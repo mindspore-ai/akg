@@ -25,18 +25,19 @@ project(akg C CXX)
 
 set(AKG_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 
+include(cmake/utils.cmake)
+include(cmake/external_libs/isl.cmake)
 if(ENABLE_AKG)
   message("-- Build akg in Mindspore")
   execute_process(COMMAND bash ${AKG_SOURCE_DIR}/third_party/apply_patches.sh ${CMAKE_CURRENT_BINARY_DIR} "1")
+  set(TVM_DIR "${CMAKE_CURRENT_BINARY_DIR}/ktvm")
 else()
   message("-- Build akg alone")
-  include(cmake/utils.cmake)
-  include(cmake/external_libs/isl.cmake)
   execute_process(COMMAND bash ${AKG_SOURCE_DIR}/third_party/apply_patches.sh ${CMAKE_CURRENT_BINARY_DIR} "akg")
+  set(TVM_DIR "${CMAKE_BINARY_DIR}/ktvm")
 endif()
 
-set(TVM_DIR "${CMAKE_CURRENT_BINARY_DIR}/ktvm")
-set(ISL_DIR "${CMAKE_CURRENT_BINARY_DIR}/_deps/isl-src")
+set(ISL_DIR "${CMAKE_BINARY_DIR}/_deps/isl-src")
 
 file(COPY ${AKG_SOURCE_DIR}/python/akg DESTINATION
     ${CMAKE_CURRENT_BINARY_DIR})
