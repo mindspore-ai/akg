@@ -1,0 +1,17 @@
+#ifdef __CCE_KT_TEST__
+#define __aicore__
+#else
+#define __aicore__ [aicore]
+#endif
+
+__aicore__ int32_t FL_find_divisible_tiling_factor(int32_t mem_limit, int32_t shape) {
+    if (shape <= mem_limit) {
+        return shape;
+    }
+    for (int div = max(2, shape / mem_limit); div < sqrt(shape); ++div) {
+        if (shape % div == 0) {
+            return shape / div;
+        }
+    }
+    return 1;
+}

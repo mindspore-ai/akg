@@ -1,0 +1,50 @@
+diff -uprN ktvm_orig/python/tvm/_ffi/base.py ktvm/python/tvm/_ffi/base.py
+--- ktvm_orig/python/tvm/_ffi/base.py	2020-04-13 20:18:09.519984547 +0800
++++ ktvm/python/tvm/_ffi/base.py	2020-04-13 20:14:21.510253128 +0800
+@@ -48,7 +48,18 @@ else:
+ 
+ def _load_lib():
+     """Load libary by searching possible path."""
+-    lib_path = libinfo.find_lib_path()
++    tar_so = "libakg.so"
++    pwd = os.path.dirname(os.path.realpath(__file__))
++    path = os.path.realpath(pwd + "/../../../mindspore/lib")
++    lib_path = []
++    files = os.listdir(path)
++    for f in files:
++        if f == tar_so:
++            lib_path.append(path + "/" + f)
++            break
++    if not lib_path:
++        raise RuntimeError("Cannot find library {}.".format(tar_so))
++
+     lib = ctypes.CDLL(lib_path[0], ctypes.RTLD_GLOBAL)
+     # DMatrix functions
+     lib.TVMGetLastError.restype = ctypes.c_char_p
+diff -uprN ktvm_orig/topi/python/topi/cpp/impl.py ktvm/topi/python/topi/cpp/impl.py
+--- ktvm_orig/topi/python/topi/cpp/impl.py	2020-04-13 20:18:09.535984509 +0800
++++ ktvm/topi/python/topi/cpp/impl.py	2020-04-13 20:16:41.784427200 +0800
+@@ -31,11 +31,18 @@ def _get_lib_names():
+ 
+ def _load_lib():
+     """Load libary by searching possible path."""
+-    curr_path = os.path.dirname(os.path.realpath(os.path.expanduser(__file__)))
+-    lib_search = curr_path
+-    lib_path = libinfo.find_lib_path(_get_lib_names(), lib_search, optional=True)
+-    if lib_path is None:
+-        return None, None
++    tar_so = "libakg.so"
++    pwd = os.path.dirname(os.path.realpath(__file__))
++    path = os.path.realpath(pwd + "/../../../mindspore/lib")
++    lib_path = []
++    files = os.listdir(path)
++    for f in files:
++        if f == tar_so:
++            lib_path.append(path + "/" + f)
++            break
++    if not lib_path:
++        raise RuntimeError("Cannot find library {}.".format(tar_so))
++
+     lib = ctypes.CDLL(lib_path[0], ctypes.RTLD_GLOBAL)
+     return lib, os.path.basename(lib_path[0])
+ 
