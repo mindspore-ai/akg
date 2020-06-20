@@ -21,6 +21,7 @@ from akg import backend as cce
 from akg.utils import kernel_exec as utils
 from akg.utils import custom_tiling as ct_util
 from akg.utils import validation_check as vc_util
+from akg.ops.math import cast
 
 logging.basicConfig(level=logging.DEBUG)
 
@@ -166,7 +167,7 @@ def matmul4D_compute(x, y, bias_value, out_dtype, left_format, right_format, out
                 if adj_y:
                     y_indices = indices[:(N - 4)] + (ko,) + indices[(N - 4):(N - 3)] + indices[(N - 1):] + (ki,)
 
-        return akg.lang.cce.mmad((x(*x_indices) * y(*y_indices)).astype(out_dtype), axis=[ko, ki])
+        return akg.lang.cce.mmad((x(*x_indices) * y(*y_indices)).astype("float32"), axis=[ko, ki])
 
 
     if left_format == "zZ":
@@ -223,6 +224,8 @@ def matmul4D_compute(x, y, bias_value, out_dtype, left_format, right_format, out
         "bias": bias_name,
     })
 
+    if out_dtype == "float16":
+        result_matmul = cast.cast(result_matmul, out_dtype)
 
     def matmul_reshape(shape, result_matmul, *indices):
         N = len(shape)
