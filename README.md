@@ -29,8 +29,9 @@ See [MindSpore README.md](https://gitee.com/mindspore/mindspore/blob/master/READ
 
 ### Build Standalone
 We suggest you build and run akg together with MindSpore. And we also provide a way to run case in standalone mode for convenience sake.
-Refer to [MindSpore Installation](https://www.mindspore.cn/install/en) for more information about compilation dependencies.
+Ascend platform is needed to build this mode. Refer to [MindSpore Installation](https://www.mindspore.cn/install/en) for more information about compilation dependencies.
   ```
+  git submodule update --init
   bash build.sh
   ```
 ## Run Standalone
