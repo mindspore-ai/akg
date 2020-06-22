@@ -33,7 +33,7 @@ matmul_set_dim_map = {
 }
 
 
-def matmul_set_dim(A, B, b, out_dtype, left_format, right_format, output_format, adj_x, adj_y, has_bias, attrs):
+def matmul_set_dim(A, B, b, out_dtype, left_format, right_format, output_format, adj_x, adj_y, attrs):
     shape_A = A.shape
     shape_B = B.shape
     bias = 0 if b is None else 1
@@ -259,7 +259,7 @@ def matmul4D_compute(x, y, bias_value, out_dtype, left_format, right_format, out
 
 
 @ct_util.reg_set_dim_func(matmul_set_dim)
-def matmul(x, y, b, out_dtype, left_format="zZ", right_format="nZ", out_format="zN", transpose_x=False, transpose_y=False, has_bias=False, attrs=None):
+def matmul(x, y, b, out_dtype, left_format="zZ", right_format="nZ", out_format="zN", transpose_x=False, transpose_y=False, attrs=None):
     """
     Computes matrix multiplication x * y + b.
 
@@ -273,7 +273,6 @@ def matmul(x, y, b, out_dtype, left_format="zZ", right_format="nZ", out_format="
         out_format: str. Data format of output tensor. Supported data format list ["zZ", "nZ", "zN"].
         transpose_x: Boolean. Specifies whether x is transposed or not. 
         transpose_y: Boolean. Specifies whether y is transposed or not.
-        has_bias: Boolean. Specifies whether bias tensor exists or not.
         attrs: Dict. Used in matmul computation.
 
     Note:

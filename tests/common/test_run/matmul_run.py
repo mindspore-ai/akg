@@ -19,7 +19,7 @@ from gen_random import random_gaussian
 import numpy as np
 import akg.backend as cce
 from akg.utils import kernel_exec as utils
-from test_op import matmul
+from akg.ops.nn import matmul
 from base import get_rtol_atol
 from tensorio import compare_tensor
 
@@ -353,9 +353,9 @@ def matmul_compile(shape_x, shape_y, bias, left_format, right_format, output_for
     has_bias = False
     if bias == 1:
         has_bias = True
-    op_attrs = [out_dtype, left_format, right_format, output_format, adj_x, adj_y, has_bias, attrs]
+    op_attrs = [out_dtype, left_format, right_format, output_format, adj_x, adj_y, attrs]
     if has_bias == False:
         input_shapes = [shape_xx, shape_yy]
         input_types = [dtype, dtype]
-        op_attrs = [None, out_dtype, left_format, right_format, output_format, adj_x, adj_y, has_bias, attrs]
+        op_attrs = [None, out_dtype, left_format, right_format, output_format, adj_x, adj_y, attrs]
     return utils.op_build_test(matmul.matmul, input_shapes, input_types, op_attrs, kernel_name, attrs)
