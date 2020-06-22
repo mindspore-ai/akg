@@ -37,7 +37,7 @@ else()
   set(TVM_DIR "${CMAKE_BINARY_DIR}/ktvm")
 endif()
 
-set(ISL_DIR "${CMAKE_BINARY_DIR}/_deps/isl-src")
+set(ISL_DIR "${CMAKE_BINARY_DIR}/isl")
 
 file(COPY ${AKG_SOURCE_DIR}/python/akg DESTINATION
     ${CMAKE_CURRENT_BINARY_DIR})
