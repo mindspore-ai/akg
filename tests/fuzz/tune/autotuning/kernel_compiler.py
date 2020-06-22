@@ -21,7 +21,7 @@ from akg.utils import custom_tiling as ct_util
 from akg.ops.nn import conv_bn1
 from akg.ops.nn import conv, conv_backprop_input, conv_backprop_filter, batchmatmul
 from akg.backend import build_module
-from test_op import matmul
+from akg.ops.nn import matmul
 from test_run import batchmatmul_run, matmul_run
 from .type_definitions import ConvDesc, ConvBackpropDesc, MatmulCubeDesc, ConvConfig, ConvBackpropInputConfig, ConvBackpropFilterConfig, MatmulCubeConfig
 

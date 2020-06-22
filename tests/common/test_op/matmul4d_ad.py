@@ -15,7 +15,7 @@
 """operator dsl function: matmul4d_ad"""
 import akg.tvm
 import akg
-from test_op import matmul
+from akg.ops.nn import matmul
 from akg.utils import custom_tiling as ct_util
 
 
