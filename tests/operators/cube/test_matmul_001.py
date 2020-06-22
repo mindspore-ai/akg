@@ -32,6 +32,29 @@ class TestCase(TestBase):
         self.testarg = [
             # caseflag,opfuncname,testRunArgs, dimArgs
             # shape_x, shape_y, bias, left_format, right_format, output_format, adj_x, adj_y, dtype, out_dtype, kernel_name, attrs
+
+            # bert shape
+            ("matmul_run_bert_00", "matmul_run", ((16, 1024), (16, 1024), 0, "zN", "zN", "zN", False, True, "float16", "float16", "matmul_cce")),
+            ("matmul_run_bert_01", "matmul_run", ((8192, 4096), (8192, 1024), 0, "zN", "zN", "zN", True, False, "float16", "float32", "matmul_cce")),
+            ("matmul_run_bert_02", "matmul_run", ((8192, 1024), (1024, 4096), 0, "zN", "zN", "zN", False, False, "float16", "float16", "matmul_cce")),
+            ("matmul_run_bert_03", "matmul_run", ((16, 16), (16, 1024), 0, "zN", "zN", "zN", True, False, "float16", "float32", "matmul_cce")),
+            ("matmul_run_bert_04", "matmul_run", ((1216, 1024), (1024, 1024), 0, "zN", "zN", "zN", False, False, "float16", "float32", "matmul_cce")),
+            ("matmul_run_bert_05", "matmul_run", ((8192, 4096), (4096, 1024), 0, "zN", "zN", "zN", False, False, "float16", "float16", "matmul_cce")),
+            ("matmul_run_bert_06", "matmul_run", ((8192, 1024), (4096, 1024), 0, "zN", "zN", "zN", False, True, "float16", "float16", "matmul_cce")),
+            ("matmul_run_bert_07", "matmul_run", ((8192, 1024), (8192, 4096), 0, "zN", "zN", "zN", True, False, "float16", "float16", "matmul_cce")),
+            ("matmul_run_bert_08", "matmul_run", ((1216, 1024), (1024, 1024), 0, "zN", "zN", "zN", False, True, "float16", "float16", "matmul_cce")),
+            ("matmul_run_bert_09", "matmul_run", ((8192, 1024), (1024, 1024), 0, "zN", "zN", "zN", False, False, "float16", "float16", "matmul_cce")),
+            ("matmul_run_bert_10", "matmul_run", ((1216, 30522), (30522, 1024), 0, "zN", "zN", "zN", False, False, "float16", "float16", "matmul_cce")),
+            ("matmul_run_bert_11", "matmul_run", ((1216, 30522), (1216, 1024), 0, "zN", "zN", "zN", True, False, "float16", "float32", "matmul_cce")),
+            ("matmul_run_bert_12", "matmul_run", ((1216, 1024), (30522, 1024), 0, "zN", "zN", "zN", False, True, "float16", "float32", "matmul_cce")),
+            ("matmul_run_bert_13", "matmul_run", ((8192, 1024), (8192, 1024), 0, "zN", "zN", "zN", True, False, "float16", "float32", "matmul_cce")),
+            ("matmul_run_bert_14", "matmul_run", ((1216, 1024), (1216, 1024), 0, "zN", "zN", "zN", True, False, "float16", "float16", "matmul_cce")),
+            ("matmul_run_bert_15", "matmul_run", ((16, 1024), (16, 1024), 0, "zN", "zN", "zN", True, False, "float16", "float32", "matmul_cce")),
+            ("matmul_run_bert_16", "matmul_run", ((16, 1024), (1024, 1024), 0, "zN", "zN", "zN", False, True, "float16", "float32", "matmul_cce")),
+            ("matmul_run_bert_17", "matmul_run", ((16, 16), (16, 1024), 0, "zN", "zN", "zN", False, False, "float16", "float32", "matmul_cce")),
+            ("matmul_run_bert_18", "matmul_run", ((8192, 1024), (1024, 1024), 0, "zN", "zN", "zN", False, True, "float16", "float16", "matmul_cce")),
+            ("matmul_run_bert_19", "matmul_run", ((8192, 4096), (1024, 4096), 0, "zN", "zN", "zN", False, True, "float16", "float16", "matmul_cce")),
+
             # matmul_cast
             ("matmul_run1", "matmul_run",
              ((64, 1024), (16, 1024), 0, "zZ", "nZ", "zN", False, True, "float16", "float32", "matmul_cast_cce")),
