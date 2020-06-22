@@ -51,7 +51,7 @@ Ascend platform is needed to build this mode. Refer to [MindSpore Installation](
 
 ## Contributing
 
-Welcome contributions. See our [Contributor Wiki](CONTRIBUTING.md) for
+Welcome contributions. See [MindSpore Contributor Wiki](https://gitee.com/mindspore/mindspore/blob/master/CONTRIBUTING.md) for
 more details.
 
 ## Release Notes
