@@ -444,12 +444,10 @@ int64_t TileCandidate::CalActualTile(const CalAlignInfo *align_info) {
 void TileCandidate::UpdateMemoryAfterBuffer(const BufferEntry *buf, MemInferInfo *mem_infer_info) {
   CHECK(buf);
   CHECK(mem_infer_info);
-  CHECK(buf);
   const auto fix_size = buf->shape.as<IntImm>();
   if (fix_size == nullptr) {
     std::stringstream ss;
     ss << "Buffer " << buf->name << " contains dynamic shape " << buf->shape << ", skip.";
-
     analyzer_->logger_.AppendLog(DO_TILING, ss);
     return;
   }

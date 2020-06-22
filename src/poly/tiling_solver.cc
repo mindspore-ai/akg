@@ -936,16 +936,17 @@ bool TraverseSolver::DoTiling(const TileInfo *info) {
 
     if (!mem_ok) continue;
     success = true;
-    if (dst % t == 0) {
+    auto tail = dst % t;
+    if (tail == 0) {
       if (deviation > best_no_iso_devs) continue;
       ss << "factor " << t << " has " << deviation << " deviation, update to no isolate factor";
       best_no_iso_val = t;
       best_no_iso_devs = deviation;
     } else {
       if (deviation > best_devs) continue;
-      if (analyzer_.scop_->pragma_allow_tail_tiling_) {
-        auto tail = dst - dst / t * t;
-        if (tail % GetMaxAlignBytes(axis->data_size) != 0) continue;
+      if (analyzer_.scop_->pragma_allow_tail_tiling_ && tail < GetMaxAlignBytes(axis->data_size)) {
+        ss << "factor " << t << " has " << tail << " tail that may disable multicore, skip.";
+        continue;
       }
       ss << "factor " << t << " has " << deviation << " deviation, update to isolate factor";
       best_val = t;
