@@ -15,8 +15,10 @@
 # limitations under the License.
 
 """matmul"""
-from akg.ops.nn import batchmatmul
+from akg.ops.nn import matmul
 
-def MatMul(x1, x2, transpose_a=False, transpose_b=False):
+def MatMul(x1, x2, out_dtype, transpose_a=False, transpose_b=False):
     """matmul"""
-    return batchmatmul.batchmatmul(x1, x2, transpose_a, transpose_b)
+    return matmul.matmul(x=x1, y=x2, b=None, out_dtype=out_dtype,
+                         left_format="zN", right_format="zN", out_format="zN",
+                         transpose_x=transpose_a, transpose_y=transpose_b)
