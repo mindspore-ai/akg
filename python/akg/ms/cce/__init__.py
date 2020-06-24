@@ -31,6 +31,7 @@ from .fused_batch_norm import FusedBatchNorm
 from .fused_batchnorm_infer import FusedBatchNormInfer
 from .fused_batch_norm_grad import FusedBatchNormGrad
 from .matmul import MatMul
+from .batchmatmul import BatchMatMul
 from .mean import SimpleMean
 from .mean_grad import SimpleMeanGrad
 from .mul import Mul
