@@ -433,14 +433,13 @@ void GemmStrategy::AddConstraint() {
 std::pair<int, int> MulticoreStrategy::GetProposalRangeForFullMulticore(TileAxis *multicore_axis) {
   int max_core = cand_.GetCoreNumConf();
   int used_core = 1;
-  std::pair<int, int> proposal_range = std::make_pair(
-    std::max(static_cast<int>(MIN_MULTICORE_BYTES / cand_.GetMinUbToGmDataAfterAxis(multicore_axis)), 1), -1);
+  std::pair<int, int> proposal_range = std::make_pair(cand_.GetMinFactorForMinDataGranularity(multicore_axis), -1);
   auto this_level_core = std::max(static_cast<int>(max_core / used_core), 1);
   std::stringstream ss;
   if (multicore_axis->range_extent.as<IntImm>() == nullptr) return proposal_range;
   auto shape = multicore_axis->range_extent.as<IntImm>()->value;
   bool is_last_level = false;
-  for (auto other_axis : cand_.GetTileAxis()) {
+  for (auto other_axis : this->cand_.GetTileAxis()) {
     if (other_axis == multicore_axis) break;
     if (other_axis->index != multicore_axis->index || other_axis->HasAttr("REDUCE_AXIS")) continue;
     if (other_axis->range_extent.as<IntImm>() == nullptr) return proposal_range;
@@ -480,6 +479,7 @@ std::pair<int, int> MulticoreStrategy::GetProposalRangeForFullMulticore(TileAxis
   logger_.AppendLog(DO_TILING, ss);
   return proposal_range;
 }
+
 int64_t MulticoreStrategy::AdjustTilingAccordingToMulticoreConstraint(TileAxis *multicore_axis, int64_t tiling_factor) {
   CHECK_GT(tiling_factor, 0) << "tiling factor cant be zero or negative";
   auto proposal_range = GetProposalRangeForFullMulticore(multicore_axis);
@@ -488,10 +488,17 @@ int64_t MulticoreStrategy::AdjustTilingAccordingToMulticoreConstraint(TileAxis *
   auto origin_factor = tiling_factor;
   std::stringstream ss;
 
-  if ((!multicore_axis->mc_sup) || (multicore_axis->HasAttr("REDUCE_AXIS")) ||
-      (tiling_factor < cand_.GetMinFactorToEnableMulticore(multicore_axis) ||
-       (tiling_factor == max_factor_for_full_cores) || (max_factor_for_full_cores <= 0))) {
+  if ((!multicore_axis->mc_sup) || (multicore_axis->HasAttr("REDUCE_AXIS") || (max_factor_for_full_cores <= 0))) {
     logger_.AppendLine(DO_TILING, "This axis is not suitable for multicore, return.");
+    return origin_factor;
+  }
+  if (tiling_factor < cand_.GetMinFactorToEnableMulticore(multicore_axis)) {
+    logger_.AppendLine(DO_TILING, "Inner-most tile size is smaller than 32 bytes, multicore is disable, return.");
+    return origin_factor;
+  }
+  if ((tiling_factor <= min_factor_for_enough_data) ||
+      (min_factor_for_enough_data >= cand_.GetCoreNumConf() * max_factor_for_full_cores)) {
+    logger_.AppendLine(DO_TILING, "Cannot increase degree of parallelism by adjusting current tiling factor, return.");
     return origin_factor;
   }
 
@@ -505,18 +512,27 @@ int64_t MulticoreStrategy::AdjustTilingAccordingToMulticoreConstraint(TileAxis *
   CheckConstConstraint(multicore_axis->l1_constraints.tile_min_);
   CheckConstConstraint(multicore_axis->l1_constraints.tile_mod_);
 
+  auto pending_blocks = cand_.GetMaximalPendingBlocks(multicore_axis);
   if (tiling_factor < max_factor_for_full_cores) {
     auto end = static_cast<int>(sqrt(max_factor_for_full_cores));
-    while (max_factor_for_full_cores % tiling_factor != 0 && tiling_factor > end) --tiling_factor;
-  } else {
+    while (max_factor_for_full_cores % tiling_factor != 0 && tiling_factor > end) {
+      --tiling_factor;
+    }
+  } else if (max_factor_for_full_cores >= min_factor_for_enough_data) {
     tiling_factor = max_factor_for_full_cores;
+  } else if (max_factor_for_full_cores < min_factor_for_enough_data) {
+    // In this case, simply adjusting tiling factor to max_factor_for_full_core may lead to insufficient data
+    // in each core while adjusting tiling factor to min_factor_for_enough_date may lead to fewer parallel cores.
+    // Since pending blocks can compensate data in each core, we make decision upon on its value.
+    tiling_factor = pending_blocks >= static_cast<int>(min_factor_for_enough_data / max_factor_for_full_cores)
+                      ? max_factor_for_full_cores
+                      : min_factor_for_enough_data;
   }
 
   auto shape = multicore_axis->range_extent.as<IntImm>()->value;
   bool efficient = (shape % tiling_factor == 0) >= (shape % origin_factor == 0);
   auto multicore_shrink_limit = 2;
   auto reduced_mem = std::max(origin_factor - tiling_factor, min_factor_for_enough_data - tiling_factor);
-  auto pending_blocks = cand_.GetMaximalPendingBlocks(multicore_axis);
   if ((static_cast<int>(origin_factor / tiling_factor) >= multicore_shrink_limit) && reduced_mem > pending_blocks) {
     ss << "If axis adjust to " << tiling_factor << ", " << reduced_mem << " memory is reduced;"
        << " while maximal pending blocks is only " << pending_blocks << ", adjust may not be efficient.";
