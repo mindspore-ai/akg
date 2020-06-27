@@ -1,3 +1,4 @@
+# This is the Python adaptation and derivative work of TVM (https://github.com/apache/incubator-tvm/).
 # Copyright 2019 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
