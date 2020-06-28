@@ -80,7 +80,7 @@ class BroadcastVecRewriter : public IRMutator {
             }
           }
 
-          if (secDimFit && dimFit && forLoopFit) {
+          if (secDimFit && dimFit && forLoopFit && remainDim > 1) {
             newExtent = GetInt32Const(GetItem(forInfo.ops_, idx).as<For>()->extent) / remainDim;
             tmpBuffer = VarExpr("tmp_broadcast_" + std::to_string(broadBufferCount++) + "_local_UB", dtype);
             varList = dstInfo->var_;
