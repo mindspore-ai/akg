@@ -380,7 +380,8 @@ class TileCandidate {
   static int GetCoreNumConf();
   int GetMinFactorToEnableMulticore(TileAxis *axis);
   int GetMaximalPendingBlocks(TileAxis *excluded_axis);
-  int GetMinUbToGmDataAfterAxis(TileAxis *axis);
+  int GetDmaCopySizeWithinAxis(TileAxis *axis);
+  int GetMinFactorForMinDataGranularity(TileAxis *axis);
 
  private:
   void DoMemInfer();

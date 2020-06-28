@@ -192,12 +192,12 @@ class MulticoreStrategy {
   MulticoreStrategy(TileCandidate &cand, const std::string log_file)
       : cand_(cand), logger_(TileLogger::GetInstance(log_file)) {}
   ~MulticoreStrategy() {}
-  std::pair<int, int> GetProposalRangeForFullMulticore(TileAxis *axis);
   int64_t AdjustTilingAccordingToMulticoreConstraint(TileAxis *axis, int64_t tiling_factor);
 
  private:
   TileCandidate &cand_;
   TileLogger &logger_;
+  std::pair<int, int> GetProposalRangeForFullMulticore(TileAxis *axis);
 };
 }  // namespace poly
 }  // namespace ir

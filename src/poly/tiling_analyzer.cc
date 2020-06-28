@@ -608,26 +608,30 @@ void TileCandidate::DoMemInfer() {
   }
 }
 
-int TileCandidate::GetMinUbToGmDataAfterAxis(TileAxis *axis) {
-  // e.g.1
-  // Input ir:
-  //   for (cc0) <--- axis, dtype = float16
-  //     for (cc1)  <--- tile factor 1024, dtype = float16
-  //       GM_BUF1[cc0, cc1] = UB_BUF1[cc0, cc1]
-  //   for (cc0) <--- axis
-  //     for (cc2)  <--- tile factor 1024, dtype = float32
-  //       GM_BUF2[cc0, cc2] = UB_BUF2[cc0, cc2]
-  // Return:
-  //   1024 * 2
-  // e.g.2
-  // Input ir:
-  //   for (cc0) <--- axis, dtype = float16
-  //     GM_BUF1[cc0] = UB_BUF1[cc0]
-  // Return:
-  //   1 * 2
-  int min_data_each_core = -1;
-
+/*
+ * This function returns current data size moved from local buffer (UB in Davinci)
+ * to main memory (GM in Davinci) within target axis.
+ *  e.g.1: target is not inner-most axis
+ * Input ir:
+ *  for (cc0) <--- axis, dtype = float16
+ *    for (cc1)  <--- tile factor 1024, dtype = float16
+ *      GM_BUF1[cc0, cc1] = UB_BUF1[cc0, cc1]
+ *  for (cc0) <--- axis
+ *    for (cc2)  <--- tile factor 1024, dtype = float32
+ *      GM_BUF2[cc0, cc2] = UB_BUF2[cc0, cc2]
+ * Return:
+ *  min(1024 * 2(fp16), 1024 * 4(fp32)) = 1024 * 2
+ *
+ * e.g.2: target is inner-most axis
+ * Input ir:
+ *  for (cc0) <--- axis, dtype = float16
+ *    GM_BUF1[cc0] = UB_BUF1[cc0]
+ * Return:
+ *  32(ALIGN_BYTES) / 2(fp16) = 16
+ */
+int TileCandidate::GetDmaCopySizeWithinAxis(TileAxis *target_axis) {
   std::stringstream ss;
+  int min_data_each_core = -1;
   bool before_this_axis = true;
   for (const auto &attr : analyzer_->RootAxis()->attrs) {
     if (attr.attr_key.find("DMA3") == std::string::npos) {
@@ -635,7 +639,7 @@ int TileCandidate::GetMinUbToGmDataAfterAxis(TileAxis *axis) {
     }
     int64_t data_each_core = 1;
     int data_bytes = -1;
-    bool record = true;
+    bool need_record = true;
     std::string gm_buf_name = attr.attr_value;
     auto it = analyzer_->buf_info_.find(gm_buf_name);
     if (it == analyzer_->buf_info_.end()) {
@@ -643,32 +647,28 @@ int TileCandidate::GetMinUbToGmDataAfterAxis(TileAxis *axis) {
     }
     auto gm_buf = it->second.get();
     for (auto &gm_axis : *(gm_buf->tile_axis)) {
-      if (gm_axis->index != axis->index) {
-        record = false;
+      if (gm_axis->index != target_axis->index || gm_axis->range_extent.as<IntImm>() == nullptr) {
+        need_record = false;
         break;
       }
-      if (gm_axis == axis) {
+      if (gm_axis == target_axis) {
         before_this_axis = false;
         continue;
       }
       if (before_this_axis) {
         continue;
       }
-      if (gm_axis->range_extent.as<IntImm>() == nullptr) {
-        record = false;
-        break;
-      }
       int64_t l1_val = MIN_TILE;
       std::tie(l1_val, std::ignore) = GetConstTileVal(gm_axis);
       if (l1_val == TileVarId::VAR) {
-        record = false;
+        need_record = false;
         break;
       }
-      CHECK_NE(l1_val, 0) << "Inner axis " << gm_axis->dim_axis << " should be tile before axis " << axis->dim_axis;
+      CHECK_NE(l1_val, 0) << "Inner axis " << gm_axis->dim_axis << " should be tile before axis "
+                          << target_axis->dim_axis;
       if (gm_axis->HasAnyAttr({"REDUCE_AXIS", "TRANSPOSE", "TRANSFORM"})) {
         ss << "axis " << gm_axis->index << "_" << gm_axis->dim_axis << " cannot be flatten. clear data each core.";
         analyzer_->logger_.AppendLog(DO_TILING, ss);
-
         data_each_core = 1;
         data_bytes = 1;
         continue;
@@ -678,19 +678,51 @@ int TileCandidate::GetMinUbToGmDataAfterAxis(TileAxis *axis) {
       auto min_bytes = static_cast<int>(ALIGN_BYTES / GetMaxAlignBytes(gm_axis->data_size));
       data_bytes = (data_bytes == -1 || min_bytes < data_bytes) ? min_bytes : data_bytes;
     }
-    if (record && (min_data_each_core == -1 || data_bytes * data_each_core < min_data_each_core))
+    if (need_record && (min_data_each_core == -1 || data_bytes * data_each_core < min_data_each_core)) {
       min_data_each_core = data_bytes * data_each_core;
+    }
   }
-  ss << "[Data within axis " << axis->index << "_" << axis->dim_axis << "]: " << min_data_each_core;
+  ss << "[Data within axis " << target_axis->index << "_" << target_axis->dim_axis << "]: " << min_data_each_core;
   analyzer_->logger_.AppendLog(DO_TILING, ss);
-  return min_data_each_core == -1 ? static_cast<int>(ALIGN_BYTES / GetMaxAlignBytes(axis->data_size))
+  return min_data_each_core == -1 ? static_cast<int>(ALIGN_BYTES / GetMaxAlignBytes(target_axis->data_size))
                                   : min_data_each_core;
 }
 
+/*
+ * This function returns the minimal tile size of axis that can enable multi-core function.
+ * If inner-most data granularity of DMA from local buffer to main memory is less than align bytes,
+ * which is 32 in Davinci Core, it will disable multi-core function.
+ */
 int TileCandidate::GetMinFactorToEnableMulticore(TileAxis *axis) {
-  return std::max(static_cast<int>(ALIGN_BYTES / GetMinUbToGmDataAfterAxis(axis)), 1);
+  return std::max(static_cast<int>(ALIGN_BYTES / GetDmaCopySizeWithinAxis(axis)), 1);
 }
 
+/*
+ * This function returns the minimal tile size of axis that each core can have enough data granularity to process.
+ * Minimal data granularity for each core is set to 256 bytes by default and if actual data granularity is less
+ * than this value, the candidate tile sizes will be regarded as multi-core inefficient.
+ */
+int TileCandidate::GetMinFactorForMinDataGranularity(TileAxis *axis) {
+  auto granularity = 1;
+  for (auto a : this->tile_axis_) {
+    if (a == axis) {
+      continue;
+    }
+    if (!a->range_extent.as<IntImm>()) {
+      continue;
+    }
+    int64_t l1_val = this->GetConstTileVal(a).first;
+    if (l1_val == TileVarId::UNDEFINE || l1_val == TileVarId::VAR) {
+      continue;
+    }
+    granularity *= l1_val;
+  }
+  return std::max(static_cast<int>(MIN_MULTICORE_BYTES / granularity), 1);
+}
+
+/*
+ * This function returns the multiplies of loop extent of all the pending (not tiled) axes.
+ */
 int TileCandidate::GetMaximalPendingBlocks(TileAxis *excluded_axis) {
   int64_t blocks = 1;
   for (auto axis : this->tile_axis_) {
