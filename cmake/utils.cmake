@@ -261,7 +261,7 @@ function(mindspore_add_pkg pkg_name )
         get_filename_component(_PATCH_FILE_NAME ${_PATCH_FILE} NAME)
         set(_LF_PATCH_FILE ${CMAKE_BINARY_DIR}/_ms_patch/${_PATCH_FILE_NAME})
         configure_file(${_PATCH_FILE} ${_LF_PATCH_FILE} NEWLINE_STYLE LF)
-        message("patching ${${pkg_name}_SOURCE_DIR} -p1 < ${_LF_PATCH_FILE}")
+        message("patching ${${pkg_name}_PATCHED_DIR} -p1 < ${_LF_PATCH_FILE}")
         execute_process(COMMAND patch -p1 INPUT_FILE ${_LF_PATCH_FILE}
 		WORKING_DIRECTORY ${${pkg_name}_PATCHED_DIR}
                         RESULT_VARIABLE Result)
