@@ -42,7 +42,6 @@ void TilingSolver::CollectTileAxisTopDown() {
     }
     this->cand_.InsertAxisBack(a);
   };
-
   this->cand_.ResetTileAxis();
   this->analyzer_.ForEachAxisTopDown(CollectTileAxis);
   this->cand_.SortByPriority();
@@ -97,9 +96,11 @@ TileCandidate *InequalitySolver::Solve() {
   auto tile_band_size = static_cast<int>(analyzer_.RootAxis()->children.size());
   for (auto band = 0; band < tile_band_size; ++band) {
     tiling_band_ = band;
+
     CollectTileAxisTopDown();
 
     InitTileAxis(LEVEL1);
+
     if (analyzer_.op_type_ != VECTOR_OP) {
       InitTileAxis(LEVEL0);
     }
@@ -738,9 +739,11 @@ void DynamicShapeSolver::AppendTileConstraintInIR(TileCandidate *cand, TileLevel
 
 TileCandidate *TraverseSolver::Solve() {
   CollectMemoryLimit();
+
   auto tile_band_size = static_cast<int>(analyzer_.RootAxis()->children.size());
   for (auto band = 0; band < tile_band_size; ++band) {
     tiling_band_ = band;
+
     CollectTileAxisTopDown();
 
     // tile all axis top down

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #include "poly/tiling_strategy_manager.h"
-
+#include <numeric>
 #include <iostream>
 
 namespace akg {
@@ -222,12 +222,8 @@ void ReduceStrategy::AddConstraint() {
     if (align_elem == block_size) {
       axis->l1_constraints.tile_min_ = align_elem;
     } else {
-      axis->priority += 1;
       axis->forbid_iso = true;
     }
-  }
-  for (auto axis : analyzer_->GetAxesOfAttr("REDUCE_SRC_LAST")) {
-    axis->priority += 1;
   }
 }
 
@@ -551,6 +547,104 @@ int64_t MulticoreStrategy::AdjustTilingAccordingToMulticoreConstraint(TileAxis *
      << max_factor_for_full_cores << ")";
   logger_.AppendLog(DO_TILING, ss);
   return (valid && efficient) ? tiling_factor : origin_factor;
+}
+
+void TilingPriorityScorer::SetPriorityByScoring() {
+  std::stringstream ss;
+  for (int band_idx = 0; band_idx < static_cast<int>(analyzer_.RootAxis()->children.size()); ++band_idx) {
+    std::map<double, std::vector<TileAxis *>> priority_map;
+    std::vector<TileAxis *> tile_axes = GetBandTileAxes(band_idx);
+
+    auto norm_range = static_cast<int>(tile_axes.size());
+    auto dd_scores = MinMaxScaler(ComputeTileDependency(tile_axes), norm_range);
+    auto pl_scores = MinMaxScaler(ComputeParallelism(tile_axes), norm_range);
+    auto vec_scores = MinMaxScaler(ComputeVectorization(tile_axes), norm_range);
+
+    bool has_custom_priority = false;
+    int default_priority = -1;
+    for (int i = 0; i < static_cast<int>(tile_axes.size()); ++i) {
+      auto axis = tile_axes[i];
+
+      if (axis->priority != default_priority) {
+        has_custom_priority = true;
+        break;
+      }
+
+      ss << "Axis " << axis->index << " , " << axis->dim_axis << ": ";
+      auto total_score = (weight_.tile_dependency * dd_scores[i] + weight_.parallelism * pl_scores[i] +
+                          weight_.vectorization * vec_scores[i]) /
+                         weight_.Sum();
+      ss << "score = (tile dependency) " << weight_.tile_dependency << "*" << dd_scores[i] << " + (parallelism) "
+         << weight_.parallelism << " * " << pl_scores[i] << " + (vectorization) " << weight_.vectorization << " * "
+         << vec_scores[i] << " / " << weight_.Sum() << " = " << total_score;
+      logger_.AppendLog(DO_TILING, ss);
+
+      if (priority_map.find(total_score) == priority_map.end()) {
+        priority_map[total_score] = {axis};
+      } else {
+        priority_map[total_score].emplace_back(axis);
+      }
+    }
+
+    if (has_custom_priority) {
+      continue;
+    }
+
+    int priority = static_cast<int>(tile_axes.size()) - 1;
+    for (auto it : priority_map) {
+      for (auto a : it.second) {
+        a->priority = priority;
+        priority -= 1;
+      }
+    }
+  }
+}
+
+std::vector<double> TilingPriorityScorer::ComputeTileDependency(std::vector<TileAxis *> tile_axes) {
+  std::vector<double> scores;
+  scores.reserve(tile_axes.size());
+  for (auto axis : tile_axes) {
+    scores.emplace_back((axis->dim_axis + 1) * axis->HasAttr("REDUCE_AXIS"));
+  }
+  return scores;
+}
+
+std::vector<double> TilingPriorityScorer::ComputeParallelism(std::vector<TileAxis *> tile_axes) {
+  std::vector<double> scores;
+  scores.reserve(tile_axes.size());
+  for (auto axis : tile_axes) {
+    scores.emplace_back(!axis->mc_sup);
+  }
+  return scores;
+}
+
+std::vector<double> TilingPriorityScorer::ComputeVectorization(std::vector<TileAxis *> tile_axes) {
+  std::vector<double> scores;
+  scores.reserve(tile_axes.size());
+  std::unordered_map<DavinciMemScope, int> coef_map = {
+    {DavinciMemScope::MEM_SCOPE_GM, 2},   // continuous dma copy is considered as the most important factor
+    {DavinciMemScope::MEM_SCOPE_UB, 1},   // vectorization instruction is also important
+    {DavinciMemScope::MEM_SCOPE_L1, 0},   // does not consider impact of L1 dma copy
+    {DavinciMemScope::MEM_SCOPE_L0A, 0},  // does not consider impact of L0 dma copy
+    {DavinciMemScope::MEM_SCOPE_L0B, 0}, {DavinciMemScope::MEM_SCOPE_L0C, 0},
+  };
+  for (auto axis : tile_axes) {
+    int vec_level = 0;
+    for (auto it : analyzer_.buf_info_) {
+      auto buf = it.second.get();
+      auto coef = coef_map[buf->scope];
+      int dim_depth = 1;
+      for (auto &a : *(buf->tile_axis)) {
+        if (a == axis) {
+          vec_level += coef * dim_depth;
+          break;
+        }
+        dim_depth += 1;
+      }
+    }
+    scores.emplace_back(vec_level);
+  }
+  return scores;
 }
 
 }  // namespace poly

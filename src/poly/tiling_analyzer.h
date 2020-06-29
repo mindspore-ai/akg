@@ -288,7 +288,7 @@ class TilingAnalyzer {
   std::unordered_map<std::string, std::shared_ptr<BufferEntry>> buf_info_;
 
  private:
-  void TileSpaceAnalyze();
+  void AddTilingConstraints();
   std::unique_ptr<TileAxis> root_axis_;
 };
 
