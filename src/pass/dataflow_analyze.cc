@@ -471,12 +471,11 @@ class DFVisitor : public IRVisitor {
   /**
    * Check whether meminfo has necessary args for calculating stride.
    */
-  bool checkAllMemInfoExists(const IntImm *offset, const IntImm *extent, const IntImm *typeSize,
-                             const IntImm *repeatTime, const IntImm *repeatStride, const IntImm *blockNumber,
-                             const IntImm *blockStride, const IntImm *blockSize) const {
-    return ((offset != nullptr) && (extent != nullptr) && (typeSize != nullptr) && (repeatTime != nullptr) &&
-            (repeatStride != nullptr) && (blockNumber != nullptr) && (blockStride != nullptr) &&
-            (blockSize != nullptr));
+  bool checkAllMemInfoExists(const IntImm *offset, const IntImm *typeSize, const IntImm *repeatTime,
+                             const IntImm *repeatStride, const IntImm *blockNumber, const IntImm *blockStride,
+                             const IntImm *blockSize) const {
+    return ((offset != nullptr) && (typeSize != nullptr) && (repeatTime != nullptr) && (repeatStride != nullptr) &&
+            (blockNumber != nullptr) && (blockStride != nullptr) && (blockSize != nullptr));
   }
 
   /**
@@ -530,7 +529,6 @@ class DFVisitor : public IRVisitor {
     CHECK(offsetIntImmOfA->value >= 0) << "offset A must be Non-negative number";
 
     Expr typeSizeExprOfA = make_const(a.offset.type(), a.type.bytes());
-    const auto extentIntImmOfA = a.extent.as<IntImm>();
     const auto typeSizeIntImmOfA = typeSizeExprOfA.as<IntImm>();
     const auto repeatTimeIntImmOfA = a.repeatTime.as<IntImm>();
     const auto repeatStrideIntImmOfA = a.repeatStride.as<IntImm>();
@@ -539,7 +537,6 @@ class DFVisitor : public IRVisitor {
     const auto blockSizeIntImmOfA = a.blockSize.as<IntImm>();
 
     Expr typeSizeExprOfB = make_const(b.offset.type(), b.type.bytes());
-    const auto extentIntImmOfB = b.extent.as<IntImm>();
     const auto typeSizeIntImmOfB = typeSizeExprOfB.as<IntImm>();
     const auto repeatTimeIntImmOfB = b.repeatTime.as<IntImm>();
     const auto repeatStrideIntImmOfB = b.repeatStride.as<IntImm>();
@@ -549,10 +546,10 @@ class DFVisitor : public IRVisitor {
 
     // if checkResult is true, it means there is enough info to calc stride. If not, func will return overlap(default).
     bool checkResult =
-      checkAllMemInfoExists(offsetIntImmOfA, extentIntImmOfA, typeSizeIntImmOfA, repeatTimeIntImmOfA,
-                            repeatStrideIntImmOfA, blockNumberIntImmOfA, blockStrideIntImmOfA, blockSizeIntImmOfA) &&
-      checkAllMemInfoExists(offsetIntImmOfB, extentIntImmOfB, typeSizeIntImmOfB, repeatTimeIntImmOfB,
-                            repeatStrideIntImmOfB, blockNumberIntImmOfB, blockStrideIntImmOfB, blockSizeIntImmOfB);
+      checkAllMemInfoExists(offsetIntImmOfA, typeSizeIntImmOfA, repeatTimeIntImmOfA, repeatStrideIntImmOfA,
+                            blockNumberIntImmOfA, blockStrideIntImmOfA, blockSizeIntImmOfA) &&
+      checkAllMemInfoExists(offsetIntImmOfB, typeSizeIntImmOfB, repeatTimeIntImmOfB, repeatStrideIntImmOfB,
+                            blockNumberIntImmOfB, blockStrideIntImmOfB, blockSizeIntImmOfB);
     if (!checkResult) {
       return true;
     }
