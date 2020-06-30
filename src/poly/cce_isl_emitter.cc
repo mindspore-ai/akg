@@ -491,13 +491,14 @@ bool CCEIslEmitter::InjectMulticore(const std::string &iter) {
       bool is_loop_in_multicore_band = (coincident_member < multicore_info.coincidence.size());
       if (is_loop_in_multicore_band) {
         should_insert_multi_core = multicore_info.coincidence[coincident_member];
+        if (should_insert_multi_core) {
+          ++multicore_info.multicore_depth;
+          --multicore_info.coincidence[coincident_member];
+        }	  
       }
     } else {
       LOG(WARNING) << "multicore: unrecognized loop var " << iter;
     }
-  }
-  if (should_insert_multi_core) {
-    ++multicore_info.multicore_depth;
   }
   return should_insert_multi_core;
 }
@@ -549,8 +550,8 @@ Stmt CCEIslEmitter::EmitFor(const isl::ast_node_for &node) {
   if (should_insert_multi_core) {
     CHECK_EQ(multicore_info.multicore_depth, original_multicore_info.multicore_depth + 1);
     stmt = AttrStmt::make(make_zero(Int(32)), "pragma_multi_core_depth", Expr(multicore_info.multicore_depth), stmt);
+    --multicore_info.multicore_depth;
   }
-  multicore_info = original_multicore_info;
 
   return stmt;
 }

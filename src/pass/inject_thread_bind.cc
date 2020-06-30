@@ -1371,15 +1371,50 @@ class MultiCoreScalarMerge : public IRMutator {
 
 class ScalarPeel : public IRMutator {
  public:
-  Stmt Run(const Stmt &s) { return Mutate(s); }
+  Stmt Run(const Stmt &s) {
+    Stmt res = Mutate(s);
+    if (!before_scalar_store_) {
+      multi_core_body_ = s;
+      return Stmt();
+    }
+    return res;
+  }
+
   Stmt multi_core_body_;
+  bool find_multi_core_{false};
+  bool before_scalar_store_{false};
 
  private:
+  Stmt Mutate_(const Store *op, const Stmt &s) final {
+    if (!find_multi_core_)  before_scalar_store_ = true;
+    return IRMutator::Mutate_(op, s);
+  }
+
+  bool MultiCoreAttr(const AttrStmt *op) {
+    if (op->attr_key == "pragma_multi_core_depth" &&
+        Compare(op->value, make_const(op->value.type(), 1)) == 0) {
+      return true;
+    }
+    return false;
+  }
+
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
-    if (op->attr_key == "pragma_multi_core_depth" && Compare(op->value, make_const(op->value.type(), 1)) == 0) {
+    if (MultiCoreAttr(op)) {
+      find_multi_core_ = true;
       Stmt body = Mutate(op->body);
       multi_core_body_ = AttrStmt::make(op->node, op->attr_key, op->value, body);
       return AttrStmt::make(op->node, op->attr_key, op->value, Evaluate::make(0));
+    }
+    return IRMutator::Mutate_(op, s);
+  }
+
+  Stmt Mutate_(const Block *op, const Stmt &s) final {
+    if (op->first.defined() && op->rest.defined() &&
+        op->first.as<AttrStmt>() != nullptr && MultiCoreAttr(op->first.as<AttrStmt>())) {
+      auto first = Mutate(op->first);
+      auto rest = Mutate(op->rest);
+      multi_core_body_ = Block::make(multi_core_body_, rest);
+      return Block::make(first, Evaluate::make(0));
     }
     return IRMutator::Mutate_(op, s);
   }
@@ -1393,7 +1428,7 @@ Stmt InjectMultiCore(Stmt stmt, int max_block_dim, int merge_outer_loop, bool is
   Stmt scalar_part;
   if (scalar_rearrange) {
     ScalarPeel peel;
-    scalar_part = peel.Mutate(stmt);
+    scalar_part = peel.Run(stmt);
     stmt = peel.multi_core_body_;
   }
 
@@ -1419,7 +1454,7 @@ Stmt InjectMultiCore(Stmt stmt, int max_block_dim, int merge_outer_loop, bool is
       stmt = MultiCoreInsert(plan.block_num_, plan.block_coef_).Insert(stmt);
     }
     stmt = LoopUnCompunder().Mutate(stmt);
-    if (scalar_rearrange) {
+    if (scalar_rearrange && scalar_part.defined()) {
       stmt = MultiCoreScalarMerge().Run(stmt, scalar_part);
     }
     return stmt;
