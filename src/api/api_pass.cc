@@ -182,5 +182,6 @@ REGISTER_PASS(SinkAllocate);
 REGISTER_PASS(SubstituteDivVar);
 REGISTER_PASS(CastFilter);
 REGISTER_PASS(ScalarComputeRewrite);
+REGISTER_PASS(SplitTail);
 }  // namespace ir
 }  // namespace akg

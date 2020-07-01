@@ -294,6 +294,16 @@ struct BisectionInfoWrapper {
   Map<std::string, Expr> dma_arg_info_map_;
 };
 
+struct InsnAxis {
+  int min{0};
+  int extent{0};
+  Var var;
+  int dst_stride{0};
+  int src_stride{0};
+  std::list<int> src_stride_list;
+  std::list<int> stride_list;
+};
+
 IterVar GetCceAxis();
 
 int CeilTo(int value, int target);

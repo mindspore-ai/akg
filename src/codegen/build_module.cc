@@ -759,6 +759,9 @@ NodeRef Lower(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeRef> 
     stmt = NEXT_PASS(GatherLoopInfo, stmt);
   }
   stmt = NEXT_PASS(CastFilter, stmt);
+  if (!is_dynamic) {
+    stmt = NEXT_PASS(SplitTail, stmt);
+  }
   stmt = NEXT_PASS(EmitInsn, stmt, global_attrs.GetBoolAttr(kEnableBisectOptimize, true),
                    global_attrs.GetBoolAttr(kEnableCoverProtectOptimize, true), binds_0, is_dynamic);
   // must be after EmitInsn
