@@ -1303,12 +1303,7 @@ int TilingAnalyzer::GetNumOfAxisInBand(int band_idx) const {
   return max + 1;
 }
 
-void TilingAnalyzer::TileSpaceAnalyze() {
-  CHECK(scop_);
-
-  SpaceAnalyzer space_analyzer(this);
-  space_analyzer.AnalyzeSpecialAxes();
-
+void TilingAnalyzer::AddTilingConstraints() {
   std::vector<TilingStrategy *> actived_strategies;
 
   PassDownAttrStrategy pd_attr_strategy(this);
@@ -1351,15 +1346,10 @@ void TilingAnalyzer::TileSpaceAnalyze() {
   TilingStrategyManager &strategy_manager = TilingStrategyManager::GetInstance();
   strategy_manager.SetStrategies(actived_strategies);
   strategy_manager.Execute();
-  logger_.AppendLine(ANA_TILING_SPACE, "After adding constraints =======>");
-  auto PrintAttr = [&](TileAxis *a) -> void {
-    if (a != nullptr) a->DumpAxis();
-  };
-  ForEachAxisTopDown(PrintAttr);
-  logger_.AppendLine(ANA_TILING_SPACE, "<=============");
 }
 
 bool TilingAnalyzer::Prepare() {
+  // Stage 1: Analyze schedule tree.
   ScheduleTreeAnalyzer sch_ana(this, this->sch_);
   root_axis_ = sch_ana.Build(this->Halide());
   if (root_axis_ == nullptr) {
@@ -1368,25 +1358,42 @@ bool TilingAnalyzer::Prepare() {
   if (root_axis_->children.empty()) {
     return false;
   }
-  auto build_axis_map = [this](const TileAxis *a) {
+  auto BuildAxisMap = [this](const TileAxis *a) {
     for (auto loop : a->loops) {
       CHECK(loop) << "Tile axis has null ptr loop, check";
       this->tile_axis_[loop] = const_cast<TileAxis *>(a);
     }
   };
-  this->ForEachAxisTopDown(build_axis_map);
+  this->ForEachAxisTopDown(BuildAxisMap);
   if (op_type_ != VECTOR_OP) {
     sch_ana.AnalyzeCubeInfo();
   }
-  TileSpaceAnalyze();
 
+  // Stage 2: Analyze Halide IR and add tiling constraints.
+  SpaceAnalyzer space_analyzer(this);
+  space_analyzer.AnalyzeSpecialAxes();
+  AddTilingConstraints();
+
+  // Stage 3: Analyze buffer footprint.
   LinearAccessPatternBuilder lap_bdr(this);
   lap_bdr.Build(body_);
   linear_seq_ = std::move(lap_bdr.seq_);
   buf_info_ = std::move(lap_bdr.buf_);
   buffer_usage_timetable_ = std::move(lap_bdr.buffer_usage_timetable_);
 
+  // Stage 4: Set tiling priority based on previous analysis.
+  TilingPriorityScorer scroer(*this);
+  scroer.SetPriorityByScoring();
+
+  // Logging
+  logger_.AppendLine(ANA_TILING_SPACE, "After adding constraints =======>");
+  auto PrintAttr = [&](TileAxis *a) -> void {
+    if (a != nullptr) a->DumpAxis();
+  };
+  ForEachAxisTopDown(PrintAttr);
+  logger_.AppendLine(ANA_TILING_SPACE, "<=============");
   DumpLinearSeq();
+
   return true;
 }
 
