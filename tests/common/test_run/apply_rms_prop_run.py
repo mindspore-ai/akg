@@ -61,13 +61,22 @@ def gen_data(shape, dtype, lr, momentum, rho, epsilon):
     lr = np.array([lr]).astype(dtype)
     momentum = np.array([momentum]).astype(dtype)
     rho = np.array([rho]).astype(dtype)
-
     inputs = [var, ms, mom, grad, lr, momentum, rho]
+    expects = apply_rms_prop_compute(var, ms, mom, grad, lr, momentum, rho, epsilon)
+    args = inputs
+    return inputs, expects, args
 
+
+def apply_rms_prop_compute(var, ms, mom, grad, lr, momentum, rho, epsilon):
+    compute_dtype = "float32"
+    dtype = var.dtype
+    if dtype != compute_dtype:
+        var, ms, mom, grad, lr, momentum, rho = [t.astype(compute_dtype) for t in [
+            var, ms, mom, grad, lr, momentum, rho]]
     # ms = rho * ms + (1-rho) * grad * grad
     # mom = momentum * mom + lr * grad / sqrt(ms + epsilon)
     # var = var - mom
-    one = np.array([1.0]).astype(dtype)
+    one = np.array([1.0]).astype(compute_dtype)
     ms_1 = rho * ms
     ms_2 = (one - rho) * grad * grad
     ms_update = ms_1 + ms_2
@@ -77,7 +86,7 @@ def gen_data(shape, dtype, lr, momentum, rho, epsilon):
     mom_3 = mom_2_1 * mom_2_2
     mom_update = mom_1 + mom_3
     var_update = var - mom_update
-
-    expects = (var_update, ms_update, mom_update)
-    args = inputs
-    return inputs, expects, args
+    expects = [var_update, ms_update, mom_update]
+    if var_update.dtype != dtype:
+        expects = [t.astype(dtype) for t in expects]
+    return expects

@@ -29,7 +29,7 @@ class TestCase(TestBase):
         self.testarg = [
             ("apply_adagrad_001", "apply_adagrad_run", ((16, 16), "float16", True)),
             ("apply_adagrad_002", "apply_adagrad_run", ((16, 16), "float32", True)),
-          # ("apply_adagrad_003", "apply_adagrad_run", ((16, 16), "float16", False)),
+            ("apply_adagrad_003", "apply_adagrad_run", ((16, 16), "float16", False)),
             ("apply_adagrad_004", "apply_adagrad_run", ((16, 16), "float32", False)),
         ]
 
