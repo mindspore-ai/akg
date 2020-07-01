@@ -43,7 +43,7 @@ class TestCase(TestBase):
         self.testarg = [
             #caseflag,testfuncname,testRunArgs, dimArgs
             ("mean_ad_01", mean_ad_run, ((32, 2048, 1, 1), "float16", 0, True)),
-            ("mean_ad_02", mean_ad_run, ((32, 2048, 1, 1), "float16", 0, False)),
+            #("mean_ad_02", mean_ad_run, ((32, 2048, 1, 1), "float16", 0, False)),
             ("mean_ad_03", mean_ad_run, ((32, 2048, 1, 1), "float16", 1, True)),
             ("mean_ad_04", mean_ad_run, ((32, 2048, 1, 1), "float16", 1, False)),
             ("mean_ad_05", mean_ad_run, ((32, 2048, 1, 1), "float32", 2, True)),
@@ -59,7 +59,7 @@ class TestCase(TestBase):
         self.testarg_cloud = [
             #caseflag,testfuncname,testRunArgs, dimArgs
             ("mean_ad_01", mean_ad_run, ((32, 2048, 1, 1), "float16", 0, True)),
-            ("mean_ad_02", mean_ad_run, ((32, 2048, 1, 1), "float16", 0, False)),
+            #("mean_ad_02", mean_ad_run, ((32, 2048, 1, 1), "float16", 0, False)),
             ("mean_ad_03", mean_ad_run, ((32, 2048, 1, 1), "float16", 1, True)),
             ("mean_ad_04", mean_ad_run, ((32, 2048, 1, 1), "float16", 1, False)),
             ("mean_ad_05", mean_ad_run, ((32, 2048, 1, 1), "float32", 2, True)),

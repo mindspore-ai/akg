@@ -45,7 +45,7 @@ class TestCase(TestBase):
         self.caseresult = True
         self._log.info("============= {0} Setup case============".format(self.casename))
         self.testarg = [
-            ("resize_bilinear_00", resize_bilinear_run, ([1, 8, 8, 16], [16, 16], "float16", "cce_resize_bilinear_fp16"),((16,1),(38,1),(53,1),(60,1))),
+            # ("resize_bilinear_00", resize_bilinear_run, ([1, 8, 8, 16], [16, 16], "float16", "cce_resize_bilinear_fp16"),((16,1),(38,1),(53,1),(60,1))),
             # ("resize_bilinear_01", resize_bilinear_run, ([1,375,500,3], [468,625], "float16", "cce_resize_bilinear_fp16")),   # setdim
             # ("resize_bilinear_03", resize_bilinear_run, ([1,500,333,3], [750,499], "float16", "cce_resize_bilinear_fp16")),   # poly
             # ("resize_bilinear_04", resize_bilinear_run, ([1,357,500,3], [624,875], "float16", "cce_resize_bilinear_fp16")),   # poly

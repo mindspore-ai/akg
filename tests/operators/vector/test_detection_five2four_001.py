@@ -48,8 +48,8 @@ class TestCase(TestBase):
             ("detection_five2four_001", detection_five2four_run, ((16, 4, 1), "float16")),
             ("detection_five2four_002", detection_five2four_run, ((16, 4, 3), "float16")),
             ("detection_five2four_003", detection_five2four_run, ((16, 6, 5), "float16")),
-            ("detection_five2four_004", detection_five2four_run, ((16, 6, 10), "float16")),
-            ("detection_five2four_005", detection_five2four_run, ((16, 6, 19), "float16")),
+            #("detection_five2four_004", detection_five2four_run, ((16, 6, 10), "float16")),
+            #("detection_five2four_005", detection_five2four_run, ((16, 6, 19), "float16")),
             ("detection_five2four_006", detection_five2four_run, ((16, 4, 38), "float16")),
         ]
         self.testarg_cloud = [

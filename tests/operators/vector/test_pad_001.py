@@ -52,7 +52,7 @@ class TestCase(TestBase):
 
             # Matmul shape
             # ("pad_05", pad_run, ((16384, 33), (), "float32", "constant", "cce_pad_float16"), ),
-            ("pad_06", pad_run, ((16384, 33), (), "float16", "constant", "cce_pad_float16"), ),
+            # ("pad_06", pad_run, ((16384, 33), (), "float16", "constant", "cce_pad_float16"), ),
             # ("pad_07", pad_run, ((33, 16384), (), "float32", "constant", "cce_pad_float16"), ),
             ("pad_08", pad_run, ((1024, 8), (), "float32", "constant", "cce_pad_float16"), ),
             ("pad_09", pad_run, ((1024, 2), (), "float32", "constant", "cce_pad_float16"), ),
