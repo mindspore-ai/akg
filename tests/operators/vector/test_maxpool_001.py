@@ -43,11 +43,11 @@ class TestCase(TestBase):
             ("001_maxpool_fp16", maxpool_run, ((1, 1, 16, 16, 16), (2, 2), (1, 1), (0, 0, 0, 0), True, "float16")),
             ("002_maxpool_fp16", maxpool_run, ((1, 1, 16, 16, 16), (2, 2), (2, 2), (1, 1, 1, 1), True, "float16")),
             ("003_maxpool_fp16", maxpool_run, ((1, 1, 16, 16, 16), (2, 2), (1, 1), (1, 1, 1, 1), True, "float16")),
-            ("004_maxpool_fp16", maxpool_run, ((1, 1, 29, 29, 16), (2, 2), (1, 1), (1, 1, 1, 1), True, "float16")),
+            # ("004_maxpool_fp16", maxpool_run, ((1, 1, 29, 29, 16), (2, 2), (1, 1), (1, 1, 1, 1), True, "float16")),
             ("005_maxpool_fp16", maxpool_run, ((1, 1, 30, 30, 16), (2, 2), (1, 1), (0, 0, 0, 0), True, "float16")),
             ("006_maxpool_fp16", maxpool_run, ((1, 2, 16, 16, 16), (4, 4), (3, 3), (1, 1, 1, 1), True, "float16")),
             ("007_maxpool_fp16", maxpool_run, ((1, 1, 17, 17, 16), (3, 3), (2, 2), (1, 1, 1, 1), True, "float16")),
-            ("008_maxpool_fp16", maxpool_run, ((1, 1, 30, 30, 16), (2, 2), (1, 1), (1, 1, 1, 1), True, "float16")),
+            #("008_maxpool_fp16", maxpool_run, ((1, 1, 30, 30, 16), (2, 2), (1, 1), (1, 1, 1, 1), True, "float16")),
 
             # not hybrid
             ("not_hybrid_01", maxpool_run, ((2, 16, 40, 24, 16), (1, 1), (2, 2), (0, 0, 0, 0), False, "float16")),

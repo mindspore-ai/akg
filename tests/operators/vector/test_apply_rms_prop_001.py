@@ -46,7 +46,7 @@ class TestCase(TestBase):
         self.testarg = [
             # testflag, opfuncname, testRunArgs, dimArgs
             # testRunArgs: (shape, dtype, lr, momentum, rho, epsilon, attrs)
-            ("apply_rms_prop_1", apply_rms_prop_run, ((1024,), "float16", 0.5, 0.9, 0.6, 1e-4)),
+            # ("apply_rms_prop_1", apply_rms_prop_run, ((1024,), "float16", 0.5, 0.9, 0.6, 1e-4)),
             ("apply_rms_prop_2", apply_rms_prop_run, ((16, 16), "float32", 0.5, 0.9, 0.6, 1e-6)),
         ]
         self.testarg_cloud = [

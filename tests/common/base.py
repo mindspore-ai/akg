@@ -318,7 +318,7 @@ class TestBase(object):
                         os.remove(cce_file_name)
                     if ir_file_name and os.path.exists(ir_file_name):
                         os.remove(ir_file_name)
-                    self.case_result = True
+                    self.case_result &= True
 
             endtime = datetime.datetime.now()
             self._log.info("{0} testcase use ***Running Time*** is: {1}s. "
