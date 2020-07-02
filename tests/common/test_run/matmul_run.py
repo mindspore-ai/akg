@@ -67,13 +67,13 @@ def get_shapes(batch_tuple, M, K, N, trans_data=False, trans_weight=False):
     return shape_x, shape_y
 
 
-def getMatmulType(m, n, k):
-    type = MatmulType.gemm
+def getMatmulType(m, n):
+    matmul_type = MatmulType.gemm
     if m // cce.BLOCK_IN == 0:
-        type = MatmulType.gevm
+        matmul_type = MatmulType.gevm
     elif n == 1:
-        type = MatmulType.gemv
-    return type
+        matmul_type = MatmulType.gemv
+    return matmul_type
 
 
 def np_matmul(matrix_a, matrix_b, batch_tuple, M, K, N, trans_data=False, trans_weight=False, output_format=None):
@@ -100,7 +100,7 @@ def np_matmul(matrix_a, matrix_b, batch_tuple, M, K, N, trans_data=False, trans_
     for b in range(mul):
         out[b, :] = np.dot(reshape_x[b, :], reshape_y[b, :])
         #out[b,:] = np.matmul(reshape_x[b,:], reshape_y[b,:])
-    matmul_type = getMatmulType(M, N, K)
+    matmul_type = getMatmulType(M, N)
     out_shape = ()
     if matmul_type == MatmulType.gemm:
         out_shape = batch_tuple + (M // cce.BLOCK_IN, cce.BLOCK_IN, N // cce.BLOCK_OUT, cce.BLOCK_OUT)
@@ -132,7 +132,7 @@ def genData(batch_tuple, M, K, N, trans_data=False, trans_weight=False,
     matrix_a_for_np = matrix_a.astype(np.float32)
     matrix_b_for_np = matrix_b.astype(np.float32)
 
-    matmul_type = getMatmulType(M, N, K)
+    matmul_type = getMatmulType(M, N)
     out = np_matmul(matrix_a_for_np, matrix_b_for_np, batch_tuple, M, K, N, trans_data, trans_weight, output_format).astype(out_dtype)
     if dtype == "float16":
         out.astype(np.float16)
@@ -226,24 +226,24 @@ def reduce_data(reduce_type):
     return res
 
 
-def get_fractal_shape(dim1, dim2, reduce1="in", reduce2="reduce", format="zZ"):
+def get_fractal_shape(dim1, dim2, reduce1="in", reduce2="reduce", matrix_format="zZ"):
     result = ()
     dim1_reduce = reduce_data(reduce1)
     dim2_reduce = reduce_data(reduce2)
-    if format == "zZ":
+    if matrix_format == "zZ":
         result = (dim1 // dim1_reduce, dim2 // dim2_reduce, dim1_reduce, dim2_reduce)
-    elif format == "nZ":
+    elif matrix_format == "nZ":
         result = (dim1 // dim1_reduce, dim2 // dim2_reduce, dim2_reduce, dim1_reduce)
-    elif format == "nN":
+    elif matrix_format == "nN":
         result = (dim2 // dim2_reduce, dim1 // dim1_reduce, dim2_reduce, dim1_reduce)
-    elif format == "zN":
+    elif matrix_format == "zN":
         result = (dim2 // dim2_reduce, dim1 // dim1_reduce, dim1_reduce, dim2_reduce)
 
     return result
 
 
 def get_converted_shapes(m, n, k, batch_tuple, adj_x, adj_y, bias, left_format="zZ", right_format="nZ", out_format="zN"):
-    matmul_type = getMatmulType(m, n, k)
+    matmul_type = getMatmulType(m, n)
     if matmul_type == MatmulType.gemm:
         # left_format zZ process
         if left_format == "zZ":
@@ -341,7 +341,7 @@ def matmul_execute(shape_x, shape_y, bias, left_format, right_format, out_format
     return (m_x, m_y), output, bench_mark, compare_result
 
 
-def matmul_compile(shape_x, shape_y, bias, left_format, right_format, output_format, adj_x, adj_y, dtype, out_dtype, kernel_name, attrs):
+def matmul_compile(shape_x, shape_y, bias, left_format, right_format, output_format, adj_x, adj_y, dtype, out_dtype, kernel_name, attrs, tuning=False):
     batch_tuple, m, k, n = extract_dim(shape_x, shape_y, adj_x, adj_y)
     m = (m + 15) // 16 * 16
     n = (n + 15) // 16 * 16
@@ -358,4 +358,4 @@ def matmul_compile(shape_x, shape_y, bias, left_format, right_format, output_for
         input_shapes = [shape_xx, shape_yy]
         input_types = [dtype, dtype]
         op_attrs = [None, out_dtype, left_format, right_format, output_format, adj_x, adj_y, attrs]
-    return utils.op_build_test(matmul.matmul, input_shapes, input_types, op_attrs, kernel_name, attrs)
+    return utils.op_build_test(matmul.matmul, input_shapes, input_types, op_attrs, kernel_name, attrs, tuning=tuning)
