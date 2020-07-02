@@ -25,10 +25,14 @@ from akg.ops.math.rsqrt import rsqrt
 
 def _apply_rms_prop_compute(var, ms, mom, grad, lr, momentum, rho, epsilon):
     """Compute apply_rms_prop"""
-    shape = get_shape(var)
+    compute_dtype = "float32"
     dtype = var.dtype
-    cons_eps = akg.tvm.const(epsilon, dtype=dtype)
-    one_minus_rho = akg.tvm.compute((1, ), lambda *indice: akg.tvm.const(1.0, dtype) - rho[0], name="one_minus_rho")
+    if dtype != compute_dtype:
+        var, ms, mom, grad, lr, momentum, rho = [topi.cast(t, compute_dtype) for t in [
+            var, ms, mom, grad, lr, momentum, rho]]
+    shape = get_shape(var)
+    cons_eps = akg.tvm.const(epsilon, dtype=compute_dtype)
+    one_minus_rho = akg.tvm.compute((1, ), lambda *indice: akg.tvm.const(1.0, compute_dtype) - rho[0], name="one_minus_rho")
 
     # var_update = var - (momentum * mom + lr * grad / sqrt(rho * ms + (1 - rho) * grad * grad + epsilon))
     mom_1 = akg.tvm.compute(shape, lambda *indice: momentum[0] * mom(*indice), name="mom_1")
@@ -42,6 +46,8 @@ def _apply_rms_prop_compute(var, ms, mom, grad, lr, momentum, rho, epsilon):
     mom_2 = akg.tvm.compute(shape, lambda *indice: lr_grad(*indice) * rsq(*indice), name="mom_2")
     mom_update = akg.tvm.compute(shape, lambda *indice: mom_1(*indice) + mom_2(*indice), name="mom_update")
     var_update = akg.tvm.compute(shape, lambda *indice: var(*indice) - mom_update(*indice), name="var_update")
+    if var_update.dtype != dtype:
+        var_update, ms_update, mom_update = [topi.cast(t, dtype) for t in [var_update, ms_update, mom_update]]
 
     return var_update, ms_update, mom_update
 

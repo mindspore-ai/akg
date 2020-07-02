@@ -34,13 +34,12 @@ def apply_adagrad_execute(shape, dtype, update_slots, attrs=None):
 
 def gen_data(dtype, update_slots, shape):
     var = random_gaussian(shape, miu=1, sigma=0.1).astype(dtype)
-    accum = random_gaussian(shape, miu=1, sigma=0.1).astype(dtype)
+    # accum must be greater than or equal to 0
+    accum = np.abs(random_gaussian(shape, miu=1, sigma=0.1).astype(dtype))
     lr = random_gaussian((1,), miu=1, sigma=0.1).astype(dtype)
     grad = random_gaussian(shape, miu=1, sigma=0.1).astype(dtype)
     inputs = [var, accum, lr, grad]
-    accum_out = accum + grad * grad if update_slots else accum
-    var_out = var - (lr * grad / np.sqrt(accum_out))
-    exp_output = (var_out, accum_out)
+    exp_output = apply_adagrad_compute(var, accum, lr, grad, update_slots)
     outputs = [np.full(e.shape, np.nan, dtype) for e in exp_output]
     args = [*inputs, *outputs]
 
@@ -52,3 +51,16 @@ def apply_adagrad_compile(shape, dtype, update_slots, attrs, kernel_name="apply_
     dtypes = [dtype] * len(shapes)
     return utils.op_build_test(apply_adagrad.apply_adagrad, shapes, dtypes, [update_slots],
                                kernel_name=kernel_name, attrs=attrs, tuning=tuning)
+
+
+def apply_adagrad_compute(var, accum, lr, grad, update_slots):
+    dtype = var.dtype
+    compute_dtype = "float32"
+    if dtype != compute_dtype:
+        var, accum, lr, grad = [t.astype(compute_dtype) for t in [var, accum, lr, grad]]
+    accum_out = accum + grad * grad if update_slots else accum
+    var_out = var - (lr * grad / np.sqrt(accum_out))
+    exp_output = [var_out, accum_out]
+    if compute_dtype != dtype:
+        exp_output = [t.astype(dtype) for t in exp_output]
+    return exp_output

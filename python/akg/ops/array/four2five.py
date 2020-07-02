@@ -270,10 +270,10 @@ def four2five(data, format_, dst_dtype='float16'):
                 pad_before.append(0)
                 pad_after.append(0)
             pad_after[-1] = last_channel - c
-            output = akg.topi.reshape(cast_data, (bs, c1, h, w, c))
+            # As c < last_channel, c1 is 1
+            output = akg.tvm.compute((bs, c1, h, w, c), lambda bs_i, _, h_i, w_i, c_i: cast_data[
+                bs_i, h_i, w_i, c_i], name="output")
             output = tvm_pad(output, pad_before, pad_after=pad_after, name='pad_output')
-            # In this case, reshape will create mod/div ops, which needs loop partition for tiling
-            attrs["enable_pre_poly_loop_partition"] = True
         else:
             output = nhwc_to_nc1hwc0(
                 cast_data,

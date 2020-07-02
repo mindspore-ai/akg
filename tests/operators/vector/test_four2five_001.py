@@ -72,7 +72,7 @@ class TestCase(TestBase):
             #("four2five_025", four2five_run, ([8, 64, 16, 16], "float32", 'NHWC', 'float16')),
             #("four2five_026", four2five_run, ([1, 64, 15, 15], "float32", 'NHWC', 'float16')),
             #("four2five_027", four2five_run, ([1, 24, 16, 16], "float32", 'NHWC', 'float16')),
-            #("four2five_028", "four2five_run", ([1, 59, 121, 15], "float32", 'NHWC', 'float32')),
+            ("four2five_028", "four2five_run", ([1, 59, 121, 15], "float32", 'NHWC', 'float32')),
             ("four2five_017", "four2five_run", ([32, 2048, 7, 7], "float32", 'NCHW', 'float32')),
         ]
 
