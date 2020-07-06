@@ -271,7 +271,7 @@ def matmul4D_compute(x, y, bias_value, out_dtype, left_format, right_format, out
         "bias": bias_name,
     })
 
-    if out_dtype == "float16":
+    if out_dtype == "float16" and (bias_value == None or bias_value.dtype == "float16"):
         result_matmul = cast.cast(result_matmul, out_dtype)
 
     def matmul_reshape(shape, result_matmul, *indices):
@@ -288,10 +288,10 @@ def matmul4D_compute(x, y, bias_value, out_dtype, left_format, right_format, out
         N = len(output_shape)
         # reduce axis
         if output_format == "zN":
-            bias_indices = indices[:(N - 4)] + indices[(N - 4):(N - 3)] + (0, 0) + indices[(N - 1):]
+            bias_indices = indices[N - 4] * cce.BLOCK_OUT + indices[N - 1]
         elif output_format == "zZ":
-            bias_indices = indices[:(N - 4)] + (0,) + indices[(N - 3):(N - 2)] + (0,) + indices[(N - 1):]
-        return result(*indices) + bias(*bias_indices)
+            bias_indices = indices[N - 3] * cce.BLOCK_OUT + indices[N - 1]
+        return result(*indices) + bias(bias_indices)
     if bias == 1:
         if out_format == "zN":
             out = akg.tvm.compute(output_shape_zN, lambda *indices: bias_compute(output_shape_zN, result, bias_value, out_format, *indices),
@@ -299,6 +299,8 @@ def matmul4D_compute(x, y, bias_value, out_dtype, left_format, right_format, out
         elif out_format == "zZ":
             out = akg.tvm.compute(output_shape_zZ, lambda *indices: bias_compute(output_shape_zZ, result, bias_value, out_format, *indices),
                               name="output")
+        if out_dtype == "float16" and bias_value.dtype == "float32":
+            out = cast.cast(out, out_dtype)
     else:
         out = result
 

@@ -121,7 +121,7 @@ def np_matmul(matrix_a, matrix_b, batch_tuple, M, K, N, trans_data=False, trans_
 
 
 def genData(batch_tuple, M, K, N, trans_data=False, trans_weight=False,
-            dtype="float16", out_dtype="float16", bias=0, left_format="zZ", right_format="nZ", output_format="zN"):
+            dtype="float16", bias_dtype="float16", out_dtype="float16", bias=0, left_format="zZ", right_format="nZ", output_format="zN"):
     shape_x, shape_y = get_shapes(batch_tuple, M, K, N, trans_data, trans_weight)
     matrix_a = random_gaussian(shape_x, miu=0.1, sigma=0.01).astype(dtype)
     matrix_b = random_gaussian(shape_y, miu=0.1, sigma=0.01).astype(dtype)
@@ -137,13 +137,19 @@ def genData(batch_tuple, M, K, N, trans_data=False, trans_weight=False,
     if dtype == "float16":
         out.astype(np.float16)
 
-    bias_shape = batch_tuple + (N // cce.BLOCK_OUT, 1, 1, cce.BLOCK_OUT)
-    if output_format == "zZ":
-        bias_shape = batch_tuple + (1, N // cce.BLOCK_OUT, 1, cce.BLOCK_OUT)
-    bias_data = np.full(bias_shape, np.nan, out_dtype)
-    if bias == 1:
-        bias_data = random_gaussian(bias_shape, miu=0.5, sigma=0.01).astype(out_dtype)
-        out = out + bias_data
+    bias_shape = (N,)
+    bias_data = np.full(bias_shape, np.nan, bias_dtype)
+    if bias != 0:
+        bias_data = random_gaussian(bias_shape, miu=0.5, sigma=0.01).astype(bias_dtype)
+        bias_reshape = (N // cce.BLOCK_OUT, 1, 1, cce.BLOCK_OUT)
+        if output_format == "zZ":
+            bias_reshape = (1, N // cce.BLOCK_OUT, 1, cce.BLOCK_OUT)
+        bias_data_reshaped = bias_data.reshape(bias_reshape)
+        if bias_dtype != out_dtype:
+            out = out.astype(np.float32) + bias_data_reshaped.astype(np.float32)
+            out = out.astype(out_dtype)
+        else:
+            out = out + bias_data_reshaped
 
     shape_x = ()
     shape_y = ()
@@ -185,14 +191,14 @@ def genData(batch_tuple, M, K, N, trans_data=False, trans_weight=False,
     return fractal_a, fractal_b, out, bias_data
 
 
-def matmul_data(batch_tuple, M, K, N, dtype, out_dtype, bias, adj_x, adj_y, left_format=None, right_format=None, output_format=None, debug_logging=False):
+def matmul_data(batch_tuple, M, K, N, dtype, bias_dtype, out_dtype, bias, adj_x, adj_y, left_format=None, right_format=None, output_format=None, debug_logging=False):
     m_x = ()
     m_y = ()
     bench_mark = ()
     bias_data = ()
     logging.debug("gen data start!")
     a = datetime.now()
-    m_x, m_y, bench_mark, bias_data = genData(batch_tuple, M, K, N, adj_x, adj_y, dtype, out_dtype, bias, left_format, right_format, output_format)
+    m_x, m_y, bench_mark, bias_data = genData(batch_tuple, M, K, N, adj_x, adj_y, dtype, bias_dtype, out_dtype, bias, left_format, right_format, output_format)
     b = datetime.now()
     logging.debug((b - a).seconds)
     logging.debug("gen data end!")
@@ -295,17 +301,13 @@ def get_converted_shapes(m, n, k, batch_tuple, adj_x, adj_y, bias, left_format="
         output_shape = batch_tuple + (m // cce.BLOCK_OUT, 1, n % cce.BLOCK_IN, cce.BLOCK_OUT)
 
     if bias == 1:
-        if out_format == "zN":
-            bias_shape_nc1hwc0 = batch_tuple + (n // cce.BLOCK_OUT, 1, 1, cce.BLOCK_OUT)
-        elif out_format == "zZ":
-            bias_shape_nc1hwc0 = batch_tuple + (1, n // cce.BLOCK_OUT, 1, cce.BLOCK_OUT)
-
+        bias_shape_nc1hwc0 = (n,)
     else:
         bias_shape_nc1hwc0 = None 
     return shape_xx, shape_yy, bias_shape_nc1hwc0, output_shape, k
 
 
-def matmul_execute(shape_x, shape_y, bias, left_format, right_format, out_format, adj_x, adj_y, dtype, out_dtype, kernel_name, attrs):
+def matmul_execute(shape_x, shape_y, bias, left_format, right_format, out_format, adj_x, adj_y, dtype, bias_dtype, out_dtype, kernel_name, attrs):
     '''
     There are four types of fractal format in Davinci core: zZ, zN, nZ, nN
     general matmul format
@@ -323,9 +325,9 @@ def matmul_execute(shape_x, shape_y, bias, left_format, right_format, out_format
     n = (n + 15) // 16 * 16
     k = (k + 15) // 16 * 16
     shape_xx, shape_yy, bias_shape, out_shape, k = get_converted_shapes(m, n, k, batch_tuple, adj_x, adj_y, bias, left_format, right_format, out_format)
-    mod = matmul_compile(shape_x, shape_y, bias, left_format, right_format, out_format, adj_x, adj_y, dtype, out_dtype, kernel_name, attrs)
+    mod = matmul_compile(shape_x, shape_y, bias, left_format, right_format, out_format, adj_x, adj_y, dtype, bias_dtype, out_dtype, kernel_name, attrs)
     # Generate data
-    m_x, m_y, bench_mark, bias_data = matmul_data(batch_tuple, m, k, n, dtype, out_dtype, bias, adj_x, adj_y, left_format, right_format, out_format)
+    m_x, m_y, bench_mark, bias_data = matmul_data(batch_tuple, m, k, n, dtype, bias_dtype, out_dtype, bias, adj_x, adj_y, left_format, right_format, out_format)
 
     # mod launch
     output = np.full(out_shape, np.nan, out_dtype)
@@ -341,7 +343,7 @@ def matmul_execute(shape_x, shape_y, bias, left_format, right_format, out_format
     return (m_x, m_y), output, bench_mark, compare_result
 
 
-def matmul_compile(shape_x, shape_y, bias, left_format, right_format, output_format, adj_x, adj_y, dtype, out_dtype, kernel_name, attrs, tuning=False):
+def matmul_compile(shape_x, shape_y, bias, left_format, right_format, output_format, adj_x, adj_y, dtype, bias_dtype, out_dtype, kernel_name, attrs, tuning=False):
     batch_tuple, m, k, n = extract_dim(shape_x, shape_y, adj_x, adj_y)
     m = (m + 15) // 16 * 16
     n = (n + 15) // 16 * 16
@@ -349,7 +351,7 @@ def matmul_compile(shape_x, shape_y, bias, left_format, right_format, output_for
     shape_xx, shape_yy, bias_shape, out_shape, k = get_converted_shapes(m, n, k, batch_tuple, adj_x, adj_y, bias,
                                                                         left_format, right_format, output_format)
     input_shapes = [shape_xx, shape_yy, bias_shape]
-    input_types = [dtype, dtype, out_dtype]
+    input_types = [dtype, dtype, bias_dtype]
     has_bias = False
     if bias == 1:
         has_bias = True
