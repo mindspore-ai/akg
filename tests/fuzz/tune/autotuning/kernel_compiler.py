@@ -100,16 +100,6 @@ def gen_kernel_matmul_cube(op_desc: MatmulCubeDesc, _, index_table,
     kernel_name = "matmul_cube_poly"
     if idx is not None:
         kernel_name += str(idx)
-    batch_tuple, m, k, n = matmul_run.extract_dim(op_desc.x_shape, op_desc.y_shape, op_desc.adj_x, op_desc.adj_y)
-    m = (m + 15) // 16 * 16
-    n = (n + 15) // 16 * 16
-    k = (k + 15) // 16 * 16
-    shape_xx, shape_yy, bias_shape, _, _ = matmul_run.get_converted_shapes(m, n, k, batch_tuple, op_desc.adj_x,
-                                                                           op_desc.adj_y, op_desc.bias,
-                                                                           op_desc.left_format, op_desc.right_format,
-                                                                           op_desc.out_format)
-    input_shapes = [shape_xx, shape_yy, bias_shape]
-    input_types = [op_desc.dtype, op_desc.dtype, op_desc.dtype]
     if config is None:
         attrs = {'dim': ""}
     else:
@@ -123,18 +113,9 @@ def gen_kernel_matmul_cube(op_desc: MatmulCubeDesc, _, index_table,
         tiling_param.extend([(16, 16), (16, 16), (config.k_l1, config.k_l0)])
         dim_info = ct_util.set_dims(tuple(tiling_param))
         attrs = {'dim': dim_info, 'bypass': config.bypass}
-    has_bias = False
-    if op_desc.bias == 1:
-        has_bias = True
-    op_attrs = [op_desc.out_dtype, op_desc.left_format, op_desc.right_format, op_desc.out_format,
-                op_desc.adj_x, op_desc.adj_y, has_bias, attrs]
-    if has_bias == False:
-        input_shapes = [shape_xx, shape_yy]
-        input_types = [op_desc.dtype, op_desc.dtype]
-        op_attrs = [None, op_desc.out_dtype, op_desc.left_format, op_desc.right_format, op_desc.out_format,
-                    op_desc.adj_x, op_desc.adj_y, has_bias, attrs]
-    return utils.op_build(matmul.matmul, input_shapes, input_types, op_attrs,
-                          kernel_name=kernel_name, attrs=attrs, polyhedral=True, tuning=gen_tiling_spaces)
+    return matmul_run.matmul_compile(op_desc.x_shape, op_desc.y_shape, op_desc.bias, op_desc.left_format,
+                                     op_desc.right_format, op_desc.out_format, op_desc.adj_x, op_desc.adj_y,
+                                     op_desc.dtype, op_desc.out_dtype, kernel_name, attrs, gen_tiling_spaces)
 
 
 def gen_kernel_conv_backprop_input(op_desc: ConvBackpropDesc, _, index_table, config: ConvBackpropInputConfig = None,

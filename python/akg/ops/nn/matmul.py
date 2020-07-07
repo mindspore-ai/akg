@@ -80,7 +80,7 @@ matmul_set_dim_map = {
 }
 
 
-def matmul_set_dim(A, B, b, out_dtype, left_format, right_format, output_format, adj_x, adj_y, attrs):
+def matmul_set_dim(A, B, b, out_dtype, left_format, right_format, output_format, adj_x, adj_y):
     shape_A = A.shape[1:5] if len(A.shape) == 5 else A.shape
     shape_B = B.shape[1:5] if len(B.shape) == 5 else B.shape
     bias = 0 if b is None else 1
@@ -341,7 +341,7 @@ def matmul(x, y, b, out_dtype, left_format="zZ", right_format="nZ", out_format="
     out = matmul4D_compute(x, y, b, out_dtype, left_format, right_format, out_format, transpose_x, transpose_y, attrs)
     attr_map = {"pragma_rmselfdep": False}
 
-    dims_info, _ = matmul_set_dim(x, y, b, out_dtype, left_format, right_format, out_format, transpose_x, transpose_y, attrs)
+    dims_info, _ = matmul_set_dim(x, y, b, out_dtype, left_format, right_format, out_format, transpose_x, transpose_y)
     attr_map["dim"] = dims_info
 
     return out, attr_map
