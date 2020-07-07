@@ -138,7 +138,11 @@ class EstimateAlign : public IRMutator {
  public:
   bool IsSimpleAddress(const Stmt &stmt) {
     Mutate(stmt);
-    return all_simple_addressing_;
+    // Returns true only when the numbers of Store in IR that is not elementwise
+    // is only 1 or less, in this case, we can consider optimizing broadcast by
+    // using variable length mask in insn emitting pass safely because at most
+    // 1 Store does not need to cosider block alignment.
+    return (not_simple_addressing_cnt_ < 2);
   }
 
   Stmt Mutate_(const AttrStmt *op, const Stmt &stmt) final {
@@ -146,22 +150,19 @@ class EstimateAlign : public IRMutator {
       if (exclude_list.count(op->value.as<StringImm>()->value)) {
         return stmt;
       }
-      is_candidate_ = true;
 
       StmtInfoList dst_info_list, src_info_list;
       StmtInfo if_info, for_info;
       GetCompactComputationInfo(op->body, dst_info_list, src_info_list, if_info, for_info, false);
 
       if (!src_info_list.empty() && !IsElementwise(dst_info_list, src_info_list)) {
-        all_simple_addressing_ = false;
+        not_simple_addressing_cnt_++;
       }
-      is_candidate_ = false;
     }
     return IRMutator::Mutate_(op, stmt);
   }
 
-  bool is_candidate_{false};
-  bool all_simple_addressing_{true};
+  int not_simple_addressing_cnt_{0};  // records the number of stores that are not elementwise
 };
 
 Stmt OptimizePragma(Stmt stmt) {
