@@ -199,6 +199,7 @@ class MulticoreStrategy {
   TileCandidate &cand_;
   TileLogger &logger_;
   std::pair<int, int> GetProposalRangeForFullMulticore(TileAxis *axis);
+  int GetProposalCoreNum();
 };
 
 class TilingPriorityScorer {

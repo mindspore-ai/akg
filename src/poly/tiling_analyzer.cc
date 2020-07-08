@@ -717,7 +717,7 @@ int TileCandidate::GetMinFactorForMinDataGranularity(TileAxis *axis) {
     }
     granularity *= l1_val;
   }
-  return std::max(static_cast<int>(MIN_MULTICORE_BYTES / granularity), 1);
+  return std::max(static_cast<int>(MIN_CORE_GRANULARITY / granularity), 1);
 }
 
 /*

@@ -426,19 +426,47 @@ void GemmStrategy::AddConstraint() {
   }
 }
 
-std::pair<int, int> MulticoreStrategy::GetProposalRangeForFullMulticore(TileAxis *multicore_axis) {
+// Adjust max core for element-wise and inner-most reduction operations to balance core number and granularity.
+int MulticoreStrategy::GetProposalCoreNum() {
   int max_core = cand_.GetCoreNumConf();
+  int problem_size = 1;
+
+  for (auto axis : this->cand_.GetTileAxis()) {
+    if (axis->range_extent.as<IntImm>() == nullptr) {
+      return 0;
+    }
+
+    if ((axis->HasAttr("TRANSFORM")) || (axis->HasAttr("TRANSPOSE")) ||
+        (axis->HasAttr("REDUCE_AXIS") && !axis->HasAttr("REDUCE_SRC_LAST"))) {
+      return max_core;
+    }
+
+    problem_size *= axis->range_extent.as<IntImm>()->value;
+  }
+
+  if (problem_size < max_core * MIN_CORE_GRANULARITY * MAX_REPEAT) {
+    max_core = static_cast<int>(problem_size / DESIRE_CORE_GRANULARITY);
+    if (max_core > 2 && max_core % 2 != 0) {
+      max_core--;
+    }
+  }
+  return max_core;
+}
+
+std::pair<int, int> MulticoreStrategy::GetProposalRangeForFullMulticore(TileAxis *multicore_axis) {
+  int max_core = GetProposalCoreNum();
   int used_core = 1;
   std::pair<int, int> proposal_range = std::make_pair(cand_.GetMinFactorForMinDataGranularity(multicore_axis), -1);
   auto this_level_core = std::max(static_cast<int>(max_core / used_core), 1);
   std::stringstream ss;
-  if (multicore_axis->range_extent.as<IntImm>() == nullptr) return proposal_range;
+  if (multicore_axis->range_extent.as<IntImm>() == nullptr || this_level_core <= 1) {
+    return proposal_range;
+  }
   auto shape = multicore_axis->range_extent.as<IntImm>()->value;
   bool is_last_level = false;
   for (auto other_axis : this->cand_.GetTileAxis()) {
     if (other_axis == multicore_axis) break;
     if (other_axis->index != multicore_axis->index || other_axis->HasAttr("REDUCE_AXIS")) continue;
-    if (other_axis->range_extent.as<IntImm>() == nullptr) return proposal_range;
     int64_t l1_val = TileVarId::UNDEFINE;
     std::tie(l1_val, std::ignore) = cand_.GetConstTileVal(other_axis);
     if (l1_val == TileVarId::VAR) return proposal_range;
@@ -529,7 +557,7 @@ int64_t MulticoreStrategy::AdjustTilingAccordingToMulticoreConstraint(TileAxis *
   bool efficient = (shape % tiling_factor == 0) >= (shape % origin_factor == 0);
   auto multicore_shrink_limit = 2;
   auto reduced_mem = std::max(origin_factor - tiling_factor, min_factor_for_enough_data - tiling_factor);
-  if ((static_cast<int>(origin_factor / tiling_factor) >= multicore_shrink_limit) && reduced_mem > pending_blocks) {
+  if ((static_cast<int>(origin_factor / tiling_factor) > multicore_shrink_limit) && reduced_mem > pending_blocks) {
     ss << "If axis adjust to " << tiling_factor << ", " << reduced_mem << " memory is reduced;"
        << " while maximal pending blocks is only " << pending_blocks << ", adjust may not be efficient.";
     logger_.AppendLog(DO_TILING, ss);
