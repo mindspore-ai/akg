@@ -230,3 +230,8 @@ if(ENABLE_AKG)
   #file(COPY ${CMAKE_CURRENT_BINARY_DIR}/libakg.so DESTINATION "${AKG_SOURCE_DIR}/output")
 endif()
 
+# unittest_cpp
+add_subdirectory(${AKG_SOURCE_DIR}/third_party/googletest)
+add_subdirectory(${AKG_SOURCE_DIR}/tests/unittest_cpp)
+set(GTEST_DIR "${AKG_SOURCE_DIR}/third_party/googletest")
+set(UNITTEST_CPP_DIR "${AKG_SOURCE_DIR}/tests/unittest_cpp")

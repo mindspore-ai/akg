@@ -1329,9 +1329,5 @@ Stmt ToThreeAddress(Stmt stmt, bool reuse_variable, int minimum_split, bool cros
   stmt = ThreeAddressStmtMutator(reuse_variable, minimum_split, cross_stmt_simplify).Mutate(stmt);
   return Simplify_cce(stmt);
 }
-
-TVM_REGISTER_API("ir_pass.ExprEqual").set_body([](const TVMArgs args, TVMRetValue *ret) {
-  *ret = Equal(args[0].operator Expr(), args[1].operator Expr());
-});
 }  // namespace ir
 }  // namespace akg
