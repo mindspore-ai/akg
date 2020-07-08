@@ -112,13 +112,20 @@ class VectorizedStrategy : public TilingStrategy {
   void AddConstraint();
 };
 
+class DmaAlignStrategy : public TilingStrategy {
+ public:
+  explicit DmaAlignStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {}
+  ~DmaAlignStrategy() {}
+  void AddConstraint();
+  
+  std::string interested_attr_key = "ALIGN";
+};
+
 class TensorOfTensorStrategy : public TilingStrategy {
  public:
   explicit TensorOfTensorStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {}
   ~TensorOfTensorStrategy() {}
   void AddConstraint();
-
-  std::string interested_attr_key = "CAST";
 };
 
 class PassDownAttrStrategy : public TilingStrategy {
