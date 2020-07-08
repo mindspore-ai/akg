@@ -335,6 +335,7 @@ Stmt ValueNumbering(Stmt stmt);
 Stmt MultiLastAxisReductions(Stmt stmt, bool is_dynamic);
 
 Stmt AutoReorder(Stmt stmt);
+Stmt SplitTail(Stmt stmt);
 
 Stmt CopyPropagation(Stmt stmt, const Map<Tensor, Buffer> &extern_buffer);
 
