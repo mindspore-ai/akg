@@ -232,20 +232,20 @@ void VectorizedStrategy::AddConstraint() {
     return;
   }
   for (auto axis : analyzer_->GetAxesOfAttr("VECTORIZED")) {
-    if (axis->HasAttr("DYNAMIC_BOUND")) {
+    if (axis->HasAttr("DYNAMIC_BOUND") || axis->range_extent.as<IntImm>() == nullptr) {
       continue;
     }
     int64_t min_byte = -1;
-    if (axis->data_size.empty()) {
-      min_byte = 1;
-    } else {
-      for (const auto &it : axis->data_size) {
-        if (min_byte == -1 || min_byte > it.second) {
-          min_byte = it.second;
-        }
+    for (const auto &it : axis->data_size) {
+      if (it.second == 0) {
+        continue;
+      }
+      if (min_byte == -1 || min_byte > it.second) {
+        min_byte = it.second;
       }
     }
-    CHECK_NE(min_byte, 0);
+    min_byte = min_byte == -1 ? 1 : min_byte;
+    CHECK_GT(min_byte, 0);
     axis->l1_constraints.tile_mod_ = CanonicalSimplify(CastIntToExpr(VECTORIZE_BYTE / min_byte));
   }
 }
