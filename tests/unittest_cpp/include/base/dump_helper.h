@@ -29,7 +29,7 @@ class UTRegxMatch {
   static bool RegxMatchHex(const std::string &str);
 
   static const std::string pattern_hex_;
-};  // UTRegxMatch
+};  // class UTRegxMatch
 
 class UTDumpHelper {
  public:
@@ -38,6 +38,6 @@ class UTDumpHelper {
 
   static std::string Dump(const air::NodeRef &node);
   static bool RegxMatchPlaceholder(const std::string &str, const std::string &name);
-};  // UTDumpHelper
+};  // class UTDumpHelper
 }  // namespace akg
 #endif  // UT_BASE_DUMP_HELPER_H_

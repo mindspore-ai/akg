@@ -14,9 +14,22 @@
  * limitations under the License.
  */
 #include <sstream>
+#include <tvm/operation.h>
 #include "base/expr_builder.h"
 
 namespace akg {
+air::Expr UTExprBuilder::IntImm(int64_t value, air::DataType dtype) {
+  return air::IntImm::make(dtype, value);
+}
+
+air::Expr UTExprBuilder::UIntImm(uint64_t value, air::DataType dtype) {
+  return air::ir::UIntImm::make(dtype, value);
+}
+
+air::Expr UTExprBuilder::BoolImm(bool value) {
+  return air::ir::UIntImm::make(air::Bool(), value ? 1 : 0);
+}
+
 air::Array<air::Expr> UTExprBuilder::CreateShape(const std::vector<int32_t> &shapes) {
   air::Array<air::Expr> res;
   for (int32_t shape : shapes) {
@@ -36,6 +49,28 @@ air::Array<air::Expr> UTExprBuilder::CreateVars(const std::vector<std::string> &
     vars.push_back(std::move(CreateVar(name)));
   }
   return vars;
+}
+
+air::Region UTExprBuilder::CreateRegion(const std::vector<int32_t> &shapes) {
+  air::Region region;
+  for (int32_t shape : shapes) {
+    region.push_back(CreateRange(0, shape));
+  }
+  return region;
+}
+
+air::Region UTExprBuilder::CreateRegion(const air::Array<air::Expr> &shapes) {
+  air::Region region;
+  for (const air::Expr &shape : shapes) {
+    region.push_back(air::Range::make_by_min_extent(IntImm(0), shape));
+  }
+  return region;
+}
+
+air::Range UTExprBuilder::CreateRange(int32_t min, int32_t max) {
+  air::Integer imm_min = air::IntImm::make(air::Int(32), min);
+  air::Integer imm_max = air::IntImm::make(air::Int(32), max);
+  return air::Range(std::move(imm_min), std::move(imm_max));
 }
 
 air::Operation UTExprBuilder::PlaceholderOpNode(
@@ -60,6 +95,56 @@ air::Expr UTExprBuilder::TensorElement(
       0);                                      // value_index
 }
 
+air::Expr UTExprBuilder::ElementOf(
+    const air::Operation &op,
+    const std::vector<std::string> &axis_names) {
+  if (op->template IsInstance<air::PlaceholderOpNode>()) {
+    return ElementOfPlaceholderOp(op, axis_names);
+  } else {
+    CHECK(false);
+    return air::ir::Any::make();
+  }
+}
+
+air::Expr UTExprBuilder::ElementOfPlaceholderOp(
+    const air::Operation &op,
+    const std::vector<std::string> &axis_names) {
+  const air::PlaceholderOpNode *node = op.as<const air::PlaceholderOpNode>();
+  CHECK(node);
+  return air::ir::Call::make(
+      node->dtype,
+      node->name,
+      CreateVars(axis_names),
+      air::ir::Call::Halide,
+      op,
+      0);
+}
+air::Expr UTExprBuilder::CreateCall(
+  const air::ir::FunctionRef func,
+  air::Array<air::Expr> args,
+  air::ir::Call::CallType call_type,
+  int value_index) {
+  air::DataType type = air::Float(16);
+  const air::OperationNode *node_op = func.as<air::OperationNode>();
+  CHECK(node_op);
+  std::string name = node_op->name;
+  const air::PlaceholderOpNode *node_placeholder = func.as<air::PlaceholderOpNode>();
+  if (node_placeholder != nullptr) {
+    type = node_placeholder->dtype;
+  }
+  return air::ir::Call::make(type, name, args, call_type, func, value_index);
+}
+
+air::Tensor UTExprBuilder::CreateTensorByPlaceholder(const air::Operation op) {
+  const air::PlaceholderOpNode *node = op.as<air::PlaceholderOpNode>();
+  CHECK(node);
+  return air::TensorNode::make(
+      node->shape,
+      node->dtype,
+      op,
+      0);
+}
+
 UTTensorElementHelper::UTTensorElementHelper(const std::vector<int32_t> &shapes,
                                              const std::string &axis_name_prefix)
     : shapes_(shapes), axis_name_prefix_(axis_name_prefix) {
@@ -72,8 +157,8 @@ UTTensorElementHelper::UTTensorElementHelper(const std::vector<int32_t> &shapes,
 }
 
 air::Expr UTTensorElementHelper::Elem(const std::string &name,
-                                       uint32_t dim,
-                                       air::DataType dtype) const {
+                                      uint32_t dim,
+                                      air::DataType dtype) const {
   uint32_t start = shapes_.size() - dim;
   return UTExprBuilder::TensorElement(
       name,
