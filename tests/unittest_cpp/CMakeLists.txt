@@ -14,4 +14,8 @@ file(
 
 add_executable(unittest_main ${UT_CPP_SRC})
 
-target_link_libraries(unittest_main gtest akg ${TVM_RUNTIME_LINKER_LIBS} ${CMAKE_DL_LIBS})
+if (CMAKE_SYSTEM_NAME MATCHES "Linux")
+  target_link_libraries(unittest_main PRIVATE gtest akg ${TVM_RUNTIME_LINKER_LIBS} pthread util dl)
+else()
+  target_link_libraries(unittest_main PRIVATE gtest akg ${TVM_RUNTIME_LINKER_LIBS})
+endif()
