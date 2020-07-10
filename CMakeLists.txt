@@ -25,6 +25,7 @@ project(akg C CXX)
 
 set(AKG_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 
+include(cmake/RT.cmake)
 include(cmake/utils.cmake)
 include(cmake/external_libs/isl.cmake)
 if(ENABLE_AKG)
@@ -35,6 +36,11 @@ else()
   message("-- Build akg alone")
   execute_process(COMMAND bash ${AKG_SOURCE_DIR}/third_party/apply_patches.sh ${CMAKE_CURRENT_BINARY_DIR} "akg")
   set(TVM_DIR "${CMAKE_BINARY_DIR}/incubator-tvm")
+
+  include(cmake/external_libs/gtest.cmake)
+  add_subdirectory(${AKG_SOURCE_DIR}/tests/unittest_cpp)
+  set(GTEST_DIR "${CMAKE_CURRENT_BINARY_DIR}/_deps/gtest-src")
+  set(UNITTEST_DIR "${AKG_SOURCE_DIR}/tests/unittest_cpp")
 endif()
 
 set(ISL_DIR "${CMAKE_BINARY_DIR}/isl")
@@ -86,17 +92,12 @@ add_subdirectory(${AKG_SOURCE_DIR}/third_party/isl_wrap isl_fixed)
 
 # initial variables
 set(TVM_LINKER_LIBS isl_fixed)
-# lib contain dlopen and dlclose
-set(TVM_RUNTIME_LINKER_LIBS ${CMAKE_DL_LIBS})
 
 add_definitions(-DPICOJSON_USE_INT64=1)
 add_definitions(-DDMLC_LOG_CUSTOMIZE=1)
 if(USE_AKG_LOG)
   add_definitions(-DUSE_AKG_LOG=1)
 endif()
-
-include(cmake/RT.cmake)
-
 
 # Generic compilation options
 include(CheckCXXCompilerFlag)
@@ -241,7 +242,6 @@ target_include_directories(akg PRIVATE "${TVM_DIR}/topi/include")
 # Installation rules
 install(TARGETS akg DESTINATION lib${LIB_SUFFIX})
 
-
 if(ENABLE_AKG)
   install(
 	  DIRECTORY
@@ -253,8 +253,3 @@ if(ENABLE_AKG)
   #file(COPY ${CMAKE_CURRENT_BINARY_DIR}/libakg.so DESTINATION "${AKG_SOURCE_DIR}/output")
 endif()
 
-# unittest_cpp
-add_subdirectory(${AKG_SOURCE_DIR}/third_party/googletest)
-add_subdirectory(${AKG_SOURCE_DIR}/tests/unittest_cpp)
-set(GTEST_DIR "${AKG_SOURCE_DIR}/third_party/googletest")
-set(UNITTEST_CPP_DIR "${AKG_SOURCE_DIR}/tests/unittest_cpp")

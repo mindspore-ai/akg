@@ -5,7 +5,7 @@ if (CMAKE_SYSTEM_NAME MATCHES "Windows" AND ${CMAKE_VERSION} VERSION_GREATER_EQU
     set(CMAKE_FIND_LIBRARY_SUFFIXES .dll ${CMAKE_FIND_LIBRARY_SUFFIXES})
 endif ()
 
-function(mindspore_add_submodule_obj des_submodule_objs sub_dir submodule_name_obj)
+function(akg_add_submodule_obj des_submodule_objs sub_dir submodule_name_obj)
 
     add_subdirectory(${sub_dir})
 
@@ -198,15 +198,20 @@ function(__check_patches pkg_patches)
     endif ()
 endfunction()
 
-set(MS_FIND_NO_DEFAULT_PATH NO_CMAKE_PATH NO_CMAKE_ENVIRONMENT_PATH NO_SYSTEM_ENVIRONMENT_PATH
+set(AKG_FIND_NO_DEFAULT_PATH NO_CMAKE_PATH NO_CMAKE_ENVIRONMENT_PATH NO_SYSTEM_ENVIRONMENT_PATH
                             NO_CMAKE_BUILDS_PATH NO_CMAKE_PACKAGE_REGISTRY NO_CMAKE_SYSTEM_PATH
                             NO_CMAKE_SYSTEM_PACKAGE_REGISTRY)
-function(mindspore_add_pkg pkg_name )
 
+function(akg_add_pkg pkg_name )
     set(options )
-    set(oneValueArgs URL MD5 GIT_REPOSITORY GIT_TAG VER EXE DIR HEAD_ONLY CMAKE_PATH RELEASE LIB_PATH CUSTOM_CMAKE)
-    set(multiValueArgs CMAKE_OPTION LIBS PRE_CONFIGURE_COMMAND CONFIGURE_COMMAND BUILD_OPTION INSTALL_INCS INSTALL_LIBS PATCHES SUBMODULES SOURCEMODULES)
+    set(oneValueArgs URL MD5 GIT_REPOSITORY GIT_TAG VER EXE DIR HEAD_ONLY CMAKE_PATH)
+    set(multiValueArgs CMAKE_OPTION LIBS PRE_CONFIGURE_COMMAND CONFIGURE_COMMAND BUILD_OPTION INSTALL_INCS INSTALL_LIBS PATCHES)
     cmake_parse_arguments(PKG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN} )
+
+    if (NOT PKG_LIB_PATH)
+        set(PKG_LIB_PATH lib)
+    endif ()
+
 
     set(__FIND_PKG_NAME ${pkg_name})
     string(TOLOWER ${pkg_name} pkg_name)
@@ -228,8 +233,38 @@ function(mindspore_add_pkg pkg_name )
 
     message("${pkg_name} config hash: ${${pkg_name}_CONFIG_HASH}")
 
-    set(${pkg_name}_BASE_DIR ${_MS_LIB_CACHE}/${pkg_name})
+    set(${pkg_name}_BASE_DIR ${_MS_LIB_CACHE}/${pkg_name}_${${pkg_name}_CONFIG_HASH})
     set(${pkg_name}_DIRPATH ${${pkg_name}_BASE_DIR} CACHE STRING INTERNAL)
+
+    if(EXISTS ${${pkg_name}_BASE_DIR}/options.txt AND PKG_HEAD_ONLY)
+        set(${pkg_name}_INC ${${pkg_name}_BASE_DIR}/${PKG_HEAD_ONLY} PARENT_SCOPE)
+        add_library(${pkg_name} INTERFACE)
+        target_include_directories(${pkg_name} INTERFACE ${${pkg_name}_INC})
+        return()
+    endif ()
+
+    if(NOT PKG_EXE)
+        set(PKG_EXE 0)
+    endif()
+
+    set(${__FIND_PKG_NAME}_ROOT ${${pkg_name}_BASE_DIR})
+    set(${__FIND_PKG_NAME}_ROOT ${${pkg_name}_BASE_DIR} PARENT_SCOPE)
+
+    if (PKG_LIBS)
+        __find_pkg_then_add_target(${pkg_name} ${PKG_EXE} ${PKG_LIB_PATH} ${PKG_LIBS})
+        if(${pkg_name}_LIBS)
+            set(${pkg_name}_INC ${${pkg_name}_BASE_DIR}/include PARENT_SCOPE)
+            message("Found libs: ${${pkg_name}_LIBS}")
+            return()
+        endif()
+    elseif(NOT PKG_HEAD_ONLY)
+        find_package(${__FIND_PKG_NAME} ${PKG_VER} ${AKG_FIND_NO_DEFAULT_PATH})
+        if (${__FIND_PKG_NAME}_FOUND)
+            set(${pkg_name}_INC ${${pkg_name}_BASE_DIR}/include PARENT_SCOPE)
+            message("Found pkg: ${__FIND_PKG_NAME}")
+            return()
+        endif ()
+    endif ()
 
     if (NOT PKG_DIR)
         if (PKG_GIT_REPOSITORY)
@@ -251,11 +286,13 @@ function(mindspore_add_pkg pkg_name )
 
     set(${pkg_name}_PATCHED_DIR ${CMAKE_BINARY_DIR}/${pkg_name})
     if(EXISTS ${${pkg_name}_PATCHED_DIR})
-	    file(REMOVE_RECURSE ${${pkg_name}_PATCHED_DIR})
+        file(REMOVE_RECURSE ${${pkg_name}_PATCHED_DIR})
     endif()
     file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/${pkg_name}")
     file(COPY ${${pkg_name}_SOURCE_DIR}/ DESTINATION ${${pkg_name}_PATCHED_DIR})
     message("${pkg_name}_PATCHED_DIR : ${${pkg_name}_PATCHED_DIR}")
+    set(${pkg_name}_SOURCE_DIR ${${pkg_name}_PATCHED_DIR})
+    message("${pkg_name}_SOURCE_DIR : ${${pkg_name}_SOURCE_DIR}")
 
     foreach(_PATCH_FILE ${PKG_PATCHES})
         get_filename_component(_PATCH_FILE_NAME ${_PATCH_FILE} NAME)
@@ -275,4 +312,59 @@ function(mindspore_add_pkg pkg_name )
         message(FATAL_ERROR "error! when try lock ${${pkg_name}_BASE_DIR} : ${${pkg_name}_LOCK_RET}")
     endif()
 
+    if (PKG_CUSTOM_CMAKE)
+        file(GLOB ${pkg_name}_cmake ${PKG_CUSTOM_CMAKE}/CMakeLists.txt)
+        file(COPY ${${pkg_name}_cmake} DESTINATION ${${pkg_name}_SOURCE_DIR})
+    endif ()
+
+    if(${pkg_name}_SOURCE_DIR)
+        if (PKG_HEAD_ONLY)
+            file(GLOB ${pkg_name}_SOURCE_SUBDIRS ${${pkg_name}_SOURCE_DIR}/*)
+            file(COPY ${${pkg_name}_SOURCE_SUBDIRS} DESTINATION ${${pkg_name}_BASE_DIR})
+            set(${pkg_name}_INC ${${pkg_name}_BASE_DIR}/${PKG_HEAD_ONLY} PARENT_SCOPE)
+            add_library(${pkg_name} INTERFACE)
+            target_include_directories(${pkg_name} INTERFACE ${${pkg_name}_INC})
+
+        elseif (PKG_CMAKE_OPTION)
+            # in cmake
+            file(MAKE_DIRECTORY ${${pkg_name}_SOURCE_DIR}/_build)
+            if (${pkg_name}_CFLAGS)
+                set(${pkg_name}_CMAKE_CFLAGS "-DCMAKE_C_FLAGS=${${pkg_name}_CFLAGS}")
+            endif ()
+            if (${pkg_name}_CXXFLAGS)
+                set(${pkg_name}_CMAKE_CXXFLAGS "-DCMAKE_CXX_FLAGS=${${pkg_name}_CXXFLAGS}")
+            endif ()
+
+            if (${pkg_name}_LDFLAGS)
+                if (${pkg_name}_USE_STATIC_LIBS)
+                    set(${pkg_name}_CMAKE_LDFLAGS "-DCMAKE_STATIC_LINKER_FLAGS=${${pkg_name}_LDFLAGS}")
+                else()
+                    set(${pkg_name}_CMAKE_LDFLAGS "-DCMAKE_SHARED_LINKER_FLAGS=${${pkg_name}_LDFLAGS}")
+                endif ()
+            endif ()
+
+            __exec_cmd(COMMAND ${CMAKE_COMMAND} ${PKG_CMAKE_OPTION} -G ${CMAKE_GENERATOR}
+                    ${${pkg_name}_CMAKE_CFLAGS} ${${pkg_name}_CMAKE_CXXFLAGS} ${${pkg_name}_CMAKE_LDFLAGS}
+                    -DCMAKE_INSTALL_PREFIX=${${pkg_name}_BASE_DIR} ${${pkg_name}_SOURCE_DIR}/${PKG_CMAKE_PATH}
+                    WORKING_DIRECTORY ${${pkg_name}_SOURCE_DIR}/_build)
+
+            __exec_cmd(COMMAND ${CMAKE_COMMAND} --build . --target install -- -j${THNUM}
+                    WORKING_DIRECTORY ${${pkg_name}_SOURCE_DIR}/_build)
+        endif ()
+    endif()
+
+    if (PKG_LIBS)
+        __find_pkg_then_add_target(${pkg_name} ${PKG_EXE} ${PKG_LIB_PATH} ${PKG_LIBS})
+        set(${pkg_name}_INC ${${pkg_name}_BASE_DIR}/include PARENT_SCOPE)
+        if(NOT ${pkg_name}_LIBS)
+            message(FATAL_ERROR "Can not find pkg: ${pkg_name}")
+        endif()
+    else()
+        find_package(${__FIND_PKG_NAME} ${PKG_VER} QUIET)
+        if (${__FIND_PKG_NAME}_FOUND)
+            set(${pkg_name}_INC ${${pkg_name}_BASE_DIR}/include PARENT_SCOPE)
+            message("Found pkg: ${${__FIND_PKG_NAME}_LIBRARIES}")
+            return()
+        endif ()
+    endif ()
 endfunction()
