@@ -52,7 +52,9 @@ constexpr auto DUMP_LEVEL_TUNING = 3;
 constexpr auto DUMP_LINE_BREAK_NUM = 100;
 constexpr auto GEN_PRIME_NUM = 32;
 constexpr auto VECTORIZE_BYTE = 256;
-constexpr auto MIN_MULTICORE_BYTES = 256;
+constexpr auto MAX_REPEAT = 255;
+constexpr auto MIN_CORE_GRANULARITY = 256;
+constexpr auto DESIRE_CORE_GRANULARITY = 8192;  // 256 Bytes * 64 repeat
 
 // Controlled by custom tiling.
 constexpr auto ALLOCATION_PERCENTAGE = 0.5;  // reserved for double buffer in default
