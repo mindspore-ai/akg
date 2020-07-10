@@ -36,6 +36,8 @@ class TilingSolver {
   TileCandidate cand_;
   int64_t mem_limit_[MEM_SCOPE_BULK]{0};
   int tiling_band_{0};
+  double percentage_ = 0.5;
+  double exceed_ratio_ = 1;  // allow memory allocation to exceed memory_size * percentage, may disable double buffer
 };
 
 class InequalitySolver : TilingSolver {

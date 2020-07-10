@@ -21,17 +21,17 @@ namespace akg {
 namespace ir {
 namespace poly {
 void TilingSolver::CollectMemoryLimit() {
-  double percentage = ALLOCATION_PERCENTAGE;
+  percentage_ = ALLOCATION_PERCENTAGE;
   for (auto attr : analyzer_.RootAxis()->attrs) {
     if (attr.attr_key != "MEM_RATIO") continue;
     CHECK_NE(attr.attr_value, "");
-    percentage = std::strtod(attr.attr_value.c_str(), nullptr);
+    percentage_ = std::strtod(attr.attr_value.c_str(), nullptr);
     break;
   }
 
   DavinciInfo &d_info = DavinciInfo::GetInstance();
   for (auto i = 0; i < MEM_SCOPE_BULK; ++i) {
-    this->mem_limit_[i] = d_info.GetMemoryLimitInScope(i) * percentage;
+    this->mem_limit_[i] = d_info.GetMemoryLimitInScope(i) * percentage_;
   }
 }
 
@@ -431,9 +431,7 @@ int64_t InequalitySolver::DetermineTileForStatic(TileAxis *axis, const Expr &mem
   TileAxis::Constraint cons = level == LEVEL1 ? axis->l1_constraints : axis->l0_constraints;
 
   if (!cons.cand_factor.empty()) {
-    for (auto i = static_cast<int>(cons.cand_factor.size()) - 1; i >= 0; --i) {
-      auto max_cand = cons.cand_factor[i];
-
+    for (auto max_cand : cons.cand_factor) {
       if (max_cand.as<IntImm>() == nullptr) {
         ss << "Static shape should have const candidate factor, while got " << max_cand;
         analyzer_.logger_.LogFatalAndSaveLog(ss.str());
@@ -442,6 +440,12 @@ int64_t InequalitySolver::DetermineTileForStatic(TileAxis *axis, const Expr &mem
       if (max_cand.as<IntImm>()->value <= static_mem_constraint) {
         final_factor = max_cand.as<IntImm>()->value;
         ss << "--> Candidate factor " << final_factor;
+        break;
+      } else if (max_cand.as<IntImm>()->value * exceed_ratio_ * percentage_ < static_mem_constraint) {
+        final_factor = max_cand.as<IntImm>()->value;
+        exceed_ratio_ =
+          exceed_ratio_ * (static_cast<double>(final_factor) / static_cast<double>(static_mem_constraint));
+        ss << "--> Candidate factor " << final_factor << " (exceed ratio update to " << exceed_ratio_ << ")";
         break;
       }
     }
@@ -542,11 +546,11 @@ void InequalitySolver::CalculateMemoryInBuffer(const TilingAnalyzer::BufferEntry
       ExprSimplifier().CanProveWithPosParam(mem_info->live_size[buf->scope] < mem_info->max_live_size[buf->scope]);
 
     if (current_is_larger) {
-      ss << "Can prove current live size" << mem_info->live_size[buf->scope] << " greater than maximal size "
+      ss << "[Update max] current live size " << mem_info->live_size[buf->scope] << " greater than maximal size "
          << mem_info->max_live_size[buf->scope];
       mem_info->max_live_size[buf->scope] = mem_info->live_size[buf->scope];
     } else if (!current_is_smaller) {
-      ss << "Can not compare current live size" << mem_info->live_size[buf->scope] << " with maximal size "
+      ss << "[Unknown] Can not compare current live size" << mem_info->live_size[buf->scope] << " with maximal size "
          << mem_info->max_live_size[buf->scope];
       mem_info->max_live_size[buf->scope] = CanonicalSimplify(mem_info->max_live_size[buf->scope] + buf_shape);
     }
@@ -620,6 +624,7 @@ void InequalitySolver::UpdateMemInfo() {
 }
 
 void InequalitySolver::UpdateMemInfoWithBufReuse() {
+  std::stringstream ss;
   auto mem_info = tiling_mem_info_.get();
   CHECK(mem_info);
 
@@ -631,6 +636,7 @@ void InequalitySolver::UpdateMemInfoWithBufReuse() {
         continue;
       }
       if (mem_info->live_size[it.first->scope].defined() && mem_info->live_buf[it.first].defined()) {
+        ss << "Release buffer " << it.first->name << " with size " << mem_info->live_buf[it.first];
         mem_info->live_size[it.first->scope] -= mem_info->live_buf[it.first];
       }
       mem_info->live_buf.erase(it.first);

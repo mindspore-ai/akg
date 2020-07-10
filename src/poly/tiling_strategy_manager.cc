@@ -213,17 +213,7 @@ void CastStrategy::AddConstraint() {
 
 void ReduceStrategy::AddConstraint() {
   for (auto axis : analyzer_->GetAxesOfAttr("REDUCE_DST_LAST")) {
-    int64_t block_size = GetMaxAlignBytes(axis->data_size);
-    int64_t const_extent = axis->GetConstExtent();
-    if (const_extent == -1) {
-      continue;
-    }
-    int64_t align_elem = ktvm::ir::gcd(block_size, const_extent);
-    if (align_elem == block_size) {
-      axis->l1_constraints.tile_min_ = align_elem;
-    } else {
-      axis->forbid_iso = true;
-    }
+    axis->l1_constraints.tile_min_ = CastInt64ToExpr(GetMaxAlignBytes(axis->data_size));
   }
 }
 
@@ -247,6 +237,35 @@ void VectorizedStrategy::AddConstraint() {
     }
     CHECK_NE(min_byte, 0);
     axis->l1_constraints.tile_mod_ = CanonicalSimplify(CastIntToExpr(VECTORIZE_BYTE / min_byte));
+  }
+}
+
+void DmaAlignStrategy::AddConstraint() {
+  for (auto axis : analyzer_->GetAxesContainsAttr("ALIGN")) {
+    for (const auto &attr : axis->attrs) {
+      LOG(INFO) << attr.attr_key;
+      if ((attr.attr_key.find("ALIGN") == std::string::npos) || (attr.attr_key.find("DMA") == std::string::npos)) {
+        continue;
+      }
+      auto align_size = GetMaxAlignBytes(axis->data_size);
+
+      int const_extent = axis->GetConstExtent();
+
+      // For dynamic shape or axes that has other candidates, simply add tile min constraint;
+      // for static shape that has no other candidate, add aligned candidates.
+      if (const_extent == -1 || !axis->l1_constraints.cand_factor.empty()) {
+        axis->l1_constraints.tile_min_ = CastInt64ToExpr(align_size);
+      } else {
+        std::vector<ktvm::Expr> candidates;
+        for (auto cand = const_extent; cand >= align_size; --cand) {
+          auto tail = const_extent % cand;
+          if (tail == 0 || tail >= align_size) {
+            candidates.emplace_back(CastIntToExpr(cand));
+          }
+        }
+        axis->l1_constraints.cand_factor = candidates;
+      }
+    }
   }
 }
 

@@ -122,7 +122,7 @@ void TileAxis::InsertL1CandFactor(const Expr &f) {
   while (i < this->l1_constraints.cand_factor.size()) {
     if (Equal(this->l1_constraints.cand_factor[i], f)) {
       return;
-    } else if (analyzer_->arith_ana_.CanProve(this->l1_constraints.cand_factor[i] > f)) {
+    } else if (analyzer_->arith_ana_.CanProve(this->l1_constraints.cand_factor[i] < f)) {
       break;
     }
     ++i;
@@ -135,7 +135,7 @@ void TileAxis::InsertL0CandFactor(const Expr &f) {
   while (i < this->l0_constraints.cand_factor.size()) {
     if (Equal(this->l0_constraints.cand_factor[i], f)) {
       return;
-    } else if (analyzer_->arith_ana_.CanProve(this->l0_constraints.cand_factor[i] > f)) {
+    } else if (analyzer_->arith_ana_.CanProve(this->l0_constraints.cand_factor[i] < f)) {
       break;
     }
     ++i;
@@ -180,8 +180,13 @@ void TileAxis::DumpAxis(bool on_screen) {
   }
   if (!this->l1_constraints.cand_factor.empty()) {
     ss << "| L1 Cand_factors:{";
-    for (const auto &f : this->l1_constraints.cand_factor) {
-      ss << f << ",";
+    bool full_dump = this->l1_constraints.cand_factor.size() <= 10;
+    if (full_dump) {
+      for (const auto &f : this->l1_constraints.cand_factor) {
+        ss << f << ",";
+      }
+    } else {
+      ss << this->l1_constraints.cand_factor[0] << " ... " << this->l1_constraints.cand_factor.back();
     }
     ss << "} |";
     if (on_screen) LOG(INFO) << ss.str();
@@ -189,8 +194,13 @@ void TileAxis::DumpAxis(bool on_screen) {
   }
   if (!this->l0_constraints.cand_factor.empty()) {
     ss << "| L0 Cand_factors:{";
-    for (const auto &f : this->l0_constraints.cand_factor) {
-      ss << f << ",";
+    bool full_dump = this->l0_constraints.cand_factor.size() <= 10;
+    if (full_dump) {
+      for (const auto &f : this->l0_constraints.cand_factor) {
+        ss << f << ",";
+      }
+    } else {
+      ss << this->l0_constraints.cand_factor[0] << " ... " << this->l0_constraints.cand_factor.back();
     }
     ss << "} |";
     if (on_screen) LOG(INFO) << ss.str();
@@ -1310,12 +1320,16 @@ void TilingAnalyzer::AddTilingConstraints() {
   actived_strategies.push_back(&pd_attr_strategy);
 
   CastStrategy cast_strategy(this);
-  ReduceStrategy reduce_strategy(this);
   VectorizedStrategy vectorized_strategy(this);
   TensorOfTensorStrategy tot_strategy(this);
   actived_strategies.push_back(&cast_strategy);
-  actived_strategies.push_back(&reduce_strategy);
   actived_strategies.push_back(&vectorized_strategy);
+  if (!is_dynamic_) {
+    ReduceStrategy reduce_strategy(this);
+    DmaAlignStrategy dma_align_stratgey(this);
+    actived_strategies.push_back(&reduce_strategy);
+    actived_strategies.push_back(&dma_align_stratgey);
+  }
   actived_strategies.push_back(&tot_strategy);
 
   ModStrategy mod_strategy(this);
@@ -1512,9 +1526,6 @@ void TilingAnalyzer::DumpBufferUsageTimeable() {
       lived_buf_name.insert(it.first->name);
       ss << "Buffer " << it.first->name << " | Alloc time: " << alloc_time << " | Last use time : " << last_use_time
          << " | ";
-      ss << "live buf: [";
-      for (const auto &name : lived_buf_name) ss << name << ", ";
-      ss << "]";
       logger_.AppendLog(ANA_BUF_LIVE_EXTENT, ss);
     }
   }
