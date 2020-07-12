@@ -27,7 +27,7 @@
 
 namespace akg {
 namespace ir {
-using ktvm::ir::intrinsic::tvm_access_ptr;
+using air::ir::intrinsic::tvm_access_ptr;
 
 // 1, find control flow loops
 // 2, find location of set matrix,
@@ -57,7 +57,7 @@ class PreHoist : public IRVisitor {
     //     set 1
     //     set 2
     // can't promote set 1 or set 2 before for
-    ktvm::ir::PostOrderVisit(op->body, Scan);
+    air::ir::PostOrderVisit(op->body, Scan);
     if (can_promote) {
       deq_outer_loops_.push_front(op);
     }
@@ -237,7 +237,7 @@ class StorageHoistVerify {
 
   bool Verify(const Variable *buf, const For *loop) {
     StorageEntry &entry = storage_[buf];
-    ktvm::MemoryInfo info = ktvm::GetMemoryInfo(entry.scope);
+    air::MemoryInfo info = air::GetMemoryInfo(entry.scope);
     if (!info.defined()) {
       return false;
     }
@@ -326,7 +326,7 @@ class InvarHoistVerify : public IRVisitor {
     };
 
     node_ = node;
-    ktvm::ir::PostOrderVisit(node, FindTouch);
+    air::ir::PostOrderVisit(node, FindTouch);
     this->Visit(loop_->body);
 
     return !defined_;
@@ -415,7 +415,7 @@ class InvarHoistPlan : public IRVisitor {
   }
 
   void Visit_(const AttrStmt *op) override {
-    if (!replay_ && op->attr_key == ktvm::ir::attr::storage_scope) {
+    if (!replay_ && op->attr_key == air::ir::attr::storage_scope) {
       const auto var = op->node.as<Variable>();
       cur_scope_.allocs[var] = op;
     }
@@ -525,7 +525,7 @@ class InvarHoistPlan : public IRVisitor {
       }
     };
 
-    ktvm::ir::PostOrderVisit(node, Scan);
+    air::ir::PostOrderVisit(node, Scan);
     if (invariant) {
       bool can_hoist = InvarHoistVerify(cur_scope_.node, cur_scope_.hoist.nodes).Verify(node);
       if (!can_hoist) {
@@ -573,7 +573,7 @@ class InvarHoistPlan : public IRVisitor {
         }
       };
 
-      ktvm::ir::PostOrderVisit(ref, Scan);
+      air::ir::PostOrderVisit(ref, Scan);
       if (Hoist(ref, touched)) {
         for (const Variable *var : touched) {
           stay_allocs.erase(var);
@@ -772,7 +772,7 @@ class InvarHoist : public IRMutator {
           alloc.emplace_back(allocs_[n].second);
         }
 
-        stmt = ktvm::ir::MergeNest(alloc, stmt);
+        stmt = air::ir::MergeNest(alloc, stmt);
       }
     }
 
@@ -780,7 +780,7 @@ class InvarHoist : public IRMutator {
   }
 
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
-    if (op->attr_key == ktvm::ir::attr::storage_scope) {
+    if (op->attr_key == air::ir::attr::storage_scope) {
       const auto buf = op->node.as<Variable>();
       auto it = allocs_.find(buf);
       if (it != allocs_.end()) {
@@ -829,7 +829,7 @@ class InvarHoist : public IRMutator {
       }
     };
 
-    ktvm::ir::PostOrderVisit(stmt, vmask_scan);
+    air::ir::PostOrderVisit(stmt, vmask_scan);
 
     return vmask;
   }
@@ -1114,7 +1114,7 @@ class ElimRptDMA : public IRMutator {
     }
 
     // should not be the top flag
-    if (op->attr_key == ktvm::ir::attr::storage_scope) {
+    if (op->attr_key == air::ir::attr::storage_scope) {
       if (op->body.as<Allocate>()) {
         cur_alloc_level_++;
         cur_outer_alloc_.insert(op);
@@ -1258,7 +1258,7 @@ class ElimRptDMA : public IRMutator {
         num++;
       }
     };
-    ktvm::ir::PostOrderVisit(stmt, Scan);
+    air::ir::PostOrderVisit(stmt, Scan);
 
     return num <= 1;
   }

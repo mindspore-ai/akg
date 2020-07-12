@@ -22,8 +22,8 @@
 
 namespace akg {
 constexpr auto kMsDavinciKernelPath = "./kernel_meta/";
-static std::unordered_map<std::string, ktvm::Type> type_mapping = {
-  {"float32", ktvm::Float(32)}, {"float16", ktvm::Float(16)}, {"int32", ktvm::Int(32)}, {"bool", ktvm::Bool()}};
+static std::unordered_map<std::string, air::Type> type_mapping = {
+  {"float32", air::Float(32)}, {"float16", air::Float(16)}, {"int32", air::Int(32)}, {"bool", air::Bool()}};
 }  // namespace akg
 
 #endif  // COMPOSITE_UTIL_H_

@@ -49,8 +49,8 @@ struct TouchEntry {
 
 // Analysis data flow info for each scope
 class DFVisitor : public IRVisitor {
-  Expr const_zero = make_const(ktvm::Int(32), 0);
-  Expr const_one = make_const(ktvm::Int(32), 1);
+  Expr const_zero = make_const(air::Int(32), 0);
+  Expr const_one = make_const(air::Int(32), 1);
   Var const_reg = Var("register");
 
   // const meminfo for vcmp
@@ -150,7 +150,7 @@ class DFVisitor : public IRVisitor {
       return;
     }
 
-    if (op->is_intrinsic(ktvm::ir::intrinsic::tvm_access_ptr)) {
+    if (op->is_intrinsic(air::ir::intrinsic::tvm_access_ptr)) {
       const auto buffer = op->args[1].as<Variable>();
       if (buffer == nullptr) {
         return;
@@ -185,7 +185,7 @@ class DFVisitor : public IRVisitor {
             CHECK(storage_range_.find(buffer) != storage_range_.end());
             StorageRange &range = storage_range_[buffer];
             int64_t align_ext = ext_imm->value + align - ext_imm->value % align;
-            ktvm::arith::Analyzer analyzer_;
+            air::arith::Analyzer analyzer_;
             Expr check = Simplify_cce(offset <= make_const(Int(32), range.size - align_ext), range_);
             if (analyzer_.CanProve(check)) {
               extent = make_const(Int(32), align_ext);
@@ -262,7 +262,7 @@ class DFVisitor : public IRVisitor {
       return;
     }
 
-    if (op->attr_key == ktvm::ir::attr::storage_scope) {
+    if (op->attr_key == air::ir::attr::storage_scope) {
       const auto buf = op->node.as<Variable>();
       if (buf == nullptr) return;
 
@@ -271,7 +271,7 @@ class DFVisitor : public IRVisitor {
       storage_scope_[buf] = StorageScope::make(pragma->value);
     }
 
-    if (op->attr_key == ktvm::ir::attr::coproc_scope) {
+    if (op->attr_key == air::ir::attr::coproc_scope) {
       if (!in_scope_) {
         in_scope_ = true;
         curr_attr_ = op;
@@ -460,7 +460,7 @@ class DFVisitor : public IRVisitor {
     Expr t = addr_a > addr_b ? Simplify_cce(a.offset * a_unit + delta >= (b.offset + b.extent) * b_unit, range_)
                              : Simplify_cce(b.offset * b_unit - delta >= (a.offset + a.extent) * a_unit, range_);
 
-    ktvm::arith::Analyzer analyzer_;
+    air::arith::Analyzer analyzer_;
     if (analyzer_.CanProve(t)) {
       return false;
     }

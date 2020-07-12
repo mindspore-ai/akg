@@ -135,7 +135,7 @@ class PoolingFusion : public IRMutator {
   }
 
   bool PatternCheck(const AttrStmt *op) {
-    if (op->attr_key != ktvm::ir::attr::realize_scope) return false;
+    if (op->attr_key != air::ir::attr::realize_scope) return false;
     const auto str = op->value.as<StringImm>();
     if (str == nullptr) return false;
     if (str->value != "local.L1") return false;

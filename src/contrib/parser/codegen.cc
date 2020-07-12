@@ -51,7 +51,7 @@ class ASTCodeGenerator : public ASTVisitor {
 
     auto body = MakeBlock(op.body, *this);
     NodeRef ref;
-    if (op.attr_key == ktvm::ir::attr::realize_scope) {
+    if (op.attr_key == air::ir::attr::realize_scope) {
       auto stat = GetTokStateFromCode(op.node);
       auto tok = GetNextToken(stat);
       CHECK(tok == Token::kID);
@@ -73,10 +73,10 @@ class ASTCodeGenerator : public ASTVisitor {
       } else {
         CHECK(false);
       }
-    } else if (op.attr_key == ktvm::ir::attr::storage_scope) {
+    } else if (op.attr_key == air::ir::attr::storage_scope) {
       ref = GetBuffer(op.node).second;
       PopBuffer(op.node);
-    } else if (op.attr_key == ktvm::ir::attr::coproc_scope) {
+    } else if (op.attr_key == air::ir::attr::coproc_scope) {
       ref = GetCceAxis();
     } else if (op.attr_key == "isolate_range") {
       CHECK_EQ(op.node, "0");

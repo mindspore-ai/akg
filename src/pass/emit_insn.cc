@@ -24,7 +24,7 @@
 
 namespace akg {
 namespace ir {
-using ktvm::runtime::PackedFunc;
+using air::runtime::PackedFunc;
 
 class FindPragmaAttrs : public IRVisitor {
  public:
@@ -60,7 +60,7 @@ class EmitInsns : public IRMutator {
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
     if (op->attr_key == "alloc_C") {
       collect_for_ = true;
-    } else if (ktvm::ir::attr::IsPragmaKey(op->attr_key)) {
+    } else if (air::ir::attr::IsPragmaKey(op->attr_key)) {
       if (op->attr_key == "pragma_fractal" || op->attr_key == "pragma_filter") {
         return Evaluate::make(0);
       } else if (insn_handle_functors_.count(op->attr_key) != 0) {
@@ -361,12 +361,12 @@ class UnalignedMad : public IRMutator {
         CHECK_EQ(op->args.size(), 8);
         const Call *dst = op->args[0].as<Call>();
         CHECK(dst);
-        CHECK(dst->is_intrinsic(ktvm::ir::intrinsic::tvm_access_ptr));
+        CHECK(dst->is_intrinsic(air::ir::intrinsic::tvm_access_ptr));
         CHECK_EQ(dst->args.size(), 5U);
 
         const Call *src = op->args[1].as<Call>();
         CHECK(src);
-        CHECK(src->is_intrinsic(ktvm::ir::intrinsic::tvm_access_ptr));
+        CHECK(src->is_intrinsic(air::ir::intrinsic::tvm_access_ptr));
         CHECK_EQ(src->args.size(), 5U);
 
         CHECK(src->args[1].as<Variable>());
@@ -443,7 +443,7 @@ class RegCondition : public IRMutator {
       Stmt new_if = IfThenElse::make(new_load, then_case, else_case);
       Stmt temp = Block::make(new_store, new_if);
       Stmt new_alloc = Allocate::make(new_var, UInt(1), {make_const(Int(32), 1)}, const_true(), temp);
-      Stmt new_attr = AttrStmt::make(new_var, ktvm::ir::attr::storage_scope, StringImm::make("local.REG"), new_alloc);
+      Stmt new_attr = AttrStmt::make(new_var, air::ir::attr::storage_scope, StringImm::make("local.REG"), new_alloc);
       return new_attr;
     }
     return IRMutator::Mutate_(op, s);

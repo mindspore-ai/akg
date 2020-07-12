@@ -18,15 +18,15 @@
 #include <tvm/schedule_pass.h>
 #include <tvm.h>
 
-namespace ktvm {
+namespace air {
 namespace schedule {
 bool IsElemWise(const Operation &op);
 }  // namespace schedule
-}  // namespace ktvm
+}  // namespace air
 
 namespace akg {
 namespace schedule {
-using ktvm::Stage;
+using air::Stage;
 
 // filter for op can not be inlined
 class InlineFilter : public IRVisitor {
@@ -124,7 +124,7 @@ void AutoInline(Schedule sch) {
   // Note: do not support inline of hybrid ops
   std::unordered_set<Operation, NodeHash, NodeEqual> uninlinable;
   for (const Stage &s : sch->stages) {
-    if (const auto op = s->op.as<ktvm::HybridOpNode>()) {
+    if (const auto op = s->op.as<air::HybridOpNode>()) {
       for (Tensor t : op->inputs) {
         uninlinable.insert(t->op);
       }
@@ -141,7 +141,7 @@ void AutoInline(Schedule sch) {
   }
 
   for (Stage s : sch->stages) {
-    if (!s.is_scheduled() && (IsInjective(s->op) || ktvm::schedule::IsElemWise(s->op)) && !CantInline(s->op) &&
+    if (!s.is_scheduled() && (IsInjective(s->op) || air::schedule::IsElemWise(s->op)) && !CantInline(s->op) &&
         !s->is_output && uninlinable.count(s->op) == 0 && !(has_conv && !IsConvInline(s->op, conv_inputs)) &&
         (s->op->attrs.count("no_inline") == 0)) {
       static_cast<void>(s.compute_inline());

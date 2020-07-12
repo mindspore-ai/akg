@@ -111,7 +111,7 @@ class MultiStageCSE : public IRMutator {
 
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
     Stmt stmt = IRMutator::Mutate_(op, s);
-    if (op->attr_key == ktvm::ir::attr::realize_scope) {
+    if (op->attr_key == air::ir::attr::realize_scope) {
       if (replace_.count(op->node.get())) {
         const auto n = stmt.as<AttrStmt>();
         CHECK(n);
@@ -321,7 +321,7 @@ class Compact : public IRMutator {
   Stmt Mutate_(const Realize *op, const Stmt &s) final {
     Region new_bounds;
     Expr cone = make_const(Int(32), 1);
-    ktvm::arith::Analyzer analyzer_;
+    air::arith::Analyzer analyzer_;
     for (size_t i = 0; i < op->bounds.size(); i++) {
       if (analyzer_.CanProve(op->bounds[i]->extent > cone) || i == 0 || i == op->bounds.size() - 1) {
         new_bounds.push_back(op->bounds[i]);

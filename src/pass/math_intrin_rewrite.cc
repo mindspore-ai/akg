@@ -187,7 +187,7 @@ class NotRewriter : public IRMutator {
  public:
   Expr Mutate_(const Not *op, const Expr &e) final {
     // vsub instrunction does not support bool or int8 type
-    ktvm::DataType sub_dtype = Float(16);
+    air::DataType sub_dtype = Float(16);
     Expr res = Sub::make(make_const(sub_dtype, 1.0), Cast::make(sub_dtype, Mutate(op->a)));
     return Cast::make(e.type(), res);
   }

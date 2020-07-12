@@ -31,7 +31,7 @@
 
 namespace akg {
 namespace ir {
-using VarSet = std::unordered_set<Var, ktvm::NodeHash, ktvm::NodeEqual>;
+using VarSet = std::unordered_set<Var, air::NodeHash, air::NodeEqual>;
 
 // forward declaration
 class ThreeAddressExprMutator;
@@ -98,7 +98,7 @@ class ScalarOperandFinder : public IRVisitor {
 };
 
 // Assign a hash value for an expression. This is used for common expression elmination
-class ExprHasher : public ktvm::ir::ExprFunctor<size_t(const Expr &n)> {
+class ExprHasher : public air::ir::ExprFunctor<size_t(const Expr &n)> {
  public:
   ExprHasher() : cross_simplify_(false) {}
   explicit ExprHasher(bool cross_simplify) : cross_simplify_(cross_simplify) {}
@@ -416,7 +416,7 @@ class ThreeAddressExprMutator : public IRMutator {
         VarSet vars;
         GatherVars(op->args[op->args.size() - 1], &vars);
         if (vars.size() == 1) {
-          auto coff = ktvm::arith::DetectLinearEquation(op->args[op->args.size() - 1], {*vars.begin()});
+          auto coff = air::arith::DetectLinearEquation(op->args[op->args.size() - 1], {*vars.begin()});
           if (coff.size() > 0 && coff[0].as<IntImm>() && coff[0].as<IntImm>()->value < 0) {
             return AllocateTmp(e);
           }
@@ -462,7 +462,7 @@ class ThreeAddressExprMutator : public IRMutator {
       }
       // this is going to generate a tensor of tensor expr, like A(B(i))
       return e;
-    } else if (op->call_type == Call::CallType::PureIntrinsic && op->name == ktvm::ir::intrinsic::tvm_if_then_else) {
+    } else if (op->call_type == Call::CallType::PureIntrinsic && op->name == air::ir::intrinsic::tvm_if_then_else) {
       // do not split the condition of tvm_if_then_else
       Array<Expr> args;
       in_call_++;
@@ -538,7 +538,7 @@ class ThreeAddressExprMutator : public IRMutator {
 
   std::vector<Stmt> assign_stmt;
   std::vector<Tensor> imm_tensors;
-  std::unordered_set<FunctionRef, ktvm::NodeHash, ktvm::NodeEqual> imm_ops;
+  std::unordered_set<FunctionRef, air::NodeHash, air::NodeEqual> imm_ops;
 
  private:
   Expr FixMultivarInsn(const Call *op, const Array<Expr> &args) {
@@ -557,7 +557,7 @@ class ThreeAddressExprMutator : public IRMutator {
   Array<Expr> shape_;
 
   std::unordered_map<size_t, std::pair<Expr, Expr>> common_exprs_;  // hash value -> <match expr, replace expr>
-  std::unordered_map<FunctionRef, size_t, ktvm::NodeHash, ktvm::NodeEqual>
+  std::unordered_map<FunctionRef, size_t, air::NodeHash, air::NodeEqual>
     imm2hash_;  // imm tensor -> hash value of the expr in the tensor
 
   int level_{0};
@@ -603,9 +603,9 @@ class InstructionMatcher {
   const int NORMAL = 20;
   const int PRIOR = 50;
   const int UNMATCH = -1;
-  ktvm::arith::PVar<Expr> x, y, z, w;
-  ktvm::arith::PVar<Type> pt;
-  ktvm::arith::PVar<Floating> c1, c2;
+  air::arith::PVar<Expr> x, y, z, w;
+  air::arith::PVar<Type> pt;
+  air::arith::PVar<Floating> c1, c2;
 
   std::vector<ExpressionPattern> ins_pattern{
     // vmadd  [Xd] = [Xn] * [Xd] + [Xm]
@@ -891,7 +891,7 @@ class InferUpperBound {
   };
 
   Bound infer_range(const Expr &expr) {
-    ktvm::arith::Analyzer analyzer_;
+    air::arith::Analyzer analyzer_;
     if (expr.as<IntImm>() || expr.as<UIntImm>() || expr.as<FloatImm>()) {
       return Bound::make(expr, expr);
     } else if (expr.as<Variable>()) {
@@ -961,7 +961,7 @@ class InferUpperBound {
   }
 
  public:
-  Expr run(const Expr &expr, const std::unordered_map<VarExpr, Range, ktvm::NodeHash, ktvm::NodeEqual> &dom_map) {
+  Expr run(const Expr &expr, const std::unordered_map<VarExpr, Range, air::NodeHash, air::NodeEqual> &dom_map) {
     for (auto bind : dom_map) {
       binds.emplace(bind.first->name_hint, Bound::make(bind.second));
     }
@@ -1016,7 +1016,7 @@ class ThreeAddressStmtMutator : public IRMutator {
   Stmt Mutate_(const Provide *op, const Stmt &s) final {
     // skip cube operators (conv2d, matmul)
     bool is_reduction = IsReductionOp(op);
-    ktvm::arith::Analyzer analyzer_;
+    air::arith::Analyzer analyzer_;
     Expr value = analyzer_.rewrite_simplify(op->value);
     if (!PolyUnsupportedExprChecker().isSupported(value)) {
       value = Simplify_cce(op->value);
@@ -1054,8 +1054,8 @@ class ThreeAddressStmtMutator : public IRMutator {
         }
       }
 
-      std::unordered_map<Var, VarSet, ktvm::NodeHash, ktvm::NodeEqual> edges;
-      std::unordered_map<Var, size_t, ktvm::NodeHash, ktvm::NodeEqual> degree;
+      std::unordered_map<Var, VarSet, air::NodeHash, air::NodeEqual> edges;
+      std::unordered_map<Var, size_t, air::NodeHash, air::NodeEqual> degree;
       VarSet new_args_vars;
 
       // sort reduction vars  (Here we use a simplified version, only deal with the relation
@@ -1086,8 +1086,8 @@ class ThreeAddressStmtMutator : public IRMutator {
       });
 
       // for non-variable terms, attach them to its previous variable term
-      std::unordered_map<Var, std::vector<Expr>, ktvm::NodeHash, ktvm::NodeEqual> following_terms_arg;
-      std::unordered_map<Var, std::vector<Expr>, ktvm::NodeHash, ktvm::NodeEqual> following_terms_shape;
+      std::unordered_map<Var, std::vector<Expr>, air::NodeHash, air::NodeEqual> following_terms_arg;
+      std::unordered_map<Var, std::vector<Expr>, air::NodeHash, air::NodeEqual> following_terms_shape;
       VarSet vars_add_to_args(reduce_vars.begin(), reduce_vars.end());
 
       size_t i = 0;
@@ -1308,11 +1308,11 @@ class ThreeAddressStmtMutator : public IRMutator {
  private:
   std::unordered_map<Tensor, std::vector<Tensor>> split_to_;
 
-  std::unordered_map<FunctionRef, std::set<int>, ktvm::NodeHash, ktvm::NodeEqual> op_indices_;
+  std::unordered_map<FunctionRef, std::set<int>, air::NodeHash, air::NodeEqual> op_indices_;
   std::unordered_map<Tensor, const Realize *> realize_node_;
-  std::unordered_map<FunctionRef, const AttrStmt *, ktvm::NodeHash, ktvm::NodeEqual> attr_node_;
+  std::unordered_map<FunctionRef, const AttrStmt *, air::NodeHash, air::NodeEqual> attr_node_;
 
-  std::unordered_map<VarExpr, Range, ktvm::NodeHash, ktvm::NodeEqual> dom_map;
+  std::unordered_map<VarExpr, Range, air::NodeHash, air::NodeEqual> dom_map;
 
   std::unordered_map<size_t, std::pair<Expr, Expr>> global_common_expr_;
 

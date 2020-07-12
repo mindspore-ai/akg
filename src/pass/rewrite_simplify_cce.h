@@ -56,11 +56,11 @@ class RewriteSimplifierCCE {
    */
   void Update(const Var &var, const Expr &new_expr, bool override = false);
 
-  explicit RewriteSimplifierCCE(ktvm::arith::Analyzer *parent);
+  explicit RewriteSimplifierCCE(air::arith::Analyzer *parent);
   ~RewriteSimplifierCCE();
 
  private:
-  friend class ktvm::arith::Analyzer;
+  friend class air::arith::Analyzer;
   friend class ConstraintContext;
   friend class CanonicalSimplifier;
   class Impl;
@@ -75,7 +75,7 @@ class RewriteSimplifierCCE {
  */
 class RewriteSimplifierCCE::Impl : public IRMutator {
  public:
-  explicit Impl(ktvm::arith::Analyzer *parent) : parent_(parent) {}
+  explicit Impl(air::arith::Analyzer *parent) : parent_(parent) {}
   ~Impl() override = default;
 
   void SetIteratorsFromBounds(const Expr &e);
@@ -108,7 +108,7 @@ class RewriteSimplifierCCE::Impl : public IRMutator {
   /*! \brief internal structure for comparison. */
   enum CompareResult { kUnknown, kEQ, kGT, kGE, kLT, kLE, kNE };
   // reference to the main analyzer
-  ktvm::arith::Analyzer *parent_;
+  air::arith::Analyzer *parent_;
   // counter to record recursive rewrite depth.
   int recur_depth_{0};
   // internal variable map
@@ -128,14 +128,14 @@ class RewriteSimplifierCCE::Impl : public IRMutator {
   Expr ReduceCondition(Expr cond);
   template <typename T1>
   Expr RemoveSelectFromCond(const Expr &lhs, const Expr &rhs, const Expr &self);
-  bool VarIntervalIsUseful(const Expr &e, ktvm::arith::IntervalSet &interval);
-  bool VarIntervalIsUseful(const Expr &e, ktvm::arith::IntervalSet &interval_e, const Expr &e2,
-                           ktvm::arith::IntervalSet &interval_e2);
-  ktvm::arith::IntervalSet BoundToIntervalSet(const ktvm::arith::ConstIntBound &bound);
+  bool VarIntervalIsUseful(const Expr &e, air::arith::IntervalSet &interval);
+  bool VarIntervalIsUseful(const Expr &e, air::arith::IntervalSet &interval_e, const Expr &e2,
+                           air::arith::IntervalSet &interval_e2);
+  air::arith::IntervalSet BoundToIntervalSet(const air::arith::ConstIntBound &bound);
 
  private:
   bool in_for_bound_{false};
-  std::unordered_map<const Variable *, ktvm::arith::IntSet> iteration_vars_;
+  std::unordered_map<const Variable *, air::arith::IntSet> iteration_vars_;
 
   // Whether x is true
   bool CanProve(const Expr &x) { return parent_->CanProve(x); }
@@ -156,13 +156,13 @@ class RewriteSimplifierCCE::Impl : public IRMutator {
   }
 
   template <typename TA>
-  ktvm::arith::PConstWithTypeLike<TA> ZeroWithTypeLike(const ktvm::arith::Pattern<TA> &pattern) {
-    return ktvm::arith::PConstWithTypeLike<TA>(pattern.derived(), 0);
+  air::arith::PConstWithTypeLike<TA> ZeroWithTypeLike(const air::arith::Pattern<TA> &pattern) {
+    return air::arith::PConstWithTypeLike<TA>(pattern.derived(), 0);
   }
 
   template <typename TA>
-  ktvm::arith::PConstWithTypeLike<TA> OneWithTypeLike(const ktvm::arith::Pattern<TA> &pattern) {
-    return ktvm::arith::PConstWithTypeLike<TA>(pattern.derived(), 1);
+  air::arith::PConstWithTypeLike<TA> OneWithTypeLike(const air::arith::Pattern<TA> &pattern) {
+    return air::arith::PConstWithTypeLike<TA>(pattern.derived(), 1);
   }
 };
 }  // namespace arith

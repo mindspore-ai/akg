@@ -141,7 +141,7 @@ class LoopsCompacter : public IRMutator {
       }
     }
     for (const auto &e : map) {
-      if (ktvm::ir::StmtUseVar(s, e.first)) {
+      if (air::ir::StmtUseVar(s, e.first)) {
         return false;
       }
     }

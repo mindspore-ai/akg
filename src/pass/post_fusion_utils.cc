@@ -868,7 +868,7 @@ Expr RemoveNullRealize::Mutate_(const Call *op, const Expr &e) {
 }
 
 Stmt RemoveNullRealizeScope::Mutate_(const AttrStmt *op, const Stmt &s) {
-  if (op->attr_key == ktvm::ir::attr::realize_scope && !op->body.as<Realize>()) {
+  if (op->attr_key == air::ir::attr::realize_scope && !op->body.as<Realize>()) {
     return AttrStmt::make(make_zero(Int(32)), "old_realize", 0, this->Mutate(op->body));
   }
 

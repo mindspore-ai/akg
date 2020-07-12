@@ -25,7 +25,7 @@
 namespace akg {
 namespace ir {
 namespace {
-int LeastCommonMultiple(int a, int b) { return (a * b / ktvm::ir::gcd(a, b)); }
+int LeastCommonMultiple(int a, int b) { return (a * b / air::ir::gcd(a, b)); }
 
 int GetTensorSize(Array<Expr> shape) {
   int size = 1;

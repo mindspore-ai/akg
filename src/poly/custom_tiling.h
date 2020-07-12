@@ -19,7 +19,7 @@
 #include <tvm/expr.h>
 #include <string>
 
-namespace ktvm {
+namespace air {
 /*!
  * \brief Custom tiling constraints for user specified axis
  *  Users can apply custom tiling by setting dim and related constraint
@@ -113,6 +113,6 @@ class CustomTiling : public NodeRef {
 };
 
 TVM_REGISTER_NODE_TYPE(CustomTilingNode);
-}  // namespace ktvm
+}  // namespace air
 
 #endif  // POLY_CUSTOM_TILING_H_

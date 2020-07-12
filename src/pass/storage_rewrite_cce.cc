@@ -36,9 +36,9 @@
 
 namespace akg {
 namespace ir {
-using ktvm::arith::IntSet;
-using ktvm::runtime::StorageRank;
-using ktvm::runtime::StorageScope;
+using air::arith::IntSet;
+using air::runtime::StorageRank;
+using air::runtime::StorageScope;
 
 constexpr auto READ_MASK = 1;
 constexpr auto WRITE_MASK = 2;
@@ -58,7 +58,7 @@ void LivenessAnalyzer::Analyze(const Stmt stmt) {
 }
 
 void LivenessAnalyzer::Visit_(const AttrStmt *op) {
-  if (op->attr_key == ktvm::ir::attr::storage_scope) {
+  if (op->attr_key == air::ir::attr::storage_scope) {
     const auto buf = op->node.as<Variable>();
     auto pragma = op->value.as<StringImm>();
     CHECK(pragma != nullptr);
@@ -164,8 +164,8 @@ bool InplaceOpVerifierCCE::CanReuse(const MemInfo &src_address, const MemInfo &d
   // rule 2, it should not use inplace when transpose exist
   auto src_vars = GetVarsInExpr(src_address.offset);
   auto dst_vars = GetVarsInExpr(dst_address.offset);
-  Array<Expr> src_strides = ktvm::arith::DetectLinearEquation(src_address.offset, src_vars);
-  Array<Expr> dst_strides = ktvm::arith::DetectLinearEquation(dst_address.offset, dst_vars);
+  Array<Expr> src_strides = air::arith::DetectLinearEquation(src_address.offset, src_vars);
+  Array<Expr> dst_strides = air::arith::DetectLinearEquation(dst_address.offset, dst_vars);
   // repeat can be viewd as a var when repeatTime is greater than 1
   if (!prove_equal(dst_address.repeatTime, 1) && !src_vars.empty() && !dst_vars.empty()) {
     auto repeat_var = Variable::make(src_vars[0].type(), "repeat_var");
@@ -277,7 +277,7 @@ void InplaceOpVerifierCCE::Visit_(const Call *op) {
       result_ = false;
       return;
     }
-  } else if (op->is_intrinsic(ktvm::ir::intrinsic::tvm_access_ptr)) {
+  } else if (op->is_intrinsic(air::ir::intrinsic::tvm_access_ptr)) {
     CHECK_GE(op->args.size(), 10U);
     mem_info_.offset = op->args[2];
     mem_info_.extent = op->args[3];
@@ -329,7 +329,7 @@ void PipelineAnalyzer::Visit_(const Store *op) {
 
 void PipelineAnalyzer::Visit_(const Call *op) {
   if (cur_proc_ != nullptr) {
-    if (op->is_intrinsic(ktvm::ir::intrinsic::tvm_access_ptr)) {
+    if (op->is_intrinsic(air::ir::intrinsic::tvm_access_ptr)) {
       CHECK_GE(op->args.size(), 5U);
       const auto buf = op->args[1].as<Variable>();
       const auto imm = op->args[4].as<IntImm>();
@@ -346,7 +346,7 @@ void PipelineAnalyzer::Visit_(const Call *op) {
 }
 
 void PipelineAnalyzer::Visit_(const AttrStmt *op) {
-  if (op->attr_key == ktvm::ir::attr::coproc_scope) {
+  if (op->attr_key == air::ir::attr::coproc_scope) {
     if (!playback_) {
       std::shared_ptr<Proc> proc = std::make_shared<Proc>(next_proc_index_++);
       proc_.emplace(op, proc);
@@ -362,7 +362,7 @@ void PipelineAnalyzer::Visit_(const AttrStmt *op) {
       return;
     }
   }
-  if (op->attr_key == ktvm::ir::attr::storage_scope && !playback_) {
+  if (op->attr_key == air::ir::attr::storage_scope && !playback_) {
     const auto buf = op->node.as<Variable>();
     buffer_.emplace(buf, Buffer{nullptr, nullptr});
   }
@@ -676,7 +676,7 @@ void StorageSizeDetector::Visit_(const Allocate *op) {
 
     bool dump_infer_bound = false;
     Expr bound_max = CachedInferBound(extent, var_cond, cond, vars_set);
-    ktvm::MemoryInfo info = ktvm::GetMemoryInfo("local.UB");
+    air::MemoryInfo info = air::GetMemoryInfo("local.UB");
     uint64_t max_num_bytes = static_cast<uint64_t>(info->max_num_bits) / 8;
 
     if (is_const(bound_max) && GetIntConst(bound_max) < INT_MAX && GetIntConst(bound_max) > 0) {
@@ -816,13 +816,13 @@ Stmt StoragePlanRewriterCCE::Rewrite(Stmt stmt, bool is_dynamic) {
     auto vars = GatherVarsInStmts(nest);
     std::vector<Stmt> outer_let_stmts;
     stmt = PeelLetStmtsOfVarsMutator(vars, outer_let_stmts).Run(stmt);
-    stmt = ktvm::ir::MergeNest(outer_let_stmts, ktvm::ir::MergeNest(nest, stmt));
+    stmt = air::ir::MergeNest(outer_let_stmts, air::ir::MergeNest(nest, stmt));
     if (!is_dynamic_rewrite) {
       stmt = RewriteAllocateSizeToMax(alloc_size_).Mutate(stmt);
     }
     return stmt;
   } else {
-    return ktvm::ir::MergeNest(nest, stmt);
+    return air::ir::MergeNest(nest, stmt);
   }
 }
 
@@ -843,7 +843,7 @@ void StoragePlanRewriterCCE::MakeAlloc(const std::string &scope_name, MemScope &
         new_offset = make_const(Int(32), (e->offset + BIT_NUM_PER_BYTE - 1) / BIT_NUM_PER_BYTE);
       }
       nest.emplace_back(
-        AttrStmt::make(a->buffer_var, ktvm::ir::attr::storage_scope, StringImm::make(scope_name), Evaluate::make(0)));
+        AttrStmt::make(a->buffer_var, air::ir::attr::storage_scope, StringImm::make(scope_name), Evaluate::make(0)));
       nest.emplace_back(
         Allocate::make(a->buffer_var, a->type, a->extents, a->condition, Evaluate::make(0), new_offset));
     }
@@ -851,7 +851,7 @@ void StoragePlanRewriterCCE::MakeAlloc(const std::string &scope_name, MemScope &
 }
 
 Stmt StoragePlanRewriterCCE::Mutate_(const AttrStmt *op, const Stmt &s) {
-  if (op->attr_key == ktvm::ir::attr::storage_scope) {
+  if (op->attr_key == air::ir::attr::storage_scope) {
     return Mutate(op->body);
   }
   return IRMutator::Mutate_(op, s);
@@ -1028,7 +1028,7 @@ void StoragePlanRewriterCCE::DoDynamicRewrite(const std::string scope,
                                               std::vector<std::unique_ptr<StorageEntry>> &allocs) {
   // By default, align to 4 bytes.
   size_t align_bytes = 4;
-  ktvm::MemoryInfo info = ktvm::GetMemoryInfo(scope);
+  air::MemoryInfo info = air::GetMemoryInfo(scope);
   if (info.defined()) {
     align_bytes = info->max_simd_bits / 8;
   }
@@ -1100,7 +1100,7 @@ bool StoragePlanRewriterCCE::DoRewrite(const std::string scope, std::vector<std:
   for (size_t i = 1; i < allocs.size(); ++i) {
     children.emplace_back(allocs[i].get());
   }
-  ktvm::MemoryInfo info = ktvm::GetMemoryInfo(scope);
+  air::MemoryInfo info = air::GetMemoryInfo(scope);
   // By default, align to 32 bits.
   size_t align = 32;
   uint64_t max_num_bits = 1024L * 1024 * 1024 * 8;

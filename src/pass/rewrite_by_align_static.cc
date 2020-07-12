@@ -128,7 +128,7 @@ class AxisPartitioner : public IRMutator {
     for (size_t i = 0; i != all_vars.size(); ++i) {
       auto var = all_vars[i];
 
-      auto strides = ktvm::arith::DetectLinearEquation(tmp_idx, {var});
+      auto strides = air::arith::DetectLinearEquation(tmp_idx, {var});
       if (strides.empty()) {
         continue;
       }
@@ -173,7 +173,7 @@ class RewriteAllocateAndIndex : public IRMutator {
   ~RewriteAllocateAndIndex() override = default;
 
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
-    if (op->attr_key == ktvm::ir::attr::storage_scope) {
+    if (op->attr_key == air::ir::attr::storage_scope) {
       auto scope_s = op->value.as<StringImm>()->value;
       if (scope_s == "local.UB") {
         const auto buf = op->node.as<Variable>();
@@ -203,11 +203,11 @@ class RewriteAllocateAndIndex : public IRMutator {
 
       Expr align = GetIntConst(it->second) > 0 ? it->second : blk_sz;
 
-      Expr sz = ktvm::arith::ComputeReduce<Mul>(opn->extents, make_const(Int(32), 1));
+      Expr sz = air::arith::ComputeReduce<Mul>(opn->extents, make_const(Int(32), 1));
       Expr fixed_align = Simplify(((align + blk_sz - 1) / blk_sz * blk_sz));
       Expr fixed_sz = Simplify(((sz + align - 1) / align) * fixed_align);
       // only fix extent for extending size
-      if (ktvm::arith::Analyzer().CanProve((fixed_sz - sz) > 0)) {
+      if (air::arith::Analyzer().CanProve((fixed_sz - sz) > 0)) {
         return Allocate::make(opn->buffer_var, opn->type, {fixed_sz}, opn->condition, opn->body, opn->new_expr,
                               opn->free_function);
       }
@@ -300,7 +300,7 @@ class RewriteAllocateAndIndex : public IRMutator {
     CHECK_NE(blk_sz, 0);
     int64_t times = ((align + blk_sz - 1) / blk_sz * blk_sz);
     for (auto v : all_vars) {
-      auto strides = ktvm::arith::DetectLinearEquation(tmp_idx, {v});
+      auto strides = air::arith::DetectLinearEquation(tmp_idx, {v});
       CHECK_EQ(strides.size(), 2);
 
       CHECK(is_const(strides[0]));
@@ -335,7 +335,7 @@ class RewriteAllocateAndIndex : public IRMutator {
     auto align32 = static_cast<int32_t>(align);
     CHECK_NE(new_align, 0);
     auto blksz32 = static_cast<int32_t>(new_align);
-    ktvm::arith::Analyzer analyzer;
+    air::arith::Analyzer analyzer;
     for (auto e : fors_) {
       analyzer.Bind(e->loop_var, Range::make_by_min_extent(e->min, e->extent));
     }

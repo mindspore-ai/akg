@@ -117,7 +117,7 @@ class SinkAllocateMutator : public IRMutator {
 
  private:
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
-    if (op->attr_key == ktvm::ir::attr::storage_scope && op->value.as<StringImm>() &&
+    if (op->attr_key == air::ir::attr::storage_scope && op->value.as<StringImm>() &&
         op->value.as<StringImm>()->value.find("L1") == std::string::npos &&
         op->value.as<StringImm>()->value.find("L0") == std::string::npos) {
       if (const auto allocate = op->body.as<Allocate>()) {

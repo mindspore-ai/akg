@@ -28,8 +28,8 @@ namespace poly {
 class TileSpaceCollector {
  public:
   TileSpaceCollector(TilingAnalyzer &analyzer, const int level)
-      : space_(make_node<ktvm::TileSpaceNode>()), analyzer_(analyzer), cand_(&analyzer), level_(level) {
-    ktvm::runtime::NDArray init_array = ktvm::runtime::NDArray::Empty({}, type, ctx);
+      : space_(make_node<air::TileSpaceNode>()), analyzer_(analyzer), cand_(&analyzer), level_(level) {
+    air::runtime::NDArray init_array = air::runtime::NDArray::Empty({}, type, ctx);
     space_->index_table = init_array;
     space_->l1_tile_range_table = init_array;
     space_->l0_tile_range_table = init_array;
@@ -39,7 +39,7 @@ class TileSpaceCollector {
   }
   ~TileSpaceCollector() = default;
 
-  ktvm::TileSpace GetSpace() { return ktvm::TileSpace(space_); }
+  air::TileSpace GetSpace() { return air::TileSpace(space_); }
 
   void Collect() {
     size_t band_size = analyzer_.RootAxis()->children.size();
@@ -59,7 +59,7 @@ class TileSpaceCollector {
       CollectConstraint(tile_size, band_size);
       if (level_ >= DUMP_LEVEL_CANDIDATE) {
         auto &result = result_[0];
-        space_->tiling_candidate = ktvm::runtime::NDArray::Empty(
+        space_->tiling_candidate = air::runtime::NDArray::Empty(
           {static_cast<int64_t>(result.size()), static_cast<int64_t>(tile_size)}, type, ctx);
         auto spaceTilingDlPack = space_->tiling_candidate.ToDLPack();
         auto ptr = reinterpret_cast<int *>(spaceTilingDlPack->dl_tensor.data);
@@ -84,7 +84,7 @@ class TileSpaceCollector {
       CollectConstraint(tile_size, band_size);
       if (level_ >= DUMP_LEVEL_CANDIDATE) {
         FreeResult();
-        space_->tiling_candidate = ktvm::runtime::NDArray::Empty(
+        space_->tiling_candidate = air::runtime::NDArray::Empty(
           {static_cast<int64_t>(result.size()), static_cast<int64_t>(tile_size)}, type, ctx);
         auto spaceTilingDlPack = space_->tiling_candidate.ToDLPack();
         auto ptr2 = reinterpret_cast<int *>(spaceTilingDlPack->dl_tensor.data);
@@ -122,7 +122,7 @@ class TileSpaceCollector {
     // step 2. collect cared info from each axis
     for (const auto &con : cared_info_) {
       int length = con.find("mod") != std::string::npos ? 1 : 2;
-      auto array = ktvm::runtime::NDArray::Empty({static_cast<int64_t>(tile_size), length}, type, ctx);
+      auto array = air::runtime::NDArray::Empty({static_cast<int64_t>(tile_size), length}, type, ctx);
       auto spaceDlPack = array.ToDLPack();
       auto ptr = reinterpret_cast<int *>(spaceDlPack->dl_tensor.data);
       for (size_t b_idx = 0; b_idx < all_axes.size(); ++b_idx) {
@@ -159,7 +159,7 @@ class TileSpaceCollector {
   }
 
  private:
-  NodePtr<ktvm::TileSpaceNode> space_;
+  NodePtr<air::TileSpaceNode> space_;
 
   void CombineBand(size_t band, const std::vector<int> &idx, std::vector<int> &tile,
                    std::vector<std::vector<int>> &combined) {

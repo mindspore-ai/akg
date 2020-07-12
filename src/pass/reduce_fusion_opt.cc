@@ -75,7 +75,7 @@ Stmt ReduceUbInit(const Map<std::string, NodeRef> &attrs, size_t index) {
 
   auto stmt = Block::make(first, rest);
   stmt = Realize::make(t->op, t->value_index, Float(32), bounds, const_true(), stmt);
-  stmt = AttrStmt::make(t->op, ktvm::ir::attr::realize_scope, Expr("local.UB"), stmt);
+  stmt = AttrStmt::make(t->op, air::ir::attr::realize_scope, Expr("local.UB"), stmt);
 
   return stmt;
 }
@@ -147,7 +147,7 @@ Stmt GetOpAfterReduce(Stmt &s, const Map<std::string, NodeRef> &attrs, const std
   bounds.push_back(Range::make_by_min_extent(0, c0_extent));
   for (auto r : f.miss_realize_) {
     stmt = Realize::make(r->func, r->value_index, Float(32), bounds, const_true(), stmt);
-    stmt = AttrStmt::make(r->func, ktvm::ir::attr::realize_scope, Expr("local.UB"), stmt);
+    stmt = AttrStmt::make(r->func, air::ir::attr::realize_scope, Expr("local.UB"), stmt);
   }
   return stmt;
 }

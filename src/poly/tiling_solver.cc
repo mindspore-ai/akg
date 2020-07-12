@@ -65,7 +65,7 @@ double TilingSolver::GetNewAllocRatioWhenRewriteFail(int64_t memory_bits) {
     auto expect_allocs = memory_bits * last_adjust_ratio;
     adjust_ratio = (expect_allocs / actual_allocs);
     ss << "Adjust memory allocation ratio to " << adjust_ratio << " times and retry tiling.";
-    global_attrs.Set(kUBRatio, ktvm::make_const(Float(32), adjust_ratio));
+    global_attrs.Set(kUBRatio, air::make_const(Float(32), adjust_ratio));
     analyzer_.logger_.AppendLog(MICRO_TUNING, ss);
   }
   return adjust_ratio;
@@ -200,7 +200,7 @@ TileCandidate *InequalitySolver::Solve() {
 
 Expr InequalitySolver::GetSubstitutedExpr(const NodeRef &op) {
   const auto v = op.as<Variable>();
-  auto var = ktvm::Downcast<Var>(op);
+  auto var = air::Downcast<Var>(op);
   Expr ret;
   if (defined_vars_.find(var) == defined_vars_.end()) {
     bool is_tile_var = false;
@@ -262,13 +262,13 @@ Expr InequalitySolver::SolveMemoryConstraint(const Array<Expr> &memory_constrain
       if (v == nullptr || v->name_hint == tiling_var->name_hint) {
         return;
       }
-      auto var = ktvm::Downcast<Var>(op);
+      auto var = air::Downcast<Var>(op);
       Expr value = GetSubstitutedExpr(op);
       if (value.defined()) {
         var_max.Set(var, value);
       }
     };
-    ktvm::ir::PostOrderVisit(mc, SubstituteOtherVar);
+    air::ir::PostOrderVisit(mc, SubstituteOtherVar);
     mc = Substitute(mc, var_max);
     cons_on_var.push_back(CanonicalSimplify(mc));
   }
@@ -330,7 +330,7 @@ void InequalitySolver::DetermineTileFactor(TileAxis *axis, TileLevel level, cons
   }
 
   if (to_tile.as<Variable>()) {
-    Expr res = SolveMemoryConstraint(memory_constraints, ktvm::Downcast<Var>(to_tile));
+    Expr res = SolveMemoryConstraint(memory_constraints, air::Downcast<Var>(to_tile));
     if (!res.defined()) {
       ss << "No memory constraint on " << to_tile << " for now, use maximal tile " << cons.tile_extent_;
       analyzer_.logger_.AppendLog(DO_TILING, ss);
@@ -380,7 +380,7 @@ void InequalitySolver::DetermineTileFactor(TileAxis *axis, TileLevel level, cons
       if (analyzer_.arith_ana_.CanProve(tile_min == tile_range)) {
         param_info_.push_front(Scop::ParamInfo{"LetStmt", Expr(to_tile), tile_range});
         AppendShapeLimitConstraint(axis, to_tile);
-        defined_vars_.Set(ktvm::Downcast<Var>(to_tile), tile_range);
+        defined_vars_.Set(air::Downcast<Var>(to_tile), tile_range);
         return;
       }
 
@@ -393,7 +393,7 @@ void InequalitySolver::DetermineTileFactor(TileAxis *axis, TileLevel level, cons
     }
 
     CHECK(final_factor_expr.defined());
-    defined_vars_.Set(ktvm::Downcast<Var>(to_tile), final_factor_expr);
+    defined_vars_.Set(air::Downcast<Var>(to_tile), final_factor_expr);
     // We can only update const tiling factor to final dim as we will replace those var factor with prime number.
     if (const auto imm = final_factor_expr.as<IntImm>()) {
       if (level == LEVEL1) {
@@ -411,7 +411,7 @@ Expr InequalitySolver::DetermineTileForDynamic(TileAxis *axis, const Expr &mem_c
                                                const Expr &shape_range, const Expr &tile_range, TileLevel level) {
   Expr final_factor;
   std::stringstream ss;
-  auto tile = ktvm::Downcast<Var>(to_tile);
+  auto tile = air::Downcast<Var>(to_tile);
   auto new_mem_constraint = mem_constraint;
   TileAxis::Constraint cons = level == LEVEL1 ? axis->l1_constraints : axis->l0_constraints;
 
@@ -735,7 +735,7 @@ Array<Expr> InequalitySolver::CollectMemoryConstraints() {
       continue;
     }
 
-    Expr constraint = ktvm::ir::CanonicalSimplify(mem_info->max_live_size[i] <= CastInt64ToExpr(mem_limit_[i]));
+    Expr constraint = air::ir::CanonicalSimplify(mem_info->max_live_size[i] <= CastInt64ToExpr(mem_limit_[i]));
     if (analyzer_.arith_ana_.CanProve(constraint == 0)) {
       LOG(WARNING) << "Memory " << i << " exceed limit, " << mem_info->max_live_size[i] << " vs " << mem_limit_[i];
       continue;
@@ -1141,7 +1141,7 @@ void TraverseSolver::AppendConvBackpropPragma() {
   Expr kh_cut = 1;
   Expr kw_cut = 1;
   bool cut_reduce = false;
-  ktvm::arith::Analyzer arith_ana;
+  air::arith::Analyzer arith_ana;
   std::vector<TileAxis *> batch_axes = analyzer_.GetAxesOfAttr(AttrInfo{"CONV", "N"});
   if (batch_axes.size() == 1U) {
     batch_cut *= cand_.GetTileVal(batch_axes[0]).first;

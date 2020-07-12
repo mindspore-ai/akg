@@ -453,7 +453,7 @@ Stmt MultiVecInsnBuilder::MultiVecIntrinBody(const VectorArgInfo &arg_info, Expr
   auto all_mask = GetAllMask(dst_info_->dtype_);
   bool mask_all = true;
   for (size_t i = 0; i < all_mask.size(); ++i) {
-    if (!ktvm::ir::Equal(arg_info->vec_mask_[i], all_mask[i])) {
+    if (!air::ir::Equal(arg_info->vec_mask_[i], all_mask[i])) {
       mask_all = false;
       break;
     }

@@ -114,7 +114,7 @@ class StmtSinker : public IRMutator {
   Stmt Mutate_(const For *op, const Stmt &s) final {
     if (auto obj = op->body.as<IfThenElse>()) {
       Var var(op->loop_var);
-      judge_func_ = [&var](const Expr &e) { return !ktvm::ir::ExprUseVar(e, var); };
+      judge_func_ = [&var](const Expr &e) { return !air::ir::ExprUseVar(e, var); };
       pack_func_ = [=](const Stmt &stmt) {
         return For::make(op->loop_var, op->min, op->extent, op->for_type, op->device_api, stmt);
       };
@@ -125,7 +125,7 @@ class StmtSinker : public IRMutator {
 
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
     auto obj_ph = op->node.as<PlaceholderOpNode>();
-    if (op->attr_key == ktvm::ir::attr::realize_scope && obj_ph) {
+    if (op->attr_key == air::ir::attr::realize_scope && obj_ph) {
       if (auto obj = op->body.as<IfThenElse>()) {
         judge_func_ = [&, this](const Expr &e) { return !HasCallName(e, obj_ph->name); };
         pack_func_ = [=](const Stmt &stmt) { return AttrStmt::make(op->node, op->attr_key, op->value, stmt); };
@@ -412,7 +412,7 @@ Stmt PromoteIfStmt(Stmt stmt, bool is_dynamic) {
   if (is_dynamic)
     stmt = RemoveNoOp(stmt);
   else
-    stmt = RemoveNoOp(ktvm::ir::CanonicalSimplify(stmt));
+    stmt = RemoveNoOp(air::ir::CanonicalSimplify(stmt));
   return IFPromoter().Mutate(stmt);
 }
 }  // namespace ir

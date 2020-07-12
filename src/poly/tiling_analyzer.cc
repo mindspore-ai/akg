@@ -428,12 +428,12 @@ int64_t TileCandidate::CalActualTile(const CalAlignInfo *align_info) {
     actual_tile = align_info->tile * block_size;
   } else if (align_type.find("DMA") != std::string::npos) {
     int64_t block_size = GetAlignBytes(align_info->buf->align_size);
-    int64_t gcd = ktvm::ir::gcd(align_info->tile, block_size);
+    int64_t gcd = air::ir::gcd(align_info->tile, block_size);
     CHECK_NE(gcd, 0);
     actual_tile = align_info->tile * block_size / gcd;
   } else if (align_type != "" || align_info->a == align_info->buf->tile_axis.get()->back()) {
     int64_t isolate_block = align_info->divisor - (split - 1) * align_info->tile;
-    int64_t gcd = ktvm::ir::gcd(align_info->tile, isolate_block);
+    int64_t gcd = air::ir::gcd(align_info->tile, isolate_block);
     int64_t block_size = GetAlignBytes(align_info->buf->align_size);
     CHECK_NE(isolate_block, 0);
     CHECK_NE(gcd, 0);
@@ -1153,7 +1153,7 @@ class LinearAccessPatternBuilder : public IRVisitor {
       }
     };
     for (Expr e : args) {
-      ktvm::ir::PostOrderVisit(e, CollectAxis);
+      air::ir::PostOrderVisit(e, CollectAxis);
     }
     buf_tile_axis_[buf] = tile_axis;
   }

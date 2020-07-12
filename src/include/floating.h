@@ -33,14 +33,14 @@ namespace akg {
  * This is used to store and automate type check
  * attributes that must be constant float.
  */
-class Floating : public ktvm::Expr {
+class Floating : public air::Expr {
  public:
   Floating() : Expr() {}
 
   /*!
    * \brief constructor from node.
    */
-  explicit Floating(ktvm::runtime::ObjectPtr<ktvm::runtime::Object> Object) : Expr(Object) {}
+  explicit Floating(air::runtime::ObjectPtr<air::runtime::Object> Object) : Expr(Object) {}
   /*!
    * \brief Construct integer from int value.
    */
@@ -61,7 +61,7 @@ class Floating : public ktvm::Expr {
    * \brief Get pointer to the internal value.
    * \return the content of the integer.
    */
-  const ktvm::ir::FloatImm *operator->() const { return static_cast<const ktvm::ir::FloatImm *>(get()); }
+  const air::ir::FloatImm *operator->() const { return static_cast<const air::ir::FloatImm *>(get()); }
   /*!
    * \brief convert to double
    */
@@ -70,7 +70,7 @@ class Floating : public ktvm::Expr {
     return (*this)->value;
   }
   /*! \brief type indicate the container type */
-  using ContainerType = ktvm::ir::FloatImm;
+  using ContainerType = air::ir::FloatImm;
 };
 }  // namespace akg
 

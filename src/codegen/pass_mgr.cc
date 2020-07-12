@@ -28,7 +28,7 @@ void PassMgr::InitializeSubName() {
 }
 
 TVMRetValue PassMgr::Run() const {
-  const auto *packed_func = ktvm::runtime::Registry::Get(pass_name_);
+  const auto *packed_func = air::runtime::Registry::Get(pass_name_);
   CHECK(packed_func != nullptr) << "PackedFunc " << pass_name_ << " not found";
 
   TVMRetValue res;
@@ -97,7 +97,7 @@ bool PassMgr::ShouldDumpC() const {
 }
 
 thread_local int PassMgr::tl_pass_id_ = -1;
-thread_local ktvm::BuildConfig PassMgr::tl_config_ = ktvm::BuildConfig::Current();
+thread_local air::BuildConfig PassMgr::tl_config_ = air::BuildConfig::Current();
 thread_local std::string PassMgr::tl_dump_ir_dir_ = "ir/";
-thread_local ktvm::Array<NodeRef> PassMgr::tl_args_;
+thread_local air::Array<NodeRef> PassMgr::tl_args_;
 }  // namespace akg

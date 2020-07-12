@@ -22,7 +22,7 @@
 
 namespace akg {
 namespace ir {
-using ktvm::ir::attr::coproc_scope;
+using air::ir::attr::coproc_scope;
 
 class InnateSyncChecker {
  public:
@@ -1502,13 +1502,13 @@ class SyncInjector : public IRMutator {
     stmt = IRMutator::Mutate(stmt);
     auto it = insert_before_.find(node);
     if (it != insert_before_.end()) {
-      Stmt before = ktvm::ir::MergeSeq(std::vector<Stmt>(it->second.rbegin(), it->second.rend()));
+      Stmt before = air::ir::MergeSeq(std::vector<Stmt>(it->second.rbegin(), it->second.rend()));
       stmt = Block::make(before, stmt);
     }
 
     it = insert_after_.find(node);
     if (it != insert_after_.end()) {
-      Stmt after = ktvm::ir::MergeSeq(it->second);
+      Stmt after = air::ir::MergeSeq(it->second);
       stmt = Block::make(stmt, after);
     }
 

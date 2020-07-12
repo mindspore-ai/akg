@@ -56,7 +56,7 @@ Buffer MakeBuf(const T *mem, const Type &t, const StmtInfo &forInfo) {
   auto loop_var_size = forInfo.ops_.size();
   // shape
   Array<Expr> shape;
-  Array<Expr> mem_strides = ktvm::arith::DetectLinearEquation(mem->index, vars);
+  Array<Expr> mem_strides = air::arith::DetectLinearEquation(mem->index, vars);
   if (mem_strides.empty()) {
     isLegalStrides = false;
     mem_strides.push_back(make_const(Int(32), 1));

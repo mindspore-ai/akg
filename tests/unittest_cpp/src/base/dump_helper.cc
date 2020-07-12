@@ -25,7 +25,7 @@ bool UTRegxMatch::RegxMatchHex(const std::string &str) {
   return std::regex_match(str, std::regex(pattern_hex_));
 }
 
-std::string UTDumpHelper::Dump(const ktvm::NodeRef &node) {
+std::string UTDumpHelper::Dump(const air::NodeRef &node) {
   std::stringstream ss;
   ss << node;
   return ss.str();

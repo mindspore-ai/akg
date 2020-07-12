@@ -676,7 +676,7 @@ class LoopSplit : public IRMutator {
       CHECK(var) << "illegal expression " << e << " for Load2d";
       const auto pb = op->b.as<IntImm>();
       if (!global_attrs.GetBoolAttr(kIsDynamic, false))
-        CHECK(pb && ktvm::arith::Analyzer().CanProve(pb->value == kernel_h_ * kernel_w_));
+        CHECK(pb && air::arith::Analyzer().CanProve(pb->value == kernel_h_ * kernel_w_));
 
       for (auto kv : loop_vars_) {
         if (kv.first == var) {
@@ -714,7 +714,7 @@ class LoopSplit : public IRMutator {
       CHECK(var) << "illegal expression " << e << " for Load2d";
       const auto pb = op->b.as<IntImm>();
       if (!global_attrs.GetBoolAttr(kIsDynamic, false))
-        CHECK(pb && ktvm::arith::Analyzer().CanProve(pb->value == kernel_h_ * kernel_w_));
+        CHECK(pb && air::arith::Analyzer().CanProve(pb->value == kernel_h_ * kernel_w_));
 
       for (auto kv : loop_vars_) {
         if (kv.first == var) {

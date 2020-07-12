@@ -25,7 +25,7 @@
 
 namespace akg {
 namespace ir {
-using ktvm::runtime::PackedFunc;
+using air::runtime::PackedFunc;
 
 class EmitInsnDebugger {
  public:
@@ -52,7 +52,7 @@ class EmitInsnDebugger {
     static_cast<void>(finder.Mutate(stmt));
     attr_stmts_ = std::move(finder.attr_stmts_);
     if (dumpJson) {
-      const PackedFunc *f = ktvm::runtime::Registry::Get("tvm.intrin.cce.writeToJson");
+      const PackedFunc *f = air::runtime::Registry::Get("tvm.intrin.cce.writeToJson");
       CHECK(f);
       static_cast<void>((*f)(attr_stmts_));
     }

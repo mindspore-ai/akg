@@ -415,7 +415,7 @@ class FixRealize : public IRMutator {
   std::vector<const For *> curnt_loops_;
   std::unordered_set<const Node *> realize_;
   std::unordered_map<const Node *, std::vector<const For *>> loop_ext_;
-  std::unordered_map<FunctionRef, Array<Expr>, ktvm::NodeHash, ktvm::NodeEqual> realize_args_;
+  std::unordered_map<FunctionRef, Array<Expr>, air::NodeHash, air::NodeEqual> realize_args_;
   bool is_dynamic_ = global_attrs.GetBoolAttr(kIsDynamic, false);
   bool found_{false};
   bool in_vectorized_{false};

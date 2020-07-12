@@ -37,10 +37,10 @@ class HasLocalScope : public IRVisitor {
   }
 
   void Visit_(const AttrStmt *op) final {
-    if (op->attr_key == ktvm::ir::attr::storage_scope) {
+    if (op->attr_key == air::ir::attr::storage_scope) {
       const auto buf = op->node.as<Variable>();
       auto scop = op->value.as<StringImm>()->value;
-      ktvm::MemoryInfo info = ktvm::GetMemoryInfo(scop);
+      air::MemoryInfo info = air::GetMemoryInfo(scop);
       if (info.defined()) {
         storage_scope_[buf] = StorageScope::make(scop);
       }
@@ -54,8 +54,8 @@ class HasLocalScope : public IRVisitor {
 };
 
 // auto inject pipe for target
-using ktvm::ir::attr::coproc_scope;
-using ktvm::runtime::PackedFunc;
+using air::ir::attr::coproc_scope;
+using air::runtime::PackedFunc;
 
 class LoadMatcher : public IRVisitor {
  public:
@@ -183,8 +183,8 @@ class InjectPip : public IRMutator {
     next_loop_map[op->loop_var.get()] = op->loop_var + 1;
     Map<Var, Range> range;
     range.Set(Var(op->loop_var), Range::make_by_min_extent(op->min, op->extent));
-    ktvm::arith::Analyzer analyzer_;
-    Expr t = Simplify_cce(ktvm::ir::Substitute(access_info.offset, next_loop_map) - access_info.offset < extent, range);
+    air::arith::Analyzer analyzer_;
+    Expr t = Simplify_cce(air::ir::Substitute(access_info.offset, next_loop_map) - access_info.offset < extent, range);
     return analyzer_.CanProve(t);
   }
 
@@ -193,7 +193,7 @@ class InjectPip : public IRMutator {
     bool is_init = false;
     auto GetInfo = [&access_info, &is_init](const NodeRef &op) {
       const auto tvm_access_ptr = op.as<Call>();
-      if (tvm_access_ptr != nullptr && tvm_access_ptr->is_intrinsic(ktvm::ir::intrinsic::tvm_access_ptr)) {
+      if (tvm_access_ptr != nullptr && tvm_access_ptr->is_intrinsic(air::ir::intrinsic::tvm_access_ptr)) {
         CHECK_EQ(tvm_access_ptr->args.size(), 10U);
         int rw = tvm_access_ptr->args[4].as<IntImm>()->value;
         const auto op_address = tvm_access_ptr->args[1].as<Variable>();
@@ -221,7 +221,7 @@ class InjectPip : public IRMutator {
         }
       }
     };
-    ktvm::ir::PostOrderVisit(body, GetInfo);
+    air::ir::PostOrderVisit(body, GetInfo);
     if (!is_init) {
       access_info.RepeatTime = -1;  // generate error code to skip moving coproc
     }
@@ -280,7 +280,7 @@ class InjectPip : public IRMutator {
         insn_num += 1;
       }
     };
-    ktvm::ir::PostOrderVisit(body, GetPip);
+    air::ir::PostOrderVisit(body, GetPip);
     return insn_num == 1 ? pip : -1;
   }
 };

@@ -151,7 +151,7 @@ AlignDict GenNormalAlignDict(const StmtInfoList &com_info_list, bool is_spread, 
     if (vars.empty()) {
       offset_gcd = index_expr;
     } else {
-      auto strides_tmp = ktvm::arith::DetectLinearEquation(index_expr, vars);
+      auto strides_tmp = air::arith::DetectLinearEquation(index_expr, vars);
       Array<Expr> strides;
       for (auto stride : strides_tmp) {
         if (!Equal(stride, 1)) {
@@ -277,7 +277,7 @@ bool IsScalarDMA(const Stmt &op) {
     auto shape = GetItem(d_info->shape_, -1);
     auto stride = GetItem(d_info->strides_, -1);
     auto block_size = GetUbBlkSize(d_info->dtype_);
-    if (!(ubuf_scalar && ktvm::arith::Analyzer().CanProve(shape < block_size) && Equal(stride, block_size) &&
+    if (!(ubuf_scalar && air::arith::Analyzer().CanProve(shape < block_size) && Equal(stride, block_size) &&
           IsTwoItemEqual(d_info->strides_, s_info->strides_, -1, true))) {
       return true;
     }
@@ -365,8 +365,8 @@ AlignDict GetDataAlign(const Stmt &op, const bool is_dma_copy, std::vector<StmtI
           auto src_shape = GetItem(src_info->shape_, -1);
           if (!Equal(floormod(dst_shape, block_size), 0) ||
               (!Equal(floormod(src_shape, block_size), 0) &&
-               (ktvm::arith::Analyzer().CanProve(src_shape > block_size) ||
-                ktvm::arith::Analyzer().CanProve(dst_shape > block_size)))) {
+               (air::arith::Analyzer().CanProve(src_shape > block_size) ||
+                air::arith::Analyzer().CanProve(dst_shape > block_size)))) {
             return GenTransposeAlign(dst_info, src_info, if_info, for_info);
           } else {
             // special case optimization
@@ -514,7 +514,7 @@ class AlignVistor : public IRVisitor {
             for (const auto &func : info.modifiers_) {
               auto old = info.base_offset_;
               func(info.base_offset_);
-              if (ktvm::arith::Analyzer().CanProve(CastInt64ToInt32(info.base_offset_) < old)) {
+              if (air::arith::Analyzer().CanProve(CastInt64ToInt32(info.base_offset_) < old)) {
                 done = false;
               }
             }
@@ -542,7 +542,7 @@ class AlignVistor : public IRVisitor {
       for (const auto &info : vec_ele) {
         auto it = all_aligns_.find(info->data_);
         CHECK(it != all_aligns_.end());
-        if (ktvm::arith::Analyzer().CanProve(CastInt64ToInt32(it->second.base_offset_) <= 1)) {
+        if (air::arith::Analyzer().CanProve(CastInt64ToInt32(it->second.base_offset_) <= 1)) {
           continue;
         }
         for (size_t i = 0; i != info->var_.size(); ++i) {
@@ -551,7 +551,7 @@ class AlignVistor : public IRVisitor {
           auto align = it->second.base_offset_;
           align = CastInt64ToInt32(align);
           if (((!is_const(align) && is_const(stride)) ||
-               (is_const(stride) && is_const(align) && ktvm::arith::Analyzer().CanProve(stride < align))) &&
+               (is_const(stride) && is_const(align) && air::arith::Analyzer().CanProve(stride < align))) &&
               Equal(ExprSimplifier().Simplify(FloorMod::make(stride * extent, align)), 0)) {
             if (!Equal(ExprSimplifier().Simplify(FloorMod::make(align, stride)), 0)) {
               it->second.base_offset_ = ExprSimplifier().Gcd(align, stride);
@@ -672,7 +672,7 @@ class AlignInsert : public IRMutator {
     return Load::make(op->type, op->buffer_var, index, val);
   }
 
-  static Expr GetAlignValue(const Expr &val, const ktvm::DataType dtype) {
+  static Expr GetAlignValue(const Expr &val, const air::DataType dtype) {
     return Equal(
              ExprSimplifier().Simplify(FloorMod::make(CastInt64ToInt32(val), CastInt64ToInt32(GetUbBlkSize(dtype)))), 0)
              ? Expr(FREE_ALIGN)
@@ -691,7 +691,7 @@ class FindSameNameBuf : public IRVisitor {
 
  private:
   void Visit_(const AttrStmt *op) final {
-    if (op->attr_key == ktvm::ir::attr::storage_scope) {
+    if (op->attr_key == air::ir::attr::storage_scope) {
       const auto buf = op->node.as<Variable>();
       CHECK(buf);
       auto str = op->value.as<StringImm>();
@@ -840,7 +840,7 @@ class AlignOne : public IRMutator {
 }  // namespace
 
 Stmt AnalyzeMinAlignDynamic(Stmt stmt, bool enable_conv_analyze_align, bool set_scalar_align) {
-  stmt = ktvm::ir::ConvertSSA(stmt);
+  stmt = air::ir::ConvertSSA(stmt);
 
   FindSameNameBuf find_visitor;
   find_visitor.Visit(stmt);

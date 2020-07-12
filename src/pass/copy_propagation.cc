@@ -106,7 +106,7 @@ class DetectCanEliminatedCopy : public IRVisitor {
         src_call.emplace_back(call);
       }
     };
-    ktvm::ir::PostOrderVisit(op->value, GetSrcCall);
+    air::ir::PostOrderVisit(op->value, GetSrcCall);
 
     for (size_t i = 0; i < src_call.size(); ++i) {
       auto func = src_call[i]->func;
@@ -228,7 +228,7 @@ class EliminateCopyAndRealize : public IRMutator {
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
     auto body = this->Mutate(op->body);
 
-    if (op->attr_key == ktvm::ir::attr::realize_scope) {
+    if (op->attr_key == air::ir::attr::realize_scope) {
       auto node = op->node.as<OperationNode>();
       if (node) {
         for (auto &it : copy_stmts_) {

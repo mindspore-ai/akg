@@ -155,7 +155,7 @@ class SubstituteArgs : public IRMutator {
 class RealizeNewFunc : public IRMutator {
  private:
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
-    if (op->attr_key == ktvm::ir::attr::realize_scope) {
+    if (op->attr_key == air::ir::attr::realize_scope) {
       if (auto r = op->body.as<Realize>()) {
         Array<Expr> shape;
         auto t = placeholder(shape, r->type, r->func->func_name());
@@ -213,7 +213,7 @@ class FractalInfoExtractor : public IRVisitor {
 };
 
 // correct axles' name
-class ExtractIterfromExpr : public ktvm::ir::IRVisitor {
+class ExtractIterfromExpr : public air::ir::IRVisitor {
  public:
   // extract Variable* from expr ((mo_11*16) + mi_12)/7 + ((mo_11*16) + mi_12) % 7 into idx_vec_
   ExtractIterfromExpr() = default;

@@ -77,7 +77,7 @@ class CallCounter : public IRVisitor {
  public:
   void Visit_(const Call *op) final {
     if (op->call_type == Call::CallType::Halide) {
-      Tensor t = Downcast<ktvm::Operation>(op->func).output(op->value_index);
+      Tensor t = Downcast<air::Operation>(op->func).output(op->value_index);
       count_map_[t]++;
     }
     IRVisitor::Visit_(op);
@@ -133,8 +133,8 @@ class StatementPatternRewriter : public IRMutator {
 };
 
 template <typename T>
-ktvm::arith::PConst<Expr> fold(T expr) {
-  return ktvm::arith::PConst<Expr>(Simplify_cce(expr.Eval()));
+air::arith::PConst<Expr> fold(T expr) {
+  return air::arith::PConst<Expr>(Simplify_cce(expr.Eval()));
 }
 
 #define TRY_REWRITE(before, after)                                                      \
@@ -146,15 +146,15 @@ ktvm::arith::PConst<Expr> fold(T expr) {
                  [&](Stmt stmt, Context *ctx) -> Stmt { return (after).Eval(); }},
 
 Stmt StmtPatternRewrite(Stmt stmt) {
-  ktvm::arith::PVar<Floating> f1, f2, f3;
-  ktvm::arith::PVar<Array<Expr> > i1, i2, i3, i4;
-  ktvm::arith::PTensor A, B, C, D, in, out;
-  ktvm::arith::PVar<Expr> value1, value2, cond;
-  ktvm::arith::PVar<Expr> min1, extent1, min2, extent2, min3, extent3, min4, extent4, min5, extent5;
-  ktvm::arith::PVar<Stmt> other, then_body, else_body;
-  ktvm::arith::PConst<Floating> zero(0.0f);
-  ktvm::arith::PVar<Var> n, c1, h, w, c0;
-  ktvm::arith::PVar<NodeRef> useless;
+  air::arith::PVar<Floating> f1, f2, f3;
+  air::arith::PVar<Array<Expr> > i1, i2, i3, i4;
+  air::arith::PTensor A, B, C, D, in, out;
+  air::arith::PVar<Expr> value1, value2, cond;
+  air::arith::PVar<Expr> min1, extent1, min2, extent2, min3, extent3, min4, extent4, min5, extent5;
+  air::arith::PVar<Stmt> other, then_body, else_body;
+  air::arith::PConst<Floating> zero(0.0f);
+  air::arith::PVar<Var> n, c1, h, w, c0;
+  air::arith::PVar<NodeRef> useless;
 
   std::vector<RewritePattern> patterns{
     // A[i] = 0

@@ -30,9 +30,9 @@
 #include "codegen/util.h"
 
 namespace akg {
-using ktvm::runtime::TVMArgs;
-using ktvm::runtime::TVMArgsSetter;
-using ktvm::runtime::TVMRetValue;
+using air::runtime::TVMArgs;
+using air::runtime::TVMArgsSetter;
+using air::runtime::TVMRetValue;
 
 template <typename T>
 void DumpRealContent(const T &content, std::ostream &buf) {
@@ -63,7 +63,7 @@ class PassMgr {
     int args_num = sizeof...(Args) + 1;
     args_values_.resize(args_num);
     args_types_.resize(args_num);
-    ktvm::runtime::detail::for_each(TVMArgsSetter(args_values_.data(), args_types_.data()),
+    air::runtime::detail::for_each(TVMArgsSetter(args_values_.data(), args_types_.data()),
                                     std::forward<Args>(args)...);
   }
 
@@ -94,7 +94,7 @@ class PassMgr {
   static void SetDir(const std::string &str) {
     tl_dump_ir_dir_ = str;
   }
-  static void SetArgs(const ktvm::Array<NodeRef> &args) {
+  static void SetArgs(const air::Array<NodeRef> &args) {
     tl_args_ = args;
   }
 
@@ -106,9 +106,9 @@ class PassMgr {
   std::string GetDumpIrFilePath() const;
 
   thread_local static int tl_pass_id_;
-  thread_local static ktvm::BuildConfig tl_config_;
+  thread_local static air::BuildConfig tl_config_;
   thread_local static std::string tl_dump_ir_dir_;
-  thread_local static ktvm::Array<NodeRef> tl_args_;
+  thread_local static air::Array<NodeRef> tl_args_;
 
   std::string pass_name_;
   std::string sub_name_;
@@ -124,14 +124,14 @@ class PassMgr {
     }
     Array<Buffer> extern_buffers;
     for (const auto &arg : tl_args_) {
-      extern_buffers.push_back(ktvm::Downcast<Buffer>(arg));
+      extern_buffers.push_back(air::Downcast<Buffer>(arg));
     }
     auto csim_fname = GetDumpIrFilePath().append(".cpp");
     std::ofstream of(csim_fname);
     CHECK(of.is_open()) << "Failed to open " << csim_fname << " to dump C.";
 
     if (node->template IsInstance<typename Stmt::ContainerType>()) {
-      Stmt stmt = ktvm::Downcast<Stmt>(node);
+      Stmt stmt = air::Downcast<Stmt>(node);
       of << akg::DumpC(stmt, extern_buffers);
     } else {
       LOG(INFO) << "unknown node type, cannot dump C of pass " << pass_name_;

@@ -43,7 +43,7 @@ class UnifyLoopVarsMutator : public IRMutator {
     }
     for (const auto &arg : arg_list) {
       if (arg.as<Variable>()) {
-        vars.insert(ktvm::Downcast<Var>(arg));
+        vars.insert(air::Downcast<Var>(arg));
       }
     }
     for (const auto &var : vars) {

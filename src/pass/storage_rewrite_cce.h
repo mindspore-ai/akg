@@ -39,7 +39,7 @@
 
 namespace akg {
 namespace ir {
-using ktvm::arith::IntSet;
+using air::arith::IntSet;
 
 class InplaceOpVerifierCCE : public IRVisitor {
  public:

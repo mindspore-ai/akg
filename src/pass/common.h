@@ -62,8 +62,8 @@ std::shared_ptr<DFAnalyzer> BuildDfAnalyzer(Stmt stmt, bool prebuild = false);
 
 Stmt ConvertSingleCoprocForm(Stmt stmt);
 
-using ktvm::runtime::StorageRank;
-using ktvm::runtime::StorageScope;
+using air::runtime::StorageRank;
+using air::runtime::StorageScope;
 
 class LivenessAnalyzer : public IRVisitor {
  public:

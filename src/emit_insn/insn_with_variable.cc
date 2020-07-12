@@ -38,7 +38,7 @@ namespace akg {
 namespace ir {
 Expr GetVarCoefExpr(const Expr &index, const Var &loop_var) {
   Expr ret = Expr();
-  Array<Expr> coefs = ktvm::arith::DetectLinearEquation(index, {loop_var});
+  Array<Expr> coefs = air::arith::DetectLinearEquation(index, {loop_var});
   if (coefs.size() == 2) {
     ret = coefs[0];
   }
@@ -203,7 +203,7 @@ class HasScalarVarValue : public IRVisitor {
 class AdjustPragma : public IRMutator {
  public:
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
-    if (ktvm::ir::attr::IsPragmaKey(op->attr_key) && op->attr_key == "pragma_emit_insn" && op->value.as<StringImm>()) {
+    if (air::ir::attr::IsPragmaKey(op->attr_key) && op->attr_key == "pragma_emit_insn" && op->value.as<StringImm>()) {
       is_candidate_ = true;
       loop_vars_ = {};
       loop_extends_ = {};
@@ -487,7 +487,7 @@ class AdjustPragma : public IRMutator {
 class TransposeTransform : public IRMutator {
  public:
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
-    if (ktvm::ir::attr::IsPragmaKey(op->attr_key) && op->attr_key == "pragma_emit_insn" && op->value.as<StringImm>() &&
+    if (air::ir::attr::IsPragmaKey(op->attr_key) && op->attr_key == "pragma_emit_insn" && op->value.as<StringImm>() &&
         op->value.as<StringImm>()->value == "dma_copy") {
       pre_transpose_buffer = Var("srcTranspose_local_UB");
       post_transpose_buffer = Var("dstTranspose_local_UB");
@@ -611,7 +611,7 @@ class TransposeTransform : public IRMutator {
 class IfReorder : public IRMutator {
  public:
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
-    if (ktvm::ir::attr::IsPragmaKey(op->attr_key) && op->attr_key == "pragma_emit_insn" && op->value.as<StringImm>() &&
+    if (air::ir::attr::IsPragmaKey(op->attr_key) && op->attr_key == "pragma_emit_insn" && op->value.as<StringImm>() &&
         op->value.as<StringImm>()->value != "mad") {
       in_insn_ = true;
       for_vars_.clear();
@@ -713,7 +713,7 @@ class IfReorder : public IRMutator {
 
 class LoopReorder : public IRMutator {
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
-    if (ktvm::ir::attr::IsPragmaKey(op->attr_key) && op->attr_key == "pragma_emit_insn" && op->value.as<StringImm>()) {
+    if (air::ir::attr::IsPragmaKey(op->attr_key) && op->attr_key == "pragma_emit_insn" && op->value.as<StringImm>()) {
       in_insn_ = true;
       pragma = op->value.as<StringImm>()->value;
       for_map_.clear();
@@ -935,10 +935,10 @@ class GenSIMD {
     } else if (mode == 1) {
       int block_unit = 32 / t_info_.type.bytes();
       size_t len = t_info_.loops_vars_.size();
-      Array<Expr> strides_dst = ktvm::arith::DetectLinearEquation(t_info_.dst_index, {t_info_.loops_vars_[len - 2]});
+      Array<Expr> strides_dst = air::arith::DetectLinearEquation(t_info_.dst_index, {t_info_.loops_vars_[len - 2]});
       dst_m1 = Simplify(FloorDiv::make(strides_dst[0], block_unit));
       for (auto src_index : t_info_.src_index) {
-        Array<Expr> strides_src = ktvm::arith::DetectLinearEquation(src_index, {t_info_.loops_vars_[len - 2]});
+        Array<Expr> strides_src = air::arith::DetectLinearEquation(src_index, {t_info_.loops_vars_[len - 2]});
         src_m1.push_back(Simplify(FloorDiv::make(strides_src[0], block_unit)));
       }
     }
@@ -1045,13 +1045,13 @@ class GenSIMD {
     Expr tail_repeat_times = FloorMod::make(repeat_times, max_repeat_cnt);
     Var innerloop_var = Var("kk");
 
-    Array<Expr> strides_dst = ktvm::arith::DetectLinearEquation(t_info_.dst_index, {t_info_.loops_vars_[len - 2]});
+    Array<Expr> strides_dst = air::arith::DetectLinearEquation(t_info_.dst_index, {t_info_.loops_vars_[len - 2]});
     Expr dst_m1_loop = Simplify(255 * strides_dst[0] * innerloop_var);
     Expr dst_m1_tail = Simplify(255 * strides_dst[0] * full_repeat_times);
     Array<Expr> src_m1_loop;
     Array<Expr> src_m1_tail;
     for (auto src_index : t_info_.src_index) {
-      Array<Expr> strides_src = ktvm::arith::DetectLinearEquation(src_index, {t_info_.loops_vars_[len - 2]});
+      Array<Expr> strides_src = air::arith::DetectLinearEquation(src_index, {t_info_.loops_vars_[len - 2]});
       src_m1_loop.push_back(Simplify(255 * strides_src[0] * innerloop_var));
       src_m1_tail.push_back(Simplify(255 * strides_src[0] * full_repeat_times));
     }
@@ -1769,7 +1769,7 @@ class EmitVariableInsns : public IRMutator {
   }
 
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
-    if (ktvm::ir::attr::IsPragmaKey(op->attr_key) && op->attr_key == "pragma_emit_insn") {
+    if (air::ir::attr::IsPragmaKey(op->attr_key) && op->attr_key == "pragma_emit_insn") {
       CHECK(op->value.as<StringImm>());
       pragma = op->value.as<StringImm>()->value;
       Stmt r;
@@ -1791,7 +1791,7 @@ class EmitVariableInsns : public IRMutator {
       if (!r.same_as(s)) {
         return r;
       }
-    } else if (ktvm::ir::attr::IsPragmaKey(op->attr_key) &&
+    } else if (air::ir::attr::IsPragmaKey(op->attr_key) &&
                (op->attr_key == "pragma_im2col" || op->attr_key == "pragma_load3d")) {
       if (paramters_.defined() && Downcast<Map<std::string, NodeRef>>(paramters_).count("feature")) {
         auto feature = Downcast<Map<std::string, NodeRef>>(paramters_)["feature"].as<StringImm>();

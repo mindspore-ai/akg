@@ -35,7 +35,7 @@ class PromoteLetStmtMutator : public IRMutator {
   void GatherExternVars(const Array<NodeRef> &arg_list) {
     for (auto arg : arg_list) {
       if (arg.as<Variable>() != nullptr) {
-        defined_vars.insert(ktvm::Downcast<Var>(arg));
+        defined_vars.insert(air::Downcast<Var>(arg));
       }
     }
   }
@@ -88,9 +88,9 @@ class PromoteLetStmtMutator : public IRMutator {
     bool found_mem_load = false;
     PostOrderVisit(e, [&](const NodeRef &node) {
       if (node.as<Variable>() != nullptr) {
-        if (non_static_vars.count(ktvm::Downcast<Var>(node)) > 0) {
+        if (non_static_vars.count(air::Downcast<Var>(node)) > 0) {
           found_free_var = true;
-        } else if (defined_vars.count(ktvm::Downcast<Var>(node)) == 0) {
+        } else if (defined_vars.count(air::Downcast<Var>(node)) == 0) {
           // blockIdx.x is a special global var that indicates the thread number
           if (node.as<Variable>()->name_hint != "blockIdx.x") {
             LOG(INFO) << "possibly undefined var " << node << " " << node.as<Variable>() << " found in LetStmt " << e;

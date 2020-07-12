@@ -95,7 +95,7 @@ class AxisPartitioner : public IRMutator {
       CHECK(opn);
       auto align = opn->predicate;
 
-      if (is_const(align) && ktvm::arith::Analyzer().CanProve(align < 1)) {
+      if (is_const(align) && air::arith::Analyzer().CanProve(align < 1)) {
         return store;
       } else {
         Check(opn->index, align);
@@ -111,7 +111,7 @@ class AxisPartitioner : public IRMutator {
       auto opn = load.as<Load>();
       CHECK(opn);
       auto align = opn->predicate;
-      if (is_const(align) && ktvm::arith::Analyzer().CanProve(align < 1)) {
+      if (is_const(align) && air::arith::Analyzer().CanProve(align < 1)) {
         return load;
       } else {
         Check(opn->index, align);
@@ -133,7 +133,7 @@ class AxisPartitioner : public IRMutator {
 
     for (size_t i = 0; i != all_vars.size(); ++i) {
       auto var = all_vars[i];
-      auto strides = ktvm::arith::DetectLinearEquation(idx, {var});
+      auto strides = air::arith::DetectLinearEquation(idx, {var});
       if (strides.empty()) {
         continue;
       }
@@ -171,7 +171,7 @@ class RewriteAllocateAndIndex : public IRMutator {
   ~RewriteAllocateAndIndex() override = default;
 
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
-    if (op->attr_key == ktvm::ir::attr::storage_scope) {
+    if (op->attr_key == air::ir::attr::storage_scope) {
       auto scope_s = op->value.as<StringImm>()->value;
       if (scope_s == "local.UB") {
         const auto buf = op->node.as<Variable>();
@@ -198,10 +198,10 @@ class RewriteAllocateAndIndex : public IRMutator {
     auto it = scope_align_.find(opn->buffer_var.get());
     if (it != scope_align_.end()) {
       Expr blk_sz = make_const(Int(32), GetUbBlkSize(opn->type));
-      // Expr align = ktvm::arith::Analyzer().CanProve(it->second > 0) ? it->second : blk_sz;
+      // Expr align = air::arith::Analyzer().CanProve(it->second > 0) ? it->second : blk_sz;
       bool gt_zero = !(it->second.as<IntImm>() && it->second.as<IntImm>()->value <= 0);
       Expr align = gt_zero ? it->second : blk_sz;
-      Expr sz = ktvm::arith::ComputeReduce<Mul>(opn->extents, make_const(Int(32), 1));
+      Expr sz = air::arith::ComputeReduce<Mul>(opn->extents, make_const(Int(32), 1));
       CHECK(blk_sz.as<IntImm>());
       Expr fixed_align = Simplify(((align + blk_sz - 1) / blk_sz * blk_sz));
       Expr fixed_sz = gt_zero ? Simplify(Simplify(div(sz, align)) * fixed_align) : (div(sz - 1, blk_sz) + 1) * blk_sz;
@@ -238,7 +238,7 @@ class RewriteAllocateAndIndex : public IRMutator {
 
       Expr align = op->predicate;
       if (IsUbBuffer(op->buffer_var->name_hint)) {
-        if ((is_const(align) && ktvm::arith::Analyzer().CanProve(align < 0))) {
+        if ((is_const(align) && air::arith::Analyzer().CanProve(align < 0))) {
           return Store::make(op->buffer_var, value, op->index, op->predicate);
         }
         Expr blk_sz = GetUbBlkSize(op->value.type());
@@ -272,7 +272,7 @@ class RewriteAllocateAndIndex : public IRMutator {
   Expr Mutate_(const Load *op, const Expr &e) final {
     Expr align = op->predicate;
     if (in_insn_ && IsUbBuffer(op->buffer_var->name_hint)) {
-      if (is_const(align) && ktvm::arith::Analyzer().CanProve(align < 0)) {
+      if (is_const(align) && air::arith::Analyzer().CanProve(align < 0)) {
         return e;
       }
       Expr blk_sz = GetUbBlkSize(op->type);
@@ -307,7 +307,7 @@ class RewriteAllocateAndIndex : public IRMutator {
     Expr times = ((align + blk_sz - 1) / blk_sz * blk_sz);
 
     for (auto v : all_vars) {
-      auto strides = ktvm::arith::DetectLinearEquation(tmp_idx, {v});
+      auto strides = air::arith::DetectLinearEquation(tmp_idx, {v});
       CHECK_EQ(strides.size(), 2);
 
       Expr coef = strides[0];
@@ -324,7 +324,7 @@ class RewriteAllocateAndIndex : public IRMutator {
   }
 
   Expr SimpleFix(const Expr &idx, const Map<Var, Expr> &var2expr, Expr align, Expr new_align) {
-    ktvm::arith::Analyzer analyzer;
+    air::arith::Analyzer analyzer;
     for (auto e : fors_) {
       analyzer.Bind(e->loop_var, Range::make_by_min_extent(e->min, e->extent));
     }

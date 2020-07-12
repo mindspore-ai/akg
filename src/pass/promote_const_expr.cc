@@ -190,7 +190,7 @@ class PromoteConstExprMutator : public IRMutator {
     // promote common expr in internal scopes
     stmt = IRMutator::Mutate(stmt);
     // merge LetStmt and AttrStmt
-    return ktvm::ir::MergeNest(outer_let, ktvm::ir::MergeNest(outer_attr, stmt));
+    return air::ir::MergeNest(outer_let, air::ir::MergeNest(outer_attr, stmt));
   }
 
  private:

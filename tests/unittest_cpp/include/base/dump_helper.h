@@ -36,7 +36,7 @@ class UTDumpHelper {
   UTDumpHelper() = default;
   ~UTDumpHelper() = default;
 
-  static std::string Dump(const ktvm::NodeRef &node);
+  static std::string Dump(const air::NodeRef &node);
   static bool RegxMatchPlaceholder(const std::string &str, const std::string &name);
 };  // UTDumpHelper
 }  // namespace akg

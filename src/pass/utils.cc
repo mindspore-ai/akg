@@ -161,7 +161,7 @@ struct NonLinearEqEntry {
 };
 
 /// Class IndexVarDetector is used by DetectNonLinearIndex
-class IndexVarDetector : public ktvm::ir::ExprFunctor<NonLinearEqEntry(const Expr &, const Expr &)> {
+class IndexVarDetector : public air::ir::ExprFunctor<NonLinearEqEntry(const Expr &, const Expr &)> {
  public:
   explicit IndexVarDetector(Array<Expr> &vars) : loopVars(vars) {}
   ~IndexVarDetector() override = default;
@@ -353,7 +353,7 @@ Array<Array<Expr>> DetectNonLinearIndex(const Expr &index, const Array<Expr> &co
     }
   }
 
-  coeffs = ktvm::arith::DetectLinearEquation(newE, pureVars);
+  coeffs = air::arith::DetectLinearEquation(newE, pureVars);
   // detect error, such as a * a * 16
   if (coeffs.empty()) {
     return Array<Array<Expr>>();
@@ -377,7 +377,7 @@ Array<Array<Expr>> DetectNonLinearIndex(const Expr &index, const Array<Expr> &co
   return res;
 }
 
-TVM_REGISTER_API("cce_util.DetectNonLinearIndex").set_body([](const ktvm::TVMArgs args, ktvm::TVMRetValue *ret) {
+TVM_REGISTER_API("cce_util.DetectNonLinearIndex").set_body([](const air::TVMArgs args, air::TVMRetValue *ret) {
   *ret = DetectNonLinearIndex(args[0], args[1]);
 });
 
@@ -1168,7 +1168,7 @@ class InferBoundOfExprWithCondClass {
     // recursively match expr or part of expr with constraint. If match success, return;
     if (!CheckConstExpr(ExprSimplifier().Simplify(expr)) && !CheckConstExpr(ExprSimplifier().Simplify(constraint))) {
       if ((expr.as<Variable>() && vars_set.count(Downcast<Var>(expr))) || !expr.as<Variable>()) {
-        ktvm::DataType dtype = expr.type();
+        air::DataType dtype = expr.type();
         if (Equal(expr, constraint)) {
           std::unordered_map<const Variable *, Expr>::iterator iter;
           iter = std::find_if(substitute_map.begin(), substitute_map.end(),
@@ -2704,7 +2704,7 @@ bool ExprPatternMatch(const Expr &expr, const Expr &pattern, std::vector<Expr> *
 }
 
 template <class T>
-bool LimitCheck(const ktvm::arith::PVar<T> &n1, const ktvm::arith::PVar<T> &n2) {
+bool LimitCheck(const air::arith::PVar<T> &n1, const air::arith::PVar<T> &n2) {
   if (n1.Eval().template as<FloatImm>() && n2.Eval().template as<FloatImm>()) {
     auto f1_eval = n1.Eval().template as<FloatImm>();
     auto f2_eval = n2.Eval().template as<FloatImm>();
@@ -2758,8 +2758,8 @@ bool LimitCheck(const ktvm::arith::PVar<T> &n1, const ktvm::arith::PVar<T> &n2) 
   return false;
 }
 
-template bool LimitCheck(const ktvm::arith::PVar<Floating> &, const ktvm::arith::PVar<Floating> &);
-template bool LimitCheck(const ktvm::arith::PVar<Integer> &, const ktvm::arith::PVar<Integer> &);
+template bool LimitCheck(const air::arith::PVar<Floating> &, const air::arith::PVar<Floating> &);
+template bool LimitCheck(const air::arith::PVar<Integer> &, const air::arith::PVar<Integer> &);
 
 std::vector<Expr> ExtractSubExprs(const Expr &e) {
   std::vector<Expr> exprs;

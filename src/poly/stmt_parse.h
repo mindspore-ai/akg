@@ -105,7 +105,7 @@ struct StmtOpInfo {
   std::string A_ = "";
   std::string B_ = "";
   std::string C_ = "";
-  ktvm::DataType MadType_ = Float(16);
+  air::DataType MadType_ = Float(16);
 };
 
 using StmtOpInfoMap = std::unordered_map<isl::id, StmtOpInfo, isl::IslIdIslHash>;

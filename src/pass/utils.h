@@ -34,8 +34,8 @@
 
 namespace akg {
 namespace ir {
-using ktvm::ir::ExprUseVar;
-using ktvm::ir::substitute;
+using air::ir::ExprUseVar;
+using air::ir::substitute;
 
 static const float HALF_MIN = 5.960464e-08;  // minimum number of float16
 static const float HALF_MAX = 65504.0;       // maximum number of float16
@@ -186,7 +186,7 @@ class DataDepender : public IRVisitor {
   }
 
   void Visit_(const Call *op) override {
-    if (op->is_intrinsic(ktvm::ir::intrinsic::tvm_access_ptr)) {
+    if (op->is_intrinsic(air::ir::intrinsic::tvm_access_ptr)) {
       const auto buf = op->args[1].as<Variable>();
       const auto rw = op->args[4].as<IntImm>();
       CHECK(buf != nullptr && rw != nullptr);
@@ -293,7 +293,7 @@ inline bool isZero(const Expr &val) {
   return false;
 }
 
-inline void GatherVars(const Expr expr, std::unordered_set<Var, ktvm::NodeHash, ktvm::NodeEqual> *vset) {
+inline void GatherVars(const Expr expr, std::unordered_set<Var, air::NodeHash, air::NodeEqual> *vset) {
   PostOrderVisit(expr, [&vset](const NodeRef &node) {
     if (node.as<Variable>()) {
       vset->insert(Downcast<Var>(node));
@@ -322,13 +322,13 @@ inline void GatherVars(const Expr expr, std::vector<Var> *vec) {
 }
 
 inline int CountVars(const Expr &v) {
-  std::unordered_set<Var, ktvm::NodeHash, ktvm::NodeEqual> vars;
+  std::unordered_set<Var, air::NodeHash, air::NodeEqual> vars;
   GatherVars(v, &vars);
   return static_cast<int>(vars.size());
 }
 
 inline int CountVars(const Array<Expr> &args) {
-  std::unordered_set<Var, ktvm::NodeHash, ktvm::NodeEqual> vars;
+  std::unordered_set<Var, air::NodeHash, air::NodeEqual> vars;
   for (size_t i = 0; i < args.size(); ++i) {
     GatherVars(args[i], &vars);
   }
@@ -337,7 +337,7 @@ inline int CountVars(const Array<Expr> &args) {
 
 // may have repeat vars
 inline int AllVars(const Array<Expr> &args) {
-  std::unordered_set<Var, ktvm::NodeHash, ktvm::NodeEqual> vars;
+  std::unordered_set<Var, air::NodeHash, air::NodeEqual> vars;
   int num = 0;
   for (size_t i = 0; i < args.size(); ++i) {
     vars.clear();
@@ -349,11 +349,11 @@ inline int AllVars(const Array<Expr> &args) {
 
 template <typename ObjType>
 inline ObjectPtr<Object> GetObjPtr(const ObjType *ptr) {
-  return ktvm::runtime::GetObjectPtr<Object>(const_cast<ObjType *>(ptr));
+  return air::runtime::GetObjectPtr<Object>(const_cast<ObjType *>(ptr));
 }
 
 template <class T>
-bool LimitCheck(const ktvm::arith::PVar<T> &n1, const ktvm::arith::PVar<T> &n2);
+bool LimitCheck(const air::arith::PVar<T> &n1, const air::arith::PVar<T> &n2);
 
 class AttrIRMutator : public IRMutator {
  public:
@@ -367,9 +367,9 @@ class AttrIRMutator : public IRMutator {
       for (auto kv : attrs) {
         auto new_node = kv.second;
         if (kv.second->IsInstance<Expr::ContainerType>()) {
-          new_node = Mutate(ktvm::Downcast<Expr>((kv.second)));
+          new_node = Mutate(air::Downcast<Expr>((kv.second)));
         } else if (kv.second->IsInstance<Range::ContainerType>()) {
-          auto old = ktvm::Downcast<Range>(kv.second);
+          auto old = air::Downcast<Range>(kv.second);
           new_node = Range::make_by_min_extent(Mutate(old->min), Mutate(old->extent));
         }
         new_attrs.emplace(std::make_pair(kv.first, new_node));

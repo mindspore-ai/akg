@@ -35,7 +35,7 @@ constexpr auto GM_ACCESS_MIN_SIZE = 32;
 
 class MultiCoreAccessFinder : public IRVisitor {
  public:
-  explicit MultiCoreAccessFinder(ktvm::arith::ConstIntBoundAnalyzer &bound) : bound_(bound) {}
+  explicit MultiCoreAccessFinder(air::arith::ConstIntBoundAnalyzer &bound) : bound_(bound) {}
   ~MultiCoreAccessFinder() override = default;
   struct TouchEntry {
     const Variable *buf;
@@ -55,12 +55,12 @@ class MultiCoreAccessFinder : public IRVisitor {
     const auto min = op->min.as<IntImm>();
     const auto ext = op->extent.as<IntImm>();
     if (min && ext) {
-      bound_.Update(Var(op->loop_var), ktvm::arith::ConstIntBound(min->value, min->value + ext->value - 1));
+      bound_.Update(Var(op->loop_var), air::arith::ConstIntBound(min->value, min->value + ext->value - 1));
     }
   }
 
   void Visit_(const AttrStmt *op) final {
-    if (op->attr_key == ktvm::ir::attr::storage_scope) {
+    if (op->attr_key == air::ir::attr::storage_scope) {
       const auto buf = op->node.as<Variable>();
       local_buf_.insert(buf);
     } else if (op->attr_key == "pragma_emit_insn") {
@@ -125,7 +125,7 @@ class MultiCoreAccessFinder : public IRVisitor {
   std::unordered_set<const Variable *> local_buf_;
   std::vector<const For *> loop_stack_;
   const For *insn_border_{nullptr};
-  ktvm::arith::ConstIntBoundAnalyzer &bound_;
+  air::arith::ConstIntBoundAnalyzer &bound_;
   bool atomic_{false};
 };
 
@@ -192,7 +192,7 @@ class MultiCorePlan : public IRVisitor {
   using TouchEntry = MultiCoreAccessFinder::TouchEntry;
 
   void VerifyDataDep(const Stmt &stmt) {
-    ktvm::arith::Analyzer analyzer;
+    air::arith::Analyzer analyzer;
     MultiCoreAccessFinder finder(analyzer.const_int_bound);
     finder.Visit(stmt);
     std::vector<TouchEntry> load = std::move(finder.load_);
@@ -205,8 +205,8 @@ class MultiCorePlan : public IRVisitor {
           if (e.buf != n.buf) continue;
           if (e.atomic && n.atomic) continue;
           if (dep_free && e.tail_align && n.tail_align) continue;
-          ktvm::arith::ConstIntBound be = analyzer.const_int_bound(e.offset);
-          ktvm::arith::ConstIntBound bn = analyzer.const_int_bound(n.offset);
+          air::arith::ConstIntBound be = analyzer.const_int_bound(e.offset);
+          air::arith::ConstIntBound bn = analyzer.const_int_bound(n.offset);
           if ((bn->min_value >= be->min_value && bn->min_value < be->max_value + e.extent) ||
               (be->min_value >= bn->min_value && be->min_value < bn->max_value + n.extent)) {
             return true;
@@ -294,7 +294,7 @@ class MultiCoreInsert : public IRMutator {
   ~MultiCoreInsert() override = default;
 
   Stmt Insert(Stmt stmt) {
-    IterVar block_idx = ktvm::thread_axis(Range(), "blockIdx.x");
+    IterVar block_idx = air::thread_axis(Range(), "blockIdx.x");
     // determine loop var replacement
     Expr this_level_iv = block_idx;
     for (int i = static_cast<int>(block_coef_.size()) - 1; i >= 0; i--) {
@@ -501,7 +501,7 @@ class MultiCorePartitioner : public IRMutator {
     block_idx_ = op->node.as<IterVarNode>()->var;
     block_num_ = static_cast<int>(op->value.as<IntImm>()->value);
     stmt = Mutate(stmt);
-    return ktvm::ir::ConvertSSA(stmt);
+    return air::ir::ConvertSSA(stmt);
   }
 
  private:
@@ -662,7 +662,7 @@ class LoopCompounder : public IRMutator {
   }
 
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
-    if (op->attr_key == ktvm::ir::attr::storage_scope) {
+    if (op->attr_key == air::ir::attr::storage_scope) {
       return s;  // local scope
     }
     return IRMutator::Mutate_(op, s);
@@ -685,7 +685,7 @@ class LoopCompounder : public IRMutator {
     Stmt res_stmt;
     for (size_t i = seg_stmts.size(); i > 0; --i) {
       auto &seg = seg_stmts[i - 1];
-      Stmt seg_s = ktvm::ir::MergeSeq(seg.second);
+      Stmt seg_s = air::ir::MergeSeq(seg.second);
       if (seg.first) {
         std::unordered_map<const Variable *, Expr> vmap;
         vmap.emplace(seg.first->loop_var.get(), loop_var - seg_offset[i - 1]);
@@ -735,7 +735,7 @@ class LoopCompounder : public IRMutator {
   }
 
   bool SegmentDepend(std::vector<SegStmt> &seg_stmts) {
-    ktvm::arith::Analyzer analyzer;
+    air::arith::Analyzer analyzer;
     struct SegAccess {
       std::vector<TouchEntry> loads;
       std::vector<TouchEntry> stores;
@@ -748,7 +748,7 @@ class LoopCompounder : public IRMutator {
         const auto ext = seg.first->extent.as<IntImm>();
         if (min && ext) {
           analyzer.const_int_bound.Update(Var(seg.first->loop_var),
-                                          ktvm::arith::ConstIntBound(min->value, min->value + ext->value - 1));
+                                          air::arith::ConstIntBound(min->value, min->value + ext->value - 1));
         }
       }
       for (Stmt &stmt : seg.second) {
@@ -774,8 +774,8 @@ class LoopCompounder : public IRMutator {
       for (TouchEntry &t1 : first) {
         for (TouchEntry &t2 : second) {
           if ((t1.buf != t2.buf) || (t1.atomic && t2.atomic)) continue;
-          ktvm::arith::ConstIntBound b1 = analyzer.const_int_bound(t1.offset);
-          ktvm::arith::ConstIntBound b2 = analyzer.const_int_bound(t2.offset);
+          air::arith::ConstIntBound b1 = analyzer.const_int_bound(t1.offset);
+          air::arith::ConstIntBound b2 = analyzer.const_int_bound(t2.offset);
           if ((b2->min_value >= b1->min_value && b2->min_value < b1->max_value + t1.extent) ||
               (b1->min_value >= b2->min_value && b1->min_value < b2->max_value + t2.extent)) {
             return true;
@@ -842,7 +842,7 @@ class LoopUnCompunder : public IRMutator {
             seq.emplace_back(res_stmt);
           }
         }
-        return ktvm::ir::MergeSeq(seq);
+        return air::ir::MergeSeq(seq);
       }
     }
     return IRMutator::Mutate_(op, s);
@@ -896,7 +896,7 @@ class DynamicShapeMulticoreLoopsFinder : public IRVisitor {
 
  private:
   void Visit_(const AttrStmt *op) final {
-    if (op->attr_key == ktvm::ir::attr::storage_scope) {
+    if (op->attr_key == air::ir::attr::storage_scope) {
       const auto buf = op->node.as<Variable>();
       local_buf_.insert(buf);
     } else if (op->attr_key == "pragma_multi_core_depth") {
@@ -1160,7 +1160,7 @@ class DynamicShapeMulticoreInsert : public IRMutator {
     Stmt mc_stmt = Mutate(stmt);
     if (multicore_cond_.defined()) {
       mc_stmt = IfThenElse::make(multicore_cond_, mc_stmt, stmt);
-      mc_stmt = ktvm::ir::ConvertSSA(mc_stmt);
+      mc_stmt = air::ir::ConvertSSA(mc_stmt);
     }
     return mc_stmt;
   }
@@ -1259,7 +1259,7 @@ class InjectDynamicShapeMulticoreMutator : public IRMutator {
       if (multicore_loops.empty()) return s;
 
       if (!multicore_enabled_) {
-        block_idx_ = ktvm::thread_axis(Range(), "blockIdx.x");
+        block_idx_ = air::thread_axis(Range(), "blockIdx.x");
         multicore_enabled_ = true;
       }
       LOG(INFO) << proposal_block_;
@@ -1324,7 +1324,7 @@ Array<NodeRef> InjectMultiCoreVar(Stmt stmt, const Var &block_dim, int merge_out
   stmt = InjectDynamicShapeMulticore(stmt, block_dim, len);
   std::vector<Stmt> thread_bind_attrs;
   stmt = PeelOuterLetAttr(stmt, thread_bind_attrs);
-  stmt = ktvm::ir::MergeNest(thread_bind_attrs, ktvm::ir::MergeNest(outer_stmts, stmt));
+  stmt = air::ir::MergeNest(thread_bind_attrs, air::ir::MergeNest(outer_stmts, stmt));
   Array<NodeRef> retArray;
   retArray.push_back(stmt);
   retArray.push_back(IntImm::make(Int(32), len));
@@ -1462,7 +1462,7 @@ Stmt InjectMultiCore(Stmt stmt, int max_block_dim, int merge_outer_loop, bool is
     stmt = InjectDynamicShapeMulticore(stmt, proposal_block);
     std::vector<Stmt> thread_bind_attrs;
     stmt = PeelOuterLetAttr(stmt, thread_bind_attrs);
-    return ktvm::ir::MergeNest(thread_bind_attrs, ktvm::ir::MergeNest(outer_stmts, stmt));
+    return air::ir::MergeNest(thread_bind_attrs, air::ir::MergeNest(outer_stmts, stmt));
   }
 }
 

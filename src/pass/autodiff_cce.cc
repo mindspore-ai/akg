@@ -217,7 +217,7 @@ Tensor DiffConv(const Tensor &output, const Tensor &input, const Tensor &head, c
           Array<Integer> Dilation = {1, 1};
           Array<Integer> Pad = {Integer(k_h - 1 - p_top), Integer(k_h - 1 - p_bottom), Integer(k_w - 1 - p_left),
                                 Integer(k_w - 1 - p_right)};
-          const PackedFunc *f = ktvm::runtime::Registry::Get("akg.autodiff.conv_compute_forward");
+          const PackedFunc *f = air::runtime::Registry::Get("akg.autodiff.conv_compute_forward");
           CHECK(f);
           CHECK_GE(new_pld_array.size(), 3);
           result = (*f)(NCHW_strided_head_shape, NCHW_flipped_weight_shape, Pad, Stride, Dilation, new_pld_array[0],
@@ -227,7 +227,7 @@ Tensor DiffConv(const Tensor &output, const Tensor &input, const Tensor &head, c
           Array<Integer> Stride = {Integer(s_h), Integer(s_w)};
           Array<Integer> Dilation = {Integer(d_h), Integer(d_w)};
           Array<Integer> Pad = {Integer(p_top), Integer(p_bottom), Integer(p_left), Integer(p_right)};
-          const PackedFunc *f_input_ad = ktvm::runtime::Registry::Get("akg.autodiff.conv_input_ad_tensor");
+          const PackedFunc *f_input_ad = air::runtime::Registry::Get("akg.autodiff.conv_input_ad_tensor");
           CHECK(f_input_ad);
           Array<Tensor> dx_data;
           // new_pld_array contains 3 tensors: Head, rounded_forward_weight (in fractal) and original_forward_weight (in
@@ -267,7 +267,7 @@ Tensor DiffConv(const Tensor &output, const Tensor &input, const Tensor &head, c
         const auto cutM_e = ((in_h_ * in_w_ + block_size - 1) / block_size) * block_size;
         int cutK_e = AD_GROUP_CONV_DEFAULT_cutK, cutN_e = block_size;
 
-        const PackedFunc *f_group = ktvm::runtime::Registry::Get("akg.autodiff.group_conv_compute_forward");
+        const PackedFunc *f_group = air::runtime::Registry::Get("akg.autodiff.group_conv_compute_forward");
         CHECK(f_group);
         CHECK_GE(new_pld_array.size(), 3);
         result = (*f_group)(head_n, (head_h - 1) * s_h + 1, (head_w - 1) * s_w + 1, k_n, k_c, group, k_h, k_w,
@@ -284,7 +284,7 @@ Tensor DiffConv(const Tensor &output, const Tensor &input, const Tensor &head, c
         if (in_attrs.GetIntAttr("ad_conv_reuse_conv", 0) != 0) {
           Array<Integer> Stride = {1, 1};
           Array<Integer> Dilation = {Integer(s_h), Integer(s_w)};
-          const PackedFunc *f = ktvm::runtime::Registry::Get("akg.autodiff.conv_compute_forward");
+          const PackedFunc *f = air::runtime::Registry::Get("akg.autodiff.conv_compute_forward");
           CHECK(f);
           CHECK_GE(new_pld_array.size(), 3);
           result = (*f)(NCHW_trans_data_shape, NCHW_trans_head_shape, Pad, Stride, Dilation, new_pld_array[0],
@@ -293,7 +293,7 @@ Tensor DiffConv(const Tensor &output, const Tensor &input, const Tensor &head, c
         } else {
           Array<Integer> Stride = {Integer(s_h), Integer(s_w)};
           Array<Integer> Dilation = {Integer(d_h), Integer(d_w)};
-          const PackedFunc *f_filter_ad = ktvm::runtime::Registry::Get("akg.autodiff.conv_filter_ad_tensor");
+          const PackedFunc *f_filter_ad = air::runtime::Registry::Get("akg.autodiff.conv_filter_ad_tensor");
           CHECK(f_filter_ad);
           Array<Tensor> dw_data;
 
@@ -331,7 +331,7 @@ Tensor DiffConv(const Tensor &output, const Tensor &input, const Tensor &head, c
         const auto cutCo_e = block_size;
         const auto cutM_e = ((hw + block_size - 1) / block_size) * block_size;
         int cutK_e = AD_GROUP_CONV_DEFAULT_cutK, cutN_e = block_size;
-        const PackedFunc *f_group = ktvm::runtime::Registry::Get("akg.autodiff.group_conv_compute_forward");
+        const PackedFunc *f_group = air::runtime::Registry::Get("akg.autodiff.group_conv_compute_forward");
         CHECK(f_group);
         CHECK_GE(new_pld_array.size(), 3);
         result = (*f_group)(weight_Cin, in_h, in_w, in_n * group, head_c, group, head_h, head_w, new_pld_array[0],
@@ -405,7 +405,7 @@ Expr AutodiffSimplify::Mutate_(const Mod *op, const Expr &e) {
 }
 
 Expr AutodiffSimplify::Mutate_(const EQ *op, const Expr &e) {
-  if (ktvm::arith::IsNumericType(op->a.type()) && ktvm::arith::IsNumericType((op->b.type()))) {
+  if (air::arith::IsNumericType(op->a.type()) && air::arith::IsNumericType((op->b.type()))) {
     return op->a >= op->b && op->a <= op->b;
   }
 
@@ -438,7 +438,7 @@ bool HasMad(const Tensor &output) {
     for (auto i : op->body) {
       if (const auto r = i.as<Reduce>()) {
         for (auto j : r->combiner->result) {
-          ktvm::ir::PostOrderVisit(j, CheckMad);
+          air::ir::PostOrderVisit(j, CheckMad);
           if (found) return true;
         }
       }
@@ -486,7 +486,7 @@ Tensor TensorDot(const Tensor &A, const Tensor &B, int axes = 2, std::string nam
     if (iter_vars.empty())
       return A(A_indices) * B(B_indices);
     else
-      return has_mad ? Mmad(A(A_indices) * B(B_indices), iter_vars) : ktvm::sum(A(A_indices) * B(B_indices), iter_vars);
+      return has_mad ? Mmad(A(A_indices) * B(B_indices), iter_vars) : air::sum(A(A_indices) * B(B_indices), iter_vars);
   };
 
   return compute(output_shape, func, name, topi::kMatMul);
@@ -917,7 +917,7 @@ Operation ReplaceInputs(const Operation &self, const std::unordered_map<Operatio
     return self;
   }
   Array<Expr> arr;
-  arr = ktvm::ir::UpdateArray(_this->body, [&rmap](const Expr &e) { return ReplaceOperation(e, rmap); });
+  arr = air::ir::UpdateArray(_this->body, [&rmap](const Expr &e) { return ReplaceOperation(e, rmap); });
   if (!arr.same_as(_this->body)) {
     return ComputeOpNode::make(_this->name, _this->tag, _this->attrs, _this->axis, arr);
   } else {
@@ -1454,7 +1454,7 @@ bool IsReducePattern_1(const Tensor &root, std::vector<Tensor> &result) {
   // Push back new tensor into result
   std::string name1 = std::string("T_mul_r1_") + std::to_string(counter++);
   std::string name2 = std::string("T_mul_r1_") + std::to_string(counter++);
-  Array<ktvm::Integer> red_axes;
+  Array<air::Integer> red_axes;
   for (auto i : reduction_axes) {
     red_axes.push_back(i);
   }
@@ -1505,7 +1505,7 @@ bool IsReducePattern_2(const Tensor &root, std::vector<Tensor> &result) {
   // Push back new tensor into result
   std::string name1 = std::string("T_mul_r2_") + std::to_string(counter++);
   std::string name2 = std::string("T_mul_r2_") + std::to_string(counter++);
-  Array<ktvm::Integer> red_axes;
+  Array<air::Integer> red_axes;
   for (auto i : reduction_axes) {
     red_axes.push_back(Integer(i));
   }
@@ -1553,7 +1553,7 @@ bool IsReducePattern_3(const Tensor &root, std::vector<Tensor> &result) {
   // Push back new tensor into result
   std::string name1 = std::string("T_mul_r3_") + std::to_string(counter++);
   std::string name2 = std::string("T_mul_r3_") + std::to_string(counter++);
-  Array<ktvm::Integer> red_axes;
+  Array<air::Integer> red_axes;
   for (auto i : reduction_axes) {
     red_axes.push_back(Integer(i));
   }
@@ -1892,7 +1892,7 @@ void ADPassMergeMultipleBroadcast(Array<Tensor> &input_tensors, Array<Tensor> &o
 void ADRunAllPasses(Array<Tensor> &input_tensors, Array<Tensor> &output_tensors, AttrMap &in_attrs,
                     const Array<Tensor> &new_pld_array, const std::string &DOT_prefix) {
   bool export_DOT_ = (in_attrs.GetIntAttr("export_DOT", 0) != 0);
-  auto f_group = ktvm::runtime::Registry::Get("akg.autodiff.export_to_DOT");
+  auto f_group = air::runtime::Registry::Get("akg.autodiff.export_to_DOT");
   if (f_group == nullptr) {
     export_DOT_ = false;
   }
@@ -1989,7 +1989,7 @@ Array<Expr> FindInputArgs(const Array<Expr> &exprs, const Array<IterVar> &fw_com
 
   Array<Expr> input_vars_fw;
   for (auto expr : exprs) {
-    input_vars_fw.push_back(ktvm::ir::Substitute(expr, arg_map));
+    input_vars_fw.push_back(air::ir::Substitute(expr, arg_map));
   }
 
   return input_vars_fw;
@@ -1998,10 +1998,10 @@ Array<Expr> FindInputArgs(const Array<Expr> &exprs, const Array<IterVar> &fw_com
 Tensor BroadcastToCond(const Tensor &t, const Expr &condition, const Array<IterVar> &iter_vars,
                        const Array<IterVar> &fw_axis, const Expr &else_val, const std::string &name,
                        const std::string &tag) {
-  Array<ktvm::Expr> expr_vars;
+  Array<air::Expr> expr_vars;
   std::vector<IterVar> axis;
   for (auto v : iter_vars) {
-    axis.emplace_back(IterVarNode::make(v->dom, v->var, ktvm::IterVarType::kDataPar));
+    axis.emplace_back(IterVarNode::make(v->dom, v->var, air::IterVarType::kDataPar));
   }
 
   // Building fw compute indexes in corresponding order.
@@ -2198,7 +2198,7 @@ void RemoveRedundantDimensions(const std::unordered_map<std::string, std::string
     }
   }
 
-  condition = ktvm::ir::Substitute(condition, arg_map);
+  condition = air::ir::Substitute(condition, arg_map);
 }
 
 Tensor GetForwardCompute(const Reduce *red, const ComputeOpNode *op, const Tensor &input, const Tensor &output,

@@ -74,7 +74,7 @@ class DcePlan : public IRVisitor {
       cur_insn_ = nullptr;
       return;
     }
-    if (op->attr_key == ktvm::ir::attr::thread_extent) {
+    if (op->attr_key == air::ir::attr::thread_extent) {
       IterVar iv = Downcast<IterVar>(op->node);
       val_map_[iv->var.get()] = make_const(Int(32), 0);
     }
@@ -158,7 +158,7 @@ class DcePlan : public IRVisitor {
   struct InsnAccess {
     explicit InsnAccess(const Variable *b) : buf(b) {}
     const Variable *buf;
-    ktvm::arith::ConstIntBound bound;
+    air::arith::ConstIntBound bound;
     Array<Expr> linear_equ;
     std::vector<const For *> touch_axis;
     std::vector<Compound *> dup_axis;
@@ -235,10 +235,10 @@ class DcePlan : public IRVisitor {
         }
       }
     };
-    index = ktvm::ir::Substitute(index, val_map_);
+    index = air::ir::Substitute(index, val_map_);
     PostOrderVisit(index, scan);
     Array<Var> loop_var;
-    ktvm::arith::Analyzer analyzer;
+    air::arith::Analyzer analyzer;
     int insn_loop_size = insn_loop_.size();
     for (int i = 0; i < static_cast<int>(touch_axis.size()); ++i) {
       const For *op = loop_stack[i];
@@ -247,13 +247,13 @@ class DcePlan : public IRVisitor {
         const auto min = op->min.as<IntImm>();
         const auto ext = op->extent.as<IntImm>();
         CHECK(min != nullptr && ext != nullptr);
-        analyzer.const_int_bound.Update(Var(op->loop_var), ktvm::arith::ConstIntBound(min->value, ext->value));
+        analyzer.const_int_bound.Update(Var(op->loop_var), air::arith::ConstIntBound(min->value, ext->value));
         access->touch_axis.push_back(op);
       } else if (i < dup_end && i >= insn_loop_size) {
         access->dup_axis.push_back(comp_stack[i - insn_loop_size]);
       }
     }
-    access->linear_equ = ktvm::arith::DetectLinearEquation(index, loop_var);
+    access->linear_equ = air::arith::DetectLinearEquation(index, loop_var);
     access->bound = analyzer.const_int_bound(index);
   }
 

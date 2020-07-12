@@ -53,7 +53,7 @@ isl::set Scop::CreateParamsSet() const {
     context = context & (aff > 0);
     if (!dynamic_shape_.empty()) {
       for (const auto &ds : dynamic_shape_) {
-        if (auto dsn = ds.as<ktvm::DynamicShapeNode>()) {
+        if (auto dsn = ds.as<air::DynamicShapeNode>()) {
           if (dsn->tensor_name == param.second->name_hint) {
             context = context & (aff < dsn->poly_upper_bound);
           }

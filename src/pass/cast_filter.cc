@@ -148,7 +148,7 @@ class CastFilterMutator : public IRMutator {
 
  private:
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
-    if (ktvm::ir::attr::IsPragmaKey(op->attr_key) && op->attr_key == "pragma_emit_insn") {
+    if (air::ir::attr::IsPragmaKey(op->attr_key) && op->attr_key == "pragma_emit_insn") {
       auto pragma = op->value.as<StringImm>()->value;
       if (pragma == "vec_single_cast") {
         cast_can_remove_ = false;

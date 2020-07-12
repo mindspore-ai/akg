@@ -36,7 +36,7 @@ void CreateDirIfNotExist(const std::string &file_name);
 std::string DumpSchTreeToString(const isl::schedule &sch);
 void DumpSchTreeImpl(const std::string &file_name, const isl::schedule &sch);
 void PrintHeader(std::ofstream &of, const std::string &str);
-void DumpNode(std::ofstream &of, const ktvm::Node *node);
+void DumpNode(std::ofstream &of, const air::Node *node);
 
 bool CompareSchTreeWithString(const std::string &compare_sch, const isl::schedule &sch);
 

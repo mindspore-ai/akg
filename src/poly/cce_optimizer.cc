@@ -306,7 +306,7 @@ class GatherWritePromotion : public IRMutator {
           }
         }
       });
-      auto body = ktvm::ir::IRTransform(op->body, recordFor, eliminateGatherWrite, {Expr("Provide"), Expr("For")});
+      auto body = air::ir::IRTransform(op->body, recordFor, eliminateGatherWrite, {Expr("Provide"), Expr("For")});
 
       CHECK(gatherWriteProvide_.defined());
       Stmt writePromotion = getWritePromotion(var2For, gatherWriteProvide_);
@@ -408,7 +408,7 @@ class GatherTransform : public IRMutator {
     Stmt newStore = Store::make(replVar, assignValue, make_const(Int(32), 0), Expr(1));
     Stmt temp1 = Block::make(newStore, body);
     Stmt newAllo = Allocate::make(replVar, Int(32), {make_const(Int(32), 1)}, const_true(), temp1);
-    Stmt newAttr = AttrStmt::make(replVar, ktvm::ir::attr::storage_scope, StringImm::make("local.REG"), newAllo);
+    Stmt newAttr = AttrStmt::make(replVar, air::ir::attr::storage_scope, StringImm::make("local.REG"), newAllo);
     return newAttr;
   }
 

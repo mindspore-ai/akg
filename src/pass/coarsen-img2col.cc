@@ -27,9 +27,9 @@
 
 namespace akg {
 namespace ir {
-using ktvm::arith::DetectLinearEquation;
-using ktvm::arith::EvalSet;
-using ktvm::arith::IntSet;
+using air::arith::DetectLinearEquation;
+using air::arith::EvalSet;
+using air::arith::IntSet;
 
 Stmt LowerImg2ColMutator::Mutate_(const Evaluate *op, const Stmt &s) {
   const Call *call_op = op->value.as<Call>();
@@ -300,15 +300,15 @@ Expr CoarsenImg2ColMutator::MutateImg2Col(const Call *op, const Expr &e) {
   auto fine_input_ptr = op->args[CCEImg2ColArgIdx::kInputPtr].as<Call>();
   CHECK_CONDITION(fine_input_ptr && fine_output_ptr);
   CHECK_CONDITION(fine_input_ptr->call_type == Call::Intrinsic && fine_output_ptr->call_type == Call::Intrinsic);
-  CHECK_CONDITION(fine_input_ptr->name == ktvm::ir::intrinsic::tvm_access_ptr &&
-                  fine_output_ptr->name == ktvm::ir::intrinsic::tvm_access_ptr);
+  CHECK_CONDITION(fine_input_ptr->name == air::ir::intrinsic::tvm_access_ptr &&
+                  fine_output_ptr->name == air::ir::intrinsic::tvm_access_ptr);
   int innermost_extent = GetInteger(loopNest_.back().loopExtent);
   CHECK_GT(innermost_extent, 0);
 
-  Array<Expr> output_coeffs = ktvm::arith::DetectLinearEquation(fine_output_ptr->args[2], {innermost_var});
+  Array<Expr> output_coeffs = air::arith::DetectLinearEquation(fine_output_ptr->args[2], {innermost_var});
   // the output offset is in the form of X + 256 * var
   // where X is invariant w.r.t to var
-  ktvm::arith::Analyzer analyzer_;
+  air::arith::Analyzer analyzer_;
   CHECK_CONDITION(output_coeffs.size() != 0 && analyzer_.CanProve(output_coeffs[0] == (kFractalSize * kFractalSize)));
   Array<Expr> coarse_output_args{fine_output_ptr->args[0], fine_output_ptr->args[1], output_coeffs[1],
                                  fine_output_ptr->args[3], fine_output_ptr->args[4]};
@@ -523,7 +523,7 @@ bool CoarsenImg2ColMutator::GetRowsFromBaseAddress(const Expr &base_address, con
     return false;
   }
 
-  Array<Expr> input_coeffs = ktvm::arith::DetectLinearEquation(input_idx, {temp});
+  Array<Expr> input_coeffs = air::arith::DetectLinearEquation(input_idx, {temp});
   if (input_coeffs.size() < 2) {
     return false;
   }
@@ -556,8 +556,8 @@ bool CoarsenImg2ColMutator::CheckEqualMod(const Expr &e1, const Expr &e2, int m)
   Array<Var> loopVars;
   std::transform(loopNest_.begin(), loopNest_.end(), std::back_inserter(loopVars.CopyOnWrite()->data),
                  [](const LoopNestInfo &v) { return (v.loopVar); });
-  Array<Expr> e1_coeffs = ktvm::arith::DetectLinearEquation(e1, loopVars);
-  Array<Expr> e2_coeffs = ktvm::arith::DetectLinearEquation(e2, loopVars);
+  Array<Expr> e1_coeffs = air::arith::DetectLinearEquation(e1, loopVars);
+  Array<Expr> e2_coeffs = air::arith::DetectLinearEquation(e2, loopVars);
   if (e1_coeffs.size() != e2_coeffs.size()) {
     return false;
   }

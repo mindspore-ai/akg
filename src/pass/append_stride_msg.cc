@@ -20,7 +20,7 @@ namespace akg {
 namespace ir {
 using Arch::BurstLengthByte;
 using Arch::GapUnitByte;
-using ktvm::ir::intrinsic::tvm_access_ptr;
+using air::ir::intrinsic::tvm_access_ptr;
 constexpr uint tvm_access_ptr_args_no_stride = 5U;
 constexpr uint tvm_access_ptr_args_stride = 10U;
 constexpr uint dma_call_num_args = 7U;

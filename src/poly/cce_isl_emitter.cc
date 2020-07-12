@@ -86,7 +86,7 @@ class MadMarker : public IRMutator {
   std::vector<std::pair<const Provide *, std::string>> insn_attrs_;
 };
 
-class GatherVar : public ktvm::ir::IRVisitor {
+class GatherVar : public air::ir::IRVisitor {
  public:
   explicit GatherVar(Map<Tensor, Buffer> binds) : binds_(std::move(binds)) {}
   void Visit_(const Variable *op) final {
@@ -291,7 +291,7 @@ class IfThenElseSplitter {
   }
 };
 
-class FindInnerRealize : public ktvm::ir::IRMutator {
+class FindInnerRealize : public air::ir::IRMutator {
  public:
   explicit FindInnerRealize(std::string name) : name_(std::move(name)) {}
   ~FindInnerRealize() override = default;
@@ -1315,7 +1315,7 @@ Stmt CCEIslEmitter::InsertRealize(Stmt stmt, const isl::id &var, bool is_L0) {
       stmt = attrstmt->body;
       stmt = Realize::make(t->op, t->value_index, t->dtype, bounds, const_true(1), stmt);
       realized_.insert(t);
-      stmt = AttrStmt::make(t->op, ktvm::ir::attr::realize_scope, FindRealizeScope(var), stmt);
+      stmt = AttrStmt::make(t->op, air::ir::attr::realize_scope, FindRealizeScope(var), stmt);
 
       return AttrStmt::make(make_zero(Int(32)), "pragma_fuse_vector", Expr(1), stmt);
     }
@@ -1327,14 +1327,14 @@ Stmt CCEIslEmitter::InsertRealize(Stmt stmt, const isl::id &var, bool is_L0) {
       if (curTensor->op->name == t->op->name) {
         stmt = Realize::make(curTensor->op, t->value_index, t->dtype, bounds, const_true(1), stmt);
         realized_.insert(t);
-        stmt = AttrStmt::make(curTensor->op, ktvm::ir::attr::realize_scope, FindRealizeScope(var), stmt);
+        stmt = AttrStmt::make(curTensor->op, air::ir::attr::realize_scope, FindRealizeScope(var), stmt);
         return stmt;
       }
     }
   }
   stmt = Realize::make(t->op, t->value_index, t->dtype, bounds, const_true(1), stmt);
   realized_.insert(t);
-  stmt = AttrStmt::make(t->op, ktvm::ir::attr::realize_scope, FindRealizeScope(var), stmt);
+  stmt = AttrStmt::make(t->op, air::ir::attr::realize_scope, FindRealizeScope(var), stmt);
 
   return stmt;
 }
@@ -1903,7 +1903,7 @@ Stmt CCEIslEmitter::EmitMarkMulticore(const isl::ast_node_mark &node) {
         bounds.push_back(Range::make_by_min_extent(Expr(0), j));
       }
       stmt = Realize::make(t->op, t->value_index, t->dtype, bounds, const_true(1), stmt);
-      stmt = AttrStmt::make(t->op, ktvm::ir::attr::realize_scope, Expr("local.L1"), stmt);
+      stmt = AttrStmt::make(t->op, air::ir::attr::realize_scope, Expr("local.L1"), stmt);
     }
     return stmt;
   } else {
@@ -1952,7 +1952,7 @@ class FindUsingTensor : public IRVisitor {
   bool found_{false};
 };
 
-class FindNotRealizedTensors : public ktvm::ir::IRVisitor {
+class FindNotRealizedTensors : public air::ir::IRVisitor {
  public:
   void Visit_(const Call *op) final {
     if (op->call_type == Call::Halide && realized_in_scope.count(op->func->func_name()) == 0) {
@@ -2191,7 +2191,7 @@ bool IsLinearExprOfOneVar(const Expr &arg) {
   } else {
     Array<Var> array_vars;
     for (const auto &var : vars) array_vars.push_back(var);
-    auto coefs = ktvm::arith::DetectLinearEquation(arg, array_vars);
+    auto coefs = air::arith::DetectLinearEquation(arg, array_vars);
     bool is_linear_equation = (coefs.size() == 2);
     return is_linear_equation;
   }

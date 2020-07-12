@@ -29,7 +29,7 @@
 namespace akg {
 namespace ir {
 using LoopVarsTable = std::unordered_map<const Variable *, Range>;
-using SubTensorTable = std::unordered_map<FunctionRef, Tensor, ktvm::NodeHash, ktvm::NodeEqual>;
+using SubTensorTable = std::unordered_map<FunctionRef, Tensor, air::NodeHash, air::NodeEqual>;
 
 enum LIB_CATEGORY { TENSOR_OF_T = 0, HYBRID_MIX, TRIGONO, IM2COL };
 
@@ -46,7 +46,7 @@ class LibAllocator : public IRVisitor {
   SubTensorTable Table() { return remap_; }
 
   void Visit_(const AttrStmt *op) final {
-    if (auto hybrid = op->node.as<ktvm::HybridOpNode>()) {
+    if (auto hybrid = op->node.as<air::HybridOpNode>()) {
       for (auto input : hybrid->inputs) {
         for (auto output : hybrid->outputs) {
           if (input == output) {
@@ -83,7 +83,7 @@ class LibAllocator : public IRVisitor {
 };
 
 inline bool rangeCompare(const Range &a, const Range &b) {
-  return (ktvm::ir::Compare(a->min, b->min) == 0) && (ktvm::ir::Compare(a->extent, b->extent) == 0);
+  return (air::ir::Compare(a->min, b->min) == 0) && (air::ir::Compare(a->extent, b->extent) == 0);
 }
 /*
  * Example before this pass:
@@ -498,7 +498,7 @@ class TaylorExpan : public IRMutator {
  private:
   std::unordered_map<Tensor, std::vector<Tensor>> expan_taylor_;
   std::unordered_map<Tensor, const Realize *> realize_node_;
-  std::unordered_map<FunctionRef, int, ktvm::NodeHash, ktvm::NodeEqual> index_node_;
+  std::unordered_map<FunctionRef, int, air::NodeHash, air::NodeEqual> index_node_;
   std::function<Expr(const Tensor &, const Provide *)> make_call_;
   size_t series_{4};
   static int ct_;
