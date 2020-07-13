@@ -92,9 +92,6 @@ Stmt SingleVecInsnBuilder::EmitExpandedIntrin(const VectorArgInfo &arg_info) {
   Expr dst_offset = dst_info_->insn_offset_;
   Expr src_offset = src_info_->insn_offset_;
 
-  Var local_var = Var("broadcast_for_vec_local_UB", Handle());
-  stmt = CreateBroadcast(arg_info, local_var, stmt);
-
   // Handle stride_m1 loop of single vector intrin, if stride_m1 > 255, it will be separated
   if (dst_stride_m1 >= MAX_STRIDE_M1 || src_stride_m1 >= MAX_STRIDE_M1) {
     auto var = Var("repeatStrideM1Idx");
@@ -112,14 +109,6 @@ Stmt SingleVecInsnBuilder::EmitExpandedIntrin(const VectorArgInfo &arg_info) {
     }
   }
 
-  if (!dst_info_->var_.empty() && src_info_->var_.empty() && intrin_name_ != INTRIN_NAME_VECTOR_DUP) {
-    // need to broadcast src first
-    stmt = Allocate::make(local_var, src_info_->dtype_, {Expr(src_block_size * FULL_BLOCK_NUM)}, const_true(), stmt);
-    if (!src_info_->scope_.empty()) {
-      stmt = AttrStmt::make(local_var, STORAGE_SCOPE, StringImm::make(src_info_->scope_), stmt);
-    }
-  }
-
   CHECK(stmt.defined()) << "Error: Stmt is undefined!";
 
   return stmt;
@@ -131,70 +120,36 @@ Stmt SingleVecInsnBuilder::EmitExpandedIntrin(const VectorArgInfo &arg_info) {
 /// \return
 Stmt SingleVecInsnBuilder::EmitIntrinBody(const VectorArgInfo &arg_info, const Map<std::string, Expr> &args) {
   Stmt body;
-
   CHECK(!arg_info->src_stride_m0_list_.empty());
   CHECK(!arg_info->src_stride_m1_list_.empty());
-
-  auto dst_buffer_id = GenBufferId(dst_info_);
-  auto src_buffer_id = GenBufferId(src_info_);
-
   Expr repeat = args["repeat"];
+  auto dst_buffer_id = GenBufferId(dst_info_);
   Expr dst_offset = Sub::make(args["dstOffset"], arg_info->block_offset_);
-  Expr src_offset = args["srcOffset"];
-  Expr src_stride_m1 = arg_info->src_stride_m1_list_[0];
-
   auto dst = GetAccessPtr(dst_buffer_id, "w", dst_offset);
-  auto src = GetAccessPtr(src_buffer_id, "r", src_offset);
 
-  if (broadcast_buffer_.defined()) {
-    src_stride_m1 = 0;
-    src = GetAccessPtr(broadcast_buffer_, "r", Expr(0));
+  Array<Expr> insn_args {};
+  if (insn_type_ == SingleType::Vector_Dump) {
+    insn_args = {dst, scalar_src_, repeat};
+  } else {
+    auto src_buffer_id = GenBufferId(src_info_);
+    Expr src_offset = args["srcOffset"];
+    auto src = GetAccessPtr(src_buffer_id, "r", src_offset);
+    if (insn_type_ == SingleType::SIMD) {
+      insn_args = {dst, src, repeat};
+    } else if (insn_type_ == SingleType::Tensor_Scalar) {
+      insn_args = {dst, src, scalar_src_, repeat};
+    } else {
+      CHECK(0) << "\nUnknown insn_type_\n";
+    }
   }
 
   Array<Expr> stride_args = {arg_info->dst_stride_m0_, arg_info->src_stride_m0_list_[0], arg_info->dst_stride_m1_,
-                             src_stride_m1};
-  Array<Expr> insn_args = {dst, src, repeat};
-  if (arg_info->scalar_.defined()) {
-    auto scalar = arg_info->scalar_;
-    if (tmp_buffer_.defined()) {
-      dst = GetAccessPtr(tmp_buffer_, "w", dst_offset);
-    }
-
-    insn_args = {dst, scalar, repeat};
-
-    if (intrin_name_ != INTRIN_NAME_VECTOR_DUP) {
-      Insert(insn_args, 1, src);
-    }
-  }
+                             arg_info->src_stride_m1_list_[0]};
   insn_args = MergeTwo(insn_args, stride_args);
   body = EmitCceIntrinTemplate(Stmt(), dst.type(), insn_args, intrin_name_);
-
   return body;
 }
 
-/// Create broadcast intrin if src is scalar
-/// \param arg_info
-/// \param local_var
-/// \param stmt
-/// \return
-Stmt SingleVecInsnBuilder::CreateBroadcast(const VectorArgInfo &arg_info, const Var &local_var, Stmt stmt) {
-  if (!dst_info_->var_.empty() && src_info_->var_.empty() && intrin_name_ != INTRIN_NAME_VECTOR_DUP) {
-    // need to broadcast src first
-    auto src_block_size = GetUbBlkSize(src_info_->dtype_);
-    broadcast_buffer_ = BufferNode::make(local_var, src_info_->dtype_, {Expr(src_block_size * FULL_BLOCK_NUM)}, {},
-                                         src_info_->elem_offset_, "broadcast_for_vec_local_UB", src_info_->scope_,
-                                         src_info_->data_alignment_, 1, BufferType::kDefault);
-    auto broad_dst = GetAccessPtr(broadcast_buffer_, "w", 0);
-    Array<Expr> args = {
-      broad_dst, GenBufferId(src_info_).vload({Expr(0)}, src_info_->dtype_), Expr(1), Expr(1), Expr(1), Expr(0),
-      Expr(0)};
-    stmt = EmitSetVecMaskIntrin(stmt, src_info_->dtype_, GetAllMask(src_info_->dtype_));
-    stmt = InsertBody(stmt, EmitCceIntrinTemplate(Stmt(), src_info_->dtype_, args, INTRIN_NAME_VECTOR_DUP));
-    stmt = EmitSetVecMaskIntrin(stmt, dst_info_->dtype_, arg_info->vec_mask_);
-  }
-
-  return stmt;
-}
 
 /// if repeat-size > cce_max_repeat, then split it into loop as "Davinci ISA User Guide t6.3 (8.2.2)" mentioned
 /// max_cce_repeat = 255, considering params are about 2 cycles, set it to be  255 // 2 = 127
@@ -1250,8 +1205,10 @@ Stmt EmitCceBinaryVectorToReduceLastAxis(const StmtStoreInfo &dst_info, const St
 
   auto vec_dup_arg_info = GenReduceHelperArgInfo(vec_dup_dst_info, for_extent, scalar, "VecDup");
 
+  vec_dup_dst_info.GetNode()->data_ = final_var;
+  vec_dup_dst_info.GetNode()->name_ = final_var->name_hint;
   SingleVecInsnBuilder single_vec_builder = SingleVecInsnBuilder(vec_dup_dst_info, vec_dup_dst_info, vec_dup_arg_info,
-                                                                 INTRIN_NAME_VECTOR_DUP, final_dst_buffer);
+                                                                 INTRIN_NAME_VECTOR_DUP, scalar, SingleType::Vector_Dump);
   auto insn_list = single_vec_builder.EmitIntrin();
   auto stmt = std::accumulate(insn_list.begin(), insn_list.end(), Stmt(),
                               [](const Stmt &s0, const Stmt &s1) { return InsertBody(s0, s1); });

@@ -25,6 +25,9 @@
 #include "insn_info.h"
 #include "cce_params.h"
 namespace akg {
+
+enum SingleType {SIMD, Tensor_Scalar, Vector_Dump};
+
 struct MutableMaskParams {
   Var mask_var_;
   Expr loop_var_;
@@ -239,8 +242,11 @@ class VectorInsnBuilder : public InsnBuilder {
 class SingleVecInsnBuilder : public VectorInsnBuilder {
  public:
   SingleVecInsnBuilder(const StmtStoreInfo &dst, const StmtStoreInfo &src, const ArgInfo &args,
-                       const std::string &intrin_name, const Buffer &tmp_buf = Buffer())
-      : VectorInsnBuilder(dst, {src}, args, intrin_name), src_info_(src_info_list_[0]), tmp_buffer_(tmp_buf) {
+                       const std::string &intrin_name,  const Expr &scalar_src = Expr(),
+                       const SingleType insn_type = SingleType::SIMD)
+      : VectorInsnBuilder(dst, {src}, args, intrin_name),
+        src_info_(src_info_list_[0]),
+        scalar_src_(scalar_src),  insn_type_(insn_type) {
     CHECK(src_info_.defined());
   }
   ~SingleVecInsnBuilder() override = default;
@@ -254,8 +260,10 @@ class SingleVecInsnBuilder : public VectorInsnBuilder {
   Stmt CreateBroadcast(const VectorArgInfo &arg_info, const Var &local_var, Stmt stmt);
 
   StmtStoreInfo src_info_;
-  Buffer tmp_buffer_;
   Buffer broadcast_buffer_;
+  Expr scalar_src_;
+  SingleType insn_type_; // 0 simd : 1 vector_scalar : 2 vector_dup
+
 };
 
 class MultiVecInsnBuilder : public VectorInsnBuilder {

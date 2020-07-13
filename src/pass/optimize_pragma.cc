@@ -147,7 +147,7 @@ class EstimateAlign : public IRMutator {
 
   Stmt Mutate_(const AttrStmt *op, const Stmt &stmt) final {
     if (air::ir::attr::IsPragmaKey(op->attr_key) && op->value.as<StringImm>()) {
-      if (exclude_list.count(op->value.as<StringImm>()->value)) {
+      if (exclude_align_analyze_list.count(op->value.as<StringImm>()->value)) {
         return stmt;
       }
 

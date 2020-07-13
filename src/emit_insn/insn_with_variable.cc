@@ -33,9 +33,11 @@
 #include "insn_info.h"
 #include "insn_pattern.h"
 #include "insn_emitter.h"
+#include "ir_transform.h"
 
 namespace akg {
 namespace ir {
+
 Expr GetVarCoefExpr(const Expr &index, const Var &loop_var) {
   Expr ret = Expr();
   Array<Expr> coefs = air::arith::DetectLinearEquation(index, {loop_var});
@@ -203,7 +205,7 @@ class HasScalarVarValue : public IRVisitor {
 class AdjustPragma : public IRMutator {
  public:
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
-    if (air::ir::attr::IsPragmaKey(op->attr_key) && op->attr_key == "pragma_emit_insn" && op->value.as<StringImm>()) {
+    if (op->attr_key == "pragma_emit_insn" && op->value.as<StringImm>()) {
       is_candidate_ = true;
       loop_vars_ = {};
       loop_extends_ = {};
@@ -295,7 +297,7 @@ class AdjustPragma : public IRMutator {
       Array<Expr> srcs = call_ptr->args;
       CHECK_EQ(srcs.size(), 2);
       is_argmax_min_ = true;
-      reduce_type_ = (op->value.as<Call>()->name == "fargmin") ? "arg_min" : "arg_max";
+      reduce_type_ = (op->value.as<Call>()->name == "fargmin") ? "reduce_fargmin" : "reduce_fargmax";
       return Store::make(op->buffer_var, Call::make(call_ptr->type, reduce_type_, {srcs[1]}, Call::CallType::Extern),
                          op->index, op->predicate);
     } else if ((op->value.as<FloatImm>() || op->value.as<IntImm>() || op->value.as<UIntImm>()) &&
@@ -482,353 +484,6 @@ class AdjustPragma : public IRMutator {
   bool is_ub_dma_to_vadds_{false};
   const AttrStmt *attr_ptr;
   Array<Var> transpose_vars_;
-};
-
-class TransposeTransform : public IRMutator {
- public:
-  Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
-    if (air::ir::attr::IsPragmaKey(op->attr_key) && op->attr_key == "pragma_emit_insn" && op->value.as<StringImm>() &&
-        op->value.as<StringImm>()->value == "dma_copy") {
-      pre_transpose_buffer = Var("srcTranspose_local_UB");
-      post_transpose_buffer = Var("dstTranspose_local_UB");
-      loop_vars_ = {};
-      loop_extends_ = {};
-      is_candidate_ = true;
-      is_block_transpose_ = false;
-      auto body = this->Mutate(op->body);
-      is_candidate_ = false;
-      if (is_block_transpose_) {
-        is_block_transpose_ = false;
-        auto allocate_pre_buffer = Allocate::make(pre_transpose_buffer, t_type, {TransTotalSize}, const_true(1), body);
-        auto attr_pre_buffer =
-          AttrStmt::make(pre_transpose_buffer, "storage_scope", Expr("local.UB"), allocate_pre_buffer);
-        auto allocate_post_buffer =
-          Allocate::make(post_transpose_buffer, t_type, {TransTotalSize}, const_true(1), attr_pre_buffer);
-        auto attr_post_buffer =
-          AttrStmt::make(post_transpose_buffer, "storage_scope", Expr("local.UB"), allocate_post_buffer);
-        return attr_post_buffer;
-      } else {
-        return AttrStmt::make(op->node, op->attr_key, op->value, body);
-      }
-    } else {
-      return IRMutator::Mutate_(op, s);
-    }
-  }
-
-  Stmt Mutate_(const For *op, const Stmt &s) final {
-    if (is_candidate_) {
-      loop_vars_.push_back(op->loop_var);
-      loop_extends_.push_back(op->extent);
-      Stmt body = this->Mutate(op->body);
-      if (is_block_transpose_ && IsInArray(trans_vars_, op->loop_var)) {
-        return body;
-      } else {
-        return For::make(op->loop_var, op->min, op->extent, ForType::Serial, DeviceAPI::None, body);
-      }
-    }
-    return IRMutator::Mutate_(op, s);
-  }
-
-  Stmt Mutate_(const Store *op, const Stmt &s) final {
-    if (is_candidate_) {
-      auto value = op->value;
-      if (auto cast = op->value.as<Cast>()) {
-        value = cast->value;
-      }
-      CHECK(value.as<Load>());
-      auto src_ptr = value.as<Load>();
-      if (GetBufferType(op->buffer_var) == SCOPE_UBUF && GetBufferType(src_ptr->buffer_var) == SCOPE_UBUF) {
-        int dst_pos = GetVectorizedVarPosition(op->index, loop_vars_);
-        int src_pos = GetVectorizedVarPosition(src_ptr->index, loop_vars_);
-        if (dst_pos != -1 && src_pos != -1 && dst_pos != src_pos &&
-            floormod(loop_extends_[dst_pos], TransAxisLen).as<IntImm>() &&
-            floormod(loop_extends_[dst_pos], TransAxisLen).as<IntImm>()->value == 0 &&
-            Equal(GetVarCoefExpr(op->index, loop_vars_[src_pos]), loop_extends_[dst_pos])) {
-          if (loop_extends_[dst_pos].as<IntImm>() && loop_extends_[dst_pos].as<IntImm>()->value == TransAxisLen &&
-              loop_extends_[src_pos].as<IntImm>() && loop_extends_[src_pos].as<IntImm>()->value == TransAxisLen) {
-            return s;
-          } else {
-            is_block_transpose_ = true;
-            t_type = src_ptr->type;
-            trans_vars_ = {};
-            trans_vars_.push_back(loop_vars_[src_pos]);
-            trans_vars_.push_back(loop_vars_[dst_pos]);
-            Expr ori_w = GetVarCoefExpr(src_ptr->index, loop_vars_[dst_pos]);
-            Expr ori_h = loop_extends_[dst_pos];
-            Expr ori_block_w = floordiv(ori_w, TransAxisLen);
-            Expr ori_block_h = floordiv(ori_h, TransAxisLen);
-            Var loop_w = Var("block_w");
-            Var loop_h = Var("block_h");
-            Expr src_base_index = EliminateVarInExpr(src_ptr->index, trans_vars_);
-            Expr dst_base_index = EliminateVarInExpr(op->index, trans_vars_);
-
-            Var tt0 = Var("tt0");
-            Var tt1 = Var("tt1");
-            auto pre_copy = Store::make(
-              pre_transpose_buffer,
-              Load::make(t_type, src_ptr->buffer_var,
-                         src_base_index + loop_h * TransAxisLen * ori_w + loop_w * TransAxisLen + tt1 * ori_w + tt0, 1),
-              tt1 * TransAxisLen + tt0, 1);
-            auto pre_l0 = For::make(tt0, 0, TransAxisLen, ForType::Serial, DeviceAPI::None, pre_copy);
-            auto pre_l1 = For::make(tt1, 0, TransAxisLen, ForType::Serial, DeviceAPI::None, pre_l0);
-            auto pre_attr = AttrStmt::make(make_zero(Int(32)), "pragma_emit_insn", Expr("dma_copy"), pre_l1);
-
-            auto transpose =
-              Store::make(post_transpose_buffer, Load::make(t_type, pre_transpose_buffer, tt1 * TransAxisLen + tt0, 1),
-                          tt0 * 16 + tt1, 1);
-            auto trans_l0 = For::make(tt0, 0, TransAxisLen, ForType::Serial, DeviceAPI::None, transpose);
-            auto trans_l1 = For::make(tt1, 0, TransAxisLen, ForType::Serial, DeviceAPI::None, trans_l0);
-            auto trans_attr = AttrStmt::make(make_zero(Int(32)), "pragma_emit_insn", Expr("dma_copy"), trans_l1);
-
-            auto post_copy = Store::make(
-              op->buffer_var, Load::make(t_type, post_transpose_buffer, tt1 * TransAxisLen + tt0, 1),
-              dst_base_index + loop_w * TransAxisLen * ori_h + loop_h * TransAxisLen + tt1 * ori_h + tt0, 1);
-            auto post_l0 = For::make(tt0, 0, TransAxisLen, ForType::Serial, DeviceAPI::None, post_copy);
-            auto post_l1 = For::make(tt1, 0, TransAxisLen, ForType::Serial, DeviceAPI::None, post_l0);
-            auto post_attr = AttrStmt::make(make_zero(Int(32)), "pragma_emit_insn", Expr("dma_copy"), post_l1);
-
-            auto full_inner = Block::make(Block::make(pre_attr, trans_attr), post_attr);
-            auto inner_w = For::make(loop_w, 0, ori_block_w, ForType::Serial, DeviceAPI::None, full_inner);
-            auto inner_h = For::make(loop_h, 0, ori_block_h, ForType::Serial, DeviceAPI::None, inner_w);
-            return inner_h;
-          }
-        }
-      }
-    }
-    return s;
-  }
-
-  bool is_candidate_{false};
-  bool is_block_transpose_{false};
-  Array<Var> trans_vars_;
-  Array<Var> loop_vars_;
-  Array<Expr> loop_extends_;
-  Type t_type;
-  Var pre_transpose_buffer;
-  Var post_transpose_buffer;
-};
-
-class IfReorder : public IRMutator {
- public:
-  Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
-    if (air::ir::attr::IsPragmaKey(op->attr_key) && op->attr_key == "pragma_emit_insn" && op->value.as<StringImm>() &&
-        op->value.as<StringImm>()->value != "mad") {
-      in_insn_ = true;
-      for_vars_.clear();
-      if_vars_.clear();
-      for_vec_.clear();
-      if_vec_.clear();
-      auto body = this->Mutate(op->body);
-      in_insn_ = false;
-      if (!if_vec_.empty()) {
-        Stmt new_s = AttrStmt::make(op->node, op->attr_key, op->value, body);
-        for (auto if_op : if_vec_) {
-          new_s = IfThenElse::make(if_op->condition, new_s);
-        }
-
-        for (auto for_op = for_vec_.rbegin(); for_op != for_vec_.rend(); ++for_op) {
-          bool find_flag = false;
-          for (auto for_iter = for_vars_.begin(); for_iter != for_vars_.end(); ++for_iter) {
-            if (Equal((*for_iter), (*for_op)->loop_var)) {
-              find_flag = true;
-              break;
-            }
-          }
-          if (find_flag) {
-            new_s = For::make((*for_op)->loop_var, (*for_op)->min, (*for_op)->extent, ForType::Serial, DeviceAPI::None,
-                              new_s);
-          }
-        }
-        return new_s;
-      } else {
-        return s;
-      }
-    }
-    return IRMutator::Mutate_(op, s);
-  }
-
-  Stmt Mutate_(const For *op, const Stmt &s) final {
-    if (in_insn_) {
-      for_vec_.push_back(op);
-      for_vars_.push_back(op->loop_var);
-      Stmt body = this->Mutate(op->body);
-      std::vector<Var>::iterator for_iter;
-      for (for_iter = for_vars_.begin(); for_iter != for_vars_.end(); ++for_iter) {
-        if (Equal((*for_iter), op->loop_var)) {
-          break;
-        }
-      }
-
-      if (!if_vec_.empty()) {
-        std::vector<Var>::iterator if_iter;
-        bool find_flag = false;
-        for (if_iter = if_vars_.begin(); if_iter != if_vars_.end(); ++if_iter) {
-          if (Equal((*if_iter), op->loop_var)) {
-            find_flag = true;
-            break;
-          }
-        }
-        if (find_flag) {
-          return body;
-        } else {
-          for_vars_.erase(for_iter);
-          return For::make(op->loop_var, op->min, op->extent, ForType::Serial, DeviceAPI::None, body);
-        }
-      } else {
-        for_vars_.erase(for_iter);
-        return For::make(op->loop_var, op->min, op->extent, ForType::Serial, DeviceAPI::None, body);
-      }
-    }
-    return IRMutator::Mutate_(op, s);
-  }
-
-  Stmt Mutate_(const IfThenElse *op, const Stmt &s) final {
-    if (in_insn_) {
-      if_vec_.push_back(op);
-      for (auto loop_var : for_vars_) {
-        if (HasVars(op->condition, loop_var)) {
-          if_vars_.push_back(loop_var);
-        }
-      }
-      Stmt body = this->Mutate(op->then_case);
-      return body;
-    }
-    return IRMutator::Mutate_(op, s);
-  }
-
-  Stmt Mutate_(const Store *op, const Stmt &s) final {
-    if (in_insn_) {
-      return s;
-    }
-    return IRMutator::Mutate_(op, s);
-  }
-
-  bool in_insn_{false};
-  std::vector<const IfThenElse *> if_vec_;
-  std::vector<Var> if_vars_;
-  std::vector<Var> for_vars_;
-  std::vector<const For *> for_vec_;
-  std::vector<const For *> before_if_;
-};
-
-class LoopReorder : public IRMutator {
-  Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
-    if (air::ir::attr::IsPragmaKey(op->attr_key) && op->attr_key == "pragma_emit_insn" && op->value.as<StringImm>()) {
-      in_insn_ = true;
-      pragma = op->value.as<StringImm>()->value;
-      for_map_.clear();
-      ori_vars_ = {};
-      var_order_.clear();
-      auto ret = this->Mutate(op->body);
-      in_insn_ = false;
-      if (!has_changed_) {
-        return s;
-      } else {
-        if (var_order_.empty()) {
-          ret = AttrStmt::make(op->node, op->attr_key, op->value, ret);
-          for (size_t i = 0; i < ori_vars_.size(); ++i) {
-            CHECK_GT(for_map_.count(ori_vars_[i].get()), 0);
-            auto ptr = for_map_[ori_vars_[i].get()];
-            ret = For::make(ptr->loop_var, ptr->min, ptr->extent, ptr->for_type, ptr->device_api, ret);
-          }
-        } else {
-          for (size_t i = 0; i < var_order_.size(); ++i) {
-            CHECK_GT(for_map_.count(var_order_[i].get()), 0);
-            auto ptr = for_map_[var_order_[i].get()];
-            ret = For::make(ptr->loop_var, ptr->min, ptr->extent, ptr->for_type, ptr->device_api, ret);
-          }
-          ret = AttrStmt::make(op->node, op->attr_key, op->value, ret);
-        }
-        return ret;
-      }
-    }
-    return IRMutator::Mutate_(op, s);
-  }
-
-  Stmt Mutate_(const For *op, const Stmt &s) final {
-    if (in_insn_) {
-      for_map_[(op->loop_var).get()] = op;
-      ori_vars_.push_back(op->loop_var);
-      auto body = this->Mutate(op->body);
-      return body;
-    } else {
-      return IRMutator::Mutate_(op, s);
-    }
-  }
-
-  Stmt Mutate_(const Store *op, const Stmt &s) final {
-    int dst_pos = GetVectorizedVarPosition(op->index, ori_vars_);
-    int len = static_cast<int>(ori_vars_.size());
-
-    std::vector<const Load *> srcs;
-    auto get_loads = [&srcs](const NodeRef &node) {
-      if (const auto v = node.as<Load>()) {
-        srcs.push_back(v);
-      }
-    };
-    PostOrderVisit(op->value, get_loads);
-
-    bool same_pos = true;
-    std::vector<int> srcs_pos;
-    for (int i = 0; i < static_cast<int>(srcs.size()); ++i) {
-      int temp_pos = GetVectorizedVarPosition(srcs[i]->index, ori_vars_);
-      srcs_pos.push_back(temp_pos);
-      if (temp_pos != dst_pos) {
-        same_pos = false;
-      }
-    }
-
-    has_changed_ = false;
-    if (dst_pos >= 0 && len >= 2 && dst_pos != (len - 1) && (same_pos || pragma == "broadcast")) {
-      // Src Load empty; all Load and Dst has the same key axis; broadcast
-      has_changed_ = true;
-      var_order_.push_back(ori_vars_[dst_pos]);
-      for (int i = len - 1; i >= 0; i--) {
-        if (i != dst_pos) {
-          var_order_.push_back(ori_vars_[i]);
-        }
-      }
-    } else if (pragma.find("reduce") != pragma.npos && len >= 2 && srcs_pos[0] != (len - 1)) {
-      // based on dst key axis: reduce
-      has_changed_ = true;
-      var_order_.push_back(ori_vars_[srcs_pos[0]]);
-      for (int i = len - 1; i >= 0; i--) {
-        if (i != srcs_pos[0]) {
-          var_order_.push_back(ori_vars_[i]);
-        }
-      }
-    }
-
-    return s;
-  }
-
-  std::unordered_map<const Variable *, const For *> for_map_;
-  std::vector<Var> var_order_;
-  Array<Var> ori_vars_;
-  bool has_changed_{false};
-  bool in_insn_{false};
-  std::string pragma;
-};
-
-class ForVarUnique : public IRMutator {
- public:
-  Stmt Mutate_(const For *op, const Stmt &s) final {
-    auto body = this->Mutate(op->body);
-    if (var_maps_.count(op->loop_var.get())) {
-      Var new_var = Var("ii" + std::to_string(++index_));
-      std::unordered_map<const Variable *, Expr> value_map;
-      value_map[op->loop_var.get()] = new_var;
-      auto new_body = Substitute(body, value_map);
-      var_maps_[new_var.get()] = 1;
-      return For::make(new_var, op->min, op->extent, ForType::Serial, DeviceAPI::None, new_body);
-    } else {
-      var_maps_[op->loop_var.get()] = 1;
-      return For::make(op->loop_var, op->min, op->extent, ForType::Serial, DeviceAPI::None, body);
-    }
-  }
-
-  std::unordered_map<const Variable *, int> var_maps_;
-  int index_{0};
 };
 
 class GenSIMD {
@@ -1520,9 +1175,9 @@ class GenReduce {
   ~GenReduce() = default;
 
   Stmt Run(int pre_index) {
-    is_arg_type_ = (pragma_ == "arg_max" || pragma_ == "arg_min");
+    is_arg_type_ = (pragma_ == "reduce_fargmax" || pragma_ == "reduce_fargmin");
     RemoveVectorizedIndex(t_info_, 0);
-    if (pragma_.find("sum") != std::string::npos) {
+    if (pragma_.find("sum") != std::string::npos || pragma_.find("add") != std::string::npos) {
       insn_intrinsic_ = "vcadd";
       expansion_factor_ = 1;
     } else if (pragma_.find("max") != std::string::npos) {
@@ -1769,7 +1424,7 @@ class EmitVariableInsns : public IRMutator {
   }
 
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
-    if (air::ir::attr::IsPragmaKey(op->attr_key) && op->attr_key == "pragma_emit_insn") {
+    if (op->attr_key == "pragma_emit_insn") {
       CHECK(op->value.as<StringImm>());
       pragma = op->value.as<StringImm>()->value;
       Stmt r;
@@ -1791,8 +1446,7 @@ class EmitVariableInsns : public IRMutator {
       if (!r.same_as(s)) {
         return r;
       }
-    } else if (air::ir::attr::IsPragmaKey(op->attr_key) &&
-               (op->attr_key == "pragma_im2col" || op->attr_key == "pragma_load3d")) {
+    } else if (op->attr_key == "pragma_im2col" || op->attr_key == "pragma_load3d") {
       if (paramters_.defined() && Downcast<Map<std::string, NodeRef>>(paramters_).count("feature")) {
         auto feature = Downcast<Map<std::string, NodeRef>>(paramters_)["feature"].as<StringImm>();
         CHECK(feature);
@@ -1842,13 +1496,13 @@ class EmitVariableInsns : public IRMutator {
 
     if (pragma.find("vec_select") != std::string::npos) {
       EmitSelect(op, t_info);
-    } else if (pragma.find("dma_copy") == 0) {
+    } else if (pragma.find("dma_copy") != std::string::npos) {
       EmitDMA(t_info);
-    } else if (pragma.find("vec_binary") == 0 || pragma.find("vec_single") == 0) {
+    } else if (pragma.find("vec_binary") != std::string::npos || pragma.find("vec_single") != std::string::npos) {
       EmitSIMD(t_info);
-    } else if (pragma.find("reduce") == 0 || pragma.find("arg_") == 0) {
+    } else if (pragma.find("reduce") != std::string::npos || pragma.find("arg_") != std::string::npos) {
       EmitReduce(t_info);
-    } else if (pragma.find("broadcast") == 0) {
+    } else if (pragma.find("broadcast") != std::string::npos) {
       if (loops_vars_.empty()) {
         gen_cce = t_info.ori_stmt;
       } else {

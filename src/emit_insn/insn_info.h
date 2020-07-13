@@ -49,13 +49,7 @@ enum ArgType {
   ARG_NOT_DEFINE
 };
 
-enum PatternType {
-  PATTERN_3D = 1,
-  PATTERN_PARTIAL_3D,
-  PATTERN_2D,
-  PATTERN_2D_BLOCK,
-  PATTERN_1D
-};
+enum PatternType { PATTERN_3D = 1, PATTERN_PARTIAL_3D, PATTERN_2D, PATTERN_2D_BLOCK, PATTERN_1D };
 
 class StmtStoreInfoNode : public Node {
  public:
@@ -98,13 +92,9 @@ class StmtStoreInfo : public NodeRef {
   explicit StmtStoreInfo(const ObjectPtr<Object> &n) : NodeRef(n), node_(n) {}
   ~StmtStoreInfo() = default;
 
-  inline StmtStoreInfoNode *GetNode() const {
-    return static_cast<StmtStoreInfoNode *>(node_.get());
-  }
+  inline StmtStoreInfoNode *GetNode() const { return static_cast<StmtStoreInfoNode *>(node_.get()); }
 
-  inline const StmtStoreInfoNode *operator->() const {
-    return static_cast<const StmtStoreInfoNode *>(node_.get());
-  }
+  inline const StmtStoreInfoNode *operator->() const { return static_cast<const StmtStoreInfoNode *>(node_.get()); }
 
   void CleanFlexVar();
 
@@ -188,13 +178,9 @@ class VectorArgInfo : public NodeRef {
   explicit VectorArgInfo(const ObjectPtr<Object> &n) : NodeRef(n), node_(n) {}
   ~VectorArgInfo() = default;
 
-  inline VectorArgInfoNode *GetNode() const {
-    return static_cast<VectorArgInfoNode *>(node_.get());
-  }
+  inline VectorArgInfoNode *GetNode() const { return static_cast<VectorArgInfoNode *>(node_.get()); }
 
-  inline const VectorArgInfoNode *operator->() const {
-    return static_cast<const VectorArgInfoNode *>(node_.get());
-  }
+  inline const VectorArgInfoNode *operator->() const { return static_cast<const VectorArgInfoNode *>(node_.get()); }
 
   void Print() const {
     LOG(DEBUG) << "[ body_num: " << GetNode()->body_num_ << ", body_offset: " << GetNode()->body_offset_
@@ -235,13 +221,9 @@ class ArgInfo : public NodeRef {
   explicit ArgInfo(const ObjectPtr<Object> &n) : NodeRef(n), node_(n) {}
   ~ArgInfo() = default;
 
-  inline ArgInfoNode *GetNode() const {
-    return static_cast<ArgInfoNode *>(node_.get());
-  }
+  inline ArgInfoNode *GetNode() const { return static_cast<ArgInfoNode *>(node_.get()); }
 
-  inline const ArgInfoNode *operator->() const {
-    return static_cast<const ArgInfoNode *>(node_.get());
-  }
+  inline const ArgInfoNode *operator->() const { return static_cast<const ArgInfoNode *>(node_.get()); }
 
   inline std::string GetPattern() const {
     switch (GetNode()->pattern_) {
@@ -373,6 +355,8 @@ bool IsBisectionReduction(const StmtInfoList &dst_info_list, const StmtInfoList 
 bool HasVars(const Expr &index, const Var &vec_var);
 
 int GetVectorizedVarPosition(const Expr &index, Array<Var> &loop_vars);
+
+std::string GetOpType(const Expr &value);
 }  // namespace akg
 
 namespace air {

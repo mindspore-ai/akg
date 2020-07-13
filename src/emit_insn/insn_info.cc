@@ -935,7 +935,7 @@ void GetCompactComputationInfo(const Stmt &stmt, StmtInfoList &dst_info_list, St
 /// \param if_info      - The if-condition as input
 /// \param for_info     - The for-loop info to be modified
 void CompactComputationInfoList(StmtInfoList &dst_info_list, StmtInfoList &src_info_list, const StmtInfo &if_info,
-                                  StmtInfo &for_info) {
+                                StmtInfo &for_info) {
   auto MergeTwoVar = [](const Var &keep_var, const Var &delete_var, StmtInfoList &dst_info_list,
                         StmtInfoList &src_info_list, StmtInfo &for_info) {
     for (auto info : dst_info_list) {
@@ -1059,8 +1059,7 @@ void CompactComputationInfoList(StmtInfoList &dst_info_list, StmtInfoList &src_i
     bool find_merge = false;
     for (size_t i = 0; (i < var_cnt - 1) && (!find_merge); i++) {
       for (size_t j = i + 1; j < var_cnt; j++) {
-        if (CanMergeTwoVar(for_info.vars_[i], for_info.vars_[j], dst_info_list, src_info_list,
-                           for_info)) {
+        if (CanMergeTwoVar(for_info.vars_[i], for_info.vars_[j], dst_info_list, src_info_list, for_info)) {
           find_merge = true;
           break;
         }
@@ -1074,7 +1073,6 @@ void CompactComputationInfoList(StmtInfoList &dst_info_list, StmtInfoList &src_i
     }
   }
 }
-
 
 /// A helper function for single dst_info's compact
 /// \param dst_info
@@ -1355,6 +1353,43 @@ int GetVectorizedVarPosition(const Expr &index, Array<Var> &loop_vars) {
     }
   }
   return pos;
+}
+
+std::string GetOpType(const Expr &value) {
+  if (value.as<Add>()) {
+    return value.as<Add>()->_type_key;
+  }
+  if (value.as<Sub>()) {
+    return value.as<Sub>()->_type_key;
+  }
+  if (value.as<Mul>()) {
+    return value.as<Mul>()->_type_key;
+  }
+  if (value.as<Div>()) {
+    return value.as<Div>()->_type_key;
+  }
+  if (value.as<Mod>()) {
+    return value.as<Mod>()->_type_key;
+  }
+  if (value.as<FloorDiv>()) {
+    return value.as<FloorDiv>()->_type_key;
+  }
+  if (value.as<FloorMod>()) {
+    return value.as<FloorMod>()->_type_key;
+  }
+  if (value.as<Min>()) {
+    return value.as<Min>()->_type_key;
+  }
+  if (value.as<Max>()) {
+    return value.as<Max>()->_type_key;
+  }
+  if (value.as<Call>()) {
+    return value.as<Call>()->name;
+  }
+  if (value.as<Load>() || value.as<IntImm>() || value.as<FloatImm>()) {
+    return "DMACopy";
+  }
+  return "undefined";
 }
 
 /// TVM Function Register, enable python code to call these cpp function.

@@ -265,6 +265,10 @@ Stmt RewriteBroadcastVector(Stmt stmt);
 
 Stmt OptimizePragma(Stmt stmt);
 
+Stmt PackStore(Stmt stmt);
+
+Stmt RecoverStore(Stmt stmt);
+
 Stmt RewriteByAlignDynamic(Stmt stmt);
 
 Stmt EliminateAtomicDma(Stmt stmt);
