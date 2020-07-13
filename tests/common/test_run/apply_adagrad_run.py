@@ -34,8 +34,9 @@ def apply_adagrad_execute(shape, dtype, update_slots, attrs=None):
 
 def gen_data(dtype, update_slots, shape):
     var = random_gaussian(shape, miu=1, sigma=0.1).astype(dtype)
-    # accum must be greater than or equal to 0
-    accum = np.abs(random_gaussian(shape, miu=1, sigma=0.1).astype(dtype))
+    # accum must be greater than 0
+    epsilon = 1e-7 if dtype == np.float32 else 1e-3
+    accum = np.abs(random_gaussian(shape, miu=1, sigma=0.1).astype(dtype)) + epsilon
     lr = random_gaussian((1,), miu=1, sigma=0.1).astype(dtype)
     grad = random_gaussian(shape, miu=1, sigma=0.1).astype(dtype)
     inputs = [var, accum, lr, grad]
