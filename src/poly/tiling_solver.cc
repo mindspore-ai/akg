@@ -462,7 +462,9 @@ int64_t InequalitySolver::DetermineTileForStatic(TileAxis *axis, const Expr &mem
       ss << "--> Init factor " << final_factor;
 
       auto mod_value = cons.tile_mod_.as<IntImm>() ? cons.tile_mod_.as<IntImm>()->value : 1;
-      if (static_shape >= mod_value && final_factor % mod_value != 0) {
+      bool is_unaligned = (static_shape >= mod_value && final_factor % mod_value != 0);
+      bool need_to_align = (final_factor > mod_value || !axis->HasAttr("VECTORIZED"));
+      if (is_unaligned && need_to_align) {
         final_factor = std::max(static_cast<int>(final_factor / mod_value * mod_value), 1);
         ss << "--> Mod value " << mod_value << " --> Align to mod " << final_factor;
       }
@@ -810,12 +812,15 @@ bool TraverseSolver::IsTilable(TileInfo *info) {
   }
 
   if (level == LEVEL1) {
-    min_tile = cons.tile_mod_.as<IntImm>()->value;
-
-    if ((info->axis->forbid_iso && const_extent % min_tile != 0) || (cons.tile_min_.as<IntImm>()->value > min_tile) ||
-        (cons.tile_min_.as<IntImm>()->value == MIN_TILE)) {
+    bool use_tile_min = (info->axis->forbid_iso && const_extent % cons.tile_mod_.as<IntImm>()->value != 0) ||
+                        (cons.tile_min_.as<IntImm>()->value == MIN_TILE) || (axis->HasAttr("VECTORIZED")) ||
+                        (cons.tile_min_.as<IntImm>()->value > cons.tile_mod_.as<IntImm>()->value);
+    if (use_tile_min) {
       min_tile = cons.tile_min_.as<IntImm>()->value;
+    } else {
+      min_tile = cons.tile_mod_.as<IntImm>()->value;
     }
+
     if (axis->range_min > min_tile) {
       min_tile = axis->range_min;
     }

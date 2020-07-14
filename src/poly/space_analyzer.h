@@ -67,7 +67,7 @@ class SpaceAnalyzer {
   // Provides stmt after analysis.
   std::unordered_map<const For *, std::vector<ProvideEntry>> provides_ana_;
 
-  const For *GetBufferLastAxis(Tensor t, int offset = 1);
+  const For *GetBufferInnerAxis(Tensor t, int offset = 1);
   // generalized cases
   void IdentifyInsnType();
   void IdentifyDmaUnderCondition();
