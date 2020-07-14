@@ -91,6 +91,11 @@ constexpr auto kEnableRemoveBroadcastCopy = "enable_remove_broadcast_copy";
 constexpr auto kEnableSubstituteDivVar = "enable_divide_var";
 constexpr auto kEnableComputeInPlace = "enable_compute_in_place";
 constexpr auto kEnableRewriteScalarCompute = "enable_rewrite_scalar_compute";
+constexpr auto kMaxNumRetryPoly = "max_num_retry_poly";
+constexpr auto kUBRatio = "ub_ratio";
+constexpr auto kErrorInfo = "";
+constexpr auto kErrorScope = "";
+constexpr auto kAllocBits = "alloc_bits";
 
 static std::unordered_map<std::string, int> help_tiling_level = {
   {"None", 0},
@@ -109,7 +114,7 @@ class AttrMap : public Map<std::string, NodeRef> {
 
   bool GetBoolAttr(const std::string &attr_name, bool dft_value);
   int GetIntAttr(const std::string &attr_name, int dft_value);
-
+  double GetFloatAttr(const std::string &attr_name, double dft_value);
   bool GetStringAttr(const std::string &attr_name, std::string *attr_to_set);
   std::string GetStringAttr(const std::string &attr_name, const std::string &dft_value);
 };

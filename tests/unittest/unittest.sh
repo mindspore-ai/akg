@@ -22,6 +22,7 @@ casefiles=(
 "pass/test_promote_if.py"
 "pass/test_sink_if.py"
 "pass/test_ir_parser.py"
+"pass/test_micro_tuning.py"
 "pass/test_elim_vector_mask.py"
 "pass/test_copy_propagation.py"
 "pass/test_utils_detect_non_linear_index.py"

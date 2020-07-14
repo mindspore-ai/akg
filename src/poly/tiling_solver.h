@@ -30,6 +30,8 @@ class TilingSolver {
   ~TilingSolver() {}
   void CollectMemoryLimit();
   void CollectTileAxisTopDown();
+  double GetNewAllocRatioWhenFlattenFail(const std::string &error_info);
+  double GetNewAllocRatioWhenRewriteFail(int64_t memory_bits);
   TileCandidate *Solve();
 
   TilingAnalyzer &analyzer_;

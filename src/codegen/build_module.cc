@@ -458,7 +458,7 @@ NodeRef Lower(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeRef> 
   PassTimer *pass_timer = PassTimer::GetInstance();
   global_attrs.Set(kKernelName, StringImm::make(name));
 
-  global_attrs.Set(kDumpPassIr, ktvm::make_const(Int(1), config->dump_pass_ir));
+  global_attrs.Set(kDumpPassIr, ktvm::make_const(Int(32), config->dump_pass_ir));
   if (config->dump_pass_ir) {
     std::string dump_ir_dir;
     if (global_attrs.GetStringAttr(kDumpIrDir, &dump_ir_dir)) {
@@ -498,7 +498,7 @@ NodeRef Lower(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeRef> 
   stmt = NEXT_PASS(RenameRealize, stmt, binds_0, replace);
 
   bool is_dynamic = !shape_vars.empty();
-  global_attrs.Set(kIsDynamic, ktvm::make_const(Int(1), is_dynamic));
+  global_attrs.Set(kIsDynamic, ktvm::make_const(Int(32), is_dynamic));
 
   Array<NodeRef> arg_list_1;
   Map<Tensor, Buffer> binds_1;
@@ -594,227 +594,255 @@ NodeRef Lower(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeRef> 
       NodeRef tuning_spaces = NEXT_PASS(GenTuningSpace, stmt, binds_0, attrs_1, false);
       return tuning_spaces;
     }
-    Array<NodeRef> poly_res = NEXT_PASS(AutoPoly, stmt, binds_0, global_attrs, false, is_dynamic);
-    CHECK_EQ(poly_res.size(), 2);
-    stmt = ktvm::Downcast<Stmt>(poly_res[0]);
-    Array<ktvm::Var> tiling_params = ktvm::Downcast<Array<ktvm::Var>>(poly_res[1]);
-    for (const auto &var : tiling_params) {
-      arg_list_0.push_back(var);
-    }
+  }
 
-    if (global_attrs.GetBoolAttr(kTileSizeIsVar, false)) {
-      Array<NodeRef> arg_list_2;
-      Map<Tensor, Buffer> binds_2;
-      FixParametricBinds(binds_0, arg_list_0, config, &binds_2, &arg_list_2);
-      stmt = NEXT_PASS(FixBindBuffer, stmt, binds_2);
-      arg_list_0 = arg_list_2;
-      binds_0 = binds_2;
-    }
+  // micro-tuning configs: current strategy is to retry autopoly up to 3 times when storage flatten/rewrite fails
+  bool need_micro_tuning = !aicpu && polyhedral && !is_dynamic && global_attrs.GetStringAttr("dim", "").empty();
+  const int max_enter_poly_times = global_attrs.GetIntAttr(kMaxNumRetryPoly, need_micro_tuning ? 4 : 1);
+  int enter_count = 0;
+  Stmt stmt_before_poly = stmt;
+  while (enter_count < max_enter_poly_times) {
+    if (!aicpu && polyhedral) {
+      Array<NodeRef> poly_res = NEXT_PASS(AutoPoly, stmt_before_poly, binds_0, global_attrs, false, is_dynamic);
+      enter_count++;
+      CHECK_EQ(poly_res.size(), 2);
+      stmt = ktvm::Downcast<Stmt>(poly_res[0]);
+      Array<ktvm::Var> tiling_params = ktvm::Downcast<Array<ktvm::Var>>(poly_res[1]);
+      for (const auto &var : tiling_params) {
+        arg_list_0.push_back(var);
+      }
 
+      if (global_attrs.GetBoolAttr(kTileSizeIsVar, false)) {
+        Array<NodeRef> arg_list_2;
+        Map<Tensor, Buffer> binds_2;
+        FixParametricBinds(binds_0, arg_list_0, config, &binds_2, &arg_list_2);
+        stmt = NEXT_PASS(FixBindBuffer, stmt, binds_2);
+        arg_list_0 = arg_list_2;
+        binds_0 = binds_2;
+      }
+
+      if (is_dynamic) {
+        if (global_attrs.GetBoolAttr(kEnableSubstituteDivVar, false)) {
+          stmt = NEXT_PASS(SubstituteDivVar, stmt);
+        }
+
+        // fix var addresses because poly identify vars by name
+        stmt = NEXT_PASS(UnifyLoopVars, stmt, binds_0, arg_list_0);
+        // isolate dynamic tile loops (isolate body and tail)
+        if (global_attrs.GetBoolAttr(kEnableIsolateLoop, true)) {
+          stmt = NEXT_PASS(IsolateLoops, stmt, global_attrs.GetBoolAttr(kEnableIsolateMinMax, false));
+          stmt = NEXT_PASS(PromoteLetStmt, stmt, arg_list_0);
+        }
+      }
+
+      // pls do not insert pass between AutoPoly and cube special pass.
+      // cube special pass begin
+      stmt = NEXT_PASS(ExprPatternRewrite, stmt);
+      stmt = NEXT_PASS(AutoMadPragmaAttr, stmt);
+      stmt = NEXT_PASS(PostFusion, stmt, binds_0, is_dynamic);
+      stmt = NEXT_PASS(ReduceFusionOpt, stmt, binds_0);
+      stmt = NEXT_PASS(PostProcessImg2col, stmt);
+      stmt = NEXT_PASS(PromoteIfStmt, stmt, is_dynamic);
+      stmt = NEXT_PASS(BypassL1, stmt);
+      if (global_attrs.GetBoolAttr(kEnableStrideKernelOp, true)) {
+        stmt = NEXT_PASS(StrideKernelOp, stmt, binds_0, is_dynamic);
+      }
+      stmt = NEXT_PASS(Load3dTrans, stmt, is_dynamic);
+      // cube special pass end
+      stmt = NEXT_PASS(CopyPropagation, stmt, binds_0);
+      stmt = NEXT_PASS(ConvertCondToExtent, stmt);
+      bool enable_convert_if = global_attrs.GetBoolAttr(kEnableConvertIf, false);
+      if (enable_convert_if) {
+        stmt = NEXT_PASS(FixRealizeShape, stmt);
+      }
+      if (global_attrs.GetBoolAttr(kEnableDmaSink, false)) {
+        stmt = NEXT_PASS(DMASink, stmt);
+      }
+
+      stmt = NEXT_PASS(LowerWith, stmt);
+      stmt = NEXT_PASS(ForEliminate, stmt);
+      stmt = NEXT_PASS(RealizeCompress, stmt);
+
+      if (!global_attrs.GetBoolAttr(kCoarsenImg2Col, false)) {
+        stmt = NEXT_PASS(LoopNormlize, stmt);
+      }
+      stmt = NEXT_PASS(PoolingTransform, stmt, is_dynamic);
+      stmt = NEXT_PASS(InjectAttr, stmt);
+      stmt = NEXT_PASS(ModDivEliminate, stmt);
+      if (enable_convert_if) {
+        stmt = NEXT_PASS(AlignLastAxisLoopExtent, stmt, binds_0);
+        stmt = NEXT_PASS(FixLoopExtent, stmt);
+        stmt = NEXT_PASS(ConvertIfToSelect, stmt);
+      }
+    }
+    try {
+      stmt = NEXT_PASS(StorageFlatten, stmt, binds_0, 64);
+    } catch (const std::runtime_error &e) {
+      if (enter_count >= max_enter_poly_times) {
+        CHECK(false) << e.what();
+      }
+      global_attrs.Set(kErrorInfo, StringImm::make(e.what()));
+      continue;
+    }
+    stmt = NEXT_PASS(DmaFlatten, stmt, global_attrs.GetBoolAttr(kTileSizeIsVar, false));
+    if (global_attrs.GetBoolAttr(kAlgebraSimplify, false) && is_dynamic) {
+      stmt = NEXT_PASS(AlgebraSimplify, stmt);
+    }
     if (is_dynamic) {
-      if (global_attrs.GetBoolAttr(kEnableSubstituteDivVar, false)) {
-        stmt = NEXT_PASS(SubstituteDivVar, stmt);
-      }
-
-      // fix var addresses because poly identify vars by name
-      stmt = NEXT_PASS(UnifyLoopVars, stmt, binds_0, arg_list_0);
-      // isolate dynamic tile loops (isolate body and tail)
-      if (global_attrs.GetBoolAttr(kEnableIsolateLoop, true)) {
-        stmt = NEXT_PASS(IsolateLoops, stmt, global_attrs.GetBoolAttr(kEnableIsolateMinMax, false));
-        stmt = NEXT_PASS(PromoteLetStmt, stmt, arg_list_0);
-      }
+      stmt = NEXT_PASS(UnifyAllocate, stmt);
     }
 
-    // pls do not insert pass between AutoPoly and cube special pass.
-    // cube special pass begin
-    stmt = NEXT_PASS(ExprPatternRewrite, stmt);
-    stmt = NEXT_PASS(AutoMadPragmaAttr, stmt);
-    stmt = NEXT_PASS(PostFusion, stmt, binds_0, is_dynamic);
-    stmt = NEXT_PASS(ReduceFusionOpt, stmt, binds_0);
-    stmt = NEXT_PASS(PostProcessImg2col, stmt);
-    stmt = NEXT_PASS(PromoteIfStmt, stmt, is_dynamic);
-    stmt = NEXT_PASS(BypassL1, stmt);
-    if (global_attrs.GetBoolAttr(kEnableStrideKernelOp, true)) {
-      stmt = NEXT_PASS(StrideKernelOp, stmt, binds_0, is_dynamic);
-    }
-    stmt = NEXT_PASS(Load3dTrans, stmt, is_dynamic);
-    // cube special pass end
-    stmt = NEXT_PASS(CopyPropagation, stmt, binds_0);
-    stmt = NEXT_PASS(ConvertCondToExtent, stmt);
-    bool enable_convert_if = global_attrs.GetBoolAttr(kEnableConvertIf, false);
-    if (enable_convert_if) {
-      stmt = NEXT_PASS(FixRealizeShape, stmt);
-    }
-    if (global_attrs.GetBoolAttr(kEnableDmaSink, false)) {
-      stmt = NEXT_PASS(DMASink, stmt);
+    if (global_attrs.GetBoolAttr(kEleminateOutmostForCond, false)) {
+      stmt = NEXT_PASS(PreProcess4Multicore, stmt);
     }
 
-    stmt = NEXT_PASS(LowerWith, stmt);
+    int enable_multicore = global_attrs.GetIntAttr(kEnableMulticore, 1);
+    if (!is_dynamic && enable_multicore != 0 && global_attrs.GetBoolAttr(kMultiCoreLoopSwitchHoist, true)) {
+      stmt = NEXT_PASS(MultiCoreLoopSwitchHoist, stmt);
+    }
+    stmt = NEXT_PASS(LoopSwitchHoist, stmt, global_attrs.GetIntAttr(kEnableHoistAllocate, false));
+
+    // Loop Partition args : 2 : split_const_loop, 3 : remove Div / Mod ops by partitioning,
+    //                       4 : whether to partition convolution or not
+    if (!aicpu && global_attrs.GetBoolAttr(kEnablePostPolyLoopPartition, true)) {
+      stmt = NEXT_PASS(LoopPartitionCCE, stmt, true, false, !polyhedral);
+    }
+
+    if (polyhedral && global_attrs.GetBoolAttr(kEnableSinkAllocate, true)) {
+      stmt = NEXT_PASS(SinkAllocate, stmt);
+    }
+
+    if (global_attrs.GetBoolAttr(kLoopPartitionUnroll, false)) {
+      // For the Manual scheduling or When polyhedral is not used
+      stmt = NEXT_PASS(UnrollNonConstantExtent, stmt);
+    }
+    if (!polyhedral) {
+      // fix mad attributes and remove dead computations for the manual schedule
+      stmt = NEXT_PASS(FixMadAttrs, stmt);
+    }
+    if (!is_dynamic) {
+      stmt = NEXT_PASS(CanonicalSimplify, stmt);
+    }
     stmt = NEXT_PASS(ForEliminate, stmt);
-    stmt = NEXT_PASS(RealizeCompress, stmt);
-
-    if (!global_attrs.GetBoolAttr(kCoarsenImg2Col, false)) {
-      stmt = NEXT_PASS(LoopNormlize, stmt);
+    if (global_attrs.GetBoolAttr(kAlgebraSimplify, false) && is_dynamic) {
+      stmt = NEXT_PASS(AlgebraSimplify, stmt);
     }
-    stmt = NEXT_PASS(PoolingTransform, stmt, is_dynamic);
-    stmt = NEXT_PASS(InjectAttr, stmt);
-    stmt = NEXT_PASS(ModDivEliminate, stmt);
-    if (enable_convert_if) {
-      stmt = NEXT_PASS(AlignLastAxisLoopExtent, stmt, binds_0);
+    if (!is_dynamic) {
       stmt = NEXT_PASS(FixLoopExtent, stmt);
-      stmt = NEXT_PASS(ConvertIfToSelect, stmt);
     }
-  }
 
-  stmt = NEXT_PASS(StorageFlatten, stmt, binds_0, 64);
-  stmt = NEXT_PASS(DmaFlatten, stmt, global_attrs.GetBoolAttr(kTileSizeIsVar, false));
-  if (global_attrs.GetBoolAttr(kAlgebraSimplify, false) && is_dynamic) {
-    stmt = NEXT_PASS(AlgebraSimplify, stmt);
-  }
-  if (is_dynamic) {
-    stmt = NEXT_PASS(UnifyAllocate, stmt);
-  }
-
-  if (global_attrs.GetBoolAttr(kEleminateOutmostForCond, false)) {
-    stmt = NEXT_PASS(PreProcess4Multicore, stmt);
-  }
-
-  int enable_multicore = global_attrs.GetIntAttr(kEnableMulticore, 1);
-  if (!is_dynamic && enable_multicore != 0 && global_attrs.GetBoolAttr(kMultiCoreLoopSwitchHoist, true)) {
-    stmt = NEXT_PASS(MultiCoreLoopSwitchHoist, stmt);
-  }
-  stmt = NEXT_PASS(LoopSwitchHoist, stmt, global_attrs.GetIntAttr(kEnableHoistAllocate, false));
-
-  // Loop Partition args : 2 : split_const_loop, 3 : remove Div / Mod ops by partitioning,
-  //                       4 : whether to partition convolution or not
-  if (!aicpu && global_attrs.GetBoolAttr(kEnablePostPolyLoopPartition, true)) {
-    stmt = NEXT_PASS(LoopPartitionCCE, stmt, true, false, !polyhedral);
-  }
-
-  if (polyhedral && global_attrs.GetBoolAttr(kEnableSinkAllocate, true)) {
-    stmt = NEXT_PASS(SinkAllocate, stmt);
-  }
-
-  if (global_attrs.GetBoolAttr(kLoopPartitionUnroll, false)) {
-    // For the Manual scheduling or When polyhedral is not used
-    stmt = NEXT_PASS(UnrollNonConstantExtent, stmt);
-  }
-  if (!polyhedral) {
-    // fix mad attributes and remove dead computations for the manual schedule
-    stmt = NEXT_PASS(FixMadAttrs, stmt);
-  }
-  if (!is_dynamic) {
-    stmt = NEXT_PASS(CanonicalSimplify, stmt);
-  }
-  stmt = NEXT_PASS(ForEliminate, stmt);
-  if (global_attrs.GetBoolAttr(kAlgebraSimplify, false) && is_dynamic) {
-    stmt = NEXT_PASS(AlgebraSimplify, stmt);
-  }
-  if (!is_dynamic) {
-    stmt = NEXT_PASS(FixLoopExtent, stmt);
-  }
-
-  if (!aicpu) {
-    stmt = NEXT_PASS(AutoPragma, stmt);
-  }
-  stmt = NEXT_PASS(EliminateAtomicDma, stmt);
-  if (global_attrs.GetBoolAttr(kDeadCodeElim, false)) {
-    stmt = NEXT_PASS(DeadCodeElim, stmt);
-  }
-  if (!is_dynamic) {
-    stmt = NEXT_PASS(RewriteBroadcastVector, stmt);
-    stmt = NEXT_PASS(OptimizePragma, stmt);
-  }
-  if (is_dynamic) {
-    stmt = NEXT_PASS(AnalyzeMinAlignDynamic, stmt, global_attrs.GetIntAttr(kEnableConvAnalyzeAlign, true),
-                     global_attrs.GetIntAttr(kEnableScalarAlign, false));
-  } else {
-    stmt = NEXT_PASS(AnalyzeMinAlignStatic, stmt);
-  }
-  stmt = NEXT_PASS(MultiLastAxisReductions, stmt, is_dynamic);
-  stmt = NEXT_PASS(AutoReorder, stmt);
-  if (enable_multicore != 0) {
-    if (is_dynamic && enable_multicore == 1) {
-      Var block_dim = Variable::make(Int(32), "blockDim");
-      Array<NodeRef> multicore_res =
-        NEXT_PASS(InjectMultiCoreVar, stmt, block_dim, global_attrs.GetIntAttr(kMergeOuterLoop, 0));
-      CHECK_EQ(multicore_res.size(), 2);
-      stmt = ktvm::Downcast<Stmt>(multicore_res[0]);
-      auto extent_thread = ktvm::Downcast<Integer>(multicore_res[1]);
-      if (extent_thread.as<IntImm>()->value == -1) {
-        arg_list_0.push_back(block_dim);
-      }
+    if (!aicpu) {
+      stmt = NEXT_PASS(AutoPragma, stmt);
+    }
+    stmt = NEXT_PASS(EliminateAtomicDma, stmt);
+    if (global_attrs.GetBoolAttr(kDeadCodeElim, false)) {
+      stmt = NEXT_PASS(DeadCodeElim, stmt);
+    }
+    if (!is_dynamic) {
+      stmt = NEXT_PASS(RewriteBroadcastVector, stmt);
+      stmt = NEXT_PASS(OptimizePragma, stmt);
+    }
+    if (is_dynamic) {
+      stmt = NEXT_PASS(AnalyzeMinAlignDynamic, stmt, global_attrs.GetIntAttr(kEnableConvAnalyzeAlign, true),
+                       global_attrs.GetIntAttr(kEnableScalarAlign, false));
     } else {
-      int block_dim = enable_multicore == 1 ? -1 : enable_multicore;
-      stmt = NEXT_PASS(InjectMultiCore, stmt, block_dim, global_attrs.GetIntAttr(kMergeOuterLoop, 0), is_dynamic,
-                       global_attrs.GetBoolAttr(kMultiCoreScalarRerrange, false));
+      stmt = NEXT_PASS(AnalyzeMinAlignStatic, stmt);
     }
-  }
-  if (!is_dynamic) {
-    RecordCore(stmt, global_attrs.GetBoolAttr(kRecordCore, false));
-  }
-  stmt = NEXT_PASS(SelectLower, stmt);
-  stmt = NEXT_PASS(ReplaceFargmaxCasts, stmt);
-  if (global_attrs.GetBoolAttr(kEnableCoverProtectOptimize, true) && !is_dynamic) {
-    stmt = NEXT_PASS(GatherLoopInfo, stmt);
-  }
-  stmt = NEXT_PASS(CastFilter, stmt);
-  if (!is_dynamic) {
-    stmt = NEXT_PASS(SplitTail, stmt);
-  }
-  stmt = NEXT_PASS(EmitInsn, stmt, global_attrs.GetBoolAttr(kEnableBisectOptimize, true),
-                   global_attrs.GetBoolAttr(kEnableCoverProtectOptimize, true), binds_0, is_dynamic);
-  // must be after EmitInsn
-  stmt = NEXT_PASS(TileCoverCorrect, stmt);
-  if (global_attrs.GetBoolAttr(kEnableCoverProtectOptimize, true) && !is_dynamic) {
-    // simulated blocks > 2 400 000 => simulated case takes too much time (> 100 sec)
-    // number of protections > 512 => too many brackets in the if statement throw an error
-    stmt = NEXT_PASS(CoverProtection, stmt, 2400000, 512);
-  }
-  stmt = NEXT_PASS(ConvertDivModToShift, stmt);
-  if (!polyhedral || global_attrs.GetBoolAttr(kCoarsenImg2Col, false)) {
-    // for conv manual schedule and load3d
-    stmt = NEXT_PASS(CoarsenImg2Col, stmt);
-  }
-  stmt = NEXT_PASS(DTypeAdapter, stmt);
-  if (global_attrs.GetBoolAttr(kEnableHoistInsn, true)) {
-    stmt = NEXT_PASS(HoistInsn, stmt);
-  }
-  // temp disable InvariantHoist for dynamic shape because it may move LetStmt out of scope
-  if (global_attrs.GetBoolAttr(kEnableInvariantHoist, true)) {
-    stmt = NEXT_PASS(InvariantHoist, stmt);
-  }
-  stmt = NEXT_PASS(SetVectorMaskDefault, stmt);
-  stmt = NEXT_PASS(ElimVectorMask, stmt);
-  stmt = NEXT_PASS(ElimDMA, stmt);
-  if (!is_dynamic) {
-    stmt = NEXT_PASS(MultiCorePartition, stmt);
-  }
+    stmt = NEXT_PASS(MultiLastAxisReductions, stmt, is_dynamic);
+    stmt = NEXT_PASS(AutoReorder, stmt);
+    if (enable_multicore != 0) {
+      if (is_dynamic && enable_multicore == 1) {
+        Var block_dim = Variable::make(Int(32), "blockDim");
+        Array<NodeRef> multicore_res =
+          NEXT_PASS(InjectMultiCoreVar, stmt, block_dim, global_attrs.GetIntAttr(kMergeOuterLoop, 0));
+        CHECK_EQ(multicore_res.size(), 2);
+        stmt = ktvm::Downcast<Stmt>(multicore_res[0]);
+        auto extent_thread = ktvm::Downcast<Integer>(multicore_res[1]);
+        if (extent_thread.as<IntImm>()->value == -1) {
+          arg_list_0.push_back(block_dim);
+        }
+      } else {
+        int block_dim = enable_multicore == 1 ? -1 : enable_multicore;
+        stmt = NEXT_PASS(InjectMultiCore, stmt, block_dim, global_attrs.GetIntAttr(kMergeOuterLoop, 0), is_dynamic,
+                         global_attrs.GetBoolAttr(kMultiCoreScalarRerrange, false));
+      }
+    }
+    if (!is_dynamic) {
+      RecordCore(stmt, global_attrs.GetBoolAttr(kRecordCore, false));
+    }
+    stmt = NEXT_PASS(SelectLower, stmt);
+    stmt = NEXT_PASS(ReplaceFargmaxCasts, stmt);
+    if (global_attrs.GetBoolAttr(kEnableCoverProtectOptimize, true) && !is_dynamic) {
+      stmt = NEXT_PASS(GatherLoopInfo, stmt);
+    }
+    stmt = NEXT_PASS(CastFilter, stmt);
+    if (!is_dynamic) {
+      stmt = NEXT_PASS(SplitTail, stmt);
+    }
+    stmt = NEXT_PASS(EmitInsn, stmt, global_attrs.GetBoolAttr(kEnableBisectOptimize, true),
+                     global_attrs.GetBoolAttr(kEnableCoverProtectOptimize, true), binds_0, is_dynamic);
+    // must be after EmitInsn
+    stmt = NEXT_PASS(TileCoverCorrect, stmt);
+    if (global_attrs.GetBoolAttr(kEnableCoverProtectOptimize, true) && !is_dynamic) {
+      // simulated blocks > 2 400 000 => simulated case takes too much time (> 100 sec)
+      // number of protections > 512 => too many brackets in the if statement throw an error
+      stmt = NEXT_PASS(CoverProtection, stmt, 2400000, 512);
+    }
+    stmt = NEXT_PASS(ConvertDivModToShift, stmt);
+    if (!polyhedral || global_attrs.GetBoolAttr(kCoarsenImg2Col, false)) {
+      // for conv manual schedule and load3d
+      stmt = NEXT_PASS(CoarsenImg2Col, stmt);
+    }
+    stmt = NEXT_PASS(DTypeAdapter, stmt);
+    if (global_attrs.GetBoolAttr(kEnableHoistInsn, true)) {
+      stmt = NEXT_PASS(HoistInsn, stmt);
+    }
+    // temp disable InvariantHoist for dynamic shape because it may move LetStmt out of scope
+    if (global_attrs.GetBoolAttr(kEnableInvariantHoist, true)) {
+      stmt = NEXT_PASS(InvariantHoist, stmt);
+    }
+    stmt = NEXT_PASS(SetVectorMaskDefault, stmt);
+    stmt = NEXT_PASS(ElimVectorMask, stmt);
+    stmt = NEXT_PASS(ElimDMA, stmt);
+    if (!is_dynamic) {
+      stmt = NEXT_PASS(MultiCorePartition, stmt);
+    }
 
-  if (global_attrs.GetBoolAttr(kEnableDoubleBuffer, true)) {
-    stmt = NEXT_PASS(AutoDoubleBuffer, stmt);
-  }
-  stmt = NEXT_PASS(InjectAccessPtrMSG, stmt);
-  if (!aicpu) {
-    stmt = NEXT_PASS(InjectPipe, stmt);
-  }
-  stmt = NEXT_PASS(ModDivEliminate, stmt);
+    if (global_attrs.GetBoolAttr(kEnableDoubleBuffer, true)) {
+      stmt = NEXT_PASS(AutoDoubleBuffer, stmt);
+    }
+    stmt = NEXT_PASS(InjectAccessPtrMSG, stmt);
+    if (!aicpu) {
+      stmt = NEXT_PASS(InjectPipe, stmt);
+    }
+    stmt = NEXT_PASS(ModDivEliminate, stmt);
 
-  // Phase 2
-  if (!simple_mode && global_attrs.GetBoolAttr(kEnablePostPolyLoopPartition, true) && !is_dynamic) {
-    stmt = NEXT_PASS(LoopPartitionCCE, stmt, config->partition_const_loop, true, !polyhedral);
+    // Phase 2
+    if (!simple_mode && global_attrs.GetBoolAttr(kEnablePostPolyLoopPartition, true) && !is_dynamic) {
+      stmt = NEXT_PASS(LoopPartitionCCE, stmt, config->partition_const_loop, true, !polyhedral);
+    }
+    if (global_attrs.GetBoolAttr(kEnablePreStorageWriteSimplify, false)) {
+      stmt = NEXT_PASS(AlgebraSimplify, stmt);
+    }
+    std::string maxsat_filename = global_attrs.GetStringAttr(kMaxsatFile, std::string());
+    // attempt to optimize UB memory layout to reduce bank conflicts and pipeline conflicts
+    bool use_bc_opt = global_attrs.GetBoolAttr(kUseBcOpt, true);
+    // run MaxSAT solver for bank conflicts with no limits on model size or runtime
+    bool bc_no_limits = false;
+    // timeout for MaxSAT solver in seconds (int)
+    int maxsat_timeout = 4;
+    try {
+      stmt = NEXT_PASS(StorageRewriteCCE, stmt, maxsat_filename, use_bc_opt, bc_no_limits, maxsat_timeout);
+    } catch (MemoryAllocationException &e) {
+      if (enter_count >= max_enter_poly_times) {
+        CHECK(false) << e.what();
+      }
+      global_attrs.Set(kAllocBits, ktvm::make_const(Int(32), e.alloc_bits_ + e.need_bits_));
+      global_attrs.Set(kErrorScope, StringImm::make(e.scope_));
+      continue;
+    }
+    break;
   }
-  if (global_attrs.GetBoolAttr(kEnablePreStorageWriteSimplify, false)) {
-    stmt = NEXT_PASS(AlgebraSimplify, stmt);
-  }
-  std::string maxsat_filename = global_attrs.GetStringAttr(kMaxsatFile, std::string());
-  // attempt to optimize UB memory layout to reduce bank conflicts and pipeline conflicts
-  bool use_bc_opt = global_attrs.GetBoolAttr(kUseBcOpt, true);
-  // run MaxSAT solver for bank conflicts with no limits on model size or runtime
-  bool bc_no_limits = false;
-  // timeout for MaxSAT solver in seconds (int)
-  int maxsat_timeout = 4;
-  stmt = NEXT_PASS(StorageRewriteCCE, stmt, maxsat_filename, use_bc_opt, bc_no_limits, maxsat_timeout);
 
   if (!is_dynamic)
     stmt = NEXT_PASS(UnrollLoop, stmt, config->auto_unroll_max_step, config->auto_unroll_max_depth,
