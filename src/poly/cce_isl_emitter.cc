@@ -171,9 +171,20 @@ class HoistL0Write : public IRMutator {
       for (const auto &arg : op->args) {
         args.push_back(this->Mutate(arg));
       }
-      return Provide::make(op->func, op->value_index, op->value, args);
+      auto value = this->Mutate(op->value);
+      return Provide::make(op->func, op->value_index, value, args);
     }
     return IRMutator::Mutate_(op, s);
+  }
+  Expr Mutate_(const Call *op, const Expr &e) final {
+    if (mutate_write_) {
+      Array<Expr> args;
+      for (const auto &arg : op->args) {
+        args.push_back(this->Mutate(arg));
+      }
+      return Call::make(op->type, op->name, args, op->call_type, op->func, op->value_index);
+    }
+    return IRMutator::Mutate_(op, e);
   }
 
   bool found_{false};
