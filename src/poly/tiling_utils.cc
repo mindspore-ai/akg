@@ -29,6 +29,8 @@ void TileLogger::AppendLine(LogStage stage, const std::string &line) {
     analyze_tiling_space_stage_.emplace_back(line);
   } else if (stage == DO_TILING) {
     do_tiling_stage_.emplace_back(line);
+  } else if (stage == MICRO_TUNING) {
+    micro_tuning_strage_.emplace_back(line);
   } else {
     do_tuning_stage_.emplace_back(line);
   }
@@ -67,6 +69,11 @@ bool TileLogger::DumpLogFile() {
   of << "=========================" << std::endl;
   of << ">>>>>>>>>> Do tuning stage <<<<<<<<<<<<" << std::endl;
   for (const auto &line : do_tuning_stage_) {
+    of << line << std::endl;
+  }
+  of << "=========================" << std::endl;
+  of << ">>>>>>>>>> Micro tuning stage <<<<<<<<<<<<" << std::endl;
+  for (const auto &line : micro_tuning_strage_) {
     of << line << std::endl;
   }
   of << "=========================" << std::endl;

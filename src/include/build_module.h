@@ -18,11 +18,33 @@
 #define INCLUDE_AKG_BUILD_MODULE_H_
 
 #include <string>
+#include <exception>
 
 #include "codegen/util.h"
 
 namespace akg {
 extern AttrMap global_attrs;
+
+/*
+ * Custom exception used when memory allocation fails and triggers micro-tuning to try to recover from failure.
+ */
+class MemoryAllocationException : public std::exception {
+ public:
+  MemoryAllocationException(const std::string &scope, uint64_t need_bits, uint64_t alloc_bits)
+      : scope_(scope), need_bits_(need_bits), alloc_bits_(alloc_bits){};
+
+  const char *what() const throw() {
+    std::runtime_error re(("Allocation exceed bound of memory tag " + scope_ + ": need " + std::to_string(need_bits_) +
+                           " bits, total alloc " + std::to_string(alloc_bits_) + " bits.")
+                            .c_str());
+    return re.what();
+  }
+
+  std::string scope_{""};
+  uint64_t need_bits_{0};
+  uint64_t alloc_bits_{0};
+};
+
 NodeRef Lower(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeRef> &shape_vars, const std::string &name,
               const Map<Tensor, Buffer> &in_binds, const Map<std::string, NodeRef> &in_attrs, bool simple_mode,
               bool polyhedral, bool tuning, bool aicpu, const BuildConfig &config);

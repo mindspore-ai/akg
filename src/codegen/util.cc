@@ -98,7 +98,13 @@ int AttrMap::GetIntAttr(const std::string &attr_name, int dft_value) {
   const NodeRef &e = this->at(attr_name);
   return ir::GetInt32Const(Downcast<Expr>(e));
 }
-
+double AttrMap::GetFloatAttr(const std::string &attr_name, double dft_value) {
+  if (this->count(attr_name) == 0) {
+    return dft_value;
+  }
+  const NodeRef &e = this->at(attr_name);
+  return ir::GetFloatConst(Downcast<Expr>(e));
+}
 bool AttrMap::GetBoolAttr(const std::string &attr_name, bool dft_value) {
   int result = GetIntAttr(attr_name, static_cast<int>(dft_value));
   CHECK(result == 0 || result == 1) << "Bool attribute " << attr_name << " must be 0 or 1, but found "

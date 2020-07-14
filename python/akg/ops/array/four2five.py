@@ -116,8 +116,8 @@ def four2five_tiling_strategy_dynamic(tensor, input_format):
             strategy.append(ct_util.create_constraint_on_tensor(tensor, 16, ct_util.TileConstraint.FACTOR, 4)[0])
     return strategy
 
-@vc_util.check_input_type(akg.tvm.tensor.Tensor, str, str)
-def four2five(data, format_, dst_dtype='float16'):
+@vc_util.check_input_type(akg.tvm.tensor.Tensor, str, str, bool)
+def four2five(data, format_, dst_dtype='float16', need_custom_tiling=True):
     """
     Convert 4-dims "data" to 5-dims,the format of "data" is defined in "format_"
 
@@ -294,8 +294,9 @@ def four2five(data, format_, dst_dtype='float16'):
         dim_info, _ = four2five_set_dim_func(data, format_, dst_dtype)
         if dim_info != "":
             attrs["dim"] = dim_info
-        attrs["custom_tiling"] = four2five_tiling_strategy(output, format_, expansion)
-    else:
+        if need_custom_tiling:
+            attrs["custom_tiling"] = four2five_tiling_strategy(output, format_, expansion)
+    elif need_custom_tiling:
         attrs["custom_tiling"] = four2five_tiling_strategy_dynamic(output, format_)
 
     if is_dynamic:

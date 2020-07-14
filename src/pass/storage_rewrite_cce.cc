@@ -26,6 +26,7 @@
 #include <regex>
 
 #include "ir_pass.h"
+#include "build_module.h"
 #include "pass/ir_util.h"
 #include "emit_insn/insn_info.h"
 #include "pass/storage_rewrite_cce.h"
@@ -1146,8 +1147,7 @@ bool StoragePlanRewriterCCE::DoRewrite(const std::string scope, std::vector<std:
       }
       if (spec_level <= 0 || child_idx < 0) {
         if (!is_dynamic_) {
-          LOG(FATAL) << "Allocation exceed bound of memory tag " << scope << ": need " << need_nbits
-                     << " bits, total alloc " << total_alloc_bits << " bits";
+          throw MemoryAllocationException(scope, need_nbits, total_alloc_bits);
         } else {
           LOG(WARNING) << "Dynamic shape static allocation exceed bound of memory tag " << scope << ": need "
                        << need_nbits << " bits, will use dynamic allocation instead";

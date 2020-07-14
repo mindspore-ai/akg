@@ -16,11 +16,63 @@
  */
 
 #include "poly/tiling_solver.h"
-
+#include "build_module.h"
 namespace akg {
 namespace ir {
 namespace poly {
+
+/*
+ * This function parse StorageFlatten error info into a ratio that guides the auto tiling to reduce
+ * memory allocation.
+ * e.g.
+ *  error info : Check failed: const_size * op->type.bits() <= info->max_num_bits (5242880 vs. 2097152) :
+ *               Allocation exceed bound of memory tag local.UB.
+ *  ratio      : memory_size / alloc_size = (2097152 / 5242880) = 0.4, which means the total allocation
+ *               size used in auto tiling shoulde reduce 0.4 times.
+ */
+double TilingSolver::GetNewAllocRatioWhenFlattenFail(const std::string &error_info) {
+  std::vector<std::string> sub_strs;
+  sub_strs = akg::common::Split(error_info, "(");
+  CHECK_GE(sub_strs.size(), 2U);
+  std::string tmp_str = sub_strs[2];
+  sub_strs = akg::common::Split(tmp_str, " ");
+  CHECK(!sub_strs.empty());
+  auto alloc_bits = static_cast<double>(std::strtod(sub_strs[0].c_str(), nullptr));
+
+  sub_strs = akg::common::Split(error_info, ")");
+  CHECK_GE(sub_strs.size(), 1U);
+  tmp_str = sub_strs[1];
+  sub_strs = akg::common::Split(tmp_str, " ");
+  CHECK(!sub_strs.empty());
+  auto memory_bits = static_cast<double>(std::strtod(sub_strs.back().c_str(), nullptr));
+
+  CHECK_NE(alloc_bits, 0);
+  return memory_bits / alloc_bits;
+}
+
+/*
+ * This function returns an adjust ratio that further reduces the memory allocation limit apart from
+ * the default percentage reserved for auto double buffer and try to generate smaller tile sizes that
+ * helps to recover from memory allocation failure such as the one in storage rewrite cce pass.
+ */
+double TilingSolver::GetNewAllocRatioWhenRewriteFail(int64_t memory_bits) {
+  auto actual_allocs = global_attrs.GetFloatAttr(kAllocBits, 0.0);
+  auto last_adjust_ratio = global_attrs.GetFloatAttr(kUBRatio, 1.0);
+  auto adjust_ratio = 1.0;
+
+  if (actual_allocs != 0) {
+    std::stringstream ss;
+    auto expect_allocs = memory_bits * last_adjust_ratio;
+    adjust_ratio = (expect_allocs / actual_allocs);
+    ss << "Adjust memory allocation ratio to " << adjust_ratio << " times and retry tiling.";
+    global_attrs.Set(kUBRatio, ktvm::make_const(Float(32), adjust_ratio));
+    analyzer_.logger_.AppendLog(MICRO_TUNING, ss);
+  }
+  return adjust_ratio;
+}
+
 void TilingSolver::CollectMemoryLimit() {
+  // Init memory allocation percentage.
   percentage_ = ALLOCATION_PERCENTAGE;
   for (auto attr : analyzer_.RootAxis()->attrs) {
     if (attr.attr_key != "MEM_RATIO") continue;
@@ -29,9 +81,27 @@ void TilingSolver::CollectMemoryLimit() {
     break;
   }
 
+  // Handle previous error info if storage flatten fails and adjust allocation percentage.
+  auto error_info = global_attrs.GetStringAttr(kErrorInfo, "");
+  if (!error_info.empty() && error_info.find("storage_flatten") != std::string::npos) {
+    std::stringstream ss;
+    ss << "Get Error Info! -> " << global_attrs.GetStringAttr(kErrorInfo, "");
+    percentage_ = percentage_ * GetNewAllocRatioWhenFlattenFail(error_info);
+    ss << "Adjust memory allocation to " << percentage_ << " of memory size and retry tiling.";
+    global_attrs.Set(kErrorInfo, StringImm::make(""));
+    analyzer_.logger_.AppendLog(MICRO_TUNING, ss);
+  }
+
+  // Init memory limit for each scope and reduce ratio of local.UB if storage rewrite fails previously.
   DavinciInfo &d_info = DavinciInfo::GetInstance();
+  auto error_scope = global_attrs.GetStringAttr(kErrorScope, "");
   for (auto i = 0; i < MEM_SCOPE_BULK; ++i) {
     this->mem_limit_[i] = d_info.GetMemoryLimitInScope(i) * percentage_;
+    if (i == DavinciMemScope::MEM_SCOPE_UB && error_scope == "local.UB") {
+      this->mem_limit_[i] =
+        std::max(static_cast<int>(this->mem_limit_[i] * GetNewAllocRatioWhenRewriteFail(this->mem_limit_[i])), 1);
+      global_attrs.Set(kErrorScope, StringImm::make(""));
+    }
   }
 }
 
