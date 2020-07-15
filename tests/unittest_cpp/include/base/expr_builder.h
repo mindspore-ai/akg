@@ -26,18 +26,18 @@ class UTExprBuilder {
   UTExprBuilder() = default;
   ~UTExprBuilder() = default;
 
-  static ktvm::Array<ktvm::Expr> CreateShape(const std::vector<int32_t> &shapes);
-  static ktvm::Var CreateVar(const std::string &name);
-  static ktvm::Array<ktvm::Expr> CreateVars(const std::vector<std::string> &names);
-  static ktvm::Operation PlaceholderOpNode(
+  static air::Array<air::Expr> CreateShape(const std::vector<int32_t> &shapes);
+  static air::Var CreateVar(const std::string &name);
+  static air::Array<air::Expr> CreateVars(const std::vector<std::string> &names);
+  static air::Operation PlaceholderOpNode(
       const std::string &name,
       const std::vector<int32_t> &shapes,
-      ktvm::DataType dtype = ktvm::Float(16));
-  static ktvm::Expr TensorElement(
+      air::DataType dtype = air::Float(16));
+  static air::Expr TensorElement(
       const std::string &name,
       const std::vector<int32_t> &shapes,
       const std::vector<std::string> &axis_names,
-      ktvm::DataType dtype = ktvm::Float(16));
+      air::DataType dtype = air::Float(16));
 };  // UTExprBuilder
 
 class UTTensorElementHelper {
@@ -45,9 +45,9 @@ class UTTensorElementHelper {
   UTTensorElementHelper(const std::vector<int32_t> &shapes,
                         const std::string &axis_name_prefix = "ax");
   ~UTTensorElementHelper() = default;
-  ktvm::Expr Elem(const std::string &name,
+  air::Expr Elem(const std::string &name,
                   uint32_t dim,
-                  ktvm::DataType dtype = ktvm::Float(16)) const;
+                  air::DataType dtype = air::Float(16)) const;
 
  private:
   std::vector<int32_t> shapes_;

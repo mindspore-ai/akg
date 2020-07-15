@@ -62,15 +62,15 @@ class SimplifyMad : public IRMutator {
  * \tparam ValueType The value type
  */
 inline bool is_const_ad(const Expr &e) {
-  if (e.as<ktvm::ir::IntImm>()) {
+  if (e.as<air::ir::IntImm>()) {
     return true;
-  } else if (e.as<ktvm::ir::UIntImm>()) {
+  } else if (e.as<air::ir::UIntImm>()) {
     return true;
-  } else if (e.as<ktvm::ir::FloatImm>()) {
+  } else if (e.as<air::ir::FloatImm>()) {
     return true;
-  } else if (const auto c = e.as<ktvm::ir::Cast>()) {
+  } else if (const auto c = e.as<air::ir::Cast>()) {
     return is_const_ad(c->value);
-  } else if (const auto b = e.as<ktvm::ir::Broadcast>()) {
+  } else if (const auto b = e.as<air::ir::Broadcast>()) {
     return is_const_ad(b->value);
   } else {
     return false;

@@ -32,7 +32,7 @@ namespace ir {
 namespace poly {
 isl::space CreateParamsSpace(const isl::ctx &ctx);
 
-isl::space CreateParamsSpace(const isl::ctx &ctx, const std::unordered_map<std::string, ktvm::Var> &params);
+isl::space CreateParamsSpace(const isl::ctx &ctx, const std::unordered_map<std::string, air::Var> &params);
 
 isl::schedule MakeScheduleTree(const isl::space &param_space, isl::set paramSet, const Stmt &stmt, Scop &scop);
 

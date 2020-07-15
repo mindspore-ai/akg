@@ -355,7 +355,7 @@ class Scop {
   std::vector<int> GetIsolateVec(int range_idx);
   std::vector<Range> GetRange(int range_idx);
   std::string ConvOutName();
-  ktvm::DataType MadCastType();
+  air::DataType MadCastType();
   bool IsConvHeadTail(const std::string &conv_output, const isl::id &stmtId, const StmtOpInfo &op_info,
                       const StmtIdHashMap &op_write_map);
   bool IsA(const std::string &name) const;

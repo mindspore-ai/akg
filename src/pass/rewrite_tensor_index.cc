@@ -155,7 +155,7 @@ class RewriteTensorIdx : public IRMutator {
 
       for (const auto &i : rhs_tensor_idx_) {
         int idx = GetTensorIdx(i.first);
-        ne = ktvm::ir::substitute(i.first, Expr(idx), ne);
+        ne = air::ir::substitute(i.first, Expr(idx), ne);
         Expr call = Call::make(op->type, "rhs", {i.first, Expr(i.second), Expr(idx)}, Call::PureIntrinsic);
         idx_args.push_back(call);
       }
@@ -182,8 +182,8 @@ class RewriteTensorIdx : public IRMutator {
     return cache_idx_[op->func.get()];
   }
 
-  std::unordered_map<Expr, int, ktvm::NodeHash, ktvm::NodeEqual> lhs_tensor_idx_;
-  std::unordered_map<Expr, int, ktvm::NodeHash, ktvm::NodeEqual> rhs_tensor_idx_;
+  std::unordered_map<Expr, int, air::NodeHash, air::NodeEqual> lhs_tensor_idx_;
+  std::unordered_map<Expr, int, air::NodeHash, air::NodeEqual> rhs_tensor_idx_;
   std::unordered_map<const Node *, Type> realize_type_;
   Map<FunctionRef, Array<Expr>> max_extent_;
   // in args

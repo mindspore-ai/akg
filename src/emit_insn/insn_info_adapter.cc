@@ -24,8 +24,8 @@
 #include "insn_info.h"
 
 namespace akg {
-using ktvm::runtime::TVMArgs;
-using ktvm::runtime::TVMRetValue;
+using air::runtime::TVMArgs;
+using air::runtime::TVMRetValue;
 
 class TestInfoNode : public Node {
  public:
@@ -57,7 +57,7 @@ class TestInfoNode : public Node {
   static constexpr const char *_type_key = "TestInfo";
   TVM_DECLARE_NODE_TYPE_INFO(TestInfoNode, Node);
 
-  void VisitAttrs(ktvm::AttrVisitor *v) {
+  void VisitAttrs(air::AttrVisitor *v) {
     v->Visit("ifvar", &ifvar);
     v->Visit("ifop", &ifop);
     v->Visit("forvar", &forvar);
@@ -85,7 +85,7 @@ class TestInfoNode : public Node {
 class TestInfo : public NodeRef {
  public:
   TestInfo() = default;
-  explicit TestInfo(const ktvm::NodePtr<TestInfoNode> &n) : NodeRef(n), node_(n) {}
+  explicit TestInfo(const air::NodePtr<TestInfoNode> &n) : NodeRef(n), node_(n) {}
   ~TestInfo() = default;
 
   inline TestInfoNode *GetNode() const {
@@ -103,7 +103,7 @@ class TestInfo : public NodeRef {
     this->GetNode()->forop = for_info.ops_;
   }
 
-  ktvm::NodePtr<TestInfoNode> node_;
+  air::NodePtr<TestInfoNode> node_;
 };
 
 TVM_REGISTER_NODE_TYPE(TestInfoNode);

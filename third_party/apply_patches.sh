@@ -31,11 +31,11 @@ if [[ -n "$2" ]]; then
     BUILD_MODE=$2
 fi
 
-if [ -d ${BUILD_PATH}/ktvm ]; then
-    rm -rf ${BUILD_PATH}/ktvm
+if [ -d ${BUILD_PATH}/incubator-tvm ]; then
+    rm -rf ${BUILD_PATH}/incubator-tvm
 fi
-mkdir ${BUILD_PATH}/ktvm
-cp -rf ${THIRD_PARTY_PATH}/ktvm/* ${BUILD_PATH}/ktvm/
+mkdir ${BUILD_PATH}/incubator-tvm
+cp -rf ${THIRD_PARTY_PATH}/incubator-tvm/* ${BUILD_PATH}/incubator-tvm/
 
 check_dir_not_empty()
 {
@@ -76,14 +76,13 @@ apply_patch()
     fi
 }
 
-KTVM_PATH=${BUILD_PATH}/ktvm
-KTVM_PATCH_PATH=${THIRD_PARTY_PATH}/patch/ktvm
-check_dir_not_empty "${KTVM_PATH}"
-check_dir_not_empty "${KTVM_PATCH_PATH}"
+TVM_PATH=${BUILD_PATH}/incubator-tvm
+TVM_PATCH_PATH=${THIRD_PARTY_PATH}/patch/incubator-tvm
+check_dir_not_empty "${TVM_PATH}"
+check_dir_not_empty "${TVM_PATCH_PATH}"
 if [[ "${BUILD_MODE}" == "1" ]]; then
-    # apply patches on ktvm
-    cd ${KTVM_PATH}
-    apply_patch "${KTVM_PATCH_PATH}/ktvm.patch"
+    cd ${TVM_PATH}
+    apply_patch "${TVM_PATCH_PATH}/incubator-tvm.patch"
 fi
 
 cd ${PWD_PATH}

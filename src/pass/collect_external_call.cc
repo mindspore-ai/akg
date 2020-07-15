@@ -36,7 +36,7 @@ class ExternalCallCollector : public IRVisitor {
           break;
         }
       }
-      if (!dup) external_call_names_.push_back(ktvm::ir::StringImm::make(op->name));
+      if (!dup) external_call_names_.push_back(air::ir::StringImm::make(op->name));
     }
     IRVisitor::Visit_(op);
   }

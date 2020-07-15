@@ -65,15 +65,15 @@ Array<NodeRef> CastKernelParams(const Stmt &stmt, const Array<NodeRef> &arg_list
       } else {
         Var param_var = Variable::make(Int(64), var->name_hint + "_I64");
         let_stmts.emplace_back(
-          LetStmt::make(ktvm::Downcast<Var>(arg), Cast::make(var->type, param_var), Evaluate::make(0)));
+          LetStmt::make(air::Downcast<Var>(arg), Cast::make(var->type, param_var), Evaluate::make(0)));
         new_arg_list.push_back(param_var);
-        var_map[ktvm::Downcast<Var>(arg)] = Cast::make(var->type, param_var);
+        var_map[air::Downcast<Var>(arg)] = Cast::make(var->type, param_var);
       }
     } else {
       new_arg_list.push_back(arg);
     }
   }
-  Stmt new_stmt = ktvm::ir::MergeNest(let_stmts, body_stmt);
+  Stmt new_stmt = air::ir::MergeNest(let_stmts, body_stmt);
   ReplaceBinds(new_arg_list, var_map);
 
   Array<NodeRef> res;

@@ -74,7 +74,7 @@ class BypassActor : public IRMutator {
       callName = call->name;
       func = call->func;
 
-      ktvm::arith::Analyzer analyzer_;
+      air::arith::Analyzer analyzer_;
       for (size_t i = 0; i < call->args.size(); ++i) {
         offsets.push_back(analyzer_.Simplify(call->args[i] - op->args[i]));
       }
@@ -87,7 +87,7 @@ class BypassActor : public IRMutator {
     // replace offset
     if (doing_replace) {
       Array<Expr> args;
-      ktvm::arith::Analyzer analyzer_;
+      air::arith::Analyzer analyzer_;
       for (size_t i = 0; i < op->args.size(); ++i) {
         args.push_back(analyzer_.Simplify(offsets[i] + op->args[i]));
       }

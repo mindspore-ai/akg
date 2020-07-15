@@ -36,7 +36,7 @@ class SpecialValueRepPlan : public IRVisitor {
       CHECK_EQ(op->args.size(), 1);
       const Call *access_op = op->args[0].as<Call>();
       CHECK(access_op != nullptr);
-      CHECK(access_op->is_intrinsic(ktvm::ir::intrinsic::tvm_access_ptr));
+      CHECK(access_op->is_intrinsic(air::ir::intrinsic::tvm_access_ptr));
       auto it = offset_.find(access_op->args[1].as<Variable>());
       CHECK(it != offset_.end());
       replace_map_[op] = cast(op->type, it->second + access_op->args[2]);

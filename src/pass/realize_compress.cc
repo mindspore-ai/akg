@@ -428,10 +428,10 @@ class RealizeCompressor : public IRMutator {
   }
 
   std::unordered_set<const Node *> realize_;
-  std::unordered_map<FunctionRef, Array<Expr>, ktvm::NodeHash, ktvm::NodeEqual> realize_max_index_;
-  std::unordered_map<FunctionRef, std::vector<IndexType>, ktvm::NodeHash, ktvm::NodeEqual> index_type_;
-  std::unordered_map<FunctionRef, std::vector<std::map<int, int>>, ktvm::NodeHash, ktvm::NodeEqual> index_remap_;
-  std::unordered_map<FunctionRef, std::vector<std::vector<Range>>, ktvm::NodeHash, ktvm::NodeEqual> index_ranges_;
+  std::unordered_map<FunctionRef, Array<Expr>, air::NodeHash, air::NodeEqual> realize_max_index_;
+  std::unordered_map<FunctionRef, std::vector<IndexType>, air::NodeHash, air::NodeEqual> index_type_;
+  std::unordered_map<FunctionRef, std::vector<std::map<int, int>>, air::NodeHash, air::NodeEqual> index_remap_;
+  std::unordered_map<FunctionRef, std::vector<std::vector<Range>>, air::NodeHash, air::NodeEqual> index_ranges_;
   std::set<const Variable *> loop_vars_;
 };
 

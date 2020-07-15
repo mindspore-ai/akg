@@ -449,7 +449,7 @@ class DumpCVisitor : public IRVisitor {
       Visit(op->min);
     }
     out_ << "; " << op->loop_var << " < ";
-    Visit(ktvm::ir::Simplify(op->min + op->extent));
+    Visit(air::ir::Simplify(op->min + op->extent));
     out_ << "; ++" << op->loop_var << ") {" << std::endl;
 
     BeginScope();
@@ -533,7 +533,7 @@ class DumpCVisitor : public IRVisitor {
     out_ << op->type << " " << name;
     for (const auto &bound : op->bounds) {
       out_ << "[";
-      Visit(ktvm::ir::Simplify(bound->min + bound->extent));
+      Visit(air::ir::Simplify(bound->min + bound->extent));
       out_ << "]";
     }
     out_ << ";" << std::endl;
@@ -543,7 +543,7 @@ class DumpCVisitor : public IRVisitor {
     out_ << "Buffer " << name << "(" << '"' << name << '"' << ", "
          << "{ ";
     for (size_t dim = 0; dim < op->bounds.size(); dim++) {
-      out_ << ktvm::ir::Simplify(op->bounds[dim]->min + op->bounds[dim]->extent);
+      out_ << air::ir::Simplify(op->bounds[dim]->min + op->bounds[dim]->extent);
       if (dim < op->bounds.size() - 1) {
         out_ << ", ";
       }

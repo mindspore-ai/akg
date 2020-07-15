@@ -33,22 +33,22 @@
 #include "cce_params.h"
 #include "pass/expr_alg_simplify.h"
 
-namespace ktvm {
+namespace air {
 /// Check if two StmtStoreInfo are equal
 /// \param lhs    - Left arg
 /// \param rhs    - Right arg
 /// \return bool  - Whether they are equal or not
 bool Equal(const akg::StmtStoreInfo &lhs, const akg::StmtStoreInfo &rhs) { return lhs == rhs; }
-}  // namespace ktvm
+}  // namespace air
 
 namespace akg {
 TVM_REGISTER_NODE_TYPE(StmtStoreInfoNode);
 TVM_REGISTER_NODE_TYPE(VectorArgInfoNode);
 TVM_REGISTER_NODE_TYPE(ArgInfoNode);
 
-using ktvm::runtime::PackedFunc;
-using ktvm::runtime::TVMArgs;
-using ktvm::runtime::TVMRetValue;
+using air::runtime::PackedFunc;
+using air::runtime::TVMArgs;
+using air::runtime::TVMRetValue;
 
 IterVar CCE_AXIS_VAR = thread_axis(Range(), "cce");
 
@@ -218,7 +218,7 @@ void SortVarShapeAndStride(Array<Var> &vars, Array<Expr> &shapes, Array<Expr> &s
 std::string GetBufScope(const std::string &name) {
   std::map<std::string, std::string> mem_dict = {{"UB", SCOPE_UBUF}, {"L1", SCOPE_CBUF}, {"L0A", SCOPE_CA},
                                                  {"L0B", SCOPE_CB},  {"L0C", SCOPE_CC},  {"REG", SCOPE_REG}};
-  std::vector<std::string> split_list = ktvm::common::Split(name, '.');
+  std::vector<std::string> split_list = air::common::Split(name, '.');
   if (split_list.size() == 1) {
     split_list = akg::common::Split(name, "_local_");
   }
@@ -401,7 +401,7 @@ void GetStoreAndLoads(const Stmt &s, Array<NodeRef> &stores, Array<NodeRef> &loa
     *ret = TVMRetValue();
   });
 
-  static_cast<void>(ktvm::ir::IRTransform(s, PackedFunc{nullptr}, post_order, enable));
+  static_cast<void>(air::ir::IRTransform(s, PackedFunc{nullptr}, post_order, enable));
 
   // Get loads in store
   PackedFunc pre_order;
@@ -686,8 +686,8 @@ StmtInfoList GetComputationInfo(const Array<NodeRef> &stores, const StmtInfo &fo
     // expect is cleaned cur_vars = [cc7], and returned strides = [1]
     auto tmp_var_list = var_list;
     for (auto var : tmp_var_list) {
-      auto tmp_strides = ktvm::arith::DetectLinearEquation(index, {var});
-      if (tmp_strides.empty() || ktvm::arith::Analyzer().CanProve(tmp_strides[0] <= 0)) {
+      auto tmp_strides = air::arith::DetectLinearEquation(index, {var});
+      if (tmp_strides.empty() || air::arith::Analyzer().CanProve(tmp_strides[0] <= 0)) {
         size_t idx = 0;
         if (GetIndexOfElement(var_list, var, idx)) {
           var_list = RemoveItemAtIndex(var_list, idx);
@@ -740,11 +740,11 @@ StmtInfoList GetComputationInfo(const Array<NodeRef> &stores, const StmtInfo &fo
       // store is an array
       // order cur_vars
       // get stride of store index
-      Array<Expr> strides = ktvm::arith::DetectLinearEquation(index, cur_vars);
+      Array<Expr> strides = air::arith::DetectLinearEquation(index, cur_vars);
       // if cur_vars have non-linear vars, then clean the vars
       if (strides.empty()) {
         CleanNonLinearVarsInIndex(cur_vars, cur_shapes, index);
-        strides = ktvm::arith::DetectLinearEquation(index, cur_vars);
+        strides = air::arith::DetectLinearEquation(index, cur_vars);
       }
       // strides with complicate expr, then strides will be [], so the vars and shapes should be [] too
       if (strides.empty()) {
@@ -1347,7 +1347,7 @@ bool HasVars(const Expr &index, const Var &vec_var) {
 int GetVectorizedVarPosition(const Expr &index, Array<Var> &loop_vars) {
   int pos = -1;
   for (size_t i = 0; i < loop_vars.size(); i++) {
-    Array<Expr> coefs = ktvm::arith::DetectLinearEquation(index, {loop_vars[i]});
+    Array<Expr> coefs = air::arith::DetectLinearEquation(index, {loop_vars[i]});
     if (coefs.size() == 2) {
       if (coefs[0].as<IntImm>() && coefs[0].as<IntImm>()->value == 1) {
         pos = static_cast<int>(i);

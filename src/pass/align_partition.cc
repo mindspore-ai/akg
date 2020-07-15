@@ -251,7 +251,7 @@ class AlignPartition : public IRMutator {
       outer_var_ = nullptr;
       inner_var_ = nullptr;
 
-      return ktvm::ir::AppendStmts(new_stmt1, new_stmt2);
+      return air::ir::AppendStmts(new_stmt1, new_stmt2);
     } else if (inside_selector_for_) {
       if ((var == selector_.lhs_) || (var == selector_.rhs_)) {
         if (!outer_var_) {

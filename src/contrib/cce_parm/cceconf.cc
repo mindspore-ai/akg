@@ -26,8 +26,8 @@ using std::string;
 
 namespace akg {
 namespace cceconf {
-using ktvm::runtime::TVMArgs;
-using ktvm::runtime::TVMRetValue;
+using air::runtime::TVMArgs;
+using air::runtime::TVMRetValue;
 
 CceConf CceConf::instance = CceConf();
 

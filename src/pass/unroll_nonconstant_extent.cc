@@ -116,7 +116,7 @@ class NonConstantExtentUnroller : public IRMutator {
         std::vector<Stmt> inner_loops;
         for (int64_t i = min->value; i < min->value + extent->value; ++i) {
           replace_value = static_cast<int>(i);
-          auto ret = ktvm::ir::Substitute(op->body, {{Var{op->loop_var}, make_const(Int(32), replace_value)}});
+          auto ret = air::ir::Substitute(op->body, {{Var{op->loop_var}, make_const(Int(32), replace_value)}});
           ret = Simplify_cce(ret);
           inner_loops.push_back(ret);
         }

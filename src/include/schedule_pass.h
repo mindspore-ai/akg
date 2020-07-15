@@ -22,7 +22,7 @@
 
 namespace akg {
 namespace schedule {
-TVM_DLL void AutoInline(ktvm::Schedule sch);
+TVM_DLL void AutoInline(air::Schedule sch);
 }  // namespace schedule
 }  // namespace akg
 #endif  // INCLUDE_AKG_SCHEDULE_PASS_H_

@@ -328,7 +328,7 @@ void extract_op_info(const picojson::array &arr, std::unordered_map<std::string,
       op_name = strList[0];
       fusionOpName = "";
     }
-    const auto *topi_f = ktvm::runtime::Registry::Get(op_name);
+    const auto *topi_f = air::runtime::Registry::Get(op_name);
     CHECK(topi_f) << "Akg topi has no op: " << op_name;
     if (op_name == "InplaceAssign") {
       CHECK(output_tensor_labels.size() == 1 && final_op_inputs.size() == 3);

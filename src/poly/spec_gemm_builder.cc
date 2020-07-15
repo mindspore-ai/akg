@@ -62,7 +62,7 @@ Stmt Scop::ConstructPolyGemm(const Expr &mad_init_cond) {
   Array<NodeRef> res_poly = AutoPoly(res, gemm_binds, attrs, true, is_dynamic_);
   CHECK_GE(res_poly.size(), 1);
   PartitionSingle::free();
-  return ktvm::Downcast<Stmt>(res_poly[0]);
+  return air::Downcast<Stmt>(res_poly[0]);
 }
 
 void Scop::BuildConvGemmFeatureBand(Scop::Binds &new_bind) {

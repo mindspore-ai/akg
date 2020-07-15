@@ -54,7 +54,7 @@ class LoopEliminater : public IRMutator {
 
     auto f = stmt.as<For>();
     CHECK(f);
-    if (!ktvm::ir::StmtUseVar(f->body, f->loop_var)) {
+    if (!air::ir::StmtUseVar(f->body, f->loop_var)) {
       stmt = f->body;
     }
 
@@ -86,7 +86,7 @@ class LoopEliminater : public IRMutator {
         // all loop vars should not be used in then_case
         bool flag = true;
         for (auto &f : for_loop_vars_) {
-          flag = flag && !ktvm::ir::StmtUseVar(if_then_else->then_case, Downcast<Var>(f));
+          flag = flag && !air::ir::StmtUseVar(if_then_else->then_case, Downcast<Var>(f));
         }
 
         if (flag) {

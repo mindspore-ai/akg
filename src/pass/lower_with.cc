@@ -43,7 +43,7 @@ class CopyPropagation : public IRMutator {
   }
 
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
-    if (op->attr_key == ktvm::ir::attr::realize_scope && op->value.as<StringImm>()) {
+    if (op->attr_key == air::ir::attr::realize_scope && op->value.as<StringImm>()) {
       storage_scope_[op->node.get()] = op->value.as<StringImm>()->value;
     }
     if (op->attr_key == "pragma_emit_insn" && op->value.as<StringImm>() &&

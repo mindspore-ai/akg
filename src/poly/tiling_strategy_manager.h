@@ -180,7 +180,7 @@ class ConvStrategy : public TilingStrategy {
   std::string interested_attr_key = "CONV";
 
   std::unordered_map<std::string, Expr> conv_info_{};
-  ktvm::arith::Analyzer arith_ana_;
+  air::arith::Analyzer arith_ana_;
 
   void RestrainH(TileAxis *axis);
   void RestrainW(TileAxis *axis);

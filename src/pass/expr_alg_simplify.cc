@@ -25,7 +25,7 @@ struct VariableLess {
   bool operator()(const Variable *l, const Variable *r) const { return l < r; }
 };
 
-void TypeChecker(const ktvm::Expr &e, ktvm::DataType &outer_type, ktvm::DataType &highest_type, bool &is_cast_exists) {
+void TypeChecker(const air::Expr &e, air::DataType &outer_type, air::DataType &highest_type, bool &is_cast_exists) {
   PackedFunc pre_order_visit;
   bool is_first_cast_op = true;
   pre_order_visit = PackedFunc([&pre_order_visit, &is_first_cast_op, &highest_type, &outer_type, &is_cast_exists](
@@ -68,13 +68,13 @@ void TypeChecker(const ktvm::Expr &e, ktvm::DataType &outer_type, ktvm::DataType
   static_cast<void>(pre_order_visit(e));
 }
 
-Expr ExprSimplifier::Simplify(const ktvm::Expr &e) {
+Expr ExprSimplifier::Simplify(const air::Expr &e) {
   if (!e.type().is_int() && !e.type().is_uint()) {
     return e;
   }
   old_vars_ = GetVarsInExpr(e, false);
-  ktvm::DataType outer_type;
-  ktvm::DataType highest_type;
+  air::DataType outer_type;
+  air::DataType highest_type;
   bool is_cast_exists = false;
   TypeChecker(e, outer_type, highest_type, is_cast_exists);
   highest_cast_type_ = highest_type;
@@ -93,7 +93,7 @@ Expr ExprSimplifier::Simplify(const ktvm::Expr &e) {
   return is_cast_exists ? Cast::make(outer_type, ret) : ret;
 }
 
-Expr ExprSimplifier::Simplify(const ktvm::Expr &e, const vector<Expr> &conds) {
+Expr ExprSimplifier::Simplify(const air::Expr &e, const vector<Expr> &conds) {
   info_ = conds;
   return Simplify(e);
 }
@@ -223,22 +223,22 @@ int ExprSimplifier::VisitDivWithLcm(const Expr &expr) const {
     if (auto f_div = node.as<FloorDiv>()) {
       int denominator = f_div->b.as<IntImm>()->value;
       CHECK(denominator != 0) << "denominator is zero!";
-      gcd = gcd == 1 ? denominator : ktvm::ir::gcd(gcd, denominator);
+      gcd = gcd == 1 ? denominator : air::ir::gcd(gcd, denominator);
       lcm = lcm == 1 ? gcd : lcm * denominator / gcd;
     } else if (auto div = node.as<Div>()) {
       int denominator = div->b.as<IntImm>()->value;
       CHECK(denominator != 0) << "denominator is zero!";
-      gcd = gcd == 1 ? denominator : ktvm::ir::gcd(gcd, denominator);
+      gcd = gcd == 1 ? denominator : air::ir::gcd(gcd, denominator);
       lcm = lcm == 1 ? gcd : lcm * denominator / gcd;
     }
   });
   return lcm;
 }
 
-Expr ExprSimplifier::ReduceInequality(const ktvm::Expr &e, const Var &reduce_var, bool scale, bool get_larger) {
+Expr ExprSimplifier::ReduceInequality(const air::Expr &e, const Var &reduce_var, bool scale, bool get_larger) {
   old_vars_ = GetVarsInExpr(e, false);
-  ktvm::DataType outer_type;
-  ktvm::DataType highest_type;
+  air::DataType outer_type;
+  air::DataType highest_type;
   bool is_cast_exists = false;
   TypeChecker(e, outer_type, highest_type, is_cast_exists);
   highest_cast_type_ = highest_type;
@@ -482,7 +482,7 @@ vector<int64_t> ExprSimplifier::BisectSolver(Expr &e, Var &var, int64_t inf, int
   return ret;
 }
 
-bool ExprSimplifier::Equals(const ktvm::Expr &e1, const ktvm::Expr &e2) {
+bool ExprSimplifier::Equals(const air::Expr &e1, const air::Expr &e2) {
   auto pure_expr = Mutate(e1 - e2);
   ArithExprSimplifier simplifier;
   // is zero expr
@@ -490,8 +490,8 @@ bool ExprSimplifier::Equals(const ktvm::Expr &e1, const ktvm::Expr &e2) {
 }
 
 bool ExprSimplifier::CanProveWithParam(const Expr &e) {
-  if (ktvm::arith::Analyzer().CanProve(e)) return true;
-  if (ktvm::arith::Analyzer().CanProve(!e)) return false;
+  if (air::arith::Analyzer().CanProve(e)) return true;
+  if (air::arith::Analyzer().CanProve(!e)) return false;
   CHECK(e.as<LE>() || e.as<LT>() || e.as<GT>() || e.as<GE>() || e.as<EQ>()) << "Unsupported expr " << e;
 
   ArithExprSimplifier simplifier;
@@ -529,8 +529,8 @@ bool ExprSimplifier::CanProveWithParam(const Expr &e) {
 }
 
 bool ExprSimplifier::CanProveWithPosParam(const Expr &e) {
-  if (ktvm::arith::Analyzer().CanProve(e)) return true;
-  if (ktvm::arith::Analyzer().CanProve(!e)) return false;
+  if (air::arith::Analyzer().CanProve(e)) return true;
+  if (air::arith::Analyzer().CanProve(!e)) return false;
   CHECK(e.as<LE>() || e.as<LT>() || e.as<GT>() || e.as<GE>() || e.as<EQ>()) << "Unsupported expr " << e;
 
   ArithExprSimplifier simplifier;
@@ -643,7 +643,7 @@ bool ExprSimplifier::CanProveWithPosParam(const Expr &e) {
   }
 }
 
-bool ExprSimplifier::IsDivisible(const ktvm::Expr &e1, const ktvm::Expr &e2) {
+bool ExprSimplifier::IsDivisible(const air::Expr &e1, const air::Expr &e2) {
   if (!e2.as<IntImm>()) {
     LOG(FATAL) << "denominator should be integer.";
     return false;
@@ -653,7 +653,7 @@ bool ExprSimplifier::IsDivisible(const ktvm::Expr &e1, const ktvm::Expr &e2) {
   return simplifier.IsDivisible(pure_expr, e2);
 }
 
-Expr ExprSimplifier::Gcd(const ktvm::Expr &e1, const ktvm::Expr &e2) {
+Expr ExprSimplifier::Gcd(const air::Expr &e1, const air::Expr &e2) {
   auto pure_expr1 = Simplify(e1);
   auto pure_expr2 = Simplify(e2);
   old_vars_ = GetVarsInExpr(e1 + e2, false);
@@ -700,14 +700,14 @@ Expr ExprSimplifier::Retrieval(const Expr &e) {
   return expr;
 }
 
-Array<Expr> ExprSimplifier::GetPolynomial(const ktvm::Expr &e1, const ktvm::Expr &e2) {
+Array<Expr> ExprSimplifier::GetPolynomial(const air::Expr &e1, const air::Expr &e2) {
   Array<Expr> exprs;
   ArithExprSimplifier simplifier;
   exprs = simplifier.GetPolynomial(e1, e2);
   return exprs;
 }
 
-Expr ExprSimplifier::SimplifyWithInfo(const ktvm::Expr &e, const vector<Expr> &conds) const {
+Expr ExprSimplifier::SimplifyWithInfo(const air::Expr &e, const vector<Expr> &conds) const {
   if (auto min = e.as<Min>()) {
     Bound cmp_bound = InferVarBound((min->a - min->b), conds);
     if (GetSign(cmp_bound.max) == static_cast<int>(Sign::NEG) ||
@@ -737,7 +737,7 @@ Expr ExprSimplifier::SimplifyWithInfo(const ktvm::Expr &e, const vector<Expr> &c
 
 Expr ExprSimplifier::Mutate_(const Variable *op, const Expr &e) {
   if (!is_retrieval_) return e;
-  Var var = ktvm::Downcast<Var>(e);
+  Var var = air::Downcast<Var>(e);
 
   if (min_map_.count(op)) {
     auto kv = min_child_.find(var);
@@ -1346,21 +1346,21 @@ Expr ExprSimplifier::DivMutator::Mutate_(const Mul *op, const Expr &e) {
   return e;
 }
 
-Stmt TestReduceInequality(const ktvm::Expr &e, const Var &reduce_var, bool scale, bool getlarger) {
+Stmt TestReduceInequality(const air::Expr &e, const Var &reduce_var, bool scale, bool getlarger) {
   Expr result = ExprSimplifier().ReduceInequality(e, reduce_var, scale, getlarger);
   Stmt ret = Evaluate::make(0);
   ret = AttrStmt::make(make_const(Int(32), 0), "ReduceInequality", result, ret);
   return ret;
 }
 
-Stmt TestSimplify(const ktvm::Expr &e) {
+Stmt TestSimplify(const air::Expr &e) {
   Expr result = ExprSimplifier().Simplify(e);
   Stmt ret = Evaluate::make(0);
   ret = AttrStmt::make(make_const(Int(32), 0), "Simplify", result, ret);
   return ret;
 }
 
-Stmt TestCanProveWithPosParam(const ktvm::Expr &e) {
+Stmt TestCanProveWithPosParam(const air::Expr &e) {
   bool res = ExprSimplifier().CanProveWithPosParam(e);
   Stmt ret = Evaluate::make(0);
   ret = AttrStmt::make(make_const(Int(32), 0), "CanProveWithParam", res, ret);

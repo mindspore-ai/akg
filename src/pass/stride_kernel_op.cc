@@ -101,15 +101,15 @@ class SubstituteHW : public IRMutator {
           sv = vh->name_hint;
         }
         auto fh = FindMul(sv);
-        auto arg_h = ktvm::ir::CanonicalSimplify(c->args[H]);
+        auto arg_h = air::ir::CanonicalSimplify(c->args[H]);
         fh.Visit(arg_h);
 
         if (((!conv_backprop_filter_ && stride_bigger_than_kernel_) ||
              (conv_backprop_filter_ && is_const(stride_h_) && is_const(tile_kh_) &&
-              ktvm::arith::Analyzer().CanProve(stride_h_ > tile_kh_))) &&
+              air::arith::Analyzer().CanProve(stride_h_ > tile_kh_))) &&
             !Equal(var_h, 0) && fh.mul_) {
           Expr expr = GetRef<Expr>(fh.mul_);
-          args.push_back(ktvm::ir::substitute(expr, var_h, arg_h));
+          args.push_back(air::ir::substitute(expr, var_h, arg_h));
           h_iters_.insert(var_h.as<Variable>());
           mutate_refs_.insert(op->func);
         } else {
@@ -122,15 +122,15 @@ class SubstituteHW : public IRMutator {
           sw = vw->name_hint;
         }
         auto fw = FindMul(sw);
-        auto arg_w = ktvm::ir::CanonicalSimplify(c->args[W]);
+        auto arg_w = air::ir::CanonicalSimplify(c->args[W]);
         fw.Visit(arg_w);
 
         if (((!conv_backprop_filter_ && stride_bigger_than_kernel_) ||
              (conv_backprop_filter_ && is_const(stride_w_) && is_const(tile_kw_) &&
-              ktvm::arith::Analyzer().CanProve(stride_w_ > tile_kw_))) &&
+              air::arith::Analyzer().CanProve(stride_w_ > tile_kw_))) &&
             !Equal(var_w, 0) && fw.mul_) {
           Expr expr = GetRef<Expr>(fw.mul_);
-          args.push_back(ktvm::ir::substitute(expr, var_w, arg_w));
+          args.push_back(air::ir::substitute(expr, var_w, arg_w));
           w_iters_.insert(var_w.as<Variable>());
           mutate_refs_.insert(op->func);
         } else {
@@ -340,7 +340,7 @@ class StrideKernelOpAct : public IRMutator {
       } else {
         if (((!conv_backprop_filter_ && stride_bigger_than_kernel_) ||
              (conv_backprop_filter_ && is_const(stride_h_) && is_const(tile_kh_) &&
-              ktvm::arith::Analyzer().CanProve(stride_h_ > tile_kh_))) &&
+              air::arith::Analyzer().CanProve(stride_h_ > tile_kh_))) &&
             (!Equal(extent_h_, 0))) {
           bounds.push_back(Range::make_by_min_extent(op->bounds[H]->min, extent_h_));
           extent_h_ = 0;
@@ -349,7 +349,7 @@ class StrideKernelOpAct : public IRMutator {
         }
         if (((!conv_backprop_filter_ && stride_bigger_than_kernel_) ||
              (conv_backprop_filter_ && is_const(stride_w_) && is_const(tile_kw_) &&
-              ktvm::arith::Analyzer().CanProve(stride_w_ > tile_kw_))) &&
+              air::arith::Analyzer().CanProve(stride_w_ > tile_kw_))) &&
             (!Equal(extent_w_, 0))) {
           bounds.push_back(Range::make_by_min_extent(op->bounds[W]->min, extent_w_));
           extent_w_ = 0;
@@ -428,8 +428,8 @@ Stmt StrideKernelOp(Stmt stmt, const Map<Tensor, Buffer> &extern_buffer, bool is
       tile_kh = kernel_h;
     }
     if (is_const(stride_w) && is_const(tile_kw) && is_const(stride_h) && is_const(tile_kh) &&
-        ktvm::arith::Analyzer().CanProve(stride_w <= tile_kw) &&
-        ktvm::arith::Analyzer().CanProve(stride_h <= tile_kh)) {
+        air::arith::Analyzer().CanProve(stride_w <= tile_kw) &&
+        air::arith::Analyzer().CanProve(stride_h <= tile_kh)) {
       return stmt;
     }
     if (!conv_backprop_filter) {

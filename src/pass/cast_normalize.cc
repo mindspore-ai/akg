@@ -20,9 +20,9 @@
 
 namespace akg {
 namespace ir {
-class CastNormalizeMutator : public ktvm::ir::IRMutator {
+class CastNormalizeMutator : public air::ir::IRMutator {
  public:
-  Expr Execute(const Expr &e, const ktvm::DataType castType) {
+  Expr Execute(const Expr &e, const air::DataType castType) {
     castType_ = castType;
     return Mutate(e);
   }
@@ -43,10 +43,10 @@ class CastNormalizeMutator : public ktvm::ir::IRMutator {
   Expr Mutate_(const Variable *op, const Expr &e) final { return Cast::make(castType_, e); }
 
  private:
-  ktvm::DataType castType_;
+  air::DataType castType_;
 };
 
-Expr CastNormalize(const Expr &expr, const ktvm::DataType castType) {
+Expr CastNormalize(const Expr &expr, const air::DataType castType) {
   return CastNormalizeMutator().Execute(expr, castType);
 }
 }  // namespace ir

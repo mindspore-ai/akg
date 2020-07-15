@@ -27,7 +27,7 @@ namespace ir {
 class ExprMutator;
 
 struct InstructionPattern {
-  std::function<int(Expr, const std::unordered_map<Expr, int, ktvm::NodeHash, ktvm::NodeEqual> &)>
+  std::function<int(Expr, const std::unordered_map<Expr, int, air::NodeHash, air::NodeEqual> &)>
     score_func;                                           // assign score to a subtree
   std::function<Expr(Expr, ExprMutator &)> replace_func;  // replace a subtree with this instruction
 };
@@ -36,7 +36,7 @@ struct InstructionPattern {
 class ExprMutator : public IRMutator {
  public:
   ExprMutator(const std::vector<InstructionPattern> &ins_pattern,
-              const std::unordered_map<Expr, int, ktvm::NodeHash, ktvm::NodeEqual> &choice_map)
+              const std::unordered_map<Expr, int, air::NodeHash, air::NodeEqual> &choice_map)
       : ins_pattern_(ins_pattern), choice_map_(choice_map) {}
   ~ExprMutator() override = default;
 
@@ -65,7 +65,7 @@ class ExprMutator : public IRMutator {
   }
 
   const std::vector<InstructionPattern> &ins_pattern_;
-  const std::unordered_map<Expr, int, ktvm::NodeHash, ktvm::NodeEqual> &choice_map_;
+  const std::unordered_map<Expr, int, air::NodeHash, air::NodeEqual> &choice_map_;
 
   std::vector<Expr> expr_stack_;
 };
@@ -96,8 +96,8 @@ class InstructionSelector : public IRVisitor {
     choice_map_[expr] = max_i;
   }
 
-  std::unordered_map<Expr, int, ktvm::NodeHash, ktvm::NodeEqual> score_map_;
-  std::unordered_map<Expr, int, ktvm::NodeHash, ktvm::NodeEqual> choice_map_;
+  std::unordered_map<Expr, int, air::NodeHash, air::NodeEqual> score_map_;
+  std::unordered_map<Expr, int, air::NodeHash, air::NodeEqual> choice_map_;
 
  private:
   const std::vector<InstructionPattern> &ins_patterns_;
@@ -138,7 +138,7 @@ class StmtMutator : public IRMutator {
   Stmt Mutate_(const For *op, const Stmt &s) final { return IRMutator::Mutate_(op, s); }
 
  private:
-  std::unordered_map<FunctionRef, const AttrStmt *, ktvm::NodeHash, ktvm::NodeEqual> attr_node_;
+  std::unordered_map<FunctionRef, const AttrStmt *, air::NodeHash, air::NodeEqual> attr_node_;
   const std::vector<InstructionPattern> &ins_patterns_;
 };
 
@@ -150,8 +150,8 @@ Expr GetArg(const Call *op, size_t idx) {
 }
 
 Stmt ExprPatternRewrite(Stmt stmt) {
-  std::vector<ktvm::arith::PVar<Expr>> pvars(3);
-  ktvm::arith::PVar<Expr> &x = pvars[0];
+  std::vector<air::arith::PVar<Expr>> pvars(3);
+  air::arith::PVar<Expr> &x = pvars[0];
   const int NORMAL = 2;
   const int UNMATCH = -1;
 
@@ -159,7 +159,7 @@ Stmt ExprPatternRewrite(Stmt stmt) {
     // reshape(a[i]) --> a[i]
     // transpose(a[i]) --> a[i]
     InstructionPattern{
-      [&x](const Expr &expr, const std::unordered_map<Expr, int, ktvm::NodeHash, ktvm::NodeEqual> &score_map) -> int {
+      [&x](const Expr &expr, const std::unordered_map<Expr, int, air::NodeHash, air::NodeEqual> &score_map) -> int {
         if (const auto op = expr.as<Call>()) {
           if (call_reshape(x).Match(GetArg(op, 0)) || call_transpose(x).Match(GetArg(op, 0))) {
             return NORMAL;
@@ -180,7 +180,7 @@ Stmt ExprPatternRewrite(Stmt stmt) {
 
     // mad(a, b) --> a + b
     InstructionPattern{
-      [](const Expr &expr, const std::unordered_map<Expr, int, ktvm::NodeHash, ktvm::NodeEqual> &score_map) -> int {
+      [](const Expr &expr, const std::unordered_map<Expr, int, air::NodeHash, air::NodeEqual> &score_map) -> int {
         if (const auto op = expr.as<Call>()) {
           if (op->name == "mad") {
             return NORMAL;

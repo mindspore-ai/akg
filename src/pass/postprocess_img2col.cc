@@ -147,7 +147,7 @@ class PostFusionLoad3d : public IRMutator {
     if (op->attr_key == "buffer_bind_scope") {
       Stmt body = Mutate(op->body);
       const Call *tuple = op->value.as<Call>();
-      CHECK(tuple && tuple->is_intrinsic(ktvm::ir::intrinsic::tvm_tuple));
+      CHECK(tuple && tuple->is_intrinsic(air::ir::intrinsic::tvm_tuple));
       Array<Expr> new_args;
       for (auto item : tuple->args) {
         if (item.as<Variable>() && item.as<Variable>()->name_hint != mo_name_) {

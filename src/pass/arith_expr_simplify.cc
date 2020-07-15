@@ -480,7 +480,7 @@ Expr ArithExprSimplifier::Gcd(const Expr &e1, const Expr &e2) {
   if (e1.as<IntImm>() && e1.as<IntImm>()->value == 1) return e1;
   if (e2.as<IntImm>() && e2.as<IntImm>()->value == 1) return e2;
   if (e1.as<IntImm>() && e2.as<IntImm>()) {
-    auto gcd = ktvm::ir::gcd(e1.as<IntImm>()->value, e2.as<IntImm>()->value);
+    auto gcd = air::ir::gcd(e1.as<IntImm>()->value, e2.as<IntImm>()->value);
     return Expr(gcd);
   }
 

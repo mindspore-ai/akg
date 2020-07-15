@@ -1551,14 +1551,14 @@ class FixOpAfterReduce : public IRMutator {
     if (fix_ && !op_after_reduce_flag_[count_ - 1]) {
       fix_stmt_ = TensorSubstitute2(fix_stmt_, op->func->func_name(), op->func, op->value_index);
       auto attr = op->body.as<AttrStmt>();
-      if (!(attr && attr->attr_key == ktvm::ir::attr::realize_scope)) {
+      if (!(attr && attr->attr_key == air::ir::attr::realize_scope)) {
         fix_ = false;
         auto stmt = fix_stmt_;
         for (auto a : missing_realize) {
           for (auto b : realizes) {
             if (b->func == a->func) {
               stmt = Realize::make(b->func, b->value_index, b->type, b->bounds, b->condition, stmt);
-              stmt = AttrStmt::make(b->func, ktvm::ir::attr::realize_scope, Expr("local.UB"), stmt);
+              stmt = AttrStmt::make(b->func, air::ir::attr::realize_scope, Expr("local.UB"), stmt);
             }
           }
         }

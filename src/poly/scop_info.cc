@@ -49,7 +49,7 @@ Expr Scop::ExtractExprFromAttrs(const std::string &name) const {
       auto provide = static_cast<const Provide *>(stmt_node);
       if (const auto cop = provide->func.as<ComputeOpNode>()) {
         if (cop->attrs.count(name) != 0) {
-          return ktvm::Downcast<Expr>(cop->attrs.at(name));
+          return air::Downcast<Expr>(cop->attrs.at(name));
         }
       }
     }
@@ -463,7 +463,7 @@ std::string Scop::ConvOutName() {
   return "";
 }
 
-ktvm::DataType Scop::MadCastType() {
+air::DataType Scop::MadCastType() {
   for (auto stmt : data_.stmt_op_Info) {
     if (stmt.second.isCube) {
       return stmt.second.MadType_;
@@ -533,9 +533,9 @@ void Scop::ParseCustomTilingAttr(const Map<std::string, NodeRef> &attrs, const s
   CHECK(attr_to_set != nullptr);
   if (attrs.count(attr_name) == 0) return;
   const NodeRef &e = attrs.at(attr_name);
-  Array<NodeRef> array = ktvm::runtime::Downcast<Array<NodeRef>>(e);
+  Array<NodeRef> array = air::runtime::Downcast<Array<NodeRef>>(e);
   for (auto d : array) {
-    if (d.as<ktvm::CustomTilingNode>()) {
+    if (d.as<air::CustomTilingNode>()) {
       attr_to_set->emplace_back(d);
     } else {
       LOG(FATAL) << "Failed to parse attribute: " << attr_name << " = " << e << " as CustomTilingNode";
@@ -548,9 +548,9 @@ void Scop::ParseDynamicShapeAttr(const Map<std::string, NodeRef> &attrs, const s
   CHECK(attr_to_set != nullptr);
   if (attrs.count(attr_name) == 0) return;
   const NodeRef &e = attrs.at(attr_name);
-  Array<NodeRef> array = ktvm::runtime::Downcast<Array<NodeRef>>(e);
+  Array<NodeRef> array = air::runtime::Downcast<Array<NodeRef>>(e);
   for (auto d : array) {
-    if (d.as<ktvm::DynamicShapeNode>()) {
+    if (d.as<air::DynamicShapeNode>()) {
       attr_to_set->emplace_back(d);
     } else {
       LOG(FATAL) << "Failed to parse attribute: " << attr_name << " = " << e << " as DynamicShapeNode";
@@ -874,17 +874,17 @@ void Scop::MergeTilingInfo(Tiles &tiling_infos) {
 
 void Scop::GetParams() {
   auto FloorDivToDiv = [](Expr expr) -> Expr {
-    if (const auto add = expr.as<ktvm::ir::Add>()) {
+    if (const auto add = expr.as<air::ir::Add>()) {
       // case 1: floordiv(a, b) + 1 ==> (a + b) / b
       if (const auto imm = add->b.as<IntImm>()) {
         if (imm->value == 1) {
-          if (const auto fd = add->a.as<ktvm::ir::FloorDiv>()) {
+          if (const auto fd = add->a.as<air::ir::FloorDiv>()) {
             if (const auto denominator = fd->b.as<IntImm>()) {
               if (denominator->value == 2) {
-                return CanonicalSimplify(ktvm::ir::Div::make((fd->a + fd->b), fd->b));
+                return CanonicalSimplify(air::ir::Div::make((fd->a + fd->b), fd->b));
               }
             }
-            return ktvm::ir::Div::make(CanonicalSimplify(fd->a), fd->b) + 1;
+            return air::ir::Div::make(CanonicalSimplify(fd->a), fd->b) + 1;
           }
         }
       }
@@ -934,7 +934,7 @@ std::pair<std::string, std::string> ExprToString(const Expr &expr) {
 
 void Scop::RegisterParam(const Expr &expr) {
   if (is_const(expr)) return;
-  if (auto op = expr.as<ktvm::ir::Mul>()) {
+  if (auto op = expr.as<air::ir::Mul>()) {
     if (is_const(op->a)) {
       RegisterParam(op->b);
       return;
@@ -943,15 +943,15 @@ void Scop::RegisterParam(const Expr &expr) {
       RegisterParam(op->a);
       return;
     }
-  } else if (auto op = expr.as<ktvm::ir::Add>()) {
+  } else if (auto op = expr.as<air::ir::Add>()) {
     RegisterParam(op->a);
     RegisterParam(op->b);
     return;
-  } else if (auto op = expr.as<ktvm::ir::Sub>()) {
+  } else if (auto op = expr.as<air::ir::Sub>()) {
     RegisterParam(op->a);
     RegisterParam(op->b);
     return;
-  } else if (auto op = expr.as<ktvm::ir::FloorDiv>()) {
+  } else if (auto op = expr.as<air::ir::FloorDiv>()) {
     RegisterParam(op->a);
     RegisterParam(op->b);
     return;

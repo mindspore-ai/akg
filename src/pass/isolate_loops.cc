@@ -279,9 +279,9 @@ class IsolateMinMaxLoopsMutator : public IRMutator {
       if (auto op = node.as<For>()) {
         auto FindMinMax = [&constraints](const NodeRef &expr) {
           if (auto min_op = expr.as<Min>()) {
-            constraints.emplace_back(make_pair(min_op->a <= min_op->b, ktvm::Downcast<Expr>(expr)));
+            constraints.emplace_back(make_pair(min_op->a <= min_op->b, air::Downcast<Expr>(expr)));
           } else if (auto max_op = expr.as<Max>()) {
-            constraints.emplace_back(make_pair(max_op->a >= max_op->b, ktvm::Downcast<Expr>(expr)));
+            constraints.emplace_back(make_pair(max_op->a >= max_op->b, air::Downcast<Expr>(expr)));
           }
         };
         PostOrderVisit(op->min, FindMinMax);

@@ -62,7 +62,7 @@ class StorageOffsetApply : public IRMutator {
 Stmt LowerStorageAccessInfoCCE(Stmt stmt) {
   StorageOffsetFinder finder;
   finder.Visit(stmt);
-  stmt = ktvm::ir::LowerStorageAccessInfo(stmt);
+  stmt = air::ir::LowerStorageAccessInfo(stmt);
   return StorageOffsetApply(finder.offset_).Mutate(stmt);
 }
 }  // namespace ir

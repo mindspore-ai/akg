@@ -186,7 +186,7 @@ Stmt SingleVecEmitter(const Stmt &op, std::string intrin_name, bool broadcast_la
         store = Store::make(e->buffer_var, e->value, e->index, e->predicate);
       }
     };
-    ktvm::ir::PostOrderVisit(op, ScanStore);
+    air::ir::PostOrderVisit(op, ScanStore);
     store = EmitSetVecMaskIntrin(store, dst_info_list[0]->dtype_);
     insn_list = {store};
   }
@@ -387,7 +387,7 @@ Stmt BinaryNmsEmitter(const Stmt &op) {
     VarExpr loop_var = VarExpr("i");
     result = EmitIou(loop_var, true, boxnum, src, src, buffer_list[2], buffer_list[0], buffer_list[1]);
     result = InsertBody(result, EmitCor(loop_var, thre, dst, buffer_list[0], buffer_list[2]));
-    result = For::make(loop_var, 0, boxnum / BOX_PER_INSN, ForType::Serial, ktvm::ir::DeviceAPI::None, result);
+    result = For::make(loop_var, 0, boxnum / BOX_PER_INSN, ForType::Serial, air::ir::DeviceAPI::None, result);
   } else {
     result = EmitIou(Expr(0), true, boxnum, src, src, buffer_list[2], buffer_list[0], buffer_list[1]);
     result = InsertBody(result, EmitCor(Expr(0), thre, dst, buffer_list[0], buffer_list[2]));
@@ -435,7 +435,7 @@ Stmt BinaryIouEmitter(const Stmt &op) {
   if (boxnum0 / BOX_PER_INSN > 1) {
     VarExpr loop_var = VarExpr("i");
     stmt = EmitIou(loop_var, false, boxnum1, src0, src1, dst, BufferA, BufferB);
-    stmt = For::make(loop_var, Expr(0), boxnum0 / BOX_PER_INSN, ForType::Serial, ktvm::ir::DeviceAPI::None, stmt);
+    stmt = For::make(loop_var, Expr(0), boxnum0 / BOX_PER_INSN, ForType::Serial, air::ir::DeviceAPI::None, stmt);
   } else {
     stmt = EmitIou(Expr(0), false, boxnum1, src0, src1, dst, BufferA, BufferB);
   }
@@ -572,7 +572,7 @@ Stmt MutableMaskEmitter(const Stmt &op) {
 
   // select((cc3 < cc0), 0.000000h, tri_matrix_0_local__ub[cc3]) is upper matrix
   // select((cc0 < cc3), 0.000000h, tri_matrix_0_local__ub[cc3]) is lower matrix
-  bool lower = ktvm::ir::Equal(condition.as<LT>()->b, elim_var);
+  bool lower = air::ir::Equal(condition.as<LT>()->b, elim_var);
   CleanForInfoVars(for_info, {elim_var});
   auto loop_var = lower ? condition.as<LT>()->a : condition.as<LT>()->b;
 
@@ -1275,14 +1275,14 @@ Stmt MadEmitter(const Stmt &op) {
         loop_vars.erase(st.as<For>()->loop_var.get());
       }
     });
-  ktvm::runtime::PackedFunc _PreOrder = ktvm::runtime::PackedFunc([&loop_vars](const TVMArgs &args, TVMRetValue *ret) {
+  air::runtime::PackedFunc _PreOrder = air::runtime::PackedFunc([&loop_vars](const TVMArgs &args, TVMRetValue *ret) {
     Stmt st = args[0];
     if (st.as<For>()) {
       loop_vars.insert(st.as<For>()->loop_var.get());
     }
   });
   Array<Expr> only_enable = {Expr("AttrStmt"), Expr("IfThenElse"), Expr("Store"), Expr("For")};
-  static_cast<void>(ktvm::ir::IRTransform(op, _PreOrder, _PostOrder, only_enable));
+  static_cast<void>(air::ir::IRTransform(op, _PreOrder, _PostOrder, only_enable));
 
   // wgt shape
   const int k_wgt_lanes = WGT_ELEM_BYTES * 8 / WGT_WIDTH;
@@ -1307,8 +1307,8 @@ Stmt MadEmitter(const Stmt &op) {
     inp_shape = {truncdiv(m[0], BLOCK_IN), truncdiv(k[0], BLOCK_REDUCE), BLOCK_IN, BLOCK_REDUCE};
     CHECK(GetIntConst(inp_shape[2] * inp_shape[3]) == k_inp_lanes);
   }
-  CHECK(ktvm::ir::Equal(inp_shape[1], wgt_shape[0]));
-  CHECK(ktvm::ir::Equal(inp_shape[3], wgt_shape[3]));
+  CHECK(air::ir::Equal(inp_shape[1], wgt_shape[0]));
+  CHECK(air::ir::Equal(inp_shape[3], wgt_shape[3]));
 
   // out shape
   const int k_out_lanes = OUT_ELEM_BYTES * 8 / OUT_WIDTH;
@@ -1324,8 +1324,8 @@ Stmt MadEmitter(const Stmt &op) {
     out_shape = {truncdiv(n[0], BLOCK_OUT), truncdiv(m[0], BLOCK_IN), BLOCK_IN, BLOCK_OUT};
     CHECK(GetIntConst(out_shape[2] * out_shape[3]) == k_out_lanes);
   }
-  CHECK(ktvm::ir::Equal(out_shape[0], wgt_shape[1]));
-  CHECK(ktvm::ir::Equal(out_shape[1], inp_shape[0]));
+  CHECK(air::ir::Equal(out_shape[0], wgt_shape[1]));
+  CHECK(air::ir::Equal(out_shape[1], inp_shape[0]));
   Buffer dwgt = BufferNode::make(src[2]->data, Float(WGT_WIDTH), wgt_shape, {}, Expr(0), src[2]->name, SCOPE_CB,
                                  k_wgt_lanes, k_wgt_lanes, BufferType::kDefault);
   Buffer dinp = BufferNode::make(src[1]->data, Float(INP_WIDTH), inp_shape, {}, Expr(0), src[1]->name, SCOPE_CA,
@@ -1627,7 +1627,7 @@ Stmt Im2ColEmitter(const Stmt &op, const std::unordered_map<std::string, ObjectR
   CommentManager::GetInstance().AddComment("Insn_name", intrin_name);
   CommentManager::GetInstance().AddComment("Insn_type", "dma");
 
-  return For::make(idx3d_loop, Expr(0), dst_jmp_offset, ForType::Serial, ktvm::ir::DeviceAPI::None, body);
+  return For::make(idx3d_loop, Expr(0), dst_jmp_offset, ForType::Serial, air::ir::DeviceAPI::None, body);
 }
 
 /// Function to emit argmax/argmin intrin
@@ -1713,7 +1713,7 @@ Stmt VaxpyEmitter(const Stmt &op) {
   CommentManager::GetInstance().AddComment("Insn_name", "vaxpy");
   CommentManager::GetInstance().AddComment("Insn_type", "single_vector");
 
-  return ktvm::ir::IRTransform(stmt, ktvm::runtime::PackedFunc{nullptr}, ReplaceIns, {StringImm::make("Call")});
+  return air::ir::IRTransform(stmt, air::runtime::PackedFunc{nullptr}, ReplaceIns, {StringImm::make("Call")});
 }
 
 /// Function to emit vnchwconv intrin
@@ -1793,7 +1793,7 @@ Stmt VnchwconvEmitter(const Stmt &op) {
                                 {Call::make(UInt(64), "reg", {addr}, Call::Extern), index_list[i]}, Call::Extern)));
   }
 
-  result = For::make(buffer_idx, Expr(0), buffer_size, ForType::Serial, ktvm::ir::DeviceAPI::None, assign_value_stmt);
+  result = For::make(buffer_idx, Expr(0), buffer_size, ForType::Serial, air::ir::DeviceAPI::None, assign_value_stmt);
 
   Array<Expr> args;
   for (size_t i = 0; i < addr_buffer_list.size(); ++i) {
@@ -1812,7 +1812,7 @@ Stmt VnchwconvEmitter(const Stmt &op) {
       addr_buffer_list[i]->data, STORAGE_SCOPE, Expr(SCOPE_REG),
       Allocate::make(addr_buffer_list[i]->data, addr_buffer_list[i]->dtype, {buffer_size}, const_true(), result));
   }
-  result = For::make(c_idx, Expr(0), Expr(c1), ForType::Serial, ktvm::ir::DeviceAPI::None, result);
+  result = For::make(c_idx, Expr(0), Expr(c1), ForType::Serial, air::ir::DeviceAPI::None, result);
 
   CommentManager::GetInstance().AddComment("Insn_name", "vnchwconv");
   CommentManager::GetInstance().AddComment("Insn_type", "scatter");

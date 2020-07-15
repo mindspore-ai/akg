@@ -15,7 +15,7 @@
  */
 #ifndef POLY_DYNAMIC_SHAPE_H
 #define POLY_DYNAMIC_SHAPE_H
-namespace ktvm {
+namespace air {
 /*!
  * \brief Dynamic shape node
  *  Users can set attributes for dynamic shape
@@ -52,7 +52,7 @@ class DynamicShape : public NodeRef {
 };
 
 TVM_REGISTER_NODE_TYPE(DynamicShapeNode);
-}  // namespace ktvm
+}  // namespace air
 
 const int default_kernel_h = 3;
 const int default_kernel_w = 3;

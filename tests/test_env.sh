@@ -22,12 +22,14 @@ usage()
     echo "       use amd64   if compiled with -DUSE_CCE_RT in amd64 env"
     echo "       use camodel if compiled with -DUSE_CCE_RT_SIM"
     echo "       use kc_air  if compiled with -DUSE_KC_AIR"
+    echo "       use gpu if compiled with -DUSE_CUDA"
 }
 
 CUR_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 MS_DIR="${CUR_DIR}/.."
 AD_BUILD_DIR="${MS_DIR}/build"
-TVM_ROOT="${AD_BUILD_DIR}/ktvm"
+TVM_ROOT="${AD_BUILD_DIR}/incubator-tvm"
+
 
 export LD_LIBRARY_PATH=${AD_BUILD_DIR}:${LD_LIBRARY_PATH}
 export PYTHONPATH=${TVM_ROOT}/python:${TVM_ROOT}/topi:${TVM_ROOT}/topi/python:${MS_DIR}/tests/common:${MS_DIR}/python:${MS_DIR}/tests/fuzz/tune:${PYTHONPATH}
@@ -54,6 +56,9 @@ if [ $# -eq 1 ]; then
             if [ -d ${AD_BUILD_DIR}/aarch64 ]; then
                 export LD_LIBRARY_PATH=${AD_BUILD_DIR}/aarch64:${LD_LIBRARY_PATH}
             fi
+            ;;
+        "gpu")
+            echo "Configuration setting in gpu successfully."
             ;;
 	*)
 	    echo "Configuration not set."

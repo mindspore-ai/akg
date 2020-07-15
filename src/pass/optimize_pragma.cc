@@ -38,7 +38,7 @@ class OptPragma : public IRMutator {
   }
 
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
-    if (ktvm::ir::attr::IsPragmaKey(op->attr_key) && op->value.as<StringImm>()) {
+    if (air::ir::attr::IsPragmaKey(op->attr_key) && op->value.as<StringImm>()) {
       is_candidate_ = true;
       loop_vars_ = {};
       loop_extends_ = {};
@@ -146,7 +146,7 @@ class EstimateAlign : public IRMutator {
   }
 
   Stmt Mutate_(const AttrStmt *op, const Stmt &stmt) final {
-    if (ktvm::ir::attr::IsPragmaKey(op->attr_key) && op->value.as<StringImm>()) {
+    if (air::ir::attr::IsPragmaKey(op->attr_key) && op->value.as<StringImm>()) {
       if (exclude_list.count(op->value.as<StringImm>()->value)) {
         return stmt;
       }

@@ -28,7 +28,7 @@
 #include "ir_generictree.h"
 
 /* located at 3rdparty/tvm/src/pass/ir_deep_compare.cc */
-extern int ktvm::ir::Compare(const Expr &lhs, const Expr &rhs);
+extern int air::ir::Compare(const Expr &lhs, const Expr &rhs);
 
 namespace akg {
 namespace ir {
@@ -40,7 +40,7 @@ class LocalValueNumbering : public IRMutator {
   using ValueNumberLabel = UIntImm;
   using ValueNumber = uint64_t;
 
-  static VNExpr makeVNLabel(const ktvm::DataType ty, ValueNumber vn) {
+  static VNExpr makeVNLabel(const air::DataType ty, ValueNumber vn) {
     NodePtr<UIntImm> node = make_node<UIntImm>();
     node->type = ty;
     node->value = vn;
@@ -164,7 +164,7 @@ class LocalValueNumbering : public IRMutator {
      the Compare operator where two keys are compared to be equal when two expression are equivalent
      in this way we can extend the pattern matching power and don't need to break the type.
      Thus available_ would be of type Expr -> ValueNumber */
-  std::map<ktvm::Expr, ValueNumber, syntaxCompare> available_;
+  std::map<air::Expr, ValueNumber, syntaxCompare> available_;
   int global_vn_counter_{0};
 
   /* Further simplify mapping_ can be even simplified. */

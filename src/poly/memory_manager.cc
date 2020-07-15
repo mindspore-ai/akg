@@ -230,7 +230,7 @@ void Scop::HoistIm2colBufferFootprintCluster(const isl::union_map &schedule, con
     bool replace_ci = false;
     if (!dynamic_shape_.empty()) {
       for (const auto &ds : dynamic_shape_) {
-        if (auto dsn = ds.as<ktvm::DynamicShapeNode>()) {
+        if (auto dsn = ds.as<air::DynamicShapeNode>()) {
           if (dsn->tensor_name == "CI1") {
             t_ci = (int64_t)(dsn->poly_upper_bound - 1);
             replace_ci = true;

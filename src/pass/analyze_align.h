@@ -40,7 +40,7 @@ const std::set<std::string> exclude_list = {
   "opt_broadcast",
   "reduce_reorder",
 };
-class IndexOptimizer : public ktvm::ir::IRMutator {
+class IndexOptimizer : public air::ir::IRMutator {
  public:
   explicit IndexOptimizer(bool rm = false) : var2expr(), rm_load_(rm) {}
   ~IndexOptimizer() override = default;

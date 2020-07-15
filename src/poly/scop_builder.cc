@@ -33,7 +33,7 @@ namespace poly {
 // Note: We can only handle empty param_space for now.
 isl::space CreateParamsSpace(const isl::ctx &ctx) { return isl::space(ctx, 0); }
 
-isl::space CreateParamsSpace(const isl::ctx &ctx, const std::unordered_map<std::string, ktvm::Var> &params) {
+isl::space CreateParamsSpace(const isl::ctx &ctx, const std::unordered_map<std::string, air::Var> &params) {
   auto space = isl::space(ctx, 0);
 
   // set parameter names
@@ -1541,7 +1541,7 @@ isl::schedule MakeScheduleTreeHelper(const NodeRef &s, Scop &scop, const isl::se
     }
 
     void Visit_(const AttrStmt *op) final {
-      if (op->attr_key == ktvm::ir::attr::reduce_update) {
+      if (op->attr_key == air::ir::attr::reduce_update) {
         Array<IterVar> red = Downcast<Array<IterVar>>(op->node);
         const auto pro = op->body.as<Provide>();
         if (pro) {
@@ -1561,7 +1561,7 @@ isl::schedule MakeScheduleTreeHelper(const NodeRef &s, Scop &scop, const isl::se
             }
           }
         }
-      } else if (op->attr_key == ktvm::ir::attr::buffer_bind_scope) {
+      } else if (op->attr_key == air::ir::attr::buffer_bind_scope) {
         /* ******************************************
          * parse attr like below
          * // attr [[buffer(Abuf, 0x29ff3b0), Tensor(shape=[1, 32, 7, 7, 16], op.name=fmap)]] buffer_bind_scope =

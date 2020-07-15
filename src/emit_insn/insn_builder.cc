@@ -32,9 +32,9 @@
 #include "insn_pattern.h"
 
 namespace akg {
-using ktvm::runtime::PackedFunc;
-using ktvm::runtime::TVMArgs;
-using ktvm::runtime::TVMRetValue;
+using air::runtime::PackedFunc;
+using air::runtime::TVMArgs;
+using air::runtime::TVMRetValue;
 
 /// extent is the memory size that will be read/wrote by the cce_instruction
 /// reference "Davinci ISA User Guide 8.2.2"

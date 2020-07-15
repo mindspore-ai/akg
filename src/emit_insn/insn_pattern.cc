@@ -27,8 +27,8 @@
 #include "common/array_api.h"
 
 namespace akg {
-using ktvm::runtime::TVMArgs;
-using ktvm::runtime::TVMRetValue;
+using air::runtime::TVMArgs;
+using air::runtime::TVMRetValue;
 
 /// Check is scalar ir
 /// \param info_list

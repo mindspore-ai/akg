@@ -31,16 +31,16 @@ using std::to_string;
 using std::unordered_map;
 using std::vector;
 
-class ExprSimplifier : public ktvm::ir::IRMutator {
+class ExprSimplifier : public air::ir::IRMutator {
   struct LoadInfo {
     Var buffer_var;
     Expr index;
     Expr predicate;
-    ktvm::DataType type;
+    air::DataType type;
   };
 
   struct CallInfo {
-    ktvm::DataType type;
+    air::DataType type;
     std::string name;
     Array<Expr> args;
     Call::CallType call_type;
@@ -48,27 +48,27 @@ class ExprSimplifier : public ktvm::ir::IRMutator {
     int value_index;
   };
 
-  class DivMutator : public ktvm::ir::IRMutator {
+  class DivMutator : public air::ir::IRMutator {
    private:
     Expr Mutate_(const Mul *op, const Expr &e) final;
   };
 
  public:
-  Expr Simplify(const ktvm::Expr &e);
+  Expr Simplify(const air::Expr &e);
 
-  Expr Simplify(const ktvm::Expr &e, const vector<Expr> &conds);
+  Expr Simplify(const air::Expr &e, const vector<Expr> &conds);
 
-  Expr ReduceInequality(const ktvm::Expr &e, const Var &reduceVar, bool scale = false, bool get_larger = false);
+  Expr ReduceInequality(const air::Expr &e, const Var &reduceVar, bool scale = false, bool get_larger = false);
 
-  bool Equals(const ktvm::Expr &e1, const ktvm::Expr &e2);
+  bool Equals(const air::Expr &e1, const air::Expr &e2);
 
   bool CanProveWithParam(const Expr &e);
 
   bool CanProveWithPosParam(const Expr &e);
 
-  bool IsDivisible(const ktvm::Expr &e, const ktvm::Expr &divisor);
+  bool IsDivisible(const air::Expr &e, const air::Expr &divisor);
 
-  Expr Gcd(const ktvm::Expr &e1, const ktvm::Expr &e2);
+  Expr Gcd(const air::Expr &e1, const air::Expr &e2);
 
   Expr Retrieval(const Expr &e);
 
@@ -135,41 +135,41 @@ class ExprSimplifier : public ktvm::ir::IRMutator {
 
   Expr ExtraDivVar(const Expr &expr, const Var &reduce_var);
 
-  Expr SimplifyWithInfo(const ktvm::Expr &e, const vector<Expr> &conds) const;
+  Expr SimplifyWithInfo(const air::Expr &e, const vector<Expr> &conds) const;
 
   int VisitDivWithLcm(const Expr &e) const;
 
   Expr ReduceIneqlWithScale(const Expr &e, const Var &reduce_var, bool is_less, bool get_larger);
 
  private:
-  unordered_map<const Variable *, const ktvm::DataType> min_map_;
-  unordered_map<const Variable *, const ktvm::DataType> max_map_;
-  unordered_map<const Variable *, const ktvm::DataType> mod_map_;
-  unordered_map<const Variable *, const ktvm::DataType> cast_map_;
-  unordered_map<const Variable *, const ktvm::DataType> string_map_;
-  unordered_map<const Variable *, const ktvm::DataType> floordiv_map_;
-  unordered_map<const Variable *, const ktvm::DataType> div_map_;
-  unordered_map<const Variable *, const ktvm::DataType> select_map_;
-  unordered_map<const Variable *, const ktvm::DataType> and_map_;
-  unordered_map<const Variable *, const ktvm::DataType> or_map_;
-  unordered_map<const Variable *, const ktvm::DataType> not_map_;
-  unordered_map<const Variable *, const ktvm::DataType> load_map_;
-  unordered_map<const Variable *, const ktvm::DataType> call_map_;
-  unordered_map<Var, vector<Expr>, ktvm::NodeHash, ktvm::NodeEqual> min_child_;
-  unordered_map<Var, vector<Expr>, ktvm::NodeHash, ktvm::NodeEqual> max_child_;
-  unordered_map<Var, vector<Expr>, ktvm::NodeHash, ktvm::NodeEqual> mod_child_;
-  unordered_map<Var, vector<Expr>, ktvm::NodeHash, ktvm::NodeEqual> floordiv_child_;
-  unordered_map<Var, vector<Expr>, ktvm::NodeHash, ktvm::NodeEqual> div_child_;
-  unordered_map<Var, vector<Expr>, ktvm::NodeHash, ktvm::NodeEqual> select_child_;
-  unordered_map<Var, vector<Expr>, ktvm::NodeHash, ktvm::NodeEqual> and_child_;
-  unordered_map<Var, vector<Expr>, ktvm::NodeHash, ktvm::NodeEqual> or_child_;
-  unordered_map<Var, vector<Expr>, ktvm::NodeHash, ktvm::NodeEqual> not_child_;
-  unordered_map<Var, Expr, ktvm::NodeHash, ktvm::NodeEqual> cast_child_;
-  unordered_map<Var, std::string, ktvm::NodeHash, ktvm::NodeEqual> string_child_;
-  unordered_map<Var, LoadInfo, ktvm::NodeHash, ktvm::NodeEqual> load_child_;
-  unordered_map<Var, CallInfo, ktvm::NodeHash, ktvm::NodeEqual> call_child_;
+  unordered_map<const Variable *, const air::DataType> min_map_;
+  unordered_map<const Variable *, const air::DataType> max_map_;
+  unordered_map<const Variable *, const air::DataType> mod_map_;
+  unordered_map<const Variable *, const air::DataType> cast_map_;
+  unordered_map<const Variable *, const air::DataType> string_map_;
+  unordered_map<const Variable *, const air::DataType> floordiv_map_;
+  unordered_map<const Variable *, const air::DataType> div_map_;
+  unordered_map<const Variable *, const air::DataType> select_map_;
+  unordered_map<const Variable *, const air::DataType> and_map_;
+  unordered_map<const Variable *, const air::DataType> or_map_;
+  unordered_map<const Variable *, const air::DataType> not_map_;
+  unordered_map<const Variable *, const air::DataType> load_map_;
+  unordered_map<const Variable *, const air::DataType> call_map_;
+  unordered_map<Var, vector<Expr>, air::NodeHash, air::NodeEqual> min_child_;
+  unordered_map<Var, vector<Expr>, air::NodeHash, air::NodeEqual> max_child_;
+  unordered_map<Var, vector<Expr>, air::NodeHash, air::NodeEqual> mod_child_;
+  unordered_map<Var, vector<Expr>, air::NodeHash, air::NodeEqual> floordiv_child_;
+  unordered_map<Var, vector<Expr>, air::NodeHash, air::NodeEqual> div_child_;
+  unordered_map<Var, vector<Expr>, air::NodeHash, air::NodeEqual> select_child_;
+  unordered_map<Var, vector<Expr>, air::NodeHash, air::NodeEqual> and_child_;
+  unordered_map<Var, vector<Expr>, air::NodeHash, air::NodeEqual> or_child_;
+  unordered_map<Var, vector<Expr>, air::NodeHash, air::NodeEqual> not_child_;
+  unordered_map<Var, Expr, air::NodeHash, air::NodeEqual> cast_child_;
+  unordered_map<Var, std::string, air::NodeHash, air::NodeEqual> string_child_;
+  unordered_map<Var, LoadInfo, air::NodeHash, air::NodeEqual> load_child_;
+  unordered_map<Var, CallInfo, air::NodeHash, air::NodeEqual> call_child_;
 
-  unordered_map<Var, vector<Expr>, ktvm::NodeHash, ktvm::NodeEqual> div_scale_range_;
+  unordered_map<Var, vector<Expr>, air::NodeHash, air::NodeEqual> div_scale_range_;
 
   Array<VarExpr> old_vars_;
   vector<Expr> info_;
@@ -193,7 +193,7 @@ class ExprSimplifier : public ktvm::ir::IRMutator {
   int call_op_count_ = 0;
   bool is_retrieval_ = false;
   bool is_scale_{false};
-  ktvm::DataType highest_cast_type_{Int(32)};
+  air::DataType highest_cast_type_{Int(32)};
 
   Var reduce_var_;
   bool is_less_than_{false};

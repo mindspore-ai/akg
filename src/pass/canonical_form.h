@@ -38,8 +38,8 @@ struct VarCompare {
 
 class Monomial;
 using VarMap = map<const Var, int, VarCompare>;
-using VarReplaceMap = unordered_map<Var, tuple<set<Monomial>, set<Monomial>, Expr>, ktvm::NodeHash, ktvm::NodeEqual>;
-using UnorderedVarMap = unordered_map<Var, vector<Expr>, ktvm::NodeHash, ktvm::NodeEqual>;
+using VarReplaceMap = unordered_map<Var, tuple<set<Monomial>, set<Monomial>, Expr>, air::NodeHash, air::NodeEqual>;
+using UnorderedVarMap = unordered_map<Var, vector<Expr>, air::NodeHash, air::NodeEqual>;
 
 class Monomial {
  public:
@@ -63,19 +63,19 @@ class Monomial {
 
   Monomial Divisible(const Monomial &monomial) const;
 
-  Expr ToExpr(ktvm::DataType type = Int(32), bool is_negative = false) const;
+  Expr ToExpr(air::DataType type = Int(32), bool is_negative = false) const;
 
   bool operator<(const Monomial &monomial) const;
   bool operator==(const Monomial &monomial) const;
 };
 
-class CanonicalForm : public ktvm::ir::ExprFunctor<set<Monomial>(const ktvm::Expr &n, const ktvm::Expr &e)> {
+class CanonicalForm : public air::ir::ExprFunctor<set<Monomial>(const air::Expr &n, const air::Expr &e)> {
  public:
-  CanonicalForm(ktvm::DataType data_type = Int(32)) : data_type_(data_type) {}
+  CanonicalForm(air::DataType data_type = Int(32)) : data_type_(data_type) {}
 
   ~CanonicalForm() override = default;
 
-  set<Monomial> ExprNormalForm(const ktvm::Expr &e);
+  set<Monomial> ExprNormalForm(const air::Expr &e);
 
   set<Monomial> Gcd(const set<Monomial> &a, const set<Monomial> &b);
 
@@ -98,23 +98,23 @@ class CanonicalForm : public ktvm::ir::ExprFunctor<set<Monomial>(const ktvm::Exp
  private:
   pair<set<Monomial>, set<Monomial>> ComputeQuotientAndRemainder(const set<Monomial> &a, const set<Monomial> &b);
 
-  set<Monomial> VisitExpr_(const Add *op, const ktvm::Expr &e) final;
+  set<Monomial> VisitExpr_(const Add *op, const air::Expr &e) final;
 
-  set<Monomial> VisitExpr_(const Sub *op, const ktvm::Expr &e) final;
+  set<Monomial> VisitExpr_(const Sub *op, const air::Expr &e) final;
 
-  set<Monomial> VisitExpr_(const Mul *op, const ktvm::Expr &e) final;
+  set<Monomial> VisitExpr_(const Mul *op, const air::Expr &e) final;
 
-  set<Monomial> VisitExpr_(const Div *op, const ktvm::Expr &e) final;
+  set<Monomial> VisitExpr_(const Div *op, const air::Expr &e) final;
 
-  set<Monomial> VisitExpr_(const FloorDiv *op, const ktvm::Expr &e) final;
+  set<Monomial> VisitExpr_(const FloorDiv *op, const air::Expr &e) final;
 
-  set<Monomial> VisitExpr_(const Variable *op, const ktvm::Expr &e) final;
+  set<Monomial> VisitExpr_(const Variable *op, const air::Expr &e) final;
 
-  set<Monomial> VisitExpr_(const IntImm *op, const ktvm::Expr &e) final;
+  set<Monomial> VisitExpr_(const IntImm *op, const air::Expr &e) final;
 
-  set<Monomial> VisitExpr_(const UIntImm *op, const ktvm::Expr &e) final;
+  set<Monomial> VisitExpr_(const UIntImm *op, const air::Expr &e) final;
 
-  ktvm::DataType data_type_ = Int(32);
+  air::DataType data_type_ = Int(32);
 };
 }  // namespace ir
 }  // namespace akg

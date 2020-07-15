@@ -69,7 +69,7 @@ void MergeAlignInfo(AlignInfo &a, const AlignInfo &b) {
   }
   a.need_spread = a.need_spread || b.need_spread;
 
-  a.base_offset = ktvm::ir::gcd(a.base_offset, b.base_offset);
+  a.base_offset = air::ir::gcd(a.base_offset, b.base_offset);
 
   a.modifiers.insert(a.modifiers.end(), b.modifiers.begin(), b.modifiers.end());
 }
@@ -105,7 +105,7 @@ AlignDict GenSpecAlignDict(const StmtInfoList &com_info_list, int64_t align, boo
 
 void FixAlignBySize(int64_t &align, int64_t size) {
   if (align < size && align != 0 && (size % align) != 0) {
-    align = ktvm::ir::gcd(align, size);
+    align = air::ir::gcd(align, size);
   }
 }
 
@@ -150,14 +150,14 @@ AlignDict GenNormalAlignDict(const StmtInfoList &com_info_list, bool is_spread, 
       CHECK(is_const(index_expr));
       offset_gcd = std::abs(GetIntConst(index_expr));
     } else {
-      auto strides = ktvm::arith::DetectLinearEquation(index_expr, vars);
+      auto strides = air::arith::DetectLinearEquation(index_expr, vars);
       if (strides.empty()) {
         offset_gcd = -2;  // "-2" means no need to consider
       } else {
         CHECK(!strides.empty());
         offset_gcd = 0;
         for (const auto &e : strides) {
-          offset_gcd = ktvm::ir::gcd(offset_gcd, GetIntConst(e));
+          offset_gcd = air::ir::gcd(offset_gcd, GetIntConst(e));
         }
       }
     }
@@ -198,11 +198,11 @@ void FixAlignByShape(int64_t &align, int64_t shape0, int64_t shape1) {
     CHECK_NE(shape0, 0);
     if (align % shape0 == 0) {
       auto times = align / shape0;
-      align = shape0 * ktvm::ir::gcd(times, shape1);
+      align = shape0 * air::ir::gcd(times, shape1);
       return;
     }
   }
-  align = ktvm::ir::gcd(align, shape0);
+  align = air::ir::gcd(align, shape0);
 }
 
 AlignDict GenTransposeAlign(const StmtStoreInfo &ori_dst, const StmtStoreInfo &ori_src, StmtInfo &if_info,
@@ -555,7 +555,7 @@ class AlignVistor : public IRVisitor {
           if (stride < align && stride * extent > align) {
             CHECK_NE(stride, 0);
             if (align % stride != 0) {
-              it->second.base_offset = ktvm::ir::gcd(align, stride);
+              it->second.base_offset = air::ir::gcd(align, stride);
 
               return false;
             }
@@ -563,7 +563,7 @@ class AlignVistor : public IRVisitor {
             CHECK_NE((align / stride), 0);
             if (extent % (align / stride) != 0) {
               auto times = align / stride;
-              auto new_times = ktvm::ir::gcd(extent, times);
+              auto new_times = air::ir::gcd(extent, times);
               it->second.base_offset = it->second.base_offset * new_times / times;
 
               return false;
@@ -589,7 +589,7 @@ class AlignVistor : public IRVisitor {
         bool changed = false;
         for (auto ele : i.second) {
           changed = changed || (ele != align);
-          align = ktvm::ir::gcd(align, ele);
+          align = air::ir::gcd(align, ele);
         }
         if (changed) {
           for (auto v : buf_table[i.first]) {
@@ -617,7 +617,7 @@ class AlignVistor : public IRVisitor {
         CHECK(it_in != all_aligns_.end());
 
         changed = changed || (it_in->second.base_offset != align);
-        align = ktvm::ir::gcd(align, it_in->second.base_offset);
+        align = air::ir::gcd(align, it_in->second.base_offset);
       }
       if (changed) {
         for (const auto &e : vec) {
@@ -681,7 +681,7 @@ class AlignInsert : public IRMutator {
   }
 
  private:
-  static int64_t GetAlignValue(int64_t val, const ktvm::DataType dtype) {
+  static int64_t GetAlignValue(int64_t val, const air::DataType dtype) {
     int value = GetUbBlkSize(dtype);
     CHECK_NE(value, 0);
     return val % value == 0 ? FREE_ALIGN : val;
@@ -700,7 +700,7 @@ class FindSameNameBuf : public IRVisitor {
   ~FindSameNameBuf() override = default;
 
   void Visit_(const AttrStmt *op) final {
-    if (op->attr_key == ktvm::ir::attr::storage_scope) {
+    if (op->attr_key == air::ir::attr::storage_scope) {
       const auto buf = op->node.as<Variable>();
       CHECK(buf != nullptr);
       auto str = op->value.as<StringImm>();
@@ -839,7 +839,7 @@ class ProcessParts : public IRMutator {
 }  // namespace
 
 Stmt AnalyzeMinAlignStatic(Stmt stmt) {
-  stmt = ktvm::ir::ConvertSSA(stmt);
+  stmt = air::ir::ConvertSSA(stmt);
 
   FindSameNameBuf find_visitor;
   find_visitor.Visit(stmt);

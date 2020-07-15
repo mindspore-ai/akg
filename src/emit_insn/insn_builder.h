@@ -416,7 +416,7 @@ class DropoutCallBuilder : public IRMutator {
     CHECK(call);
     if (call->name == "vsel") {
       auto acc_call = call->args[0].as<Call>();
-      if (acc_call != nullptr && acc_call->name == ktvm::ir::intrinsic::tvm_access_ptr) {
+      if (acc_call != nullptr && acc_call->name == air::ir::intrinsic::tvm_access_ptr) {
         auto set_cmp = EmitCceIntrinTemplate(Stmt(), msk->dtype,
                                              {GetAccessPtr(msk, "r", truncdiv(acc_call->args[2], 8))}, "set_cmpmask");
         return Block::make(set_cmp, s);

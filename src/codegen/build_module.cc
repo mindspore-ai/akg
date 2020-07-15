@@ -36,7 +36,7 @@ AttrMap global_attrs;
 Array<NodeRef> g_external_call_name;
 
 Tensor CreatePlaceholder(const NodeRef &arg) {
-  auto n = ktvm::make_node<PlaceholderOpNode>();
+  auto n = air::make_node<PlaceholderOpNode>();
 
   if (auto var_node = arg.as<Variable>()) {
     n->name = var_node->name_hint;
@@ -46,13 +46,13 @@ Tensor CreatePlaceholder(const NodeRef &arg) {
     n->name = buffer_node->name;
     Expr size = std::accumulate(buffer_node->shape.begin(), buffer_node->shape.end(), Expr(1),
                                 [](const Expr &mul, const Expr &e) { return mul * e; });
-    n->shape = Array<Expr>{ktvm::ir::Simplify(size)};
+    n->shape = Array<Expr>{air::ir::Simplify(size)};
     n->dtype = buffer_node->dtype;
   } else if (auto tensor_node = arg.as<TensorNode>()) {
     n->name = tensor_node->op->name;
     Expr size = std::accumulate(tensor_node->shape.begin(), tensor_node->shape.end(), Expr(1),
                                 [](const Expr &mul, const Expr &e) { return mul * e; });
-    n->shape = Array<Expr>{ktvm::ir::Simplify(size)};
+    n->shape = Array<Expr>{air::ir::Simplify(size)};
     n->dtype = tensor_node->dtype;
   } else {
     LOG(FATAL) << "arg must be Tensor, Buffer or Var, but got " << arg;
@@ -211,7 +211,7 @@ void GetFlattenedBinds(const Array<NodeRef> &args, const Map<Tensor, Buffer> &bi
     if (is_reshape) {
       Map<Tensor, Buffer> new_binds;
       Array<NodeRef> new_args;
-      auto n = ktvm::make_node<PlaceholderOpNode>();
+      auto n = air::make_node<PlaceholderOpNode>();
       n->name = out_tensor->op->name;
       n->shape = in_tensor->shape;
       n->dtype = out_tensor->dtype;
@@ -254,9 +254,9 @@ void RenameBinds(Map<Tensor, Buffer> &binds, const BuildConfig &config, Array<No
       } while (tensor_name.count(new_name + extend) != 0);
       new_name.append(extend);
       tensor_name.insert(new_name);
-      auto cop = old_tensor->op.as<ktvm::ComputeOpNode>();
+      auto cop = old_tensor->op.as<air::ComputeOpNode>();
       CHECK(cop != nullptr);
-      Tensor new_tensor = ktvm::ComputeOpNode::make(new_name, cop->tag, cop->attrs, cop->axis, cop->body).output(0);
+      Tensor new_tensor = air::ComputeOpNode::make(new_name, cop->tag, cop->attrs, cop->axis, cop->body).output(0);
       tensor_replace.Set(old_tensor, new_tensor);
       if (buffer_replace.count(old_buffer) == 0) {
         auto new_buffer = DeclBuffer(new_tensor, config->data_alignment, config->offset_factor, new_name);
@@ -393,12 +393,12 @@ void FixParametricBinds(const Map<Tensor, Buffer> &binds, const Array<NodeRef> &
       CHECK_EQ(x.second->shape.size(), 5);
       shape.push_back(x.second->shape[0]);
       shape.push_back(x.second->shape[1]);
-      auto h = ktvm::floordiv(H + PT + PB - KH, SH) + 1;
-      auto w = ktvm::floordiv(W + PL + PR - KW, SW) + 1;
+      auto h = air::floordiv(H + PT + PB - KH, SH) + 1;
+      auto w = air::floordiv(W + PL + PR - KW, SW) + 1;
       shape.push_back(h);
       shape.push_back(w);
       shape.push_back(x.second->shape[4]);
-      Tensor tt = ktvm::placeholder(shape, x.second->dtype, x.second->name);
+      Tensor tt = air::placeholder(shape, x.second->dtype, x.second->name);
       output_buffer = DeclBuffer(tt, config->data_alignment, config->offset_factor, x.second->name);
       out_binds->Set(tt, output_buffer);
     } else if (x.second->name.find(kernel) != std::string::npos) {
@@ -408,7 +408,7 @@ void FixParametricBinds(const Map<Tensor, Buffer> &binds, const Array<NodeRef> &
       shape.push_back(x.second->shape[1]);
       shape.push_back(x.second->shape[2]);
       shape.push_back(x.second->shape[3]);
-      Tensor tt = ktvm::placeholder(shape, x.second->dtype, x.second->name);
+      Tensor tt = air::placeholder(shape, x.second->dtype, x.second->name);
       kernel_buffer = DeclBuffer(tt, config->data_alignment, config->offset_factor, x.second->name);
       out_binds->Set(tt, kernel_buffer);
     } else {
@@ -458,7 +458,7 @@ NodeRef Lower(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeRef> 
   PassTimer *pass_timer = PassTimer::GetInstance();
   global_attrs.Set(kKernelName, StringImm::make(name));
 
-  global_attrs.Set(kDumpPassIr, ktvm::make_const(Int(32), config->dump_pass_ir));
+  global_attrs.Set(kDumpPassIr, air::make_const(Int(32), config->dump_pass_ir));
   if (config->dump_pass_ir) {
     std::string dump_ir_dir;
     if (global_attrs.GetStringAttr(kDumpIrDir, &dump_ir_dir)) {
@@ -484,7 +484,7 @@ NodeRef Lower(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeRef> 
     akg::schedule::AutoInline(sch);
   }
   auto new_sch = sch.normalize();
-  auto bounds = ktvm::schedule::InferBound(new_sch);
+  auto bounds = air::schedule::InferBound(new_sch);
   Stmt stmt = make_pass("schedule.ScheduleOps", new_sch, bounds, false);
   if (!polyhedral) {
     // for conv-matmul manual schedule
@@ -498,7 +498,7 @@ NodeRef Lower(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeRef> 
   stmt = NEXT_PASS(RenameRealize, stmt, binds_0, replace);
 
   bool is_dynamic = !shape_vars.empty();
-  global_attrs.Set(kIsDynamic, ktvm::make_const(Int(32), is_dynamic));
+  global_attrs.Set(kIsDynamic, air::make_const(Int(32), is_dynamic));
 
   Array<NodeRef> arg_list_1;
   Map<Tensor, Buffer> binds_1;
@@ -590,7 +590,7 @@ NodeRef Lower(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeRef> 
       }
 
       Map<std::string, NodeRef> attrs_1 = global_attrs;
-      attrs_1.Set(kDumpTuningLevel, ktvm::make_const(Int(32), level));
+      attrs_1.Set(kDumpTuningLevel, air::make_const(Int(32), level));
       NodeRef tuning_spaces = NEXT_PASS(GenTuningSpace, stmt, binds_0, attrs_1, false);
       return tuning_spaces;
     }
@@ -606,8 +606,8 @@ NodeRef Lower(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeRef> 
       Array<NodeRef> poly_res = NEXT_PASS(AutoPoly, stmt_before_poly, binds_0, global_attrs, false, is_dynamic);
       enter_count++;
       CHECK_EQ(poly_res.size(), 2);
-      stmt = ktvm::Downcast<Stmt>(poly_res[0]);
-      Array<ktvm::Var> tiling_params = ktvm::Downcast<Array<ktvm::Var>>(poly_res[1]);
+      stmt = air::Downcast<Stmt>(poly_res[0]);
+      Array<air::Var> tiling_params = air::Downcast<Array<air::Var>>(poly_res[1]);
       for (const auto &var : tiling_params) {
         arg_list_0.push_back(var);
       }
@@ -756,8 +756,8 @@ NodeRef Lower(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeRef> 
         Array<NodeRef> multicore_res =
           NEXT_PASS(InjectMultiCoreVar, stmt, block_dim, global_attrs.GetIntAttr(kMergeOuterLoop, 0));
         CHECK_EQ(multicore_res.size(), 2);
-        stmt = ktvm::Downcast<Stmt>(multicore_res[0]);
-        auto extent_thread = ktvm::Downcast<Integer>(multicore_res[1]);
+        stmt = air::Downcast<Stmt>(multicore_res[0]);
+        auto extent_thread = air::Downcast<Integer>(multicore_res[1]);
         if (extent_thread.as<IntImm>()->value == -1) {
           arg_list_0.push_back(block_dim);
         }
@@ -837,7 +837,7 @@ NodeRef Lower(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeRef> 
       if (enter_count >= max_enter_poly_times) {
         CHECK(false) << e.what();
       }
-      global_attrs.Set(kAllocBits, ktvm::make_const(Int(32), e.alloc_bits_ + e.need_bits_));
+      global_attrs.Set(kAllocBits, air::make_const(Int(32), e.alloc_bits_ + e.need_bits_));
       global_attrs.Set(kErrorScope, StringImm::make(e.scope_));
       continue;
     }
@@ -884,13 +884,13 @@ NodeRef Lower(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeRef> 
   if (is_dynamic) {
     Array<NodeRef> collect_res = NEXT_PASS(CollectExternalCall, stmt);
     CHECK_EQ(collect_res.size(), 2);
-    stmt = ktvm::Downcast<Stmt>(collect_res[0]);
-    g_external_call_name = ktvm::Downcast<Array<NodeRef>>(collect_res[1]);
+    stmt = air::Downcast<Stmt>(collect_res[0]);
+    g_external_call_name = air::Downcast<Array<NodeRef>>(collect_res[1]);
     // CastKernelParams should be before DecorateDeviceScope
     Array<NodeRef> cast_res = NEXT_PASS(CastKernelParams, stmt, arg_list_0);
     CHECK_EQ(cast_res.size(), 2);
-    stmt = ktvm::Downcast<Stmt>(cast_res[0]);
-    arg_list_0 = ktvm::Downcast<Array<NodeRef>>(cast_res[1]);
+    stmt = air::Downcast<Stmt>(cast_res[0]);
+    arg_list_0 = air::Downcast<Array<NodeRef>>(cast_res[1]);
   }
 
   stmt = NEXT_PASS(DecorateDeviceScope, stmt);
@@ -914,7 +914,7 @@ NodeRef Lower(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeRef> 
 
 void BuildForDevice(const Array<LoweredFunc> &flist, const std::string &target_name,
                     const std::string &target_host_name, Array<LoweredFunc> *out_flist,
-                    ktvm::runtime::Module *out_mdev) {
+                    air::runtime::Module *out_mdev) {
   CHECK(out_flist != nullptr) << "out_flist is nullptr.";
   CHECK(out_mdev != nullptr) << "out_mdev is nullptr.";
 
@@ -925,15 +925,15 @@ void BuildForDevice(const Array<LoweredFunc> &flist, const std::string &target_n
   Array<LoweredFunc> out_flist_0;
   Array<LoweredFunc> fdevice;
   for (const auto &func : flist) {
-    if (func->func_type == ktvm::LoweredFuncType::kMixedFunc) {
+    if (func->func_type == air::LoweredFuncType::kMixedFunc) {
       Array<LoweredFunc> fsplits = NEXT_PASS(SplitHostDevice, func);
       out_flist_0.push_back(fsplits[0]);
       for (size_t idx = 1; idx < fsplits.size(); idx++) {
         fdevice.push_back(fsplits[idx]);
       }
-    } else if (func->func_type == ktvm::LoweredFuncType::kHostFunc) {
+    } else if (func->func_type == air::LoweredFuncType::kHostFunc) {
       out_flist_0.push_back(func);
-    } else if (func->func_type == ktvm::LoweredFuncType::kDeviceFunc) {
+    } else if (func->func_type == air::LoweredFuncType::kDeviceFunc) {
       out_flist_0.push_back(func);
     } else {
       LOG(FATAL) << "unknown function type " << func->func_type;
@@ -967,7 +967,7 @@ void BuildForDevice(const Array<LoweredFunc> &flist, const std::string &target_n
     LoweredFunc lowered_func = NEXT_PASS(CombineContextCall, func);
     out_flist->push_back(lowered_func);
   }
-  *out_mdev = ktvm::codegen::Build(fdevice_0, target_name, g_external_call_name);
+  *out_mdev = air::codegen::Build(fdevice_0, target_name, g_external_call_name);
   return;
 }
 
@@ -1017,7 +1017,7 @@ void CreateCce(const std::string &code, const std::string &kernel_name) {
 }
 }  // namespace
 
-ktvm::runtime::Module BuildToModule(const NodeRef &ref, const std::string &target_name) {
+air::runtime::Module BuildToModule(const NodeRef &ref, const std::string &target_name) {
   CHECK(!target_name.empty()) << "target_name is empty.";
 
   auto build_rst = Downcast<BuildRst>(ref);
@@ -1025,22 +1025,22 @@ ktvm::runtime::Module BuildToModule(const NodeRef &ref, const std::string &targe
 
   Array<LoweredFunc> lowered_func_list;
   if (res->IsInstance<LoweredFuncNode>()) {
-    LoweredFunc lowered_func = ktvm::Downcast<LoweredFunc>(res);
+    LoweredFunc lowered_func = air::Downcast<LoweredFunc>(res);
     lowered_func_list.push_back(lowered_func);
   }
   if (lowered_func_list.empty()) {
-    return ktvm::runtime::Module(nullptr);
+    return air::runtime::Module(nullptr);
   }
 
   Map<std::string, Array<LoweredFunc>> target_flist;
   target_flist.Set(target_name, lowered_func_list);
 
   Array<LoweredFunc> fhost_all;
-  std::vector<ktvm::runtime::Module> device_modules;
+  std::vector<air::runtime::Module> device_modules;
 
   for (auto iter : target_flist) {
     Array<LoweredFunc> out_flist;
-    ktvm::runtime::Module out_mdev;
+    air::runtime::Module out_mdev;
     BuildForDevice(iter.second, iter.first, kAkgTargetHostName, &out_flist, &out_mdev);
 
     // Save the current lowered functions of the host and the device module.
@@ -1051,7 +1051,7 @@ ktvm::runtime::Module BuildToModule(const NodeRef &ref, const std::string &targe
   }
 
   // Generate a unified host module.
-  ktvm::runtime::Module mhost = ktvm::codegen::Build(fhost_all, kAkgTargetHostName, g_external_call_name);
+  air::runtime::Module mhost = air::codegen::Build(fhost_all, kAkgTargetHostName, g_external_call_name);
 
   // Import all modules.
   for (const auto &mdev : device_modules) {
@@ -1069,7 +1069,7 @@ ktvm::runtime::Module BuildToModule(const NodeRef &ref, const std::string &targe
   return mhost;
 }
 
-ktvm::runtime::Module BuildModule(const Schedule &inputs, const Array<NodeRef> &in_args,
+air::runtime::Module BuildModule(const Schedule &inputs, const Array<NodeRef> &in_args,
                                   const Array<NodeRef> &shape_vars, const std::string &target_name,
                                   const std::string &name, const Map<Tensor, Buffer> &in_binds,
                                   const Map<std::string, NodeRef> &in_attrs, bool polyhedral, bool aicpu,

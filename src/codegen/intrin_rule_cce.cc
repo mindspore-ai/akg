@@ -15,7 +15,7 @@
  */
 #include <codegen/intrin_rule.h>
 
-namespace ktvm {
+namespace air {
 namespace codegen {
 namespace intrin {
 struct CCEMatch : public Direct {
@@ -28,4 +28,4 @@ TVM_REGISTER_GLOBAL("tvm.intrin.rule.cce.round").set_body(DispatchExtern<CCEMatc
 TVM_REGISTER_GLOBAL("tvm.intrin.rule.cce.mod").set_body(DispatchExtern<CCEMatch>);
 }  // namespace intrin
 }  // namespace codegen
-}  // namespace ktvm
+}  // namespace air

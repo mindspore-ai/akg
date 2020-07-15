@@ -158,7 +158,7 @@ class MultiCoreLoopHoister : public IRMutator {
     Stmt stmt = IRMutator::Mutate_(op, s);
     LoopEntry &entry = loop_stack_.back();
     if (!entry.hoist_in.empty()) {
-      Stmt before = ktvm::ir::MergeSeq(entry.hoist_in);
+      Stmt before = air::ir::MergeSeq(entry.hoist_in);
       MultiCoreLoopSimplify band_simplify(loop_size_);
       before = band_simplify.Mutate(before);
       stmt = Block::make(before, stmt);

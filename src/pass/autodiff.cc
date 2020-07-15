@@ -114,7 +114,7 @@ class JacobianMutator : public IRMutator {
       } else if (op->name == "rsqrt") {
         auto type = op->args[0].type();
         return Mul::make(Mutate(op->args[0]), Div::make(Mul::make(FloatImm::make(type, -0.5), e), op->args[0]));
-      } else if (op->name == ktvm::ir::intrinsic::tvm_if_then_else) {
+      } else if (op->name == air::ir::intrinsic::tvm_if_then_else) {
         Array<Expr> new_args = {op->args[0], Mutate(op->args[1]), Mutate(op->args[2])};
         return Call::make(op->type, op->name, new_args, op->call_type, op->func, op->value_index);
       } else if (piecewise_const.count(op->name)) {
@@ -127,9 +127,9 @@ class JacobianMutator : public IRMutator {
     return e;
   }
 
-  Expr Mutate_(const Add *op, const Expr &e) override { return ktvm::ir::Add::make(Mutate(op->a), Mutate(op->b)); }
+  Expr Mutate_(const Add *op, const Expr &e) override { return air::ir::Add::make(Mutate(op->a), Mutate(op->b)); }
 
-  Expr Mutate_(const Sub *op, const Expr &e) override { return ktvm::ir::Sub::make(Mutate(op->a), Mutate(op->b)); }
+  Expr Mutate_(const Sub *op, const Expr &e) override { return air::ir::Sub::make(Mutate(op->a), Mutate(op->b)); }
 
   Expr Mutate_(const Mul *op, const Expr &e) override {
     return Add::make(Mul::make(Mutate(op->a), op->b), Mul::make(op->a, Mutate(op->b)));
@@ -227,10 +227,10 @@ class JacobianMutator : public IRMutator {
     return Select::make(op->condition, Mutate(op->true_value), Mutate(op->false_value));
   }
 
-  Expr Mutate_(const IntImm *op, const Expr &e) override { return ktvm::ir::IntImm::make(op->type, 0); }
-  Expr Mutate_(const UIntImm *op, const Expr &e) override { return ktvm::ir::UIntImm::make(op->type, 0); }
+  Expr Mutate_(const IntImm *op, const Expr &e) override { return air::ir::IntImm::make(op->type, 0); }
+  Expr Mutate_(const UIntImm *op, const Expr &e) override { return air::ir::UIntImm::make(op->type, 0); }
 
-  Expr Mutate_(const FloatImm *op, const Expr &e) override { return ktvm::ir::FloatImm::make(op->type, 0); }
+  Expr Mutate_(const FloatImm *op, const Expr &e) override { return air::ir::FloatImm::make(op->type, 0); }
 
  private:
   Tensor input_;
@@ -269,7 +269,7 @@ Tensor Jacobian(const Tensor &output, const Tensor &input, bool &used_head, bool
     Array<Expr> input_itervars;
     size_t i = 0;
     for (Expr ext : input->shape) {
-      IterVar new_v = IterVarNode::make(Range(0, ext), Var("jac_i" + std::to_string(i)), ktvm::IterVarType::kDataPar);
+      IterVar new_v = IterVarNode::make(Range(0, ext), Var("jac_i" + std::to_string(i)), air::IterVarType::kDataPar);
       // Append them to new_axis
       new_axis.push_back(new_v);
       // We also need a separate array of these itervars
@@ -278,7 +278,7 @@ Tensor Jacobian(const Tensor &output, const Tensor &input, bool &used_head, bool
     }
 
     // The differentiation itself happens here
-    Expr new_body = Jacobian(ktvm::ir::Substitute(op->body[output->value_index], vmap), input, input_itervars);
+    Expr new_body = Jacobian(air::ir::Substitute(op->body[output->value_index], vmap), input, input_itervars);
     new_body = Simplify_cce(new_body);
 
     int value_index = 0;
@@ -371,7 +371,7 @@ DifferentiationResult Differentiate(const Tensor &output, const Array<Tensor> &i
   if (!head.get()) {
     Array<Expr> shape = output->shape;
     std::copy(output->shape.begin(), output->shape.end(), std::back_inserter(shape.CopyOnWrite()->data));
-    auto func = [&output](const Array<ktvm::Var> &input_indices) {
+    auto func = [&output](const Array<air::Var> &input_indices) {
       Expr res = const_true();
       for (size_t i = 0; i < output->shape.size(); ++i) {
         res = res && (Expr(input_indices[i]) == Expr(input_indices[output->shape.size() + i]));
@@ -380,7 +380,7 @@ DifferentiationResult Differentiate(const Tensor &output, const Array<Tensor> &i
       Expr res_cast = Select::make(res, make_const(output->dtype, 1), make_const(output->dtype, 0));
       return res_cast;
     };
-    head = ktvm::compute(shape, func, "identity");
+    head = air::compute(shape, func, "identity");
   }
 
   // This map maps a tensor to the list of tensors immediately depending on it (using it in their

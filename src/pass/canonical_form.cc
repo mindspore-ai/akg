@@ -22,7 +22,7 @@ namespace ir {
 using std::get;
 using std::to_string;
 
-Expr CreateMonomialsExpr_(ktvm::DataType data_type, const set<Monomial> &monomials, int &sign) {
+Expr CreateMonomialsExpr_(air::DataType data_type, const set<Monomial> &monomials, int &sign) {
   if (monomials.empty()) {
     sign = 0;
     return make_const(data_type, 0);
@@ -55,17 +55,17 @@ Monomial Monomial::Add(const Monomial &monomial) const {
   auto d = monomial.denominator_;
 
   numerator_ = a * d + b * c;
-  auto gcd1 = ktvm::ir::gcd(numerator_, b);
+  auto gcd1 = air::ir::gcd(numerator_, b);
   CHECK_NE(gcd1, 0);
   numerator_ = numerator_ / gcd1;
   denominator_ = b / gcd1;
 
-  auto gcd2 = ktvm::ir::gcd(numerator_, d);
+  auto gcd2 = air::ir::gcd(numerator_, d);
   CHECK_NE(gcd2, 0);
   numerator_ = numerator_ / gcd2;
   denominator_ = d / gcd2 * denominator_;
 
-  auto gcd = ktvm::ir::gcd(numerator_, denominator_);
+  auto gcd = air::ir::gcd(numerator_, denominator_);
   CHECK_NE(gcd, 0);
   numerator_ = numerator_ / gcd;
   denominator_ = denominator_ / gcd;
@@ -86,17 +86,17 @@ Monomial Monomial::Sub(const Monomial &monomial) const {
   }
 
   numerator_ = a * d + b * c;
-  auto gcd1 = ktvm::ir::gcd(numerator_, b);
+  auto gcd1 = air::ir::gcd(numerator_, b);
   CHECK_NE(gcd1, 0);
   numerator_ = numerator_ / gcd1;
   denominator_ = b / gcd1;
 
-  auto gcd2 = ktvm::ir::gcd(numerator_, d);
+  auto gcd2 = air::ir::gcd(numerator_, d);
   CHECK_NE(gcd2, 0);
   numerator_ = numerator_ / gcd2;
   denominator_ = d / gcd2 * denominator_;
 
-  auto gcd = ktvm::ir::gcd(numerator_, denominator_);
+  auto gcd = air::ir::gcd(numerator_, denominator_);
   CHECK_NE(gcd, 0);
   numerator_ = numerator_ / gcd;
   denominator_ = denominator_ / gcd;
@@ -105,14 +105,14 @@ Monomial Monomial::Sub(const Monomial &monomial) const {
 }
 
 Monomial &Monomial::Mul(const Monomial &monomial) {
-  auto gcd1 = ktvm::ir::gcd(numerator_, monomial.denominator_);
-  auto gcd2 = ktvm::ir::gcd(denominator_, monomial.numerator_);
+  auto gcd1 = air::ir::gcd(numerator_, monomial.denominator_);
+  auto gcd2 = air::ir::gcd(denominator_, monomial.numerator_);
   CHECK_NE(gcd1, 0);
   CHECK_NE(gcd2, 0);
   numerator_ = (monomial.numerator_ / gcd2) * (numerator_ / gcd1);
   denominator_ = (monomial.denominator_ / gcd1) * (denominator_ / gcd2);
 
-  auto gcd = ktvm::ir::gcd(numerator_, denominator_);
+  auto gcd = air::ir::gcd(numerator_, denominator_);
   CHECK_NE(gcd, 0);
   numerator_ /= gcd;
   denominator_ /= gcd;
@@ -129,14 +129,14 @@ Monomial &Monomial::Mul(const Monomial &monomial) {
 }
 
 Monomial &Monomial::Divide(const Monomial &monomial) {
-  auto gcd1 = ktvm::ir::gcd(numerator_, monomial.numerator_);
-  auto gcd2 = ktvm::ir::gcd(denominator_, monomial.denominator_);
+  auto gcd1 = air::ir::gcd(numerator_, monomial.numerator_);
+  auto gcd2 = air::ir::gcd(denominator_, monomial.denominator_);
   CHECK_NE(gcd1, 0);
   CHECK_NE(gcd2, 0);
   numerator_ = (monomial.denominator_ / gcd2) * (numerator_ / gcd1);
   denominator_ = (monomial.numerator_ / gcd1) * (denominator_ / gcd2);
 
-  auto gcd = ktvm::ir::gcd(numerator_, denominator_);
+  auto gcd = air::ir::gcd(numerator_, denominator_);
   CHECK_NE(gcd, 0);
   numerator_ /= gcd;
   denominator_ /= gcd;
@@ -184,7 +184,7 @@ Monomial Monomial::Divisible(const Monomial &monomial) const {
   return div.Divide(monomial);
 }
 
-Expr Monomial::ToExpr(ktvm::DataType data_type, bool is_negative) const {
+Expr Monomial::ToExpr(air::DataType data_type, bool is_negative) const {
   if (numerator_ == 0) {
     return make_const(data_type, 0);
   }
@@ -402,7 +402,7 @@ set<Monomial> CanonicalForm::DivAndModFilter(set<Monomial> &monomials, vector<pa
   return monomials;
 }
 
-set<Monomial> CanonicalForm::ExprNormalForm(const ktvm::Expr &e) {
+set<Monomial> CanonicalForm::ExprNormalForm(const air::Expr &e) {
   auto ret = VisitExpr(e, e);
   return ret;
 }
@@ -496,7 +496,7 @@ void CanonicalForm::DivSimplify(set<Monomial> &a, set<Monomial> &b) {
   }
 }
 
-set<Monomial> CanonicalForm::VisitExpr_(const Add *op, const ktvm::Expr &e) {
+set<Monomial> CanonicalForm::VisitExpr_(const Add *op, const air::Expr &e) {
   auto ret_a = VisitExpr(op->a, op->a);
   auto ret_b = VisitExpr(op->b, op->b);
 
@@ -515,7 +515,7 @@ set<Monomial> CanonicalForm::VisitExpr_(const Add *op, const ktvm::Expr &e) {
   return ret_a;
 }
 
-set<Monomial> CanonicalForm::VisitExpr_(const Sub *op, const ktvm::Expr &e) {
+set<Monomial> CanonicalForm::VisitExpr_(const Sub *op, const air::Expr &e) {
   auto ret_a = VisitExpr(op->a, op->a);
   auto ret_b = VisitExpr(op->b, op->b);
 
@@ -535,34 +535,34 @@ set<Monomial> CanonicalForm::VisitExpr_(const Sub *op, const ktvm::Expr &e) {
   return ret_a;
 }
 
-set<Monomial> CanonicalForm::VisitExpr_(const Mul *op, const ktvm::Expr &e) {
+set<Monomial> CanonicalForm::VisitExpr_(const Mul *op, const air::Expr &e) {
   auto ret_a = VisitExpr(op->a, op->a);
   auto ret_b = VisitExpr(op->b, op->b);
 
   return Multiply(ret_a, ret_b);
 }
 
-set<Monomial> CanonicalForm::VisitExpr_(const Div *op, const ktvm::Expr &e) {
+set<Monomial> CanonicalForm::VisitExpr_(const Div *op, const air::Expr &e) {
   auto ret_a = VisitExpr(op->a, op->a);
   auto ret_b = VisitExpr(op->b, op->b);
 
   return Divide(ret_a, ret_b);
 }
 
-set<Monomial> CanonicalForm::VisitExpr_(const FloorDiv *op, const ktvm::Expr &e) {
+set<Monomial> CanonicalForm::VisitExpr_(const FloorDiv *op, const air::Expr &e) {
   auto expr = Div::make(op->a, op->b);
 
   return VisitExpr(expr, expr);
 }
 
-set<Monomial> CanonicalForm::VisitExpr_(const Variable *op, const ktvm::Expr &e) {
+set<Monomial> CanonicalForm::VisitExpr_(const Variable *op, const air::Expr &e) {
   Monomial term;
   term.degree_.emplace(Downcast<Var>(e), 1);
 
   return set<Monomial>{term};
 }
 
-set<Monomial> CanonicalForm::VisitExpr_(const IntImm *op, const ktvm::Expr &e) {
+set<Monomial> CanonicalForm::VisitExpr_(const IntImm *op, const air::Expr &e) {
   if (op->value == 0) {
     return set<Monomial>();
   }
@@ -573,7 +573,7 @@ set<Monomial> CanonicalForm::VisitExpr_(const IntImm *op, const ktvm::Expr &e) {
   return set<Monomial>{term};
 }
 
-set<Monomial> CanonicalForm::VisitExpr_(const UIntImm *op, const ktvm::Expr &e) {
+set<Monomial> CanonicalForm::VisitExpr_(const UIntImm *op, const air::Expr &e) {
   if (op->value == 0) {
     return set<Monomial>();
   }

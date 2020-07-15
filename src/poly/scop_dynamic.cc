@@ -209,7 +209,7 @@ Stmt Scop::RestoreCombinedParams(Stmt stmt) {
     }
   }
   stmt = AddTilingStrategyApplet(stmt);
-  stmt = ktvm::ir::MergeNest(outer_let_stmts_, stmt);
+  stmt = air::ir::MergeNest(outer_let_stmts_, stmt);
   return stmt;
 }
 
@@ -220,7 +220,7 @@ Stmt Scop::AddTilingStrategyApplet(Stmt stmt) {
       CHECK(attr_key);
       stmt = AttrStmt::make(make_zero(Int(32)), attr_key->value, info->value, stmt);
     } else if (info->type_key == "LetStmt") {
-      stmt = LetStmt::make(ktvm::Downcast<Var>(info->key), info->value, stmt);
+      stmt = LetStmt::make(air::Downcast<Var>(info->key), info->value, stmt);
     } else {
       LOG(FATAL) << "Unsupported type_key for now: " << info->type_key;
     }

@@ -128,7 +128,7 @@ class IslEmitter {
   std::unordered_map<isl::id, VarMap, isl::IslIdIslHash> stmt_var_map_;
 };
 
-class ExtractIterfromExpr : public ktvm::ir::IRVisitor {
+class ExtractIterfromExpr : public air::ir::IRVisitor {
  public:
   ExtractIterfromExpr() = default;
   ~ExtractIterfromExpr() override = default;

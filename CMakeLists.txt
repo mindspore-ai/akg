@@ -30,11 +30,11 @@ include(cmake/external_libs/isl.cmake)
 if(ENABLE_AKG)
   message("-- Build akg in Mindspore")
   execute_process(COMMAND bash ${AKG_SOURCE_DIR}/third_party/apply_patches.sh ${CMAKE_CURRENT_BINARY_DIR} "1")
-  set(TVM_DIR "${CMAKE_CURRENT_BINARY_DIR}/ktvm")
+  set(TVM_DIR "${CMAKE_CURRENT_BINARY_DIR}/incubator-tvm")
 else()
   message("-- Build akg alone")
   execute_process(COMMAND bash ${AKG_SOURCE_DIR}/third_party/apply_patches.sh ${CMAKE_CURRENT_BINARY_DIR} "akg")
-  set(TVM_DIR "${CMAKE_BINARY_DIR}/ktvm")
+  set(TVM_DIR "${CMAKE_BINARY_DIR}/incubator-tvm")
 endif()
 
 set(ISL_DIR "${CMAKE_BINARY_DIR}/isl")
@@ -44,11 +44,15 @@ file(COPY ${AKG_SOURCE_DIR}/python/akg DESTINATION
 
 # Utility functions
 include(${TVM_DIR}/cmake/util/Util.cmake)
+include(${TVM_DIR}/cmake/util/FindCUDA.cmake)
 
 tvm_option(USE_CCE_RT "Build with cce with runtime support" OFF)
 tvm_option(USE_CCE_RT_SIM "Build cce with simulate runtime support" OFF)
 tvm_option(USE_KC_AIR "Build cce with kc air rpc support" OFF)
 tvm_option(USE_ASAN "Build with AddressSanitizer" OFF)
+tvm_option(USE_CUDA "Build with CUDA" OFF)
+tvm_option(USE_CUDNN "Build with cuDNN" OFF)
+
 tvm_option(
   USE_DEFAULT_LOG
   "Use Customize log to eliminate useless log. If you want to enable defalut log, set this option to ON"
@@ -92,6 +96,7 @@ if(USE_AKG_LOG)
 endif()
 
 include(cmake/RT.cmake)
+
 
 # Generic compilation options
 include(CheckCXXCompilerFlag)
@@ -179,10 +184,17 @@ file(
   ${AKG_SOURCE_DIR}/src/op/*.cc
   ${AKG_SOURCE_DIR}/src/common/*.cc)
 
+
 file(GLOB DATATYPE_SRCS ${TVM_DIR}/src/codegen/datatype/*.cc)
 list(APPEND COMPILER_SRCS ${DATATYPE_SRCS})
 
 file(GLOB TOPI_SRCS ${TVM_DIR}/topi/src/*.cc)
+
+file(GLOB_RECURSE RELAY_SRCS ${TVM_DIR}/src/relay/*.cc)
+list(APPEND COMPILER_SRCS ${RELAY_SRCS})
+
+file(GLOB COMPILER_VERILOG_SRCS ${TVM_DIR}/src/codegen/veriog/*.cc)
+list(APPEND COMPILER_SRCS ${COMPILER_VERILOG_SRCS})
 
 file(
   GLOB
@@ -191,6 +203,10 @@ file(
   ${TVM_DIR}/src/runtime/cce/*.cc
   ${TVM_DIR}/src/runtime/vm/*.cc
   ${TVM_DIR}/src/runtime/stackvm/*.cc)
+
+if(USE_CUDA)
+include(${TVM_DIR}/cmake/modules/CUDA.cmake)
+endif()
 
 file(GLOB RUNTIME_STUB_SRC ${AKG_SOURCE_DIR}/src/runtime/stub/*.cc)
 
@@ -205,6 +221,13 @@ if(USE_RPC)
   file(GLOB RUNTIME_RPC_SRCS ${TVM_DIR}/src/runtime/rpc/*.cc)
   list(APPEND RUNTIME_SRCS ${RUNTIME_RPC_SRCS})
 endif(USE_RPC)
+
+file(GLOB COMPILER_OFF_SRC ${TVM_DIR}/src/codegen/opt/build_*_off.cc)
+list(APPEND COMPILER_SRCS ${COMPILER_OFF_SRC})
+
+if(USE_CUDA)
+  list(REMOVE_ITEM COMPILER_SRCS ${TVM_DIR}/src/codegen/opt/build_cuda_off.cc)
+endif(USE_CUDA)
 
 add_library(akg SHARED ${COMPILER_SRCS} ${RUNTIME_SRCS} ${TOPI_SRCS} ${RUNTIME_SRCS})
 

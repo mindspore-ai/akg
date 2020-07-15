@@ -339,7 +339,7 @@ Stmt SplitTail(Stmt stmt);
 
 Stmt CopyPropagation(Stmt stmt, const Map<Tensor, Buffer> &extern_buffer);
 
-Expr CastNormalize(const Expr &expr, const ktvm::DataType cast_type);
+Expr CastNormalize(const Expr &expr, const air::DataType cast_type);
 
 std::string DumpC(const Stmt &stmt, const Array<Buffer> &extern_buffer);
 
@@ -388,15 +388,15 @@ Stmt RemoveAssert(const Stmt &stmt);
 
 Stmt RewriteFloorDiv(const Stmt &stmt);
 
-Expr CastNormalize(const Expr &expr, const ktvm::DataType cast_type);
+Expr CastNormalize(const Expr &expr, const air::DataType cast_type);
 
 Stmt TestInferBoundWithCond(const Expr &expr, const Array<Expr> &constraints);
 
-Stmt TestReduceInequality(const ktvm::Expr &e, const Var &reduce_var, bool scale, bool getlarger);
+Stmt TestReduceInequality(const air::Expr &e, const Var &reduce_var, bool scale, bool getlarger);
 
 Stmt TestSimplify(const Expr &expr);
 
-Stmt TestCanProveWithPosParam(const ktvm::Expr &e);
+Stmt TestCanProveWithPosParam(const air::Expr &e);
 
 Stmt PromoteCommonExpr(const Stmt &stmt);
 
@@ -422,7 +422,7 @@ Stmt ScalarComputeRewrite(const Stmt &stmt);
 }  // namespace ir
 }  // namespace akg
 
-namespace ktvm {
+namespace air {
 namespace ir {
 /** Substitute variables with the given pointer with the replacement
  * expression within expr. */
@@ -468,6 +468,6 @@ bool ExprUseVars(const Expr &expr, const std::unordered_set<const Variable *> &v
  */
 Stmt LoopPartitionCCE(Stmt stmt, bool split_const_loop, bool remove_div_mod = false, bool partition_conv = false);
 }  // namespace ir
-}  // namespace ktvm
+}  // namespace air
 
 #endif  // INCLUDE_AKG_IR_PASS_H_

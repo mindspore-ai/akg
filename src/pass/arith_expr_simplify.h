@@ -30,7 +30,7 @@ namespace akg {
 namespace ir {
 class ArithExprSimplifier {
  public:
-  explicit ArithExprSimplifier(ktvm::DataType data_type = Int(32)) : data_type_(data_type) {}
+  explicit ArithExprSimplifier(air::DataType data_type = Int(32)) : data_type_(data_type) {}
 
   Expr Simplify(const Expr &e);
 
@@ -84,7 +84,7 @@ class ArithExprSimplifier {
   vector<tuple<int, int, int>> CountSort(vector<int> &v);
 
  private:
-  ktvm::DataType data_type_;
+  air::DataType data_type_;
 };
 }  // namespace ir
 }  // namespace akg

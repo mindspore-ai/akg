@@ -77,7 +77,7 @@ void CommonCompare(TVMArgs args, TVMRetValue *rv, const std::string &cmp) {
   std::string name = "T_" + cmp + "_";
   Expr true_expr = make_const(Float(32), 1);
   Expr false_expr = make_const(Float(32), 0);
-  ktvm::FCompute fcompute;
+  air::FCompute fcompute;
 
   if (inputs[0]->IsInstance<TensorNode>()) {
     auto tensor0 = Downcast<Tensor>(inputs[0]);
@@ -244,10 +244,10 @@ void CommonMaximumGrad(TVMArgs args, TVMRetValue *rv, bool ge) {
 TVM_REGISTER_GLOBAL("Abs").set_body([](TVMArgs args, TVMRetValue *rv) { TOPI_ONE_INPUT_CALL(args, rv, topi::abs); });
 
 TVM_REGISTER_GLOBAL("Round").set_body([](TVMArgs args, TVMRetValue *rv) {
-  auto call = [](const ktvm::Tensor &tensor) {
+  auto call = [](const air::Tensor &tensor) {
     std::string name = "T_round_" + tensor->op->name;
     return compute(
-      tensor->shape, [&](const Array<Var> &i) { return ktvm::cast(ktvm::Int(32), ktvm::round(tensor(i))); }, name,
+      tensor->shape, [&](const Array<Var> &i) { return air::cast(air::Int(32), air::round(tensor(i))); }, name,
       topi::kElementWise);
   };
   TOPI_ONE_INPUT_CALL(args, rv, call);
@@ -287,16 +287,16 @@ TVM_REGISTER_GLOBAL("Log").set_body([](TVMArgs args, TVMRetValue *rv) { TOPI_ONE
 
 TVM_REGISTER_GLOBAL("ReduceSum").set_body([](TVMArgs args, TVMRetValue *rv) {
   CHECK_GE(args.size(), 2);
-  auto attrs = args[1].operator ktvm::Array<ktvm::NodeRef>();
+  auto attrs = args[1].operator air::Array<air::NodeRef>();
   CHECK_GE(attrs.size(), 2);
-  ktvm::Array<ktvm::Integer> axis = ArrayOrInt(attrs[0]);
+  air::Array<air::Integer> axis = ArrayOrInt(attrs[0]);
   auto keepdims = static_cast<bool>(ir::GetInt32Const(Downcast<Expr>(attrs[1])));
 
   if (attrs.size() == 3) {
     Map<std::string, NodeRef> com_attrs;
     com_attrs.Set("atomic_add", attrs[2]);
     auto name = GetString(attrs[2]);
-    auto call = [&axis, &keepdims, &name, &com_attrs](const ktvm::Tensor &tensor) {
+    auto call = [&axis, &keepdims, &name, &com_attrs](const air::Tensor &tensor) {
       auto ndim = tensor->shape.size();
       CHECK_NE(ndim, 0) << "Cannot reduce a 0 dim Tensor";
       auto reduce_axes = topi::GetRealAxis(static_cast<int>(ndim), axis);
@@ -323,14 +323,14 @@ TVM_REGISTER_GLOBAL("ReduceSum").set_body([](TVMArgs args, TVMRetValue *rv) {
           eval_range.push_back(indices[arg_counter]);
           arg_counter++;
         }
-        return ktvm::sum(tensor(eval_range), r_axes);
+        return air::sum(tensor(eval_range), r_axes);
       };
 
       return compute(target_shape, reduce_compute, name, topi::kCommReduce, com_attrs);
     };
     TOPI_ONE_INPUT_CALL(args, rv, call);
   } else {
-    auto call = [&axis, &keepdims](const ktvm::Tensor &tensor) { return topi::sum(tensor, axis, keepdims); };
+    auto call = [&axis, &keepdims](const air::Tensor &tensor) { return topi::sum(tensor, axis, keepdims); };
     TOPI_ONE_INPUT_CALL(args, rv, call);
   }
 });
@@ -383,13 +383,13 @@ TVM_REGISTER_GLOBAL("Cast").set_body([](TVMArgs args, TVMRetValue *rv) {
 
   auto call = [](const Tensor &tensor, Type type) {
     std::string name = "T_cast_" + tensor->op->name;
-    if (tensor->dtype == ktvm::Bool() && type == ktvm::Float(32)) {
-      return topi::cast(topi::cast(tensor, ktvm::Float(16), name), type, name);
-    } else if (tensor->dtype == ktvm::Float(32) && type == ktvm::Bool()) {
+    if (tensor->dtype == air::Bool() && type == air::Float(32)) {
+      return topi::cast(topi::cast(tensor, air::Float(16), name), type, name);
+    } else if (tensor->dtype == air::Float(32) && type == air::Bool()) {
       const char *runtime_mode = std::getenv("RUNTIME_MODE");
       if (runtime_mode == nullptr || (runtime_mode != nullptr && std::strstr(runtime_mode, "cloud") == nullptr)) {
-        auto tmp = topi::cast(tensor, ktvm::Float(16), name + "tmp");
-        auto zero = make_zero(ktvm::Float(16));
+        auto tmp = topi::cast(tensor, air::Float(16), name + "tmp");
+        auto zero = make_zero(air::Float(16));
         auto res = topi::not_equal(tmp, zero);
         return topi::cast(res, type, name);
       } else {
@@ -558,7 +558,7 @@ TVM_REGISTER_GLOBAL("SelectGE").set_body([](TVMArgs args, TVMRetValue *rv) {
       (inputs[3]->IsInstance<ExprNode>() && akg::ir::IsZero(Downcast<Expr>(inputs[3]))) &&
       inputs[0]->IsInstance<TensorNode>() && inputs[2]->IsInstance<TensorNode>()) {
     // Rewrite relu grad
-    ktvm::FCompute fcompute;
+    air::FCompute fcompute;
     Tensor x_tensor = Downcast<Tensor>(inputs[0]);
     Tensor dout_tensor = Downcast<Tensor>(inputs[2]);
 

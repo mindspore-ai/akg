@@ -1342,7 +1342,7 @@ class RealizeScopeElimination : public IRMutator {
   ~RealizeScopeElimination() override = default;
 
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
-    if (op->attr_key == ktvm::ir::attr::realize_scope && !op->body.as<Realize>()) {
+    if (op->attr_key == air::ir::attr::realize_scope && !op->body.as<Realize>()) {
       return this->Mutate(op->body);
     }
 
@@ -1456,7 +1456,7 @@ class RealizeRescope : public IRMutator {
     body = TensorSubstitute(body, realize_res_l0c_->func, t_l0c->op, t_l0c->value_index);
     body = Realize::make(t_l0c->op, t_l0c->value_index, realize_res_l0c_->type, realize_res_l0c_->bounds,
                          realize_res_l0c_->condition, body);
-    body = AttrStmt::make(t_l0c->op, ktvm::ir::attr::realize_scope, Expr("local.L0C"), body);
+    body = AttrStmt::make(t_l0c->op, air::ir::attr::realize_scope, Expr("local.L0C"), body);
 
     Array<Expr> shape_ub;
     for (auto range : realize_res_ub_->bounds) {
@@ -1467,7 +1467,7 @@ class RealizeRescope : public IRMutator {
     body = TensorSubstitute(body, realize_res_ub_->func, t_ub->op, t_ub->value_index);
     body = Realize::make(t_ub->op, t_ub->value_index, realize_res_ub_->type, realize_res_ub_->bounds,
                          realize_res_ub_->condition, body);
-    body = AttrStmt::make(t_ub->op, ktvm::ir::attr::realize_scope, Expr("local.UB"), body);
+    body = AttrStmt::make(t_ub->op, air::ir::attr::realize_scope, Expr("local.UB"), body);
 
     return body;
   }

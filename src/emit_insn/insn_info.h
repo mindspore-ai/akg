@@ -37,7 +37,7 @@ using ir::GetUIntConst;
 using ir::IsConstExpr;
 using ir::IsFlexVarInIf;
 
-using ktvm::ir::substitute;
+using air::ir::substitute;
 
 enum ArgType {
   ARG_VECTOR_ELEWISE = 1,
@@ -76,7 +76,7 @@ class StmtStoreInfoNode : public Node {
   static constexpr const char *_type_key = "StmtStoreInfo";
   TVM_DECLARE_NODE_TYPE_INFO(StmtStoreInfoNode, Node);
 
-  void VisitAttrs(ktvm::AttrVisitor *v) {
+  void VisitAttrs(air::AttrVisitor *v) {
     v->Visit("strides", &strides_);
     v->Visit("shape", &shape_);
     v->Visit("var", &var_);
@@ -161,7 +161,7 @@ class VectorArgInfoNode : public Node {
   static constexpr const char *_type_key = "VectorArgInfo";
   TVM_DECLARE_NODE_TYPE_INFO(VectorArgInfoNode, Node);
 
-  void VisitAttrs(ktvm::AttrVisitor *v) {
+  void VisitAttrs(air::AttrVisitor *v) {
     v->Visit("bodyNum", &body_num_);
     v->Visit("bodyOffset", &body_offset_);
     v->Visit("dstHead", &dst_head_);
@@ -222,7 +222,7 @@ class ArgInfoNode : public Node {
   static constexpr const char *_type_key = "ArgInfo";
   TVM_DECLARE_NODE_TYPE_INFO(ArgInfoNode, Node);
 
-  void VisitAttrs(ktvm::AttrVisitor *v) {
+  void VisitAttrs(air::AttrVisitor *v) {
     v->Visit("body", &body_arg_info_);
     v->Visit("tail", &tail_arg_info_);
     v->Visit("reductionTailArgs", &reduction_tail_args_);
@@ -375,7 +375,7 @@ bool HasVars(const Expr &index, const Var &vec_var);
 int GetVectorizedVarPosition(const Expr &index, Array<Var> &loop_vars);
 }  // namespace akg
 
-namespace ktvm {
+namespace air {
 bool Equal(const akg::StmtStoreInfo &lhs, const akg::StmtStoreInfo &rhs);
 }
 #endif  // EMIT_INSN_INSN_INFO_H_

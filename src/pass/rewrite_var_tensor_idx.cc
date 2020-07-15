@@ -181,7 +181,7 @@ class RewriteVarTensorIdxMutator : public IRMutator {
     Stmt loop_body = IfThenElse::make(selection_cond, stmt);
 
     ForType for_type = ForType::Serial;
-    ktvm::ir::DeviceAPI device_api = ktvm::ir::DeviceAPI::None;
+    air::ir::DeviceAPI device_api = air::ir::DeviceAPI::None;
     for (const auto &loop_var_pair : loop_vars_promoted_range) {
       const Range &loop_range = loop_var_pair.second;
       const Var &loop_var_name = loop_var_pair.first;

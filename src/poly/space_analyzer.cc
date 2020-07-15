@@ -101,7 +101,7 @@ class SpaceVisitor : public IRVisitor {
         basic_op_type = "CALL";
       }
     };
-    ktvm::ir::PostOrderVisit(op->value, GetSrc);
+    air::ir::PostOrderVisit(op->value, GetSrc);
 
     for (auto call : src_call) {
       Tensor tensor;
@@ -373,7 +373,7 @@ void SpaceAnalyzer::IdentifyDmaUnderCondition() {
           }
         }
       };
-      ktvm::ir::PostOrderVisit(pe.cond->condition, DetectToT);
+      air::ir::PostOrderVisit(pe.cond->condition, DetectToT);
       if (!contain_tot) continue;
       TileAxis *tot_axis = analyzer_->Axis(GetBufferInnerAxis(pe.dst));
       if (tot_axis != nullptr) tot_axis->MarkWithAttr(AttrInfo{attr_key, ""});
@@ -553,7 +553,7 @@ void SpaceAnalyzer::IdentifySharedAxes() const {
         shift_time += 1;
         type = "DYNAMIC_SHIFT";
         if (pre_off != -1 && pre_off != 0 && offset->value != 0) {  // first time record offset
-          bound = ktvm::ir::gcd(offset->value, pre_off);
+          bound = air::ir::gcd(offset->value, pre_off);
         }
         pre_off = offset->value;
       } else {
@@ -680,7 +680,7 @@ void SpaceAnalyzer::IdentifyCastAxes() {
 void SpaceAnalyzer::IdentifyDynamicShape() {
   CHECK(analyzer_);
   for (auto node : analyzer_->dynamic_shape_) {
-    if (auto dsn = node.as<ktvm::DynamicShapeNode>()) {
+    if (auto dsn = node.as<air::DynamicShapeNode>()) {
       CHECK(dsn->tensor_name != "") << "Parse dynamic shape failed. Tensor name must be set.";
       SetAttrForTensor(dsn->tensor_name, dsn->pos, "DYN_SHAPE_LIMIT", std::to_string(dsn->dyn_shape_limit));
     }
@@ -690,7 +690,7 @@ void SpaceAnalyzer::IdentifyDynamicShape() {
 void SpaceAnalyzer::IdentifyCustomTiling() {
   CHECK(analyzer_);
   for (auto node : analyzer_->custom_tiling_) {
-    if (auto ctn = node.as<ktvm::CustomTilingNode>()) {
+    if (auto ctn = node.as<air::CustomTilingNode>()) {
       const auto mode = ctn->tile_mode.as<StringImm>();
       CHECK(mode) << "Custom tiling mode must be set as string";
       if (mode->value == "COMMON") {

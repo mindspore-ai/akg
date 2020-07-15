@@ -219,7 +219,7 @@ void PrintHeader(std::ofstream &of, const std::string &str) {
   of << std::endl << ">>>>>>>>>> " << str << " <<<<<<<<<<" << std::endl;
 }
 
-void DumpNode(std::ofstream &of, const ktvm::Node *node) {
+void DumpNode(std::ofstream &of, const air::Node *node) {
   if (node->IsInstance<Provide>()) {
     auto op = static_cast<const Provide *>(node);
     of << Provide::make(op->func, op->value_index, op->value, op->args);

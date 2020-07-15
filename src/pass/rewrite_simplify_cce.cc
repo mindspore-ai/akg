@@ -30,7 +30,7 @@
 
 namespace akg {
 namespace ir {
-using ktvm::arith::Analyzer;
+using air::arith::Analyzer;
 
 Expr Simplify_cce(Expr expr, const Map<Var, Range> &vrange) {
   Analyzer analyzer;
@@ -89,11 +89,11 @@ namespace arith {
     return RecursiveRewrite((ResExpr).Eval());                   \
   }
 
-using ktvm::arith::Analyzer;
-using ktvm::arith::ConstIntBound;
-using ktvm::arith::IntervalSet;
-using ktvm::arith::PVar;
-using ktvm::arith::TryConstFold;
+using air::arith::Analyzer;
+using air::arith::ConstIntBound;
+using air::arith::IntervalSet;
+using air::arith::PVar;
+using air::arith::TryConstFold;
 
 // try to prove x equals val
 RewriteSimplifierCCE::Impl::CompareResult RewriteSimplifierCCE::Impl::TryCompare(const Expr &x, int64_t val) {
@@ -121,7 +121,7 @@ RewriteSimplifierCCE::Impl::CompareResult RewriteSimplifierCCE::Impl::TryCompare
     return kLE;
   }
   if (val == 0) {
-    ktvm::arith::ModularSet dmod = parent_->modular_set(diff);
+    air::arith::ModularSet dmod = parent_->modular_set(diff);
     if (dmod->base != 0) {
       return kNE;
     }
@@ -150,7 +150,7 @@ Expr ModSimplify(const Mod *op, const Expr &e) {
 // Loop Partition Specific Mutators
 Stmt RewriteSimplifierCCE::Impl::Mutate_(const For *op, const Stmt &self) {
   const Variable *loop_var = op->loop_var.get();
-  iteration_vars_[loop_var] = ktvm::IntSet::interval(op->min, op->extent + op->min - 1);
+  iteration_vars_[loop_var] = air::IntSet::interval(op->min, op->extent + op->min - 1);
   in_for_bound_ = true;
   Expr min = this->Mutate(op->min);
   Expr extent = this->Mutate(op->extent);
@@ -259,7 +259,7 @@ Expr RewriteSimplifierCCE::Impl::Mutate_(const EQ *op, const Expr &self) {
   Expr ret = IRMutator::Mutate_(op, self);
   // Pattern var to match any expression
   PVar<Expr> x;
-  auto ctrue = ktvm::arith::PConst<Expr>(make_const(op->type, true));
+  auto ctrue = air::arith::PConst<Expr>(make_const(op->type, true));
 
   Expr const_res = TryConstFold<EQ>(op->a, op->b);
   if (const_res.defined()) return const_res;
@@ -295,16 +295,16 @@ Expr RewriteSimplifierCCE::Impl::Mutate_(const NE *op, const Expr &self) {
 IntervalSet RewriteSimplifierCCE::Impl::BoundToIntervalSet(const ConstIntBound &bound) {
   Expr min, max;
   if (bound->min_value == ConstIntBound::kNegInf)
-    min = ktvm::arith::neg_inf();
+    min = air::arith::neg_inf();
   else if (bound->min_value == ConstIntBound::kPosInf)
-    min = ktvm::arith::pos_inf();
+    min = air::arith::pos_inf();
   else
     min = Expr(bound->min_value);
 
   if (bound->max_value == ConstIntBound::kNegInf)
-    max = ktvm::arith::neg_inf();
+    max = air::arith::neg_inf();
   else if (bound->max_value == ConstIntBound::kPosInf)
-    max = ktvm::arith::pos_inf();
+    max = air::arith::pos_inf();
   else
     max = Expr(bound->max_value);
 
@@ -346,7 +346,7 @@ Expr RewriteSimplifierCCE::Impl::Mutate_(const Sub *op, const Expr &self) {
   Expr const_res = TryConstFold<Sub>(op->a, op->b);
   if (const_res.defined()) return const_res;
 
-  if (ktvm::arith::IsNumericType(op->type)) {
+  if (air::arith::IsNumericType(op->type)) {
     // Any number type rules
     // cancelation rules
     TVM_TRY_REWRITE((x + y) - y, x);
@@ -438,7 +438,7 @@ Expr RewriteSimplifierCCE::Impl::Mutate_(const Add *op, const Expr &self) {
 
   Expr const_res = TryConstFold<Add>(op->a, op->b);
   if (const_res.defined()) return const_res;
-  if (ktvm::arith::IsNumericType(op->type)) {
+  if (air::arith::IsNumericType(op->type)) {
     // Any number type rules
     // cancelation rules
     TVM_TRY_REWRITE((x - y) + y, x);
@@ -525,7 +525,7 @@ Expr RewriteSimplifierCCE::Impl::Mutate_(const Mul *op, const Expr &self) {
   Expr const_res = TryConstFold<Mul>(op->a, op->b);
   if (const_res.defined()) return const_res;
 
-  if (ktvm::arith::IsNumericType(op->type)) {
+  if (air::arith::IsNumericType(op->type)) {
     // constant simplification rule
     TVM_TRY_REWRITE((x + c1) * c2, x * c2 + c1 * c2);
     TVM_TRY_REWRITE((x * c1) * c2, x * (c1 * c2));
@@ -759,10 +759,10 @@ void RewriteSimplifierCCE::Impl::SetIteratorsFromBounds(const Expr &e) {
   for (auto exp : vars) {
     e_bound = parent_->const_int_bound(Expr(akg::ir::GetObjPtr(exp)));
     Expr min_bound =
-      (e_bound->min_value == e_bound.kNegInf ? ktvm::arith::SymbolicLimits::neg_inf_ : Expr(e_bound->min_value));
+      (e_bound->min_value == e_bound.kNegInf ? air::arith::SymbolicLimits::neg_inf_ : Expr(e_bound->min_value));
     Expr max_bound =
-      (e_bound->min_value == e_bound.kPosInf ? ktvm::arith::SymbolicLimits::pos_inf_ : Expr(e_bound->max_value));
-    iteration_vars_[exp] = ktvm::IntSet::interval(min_bound, max_bound);
+      (e_bound->min_value == e_bound.kPosInf ? air::arith::SymbolicLimits::pos_inf_ : Expr(e_bound->max_value));
+    iteration_vars_[exp] = air::IntSet::interval(min_bound, max_bound);
   }
 }
 
@@ -811,7 +811,7 @@ Expr RewriteSimplifierCCE::Impl::ReduceCondition(Expr cond) {
  */
 template <typename T1>
 Expr RewriteSimplifierCCE::Impl::RemoveSelectFromCond(const Expr &lhs, const Expr &rhs, const Expr &self) {
-  using ktvm::ir::Simplify;
+  using air::ir::Simplify;
   if (auto select = rhs.as<Select>()) {  // If the Select is on the rhs
     auto orLhs = select->condition;
     auto orLhs2 = Simplify(T1::make(lhs, select->true_value));

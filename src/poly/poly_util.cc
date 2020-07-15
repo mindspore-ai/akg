@@ -95,18 +95,18 @@ isl::ast_node CanonicalizeBlockInAst(const isl::ast_node &astNode) {
 }
 
 Expr RemoveCast(Expr e) {
-  if (const auto a = e.as<ktvm::ir::Add>()) {
-    return ktvm::ir::Add::make(RemoveCast(a->a), RemoveCast(a->b));
-  } else if (const auto s = e.as<ktvm::ir::Sub>()) {
-    return ktvm::ir::Sub::make(RemoveCast(s->a), RemoveCast(s->b));
-  } else if (const auto m = e.as<ktvm::ir::Mul>()) {
-    return ktvm::ir::Mul::make(RemoveCast(m->a), RemoveCast(m->b));
-  } else if (const auto d = e.as<ktvm::ir::Div>()) {
-    return ktvm::ir::Div::make(RemoveCast(d->a), RemoveCast(d->b));
-  } else if (const auto cast = e.as<ktvm::ir::Cast>()) {
+  if (const auto a = e.as<air::ir::Add>()) {
+    return air::ir::Add::make(RemoveCast(a->a), RemoveCast(a->b));
+  } else if (const auto s = e.as<air::ir::Sub>()) {
+    return air::ir::Sub::make(RemoveCast(s->a), RemoveCast(s->b));
+  } else if (const auto m = e.as<air::ir::Mul>()) {
+    return air::ir::Mul::make(RemoveCast(m->a), RemoveCast(m->b));
+  } else if (const auto d = e.as<air::ir::Div>()) {
+    return air::ir::Div::make(RemoveCast(d->a), RemoveCast(d->b));
+  } else if (const auto cast = e.as<air::ir::Cast>()) {
     return RemoveCast(cast->value);
-  } else if (const auto imm = e.as<ktvm::ir::IntImm>()) {
-    return ktvm::ir::IntImm::make(Int(32), imm->value);
+  } else if (const auto imm = e.as<air::ir::IntImm>()) {
+    return air::ir::IntImm::make(Int(32), imm->value);
   }
   return e;
 }

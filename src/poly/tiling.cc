@@ -84,7 +84,7 @@ class TilingGenerator {
           CHECK(attr_key);
           stmt = AttrStmt::make(make_zero(Int(32)), attr_key->value, info->value, stmt);
         } else if (info->type_key == "LetStmt") {
-          stmt = LetStmt::make(ktvm::Downcast<Var>(info->key), info->value, stmt);
+          stmt = LetStmt::make(air::Downcast<Var>(info->key), info->value, stmt);
         } else {
           analyzer_.logger_.LogFatalAndSaveLog("Unsupported type_key for now: " + info->type_key);
         }
@@ -290,7 +290,7 @@ class TilingGenerator {
           prev_tiling_.emplace_back(dimInfo.l0_tiling_size);
           dimInfo.l0_var = l0_val;
           if (l0_val.as<Variable>()) {
-            auto v = ktvm::Downcast<Var>(l0_val);
+            auto v = air::Downcast<Var>(l0_val);
             var_to_prime_record.Set(v, make_const(v->type, dimInfo.l0_tiling_size));
           }
         } else if (analyzer_.op_type_ == CONV_OP) {
@@ -310,7 +310,7 @@ class TilingGenerator {
         prev_tiling_.emplace_back(dimInfo.l1_tiling_size);
         dimInfo.l1_var = l1_val;
         if (l1_val.as<Variable>()) {
-          auto v = ktvm::Downcast<Var>(l1_val);
+          auto v = air::Downcast<Var>(l1_val);
           var_to_prime_record.Set(v, make_const(v->type, dimInfo.l1_tiling_size));
         }
       }

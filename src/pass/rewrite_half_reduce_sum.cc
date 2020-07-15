@@ -43,7 +43,7 @@ class ReduceSumRewriter : public IRMutator {
   }
 
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
-    if (op->attr_key == ktvm::ir::attr::reduce_update) {
+    if (op->attr_key == air::ir::attr::reduce_update) {
       Array<IterVar> iter = Downcast<Array<IterVar>>(op->node);
       const auto pro = op->body.as<Provide>();
       int64_t size = 1;

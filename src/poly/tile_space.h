@@ -19,15 +19,15 @@
 #include <tvm/base.h>
 #include <tvm/expr.h>
 
-namespace ktvm {
+namespace air {
 class TileSpaceNode : public Node {
  public:
-  ktvm::runtime::NDArray index_table;
-  ktvm::runtime::NDArray l1_tile_range_table;
-  ktvm::runtime::NDArray l0_tile_range_table;
-  ktvm::runtime::NDArray l1_tile_mod_table;
-  ktvm::runtime::NDArray l0_tile_mod_table;
-  ktvm::runtime::NDArray tiling_candidate;
+  air::runtime::NDArray index_table;
+  air::runtime::NDArray l1_tile_range_table;
+  air::runtime::NDArray l0_tile_range_table;
+  air::runtime::NDArray l1_tile_mod_table;
+  air::runtime::NDArray l0_tile_mod_table;
+  air::runtime::NDArray tiling_candidate;
 
   void VisitAttrs(AttrVisitor *v) {
     v->Visit("index_table", &index_table);
@@ -53,6 +53,6 @@ class TileSpace : public NodeRef {
 
 TVM_REGISTER_NODE_TYPE(TileSpaceNode);
 
-}  // namespace ktvm
+}  // namespace air
 
 #endif  // POLY_TILE_SPACE_H_

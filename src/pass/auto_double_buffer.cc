@@ -47,7 +47,7 @@ class DbFinder : public IRVisitor {
   DbFinder() {}
   ~DbFinder() override = default;
   void Visit_(const AttrStmt *op) final {
-    if (op->attr_key == ktvm::ir::attr::double_buffer_scope) alreadyAdd_ = true;
+    if (op->attr_key == air::ir::attr::double_buffer_scope) alreadyAdd_ = true;
   }
   bool alreadyAdd_{false};
 };
@@ -98,20 +98,20 @@ class AutoDoubleBufferInjector : public IRMutator {
     Var loop_var(op->loop_var->name_hint + ".db", op->loop_var.type());
 
     Expr tail_ext = Simplify_cce(op->extent % factor);
-    ktvm::arith::Analyzer analyzer_;
+    air::arith::Analyzer analyzer_;
     bool need_tail = (!analyzer_.CanProve(tail_ext == 0));
     std::vector<Stmt> lane_body;
     for (int i = 0; i < db_lane_; i++) {
       std::unordered_map<const Variable *, Expr> vmap;
       Expr new_loop_var = loop_var * factor + make_const(factor.type(), i) + op->min;
       vmap[op->loop_var.get()] = new_loop_var;
-      Stmt st = ktvm::ir::Substitute(body, vmap);
+      Stmt st = air::ir::Substitute(body, vmap);
       if (!is_const(op->extent) && need_tail && i != 0) {
         st = IfThenElse::make(new_loop_var < op->extent, st, Stmt());
       }
       lane_body.push_back(st);
     }
-    Stmt stmt = ktvm::ir::MergeSeq(lane_body);
+    Stmt stmt = air::ir::MergeSeq(lane_body);
     CHECK(factor.as<IntImm>());
     Expr new_ext = (is_const(op->extent) ? (op->extent / factor) : ((op->extent + factor - 1) / factor));
     auto for_type = (analyzer_.CanProve(new_ext < auto_unroll_bound_) && is_positive_const(new_ext)) ? ForType::Unrolled
@@ -122,7 +122,7 @@ class AutoDoubleBufferInjector : public IRMutator {
       Var loop_var_tail(op->loop_var->name_hint + ".db.tail", op->loop_var.type());
       std::unordered_map<const Variable *, Expr> vmap;
       vmap[op->loop_var.get()] = op->extent / factor * factor + loop_var_tail + op->min;
-      Stmt tail_stmt = ktvm::ir::Substitute(body, vmap);
+      Stmt tail_stmt = air::ir::Substitute(body, vmap);
       auto for_type_ = (analyzer_.CanProve(tail_ext < auto_unroll_bound_) && is_positive_const(tail_ext))
                          ? ForType::Unrolled
                          : ForType::Serial;
@@ -152,7 +152,7 @@ Stmt AutoDoubleBuffer(Stmt stmt) {
     return stmt;
   }
   stmt = AutoDoubleBufferInjector().Inject(stmt);
-  return ktvm::ir::ConvertSSA(stmt);
+  return air::ir::ConvertSSA(stmt);
 }
 }  // namespace ir
 }  // namespace akg

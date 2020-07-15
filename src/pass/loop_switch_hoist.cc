@@ -89,12 +89,12 @@ class LoopSwitchHoister : public IRMutator {
 
     LoopEntry &entry = loop_stack_.back();
     if (!entry.hoist_before.empty()) {
-      Stmt before = ktvm::ir::MergeSeq(entry.hoist_before);
+      Stmt before = air::ir::MergeSeq(entry.hoist_before);
       stmt = Block::make(before, stmt);
     }
 
     if (!entry.hoist_after.empty()) {
-      Stmt after = ktvm::ir::MergeSeq(entry.hoist_after);
+      Stmt after = air::ir::MergeSeq(entry.hoist_after);
       stmt = Block::make(stmt, after);
     }
 
@@ -151,7 +151,7 @@ class LoopSwitchHoister : public IRMutator {
       vmap.Set(Var(loop->loop_var), hoist_before ? loop->min : loop->extent - 1);
     }
 
-    Stmt hoist_stmt = ktvm::ir::Substitute(op->then_case, vmap);
+    Stmt hoist_stmt = air::ir::Substitute(op->then_case, vmap);
     if (hoist_before) {
       loop_stack_[global_layer].hoist_before.emplace_back(hoist_stmt);
     } else {
@@ -261,7 +261,7 @@ class LoopSwitchHoister : public IRMutator {
       Expr t = Simplify_cce(not_hit_expr, vmap);
       vmap.Set(loop_key, prev);
 
-      return ktvm::arith::Analyzer().CanProve(t);
+      return air::arith::Analyzer().CanProve(t);
     };
 
     bool pre_hoist = true;

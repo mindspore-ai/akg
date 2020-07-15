@@ -123,7 +123,7 @@ class OpRecog : public IRVisitor {
           // value_local_UB[cc1] = other_local_UB[0]
           // value_local_UB[cc1] = other_local_UB[ccx] can also pragma as broadcast
           auto vars = GetVarsInExpr(op->index);
-          auto strides = ktvm::arith::DetectLinearEquation(op->index, vars);
+          auto strides = air::arith::DetectLinearEquation(op->index, vars);
           strides = RemoveItemAtIndex(strides, -1);
           if (!strides.empty() && (GetInt32Const(GetItem(strides, -1)) % GetUbBlkSize(op->value.type())) == 0) {
             op_ = "broadcast";

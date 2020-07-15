@@ -53,7 +53,7 @@ class DavinciInfo {
 
   void InitDavinciMemoryLimit() {
     auto CollectLimit = [this](const std::string &scope, DavinciMemScope mem) {
-      ktvm::MemoryInfo info = ktvm::GetMemoryInfo(scope);
+      air::MemoryInfo info = air::GetMemoryInfo(scope);
       CHECK(info.defined());
       davinci_mem_limit_[mem] = info->max_num_bits / 8;
     };

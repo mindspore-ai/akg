@@ -20,9 +20,9 @@
 
 namespace akg {
 namespace ir {
-using ktvm::ir::LoopPartitionCCE;
-using ktvm::runtime::TVMArgs;
-using ktvm::runtime::TVMRetValue;
+using air::ir::LoopPartitionCCE;
+using air::runtime::TVMArgs;
+using air::runtime::TVMRetValue;
 
 TVM_REGISTER_API("ir_pass.LoopPartitionCCE").set_body([](const TVMArgs args, TVMRetValue *ret) {
   if (args.size() == 2) {

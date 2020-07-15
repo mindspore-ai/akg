@@ -38,7 +38,7 @@ class RewriteMultiValueFuncMutator : public IRMutator {
  private:
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) override {
     // we only process AttrStmt of realize_scope because we don't know the data structure of other AttrStmts
-    if (op->attr_key != ktvm::ir::attr::realize_scope) {
+    if (op->attr_key != air::ir::attr::realize_scope) {
       return IRMutator::Mutate_(op, s);
     }
     auto func_ref = Downcast<FunctionRef>(op->node);

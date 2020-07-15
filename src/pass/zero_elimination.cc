@@ -42,10 +42,10 @@
 
 namespace akg {
 namespace ir {
-using ktvm::IterVarType;
-using ktvm::arith::EvalSet;
-using ktvm::arith::IntSet;
-using ktvm::ir::HasSideEffect;
+using air::IterVarType;
+using air::arith::EvalSet;
+using air::arith::IntSet;
+using air::ir::HasSideEffect;
 
 struct ExprLess {
   bool operator()(const Expr &l, const Expr &r) const { return Compare(l, r) < 0; }
@@ -475,7 +475,7 @@ struct NonzeronessConditionResult {
 
 // The implementation of NonzeronessCondition
 class NonzeronessConditionFunctor
-    : public ktvm::ir::ExprFunctor<NonzeronessConditionResult(const Expr &, const Expr &)> {
+    : public air::ir::ExprFunctor<NonzeronessConditionResult(const Expr &, const Expr &)> {
  public:
   NonzeronessConditionResult NonzeronessCondition(const Expr &e) {
     if (e.type().is_bool()) {
@@ -537,7 +537,7 @@ class NonzeronessConditionFunctor
   }
 
   result_type VisitExpr_(const Call *op, const Expr &e) final {
-    if (op->name == ktvm::ir::intrinsic::tvm_if_then_else) {
+    if (op->name == air::ir::intrinsic::tvm_if_then_else) {
       Expr cond = op->args[0], true_val = op->args[1], false_val = op->args[2];
       auto nz_a = NonzeronessCondition(true_val);
       auto nz_b = NonzeronessCondition(false_val);
@@ -679,7 +679,7 @@ struct FactorOutAtomicFormulasResult {
 
 // The implementation of FactorOutAtomicFormulas
 class FactorOutAtomicFormulasFunctor
-    : public ktvm::ir::ExprFunctor<FactorOutAtomicFormulasResult(const Expr &, const Expr &)> {
+    : public air::ir::ExprFunctor<FactorOutAtomicFormulasResult(const Expr &, const Expr &)> {
  public:
   result_type Atomic_(const Expr &e) {
     // For atomic expressions the result is the expr itself with True as the residual
@@ -793,7 +793,7 @@ class RemoveRedundantInequalitiesMutator : public IRMutator {
   }
 
   Expr Mutate_(const Call *op, const Expr &e) override {
-    if (op->name == ktvm::ir::intrinsic::tvm_if_then_else) {
+    if (op->name == air::ir::intrinsic::tvm_if_then_else) {
       Expr new_cond = SuperSimplify(Mutate(op->args[0]));
       if (is_one(new_cond)) {
         return Mutate(op->args[1]);
@@ -1095,7 +1095,7 @@ DomainTransformation SolveSystemOfEquations(const Domain &domain) {
   for (const Expr &formula : domain->conditions) {
     if (const auto eq = formula.as<EQ>()) {
       Array<Expr> coefs =
-        ktvm::arith::DetectLinearEquation(SuperSimplify(eq->a - eq->b, domain->ranges), domain->variables);
+        air::arith::DetectLinearEquation(SuperSimplify(eq->a - eq->b, domain->ranges), domain->variables);
       if (!coefs.empty()) {
         std::vector<int64_t> row;
         for (size_t j = 0; j < coefs.size() - 1; ++j) {
@@ -1293,7 +1293,7 @@ DomainTransformation SolveSystemOfEquations(const Domain &domain) {
   // Set the signs for new variables to have positive sign on 1st dependent input variable
   for (size_t ii = 0; ii < new_to_old.size(); ii++) {
     Array<Expr> coefs =
-      ktvm::arith::DetectLinearEquation(SuperSimplify(new_to_old[ii], domain->ranges), domain->variables);
+      air::arith::DetectLinearEquation(SuperSimplify(new_to_old[ii], domain->ranges), domain->variables);
     if (!coefs.empty()) {
       for (size_t jj = 0; jj < coefs.size() - 1; ++jj) {
         Expr c = coefs[jj];
@@ -1440,8 +1440,8 @@ DomainTransformation SolveSystemOfEquations(const Domain &domain) {
 VarBounds VarBounds::substitute(const Map<Var, Expr> &subst) const {
   auto apply_fun = [&subst](const Expr &e) { return Substitute(e, subst); };
 
-  return {Substitute(coef, subst), ktvm::ir::UpdateArray(lower, apply_fun), ktvm::ir::UpdateArray(equal, apply_fun),
-          ktvm::ir::UpdateArray(upper, apply_fun)};
+  return {Substitute(coef, subst), air::ir::UpdateArray(lower, apply_fun), air::ir::UpdateArray(equal, apply_fun),
+          air::ir::UpdateArray(upper, apply_fun)};
 }
 
 Array<Expr> SolveSystemOfInequalitiesResult::as_conditions() const {
@@ -1575,7 +1575,7 @@ SolveSystemOfInequalitiesResult SolveSystemOfInequalities(const Array<Expr> &ine
     // Take formulas from `current` and classify them according to polarity wrt v
     for (const Expr &ineq : current) {
       if (const LE *le = ineq.as<LE>()) {
-        Array<Expr> coef = ktvm::arith::DetectLinearEquation(le->a, {v});
+        Array<Expr> coef = air::arith::DetectLinearEquation(le->a, {v});
         if (!coef.empty() && is_const(coef[0])) {
           CHECK(as_const_int(coef[0]));
           int64_t coef0 = *as_const_int(coef[0]);
@@ -1590,7 +1590,7 @@ SolveSystemOfInequalitiesResult SolveSystemOfInequalities(const Array<Expr> &ine
           continue;
         }
       } else if (const EQ *eq = ineq.as<EQ>()) {
-        Array<Expr> coef = ktvm::arith::DetectLinearEquation(eq->a, {v});
+        Array<Expr> coef = air::arith::DetectLinearEquation(eq->a, {v});
         if (!coef.empty() && is_const(coef[0])) {
           CHECK(as_const_int(coef[0]));
           int64_t coef0 = *as_const_int(coef[0]);
@@ -1616,7 +1616,7 @@ SolveSystemOfInequalitiesResult SolveSystemOfInequalities(const Array<Expr> &ine
     // Combine each positive inequality with each negative one (by adding them together)
     for (const auto &pos : coef_pos) {
       for (const auto &neg : coef_neg) {
-        auto first_gcd = ktvm::ir::gcd(static_cast<int>(pos.first), static_cast<int>(-neg.first));
+        auto first_gcd = air::ir::gcd(static_cast<int>(pos.first), static_cast<int>(-neg.first));
         CHECK_NE(first_gcd, 0);
         Expr c_pos = make_const(v.type(), neg.first / first_gcd);
         Expr c_neg = make_const(v.type(), pos.first / first_gcd);
@@ -1633,10 +1633,10 @@ SolveSystemOfInequalitiesResult SolveSystemOfInequalities(const Array<Expr> &ine
     // We will generate formulas of the form coef_lcm*v <= bound
     int64_t coef_lcm = 1;
     for (const auto &pos : coef_pos) {
-      coef_lcm = ktvm::ir::lcm(coef_lcm, pos.first);
+      coef_lcm = air::ir::lcm(coef_lcm, pos.first);
     }
     for (const auto &neg : coef_neg) {
-      coef_lcm = ktvm::ir::lcm(coef_lcm, -neg.first);
+      coef_lcm = air::ir::lcm(coef_lcm, -neg.first);
     }
 
     // The resulting lower and upper bounds stored in sorted vectors
@@ -1807,7 +1807,7 @@ DomainTransformation DeskewDomain(const Domain &domain) {
           Expr diff = SuperSimplify(upp - low, vranges);
           // Since diff may depend on some other variables, we compute its overapproximation
           Expr diff_over = EvalSet(diff, new_var_intsets).max();
-          if (ktvm::arith::is_pos_inf(diff_over)) {
+          if (air::arith::is_pos_inf(diff_over)) {
             continue;
           }
 

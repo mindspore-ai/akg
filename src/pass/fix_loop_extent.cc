@@ -48,7 +48,7 @@ class LoopExtentFixer : public IRMutator {
   }
 
  private:
-  ktvm::arith::Analyzer analyzer;
+  air::arith::Analyzer analyzer;
 };
 
 Stmt FixLoopExtent(Stmt stmt) {

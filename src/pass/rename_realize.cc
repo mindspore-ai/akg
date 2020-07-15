@@ -37,7 +37,7 @@ class RealizeRenamer : public IRMutator {
  private:
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
     const auto cop = op->node.as<ComputeOpNode>();
-    if (cop && op->attr_key == ktvm::ir::attr::realize_scope && global_.count(op->node.get()) == 0) {
+    if (cop && op->attr_key == air::ir::attr::realize_scope && global_.count(op->node.get()) == 0) {
       // don't touch empty scope
       const auto st = op->value.as<StringImm>();
       if (!st) {
@@ -116,8 +116,8 @@ class RealizeRenamer : public IRMutator {
   }
 
  private:
-  std::unordered_map<const Node *, ktvm::Operation> replace_;
-  std::unordered_map<const Node *, ktvm::Operation> global_;
+  std::unordered_map<const Node *, air::Operation> replace_;
+  std::unordered_map<const Node *, air::Operation> global_;
   std::set<std::string> attr_name_;
   int m{0};
 };

@@ -38,7 +38,7 @@ using ExprToVarMap = std::unordered_map<std::string, Var>;
 void ExtractSubExprsCount(const Expr &expr, const std::unordered_set<const Variable *> &defined_vars,
                           ExprCount *expr_count) {
   PostOrderVisit(expr, [&expr_count, &defined_vars](const NodeRef &node) {
-    auto e = ktvm::Downcast<Expr>(node);
+    auto e = air::Downcast<Expr>(node);
     // do not extract simple exprs
     if (is_const(e)) return;
     if (e.as<FloatImm>()) return;
@@ -208,7 +208,7 @@ class PromoteCommonExprMutator : public IRMutator {
     // promote common expr in internal scopes
     stmt = IRMutator::Mutate(stmt);
     // merge LetStmt and AttrStmt
-    return ktvm::ir::MergeNest(outer_let, ktvm::ir::MergeNest(outer_attr, stmt));
+    return air::ir::MergeNest(outer_let, air::ir::MergeNest(outer_attr, stmt));
   }
 
  private:

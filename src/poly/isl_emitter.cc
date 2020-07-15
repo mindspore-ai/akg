@@ -230,7 +230,7 @@ Stmt IslEmitter::EmitBlock(const isl::ast_node_block &node) {
   }
 }
 
-class ReplaceLoopVar : public ktvm::ir::IRMutator {
+class ReplaceLoopVar : public air::ir::IRMutator {
  public:
   explicit ReplaceLoopVar(VarMap v_) : var_map(std::move(v_)) {}
   ~ReplaceLoopVar() override = default;
@@ -279,7 +279,7 @@ isl::multi_aff IslEmitter::TensorAccessMultAff(const isl::id &tensor_id, const A
   return ma;
 }
 
-class EmitExpr : public ktvm::ir::IRMutator {
+class EmitExpr : public air::ir::IRMutator {
  public:
   EmitExpr(const std::function<Stmt(const std::string &, const Node *, const Array<Expr> &, VarMap)> &f, VarMap vm)
       : func(f), var_map(std::move(vm)) {}
@@ -304,7 +304,7 @@ class EmitExpr : public ktvm::ir::IRMutator {
       const auto eval = stmt.as<Evaluate>();
       return eval ? eval->value : Expr("error");
     } else {
-      return ktvm::ir::IRMutator::Mutate_(op, e);
+      return air::ir::IRMutator::Mutate_(op, e);
     }
   }
 
@@ -571,7 +571,7 @@ Stmt IslEmitter::EmitUserStmtContent(const Evaluate *eva_node) {
   // add AttrStmt to im2col
   for (const auto &item : scop_.data_.vecs) {
     Expr replaced = ReplaceLoopVar(var_map_).Mutate(item.second);
-    res = AttrStmt::make(item.first, ktvm::ir::attr::buffer_bind_scope, replaced, res);
+    res = AttrStmt::make(item.first, air::ir::attr::buffer_bind_scope, replaced, res);
   }
   return res;
 }

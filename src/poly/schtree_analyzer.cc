@@ -518,7 +518,7 @@ void ScheduleTreeAnalyzer::AddLoopRangeFromIfs() {
           if_expr.emplace_back(and_op->b);
         }
       };
-      ktvm::ir::PostOrderVisit(cond->condition, Analyze);
+      air::ir::PostOrderVisit(cond->condition, Analyze);
       if (if_expr.empty()) if_expr.emplace_back(cond->condition);
 
       for (const auto &e : if_expr) {
@@ -583,7 +583,7 @@ void ScheduleTreeAnalyzer::AddLoopDataSize() {
       for (auto arg : p->args) {
         related_name = analyzer_->VisitVarNames(arg, related_name);
       }
-      ktvm::ir::PostOrderVisit(p->value, ExtractName);
+      air::ir::PostOrderVisit(p->value, ExtractName);
       Band pre_loops = GetPreviousLoops(it.first);
       for (auto loop : pre_loops) {
         for (const auto &name : related_name) {
@@ -883,7 +883,7 @@ void ScheduleTreeAnalyzer::AnalyzeCubeInfo() {
     for (auto op : pros) {
       if (op->func->func_name() != res) continue;
       if (op->value.as<Call>()) {
-        ktvm::ir::PostOrderVisit(op->value, GetDeepestCall);
+        air::ir::PostOrderVisit(op->value, GetDeepestCall);
       }
     }
     auto SortMatrixInCBAOrder = [this](const Call *c1, const Call *c2) {

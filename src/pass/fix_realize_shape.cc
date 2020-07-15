@@ -51,7 +51,7 @@ class RealizeShapeFixer : public IRMutator {
   }
 
   void RemoveVarsInCond(const Expr &cond) {
-    std::unordered_set<Var, ktvm::NodeHash, ktvm::NodeEqual> vars_in_cond;
+    std::unordered_set<Var, air::NodeHash, air::NodeEqual> vars_in_cond;
     GatherVars(cond, &vars_in_cond);
     for (auto var_in_cond : vars_in_cond) {
       loop_var_bounds.erase(var_in_cond.get());

@@ -53,7 +53,7 @@ namespace {
 class CoreCpuCoproc : public IRVisitor {
  public:
   void Visit_(const AttrStmt *op) final {
-    if (op->attr_key == ktvm::ir::attr::coproc_scope) {
+    if (op->attr_key == air::ir::attr::coproc_scope) {
       flag_iscore_ = true;
     } else {
       IRVisitor::Visit_(op);
@@ -98,7 +98,7 @@ class CdiffSourceList {
 
 CdiffSourceList *CdiffSourceList::instance_ = nullptr;
 
-TVM_REGISTER_API("build_cce.GetCdiffSourceList").set_body([](const ktvm::TVMArgs args, ktvm::TVMRetValue *ret) {
+TVM_REGISTER_API("build_cce.GetCdiffSourceList").set_body([](const air::TVMArgs args, air::TVMRetValue *ret) {
   CdiffSourceList *inst = CdiffSourceList::GetInstance();
   std::vector<std::string> sources = inst->Get();
   Array<Expr> res;
@@ -1110,7 +1110,7 @@ std::string TvmCallbackCceCompile(const std::string &code, const Array<NodeRef> 
 // Assume there is no string literal or comment that includes non-matching brackets in the code
 std::string AddPrefixForEachLineInFunc(const std::string &source, const std::string &func_prefix,
                                        const std::string &line_prefix) {
-  std::vector<std::string> lines = ktvm::common::Split(source, '\n');
+  std::vector<std::string> lines = air::common::Split(source, '\n');
   std::string new_source;
   int nested_scope_level = 0;
   for (const auto &line : lines) {
@@ -1196,7 +1196,7 @@ void CompileCdiff(const std::vector<std::string> &cdiff_file_list) {
   const std::string csim_pass_name("cdiff");
   const char *dump_c_pass = std::getenv("DUMP_C_PASS");
   CHECK(dump_c_pass != nullptr) << "DUMP_C_PASS must be defined in environ!";
-  std::vector<std::string> cdiff_pass_names = ktvm::common::Split(dump_c_pass, ',');
+  std::vector<std::string> cdiff_pass_names = air::common::Split(dump_c_pass, ',');
   std::string cdiff_new_record_file_name = cdiff_pass_names[0] + ".cpp";
   WriteMangledCdiffFile(csim_pass_name, cdiff_new_record_file_name, cdiff_record_src);
   std::string cdiff_new_compare_file_name = cdiff_new_compare_file_name[1] + ".cpp";
@@ -1229,7 +1229,7 @@ void CcePostprocCdiff(const std::string &code, uint32_t block_dim, const std::st
   const char *dump_c_pass = std::getenv("DUMP_C_PASS");
   CHECK(dump_c_pass != nullptr) << "Please set DUMP_C_PASS=record_pass,compare_pass for RUNTIME_MODE is cdiff";
 
-  std::vector<std::string> pass_names = ktvm::common::Split(dump_c_pass, ',');
+  std::vector<std::string> pass_names = air::common::Split(dump_c_pass, ',');
   for (auto &pass_name : pass_names) {
     for (auto &letter : pass_name) {
       letter = std::tolower(letter);
@@ -1245,11 +1245,11 @@ void CcePostprocCdiff(const std::string &code, uint32_t block_dim, const std::st
   }
 }
 
-ktvm::runtime::Module BuildCCE(const Array<LoweredFunc> &funcs, const Array<NodeRef> &third_libs) {
-  using ktvm::runtime::Registry;
+air::runtime::Module BuildCCE(const Array<LoweredFunc> &funcs, const Array<NodeRef> &third_libs) {
+  using air::runtime::Registry;
   bool output_ssa = false;
   bool iscore = IsCCECore(funcs);
-  ktvm::codegen::CodeGenCCE cg;
+  air::codegen::CodeGenCCE cg;
   cg.Initialize(output_ssa);
 
   uint32_t block_dim = 1;
@@ -1285,7 +1285,7 @@ ktvm::runtime::Module BuildCCE(const Array<LoweredFunc> &funcs, const Array<Node
     code = (*f)(code, block_dim).operator std::string();
   }
 
-  return ktvm::runtime::CceModuleCreate(ptx, fmt, ktvm::codegen::ExtractFuncInfo(funcs), code);
+  return air::runtime::CceModuleCreate(ptx, fmt, air::codegen::ExtractFuncInfo(funcs), code);
 }
 
 #ifdef UT_TEST
@@ -1294,7 +1294,7 @@ TVM_REGISTER_API("codegen.build_ccecpu").set_body([](TVMArgs args, TVMRetValue *
 
 TVM_REGISTER_API("codegen.build_cce").set_body([](const TVMArgs args, TVMRetValue *rv) {
   bool iscore = IsCCECore(args[0]);
-  const PackedFunc *func = ktvm::runtime::Registry::Get("codegen.build_ccecpu");
+  const PackedFunc *func = air::runtime::Registry::Get("codegen.build_ccecpu");
   if (!func || iscore) {
     if (args.size() == 3) {
       *rv = BuildCCE(args[0], args[2]);

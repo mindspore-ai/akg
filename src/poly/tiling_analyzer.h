@@ -83,9 +83,9 @@ inline Expr CastToExpr(const std::string &value) {
   return Expr(static_cast<int>(std::strtol(value.c_str(), nullptr, 10)));
 }
 
-inline Expr CastInt64ToExpr(const int64_t value) { return ktvm::ir::IntImm::make(Int(32), value); }
+inline Expr CastInt64ToExpr(const int64_t value) { return air::ir::IntImm::make(Int(32), value); }
 
-inline Expr CastIntToExpr(const int value) { return ktvm::ir::IntImm::make(Int(32), value); }
+inline Expr CastIntToExpr(const int value) { return air::ir::IntImm::make(Int(32), value); }
 
 enum TileOpType { VECTOR_OP, CONV_OP, GEMM_OP };
 
@@ -236,7 +236,7 @@ class TilingAnalyzer {
   // represent a tilable outer band
   using Band = std::vector<const For *>;
   using VarNames = std::vector<std::string>;
-  ktvm::arith::Analyzer arith_ana_;
+  air::arith::Analyzer arith_ana_;
   ExprSimplifier expr_ac_;
   bool Prepare();
 

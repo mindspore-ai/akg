@@ -17,45 +17,45 @@
 #include "base/expr_builder.h"
 
 namespace akg {
-ktvm::Array<ktvm::Expr> UTExprBuilder::CreateShape(const std::vector<int32_t> &shapes) {
-  ktvm::Array<ktvm::Expr> res;
+air::Array<air::Expr> UTExprBuilder::CreateShape(const std::vector<int32_t> &shapes) {
+  air::Array<air::Expr> res;
   for (int32_t shape : shapes) {
-    ktvm::Integer imm = ktvm::IntImm::make(ktvm::Int(32), shape);
+    air::Integer imm = air::IntImm::make(air::Int(32), shape);
     res.push_back(imm);
   }
   return res;
 }
 
-ktvm::Var UTExprBuilder::CreateVar(const std::string &name) {
-  return ktvm::Var(name);
+air::Var UTExprBuilder::CreateVar(const std::string &name) {
+  return air::Var(name);
 }
 
-ktvm::Array<ktvm::Expr> UTExprBuilder::CreateVars(const std::vector<std::string> &names) {
-  ktvm::Array<ktvm::Expr> vars;
+air::Array<air::Expr> UTExprBuilder::CreateVars(const std::vector<std::string> &names) {
+  air::Array<air::Expr> vars;
   for (const std::string &name : names) {
     vars.push_back(std::move(CreateVar(name)));
   }
   return vars;
 }
 
-ktvm::Operation UTExprBuilder::PlaceholderOpNode(
+air::Operation UTExprBuilder::PlaceholderOpNode(
     const std::string &name,
     const std::vector<int32_t> &shapes,
-    ktvm::DataType dtype) {
-  ktvm::Array<ktvm::Expr> expr_shapes = CreateShape(shapes);
-  return ktvm::PlaceholderOpNode::make(name, expr_shapes, dtype);
+    air::DataType dtype) {
+  air::Array<air::Expr> expr_shapes = CreateShape(shapes);
+  return air::PlaceholderOpNode::make(name, expr_shapes, dtype);
 }
 
-ktvm::Expr UTExprBuilder::TensorElement(
+air::Expr UTExprBuilder::TensorElement(
     const std::string &name,
     const std::vector<int32_t> &shapes,
     const std::vector<std::string> &axis_names,
-    ktvm::DataType dtype) {
-  return ktvm::ir::Call::make(
+    air::DataType dtype) {
+  return air::ir::Call::make(
       dtype,                                   // type
       name,                                    // name
       CreateVars(axis_names),                  // args
-      ktvm::ir::Call::Halide,                  // call_type
+      air::ir::Call::Halide,                  // call_type
       PlaceholderOpNode(name, shapes, dtype),  // func,
       0);                                      // value_index
 }
@@ -71,9 +71,9 @@ UTTensorElementHelper::UTTensorElementHelper(const std::vector<int32_t> &shapes,
   }
 }
 
-ktvm::Expr UTTensorElementHelper::Elem(const std::string &name,
+air::Expr UTTensorElementHelper::Elem(const std::string &name,
                                        uint32_t dim,
-                                       ktvm::DataType dtype) const {
+                                       air::DataType dtype) const {
   uint32_t start = shapes_.size() - dim;
   return UTExprBuilder::TensorElement(
       name,
