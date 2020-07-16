@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "emit_insn/insn_emitter.h"
+#include "insn_emitter.h"
 
 #include <tvm/ir_mutator.h>
 #include <tvm/ir_pass.h>
@@ -53,121 +53,57 @@ std::vector<size_t> SortIndexes(const std::vector<int> &v) {
 /// \param intrin_name        - The CCE intrin name
 /// \param broadcast_last_axis - Tag of broadcast_last_axis mode
 /// \return Stmt of emitted CCE intrin
-Stmt SingleVecEmitter(const Stmt &op, std::string intrin_name, bool broadcast_last_axis = false) {
+Stmt SingleVecEmitter(const Stmt &op, std::string intrin_name) {
   CHECK(op);
   Stmt result;
-  // optimization of copy_ubuf_to_ubuf
-  bool is_dma_opt = false;
-  if (intrin_name == INTRIN_NAME_COPY_UB_TO_UB) {
-    CommentManager::GetInstance().AddComment("Insn_type", "dma_copy");
-    CommentManager::GetInstance().AddComment("Insn_name", INTRIN_NAME_COPY_UB_TO_UB);
-    CommentManager::GetInstance().AddComment("Vadds_replace_copy", "enable");
-    intrin_name = "vadds";
-    is_dma_opt = true;
-  } else {
-    CommentManager::GetInstance().AddComment("Insn_type", "single_vector");
-    CommentManager::GetInstance().AddComment("Insn_name", intrin_name);
-  }
+
+  CommentManager::GetInstance().AddComment("Insn_type", "single_vector");
+  CommentManager::GetInstance().AddComment("Insn_name", intrin_name);
 
   StmtInfoList dst_info_list;
   StmtInfoList src_info_list;
-  StmtStoreInfo scalar_info;
   StmtInfo for_info;
   StmtInfo if_info;
-  std::string mode = GetSingleVecComputationInfo(op, intrin_name, dst_info_list, src_info_list, if_info, for_info);
+
+  bool same_dtype = intrin_name.find("vconv_") == std::string::npos;
+  GetCompactComputationInfo(op, dst_info_list, src_info_list, if_info, for_info, same_dtype, true);
   CHECK(!dst_info_list.empty());
 
-  if (broadcast_last_axis) {
-    mode = "broadcast_last_axis";
-    // In this case, must come from binary vec, so must have two src
-    CHECK(src_info_list.size() >= 2) << "Broadcast last axis mode must have at least two srcs.";
-    if (!IsTwoItemEqual(src_info_list[0]->var_, dst_info_list[0]->var_, -1)) {
-      scalar_info = src_info_list[0];
-      src_info_list.Set(0, src_info_list[1]);
-    } else if (!IsTwoItemEqual(src_info_list[1]->var_, dst_info_list[0]->var_, -1)) {
-      scalar_info = src_info_list[1];
-    }
-  } else {
-    if (mode == "broadcast" && !src_info_list.empty() && dst_info_list.size() == 1) {
-      if (!IsTwoItemEqual(src_info_list[0]->var_, dst_info_list[0]->var_, -1)) {
-        mode = "broadcast_last_axis";
+  Array<Expr> call_args;
+  int call_cnt = 0;
+  if (intrin_name == "vector_dup" || intrin_name == "vadds" ||
+    intrin_name == "vmuls" || intrin_name == "vaxpy") {
+    auto GetCallInfo = [&intrin_name, &call_args, &call_cnt](const NodeRef &op) {
+      if (op.as<Call>() && op.as<Call>()->name == intrin_name) {
+        call_args = op.as<Call>()->args;
+        call_cnt = call_cnt + 1;
       }
-      if (src_info_list.size() > 1) {
-        if (!IsTwoItemEqual(src_info_list[1]->var_, dst_info_list[0]->var_, -1)) {
-          mode = "broadcast_last_axis";
-        } else {
-          scalar_info = src_info_list[0];
-          src_info_list.Set(0, src_info_list[1]);
-        }
-      }
-    }
+    };
+    PostOrderVisit(op, GetCallInfo);
+    CHECK_EQ(call_cnt, 1);
   }
-
-  if (broadcast_last_axis) {
-    mode = "broadcast_last_axis";
-  }
-
-  if (intrin_name == INTRIN_NAME_VECTOR_DUP) {
-    auto dst_info = dst_info_list[0];
-    if (dst_info->var_.size() > 1 &&
-        GetIntConst(GetItem(dst_info->strides_, -1)) == GetIntConst(GetItem(dst_info->shape_, -1)) + 1) {
-      // diagnoal broadcast case
-      return op;
-    }
-    dst_info.CleanFlexVar();
+  SingleType insn_type {SingleType::SIMD};
+  Expr scalar_src {};
+  if (intrin_name == "vector_dup") {
+    insn_type = SingleType::Vector_Dump;
+    src_info_list = {};
+    scalar_src = call_args[0];
+  } else if (intrin_name == "vadds" || intrin_name == "vmuls" || intrin_name == "vaxpy") {
+    insn_type = SingleType::Tensor_Scalar;
+    src_info_list = {src_info_list[0]};
+    scalar_src = call_args[1];
   }
 
   // check is single vector broadcast reduce mode exist
-  SingleVecPatternGenerator generator = SingleVecPatternGenerator(dst_info_list, src_info_list, for_info, mode);
+  SingleVecPatternGenerator generator = SingleVecPatternGenerator(dst_info_list, src_info_list, for_info);
   auto params = generator.GetInsnArgs();
   dst_info_list = params.dst_info_list;
   src_info_list = params.src_info_list;
   for_info = params.for_info;
   ArgInfo arg_info = params.arg_info;
 
-  CommentManager::GetInstance().AddComment("Compute_type", mode);
+  CommentManager::GetInstance().AddComment("Compute_type", intrin_name);
   CommentManager::GetInstance().AddComment("Pattern", arg_info.GetPattern());
-
-  if (intrin_name == "vadds" || intrin_name == "vmuls" || intrin_name == INTRIN_NAME_VECTOR_DUP) {
-    auto stores = GetStores(op);
-    auto store = stores[0].as<Store>();
-    auto scalar = Expr(0);
-    if (intrin_name == "vadds" || intrin_name == "vmuls") {
-      if (!dst_info_list.empty()) {
-        scalar = FloatImm::make(dst_info_list[0]->dtype_, 0.000000);
-      }
-      if (!dst_info_list[0]->dtype_.is_float()) {
-        return op;
-      }
-      if (!is_dma_opt) {
-        if (!scalar_info.defined()) {
-          auto children = GetBinaryOpExprChildren(store->value);
-          if (children.empty()) {
-            LOG(FATAL) << store->value << " is not binary op.";
-          }
-          scalar = children[1];
-        } else {
-          scalar = Load::make(scalar_info->dtype_, scalar_info->data_, scalar_info->index_, Expr(1));
-        }
-      }
-    } else if (intrin_name == INTRIN_NAME_VECTOR_DUP) {
-      if (store->value->IsInstance<Load>()) {
-        // scale is load
-        scalar =
-          Load::make(src_info_list[0]->dtype_, store->value.as<Load>()->buffer_var, src_info_list[0]->index_, Expr(1));
-      } else {
-        // scale is imm
-        scalar = store->value;
-      }
-    }
-
-    if (arg_info->body_arg_info_.defined()) {
-      arg_info->body_arg_info_.GetNode()->scalar_ = scalar;
-    }
-    if (arg_info->tail_arg_info_.defined()) {
-      arg_info->tail_arg_info_.GetNode()->scalar_ = scalar;
-    }
-  }
 
   if (intrin_name == "vconv_deq") {
     result = InsertBody(
@@ -175,23 +111,10 @@ Stmt SingleVecEmitter(const Stmt &op, std::string intrin_name, bool broadcast_la
   }
 
   SingleVecInsnBuilder single_vec_builder =
-    SingleVecInsnBuilder(dst_info_list[0], src_info_list[0], arg_info, intrin_name);
+    SingleVecInsnBuilder(dst_info_list[0], src_info_list[0], arg_info, intrin_name, scalar_src, insn_type);
   auto insn_list = single_vec_builder.EmitIntrin();
-
-  if (intrin_name == INTRIN_NAME_VECTOR_DUP && dst_info_list[0]->var_.empty()) {
-    Stmt store;
-    auto ScanStore = [&store](const NodeRef &op) {
-      const auto e = op.as<Store>();
-      if (e != nullptr) {
-        store = Store::make(e->buffer_var, e->value, e->index, e->predicate);
-      }
-    };
-    air::ir::PostOrderVisit(op, ScanStore);
-    store = EmitSetVecMaskIntrin(store, dst_info_list[0]->dtype_);
-    insn_list = {store};
-  }
-
-  return FoldInsnWithForInfo(insn_list, if_info, for_info, result);
+  auto ret = FoldInsnWithForInfo(insn_list, if_info, for_info, result);
+  return ret;
 }
 
 /// Function to emit binary vector intrin
@@ -211,11 +134,6 @@ Stmt BinaryVecEmitter(const Stmt &op, std::string intrin_name, bool enable_bisec
   CommentManager::GetInstance().AddComment("Insn_name", intrin_name);
 
   switch (arg_info->arg_type_) {
-    case ARG_VECTOR_BROADCAST_LAST_AXIS: {
-      CommentManager::GetInstance().CleanComments();
-      intrin_name += "s";
-      return SingleVecEmitter(op, intrin_name, true);
-    }
     case ARG_VECTOR_REDUCTION_LAST_AXIS: {
       CommentManager::GetInstance().AddComment("Compute_type", "reduce_last_axis");
       auto dst_info = dst_info_list[0];
@@ -928,83 +846,8 @@ Stmt DmaMovEmitter(const Stmt &op, bool enable_cover_protect) {
   StmtInfo for_info;
   GetDmaComputationInfo(op, dst_info_list, src_info_list, if_info, for_info, dma_mode, intrin_name);
 
-  auto check_alignment = [](const Expr &align, const Array<Expr> &shape) {
-    if (GetIntConst(align) == 1 || shape.size() == 1u) {
-      return true;
-    }
-
-    if (shape.empty()) {
-      return false;
-    }
-    Expr sz = 1;
-    for (int i = static_cast<int>(shape.size()) - 1; i >= 0; --i) {
-      sz = sz * shape[i];
-      if (GetIntConst(align) == GetIntConst(sz)) {
-        return true;
-      }
-    }
-    return false;
-  };
-
   const auto &dst_info = dst_info_list[0];
   const auto &src_info = src_info_list[0];
-  int block_size = GetUbBlkSize(dst_info->dtype_);
-
-  // check scalar to scalar
-  // check if dst is considered as scalar
-  // check if src is considered as scalar
-  bool is_broadcast =
-    (dst_info->var_.empty() || (!dst_info->strides_.empty() && GetIntConst(GetItem(dst_info->strides_, -1)) != 1)) &&
-    (src_info->var_.empty() || (!src_info->strides_.empty() && GetIntConst(GetItem(src_info->strides_, -1)) != 1));
-  // check vector to vector, but in scalar dma mode
-  bool last_dim_equal = !dst_info->var_.empty() && !src_info->var_.empty() && !dst_info->strides_.empty() &&
-                        !src_info->strides_.empty() &&
-                        GetItem(dst_info->var_, -1).get() == GetItem(src_info->var_, -1).get() &&
-                        GetIntConst(GetItem(dst_info->strides_, -1)) != GetIntConst(GetItem(src_info->strides_, -1));
-  bool broadcast_scalar = intrin_name == "broadcast" && is_broadcast;
-  bool ubuf_scalar = intrin_name == INTRIN_NAME_COPY_UB_TO_UB && (is_broadcast || last_dim_equal);
-
-  if (broadcast_scalar || ubuf_scalar) {
-    int shape1 = GetInt32Const(GetItem(dst_info->shape_, -1));
-    int stride1 = GetInt32Const(GetItem(dst_info->strides_, -1));
-    if (ubuf_scalar && shape1 < block_size && stride1 == block_size &&
-        IsTwoItemEqual(dst_info->strides_, src_info->strides_, -1, true) && src_info->dtype_.bits() != 64) {
-      // if last dim small than blocksize, then use vadds
-      return SingleVecEmitter(op, intrin_name);
-    }
-    CommentManager::GetInstance().AddComment("Insn_type", "dma_copy");
-    CommentManager::GetInstance().AddComment("Insn_name", "scalar");
-    if (src_info->var_.empty() && dst_info->var_.empty()) {
-      return op;
-    } else {
-      // check align
-      if (!check_alignment(dst_info->data_alignment_, dst_info->shape_)) {
-        return op;
-      }
-      Stmt base_stmt = EmitScalarDmaIntrinTemplate(op, src_info, dst_info);
-      return GenIfAndFor(base_stmt, if_info, for_info, false);
-    }
-  }
-
-  if (intrin_name == "broadcast") {
-    return SingleVecEmitter(op, INTRIN_NAME_VECTOR_DUP);
-  } else if (intrin_name == INTRIN_NAME_COPY_UB_TO_UB) {
-    // Use vadds to optimize dma copy
-    if (if_info.vars_.empty() && dst_info->dtype_.is_float() && src_info->dtype_.is_float()) {
-      if ((dst_info->dtype_.bits() == 32 && src_info->dtype_.bits() == 32) ||
-          (dst_info->dtype_.bits() == 16 && src_info->dtype_.bits() == 16)) {
-        int repeat_len = block_size * FULL_BLOCK_NUM;
-        CHECK_NE(block_size, 0);
-        int shape1 = GetInt32Const(GetItem(dst_info->shape_, -1));
-        if ((shape1 >= repeat_len / 2 && shape1 <= repeat_len) ||
-            (dst_info->shape_.size() >= 3 && shape1 <= block_size) ||
-            (dst_info->shape_.size() >= 2 && shape1 % block_size == 0)) {
-          // if last dim shape is too small, there is no need to opt
-          return SingleVecEmitter(op, intrin_name);
-        }
-      }
-    }
-  }
 
   CommentManager::GetInstance().AddComment("Insn_type", "dma_copy");
 
@@ -1014,31 +857,10 @@ Stmt DmaMovEmitter(const Stmt &op, bool enable_cover_protect) {
     Map<std::string, Expr> ub_copy_post;
     auto arg_info_map =
       GetDmaCopyInsnArgs(intrin_name, dst_info_list, src_info_list, for_info, ub_copy_pre, ub_copy_post);
-    if (intrin_name == "vtranspose_scalar") {
-      base_stmt = EmitScalarDmaIntrinTemplate(op, src_info, dst_info);
-      CommentManager::GetInstance().AddComment("Insn_name", "scalar");
-    } else if (intrin_name == "vtranspose") {
-      Array<Expr> args = {arg_info_map["loop_width"], arg_info_map["loop_height"], arg_info_map["shape_width"]};
-      Array<Expr> pre_ub_copy_args;
-      if (!ub_copy_pre.empty()) {
-        pre_ub_copy_args = Array<Expr>(
-          {ub_copy_pre["nBurst"], ub_copy_pre["lenBurst"], ub_copy_pre["srcStride"], ub_copy_pre["dstStride"]});
-      }
-      Array<Expr> post_ub_copy_args;
-      if (!ub_copy_post.empty()) {
-        post_ub_copy_args = Array<Expr>(
-          {ub_copy_post["nBurst"], ub_copy_post["lenBurst"], ub_copy_post["srcStride"], ub_copy_post["dstStride"]});
-      }
-      TransposeInsnBuilder builder =
-        TransposeInsnBuilder(dst_info, src_info, args, pre_ub_copy_args, post_ub_copy_args);
-      base_stmt = builder.EmitSingleIntrin();
-      CommentManager::GetInstance().AddComment("Insn_name", intrin_name);
-    } else {
-      DmaInsnBuilder dma_builder =
-        DmaInsnBuilder(dst_info, src_info, intrin_name, arg_info_map, false, false, enable_cover_protect);
-      base_stmt = dma_builder.EmitSingleIntrin();
-      CommentManager::GetInstance().AddComment("Insn_name", intrin_name);
-    }
+    DmaInsnBuilder dma_builder =
+      DmaInsnBuilder(dst_info, src_info, intrin_name, arg_info_map, false, false, enable_cover_protect);
+    base_stmt = dma_builder.EmitSingleIntrin();
+    CommentManager::GetInstance().AddComment("Insn_name", intrin_name);
   } else if (dma_mode == "cce_load") {
     auto arg_info_map = GetDmaLoad2DInsnArgs(intrin_name, dst_info_list, src_info_list, for_info);
     DmaInsnBuilder builder = DmaInsnBuilder(dst_info, src_info, intrin_name, arg_info_map, true);
@@ -1102,6 +924,19 @@ Stmt DmaAtomicAddEmitter(const Stmt &op) {
   stmt = InsertBody(config_atomic_open, stmt);
   stmt = InsertBody(stmt, config_atomic_close);
   return stmt;
+}
+
+Stmt VTransposeEmitter(const Stmt &op) {
+  StmtInfoList dst_info_list;
+  StmtInfoList src_info_list;
+  StmtInfo for_info;
+  StmtInfo if_info;
+  GetCompactComputationInfo(op, dst_info_list, src_info_list, if_info, for_info, true, true);
+  auto dst_buffer_id = GenBufferId(dst_info_list[0]);
+  auto src_buffer_id = GenBufferId(src_info_list[0]);
+  auto dst = GetAccessPtr(dst_buffer_id, "w", 0);
+  auto src = GetAccessPtr(src_buffer_id, "r", 0);
+  return Evaluate::make(Call::make(Float(16), "vtranspose", {dst, src}, Call::Extern));
 }
 
 /// Function to emit dropout intrin
@@ -1913,97 +1748,6 @@ Stmt ReduceCombineEmitter(const Stmt &op, bool enable_bisect) {
 Stmt InsnEmit(std::string insn_name, const Stmt &op, bool enable_bisect, bool enable_cover_protect, int comment_level) {
   CHECK(op.defined());
 
-  static const std::map<std::string, std::string> ReplaceAttrPragmaMap = {
-    // vector binary
-    {"binary_vcadd", "vec_binary_add"},
-    {"vaxpy", "vec_binary_axpy"},
-    // vector single
-    {"vec_single_fabs", "vec_single_abs"},
-    {"broadcast", "vec_broadcast"},
-    // cube
-    {"mad", "cube_mad"},
-    {"ub2gm", "cube_ub2gm"},
-    {"im2col", "cube_img2col"},
-    // special attrs
-    {"vec_binary_proposal_sort", "vec_proposal_sort"},
-    {"vec_binary_topk_sort", "vec_topk_sort"},
-    {"vec_binary_dropout", "vec_dropout"},
-    {"vec_binary_fargmax", "vec_argmax"},
-    {"vec_binary_fargmin", "vec_argmin"},
-    {"vec_binary_iou", "vec_iou"},
-    {"vec_binary_nms", "vec_nms"},
-    {"mask_broadcast", "vec_broadcast"},
-  };
-
-  static const std::map<std::string, std::string> BinaryVecInsnMap = {
-    // vadd.f16 support target:mini_v100 tiny_v100 lite_v100 cloud_v100
-    // vadd.s32 support target:mini_v100 tiny_v100 lite_v100 cloud_v100
-    // vadd.f32 support target:mini_v100 cloud_v100
-    // vadd contains two situations:
-    // 1. normal elewise vector add
-    // - all src[i].shape = dst.shape
-    // 2. reductive vector add
-    // - exist src[i].shape != dst.shape
-    {"vec_binary_add", "vadd"},
-    // vsub.f16 support target:mini_v100 tiny_v100 lite_v100 cloud_v100
-    // vsub.s32 support target:mini_v100 tiny_v100 lite_v100 cloud_v100
-    // vsub.f32 support target:mini_v100 cloud_v100
-    {"vec_binary_sub", "vsub"},
-    // vmul.f16 support target:mini_v100 tiny_v100 lite_v100 cloud_v100
-    // vmul.s32 support target:mini_v100 tiny_v100 lite_v100 cloud_v100
-    // vmul.f32 support target:mini_v100 cloud_v100
-    {"vec_binary_mul", "vmul"},
-    // vmin.f16 support target:mini_v100 tiny_v100 lite_v100 cloud_v100
-    // vmin.s32 support target:mini_v100 tiny_v100 lite_v100 cloud_v100
-    // vmin.f32 support target:mini_v100 cloud_v100
-    {"vec_binary_min", "vmin"},
-    // vmax.f16 support target:mini_v100 tiny_v100 lite_v100 cloud_v100
-    // vmax.s32 support target:mini_v100 tiny_v100 lite_v100 cloud_v100
-    // vmax.f32 support target:mini_v100 cloud_v100
-    {"vec_binary_max", "vmax"},
-    {"vec_binary_div", "vdiv"},
-    {"vec_binary_and", "vand"},
-    {"vec_binary_bitwise_and", "vand"},
-    {"vec_binary_or", "vor"},
-    {"vec_binary_bitwise_or", "vor"},
-    {"vec_binary_vmadd", "vmadd"},
-    {"vec_binary_vmaddrelu", "vmaddrelu"},
-    {"vec_binary_vmla", "vmla"}};
-
-  static const std::map<std::string, std::string> SingleVecInsnMap = {
-    // vmuls.f16 support target:mini_v100 tiny_v100 lite_v100 cloud_v100
-    // vmuls.f32 supporttarget:mini_v100 cloud_v100
-    {"vec_single_muls", "vmuls"},
-    // vadds.f16 support target:mini_v100 tiny_v100 lite_v100 cloud_v100
-    // vadds.f32 support target:mini_v100 cloud_v100
-    {"vec_single_adds", "vadds"},
-    // vrelu.f16 support target:mini_v100 tiny_v100 lite_v100 cloud_v100
-    {"vec_single_relu", "vrelu"},
-    // vabs.f16 support target:mini_v100 tiny_v100 lite_v100 cloud_v100
-    // vabs.f32 support target:mini_v100 cloud_v100
-    {"vec_single_abs", "vabs"},
-    // vln.f16 support target:mini_v100 tiny_v100 lite_v100 cloud_v100
-    // vln.f32 support target:cloud_v100
-    {"vec_single_log", "vln"},
-    // vexp.f16 support target:mini_v100 tiny_v100 lite_v100 cloud_v100
-    // vexp.f32 support target:cloud_v100
-    {"vec_single_exp", "vexp"},
-    // vrec.f16 support target:mini_v100 tiny_v100 lite_v100 cloud_v100
-    // vrec.f32 support target:mini_v100 cloud_v100
-    {"vec_single_rec", "vrec"},
-    // vnot support target:mini_v100 tiny_v100 lite_v100 cloud_v100
-    {"vec_single_not", "vnot"},
-    {"vec_single_bitwise_not", "vnot"},
-    // vsqrt support target:cloud_v100
-    {"vec_single_sqrt", "vsqrt"},
-    {"vec_single_rsqrt", "vrsqrt"},
-    {"vec_broadcast", "vector_dup"}};
-
-  static const std::map<std::string, std::string> SingleCastInsnMap = {
-    {"vec_single_floor", "f"}, {"vec_single_round", "r"}, {"vec_single_ceil", "c"}, {"vec_single_trunc", "z"}};
-
-  static const std::set<std::string> ReturnOpInsnSet = {"scalar_dma", "scatter", "vec_binary_select_loop_var"};
-
   static const std::map<std::string, std::function<Stmt(const Stmt &)>> InsnFunctorMap = {
     {"dma_atomic_add", DmaAtomicAddEmitter},
     {"vec_single_cast", SingleCastEmitter},
@@ -2017,9 +1761,9 @@ Stmt InsnEmit(std::string insn_name, const Stmt &op, bool enable_bisect, bool en
     {"vec_dropout", BinaryDropoutEmitter},
     {"cube_mad", MadEmitter},
     {"vec_select_scalar", SelectWithScalarEmitter},
-    {"vec_binary_axpy", VaxpyEmitter},
     {"opt_broadcast", MultiMaskEmitter},
-    {"vec_single_four2five_nchw", VnchwconvEmitter}};
+    {"vec_single_four2five_nchw", VnchwconvEmitter},
+    {"vtranspose", VTransposeEmitter}};
 
   if (ReplaceAttrPragmaMap.count(insn_name) != 0) {
     insn_name = ReplaceAttrPragmaMap.find(insn_name)->second;

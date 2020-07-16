@@ -738,16 +738,19 @@ NodeRef Lower(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeRef> 
     if (global_attrs.GetBoolAttr(kDeadCodeElim, false)) {
       stmt = NEXT_PASS(DeadCodeElim, stmt);
     }
-    if (!is_dynamic) {
-      stmt = NEXT_PASS(RewriteBroadcastVector, stmt);
-      stmt = NEXT_PASS(OptimizePragma, stmt);
-    }
+
     if (is_dynamic) {
       stmt = NEXT_PASS(AnalyzeMinAlignDynamic, stmt, global_attrs.GetIntAttr(kEnableConvAnalyzeAlign, true),
-                       global_attrs.GetIntAttr(kEnableScalarAlign, false));
+                      global_attrs.GetIntAttr(kEnableScalarAlign, false));
     } else {
+      stmt = NEXT_PASS(RewriteBroadcastVector, stmt);
+      stmt = NEXT_PASS(OptimizePragma, stmt);
+      stmt = NEXT_PASS(MergeLoops, stmt, false);
+      stmt = NEXT_PASS(PackStore, stmt);
       stmt = NEXT_PASS(AnalyzeMinAlignStatic, stmt);
+      stmt = NEXT_PASS(RecoverStore, stmt);
     }
+
     stmt = NEXT_PASS(MultiLastAxisReductions, stmt, is_dynamic);
     stmt = NEXT_PASS(AutoReorder, stmt);
     if (enable_multicore != 0) {

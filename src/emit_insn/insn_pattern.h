@@ -77,7 +77,7 @@ class PatternGenerator {
 class SingleVecPatternGenerator : public PatternGenerator {
  public:
   SingleVecPatternGenerator(const StmtInfoList &dst_info_list, const StmtInfoList &src_info_list,
-                            const StmtInfo &for_info, const std::string &mode)
+                            const StmtInfo &for_info, const std::string &mode = "elewise")
       : PatternGenerator(dst_info_list, for_info),
         arg_info(ArgInfo(make_node<ArgInfoNode>())),
         body_args(VectorArgInfo()),

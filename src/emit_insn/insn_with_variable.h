@@ -31,8 +31,7 @@
 
 namespace akg {
 namespace ir {
-const int TransTotalSize = 256;
-const int TransAxisLen = 16;
+
 const int64_t FullReduceMaskValue = 6148914691236517205;
 
 class CCEInsn {

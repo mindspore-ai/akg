@@ -466,7 +466,7 @@ class AlignVistor : public IRVisitor {
     // only scan dma insns
     if (op->attr_key == "pragma_ub_gm" || (op->attr_key == "pragma_emit_insn" && op->value.as<StringImm>() &&
                                            op->value.as<StringImm>()->value != "vec_binary_dropout" &&
-                                           exclude_list.count(op->value.as<StringImm>()->value) == 0)) {
+                                           exclude_align_analyze_list.count(op->value.as<StringImm>()->value) == 0)) {
       bool in_dma_copy = false;
       if (op->value.as<StringImm>() && op->value.as<StringImm>()->value == "dma_copy") {
         in_dma_copy = true;

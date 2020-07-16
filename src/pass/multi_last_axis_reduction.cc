@@ -192,6 +192,7 @@ class MultiLastAxisReduction : public IRMutator {
               lastResult = loadTmp + storeLeft;
             }
 
+            broadcastNum = Call::make(type_tmp, "vector_dup", {broadcastNum}, Call::PureIntrinsic);
             Stmt stForOnce = Store::make(tmpBuffer, storeResult, newIdx, storeTmp->predicate);
             Stmt stForTwice = Store::make(storeTmp->buffer_var, lastResult, storeTmp->index, storeTmp->predicate);
             Stmt stBroadcast = Store::make(tmpBuffer, broadcastNum, newIdx, storeTmp->predicate);
@@ -212,7 +213,7 @@ class MultiLastAxisReduction : public IRMutator {
 
             stForOnce = AttrStmt::make(VarExpr("0", Int(32)), "pragma_emit_insn", Expr(str), stForOnce);
             stForTwice = AttrStmt::make(VarExpr("0", Int(32)), "pragma_emit_insn", Expr(str), stForTwice);
-            stBroadcast = AttrStmt::make(VarExpr("0", Int(32)), "pragma_emit_insn", Expr("broadcast"), stBroadcast);
+            stBroadcast = AttrStmt::make(VarExpr("0", Int(32)), "pragma_emit_insn", Expr("vector_dup"), stBroadcast);
 
             stmt = Block::make({stBroadcast, stForOnce, stForTwice});
             stmt = Allocate::make(tmpBuffer, type_tmp, extentsArray, const_true(), stmt);

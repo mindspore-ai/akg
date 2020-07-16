@@ -46,7 +46,7 @@ class AxisPartitioner : public IRMutator {
 
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
     if (op->attr_key == "pragma_ub_gm" || (op->attr_key == "pragma_emit_insn" && op->value->IsInstance<StringImm>() &&
-                                           exclude_list.count(op->value.as<StringImm>()->value) == 0)) {
+                                           exclude_index_fix_list.count(op->value.as<StringImm>()->value) == 0)) {
       in_insn_ = true;
       counter_ = 0;
       auto ret = IRMutator::Mutate_(op, s);
@@ -180,7 +180,7 @@ class RewriteAllocateAndIndex : public IRMutator {
       }
     }
     if (op->attr_key == "pragma_ub_gm" || (op->attr_key == "pragma_emit_insn" && op->value->IsInstance<StringImm>() &&
-                                           (exclude_list.count(op->value.as<StringImm>()->value) == 0 ||
+                                           (exclude_index_fix_list.count(op->value.as<StringImm>()->value) == 0 ||
                                             op->value.as<StringImm>()->value == "scatter"))) {
       in_insn_ = true;
       auto ret = IRMutator::Mutate_(op, s);
