@@ -1,7 +1,19 @@
-diff -uprN tvm_orig/python/tvm/_ffi/base.py tvm/python/tvm/_ffi/base.py
---- tvm_orig/python/tvm/_ffi/base.py	2020-04-13 20:18:09.519984547 +0800
-+++ tvm/python/tvm/_ffi/base.py	2020-04-13 20:14:21.510253128 +0800
-@@ -48,7 +48,18 @@ else:
+diff -Npur tvm_orig/python/tvm/_ffi/base.py tvm/python/tvm/_ffi/base.py
+--- tvm_orig/python/tvm/_ffi/base.py	2020-07-16 14:39:28.859033775 +0800
++++ tvm/python/tvm/_ffi/base.py	2020-07-16 14:42:26.594223690 +0800
+@@ -16,6 +16,11 @@
+ # under the License.
+ # coding: utf-8
+ # pylint: disable=invalid-name
++
++#
++# 2020.7.16 - Modify _load_lib function to find the correct library.
++#
++
+ """Base library for TVM FFI."""
+ from __future__ import absolute_import
+
+@@ -48,7 +53,18 @@ else:
  
  def _load_lib():
      """Load libary by searching possible path."""
@@ -21,10 +33,22 @@ diff -uprN tvm_orig/python/tvm/_ffi/base.py tvm/python/tvm/_ffi/base.py
      lib = ctypes.CDLL(lib_path[0], ctypes.RTLD_GLOBAL)
      # DMatrix functions
      lib.TVMGetLastError.restype = ctypes.c_char_p
-diff -uprN tvm_orig/topi/python/topi/cpp/impl.py tvm/topi/python/topi/cpp/impl.py
---- tvm_orig/topi/python/topi/cpp/impl.py	2020-04-13 20:18:09.535984509 +0800
-+++ tvm/topi/python/topi/cpp/impl.py	2020-04-13 20:16:41.784427200 +0800
-@@ -31,11 +31,18 @@ def _get_lib_names():
+diff -Npur tvm_orig/topi/python/topi/cpp/impl.py tvm/topi/python/topi/cpp/impl.py
+--- tvm_orig/topi/python/topi/cpp/impl.py	2020-07-16 14:40:07.754722324 +0800
++++ tvm/topi/python/topi/cpp/impl.py	2020-07-16 14:42:56.638225874 +0800
+@@ -14,6 +14,11 @@
+ # KIND, either express or implied.  See the License for the
+ # specific language governing permissions and limitations
+ # under the License.
++
++#
++# 2020.7.16 - Modify _load_lib function to find the correct library.
++#
++
+ """Load Lib for C++ TOPI ops and schedules"""
+ import sys
+ import os
+@@ -31,11 +36,18 @@ def _get_lib_names():
  
  def _load_lib():
      """Load libary by searching possible path."""
