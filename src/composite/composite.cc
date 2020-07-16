@@ -459,7 +459,44 @@ NodeRef composite_with_json_to_func(const std::string &json_str, Map<std::string
   return build_rst;
 }
 
+std::string get_process(const std::string &json_str) {
+  size_t pos = json_str.find("\"process\"");
+  if (pos != std::string::npos && json_str.find("gpu", pos) != std::string::npos) {
+    return "gpu";
+  }
+  return "aicore";
+}
+
+std::string get_schedule(Array<Tensor> &outputs) {
+  for (const Tensor &t : outputs) {
+    if (t->op->tag == "comm_reduce" || t->op->tag == "comm_reduce_idx") {
+      return "reduce";
+    }
+  }
+  return "injective";
+}
+
+Module composite_with_json_gpu(const std::string &json_str, Map<std::string, NodeRef> attrs) {
+  picojson::value v;
+  std::string err = picojson::parse(v, json_str);
+  if (!err.empty()) {
+    LOG(ERROR) << "json parse error, error message: " << err;
+  }
+  Array<Tensor> tensors;
+  Array<NodeRef> args;
+  Map<Tensor, Buffer> in_binds;
+  std::string kernel_name;
+  extract_op_info(v, &tensors, &args, &kernel_name, &in_binds);
+  const auto* build_func = air::runtime::Registry::Get("akg_build_gpu_module");
+  CHECK(build_func != nullptr);
+  std::string sch = get_schedule(tensors);
+  return (*build_func)(tensors, args, sch, kernel_name);
+}
+
 Module composite_with_json(const std::string &json_str, Map<std::string, NodeRef> attrs) {
+  if (get_process(json_str) == "gpu") {
+    return composite_with_json_gpu(json_str, attrs);
+  }
   auto build_rst = composite_with_json_to_func(json_str, attrs);
   return BuildToModule(build_rst);
 }
