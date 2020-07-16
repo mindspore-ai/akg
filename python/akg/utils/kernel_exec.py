@@ -42,7 +42,7 @@ from akg.utils import format_transform as ft_util
 from akg.utils import custom_tiling as ct_util
 from akg.utils import validation_check as vc_util
 from akg.utils.dsl_create import TensorUtils
-
+from akg.utils import dump_cuda_meta
 
 sh = logging.StreamHandler(sys.stdout)
 logging.getLogger().addHandler(sh)
@@ -435,6 +435,12 @@ def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=0, expect=None)
     """
 
     gc.collect()
+    if mod.imported_modules[0].type_key == 'cuda':
+        ctx = akg.tvm.context('cuda', device_id)
+        mod_args = [akg.tvm.nd.array(a, ctx) for a in args]
+        mod(*mod_args)
+        out_list = [mod_args[len(args) + i if i < 0 else i].asnumpy() for i in outputs]
+        return out_list[0] if len(out_list) == 1 else tuple(out_list)
 
     stat_info = {}
     profiling_mode = get_profiling_mode()
@@ -679,7 +685,7 @@ def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
         attrs['dim'] = dim_info
 
     compute_func = None  # func which is defined in dsl for doing compute_inline or other
-
+    sch_tmpl = None
     if isinstance(output, (list, tuple)):
         from inspect import isfunction
         new_outputs = []
@@ -696,6 +702,9 @@ def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
                 new_outputs.append(elem)
 
         output = new_outputs
+    elif isinstance(output, dict):
+        sch_tmpl = output
+        output = sch_tmpl['output']
     binds = None if not attrs else attrs.pop(BINDS, None)
 
     op_var = []
@@ -714,6 +723,16 @@ def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
     else:
         if TensorUtils.is_output_value(output):
             op_var = op_var + [output]
+
+    if sch_tmpl != None:
+        assert(sch_tmpl['target'] == 'cuda')
+        kernel_name = kernel_name if kernel_name != "" else sch_tmpl['op_name']
+        with akg.tvm.target.cuda() as target:
+            s = sch_tmpl['schedule'](sch_tmpl['output'])
+            with akg.tvm.build_config(dump_pass_ir = True):
+                mod = akg.tvm.build(s, op_var, target, target_host = 'stackvm', name = kernel_name)
+                dump_cuda_meta.dump(mod, kernel_name, s, op_var)
+                return mod
 
     if isinstance(output, (list, tuple)):
         tmp = []

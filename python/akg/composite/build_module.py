@@ -19,7 +19,8 @@ import json
 from akg import tvm
 from akg.tvm import _api_internal
 from .repository import __all__ as repository
-
+import topi
+from akg.utils import dump_cuda_meta
 
 def generate_trait(desc):
     """ generate trait of kernel description """
@@ -116,6 +117,9 @@ def _build_to_func(desc_s, desc_d, attr=None):
     return func(desc_s, attr)
 
 def _build(desc_s, desc_d, attr=None):
+    if desc_d['process'] == 'gpu':
+        func = tvm.get_global_func("composite_with_json")
+        return func(desc_s, attr)
     rst = _build_to_func(desc_s, desc_d, attr)
     return _api_internal._BuildToModule(rst)
 
@@ -163,3 +167,16 @@ def get_tiling_space(kernel_desc, level=1, attr=None):
     if level >= 2:
         spaces['tuning_space'] = ret.tiling_candidate.asnumpy().tolist()
     return spaces
+
+@tvm.register_func("akg_build_gpu_module")
+def build_cuda(outputs, args, sch_name, kernel_name):
+    scheduler = {
+        "injective" : topi.cuda.schedule_injective,
+        "reduce"    : topi.cuda.schedule_reduce,
+    }
+    with tvm.target.cuda() as cuda:
+        s = scheduler[sch_name](outputs)
+        with tvm.build_config(dump_pass_ir = True):
+            mod = tvm.build(s, args, cuda, name = kernel_name)
+            dump_cuda_meta.dump(mod, kernel_name, s, list(args))
+            return mod

@@ -27,4 +27,5 @@ from .squeeze import Squeeze, gpu_schedule_Squeeze
 from .squeeze_grad import SqueezeGrad, gpu_schedule_SqueezeGrad
 from .mean import SimpleMean, gpu_schedule_SimpleMean
 from .mean_grad import SimpleMeanGrad, gpu_schedule_SimpleMeanGrad
-from .mul import Mul, gpu_schedule_Mul
+
+from .mul import Mul

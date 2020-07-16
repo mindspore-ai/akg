@@ -64,6 +64,13 @@ class AKGMetaPathLoader:
         sys.modules[fullname] = self.__target_module
         return self.__target_module
 
+def schedule(sch, target = 'cuda'):
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            output = func(*args, **kwargs)
+            return {'schedule' : sch, 'target' : target, 'output' : output, 'op_name' : func.__name__}
+        return wrapper
+    return decorator
 
 sys.meta_path.insert(0, AKGMetaPathFinder())
 
