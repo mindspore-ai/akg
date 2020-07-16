@@ -234,33 +234,32 @@ class HostDeviceSplitter : public IRMutator {
       }
     }
 
-    const char* mode = getenv("RUNTIME_MODE");
-    if (mode) {
-      std::shared_ptr<LoweredFuncNode> na = std::make_shared<LoweredFuncNode>();
-      for (unsigned i = 0; i < (unsigned)args_real.size(); i++) {
-        bool match = false;
-        for (unsigned j = 0; j < (unsigned)n->args.size(); j++) {
-          if (strcmp(args_real[i].get()->name_hint.c_str(), n->args[j].get()->name_hint.c_str()) == 0) {
-            na->args.push_back(n->args[j]);
-            match = true;
-            break;
-          } else {
-            continue;
-          }
+#ifdef BACKEND_D
+    std::shared_ptr<LoweredFuncNode> na = std::make_shared<LoweredFuncNode>();
+    for (unsigned i = 0; i < (unsigned)args_real.size(); i++) {
+      bool match = false;
+      for (unsigned j = 0; j < (unsigned)n->args.size(); j++) {
+        if (strcmp(args_real[i].get()->name_hint.c_str(), n->args[j].get()->name_hint.c_str()) == 0) {
+          na->args.push_back(n->args[j]);
+          match = true;
+          break;
+        } else {
+          continue;
         }
+      }
 
-        if (!match) {
-          na->args.push_back(args_real[i]);
-          // mark handle data type.
-          for (auto kv : handle_data_type_) {
-            if (strcmp(args_real[i].get()->name_hint.c_str(), kv.first->name_hint.c_str()) == 0) {
-              n->handle_data_type.Set(args_real[i], kv.second);
-            }
+      if (!match) {
+        na->args.push_back(args_real[i]);
+        // mark handle data type.
+        for (auto kv : handle_data_type_) {
+          if (strcmp(args_real[i].get()->name_hint.c_str(), kv.first->name_hint.c_str()) == 0) {
+            n->handle_data_type.Set(args_real[i], kv.second);
           }
         }
       }
-      n->args = na->args;
     }
+    n->args = na->args;
+#endif
     
     LoweredFunc f_device(n);
     Array<Expr> call_args;
