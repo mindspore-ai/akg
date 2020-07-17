@@ -161,6 +161,9 @@ class ListConfigSpace(ConfigSpace):
         """reset fetch state"""
         self.__fetch_pool = [i for i in range(len(self._configs))]
 
+    def fetch_scope(self, start, end):
+        self.__fetch_pool = [i for i in range(start, end)]
+
     def has_next(self) -> bool:
         return len(self.__fetch_pool) > 0
 
@@ -171,6 +174,12 @@ class ListConfigSpace(ConfigSpace):
         self.__fetch_pool[idx] = self.__fetch_pool[-1]
         self.__fetch_pool.pop()
         return ret
+
+    def fetch_next_index(self) -> int:
+        """fetch next index of config"""
+        idx = len(self.__fetch_pool) - 1 + self.__fetch_pool[0]
+        self.__fetch_pool.pop()
+        return idx
 
     def fetch_config(self) -> ConfigEntity:
         """fetch a random config"""

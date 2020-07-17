@@ -115,7 +115,8 @@ def gen_kernel_matmul_cube(op_desc: MatmulCubeDesc, _, index_table,
         attrs = {'dim': dim_info, 'bypass': config.bypass}
     return matmul_run.matmul_compile(op_desc.x_shape, op_desc.y_shape, op_desc.bias, op_desc.left_format,
                                      op_desc.right_format, op_desc.out_format, op_desc.adj_x, op_desc.adj_y,
-                                     op_desc.dtype, op_desc.out_dtype, kernel_name, attrs, gen_tiling_spaces)
+                                     op_desc.dtype, op_desc.bias_dtype, op_desc.out_dtype, kernel_name,
+                                     attrs, tuning=gen_tiling_spaces)
 
 
 def gen_kernel_conv_backprop_input(op_desc: ConvBackpropDesc, _, index_table, config: ConvBackpropInputConfig = None,

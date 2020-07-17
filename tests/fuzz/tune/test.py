@@ -13,11 +13,16 @@
 # limitations under the License.
 
 """test"""
+import time
 from autotuning.job import launch
 from test_run.sub_run import sub_execute
 
+time_start = time.time()
 op_type_ = 'sub'
 debug_mode_ = True
 save_res_ = True
+all_space_ = False
 desc_ = ('024_sub_64_16_128_128_64_16_128_128_fp16', sub_execute, [(64, 16, 128, 128), (64, 16, 128, 1), 'float16'])
-launch(op_type=op_type_, debug_mode=debug_mode_, save_res=save_res_, desc=desc_)
+launch(op_type=op_type_, debug_mode=debug_mode_, save_res=save_res_, desc=desc_, all_space=all_space_)
+time_end = time.time()
+print("launch time: ", time_end - time_start)

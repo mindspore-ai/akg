@@ -18,6 +18,7 @@ import multiprocessing
 import logging
 import os
 import subprocess
+import time
 from typing import NamedTuple
 import numpy as np
 from akg import composite
@@ -86,8 +87,10 @@ class KernelRunner:
 
     def run_one_kernel(self, run_times, idx, config, best_time=np.inf, is_auto=False):
         """Compile and execute a config of the operator on device"""
+        time_one_kernel_start = time.time()
         logger.debug('compile %dth kernel', idx)
         try:
+            time_start_build = time.time()
             if self.op_type == "json":
                 if is_auto:
                     mod = composite.build(self.op_desc)
@@ -105,6 +108,8 @@ class KernelRunner:
             else:
                 mod = compile_kernel(self.op_type, self.op_desc, self.input_shape, self._index_table,
                                      None if is_auto else config.input, idx)
+            time_end_build = time.time()
+            logger.debug("build module time: %f", time_end_build - time_start_build)
             logger.debug('finished compile %dth kernel', idx)
         except BaseException as e:
             logger.debug("Compile Failed: [%s] : %s", "origin" if is_auto else str(config.input), str(e))
@@ -127,6 +132,7 @@ class KernelRunner:
             for _ in range(self.repeat_times):
                 stat_info = {}
                 try:
+                    time_start_launch = time.time()
                     if self.mod_output_param is not None:
                         output, stat_info = utils.mod_launch(mod, list(self.input), self.mod_output_param,
                                                              tuning=True, device_id=device_id)
@@ -144,18 +150,24 @@ class KernelRunner:
                                 stat_info['run_time'] = precision_error_time
                                 logger.debug("Precision Error: [%s]",
                                              "origin" if config is None else str(config.input))
+                    time_end_launch = time.time()
+                    logger.debug("mod launch time: %f", time_end_launch - time_start_launch)
                 except BaseException as e:
                     logger.debug("Run Failed: [%s] : %s", str(config.input), str(e))
                     stat_info['run_time'] = run_failed_time
                 run_times[idx] = np.minimum(run_times[idx], stat_info['run_time'])
         finally:
             logger.debug('end of %dth kernel', idx)
+            time_one_kernel_end = time.time()
+            logger.debug('run one kernel time: %f', time_one_kernel_end - time_one_kernel_start)
         return
 
-    def run(self, configs, best_time=np.inf, is_auto_set_dim=False):
+    def run(self, configs, best_time=np.inf, is_auto_set_dim=False, all_space=False):
         """Compile and execute a batch config of the operator on device"""
         start = time.time()
+        logger.setLevel(logging.DEBUG)
         logger.debug("gen cce kernels batch: %d kernels", len(configs))
+        subprocess.run("rm -rf ./jobs/JOB*", shell=True)
         process_jobs = []
         run_times = multiprocessing.Manager().list(np.full((len(configs),), compile_fail_time))
         for idx, config in enumerate(configs):
@@ -173,6 +185,8 @@ class KernelRunner:
                 run_times[idx] = timeout_time
                 p.terminate()
 
+        process_end = time.time()
+        logger.debug("process time: %f", process_end - start)
         # clean the profiling directory
         tune_device = int(os.environ['DEVICE_ID'])
         tune_num = int(os.environ['DEVICE_TOTAL_NUM'])
@@ -206,6 +220,7 @@ class KernelRunner:
                 job_file = p[0].decode('utf8').strip().split('/')[-2]
                 subprocess.run("rm -rf ./jobs/%s" % job_file, shell=True)
         end = time.time()
+        logger.debug("run kernels time: %f", end - start)
         self.run_kernel_time += end - start
 
         for idx, config in enumerate(configs):

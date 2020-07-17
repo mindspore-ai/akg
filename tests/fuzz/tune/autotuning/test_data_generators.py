@@ -107,10 +107,10 @@ def _gen_data_matmul_cube(op_desc: MatmulCubeDesc):
     _, _, _, out_shape, k = matmul_run.get_converted_shapes(m, n, k, batch_tuple, op_desc.adj_x, op_desc.adj_y,
                                                             op_desc.bias, op_desc.left_format, op_desc.right_format,
                                                             op_desc.out_format)
-    m_x, m_y, bench_mark, bias_data = matmul_run.matmul_data(batch_tuple, m, k, n, op_desc.dtype, op_desc.out_dtype,
-                                                             op_desc.bias, op_desc.adj_x, op_desc.adj_y,
-                                                             op_desc.left_format, op_desc.right_format,
-                                                             op_desc.out_format)
+    m_x, m_y, bench_mark, bias_data = matmul_run.matmul_data(batch_tuple, m, k, n, op_desc.dtype, op_desc.bias_dtype,
+                                                             op_desc.out_dtype, op_desc.bias, op_desc.adj_x,
+                                                             op_desc.adj_y, op_desc.left_format,
+                                                             op_desc.right_format, op_desc.out_format)
 
     out_data = np.full(out_shape, np.nan, op_desc.out_dtype)
 
