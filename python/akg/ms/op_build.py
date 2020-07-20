@@ -33,7 +33,6 @@ BINDS = "binds"
 MS_AKG_DUMP_IR = "MS_AKG_DUMP_IR"
 MS_AKG_DUMP_CCE = "MS_AKG_DUMP_CCE"
 MS_DAVINCI_KERNEL_PATH = "./kernel_meta/"
-MS_CUDA_KERNEL_PATH = "./cuda_meta/"
 
 
 @vc_util.check_input_type(list, (list, tuple), (list, tuple), (types.FunctionType, type(None)), str, str, dict)
@@ -72,10 +71,11 @@ def op_build(opnames, computes, args, custom_schedule, device, kernel_name, attr
     """op_build"""
     if device in ("aicore", "aicpu"):
         tmp_rst = op_build_to_func(opnames, computes, args, custom_schedule, device, kernel_name, attrs)
-        return _api_internal._BuildToModule(tmp_rst)
+        return tmp_rst
 
     if device == "cuda":
-        cuda_path = os.path.realpath(MS_CUDA_KERNEL_PATH)
+        kernel_meta_path = "./cuda_meta_" + str(os.getpid()) + "/"
+        cuda_path = os.path.realpath(kernel_meta_path)
         if not os.path.isdir(cuda_path):
             os.makedirs(cuda_path)
         if not opnames:
@@ -88,7 +88,7 @@ def op_build(opnames, computes, args, custom_schedule, device, kernel_name, attr
             logging.error("no schedule func found %s", str(schedule_name))
             return None
 
-        ptx_file = os.path.realpath(MS_CUDA_KERNEL_PATH + kernel_name + ".ptx")
+        ptx_file = os.path.realpath(kernel_meta_path + kernel_name + ".ptx")
         if os.path.exists(ptx_file):
             os.remove(ptx_file)
         try:
@@ -100,7 +100,7 @@ def op_build(opnames, computes, args, custom_schedule, device, kernel_name, attr
                     foo = akg.tvm.build(s, args, device, name=kernel_name)
                     ptx_code = foo.imported_modules[0].get_source("ptx")
                     file.write(ptx_code)
-                    json_file = os.path.realpath(MS_CUDA_KERNEL_PATH + kernel_name + ".json")
+                    json_file = os.path.realpath(kernel_meta_path + kernel_name + ".json")
                     kernel_info = (ptx_code, json_file, kernel_name)
                     gpu_utils.save_gpu_params(s, args, kernel_info)
             os.chmod(ptx_file, 0o400)

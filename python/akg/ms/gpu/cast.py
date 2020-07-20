@@ -19,27 +19,9 @@ import logging
 import akg.tvm
 from akg.ops.math import cast
 from akg.topi.generic import schedule_elemwise
+import akg.topi as topi
 
+@akg.schedule(topi.cuda.schedule_injective)
 def Cast(x, dst_type):
     """cast."""
     return cast.cast(x, dst_type)
-
-
-def gpu_schedule_Cast(outs):
-    """
-    gpu schedule for cast.
-
-    Args:
-        outs (tvm.tensor.Tensor): outputs of compute.
-
-    Returns:
-        sch (schedule.Schedule): The created schedule.
-    """
-    device = 'cuda'
-    ctx = akg.tvm.context(device, 0)
-    if not ctx.exist:
-        logging.info("Skip because %s is not enabled", device)
-        return None
-    with akg.tvm.target.create(device):
-        sch = schedule_elemwise(outs)
-    return sch

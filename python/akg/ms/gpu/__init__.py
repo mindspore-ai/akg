@@ -20,7 +20,6 @@ from .equal import gpu_schedule_Equal
 from .tile import Tile
 from .tile import gpu_schedule_Tile
 from .cast import Cast
-from .cast import gpu_schedule_Cast
 from .relu6 import ReLU6, gpu_schedule_ReLU6
 from .relu6_grad import ReLU6Grad, gpu_schedule_ReLU6Grad
 from .squeeze import Squeeze, gpu_schedule_Squeeze

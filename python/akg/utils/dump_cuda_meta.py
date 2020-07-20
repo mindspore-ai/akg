@@ -85,7 +85,7 @@ def save_gpu_params(s, args, kernel_info):
         fo.write("}\n")
 
 def dump(mod, kernel_name, sch, args):
-    meta_path = "./cuda_meta/"
+    meta_path = "./cuda_meta_/" + str(os.getpid()) + "/"
     cuda_path = os.path.realpath(meta_path)
     if not os.path.isdir(cuda_path):
         os.makedirs(cuda_path)
