@@ -21,7 +21,7 @@ ConvDesc = namedtuple("ConvDesc", ['fmap_shape', 'filter_shape', 'pad', 'stride'
 ConvBackpropDesc = namedtuple("ConvBackpropDesc", ['fmap_shape', 'filter_shape', 'pad', 'stride', 'dilation'])
 
 MatmulCubeDesc = namedtuple("MatmulCubeDesc", ["x_shape", "y_shape", "bias", "left_format", "right_format",
-                                               "out_format", "adj_x", "adj_y", "dtype", "out_dtype"])
+                                               "out_format", "adj_x", "adj_y", "dtype", "bias_dtype", "out_dtype"])
 
 # config param definitions
 ConvConfig = namedtuple('ConvConfig', ['tile_h', 'tile_co', 'tile_m', 'tile_k', 'tile_n', 'tile_w', 'bypass'])

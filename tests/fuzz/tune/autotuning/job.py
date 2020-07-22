@@ -15,22 +15,23 @@
 """AutoTuning job"""
 import os
 import json
+import time
 import datetime
 import importlib
 import logging
+import subprocess
 import numpy as np
 from collections import namedtuple
 from akg import composite
 from akg.utils import kernel_exec as utils
 from autotuning.runner import KernelRunner, error_time_list, error_time_string
-from autotuning.tuner import ModelBasedTuner
+from autotuning.tuner import ModelBasedTuner, Tuner
 from autotuning.type_definitions import ConvDesc, ConvBackpropDesc, MatmulCubeDesc
 from autotuning.space_generators import get_space
 from autotuning.space import ListConfigSpace
 from autotuning.test_data_generators import gen_data
 
-logging.basicConfig(level=logging.DEBUG,
-                    format='%(asctime)s - %(filename)s[line:%(lineno)d] - %(levelname)s: %(message)s')
+logging.basicConfig(level=logging.DEBUG)
 
 logger = logging.getLogger('fuzz.tune.autotuning.job')
 
@@ -92,11 +93,16 @@ def launch_json(debug_mode: bool = True, save_res: bool = False, json_input_dir=
         if save_res:
             save_tuning_result(key, "json", None, index_table, tuner)
 
-def jobs(op_type: str = 'add', desc=None, debug_mode: bool = True,
-         save_res: bool = False, insert_key='', conf_of_set_dim=""):
+def jobs(op_type: str = 'add', desc=None, debug_mode: bool = True, save_res: bool = False,
+         all_space: bool = True, insert_key='', conf_of_set_dim=""):
     """AutoTuning jobs"""
     iter_times = [3, 3, 3] if debug_mode else [80, 160, 320]
+    time_start_get_space = time.time()
     index_table, space, key, expect, input_for_mod = get_space(op_type, desc)
+    if all_space:
+        iter_times = [space.length, space.length, space.length]
+    time_end_get_space = time.time()
+    print("get space time: ", time_end_get_space - time_start_get_space)
     print('space size:', space.length)
     print('index table:', index_table)
     key = key if insert_key == '' else insert_key
@@ -121,12 +127,18 @@ def jobs(op_type: str = 'add', desc=None, debug_mode: bool = True,
     # available device numbers, normally is 8 or 1
     available_device_numbers = utils.get_available_devices_num()
 
-    tuner = ModelBasedTuner(runner, index_table, space,
-                            n_parallel=available_device_numbers if is_truly_profiling else 1,
-                            plan_size=64, pre_model=None)
+    time_start_tuning = time.time()
+    if all_space:
+        tuner = Tuner(runner, index_table, space, n_parallel=available_device_numbers)
+    else:
+        tuner = ModelBasedTuner(runner, index_table, space,
+                                n_parallel=available_device_numbers if is_truly_profiling else 1,
+                                plan_size=64, pre_model=None)
     least_try_times = iter_times[0 if space.length < 10 ** 4 else 1 if space.length < 10 ** 5 else 2]
     tuner.tune(least_try_times, output_file=op_type + ".log")
 
+    time_end_tuning = time.time()
+    print("tuning time: ", time_end_tuning - time_start_tuning)
     print_tuning_result(op_type, space, index_table, tuner, key)
 
     if save_res:
@@ -231,46 +243,48 @@ def load_json_configs(op_type):
             return {}
     return {}
 
-def read_shapes_from_file(debug_mode, save_res, conf_of_set_dim, op_type):
+def read_shapes_from_file(debug_mode, save_res, all_space, conf_of_set_dim, op_type):
     """read tuning shapes from file"""
     file = importlib.import_module('autotuning.shapes.' + op_type)
     shapes = file.shapes
     for _, shp in enumerate(shapes):
-        do_profiling(shp, debug_mode, save_res, op_type, conf_of_set_dim)
+        do_profiling(shp, debug_mode, save_res, all_space, op_type, conf_of_set_dim)
 
-def do_profiling(shp, debug_mode, save_res, op_type, conf_of_set_dim=None):
+def do_profiling(shp, debug_mode, save_res, all_space, op_type, conf_of_set_dim=None):
     """do profiling"""
+    # remove undeleted JOB files for previous shapes
+    subprocess.run("rm -rf /var/log/npu/profiling/JOB*", shell=True)
     if op_type == 'matmul':
         key = shp[2][0:-1]
         logger.debug("start profiling: [%s]", str(key))
         desc = MatmulCubeDesc(*key)
-        jobs(op_type, desc, debug_mode, save_res, key.__str__(), conf_of_set_dim)
+        jobs(op_type, desc, debug_mode, save_res, all_space, key.__str__(), conf_of_set_dim)
         logger.debug("end profiling: [%s]", str(key))
     elif op_type.startswith('conv_backprop'):
         key = shp[2]
         logger.debug("start profiling: [%s]", str(key))
         desc = ConvBackpropDesc(*key)
-        jobs(op_type, desc, debug_mode, save_res, key.__str__(), conf_of_set_dim)
+        jobs(op_type, desc, debug_mode, save_res, all_space, key.__str__(), conf_of_set_dim)
         logger.debug("end profiling: [%s]", str(key))
     elif op_type.startswith('conv'):
         key = shp[2]
         logger.debug("start profiling: [%s]", str(key))
         desc = ConvDesc(*key)
-        jobs(op_type, desc, debug_mode, save_res, key.__str__(), conf_of_set_dim)
+        jobs(op_type, desc, debug_mode, save_res, all_space, key.__str__(), conf_of_set_dim)
         logger.debug("end profiling: [%s]", str(key))
     else:
         key = shp
         logger.debug("start profiling: [%s]", str(key))
         desc = key
-        jobs(op_type, desc, debug_mode, save_res, conf_of_set_dim=conf_of_set_dim)
+        jobs(op_type, desc, debug_mode, save_res, all_space, conf_of_set_dim=conf_of_set_dim)
         logger.debug("end profiling: [%s]", str(key))
 
-def launch(op_type, debug_mode, save_res=False, desc=None):
+def launch(op_type, debug_mode, save_res=False, desc=None, all_space=False):
     # get the existed tiling
     conf_of_set_dim = load_json_configs(op_type)
 
     if desc is None:
-        read_shapes_from_file(debug_mode, save_res, conf_of_set_dim, op_type)
+        read_shapes_from_file(debug_mode, save_res, all_space, conf_of_set_dim, op_type)
     else:
         shp = desc
-        do_profiling(shp, debug_mode, save_res, op_type)
+        do_profiling(shp, debug_mode, save_res, all_space, op_type)

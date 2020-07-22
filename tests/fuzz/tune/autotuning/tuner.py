@@ -93,7 +93,7 @@ class Tuner:
         print('tuning time:', self._tuning_time, 'secs')
 
     def next_batch(self, batch_size: int, is_add_visited=True):
-        """extract next batch"""
+        """extract next batch with xgboost model"""
         ret = []
         counter = 0
         if not is_add_visited:
@@ -113,6 +113,17 @@ class Tuner:
             ret.append(self._space.get(index))
             self._visited.add(index)
 
+            counter += 1
+        return ret
+
+    def next_config(self, batch_size: int):
+        """extract next config orderly"""
+        ret = []
+        counter = 0
+        while counter < batch_size and self._space.has_next():
+            index = self._space.fetch_next_index()
+            ret.append(self._space.get(index))
+            self._visited.add(index)
             counter += 1
         return ret
 
@@ -158,13 +169,13 @@ class Tuner:
         while i < least_try_times:
             if not self._space.has_next():
                 break
-            configs = self.next_batch(min(self._n_parallel, least_try_times - i))
+            configs = self.next_config(min(self._n_parallel, least_try_times - i))
             run_times = self._runner.run(configs, self._best_time)
             results = []
             for idx, conf in enumerate(configs):
                 results.append((conf.input_id, run_times[idx]))
                 # keep best config
-                if self.best_time < run_times[idx]:
+                if self.best_time > run_times[idx]:
                     self._best_time = run_times[idx]
                     self._best_iter = i + idx
                     self._best_config = conf
@@ -224,6 +235,7 @@ class ModelBasedTuner(Tuner):
         self.__least_try_times = least_try_times
         self.__early_stopping = early_stopping
 
+        logger.setLevel(logging.DEBUG)
         old_level = logger.level
         i = 0
         error_ct = 0
