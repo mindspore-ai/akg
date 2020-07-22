@@ -29,8 +29,8 @@ from akg.utils import validation_check as vc_util
 from akg import composite
 from akg.tvm import _api_internal
 from . import cce
-from . import op_build_to_func
-
+from . import gpu
+from . import op_build
 
 @vc_util.check_input_type(str)
 def compilewithjson_to_func(json_str):
@@ -68,6 +68,17 @@ def compilewithjson_to_func(json_str):
     if op_func is None:
         if processor == 'cuda':
             op_func = getattr(gpu, op_name, None)
+            input_shapes = []
+            input_types = []
+            for input_desc in kernel_info['input_desc']:
+                input_shapes.append(input_desc[0]['shape'])
+                input_types.append(input_desc[0]['data_type'])
+            op_attrs = []
+            if kernel_info['attr']:
+                for ext_arg in kernel_info['attr']:
+                    op_attrs.append(ext_arg['value'])
+            mod = utils.op_build(op_func, input_shapes, input_types, op_attrs, kernel_info['op'])
+            return True
         else:
             op_func = getattr(cce, op_name, None)
 
@@ -121,7 +132,7 @@ def compilewithjson_to_func(json_str):
         output = [output]
 
     tsr = tsr + [i for i in output if utils.TensorUtils.is_output_value(i)]
-    return op_build_to_func([op_name], output, tsr, schedule_func, processor, kernel_info['op'], attrs)
+    return op_build([op_name], output, tsr, schedule_func, processor, kernel_info['op'], attrs)
 
 def compilewithjson(json_str):
     tmp_rst = compilewithjson_to_func(json_str)
