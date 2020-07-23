@@ -42,7 +42,6 @@ def op_build_to_func(opnames, computes, args, custom_schedule, device, kernel_na
         logging.error("Device %s is not in [aicore, aicpu].", device)
         return None
 
-    aicpu = device == "aicpu"
     polyhedral = True
     dump_ir = os.getenv(MS_AKG_DUMP_IR) == "on"
 
@@ -57,9 +56,9 @@ def op_build_to_func(opnames, computes, args, custom_schedule, device, kernel_na
             if attrs:
                 binds = attrs.pop(BINDS, None)
                 rst = akg.build_to_func(s, args, name=kernel_name, attrs=attrs, polyhedral=polyhedral,
-                                        binds=binds, aicpu=aicpu)
+                                        binds=binds, target=device)
             else:
-                rst = akg.build_to_func(s, args, name=kernel_name, polyhedral=polyhedral, aicpu=aicpu)
+                rst = akg.build_to_func(s, args, name=kernel_name, polyhedral=polyhedral, target=device)
 
     except Exception:
         logging.error(traceback.format_exc())

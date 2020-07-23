@@ -454,7 +454,7 @@ NodeRef composite_with_json_to_func(const std::string &json_str, Map<std::string
   CHECK(config.defined());
   config->dump_pass_ir = akg_dump_pass_ir != nullptr;
   attrs.Set("pragma_reschedule", make_const(Int(32), 1));
-  auto build_rst = akg::BuildToFunc(sch, args, shape_vars, kernel_name, in_binds, attrs, true, false, config);
+  auto build_rst = akg::BuildToFunc(sch, args, shape_vars, kernel_name, in_binds, attrs, true, "cce", config);
   CHECK(build_rst.defined());
   return build_rst;
 }
@@ -519,7 +519,7 @@ NodeRef composite_lower(const std::string &json_str, Map<std::string, NodeRef> a
   akg::BuildConfig config = akg::BuildConfig::Current();
   CHECK(config.defined());
   bool tuning = attrs.find("tuning") != attrs.end();
-  return akg::Lower(sch, args, shape_vars, kernel_name, in_binds, attrs, false, true, tuning, false, config);
+  return akg::Lower(sch, args, shape_vars, kernel_name, in_binds, attrs, false, true, tuning, "cce", config);
 }
 
 TVM_REGISTER_GLOBAL("composite_with_json_to_func").set_body_typed(composite_with_json_to_func);
