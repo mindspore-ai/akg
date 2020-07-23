@@ -16,6 +16,7 @@ file(
   unittest_main.cc
   src/base/*.cc
   src/base_test/*.cc
+  src/pass_test_base/*.cc
   src/pass_test/*.cc)
 
 link_directories(${CMAKE_BINARY_DIR}/googletest/googlemock/gtest)
