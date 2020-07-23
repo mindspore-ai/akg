@@ -1,6 +1,4 @@
-#!/usr/bin/env python3
-# coding: utf-8
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2020 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,7 +15,9 @@
 """relu6 grad"""
 import akg.topi as topi
 import akg.tvm as tvm
+import akg
 
+@akg.schedule(topi.cuda.schedule_injective)
 def ReLU6Grad(y_grad, x):
     """
     Computes Gradients of Rectified Linear 6.
@@ -39,23 +39,3 @@ def ReLU6Grad(y_grad, x):
     res6 = tvm.compute(shape, lambda *i: tvm.if_then_else(x(*i) >= six, zero, res0(*i)))
     res = tvm.compute(shape, lambda *i: tvm.if_then_else(res6(*i) == zero, zero, y_grad(*i)))
     return res
-
-
-def gpu_schedule_ReLU6Grad(outs):
-    """
-    gpu schedule ReLU6Grad.
-
-    Args:
-        outs (tvm.tensor.Tensor): outputs of compute.
-
-    Returns:
-        sch (schedule.Schedule): The created schedule.
-    """
-    device = 'cuda'
-    ctx = tvm.context(device, 0)
-    if not ctx.exist:
-        raise SystemError("Skip because %s is not enabled" % device)
-
-    with tvm.target.create(device):
-        sch = topi.cuda.schedule_elemwise(outs)
-    return sch

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # coding: utf-8
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2020 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,29 +13,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""tile"""
-import akg.tvm
-from akg.ops.array import tile
-from akg.topi.generic import schedule_elemwise
 
+"""tile"""
+from akg.ops.array_gpu import tile
+import akg.topi as topi
+import akg
+
+@akg.schedule(topi.cuda.schedule_injective)
 def Tile(x, multiples):
     """tile."""
     return tile.tile(x, multiples)
-
-def gpu_schedule_Tile(outs):
-    """
-    gpu schedule for tile.
-
-    Args:
-        outs (tvm.tensor.Tensor): outputs of compute.
-
-    Returns:
-        sch (schedule.Schedule): The created schedule.
-    """
-    device = 'cuda'
-    ctx = akg.tvm.context(device, 0)
-    if not ctx.exist:
-        raise SystemError("Skip because %s is not enabled" % device)
-    with akg.tvm.target.create(device):
-        s = schedule_elemwise(outs)
-    return s

@@ -12,14 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""cast"""
+"""less_equal"""
 import akg
-from akg.ops.math_gpu import cast
-import akg.topi as topi
+import akg.topi
+from akg.ops.math_gpu import less_equal
 
-@akg.schedule(topi.cuda.schedule_injective)
-def Cast(x, dst_type):
-    """cast."""
-    if x.dtype == "int64" and dst_type == "float16":
-        x = cast.cast(x, "float32")
-    return cast.cast(x, dst_type)
+@akg.schedule(akg.topi.cuda.schedule_injective)
+def LessEqual(x, y):
+    return less_equal.less_equal(x, y)

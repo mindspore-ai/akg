@@ -99,8 +99,9 @@ add_definitions(-DDMLC_LOG_CUSTOMIZE=1)
 if(USE_AKG_LOG)
   add_definitions(-DUSE_AKG_LOG=1)
 endif()
-if(NOT USE_CUDA)
-  add_definitions("-DBACKEND_D")
+if(NOT USE_CUDA
+   OR ENABLE_AKG)
+  add_definitions("-DFIX_INPUT_ORDER_TVM")
 endif()
 
 # Generic compilation options

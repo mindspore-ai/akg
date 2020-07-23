@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2019 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,14 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""cast"""
-import akg
-from akg.ops.math_gpu import cast
-import akg.topi as topi
+"""operator dsl function: logical_not"""
+import akg.tvm
+import akg.topi
+from akg.utils import validation_check as vc_util
 
-@akg.schedule(topi.cuda.schedule_injective)
-def Cast(x, dst_type):
-    """cast."""
-    if x.dtype == "int64" and dst_type == "float16":
-        x = cast.cast(x, "float32")
-    return cast.cast(x, dst_type)
+@vc_util.check_input_type(akg.tvm.tensor.Tensor)
+def logical_not(input1):
+    """
+    Compute logical_not of input1.
+
+    Args:
+        input1 (tvm.tensor.Tensor): Tensor.
+
+    Returns:
+        tvm.tensor.Tensor.
+    """
+    res = akg.topi.logical_not(input1)
+    return res
