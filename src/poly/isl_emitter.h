@@ -19,11 +19,9 @@
 
 #include <tvm/expr.h>
 #include <tvm/ir.h>
-#include <tvm/ir_pass.h>
 
 #include "ir_pass.h"
-#include "poly/isl.h"
-#include "poly/scop.h"
+#include "poly/scop_info.h"
 
 namespace akg {
 namespace ir {
@@ -47,29 +45,31 @@ class IslEmitter {
   Expr InterpretBinaryOp(const isl::ast_expr_op &e);
 
  public:
-  explicit IslEmitter(Scop &s_, const NodeInfoRepo &n_, const isl::id_list &i_)
-      : scop_(s_), node_info_map_(n_), iter_names_(i_) {}
+  explicit IslEmitter(ScopInfo &info, const NodeInfoRepo &n, const isl::id_list &i)
+      : info_(info), node_info_map_(n), iter_names_(i) {}
   virtual ~IslEmitter() = default;
 
-  /// Interpret isl::ast_expr to Halide Expr
-  //@{
+  // Interpret isl::ast_expr to Halide Expr
   Expr Interpret(const isl::ast_expr &e);
-  //@}
 
   // helper functions, which may can be moved into a separated class
   isl::space GetDomainSpace(const isl::id &stmt_id);
   isl::space GetSpace(const isl::id &tensor_id, const Array<Expr> &tensor_index, const isl::id &stmt_id);
-  isl::multi_aff TensorAccessMultAff(const isl::id &tensor_id, const Array<Expr> &subscripts, const isl::id &stmt_id);
   isl::set Domain() const {
     auto iterator_map = node_info_map_.at(node_id_).iterator_map;
     return isl::map::from(iterator_map).range();
   }
   Stmt EmitAccessNode(const std::string &name, const Node *node, const Array<Expr> &tensor_index,
                       const VarMap &var_map_tmp);
-  Stmt EmitAccessNodeFromPromoteAcsProvide(Scop &scop, isl::id var, const Node *node, Array<Expr> &args);
-  Stmt EmitAccessNodeFromPromoteAcsCall(Scop &scop, isl::id var, const Node *node, Array<Expr> &args);
-  /// Virtual emitters for different type node
-  //@{
+  Stmt EmitAccessNodeFromPromoteAcsProvide(isl::id var, const Node *node, Array<Expr> &args);
+  Stmt EmitAccessNodeFromPromoteAcsCall(isl::id var, const Node *node, Array<Expr> &args);
+  Stmt EmitAccessNodeProvide(const Node *node, const VarMap &var_map_tmp, BufferedFootPrintInfo &buffer_fp_info);
+  virtual Stmt EmitAccessNodeCall(const Node *node, const VarMap &var_map_tmp, BufferedFootPrintInfo &buffer_fp_info);
+  virtual isl::multi_aff TensorAccessMultAff(isl::id &tensor_id, const Array<Expr> &subscripts, const isl::id &stmt_id);
+  virtual bool IsTransferStmt();
+  virtual bool IsCopyinFromAnotherBand(isl::multi_aff &access);
+
+  // Virtual emitters for different type node
   virtual Stmt Emit(const isl::ast_node &node);
   virtual Stmt EmitFor(const isl::ast_node_for &node);
   virtual Stmt EmitIf(const isl::ast_node_if &node);
@@ -84,7 +84,12 @@ class IslEmitter {
   virtual Stmt EmitUserStmtContent(const IfThenElse *if_node);
   virtual Stmt EmitUserStmtContent(const For *for_node);
   virtual Stmt EmitUserStmtContent(const Block *block_node);
-  //@}
+
+  // Loop isl iters info
+  virtual void PushIter(const Variable *iter);
+  virtual void PopIter(const Variable *iter);
+  bool FindIter(const Variable *iter) const;
+  const Variable *GetIterByName(const std::string &id) const;
 
   std::unordered_set<isl::id, isl::IslIdIslHash> realize_use_;
   std::unordered_set<isl::id, isl::IslIdIslHash> realize_use_with_may_def_;
@@ -93,27 +98,15 @@ class IslEmitter {
   std::unordered_set<isl::id, isl::IslIdIslHash> realize_out_;
   std::unordered_set<isl::id, isl::IslIdIslHash> global_realize_out_;
 
-  /// Scop
-  Scop &scop_;
+  ScopInfo &info_;
 
   /// Node information map including
   const NodeInfoRepo &node_info_map_;
 
-  /// Loop isl iters info
-  //@{
   /// Loop isl iters list
   isl::id_list iter_names_;
   /// Loop declared halide iters
   std::vector<const Variable *> iters_;
-
-  virtual void PushIter(const Variable *iter);
-  virtual void PopIter(const Variable *iter);
-  bool FindIter(const Variable *iter) const;
-  const Variable *GetIterByName(const std::string &id) const;
-  //@}
-
-  std::map<const Variable *, std::string> iters_old_name_;
-  std::map<const Variable *, std::string> iters_new_name_;
 
   // current ast node id
   isl::id node_id_;
@@ -125,7 +118,6 @@ class IslEmitter {
   // emit in if
   std::vector<const Node *> cur_if_list_;
   std::unordered_map<isl::id, std::vector<const Node *>, isl::IslIdIslHash> if_map_;
-  std::unordered_map<isl::id, VarMap, isl::IslIdIslHash> stmt_var_map_;
 };
 
 class ExtractIterfromExpr : public air::ir::IRVisitor {
@@ -146,16 +138,23 @@ class ExtractIterfromExpr : public air::ir::IRVisitor {
   std::vector<const Variable *> vec_;
 };
 
-void FindBufferFootprintById(Scop::BufferedFootPrintInfo &buffer_footprint_info,
-                             std::vector<Scop::BufferedFootPrintInfo> active_buffer_fp, isl::id id);
-void GetNameWithoutLocal(isl::id &tensor_id, Scop &scop);
-bool IsTransferStmt(Scop &scop, isl::id &stmt_id);
-bool IsCopyinFromAnotherBand(Scop &scop, isl::multi_aff &access);
-void AffSubForAstToSchedule(isl::pw_multi_aff &ast_to_schedule, bool &is_transfer_stmt,
-                            bool &is_copyin_from_another_band);
-Stmt EmitAccessNodeProvide(const Node *node, const VarMap &var_map_tmp, Scop::BufferedFootPrintInfo &buffer_fp_info);
-Stmt EmitAccessNodeCall(const Node *node, const VarMap &var_map_tmp, Scop::BufferedFootPrintInfo &buffer_fp_info,
-                        bool &is_transfer_stmt, Scop &scop);
+class ReplaceLoopVar : public air::ir::IRMutator {
+ public:
+  explicit ReplaceLoopVar(VarMap v_) : var_map(std::move(v_)) {}
+  ~ReplaceLoopVar() override = default;
+  Expr Mutate_(const Variable *op, const Expr &e) final {
+    for (auto &i : var_map) {
+      if (op->name_hint == i.first.get_name()) {
+        return i.second;
+      }
+    }
+    return e;
+  }
+
+ private:
+  VarMap var_map;
+};
+
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

@@ -203,11 +203,13 @@ Stmt IslEmitter::EmitFor(const isl::ast_node_for &node) {
 
 Stmt IslEmitter::EmitIf(const isl::ast_node_if &node) {
   Expr cond_expr = Interpret(node.get_cond());
+  cur_if_list_.push_back(cond_expr.get());
   Stmt then_case = EmitAst(node.get_then_node());
   Stmt else_case;
   if (node.has_else_node()) {
     else_case = EmitAst(node.get_else_node());
   }
+  cur_if_list_.pop_back();
   return IfThenElse::make(cond_expr, then_case, else_case);
 }
 
@@ -230,25 +232,8 @@ Stmt IslEmitter::EmitBlock(const isl::ast_node_block &node) {
   }
 }
 
-class ReplaceLoopVar : public air::ir::IRMutator {
- public:
-  explicit ReplaceLoopVar(VarMap v_) : var_map(std::move(v_)) {}
-  ~ReplaceLoopVar() override = default;
-  Expr Mutate_(const Variable *op, const Expr &e) final {
-    for (auto &i : var_map) {
-      if (op->name_hint == i.first.get_name()) {
-        return i.second;
-      }
-    }
-    return e;
-  }
-
- private:
-  VarMap var_map;
-};
-
 isl::space IslEmitter::GetDomainSpace(const isl::id &node_id) {
-  auto dom = isl::union_set(scop_.Domain());
+  auto dom = isl::union_set(info_.analysis_result_.Domain());
   auto space = isl::space();
   dom.foreach_set([&node_id, &space](const isl::set &s) -> void {
     if (s.get_tuple_id() == node_id) {
@@ -265,12 +250,12 @@ isl::space IslEmitter::GetSpace(const isl::id &tensor_id, const Array<Expr> &ten
   return space;
 }
 
-isl::multi_aff IslEmitter::TensorAccessMultAff(const isl::id &tensor_id, const Array<Expr> &tensor_index,
+isl::multi_aff IslEmitter::TensorAccessMultAff(isl::id &tensor_id, const Array<Expr> &tensor_index,
                                                const isl::id &node_id) {
   CHECK_NE(tensor_index.size(), 0u);
   isl::pw_multi_aff iter_map = node_info_map_.at(node_id).iterator_map;
   isl::id stmt_id = iter_map.get_tuple_id(isl_dim_out);
-  OperatorDomainSpace domain_space = scop_.data_.domains.at(stmt_id);
+  OperatorDomainSpace domain_space = info_.analysis_result_.GetOperatorDomainMap().at(stmt_id);
   isl::multi_aff ma = isl::multi_aff::zero(GetSpace(tensor_id, tensor_index, stmt_id));
   for (size_t i = 0; i < tensor_index.size(); ++i) {
     auto aff = Expr2Aff(domain_space.param_space, tensor_index[i]).unbind_params_insert_domain(domain_space.tuple);
@@ -335,8 +320,9 @@ class EmitExpr : public air::ir::IRMutator {
   Map<Expr, Expr> cache_;
 };
 
-void FindBufferFootprintById(Scop::BufferedFootPrintInfo &buffer_footprint_info,
-                             std::vector<Scop::BufferedFootPrintInfo> active_buf_footprints, isl::id fp_id) {
+BufferedFootPrintInfo FindBufferFootprintById(const std::vector<BufferedFootPrintInfo> &active_buf_footprints,
+                                              const isl::id &fp_id) {
+  BufferedFootPrintInfo buffer_footprint_info;
   for (const auto &act_buf_fp : active_buf_footprints) {
     if (act_buf_fp.cluster != nullptr) {
       for (const auto &fp : act_buf_fp.cluster->tensor_foot_prints) {
@@ -347,14 +333,16 @@ void FindBufferFootprintById(Scop::BufferedFootPrintInfo &buffer_footprint_info,
       }
     }
   }
+  return buffer_footprint_info;
 }
 
-bool IsTransferStmt(Scop &scop, isl::id &stmt_id) {
-  if (!scop.is_spec_gemm_ && scop.is_tiled_) {
-    isl::union_set transfer_stmt = scop.data_.transfer_stmt;
+bool IslEmitter::IsTransferStmt() {
+  if (info_.analysis_result_.GetIsTiled()) {
+    isl::union_set transfer_stmt = info_.analysis_result_.GetTransferStmt();
     if (!transfer_stmt.is_empty()) {
       bool name_match = false;
-      transfer_stmt.foreach_set([&name_match, stmt_id](const isl::set &s) -> void {
+      auto stmt_id = stmt_id_;
+      transfer_stmt.foreach_set([&name_match, &stmt_id](const isl::set &s) -> void {
         if (s.get_tuple_name() == stmt_id.get_name()) {
           name_match = true;
         }
@@ -365,8 +353,8 @@ bool IsTransferStmt(Scop &scop, isl::id &stmt_id) {
   return false;
 }
 
-Stmt EmitAccessNodeProvide(const Node *node, const VarMap &var_map_tmp,
-                           Scop::BufferedFootPrintInfo &buffer_footprint_info) {
+Stmt IslEmitter::EmitAccessNodeProvide(const Node *node, const VarMap &var_map_tmp,
+                                       BufferedFootPrintInfo &buffer_footprint_info) {
   const auto provide = static_cast<const Provide *>(node);
   Expr value = ReplaceLoopVar(var_map_tmp).Mutate(provide->value);
   Array<Expr> args;
@@ -380,8 +368,8 @@ Stmt EmitAccessNodeProvide(const Node *node, const VarMap &var_map_tmp,
   return Stmt();
 }
 
-Stmt EmitAccessNodeCall(const Node *node, const VarMap &var_map_tmp, Scop::BufferedFootPrintInfo &buffer_footprint_info,
-                        bool &is_transfer_stmt, Scop &scop) {
+Stmt IslEmitter::EmitAccessNodeCall(const Node *node, const VarMap &var_map_tmp,
+                                    BufferedFootPrintInfo &buffer_footprint_info) {
   const Call *call = static_cast<const Call *>(node);
   Array<Expr> args;
   for (auto iv : call->args) {
@@ -389,46 +377,35 @@ Stmt EmitAccessNodeCall(const Node *node, const VarMap &var_map_tmp, Scop::Buffe
   }
   // Not hoisted, emitting just the mapped subscript.
   if (!buffer_footprint_info.cluster_id) {
-    std::string call_name = call->name;
-    if (is_transfer_stmt && (std::string::npos == call_name.find("_local_UB"))) {
-      call_name = call_name + "_local_UB";
-      Tensor t = scop.FindTensor(call_name);
-      if (t.defined()) {
-        return Evaluate::make(Call::make(call->type, call_name, args, call->call_type, t->op, call->value_index));
-      } else {
-        LOG(WARNING) << "Call can not found tensor!!!  tensor name: " << call_name;
-      }
-    }
     return Evaluate::make(Call::make(call->type, call->name, args, call->call_type, call->func, call->value_index));
   }
   return Stmt();
 }
 
-bool IsCopyinFromAnotherBand(Scop &scop, isl::multi_aff &access) {
-  if (!scop.is_spec_gemm_) {
-    for (isl::map inter_band_dependency : scop.data_.inter_band_dependency.get_map_list()) {
-      if (inter_band_dependency.get_tuple_id(isl_dim_out) == access.get_tuple_id(isl_dim_out)) {
-        return true;
-      }
+bool IslEmitter::IsCopyinFromAnotherBand(isl::multi_aff &access) {
+  for (isl::map inter_band_dependency : info_.analysis_result_.GetInnerBandDependency().get_map_list()) {
+    if (inter_band_dependency.get_tuple_id(isl_dim_out) == access.get_tuple_id(isl_dim_out)) {
+      return true;
     }
   }
   return false;
 }
 
-void AffSubForAstToSchedule(isl::pw_multi_aff &ast_to_schedule, bool &is_transfer_stmt,
-                            bool &is_copyin_from_another_band) {
+isl::pw_multi_aff &AffSubForAstToSchedule(isl::pw_multi_aff &ast_to_schedule, bool is_transfer_stmt,
+                                          bool is_copyin_from_another_band) {
   if (is_transfer_stmt || is_copyin_from_another_band) {
     isl_pw_multi_aff *pma1 = ast_to_schedule.copy();
     isl_pw_multi_aff *pma2 = ast_to_schedule.copy();
     isl_pw_multi_aff *pma = isl_pw_multi_aff_sub(pma1, pma2);
     ast_to_schedule = isl::manage(pma);
   }
+  return ast_to_schedule;
 }
 
-Stmt IslEmitter::EmitAccessNodeFromPromoteAcsProvide(Scop &scop, isl::id var, const Node *node, Array<Expr> &args) {
+Stmt IslEmitter::EmitAccessNodeFromPromoteAcsProvide(isl::id var, const Node *node, Array<Expr> &args) {
   const auto provide = static_cast<const Provide *>(node);
-  Tensor t = scop.FindTensor(var);
-  if (scop.CountBufferDefInfo(var)) {
+  Tensor t = info_.FindTensor(var);
+  if (info_.analysis_result_.CountBufferDefInfo(var)) {
     realize_may_def_.insert(var);
     if_map_[var] = cur_if_list_;
     if (cur_if_list_.empty()) {
@@ -439,35 +416,16 @@ Stmt IslEmitter::EmitAccessNodeFromPromoteAcsProvide(Scop &scop, isl::id var, co
   return s;
 }
 
-Stmt IslEmitter::EmitAccessNodeFromPromoteAcsCall(Scop &scop, isl::id var, const Node *node, Array<Expr> &args) {
+Stmt IslEmitter::EmitAccessNodeFromPromoteAcsCall(isl::id var, const Node *node, Array<Expr> &args) {
   const Call *call = static_cast<const Call *>(node);
-  Tensor t = scop.FindTensor(var);
-  if (scop.CountBufferDefInfo(var)) {
+  Tensor t = info_.FindTensor(var);
+  if (info_.analysis_result_.CountBufferDefInfo(var)) {
     realize_use_.insert(var);
     if (!if_map_.count(var) || !AOutThanB(if_map_.at(var), cur_if_list_)) {
       realize_use_with_may_def_.insert(var);
     }
   }
   return Evaluate::make(Call::make(call->type, var.get_name(), args, call->call_type, t->op, t->value_index));
-}
-
-void GetNameWithoutLocal(isl::id &tensor_id, Scop &scop) {
-  if (!scop.is_spec_gemm_) {
-    size_t pos = tensor_id.get_name().find("_local_");
-    std::string substr = tensor_id.get_name().substr(0, pos);
-    if (pos != 0) tensor_id = isl::id(tensor_id.ctx(), substr);
-  }
-}
-
-Stmt EmitAccessNodeImpl(const Node *node, const VarMap &var_map_tmp, Scop::BufferedFootPrintInfo &buffer_footprint_info,
-                        bool &is_transfer_stmt, Scop &scop, bool is_Provide) {
-  Stmt s;
-  if (is_Provide) {
-    s = EmitAccessNodeProvide(node, var_map_tmp, buffer_footprint_info);
-  } else {
-    s = EmitAccessNodeCall(node, var_map_tmp, buffer_footprint_info, is_transfer_stmt, scop);
-  }
-  return s;
 }
 
 Stmt IslEmitter::EmitAccessNode(const std::string &name, const Node *node, const Array<Expr> &tensor_index,
@@ -481,40 +439,34 @@ Stmt IslEmitter::EmitAccessNode(const std::string &name, const Node *node, const
   auto build = node_info_map_.at(node_id_).build;
   auto iterator_map = node_info_map_.at(node_id_).iterator_map;
 
-  CHECK_EQ(scop_.data_.accesses.count(node), 1u)
+  CHECK_EQ(info_.analysis_result_.GetAccessMap().count(node), 1u)
     << "generating tensor " << name << " not in Scop" << node << " not allowed ";
-  auto fp_id = scop_.data_.accesses.at(node);
+  auto fp_id = info_.analysis_result_.GetAccessMap().at(node);
 
-  Scop::BufferedFootPrintInfo buffer_footprint_info;
-  std::vector<Scop::BufferedFootPrintInfo> active_buf_footprint;
-  for (const auto &kv : scop_.ActiveBufferFootprints()) {
+  std::vector<BufferedFootPrintInfo> active_buf_footprint;
+  for (const auto &kv : info_.analysis_result_.ActiveBufferFootprints()) {
     if (kv.first.intersect(isl::union_set(Domain())).is_empty()) {
       continue;
     }
     active_buf_footprint.emplace_back(kv.second);
   }
-  FindBufferFootprintById(buffer_footprint_info, active_buf_footprint, fp_id);
-
-  bool is_transfer_stmt = false;
-  is_transfer_stmt = IsTransferStmt(scop_, stmt_id_);
+  BufferedFootPrintInfo buffer_footprint_info = FindBufferFootprintById(active_buf_footprint, fp_id);
 
   if (node->IsInstance<Provide>()) {
-    if (EmitAccessNodeImpl(node, var_map_tmp, buffer_footprint_info, is_transfer_stmt, scop_, true).defined())
-      return EmitAccessNodeImpl(node, var_map_tmp, buffer_footprint_info, is_transfer_stmt, scop_, true);
+    auto stmt = EmitAccessNodeProvide(node, var_map_tmp, buffer_footprint_info);
+    if (stmt.defined()) return stmt;
   }
 
   if (node->IsInstance<Call>()) {
-    if (EmitAccessNodeImpl(node, var_map_tmp, buffer_footprint_info, is_transfer_stmt, scop_, false).defined())
-      return EmitAccessNodeImpl(node, var_map_tmp, buffer_footprint_info, is_transfer_stmt, scop_, false);
+    auto stmt = EmitAccessNodeCall(node, var_map_tmp, buffer_footprint_info);
+    if (stmt.defined()) return stmt;
   }
 
-  auto buf_def = scop_.GetBufferDefInfo(buffer_footprint_info.cluster_id);
-  GetNameWithoutLocal(buf_def.tensor_id, scop_);
+  auto buf_def = info_.analysis_result_.GetBufferDefInfo(buffer_footprint_info.cluster_id);
 
   auto access = TensorAccessMultAff(buf_def.tensor_id, tensor_index, node_id_);
 
-  bool is_copyin_from_another_band = false;
-  is_copyin_from_another_band = IsCopyinFromAnotherBand(scop_, access);
+  bool is_copyin_from_another_band = IsCopyinFromAnotherBand(access);
 
   auto memory_hoist = buffer_footprint_info.cluster->ComputeBufferedFootprints();
   if (is_copyin_from_another_band) {
@@ -523,33 +475,31 @@ Stmt IslEmitter::EmitAccessNode(const std::string &name, const Node *node, const
 
   // split read-only or write-only input tensor memory_hoists
   // we need to find tensor by name because tensor_id is a fake isl::id
-  bool is_input_tensor = scop_.FindTensorInOrig(buf_def.tensor_id.name()).defined();
+  bool is_input_tensor = info_.FindTensorInOrig(buf_def.tensor_id.name()).defined();
   if (is_input_tensor && buffer_footprint_info.cluster->foot_print_.should_split) {
     memory_hoist = buffer_footprint_info.cluster->UnshiftedBufferFootprint(memory_hoist, fp_id);
   }
   memory_hoist = memory_hoist.set_tuple_id(isl_dim_out, buffer_footprint_info.cluster_id);
 
-  auto schedule = isl::map::from(buffer_footprint_info.outer_schedule.intersect_domain(this->Domain()));
+  auto schedule = isl::map::from(buffer_footprint_info.outer_schedule.intersect_domain(Domain()));
   CHECK(schedule.is_single_valued()) << schedule << " is not single-valued schedule";
   auto ast_to_schedule = isl::pw_multi_aff(schedule).pullback(iterator_map);
-  AffSubForAstToSchedule(ast_to_schedule, is_transfer_stmt, is_copyin_from_another_band);
+  ast_to_schedule = AffSubForAstToSchedule(ast_to_schedule, IsTransferStmt(), is_copyin_from_another_band);
 
   auto ast_to_original = isl::pw_multi_aff(access).pullback(iterator_map);
   auto ast_to_scheduled_original = ast_to_schedule.range_product(ast_to_original);
   auto ast_to_hoisted = isl::pw_multi_aff(memory_hoist).pullback(ast_to_scheduled_original);
   auto hoist_acs = build.access_from(ast_to_hoisted);
   if (auto op = hoist_acs.as<isl::ast_expr_op>()) {
-    if (auto access_ = op.as<isl::ast_expr_op_access>()) {
+    if (op.as<isl::ast_expr_op_access>()) {
       Array<Expr> args;
       for (int i = 1; i < static_cast<int>(op.get_n_arg()); ++i) {
         args.push_back(Interpret(op.get_arg(i)));
       }
       if (node->IsInstance<Provide>())
-        return IslEmitter::EmitAccessNodeFromPromoteAcsProvide(scop_, op.get_arg(0).as<isl::ast_expr_id>().get_id(),
-                                                               node, args);
+        return EmitAccessNodeFromPromoteAcsProvide(op.get_arg(0).as<isl::ast_expr_id>().get_id(), node, args);
       if (node->IsInstance<Call>())
-        return IslEmitter::EmitAccessNodeFromPromoteAcsCall(scop_, op.get_arg(0).as<isl::ast_expr_id>().get_id(), node,
-                                                            args);
+        return EmitAccessNodeFromPromoteAcsCall(op.get_arg(0).as<isl::ast_expr_id>().get_id(), node, args);
     }
   }
   return Evaluate::make(Expr("todo EmitAst"));
@@ -569,7 +519,7 @@ Stmt IslEmitter::EmitUserStmtContent(const Evaluate *eva_node) {
   auto im2col = Call::make(call->type, call->name, args, call->call_type);
   Stmt res = Evaluate::make(im2col);
   // add AttrStmt to im2col
-  for (const auto &item : scop_.data_.vecs) {
+  for (const auto &item : info_.analysis_result_.GetBufferBindVec()) {
     Expr replaced = ReplaceLoopVar(var_map_).Mutate(item.second);
     res = AttrStmt::make(item.first, air::ir::attr::buffer_bind_scope, replaced, res);
   }
@@ -600,8 +550,9 @@ class SubstituteByNameMutator : public IRMutator {
  * So, we need to sink the copy out statement into the innermost "if",
  * i.e., copy out immediately after each computation.
  */
-static Stmt GenerateCopyOut(const Scop &scop, const Provide *original, const Provide *hoisted, const VarMap &var_map) {
-  auto call_type = scop.GetDtypeOf(hoisted->func->func_name());
+static Stmt GenerateCopyOut(const ScopInfo &info, const Provide *original, const Provide *hoisted,
+                            const VarMap &var_map) {
+  auto call_type = info.GetDtypeOf(hoisted->func->func_name());
   Expr call_expr = Call::make(call_type, hoisted->func->func_name(), hoisted->args, Call::CallType::Halide,
                               hoisted->func, hoisted->value_index);
   Array<Expr> new_args;
@@ -621,8 +572,8 @@ Stmt IslEmitter::EmitUserStmtContent(const Provide *provide_node) {
   Expr value = EmitExpr(f, var_map_).Mutate(provide_node->value);
   Stmt provide_stmt = Provide::make(provide_new->func, provide_new->value_index, value, provide_new->args);
 
-  if (scop_.conditional_write_buffer_footprints_.count(write_tensor)) {
-    return Block::make(provide_stmt, GenerateCopyOut(scop_, provide_node, provide_new, var_map_));
+  if (info_.analysis_result_.GetConditionalWriteBufferFootprints().count(write_tensor)) {
+    return Block::make(provide_stmt, GenerateCopyOut(info_, provide_node, provide_new, var_map_));
   }
   return provide_stmt;
 }
@@ -688,11 +639,11 @@ Stmt IslEmitter::EmitUserStmt(const isl::ast_node_user &node) {
   isl::ast_expr_op usr_expr = node.get_expr().as<isl::ast_expr_op>();
   stmt_id_ = usr_expr.get_arg(0).as<isl::ast_expr_id>().get_id();
   node_id_ = node.get_annotation();
-  const Node *stmt_node = scop_.data_.statements.at(stmt_id_);
+  const Node *stmt_node = info_.analysis_result_.GetStatementMap().at(stmt_id_);
   CHECK(stmt_node);
   // compute VarMap to replace old iterators
   auto build = node_info_map_.at(node_id_).build;
-  auto tuple = scop_.data_.domains.at(stmt_id_).tuple;
+  auto tuple = info_.analysis_result_.GetOperatorDomainMap().at(stmt_id_).tuple;
   auto iterator_map = node_info_map_.at(node_id_).iterator_map;
 
   var_map_.clear();
@@ -701,41 +652,51 @@ Stmt IslEmitter::EmitUserStmt(const isl::ast_node_user &node) {
     auto isl_expr = build.expr_from(iterator_map.get_pw_aff(i));
     Expr halide_new_iter = Interpret(isl_expr);
     var_map_.emplace(isl_old_iter, halide_new_iter);
-    std::string replace_id = isl_old_iter.get_name() + "_";
-    std::vector<const Variable *> vec = ExtractIterfromExpr().Run(halide_new_iter);
-    for (auto item : vec) {
-      std::string new_name = item->name_hint;
-      size_t pos = new_name.find(scop_.iter_prefix_);
-      if (pos != std::string::npos) {
-        new_name = new_name.replace(pos, scop_.iter_prefix_.size(), replace_id);
-        iters_old_name_.emplace(item, item->name_hint);
-        iters_new_name_.emplace(item, new_name);
-      }
-    }
   }
 
-  VarMap vmap = var_map_;
-  stmt_var_map_.emplace(stmt_id_, vmap);
   return EmitUserStmtContent(stmt_node);
 }
 
-Stmt IslEmitter::EmitStmt(const isl::ast_node_user &node) { return EmitUserStmt(node); }
+Stmt IslEmitter::EmitStmt(const isl::ast_node_user &node) {
+  CHECK(node.get_expr().isa<isl::ast_expr_op>());
+  isl::ast_expr_op usr_expr = node.get_expr().as<isl::ast_expr_op>();
+  CHECK(usr_expr);
+  auto stmt_id = usr_expr.get_arg(0).as<isl::ast_expr_id>().get_id();
+  if (info_.IsRead(stmt_id)) {
+    return Evaluate::make(Expr("todo EmitRead"));
+  }
+  if (info_.IsWrite(stmt_id)) {
+    return Evaluate::make(Expr("todo EmitWrite"));
+  }
+  return EmitUserStmt(node);
+}
 
 Stmt IslEmitter::EmitAst(const isl::ast_node &node) {
+  Stmt s;
+  std::string info;
   if (auto for_node = node.as<isl::ast_node_for>()) {
-    return EmitFor(for_node);
+    info = "[FOR_NODE]";
+    s = EmitFor(for_node);
   } else if (auto if_node = node.as<isl::ast_node_if>()) {
-    return EmitIf(if_node);
+    info = "[IF_NODE]";
+    s = EmitIf(if_node);
   } else if (auto block_node = node.as<isl::ast_node_block>()) {
-    return EmitBlock(block_node);
+    info = "[BLOCK_NODE]";
+    s = EmitBlock(block_node);
   } else if (auto mark_node = node.as<isl::ast_node_mark>()) {
-    return EmitMark(mark_node);
+    info = "[MARK_NODE]";
+    s = EmitMark(mark_node);
   } else if (auto user_node = node.as<isl::ast_node_user>()) {
-    return EmitStmt(user_node);
+    info = "[USER_NODE]";
+    s = EmitStmt(user_node);
   } else {
-    LOG(FATAL) << "NYI " << node << "\n";
+    s = Evaluate::make(Expr("todo EmitAst"));
   }
-  return Evaluate::make(Expr("todo EmitAst"));
+  if (PRINT_EMMITER) {
+    LOG(INFO) << ">>>>>>>>>>>>INPUT AST_NODE" << info << "<<<<<<<<<<<<<<\n" << node;
+    LOG(INFO) << ">>>>>>>>>>>>OUTPUT STMT<<<<<<<<<<<<\n" << s;
+  }
+  return s;
 }
 
 Stmt IslEmitter::Emit(const isl::ast_node &node) { return EmitAst(node); }

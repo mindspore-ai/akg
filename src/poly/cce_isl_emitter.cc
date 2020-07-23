@@ -13,19 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include "poly/cce_isl_emitter.h"
 
-#include <tvm/expr.h>
-#include <tvm/ir.h>
-#include <tvm/operation.h>
-#include <tvm/ir_pass.h>
-#include <tvm/ir_mutator.h>
-#include <tvm/ir_visitor.h>
-
 #include "ir_pass.h"
-#include "poly/isl.h"
-#include "poly/poly_util.h"
+#include "poly/dma_inject.h"
 #include "pass/utils.h"
+#include "poly/spec_gemm_builder.h"
 
 namespace akg {
 namespace ir {
@@ -403,7 +397,7 @@ std::vector<isl::id> GetLhsAllArgs(const CCEIslEmitter *emitter, const isl::ast_
   auto node_id = node.get_annotation();
   isl::ast_expr_op node_op;
   std::vector<isl::id> arg_ids;
-  if (!emitter->scop_.IsRead(stmt_id) && !emitter->scop_.IsWrite(stmt_id)) {
+  if (!emitter->info_.IsRead(stmt_id) && !emitter->info_.IsWrite(stmt_id)) {
     node_op = node.get_expr().as<isl::ast_expr_op>();
     if (!node_op) return arg_ids;
   } else {
@@ -412,9 +406,9 @@ std::vector<isl::id> GetLhsAllArgs(const CCEIslEmitter *emitter, const isl::ast_
     auto hoisted = iterator_map.range_factor_range();
     auto original = iterator_map.range_factor_domain().range_factor_range();
     auto build = emitter->node_info_map_.at(node_id).build;
-    if (emitter->scop_.IsRead(stmt_id)) {
+    if (emitter->info_.IsRead(stmt_id)) {
       node_expr = build.access_from(isl::multi_pw_aff(hoisted));
-    } else if (emitter->scop_.IsWrite(stmt_id)) {
+    } else if (emitter->info_.IsWrite(stmt_id)) {
       node_expr = build.access_from(isl::multi_pw_aff(original));
     }
     node_op = node_expr.as<isl::ast_expr_op>();
@@ -505,7 +499,7 @@ bool CCEIslEmitter::InjectMulticore(const std::string &iter) {
         if (should_insert_multi_core) {
           ++multicore_info.multicore_depth;
           --multicore_info.coincidence[coincident_member];
-        }	  
+        }
       }
     } else {
       LOG(WARNING) << "multicore: unrecognized loop var " << iter;
@@ -545,7 +539,7 @@ Stmt CCEIslEmitter::EmitFor(const isl::ast_node_for &node) {
   Stmt stmt;
   if (body_stmt.defined()) {
     stmt = For::make(iter_expr, init_expr, cond_expr, ForType::Serial, DeviceAPI::None, body_stmt);
-    if (scop_.optimize_for_davinci_) {
+    if (info_.user_config_.GetOptimizeForDavinci()) {
       const int DAVINCIC0SIZE = 16;
       // need to find the last axis
       if (Equal(cond_expr, Expr(DAVINCIC0SIZE)) && ForShouldPassDown(this, node, isl_iter_id)) {
@@ -567,26 +561,10 @@ Stmt CCEIslEmitter::EmitFor(const isl::ast_node_for &node) {
   return stmt;
 }
 
-Stmt CCEIslEmitter::EmitIf(const isl::ast_node_if &node) {
-  // get cond
-  Expr cond_expr = Interpret(node.get_cond());
-
-  cur_if_list_.push_back(cond_expr.get());
-
-  // get then_case
-  Stmt then_case = EmitAst(node.get_then_node());
-
-  // get else_case
-  Stmt else_case;
-  if (node.has_else_node()) {
-    else_case = EmitAst(node.get_else_node());
-  }
-
-  cur_if_list_.pop_back();
-  return IfThenElse::make(cond_expr, then_case, else_case);
-}
-
 Expr CCEIslEmitter::EmitLoad(const isl::ast_expr &expr, const Type type) {
+  if (PRINT_CCE_ISL_EMMITER) {
+    LOG(INFO) << ">>>>>>>>>>>>INPUT AST_NODE[LOAD]<<<<<<<<<<<<<<\n" << expr;
+  }
   if (auto op = expr.as<isl::ast_expr_op>()) {
     if (auto access = op.as<isl::ast_expr_op_access>()) {
       // make buffer, index
@@ -596,24 +574,32 @@ Expr CCEIslEmitter::EmitLoad(const isl::ast_expr &expr, const Type type) {
       for (unsigned int i = 1; i < op.get_n_arg(); ++i) {
         local_args.push_back(Interpret(op.get_arg(i)));
       }
-      if (scop_.CountBufferDefInfo(var)) {
+      if (info_.analysis_result_.CountBufferDefInfo(var)) {
         realize_use_.insert(var);
         if (!if_map_.count(var) || !AOutThanB(if_map_.at(var), cur_if_list_)) {
           realize_use_with_may_def_.insert(var);
         }
       }
-      Tensor t = scop_.FindTensor(var);
-      if (scop_.IsIm2col()) {
+      Tensor t = info_.FindTensor(var);
+      if (info_.cube_info_.IsIm2col()) {
         // compute_local_UB find compute
         std::string name = t->op->name;
-        for (const auto &updateTensor : scop_.data_.update_tensors) {
+        for (const auto &updateTensor : info_.analysis_result_.GetUpdateTensor()) {
           if (updateTensor->op->name == name) {
-            return Call::make(type, updateTensor->op->name, local_args, Call::CallType::Halide, updateTensor->op,
-                              updateTensor->value_index);
+            auto call = Call::make(type, updateTensor->op->name, local_args, Call::CallType::Halide, updateTensor->op,
+                                   updateTensor->value_index);
+            if (PRINT_CCE_ISL_EMMITER) {
+              LOG(INFO) << ">>>>>>>>>>>>OUTPUT STMT<<<<<<<<<<<<\n" << call;
+            }
+            return call;
           }
         }
       }
-      return Call::make(type, t->op->name, local_args, Call::CallType::Halide, t->op, t->value_index);
+      auto call = Call::make(type, t->op->name, local_args, Call::CallType::Halide, t->op, t->value_index);
+      if (PRINT_CCE_ISL_EMMITER) {
+        LOG(INFO) << ">>>>>>>>>>>>OUTPUT STMT<<<<<<<<<<<<\n" << call;
+      }
+      return call;
     }
   }
   return Expr();
@@ -633,27 +619,72 @@ static isl_stat ExtractSinglePiece(__isl_take isl_set *set, __isl_take isl_aff *
   return isl_stat_error;
 }
 
-Stmt CCEIslEmitter::EmitL1Read(const isl::ast_node_user &node) {
+static isl::pw_multi_aff ComputeNewBufferFootprint(const std::shared_ptr<TensorFootprintCluster> &fp_cluster,
+                                                   const isl::pw_multi_aff &buffer_footprint) {
+  if (!fp_cluster->UnWriteable()) return buffer_footprint;
+  if (!fp_cluster->foot_print_.is_valid) return buffer_footprint;
+  unsigned num_dims = fp_cluster->foot_print_.GetBoxDim();
+
+  isl::pw_multi_aff new_buffer_footprint = buffer_footprint;
+  for (unsigned dim = 0; dim < num_dims; ++dim) {
+    isl::aff lower_bound = fp_cluster->foot_print_.GetBoxLowerBound(dim);
+    isl::pw_aff dim_buf_fp = buffer_footprint.get_pw_aff(dim);
+    if (dim_buf_fp.n_piece() != 1) return buffer_footprint;
+    // there is only one piece, but we have to use the foreach API
+    dim_buf_fp.foreach_piece([&lower_bound, &new_buffer_footprint, &dim](const isl::set &set,
+                                                                         const isl::aff &aff) -> void {
+      if (IsAffVarPlusOffset(lower_bound) && IsAffNonZeroConst(aff)) {
+        isl::pw_aff zero = isl::pw_aff(isl::manage(isl_aff_set_constant_si(aff.copy(), 0)));
+        new_buffer_footprint = isl::manage(isl_pw_multi_aff_set_pw_aff(new_buffer_footprint.copy(), dim, zero.copy()));
+      }
+    });
+  }
+  return new_buffer_footprint;
+}
+
+/*
+ * Remove the constant offset from provide args, e.g. input_1_local_UB(32, 7, cc2, cc3) = input_1(...)
+ * Check the footprint cluster of the hoisted var to confirm this input tensor has multiple accesses
+ * from shifted tiles. This should be improved by computing the new footprint with footprint_per_access(),
+ * but from isl AST we do not know the footprint ID that corresponds to the GM -> UB copy.
+ */
+isl::pw_multi_aff RemoveConstOffsetFromBufferFootprint(
+  const isl::pw_multi_aff &buffer_footprint,
+  const std::vector<std::pair<isl::union_set, BufferedFootPrintInfo>> &active_buffer_footprints) {
+  const isl::id buffer_id = buffer_footprint.get_tuple_id(isl_dim_out);
+  for (const auto &act_buf : active_buffer_footprints) {
+    if (act_buf.second.cluster_id == buffer_id) {
+      const auto &footprint_cluster = act_buf.second.cluster;
+      return ComputeNewBufferFootprint(footprint_cluster, buffer_footprint);
+    }
+  }
+  return buffer_footprint;
+}
+
+Stmt CCEIslEmitter::EmitRead(const isl::ast_node_user &node) {
   isl::id node_id = node.get_annotation();
   isl::pw_multi_aff iterator_map = node_info_map_.at(node_id).iterator_map;
   isl::pw_multi_aff hoisted = iterator_map.range_factor_range();
   isl::pw_multi_aff original = iterator_map.range_factor_domain().range_factor_range();
 
   isl::id original_tensor = original.get_tuple_id(isl_dim_out);
-  bool isInputTensor = scop_.FindTensorInOrig(original_tensor).defined();
-  if (isInputTensor) hoisted = scop_.RemoveConstOffsetFromBufferFootprint(hoisted);
+  bool isInputTensor = info_.FindTensorInOrig(original_tensor).defined();
+  if (isInputTensor)
+    hoisted = RemoveConstOffsetFromBufferFootprint(hoisted, info_.analysis_result_.ActiveBufferFootprints());
 
   auto build = node_info_map_.at(node_id).build;
   auto lhs = build.access_from(isl::multi_pw_aff(hoisted));
   auto rhs = build.access_from(isl::multi_pw_aff(original));
 
-  size_t pos = scop_.GetBName().find("_local");
-  std::string b_name = pos == std::string::npos ? scop_.GetBName() : scop_.GetBName().substr(0, pos);
+  size_t pos = info_.cube_info_.GetBName().find("_local");
+  std::string b_name =
+    pos == std::string::npos ? info_.cube_info_.GetBName() : info_.cube_info_.GetBName().substr(0, pos);
   auto b_l1_name = b_name + "_local_L1";
 
-  if (scop_.matB_dim_h_ > 0 && scop_.matB_dim_w_ > 0 && original.get_tuple_id(isl_dim_out).get_name() == b_l1_name) {
-    auto h_size = scop_.matB_dim_h_;
-    auto w_size = scop_.matB_dim_w_;
+  if (info_.user_config_.GetMatBDimH() > 0 && info_.user_config_.GetMatBDimW() > 0 &&
+      original.get_tuple_id(isl_dim_out).get_name() == b_l1_name) {
+    auto h_size = info_.user_config_.GetMatBDimH();
+    auto w_size = info_.user_config_.GetMatBDimW();
 
     auto mpa = isl::multi_pw_aff(original);
     auto size = mpa.size();
@@ -696,7 +727,7 @@ Stmt CCEIslEmitter::EmitL1Read(const isl::ast_node_user &node) {
     rhs = build.access_from(isl::multi_pw_aff(ma));
   }
 
-  Type type = scop_.GetDtypeOf(rhs);
+  Type type = info_.GetDtypeOf(rhs);
   if (auto op = lhs.as<isl::ast_expr_op>()) {
     if (auto access = op.as<isl::ast_expr_op_access>()) {
       Expr value = EmitLoad(rhs, type);
@@ -707,9 +738,9 @@ Stmt CCEIslEmitter::EmitL1Read(const isl::ast_node_user &node) {
         local_args.push_back(Interpret(op.get_arg(i)));
       }
 
-      Tensor t = scop_.FindTensor(var);
+      Tensor t = info_.FindTensor(var);
       CHECK(t.defined());
-      if (scop_.CountBufferDefInfo(var)) {
+      if (info_.analysis_result_.CountBufferDefInfo(var)) {
         realize_may_def_.insert(var);
         if_map_.emplace(var, cur_if_list_);
         if (cur_if_list_.empty()) {
@@ -717,8 +748,8 @@ Stmt CCEIslEmitter::EmitL1Read(const isl::ast_node_user &node) {
         }
       }
       hoisted_read_.insert(var);
-      if (scop_.IsIm2col() && !scop_.data_.update_tensors.empty()) {
-        return Provide::make(scop_.data_.update_tensors[0]->op, 0, value, local_args);
+      if (info_.cube_info_.IsIm2col() && !info_.analysis_result_.GetUpdateTensor().empty()) {
+        return Provide::make(info_.analysis_result_.GetUpdateTensor()[0]->op, 0, value, local_args);
       }
       return Provide::make(t->op, 0, value, local_args);
     }
@@ -726,7 +757,7 @@ Stmt CCEIslEmitter::EmitL1Read(const isl::ast_node_user &node) {
   return Stmt();
 }
 
-Stmt CCEIslEmitter::EmitL1Write(const isl::ast_node_user &node, Scop::AtomicType atomic) {
+Stmt CCEIslEmitter::EmitWrite(const isl::ast_node_user &node, AtomicType atomic) {
   auto node_id = node.get_annotation();
   CHECK_GT(node_info_map_.count(node_id), 0);
   auto iterator_map = node_info_map_.at(node_id).iterator_map;
@@ -735,18 +766,18 @@ Stmt CCEIslEmitter::EmitL1Write(const isl::ast_node_user &node, Scop::AtomicType
 
   // refine atomic from reduce op
   bool doatomic = false;
-  if (atomic == Scop::AtomicType::Add) {
+  if (atomic == AtomicType::Add) {
     auto srcid = original.get_tuple_id(isl_dim_out);
-    for (const auto &i : scop_.data_.statements) {
+    for (const auto &i : info_.analysis_result_.GetStatementMap()) {
       std::set<const Variable *> rmv;
       const auto provide = static_cast<const Provide *>(i.second);
-      if (provide == nullptr || scop_.data_.reduces.count(provide) != 1) continue;
+      if (provide == nullptr || info_.analysis_result_.GetReduceMap().count(provide) != 1) continue;
       if (provide->func->func_name() != srcid.get_name()) continue;
       doatomic = true;
       if (!stmt_var_map_.count(i.first)) continue;
       VarMap vmap = stmt_var_map_.at(i.first);
       for (const auto &j : vmap) {
-        for (auto k : scop_.data_.reduces.at(provide)) {
+        for (auto k : info_.analysis_result_.GetReduceMap().at(provide)) {
           if (k->var.get()->name_hint != j.first.get_name()) continue;
           std::vector<const Variable *> iters = ExtractIterfromExpr().Run(j.second);
           for (auto v : iters)
@@ -761,7 +792,7 @@ Stmt CCEIslEmitter::EmitL1Write(const isl::ast_node_user &node, Scop::AtomicType
   auto build = node_info_map_.at(node_id).build;
   auto rhs = build.access_from(isl::multi_pw_aff(hoisted));
   auto lhs = build.access_from(isl::multi_pw_aff(original));
-  Type type = scop_.GetDtypeOf(lhs);
+  Type type = info_.GetDtypeOf(lhs);
 
   if (auto op = lhs.as<isl::ast_expr_op>()) {
     if (auto access = op.as<isl::ast_expr_op_access>()) {
@@ -773,9 +804,9 @@ Stmt CCEIslEmitter::EmitL1Write(const isl::ast_node_user &node, Scop::AtomicType
         local_args.push_back(Interpret(op.get_arg(static_cast<int>(i))));
       }
 
-      Tensor t = scop_.FindTensor(var);
+      Tensor t = info_.FindTensor(var);
       CHECK(t.defined());
-      if (scop_.CountBufferDefInfo(var)) {
+      if (info_.analysis_result_.CountBufferDefInfo(var)) {
         realize_may_def_.insert(var);
         if_map_.emplace(var, cur_if_list_);
         if (cur_if_list_.empty()) {
@@ -791,7 +822,7 @@ Stmt CCEIslEmitter::EmitL1Write(const isl::ast_node_user &node, Scop::AtomicType
       }
 
       // remove original copy out promotion statement because it is sinked into if stmt of computation
-      if (scop_.conditional_write_buffer_footprints_.count(t->op->name)) return Evaluate::make(0);
+      if (info_.analysis_result_.GetConditionalWriteBufferFootprints().count(t->op->name)) return Evaluate::make(0);
 
       return Provide::make(t->op, 0, value, local_args);
     }
@@ -804,15 +835,46 @@ Stmt CCEIslEmitter::EmitUserStmt(const isl::ast_node_user &node) {
     LOG(INFO) << "don't emit conv origin user stmt.";
     return Evaluate::make(Expr(0));
   } else {
-    auto user_stmt = IslEmitter::EmitUserStmt(node);
+    CHECK(node.get_expr().isa<isl::ast_expr_op>());
+    isl::ast_expr_op usr_expr = node.get_expr().as<isl::ast_expr_op>();
+    stmt_id_ = usr_expr.get_arg(0).as<isl::ast_expr_id>().get_id();
+    node_id_ = node.get_annotation();
+    const Node *stmt_node = info_.analysis_result_.GetStatementMap().at(stmt_id_);
+    CHECK(stmt_node);
+    // compute VarMap to replace old iterators
+    auto build = node_info_map_.at(node_id_).build;
+    auto tuple = info_.analysis_result_.GetOperatorDomainMap().at(stmt_id_).tuple;
+    auto iterator_map = node_info_map_.at(node_id_).iterator_map;
+
+    var_map_.clear();
+    for (unsigned int i = 0; i < tuple.size(); ++i) {
+      isl::id isl_old_iter = tuple.get_id(i);
+      auto isl_expr = build.expr_from(iterator_map.get_pw_aff(i));
+      Expr halide_new_iter = Interpret(isl_expr);
+      var_map_.emplace(isl_old_iter, halide_new_iter);
+      std::string replace_id = isl_old_iter.get_name() + "_";
+      std::vector<const Variable *> vec = ExtractIterfromExpr().Run(halide_new_iter);
+      for (auto item : vec) {
+        std::string new_name = item->name_hint;
+        auto iter_prefix = info_.user_config_.GetIterPrefix(info_.cube_info_.IsSpecGemm());
+        size_t pos = new_name.find(iter_prefix);
+        if (pos != std::string::npos) {
+          new_name = new_name.replace(pos, iter_prefix.size(), replace_id);
+          iters_old_name_.emplace(item, item->name_hint);
+          iters_new_name_.emplace(item, new_name);
+        }
+      }
+    }
+
+    VarMap vmap = var_map_;
+    stmt_var_map_.emplace(stmt_id_, vmap);
+    auto user_stmt = EmitUserStmtContent(stmt_node);
 
     // fix conv prefusion dma if condition
     bool add_attr = false;
-    const Node *stmt_node = scop_.data_.statements.at(stmt_id_);
-    CHECK(stmt_node);
     std::string type_key = std::string(stmt_node->GetTypeKey());
-    if (!scop_.is_spec_gemm_ && (type_key == "IfThenElse")) {
-      isl::union_set transfer_stmt = scop_.data_.transfer_stmt;
+    if (!info_.cube_info_.IsSpecGemm() && (type_key == "IfThenElse")) {
+      isl::union_set transfer_stmt = info_.analysis_result_.GetTransferStmt();
       if (!transfer_stmt.is_empty()) {
         transfer_stmt.foreach_set([&add_attr, this](const isl::set &s) -> void {
           if (s.get_tuple_name() == stmt_id_.get_name()) {
@@ -828,6 +890,24 @@ Stmt CCEIslEmitter::EmitUserStmt(const isl::ast_node_user &node) {
   }
 }
 
+AtomicType GetAtomicWrite(const isl::id &id, const StatementMap &statements) {
+  for (const auto &i : statements) {
+    const Node *stmt_node = i.second;
+    if (stmt_node->IsInstance<Provide>()) {
+      auto provide = static_cast<const Provide *>(stmt_node);
+      if (const auto cop = provide->func.as<ComputeOpNode>()) {
+        if (cop->attrs.count(ATTR_ATOMIC_ADD) != 0) {
+          if (auto str_op = cop->attrs.at(ATTR_ATOMIC_ADD).as<StringImm>()) {
+            auto str = str_op->value;
+            if (str == id.get_name()) return AtomicType::Add;
+          }
+        }
+      }
+    }
+  }
+  return AtomicType::Equ;
+}
+
 Stmt CCEIslEmitter::EmitStmt(const isl::ast_node_user &node) {
   CHECK(node.get_expr().isa<isl::ast_expr_op>());
   isl::ast_expr_op usr_expr = node.get_expr().as<isl::ast_expr_op>();
@@ -835,16 +915,28 @@ Stmt CCEIslEmitter::EmitStmt(const isl::ast_node_user &node) {
   auto stmt_id = usr_expr.get_arg(0).as<isl::ast_expr_id>().get_id();
   auto node_id = node.get_annotation();
 
-  if (scop_.IsRead(stmt_id)) {
-    return EmitL1Read(node);
-  } else if (scop_.IsWrite(stmt_id)) {
-    if (scop_.IsGMWrite(stmt_id)) {
+  if (info_.IsRead(stmt_id)) {
+    auto s = EmitRead(node);
+    if (PRINT_CCE_ISL_EMMITER) {
+      LOG(INFO) << ">>>>>>>>>>>>INPUT AST_NODE[READ]<<<<<<<<<<<<<<\n" << node;
+      LOG(INFO) << ">>>>>>>>>>>>OUTPUT STMT<<<<<<<<<<<<\n" << s;
+    }
+    return s;
+  } else if (info_.IsWrite(stmt_id)) {
+    auto s = Stmt();
+    if (info_.IsGMWrite(stmt_id)) {
       auto iterator_map = node_info_map_.at(node_id).iterator_map;
       auto original = iterator_map.range_factor_domain().range_factor_range();
       auto srcid = original.get_tuple_id(isl_dim_out);
-      return EmitL1Write(node, scop_.GetAtomicWrite(srcid));
+      s = EmitWrite(node, GetAtomicWrite(srcid, info_.analysis_result_.GetStatementMap()));
+    } else {
+      s = EmitWrite(node, AtomicType::Equ);
     }
-    return EmitL1Write(node, Scop::AtomicType::Equ);
+    if (PRINT_CCE_ISL_EMMITER) {
+      LOG(INFO) << ">>>>>>>>>>>>INPUT AST_NODE[WRITE]<<<<<<<<<<<<<<\n" << node;
+      LOG(INFO) << ">>>>>>>>>>>>OUTPUT STMT<<<<<<<<<<<<\n" << s;
+    }
+    return s;
   } else {
     SetCube(stmt_id);
     return EmitUserStmt(node);
@@ -852,7 +944,7 @@ Stmt CCEIslEmitter::EmitStmt(const isl::ast_node_user &node) {
 }
 
 void CCEIslEmitter::SetCube(const isl::id &stmt_id) {
-  auto cur_op = scop_.data_.stmt_op_Info.at(stmt_id);
+  auto cur_op = info_.analysis_result_.GetStmtOpInfoMap().at(stmt_id);
   opinfo_.isCube = cur_op.isCube || opinfo_.isCube;
   opinfo_.ops.insert(opinfo_.ops.end(), cur_op.ops.begin(), cur_op.ops.end());
   is_cube_ = true;
@@ -1002,9 +1094,10 @@ Stmt CCEIslEmitter::EmitGemmRangeInfoBackPropFilter(const Stmt &stmt) {
   return AttrStmt::make(range_map, "pragma_gemm_l0", Expr(l0_range_idx), stmt);
 }
 
-void CCEIslEmitter::EmitGemmRangeInfoNewAxis(std::vector<Range> &range, std::vector<std::string> &prefix,
-                                             std::unordered_map<std::string, bool> &outerAxis, Range &axisMRange,
-                                             Map<std::string, Range> &range_map, Map<std::string, VarExpr> &axis_map) {
+void CCEIslEmitter::CollectGemmRangeInfoNewAxis(std::vector<Range> &range, std::vector<std::string> &prefix,
+                                                std::unordered_map<std::string, bool> &outerAxis, Range &axisMRange,
+                                                Map<std::string, Range> &range_map,
+                                                Map<std::string, VarExpr> &axis_map) {
   for (unsigned int i = 0; i < range.size(); i++) {
     std::stringstream ss;
     ss << "ee" << i;
@@ -1109,7 +1202,7 @@ Stmt CCEIslEmitter::EmitGemmRangeInfo(Stmt stmt) {
    ***********************/
   // spec gemm set dim outer outer range
   std::vector<Range> range;
-  if (scop_.tile_size_is_var_) {
+  if (info_.user_config_.GetTileSizeIsVar()) {
     // must equal to scop.cc
     const int t0_mo = 11;
     const int t0_ko = 13;
@@ -1120,7 +1213,7 @@ Stmt CCEIslEmitter::EmitGemmRangeInfo(Stmt stmt) {
     range.emplace_back(Expr(0), Expr(1));
     range.emplace_back(Expr(0), floordiv(Var("KO") + t0_ko - 1, t0_ko));
   } else {
-    range = scop_.GetRange(range_idx_);
+    range = info_.cube_info_.GetRange(range_idx_);
   }
   Map<std::string, Range> range_map;
   Map<std::string, VarExpr> axis_map;
@@ -1131,7 +1224,7 @@ Stmt CCEIslEmitter::EmitGemmRangeInfo(Stmt stmt) {
   CHECK(prefix.size() == range.size());
   Range axis_m_range;
 
-  EmitGemmRangeInfoNewAxis(range, prefix, outer_axis, axis_m_range, range_map, axis_map);
+  CollectGemmRangeInfoNewAxis(range, prefix, outer_axis, axis_m_range, range_map, axis_map);
 
   std::vector<std::string> all_axis;
   all_axis.emplace_back("mo_");
@@ -1153,10 +1246,10 @@ Stmt CCEIslEmitter::EmitGemmRangeInfo(Stmt stmt) {
    * **********************************/
   PartitionSingle *single = PartitionSingle::getInstance();
   if (single != nullptr) {
-    if (!scop_.is_dynamic_) {
-      EmitGemmRangeInfoDynamic(axis_m_range, range_map);
+    if (!info_.user_config_.GetIsDynamic()) {
+      CollectGemmMWSize(axis_m_range, range_map);
     } else {
-      EmitGemmRangeInfoStatic(range_map);
+      CollectGemmMWSizeDynamic(range_map);
     }
   }
   stmt = AttrStmt::make(axis_map, "pragma_spec_gemm_attr", Expr(0), stmt);
@@ -1165,7 +1258,7 @@ Stmt CCEIslEmitter::EmitGemmRangeInfo(Stmt stmt) {
   return stmt;
 }
 
-void CCEIslEmitter::EmitGemmRangeInfoDynamic(Range &axis_m_range, Map<std::string, Range> &range_map) {
+void CCEIslEmitter::CollectGemmMWSize(Range &axis_m_range, Map<std::string, Range> &range_map) {
   std::map<std::string, Expr> fractal_int_info = PartitionSingle::getFractalInfo();
   CHECK(fractal_int_info.find(ATTR_CONV_GMM_M) != fractal_int_info.end());
   CHECK(fractal_int_info.find(ATTR_CONV_TILE_M) != fractal_int_info.end());
@@ -1203,7 +1296,7 @@ void CCEIslEmitter::EmitGemmRangeInfoDynamic(Range &axis_m_range, Map<std::strin
   range_map.Set("w_size", Range(Expr(0), Expr(fractal_int_info[ATTR_CONV_M_CUT_SIZE])));
 }
 
-void CCEIslEmitter::EmitGemmRangeInfoStatic(Map<std::string, Range> &range_map) {
+void CCEIslEmitter::CollectGemmMWSizeDynamic(Map<std::string, Range> &range_map) {
   std::map<std::string, Expr> fractal_int_info = PartitionSingle::getFractalInfo();
   CHECK(fractal_int_info.find(ATTR_CONV_GMM_M) != fractal_int_info.end());
   CHECK(fractal_int_info.find(ATTR_CONV_TILE_M) != fractal_int_info.end());
@@ -1232,8 +1325,8 @@ void CCEIslEmitter::EmitGemmRangeInfoStatic(Map<std::string, Range> &range_map) 
 }
 
 std::string CCEIslEmitter::FindRealizeScopeToString(const isl::id &var) {
-  if (scop_.CountBufferDefInfo(var)) {
-    auto tensor_info = scop_.GetBufferDefInfo(var);
+  if (info_.analysis_result_.CountBufferDefInfo(var)) {
+    auto tensor_info = info_.analysis_result_.GetBufferDefInfo(var);
     MemType mem_type = tensor_info.DstMemType();
 
     switch (mem_type) {
@@ -1277,11 +1370,11 @@ Stmt CCEIslEmitter::InsertRealize(Stmt stmt, const isl::id &var, bool is_L0) {
   // A tensor may be defined multiple times in BufferDefInfo due to nested realize.
   // Because we cannot determine which one we actually want, we have to be conservative here
   // and allocate space for the largest shape to avoid overflow.
-  Tensor t = scop_.FindTensorWithLargestShape(var);
+  Tensor t = info_.FindTensorWithLargestShape(var);
   Region bounds;
 
-  if (scop_.IsCUB(var.get_name())) {
-    auto ct = scop_.FindTensor(var.get_name() + "_local_L0C");
+  if (info_.cube_info_.IsCUB(var.get_name())) {
+    auto ct = info_.FindTensor(var.get_name() + "_local_L0C");
     for (auto j : ct->shape) {
       bounds.push_back(Range::make_by_min_extent(Expr(0), j));
     }
@@ -1294,18 +1387,18 @@ Stmt CCEIslEmitter::InsertRealize(Stmt stmt, const isl::id &var, bool is_L0) {
   }
 
   // If isolate, make a new buffer
-  auto buf = scop_.binds_.at(t);
+  auto buf = info_.user_config_.GetBind().at(t);
   auto tt = placeholder(t->shape, t->dtype, t->op->name);
 
   stmt = TensorSubstitute(stmt, t->op, tt->op, tt->value_index);
   t = tt;
-  if (scop_.CountBufferDefInfo(var)) {
-    auto decl = scop_.GetBufferDefInfo(var);
+  if (info_.analysis_result_.CountBufferDefInfo(var)) {
+    auto decl = info_.analysis_result_.GetBufferDefInfo(var);
     decl.tensor = t;
   }
-  scop_.binds_.Set(t, buf);
+  info_.user_config_.SetBind(t, buf);
 
-  if (!scop_.IsIm2col()) {
+  if (!info_.cube_info_.IsIm2col()) {
     stmt = TensorSubstitute2(stmt, t->op->func_name(), t->op, t->value_index);
   }
 
@@ -1321,8 +1414,8 @@ Stmt CCEIslEmitter::InsertRealize(Stmt stmt, const isl::id &var, bool is_L0) {
     }
   }
 
-  if (scop_.IsIm2col()) {
-    for (const auto &curTensor : scop_.data_.update_tensors) {
+  if (info_.cube_info_.IsIm2col()) {
+    for (const auto &curTensor : info_.analysis_result_.GetUpdateTensor()) {
       // find the updateTensor with same name and make Realize and AttrStmt
       if (curTensor->op->name == t->op->name) {
         stmt = Realize::make(curTensor->op, t->value_index, t->dtype, bounds, const_true(1), stmt);
@@ -1339,25 +1432,25 @@ Stmt CCEIslEmitter::InsertRealize(Stmt stmt, const isl::id &var, bool is_L0) {
   return stmt;
 }
 
-Stmt HoistL0write(Scop &scop, const Stmt &body, std::vector<Stmt> &l0write) {
+Stmt HoistL0write(ScopInfo &info, const Stmt &body, std::vector<Stmt> &l0write) {
   Stmt stmt = body;
   if (!l0write.empty()) {
-    if (scop.IsGemm()) {
-      auto f = HoistL0Write(scop.binds_orig_, l0write.back());
+    if (info.cube_info_.IsGemm()) {
+      auto f = HoistL0Write(info.user_config_.GetOriginBind(), l0write.back());
       static_cast<void>(f.Mutate(body));
       f.mutate_ = true;
       stmt = f.Mutate(body);
       if (!f.found_) stmt = Block::make(body, l0write.back());
-    } else if (scop.is_spec_gemm_) {
+    } else if (info.cube_info_.IsSpecGemm()) {
       stmt = Block::make(body, l0write.back());
     }
   }
   return stmt;
 }
 
-void CCEIslEmitter::ProcBypassL1(const Scop &scop) {
+void CCEIslEmitter::ProcBypassL1(const ScopInfo &info) {
   if (0 == bypassL1_) {
-    bypassL1_ = scop_.bypassL1_;
+    bypassL1_ = info.user_config_.GetByPassL1();
   }
 }
 
@@ -1365,8 +1458,8 @@ Stmt CCEIslEmitter::EmitSpecGemL1write(const isl::ast_node_mark &node, const Stm
   is_old_gemm_l1write_ = true;
   static_cast<void>(EmitAst(node.get_node()));
   is_old_gemm_l1write_ = false;
-  if (!scop_.is_spec_gemm_ && !scop_.old_l1_write_.empty()) {
-    return Block::make(stmt, scop_.old_l1_write_.back());
+  if (!info_.cube_info_.IsSpecGemm() && !info_.cube_info_.GetOldL1Write().empty()) {
+    return Block::make(stmt, info_.cube_info_.GetOldL1Write().back());
   }
   return stmt;
 }
@@ -1374,13 +1467,13 @@ Stmt CCEIslEmitter::EmitSpecGemL1write(const isl::ast_node_mark &node, const Stm
 void CCEIslEmitter::EmitAttrStmtAfterRealize(bool is_L1, bool is_L0, std::vector<Stmt> &stmts) {
   // Emit attrs of provide
   if (is_L1) {
-    for (const auto &i : scop_.data_.stmt_op_Info) {
+    for (const auto &i : info_.analysis_result_.GetStmtOpInfoMap()) {
       if (!i.second.isCube) continue;
-      const Node *stmt_node = scop_.data_.statements.at(i.first);
+      const Node *stmt_node = info_.analysis_result_.GetStatementMap().at(i.first);
       if (!stmt_node->IsInstance<Provide>()) continue;
       const auto provide = static_cast<const Provide *>(stmt_node);
-      if (!scop_.attr_info_.empty()) {
-        stmts[0] = AttrStmt::make(scop_.attr_info_, "pragma_attrs", Expr(1), stmts[0]);
+      if (!info_.cube_info_.GetConvAttrInfo().empty()) {
+        stmts[0] = AttrStmt::make(info_.cube_info_.GetConvAttrInfo(), "pragma_attrs", Expr(1), stmts[0]);
       } else if (const auto cop = provide->func.as<ComputeOpNode>()) {
         stmts[0] = AttrStmt::make(cop->attrs, "pragma_attrs", Expr(1), stmts[0]);
       }
@@ -1389,8 +1482,8 @@ void CCEIslEmitter::EmitAttrStmtAfterRealize(bool is_L1, bool is_L0, std::vector
     }
   }
 
-  if (scop_.is_spec_gemm_ && is_L0) {
-    if (scop_.conv_back_prop_filter_) {
+  if (info_.cube_info_.IsSpecGemm() && is_L0) {
+    if (info_.user_config_.GetConvBackPropFilter()) {
       stmts[0] = EmitGemmRangeInfoBackPropFilter(stmts[0]);
     } else {
       stmts[0] = EmitGemmRangeInfo(stmts[0]);
@@ -1399,21 +1492,24 @@ void CCEIslEmitter::EmitAttrStmtAfterRealize(bool is_L1, bool is_L0, std::vector
 }
 
 void CCEIslEmitter::GemmTranspose(std::vector<Stmt> &stmts) {
-  if (scop_.IsGemmDataTranspose()) {
-    bool transBlock = !scop_.IsGemmDataTransposeInnerBlock();
-    bool transIn = !scop_.IsGemmDataTransposeBlock();
+  if (info_.cube_info_.IsGemmDataTranspose()) {
+    bool transBlock = !info_.cube_info_.IsGemmDataTransposeInnerBlock();
+    bool transIn = !info_.cube_info_.IsGemmDataTransposeBlock();
     stmts[0] = TransposeLoopVarOrderInMad().Run(stmts[0], "_L1_local_L0A", transBlock, transIn);
   }
-  if (scop_.IsGemmWeightTranspose()) {
-    bool transBlock = !scop_.IsGemmWeightTransposeInnerBlock();
-    bool transIn = !scop_.IsGemmWeightTransposeBlock();
+  if (info_.cube_info_.IsGemmWeightTranspose()) {
+    bool transBlock = !info_.cube_info_.IsGemmWeightTransposeInnerBlock();
+    bool transIn = !info_.cube_info_.IsGemmWeightTransposeBlock();
     stmts[0] = TransposeLoopVarOrderInMad().Run(stmts[0], "_L1_local_L0B", transBlock, transIn);
   }
 }
 
-void CCEIslEmitter::EmitAttrStmtL0(Tensor &t, bool &is_im2col, bool &is_filter_l0, bool &is_gemm_data_trans,
-                                   bool &is_gemm_weight_trans) {
-  if (scop_.is_spec_gemm_) {
+void CCEIslEmitter::EmitReadAttrAtL0(std::vector<Stmt> &stmts, int i, Tensor &t) {
+  bool is_im2col = false;
+  bool is_filter_l0 = false;
+  bool is_gemm_data_trans = false;
+  bool is_gemm_weight_trans = false;
+  if (info_.cube_info_.IsSpecGemm()) {
     // this case is conv gemm
     if (t->op->name.find("_fractal_L1_local_L0A") != std::string::npos ||
         t->op->name.find("_fractal_L1_local_L0B") != std::string::npos) {
@@ -1424,10 +1520,10 @@ void CCEIslEmitter::EmitAttrStmtL0(Tensor &t, bool &is_im2col, bool &is_filter_l
         t->op->name.find("_local_L1_local_L0A") != std::string::npos) {
       is_filter_l0 = true;
     }
-  } else if (!scop_.is_spec_gemm_) {
+  } else {
     // this case is ordinary gemm
-    std::string data_trans = scop_.ExtractStringFromAttrsAndInfo(ATTR_GEMM_DATA_TRANSPOSE);
-    std::string weight_trans = scop_.ExtractStringFromAttrsAndInfo(ATTR_GEMM_WEIGHT_TRANSPOSE);
+    std::string data_trans = info_.cube_info_.ExtractStringFromAttrsAndInfo(ATTR_GEMM_DATA_TRANSPOSE);
+    std::string weight_trans = info_.cube_info_.ExtractStringFromAttrsAndInfo(ATTR_GEMM_WEIGHT_TRANSPOSE);
     size_t pos1 = t->op->name.find("_L1_local_L0A");
     size_t pos2 = t->op->name.find("_L1_local_L0B");
     if (data_trans == "Y" && pos1 != std::string::npos) {
@@ -1445,11 +1541,33 @@ void CCEIslEmitter::EmitAttrStmtL0(Tensor &t, bool &is_im2col, bool &is_filter_l
       if (pos2 != std::string::npos) is_filter_l0 = true;
     }
   }
+
+  if (is_im2col) {
+    stmts[i] = AttrStmt::make(make_zero(Int(32)), "pragma_im2col", Expr(1), stmts[i]);
+  } else if (is_gemm_data_trans) {
+    stmts[i] =
+      AttrStmt::make(make_zero(Int(32)), "pragma_load2d_transpose_data", Expr(gemm_transpose_index_), stmts[i]);
+    gemm_transpose_index_++;
+    gemm_transpose_index_ = gemm_transpose_index_ % 2;
+  } else if (is_gemm_weight_trans) {
+    stmts[i] =
+      AttrStmt::make(make_zero(Int(32)), "pragma_load2d_transpose_weight", Expr(gemm_transpose_index_), stmts[i]);
+    gemm_transpose_index_++;
+    gemm_transpose_index_ = gemm_transpose_index_ % 2;
+  }
+  stmts[i] = ProducerConsumer::make(t->op, true, stmts[i]);
+  if (bypassL1_ > 0) {
+    if (is_filter_l0) {
+      stmts[i] = AttrStmt::make(make_zero(Int(32)), "pragma_bypass_filter_l0", Expr(0), stmts[i]);
+    }
+  }
 }
 
-void CCEIslEmitter::EmitAttrStmtL1(Tensor &t, bool &is_fractal, bool &is_filter_l1) {
-  std::string fractal_str = scop_.ExtractStringFromAttrs(ATTR_CONV_FEATURE_NAME) + "_fractal_L1";
-  std::string filter_str = scop_.ExtractStringFromAttrs(ATTR_CONV_FILTER_NAME) + "_local_L1";
+void CCEIslEmitter::EmitReadAttrAtL1(std::vector<Stmt> &stmts, int i, Tensor &t) {
+  bool is_fractal = false;
+  bool is_filter_l1 = false;
+  std::string fractal_str = info_.cube_info_.ExtractStringFromAttrs(ATTR_CONV_FEATURE_NAME) + "_fractal_L1";
+  std::string filter_str = info_.cube_info_.ExtractStringFromAttrs(ATTR_CONV_FILTER_NAME) + "_local_L1";
 
   if (fractal_str == t->op->name) {
     is_fractal = true;
@@ -1459,31 +1577,55 @@ void CCEIslEmitter::EmitAttrStmtL1(Tensor &t, bool &is_fractal, bool &is_filter_
     is_filter_l1 = true;
   }
 
-  std::string data_str = scop_.ExtractStringFromAttrs(ATTR_CONV_GMM_FEATURE) + "_local_L1";
-  std::string weight_str = scop_.ExtractStringFromAttrs(ATTR_CONV_GMM_WEIGHT) + "_local_L1";
+  std::string data_str = info_.cube_info_.ExtractStringFromAttrs(ATTR_CONV_GMM_FEATURE) + "_local_L1";
+  std::string weight_str = info_.cube_info_.ExtractStringFromAttrs(ATTR_CONV_GMM_WEIGHT) + "_local_L1";
   if ((bypassL1_ == 2 && data_str == t->op->name) || (bypassL1_ == 1 && weight_str == t->op->name)) {
     is_filter_l1 = true;
   }
+
+  if (is_fractal) {
+    stmts[i] = AttrStmt::make(make_zero(Int(32)), "pragma_fractal", Expr(1), stmts[i]);
+  }
+  stmts[i] = ProducerConsumer::make(t->op, true, stmts[i]);
+  if (bypassL1_ > 0) {
+    if (is_filter_l1) {
+      stmts[i] = AttrStmt::make(make_zero(Int(32)), "pragma_bypass_filter_l1", Expr(0), stmts[i]);
+    }
+  }
 }
 
-void CCEIslEmitter::EmitAttrStmtLiveness(const Liveness &liveness, std::vector<Stmt> &stmts, int i, bool is_L1) {
-  for (const auto &id : liveness.write_[i]) {
-    if (is_L1 && scop_.IsCUB(id.get_name())) continue;
-    if (is_old_gemm_l1write_ && scop_.IsC(id.get_name())) {
+void CCEIslEmitter::EmitReadAttr(const std::vector<IslIdSet> &read, std::vector<Stmt> &stmts, int i, bool is_L1,
+                                 bool is_L0) {
+  for (const auto &id : read[i]) {
+    Tensor t = info_.FindTensor(id);
+    if (is_L1) {
+      EmitReadAttrAtL1(stmts, i, t);
+    }
+
+    if (is_L0) {
+      EmitReadAttrAtL0(stmts, i, t);
+    }
+  }
+}
+
+void CCEIslEmitter::EmitWriteAttr(const std::vector<IslIdSet> &write, std::vector<Stmt> &stmts, int i, bool is_L1) {
+  for (const auto &id : write[i]) {
+    if (is_L1 && info_.cube_info_.IsCUB(id.get_name())) continue;
+    if (is_old_gemm_l1write_ && info_.cube_info_.IsC(id.get_name())) {
       stmts[i] = AttrStmt::make(make_zero(Int(32)), "pragma_cube_l1write", Expr(1), stmts[i]);
-      scop_.old_l1_write_.emplace_back(stmts[i]);
+      info_.cube_info_.OldL1WriteInsert(stmts[i]);
     }
-    if (scop_.is_spec_gemm_ && scop_.IsC(id.get_name())) {
+    if (info_.cube_info_.IsSpecGemm() && info_.cube_info_.IsC(id.get_name())) {
       stmts[i] = AttrStmt::make(make_zero(Int(32)), "pragma_cube_l0write", Expr(1), stmts[i]);
       cube_l0write_.emplace_back(stmts[i]);
       stmts[i] = Evaluate::make(0);
     }
-    if (scop_.IsGemm() && !scop_.is_spec_gemm_ && scop_.IsCUB(id.get_name())) {
+    if (info_.cube_info_.IsGemm() && !info_.cube_info_.IsSpecGemm() && info_.cube_info_.IsCUB(id.get_name())) {
       stmts[i] = AttrStmt::make(make_zero(Int(32)), "pragma_cube_l0write", Expr(1), stmts[i]);
       cube_l0write_.emplace_back(stmts[i]);
       stmts[i] = Evaluate::make(0);
     }
-    if (scop_.IsGemm() && !scop_.is_spec_gemm_ && scop_.IsC(id.get_name())) {
+    if (info_.cube_info_.IsGemm() && !info_.cube_info_.IsSpecGemm() && info_.cube_info_.IsC(id.get_name())) {
       stmts[i] = AttrStmt::make(make_zero(Int(32)), "pragma_cube_l1write", Expr(1), stmts[i]);
       if (!cube_l0write_.empty()) {
         cube_l0write_.emplace_back(Block::make(cube_l0write_[0], stmts[i]));
@@ -1496,56 +1638,14 @@ void CCEIslEmitter::EmitAttrStmtLiveness(const Liveness &liveness, std::vector<S
 void CCEIslEmitter::EmitAttrStmt(const isl::ast_node_block &block_node, const Liveness &liveness, bool is_L1,
                                  bool is_L0, std::vector<Stmt> &stmts) {
   for (unsigned int i = 0; i < block_node.get_children().size(); ++i) {
-    for (const auto &id : liveness.read_[i]) {
-      Tensor t = scop_.FindTensor(id);
-      bool is_im2col = false;
-      bool is_fractal = false;
-
-      bool is_filter_l1 = false;
-      bool is_filter_l0 = false;
-
-      bool is_gemm_data_trans = false;
-      bool is_gemm_weight_trans = false;
-      if (is_L0) {
-        EmitAttrStmtL0(t, is_im2col, is_filter_l0, is_gemm_data_trans, is_gemm_weight_trans);
-      }
-
-      if (is_L1) {
-        EmitAttrStmtL1(t, is_fractal, is_filter_l1);
-      }
-
-      if (is_im2col) {
-        stmts[i] = AttrStmt::make(make_zero(Int(32)), "pragma_im2col", Expr(1), stmts[i]);
-      } else if (is_fractal) {
-        stmts[i] = AttrStmt::make(make_zero(Int(32)), "pragma_fractal", Expr(1), stmts[i]);
-      } else if (is_gemm_data_trans) {
-        stmts[i] =
-          AttrStmt::make(make_zero(Int(32)), "pragma_load2d_transpose_data", Expr(gemm_transpose_index_), stmts[i]);
-        gemm_transpose_index_++;
-        gemm_transpose_index_ = gemm_transpose_index_ % 2;
-      } else if (is_gemm_weight_trans) {
-        stmts[i] =
-          AttrStmt::make(make_zero(Int(32)), "pragma_load2d_transpose_weight", Expr(gemm_transpose_index_), stmts[i]);
-        gemm_transpose_index_++;
-        gemm_transpose_index_ = gemm_transpose_index_ % 2;
-      }
-      stmts[i] = ProducerConsumer::make(t->op, true, stmts[i]);
-      if (bypassL1_ > 0) {
-        if (is_filter_l1) {
-          stmts[i] = AttrStmt::make(make_zero(Int(32)), "pragma_bypass_filter_l1", Expr(0), stmts[i]);
-        }
-        if (is_filter_l0) {
-          stmts[i] = AttrStmt::make(make_zero(Int(32)), "pragma_bypass_filter_l0", Expr(0), stmts[i]);
-        }
-      }
-    }
-    EmitAttrStmtLiveness(liveness, stmts, i, is_L1);
+    EmitReadAttr(liveness.read_, stmts, i, is_L1, is_L0);
+    EmitWriteAttr(liveness.write_, stmts, i, is_L1);
   }
 }
 
-void CCEIslEmitter::EmitRealizeLivenessInfo(std::vector<IslIdSet> &real, const Liveness &liveness_info,
-                                            std::unordered_map<isl::id, std::set<int>, isl::IslIdIslHash> &liveness,
-                                            std::function<bool(const std::string &id)> const &CheckGoOut) {
+void CCEIslEmitter::CollectLiveness(const Liveness &liveness_info, bool is_L1, std::vector<IslIdSet> &real,
+                                    std::unordered_map<isl::id, std::set<int>, isl::IslIdIslHash> &liveness,
+                                    std::function<bool(const std::string &id)> const &CheckGoOut) {
   for (unsigned int i = 0; i < liveness_info.read_.size(); i++) {
     IslIdSet idset;
     real.push_back(idset);
@@ -1580,8 +1680,8 @@ void CCEIslEmitter::EmitRealizeLivenessInfo(std::vector<IslIdSet> &real, const L
       // Now we just judge whole loop's liveness from existing WAR.
       // It is correct in gemm, conv etc. but may be wrong in other cases.
 
-      std::string tensor_name = scop_.GetOriginTensorId(j).get_name();
-      if (scop_.MayWriteAfterRead(tensor_name) && CheckGoOut(j.get_name())) {
+      std::string tensor_name = info_.GetOriginTensorId(j).get_name();
+      if (info_.MayWriteAfterRead(tensor_name) && CheckGoOut(j.get_name())) {
         realize_out_.insert(j);
       }
       if (!liveness.count(j)) {
@@ -1591,13 +1691,20 @@ void CCEIslEmitter::EmitRealizeLivenessInfo(std::vector<IslIdSet> &real, const L
       liveness.at(j).insert(v);
     }
     for (const auto &j : liveness_info.write_[i]) {
-      if (!scop_.IsInBinds(j) && CheckGoOut(j.get_name())) realize_out_.insert(j);
+      if (!info_.IsInBinds(j) && CheckGoOut(j.get_name())) realize_out_.insert(j);
     }
 
     // isolated part, may reuse def in full tile. We realize them out
     for (const auto &j : liveness_info.use_with_may_def_[i]) {
       if (CheckGoOut(j.get_name())) realize_out_.insert(j);
     }
+  }
+  /// amazing and fusing control: which should be realized out
+  if (is_L1) realize_out_.clear();
+
+  for (const auto &i : liveness) {
+    if (realize_out_.count(i.first)) continue;
+    real[(unsigned int)*i.second.begin()].insert(i.first);
   }
 }
 
@@ -1606,26 +1713,18 @@ void CCEIslEmitter::EmitRealizeLivenessInfo(std::vector<IslIdSet> &real, const L
 // we hack gemm C+=A*B and make C's liveness in the whole loop
 void CCEIslEmitter::EmitRealize(const isl::ast_node_block &block_node, const Liveness &liveness_info, bool is_L1,
                                 bool is_L0, std::vector<Stmt> &stmts) {
-  std::vector<IslIdSet> real;
-  std::unordered_map<isl::id, std::set<int>, isl::IslIdIslHash> liveness;
-  auto c_ub = scop_.is_spec_gemm_ ? scop_.GetCName() : scop_.GetCName() + "_local_UB";
+  auto c_ub = info_.cube_info_.IsSpecGemm() ? info_.cube_info_.GetCName() : info_.cube_info_.GetCName() + "_local_UB";
   auto c_l0c = c_ub + "_local_L0C";
   auto CheckGoOut = [&c_ub, &c_l0c](const std::string &id) -> bool { return !(id == c_ub || id == c_l0c); };
 
-  EmitRealizeLivenessInfo(real, liveness_info, liveness, CheckGoOut);
-
-  /// amazing and fusing control: which should be realized out
-  if (is_L1) realize_out_.clear();
-
-  for (const auto &i : liveness) {
-    if (realize_out_.count(i.first)) continue;
-    real[(unsigned int)*i.second.begin()].insert(i.first);
-  }
+  std::vector<IslIdSet> real;
+  std::unordered_map<isl::id, std::set<int>, isl::IslIdIslHash> liveness;
+  CollectLiveness(liveness_info, is_L1, real, liveness, CheckGoOut);
 
   size_t last = block_node.get_children().size() - 1;
   for (const auto &var : real[last]) {
     /// so far our alloc_C is only designed for specgemm
-    if (scop_.is_spec_gemm_ || scop_.IsConv()) {
+    if (info_.cube_info_.IsSpecGemm() || info_.cube_info_.IsConv()) {
       if (!CheckGoOut(var.get_name())) continue;
     }
 
@@ -1638,16 +1737,16 @@ void CCEIslEmitter::EmitRealize(const isl::ast_node_block &block_node, const Liv
 
     for (const auto &var : real[p]) {
       /// so far our alloc_C is only designed for specgemm
-      if (scop_.is_spec_gemm_ || scop_.IsConv()) {
+      if (info_.cube_info_.IsSpecGemm() || info_.cube_info_.IsConv()) {
         if (!CheckGoOut(var.get_name())) continue;
       }
 
       stmts[p] = InsertRealize(stmts[p], var, is_L0);
 
       if (!DELETE_FRACTAL) continue;
-      std::string feature_str = scop_.ExtractStringFromAttrs(ATTR_CONV_FEATURE_NAME) + "_local_L1";
+      std::string feature_str = info_.cube_info_.ExtractStringFromAttrs(ATTR_CONV_FEATURE_NAME) + "_local_L1";
       if (feature_str == var.get_name()) {
-        std::string fractal_str = scop_.ExtractStringFromAttrs(ATTR_CONV_FEATURE_NAME) + "_fractal_L1";
+        std::string fractal_str = info_.cube_info_.ExtractStringFromAttrs(ATTR_CONV_FEATURE_NAME) + "_fractal_L1";
         stmts[p] = InsertRealize(stmts[p], isl::id(var.ctx(), fractal_str), is_L0);
       }
     }
@@ -1711,7 +1810,7 @@ Stmt CCEIslEmitter::EmitBlock(const isl::ast_node_block &block_node) {
 }
 
 void CCEIslEmitter::ConvBackPropFilterFixMadInit(const isl::ast_node_mark &node, Expr &mad_init_cond) {
-  if (scop_.IsConvBackpropFilter()) {
+  if (info_.cube_info_.IsConvBackpropFilter()) {
     /// find reduce k;
     /// correct axles' name
     FindStmt fs = FindStmt();
@@ -1723,19 +1822,19 @@ void CCEIslEmitter::ConvBackPropFilterFixMadInit(const isl::ast_node_mark &node,
       CHECK(usr_expr.get_arg(0).isa<isl::ast_expr_id>());
       isl::id curstmtid = usr_expr.get_arg(0).as<isl::ast_expr_id>().get_id();
       isl::id curnodeid = i.get_annotation();
-      const Node *stmt_node = scop_.data_.statements.at(curstmtid);
+      const Node *stmt_node = info_.analysis_result_.GetStatementMap().at(curstmtid);
       CHECK(stmt_node != nullptr);
 
       // stmt_node should not have if stmt
       if (stmt_node->IsInstance<Provide>()) {
         auto build = node_info_map_.at(curnodeid).build;
-        auto tuple = scop_.data_.domains.at(curstmtid).tuple;
+        auto tuple = info_.analysis_result_.GetOperatorDomainMap().at(curstmtid).tuple;
         auto iterator_map = node_info_map_.at(curnodeid).iterator_map;
 
         for (unsigned int n = 0; n < tuple.size(); n++) {
           isl::id isl_old_iter = tuple.get_id(n);
           bool is_red = false;
-          for (const auto &reds : scop_.data_.reduces) {
+          for (const auto &reds : info_.analysis_result_.GetReduceMap()) {
             for (auto j : reds.second) {
               // when support atomic add, "no" should not init in each core
               if (isl_old_iter.get_name() == j->var->name_hint && isl_old_iter.get_name() != "no") {
@@ -1767,7 +1866,7 @@ void CCEIslEmitter::ConvBackPropFilterFixMadInit(const isl::ast_node_mark &node,
 
 Stmt CCEIslEmitter::EmitMarkFuseVector(const isl::ast_node_mark &node) {
   auto stmt = AttrStmt::make(make_zero(Int(32)), "pragma_fuse_vector", Expr(1), EmitAst(node.get_node()));
-  if (scop_.IsGemm() && !scop_.is_spec_gemm_ && !cube_l0write_.empty()) {
+  if (info_.cube_info_.IsGemm() && !info_.cube_info_.IsSpecGemm() && !cube_l0write_.empty()) {
     cube_l0write_.emplace_back(Block::make(cube_l0write_[0], stmt));
     stmt = Evaluate::make(0);
   }
@@ -1787,24 +1886,24 @@ Stmt CCEIslEmitter::EmitMarkAllocRealizeOut(const isl::ast_node_mark &node) {
 Stmt CCEIslEmitter::EmitMarkAllocC(const isl::ast_node_mark &node) {
   Stmt body = EmitAst(node.get_node());
   body = RemoveNoOp(body);
-  body = HoistL0write(scop_, body, cube_l0write_);
+  body = HoistL0write(info_, body, cube_l0write_);
 
-  auto c_ub = scop_.is_spec_gemm_ ? scop_.GetCName() : scop_.GetCName() + "_local_UB";
+  auto c_ub = info_.cube_info_.IsSpecGemm() ? info_.cube_info_.GetCName() : info_.cube_info_.GetCName() + "_local_UB";
   auto c_l0c = c_ub + "_local_L0C";
-  body = InsertRealize(body, isl::id(scop_.ctx_, c_l0c), false);
-  body = InsertRealize(body, isl::id(scop_.ctx_, c_ub), false);
+  body = InsertRealize(body, isl::id(info_.GetCtx(), c_l0c), false);
+  body = InsertRealize(body, isl::id(info_.GetCtx(), c_ub), false);
   body = AttrStmt::make(make_zero(Int(32)), ALLOC_C, Expr(1), body);
   return body;
 }
 
 Stmt CCEIslEmitter::EmitMarkSpecGemm(const isl::ast_node_mark &node) {
-  scop_.UpdateFractalIntInfo(++isolate_idx_);
+  info_.cube_info_.UpdateFractalIntInfo(++isolate_idx_);
   Expr mad_init_cond;
   ConvBackPropFilterFixMadInit(node, mad_init_cond);
-  if (scop_.out_reduce_init_ == 0) {
+  if (info_.cube_info_.GetOutReduceInit() == 0) {
     mad_init_cond = Expr(0);
   }
-  Stmt stmt = scop_.ConstructPolyGemm(mad_init_cond);
+  Stmt stmt = SpecGemmBuilder(info_).Build(mad_init_cond);
   return EmitSpecGemL1write(node, stmt);
 }
 
@@ -1847,10 +1946,11 @@ void CCEIslEmitter::RealizeOut() {
     // Now we just judge whole loop's liveness from existing WAR.
     // It is correct in gemm, conv etc. but may be wrong in other cases.
 
-    std::string tensor_name = scop_.GetOriginTensorId(j).get_name();
-    if (scop_.MayWriteAfterRead(tensor_name)) {
+    std::string tensor_name = info_.GetOriginTensorId(j).get_name();
+    if (info_.MayWriteAfterRead(tensor_name)) {
       bool do_out = true;
-      auto c_ub = scop_.is_spec_gemm_ ? scop_.GetCName() : scop_.GetCName() + "_local_UB";
+      auto c_ub =
+        info_.cube_info_.IsSpecGemm() ? info_.cube_info_.GetCName() : info_.cube_info_.GetCName() + "_local_UB";
       auto c_l0c = c_ub + "_local_L0C";
       if (j.get_name() == c_ub || j.get_name() == c_l0c) {
         do_out = false;
@@ -1897,7 +1997,7 @@ Stmt CCEIslEmitter::EmitMarkMulticore(const isl::ast_node_mark &node) {
   } else if (node.get_node().as<isl::ast_node_if>()) {
     auto stmt = EmitAst(node.get_node());
     for (const auto &var : realize_must_def_) {
-      Tensor t = scop_.FindTensor(var);
+      Tensor t = info_.FindTensor(var);
       Region bounds;
       for (auto j : t->shape) {
         bounds.push_back(Range::make_by_min_extent(Expr(0), j));
@@ -2386,28 +2486,29 @@ Stmt CCEIslEmitter::Emit(const isl::ast_node &node) {
   Stmt stmt = EmitAst(node);
   stmt = RemoveCond(stmt);
   /// emit global realize
-  if (!scop_.is_spec_gemm_) {
+  if (!info_.cube_info_.IsSpecGemm()) {
     for (const auto &i : global_realize_out_) {
-      Tensor t = scop_.FindTensor(i);
+      Tensor t = info_.FindTensor(i);
       if (realized_.count(t)) continue;
       stmt = InsertRealize(stmt, i, false);
     }
 
     for (const auto &i : realize_out_) {
-      Tensor t = scop_.FindTensor(i);
+      Tensor t = info_.FindTensor(i);
       if (realized_.count(t)) continue;
       stmt = InsertRealize(stmt, i, false);
     }
 
-    for (const auto &i : scop_.realize_from_input_) {
-      if (FindUsingTensor(stmt).found(i.get_name()) && !scop_.IsInBinds(i.get_name())) {
+    auto realize_from_input = info_.user_config_.GetRealizeFromInput();
+    for (const auto &i : realize_from_input) {
+      if (FindUsingTensor(stmt).found(i.get_name()) && !info_.IsInBinds(i.get_name())) {
         stmt = InsertRealize(stmt, i, false);
       }
     }
 
     auto not_realized_tensors = FindNotRealizedTensors().Find(stmt);
     for (const auto &not_realized_tensor : not_realized_tensors) {
-      isl::id var = isl::id(scop_.ctx_, not_realized_tensor);
+      isl::id var = isl::id(info_.GetCtx(), not_realized_tensor);
       if (!FindRealizeScopeToString(var).empty()) {
         // The tensor needs to be realized somewhere, but it is not realized in the correct scope.
         // So, we realize it in the outermost scope to fix it.
@@ -2427,6 +2528,59 @@ Stmt CCEIslEmitter::Emit(const isl::ast_node &node) {
   }
   return stmt;
 }
+
+void GetNameWithoutLocal(isl::id &tensor_id, ScopInfo &info) {
+  if (!info.cube_info_.IsSpecGemm()) {
+    size_t pos = tensor_id.get_name().find("_local_");
+    std::string substr = tensor_id.get_name().substr(0, pos);
+    if (pos != 0) tensor_id = isl::id(tensor_id.ctx(), substr);
+  }
+}
+
+isl::multi_aff CCEIslEmitter::TensorAccessMultAff(isl::id &tensor_id, const Array<Expr> &tensor_index,
+                                                  const isl::id &node_id) {
+  GetNameWithoutLocal(tensor_id, info_);
+  return IslEmitter::TensorAccessMultAff(tensor_id, tensor_index, node_id);
+}
+
+bool CCEIslEmitter::IsCopyinFromAnotherBand(isl::multi_aff &access) {
+  if (!info_.cube_info_.IsSpecGemm()) {
+    return IslEmitter::IsCopyinFromAnotherBand(access);
+  }
+  return false;
+}
+
+bool CCEIslEmitter::IsTransferStmt() {
+  if (!info_.cube_info_.IsSpecGemm()) {
+    return IslEmitter::IsTransferStmt();
+  }
+  return false;
+}
+
+Stmt CCEIslEmitter::EmitAccessNodeCall(const Node *node, const VarMap &var_map_tmp,
+                                       BufferedFootPrintInfo &buffer_footprint_info) {
+  const Call *call = static_cast<const Call *>(node);
+  Array<Expr> args;
+  for (auto iv : call->args) {
+    args.push_back(ReplaceLoopVar(var_map_tmp).Mutate(iv));
+  }
+  // Not hoisted, emitting just the mapped subscript.
+  if (!buffer_footprint_info.cluster_id) {
+    std::string call_name = call->name;
+    if (IsTransferStmt() && (std::string::npos == call_name.find("_local_UB"))) {
+      call_name = call_name + "_local_UB";
+      Tensor t = info_.FindTensor(call_name);
+      if (t.defined()) {
+        return Evaluate::make(Call::make(call->type, call_name, args, call->call_type, t->op, call->value_index));
+      } else {
+        LOG(WARNING) << "Call can not found tensor!!!  tensor name: " << call_name;
+      }
+    }
+    return Evaluate::make(Call::make(call->type, call->name, args, call->call_type, call->func, call->value_index));
+  }
+  return Stmt();
+}
+
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

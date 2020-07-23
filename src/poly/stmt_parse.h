@@ -13,15 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #ifndef POLY_STMT_PARSE_H_
 #define POLY_STMT_PARSE_H_
-#pragma once
-#include <tvm/ir.h>
-#include <tvm/ir_pass.h>
-
-#include <unordered_map>
-#include <vector>
-#include <string>
 
 #include "isl.h"
 #include "ir_pass.h"
@@ -87,11 +81,8 @@ namespace poly {
   X(elewise_single_bitwise_not)
 
 #define GENERATE_ENUM(ENUM) ENUM,
-#define GENERATE_STRING(STRING) #STRING,
 
 enum class PolyOpType : int { FOREACH(GENERATE_ENUM) };
-
-const char *getPolyOpTypeKey(PolyOpType type);
 
 struct StmtOpInfo {
   std::vector<PolyOpType> ops;

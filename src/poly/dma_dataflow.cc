@@ -13,9 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "poly/dma_dataflow.h"
 
-#include "poly/scop.h"
+#include "poly/dma_dataflow.h"
+#include "poly/poly_util.h"
 
 namespace akg {
 namespace ir {
@@ -193,7 +193,6 @@ void StmtDataFlowInfo::AddWriteTensor(const std::string &name, TENSOR_DATAFLOW_T
 void StmtDataFlowInfo::CreateTensorDataFlow(TENSOR_DATAFLOW_TYPE type, const std::string &name,
                                             TensorDataFlow &dataflow) {
   CHECK_NE(name, "");
-  dataflow.tensor_name_ = name;
   switch (type) {
     case TENSOR_DATAFLOW_TYPE::CUBE_CONV_A:
       CubeConvA(name, dataflow);

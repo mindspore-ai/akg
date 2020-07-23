@@ -13,15 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include "poly/dma_inject.h"
-
-#include <tvm/ir.h>
-#include <algorithm>
-#include <utility>
-
-#include "poly/scop.h"
-#include "poly/transform.h"
 #include "poly/scop_builder.h"
+#include "poly/schedule_pass.h"
 
 namespace akg {
 namespace ir {
@@ -417,9 +412,10 @@ std::unique_ptr<TensorFootprintCluster> TensorFootprintCluster::ClusteringFootpr
  * 1. find n_dim & shape from binds based on tensor_id
  * 2. if found, update n_dim & shape from buf_def based on tensor_id
  * */
-void TensorShapeInfo(const Scop &scop, const isl::id &tensor_id, size_t &n_dim, Array<Expr> &shape) {
+void TensorShapeInfo(const ScopInfo &scop_info, const isl::id &tensor_id, size_t &n_dim, Array<Expr> &shape) {
   n_dim = 0;
-  for (const auto &i : scop.binds_) {
+  auto binds = scop_info.user_config_.GetBind();
+  for (const auto &i : binds) {
     if (i.first->op->name == tensor_id.get_name()) {
       n_dim = i.first.ndim();
       shape = i.first->shape;
@@ -427,7 +423,7 @@ void TensorShapeInfo(const Scop &scop, const isl::id &tensor_id, size_t &n_dim, 
   }
 
   if (!n_dim) {
-    auto buf_def = scop.GetBufferDefInfo(tensor_id);
+    auto buf_def = scop_info.analysis_result_.GetBufferDefInfo(tensor_id);
     n_dim = buf_def.sizes.size();
     for (auto i : buf_def.sizes) {
       shape.push_back(Expr(i));
@@ -435,11 +431,11 @@ void TensorShapeInfo(const Scop &scop, const isl::id &tensor_id, size_t &n_dim, 
   }
 }
 
-isl::set CollectTensorSet(const Scop &scop, const isl::id &tensor_id) {
-  auto space = scop.schedule_.get_domain().get_space();
+isl::set CollectTensorSet(const ScopInfo &scop_info, const isl::id &tensor_id, const isl::space &space) {
+  // auto space = scop.schedule_.get_domain().get_space();
   size_t n_dim;
   Array<Expr> shape;
-  TensorShapeInfo(scop, tensor_id, n_dim, shape);
+  TensorShapeInfo(scop_info, tensor_id, n_dim, shape);
 
   auto coordinate = CollectTensorCoordinate(space, tensor_id, n_dim);
   auto tensor_set = isl::set::universe(coordinate.get_space());
@@ -979,7 +975,7 @@ void AffineRefGroupConstructor::create() {
   }
 }
 
-std::unique_ptr<TensorFootprintCluster> AffineRefGroupConstructor::ConstructRefGroup(Scop &scop,
+std::unique_ptr<TensorFootprintCluster> AffineRefGroupConstructor::ConstructRefGroup(ScopInfo &scop_info,
                                                                                      const isl::union_map &accesses,
                                                                                      const isl::union_set &domain,
                                                                                      const isl::union_map &schedule,
@@ -987,7 +983,7 @@ std::unique_ptr<TensorFootprintCluster> AffineRefGroupConstructor::ConstructRefG
   for (auto a : accesses.get_map_list()) {
     auto tensor_id = a.get_tuple_id(isl_dim_out);
     // filter out tensor
-    if (affine_->NotNeedConstruct(tensor_id.get_name(), scop)) {
+    if (affine_->NotNeedConstruct(tensor_id.get_name(), scop_info)) {
       continue;
     }
 
@@ -1051,7 +1047,7 @@ std::unique_ptr<TensorFootprintCluster> AffineRefGroupConstructor::AffineMapFoot
   return tensorGroup;
 }
 
-std::unique_ptr<TensorFootprintCluster> ConstructAffineFpCluster(Scop &scop, const isl::union_map &accesses,
+std::unique_ptr<TensorFootprintCluster> ConstructAffineFpCluster(ScopInfo &scop_info, const isl::union_map &accesses,
                                                                  const isl::union_set &domain,
                                                                  const isl::union_map &schedule, ReferenceType type,
                                                                  AffineType affine_type, AffineTensor right_matrix) {
@@ -1081,32 +1077,32 @@ std::unique_ptr<TensorFootprintCluster> ConstructAffineFpCluster(Scop &scop, con
     case AffineType::AFFINE_IM2COL: {
       auto affine = static_cast<Im2colAffine *>(constructor.affine_);
       if (affine != nullptr) {
-        affine->attrInfo_ = scop.attr_info_;
+        affine->attrInfo_ = scop_info.cube_info_.GetConvAttrInfo();
       }
     } break;
     case AffineType::AFFINE_WEIGHTTRANS: {
       auto affine = static_cast<WeightAffine *>(constructor.affine_);
       if (affine != nullptr) {
-        affine->attrInfo_ = scop.attr_info_;
+        affine->attrInfo_ = scop_info.cube_info_.GetConvAttrInfo();
       }
     } break;
     case AffineType::AFFINE_FRACTAL: {
       auto affine = static_cast<FractalAffine *>(constructor.affine_);
       if (affine != nullptr) {
-        affine->attrInfo_ = scop.attr_info_;
+        affine->attrInfo_ = scop_info.cube_info_.GetConvAttrInfo();
       }
     } break;
     default:
       break;
   }
 
-  return constructor.ConstructRefGroup(scop, accesses, domain, schedule, type);
+  return constructor.ConstructRefGroup(scop_info, accesses, domain, schedule, type);
 }
 
-void AddAllBufferFootprintOfTensor(const Scop &scop, const isl::id &tensor_id,
+void AddAllBufferFootprintOfTensor(const ScopInfo &scop_info, const isl::id &tensor_id,
                                    std::unordered_set<isl::id, isl::IslIdIslHash> &buffered_tensors) {
   buffered_tensors.insert(tensor_id);
-  for (const auto &info : scop.buffer_def_infos_) {
+  for (const auto &info : scop_info.analysis_result_.buffer_def_infos_) {
     if (info.dst_tensor_id == tensor_id) {
       buffered_tensors.insert(info.ancester_tensor_id);
     }
@@ -1132,15 +1128,15 @@ std::unordered_set<isl::id, isl::IslIdIslHash> GatherStatementsInSubtree(const i
   return statements;
 }
 
-bool IsExtensionUsedInSubTree(const Scop &scop, const isl::schedule_node &tree, const isl::union_map &extension,
-                              const isl::union_map &accesses) {
+bool IsExtensionUsedInSubTree(const ScopInfo &scop_info, const isl::schedule_node &tree,
+                              const isl::union_map &extension, const isl::union_map &accesses) {
   auto statements = GatherStatementsInSubtree(tree);
 
   std::unordered_set<isl::id, isl::IslIdIslHash> promoted_tensors;
   extension.foreach_map([&](const isl::map &footprint) -> void {
     if (!footprint.range().is_wrapping()) return;
     const isl::id &tensor_id = footprint.range().unwrap().domain().unwrap().get_tuple_id(isl_dim_out);
-    AddAllBufferFootprintOfTensor(scop, tensor_id, promoted_tensors);
+    AddAllBufferFootprintOfTensor(scop_info, tensor_id, promoted_tensors);
   });
 
   bool found_extension_in_subtree = false;
@@ -1172,22 +1168,22 @@ isl::schedule_node InsertExtensionHere(isl::schedule_node &tree, const isl::sche
  * If they have the same range, then they will be in a same tile, and the footprint can be reused.
  * Otherwise, a new extension needs to be inserted.
  */
-isl::schedule_node InsertExtensionToFirstAccessedFilters(const Scop &scop, isl::schedule_node &tree,
+isl::schedule_node InsertExtensionToFirstAccessedFilters(const ScopInfo &scop_info, isl::schedule_node &tree,
                                                          const isl::union_map &extension,
                                                          const isl::schedule_node &graft, isl_bool before,
                                                          bool &found_extension_in_schedule) {
   found_extension_in_schedule = false;
-  if (scop.IsConv() || !tree.isa<isl::schedule_node_sequence>()) {
+  if (scop_info.cube_info_.IsConv() || !tree.isa<isl::schedule_node_sequence>()) {
     return tree;
   }
 
-  isl::union_map accesses = scop.data_.reads.unite(scop.data_.writes);
+  isl::union_map accesses = scop_info.analysis_result_.GetReads().unite(scop_info.analysis_result_.GetWrites());
   isl::union_set last_schedule_range;
 
   unsigned int n_children = tree.n_children();
   for (unsigned int i = 0; i < n_children; ++i) {
     unsigned int child_idx = before ? i : n_children - 1 - i;
-    if (IsExtensionUsedInSubTree(scop, tree.get_child(child_idx), extension, accesses)) {
+    if (IsExtensionUsedInSubTree(scop_info, tree.get_child(child_idx), extension, accesses)) {
       tree = tree.child(child_idx).child(0);
 
       bool insert_here = false;
@@ -1266,7 +1262,7 @@ isl::schedule_node DefaultInsertExtension(isl::schedule_node tree, const isl::sc
  *         - filter: S_1[i0]
  *           ... (original schedule)
  */
-isl::schedule_node InsertExtensionBeforeOrAfter(const Scop &scop, isl::schedule_node tree,
+isl::schedule_node InsertExtensionBeforeOrAfter(const ScopInfo &scop_info, isl::schedule_node tree,
                                                 const isl::union_map &extension,
                                                 const isl::multi_union_pw_aff &schedule, isl_bool before) {
   if (tree.isa<isl::schedule_node_filter>() && tree.parent().isa<isl::schedule_node_sequence>()) {
@@ -1307,7 +1303,7 @@ isl::schedule_node InsertExtensionBeforeOrAfter(const Scop &scop, isl::schedule_
   }
 
   bool found_extension_in_schedule = false;
-  tree = InsertExtensionToFirstAccessedFilters(scop, tree, extension, graft, before, found_extension_in_schedule);
+  tree = InsertExtensionToFirstAccessedFilters(scop_info, tree, extension, graft, before, found_extension_in_schedule);
 
   if (found_extension_in_schedule) {
     return tree;
@@ -1316,47 +1312,9 @@ isl::schedule_node InsertExtensionBeforeOrAfter(const Scop &scop, isl::schedule_
   }
 }
 
-static std::string MemTypeToString(const MemType &memType) {
-  switch (memType) {
-    case MemType::UB_:
-      return "UB";
-    case MemType::L1_:
-      return "L1";
-    case MemType::UBL0_:
-      return "UBL0";
-    case MemType::UBL1_:
-      return "UBL1";
-    case MemType::L0A_:
-      return "L0A";
-    case MemType::L0B_:
-      return "L0B";
-    case MemType::L0C_:
-      return "L0C";
-    case MemType::DDR:
-      return "GM";
-    default:
-      return "";
-  }
-}
-
-static std::string GetIslReadName(Scop &scop, const isl::id &cluster_id) {
-  auto tensor_info = scop.GetBufferDefInfo(cluster_id);
-  MemType memType = tensor_info.SrcMemType();
-  return MemTypeToString(memType) + "read";
-}
-
-static std::string GetIslWriteName(Scop &scop, const isl::id &cluster_id) {
-  if (scop.HasBufferDefInfo(cluster_id)) {
-    auto tensor_info = scop.GetBufferDefInfo(cluster_id);
-    MemType memType = tensor_info.DstMemType();
-    return MemTypeToString(memType) + "write";
-  }
-  return MemTypeToString(MemType::DDR) + "write";
-}
-
-isl::schedule_node PlaceIm2colBelowImpl(Scop &scop, isl::schedule_node tree, const TensorFootprintCluster &cluster,
-                                        const isl::map &footprint, const isl::set &original_elements,
-                                        const isl::set &read_set) {
+isl::schedule_node PlaceIm2colBelowImpl(ScopInfo &scop_info, isl::schedule_node tree,
+                                        const TensorFootprintCluster &cluster, const isl::map &footprint,
+                                        const isl::set &original_elements, const isl::set &read_set) {
   bool reads = (!cluster.RichReadRelations().is_empty() && cluster.ReadNeedDma());
   if (reads) {
     auto cluster_id = footprint.get_tuple_id(isl_dim_out);
@@ -1367,20 +1325,47 @@ isl::schedule_node PlaceIm2colBelowImpl(Scop &scop, isl::schedule_node tree, con
                            .wrap()
                            .product(buffered_footprint);
     auto fp_space_identity = isl::multi_aff::identity(footprint.get_space().range().map_from_set());
-    auto buffer_def = scop.GetBufferDefInfo(cluster_id);
+    auto buffer_def = scop_info.analysis_result_.GetBufferDefInfo(cluster_id);
     fp_space_identity = RemoveDimensionOfSizeOne(fp_space_identity, buffer_def.TensorSize(tree.parent()));
     auto extension_map = footprint.wrap().identity().domain_factor_domain().domain_factor_domain();
-    isl::id read_id = isl::id(tree.ctx(), GetIslReadName(scop, cluster_id));
+    isl::id read_id = isl::id(tree.ctx(), scop_info.GetIslReadName(cluster_id));
     auto read_extension = extension_map.intersect_range(buffered_read).set_tuple_id(isl_dim_out, read_id);
     auto read_mupa = isl::multi_union_pw_aff(fp_space_identity.pullback(
       isl::multi_aff::wrapped_range_map(footprint.get_space().wrap().set_set_tuple_id(read_id))));
-    tree = InsertExtensionBeforeOrAfter(scop, tree.get_child(0), read_extension, read_mupa, isl_bool_true);
+    tree = InsertExtensionBeforeOrAfter(scop_info, tree.get_child(0), read_extension, read_mupa, isl_bool_true);
   }
-  scop.schedule_ = tree.get_schedule();
   return tree;
 }
 
-void UpdateTensorShape(Scop &scop, const isl::map &read_extension) {
+/*
+ * Update sizes of a specific tensor in order to support realize shape expansion in UB -> L1 strided copy
+ * param new_sizes: new shape of the tensor
+ * return: found or not found
+ */
+bool UpdateBufferDefInfoSizes(ScopInfo &info, const isl::id &tensor_id, const std::vector<size_t> &new_sizes) {
+  for (auto &buffer_def_info : info.analysis_result_.buffer_def_infos_) {
+    // update the first occurrence
+    if (buffer_def_info.dst_tensor_id == tensor_id) {
+      auto old_sizes = buffer_def_info.sizes;
+      CHECK(old_sizes.size() == new_sizes.size());
+      Array<Expr> shapes;
+      for (size_t dim = 0; dim < new_sizes.size(); ++dim) {
+        size_t new_size = std::max(new_sizes[dim], old_sizes[dim]);
+        shapes.push_back(Expr(static_cast<int>(new_size)));
+      }
+      Tensor tensor = placeholder(shapes, buffer_def_info.data_type, tensor_id.get_name());
+      const Buffer buffer = decl_buffer(shapes, buffer_def_info.data_type, tensor_id.get_name());
+      info.user_config_.SetBind(tensor, buffer);
+
+      buffer_def_info.sizes = new_sizes;
+      buffer_def_info.tensor = tensor;
+      return true;
+    }
+  }
+  return false;
+}
+
+void UpdateTensorShape(ScopInfo &scop_info, const isl::map &read_extension) {
   ScopedFootprint foot_print = ComputeFootprintOfRange(read_extension.domain_factor_domain());
   if (!foot_print.box.is_valid()) {
     return;
@@ -1391,19 +1376,19 @@ void UpdateTensorShape(Scop &scop, const isl::map &read_extension) {
   for (const auto &size : foot_print.box.get_size().get_val_list()) {
     shape.push_back(size.get_num_si());
   }
-  static_cast<void>(scop.UpdateBufferDefInfoSizes(cluster_id, shape));
+  static_cast<void>(UpdateBufferDefInfoSizes(scop_info, cluster_id, shape));
 }
 
-isl::schedule_node InsertStmtExtension(Scop &scop, isl::schedule_node tree, isl::map read, isl::map read_extension,
-                                       const isl::union_map &raw_reads, const isl::union_map &raw_writes,
-                                       const isl::union_map &raw_copyin, const isl::union_map &schedule,
-                                       BufferDefInfo &def) {
+isl::schedule_node InsertStmtExtension(ScopInfo &scop_info, isl::schedule_node tree, isl::map read,
+                                       isl::map read_extension, const isl::union_map &raw_reads,
+                                       const isl::union_map &raw_writes, const isl::union_map &raw_copyin,
+                                       const isl::union_map &schedule, BufferDefInfo &def) {
   isl::union_map reads = isl::union_map(read);
   isl::union_map writes = raw_writes.intersect_range(reads.range());
   isl::union_map dependence = DependenceAnalysis(writes, reads, writes, schedule);
   isl::union_set stmt = dependence.domain().universe();
   writes = raw_writes.intersect_domain(stmt);
-  UpdateTensorShape(scop, read_extension);
+  UpdateTensorShape(scop_info, read_extension);
 
   /* get stmt extension */
   isl::union_map stmt_ext = isl::union_map(read_extension);
@@ -1427,7 +1412,7 @@ isl::schedule_node InsertStmtExtension(Scop &scop, isl::schedule_node tree, isl:
     identity_copy_schedule = RemoveDimensionOfSizeOne(identity_copy_schedule, def.TensorSize(tree.parent()));
     isl::multi_union_pw_aff stmtSchedule = isl::multi_union_pw_aff(identity_copy_schedule);
     /* insert extension node */
-    tree = InsertExtensionBeforeOrAfter(scop, tree.get_child(0), stmt_extension, stmtSchedule, isl_bool_true);
+    tree = InsertExtensionBeforeOrAfter(scop_info, tree.get_child(0), stmt_extension, stmtSchedule, isl_bool_true);
   }
 
   /* next */
@@ -1443,7 +1428,8 @@ isl::schedule_node InsertStmtExtension(Scop &scop, isl::schedule_node tree, isl:
       read = readList.get_at(i);
       readExt = readExt.intersect_range(isl::union_set(read.range()));
       read_extension = isl::map::from(readExt);
-      tree = InsertStmtExtension(scop, tree, read, read_extension, raw_reads, raw_writes, raw_copyin, schedule, def);
+      tree =
+        InsertStmtExtension(scop_info, tree, read, read_extension, raw_reads, raw_writes, raw_copyin, schedule, def);
     }
   }
   return tree;
@@ -1464,49 +1450,51 @@ void CheckOutOfBoundAccess(const isl::map &access_elements, const isl::set &orig
   }
 }
 
-void PlaceDataCopyBelowImplReadWrite(Scop &scop, isl::schedule_node &tree, const TensorFootprintCluster &cluster,
-                                     const isl::map &footprint, const isl::id &tensor_id,
-                                     const isl::set &original_elements, const isl::map &exact_writes,
-                                     isl::map &read_extension, isl::set &buffered_footprint, const isl::id &cluster_id,
-                                     isl::map &extension_map, isl::id &read_id) {
+void PlaceDataCopyBelowImplReadWrite(ScopInfo &scop_info, isl::schedule_node &tree,
+                                     const TensorFootprintCluster &cluster, const isl::map &footprint,
+                                     const isl::id &tensor_id, const isl::set &original_elements,
+                                     const isl::map &exact_writes, isl::map &read_extension,
+                                     isl::set &buffered_footprint, const isl::id &cluster_id, isl::map &extension_map,
+                                     isl::id &read_id) {
   bool reads = (!cluster.RichReadRelations().is_empty() && cluster.ReadNeedDma());
   bool writes = (!cluster.RichWriteRelations().is_empty() && cluster.WriteNeedDma());
   if (writes) {
-    auto tensor_info = scop.GetBufferDefInfo(cluster_id);
+    auto tensor_info = scop_info.analysis_result_.GetBufferDefInfo(cluster_id);
     if (MemType::UBL0_ == tensor_info.DstMemType() || MemType::UB_ == tensor_info.DstMemType() ||
         tensor_info.IsPreCubeL1Write()) {
-      if (!scop.IsInBinds(tensor_id)) writes = false;
+      if (!scop_info.IsInBinds(tensor_id)) writes = false;
     }
     if (tensor_info.IsPreCubeL1Write()) {
-      if (!scop.IsInBinds(tensor_id)) reads = false;
+      if (!scop_info.IsInBinds(tensor_id)) reads = false;
     }
   }
 
   auto fp_space_identity = isl::multi_aff::identity(footprint.get_space().range().map_from_set());
-  auto buffer_def = scop.GetBufferDefInfo(cluster_id);
+  auto buffer_def = scop_info.analysis_result_.GetBufferDefInfo(cluster_id);
   fp_space_identity = RemoveDimensionOfSizeOne(fp_space_identity, buffer_def.TensorSize(tree.parent()));
   if (reads) {
     auto read_mupa = isl::multi_union_pw_aff(fp_space_identity.pullback(
       isl::multi_aff::wrapped_range_map(footprint.get_space().wrap().set_set_tuple_id(read_id))));
-    tree = InsertExtensionBeforeOrAfter(scop, tree.get_child(0), read_extension, read_mupa, isl_bool_true);
+    tree = InsertExtensionBeforeOrAfter(scop_info, tree.get_child(0), read_extension, read_mupa, isl_bool_true);
   }
   if (writes) {
     isl::schedule_node tree_write = tree.get_child(0);
-    if (scop.params_.empty() && scop.IsLoad3dL1Ub()) {
+    if (scop_info.user_config_.GetParams().empty() && scop_info.cube_info_.IsLoad3dL1Ub()) {
       tree_write = tree;
     }
     isl::set writes_set = exact_writes.intersect_range(original_elements).wrap().product(buffered_footprint);
-    isl::id write_id = isl::id(tree.ctx(), GetIslWriteName(scop, tensor_id));
+    isl::id write_id = isl::id(tree.ctx(), scop_info.GetIslWriteName(tensor_id));
     isl::map write_extension = extension_map.intersect_range(writes_set).set_tuple_id(isl_dim_out, write_id);
     auto write_mupa = isl::multi_union_pw_aff(fp_space_identity.pullback(
       isl::multi_aff::wrapped_range_map(footprint.get_space().wrap().set_set_tuple_id(write_id))));
-    tree = InsertExtensionBeforeOrAfter(scop, tree_write, write_extension, write_mupa, isl_bool_false);
+    tree = InsertExtensionBeforeOrAfter(scop_info, tree_write, write_extension, write_mupa, isl_bool_false);
   }
 }
 
-void PlaceDataCopyBelowImplFakeReads(Scop &scop, isl::schedule_node &tree, const TensorFootprintCluster &cluster,
-                                     isl::map &read_extension, const isl::id &cluster_id) {
-  auto buffer_def = scop.GetBufferDefInfo(cluster_id);
+void PlaceDataCopyBelowImplFakeReads(ScopInfo &scop_info, isl::schedule_node &tree,
+                                     const TensorFootprintCluster &cluster, isl::map &read_extension,
+                                     const isl::id &cluster_id, const isl::union_map &sched) {
+  auto buffer_def = scop_info.analysis_result_.GetBufferDefInfo(cluster_id);
   bool fake_reads = (!cluster.RichReadRelations().is_empty() && cluster.ReadNeedDma() && cluster.ReadNeedExtension());
   if (fake_reads) {
     isl::schedule_node node = tree;
@@ -1526,39 +1514,44 @@ void PlaceDataCopyBelowImplFakeReads(Scop &scop, isl::schedule_node &tree, const
       stmt_extension = stmt_extension.set_tuple_id(isl_dim_out, stmt_tensor_id);
 
       isl::union_set readTensor = isl::union_set(stmt_extension.range());
-      isl::union_map reads_map = scop.data_.fake_copyin.domain_factor_domain().intersect_range(readTensor.universe());
+      isl::union_map reads_map =
+        scop_info.analysis_result_.GetFakeCopyin().domain_factor_domain().intersect_range(readTensor.universe());
       if (!reads_map.is_empty()) {
-        isl::union_map raw_reads = scop.data_.reads.domain_factor_domain();
-        isl::union_map raw_writes = scop.data_.writes.domain_factor_domain();
-        isl::union_map raw_copyin = scop.data_.copyin.domain_factor_domain();
+        isl::union_map raw_reads = scop_info.analysis_result_.GetReads().domain_factor_domain();
+        isl::union_map raw_writes = scop_info.analysis_result_.GetWrites().domain_factor_domain();
+        isl::union_map raw_copyin = scop_info.analysis_result_.GetCopyin().domain_factor_domain();
 
         isl::map_list readList = reads_map.get_map_list();
         int n = readList.size();
         for (int i = 0; i < n; ++i) {
-          tree = InsertStmtExtension(scop, tree, readList.get_at(i), stmt_extension, raw_reads, raw_writes, raw_copyin,
-                                     scop.sch_, buffer_def);
+          tree = InsertStmtExtension(scop_info, tree, readList.get_at(i), stmt_extension, raw_reads, raw_writes,
+                                     raw_copyin, sched, buffer_def);
         }
       }
     }
   }
 }
 
-isl::schedule_node PlaceDataCopyBelowImpl(Scop &scop, isl::schedule_node tree, const TensorFootprintCluster &cluster,
-                                          const isl::map &footprint, const isl::id &tensor_id,
-                                          const isl::set &original_elements, const isl::map &exact_reads,
-                                          const isl::map &exact_writes) {
+isl::schedule_node PlaceDataCopyBelowImpl(ScopInfo &scop_info, isl::schedule_node tree,
+                                          const TensorFootprintCluster &cluster, const isl::map &footprint,
+                                          const isl::id &tensor_id, const isl::set &original_elements,
+                                          const isl::map &exact_reads, const isl::map &exact_writes,
+                                          const isl::union_map &sch) {
   auto cluster_id = footprint.get_tuple_id(isl_dim_out);
 
-  if (!scop.IsConv()) CheckOutOfBoundAccess(exact_reads, original_elements, "read");
+  if (!scop_info.cube_info_.IsConv()) CheckOutOfBoundAccess(exact_reads, original_elements, "read");
 
   bool special_dma = false;
-  if (scop.conv_special_dma_ || (scop.attr_info_.count(ATTR_CONV_SPECIAL_DMA) > 0)) {
-    if (scop.attr_info_.count(ATTR_CONV_BACKPROP_FILTER) > 0 && scop.attr_info_.count(ATTR_CONV_KERNEL_H) > 0 &&
-        scop.attr_info_.count(ATTR_CONV_KERNEL_W) > 0 && scop.attr_info_.count(ATTR_CONV_FEATURE_C) > 0) {
-      std::string featureName = scop.ExtractStringFromAttrs(ATTR_CONV_FEATURE_NAME) + "_local_L1";
-      int kh = scop.ExtractIntFromAttrs(ATTR_CONV_KERNEL_H);
-      int kw = scop.ExtractIntFromAttrs(ATTR_CONV_KERNEL_W);
-      int ci = scop.ExtractIntFromAttrs(ATTR_CONV_FEATURE_C);
+  if (scop_info.user_config_.GetConvSpecialDma() ||
+      (scop_info.cube_info_.GetConvAttrInfo().count(ATTR_CONV_SPECIAL_DMA) > 0)) {
+    if (scop_info.cube_info_.GetConvAttrInfo().count(ATTR_CONV_BACKPROP_FILTER) > 0 &&
+        scop_info.cube_info_.GetConvAttrInfo().count(ATTR_CONV_KERNEL_H) > 0 &&
+        scop_info.cube_info_.GetConvAttrInfo().count(ATTR_CONV_KERNEL_W) > 0 &&
+        scop_info.cube_info_.GetConvAttrInfo().count(ATTR_CONV_FEATURE_C) > 0) {
+      std::string featureName = scop_info.cube_info_.ExtractStringFromAttrs(ATTR_CONV_FEATURE_NAME) + "_local_L1";
+      int kh = scop_info.cube_info_.ExtractIntFromAttrs(ATTR_CONV_KERNEL_H);
+      int kw = scop_info.cube_info_.ExtractIntFromAttrs(ATTR_CONV_KERNEL_W);
+      int ci = scop_info.cube_info_.ExtractIntFromAttrs(ATTR_CONV_FEATURE_C);
       if (featureName == cluster_id.get_name() && kh == 7 && kw == 7 && ci == 16) {
         special_dma = true;
       }
@@ -1576,7 +1569,7 @@ isl::schedule_node PlaceDataCopyBelowImpl(Scop &scop, isl::schedule_node tree, c
   read_set = read_set.product(buffered_footprint);
 
   isl::map extension_map = footprint.wrap().identity().domain_factor_domain().domain_factor_domain();
-  isl::id read_id = isl::id(tree.ctx(), GetIslReadName(scop, cluster_id));
+  isl::id read_id = isl::id(tree.ctx(), scop_info.GetIslReadName(cluster_id));
   isl::map read_extension = extension_map.intersect_range(read_set).set_tuple_id(isl_dim_out, read_id);
   if (special_dma) {
     isl::map read_set_map = read_extension.range().unwrap();
@@ -1587,21 +1580,21 @@ isl::schedule_node PlaceDataCopyBelowImpl(Scop &scop, isl::schedule_node tree, c
     read_extension =
       read_set_map.wrap().identity().domain_factor_domain().domain_factor_domain().set_tuple_id(isl_dim_out, read_id);
   }
-  if (!scop.IsConv()) CheckOutOfBoundAccess(exact_writes, original_elements, "write");
+  if (!scop_info.cube_info_.IsConv()) CheckOutOfBoundAccess(exact_writes, original_elements, "write");
 
-  PlaceDataCopyBelowImplReadWrite(scop, tree, cluster, footprint, tensor_id, original_elements, exact_writes,
+  PlaceDataCopyBelowImplReadWrite(scop_info, tree, cluster, footprint, tensor_id, original_elements, exact_writes,
                                   read_extension, buffered_footprint, cluster_id, extension_map, read_id);
 
-  PlaceDataCopyBelowImplFakeReads(scop, tree, cluster, read_extension, cluster_id);
+  PlaceDataCopyBelowImplFakeReads(scop_info, tree, cluster, read_extension, cluster_id, sch);
 
-  scop.schedule_ = tree.get_schedule();
   return tree;
 }
 
-isl::schedule_node PlaceInnerDataCopyBelow(Scop &scop, const isl::schedule_node &tree,
+isl::schedule_node PlaceInnerDataCopyBelow(ScopInfo &scop_info, const isl::schedule_node &tree,
                                            const TensorFootprintCluster &cluster,
                                            const TensorFootprintCluster &outer_scope_cluster, const isl::id &tensor_id,
-                                           const isl::id &cluster_id, const isl::id &outer_scope_cluster_id) {
+                                           const isl::id &cluster_id, const isl::id &outer_scope_cluster_id,
+                                           const isl::union_map &sch) {
   // map :: [S -> O] -> P_inner
   isl::map inner_scope_footprint = isl::map(cluster.ComputeBufferedFootprints()).set_tuple_id(isl_dim_out, cluster_id);
 
@@ -1634,12 +1627,13 @@ isl::schedule_node PlaceInnerDataCopyBelow(Scop &scop, const isl::schedule_node 
 
   inner_scope_footprint = inner_scope_footprint.apply_domain(outer_scope_footprint);
 
-  return PlaceDataCopyBelowImpl(scop, tree, cluster, inner_scope_footprint, tensor_id, outerScopeGroupFootprint,
+  return PlaceDataCopyBelowImpl(scop_info, tree, cluster, inner_scope_footprint, tensor_id, outerScopeGroupFootprint,
                                 cluster.RichReadRelations().wrap().apply(outer_scope_footprint).unwrap(),
-                                cluster.RichWriteRelations().wrap().apply(outer_scope_footprint).unwrap());
+                                cluster.RichWriteRelations().wrap().apply(outer_scope_footprint).unwrap(), sch);
 }
 
-isl::schedule_node PlaceIm2colBelow(Scop &scop, const isl::schedule_node &tree, const TensorFootprintCluster &cluster,
+isl::schedule_node PlaceIm2colBelow(ScopInfo &scop_info, const isl::schedule_node &tree,
+                                    const TensorFootprintCluster &cluster,
                                     const TensorFootprintCluster &outer_scope_cluster, const isl::id &cluster_id,
                                     const isl::id &outer_scope_cluster_id) {
   // map :: [S -> O] -> P_inner
@@ -1671,24 +1665,25 @@ isl::schedule_node PlaceIm2colBelow(Scop &scop, const isl::schedule_node &tree, 
 
   // map :: [S -> P_outer] -> P_inner
   inner_scope_footprint = inner_scope_footprint.apply_domain(outer_scope_footprint);
-  return PlaceIm2colBelowImpl(scop, tree, cluster, inner_scope_footprint,
+  return PlaceIm2colBelowImpl(scop_info, tree, cluster, inner_scope_footprint,
                               outer_scope_cluster.BufferedFootprint().set_tuple_id(outer_scope_cluster_id),
                               outer_scope_cluster.BufferedFootprint().set_tuple_id(outer_scope_cluster_id));
 }
 
-isl::schedule_node PlaceOuterDataCopyBelow(Scop &scop, const isl::schedule_node &tree,
+isl::schedule_node PlaceOuterDataCopyBelow(ScopInfo &scop_info, const isl::schedule_node &tree,
                                            const TensorFootprintCluster &cluster, const isl::id &tensor_id,
-                                           const isl::id &cluster_id) {
+                                           const isl::id &cluster_id, const isl::union_map &sch,
+                                           const isl::space &sch_space) {
   CHECK(!cluster_id.is_null()) << "expected cluster id";
-  auto tensor_elements = CollectTensorSet(scop, tensor_id);
+  auto tensor_elements = CollectTensorSet(scop_info, tensor_id, sch_space);
   isl::map footprint;
   if (cluster.foot_print_.box.is_valid()) {
     footprint = isl::map(cluster.ComputeBufferedFootprints()).set_tuple_id(isl_dim_out, cluster_id);
   } else {
     footprint = isl::map(cluster.IdentityBufferFootprint()).set_tuple_id(isl_dim_out, cluster_id);
   }
-  return PlaceDataCopyBelowImpl(scop, tree, cluster, footprint, tensor_id, tensor_elements, cluster.RichReadRelations(),
-                                cluster.RichWriteRelations());
+  return PlaceDataCopyBelowImpl(scop_info, tree, cluster, footprint, tensor_id, tensor_elements,
+                                cluster.RichReadRelations(), cluster.RichWriteRelations(), sch);
 }
 
 void UniteInterleavedReadsAndWrites(std::vector<std::unique_ptr<TensorFootprintCluster>> &clusters) {

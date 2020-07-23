@@ -15,12 +15,9 @@
  */
 #ifndef POLY_UTIL_H_
 #define POLY_UTIL_H_
-#pragma once
 #include <tvm/ir.h>
-#include <tvm/ir_pass.h>
 #include <ir_pass.h>
-#include <tvm/ir_visitor.h>
-#include <tvm/ir_mutator.h>
+#include <chrono>
 #include "isl.h"
 
 namespace akg {
@@ -31,28 +28,26 @@ namespace poly {
 #define PRETTY_PRINT_IR true
 #define DUMP_SCOP_DATA true
 #define DUMP_SCOP_DATA_PER_PASS false
-#define DUMP_TRANSFORM true
-#define DUMP_TRANSFORM_PER_PASS false
 #define DUMP_IN_CURRENT_DIR false
 
-#define PRINT_C false
 #define PRINT_SCHEDULE_INFO false
+#define PRINT_ISL_EMMITER false
+#define PRINT_CCE_ISL_EMMITER false
+#define PRINT_EMMITER (PRINT_ISL_EMMITER || PRINT_CCE_ISL_EMMITER)
 #define SPEC_GEMM true
 #define DELETE_FRACTAL true
 
 /// conv_backward options
 #define SELECT_DOMAIN_OPT true
 
-/// transform options
-#define USE_CACHED_SCHEDULE false
-#define ENABLE_REPLACE_SCHEDULE_HOOK true
-
-/// constants
-constexpr auto kReadSuffix = "read";
-constexpr auto kWriteSuffix = "write";
-constexpr auto kIterNamePrefix = "cc";
-constexpr auto kGemmIterNamePrefix = "ee";
-constexpr auto TENSORLISTTAILNAME = "TensorListTail";
+// timer records
+#define TIMER_START timer_start = std::chrono::high_resolution_clock::now()
+#define TIMER_DURATION                                                                                                \
+  (std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::high_resolution_clock::now() - timer_start) \
+     .count()) *                                                                                                      \
+    1000
+#define TIMER_SHOW(NAME, SPEC_GEMM) \
+  { LOG(INFO) << "[ Polyhedral exec time" << SPEC_GEMM << " ], " << NAME << " spent " << TIMER_DURATION << " ms"; }
 
 unsigned int WrappedStrtol(const std::string &str);
 
@@ -67,6 +62,12 @@ isl::ast_node CanonicalizeBlockInAst(const isl::ast_node &astNode);
 Expr RemoveCast(Expr e);
 
 Stmt PeelOuterLetStmt(const Stmt &s, std::vector<Stmt> &outer_stmts);
+
+isl::union_map ShortSchedule(const isl::schedule_node &node);
+isl::union_map LocalSchedule(const isl::schedule_node &node);
+void GetAffOffsetAndNumVars(const isl::aff &aff, int &offset, int &num_vars);
+bool IsAffVarPlusOffset(const isl::aff &aff);
+bool IsAffNonZeroConst(const isl::aff &aff);
 
 class ConsolidateExprMutator : public IRMutator {
  public:
@@ -86,15 +87,15 @@ class ConsolidateExprMutator : public IRMutator {
   }
 
   // list operators that may appear in dynamic shape params
-  Expr Mutate_(const Add *op, const Expr &e) { return GenericMutate(op, e); }
-  Expr Mutate_(const Sub *op, const Expr &e) { return GenericMutate(op, e); }
-  Expr Mutate_(const Mul *op, const Expr &e) { return GenericMutate(op, e); }
-  Expr Mutate_(const FloorDiv *op, const Expr &e) { return GenericMutate(op, e); }
-  Expr Mutate_(const FloorMod *op, const Expr &e) { return GenericMutate(op, e); }
-  Expr Mutate_(const Div *op, const Expr &e) { return GenericMutate(op, e); }
-  Expr Mutate_(const Mod *op, const Expr &e) { return GenericMutate(op, e); }
-  Expr Mutate_(const Min *op, const Expr &e) { return GenericMutate(op, e); }
-  Expr Mutate_(const Max *op, const Expr &e) { return GenericMutate(op, e); }
+  Expr Mutate_(const Add *op, const Expr &e) override { return GenericMutate(op, e); }
+  Expr Mutate_(const Sub *op, const Expr &e) override { return GenericMutate(op, e); }
+  Expr Mutate_(const Mul *op, const Expr &e) override { return GenericMutate(op, e); }
+  Expr Mutate_(const FloorDiv *op, const Expr &e) override { return GenericMutate(op, e); }
+  Expr Mutate_(const FloorMod *op, const Expr &e) override { return GenericMutate(op, e); }
+  Expr Mutate_(const Div *op, const Expr &e) override { return GenericMutate(op, e); }
+  Expr Mutate_(const Mod *op, const Expr &e) override { return GenericMutate(op, e); }
+  Expr Mutate_(const Min *op, const Expr &e) override { return GenericMutate(op, e); }
+  Expr Mutate_(const Max *op, const Expr &e) override { return GenericMutate(op, e); }
 
   const std::unordered_map<std::string, Var> &params;
 };
@@ -168,6 +169,9 @@ constexpr auto ATTR_GEMM_WEIGHT_TRANSPOSE_BLOCK_INNER = "pragma_weight_transpose
 
 constexpr auto ATTR_ATOMIC_ADD = "atomic_add";
 constexpr auto ATOMIC_COND_CLEAN = "atomic_cond_clean";
+
+constexpr auto UBL0 = "UBL0";
+constexpr auto REALIZE_ = "realize_";
 /******************************************************
  * Following const is the mark tags for schedule tree
  ******************************************************/

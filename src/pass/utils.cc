@@ -29,7 +29,7 @@
 #include "ir_pass.h"
 #include "pass/utils.h"
 #include "pass/expr_alg_simplify.h"
-#include "poly/tiling_algorithm.h"
+#include "poly/tiling/tiling_algorithm.h"
 
 namespace akg {
 namespace ir {

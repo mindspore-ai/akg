@@ -33,7 +33,7 @@ namespace akg {
 namespace ir {
 namespace poly {
 class TensorFootprintCluster;
-class TensorDataFlow;
+struct TensorDataFlow;
 class StmtDataFlowInfo;
 
 enum MemType { DDR = 1, L1_, UB_, L0A_, L0B_, L0C_, UBL0_, UBL1_ };
@@ -142,7 +142,6 @@ enum TENSOR_DATAFLOW_TYPE {
 };
 
 struct TensorDataFlow {
-  std::string tensor_name_;
   std::vector<std::string> name_flow_;
   MemFlow mem_type_flow_;
 

@@ -13,19 +13,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #ifndef POLY_SCOP_BUILDER_H_
 #define POLY_SCOP_BUILDER_H_
 
-#pragma once
 #include <tvm/ir.h>
 #include <tvm/ir_pass.h>
 #include <tvm/ir_visitor.h>
 
-#include <vector>
-
-#include "ir_pass.h"
 #include "poly/isl.h"
-#include "poly/scop.h"
+#include "poly/scop_info.h"
 
 namespace akg {
 namespace ir {
@@ -34,7 +31,7 @@ isl::space CreateParamsSpace(const isl::ctx &ctx);
 
 isl::space CreateParamsSpace(const isl::ctx &ctx, const std::unordered_map<std::string, air::Var> &params);
 
-isl::schedule MakeScheduleTree(const isl::space &param_space, isl::set paramSet, const Stmt &stmt, Scop &scop);
+isl::schedule MakeScheduleTree(const isl::space &param_space, isl::set paramSet, const Stmt &stmt, ScopInfo &scop_info);
 
 std::vector<isl::aff> Expr2AffBounds(const isl::space &space, const Expr &e, bool allow_min, bool allow_max,
                                      bool ignore_error = true);
@@ -45,9 +42,11 @@ isl::aff Expr2Aff(const isl::space &space, const Expr &e);
 isl::aff Int2Aff(const isl::space &s, int64_t v);
 isl::multi_id CollectTensorCoordinate(const isl::space &pspace, const isl::id &Id, size_t dim);
 
-void ParseStmtOpCall(const isl::id &id, const Call *call, Scop::Data &data, const FunctionRef &func);
+isl::map AddSuffix4Accesses(AccessMap &accesses, const isl::map &in_map, const Node *op, const isl::ctx &ctx);
 
-void ParseStmtOps(const isl::id &id, const Expr &val, Scop::Data &data, const FunctionRef &func);
+void ParseStmtOpCall(const isl::id &id, const Call *call, AnalysisResult &result, const FunctionRef &func);
+
+void ParseStmtOps(const isl::id &id, const Expr &val, AnalysisResult &result, const FunctionRef &func);
 
 }  // namespace poly
 }  // namespace ir

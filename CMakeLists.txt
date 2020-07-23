@@ -28,6 +28,9 @@ set(AKG_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 include(cmake/RT.cmake)
 include(cmake/utils.cmake)
 include(cmake/external_libs/isl.cmake)
+
+set(ISL_DIR "${CMAKE_BINARY_DIR}/isl")
+
 if(ENABLE_AKG)
   message("-- Build akg in Mindspore")
   execute_process(COMMAND bash ${AKG_SOURCE_DIR}/third_party/apply_patches.sh ${CMAKE_CURRENT_BINARY_DIR} "1")
@@ -42,8 +45,6 @@ else()
   set(GTEST_DIR "${CMAKE_CURRENT_BINARY_DIR}/_deps/gtest-src")
   set(UNITTEST_DIR "${AKG_SOURCE_DIR}/tests/unittest_cpp")
 endif()
-
-set(ISL_DIR "${CMAKE_BINARY_DIR}/isl")
 
 file(COPY ${AKG_SOURCE_DIR}/python/akg DESTINATION
     ${CMAKE_CURRENT_BINARY_DIR})
@@ -175,6 +176,8 @@ file(
   ${TVM_DIR}/src/runtime/vm/profiler/*.cc
   ${TVM_DIR}/src/codegen/stackvm/*.cc
   ${AKG_SOURCE_DIR}/src/poly/*.cc
+  ${AKG_SOURCE_DIR}/src/poly/schedule_pass/*.cc
+  ${AKG_SOURCE_DIR}/src/poly/tiling/*.cc
   ${AKG_SOURCE_DIR}/src/api/*.cc
   ${AKG_SOURCE_DIR}/src/pass/*.cc
   ${AKG_SOURCE_DIR}/src/rpc/*.cc

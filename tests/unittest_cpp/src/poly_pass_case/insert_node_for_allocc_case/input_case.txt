@@ -1,0 +1,104 @@
+domain: "{ S_0[i0, i1, i2, i3, i4, i5] : 0 <= i0 <= 15 and 0 <= i1 <= 15 and 0 <= i2 <= 3 and 0 <= i3 <= 31 and 0 <= i4 <= 15 and 0 <= i5 <= 15;"
+          "S_2[i0, i1, i2, i3, i4, i5] : 0 <= i0 <= 15 and 0 <= i1 <= 15 and 0 <= i2 <= 3 and 0 <= i3 <= 31 and 0 <= i4 <= 15 and 0 <= i5 <= 15;"
+          "S_1[i0, i1, i2, i3, i4, i5, ko, ki] : 0 <= i0 <= 15 and 0 <= i1 <= 15 and 0 <= i2 <= 3 and 0 <= i3 <= 31 and 0 <= i4 <= 15 and 0 <= i5 <= 15 and 0 <= ko <= 31 and 0 <= ki <= 15 }"
+child:
+  mark: "realize_L1"
+  child:
+    schedule: "[{ S_2[i0, i1, i2, i3, i4, i5] -> [(i0)];"
+                 "S_1[i0, i1, i2, i3, i4, i5, ko, ki] -> [(i0)];"
+                 "S_0[i0, i1, i2, i3, i4, i5] -> [(i0)] },"
+               "{ S_2[i0, i1, i2, i3, i4, i5] -> [(i1)];"
+                 "S_1[i0, i1, i2, i3, i4, i5, ko, ki] -> [(i1)];"
+                 "S_0[i0, i1, i2, i3, i4, i5] -> [(i1)] },"
+               "{ S_2[i0, i1, i2, i3, i4, i5] -> [(floor((i2)/4))];"
+                 "S_1[i0, i1, i2, i3, i4, i5, ko, ki] -> [(floor((i2)/4))];"
+                 "S_0[i0, i1, i2, i3, i4, i5] -> [(floor((i2)/4))] },"
+               "{ S_2[i0, i1, i2, i3, i4, i5] -> [(floor((i3)/16))];"
+                 "S_1[i0, i1, i2, i3, i4, i5, ko, ki] -> [(floor((i3)/16))];"
+                 "S_0[i0, i1, i2, i3, i4, i5] -> [(floor((i3)/16))] },"
+               "{ S_2[i0, i1, i2, i3, i4, i5] -> [(floor((i4)/16))];"
+                 "S_1[i0, i1, i2, i3, i4, i5, ko, ki] -> [(floor((i4)/16))];"
+                 "S_0[i0, i1, i2, i3, i4, i5] -> [(floor((i4)/16))] },"
+               "{ S_2[i0, i1, i2, i3, i4, i5] -> [(floor((i5)/16))];"
+                 "S_1[i0, i1, i2, i3, i4, i5, ko, ki] -> [(floor((i5)/16))];"
+                 "S_0[i0, i1, i2, i3, i4, i5] -> [(floor((i5)/16))] },"
+               "{ S_2[i0, i1, i2, i3, i4, i5] -> [(1)];"
+                 "S_1[i0, i1, i2, i3, i4, i5, ko, ki] -> [(floor((ko)/16))];"
+                 "S_0[i0, i1, i2, i3, i4, i5] -> [(0)] }]"
+    permutable: 1
+    coincident: [ 1, 1, 1, 1, 1, 1, 0 ]
+    options: "{ isolate[[] -> [i0, i1, 0, i3, 0, 0, i6]] : 0 <= i0 <= 15 and 0 <= i1 <= 15 and 0 <= i3 <= 1 and 0 <= i6 <= 1 }"
+    child:
+      sequence:
+      - filter: "{ S_1[i0, i1, i2, i3, i4, i5, ko, ki];"
+                  "S_0[i0, i1, i2, i3, i4, i5] }"
+        child:
+          mark: "realize_L0"
+          child:
+            schedule: "[{ S_1[i0, i1, i2, i3, i4, i5, ko, ki] -> [(0)];"
+                         "S_0[i0, i1, i2, i3, i4, i5] -> [(0)] },"
+                       "{ S_1[i0, i1, i2, i3, i4, i5, ko, ki] -> [(0)];"
+                         "S_0[i0, i1, i2, i3, i4, i5] -> [(0)] },"
+                       "{ S_1[i0, i1, i2, i3, i4, i5, ko, ki] -> [(0)];"
+                         "S_0[i0, i1, i2, i3, i4, i5] -> [(0)] },"
+                       "{ S_1[i0, i1, i2, i3, i4, i5, ko, ki] -> [(0)];"
+                         "S_0[i0, i1, i2, i3, i4, i5] -> [(0)] },"
+                       "{ S_1[i0, i1, i2, i3, i4, i5, ko, ki] -> [(0)];"
+                         "S_0[i0, i1, i2, i3, i4, i5] -> [(0)] },"
+                       "{ S_1[i0, i1, i2, i3, i4, i5, ko, ki] -> [(0)];"
+                         "S_0[i0, i1, i2, i3, i4, i5] -> [(0)] },"
+                       "{ S_1[i0, i1, i2, i3, i4, i5, ko, ki] -> [(floor((ko)/4) - 4*floor((ko)/16))];"
+                         "S_0[i0, i1, i2, i3, i4, i5] -> [(0)] }]"
+            permutable: 1
+            coincident: [ 1, 1, 1, 1, 1, 1, 0 ]
+            options: "{ isolate[[i0, i1, 0, i3, 0, 0, i6] -> [0, 0, 0, 0, 0, 0, i13]] : 0 <= i0 <= 15 and 0 <= i1 <= 15 and 0 <= i3 <= 1 and 0 <= i6 <= 1 and 0 <= i13 <= 3;"
+                       "isolate[[i0, i1, 0, i3, 0, 0, i6] -> [0, 0, 0, 0, 0, 0, 0]] : 0 <= i0 <= 15 and 0 <= i1 <= 15 and 0 <= i3 <= 1 and 0 <= i6 <= 1 }"
+            child:
+              schedule: "[{ S_1[i0, i1, i2, i3, i4, i5, ko, ki] -> [(0)];"
+                           "S_0[i0, i1, i2, i3, i4, i5] -> [(0)] },"
+                         "{ S_1[i0, i1, i2, i3, i4, i5, ko, ki] -> [(0)];"
+                           "S_0[i0, i1, i2, i3, i4, i5] -> [(0)] },"
+                         "{ S_1[i0, i1, i2, i3, i4, i5, ko, ki] -> [((i2) mod 4)];"
+                           "S_0[i0, i1, i2, i3, i4, i5] -> [((i2) mod 4)] },"
+                         "{ S_1[i0, i1, i2, i3, i4, i5, ko, ki] -> [((i3) mod 16)];"
+                           "S_0[i0, i1, i2, i3, i4, i5] -> [((i3) mod 16)] },"
+                         "{ S_1[i0, i1, i2, i3, i4, i5, ko, ki] -> [((i4) mod 16)];"
+                           "S_0[i0, i1, i2, i3, i4, i5] -> [((i4) mod 16)] },"
+                         "{ S_1[i0, i1, i2, i3, i4, i5, ko, ki] -> [((i5) mod 16)];"
+                           "S_0[i0, i1, i2, i3, i4, i5] -> [((i5) mod 16)] },"
+                         "{ S_1[i0, i1, i2, i3, i4, i5, ko, ki] -> [((ko) mod 4)];"
+                           "S_0[i0, i1, i2, i3, i4, i5] -> [(0)] }]"
+              permutable: 1
+              coincident: [ 1, 1, 1, 1, 1, 1, 0 ]
+              child:
+                schedule: "[{ S_0[i0, i1, i2, i3, i4, i5] -> [(0)];"
+                             "S_1[i0, i1, i2, i3, i4, i5, ko, ki] -> [(ki)] }]"
+                permutable: 1
+                child:
+                  sequence:
+                  - filter: "{ S_0[i0, i1, i2, i3, i4, i5] }"
+                  - filter: "{ S_1[i0, i1, i2, i3, i4, i5, ko, ki] }"
+      - filter: "{ S_2[i0, i1, i2, i3, i4, i5] }"
+        child:
+          mark: "realize_UBL0"
+          child:
+            schedule: "[{ S_2[i0, i1, i2, i3, i4, i5] -> [(0)] },"
+                       "{ S_2[i0, i1, i2, i3, i4, i5] -> [(0)] },"
+                       "{ S_2[i0, i1, i2, i3, i4, i5] -> [(0)] },"
+                       "{ S_2[i0, i1, i2, i3, i4, i5] -> [(0)] },"
+                       "{ S_2[i0, i1, i2, i3, i4, i5] -> [(0)] },"
+                       "{ S_2[i0, i1, i2, i3, i4, i5] -> [(0)] },"
+                       "{ S_2[i0, i1, i2, i3, i4, i5] -> [(3)] }]"
+            permutable: 1
+            coincident: [ 1, 1, 1, 1, 1, 1, 0 ]
+            options: "{ isolate[[i0, i1, 0, i3, 0, 0, 1] -> [0, 0, 0, 0, 0, 0, 3]] : 0 <= i0 <= 15 and 0 <= i1 <= 15 and 0 <= i3 <= 1 }"
+            child:
+              schedule: "[{ S_2[i0, i1, i2, i3, i4, i5] -> [(0)] },"
+                         "{ S_2[i0, i1, i2, i3, i4, i5] -> [(0)] },"
+                         "{ S_2[i0, i1, i2, i3, i4, i5] -> [((i2) mod 4)] },"
+                         "{ S_2[i0, i1, i2, i3, i4, i5] -> [((i3) mod 16)] },"
+                         "{ S_2[i0, i1, i2, i3, i4, i5] -> [((i4) mod 16)] },"
+                         "{ S_2[i0, i1, i2, i3, i4, i5] -> [((i5) mod 16)] },"
+                         "{ S_2[i0, i1, i2, i3, i4, i5] -> [(3)] }]"
+              permutable: 1
+              coincident: [ 1, 1, 1, 1, 1, 1, 0 ]
