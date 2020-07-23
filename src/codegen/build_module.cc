@@ -787,9 +787,9 @@ NodeRef Lower(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeRef> 
     // must be after EmitInsn
     stmt = NEXT_PASS(TileCoverCorrect, stmt);
     if (global_attrs.GetBoolAttr(kEnableCoverProtectOptimize, true) && !is_dynamic) {
-      // simulated blocks > 2 400 000 => simulated case takes too much time (> 100 sec)
-      // number of protections > 512 => too many brackets in the if statement throw an error
-      stmt = NEXT_PASS(CoverProtection, stmt, 2400000, 512);
+      // simulated blocks > 240 000 => simulated case takes too much time (> 10 sec)
+      // number of protections > 128 => too many brackets in the if statement throw an error
+      stmt = NEXT_PASS(CoverProtection, stmt, 240000, 128);
     }
     stmt = NEXT_PASS(ConvertDivModToShift, stmt);
     if (!polyhedral || global_attrs.GetBoolAttr(kCoarsenImg2Col, false)) {
