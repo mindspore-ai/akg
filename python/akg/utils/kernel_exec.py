@@ -724,13 +724,14 @@ def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
         if TensorUtils.is_output_value(output):
             op_var = op_var + [output]
 
-    if sch_tmpl != None:
-        assert(sch_tmpl['target'] == 'cuda')
+    if sch_tmpl is not None:
+        if sch_tmpl['target'] != 'cuda':
+            raise ValueError("Only support cuda as target when using schedule template.")
         kernel_name = kernel_name if kernel_name != "" else sch_tmpl['op_name']
         with akg.tvm.target.cuda() as target:
             s = sch_tmpl['schedule'](sch_tmpl['output'])
-            with akg.tvm.build_config(dump_pass_ir = True):
-                mod = akg.tvm.build(s, op_var, target, target_host = 'stackvm', name = kernel_name)
+            with akg.build_config(dump_pass_ir=True):
+                mod = akg.build(s, op_var, "cuda", shape_var, name=kernel_name, attrs=attrs, polyhedral=polyhedral, binds=binds)
                 dump_cuda_meta.dump(mod, kernel_name, s, op_var)
                 return mod
 

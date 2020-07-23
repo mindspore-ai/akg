@@ -47,19 +47,19 @@ class MemoryAllocationException : public std::exception {
 
 NodeRef Lower(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeRef> &shape_vars, const std::string &name,
               const Map<Tensor, Buffer> &in_binds, const Map<std::string, NodeRef> &in_attrs, bool simple_mode,
-              bool polyhedral, bool tuning, bool aicpu, const BuildConfig &config);
+              bool polyhedral, bool tuning, const std::string &target, const BuildConfig &config);
 
 air::runtime::Module BuildModule(const Schedule &inputs, const Array<NodeRef> &in_args,
                                   const Array<NodeRef> &shape_vars, const std::string &target_name,
                                   const std::string &name, const Map<Tensor, Buffer> &in_binds,
-                                  const Map<std::string, NodeRef> &in_attrs, bool polyhedral, bool aicpu,
+                                  const Map<std::string, NodeRef> &in_attrs, bool polyhedral, const std::string &target,
                                   const BuildConfig &config);
 
 class BuildRst;
 
 BuildRst BuildToFunc(const Schedule &inputs, const Array<NodeRef> &in_args, const Array<NodeRef> &shape_vars,
                      const std::string &name, const Map<Tensor, Buffer> &in_binds,
-                     const Map<std::string, NodeRef> &in_attrs, bool polyhedral, bool aicpu, const BuildConfig &config);
+                     const Map<std::string, NodeRef> &in_attrs, bool polyhedral, const std::string &target, const BuildConfig &config);
 
 air::runtime::Module BuildToModule(const NodeRef &ref, const std::string &target_name = "cce");
 

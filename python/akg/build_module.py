@@ -80,9 +80,9 @@ def build_config(**kwargs):
 
 
 @vc_util.check_input_type(schedule.Schedule, (list, tuple), (list, tuple), str,
-                          (dict, type(None)), (dict, type(None)), bool, bool, bool, bool)
+                          (dict, type(None)), (dict, type(None)), bool, bool, bool, str)
 def lower(sch, args, shape_params=None, name="default_function", binds=None, attrs=None,
-          simple_mode=False, polyhedral=False, tuning=False, aicpu=False):
+          simple_mode=False, polyhedral=False, tuning=False, target="cce"):
     """Lowering function."""
     tmp_binds = None
     if binds is not None:
@@ -96,7 +96,7 @@ def lower(sch, args, shape_params=None, name="default_function", binds=None, att
     cfg = _api_internal._GetCurrentBuildConfig()
     ret = _api_internal._Lower(sch, args, shape_params, name,
                                tmp_binds, tmp_attrs, simple_mode,
-                               polyhedral, tuning, aicpu, cfg)
+                               polyhedral, tuning, target, cfg)
 
     level = tmp_attrs.get("help_tiling")
     if tuning or (level is not None and level > help_tiling_level['None']):
@@ -116,9 +116,9 @@ def lower(sch, args, shape_params=None, name="default_function", binds=None, att
 
 
 @vc_util.check_input_type(schedule.Schedule, (list, tuple), (list, tuple, type(None)), str,
-                          (dict, type(None)), (dict, type(None)), bool, bool)
+                          (dict, type(None)), (dict, type(None)), bool, str)
 def build_to_func(inputs, args, shape_params=None, name="default_function",
-                  binds=None, attrs=None, polyhedral=False, aicpu=False):
+                  binds=None, attrs=None, polyhedral=False, target="cce"):
     """Build module."""
     tmp_binds = None
     if binds is not None:
@@ -132,14 +132,13 @@ def build_to_func(inputs, args, shape_params=None, name="default_function",
         shape_params = []
     cfg = _api_internal._GetCurrentBuildConfig()
     return _api_internal._BuildToFunc(inputs, args, shape_params, name, tmp_binds, tmp_attrs,
-                                      polyhedral, aicpu, cfg)
+                                      polyhedral, target, cfg)
 
-@vc_util.check_input_type(schedule.Schedule, (list, tuple), (str, type(None)), (list, tuple), str,
-                          (dict, type(None)), (dict, type(None)), bool, bool)
-def build(inputs, args, target=None, shape_params=None, name="default_function",
-          binds=None, attrs=None, polyhedral=False, aicpu=False):
+@vc_util.check_input_type(schedule.Schedule, (list, tuple), str, (list, tuple), str,
+                          (dict, type(None)), (dict, type(None)), bool)
+def build(inputs, args, target='cce', shape_params=None, name="default_function",
+          binds=None, attrs=None, polyhedral=False):
     tmp_rst = build_to_func(inputs, args, shape_params=shape_params, name=name, binds=binds,
-                            attrs=attrs, polyhedral=polyhedral, aicpu=aicpu)
+                            attrs=attrs, polyhedral=polyhedral, target=target)
 
-    tmp_target = target if target is not None else 'cce'
-    return _api_internal._BuildToModule(tmp_rst, tmp_target)
+    return _api_internal._BuildToModule(tmp_rst, target)
