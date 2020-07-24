@@ -16,7 +16,7 @@ import numpy as np
 from tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
 from test_op.prob_program import distr_normal_diag_KLdiv_ad
-from gen_random import random_gaussian
+from gen_random import random_gaussian, gen_epsilon
 from base import get_rtol_atol
 
 
@@ -40,9 +40,8 @@ def gen_data(dtype, shape):
     support_list = {"float16": np.float16, "float32": np.float32}
 
     m, k = shape
-
     mean  = random_gaussian((m, k), miu=1, sigma=0.1).astype(support_list[dtype])
-    scale = random_gaussian((m, k), miu=1, sigma=0.1).astype(support_list[dtype])
+    scale = random_gaussian((m, k), miu=1, sigma=0.1, epsilon=gen_epsilon(dtype)).astype(support_list[dtype])
     head = random_gaussian((m, ), miu=1, sigma=0.1).astype(support_list[dtype])
 
     output1 = np.full((m, k), 0.0, dtype)

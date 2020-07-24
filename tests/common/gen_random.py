@@ -28,6 +28,8 @@ from akg.utils.kernel_exec import get_profiling_mode
 
 RANDOM_SEED_NUM = 20
 PROF_ERROR_CODE = 9999999999
+
+
 def func(size_, miu_=0, sigma_=8, seed_=None):
     """
     Select random func according to RANDOM_FUNC_MODE and randint, calculated by the length of the random_func_list.
@@ -59,7 +61,7 @@ def func(size_, miu_=0, sigma_=8, seed_=None):
 
 
 @func_time_required
-def random_gaussian(size, miu=0, sigma=8, seed=None):
+def random_gaussian(size, miu=0, sigma=8, epsilon=0, seed=None):
     """Generate random array with absolution value obeys gaussian distribution."""
     random_data_disk_path = None
     if os.environ.get("RANDOM_DATA_DISK_PATH") is not None:
@@ -93,7 +95,7 @@ def random_gaussian(size, miu=0, sigma=8, seed=None):
                 numbers.extend(func(size_c, miu, sigma, s))
             ret = np.array(numbers)
         ret = ret.flatten()
-        return ret[:size_c].reshape(size)
+        return ret[:size_c].reshape(size) + epsilon
 
     data_len = functools.reduce(lambda x, y: x * y, size)
     data_pool = np.fromfile(random_data_disk_path)
@@ -107,4 +109,8 @@ def random_gaussian(size, miu=0, sigma=8, seed=None):
         np.random.shuffle(data_copy)
         data_copy_list.append(data_copy)
     data_pool = np.concatenate(tuple(data_copy_list), axis=0)
-    return data_pool[0:data_len].reshape(size)
+    return data_pool[0:data_len].reshape(size) + epsilon
+
+def gen_epsilon(dtype):
+    """Generate suggested epsilon according to data type."""
+    return 1e-7 if dtype == np.float32 else 1e-3
