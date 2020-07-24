@@ -651,4 +651,21 @@ TensorAdd12.InplaceAssign1516.InplaceAssign11220.1721': {
             },
         },
     },
+
+    # Mul_TensorAdd
+    '2.EquivFormat.Mul13.EquivFormat3.TensorAdd12.5': {
+        '16_16_32_32_16_16.16_1_1_512.16_16_32_32_16_16': {
+            'float16--': {
+                'metadata': {
+                    'attrs': {
+                        'enable_mark_multi_core': True,
+                        'multicore_loop_switch_hoist': False,
+                        'multicore_scalar_rearrange': True,
+                        'enable_post_poly_loop_partition': False,
+                    },
+                },
+                'dim': '0 0 1 1 0 1 2 1 0 2 16 1 0 3 1 1 0 4 32 1 0 5 16 1'
+            },
+        },
+    },
 }

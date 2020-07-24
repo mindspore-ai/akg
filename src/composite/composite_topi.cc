@@ -636,9 +636,22 @@ TVM_REGISTER_GLOBAL("InplaceAssign").set_body([](TVMArgs args, TVMRetValue *rv) 
 TVM_REGISTER_GLOBAL("EquivFormat").set_body([](TVMArgs args, TVMRetValue *rv) {
   CHECK_GE(args.size(), 1);
   auto inputs = args[0].operator Array<NodeRef>();
-  CHECK(inputs[0]->IsInstance<TensorNode>());
-  auto ref = Downcast<Tensor>(inputs[0]);
-  *rv = ref;
+  if (inputs[0]->IsInstance<TensorNode>()) {
+    auto ref = [](NodeRef attr) -> Array<Expr> {
+      auto shape = Downcast<Array<Integer>>(attr);
+      CHECK(!shape.empty());
+      Array<Expr> newshape;
+      for (auto s : shape) {
+        newshape.push_back(s);
+      }
+      return newshape;
+    };
+
+    TOPI_ONE_INPUT_ONE_ATTR_CALL(args, rv, topi::reshape, ref);
+  } else {
+    Array<Expr> shape = {Expr(1)};
+    *rv = compute(shape, [&](const Array<Var> &indices) { return Downcast<Expr>(inputs[0]); });
+  }
 });
 
 TVM_REGISTER_GLOBAL("AddMinValue").set_body([](TVMArgs args, TVMRetValue *rv) {
