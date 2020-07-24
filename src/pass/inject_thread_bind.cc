@@ -1373,10 +1373,11 @@ class ScalarPeel : public IRMutator {
  public:
   Stmt Run(const Stmt &s) {
     Stmt res = Mutate(s);
-    if (!before_scalar_store_) {
+    if (!before_scalar_store_ || !find_multi_core_) {
       multi_core_body_ = s;
       return Stmt();
     }
+    CHECK(multi_core_body_.defined()) << "Error, multicore body is not defined.";
     return res;
   }
 
