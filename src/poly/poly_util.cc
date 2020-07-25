@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include "poly/poly_util.h"
 
 namespace akg {
@@ -119,6 +120,65 @@ Stmt PeelOuterLetStmt(const Stmt &s, std::vector<Stmt> &outer_stmts) {
   }
   return body;
 }
+
+void GetAffOffsetAndNumVars(const isl::aff &aff, int &offset, int &num_vars) {
+  offset = aff.get_constant_val().get_num_si();
+
+  num_vars = 0;
+  int dim = isl_aff_dim(aff.get(), isl_dim_in);
+  CHECK_GE(dim, 0);
+  for (int j = 0; j < dim; ++j) {
+    isl_val *coef = isl_aff_get_coefficient_val(aff.get(), isl_dim_in, j);
+    int coef_val = isl_val_get_num_si(coef);
+    static_cast<void>(isl_val_free(coef));
+    if (coef_val != 0) ++num_vars;
+  }
+}
+
+/*
+ * Check the isl::aff is in the form of { [i0, i1, i2, i3, i4] -> [(-64 + i2)] }
+ * i.e. the mapping is one variable plus a non-zero constant offset.
+ */
+bool IsAffVarPlusOffset(const isl::aff &aff) {
+  int offset = 0, num_vars = 0;
+  GetAffOffsetAndNumVars(aff, offset, num_vars);
+  return offset != 0 && num_vars == 1;
+}
+
+/*
+ * Check the isl::aff is in the form of { [i0, i1, i2, i3, i4] -> [(64)] }
+ * i.e. the mapping is a non-zero constant.
+ */
+bool IsAffNonZeroConst(const isl::aff &aff) {
+  int offset = 0, num_vars = 0;
+  GetAffOffsetAndNumVars(aff, offset, num_vars);
+  return offset != 0 && num_vars == 0;
+}
+
+isl::union_map LocalScheduleImpl(const isl::schedule_node &node, bool use_node) {
+  int tree_depth = node.get_tree_depth();
+  int new_tree_depth = tree_depth;
+  if (use_node) ++new_tree_depth;
+  isl::schedule_node tmp_node;
+  isl::union_map schedule = isl::union_map::from_domain(node.get_domain());
+  for (int i = 0; i < new_tree_depth; ++i) {
+    tmp_node = node.ancestor(tree_depth - i);
+    if (auto band_node = tmp_node.as<isl::schedule_node_band>()) {
+      if (band_node.n_member() > 0) {
+        schedule = schedule.flat_range_product(band_node.get_partial_schedule_union_map());
+      }
+    } else if (auto filter_node = tmp_node.as<isl::schedule_node_filter>()) {
+      schedule = schedule.intersect_domain(filter_node.get_filter());
+    } else if (auto extension_node = tmp_node.as<isl::schedule_node_extension>()) {
+      schedule = schedule.unite(extension_node.get_extension().reverse().intersect_range(schedule.range()));
+    }
+  }
+  return schedule;
+}
+
+isl::union_map ShortSchedule(const isl::schedule_node &node) { return LocalScheduleImpl(node, false); }
+
+isl::union_map LocalSchedule(const isl::schedule_node &node) { return LocalScheduleImpl(node, true); }
 
 }  // namespace poly
 }  // namespace ir

@@ -14,12 +14,9 @@
  * limitations under the License.
  */
 
+#include "scop_info.h"
 #include <regex>
-#include "pass/utils.h"
-#include "scop.h"
-#include "scop_builder.h"
 #include "poly/dma_inject.h"
-#include "poly/poly_util.h"
 
 namespace akg {
 namespace ir {
@@ -27,23 +24,29 @@ namespace poly {
 constexpr int kInvalidIntAttr = -1;
 Expr kInvalidExprAttr;
 
-bool Scop::IsConvBackpropInput() const {
+CubeInfo::~CubeInfo() {
+  if (model_ != nullptr) {
+    delete model_;
+    model_ = nullptr;
+  }
+}
+bool CubeInfo::IsConvBackpropInput() const {
   int n = ExtractIntFromAttrs(ATTR_CONV_BACKPROP_INPUT);
   return (IsConv() && (n != kInvalidIntAttr));
 }
 
-bool Scop::IsConvBackpropFilter() const {
+bool CubeInfo::IsConvBackpropFilter() const {
   int n = ExtractIntFromAttrs(ATTR_CONV_BACKPROP_FILTER);
   return (IsConv() && (n != kInvalidIntAttr));
 }
 
-Expr Scop::ExtractExprFromAttrs(const std::string &name) const {
-  for (auto i : data_.stmt_op_Info) {
+Expr CubeInfo::ExtractExprFromAttrs(const std::string &name) const {
+  for (auto i : analysis_result_.GetStmtOpInfoMap()) {
     if (!i.second.isCube) {
       continue;
     }
 
-    const Node *stmt_node = data_.statements.at(i.first);
+    const Node *stmt_node = analysis_result_.GetStatementMap().at(i.first);
     CHECK(stmt_node != nullptr);
     if (stmt_node->IsInstance<Provide>()) {
       auto provide = static_cast<const Provide *>(stmt_node);
@@ -57,7 +60,7 @@ Expr Scop::ExtractExprFromAttrs(const std::string &name) const {
   return kInvalidExprAttr;
 }
 
-int Scop::ExtractIntFromAttrs(const std::string &name) const {
+int CubeInfo::ExtractIntFromAttrs(const std::string &name) const {
   Expr expr_attr = ExtractExprFromAttrs(name);
   if (expr_attr.defined()) {
     if (const auto int_op = expr_attr.as<IntImm>())
@@ -68,9 +71,9 @@ int Scop::ExtractIntFromAttrs(const std::string &name) const {
   return kInvalidIntAttr;
 }
 
-std::unordered_set<std::string> Scop::ExtractWithStmtId() const {
+std::unordered_set<std::string> AnalysisResult::ExtractWithStmtId() const {
   std::unordered_set<std::string> res;
-  for (auto i : data_.stmt_op_Info) {
+  for (auto i : GetStmtOpInfoMap()) {
     if (!i.second.isWith) {
       continue;
     }
@@ -79,13 +82,13 @@ std::unordered_set<std::string> Scop::ExtractWithStmtId() const {
   return res;
 }
 
-std::string Scop::ExtractStringFromAttrs(const std::string &name) const {
-  for (auto i : data_.stmt_op_Info) {
+std::string CubeInfo::ExtractStringFromAttrs(const std::string &name) const {
+  for (auto i : analysis_result_.GetStmtOpInfoMap()) {
     if (!i.second.isCube) {
       continue;
     }
 
-    const Node *stmt_node = data_.statements.at(i.first);
+    const Node *stmt_node = analysis_result_.GetStatementMap().at(i.first);
     if (stmt_node->IsInstance<Provide>()) {
       auto provide = static_cast<const Provide *>(stmt_node);
       if (const auto cop = provide->func.as<ComputeOpNode>()) {
@@ -102,13 +105,13 @@ std::string Scop::ExtractStringFromAttrs(const std::string &name) const {
   return "";
 }
 
-std::string Scop::ExtractStringFromAttrsAndInfo(const std::string &name) const {
-  for (auto i : data_.stmt_op_Info) {
+std::string CubeInfo::ExtractStringFromAttrsAndInfo(const std::string &name) const {
+  for (auto i : analysis_result_.GetStmtOpInfoMap()) {
     if (!i.second.isCube) {
       continue;
     }
 
-    const Node *stmt_node = data_.statements.at(i.first);
+    const Node *stmt_node = analysis_result_.GetStatementMap().at(i.first);
     if (stmt_node->IsInstance<Provide>()) {
       auto provide = static_cast<const Provide *>(stmt_node);
       if (const auto cop = provide->func.as<ComputeOpNode>()) {
@@ -123,8 +126,8 @@ std::string Scop::ExtractStringFromAttrsAndInfo(const std::string &name) const {
     }
   }
 
-  if (attr_info_.count(name) >= 1) {
-    if (const auto str_op = attr_info_.at(name).as<StringImm>()) {
+  if (GetConvAttrInfo().count(name) >= 1) {
+    if (const auto str_op = GetConvAttrInfo().at(name).as<StringImm>()) {
       return str_op->value;
     } else {
       LOG(FATAL) << "attr " << name << " is not a string";
@@ -134,70 +137,8 @@ std::string Scop::ExtractStringFromAttrsAndInfo(const std::string &name) const {
   return "";
 }
 
-class DimInfoMatcher : public IRVisitor {
- public:
-  DimInfoMatcher() : dim_("") {}
-  ~DimInfoMatcher() override = default;
-
-  std::string dim() { return dim_; }
-
-  void Visit_(const AttrStmt *op) final {
-    if (const auto Cop = op->node.as<ComputeOpNode>()) {
-      for (auto iter : Cop->attrs) {
-        if (dim_.empty() && iter.first == "dim") {
-          if (auto dim = iter.second.as<StringImm>()) {
-            dim_ = dim->value;
-            break;
-          }
-        }
-      }
-    }
-  }
-
- private:
-  std::string dim_;
-};
-
-std::string TensorMarkTag(MemType mem_type, MemFlow mem_flow) {
-  /******************************
-   *  This interface is used to convert tensor MemType to isl schedule tree mark_tag,
-   *  used to record the extension position for each tensor in isl schedule tree.
-   *  Now REALIZE_L1/REALIZE_L0/REALIZE_UB mark_tag is equal to its MemType.
-   *  For mem_type is DDR, mark_tag is empty string "".
-   * */
-  switch (mem_type) {
-    case MemType::L1_:
-      if (mem_flow.size() == 3 && mem_flow[0] == MemType::DDR && mem_flow[1] == MemType::L1_ &&
-          mem_flow[2] == MemType::UBL1_)
-        return REALIZE_L1UBL1;
-      return REALIZE_L1;
-    case MemType::UB_:
-      // ordinary conv condition no fusion
-      if (mem_flow.size() == 3 && mem_flow[0] == MemType::DDR && mem_flow[1] == mem_type &&
-          mem_flow[2] == MemType::L0C_)
-        return REALIZE_L0;
-      return REALIZE_UB;
-    case MemType::L0A_:
-      return REALIZE_L0;
-    case MemType::L0B_:
-      return REALIZE_L0;
-    case MemType::L0C_:
-      return REALIZE_L0;
-    case MemType::UBL0_:
-      return REALIZE_UBL0;
-    case MemType::UBL1_:
-      if (mem_flow.size() == 2 && mem_flow[0] == MemType::DDR && mem_flow[1] == MemType::UBL1_) return REALIZE_L1;
-      return REALIZE_UBL1;
-    case MemType::DDR:
-      return "";
-    default:
-      LOG(FATAL) << "undefined mem_type " << mem_type;
-      return "";
-  }
-}
-
-bool Scop::IsElewiseVMStmt(const isl::id &id) const {
-  auto stmt = data_.statements.at(id);
+bool ScopInfo::IsElewiseVMStmt(const isl::id &id) const {
+  auto stmt = analysis_result_.GetStatementMap().at(id);
   if (stmt != nullptr && stmt->IsInstance<Provide>()) {
     auto provide = static_cast<const Provide *>(stmt);
     if (auto call = provide->value.as<Call>()) {
@@ -207,10 +148,10 @@ bool Scop::IsElewiseVMStmt(const isl::id &id) const {
   return false;
 }
 
-bool Scop::MayWriteAfterRead(const std::string &name) const {
+bool ScopInfo::MayWriteAfterRead(const std::string &name) const {
   std::map<int, isl::id> def;
   std::map<int, isl::id> use;
-  for (auto a : data_.writes.get_map_list()) {
+  for (auto a : analysis_result_.GetWrites().get_map_list()) {
     isl::id id = a.domain().unwrap().domain().get_tuple_id();
     std::string idstr = id.get_name();
     if (a.get_tuple_id(isl_dim_out).get_name() != name) continue;
@@ -219,7 +160,7 @@ bool Scop::MayWriteAfterRead(const std::string &name) const {
     int ref = static_cast<int>(WrappedStrtol(idstr));
     def[ref] = id;
   }
-  for (auto a : data_.reads.get_map_list()) {
+  for (auto a : analysis_result_.GetReads().get_map_list()) {
     isl::id id = a.domain().unwrap().domain().get_tuple_id();
     std::string idstr = id.get_name();
     if (a.get_tuple_id(isl_dim_out).get_name() != name) continue;
@@ -241,8 +182,8 @@ bool Scop::MayWriteAfterRead(const std::string &name) const {
   return false;
 }
 
-bool Scop::IsA(const std::string &name) const {
-  for (auto &info : data_.stmt_op_Info) {
+bool CubeInfo::IsA(const std::string &name) const {
+  for (auto &info : analysis_result_.GetStmtOpInfoMap()) {
     if (info.second.isCube) {
       if (info.second.A_ == name) {
         return true;
@@ -252,8 +193,8 @@ bool Scop::IsA(const std::string &name) const {
   return false;
 }
 
-bool Scop::IsB(const std::string &name) const {
-  for (auto &info : data_.stmt_op_Info) {
+bool CubeInfo::IsB(const std::string &name) const {
+  for (auto &info : analysis_result_.GetStmtOpInfoMap()) {
     if (info.second.isCube) {
       if (info.second.B_ == name) {
         return true;
@@ -263,8 +204,8 @@ bool Scop::IsB(const std::string &name) const {
   return false;
 }
 
-bool Scop::IsC(const std::string &name) const {
-  for (auto &info : data_.stmt_op_Info) {
+bool CubeInfo::IsC(const std::string &name) const {
+  for (auto &info : analysis_result_.GetStmtOpInfoMap()) {
     if (info.second.isCube) {
       if (info.second.C_ == name) {
         return true;
@@ -274,8 +215,8 @@ bool Scop::IsC(const std::string &name) const {
   return false;
 }
 
-bool Scop::IsCUB(const std::string &name) const {
-  for (auto &info : data_.stmt_op_Info) {
+bool CubeInfo::IsCUB(const std::string &name) const {
+  for (auto &info : analysis_result_.GetStmtOpInfoMap()) {
     if (info.second.isCube) {
       if (info.second.C_ + "_local_UB" == name) {
         return true;
@@ -285,8 +226,8 @@ bool Scop::IsCUB(const std::string &name) const {
   return false;
 }
 
-std::string Scop::GetAName() const {
-  for (auto &info : data_.stmt_op_Info) {
+std::string CubeInfo::GetAName() const {
+  for (auto &info : analysis_result_.GetStmtOpInfoMap()) {
     if (info.second.isCube) {
       return info.second.A_;
     }
@@ -294,8 +235,8 @@ std::string Scop::GetAName() const {
   return "";
 }
 
-std::string Scop::GetBName() const {
-  for (auto &info : data_.stmt_op_Info) {
+std::string CubeInfo::GetBName() const {
+  for (auto &info : analysis_result_.GetStmtOpInfoMap()) {
     if (info.second.isCube) {
       return info.second.B_;
     }
@@ -303,8 +244,8 @@ std::string Scop::GetBName() const {
   return "";
 }
 
-std::string Scop::GetCName() const {
-  for (auto &info : data_.stmt_op_Info) {
+std::string CubeInfo::GetCName() const {
+  for (auto &info : analysis_result_.GetStmtOpInfoMap()) {
     if (info.second.isCube) {
       return info.second.C_;
     }
@@ -312,22 +253,22 @@ std::string Scop::GetCName() const {
   return "";
 }
 
-bool Scop::IsIm2col() const {
-  for (auto &info : data_.stmt_op_Info) {
+bool CubeInfo::IsIm2col() const {
+  for (auto &info : analysis_result_.GetStmtOpInfoMap()) {
     if (info.second.isIm2col) return true;
   }
   return false;
 }
 
-bool Scop::IsLoad3dL1Ub() const {
-  for (auto &info : data_.stmt_op_Info) {
+bool CubeInfo::IsLoad3dL1Ub() const {
+  for (auto &info : analysis_result_.GetStmtOpInfoMap()) {
     if (info.second.isLoad3d) return true;
   }
   return false;
 }
 
-bool Scop::IsLoad3dL1UBStmt(const std::string &stmt_name) const {
-  for (auto &info : data_.stmt_op_Info) {
+bool CubeInfo::IsLoad3dL1UBStmt(const std::string &stmt_name) const {
+  for (auto &info : analysis_result_.GetStmtOpInfoMap()) {
     if (info.second.isLoad3d && info.first.name() == stmt_name) {
       return true;
     }
@@ -335,81 +276,62 @@ bool Scop::IsLoad3dL1UBStmt(const std::string &stmt_name) const {
   return false;
 }
 
-bool Scop::HasCube() const {
-  for (auto &info : data_.stmt_op_Info) {
+bool CubeInfo::HasCube() const {
+  for (auto &info : analysis_result_.GetStmtOpInfoMap()) {
     if (info.second.isCube) return true;
   }
   return false;
 }
 
-bool Scop::IsGemmDataTransposeBlock() const {
+bool CubeInfo::IsGemmDataTransposeBlock() const {
   std::string trans_data_block = ExtractStringFromAttrsAndInfo(ATTR_GEMM_DATA_TRANSPOSE_BLOCK);
-  return IsGemm() && !is_spec_gemm_ && (trans_data_block == "Y");
+  return IsGemm() && !IsSpecGemm() && (trans_data_block == "Y");
 }
 
-bool Scop::IsGemmWeightTransposeBlock() const {
+bool CubeInfo::IsGemmWeightTransposeBlock() const {
   std::string trans_weight_block = ExtractStringFromAttrsAndInfo(ATTR_GEMM_WEIGHT_TRANSPOSE_BLOCK);
-  return IsGemm() && !is_spec_gemm_ && (trans_weight_block == "Y");
+  return IsGemm() && !IsSpecGemm() && (trans_weight_block == "Y");
 }
 
-bool Scop::IsGemmDataTransposeInnerBlock() const {
+bool CubeInfo::IsGemmDataTransposeInnerBlock() const {
   std::string trans_data_inner_block = ExtractStringFromAttrsAndInfo(ATTR_GEMM_DATA_TRANSPOSE_BLOCK_INNER);
-  return IsGemm() && !is_spec_gemm_ && (trans_data_inner_block == "Y");
+  return IsGemm() && !IsSpecGemm() && (trans_data_inner_block == "Y");
 }
-bool Scop::IsGemmWeightTransposeInnerBlock() const {
+bool CubeInfo::IsGemmWeightTransposeInnerBlock() const {
   std::string trans_weight_inner_block = ExtractStringFromAttrsAndInfo(ATTR_GEMM_WEIGHT_TRANSPOSE_BLOCK_INNER);
-  return IsGemm() && !is_spec_gemm_ && (trans_weight_inner_block == "Y");
+  return IsGemm() && !IsSpecGemm() && (trans_weight_inner_block == "Y");
 }
-bool Scop::IsGemmDataTranspose() const {
+bool CubeInfo::IsGemmDataTranspose() const {
   std::string trans_data = ExtractStringFromAttrsAndInfo(ATTR_GEMM_DATA_TRANSPOSE);
-  return IsGemm() && !is_spec_gemm_ &&
+  return IsGemm() && !IsSpecGemm() &&
          ((trans_data == "Y") || IsGemmDataTransposeBlock() || IsGemmDataTransposeInnerBlock());
 }
 
-bool Scop::IsGemmWeightTranspose() const {
+bool CubeInfo::IsGemmWeightTranspose() const {
   std::string trans_weight = ExtractStringFromAttrsAndInfo(ATTR_GEMM_WEIGHT_TRANSPOSE);
-  return IsGemm() && !is_spec_gemm_ &&
+  return IsGemm() && !IsSpecGemm() &&
          ((trans_weight == "Y") || IsGemmWeightTransposeBlock() || IsGemmWeightTransposeInnerBlock());
 }
 
-bool Scop::IsGemm() const { return HasCube() && !IsConv(); }
+bool CubeInfo::IsGemm() const { return HasCube() && !IsConv(); }
 
-bool Scop::IsConv() const {
+bool CubeInfo::IsConv() const {
   std::string n = ExtractStringFromAttrs(ATTR_CONV_FEATURE_NAME);
   return (!n.empty());
 }
 
-const isl::union_set Scop::Domain() const { return schedule_.get_domain(); }
-
-Tensor Scop::FindTensorInOrig(const isl::id &var) {
-  for (auto i : binds_orig_) {
-    if (i.first->op->name == var.get_name()) {
-      return i.first;
-    }
-  }
-  return Tensor();
-}
-
-Tensor Scop::FindTensorInOrig(const std::string &str) {
-  for (auto i : binds_orig_) {
-    if (i.first->op->name == str) {
-      return i.first;
-    }
-  }
-  return Tensor();
-}
-
-void Scop::UpdateComputeAttrInfo() {
+void CubeInfo::UpdateComputeAttrInfo() {
   if (IsConv()) {
     FindComputeAttr(ConvATTRList);
   } else if (IsLoad3dL1Ub()) {
     FindComputeAttr(FastPoolingATTRList);
   }
 }
-void Scop::FindComputeAttr(const std::vector<std::string> &op_keys) {
-  for (auto i : data_.stmt_op_Info) {
+
+void CubeInfo::FindComputeAttr(const std::vector<std::string> &op_keys) {
+  for (auto i : analysis_result_.GetStmtOpInfoMap()) {
     if (i.second.isCube || i.second.isLoad3d) {
-      const Node *stmt_node = data_.statements.at(i.first);
+      const Node *stmt_node = analysis_result_.GetStatementMap().at(i.first);
       if (stmt_node->IsInstance<Provide>()) {
         auto provide = static_cast<const Provide *>(stmt_node);
         const auto cop = provide->func.as<ComputeOpNode>();
@@ -418,7 +340,7 @@ void Scop::FindComputeAttr(const std::vector<std::string> &op_keys) {
             std::string err = "Error: You need to set attr feature " + j + " at akg.tvm.compute()!";
             CHECK(cop->attrs.count(j) != 0) << err;
           }
-          attr_info_ = cop->attrs;
+          SetConvAttrInfo(cop->attrs);
         }
       }
       break;
@@ -426,9 +348,51 @@ void Scop::FindComputeAttr(const std::vector<std::string> &op_keys) {
   }
 }
 
+std::string CubeInfo::ConvOutName() {
+  for (auto stmt : analysis_result_.GetStmtOpInfoMap()) {
+    if (stmt.second.isCube) {
+      return stmt.second.C_;
+    }
+  }
+  return "";
+}
+
+bool CubeInfo::IsFilterCanByPass() {
+  bool can_bypass = true;
+  auto filter_name = ExtractStringFromAttrs(ATTR_CONV_FILTER_NAME);
+  auto tensor_mem_flows = analysis_result_.GetTensorMemFlows();
+  if (tensor_mem_flows.count(filter_name)) {
+    auto filter_memflow = tensor_mem_flows[filter_name];
+    auto it = std::find(filter_memflow.begin(), filter_memflow.end(), UBL1_);
+    if (it != filter_memflow.end()) can_bypass = false;
+  }
+  return can_bypass;
+}
+
+Tensor ScopInfo::FindTensorInOrig(const isl::id &var) {
+  auto binds_orig = user_config_.GetOriginBind();
+  for (auto i : binds_orig) {
+    if (i.first->op->name == var.get_name()) {
+      return i.first;
+    }
+  }
+  return Tensor();
+}
+
+Tensor ScopInfo::FindTensorInOrig(const std::string &str) {
+  auto binds_orig = user_config_.GetOriginBind();
+  for (auto i : binds_orig) {
+    if (i.first->op->name == str) {
+      return i.first;
+    }
+  }
+  return Tensor();
+}
+
 // find the dtype of global buffer by the tensor name
-Type Scop::GetDtypeOf(const std::string &tensor_name) const {
-  for (auto i : binds_) {
+Type ScopInfo::GetDtypeOf(const std::string &tensor_name) const {
+  auto binds = user_config_.GetBind();
+  for (auto i : binds) {
     if (i.first->op->name == tensor_name) {
       return i.second->dtype;
     }
@@ -437,7 +401,7 @@ Type Scop::GetDtypeOf(const std::string &tensor_name) const {
   return Int(32);
 }
 
-Type Scop::GetDtypeOf(const isl::ast_expr &e) const {
+Type ScopInfo::GetDtypeOf(const isl::ast_expr &e) const {
   if (auto op = e.as<isl::ast_expr_op>()) {
     isl::id var = op.get_arg(0).as<isl::ast_expr_id>().get_id();
     return GetDtypeOf(var);
@@ -445,8 +409,9 @@ Type Scop::GetDtypeOf(const isl::ast_expr &e) const {
   return Int(32);
 }
 
-bool Scop::IsInBinds(const std::string &name) const {
-  for (auto i : binds_orig_) {
+bool ScopInfo::IsInBinds(const std::string &name) const {
+  auto binds_orig = user_config_.GetOriginBind();
+  for (auto i : binds_orig) {
     if (name == i.first->op->name) {
       return true;
     }
@@ -454,17 +419,8 @@ bool Scop::IsInBinds(const std::string &name) const {
   return false;
 }
 
-std::string Scop::ConvOutName() {
-  for (auto stmt : data_.stmt_op_Info) {
-    if (stmt.second.isCube) {
-      return stmt.second.C_;
-    }
-  }
-  return "";
-}
-
-air::DataType Scop::MadCastType() {
-  for (auto stmt : data_.stmt_op_Info) {
+air::DataType CubeInfo::MadCastType() {
+  for (auto stmt : analysis_result_.GetStmtOpInfoMap()) {
     if (stmt.second.isCube) {
       return stmt.second.MadType_;
     }
@@ -472,172 +428,22 @@ air::DataType Scop::MadCastType() {
   return Float(16);
 }
 
-std::string Scop::GetcDim() {
-  auto matcher = DimInfoMatcher();
-  matcher.Visit(body_);
-  return matcher.dim();
-}
-
-bool Scop::IsFilterCanByPass() {
-  bool can_bypass = true;
-  auto filter_name = ExtractStringFromAttrs(ATTR_CONV_FILTER_NAME);
-  if (tensor_mem_flows_.count(filter_name)) {
-    auto filter_memflow = tensor_mem_flows_[filter_name];
-    auto it = find(filter_memflow.begin(), filter_memflow.end(), UBL1_);
-    if (it != filter_memflow.end()) can_bypass = false;
-  }
-  return can_bypass;
-}
-
-void Scop::ParseIntAttr(const Map<std::string, NodeRef> &attrs, const std::string &attr_name, int *attr_to_set) {
-  CHECK(attr_to_set != nullptr);
-  if (attrs.count(attr_name) == 0) return;
-  const NodeRef &e = attrs.at(attr_name);
-  if (auto i = e.as<IntImm>()) {
-    *attr_to_set = static_cast<int>(i->value);
-  } else if (auto ui = e.as<UIntImm>()) {
-    *attr_to_set = static_cast<int>(ui->value);
-  } else {
-    LOG(FATAL) << "Failed to parse attribute: " << attr_name << " = " << e << " as integer";
-  }
-}
-
-void Scop::ParseBoolAttr(const Map<std::string, NodeRef> &attrs, const std::string &attr_name, bool *attr_to_set) {
-  CHECK(attr_to_set != nullptr);
-  if (attrs.count(attr_name) != 0) {
-    const int invalid_value = -1;
-    int attr = invalid_value;
-    ParseIntAttr(attrs, attr_name, &attr);
-    if (attr != invalid_value) {
-      CHECK(attr == 0 || attr == 1) << "Bool attribute " << attr_name << " must be 0 or 1, but found "
-                                    << attrs.at(attr_name);
-      *attr_to_set = static_cast<bool>(attr);
-    }
-  }
-}
-
-void Scop::ParseStringAttr(const Map<std::string, NodeRef> &attrs, const std::string &attr_name,
-                           std::string *attr_to_set) {
-  CHECK(attr_to_set != nullptr);
-  if (attrs.count(attr_name) == 0) return;
-  const NodeRef &e = attrs.at(attr_name);
-  if (auto val = e.as<StringImm>()) {
-    *attr_to_set = val->value;
-  } else {
-    LOG(FATAL) << "Failed to parse attribute: " << attr_name << " = " << e << " as string";
-  }
-}
-
-void Scop::ParseCustomTilingAttr(const Map<std::string, NodeRef> &attrs, const std::string &attr_name,
-                                 std::vector<NodeRef> *attr_to_set) {
-  CHECK(attr_to_set != nullptr);
-  if (attrs.count(attr_name) == 0) return;
-  const NodeRef &e = attrs.at(attr_name);
-  Array<NodeRef> array = air::runtime::Downcast<Array<NodeRef>>(e);
-  for (auto d : array) {
-    if (d.as<air::CustomTilingNode>()) {
-      attr_to_set->emplace_back(d);
-    } else {
-      LOG(FATAL) << "Failed to parse attribute: " << attr_name << " = " << e << " as CustomTilingNode";
-    }
-  }
-}
-
-void Scop::ParseDynamicShapeAttr(const Map<std::string, NodeRef> &attrs, const std::string &attr_name,
-                                 std::vector<NodeRef> *attr_to_set) {
-  CHECK(attr_to_set != nullptr);
-  if (attrs.count(attr_name) == 0) return;
-  const NodeRef &e = attrs.at(attr_name);
-  Array<NodeRef> array = air::runtime::Downcast<Array<NodeRef>>(e);
-  for (auto d : array) {
-    if (d.as<air::DynamicShapeNode>()) {
-      attr_to_set->emplace_back(d);
-    } else {
-      LOG(FATAL) << "Failed to parse attribute: " << attr_name << " = " << e << " as DynamicShapeNode";
-    }
-  }
-}
-
-void Scop::SetAttrs(const Map<std::string, NodeRef> &attrs) {
-  if (attrs.empty()) return;
-  ParseStringAttr(attrs, "dim", &b_dim_);
-  ParseIntAttr(attrs, "kernel_h", &matB_dim_h_);
-  ParseIntAttr(attrs, "kernel_w", &matB_dim_w_);
-  ParseIntAttr(attrs, "conv_backprop_filter", &conv_back_prop_filter_);
-  ParseIntAttr(attrs, "bypassL1", &bypassL1_);
-  ParseIntAttr(attrs, "dump_tuning_level", &dump_tuning_level_);
-  ParseBoolAttr(attrs, "pragma_rmselfdep", &remove_self_dependence_);
-  ParseBoolAttr(attrs, "pragma_force_rmselfdep", &force_remove_self_dependence_);
-  ParseBoolAttr(attrs, "pragma_reschedule", &compute_reschedule_);
-  ParseBoolAttr(attrs, "pragma_remove_invariant_dependence", &remove_invariant_dependence_);
-  ParseBoolAttr(attrs, "pragma_disable_schedule_shift", &disable_schedule_shift_);
-  ParseBoolAttr(attrs, "pragma_enable_schedule_max_constant", &enable_schedule_max_constant_);
-  ParseBoolAttr(attrs, "pragma_disable_loop_reversal", &disable_loop_reversal_);
-  ParseBoolAttr(attrs, "pragma_disable_loop_fusion", &disable_loop_fusion_);
-  ParseBoolAttr(attrs, "pragma_reorder_schedule", &reorder_schedule_);
-  ParseBoolAttr(attrs, "pragma_modshift", &mod_schedule_shift_);
-  ParseBoolAttr(attrs, "pragma_conv_special_dma", &conv_special_dma_);
-  ParseBoolAttr(attrs, "pragma_checkcoincident", &tile_check_coincident_);
-  ParseBoolAttr(attrs, "pragma_opt_for_davinci", &optimize_for_davinci_);
-  ParseBoolAttr(attrs, "pragma_sink_last_axis", &sink_last_axis_);
-  ParseBoolAttr(attrs, "pragma_keep_outer_band_order", &keep_outer_band_order_);
-  ParseBoolAttr(attrs, "pragma_disable_group", &disable_group_);
-  ParseBoolAttr(attrs, "pragma_tile_inner_band", &tile_inner_band_);
-  ParseBoolAttr(attrs, "pragma_set_all_coincident", &pragma_set_all_coincident_);
-  ParseBoolAttr(attrs, "enable_feature_library", &enable_feature_library_);
-  ParseBoolAttr(attrs, "enable_hoist_cond_write", &enable_hoist_cond_write_);
-  ParseBoolAttr(attrs, "enable_mark_multi_core", &enable_mark_multi_core_);
-  ParseStringAttr(attrs, "kernel_name", &kernel_name_);
-  ParseIntAttr(attrs, "dump_pass_ir", &dump_pass_ir_);
-  ParseStringAttr(attrs, "dump_poly_dir", &dump_poly_dir_);
-  ParseIntAttr(attrs, "isolated_idx", &isolated_idx_);
-  ParseCustomTilingAttr(attrs, "custom_tiling", &custom_tiling_);
-  ParseDynamicShapeAttr(attrs, "dynamic_shape", &dynamic_shape_);
-  ParseIntAttr(attrs, "dynamic_shape_bound", &dynamic_shape_bound_);
-  ParseIntAttr(attrs, "pragma_tilesize_is_var", &tile_size_is_var_);
-  ParseIntAttr(attrs, "pragma_outerband_need_split", &outer_band_need_split_);
-  ParseIntAttr(attrs, "pragma_is_conv", &pragma_is_conv_);
-  ParseBoolAttr(attrs, "dynamic_shape_conv_full_parametric", &dynamic_shape_conv_full_parametric_);
-  ParseBoolAttr(attrs, "pragma_analyze_reuse_buffer", &pragma_analyze_reuse_buffer_);
-  ParseBoolAttr(attrs, "pragma_speedup_tiling", &pragma_speedup_tiling_);
-  ParseBoolAttr(attrs, "pragma_allow_tail_tiling", &pragma_allow_tail_tiling_);
-  ParseBoolAttr(attrs, "pragma_analyze_multicore", &pragma_analyze_multicore_);
-
-  if (force_remove_self_dependence_) {
-    LOG(WARNING) << "pragma_force_rmselfdep should be used with care. "
-                 << "It removes all self dependence and cannot ensure that reduce axis do not use multicore.";
-  }
-
-  for (auto iter : attrs) {
-    if (iter.first == ATTR_CONV_GMM_FEATURE || iter.first == ATTR_CONV_GMM_WEIGHT ||
-        iter.first == ATTR_GEMM_DATA_TRANSPOSE || iter.first == ATTR_GEMM_WEIGHT_TRANSPOSE ||
-        iter.first == ATTR_GEMM_DATA_TRANSPOSE_BLOCK || iter.first == ATTR_GEMM_WEIGHT_TRANSPOSE_BLOCK ||
-        iter.first == ATTR_GEMM_DATA_TRANSPOSE_BLOCK_INNER || iter.first == ATTR_GEMM_WEIGHT_TRANSPOSE_BLOCK_INNER) {
-      attr_info_.Set(iter.first, iter.second);
-    }
-  }
-  if (is_spec_gemm_) attr_info_ = attrs;
-}
-
-void Scop::RecordReduceStmt(const isl::id &stmt_id, const std::vector<std::string> &reduce_axis_list) {
-  data_.reduce_stmts[stmt_id] = reduce_axis_list;
-}
-
-int Scop::GetAttrValue(const std::string &key) {
-  CHECK(attr_info_.find(key) != attr_info_.end());
-  if (attr_info_[key].as<IntImm>() != nullptr) return attr_info_[key].as<IntImm>()->value;
-  if (attr_info_[key].as<FloatImm>() != nullptr) {
-    float res = attr_info_[key].as<FloatImm>()->value;
+int CubeInfo::GetAttrValue(const std::string &key) {
+  Map<std::string, NodeRef> attr_info = GetConvAttrInfo();
+  CHECK(attr_info.find(key) != attr_info.end());
+  if (attr_info[key].as<IntImm>() != nullptr) return attr_info[key].as<IntImm>()->value;
+  if (attr_info[key].as<FloatImm>() != nullptr) {
+    float res = attr_info[key].as<FloatImm>()->value;
     LOG(WARNING) << "attr: " << key << " : should be an integer, but found float. Force convert to int.";
     return static_cast<int>(res);
   }
   return -1;
 }
 
-Tensor Scop::FindTensorWithLargestShape(const std::string &name) {
+Tensor ScopInfo::FindTensorWithLargestShape(const std::string &name) {
   size_t largest_size = 0;
   Tensor largest_tensor;
-  for (auto i : buffer_def_infos_) {
+  for (auto i : analysis_result_.buffer_def_infos_) {
     if (!i.tensor.defined()) continue;
     if (i.dst_tensor_id.get_name() == name) {
       size_t tensor_size = 1;
@@ -652,7 +458,8 @@ Tensor Scop::FindTensorWithLargestShape(const std::string &name) {
       }
     }
   }
-  for (auto i : binds_) {
+  auto binds = user_config_.GetBind();
+  for (auto i : binds) {
     if (!i.first.defined()) continue;
     if (i.first->op->name == name) {
       size_t tensor_size = 1;
@@ -672,15 +479,16 @@ Tensor Scop::FindTensorWithLargestShape(const std::string &name) {
   return Tensor();
 }
 
-Tensor Scop::FindTensorWithLargestShape(const isl::id &var) { return FindTensorWithLargestShape(var.get_name()); }
+Tensor ScopInfo::FindTensorWithLargestShape(const isl::id &var) { return FindTensorWithLargestShape(var.get_name()); }
 
-Tensor Scop::FindTensor(const std::string &str) {
-  for (auto i : buffer_def_infos_) {
+Tensor ScopInfo::FindTensor(const std::string &str) {
+  for (auto i : analysis_result_.buffer_def_infos_) {
     if (str == i.dst_tensor_id.get_name() && i.is_bind_tensor && i.tensor.defined()) {
       return i.tensor;
     }
   }
-  for (auto i : binds_) {
+  auto binds = user_config_.GetBind();
+  for (auto i : binds) {
     if (i.first->op->name == str) {
       return i.first;
     }
@@ -689,13 +497,14 @@ Tensor Scop::FindTensor(const std::string &str) {
   return Tensor();
 }
 
-Tensor Scop::FindTensor(const isl::id &var) {
-  for (const auto &i : buffer_def_infos_) {
+Tensor ScopInfo::FindTensor(const isl::id &var) {
+  for (const auto &i : analysis_result_.buffer_def_infos_) {
     if (i.dst_tensor_id.get_name() == var.get_name() && i.is_bind_tensor && i.tensor.defined()) {
       return i.tensor;
     }
   }
-  for (const auto &i : binds_) {
+  auto binds = user_config_.GetBind();
+  for (const auto &i : binds) {
     if (i.first->op->name == var.get_name()) {
       return i.first;
     }
@@ -704,55 +513,54 @@ Tensor Scop::FindTensor(const isl::id &var) {
   return Tensor();
 }
 
-isl::id Scop::GetOriginTensorId(const std::string &name) const {
+isl::id ScopInfo::GetOriginTensorId(const std::string &name) const {
   std::string tensor_name = name;
   size_t pos = name.find("_local_");
   if (std::string::npos != pos) {
     tensor_name = name.substr(0, pos);
   }
-  return isl::id(ctx_, tensor_name);
+  return isl::id(GetCtx(), tensor_name);
 }
 
-isl::id Scop::GetOriginTensorId(const isl::id &id) const { return GetOriginTensorId(id.get_name()); }
+isl::id ScopInfo::GetOriginTensorId(const isl::id &id) const { return GetOriginTensorId(id.get_name()); }
 
-bool Scop::InitRangeStrideVec() {
-  if (!data_.range_stride.empty()) return false;
+bool CubeInfo::InitRangeStrideVec() {
+  if (!GetRangeStride().empty()) return false;
 
-  if (data_.range_info.empty()) {
+  if (GetRangeInfo().empty()) {
     LOG(WARNING) << "range_info is not specified, please check";
     return false;
   }
 
-  data_.range_stride.push_back(1);
-  for (uint64_t i = data_.range_info.size(); i >= 1; --i) {
-    data_.range_stride.insert(data_.range_stride.begin(),
-                              data_.range_info[i - 1].size() * (unsigned int)data_.range_stride[0]);
+  RecordRangeStrideBack(1);
+  for (uint64_t i = GetRangeInfo().size(); i >= 1; --i) {
+    RecordRangeStrideFront(GetRangeInfo()[i - 1].size() * (unsigned int)GetRangeStride()[0]);
   }
   return true;
 }
 
-std::vector<int> Scop::GetIsolateVec(int range_idx) {
+std::vector<int> CubeInfo::GetIsolateVec(int range_idx) {
   static_cast<void>(InitRangeStrideVec());
   std::vector<int> idx;
-  for (unsigned int i = 0; i < data_.range_stride.size() - 1; i++) {
-    CHECK_NE(data_.range_stride[i], 0);
-    CHECK_NE(data_.range_stride[i + 1], 0);
-    idx.push_back(range_idx % data_.range_stride[i] / data_.range_stride[i + 1]);
+  for (unsigned int i = 0; i < GetRangeStride().size() - 1; i++) {
+    CHECK_NE(GetRangeStride()[i], 0);
+    CHECK_NE(GetRangeStride()[i + 1], 0);
+    idx.push_back(range_idx % GetRangeStride()[i] / GetRangeStride()[i + 1]);
   }
   return idx;
 }
 
-std::vector<Range> Scop::GetRange(int range_idx) {
+std::vector<Range> CubeInfo::GetRange(int range_idx) {
   std::vector<int> idx = GetIsolateVec(range_idx);
   std::vector<Range> res;
-  CHECK(idx.size() == data_.range_info.size());
+  CHECK(idx.size() == GetRangeInfo().size());
   for (unsigned int i = 0; i < idx.size(); i++) {
-    res.push_back(data_.range_info[i][(unsigned int)idx[i]]);
+    res.push_back(GetRangeInfo()[i][(unsigned int)idx[i]]);
   }
   return res;
 }
 
-std::unordered_map<std::string, Expr> Scop::GetConvInfoForTiling() {
+std::unordered_map<std::string, Expr> CubeInfo::GetConvInfoForTiling() {
   std::unordered_map<std::string, Expr> conv_info;
   conv_info[ATTR_CONV_FEATURE_H] = this->ExtractExprFromAttrs(ATTR_CONV_FEATURE_H);
   conv_info[ATTR_CONV_FEATURE_W] = this->ExtractExprFromAttrs(ATTR_CONV_FEATURE_W);
@@ -767,9 +575,10 @@ std::unordered_map<std::string, Expr> Scop::GetConvInfoForTiling() {
   return conv_info;
 }
 
-void Scop::GetConvMNKInfo(std::vector<DimensionInfo> &dimInfos_conv) {
-  std::vector<DimensionInfo> L1_factors;
-  std::vector<DimensionInfo> L0_factors;
+void CubeInfo::SetConvMNKInfo() {
+  TileSizes &dimInfos_conv = analysis_result_.GetTileSizes();
+  TileSizes L1_factors;
+  TileSizes L0_factors;
 
   std::unordered_set<std::string> conv_pragmas = {
     ATTR_CONV_TILE_W, ATTR_CONV_TILE_H,  ATTR_CONV_TILE_CO, ATTR_CONV_TILE_M,  ATTR_CONV_TILE_N,
@@ -783,17 +592,18 @@ void Scop::GetConvMNKInfo(std::vector<DimensionInfo> &dimInfos_conv) {
       L1_factors.emplace_back(dim);
     }
   }
-  dimInfos_conv = L1_factors;
-  conv_mnk_dims_ = L0_factors;
-  if (is_dynamic_) {
-    for (const auto &dim : conv_mnk_dims_) {
+  analysis_result_.SetTileSizes(L1_factors);
+  SetConvMNKDims(L0_factors);
+  auto conv_mnk_dims = GetConvMNKDims();
+  if (user_config_.GetIsDynamic()) {
+    for (const auto &dim : conv_mnk_dims) {
       fractal_int_info_[dim.axis] = IntImm::make(Int(32), dim.l1_tiling_size);
       attr_info_.Set(dim.axis, IntImm::make(Int(32), dim.l1_tiling_size));
     }
   } else {
     const int c0_size = 16;
     const int int_imm_num_bits = 32;
-    for (const auto &dim : conv_mnk_dims_) {
+    for (const auto &dim : conv_mnk_dims) {
       int l0tile = static_cast<int>(dim.l0_tiling_size);
       if (dim.axis == ATTR_CONV_TILE_M || dim.axis == ATTR_CONV_TILE_N || dim.axis == ATTR_CONV_TILE_K) {
         // multiply outer tile size with inner size
@@ -805,74 +615,7 @@ void Scop::GetConvMNKInfo(std::vector<DimensionInfo> &dimInfos_conv) {
   }
 }
 
-// Init set_dim info
-void Scop::InitDimensionInfo(const isl::schedule &sch_init) {
-  // get compute dim
-  std::string dim = GetcDim();
-  // get build dim
-  if (dim.empty()) {
-    dim = GetbDim();
-  }
-
-  // apply default tiling
-  if (dim.empty()) {
-    auto tiling_res = GenerateTiling(this, sch_init, custom_tiling_, dynamic_shape_);
-    dim_infos_ = tiling_res.first;
-    tiling_constraints_ = tiling_res.second;
-    if (IsConv()) GetConvMNKInfo(dim_infos_);
-    return;
-  }
-
-  const std::string pattern = " ";
-  std::vector<std::string> str = Split(dim, pattern);
-  const int dim_info_entry_size = 4;
-  CHECK(!str.empty() && !(str.size() % dim_info_entry_size)) << "Error: You need to set dim !";
-  int sequence = 0;
-  for (size_t i = 0; i < str.size(); i += dim_info_entry_size) {
-    Scop::DimensionInfo dim_info;
-    char *endptr = nullptr;
-    const int radix = 10;
-    dim_info.index = strtol(str[i].c_str(), &endptr, radix);
-    if (endptr == nullptr || *endptr != '\0') LOG(FATAL) << "failed to convert string " << str[i] << " to number";
-    const int max_dim_index = 16;
-    CHECK(dim_info.index < max_dim_index) << "set_dim index must be less than " << max_dim_index << "!";
-    dim_info.axis = str[i + 1];
-    const int default_tiling_size = 65535;
-    endptr = nullptr;
-    int64_t str_2_number = strtol(str[i + 2].c_str(), &endptr, radix);
-    if (endptr == nullptr || *endptr != '\0' || str_2_number <= 0) {
-      dim_info.l1_tiling_size = default_tiling_size;
-    } else {
-      dim_info.l1_tiling_size = str_2_number;
-    }
-    endptr = nullptr;
-    int64_t str_3_number = strtol(str[i + 3].c_str(), &endptr, radix);
-    if (endptr == nullptr || *endptr != '\0' || str_3_number <= 0) {
-      dim_info.l0_tiling_size = default_tiling_size;
-    } else {
-      dim_info.l0_tiling_size = str_3_number;
-    }
-    dim_info.dim_seq = sequence;
-    sequence++;
-    dim_infos_.push_back(dim_info);
-  }
-}
-
-void Scop::MergeTilingInfo(Tiles &tiling_infos) {
-  int64_t tiles_num = 0;
-  for (unsigned i = 0; i < dim_infos_.size(); ++i) {
-    if (tiles_num <= dim_infos_[i].index) {
-      tiles_num = dim_infos_[i].index + 1;
-    }
-  }
-  tiling_infos.resize((size_t)tiles_num);
-
-  for (unsigned i = 0; i < dim_infos_.size(); ++i) {
-    tiling_infos[(unsigned int)dim_infos_[i].index].dim_infos.push_back(dim_infos_[i]);
-  }
-}
-
-void Scop::GetParams() {
+void UserConfig::CollectParams() {
   auto FloorDivToDiv = [](Expr expr) -> Expr {
     if (const auto add = expr.as<air::ir::Add>()) {
       // case 1: floordiv(a, b) + 1 ==> (a + b) / b
@@ -891,15 +634,16 @@ void Scop::GetParams() {
     }
     return expr;
   };
-  for (auto x : binds_orig_) {
+  auto binds_orig = GetOriginBind();
+  for (auto x : binds_orig) {
     for (const auto &expr : x.second->shape) {
       if (!is_const(expr)) {
         RegisterParam(FloorDivToDiv(expr));
       }
     }
   }
-
-  for (auto it : outer_let_stmts_) {
+  auto outer_let_stmts = GetOuterLetStmts();
+  for (auto it : outer_let_stmts) {
     if (auto let_op = it.as<LetStmt>()) {
       if (let_op->var.type().is_int() || let_op->var.type().is_uint()) {
         CHECK(params_.count(let_op->var->name_hint) == 0) << "duplicate name in params: " << let_op->var;
@@ -932,7 +676,7 @@ std::pair<std::string, std::string> ExprToString(const Expr &expr) {
   return std::pair<std::string, std::string>(expr_str, name);
 }
 
-void Scop::RegisterParam(const Expr &expr) {
+void UserConfig::RegisterParam(const Expr &expr) {
   if (is_const(expr)) return;
   if (auto op = expr.as<air::ir::Mul>()) {
     if (is_const(op->a)) {
@@ -943,17 +687,17 @@ void Scop::RegisterParam(const Expr &expr) {
       RegisterParam(op->a);
       return;
     }
-  } else if (auto op = expr.as<air::ir::Add>()) {
-    RegisterParam(op->a);
-    RegisterParam(op->b);
+  } else if (auto add = expr.as<air::ir::Add>()) {
+    RegisterParam(add->a);
+    RegisterParam(add->b);
     return;
-  } else if (auto op = expr.as<air::ir::Sub>()) {
-    RegisterParam(op->a);
-    RegisterParam(op->b);
+  } else if (auto sub = expr.as<air::ir::Sub>()) {
+    RegisterParam(sub->a);
+    RegisterParam(sub->b);
     return;
-  } else if (auto op = expr.as<air::ir::FloorDiv>()) {
-    RegisterParam(op->a);
-    RegisterParam(op->b);
+  } else if (auto floodiv = expr.as<air::ir::FloorDiv>()) {
+    RegisterParam(floodiv->a);
+    RegisterParam(floodiv->b);
     return;
   }
 
@@ -971,41 +715,24 @@ void Scop::RegisterParam(const Expr &expr) {
   params_rev_map_.emplace(name, expr);
 }
 
-Scop::AtomicType Scop::GetAtomicWrite(const isl::id &id) const {
-  for (const auto &i : data_.statements) {
-    const Node *stmt_node = i.second;
-    if (stmt_node->IsInstance<Provide>()) {
-      auto provide = static_cast<const Provide *>(stmt_node);
-      if (const auto cop = provide->func.as<ComputeOpNode>()) {
-        if (cop->attrs.count(ATTR_ATOMIC_ADD) != 0) {
-          if (auto str_op = cop->attrs.at(ATTR_ATOMIC_ADD).as<StringImm>()) {
-            auto str = str_op->value;
-            if (str == id.get_name()) return Scop::AtomicType::Add;
-          }
-        }
-      }
-    }
-  }
-  return Scop::AtomicType::Equ;
-}
-
-void Scop::CreateConvModel(bool is_dynamic) {
+void CubeInfo::CreateConvModel() {
+  if (model_) return;
   if (!attr_info_.empty()) {
     if (attr_info_.count(ATTR_CONV_BACKPROP_INPUT) > 0) {
       try {
-        model_ = new ConvolutionBackpropInputModel(attr_info_, is_dynamic);
+        model_ = new ConvolutionBackpropInputModel(attr_info_, user_config_.GetIsDynamic());
       } catch (const std::bad_alloc &) {
         LOG(FATAL) << "bad_alloc exception occurred when constructing ConvolutionBackpropInputModel";
       }
     } else if (attr_info_.count(ATTR_CONV_BACKPROP_FILTER) > 0) {
       try {
-        model_ = new ConvolutionBackpropFilterModel(attr_info_, is_dynamic);
+        model_ = new ConvolutionBackpropFilterModel(attr_info_, user_config_.GetIsDynamic());
       } catch (const std::bad_alloc &) {
         LOG(FATAL) << "bad_alloc exception occurred when constructing ConvolutionBackpropFilterModel";
       }
     } else {
       try {
-        model_ = new ConvolutionForwardModel(attr_info_, is_dynamic);
+        model_ = new ConvolutionForwardModel(attr_info_, user_config_.GetIsDynamic());
       } catch (const std::bad_alloc &) {
         LOG(FATAL) << "bad_alloc exception occurred when constructing ConvolutionForwardModel";
       }
@@ -1016,7 +743,85 @@ void Scop::CreateConvModel(bool is_dynamic) {
   }
 }
 
-void Scop::UpdateFractalIntInfoConvForward(int isolate_idx) {
+void CubeInfo::UpdateFractalIntFirstInfo(bool is_conv_backprop_filter,
+                                         const std::vector<size_t> &im2col_fp_cluster_size,
+                                         const std::vector<size_t> &fractal_fp_cluster_size) {
+  if (is_conv_backprop_filter) {
+    UpdateFractalIntFirstInfoConvBackpropFilter(im2col_fp_cluster_size, fractal_fp_cluster_size);
+  } else {
+    UpdateFractalIntFirstInfoConvForward(im2col_fp_cluster_size, fractal_fp_cluster_size);
+  }
+}
+
+void CubeInfo::UpdateFractalIntLastInfo(std::vector<size_t> filter_fp_cluster_size) {
+  if (IsConvBackpropInput()) {
+    CHECK_EQ(filter_fp_cluster_size.size(), 4);
+    // conv_backprop_input filter: [ko, no, ni, ki]
+    int64_t kh = ExtractIntFromAttrs(ATTR_CONV_KERNEL_H);
+    int64_t kw = ExtractIntFromAttrs(ATTR_CONV_KERNEL_W);
+    fractal_int_info_[ATTR_CONV_TILE_CO] = (int64_t)filter_fp_cluster_size[0] / (kh * kw);
+    fractal_int_info_[ATTR_CONV_TILE_N] = (int64_t)filter_fp_cluster_size[0] / (kh * kw);
+
+    fractal_int_info_[ATTR_CONV_N_INNER] = (int64_t)filter_fp_cluster_size[2];
+  } else if (IsConvBackpropFilter()) {
+    CHECK_EQ(filter_fp_cluster_size.size(), 5);
+    // conv_backprop_filter filter: [batch, no, mo, ni, mi]
+    fractal_int_info_[ATTR_CONV_TILE_M] = (int64_t)filter_fp_cluster_size[1];
+    fractal_int_info_[ATTR_CONV_M_INNER] = (int64_t)filter_fp_cluster_size[3];
+    fractal_int_info_[ATTR_CONV_GMM_M] = (int64_t)filter_fp_cluster_size[1] * filter_fp_cluster_size[3];
+  } else {
+    CHECK_EQ(filter_fp_cluster_size.size(), 4);
+    // conv_forward filter: [ko, no, ni, ki]
+    fractal_int_info_[ATTR_CONV_TILE_CO] = (int64_t)filter_fp_cluster_size[1];
+    fractal_int_info_[ATTR_CONV_TILE_N] = (int64_t)filter_fp_cluster_size[1];
+    fractal_int_info_[ATTR_CONV_N_INNER] = (int64_t)filter_fp_cluster_size[2];
+  }
+}
+
+void CubeInfo::UpdateSpecGemmFractalInfo(const BufferDefInfo &tensor_info) {
+  if (IsConv() && IsB(tensor_info.tensor_id.get_name())) {
+    CHECK(tensor_info.footprints_cluster != nullptr);
+    UpdateFractalIntLastInfo(tensor_info.footprints_cluster->GetFixedBoxSizes());
+    fractal_str_info_[ATTR_CONV_GMM_WEIGHT] = tensor_info.dst_tensor_id.get_name();
+    CHECK_NE(tensor_info.dst_tensor_id.get_name(), "");
+  } else if (IsConv() && IsA(tensor_info.tensor_id.get_name())) {
+    fractal_str_info_[ATTR_CONV_GMM_FEATURE] = tensor_info.data_stream[2].first.get_name();
+    CHECK_NE(tensor_info.dst_tensor_id.get_name(), "");
+  } else if (IsConv() && IsC(tensor_info.tensor_id.get_name())) {
+    fractal_str_info_[ATTR_CONV_GMM_RES] = tensor_info.dst_tensor_id.get_name();
+    CHECK_NE(tensor_info.dst_tensor_id.get_name(), "");
+  }
+}
+
+void CubeInfo::UpdateFractalIntFirstInfoConvBackpropFilter(std::vector<size_t> im2col_fp_cluster_size,
+                                                           std::vector<size_t> fractal_fp_cluster_size) {
+  CHECK_EQ(fractal_fp_cluster_size.size(), 5);
+  fractal_int_info_[ATTR_CONV_BATCH] = (int64_t)fractal_fp_cluster_size[0];
+  fractal_int_info_[ATTR_CONV_TILE_K] = (int64_t)fractal_fp_cluster_size[1];
+  fractal_int_info_[ATTR_CONV_TILE_N] = (int64_t)fractal_fp_cluster_size[2];
+  fractal_int_info_[ATTR_CONV_N_INNER] = (int64_t)fractal_fp_cluster_size[3];
+  fractal_int_info_[ATTR_CONV_K_INNER] = (int64_t)fractal_fp_cluster_size[4];
+
+  fractal_int_info_[ATTR_CONV_TILE_CO] = (int64_t)fractal_fp_cluster_size[2];
+
+  CHECK_EQ(im2col_fp_cluster_size.size(), 6);
+  fractal_int_info_[ATTR_CONV_GMM_K] = (int64_t)im2col_fp_cluster_size[1];
+}
+
+void CubeInfo::UpdateFractalIntFirstInfoConvForward(std::vector<size_t> im2col_fp_cluster_size,
+                                                    std::vector<size_t> fractal_fp_cluster_size) {
+  CHECK_EQ(fractal_fp_cluster_size.size(), 5);
+  fractal_int_info_[ATTR_CONV_BATCH] = (int64_t)fractal_fp_cluster_size[0];
+  fractal_int_info_[ATTR_CONV_TILE_M] = (int64_t)fractal_fp_cluster_size[1];
+  fractal_int_info_[ATTR_CONV_TILE_K] = (int64_t)fractal_fp_cluster_size[2];
+  fractal_int_info_[ATTR_CONV_M_INNER] = (int64_t)fractal_fp_cluster_size[3];
+  fractal_int_info_[ATTR_CONV_K_INNER] = (int64_t)fractal_fp_cluster_size[4];
+
+  CHECK_EQ(im2col_fp_cluster_size.size(), 6);
+  fractal_int_info_[ATTR_CONV_GMM_M] = (int64_t)im2col_fp_cluster_size[1];
+}
+
+void CubeInfo::UpdateFractalIntInfoConvForward(int isolate_idx) {
   auto C0_SIZE = IntImm::make(Int(32), 16);
   fractal_int_info_[ATTR_CONV_TILE_N] = floordiv(model_->get_co_isolate_info(isolate_idx).inner, C0_SIZE);
 
@@ -1025,12 +830,12 @@ void Scop::UpdateFractalIntInfoConvForward(int isolate_idx) {
   fractal_int_info_[ATTR_CONV_TILE_M] = floordiv(m + C0_SIZE - 1, C0_SIZE);
   fractal_int_info_[ATTR_CONV_M_INNER] = C0_SIZE;
   fractal_int_info_[ATTR_CONV_M_CUT_SIZE] = model_->get_w_win_isolate_info(isolate_idx).inner;
-  if (!is_dynamic_) {
+  if (!user_config_.GetIsDynamic()) {
     if (IsConvBackpropInput()) {
       CHECK(model_->conv_.filter.kh.as<IntImm>());
       CHECK(model_->conv_.filter.kw.as<IntImm>());
-      matB_dim_h_ = model_->conv_.filter.kh.as<IntImm>()->value;
-      matB_dim_w_ = model_->conv_.filter.kw.as<IntImm>()->value;
+      user_config_.SetMatBDimH(model_->conv_.filter.kh.as<IntImm>()->value);
+      user_config_.SetMatBDimW(model_->conv_.filter.kw.as<IntImm>()->value);
     }
   } else {
     auto tile_h = ExtractExprFromAttrs(ATTR_CONV_TILE_H);
@@ -1047,7 +852,7 @@ void Scop::UpdateFractalIntInfoConvForward(int isolate_idx) {
   }
 }
 
-void Scop::UpdateFractalIntInfoConvBackpropFilter(int isolate_idx) {
+void CubeInfo::UpdateFractalIntInfoConvBackpropFilter(int isolate_idx) {
   // gemm_idx order as follow:
   // for (Ci Cut) {
   //   for (KH Cut) {
@@ -1131,43 +936,14 @@ void Scop::UpdateFractalIntInfoConvBackpropFilter(int isolate_idx) {
   }
 }
 
-void Scop::UpdateFractalIntInfo(int gemm_idx) {
+void CubeInfo::UpdateFractalIntInfo(int gemm_idx) {
   if (IsConvBackpropFilter()) {
-    if (!is_dynamic_) UpdateFractalIntInfoConvBackpropFilter(gemm_idx);
+    if (!user_config_.GetIsDynamic()) {
+      UpdateFractalIntInfoConvBackpropFilter(gemm_idx);
+    }
   } else {
     UpdateFractalIntInfoConvForward(gemm_idx);
   }
-}
-
-Expr Scop::ReplacePragmaPrimeByVar(Expr pragma) {
-  if (is_dynamic_) {
-    if (const auto prime = pragma.as<IntImm>()) {
-      for (auto dim : this->conv_mnk_dims_) {
-        if (dim.pragma.defined() && ((dim.l1_tiling_size == prime->value))) {
-          return RemoveCast(dim.l1_var);
-        } else if (dim.l1_tiling_size / 16 == prime->value) {
-          return floordiv(dim.l1_var + 15, 16);
-        }
-      }
-    }
-  }
-  return pragma;
-}
-
-std::vector<std::vector<int>> Scop::AddTileInfo(const std::vector<std::vector<int>> &partition_info) {
-  std::vector<std::vector<int>> info;
-  PartitionSingle *single = PartitionSingle::getInstance();
-  if (single == nullptr) {
-    return partition_info;
-  } else if (PartitionSingle::getTimes() < 2) {
-    // first time gemm or m isolate main gemm
-    return partition_info;
-  }
-
-  for (auto it : partition_info) {
-    info.push_back(it);
-  }
-  return info;
 }
 
 static bool CompareFootprintOfMaps(const isl::map &local_access, const isl::map &global_access) {
@@ -1181,8 +957,8 @@ static bool CompareFootprintOfMaps(const isl::map &local_access, const isl::map 
   return true;
 }
 
-bool Scop::IsWriteWholeBufferFootPrint(const isl::id &poly_ref_id) const {
-  for (const auto &buffer : active_buffer_footprints_) {
+bool ScopInfo::IsWriteWholeBufferFootPrint(const isl::id &poly_ref_id) const {
+  for (const auto &buffer : analysis_result_.active_buffer_footprints_) {
     auto group = buffer.second.cluster;
     for (const auto &reference : group->tensor_foot_prints) {
       if (reference->id == poly_ref_id) {
@@ -1199,15 +975,15 @@ bool Scop::IsWriteWholeBufferFootPrint(const isl::id &poly_ref_id) const {
  * Checks if a promoted tensor is written conditionally, and there is no other unconditional statement
  * in the same buffer that writes the whole promoted tensor.
  */
-bool Scop::IsConditionalWriteTensor(const std::string &name,
-                                    const std::vector<std::pair<isl::id, isl::id>> &write_stmts) const {
+bool ScopInfo::IsConditionalWriteTensor(const std::string &name,
+                                        const std::vector<std::pair<isl::id, isl::id>> &write_stmts) const {
   bool has_conditional_write = false;
   bool has_unconditional_full_write = false;
   for (const auto &pair : write_stmts) {
     auto stmt_id = pair.first;
     auto poly_ref_id = pair.second;
-    CHECK_GT(data_.statements.count(stmt_id), 0);
-    const Node *stmt = data_.statements.at(stmt_id);
+    CHECK_GT(analysis_result_.GetStatementMap().count(stmt_id), 0);
+    const Node *stmt = analysis_result_.GetStatementMap().at(stmt_id);
     if (stmt->IsInstance<IfThenElse>()) {
       has_conditional_write = true;
     } else if (IsWriteWholeBufferFootPrint(poly_ref_id)) {
@@ -1217,29 +993,30 @@ bool Scop::IsConditionalWriteTensor(const std::string &name,
   return has_conditional_write && !has_unconditional_full_write;
 }
 
-void Scop::FindConditionalWritePromotions() {
+void ScopInfo::CollectConditionalWritePromotions() {
   std::unordered_map<std::string, std::vector<std::pair<isl::id, isl::id>>> tensor_write_stmts_map;
-  data_.writes.foreach_map([&tensor_write_stmts_map](const isl::map &map) -> void {
+  analysis_result_.GetWrites().foreach_map([&tensor_write_stmts_map](const isl::map &map) -> void {
     std::string tensor_name = map.get_tuple_id(isl_dim_out).name();
     isl::id stmt_id = map.domain().unwrap().get_tuple_id(isl_dim_in);
     isl::id poly_ref_id = map.domain().unwrap().get_tuple_id(isl_dim_out);
     tensor_write_stmts_map[tensor_name].push_back(std::make_pair(stmt_id, poly_ref_id));
   });
 
-  for (auto bind : binds_orig_) {
+  auto binds_orig = user_config_.GetOriginBind();
+  for (auto bind : binds_orig) {
     auto name = bind.first->op->name;
     if (tensor_write_stmts_map.count(name) == 0) continue;
     if (IsConditionalWriteTensor(name, tensor_write_stmts_map[name])) {
       LOG(INFO) << "found conditionally written promoted tensor: " << name
                 << ", buffer will be sinked to the computation.";
-      conditional_write_buffer_footprints_.insert(name);
+      analysis_result_.InsertConditionalWriteBufferFootprints(name);
     }
   }
 }
 
-StmtIdHashMap Scop::StmtWriteMap() {
+StmtIdHashMap ScopInfo::StmtWriteMap() {
   StmtIdHashMap stmt_write_map;
-  isl::union_map write_stmt = data_.writes.domain_factor_domain();
+  isl::union_map write_stmt = analysis_result_.GetWrites().domain_factor_domain();
   for (auto stmt : write_stmt.get_map_list()) {
     auto stmtId = stmt.domain().get_tuple_id();
     auto write_tensor = stmt.get_tuple_id(isl_dim_out);
@@ -1248,9 +1025,9 @@ StmtIdHashMap Scop::StmtWriteMap() {
   return stmt_write_map;
 }
 
-StmtIdHashMap Scop::StmtReadMap() {
+StmtIdHashMap ScopInfo::StmtReadMap() {
   StmtIdHashMap stmt_read_map;
-  isl::union_map read_stmt = data_.reads.domain_factor_domain();
+  isl::union_map read_stmt = analysis_result_.GetReads().domain_factor_domain();
   for (auto stmt : read_stmt.get_map_list()) {
     auto stmtId = stmt.domain().get_tuple_id();
     auto read_tensor = stmt.get_tuple_id(isl_dim_out);
@@ -1259,9 +1036,9 @@ StmtIdHashMap Scop::StmtReadMap() {
   return stmt_read_map;
 }
 
-StmtIdHashMap Scop::StmtCopyinMap() {
+StmtIdHashMap ScopInfo::StmtCopyinMap() {
   StmtIdHashMap stmt_copyin_map;
-  isl::union_map copyin_stmt = data_.copyin.domain_factor_domain();
+  isl::union_map copyin_stmt = analysis_result_.GetCopyin().domain_factor_domain();
   for (auto stmt : copyin_stmt.get_map_list()) {
     auto stmtId = stmt.domain().get_tuple_id();
     auto read_tensor = stmt.get_tuple_id(isl_dim_out);
@@ -1270,7 +1047,7 @@ StmtIdHashMap Scop::StmtCopyinMap() {
   return stmt_copyin_map;
 }
 
-bool Scop::IsCopyinTensor(const std::string &tensor_name) {
+bool ScopInfo::IsCopyinTensor(const std::string &tensor_name) {
   CHECK_NE(tensor_name, "");
   StmtIdHashMap copyin_map = StmtCopyinMap();
   for (const auto &item : copyin_map) {
@@ -1281,8 +1058,8 @@ bool Scop::IsCopyinTensor(const std::string &tensor_name) {
   return false;
 }
 
-bool Scop::IsConvHeadTail(const std::string &conv_output, const isl::id &stmtId, const StmtOpInfo &op_info,
-                          const StmtIdHashMap &op_write_map) {
+bool CubeInfo::IsConvHeadTail(const std::string &conv_output, const isl::id &stmtId, const StmtOpInfo &op_info,
+                              const StmtIdHashMap &op_write_map) {
   if (!IsConv()) return false;
 
   if (op_info.isCube || op_info.isCubeAssign) return false;
@@ -1301,17 +1078,17 @@ bool Scop::IsConvHeadTail(const std::string &conv_output, const isl::id &stmtId,
   return false;
 }
 
-void Scop::CreateDataFlowInfo() {
+void ScopInfo::CreateDataFlowInfo() {
   StmtIdHashMap op_write_map = StmtWriteMap();
   StmtIdHashMap op_read_map = StmtReadMap();
   std::string conv_output;
-  if (IsConv()) {
-    conv_output = ConvOutName();
+  if (cube_info_.IsConv()) {
+    conv_output = cube_info_.ConvOutName();
   }
-  uint64_t stmtNum = data_.stmt_op_Info.size();
-  stmt_type_.resize(stmtNum);
+  uint64_t stmtNum = analysis_result_.GetStmtOpInfoMap().size();
+  analysis_result_.stmt_type_.resize(stmtNum);
   DMADataFlow dma_dataflow;
-  for (auto stmt : data_.stmt_op_Info) {
+  for (auto stmt : analysis_result_.GetStmtOpInfoMap()) {
     std::string name = stmt.first.get_name();
     size_t pos = name.find("_");
     CHECK(pos != name.size() - 1);
@@ -1321,208 +1098,73 @@ void Scop::CreateDataFlowInfo() {
     size_t num = strtol(subNum.c_str(), &endptr, radix);
     if (endptr == nullptr || *endptr != '\0') LOG(FATAL) << "failed to convert string " << subNum << " to number";
 
-    if (IsConv() && IsConvHeadTail(conv_output, stmt.first, stmt.second, op_write_map)) {
-      stmt_type_[num] = std::make_pair(stmt.first.get_name(), STMT_OP_TYPE::VECTOR);
+    if (cube_info_.IsConv() && cube_info_.IsConvHeadTail(conv_output, stmt.first, stmt.second, op_write_map)) {
+      analysis_result_.stmt_type_[num] = std::make_pair(stmt.first.get_name(), STMT_OP_TYPE::VECTOR);
       continue;
     }
 
-    if (stmt.second.isCube && IsConv()) {
-      stmt_type_[num] = std::make_pair(stmt.first.get_name(), STMT_OP_TYPE::CUBE_CONV);
+    if (stmt.second.isCube && cube_info_.IsConv()) {
+      analysis_result_.stmt_type_[num] = std::make_pair(stmt.first.get_name(), STMT_OP_TYPE::CUBE_CONV);
       dma_dataflow.CreateStmtDataFlow(STMT_OP_TYPE::CUBE_CONV, stmt.first, stmt.second, op_read_map, op_write_map);
     }
 
-    if (stmt.second.isCube && !IsConv()) {
-      stmt_type_[num] = std::make_pair(stmt.first.get_name(), STMT_OP_TYPE::CUBE_GEMM);
+    if (stmt.second.isCube && !cube_info_.IsConv()) {
+      analysis_result_.stmt_type_[num] = std::make_pair(stmt.first.get_name(), STMT_OP_TYPE::CUBE_GEMM);
       dma_dataflow.CreateStmtDataFlow(STMT_OP_TYPE::CUBE_GEMM, stmt.first, stmt.second, op_read_map, op_write_map);
     }
 
     if (stmt.second.isIm2col || stmt.second.isLoad3d) {
-      stmt_type_[num] = std::make_pair(stmt.first.get_name(), STMT_OP_TYPE::IM2COL_UB);
+      analysis_result_.stmt_type_[num] = std::make_pair(stmt.first.get_name(), STMT_OP_TYPE::IM2COL_UB);
       dma_dataflow.CreateStmtDataFlow(STMT_OP_TYPE::IM2COL_UB, stmt.first, stmt.second, op_read_map, op_write_map);
     }
 
     if (!stmt.second.isCube && !stmt.second.isCubeAssign) {
-      stmt_type_[num] = std::make_pair(stmt.first.get_name(), STMT_OP_TYPE::VECTOR);
+      analysis_result_.stmt_type_[num] = std::make_pair(stmt.first.get_name(), STMT_OP_TYPE::VECTOR);
       dma_dataflow.CreateStmtDataFlow(STMT_OP_TYPE::VECTOR, stmt.first, stmt.second, op_read_map, op_write_map);
     }
 
     if (stmt.second.isCubeAssign) {
-      stmt_type_[num] = std::make_pair(stmt.first.get_name(), STMT_OP_TYPE::VECTOR);
+      analysis_result_.stmt_type_[num] = std::make_pair(stmt.first.get_name(), STMT_OP_TYPE::VECTOR);
     }
   }
   dma_dataflow.FusionAnalysis();
-  dma_dataflow.OpDataflowInfo(tensor_name_flows_, tensor_mem_flows_);
+  std::map<std::string, std::vector<std::string>> tensor_name_flows;
+  std::map<std::string, MemFlow> tensor_mem_flows;
+  dma_dataflow.OpDataflowInfo(tensor_name_flows, tensor_mem_flows);
+  analysis_result_.SetTensorNameFlows(tensor_name_flows);
+  analysis_result_.SetTensorMemFlows(tensor_mem_flows);
 }
 
-void Scop::AddStateTensorsDataFlow() {
-  // build init list
-  // init list   TensorID   input0      DDR --> L1 --> L1 --> L0A
-  //             TensorID   input1      DDR --> L0B
-  //             TensorID   input2      DDR --> UB
-  //             TensorID   output0     DDR <-- UB <-- L0C
-  //             TensorID   max_1       UB  --> DDR
-  // build whole list
-  // add below node
-  //   TensorID  input0_local_L1               L1 --> L1 --> L0A
-  //   TensorID  input0_fractal_L1             L1 --> L0A
-  //   TensorID  input0_fractal_L1_local_L0A   L0A
-  //   TensorID  input1_local_L1_local_L0B     L0B
-  //   TensorID  output0_local_UB               UB <-- L0C
-  //   TensorID  output0_local_UB_local_L0C     L0C
-  //   TensorID  input2_local_UB               UB
-  //   TensorID   max_1_local_UB               UB
-  CHECK_EQ(tensor_mem_flows_.size(), tensor_name_flows_.size());
-  CHECK_GT(tensor_mem_flows_.size(), 0);
-  for (const auto &tensor : tensor_mem_flows_) {
-    std::string name = tensor.first;
-    if (tensor_name_flows_.find(name) == tensor_name_flows_.end()) continue;
-    auto it = std::find(tensor_mem_flows_[name].begin(), tensor_mem_flows_[name].end(), UBL1_);
-    auto it2 = std::find(tensor_mem_flows_[name].begin(), tensor_mem_flows_[name].end(), L1_);
-    if (it != tensor_mem_flows_[name].end() && it2 != tensor_mem_flows_[name].end()) {
-      std::vector<std::string> name_flow1, name_flow2;
-      MemFlow mem_flow1, mem_flow2;
-      if (IsConv() || IsGemm()) {
-        name_flow1.push_back(tensor_name_flows_[name][0]);
-        mem_flow1.push_back(tensor_mem_flows_[name][0]);
-        name_flow1.push_back(tensor_name_flows_[name][2]);
-        mem_flow1.push_back(tensor_mem_flows_[name][2]);
-        name_flow1.push_back(tensor_name_flows_[name][1]);
-        mem_flow1.push_back(tensor_mem_flows_[name][1]);
-
-        name_flow2.push_back(tensor_name_flows_[name][0]);
-        mem_flow2.push_back(tensor_mem_flows_[name][0]);
-        name_flow2.push_back(tensor_name_flows_[name][2]);
-        mem_flow2.push_back(tensor_mem_flows_[name][2]);
-        name_flow2.push_back(tensor_name_flows_[name][3]);
-        mem_flow2.push_back(tensor_mem_flows_[name][3]);
-      }
-      if (IsConv() && IsA(name)) {
-        name_flow2.push_back(tensor_name_flows_[name][4]);
-        mem_flow2.push_back(tensor_mem_flows_[name][4]);
-      }
-
-      AddTensorDataFlow(mem_flow1, name_flow1);
-      AddTensorDataFlow(mem_flow2, name_flow2);
-
-      continue;
+void ScopInfo::AddPartitionInfoToData(const std::vector<std::vector<int>> &partition_info) {
+  for (unsigned int i = 0; i < partition_info.size(); i++) {
+    std::vector<Range> tmp;
+    for (unsigned int j = 1; j < partition_info[i].size(); j++) {
+      cube_info_.RecordRangeAt(i, Range(Expr(partition_info[i][j - 1]), Expr(partition_info[i][j])));
     }
-    AddTensorDataFlow(tensor.second, tensor_name_flows_[name]);
-  }
-
-  size_t length = buffer_def_infos_.size();
-  for (size_t tensor_idx = 0; tensor_idx < length; tensor_idx++) {
-    if (buffer_def_infos_[tensor_idx].data_stream.size() == 1) continue;
-
-    isl::id ancestor_id = buffer_def_infos_[tensor_idx].tensor_id;
-    for (size_t idx = 1; idx < buffer_def_infos_[tensor_idx].data_stream.size(); ++idx) {
-      if (idx + 1 == buffer_def_infos_[tensor_idx].data_stream.size()) continue;
-      std::vector<std::pair<isl::id, MemType>> sub_data_stream = buffer_def_infos_[tensor_idx].PartialDataStream(idx);
-      AddOneBufferDefInfo(ancestor_id, sub_data_stream);
+    if (partition_info[i].size() == 1) {
+      cube_info_.RecordRangeAt(i, Range(Expr(0), Expr(0)));
     }
   }
 }
 
-void Scop::AddOneBufferDefInfo(const isl::id &ancestor_id,
-                               const std::vector<std::pair<isl::id, MemType>> &data_stream) {
-  if (data_stream.empty()) return;
-
-  auto target = data_stream[0];
-  isl::id tensor_id = target.first;
-  MemType mem_type = target.second;
-  isl::id dst_tensorId = isl::id(ctx_, TENSORLISTTAILNAME);
-  MemType dst_mem_type = MemType::DDR;
-  if (0 < data_stream.size() - 1) {
-    dst_tensorId = data_stream[1].first;
-    dst_mem_type = data_stream[1].second;
+void CubeInfo::ComputeByPassL1() {
+  if (user_config_.GetByPassL1() == 0) {
+    int value = ExtractIntFromAttrs(ATTR_CONV_BYPASS_L1);
+    if (value >= 0) {
+      user_config_.SetByPassL1(value);
+    }
   }
-
-  MemFlow mem_flow;
-  for (const auto &item : data_stream) {
-    mem_flow.push_back(item.second);
+  if (!IsFilterCanByPass()) {
+    user_config_.SetByPassL1(0);
   }
-  std::string mark_tag = TensorMarkTag(dst_mem_type, mem_flow);
-  if (mark_tag.empty()) return;
-
-  std::vector<size_t> sizes;
-  BufferDefInfo promoted_info = BufferDefInfo{tensor_id,
-                                              dst_tensorId,
-                                              ancestor_id,
-                                              mem_type,
-                                              mark_tag,
-                                              false,
-                                              false,
-                                              data_stream,
-                                              Tensor(),
-                                              Handle(),
-                                              sizes,
-                                              nullptr,
-                                              isl::union_map::empty(CreateParamsSpace(ctx_))};
-  MakeBufferFootprintCluster(promoted_info);
-  buffer_def_infos_.push_back(promoted_info);
 }
 
-void Scop::AddTensorDataFlow(const std::vector<MemType> &memflow, const std::vector<std::string> &nameflow) {
-  CHECK(memflow.size() == nameflow.size());
-  uint64_t i = 0;
-  /*********************************************
-   *
-   * init mem_type:        DDR
-   * init tensor_id:       input0
-   * init dst_tensorId:    input0_local_L1
-   * init ancestor_id:     input0
-   *
-   * init mark_tag:        base on dst_tensorId mem_type, realize_L1
-   * init data_stream:     input0 --> input0_local_L1 --> input0_fractal_L1 --> input0_fractal_L1_local_L0A
-   **********************************************/
-  std::string tensor_name = nameflow[i];
-  MemType mem_type = memflow[i];
-
-  isl::id tensor_id = isl::id(ctx_, tensor_name);
-  isl::id ancestor_id = tensor_id;
-  isl::id dst_tensorId = isl::id(ctx_, tensor_name);
-  if (i < nameflow.size() - 1) {
-    std::string dst_tensor_name = nameflow[i + 1];
-    dst_tensorId = isl::id(ctx_, dst_tensor_name);
-  }
-  std::vector<std::pair<isl::id, MemType>> data_stream;
-
-  for (size_t j = i; j < nameflow.size(); j++) {
-    std::string tmp_name = nameflow[j];
-    isl::id tmp_id = isl::id(ctx_, tmp_name);
-    MemType tmp_mem_type = memflow[j];
-    data_stream.emplace_back(std::make_pair(tmp_id, tmp_mem_type));
-  }
-  MemType dst_mem_type = MemType::DDR;
-  if (data_stream.size() > 1) {
-    dst_mem_type = data_stream[1].second;
-  }
-  std::string mark_tag = TensorMarkTag(dst_mem_type, memflow);
-  if (IsIm2col() && mark_tag == REALIZE_L1) {
-    mark_tag = REALIZE_UB;
-  }
-
-  bool isCopyin = IsCopyinTensor(tensor_id.get_name());
-  if (!isCopyin && dst_mem_type == MemType::UBL1_) {
-    mark_tag = REALIZE_L1UBL1;
-  }
-
-  std::vector<size_t> sizes;
-  bool is_bind_tensor = true;
-  BufferDefInfo promoted_info = BufferDefInfo{tensor_id,
-                                              dst_tensorId,
-                                              ancestor_id,
-                                              mem_type,
-                                              mark_tag,
-                                              false,
-                                              is_bind_tensor,
-                                              data_stream,
-                                              Tensor(),
-                                              Handle(),
-                                              sizes,
-                                              nullptr,
-                                              isl::union_map::empty(CreateParamsSpace(ctx_))};
-  MakeBufferFootprintCluster(promoted_info);
-  buffer_def_infos_.push_back(promoted_info);
+void GatherVars(const Expr &expr, std::unordered_set<Var, air::NodeHash, air::NodeEqual> *vset) {
+  PostOrderVisit(expr, [&vset](const NodeRef &node) {
+    if (node.as<Variable>()) {
+      vset->insert(Downcast<Var>(node));
+    }
+  });
 }
 
 void GatherVarNames(const Expr &expr, CondVarsMap &cond_vars, const isl::id &id) {
@@ -1533,9 +1175,9 @@ void GatherVarNames(const Expr &expr, CondVarsMap &cond_vars, const isl::id &id)
   }
 }
 
-CondVarsMap Scop::ExtractCondVarsMap() const {
+CondVarsMap AnalysisResult::GetCondVarsMap() {
   CondVarsMap cond_vars;
-  for (const auto &pair : data_.statements) {
+  for (const auto &pair : statements_) {
     const isl::id &id = pair.first;
     const Node *stmt = pair.second;
     CHECK(stmt);
@@ -1554,27 +1196,109 @@ CondVarsMap Scop::ExtractCondVarsMap() const {
   return cond_vars;
 }
 
-void Scop::AddPartitionInfoToData(const std::vector<std::vector<int>> &partition_info) {
-  for (unsigned int i = 0; i < partition_info.size(); i++) {
-    std::vector<Range> tmp;
-    data_.range_info.push_back(tmp);
-    for (unsigned int j = 1; j < partition_info[i].size(); j++) {
-      data_.range_info[i].push_back(Range(Expr(partition_info[i][j - 1]), Expr(partition_info[i][j])));
+const BufferDefInfo &AnalysisResult::GetBufferDefInfo(const isl::id &tensor_id) const {
+  for (const auto &idx : BufferDefInfos()) {
+    if (idx.dst_tensor_id.get_name() == tensor_id.get_name()) {
+      return idx;
     }
-    if (partition_info[i].size() == 1) {
-      data_.range_info[i].push_back(Range(Expr(0), Expr(0)));
+  }
+  LOG(FATAL) << "Hoist footprint of tensor " << tensor_id << " has no buffer definition";
+  return default_buffer_def_info_;
+}
+
+int AnalysisResult::CountBufferDefInfo(const isl::id &tensor_id) const {
+  int num = 0;
+  for (const auto &tensorIter : BufferDefInfos()) {
+    if (tensorIter.dst_tensor_id.get_name() == tensor_id.get_name()) {
+      num++;
     }
+  }
+  return num;
+}
+
+bool AnalysisResult::HasBufferDefInfo(const isl::id &tensor_id) const {
+  for (const auto &idx : BufferDefInfos()) {
+    if (idx.dst_tensor_id.get_name() == tensor_id.get_name()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+static std::string MemTypeToString(const MemType &memType) {
+  switch (memType) {
+    case MemType::UB_:
+      return "UB";
+    case MemType::L1_:
+      return "L1";
+    case MemType::UBL0_:
+      return "UBL0";
+    case MemType::UBL1_:
+      return "UBL1";
+    case MemType::L0A_:
+      return "L0A";
+    case MemType::L0B_:
+      return "L0B";
+    case MemType::L0C_:
+      return "L0C";
+    case MemType::DDR:
+      return "GM";
+    default:
+      return "";
   }
 }
 
-void Scop::ComputeByPassL1() {
-  if (bypassL1_ == 0) {
-    int value = ExtractIntFromAttrs(ATTR_CONV_BYPASS_L1);
-    if (value >= 0) {
-      bypassL1_ = value;
-    }
+std::string ScopInfo::GetIslReadName(const isl::id &cluster_id) {
+  auto tensor_info = analysis_result_.GetBufferDefInfo(cluster_id);
+  MemType memType = tensor_info.SrcMemType();
+  return MemTypeToString(memType) + "read";
+}
+
+std::string ScopInfo::GetIslWriteName(const isl::id &cluster_id) {
+  if (analysis_result_.HasBufferDefInfo(cluster_id)) {
+    auto tensor_info = analysis_result_.GetBufferDefInfo(cluster_id);
+    MemType memType = tensor_info.DstMemType();
+    return MemTypeToString(memType) + "write";
   }
-  bypassL1_ = (IsFilterCanByPass()) ? bypassL1_ : 0;
+  return MemTypeToString(MemType::DDR) + "write";
+}
+
+std::string TensorMarkTag(MemType mem_type, MemFlow mem_flow) {
+  /******************************
+   *  This interface is used to convert tensor MemType to isl schedule tree mark_tag,
+   *  used to record the extension position for each tensor in isl schedule tree.
+   *  Now REALIZE_L1/REALIZE_L0/REALIZE_UB mark_tag is equal to its MemType.
+   *  For mem_type is DDR, mark_tag is empty string "".
+   * */
+  switch (mem_type) {
+    case MemType::L1_:
+      if (mem_flow.size() == 3 && mem_flow[0] == MemType::DDR && mem_flow[1] == MemType::L1_ &&
+          mem_flow[2] == MemType::UBL1_)
+        return REALIZE_L1UBL1;
+      return REALIZE_L1;
+    case MemType::UB_:
+      // ordinary conv condition no fusion
+      if (mem_flow.size() == 3 && mem_flow[0] == MemType::DDR && mem_flow[1] == mem_type &&
+          mem_flow[2] == MemType::L0C_)
+        return REALIZE_L0;
+      return REALIZE_UB;
+    case MemType::L0A_:
+      return REALIZE_L0;
+    case MemType::L0B_:
+      return REALIZE_L0;
+    case MemType::L0C_:
+      return REALIZE_L0;
+    case MemType::UBL0_:
+      return REALIZE_UBL0;
+    case MemType::UBL1_:
+      if (mem_flow.size() == 2 && mem_flow[0] == MemType::DDR && mem_flow[1] == MemType::UBL1_) return REALIZE_L1;
+      return REALIZE_UBL1;
+    case MemType::DDR:
+      return "";
+    default:
+      LOG(FATAL) << "undefined mem_type " << mem_type;
+      return "";
+  }
 }
 
 }  // namespace poly

@@ -18,7 +18,7 @@
 #include <pass/expr_alg_simplify.h>
 
 #include <utility>
-#include "scop.h"
+#include "scop_info.h"
 
 namespace akg {
 namespace ir {
@@ -123,8 +123,8 @@ class ParameterizingTiling : public IRMutator {
   }
 };
 
-void Scop::Full2PartialDynamic(std::unordered_map<std::string, Expr> &params_map,
-                               const Map<std::string, NodeRef> &attr_info) {
+void Full2PartialDynamic(std::unordered_map<std::string, Expr> &params_map,
+                         const Map<std::string, NodeRef> &attr_info) {
   int64_t kh = default_kernel_h;
   int64_t kw = default_kernel_w;
   int64_t pt = 1;
@@ -183,52 +183,27 @@ void Scop::Full2PartialDynamic(std::unordered_map<std::string, Expr> &params_map
   if (tile_ko > 0) params_map.insert(std::make_pair("T0_0_KO", Expr((int32_t)tile_ko)));
 }
 
-Stmt Scop::RestoreCombinedParams(Stmt stmt) {
-  stmt = RestoreCombinedParamsMutator(params_rev_map_).Mutate(stmt);
-  if (IsConv() && !is_spec_gemm_) {
-    stmt = RestoreConstToMinMutator().Mutate(stmt);
-  }
-  stmt = ReplacePrimesWithParameters(stmt);
-  if (tile_size_is_var_) {
-    if (is_spec_gemm_) {
-      std::unordered_map<std::string, Expr> params_map;
-      params_map.insert(std::make_pair(
-        "MO", floordiv(min(Var("T1_0_H"), floordiv(Var("H") + Var("PT") + Var("PB") - Var("KH"), Var("SH")) -
-                                            Var("cc2") * Var("T1_0_H") + 1) *
-                           min(Var("T1_0_W"), floordiv(Var("W") + Var("PL") + Var("PR") - Var("KW"), Var("SW")) -
-                                                Var("cc3") * Var("T1_0_W") + 1) +
-                         15,
-                       Expr(16))));
-      params_map.insert(std::make_pair("KO", Expr(128 * 11 * 31)));
-      params_map.insert(std::make_pair("NO", min(Var("T1_0_C1"), (Var("CO1") - Var("cc1") * Var("T1_0_C1")))));
-      stmt = RestoreCombinedParamsMutator(params_map).Mutate(stmt);
-    } else if (!dynamic_shape_conv_full_parametric_) {
-      std::unordered_map<std::string, Expr> params_map;
-      Full2PartialDynamic(params_map, attr_info_);
-      stmt = RestoreCombinedParamsMutator(params_map).Mutate(stmt);
-    }
-  }
-  stmt = AddTilingStrategyApplet(stmt);
-  stmt = air::ir::MergeNest(outer_let_stmts_, stmt);
-  return stmt;
-}
-
-Stmt Scop::AddTilingStrategyApplet(Stmt stmt) {
-  for (auto info = tiling_constraints_.rbegin(); info != tiling_constraints_.rend(); ++info) {
-    if (info->type_key == "AttrStmt") {
-      auto attr_key = info->key.as<StringImm>();
+Stmt AddTilingStrategyApplet(ScopInfo &scop_info, Stmt stmt) {
+  auto tile_constraints = scop_info.analysis_result_.GetTileConstraints();
+  for (auto constraint = tile_constraints.rbegin(); constraint != tile_constraints.rend(); ++constraint) {
+    if (constraint->type_key == "AttrStmt") {
+      auto attr_key = constraint->key.as<StringImm>();
       CHECK(attr_key);
-      stmt = AttrStmt::make(make_zero(Int(32)), attr_key->value, info->value, stmt);
-    } else if (info->type_key == "LetStmt") {
-      stmt = LetStmt::make(air::Downcast<Var>(info->key), info->value, stmt);
+      stmt = AttrStmt::make(make_zero(Int(32)), attr_key->value, constraint->value, stmt);
+    } else if (constraint->type_key == "LetStmt") {
+      stmt = LetStmt::make(air::Downcast<Var>(constraint->key), constraint->value, stmt);
     } else {
-      LOG(FATAL) << "Unsupported type_key for now: " << info->type_key;
+      LOG(FATAL) << "Unsupported type_key for now: " << constraint->type_key;
     }
   }
   return stmt;
 }
 
-void Scop::InsertPairsSpecGemmTileVar(std::map<int64_t, Expr> &param_map) {
+// Prime numbers for prime-param replacement
+constexpr int PRIME_1 = 53;
+constexpr int PRIME_2 = 59;
+constexpr int PRIME_3 = 61;
+void InsertPairsSpecGemmTileVar(std::map<int64_t, Expr> &param_map) {
   const int t0_mo = PRIME_1;
   const int t0_ko = PRIME_2;
   const int t0_no = PRIME_3;
@@ -240,31 +215,31 @@ void Scop::InsertPairsSpecGemmTileVar(std::map<int64_t, Expr> &param_map) {
   param_map.insert(std::make_pair(static_cast<int64_t>(t0_no * 16), Var("T0_0_NO") * 16));
 }
 
-void Scop::InsertPairsConvTileVar(Stmt &stmt, std::map<int64_t, Expr> &param_map) {
+void InsertPairsConvTileVar(Stmt &stmt, ScopInfo &scop_info, std::map<int64_t, Expr> &param_map) {
   // tile size
-  const int t1_c1 = GetAttrValue(ATTR_CONV_TILE_CO) / 16;
-  const int h_cut = GetAttrValue(ATTR_CONV_TILE_H);
-  const int w_cut = GetAttrValue(ATTR_CONV_TILE_W);
+  const int t1_c1 = scop_info.cube_info_.GetAttrValue(ATTR_CONV_TILE_CO) / 16;
+  const int h_cut = scop_info.cube_info_.GetAttrValue(ATTR_CONV_TILE_H);
+  const int w_cut = scop_info.cube_info_.GetAttrValue(ATTR_CONV_TILE_W);
 
-  const int t0_m = GetAttrValue(ATTR_CONV_TILE_M);
-  const int t0_k = GetAttrValue(ATTR_CONV_TILE_K);
-  const int t0_n = GetAttrValue(ATTR_CONV_TILE_N);
+  const int t0_m = scop_info.cube_info_.GetAttrValue(ATTR_CONV_TILE_M);
+  const int t0_k = scop_info.cube_info_.GetAttrValue(ATTR_CONV_TILE_K);
+  const int t0_n = scop_info.cube_info_.GetAttrValue(ATTR_CONV_TILE_N);
 
   const int ci1 = 128;
 
   // kernel
-  const int k_h = GetAttrValue(ATTR_CONV_KERNEL_H);
-  const int k_w = GetAttrValue(ATTR_CONV_KERNEL_W);
+  const int k_h = scop_info.cube_info_.GetAttrValue(ATTR_CONV_KERNEL_H);
+  const int k_w = scop_info.cube_info_.GetAttrValue(ATTR_CONV_KERNEL_W);
 
   // pad
-  const int p_t = GetAttrValue(ATTR_CONV_PAD_TOP);
-  const int p_b = GetAttrValue(ATTR_CONV_PAD_BOTTOM);
-  const int p_l = GetAttrValue(ATTR_CONV_PAD_LEFT);
-  const int p_r = GetAttrValue(ATTR_CONV_PAD_RIGHT);
+  const int p_t = scop_info.cube_info_.GetAttrValue(ATTR_CONV_PAD_TOP);
+  const int p_b = scop_info.cube_info_.GetAttrValue(ATTR_CONV_PAD_BOTTOM);
+  const int p_l = scop_info.cube_info_.GetAttrValue(ATTR_CONV_PAD_LEFT);
+  const int p_r = scop_info.cube_info_.GetAttrValue(ATTR_CONV_PAD_RIGHT);
 
   // stride
-  const int s_h = GetAttrValue(ATTR_CONV_STRIDE_H);
-  const int s_w = GetAttrValue(ATTR_CONV_STRIDE_W);
+  const int s_h = scop_info.cube_info_.GetAttrValue(ATTR_CONV_STRIDE_H);
+  const int s_w = scop_info.cube_info_.GetAttrValue(ATTR_CONV_STRIDE_W);
 
   const int t1_h = (h_cut - k_h) / s_h + 1;
   const int t1_w = (w_cut - k_w) / s_w + 1;
@@ -285,7 +260,7 @@ void Scop::InsertPairsConvTileVar(Stmt &stmt, std::map<int64_t, Expr> &param_map
   auto PL = Var("PL");
   auto PR = Var("PR");
 
-  if (dynamic_shape_conv_full_parametric_) {
+  if (scop_info.user_config_.GetDynamicShapeConvFullParametric()) {
     stmt = AttrStmt::make(make_zero(Int(32)), "[MemoryLimit_L1]", T1_0_C1 <= 4, stmt);
     stmt = AttrStmt::make(make_zero(Int(32)), "[MemoryLimit_L1]", T1_0_H <= 18, stmt);
     stmt = AttrStmt::make(make_zero(Int(32)), "[MemoryLimit_L1]", T1_0_W <= 1, stmt);
@@ -365,14 +340,14 @@ void Scop::InsertPairsConvTileVar(Stmt &stmt, std::map<int64_t, Expr> &param_map
   param_map.insert(std::make_pair(static_cast<int64_t>((t1_w - 1) * s_w + k_w - 1), (T1_0_W - 1) * SW + KW - 1));
 }
 
-void Scop::InsertRange(std::map<int64_t, Expr> &param_map, const std::pair<int64_t, Expr> &item) {
+void InsertRange(std::map<int64_t, Expr> &param_map, const std::pair<int64_t, Expr> &item) {
   param_map.insert(std::make_pair(-item.first, CanonicalSimplify(-1 * item.second)));
   param_map.insert(std::make_pair(item.first, CanonicalSimplify(item.second)));
   param_map.insert(std::make_pair(item.first - 1, CanonicalSimplify(item.second - 1)));
 }
 
-void Scop::InsertPairsSpecGemmOrConv(Stmt &stmt, std::map<int64_t, Expr> &param_map) {
-  for (const auto &dims : dim_infos_) {
+void InsertPairsSpecGemmOrConv(Stmt &stmt, ScopInfo &scop_info, std::map<int64_t, Expr> &param_map) {
+  for (const auto &dims : scop_info.analysis_result_.GetTileSizes()) {
     if (dims.l1_var.defined()) {
       InsertRange(param_map, std::make_pair(dims.l1_tiling_size, dims.l1_var));
       param_map.insert(std::make_pair(dims.l1_tiling_size * 16, dims.l1_var * 16));
@@ -385,7 +360,8 @@ void Scop::InsertPairsSpecGemmOrConv(Stmt &stmt, std::map<int64_t, Expr> &param_
   Expr m_size_expr = 1;
   int64_t t0_mo = 1;
   Expr t0_mo_expr = 1;
-  for (const auto &dims : conv_mnk_dims_) {
+  auto conv_mnk_dims = scop_info.cube_info_.GetConvMNKDims();
+  for (const auto &dims : conv_mnk_dims) {
     if (dims.axis == ATTR_CONV_TILE_M || dims.axis == ATTR_CONV_TILE_N || dims.axis == ATTR_CONV_TILE_K) {
       if (dims.l0_var.defined()) {
         if (!dims.l0_var.as<IntImm>()) {
@@ -429,8 +405,8 @@ void Scop::InsertPairsSpecGemmOrConv(Stmt &stmt, std::map<int64_t, Expr> &param_
   }
 }
 
-void Scop::InsertPairs(Stmt &stmt, std::map<int64_t, Expr> &param_map) {
-  for (const auto &dims : dim_infos_) {
+void InsertPairs(Stmt &stmt, ScopInfo &scop_info, std::map<int64_t, Expr> &param_map) {
+  for (const auto &dims : scop_info.analysis_result_.GetTileSizes()) {
     if (dims.l1_var.defined()) {
       if (dims.pragma.defined()) {
         // pragma defined is used for special axes like shift axis
@@ -468,23 +444,54 @@ void Scop::InsertPairs(Stmt &stmt, std::map<int64_t, Expr> &param_map) {
   }
 }
 
-Stmt Scop::ReplacePrimesWithParameters(Stmt stmt) {
+Stmt ReplacePrimesWithParameters(Stmt stmt, ScopInfo &scop_info) {
   std::map<int64_t, Expr> param_map;
-  if (is_spec_gemm_ || IsConv()) {
-    if (tile_size_is_var_) {
-      if (is_spec_gemm_) {
+  if (scop_info.cube_info_.IsSpecGemm() || scop_info.cube_info_.IsConv()) {
+    if (scop_info.user_config_.GetTileSizeIsVar()) {
+      if (scop_info.cube_info_.IsSpecGemm()) {
         InsertPairsSpecGemmTileVar(param_map);
       } else {
-        InsertPairsConvTileVar(stmt, param_map);
+        InsertPairsConvTileVar(stmt, scop_info, param_map);
       }
     } else {
-      InsertPairsSpecGemmOrConv(stmt, param_map);
+      InsertPairsSpecGemmOrConv(stmt, scop_info, param_map);
     }
   } else {
-    InsertPairs(stmt, param_map);
+    InsertPairs(stmt, scop_info, param_map);
   }
-  param_tiling_map_ = param_map;
+  scop_info.user_config_.SetParamTilingMap(param_map);
   stmt = ParameterizingTiling(param_map).Mutate(stmt);
+  return stmt;
+}
+
+Stmt RestoreCombinedParams(Stmt stmt, ScopInfo &scop_info) {
+  if (scop_info.cube_info_.IsConv() && !scop_info.cube_info_.IsSpecGemm()) {
+    stmt = RestoreConstToMinMutator().Mutate(stmt);
+  }
+  stmt = ReplacePrimesWithParameters(stmt, scop_info);
+  if (scop_info.user_config_.GetTileSizeIsVar()) {
+    if (scop_info.cube_info_.IsSpecGemm()) {
+      std::unordered_map<std::string, Expr> params_map;
+      params_map.insert(std::make_pair(
+        "MO", floordiv(min(Var("T1_0_H"), floordiv(Var("H") + Var("PT") + Var("PB") - Var("KH"), Var("SH")) -
+                                            Var("cc2") * Var("T1_0_H") + 1) *
+                           min(Var("T1_0_W"), floordiv(Var("W") + Var("PL") + Var("PR") - Var("KW"), Var("SW")) -
+                                                Var("cc3") * Var("T1_0_W") + 1) +
+                         15,
+                       Expr(16))));
+      params_map.insert(std::make_pair("KO", Expr(128 * 11 * 31)));
+      params_map.insert(std::make_pair("NO", min(Var("T1_0_C1"), (Var("CO1") - Var("cc1") * Var("T1_0_C1")))));
+      stmt = RestoreCombinedParamsMutator(params_map).Mutate(stmt);
+    } else if (!scop_info.user_config_.GetDynamicShapeConvFullParametric()) {
+      std::unordered_map<std::string, Expr> params_map;
+      Full2PartialDynamic(params_map, scop_info.cube_info_.GetConvAttrInfo());
+      stmt = RestoreCombinedParamsMutator(params_map).Mutate(stmt);
+    }
+  }
+  stmt = AddTilingStrategyApplet(scop_info, stmt);
+  stmt = air::ir::MergeNest(scop_info.user_config_.GetOuterLetStmts(), stmt);
+  auto params_rev_map = scop_info.user_config_.GetParamsRevMap();
+  stmt = RestoreCombinedParamsMutator(params_rev_map).Mutate(stmt);
   return stmt;
 }
 

@@ -13,20 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #ifndef POLY_DMA_INJECT_H_
 #define POLY_DMA_INJECT_H_
 
-#pragma once
 #include <isl/constraint.h>
-#include <iostream>
-#include <unordered_map>
-#include <unordered_set>
-#include <utility>
-#include <vector>
-#include <string>
 #include <memory>
 #include "poly/isl.h"
-#include "poly/scop.h"
+#include "poly/scop_info.h"
 
 namespace akg {
 namespace ir {
@@ -177,30 +171,36 @@ std::vector<int> ExpandInvalidDims(const std::vector<int> &invalid_dims, const i
                                    int &first_invalid_domain_dim);
 isl::multi_aff ComputeBufferFootprint(const isl::map &access, const ScopedFootprint &foot_print);
 
-isl::schedule_node PlaceDataCopyBelowImpl(Scop &scop, isl::schedule_node tree, const TensorFootprintCluster &cluster,
-                                          const isl::map &buffer_footprint, const isl::id &tensor_id,
-                                          const isl::set &original_elements, const isl::map &exact_reads,
-                                          const isl::map &exact_writes);
+isl::schedule_node PlaceDataCopyBelowImpl(ScopInfo &scop_info, isl::schedule_node tree,
+                                          const TensorFootprintCluster &cluster, const isl::map &buffer_footprint,
+                                          const isl::id &tensor_id, const isl::set &original_elements,
+                                          const isl::map &exact_reads, const isl::map &exact_writes,
+                                          const isl::union_map &sch);
 
-void PlaceDataCopyBelowImplReadWrite(Scop &scop, isl::schedule_node &tree, const TensorFootprintCluster &cluster,
-                                     const isl::map &footprint, const isl::id &tensor_id,
-                                     const isl::set &original_elements, const isl::map &exact_writes,
-                                     isl::map &read_extension, isl::set &buffered_footprint, const isl::id &cluster_id,
-                                     isl::map &extension_map, isl::id &read_id);
+void PlaceDataCopyBelowImplReadWrite(ScopInfo &scop_info, isl::schedule_node &tree,
+                                     const TensorFootprintCluster &cluster, const isl::map &footprint,
+                                     const isl::id &tensor_id, const isl::set &original_elements,
+                                     const isl::map &exact_writes, isl::map &read_extension,
+                                     isl::set &buffered_footprint, const isl::id &cluster_id, isl::map &extension_map,
+                                     isl::id &read_id);
 
-void PlaceDataCopyBelowImplFakeReads(Scop &scop, isl::schedule_node &tree, const TensorFootprintCluster &cluster,
-                                     isl::map &read_extension, const isl::id &cluster_id);
+void PlaceDataCopyBelowImplFakeReads(ScopInfo &scop_info, isl::schedule_node &tree,
+                                     const TensorFootprintCluster &cluster, isl::map &read_extension,
+                                     const isl::id &cluster_id, const isl::union_map &sch);
 
-isl::schedule_node PlaceInnerDataCopyBelow(Scop &scop, const isl::schedule_node &tree,
+isl::schedule_node PlaceInnerDataCopyBelow(ScopInfo &scop_info, const isl::schedule_node &tree,
                                            const TensorFootprintCluster &cluster,
                                            const TensorFootprintCluster &outer_scope_cluster, const isl::id &tensor_id,
-                                           const isl::id &cluster_id, const isl::id &outer_scope_cluster_id);
+                                           const isl::id &cluster_id, const isl::id &outer_scope_cluster_id,
+                                           const isl::union_map &sch);
 
-isl::schedule_node PlaceOuterDataCopyBelow(Scop &scop, const isl::schedule_node &tree,
+isl::schedule_node PlaceOuterDataCopyBelow(ScopInfo &scop_info, const isl::schedule_node &tree,
                                            const TensorFootprintCluster &cluster, const isl::id &tensor_id,
-                                           const isl::id &cluster_id);
+                                           const isl::id &cluster_id, const isl::union_map &sch,
+                                           const isl::space &sch_space);
 
-isl::schedule_node PlaceIm2colBelow(Scop &scop, const isl::schedule_node &tree, const TensorFootprintCluster &cluster,
+isl::schedule_node PlaceIm2colBelow(ScopInfo &scop_info, const isl::schedule_node &tree,
+                                    const TensorFootprintCluster &cluster,
                                     const TensorFootprintCluster &outer_scope_cluster, const isl::id &cluster_id,
                                     const isl::id &outer_scope_cluster_id);
 
@@ -210,7 +210,7 @@ class AffineBase {
  public:
   virtual ~AffineBase() = default;
   virtual isl::map ConstructAffine(isl::map original) = 0;
-  virtual bool NotNeedConstruct(std::string name, Scop &scop) = 0;
+  virtual bool NotNeedConstruct(std::string name, ScopInfo &scop_info) = 0;
 };
 
 class GemmInnerTransposeAffine : public AffineBase {
@@ -221,13 +221,13 @@ class GemmInnerTransposeAffine : public AffineBase {
   isl::map ConstructAffine(isl::map original_map) final;
   void SetRightMatrix(AffineTensor v) { is_right_matrix_ = v; }
 
-  bool NotNeedConstruct(std::string name, Scop &scop) override {
+  bool NotNeedConstruct(std::string name, ScopInfo &scop_info) override {
     // right matrix filter !B tensor
-    if (is_right_matrix_ == AffineTensor::RIGHT_TENSOR && !scop.IsB(name)) {
+    if (is_right_matrix_ == AffineTensor::RIGHT_TENSOR && !scop_info.cube_info_.IsB(name)) {
       return true;
     }
     // left matrix filter !A tensor
-    if (is_right_matrix_ == AffineTensor::LEFT_TENSOR && !scop.IsA(name)) {
+    if (is_right_matrix_ == AffineTensor::LEFT_TENSOR && !scop_info.cube_info_.IsA(name)) {
       return true;
     }
     return false;
@@ -246,13 +246,13 @@ class GemmTransposeAffine : public AffineBase {
 
   void SetRightMatrix(AffineTensor v) { is_right_matrix_ = v; }
 
-  bool NotNeedConstruct(std::string name, Scop &scop) override {
+  bool NotNeedConstruct(std::string name, ScopInfo &scop_info) override {
     // right matrix filter !B tensor
-    if (is_right_matrix_ == AffineTensor::RIGHT_TENSOR && !scop.IsB(name)) {
+    if (is_right_matrix_ == AffineTensor::RIGHT_TENSOR && !scop_info.cube_info_.IsB(name)) {
       return true;
     }
     // left matrix filter !A tensor
-    if (is_right_matrix_ == AffineTensor::LEFT_TENSOR && !scop.IsA(name)) {
+    if (is_right_matrix_ == AffineTensor::LEFT_TENSOR && !scop_info.cube_info_.IsA(name)) {
       return true;
     }
     return false;
@@ -271,17 +271,17 @@ class GemmTransposeBlockAffine : public AffineBase {
 
   void SetRightMatrix(AffineTensor v) { is_right_matrix_ = v; }
 
-  bool NotNeedConstruct(std::string name, Scop &scop) override {
+  bool NotNeedConstruct(std::string name, ScopInfo &scop_info) override {
     // right matrix filter !B tensor
-    if (AffineTensor::RIGHT_TENSOR == is_right_matrix_ && !scop.IsB(name)) {
+    if (AffineTensor::RIGHT_TENSOR == is_right_matrix_ && !scop_info.cube_info_.IsB(name)) {
       return true;
     }
     // left matrix filter !A tensor
-    if (is_right_matrix_ == AffineTensor::LEFT_TENSOR && !scop.IsA(name)) {
+    if (is_right_matrix_ == AffineTensor::LEFT_TENSOR && !scop_info.cube_info_.IsA(name)) {
       return true;
     }
 
-    if (AffineTensor::OUT_TENSOR == is_right_matrix_ && !scop.IsC(name)) {
+    if (AffineTensor::OUT_TENSOR == is_right_matrix_ && !scop_info.cube_info_.IsC(name)) {
       return true;
     }
 
@@ -302,8 +302,8 @@ class Im2colAffine : public AffineBase {
   void ConstructAffineMap(isl::map &footprint, std::vector<isl::aff> &v_aff_x, std::vector<isl::aff> &v_aff_y,
                           const isl::map &original_map, isl::local_space &ls);
 
-  bool NotNeedConstruct(std::string name, Scop &scop) override {
-    if (!scop.IsA(name)) {
+  bool NotNeedConstruct(std::string name, ScopInfo &scop_info) override {
+    if (!scop_info.cube_info_.IsA(name)) {
       return true;
     }
     return false;
@@ -319,8 +319,8 @@ class WeightAffine : public AffineBase {
 
   isl::map ConstructAffine(isl::map original_map) final;
 
-  bool NotNeedConstruct(std::string name, Scop &scop) override {
-    if (!scop.IsB(name)) {
+  bool NotNeedConstruct(std::string name, ScopInfo &scop_info) override {
+    if (!scop_info.cube_info_.IsB(name)) {
       return true;
     }
     return false;
@@ -339,8 +339,8 @@ class FractalAffine : public AffineBase {
   void ConstructAffineMap(isl::map &footprint, std::vector<isl::aff> &v_aff_x, std::vector<isl::aff> &v_aff_y,
                           const isl::map &original_map, isl::local_space &ls);
 
-  bool NotNeedConstruct(std::string name, Scop &scop) override {
-    if (!scop.IsA(name)) {
+  bool NotNeedConstruct(std::string name, ScopInfo &scop_info) override {
+    if (!scop_info.cube_info_.IsA(name)) {
       return true;
     }
     return false;
@@ -371,7 +371,7 @@ class AffineRefGroupConstructor {
 
   void create();
 
-  std::unique_ptr<TensorFootprintCluster> ConstructRefGroup(Scop &scop, const isl::union_map &accesses,
+  std::unique_ptr<TensorFootprintCluster> ConstructRefGroup(ScopInfo &scop_info, const isl::union_map &accesses,
                                                             const isl::union_set &domain,
                                                             const isl::union_map &schedule, ReferenceType type);
 
@@ -391,7 +391,7 @@ class AffineRefGroupConstructor {
   AffineType type_ = AffineType::AFFINE_GEMM;
 };
 
-std::unique_ptr<TensorFootprintCluster> ConstructAffineFpCluster(Scop &scop, const isl::union_map &accesses,
+std::unique_ptr<TensorFootprintCluster> ConstructAffineFpCluster(ScopInfo &info, const isl::union_map &accesses,
                                                                  const isl::union_set &domain,
                                                                  const isl::union_map &schedule, ReferenceType type,
                                                                  AffineType affine_type,

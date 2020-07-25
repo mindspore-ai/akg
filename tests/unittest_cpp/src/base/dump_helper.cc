@@ -21,9 +21,7 @@
 namespace akg {
 const std::string UTRegxMatch::pattern_hex_ = "0[xX][0-9a-fA-F]+";
 
-bool UTRegxMatch::RegxMatchHex(const std::string &str) {
-  return std::regex_match(str, std::regex(pattern_hex_));
-}
+bool UTRegxMatch::RegxMatchHex(const std::string &str) { return std::regex_match(str, std::regex(pattern_hex_)); }
 
 std::string UTDumpHelper::Dump(const air::NodeRef &node) {
   std::stringstream ss;
@@ -35,4 +33,22 @@ bool UTDumpHelper::RegxMatchPlaceholder(const std::string &str, const std::strin
   std::string pattern = "placeholder\\(" + name + ", " + UTRegxMatch::pattern_hex_ + "\\)";
   return std::regex_match(str, std::regex(pattern));
 }
+
+std::string UTDumpHelper::DumpScheduleTree(const isl::schedule &sch) {
+  isl_printer *printer = nullptr;
+
+  CHECK(sch.get());
+
+  printer = isl_printer_to_str(sch.ctx().get());
+  CHECK(printer);
+  printer = isl_printer_set_yaml_style(printer, ISL_YAML_STYLE_BLOCK);
+  printer = isl_printer_print_schedule(printer, sch.get());
+  const char *s = isl_printer_get_str(printer);
+  static_cast<void>(isl_printer_free(printer));
+
+  std::string str(s);
+  std::free(reinterpret_cast<void *>(const_cast<char *>(s)));
+  return str;
+}
+
 }  // namespace akg

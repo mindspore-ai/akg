@@ -1,0 +1,265 @@
+domain: "{ S_32[];"
+          "S_31[];"
+          "S_11[];"
+          "S_23[];"
+          "S_28[];"
+          "S_17[];"
+          "S_13[];"
+          "S_16[];"
+          "S_1[];"
+          "S_21[];"
+          "S_15[];"
+          "S_26[];"
+          "S_5[];"
+          "S_20[];"
+          "S_9[];"
+          "S_35[ax0, ax1] : 0 <= ax0 <= 1023 and 0 <= ax1 <= 1023;"
+          "S_27[];"
+          "S_14[];"
+          "S_34[ax0, ax1] : 0 <= ax0 <= 1023 and 0 <= ax1 <= 1023;"
+          "S_24[];"
+          "S_7[];"
+          "S_30[];"
+          "S_6[];"
+          "S_33[];"
+          "S_18[];"
+          "S_3[];"
+          "S_22[];"
+          "S_2[];"
+          "S_25[];"
+          "S_29[];"
+          "S_10[];"
+          "S_0[];"
+          "S_19[];"
+          "S_8[];"
+          "S_4[];"
+          "S_12[] }"
+child:
+  sequence:
+  - filter: "{ S_12[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_2[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_1[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_3[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_4[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_6[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_5[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_7[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_8[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_13[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_14[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_15[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_16[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_17[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_18[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_19[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_0[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_9[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_10[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_21[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_22[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_23[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_24[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_20[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_25[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_26[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_27[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_28[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_11[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_29[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_30[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_31[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_32[] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[]"
+        permutable: 1
+  - filter: "{ S_33[];"
+              "S_34[ax0, ax1];"
+              "S_35[ax0, ax1] }"
+    child:
+      mark: "realize_UB"
+      child:
+        schedule: "[{ S_34[ax0, ax1] -> [(floor((ax0)/32))];"
+                     "S_33[] -> [(0)];"
+                     "S_35[ax0, ax1] -> [(floor((ax0)/32))] },"
+                   "{ S_34[ax0, ax1] -> [(floor((ax1)/512))];"
+                     "S_33[] -> [(0)];"
+                     "S_35[ax0, ax1] -> [(floor((ax1)/512))] }]"
+        permutable: 1
+        coincident: [ 1, 1 ]
+        options: "{ isolate[[] -> [i0, i1]] : 0 <= i0 <= 31 and 0 <= i1 <= 1 }"
+        child:
+          schedule: "[{ S_34[ax0, ax1] -> [((ax0) mod 32)];"
+                       "S_33[] -> [(0)];"
+                       "S_35[ax0, ax1] -> [((ax0) mod 32)] },"
+                     "{ S_34[ax0, ax1] -> [((ax1) mod 512)];"
+                       "S_33[] -> [(0)];"
+                       "S_35[ax0, ax1] -> [((ax1) mod 512)] }]"
+          permutable: 1
+          coincident: [ 1, 1 ]
+          child:
+            sequence:
+            - filter: "{ S_33[] }"
+            - filter: "{ S_34[ax0, ax1] }"
+            - filter: "{ S_35[ax0, ax1] }"

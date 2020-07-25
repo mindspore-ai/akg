@@ -19,6 +19,7 @@
 #include <isl/cpp.h>
 #include <tvm/node/node.h>
 #include <string>
+#include "poly/poly_util.h"
 namespace akg {
 namespace ir {
 namespace poly {
@@ -35,10 +36,10 @@ bool CreateFileIfNotExist(const std::string &file_name);
 void CreateDirIfNotExist(const std::string &file_name);
 std::string DumpSchTreeToString(const isl::schedule &sch);
 void DumpSchTreeImpl(const std::string &file_name, const isl::schedule &sch);
+std::string PrettyPrintSchTree(const isl::schedule &sch);
 void PrintHeader(std::ofstream &of, const std::string &str);
+void PrintHeader(const std::string &str);
 void DumpNode(std::ofstream &of, const air::Node *node);
-
-bool CompareSchTreeWithString(const std::string &compare_sch, const isl::schedule &sch);
 
 }  // namespace poly
 }  // namespace ir

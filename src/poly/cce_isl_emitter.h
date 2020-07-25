@@ -16,13 +16,7 @@
 #ifndef POLY_CCE_ISL_EMITTER_H_
 #define POLY_CCE_ISL_EMITTER_H_
 
-#include <tvm/expr.h>
-#include <tvm/ir.h>
-#include <tvm/ir_pass.h>
-
 #include "ir_pass.h"
-#include "isl.h"
-#include "scop.h"
 #include "isl_emitter.h"
 
 namespace akg {
@@ -39,12 +33,15 @@ class Liveness {
   std::vector<IslIdSet> read_;
   std::vector<IslIdSet> write_;
 };
+enum AtomicType { Equ = 0, Add };
 /*!
  * IslEmitter for CCE
  */
 class CCEIslEmitter : public IslEmitter {
  public:
-  CCEIslEmitter(Scop &s, const NodeInfoRepo &n, const isl::id_list &i) : IslEmitter(s, n, i) { ProcBypassL1(s); }
+  CCEIslEmitter(ScopInfo &info, const NodeInfoRepo &n, const isl::id_list &i) : IslEmitter(info, n, i) {
+    ProcBypassL1(info);
+  }
   ~CCEIslEmitter() override = default;
 
   Stmt Emit(const isl::ast_node &node) final;
@@ -52,7 +49,6 @@ class CCEIslEmitter : public IslEmitter {
  private:
   // override emitters for CCE
   Stmt EmitFor(const isl::ast_node_for &node) final;
-  Stmt EmitIf(const isl::ast_node_if &node) final;
   Stmt EmitMark(const isl::ast_node_mark &node_id) override;
   Stmt EmitBlock(const isl::ast_node_block &node) final;
   Stmt EmitStmt(const isl::ast_node_user &node) final;
@@ -60,59 +56,67 @@ class CCEIslEmitter : public IslEmitter {
 
   // DMA emitters for CCE
   Expr EmitLoad(const isl::ast_expr &lhs, Type type);
-  Stmt EmitL1Read(const isl::ast_node_user &node);
-  Stmt EmitL1Write(const isl::ast_node_user &node, Scop::AtomicType atomic);
+  Stmt EmitRead(const isl::ast_node_user &node);
+  Stmt EmitWrite(const isl::ast_node_user &node, AtomicType atomic);
   Stmt EmitSpecGemL1write(const isl::ast_node_mark &node, const Stmt &stmt);
 
-  // RangeInfo emitters for CCE
-  Stmt EmitGemmRangeInfoBackPropFilter(const Stmt &stmt);
-  Stmt EmitGemmRangeInfo(Stmt stmt);
-
-  // multicore emitters for CCE
+  // emit mark node
   Stmt EmitMarkMulticore(const isl::ast_node_mark &node);
-  bool InjectMulticore(const std::string &iter);
-
   Stmt EmitMarkFuseVector(const isl::ast_node_mark &node);
   Stmt EmitMarkAllocRealizeOut(const isl::ast_node_mark &node);
   Stmt EmitMarkAllocC(const isl::ast_node_mark &node);
   Stmt EmitMarkSpecGemm(const isl::ast_node_mark &node);
 
+  // emit attrs
   void EmitAttrStmt(const isl::ast_node_block &block_node, const Liveness &liveness, bool is_L1, bool is_L0,
                     std::vector<Stmt> &stmts);
-
-  void EmitAttrStmtL0(Tensor &t, bool &is_im2col, bool &is_filter_l0, bool &is_gemm_data_trans,
-                      bool &is_gemm_weight_trans);
-
-  void EmitAttrStmtL1(Tensor &t, bool &is_fractal, bool &is_filter_l1);
-
-  void EmitAttrStmtLiveness(const Liveness &liveness, std::vector<Stmt> &stmts, int i, bool is_L1);
-
+  void EmitReadAttrAtL0(std::vector<Stmt> &stmts, int i, Tensor &t);
+  void EmitReadAttrAtL1(std::vector<Stmt> &stmts, int i, Tensor &t);
+  void EmitReadAttr(const std::vector<IslIdSet> &read, std::vector<Stmt> &stmts, int i, bool is_L1, bool is_L0);
+  void EmitWriteAttr(const std::vector<IslIdSet> &write, std::vector<Stmt> &stmts, int i, bool is_L1);
   void EmitAttrStmtAfterRealize(bool is_L1, bool is_L0, std::vector<Stmt> &stmts);
+  Stmt EmitGemmRangeInfoBackPropFilter(const Stmt &stmt);
+  Stmt EmitGemmRangeInfo(Stmt stmt);
+
+  // emit realize
   void EmitRealize(const isl::ast_node_block &block_node, const Liveness &liveness_info, bool is_L1, bool is_L0,
                    std::vector<Stmt> &stmts);
 
-  void EmitRealizeLivenessInfo(std::vector<IslIdSet> &real, const Liveness &liveness_info,
-                               std::unordered_map<isl::id, std::set<int>, isl::IslIdIslHash> &liveness,
-                               std::function<bool(const std::string &id)> const &CheckGoOut);
-  void EmitGemmRangeInfoNewAxis(std::vector<Range> &range, std::vector<std::string> &prefix,
-                                std::unordered_map<std::string, bool> &outerAxis, Range &axisMRange,
-                                Map<std::string, Range> &range_map, Map<std::string, VarExpr> &axis_map);
+  // emit access
+  Stmt EmitAccessNodeCall(const Node *node, const VarMap &var_map_tmp, BufferedFootPrintInfo &buffer_fp_info) override;
 
-  void EmitGemmRangeInfoDynamic(Range &axisMRange, Map<std::string, Range> &range_map);
-  void EmitGemmRangeInfoStatic(Map<std::string, Range> &range_map);
-  // realize info for CCE
+  // tool func
+  bool InjectMulticore(const std::string &iter);
+  void CollectLiveness(const Liveness &liveness_info, bool is_L1, std::vector<IslIdSet> &real,
+                       std::unordered_map<isl::id, std::set<int>, isl::IslIdIslHash> &liveness,
+                       std::function<bool(const std::string &id)> const &CheckGoOut);
+  void CollectGemmRangeInfoNewAxis(std::vector<Range> &range, std::vector<std::string> &prefix,
+                                   std::unordered_map<std::string, bool> &outerAxis, Range &axisMRange,
+                                   Map<std::string, Range> &range_map, Map<std::string, VarExpr> &axis_map);
+
+  void CollectGemmMWSize(Range &axis_m_range, Map<std::string, Range> &range_map);
+  void CollectGemmMWSizeDynamic(Map<std::string, Range> &range_map);
   Expr FindRealizeScope(const isl::id &var);
   std::string FindRealizeScopeToString(const isl::id &var);
   Stmt InsertRealize(Stmt stmt, const isl::id &var, bool is_L0);
   void RealizeOut();
 
   Stmt RemoveCond(const Stmt &stmt);
-  void ProcBypassL1(const Scop &scop);
+  void ProcBypassL1(const ScopInfo &info);
   void SetCube(const isl::id &stmt_id);
   std::string ReplaceAxis(const std::string &oldAxis);
   static std::vector<std::string> ConstructPrefix();
   void GemmTranspose(std::vector<Stmt> &stmts);
   void ConvBackPropFilterFixMadInit(const isl::ast_node_mark &node, Expr &mad_init_cond);
+
+  isl::multi_aff TensorAccessMultAff(isl::id &tensor_id, const Array<Expr> &subscripts,
+                                     const isl::id &stmt_id) override;
+  bool IsTransferStmt() override;
+  bool IsCopyinFromAnotherBand(isl::multi_aff &access) override;
+
+  std::map<const Variable *, std::string> iters_old_name_;
+  std::map<const Variable *, std::string> iters_new_name_;
+  std::unordered_map<isl::id, VarMap, isl::IslIdIslHash> stmt_var_map_;
 
   std::set<Tensor> realized_;
   IslIdSet hoisted_read_;

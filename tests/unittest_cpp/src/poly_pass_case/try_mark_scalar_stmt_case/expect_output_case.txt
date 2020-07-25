@@ -1,0 +1,6 @@
+domain: "{ S_0[] }"
+child:
+  mark: "realize_UB"
+  child:
+    schedule: "[]"
+    permutable: 1

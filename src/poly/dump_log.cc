@@ -20,9 +20,10 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <fstream>
+#include <iostream>
+#include <iomanip>
 
 #include "poly/poly_util.h"
-#include "poly/scop.h"
 #include "poly/dma_inject.h"
 
 namespace akg {
@@ -152,6 +153,11 @@ void PrettyPrintSchTree(std::FILE *fp, const isl::schedule &sch) {
   }
 }
 
+std::string PrettyPrintSchTree(const isl::schedule &sch) {
+  std::string sch_tree_str = DumpSchTreeToString(sch);
+  return FormatSchTreeStr(sch_tree_str);
+}
+
 /*
  * Check that file name is a simple relative path (does not start with "/", and does not include "." or "..").
  * FileName should not include extension, and the extension will be appended to FileName.
@@ -218,6 +224,7 @@ bool CompareSchTreeWithString(const std::string &compare_sch_, const isl::schedu
 void PrintHeader(std::ofstream &of, const std::string &str) {
   of << std::endl << ">>>>>>>>>> " << str << " <<<<<<<<<<" << std::endl;
 }
+void PrintHeader(const std::string &str) { std::cout << ">>>>>>>>>> " << str << " <<<<<<<<<<" << std::endl; }
 
 void DumpNode(std::ofstream &of, const air::Node *node) {
   if (node->IsInstance<Provide>()) {
@@ -274,28 +281,28 @@ void CreateDirIfNotExist(const std::string &file_name) {
   free(file_name_);
 }
 
-void Scop::DumpScopDataBasics(std::ofstream &of) {
+void AnalysisResult::DumpScopDataBasics(std::ofstream &of) {
   PrintHeader(of, "statements");
-  for (const auto &stmt : data_.statements) {
+  for (const auto &stmt : GetStatementMap()) {
     of << stmt.first << " : ";
     DumpNode(of, stmt.second);
     of << std::endl;
   }
 
   PrintHeader(of, "accesses");
-  for (const auto &stmt : data_.accesses) {
+  for (const auto &stmt : GetAccessMap()) {
     of << stmt.second << " : ";
     DumpNode(of, stmt.first);
     of << std::endl;
   }
 
   PrintHeader(of, "domains");
-  for (const auto &stmt : data_.domains) {
+  for (const auto &stmt : GetOperatorDomainMap()) {
     of << stmt.first << " : param_space " << stmt.second.param_space << std::endl;
   }
 
   PrintHeader(of, "stmt_op_Info");
-  for (const auto &stmt : data_.stmt_op_Info) {
+  for (const auto &stmt : GetStmtOpInfoMap()) {
     of << stmt.first << " : ops [ ";
     for (auto op : stmt.second.ops) {
       of << int(op) << ", ";
@@ -307,92 +314,79 @@ void Scop::DumpScopDataBasics(std::ofstream &of) {
     of << "]" << std::endl;
   }
 
-  PrintHeader(of, "iterators");
-  for (const auto &it : data_.iterators) {
-    of << it.first << " : [ ";
-    for (const auto &str : it.second) {
-      of << str << ", ";
-    }
-    of << "]" << std::endl;
-  }
-
   PrintHeader(of, "reads");
-  of << FormatMupaStr(data_.reads) << std::endl;
+  of << FormatMupaStr(GetReads()) << std::endl;
 
   PrintHeader(of, "writes");
-  of << FormatMupaStr(data_.writes) << std::endl;
+  of << FormatMupaStr(GetWrites()) << std::endl;
 
   PrintHeader(of, "copyin");
-  of << FormatMupaStr(data_.copyin) << std::endl;
+  of << FormatMupaStr(GetCopyin()) << std::endl;
 
   PrintHeader(of, "fake_copyin");
-  of << FormatMupaStr(data_.fake_copyin) << std::endl;
+  of << FormatMupaStr(GetFakeCopyin()) << std::endl;
 
   PrintHeader(of, "inter_band_dependency");
-  of << FormatMupaStr(data_.inter_band_dependency) << std::endl;
+  of << FormatMupaStr(GetInnerBandDependency()) << std::endl;
 
   PrintHeader(of, "transfer_stmt");
-  of << FormatMupaStr(data_.transfer_stmt) << std::endl;
+  of << FormatMupaStr(GetTransferStmt()) << std::endl;
 
   PrintHeader(of, "reduce_stmts");
-  for (const auto &stmt : data_.reduce_stmts) {
+  for (const auto &stmt : GetReduceStmtMap()) {
     of << stmt.first << ": reduce axis [ ";
     for (const auto &axis : stmt.second) {
       of << axis << " ";
     }
     of << "]" << std::endl;
   }
-
-  PrintHeader(of, "group_filter_map");
-  for (const auto &group : group_filter_map_) {
-    of << group.first << " : [ ";
-    for (auto filter : group.second) {
-      of << filter << ", ";
-    }
-    of << "]" << std::endl;
-  }
 }
 
-void Scop::DumpScopDataAdvanced(std::ofstream &of) {
+void ScopInfo::DumpScopDataAdvanced(std::ofstream &of) {
   PrintHeader(of, "binds");
-  for (auto bind : binds_) {
+  auto binds = user_config_.GetBind();
+  for (auto bind : binds) {
     of << bind.first << " : " << bind.second << std::endl;
   }
 
   PrintHeader(of, "binds_orig");
-  for (auto bind : binds_orig_) {
+  auto binds_orig = user_config_.GetOriginBind();
+  for (auto bind : binds_orig) {
     of << bind.first << " : " << bind.second << std::endl;
   }
 
   PrintHeader(of, "realize_from_input");
-  for (const auto &id : realize_from_input_) {
+  auto realize_from_input = user_config_.GetRealizeFromInput();
+  for (const auto &id : realize_from_input) {
     of << id << ", ";
   }
   of << std::endl;
 
   PrintHeader(of, "dim_infos");
-  for (const auto &dim_info : dim_infos_) {
+  for (const auto &dim_info : analysis_result_.GetTileSizes()) {
     of << "index=" << dim_info.index << " axis=" << dim_info.axis << " l1_tiling_size=" << dim_info.l1_tiling_size
        << " l0_tiling_size=" << dim_info.l0_tiling_size << " dim_seq=" << dim_info.dim_seq << std::endl;
   }
 
   PrintHeader(of, "fractal_int_info");
-  for (const auto &info : fractal_int_info_) {
+  for (const auto &info : cube_info_.fractal_int_info_) {
     of << info.first << " : " << info.second << std::endl;
   }
 
   PrintHeader(of, "fractal_str_info");
-  for (const auto &info : fractal_str_info_) {
+  for (const auto &info : cube_info_.fractal_str_info_) {
     of << info.first << " : " << info.second << std::endl;
   }
 
   PrintHeader(of, "conditional_write_buffer_footprints");
-  for (const auto &tensor : conditional_write_buffer_footprints_) {
+  auto conditional_write_buffer_footprints = analysis_result_.GetConditionalWriteBufferFootprints();
+  for (const auto &tensor : conditional_write_buffer_footprints) {
     of << tensor << std::endl;
   }
 
   PrintHeader(of, "tensor_name_flows");
-  for (const auto &name_flow : tensor_name_flows_) {
+  auto tensor_name_flows = analysis_result_.GetTensorNameFlows();
+  for (const auto &name_flow : tensor_name_flows) {
     of << name_flow.first << " : [ ";
     for (const auto &name : name_flow.second) {
       of << name << ", ";
@@ -401,7 +395,8 @@ void Scop::DumpScopDataAdvanced(std::ofstream &of) {
   }
 
   PrintHeader(of, "tensor_memflows");
-  for (const auto &mem_flow : tensor_mem_flows_) {
+  auto tensor_mem_flows = analysis_result_.GetTensorMemFlows();
+  for (const auto &mem_flow : tensor_mem_flows) {
     of << mem_flow.first << " : [ ";
     for (auto mem : mem_flow.second) {
       of << static_cast<int>(mem) << ", ";
@@ -409,25 +404,8 @@ void Scop::DumpScopDataAdvanced(std::ofstream &of) {
     of << "]" << std::endl;
   }
 
-  PrintHeader(of, "n_clusters");
-  for (const auto &cluster : n_clusters_) {
-    of << cluster.first << " : " << cluster.second << std::endl;
-  }
-
-  PrintHeader(of, "bufferedDecls");
-  for (const auto &buffered_decl : buffered_decls_) {
-    of << buffered_decl.first << " : "
-       << "tensor_id=" << buffered_decl.second.tensor_id << "type=" << buffered_decl.second.type
-       << "kind=" << static_cast<int>(buffered_decl.second.kind) << "tensor=" << buffered_decl.second.tensor
-       << "size=[";
-    for (auto size : buffered_decl.second.sizes) {
-      of << size << ",";
-    }
-    of << "]" << std::endl;
-  }
-
   PrintHeader(of, "active_buffer_footprints");
-  for (const auto &active_buffer_footprint : active_buffer_footprints_) {
+  for (const auto &active_buffer_footprint : analysis_result_.active_buffer_footprints_) {
     of << "cluster_id : " << active_buffer_footprint.second.cluster_id << std::endl
        << "domain : " << FormatMupaStr(active_buffer_footprint.first) << std::endl
        << "cluster : " << *(active_buffer_footprint.second.cluster) << std::endl
@@ -436,81 +414,82 @@ void Scop::DumpScopDataAdvanced(std::ofstream &of) {
   }
 
   PrintHeader(of, "buffered_decl_infos");
-  DumpBufferDefInfos(of);
-  of << std::endl;
-
-  of << "custom_tiling : ";
-  if (custom_tiling_.empty()) of << "empty" << std::endl;
-  for (const auto &tiling : custom_tiling_) {
-    of << tiling << " ";
-  }
+  analysis_result_.DumpBufferDefInfos(of);
   of << std::endl;
 
   PrintHeader(of, "attr_info");
-  for (const auto &info : attr_info_) {
+  for (const auto &info : cube_info_.GetConvAttrInfo()) {
     of << info.first << " : " << info.second << std::endl;
   }
 }
 
-void Scop::DumpScopDataScheduleAttrs(std::ofstream &of) {
+void UserConfig::DumpScopDataScheduleAttrs(std::ofstream &of) {
   PrintHeader(of, "schedule attrs");
-  of << "dim : " << b_dim_ << std::endl;
-  of << "kernel_h : " << matB_dim_h_ << std::endl;
-  of << "kernel_w : " << matB_dim_w_ << std::endl;
-  of << "conv_backprop_filter : " << conv_back_prop_filter_ << std::endl;
-  of << "bypassL1 : " << bypassL1_ << std::endl;
-  of << "dump_tuning_level : " << dump_tuning_level_ << std::endl;
-  of << "pragma_rmselfdep : " << remove_self_dependence_ << std::endl;
-  of << "pragma_force_rmselfdep : " << force_remove_self_dependence_ << std::endl;
-  of << "pragma_reschedule : " << compute_reschedule_ << std::endl;
-  of << "pragma_disable_schedule_shift : " << disable_schedule_shift_ << std::endl;
-  of << "pragma_enable_schedule_max_constant : " << enable_schedule_max_constant_ << std::endl;
-  of << "pragma_disable_loop_reversal : " << disable_loop_reversal_ << std::endl;
-  of << "pragma_disable_loop_fusion : " << disable_loop_fusion_ << std::endl;
-  of << "pragma_modshift : " << mod_schedule_shift_ << std::endl;
-  of << "pragma_conv_special_dma : " << conv_special_dma_ << std::endl;
-  of << "pragma_reorder_schedule : " << reorder_schedule_ << std::endl;
-  of << "pragma_checkcoincident : " << tile_check_coincident_ << std::endl;
-  of << "pragma_opt_for_davinci : " << optimize_for_davinci_ << std::endl;
-  of << "pragma_sink_last_axis : " << sink_last_axis_ << std::endl;
-  of << "pragma_keep_outer_band_order : " << keep_outer_band_order_ << std::endl;
-  of << "pragma_disable_group : " << disable_group_ << std::endl;
-  of << "pragma_tile_inner_band : " << tile_inner_band_ << std::endl;
-  of << "kernel_name : " << kernel_name_ << std::endl;
-  of << "dump_poly_dir : " << dump_poly_dir_ << std::endl;
-  of << "isolated_idx : " << isolated_idx_ << std::endl;
-  of << "dynamic_shape_bound : " << dynamic_shape_bound_ << std::endl;
-  of << "pragma_tilesize_is_var : " << tile_size_is_var_ << std::endl;
-  of << "pragma_outerband_need_split : " << outer_band_need_split_ << std::endl;
-  of << "pragma_is_conv : " << pragma_is_conv_ << std::endl;
+  of << "dump_poly_dir : " << GetDumpPolyDir() << std::endl;
+
+  of << "dump_tuning_level : " << GetDumpTuningLevel() << std::endl;
+  of << "dim : " << GetBDim() << std::endl;
+
+  of << "pragma_rmselfdep : " << GetRemoveSelfDependence() << std::endl;
+  of << "pragma_force_rmselfdep : " << GetForceRemoveSelfDependence() << std::endl;
+  of << "pragma_reschedule : " << GetComputeReschedule() << std::endl;
+  of << "pragma_disable_schedule_shift : " << GetDisableScheduleShift() << std::endl;
+  of << "pragma_enable_schedule_max_constant : " << GetEnableScheduleMaxConstant() << std::endl;
+  of << "pragma_disable_loop_reversal : " << GetDisableLoopReversal() << std::endl;
+  of << "pragma_disable_loop_fusion : " << GetDisableLoopFusion() << std::endl;
+  of << "pragma_modshift : " << GetModScheduleShift() << std::endl;
+  of << "pragma_reorder_schedule : " << GetReorderSchedule() << std::endl;
+  of << "pragma_checkcoincident : " << GetTileCheckCoincident() << std::endl;
+  of << "pragma_opt_for_davinci : " << GetOptimizeForDavinci() << std::endl;
+  of << "pragma_sink_last_axis : " << GetSinkLastAxis() << std::endl;
+  of << "pragma_keep_outer_band_order : " << GetKeepOuterBandOrder() << std::endl;
+  of << "pragma_disable_group : " << GetDisableGroup() << std::endl;
+  of << "pragma_tile_inner_band : " << GetTileInnerBand() << std::endl;
+  of << "isolated_idx : " << GetIsolatedIdx() << std::endl;
+  of << "pragma_outerband_need_split : " << GetOuterBandNeedSplit() << std::endl;
+
+  of << "dynamic_shape_bound : " << GetDynamicShapeBound() << std::endl;
+  of << "pragma_tilesize_is_var : " << GetTileSizeIsVar() << std::endl;
+
+  of << "kernel_name : " << GetKernelName() << std::endl;
+  of << "kernel_h : " << GetMatBDimH() << std::endl;
+  of << "kernel_w : " << GetMatBDimW() << std::endl;
+  of << "conv_backprop_filter : " << GetConvBackPropFilter() << std::endl;
+  of << "bypassL1 : " << GetByPassL1() << std::endl;
+  of << "pragma_is_conv : " << GetPragmaIsConv() << std::endl;
+  of << "pragma_conv_special_dma : " << GetConvSpecialDma() << std::endl;
 }
 
-bool Scop::DumpScopData(const std::string &file_name) {
+bool ScopInfo::DumpScopData(const std::string &file_name) {
   std::string canonical_log_name = FilePathCanonicalize(file_name, true);
   if (!CreateFileIfNotExist(canonical_log_name)) return false;
   std::ofstream of;
   of.open(canonical_log_name, std::ios::out);
   if (!of.is_open()) return false;
 
-  DumpScopDataBasics(of);
+  analysis_result_.DumpScopDataBasics(of);
 
   DumpScopDataAdvanced(of);
 
-  DumpScopDataScheduleAttrs(of);
+  user_config_.DumpScopDataScheduleAttrs(of);
 
   of.close();
   return true;
 }
 
-void Scop::DumpSchTree(const std::string &file_name, const isl::schedule &sch_dump) {
-  if (dump_pass_ir_) {
+void ScopInfo::DumpSchTree(const std::string &file_name, const isl::schedule &sch_dump) {
+  std::stringstream final_file_name;
+  final_file_name << std::setw(2) << std::setfill('0') << dump_schtree_count << "_" << file_name
+                  << std::string(cube_info_.IsSpecGemm() ? "_specgemm" : "");
+  if (user_config_.GetDumpPassIr()) {
 #if DUMP_IR
-    DumpSchTreeImpl(CreateDumpDir(file_name), sch_dump);
+    DumpSchTreeImpl(CreateDumpDir(final_file_name.str()), sch_dump);
+    dump_schtree_count++;
 #endif
 
 #if DUMP_SCOP_DATA
 #if DUMP_SCOP_DATA_PER_PASS
-    static_cast<void>(DumpScopData(CreateDumpDir(file_name)));
+    static_cast<void>(DumpScopData(CreateDumpDir(final_file_name.str())));
 #else
     static_cast<void>(DumpScopData(CreateDumpDir("scop")));
 #endif
@@ -518,29 +497,29 @@ void Scop::DumpSchTree(const std::string &file_name, const isl::schedule &sch_du
   }
 }
 
-std::string Scop::AddDumpDir(const std::string &file_name) {
+std::string ScopInfo::AddDumpDir(const std::string &file_name) {
   std::string real_file_name = file_name;
-  bool is_specgemm = (isolated_idx_ > 0);
+  bool is_specgemm = (user_config_.GetIsolatedIdx() > 0);
   if (is_specgemm) {
-    std::string dump_isolate_dir = "specgemm_" + std::to_string(isolated_idx_);
+    std::string dump_isolate_dir = "specgemm_" + std::to_string(user_config_.GetIsolatedIdx());
     real_file_name = dump_isolate_dir + '/' + real_file_name;
   }
 
 #if (!DUMP_IN_CURRENT_DIR)
-  if (!dump_poly_dir_.empty()) {
-    real_file_name = dump_poly_dir_ + '/' + real_file_name;
+  if (!user_config_.GetDumpPolyDir().empty()) {
+    real_file_name = user_config_.GetDumpPolyDir() + '/' + real_file_name;
   }
 #endif
   return real_file_name;
 }
 
-std::string Scop::CreateDumpDir(const std::string &file_name) {
+std::string ScopInfo::CreateDumpDir(const std::string &file_name) {
   std::string real_file_name = AddDumpDir(file_name);
   CreateDirIfNotExist(real_file_name);
   return real_file_name;
 }
 
-void Scop::DumpBufferDefInfos(std::ostream &out) {
+void AnalysisResult::DumpBufferDefInfos(std::ostream &out) {
   for (size_t index = 0; index < buffer_def_infos_.size(); index++) {
     out << "\r\nbufferedDefInfos_[" << index << "]: " << std::endl;
     out << "    tensor_id       : " << buffer_def_infos_[index].tensor_id << std::endl;
@@ -551,6 +530,48 @@ void Scop::DumpBufferDefInfos(std::ostream &out) {
     out << "    find_buffer     : " << buffer_def_infos_[index].find_buffer << std::endl;
     out << "    is_bind_tensor  : " << buffer_def_infos_[index].is_bind_tensor << std::endl;
   }
+}
+
+void ScopInfo::DumpTransform(const std::string &file_name, PassInfo &pass_info) {
+  auto real_path = CreateDumpDir(file_name);
+  std::ofstream of;
+  of.open(real_path, std::ios::out);
+  if (!of.is_open()) {
+    return;
+  }
+
+  PrintHeader(of, "group_filter_map");
+  for (const auto &group : pass_info.group_filter_map_) {
+    of << group.first << " : [ ";
+    for (auto filter : group.second) {
+      of << filter << ", ";
+    }
+    of << "]" << std::endl;
+  }
+
+  PrintHeader(of, "dependences");
+  of << FormatMupaStr(pass_info.dependences_.to_str()) << std::endl;
+
+  PrintHeader(of, "constraints");
+  isl_printer *p;
+  char *s = nullptr;
+  p = isl_printer_to_str(GetCtx().get());
+  CHECK(p != nullptr);
+  p = isl_printer_set_yaml_style(p, ISL_YAML_STYLE_BLOCK);
+  p = isl_printer_print_schedule_constraints(p, pass_info.constraints_.get());
+  s = isl_printer_get_str(p);
+  if (s) {
+    of << FormatMupaStr(s);
+    free(s);
+  }
+  static_cast<void>(isl_printer_free(p));
+
+  PrintHeader(of, "time_records");
+  for (auto time_log : time_records_) {
+    of << time_log << std::endl;
+  }
+
+  of.close();
 }
 }  // namespace poly
 }  // namespace ir

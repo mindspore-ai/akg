@@ -18,6 +18,7 @@
 #include <string>
 #include <tvm/node/node.h>
 #include <tvm/expr.h>
+#include <poly/isl.h>
 
 namespace akg {
 class UTRegxMatch {
@@ -38,6 +39,7 @@ class UTDumpHelper {
 
   static std::string Dump(const air::NodeRef &node);
   static bool RegxMatchPlaceholder(const std::string &str, const std::string &name);
-};  // class UTDumpHelper
+  static std::string DumpScheduleTree(const isl::schedule &sch);
+};  // UTDumpHelper
 }  // namespace akg
 #endif  // UT_BASE_DUMP_HELPER_H_
