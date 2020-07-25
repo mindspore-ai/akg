@@ -176,7 +176,7 @@ class MultiCoreLoopHoister : public IRMutator {
   }
 
   Stmt Mutate_(const IfThenElse *op, const Stmt &s) final {
-    if (loop_stack_.empty() || !need_hoisted_) {
+    if (loop_stack_.empty() || !need_hoisted_ || IsScalar(op->then_case)) {
       return IRMutator::Mutate_(op, s);
     }
     loop_stack_.back().branch_bound = true;
@@ -294,6 +294,14 @@ class MultiCoreLoopHoister : public IRMutator {
           return true;
         }
       }
+    }
+    return false;
+  }
+
+  bool IsScalar(const Stmt &s) {
+    if (s->IsInstance<Store>()) {
+      auto store = s.as<Store>();
+      return IsConstExpr(store->predicate);
     }
     return false;
   }
