@@ -12,14 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""cast"""
+"""operator dsl function: notequal"""
 import akg
-from akg.ops.math_gpu import cast
-import akg.topi as topi
+import akg.topi
+from akg.ops.math_gpu import notequal
 
-@akg.schedule(topi.cuda.schedule_injective)
-def Cast(x, dst_type):
-    """cast."""
-    if x.dtype == "int64" and dst_type == "float16":
-        x = cast.cast(x, "float32")
-    return cast.cast(x, dst_type)
+@akg.schedule(akg.topi.cuda.schedule_injective)
+def NotEqual(x, y):
+    """notequal."""
+    return notequal.notequal(x, y)

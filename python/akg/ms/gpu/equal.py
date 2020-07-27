@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # coding: utf-8
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2020 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,30 +13,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 """equal"""
-import akg.tvm
-from akg.ops.math import equal
-from akg.topi.generic import schedule_elemwise
+import akg
+import akg.topi as topi
+from akg.ops.math_gpu import equal
 
+@akg.schedule(topi.cuda.schedule_injective)
 def Equal(x, y):
-    """equal."""
+    """Equal"""
     return equal.equal(x, y)
-
-
-def gpu_schedule_Equal(outs):
-    """
-    gpu schedule for Equal.
-
-    Args:
-        outs (tvm.tensor.Tensor): outputs of compute.
-
-    Returns:
-        sch (schedule.Schedule): The created schedule.
-    """
-    device = 'cuda'
-    ctx = akg.tvm.context(device, 0)
-    if not ctx.exist:
-        raise SystemError("Skip because %s is not enabled" % device)
-    with akg.tvm.target.create(device):
-        sch = schedule_elemwise(outs)
-    return sch

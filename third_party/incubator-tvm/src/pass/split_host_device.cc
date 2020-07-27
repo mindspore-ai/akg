@@ -234,7 +234,7 @@ class HostDeviceSplitter : public IRMutator {
       }
     }
 
-#ifdef BACKEND_D
+#ifdef FIX_INPUT_ORDER_TVM
     std::shared_ptr<LoweredFuncNode> na = std::make_shared<LoweredFuncNode>();
     for (unsigned i = 0; i < (unsigned)args_real.size(); i++) {
       bool match = false;

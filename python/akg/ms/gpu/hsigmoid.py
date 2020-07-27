@@ -12,14 +12,34 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""cast"""
-import akg
-from akg.ops.math_gpu import cast
+"""hsigmoid"""
 import akg.topi as topi
+import akg.tvm as tvm
+from akg.topi import tag
+import akg
+
+@tvm.tag_scope(tag=tag.ELEMWISE)
+def topi_nn_hsigmoid(x):
+    """
+    topi hsigmoid
+    Args:
+        x:
+
+    Returns:
+
+    """
+    return tvm.compute(x.shape, lambda *i: tvm.if_then_else(x(*i) <= -3, 0,
+                                                            tvm.if_then_else(x(*i) >= 3, 1,
+                                                                             (x(*i) + 3) / 6)))
 
 @akg.schedule(topi.cuda.schedule_injective)
-def Cast(x, dst_type):
-    """cast."""
-    if x.dtype == "int64" and dst_type == "float16":
-        x = cast.cast(x, "float32")
-    return cast.cast(x, dst_type)
+def HSigmoid(x):
+    """
+    HSigmoid
+    Args:
+        x:
+
+    Returns:
+
+    """
+    return topi_nn_hsigmoid(x)

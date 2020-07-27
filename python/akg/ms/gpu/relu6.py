@@ -1,6 +1,4 @@
-#!/usr/bin/env python3
-# coding: utf-8
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2020 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,14 +14,16 @@
 
 """relu6"""
 import akg.topi as topi
-import akg.tvm as tvm
 from akg.topi import tag
+import akg
+import akg.tvm as tvm
 
 @tvm.tag_scope(tag=tag.ELEMWISE)
 def topi_nn_relu6(x):
     """topi nn relu6."""
     return tvm.compute(x.shape, lambda *i: tvm.min(tvm.max(x(*i), tvm.const(0, x.dtype)), tvm.const(6, x.dtype)))
 
+@akg.schedule(topi.cuda.schedule_injective)
 def ReLU6(x):
     """
     Compute elementwise with function: min(max(x, 0), 6).
@@ -35,22 +35,3 @@ def ReLU6(x):
         tvm.tensor.Tensor, has same type and shape as input.
     """
     return topi_nn_relu6(x)
-
-
-def gpu_schedule_ReLU6(outs):
-    """
-    gpu schedule ReLU6.
-
-    Args:
-        outs (tvm.tensor.Tensor): outputs of compute.
-
-    Returns:
-        sch (schedule.Schedule): The created schedule.
-    """
-    device = 'cuda'
-    ctx = tvm.context(device, 0)
-    if not ctx.exist:
-        raise SystemError("Skip because %s is not enabled" % device)
-    with tvm.target.create(device):
-        sch = topi.cuda.schedule_elemwise(outs)
-    return sch

@@ -12,14 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""cast"""
+"""logical_not"""
 import akg
-from akg.ops.math_gpu import cast
 import akg.topi as topi
+from akg.ops.math_gpu import logical_not
 
 @akg.schedule(topi.cuda.schedule_injective)
-def Cast(x, dst_type):
-    """cast."""
-    if x.dtype == "int64" and dst_type == "float16":
-        x = cast.cast(x, "float32")
-    return cast.cast(x, dst_type)
+def LogicalNot(x):
+    """LogicalNot."""
+    return logical_not.logical_not(x)
+

@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2019 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,20 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""squeeze"""
-import akg.topi as topi
-import akg
+"""operator dsl function: cast"""
+import akg.tvm
+import akg.topi
+from akg.utils import validation_check as vc_util
 
-@akg.schedule(topi.cuda.schedule_injective)
-def Squeeze(x, axis=None):
+
+@vc_util.check_input_type(akg.tvm.tensor.Tensor, str)
+def cast(data, dst_type):
     """
-    Remove the dimensions which have shape size 1.
+    cast data to target type.
 
     Args:
-        x (tvm.tensor.Tensor): Tensor, input whose shape is to be squeeze.
-        axis (Union[list, tuple, int, None]): specify which size 1 dimension to be removed.
+        data (tvm.tensor.Tensor): Tensor to be casted.
+        dst_type (str): target cast type.
 
     Returns:
-        tvm.tensor.Tensor, has the same type and element as x, but some size 1 dimensions are removed.
+        tvm.tensor.Tensor, type is dst_type.
     """
-    return topi.squeeze(x, axis)
+    vc_util.check_shape(data.shape)
+    out = akg.topi.cast(data, dst_type)
+
+    return out

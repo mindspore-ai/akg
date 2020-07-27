@@ -12,14 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""cast"""
-import akg
-from akg.ops.math_gpu import cast
+"""HSwishGrad"""
 import akg.topi as topi
+import akg.tvm as tvm
+import akg
 
 @akg.schedule(topi.cuda.schedule_injective)
-def Cast(x, dst_type):
-    """cast."""
-    if x.dtype == "int64" and dst_type == "float16":
-        x = cast.cast(x, "float32")
-    return cast.cast(x, dst_type)
+def HSwishGrad(y_grad, x):
+    """
+    HSwishGrad
+    Args:
+        y_grad:
+        x:
+
+    Returns:
+
+    """
+    shape = x.shape
+
+    res0 = tvm.compute(shape, lambda *i: tvm.if_then_else(x(*i) <= -3, 0, y_grad(*i) * (2 * x(*i) + 3) / 6))
+    res6 = tvm.compute(shape, lambda *i: tvm.if_then_else(x(*i) >= 3, y_grad(*i), res0(*i)))
+    return res6

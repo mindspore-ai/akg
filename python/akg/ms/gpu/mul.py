@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # coding: utf-8
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2020 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,8 +17,7 @@
 """mul"""
 import akg
 import akg.topi as topi
-import akg.tvm as tvm
-from akg.ops.math import mul
+from akg.ops.math_gpu import mul
 
 @akg.schedule(topi.cuda.schedule_injective)
 def Mul(x, y):

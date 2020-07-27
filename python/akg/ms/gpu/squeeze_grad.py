@@ -1,6 +1,4 @@
-#!/usr/bin/env python3
-# coding: utf-8
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2020 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,21 +14,7 @@
 
 """squeeze grad"""
 import akg.topi as topi
-
-def SqueezeGrad(y_grad, x_shape, axis=None):
-    """
-    Computes gradients for squeeze op.
-
-    Args:
-        y_grad (tvm.tensor.Tensor): the gradient needed to be propagation.
-        x_shape (Union[list, tuple]): output Tensor shape.
-        axis (Union[list, tuple, int, None], optional): eliminated axis by squeeze.
-
-    Returns:
-        tvm.tensor.Tensor: output gradient.
-    """
-    return topi.reshape(y_grad, x_shape)
-
+import akg
 
 def gpu_schedule_SqueezeGrad(outs):
     """
@@ -44,3 +28,17 @@ def gpu_schedule_SqueezeGrad(outs):
     """
     from .default_schedule import default_schedule
     return default_schedule(outs)
+
+@akg.schedule(gpu_schedule_SqueezeGrad)
+def SqueezeGrad(y_grad, x_shape):
+    """
+    Computes gradients for squeeze op.
+
+    Args:
+        y_grad (tvm.tensor.Tensor): the gradient needed to be propagation.
+        x_shape (Union[list, tuple]): output Tensor shape.
+
+    Returns:
+        tvm.tensor.Tensor: output gradient.
+    """
+    return topi.reshape(y_grad, x_shape)
