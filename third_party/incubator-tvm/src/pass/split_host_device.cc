@@ -234,32 +234,25 @@ class HostDeviceSplitter : public IRMutator {
       }
     }
 
-#ifdef FIX_INPUT_ORDER_TVM
-    std::shared_ptr<LoweredFuncNode> na = std::make_shared<LoweredFuncNode>();
-    for (unsigned i = 0; i < (unsigned)args_real.size(); i++) {
-      bool match = false;
-      for (unsigned j = 0; j < (unsigned)n->args.size(); j++) {
-        if (strcmp(args_real[i].get()->name_hint.c_str(), n->args[j].get()->name_hint.c_str()) == 0) {
-          na->args.push_back(n->args[j]);
-          match = true;
-          break;
-        } else {
-          continue;
-        }
-      }
-
-      if (!match) {
-        na->args.push_back(args_real[i]);
-        // mark handle data type.
-        for (auto kv : handle_data_type_) {
-          if (strcmp(args_real[i].get()->name_hint.c_str(), kv.first->name_hint.c_str()) == 0) {
-            n->handle_data_type.Set(args_real[i], kv.second);
-          }
-        }
+    // Reorder args to match args_real
+    Array<Var> ordered_args;
+    std::unordered_set<Var, NodeHash, NodeEqual> args_set;
+    std::unordered_set<Var, NodeHash, NodeEqual> args_real_set;
+    for (size_t i = 0; i < n->args.size(); ++i) {
+      args_set.insert(n->args[i]);
+    }
+    for (size_t i = 0; i < args_real.size(); ++i) {
+      args_real_set.insert(args_real[i]);
+      if (args_set.find(args_real[i]) != args_set.end()) {
+        ordered_args.push_back(args_real[i]);
       }
     }
-    n->args = na->args;
-#endif
+    for (size_t i = 0; i < n->args.size(); ++i) {
+      if (args_real_set.find(n->args[i]) == args_real_set.end()) {
+        ordered_args.push_back(n->args[i]);
+      }
+    }
+    n->args = ordered_args;
     
     LoweredFunc f_device(n);
     Array<Expr> call_args;
