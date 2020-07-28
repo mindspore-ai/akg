@@ -117,7 +117,7 @@ def _build_to_func(desc_s, desc_d, attr=None):
     return func(desc_s, attr)
 
 def _build(desc_s, desc_d, attr=None):
-    if desc_d['process'] == 'gpu':
+    if desc_d['process'] == 'cuda':
         func = tvm.get_global_func("composite_with_json")
         return func(desc_s, attr)
     rst = _build_to_func(desc_s, desc_d, attr)

@@ -461,8 +461,8 @@ NodeRef composite_with_json_to_func(const std::string &json_str, Map<std::string
 
 std::string get_process(const std::string &json_str) {
   size_t pos = json_str.find("\"process\"");
-  if (pos != std::string::npos && json_str.find("gpu", pos) != std::string::npos) {
-    return "gpu";
+  if (pos != std::string::npos && json_str.find("cuda", pos) != std::string::npos) {
+    return "cuda";
   }
   return "aicore";
 }
@@ -494,7 +494,7 @@ Module composite_with_json_gpu(const std::string &json_str, Map<std::string, Nod
 }
 
 Module composite_with_json(const std::string &json_str, Map<std::string, NodeRef> attrs) {
-  if (get_process(json_str) == "gpu") {
+  if (get_process(json_str) == "cuda") {
     return composite_with_json_gpu(json_str, attrs);
   }
   auto build_rst = composite_with_json_to_func(json_str, attrs);
