@@ -41,19 +41,24 @@ def compilewithjson_to_func(json_str):
         logging.error(traceback.format_exc())
         return False
 
+    processor = 'aicore'
+    if 'process' in kernel_info:
+        processor = kernel_info['process']
+
     if 'composite' in kernel_info and kernel_info['composite'] is True:
         try:
-            mod = composite._build_to_func(json_str, kernel_info)
-            return mod
+            if processor == 'cuda':
+                _ = composite._build(json_str, kernel_info)
+                return True
+            else:
+                mod = composite._build_to_func(json_str, kernel_info)
+                return mod
         except Exception:
             logging.error(traceback.format_exc())
             return False
 
     op_name = kernel_info['name']
     op_func = None
-    processor = 'aicore'
-    if 'process' in kernel_info:
-        processor = kernel_info['process']
     # get custom ops implementation first.
     if 'impl_path' in kernel_info and kernel_info['impl_path'] is not None:
         impl_path = os.path.realpath(kernel_info['impl_path'])
