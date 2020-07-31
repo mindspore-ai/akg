@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #define PATH_MAX 4096
+#define MAX_PATH_DEPTH 20
 #include <fstream>
 #include <unistd.h>
 #include "poly/poly_util.h"
@@ -86,8 +87,7 @@ std::string ScheduleTreeHelper::UndoPrettyPrintSchTree(const std::string &schedu
 }
 
 std::string ScheduleTreeHelper::GetPolyPassCasePath() {
-  std::string relative_path("/test/unittest_cpp/src/poly_pass_case/");
-  int max_path_depth = 16;
+  std::string relative_path("/tests/unittest_cpp/src/poly_pass_case/");
 
   char cwd[PATH_MAX];
   char *ret = getcwd(cwd, sizeof(cwd));
@@ -113,7 +113,7 @@ std::string ScheduleTreeHelper::GetPolyPassCasePath() {
     }
     dirname = parent_path;
     ++path_depth_count;
-    if (path_depth_count > max_path_depth) {
+    if (path_depth_count > MAX_PATH_DEPTH) {
       LOG(WARNING) << "Failed to find " << relative_path << " file.";
       return "";
     }
