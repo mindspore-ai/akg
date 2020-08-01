@@ -109,7 +109,7 @@ if(NOT SUPPORT_CXX11)
 endif()
 
 check_cxx_compiler_flag("-march=native" NATIVE_BUILD)
-if(NATIVE_BUILD)
+if(NATIVE_BUILD AND ENABLE_NATIVE_BUILD)
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=native")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native")
 endif()
