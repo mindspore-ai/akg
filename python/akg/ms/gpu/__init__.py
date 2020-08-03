@@ -26,7 +26,6 @@ from .logical_or import LogicalOr
 from .relu6_grad import ReLU6Grad
 from .squeeze import Squeeze
 from .squeeze_grad import SqueezeGrad, gpu_schedule_SqueezeGrad
-from .mean import SimpleMean
 from .sub import Sub
 from .mul import Mul
 from .hsigmoid import HSigmoid
