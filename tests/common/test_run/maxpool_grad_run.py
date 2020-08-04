@@ -100,7 +100,7 @@ def maxpool_grad_run(shape, kernel, stride, pad, dtype, attrs):
         mod = utils.op_build_test(maxpool_grad.maxpool_grad,
                                   [shape, y_shape, y_shape], [dtype, dtype, dtype],
                                   op_attrs=[kernel, stride, pad],
-                                  kernel_name=kernel_name, attrs=attrs, dump_cce=True, tuning=t)
+                                  kernel_name=kernel_name, attrs=attrs, dump_code=True, tuning=t)
         if t:
             dy, expect, output, x, y = \
                 gen_data(dtype, kernel, pad, shape, stride, y_shape)
@@ -111,7 +111,7 @@ def maxpool_grad_run(shape, kernel, stride, pad, dtype, attrs):
         mod = utils.op_build_test(maxpool_grad.maxpool_grad,
                                   [shape, y_shape, y_shape], [dtype, dtype, dtype],
                                   op_attrs=[kernel, stride, pad],
-                                  kernel_name='maxpool_grad', attrs=attrs, dump_cce=True)
+                                  kernel_name='maxpool_grad', attrs=attrs, dump_code=True)
         dy, expect, output, x, y = \
             gen_data(dtype, kernel, pad, shape, stride, y_shape)
         output = utils.mod_launch(mod, (x, y, dy, output), expect=expect)

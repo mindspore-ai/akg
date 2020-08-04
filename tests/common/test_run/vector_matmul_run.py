@@ -145,7 +145,7 @@ def vector_matmul_run(case_index, m, n, k, trans_a, trans_b, read_data, dump_dat
     # k = (k+15)//16*16
 
     mod, out_shape = vector_matmul.vector_matmul(m, n, k, trans_a, trans_b, dtype, kernel_name, attrs)
-    utils.create_cce(kernel_name, "./", mod.imported_modules[0].get_source())
+    utils.create_code(kernel_name, "./", mod.imported_modules[0].get_source())
 
     # Generate data
     m_a, m_b, bench_mark = vector_matmul_data(case_index, m, n, k, trans_a, trans_b, read_data, dump_data, dtype)

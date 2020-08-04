@@ -105,5 +105,5 @@ def vector_matmul(data_m, data_n, data_k, trans_a, trans_b, dtype, kernel_name, 
     with akg.build_config(add_lower_pass=cce.debug_mode(0), dump_pass_ir=True):
         mod = akg.build(forward_s, op_vars, "cce", name=kernel_name, attrs=attrs, polyhedral=True)
         source_code = mod.imported_modules[0].get_source()
-        utils.create_cce(kernel_name, "./", source_code)
+        utils.create_code(kernel_name, "./", source_code)
         return mod, output_shape

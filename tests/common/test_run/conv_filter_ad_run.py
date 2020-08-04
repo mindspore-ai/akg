@@ -192,7 +192,7 @@ def conv_filter_ad_run(fmap_shape, filter_shape, pad_, stride_, dilation_,  attr
         return np_input, out_data, expect, True
 
     mod = utils.op_build_test(conv_filter_ad.conv_filter_ad, [dw_input_shapes], [conv_dtype],
-                              op_attrs=[fmap_shape, filter_shape, pad_, stride_, dilation_], kernel_name='conv_filter_ad', attrs=attrs, dump_cce = True)
+                              op_attrs=[fmap_shape, filter_shape, pad_, stride_, dilation_], kernel_name='conv_filter_ad', attrs=attrs, dump_code = True)
     args = (dy_data, dx_data, out_data)
     out_data = utils.mod_launch(mod, args, expect=expect)
     rtol, atol = get_rtol_atol("conv_filter_ad", conv_dtype)

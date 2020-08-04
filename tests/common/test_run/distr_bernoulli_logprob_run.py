@@ -29,7 +29,7 @@ def log_prob_run(shape, dtype, kernelname="", attrs = None):
 
   mod = utils.op_build_test(log_prob_op, [x.shape, probs.shape],
                             [dtype, dtype], kernel_name=kernelname,
-                            op_attrs=[], attrs=None, log_cce=True, dump_cce=True, polyhedral=True)
+                            op_attrs=[], attrs=None, log_cce=True, dump_code=True, polyhedral=True)
   output = utils.mod_launch(mod, [x, probs, output], expect=expect)
   return (x, probs), output, expect, compare_tensor(output, expect, rtol=1e-03, atol=1e-03, equal_nan=True)
 

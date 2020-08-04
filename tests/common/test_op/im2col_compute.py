@@ -109,5 +109,5 @@ def im2col_manual_schedule(shape, kernel, stride, pad, dtype, polyhedral=True, a
                        attrs=attrs, polyhedral=polyhedral)
         source_code = mod.imported_modules[0].get_source()
         kernel_name = "im2col_manual_schedule"
-        utils.create_cce(kernel_name, './', source_code)
+        utils.create_code(kernel_name, './', source_code)
     return mod

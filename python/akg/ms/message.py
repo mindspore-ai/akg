@@ -82,7 +82,10 @@ def compilewithjson_to_func(json_str):
             if kernel_info['attr']:
                 for ext_arg in kernel_info['attr']:
                     op_attrs.append(ext_arg['value'])
-            mod = utils.op_build(op_func, input_shapes, input_types, op_attrs, kernel_info['op'])
+            dump_ir = os.getenv('MS_AKG_DUMP_IR') == "on"
+            dump_code = os.getenv('MS_AKG_DUMP_CODE') == "on"
+            mod = utils.op_build(op_func, input_shapes, input_types, op_attrs, kernel_info['op'], dump_ir=dump_ir,
+                                 dump_code=dump_code)
             return True
         else:
             op_func = getattr(cce, op_name, None)

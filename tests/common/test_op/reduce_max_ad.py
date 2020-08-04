@@ -200,5 +200,5 @@ def reduce_max_ad_optimized_manual_schedule(input_shape, dtype, axis, keepdims, 
                         name="reduce_max_ad_manual_schedule", attrs=attrs, polyhedral=polyhedral)
         source_code = mod.imported_modules[0].get_source()
         kernel_name = "reduce_max_ad_manual_schedule"
-        utils.create_cce(kernel_name, './', source_code)
+        utils.create_code(kernel_name, './', source_code)
     return mod

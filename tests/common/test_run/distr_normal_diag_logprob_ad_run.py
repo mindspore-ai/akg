@@ -30,7 +30,7 @@ def logprob_ad_run(shape, dtype, kernel_name="", attrs=None):
         op_attrs=None,
         attrs=None,
         log_cce=True,
-        dump_cce=True,
+        dump_code=True,
         polyhedral=True,
     )
     outputs = utils.mod_launch(

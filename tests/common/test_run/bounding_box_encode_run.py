@@ -197,7 +197,7 @@ def bounding_box_encode_run(anchor_box_shape, groundtruth_box_shape, anchor_samp
         mod = utils.op_build_test(bounding_box_encode.bouding_box_encode,
                                   [anchor_box_shape, groundtruth_box_shape, anchor_samples_shape],
                                   [dtype, dtype, "int32"],
-                                  op_attrs, kernel_name=kernel_name, attrs=attrs, dump_cce=True, tuning=t)
+                                  op_attrs, kernel_name=kernel_name, attrs=attrs, dump_code=True, tuning=t)
         if t:
             anchor_box_data, anchor_samples_data, expect, groundtruth_box_data, output_data = gen_data(anchor_box_shape,
                                                                                                        anchor_samples_shape,
@@ -211,7 +211,7 @@ def bounding_box_encode_run(anchor_box_shape, groundtruth_box_shape, anchor_samp
         mod = utils.op_build_test(bounding_box_encode.bouding_box_encode,
                                   [anchor_box_shape, groundtruth_box_shape, anchor_samples_shape],
                                   [dtype, dtype, "int32"],
-                                  op_attrs, kernel_name=kernel_name, attrs=attrs, dump_cce=True)
+                                  op_attrs, kernel_name=kernel_name, attrs=attrs, dump_code=True)
         anchor_box_data, anchor_samples_data, expect, groundtruth_box_data, output_data = gen_data(anchor_box_shape,
                                                                                                    anchor_samples_shape,
                                                                                                    dtype, epsilon,

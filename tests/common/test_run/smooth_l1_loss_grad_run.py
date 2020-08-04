@@ -37,7 +37,7 @@ def smooth_l1_loss_grad_run(shape, dtype, attrs=None, kernel_name="smooth_l1_los
         kernel_name = attrs.get("kernel_name", False)
         mod = utils.op_build_test(smooth_l1_loss_grad.smooth_l1_loss_grad, [sample_shape, shape, shape, sample_shape],
                                   [dtype, dtype, dtype, anchor_samples_dtype], op_attrs=[sigma, anchor_sample_correct],
-                                  attrs=attrs, kernel_name=kernel_name, dump_cce=True, tuning=t)
+                                  attrs=attrs, kernel_name=kernel_name, dump_code=True, tuning=t)
         if t:
             anchor_samples, dloss, expect, output, prediction, prediction_, target, target_ = gen_data(
                 anchor_sample_correct, anchor_samples_dtype, dtype, sample_shape, shape, sigma)
@@ -50,7 +50,7 @@ def smooth_l1_loss_grad_run(shape, dtype, attrs=None, kernel_name="smooth_l1_los
         mod = utils.op_build_test(smooth_l1_loss_grad.smooth_l1_loss_grad,
                                   [sample_shape, shape, shape, sample_shape],
                                   [dtype, dtype, dtype, anchor_samples_dtype], op_attrs=[sigma, anchor_sample_correct],
-                                  attrs=attrs, kernel_name=kernel_name, dump_cce=True)
+                                  attrs=attrs, kernel_name=kernel_name, dump_code=True)
         output = utils.mod_launch(mod, (dloss, prediction, target, anchor_samples, output), expect=expect)
         return (dloss, prediction, target, anchor_samples), output, expect, compare_tensor(output, expect, atol=5e-3,
                                                                                            rtol=5e-3)

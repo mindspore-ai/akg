@@ -81,7 +81,7 @@ def gen_data(begin, begin_mask, dtype, ellipsis_mask, end, end_mask, grad_shape,
     # source_code = mod.imported_modules[0].get_source()
     # print(source_code)
     # kernel_name = "cce_strided_slice_grad_fp16"
-    # utils.create_cce(kernel_name, './', source_code)
+    # utils.create_code(kernel_name, './', source_code)
     out_shape = input_shape
     output = np.full(out_shape, 0, dtype)
     return expect, grad, output

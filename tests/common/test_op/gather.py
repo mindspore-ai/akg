@@ -115,6 +115,6 @@ def gather(params_shape, indices_shape, params_dtype, indices_dtype, axis, kerne
         mod = akg.build(s, [xx, yy, res], "cce", name=kernel_name, attrs=attrs)
 
     source_code = mod.imported_modules[0].get_source()
-    utils.create_cce(kernel_name, cce_path, source_code)
+    utils.create_code(kernel_name, cce_path, source_code)
 
     return mod

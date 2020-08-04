@@ -28,7 +28,7 @@ def l1_loss_grad_run(shape, dtype, kernel_name="l1_loss_grad", attrs=None):
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
         mod = utils.op_build_test(l1_loss_grad.l1_loss_grad, [shape, shape, shape], [dtype, dtype, dtype],
-                                  kernel_name=kernel_name, attrs=attrs, dump_cce=True, tuning=t)
+                                  kernel_name=kernel_name, attrs=attrs, dump_code=True, tuning=t)
         if t:
             dloss, expect, output, prediction, target = gen_data(dtype, shape)
             return mod, expect, (dloss, prediction, target, output)
@@ -36,7 +36,7 @@ def l1_loss_grad_run(shape, dtype, kernel_name="l1_loss_grad", attrs=None):
             return mod
     else:
         mod = utils.op_build_test(l1_loss_grad.l1_loss_grad, [shape, shape, shape], [dtype, dtype, dtype],
-                                  kernel_name=kernel_name, attrs=attrs, dump_cce=True)
+                                  kernel_name=kernel_name, attrs=attrs, dump_code=True)
         dloss, expect, output, prediction, target = gen_data(dtype, shape)
         output = utils.mod_launch(mod, (dloss, prediction, target, output), expect=expect)
         return (dloss, prediction, target), output, expect, compare_tensor(output, expect, rtol=0.001, atol=0.001)

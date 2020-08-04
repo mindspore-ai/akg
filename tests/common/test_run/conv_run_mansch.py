@@ -34,7 +34,7 @@ def conv_run_mansch(FMap_shape, Filter_shape, Pad, Stride, Dilation=None, use_bi
                       use_bias=use_bias, fp32_mad=fp32_mad, kernel_name="conv_mansch")
 
     source_code = mod.imported_modules[0].get_source()
-    utils.create_cce("conv_mansch", ".", source_code)
+    utils.create_code("conv_mansch", ".", source_code)
     A, B, bias_data, expect = gen_data(FMap_shape, Filter_shape, Pad, Stride, Dilation, use_bias)
 
     expect = expect.reshape((expect.shape[0], expect.shape[1], expect.shape[2]*expect.shape[3],expect.shape[4]))  # output on conv2d is in 4d format

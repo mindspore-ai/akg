@@ -35,7 +35,7 @@ def square_difference_run(shape1, shape2, dtype, kernel_name, attrs, cce_path=".
                                   input_types=[dtype, dtype], kernel_name=kernel_name, attrs=attrs)
         expect, input1, input2, output = gen_data(dtype, shape1, shape2)
         source_code = mod.imported_modules[0].get_source()
-        utils.create_cce(kernel_name, cce_path, source_code)
+        utils.create_code(kernel_name, cce_path, source_code)
         output = utils.mod_launch(mod, (input1, input2, output), expect=expect)
         return (input1, input2), output, expect, compare_tensor(output, expect, rtol=5e-03, equal_nan=True)
 

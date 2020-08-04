@@ -201,7 +201,7 @@ def add_b_conv(fmap_shape, filter_shape, pad_, stride_, dilation_,
             mod = akg.build(s, [a_value, b_value, conv], "cce", name=kernel_name, attrs=attrs, polyhedral=True)
     source_code = mod.imported_modules[0].get_source()
     cce_path = '.'
-    utils.create_cce(kernel_name, cce_path, source_code)
+    utils.create_code(kernel_name, cce_path, source_code)
 
     return mod
 
