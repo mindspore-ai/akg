@@ -14,6 +14,11 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+
+#
+# 2020.7.16 - Modify _load_lib function to find the correct library.
+#
+
 """Load Lib for C++ TOPI ops and schedules"""
 import sys
 import os
@@ -31,11 +36,23 @@ def _get_lib_names():
 
 def _load_lib():
     """Load libary by searching possible path."""
-    curr_path = os.path.dirname(os.path.realpath(os.path.expanduser(__file__)))
-    lib_search = curr_path
-    lib_path = libinfo.find_lib_path(_get_lib_names(), lib_search, optional=True)
-    if lib_path is None:
-        return None, None
+    lib_path = []
+    pwd = os.path.dirname(os.path.realpath(__file__))
+    path = os.path.realpath(pwd + "/../../../mindspore/lib")
+    if os.path.exists(path):
+        tar_so = "libakg.so"
+        files = os.listdir(path)
+        for f in files:
+            if f == tar_so:
+                lib_path.append(path + "/" + f)
+                break
+
+    if not lib_path:
+        lib_path = libinfo.find_lib_path()
+
+    if not lib_path:
+        raise RuntimeError("Cannot find library {}.".format(tar_so))
+
     lib = ctypes.CDLL(lib_path[0], ctypes.RTLD_GLOBAL)
     return lib, os.path.basename(lib_path[0])
 
