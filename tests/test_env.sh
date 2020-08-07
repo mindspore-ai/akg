@@ -26,13 +26,12 @@ usage()
 }
 
 CUR_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-MS_DIR="${CUR_DIR}/.."
-AD_BUILD_DIR="${MS_DIR}/build"
-TVM_ROOT="${AD_BUILD_DIR}/incubator-tvm"
-
+AKG_DIR="${CUR_DIR}/.."
+AD_BUILD_DIR="${AKG_DIR}/build"
+TVM_ROOT="${AKG_DIR}/third_party/incubator-tvm"
 
 export LD_LIBRARY_PATH=${AD_BUILD_DIR}:${LD_LIBRARY_PATH}
-export PYTHONPATH=${TVM_ROOT}/python:${TVM_ROOT}/topi:${TVM_ROOT}/topi/python:${MS_DIR}/tests/common:${MS_DIR}/python:${MS_DIR}/tests/fuzz/tune:${PYTHONPATH}
+export PYTHONPATH=${TVM_ROOT}/python:${TVM_ROOT}/topi:${TVM_ROOT}/topi/python:${AKG_DIR}/tests/common:${AKG_DIR}/python:${AKG_DIR}/tests/fuzz/tune:${PYTHONPATH}
 
 if [ $# -eq 1 ]; then
     case "$1" in

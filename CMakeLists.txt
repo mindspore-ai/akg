@@ -25,21 +25,23 @@ project(akg C CXX)
 
 set(AKG_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 
+# Find gmp
+find_path(GMP_INCLUDE_DIR NAME gmp.h HINTS /usr /usr/local PATH_SUFFIXES include include/x86_64-linux-gnu)
+find_library(GMP_LIBRARY NAMES gmp HINTS /usr /usr/local PATH_SUFFIXES lib lib64 lib/x86_64-linux-gnu)
+if(NOT GMP_INCLUDE_DIR)
+  message(FATAL_ERROR "Please export CMAKE_INCLUDE_PATH to directory where gmp.h locates at.")
+endif()
+if(NOT GMP_LIBRARY)
+  message(FATAL_ERROR "Please export CMAKE_LIBRARY_PATH to directory where libgmp.so locates at.")
+endif()
+
 include(cmake/RT.cmake)
 include(cmake/utils.cmake)
 include(cmake/external_libs/isl.cmake)
 
-set(ISL_DIR "${CMAKE_BINARY_DIR}/isl")
-
-if(ENABLE_AKG)
-  message("-- Build akg in Mindspore")
-  execute_process(COMMAND bash ${AKG_SOURCE_DIR}/third_party/apply_patches.sh ${CMAKE_CURRENT_BINARY_DIR} "1")
-  set(TVM_DIR "${CMAKE_CURRENT_BINARY_DIR}/incubator-tvm")
-else()
+set(TVM_DIR "${AKG_SOURCE_DIR}/third_party/incubator-tvm")
+if(NOT ENABLE_AKG)
   message("-- Build akg alone")
-  execute_process(COMMAND bash ${AKG_SOURCE_DIR}/third_party/apply_patches.sh ${CMAKE_CURRENT_BINARY_DIR} "akg")
-  set(TVM_DIR "${CMAKE_BINARY_DIR}/incubator-tvm")
-
   include(cmake/external_libs/gtest.cmake)
   add_subdirectory(${AKG_SOURCE_DIR}/tests/unittest_cpp)
   set(GTEST_DIR "${CMAKE_CURRENT_BINARY_DIR}/_deps/gtest-src")
@@ -78,21 +80,14 @@ include_directories(AFTER "${AKG_SOURCE_DIR}/src/include")
 include_directories(AFTER "${AKG_SOURCE_DIR}/third_party/fwkacllib/inc")
 include_directories(AFTER "${AKG_SOURCE_DIR}/third_party/fwkacllib/inc/toolchain")
 
-# isl
-include_directories(AFTER "${AKG_SOURCE_DIR}/third_party/isl_wrap/include")
-include_directories(AFTER "${ISL_DIR}/include")
-include_directories(AFTER "${ISL_DIR}")
-
 include_directories(AFTER "${TVM_DIR}/3rdparty/dmlc-core/include")
 include_directories(AFTER "${TVM_DIR}/3rdparty/dlpack/include")
 include_directories(AFTER "${TVM_DIR}/3rdparty/compiler-rt")
 include_directories(AFTER "${TVM_DIR}/3rdparty/rang/include")
 include_directories(AFTER "${TVM_DIR}/3rdparty/picojson")
 
-add_subdirectory(${AKG_SOURCE_DIR}/third_party/isl_wrap isl_fixed)
-
 # initial variables
-set(TVM_LINKER_LIBS isl_fixed)
+set(TVM_LINKER_LIBS )
 
 add_definitions(-DPICOJSON_USE_INT64=1)
 add_definitions(-DDMLC_LOG_CUSTOMIZE=1)
@@ -235,9 +230,8 @@ endif(USE_CUDA)
 
 add_library(akg SHARED ${COMPILER_SRCS} ${RUNTIME_SRCS} ${TOPI_SRCS} ${RUNTIME_SRCS})
 
-add_dependencies(akg isl_fixed)
-
-target_link_libraries(akg ${TVM_LINKER_LIBS} ${TVM_RUNTIME_LINKER_LIBS})
+add_dependencies(akg akg::isl_fixed)
+target_link_libraries(akg ${TVM_LINKER_LIBS} ${TVM_RUNTIME_LINKER_LIBS} akg::isl_fixed ${GMP_LIBRARY})
 
 # Related headers
 target_include_directories(akg PRIVATE "${TVM_DIR}/topi/include")
@@ -251,8 +245,5 @@ if(ENABLE_AKG)
 	       ${TVM_DIR}/python/tvm
 	       ${TVM_DIR}/topi/python/topi
 	  DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/akg)
-  #else()
-  #file(MAKE_DIRECTORY "${AKG_SOURCE_DIR}/output")
-  #file(COPY ${CMAKE_CURRENT_BINARY_DIR}/libakg.so DESTINATION "${AKG_SOURCE_DIR}/output")
 endif()
 

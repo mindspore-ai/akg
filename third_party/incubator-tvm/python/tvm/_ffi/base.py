@@ -16,6 +16,11 @@
 # under the License.
 # coding: utf-8
 # pylint: disable=invalid-name
+
+#
+# 2020.7.16 - Modify _load_lib function to find the correct library.
+#
+
 """Base library for TVM FFI."""
 from __future__ import absolute_import
 
@@ -48,7 +53,23 @@ else:
 
 def _load_lib():
     """Load libary by searching possible path."""
-    lib_path = libinfo.find_lib_path()
+    lib_path = []
+    pwd = os.path.dirname(os.path.realpath(__file__))
+    path = os.path.realpath(pwd + "/../../../mindspore/lib")
+    if os.path.exists(path):
+        tar_so = "libakg.so"
+        files = os.listdir(path)
+        for f in files:
+            if f == tar_so:
+                lib_path.append(path + "/" + f)
+                break
+
+    if not lib_path:
+        lib_path = libinfo.find_lib_path()
+
+    if not lib_path:
+        raise RuntimeError("Cannot find library {}.".format(tar_so))
+
     lib = ctypes.CDLL(lib_path[0], ctypes.RTLD_GLOBAL)
     # DMatrix functions
     lib.TVMGetLastError.restype = ctypes.c_char_p

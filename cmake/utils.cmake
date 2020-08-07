@@ -204,18 +204,24 @@ set(AKG_FIND_NO_DEFAULT_PATH NO_CMAKE_PATH NO_CMAKE_ENVIRONMENT_PATH NO_SYSTEM_E
 
 function(akg_add_pkg pkg_name )
     set(options )
-    set(oneValueArgs URL MD5 GIT_REPOSITORY GIT_TAG VER EXE DIR HEAD_ONLY CMAKE_PATH)
-    set(multiValueArgs CMAKE_OPTION LIBS PRE_CONFIGURE_COMMAND CONFIGURE_COMMAND BUILD_OPTION INSTALL_INCS INSTALL_LIBS PATCHES)
+    set(oneValueArgs URL MD5 GIT_REPOSITORY GIT_TAG VER EXE DIR CMAKE_PATH CUSTOM_CMAKE)
+    set(multiValueArgs CMAKE_OPTION LIBS PATCHES)
     cmake_parse_arguments(PKG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN} )
 
-    if (NOT PKG_LIB_PATH)
+    if(NOT PKG_LIB_PATH)
         set(PKG_LIB_PATH lib)
-    endif ()
-
+    endif()
 
     set(__FIND_PKG_NAME ${pkg_name})
     string(TOLOWER ${pkg_name} pkg_name)
     message("pkg name:${__FIND_PKG_NAME},${pkg_name}")
+
+    # Generate hash for current pkg
+    set(${pkg_name}_CUSTOM_CMAKE_HASH )
+    if(PKG_CUSTOM_CMAKE)
+        file(MD5 ${PKG_CUSTOM_CMAKE}/CMakeLists.txt _CUSTOM_CMAKE_MD5)
+        set(${pkg_name}_CUSTOM_CMAKE_HASH "${_CUSTOM_CMAKE_MD5}")
+    endif()
 
     set(${pkg_name}_PATCHES_HASH )
     foreach(_PATCH ${PKG_PATCHES})
@@ -223,25 +229,18 @@ function(akg_add_pkg pkg_name )
         set(${pkg_name}_PATCHES_HASH "${${pkg_name}_PATCHES_HASH},${_PF_MD5}")
     endforeach(_PATCH)
 
-    # check options
     set(${pkg_name}_CONFIG_TXT
             "${CMAKE_CXX_COMPILER_VERSION}-${CMAKE_C_COMPILER_VERSION}
-            ${ARGN} - ${${pkg_name}_USE_STATIC_LIBS}- ${${pkg_name}_PATCHES_HASH}
+            ${ARGN} - ${${pkg_name}_USE_STATIC_LIBS}- ${${pkg_name}_PATCHES_HASH}- ${${pkg_name}_CUSTOM_CMAKE_HASH}
             ${${pkg_name}_CXXFLAGS}--${${pkg_name}_CFLAGS}--${${pkg_name}_LDFLAGS}")
     string(REPLACE ";" "-" ${pkg_name}_CONFIG_TXT ${${pkg_name}_CONFIG_TXT})
     string(MD5 ${pkg_name}_CONFIG_HASH ${${pkg_name}_CONFIG_TXT})
 
     message("${pkg_name} config hash: ${${pkg_name}_CONFIG_HASH}")
+    # Generate hash for current pkg end
 
     set(${pkg_name}_BASE_DIR ${_MS_LIB_CACHE}/${pkg_name}_${${pkg_name}_CONFIG_HASH})
     set(${pkg_name}_DIRPATH ${${pkg_name}_BASE_DIR} CACHE STRING INTERNAL)
-
-    if(EXISTS ${${pkg_name}_BASE_DIR}/options.txt AND PKG_HEAD_ONLY)
-        set(${pkg_name}_INC ${${pkg_name}_BASE_DIR}/${PKG_HEAD_ONLY} PARENT_SCOPE)
-        add_library(${pkg_name} INTERFACE)
-        target_include_directories(${pkg_name} INTERFACE ${${pkg_name}_INC})
-        return()
-    endif ()
 
     if(NOT PKG_EXE)
         set(PKG_EXE 0)
@@ -250,6 +249,7 @@ function(akg_add_pkg pkg_name )
     set(${__FIND_PKG_NAME}_ROOT ${${pkg_name}_BASE_DIR})
     set(${__FIND_PKG_NAME}_ROOT ${${pkg_name}_BASE_DIR} PARENT_SCOPE)
 
+    # Check if pkg exists in cache, if exists, use the cached one
     if (PKG_LIBS)
         __find_pkg_then_add_target(${pkg_name} ${PKG_EXE} ${PKG_LIB_PATH} ${PKG_LIBS})
         if(${pkg_name}_LIBS)
@@ -257,17 +257,11 @@ function(akg_add_pkg pkg_name )
             message("Found libs: ${${pkg_name}_LIBS}")
             return()
         endif()
-    elseif(NOT PKG_HEAD_ONLY)
-        find_package(${__FIND_PKG_NAME} ${PKG_VER} ${AKG_FIND_NO_DEFAULT_PATH})
-        if (${__FIND_PKG_NAME}_FOUND)
-            set(${pkg_name}_INC ${${pkg_name}_BASE_DIR}/include PARENT_SCOPE)
-            message("Found pkg: ${__FIND_PKG_NAME}")
-            return()
-        endif ()
-    endif ()
+    endif()
 
-    if (NOT PKG_DIR)
-        if (PKG_GIT_REPOSITORY)
+    # Download pkg
+    if(NOT PKG_DIR)
+        if(PKG_GIT_REPOSITORY)
             __download_pkg_with_git(${pkg_name} ${PKG_GIT_REPOSITORY} ${PKG_GIT_TAG} ${PKG_MD5})
         else()
             message("--__download_pkg")
@@ -281,30 +275,31 @@ function(akg_add_pkg pkg_name )
         endforeach (_SUBMODULE_FILE)
     else()
         set(${pkg_name}_SOURCE_DIR ${PKG_DIR})
-    endif ()
+    endif()
     message("${pkg_name}_SOURCE_DIR : ${${pkg_name}_SOURCE_DIR}")
 
+    # Copy pkg to the build directory and uses the copied one
     set(${pkg_name}_PATCHED_DIR ${CMAKE_BINARY_DIR}/${pkg_name})
     if(EXISTS ${${pkg_name}_PATCHED_DIR})
         file(REMOVE_RECURSE ${${pkg_name}_PATCHED_DIR})
     endif()
-    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/${pkg_name}")
+    file(MAKE_DIRECTORY "${${pkg_name}_PATCHED_DIR}")
     file(COPY ${${pkg_name}_SOURCE_DIR}/ DESTINATION ${${pkg_name}_PATCHED_DIR})
-    message("${pkg_name}_PATCHED_DIR : ${${pkg_name}_PATCHED_DIR}")
     set(${pkg_name}_SOURCE_DIR ${${pkg_name}_PATCHED_DIR})
     message("${pkg_name}_SOURCE_DIR : ${${pkg_name}_SOURCE_DIR}")
 
+    # Apply patches on pkg
     foreach(_PATCH_FILE ${PKG_PATCHES})
         get_filename_component(_PATCH_FILE_NAME ${_PATCH_FILE} NAME)
         set(_LF_PATCH_FILE ${CMAKE_BINARY_DIR}/_ms_patch/${_PATCH_FILE_NAME})
         configure_file(${_PATCH_FILE} ${_LF_PATCH_FILE} NEWLINE_STYLE LF)
-        message("patching ${${pkg_name}_PATCHED_DIR} -p1 < ${_LF_PATCH_FILE}")
+        message("patching ${${pkg_name}_SOURCE_DIR} -p1 < ${_LF_PATCH_FILE}")
         execute_process(COMMAND patch -p1 INPUT_FILE ${_LF_PATCH_FILE}
-		WORKING_DIRECTORY ${${pkg_name}_PATCHED_DIR}
+                        WORKING_DIRECTORY ${${pkg_name}_SOURCE_DIR}
                         RESULT_VARIABLE Result)
         if(NOT Result EQUAL "0")
             message(FATAL_ERROR "Failed patch: ${_LF_PATCH_FILE}")
-        endif ()
+        endif()
     endforeach(_PATCH_FILE)
  
     file(LOCK ${${pkg_name}_BASE_DIR} DIRECTORY GUARD FUNCTION RESULT_VARIABLE ${pkg_name}_LOCK_RET TIMEOUT 600)
@@ -312,45 +307,39 @@ function(akg_add_pkg pkg_name )
         message(FATAL_ERROR "error! when try lock ${${pkg_name}_BASE_DIR} : ${${pkg_name}_LOCK_RET}")
     endif()
 
-    if (PKG_CUSTOM_CMAKE)
+    if(PKG_CUSTOM_CMAKE)
         file(GLOB ${pkg_name}_cmake ${PKG_CUSTOM_CMAKE}/CMakeLists.txt)
         file(COPY ${${pkg_name}_cmake} DESTINATION ${${pkg_name}_SOURCE_DIR})
-    endif ()
+    endif()
 
     if(${pkg_name}_SOURCE_DIR)
-        if (PKG_HEAD_ONLY)
-            file(GLOB ${pkg_name}_SOURCE_SUBDIRS ${${pkg_name}_SOURCE_DIR}/*)
-            file(COPY ${${pkg_name}_SOURCE_SUBDIRS} DESTINATION ${${pkg_name}_BASE_DIR})
-            set(${pkg_name}_INC ${${pkg_name}_BASE_DIR}/${PKG_HEAD_ONLY} PARENT_SCOPE)
-            add_library(${pkg_name} INTERFACE)
-            target_include_directories(${pkg_name} INTERFACE ${${pkg_name}_INC})
-
-        elseif (PKG_CMAKE_OPTION)
+        if(PKG_CMAKE_OPTION)
             # in cmake
             file(MAKE_DIRECTORY ${${pkg_name}_SOURCE_DIR}/_build)
-            if (${pkg_name}_CFLAGS)
+            if(${pkg_name}_CFLAGS)
                 set(${pkg_name}_CMAKE_CFLAGS "-DCMAKE_C_FLAGS=${${pkg_name}_CFLAGS}")
-            endif ()
+            endif()
             if (${pkg_name}_CXXFLAGS)
                 set(${pkg_name}_CMAKE_CXXFLAGS "-DCMAKE_CXX_FLAGS=${${pkg_name}_CXXFLAGS}")
-            endif ()
+            endif()
 
             if (${pkg_name}_LDFLAGS)
                 if (${pkg_name}_USE_STATIC_LIBS)
                     set(${pkg_name}_CMAKE_LDFLAGS "-DCMAKE_STATIC_LINKER_FLAGS=${${pkg_name}_LDFLAGS}")
                 else()
                     set(${pkg_name}_CMAKE_LDFLAGS "-DCMAKE_SHARED_LINKER_FLAGS=${${pkg_name}_LDFLAGS}")
-                endif ()
-            endif ()
+                endif()
+            endif()
 
             __exec_cmd(COMMAND ${CMAKE_COMMAND} ${PKG_CMAKE_OPTION} -G ${CMAKE_GENERATOR}
                     ${${pkg_name}_CMAKE_CFLAGS} ${${pkg_name}_CMAKE_CXXFLAGS} ${${pkg_name}_CMAKE_LDFLAGS}
+                    ${${pkg_name}_CONFIG_FILE_DIR} ${${pkg_name}_DEPEND_INCLUDE_DIR} ${${pkg_name}_DEPEND_LIB_DIR}
                     -DCMAKE_INSTALL_PREFIX=${${pkg_name}_BASE_DIR} ${${pkg_name}_SOURCE_DIR}/${PKG_CMAKE_PATH}
                     WORKING_DIRECTORY ${${pkg_name}_SOURCE_DIR}/_build)
 
             __exec_cmd(COMMAND ${CMAKE_COMMAND} --build . --target install -- -j${THNUM}
                     WORKING_DIRECTORY ${${pkg_name}_SOURCE_DIR}/_build)
-        endif ()
+        endif()
     endif()
 
     if (PKG_LIBS)
@@ -365,6 +354,6 @@ function(akg_add_pkg pkg_name )
             set(${pkg_name}_INC ${${pkg_name}_BASE_DIR}/include PARENT_SCOPE)
             message("Found pkg: ${${__FIND_PKG_NAME}_LIBRARIES}")
             return()
-        endif ()
-    endif ()
+        endif()
+    endif()
 endfunction()
