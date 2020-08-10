@@ -81,7 +81,7 @@ def iou_for_train_run(shape_tensor,
         output = utils.mod_launch(mod, (anchor, ground_truth, output), expect=expect)
 
         source_code = mod.imported_modules[0].get_source()
-        utils.create_cce(kernel_name, "./", source_code)
+        utils.create_code(kernel_name, "./", source_code)
         return input, output, expect, compare_tensor(output, expect, rtol=5e-03, equal_nan=True)
 
 

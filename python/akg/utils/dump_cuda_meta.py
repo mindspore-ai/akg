@@ -64,7 +64,19 @@ def save_gpu_params(s, args, kernel_info):
     ptx_code = kernel_info[0]
     file_name = kernel_info[1]
     kernel_name = kernel_info[2]
-    ir = str(akg.tvm.lower(s, args, simple_mode=True))
+
+    
+    dump_ir = os.getenv('MS_AKG_DUMP_IR') == "on"
+    if dump_ir:
+        schedule_path = os.path.realpath(kernel_name)
+        all_passes = os.listdir(schedule_path)
+        for cur_pass in all_passes:
+            if cur_pass.startswith("00_"):
+                with open(schedule_path + '/' + cur_pass, "r") as file:
+                    ir = file.read()
+                break
+    else:
+        ir = str(akg.tvm.lower(s, args, simple_mode=True))
     file_path = os.path.realpath(file_name)
     if os.path.exists(file_path):
         os.remove(file_path)

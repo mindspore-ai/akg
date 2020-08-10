@@ -32,7 +32,7 @@ def roipool_run(shape, roibox, pooled_shape, dtype, attrs, cce_path="./"):
     expect = roipool_expect(input1, shape, roibox, pooled_shape)
 
     # source_code = mod.imported_modules[0].get_source()
-    # utils.create_cce(kernel_name, cce_path, source_code)
+    # utils.create_code(kernel_name, cce_path, source_code)
 
     output = np.full(output_shape, np.nan, dtype)
     output = utils.mod_launch(mod, (input1, output), expect=expect)

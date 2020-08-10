@@ -83,7 +83,7 @@ def dropout_execute(shape_tensor, keep_prob, dtype, kernel_name, attrs=None):
         output = utils.mod_launch(mod, (input, mask, output), expect=expect)
 
         source_code = mod.imported_modules[0].get_source()
-        utils.create_cce(kernel_name, "./", source_code)
+        utils.create_code(kernel_name, "./", source_code)
 
         rtol, atol = get_rtol_atol("dropout", dtype)
         return (input, mask), output, expect, compare_tensor(output, expect, rtol=rtol, atol=atol, equal_nan=True)

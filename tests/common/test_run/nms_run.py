@@ -94,6 +94,6 @@ def nms_run(shape_tensor, thres, dtype, kernel_name, attrs):
         output = utils.mod_launch(mod, (anchor, output), expect=expect)
         output = np.frombuffer(output.tobytes(), np.uint16).reshape(out_shape)
         source_code = mod.imported_modules[0].get_source()
-        utils.create_cce(kernel_name, "./", source_code)
+        utils.create_code(kernel_name, "./", source_code)
         expect = np.frombuffer(expect.tobytes(), np.uint16).reshape(out_shape)
         return anchor, output, expect, np.all(output == expect)

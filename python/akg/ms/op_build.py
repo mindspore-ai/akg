@@ -31,7 +31,7 @@ from akg.utils import validation_check as vc_util
 
 BINDS = "binds"
 MS_AKG_DUMP_IR = "MS_AKG_DUMP_IR"
-MS_AKG_DUMP_CCE = "MS_AKG_DUMP_CCE"
+MS_AKG_DUMP_CODE = "MS_AKG_DUMP_CODE"
 MS_DAVINCI_KERNEL_PATH = "./kernel_meta/"
 
 

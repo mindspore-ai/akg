@@ -26,7 +26,7 @@ def truncatemod_run(shape1, shape2, dtype, attrs):
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
         mod = utils.op_build_test(truncatemod.truncatemod, [shape1, shape2], [dtype, dtype], kernel_name=kernel_name,
-                                  attrs=attrs, dump_cce=True, tuning=t)
+                                  attrs=attrs, dump_code=True, tuning=t)
         if t:
             expect, input1, input2, output = gen_data(dtype, shape1, shape2)
             return mod, expect, (input1, input2, output)
@@ -35,7 +35,7 @@ def truncatemod_run(shape1, shape2, dtype, attrs):
     else:
         expect, input1, input2, output = gen_data(dtype, shape1, shape2)
         mod = utils.op_build_test(truncatemod.truncatemod, [shape1, shape2], [dtype, dtype], kernel_name="truncatemod",
-                                  attrs=attrs, dump_cce=True)
+                                  attrs=attrs, dump_code=True)
         output = utils.mod_launch(mod, (input1, input2, output), expect=expect)
         rtol, atol = get_rtol_atol("truncatemod", dtype)
         res = compare_tensor(output, expect, rtol=rtol, atol=atol, equal_nan=True)

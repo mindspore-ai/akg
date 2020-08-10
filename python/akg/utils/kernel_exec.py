@@ -67,29 +67,42 @@ def func_time_required(func_name):
     return wrapper
 
 
-def create_cce(kernel_name, cce_path=None, code=None):
+def create_code(kernel_name, code_path=None, code=None, code_type="CCE"):
     """
-    Create cce file.
+    Create cce or cuda file.
 
     Args:
-        kernel_name: cce file name.
-        cce_path: cce file path.
-        code: cce code.
+        kernel_name: file name.
+        code_path: file path.
+        code: code.
+        code_type: code type.
     """
-    if cce_path:
-        if len(cce_path) > 4 and cce_path[-4:].lower() == ".cce":
-            real_path = cce_path
-        else:
-            if cce_path[-1] == r"/":
-                real_path = cce_path + kernel_name + ".cce"
-            else:
-                real_path = cce_path + r"/" + kernel_name + ".cce"
-        dir_path = r"/".join(real_path.split(r"/")[:-1])
-        if not os.path.isdir(dir_path):
-            os.makedirs(dir_path)
+    if code_type == "CCE":
+        postfix = ".cce"
+    elif code_type == "CUDA":
+        postfix = ".cu"
+    else:
+        logging.info("the target code type %s is not supported.", code_type)
 
-        with open(real_path, 'wt') as ss:
-            ss.write(code)
+    if not code_path:
+        code_path = "./"
+    
+    if code_type == "CCE" and len(code_path) > 4 and code_path[-4:].lower() == postfix:
+        real_path = code_path
+    elif code_type == "CUDA" and len(code_path) > 3 and code_path[-3:].lower() == postfix:
+        real_path = code_path
+    else:
+        if code_path[-1] == r"/":
+            real_path = code_path + kernel_name + postfix
+        else:
+            real_path = code_path + r"/" + kernel_name + postfix
+    dir_path = r"/".join(real_path.split(r"/")[:-1])
+    if not os.path.isdir(dir_path):
+        os.makedirs(dir_path)
+    
+    with open(real_path, 'wt') as ss:
+        ss.write(code)
+
 
 
 def gen_name_kernel(kernel, dtype, shapes):
@@ -538,7 +551,7 @@ def gen_kernel_name(input_shapes, input_types, op_attrs=None, kernel_name=""):
 
 @func_time_required
 def op_build_test(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
-                  attrs=None, log_cce=False, dump_ir=True, dump_cce=True,
+                  attrs=None, log_cce=False, dump_ir=True, dump_code=True,
                   polyhedral=True, tuning=False):
     """
     Return module from op_build with given inputs, distinguish tuning mode.
@@ -552,7 +565,7 @@ def op_build_test(op_func, input_shapes, input_types, op_attrs=None, kernel_name
         attrs (dict): tiling parameter.
         log_cce (bool): False by default.
         dump_ir (bool): True by default.
-        dump_cce (bool): False by default.
+        dump_code (bool): False by default.
         polyhedral (bool): True by default.
         tuning (bool): False by default.
 
@@ -565,7 +578,7 @@ def op_build_test(op_func, input_shapes, input_types, op_attrs=None, kernel_name
         kernel_name = gen_kernel_name(input_shapes, input_types, op_attrs, kernel_name)
     logging.debug('kernel_name---------- %s', str(kernel_name))
     mod = op_build(op_func, input_shapes, input_types, op_attrs, kernel_name,
-                   attrs, log_cce, dump_ir, dump_cce,
+                   attrs, log_cce, dump_ir, dump_code,
                    polyhedral, tuning)
     return mod
 
@@ -593,7 +606,7 @@ def recursive_copy(obj):
 
 
 def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
-             attrs=None, log_cce=False, dump_ir=True, dump_cce=True,
+             attrs=None, log_cce=False, dump_ir=True, dump_code=True,
              polyhedral=True, tuning=False):
     """
     Return module built from op_func with given inputs.
@@ -607,7 +620,7 @@ def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
         attrs (dict): tiling parameter.
         log_cce (bool): False by default.
         dump_ir (bool): True by default.
-        dump_cce (bool): False by default.
+        dump_code (bool): False by default.
         polyhedral (bool): True by default.
         tuning (bool): False by default.
 
@@ -730,9 +743,13 @@ def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
         kernel_name = kernel_name if kernel_name != "" else sch_tmpl['op_name']
         with akg.tvm.target.cuda() as target:
             s = sch_tmpl['schedule'](sch_tmpl['output'])
-            with akg.build_config(dump_pass_ir=True):
-                mod = akg.build(s, op_var, "cuda", shape_var, name=kernel_name, attrs=attrs, polyhedral=polyhedral, binds=binds)
+            with akg.tvm.build_config(dump_pass_ir=dump_ir):
+                mod = akg.build(s, op_var, "cuda", shape_var, name=kernel_name, attrs=attrs,
+                                polyhedral=polyhedral, binds=binds)
                 dump_cuda_meta.dump(mod, kernel_name, s, op_var)
+                if dump_code:
+                    source_code = mod.imported_modules[0].get_source()
+                    create_code(kernel_name, "./", source_code, "CUDA")
                 return mod
 
     if isinstance(output, (list, tuple)):
@@ -781,9 +798,9 @@ def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
     if log_cce:
         logging.debug("#################cce code####################")
         logging.debug(source_code)
-    if dump_cce:
-        cce_path = "./"
-        create_cce(kernel_name, cce_path, source_code)
+    if dump_code:
+        code_path = "./"
+        create_code(kernel_name, code_path, source_code)
 
     return mod
 

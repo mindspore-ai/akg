@@ -387,7 +387,7 @@ def maxpool_ad_manual_schedule_all_max(shape, kernel, stride, pad, dtype, polyhe
                         attrs=attrs, polyhedral=polyhedral)
         source_code = mod.imported_modules[0].get_source()
         kernel_name = "maxpool_ad_manual_schedule_all_max"
-        utils.create_cce(kernel_name, './', source_code)
+        utils.create_code(kernel_name, './', source_code)
     return mod
 
 
@@ -489,5 +489,5 @@ def maxpool_ad_manual_schedule_no_overlap_all_max(shape, kernel, stride, pad, dt
                         name="maxpool_ad_manual_schedule_no_overlap_all_max", attrs=attrs, polyhedral=polyhedral)
         source_code = mod.imported_modules[0].get_source()
         kernel_name = "maxpool_ad_manual_schedule_no_overlap_all_max"
-        utils.create_cce(kernel_name, './', source_code)
+        utils.create_code(kernel_name, './', source_code)
     return mod

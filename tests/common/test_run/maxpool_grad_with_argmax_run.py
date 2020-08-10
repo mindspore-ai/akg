@@ -31,7 +31,7 @@ def maxpool_grad_with_argmax_run(shape, kernel, stride, pad, dtype, polyhedral=F
             mod = utils.op_build_test(maxpool_grad_with_argmax, [head.shape, mask.shape],
                                       [dtype, dtype], kernel_name="maxpool_grad_with_argmax",
                                       op_attrs=[shape, kernel, stride, pad], attrs=attrs,
-                                      log_cce=False, dump_cce=True, polyhedral=polyhedral)
+                                      log_cce=False, dump_code=True, polyhedral=polyhedral)
         if t:
             return mod, expect, (head, mask, output)
         else:
@@ -43,7 +43,7 @@ def maxpool_grad_with_argmax_run(shape, kernel, stride, pad, dtype, polyhedral=F
             mod = utils.op_build_test(maxpool_grad_with_argmax, [head.shape, mask.shape],
                                       [dtype, dtype], kernel_name="maxpool_grad_with_argmax",
                                       op_attrs=[shape, kernel, stride, pad], attrs=attrs,
-                                      log_cce=False, dump_cce=True, polyhedral=polyhedral)
+                                      log_cce=False, dump_code=True, polyhedral=polyhedral)
             output = utils.mod_launch(mod, [head, mask, output], expect=expect)
 
         rtol, atol = get_rtol_atol("maxpool_grad_with_argmax", dtype)

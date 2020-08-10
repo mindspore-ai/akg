@@ -28,7 +28,7 @@ def kldiv_loss_grad_run(shape, dtype, kernel_name="kldiv_loss_grad", attrs=None)
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
         mod = utils.op_build_test(kldiv_loss_grad.kldiv_loss_grad, [shape, shape, shape], [dtype, dtype, dtype],
-                                  kernel_name=kernel_name, attrs=attrs, dump_cce=True, tuning=t)
+                                  kernel_name=kernel_name, attrs=attrs, dump_code=True, tuning=t)
         if t:
             cur_deriv, output, pre_deriv, prediction, target = gen_data(attrs, dtype, shape)
             return mod, cur_deriv, (pre_deriv, prediction, target, output)
@@ -36,7 +36,7 @@ def kldiv_loss_grad_run(shape, dtype, kernel_name="kldiv_loss_grad", attrs=None)
             return mod
     else:
         mod = utils.op_build_test(kldiv_loss_grad.kldiv_loss_grad, [shape, shape, shape], [dtype, dtype, dtype],
-                                  kernel_name=kernel_name, attrs=attrs, dump_cce=True)
+                                  kernel_name=kernel_name, attrs=attrs, dump_code=True)
         cur_deriv, output, pre_deriv, prediction, target = gen_data(attrs, dtype, shape)
         output = utils.mod_launch(mod, (pre_deriv, prediction, target, output), expect=cur_deriv)
         return (pre_deriv, prediction, target), output, cur_deriv, compare_tensor(output, cur_deriv, rtol=0.005,

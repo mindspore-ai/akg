@@ -45,7 +45,7 @@ def matmul_run_mansch(MatrixShape, l1_tiling, l0_tiling, kernel_name, attrs=None
     # launch the kernel
     mod = matmul_mansch.gemm_dsl(MatrixShape, l1_tiling, l0_tiling, kernel_name)
     source_code = mod.imported_modules[0].get_source()
-    utils.create_cce(kernel_name, ".", source_code)
+    utils.create_code(kernel_name, ".", source_code)
     res = utils.mod_launch(mod, [A, B, out_data])
 
     # transform numpy data to compute benchMark

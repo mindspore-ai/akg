@@ -403,7 +403,7 @@ def test_CCE_Conv(fmap_shape, filter_shape, pad_, stride_,
                 mod = akg.build(s, [A, B, ScaleQ, OffsetQ, out], "cce", name=kernel_name, attrs=attrs, attrs={"dim": info}, polyhedral=True)
     source_code = mod.imported_modules[0].get_source()
     # print(source_code)
-    # utils.create_cce(kernel_name, cce_path, source_code)
+    # utils.create_code(kernel_name, cce_path, source_code)
     if run_cce:
         run_conv(mod, fmap_shape, filter_shape, pad_[0], stride_[0], use_bias)
 

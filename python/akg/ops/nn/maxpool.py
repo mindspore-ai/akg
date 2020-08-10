@@ -294,7 +294,7 @@ def maxpool_manual_schedule(shape, kernel, stride, padding, dtype, attrs=None, p
         mod = akg.build(s, [data, res], "cce", name="maxpool_manual_schedule", attrs=attrs, polyhedral=polyhedral)
         source_code = mod.imported_modules[0].get_source()
         kernel_name = "maxpool_ad_manual_schedule"
-        utils.create_cce(kernel_name, './', source_code)
+        utils.create_code(kernel_name, './', source_code)
     return mod
 
 def pad_strategy_check(strategy):

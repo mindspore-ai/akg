@@ -26,7 +26,7 @@ def sample_run(shape, dtype, kernel_name="", attrs=None):
 
     mod = utils.op_build_test(sample_op, [mean.shape, scale.shape, eps.shape],
                                          [dtype, dtype, dtype], kernel_name=kernel_name,
-                                         op_attrs=None, attrs=None, log_cce=True, dump_cce=True, polyhedral=True)
+                                         op_attrs=None, attrs=None, log_cce=True, dump_code=True, polyhedral=True)
     output = utils.mod_launch(mod, [mean, scale, eps, output], expect=expect)
 
     return (mean, scale, eps), output, expect, compare_tensor(output, expect, rtol=5e-03, atol=0.1, equal_nan=True)

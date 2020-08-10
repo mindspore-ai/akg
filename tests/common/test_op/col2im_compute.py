@@ -64,5 +64,5 @@ def col2im_manual_schedule(shape, kernel, stride, pad, dtype, output_H_W, polyhe
         mod = akg.build(s, [data, res], "cce", name="col2im_manual_schedule", attrs=attrs, polyhedral=polyhedral)
         source_code = mod.imported_modules[0].get_source()
         kernel_name = "col2im_manual_schedule"
-        utils.create_cce(kernel_name, "./", source_code)
+        utils.create_code(kernel_name, "./", source_code)
     return mod
