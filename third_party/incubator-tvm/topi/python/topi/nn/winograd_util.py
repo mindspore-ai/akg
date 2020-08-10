@@ -21,6 +21,9 @@
         https://arxiv.org/abs/1509.09308
         https://github.com/andravin/wincnn
 """
+"""
+2020.08.10 - Remove memoize decorator of function winograd_transform_matrices.
+"""
 
 from operator import mul
 from functools import reduce
@@ -133,7 +136,6 @@ def _interpolation_points(degree):
     return np.array(in_pts[degree-1], dtype=np.float64)
 
 
-@memoize("topi.nn.winograd_matrices", save_at_exit=False)
 def winograd_transform_matrices(tile_size, kernel_size, out_dtype):
     """Compute the A, B, and G transform matrices for `tile_size` as a `tvm.Expr`.
     """
