@@ -20,7 +20,7 @@ import json
 import json.decoder as jd
 import logging
 import traceback
-import os.path
+import os
 from pathlib import Path
 
 import akg.tvm

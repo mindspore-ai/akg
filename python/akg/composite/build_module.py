@@ -15,7 +15,9 @@
 # limitations under the License.
 
 """build module"""
+import os
 import json
+import akg
 from akg import tvm
 from akg.tvm import _api_internal
 from .repository import __all__ as repository
@@ -178,6 +180,6 @@ def build_cuda(outputs, args, sch_name, kernel_name):
         s = scheduler[sch_name](outputs)
         dump_ir = os.getenv('MS_AKG_DUMP_IR') == "on"
         with tvm.build_config(dump_pass_ir = dump_ir):
-            mod = tvm.build(s, args, cuda, name = kernel_name)
+            mod = akg.build(s, list(args), "cuda", name = kernel_name)
             dump_cuda_meta.dump(mod, kernel_name, s, list(args))
             return mod
