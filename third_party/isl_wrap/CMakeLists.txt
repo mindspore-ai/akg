@@ -3,9 +3,9 @@ set(ISL_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 message("ISL_DIR: ${ISL_DIR}")
 message("GMP_INCLUDE_DIR: ${GMP_INCLUDE_DIR}")
 message("GMP_LIBRARY: ${GMP_LIBRARY}")
-message("ISL_WARP_DIR: ${ISL_WARP_DIR}")
+message("ISL_WRAP_DIR: ${ISL_WRAP_DIR}")
 
-include_directories("${ISL_WARP_DIR}/include")
+include_directories("${ISL_WRAP_DIR}/include")
 include_directories("${ISL_DIR}/include")
 include_directories("${ISL_DIR}")
 
@@ -127,7 +127,7 @@ execute_process(
   WORKING_DIRECTORY ${ISL_DIR}
   OUTPUT_VARIABLE ISL_GIT_VERSION
   OUTPUT_STRIP_TRAILING_WHITESPACE)
-configure_file("${ISL_WARP_DIR}/gitversion.h.in" "gitversion.h")
+configure_file("${ISL_WRAP_DIR}/gitversion.h.in" "gitversion.h")
 
 install(TARGETS isl_fixed)
 file(GLOB HEAD_FILE_LIST ${ISL_DIR}/*.h)
