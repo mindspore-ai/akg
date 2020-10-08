@@ -36,6 +36,7 @@ void GPUMgrStrategy::RegisterMemPromPasses() {
 void GPUMgrStrategy::RegisterPasses() {
   passes_.clear();
   RegisterNormalizationPasses();
+  RegisterConstrainedScheduling();
   RegisterSchedulingPasses();
   RegisterPass(std::make_shared<GpuDmaAnalysis>(scop_info_));
   RegisterTilingPasses();

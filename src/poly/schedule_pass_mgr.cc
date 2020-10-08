@@ -44,7 +44,17 @@ isl::schedule SchedulePassMgr::Run(const isl::schedule &sch, const std::vector<s
   auto replace_sch = sch;
   need_restart_ = false;
 
+  std::set<std::string> disabled;
   for (auto &pass : passes) {
+    const std::string &name = pass->GetPassName();
+    const bool disable = disabled.find(name) != disabled.end();
+    if (disable) {
+      LOG(INFO) << "Disabling poly pass " << name;
+      continue;
+    } else {
+      LOG(INFO) << "Running poly pass " << name;
+    }
+
     if (LoadScheduleTreeFromFile(scop_info_.AddDumpDir(pass->GetPassName() + ".txt"), replace_sch)) {
       if (!replace_sch.plain_is_equal(final_sch)) {
         final_sch = replace_sch;
@@ -66,6 +76,10 @@ isl::schedule SchedulePassMgr::Run(const isl::schedule &sch, const std::vector<s
     if (pass->restart_) {
       need_restart_ = true;
       break;
+    }
+    if (!pass->disabled_passes_.empty()) {
+      disabled.insert(pass->disabled_passes_.begin(), pass->disabled_passes_.end());
+      LOG(INFO) << name << " requests to disable some subsequent passes";
     }
   }
   return final_sch;

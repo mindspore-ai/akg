@@ -17,7 +17,7 @@ akg_add_pkg(isl
         URL ${ISL_URL}
         MD5 ${ISL_MD5}
         CUSTOM_CMAKE ${AKG_SOURCE_DIR}/third_party/isl_wrap
-        PATCHES ${AKG_SOURCE_DIR}/third_party/patch/isl/isl.patch
+        PATCHES ${AKG_SOURCE_DIR}/third_party/patch/isl/isl.patch ${AKG_SOURCE_DIR}/third_party/patch/isl/isl-influence.patch
         CMAKE_OPTION " ")
 include_directories("${AKG_SOURCE_DIR}/third_party/isl_wrap/include")
 include_directories("${isl_INC}/include")

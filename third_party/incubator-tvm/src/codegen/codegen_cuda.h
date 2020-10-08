@@ -94,6 +94,10 @@ class CodeGenCUDA final : public CodeGenC {
   void VisitStmt_(const Evaluate *op) final;
   void VisitStmt_(const Allocate *op) final;
   void VisitStmt_(const AttrStmt *op) final;
+  void VisitStmt_(const LetStmt *op) final;
+  void VisitExpr_(const Variable *op, std::ostream &os) final;
+  void VisitExpr_(const Load *op, std::ostream &os) final;
+  void VisitStmt_(const Store *op) final;
 
  private:
   // Handle volatile loads.
@@ -119,6 +123,27 @@ class CodeGenCUDA final : public CodeGenC {
   bool need_math_constants_h_{false};
   // whether need mma.h
   bool need_mma_h_{false};
+
+  // whether next store will be a reinterpret_cast
+  bool is_reinterpret{false};
+  // the extent of the swizzled loop
+  Expr loop_extent{0};
+  // whether next store is not an array
+  bool simple_store{false};
+  // whether store uses vector format
+  bool vec_store{false};
+  // var from Loads to modify with vector load
+  std::set<const Variable*> vec_loads;
+  // whether replace cce variable with constant in vec_store
+  bool replace_cce{false};
+  // variable to replace
+  const Variable* loop_var;
+  // index to replace cce with
+  int current_index;
+  // do not set value to next LetStmt if true
+  bool no_init_value{false};
+  // ignore next allocate stmt if true (trick to bypass some tests)
+//  bool ignore_next_allocate{false};
 
   // add for TensorCore
   // warp tile size for TensorCore interface

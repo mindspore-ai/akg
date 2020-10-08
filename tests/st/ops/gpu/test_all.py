@@ -62,6 +62,7 @@ from tests.st.ops.gpu.test_fused_relu_grad import test_fused_relu_grad
 from tests.st.ops.gpu.test_fused_bn_update_grad import test_fused_bn_update_grad
 from tests.st.ops.gpu.test_fused_mul_div_rsqrt_mul_isfinite_red import test_fused_mul_div_rsqrt_mul_isfinite_red
 from tests.st.ops.gpu.test_ms_composite_stitch import test_composite_stitch
+from tests.st.ops.gpu.test_ms_mindtricks import test_mindtricks
 
 
 @pytest.mark.level0
@@ -502,6 +503,14 @@ def test_ms_fused_mul_div_rsqrt_mul_isfinite_red():
 def test_ms_composite_buffer_stitch():
     ci_path = "./stitch_cases/"
     test_composite_stitch(ci_path)
+    return True
+
+
+@pytest.mark.level0
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
+def test_ms_mindtricks():
+    test_mindtricks()
     return True
 
 

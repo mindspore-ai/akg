@@ -1,0 +1,20 @@
+{
+  "name": "Fused_AddN_fusion_9584919353229493170_0",
+  "operator": "Fused_AddN_fusion_9584919353229493170_0",
+  "domain": "{ S_0[cc0] : 0 <= cc0 <= 3145727 }",
+  "schedule": [
+    "{ S_0[cc0] -> [cc0/4096] }",
+    "{ S_0[cc0] -> [(cc0 mod 4096)/4] }",
+    "{ S_0[cc0] -> [(cc0 mod 4096) mod 4] }",
+    "{ S_0[cc0] -> [0] }"
+  ],
+  "gpu": {
+    "blocks": [0],
+    "threads": [1],
+    "compiler flags": ["--use_fast_math"]
+  },
+  "disable": [
+    "GpuDmaAnalysis",
+    "TileOuterBand"
+  ]
+}

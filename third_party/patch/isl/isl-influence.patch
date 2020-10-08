@@ -1,0 +1,573 @@
+unchanged:
+--- isl_0.22/include/isl/options.h	2021-01-26 13:29:02.345994411 +0100
++++ isl/include/isl/options.h	2021-01-26 13:25:07.713990422 +0100
+@@ -49,6 +49,13 @@ int isl_options_get_coalesce_bounded_wra
+ isl_stat isl_options_set_coalesce_preserve_locals(isl_ctx *ctx, int val);
+ int isl_options_get_coalesce_preserve_locals(isl_ctx *ctx);
+ 
++/* ====================== AKG influence patch -- start ====================== */
++isl_stat isl_options_set_akg_print_debug(isl_ctx *ctx, int val);
++int isl_options_get_akg_print_debug(isl_ctx *ctx);
++isl_stat isl_options_set_akg_influence_scheduler(isl_ctx *ctx, int val);
++int isl_options_get_akg_influence_scheduler(isl_ctx *ctx);
++/* ======================= AKG influence patch -- end ======================= */
++
+ #if defined(__cplusplus)
+ }
+ #endif
+unchanged:
+--- isl_0.22/include/isl/schedule.h	2021-01-26 13:29:02.345994411 +0100
++++ isl/include/isl/schedule.h	2021-01-26 13:25:07.713990422 +0100
+@@ -9,7 +9,7 @@
+ #include <isl/set_type.h>
+ #include <isl/list.h>
+ #include <isl/printer_type.h>
+-
++#include <isl/vec.h>
+ #if defined(__cplusplus)
+ extern "C" {
+ #endif
+@@ -209,6 +209,57 @@ __isl_give isl_printer *isl_printer_prin
+ void isl_schedule_dump(__isl_keep isl_schedule *schedule);
+ __isl_give char *isl_schedule_to_str(__isl_keep isl_schedule *schedule);
+ 
++/* ====================== AKG influence patch -- start ====================== */
++
++/* --- Exports --- */
++
++/* export hidden types */
++struct isl_sched_node;
++typedef struct isl_sched_node isl_sched_node;
++struct isl_sched_edge;
++typedef struct isl_sched_edge isl_sched_edge;
++struct isl_sched_graph;
++typedef struct isl_sched_graph isl_sched_graph;
++
++/* isl_sched_node functions */
++int isl_sched_node_par_coef_offset(struct isl_sched_node *node);
++int isl_sched_node_cst_coef_offset(struct isl_sched_node *node);
++__isl_give isl_map *isl_sched_node_extract_schedule(struct isl_sched_node *node);
++
++/* isl vec functions */
++int isl_inf_vec_get_size( isl_vec* vec);
++/* export isl_sched_edge functions */
++/* export isl_sched_graph functions */
++isl_stat isl_sched_graph_init(struct isl_sched_graph *graph,
++	__isl_keep isl_schedule_constraints *sc);
++void isl_sched_graph_free(isl_ctx *ctx, struct isl_sched_graph *graph);
++__isl_give isl_schedule_node *isl_schedule_node_compute_schedule(isl_schedule_node *node,
++	struct isl_sched_graph *graph);
++
++/* --- New functions --- */
++
++/* isl_sched_node functions */
++int isl_sched_node_get_nparam(const struct isl_sched_node *node);
++int isl_sched_node_get_nvar(const struct isl_sched_node *node);
++
++/* isl_vec functions */
++int  isl_influence_int_eq(isl_vec* v, int pos1, int pos2);
++isl_val*  isl_influence_vec_get_elem(isl_vec*, int pos);
++/* isl_sched_graph functions */
++struct isl_sched_node* isl_sched_graph_get_node(struct isl_sched_graph *graph, int i);
++
++/* --- AKG influence --- */
++extern isl_basic_set* (*isl_influence_set_coef)(
++    isl_ctx *ctx, struct isl_sched_graph *graph, isl_basic_set *bset);
++extern isl_basic_set* (*isl_influence_set_equal)(
++    isl_ctx *ctx, struct isl_sched_graph *graph, isl_basic_set *bset);
++extern int (*isl_influence_maxvar)(struct isl_sched_graph* graph);
++extern int (*isl_influence_check_coincident)(struct isl_sched_graph* graph, isl_vec* sol);
++extern struct isl_sched_graph* (*isl_influence_sol_list_free)(struct isl_sched_graph* graph);
++extern struct isl_sched_graph* (*isl_influence_sol_add_elem)(isl_vec* sol, struct isl_sched_graph* graph);
++extern int(*isl_influence_sol_get_elem)(int sched, int pos, struct isl_sched_graph* graph);
++/* ======================= AKG influence patch -- end ======================= */
++
+ #if defined(__cplusplus)
+ }
+ #endif
+unchanged:
+--- isl_0.22/isl_options.c	2021-01-26 13:29:02.313994410 +0100
++++ isl/isl_options.c	2021-01-26 13:25:07.713990422 +0100
+@@ -228,6 +228,12 @@ ISL_ARG_BOOL(struct isl_options, print_s
+ 	"print statistics for every isl_ctx")
+ ISL_ARG_ULONG(struct isl_options, max_operations, 0,
+ 	"max-operations", 0, "default number of maximal operations per isl_ctx")
++/* ====================== AKG influence patch -- start ====================== */
++ISL_ARG_BOOL(struct isl_options, akg_print_debug, 0, "print-debug", 0,
++	"print debug info")
++ISL_ARG_BOOL(struct isl_options, akg_influence_scheduler, 0, "influence-schedule", 0,
++	"update scheduler coefficients")
++/* ======================= AKG influence patch -- end ======================= */
+ ISL_ARG_VERSION(print_version)
+ ISL_ARGS_END
+ 
+@@ -402,3 +408,14 @@ ISL_CTX_SET_BOOL_DEF(isl_options, struct
+ 	ast_build_allow_or)
+ ISL_CTX_GET_BOOL_DEF(isl_options, struct isl_options, isl_options_args,
+ 	ast_build_allow_or)
++
++/* ====================== AKG influence patch -- start ====================== */
++ISL_CTX_SET_BOOL_DEF(isl_options, struct isl_options, isl_options_args,
++	akg_print_debug)
++ISL_CTX_GET_BOOL_DEF(isl_options, struct isl_options, isl_options_args,
++	akg_print_debug)
++ISL_CTX_SET_BOOL_DEF(isl_options, struct isl_options, isl_options_args,
++	akg_influence_scheduler)
++ISL_CTX_GET_BOOL_DEF(isl_options, struct isl_options, isl_options_args,
++	akg_influence_scheduler)
++/* ======================= AKG influence patch -- end ======================= */
+unchanged:
+--- isl_0.22/isl_options_private.h	2021-01-26 13:29:02.317994410 +0100
++++ isl/isl_options_private.h	2021-01-26 13:25:07.713990422 +0100
+@@ -71,6 +71,10 @@ struct isl_options {
+ 
+ 	int			print_stats;
+ 	unsigned long		max_operations;
++/* ====================== AKG influence patch -- start ====================== */
++	int			akg_print_debug;
++	int			akg_influence_scheduler;
++/* ======================= AKG influence patch -- end ======================= */
+ };
+ 
+ #endif
+diff -u isl/isl_scheduler.c isl/isl_scheduler.c
+--- isl/isl_scheduler.c	2021-02-05 09:56:15.186697283 +0100
++++ isl/isl_scheduler.c	2021-03-31 14:49:38.568015437 +0200
+@@ -39,7 +39,6 @@
+ #include <isl_morph.h>
+ #include <isl/ilp.h>
+ #include <isl_val_private.h>
+-
+ /*
+  * The scheduling algorithm implemented in this file was inspired by
+  * Bondhugula et al., "Automatic Transformations for Communication-Minimized
+@@ -303,6 +302,12 @@
+ 	return is_condition(edge) || is_conditional_validity(edge);
+ }
+ 
++/* ====================== AKG influence patch -- start ====================== */
++struct isl_influence_list;
++struct isl_influence_equal_list;
++struct isl_influence_sol_list;
++/* ======================= AKG influence patch -- end ======================= */
++
+ /* Internal information about the dependence graph used during
+  * the construction of the schedule.
+  *
+@@ -395,6 +400,11 @@
+ 	int weak;
+ 
+ 	int max_weight;
++/* ====================== AKG influence patch -- start ====================== */
++	struct isl_influence_list *inf_list;
++	struct isl_influence_equal_list *inf_equal_list;
++	struct isl_influenec_sol_list* inf_sol_list;
++/* ======================= AKG influence patch -- end ======================= */
+ };
+ 
+ /* Initialize node_table based on the list of nodes.
+@@ -757,6 +767,8 @@
+ 		isl_hash_table_free(ctx, graph->edge_table[i]);
+ 	isl_hash_table_free(ctx, graph->node_table);
+ 	isl_basic_set_free(graph->lp);
++	if(isl_influence_sol_list_free)
++		graph=isl_influence_sol_list_free(graph);
+ }
+ 
+ /* For each "set" on which this function is called, increment
+@@ -1233,7 +1245,6 @@
+ 		return isl_stat_error;
+ 	if (compressed && (!hull || !compress || !decompress))
+ 		return isl_stat_error;
+-
+ 	return isl_stat_ok;
+ error:
+ 	isl_set_free(set);
+@@ -3222,6 +3233,7 @@
+  * In particular, the non-triviality region enforces that at least
+  * one of the linear combinations in the rows of node->indep is non-zero.
+  */
++
+ static __isl_give isl_vec *solve_lp(isl_ctx *ctx, struct isl_sched_graph *graph)
+ {
+ 	int i;
+@@ -3237,16 +3249,68 @@
+ 			trivial = construct_trivial(node, node->indep);
+ 		else
+ 			trivial = isl_mat_zero(ctx, 0, 0);
++		
+ 		graph->region[i].trivial = trivial;
+ 	}
+ 	lp = isl_basic_set_copy(graph->lp);
++/* ====================== AKG influence patch -- start ====================== */
++	isl_basic_set *lp_backup;
++	isl_basic_set *lp_backup_inf;
++	const int akg_influence = isl_options_get_akg_influence_scheduler(ctx);
++	const int akg_debug = isl_options_get_akg_print_debug(ctx);
++	if (akg_influence)
++	{
++		lp_backup = isl_basic_set_copy(graph->lp);
++		lp = isl_influence_set_coef(ctx, graph, lp);
++		lp = isl_influence_set_equal(ctx, graph, lp);
++		lp_backup_inf = isl_basic_set_copy(lp);
++  	}
++/* ======================= AKG influence patch -- end ======================= */
+ 	sol = isl_tab_basic_set_non_trivial_lexmin(lp, 2, graph->n,
+ 				       graph->region, &check_conflict, graph);
++/* ====================== AKG influence patch -- start ====================== */
++	if (akg_influence)
++	{
++		if(sol->size == 0)
++		{
++			if (akg_debug >= 1)  fprintf(stderr, "\ninfluence schedule did not find solution, relax region and try again::\n");
++			isl_vec_free(sol);
++
++			for(int i=0; i< graph->n;i++)
++			{
++				isl_mat_free(graph->region[i].trivial);
++				graph->region[i].trivial = isl_mat_zero(ctx,0,0);
++			}
++
++			sol = isl_tab_basic_set_non_trivial_lexmin(lp_backup_inf, 2, graph->n, graph->region, &check_conflict, graph);
++
++			if (sol->size == 0)
++		    {
++				if (akg_debug >= 1)  fprintf(stderr, "\ninfluence schedule did not find solution, another try with use_coincidence=0:\n");
++			} else
++			{
++				isl_basic_set_free(lp_backup);	
++			}
++
++		}
++		else
++	    {
++			isl_basic_set_free(lp_backup);	
++			isl_basic_set_free(lp_backup_inf);
++		}
++	}
++
++	if (!sol->size)
++	{
++		if (akg_debug >= 1)
++			fprintf(stderr, "solve_lp did not find solution for dimension: %d\n",graph->n_row);
++	}
++
++/* ======================= AKG influence patch -- end ======================= */
+ 	for (i = 0; i < graph->n; ++i)
+ 		isl_mat_free(graph->region[i].trivial);
+ 	return sol;
+ }
+-
+ /* Extract the coefficients for the variables of "node" from "sol".
+  *
+  * Each schedule coefficient c_i_x is represented as the difference
+@@ -3271,6 +3335,12 @@
+ 	if (!csol)
+ 		return NULL;
+ 
++/* ====================== AKG influence patch -- start ====================== */
++	isl_ctx* const ctx = isl_vec_get_ctx(sol);
++	const int akg_influence = isl_options_get_akg_influence_scheduler(ctx);
++	const int akg_debug = isl_options_get_akg_print_debug(ctx);
++
++/* ======================= AKG influence patch -- end ======================= */
+ 	for (i = 0; i < node->nvar; ++i) {
+ 		pos = 1 + node_var_coef_pos(node, i);
+ 		if (node->nonneg)
+@@ -3304,10 +3374,15 @@
+ 	if (sol->size == 0)
+ 		isl_die(sol->ctx, isl_error_internal,
+ 			"no solution found", goto error);
+-	if (graph->n_total_row >= graph->max_row)
++/* ====================== AKG influence patch -- start ====================== */
++	isl_ctx* const ctx = isl_vec_get_ctx(sol);
++	const int akg_influence = isl_options_get_akg_influence_scheduler(ctx);
++	const int akg_debug = isl_options_get_akg_print_debug(ctx);
++
++	if (!akg_influence && graph->n_total_row >= graph->max_row)
+ 		isl_die(sol->ctx, isl_error_internal,
+ 			"too many schedule rows", goto error);
+-
++	/* ======================= AKG influence patch -- end ======================= */
+ 	for (i = 0; i < graph->n; ++i) {
+ 		struct isl_sched_node *node = &graph->node[i];
+ 		int pos;
+@@ -3325,11 +3400,13 @@
+ 			goto error;
+ 		pos = node_cst_coef_offset(node);
+ 		node->sched = isl_mat_set_element(node->sched,
+-					row, 0, sol->el[1 + pos]);
++				row, 0, sol->el[1 + pos]);
+ 		pos = node_par_coef_offset(node);
+ 		for (j = 0; j < node->nparam; ++j)
++    	{
+ 			node->sched = isl_mat_set_element(node->sched,
+ 					row, 1 + j, sol->el[1 + pos + j]);
++    	}
+ 		for (j = 0; j < node->nvar; ++j)
+ 			node->sched = isl_mat_set_element(node->sched,
+ 					row, 1 + node->nparam + j, csol->el[j]);
+@@ -3340,6 +3417,14 @@
+ 
+ 	graph->n_row++;
+ 	graph->n_total_row++;
++/* ====================== AKG influence patch -- start ====================== */
++	if (akg_influence && graph->n_row  == graph->maxvar)
++	{
++		if(graph->n_row  < isl_influence_maxvar(graph)){
++			graph->maxvar++;
++		}
++	}
++/* ======================= AKG influence patch -- end ======================= */
+ 
+ 	return 0;
+ error:
+@@ -3917,14 +4002,16 @@
+ static int compute_maxvar(struct isl_sched_graph *graph)
+ {
+ 	int i;
+-
+ 	graph->maxvar = 0;
+ 	for (i = 0; i < graph->n; ++i) {
+ 		struct isl_sched_node *node = &graph->node[i];
+ 		int nvar;
+ 
+-		if (node_update_vmap(node) < 0)
++/* ====================== AKG influence patch -- start ====================== */
++		if (node_update_vmap(node) < 0) {
+ 			return -1;
++		}
++/* ======================= AKG influence patch -- end ======================= */
+ 		nvar = node->nvar + graph->n_row - node->rank;
+ 		if (nvar > graph->maxvar)
+ 			graph->maxvar = nvar;
+@@ -3968,6 +4055,10 @@
+ 	sub->max_row = graph->max_row;
+ 	sub->n_total_row = graph->n_total_row;
+ 	sub->band_start = graph->band_start;
++/* ====================== AKG influence patch -- start ====================== */
++	sub->inf_list = graph->inf_list;
++	sub->inf_equal_list = graph->inf_equal_list;
++/* ======================= AKG influence patch -- end ======================= */
+ 
+ 	return isl_stat_ok;
+ }
+@@ -3997,6 +4088,11 @@
+ {
+ 	struct isl_sched_graph split = { 0 };
+ 
++/* ====================== AKG influence patch -- start ====================== */
++	const int akg_influence = isl_options_get_akg_influence_scheduler(ctx);
++	const int akg_debug = isl_options_get_akg_print_debug(ctx);
++/* ======================= AKG influence patch -- end ======================= */
++
+ 	if (extract_sub_graph(ctx, graph, node_pred, edge_pred, data,
+ 				&split) < 0)
+ 		goto error;
+@@ -5396,6 +5492,30 @@
+ 		return NULL;
+ 
+ 	lp = isl_basic_set_copy(graph->lp);
++/* ====================== AKG influence patch -- start ====================== */
++	const int akg_influence = isl_options_get_akg_influence_scheduler(ctx);
++	const int akg_debug = isl_options_get_akg_print_debug(ctx);
++	if (akg_influence)
++	{
++		isl_basic_set *lp_backup = isl_basic_set_copy(graph->lp);
++		lp = isl_influence_set_coef(ctx, graph, lp);
++		lp = isl_influence_set_equal(ctx, graph, lp);
++		isl_vec *sol = non_neg_lexmin(graph, lp, n_edge, want_integral);
++		if (sol->size == 0)
++		{
++      if (akg_debug >= 1) {
++        fprintf(stderr, "\ncarry_lp hack failed, restoring previous lp problem\n");
++      }
++			sol = non_neg_lexmin(graph, lp_backup, n_edge, want_integral);
++		}
++		else
++		{
++			isl_basic_set_free(lp_backup);
++		}
++
++    return sol;
++	}
++/* ======================= AKG influence patch -- end ======================= */
+ 	return non_neg_lexmin(graph, lp, n_edge, want_integral);
+ }
+ 
+@@ -5991,6 +6111,11 @@
+ 	int use_coincidence;
+ 	int force_coincidence = 0;
+ 	int check_conditional;
++	int coincidence_relaxed=0;
++/* ====================== AKG influence patch -- start ====================== */
++	const int akg_influence = isl_options_get_akg_influence_scheduler(ctx);
++	const int akg_debug = isl_options_get_akg_print_debug(ctx);
++/* ======================= AKG influence patch -- end ======================= */
+ 
+ 	if (sort_sccs(graph) < 0)
+ 		return isl_stat_error;
+@@ -5998,10 +6123,17 @@
+ 	clear_local_edges(graph);
+ 	check_conditional = need_condition_check(graph);
+ 	has_coincidence = has_any_coincidence(graph);
+-
+ 	if (ctx->opt->schedule_outer_coincidence)
+ 		force_coincidence = 1;
+ 
++
++	if(akg_influence){
++		int previous_coincidence = has_coincidence;
++		int isl_maxvar = isl_influence_maxvar(graph);
++		if(graph->maxvar > isl_maxvar)
++			graph->maxvar = isl_maxvar;
++	}
++	
+ 	use_coincidence = has_coincidence;
+ 	while (graph->n_row < graph->maxvar) {
+ 		isl_vec *sol;
+@@ -6014,19 +6146,34 @@
+ 		if (setup_lp(ctx, graph, use_coincidence) < 0)
+ 			return isl_stat_error;
+ 		sol = solve_lp(ctx, graph);
+-		if (!sol)
++		if(akg_influence && sol->size)
++			graph=isl_influence_sol_add_elem(sol,graph);
++		if(!sol)
++    {
+ 			return isl_stat_error;
++    }
+ 		if (sol->size == 0) {
++			/* ====================== AKG influence patch -- start ====================== */
++      		if (akg_influence && akg_debug >= 1) {
++        		fprintf(stderr, "No solution!\n");
++      		}
++			/* ======================= AKG influence patch -- end ======================= */
+ 			int empty = graph->n_total_row == graph->band_start;
+ 
+ 			isl_vec_free(sol);
+ 			if (use_coincidence && (!force_coincidence || !empty)) {
+ 				use_coincidence = 0;
++				coincidence_relaxed=1;
+ 				continue;
+ 			}
+ 			return isl_stat_ok;
+ 		}
+ 		coincident = !has_coincidence || use_coincidence;
++		
++		if(akg_influence && graph->n > 1){
++			coincident=isl_influence_check_coincident(graph,sol);
++		}
++			
+ 		if (update_schedule(graph, sol, coincident) < 0)
+ 			return isl_stat_error;
+ 
+@@ -7688,6 +7835,10 @@
+ 
+ 	if (graph->scc <= 1 || isl_options_get_schedule_whole_component(ctx))
+ 		return compute_schedule_wcc_whole(node, graph);
++/* ====================== AKG influence patch -- start ====================== */
++  else if (isl_options_get_akg_influence_scheduler(ctx))
++    return compute_schedule_wcc_whole(node, graph);
++/* ======================= AKG influence patch -- end ======================= */
+ 	else
+ 		return compute_schedule_wcc_clustering(node, graph);
+ }
+@@ -7735,6 +7886,10 @@
+ 	else
+ 		node = isl_schedule_node_insert_sequence(node, filters);
+ 
++/* ====================== AKG influence patch -- start ====================== */
++	const int akg_influence = isl_options_get_akg_influence_scheduler(ctx);
++	const int akg_debug = isl_options_get_akg_print_debug(ctx);
++/* ======================= AKG influence patch -- end ======================= */
+ 	for (component = 0; component < graph->scc; ++component) {
+ 		node = isl_schedule_node_child(node, component);
+ 		node = isl_schedule_node_child(node, 0);
+@@ -7775,7 +7930,10 @@
+ 			return isl_schedule_node_free(node);
+ 	}
+ 
+-	if (graph->scc > 1)
++/* ====================== AKG influence patch -- start ====================== */
++	const int akg_influence = isl_options_get_akg_influence_scheduler(ctx);
++	if (graph->scc > 1 && akg_influence == 0)
++/* ======================= AKG influence patch -- end ======================= */
+ 		return compute_component_schedule(node, graph, 1);
+ 
+ 	return compute_schedule_wcc(node, graph);
+@@ -7806,6 +7964,11 @@
+ 	isl_union_set *domain;
+ 	isl_size n;
+ 
++/* ====================== AKG influence patch -- start ====================== */
++	const int akg_influence = isl_options_get_akg_influence_scheduler(ctx);
++	const int akg_debug = isl_options_get_akg_print_debug(ctx);
++/* ======================= AKG influence patch -- end ======================= */
++
+ 	sc = isl_schedule_constraints_align_params(sc);
+ 
+ 	domain = isl_schedule_constraints_get_domain(sc);
+@@ -7852,0 +8016,62 @@
++
++/* ====================== AKG influence patch -- start ====================== */
++isl_basic_set* (*isl_influence_set_coef)(
++    isl_ctx *ctx, struct isl_sched_graph *graph, isl_basic_set *bset) = { 0 };
++isl_basic_set* (*isl_influence_set_equal)(
++    isl_ctx *ctx, struct isl_sched_graph *graph, isl_basic_set *bset) = { 0 };
++int (*isl_influence_maxvar)(struct isl_sched_graph* graph) = { 0 };
++int (*isl_influence_check_coincident)(struct isl_sched_graph *graph,isl_vec* sol) = { 0 };
++struct isl_sched_graph* (*isl_influence_sol_list_free)(struct isl_sched_graph* graph) = { 0 } ;
++struct isl_sched_graph* (*isl_influence_sol_add_elem)(isl_vec* sol, struct isl_sched_graph* graph) = { 0 };
++int  (*isl_influence_sol_get_elem)(int sched, int pos, struct isl_sched_graph* graph) = { 0 };
++int  isl_sched_node_par_coef_offset(struct isl_sched_node *node) {
++  return node_par_coef_offset(node);
++}
++
++int isl_sched_node_cst_coef_offset(struct isl_sched_node *node) {
++  return node_cst_coef_offset(node);
++}
++
++__isl_give isl_map *isl_sched_node_extract_schedule(struct isl_sched_node *node) {
++  return node_extract_schedule(node);
++}
++
++int isl_sched_node_get_nparam(const struct isl_sched_node *node) {
++  return node->nparam;
++}
++
++int isl_sched_node_get_nvar(const struct isl_sched_node *node) {
++  return node->nvar;
++}
++
++int isl_influence_int_eq(isl_vec* v, int pos1, int pos2)
++{
++  return isl_int_eq(v->el[pos1],v->el[pos2]);
++}
++
++isl_val* isl_influence_vec_get_elem(isl_vec* v, int pos)
++{
++  return isl_vec_get_element_val(v,pos);
++}
++isl_stat isl_sched_graph_init(struct isl_sched_graph *graph,
++	__isl_keep isl_schedule_constraints *sc) {
++  return graph_init(graph, sc);
++}
++
++void isl_sched_graph_free(isl_ctx *ctx, struct isl_sched_graph *graph) {
++  graph_free(ctx, graph);
++}
++
++__isl_give isl_schedule_node *isl_schedule_node_compute_schedule(isl_schedule_node *node,
++	struct isl_sched_graph *graph) {
++  return compute_schedule(node, graph);
++}
++
++struct isl_sched_node* isl_sched_graph_get_node(struct isl_sched_graph *graph, int i) {
++  return &graph->node[i];
++}
++
++int isl_inf_vec_get_size(isl_vec* vec){
++  return(int) vec->size;
++}
++/* ======================= AKG influence patch -- end ======================= */

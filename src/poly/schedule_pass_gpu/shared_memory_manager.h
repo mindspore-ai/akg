@@ -72,7 +72,9 @@ class SharedMemoryManager : public SchedulePass {
 
   void UpdateDepth(const isl::schedule_node &root);
 
+  std::vector<size_t> OptimizeSharedDimension(std::vector<size_t> sizes);
   std::vector<size_t> OptimizeBankConflict(std::vector<size_t> sizes);
+  std::vector<size_t> OptimizeVectorAlign(std::vector<size_t> sizes);
   bool UnderThreadMarker(size_t depth);
 
   std::string InAtomicTensors(isl::schedule_node &node);
@@ -102,6 +104,8 @@ class SharedMemoryManager : public SchedulePass {
   std::string tensor_c_;
   std::string tensor_a_;
   std::string tensor_b_;
+  bool shared_inversed_thread_map_{false};
+  int shared_vector_align_{0};
 };
 
 }  // namespace poly

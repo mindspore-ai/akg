@@ -1,0 +1,57 @@
+{
+  "name": "Fused_Cast_RealDiv_Reshape_FusedAdamWeightDecay_fusion_1545859458890067484_0",
+  "operator": "Fused_Cast_RealDiv_Reshape_FusedAdamWeightDecay_fusion_1545859458890067484_0",
+  "domain": [
+    "{ S_0[ax0, ax1] : 0 <= ax0 <= 767 and 0 <= ax1 <= 767 }",
+    "{ S_1[ax0, ax1] : 0 <= ax0 <= 767 and 0 <= ax1 <= 767 }",
+    "{ S_2[ax0, ax1] : 0 <= ax0 <= 767 and 0 <= ax1 <= 767 }"
+  ],
+  "pattern": "{ domain: \"{ S_0[ax0, ax1] : 0 <= ax0 <= 767 and 0 <= ax1 <= 767; S_2[ax0, ax1] : 0 <= ax0 <= 767 and 0 <= ax1 <= 767; S_1[ax0, ax1] : 0 <= ax0 <= 767 and 0 <= ax1 <= 767 }\", child: { sequence: [ { filter: \"{ S_0[ax0, ax1] }\", child: { schedule: \"[{ S_0[ax0, ax1] -> [(ax0)] }]\", child: { schedule: \"[{ S_0[ax0, ax1] -> [(ax1)] }]\" } } }, { filter: \"{ S_1[ax0, ax1] }\", child: { schedule: \"[{ S_1[ax0, ax1] -> [(ax0)] }]\", child: { schedule: \"[{ S_1[ax0, ax1] -> [(ax1)] }]\" } } }, { filter: \"{ S_2[ax0, ax1] }\", child: { schedule: \"[{ S_2[ax0, ax1] -> [(ax0)] }]\", child: { schedule: \"[{ S_2[ax0, ax1] -> [(ax1)] }]\" } } } ] } }",
+  "schedule": [
+    "{ S_0[ax0, ax1] -> [ax0]; S_1[ax0, ax1] -> [ax0]; S_2[ax0, ax1] -> [ax0] }",
+    "{ S_0[ax0, ax1] -> [ax1/4]; S_1[ax0, ax1] -> [ax1/4]; S_2[ax0, ax1] -> [ax1/4] }",
+    "{ S_0[ax0, ax1] -> [ax1 mod 4]; S_1[ax0, ax1] -> [ax1 mod 4]; S_2[ax0, ax1] -> [ax1 mod 4] }",
+    "{ S_0[ax0, ax1] -> [0]; S_1[ax0, ax1] -> [1]; S_2[ax0, ax1] -> [2] }"
+  ],
+  "soft constraints": [
+    {
+      "statement": "S_0",
+      "meta": [2, 0],
+      "coefficients": [
+        "[?1, 0, ?3]",
+        "[?1, 1, ?3] (/4)",
+        "[?1, 1, ?3] (%4)",
+        "[0, 0, 0]"
+      ]
+    },
+    {
+      "statement": "S_1",
+      "meta": [2, 0],
+      "coefficients": [
+        "[?1, 0, ?3]",
+        "[?1, 1, ?3] (/4)",
+        "[?1, 1, ?3] (%4)",
+        "[0, 0, 1]"
+      ]
+    },
+    {
+      "statement": "S_2",
+      "meta": [2, 0],
+      "coefficients": [
+        "[?1, 0, ?3]",
+        "[?1, 1, ?3] (/4)",
+        "[?1, 1, ?3] (%4)",
+        "[0, 0, 2]"
+      ]
+    }
+  ],
+  "gpu": {
+    "blocks": [0],
+    "threads": [1],
+    "compiler flags": ["--use_fast_math"]
+  },
+  "disable": [
+    "GpuDmaAnalysis",
+    "TileOuterBand"
+  ]
+}

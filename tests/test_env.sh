@@ -20,8 +20,8 @@ if [ $# -eq 1 ] && [ $1 = "gpu_ci" ]; then
   echo "Argument gpu_ci is used in CI and will be deprecated."
 else
   CUR_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-  AKG_DIR="${CUR_DIR}/.."
-  AKG_BUILD_DIR="${AKG_DIR}/build"
+  AKG_DIR="${AKG_DIR:-${CUR_DIR}/..}"
+  AKG_BUILD_DIR="${AKG_BUILD_DIR:-${AKG_DIR}/build}"
   TVM_ROOT="${AKG_DIR}/third_party/incubator-tvm"
 
   export LD_LIBRARY_PATH=${AKG_BUILD_DIR}:${LD_LIBRARY_PATH}

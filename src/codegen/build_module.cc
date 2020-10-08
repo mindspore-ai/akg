@@ -564,6 +564,13 @@ NodeRef LowerStmt(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeR
     stmt = NEXT_PASS(InjectDoubleBuffer, stmt, config->double_buffer_split_loop, 
       global_attrs.GetBoolAttr(kEnableTransferBuffer, false));
     stmt = NEXT_PASS(StorageRewrite, stmt);
+
+    if (target_platform->device_type == kDLGPU && polyhedral) {
+      if (global_attrs.GetBoolAttr(kEnableSwizzleGPU, true)) {
+        stmt = NEXT_PASS(SwizzleGPU, stmt, global_attrs);
+      }
+    }
+
     stmt = NEXT_PASS(UnrollLoop, stmt, config->auto_unroll_max_step, config->auto_unroll_max_depth,
                      config->auto_unroll_max_extent, config->unroll_explicit);
 

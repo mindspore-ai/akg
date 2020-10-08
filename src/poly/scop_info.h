@@ -179,6 +179,11 @@ class UserConfig {
     ParseBoolAttr(attrs, "pragma_tilesize_is_var", &tile_size_is_var_);
     ParseBoolAttr(attrs, "pragma_outerband_need_split", &outer_band_need_split_);
 
+    // Mind-trick pass
+    ParseIntAttr(attrs, "constrain_schedule_verbosity", &constrain_schedule_verbosity_);
+    ParseBoolAttr(attrs, "enable_mind_trick", &enable_mind_trick_);
+    ParseStringAttr(attrs, "mind_trick", &mind_trick_);
+
     ParseStringAttr(attrs, "dim", &b_dim_);
     ParseStringAttr(attrs, "bind_elem_per_thread", &elem_per_thread_);
     ParseMappingCfgAttr(attrs, "bind_block", &block_cfg_);
@@ -241,6 +246,8 @@ class UserConfig {
       ParseBoolAttr(attrs, "use_shared_memory", &use_shared_memory_);
       ParseBoolAttr(attrs, "enable_bank_conflict_opt", &enable_bank_conflict_);
       ParseBoolAttr(attrs, "enable_one_dim_thread", &enable_one_dim_thread_);
+      ParseBoolAttr(attrs, "shared_inversed_thread_map", &shared_inversed_thread_map_);
+      ParseIntAttr(attrs, "shared_vector_align", &shared_vector_align_);
       ParseIntAttr(attrs, "register_memory_depth", &register_depth_);
       ParseIntAttr(attrs, "shared_memory_depth", &shared_depth_);
       ParseStringAttr(attrs, "shared_memory_tensors", &shared_tensors_);
@@ -304,6 +311,12 @@ class UserConfig {
   bool GetUnrollShared() const { return unroll_shared_; }
   void SetUnrollShared(const bool unroll_shared) { this->unroll_shared_ = unroll_shared; }
   void SetDisableLoopFusion(const bool disable_loop_fusion) { this->disable_loop_fusion_ = disable_loop_fusion; }
+
+  // getter/setter for schedule_pass config
+  int GetConstrainScheduleVerbosity() const { return constrain_schedule_verbosity_; }
+  bool GetEnableMindTrick() const { return enable_mind_trick_; }
+  std::string GetMindTrick() const { return mind_trick_; }
+  void SetConstrainedSchedulingOutput(const std::string &output) { constrained_scheduling_output_ = output; }
 
   // getter for schedule tree transform config
   bool GetRemoveSelfDependence() const { return remove_self_dependence_; }
@@ -418,6 +431,12 @@ class UserConfig {
   void SetEnableBankConflict(bool enable_bank_conflict) { enable_bank_conflict_ = enable_bank_conflict; }
   bool GetEnableBankConflict() { return enable_bank_conflict_; }
   int GetVectorLoadType() { return vector_load_type_; }
+  void SetSharedInversedThreadMap(bool shared_inversed_thread_map) {
+    shared_inversed_thread_map_ = shared_inversed_thread_map;
+  }
+  bool GetSharedInversedThreadMap() { return shared_inversed_thread_map_; }
+  void SetSharedVectorAlign(int shared_vector_align) { shared_vector_align_ = shared_vector_align; }
+  int GetSharedVectorAlign() { return shared_vector_align_; }
 
  private:
   // tools for parsing user config
@@ -576,6 +595,14 @@ class UserConfig {
   int max_unroll_loop_{1};
   bool unroll_shared_{false};
   bool enable_bank_conflict_{false};
+  bool shared_inversed_thread_map_{false};
+  int shared_vector_align_{0};
+
+  // schedule_pass/mind_trick config
+  int constrain_schedule_verbosity_{-1};
+  bool enable_mind_trick_{true};
+  std::string mind_trick_{""};
+  std::string constrained_scheduling_output_{""};
 
   // schedule tree transform config
   bool remove_self_dependence_{true};

@@ -1,0 +1,37 @@
+{
+  "name": "Fused_Transpose_split_18185609042134105765_0",
+  "operator": "Fused_Transpose_split_18185609042134105765_0",
+  "domain": "{ S_0[ax0, ax1, ax2, ax3] : 0 <= ax0 <= 31 and 0 <= ax1 <= 127 and 0 <= ax2 <= 11 and 0 <= ax3 <= 63 }",
+  "pattern": "{ domain: \"{ S_0[ax0, ax1, ax2, ax3] : 0 <= ax0 <= 31 and 0 <= ax1 <= 127 and 0 <= ax2 <= 11 and 0 <= ax3 <= 63 }\", child: { schedule: \"[{ S_0[ax0, ax1, ax2, ax3] -> [(ax0)] }]\", child: { schedule: \"[{ S_0[ax0, ax1, ax2, ax3] -> [(ax1)] }]\", child: { schedule: \"[{ S_0[ax0, ax1, ax2, ax3] -> [(ax2)] }]\", child: { schedule: \"[{ S_0[ax0, ax1, ax2, ax3] -> [(ax3)] }]\" } } } } }",
+  "schedule": [
+    "{ S_0[ax0, ax1, ax2, ax3] -> [ax0] }",
+    "{ S_0[ax0, ax1, ax2, ax3] -> [ax1] }",
+    "{ S_0[ax0, ax1, ax2, ax3] -> [ax2] }",
+    "{ S_0[ax0, ax1, ax2, ax3] -> [ax3/4] }",
+    "{ S_0[ax0, ax1, ax2, ax3] -> [ax3 mod 4] }",
+    "{ S_0[ax0, ax1, ax2, ax3] -> [0] }"
+  ],
+  "soft constraints": [
+    {
+      "statement": "S_0",
+      "meta": [4, 0],
+      "coefficients": [
+        "[?, ?, ?, 0, ?]",
+        "[?, ?, ?, 0, ?]",
+        "[?, ?, ?, 0, ?]",
+        "[?, ?, ?, 1, ?] (/4)",
+        "[?, ?, ?, 1, ?] (%4)",
+        "[0, 0, 0, 0, 0]"
+      ]
+    }
+  ],
+  "gpu": {
+    "blocks": [0, 1],
+    "threads": [2, 3],
+    "compiler flags": ["--use_fast_math"]
+  },
+  "disable": [
+    "GpuDmaAnalysis",
+    "TileOuterBand"
+  ]
+}

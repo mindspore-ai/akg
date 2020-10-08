@@ -32,6 +32,13 @@ isl::schedule SharedMemoryManager::Run(isl::schedule sch) {
   }
   schedule_ = sch;
   auto root = sch.get_root();
+
+  // Update the variable/tensor to share
+  if (!scop_info_.user_config_.GetSharedTensors().empty()) {
+    configed_tensors_ = Split(scop_info_.user_config_.GetSharedTensors(), " ");
+  }
+
+  // Compute the depth where the shared memory have to be generated
   UpdateDepth(root);
   if (scop_info_.user_config_.GetSharedDepth() >= 0) {
     depth_ = scop_info_.user_config_.GetSharedDepth();
@@ -39,6 +46,8 @@ isl::schedule SharedMemoryManager::Run(isl::schedule sch) {
   }
   CHECK_GE(depth_, 0) << "shared depth should be greater than or equal with zero!";
   bank_conflict_ = scop_info_.user_config_.GetEnableBankConflict();
+  shared_inversed_thread_map_ = scop_info_.user_config_.GetSharedInversedThreadMap();
+  shared_vector_align_ = scop_info_.user_config_.GetSharedVectorAlign();
 
   // collect all bands at the given depth in the schedule tree
   size_t remain_memory = share_memory_size_;
@@ -169,6 +178,31 @@ isl::schedule_node SharedMemoryManager::MapCopiesToThreads(isl::schedule_node &r
       band_node = band_node.as<isl::schedule_node_band>().split(mem_size - thread_cfg->bound);
       band_node = band_node.child(0);
       has_split = true;
+    }
+
+    if (shared_inversed_thread_map_) {
+      // Pretille - To make a vectorize loop more apparent with only the information of the mapping
+      const auto &domain =  band_node.as<isl::schedule_node_band>().get_partial_schedule().domain();
+      const isl::id &current_computing_id_shared = domain.unwrap().range().set_list().get_at(0).get_tuple_id();
+
+      std::vector<size_t> tensor_size;
+      for (BufferDefInfo &buffer_info : scop_info_.analysis_result_.buffer_def_infos_) {
+        if (current_computing_id_shared == buffer_info.dst_tensor_id) {
+          tensor_size = buffer_info.sizes;
+        }
+      }
+      // Reverse because thread is innermost map
+      std::reverse(tensor_size.begin(),tensor_size.end());
+
+      auto ctx = band_node.ctx();
+      const auto &space = band_node.as<isl::schedule_node_band>().get_space();
+      const auto n_member = band_node.as<isl::schedule_node_band>().n_member();
+      isl::multi_val tile_size = isl::multi_val::zero(space);
+      for (size_t i = 0; i < n_member; ++i) {
+        const size_t size = tensor_size[i]/thread_cfg->GetAt(i).second;
+        tile_size = tile_size.set_val(n_member-1 - i, isl::val(ctx, size!=0?size:1));
+      }
+      band_node = TileBand(band_node, tile_size);
     }
 
     auto mapping_cfg = thread_cfg;
@@ -495,9 +529,7 @@ void SharedMemoryManager::GatherBufferFootprintDefInfo(const isl::schedule_node 
     sizes.back() += 16;
   }
 
-  if (bank_conflict_) {
-    sizes = OptimizeBankConflict(sizes);
-  }
+  sizes = OptimizeSharedDimension(sizes);
 
   isl::id tensor_id = tensor_info.tensor_id;
   isl::id cluster_id = tensor_info.dst_tensor_id;
@@ -552,7 +584,7 @@ isl::schedule_node SharedMemoryManager::HoistClusters(const isl::schedule_node &
       LOG(FATAL) << "Can not manage a scalar tensor";
     }
 
-    box_sizes = OptimizeBankConflict(box_sizes);
+    box_sizes = OptimizeSharedDimension(box_sizes);
 
     auto approximation_size = std::accumulate(box_sizes.begin(), box_sizes.end(), 1, std::multiplies<size_t>());
     size_t byte = Bytes(id);
@@ -596,7 +628,7 @@ isl::schedule_node SharedMemoryManager::HoistToBlockThreadMemory(isl::schedule_n
   isl::id dst_tensor_id = GpuDstId(type, tensor_id);
   auto sizes = cluster.GetFixedBoxSizes();
   if (force_last_extension_odd) {
-    sizes = OptimizeBankConflict(sizes);
+    sizes = OptimizeSharedDimension(sizes);
   }
 
   auto res_node = PlaceOuterDataCopyBelow(scop_info_, tree, cluster, tensor_id, dst_tensor_id, out_schedule,
@@ -734,6 +766,13 @@ size_t SharedMemoryManager::Bytes(const isl::id tensor_id) {
   return static_cast<size_t>(type.bytes());
 }
 
+std::vector<size_t> SharedMemoryManager::OptimizeSharedDimension(std::vector<size_t> sizes) {
+  std::vector<size_t> res = sizes;
+  res = OptimizeBankConflict(res);
+  res = OptimizeVectorAlign(res);
+  return res;
+}
+
 std::vector<size_t> SharedMemoryManager::OptimizeBankConflict(std::vector<size_t> sizes) {
   std::vector<size_t> res = sizes;
   if (res.back() % 2 == 0) {
@@ -744,6 +783,15 @@ std::vector<size_t> SharedMemoryManager::OptimizeBankConflict(std::vector<size_t
     } else {
       res.back() += 1;
     }
+  }
+  return res;
+}
+
+std::vector<size_t> SharedMemoryManager::OptimizeVectorAlign(std::vector<size_t> sizes) {
+  std::vector<size_t> res = sizes;
+  if (shared_vector_align_ != 0) {
+    int padsize = res.back() % shared_vector_align_;
+    res.back() += padsize?(shared_vector_align_-padsize):0;
   }
   return res;
 }

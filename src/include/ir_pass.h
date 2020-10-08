@@ -206,6 +206,8 @@ Stmt ValueNumbering(Stmt stmt);
 
 Stmt TensorAccessRewrite(const Stmt stmt);
 
+Stmt SwizzleGPU(const Stmt &stmt, const Map<std::string, NodeRef> &attrs);
+
 }  // namespace ir
 }  // namespace akg
 
