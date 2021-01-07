@@ -128,7 +128,15 @@ def tune_json_file(input_path, input_file, iter_times, save_res, repo_path, all_
         repo = json.loads(f.read())
     with open(input_path + '/' + input_file, 'r') as f:
         json_input = f.read()
+    
     json_content = json.loads(json_input)
+    
+    # specialize tunning attrs for RealDiv
+    for op_desc in json_content["op_desc"]:
+        if op_desc["name"] == "RealDiv":
+            tuning_attrs.append('enable_rewrite_scalar_compute')
+            break
+    
     for input_desc in json_content["input_desc"]:
         if input_desc[0]["shape"] == []:
             input_desc[0]["shape"] = [1]
@@ -169,7 +177,7 @@ def tune_json_file(input_path, input_file, iter_times, save_res, repo_path, all_
                         fe.write(input_file)
                         fe.write("\n")
                     return
-            space_res = space_dict['res']
+                space_res = space_dict['res']
             time_end_get_space = time.time()
             logger.debug("get space time: %f", time_end_get_space - time_start_get_space)
             index_table = space_res['index']
@@ -307,7 +315,7 @@ def jobs(op_type: str = 'add', desc=None, debug_mode: bool = True, save_res: boo
     output_para = None  # this is for multi-output
     if isinstance(input_for_mod, dict):
         input_for_mod, output_para = input_for_mod['args'], input_for_mod['outputs']
-    runner = KernelRunner(op_type, desc, index_table, input_data=input_for_mod,
+    runner = KernelRunner(op_type, desc, None, index_table, input_data=input_for_mod,
                           expect=expect, mod_output_param=output_para, timeout=180, repeat_times=1)
 
     # we can only get a valid tiling, or accurate get cycles
