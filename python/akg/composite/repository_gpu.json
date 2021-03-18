@@ -1,0 +1,73 @@
+{
+    "2.Mul11.Mul1.TensorAdd1.Mul1.Mul45.Mul1.TensorAdd17.Mul1.Tanh1.Mul11.Sub1.Mul12.Mul12.Mul110.TensorAdd6.Mul1.TensorAdd13.Mul119.19": {
+        "8192_3072--": {
+            "float16--": {
+                "dim": "0 0 1024 1024",
+                "bind_block": "12288",
+                "bind_thread": "1024"
+            }
+        }
+    },
+    "2.Cast1.TensorAdd13.Mul11.Mul12.Mul1.TensorAdd14.Mul1.Tanh1.TensorAdd1.Mul18.Mul1.312": {
+        "metadata": {
+            "attrs": {
+                "enable_auto_fuse": false
+            }
+        },
+        "8192_3072.3072.8192_3072-": {
+            "float16.float32.float16-": {
+                "dim": "0 0 4 4 0 1 1024 1024",
+                "bind_block": "3 1024 1",
+                "bind_thread": "1024 1 1"
+            }
+        }
+    },
+    "3.Mul2.Mul14.Mul13.ReduceSum1.46": {
+        "64_12_128_128---.64_12_128_1": {
+            "float16----": {
+                "dim": "0 0 128 128 0 1 128 128",
+                "bind_block": "1 768 1",
+                "bind_thread": "32 32 1"
+            }
+        }
+    },
+    "2.Cast2.TensorAdd12.Reshape1.Transpose1.5": {
+        "768.8192_768.64_12_128_64": {
+            "float32.float16-": {
+                "dim": "0 0 1 1 0 1 1 1 0 2 16 16 0 3 64 64",
+                "bind_block": "1 12 64",
+                "bind_thread": "64 16 1"
+            }
+        }
+    },
+    "2.BatchMatMul12.2": {
+        "any_shape": {
+            "float16--": {
+                "metadata": {
+                    "attrs": {
+                        "use_shared_memory": true,
+                        "pragma_enable_tensor_core": true,
+                        "pragma_enable_matmul": true,
+                        "enable_auto_fuse": false,
+                        "vector_load_type": "float4",
+                        "bind_thread": "32 4"
+                    }
+                }
+            }
+        }
+    },
+    "12.GreaterEqual6.Cast1.LessEqual7.Cast1.AddN8.Reshape1.Cast1.Mul14.Mul17.Mul1.Mul117.Mul121.Sub2021.Mul1.Mul225.Mul14.Mul1.ReduceSum1.Mul730.Mul731.Mul110.22232425293032": {
+        "metadata": {
+            "attrs": {
+                "enable_atomic_add": true
+            }
+        },
+        "64_128_1-.768.64_128_768.64_128_1.64_128_768--.8192_768---.64_128_768-.64_128_1.64_128_768---": {
+            "float32-------.float16---.float32------": {
+                "dim": "0 0 8 1 0 1 768 1",
+                "bind_block": "1 1024",
+                "bind_thread": "128 8"
+            }
+        }
+    }
+}

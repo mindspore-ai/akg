@@ -1,0 +1,74 @@
+domain: "{ group1[i0, i1, i2, i3] : 0 <= i0 <= 63 and 0 <= i1 <= 15 and 0 <= i2 <= 127 and 0 <= i3 <= 127;"
+          "group0[i0, i1, i2, i3] : 0 <= i0 <= 63 and 0 <= i1 <= 15 and 0 <= i2 <= 127 and 0 <= i3 <= 127;"
+          "S_1[i0, i1, i2, k1] : 0 <= i0 <= 63 and 0 <= i1 <= 15 and 0 <= i2 <= 127 and 0 <= k1 <= 127;"
+          "S_2[i0, i1, i2] : 0 <= i0 <= 63 and 0 <= i1 <= 15 and 0 <= i2 <= 127;"
+          "S_0[i0, i1, i2] : 0 <= i0 <= 63 and 0 <= i1 <= 15 and 0 <= i2 <= 127 }"
+child:
+  sequence:
+  - filter: "{ S_0[i0, i1, i2];"
+              "S_1[i0, i1, i2, k1] }"
+    child:
+      schedule: "[{ S_0[i0, i1, i2] -> [(i0)];"
+                   "S_1[i0, i1, i2, k1] -> [(i0)] }]"
+      child:
+        schedule: "[{ S_0[i0, i1, i2] -> [(i1)];"
+                     "S_1[i0, i1, i2, k1] -> [(i1)] }]"
+        child:
+          schedule: "[{ S_0[i0, i1, i2] -> [(i2)];"
+                       "S_1[i0, i1, i2, k1] -> [(i2)] }]"
+          child:
+            sequence:
+            - filter: "{ S_0[i0, i1, i2] }"
+            - filter: "{ S_1[i0, i1, i2, k1] }"
+              child:
+                schedule: "[{ S_1[i0, i1, i2, k1] -> [(k1)] }]"
+  - filter: "{ S_2[i0, i1, i2];"
+              "group0[i0, i1, i2, i3] }"
+    child:
+      schedule: "[{ S_2[i0, i1, i2] -> [(i0)];"
+                   "group0[i0, i1, i2, i3] -> [(i0)] }]"
+      child:
+        schedule: "[{ S_2[i0, i1, i2] -> [(i1)];"
+                     "group0[i0, i1, i2, i3] -> [(i1)] }]"
+        child:
+          schedule: "[{ S_2[i0, i1, i2] -> [(i2)];"
+                       "group0[i0, i1, i2, i3] -> [(i2)] }]"
+          child:
+            sequence:
+            - filter: "{ S_2[i0, i1, i2] }"
+            - filter: "{ group0[i0, i1, i2, i3] }"
+              child:
+                schedule: "[{ group0[i0, i1, i2, i3] -> [(i3)] }]"
+                child:
+                  contraction: "{ S_6[i0, i1, i2, k1] -> group0[(i0), (i1), (i2), (k1)];"
+                                 "S_3[i0, i1, i2, k1] -> group0[(i0), (i1), (i2), (k1)];"
+                                 "S_5[i0, i1, i2, k1] -> group0[(i0), (i1), (i2), (k1)];"
+                                 "S_4[i0, i1, i2, k1] -> group0[(i0), (i1), (i2), (k1)] }"
+                  expansion: "{ group0[i0', i1', i2', i3] -> S_3[i0 = i0', i1 = i1', i2 = i2', k1 = i3] : 0 <= i0' <= 63 and 0 <= i1' <= 15 and 0 <= i2' <= 127 and 0 <= i3 <= 127;"
+                               "group0[i0', i1', i2', i3] -> S_4[i0 = i0', i1 = i1', i2 = i2', k1 = i3] : 0 <= i0' <= 63 and 0 <= i1' <= 15 and 0 <= i2' <= 127 and 0 <= i3 <= 127;"
+                               "group0[i0', i1', i2', i3] -> S_5[i0 = i0', i1 = i1', i2 = i2', k1 = i3] : 0 <= i0' <= 63 and 0 <= i1' <= 15 and 0 <= i2' <= 127 and 0 <= i3 <= 127;"
+                               "group0[i0', i1', i2', i3] -> S_6[i0 = i0', i1 = i1', i2 = i2', k1 = i3] : 0 <= i0' <= 63 and 0 <= i1' <= 15 and 0 <= i2' <= 127 and 0 <= i3 <= 127 }"
+                  child:
+                    sequence:
+                    - filter: "{ S_3[i0, i1, i2, k1] }"
+                    - filter: "{ S_4[i0, i1, i2, k1] }"
+                    - filter: "{ S_5[i0, i1, i2, k1] }"
+                    - filter: "{ S_6[i0, i1, i2, k1] }"
+  - filter: "{ group1[i0, i1, i2, i3] }"
+    child:
+      schedule: "[{ group1[i0, i1, i2, i3] -> [(i0)] }]"
+      child:
+        schedule: "[{ group1[i0, i1, i2, i3] -> [(i1)] }]"
+        child:
+          schedule: "[{ group1[i0, i1, i2, i3] -> [(i2)] }]"
+          child:
+            schedule: "[{ group1[i0, i1, i2, i3] -> [(i3)] }]"
+            child:
+              contraction: "{ S_8[ax0, ax1, ax2, ax3] -> group1[(ax0), (ax1), (ax2), (ax3)];"
+                             "S_7[ax0, ax1, ax2, ax3] -> group1[(ax0), (ax1), (ax2), (ax3)] }"
+              expansion: "{ group1[i0, i1, i2, i3] -> S_8[ax0 = i0, ax1 = i1, ax2 = i2, ax3 = i3] : 0 <= i0 <= 63 and 0 <= i1 <= 15 and 0 <= i2 <= 127 and 0 <= i3 <= 127;"
+                           "group1[i0, i1, i2, i3] -> S_7[ax0 = i0, ax1 = i1, ax2 = i2, ax3 = i3] : 0 <= i0 <= 63 and 0 <= i1 <= 15 and 0 <= i2 <= 127 and 0 <= i3 <= 127 }"
+              child:
+                sequence:
+                - filter: "{ S_7[ax0, ax1, ax2, ax3] }"
+                - filter: "{ S_8[ax0, ax1, ax2, ax3] }"

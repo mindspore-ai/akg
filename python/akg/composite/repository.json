@@ -1,0 +1,780 @@
+{
+    "2.ZerosLike1.GreaterEqual3.Select123.4": {
+        "metadata": {
+            "attrs": {
+                "enable_double_buffer": false
+            }
+        },
+        "32_16_28_28_16--": {
+            "float32--": {
+                "dim": "0 0 1024 1024"
+            }
+        }
+    },
+    "1.Mul1.Tile1.2": {
+        "metadata": {
+            "attrs": {
+                "enable_variable_mask": true
+            }
+        }
+    },
+    "4.Cast4.ReduceSum1.TensorAdd3.Sqrt1.RealDiv1.Mul7.Cast9.TensorAdd12.Mul14.Mul19.ReduceSum1.514": {
+        "metadata": {
+            "attrs": {
+                "merge_outer_loop_for_multicore": 1,
+                "enable_auto_inline": false
+            }
+        },
+        "32_4_112_112_16-.1_4_1_1_16---": {
+            "float16-.float32---": {
+                "dim": "0 0 1 1 0 1 16 16 0 2 1 1 0 3 2 2 0 4 112 112"
+            }
+        },
+        "32_16_56_56_16-.1_16_1_1_16---": {
+            "float16-.float32---": {
+                "dim": "0 0 1 1 0 1 16 16 0 2 1 1 0 3 14 14 0 4 56 56"
+            }
+        },
+        "32_32_7_7_16-.1_32_1_1_16---": {
+            "float16-.float32---": {
+                "dim": "0 0 16 16 0 1 16 16 0 2 1 1 0 3 7 7 0 4 7 7"
+            }
+        },
+        "32_4_56_56_16-.1_4_1_1_16---": {
+            "float16-.float32---": {
+                "dim": "0 0 1 1 0 1 16 16 0 2 1 1 0 3 14 14 0 4 56 56"
+            }
+        },
+        "32_16_14_14_16-.1_16_1_1_16---": {
+            "float16-.float32---": {
+                "dim": "0 0 1 1 0 1 16 16 0 2 4 4 0 3 14 14 0 4 14 14"
+            }
+        },
+        "32_8_28_28_16-.1_8_1_1_16---": {
+            "float16-.float32---": {
+                "dim": "0 0 1 1 0 1 16 16 0 2 1 1 0 3 28 28 0 4 28 28"
+            }
+        },
+        "32_64_14_14_16-.1_64_1_1_16---": {
+            "float16-.float32---": {
+                "dim": "0 0 4 4 0 1 16 16 0 2 1 1 0 3 14 14 0 4 14 14"
+            }
+        },
+        "32_32_28_28_16-.1_32_1_1_16---": {
+            "float16-.float32---": {
+                "dim": "0 0 1 1 0 1 16 16 0 2 1 1 0 3 28 28 0 4 28 28"
+            }
+        }
+    },
+    "4.ReduceSum4.TensorAdd2.Sqrt1.RealDiv1.Mul6.Cast8.TensorAdd12.Mul14.Mul112.ReduceSum1.413": {
+        "metadata": {
+            "attrs": {
+                "merge_outer_loop_for_multicore": 1,
+                "enable_auto_inline": false
+            }
+        },
+        "32_128_7_7_16-.1_128_1_1_16---": {
+            "float32.float16.float32---": {
+                "dim": "0 0 16 16 0 1 16 16 0 2 1 1 0 3 7 7 0 4 7 7"
+            }
+        }
+    },
+    "1.ReduceSum1.EquivFormat1.Cast1.3": {
+        "64_20_16_16.1024": {
+            "float16.float32": {
+                "dim": "0 0 1 1 0 1 16 16 0 2 20 20 0 3 16 16"
+            }
+        },
+        "64_40_16_16.1024": {
+            "float16.float32": {
+                "dim": "0 0 1 1 0 1 16 16 0 2 40 40 0 3 16 16"
+            }
+        },
+        "64_128_16_16.1024": {
+            "float16.float32": {
+                "dim": "0 0 1 1 0 1 16 16 0 2 64 64 0 3 16 16"
+            }
+        },
+        "64_256_16_16.1024": {
+            "float16.float32": {
+                "dim": "0 0 1 1 0 1 16 16 0 2 64 64 0 3 16 16"
+            }
+        },
+        "256_128_16_16.1024": {
+            "float16.float32": {
+                "dim": "0 0 1 1 0 1 16 16 0 2 64 64 0 3 16 16"
+            }
+        },
+        "256_256_16_16.1024": {
+            "float16.float32": {
+                "dim": "0 0 1 1 0 1 16 16 0 2 64 64 0 3 16 16"
+            }
+        }
+    },
+    "1.ReduceSum1.Cast1.2": {
+        "16_1024.1024": {
+            "float16.float32": {
+                "dim": "0 0 32 32 0 1 16 16"
+            }
+        },
+        "32_1024.1024": {
+            "float16.float32": {
+                "dim": "0 0 32 32 0 1 32 32"
+            }
+        },
+        "4096_1024.1024": {
+            "float16.float32": {
+                "dim": "0 0 32 32 0 1 512 512"
+            }
+        },
+        "2048_1024.1024": {
+            "float16.float32": {
+                "dim": "0 0 32 32 0 1 512 512"
+            }
+        }
+    },
+    "2.ReduceSum2.Cast1.Mul13.4": {
+        "8192_1024..1024": {
+            "float16.float32-": {
+                "dim": "0 0 32 32 0 1 512 512"
+            }
+        }
+    },
+    "2.ReduceSum2.EquivFormat1.Cast1.Mul14.5": {
+        "64_1_16_16..1024": {
+            "float16.float32-": {
+                "dim": "0 0 1 1 0 1 16 16 0 2 16 16"
+            }
+        },
+        "64_512_16_16..1024": {
+            "float16.float32-": {
+                "dim": "0 0 1 1 0 1 16 16 0 2 64 64 0 3 16 16"
+            }
+        },
+        "256_512_16_16..4096": {
+            "float16.float32-": {
+                "dim": "0 0 1 1 0 1 16 16 0 2 64 64 0 3 16 16"
+            }
+        }
+    },
+    "2.ZeroLike1.GreaterEqual3.Select123.4": {
+        "16_128_1024--": {
+            "float32--": {
+                "dim": "0 0 16384 1 0 1 1 1"
+            }
+        }
+    },
+    "2.ZeroLike1.LessEqual3.Select123.4": {
+        "16_128_1024--": {
+            "float32--": {
+                "dim": "0 0 16384 1 0 1 1 1"
+            }
+        }
+    },
+    "4.Sub34.TensorAdd3.Log1.Mul1.Exp1.Mul15.Mul17.ReduceSum1.ReduceSum9.1112": {
+        "metadata": {
+            "attrs": {
+                "enable_auto_inline": true
+            }
+        }
+    },
+    "1.Mul11.Mul12.Mul1.TensorAdd14.Mul1.Minimum1.Exp1.Abs3.Mul1.Exp1.TensorAdd1.RealDiv12.Mul16.13": {
+        "metadata": {
+            "attrs": {
+                "pragma_allow_tail_tiling": false,
+                "pragma_speedup_tiling": true,
+                "pragma_analyze_reuse_buffer": true
+            }
+        }
+    },
+    "1.Cast1.Mul11.Mul12.Mul1.TensorAdd14.Mul1.Minimum1.Exp1.Abs3.Mul1.Exp1.TensorAdd1.RealDiv112.Mul16.Cast1.15": {
+        "metadata": {
+            "attrs": {
+                "pragma_allow_tail_tiling": false,
+                "pragma_speedup_tiling": true,
+                "pragma_analyze_reuse_buffer": true
+            }
+        }
+    },
+    "3.Mul33.Mul14.Mul1.TensorAdd16.Mul1.Abs1.Mul1.Exp1.TensorAdd1.Minimum5.Exp1.Mul13.Mul12.TensorAdd1.Mul116.Mul18.Mul7.Exp1.TensorAdd13.RealDiv18.Mul121.23": {
+        "metadata": {
+            "attrs": {
+                "pragma_allow_tail_tiling": false,
+                "pragma_speedup_tiling": true,
+                "pragma_analyze_reuse_buffer": true
+            }
+        }
+    },
+    "3.Cast1.Cast4.Mul11.Mul12.Mul1.TensorAdd14.Mul1.Abs1.Mul1.Exp1.TensorAdd1.Minimum5.Exp1.Mul13.Mul12.TensorAdd1.Cast18.Mul12.Mul19.Mul8.Exp1.TensorAdd13.RealDiv19.Mul123.Cast1.27": {
+        "metadata": {
+            "attrs": {
+                "pragma_allow_tail_tiling": false,
+                "pragma_speedup_tiling": true,
+                "pragma_analyze_reuse_buffer": true
+            }
+        },
+        "256_512_16_16---": {
+            "float16---": {
+                "dim": "0 0 4096 4096"
+            }
+        }
+    },
+    "2.ReduceSum2.Mul12.3": {
+        "1216_30522..30522": {
+            "float32--": {
+                "metadata": {
+                    "attrs": {
+                        "pragma_remove_invariant_dependence": true,
+                        "enable_mark_multi_core": true,
+                        "multicore_scalar_rearrange": true,
+                        "enable_cover_protect_optimize": false
+                    }
+                },
+                "dim": "0 0 280 1 0 1 57 1"
+            }
+        }
+    },
+    "7.Mul7.Mul7.TensorAdd12.RealDiv18.Sqrt1.TensorAdd1.Mul10.Mul10.TensorAdd12.RealDiv111.RealDiv15.Mul12.TensorAdd9.Rsqrt1.Mul15.TensorAdd14.InplaceAssign1819.InplaceAssign11523.1724": {
+        "metadata": {
+            "enable_double_buffer": true
+        },
+        "4096_1024-.1.4096_1024-.1.4096_1024--": {
+            "float32--------": {
+                "metadata": {
+                    "attrs": {
+                        "enable_double_buffer": true,
+                        "multicore_scalar_rearrange": true,
+                        "enable_rewrite_scalar_compute": true
+                    }
+                },
+                "dim": "0 0 4096 1"
+            }
+        },
+        "1024_4096-.1.1024_4096-.1.1024_4096--": {
+            "float32--------": {
+                "metadata": {
+                    "attrs": {
+                        "enable_double_buffer": true,
+                        "multicore_scalar_rearrange": true,
+                        "enable_rewrite_scalar_compute": true
+                    }
+                },
+                "dim": "0 0 4096 1"
+            }
+        },
+        "1024_1024-.1.1024_1024-.1.1024_1024--": {
+            "float32--------": {
+                "metadata": {
+                    "attrs": {
+                        "enable_double_buffer": true,
+                        "multicore_scalar_rearrange": true,
+                        "enable_rewrite_scalar_compute": true
+                    }
+                },
+                "dim": "0 0 4096 1"
+            }
+        },
+        "21128_1024-.1.21128_1024-.1.21128_1024--": {
+            "float32--------": {
+                "metadata": {
+                    "attrs": {
+                        "enable_double_buffer": true,
+                        "pragma_remove_invariant_dependence": true,
+                        "enable_mark_multi_core": true,
+                        "multicore_scalar_rearrange": true,
+                        "enable_rewrite_scalar_compute": true
+                    }
+                },
+                "dim": "0 0 2432 1"
+            }
+        },
+        "30528_1024-.1.30528_1024-.1.30528_1024--": {
+            "float32--------": {
+                "metadata": {
+                    "attrs": {
+                        "enable_double_buffer": true,
+                        "pragma_remove_invariant_dependence": true,
+                        "enable_mark_multi_core": true,
+                        "multicore_scalar_rearrange": true,
+                        "enable_rewrite_scalar_compute": true
+                    }
+                },
+                "dim": "0 0 2048 1"
+            }
+        },
+        "30522-.1.30522-.1.30522--": {
+            "float32--------": {
+                "dim": "0 0 2304 1"
+            }
+        },
+        "30522_1024-.1.30522_1024-.1.30522_1024--": {
+            "float32--------": {
+                "metadata": {
+                    "attrs": {
+                        "enable_double_buffer": true,
+                        "multicore_scalar_rearrange": true,
+                        "enable_rewrite_scalar_compute": true
+                    }
+                },
+                "dim": "0 0 10174 1"
+            }
+        }
+    },
+    "6.RealDiv45.Greater7.Select12.Greater8.Select12.Minimum1.Maximum1.Mul110.Mul110.Sub110.InplaceAssign1111.16": {
+        "metadata": {
+            "attrs": {
+                "enable_double_buffer": true
+            }
+        },
+        "--.1.1024_1024--": {
+            "float32------": {
+                "metadata": {
+                    "attrs": {
+                        "enable_double_buffer": true,
+                        "enable_invariant_hoist": false,
+                        "multicore_scalar_rearrange": true
+                    }
+                },
+                "dim": "0 0 32 1 0 1 512 1"
+            }
+        },
+        "1---.1024_1024--": {
+            "float32------": {
+                "metadata": {
+                    "attrs": {
+                        "enable_double_buffer": true,
+                        "enable_mark_multi_core": true,
+                        "enable_invariant_hoist": false,
+                        "multicore_scalar_rearrange": true
+                    }
+                },
+                "dim": "0 0 32 1 0 1 512 1"
+            }
+        },
+        "--.1.1024_4096--": {
+            "float32------": {
+                "metadata": {
+                    "attrs": {
+                        "enable_double_buffer": true,
+                        "enable_invariant_hoist": false,
+                        "multicore_scalar_rearrange": true
+                    }
+                },
+                "dim": "0 0 64 1 0 1 256 1"
+            }
+        },
+        "1---.1024_4096--": {
+            "float32------": {
+                "metadata": {
+                    "attrs": {
+                        "enable_double_buffer": true,
+                        "enable_mark_multi_core": true,
+                        "enable_invariant_hoist": false,
+                        "multicore_scalar_rearrange": true
+                    }
+                },
+                "dim": "0 0 64 1"
+            }
+        },
+        "--.1.4096_1024--": {
+            "float32------": {
+                "metadata": {
+                    "attrs": {
+                        "enable_double_buffer": true,
+                        "enable_invariant_hoist": false,
+                        "multicore_scalar_rearrange": true
+                    }
+                },
+                "dim": "0 0 128 1 0 1 128 1"
+            }
+        },
+        "1---.4096_1024--": {
+            "float32------": {
+                "metadata": {
+                    "attrs": {
+                        "enable_double_buffer": true,
+                        "enable_mark_multi_core": true,
+                        "enable_invariant_hoist": false,
+                        "multicore_scalar_rearrange": true
+                    }
+                },
+                "dim": "0 0 128 1"
+            }
+        },
+        "--.1.21128_1024--": {
+            "float32------": {
+                "metadata": {
+                    "attrs": {
+                        "enable_double_buffer": true,
+                        "enable_mark_multi_core": true,
+                        "enable_invariant_hoist": false,
+                        "multicore_scalar_rearrange": true
+                    }
+                },
+                "dim": "0 0 8 1 0 1 512 1"
+            }
+        },
+        "1---.21128_1024--": {
+            "float32------": {
+                "metadata": {
+                    "attrs": {
+                        "enable_double_buffer": true,
+                        "enable_mark_multi_core": true,
+                        "enable_invariant_hoist": false,
+                        "multicore_scalar_rearrange": true
+                    }
+                },
+                "dim": "0 0 8 1 0 1 512 1"
+            }
+        },
+        "--.1.30528_1024--": {
+            "float32------": {
+                "metadata": {
+                    "attrs": {
+                        "enable_double_buffer": true,
+                        "enable_mark_multi_core": true,
+                        "enable_invariant_hoist": false,
+                        "multicore_scalar_rearrange": true
+                    }
+                },
+                "dim": "0 0 32 1 0 1 512 1"
+            }
+        },
+        "1---.30528_1024--": {
+            "float32------": {
+                "metadata": {
+                    "attrs": {
+                        "enable_double_buffer": true,
+                        "enable_mark_multi_core": true,
+                        "enable_invariant_hoist": false,
+                        "multicore_scalar_rearrange": true
+                    }
+                },
+                "dim": "0 0 32 1 0 1 512 1"
+            }
+        },
+        "--.1.30522_1024--": {
+            "float32------": {
+                "metadata": {
+                    "attrs": {
+                        "enable_double_buffer": true,
+                        "enable_invariant_hoist": false,
+                        "multicore_scalar_rearrange": true
+                    }
+                },
+                "dim": "0 0 6 1 0 1 512 1"
+            }
+        },
+        "1---.30522_1024--": {
+            "float32------": {
+                "metadata": {
+                    "attrs": {
+                        "enable_double_buffer": true,
+                        "enable_mark_multi_core": true,
+                        "enable_invariant_hoist": false,
+                        "multicore_scalar_rearrange": true
+                    }
+                },
+                "dim": "0 0 6 1 0 1 512 1"
+            }
+        }
+    },
+    "1.Cast1.TransData1.2": {
+        "metadata": {
+            "attrs": {
+                "enable_auto_inline": true
+            }
+        },
+        "1024_1024.64_64_16_16": {
+            "float32.float16": {
+                "dim": "0 0 16 1 0 1 1 1 0 2 16 1 0 3 16 1"
+            }
+        },
+        "1024_4096.256_64_16_16": {
+            "float32.float16": {
+                "dim": "0 0 64 1 0 1 1 1 0 2 16 1 0 3 16 1"
+            }
+        },
+        "4096_1024.64_256_16_16": {
+            "float32.float16": {
+                "dim": "0 0 64 1 0 1 1 1 0 2 16 1 0 3 16 1"
+            }
+        },
+        "1216_30522.1908_76_16_16": {
+            "float32.float16": {
+                "metadata": {
+                    "attrs": {
+                        "enable_auto_inline": true,
+                        "enable_pre_poly_loop_partition": false,
+                        "enable_to_three_address": false
+                    }
+                },
+                "dim": "0 0 36 1 0 1 2 1 0 2 16 1"
+            }
+        },
+        "30522_1024.64_1908_16_16": {
+            "float32.float16": {
+                "metadata": {
+                    "attrs": {
+                        "enable_auto_inline": true,
+                        "merge_outer_loop_for_multicore": 1
+                    }
+                },
+                "dim": "0 0 64 1 0 1 1 1 0 2 16 1 0 3 16 1"
+            }
+        },
+        "1216_1024.64_76_16_16": {
+            "float32.float16": {
+                "dim": "0 0 16 1 0 1 1 1 0 2 16 1"
+            }
+        }
+    },
+    "2.Mul12.ReduceSum1.3": {
+        "1216_30522-.1216": {
+            "float32--": {
+                "dim": "0 0 8 1 0 1 2048 1"
+            }
+        }
+    },
+    "3.AddN3.ReduceSum1.Cast1.Mul14.36": {
+        "8192_1024-..8192_1024.1024": {
+            "float16-.float32.float16.float32": {
+                "dim": "0 0 64 1 0 1 256 1"
+            }
+        }
+    },
+    "3.Mul23.ReduceSum1.Cast1.Mul14.6": {
+        "8192_1024-..1024": {
+            "float16-.float32-": {
+                "dim": "0 0 64 1 0 1 256 1"
+            }
+        }
+    },
+    "2.ReduceSum2.Neg1.MUl13.4": {
+        "1216_30522.12106-": {
+            "float32--": {
+                "dim": "0 0 8 1 0 1 2048 1"
+            }
+        }
+    },
+    "2.Reciprocal2.ReduceSum2.Mul12.24": {
+        ".1216_30522.1.30522": {
+            "float32---": {
+                "metadata": {
+                    "attrs": {
+                        "pragma_remove_invariant_dependence": true,
+                        "enable_mark_multi_core": true,
+                        "multicore_scalar_rearrange": true,
+                        "enable_cover_protect_optimize": false
+                    }
+                },
+                "dim": "0 0 953 1 0 1 16 1"
+            }
+        }
+    },
+    "2.Mul1.Mul3.TensorAdd12.34": {
+        "16_1_1_512.16_16_512_512.16_1_1_512.16_16_512_512": {
+            "float16---": {
+                "dim": "0 0 2 1 0 1 128 1 0 2 2 1 0 3 32 1"
+            }
+        }
+    },
+    "3.Cast2.Cast4.Mul13.TensorAdd13.46": {
+        "1024-.8192_1024.1024.8192_1024": {
+            "float32-.float16--": {
+                "metadata": {
+                    "attrs": {
+                        "pragma_set_all_coincident": true,
+                        "enable_post_poly_loop_partition": false,
+                        "multicore_loop_switch_hoist": false
+                    }
+                },
+                "dim": "0 0 1024 1 0 1 32 1"
+            }
+        }
+    },
+    "2.Mul2.TensorAdd12.3": {
+        "30522_1024--": {
+            "float32--": {
+                "dim": "0 0 13376 1"
+            }
+        },
+        "512_1024--": {
+            "float32--": {
+                "dim": "0 0 13376 1"
+            }
+        },
+        "1024_1024--": {
+            "float32--": {
+                "dim": "0 0 13376 1"
+            }
+        },
+        "4096_1024--": {
+            "float32--": {
+                "dim": "0 0 13376 1"
+            }
+        },
+        "1024_4096--": {
+            "float32--": {
+                "dim": "0 0 13376 1"
+            }
+        }
+    },
+    "7.Mul7.Mul7.TensorAdd12.RealDiv18.Sqrt1.TensorAdd1.Mul10.Mul10.TensorAdd12.RealDiv111.RealDiv15.Mul12.TensorAdd12.InplaceAssign1516.InplaceAssign11220.1721": {
+        "30522_1024-.1.30522_1024-.1.30522_1024--": {
+            "float32--------": {
+                "metadata": {
+                    "attrs": {
+                        "enable_rewrite_scalar_compute": true,
+                        "pragma_remove_invariant_dependence": true,
+                        "multicore_scalar_rearrange": true
+                    }
+                },
+                "dim": "0 0 10174 1"
+            }
+        },
+        "1024_4096-.1.1024_4096-.1.1024_4096--": {
+            "float32--------": {
+                "metadata": {
+                    "attrs": {
+                        "enable_rewrite_scalar_compute": true,
+                        "pragma_remove_invariant_dependence": true,
+                        "multicore_scalar_rearrange": true,
+                        "pragma_speedup_tiling": true,
+                        "pragma_analyze_reuse_buffer": true
+                    }
+                }
+            }
+        },
+        "1024_1024-.1.1024_1024-.1.1024_1024--": {
+            "float32--------": {
+                "metadata": {
+                    "attrs": {
+                        "enable_rewrite_scalar_compute": true,
+                        "pragma_remove_invariant_dependence": true,
+                        "multicore_scalar_rearrange": true,
+                        "pragma_speedup_tiling": true,
+                        "pragma_analyze_reuse_buffer": true
+                    }
+                }
+            }
+        },
+        "30522-.1.30522-.1.30522--": {
+            "float32--------": {
+                "dim": "0 0 2304 1"
+            }
+        },
+        "4096_1024-.1.4096_1024-.1.4096_1024--": {
+            "float32--------": {
+                "metadata": {
+                    "attrs": {
+                        "enable_rewrite_scalar_compute": true,
+                        "pragma_remove_invariant_dependence": true,
+                        "multicore_scalar_rearrange": true,
+                        "pragma_speedup_tiling": true,
+                        "pragma_analyze_reuse_buffer": true
+                    }
+                }
+            }
+        }
+    },
+    "5.RealDiv45.Minimum1.Maximum1.Mul16.Mul16.Sub16.InplaceAssign117.11": {
+        "-.1.30522_1024--": {
+            "float32-----": {
+                "metadata": {
+                    "attrs": {
+                        "pragma_remove_invariant_dependence": true,
+                        "multicore_scalar_rearrange": true
+                    }
+                },
+                "dim": "0 0 6 1 0 1 1024 1"
+            }
+        },
+        "-.1.4096_1024--": {
+            "float32-----": {
+                "metadata": {
+                    "attrs": {
+                        "enable_mark_multi_core": true,
+                        "multicore_scalar_rearrange": true
+                    }
+                },
+                "dim": "0 0 128 1"
+            }
+        },
+        "-.1.1024_4096--": {
+            "float32-----": {
+                "metadata": {
+                    "attrs": {
+                        "pragma_remove_invariant_dependence": true,
+                        "multicore_scalar_rearrange": true
+                    }
+                },
+                "dim": "0 0 4 1 0 1 4096 1"
+            }
+        },
+        "-.1.1024_1024--": {
+            "float32-----": {
+                "metadata": {
+                    "attrs": {
+                        "pragma_remove_invariant_dependence": true,
+                        "multicore_scalar_rearrange": true
+                    }
+                },
+                "dim": "0 0 16 1 0 1 1024 1"
+            }
+        },
+        "-.1.512_1024--": {
+            "float32-----": {
+                "metadata": {
+                    "attrs": {
+                        "pragma_remove_invariant_dependence": true,
+                        "multicore_scalar_rearrange": true
+                    }
+                },
+                "dim": "0 0 16 1 0 1 1024 1"
+            }
+        }
+    },
+    "2.EquivFormat.Mul13.EquivFormat3.TensorAdd12.5": {
+        "16_16_32_32_16_16.16_1_1_512.16_16_32_32_16_16": {
+            "float16--": {
+                "metadata": {
+                    "attrs": {
+                        "enable_mark_multi_core": true,
+                        "multicore_loop_switch_hoist": false,
+                        "multicore_scalar_rearrange": true,
+                        "enable_post_poly_loop_partition": false
+                    }
+                },
+                "dim": "0 0 1 1 0 1 2 1 0 2 16 1 0 3 1 1 0 4 32 1 0 5 16 1"
+            }
+        }
+    },
+    "2.Greater2.Select13.Sqrt1.Select135.Maximum1.RealDiv16.7": {
+        "metadata": {
+            "attrs": {
+                "enable_mark_multi_core": true,
+                "pragma_remove_invariant_dependence": true,
+                "multicore_scalar_rearrange": true,
+                "enable_rewrite_scalar_compute": true
+            }
+        }
+    },
+    "4.Cast1.RealDiv35.Mul15.TensorAdd13.57": {
+        "4_1024_1.1024.4_1024_1024.1024.4_1024_1024-": {
+            "float16--.float32.float16-": {
+                "metadata": {
+                    "attrs": {
+                        "enable_mark_multi_core": false,
+                        "enable_pre_poly_loop_partition": true,
+                        "enable_post_poly_loop_partition": false,
+                        "enable_rewrite_scalar_compute": false,
+                        "multicore_scalar_rearrange": true,
+                        "pragma_remove_invariant_dependence": true,
+                        "dim": "0 0 1024 1 0 1 1 1 0 2 8 1"
+                    }
+                }
+            }
+        }
+    }
+}

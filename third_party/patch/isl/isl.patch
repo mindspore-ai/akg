@@ -1,0 +1,3264 @@
+diff -Npur isl_0.22/include/isl/aff.h isl/include/isl/aff.h
+--- isl_0.22/include/isl/aff.h	2020-04-17 16:49:36.266477000 +0800
++++ isl/include/isl/aff.h	2020-04-29 18:14:39.945681000 +0800
+@@ -17,14 +17,19 @@
+ extern "C" {
+ #endif
+ 
++__isl_constructor
+ __isl_give isl_aff *isl_aff_zero_on_domain(__isl_take isl_local_space *ls);
+ __isl_give isl_aff *isl_aff_val_on_domain_space(__isl_take isl_space *space,
+ 	__isl_take isl_val *val);
++__isl_constructor
+ __isl_give isl_aff *isl_aff_val_on_domain(__isl_take isl_local_space *ls,
+ 	__isl_take isl_val *val);
++
++__isl_export
+ __isl_give isl_aff *isl_aff_var_on_domain(__isl_take isl_local_space *ls,
+ 	enum isl_dim_type type, unsigned pos);
+ __isl_give isl_aff *isl_aff_nan_on_domain(__isl_take isl_local_space *ls);
++__isl_overload
+ __isl_give isl_aff *isl_aff_param_on_domain_space_id(
+ 	__isl_take isl_space *space, __isl_take isl_id *id);
+ 
+@@ -41,6 +46,7 @@ isl_bool isl_aff_involves_dims(__isl_kee
+ 	enum isl_dim_type type, unsigned first, unsigned n);
+ 
+ __isl_give isl_space *isl_aff_get_domain_space(__isl_keep isl_aff *aff);
++__isl_export
+ __isl_give isl_space *isl_aff_get_space(__isl_keep isl_aff *aff);
+ __isl_give isl_local_space *isl_aff_get_domain_local_space(
+ 	__isl_keep isl_aff *aff);
+@@ -48,12 +54,14 @@ __isl_give isl_local_space *isl_aff_get_
+ 
+ const char *isl_aff_get_dim_name(__isl_keep isl_aff *aff,
+ 	enum isl_dim_type type, unsigned pos);
++__isl_export
+ __isl_give isl_val *isl_aff_get_constant_val(__isl_keep isl_aff *aff);
+ __isl_give isl_val *isl_aff_get_coefficient_val(__isl_keep isl_aff *aff,
+ 	enum isl_dim_type type, int pos);
+ int isl_aff_coefficient_sgn(__isl_keep isl_aff *aff,
+ 	enum isl_dim_type type, int pos);
+ __isl_give isl_val *isl_aff_get_denominator_val(__isl_keep isl_aff *aff);
++__isl_export
+ __isl_give isl_aff *isl_aff_set_constant_si(__isl_take isl_aff *aff, int v);
+ __isl_give isl_aff *isl_aff_set_constant_val(__isl_take isl_aff *aff,
+ 	__isl_take isl_val *v);
+@@ -61,6 +69,7 @@ __isl_give isl_aff *isl_aff_set_coeffici
+ 	enum isl_dim_type type, int pos, int v);
+ __isl_give isl_aff *isl_aff_set_coefficient_val(__isl_take isl_aff *aff,
+ 	enum isl_dim_type type, int pos, __isl_take isl_val *v);
++__isl_export
+ __isl_give isl_aff *isl_aff_add_constant_si(__isl_take isl_aff *aff, int v);
+ __isl_overload
+ __isl_give isl_aff *isl_aff_add_constant_val(__isl_take isl_aff *aff,
+@@ -209,11 +218,13 @@ __isl_give isl_pw_aff *isl_pw_aff_from_a
+ __isl_give isl_pw_aff *isl_pw_aff_empty(__isl_take isl_space *space);
+ __isl_give isl_pw_aff *isl_pw_aff_alloc(__isl_take isl_set *set,
+ 	__isl_take isl_aff *aff);
++__isl_constructor
+ __isl_give isl_pw_aff *isl_pw_aff_zero_on_domain(
+ 	__isl_take isl_local_space *ls);
+ __isl_give isl_pw_aff *isl_pw_aff_var_on_domain(__isl_take isl_local_space *ls,
+ 	enum isl_dim_type type, unsigned pos);
+ __isl_give isl_pw_aff *isl_pw_aff_nan_on_domain(__isl_take isl_local_space *ls);
++__isl_constructor
+ __isl_give isl_pw_aff *isl_pw_aff_val_on_domain(__isl_take isl_set *domain,
+ 	__isl_take isl_val *v);
+ __isl_overload
+@@ -240,6 +251,7 @@ int isl_pw_aff_plain_cmp(__isl_keep isl_
+ 	__isl_keep isl_pw_aff *pa2);
+ isl_bool isl_pw_aff_plain_is_equal(__isl_keep isl_pw_aff *pwaff1,
+ 	__isl_keep isl_pw_aff *pwaff2);
++__isl_export
+ isl_bool isl_pw_aff_is_equal(__isl_keep isl_pw_aff *pa1,
+ 	__isl_keep isl_pw_aff *pa2);
+ 
+@@ -375,7 +387,9 @@ __isl_overload
+ __isl_give isl_pw_aff *isl_pw_aff_pullback_multi_pw_aff(
+ 	__isl_take isl_pw_aff *pa, __isl_take isl_multi_pw_aff *mpa);
+ 
++__isl_export
+ isl_size isl_pw_aff_n_piece(__isl_keep isl_pw_aff *pwaff);
++__isl_export
+ isl_stat isl_pw_aff_foreach_piece(__isl_keep isl_pw_aff *pwaff,
+ 	isl_stat (*fn)(__isl_take isl_set *set, __isl_take isl_aff *aff,
+ 		    void *user), void *user);
+@@ -387,8 +401,11 @@ __isl_give isl_aff *isl_pw_aff_as_aff(__
+ __isl_give isl_set *isl_set_from_pw_aff(__isl_take isl_pw_aff *pwaff);
+ __isl_give isl_map *isl_map_from_pw_aff(__isl_take isl_pw_aff *pwaff);
+ 
++__isl_export
+ __isl_give isl_set *isl_pw_aff_pos_set(__isl_take isl_pw_aff *pa);
++__isl_export
+ __isl_give isl_set *isl_pw_aff_nonneg_set(__isl_take isl_pw_aff *pwaff);
++__isl_export
+ __isl_give isl_set *isl_pw_aff_zero_set(__isl_take isl_pw_aff *pwaff);
+ __isl_give isl_set *isl_pw_aff_non_zero_set(__isl_take isl_pw_aff *pwaff);
+ 
+@@ -411,10 +428,13 @@ __isl_export
+ __isl_give isl_set *isl_pw_aff_gt_set(__isl_take isl_pw_aff *pwaff1,
+ 	__isl_take isl_pw_aff *pwaff2);
+ 
++__isl_export
+ __isl_give isl_map *isl_pw_aff_eq_map(__isl_take isl_pw_aff *pa1,
+ 	__isl_take isl_pw_aff *pa2);
++__isl_export
+ __isl_give isl_map *isl_pw_aff_lt_map(__isl_take isl_pw_aff *pa1,
+ 	__isl_take isl_pw_aff *pa2);
++__isl_export
+ __isl_give isl_map *isl_pw_aff_gt_map(__isl_take isl_pw_aff *pa1,
+ 	__isl_take isl_pw_aff *pa2);
+ 
+@@ -467,9 +487,15 @@ ISL_DECLARE_MULTI_BIND_DOMAIN(aff)
+ __isl_constructor
+ __isl_give isl_multi_aff *isl_multi_aff_from_aff(__isl_take isl_aff *aff);
+ __isl_export
++__isl_give isl_multi_aff *isl_multi_aff_identity(__isl_take isl_space *space);
++__isl_export
+ __isl_give isl_multi_aff *isl_multi_aff_domain_map(__isl_take isl_space *space);
+ __isl_export
+ __isl_give isl_multi_aff *isl_multi_aff_range_map(__isl_take isl_space *space);
++__isl_export
++__isl_give isl_multi_aff *isl_multi_aff_wrapped_range_map(
++	__isl_take isl_space *space);
++__isl_export
+ __isl_give isl_multi_aff *isl_multi_aff_project_out_map(
+ 	__isl_take isl_space *space, enum isl_dim_type type,
+ 	unsigned first, unsigned n);
+@@ -533,6 +559,7 @@ ISL_DECLARE_MULTI_PARAM(pw_aff)
+ 
+ __isl_export
+ __isl_give isl_pw_multi_aff *isl_pw_multi_aff_zero(__isl_take isl_space *space);
++__isl_export
+ __isl_give isl_pw_multi_aff *isl_pw_multi_aff_identity(
+ 	__isl_take isl_space *space);
+ __isl_give isl_pw_multi_aff *isl_pw_multi_aff_range_map(
+@@ -559,6 +586,7 @@ isl_bool isl_pw_multi_aff_involves_param
+ 	__isl_keep isl_id *id);
+ isl_bool isl_pw_multi_aff_involves_dims(__isl_keep isl_pw_multi_aff *pma,
+ 	enum isl_dim_type type, unsigned first, unsigned n);
++__isl_export
+ __isl_give isl_pw_aff *isl_pw_multi_aff_get_pw_aff(
+ 	__isl_keep isl_pw_multi_aff *pma, int pos);
+ __isl_give isl_pw_multi_aff *isl_pw_multi_aff_set_pw_aff(
+@@ -575,6 +603,7 @@ isl_bool isl_pw_multi_aff_has_tuple_name
+ 	enum isl_dim_type type);
+ const char *isl_pw_multi_aff_get_tuple_name(__isl_keep isl_pw_multi_aff *pma,
+ 	enum isl_dim_type type);
++__isl_export
+ __isl_give isl_id *isl_pw_multi_aff_get_tuple_id(
+ 	__isl_keep isl_pw_multi_aff *pma, enum isl_dim_type type);
+ isl_bool isl_pw_multi_aff_has_tuple_id(__isl_keep isl_pw_multi_aff *pma,
+@@ -601,6 +630,7 @@ __isl_give isl_pw_multi_aff *isl_pw_mult
+ __isl_give isl_pw_multi_aff *isl_pw_multi_aff_from_domain(
+ 	__isl_take isl_set *set);
+ 
++__isl_constructor
+ __isl_give isl_pw_multi_aff *isl_pw_multi_aff_multi_val_on_domain(
+ 	__isl_take isl_set *domain, __isl_take isl_multi_val *mv);
+ 
+@@ -616,6 +646,7 @@ __isl_give isl_pw_multi_aff *isl_pw_mult
+ isl_bool isl_pw_multi_aff_involves_nan(__isl_keep isl_pw_multi_aff *pma);
+ isl_bool isl_pw_multi_aff_plain_is_equal(__isl_keep isl_pw_multi_aff *pma1,
+ 	__isl_keep isl_pw_multi_aff *pma2);
++__isl_export
+ isl_bool isl_pw_multi_aff_is_equal(__isl_keep isl_pw_multi_aff *pma1,
+ 	__isl_keep isl_pw_multi_aff *pma2);
+ 
+@@ -721,6 +752,7 @@ __isl_export
+ __isl_give isl_multi_aff *isl_pw_multi_aff_as_multi_aff(
+ 	__isl_take isl_pw_multi_aff *pma);
+ 
++__isl_overload
+ __isl_give isl_map *isl_map_from_pw_multi_aff(__isl_take isl_pw_multi_aff *pma);
+ __isl_give isl_set *isl_set_from_pw_multi_aff(__isl_take isl_pw_multi_aff *pma);
+ 
+@@ -729,6 +761,7 @@ __isl_give isl_printer *isl_printer_prin
+ 	__isl_keep isl_pw_multi_aff *pma);
+ 
+ __isl_give isl_pw_multi_aff *isl_pw_multi_aff_from_set(__isl_take isl_set *set);
++__isl_constructor
+ __isl_give isl_pw_multi_aff *isl_pw_multi_aff_from_map(__isl_take isl_map *map);
+ 
+ __isl_export
+@@ -758,8 +791,10 @@ __isl_give isl_union_pw_multi_aff *isl_u
+ 	__isl_take isl_pw_multi_aff *pma);
+ __isl_give isl_union_pw_multi_aff *isl_union_pw_multi_aff_from_domain(
+ 	__isl_take isl_union_set *uset);
++__isl_constructor
+ __isl_give isl_union_pw_multi_aff *isl_union_pw_multi_aff_multi_val_on_domain(
+ 	__isl_take isl_union_set *domain, __isl_take isl_multi_val *mv);
++__isl_overload
+ __isl_give isl_union_pw_aff *isl_union_pw_aff_param_on_domain_id(
+ 	__isl_take isl_union_set *domain, __isl_take isl_id *id);
+ __isl_give isl_union_pw_multi_aff *isl_union_pw_multi_aff_copy(
+@@ -862,8 +897,10 @@ __isl_give isl_union_pw_multi_aff *isl_u
+ 	__isl_take isl_union_pw_multi_aff *upma1,
+ 	__isl_take isl_union_pw_multi_aff *upma2);
+ 
++__isl_overload
+ __isl_give isl_union_pw_multi_aff *isl_union_pw_multi_aff_scale_val(
+ 	__isl_take isl_union_pw_multi_aff *upma, __isl_take isl_val *val);
++__isl_overload
+ __isl_give isl_union_pw_multi_aff *isl_union_pw_multi_aff_scale_down_val(
+ 	__isl_take isl_union_pw_multi_aff *upma, __isl_take isl_val *val);
+ __isl_give isl_union_pw_multi_aff *isl_union_pw_multi_aff_scale_multi_val(
+@@ -911,6 +948,7 @@ __isl_give isl_printer *isl_printer_prin
+ 
+ __isl_give isl_union_pw_multi_aff *isl_union_pw_multi_aff_from_union_set(
+ 	__isl_take isl_union_set *uset);
++__isl_overload
+ __isl_give isl_union_pw_multi_aff *isl_union_pw_multi_aff_from_union_map(
+ 	__isl_take isl_union_map *umap);
+ 
+@@ -947,6 +985,7 @@ __isl_give isl_multi_pw_aff *isl_multi_p
+ 	__isl_take isl_multi_pw_aff *mpa, __isl_take isl_set *set);
+ 
+ isl_bool isl_multi_pw_aff_is_cst(__isl_keep isl_multi_pw_aff *mpa);
++__isl_export
+ isl_bool isl_multi_pw_aff_is_equal(__isl_keep isl_multi_pw_aff *mpa1,
+ 	__isl_keep isl_multi_pw_aff *mpa2);
+ 
+@@ -967,6 +1006,7 @@ __isl_give isl_multi_pw_aff *isl_multi_p
+ 
+ __isl_give isl_set *isl_set_from_multi_pw_aff(__isl_take isl_multi_pw_aff *mpa);
+ __isl_give isl_map *isl_map_from_multi_pw_aff(__isl_take isl_multi_pw_aff *mpa);
++__isl_overload
+ __isl_give isl_pw_multi_aff *isl_pw_multi_aff_from_multi_pw_aff(
+ 	__isl_take isl_multi_pw_aff *mpa);
+ __isl_constructor
+@@ -1001,6 +1041,7 @@ isl_ctx *isl_union_pw_aff_get_ctx(__isl_
+ __isl_export
+ __isl_give isl_space *isl_union_pw_aff_get_space(
+ 	__isl_keep isl_union_pw_aff *upa);
++__isl_export
+ __isl_give isl_pw_aff_list *isl_union_pw_aff_get_pw_aff_list(
+ 	__isl_keep isl_union_pw_aff *upa);
+ 
+@@ -1022,13 +1063,16 @@ __isl_give isl_union_pw_aff *isl_union_p
+ __isl_give isl_union_pw_aff *isl_union_pw_aff_empty_ctx(isl_ctx *ctx);
+ __isl_give isl_union_pw_aff *isl_union_pw_aff_empty_space(
+ 	__isl_take isl_space *space);
++__isl_export
+ __isl_give isl_union_pw_aff *isl_union_pw_aff_empty(
+ 	__isl_take isl_space *space);
+ __isl_constructor
+ __isl_give isl_union_pw_aff *isl_union_pw_aff_from_pw_aff(
+ 	__isl_take isl_pw_aff *pa);
++__isl_constructor
+ __isl_give isl_union_pw_aff *isl_union_pw_aff_val_on_domain(
+ 	__isl_take isl_union_set *domain, __isl_take isl_val *v);
++__isl_constructor
+ __isl_give isl_union_pw_aff *isl_union_pw_aff_aff_on_domain(
+ 	__isl_take isl_union_set *domain, __isl_take isl_aff *aff);
+ __isl_give isl_union_pw_aff *isl_union_pw_aff_pw_aff_on_domain(
+@@ -1081,13 +1125,17 @@ __isl_give isl_union_pw_aff *isl_union_p
+ 	__isl_take isl_union_pw_aff *upa,
+ 	__isl_take isl_union_pw_multi_aff *upma);
+ 
++__isl_export
+ __isl_give isl_union_pw_aff *isl_union_pw_aff_floor(
+ 	__isl_take isl_union_pw_aff *upa);
+ 
++__isl_overload
+ __isl_give isl_union_pw_aff *isl_union_pw_aff_scale_val(
+ 	__isl_take isl_union_pw_aff *upa, __isl_take isl_val *v);
++__isl_overload
+ __isl_give isl_union_pw_aff *isl_union_pw_aff_scale_down_val(
+ 	__isl_take isl_union_pw_aff *upa, __isl_take isl_val *v);
++__isl_overload
+ __isl_give isl_union_pw_aff *isl_union_pw_aff_mod_val(
+ 	__isl_take isl_union_pw_aff *upa, __isl_take isl_val *f);
+ 
+@@ -1114,6 +1162,7 @@ __isl_give isl_union_pw_aff *isl_union_p
+ 	__isl_take isl_union_pw_aff *upa,
+ 	enum isl_dim_type type, unsigned pos, const char *s);
+ 
++__isl_export
+ __isl_give isl_union_set *isl_union_pw_aff_zero_union_set(
+ 	__isl_take isl_union_pw_aff *upa);
+ 
+@@ -1148,14 +1197,17 @@ __isl_give isl_multi_union_pw_aff *isl_m
+ __isl_constructor
+ __isl_give isl_multi_union_pw_aff *isl_multi_union_pw_aff_from_multi_pw_aff(
+ 	__isl_take isl_multi_pw_aff *mpa);
++__isl_constructor
+ __isl_give isl_multi_union_pw_aff *isl_multi_union_pw_aff_multi_val_on_domain(
+ 	__isl_take isl_union_set *domain, __isl_take isl_multi_val *mv);
++__isl_constructor
+ __isl_give isl_multi_union_pw_aff *isl_multi_union_pw_aff_multi_aff_on_domain(
+ 	__isl_take isl_union_set *domain, __isl_take isl_multi_aff *ma);
+ __isl_give isl_multi_union_pw_aff *
+ isl_multi_union_pw_aff_pw_multi_aff_on_domain(__isl_take isl_union_set *domain,
+ 	__isl_take isl_pw_multi_aff *pma);
+ 
++__isl_export
+ __isl_give isl_multi_union_pw_aff *isl_multi_union_pw_aff_floor(
+ 	__isl_take isl_multi_union_pw_aff *mupa);
+ 
+@@ -1184,10 +1236,12 @@ __isl_give isl_multi_union_pw_aff *isl_m
+ 
+ __isl_give isl_union_pw_aff *isl_multi_union_pw_aff_apply_aff(
+ 	__isl_take isl_multi_union_pw_aff *mupa, __isl_take isl_aff *aff);
++__isl_overload
+ __isl_give isl_multi_union_pw_aff *isl_multi_union_pw_aff_apply_multi_aff(
+ 	__isl_take isl_multi_union_pw_aff *mupa, __isl_take isl_multi_aff *ma);
+ __isl_give isl_union_pw_aff *isl_multi_union_pw_aff_apply_pw_aff(
+ 	__isl_take isl_multi_union_pw_aff *mupa, __isl_take isl_pw_aff *pa);
++__isl_overload
+ __isl_give isl_multi_union_pw_aff *isl_multi_union_pw_aff_apply_pw_multi_aff(
+ 	__isl_take isl_multi_union_pw_aff *mupa,
+ 	__isl_take isl_pw_multi_aff *pma);
+@@ -1211,6 +1265,7 @@ __isl_give isl_multi_union_pw_aff *
+ isl_multi_union_pw_aff_from_union_pw_multi_aff(
+ 	__isl_take isl_union_pw_multi_aff *upma);
+ 
++__isl_export
+ __isl_give isl_multi_union_pw_aff *isl_multi_union_pw_aff_from_union_map(
+ 	__isl_take isl_union_map *umap);
+ __isl_overload
+diff -Npur isl_0.22/include/isl/aff_type.h isl/include/isl/aff_type.h
+--- isl_0.22/include/isl/aff_type.h	2020-04-17 16:49:36.266477000 +0800
++++ isl/include/isl/aff_type.h	2020-04-29 18:14:39.941681000 +0800
+@@ -10,13 +10,13 @@ extern "C" {
+ struct __isl_subclass(isl_multi_aff) __isl_subclass(isl_pw_aff) isl_aff;
+ typedef struct isl_aff isl_aff;
+ 
+-ISL_DECLARE_EXPORTED_LIST_TYPE(aff)
++ISL_DECLARE_EXPORTED_LIST(aff)
+ 
+ struct __isl_subclass(isl_multi_pw_aff) __isl_subclass(isl_pw_multi_aff)
+ 	__isl_subclass(isl_union_pw_aff) isl_pw_aff;
+ typedef struct isl_pw_aff isl_pw_aff;
+ 
+-ISL_DECLARE_EXPORTED_LIST_TYPE(pw_aff)
++ISL_DECLARE_EXPORTED_LIST(pw_aff)
+ 
+ struct __isl_subclass(isl_multi_union_pw_aff)
+ 	__isl_subclass(isl_union_pw_multi_aff) isl_union_pw_aff;
+diff -Npur isl_0.22/include/isl/ast_build.h isl/include/isl/ast_build.h
+--- isl_0.22/include/isl/ast_build.h	2020-04-17 16:49:36.266477000 +0800
++++ isl/include/isl/ast_build.h	2020-04-29 18:14:39.941681000 +0800
+@@ -67,6 +67,7 @@ __isl_null isl_ast_build *isl_ast_build_
+ __isl_give isl_ast_build *isl_ast_build_set_options(
+ 	__isl_take isl_ast_build *build,
+ 	__isl_take isl_union_map *options);
++__isl_export
+ __isl_give isl_ast_build *isl_ast_build_set_iterators(
+ 	__isl_take isl_ast_build *build,
+ 	__isl_take isl_id_list *iterators);
+diff -Npur isl_0.22/include/isl/ast.h isl/include/isl/ast.h
+--- isl_0.22/include/isl/ast.h	2020-04-17 16:49:36.266477000 +0800
++++ isl/include/isl/ast.h	2020-04-29 18:14:39.941681000 +0800
+@@ -84,9 +84,11 @@ __isl_give isl_ast_expr *isl_ast_expr_op
+ 	int pos);
+ __isl_give isl_ast_expr *isl_ast_expr_get_op_arg(__isl_keep isl_ast_expr *expr,
+ 	int pos);
++__isl_export
+ __isl_give isl_ast_expr *isl_ast_expr_set_op_arg(__isl_take isl_ast_expr *expr,
+ 	int pos, __isl_take isl_ast_expr *arg);
+ 
++__isl_export
+ isl_bool isl_ast_expr_is_equal(__isl_keep isl_ast_expr *expr1,
+ 	__isl_keep isl_ast_expr *expr2);
+ 
+@@ -104,12 +106,18 @@ __isl_give isl_ast_node *isl_ast_node_al
+ __isl_give isl_ast_node *isl_ast_node_copy(__isl_keep isl_ast_node *node);
+ __isl_null isl_ast_node *isl_ast_node_free(__isl_take isl_ast_node *node);
+ 
++__isl_export
++__isl_give isl_ast_node *isl_ast_node_from_ast_node_list(
++    __isl_take isl_ast_node_list *list);
++
+ isl_ctx *isl_ast_node_get_ctx(__isl_keep isl_ast_node *node);
+ __isl_subclass(isl_ast_node)
+ enum isl_ast_node_type isl_ast_node_get_type(__isl_keep isl_ast_node *node);
+ 
++__isl_export
+ __isl_give isl_ast_node *isl_ast_node_set_annotation(
+ 	__isl_take isl_ast_node *node, __isl_take isl_id *annotation);
++__isl_export
+ __isl_give isl_id *isl_ast_node_get_annotation(__isl_keep isl_ast_node *node);
+ 
+ __isl_export
+diff -Npur isl_0.22/include/isl/constraint.h isl/include/isl/constraint.h
+--- isl_0.22/include/isl/constraint.h	2020-04-17 16:49:36.266477000 +0800
++++ isl/include/isl/constraint.h	2020-04-29 18:14:39.941681000 +0800
+@@ -37,6 +37,7 @@ __isl_give isl_constraint *isl_equality_
+ __isl_give isl_constraint *isl_inequality_alloc(__isl_take isl_local_space *ls);
+ 
+ struct isl_constraint *isl_constraint_copy(struct isl_constraint *c);
++__isl_constructor
+ __isl_null isl_constraint *isl_constraint_free(__isl_take isl_constraint *c);
+ 
+ isl_size isl_basic_map_n_constraint(__isl_keep isl_basic_map *bmap);
+@@ -45,6 +46,7 @@ isl_stat isl_basic_map_foreach_constrain
+ 	isl_stat (*fn)(__isl_take isl_constraint *c, void *user), void *user);
+ isl_stat isl_basic_set_foreach_constraint(__isl_keep isl_basic_set *bset,
+ 	isl_stat (*fn)(__isl_take isl_constraint *c, void *user), void *user);
++__isl_export
+ __isl_give isl_constraint_list *isl_basic_map_get_constraint_list(
+ 	__isl_keep isl_basic_map *bmap);
+ __isl_give isl_constraint_list *isl_basic_set_get_constraint_list(
+@@ -62,6 +64,7 @@ __isl_give isl_basic_map *isl_basic_map_
+ 	__isl_take isl_basic_map *bmap, __isl_take isl_constraint *constraint);
+ __isl_give isl_basic_set *isl_basic_set_add_constraint(
+ 	__isl_take isl_basic_set *bset, __isl_take isl_constraint *constraint);
++__isl_export
+ __isl_give isl_map *isl_map_add_constraint(__isl_take isl_map *map,
+ 	__isl_take isl_constraint *constraint);
+ __isl_give isl_set *isl_set_add_constraint(__isl_take isl_set *set,
+@@ -82,9 +85,11 @@ __isl_give isl_space *isl_constraint_get
+ 	__isl_keep isl_constraint *constraint);
+ __isl_give isl_local_space *isl_constraint_get_local_space(
+ 	__isl_keep isl_constraint *constraint);
++__isl_export
+ isl_size isl_constraint_dim(__isl_keep isl_constraint *constraint,
+ 	enum isl_dim_type type);
+ 
++__isl_export
+ isl_bool isl_constraint_involves_dims(__isl_keep isl_constraint *constraint,
+ 	enum isl_dim_type type, unsigned first, unsigned n);
+ 
+@@ -110,6 +115,7 @@ __isl_give isl_aff *isl_constraint_get_d
+ 
+ struct isl_constraint *isl_constraint_negate(struct isl_constraint *constraint);
+ 
++__isl_export
+ isl_bool isl_constraint_is_equality(__isl_keep isl_constraint *constraint);
+ isl_bool isl_constraint_is_div_constraint(
+ 	__isl_keep isl_constraint *constraint);
+@@ -138,6 +144,7 @@ int isl_constraint_cmp_last_non_zero(__i
+ 
+ __isl_give isl_printer *isl_printer_print_constraint(__isl_take isl_printer *p,
+ 	__isl_keep isl_constraint *c);
++__isl_export
+ void isl_constraint_dump(__isl_keep isl_constraint *c);
+ 
+ #if defined(__cplusplus)
+diff -Npur isl_0.22/include/isl/id.h isl/include/isl/id.h
+--- isl_0.22/include/isl/id.h	2020-04-17 16:49:36.266477000 +0800
++++ isl/include/isl/id.h	2020-04-29 18:14:39.941681000 +0800
+@@ -17,6 +17,7 @@ ISL_DECLARE_EXPORTED_LIST_FN(id)
+ ISL_DECLARE_MULTI(id)
+ 
+ isl_ctx *isl_id_get_ctx(__isl_keep isl_id *id);
++__isl_export
+ uint32_t isl_id_get_hash(__isl_keep isl_id *id);
+ 
+ __isl_give isl_id *isl_id_alloc(isl_ctx *ctx,
+diff -Npur isl_0.22/include/isl/ilp.h isl/include/isl/ilp.h
+--- isl_0.22/include/isl/ilp.h	2020-04-17 16:49:36.266477000 +0800
++++ isl/include/isl/ilp.h	2020-04-29 18:14:39.941681000 +0800
+@@ -31,11 +31,15 @@ __isl_give isl_val *isl_set_max_val(__is
+ __isl_give isl_multi_val *isl_union_set_min_multi_union_pw_aff(
+ 	__isl_keep isl_union_set *uset, __isl_keep isl_multi_union_pw_aff *obj);
+ 
++__isl_export
+ __isl_give isl_val *isl_union_pw_aff_min_val(__isl_take isl_union_pw_aff *upa);
++__isl_export
+ __isl_give isl_val *isl_union_pw_aff_max_val(__isl_take isl_union_pw_aff *upa);
+ 
++__isl_export
+ __isl_give isl_multi_val *isl_multi_union_pw_aff_min_multi_val(
+ 	__isl_take isl_multi_union_pw_aff *mupa);
++__isl_export
+ __isl_give isl_multi_val *isl_multi_union_pw_aff_max_multi_val(
+ 	__isl_take isl_multi_union_pw_aff *mupa);
+ 
+diff -Npur isl_0.22/include/isl/list.h isl/include/isl/list.h
+--- isl_0.22/include/isl/list.h	2020-04-17 16:49:36.270477000 +0800
++++ isl/include/isl/list.h	2020-04-29 18:14:39.945681000 +0800
+@@ -43,6 +43,7 @@ __isl_give isl_##EL##_list *isl_##EL##_l
+ __isl_give isl_##EL##_list *isl_##EL##_list_insert(			\
+ 	__isl_take isl_##EL##_list *list, unsigned pos,			\
+ 	__isl_take struct isl_##EL *el);				\
++EXPORT									\
+ __isl_give isl_##EL##_list *isl_##EL##_list_drop(			\
+ 	__isl_take isl_##EL##_list *list, unsigned first, unsigned n);	\
+ EXPORT									\
+@@ -51,6 +52,7 @@ __isl_give isl_##EL##_list *isl_##EL##_l
+ __isl_give isl_##EL##_list *isl_##EL##_list_swap(			\
+ 	__isl_take isl_##EL##_list *list, unsigned pos1,		\
+ 	unsigned pos2);							\
++EXPORT									\
+ __isl_give isl_##EL##_list *isl_##EL##_list_reverse(			\
+ 	__isl_take isl_##EL##_list *list);				\
+ EXPORT									\
+diff -Npur isl_0.22/include/isl/local_space.h isl/include/isl/local_space.h
+--- isl_0.22/include/isl/local_space.h	2020-04-17 16:49:36.270477000 +0800
++++ isl/include/isl/local_space.h	2020-04-29 18:14:39.945681000 +0800
+@@ -10,11 +10,12 @@
+ extern "C" {
+ #endif
+ 
+-struct isl_local_space;
++struct __isl_export isl_local_space;
+ typedef struct isl_local_space isl_local_space;
+ 
+ isl_ctx *isl_local_space_get_ctx(__isl_keep isl_local_space *ls);
+ 
++__isl_constructor
+ __isl_give isl_local_space *isl_local_space_from_space(__isl_take isl_space *dim);
+ 
+ __isl_give isl_local_space *isl_local_space_copy(
+@@ -75,6 +76,7 @@ __isl_give isl_local_space *isl_local_sp
+ __isl_give isl_local_space *isl_local_space_wrap(
+ 	__isl_take isl_local_space *ls);
+ 
++__isl_export
+ isl_bool isl_local_space_is_equal(__isl_keep isl_local_space *ls1,
+ 	__isl_keep isl_local_space *ls2);
+ 
+diff -Npur isl_0.22/include/isl/map.h isl/include/isl/map.h
+--- isl_0.22/include/isl/map.h	2020-04-17 16:49:36.270477000 +0800
++++ isl/include/isl/map.h	2020-04-29 18:14:39.945681000 +0800
+@@ -34,6 +34,7 @@ isl_size isl_basic_map_total_dim(__isl_k
+ isl_size isl_basic_map_dim(__isl_keep isl_basic_map *bmap,
+ 				enum isl_dim_type type);
+ 
++__isl_export
+ isl_size isl_map_dim(__isl_keep isl_map *map, enum isl_dim_type type);
+ 
+ isl_ctx *isl_basic_map_get_ctx(__isl_keep isl_basic_map *bmap);
+@@ -56,6 +57,7 @@ isl_bool isl_map_has_tuple_name(__isl_ke
+ 	enum isl_dim_type type);
+ const char *isl_map_get_tuple_name(__isl_keep isl_map *map,
+ 	enum isl_dim_type type);
++__isl_export
+ __isl_give isl_map *isl_map_set_tuple_name(__isl_take isl_map *map,
+ 	enum isl_dim_type type, const char *s);
+ const char *isl_basic_map_get_dim_name(__isl_keep isl_basic_map *bmap,
+@@ -67,6 +69,7 @@ const char *isl_map_get_dim_name(__isl_k
+ __isl_give isl_basic_map *isl_basic_map_set_dim_name(
+ 	__isl_take isl_basic_map *bmap,
+ 	enum isl_dim_type type, unsigned pos, const char *s);
++__isl_export
+ __isl_give isl_map *isl_map_set_dim_name(__isl_take isl_map *map,
+ 	enum isl_dim_type type, unsigned pos, const char *s);
+ 
+@@ -81,11 +84,13 @@ isl_bool isl_map_has_dim_id(__isl_keep i
+ 	enum isl_dim_type type, unsigned pos);
+ __isl_give isl_id *isl_map_get_dim_id(__isl_keep isl_map *map,
+ 	enum isl_dim_type type, unsigned pos);
++__isl_export
+ __isl_give isl_map *isl_map_set_tuple_id(__isl_take isl_map *map,
+ 	enum isl_dim_type type, __isl_take isl_id *id);
+ __isl_give isl_map *isl_map_reset_tuple_id(__isl_take isl_map *map,
+ 	enum isl_dim_type type);
+ isl_bool isl_map_has_tuple_id(__isl_keep isl_map *map, enum isl_dim_type type);
++__isl_export
+ __isl_give isl_id *isl_map_get_tuple_id(__isl_keep isl_map *map,
+ 	enum isl_dim_type type);
+ __isl_give isl_map *isl_map_reset_user(__isl_take isl_map *map);
+@@ -207,6 +212,7 @@ __isl_give isl_basic_map *isl_basic_map_
+ 	__isl_take isl_basic_map *bmap2);
+ __isl_give isl_basic_map *isl_basic_map_neg(__isl_take isl_basic_map *bmap);
+ 
++__isl_export
+ __isl_give isl_map *isl_map_sum(__isl_take isl_map *map1,
+ 	__isl_take isl_map *map2);
+ __isl_give isl_map *isl_map_neg(__isl_take isl_map *map);
+@@ -257,6 +263,9 @@ __isl_give isl_pw_multi_aff *isl_map_lex
+ void isl_basic_map_print_internal(__isl_keep isl_basic_map *bmap,
+ 	FILE *out, int indent);
+ 
++__isl_give isl_map *isl_map_plain_update_val_if_fixed(__isl_take isl_map *map,
++	enum isl_dim_type type, unsigned pos);
++
+ __isl_give isl_val *isl_basic_map_plain_get_val_if_fixed(
+ 	__isl_keep isl_basic_map *bmap,
+ 	enum isl_dim_type type, unsigned pos);
+@@ -416,6 +425,7 @@ __isl_export
+ __isl_give isl_basic_map *isl_map_polyhedral_hull(__isl_take isl_map *map);
+ __isl_give isl_basic_map *isl_basic_map_add_dims(__isl_take isl_basic_map *bmap,
+ 		enum isl_dim_type type, unsigned n);
++__isl_export
+ __isl_give isl_map *isl_map_add_dims(__isl_take isl_map *map,
+ 		enum isl_dim_type type, unsigned n);
+ __isl_give isl_basic_map *isl_basic_map_insert_dims(
+@@ -433,6 +443,7 @@ __isl_give isl_map *isl_map_move_dims(__
+ __isl_give isl_basic_map *isl_basic_map_project_out(
+ 		__isl_take isl_basic_map *bmap,
+ 		enum isl_dim_type type, unsigned first, unsigned n);
++__isl_export
+ __isl_give isl_map *isl_map_project_out(__isl_take isl_map *map,
+ 		enum isl_dim_type type, unsigned first, unsigned n);
+ __isl_export
+@@ -520,8 +531,10 @@ __isl_give isl_basic_map *isl_basic_map_
+ __isl_give isl_basic_map *isl_basic_map_from_range(
+ 	__isl_take isl_basic_set *bset);
+ __isl_give isl_map *isl_map_from_range(__isl_take isl_set *set);
++__isl_constructor
+ __isl_give isl_basic_map *isl_basic_map_from_domain_and_range(
+ 	__isl_take isl_basic_set *domain, __isl_take isl_basic_set *range);
++__isl_constructor
+ __isl_give isl_map *isl_map_from_domain_and_range(__isl_take isl_set *domain,
+ 	__isl_take isl_set *range);
+ __isl_export
+@@ -565,6 +578,7 @@ isl_bool isl_map_has_equal_space(__isl_k
+ isl_bool isl_basic_map_can_zip(__isl_keep isl_basic_map *bmap);
+ isl_bool isl_map_can_zip(__isl_keep isl_map *map);
+ __isl_give isl_basic_map *isl_basic_map_zip(__isl_take isl_basic_map *bmap);
++__isl_export
+ __isl_give isl_map *isl_map_zip(__isl_take isl_map *map);
+ 
+ isl_bool isl_basic_map_can_curry(__isl_keep isl_basic_map *bmap);
+@@ -587,7 +601,7 @@ __isl_give isl_map *isl_basic_map_comput
+ __isl_give isl_map *isl_map_compute_divs(__isl_take isl_map *map);
+ ISL_DEPRECATED
+ __isl_give isl_map *isl_map_align_divs(__isl_take isl_map *map);
+-
++__isl_export
+ __isl_give isl_basic_map *isl_basic_map_drop_constraints_involving_dims(
+ 	__isl_take isl_basic_map *bmap,
+ 	enum isl_dim_type type, unsigned first, unsigned n);
+@@ -600,6 +614,8 @@ __isl_give isl_map *isl_map_drop_constra
+ __isl_give isl_map *isl_map_drop_constraints_not_involving_dims(
+ 	__isl_take isl_map *map,
+ 	enum isl_dim_type type, unsigned first, unsigned n);
++__isl_give isl_map *isl_map_drop_special_constraints(
++	__isl_take isl_map *bmap, unsigned first, unsigned n);
+ 
+ isl_bool isl_basic_map_involves_dims(__isl_keep isl_basic_map *bmap,
+ 	enum isl_dim_type type, unsigned first, unsigned n);
+@@ -629,6 +645,7 @@ __isl_give isl_map *isl_map_gist_params(
+ __isl_give isl_map *isl_map_gist_basic_map(__isl_take isl_map *map,
+ 	__isl_take isl_basic_map *context);
+ 
++__isl_export
+ __isl_give isl_stride_info *isl_map_get_range_stride_info(
+ 	__isl_keep isl_map *map, int pos);
+ __isl_export
+@@ -642,7 +659,7 @@ isl_bool isl_map_plain_is_equal(__isl_ke
+ 	__isl_keep isl_map *map2);
+ 
+ uint32_t isl_map_get_hash(__isl_keep isl_map *map);
+-
++__isl_export
+ isl_size isl_map_n_basic_map(__isl_keep isl_map *map);
+ __isl_export
+ isl_stat isl_map_foreach_basic_map(__isl_keep isl_map *map,
+@@ -689,20 +706,24 @@ __isl_give isl_basic_map *isl_basic_map_
+ 	enum isl_dim_type c2, enum isl_dim_type c3,
+ 	enum isl_dim_type c4, enum isl_dim_type c5);
+ 
++__isl_constructor
+ __isl_give isl_basic_map *isl_basic_map_from_aff(__isl_take isl_aff *aff);
++__isl_constructor
+ __isl_give isl_basic_map *isl_basic_map_from_multi_aff(
+ 	__isl_take isl_multi_aff *maff);
+ __isl_give isl_basic_map *isl_basic_map_from_aff_list(
+ 	__isl_take isl_space *domain_space, __isl_take isl_aff_list *list);
+ 
++__isl_constructor
+ __isl_give isl_map *isl_map_from_aff(__isl_take isl_aff *aff);
++__isl_constructor
+ __isl_give isl_map *isl_map_from_multi_aff(__isl_take isl_multi_aff *maff);
+ 
+ __isl_give isl_pw_aff *isl_map_dim_min(__isl_take isl_map *map, int pos);
+ __isl_give isl_pw_aff *isl_map_dim_max(__isl_take isl_map *map, int pos);
+ 
+ ISL_DECLARE_LIST_FN(basic_map)
+-ISL_DECLARE_LIST_FN(map)
++ISL_DECLARE_EXPORTED_LIST_FN(map)
+ 
+ #if defined(__cplusplus)
+ }
+diff -Npur isl_0.22/include/isl/map_type.h isl/include/isl/map_type.h
+--- isl_0.22/include/isl/map_type.h	2020-04-17 16:49:36.270477000 +0800
++++ isl/include/isl/map_type.h	2020-04-29 18:14:39.945681000 +0800
+@@ -13,7 +13,7 @@ typedef struct isl_basic_map isl_basic_m
+ ISL_DECLARE_LIST_TYPE(basic_map)
+ struct __isl_subclass(isl_union_map) isl_map;
+ typedef struct isl_map isl_map;
+-ISL_DECLARE_LIST_TYPE(map)
++ISL_DECLARE_EXPORTED_LIST_TYPE(map)
+ 
+ #ifndef isl_basic_set
+ struct __isl_subclass(isl_set) isl_basic_set;
+@@ -24,11 +24,11 @@ ISL_DECLARE_LIST_TYPE(basic_set)
+ #ifndef isl_set
+ struct __isl_subclass(isl_union_set) isl_set;
+ typedef struct isl_set isl_set;
+-ISL_DECLARE_LIST_TYPE(set)
++ISL_DECLARE_EXPORTED_LIST_TYPE(set)
+ #endif
+ 
+ ISL_DECLARE_LIST_FN(basic_set)
+-ISL_DECLARE_LIST_FN(set)
++ISL_DECLARE_EXPORTED_LIST_FN(set)
+ 
+ #if defined(__cplusplus)
+ }
+diff -Npur isl_0.22/include/isl/multi.h isl/include/isl/multi.h
+--- isl_0.22/include/isl/multi.h	2020-04-17 16:49:36.270477000 +0800
++++ isl/include/isl/multi.h	2020-04-29 18:14:39.945681000 +0800
+@@ -36,12 +36,17 @@ isl_size isl_multi_##BASE##_size(__isl_k
+ __isl_export								\
+ __isl_give isl_##BASE *isl_multi_##BASE##_get_at(			\
+ 	__isl_keep isl_multi_##BASE *multi, int pos);			\
++__isl_export                                                            \
+ __isl_give isl_##BASE *isl_multi_##BASE##_get_##BASE(			\
+ 	__isl_keep isl_multi_##BASE *multi, int pos);			\
+ __isl_export								\
+ __isl_give isl_multi_##BASE *isl_multi_##BASE##_set_at(			\
+ 	__isl_take isl_multi_##BASE *multi, int pos,			\
+ 	__isl_take isl_##BASE *el);					\
++__isl_export                                                            \
++__isl_give isl_##BASE##_list *isl_multi_##BASE##_get_##BASE##_list(	\
++	__isl_keep isl_multi_##BASE *multi);				\
++__isl_export								\
+ __isl_give isl_multi_##BASE *isl_multi_##BASE##_set_##BASE(		\
+ 	__isl_take isl_multi_##BASE *multi, int pos,			\
+ 	__isl_take isl_##BASE *el);					\
+@@ -102,6 +107,7 @@ __isl_overload								\
+ __isl_give isl_multi_##BASE *isl_multi_##BASE##_scale_down_multi_val(	\
+ 	__isl_take isl_multi_##BASE *multi,				\
+ 	__isl_take isl_multi_val *mv);					\
++__isl_overload								\
+ __isl_give isl_multi_##BASE *isl_multi_##BASE##_mod_multi_val(		\
+ 	__isl_take isl_multi_##BASE *multi,				\
+ 	__isl_take isl_multi_val *mv);					\
+@@ -174,11 +180,13 @@ const char *isl_multi_##BASE##_get_tuple
+ 	__isl_keep isl_multi_##BASE *multi, enum isl_dim_type type);	\
+ isl_bool isl_multi_##BASE##_has_tuple_id(				\
+ 	__isl_keep isl_multi_##BASE *multi, enum isl_dim_type type);	\
++__isl_export												\
+ __isl_give isl_id *isl_multi_##BASE##_get_tuple_id(			\
+ 	__isl_keep isl_multi_##BASE *multi, enum isl_dim_type type);	\
+ __isl_give isl_multi_##BASE *isl_multi_##BASE##_set_tuple_name(		\
+ 	__isl_take isl_multi_##BASE *multi,				\
+ 	enum isl_dim_type type, const char *s);				\
++__isl_export                                                        \
+ __isl_give isl_multi_##BASE *isl_multi_##BASE##_set_tuple_id(		\
+ 	__isl_take isl_multi_##BASE *multi,				\
+ 	enum isl_dim_type type, __isl_take isl_id *id);			\
+diff -Npur isl_0.22/include/isl/schedule.h isl/include/isl/schedule.h
+--- isl_0.22/include/isl/schedule.h	2020-04-17 16:49:36.270477000 +0800
++++ isl/include/isl/schedule.h	2020-04-29 18:14:39.945681000 +0800
+@@ -17,9 +17,16 @@ extern "C" {
+ struct __isl_export isl_schedule_constraints;
+ typedef struct isl_schedule_constraints isl_schedule_constraints;
+ 
++isl_stat isl_options_set_schedule_nonneg_var_coefficient(isl_ctx *ctx, int val);
++int isl_options_get_schedule_nonneg_var_coefficient(isl_ctx *ctx);
++
+ isl_stat isl_options_set_schedule_max_coefficient(isl_ctx *ctx, int val);
+ int isl_options_get_schedule_max_coefficient(isl_ctx *ctx);
+ 
++isl_stat isl_options_set_schedule_unit_max_var_coefficient_sum(isl_ctx *ctx,
++	int val);
++int isl_options_get_schedule_unit_max_var_coefficient_sum(isl_ctx *ctx);
++
+ isl_stat isl_options_set_schedule_max_constant_term(isl_ctx *ctx, int val);
+ int isl_options_get_schedule_max_constant_term(isl_ctx *ctx);
+ 
+@@ -104,6 +111,10 @@ __isl_give isl_union_map *
+ isl_schedule_constraints_get_conditional_validity_condition(
+ 	__isl_keep isl_schedule_constraints *sc);
+ 
++__isl_export
++__isl_give isl_schedule_constraints *isl_schedule_constraints_intersect_domain(
++	__isl_take isl_schedule_constraints *sc,
++	__isl_take isl_union_set *domain);
+ __isl_give isl_schedule_constraints *isl_schedule_constraints_apply(
+ 	__isl_take isl_schedule_constraints *sc,
+ 	__isl_take isl_union_map *umap);
+@@ -138,12 +149,14 @@ __isl_export
+ __isl_give isl_union_map *isl_schedule_get_map(__isl_keep isl_schedule *sched);
+ 
+ isl_ctx *isl_schedule_get_ctx(__isl_keep isl_schedule *sched);
++__isl_export
+ isl_bool isl_schedule_plain_is_equal(__isl_keep isl_schedule *schedule1,
+ 	__isl_keep isl_schedule *schedule2);
+ 
+ __isl_export
+ __isl_give isl_schedule_node *isl_schedule_get_root(
+ 	__isl_keep isl_schedule *schedule);
++__isl_export
+ __isl_give isl_union_set *isl_schedule_get_domain(
+ 	__isl_keep isl_schedule *schedule);
+ 
+@@ -158,13 +171,16 @@ __isl_give isl_schedule *isl_schedule_ma
+ 
+ __isl_give isl_schedule *isl_schedule_insert_context(
+ 	__isl_take isl_schedule *schedule, __isl_take isl_set *context);
++__isl_export
+ __isl_give isl_schedule *isl_schedule_insert_partial_schedule(
+ 	__isl_take isl_schedule *schedule,
+ 	__isl_take isl_multi_union_pw_aff *partial);
+ __isl_give isl_schedule *isl_schedule_insert_guard(
+ 	__isl_take isl_schedule *schedule, __isl_take isl_set *guard);
++__isl_export
+ __isl_give isl_schedule *isl_schedule_sequence(
+ 	__isl_take isl_schedule *schedule1, __isl_take isl_schedule *schedule2);
++__isl_export
+ __isl_give isl_schedule *isl_schedule_set(
+ 	__isl_take isl_schedule *schedule1, __isl_take isl_schedule *schedule2);
+ __isl_give isl_schedule *isl_schedule_intersect_domain(
+diff -Npur isl_0.22/include/isl/schedule_node.h isl/include/isl/schedule_node.h
+--- isl_0.22/include/isl/schedule_node.h	2020-04-17 16:49:36.270477000 +0800
++++ isl/include/isl/schedule_node.h	2020-04-29 18:14:39.945681000 +0800
+@@ -78,6 +78,7 @@ __isl_export
+ isl_size isl_schedule_node_get_ancestor_child_position(
+ 	__isl_keep isl_schedule_node *node,
+ 	__isl_keep isl_schedule_node *ancestor);
++__isl_export
+ __isl_give isl_schedule_node *isl_schedule_node_get_child(
+ 	__isl_keep isl_schedule_node *node, int pos);
+ __isl_export
+@@ -94,7 +95,7 @@ __isl_give isl_schedule_node *isl_schedu
+ __isl_export
+ __isl_give isl_schedule_node *isl_schedule_node_ancestor(
+ 	__isl_take isl_schedule_node *node, int generation);
+-__isl_export
++
+ __isl_give isl_schedule_node *isl_schedule_node_child(
+ 	__isl_take isl_schedule_node *node, int pos);
+ __isl_export
+@@ -110,20 +111,23 @@ __isl_give isl_schedule_node *isl_schedu
+ __isl_export
+ isl_bool isl_schedule_node_is_subtree_anchored(
+ 	__isl_keep isl_schedule_node *node);
+-
++__isl_export
+ __isl_give isl_schedule_node *isl_schedule_node_group(
+ 	__isl_take isl_schedule_node *node, __isl_take isl_id *group_id);
+ 
+ __isl_give isl_schedule_node *isl_schedule_node_sequence_splice_child(
+ 	__isl_take isl_schedule_node *node, int pos);
+ 
++__isl_export
+ __isl_give isl_space *isl_schedule_node_band_get_space(
+ 	__isl_keep isl_schedule_node *node);
+ __isl_export
+ __isl_give isl_multi_union_pw_aff *isl_schedule_node_band_get_partial_schedule(
+ 	__isl_keep isl_schedule_node *node);
++__isl_export
+ __isl_give isl_union_map *isl_schedule_node_band_get_partial_schedule_union_map(
+ 	__isl_keep isl_schedule_node *node);
++__isl_export
+ enum isl_ast_loop_type isl_schedule_node_band_member_get_ast_loop_type(
+ 	__isl_keep isl_schedule_node *node, int pos);
+ __isl_export
+@@ -133,6 +137,7 @@ __isl_give isl_schedule_node *isl_schedu
+ enum isl_ast_loop_type isl_schedule_node_band_member_get_isolate_ast_loop_type(
+ 	__isl_keep isl_schedule_node *node, int pos);
+ __isl_give isl_schedule_node *
++__isl_export
+ isl_schedule_node_band_member_set_isolate_ast_loop_type(
+ 	__isl_take isl_schedule_node *node, int pos,
+ 	enum isl_ast_loop_type type);
+@@ -181,6 +186,7 @@ __isl_give isl_schedule_node *isl_schedu
+ __isl_export
+ __isl_give isl_schedule_node *isl_schedule_node_band_tile(
+ 	__isl_take isl_schedule_node *node, __isl_take isl_multi_val *sizes);
++__isl_export
+ __isl_give isl_schedule_node *isl_schedule_node_band_sink(
+ 	__isl_take isl_schedule_node *node);
+ __isl_export
+@@ -205,16 +211,22 @@ __isl_give isl_union_map *isl_schedule_n
+ __isl_export
+ __isl_give isl_union_set *isl_schedule_node_filter_get_filter(
+ 	__isl_keep isl_schedule_node *node);
++__isl_give isl_schedule_node *isl_schedule_node_filter_set_filter(
++    __isl_take isl_schedule_node *node, __isl_take isl_union_set *filter);
+ __isl_export
+ __isl_give isl_set *isl_schedule_node_guard_get_guard(
+ 	__isl_keep isl_schedule_node *node);
++__isl_export
+ __isl_give isl_id *isl_schedule_node_mark_get_id(
+ 	__isl_keep isl_schedule_node *node);
+ 
++__isl_export
+ isl_size isl_schedule_node_get_schedule_depth(
+ 	__isl_keep isl_schedule_node *node);
++__isl_export
+ __isl_give isl_union_set *isl_schedule_node_get_domain(
+ 	__isl_keep isl_schedule_node *node);
++__isl_export
+ __isl_give isl_union_set *isl_schedule_node_get_universe_domain(
+ 	__isl_keep isl_schedule_node *node);
+ __isl_export
+@@ -234,6 +246,7 @@ __isl_give isl_union_map *isl_schedule_n
+ 	__isl_keep isl_schedule_node *node);
+ __isl_give isl_union_map *isl_schedule_node_get_subtree_expansion(
+ 	__isl_keep isl_schedule_node *node);
++__isl_export
+ __isl_give isl_union_pw_multi_aff *isl_schedule_node_get_subtree_contraction(
+ 	__isl_keep isl_schedule_node *node);
+ 
+@@ -264,6 +277,7 @@ __isl_give isl_schedule_node *isl_schedu
+ 
+ __isl_give isl_schedule_node *isl_schedule_node_cut(
+ 	__isl_take isl_schedule_node *node);
++__isl_export
+ __isl_give isl_schedule_node *isl_schedule_node_delete(
+ 	__isl_take isl_schedule_node *node);
+ 
+@@ -293,6 +307,27 @@ __isl_give isl_printer *isl_printer_prin
+ void isl_schedule_node_dump(__isl_keep isl_schedule_node *node);
+ __isl_give char *isl_schedule_node_to_str(__isl_keep isl_schedule_node *node);
+ 
++struct isl_schedule_tree;
++typedef struct isl_schedule_tree isl_schedule_tree;
++
++__isl_export
++__isl_give isl_schedule_tree *isl_schedule_node_get_tree(
++	__isl_keep isl_schedule_node *node);
++__isl_export
++__isl_give isl_schedule_node *isl_schedule_node_graft_tree(
++	__isl_take isl_schedule_node *pos, __isl_take isl_schedule_tree *tree);
++
++__isl_export
++__isl_give isl_schedule_tree *isl_schedule_tree_get_child(
++	__isl_keep isl_schedule_tree *tree, int pos);
++__isl_export
++__isl_give isl_schedule_tree *isl_schedule_tree_replace_child(
++	__isl_take isl_schedule_tree *tree, int pos,
++	__isl_take isl_schedule_tree *new_child);
++__isl_export
++__isl_null isl_schedule_tree *isl_schedule_tree_free(
++	__isl_take isl_schedule_tree *tree);
++
+ #if defined(__cplusplus)
+ }
+ #endif
+diff -Npur isl_0.22/include/isl/set.h isl/include/isl/set.h
+--- isl_0.22/include/isl/set.h	2020-04-17 16:49:36.270477000 +0800
++++ isl/include/isl/set.h	2020-04-29 18:14:39.945681000 +0800
+@@ -31,6 +31,7 @@ isl_size isl_basic_set_total_dim(__isl_k
+ isl_size isl_basic_set_dim(__isl_keep isl_basic_set *bset,
+ 				enum isl_dim_type type);
+ 
++__isl_export
+ isl_size isl_set_n_dim(__isl_keep isl_set *set);
+ isl_size isl_set_n_param(__isl_keep isl_set *set);
+ isl_size isl_set_dim(__isl_keep isl_set *set, enum isl_dim_type type);
+@@ -50,10 +51,13 @@ __isl_give isl_local_space *isl_basic_se
+ 	__isl_keep isl_basic_set *bset);
+ 
+ const char *isl_basic_set_get_tuple_name(__isl_keep isl_basic_set *bset);
++__isl_export
+ isl_bool isl_set_has_tuple_name(__isl_keep isl_set *set);
++__isl_export
+ const char *isl_set_get_tuple_name(__isl_keep isl_set *set);
+ __isl_give isl_basic_set *isl_basic_set_set_tuple_name(
+ 	__isl_take isl_basic_set *set, const char *s);
++__isl_export
+ __isl_give isl_set *isl_set_set_tuple_name(__isl_take isl_set *set,
+ 	const char *s);
+ const char *isl_basic_set_get_dim_name(__isl_keep isl_basic_set *bset,
+@@ -78,10 +82,12 @@ isl_bool isl_set_has_dim_id(__isl_keep i
+ 	enum isl_dim_type type, unsigned pos);
+ __isl_give isl_id *isl_set_get_dim_id(__isl_keep isl_set *set,
+ 	enum isl_dim_type type, unsigned pos);
++__isl_export
+ __isl_give isl_set *isl_set_set_tuple_id(__isl_take isl_set *set,
+ 	__isl_take isl_id *id);
+ __isl_give isl_set *isl_set_reset_tuple_id(__isl_take isl_set *set);
+ isl_bool isl_set_has_tuple_id(__isl_keep isl_set *set);
++__isl_export
+ __isl_give isl_id *isl_set_get_tuple_id(__isl_keep isl_set *set);
+ __isl_give isl_set *isl_set_reset_user(__isl_take isl_set *set);
+ 
+@@ -154,6 +160,7 @@ __isl_give isl_basic_set *isl_basic_set_
+ 	enum isl_dim_type type, unsigned pos, __isl_take isl_val *v);
+ __isl_give isl_set *isl_set_fix_si(__isl_take isl_set *set,
+ 		enum isl_dim_type type, unsigned pos, int value);
++__isl_export
+ __isl_give isl_set *isl_set_lower_bound_si(__isl_take isl_set *set,
+ 		enum isl_dim_type type, unsigned pos, int value);
+ __isl_give isl_basic_set *isl_basic_set_lower_bound_val(
+@@ -161,6 +168,7 @@ __isl_give isl_basic_set *isl_basic_set_
+ 	__isl_take isl_val *value);
+ __isl_give isl_set *isl_set_lower_bound_val(__isl_take isl_set *set,
+ 	enum isl_dim_type type, unsigned pos, __isl_take isl_val *value);
++__isl_export
+ __isl_give isl_set *isl_set_upper_bound_si(__isl_take isl_set *set,
+ 	enum isl_dim_type type, unsigned pos, int value);
+ __isl_give isl_basic_set *isl_basic_set_upper_bound_val(
+@@ -227,6 +235,7 @@ __isl_give isl_basic_set *isl_basic_set_
+ 	__isl_take isl_basic_set *bset);
+ __isl_export
+ __isl_give isl_set *isl_set_params(__isl_take isl_set *set);
++__isl_export
+ __isl_give isl_set *isl_set_from_params(__isl_take isl_set *set);
+ 
+ __isl_export
+@@ -258,6 +267,7 @@ __isl_export
+ __isl_give isl_set *isl_set_empty(__isl_take isl_space *space);
+ __isl_export
+ __isl_give isl_set *isl_set_universe(__isl_take isl_space *space);
++__isl_export
+ __isl_give isl_set *isl_set_nat_universe(__isl_take isl_space *dim);
+ __isl_give isl_set *isl_set_copy(__isl_keep isl_set *set);
+ __isl_null isl_set *isl_set_free(__isl_take isl_set *set);
+@@ -276,6 +286,7 @@ __isl_give isl_basic_set *isl_set_affine
+ __isl_give isl_basic_set *isl_set_convex_hull(__isl_take isl_set *set);
+ __isl_export
+ __isl_give isl_basic_set *isl_set_polyhedral_hull(__isl_take isl_set *set);
++__isl_export
+ __isl_give isl_basic_set *isl_set_simple_hull(__isl_take isl_set *set);
+ __isl_export
+ __isl_give isl_basic_set *isl_set_unshifted_simple_hull(
+@@ -370,6 +381,7 @@ __isl_give isl_basic_set *isl_basic_set_
+ 	enum isl_dim_type type, unsigned first, unsigned n);
+ __isl_give isl_set *isl_set_eliminate(__isl_take isl_set *set,
+ 	enum isl_dim_type type, unsigned first, unsigned n);
++__isl_export
+ __isl_give isl_set *isl_set_eliminate_dims(__isl_take isl_set *set,
+ 		unsigned first, unsigned n);
+ __isl_give isl_set *isl_set_remove_dims(__isl_take isl_set *bset,
+@@ -406,6 +418,7 @@ isl_bool isl_set_involves_dims(__isl_kee
+ 
+ void isl_set_print_internal(__isl_keep isl_set *set, FILE *out, int indent);
+ isl_bool isl_set_plain_is_empty(__isl_keep isl_set *set);
++__isl_export
+ isl_bool isl_set_plain_is_universe(__isl_keep isl_set *set);
+ isl_bool isl_set_is_params(__isl_keep isl_set *set);
+ __isl_export
+@@ -480,6 +493,7 @@ isl_bool isl_set_plain_is_disjoint(__isl
+ 
+ uint32_t isl_set_get_hash(struct isl_set *set);
+ 
++__isl_export
+ isl_size isl_set_n_basic_set(__isl_keep isl_set *set);
+ __isl_export
+ isl_stat isl_set_foreach_basic_set(__isl_keep isl_set *set,
+@@ -537,6 +551,7 @@ __isl_give isl_basic_set *isl_basic_set_
+ __isl_give isl_basic_set *isl_basic_set_from_multi_aff(
+ 	__isl_take isl_multi_aff *ma);
+ 
++__isl_overload
+ __isl_give isl_set *isl_set_from_multi_aff(__isl_take isl_multi_aff *ma);
+ 
+ __isl_give isl_mat *isl_basic_set_reduced_basis(__isl_keep isl_basic_set *bset);
+@@ -550,7 +565,9 @@ __isl_give isl_basic_set *isl_basic_set_
+ 	__isl_take isl_basic_set *bset);
+ __isl_give isl_basic_set *isl_set_solutions(__isl_take isl_set *set);
+ 
++__isl_export
+ __isl_give isl_pw_aff *isl_set_dim_max(__isl_take isl_set *set, int pos);
++__isl_export
+ __isl_give isl_pw_aff *isl_set_dim_min(__isl_take isl_set *set, int pos);
+ 
+ __isl_give char *isl_basic_set_to_str(__isl_keep isl_basic_set *bset);
+diff -Npur isl_0.22/include/isl/space.h isl/include/isl/space.h
+--- isl_0.22/include/isl/space.h	2020-04-17 16:49:36.270477000 +0800
++++ isl/include/isl/space.h	2020-04-29 18:14:39.945681000 +0800
+@@ -26,6 +26,7 @@ __isl_give isl_space *isl_space_alloc(is
+ 			unsigned nparam, unsigned n_in, unsigned n_out);
+ __isl_give isl_space *isl_space_set_alloc(isl_ctx *ctx,
+ 			unsigned nparam, unsigned dim);
++__isl_constructor
+ __isl_give isl_space *isl_space_params_alloc(isl_ctx *ctx, unsigned nparam);
+ __isl_give isl_space *isl_space_copy(__isl_keep isl_space *dim);
+ __isl_null isl_space *isl_space_free(__isl_take isl_space *space);
+@@ -34,6 +35,10 @@ isl_bool isl_space_is_params(__isl_keep
+ isl_bool isl_space_is_set(__isl_keep isl_space *space);
+ isl_bool isl_space_is_map(__isl_keep isl_space *space);
+ 
++__isl_overload
++isl_bool isl_space_has_param_id(__isl_keep isl_space *space,
++	__isl_keep isl_id *id);
++__isl_overload
+ __isl_give isl_space *isl_space_add_param_id(__isl_take isl_space *space,
+ 	__isl_take isl_id *id);
+ 
+@@ -43,12 +48,16 @@ isl_bool isl_space_has_tuple_name(__isl_
+ 	enum isl_dim_type type);
+ __isl_keep const char *isl_space_get_tuple_name(__isl_keep isl_space *space,
+ 				 enum isl_dim_type type);
++__isl_export
++__isl_give isl_space *isl_space_set_set_tuple_id(__isl_take isl_space *space,
++	__isl_take isl_id *id);
+ __isl_give isl_space *isl_space_set_tuple_id(__isl_take isl_space *space,
+ 	enum isl_dim_type type, __isl_take isl_id *id);
+ __isl_give isl_space *isl_space_reset_tuple_id(__isl_take isl_space *space,
+ 	enum isl_dim_type type);
+ isl_bool isl_space_has_tuple_id(__isl_keep isl_space *space,
+ 	enum isl_dim_type type);
++__isl_export
+ __isl_give isl_id *isl_space_get_tuple_id(__isl_keep isl_space *space,
+ 	enum isl_dim_type type);
+ __isl_give isl_space *isl_space_reset_user(__isl_take isl_space *space);
+@@ -76,6 +85,7 @@ __isl_keep const char *isl_space_get_dim
+ ISL_DEPRECATED
+ __isl_give isl_space *isl_space_extend(__isl_take isl_space *dim,
+ 			unsigned nparam, unsigned n_in, unsigned n_out);
++__isl_export
+ __isl_give isl_space *isl_space_add_dims(__isl_take isl_space *space,
+ 	enum isl_dim_type type, unsigned n);
+ __isl_give isl_space *isl_space_move_dims(__isl_take isl_space *space,
+@@ -85,6 +95,7 @@ __isl_give isl_space *isl_space_insert_d
+ 	enum isl_dim_type type, unsigned pos, unsigned n);
+ __isl_give isl_space *isl_space_join(__isl_take isl_space *left,
+ 	__isl_take isl_space *right);
++__isl_export
+ __isl_give isl_space *isl_space_product(__isl_take isl_space *left,
+ 	__isl_take isl_space *right);
+ __isl_give isl_space *isl_space_domain_product(__isl_take isl_space *left,
+@@ -103,6 +114,7 @@ __isl_give isl_space *isl_space_range_fa
+ 	__isl_take isl_space *space);
+ __isl_export
+ __isl_give isl_space *isl_space_map_from_set(__isl_take isl_space *space);
++__isl_export
+ __isl_give isl_space *isl_space_map_from_domain_and_range(
+ 	__isl_take isl_space *domain, __isl_take isl_space *range);
+ __isl_give isl_space *isl_space_reverse(__isl_take isl_space *space);
+@@ -126,12 +138,13 @@ __isl_give isl_space *isl_space_domain_m
+ __isl_give isl_space *isl_space_range_map(__isl_take isl_space *space);
+ __isl_export
+ __isl_give isl_space *isl_space_params(__isl_take isl_space *space);
+-__isl_overload
++__isl_export
+ __isl_give isl_space *isl_space_add_unnamed_tuple_ui(
+ 	__isl_take isl_space *space, unsigned dim);
+-__isl_overload
++__isl_export
+ __isl_give isl_space *isl_space_add_named_tuple_id_ui(
+ 	__isl_take isl_space *space, __isl_take isl_id *tuple_id, unsigned dim);
++__isl_export
+ __isl_give isl_space *isl_space_set_from_params(__isl_take isl_space *space);
+ 
+ __isl_give isl_space *isl_space_align_params(__isl_take isl_space *dim1,
+@@ -150,13 +163,17 @@ __isl_give isl_space *isl_space_unwrap(_
+ isl_bool isl_space_can_zip(__isl_keep isl_space *space);
+ __isl_give isl_space *isl_space_zip(__isl_take isl_space *space);
+ 
++__isl_export
+ isl_bool isl_space_can_curry(__isl_keep isl_space *space);
++__isl_export
+ __isl_give isl_space *isl_space_curry(__isl_take isl_space *space);
+ 
+ isl_bool isl_space_can_range_curry(__isl_keep isl_space *space);
+ __isl_give isl_space *isl_space_range_curry(__isl_take isl_space *space);
+ 
++__isl_export
+ isl_bool isl_space_can_uncurry(__isl_keep isl_space *space);
++__isl_export
+ __isl_give isl_space *isl_space_uncurry(__isl_take isl_space *space);
+ 
+ isl_bool isl_space_is_domain(__isl_keep isl_space *space1,
+@@ -168,6 +185,7 @@ isl_bool isl_space_is_equal(__isl_keep i
+ 	__isl_keep isl_space *space2);
+ isl_bool isl_space_has_equal_params(__isl_keep isl_space *space1,
+ 	__isl_keep isl_space *space2);
++__isl_export
+ isl_bool isl_space_has_equal_tuples(__isl_keep isl_space *space1,
+ 	__isl_keep isl_space *space2);
+ isl_bool isl_space_tuple_is_equal(__isl_keep isl_space *space1,
+@@ -176,6 +194,7 @@ isl_bool isl_space_tuple_is_equal(__isl_
+ ISL_DEPRECATED
+ isl_bool isl_space_match(__isl_keep isl_space *space1, enum isl_dim_type type1,
+ 	__isl_keep isl_space *space2, enum isl_dim_type type2);
++__isl_export
+ isl_size isl_space_dim(__isl_keep isl_space *space, enum isl_dim_type type);
+ 
+ __isl_export
+diff -Npur isl_0.22/include/isl/stride_info.h isl/include/isl/stride_info.h
+--- isl_0.22/include/isl/stride_info.h	2020-04-17 16:49:36.270477000 +0800
++++ isl/include/isl/stride_info.h	2020-04-29 18:14:39.945681000 +0800
+@@ -12,11 +12,13 @@
+ extern "C" {
+ #endif
+ 
+-struct isl_stride_info;
++struct __isl_export isl_stride_info;
+ typedef struct isl_stride_info isl_stride_info;
+ 
+ isl_ctx *isl_stride_info_get_ctx(__isl_keep isl_stride_info *si);
++__isl_export
+ __isl_give isl_val *isl_stride_info_get_stride(__isl_keep isl_stride_info *si);
++__isl_export
+ __isl_give isl_aff *isl_stride_info_get_offset(__isl_keep isl_stride_info *si);
+ __isl_null isl_stride_info *isl_stride_info_free(
+ 	__isl_take isl_stride_info *si);
+diff -Npur isl_0.22/include/isl/union_map.h isl/include/isl/union_map.h
+--- isl_0.22/include/isl/union_map.h	2020-04-17 16:49:36.270477000 +0800
++++ isl/include/isl/union_map.h	2020-04-29 18:14:39.945681000 +0800
+@@ -29,6 +29,7 @@ __isl_overload
+ __isl_give isl_union_map *isl_union_map_empty_ctx(isl_ctx *ctx);
+ __isl_give isl_union_map *isl_union_map_empty_space(
+ 	__isl_take isl_space *space);
++__isl_export
+ __isl_give isl_union_map *isl_union_map_empty(__isl_take isl_space *space);
+ __isl_give isl_union_map *isl_union_map_copy(__isl_keep isl_union_map *umap);
+ __isl_null isl_union_map *isl_union_map_free(__isl_take isl_union_map *umap);
+@@ -90,6 +91,7 @@ __isl_give isl_union_map *isl_union_map_
+ __isl_export
+ __isl_give isl_union_map *isl_union_map_lexmax(__isl_take isl_union_map *umap);
+ 
++__isl_export
+ __isl_give isl_union_map *isl_union_map_add_map(__isl_take isl_union_map *umap,
+ 	__isl_take isl_map *map);
+ __isl_export
+@@ -115,6 +117,7 @@ __isl_give isl_union_map *isl_union_map_
+ __isl_export
+ __isl_give isl_union_map *isl_union_map_range_product(
+ 	__isl_take isl_union_map *umap1, __isl_take isl_union_map *umap2);
++__isl_export
+ __isl_give isl_union_map *isl_union_map_flat_range_product(
+ 	__isl_take isl_union_map *umap1, __isl_take isl_union_map *umap2);
+ __isl_export
+@@ -255,10 +258,12 @@ isl_bool isl_union_map_is_strict_subset(
+ 
+ uint32_t isl_union_map_get_hash(__isl_keep isl_union_map *umap);
+ 
++__isl_export
+ isl_size isl_union_map_n_map(__isl_keep isl_union_map *umap);
+ __isl_export
+ isl_stat isl_union_map_foreach_map(__isl_keep isl_union_map *umap,
+ 	isl_stat (*fn)(__isl_take isl_map *map, void *user), void *user);
++__isl_export
+ __isl_give isl_map_list *isl_union_map_get_map_list(
+ 	__isl_keep isl_union_map *umap);
+ __isl_export
+@@ -274,6 +279,7 @@ __isl_give isl_map *isl_union_map_extrac
+ 	__isl_take isl_space *dim);
+ __isl_export
+ isl_bool isl_union_map_isa_map(__isl_keep isl_union_map *umap);
++__isl_overload
+ __isl_give isl_map *isl_map_from_union_map(__isl_take isl_union_map *umap);
+ 
+ __isl_give isl_basic_map *isl_union_map_sample(__isl_take isl_union_map *umap);
+@@ -299,9 +305,11 @@ __isl_overload
+ __isl_give isl_union_map *isl_union_map_eq_at_multi_union_pw_aff(
+ 	__isl_take isl_union_map *umap,
+ 	__isl_take isl_multi_union_pw_aff *mupa);
++__isl_overload
+ __isl_give isl_union_map *isl_union_map_lex_lt_at_multi_union_pw_aff(
+ 	__isl_take isl_union_map *umap,
+ 	__isl_take isl_multi_union_pw_aff *mupa);
++__isl_overload
+ __isl_give isl_union_map *isl_union_map_lex_gt_at_multi_union_pw_aff(
+ 	__isl_take isl_union_map *umap,
+ 	__isl_take isl_multi_union_pw_aff *mupa);
+diff -Npur isl_0.22/include/isl/union_set.h isl/include/isl/union_set.h
+--- isl_0.22/include/isl/union_set.h	2020-04-17 16:49:36.270477000 +0800
++++ isl/include/isl/union_set.h	2020-04-29 18:14:39.945681000 +0800
+@@ -20,6 +20,7 @@ __isl_overload
+ __isl_give isl_union_set *isl_union_set_empty_ctx(isl_ctx *ctx);
+ __isl_give isl_union_set *isl_union_set_empty_space(
+ 	__isl_take isl_space *space);
++__isl_export
+ __isl_give isl_union_set *isl_union_set_empty(__isl_take isl_space *space);
+ __isl_give isl_union_set *isl_union_set_copy(__isl_keep isl_union_set *uset);
+ __isl_null isl_union_set *isl_union_set_free(__isl_take isl_union_set *uset);
+@@ -59,7 +60,7 @@ __isl_export
+ __isl_give isl_union_set *isl_union_set_lexmin(__isl_take isl_union_set *uset);
+ __isl_export
+ __isl_give isl_union_set *isl_union_set_lexmax(__isl_take isl_union_set *uset);
+-
++__isl_export
+ __isl_give isl_union_set *isl_union_set_add_set(__isl_take isl_union_set *uset,
+ 	__isl_take isl_set *set);
+ __isl_export
+@@ -124,6 +125,7 @@ isl_bool isl_union_set_is_strict_subset(
+ 
+ uint32_t isl_union_set_get_hash(__isl_keep isl_union_set *uset);
+ 
++__isl_export
+ isl_size isl_union_set_n_set(__isl_keep isl_union_set *uset);
+ __isl_export
+ isl_stat isl_union_set_foreach_set(__isl_keep isl_union_set *uset,
+@@ -133,6 +135,7 @@ isl_bool isl_union_set_every_set(__isl_k
+ 	isl_bool (*test)(__isl_keep isl_set *set, void *user), void *user);
+ __isl_give isl_basic_set_list *isl_union_set_get_basic_set_list(
+ 	__isl_keep isl_union_set *uset);
++__isl_export
+ __isl_give isl_set_list *isl_union_set_get_set_list(
+ 	__isl_keep isl_union_set *uset);
+ isl_bool isl_union_set_contains(__isl_keep isl_union_set *uset,
+@@ -142,6 +145,7 @@ __isl_give isl_set *isl_union_set_extrac
+ 	__isl_take isl_space *dim);
+ __isl_export
+ isl_bool isl_union_set_isa_set(__isl_keep isl_union_set *uset);
++__isl_export
+ __isl_give isl_set *isl_set_from_union_set(__isl_take isl_union_set *uset);
+ __isl_export
+ isl_stat isl_union_set_foreach_point(__isl_keep isl_union_set *uset,
+diff -Npur isl_0.22/interface/cpp.cc isl/interface/cpp.cc
+--- isl_0.22/interface/cpp.cc	2020-04-17 16:49:36.270477000 +0800
++++ isl/interface/cpp.cc	2020-04-29 18:14:39.945681000 +0800
+@@ -253,6 +253,7 @@ void cpp_generator::print_class(ostream
+ 	print_ptr_decl(os, clazz);
+ 	print_downcast_decl(os, clazz);
+ 	print_ctx_decl(os);
++	print_str_decl(os, clazz);
+ 	osprintf(os, "\n");
+ 	print_persistent_callbacks_decl(os, clazz);
+ 	print_methods_decl(os, clazz);
+@@ -467,6 +468,11 @@ void cpp_generator::print_destructor_dec
+  *
+  * 	  Check if the current object is a null pointer.
+  *
++ * 	4) explicit operator bool()
++ *
++ * 	  Check if the current object represents a valid isl object,
++ *	  i.e., if it is not a null pointer.
++ *
+  * The functions get() and release() model the value_ptr proposed in
+  * http://www.open-std.org/jtc1/sc22/wg21/docs/papers/2012/n3339.pdf.
+  * The copy() function is an extension to allow the user to explicitly
+@@ -487,6 +493,7 @@ void cpp_generator::print_ptr_decl(ostre
+ 	osprintf(os, "  inline __isl_keep %s *get() const;\n", name);
+ 	osprintf(os, "  inline __isl_give %s *release();\n", name);
+ 	osprintf(os, "  inline bool is_null() const;\n");
++	osprintf(os, "  inline explicit operator bool() const;\n");
+ }
+ 
+ /* Print a template declaration with given indentation
+@@ -548,6 +555,14 @@ void cpp_generator::print_ctx_decl(ostre
+ 	osprintf(os, "  inline %sctx ctx() const;\n", ns.c_str());
+ }
+ 
++void cpp_generator::print_str_decl(ostream &os, const isl_class &clazz)
++{
++	if (!clazz.fn_to_str)
++		return;
++
++	osprintf(os, "  inline std::string to_str() const;\n");
++}
++
+ /* Add a space to the return type "type" if needed,
+  * i.e., if it is not the type of a pointer.
+  */
+@@ -835,6 +850,7 @@ void cpp_generator::print_class_impl(ost
+ 	print_copy_assignment_impl(os, clazz);
+ 	print_destructor_impl(os, clazz);
+ 	print_ptr_impl(os, clazz);
++	print_str_impl(os, clazz);
+ 	print_downcast_impl(os, clazz);
+ 	print_ctx_impl(os, clazz);
+ 	print_persistent_callbacks_impl(os, clazz);
+@@ -1328,6 +1344,10 @@ void cpp_generator::print_ptr_impl(ostre
+ 	osprintf(os, "bool %s::is_null() const {\n", cppname);
+ 	osprintf(os, "  return ptr == nullptr;\n");
+ 	osprintf(os, "}\n");
++	osprintf(os, "%s::operator bool() const\n", cppname);
++	osprintf(os, "{\n");
++	osprintf(os, "  return !is_null();\n");
++	osprintf(os, "}\n");
+ }
+ 
+ /* Print implementations for the "as" and "isa" methods, if "clazz"
+@@ -1379,10 +1399,7 @@ void cpp_generator::print_downcast_impl(
+ 	if (checked)
+ 		osprintf(os, " if (isa<T>().is_false())\n");
+ 	else
+-		osprintf(os, " if (!isa<T>())\n");
+-	print_invalid(os, 4, "not an object of the requested subtype",
+-		    "return T()");
+-	osprintf(os, "  return T(copy());\n");
++		osprintf(os, "  return isa<T>() ? T(copy()) : T();\n");
+ 	osprintf(os, "}\n");
+ }
+ 
+@@ -1401,6 +1418,25 @@ void cpp_generator::print_ctx_impl(ostre
+ 	osprintf(os, "}\n");
+ }
+ 
++void cpp_generator::print_str_impl(ostream &os, const isl_class &clazz)
++{
++	if (!clazz.fn_to_str)
++		return;
++
++	const char *name = clazz.name.c_str();
++	std::string cppstring = type2cpp(clazz);
++	const char *cppname = cppstring.c_str();
++	osprintf(os, "\n");
++	osprintf(os, "std::string %s::to_str() const {\n", cppname);
++	osprintf(os, "  char *Tmp = %s_to_str(get());\n", name, name);
++	osprintf(os, "  if (!Tmp)\n");
++	osprintf(os, "    return \"\";\n");
++	osprintf(os, "  std::string S(Tmp);\n");
++	osprintf(os, "  free(Tmp);\n");
++	osprintf(os, "  return S;\n");
++	osprintf(os, "}\n");
++}
++
+ /* Print the implementations of the methods needed for the persistent callbacks
+  * of "clazz".
+  */
+@@ -2439,6 +2475,7 @@ void cpp_generator::print_callback_local
+  */
+ static const char *rename_map[][2] = {
+ 	{ "union", "unite" },
++	{ "delete", "del" },
+ };
+ 
+ /* Rename method "name" in case the method name in the C++ bindings should not
+diff -Npur isl_0.22/interface/cpp.h isl/interface/cpp.h
+--- isl_0.22/interface/cpp.h	2020-04-17 16:49:36.270477000 +0800
++++ isl/interface/cpp.h	2020-04-29 18:14:39.945681000 +0800
+@@ -50,6 +50,7 @@ private:
+ 		const isl_class &super);
+ 	void print_downcast_decl(ostream &os, const isl_class &clazz);
+ 	void print_ctx_decl(ostream &os);
++	void print_str_decl(ostream &os, const isl_class &clazz);
+ 	void print_persistent_callback_prototype(ostream &os,
+ 		const isl_class &clazz, FunctionDecl *method,
+ 		bool is_declaration);
+@@ -101,6 +102,7 @@ private:
+ 	void print_ptr_impl(ostream &os, const isl_class &clazz);
+ 	void print_downcast_impl(ostream &os, const isl_class &clazz);
+ 	void print_ctx_impl(ostream &os, const isl_class &clazz);
++	void print_str_impl(ostream &os, const isl_class &clazz);
+ 	void print_persistent_callbacks_impl(ostream &os,
+ 		const isl_class &clazz);
+ 	void print_methods_impl(ostream &os, const isl_class &clazz);
+diff -Npur isl_0.22/isl_aff.c isl/isl_aff.c
+--- isl_0.22/isl_aff.c	2020-04-17 16:49:36.242477000 +0800
++++ isl/isl_aff.c	2020-04-29 18:14:39.945681000 +0800
+@@ -57,6 +57,21 @@
+ 
+ #include <isl_list_templ.c>
+ 
++/* Check that "space" is a set space.
++ */
++static isl_stat check_space_is_set(__isl_keep isl_space *space)
++{
++	isl_bool is_set;
++
++	is_set = isl_space_is_set(space);
++	if (is_set < 0)
++		return isl_stat_error;
++	if (!is_set)
++		isl_die(isl_space_get_ctx(space), isl_error_invalid,
++			"expecting set space", return isl_stat_error);
++	return isl_stat_ok;
++}
++
+ __isl_give isl_aff *isl_aff_alloc_vec(__isl_take isl_local_space *ls,
+ 	__isl_take isl_vec *v)
+ {
+@@ -4135,6 +4150,34 @@ __isl_give isl_multi_aff *isl_multi_aff_
+ 	return ma;
+ error:
+ 	isl_space_free(space);
++	return NULL;
++}
++
++/* Given the space of a wrapped map of the form A[B -> C],
++ * return the map A[B -> C] -> C.
++ */
++__isl_give isl_multi_aff *isl_multi_aff_wrapped_range_map(
++	__isl_take isl_space *space)
++{
++	isl_bool has_id;
++	isl_id *id;
++	isl_multi_aff *ma;
++
++	if (check_space_is_set(space) < 0)
++		goto error;
++	has_id = isl_space_has_tuple_id(space, isl_dim_set);
++	if (has_id < 0)
++		goto error;
++	if (!has_id)
++		return isl_multi_aff_range_map(isl_space_unwrap(space));
++
++	id = isl_space_get_tuple_id(space, isl_dim_set);
++	ma = isl_multi_aff_range_map(isl_space_unwrap(space));
++	ma = isl_multi_aff_set_tuple_id(ma, isl_dim_in, id);
++
++	return ma;
++error:
++	isl_space_free(space);
+ 	return NULL;
+ }
+ 
+diff -Npur isl_0.22/isl_ast_codegen.c isl/isl_ast_codegen.c
+--- isl_0.22/isl_ast_codegen.c	2020-04-17 16:49:36.242477000 +0800
++++ isl/isl_ast_codegen.c	2020-04-29 18:14:39.933681000 +0800
+@@ -3644,8 +3644,20 @@ static __isl_give isl_ast_graft_list *ge
+ 	domain = isl_set_from_union_set(schedule_domain);
+ 
+ 	isolated = isl_ast_build_get_isolated(build);
++	if (build->depth - build->outer_pos) {
++		// eliminate the constraint and isolate the piece on the corner
++		isolated = isl_set_eliminate(isolated, isl_dim_set, build->outer_pos, (build->depth - build->outer_pos));
++		if (NULL != build->node) {
++			isl_size n = isl_schedule_node_band_n_member(build->node);
++			if (build->outer_pos >= n) {
++				// eliminate the parent band's constraint
++				isolated = isl_set_eliminate(isolated, isl_dim_set, (build->outer_pos - n), (build->depth - build->outer_pos));
++			}
++		}
++	}
+ 	isolated = isl_set_intersect(isolated, isl_set_copy(domain));
+ 	test = isl_ast_build_specialize(build, isl_set_copy(isolated));
++	isolated = isl_set_intersect(isolated, isl_set_copy(test));
+ 	empty = isl_set_is_empty(test);
+ 	isl_set_free(test);
+ 	if (empty < 0)
+diff -Npur isl_0.22/isl_box.c isl/isl_box.c
+--- isl_0.22/isl_box.c	2020-04-17 16:49:36.242477000 +0800
++++ isl/isl_box.c	2020-05-17 20:34:22.000000000 +0800
+@@ -302,6 +302,13 @@ static isl_stat compute_size_in_directio
+  * Initialize the size with infinity and if no better size is found
+  * then invalidate the box.  Otherwise, set the offset and size
+  * in the given direction by those that correspond to the smallest size.
++ * 
++ * Note that while evaluating the size corresponding to a lower bound,
++ * an affine expression is constructed from the lower bound.
++ * This lower bound may therefore not have any unknown local variables.
++ * Eliminate any unknown local variables up front.
++ * No such restriction needs to be imposed on the set over which
++ * the size is computed.
+  */
+ static __isl_give isl_fixed_box *set_dim_extent(__isl_take isl_fixed_box *box,
+ 	__isl_keep isl_map *map, int pos)
+@@ -309,6 +316,7 @@ static __isl_give isl_fixed_box *set_dim
+ 	struct isl_size_info info;
+ 	isl_bool valid;
+ 	isl_ctx *ctx;
++	isl_basic_set *bset;
+ 
+ 	if (!box || !map)
+ 		return isl_fixed_box_free(box);
+@@ -316,16 +324,18 @@ static __isl_give isl_fixed_box *set_dim
+ 	ctx = isl_map_get_ctx(map);
+ 	map = isl_map_copy(map);
+ 	map = isl_map_project_onto(map, isl_dim_out, pos, 1);
+-	map = isl_map_compute_divs(map);
+ 	info.size = isl_val_infty(ctx);
+ 	info.offset = NULL;
+ 	info.pos = isl_map_dim(map, isl_dim_in);
+ 	info.bset = isl_basic_map_wrap(isl_map_simple_hull(map));
++	bset = isl_basic_set_copy(info.bset);
++	bset = isl_basic_set_remove_unknown_divs(bset);
+ 	if (info.pos < 0)
+-		info.bset = isl_basic_set_free(info.bset);
+-	if (isl_basic_set_foreach_constraint(info.bset,
++		bset = isl_basic_set_free(bset);
++	if (isl_basic_set_foreach_constraint(bset,
+ 					&compute_size_in_direction, &info) < 0)
+ 		box = isl_fixed_box_free(box);
++	isl_basic_set_free(bset);
+ 	valid = isl_val_is_int(info.size);
+ 	if (valid < 0)
+ 		box = isl_fixed_box_free(box);
+diff -Npur isl_0.22/isl_factorization.c isl/isl_factorization.c
+--- isl_0.22/isl_factorization.c	2020-04-17 16:49:36.246477000 +0800
++++ isl/isl_factorization.c	2020-04-29 18:14:39.961680000 +0800
+@@ -18,8 +18,18 @@
+ #include <isl_space_private.h>
+ #include <isl_mat_private.h>
+ 
++/* Return the isl_ctx to which "f" belongs.
++ */
++isl_ctx *isl_factorizer_get_ctx(__isl_keep isl_factorizer *f)
++{
++	if (!f)
++		return NULL;
++	return isl_basic_set_get_ctx(f->bset);
++}
++
+ static __isl_give isl_factorizer *isl_factorizer_alloc(
+-	__isl_take isl_morph *morph, int n_group)
++	__isl_keep isl_basic_set *bset, __isl_take isl_morph *morph,
++	int n_group)
+ {
+ 	isl_factorizer *f = NULL;
+ 	int *len = NULL;
+@@ -37,6 +47,7 @@ static __isl_give isl_factorizer *isl_fa
+ 	if (!f)
+ 		goto error;
+ 
++	f->bset = isl_basic_set_copy(bset);
+ 	f->morph = morph;
+ 	f->n_group = n_group;
+ 	f->len = len;
+@@ -48,14 +59,16 @@ error:
+ 	return NULL;
+ }
+ 
+-void isl_factorizer_free(__isl_take isl_factorizer *f)
++__isl_null isl_factorizer *isl_factorizer_free(__isl_take isl_factorizer *f)
+ {
+ 	if (!f)
+-		return;
++		return NULL;
+ 
++	isl_basic_set_free(f->bset);
+ 	isl_morph_free(f->morph);
+ 	free(f->len);
+ 	free(f);
++	return NULL;
+ }
+ 
+ void isl_factorizer_dump(__isl_take isl_factorizer *f)
+@@ -77,7 +90,7 @@ void isl_factorizer_dump(__isl_take isl_
+ 
+ __isl_give isl_factorizer *isl_factorizer_identity(__isl_keep isl_basic_set *bset)
+ {
+-	return isl_factorizer_alloc(isl_morph_identity(bset), 0);
++	return isl_factorizer_alloc(bset, isl_morph_identity(bset), 0);
+ }
+ 
+ __isl_give isl_factorizer *isl_factorizer_groups(__isl_keep isl_basic_set *bset,
+@@ -108,7 +121,7 @@ __isl_give isl_factorizer *isl_factorize
+ 	space = isl_space_add_dims(space, isl_dim_set, nvar);
+ 	ran = isl_basic_set_universe(space);
+ 	morph = isl_morph_alloc(dom, ran, Q, U);
+-	f = isl_factorizer_alloc(morph, n);
++	f = isl_factorizer_alloc(bset, morph, n);
+ 	if (!f)
+ 		return NULL;
+ 	for (i = 0; i < n; ++i)
+@@ -326,3 +339,51 @@ error:
+ 	clear_groups(&g);
+ 	return NULL;
+ }
++
++/* Given the factorizer "f" of a basic set,
++ * call "test" on each resulting factor as long as each call succeeds.
++ */
++__isl_give isl_bool isl_factorizer_every_factor_basic_set(
++	__isl_keep isl_factorizer *f,
++	isl_bool (*test)(__isl_keep isl_basic_set *bset, void *user),
++	void *user)
++{
++	int i, n;
++	isl_bool every = isl_bool_true;
++	isl_size nparam, nvar;
++	isl_basic_set *bset;
++
++	if (!f)
++		return isl_bool_error;
++	nparam = isl_basic_set_dim(f->bset, isl_dim_param);
++	nvar = isl_basic_set_dim(f->bset, isl_dim_set);
++	if (nparam < 0 || nvar < 0)
++		return isl_bool_error;
++
++	bset = isl_basic_set_copy(f->bset);
++	bset = isl_morph_basic_set(isl_morph_copy(f->morph), bset);
++
++	for (i = 0, n = 0; i < f->n_group; ++i) {
++		isl_basic_set *factor;
++
++		factor = isl_basic_set_copy(bset);
++		factor = isl_basic_set_drop_constraints_involving(factor,
++			    nparam + n + f->len[i], nvar - n - f->len[i]);
++		factor = isl_basic_set_drop_constraints_involving(factor,
++			    nparam, n);
++		factor = isl_basic_set_drop(factor, isl_dim_set,
++			    n + f->len[i], nvar - n - f->len[i]);
++		factor = isl_basic_set_drop(factor, isl_dim_set, 0, n);
++		every = test(factor, user);
++		isl_basic_set_free(factor);
++
++		if (every < 0 || !every)
++			break;
++
++		n += f->len[i];
++	}
++
++	isl_basic_set_free(bset);
++
++	return every;
++}
+diff -Npur isl_0.22/isl_factorization.h isl/isl_factorization.h
+--- isl_0.22/isl_factorization.h	2020-04-17 16:49:36.246477000 +0800
++++ isl/isl_factorization.h	2020-04-29 18:14:39.937681000 +0800
+@@ -8,13 +8,14 @@
+ extern "C" {
+ #endif
+ 
+-/* Data for factorizing a particular basic set.
++/* Data for factorizing the basic set "bset".
+  * After applying "morph" to the basic set, there are "n_group"
+  * groups of consecutive set variables, each of length "len[i]",
+  * with 0 <= i < n_group.
+  * If no factorization is possible, then "n_group" is set to 0.
+  */
+ struct isl_factorizer {
++	isl_basic_set	*bset;
+ 	isl_morph	*morph;
+ 	int		n_group;
+ 	int		*len;
+@@ -24,9 +25,16 @@ typedef struct isl_factorizer isl_factor
+ __isl_give isl_factorizer *isl_basic_set_factorizer(
+ 	__isl_keep isl_basic_set *bset);
+ 
+-void isl_factorizer_free(__isl_take isl_factorizer *f);
++isl_ctx *isl_factorizer_get_ctx(__isl_keep isl_factorizer *f);
++
++__isl_null isl_factorizer *isl_factorizer_free(__isl_take isl_factorizer *f);
+ void isl_factorizer_dump(__isl_take isl_factorizer *f);
+ 
++__isl_give isl_bool isl_factorizer_every_factor_basic_set(
++	__isl_keep isl_factorizer *f,
++	isl_bool (*test)(__isl_keep isl_basic_set *bset, void *user),
++	void *user);
++
+ #if defined(__cplusplus)
+ }
+ #endif
+diff -Npur isl_0.22/isl_farkas.c isl/isl_farkas.c
+--- isl_0.22/isl_farkas.c	2020-04-17 16:49:36.246477000 +0800
++++ isl/isl_farkas.c	2020-04-29 18:14:39.937681000 +0800
+@@ -12,6 +12,9 @@
+ #include <isl/set.h>
+ #include <isl_space_private.h>
+ #include <isl_seq.h>
++#include <isl_aff_private.h>
++#include <isl_mat_private.h>
++#include <isl_factorization.h>
+ 
+ /*
+  * Let C be a cone and define
+@@ -222,30 +225,35 @@ static __isl_give isl_basic_set *rationa
+  * As explained above, we add an extra dimension to represent
+  * the coefficient of the constant term when going from solutions
+  * to coefficients (shift == 1) and we drop the extra dimension when going
+- * in the opposite direction (shift == -1).  "space" is the space in which
+- * the dual should be created.
++ * in the opposite direction (shift == -1).
++ * The dual can be created in an arbitrary space.
++ * The caller is responsible for putting the result in the appropriate space.
+  *
+  * If "bset" is (obviously) empty, then the way this emptiness
+  * is represented by the constraints does not allow for the application
+  * of the standard farkas algorithm.  We therefore handle this case
+  * specifically and return the universe basic set.
+  */
+-static __isl_give isl_basic_set *farkas(__isl_take isl_space *space,
+-	__isl_take isl_basic_set *bset, int shift)
++static __isl_give isl_basic_set *farkas(__isl_take isl_basic_set *bset,
++	int shift)
+ {
+ 	int i, j, k;
++	isl_ctx *ctx;
++	isl_space *space;
+ 	isl_basic_set *dual = NULL;
+ 	isl_size total;
+ 
++	total = isl_basic_set_dim(bset, isl_dim_all);
++	if (total < 0)
++		return isl_basic_set_free(bset);
++
++	ctx = isl_basic_set_get_ctx(bset);
++	space = isl_space_set_alloc(ctx, 0, total + shift);
+ 	if (isl_basic_set_plain_is_empty(bset)) {
+ 		isl_basic_set_free(bset);
+ 		return rational_universe(space);
+ 	}
+ 
+-	total = isl_basic_set_dim(bset, isl_dim_all);
+-	if (total < 0)
+-		space = isl_space_free(space);
+-
+ 	dual = isl_basic_set_alloc_space(space, bset->n_eq + bset->n_ineq,
+ 					total, bset->n_ineq + (shift > 0));
+ 	dual = isl_basic_set_set_rational(dual);
+@@ -307,6 +315,525 @@ error:
+ }
+ 
+ /* Construct a basic set containing the tuples of coefficients of all
++ * valid affine constraints on the given basic set, ignoring
++ * the space of input and output and without any further decomposition.
++ */
++static __isl_give isl_basic_set *isl_basic_set_coefficients_base(
++	__isl_take isl_basic_set *bset)
++{
++	return farkas(bset, 1);
++}
++
++/* Return the inverse mapping of "morph".
++ */
++static __isl_give isl_mat *peek_inv(__isl_keep isl_morph *morph)
++{
++	return morph ? morph->inv : NULL;
++}
++
++/* Return a copy of the inverse mapping of "morph".
++ */
++static __isl_give isl_mat *get_inv(__isl_keep isl_morph *morph)
++{
++	return isl_mat_copy(peek_inv(morph));
++}
++
++/* Information about a single factor within isl_basic_set_coefficients_product.
++ *
++ * "start" is the position of the first coefficient (beyond
++ * the one corresponding to the constant term) in this factor.
++ * "dim" is the number of coefficients (other than
++ * the one corresponding to the constant term) in this factor.
++ * "n_line" is the number of lines in "coeff".
++ * "n_ray" is the number of rays (other than lines) in "coeff".
++ * "n_vertex" is the number of vertices in "coeff".
++ *
++ * While iterating over the vertices,
++ * "pos" represents the inequality constraint corresponding
++ * to the current vertex.
++ */
++struct isl_coefficients_factor_data {
++	isl_basic_set *coeff;
++	int start;
++	int dim;
++	int n_line;
++	int n_ray;
++	int n_vertex;
++	int pos;
++};
++
++/* Internal data structure for isl_basic_set_coefficients_product.
++ * "n" is the number of factors in the factorization.
++ * "pos" is the next factor that will be considered.
++ * "start_next" is the position of the first coefficient (beyond
++ * the one corresponding to the constant term) in the next factor.
++ * "factors" contains information about the individual "n" factors.
++ */
++struct isl_coefficients_product_data {
++	int n;
++	int pos;
++	int start_next;
++	struct isl_coefficients_factor_data *factors;
++};
++
++/* Initialize the internal data structure for
++ * isl_basic_set_coefficients_product.
++ */
++static isl_stat isl_coefficients_product_data_init(isl_ctx *ctx,
++	struct isl_coefficients_product_data *data, int n)
++{
++	data->n = n;
++	data->pos = 0;
++	data->start_next = 0;
++	data->factors = isl_calloc_array(ctx,
++					struct isl_coefficients_factor_data, n);
++	if (!data->factors)
++		return isl_stat_error;
++	return isl_stat_ok;
++}
++
++/* Free all memory allocated in "data".
++ */
++static void isl_coefficients_product_data_clear(
++	struct isl_coefficients_product_data *data)
++{
++	int i;
++
++	if (data->factors) {
++		for (i = 0; i < data->n; ++i) {
++			isl_basic_set_free(data->factors[i].coeff);
++		}
++	}
++	free(data->factors);
++}
++
++/* Does inequality "ineq" in the (dual) basic set "bset" represent a ray?
++ * In particular, does it have a zero denominator
++ * (i.e., a zero coefficient for the constant term)?
++ */
++static int is_ray(__isl_keep isl_basic_set *bset, int ineq)
++{
++	return isl_int_is_zero(bset->ineq[ineq][1]);
++}
++
++/* isl_factorizer_every_factor_basic_set callback that
++ * constructs a basic set containing the tuples of coefficients of all
++ * valid affine constraints on the factor "bset" and
++ * extracts further information that will be used
++ * when combining the results over the different factors.
++ */
++static isl_bool isl_basic_set_coefficients_factor(
++	__isl_keep isl_basic_set *bset, void *user)
++{
++	struct isl_coefficients_product_data *data = user;
++	isl_basic_set *coeff;
++	isl_size n_eq, n_ineq, dim;
++	int i, n_ray, n_vertex;
++
++	coeff = isl_basic_set_coefficients_base(isl_basic_set_copy(bset));
++	data->factors[data->pos].coeff = coeff;
++	if (!coeff)
++		return isl_bool_error;
++
++	dim = isl_basic_set_dim(bset, isl_dim_set);
++	n_eq = isl_basic_set_n_equality(coeff);
++	n_ineq = isl_basic_set_n_inequality(coeff);
++	if (dim < 0 || n_eq < 0 || n_ineq < 0)
++		return isl_bool_error;
++	n_ray = n_vertex = 0;
++	for (i = 0; i < n_ineq; ++i) {
++		if (is_ray(coeff, i))
++			n_ray++;
++		else
++			n_vertex++;
++	}
++	data->factors[data->pos].start = data->start_next;
++	data->factors[data->pos].dim = dim;
++	data->factors[data->pos].n_line = n_eq;
++	data->factors[data->pos].n_ray = n_ray;
++	data->factors[data->pos].n_vertex = n_vertex;
++	data->pos++;
++	data->start_next += dim;
++
++	return isl_bool_true;
++}
++
++/* Clear an entry in the product, given that there is a "total" number
++ * of coefficients (other than that of the constant term).
++ */
++static void clear_entry(isl_int *entry, int total)
++{
++	isl_seq_clr(entry, 1 + 1 + total);
++}
++
++/* Set the part of the entry corresponding to factor "data",
++ * from the factor coefficients in "src".
++ */
++static void set_factor(isl_int *entry, isl_int *src,
++	struct isl_coefficients_factor_data *data)
++{
++	isl_seq_cpy(entry + 1 + 1 + data->start, src + 1 + 1, data->dim);
++}
++
++/* Set the part of the entry corresponding to factor "data",
++ * from the factor coefficients in "src" multiplied by "f".
++ */
++static void scale_factor(isl_int *entry, isl_int *src, isl_int f,
++	struct isl_coefficients_factor_data *data)
++{
++	isl_seq_scale(entry + 1 + 1 + data->start, src + 1 + 1, f, data->dim);
++}
++
++/* Add all lines from the given factor to "bset",
++ * given that there is a "total" number of coefficients
++ * (other than that of the constant term).
++ */
++static __isl_give isl_basic_set *add_lines(__isl_take isl_basic_set *bset,
++	struct isl_coefficients_factor_data *factor, int total)
++{
++	int i;
++
++	for (i = 0; i < factor->n_line; ++i) {
++		int k;
++
++		k = isl_basic_set_alloc_equality(bset);
++		if (k < 0)
++			return isl_basic_set_free(bset);
++		clear_entry(bset->eq[k], total);
++		set_factor(bset->eq[k], factor->coeff->eq[i], factor);
++	}
++
++	return bset;
++}
++
++/* Add all rays (other than lines) from the given factor to "bset",
++ * given that there is a "total" number of coefficients
++ * (other than that of the constant term).
++ */
++static __isl_give isl_basic_set *add_rays(__isl_take isl_basic_set *bset,
++	struct isl_coefficients_factor_data *data, int total)
++{
++	int i;
++	int n_ineq = data->n_ray + data->n_vertex;
++
++	for (i = 0; i < n_ineq; ++i) {
++		int k;
++
++		if (!is_ray(data->coeff, i))
++			continue;
++
++		k = isl_basic_set_alloc_inequality(bset);
++		if (k < 0)
++			return isl_basic_set_free(bset);
++		clear_entry(bset->ineq[k], total);
++		set_factor(bset->ineq[k], data->coeff->ineq[i], data);
++	}
++
++	return bset;
++}
++
++/* Move to the first vertex of the given factor starting
++ * at inequality constraint "start", setting factor->pos and
++ * returning 1 if a vertex is found.
++ */
++static int factor_first_vertex(struct isl_coefficients_factor_data *factor,
++	int start)
++{
++	int j;
++	int n = factor->n_ray + factor->n_vertex;
++
++	for (j = start; j < n; ++j) {
++		if (is_ray(factor->coeff, j))
++			continue;
++		factor->pos = j;
++		return 1;
++	}
++
++	return 0;
++}
++
++/* Move to the first constraint in each factor starting at "first"
++ * that represents a vertex.
++ * In particular, skip the initial constraints that correspond to rays.
++ */
++static void first_vertex(struct isl_coefficients_product_data *data, int first)
++{
++	int i;
++
++	for (i = first; i < data->n; ++i)
++		factor_first_vertex(&data->factors[i], 0);
++}
++
++/* Move to the next vertex in the product.
++ * In particular, move to the next vertex of the last factor.
++ * If all vertices of this last factor have already been considered,
++ * then move to the next vertex of the previous factor(s)
++ * until a factor is found that still has a next vertex.
++ * Once such a next vertex has been found, the subsequent
++ * factors are reset to the first vertex.
++ * Return 1 if any next vertex was found.
++ */
++static int next_vertex(struct isl_coefficients_product_data *data)
++{
++	int i;
++
++	for (i = data->n - 1; i >= 0; --i) {
++		struct isl_coefficients_factor_data *factor = &data->factors[i];
++
++		if (!factor_first_vertex(factor, factor->pos + 1))
++			continue;
++		first_vertex(data, i + 1);
++		return 1;
++	}
++
++	return 0;
++}
++
++/* Add a vertex to the product "bset" combining the currently selected
++ * vertices of the factors.
++ *
++ * In the dual representation, the constant term is always zero.
++ * The vertex itself is the sum of the contributions of the factors
++ * with a shared denominator in position 1.
++ *
++ * First compute the shared denominator (lcm) and
++ * then scale the numerators to this shared denominator.
++ */
++static __isl_give isl_basic_set *add_vertex(__isl_take isl_basic_set *bset,
++	struct isl_coefficients_product_data *data)
++{
++	int i;
++	int k;
++	isl_int lcm, f;
++
++	k = isl_basic_set_alloc_inequality(bset);
++	if (k < 0)
++		return isl_basic_set_free(bset);
++
++	isl_int_init(lcm);
++	isl_int_init(f);
++	isl_int_set_si(lcm, 1);
++	for (i = 0; i < data->n; ++i) {
++		struct isl_coefficients_factor_data *factor = &data->factors[i];
++		isl_basic_set *coeff = factor->coeff;
++		int pos = factor->pos;
++		isl_int_lcm(lcm, lcm, coeff->ineq[pos][1]);
++	}
++	isl_int_set_si(bset->ineq[k][0], 0);
++	isl_int_set(bset->ineq[k][1], lcm);
++
++	for (i = 0; i < data->n; ++i) {
++		struct isl_coefficients_factor_data *factor = &data->factors[i];
++		isl_basic_set *coeff = factor->coeff;
++		int pos = factor->pos;
++		isl_int_divexact(f, lcm, coeff->ineq[pos][1]);
++		scale_factor(bset->ineq[k], coeff->ineq[pos], f, factor);
++	}
++
++	isl_int_clear(f);
++	isl_int_clear(lcm);
++
++	return bset;
++}
++
++/* Combine the duals of the factors in the factorization of a basic set
++ * to form the dual of the entire basic set.
++ * The dual share the coefficient of the constant term.
++ * All other coefficients are specific to a factor.
++ * Any constraint not involving the coefficient of the constant term
++ * can therefor simply be copied into the appropriate position.
++ * This includes all equality constraints since the coefficient
++ * of the constant term can always be increased and therefore
++ * never appears in an equality constraint.
++ * The inequality constraints involving the coefficient of
++ * the constant term need to be combined across factors.
++ * In particular, if this coefficient needs to be greater than or equal
++ * to some linear combination of the other coefficients in each factor,
++ * then it needs to be greater than or equal to the sum of
++ * these linear combinations across the factors.
++ *
++ * Alternatively, the constraints of the dual can be seen
++ * as the vertices, rays and lines of the original basic set.
++ * Clearly, rays and lines can simply be copied,
++ * while vertices needs to be combined across factors.
++ * This means that the number of rays and lines in the product
++ * is equal to the sum of the numbers in the factors,
++ * while the number of vertices is the product
++ * of the number of vertices in the factors.  Note that each
++ * factor has at least one vertex.
++ * The only exception is when the factor is the dual of an obviously empty set,
++ * in which case a universe dual is created.
++ * In this case, return a universe dual for the product as well.
++ *
++ * While constructing the vertices, look for the first combination
++ * of inequality constraints that represent a vertex,
++ * construct the corresponding vertex and then move on
++ * to the next combination of inequality constraints until
++ * all combinations have been considered.
++ */
++static __isl_give isl_basic_set *construct_product(isl_ctx *ctx,
++	struct isl_coefficients_product_data *data)
++{
++	int i;
++	int n_line, n_ray, n_vertex;
++	int total;
++	isl_space *space;
++	isl_basic_set *product;
++
++	if (!data->factors)
++		return NULL;
++
++	total = data->start_next;
++
++	n_line = 0;
++	n_ray = 0;
++	n_vertex = 1;
++	for (i = 0; i < data->n; ++i) {
++		n_line += data->factors[i].n_line;
++		n_ray += data->factors[i].n_ray;
++		n_vertex *= data->factors[i].n_vertex;
++	}
++
++	space = isl_space_set_alloc(ctx, 0, 1 + total);
++	if (n_vertex == 0)
++		return rational_universe(space);
++	product = isl_basic_set_alloc_space(space, 0, n_line, n_ray + n_vertex);
++	product = isl_basic_set_set_rational(product);
++
++	for (i = 0; i < data->n; ++i)
++		product = add_lines(product, &data->factors[i], total);
++	for (i = 0; i < data->n; ++i)
++		product = add_rays(product, &data->factors[i], total);
++
++	first_vertex(data, 0);
++	do {
++		product = add_vertex(product, data);
++	} while (next_vertex(data));
++
++	return product;
++}
++
++/* Given a factorization "f" of a basic set,
++ * construct a basic set containing the tuples of coefficients of all
++ * valid affine constraints on the product of the factors, ignoring
++ * the space of input and output.
++ * Note that this product may not be equal to the original basic set,
++ * if a non-trivial transformation is involved.
++ * This is handled by the caller.
++ *
++ * Compute the tuples of coefficients for each factor separately and
++ * then combine the results.
++ */
++static __isl_give isl_basic_set *isl_basic_set_coefficients_product(
++	__isl_take isl_factorizer *f)
++{
++	struct isl_coefficients_product_data data;
++	isl_ctx *ctx;
++	isl_basic_set *coeff;
++	isl_bool every;
++
++	ctx = isl_factorizer_get_ctx(f);
++	if (isl_coefficients_product_data_init(ctx, &data, f->n_group) < 0)
++		f = isl_factorizer_free(f);
++	every = isl_factorizer_every_factor_basic_set(f,
++			&isl_basic_set_coefficients_factor, &data);
++	isl_factorizer_free(f);
++	if (every >= 0)
++		coeff = construct_product(ctx, &data);
++	else
++		coeff = NULL;
++	isl_coefficients_product_data_clear(&data);
++
++	return coeff;
++}
++
++/* Given a factorization "f" of a basic set,
++ * construct a basic set containing the tuples of coefficients of all
++ * valid affine constraints on the basic set, ignoring
++ * the space of input and output.
++ *
++ * The factorization may involve a linear transformation of the basic set.
++ * In particular, the transformed basic set is formulated
++ * in terms of x' = U x, i.e., x = V x', with V = U^{-1}.
++ * The dual is then computed in terms of y' with y'^t [z; x'] >= 0.
++ * Plugging in y' = [1 0; 0 V^t] y yields
++ * y^t [1 0; 0 V] [z; x'] >= 0, i.e., y^t [z; x] >= 0, which is
++ * the desired set of coefficients y.
++ * Note that this transformation to y' only needs to be applied
++ * if U is not the identity matrix.
++ */
++static __isl_give isl_basic_set *isl_basic_set_coefficients_morphed_product(
++	__isl_take isl_factorizer *f)
++{
++	isl_bool is_identity;
++	isl_space *space;
++	isl_mat *inv;
++	isl_multi_aff *ma;
++	isl_basic_set *coeff;
++
++	if (!f)
++		goto error;
++	is_identity = isl_mat_is_scaled_identity(peek_inv(f->morph));
++	if (is_identity < 0)
++		goto error;
++	if (is_identity)
++		return isl_basic_set_coefficients_product(f);
++
++	inv = get_inv(f->morph);
++	inv = isl_mat_transpose(inv);
++	inv = isl_mat_lin_to_aff(inv);
++
++	coeff = isl_basic_set_coefficients_product(f);
++	space = isl_space_map_from_set(isl_basic_set_get_space(coeff));
++	ma = isl_multi_aff_from_aff_mat(space, inv);
++	coeff = isl_basic_set_preimage_multi_aff(coeff, ma);
++
++	return coeff;
++error:
++	isl_factorizer_free(f);
++	return NULL;
++}
++
++/* Construct a basic set containing the tuples of coefficients of all
++ * valid affine constraints on the given basic set, ignoring
++ * the space of input and output.
++ *
++ * The caller has already checked that "bset" does not involve
++ * any local variables.  It may have parameters, though.
++ * Treat them as regular variables internally.
++ * This is especially important for the factorization,
++ * since the (original) parameters should be taken into account
++ * explicitly in this factorization.
++ *
++ * Check if the basic set can be factorized.
++ * If so, compute constraints on the coefficients of the factors
++ * separately and combine the results.
++ * Otherwise, compute the results for the input basic set as a whole.
++ */
++static __isl_give isl_basic_set *basic_set_coefficients(
++	__isl_take isl_basic_set *bset)
++{
++	isl_factorizer *f;
++	isl_size nparam;
++
++	nparam = isl_basic_set_dim(bset, isl_dim_param);
++	if (nparam < 0)
++		return isl_basic_set_free(bset);
++	bset = isl_basic_set_move_dims(bset, isl_dim_set, 0,
++					    isl_dim_param, 0, nparam);
++
++	f = isl_basic_set_factorizer(bset);
++	if (!f)
++		return isl_basic_set_free(bset);
++	if (f->n_group > 0) {
++		isl_basic_set_free(bset);
++		return isl_basic_set_coefficients_morphed_product(f);
++	}
++	isl_factorizer_free(f);
++	return isl_basic_set_coefficients_base(bset);
++}
++
++/* Construct a basic set containing the tuples of coefficients of all
+  * valid affine constraints on the given basic set.
+  */
+ __isl_give isl_basic_set *isl_basic_set_coefficients(
+@@ -324,7 +851,9 @@ __isl_give isl_basic_set *isl_basic_set_
+ 	space = isl_basic_set_get_space(bset);
+ 	space = isl_space_coefficients(space);
+ 
+-	return farkas(space, bset, 1);
++	bset = basic_set_coefficients(bset);
++	bset = isl_basic_set_reset_space(bset, space);
++	return bset;
+ error:
+ 	isl_basic_set_free(bset);
+ 	return NULL;
+@@ -349,7 +878,9 @@ __isl_give isl_basic_set *isl_basic_set_
+ 	space = isl_basic_set_get_space(bset);
+ 	space = isl_space_solutions(space);
+ 
+-	return farkas(space, bset, -1);
++	bset = farkas(bset, -1);
++	bset = isl_basic_set_reset_space(bset, space);
++	return bset;
+ error:
+ 	isl_basic_set_free(bset);
+ 	return NULL;
+diff -Npur isl_0.22/isl_map.c isl/isl_map.c
+--- isl_0.22/isl_map.c	2020-04-17 16:49:36.250477000 +0800
++++ isl/isl_map.c	2020-04-29 18:14:39.933681000 +0800
+@@ -3162,6 +3162,133 @@ __isl_give isl_set *isl_set_drop_constra
+ 	return isl_map_drop_constraints_not_involving_dims(set, type, first, n);
+ }
+ 
++
++/* Drop all constraints in bmap that do not involve any of the dimensions
++ * first to first + n - 1 of the given type.
++ */
++__isl_give isl_basic_map *isl_basic_map_drop_special_constraints(
++	__isl_take isl_basic_map *bmap,
++	enum isl_dim_type type, unsigned pos)
++{
++	int i, j;
++	unsigned begin, num;
++	isl_size n_in, n_out, total;
++	long int min = 0;
++	long int max = 0;
++	long int val = 0;
++
++	if (!bmap)
++		return NULL;
++
++	if (bmap->n_div)
++        return bmap;
++
++	if (isl_basic_map_check_range(bmap, type, pos, 1) < 0)
++		return bmap;
++
++	n_in = isl_basic_map_dim(bmap, isl_dim_in);
++	n_out = isl_basic_map_dim(bmap, isl_dim_out);
++	if (n_in < n_out)
++        return bmap;
++
++	bmap = isl_basic_map_cow(bmap);
++	pos += isl_basic_map_offset(bmap, type);
++	total = isl_basic_map_dim(bmap, isl_dim_all);
++	if (total <= 0)
++		return bmap;
++	for (i = bmap->n_eq - 1; i >= 0; --i) {
++		if (isl_int_is_zero(bmap->eq[i][pos]))
++			continue;
++
++		if (isl_seq_first_non_zero(bmap->eq[i] + 1, pos - 1) != -1)
++			continue;
++
++		if (isl_seq_first_non_zero(bmap->eq[i] + pos + 1, total - pos) != -1)
++			continue;
++
++		if (isl_int_is_one(bmap->eq[i][pos])) {
++			min = max = -isl_int_get_si(bmap->eq[i][0]);
++			break;
++		}
++	}
++
++	for (i = bmap->n_ineq - 1; i >= 0; --i) {
++		if (isl_int_is_zero(bmap->ineq[i][pos]))
++			continue;
++
++		if (isl_seq_first_non_zero(bmap->ineq[i] + 1, pos - 1) != -1)
++			continue;
++
++		if (isl_seq_first_non_zero(bmap->ineq[i] + pos + 1, total - pos) != -1)
++			continue;
++
++		if (isl_int_is_one(bmap->ineq[i][pos]))
++			min = -isl_int_get_si(bmap->ineq[i][0]);
++
++		if (isl_int_is_negone(bmap->ineq[i][pos]))
++			max = isl_int_get_si(bmap->ineq[i][0]);
++	}
++
++	begin = isl_basic_map_offset(bmap, isl_dim_out) - n_out;
++	num = n_out * 2;
++
++	for (i = bmap->n_eq - 1; i >= 0; --i) {
++		if (isl_int_is_zero(bmap->eq[i][pos]))
++			continue;
++
++		if (isl_seq_first_non_zero(bmap->eq[i] + begin, num) == -1)
++			continue;
++
++		isl_int_set_si(bmap->eq[i][pos], 0);
++	}
++
++	for (i = bmap->n_ineq - 1; i >= 0; --i) {
++		if (isl_int_is_zero(bmap->ineq[i][pos]))
++			continue;
++
++		j = isl_seq_first_non_zero(bmap->ineq[i] + begin, num);
++		if (j == -1)
++			continue;
++
++		val = 0;
++		int sgn = isl_int_sgn(bmap->ineq[i][begin + j]);
++		if (sgn > 0) {
++			val = isl_int_get_si(bmap->ineq[i][pos]) * min;
++		}
++		if (sgn < 0) {
++			val = isl_int_get_si(bmap->ineq[i][pos]) * max;
++		}
++		isl_int_set_si(bmap->ineq[i][pos], 0);
++		if (val != 0) {
++			val += isl_int_get_si(bmap->ineq[i][0]);
++			isl_int_set_si(bmap->ineq[i][0], val);
++		}
++	}
++	return bmap;
++}
++
++__isl_give isl_map *isl_map_drop_special_constraints(
++	__isl_take isl_map *map, unsigned first, unsigned n)
++{
++	int i;
++	unsigned j;
++
++	if (isl_map_check_range(map, isl_dim_in, first, n) < 0)
++		return isl_map_free(map);
++
++	map = isl_map_cow(map);
++	if (!map)
++		return NULL;
++
++	for (i = 0; i < map->n; ++i) {
++		for (j = first; j < first + n; ++j) {
++			isl_basic_map *bmap = map->p[i];
++			map->p[i] = isl_basic_map_drop_special_constraints(bmap, isl_dim_in, j);
++		}
++	}
++	return map;
++}
++
+ /* Does local variable "div" of "bmap" have a complete explicit representation?
+  * Having a complete explicit representation requires not only
+  * an explicit representation, but also that all local variables
+@@ -9695,6 +9822,66 @@ isl_bool isl_basic_map_plain_is_fixed(__
+ 		isl_basic_map_offset(bmap, type) - 1 + pos, val);
+ }
+ 
++__isl_give isl_basic_map *isl_basic_map_plain_update_fixed_var(
++	__isl_take isl_basic_map *bmap, unsigned pos)
++{
++	int i;
++	int d;
++	isl_size total;
++
++	total = isl_basic_map_dim(bmap, isl_dim_all);
++	if (total < 0)
++		return bmap;
++	for (i = 0, d = total-1; i < bmap->n_eq && d+1 > pos; ++i) {
++		for (; d+1 > pos; --d)
++			if (!isl_int_is_zero(bmap->eq[i][1+d]))
++				break;
++		if (d != pos)
++			continue;
++		if (isl_seq_first_non_zero(bmap->eq[i]+1, d) != -1)
++			break;
++		if (isl_seq_first_non_zero(bmap->eq[i]+1+d+1, total-d-1) != -1)
++			break;
++		if (!isl_int_is_one(bmap->eq[i][1+d]))
++			break;
++		if (!isl_int_is_zero(bmap->eq[i][0])) {
++			isl_int_sub_ui(bmap->eq[i][0], bmap->eq[i][0], 1);
++		}
++		break;
++	}
++	return bmap;
++}
++
++
++__isl_give isl_basic_map *isl_basic_map_plain_update_val_if_fixed(__isl_take isl_basic_map *bmap,
++	enum isl_dim_type type, unsigned pos)
++{
++	if (isl_basic_map_check_range(bmap, type, pos, 1) < 0)
++		return bmap;
++	return isl_basic_map_plain_update_fixed_var(bmap,
++		isl_basic_map_offset(bmap, type) - 1 + pos);
++}
++
++/* If "map" obviously lies on a hyperplane where the given dimension
++ * has a fixed value, then update the fixed value use (value + 1).
++ */
++__isl_give isl_map *isl_map_plain_update_val_if_fixed(__isl_take isl_map *map,
++	enum isl_dim_type type, unsigned pos)
++{
++	int i;
++	if (!map)
++		return map;
++	if (map->n == 0)
++		return map;
++	if (isl_map_check_range(map, type, pos, 1) < 0)
++		return map;
++
++	for (i = 0; i < map->n; ++i) {
++		map->p[i] = isl_basic_map_plain_update_val_if_fixed(map->p[i], type, pos);
++	}
++	return map;
++}
++
+ /* If "bmap" obviously lies on a hyperplane where the given dimension
+  * has a fixed value, then return that value.
+  * Otherwise return NaN.
+diff -Npur isl_0.22/isl_multi_templ.c isl/isl_multi_templ.c
+--- isl_0.22/isl_multi_templ.c	2020-04-17 16:49:36.254477000 +0800
++++ isl/isl_multi_templ.c	2020-04-29 18:14:39.937681000 +0800
+@@ -258,6 +258,25 @@ __isl_give MULTI(BASE) *FN(FN(MULTI(BASE
+ 	return FN(MULTI(BASE),set_at)(multi, pos, el);
+ }
+ 
++/* Return the base expressions of "multi" as a list.
++ */
++__isl_give LIST(EL) *FN(FN(MULTI(BASE),get),LIST(BASE))(
++	__isl_keep MULTI(BASE) *multi)
++{
++	int i;
++	LIST(EL) *list;
++
++	if (!multi)
++		return NULL;
++	list = FN(LIST(EL),alloc)(FN(MULTI(BASE),get_ctx(multi)), multi->n);
++	for (i = 0; i < multi->n; ++i) {
++		EL *el = FN(FN(MULTI(BASE),get),BASE)(multi, i);
++		list = FN(LIST(EL),add)(list, el);
++	}
++
++	return list;
++}
++
+ /* Reset the space of "multi".  This function is called from isl_pw_templ.c
+  * and doesn't know if the space of an element object is represented
+  * directly or through its domain.  It therefore passes along both,
+diff -Npur isl_0.22/isl_options.c isl/isl_options.c
+--- isl_0.22/isl_options.c	2020-04-17 16:49:36.254477000 +0800
++++ isl/isl_options.c	2020-04-29 18:14:39.937681000 +0800
+@@ -137,10 +137,19 @@ ISL_ARG_BOOL(struct isl_options, coalesc
+ ISL_ARG_BOOL(struct isl_options, coalesce_preserve_locals, 0,
+ 	"coalesce-preserve-locals", 0,
+ 	"preserve local variables during coalescing")
++
++ISL_ARG_BOOL(struct isl_options, schedule_nonneg_var_coefficient, 0,
++	"schedule-nonneg-var-coefficient", 0, "Only consider schedules "
++	"where the coefficients of the variable dimensions "
++        "are non-negative.")
+ ISL_ARG_INT(struct isl_options, schedule_max_coefficient, 0,
+ 	"schedule-max-coefficient", "limit", -1, "Only consider schedules "
+ 	"where the coefficients of the variable and parameter dimensions "
+         "do not exceed <limit>. A value of -1 allows arbitrary coefficients.")
++ISL_ARG_BOOL(struct isl_options, schedule_unit_max_var_coefficient_sum, 0,
++	"schedule-unit-max-var-coefficient-sum", 0,
++	"bound the sum of the coefficients of the variables by one "
++	"for each statement")
+ ISL_ARG_INT(struct isl_options, schedule_max_constant_term, 0,
+ 	"schedule-max-constant-term", "limit", -1, "Only consider schedules "
+ 	"where the coefficients of the constant dimension do not exceed "
+@@ -167,7 +176,7 @@ ISL_ARG_BOOL(struct isl_options, schedul
+ 	"schedule-separate-components", 1,
+ 	"separate components in dependence graph")
+ ISL_ARG_BOOL(struct isl_options, schedule_whole_component, 0,
+-	"schedule-whole-component", 0,
++	"schedule-whole-component", 1,
+ 	"try and compute schedule for entire component first")
+ ISL_ARG_CHOICE(struct isl_options, schedule_algorithm, 0,
+ 	"schedule-algorithm", isl_schedule_algorithm_choice,
+@@ -255,10 +264,20 @@ ISL_CTX_GET_BOOL_DEF(isl_options, struct
+ 	gbr_only_first)
+ 
+ ISL_CTX_SET_INT_DEF(isl_options, struct isl_options, isl_options_args,
++	schedule_nonneg_var_coefficient)
++ISL_CTX_GET_INT_DEF(isl_options, struct isl_options, isl_options_args,
++	schedule_nonneg_var_coefficient)
++
++ISL_CTX_SET_INT_DEF(isl_options, struct isl_options, isl_options_args,
+ 	schedule_max_coefficient)
+ ISL_CTX_GET_INT_DEF(isl_options, struct isl_options, isl_options_args,
+ 	schedule_max_coefficient)
+ 
++ISL_CTX_SET_BOOL_DEF(isl_options, struct isl_options, isl_options_args,
++	schedule_unit_max_var_coefficient_sum)
++ISL_CTX_GET_BOOL_DEF(isl_options, struct isl_options, isl_options_args,
++	schedule_unit_max_var_coefficient_sum)
++
+ ISL_CTX_SET_INT_DEF(isl_options, struct isl_options, isl_options_args,
+ 	schedule_max_constant_term)
+ ISL_CTX_GET_INT_DEF(isl_options, struct isl_options, isl_options_args,
+diff -Npur isl_0.22/isl_options_private.h isl/isl_options_private.h
+--- isl_0.22/isl_options_private.h	2020-04-17 16:49:36.254477000 +0800
++++ isl/isl_options_private.h	2020-04-29 18:14:39.937681000 +0800
+@@ -34,9 +34,11 @@ struct isl_options {
+ 	int			convex;
+ 
+ 	int			coalesce_bounded_wrapping;
++	int			schedule_nonneg_var_coefficient;
+ 	int			coalesce_preserve_locals;
+ 
+ 	int			schedule_max_coefficient;
++	int			schedule_unit_max_var_coefficient_sum;
+ 	int			schedule_max_constant_term;
+ 	int			schedule_parametric;
+ 	int			schedule_outer_coincidence;
+diff -Npur isl_0.22/isl_polynomial.c isl/isl_polynomial.c
+--- isl_0.22/isl_polynomial.c	2020-04-17 16:49:36.254477000 +0800
++++ isl/isl_polynomial.c	2020-04-29 18:14:39.937681000 +0800
+@@ -4756,6 +4756,32 @@ static __isl_give isl_pw_qpolynomial *co
+ 	return isl_pw_qpolynomial_alloc(isl_set_from_basic_set(bset), qp);
+ }
+ 
++/* Internal data structure for multiplicative_call_factor_pw_qpolynomial.
++ * "fn" is the function that is called on each factor.
++ * "pwpq" collects the results.
++ */
++struct isl_multiplicative_call_data_pw_qpolynomial {
++	__isl_give isl_pw_qpolynomial *(*fn)(__isl_take isl_basic_set *bset);
++	isl_pw_qpolynomial *pwqp;
++};
++
++/* isl_factorizer_every_factor_basic_set callback that applies
++ * data->fn to the factor "bset" and multiplies in the result
++ * in data->pwqp.
++ */
++static isl_bool multiplicative_call_factor_pw_qpolynomial(
++	__isl_keep isl_basic_set *bset, void *user)
++{
++	struct isl_multiplicative_call_data_pw_qpolynomial *data = user;
++
++	bset = isl_basic_set_copy(bset);
++	data->pwqp = isl_pw_qpolynomial_mul(data->pwqp, data->fn(bset));
++	if (!data->pwqp)
++		return isl_bool_error;
++
++	return isl_bool_true;
++}
++
+ /* Factor bset, call fn on each of the factors and return the product.
+  *
+  * If no factors can be found, simply call fn on the input.
+@@ -4766,14 +4792,12 @@ static __isl_give isl_pw_qpolynomial *co
+ 	__isl_take isl_basic_set *bset,
+ 	__isl_give isl_pw_qpolynomial *(*fn)(__isl_take isl_basic_set *bset))
+ {
+-	int i, n;
++	struct isl_multiplicative_call_data_pw_qpolynomial data = { fn };
+ 	isl_space *space;
+ 	isl_set *set;
+ 	isl_factorizer *f;
+ 	isl_qpolynomial *qp;
+-	isl_pw_qpolynomial *pwqp;
+-	isl_size nparam;
+-	isl_size nvar;
++	isl_bool every;
+ 
+ 	f = isl_basic_set_factorizer(bset);
+ 	if (!f)
+@@ -4783,42 +4807,21 @@ static __isl_give isl_pw_qpolynomial *co
+ 		return fn(bset);
+ 	}
+ 
+-	nparam = isl_basic_set_dim(bset, isl_dim_param);
+-	nvar = isl_basic_set_dim(bset, isl_dim_set);
+-	if (nparam < 0 || nvar < 0)
+-		bset = isl_basic_set_free(bset);
+-
+ 	space = isl_basic_set_get_space(bset);
+ 	space = isl_space_params(space);
+ 	set = isl_set_universe(isl_space_copy(space));
+ 	qp = isl_qpolynomial_one_on_domain(space);
+-	pwqp = isl_pw_qpolynomial_alloc(set, qp);
+-
+-	bset = isl_morph_basic_set(isl_morph_copy(f->morph), bset);
++	data.pwqp = isl_pw_qpolynomial_alloc(set, qp);
+ 
+-	for (i = 0, n = 0; i < f->n_group; ++i) {
+-		isl_basic_set *bset_i;
+-		isl_pw_qpolynomial *pwqp_i;
+-
+-		bset_i = isl_basic_set_copy(bset);
+-		bset_i = isl_basic_set_drop_constraints_involving(bset_i,
+-			    nparam + n + f->len[i], nvar - n - f->len[i]);
+-		bset_i = isl_basic_set_drop_constraints_involving(bset_i,
+-			    nparam, n);
+-		bset_i = isl_basic_set_drop(bset_i, isl_dim_set,
+-			    n + f->len[i], nvar - n - f->len[i]);
+-		bset_i = isl_basic_set_drop(bset_i, isl_dim_set, 0, n);
+-
+-		pwqp_i = fn(bset_i);
+-		pwqp = isl_pw_qpolynomial_mul(pwqp, pwqp_i);
+-
+-		n += f->len[i];
+-	}
++	every = isl_factorizer_every_factor_basic_set(f,
++			&multiplicative_call_factor_pw_qpolynomial, &data);
++	if (every < 0)
++		data.pwqp = isl_pw_qpolynomial_free(data.pwqp);
+ 
+ 	isl_basic_set_free(bset);
+ 	isl_factorizer_free(f);
+ 
+-	return pwqp;
++	return data.pwqp;
+ error:
+ 	isl_basic_set_free(bset);
+ 	return NULL;
+diff -Npur isl_0.22/isl_schedule_constraints.c isl/isl_schedule_constraints.c
+--- isl_0.22/isl_schedule_constraints.c	2020-04-17 16:49:36.258477000 +0800
++++ isl/isl_schedule_constraints.c	2020-04-29 18:14:39.937681000 +0800
+@@ -157,6 +157,19 @@ error:
+ 	return NULL;
+ }
+ 
++/* Intersect the domain of "sc" with "domain".
++ */
++__isl_give isl_schedule_constraints *isl_schedule_constraints_intersect_domain(
++	__isl_take isl_schedule_constraints *sc,
++	__isl_take isl_union_set *domain)
++{
++	isl_union_set *sc_domain;
++
++	sc_domain = isl_schedule_constraints_get_domain(sc);
++	sc_domain = isl_union_set_intersect(sc_domain, domain);
++	return isl_schedule_constraints_set_domain(sc, sc_domain);
++}
++
+ /* Replace the context of "sc" by "context".
+  */
+ __isl_give isl_schedule_constraints *isl_schedule_constraints_set_context(
+diff -Npur isl_0.22/isl_scheduler.c isl/isl_scheduler.c
+--- isl_0.22/isl_scheduler.c	2020-04-17 16:49:36.258477000 +0800
++++ isl/isl_scheduler.c	2020-04-29 18:14:39.937681000 +0800
+@@ -73,6 +73,7 @@
+  * nvar is the dimension of the (compressed) domain
+  * nparam is the number of parameters or 0 if we are not constructing
+  *	a parametric schedule
++ * nonneg is set if the coefficients of the variables should be non-negative
+  *
+  * If compressed is set, then hull represents the constraints
+  * that were used to derive the compression, while compress and
+@@ -115,6 +116,7 @@ struct isl_sched_node {
+ 	int	 start;
+ 	int	 nvar;
+ 	int	 nparam;
++	int	 nonneg;
+ 
+ 	int	 scc;
+ 	int	 cluster;
+@@ -1928,30 +1930,53 @@ static isl_size coef_var_offset(__isl_ke
+ 	return offset;
+ }
+ 
++/* Return the number of variables needed in the (I)LP
++ * for encoding a single variable coefficient of "node".
++ * Each coefficient is encoded as a difference between two non-negative
++ * variables (if the coefficients of "node" are allowed to take on
++ * negative values) or directly as a single non-negative variable.
++ */
++static int coef_per_var(struct isl_sched_node *node)
++{
++	return node->nonneg ? 1 : 2;
++}
++
++/* Return the number of variables needed for "node" within the (I)LP.
++ *
++ * Within each node, the coefficients have the following order:
++ *	- c_i_x
++ *	- c_i_n (if parametric)
++ *	- c_i_0
++ */
++static int node_coef_size(struct isl_sched_node *node)
++{
++	return coef_per_var(node) * node->nvar + node->nparam + 1;
++}
++
+ /* Return the offset of the coefficient of the constant term of "node"
+  * within the (I)LP.
+  *
+  * Within each node, the coefficients have the following order:
+- *	- positive and negative parts of c_i_x
++ *	- c_i_x
+  *	- c_i_n (if parametric)
+  *	- c_i_0
+  */
+ static int node_cst_coef_offset(struct isl_sched_node *node)
+ {
+-	return node->start + 2 * node->nvar + node->nparam;
++	return node->start + coef_per_var(node) * node->nvar + node->nparam;
+ }
+ 
+ /* Return the offset of the coefficients of the parameters of "node"
+  * within the (I)LP.
+  *
+  * Within each node, the coefficients have the following order:
+- *	- positive and negative parts of c_i_x
++ *	- c_i_x
+  *	- c_i_n (if parametric)
+  *	- c_i_0
+  */
+ static int node_par_coef_offset(struct isl_sched_node *node)
+ {
+-	return node->start + 2 * node->nvar;
++	return node->start + coef_per_var(node) * node->nvar;
+ }
+ 
+ /* Return the offset of the coefficients of the variables of "node"
+@@ -1968,14 +1993,57 @@ static int node_var_coef_offset(struct i
+ }
+ 
+ /* Return the position of the pair of variables encoding
+- * coefficient "i" of "node".
++ * coefficient "i" of "node", within the sequence of coefficients
++ * of the variables of "node".
+  *
+  * The order of these variable pairs is the opposite of
+  * that of the coefficients, with 2 variables per coefficient.
+  */
++static int node_local_var_coef_pos(struct isl_sched_node *node, int i)
++{
++	return coef_per_var(node) * (node->nvar - 1 - i);
++}
++
++/* Return the position of the pair of variables encoding
++ * coefficient "i" of "node".
++ */
+ static int node_var_coef_pos(struct isl_sched_node *node, int i)
+ {
+-	return node_var_coef_offset(node) + 2 * (node->nvar - 1 - i);
++	return node_var_coef_offset(node) + node_local_var_coef_pos(node, i);
++}
++
++/* Update "dim_map" for mapping the coefficients of the variables in "node"
++ * to the corresponding positions in the LP.
++ * "offset" is the offset of the coefficients for the variables
++ * in the input constraints.
++ * "s" is the sign of the mapping.
++ *
++ * This part of the mapping essentially plugs in
++ * (c_i_x^+ - c_i_x^-) if s = 1 and
++ * (-c_i_x^+ + c_i_x^-) if s = -1
++ * for the variable coefficients c_x.
++ * In the LP, the c_i_x^- appear before their c_i_x^+ counterpart.
++ * Furthermore, the order of these pairs is the opposite of that
++ * of the corresponding coefficients.
++ *
++ * If the coefficients are expected to be non-negative, then
++ * only a single variable is used in the encoding (c_i_x^- = 0 is omitted).
++ */
++static __isl_give isl_dim_map *node_var_dim_map(struct isl_sched_node *node,
++	int offset, int s, __isl_take isl_dim_map *dim_map)
++{
++	int pos;
++
++	pos = node_var_coef_pos(node, 0);
++	if (node->nonneg) {
++		isl_dim_map_range(dim_map, pos, -1, offset, 1, node->nvar, s);
++	} else {
++		isl_dim_map_range(dim_map, pos, -2, offset, 1, node->nvar, -s);
++		isl_dim_map_range(dim_map, pos + 1, -2,
++					offset, 1, node->nvar, s);
++	}
++
++	return dim_map;
+ }
+ 
+ /* Construct an isl_dim_map for mapping constraints on coefficients
+@@ -1991,9 +2059,6 @@ static int node_var_coef_pos(struct isl_
+  * (0, -c_i_x^+ + c_i_x^-) if s = -1 or
+  * (0, 0, c_i_x^+ - c_i_x^-) if s = 1 and
+  * (0, 0, -c_i_x^+ + c_i_x^-) if s = -1.
+- * In graph->lp, the c_i_x^- appear before their c_i_x^+ counterpart.
+- * Furthermore, the order of these pairs is the opposite of that
+- * of the corresponding coefficients.
+  *
+  * The caller can extend the mapping to also map the other coefficients
+  * (and therefore not plug in 0).
+@@ -2002,7 +2067,6 @@ static __isl_give isl_dim_map *intra_dim
+ 	struct isl_sched_graph *graph, struct isl_sched_node *node,
+ 	int offset, int s)
+ {
+-	int pos;
+ 	isl_size total;
+ 	isl_dim_map *dim_map;
+ 
+@@ -2010,10 +2074,8 @@ static __isl_give isl_dim_map *intra_dim
+ 	if (!node || total < 0)
+ 		return NULL;
+ 
+-	pos = node_var_coef_pos(node, 0);
+ 	dim_map = isl_dim_map_alloc(ctx, total);
+-	isl_dim_map_range(dim_map, pos, -2, offset, 1, node->nvar, -s);
+-	isl_dim_map_range(dim_map, pos + 1, -2, offset, 1, node->nvar, s);
++	dim_map = node_var_dim_map(node, offset, s, dim_map);
+ 
+ 	return dim_map;
+ }
+@@ -2032,9 +2094,6 @@ static __isl_give isl_dim_map *intra_dim
+  *  -(c_i_x^+ - c_i_x^-), c_j_x^+ - c_j_x^-) if s = 1 and
+  * (-c_j_0 + c_i_0, -c_j_n + c_i_n,
+  *  c_i_x^+ - c_i_x^-, -(c_j_x^+ - c_j_x^-)) if s = -1.
+- * In graph->lp, the c_*^- appear before their c_*^+ counterpart.
+- * Furthermore, the order of these pairs is the opposite of that
+- * of the corresponding coefficients.
+  *
+  * The caller can further extend the mapping.
+  */
+@@ -2056,19 +2115,13 @@ static __isl_give isl_dim_map *inter_dim
+ 	isl_dim_map_range(dim_map, pos, 0, 0, 0, 1, s);
+ 	pos = node_par_coef_offset(dst);
+ 	isl_dim_map_range(dim_map, pos, 1, 1, 1, dst->nparam, s);
+-	pos = node_var_coef_pos(dst, 0);
+-	isl_dim_map_range(dim_map, pos, -2, offset + src->nvar, 1,
+-			  dst->nvar, -s);
+-	isl_dim_map_range(dim_map, pos + 1, -2, offset + src->nvar, 1,
+-			  dst->nvar, s);
++	dim_map = node_var_dim_map(dst, offset + src->nvar, s, dim_map);
+ 
+ 	pos = node_cst_coef_offset(src);
+ 	isl_dim_map_range(dim_map, pos, 0, 0, 0, 1, -s);
+ 	pos = node_par_coef_offset(src);
+ 	isl_dim_map_range(dim_map, pos, 1, 1, 1, src->nparam, -s);
+-	pos = node_var_coef_pos(src, 0);
+-	isl_dim_map_range(dim_map, pos, -2, offset, 1, src->nvar, s);
+-	isl_dim_map_range(dim_map, pos + 1, -2, offset, 1, src->nvar, -s);
++	dim_map = node_var_dim_map(src, offset, -s, dim_map);
+ 
+ 	return dim_map;
+ }
+@@ -2842,6 +2895,63 @@ static isl_stat add_bound_coefficient_co
+ 	return isl_stat_ok;
+ }
+ 
++/* Count the number of constraints that will be added by
++ * add_bound_coefficient_sum_constraints and increment *n_eq and *n_ineq
++ * accordingly.
++ *
++ * In practice, add_bound_coefficient_sum_constraints only adds
++ * inequality constraints.
++ */
++static isl_stat count_bound_coefficient_sum_constraints(isl_ctx *ctx,
++	struct isl_sched_graph *graph, int *n_eq, int *n_ineq)
++{
++	if (!isl_options_get_schedule_unit_max_var_coefficient_sum(ctx))
++		return isl_stat_ok;
++
++	*n_ineq += graph->n;
++
++	return isl_stat_ok;
++}
++
++/* If the schedule_unit_max_var_coefficient_sum option is set,
++ * then add a constraint for each node that ensures that
++ * the sum of the variables used in the encoding of the coefficients of
++ * the variables of the node is bounded by one.
++ * When a coefficient is encoded as a difference between two non-negative
++ * variables, this means that the absolute values of the coefficients
++ * are bounded by one.
++ * A non-negative coefficient is encoded as itself, in which case
++ * it is the coefficient itself that is bounded by one.
++ */
++static isl_stat add_bound_coefficient_sum_constraints(isl_ctx *ctx,
++	struct isl_sched_graph *graph)
++{
++	int i;
++	int total;
++
++	if (!isl_options_get_schedule_unit_max_var_coefficient_sum(ctx))
++		return isl_stat_ok;
++
++	total = isl_basic_set_dim(graph->lp, isl_dim_set);
++
++	for (i = 0; i < graph->n; ++i) {
++		int j, k;
++		int pos;
++		struct isl_sched_node *node = &graph->node[i];
++
++		k = isl_basic_set_alloc_inequality(graph->lp);
++		if (k < 0)
++			return isl_stat_error;
++		isl_seq_clr(graph->lp->ineq[k], 1 + total);
++		pos = 1 + node_var_coef_offset(node);
++		for (j = 0; j < coef_per_var(node) * node->nvar; ++j)
++			isl_int_set_si(graph->lp->ineq[k][pos + j], -1);
++		isl_int_set_si(graph->lp->ineq[k][0], 1);
++	}
++
++	return isl_stat_ok;
++}
++
+ /* Add a constraint to graph->lp that equates the value at position
+  * "sum_pos" to the sum of the "n" values starting at "first".
+  */
+@@ -2916,7 +3026,7 @@ static isl_stat add_var_sum_constraint(s
+ 		struct isl_sched_node *node = &graph->node[i];
+ 		int pos = 1 + node_var_coef_offset(node);
+ 
+-		for (j = 0; j < 2 * node->nvar; ++j)
++		for (j = 0; j < coef_per_var(node) * node->nvar; ++j)
+ 			isl_int_set_si(graph->lp->eq[k][pos + j], 1);
+ 	}
+ 
+@@ -2975,7 +3085,7 @@ static isl_stat setup_lp(isl_ctx *ctx, s
+ 		if (node_update_vmap(node) < 0)
+ 			return isl_stat_error;
+ 		node->start = total;
+-		total += 1 + node->nparam + 2 * node->nvar;
++		total += node_coef_size(node);
+ 	}
+ 
+ 	if (count_constraints(graph, &n_eq, &n_ineq, use_coincidence) < 0)
+@@ -2984,6 +3094,9 @@ static isl_stat setup_lp(isl_ctx *ctx, s
+ 		return isl_stat_error;
+ 	if (count_bound_coefficient_constraints(ctx, graph, &n_eq, &n_ineq) < 0)
+ 		return isl_stat_error;
++	if (count_bound_coefficient_sum_constraints(ctx, graph,
++							    &n_eq, &n_ineq) < 0)
++		return isl_stat_error;
+ 
+ 	space = isl_space_set_alloc(ctx, 0, total);
+ 	isl_basic_set_free(graph->lp);
+@@ -3001,6 +3114,8 @@ static isl_stat setup_lp(isl_ctx *ctx, s
+ 		return isl_stat_error;
+ 	if (add_bound_coefficient_constraints(ctx, graph) < 0)
+ 		return isl_stat_error;
++	if (add_bound_coefficient_sum_constraints(ctx, graph) < 0)
++		return isl_stat_error;
+ 	if (add_all_validity_constraints(graph, use_coincidence) < 0)
+ 		return isl_stat_error;
+ 	if (add_all_proximity_constraints(graph, use_coincidence) < 0)
+@@ -3059,14 +3174,16 @@ static int needs_row(struct isl_sched_gr
+ 
+ /* Construct a non-triviality region with triviality directions
+  * corresponding to the rows of "indep".
+- * The rows of "indep" are expressed in terms of the schedule coefficients c_i,
++ * The rows of "indep" are expressed in terms of the schedule coefficients c_i
++ * of "node",
+  * while the triviality directions are expressed in terms of
+  * pairs of non-negative variables c^+_i - c^-_i, with c^-_i appearing
+- * before c^+_i.  Furthermore,
+- * the pairs of non-negative variables representing the coefficients
+- * are stored in the opposite order.
++ * before c^+_i.
++ * If the coefficients are forced to be non-negative,
++ * then c^-_i = 0 is omitted from the encoding.
+  */
+-static __isl_give isl_mat *construct_trivial(__isl_keep isl_mat *indep)
++static __isl_give isl_mat *construct_trivial(struct isl_sched_node *node,
++	__isl_keep isl_mat *indep)
+ {
+ 	isl_ctx *ctx;
+ 	isl_mat *mat;
+@@ -3079,14 +3196,19 @@ static __isl_give isl_mat *construct_tri
+ 		return NULL;
+ 
+ 	ctx = isl_mat_get_ctx(indep);
+-	mat = isl_mat_alloc(ctx, n, 2 * n_var);
++	mat = isl_mat_alloc(ctx, n, coef_per_var(node) * n_var);
+ 	if (!mat)
+ 		return NULL;
+ 	for (i = 0; i < n; ++i) {
+ 		for (j = 0; j < n_var; ++j) {
+-			int nj = n_var - 1 - j;
+-			isl_int_neg(mat->row[i][2 * nj], indep->row[i][j]);
+-			isl_int_set(mat->row[i][2 * nj + 1], indep->row[i][j]);
++			int pos = node_local_var_coef_pos(node, j);
++			if (node->nonneg) {
++				isl_int_set(mat->row[i][pos], indep->row[i][j]);
++			} else {
++				isl_int_neg(mat->row[i][pos], indep->row[i][j]);
++				isl_int_set(mat->row[i][pos + 1],
++					    indep->row[i][j]);
++			}
+ 		}
+ 	}
+ 
+@@ -3112,7 +3234,7 @@ static __isl_give isl_vec *solve_lp(isl_
+ 
+ 		graph->region[i].pos = node_var_coef_offset(node);
+ 		if (needs_row(graph, node))
+-			trivial = construct_trivial(node->indep);
++			trivial = construct_trivial(node, node->indep);
+ 		else
+ 			trivial = isl_mat_zero(ctx, 0, 0);
+ 		graph->region[i].trivial = trivial;
+@@ -3130,8 +3252,9 @@ static __isl_give isl_vec *solve_lp(isl_
+  * Each schedule coefficient c_i_x is represented as the difference
+  * between two non-negative variables c_i_x^+ - c_i_x^-.
+  * The c_i_x^- appear before their c_i_x^+ counterpart.
+- * Furthermore, the order of these pairs is the opposite of that
+- * of the corresponding coefficients.
++ *
++ * If the coefficients are forced to be non-negative,
++ * then the c_i_x^- = 0 are omitted from the encoding.
+  *
+  * Return c_i_x = c_i_x^+ - c_i_x^-
+  */
+@@ -3148,10 +3271,14 @@ static __isl_give isl_vec *extract_var_c
+ 	if (!csol)
+ 		return NULL;
+ 
+-	pos = 1 + node_var_coef_offset(node);
+-	for (i = 0; i < node->nvar; ++i)
+-		isl_int_sub(csol->el[node->nvar - 1 - i],
+-			    sol->el[pos + 2 * i + 1], sol->el[pos + 2 * i]);
++	for (i = 0; i < node->nvar; ++i) {
++		pos = 1 + node_var_coef_pos(node, i);
++		if (node->nonneg)
++			isl_int_set(csol->el[i], sol->el[pos]);
++		else
++			isl_int_sub(csol->el[i],
++				    sol->el[pos + 1], sol->el[pos]);
++	}
+ 
+ 	return csol;
+ }
+@@ -4412,7 +4539,7 @@ static isl_stat setup_carry_lp(isl_ctx *
+ 	for (i = 0; i < graph->n; ++i) {
+ 		struct isl_sched_node *node = &graph->node[graph->sorted[i]];
+ 		node->start = total;
+-		total += 1 + node->nparam + 2 * node->nvar;
++		total += node_coef_size(node);
+ 	}
+ 
+ 	if (count_all_constraints(intra, inter, &n_eq, &n_ineq) < 0)
+@@ -5806,6 +5933,17 @@ static __isl_give isl_schedule_node *com
+ 			return isl_schedule_node_free(node);
+ 		if (isl_options_get_schedule_outer_coincidence(ctx))
+ 			return carry_coincidence(node, graph);
++		//fix isl scheduling bug for l2_loss
++		isl_vec *sol;
++		sol = compute_carrying_sol(ctx, graph, 1, 0);
++		if (!sol)
++			return isl_schedule_node_free(node);
++		if (sol->size == 0) {
++			isl_vec_free(sol);
++			if (graph->scc > 1)
++				return compute_component_schedule(node, graph, 1);
++			return sort_statements(node, graph, initialized);
++		}
+ 		return carry_dependences(node, graph);
+ 	}
+ 
+@@ -5846,7 +5984,7 @@ static __isl_give isl_schedule_node *com
+  * Since there are only a finite number of dependences,
+  * there will only be a finite number of iterations.
+  */
+-static isl_stat compute_schedule_wcc_band(isl_ctx *ctx,
++static isl_stat compute_schedule_wcc_band_core(isl_ctx *ctx,
+ 	struct isl_sched_graph *graph)
+ {
+ 	int has_coincidence;
+@@ -5907,6 +6045,67 @@ static isl_stat compute_schedule_wcc_ban
+ 	return isl_stat_ok;
+ }
+ 
++
++/* Set the nonneg fields of the nodes in "graph".
++ *
++ * If the "schedule_nonneg_var_coefficient" option is set,
++ * then all nodes have their nonneg fields set.
++ * Otherwise, it is set based on the additional constraints
++ * on the coefficients of the variables, if any.
++ */
++static isl_stat graph_set_nonneg(isl_ctx *ctx, struct isl_sched_graph *graph)
++{
++	int i;
++	int nonneg;
++
++	nonneg = isl_options_get_schedule_nonneg_var_coefficient(ctx);
++	for (i = 0; i < graph->n; ++i) {
++		struct isl_sched_node *node = &graph->node[i];
++
++		if (nonneg)
++			node->nonneg = 1;
++	}
++
++	return isl_stat_ok;
++}
++
++/* Clear the nonneg fields of the nodes in "graph".
++ */
++static isl_stat graph_clear_nonneg(isl_ctx *ctx, struct isl_sched_graph *graph)
++{
++	int i;
++
++	for (i = 0; i < graph->n; ++i) {
++		struct isl_sched_node *node = &graph->node[i];
++
++		node->nonneg = 0;
++	}
++
++	return isl_stat_ok;
++}
++
++/* Construct a band of schedule rows for a connected dependence graph.
++ * The caller is responsible for determining the strongly connected
++ * components and calling compute_maxvar first.
++ *
++ * Locally set the nonneg fields of the nodes for use in the LP encoding.
++ * The markings are cleared afterwards in case the graph is reused
++ * to carry dependences.
++ */
++static isl_stat compute_schedule_wcc_band(isl_ctx *ctx,
++	struct isl_sched_graph *graph)
++{
++	isl_stat r;
++
++	r = graph_set_nonneg(ctx, graph);
++	if (r >= 0)
++		r = compute_schedule_wcc_band_core(ctx, graph);
++	if (r >= 0)
++		r = graph_clear_nonneg(ctx, graph);
++
++	return r;
++}
++
+ /* Compute a schedule for a connected dependence graph by considering
+  * the graph as a whole and return the updated schedule node.
+  *
+diff -Npur isl_0.22/isl_space.c isl/isl_space.c
+--- isl_0.22/isl_space.c	2020-04-17 16:49:36.258477000 +0800
++++ isl/isl_space.c	2020-04-29 18:14:39.941681000 +0800
+@@ -599,6 +599,20 @@ error:
+ 	return NULL;
+ }
+ 
++/* Replace the tuple identifier of the set space "space" by "id".
++ */
++__isl_give isl_space *isl_space_set_set_tuple_id(__isl_take isl_space *space,
++	__isl_take isl_id *id)
++{
++	if (isl_space_check_is_set(space) < 0)
++		goto error;
++	return isl_space_set_tuple_id(space, isl_dim_set, id);
++error:
++	isl_space_free(space);
++	isl_id_free(id);
++	return NULL;
++}
++
+ __isl_give isl_space *isl_space_reset_tuple_id(__isl_take isl_space *space,
+ 	enum isl_dim_type type)
+ {
+@@ -1140,6 +1154,17 @@ error:
+ 	return NULL;
+ }
+ 
++/* Does "id" appear as a parameter in "space"?
++ */
++isl_bool isl_space_has_param_id(__isl_keep isl_space *space,
++	__isl_keep isl_id *id)
++{
++	if (!space || !id)
++		return isl_bool_error;
++
++	return isl_space_find_dim_by_id(space, isl_dim_param, id) >= 0;
++}
++
+ /* Add a parameter with identifier "id" to "space", provided
+  * it does not already appear in "space".
+  */

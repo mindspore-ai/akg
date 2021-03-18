@@ -1,0 +1,170 @@
+#!/bin/bash
+# Copyright 2019-2021 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+export AKG_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/" && pwd )"
+BUILD_DIR="${AKG_DIR}/build"
+OUTPUT_PATH="${AKG_DIR}/output"
+
+usage()
+{
+    echo "Usage:"
+    echo "bash build.sh [-e gpu|ascend] [-j[n]] [-t on|off] [-a]"
+    echo ""
+    echo "Options:"
+    echo "    -e Hardware environment: gpu or ascend"
+    echo "    -j[n] Set the threads when building (Default: -j8)"
+    echo "    -t Unit test: on or off (Default: off)"
+    echo "    -a Download libakg_ext.a"
+}
+
+mk_new_dir()
+{
+    local create_dir="$1"
+
+    if [[ -d "${create_dir}" ]]; then
+        rm -rf "${create_dir}"
+    fi
+
+    mkdir -pv "${create_dir}"
+}
+
+write_checksum()
+{
+    cd "$OUTPUT_PATH" || exit
+    PACKAGE_LIST=$(ls lib*.tar.gz) || exit
+    for PACKAGE_NAME in $PACKAGE_LIST; do
+        echo $PACKAGE_NAME
+        sha256sum -b "$PACKAGE_NAME" >"$PACKAGE_NAME.sha256"
+    done
+}
+
+download_lib()
+{
+    uname_info=`uname -a | tr '[A-Z]' '[a-z]'`
+    os_name=""
+    arch_name=""
+    if [[ "${uname_info}" =~ "ubuntu" ]]; then
+        os_name="ubuntu"
+    elif [[ "${uname_info}" =~ "euleros" ]]; then
+        os_name="euleros"
+    elif [[ "${uname_info}" =~ "centos" ]]; then
+        os_name="centos"
+    fi
+
+    if [[ "${uname_info}" =~ "aarch64" ]]; then
+        arch_name="aarch64"
+    elif [[ "${uname_info}" =~ "x86_64" ]]; then
+        arch_name="x86"
+    fi
+
+    os_arch="${os_name}_${arch_name}"
+    url_prefix="https://repo.mindspore.cn/public/ms-incubator/akg-binary/version"
+    lib_mark="202103/20210318/master_20210318142553_3e77f3a799ca87c23f1a906eaad5ec4c1f78bc95"
+    lib_url="${url_prefix}/${lib_mark}/lib/${os_arch}/libakg_ext.a"
+    hash_url="${url_prefix}/${lib_mark}/lib/${os_arch}/libakg_ext.a.sha256"
+
+    if [ ! -d ${BUILD_DIR} ]; then
+      mkdir -pv ${BUILD_DIR}
+    fi
+
+    # Download
+    wget -P ${BUILD_DIR} --waitretry=10 --tries=3 ${hash_url}
+    wget -P ${BUILD_DIR} --waitretry=10 --tries=3 ${lib_url}
+
+    # Check hash
+    if [ ! -f ${BUILD_DIR}/libakg_ext.a ]; then
+      echo "Fail to download libakg_ext.a"
+      return 1
+    elif [ ! -f ${BUILD_DIR}/libakg_ext.a.sha256 ]; then
+      echo "Fail to download libakg_ext.a.sha256"
+      return 1
+    else
+      cur_hash=`sha256sum -b ${BUILD_DIR}/libakg_ext.a | awk '{print $1}'`
+      orig_hash=`grep libakg_ext.a ${BUILD_DIR}/libakg_ext.a.sha256 | awk '{print $1}'`
+      if [ "${cur_hash}" != "${orig_hash}" ]; then
+        echo "Hash check failed!"
+        return 1
+      fi
+    fi
+}
+
+if [ ! -n "$1" ]; then
+    echo "Must input parameter!"
+    usage
+    exit 1
+fi
+
+# Parse arguments
+THREAD_NUM=32
+CMAKE_ARGS=""
+while getopts 'e:j:t:a' opt
+do
+    case "${opt}" in
+        e)
+            if [[ "${OPTARG}" == "gpu" ]]; then
+                CMAKE_ARGS="${CMAKE_ARGS} -DUSE_CUDA=ON -DUSE_RPC=ON"
+            elif [[ "${OPTARG}" == "ascend" ]]; then
+                CMAKE_ARGS="${CMAKE_ARGS} -DUSE_CCE_RT=1"
+            else
+                echo "Unknown parameter ${OPTARG}!"
+                usage
+                exit 1
+            fi
+            ;;
+        j)
+            THREAD_NUM=${OPTARG}
+            ;;
+        t)
+            ;;
+        a)
+            download_lib
+            if [ $? -ne 0 ]; then
+              exit 1
+            fi
+            exit 0
+            ;;
+        *)
+            echo "Unknown option ${opt}!"
+            usage
+            exit 1
+    esac
+done
+echo "CMAKE_ARGS: ${CMAKE_ARGS}"
+
+# Create directories
+mk_new_dir "${BUILD_DIR}"
+mk_new_dir "${OUTPUT_PATH}"
+
+echo "---------------- AKG: build start ----------------"
+# Build target
+cd $BUILD_DIR
+cmake .. ${CMAKE_ARGS}
+make -j$THREAD_NUM
+make install
+
+if [ ! -f "libakg.so" ];then
+  echo "[ERROR] libakg.so not exist!"
+  exit 1
+fi
+
+# Copy target to output/ directory
+cp libakg.so ${OUTPUT_PATH}
+cd ${OUTPUT_PATH}
+tar czvf libakg.tar.gz libakg.so
+rm -rf libakg.so
+write_checksum
+
+cd -
+echo "---------------- AKG: build end ----------------"

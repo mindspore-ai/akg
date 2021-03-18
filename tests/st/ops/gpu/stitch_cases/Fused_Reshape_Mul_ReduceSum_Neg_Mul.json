@@ -1,0 +1,273 @@
+{
+    "buffer_stitch": {
+        "stitch_op": [
+            [
+                "output_0_2"
+            ]
+        ]
+    },
+    "composite": true,
+    "composite_graph": "23720.23720",
+    "id": 1454,
+    "input_desc": [
+        [
+            {
+                "data_type": "float32",
+                "format": "DefaultFormat",
+                "shape": [
+                    32,
+                    20
+                ],
+                "tensor_name": "input_0"
+            }
+        ],
+        [
+            {
+                "data_type": "float32",
+                "format": "DefaultFormat",
+                "shape": [
+                    640,
+                    21128
+                ],
+                "tensor_name": "input_1"
+            }
+        ],
+        [
+            {
+                "data_type": "float32",
+                "format": "DefaultFormat",
+                "shape": [
+                    640,
+                    21128
+                ],
+                "tensor_name": "input_2"
+            }
+        ]
+    ],
+    "op": "Fused_Reshape_Mul_ReduceSum_Neg_Mul_split_15286880971801446343",
+    "op_desc": [
+        {
+            "attr": [
+                {
+                    "data_type": "listInt",
+                    "name": "shape",
+                    "value": [
+                        -1
+                    ]
+                }
+            ],
+            "impl_path": "",
+            "input_desc": [
+                [
+                    {
+                        "data_type": "float32",
+                        "format": "DefaultFormat",
+                        "name": "input_0",
+                        "shape": [
+                            32,
+                            20
+                        ],
+                        "tensor_name": "input_0"
+                    }
+                ]
+            ],
+            "name": "Reshape",
+            "output_desc": [
+                {
+                    "data_type": "float32",
+                    "format": "DefaultFormat",
+                    "name": "output",
+                    "shape": [
+                        640
+                    ],
+                    "tensor_name": "output_0_0"
+                }
+            ]
+        },
+        {
+            "attr": null,
+            "impl_path": "",
+            "input_desc": [
+                [
+                    {
+                        "data_type": "float32",
+                        "format": "DefaultFormat",
+                        "name": "input_0",
+                        "shape": [
+                            640,
+                            21128
+                        ],
+                        "tensor_name": "input_1"
+                    }
+                ],
+                [
+                    {
+                        "data_type": "float32",
+                        "format": "DefaultFormat",
+                        "name": "input_1",
+                        "shape": [
+                            640,
+                            21128
+                        ],
+                        "tensor_name": "input_2"
+                    }
+                ]
+            ],
+            "name": "Mul",
+            "output_desc": [
+                {
+                    "data_type": "float32",
+                    "format": "DefaultFormat",
+                    "name": "output",
+                    "shape": [
+                        640,
+                        21128
+                    ],
+                    "tensor_name": "output_0_1"
+                }
+            ]
+        },
+        {
+            "attr": [
+                {
+                    "data_type": "listInt",
+                    "name": "axis",
+                    "value": [
+                        -1
+                    ]
+                },
+                {
+                    "data_type": "str",
+                    "name": "io_format",
+                    "value": "ND"
+                },
+                {
+                    "data_type": "bool",
+                    "name": "stitch",
+                    "value": true
+                },
+                {
+                    "data_type": "bool",
+                    "name": "keep_dims",
+                    "value": false
+                }
+            ],
+            "impl_path": "",
+            "input_desc": [
+                [
+                    {
+                        "data_type": "float32",
+                        "format": "DefaultFormat",
+                        "name": "input_0",
+                        "shape": [
+                            640,
+                            21128
+                        ],
+                        "tensor_name": "output_0_1"
+                    }
+                ]
+            ],
+            "name": "ReduceSum",
+            "output_desc": [
+                {
+                    "data_type": "float32",
+                    "format": "DefaultFormat",
+                    "name": "output",
+                    "shape": [
+                        640
+                    ],
+                    "tensor_name": "output_0_2"
+                }
+            ]
+        },
+        {
+            "attr": null,
+            "impl_path": "",
+            "input_desc": [
+                [
+                    {
+                        "data_type": "float32",
+                        "format": "DefaultFormat",
+                        "name": "input_0",
+                        "shape": [
+                            640
+                        ],
+                        "tensor_name": "output_0_2"
+                    }
+                ]
+            ],
+            "name": "Neg",
+            "output_desc": [
+                {
+                    "data_type": "float32",
+                    "format": "DefaultFormat",
+                    "name": "output",
+                    "shape": [
+                        640
+                    ],
+                    "tensor_name": "output_0_3"
+                }
+            ]
+        },
+        {
+            "attr": null,
+            "impl_path": "",
+            "input_desc": [
+                [
+                    {
+                        "data_type": "float32",
+                        "format": "DefaultFormat",
+                        "name": "input_0",
+                        "shape": [
+                            640
+                        ],
+                        "tensor_name": "output_0_0"
+                    }
+                ],
+                [
+                    {
+                        "data_type": "float32",
+                        "format": "DefaultFormat",
+                        "name": "input_1",
+                        "shape": [
+                            640
+                        ],
+                        "tensor_name": "output_0_3"
+                    }
+                ]
+            ],
+            "name": "Mul",
+            "output_desc": [
+                {
+                    "data_type": "float32",
+                    "format": "DefaultFormat",
+                    "name": "output",
+                    "shape": [
+                        640
+                    ],
+                    "tensor_name": "output_0_4"
+                }
+            ]
+        }
+    ],
+    "output_desc": [
+        {
+            "data_type": "float32",
+            "format": "DefaultFormat",
+            "shape": [
+                640
+            ],
+            "tensor_name": "output_0_4"
+        },
+        {
+            "data_type": "float32",
+            "format": "DefaultFormat",
+            "shape": [
+                640
+            ],
+            "tensor_name": "output_0_0"
+        }
+    ],
+    "platform": "AKG",
+    "process": "cuda"
+}
