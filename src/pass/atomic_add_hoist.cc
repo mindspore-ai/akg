@@ -84,9 +84,11 @@ class AtomicAddGetHoistEntry : public IRVisitor {
     // atomic write
     if (op->attr_key == ATTR_ATOMIC_ADD || (op->attr_key == "pragma_emit_insn" && op->value->IsInstance<StringImm>() &&
                                             op->value.as<StringImm>()->value == "dma_atomic_add")) {
-      // The atomic clean_zero and the atomic write should appear in pairs:
       auto buf = GetBuffer(op->body);
-      CHECK(buf_map_clean_attr_.count(buf));
+      // Currently only supports scenes where the atomic clean_zero and the atomic write in pairs
+      if (!buf_map_clean_attr_.count(buf)) {
+        return;
+      }
       auto clean_attr = buf_map_clean_attr_.at(buf);
       CHECK(clean_attr_map_loop_stack_.count(clean_attr));
       auto &clean_loop_stack = clean_attr_map_loop_stack_.at(clean_attr);
