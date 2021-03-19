@@ -63,21 +63,36 @@ link_directories(${AKG_RPATH})
 # Search AKG_EXTEND by order
 set(AKG_EXTEND )
 if(NOT USE_CUDA)
-  set(AKG_EXTEND_FILE ${AKG_SOURCE_DIR}/libakg_ext.a)  # Search libakg_ext.a in directory akg
-  if(NOT EXISTS ${AKG_EXTEND_FILE})
-    set(AKG_EXTEND_FILE ${AKG_SOURCE_DIR}/build/libakg_ext.a)  # Search libakg_ext.a in directory akg/build
-    if(NOT EXISTS ${AKG_EXTEND_FILE} AND NOT USE_KC_AIR)  # Download libakg_ext.a to directory akg/build
+  set(AKG_EXTEND_FILE )
+  set(LIB_PATH1 ${AKG_SOURCE_DIR}/libakg_ext.a)
+  set(LIB_PATH2 ${AKG_SOURCE_DIR}/build/libakg_ext.a)
+
+  if(EXISTS ${LIB_PATH1})  # Search libakg_ext.a in akg/
+    set(AKG_EXTEND_FILE ${LIB_PATH1})
+  else()
+    if(EXISTS ${LIB_PATH2})  # Search libakg_ext.a in akg/build/
+      set(AKG_EXTEND_FILE ${LIB_PATH2})
+    else()  # Download libakg_ext.a to akg/build/
       execute_process(COMMAND bash ${AKG_SOURCE_DIR}/build.sh -a
               WORKING_DIRECTORY ${AKG_SOURCE_DIR}
+              OUTPUT_VARIABLE OUTPUT_URL
               RESULT_VARIABLE RESULT)
-      if(RESULT EQUAL 0)
-        set(AKG_EXTEND_FILE ${AKG_SOURCE_DIR}/build/libakg_ext.a)
+      if(RESULT EQUAL 0 AND OUTPUT_URL MATCHES "libakg_ext.a")
+        # Download library
+        string(STRIP ${OUTPUT_URL} LIB_URL)
+        message("-- Downloading ${LIB_URL} --> ${LIB_PATH2}")
+        file(DOWNLOAD ${LIB_URL} ${LIB_PATH2} STATUS DOWNLOAD_STATUS)
+        message("-- Download status: ${DOWNLOAD_STATUS}")
+        list(GET DOWNLOAD_STATUS 0 DOWNLOAD_CODE)
+        if(DOWNLOAD_CODE EQUAL 0)
+          set(AKG_EXTEND_FILE ${LIB_PATH2})
+        endif()
       endif()
     endif()
   endif()
 
+  message("-- AKG_EXTEND_FILE: ${AKG_EXTEND_FILE}")
   if(EXISTS ${AKG_EXTEND_FILE})
-    message("-- AKG_EXTEND_FILE: ${AKG_EXTEND_FILE}")
     file(COPY ${AKG_EXTEND_FILE} DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/akg_extend)
     execute_process(COMMAND ar -x libakg_ext.a
             WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/akg_extend)
