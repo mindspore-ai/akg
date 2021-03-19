@@ -14,14 +14,15 @@
  * limitations under the License.
  */
 #include "composite/optimize/optimize.h"
+#include <memory>
 #include "composite/optimize/reshape_tensor.h"
 #include "composite/optimize/elim_transform_op.h"
-#include "composite/optimize/select_fusion.h"
 #include "composite/optimize/inplace_assign_mutator.h"
 #include "composite/optimize/broadcast_inserter.h"
 #include "composite/optimize/axis_attr_normalize.h"
 #include "composite/optimize/fold_dimension.h"
 #include "composite/optimize/typecast_inserter.h"
+#include "composite/optimize/ops_combine.h"
 
 namespace akg {
 Stmt Optimize(Stmt &s, BuildInfo &info) {
@@ -30,8 +31,10 @@ Stmt Optimize(Stmt &s, BuildInfo &info) {
   if (info.opt.target == "aicore") {
     pm.RegisterPass(std::make_shared<ReshapeTensor>());
   }
-  // fusion
-  pm.RegisterPass(std::make_shared<SelectFusion>());
+  // ops combine
+  if (info.opt.target == "aicore") {
+    pm.RegisterPass(std::make_shared<OpsCombine>(pm.info_));
+  }
   // elemwise opt
   pm.RegisterPass(std::make_shared<ElimTransformOp>(pm.info_));
   // normalize axis attr
