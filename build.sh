@@ -79,24 +79,25 @@ download_lib()
       mkdir -pv ${BUILD_DIR}
     fi
 
-    # Download
+    # Download libakg_ext.a.sha256
     wget -P ${BUILD_DIR} --waitretry=10 --tries=3 ${hash_url}
+    if [ $? -ne 0 ]; then
+      echo "Fail to download ${hash_url}"
+      return 1
+    fi
+    # Download libakg_ext.a
     wget -P ${BUILD_DIR} --waitretry=10 --tries=3 ${lib_url}
+    if [ $? -ne 0 ]; then
+      echo "Fail to download ${lib_url}"
+      return 1
+    fi
 
     # Check hash
-    if [ ! -f ${BUILD_DIR}/libakg_ext.a ]; then
-      echo "Fail to download libakg_ext.a"
+    cur_hash=`sha256sum -b ${BUILD_DIR}/libakg_ext.a | awk '{print $1}'`
+    orig_hash=`grep libakg_ext.a ${BUILD_DIR}/libakg_ext.a.sha256 | awk '{print $1}'`
+    if [ "${cur_hash}" != "${orig_hash}" ]; then
+      echo "Hash check failed!"
       return 1
-    elif [ ! -f ${BUILD_DIR}/libakg_ext.a.sha256 ]; then
-      echo "Fail to download libakg_ext.a.sha256"
-      return 1
-    else
-      cur_hash=`sha256sum -b ${BUILD_DIR}/libakg_ext.a | awk '{print $1}'`
-      orig_hash=`grep libakg_ext.a ${BUILD_DIR}/libakg_ext.a.sha256 | awk '{print $1}'`
-      if [ "${cur_hash}" != "${orig_hash}" ]; then
-        echo "Hash check failed!"
-        return 1
-      fi
     fi
 }
 

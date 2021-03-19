@@ -65,13 +65,13 @@ set(AKG_EXTEND )
 if(NOT USE_CUDA)
   set(AKG_EXTEND_FILE ${AKG_SOURCE_DIR}/libakg_ext.a)  # Search libakg_ext.a in directory akg
   if(NOT EXISTS ${AKG_EXTEND_FILE})
-    set(AKG_EXTEND_FILE ${CMAKE_CURRENT_BINARY_DIR}/libakg_ext.a)  # Search libakg_ext.a in directory akg/build
+    set(AKG_EXTEND_FILE ${AKG_SOURCE_DIR}/build/libakg_ext.a)  # Search libakg_ext.a in directory akg/build
     if(NOT EXISTS ${AKG_EXTEND_FILE} AND NOT USE_KC_AIR)  # Download libakg_ext.a to directory akg/build
       execute_process(COMMAND bash ${AKG_SOURCE_DIR}/build.sh -a
               WORKING_DIRECTORY ${AKG_SOURCE_DIR}
               RESULT_VARIABLE RESULT)
       if(RESULT EQUAL 0)
-        set(AKG_EXTEND_FILE ${CMAKE_CURRENT_BINARY_DIR}/libakg_ext.a)
+        set(AKG_EXTEND_FILE ${AKG_SOURCE_DIR}/build/libakg_ext.a)
       endif()
     endif()
   endif()
