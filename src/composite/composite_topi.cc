@@ -71,81 +71,6 @@ std::string GetString(const NodeRef &arg) {
   return val->value;
 }
 
-void CommonCompare(TVMArgs args, TVMRetValue *rv, const std::string &cmp) {
-  CHECK_GE(args.size(), 1);
-  auto inputs = args[0].operator Array<NodeRef>();
-  CHECK_GE(inputs.size(), 2);
-
-  std::string name = "T_" + cmp + "_";
-  Expr true_expr = make_const(Float(32), 1);
-  Expr false_expr = make_const(Float(32), 0);
-  air::FCompute fcompute;
-
-  if (inputs[0]->IsInstance<TensorNode>()) {
-    auto tensor0 = Downcast<Tensor>(inputs[0]);
-    true_expr = make_const(tensor0->dtype, 1);
-    false_expr = make_const(tensor0->dtype, 0);
-    if (inputs[1]->IsInstance<TensorNode>()) {
-      auto tensor1 = Downcast<Tensor>(inputs[1]);
-      (void)name.append(tensor0->op->name).append("_").append(tensor1->op->name);
-      if (cmp == "GreaterEqual") {
-        fcompute = [&](const Array<Var> &indices) {
-          return Select::make(tensor0(indices) >= tensor1(indices), true_expr, false_expr);
-        };
-      } else if (cmp == "LessEqual") {
-        fcompute = [&](const Array<Var> &indices) {
-          return Select::make(tensor0(indices) <= tensor1(indices), true_expr, false_expr);
-        };
-      }
-      *rv = compute(tensor0->shape, fcompute, name);
-    } else {
-      CHECK(inputs[1]->IsInstance<ExprNode>());
-      auto expr1 = Downcast<Expr>(inputs[1]);
-      (void)name.append(tensor0->op->name);
-      if (cmp == "GreaterEqual") {
-        fcompute = [&](const Array<Var> &indices) {
-          return Select::make(tensor0(indices) >= expr1, true_expr, false_expr);
-        };
-      } else if (cmp == "LessEqual") {
-        fcompute = [&](const Array<Var> &indices) {
-          return Select::make(tensor0(indices) <= expr1, true_expr, false_expr);
-        };
-      }
-      *rv = compute(tensor0->shape, fcompute, name);
-    }
-  } else if (inputs[1]->IsInstance<TensorNode>()) {
-    auto tensor1 = Downcast<Tensor>(inputs[1]);
-    true_expr = make_const(tensor1->dtype, 1);
-    false_expr = make_const(tensor1->dtype, 0);
-    CHECK(inputs[0]->IsInstance<ExprNode>());
-    auto expr0 = Downcast<Expr>(inputs[0]);
-    (void)name.append(tensor1->op->name);
-    if (cmp == "GreaterEqual") {
-      fcompute = [&](const Array<Var> &indices) {
-        return Select::make(expr0 >= tensor1(indices), true_expr, false_expr);
-      };
-    } else if (cmp == "LessEqual") {
-      fcompute = [&](const Array<Var> &indices) {
-        return Select::make(expr0 <= tensor1(indices), true_expr, false_expr);
-      };
-    }
-    *rv = compute(tensor1->shape, fcompute, name);
-  } else {
-    CHECK(inputs[0]->IsInstance<ExprNode>());
-    CHECK(inputs[1]->IsInstance<ExprNode>());
-    // scaler >= scaler
-    auto expr0 = Downcast<Expr>(inputs[0]);
-    auto expr1 = Downcast<Expr>(inputs[1]);
-    (void)name.append("scalar");
-    if (cmp == "GreaterEqual") {
-      fcompute = [&](const Array<Var> &indices) { return Select::make(expr0 >= expr1, true_expr, false_expr); };
-    } else if (cmp == "LessEqual") {
-      fcompute = [&](const Array<Var> &indices) { return Select::make(expr0 <= expr1, true_expr, false_expr); };
-    }
-    *rv = compute({Expr(1)}, fcompute, name);
-  }
-}
-
 void CommonSelect(NodeRef a, NodeRef b, NodeRef c, NodeRef d, TVMRetValue *rv, bool ge) {
   bool a_is_expr = a->IsInstance<ExprNode>();
   bool a_is_tensor = a->IsInstance<TensorNode>();
@@ -493,12 +418,6 @@ TVM_REGISTER_GLOBAL("Reciprocal").set_body([](TVMArgs args, TVMRetValue *rv) {
   TOPI_ONE_INPUT_CALL(args, rv, call);
 });
 
-TVM_REGISTER_GLOBAL("GreaterEqual").set_body([](TVMArgs args, TVMRetValue *rv) {
-  CommonCompare(args, rv, "GreaterEqual");
-});
-
-TVM_REGISTER_GLOBAL("LessEqual").set_body([](TVMArgs args, TVMRetValue *rv) { CommonCompare(args, rv, "LessEqual"); });
-
 TVM_REGISTER_GLOBAL("ZerosLike").set_body([](TVMArgs args, TVMRetValue *rv) {
   CHECK_GE(args.size(), 1);
   auto inputs = args[0].operator Array<NodeRef>();
@@ -535,6 +454,16 @@ TVM_REGISTER_GLOBAL("Select").set_body([](TVMArgs args, TVMRetValue *rv) {
 
 TVM_REGISTER_GLOBAL("Greater").set_body([](TVMArgs args, TVMRetValue *rv) {
   TOPI_TWO_INPUTS_CALL(args, rv, topi::greater);
+});
+
+TVM_REGISTER_GLOBAL("Less").set_body([](TVMArgs args, TVMRetValue *rv) { TOPI_TWO_INPUTS_CALL(args, rv, topi::less); });
+
+TVM_REGISTER_GLOBAL("GreaterEqual").set_body([](TVMArgs args, TVMRetValue *rv) {
+  TOPI_TWO_INPUTS_CALL(args, rv, topi::greater_equal);
+});
+
+TVM_REGISTER_GLOBAL("LessEqual").set_body([](TVMArgs args, TVMRetValue *rv) {
+  TOPI_TWO_INPUTS_CALL(args, rv, topi::less_equal);
 });
 
 TVM_REGISTER_GLOBAL("SelectGE").set_body([](TVMArgs args, TVMRetValue *rv) {
@@ -953,8 +882,8 @@ TVM_REGISTER_GLOBAL("aicore_MatMul").set_body([](TVMArgs args, TVMRetValue *rv) 
   IterVar reduce_ki = air::reduce_axis(Range(0, k[1]), "ki");
   Array<IterVar> reduces = {reduce_ko, reduce_ki};
 
-  auto fcompute = [&left_matrix, &right_matrix, &transpose_a, &transpose_b,
-                   &reduces, &output_shape, &Mmad](const Array<Var> &indices) {
+  auto fcompute = [&left_matrix, &right_matrix, &transpose_a, &transpose_b, &reduces, &output_shape,
+                   &Mmad](const Array<Var> &indices) {
     Array<Expr> left_indice = {reduces[0], indices[1], indices[2], reduces[1]};
     Array<Expr> right_indice = {indices[0], reduces[0], reduces[1], indices[3]};
     if (transpose_a) {
