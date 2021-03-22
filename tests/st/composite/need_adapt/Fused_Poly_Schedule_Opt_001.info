@@ -1,0 +1,707 @@
+{
+    "composite": true,
+    "input_desc": [
+        [
+            {
+                "data_type": "float32",
+                "shape": [
+                    32,
+                    16,
+                    56,
+                    56,
+                    16
+                ],
+                "tensor_name": "input_14"
+            }
+        ],
+        [
+            {
+                "data_type": "float32",
+                "shape": [
+                    1,
+                    16,
+                    1,
+                    1,
+                    16
+                ],
+                "tensor_name": "input_0"
+            }
+        ],
+        [
+            {
+                "data_type": "float32",
+                "shape": [
+                    1,
+                    16,
+                    1,
+                    1,
+                    16
+                ],
+                "tensor_name": "input_3"
+            }
+        ],
+        [
+            {
+                "data_type": "float32",
+                "shape": [
+                    1,
+                    16,
+                    1,
+                    1,
+                    16
+                ],
+                "tensor_name": "input_9"
+            }
+        ],
+        [
+            {
+                "data_type": "float32",
+                "shape": [
+                    1,
+                    16,
+                    1,
+                    1,
+                    16
+                ],
+                "tensor_name": "input_12"
+            }
+        ]
+    ],
+    "op": "Fused_Poly_Schedule_Opt_001",
+    "op_desc": [
+        {
+            "attr": [
+                {
+                    "name": "x_shape",
+                    "value": [
+                        256
+                    ]
+                },
+                {
+                    "name": "y_shape",
+                    "value": [
+                        1
+                    ]
+                },
+                {
+                    "name": "data_format",
+                    "value": [
+                        "NC1HWC0",
+                        "NC1HWC0"
+                    ]
+                }
+            ],
+            "impl_path": "",
+            "input_desc": [
+                [
+                    {
+                        "data_type": "float32",
+                        "name": "x",
+                        "shape": [
+                            1,
+                            16,
+                            1,
+                            1,
+                            16
+                        ],
+                        "tensor_name": "input_0"
+                    }
+                ],
+                [
+                    {
+                        "data_type": "float32",
+                        "name": "y",
+                        "shape": [
+                            1
+                        ],
+                        "tensor_name": "input_1",
+                        "value": 9.964923265215475e-06
+                    }
+                ]
+            ],
+            "name": "Mul",
+            "output_desc": [
+                {
+                    "data_type": "float32",
+                    "name": "output",
+                    "shape": [
+                        1,
+                        16,
+                        1,
+                        1,
+                        16
+                    ],
+                    "tensor_name": "output_0_0"
+                }
+            ]
+        },
+        {
+            "attr": [
+                {
+                    "name": "x_shape",
+                    "value": [
+                        256
+                    ]
+                },
+                {
+                    "name": "y_shape",
+                    "value": [
+                        256
+                    ]
+                },
+                {
+                    "name": "data_format",
+                    "value": [
+                        "NC1HWC0",
+                        "NC1HWC0"
+                    ]
+                }
+            ],
+            "impl_path": "",
+            "input_desc": [
+                [
+                    {
+                        "data_type": "float32",
+                        "name": "x",
+                        "shape": [
+                            1,
+                            16,
+                            1,
+                            1,
+                            16
+                        ],
+                        "tensor_name": "output_0_0"
+                    }
+                ],
+                [
+                    {
+                        "data_type": "float32",
+                        "name": "y",
+                        "shape": [
+                            1,
+                            16,
+                            1,
+                            1,
+                            16
+                        ],
+                        "tensor_name": "output_0_0"
+                    }
+                ]
+            ],
+            "name": "Mul",
+            "output_desc": [
+                {
+                    "data_type": "float32",
+                    "name": "output",
+                    "shape": [
+                        1,
+                        16,
+                        1,
+                        1,
+                        16
+                    ],
+                    "tensor_name": "output_0_1"
+                }
+            ]
+        },
+        {
+            "attr": [
+                {
+                    "name": "x_shape",
+                    "value": [
+                        256
+                    ]
+                },
+                {
+                    "name": "y_shape",
+                    "value": [
+                        1
+                    ]
+                },
+                {
+                    "name": "data_format",
+                    "value": [
+                        "NC1HWC0",
+                        "NC1HWC0"
+                    ]
+                }
+            ],
+            "impl_path": "",
+            "input_desc": [
+                [
+                    {
+                        "data_type": "float32",
+                        "name": "x",
+                        "shape": [
+                            1,
+                            16,
+                            1,
+                            1,
+                            16
+                        ],
+                        "tensor_name": "input_3"
+                    }
+                ],
+                [
+                    {
+                        "data_type": "float32",
+                        "name": "y",
+                        "shape": [
+                            1
+                        ],
+                        "tensor_name": "input_1",
+                        "value": 9.964923265215475e-06
+                    }
+                ]
+            ],
+            "name": "Mul",
+            "output_desc": [
+                {
+                    "data_type": "float32",
+                    "name": "output",
+                    "shape": [
+                        1,
+                        16,
+                        1,
+                        1,
+                        16
+                    ],
+                    "tensor_name": "output_0_2"
+                }
+            ]
+        },
+        {
+            "attr": null,
+            "impl_path": "",
+            "input_desc": [
+                [
+                    {
+                        "data_type": "float32",
+                        "name": "x",
+                        "shape": [
+                            1,
+                            16,
+                            1,
+                            1,
+                            16
+                        ],
+                        "tensor_name": "output_0_2"
+                    }
+                ],
+                [
+                    {
+                        "data_type": "float32",
+                        "name": "y",
+                        "shape": [
+                            1,
+                            16,
+                            1,
+                            1,
+                            16
+                        ],
+                        "tensor_name": "output_0_1"
+                    }
+                ]
+            ],
+            "name": "Sub",
+            "output_desc": [
+                {
+                    "data_type": "float32",
+                    "name": "output",
+                    "shape": [
+                        1,
+                        16,
+                        1,
+                        1,
+                        16
+                    ],
+                    "tensor_name": "output_0_3"
+                }
+            ]
+        },
+        {
+            "attr": null,
+            "impl_path": "",
+            "input_desc": [
+                [
+                    {
+                        "data_type": "float32",
+                        "name": "x",
+                        "shape": [
+                            1,
+                            16,
+                            1,
+                            1,
+                            16
+                        ],
+                        "tensor_name": "output_0_3"
+                    }
+                ],
+                [
+                    {
+                        "data_type": "float32",
+                        "name": "y",
+                        "shape": [
+                            1
+                        ],
+                        "tensor_name": "input_7",
+                        "value": 9.999999747378752e-06
+                    }
+                ]
+            ],
+            "name": "TensorAdd",
+            "output_desc": [
+                {
+                    "data_type": "float32",
+                    "name": "output",
+                    "shape": [
+                        1,
+                        16,
+                        1,
+                        1,
+                        16
+                    ],
+                    "tensor_name": "output_0_4"
+                }
+            ]
+        },
+        {
+            "attr": null,
+            "impl_path": "",
+            "input_desc": [
+                [
+                    {
+                        "data_type": "float32",
+                        "name": "x",
+                        "shape": [
+                            1,
+                            16,
+                            1,
+                            1,
+                            16
+                        ],
+                        "tensor_name": "output_0_4"
+                    }
+                ]
+            ],
+            "name": "Sqrt",
+            "output_desc": [
+                {
+                    "data_type": "float32",
+                    "name": "output",
+                    "shape": [
+                        1,
+                        16,
+                        1,
+                        1,
+                        16
+                    ],
+                    "tensor_name": "output_0_5"
+                }
+            ]
+        },
+        {
+            "attr": null,
+            "impl_path": "",
+            "input_desc": [
+                [
+                    {
+                        "data_type": "float32",
+                        "name": "x",
+                        "shape": [
+                            1,
+                            16,
+                            1,
+                            1,
+                            16
+                        ],
+                        "tensor_name": "input_9"
+                    }
+                ],
+                [
+                    {
+                        "data_type": "float32",
+                        "name": "y",
+                        "shape": [
+                            1,
+                            16,
+                            1,
+                            1,
+                            16
+                        ],
+                        "tensor_name": "output_0_5"
+                    }
+                ]
+            ],
+            "name": "RealDiv",
+            "output_desc": [
+                {
+                    "data_type": "float32",
+                    "name": "output",
+                    "shape": [
+                        1,
+                        16,
+                        1,
+                        1,
+                        16
+                    ],
+                    "tensor_name": "output_0_6"
+                }
+            ]
+        },
+        {
+            "attr": [
+                {
+                    "name": "x_shape",
+                    "value": [
+                        256
+                    ]
+                },
+                {
+                    "name": "y_shape",
+                    "value": [
+                        256
+                    ]
+                },
+                {
+                    "name": "data_format",
+                    "value": [
+                        "NC1HWC0",
+                        "NC1HWC0"
+                    ]
+                }
+            ],
+            "impl_path": "",
+            "input_desc": [
+                [
+                    {
+                        "data_type": "float32",
+                        "name": "x",
+                        "shape": [
+                            1,
+                            16,
+                            1,
+                            1,
+                            16
+                        ],
+                        "tensor_name": "output_0_6"
+                    }
+                ],
+                [
+                    {
+                        "data_type": "float32",
+                        "name": "y",
+                        "shape": [
+                            1,
+                            16,
+                            1,
+                            1,
+                            16
+                        ],
+                        "tensor_name": "output_0_0"
+                    }
+                ]
+            ],
+            "name": "Mul",
+            "output_desc": [
+                {
+                    "data_type": "float32",
+                    "name": "output",
+                    "shape": [
+                        1,
+                        16,
+                        1,
+                        1,
+                        16
+                    ],
+                    "tensor_name": "output_0_7"
+                }
+            ]
+        },
+        {
+            "attr": null,
+            "impl_path": "",
+            "input_desc": [
+                [
+                    {
+                        "data_type": "float32",
+                        "name": "x",
+                        "shape": [
+                            1,
+                            16,
+                            1,
+                            1,
+                            16
+                        ],
+                        "tensor_name": "input_12"
+                    }
+                ],
+                [
+                    {
+                        "data_type": "float32",
+                        "name": "y",
+                        "shape": [
+                            1,
+                            16,
+                            1,
+                            1,
+                            16
+                        ],
+                        "tensor_name": "output_0_7"
+                    }
+                ]
+            ],
+            "name": "Sub",
+            "output_desc": [
+                {
+                    "data_type": "float32",
+                    "name": "output",
+                    "shape": [
+                        1,
+                        16,
+                        1,
+                        1,
+                        16
+                    ],
+                    "tensor_name": "output_0_8"
+                }
+            ]
+        },
+        {
+            "attr": [
+                {
+                    "name": "x_shape",
+                    "value": [
+                        256
+                    ]
+                },
+                {
+                    "name": "y_shape",
+                    "value": [
+                        32,
+                        256,
+                        56,
+                        56
+                    ]
+                },
+                {
+                    "name": "data_format",
+                    "value": [
+                        "NC1HWC0",
+                        "NC1HWC0"
+                    ]
+                }
+            ],
+            "impl_path": "",
+            "input_desc": [
+                [
+                    {
+                        "data_type": "float32",
+                        "name": "x",
+                        "shape": [
+                            1,
+                            16,
+                            1,
+                            1,
+                            16
+                        ],
+                        "tensor_name": "output_0_6"
+                    }
+                ],
+                [
+                    {
+                        "data_type": "float32",
+                        "name": "y",
+                        "shape": [
+                            32,
+                            16,
+                            56,
+                            56,
+                            16
+                        ],
+                        "tensor_name": "input_14"
+                    }
+                ]
+            ],
+            "name": "Mul",
+            "output_desc": [
+                {
+                    "data_type": "float32",
+                    "name": "output",
+                    "shape": [
+                        32,
+                        16,
+                        56,
+                        56,
+                        16
+                    ],
+                    "tensor_name": "output_0_9"
+                }
+            ]
+        },
+        {
+            "attr": null,
+            "impl_path": "",
+            "input_desc": [
+                [
+                    {
+                        "data_type": "float32",
+                        "name": "x",
+                        "shape": [
+                            32,
+                            16,
+                            56,
+                            56,
+                            16
+                        ],
+                        "tensor_name": "output_0_9"
+                    }
+                ],
+                [
+                    {
+                        "data_type": "float32",
+                        "name": "y",
+                        "shape": [
+                            1,
+                            16,
+                            1,
+                            1,
+                            16
+                        ],
+                        "tensor_name": "output_0_8"
+                    }
+                ]
+            ],
+            "name": "TensorAdd",
+            "output_desc": [
+                {
+                    "data_type": "float32",
+                    "name": "output",
+                    "shape": [
+                        32,
+                        16,
+                        56,
+                        56,
+                        16
+                    ],
+                    "tensor_name": "output_0_10"
+                }
+            ]
+        }
+    ],
+    "output_desc": [
+        {
+            "data_type": "float32",
+            "shape": [
+                32,
+                16,
+                56,
+                56,
+                16
+            ],
+            "tensor_name": "output_0_10"
+        }
+    ],
+    "platform": "AKG",
+    "process": "aicore"
+}
