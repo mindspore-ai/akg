@@ -50,22 +50,23 @@ write_checksum()
     done
 }
 
-download_lib()
+acquire_lib_url()
 {
-    uname_info=`uname -a | tr '[A-Z]' '[a-z]'`
+    os_info=`cat /etc/os-release | grep '^NAME=' | tr '[A-Z]' '[a-z]'`
     os_name=""
-    arch_name=""
-    if [[ "${uname_info}" =~ "ubuntu" ]]; then
+    if [[ "${os_info}" =~ "ubuntu" ]]; then
         os_name="ubuntu"
-    elif [[ "${uname_info}" =~ "euleros" ]]; then
+    elif [[ "${os_info}" =~ "euleros" ]]; then
         os_name="euleros"
-    elif [[ "${uname_info}" =~ "centos" ]]; then
+    elif [[ "${os_info}" =~ "centos" ]]; then
         os_name="centos"
     fi
 
-    if [[ "${uname_info}" =~ "aarch64" ]]; then
+    arch_info=`arch | tr '[A-Z]' '[a-z]'`
+    arch_name=""
+    if [[ "${arch_info}" =~ "aarch64" ]]; then
         arch_name="aarch64"
-    elif [[ "${uname_info}" =~ "x86_64" ]]; then
+    elif [[ "${arch_info}" =~ "x86" ]]; then
         arch_name="x86"
     fi
 
@@ -73,32 +74,7 @@ download_lib()
     url_prefix="https://repo.mindspore.cn/public/ms-incubator/akg-binary/version"
     lib_mark="202103/20210318/master_20210318142553_3e77f3a799ca87c23f1a906eaad5ec4c1f78bc95"
     lib_url="${url_prefix}/${lib_mark}/lib/${os_arch}/libakg_ext.a"
-    hash_url="${url_prefix}/${lib_mark}/lib/${os_arch}/libakg_ext.a.sha256"
-
-    if [ ! -d ${BUILD_DIR} ]; then
-      mkdir -pv ${BUILD_DIR}
-    fi
-
-    # Download libakg_ext.a.sha256
-    wget -P ${BUILD_DIR} --waitretry=10 --tries=3 ${hash_url}
-    if [ $? -ne 0 ]; then
-      echo "Fail to download ${hash_url}"
-      return 1
-    fi
-    # Download libakg_ext.a
-    wget -P ${BUILD_DIR} --waitretry=10 --tries=3 ${lib_url}
-    if [ $? -ne 0 ]; then
-      echo "Fail to download ${lib_url}"
-      return 1
-    fi
-
-    # Check hash
-    cur_hash=`sha256sum -b ${BUILD_DIR}/libakg_ext.a | awk '{print $1}'`
-    orig_hash=`grep libakg_ext.a ${BUILD_DIR}/libakg_ext.a.sha256 | awk '{print $1}'`
-    if [ "${cur_hash}" != "${orig_hash}" ]; then
-      echo "Hash check failed!"
-      return 1
-    fi
+    echo "${lib_url}"
 }
 
 if [ ! -n "$1" ]; then
@@ -130,10 +106,7 @@ do
         t)
             ;;
         a)
-            download_lib
-            if [ $? -ne 0 ]; then
-              exit 1
-            fi
+            acquire_lib_url
             exit 0
             ;;
         *)
