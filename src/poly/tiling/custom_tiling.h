@@ -80,6 +80,24 @@ class CustomTilingNode : public Node {
    * default is 0.5 which is reserved for double buffer*/
   double mem_ratio;
 
+  /*! \brief minimal thread binding factor on gpu, greater than 0*/
+  Array<Expr> thread_min;
+
+  /*! \brief maximal thread binding factor on gpu*/
+  Array<Expr> thread_max;
+
+  /*! \brief constraint thread binding factor % thread_mod == 0*/
+  Array<Expr> thread_mod;
+
+    /*! \brief minimal block binding factor on gpu, greater than 0*/
+  Array<Expr> block_min;
+
+  /*! \brief maximal block binding factor on gpu*/
+  Array<Expr> block_max;
+
+  /*! \brief constraint block binding factor % block_mod == 0*/
+  Array<Expr> block_mod;
+
   void VisitAttrs(AttrVisitor *v) {
     v->Visit("tile_level", &tile_level);
     v->Visit("tile_mode", &tile_mode);
@@ -97,6 +115,12 @@ class CustomTilingNode : public Node {
     v->Visit("priority", &priority);
     v->Visit("expansion", &expansion);
     v->Visit("mem_ratio", &mem_ratio);
+    v->Visit("thread_min", &thread_min);
+    v->Visit("thread_max", &thread_max);
+    v->Visit("thread_mod", &thread_mod);
+    v->Visit("block_min", &block_min);
+    v->Visit("block_max", &block_max);
+    v->Visit("block_mod", &block_mod);
   }
 
   static constexpr const char *_type_key = "CustomTilingNode";

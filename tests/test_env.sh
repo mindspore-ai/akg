@@ -25,7 +25,7 @@ else
   TVM_ROOT="${AKG_DIR}/third_party/incubator-tvm"
 
   export LD_LIBRARY_PATH=${AKG_BUILD_DIR}:${LD_LIBRARY_PATH}
-  export PYTHONPATH=${TVM_ROOT}/python:${TVM_ROOT}/topi:${TVM_ROOT}/topi/python:${AKG_DIR}:${AKG_DIR}/python:${PYTHONPATH}
+  export PYTHONPATH=${TVM_ROOT}/python:${TVM_ROOT}/topi:${TVM_ROOT}/topi/python:${AKG_DIR}:${AKG_DIR}/tests/common:${AKG_DIR}/python:${AKG_DIR}/tests/operators/gpu:${AKG_DIR}/tests/fuzz/tune_for_gpu:${PYTHONPATH}
   if [ $# -eq 1 ] && [ $1 = "gpu" ]; then
     export LD_LIBRARY_PATH=/usr/local/cuda/extras/CUPTI/lib64:${LD_LIBRARY_PATH}
   fi

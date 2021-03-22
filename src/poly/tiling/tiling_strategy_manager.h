@@ -284,8 +284,6 @@ class GemmStrategy : public TilingStrategy {
   ~GemmStrategy() {}
   void AddNpuConstraint();
   void AddGpuConstraint();
-
-  std::string interested_attr_key = AT_GEMM;
 };
 
 class GpuStrategy : public TilingStrategy {
@@ -306,6 +304,8 @@ class GpuStrategy : public TilingStrategy {
   };
   void AddNpuConstraint();
   void AddGpuConstraint();
+  std::vector<TileAxis::MappingConstraint> thread_binding_spaces_;  // [thread.x, thread.y, thread.z]
+  std::vector<TileAxis::MappingConstraint> block_binding_spaces_;  // [block.x, block.y, block.z]
 
  private:
   void DetermineTemplate();
@@ -325,6 +325,8 @@ class GpuStrategy : public TilingStrategy {
 
   // Step 1. Collect axes and sort them from inner to outer
   void BuildAxesQueue();
+
+  void ApplyCustomConstraint();
 
   /*
    * Step 2. Tile inner axes first and map them to threads, and then tile outer axis and map the rest of them to blocks.
@@ -357,6 +359,7 @@ class GpuStrategy : public TilingStrategy {
   int64_t min_elem_for_io_bound_ = 2;
   size_t depth_{0};
   bool need_reverse_{false};
+  bool reverse_binding_{false};
   int64_t fused_size_{1};
   std::unordered_map<int, std::string> template_map_ = {{0, "DEFAULT"},   {1, "PURE_ELEM"},    {2, "BROADCAST_OP"},
                                                         {3, "REDUCTION"}, {4, "ALL_REDUCE"},   {5, "BITWISE_REDUCTION"},
@@ -378,7 +381,7 @@ class MulticoreStrategy {
 
 class TilingPriorityScorer {
  public:
-  TilingPriorityScorer(TilingAnalyzer &analyzer) : analyzer_(analyzer), logger_(analyzer.GetTileLogger()) {}
+ TilingPriorityScorer(TilingAnalyzer &analyzer) : analyzer_(analyzer), logger_(analyzer.GetTileLogger()) {}
   ~TilingPriorityScorer() {}
 
   /*

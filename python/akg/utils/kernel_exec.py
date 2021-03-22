@@ -35,6 +35,7 @@ import numpy as np
 
 import akg
 from akg.build_module import help_tiling_level
+from akg import backend as cce
 import akg.tvm
 from akg.tvm import autotvm
 from akg.tvm import rpc
@@ -87,7 +88,6 @@ def debug_mode(debug_flag):
     if debug_flag == 1:
         pass_list.append((0, ir_pass.inject_dma_intrin))
     return pass_list
-
 
 def func_time_required(func_name):
     """Checking the Time Required for Function Running."""
@@ -467,7 +467,7 @@ def mod_launch_air(mod, args, outputs):
     return None
 
 @func_time_required
-def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=0, expect=None):
+def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=0, expect=None, repeat_time=400):
     """
     unified run CCE kernel api.
 
@@ -492,7 +492,7 @@ def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=0, expect=None)
         if not tuning:
             return out_list[0] if len(out_list) == 1 else tuple(out_list)
         else:
-            cycles = get_gpu_cycles(mod, *mod_args, device_id=device_id, save_log=True)
+            cycles = get_gpu_cycles(mod, *mod_args, device_id=device_id, save_log=True, repeat_time=repeat_time)
             return out_list[0] if len(out_list) == 1 else tuple(out_list), {'run_time': cycles}
 
     stat_info = {}
@@ -996,7 +996,6 @@ def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
     level = attrs.get("help_tiling") if attrs and "help_tiling" in attrs else None
     if tuning or (level is not None and level > help_tiling_level['None']):
         return gen_spaces_dim_key(op_func, args, s, op_var, kernel_name, attrs, polyhedral, tuning, target)
-
     mode = get_runtime_mode()
     if mode == "cpu":
         mod = akg.tvm.build(s, op_var, "llvm")
@@ -1069,12 +1068,12 @@ def get_device_id():
         logging.error(e)
         return 0
 
-def get_gpu_cycles(mod, *mod_args, device_id=0, save_log=False):
+def get_gpu_cycles(mod, *mod_args, device_id=0, save_log=False, repeat_time=400):
     "get gpu profiling cycles."
     func = tvm.get_global_func('GPUProfilerInit')
     func("")
     from akg.utils.result_analysis import gpu_profiling
-    gpu_profiling(mod, *mod_args, repeat_time=400, device_id=device_id)
+    gpu_profiling(mod, *mod_args, repeat_time=repeat_time, device_id=device_id)
     func = tvm.get_global_func('GPUProfilerStop')
     a = func()
     return int(a)
