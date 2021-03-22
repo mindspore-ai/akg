@@ -64,7 +64,7 @@ inline int64_t GetAlignBytes(const int64_t dtype) {
   return (ALIGN_BYTES + dtype - 1) / dtype;
 }
 
-inline int64_t GetMaxAlignBytes(std::unordered_map<std::string, std::vector<int>> dtypes) {
+inline int64_t GetMinBytes(std::unordered_map<std::string, std::vector<int>> dtypes) {
   int64_t min_byte = -1;
   for (const auto &it : dtypes) {
     if (it.second.empty()) {
@@ -75,7 +75,11 @@ inline int64_t GetMaxAlignBytes(std::unordered_map<std::string, std::vector<int>
       min_byte = min_elem;
     }
   }
-  return GetAlignBytes(min_byte);
+  return min_byte;
+}
+
+inline int64_t GetMaxAlignBytes(std::unordered_map<std::string, std::vector<int>> dtypes) {
+  return GetAlignBytes(GetMinBytes(dtypes));
 }
 
 inline Expr CastToExpr(const std::string &value) {
@@ -134,6 +138,12 @@ constexpr auto AT_DYNAMIC_BOUND = "DYNAMIC_BOUND";
 constexpr auto AT_MOD = "MOD";
 constexpr auto AT_CAST = "CAST";
 constexpr auto AT_MEM_RATIO = "MEM_RATIO";
+constexpr auto AT_THREAD_MIN = "THREAD_MIN";
+constexpr auto AT_THREAD_MAX = "THREAD_MAX";
+constexpr auto AT_THREAD_MOD = "THREAD_MOD";
+constexpr auto AT_BLOCK_MIN = "BLOCK_MIN";
+constexpr auto AT_BLOCK_MAX = "BLOCK_MAX";
+constexpr auto AT_BLOCK_MOD = "BLOCK_MOD";
 
 class TilingAnalyzer;
 
@@ -233,12 +243,12 @@ class TilingAnalyzer {
         sch_(sch),
         scop_info_(scop_info),
         is_retry_(!global_attrs.GetStringAttr(kErrorInfo, "").empty()) {
-    if (scop_info.mmu_info_.IsGemm()) {
-      op_type_ = GEMM_OP;
-    } else if (scop_info.mmu_info_.IsConv()) {
-      op_type_ = CONV_OP;
-    } else {
-      op_type_ = VECTOR_OP;
+          if (scop_info.mmu_info_.IsGemm()) {
+            op_type_ = GEMM_OP;
+          } else if (scop_info.mmu_info_.IsConv()) {
+            op_type_ = CONV_OP;
+          } else {
+            op_type_ = VECTOR_OP;
     }
   }
 
@@ -292,7 +302,7 @@ class TilingAnalyzer {
     CHECK(logger_);
     return *(logger_.get());
   }
-
+  void UpdateBindingSpace(TileAxis::MappingConstraint constraint) { binding_spaces_.emplace_back(constraint); }
   Stmt body_;
   Binds &binds_;
   isl::schedule sch_;
@@ -306,9 +316,8 @@ class TilingAnalyzer {
 
   std::unordered_map<TilingAnalyzer::BufferEntry *, std::pair<int, int>> buffer_usage_timetable_;
   std::unordered_map<std::string, std::shared_ptr<BufferEntry>> buf_info_;
-
   bool is_retry_{false};
-
+  std::vector<TileAxis::MappingConstraint> binding_spaces_;  // [thread.x[min, max, mod], thread.y, thread.z, block.x, block.y, block.z]
  private:
   void AddTilingConstraints();
   void AddPostTilingConstraints();

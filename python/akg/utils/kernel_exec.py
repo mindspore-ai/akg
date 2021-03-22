@@ -35,6 +35,7 @@ import numpy as np
 
 import akg
 from akg.build_module import help_tiling_level
+from akg import backend as cce
 import akg.tvm
 from akg.tvm import autotvm
 from akg.tvm import rpc
@@ -87,7 +88,6 @@ def debug_mode(debug_flag):
     if debug_flag == 1:
         pass_list.append((0, ir_pass.inject_dma_intrin))
     return pass_list
-
 
 def func_time_required(func_name):
     """Checking the Time Required for Function Running."""
@@ -467,7 +467,7 @@ def mod_launch_air(mod, args, outputs):
     return None
 
 @func_time_required
-def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=0, expect=None):
+def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=0, expect=None, repeat_time=400):
     """
     unified run CCE kernel api.
 
@@ -492,7 +492,7 @@ def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=0, expect=None)
         if not tuning:
             return out_list[0] if len(out_list) == 1 else tuple(out_list)
         else:
-            cycles = get_gpu_cycles(mod, *mod_args, device_id=device_id, save_log=True)
+            cycles = get_gpu_cycles(mod, *mod_args, device_id=device_id, save_log=True, repeat_time=repeat_time)
             return out_list[0] if len(out_list) == 1 else tuple(out_list), {'run_time': cycles}
 
     stat_info = {}
@@ -797,19 +797,19 @@ def gen_shape_var(attrs_params, shape_params, shape_var):
         [shape_var.append(i) for i in attrs_params if i not in shape_var]
     [shape_var.append(i) for i in shape_params if i not in shape_var]
 
-def gen_spaces_dim_key(op_func, args, s, op_var, kernel_name, attrs, polyhedral, tuning, target):
+def gen_spaces_dim_key(op_func, s, op_var, kernel_name, attrs, polyhedral, tuning, target, build_args):
     """
     Generate tiling parameter.
 
     Args:
         op_func (function returning an op or (op, [op_vars])): The op build function.
-        args (Union[list, tuple]): list or tuple of numpy array.
         s (dict): schedule of op.
         op_var (list): the akg.tvm.tensor of inputs and outputs for op.
         kernel_name (str): name of op.
         attrs (dict): tiling parameter.
         polyhedral (bool): True by default.
         tuning (bool): False by default.
+        build_args: args from op_build.
 
     Return:
         tiling parameter.
@@ -818,16 +818,16 @@ def gen_spaces_dim_key(op_func, args, s, op_var, kernel_name, attrs, polyhedral,
     if op_func.__name__ in ct_util.set_dim_func_map.keys():
         func_ = ct_util.set_dim_func_map[op_func.__name__]
         if inspect.isfunction(func_):
-            set_dim_key = func_(*args)[1]
+            set_dim_key = func_(*build_args)[1]
     elif op_func.__name__ in ct_util.gen_key_func_map.keys():
         func_ = ct_util.gen_key_func_map[op_func.__name__]
         if inspect.isfunction(func_):
-            set_dim_key = func_(*args)
+            set_dim_key = func_(*build_args)
     with akg.build_config(dump_pass_ir=True):
         spaces = akg.lower(s, op_var, name=kernel_name, attrs=attrs, polyhedral=polyhedral, tuning=tuning,
                            target=target)
         if set_dim_key == "":
-            set_dim_key = str(args)
+            set_dim_key = str(build_args)
         return spaces, set_dim_key
 
 def create_gpu_mod(sch_tmpl, s, op_func, op_var, shape_var, kernel_name, attrs, polyhedral, binds, dump_ir, dump_code,
@@ -989,13 +989,13 @@ def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
         compute_func(s)
         polyhedral = False
 
-    target = CCE
+    target = None
     if attrs and attrs.get("target", "cce") == CUDA:
         target = CUDA
 
     level = attrs.get("help_tiling") if attrs and "help_tiling" in attrs else None
     if tuning or (level is not None and level > help_tiling_level['None']):
-        return gen_spaces_dim_key(op_func, args, s, op_var, kernel_name, attrs, polyhedral, tuning, target)
+        return gen_spaces_dim_key(op_func, s, op_var, kernel_name, attrs, polyhedral, tuning, target, args)
 
     mode = get_runtime_mode()
     if mode == "cpu":
@@ -1069,12 +1069,12 @@ def get_device_id():
         logging.error(e)
         return 0
 
-def get_gpu_cycles(mod, *mod_args, device_id=0, save_log=False):
+def get_gpu_cycles(mod, *mod_args, device_id=0, save_log=False, repeat_time=400):
     "get gpu profiling cycles."
     func = tvm.get_global_func('GPUProfilerInit')
     func("")
     from akg.utils.result_analysis import gpu_profiling
-    gpu_profiling(mod, *mod_args, repeat_time=400, device_id=device_id)
+    gpu_profiling(mod, *mod_args, repeat_time=repeat_time, device_id=device_id)
     func = tvm.get_global_func('GPUProfilerStop')
     a = func()
     return int(a)

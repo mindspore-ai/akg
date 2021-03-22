@@ -70,15 +70,33 @@ class TileConstraint(Enum):
     SET_EXPANSION = "SET_EXPANSION"
     SET_MEM_RATIO = "SET_MEM_RATIO"
     SET_AXIS_INFO = "SET_AXIS_INFO"
+    THREAD_MIN = "THREAD_MIN"
+    THREAD_MAX = "THREAD_MAX"
+    THREAD_MOD = "THREAD_MOD"
+    BLOCK_MIN = "BLOCK_MIN"
+    BLOCK_MAX = "BLOCK_MAX"
+    BLOCK_MOD = "BLOCK_MOD"
 
 
-@check_input_type((double, float, int), TileConstraint, TileLevel)
+@check_input_type((double, float, int, list), TileConstraint, TileLevel)
 def modify_common_constraints(value, constraint, level=TileLevel.C1):
     """api for dsl to modify some default constraint used in auto tiling."""
     if constraint not in TileConstraint:
         raise ValueError("Tile constraints must be chosen from {0}".format(TileConstraint))
     if constraint == TileConstraint.SET_MEM_RATIO:
         return create_custom_tiling_node(TileMode.COMMON, tile_level=level, mem_ratio=double(value))
+    if constraint == TileConstraint.THREAD_MIN:
+        return create_custom_tiling_node(TileMode.COMMON, thread_min=value)
+    if constraint == TileConstraint.THREAD_MAX:
+        return create_custom_tiling_node(TileMode.COMMON, thread_max=value)
+    if constraint == TileConstraint.THREAD_MOD:
+        return create_custom_tiling_node(TileMode.COMMON, thread_mod=value)
+    if constraint == TileConstraint.BLOCK_MIN:
+        return create_custom_tiling_node(TileMode.COMMON, block_min=value)
+    if constraint == TileConstraint.BLOCK_MAX:
+        return create_custom_tiling_node(TileMode.COMMON, block_max=value)
+    if constraint == TileConstraint.BLOCK_MOD:
+        return create_custom_tiling_node(TileMode.COMMON, block_mod=value)
     raise TypeError("Constraint {} is not supported in this api, please use other api"
                     .format(constraint.value))
 
@@ -233,7 +251,13 @@ def create_custom_tiling_node(tile_mode,
                               axis_info=DEFAULT_STRING,
                               priority=DEFAULT_VALUE,
                               expansion=DEFAULT_VALUE,
-                              mem_ratio=double(DEFAULT_VALUE)):
+                              mem_ratio=double(DEFAULT_VALUE),
+                              thread_min=[],
+                              thread_max=[],
+                              thread_mod=[],
+                              block_min=[],
+                              block_max=[],
+                              block_mod=[]):
     """default method to create custom tiling node, all values are default except tile mode."""
 
     tile_min = to_tvm_type(tile_min, "tile_min")
@@ -257,7 +281,13 @@ def create_custom_tiling_node(tile_mode,
                              axis_info=akg.tvm.expr.StringImm(axis_info),
                              priority=priority,
                              expansion=expansion,
-                             mem_ratio=mem_ratio)
+                             mem_ratio=mem_ratio,
+                             thread_min=thread_min,
+                             thread_max=thread_max,
+                             thread_mod=thread_mod,
+                             block_min=block_min,
+                             block_max=block_max,
+                             block_mod=block_mod)
 
 
 def template_nc1hwc0(tensor_name, level):

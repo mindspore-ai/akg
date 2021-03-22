@@ -28,6 +28,11 @@ class TileSpaceNode : public Node {
   air::runtime::NDArray c1_tile_mod_table;
   air::runtime::NDArray c0_tile_mod_table;
   air::runtime::NDArray tiling_candidate;
+  air::runtime::NDArray gpu_thread_range_table;
+  air::runtime::NDArray gpu_block_range_table;
+  air::runtime::NDArray gpu_thread_mod_table;
+  air::runtime::NDArray gpu_block_mod_table;
+
 
   void VisitAttrs(AttrVisitor *v) {
     v->Visit("index_table", &index_table);
@@ -36,6 +41,11 @@ class TileSpaceNode : public Node {
     v->Visit("c1_tile_mod_table", &c1_tile_mod_table);
     v->Visit("c0_tile_mod_table", &c0_tile_mod_table);
     v->Visit("tiling_candidate", &tiling_candidate);
+    v->Visit("gpu_thread_range_table", &gpu_thread_range_table);
+    v->Visit("gpu_block_range_table", &gpu_block_range_table);
+    v->Visit("gpu_thread_mod_table", &gpu_thread_mod_table);
+    v->Visit("gpu_block_mod_table", &gpu_block_mod_table);
+
   }
   static constexpr const char *_type_key = "TileSpace";
   TVM_DECLARE_NODE_TYPE_INFO(TileSpaceNode, Node);
