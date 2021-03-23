@@ -26,7 +26,7 @@ project(akg C CXX)
 set(AKG_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 set(TVM_DIR "${AKG_SOURCE_DIR}/third_party/incubator-tvm")
 
-if(NOT CMAKE_SYSTEM_NAME MATCHES "Windows" AND NOT USE_KC_AIR)
+if(NOT CMAKE_SYSTEM_NAME MATCHES "Windows" AND NOT USE_KC_AIR AND NOT USE_CCE_PROFILING)
   add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=0)
 endif()
 
@@ -72,7 +72,7 @@ if(NOT USE_CUDA)
   else()
     if(EXISTS ${LIB_PATH2})  # Search libakg_ext.a in akg/build/
       set(AKG_EXTEND_FILE ${LIB_PATH2})
-    else()  # Download libakg_ext.a to akg/build/
+    elseif(NOT USE_KC_AIR AND NOT USE_CCE_PROFILING)  # Download libakg_ext.a to akg/build/
       execute_process(COMMAND bash ${AKG_SOURCE_DIR}/build.sh -a
               WORKING_DIRECTORY ${AKG_SOURCE_DIR}
               OUTPUT_VARIABLE OUTPUT_URL
