@@ -900,12 +900,15 @@ TVM_REGISTER_GLOBAL("aicore_MatMul").set_body([](TVMArgs args, TVMRetValue *rv) 
   auto name = "T_matmul_" + left_matrix->op->name + "_" + right_matrix->op->name;
 
   // set compute attrs
-  auto set_compute_attrs_zN = [&left_matrix, &right_matrix, &inputs, transpose_a, transpose_b]() {
+  auto set_compute_attrs_zN = [&left_matrix, &right_matrix, &inputs, transpose_a, transpose_b, attrs]() {
     Map<std::string, NodeRef> com_attrs;
 
     com_attrs.Set("pragma_gemm_data", Expr(left_matrix->op->name));
     com_attrs.Set("pragma_gemm_weight", Expr(right_matrix->op->name));
     com_attrs.Set("pragma_conv_bypass_l1", Expr(0));
+    if (attrs.count("bypass")) {
+      com_attrs.Set("pragma_conv_bypass_l1", Downcast<Expr>(attrs["bypass"]));
+    }
 
     std::string data_trans("Y");
     std::string data_trans_block("Y");

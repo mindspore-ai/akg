@@ -532,12 +532,20 @@ def _get_repository_file_path(file):
             raise FileNotFoundError("Can not find {} in directory {} and {}".format(file, pwd, pwd + "/../config"))
     return path
 
-def _build_to_func(desc_s, desc_d, attr=None, use_repo=True):
+def _set_compute_attrs(desc_d_in, attr):
+    desc_d = desc_d_in
+    for i, op in enumerate(desc_d.get('op_desc')):
+        if op.get('name') == "MatMul" and attr.get('bypass') not in (None, ''):
+            desc_d['op_desc'][i]['attr'].append({'data_type': 'int32', 'name': 'bypass', 'value': attr['bypass']})
+    desc_s = json.dumps(desc_d)
+    return desc_d, desc_s
+
+def _build_to_func(desc_s_in, desc_d_in, attr=None, use_repo=True):
     """
     build kernel with compute description in json format
     Args:
-       desc_s : str of compute description
-       desc_d : dict of compute description
+       desc_s_in : str of compute description
+       desc_d_in : dict of compute description
        attr   : dict of build attributes
 
     Returns:
@@ -560,6 +568,8 @@ def _build_to_func(desc_s, desc_d, attr=None, use_repo=True):
     # turn 'enable_auto_inline' off for composite op by default.
     if 'enable_auto_inline' not in attr:
         attr['enable_auto_inline'] = False
+    desc_d = desc_d_in
+    desc_s = desc_s_in
     if use_repo:
         compute, shape, dtype = generate_trait(desc_d)
         repo_attr = get_repo([compute, shape, dtype, 'metadata', 'attrs'], {})
@@ -572,6 +582,7 @@ def _build_to_func(desc_s, desc_d, attr=None, use_repo=True):
             tiling = get_repo([compute, shape, dtype, 'dim'])
             if tiling:
                 attr['dim'] = tiling
+        desc_d, desc_s = _set_compute_attrs(desc_d, attr)
 
     if 'parallel_fusion' in desc_d or 'buffer_stitch' in desc_d:
         return _build_json_list_func(desc_d, attr, True, 'cce')
