@@ -38,7 +38,8 @@ class TestCase(TestBase):
             # (testflag, opfuncname,(N, H, W, CI, CO, group, KH, KW, pad, pad, stride, stride, cutH, cutCo, cutM, cutK, cutN)
             # mobilenet V1
             ("group_conv_ad_run_001", group_conv_ad_run, (16, 7, 7, 1024, 1024, 64, 3, 3, 1, 1, 1, 1, 7, 16, 512, 3 * 16, 16)),
-            # mobilenet V2
+        ]
+        self.testarg1 = [
             ("group_conv_ad_run_101", group_conv_ad_run, (16, 7, 7, 960, 960, 60, 3, 3, 1, 1, 1, 1, 9, 16, 512, 3 * 16, 16)),
         ]
 
@@ -54,6 +55,17 @@ class TestCase(TestBase):
         :return:
         """
         self.common_run(self.testarg)
+
+    @pytest.mark.level1
+    @pytest.mark.platform_arm_ascend_training
+    @pytest.mark.platform_x86_ascend_training
+    @pytest.mark.env_onecard
+    def test_run1(self):
+        """
+        run case.#
+        :return:
+        """
+        self.common_run(self.testarg1)
 
     def teardown(self):
         """

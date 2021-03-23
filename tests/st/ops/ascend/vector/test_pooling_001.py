@@ -15,6 +15,7 @@
 """pooling test case"""
 
 import os
+import pytest
 from tests.common.base import TestBase
 from tests.common.test_run.pooling_run import pooling_run
 
@@ -51,6 +52,10 @@ class TestPooling(TestBase):
                 (0, 0, 0, 0), False, 0)),
         ]
 
+    @pytest.mark.level1
+    @pytest.mark.platform_arm_ascend_training
+    @pytest.mark.platform_x86_ascend_training
+    @pytest.mark.env_onecard
     def test_mini_run(self):
         """run case for mini"""
         self.common_run(self.testarg_mini)

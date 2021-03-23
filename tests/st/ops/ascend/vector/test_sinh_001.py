@@ -15,6 +15,7 @@
 """sinh test case"""
 
 import os
+import pytest
 from tests.common.base import TestBase
 from tests.common.test_run.sinh_run import sinh_run
 
@@ -35,6 +36,10 @@ class TestCase(TestBase):
         ]
         return
 
+    @pytest.mark.level1
+    @pytest.mark.platform_arm_ascend_training
+    @pytest.mark.platform_x86_ascend_training
+    @pytest.mark.env_onecard
     def test_run(self):
         self.common_run(self.testarg)
 

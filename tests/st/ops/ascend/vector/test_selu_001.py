@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import pytest
 from tests.common.base import TestBase
 from tests.common.test_run.selu_run import selu_run
 
@@ -45,6 +46,10 @@ class TestCase(TestBase):
             ("selu_004", selu_run, ((16, 16), "int8")),
         ]
 
+    @pytest.mark.level1
+    @pytest.mark.platform_arm_ascend_training
+    @pytest.mark.platform_x86_ascend_training
+    @pytest.mark.env_onecard
     def test_run(self):
         """
         run case.#

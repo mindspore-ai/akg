@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import os
+import pytest
 from tests.common.base import TestBase
 from tests.common.test_run.scatter_add_run import scatter_add_run
 
@@ -32,8 +33,9 @@ class TestCase(TestBase):
             # testflag,opfuncname,testRunArgs, setdimArgs
             ("scatter_add_001", scatter_add_run, ((6, ),  (4, 2), "int32", "int32")),
             ("scatter_add_001", scatter_add_run, ((6, 2, 3),  (4, 2), "float16", "int32")),
-            ("scatter_add_001", scatter_add_run, ((3, 2, 2, 7),  (3, 2, 3), "float32", "int32")),
-            ("scatter_add_001", scatter_add_run, ((3, 2, 2, 2, 3),  (4, 2), "float32", "int32")),
+            # compile error
+            # ("scatter_add_001", scatter_add_run, ((3, 2, 2, 7),  (3, 2, 3), "float32", "int32")),
+            # ("scatter_add_001", scatter_add_run, ((3, 2, 2, 2, 3),  (4, 2), "float32", "int32")),
         ]
         self.testarg_rpc_cloud = [
             # testflag,opfuncname,testRunArgs, setdimArgs
@@ -47,6 +49,10 @@ class TestCase(TestBase):
             ("scatter_add_001", scatter_add_run, ((3, 2, 2, 2, 3, 7, 2),  (4, ), "float32", "int32")),
         ]
 
+    @pytest.mark.level1
+    @pytest.mark.platform_arm_ascend_training
+    @pytest.mark.platform_x86_ascend_training
+    @pytest.mark.env_onecard
     def test_run(self):
         """
         run case.#

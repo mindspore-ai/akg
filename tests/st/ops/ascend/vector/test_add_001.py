@@ -24,7 +24,7 @@ Testcase_ExpectedResult:
 """
 import os
 import pytest
-from tests.common.base import TestBase
+from tests.common.base import TestBase, get_splitted_cases
 from tests.common.test_run.add_run import add_run
 
 
@@ -40,7 +40,7 @@ class TestCase(TestBase):
         self.caseresult = True
         self._log.info("============= {0} Setup case============".format(self.casename))
         self.testarg = [
-            #testflag,opfuncname,testRunArgs, dimArgs
+            # testflag,opfuncname,testRunArgs, dimArgs
             ("add_1_1_int32", add_run, ([1], [1], "int32", "cce_add_int32")),
             ("add_2_1_int32", add_run, ([2], [1], "int32", "cce_add_int32")),
             ("001_add_2_2_fp16", add_run, ([2], [2], "float16", "cce_add_fp16", 3.0)),
@@ -53,25 +53,32 @@ class TestCase(TestBase):
             ("010_add_4096_1024_4096_1024_fp16", add_run, ([4096, 1024], [4096, 1024], "float16", "cce_add_fp16")),
             # manual scheduling tests, man sch work for all the shapes but including only two tests in the CI
             ("012_add_2_2_fp16", add_run, ([2], [2], "float16", "cce_add_fp16", 3.0), ([2, 2],), False),
-            #("013_add_160_1024_160_1024_fp16", add_run, ([160, 1024], [160, 1024], "float16", "cce_add_fp16", 1.0), ([16, 16], [1024, 1024]), False),
-            ("014_add_160_1024_160_1024_fp16", add_run, ([160, 1024], [160, 1024], "float16", "cce_add_fp16"), ([20, 20], [1024, 1024]), False),
+            # ("013_add_160_1024_160_1024_fp16", add_run, ([160, 1024], [160, 1024], "float16", "cce_add_fp16", 1.0), ([16, 16], [1024, 1024]), False),
+            ("014_add_160_1024_160_1024_fp16", add_run, ([160, 1024], [160, 1024], "float16", "cce_add_fp16"),
+             ([20, 20], [1024, 1024]), False),
 
             # deeplabv3
             ("add", add_run, ([1, 1, 192, 64], [1], "float32", "cce_add_fp32")),
             ("add", add_run, ([576, 750, 1], [1], "int32", "cce_add_int32")),
         ]
         self.testarg_level1 = [
-            #testflag,opfuncname,testRunArgs, dimArgs
+            # testflag,opfuncname,testRunArgs, dimArgs
             ("101_add_8192_1024_8192_1024_fp16", add_run, ([8192, 1024], [8192, 1024], "float16", "cce_add_fp16")),
             ("102_add_30522_1024_30522_1024_fp16", add_run, ([30522, 1024], [30522, 1024], "float16", "cce_add_fp16")),
             ("103_add_1024_4096_1024_4096_fp16", add_run, ([1024, 4096], [1024, 4096], "float16", "cce_add_fp16")),
             ("104_add_8192_4096_8192_4096_fp16", add_run, ([8192, 4096], [8192, 4096], "float16", "cce_add_fp16")),
-            ("105_add_8_128_1024_8_128_1024_fp16", add_run, ([8, 128, 1024], [8, 128, 1024], "float16", "cce_add_fp16")),
-            ("106_add_64_128_1024_64_128_1024_fp16", add_run, ([64, 128, 1024], [64, 128, 1024], "float16", "cce_add_fp16")),
-            ("107_add_1_128_1024_8_128_1024_fp16", add_run, ([1, 128, 1024], [8, 128, 1024], "float16", "cce_add_fp16")),
-            ("108_add_1_128_1024_64_128_1024_fp16", add_run, ([1, 128, 1024], [64, 128, 1024], "float16", "cce_add_fp16")),
-            ("109_add_8_16_128_128_8_1_128_128_fp16", add_run, ([8, 16, 128, 128], [8, 1, 128, 128], "float16", "cce_add_fp16")),
-            ("110_add_64_16_128_128_64_1_128_128_fp16", add_run, ([64, 16, 128, 128], [64, 1, 128, 128], "float16", "cce_add_fp16")),
+            (
+            "105_add_8_128_1024_8_128_1024_fp16", add_run, ([8, 128, 1024], [8, 128, 1024], "float16", "cce_add_fp16")),
+            ("106_add_64_128_1024_64_128_1024_fp16", add_run,
+             ([64, 128, 1024], [64, 128, 1024], "float16", "cce_add_fp16")),
+            (
+            "107_add_1_128_1024_8_128_1024_fp16", add_run, ([1, 128, 1024], [8, 128, 1024], "float16", "cce_add_fp16")),
+            ("108_add_1_128_1024_64_128_1024_fp16", add_run,
+             ([1, 128, 1024], [64, 128, 1024], "float16", "cce_add_fp16")),
+            ("109_add_8_16_128_128_8_1_128_128_fp16", add_run,
+             ([8, 16, 128, 128], [8, 1, 128, 128], "float16", "cce_add_fp16")),
+            ("110_add_64_16_128_128_64_1_128_128_fp16", add_run,
+             ([64, 16, 128, 128], [64, 1, 128, 128], "float16", "cce_add_fp16")),
             ("111_add_1_1_fp16", add_run, ([1], [1], "float16", "cce_add_fp16")),
             ("112_add_2_1_fp16", add_run, ([2], [1], "float16", "cce_add_fp16")),
             ("113_add_1024_1_fp16", add_run, ([1024], [1], "float16", "cce_add_fp16")),
@@ -94,10 +101,13 @@ class TestCase(TestBase):
             ("134_add_1_64_16_128_128_fp16", add_run, ([1], [64, 16, 128, 128], "float16", "cce_add_fp16")),
 
             # manual scheduling tests, it works for all the shapes in this testfile, but only including few in the CI
-            ("135_add_64_16_128_128_64_1_128_128_fp16", add_run, ([64, 16, 128, 128], [64, 1, 128, 128], "float16", "cce_add_fp16", 1.0), ([1, 1], [1, 1], [128, 128], [128, 128]), False),
+            ("135_add_64_16_128_128_64_1_128_128_fp16", add_run,
+             ([64, 16, 128, 128], [64, 1, 128, 128], "float16", "cce_add_fp16", 1.0),
+             ([1, 1], [1, 1], [128, 128], [128, 128]), False),
             ("136_add_2_1_fp16", add_run, ([2], [1], "float16", "cce_add_fp16", 1.0), ([2, 2],), False),
-            #("137_add_512_1024_1_fp16", add_run, ([512, 1024], [1], "float16", "cce_add_fp16", 1.0), ([1, 1], [1024, 1024]), False),
-            ("138_add_1_64_128_1024_fp16", add_run, ([1], [64, 128, 1024], "float16", "cce_add_fp16", 1.0), ([1, 1], [128, 128], [128, 128]), False),
+            # ("137_add_512_1024_1_fp16", add_run, ([512, 1024], [1], "float16", "cce_add_fp16", 1.0), ([1, 1], [1024, 1024]), False),
+            ("138_add_1_64_128_1024_fp16", add_run, ([1], [64, 128, 1024], "float16", "cce_add_fp16", 1.0),
+             ([1, 1], [128, 128], [128, 128]), False),
 
             # deeplabv3
             ("add", add_run, ([1, 1, 256, 3], [1], "float32", "cce_add_fp32")),
@@ -211,6 +221,9 @@ class TestCase(TestBase):
     def test_rpc_cloud(self):
         self.common_run(self.testarg_rpc_cloud)
 
+    def test_level1(self, split_nums, split_idx):
+        self.common_run(get_splitted_cases(self.testarg_level1, split_nums, split_idx))
+
     def teardown(self):
         """
         clean environment
@@ -218,3 +231,47 @@ class TestCase(TestBase):
         """
         self._log.info("============= {0} Teardown============".format(self.casename))
         return
+
+
+@pytest.mark.level1
+@pytest.mark.platform_arm_ascend_training
+@pytest.mark.platform_x86_ascend_training
+@pytest.mark.env_onecard
+def test0_level1():
+    a = TestCase()
+    a.setup()
+    a.test_level1(4, 0)
+    a.teardown()
+
+
+@pytest.mark.level1
+@pytest.mark.platform_arm_ascend_training
+@pytest.mark.platform_x86_ascend_training
+@pytest.mark.env_onecard
+def test1_level1():
+    a = TestCase()
+    a.setup()
+    a.test_level1(4, 1)
+    a.teardown()
+
+
+@pytest.mark.level1
+@pytest.mark.platform_arm_ascend_training
+@pytest.mark.platform_x86_ascend_training
+@pytest.mark.env_onecard
+def test2_level1():
+    a = TestCase()
+    a.setup()
+    a.test_level1(4, 2)
+    a.teardown()
+
+
+@pytest.mark.level1
+@pytest.mark.platform_arm_ascend_training
+@pytest.mark.platform_x86_ascend_training
+@pytest.mark.env_onecard
+def test3_level1():
+    a = TestCase()
+    a.setup()
+    a.test_level1(4, 3)
+    a.teardown()

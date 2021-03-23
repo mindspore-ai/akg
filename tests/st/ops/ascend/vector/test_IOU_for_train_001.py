@@ -17,6 +17,7 @@ iou_for_train test cast
 """
 
 import os
+import pytest
 from tests.common.base import TestBase
 from tests.common.test_run.IOU_for_train_run import iou_for_train_run
 
@@ -46,6 +47,10 @@ class Testcase(TestBase):
         ]
         return
 
+    @pytest.mark.level0
+    @pytest.mark.platform_arm_ascend_training
+    @pytest.mark.platform_x86_ascend_training
+    @pytest.mark.env_onecard
     def test_run(self):
         """
         run case.#
@@ -53,6 +58,10 @@ class Testcase(TestBase):
         """
         self.common_run(self.testarg)
 
+    @pytest.mark.level1
+    @pytest.mark.platform_arm_ascend_training
+    @pytest.mark.platform_x86_ascend_training
+    @pytest.mark.env_onecard
     def test_run_1(self):
         """
         run case.#

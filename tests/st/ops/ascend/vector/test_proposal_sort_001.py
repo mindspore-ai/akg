@@ -24,7 +24,6 @@ Testcase_ExpectedResult:
 """
 
 import os
-import pytest
 from tests.common.base import TestBase
 from tests.common.test_run.proposal_sort_run import proposal_sort_run
 

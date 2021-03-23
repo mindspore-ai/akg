@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import pytest
 from tests.common.base import TestBase
 from tests.common.test_run.matrix_diag_part_run import matrix_diag_part_run
 
@@ -48,6 +49,10 @@ class TestCase(TestBase):
             ("matrix_diag_part_001", matrix_diag_part_run, ((4, 4), "float32")),
         ]
 
+    @pytest.mark.level1
+    @pytest.mark.platform_arm_ascend_training
+    @pytest.mark.platform_x86_ascend_training
+    @pytest.mark.env_onecard
     def test_run(self):
         """
         run case.#

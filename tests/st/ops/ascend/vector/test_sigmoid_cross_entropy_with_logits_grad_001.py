@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import pytest
 from tests.common.base import TestBase
 from tests.common.test_run.sigmoid_cross_entropy_with_logits_grad_run import sigmoid_cross_entropy_with_logits_grad_run
 
@@ -47,6 +48,10 @@ class TestCase(TestBase):
              ((224, 224), "float32")),
         ]
 
+    @pytest.mark.level1
+    @pytest.mark.platform_arm_ascend_training
+    @pytest.mark.platform_x86_ascend_training
+    @pytest.mark.env_onecard
     def test_run(self):
         """
         run case.#

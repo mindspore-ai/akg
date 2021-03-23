@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import pytest
 from tests.common.base import TestBase
 from tests.common.test_run.minimum_ad_run import minimum_ad_run
 
@@ -44,6 +45,10 @@ class TestCase(TestBase):
             ("minimum_ad_005", minimum_ad_run, ((8, 16), "int32", True, True)),
         ]
 
+    @pytest.mark.level1
+    @pytest.mark.platform_arm_ascend_training
+    @pytest.mark.platform_x86_ascend_training
+    @pytest.mark.env_onecard
     def test_run(self):
         """
         run case.#

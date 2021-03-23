@@ -15,6 +15,7 @@
 """truncate_div test case"""
 
 import os
+import pytest
 from tests.common.base import TestBase
 from tests.common.test_run.truncate_div_run import truncate_div_run
 
@@ -44,6 +45,10 @@ class TestTD(TestBase):
             ("truncate_div_f32", truncate_div_run, ((8, 16), "float16", (16,), "float16")),
         ]
 
+    @pytest.mark.level1
+    @pytest.mark.platform_arm_ascend_training
+    @pytest.mark.platform_x86_ascend_training
+    @pytest.mark.env_onecard
     def test_mini_run(self):
         """run case"""
         self.common_run(self.testarg_mini)

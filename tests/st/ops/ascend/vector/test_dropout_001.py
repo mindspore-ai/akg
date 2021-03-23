@@ -52,11 +52,6 @@ class Testdropout(TestBase):
             ("dropout_14", "dropout_run", ((1, 16, 128, 128), 0.5, "float16", "cce_dropout_do_mask")),
         ]
 
-        self.testarg_nightly = [
-            ("dropout_06", "dropout_run", ((64, 12, 128, 128), 0.5, "float16", "cce_dropout_do_mask")),
-            ("dropout_07", "dropout_run", ((64, 12, 128, 128), 0.5, "float32", "cce_dropout_do_mask")),
-        ]
-
         self.testarg_rpc_cloud = [
             ## testflag,opfuncname,testRunArgs, dimArgs
             # ("dropout_04", "dropout_run", ((64, 128, 1024), "float32")),
@@ -81,13 +76,6 @@ class Testdropout(TestBase):
         :return:
         """
         self.common_run(self.testarg)
-
-    def test_run_1(self):
-        """
-        run case.#
-        :return:
-        """
-        self.common_run(self.testarg_nightly)
 
     def test_run_rpc_cloud(self):
         self.common_run([self.testarg_rpc_cloud[0]])

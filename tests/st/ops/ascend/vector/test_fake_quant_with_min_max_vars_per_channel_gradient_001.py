@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import pytest
 from tests.common.base import TestBase
 from tests.common.test_run.fake_quant_with_min_max_vars_per_channel_gradient_run import fake_quant_with_min_max_vars_per_channel_gradient_run
 
@@ -46,6 +47,10 @@ class TestCase(TestBase):
              ((4, 4, 4, 4), (4, 4, 4, 4), (4, ), (4, ), "float32", 8, False)),
         ]
 
+    @pytest.mark.level1
+    @pytest.mark.platform_arm_ascend_training
+    @pytest.mark.platform_x86_ascend_training
+    @pytest.mark.env_onecard
     def test_run(self):
         """
         run case.#
