@@ -36,6 +36,10 @@ class TileSpaceCollector {
     space_->c1_tile_mod_table = init_array;
     space_->c0_tile_mod_table = init_array;
     space_->tiling_candidate = init_array;
+    space_->gpu_thread_range_table = init_array;
+    space_->gpu_block_range_table = init_array;
+    space_->gpu_thread_mod_table = init_array;
+    space_->gpu_block_mod_table = init_array;
   }
   ~TileSpaceCollector() = default;
 
@@ -122,38 +126,61 @@ class TileSpaceCollector {
     // step 2. collect cared info from each axis
     for (const auto &con : cared_info_) {
       int length = con.find("mod") != std::string::npos ? 1 : 2;
-      auto array = air::runtime::NDArray::Empty({static_cast<int64_t>(tile_size), length}, type, ctx);
+      auto size = static_cast<int64_t>(tile_size);
+      if (con.find("gpu") != std::string::npos) {
+        size = std::max<int64_t>(3, size);
+      }
+      auto array = air::runtime::NDArray::Empty({size, length}, type, ctx);
       auto spaceDlPack = array.ToDLPack();
       auto ptr = reinterpret_cast<int *>(spaceDlPack->dl_tensor.data);
-      for (size_t b_idx = 0; b_idx < all_axes.size(); ++b_idx) {
-        for (size_t a_idx = 0; a_idx < all_axes[b_idx].size(); ++a_idx) {
-          if (con == "index") {
-            *ptr++ = b_idx;
-            *ptr++ = a_idx;
+      if (con.find("gpu") != std::string::npos) {
+        size_t s = con.find("thread") != std::string::npos ? 0 : 3;
+        size_t e = con.find("thread") != std::string::npos ? 3 : 6;
+        for (size_t i = s; i < e; ++i) {
+          if (length == 1) {
+            *ptr++ = analyzer_.binding_spaces_[i].map_mod_;
           } else {
-            if (con == "C1_range") {
-              TileAxis::Constraint const_cons = all_axes[b_idx][a_idx]->GetConstConstraint(CACHE1);
-              *ptr++ = const_cons.tile_min_.as<IntImm>()->value;
-              *ptr++ = const_cons.tile_extent_.as<IntImm>()->value;
-            } else if (con == "C0_range") {
-              TileAxis::Constraint const_cons = all_axes[b_idx][a_idx]->GetConstConstraint(CACHE0);
-              *ptr++ = const_cons.tile_min_.as<IntImm>()->value;
-              *ptr++ = const_cons.tile_extent_.as<IntImm>()->value;
-            } else if (con == "C1_mod") {
-              TileAxis::Constraint const_cons = all_axes[b_idx][a_idx]->GetConstConstraint(CACHE1);
-              *ptr++ = const_cons.tile_mod_.as<IntImm>()->value;
-            } else if (con == "C0_mod") {
-              TileAxis::Constraint const_cons = all_axes[b_idx][a_idx]->GetConstConstraint(CACHE0);
-              *ptr++ = const_cons.tile_mod_.as<IntImm>()->value;
+            *ptr++ = analyzer_.binding_spaces_[i].map_min_;
+            *ptr++ = analyzer_.binding_spaces_[i].map_extent_;
+          }
+        }
+      } else {
+        for (size_t b_idx = 0; b_idx < all_axes.size(); ++b_idx) {
+          for (size_t a_idx = 0; a_idx < all_axes[b_idx].size(); ++a_idx) {
+            if (con == "index") {
+              *ptr++ = b_idx;
+              *ptr++ = a_idx;
+            } else {
+              if (con == "C1_range") {
+                TileAxis::Constraint const_cons = all_axes[b_idx][a_idx]->GetConstConstraint(CACHE1);
+                *ptr++ = const_cons.tile_min_.as<IntImm>()->value;
+                *ptr++ = const_cons.tile_extent_.as<IntImm>()->value;
+              } else if (con == "C0_range") {
+                TileAxis::Constraint const_cons = all_axes[b_idx][a_idx]->GetConstConstraint(CACHE0);
+                *ptr++ = const_cons.tile_min_.as<IntImm>()->value;
+                *ptr++ = const_cons.tile_extent_.as<IntImm>()->value;
+              } else if (con == "C1_mod") {
+                TileAxis::Constraint const_cons = all_axes[b_idx][a_idx]->GetConstConstraint(CACHE1);
+                *ptr++ = const_cons.tile_mod_.as<IntImm>()->value;
+              } else if (con == "C0_mod") {
+                TileAxis::Constraint const_cons = all_axes[b_idx][a_idx]->GetConstConstraint(CACHE0);
+                *ptr++ = const_cons.tile_mod_.as<IntImm>()->value;
+              }
             }
           }
         }
       }
+
       if (con == "index") space_->index_table = array;
       if (con == "C1_range") space_->c1_tile_range_table = array;
       if (con == "C0_range") space_->c0_tile_range_table = array;
       if (con == "C1_mod") space_->c1_tile_mod_table = array;
       if (con == "C0_mod") space_->c0_tile_mod_table = array;
+      if (con == "gpu_thread_range") space_->gpu_thread_range_table = array;
+      if (con == "gpu_block_range") space_->gpu_block_range_table = array;
+      if (con == "gpu_thread_mod") space_->gpu_thread_mod_table = array;
+      if (con == "gpu_block_mod") space_->gpu_block_mod_table = array;
+
       delete spaceDlPack;
     }
   }
@@ -196,7 +223,8 @@ class TileSpaceCollector {
       bool min_tile_ok = false;
       for (int64_t tile = tile_min->value; tile <= tile_extent->value; ++tile) {
         bool break_constraint =
-          (tile != tile_min->value) && (tile != tile_extent->value) && (tile % tile_mod->value != 0);
+          ((tile != tile_min->value) && (tile != tile_extent->value) && (tile % tile_mod->value != 0)) ||
+          (axis->forbid_iso && tile_extent->value % tile != 0);
         if (analyzer_.scop_info_.user_config_.GetPruneTuningSpace() && break_constraint) {
           continue;
         }
@@ -365,7 +393,9 @@ class TileSpaceCollector {
   DLContext ctx = {kDLCPU, 0};
   std::vector<TileAxis *> tile_axes_;
   std::vector<bool> is_shared_;
-  std::unordered_set<std::string> cared_info_ = {"index", "C1_range", "C0_range", "C1_mod", "C0_mod"};
+  std::unordered_set<std::string> cared_info_ = {"index",           "C1_range",       "C0_range",
+                                                 "C1_mod",          "C0_mod",         "gpu_thread_range",
+                                                 "gpu_block_range", "gpu_thread_mod", "gpu_block_mod"};
 
   struct Result {
     std::vector<int> tile;
