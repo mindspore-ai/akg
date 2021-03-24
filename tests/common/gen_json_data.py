@@ -172,11 +172,7 @@ def trans_data_fractal2two(input_, src_format, dst_format, shape_origin):
             bench_mark = bench_mark[:, :, shape_origin[0], :shape_origin[1]]
     return bench_mark
 
-
-def trans_data_dsl(inputs, output, attr):
-    src_format = get_attr(attr, "src_format")
-    dst_format = get_attr(attr, "dst_format")
-    original_shape = output[0]['shape']
+def get_trans_data_str(input_name, output_name, ori_shape, src_format, dst_format):
 
     support_formats = [("DefaultFormat", "FRACTAL_NZ"),
                        ("NCHW", "FRACTAL_NZ"),
@@ -189,17 +185,24 @@ def trans_data_dsl(inputs, output, attr):
 
     if (src_format == 'DefaultFormat' or src_format == "NCHW") and dst_format == 'FRACTAL_NZ':
         res = "%s \n%s = %s(%s, '%s', '%s')" % (inspect.getsource(trans_data_two2fractal),
-                                                output[0]['tensor_name'], trans_data_two2fractal.__name__, get_input(
-                                                    inputs[0][0]),
+                                                output_name, trans_data_two2fractal.__name__, input_name,
                                                 src_format, dst_format)
     elif src_format == 'FRACTAL_NZ' and (dst_format == 'DefaultFormat' or dst_format == "NCHW"):
         res = "%s \n%s = %s(%s, '%s', '%s', %s)" % (inspect.getsource(trans_data_fractal2two),
-                                                    output[0]['tensor_name'], trans_data_fractal2two.__name__, get_input(
-                                                        inputs[0][0]),
-                                                    src_format, dst_format, original_shape)
+                                                    output_name, trans_data_fractal2two.__name__, input_name,
+                                                    src_format, dst_format, ori_shape)
     else:
         raise ValueError("src_format(%s) and dst_format(%s) is not supported!" % (src_format, dst_format))
     return res
+
+def trans_data_dsl(inputs, output, attr):
+    src_format = get_attr(attr, "src_format")
+    dst_format = get_attr(attr, "dst_format")
+    ori_shape = output[0]['shape']
+    input_name = get_input(inputs[0][0])
+    output_name = output[0]['tensor_name']
+    return get_trans_data_str(input_name, output_name, ori_shape, src_format, dst_format)
+
 
 
 def batchmatmul_str(inputs, output, attr):
@@ -217,6 +220,43 @@ def batchmatmul_str(inputs, output, attr):
     else:
         res = "%s = np.matmul(%s, %s)" %\
               (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]))
+    return res
+
+def convert_fracal_shape(ori_shape, fractal):
+    ori_shape = tuple(ori_shape)
+    if fractal == "zN":
+        return ori_shape[:-4] + (ori_shape[-2] * ori_shape[-3], ori_shape[-1] * ori_shape[-4])
+    if fractal == "zZ":
+        return ori_shape[:-4] + (ori_shape[-4] * ori_shape[-2], ori_shape[-3] * ori_shape[-1])
+
+def matmul_str(inputs, output, attr):
+
+    left_format = get_attr(attr, "left_format")
+    right_format = get_attr(attr, "right_format")
+    left_input = inputs[0][0]
+    right_input = inputs[1][0]
+    output_name = output[0]['tensor_name']
+    output_format = output[0]['format']
+    output_shape = output[0]['shape']
+    right_ori_shape = convert_fracal_shape(right_input['shape'], right_format)
+
+    left_input_name = get_input(left_input)
+    right_input_name = get_input(right_input)
+    res = ''
+    if left_format == 'FRACTAL_NZ':
+        left_ori_shape = convert_fracal_shape(left_input['shape'], "zN")
+        left_trans_str = get_trans_data_str(left_input_name, left_input_name, left_ori_shape, left_format, 'DefaultFormat')
+        res = res + left_trans_str + "\n"
+    if right_format == 'FRACTAL_NZ':
+        right_ori_shape = convert_fracal_shape(right_input['shape'], "zN")
+        right_trans_str = get_trans_data_str(right_input_name, right_input_name, right_ori_shape, right_format, 'DefaultFormat')
+        res = res + right_trans_str + "\n"
+    matmul_str = batchmatmul_str(inputs, output, attr)
+    res = res + matmul_str + "\n"
+
+    if output_format != 'DefaultFormat':
+        output_trans_str = get_trans_data_str(output_name, output_name, output_shape, 'DefaultFormat', output_format)
+        res = res + output_trans_str + "\n"
     return res
 
 
@@ -311,7 +351,8 @@ op_dsl = {
     "BatchMatMul": lambda inputs, output, attr: batchmatmul_str(inputs, output, attr),
     "Assign": lambda inputs, output, attr: "%s = %s; %s = %s" %
         (get_input(inputs[0][0]), get_input(inputs[1][0]), output[0]['tensor_name'],
-        get_input(inputs[1][0]))
+        get_input(inputs[1][0])), 
+    "MatMul": lambda inputs, output, attr: matmul_str(inputs, output, attr)
 }
 
 
@@ -373,6 +414,7 @@ def gen_json_data(op_desc):
             inplace_assign_write.append(op["input_desc"][0][0]["tensor_name"])
         elif op["name"] in elemwise_op_list and "format" in op["output_desc"][0]and \
              op["output_desc"][0]["format"] =="FRACTAL_NZ":
+            need_reshape = False
             if op["input_desc"][0][0]["format"] == "DefaultFormat" and \
                op["input_desc"][1][0]["format"] == "FRACTAL_NZ":
                 fractal_tensor = op["input_desc"][1][0]
