@@ -33,6 +33,8 @@ class Emitter : public IRVisitor {
       op_attrs_ = Downcast<Map<std::string, NodeRef>>(op->node);
       Visit(op->body);
       op_attrs_ = {};
+    } else {
+      IRVisitor::Visit_(op);
     }
   }
   void Visit_(const Provide *op) override {
@@ -119,8 +121,8 @@ void ProcessSames(FuncTensorMap &tensor_map, BuildOpt &opt) {
   }
 }
 
-void CollectInputs(const std::vector<std::string> &input_tensors, FuncTensorMap &tensor_map, BuildInfo &info) {
-  for (const auto &input : input_tensors) {
+void CollectInputs(FuncTensorMap &tensor_map, BuildInfo &info) {
+  for (const auto &input : info.input_names) {
     auto iter =
       std::find_if(tensor_map.begin(), tensor_map.end(),
                    [&input](const std::pair<const FunctionRef, Tensor> &kv) { return kv.first->func_name() == input; });
@@ -130,10 +132,9 @@ void CollectInputs(const std::vector<std::string> &input_tensors, FuncTensorMap 
   }
 }
 
-void CollectOutputsAndComputes(const std::vector<std::string> &output_tensors, FuncTensorMap &tensor_map,
-                               BuildInfo &info) {
+void CollectOutputsAndComputes(FuncTensorMap &tensor_map, BuildInfo &info) {
   int count = 0;
-  for (const auto &output : output_tensors) {
+  for (const auto &output : info.output_names) {
     auto iter = std::find_if(
       tensor_map.begin(), tensor_map.end(),
       [&output](const std::pair<const FunctionRef, Tensor> &kv) { return kv.first->func_name() == output; });
@@ -178,37 +179,29 @@ void CollectIsolatedInplaceTensor(BuildOpt &opt, FuncTensorMap &tensor_map) {
   }
 }
 
-void CollectBuildInfo(const std::vector<std::string> &input_tensors, const std::vector<std::string> &output_tensors,
-                      FuncTensorMap &tensor_map, BuildInfo &info) {
+void CollectBuildInfo(FuncTensorMap &tensor_map, BuildInfo &info) {
   DumpBuildInfo(info);
   CollectIsolatedInplaceTensor(info.opt, tensor_map);
   CollectBinds(tensor_map, info);
   ProcessSames(tensor_map, info.opt);
-  CollectInputs(input_tensors, tensor_map, info);
-  CollectOutputsAndComputes(output_tensors, tensor_map, info);
+  CollectInputs(tensor_map, info);
+  CollectOutputsAndComputes(tensor_map, info);
   CollectSchOnlyComputes(info);
   DumpBuildInfo(info);
 }
 
-void ExtractBuildInfo(const picojson::value &input_json, BuildInfo &info, std::vector<std::string> &input_tensors,
-                      std::vector<std::string> &output_tensors) {
+void ExtractBuildInfo(const picojson::value &input_json, BuildInfo &info) {
   CHECK(input_json.is<picojson::object>());
   info.opt.fold_dim = !info.opt.stitch;
   // 1. make stmt by input_json
-  auto stmt = Parse(input_json, info, input_tensors, output_tensors);
+  auto stmt = Parse(input_json, info);
   // 2. optimize stmt
   stmt = Optimize(stmt, info);
   // 3. emit stmt by topi
   FuncTensorMap tensor_map;
   Emitter(tensor_map, info.opt).Visit(stmt);
   // 4. collect build info: args, compute, binds
-  CollectBuildInfo(input_tensors, output_tensors, tensor_map, info);
-}
-
-void ExtractBuildInfo(const picojson::value &input_json, BuildInfo &info) {
-  std::vector<std::string> input_tensors;
-  std::vector<std::string> output_tensors;
-  ExtractBuildInfo(input_json, info, input_tensors, output_tensors);
+  CollectBuildInfo(tensor_map, info);
 }
 
 Stmt String2LowerStmtSimple(const StringImm *json_str, const Map<std::string, NodeRef> &attrs, bool poly,
@@ -218,9 +211,7 @@ Stmt String2LowerStmtSimple(const StringImm *json_str, const Map<std::string, No
   BuildInfo info;
   info.opt.stitch = buffer_stitch;
   info.opt.enable_dump = false;
-  std::vector<std::string> input_tensors;
-  std::vector<std::string> output_tensors;
-  ExtractBuildInfo(v, info, input_tensors, output_tensors);
+  ExtractBuildInfo(v, info);
   std::string sch_name = GetSchedule(info.tensors);
   const auto *sch_create = air::runtime::Registry::Get("select_cuda_scheduler");
   CHECK(sch_create != nullptr);
@@ -534,9 +525,7 @@ class CompositeJsonListGpu : public CompositeJsonList {
     BuildInfo info;
     info.opt.stitch_ir_idx_ = each_ir_idx_;
     info.opt.stitch = buffer_stitch;
-    std::vector<std::string> input_tensors;
-    std::vector<std::string> output_tensors;
-    ExtractBuildInfo(v, info, input_tensors, output_tensors);
+    ExtractBuildInfo(v, info);
     // ensure merge_name_ is the same as original json name
     if (merge_name_.empty()) merge_name_ = info.kernel_name;
     std::string sch_name = GetSchedule(info.tensors);
@@ -556,9 +545,9 @@ class CompositeJsonListGpu : public CompositeJsonList {
     for (const auto &x : arg_list_0) {
       auto buffer = x.as<BufferNode>();
       CHECK(buffer) << "arg must be a BufferNode";
-      if (std::find(input_tensors.begin(), input_tensors.end(), buffer->name) == std::end(input_tensors)) {
-        CHECK(count < output_tensors.size());
-        outputs2args_[output_tensors[count]] = x;
+      if (std::find(info.input_names.begin(), info.input_names.end(), buffer->name) == std::end(info.input_names)) {
+        CHECK(count < info.output_names.size());
+        outputs2args_[info.output_names[count]] = x;
         count++;
       }
       all_args_.push_back(x);

@@ -15,6 +15,8 @@
  */
 #ifndef COMPOSITE_OPTIMIZE_H_
 #define COMPOSITE_OPTIMIZE_H_
+#include <string>
+#include <vector>
 #include "composite/util.h"
 #include "composite/dump.h"
 

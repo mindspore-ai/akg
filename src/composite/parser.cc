@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "composite/parser.h"
+#include <string>
 
 namespace akg {
 std::tuple<std::string, std::string, picojson::array, picojson::array, picojson::array> ParseInputJson(
@@ -127,16 +128,12 @@ Stmt MakeStmt(const std::vector<OpDesc> &op_descs) {
     if (!op_desc.attrs.empty()) {
       stmt = AttrStmt::make(op_desc.attrs, "attrs", Expr(1), stmt);
     }
-    if (!op_desc.fusion_op_name.empty()) {
-      stmt = AttrStmt::make(make_zero(Int(32)), "fusion", op_desc.fusion_op_name, stmt);
-    }
     stmts.emplace_back(stmt);
   }
   return Block::make(stmts);
 }
 
-Stmt Parse(const picojson::value &input_json, BuildInfo &info, std::vector<std::string> &input_tensors,
-           std::vector<std::string> &output_tensors) {
+Stmt Parse(const picojson::value &input_json, BuildInfo &info) {
   picojson::array input_desc;
   picojson::array output_desc;
   picojson::array op_descs;
@@ -145,10 +142,10 @@ Stmt Parse(const picojson::value &input_json, BuildInfo &info, std::vector<std::
   // 1. parse input json
   std::tie(kernelname, target, input_desc, output_desc, op_descs) = ParseInputJson(input_json);
   info.kernel_name = kernelname;
-  ParseInputTensors(input_desc, input_tensors);
-  ParseOutputTensors(output_desc, output_tensors);
+  ParseInputTensors(input_desc, info.input_names);
+  ParseOutputTensors(output_desc, info.output_names);
   // 2. parse op descs
-  auto parser = OpDescsParser(op_descs, input_tensors, output_tensors);
+  auto parser = OpDescsParser(op_descs, info.input_names, info.output_names);
   parser.Parse();
   info.opt.input_funcs = parser.input_funcs_;
   info.opt.output_funcs = parser.output_funcs_;

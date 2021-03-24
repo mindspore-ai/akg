@@ -13,16 +13,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef COMPOSITE_OPTIMIZE_SELECT_FUSION_H_
-#define COMPOSITE_OPTIMIZE_SELECT_FUSION_H_
+
+#ifndef COMPOSITE_OPTIMIZE_OPS_COMBINE_H_
+#define COMPOSITE_OPTIMIZE_OPS_COMBINE_H_
+#include <string>
+#include <vector>
 #include "composite/optimize/optimize.h"
 
 namespace akg {
-class SelectFusion : public CompositeOptPass {
+class OpsCombine : public CompositeOptPass {
  public:
-  SelectFusion() { pass_name_ = __FUNCTION__; }
-  ~SelectFusion() = default;
+  explicit OpsCombine(BuildInfo &info) : info_(info) { pass_name_ = __FUNCTION__; }
+  ~OpsCombine() = default;
   Stmt Run(const Stmt &s) override;
+
+  BuildInfo &info_;
 };
 }  // namespace akg
-#endif  // COMPOSITE_OPTIMIZE_SELECT_FUSION_H_
+#endif  // COMPOSITE_OPTIMIZE_OPS_COMBINE_H_

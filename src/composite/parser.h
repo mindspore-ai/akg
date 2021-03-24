@@ -15,6 +15,11 @@
  */
 #ifndef COMPOSITE_PARSER_H_
 #define COMPOSITE_PARSER_H_
+#include <string>
+#include <tuple>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 #include "composite/util.h"
 
 namespace akg {
@@ -25,8 +30,7 @@ void ParseOutputTensors(const picojson::array &output_descs, std::vector<std::st
 std::vector<OpDesc> ParseOpDesc(const std::string &json_str);
 std::string ParseKernelName(const std::string &json_str);
 Stmt MakeStmt(const std::vector<OpDesc> &op_descs);
-Stmt Parse(const picojson::value &input_json, BuildInfo &info, std::vector<std::string> &input_tensors,
-           std::vector<std::string> &output_tensors);
+Stmt Parse(const picojson::value &input_json, BuildInfo &info);
 
 class OpDescsParser {
  public:
@@ -47,7 +51,6 @@ class OpDescsParser {
     LOG(INFO) << "========OP_DESCS========";
     for (const auto &item : op_descs_) {
       LOG(INFO) << "op_name: " << item.op_name;
-      LOG(INFO) << "fusion_op_name: " << item.fusion_op_name;
       for (const auto &attr : item.attrs) {
         LOG(INFO) << "attrs: " << attr.first << ":" << attr.second;
       }
@@ -190,11 +193,7 @@ class OpDescsParser {
 
   void ParseOpDesc(const picojson::object &op_desc) {
     OpDesc op_desc_info;
-    auto it = op_desc.find("fusion");
-    if (it != op_desc.end()) {
-      op_desc_info.fusion_op_name = it->second.get<std::string>();
-    }
-    it = op_desc.find("name");
+    auto it = op_desc.find("name");
     if (it != op_desc.end()) {
       op_desc_info.op_name = it->second.get<std::string>();
     }

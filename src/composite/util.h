@@ -119,15 +119,25 @@ inline std::ostream &operator<<(std::ostream &os, const BuildOpt &x) {
 }
 
 struct BuildInfo {
-  Array<Tensor> tensors;         // topi's output tensor, which should be compute node
-  Array<NodeRef> args;           // the composite kernel's inputs and outputs
-  Map<Tensor, Buffer> in_binds;  // the tensors which should be in bind
-  std::string kernel_name;       // the composite kernel's name
+  std::vector<std::string> input_names;   // names of kernel's inputs
+  std::vector<std::string> output_names;  // names of kernel's outputs
+  Array<Tensor> tensors;                  // topi's output tensor, which should be compute node
+  Array<NodeRef> args;                    // the composite kernel's inputs and outputs
+  Map<Tensor, Buffer> in_binds;           // the tensors which should be in bind
+  std::string kernel_name;                // the composite kernel's name
   BuildOpt opt;
 };
 inline std::ostream &operator<<(std::ostream &os, const BuildInfo &x) {
   std::string indent = "  ";
   os << "[BuildInfo] : " << std::endl;
+  os << "- input names: " << std::endl;
+  for (const auto &in_name : x.input_names) {
+    os << indent << in_name << std::endl;
+  }
+  os << "- output names: " << std::endl;
+  for (const auto &out_name : x.output_names) {
+    os << indent << out_name << std::endl;
+  }
   os << "- tensors: " << std::endl;
   for (const auto &a : x.tensors) {
     os << indent << a->op->func_name() << std::endl;
@@ -155,7 +165,6 @@ struct TensorInfo {
 
 struct OpDesc {
   std::string op_name;
-  std::string fusion_op_name;
   Map<std::string, NodeRef> attrs;
   Array<NodeRef> input_descs;
   Array<NodeRef> output_descs;
