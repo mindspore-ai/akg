@@ -40,6 +40,11 @@ class TileSpaceCollector {
     space_->gpu_block_range_table = init_array;
     space_->gpu_thread_mod_table = init_array;
     space_->gpu_block_mod_table = init_array;
+    if (analyzer_.scop_info_.user_config_.GetTarget() == TARGET_CUDA) {
+      cared_info_ = {"index", "C1_range", "C0_range", "C1_mod", "C0_mod", "gpu_thread_range", "gpu_block_range", "gpu_thread_mod", "gpu_block_mod"};
+    } else {
+      cared_info_ = {"index", "C1_range", "C0_range", "C1_mod", "C0_mod"};
+    }
   }
   ~TileSpaceCollector() = default;
 
@@ -393,9 +398,7 @@ class TileSpaceCollector {
   DLContext ctx = {kDLCPU, 0};
   std::vector<TileAxis *> tile_axes_;
   std::vector<bool> is_shared_;
-  std::unordered_set<std::string> cared_info_ = {"index",           "C1_range",       "C0_range",
-                                                 "C1_mod",          "C0_mod",         "gpu_thread_range",
-                                                 "gpu_block_range", "gpu_thread_mod", "gpu_block_mod"};
+  std::unordered_set<std::string> cared_info_;
 
   struct Result {
     std::vector<int> tile;
