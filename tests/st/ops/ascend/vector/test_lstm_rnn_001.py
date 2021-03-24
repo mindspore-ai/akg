@@ -24,6 +24,7 @@ Testcase_ExpectedResult:
 """
 
 import os
+import pytest
 from tests.common.base import TestBase
 from tests.common.test_run.lstm_rnn_run import lstmcell_run
 from tests.common.test_run.lstm_rnn_run import rnn_tanh_cell_run
@@ -109,8 +110,12 @@ class TestCase(TestBase):
             ("lstm_rnn_ad_4", lstmcell_h_ad_run, ((1, 16, 32), "float16", "lstm_h_ad_4_fp16"), ((65536, 65536), )),
         ]
 
+    @pytest.mark.level1
+    @pytest.mark.platform_arm_ascend_training
+    @pytest.mark.platform_x86_ascend_training
+    @pytest.mark.env_onecard
     def test_run(self):
-        self.common_run(self.testarg)
+        self.common_run(self.testarg[0:1])
 
     def test_run_level2(self):
         self.common_run(self.testarg_level2)

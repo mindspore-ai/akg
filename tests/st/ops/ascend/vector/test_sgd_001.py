@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 import os
+import pytest
 from tests.common.base import TestBase
 from tests.common.test_run.sgd_run import sgd_run
 
@@ -42,6 +43,10 @@ class TestSgd(TestBase):
         ]
         return
 
+    @pytest.mark.level1
+    @pytest.mark.platform_arm_ascend_training
+    @pytest.mark.platform_x86_ascend_training
+    @pytest.mark.env_onecard
     def test_run(self):
         """
         run case.#

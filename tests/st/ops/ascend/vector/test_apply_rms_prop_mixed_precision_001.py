@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import pytest
 from tests.common.base import TestBase
 from tests.common.test_run.apply_rms_prop_mixed_precision_run import apply_rms_prop_mixed_precision_run as run_func
 
@@ -31,6 +32,10 @@ class TestCase(TestBase):
             ("apply_rms_prop_mixed_precision_01", run_func, ((16, 16), "float32", 0.5, 0.9, 0.6, 1e-6)),
         ]
 
+    @pytest.mark.level1
+    @pytest.mark.platform_arm_ascend_training
+    @pytest.mark.platform_x86_ascend_training
+    @pytest.mark.env_onecard
     def test_run_level1(self):
         self.common_run(self.testarg_level1)
 

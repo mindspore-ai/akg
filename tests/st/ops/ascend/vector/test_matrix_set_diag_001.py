@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import pytest
 from tests.common.base import TestBase
 from tests.common.test_run.matrix_set_diag_run import matrix_set_diag_run
 
@@ -55,12 +56,16 @@ class TestCase(TestBase):
             ("matrix_set_diag_001", matrix_set_diag_run, ((2, 4, 9, 7), (1, 4, 7), "float16")),
         ]
 
+    @pytest.mark.level1
+    @pytest.mark.platform_arm_ascend_training
+    @pytest.mark.platform_x86_ascend_training
+    @pytest.mark.env_onecard
     def test_run(self):
         """
         run case.#
         :return:
         """
-        self.common_run(self.testarg)
+        self.common_run(self.testarg[0:2])
 
     def test_run_rpc_cloud(self):
         """

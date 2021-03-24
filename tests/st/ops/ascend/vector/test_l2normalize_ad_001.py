@@ -24,7 +24,7 @@ Testcase_ExpectedResult:
 """
 import os
 import pytest
-from tests.common.base import TestBase
+from tests.common.base import TestBase, get_splitted_cases
 from tests.common.test_run.l2normalize_ad_run import l2normalize_ad_run
 
 
@@ -81,10 +81,45 @@ class TestCase(TestBase):
     def test_run_level1(self):
         self.common_run(self.testarg_level1)
 
+    def test_level1(self, split_nums, split_idx):
+        self.common_run(get_splitted_cases(self.testarg_level1, split_nums, split_idx))
+
     def test_run_level2(self):
         self.common_run(self.testarg_level2)
 
     def teardown(self):
-
         self._log.info("============= {0} Teardown============".format(self.casename))
         return
+
+
+@pytest.mark.level1
+@pytest.mark.platform_arm_ascend_training
+@pytest.mark.platform_x86_ascend_training
+@pytest.mark.env_onecard
+def test0_level1():
+    a = TestCase()
+    a.setup()
+    a.test_level1(3, 0)
+    a.teardown()
+
+
+@pytest.mark.level1
+@pytest.mark.platform_arm_ascend_training
+@pytest.mark.platform_x86_ascend_training
+@pytest.mark.env_onecard
+def test1_level1():
+    a = TestCase()
+    a.setup()
+    a.test_level1(3, 1)
+    a.teardown()
+
+
+@pytest.mark.level1
+@pytest.mark.platform_arm_ascend_training
+@pytest.mark.platform_x86_ascend_training
+@pytest.mark.env_onecard
+def test2_level1():
+    a = TestCase()
+    a.setup()
+    a.test_level1(3, 2)
+    a.teardown()

@@ -15,6 +15,7 @@
 """xlogy_grad test case"""
 
 import os
+import pytest
 from tests.common.base import TestBase
 from tests.common.test_run.xlogy_grad_run import xlogy_grad_run
 
@@ -63,6 +64,10 @@ class TestCos(TestBase):
         """bug case in mini: if len(shape1) < len(shape2), the precision maynot meet demand"""
         self.common_run(self.testarg_bug)
 
+    @pytest.mark.level1
+    @pytest.mark.platform_arm_ascend_training
+    @pytest.mark.platform_x86_ascend_training
+    @pytest.mark.env_onecard
     def test_cloud_run(self):
         """run cloud case"""
         self.common_run(self.testarg_cloud)

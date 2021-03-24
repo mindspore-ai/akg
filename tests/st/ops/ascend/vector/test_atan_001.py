@@ -15,6 +15,7 @@
 """atan test case"""
 
 import os
+import pytest
 from tests.common.base import TestBase
 from tests.common.test_run.atan_run import atan_run
 
@@ -39,6 +40,10 @@ class TestAtan(TestBase):
             ("atan_f32_04", atan_run, ((32, 256, 16), "float32")),
         ]
 
+    @pytest.mark.level1
+    @pytest.mark.platform_arm_ascend_training
+    @pytest.mark.platform_x86_ascend_training
+    @pytest.mark.env_onecard
     def test_mini_run(self):
         """run case for mini"""
         self.common_run(self.testarg_mini)

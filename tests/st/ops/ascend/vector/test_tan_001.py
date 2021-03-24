@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import os
+import pytest
 from tests.common.base import TestBase
 from tests.common.test_run.tan_run import tan_run
 
@@ -43,6 +44,10 @@ class TestCase(TestBase):
             ("tan_001", tan_run, ((4, 4), "int32")),
         ]
 
+    @pytest.mark.level1
+    @pytest.mark.platform_arm_ascend_training
+    @pytest.mark.platform_x86_ascend_training
+    @pytest.mark.env_onecard
     def test_run(self):
         """
         run case.#

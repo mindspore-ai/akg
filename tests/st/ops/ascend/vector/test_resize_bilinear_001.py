@@ -24,8 +24,9 @@ Testcase_ExpectedResult:
 """
 import os
 import pytest
-from tests.common.base import TestBase
+from tests.common.base import TestBase, get_splitted_cases
 from tests.common.test_run.resize_bilinear_run import resize_bilinear_run
+
 
 ############################################################
 # TestCase= class: put to tests/*/
@@ -75,13 +76,18 @@ class TestCase(TestBase):
             # ("resize_bilinear_33", resize_bilinear_run, ([1,500,375,3], [1000,750], "float16", "cce_resize_bilinear_fp16")),  # poly
         ]
 
-        self.test_level1 = [
-            ("resize_bilinear_02", resize_bilinear_run, ([4, 129, 129, 21], [129, 129], "float16", "cce_resize_bilinear_fp16")),
-            ("resize_bilinear_06", resize_bilinear_run, ([1, 129, 129, 48], [129, 129], "float16", "cce_resize_bilinear_fp16")),
-            ("resize_bilinear_24", resize_bilinear_run, ([1, 400, 500, 3], [400, 500], "float16", "cce_resize_bilinear_fp16")),
-            ("resize_bilinear_25", resize_bilinear_run, ([1, 333, 500, 3], [333, 500], "float16", "cce_resize_bilinear_fp16")),
+        self.testarg_level1 = [
+            ("resize_bilinear_02", resize_bilinear_run,
+             ([4, 129, 129, 21], [129, 129], "float16", "cce_resize_bilinear_fp16")),
+            ("resize_bilinear_06", resize_bilinear_run,
+             ([1, 129, 129, 48], [129, 129], "float16", "cce_resize_bilinear_fp16")),
+            ("resize_bilinear_24", resize_bilinear_run,
+             ([1, 400, 500, 3], [400, 500], "float16", "cce_resize_bilinear_fp16")),
+            ("resize_bilinear_25", resize_bilinear_run,
+             ([1, 333, 500, 3], [333, 500], "float16", "cce_resize_bilinear_fp16")),
             ("resize_bilinear_34", resize_bilinear_run, ([1, 9, 9, 48], [9, 9], "float16", "cce_resize_bilinear_fp16")),
-            ("resize_bilinear_35", resize_bilinear_run, ([1, 375, 500, 3], [375, 500], "float16", "cce_resize_bilinear_fp16")),
+            ("resize_bilinear_35", resize_bilinear_run,
+             ([1, 375, 500, 3], [375, 500], "float16", "cce_resize_bilinear_fp16")),
         ]
         return
 
@@ -93,15 +99,77 @@ class TestCase(TestBase):
         self.common_run(self.testarg)
 
     def test_daily_ci(self):
-        self.common_run(self.test_level1)
+        self.common_run(self.testarg_level1)
+
+    def test_level1(self, split_nums, split_idx):
+        self.common_run(get_splitted_cases(self.testarg_level1, split_nums, split_idx))
 
     def teardown(self):
         self._log.info("============= {0} Teardown============".format(self.casename))
         return
 
 
-if __name__ == "__main__":
+@pytest.mark.level1
+@pytest.mark.platform_arm_ascend_training
+@pytest.mark.platform_x86_ascend_training
+@pytest.mark.env_onecard
+def test0_level1():
     a = TestCase()
     a.setup()
-    a.test_run()
+    a.test_level1(6, 0)
+    a.teardown()
+
+
+@pytest.mark.level1
+@pytest.mark.platform_arm_ascend_training
+@pytest.mark.platform_x86_ascend_training
+@pytest.mark.env_onecard
+def test1_level1():
+    a = TestCase()
+    a.setup()
+    a.test_level1(6, 1)
+    a.teardown()
+
+
+@pytest.mark.level1
+@pytest.mark.platform_arm_ascend_training
+@pytest.mark.platform_x86_ascend_training
+@pytest.mark.env_onecard
+def test2_level1():
+    a = TestCase()
+    a.setup()
+    a.test_level1(6, 2)
+    a.teardown()
+
+
+@pytest.mark.level1
+@pytest.mark.platform_arm_ascend_training
+@pytest.mark.platform_x86_ascend_training
+@pytest.mark.env_onecard
+def test3_level1():
+    a = TestCase()
+    a.setup()
+    a.test_level1(6, 3)
+    a.teardown()
+
+
+@pytest.mark.level1
+@pytest.mark.platform_arm_ascend_training
+@pytest.mark.platform_x86_ascend_training
+@pytest.mark.env_onecard
+def test3_level1():
+    a = TestCase()
+    a.setup()
+    a.test_level1(6, 4)
+    a.teardown()
+
+
+@pytest.mark.level1
+@pytest.mark.platform_arm_ascend_training
+@pytest.mark.platform_x86_ascend_training
+@pytest.mark.env_onecard
+def test3_level1():
+    a = TestCase()
+    a.setup()
+    a.test_level1(6, 5)
     a.teardown()

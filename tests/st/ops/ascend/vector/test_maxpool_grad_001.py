@@ -14,8 +14,9 @@
 
 import os
 import pytest
-from tests.common.base import TestBase
+from tests.common.base import TestBase, get_splitted_cases
 from tests.common.test_run.maxpool_grad_run import maxpool_grad_run
+
 
 ############################################################
 # TestCase= class: put to tests/*/
@@ -44,7 +45,7 @@ class TestCase(TestBase):
             ("lenet_MaxPoolV2Grad_32_1_28_28_16_f16_VALID_2_0_2", maxpool_grad_run, (
                 (32, 1, 28, 28, 16), (2, 2), (2, 2), "VALID", "float16")),
 
-            ("other_mpgrad_fp16_01", maxpool_grad_run, ((1, 1,  4,  4, 16), (2, 2), (2, 2), (0, 0, 0, 0), "float16")),
+            ("other_mpgrad_fp16_01", maxpool_grad_run, ((1, 1, 4, 4, 16), (2, 2), (2, 2), (0, 0, 0, 0), "float16")),
             #  ("other_mpgrad_fp16_02", maxpool_grad_run, ((1, 1, 16, 16, 16), (4, 4), (4, 4), (0, 0, 0, 0), "float16")),
             #  ("other_mpgrad_fp16_03", maxpool_grad_run, ((1, 1, 32, 32, 16), (4, 4), (4, 4), (0, 0, 0, 0), "float16")),
         ]
@@ -52,15 +53,19 @@ class TestCase(TestBase):
             # testflag,opfuncname,testRunArgs: shape, kernel, stride, pad, dtype, dimArgs
             # resnet 50
             ("resnet50_mpgrad_fp16_01", maxpool_grad_run, ((32, 4, 112, 112, 16), (3, 3), (2, 2), 'SAME', "float16")),
-            ("resnet50_mpgrad_fp16_02", maxpool_grad_run, ((32, 4, 112, 112, 16), (3, 3), (2, 2), (0, 1, 0, 1), "float16")),
-            ("resnet50_mpgrad_fp16_03", maxpool_grad_run, ((32, 4, 112, 112, 16), (3, 3), (2, 2), (1, 0, 1, 0), "float16")),
+            ("resnet50_mpgrad_fp16_02", maxpool_grad_run,
+             ((32, 4, 112, 112, 16), (3, 3), (2, 2), (0, 1, 0, 1), "float16")),
+            ("resnet50_mpgrad_fp16_03", maxpool_grad_run,
+             ((32, 4, 112, 112, 16), (3, 3), (2, 2), (1, 0, 1, 0), "float16")),
         ]
 
         self.testarg_cloud = [
             # testflag,opfuncname,testRunArgs: shape, kernel, stride, pad, dtype, dimArgs
             ("resnet50_mpgrad_fp32_01", maxpool_grad_run, ((32, 4, 112, 112, 16), (3, 3), (2, 2), 'SAME', "float32")),
-            ("resnet50_mpgrad_fp32_02", maxpool_grad_run, ((32, 4, 112, 112, 16), (3, 3), (2, 2), (0, 1, 0, 1), "float32")),
-            ("resnet50_mpgrad_fp32_03", maxpool_grad_run, ((32, 4, 112, 112, 16), (3, 3), (2, 2), (1, 0, 1, 0), "float32")),
+            ("resnet50_mpgrad_fp32_02", maxpool_grad_run,
+             ((32, 4, 112, 112, 16), (3, 3), (2, 2), (0, 1, 0, 1), "float32")),
+            ("resnet50_mpgrad_fp32_03", maxpool_grad_run,
+             ((32, 4, 112, 112, 16), (3, 3), (2, 2), (1, 0, 1, 0), "float32")),
         ]
         self.testarg_aic = [
         ]
@@ -76,6 +81,9 @@ class TestCase(TestBase):
     def test_run_level_1(self):
         self.common_run(self.testarg_l1)
 
+    def test_level1(self, split_nums, split_idx):
+        self.common_run(get_splitted_cases(self.testarg_l1, split_nums, split_idx))
+
     def test_run_aic(self):
         self.common_run(self.testarg_aic)
 
@@ -83,6 +91,38 @@ class TestCase(TestBase):
         self.common_run(self.testarg_cloud)
 
     def teardown(self):
-
         self._log.info("============= {0} Teardown============".format(self.casename))
         return
+
+
+@pytest.mark.level1
+@pytest.mark.platform_arm_ascend_training
+@pytest.mark.platform_x86_ascend_training
+@pytest.mark.env_onecard
+def test0_level1():
+    a = TestCase()
+    a.setup()
+    a.test_level1(3, 0)
+    a.teardown()
+
+
+@pytest.mark.level1
+@pytest.mark.platform_arm_ascend_training
+@pytest.mark.platform_x86_ascend_training
+@pytest.mark.env_onecard
+def test1_level1():
+    a = TestCase()
+    a.setup()
+    a.test_level1(3, 1)
+    a.teardown()
+
+
+@pytest.mark.level1
+@pytest.mark.platform_arm_ascend_training
+@pytest.mark.platform_x86_ascend_training
+@pytest.mark.env_onecard
+def test2_level1():
+    a = TestCase()
+    a.setup()
+    a.test_level1(3, 2)
+    a.teardown()

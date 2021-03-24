@@ -15,6 +15,7 @@
 """quantized_avg_pool test case"""
 
 import os
+import pytest
 from tests.common.base import TestBase
 from tests.common.test_run.quantized_avg_pool_run import quantized_avg_pool_run
 
@@ -92,9 +93,13 @@ class TestQuantizedAvgPool(TestBase):
                 [1, 0], 2, 0)),
         ]
 
+    @pytest.mark.level1
+    @pytest.mark.platform_arm_ascend_training
+    @pytest.mark.platform_x86_ascend_training
+    @pytest.mark.env_onecard
     def test_mini_run(self):
         """run case for mini"""
-        self.common_run(self.testarg_mini)
+        self.common_run(self.testarg_mini[0:3])
 
     def test_cloud_run(self):
         """run case for cloud"""

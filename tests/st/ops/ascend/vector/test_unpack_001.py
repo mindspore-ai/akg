@@ -15,6 +15,7 @@
 """unpack test case"""
 
 import os
+import pytest
 from tests.common.base import TestBase
 from tests.common.test_run.unpack_run import unpack_run
 
@@ -60,6 +61,10 @@ class TestUnpack(TestBase):
             ("unpack_f16_8_big", unpack_run, ((8, 127), "float16", "ND", None, 0)),
         ]
 
+    @pytest.mark.level1
+    @pytest.mark.platform_arm_ascend_training
+    @pytest.mark.platform_x86_ascend_training
+    @pytest.mark.env_onecard
     def test_mini_run(self):
         """mini run case"""
         self.common_run(self.testarg)

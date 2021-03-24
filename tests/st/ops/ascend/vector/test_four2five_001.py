@@ -141,12 +141,16 @@ class TestCase(TestBase):
     def test_run_rpc_cloud(self):
         self.common_run(self.testarg_rpc_cloud)
 
+    @pytest.mark.level1
+    @pytest.mark.platform_arm_ascend_training
+    @pytest.mark.platform_x86_ascend_training
+    @pytest.mark.env_onecard
     def test_run_level1(self):
         """
         run case.#
         :return:
         """
-        self.common_run(self.testarg_level1)
+        self.common_run(self.testarg_level1[0:10])
 
     def teardown(self):
         """

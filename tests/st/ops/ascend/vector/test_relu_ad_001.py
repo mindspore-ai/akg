@@ -136,6 +136,10 @@ class TestCase(TestBase):
         """
         self.common_run(self.testarg_rpc_cloud)
 
+    @pytest.mark.level1
+    @pytest.mark.platform_arm_ascend_training
+    @pytest.mark.platform_x86_ascend_training
+    @pytest.mark.env_onecard
     def test_run_restnet(self):
         self.common_run(self.testarg_resnet50)
 

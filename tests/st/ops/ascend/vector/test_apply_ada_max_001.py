@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import pytest
 from tests.common.base import TestBase
 
 
@@ -29,6 +30,10 @@ class TestCase(TestBase):
             ("apply_ada_max_002", "apply_ada_max_run", ((16, 16), "float32", 1e-5)),
         ]
 
+    @pytest.mark.level1
+    @pytest.mark.platform_arm_ascend_training
+    @pytest.mark.platform_x86_ascend_training
+    @pytest.mark.env_onecard
     def test_run(self):
         self.common_run(self.testarg)
 

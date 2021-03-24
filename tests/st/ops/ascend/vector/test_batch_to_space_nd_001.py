@@ -77,6 +77,10 @@ class TestCase(TestBase):
         """
         self.common_run(self.test_level0)
 
+    @pytest.mark.level1
+    @pytest.mark.platform_arm_ascend_training
+    @pytest.mark.platform_x86_ascend_training
+    @pytest.mark.env_onecard
     def test_run_daily_ci(self):
         """
         run case.#

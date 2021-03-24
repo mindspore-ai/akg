@@ -50,12 +50,9 @@ class TestAssignAdd(TestBase):
             ("test_assign_add_1_fp16", assign_add_run, ([1], [1], "float16")),
             ("test_assign_add_1_fp32", assign_add_run, ([1], [1], "float32")),
         ]
-        self.testarg_cloud = [
-            # ("test_assign_add_2_2_fp16",                        assign_add_run, ([2], [2],                      "float32"), ([2, 2],)),
-        ]
+
         self.testarg_level1 = [
             ## testflag, opfuncname, testRunArgs
-
             ("test_assign_add_8192_1024_8192_1024_fp16", assign_add_run, ([8192, 1024], [8192, 1024], "float16")),
             ("test_assign_add_30522_1024_30522_1024_fp16", assign_add_run, ([30522, 1024], [30522, 1024], "float16")),
             ("test_assign_add_1024_4096_1024_4096_fp16", assign_add_run, ([1024, 4096], [1024, 4096], "float16")),
@@ -65,9 +62,6 @@ class TestAssignAdd(TestBase):
              ([64, 128, 1024], [64, 128, 1024], "float16")),
             ("test_assign_add_8_16_128_128_8_1_128_128_fp16", assign_add_run,
              ([8, 16, 128, 128], [8, 1, 128, 128], "float16")),
-            ("test_assign_add_2_1_fp16", assign_add_run, ([2], [1], "float16")),
-            ("test_assign_add_1024_1_fp16", assign_add_run, ([1024], [1], "float16")),
-
             ("test_assign_add_1024_1024_1_fp16", assign_add_run, ([1024, 1024], [1], "float16"), ([1, 1], [1024, 1024])),
             ("test_assign_add_30522_1024_1_fp16", assign_add_run, ([30522, 1024], [1], "float16")),
 
@@ -85,13 +79,10 @@ class TestAssignAdd(TestBase):
         """
         self.common_run(self.testarg)
 
-    def test_run_cloud(self):
-        """
-        run case.#
-        :return:
-        """
-        self.common_run(self.testarg_cloud)
-
+    @pytest.mark.level1
+    @pytest.mark.platform_arm_ascend_training
+    @pytest.mark.platform_x86_ascend_training
+    @pytest.mark.env_onecard
     def test_run_level1(self):
         """
         run case.#

@@ -73,10 +73,14 @@ class TestCase(TestBase):
     def test_run_cloud(self):
         self.common_run(self.testarg_cloud)
 
+    @pytest.mark.level1
+    @pytest.mark.platform_arm_ascend_training
+    @pytest.mark.platform_x86_ascend_training
+    @pytest.mark.env_onecard
     def test_run_level1(self):
         self.common_run(self.testarg_level1)
 
-    def test_run_level1(self):
+    def test_run_level2(self):
         self.common_run(self.testarg_level2)
 
     def teardown(self):

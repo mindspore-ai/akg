@@ -24,7 +24,7 @@ Testcase_ExpectedResult:
 """
 import os
 import pytest
-from tests.common.base import TestBase
+from tests.common.base import TestBase, get_splitted_cases
 
 
 ############################################################
@@ -76,9 +76,34 @@ class TestCase(TestBase):
     def test_run_nightly(self):
         self.common_run(self.testarg_nightly)
 
+    def test_level1(self, split_nums, split_idx):
+        self.common_run(get_splitted_cases(self.testarg_nightly, split_nums, split_idx))
+
     def test_run_rpc_cloud(self):
         self.common_run(self.testarg_rpc_cloud)
 
     def teardown(self):
         self._log.info("============= {0} Teardown============".format(self.casename))
         return
+
+
+@pytest.mark.level1
+@pytest.mark.platform_arm_ascend_training
+@pytest.mark.platform_x86_ascend_training
+@pytest.mark.env_onecard
+def test0_level1():
+    a = TestCase()
+    a.setup()
+    a.test_level1(2, 0)
+    a.teardown()
+
+
+@pytest.mark.level1
+@pytest.mark.platform_arm_ascend_training
+@pytest.mark.platform_x86_ascend_training
+@pytest.mark.env_onecard
+def test1_level1():
+    a = TestCase()
+    a.setup()
+    a.test_level1(2, 1)
+    a.teardown()
