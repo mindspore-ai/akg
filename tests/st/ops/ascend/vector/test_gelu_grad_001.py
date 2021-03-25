@@ -41,8 +41,8 @@ class TestCase(TestBase):
         self.testarg = [
             # caseflag,opfuncname,testRunArgs, dimArgs
             # shape, dtype
-            # ("gelu_grad_run1", "gelu_grad_run", ((64 * 20, 1024), "float16")),
-            # ("gelu_grad_run3", "gelu_grad_run", ((8, 16), "float16"))
+            ("gelu_grad_run1", "gelu_grad_run", ((64 * 20, 1024), "float16")),
+            ("gelu_grad_run3", "gelu_grad_run", ((8, 16), "float16"))
         ]
         self.testlevel1 = [
             # caseflag,opfuncname,testRunArgs, dimArgs
