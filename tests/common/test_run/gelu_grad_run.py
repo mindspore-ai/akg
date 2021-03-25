@@ -17,10 +17,11 @@ from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
 from tests.common.test_op import gelu_grad
 from tests.common.base import get_rtol_atol
+from tests.common.gen_random import random_gaussian
 
 
 def gelu_grad_data(shape, dtype):
-    x = np.random.rand(*shape).astype(dtype) * 4 - 2  # -2 ~ 2
+    x = random_gaussian(shape, miu=10, sigma=0.3).astype(dtype)
     dy = np.random.rand(*shape).astype(dtype) * 4 - 2  # -2 ~ 2
 
     t = 0.044715
