@@ -14,3 +14,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from .build_module import build, _build, _build_to_func, generate_trait, get_tiling_space, should_enable_atomic_add
+from .topi import *

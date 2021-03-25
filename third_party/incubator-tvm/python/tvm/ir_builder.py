@@ -14,6 +14,9 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+
+# 2021.3.25 - Add for_range_n, load and store api
+
 """Developer API of IR node builder make function."""
 from __future__ import absolute_import as _abs
 
@@ -227,6 +230,94 @@ class IRBuilder(object):
             self.emit(_make.For(
                 loop_var, begin, extent, for_type_id, 0, self._pop_seq()))
         return WithScope(loop_var, _exit_cb)
+
+    def for_range_n(self, extents, prefix_name="i", dtype="int32", for_type="serial"):
+        """ Create a multilayer for iteration scope
+
+        Parameters
+        ----------
+        extents: list or tuple
+           The end iteration scope of each layer.
+
+        prefix_name: str, optional
+           The prefix name of iteration variable.
+
+        dtype : str, optional
+            The data type of iteration variable.
+
+        for_type : str, optional
+            The special tag on the for loop.
+
+        Returns
+        -------
+        loop_scope : With.Scope of Var list
+            The for scope, when enters returns loop_var
+        """
+        self._seq_stack.append([])
+        loop_vars = []
+        for e in extents:
+            name = prefix_name + str(self.nidx)
+            loop_vars.append(_api.var(name, dtype=dtype))
+            self.nidx += 1
+        def _exit_cb():
+            if for_type == "serial":
+                for_type_id = 0
+            elif for_type == "parallel":
+                for_type_id = 1
+            elif for_type == "vectorize":
+                for_type_id = 2
+            elif for_type == "unroll":
+                for_type_id = 3
+            else:
+                raise ValueError("Unknown for_type")
+            stmt = self._pop_seq()
+            for i in range(len(extents)-1, -1, -1):
+                stmt = _make.For(loop_vars[i], 0, extents[i], for_type_id, 0, stmt)
+            self.emit(stmt)
+        return WithScope(loop_vars, _exit_cb)
+
+    def load(self, buf, index):
+        """Load element from tensor buffer.
+
+        Parameters
+        ----------
+        buf: Buffer
+           The buffer to load.
+
+        index: Expr
+           Element index to load
+
+        Returns
+        -------
+        expr:  Expr
+           The result of load expr.
+        """
+        if not isinstance(index, (list, tuple)):
+            index = [index]
+        return _make.Call(buf.dtype, "tensor_load", [buf.data, *index], _Call.PureIntrinsic, None, 0)
+
+    def store(self, buf, index, value):
+        """Store value to tensor buffer.
+
+        Parameters
+        ----------
+        buf: Buffer
+           Tensor buffer.
+
+        index: Expr
+           Element index.
+
+        value: Expr
+           Value to store.
+
+        Returns
+        -------
+        stmt:  Stmt
+           The result of emit stmt.
+        """
+        if not isinstance(index, (list, tuple)):
+            index = [index]
+        self.emit(_make.Call(buf.dtype, "tensor_store", [buf.data, value, *index], _Call.PureIntrinsic, None, 0))
 
     def if_scope(self, cond):
         """Create an if scope.

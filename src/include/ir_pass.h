@@ -203,6 +203,9 @@ Stmt SubstituteDivVar(Stmt stmt);
 Stmt UnrollNonConstantExtent(Stmt s);
 
 Stmt ValueNumbering(Stmt stmt);
+
+Stmt TensorAccessRewrite(const Stmt stmt);
+
 }  // namespace ir
 }  // namespace akg
 
