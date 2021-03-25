@@ -540,6 +540,21 @@ def _set_compute_attrs(desc_d_in, attr):
     desc_s = json.dumps(desc_d)
     return desc_d, desc_s
 
+def _pragma_rmselfdep(kernel_info):
+    for op in kernel_info["op_desc"]:
+        if op['name'] == "MatMul":
+            return False
+    return True
+
+def _enable_auto_inline(kernel_info):
+    for op in kernel_info["op_desc"]:
+        # For the TransData op operator, if the inline is not performed,
+        # the operator fusion scene is difficult to handle for the poly.
+        if op['name'] == "TransData":
+            return True
+    # For the Ascend, turn 'enable_auto_inline' off for composite op by default.
+    return False
+
 def _build_to_func(desc_s_in, desc_d_in, attr=None, use_repo=True):
     """
     build kernel with compute description in json format
@@ -565,11 +580,11 @@ def _build_to_func(desc_s_in, desc_d_in, attr=None, use_repo=True):
         return repo
     if attr is None:
         attr = {'dim': ''}
-    # turn 'enable_auto_inline' off for composite op by default.
-    if 'enable_auto_inline' not in attr:
-        attr['enable_auto_inline'] = False
     desc_d = desc_d_in
     desc_s = desc_s_in
+    attr["pragma_rmselfdep"] = _pragma_rmselfdep(desc_d)
+    if "enable_auto_inline" not in attr:
+        attr["enable_auto_inline"] = _enable_auto_inline(desc_d)
     if use_repo:
         compute, shape, dtype = generate_trait(desc_d)
         repo_attr = get_repo([compute, shape, dtype, 'metadata', 'attrs'], {})
@@ -740,10 +755,15 @@ def _build_to_gpu_func(desc_s, desc_d, attrs=None, poly=False):
     return func(desc_s, attrs, poly)
 
 def _build(desc_s, desc_d, attrs=None, poly=False, use_repo=True):
+    if attrs is None:
+        attrs = dict()
+    if "enable_atomic_add" not in attrs.keys():
+        enable_atomic_add = should_enable_atomic_add(desc_d)
+        attrs["enable_atomic_add"] = enable_atomic_add
     if desc_d['process'] == 'cuda':
         return _build_to_gpu_func(desc_s, desc_d, attrs, poly)
-    rst = _build_to_func(desc_s, desc_d, attrs, use_repo)
-    return _api_internal._BuildToModule(rst)
+    else:
+        return _build_to_func(desc_s, desc_d, attrs, use_repo)
 
 def build(kernel_desc, attrs=None, poly=False, use_repo=True):
     """
@@ -762,7 +782,10 @@ def build(kernel_desc, attrs=None, poly=False, use_repo=True):
         assert isinstance(kernel_desc, dict)
         desc_s = json.dumps(kernel_desc)
         desc_d = kernel_desc
-    return _build(desc_s, desc_d, attrs, poly, use_repo)
+    rst = _build(desc_s, desc_d, attrs, poly, use_repo)
+    if desc_d['process'] == 'cuda':
+        return rst
+    return _api_internal._BuildToModule(rst)
 
 def get_tiling_space(kernel_desc, level=1, attr=None):
     """
