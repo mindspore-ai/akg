@@ -1,0 +1,9 @@
+{
+  "enable_atomic_add": {
+    "dtype": "bool",
+    "options": [
+      "False",
+      "True"
+    ]
+  }
+}

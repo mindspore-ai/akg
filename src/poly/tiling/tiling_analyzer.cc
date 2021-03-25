@@ -1351,19 +1351,34 @@ void TilingAnalyzer::AddPostTilingConstraints() {
 
   if (scop_info_.user_config_.GetTarget() == TARGET_CUDA) {
     ReduceStrategy reduce_strategy(this);
-    actived_strategies.push_back(&reduce_strategy);
     ModStrategy mod_strategy(this);
-    actived_strategies.push_back(&mod_strategy);
-
+    GemmStrategy gemm_strategy(this);
     GpuDmaAnalysisStrategy dma_analysis_strategy(this);
+    CustomTilingStrategy custom_strategy(this);
     GpuStrategy gpu_strategy(this);
     if (scop_info_.analysis_result_.GetIsGpuDmaAnalysed()) {
       actived_strategies.push_back(&dma_analysis_strategy);
     } else {
+      if (scop_info_.user_config_.GetIsTuning()) {
+        actived_strategies.push_back(&custom_strategy);
+      } else {
+        actived_strategies.push_back(&reduce_strategy);
+        actived_strategies.push_back(&mod_strategy);
+        actived_strategies.push_back(&gemm_strategy);
+      }
       actived_strategies.push_back(&gpu_strategy);
     }
     strategy_manager->SetStrategies(actived_strategies);
     strategy_manager->ExecuteGpu();
+    if (scop_info_.user_config_.GetIsTuning()) {
+      binding_spaces_.clear();
+      for (auto i : gpu_strategy.thread_binding_spaces_) {
+        UpdateBindingSpace(i);
+      }
+      for (auto i : gpu_strategy.block_binding_spaces_) {
+        UpdateBindingSpace(i);
+      }
+    }
     return;
   }
 }
@@ -1376,7 +1391,6 @@ void TilingAnalyzer::AddTilingConstraints() {
   if (scop_info_.user_config_.GetTarget() == TARGET_CUDA) {
     CastStrategy cast_strategy(this);
     actived_strategies.push_back(&cast_strategy);
-
     strategy_manager->SetStrategies(actived_strategies);
     strategy_manager->ExecuteGpu();
     return;
@@ -1429,7 +1443,7 @@ void TilingAnalyzer::AddTilingConstraints() {
 
 bool TilingAnalyzer::Prepare() {
   logger_ = std::unique_ptr<TileLogger>(new (std::nothrow) TileLogger(
-    scop_info_.AddDumpDir("tiling.log"), !scop_info_.user_config_.GetDumpPolyDir().empty()));
+  scop_info_.AddDumpDir("tiling.log"), !scop_info_.user_config_.GetDumpPolyDir().empty()));
   CHECK(logger_) << "memory alloc fail.";
   // Stage 1: Analyze schedule tree.
   ScheduleTreeAnalyzer sch_ana(this, this->sch_);
