@@ -33,7 +33,10 @@ constexpr auto SHARED = "shared";
 constexpr auto ALLOC = "ALLOC";
 constexpr auto MEM_LIMIT = 49152;
 static std::unordered_map<std::string, air::Type> type_mapping = {
-  {"float32", air::Float(32)}, {"float16", air::Float(16)}, {"int32", air::Int(32)}, {"bool", air::Bool()}};
+  {"float64", air::Float(64)}, {"float32", air::Float(32)}, {"float16", air::Float(16)}, {"bool", air::Bool()},
+  {"int64", air::Int(64)},     {"int32", air::Int(32)},     {"int16", air::Int(16)},     {"int8", air::Int(8)},
+  {"uint64", air::UInt(64)},   {"uint32", air::UInt(32)},   {"uint16", air::UInt(16)},   {"uint8", air::UInt(8)},
+};
 
 std::string GetProcess(const std::string &json_str);
 std::string GetSchedule(Array<Tensor> &outputs);
