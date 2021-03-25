@@ -222,16 +222,28 @@ class FuseCheck {
   void Run() {
     ReduceCheck();
     OutputBroadcastCheck();
+    ExternOpCheck();
     if (!has_matmul_ && !has_reduce_ && !has_output_broadcast_) {
       BroadcastElemwiseCheck();
     }
   }
 
   bool NeedToFuse() {
-    if (has_matmul_) {
+    if (has_matmul_ || has_extern_) {
       return false;
     }
     return has_reduce_ || has_output_broadcast_ || is_broadcast_elemwise_;
+  }
+
+  void ExternOpCheck() {
+    for (const auto &s : sch_->stages) {
+      auto op = s->op;
+      CHECK(op.defined());
+      if (op.as<air::ExternOpNode>()) {
+        has_extern_ = true;
+        break;
+      }
+    }
   }
 
   void ReduceCheck() {
@@ -289,6 +301,7 @@ class FuseCheck {
   bool has_matmul_{false};
   bool has_output_broadcast_{false};
   bool is_broadcast_elemwise_{false};
+  bool has_extern_{false};
   std::unordered_map<Operation, std::unordered_set<Operation>> op_input_ops;
   std::unordered_map<Operation, Operation> output_broadcast_pairs_;
 

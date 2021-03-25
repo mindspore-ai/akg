@@ -84,5 +84,6 @@ REGISTER_PASS(StmtPatternRewrite);
 REGISTER_PASS(SubstituteDivVar);
 REGISTER_PASS(UnrollNonConstantExtent)
 REGISTER_PASS(ValueNumbering);
+REGISTER_PASS(TensorAccessRewrite);
 }  // namespace ir
 }  // namespace akg

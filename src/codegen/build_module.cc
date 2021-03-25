@@ -495,7 +495,8 @@ NodeRef LowerStmt(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeR
   auto new_sch = sch.normalize();
   auto bounds = air::schedule::InferBound(new_sch);
   Stmt stmt = make_pass("schedule.ScheduleOps", new_sch, bounds, false);
-
+ 
+  stmt = NEXT_PASS(TensorAccessRewrite, stmt);
   if (target_platform->device_type == kDLGPU) {
     if (polyhedral) {
       stmt = NEXT_PASS(ReplaceSeparator, stmt);

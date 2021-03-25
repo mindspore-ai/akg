@@ -188,10 +188,15 @@ class CSE {
 };
 
 void AutoInline(Schedule sch, const Target &target ,bool enable_cse) {
-  // Note: do not support inline of hybrid ops
+  // Note: do not support inline of hybrid ops and extern ops
   std::unordered_set<Operation, NodeHash, NodeEqual> uninlinable;
   for (const Stage &s : sch->stages) {
     if (const auto op = s->op.as<air::HybridOpNode>()) {
+      for (Tensor t : op->inputs) {
+        uninlinable.insert(t->op);
+      }
+    }
+    if (const auto op = s->op.as<air::ExternOpNode>()) {
       for (Tensor t : op->inputs) {
         uninlinable.insert(t->op);
       }
