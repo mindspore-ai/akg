@@ -13,18 +13,17 @@
 # limitations under the License.
 
 """
-matmul tanh fusion
+matmul gelu grad fusion
 """
 import os
 import pytest
 from tests.common.base import TestBase, get_splitted_cases
-from tests.common.test_run.matmul_tanh_run import matmul_tanh_execute
-
+from tests.common.test_run.matmul_gelu_grad_run import matmul_gelu_grad_execute
 
 class TestCase(TestBase):
 
     def setup(self):
-        case_name = "test_akg_matmul_tanh_001"
+        case_name = "test_akg_matmul_gelu_grad_001"
         case_path = os.getcwd()
         self.params_init(case_name, case_path)
         self.caseresult = True
@@ -32,10 +31,9 @@ class TestCase(TestBase):
         self.testarg = [
             # caseflag,opfuncname,testRunArgs, dimArgs
             # shape_x, shape_y, bias, left_format, right_format, output_format, adj_x, adj_y, dtype, bias_dtype, out_dtype, kernel_name, attrs
-            ("matmul_tanh_0", matmul_tanh_execute, ((4096, 12288), (4096, 768), 0,  "zN", "zN", "zN", True, False, "float16", None, "float32", "matmul_tanh_cce")),
-            ("matmul_tanh_1", matmul_tanh_execute, ((4096, 12288), (12288, 768), 0,  "zN", "zN", "zN", False, False, "float16", None, "float16", "matmul_tanh_cce")),
-            ("matmul_tanh_2", matmul_tanh_execute, ((4096, 192), (192, 12288), 0,  "zN", "zN", "zN", False, False, "float16", None, "float16", "matmul_tanh_cce")),
-            ("matmul_tanh_3", matmul_tanh_execute, ((4096, 12288), (768, 12288), 0,  "zN", "zN", "zN", False, True, "float16", None, "float16", "matmul_tanh_cce")),
+            ("matmul_gelu_grad_0", matmul_gelu_grad_execute, ((4096, 192), (4096, 12288), 0,  "zN", "zN", "zN", True, False, "float16", None, "float32", "matmul_gelu_grad_cce")),
+            ("matmul_gelu_grad_1", matmul_gelu_grad_execute, ((4096, 12288), (768, 12288), 0, "zN", "zN", "zN", False, True, "float16", None, "float32", "matmul_gelu_grad_cce")),
+
         ]
 
         self.testarg_rpc_cloud = [
@@ -47,10 +45,6 @@ class TestCase(TestBase):
 
         return
 
-    @pytest.mark.level0
-    @pytest.mark.platform_arm_ascend_training
-    @pytest.mark.platform_x86_ascend_training
-    @pytest.mark.env_onecard
     def test_run(self):
         """
         run case.#
@@ -82,3 +76,24 @@ class TestCase(TestBase):
         """
         self._log.info("============= {0} Teardown============".format(self.casename))
         return
+
+@pytest.mark.level0
+@pytest.mark.platform_arm_ascend_training
+@pytest.mark.platform_x86_ascend_training
+@pytest.mark.env_onecard
+def test0():
+    a = TestCase()
+    a.setup()
+    a.test(2, 0)
+    a.teardown()
+
+
+@pytest.mark.level0
+@pytest.mark.platform_arm_ascend_training
+@pytest.mark.platform_x86_ascend_training
+@pytest.mark.env_onecard
+def test1():
+    a = TestCase()
+    a.setup()
+    a.test(2, 1)
+    a.teardown()

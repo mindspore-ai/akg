@@ -13,18 +13,18 @@
 # limitations under the License.
 
 """
-matmul tanh fusion
+matmul addn fusion
 """
 import os
 import pytest
 from tests.common.base import TestBase, get_splitted_cases
-from tests.common.test_run.matmul_tanh_run import matmul_tanh_execute
+from tests.common.test_run.matmul_addn_run import matmul_addn_execute
 
 
 class TestCase(TestBase):
 
     def setup(self):
-        case_name = "test_akg_matmul_tanh_001"
+        case_name = "test_akg_matmul_addn_001"
         case_path = os.getcwd()
         self.params_init(case_name, case_path)
         self.caseresult = True
@@ -32,10 +32,11 @@ class TestCase(TestBase):
         self.testarg = [
             # caseflag,opfuncname,testRunArgs, dimArgs
             # shape_x, shape_y, bias, left_format, right_format, output_format, adj_x, adj_y, dtype, bias_dtype, out_dtype, kernel_name, attrs
-            ("matmul_tanh_0", matmul_tanh_execute, ((4096, 12288), (4096, 768), 0,  "zN", "zN", "zN", True, False, "float16", None, "float32", "matmul_tanh_cce")),
-            ("matmul_tanh_1", matmul_tanh_execute, ((4096, 12288), (12288, 768), 0,  "zN", "zN", "zN", False, False, "float16", None, "float16", "matmul_tanh_cce")),
-            ("matmul_tanh_2", matmul_tanh_execute, ((4096, 192), (192, 12288), 0,  "zN", "zN", "zN", False, False, "float16", None, "float16", "matmul_tanh_cce")),
-            ("matmul_tanh_3", matmul_tanh_execute, ((4096, 12288), (768, 12288), 0,  "zN", "zN", "zN", False, True, "float16", None, "float16", "matmul_tanh_cce")),
+            ("matmul_addn_0", matmul_addn_execute, ((4096, 768), (4096, 12288), 0, 3,  "zN", "zN", "zN", True, False, "float16", None, "float32", "matmul_addn_cce")),
+            ("matmul_addn_1", matmul_addn_execute, ((4096, 768), (12288, 768), 0,  3, "zN", "zN", "zN", False, True, "float16", None, "float16", "matmul_addn_cce")),
+            ("matmul_addn_2", matmul_addn_execute, ((4096, 12288), (192, 12288), 0, 4,  "zN", "zN", "zN", False, True, "float16", None, "float16", "matmul_addn_cce")),
+            ("matmul_addn_3", matmul_addn_execute, ((4096, 800), (800, 12288), 0,  4, "zN", "zN", "zN", False, False, "float16", None, "float32", "matmul_addn_cce")),
+
         ]
 
         self.testarg_rpc_cloud = [
