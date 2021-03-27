@@ -26,6 +26,7 @@ import akg
 from akg.utils import kernel_exec as utils
 from akg.ms import save_gpu_param as gpu_utils
 from akg.utils import validation_check as vc_util
+from akg.tvm import _api_internal
 
 
 BINDS = "binds"
@@ -69,7 +70,13 @@ def op_build(opnames, computes, args, custom_schedule, device, kernel_name, attr
     """op_build"""
     if device in ("aicore", "aicpu"):
         tmp_rst = op_build_to_func(opnames, computes, args, custom_schedule, device, kernel_name, attrs)
-        return tmp_rst
+        if tmp_rst is not None:
+            try:
+                _api_internal._BuildToModule(tmp_rst, device)
+            except Exception:
+                logging.error(traceback.format_exc())
+                return None
+        return None
 
     if device == "cuda":
         kernel_meta_path = "./cuda_meta_" + str(os.getpid()) + "/"

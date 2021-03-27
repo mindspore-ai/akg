@@ -69,13 +69,6 @@ def _get_backend(desc):
     return json_obj["process"]
 
 
-def _add_attrs_from_json(desc, attrs, poly=True):
-    json_obj = _get_json_dict(desc)
-    if "enable_atomic_add" not in attrs.keys():
-        attrs["enable_atomic_add"] = composite.should_enable_atomic_add(json_obj) if poly else False
-    return attrs if attrs is not None else {}
-
-
 def _compare_func(output, expect):
     rtol, atol = get_rtol_atol("FUSED", str(output.dtype))
     return compare_tensor(output, expect, rtol=rtol, atol=atol)
@@ -83,12 +76,8 @@ def _compare_func(output, expect):
 
 def get_result(desc, poly, attrs=None):
     backend = _get_backend(desc)
-    if backend == "cuda" and not attrs:
-        attrs = _add_attrs_from_json(desc, attrs, poly)
-    if poly:
-        reduce_lib_key = "enable_akg_reduce_lib"
-        if reduce_lib_key not in attrs.keys():
-            attrs[reduce_lib_key] = poly
+    if attrs is None:
+        attrs = {}
 
     build_attrs = attrs if attrs else None
     mod = composite.build(desc, build_attrs, poly=poly)
