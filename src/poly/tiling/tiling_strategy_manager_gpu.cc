@@ -642,14 +642,16 @@ void GpuStrategy::InnerThreadOuterBlock() {
         if (axis->block_constraints.map_extent_ > 1) {
           tile =
             std::max(tile, std::max<int64_t>(ceil(static_cast<float>(shape) / axis->block_constraints.map_extent_), 1));
-          pending_axes_.push_back(std::make_pair(axis, std::max<int64_t>(ceil(static_cast<float>(shape) / tile), 1)));
-          ss << ", map to block.";
         } else {
           tile = std::min(tile, shape);
         }
       }
       axis->TileRestrainLower(tile, TileLevel::CACHE1);
       ss << ", tile = " << tile;
+      if (axis->block_constraints.map_extent_ > 1) {
+        pending_axes_.push_back(std::make_pair(axis, std::max<int64_t>(ceil(static_cast<float>(shape) / tile), 1)));
+        ss << ", map to block.";
+      }
       analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
     };
 
