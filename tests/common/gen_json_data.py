@@ -119,7 +119,7 @@ def trans_data_two2fractal(input_, src_format, dst_format):
     dtype = input_.dtype
     if dtype == "float32":
         input_ = input_.astype(np.float16)
-    if src_format == "DefaultFormat":
+    if src_format == "DefaultFormat" or src_format == "NCHW":
         m, n = shape[-2], shape[-1]
         m1, n1 = m // 16, n // 16
         m0, n0 = 16, 16
@@ -144,15 +144,14 @@ def trans_data_two2fractal(input_, src_format, dst_format):
             reshape_input = input_.reshape(reshape_shape)
         if dst_format == "FRACTAL_NZ":
             transpose_axis = [2, 0, 1, 3]
-            new_shape = [n1, m1, m0, n0]
         else:
             raise ValueError("dst_fromat %s is not suppored when src_format is %s" % (
                 dst_format, src_format))
         transpose_axis = [x + len(shape) - 2 for x in transpose_axis]
         transpose_axis = [x for x in range(len(shape) - 2)] + transpose_axis
-        new_shape = shape[:-2] + new_shape
         bench_mark = reshape_input.transpose(transpose_axis).astype('float16')
         return bench_mark
+    raise ValueError("src_format %s is not supported!" % src_format)
 
 
 def trans_data_fractal2two(input_, src_format, dst_format, shape_origin):
@@ -175,26 +174,31 @@ def trans_data_fractal2two(input_, src_format, dst_format, shape_origin):
 
 
 def trans_data_dsl(inputs, output, attr):
-    src_format = attr[0]['value']
-    dst_format = attr[1]['value']
+    src_format = get_attr(attr, "src_format")
+    dst_format = get_attr(attr, "dst_format")
+    original_shape = output[0]['shape']
 
     support_formats = [("DefaultFormat", "FRACTAL_NZ"),
-                       ("FRACTAL_NZ", "DefaultFormat")]
+                       ("NCHW", "FRACTAL_NZ"),
+                       ("FRACTAL_NZ", "DefaultFormat"),
+                       ("FRACTAL_NZ", "NCHW")]
 
     if (src_format, dst_format) not in support_formats:
         raise ValueError("src_format %s and dst_format %s is not supported!" %
                          (src_format, dst_format))
 
-    if src_format == 'DefaultFormat' and dst_format == 'FRACTAL_NZ':
+    if (src_format == 'DefaultFormat' or src_format == "NCHW") and dst_format == 'FRACTAL_NZ':
         res = "%s \n%s = %s(%s, '%s', '%s')" % (inspect.getsource(trans_data_two2fractal),
                                                 output[0]['tensor_name'], trans_data_two2fractal.__name__, get_input(
                                                     inputs[0][0]),
-                                                attr[0]['value'], attr[1]['value'])
-    elif src_format == 'FRACTAL_NZ' and dst_format == 'DefaultFormat':
+                                                src_format, dst_format)
+    elif src_format == 'FRACTAL_NZ' and (dst_format == 'DefaultFormat' or dst_format == "NCHW"):
         res = "%s \n%s = %s(%s, '%s', '%s', %s)" % (inspect.getsource(trans_data_fractal2two),
                                                     output[0]['tensor_name'], trans_data_fractal2two.__name__, get_input(
                                                         inputs[0][0]),
-                                                    attr[0]['value'], attr[1]['value'], attr[2]['value'])
+                                                    src_format, dst_format, original_shape)
+    else:
+        raise ValueError("src_format(%s) and dst_format(%s) is not supported!" % (src_format, dst_format))
     return res
 
 

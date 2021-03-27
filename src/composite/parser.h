@@ -212,6 +212,13 @@ class OpDescsParser {
       const picojson::array &output_descs = it->second.get<picojson::array>();
       ParseOutputTensors(output_descs, op_desc_info);
     }
+    // In some scenarios, for example, FRACTAL_NZ is transfered to DefaultFormat,
+    // for the TransData operator to execute, output_shape(original_shape) information is necessary.
+    if (op_desc_info.op_name == "TransData") {
+      CHECK_EQ(op_desc_info.output_tensor_info.size(), 1);
+      auto output_shape = op_desc_info.output_tensor_info[0].shape_;
+      op_desc_info.attrs.Set("output_shape", output_shape);
+    }
     op_descs_.emplace_back(op_desc_info);
   }
 

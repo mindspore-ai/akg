@@ -39,12 +39,6 @@ def should_use_poly(kernel_info):
             return True
     return False
 
-def _pragma_rmselfdep(kernel_info):
-    for op in kernel_info["op_desc"]:
-        if op['name'] == "MatMul":
-            return False
-    return True
-
 @vc_util.check_input_type(str)
 def compilewithjson_to_func(json_str):
     """compile with json."""
@@ -65,14 +59,12 @@ def compilewithjson_to_func(json_str):
     if 'composite' in kernel_info and kernel_info['composite'] is True:
         try:
             if processor == 'cuda':
-                use_poly = should_use_poly(kernel_info) 
-                enable_atomic_add = composite.should_enable_atomic_add(kernel_info)
+                use_poly = should_use_poly(kernel_info)
                 _ = composite._build(json_str, kernel_info, attrs={
-                                     "target": "cuda", "enable_akg_reduce_lib": True, "enable_atomic_add": enable_atomic_add}, poly=use_poly)
+                                     "target": "cuda", "enable_akg_reduce_lib": True}, poly=use_poly)
                 return True
             else:
-                pragma_rmselfdep = _pragma_rmselfdep(kernel_info)
-                mod = composite._build_to_func(json_str, kernel_info, attr = {"pragma_rmselfdep": pragma_rmselfdep})
+                mod = composite._build(json_str, kernel_info, poly=True)
                 return mod
         except Exception:
             logging.error(traceback.format_exc())
