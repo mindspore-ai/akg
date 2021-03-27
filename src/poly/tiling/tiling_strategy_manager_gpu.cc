@@ -657,11 +657,20 @@ void GpuStrategy::InnerThreadOuterBlock() {
       rest_threads = std::min(rest_threads, axis->thread_constraints.map_extent_);
     }
 
-    if (rest_threads <= 1 || thread_cfg_.size() >= thread_dim || inner_dim >= max_dim_) {
+    if (thread_cfg_.size() >= thread_dim || inner_dim >= max_dim_) {
       ss << ", no thread/dim rests";
       SkipMapping();
       continue;
     }
+    if (rest_threads <= 1) {
+      if (axis->mc_sup ||
+          (template_ == Template::REDUCTION && analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib())) {
+        thread_cfg_.emplace_back(1);
+      }
+      SkipMapping();
+      continue;
+    }
+
     auto item = elem_per_thread_[inner_dim] == SpItemPerThread::AUTO ? axis->thread_constraints.item_process_
                                                                      : elem_per_thread_[inner_dim];
     item = std::min(item, max_elem_per_thread_);
