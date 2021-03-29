@@ -107,8 +107,8 @@ def trans_data(inputs, attrs):
         output_shape = []
         for i in range(0, len(shape) - 2):
             output_shape.append(shape[i])
-        m1 = m // cs
-        n1 = n // cs
+        m1 = (m + cs - 1) // cs
+        n1 = (n + cs - 1) // cs
         output_shape.extend([n1, m1, cs, cs])
 
         def fcompute(*output_indices):
