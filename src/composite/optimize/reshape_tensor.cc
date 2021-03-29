@@ -356,7 +356,9 @@ class ReshapeTensorMutator : public IRMutator {
 
 };
 
-// when Matmul has DefaultFormat bias, reshape bias to FRACTAL_NZ format
+// When Matmul has DefaultFormat bias, reshape bias to FRACTAL_NZ format
+// If bias need pad, do pad as
+// input_2_reshape(1,1,1,16) = Reshape(input_2(2)):float16:PI 
 class ReshapeMatmul : public ReshapeTensorMutator {
  public:
   explicit ReshapeMatmul() {}
@@ -445,6 +447,7 @@ class ReshapeMatmul : public ReshapeTensorMutator {
     if (format0 == "FRACTAL_NZ" && format1 == "DefaultFormat") {
       shape_fractal = tensor0->shape;
       shape_default = tensor1->shape;
+      PadBias(shape_default);
       need_swap = false;
     } else {
       LOG(WARNING) << "[" << op_name << "], check whether input formats are valid";
@@ -507,6 +510,15 @@ class ReshapeMatmul : public ReshapeTensorMutator {
 
  private:
   std::stack<bool> transpose_b;
+
+  void PadBias(Array<Expr> &shape_default) {
+    if (shape_default.size() != 1) { return; }
+    auto bias_length = (shape_default[0].as<IntImm>())->value;
+    if (bias_length % 16 == 0) { return; }
+    int64_t pad_length = (bias_length / 16) * 16 + 16;
+    shape_default.Set(0, Expr(pad_length));
+    LOG(INFO) << "Pad bias length from " << bias_length << " to " << pad_length;
+  }
 };
 
 Stmt ReshapeTensor::Run(const Stmt &s) {
