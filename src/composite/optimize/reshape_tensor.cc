@@ -150,8 +150,12 @@ class ReshapeTensorMutator : public IRMutator {
     auto batch = dims - 2;
     Array<Expr> shape_new;
     CHECK(dims >= 2);
+
+    CHECK(shape0.size() == shape1.size());
+    CHECK(shape1.size() == shape_out.size());
+
     for (size_t i = 0; i < batch; ++i) {
-      shape_new.push_back(shape_out[i]);
+      shape_new.push_back(shape1[i]);
     }
     if (is_one(shape1[dims - 2]) && is_one(shape1[dims - 1])) {
       // (bs, 1, 1) --> (bs, 1, 1, 1, 1)
