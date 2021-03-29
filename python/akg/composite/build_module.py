@@ -555,7 +555,7 @@ def _enable_auto_inline(kernel_info):
     # For the Ascend, turn 'enable_auto_inline' off for composite op by default.
     return False
 
-def _build_to_func(desc_s_in, desc_d_in, attr=None, use_repo=True):
+def _build_to_module(desc_s_in, desc_d_in, attr=None, use_repo=True):
     """
     build kernel with compute description in json format
     Args:
@@ -583,8 +583,7 @@ def _build_to_func(desc_s_in, desc_d_in, attr=None, use_repo=True):
     desc_d = desc_d_in
     desc_s = desc_s_in
     attr["pragma_rmselfdep"] = _pragma_rmselfdep(desc_d)
-    if "enable_auto_inline" not in attr:
-        attr["enable_auto_inline"] = _enable_auto_inline(desc_d)
+    attr["enable_auto_inline"] = _enable_auto_inline(desc_d)
     if use_repo:
         compute, shape, dtype = generate_trait(desc_d)
         repo_attr = get_repo([compute, shape, dtype, 'metadata', 'attrs'], {})
@@ -600,9 +599,9 @@ def _build_to_func(desc_s_in, desc_d_in, attr=None, use_repo=True):
         desc_d, desc_s = _set_compute_attrs(desc_d, attr)
 
     if 'parallel_fusion' in desc_d or 'buffer_stitch' in desc_d:
-        return _build_json_list_func(desc_d, attr, True, 'cce')
-    func = tvm.get_global_func("composite_with_json_to_func")
-    return func(desc_s, attr)
+        return _build_json_list_to_module(desc_d, attr, True, 'cce')
+    func = tvm.get_global_func("composite_with_json")
+    return func(desc_s, attr, True)
 
 def _reducemax_pattern(kernel_info):
     for op in kernel_info['op_desc']:
@@ -696,14 +695,14 @@ def _json_need_split(desc_d, attrs):
         clean_op_map_list.append(clean_op_map)
     return block_jsons, input_tensor_name, output_tensor_name, attrs_list, alloc_map_list, reuse_map_list, clean_op_map_list
 
-def _build_json_list_func(desc_d, attrs, poly, target):
+def _build_json_list_to_module(desc_d, attrs, poly, target):
     func = tvm.get_global_func("composite_with_json_list")
     block_jsons, input_tensor_name, output_tensor_name, attrs_list, alloc_map_list, reuse_map_list, \
     clean_op_map_list = _json_need_split(desc_d, attrs)
     return func(block_jsons, input_tensor_name, output_tensor_name, alloc_map_list, reuse_map_list, \
                 clean_op_map_list, attrs_list, poly, target)
 
-def _build_to_gpu_func(desc_s, desc_d, attrs=None, poly=False):
+def _build_to_module_gpu(desc_s, desc_d, attrs=None, poly=False):
     """
     build kernel with compute description in json format
     Args:
@@ -750,22 +749,26 @@ def _build_to_gpu_func(desc_s, desc_d, attrs=None, poly=False):
                 attrs[item] = value
 
     if 'parallel_fusion' in desc_d or 'buffer_stitch' in desc_d:
-        return _build_json_list_func(desc_d, attrs, poly, 'cuda')
+        return _build_json_list_to_module(desc_d, attrs, poly, 'cuda')
     func = tvm.get_global_func("composite_with_json")
     return func(desc_s, attrs, poly)
 
-def _build(desc_s, desc_d, attrs=None, poly=False, use_repo=True):
+def _build(desc_s, desc_d, attrs=None, poly=True, use_repo=True):
     if attrs is None:
         attrs = dict()
+    backend = desc_d['process']
     if "enable_atomic_add" not in attrs.keys():
-        enable_atomic_add = should_enable_atomic_add(desc_d)
-        attrs["enable_atomic_add"] = enable_atomic_add
-    if desc_d['process'] == 'cuda':
-        return _build_to_gpu_func(desc_s, desc_d, attrs, poly)
+        attrs["enable_atomic_add"] = should_enable_atomic_add(desc_d)
+        if not poly:
+            attrs["enable_atomic_add"] = False
+    if backend == 'cuda':
+        if poly:
+            attrs["enable_akg_reduce_lib"] = True
+        return _build_to_module_gpu(desc_s, desc_d, attrs, poly)
     else:
-        return _build_to_func(desc_s, desc_d, attrs, use_repo)
+        return _build_to_module(desc_s, desc_d, attrs, use_repo)
 
-def build(kernel_desc, attrs=None, poly=False, use_repo=True):
+def build(kernel_desc, attrs=None, poly=True, use_repo=True):
     """
     build kernel with compute description in json format
     Args:
@@ -782,10 +785,7 @@ def build(kernel_desc, attrs=None, poly=False, use_repo=True):
         assert isinstance(kernel_desc, dict)
         desc_s = json.dumps(kernel_desc)
         desc_d = kernel_desc
-    rst = _build(desc_s, desc_d, attrs, poly, use_repo)
-    if desc_d['process'] == 'cuda':
-        return rst
-    return _api_internal._BuildToModule(rst)
+    return _build(desc_s, desc_d, attrs, poly, use_repo)
 
 def get_tiling_space(kernel_desc, level=1, attr=None):
     """

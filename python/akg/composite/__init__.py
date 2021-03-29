@@ -13,5 +13,5 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from .build_module import build, _build, _build_to_func, generate_trait, get_tiling_space, should_enable_atomic_add
+from .build_module import build, generate_trait, get_tiling_space
 from .topi import *

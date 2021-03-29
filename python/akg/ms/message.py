@@ -25,22 +25,13 @@ import akg.tvm
 from akg.utils import kernel_exec as utils
 from akg.utils import validation_check as vc_util
 from akg import composite
-from akg.tvm import _api_internal
 from . import cce
 from . import gpu
 from . import op_build
 
 
-def should_use_poly(kernel_info):
-    if os.getenv('MS_AKG_USE_POLY') != "off":
-        return True
-    for desc in kernel_info['op_desc']:
-        if desc['name'].startswith('Reduce'):
-            return True
-    return False
-
 @vc_util.check_input_type(str)
-def compilewithjson_to_func(json_str):
+def _compilewithjson_to_module(json_str):
     """compile with json."""
     try:
         kernel_info = json.loads(json_str)
@@ -58,14 +49,8 @@ def compilewithjson_to_func(json_str):
 
     if 'composite' in kernel_info and kernel_info['composite'] is True:
         try:
-            if processor == 'cuda':
-                use_poly = should_use_poly(kernel_info)
-                _ = composite._build(json_str, kernel_info, attrs={
-                                     "target": "cuda", "enable_akg_reduce_lib": True}, poly=use_poly)
-                return True
-            else:
-                mod = composite._build(json_str, kernel_info, poly=True)
-                return mod
+            composite.build(json_str)
+            return True
         except Exception:
             logging.error(traceback.format_exc())
             return False
@@ -99,8 +84,8 @@ def compilewithjson_to_func(json_str):
                         op_attrs.append(ext_arg['value'])
                 dump_ir = os.getenv('MS_AKG_DUMP_IR') == "on"
                 dump_code = os.getenv('MS_AKG_DUMP_CODE') == "on"
-                mod = utils.op_build(op_func, input_shapes, input_types, op_attrs, kernel_info['op'], dump_ir=dump_ir,
-                                     dump_code=dump_code)
+                utils.op_build(op_func, input_shapes, input_types, op_attrs, kernel_info['op'], dump_ir=dump_ir,
+                               dump_code=dump_code)
                 return True
         else:
             op_func = getattr(cce, op_name, None)
@@ -158,11 +143,11 @@ def compilewithjson_to_func(json_str):
         output = [output]
 
     tsr = tsr + [i for i in output if utils.TensorUtils.is_output_value(i)]
-    return op_build([op_name], output, tsr, schedule_func, processor, kernel_info['op'], attrs)
+    build_res = op_build([op_name], output, tsr, schedule_func, processor, kernel_info['op'], attrs)
+    if not build_res:
+        return False
+    return True
 
 
 def compilewithjson(json_str):
-    tmp_rst = compilewithjson_to_func(json_str)
-    if isinstance(tmp_rst, bool):
-        return tmp_rst
-    return _api_internal._BuildToModule(tmp_rst)
+    return _compilewithjson_to_module(json_str)
