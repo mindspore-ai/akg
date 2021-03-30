@@ -20,23 +20,25 @@
 /*!
  * \file cuda_module.cc
  * 2020.09.19 - Modify operator() for kc_air.
- * 2020.09.22 - Separate the implementation of KC and GPU. 
+ * 2020.09.22 - Separate the implementation of KC and GPU.
  */
 #include "cuda_module.h"
 
-#include <tvm/runtime/registry.h>
 #include <cuda.h>
 #include <cuda_runtime.h>
-#include <vector>
+#include <tvm/runtime/registry.h>
+
 #include <array>
-#include <string>
 #include <mutex>
+#include <string>
 #include <unordered_map>
-#include "cuda_common.h"
+#include <vector>
+
+#include "../file_util.h"
+#include "../meta_data.h"
 #include "../pack_args.h"
 #include "../thread_storage_scope.h"
-#include "../meta_data.h"
-#include "../file_util.h"
+#include "cuda_common.h"
 
 namespace air {
 namespace runtime {
@@ -47,8 +49,7 @@ namespace runtime {
 // The modules will be lazily loaded
 class CUDAModuleNode : public runtime::ModuleNode {
  public:
-  explicit CUDAModuleNode(std::string data,
-                          std::string fmt,
+  explicit CUDAModuleNode(std::string data, std::string fmt,
                           std::unordered_map<std::string, FunctionInfo> fmap,
                           std::string cuda_source)
       : data_(data), fmt_(fmt), fmap_(fmap), cuda_source_(cuda_source) {
@@ -65,16 +66,11 @@ class CUDAModuleNode : public runtime::ModuleNode {
     }
   }
 
-  const char* type_key() const final {
-    return "cuda";
-  }
+  const char* type_key() const final { return "cuda"; }
 
-  PackedFunc GetFunction(
-      const std::string& name,
-      const ObjectPtr<Object>& sptr_to_self) final;
+  PackedFunc GetFunction(const std::string& name, const ObjectPtr<Object>& sptr_to_self) final;
 
-  void SaveToFile(const std::string& file_name,
-                  const std::string& format) final {
+  void SaveToFile(const std::string& file_name, const std::string& format) final {
     std::string fmt = GetFileFormat(file_name, format);
     std::string meta_file = GetMetaFilePath(file_name);
     if (fmt == "cu") {
@@ -82,8 +78,7 @@ class CUDAModuleNode : public runtime::ModuleNode {
       SaveMetaDataToFile(meta_file, fmap_);
       SaveBinaryToFile(file_name, cuda_source_);
     } else {
-      CHECK_EQ(fmt, fmt_)
-          << "Can only save to format=" << fmt_;
+      CHECK_EQ(fmt, fmt_) << "Can only save to format=" << fmt_;
       SaveMetaDataToFile(meta_file, fmap_);
       SaveBinaryToFile(file_name, data_);
     }
@@ -106,11 +101,18 @@ class CUDAModuleNode : public runtime::ModuleNode {
   }
 
   // get a CUfunction from primary context in device_id
-  CUfunction GetFunc(int device_id, const std::string& func_name) {
+  CUfunction GetFunc(int device_id, const std::string& func_name, ThreadWorkLoad wl) {
     std::lock_guard<std::mutex> lock(mutex_);
     // must recheck under the lock scope
     if (module_[device_id] == nullptr) {
-      CUDA_DRIVER_CALL(cuModuleLoadData(&(module_[device_id]), data_.c_str()));
+      CUjit_option options[1];
+      options[0] = CU_JIT_MAX_REGISTERS;
+      void* values[1];
+      long register_nums =
+          MAX_REGISTER_PER_THREAD_BLOCK / wl.block_dim(0) * wl.block_dim(1) * wl.block_dim(2);
+      values[0] = (void*)register_nums;
+      CUDA_DRIVER_CALL(
+          cuModuleLoadDataEx(&(module_[device_id]), data_.c_str(), 1, options, values));
     }
     CUresult result = CUDA_SUCCESS;
     CUfunction func = nullptr;
@@ -122,11 +124,9 @@ class CUDAModuleNode : public runtime::ModuleNode {
 #endif
     }
     if (result != CUDA_SUCCESS) {
-      const char *msg;
+      const char* msg;
       cuGetErrorName(result, &msg);
-      LOG(FATAL)
-          << "CUDAError: cuModuleGetFunction " << func_name
-          << " failed with error: " << msg;
+      LOG(FATAL) << "CUDAError: cuModuleGetFunction " << func_name << " failed with error: " << msg;
     }
 #ifdef USE_KC_AIR
     return func_[device_id];
@@ -135,9 +135,7 @@ class CUDAModuleNode : public runtime::ModuleNode {
 #endif
   }
   // get a global var from primary context in device_id
-  CUdeviceptr GetGlobal(int device_id,
-                        const std::string& global_name,
-                        size_t expect_nbytes) {
+  CUdeviceptr GetGlobal(int device_id, const std::string& global_name, size_t expect_nbytes) {
     std::lock_guard<std::mutex> lock(mutex_);
     // must recheck under the lock scope
     if (module_[device_id] == nullptr) {
@@ -146,15 +144,12 @@ class CUDAModuleNode : public runtime::ModuleNode {
     CUdeviceptr global;
     size_t nbytes;
 
-    CUresult result = cuModuleGetGlobal(&global, &nbytes,
-                                        module_[device_id], global_name.c_str());
+    CUresult result = cuModuleGetGlobal(&global, &nbytes, module_[device_id], global_name.c_str());
     CHECK_EQ(nbytes, expect_nbytes);
     if (result != CUDA_SUCCESS) {
-      const char *msg;
+      const char* msg;
       cuGetErrorName(result, &msg);
-      LOG(FATAL)
-          << "CUDAError: cuModuleGetGlobal " << global_name
-          << " failed with error: " << msg;
+      LOG(FATAL) << "CUDAError: cuModuleGetGlobal " << global_name << " failed with error: " << msg;
     }
     return global;
   }
@@ -173,17 +168,15 @@ class CUDAModuleNode : public runtime::ModuleNode {
   // internal mutex when updating the module
   std::mutex mutex_;
   std::array<CUfunction, kMaxNumGPUs> func_;
+  const int MAX_REGISTER_PER_THREAD_BLOCK = 65536;
 };
 
 // a wrapped function class to get packed func.
 class CUDAWrappedFunc {
  public:
   // initialize the CUDA function.
-  void Init(CUDAModuleNode* m,
-            ObjectPtr<Object> sptr,
-            const std::string& func_name,
-            size_t num_void_args,
-            std::vector<size_t> arg_size,
+  void Init(CUDAModuleNode* m, ObjectPtr<Object> sptr, const std::string& func_name,
+            size_t num_void_args, std::vector<size_t> arg_size,
             const std::vector<std::string>& thread_axis_tags) {
     m_ = m;
     sptr_ = sptr;
@@ -194,65 +187,49 @@ class CUDAWrappedFunc {
     thread_axis_cfg_.Init(num_void_args, thread_axis_tags);
   }
   // invoke the function with void arguments
-  void operator()(TVMArgs args,
-                  TVMRetValue* rv,
-                  void** void_args) const {
+  void operator()(TVMArgs args, TVMRetValue* rv, void** void_args) const {
     int device_id;
     CUDA_CALL(cudaGetDevice(&device_id));
-    if (fcache_[device_id] == nullptr) {
-      fcache_[device_id] = m_->GetFunc(device_id, func_name_);
-    }
     ThreadWorkLoad wl = thread_axis_cfg_.Extract(args);
+    if (fcache_[device_id] == nullptr) {
+      fcache_[device_id] = m_->GetFunc(device_id, func_name_, wl);
+    }
     CUstream strm = static_cast<CUstream>(CUDAThreadEntry::ThreadLocal()->stream);
     CUresult result;
 
 #ifdef USE_KC_AIR
     size_t raw_size = num_void_args_;
-    void** raw_args = new  (std::nothrow) void*[raw_size];
+    void** raw_args = new (std::nothrow) void*[raw_size];
     if (*raw_args == nullptr) {
-      LOG(FATAL)  << "Memory alloc fail.";
+      LOG(FATAL) << "Memory alloc fail.";
     }
     size_t args_size = 0;
-    for (size_t i = 0; i < raw_size; ++i)
-    {
+    for (size_t i = 0; i < raw_size; ++i) {
       args_size += arg_size_[i];
       void** ptr = reinterpret_cast<void**>(void_args[i]);
       raw_args[i] = *ptr;
     }
-    result = cuLaunchKernel(
-        fcache_[device_id],
-        wl.grid_dim(0),
-        wl.grid_dim(1),
-        wl.grid_dim(2),
-        wl.block_dim(0),
-        wl.block_dim(1),
-        wl.block_dim(2),
-        (static_cast<uint32_t>(args_size)/sizeof(void *)), strm, raw_args, 0);
+    result = cuLaunchKernel(fcache_[device_id], wl.grid_dim(0), wl.grid_dim(1), wl.grid_dim(2),
+                            wl.block_dim(0), wl.block_dim(1), wl.block_dim(2),
+                            (static_cast<uint32_t>(args_size) / sizeof(void*)), strm, raw_args, 0);
     if (raw_args != NULL) {
       free(raw_args);
       raw_args = NULL;
     }
 #else
-    result = cuLaunchKernel(
-        fcache_[device_id],
-        wl.grid_dim(0),
-        wl.grid_dim(1),
-        wl.grid_dim(2),
-        wl.block_dim(0),
-        wl.block_dim(1),
-        wl.block_dim(2),
-        0, strm, void_args, 0);
+    result =
+        cuLaunchKernel(fcache_[device_id], wl.grid_dim(0), wl.grid_dim(1), wl.grid_dim(2),
+                       wl.block_dim(0), wl.block_dim(1), wl.block_dim(2), 0, strm, void_args, 0);
 #endif
 
     if (result != CUDA_SUCCESS && result != CUDA_ERROR_DEINITIALIZED) {
-      const char *msg;
+      const char* msg;
       cuGetErrorName(result, &msg);
       std::ostringstream os;
       os << "CUDALaunch Error: " << msg << "\n"
-         << " grid=(" << wl.grid_dim(0) << ","
-         << wl.grid_dim(1) << "," << wl.grid_dim(2) << "), "
-         << " block=(" << wl.block_dim(0) << ","
-         << wl.block_dim(1) << "," << wl.block_dim(2) << ")\n";
+         << " grid=(" << wl.grid_dim(0) << "," << wl.grid_dim(1) << "," << wl.grid_dim(2) << "), "
+         << " block=(" << wl.block_dim(0) << "," << wl.block_dim(1) << "," << wl.block_dim(2)
+         << ")\n";
       std::string cuda = m_->GetSource("");
       if (cuda.length() != 0) {
         os << "// func_name=" << func_name_ << "\n"
@@ -283,9 +260,7 @@ class CUDAWrappedFunc {
 
 class CUDAPrepGlobalBarrier {
  public:
-  CUDAPrepGlobalBarrier(CUDAModuleNode* m,
-                        ObjectPtr<Object> sptr)
-      : m_(m), sptr_(sptr) {
+  CUDAPrepGlobalBarrier(CUDAModuleNode* m, ObjectPtr<Object> sptr) : m_(m), sptr_(sptr) {
     std::fill(pcache_.begin(), pcache_.end(), 0);
   }
 
@@ -293,8 +268,8 @@ class CUDAPrepGlobalBarrier {
     int device_id;
     CUDA_CALL(cudaGetDevice(&device_id));
     if (pcache_[device_id] == 0) {
-      pcache_[device_id] = m_->GetGlobal(
-          device_id, runtime::symbol::tvm_global_barrier_state, sizeof(unsigned));
+      pcache_[device_id] =
+          m_->GetGlobal(device_id, runtime::symbol::tvm_global_barrier_state, sizeof(unsigned));
     }
     CUDA_DRIVER_CALL(cuMemsetD32(pcache_[device_id], 0, 1));
   }
@@ -308,12 +283,10 @@ class CUDAPrepGlobalBarrier {
   mutable std::array<CUdeviceptr, kMaxNumGPUs> pcache_;
 };
 
-PackedFunc CUDAModuleNode::GetFunction(
-      const std::string& name,
-      const ObjectPtr<Object>& sptr_to_self) {
+PackedFunc CUDAModuleNode::GetFunction(const std::string& name,
+                                       const ObjectPtr<Object>& sptr_to_self) {
   CHECK_EQ(sptr_to_self.get(), this);
-  CHECK_NE(name, symbol::tvm_module_main)
-      << "Device function do not have main";
+  CHECK_NE(name, symbol::tvm_module_main) << "Device function do not have main";
   if (name == symbol::tvm_prepare_global_barrier) {
     return PackedFunc(CUDAPrepGlobalBarrier(this, sptr_to_self));
   }
@@ -322,7 +295,7 @@ PackedFunc CUDAModuleNode::GetFunction(
   const FunctionInfo& info = it->second;
   CUDAWrappedFunc f;
   std::vector<size_t> arg_size(info.arg_types.size());
-  for (int i=0; i<static_cast<int>(info.arg_types.size()); ++i){
+  for (int i = 0; i < static_cast<int>(info.arg_types.size()); ++i) {
     TVMType t = info.arg_types[i];
     CHECK_EQ(t.lanes, 1U);
     uint32_t bits = t.bits;
@@ -333,18 +306,15 @@ PackedFunc CUDAModuleNode::GetFunction(
   return PackFuncVoidAddr(f, info.arg_types);
 }
 
-Module CUDAModuleCreate(
-    std::string data,
-    std::string fmt,
-    std::unordered_map<std::string, FunctionInfo> fmap,
-    std::string cuda_source) {
+Module CUDAModuleCreate(std::string data, std::string fmt,
+                        std::unordered_map<std::string, FunctionInfo> fmap,
+                        std::string cuda_source) {
   auto n = make_object<CUDAModuleNode>(data, fmt, fmap, cuda_source);
   return Module(n);
 }
 
 // Load module from module.
-Module CUDAModuleLoadFile(const std::string& file_name,
-                          const std::string& format) {
+Module CUDAModuleLoadFile(const std::string& file_name, const std::string& format) {
   std::string data;
   std::unordered_map<std::string, FunctionInfo> fmap;
   std::string fmt = GetFileFormat(file_name, format);
@@ -365,14 +335,10 @@ Module CUDAModuleLoadBinary(void* strm) {
   return CUDAModuleCreate(data, fmt, fmap, std::string());
 }
 
-TVM_REGISTER_GLOBAL("module.loadfile_cubin")
-.set_body_typed(CUDAModuleLoadFile);
+TVM_REGISTER_GLOBAL("module.loadfile_cubin").set_body_typed(CUDAModuleLoadFile);
 
-TVM_REGISTER_GLOBAL("module.loadfile_ptx")
-.set_body_typed(CUDAModuleLoadFile);
+TVM_REGISTER_GLOBAL("module.loadfile_ptx").set_body_typed(CUDAModuleLoadFile);
 
-TVM_REGISTER_GLOBAL("module.loadbinary_cuda")
-.set_body_typed(CUDAModuleLoadBinary);
+TVM_REGISTER_GLOBAL("module.loadbinary_cuda").set_body_typed(CUDAModuleLoadBinary);
 }  // namespace runtime
 }  // namespace air
-

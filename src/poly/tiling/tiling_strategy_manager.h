@@ -58,8 +58,10 @@ class TilingStrategy {
 
   // gpu configs
   int64_t warp_sizes_ = 32;
-  int64_t max_num_blocks_ = 256 * 256;
-  int64_t max_num_threads_ = 1024;
+  int64_t max_x_dim_block_ = pow(2, 31) - 1;
+  int64_t max_y_z_dim_block_ = 65535;
+  int64_t max_x_y_dim_thread_ = 1024;
+  int64_t max_z_dim_thread_ = 64;
   size_t max_dim_ = 3;
   int64_t max_elem_per_thread_ = 1024;
 };
@@ -344,6 +346,8 @@ class GpuStrategy : public TilingStrategy {
   // Step 3. Transform list of integer into string mapping config.
   void SetMappingConfig();
 
+
+  int GetLocalAllocBufCount();
   Template template_{Template::DEFAULT};
   bool is_reduce_op_[TEMPLATE_BULK] = {false, false, true, true, true, false};
 
@@ -352,8 +356,6 @@ class GpuStrategy : public TilingStrategy {
   std::vector<int64_t> thread_limit_;
   std::vector<int64_t> block_cfg_;
   std::vector<int64_t> thread_cfg_;
-  int64_t max_x_y_dim_thread_ = 1024;
-  int64_t max_z_dim_thread_ = 64;
   int block_count_{0};  // number of mapped blocks
   int64_t elem_per_thread_[3]{SpItemPerThread::AUTO};
   int64_t min_elem_for_io_bound_ = 2;
