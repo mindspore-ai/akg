@@ -15,14 +15,16 @@
 """test"""
 import time
 from tests.fuzz.tune.autotuning.job import launch
-from tests.common.test_run.sub_run import sub_execute
+from tests.common.test_run.matmul_run import matmul_execute
 
 time_start = time.time()
-op_type_ = 'sub'
+op_type_ = 'matmul'
 debug_mode_ = True
 save_res_ = True
 all_space_ = False
-desc_ = ('024_sub_64_16_128_128_64_16_128_128_fp16', sub_execute, [(64, 16, 128, 128), (64, 16, 128, 1), 'float16'])
+desc_ = ('024_sub_64_16_128_128_64_16_128_128_fp16',matmul_execute, [( 256* 16,12 *  16), (256*16, 768 * 16), 0, "zN", "zN", "zN", True, False, 'float16', None,'float16', 'aabb'])
 launch(op_type=op_type_, debug_mode=debug_mode_, save_res=save_res_, desc=desc_, all_space=all_space_)
 time_end = time.time()
 print("launch time: ", time_end - time_start)
+
+

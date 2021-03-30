@@ -13,6 +13,7 @@
 # limitations under the License.
 
 """Runner for compile and execute a configs of an operator on device"""
+import json
 import time
 import multiprocessing
 import logging
@@ -26,7 +27,7 @@ from akg.utils import custom_tiling as ct_util
 from akg.utils import kernel_exec as utils
 from tests.fuzz.tune.autotuning.kernel_compiler import compile_kernel
 from tests.fuzz.tune.autotuning.test_data_generators import gen_data
-
+from tests.fuzz.tune.autotuning.kernel_compiler import get_matmul_cube_attrs
 logger = logging.getLogger('fuzz.tune.autotuning.runner')
 
 error_time_list = [
@@ -84,10 +85,11 @@ class KernelRunner:
         Run one config repeat_times
     """
 
-    def __init__(self, op_type: str, op_desc: NamedTuple, index_table: list, timeout: int = 600,
+    def __init__(self, op_type: str, op_desc: NamedTuple, json_desc: str, index_table: list, timeout: int = 600,
                  repeat_times: int = 2, input_data=None, expect=None, mod_output_param=None):
         self.op_type = op_type
         self.op_desc = op_desc
+        self.json_desc = json_desc
         self._index_table = index_table
         self.run_kernel_time = 0.0
         self.timeout = timeout
@@ -135,6 +137,10 @@ class KernelRunner:
                     if os.environ['RUNTIME_MODE'] == "gpu":
                         attrs['target'] = "cuda"
                     mod = composite.build(self.op_desc, attrs, use_repo=False)
+            elif self.op_type == "matmul_json":
+                attrs = get_matmul_cube_attrs(self.op_desc, config.input)
+                print(attrs)
+                mod = composite.build(self.json_desc, attrs, use_repo=False)
             else:
                 mod = compile_kernel(self.op_type, self.op_desc, self.input_shape, self._index_table,
                                      None if is_auto else config.input, idx)

@@ -71,6 +71,56 @@ def gen_bool_list(attr_list):
     return bool_list
 
 
+def get_matmul_op_desc(json_input):
+    for op_desc in json_input["op_desc"]:
+        if op_desc["name"] == "MatMul":
+            return op_desc
+    return None
+
+def convert_fracal_shape(ori_shape, fractal):
+    ori_shape = tuple(ori_shape)
+    if fractal == "zN":
+        return ori_shape[:-4] + (ori_shape[-2] * ori_shape[-3], ori_shape[-1] * ori_shape[-4])
+    if fractal == "zZ":
+        return ori_shape[:-4] + (ori_shape[-4] * ori_shape[-2], ori_shape[-3] * ori_shape[-1])
+
+def get_matmul_frac(s):
+    if s[-2:] == "NZ": 
+        return "zN"
+    if s[-2:] == "ZZ":
+        return "zZ"
+
+def get_attr(attrs, name):
+    for attr in attrs:
+        if attr["name"] == name:
+            return attr["value"]
+    return None    
+
+def get_matmul_desc(op_desc):
+    
+    input_desc = op_desc["input_desc"]
+    output_desc = op_desc["output_desc"]
+    op_attrs = op_desc["attr"]
+    if len(input_desc) == 3 :
+        bias = 1
+        dtype_bias = input_desc[2][0]["data_type"]
+    else:
+        bias = 0
+        dtype_bias = None 
+
+    dtype_a = input_desc[0][0]["data_type"]
+    dtype_c = output_desc[0]["data_type"]
+    fractal_a = get_matmul_frac(input_desc[0][0]["format"])
+    fractal_b = get_matmul_frac(input_desc[1][0]["format"])
+    fractal_c = get_matmul_frac(output_desc[0]["format"])
+    trans_a = get_attr(op_attrs, "transpose_a") 
+    trans_b = get_attr(op_attrs, "transpose_b")
+    shape_a = convert_fracal_shape(input_desc[0][0]["shape"], fractal_a)
+    shape_b = convert_fracal_shape(input_desc[1][0]["shape"], fractal_b)
+    res = [tuple(shape_a), tuple(shape_b), bias, fractal_a, fractal_b, fractal_c, trans_a, trans_b, dtype_a, dtype_bias, dtype_c]    
+    print(res)
+    return MatmulCubeDesc(*res)
+
 def tune_json_file(input_path, input_file, iter_times, save_res, repo_path, all_space, skip_exist, extra_tune,
                    self_attrs, tuning_attrs, tuned_file):
     """tune for single json file"""
@@ -96,61 +146,71 @@ def tune_json_file(input_path, input_file, iter_times, save_res, repo_path, all_
                 fe.write(input_file)
                 fe.write("\n")
             return
-
+    
+    matmul_op_desc = get_matmul_op_desc(json_content)
+    has_matmul = (matmul_op_desc != None)
+    print("has_matmul: ",has_matmul) 
     # generate tuning space
-    if not extra_tune:
-        time_start_get_space = time.time()
-        with Manager() as manager:
-            space_dict = manager.dict()
-            p = Process(target=get_json_space, args=(json_input, space_dict))
-            p.daemon = True
-            p.start()
-            p.join(600)
-            if 'res' not in space_dict:
-                with open('res/error_space_list.txt', 'a') as fe:
+
+    if has_matmul:
+        matmul_desc = get_matmul_desc(matmul_op_desc)
+        index_table, space, _, _, _ = get_space("matmul", matmul_desc)
+    else:
+        if not extra_tune:
+            time_start_get_space = time.time()
+            with Manager() as manager:
+                space_dict = manager.dict()
+                p = Process(target=get_json_space, args=(json_input, space_dict))
+                p.daemon = True
+                p.start()
+                p.join(600)
+                if 'res' not in space_dict:
+                    with open('res/error_space_list.txt', 'a') as fe:
+                        fe.write(input_file)
+                        fe.write("\n")
+                    return
+            space_res = space_dict['res']
+            time_end_get_space = time.time()
+            logger.debug("get space time: %f", time_end_get_space - time_start_get_space)
+            index_table = space_res['index']
+            tiling_spaces = space_res['tuning_space']
+            if not isinstance(tiling_spaces, list) or len(tiling_spaces) == 0:
+                with open('res/empty_space_list.txt', 'a') as fe:
                     fe.write(input_file)
                     fe.write("\n")
                 return
-            space_res = space_dict['res']
-        time_end_get_space = time.time()
-        logger.debug("get space time: %f", time_end_get_space - time_start_get_space)
-        index_table = space_res['index']
-        tiling_spaces = space_res['tuning_space']
-        if not isinstance(tiling_spaces, list) or len(tiling_spaces) == 0:
-            with open('res/empty_space_list.txt', 'a') as fe:
-                fe.write(input_file)
-                fe.write("\n")
-            return
-        dim_names = ['tiling_' + str(i) for i in range(len(tiling_spaces[0]))]
-        use_tuning_attrs = len(tiling_spaces) < 10 ** 5
-        if tuning_attrs and use_tuning_attrs:
-            dim_names.extend(tuning_attrs)
-        input_type = namedtuple("json", dim_names)
-        space = ListConfigSpace(input_type)
-        if tuning_attrs and use_tuning_attrs:
-            attr_options = gen_bool_list(tuning_attrs)
-            for tiling_space in tiling_spaces:
-                for attr_option in attr_options:
-                    tmp = tiling_space[:]
-                    tmp.extend(attr_option)
-                    config = input_type(*tmp)
+            dim_names = ['tiling_' + str(i) for i in range(len(tiling_spaces[0]))]
+            use_tuning_attrs = len(tiling_spaces) < 10 ** 5
+            if tuning_attrs and use_tuning_attrs:
+                dim_names.extend(tuning_attrs)
+            input_type = namedtuple("json", dim_names)           
+            space = ListConfigSpace(input_type)
+            if tuning_attrs and use_tuning_attrs:
+                attr_options = gen_bool_list(tuning_attrs)
+                for tiling_space in tiling_spaces:
+                    for attr_option in attr_options:
+                        tmp = tiling_space[:]
+                        tmp.extend(attr_option)
+                        config = input_type(*tmp)
+                        space.add(config)
+            else:
+                for tiling_space in tiling_spaces:
+                    config = input_type(*tiling_space)
                     space.add(config)
         else:
-            for tiling_space in tiling_spaces:
-                config = input_type(*tiling_space)
+            index_table = []
+            pre_lists = gen_bool_list(self_attrs)
+            pre_input_type = namedtuple("extra_tune", self_attrs)
+            space = ListConfigSpace(pre_input_type)
+            for item in pre_lists:
+                config = pre_input_type(*item)
                 space.add(config)
-    else:
-        index_table = []
-        pre_lists = gen_bool_list(self_attrs)
-        pre_input_type = namedtuple("extra_tune", self_attrs)
-        space = ListConfigSpace(pre_input_type)
-        for item in pre_lists:
-            config = pre_input_type(*item)
-            space.add(config)
 
     key = json_content["op"]
     try:
+
         input_for_mod, expect, output_indexes = gen_data(op_type="json", op_desc=json_input)
+
     except BaseException as e:
         logger.debug("gen numpy data from [%s] failed: %s", input_file, str(e))
         with open('res/error_gen_data_list.txt', 'a') as fe:
@@ -161,8 +221,9 @@ def tune_json_file(input_path, input_file, iter_times, save_res, repo_path, all_
         return
     print('space size:', space.length)
     print('index table:', index_table)
-
-    runner = KernelRunner(op_type="json", op_desc=json_input, index_table=index_table, input_data=input_for_mod,
+    runner_op_type = "matmul_json" if has_matmul else "json"   
+    op_desc = matmul_desc if has_matmul else json_input
+    runner = KernelRunner(op_type=runner_op_type, op_desc=op_desc, json_desc=json_input, index_table=index_table, input_data=input_for_mod,
                           expect=expect, mod_output_param=output_indexes, timeout=180, repeat_times=1)
 
     # we can only get a valid tiling, or accurate get cycles

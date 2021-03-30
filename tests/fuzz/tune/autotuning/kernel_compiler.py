@@ -92,6 +92,18 @@ def gen_kernel_conv_bn1(op_desc: ConvDesc, input_shape, index_table, config: Con
                           kernel_name=kernel_name, attrs=attrs, polyhedral=True, tuning=gen_tiling_spaces)
 
 
+def get_matmul_cube_attrs(op_desc, config):
+    tiling_param = []
+    for _ in range(len(op_desc.x_shape) - 2):
+        tiling_param.append((1, 1))
+    if config.n_l1 > 0:
+        tiling_param.append((config.n_l1, config.n_l0))
+    if config.m_l1 > 0:
+        tiling_param.append((config.m_l1, config.m_l0))
+    tiling_param.extend([(16, 16), (16, 16), (config.k_l1, config.k_l0)])
+    dim_info = ct_util.set_dims(tuple(tiling_param))
+    attrs = {'dim': dim_info, 'bypass': config.bypass}
+    return attrs
 def gen_kernel_matmul_cube(op_desc: MatmulCubeDesc, _, index_table,
                            config: MatmulCubeConfig = None, idx=None, gen_tiling_spaces=False):
     """Compile kernel module for matmul_cube"""
@@ -103,16 +115,7 @@ def gen_kernel_matmul_cube(op_desc: MatmulCubeDesc, _, index_table,
     if config is None:
         attrs = {'dim': ""}
     else:
-        tiling_param = []
-        for _ in range(len(op_desc.x_shape) - 2):
-            tiling_param.append((1, 1))
-        if config.n_l1 > 0:
-            tiling_param.append((config.n_l1, config.n_l0))
-        if config.m_l1 > 0:
-            tiling_param.append((config.m_l1, config.m_l0))
-        tiling_param.extend([(16, 16), (16, 16), (config.k_l1, config.k_l0)])
-        dim_info = ct_util.set_dims(tuple(tiling_param))
-        attrs = {'dim': dim_info, 'bypass': config.bypass}
+        attrs = get_matmul_cube_attrs(op_desc, config)
     return matmul_run.matmul_compile(op_desc.x_shape, op_desc.y_shape, op_desc.bias, op_desc.left_format,
                                      op_desc.right_format, op_desc.out_format, op_desc.adj_x, op_desc.adj_y,
                                      op_desc.dtype, op_desc.bias_dtype, op_desc.out_dtype, kernel_name,
