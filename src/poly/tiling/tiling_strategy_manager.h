@@ -346,6 +346,8 @@ class GpuStrategy : public TilingStrategy {
   // Step 3. Transform list of integer into string mapping config.
   void SetMappingConfig();
 
+
+  int GetLocalAllocBufCount();
   Template template_{Template::DEFAULT};
   bool is_reduce_op_[TEMPLATE_BULK] = {false, false, true, true, true, false};
 
