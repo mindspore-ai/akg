@@ -129,7 +129,20 @@ def tune_json_file(input_path, input_file, iter_times, save_res, repo_path, all_
     with open(input_path + '/' + input_file, 'r') as f:
         json_input = f.read()
     
-    json_content = json.loads(json_input)
+    try:
+        json_content = json.loads(json_input)
+    except BaseException as e:
+        logger.warning("load json [%s] failed: %s", input_file, str(e))
+        with open('res/wrong_json.txt', 'a') as fe:
+            fe.write(input_file)
+            fe.write("\n")
+        return
+    if "input_desc" not in json_content:
+        with open('res/wrong_json.txt', 'a') as fe:
+            logger.warning("wrong json format [%s]", input_file)
+            fe.write(input_file)
+            fe.write("\n")
+        return
     
     # specialize tunning attrs for RealDiv
     for op_desc in json_content["op_desc"]:
@@ -220,7 +233,7 @@ def tune_json_file(input_path, input_file, iter_times, save_res, repo_path, all_
         input_for_mod, expect, output_indexes = gen_data(op_type="json", op_desc=json_input)
 
     except BaseException as e:
-        logger.debug("gen numpy data from [%s] failed: %s", input_file, str(e))
+        logger.warning("gen numpy data from [%s] failed: %s", input_file, str(e))
         with open('res/error_gen_data_list.txt', 'a') as fe:
             fe.write(input_file)
             fe.write(": ")

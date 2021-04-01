@@ -170,7 +170,11 @@ class KernelRunner:
                                                "origin" if config is None else str(config.input))
 
                     else:
-                        output, stat_info = utils.mod_launch(mod, self.input, tuning=True, device_id=device_id)
+                        if self.op_type in ["json", "extra_tune", "matmul_json"]:
+                            output, stat_info = utils.mod_launch(mod, self.input, self.mod_output_param, tuning=True,
+                                                                 device_id=device_id)
+                        else:
+                            output, stat_info = utils.mod_launch(mod, self.input, tuning=True, device_id=device_id)
                         if stat_info['run_time'] < best_time:
                             if not np.allclose(output, self.expect, rtol=5e-03, atol=5e-03, equal_nan=True):
                                 stat_info['run_time'] = precision_error_time
