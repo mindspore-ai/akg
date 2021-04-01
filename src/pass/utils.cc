@@ -689,6 +689,7 @@ class InferBoundOfExprClass {
       if (binds.count(var) > 0) {
         Bound var_min_range = infer_range(binds[var].min);
         Bound var_max_range = infer_range(binds[var].max);
+        if (!var_max_range.defined() || !var_min_range.defined()) return Bound();
         return Bound::make(var_min_range.min, var_max_range.max);
       } else {
         return Bound::make(expr, expr);
@@ -696,14 +697,17 @@ class InferBoundOfExprClass {
     } else if (const auto add = expr.as<Add>()) {
       Bound bound_a = infer_range(add->a);
       Bound bound_b = infer_range(add->b);
+      if (!bound_a.defined() || !bound_b.defined()) return Bound();
       return Bound::make(Simplify(bound_a.min + bound_b.min), Simplify(bound_a.max + bound_b.max));
     } else if (const auto sub = expr.as<Sub>()) {
       Bound bound_a = infer_range(sub->a);
       Bound bound_b = infer_range(sub->b);
+      if (!bound_a.defined() || !bound_b.defined()) return Bound();
       return Bound::make(Simplify(bound_a.min - bound_b.max), Simplify(bound_a.max - bound_b.min));
     } else if (const auto mul = expr.as<Mul>()) {
       Bound bound_a = infer_range(mul->a);
       Bound bound_b = infer_range(mul->b);
+      if (!bound_a.defined() || !bound_b.defined()) return Bound();
       Bound bound;
       if (CanProve(bound_a.min >= 0) && CanProve(bound_b.min >= 0)) {
         bound.min = Simplify(bound_a.min * bound_b.min);
@@ -719,6 +723,7 @@ class InferBoundOfExprClass {
     } else if (const auto f_div = expr.as<FloorDiv>()) {
       Bound bound_a = infer_range(f_div->a);
       Bound bound_b = infer_range(f_div->b);
+      if (!bound_a.defined() || !bound_b.defined()) return Bound();
       Bound bound;
       if (CanProve(bound_a.min >= 0) && CanProve(bound_b.max > 0)) {
         bound.min = Simplify(floordiv(bound_a.min, bound_b.max));
@@ -734,6 +739,7 @@ class InferBoundOfExprClass {
     } else if (const auto div = expr.as<Div>()) {
       Bound bound_a = infer_range(div->a);
       Bound bound_b = infer_range(div->b);
+      if (!bound_a.defined() || !bound_b.defined()) return Bound();
       Bound bound;
       if (CanProve(bound_a.min >= 0) && CanProve(bound_b.max > 0)) {
         bound.min = Simplify(floordiv(bound_a.min, bound_b.max));
@@ -749,10 +755,12 @@ class InferBoundOfExprClass {
     } else if (const auto min_expr = expr.as<Min>()) {
       Bound bound_a = infer_range(min_expr->a);
       Bound bound_b = infer_range(min_expr->b);
+      if (!bound_a.defined() || !bound_b.defined()) return Bound();
       return Bound::make(Simplify(min(bound_a.min, bound_b.min)), Simplify(min(bound_a.max, bound_b.max)));
     } else if (const auto max_expr = expr.as<Max>()) {
       Bound bound_a = infer_range(max_expr->a);
       Bound bound_b = infer_range(max_expr->b);
+      if (!bound_a.defined() || !bound_b.defined()) return Bound();
       return Bound::make(Simplify(max(bound_a.min, bound_b.min)), Simplify(max(bound_a.max, bound_b.max)));
     } else {
       LOG(INFO) << "constrain expr is invalid " << expr;
@@ -2518,16 +2526,21 @@ Range InferSimpleExprRange(Expr e, std::unordered_map<const Variable *, Range> *
   } else if (const auto addOp = e.as<Add>()) {
     Range a = InferSimpleExprRange(addOp->a, rmap);
     Range b = InferSimpleExprRange(addOp->b, rmap);
+    if (!a.defined() || !b.defined()) return Range();
     return Range::make_by_min_extent(Simplify_cce(a->min + b->min), Simplify_cce(a->extent + b->extent - 1));
+
   } else if (const auto subOp = e.as<Sub>()) {
     Range a = InferSimpleExprRange(subOp->a, rmap);
     Range b = InferSimpleExprRange(subOp->b, rmap);
+    if (!a.defined() || !b.defined()) return Range();
     return Range::make_by_min_extent(Simplify_cce(a->min - (b->min + b->extent - 1)),
                                      Simplify_cce(a->extent + b->extent - 1));
+
   } else if (const auto mulOp = e.as<Mul>()) {
     if (const auto imma = mulOp->a.as<IntImm>()) {
       Range b = InferSimpleExprRange(mulOp->b, rmap);
       int value = static_cast<int>(imma->value);
+      if (!b.defined()) return Range();
       if (value > 0) {
         return Range::make_by_min_extent(Simplify_cce(b->min * value),
                                          Simplify_cce((b->min + b->extent - 1) * value - b->min * value + 1));
@@ -2539,6 +2552,7 @@ Range InferSimpleExprRange(Expr e, std::unordered_map<const Variable *, Range> *
       }
     } else if (const auto immb = mulOp->b.as<IntImm>()) {
       Range a = InferSimpleExprRange(mulOp->a, rmap);
+      if (!a.defined()) return Range();
       int value = static_cast<int>(immb->value);
       if (value > 0) {
         return Range::make_by_min_extent(Simplify_cce(a->min * value),
@@ -2556,7 +2570,7 @@ Range InferSimpleExprRange(Expr e, std::unordered_map<const Variable *, Range> *
     LOG(INFO) << "unsupported expression " << e;
   }
 
-  return {};
+  return Range();
 }
 
 /* Match expr against a pattern.

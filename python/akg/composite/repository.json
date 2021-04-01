@@ -224,9 +224,6 @@
             "float32--": {
                 "metadata": {
                     "attrs": {
-                        "pragma_remove_invariant_dependence": true,
-                        "enable_mark_multi_core": true,
-                        "multicore_scalar_rearrange": true,
                         "enable_cover_protect_optimize": false
                     }
                 },
@@ -243,7 +240,6 @@
                 "metadata": {
                     "attrs": {
                         "enable_double_buffer": true,
-                        "multicore_scalar_rearrange": true,
                         "enable_rewrite_scalar_compute": true
                     }
                 },
@@ -255,7 +251,6 @@
                 "metadata": {
                     "attrs": {
                         "enable_double_buffer": true,
-                        "multicore_scalar_rearrange": true,
                         "enable_rewrite_scalar_compute": true
                     }
                 },
@@ -267,7 +262,6 @@
                 "metadata": {
                     "attrs": {
                         "enable_double_buffer": true,
-                        "multicore_scalar_rearrange": true,
                         "enable_rewrite_scalar_compute": true
                     }
                 },
@@ -279,9 +273,6 @@
                 "metadata": {
                     "attrs": {
                         "enable_double_buffer": true,
-                        "pragma_remove_invariant_dependence": true,
-                        "enable_mark_multi_core": true,
-                        "multicore_scalar_rearrange": true,
                         "enable_rewrite_scalar_compute": true
                     }
                 },
@@ -293,9 +284,6 @@
                 "metadata": {
                     "attrs": {
                         "enable_double_buffer": true,
-                        "pragma_remove_invariant_dependence": true,
-                        "enable_mark_multi_core": true,
-                        "multicore_scalar_rearrange": true,
                         "enable_rewrite_scalar_compute": true
                     }
                 },
@@ -312,7 +300,6 @@
                 "metadata": {
                     "attrs": {
                         "enable_double_buffer": true,
-                        "multicore_scalar_rearrange": true,
                         "enable_rewrite_scalar_compute": true
                     }
                 },
@@ -331,8 +318,7 @@
                 "metadata": {
                     "attrs": {
                         "enable_double_buffer": true,
-                        "enable_invariant_hoist": false,
-                        "multicore_scalar_rearrange": true
+                        "enable_invariant_hoist": false
                     }
                 },
                 "dim": "0 0 32 1 0 1 512 1"
@@ -343,9 +329,7 @@
                 "metadata": {
                     "attrs": {
                         "enable_double_buffer": true,
-                        "enable_mark_multi_core": true,
-                        "enable_invariant_hoist": false,
-                        "multicore_scalar_rearrange": true
+                        "enable_invariant_hoist": false
                     }
                 },
                 "dim": "0 0 32 1 0 1 512 1"
@@ -356,8 +340,7 @@
                 "metadata": {
                     "attrs": {
                         "enable_double_buffer": true,
-                        "enable_invariant_hoist": false,
-                        "multicore_scalar_rearrange": true
+                        "enable_invariant_hoist": false
                     }
                 },
                 "dim": "0 0 64 1 0 1 256 1"
@@ -368,9 +351,7 @@
                 "metadata": {
                     "attrs": {
                         "enable_double_buffer": true,
-                        "enable_mark_multi_core": true,
-                        "enable_invariant_hoist": false,
-                        "multicore_scalar_rearrange": true
+                        "enable_invariant_hoist": false
                     }
                 },
                 "dim": "0 0 64 1"
@@ -381,8 +362,7 @@
                 "metadata": {
                     "attrs": {
                         "enable_double_buffer": true,
-                        "enable_invariant_hoist": false,
-                        "multicore_scalar_rearrange": true
+                        "enable_invariant_hoist": false
                     }
                 },
                 "dim": "0 0 128 1 0 1 128 1"
@@ -393,9 +373,7 @@
                 "metadata": {
                     "attrs": {
                         "enable_double_buffer": true,
-                        "enable_mark_multi_core": true,
-                        "enable_invariant_hoist": false,
-                        "multicore_scalar_rearrange": true
+                        "enable_invariant_hoist": false
                     }
                 },
                 "dim": "0 0 128 1"
@@ -406,9 +384,7 @@
                 "metadata": {
                     "attrs": {
                         "enable_double_buffer": true,
-                        "enable_mark_multi_core": true,
-                        "enable_invariant_hoist": false,
-                        "multicore_scalar_rearrange": true
+                        "enable_invariant_hoist": false
                     }
                 },
                 "dim": "0 0 8 1 0 1 512 1"
@@ -419,9 +395,7 @@
                 "metadata": {
                     "attrs": {
                         "enable_double_buffer": true,
-                        "enable_mark_multi_core": true,
-                        "enable_invariant_hoist": false,
-                        "multicore_scalar_rearrange": true
+                        "enable_invariant_hoist": false
                     }
                 },
                 "dim": "0 0 8 1 0 1 512 1"
@@ -432,9 +406,7 @@
                 "metadata": {
                     "attrs": {
                         "enable_double_buffer": true,
-                        "enable_mark_multi_core": true,
-                        "enable_invariant_hoist": false,
-                        "multicore_scalar_rearrange": true
+                        "enable_invariant_hoist": false
                     }
                 },
                 "dim": "0 0 32 1 0 1 512 1"
@@ -445,9 +417,7 @@
                 "metadata": {
                     "attrs": {
                         "enable_double_buffer": true,
-                        "enable_mark_multi_core": true,
-                        "enable_invariant_hoist": false,
-                        "multicore_scalar_rearrange": true
+                        "enable_invariant_hoist": false
                     }
                 },
                 "dim": "0 0 32 1 0 1 512 1"
@@ -458,8 +428,7 @@
                 "metadata": {
                     "attrs": {
                         "enable_double_buffer": true,
-                        "enable_invariant_hoist": false,
-                        "multicore_scalar_rearrange": true
+                        "enable_invariant_hoist": false
                     }
                 },
                 "dim": "0 0 6 1 0 1 512 1"
@@ -470,9 +439,7 @@
                 "metadata": {
                     "attrs": {
                         "enable_double_buffer": true,
-                        "enable_mark_multi_core": true,
-                        "enable_invariant_hoist": false,
-                        "multicore_scalar_rearrange": true
+                        "enable_invariant_hoist": false
                     }
                 },
                 "dim": "0 0 6 1 0 1 512 1"
@@ -562,9 +529,6 @@
             "float32---": {
                 "metadata": {
                     "attrs": {
-                        "pragma_remove_invariant_dependence": true,
-                        "enable_mark_multi_core": true,
-                        "multicore_scalar_rearrange": true,
                         "enable_cover_protect_optimize": false
                     }
                 },
@@ -625,9 +589,7 @@
             "float32--------": {
                 "metadata": {
                     "attrs": {
-                        "enable_rewrite_scalar_compute": true,
-                        "pragma_remove_invariant_dependence": true,
-                        "multicore_scalar_rearrange": true
+                        "enable_rewrite_scalar_compute": true
                     }
                 },
                 "dim": "0 0 10174 1"
@@ -638,8 +600,6 @@
                 "metadata": {
                     "attrs": {
                         "enable_rewrite_scalar_compute": true,
-                        "pragma_remove_invariant_dependence": true,
-                        "multicore_scalar_rearrange": true,
                         "pragma_speedup_tiling": true,
                         "pragma_analyze_reuse_buffer": true
                     }
@@ -651,8 +611,6 @@
                 "metadata": {
                     "attrs": {
                         "enable_rewrite_scalar_compute": true,
-                        "pragma_remove_invariant_dependence": true,
-                        "multicore_scalar_rearrange": true,
                         "pragma_speedup_tiling": true,
                         "pragma_analyze_reuse_buffer": true
                     }
@@ -669,8 +627,6 @@
                 "metadata": {
                     "attrs": {
                         "enable_rewrite_scalar_compute": true,
-                        "pragma_remove_invariant_dependence": true,
-                        "multicore_scalar_rearrange": true,
                         "pragma_speedup_tiling": true,
                         "pragma_analyze_reuse_buffer": true
                     }
@@ -683,8 +639,6 @@
             "float32-----": {
                 "metadata": {
                     "attrs": {
-                        "pragma_remove_invariant_dependence": true,
-                        "multicore_scalar_rearrange": true
                     }
                 },
                 "dim": "0 0 6 1 0 1 1024 1"
@@ -694,8 +648,6 @@
             "float32-----": {
                 "metadata": {
                     "attrs": {
-                        "enable_mark_multi_core": true,
-                        "multicore_scalar_rearrange": true
                     }
                 },
                 "dim": "0 0 128 1"
@@ -705,8 +657,6 @@
             "float32-----": {
                 "metadata": {
                     "attrs": {
-                        "pragma_remove_invariant_dependence": true,
-                        "multicore_scalar_rearrange": true
                     }
                 },
                 "dim": "0 0 4 1 0 1 4096 1"
@@ -716,8 +666,6 @@
             "float32-----": {
                 "metadata": {
                     "attrs": {
-                        "pragma_remove_invariant_dependence": true,
-                        "multicore_scalar_rearrange": true
                     }
                 },
                 "dim": "0 0 16 1 0 1 1024 1"
@@ -727,8 +675,6 @@
             "float32-----": {
                 "metadata": {
                     "attrs": {
-                        "pragma_remove_invariant_dependence": true,
-                        "multicore_scalar_rearrange": true
                     }
                 },
                 "dim": "0 0 16 1 0 1 1024 1"
@@ -740,9 +686,7 @@
             "float16--": {
                 "metadata": {
                     "attrs": {
-                        "enable_mark_multi_core": true,
                         "multicore_loop_switch_hoist": false,
-                        "multicore_scalar_rearrange": true,
                         "enable_post_poly_loop_partition": false
                     }
                 },
@@ -753,9 +697,6 @@
     "2.Greater2.Select13.Sqrt1.Select135.Maximum1.RealDiv16.7": {
         "metadata": {
             "attrs": {
-                "enable_mark_multi_core": true,
-                "pragma_remove_invariant_dependence": true,
-                "multicore_scalar_rearrange": true,
                 "enable_rewrite_scalar_compute": true
             }
         }
@@ -765,12 +706,9 @@
             "float16--.float32.float16-": {
                 "metadata": {
                     "attrs": {
-                        "enable_mark_multi_core": false,
                         "enable_pre_poly_loop_partition": true,
                         "enable_post_poly_loop_partition": false,
                         "enable_rewrite_scalar_compute": false,
-                        "multicore_scalar_rearrange": true,
-                        "pragma_remove_invariant_dependence": true,
                         "dim": "0 0 1024 1 0 1 1 1 0 2 8 1"
                     }
                 }

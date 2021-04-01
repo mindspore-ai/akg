@@ -45,7 +45,6 @@ constexpr auto kExtentToCond = "extent_to_cond";
 constexpr auto kEnableMulticore = "enable_multicore";
 constexpr auto kMergeOuterLoop = "merge_outer_loop_for_multicore";
 constexpr auto kMultiCoreLoopMaxDepth = "multicore_loop_max_depth";
-constexpr auto kMultiCoreScalarRerrange = "multicore_scalar_rearrange";
 constexpr auto kMultiCoreLoopSwitchHoist = "multicore_loop_switch_hoist";
 constexpr auto kRecordCore = "record_core";
 constexpr auto kEnableBisectOptimize = "enable_bisect_optimize";

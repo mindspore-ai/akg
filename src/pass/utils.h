@@ -81,6 +81,10 @@ class Bound {
     bound.max = max;
     return bound;
   }
+  
+  bool defined(){
+    return this->min.defined() && this->max.defined();
+  }
 };
 
 enum class Interval { LTZERO = -2, LEZERO, ZERO, GEZERO, GTZERO, UNKNOWN };
