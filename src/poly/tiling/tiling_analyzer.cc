@@ -1404,13 +1404,18 @@ void TilingAnalyzer::AddTilingConstraints() {
   VectorizedStrategy vectorized_strategy(this);
   TensorOfTensorStrategy tot_strategy(this);
   actived_strategies.push_back(&cast_strategy);
-  actived_strategies.push_back(&vectorized_strategy);
+  if (!scop_info_.user_config_.GetIsTuning()) {
+    actived_strategies.push_back(&vectorized_strategy);
+  }
   actived_strategies.push_back(&tot_strategy);
 
   ReduceStrategy reduce_strategy(this);
   DmaAlignStrategy dma_align_stratgey(this);
-  actived_strategies.push_back(&reduce_strategy);
-  actived_strategies.push_back(&dma_align_stratgey);
+  
+  if (!scop_info_.user_config_.GetIsTuning()) {
+    actived_strategies.push_back(&reduce_strategy);
+    actived_strategies.push_back(&dma_align_stratgey);
+  }
 
   ModStrategy mod_strategy(this);
   actived_strategies.push_back(&mod_strategy);
