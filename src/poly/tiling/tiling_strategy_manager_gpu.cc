@@ -586,9 +586,9 @@ void GpuStrategy::InitMappingLimit() {
 
   if (template_ == Template::CUSTOM_CONFIG) {
     auto block_config = analyzer_->scop_info_.user_config_.GetBlockConfig();
-    for (int i = block_config->bound - 1; i >= 0; --i) {
+    for (int i = 0; i < static_cast<int>(block_config->bound) - 1; ++i) {
       if (i >= static_cast<int>(depth_)) {
-        continue;
+        break;
       }
       block_limit_.emplace_back(block_config->GetAt(i).second);
     }
@@ -913,7 +913,7 @@ int64_t GpuStrategy::TileAfterThreadMapping(TileAxis *axis, size_t inner_dim, in
       tile = thread_size;
       ss << "tile = thread size, ";
     } else {
-      auto block_dim = reverse_binding_ ? inner_dim : block_limit_.size() - 1 - inner_dim;
+      auto block_dim = reverse_binding_ ? block_limit_.size() - 1 - inner_dim : inner_dim;
       int64_t least_blocks;
       if (block_dim >= 0 && block_dim < block_limit_.size()) {
         least_blocks = block_limit_[block_dim];
