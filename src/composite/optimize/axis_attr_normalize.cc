@@ -16,6 +16,9 @@
 
 #include "composite/optimize/axis_attr_normalize.h"
 
+#include <algorithm>
+#include <vector>
+
 namespace akg {
 class AxisAttrNormalizer : public IRMutator {
  public:
@@ -23,24 +26,31 @@ class AxisAttrNormalizer : public IRMutator {
     if (op->attr_key == "attrs") {
       auto attrs = Downcast<Map<std::string, NodeRef>>(op->node);
       if (attrs.find("axis") != attrs.end()) {
+        rank_ = 0;
         Stmt body = IRMutator::Mutate(op->body);
         if (attrs["axis"].as<IntImm>()) {
-          int64_t idx = axis_len_ > 0 ? (attrs["axis"].as<IntImm>()->value + axis_len_) % axis_len_ : 0;
-          Array<Expr> new_axis = {make_const(Int(32), idx)};
+          Array<Expr> new_axis = {make_const(Int(32), CalIndex(attrs["axis"].as<IntImm>()->value))};
           attrs.Set("axis", new_axis);
         } else {
           Array<Expr> axis = Downcast<Array<Expr>>(attrs["axis"]);
           Array<Expr> new_axis;
-          for (auto val : axis) {
-            auto imm = val.as<IntImm>();
-            CHECK(imm);
-            if (imm->value >= 0) {
-              new_axis.push_back(val);
-            } else {
-              new_axis.push_back(make_const(Int(32), imm->value + axis_len_));
+          if (axis.empty()) {
+            for (int64_t i = 0; i < rank_; i++) {
+              new_axis.push_back(make_const(Int(32), i));
             }
-            attrs.Set("axis", new_axis);
+          } else {
+            std::vector<int64_t> new_axis_val;
+            for (auto val : axis) {
+              auto imm = val.as<IntImm>();
+              CHECK(imm);
+              new_axis_val.push_back(CalIndex(imm->value));
+            }
+            std::sort(new_axis_val.begin(), new_axis_val.end());
+            for (auto val : new_axis_val) {
+              new_axis.push_back(make_const(Int(32), val));
+            }
           }
+          attrs.Set("axis", new_axis);
         }
         return AttrStmt::make(attrs, op->attr_key, op->value, body);
       }
@@ -53,13 +63,30 @@ class AxisAttrNormalizer : public IRMutator {
     CHECK(prim && prim->args.size() > 0);
     auto input = prim->args[0].as<Call>();
     if (input) {
-      axis_len_ = input->args.size();
+      rank_ = input->args.size();
+      if (rank_ == 0) {
+        rank_ = 1;
+      }
+      if (GetOpName(op) == "ExpandDims") {
+        // the valid axis of ExpandDims is in [-1-rank, rank]
+        rank_++;
+      }
     }
     return s;
   }
 
+  int64_t CalIndex(int64_t x) {
+    // rank == 0 means the real body is eliminated
+    if (rank_ == 0) return x;
+
+    // check axis in range [-rank, rank)
+    CHECK_GE(x, -rank_);
+    CHECK_LE(x, rank_ - 1);
+    return x >= 0 ? x : x + rank_;
+  }
+
  private:
-  int64_t axis_len_{0};
+  int64_t rank_{0};
 };
 
 Stmt AxisAttrNormalize::Run(const Stmt &stmt) { return AxisAttrNormalizer().Mutate(stmt); }

@@ -252,7 +252,7 @@ TVM_REGISTER_GLOBAL("Sqrt").set_body([](TVMArgs args, TVMRetValue *rv) { TOPI_ON
 TVM_REGISTER_GLOBAL("ExpandDims").set_body([](TVMArgs args, TVMRetValue *rv) {
   auto ref = [](OpAttr attrs) -> int {
     CHECK(attrs.count("axis"));
-    auto axis = ir::GetInt32Const(Downcast<Expr>(attrs["axis"]));
+    auto axis = ir::GetInt32Const(Downcast<Array<Expr>>(attrs["axis"])[0]);
     return axis;
   };
 
