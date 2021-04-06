@@ -31,6 +31,8 @@ from akg.auto_tune.type_definitions import ConvDesc, ConvBackpropDesc, MatmulCub
 from akg.auto_tune.space_generators import get_space
 from akg.auto_tune.space import ListConfigSpace
 from akg.auto_tune.data_generators import gen_data
+from akg.auto_tune.kernel_compiler import get_matmul_cube_attrs
+
 
 logger = logging.getLogger('akg.auto_tune.job')
 
@@ -179,7 +181,7 @@ def tune_json_file(input_path, input_file, iter_times, save_res, repo_path, all_
 
     if has_matmul:
         matmul_desc = get_matmul_desc(matmul_op_desc)
-        index_table, space, _, _, _ = get_space("matmul", matmul_desc)
+        index_table, space, _, _, _ = get_space("matmul", matmul_desc, tuning_attrs)
     else:
         if not extra_tune:
             time_start_get_space = time.time()
@@ -275,9 +277,13 @@ def tune_json_file(input_path, input_file, iter_times, save_res, repo_path, all_
 
     if save_res:
         if extra_tune:
-            save_tuning_result(key, "extra_tune", json_content, index_table, tuner, repo_path)
+            save_tuning_result(key, "extra_tune", None, json_content, index_table, tuner, repo_path)
         else:
-            save_tuning_result(key, "json", json_content, index_table, tuner, repo_path)
+            if has_matmul:
+                save_tuning_result(key, runner_op_type, op_desc, json_content, index_table, tuner, repo_path)
+            else:
+                save_tuning_result(key, "json", None, json_content, index_table, tuner, repo_path)
+    
     return tuner
 
 def launch_json(debug_mode: bool = True, save_res: bool = False, input_str="", repo_path="", all_space=False,
@@ -359,7 +365,7 @@ def jobs(op_type: str = 'add', desc=None, debug_mode: bool = True, save_res: boo
     print_tuning_result(op_type, space, index_table, tuner, key)
 
     if save_res:
-        save_tuning_result(key, op_type, desc, index_table, tuner)
+        save_tuning_result(key, op_type, desc, None, index_table, tuner)
 
 
 def print_tuning_result(op_type, space, index_table, tuner, key):
@@ -377,13 +383,13 @@ def print_tuning_result(op_type, space, index_table, tuner, key):
         print(space.get(x), y if y not in error_time_string.keys() else error_time_string[y])
 
 
-def save_tuning_result(key, op_type, desc, index_table, tuner, repo_path=""):
+def save_tuning_result(key, op_type, op_desc, json_desc, index_table, tuner, repo_path=""):
     """save tuning result"""
     if tuner.best_config is not None and tuner.best_time not in error_time_list:
         set_dim_configs = tuner.best_config.input
         if op_type == "matmul":
             param = []
-            for _ in range(len(desc.x_shape) - 2):
+            for _ in range(len(op_desc.x_shape) - 2):
                 param.append((1, 1))
             if set_dim_configs.n_l1 > 0:
                 param.append((set_dim_configs.n_l1, set_dim_configs.n_l0))
@@ -391,7 +397,8 @@ def save_tuning_result(key, op_type, desc, index_table, tuner, repo_path=""):
                 param.append((set_dim_configs.m_l1, set_dim_configs.m_l0))
             param.extend([(16, 16), (16, 16), (set_dim_configs.k_l1, set_dim_configs.k_l0)])
             tiling_param = (param, {"bypass": set_dim_configs.bypass})
-
+        elif op_type == "matmul_json":
+            tiling_param = get_matmul_cube_attrs(op_desc, set_dim_configs)
         # special case with different tiling parameter format
         elif op_type in ("conv", "conv_bn1"):
             param = []
@@ -446,9 +453,9 @@ def save_tuning_result(key, op_type, desc, index_table, tuner, repo_path=""):
               "tuning time": tuner.tuning_time,
               }
     # save results to repo file when tuning time for composite is valid
-    if op_type in ("json", "extra_tune") and tuner.best_time not in error_time_list:
+    if op_type in ("json", "extra_tune", "matmul_json") and tuner.best_time not in error_time_list:
         config["file_name"] = str(key)
-        compute, shape, dtype = generate_trait(desc)
+        compute, shape, dtype = generate_trait(json_desc)
         save_file = "autotuning/extra_tune.json" if op_type == "extra_tune" else repo_path
         with open(save_file, 'r') as f:
             repo = json.loads(f.read())

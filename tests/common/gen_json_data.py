@@ -205,6 +205,35 @@ def trans_data_dsl(inputs, output, attr):
     return get_trans_data_str(input_name, output_name, ori_shape, src_format, dst_format)
 
 
+def np_matmul_str(inputs, output, attr):
+    trans_a = get_attr(attr, "transpose_a")
+    trans_b = get_attr(attr, "transpose_b")
+    input_0 = inputs[0][0]
+    input_1 = inputs[1][0]
+    res = ""
+    if input_0['data_type'] == "float16":
+        tmp = "%s = %s.astype(np.float32)" % (get_input(input_0), get_input(input_0))
+        res = res + tmp + "\n"
+    if input_1['data_type'] == "float16":
+        tmp = "%s = %s.astype(np.float32)" % (get_input(input_1), get_input(input_1))
+        res = res + tmp + "\n"
+    
+    if trans_a and trans_b:
+        res += "%s = np.dot(np.swapaxes(%s, -1, -2), np.swapaxes(%s, -1, -2))" %\
+              (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]))
+    elif trans_a:
+        res += "%s = np.dot(np.swapaxes(%s, -1, -2), %s)" %\
+              (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]))
+    elif trans_b:
+        res += "%s = np.dot(%s, np.swapaxes(%s, -1, -2))" %\
+              (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]))
+    else:
+        res += "%s = np.dot(%s, %s)" %\
+              (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]))
+    if output[0]['data_type'] == "float16":
+        res += "\n" + "%s = %s.astype(np.float16)" % (output[0]['tensor_name'], output[0]['tensor_name'])
+    return res
+
 
 def batchmatmul_str(inputs, output, attr):
     trans_a = get_attr(attr, "transpose_a")
@@ -234,6 +263,8 @@ def matmul_str(inputs, output, attr):
 
     left_format = get_attr(attr, "left_format")
     right_format = get_attr(attr, "right_format")
+    trans_a = get_attr(attr, "transpose_a")
+    trans_b = get_attr(attr, "transpose_b")
     left_input = inputs[0][0]
     right_input = inputs[1][0]
     output_name = output[0]['tensor_name']
@@ -252,9 +283,17 @@ def matmul_str(inputs, output, attr):
         right_ori_shape = convert_fracal_shape(right_input['shape'], "zN")
         right_trans_str = get_trans_data_str(right_input_name, right_input_name, right_ori_shape, right_format, 'DefaultFormat')
         res = res + right_trans_str + "\n"
-    matmul_str = batchmatmul_str(inputs, output, attr)
+    matmul_str = np_matmul_str(inputs, output, attr)
     res = res + matmul_str + "\n"
 
+    has_bias = (len(inputs) > 2)
+    if has_bias:
+        bias=inputs[2][0]
+        bias_shape = right_ori_shape[-2] if trans_b else right_ori_shape[-1] 
+        if bias['shape'][0] != bias_shape:
+            res += "%s = random_gaussian([%s, ], miu=1, sigma=0.1).astype(np.%s) \n" % (get_input(bias), str(bias_shape), bias['data_type'])
+
+        res += "%s = np.add(%s, %s)\n" % (output_name, output_name, get_input(bias))
     if output_format != 'DefaultFormat':
         output_trans_str = get_trans_data_str(output_name, output_name, output_shape, 'DefaultFormat', output_format)
         res = res + output_trans_str + "\n"

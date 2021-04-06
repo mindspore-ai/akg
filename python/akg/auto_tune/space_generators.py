@@ -47,7 +47,7 @@ def _get_space_vector(op_type: str, op_desc):
     return index_table, space, key, expect, input_for_mod
 
 
-def _get_space_conv(op_desc: ConvDesc):
+def _get_space_conv(op_desc: ConvDesc, tunning_attrs):
     """get config space of convolution"""
     if not isinstance(op_desc, ConvDesc):
         raise TypeError('op_desc must be ConvDesc')
@@ -144,7 +144,7 @@ def _get_space_conv(op_desc: ConvDesc):
     return None, config_space, op_desc.__str__(), None, None
 
 
-def _get_space_conv_bn1(op_desc: ConvDesc):
+def _get_space_conv_bn1(op_desc: ConvDesc, tunning_attrs):
     """get config space of convolution"""
     if not isinstance(op_desc, ConvDesc):
         raise TypeError('op_desc must be ConvDesc')
@@ -242,7 +242,7 @@ def _get_space_conv_bn1(op_desc: ConvDesc):
     return None, config_space, op_desc.__str__(), None, None
 
 
-def _get_space_conv_backprop_input(op_desc: ConvBackpropDesc):
+def _get_space_conv_backprop_input(op_desc: ConvBackpropDesc, tunning_attrs):
     """get config space of convolution backprop input"""
     if not isinstance(op_desc, ConvBackpropDesc):
         raise TypeError('op_desc must be ConvDesc')
@@ -352,7 +352,7 @@ def _get_space_conv_backprop_input(op_desc: ConvBackpropDesc):
     return None, config_space, op_desc.__str__(), None, None
 
 
-def _get_space_conv_backprop_filter(op_desc: ConvBackpropDesc):
+def _get_space_conv_backprop_filter(op_desc: ConvBackpropDesc, tunning_attrs):
     """get config space of convolution backwprop filter"""
     if not isinstance(op_desc, ConvBackpropDesc):
         raise TypeError('op_desc must be ConvBackpropDesc')
@@ -473,11 +473,32 @@ def _get_space_conv_backprop_filter(op_desc: ConvBackpropDesc):
                                                                                       tile_w, tile_m, tile_k, tile_n))
     return None, config_space, op_desc.__str__(), None, None
 
+def gen_bool_list(attr_list):
+    bool_list = []
+    for _ in attr_list:
+        if len(bool_list) == 0:
+            bool_list = [[True], [False]]
+        else:
+            tmp_list = []
+            for attr_option in bool_list:
+                tmp = attr_option[:]
+                tmp.append(True)
+                tmp1 = tmp[:]
+                tmp.pop()
+                tmp.append(False)
+                tmp2 = tmp[:]
+                tmp_list.append(tmp1)
+                tmp_list.append(tmp2)
+            bool_list = tmp_list
+    return bool_list
 
-def _get_space_matmul_cube(op_desc: MatmulCubeDesc):
+def _get_space_matmul_cube(op_desc: MatmulCubeDesc, tuning_attrs):
     """get config space of matmul_cube"""
     if not isinstance(op_desc, MatmulCubeDesc):
         raise TypeError('op_desc must be MatmulCubeDesc')
+    config_attrs =  ['n_l1', 'n_l0', 'm_l1', 'm_l0', 'k_l1', 'k_l0', 'bypass']
+    config_attrs.extend(tuning_attrs)
+    MatmulCubeConfig = namedtuple('MatmulCubeConfig', config_attrs) 
     config_space = ListConfigSpace(MatmulCubeConfig)
     batch_tuple, m, k, n = matmul_run.extract_dim(op_desc.x_shape, op_desc.y_shape, op_desc.adj_x, op_desc.adj_y)
 
@@ -570,7 +591,16 @@ def _get_space_matmul_cube(op_desc: MatmulCubeDesc):
                                 if kmax == 1:
                                     k_l1 = 16
                                     k_l0 = 16
-                                config_space.add(MatmulCubeConfig(n_l1, n_l0, m_l1, m_l0, k_l1, k_l0, bypass))
+                                tiling_space = [n_l1, n_l0, m_l1, m_l0, k_l1, k_l0, bypass]
+                                if len(tuning_attrs) == 0:
+                                    config_space.add(MatmulCubeConfig(*tiling_space))
+                                else:
+                                    attr_options = gen_bool_list(tuning_attrs)
+                                    for attr_option in attr_options:
+                                        tmp = tiling_space[:]
+                                        tmp.extend(attr_option)
+                                        config = MatmulCubeConfig(*tmp)
+                                        config_space.add(config)
     shape_xx, shape_yy, _, _, k = matmul_run.get_converted_shapes(m, n, k, batch_tuple, op_desc.adj_x, op_desc.adj_y,
                                                                   op_desc.bias, op_desc.left_format,
                                                                   op_desc.right_format, op_desc.out_format)
@@ -588,9 +618,9 @@ _get_space_func = {
 }
 
 
-def get_space(op_type: str, op_desc: NamedTuple):
+def get_space(op_type: str, op_desc: NamedTuple, tuning_attrs=[]):
     """get space of an operator"""
     func = _get_space_func.get(op_type, None)
     if func is None:
         func = partial(_get_space_vector, op_type=op_type)
-    return func(op_desc=op_desc)
+    return func(op_desc=op_desc, tuning_attrs=tuning_attrs)
