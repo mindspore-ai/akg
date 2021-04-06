@@ -302,7 +302,7 @@ op_dsl = {
         (output[0]['tensor_name'], get_input(inputs[0][0])),
     "Cast": lambda inputs, output, attr: cast_str(inputs, output, attr),
     "Reshape": lambda inputs, output, attr: "%s = np.reshape(%s, %s)" %
-        (output[0]['tensor_name'], get_input(inputs[0][0]), attr[0]['value']),
+        (output[0]['tensor_name'], get_input(inputs[0][0]), get_attr(attr, "shape")),
     "OneHot": lambda inputs, output, attr: "%s = np.one_hot(%s, %s, %s, %s, %s, %s)" %
         (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]), get_input(inputs[2][0]),
         attr[0]['value'], attr[1]['value'], inputs[0][0]['data_type']),
@@ -313,7 +313,7 @@ op_dsl = {
                                            for i in range(0, len(inputs[0]))])),
     "Tile": lambda inputs, output, attr: "%s = np.tile(%s, %s)" %
         (output[0]['tensor_name'], get_input(
-        inputs[0][0]), attr[0]['value']),
+        inputs[0][0]), get_attr(attr, "multiples")),
     "Reciprocal": lambda inputs, output, attr: "%s = np.divide(1.0, %s)" %
         (output[0]['tensor_name'], get_input(inputs[0][0])),
     "Equal": lambda inputs, output, attr: "%s = np.equal(%s, %s)" %
@@ -344,7 +344,7 @@ op_dsl = {
     "EquivFormat": lambda inputs, output, attr: "%s = %s" %
         (output[0]['tensor_name'], get_input(inputs[0][0])),
     "ExpandDims": lambda inputs, output, attr: "%s = np.expand_dims(%s, %s)" %
-        (output[0]['tensor_name'], get_input(inputs[0][0]), attr[0]['value']),
+        (output[0]['tensor_name'], get_input(inputs[0][0]), get_attr(attr, "axis")),
     "Transpose": lambda inputs, output, attr: transpose_str(inputs, output, attr),
     "TransData": trans_data_dsl,
     "BroadcastTo": lambda inputs, output, attr: broadcast_str(inputs, output, attr),
