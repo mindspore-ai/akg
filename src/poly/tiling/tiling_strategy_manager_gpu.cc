@@ -376,6 +376,18 @@ void ReduceStrategy::DealWithPostReduceTensors() {
   }
 }
 
+int GpuStrategy::GetLocalAllocBufCount () {
+  int count = 0;
+  for (auto &it : analyzer_->buf_info_) {
+    auto buf = it.second.get();
+    CHECK(buf);
+    if (buf->scope == TilingMemScope::MEM_SCOPE_LOCAL) {
+      count++;
+    }
+  }
+  return count;
+}
+
 void GpuStrategy::ApplyCustomConstraint() {
   auto ParseBindingConstraint = [](const std::string constraint, size_t max_size) {
     std::vector<std::string> sp = akg::common::Split(constraint, ",");
@@ -514,6 +526,15 @@ void GpuStrategy::AddGpuConstraint() {
       axis->TileRestrainToSingleValue(axis->c1_constraints.tile_min_, TileLevel::CACHE0);
     });
   }
+  // TODO: This is a very naive strategy to avoid cuda launch out of resources 
+  //       and we should fix this in register memory promotion pass.
+  if (template_ != Template::REDUCTION && template_ != Template::ALL_REDUCE) {
+    auto local_buf_count = GetLocalAllocBufCount();
+    auto thread_size = std::accumulate(thread_cfg_.begin(), thread_cfg_.end(), 1, std::multiplies<int>());
+    if (local_buf_count >= 4 || local_buf_count * 4 * thread_size >= 65536) {
+      analyzer_->scop_info_.user_config_.SetUseRegisterMemory(false);
+    }
+  }
 }
 
 void GpuStrategy::InitMappingLimit() {
@@ -565,9 +586,9 @@ void GpuStrategy::InitMappingLimit() {
 
   if (template_ == Template::CUSTOM_CONFIG) {
     auto block_config = analyzer_->scop_info_.user_config_.GetBlockConfig();
-    for (int i = block_config->bound - 1; i >= 0; --i) {
+    for (int i = 0; i < static_cast<int>(block_config->bound) - 1; ++i) {
       if (i >= static_cast<int>(depth_)) {
-        continue;
+        break;
       }
       block_limit_.emplace_back(block_config->GetAt(i).second);
     }
@@ -892,7 +913,7 @@ int64_t GpuStrategy::TileAfterThreadMapping(TileAxis *axis, size_t inner_dim, in
       tile = thread_size;
       ss << "tile = thread size, ";
     } else {
-      auto block_dim = reverse_binding_ ? inner_dim : block_limit_.size() - 1 - inner_dim;
+      auto block_dim = reverse_binding_ ? block_limit_.size() - 1 - inner_dim : inner_dim;
       int64_t least_blocks;
       if (block_dim >= 0 && block_dim < block_limit_.size()) {
         least_blocks = block_limit_[block_dim];
