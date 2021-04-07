@@ -356,7 +356,7 @@ void RegisterMemoryManager::IsOutofMemory(std::vector<BufferDefInfo> promoted_in
       auto tensor_size = std::accumulate(box_sizes.begin(), box_sizes.end(), 1, std::multiplies<size_t>());
       auto data_bytes = scop_info_.user_config_.GetDataType(promoted_info.tensor_id.get_name());
       total_alloc_size += tensor_size * std::max<int>(1, data_bytes / BYTES_PER_REGISTER);
-      if (total_alloc_size * alloc_threads > MAX_REGISTER_PER_THREAD_BLOCK * REGISTER_ALLOC_RATIO) {
+      if (total_alloc_size * alloc_threads >= MAX_REGISTER_PER_THREAD_BLOCK * REGISTER_ALLOC_RATIO) {
         memory_exceeding_ = true;
         break;
       }
