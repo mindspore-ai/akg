@@ -16,9 +16,46 @@
 #include "composite/stitch_fusion.h"
 #include "composite/util.h"
 #include "composite/dump.h"
+#include <ir_pass.h>
 #include <fstream>
 
 namespace akg {
+class RmUnThreadExpr : public IRMutator {
+ public:
+  RmUnThreadExpr() = default;
+  Expr Mutate_(const Variable *op, const Expr &e) final {
+    if (!IsThreadIdx(op->name_hint)) return 0;
+    return IRMutator::Mutate_(op, e);
+  }
+};
+class RmThreadExpr : public IRMutator {
+ public:
+  RmThreadExpr() = default;
+  Expr Mutate_(const Variable *op, const Expr &e) final {
+    if (IsThreadIdx(op->name_hint)) return 0;
+    return IRMutator::Mutate_(op, e);
+  }
+};
+class RmBlockExpr : public IRMutator {
+ public:
+  RmBlockExpr() = default;
+  Expr Mutate_(const Variable *op, const Expr &e) final {
+    if (IsBlockIdx(op->name_hint)) return 0;
+    return IRMutator::Mutate_(op, e);
+  }
+};
+class LeftmostIsBlock : public IRVisitor {
+ public:
+  LeftmostIsBlock() = default;
+  bool Check(const Expr &e) {
+    this->Visit(e);
+    return leftmost_ && leftmost_->name_hint.find(BLOCKIDX) != std::string::npos;
+  }
+  void Visit_(const Variable *op) override { leftmost_ = op; }
+  void Visit_(const Mul *op) override { this->Visit(op->a); }
+  void Visit_(const Add *op) override { this->Visit(op->a); }
+  const Variable *leftmost_{nullptr};
+};
 class GetLoopLen : public IRVisitor {
  public:
   explicit GetLoopLen(const For *f) : f_(f) {}
@@ -40,7 +77,16 @@ class GetBlockExpr : public IRVisitor {
       blockexpr_ = Var(op->name_hint);
     }
   }
-  Expr blockexpr_{0};
+  void Visit_(const Mul *op) override {
+    auto var = op->a.as<Variable>();
+    if (var && var->name_hint.find(BLOCKIDX) != std::string::npos) {
+      blockmul_ = op->a * op->b;
+    }
+    this->Visit(op->a);
+    this->Visit(op->b);
+  }
+  Expr blockexpr_;
+  Expr blockmul_;
 };
 
 Var GetReplaceVar(const Var &var, std::unordered_map<std::string, Var> &vars, const std::string &name,
@@ -86,7 +132,14 @@ class BroadcastSubstitute : public IRVisitor {
               varmap[old_loopvar.get()] = loops_[i]->loop_var;
               i++;
             }
-            substitute_[op->index] = Substitute(kv2.second.old_index, varmap);
+            auto a = Simplify(RmBlockExpr().Mutate(op->index));
+            auto b = Substitute(kv2.second.old_index, varmap);
+            if (a.as<Add>()) {
+              substitute_[Simplify(RmThreadExpr().Mutate(a))] = Simplify(RmThreadExpr().Mutate(b));
+              substitute_[Simplify(RmUnThreadExpr().Mutate(a))] = Simplify(RmUnThreadExpr().Mutate(b));
+            } else {
+              substitute_[Simplify(a)] = Simplify(b);
+            }
             return;
           }
         }
@@ -108,11 +161,13 @@ class StitchMutate : public IRMutator {
  public:
   explicit StitchMutate(std::unordered_map<std::string, StitchBufferInfo> &stitch_buffer_map,
                         std::unordered_map<std::string, StitchBufferInfo> &buf_within_op_map,
-                        std::vector<std::string> &allocate_revoke, StitchAttrInfo &store_attr)
+                        std::vector<std::string> &allocate_revoke, StitchAttrInfo &store_attr,
+                        const std::unordered_map<std::string, NodeRef> &real_outputs)
       : stitch_buffer_map_(stitch_buffer_map),
         buf_within_op_map_(buf_within_op_map),
         allocate_revoke_(allocate_revoke),
-        store_attr_(store_attr) {}
+        store_attr_(store_attr),
+        real_outputs_(real_outputs) {}
 
   Stmt Run(Stmt &s) {
     stitch_type_ = store_attr_.type_array[phase];
@@ -212,17 +267,33 @@ class StitchMutate : public IRMutator {
     loops_.pop_back();
     return stmt;
   }
+  void CollectBlockSubstitute(const Expr &index, const Expr &to_replace) {
+    for (auto &kv : broadcast_substitute_) {
+      if (Equal(kv.first, Simplify(RmThreadExpr().Mutate(RmBlockExpr().Mutate(index))))) {
+        auto f = GetLoopLen(*loops_.begin());
+        f.Visit(kv.second);
+        if (f.len_.defined()) {
+          auto f2 = GetBlockExpr();
+          f2.Visit(to_replace);
+          broadcast_substitute_[to_replace] = f2.blockexpr_ * f.len_;
+          break;
+        }
+      }
+    }
+  }
   Expr GetIndex(const Expr &index) {
     if (stitch_type_ == StitchOpType::Broadcast && !broadcast_substitute_.empty()) {
       auto f = GetBlockExpr();
       f.Visit(index);
-      for (auto &kv : broadcast_substitute_) {
-        if (Equal(kv.first, index)) {
-          auto f2 = GetLoopLen(*loops_.begin());
-          f2.Visit(kv.second);
-          return kv.second + f.blockexpr_ * f2.len_;
-        }
+      if (f.blockmul_.defined() && !LeftmostIsBlock().Check(index)) {
+        CollectBlockSubstitute(index, f.blockmul_);
       }
+
+      auto new_index = f.blockmul_.defined() ? Simplify(RmBlockExpr().Mutate(index)) + f.blockmul_ : index;
+      for (auto &kv : broadcast_substitute_) {
+        new_index = air::ir::substitute(kv.first, kv.second, new_index);
+      }
+      return new_index;
     }
     return index;
   }
@@ -234,11 +305,19 @@ class StitchMutate : public IRMutator {
     }
     store_with_loopvar_[stmt.as<Store>()->buffer_var] = swlv;
   }
+  bool IsOutput(const std::string &name) {
+    for (auto &kv : real_outputs_) {
+      if (name == kv.second.as<BufferNode>()->name) {
+        return true;
+      }
+    }
+    return false;
+  }
   Stmt Mutate_(const Store *op, const Stmt &s) final {
     Var var = op->buffer_var;
     auto name = var->name_hint;
     auto index = GetIndex(op->index);
-    if (stitch_buffer_map_.count(name)) {
+    if (stitch_buffer_map_.count(name) && !IsOutput(name)) {
       auto info = stitch_buffer_map_[name];
       if (info.type == StorageType::Shared) {
         auto shared_name = info.buf_name;
@@ -333,6 +412,7 @@ class StitchMutate : public IRMutator {
   std::unordered_map<Var, StoreWithLoopVar, air::NodeHash, air::NodeEqual> store_with_loopvar_;
   StitchAttrInfo &store_attr_;
   std::unordered_map<std::string, Var> vars_;
+  std::unordered_map<std::string, NodeRef> real_outputs_;
   Expr blockdim_x{0};
   Expr blockdim_y{1};
   Expr blockdim_z{1};
@@ -484,10 +564,11 @@ IrAttrInfo GetIRAttr(StitchOpType type, BufferStitchAttr &stitch_attr_info, std:
 Stmt StitchFusionGpu(std::vector<Stmt> &stitch_irs, const std::string &kernel_name, StitchAttrInfo &store_attr,
                      std::unordered_map<std::string, StitchBufferInfo> &stitch_buffer_map,
                      std::unordered_map<std::string, StitchBufferInfo> &buf_within_op_map,
-                     std::vector<std::string> &allocate_revoke) {
+                     std::vector<std::string> &allocate_revoke,
+                     const std::unordered_map<std::string, NodeRef> &real_outputs) {
   DumpStitchInfo(kernel_name, store_attr, stitch_buffer_map, buf_within_op_map, allocate_revoke);
   DumpStmt2File("stitch_info/" + kernel_name + "_before_stitch.cc", Block::make(stitch_irs));
-  auto func = StitchMutate(stitch_buffer_map, buf_within_op_map, allocate_revoke, store_attr);
+  auto func = StitchMutate(stitch_buffer_map, buf_within_op_map, allocate_revoke, store_attr, real_outputs);
   CHECK(stitch_irs.size() > 1);
   size_t i = 0;
   for (auto &ir : stitch_irs) {
