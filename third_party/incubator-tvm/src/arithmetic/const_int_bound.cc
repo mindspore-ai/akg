@@ -97,19 +97,18 @@ class ConstIntBoundAnalyzer::Impl :
     }
   };
 
-  void Bind(const Var& var, const Range& range) {
+  void Bind(const Var& var, const Range& range, bool allow_override) {
     Entry a = VisitExpr(range->min);
     Entry b = VisitExpr(range->extent);
     Entry ret;
     ret.min_value = a.min_value;
     ret.max_value = InfAwareAdd(a.max_value, InfAwareAdd(b.max_value, -1));
+    // CCE requires override in update.
     Update(var, ret, true);
   }
 
-  void Update(const Var& var,
-              const Entry& info,
-              bool override) {
-    if (!override) {
+  void Update(const Var& var, const Entry& info, bool allow_override) {
+    if (!allow_override) {
       auto it = var_map_.find(var);
       if (it != var_map_.end()) {
         CHECK(it->second == info)
@@ -122,10 +121,8 @@ class ConstIntBoundAnalyzer::Impl :
     var_map_[var] = info;
   }
 
-  void Update(const Var& var,
-              const ConstIntBound& info,
-              bool override) {
-    Update(var, MakeBound(info->min_value, info->max_value), override);
+  void Update(const Var& var, const ConstIntBound& info, bool allow_override) {
+    Update(var, MakeBound(info->min_value, info->max_value), allow_override);
   }
 
   // Override visitor behaviors
@@ -539,14 +536,12 @@ ConstIntBound ConstIntBoundAnalyzer::operator()(const Expr& expr) {
   return ConstIntBound(ret.min_value, ret.max_value);
 }
 
-void ConstIntBoundAnalyzer::Update(const Var& var,
-                                   const ConstIntBound& info,
-                                   bool override) {
-  impl_->Update(var, info, override);
+void ConstIntBoundAnalyzer::Update(const Var& var, const ConstIntBound& info, bool allow_override) {
+  impl_->Update(var, info, allow_override);
 }
 
-void ConstIntBoundAnalyzer::Bind(const Var& var, const Range& range) {
-  impl_->Bind(var, range);
+void ConstIntBoundAnalyzer::Bind(const Var& var, const Range& range, bool allow_override) {
+  impl_->Bind(var, range, allow_override);
 }
 
 std::function<void()> ConstIntBoundAnalyzer::EnterConstraint(const Expr& constraint) {

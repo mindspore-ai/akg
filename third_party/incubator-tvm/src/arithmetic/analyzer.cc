@@ -40,21 +40,21 @@ Analyzer::Analyzer()
       int_set(this) {
 }
 
-void Analyzer::Bind(const VarExpr& var, const Expr& expr) {
+void Analyzer::Bind(const VarExpr& var, const Expr& expr, bool allow_override) {
   Expr new_expr = expr;
   new_expr = this->canonical_simplify(new_expr);
   new_expr = this->rewrite_simplify(new_expr);
 
-  this->const_int_bound.Update(var, this->const_int_bound(new_expr));
-  this->modular_set.Update(var, this->modular_set(new_expr));
-  this->rewrite_simplify.Update(var, new_expr);
-  this->canonical_simplify.Update(var, new_expr);
+  this->const_int_bound.Update(var, this->const_int_bound(new_expr), allow_override);
+  this->modular_set.Update(var, this->modular_set(new_expr), allow_override);
+  this->rewrite_simplify.Update(var, new_expr, allow_override);
+  this->canonical_simplify.Update(var, new_expr, allow_override);
 }
 
-void Analyzer::Bind(const VarExpr& var, const Range& range) {
+void Analyzer::Bind(const VarExpr& var, const Range& range, bool allow_override) {
   // CCE Preserve this change instead of checking for extent of one
   CHECK(range.defined());
-  this->const_int_bound.Bind(var, range);
+  this->const_int_bound.Bind(var, range, allow_override);
   // skip modular_set
   // skip rewrite simplify
 }
