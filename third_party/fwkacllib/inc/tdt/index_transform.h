@@ -14,23 +14,24 @@
  * limitations under the License.
  */
 
- #ifndef GE_OP_SCORE_FILTER_PRE_SORT_H
- #define GE_OP_SCORE_FILTER_PRE_SORT_H
+#ifndef INC_TDT_INDEX_TRANSFORM_H
+#define INC_TDT_INDEX_TRANSFORM_H
 
- #include "graph/operator_reg.h"
+#include "stdint.h"
+/**
+* @ingroup IndexTransform
+* @brief get logical device id by phy device id.
+*
+* @par Function get logical device id by phy device id.
+*
+* @param  phyId [IN] physical device id
+* @param  logicalId [OUT] logical device id
+* @retval 0 Success
+* @retval OtherValues Fail
+*
+* @par Dependency
+* @li libruntime.so: Library to which the interface belongs.
+*/
 
-namespace ge {
-    REG_OP(ScoreFiltePreSort)
-    .INPUT(rois, TensorType({DT_FLOAT16}))
-    .INPUT(cls_bg_prob, TensorType({DT_FLOAT16}))
-    .OUTPUT(sorted_proposal, TensorType({ DT_FLOAT16}))
-    .OUTPUT(proposal_num, TensorType({ DT_UINT32}))
-    .REQUIRED_ATTR(score_threshold, Float)
-    .REQUIRED_ATTR(k, Int)
-    .ATTR(score_filter, Bool, true)
-    .ATTR(core_max_num, Int, 8)
-    .OP_END_FACTORY_REG(ScoreFiltePreSort)
-    } // namespace ge
-
-     #endif // GE_OP_SCORE_FILTER_PRE_SORT_H
-
+int32_t IndexTransform(const uint32_t phyId, uint32_t &logicId);
+#endif

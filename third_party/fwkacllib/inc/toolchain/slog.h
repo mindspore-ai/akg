@@ -18,16 +18,28 @@
 #define D_SYSLOG_H_
 
 #ifdef __cplusplus
+#ifndef LOG_CPP
 extern "C" {
+#endif
 #endif // __cplusplus
 
 #ifndef LINUX
 #define LINUX 0
 #endif // LINUX
 
+#ifndef WIN
+#define WIN 1
+#endif
+
 #ifndef OS_TYPE
 #define OS_TYPE 0
 #endif // OS_TYPE
+
+#if (OS_TYPE == LINUX)
+#define DLL_EXPORT __attribute__((visibility("default")))
+#else
+#define DLL_EXPORT _declspec(dllexport)
+#endif
 
 /**
  * @ingroup slog
@@ -91,6 +103,11 @@ extern "C" {
  * max log length
  */
 #define MSG_LENGTH 1024
+#define DEBUG_LOG_MASK      (0x00010000)
+#define SECURITY_LOG_MASK   (0x00100000)
+#define RUN_LOG_MASK        (0x01000000)
+#define OPERATION_LOG_MASK  (0x10000000)
+#define RESERVERD_LENGTH 52
 
 typedef struct tagDCODE {
   const char *cName;
@@ -101,6 +118,18 @@ typedef struct tagKV {
   char *kname;
   char *value;
 } KeyValue;
+
+typedef enum {
+    APPLICATION = 0,
+    SYSTEM
+} ProcessType;
+
+typedef struct {
+    ProcessType type;
+    unsigned int pid;
+    unsigned int deviceId;
+    char reserved[RESERVERD_LENGTH];
+} LogAttr;
 
 /**
  * @ingroup slog
@@ -169,89 +198,18 @@ enum {
   PROCMGR,     // Process Manager, Base Platform
   BBOX,
   AIVECTOR,
+  TBE,
+  FV,
+  MDCMAP,
+  TUNE,
   INVLID_MOUDLE_ID
 };
 
-#ifdef MODULE_ID_NAME
-
-/**
- * @ingroup slog
- *
- * set module id to map
- */
-#define SET_MOUDLE_ID_MAP_NAME(x) \
-  { #x, x }
-
-static DCODE g_moduleIdName[] = {SET_MOUDLE_ID_MAP_NAME(SLOG),
-                                 SET_MOUDLE_ID_MAP_NAME(IDEDD),
-                                 SET_MOUDLE_ID_MAP_NAME(IDEDH),
-                                 SET_MOUDLE_ID_MAP_NAME(HCCL),
-                                 SET_MOUDLE_ID_MAP_NAME(FMK),
-                                 SET_MOUDLE_ID_MAP_NAME(HIAIENGINE),
-                                 SET_MOUDLE_ID_MAP_NAME(DVPP),
-                                 SET_MOUDLE_ID_MAP_NAME(RUNTIME),
-                                 SET_MOUDLE_ID_MAP_NAME(CCE),
-#if (OS_TYPE == LINUX)
-                                 SET_MOUDLE_ID_MAP_NAME(HDC),
-#else
-                                 SET_MOUDLE_ID_MAP_NAME(HDCL),
-#endif // OS_TYPE
-                                 SET_MOUDLE_ID_MAP_NAME(DRV),
-                                 SET_MOUDLE_ID_MAP_NAME(MDCFUSION),
-                                 SET_MOUDLE_ID_MAP_NAME(MDCLOCATION),
-                                 SET_MOUDLE_ID_MAP_NAME(MDCPERCEPTION),
-                                 SET_MOUDLE_ID_MAP_NAME(MDCFSM),
-                                 SET_MOUDLE_ID_MAP_NAME(MDCCOMMON),
-                                 SET_MOUDLE_ID_MAP_NAME(MDCMONITOR),
-                                 SET_MOUDLE_ID_MAP_NAME(MDCBSWP),
-                                 SET_MOUDLE_ID_MAP_NAME(MDCDEFAULT),
-                                 SET_MOUDLE_ID_MAP_NAME(MDCSC),
-                                 SET_MOUDLE_ID_MAP_NAME(MDCPNC),
-                                 SET_MOUDLE_ID_MAP_NAME(MLL),
-                                 SET_MOUDLE_ID_MAP_NAME(DEVMM),
-                                 SET_MOUDLE_ID_MAP_NAME(KERNEL),
-                                 SET_MOUDLE_ID_MAP_NAME(LIBMEDIA),
-                                 SET_MOUDLE_ID_MAP_NAME(CCECPU),
-                                 SET_MOUDLE_ID_MAP_NAME(ASCENDDK),
-                                 SET_MOUDLE_ID_MAP_NAME(ROS),
-                                 SET_MOUDLE_ID_MAP_NAME(HCCP),
-                                 SET_MOUDLE_ID_MAP_NAME(ROCE),
-                                 SET_MOUDLE_ID_MAP_NAME(TEFUSION),
-                                 SET_MOUDLE_ID_MAP_NAME(PROFILING),
-                                 SET_MOUDLE_ID_MAP_NAME(DP),
-                                 SET_MOUDLE_ID_MAP_NAME(APP),
-                                 SET_MOUDLE_ID_MAP_NAME(TS),
-                                 SET_MOUDLE_ID_MAP_NAME(TSDUMP),
-                                 SET_MOUDLE_ID_MAP_NAME(AICPU),
-                                 SET_MOUDLE_ID_MAP_NAME(LP),
-                                 SET_MOUDLE_ID_MAP_NAME(TDT),
-                                 SET_MOUDLE_ID_MAP_NAME(FE),
-                                 SET_MOUDLE_ID_MAP_NAME(MD),
-                                 SET_MOUDLE_ID_MAP_NAME(MB),
-                                 SET_MOUDLE_ID_MAP_NAME(ME),
-                                 SET_MOUDLE_ID_MAP_NAME(IMU),
-                                 SET_MOUDLE_ID_MAP_NAME(IMP),
-                                 SET_MOUDLE_ID_MAP_NAME(GE),
-                                 SET_MOUDLE_ID_MAP_NAME(MDCFUSA),
-                                 SET_MOUDLE_ID_MAP_NAME(CAMERA),
-                                 SET_MOUDLE_ID_MAP_NAME(ASCENDCL),
-                                 SET_MOUDLE_ID_MAP_NAME(TEEOS),
-                                 SET_MOUDLE_ID_MAP_NAME(ISP),
-                                 SET_MOUDLE_ID_MAP_NAME(SIS),
-                                 SET_MOUDLE_ID_MAP_NAME(HSM),
-                                 SET_MOUDLE_ID_MAP_NAME(DSS),
-                                 SET_MOUDLE_ID_MAP_NAME(PROCMGR),
-                                 SET_MOUDLE_ID_MAP_NAME(BBOX),
-                                 SET_MOUDLE_ID_MAP_NAME(AIVECTOR),
-                                 { NULL, -1 }};
-#endif // MODULE_ID_NAME
-
-#if (OS_TYPE == LINUX)
 /**
  * @ingroup slog
  * @brief External log interface, which called by modules
  */
-extern void dlog_init(void);
+DLL_EXPORT void dlog_init(void);
 
 /**
  * @ingroup slog
@@ -261,7 +219,7 @@ extern void dlog_init(void);
  * @param [out]enableEvent: 1: enable; 0: disable
  * @return: module level(0: debug, 1: info, 2: warning, 3: error, 4: null output)
  */
-extern int dlog_getlevel(int moduleId, int *enableEvent);
+DLL_EXPORT int dlog_getlevel(int moduleId, int *enableEvent);
 
 /**
  * @ingroup slog
@@ -272,17 +230,26 @@ extern int dlog_getlevel(int moduleId, int *enableEvent);
  * @param [in]enableEvent: 1: enable; 0: disable, others:invalid
  * @return: 0: SUCCEED, others: FAILED
  */
-extern int dlog_setlevel(int moduleId, int level, int enableEvent);
+DLL_EXPORT int dlog_setlevel(int moduleId, int level, int enableEvent);
 
 /**
  * @ingroup slog
  * @brief CheckLogLevel: check module level enable or not
+ * users no need to call it because all dlog interface(include inner interface) has already called
  *
  * @param [in]moduleId: module id, eg: CCE
  * @param [in]logLevel: eg: DLOG_EVENT/DLOG_ERROR/DLOG_WARN/DLOG_INFO/DLOG_DEBUG
  * @return: 1:enable, 0:disable
  */
-extern int CheckLogLevel(int moduleId, int logLevel);
+DLL_EXPORT int CheckLogLevel(int moduleId, int logLevel);
+
+/**
+ * @ingroup slog
+ * @brief DlogSetAttr: set log attr, default pid is 0, default device id is 0, default process type is APPLICATION
+ * @param [in]logAttr: attr info, include pid(must be larger than 0), process type and device id(chip ID)
+ * @return: 0: SUCCEED, others: FAILED
+ */
+DLL_EXPORT int DlogSetAttr(LogAttr logAttr);
 
 /**
  * @ingroup slog
@@ -299,37 +266,46 @@ extern int CheckLogLevel(int moduleId, int logLevel);
 /**
  * @ingroup slog
  * @brief dlog_warn: print warning log
+ * call CheckLogLevel in advance to optimize performance, call interface with fmt input take time
  *
  * @param [in]moduleId: module id, eg: CCE
  * @param [in]fmt: log content
  */
-#define dlog_warn(moduleId, fmt, ...)                                          \
-  do {                                                                         \
-    DlogWarnInner(moduleId, "[%s:%d]" fmt, __FILE__, __LINE__, ##__VA_ARGS__); \
+#define dlog_warn(moduleId, fmt, ...)                                               \
+  do {                                                                              \
+    if(CheckLogLevel(moduleId, DLOG_WARN) == 1) {                                   \
+        DlogWarnInner(moduleId, "[%s:%d]" fmt, __FILE__, __LINE__, ##__VA_ARGS__);  \
+    }                                                                               \
   } while (0)
 
 /**
  * @ingroup slog
  * @brief dlog_info: print info log
+ * call CheckLogLevel in advance to optimize performance, call interface with fmt input take time
  *
  * @param [in]moduleId: module id, eg: CCE
  * @param [in]fmt: log content
  */
-#define dlog_info(moduleId, fmt, ...)                                          \
-  do {                                                                         \
-    DlogInfoInner(moduleId, "[%s:%d]" fmt, __FILE__, __LINE__, ##__VA_ARGS__); \
+#define dlog_info(moduleId, fmt, ...)                                               \
+  do {                                                                              \
+    if(CheckLogLevel(moduleId, DLOG_INFO) == 1) {                                   \
+        DlogInfoInner(moduleId, "[%s:%d]" fmt, __FILE__, __LINE__, ##__VA_ARGS__);  \
+    }                                                                               \
   } while (0)
 
 /**
  * @ingroup slog
  * @brief dlog_debug: print debug log
+ * call CheckLogLevel in advance to optimize performance, call interface with fmt input take time
  *
  * @param [in]moduleId: module id, eg: CCE
  * @param [in]fmt: log content
  */
-#define dlog_debug(moduleId, fmt, ...)                                          \
-  do {                                                                          \
-    DlogDebugInner(moduleId, "[%s:%d]" fmt, __FILE__, __LINE__, ##__VA_ARGS__); \
+#define dlog_debug(moduleId, fmt, ...)                                              \
+  do {                                                                              \
+    if(CheckLogLevel(moduleId, DLOG_DEBUG) == 1) {                                  \
+        DlogDebugInner(moduleId, "[%s:%d]" fmt, __FILE__, __LINE__, ##__VA_ARGS__); \
+    }                                                                               \
   } while (0)
 
 /**
@@ -347,33 +323,40 @@ extern int CheckLogLevel(int moduleId, int logLevel);
 /**
  * @ingroup slog
  * @brief Dlog: print log, need caller to specify level
+ * call CheckLogLevel in advance to optimize performance, call interface with fmt input take time
  *
  * @param [in]moduleId: module id, eg: CCE
  * @param [in]level(0: debug, 1: info, 2: warning, 3: error, 5: trace, 6: oplog, 16: event)
  * @param [in]fmt: log content
  */
-#define Dlog(moduleId, level, fmt, ...)                                           \
-  do {                                                                            \
-    DlogInner(moduleId, level, "[%s:%d]" fmt, __FILE__, __LINE__, ##__VA_ARGS__); \
+#define Dlog(moduleId, level, fmt, ...)                                                 \
+  do {                                                                                  \
+    if(CheckLogLevel(moduleId, level) == 1) {                                           \
+        DlogInner(moduleId, level, "[%s:%d]" fmt, __FILE__, __LINE__, ##__VA_ARGS__);   \
+     }                                                                                  \
   } while (0)
 
 /**
  * @ingroup slog
  * @brief DlogSub: print log, need caller to specify level and submodule
+ * call CheckLogLevel in advance to optimize performance, call interface with fmt input take time
  *
  * @param [in]moduleId: module id, eg: CCE
  * @param [in]submodule: eg: engine
  * @param [in]level(0: debug, 1: info, 2: warning, 3: error, 5: trace, 6: oplog, 16: event)
  * @param [in]fmt: log content
  */
-#define DlogSub(moduleId, submodule, level, fmt, ...)                                            \
-  do {                                                                                           \
-    DlogInner(moduleId, level, "[%s:%d][%s]" fmt, __FILE__, __LINE__, submodule, ##__VA_ARGS__); \
+#define DlogSub(moduleId, submodule, level, fmt, ...)                                                   \
+  do {                                                                                                  \
+    if(CheckLogLevel(moduleId, level) == 1) {                                                           \
+        DlogInner(moduleId, level, "[%s:%d][%s]" fmt, __FILE__, __LINE__, submodule, ##__VA_ARGS__);    \
+    }                                                                                                   \
   } while (0)
 
 /**
  * @ingroup slog
  * @brief DlogWithKV: print log, need caller to specify level and other paramters
+ * call CheckLogLevel in advance to optimize performance, call interface with fmt input take time
  *
  * @param [in]moduleId: module id, eg: CCE
  * @param [in]level(0: debug, 1: info, 2: warning, 3: error, 5: trace, 6: oplog, 16: event)
@@ -381,11 +364,18 @@ extern int CheckLogLevel(int moduleId, int logLevel);
  * @param [in]kvNum: key-value element num in array
  * @param [in]fmt: log content
  */
-#define DlogWithKV(moduleId, level, pstKVArray, kvNum, fmt, ...)                                           \
-  do {                                                                                                     \
-    DlogWithKVInner(moduleId, level, pstKVArray, kvNum, "[%s:%d]" fmt, __FILE__, __LINE__, ##__VA_ARGS__); \
+#define DlogWithKV(moduleId, level, pstKVArray, kvNum, fmt, ...)                                                \
+  do {                                                                                                          \
+    if(CheckLogLevel(moduleId, level) == 1) {                                                                   \
+        DlogWithKVInner(moduleId, level, pstKVArray, kvNum, "[%s:%d]" fmt, __FILE__, __LINE__, ##__VA_ARGS__);  \
+    }                                                                                                           \
   } while (0)
 
+/**
+ * @ingroup slog
+ * @brief DlogFlush: flush log buffer to file
+ */
+DLL_EXPORT void DlogFlush(void);
 
 /**
  * @ingroup slog
@@ -399,12 +389,122 @@ void DlogEventInner(int moduleId, const char *fmt, ...);
 void DlogInner(int moduleId, int level, const char *fmt, ...);
 void DlogWithKVInner(int moduleId, int level, KeyValue *pstKVArray, int kvNum, const char *fmt, ...);
 
-#else
-_declspec(dllexport) void dlog_init(void);
-_declspec(dllexport) int dlog_getlevel(int moduleId, int *enableEvent);
-#endif // OS_TYPE
+#ifdef __cplusplus
+#ifndef LOG_CPP
+}
+#endif // LOG_CPP
+#endif // __cplusplus
+
+#ifdef LOG_CPP
+#ifdef __cplusplus
+extern "C" {
+#endif
+/**
+ * @ingroup slog
+ * @brief DlogGetlevelForC: get module loglevel and enableEvent
+ *
+ * @param [in]moduleId: moudule id(see slog.h, eg: CCE), others: invalid
+ * @param [out]enableEvent: 1: enable; 0: disable
+ * @return: module level(0: debug, 1: info, 2: warning, 3: error, 4: null output)
+ */
+DLL_EXPORT int DlogGetlevelForC(int moduleId, int *enableEvent);
+
+/**
+ * @ingroup slog
+ * @brief DlogSetlevelForC: set module loglevel and enableEvent
+ *
+ * @param [in]moduleId: moudule id(see slog.h, eg: CCE), -1: all modules, others: invalid
+ * @param [in]level: log level(0: debug, 1: info, 2: warning, 3: error, 4: null output)
+ * @param [in]enableEvent: 1: enable; 0: disable, others:invalid
+ * @return: 0: SUCCEED, others: FAILED
+ */
+DLL_EXPORT int DlogSetlevelForC(int moduleId, int level, int enableEvent);
+
+/**
+ * @ingroup slog
+ * @brief CheckLogLevelForC: check module level enable or not
+ * users no need to call it because all dlog interface(include inner interface) has already called
+ *
+ * @param [in]moduleId: module id, eg: CCE
+ * @param [in]logLevel: eg: DLOG_EVENT/DLOG_ERROR/DLOG_WARN/DLOG_INFO/DLOG_DEBUG
+ * @return: 1:enable, 0:disable
+ */
+DLL_EXPORT int CheckLogLevelForC(int moduleId, int logLevel);
+
+/**
+ * @ingroup slog
+ * @brief DlogSetAttrForC: set log attr, default pid is 0, default device id is 0, default process type is APPLICATION
+ * @param [in]logAttr: attr info, include pid(must be larger than 0), process type and device id(chip ID)
+ * @return: 0: SUCCEED, others: FAILED
+ */
+DLL_EXPORT int DlogSetAttrForC(LogAttr logAttr);
+
+/**
+ * @ingroup slog
+ * @brief DlogForC: print log, need caller to specify level
+ * call CheckLogLevelForC in advance to optimize performance, call interface with fmt input take time
+ *
+ * @param [in]moduleId: module id, eg: CCE
+ * @param [in]level(0: debug, 1: info, 2: warning, 3: error, 5: trace, 6: oplog, 16: event)
+ * @param [in]fmt: log content
+ */
+#define DlogForC(moduleId, level, fmt, ...)                                                 \
+  do {                                                                                  \
+    if(CheckLogLevelForC(moduleId, level) == 1) {                                           \
+        DlogInnerForC(moduleId, level, "[%s:%d]" fmt, __FILE__, __LINE__, ##__VA_ARGS__);   \
+     }                                                                                  \
+  } while (0)
+
+/**
+ * @ingroup slog
+ * @brief DlogSubForC: print log, need caller to specify level and submodule
+ * call CheckLogLevelForC in advance to optimize performance, call interface with fmt input take time
+ *
+ * @param [in]moduleId: module id, eg: CCE
+ * @param [in]submodule: eg: engine
+ * @param [in]level(0: debug, 1: info, 2: warning, 3: error, 5: trace, 6: oplog, 16: event)
+ * @param [in]fmt: log content
+ */
+#define DlogSubForC(moduleId, submodule, level, fmt, ...)                                                   \
+  do {                                                                                                  \
+    if(CheckLogLevelForC(moduleId, level) == 1) {                                                           \
+        DlogInnerForC(moduleId, level, "[%s:%d][%s]" fmt, __FILE__, __LINE__, submodule, ##__VA_ARGS__);    \
+    }                                                                                                   \
+  } while (0)
+
+/**
+ * @ingroup slog
+ * @brief DlogWithKVForC: print log, need caller to specify level and other paramters
+ * call CheckLogLevelForC in advance to optimize performance, call interface with fmt input take time
+ *
+ * @param [in]moduleId: module id, eg: CCE
+ * @param [in]level(0: debug, 1: info, 2: warning, 3: error, 5: trace, 6: oplog, 16: event)
+ * @param [in]pstKVArray: key-value array
+ * @param [in]kvNum: key-value element num in array
+ * @param [in]fmt: log content
+ */
+#define DlogWithKVForC(moduleId, level, pstKVArray, kvNum, fmt, ...)                                                \
+  do {                                                                                                          \
+    if(CheckLogLevelForC(moduleId, level) == 1) {                                                                   \
+        DlogWithKVInnerForC(moduleId, level, pstKVArray, kvNum, "[%s:%d]" fmt, __FILE__, __LINE__, ##__VA_ARGS__);  \
+    }                                                                                                           \
+  } while (0)
+
+/**
+ * @ingroup slog
+ * @brief DlogFlushForC: flush log buffer to file
+ */
+DLL_EXPORT void DlogFlushForC(void);
+
+/**
+ * @ingroup slog
+ * @brief Internal log interface, other modules are not allowed to call this interface
+ */
+void DlogInnerForC(int moduleId, int level, const char *fmt, ...);
+void DlogWithKVInnerForC(int moduleId, int level, KeyValue *pstKVArray, int kvNum, const char *fmt, ...);
 
 #ifdef __cplusplus
 }
-#endif // __cplusplus
+#endif
+#endif // LOG_CPP
 #endif // D_SYSLOG_H_

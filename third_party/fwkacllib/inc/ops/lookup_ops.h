@@ -14,22 +14,28 @@
  * limitations under the License.
  */
 
-#ifndef GE_OP_LOOKUP_OPS_H_
-#define GE_OP_LOOKUP_OPS_H_
+/*!
+ * \file lookup_ops.h
+ * \brief
+ */
+#ifndef OPS_BUILT_IN_OP_PROTO_INC_LOOKUP_OPS_H_
+#define OPS_BUILT_IN_OP_PROTO_INC_LOOKUP_OPS_H_
 
 #include "graph/operator_reg.h"
 
 namespace ge {
 
 /**
-*@brief Replaces the contents of the table with the specified keys and values.
+*@brief Replaces the contents of the table with the specified keys and values . \n
 
 *@par Inputs:
-*The dtype of input handle must be resource. Inputs include: \n
+*The dtype of input handle must be resource. Inputs include:
 *@li handle: A Tensor of type resource. Handle to the table.
 *@li keys: A Tensor. Any shape. Keys to look up.
-*@li values: A Tensor. Values to associate with keys.
+*@li values: A Tensor. Values to associate with keys . \n
 
+*@par Third-party framework compatibility.
+*Compatible with tensorflow LookupTableImport operator.
 */
 
 REG_OP(LookupTableImport)
@@ -40,18 +46,20 @@ REG_OP(LookupTableImport)
     .OP_END_FACTORY_REG(LookupTableImport)
 
 /**
-*@brief Updates the table to associates keys with values.
+*@brief Updates the table to associates keys with values . \n
 
 *@par Inputs:
-*The dtype of input handle must be resource. Inputs include: \n
+*The dtype of input handle must be resource. Inputs include:
 *@li handle: A Tensor of type resource. Handle to the table.
 *@li keys: A Tensor. Any shape. Keys to look up.
-*@li values: A Tensor. Values to associate with keys.
+*@li values: A Tensor. Values to associate with keys . \n
 
-*@attention Constraints: \n
-*@li The tensor keys must be of the same type as the keys of the table. \n
-*@li The tensor values must be of the type of the table values. \n
+*@attention Constraints:
+*@li The tensor keys must be of the same type as the keys of the table.
+*@li The tensor values must be of the type of the table values.
 
+*@par Third-party framework compatibility.
+*Compatible with tensorflow LookupTableInsert operator.
 */
 
 REG_OP(LookupTableInsert)
@@ -62,20 +70,22 @@ REG_OP(LookupTableInsert)
     .OP_END_FACTORY_REG(LookupTableInsert)
 
 /**
-*@brief Outputs all keys and values in the table.
+*@brief Outputs all keys and values in the table . \n
 
 *@par Inputs:
-*The dtype of input handle must be resource. Inputs include: \n
-*handle: A Tensor of type resource. Handle to the table.
+*The dtype of input handle must be resource. Inputs include:
+*handle: A Tensor of type resource. Handle to the table . \n
 
 *@par Attributes:
 *@li Tkeys: A DType.
-*@li Tvalues: A DType.
+*@li Tvalues: A DType . \n
 
 *@par Outputs:
 *@li keys: A Tensor of type Tkeys.
-*@li values: A Tensor of type Tvalues.
+*@li values: A Tensor of type Tvalues . \n
 
+*@par Third-party framework compatibility.
+*Compatible with tensorflow LookupTableExport operator.
 */
 
 REG_OP(LookupTableExport)
@@ -88,15 +98,17 @@ REG_OP(LookupTableExport)
     .OP_END_FACTORY_REG(LookupTableExport)
 
 /**
-*@brief Computes the number of elements in the given table.
+*@brief Computes the number of elements in the given table . \n
 
 *@par Inputs:
-*The dtype of input handle must be resource. Inputs include: \n
-*handle: A Tensor of type resource. Handle to the table.
+*The dtype of input handle must be resource. Inputs include:
+*handle: A Tensor of type resource. Handle to the table . \n
 
 *@par Outputs:
-*size: A Tensor of type int64.
+*size: A Tensor of type int64 . \n
 
+*@par Third-party framework compatibility.
+*Compatible with tensorflow LookupTableSize operator.
 */
 
 REG_OP(LookupTableSize)
@@ -105,20 +117,22 @@ REG_OP(LookupTableSize)
     .OP_END_FACTORY_REG(LookupTableSize)
 
 /**
-*@brief Looks up keys in a table, outputs the corresponding values.
+*@brief Looks up keys in a table, outputs the corresponding values . \n
 
 *@par Inputs:
-*The dtype of input handle must be resource. Inputs include: \n
+*The dtype of input handle must be resource. Inputs include:
 *@li handle: A Tensor of type resource. Handle to the table.
 *@li keys: A Tensor. Any shape. Keys to look up.
-*@li default_value: A Tensor.
+*@li default_value: A Tensor . \n
 
 *@par Attributes:
-*Tout: Specified type of ouput values.
+*Tout: Specified type of ouput values . \n
 
 *@par Outputs:
-*values: A Tensor. Has the same type as default_value.
+*values: A Tensor. Has the same type as default_value . \n
 
+*@par Third-party framework compatibility.
+*Compatible with tensorflow LookupTableFind operator.
 */
 
 REG_OP(LookupTableFind)
@@ -132,24 +146,26 @@ REG_OP(LookupTableFind)
     .OP_END_FACTORY_REG(LookupTableFind)
 
 /**
-*@brief Creates a non-initialized hash table.
+*@brief Creates a non-initialized hash table . \n
 
 *@par Attributes:
-*@li container: An optional string. Defaults to "". If non-empty, this table \n
+*@li container: An optional string. Defaults to "". If non-empty, this table
 is placed in the given container. Otherwise, a default container is used.
-*@li shared_name: An optional string. Defaults to "". If non-empty, this \n
+*@li shared_name: An optional string. Defaults to "". If non-empty, this
 table is shared under the given name across multiple sessions.
-*@li use_node_name_sharing: An optional bool. Defaults to False. If true and \n
+*@li use_node_name_sharing: An optional bool. Defaults to False. If true and
 shared_name is empty, the table is shared using the node name.
 *@li key_dtype: A DType. Type of the table keys.
-*@li value_dtype: A DType. Type of the table values.
+*@li value_dtype: A DType. Type of the table values . \n
 
 *@par Outputs:
-*handle: A Tensor of type resource. Handle to the table.
+*handle: A Tensor of type resource. Handle to the table . \n
 
-*@attention Constraints: \n
-*The implementation for HashTable on Ascend uses ai cpu, with bad performance. \n
+*@attention Constraints:
+*The implementation for HashTable on Ascend uses ai cpu, with bad performance.
 
+*@par Third-party framework compatibility.
+*Compatible with tensorflow HashTable operator.
 */
 
 REG_OP(HashTable)
@@ -162,16 +178,18 @@ REG_OP(HashTable)
     .OP_END_FACTORY_REG(HashTable)
 
 /**
-*@brief Table initializer that takes two tensors for keys and values \n
-respectively.
+*@brief Table initializer that takes two tensors for keys and values
+respectively . \n
 
 *@par Inputs:
-*The dtype of input handle must be resource. Inputs include: \n
-*@li handle: A Tensor of type resource. Handle to a table which will be \n
+*The dtype of input handle must be resource. Inputs include:
+*@li handle: A Tensor of type resource. Handle to a table which will be
 initialized.
 *@li keys: A Tensor. Keys of type Tkey.
-*@li values: A Tensor. Values of type Tval.
+*@li values: A Tensor. Values of type Tval . \n
 
+*@par Third-party framework compatibility.
+*Compatible with tensorflow InitializeTable operator.
 */
 
 REG_OP(InitializeTable)
@@ -182,33 +200,35 @@ REG_OP(InitializeTable)
     .OP_END_FACTORY_REG(InitializeTable)
 
 /**
-*@brief Creates an empty hash table that uses tensors as the backing store.
+*@brief Creates an empty hash table that uses tensors as the backing store . \n
 
 *@par Inputs:
-*The input deleted_key must have the same type as empty_key. Inputs include: \n
-*@li empty_key: A Tensor. The key used to represent empty key buckets \n
+*The input deleted_key must have the same type as empty_key. Inputs include:
+*@li empty_key: A Tensor. The key used to represent empty key buckets
 internally. Must not be used in insert or lookup operations.
-*@li deleted_key: A Tensor. Must have the same type as empty_key.
+*@li deleted_key: A Tensor. Must have the same type as empty_key . \n
 
 *@par Attributes:
-*@li container: An optional string. Defaults to "". If non-empty, this table \n
+*@li container: An optional string. Defaults to "". If non-empty, this table
 is placed in the given container. Otherwise, a default container is used.
-*@li shared_name: An optional string. Defaults to "". If non-empty, this \n
+*@li shared_name: An optional string. Defaults to "". If non-empty, this
 table is shared under the given name across multiple sessions.
-*@li use_node_name_sharing: An optional bool. Defaults to False. If true and \n
+*@li use_node_name_sharing: An optional bool. Defaults to False. If true and
 shared_name is empty, the table is shared using the node name.
 *@li value_dtype: A DType. Type of the table values.
-*@li value_shape: An optional TensorShape or list of ints. Defaults to []. \n
+*@li value_shape: An optional TensorShape or list of ints. Defaults to [].
 The shape of each value.
-*@li initial_num_buckets: An optional int. Defaults to 131072. The initial \n
+*@li initial_num_buckets: An optional int. Defaults to 131072. The initial
 number of hash table buckets. Must be a power to 2.
-*@li max_load_factor: An optional float. Defaults to 0.8. The maximum ratio \n
-between number of entries and number of buckets before growing the table. \n
-Must be between 0 and 1.
+*@li max_load_factor: An optional float. Defaults to 0.8. The maximum ratio
+between number of entries and number of buckets before growing the table.
+Must be between 0 and 1 . \n
 
 *@par Outputs:
-*handle: A Tensor of type resource. Handle to the table.
+*handle: A Tensor of type resource. Handle to the table . \n
 
+*@par Third-party framework compatibility.
+*Compatible with tensorflow MutableDenseHashTable operator.
 */
 
 REG_OP(MutableDenseHashTable)
@@ -225,22 +245,24 @@ REG_OP(MutableDenseHashTable)
     .OP_END_FACTORY_REG(MutableDenseHashTable)
 
 /**
-*@brief Creates an empty hash table.
+*@brief Creates an empty hash table . \n
 
 *@par Attributes:
-*@li container: An optional string. Defaults to "". If non-empty, this table \n
+*@li container: An optional string. Defaults to "". If non-empty, this table
 is placed in the given container. Otherwise, a default container is used.
-*@li shared_name: An optional string. Defaults to "". If non-empty, this \n
+*@li shared_name: An optional string. Defaults to "". If non-empty, this
 table is shared under the given name across multiple sessions.
-*@li use_node_name_sharing: An optional bool. Defaults to False. If true and \n
+*@li use_node_name_sharing: An optional bool. Defaults to False. If true and
 shared_name is empty, the table is shared using the node name.
 *@li key_dtype: A DType. Type of the table keys.
 *@li value_dtype: A DType. Type of the table values.
-*@li value_shape: An optional TensorShape or list of ints. Defaults to [].
+*@li value_shape: An optional TensorShape or list of ints. Defaults to [] . \n
 
 *@par Outputs:
-*handle: A Tensor of type resource. Handle to the table.
+*handle: A Tensor of type resource. Handle to the table . \n
 
+*@par Third-party framework compatibility.
+*Compatible with tensorflow MutableHashTableOfTensors operator.
 */
 
 REG_OP(MutableHashTableOfTensors)
@@ -254,21 +276,23 @@ REG_OP(MutableHashTableOfTensors)
     .OP_END_FACTORY_REG(MutableHashTableOfTensors)
 
 /**
-*@brief Creates an empty hash table.
+*@brief Creates an empty hash table . \n
 
 *@par Attributes:
-*@li container: An optional string. Defaults to "". If non-empty, this table \n
+*@li container: An optional string. Defaults to "". If non-empty, this table
 is placed in the given container. Otherwise, a default container is used.
-*@li shared_name: An optional string. Defaults to "". If non-empty, this \n
+*@li shared_name: An optional string. Defaults to "". If non-empty, this
 table is shared under the given name across multiple sessions.
-*@li use_node_name_sharing: An optional bool. Defaults to False. If true and \n
+*@li use_node_name_sharing: An optional bool. Defaults to False. If true and
 shared_name is empty, the table is shared using the node name.
 *@li key_dtype: A DType. Type of the table keys.
-*@li value_dtype: A DType. Type of the table values.
+*@li value_dtype: A DType. Type of the table values . \n
 
 *@par Outputs:
-*handle: A Tensor of type resource. Handle to the table.
+*handle: A Tensor of type resource. Handle to the table . \n
 
+*@par Third-party framework compatibility.
+*Compatible with tensorflow MutableHashTable operator.
 */
 
 REG_OP(MutableHashTable)
@@ -281,4 +305,4 @@ REG_OP(MutableHashTable)
     .OP_END_FACTORY_REG(MutableHashTable)
 }   // namespace ge
 
-#endif  // GE_OP_LOOKUP_OPS_H_
+#endif  // OPS_BUILT_IN_OP_PROTO_INC_LOOKUP_OPS_H_

@@ -124,16 +124,6 @@ class CceDeviceAPI final : public DeviceAPI {
 
     CCE_CALL(rtSetDevice(ctx.device_id));
     CCE_CALL(rtStreamSynchronize(cce_stream));
-#ifdef USE_CCE_PROFILING
-    if (CceThreadEntry::ThreadLocal()->profcfghandle != nullptr) {
-      ProfMgrStop(CceThreadEntry::ThreadLocal()->profcfghandle);
-      LOG(INFO) << "close profiling status:";
-      // CceThreadEntry::ThreadLocal()->profcfghandle = nullptr;
-    } else {
-      LOG(INFO) << "no need to close profiling, cause failed to start!!!!! ";
-    }
-
-#endif
   }
 
   void SetStream(TVMContext ctx, TVMStreamHandle stream) final {

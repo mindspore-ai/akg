@@ -14,32 +14,38 @@
  * limitations under the License.
  */
 
-#ifndef GE_OP_RAGGED_CONVERSION_OPS_H
-#define GE_OP_RAGGED_CONVERSION_OPS_H
+/*!
+ * \file ragged_conversion_ops.h
+ * \brief
+ */
+#ifndef OPS_BUILT_IN_OP_PROTO_INC_RAGGED_CONVERSION_OPS_H_
+#define OPS_BUILT_IN_OP_PROTO_INC_RAGGED_CONVERSION_OPS_H_
 #include "graph/operator_reg.h"
 
 namespace ge {
 
 /**
-*@brief Converts a RaggedTensor into a SparseTensor with the same values.
+*@brief Converts a RaggedTensor into a SparseTensor with the same values . \n
 
 *@par Inputs:
-*Two inputs, including: \n
-*@li rt_nested_splits: A list of at least 1 Tensor objects with the same type \n
-in: int32, int64. The row_splits for the RaggedTensor.
-*@li rt_dense_values: A Tensor. The flat_values for the RaggedTensor \n
-Must be one of the following types: bool, int8, int16, uint16, int32, \n
-int64, double, float, float16.
+*Two inputs, including:
+*@li rt_nested_splits: A list of at least 1 Tensor objects with the same type
+in: int32, int64. The row_splits for the RaggedTensor. It's a dynamic input.
+*@li rt_dense_values: A Tensor. The flat_values for the RaggedTensor
+Must be one of the following types: bool, int8, int16, uint16, int32,
+int64, double, float, float16 . \n
 
 *@par Attributes:
 *@li RAGGED_RANK: the dynamic of input rt_nested_splits with type int.
-*@li Tsplits: A required attribute, the type is int64.
+*@li Tsplits: A required attribute, the type is int64 . \n
 
 *@par Outputs:
 *@li sparse_indices: A Tensor of type int64.
 *@li sparse_values: A Tensor. Has the same type as rt_dense_values.
-*@li sparse_dense_shape: A Tensor of type int64.
+*@li sparse_dense_shape: A Tensor of type int64 . \n
 
+*@par Third-party framework compatibility
+* Compatible with TensorFlow operator RaggedTensorToSparse.
 */
 REG_OP(RaggedTensorToSparse)
     .DYNAMIC_INPUT(rt_nested_splits, TensorType({DT_INT32, DT_INT64}))
@@ -52,24 +58,24 @@ REG_OP(RaggedTensorToSparse)
     .OP_END_FACTORY_REG(RaggedTensorToSparse)
 
 /**
-*@brief Create a dense tensor from a ragged tensor, possibly altering its shape.
+*@brief Create a dense tensor from a ragged tensor, possibly altering its shape . \n
 
 *@par Inputs:
 *Six inputs, including:
 *@li shape:A `Tensor`. Must be one of the following types: `int64`, `int32`.
 *@li values:A 1D tensor representing the values of the ragged tensor.
 *@li default_value:A `Tensor`. Must have the same type as `values`.
-*@li row_partition_tensors:A list of at least 1 `Tensor` objects with the same \n
-type in: `int64`, `int32`.
+*@li row_partition_tensors:A list of at least 1 `Tensor` objects with the same
+type in: `int64`, `int32` . It's a dynamic input.\n
 
 *@par Attributes:
 *@li num_row_partition_tensors:Numbers of row partition tensors.
-*@li row_partition_types: A list of `strings`. \n
-The types of the row partition tensors. At present, these can be: \n
-* "ROW_SPLITS": the row_splits tensor from the ragged tensor. \n
-* "VALUE_ROWIDS": the value_rowids tensor from the ragged tensor. \n
-* "FIRST_DIM_SIZE": if value_rowids is used for the first dimension, then it \n
-is preceeded by "FIRST_DIM_SIZE".
+*@li row_partition_types: A list of `strings`.
+The types of the row partition tensors. At present, these can be:
+* "ROW_SPLITS": the row_splits tensor from the ragged tensor.
+* "VALUE_ROWIDS": the value_rowids tensor from the ragged tensor.
+* "FIRST_DIM_SIZE": if value_rowids is used for the first dimension, then it
+is preceeded by "FIRST_DIM_SIZE" . \n
 
 *@par Outputs:
 *@li result: A `Tensor`. Has the same type as `values`.
@@ -89,4 +95,4 @@ REG_OP(RaggedTensorToTensor)
 
 
 } // namespace ge
-#endif // GE_OP_RAGGED_CONVERSION_OPS_H
+#endif  // OPS_BUILT_IN_OP_PROTO_INC_RAGGED_CONVERSION_OPS_H_

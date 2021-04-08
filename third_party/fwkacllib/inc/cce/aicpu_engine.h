@@ -17,6 +17,8 @@
 #ifndef AICPU_ENGINE_H__
 #define AICPU_ENGINE_H__
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -36,11 +38,22 @@ typedef enum {
 /**
  * @ingroup aicpu engine
  * @brief aeCallInterface:
- *          a interface to call  a function in a op kernfel lib
+ *          a interface to call a function in a op kernfel lib
  * @param [in] addr     void *,  should be STR_KERNEL * format
  * @return aeStatus_t
  */
 aeStatus_t aeCallInterface(void *addr);
+
+/**
+ * @ingroup aicpu engine
+ * @brief aeBatchLoadKernelSo:
+ *          a interface to load kernel so
+ * @param [in] loadSoNum  load so number
+ * @param [in] soPaths    load so paths
+ * @param [in] soNames    load so names
+ * @return aeStatus_t
+ */
+aeStatus_t aeBatchLoadKernelSo(const uint32_t loadSoNum, const char *soPaths[], const char *soNames[]);
 
 #ifdef __cplusplus
 }

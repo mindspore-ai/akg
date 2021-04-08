@@ -44,6 +44,9 @@ from akg.utils import format_transform as ft_util
 from akg.utils import custom_tiling as ct_util
 from akg.utils import validation_check as vc_util
 from akg.utils.dsl_create import TensorUtils
+from akg.backend.parsing_profiling_data import HWTSLogParser
+from akg.backend.parsing_profiling_data import validate_and_normalize_path
+
 
 sh = logging.StreamHandler(sys.stdout)
 logging.getLogger().addHandler(sh)
@@ -362,13 +365,21 @@ def profiling_mode_run(mod, args, outputs, tuning, device_id):
         device_id: device_id on device.
     """
     ctx = akg.tvm.ndarray.cce(device_id)
+
+    tvm.get_global_func("ascend_start_profiling")(device_id)
+
     arg_list = []
     for a in args:
         arg_list.append(akg.tvm.nd.array(a, ctx))
+
+    time_before_launch = time.time()
     mod(*arg_list)
     ctx.sync()
+
+    tvm.get_global_func("ascend_stop_profiling")()
+
     out_list = []
-    cycle = profiling_analyse(device_id)
+    cycle = profiling_analyse(device_id, time_before_launch)
     for i in outputs:
         out = arg_list[len(arg_list) + i if i < 0 else i].asnumpy()
         out_list.append(out)
@@ -384,7 +395,7 @@ def profiling_mode_run(mod, args, outputs, tuning, device_id):
     return out_list[0] if len(out_list) == 1 else tuple(out_list)
 
 
-def profiling_analyse(device_id):
+def profiling_analyse(device_id, time_before_launch):
     """analyse profiling."""
 
     def exec_cmds_with_pipe(cmd_list):
@@ -406,7 +417,12 @@ def profiling_analyse(device_id):
         raise TypeError("device_id must be an integer.")
 
     try:
-        public_path = "/var/log/npu/profiling"
+        public_path = os.getenv('PROFILING_DIR')
+        if public_path is None:
+            raise RuntimeError("Environment PROFILING_DIR not set!")
+            return None
+
+        public_path = validate_and_normalize_path(public_path)
         cmd_list = [
             ["find", public_path, "-iname", "*.log.%d" % device_id, "-printf", "'%T+\t%p\n'"],
             ["grep", "JOB"],
@@ -425,8 +441,16 @@ def profiling_analyse(device_id):
             logging.warning("failed to decode profiling result")
             return None
         logging.debug("job file is: %s", job_file)
-        from akg.backend import parsing_profiling_data
-        return parsing_profiling_data.parsing(public_path + '/' + job_file)
+
+        file_abs_path = public_path + "/" + job_file
+        file_create_time = os.path.getctime(file_abs_path)
+
+        if file_create_time < time_before_launch:
+            raise RuntimeError("The JOB file is too old")
+            return None
+
+        hwtslog_parser = HWTSLogParser(file_abs_path)
+        return hwtslog_parser.execute()
     except SyntaxError as e:
         logging.error(e)
         return PROF_ERROR_CODE

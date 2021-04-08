@@ -16,7 +16,16 @@
 
 #ifndef MSPROF_ENGINE_PROF_MGR_CORE_H_
 #define MSPROF_ENGINE_PROF_MGR_CORE_H_
+#ifndef OS_TYPE
+#define OS_TYPE 0
+#endif // OS_TYPE
+
+#if (OS_TYPE != LINUX)
+#define MSVP_PROF_API __declspec(dllexport)
+#else
 #define MSVP_PROF_API __attribute__((visibility("default")))
+#endif
+
 
 #include <string>
 #include <vector>

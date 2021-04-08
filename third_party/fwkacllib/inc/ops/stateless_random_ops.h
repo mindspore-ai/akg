@@ -14,8 +14,12 @@
  * limitations under the License.
  */
 
-#ifndef GE_OP_STATELESS_RANDOM_OPS_H
-#define GE_OP_STATELESS_RANDOM_OPS_H
+/*!
+ * \file stateless_random_ops.h
+ * \brief
+ */
+#ifndef OPS_BUILT_IN_OP_PROTO_INC_STATELESS_RANDOM_OPS_H_
+#define OPS_BUILT_IN_OP_PROTO_INC_STATELESS_RANDOM_OPS_H_
 
 #include "graph/operator.h"
 #include "graph/operator_reg.h"
@@ -23,23 +27,25 @@
 namespace ge {
 
 /**
-*@brief Draws samples from a multinomial distribution.
+*@brief Draws samples from a multinomial distribution . \n
 
 *@par Inputs:
-include: \n
-*@li logits:2-D Tensor with shape [batch_size, num_classes]. Each slice [i, :]\n
+include:
+*@li logits:2-D Tensor with shape [batch_size, num_classes]. Each slice [i, :]
 *represents the unnormalized log probabilities for all classes.
 *@li num_samples:0-D. Number of independent samples to draw for each row slice.
-*@li seed:The seed to generate random.
+*@li seed:The seed to generate random . \n
 
 *@par Attributes:
-*output_dtype:Output data type.
+*output_dtype:Output data type . \n
 
 *@par Outputs:
-*y:Output random number.
+*y:Output random number . \n
 
 *@see StatelessMultinomial()
 
+*@par Third-party framework compatibility
+*compatible with StatelessMultinomial op of tensorflow
 */
 REG_OP(StatelessMultinomial)
     .INPUT(logits, TensorType({DT_FLOAT16,DT_FLOAT,DT_DOUBLE}))
@@ -50,17 +56,19 @@ REG_OP(StatelessMultinomial)
     .OP_END_FACTORY_REG(StatelessMultinomial)
 
 /**
-*@brief Outputs deterministic pseudorandom random integers from a uniform distribution.
+*@brief Outputs deterministic pseudorandom random integers from a uniform distribution . \n
 
 *@par Inputs:
 *@li shape: The shape of the output tensor.
 *@li seed: 2 seeds (shape [2]).
 *@li minval: Minimum value (inclusive, scalar).
-*@li maxval: Maximum value (exclusive, scalar).
+*@li maxval: Maximum value (exclusive, scalar) . \n
 
 *@par Outputs:
-*y: Returns Random values with specified shape.
+*y: Returns Random values with specified shape . \n
 
+*@par Third-party framework compatibility
+* Compatible with TensorFlow StatelessRandomUniformInt operator.
 */
 
 REG_OP(StatelessRandomUniformInt)
@@ -73,4 +81,4 @@ REG_OP(StatelessRandomUniformInt)
 
 }  // namespace ge
 
-#endif //GE_OP_STATELESS_RANDOM_OPS_H
+#endif  // OPS_BUILT_IN_OP_PROTO_INC_STATELESS_RANDOM_OPS_H_

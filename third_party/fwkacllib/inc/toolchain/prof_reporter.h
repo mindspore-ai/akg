@@ -16,7 +16,17 @@
 
 #ifndef MSPROF_ENGINE_PROF_REPORTER_H_
 #define MSPROF_ENGINE_PROF_REPORTER_H_
+#ifndef OS_TYPE
+#define OS_TYPE 0
+#endif // OS_TYPE
+
+#if (OS_TYPE != LINUX)
+#define MSVP_PROF_API __declspec(dllexport)
+#else
 #define MSVP_PROF_API __attribute__((visibility("default")))
+#endif
+
+#include "prof_callback.h"
 
 /**
  * @file prof_reporter.h
@@ -25,20 +35,6 @@
  */
 namespace Msprof {
 namespace Engine {
-/// the max tag length
-#define MSPROF_ENGINE_MAX_TAG_LEN (31)
-/**
- * @ingroup reporter
- * @brief struct ReporterData
- * the sturct of the data send to libmsprof
- */
-struct ReporterData {
-  char tag[MSPROF_ENGINE_MAX_TAG_LEN + 1];  ///< the sub-type of the module, data with different tag will be writen
-  int deviceId;                             ///< the physical id of device
-  size_t dataLen;                           ///< the length of send data
-  unsigned char *data;                      ///< the data content
-};
-
 /**
  * @ingroup reporter
  * @brief class Reporter

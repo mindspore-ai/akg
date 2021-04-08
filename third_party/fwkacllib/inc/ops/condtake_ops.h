@@ -14,25 +14,29 @@
  * limitations under the License.
  */
 
-#ifndef GE_OP_CONDTAKE_OPS_H_
-#define GE_OP_CONDTAKE_OPS_H_
+/*!
+ * \file condtake_ops.h
+ * \brief
+ */
+#ifndef OPS_BUILT_IN_OP_PROTO_INC_CONDTAKE_OPS_H_
+#define OPS_BUILT_IN_OP_PROTO_INC_CONDTAKE_OPS_H_
 
 #include "graph/operator_reg.h"
 #include "graph/operator.h"
 
 namespace ge {
 /**
-*@brief Take elements from data if specific condition is satisfied on mask.
+*@brief Take elements from data if specific condition is satisfied on mask. \n
 
 *@par Inputs:
-*@li data: input tensor from which to take elements, High-dimension input would \n
+*@li data: input tensor from which to take elements, High-dimension input would
 first be flattened.
-*@li mask: condition param; must be the same shape with data.
+*@li mask: condition param; must be the same shape with data. \n
 
 *@par Attributes:
 *@li mode:convert by convert in Mode.
 *@li val:convert by <class 'float'>
-*@li eps:convert by <class 'float'> (default: 1e-06)
+*@li eps:convert by <class 'float'> (default: 1e-06) \n
 
 *@par Outputs:
 *@li out_data: the elements taken
@@ -52,4 +56,4 @@ REG_OP(CondTake)
     .OP_END_FACTORY_REG(CondTake)
 }  // namespace ge
 
-#endif  // GE_OP_ARRAY_OPS_H_
+#endif  // OPS_BUILT_IN_OP_PROTO_INC_CONDTAKE_OPS_H_

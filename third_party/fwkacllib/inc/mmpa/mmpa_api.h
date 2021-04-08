@@ -17,13 +17,19 @@
 #ifndef _MMPA_API_H_
 #define _MMPA_API_H_
 
-#define  LINUX    0
-#define  WIN      1
+#define LINUX 0
+#define WIN 1
 
-#if(OS_TYPE == LINUX)
+#if(OS_TYPE == LINUX) //lint !e553
 
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
+
+#ifdef FUNC_VISIBILITY
+#define MMPA_FUNC_VISIBILITY __attribute__((visibility("default")))
+#else
+#define MMPA_FUNC_VISIBILITY
 #endif
 
 #include <string.h>
@@ -75,6 +81,7 @@
 #include <sys/wait.h>
 #include <sys/statvfs.h>
 #include <sys/prctl.h>
+#include <sys/inotify.h>
 
 #include "securec.h"
 
@@ -84,7 +91,14 @@
 #endif
 
 
-#if(OS_TYPE == WIN)
+#if(OS_TYPE == WIN) //lint !e553
+
+#ifdef FUNC_VISIBILITY
+#define MMPA_FUNC_VISIBILITY _declspec(dllexport)
+#else
+#define MMPA_FUNC_VISIBILITY
+#endif
+
 #include <winsock2.h>
 #include <winsock.h>
 #include "Windows.h"
@@ -103,15 +117,18 @@
 #include <stdarg.h>
 #include "shlwapi.h"
 #include <direct.h>
-#include "sub_inc/mmpa_typedef_win.h"
-#include "sub_inc/mmpa_win.h"
 #include <VersionHelpers.h>
 #include <processthreadsapi.h>
 #include <Wbemidl.h>
 #include <iphlpapi.h>
-
+#include <synchapi.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+
+#include "securec.h"
+
+#include "sub_inc/mmpa_typedef_win.h"
+#include "sub_inc/mmpa_win.h"
 
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "mswsock.lib")

@@ -14,35 +14,44 @@
  * limitations under the License.
  */
 
-#ifndef GE_OP_BOOSTED_TREES_OPS_H_
-#define GE_OP_BOOSTED_TREES_OPS_H_
+/*!
+ * \file boosted_trees_ops.h
+ * \brief
+ */
+#ifndef OPS_BUILT_IN_OP_PROTO_INC_BOOSTED_TREES_OPS_H_
+#define OPS_BUILT_IN_OP_PROTO_INC_BOOSTED_TREES_OPS_H_
 
 #include "graph/operator_reg.h"
 
 namespace ge {
 
 /**
-*@brief Bucketizes each feature based on bucket boundaries.
+*@brief Bucketizes each feature based on bucket boundaries . \n
 
-*@par Inputs: 
-*Input "float_values" is a 1D tensor. Input "bucket_boundaries" is \n
-a list of 1D tensors.
-* @li float_values: A list of rank 1 tensors each containing float \n
+*@par Inputs:
+*Input "float_values" is a 1D tensor. Input "bucket_boundaries" is
+a list of 1D tensors. It's a dynamic input.
+* @li float_values: A list of rank 1 tensors each containing float
 values for a single feature.
-* @li bucket_boundaries: A list of rank 1 tensors each containing \n
-the bucket boundaries for a single feature.
+* @li bucket_boundaries: A list of rank 1 tensors each containing
+the bucket boundaries for a single feature . It's a dynamic input. \n
 
-*@par Attributes: 
-*@li num_features: Number of features \n
+*@par Attributes:
+*@li num_features: Number of features
 
-*@par Outputs: 
-*@li y: A list of rank 1 tensors each containing the bucketized values for \n
-a single feature.
+*@par Outputs:
+*@li y: A list of rank 1 tensors each containing the bucketized values for
+a single feature . \n
 
-*@attention Constraints: \n
+*@attention Constraints:
 *BoostedTreesBucketize runs on the Ascend AI CPU, which delivers poor performance. \n
-*/
 
+*@par Third-party framework compatibility
+*Compatible with the TensorFlow operator BoostedTreesBucketize . \n
+
+*@par Restrictions:
+*Warning: THIS FUNCTION IS EXPERIMENTAL. Please do not use.
+*/
 REG_OP(BoostedTreesBucketize)
     .DYNAMIC_INPUT(float_values, TensorType({DT_FLOAT}))
     .DYNAMIC_INPUT(bucket_boundaries, TensorType({DT_FLOAT}))
@@ -52,4 +61,4 @@ REG_OP(BoostedTreesBucketize)
 
 }  // namespace ge
 
-#endif  // GE_OP_BOOSTED_TREES_OPS_H_
+#endif  // OPS_BUILT_IN_OP_PROTO_INC_BOOSTED_TREES_OPS_H_

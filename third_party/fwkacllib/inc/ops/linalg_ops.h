@@ -14,8 +14,12 @@
  * limitations under the License.
  */
 
-#ifndef GE_OP_LINALG_OPS_H_
-#define GE_OP_LINALG_OPS_H_
+/*!
+ * \file linalg_ops.h
+ * \brief
+ */
+#ifndef OPS_BUILT_IN_OP_PROTO_INC_LINALG_OPS_H_
+#define OPS_BUILT_IN_OP_PROTO_INC_LINALG_OPS_H_
 
 #include "graph/operator_reg.h"
 #include "graph/operator.h"
@@ -23,25 +27,27 @@
 namespace ge {
 
 /**
-*@brief Computes the reverse mode backpropagated gradient of the Cholesky \n
-algorithm.
+*@brief Computes the reverse mode backpropagated gradient of the Cholesky
+algorithm . \n
 
 *@par Inputs:
-*The input x has to be symmetric and positive definite. Inputs include: \n
-*@li x:A Tensor. Must be one of the following types: double, float32. Output \n
-of batch Cholesky algorithm x = cholesky(A). Shape is [..., M, M]. Algorithm \n
+*The input x has to be symmetric and positive definite. Inputs include:
+*@li x:A Tensor. Must be one of the following types: double, float32. Output
+of batch Cholesky algorithm x = cholesky(A). Shape is [..., M, M]. Algorithm
 depends only on lower triangular part of the innermost matrices of this tensor.
-*@li grad:A Tensor. Must have the same type as l. df/dx where f is some \n
-scalar function. Shape is [..., M, M]. Algorithm depends only on lower \n
-triangular part of the innermost matrices of this tensor.
+*@li grad:A Tensor. Must have the same type as l. df/dx where f is some
+scalar function. Shape is [..., M, M]. Algorithm depends only on lower
+triangular part of the innermost matrices of this tensor . \n
 
 *@par Outputs:
-*y:A Tensor. Has the same type as x.
+*y:A Tensor. Has the same type as x . \n
 
-*@attention Constraints: \n
-*The input x is a tensor of shape [..., M, M] whose inner-most 2 dimensions \n
-form square matrices. \n
+*@attention Constraints:
+*The input x is a tensor of shape [..., M, M] whose inner-most 2 dimensions
+form square matrices.
 
+*@par Third-party framework compatibility
+*Compatible with tensorflow CholeskyGrad operator.
 */
 
 REG_OP(CholeskyGrad)
@@ -51,20 +57,22 @@ REG_OP(CholeskyGrad)
     .OP_END_FACTORY_REG(CholeskyGrad)
 
 /**
-*@brief Computes the Cholesky decomposition of one or more square matrices.
+*@brief Computes the Cholesky decomposition of one or more square matrices . \n
 
 *@par Inputs:
-*The input x has to be symmetric and positive definite.Inputs include: \n
-*x:A Tensor. Must be one of the following types: double, float32. Shape \n
-is [..., M, M].
+*The input x has to be symmetric and positive definite.Inputs include:
+*x:A Tensor. Must be one of the following types: double, float32. Shape
+is [..., M, M] . \n
 
 *@par Outputs:
-*y:A Tensor. Has the same type as x.
+*y:A Tensor. Has the same type as x . \n
 
-*@attention Constraints: \n
-*The input x is a tensor of shape [..., M, M] whose inner-most 2 dimensions \n
-form square matrices. \n
+*@attention Constraints:
+*The input x is a tensor of shape [..., M, M] whose inner-most 2 dimensions
+form square matrices.
 
+*@par Third-party framework compatibility
+*Compatible with tensorflow Cholesky operator.
 */
 
 REG_OP(Cholesky)
@@ -73,23 +81,25 @@ REG_OP(Cholesky)
     .OP_END_FACTORY_REG(Cholesky)
 
 /**
-*@brief Computes the sign and the log of the absolute value of the determinant \n
-of one or more square matrices.
+*@brief Computes the sign and the log of the absolute value of the determinant
+of one or more square matrices . \n
 
 *@par Inputs:
-*The input x is a tensor of shape [N, M, M] whose inner-most 2 dimensions \n
-form square matrices. Inputs include: \n
-*x:A Tensor. Must be one of the following types: double, float32. Shape is \n
-[..., M, M].
+*The input x is a tensor of shape [N, M, M] whose inner-most 2 dimensions
+form square matrices. Inputs include:
+*x:A Tensor. Must be one of the following types: double, float32. Shape is
+[..., M, M] . \n
 
 *@par Outputs:
 *@li y:A Tensor. Has the same type as x.
-*@li sign:A Tensor. Has the same type as x.
+*@li sign:A Tensor. Has the same type as x . \n
 
-*@attention Constraints: \n
-*The input x is a tensor of shape [N, M, M] whose inner-most 2 dimensions \n
+*@attention Constraints:
+*The input x is a tensor of shape [N, M, M] whose inner-most 2 dimensions
 form square matrices. \n
 
+*@par Third-party framework compatibility
+*Compatible with tensorflow LogMatrixDeterminant operator.
 */
 
 REG_OP(LogMatrixDeterminant)
@@ -99,21 +109,23 @@ REG_OP(LogMatrixDeterminant)
     .OP_END_FACTORY_REG(LogMatrixDeterminant)
 
 /**
-*@brief Computes the determinant of one or more square matrices.
+*@brief Computes the determinant of one or more square matrices . \n
 
 *@par Inputs:
-*The input x is a tensor of shape [N, M, M] whose inner-most 2 dimensions \n
-form square matrices. Inputs include: \n
-*x:A Tensor. Must be one of the following types: double, float32. Shape is \n
-[..., M, M].
+*The input x is a tensor of shape [N, M, M] whose inner-most 2 dimensions
+form square matrices. Inputs include:
+*x:A Tensor. Must be one of the following types: double, float32. Shape is
+[..., M, M] . \n
 
 *@par Outputs:
-*y:A Tensor. Has the same type as x.
+*y:A Tensor. Has the same type as x . \n
 
-*@attention Constraints: \n
-*The input x is a tensor of shape [..., M, M] whose inner-most 2 dimensions \n
-form square matrices. \n
+*@attention Constraints:
+*The input x is a tensor of shape [..., M, M] whose inner-most 2 dimensions
+form square matrices.
 
+*@par Third-party framework compatibility
+*Compatible with tensorflow MatrixDeterminant operator.
 */
 
 REG_OP(MatrixDeterminant)
@@ -122,26 +134,28 @@ REG_OP(MatrixDeterminant)
     .OP_END_FACTORY_REG(MatrixDeterminant)
 
 /**
-*@brief Computes the inverse of one or more square invertible matrices or \n
-their adjoints (conjugate transposes).
+*@brief Computes the inverse of one or more square invertible matrices or
+their adjoints (conjugate transposes) . \n
 
 *@par Inputs:
-*The input x is a tensor of shape [..., M, M] whose inner-most 2 dimensions \n
-form square matrices. Inputs include: \n
-*x:A Tensor. Must be one of the following types: double, float. Shape is \n
-[..., M, M].
+*The input x is a tensor of shape [..., M, M] whose inner-most 2 dimensions
+form square matrices. Inputs include:
+*x:A Tensor. Must be one of the following types: double, float. Shape is
+[..., M, M] . \n
 
 *@par Attributes:
-*adjoint:An optional bool. Defaults to False.Boolean indicating whether to \n
-deal with matrix or its (block-wise) adjoint.
+*adjoint:An optional bool. Defaults to False.Boolean indicating whether to
+deal with matrix or its (block-wise) adjoint . \n
 
 *@par Outputs:
-*y:A Tensor. Has the same type as x.
+*y:A Tensor. Has the same type as x . \n
 
-*@attention Constraints: \n
-*The input x is a tensor of shape [..., M, M] whose inner-most 2 dimensions \n
-form square matrices. \n
+*@attention Constraints:
+*The input x is a tensor of shape [..., M, M] whose inner-most 2 dimensions
+form square matrices.  \n
 
+*@par Third-party framework compatibility
+*Compatible with tensorflow MatrixInverse operator.
 */
 
 REG_OP(MatrixInverse)
@@ -151,25 +165,27 @@ REG_OP(MatrixInverse)
     .OP_END_FACTORY_REG(MatrixInverse)
 
 /**
-*@brief Solves systems of linear equations.
+*@brief Solves systems of linear equations . \n
 
 *@par Inputs:
-*The input rhs must have the same type as matrix. Inputs include: \n
-*@li matrix:A Tensor. Must be one of the following types: double, float. \n
+*The input rhs must have the same type as matrix. Inputs include:
+*@li matrix:A Tensor. Must be one of the following types: double, float.
 Shape is [..., M, M].
-*@li rhs:A Tensor. Must have the same type as matrix. Shape is [..., M, K].
+*@li rhs:A Tensor. Must have the same type as matrix. Shape is [..., M, K] . \n
 
 *@par Attributes:
-*adjoint:An optional bool. Defaults to False.Boolean indicating whether to \n
-solve with matrix or its (block-wise) adjoint.
+*adjoint:An optional bool. Defaults to False.Boolean indicating whether to
+solve with matrix or its (block-wise) adjoint . \n
 
 *@par Outputs:
-*y:A Tensor. Has the same type as matrix.
+*y:A Tensor. Has the same type as matrix . \n
 
-*@attention Constraints: \n
-*The input matrix is a tensor of shape [..., M, M] whose inner-most 2 \n
-dimensions form square matrices. \n
+*@attention Constraints:
+*The input matrix is a tensor of shape [..., M, M] whose inner-most 2
+dimensions form square matrices.  \n
 
+*@par Third-party framework compatibility
+*Compatible with tensorflow MatrixSolve operator.
 */
 
 REG_OP(MatrixSolve)
@@ -180,26 +196,28 @@ REG_OP(MatrixSolve)
     .OP_END_FACTORY_REG(MatrixSolve)
 
 /**
-*@brief Solves systems of linear equations.
+*@brief Solves systems of linear equations . \n
 
 *@par Inputs:
-*The input rhs must have the same type as matrix. Inputs include: \n
+*The input rhs must have the same type as matrix. Inputs include:
 *@li matrix:A Tensor. Shape is [..., M, M].
 *@li rhs:A Tensor. Must have the same type as matrix. Shape is [..., M, K].
-*@li l2:0-D double Tensor. Ignored if fast=False.
+*@li l2:0-D double Tensor. Ignored if fast=False . \n
 
 *@par Attributes:
-*fast:bool. Defaults to True.
+*fast:bool. Defaults to True . \n
 
 *@par Outputs:
-*y:Tensor of shape [..., N, K] whose inner-most 2 dimensions form M-by-K \n
-matrices that solve the equations matrix[..., :, :] * output[..., :, :] = \n
-rhs[..., :, :] in the least squares sense.
+*y:Tensor of shape [..., N, K] whose inner-most 2 dimensions form M-by-K
+matrices that solve the equations matrix[..., :, :] * output[..., :, :] =
+rhs[..., :, :] in the least squares sense . \n
 
-*@attention Constraints: \n
-*The input matrix matrix is a tensor of shape [..., M, M] whose inner-most 2 \n
-dimensions form square matrices. \n
+*@attention Constraints:
+*The input matrix matrix is a tensor of shape [..., M, M] whose inner-most 2
+dimensions form square matrices.  \n
 
+*@par Third-party framework compatibility
+*Compatible with tensorflow MatrixSolveLs operator.
 */
 
 REG_OP(MatrixSolveLs)
@@ -211,28 +229,30 @@ REG_OP(MatrixSolveLs)
     .OP_END_FACTORY_REG(MatrixSolveLs)
 
 /**
-*@brief Solves systems of linear equations with upper or lower triangular \n
-matrices by backsubstitution.
+*@brief Solves systems of linear equations with upper or lower triangular
+matrices by backsubstitution . \n
 
 *@par Inputs:
-*The input rhs must have the same type as matrix. Inputs include: \n
-*@li matrix: A Tensor. Must be one of the following types: double, float. \n
+*The input rhs must have the same type as matrix. Inputs include:
+*@li matrix: A Tensor. Must be one of the following types: double, float.
 Shape is [..., M, M].
-*@li rhs:A Tensor. Must have the same type as matrix. Shape is [..., M, K].
+*@li rhs:A Tensor. Must have the same type as matrix. Shape is [..., M, K] . \n
 
 *@par Attributes:
-*@li lower: An optional bool. Defaults to True. Boolean indicating whether \n
+*@li lower: An optional bool. Defaults to True. Boolean indicating whether
 the innermost matrices in matrix are lower or upper triangular.
-*@li An optional bool. Defaults to False. Boolean indicating whether to solve \n
-with matrix or its (block-wise) adjoint.
+*@li An optional bool. Defaults to False. Boolean indicating whether to solve
+with matrix or its (block-wise) adjoint . \n
 
 *@par Outputs:
-*y:A Tensor. Has the same type as matrix.
+*y:A Tensor. Has the same type as matrix . \n
 
-*@attention Constraints: \n
-*The input matrix is a tensor of shape [..., M, M] whose inner-most 2 \n
-dimensions form square matrices. \n
+*@attention Constraints:
+*The input matrix is a tensor of shape [..., M, M] whose inner-most 2
+dimensions form square matrices.  \n
 
+*@par Third-party framework compatibility
+*Compatible with tensorflow MatrixTriangularSolve operator.
 */
 
 REG_OP(MatrixTriangularSolve)
@@ -244,26 +264,28 @@ REG_OP(MatrixTriangularSolve)
     .OP_END_FACTORY_REG(MatrixTriangularSolve)
 
 /**
-*@brief Computes the QR decompositions of one or more matrices.
+*@brief Computes the QR decompositions of one or more matrices . \n
 
 *@par Inputs:
-*The input shape of x must be [..., M, N]. Inputs include: \n
-*x:A Tensor whose shape is [..., M, N]. Must be one of the following types: \n
-double, float.
+*The input shape of x must be [..., M, N]. Inputs include:
+*x:A Tensor whose shape is [..., M, N]. Must be one of the following types:
+double, float . \n
 
 *@par Attributes:
-*full_matrices: An optional bool. Defaults to False. If true, compute \n
-full-sized q and r. If false (the default), compute only the leading P \n
-columns of q.
+*full_matrices: An optional bool. Defaults to False. If true, compute
+full-sized q and r. If false (the default), compute only the leading P
+columns of q . \n
 
 *@par Outputs:
 *@li q: A Tensor. Has the same type as x.
-*@li r: A Tensor. Has the same type as x.
+*@li r: A Tensor. Has the same type as x . \n
 
-*@attention Constraints: \n
-*The input matrix x is a tensor of shape [..., M, N] whose inner-most 2 \n
-dimensions form matrices of size [M, N]. \n
+*@attention Constraints:
+*The input matrix x is a tensor of shape [..., M, N] whose inner-most 2
+dimensions form matrices of size [M, N].  \n
 
+*@par Third-party framework compatibility
+*Compatible with tensorflow Qr operator.
 */
 
 REG_OP(Qr)
@@ -274,25 +296,27 @@ REG_OP(Qr)
     .OP_END_FACTORY_REG(Qr)
 
 /**
-*@brief Computes the eigen decomposition of a batch of self-adjoint matrices.
+*@brief Computes the eigen decomposition of a batch of self-adjoint matrices . \n
 
 *@par Inputs:
-*The input shape of x must be [..., N, N]. Inputs include: \n
-*x:Tensor of shape [..., N, N]. Only the lower triangular part of each inner \n
-inner matrix is referenced.
+*The input shape of x must be [..., N, N]. Inputs include:
+*x:Tensor of shape [..., N, N]. Only the lower triangular part of each inner
+inner matrix is referenced . \n
 
 *@par Attributes:
-*compute_v:bool. Defaults to True.
+*compute_v:bool. Defaults to True . \n
 
 *@par Outputs:
 *@li eigen_value:Eigenvalues. Shape is [..., N]. Sorted in non-decreasing order.
-*@li eigen_vector:Shape is [..., N, N]. The columns of the inner most matrices \n
+*@li eigen_vector:Shape is [..., N, N]. The columns of the inner most matrices
 contain eigenvectors of the corresponding matrices in tensor
 
-*@attention Constraints: \n
-*The input x is a tensor of shape [..., N, N] whose inner-most 2 dimensions \n
-form square matrices. \n
+*@attention Constraints:
+*The input x is a tensor of shape [..., N, N] whose inner-most 2 dimensions
+form square matrices.   \n
 
+*@par Third-party framework compatibility
+*Compatible with tensorflow SelfAdjointEig operator.
 */
 
 REG_OP(SelfAdjointEig)
@@ -303,32 +327,34 @@ REG_OP(SelfAdjointEig)
     .OP_END_FACTORY_REG(SelfAdjointEig)
 
 /**
-*@brief Computes the singular value decompositions of one or more matrices.
+*@brief Computes the singular value decompositions of one or more matrices . \n
 
 *@par Inputs:
-*The input shape of x must be [..., N, N]. Inputs include: \n
-*x:Tensor of shape [..., M, N]. Let P be the minimum of M and N.
+*The input shape of x must be [..., N, N]. Inputs include:
+*x:Tensor of shape [..., M, N]. Let P be the minimum of M and N . \n
 
 *@par Attributes:
-*compute_uv:If True then left and right singular vectors will be computed and \n
-returned in u and v, respectively. Otherwise, only the singular values will \n
-be computed, which can be significantly faster.
+*compute_uv:If True then left and right singular vectors will be computed and
+returned in u and v, respectively. Otherwise, only the singular values will
+be computed, which can be significantly faster . \n
 
 *@par Outputs:
-*@li sigma:Singular values. Shape is [..., P]. The values are sorted in \n
-reverse order of magnitude, so s[..., 0] is the largest value, s[..., 1] \n
+*@li sigma:Singular values. Shape is [..., P]. The values are sorted in
+reverse order of magnitude, so s[..., 0] is the largest value, s[..., 1]
 is the second largest, etc.
-*@li u:Left singular vectors. If full_matrices is False (default) then shape \n
-is [..., M, P]; if full_matrices is True then shape is [..., M, M]. Not \n
+*@li u:Left singular vectors. If full_matrices is False (default) then shape
+is [..., M, P]; if full_matrices is True then shape is [..., M, M]. Not
 returned if compute_uv is False.
-*@li v:Right singular vectors. If full_matrices is False (default) then shape \n
-is [..., N, P]. If full_matrices is True then shape is [..., N, N]. Not \n
-returned if compute_uv is False.
+*@li v:Right singular vectors. If full_matrices is False (default) then shape
+is [..., N, P]. If full_matrices is True then shape is [..., N, N]. Not
+returned if compute_uv is False . \n
 
-*@attention Constraints: \n
-*The input x is a tensor of shape [..., N, N] whose inner-most 2 dimensions \n
-form square matrices. \n
+*@attention Constraints:
+*The input x is a tensor of shape [..., N, N] whose inner-most 2 dimensions
+form square matrices.  \n
 
+*@par Third-party framework compatibility
+*Compatible with tensorflow Svd operator
 */
 
 REG_OP(Svd)
@@ -341,18 +367,20 @@ REG_OP(Svd)
     .OP_END_FACTORY_REG(Svd)
 
 /**
-*@brief Computes the LU decomposition of one or more square matrices.
+*@brief Computes the LU decomposition of one or more square matrices . \n
 
 *@par Inputs:
-*input: A tensor of shape `[..., M, M]` whose inner-most 2 dimensions form \n
-matrices of size `[M, M]`.
+*input: A tensor of shape `[..., M, M]` whose inner-most 2 dimensions form
+matrices of size `[M, M]` . \n
 
 *@par Outputs:
-*@li lu: A tensor of shape `[..., M, M]` whose strictly lower triangular part \n
+*@li lu: A tensor of shape `[..., M, M]` whose strictly lower triangular part
 denotes the lower triangular factor `L` with unit diagonal.
-*@li p: upper triangular part denotes the upper triangular factor `U`.Permutation \n
-of the rows encoded as a list of indices in `0..M-1`. Shape is `[..., M]`.
+*@li p: upper triangular part denotes the upper triangular factor `U`.Permutation
+of the rows encoded as a list of indices in `0..M-1`. Shape is `[..., M]` . \n
 
+*@par Third-party framework compatibility
+* Compatible with TensorFlow Lu operator.
 */
 
 REG_OP(Lu)
@@ -363,14 +391,16 @@ REG_OP(Lu)
     .OP_END_FACTORY_REG(Lu)
 
 /**
-*@brief Computes the matrix square root of one or more square matrices.
+*@brief Computes the matrix square root of one or more square matrices . \n
 
 *@par Inputs:
-*input: Shape is `[..., M, M]`.
+*input: Shape is `[..., M, M]` . \n
 
 *@par Outputs:
-y: Shape is `[..., M, M]`.
+y: Shape is `[..., M, M]` . \n
 
+*@par Third-party framework compatibility
+* Compatible with TensorFlow MatrixSquareRoot operator.
 */
 
 REG_OP(MatrixSquareRoot)
@@ -379,19 +409,18 @@ REG_OP(MatrixSquareRoot)
     .OP_END_FACTORY_REG(MatrixSquareRoot)
 
 /**
-*@brief Solves tridiagonal systems of equations.
+*@brief Solves tridiagonal systems of equations . \n
 
 *@par Inputs:
-*@li diagonals: Tensor of shape `[..., 3, M]` whose innermost 2 dimensions represent the \n
-tridiagonal matrices with three rows being the superdiagonal, diagonals, and \n
-subdiagonals, in order. The last element of the superdiagonal and the first \n
-element of the subdiagonal is ignored.
-*@li rhs: Tensor of shape `[..., M, K]`, representing K right-hand sides per each \n
-left-hand side.
+*@li diagonals: Tensor of shape `[..., 3, M]` whose innermost 2 dimensions represent the tridiagonal matrices with three rows being the superdiagonal, diagonals, and subdiagonals, in order. The last element of the superdiagonal and the first element of the subdiagonal is ignored.
+*@li rhs: Tensor of shape `[..., M, K]`, representing K right-hand sides per each
+left-hand side . \n
 
 *@par Outputs:
-y: Tensor of shape `[..., M, K]` containing the solutions
+y: Tensor of shape `[..., M, K]` containing the solutions \n
 
+*@par Third-party framework compatibility
+* Compatible with TensorFlow TridiagonalSolve operator.
 */
 
 REG_OP(TridiagonalSolve)
@@ -403,4 +432,4 @@ REG_OP(TridiagonalSolve)
 
 }  // namespace ge
 
-#endif  // GE_OP_LINALG_OPS_H_
+#endif  // OPS_BUILT_IN_OP_PROTO_INC_LINALG_OPS_H_

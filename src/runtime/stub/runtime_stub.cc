@@ -23,6 +23,7 @@
 #define EVENT_LENTH 10
 
 #define FUNC_ENTRY LOG(INFO) << "Run in func " << __FUNCTION__;
+#define RT_ERROR_MEMORY_ALLOCATION -1
 
 void *ProfMgrStartUp(const ProfMgrCfg *cfg) {
   return reinterpret_cast<void *>(0xffffff);

@@ -14,9 +14,13 @@
  * limitations under the License.
  */
 
-#ifndef GE_OP_NN_OPS_H_
-#define GE_OP_NN_OPS_H_
+/*!
+ * \file nn_ops.h
+ * \brief
+ */
+#ifndef OPS_BUILT_IN_OP_PROTO_INC_NN_OPS_H_
+#define OPS_BUILT_IN_OP_PROTO_INC_NN_OPS_H_
 
 #include "nn_pooling_ops.h"
 
-#endif  // GE_OP_NN_OPS_H_
+#endif  // OPS_BUILT_IN_OP_PROTO_INC_NN_OPS_H_

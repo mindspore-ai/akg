@@ -23,6 +23,7 @@
 #include <mutex>
 #include "tdt/status.h"
 #include "tdt/data_common.h"
+#include "toolchain/prof_callback.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -37,7 +38,7 @@ extern "C" {
 * Used for the Framework process to communicate with the TSDDaemon process,
 * and notify TSD to complete the initialization of other processes
 *
-* @param phyDeviceId [IN] type #unsigned int. Physical device ID
+* @param logicDeviceId [IN] type #unsigned int. Logic device ID
 * @param rankSize [IN] type #unsigned int. The rankSize of the training.
 * The default value is 1. When rankSize is greater than 1,
 * HCCP will be pulled to perform set communication related operations.
@@ -49,7 +50,7 @@ extern "C" {
 * @li tsd_client.h: Header file where the interface declaration is located.
 * @li data_common.h: Header file where 'TDT_StatusT' defined
 */
-TDT_StatusT TsdOpen(const uint32_t phyDeviceId, const uint32_t rankSize);
+TDT_LIB_EXPORT TDT_StatusT TsdOpen(const uint32_t logicDeviceId, const uint32_t rankSize);
 
 /**
 * @ingroup Close
@@ -67,7 +68,44 @@ TDT_StatusT TsdOpen(const uint32_t phyDeviceId, const uint32_t rankSize);
 * @li tsd_client.h: Header file where the interface declaration is located.
 * @li data_common.h: Header file where 'TDT_StatusT' defined
 */
-TDT_StatusT TsdClose(const uint32_t phyDeviceId);
+TDT_LIB_EXPORT TDT_StatusT TsdClose(const uint32_t logicDeviceId);
+
+/**
+* @ingroup UpdateProfilingMode
+* @brief notify TSDClient update profiling mode
+*
+* @par Function
+* notify TSDClient update profiling mode
+*
+* @param NA
+* @retval TDT_OK Success
+* @retval OtherValues Failure
+*
+* @par Dependency
+* @li libtsdclient.so: Library to which the interface belongs.
+* @li tsd_client.h: Header file where the interface declaration is located.
+* @li data_common.h: Header file where 'TDT_StatusT' defined
+*/
+TDT_LIB_EXPORT TDT_StatusT UpdateProfilingMode(const uint32_t logicDeviceId, const uint32_t flag);
+
+/**
+* @ingroup TsdSetMsprofReporterCallback
+* @brief 用于推理场景下设置aicpu的profilng的callback函数
+*
+* @par Function
+* 设置offline模式下aicpu_sd进程的profiling的callback函数
+*
+* @param callback [IN] type #MsprofReporterCallback. 回调函数
+* @retval TDT_OK Success
+* @retval OtherValues Failure
+*
+* @par Dependency
+* @li libtsdclient.so: Library to which the interface belongs.
+* @li tsd_client.h: Header file where the interface declaration is located.
+* @li data_common.h: Header file where 'TDT_StatusT' defined
+* @li prof_callback.h: Headerfile where 'MsprofReporterCallback' defined
+*/
+TDT_LIB_EXPORT TDT_StatusT TsdSetMsprofReporterCallback(MsprofReporterCallback callback);
 
 /**
 * @ingroup CreateCmdParameterObj
@@ -151,84 +189,6 @@ TDT_StatusT GetCmdParameterObjAttribute(tdt::TsdCmdType type, void *cmdParameter
 */
 TDT_StatusT TsdClientCmd(tdt::TsdCmdType cmd, void *cmdParameterObj);
 
-namespace tdt {
-/**
-* @ingroup  RANK_SIZE_DEFAULT_VALUE。
-* The default value of Rank size is 1 by default.
-* It does not pull up HCCP to perform set communication related operations.
-*
-*/
-constexpr uint32_t RANK_SIZE_DEFAULT_VALUE = 1;
-
-class TsdClient {
- public:
-  /**
-  * @ingroup GetInstance
-  * @brief Get TsdClient instance
-  *
-  * @par Function
-  * Get TsdClient instance
-  *
-  * @param NA
-  * @retval TsdClient TsdClient instance
-  *
-  * @par Dependency
-  * @li libtsdclient.so: Library to which the interface belongs.
-  * @li tsd_client.h: Header file where the interface declaration is located.
-  */
-  static TsdClient *GetInstance();
-
-   /**
-   * @ingroup ~TsdClient
-   * @brief TsdClient destructor
-   *
-   * @par Function
-   * TsdClient destructor
-   *
-   * @param NA
-   * @retval NA
-   *
-   * @par Dependency
-   * @li libtsdclient.so: Library to which the interface belongs.
-   * @li tsd_client.h: Header file where the interface declaration is located.
-   */
-  ~TsdClient();
-
-  /**
-  * @ingroup Open
-  * @brief Used for the Framework process to communicate with the TSDDaemon process,
-  * and notify TSD to complete the initialization of other processes
-  *
-  * @par Function
-  * Used for the Framework process to communicate with the TSDDaemon process,
-  * and notify TSD to complete the initialization of other processes
-  *
-  * @param phyDeviceId [IN] type #unsigned int. Physical device ID
-  * @param rankSize [IN] type #unsigned int. The rankSize of the training.
-  * The default value is 1. When rankSize is greater than 1,
-  * HCCP will be pulled to perform set communication related operations.
-  * @retval TDT_OK Success
-  * @retval OtherValues Failure
-  *
-  * @par Dependency
-  * @li libtsdclient.so: Library to which the interface belongs.
-  * @li tsd_client.h: Header file where the interface declaration is located.
-  * @li data_common.h: Header file where 'TDT_StatusT' defined
-  */
-  TDT_StatusT Open(const uint32_t phyDeviceId, const uint32_t rankSize = RANK_SIZE_DEFAULT_VALUE);
-
-  TDT_StatusT Close();
-
- private:
-  TsdClient();
-  TsdClient(const TsdClient &) = delete;
-  TsdClient(TsdClient &&) = delete;
-  TsdClient &operator=(const TsdClient &) = delete;
-  TsdClient &operator=(TsdClient &&) = delete;
-
-  uint32_t rankSize_;
-};
-}  // namespace tdt
 #ifdef __cplusplus
 }
 #endif  // __cplusplus

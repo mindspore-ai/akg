@@ -14,8 +14,12 @@
  * limitations under the License.
  */
 
-#ifndef GE_NO_OP_H_
-#define GE_NO_OP_H_
+/*!
+ * \file no_op.h
+ * \brief
+ */
+#ifndef OPS_BUILT_IN_OP_PROTO_INC_NO_OP_H_
+#define OPS_BUILT_IN_OP_PROTO_INC_NO_OP_H_
 
 #include "graph/operator_reg.h"
 #include "graph/operator.h"
@@ -23,7 +27,10 @@
 namespace ge {
 
 /**
-*@brief Does nothing. Only useful as a placeholder for control edges.
+*@brief Does nothing. Only useful as a placeholder for control edges . \n
+
+*@par Third-party framework compatibility
+*Compatible with the TensorFlow operator NoOp.
 */
 
 REG_OP(NoOp)
@@ -31,4 +38,4 @@ REG_OP(NoOp)
 
 }  // namespace ge
 
-#endif  // GE_NO_OP_H_
+#endif  // OPS_BUILT_IN_OP_PROTO_INC_NO_OP_H_

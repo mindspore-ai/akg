@@ -22,7 +22,8 @@
 
 #ifndef HCCL_BASE_H_
 #define HCCL_BASE_H_
-
+#include <hccl/hccl_types.h>
+#include <string>
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
@@ -37,56 +38,17 @@ typedef unsigned int u32;
 typedef unsigned long long u64;
 
 /**
- * @brief HCOM functions return value definition
+ * @brief Horovod Reduction opperation
  */
-typedef enum tagHcclResult {
-    HCCL_SUCCESS = 0,               /**< success */
-    HCCL_E_PARA = 1,                /**< parameter error */
-    HCCL_E_PTR = 2,                 /**< empty pointer */
-    HCCL_E_MEMORY = 3,              /**< memory error */
-    HCCL_E_INTERNAL = 4,            /**< internal error */
-    HCCL_E_NOT_SUPPORT = 5,         /**< not support feature */
-    HCCL_E_NOT_FOUND = 6,           /**< not found specific resource */
-    HCCL_E_UNAVAIL = 7,             /**< resource unavailable */
-    HCCL_E_SYSCALL = 8,             /**< call system interface error */
-    HCCL_E_TIMEOUT = 9,             /**< timeout */
-    HCCL_E_OPEN_FILE_FAILURE = 10,  /**< open file fail */
-    HCCL_E_TCP_CONNECT = 11,        /**< tcp connect fail */
-    HCCL_E_ROCE_CONNECT = 12,       /**< roce connect fail */
-    HCCL_E_TCP_TRANSFER = 13,       /**< tcp transfer fail */
-    HCCL_E_ROCE_TRANSFER = 14,      /**< roce transfer fail */
-    HCCL_E_RUNTIME = 15,            /**< call runtime api fail */
-    HCCL_E_DRV = 16,                /**< call driver api fail */
-    HCCL_E_PROFILING = 17,          /**< call profiling api fail */
-    HCCL_E_CCE = 18,                /**< call cce api fail */
-    HCCL_E_NETWORK = 19,            /**< call network api fail */
-    HCCL_E_RESERVED                 /**< reserved */
-} hcclResult_t;
-
-/* handle to communicator */
-typedef void *hcclComm_t;
-
-/**
- * @brief HCCL Reduction opperation
- */
-typedef enum tagHcclRedOp {
-    HCCL_REP_OP_SUM = 0,    /**< sum */
-    HCCL_REP_OP_PROD = 1,   /**< prod */
-    HCCL_REP_OP_MAX = 2,    /**< max */
-    HCCL_REP_OP_MIN = 3,    /**< min */
-    HCCL_REP_OP_RESERVED    /**< reserved */
-} hcclRedOp_t;
-
-/**
- * @brief HCCL data type
- */
-typedef enum tagHcclDataType {
-    HCCL_DATA_TYPE_INT8 = 0,  /**< int8 */
-    HCCL_DATA_TYPE_INT = 1,   /**< int32 */
-    HCCL_DATA_TYPE_HALF = 2,  /**< fp16 */
-    HCCL_DATA_TYPE_FLOAT = 3, /**< fp32 */
-    HCCL_DATA_TYPE_RESERVED   /**< reserved */
-} hcclDataType_t;
+typedef enum {
+    HOROVOD_REDUCE_AVERAGE = 0, /**< average */
+    HOROVOD_REDUCE_SUM = 1,     /**< sum */
+    HOROVOD_REDUCE_ADASUM = 2,  /**< adasum */
+    HOROVOD_REDUCE_MIN = 3,     /**< min */
+    HOROVOD_REDUCE_MAX = 4,     /**< max */
+    HOROVOD_REDUCE_PROD = 5,    /**< proo */
+    HOROVOD_REDUCE_RESERVED     /**< reserved */
+} HorovodReduceOp;
 
 const u32 HCCL_MAX_SEGMENT_NUM = 8;   // The max number of gradient segments.
 
@@ -100,10 +62,28 @@ struct model_feature {
     float *gradient_time;    /**< The BP compution time of each gradient */
 };
 
+/**
+ * @brief Memory Register Address Struct for Remote Access
+ */
+struct MemRegisterAddr {
+    u64 addr;
+    u64 length;
+};
+/*
+ * @brief The max number of memory register address for remote access.
+ */
+const u32 HCCL_MAX_MEM_REGISTER_NUM = 32;
+
 enum GradSplitForceMode {
     FORCE_NONE,     /**< no force */
     FORCE_SIZE,     /**< force split gradient by size */
     FORCE_RESERVED  /**< reserved */
+};
+
+enum OriginalGraphShapeType {
+    KNOWN_SHAPE,
+    UNKNOWN_SHAPE,
+    SHAPE_RESERVED  /**< reserved */
 };
 
 /**
@@ -115,6 +95,33 @@ typedef void *rtStream_t;
 * @brief model handle.
 */
 typedef void *rtModel_t;
+
+struct HcomOperation {
+    std::string hcclType;
+    void *inputPtr;
+    void *outputPtr;
+    u64 count;
+    HcclDataType dataType;
+    HcclReduceOp opType;
+    u32 root;
+
+    HcomOperation()
+    {
+        inputPtr = nullptr;
+        outputPtr = nullptr;
+        count = 0;
+        dataType = HCCL_DATA_TYPE_RESERVED;
+        opType = HCCL_REDUCE_RESERVED;
+        root = 0;
+    }
+};
+
+struct HcomRemoteAccessAddrInfo {
+    u32 remotetRankID;
+    u64 remoteAddr;  // host embedding table address
+    u64 localAddr;  // device HBM address
+    u64 length;   // Memory Length in Bytes 
+};
 
 #ifdef __cplusplus
 }
