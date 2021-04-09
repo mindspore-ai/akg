@@ -112,18 +112,17 @@ class ConstIntBoundAnalyzer {
    *
    * \param var The variable of interest.
    * \param info The bound information.
-   * \param override Whether do we allow override of existing information.
+   * \param allow_override Whether do we allow override of existing information.
    */
-  void Update(const Var& var,
-              const ConstIntBound& info,
-              bool override = false);
+  void Update(const Var& var, const ConstIntBound& info, bool allow_override = false);
   /*!
    * \brief Bind variable to a range.
    *
    * \param var The variable.
    * \param range The range we bind to.
+   * \param allow_override Whether we allow overriding an existing var's range.
    */
-  void Bind(const Var& var, const Range& range);
+  void Bind(const Var& var, const Range& range, bool allow_override = false);
 
  private:
   friend class Analyzer;
@@ -198,11 +197,9 @@ class ModularSetAnalyzer {
    *
    * \param var The variable of interest.
    * \param info The bound information.
-   * \param override Whether do we allow override of existing information.
+   * \param allow_override Whether do we allow override of existing information.
    */
-  void Update(const Var& var,
-              const ModularSet& info,
-              bool override = false);
+  void Update(const Var& var, const ModularSet& info, bool allow_override = false);
 
  private:
   friend class Analyzer;
@@ -239,11 +236,9 @@ class RewriteSimplifier {
    *
    * \param var The variable of interest.
    * \param new_expr
-   * \param override Whether do we allow override of existing information.
+   * \param allow_override Whether do we allow override of existing information.
    */
-  void Update(const Var& var,
-              const Expr& new_expr,
-              bool override = false);
+  void Update(const Var& var, const Expr& new_expr, bool allow_override = false);
 
   std::function<void()> EnterConstraint(const Expr& constraint);
 
@@ -275,11 +270,9 @@ class CanonicalSimplifier {
    *
    * \param var The variable of interest.
    * \param new_expr
-   * \param override Whether do we allow override of existing information.
+   * \param allow_override Whether do we allow override of existing information.
    */
-  void Update(const Var& var,
-              const Expr& new_expr,
-              bool override = false);
+  void Update(const Var& var, const Expr& new_expr, bool allow_override = false);
 
  private:
   friend class Analyzer;
@@ -498,8 +491,9 @@ class Analyzer {
    *
    * \param var The variable.
    * \param expr The expression we bind to.
+   * \param allow_override Whether we allow overriding an existing var's expression.
    */
-  void Bind(const VarExpr& var, const Expr& expr);
+  void Bind(const VarExpr& var, const Expr& expr, bool allow_override = false);
   /*!
    * \brief Notify all the sub-analyzers that var
    *        is created and binded to a range.
@@ -508,8 +502,9 @@ class Analyzer {
    *
    * \param var The variable.
    * \param range The range we bind to.
+   * \param allow_override Whether we allow overriding an existing var's expression.
    */
-  void Bind(const VarExpr& var, const Range& range);
+  void Bind(const VarExpr& var, const Range& range, bool allow_override = false);
   /*!
    * \brief Whether can we prove expr >= val.
 
