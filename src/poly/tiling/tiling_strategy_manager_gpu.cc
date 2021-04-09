@@ -376,7 +376,7 @@ void ReduceStrategy::DealWithPostReduceTensors() {
   }
 }
 
-int GpuStrategy::GetLocalAllocBufCount () {
+int GpuStrategy::GetLocalAllocBufCount() {
   int count = 0;
   for (auto &it : analyzer_->buf_info_) {
     auto buf = it.second.get();
@@ -526,7 +526,7 @@ void GpuStrategy::AddGpuConstraint() {
       axis->TileRestrainToSingleValue(axis->c1_constraints.tile_min_, TileLevel::CACHE0);
     });
   }
-  // TODO: This is a very naive strategy to avoid cuda launch out of resources 
+  // TODO: This is a very naive strategy to avoid cuda launch out of resources
   //       and we should fix this in register memory promotion pass.
   if (template_ != Template::REDUCTION && template_ != Template::ALL_REDUCE) {
     auto local_buf_count = GetLocalAllocBufCount();
@@ -639,6 +639,12 @@ void GpuStrategy::InnerThreadOuterBlock() {
 
   // tile from inner to outer and map to thread
   analyzer_->GetTileLogger().AppendLine(GPU_MAPPING, "-----Map to thread-----");
+  ss << "[Thread Limit]: ";
+  for (auto l : thread_limit_) {
+    ss << l << ", ";
+  }
+  analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
+
   size_t ori_size = pending_axes_.size();
   size_t inner_dim = 0;
   for (size_t i = 0; i < ori_size; ++i) {
@@ -746,20 +752,30 @@ void GpuStrategy::InnerThreadOuterBlock() {
     }
   } else {
     for (size_t i = pending_axes_.size() - 1; i >= ori_size; --i) {
+      if (pending_axes_[i].second <= 1 && indexing.size() == block_limit_.size()) {
+        continue;
+      }
       indexing.emplace_back(i);
     }
   }
 
   // map outer band to block according to predefined indice
   analyzer_->GetTileLogger().AppendLine(GPU_MAPPING, "-----Map to block-----");
+  ss << "[Block Limit]: ";
+  for (auto l : block_limit_) {
+    ss << l << ", ";
+  }
+  analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
+
   for (const auto &i : indexing) {
     TileAxis *axis;
     int64_t shape;
     std::tie(axis, shape) = pending_axes_[i];
     auto idx = depth_ - 1 - (pending_axes_.size() - 1 - i);
     idx = reverse_binding_ ? std::min(depth_, block_limit_.size()) - 1 - idx : idx;
-    auto rest_blocks = std::min(block_limit_[idx], axis->block_constraints.map_extent_);
-    ss << "axis " << axis->index << "_" << axis->dim_axis << " shape = " << shape << ", rest blocks = " << rest_blocks;
+    auto rest_blocks = idx < block_limit_.size() ? std::min(block_limit_[idx], axis->block_constraints.map_extent_) : 1;
+    ss << "axis " << axis->index << "_" << axis->dim_axis << " shape = " << shape << ", block_idx = " << idx
+       << ", rest blocks = " << rest_blocks;
     if (block_count_ >= static_cast<int>(block_dim)) {
       ss << "-> No mapping.";
       analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
