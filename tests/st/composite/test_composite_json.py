@@ -210,7 +210,7 @@ def test_ci_ascend():
 def main(argv):
     import getopt
     try:
-        options, args = getopt.getopt(argv, "adcf:mh", ["auto", "manual", "ci", "profile",
+        options, args = getopt.getopt(argv, "atdcf:mh", ["auto", "manual", "ci", "profile", "tune"
                                                         "enable_atomic_add=", "dim=", "bind_block=", "bind_thread=",
                                                         "help"])
         poly = True
@@ -228,6 +228,8 @@ def main(argv):
                 poly = True
             elif option in ("-m", "--manual"):
                 poly = False
+            elif option in ("-t", "--tune"):
+                attrs_list["online_tuning"] = 1
             elif option == "--ci":
                 ci_test = True
             elif option == "--profile":

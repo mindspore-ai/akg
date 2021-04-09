@@ -18,13 +18,13 @@ import sys
 import time
 import getopt
 import logging
-from tests.fuzz.tune.autotuning.job import launch_json
+from akg.auto_tune.composite_tuner import tune_composite
 
 logging.getLogger().setLevel(logging.WARNING)
 
 
 def print_usage():
-    logging.warning("Usage: python composite_tune.py <kernel_meta_path or info_file> [-f] -o <repo.json>")
+    logging.warning("Usage: python test_composite_tune.py <kernel_meta_path or info_file> [-f] -o <repo.json>")
     logging.warning("\nOptions:")
     logging.warning("<kernel_meta_path or info_file>")
     logging.warning("  kernel_meta directory or single file name, '*.info' or '*.json'.")
@@ -32,33 +32,6 @@ def print_usage():
     logging.warning("  tune for all jsons, including those already in repository")
     logging.warning("-o <repo.json>")
     logging.warning("  relative path of output repository")
-
-
-def run_json_tuning(input_str, skip_exist, repo_path):
-    time_start = time.time()
-    debug_mode_ = False
-    save_res_ = True
-    all_space_ = False
-    skip_file_ = False
-    extra_tune_ = False
-    self_attrs = None
-    tuning_attrs = ['enable_pre_poly_loop_partition',
-                    'enable_post_poly_loop_partition',
-                    'enable_rewrite_scalar_compute',
-                    'multicore_scalar_rearrange',
-                    ]
-    launch_json(debug_mode=debug_mode_,
-                save_res=save_res_,
-                input_str=input_str,
-                repo_path=repo_path,
-                all_space=all_space_,
-                skip_exist=skip_exist,
-                skip_file=skip_file_,
-                extra_tune=extra_tune_,
-                self_attrs=self_attrs,
-                tuning_attrs=tuning_attrs)
-    time_end = time.time()
-    logging.debug("launch time: %f", time_end - time_start)
 
 
 if __name__ == "__main__":
@@ -84,4 +57,7 @@ if __name__ == "__main__":
         print_usage()
         sys.exit()
 
-    run_json_tuning(input_str, skip_exist, repo_path)
+    time_start = time.time()
+    tune_composite(input_str, tune_level=1, skip_exist=skip_exist)
+    time_end = time.time()
+    logging.debug("launch time: %f", time_end - time_start)

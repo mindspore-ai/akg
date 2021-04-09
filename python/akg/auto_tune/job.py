@@ -25,14 +25,14 @@ from multiprocessing import Process, Manager
 from akg import composite
 from akg.utils import kernel_exec as utils
 from akg.composite.build_module import generate_trait
-from tests.fuzz.tune.autotuning.runner import KernelRunner, error_time_list, error_time_string
-from tests.fuzz.tune.autotuning.tuner import ModelBasedTuner, Tuner
-from tests.fuzz.tune.autotuning.type_definitions import ConvDesc, ConvBackpropDesc, MatmulCubeDesc
-from tests.fuzz.tune.autotuning.space_generators import get_space
-from tests.fuzz.tune.autotuning.space import ListConfigSpace
-from tests.fuzz.tune.autotuning.test_data_generators import gen_data
+from akg.auto_tune.runner import KernelRunner, error_time_list, error_time_string
+from akg.auto_tune.tuner import ModelBasedTuner, Tuner
+from akg.auto_tune.type_definitions import ConvDesc, ConvBackpropDesc, MatmulCubeDesc
+from akg.auto_tune.space_generators import get_space
+from akg.auto_tune.space import ListConfigSpace
+from akg.auto_tune.data_generators import gen_data
 
-logger = logging.getLogger('fuzz.tune.autotuning.job')
+logger = logging.getLogger('akg.auto_tune.job')
 
 json_file = './res/' + "{0}" + ".json"
 json_load = './autotuning/shapes/' + "{0}"
@@ -126,9 +126,13 @@ def tune_json_file(input_path, input_file, iter_times, save_res, repo_path, all_
     """tune for single json file"""
     with open(repo_path, 'r') as f:
         repo = json.loads(f.read())
-    with open(input_path + '/' + input_file, 'r') as f:
-        json_input = f.read()
-    
+    whole_path = input_path + '/' + input_file
+    if os.path.exists(whole_path):
+        with open(whole_path, 'r') as f:
+            json_input = f.read()
+    else:
+        json_input = input_file
+
     try:
         json_content = json.loads(json_input)
     except BaseException as e:
@@ -143,13 +147,13 @@ def tune_json_file(input_path, input_file, iter_times, save_res, repo_path, all_
             fe.write(input_file)
             fe.write("\n")
         return
-    
+
     # specialize tunning attrs for RealDiv
     for op_desc in json_content["op_desc"]:
-        if op_desc["name"] == "RealDiv":
+        if op_desc["name"] == "RealDiv" and 'enable_rewrite_scalar_compute' not in tuning_attrs:
             tuning_attrs.append('enable_rewrite_scalar_compute')
             break
-    
+
     for input_desc in json_content["input_desc"]:
         if input_desc[0]["shape"] == []:
             input_desc[0]["shape"] = [1]
@@ -158,7 +162,8 @@ def tune_json_file(input_path, input_file, iter_times, save_res, repo_path, all_
     # skip tuning for info in repo
     if skip_exist:
         compute, shape, dtype = generate_trait(json_content)
-        if get_repo(repo, [compute, shape, dtype]):
+        bst = get_repo(repo, [compute, shape, dtype])
+        if bst:
             print("Info for %s already exists" % input_file)
             print("ops are ", str(compute))
             print("shape is ", str(shape))
@@ -166,11 +171,10 @@ def tune_json_file(input_path, input_file, iter_times, save_res, repo_path, all_
             with open('res/skip_file.txt', 'a') as fe:
                 fe.write(input_file)
                 fe.write("\n")
-            return
+            return bst
     
     matmul_op_desc = get_matmul_op_desc(json_content)
     has_matmul = (matmul_op_desc != None)
-    print("has_matmul: ",has_matmul) 
     # generate tuning space
 
     if has_matmul:
@@ -229,7 +233,6 @@ def tune_json_file(input_path, input_file, iter_times, save_res, repo_path, all_
 
     key = json_content["op"]
     try:
-
         input_for_mod, expect, output_indexes = gen_data(op_type="json", op_desc=json_input)
 
     except BaseException as e:
@@ -262,7 +265,7 @@ def tune_json_file(input_path, input_file, iter_times, save_res, repo_path, all_
                                 plan_size=64, pre_model=None)
         least_try_times = iter_times[0 if space.length < 10 ** 4 else 1 if space.length < 10 ** 5 else 2]
     tuner.tune(least_try_times, output_file="json.log")
-
+    tuner.index_table = index_table
     if tuned_file:
         with open(tuned_file, 'a') as fe:
             fe.write(input_file)
@@ -275,16 +278,18 @@ def tune_json_file(input_path, input_file, iter_times, save_res, repo_path, all_
             save_tuning_result(key, "extra_tune", json_content, index_table, tuner, repo_path)
         else:
             save_tuning_result(key, "json", json_content, index_table, tuner, repo_path)
-
+    return tuner
 
 def launch_json(debug_mode: bool = True, save_res: bool = False, input_str="", repo_path="", all_space=False,
-                skip_exist=True, skip_file=True, extra_tune=False, self_attrs=[], tuning_attrs=[]):
+                skip_exist=True, skip_file=True, extra_tune=False, self_attrs=[], tuning_attrs=[], iter_times=None):
     """launch tuning for composite json files"""
+    best_tuners = list()
     subprocess.run("mkdir -p res/", shell=True)
     if not os.path.exists(repo_path):
         with open(repo_path, 'w') as f:
             f.write(json.dumps({}))
-    iter_times = [3, 3, 3] if debug_mode else [80, 160, 320]
+    if not iter_times:
+        iter_times = [3, 3, 3] if debug_mode else [80, 160, 320]
     if os.path.isdir(input_str):
         files = os.listdir(input_str)
         tuned_file = "res/tuned_file.txt"
@@ -297,13 +302,14 @@ def launch_json(debug_mode: bool = True, save_res: bool = False, input_str="", r
             print("[%d/%d]Start tuning for %s" % (idx + 1, len(files), input_file))
             if skip_file and input_file in tuned_list:
                 continue
-            tune_json_file(input_str, input_file, iter_times, save_res, repo_path, all_space, skip_exist, extra_tune,
-                           self_attrs,
-                           tuning_attrs, tuned_file)
+            bst = tune_json_file(input_str, input_file, iter_times, save_res, repo_path, all_space, skip_exist, extra_tune,
+                                 self_attrs, tuning_attrs, tuned_file)
+            best_tuners.append(bst)
     else:
-        tune_json_file(".", input_str, iter_times, save_res, repo_path, all_space, skip_exist, extra_tune, self_attrs,
-                       tuning_attrs, None)
-
+        bst = tune_json_file(".", input_str, iter_times, save_res, repo_path, all_space, skip_exist, extra_tune, self_attrs,
+                             tuning_attrs, None)
+        best_tuners.append(bst)
+    return best_tuners
 
 def jobs(op_type: str = 'add', desc=None, debug_mode: bool = True, save_res: bool = False,
          all_space: bool = True, insert_key='', conf_of_set_dim=""):
@@ -422,7 +428,7 @@ def save_tuning_result(key, op_type, desc, index_table, tuner, repo_path=""):
             param = [tile_cici, tile_khkh, tile_kwkw, tile_coco, tile_bb, tile_hh, tile_ww, tile_mm, tile_kk, tile_nn]
             tiling_param = (param)
         elif op_type == "json":
-            from autotuning.runner import get_attr_from_config
+            from akg.auto_tune.runner import get_attr_from_config
             tiling_param = get_attr_from_config(set_dim_configs, index_table)
         else:
             tiling = [[getattr(set_dim_configs, name), 1]
@@ -479,7 +485,6 @@ def read_shapes_from_file(debug_mode, save_res, all_space, conf_of_set_dim, op_t
 def do_profiling(shp, debug_mode, save_res, all_space, op_type, conf_of_set_dim=None):
     """do profiling"""
     # remove undeleted JOB files for previous shapes
-    subprocess.run("rm -rf /var/log/npu/profiling/JOB*", shell=True)
     if op_type == 'matmul':
         key = shp[2][0:-1]
         logger.debug("start profiling: [%s]", str(key))

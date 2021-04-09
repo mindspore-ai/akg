@@ -21,8 +21,8 @@ import numpy as np
 from multiprocessing import Process
 from tvm.autotvm.tuner.xgboost_cost_model import XgbCostModel
 from tvm.autotvm.tuner.sa_model_optimizer import SimulatedAnnealingOptimizer
-from tests.fuzz.tune.autotuning.space import ConfigSpace
-from tests.fuzz.tune.autotuning.runner import KernelRunner
+from akg.auto_tune.space import ConfigSpace
+from akg.auto_tune.runner import KernelRunner
 
 logger = logging.getLogger('fuzz.tune.autotuning.tuner')
 
@@ -57,6 +57,7 @@ class Tuner:
 
         # keep the current best
         self._best_config = None  # type: ConfigEntity
+        self._index_table = list()  # used to parse best config into attrs
         self._best_time = np.inf
         self._best_iter = 0
         self._tuning_time = 0.0
