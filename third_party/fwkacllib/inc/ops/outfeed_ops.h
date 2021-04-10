@@ -14,10 +14,14 @@
  * limitations under the License.
  */
 
-#ifndef GE_OP_OUTFEED_OPS_H
-#define GE_OP_OUTFEED_OPS_H
+/*!
+ * \file outfeed_ops.h
+ * \brief
+ */
+#ifndef OPS_BUILT_IN_OP_PROTO_INC_OUTFEED_OPS_H_
+#define OPS_BUILT_IN_OP_PROTO_INC_OUTFEED_OPS_H_
 
 #include "data_flow_ops.h"
 
-#endif  // GE_OP_OUTFEED_OPS_H
+#endif  // OPS_BUILT_IN_OP_PROTO_INC_OUTFEED_OPS_H_
 

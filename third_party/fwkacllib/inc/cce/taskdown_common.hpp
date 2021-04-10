@@ -34,7 +34,8 @@ typedef enum tagccKernelType {
   TE_AI_CORE = 4,  /* te aicore operator*/
   TE_AI_CPU = 5,   /* te aicpu operator */
   AI_CPU = 6,      /* aicpu */
-  INVALID = 7,     /* unknown kernel type */
+  CUST_AI_CPU = 7, /* custom aicpu*/
+  INVALID = 8,     /* unknown kernel type */
 } ccKernelType;
 
 typedef struct tagOpContext {

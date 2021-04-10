@@ -14,18 +14,29 @@
  * limitations under the License.
  */
 
- #ifndef GE_OP_DECODE_WHEELS_TARGET_H
- #define GE_OP_DECODE_WHEELS_TARGET_H
+#ifndef ADX_DATADUMP_SERVER_H
+#define ADX_DATADUMP_SERVER_H
+#ifdef __cplusplus
+extern "C" {
+#endif
+/**
+ * @brief initialize server for normal datadump function.
+ * @return
+ *      IDE_DAEMON_OK:    datadump server init success
+ *      IDE_DAEMON_ERROR: datadump server init failed
+ */
+int AdxDataDumpServerInit();
 
- #include "graph/operator_reg.h"
+/**
+ * @brief uninitialize server for normal datadump function.
+ * @return
+ *      IDE_DAEMON_OK:    datadump server uninit success
+ *      IDE_DAEMON_ERROR: datadump server uninit failed
+ */
+int AdxDataDumpServerUnInit();
 
- namespace ge {
+#ifdef __cplusplus
+}
+#endif
+#endif
 
- REG_OP(DecodeWheelsTarget)
-     .INPUT(boundary_predictions, TensorType({DT_FLOAT16})) /* "First operand." */
-     .INPUT(anchors, TensorType({DT_FLOAT16})) /* "Second operand." */
-     .OUTPUT(boundary_encoded, TensorType({DT_FLOAT16}))  /* "Result, has same element type as two inputs" */
-     .OP_END_FACTORY_REG(DecodeWheelsTarget)
- } // namespace ge
-
- #endif // GE_OP_DECODE_WHEELS_TARGET_H

@@ -40,6 +40,10 @@
 #include "codegen/util.h"
 #include <climits>
 
+#ifdef USE_CCE_PROFILING
+#include "profile_mgr.h"
+#endif
+
 namespace air {
 namespace runtime {
 // Module to support thread-safe multi-cce execution.
@@ -198,21 +202,6 @@ class CceWrappedFunc {
       raw_args[i] = *ptr;
     }
 
-#ifdef USE_CCE_PROFILING
-    std::ostringstream buffer;
-    buffer << "{\"startCfg\":[{\"deviceID\":\"" << device_id << "\",\"jobID\":\"JOBTUNE";
-    buffer << "\",\"features\":[{\"name\":\"task_trace\"}]}]}";
-    std::string cfg = buffer.str();
-    LOG(INFO) << "The profiling trace config: " << cfg;
-    ProfMgrCfg profCfg = {cfg};
-    LOG(INFO) << "Start profiling";
-    CceThreadEntry::ThreadLocal()->profcfghandle = ProfMgrStartUp(&profCfg);
-    if (CceThreadEntry::ThreadLocal()->profcfghandle == nullptr) {
-      LOG(INFO) << "Start profiling failed";
-    } else {
-      LOG(INFO) << "Start profiling succ";
-    }
-#endif
     rtError_t result;
 
     if (shape_arg_size == 0) {
@@ -239,6 +228,18 @@ class CceWrappedFunc {
 #endif
       akg::RecordCore(blockDim, true);
     }
+
+#ifdef USE_CCE_PROFILING    
+    uint32_t stream_id;
+    uint32_t task_id;
+    auto rt_ret = rtGetTaskIdAndStreamID(&task_id, &stream_id);
+    if (rt_ret != RT_ERROR_NONE) {
+      LOG(FATAL) << "Profiling get task_id stream_id failed";
+    }
+    auto label = std::to_string(stream_id) + "_" + std::to_string(task_id);
+    ProfileMgr::GetInstance().SetKernelLabel(label);
+#endif
+
     delete[] raw_args;
     if (result != RT_ERROR_NONE) {
       const char* msg{nullptr};

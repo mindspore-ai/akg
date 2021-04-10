@@ -135,6 +135,93 @@ int32_t TdtHostPopData(const std::string &channelName, std::vector<DataItem> &it
 * @li tdt_host_interface.h: Header file where the interface declaration is located.
 */
 int32_t TdtHostStop(const std::string &channelName);
+
+/**
+* @ingroup TdtInFeedInit
+* @brief Initialize the interface, start and initialize various general thread, log and other services
+*
+* @par Function
+* Initialize the interface, start and initialize various general thread, log and other services
+*
+* @param  deviceId [IN] type #unsigned int. logic device ID
+* @retval #0 Success
+* @retval #Not 0 Fail
+*
+* @par Dependency
+* @li libtsdclient.so: Library to which the interface belongs.
+* @li tdt_host_interface.h: Header file where the interface declaration is located.
+*/
+int32_t TdtInFeedInit(uint32_t deviceId);
+
+/**
+* @ingroup TdtOutFeedInit
+* @brief Initialize the interface, start and initialize various general thread, log and other services
+*
+* @par Function
+* Initialize the interface, start and initialize various general thread, log and other services
+*
+* @param  deviceId [IN] type #unsigned int. logic device ID
+* @retval #0 Success
+* @retval #Not 0 Fail
+*
+* @par Dependency
+* @li libtsdclient.so: Library to which the interface belongs.
+* @li tdt_host_interface.h: Header file where the interface declaration is located.
+*/
+int32_t TdtOutFeedInit(uint32_t deviceId);
+
+/**
+* @ingroup TdtInFeedDestroy
+* @brief Notify TDT component to close related resources
+*
+* @par Function
+* Notify TDT component to close related resources
+*
+* @param  NA
+* @retval 0 Success
+* @retval OtherValues Fail
+*
+* @par Dependency
+* @li libtsdclient.so: Library to which the interface belongs.
+* @li tdt_host_interface.h: Header file where the interface declaration is located.
+*/
+int32_t TdtInFeedDestroy(uint32_t deviceId);
+
+/**
+* @ingroup TdtOutFeedDestroy
+* @brief Notify TDT component to close related resources
+*
+* @par Function
+* Notify TDT component to close related resources
+*
+* @param  NA
+* @retval 0 Success
+* @retval OtherValues Fail
+*
+* @par Dependency
+* @li libtsdclient.so: Library to which the interface belongs.
+* @li tdt_host_interface.h: Header file where the interface declaration is located.
+*/
+int32_t TdtOutFeedDestroy();
+
+/**
+* @ingroup TdtInFeedData
+* @brief Blocking queue. When the queue is full, the Push interface will block.
+*
+* @par Function
+* Blocking queue. When the queue is full, the Push interface will block.
+*
+* @param channelName [IN] type #String. queue channel name
+* @param items [IN] type #vector<DataItem> DataItem is defined in data_common.h.  input data
+* @retval 0 Success
+* @retval OtherValues 0 Fail
+*
+* @par Dependency
+* @li libtsdclient.so: Library to which the interface belongs.
+* @li tdt_host_interface.h: Header file where the interface declaration is located.
+* @li data_common.h: Header file where 'DataItem' defined
+*/
+int32_t TdtInFeedData(const std::string &channelName, const std::vector<DataItem> &item, uint32_t deviceId);
 }  // namespace tdt
 #ifdef __cplusplus
 }

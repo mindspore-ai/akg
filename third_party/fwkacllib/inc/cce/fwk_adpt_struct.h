@@ -37,6 +37,7 @@ enum FWKAdptAPIRetCode {
   FWK_ADPT_SESSION_NOT_EXIST = 10,       // session id not exist
   FWK_ADPT_SESSION_ALREADY_EXIST = 11,   // session id alread exist for create session
   FWK_ADPT_NATIVE_END_OF_SEQUENCE = 12,  // end of sequence
+  FWK_ADPT_EXTEND_TYPE_NOT_EXIST = 13,   // extend info type not exist
   FWK_ADPT_UNKNOWN_ERROR = 99            // unknown error code
 };
 
@@ -47,7 +48,8 @@ enum FWKOperateType {
   FWK_ADPT_KERNEL_RUN,
   FWK_ADPT_KERNEL_DESTROY,
   FWK_ADPT_SESSION_DESTROY,
-  FWK_ADPT_SINGLE_OP_RUN
+  FWK_ADPT_SINGLE_OP_RUN,
+  FWK_ADPT_KERNEL_RUN_NO_SESS,
 };
 
 // Extend Info type for task
@@ -55,9 +57,20 @@ enum FWKTaskExtInfoType {
   FWK_ADPT_EXT_SHAPE_TYPE = 0,
   FWK_ADPT_EXT_INPUT_SHAPE,
   FWK_ADPT_EXT_OUTPUT_SHAPE,
+  FWK_ADPT_EXT_UPDATE_ADDR,
+  FWK_ADPT_EXT_OP_NAME,
+  FWK_ADPT_EXT_SESSION_INFO,
   FWK_ADPT_EXT_INVALID
 };
 
+enum FWKExtUpdateAddrType {
+  FWK_ADPT_UPDATE_NULL = 0,
+  FWK_ADPT_UPDATE_INPUT,
+  FWK_ADPT_UPDATE_OUTPUT,
+  FWK_ADPT_UPDATE_INPUT_OUTPUT
+};
+
+#pragma pack(push, 1)
 // API Parameter Structure
 struct StrFWKKernel {
   FWKOperateType opType;
@@ -75,25 +88,41 @@ struct StrFWKKernel {
   uint64_t workspaceBaseAddr;  // Workspace base addr, need convert to void*
   uint64_t inputOutputAddr;    // InputOutput addr, need convert to void*
 
-  uint64_t extInfoNum;         // extend info number
-  uint64_t extInfoAddr;        // extend info addr list, ExtInfo structure, num equal to extInfoNum
-} __attribute__((packed));
+  uint64_t extInfoLen;         // extend info total length
+  uint64_t extInfoAddr;        // extend info addr, ExtInfo structure
+};
+#pragma pack(pop)
 
 typedef StrFWKKernel FWKOperateParam;
 
-// Extend info structure for extInfoAddr
-struct ExtInfo{
-  int32_t  infoType;
-  uint32_t infoLen;
-  uint64_t infoAddr;
-} __attribute__((packed));
+// Extent info ShapeAndType
+const uint32_t kMaxShapeDims = 8;
+#pragma pack(push, 1)
+struct ShapeAndType {
+  int32_t type;
+  int64_t dims[kMaxShapeDims];
+};
+#pragma pack(pop)
 
+// Extend info structure for extInfoAddr
+const uint32_t kExtInfoHeadSize = 8;
+
+#pragma pack(push, 1)
+struct ExtInfo {
+  int32_t  infoType;    // extend type
+  uint32_t infoLen;     // length for infoMsg
+  char     infoMsg[0];  // extend value
+};
+#pragma pack(pop)
+
+#pragma pack(push, 1)
 struct ResultSummary {
   uint64_t shape_data_ptr;   // shape data addr, need convert to void*
   uint64_t shape_data_size;  // num of dims
   uint64_t raw_data_ptr;     // raw data addr,  need convert to void*
   uint64_t raw_data_size;    // size of raw data
-} __attribute__((packed));
+};
+#pragma pack(pop)
 }  // end  namespace FWKAdapter
 }  // namespace aicpu
 

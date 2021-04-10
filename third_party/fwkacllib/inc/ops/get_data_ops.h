@@ -14,19 +14,42 @@
  * limitations under the License.
  */
 
-#ifndef GE_OP_GET_DATA_OPS_H_
-#define GE_OP_GET_DATA_OPS_H_
+/*!
+ * \file get_data_ops.h
+ * \brief
+ */
+#ifndef OPS_BUILT_IN_OP_PROTO_INC_GET_DATA_OPS_H_
+#define OPS_BUILT_IN_OP_PROTO_INC_GET_DATA_OPS_H_
 
 #include "graph/operator_reg.h"
 
 namespace ge {
 
+/**
+*@brief Binding dataset and GetNext
+*@par Attributes: None
+*@par Inputs: Dataset and GetNext operator
+*@par Restrictions:
+*Warning: THIS FUNCTION IS EXPERIMENTAL. Please do not use.
+*/
 REG_OP(MakeIterator)
     .INPUT(x, TensorType::ALL())
     .INPUT(x1, TensorType::ALL())
     .ATTR(_kernel, String, "dp")
     .OP_END_FACTORY_REG(MakeIterator)
 
+/**
+*@brief Dataset iterator
+*@par Attributes:
+*output_types: Data type of output
+*output_shapes: Shapes of output
+*container: Iterator container name
+*shared_name: Iterator id
+*@par Inputs: None
+*@par Outputs: Dataset
+*@par Restrictions:
+*Warning: THIS FUNCTION IS EXPERIMENTAL. Please do not use.
+*/
 REG_OP(IteratorV2)
     .OUTPUT(y, TensorType::ALL())
     .ATTR(output_types, ListInt, {})
@@ -35,6 +58,17 @@ REG_OP(IteratorV2)
     .ATTR(shared_name, String, "")
     .OP_END_FACTORY_REG(IteratorV2)
 
+/**
+*@brief Dataset GetNext iterator
+*@par Attributes:
+*output_types: Data type of output
+*output_shapes: Shapes of output
+*output_num: Num of output
+*@par Inputs: Queue data
+*@par Outputs: Input of computer graph
+*@par Restrictions:
+*Warning: THIS FUNCTION IS EXPERIMENTAL. Please do not use.
+*/
 REG_OP(IteratorGetNext)
     .INPUT(x, TensorType::ALL())
     .DYNAMIC_OUTPUT(y, TensorType::ALL())
@@ -44,6 +78,17 @@ REG_OP(IteratorGetNext)
     .ATTR(_kernel, String, "dp")
     .OP_END_FACTORY_REG(IteratorGetNext)
 
+/**
+*@brief Device queue data area.
+*@par Attributes:
+*output_types: Data type of output
+*output_shapes: Shapes of output
+*channel_name: Channel ID corresponding to TDT
+*@par Inputs: None
+*@par Outputs: Dataset GetNext iterator
+*@par Restrictions:
+*Warning: THIS FUNCTION IS EXPERIMENTAL. Please do not use.
+*/
 REG_OP(DeviceQueueDataset)
     .OUTPUT(y, TensorType::ALL())
     .ATTR(output_types, ListInt, {})
@@ -55,4 +100,4 @@ REG_OP(DeviceQueueDataset)
 } // namespace ge
 
 
-#endif  // GE_OP_GET_DATA_OPS_H_
+#endif  // OPS_BUILT_IN_OP_PROTO_INC_GET_DATA_OPS_H_

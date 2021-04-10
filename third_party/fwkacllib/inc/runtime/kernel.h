@@ -20,7 +20,7 @@
 #include "base.h"
 #include "stream.h"
 
-#ifdef __cplusplus
+#if defined(__cplusplus) && !defined(COMPILE_OMG_PACKAGE)
 extern "C" {
 #endif
 
@@ -170,12 +170,32 @@ typedef void (*rtCallback_t)(void *fnData);
 #define RT_DEV_BINARY_MAGIC_ELF_AIVEC 0x41415246
 
 /**
+ * @ingroup rt_kernel
+ * @brief magic number of elf binary for aicube
+ */
+#define RT_DEV_BINARY_MAGIC_ELF_AICUBE 0x41415247
+
+/**
+ * @ingroup rt_kernel
+ * @brief magic number of elf binary for aivector
+ */
+#define RT_DEV_BINARY_MAGIC_ELF_AIVECTOR 0x41415248
+
+/**
  * @ingroup rt_kernel_flags
  * @brief kernel op bit flags
  */
 #define RT_KERNEL_DEFAULT (0x00)
 #define RT_KERNEL_CONVERT (0x01)
 #define RT_KERNEL_DUMPFLAG (0x02)
+#define RT_FUSION_KERNEL_DUMPFLAG (0x04)
+#define RT_KERNEL_CUSTOM_AICPU (0x08)
+
+/**
+ * @ingroup rt_kernel
+ * @brief kernel L1 Fusion Dump bit flags
+ */
+#define RT_DDR_ADDR (0x0)
 
 /**
  * @ingroup rt_kernel
@@ -183,7 +203,7 @@ typedef void (*rtCallback_t)(void *fnData);
  * @param [in] bin   device binary description
  * @param [out] handle   device binary handle
  * @return RT_ERROR_NONE for ok
- * @note:if this interface is changed, pls notify the compiler changing at the same time.
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtDevBinaryRegister(const rtDevBinary_t *bin, void **handle);
 
@@ -192,7 +212,7 @@ RTS_API rtError_t rtDevBinaryRegister(const rtDevBinary_t *bin, void **handle);
  * @brief register fast memeory device binary
  * @param [in] handle   device binary handle
  * @return RT_ERROR_NONE for ok
- * @note:if this interface is changed, pls notify the compiler changing at the same time.
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtBinaryRegisterToFastMemory(void *handle);
 
@@ -201,7 +221,7 @@ RTS_API rtError_t rtBinaryRegisterToFastMemory(void *handle);
  * @brief unregister device binary
  * @param [in] handle   device binary handle
  * @return RT_ERROR_NONE for ok
- * @note:if this interface is changed, pls notify the compiler changing at the same time.
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtDevBinaryUnRegister(void *handle);
 
@@ -211,7 +231,7 @@ RTS_API rtError_t rtDevBinaryUnRegister(void *handle);
  * @param [in] handle    device binary description
  * @param [in] metadata  device binary metadata
  * @return RT_ERROR_NONE for ok
- * @note:if this interface is changed, pls notify the compiler changing at the same time.
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtMetadataRegister(void *handle, const char *metadata);
 
@@ -221,7 +241,7 @@ RTS_API rtError_t rtMetadataRegister(void *handle, const char *metadata);
  * @param [in] mHandle   master device binary description
  * @param [in] sHandle   slave device binary description
  * @return RT_ERROR_NONE for ok
- * @note:if this interface is changed, pls notify the compiler changing at the same time.
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtDependencyRegister(void *mHandle, void *sHandle);
 
@@ -234,7 +254,7 @@ RTS_API rtError_t rtDependencyRegister(void *mHandle, void *sHandle);
  * @param [in] devFunc   device function description. symbol name or address
  *                       offset, depending binary type.
  * @return RT_ERROR_NONE for ok
- * @note:if this interface is changed, pls notify the compiler changing at the same time.
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtFunctionRegister(void *binHandle, const void *stubFunc, const char *stubName, const void *devFunc,
                                      uint32_t funcMode);
@@ -245,6 +265,7 @@ RTS_API rtError_t rtFunctionRegister(void *binHandle, const void *stubFunc, cons
  * @param [in] stubName   stub function name
  * @param [out] stubFunc   stub function
  * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtGetFunctionByName(const char *stubName, void **stubFunc);
 
@@ -254,6 +275,7 @@ RTS_API rtError_t rtGetFunctionByName(const char *stubName, void **stubFunc);
  * @param [in] stubFunc   stub function
  * @param [out] addr
  * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtGetAddrByFun(const void *stubFunc, void **addr);
 /**
@@ -261,6 +283,7 @@ RTS_API rtError_t rtGetAddrByFun(const void *stubFunc, void **addr);
  * @brief query registered or not by stubName
  * @param [in] stubName   stub function name
  * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtQueryFunctionRegistered(const char *stubName);
 
@@ -270,10 +293,11 @@ RTS_API rtError_t rtQueryFunctionRegistered(const char *stubName);
  * @param [in] dumpSizePerBlock  dump size
  * @param [in] blockDim   block dimentions
  * @param [in] dumpBaseAddr   dump base address
- * @return RT_ERROR_NONE for ok, errno for failed
+ * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtKernelConfigDump(uint32_t kind, uint32_t dumpSizePerBlock, uint32_t blockDim, void **dumpBaseAddr,
-                                     rtStream_t stream_);
+                                     rtStream_t stream);
 
 /**
  * @ingroup rt_kernel
@@ -284,7 +308,8 @@ RTS_API rtError_t rtKernelConfigDump(uint32_t kind, uint32_t dumpSizePerBlock, u
  * @param [in] argsSize   argements size
  * @param [in] smDesc   shared memory description
  * @param [in] stream   associated stream
- * @return RT_ERROR_NONE for ok, errno for failed
+ * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtKernelLaunch(const void *stubFunc, uint32_t blockDim, void *args, uint32_t argsSize,
                                  rtSmDesc_t *smDesc, rtStream_t stream);
@@ -299,7 +324,8 @@ RTS_API rtError_t rtKernelLaunch(const void *stubFunc, uint32_t blockDim, void *
  * @param [in] smDesc   shared memory description
  * @param [in] stream   associated stream
  * @param [in] flag   dump flag
- * @return RT_ERROR_NONE for ok, errno for failed
+ * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtKernelLaunchWithFlag(const void *stubFunc, uint32_t blockDim, void *args, uint32_t argsSize,
                                          rtSmDesc_t *smDesc, rtStream_t stream, uint32_t flags);
@@ -311,7 +337,8 @@ RTS_API rtError_t rtKernelLaunchWithFlag(const void *stubFunc, uint32_t blockDim
  * @param [in] argsSize   argements size
  * @param [in] flags      launch flags
  * @param [in] stream     associated stream
- * @return RT_ERROR_NONE for ok, errno for failed
+ * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtKernelLaunchEx(void *args, uint32_t argsSize, uint32_t flags, rtStream_t stream);
 
@@ -325,7 +352,8 @@ RTS_API rtError_t rtKernelLaunchEx(void *args, uint32_t argsSize, uint32_t flags
  * @param [in] argsSize      argments size
  * @param [in] smDesc        shared memory description
  * @param [in] stream        associated stream
- * @retval RT_ERROR_NONE for ok, errno for failed
+ * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtCpuKernelLaunch(const void *soName, const void *kernelName, uint32_t blockDim, const void *args,
                                     uint32_t argsSize, rtSmDesc_t *smDesc, rtStream_t stream);
@@ -341,18 +369,33 @@ RTS_API rtError_t rtCpuKernelLaunch(const void *soName, const void *kernelName, 
  * @param [in] smDesc        shared memory description
  * @param [in] stream        associated stream
  * @param [in] flag          dump flag or others function flag
- * @retval RT_ERROR_NONE for ok, errno for failed
+ * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtCpuKernelLaunchWithFlag(const void *soName, const void *kernelName, uint32_t blockDim,
                                             const void *args, uint32_t argsSize, rtSmDesc_t *smDesc, rtStream_t stream,
                                             uint32_t flags);
+
+typedef void *rtModel_t;
+/**
+ * @ingroup rt_kernel
+ * @brief L1 fusion dump addr transfered to device
+ * @param [in] model    handle info
+ * @param [in] addr     ddr address of L1 Fusion Dump
+ * @param [in] dumpSize memory size
+ * @param [in] flag     memory flag
+ * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for error input
+ */
+ RTS_API rtError_t rtDumpAddrSet(rtModel_t model, void *addr, uint32_t dumpSize, uint32_t flag);
 
 /**
  * @ingroup rt_kernel
  * @brief load dump info to aicpu
  * @param [in] dumpInfo   dump info
  * @param [in] length   length of  dump info
- * @return RT_ERROR_NONE for ok, errno for failed
+ * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtDatadumpInfoLoad(const void *dumpInfo, uint32_t length);
 
@@ -365,7 +408,7 @@ RTS_API rtError_t rtDatadumpInfoLoad(const void *dumpInfo, uint32_t length);
  * @param [in] smDesc   shared memory description
  * @param [in] stream   associated stream
  * @return RT_ERROR_NONE for ok
- * @note:if this interface is changed, pls notify the compiler changing at the same time.
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 #ifdef __cplusplus
 RTS_API rtError_t rtConfigureCall(uint32_t numBlocks, rtSmDesc_t *smDesc = nullptr, rtStream_t stream = nullptr);
@@ -381,7 +424,7 @@ RTS_API rtError_t rtConfigureCall(uint32_t numBlocks, rtSmDesc_t *smDesc, rtStre
  * @param [in] size   argment size
  * @param [in] offset  argment table offset
  * @return RT_ERROR_NONE for ok
- * @note:if this interface is changed, pls notify the compiler changing at the same time.
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtSetupArgument(const void *arg, uint32_t size, uint32_t offset);
 
@@ -391,7 +434,7 @@ RTS_API rtError_t rtSetupArgument(const void *arg, uint32_t size, uint32_t offse
  *        and call argment
  * @param [in] stubFunc   stub function
  * @return RT_ERROR_NONE for ok
- * @note:if this interface is changed, pls notify the compiler changing at the same time.
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtLaunch(const void *stubFunc);
 
@@ -404,6 +447,7 @@ RTS_API rtError_t rtLaunch(const void *stubFunc);
  * @param [in] flag   reserved. set to 0
  * @param [out] arg   returned arg. used for next kernel's arg.
  * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtKernelConfigTransArg(const void *ptr, uint64_t size, uint32_t flag, void **arg);
 
@@ -411,7 +455,8 @@ RTS_API rtError_t rtKernelConfigTransArg(const void *ptr, uint64_t size, uint32_
  * @ingroup rt_kernel
  * @brief start fusion kernels.
  * @param [in] stream   stream for fusion kernels
- * @return RT_ERROR_NONE for ok, errno for failed
+ * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtKernelFusionStart(rtStream_t stream);
 
@@ -419,7 +464,8 @@ RTS_API rtError_t rtKernelFusionStart(rtStream_t stream);
  * @ingroup rt_kernel
  * @brief end fusion kernels.
  * @param [in] stream   stream for fusion kernels
- * @return RT_ERROR_NONE for ok, errno for failed
+ * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtKernelFusionEnd(rtStream_t stream);
 
@@ -427,7 +473,8 @@ RTS_API rtError_t rtKernelFusionEnd(rtStream_t stream);
  * @ingroup rt_kernel
  * @brief set kernelinfo callback
  * @param [in] callback
- * @return RT_ERROR_NONE for ok, errno for failed
+ * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtSetKernelReportCallback(rtKernelReportCallback callBack);
 
@@ -436,7 +483,8 @@ RTS_API rtError_t rtSetKernelReportCallback(rtKernelReportCallback callBack);
  * @brief subscribe stream callback report.
  * @param [in] threadId   thread id for stream
  * @param [in] stream   stream for subscribe
- * @return RT_ERROR_NONE for ok, errno for failed
+ * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtSubscribeReport(uint64_t threadId, rtStream_t stream);
 
@@ -446,7 +494,8 @@ RTS_API rtError_t rtSubscribeReport(uint64_t threadId, rtStream_t stream);
  * @param [in] callBackFunc   app callback function
  * @param [in] fnData   user data
  * @param [in] stream   subscribed stream
- * @return RT_ERROR_NONE for ok, errno for failed
+ * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtCallbackLaunch(rtCallback_t callBackFunc, void *fnData, rtStream_t stream, bool isBlock);
 
@@ -454,7 +503,8 @@ RTS_API rtError_t rtCallbackLaunch(rtCallback_t callBackFunc, void *fnData, rtSt
  * @ingroup rt_kernel
  * @brief process callback report.
  * @param [in] timeout   if timeout=-1, while(1); else timeout
- * @return RT_ERROR_NONE for ok, errno for failed
+ * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtProcessReport(int32_t timeout);
 
@@ -463,28 +513,52 @@ RTS_API rtError_t rtProcessReport(int32_t timeout);
  * @brief unsubscribe callback report.
  * @param [in] threadId   thread id for stream
  * @param [in] stream   stream for subscribe
- * @return RT_ERROR_NONE for ok, errno for failed
+ * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtUnSubscribeReport(uint64_t threadId, rtStream_t stream);
 
 /**
  * @ingroup profiling_base
  * @brief start online prof.
+ * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtStartOnlineProf(rtStream_t stream, uint32_t sampleNum);
 
 /**
  * @ingroup profiling_base
  * @brief stop online prof.
+ * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtStopOnlineProf(rtStream_t stream);
 
 /**
  * @ingroup profiling_base
  * @brief get online prof.
+ * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtGetOnlineProfData(rtStream_t stream, rtProfDataInfo_t *pProfData, uint32_t profDataNum);
-#ifdef __cplusplus
+
+/**
+ * @ingroup profiling_base
+ * @brief start mdc profiler.
+ * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for error input
+ */
+RTS_API rtError_t rtStartMDCProfiler(void **addr, uint32_t length);
+
+/**
+ * @ingroup profiling_base
+ * @brief stop mdc profiler.
+ * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for error input
+ */
+RTS_API rtError_t rtStopMDCProfiler(void *addr);
+
+#if defined(__cplusplus) && !defined(COMPILE_OMG_PACKAGE)
 }
 #endif
 

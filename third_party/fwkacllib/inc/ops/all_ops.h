@@ -14,8 +14,12 @@
  * limitations under the License.
  */
 
-#ifndef BUILT_IN_OP_PROTO_INC_ALL_OPS_H_
-#define BUILT_IN_OP_PROTO_INC_ALL_OPS_H_
+/*!
+ * \file all_ops.h
+ * \brief
+ */
+#ifndef OPS_BUILT_IN_OP_PROTO_INC_ALL_OPS_H_
+#define OPS_BUILT_IN_OP_PROTO_INC_ALL_OPS_H_
 
 #include "aipp.h"
 #include "array_ops.h"
@@ -24,21 +28,16 @@
 #include "bitwise_ops.h"
 #include "boosted_trees_ops.h"
 #include "candidate_sampling_ops.h"
-#include "clip_boxes.h"
 #include "control_flow_ops.h"
 #include "ctc_ops.h"
 #include "data_flow_ops.h"
-#include "decode_bbox.h"
-#include "decode_boundaries_target.h"
-#include "decode_cornerpoints_target_bg.h"
-#include "decode_cornerpoints_target_wrt_center_v1.h"
-#include "decode_wheels_target.h"
 #include "elewise_calculation_ops.h"
-#include "fastrcnn_predictions.h"
 #include "functional_ops.h"
 #include "get_data_ops.h"
 #include "hcom_ops.h"
+#include "hvd_ops.h"
 #include "image_ops.h"
+#include "internal_ops.h"
 #include "linalg_ops.h"
 #include "logging_ops.h"
 #include "lookup_ops.h"
@@ -64,13 +63,11 @@
 #include "resource_variable_ops.h"
 #include "rnn.h"
 #include "rpn_ops.h"
-#include "rpn_proposals.h"
 #include "save_ops.h"
 #include "selection_ops.h"
 #include "set_ops.h"
 #include "sparse_ops.h"
 #include "split_combination_ops.h"
-#include "ssddetectionoutput_ops.h"
 #include "stateful_random_ops.h"
 #include "stateless_random_ops.h"
 #include "state_ops.h"
@@ -78,4 +75,5 @@
 #include "swap_co_ops.h"
 #include "transformation_ops.h"
 #include "condtake_ops.h"
-#endif  // BUILT_IN_OP_PROTO_INC_ALL_OPS_H_
+#include "warp_perspective_ops.h"
+#endif  // OPS_BUILT_IN_OP_PROTO_INC_ALL_OPS_H_

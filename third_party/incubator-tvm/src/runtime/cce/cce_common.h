@@ -40,20 +40,6 @@ inline const char* CceGetErrorString(rtError_t e) {
   switch (e) {
     case RT_ERROR_NONE:
       return "success";
-    case RT_ERROR_INVALID_VALUE:
-      return "invalid value";
-    case RT_ERROR_MEMORY_ALLOCATION:
-      return "memory allocation fail";
-    case RT_ERROR_INVALID_RESOURCE_HANDLE:
-      return "invalid handle";
-    case RT_ERROR_INVALID_DEVICE_POINTER:
-      return "invalid device point";
-    case RT_ERROR_INVALID_MEMCPY_DIRECTION:
-      return "invalid memory copy dirction";
-    case RT_ERROR_INVALID_DEVICE:
-      return "invalid device";
-    case RT_ERROR_NO_DEVICE:
-      return "no valid device";
     default:
       return "Unknow cce error code";
   }

@@ -14,13 +14,32 @@
  * limitations under the License.
  */
 
-#ifndef GE_OP_RESOURCE_VARIABLE_OPS_H
-#define GE_OP_RESOURCE_VARIABLE_OPS_H
+/*!
+ * \file resource_variable_ops.h
+ * \brief
+ */
+#ifndef OPS_BUILT_IN_OP_PROTO_INC_RESOURCE_VARIABLE_OPS_H_
+#define OPS_BUILT_IN_OP_PROTO_INC_RESOURCE_VARIABLE_OPS_H_
 
 #include "graph/operator.h"
 #include "graph/operator_reg.h"
 
 namespace ge {
+
+/**
+*@brief Creates a handle to a Variable resource. \n
+
+*@par Outputs:
+*y:A Tensor of type resource. \n
+
+*@par Attributes:
+* @li container: optional, string.
+* @li shared_name: optional, string.
+* @li dtype: required, type.
+* @li shape: optional, ListInt. \n
+
+*@see VarHandleOp.
+*/
 
 REG_OP(VarHandleOp)
     .ATTR(container, String, "")
@@ -30,6 +49,19 @@ REG_OP(VarHandleOp)
     .OUTPUT(y, TensorType({DT_RESOURCE}))
     .OP_END_FACTORY_REG(VarHandleOp)
 
+/**
+*@brief Assigns a new value to a variable. \n
+
+*@par Inputs:
+*resource:Handle to the resource in which to store the variable.
+*value:The value to set the new tensor to use. \n
+
+*@par Attributes:
+* @li dtype: required, type. \n
+
+*@see AssignVariableOp.
+*/
+
 REG_OP(AssignVariableOp)
     .INPUT(resource, TensorType({DT_RESOURCE}))
     .INPUT(value, TensorType({DT_FLOAT, DT_FLOAT16, DT_INT8, DT_INT16, \
@@ -37,12 +69,38 @@ REG_OP(AssignVariableOp)
     .REQUIRED_ATTR(dtype, Type)
     .OP_END_FACTORY_REG(AssignVariableOp)
 
+/**
+*@brief Adds a value to the current value of a variable. \n
+
+*@par Inputs:
+*resource:Handle to the resource in which to store the variable.
+*value:The value by which the variable will be incremented. \n
+
+*@par Attributes:
+* @li dtype: required, type. \n
+
+*@see AssignAddVariableOp.
+*/
+
 REG_OP(AssignAddVariableOp)
     .INPUT(resource, TensorType({DT_RESOURCE}))
     .INPUT(value, TensorType({DT_FLOAT, DT_FLOAT16, DT_INT8, DT_INT16, \
         DT_UINT16, DT_UINT8, DT_INT32, DT_INT64, DT_BOOL, DT_DOUBLE}))
     .REQUIRED_ATTR(dtype, Type)
     .OP_END_FACTORY_REG(AssignAddVariableOp)
+
+/**
+*@brief Subtracts a value to the current value of a variable. \n
+
+*@par Inputs:
+*resource:Handle to the resource in which to store the variable.
+*value:The value by which the variable will be incremented. \n
+
+*@par Attributes:
+* @li dtype: required, type. \n
+
+*@see AssignSubVariableOp.
+*/
 
 REG_OP(AssignSubVariableOp)
     .INPUT(resource, TensorType({DT_RESOURCE}))
@@ -53,4 +111,4 @@ REG_OP(AssignSubVariableOp)
 
 }  // namespace ge
 
-#endif //GE_OP_RESOURCE_VARIABLE_OPS_H
+#endif  // OPS_BUILT_IN_OP_PROTO_INC_RESOURCE_VARIABLE_OPS_H_

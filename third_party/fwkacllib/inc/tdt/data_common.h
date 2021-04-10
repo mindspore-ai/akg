@@ -28,7 +28,7 @@ namespace tdt {
  */
 enum TdtDataType {
   TDT_IMAGE_LABEL = 0, /**< Image label*/
-  TDT_T_R,
+  TDT_TFRECORD,        /**< TF Record*/
   TDT_DATA_LABEL,      /**< Data label*/
   TDT_END_OF_SEQUENCE, /**< End of Sequence*/
   TDT_TENSOR,          /**< Tensor*/
@@ -46,6 +46,7 @@ struct TdtDataItem {
   TdtDataType dataType_;          /**< Input data type*/
   uint64_t label_;                /**< Input data label*/
   uint64_t dataLen_;              /**< Input data type length*/
+  uint64_t realDataLen_;          /**< Real Input data type length*/
   std::string tensorShape_;       /**< Tensor shape*/
   std::string tensorType_;        /**< Tensor type*/
   uint32_t cnt_;                  /**< Data  count*/

@@ -35,6 +35,7 @@ extern "C" {
 #define EN_ERR 1
 #define EN_ERROR (-1)
 #define EN_INVALID_PARAM (-2)
+#define EN_TIMEOUT (-3)
 
 #define HANDLE_INVALID_VALUE (-1)
 #define INVALID_SOCKET_HANDLE INVALID_SOCKET
@@ -60,6 +61,7 @@ extern "C" {
 #define MMPA_MIDDLE_NI 5
 #define MMPA_LOW_NI (-5)
 #define MMPA_MIN_NI (-20)
+#define MMPA_MAX_FILE 128
 
 #define MMPA_MAX_THREAD_PIO 99
 #define MMPA_MIDDLE_THREAD_PIO 66
@@ -70,6 +72,8 @@ extern "C" {
 #define MMPA_THREAD_SCHED_FIFO 0
 #define MMPA_THREAD_SCHED_OTHER 0
 #define MMPA_THREAD_MIN_STACK_SIZE 0
+
+#define MM_MUTEX_INITIALIZER NULL
 
 #ifdef __cplusplus
 #if __cplusplus

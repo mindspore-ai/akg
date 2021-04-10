@@ -19,7 +19,7 @@
 
 #include "base.h"
 
-#ifdef __cplusplus
+#if defined(__cplusplus) && !defined(COMPILE_OMG_PACKAGE)
 extern "C" {
 #endif
 
@@ -41,8 +41,7 @@ typedef enum tagRtChipType {
   CHIP_CLOUD,
   CHIP_MDC,
   CHIP_LHISI,
-  CHIP_OTHER_PHN,
-  CHIP_OTHER_OLD,
+  CHIP_DC,
   CHIP_END,
 } rtChipType_t;
 
@@ -59,6 +58,10 @@ typedef enum tagRtPlatformType {
   PLATFORM_BEGIN = 0,
   PLATFORM_MINI_V1 = PLATFORM_BEGIN,
   PLATFORM_CLOUD_V1,
+  PLATFORM_MINI_V2,
+  PLATFORM_LHISI_ES,
+  PLATFORM_LHISI_CS,
+  PLATFORM_DC,
   PLATFORM_END,
 } rtPlatformType_t;
 
@@ -120,14 +123,6 @@ typedef struct tagRtPlatformConfig { uint32_t platformConfig; } rtPlatformConfig
 
 /**
  * @ingroup
- * @brief get platform
- * @param [in] platForm
- * @return platForm
- */
-RTS_API rtError_t rtGetPlatformConfig(rtPlatformConfig_t *platForm);
-
-/**
- * @ingroup
  * @brief get AI core count
  * @param [in] aiCoreCnt
  * @return aiCoreCnt
@@ -166,13 +161,6 @@ RTS_API rtError_t rtGetAiCoreMemoryRates(rtAiCoreMemoryRates_t *aiCoreMemoryRate
  */
 RTS_API rtError_t rtGetMemoryConfig(rtMemoryConfig_t *memoryConfig);
 
-/**
- * @ingroup
- * @brief set platform in gen ctx
- * @param [in] platForm
- * @return RT_ERROR_NONE for ok, errno for failed
- */
-RTS_API rtError_t rtSetPlatformType(rtPlatformType_t platformType);
 
 /**
  * @ingroup
@@ -182,7 +170,15 @@ RTS_API rtError_t rtSetPlatformType(rtPlatformType_t platformType);
  */
 RTS_API rtError_t rtMemGetL2Info(rtStream_t stream, void **ptr, uint32_t *size);
 
-#ifdef __cplusplus
+/**
+ * @ingroup
+ * @brief get runtime version. The version is returned as (1000 major + 10 minor). For example, RUNTIME 9.2 would be represented by 9020.
+ * @param [out] runtimeVersion
+ * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for error input
+ */
+RTS_API rtError_t rtGetRuntimeVersion(uint32_t *runtimeVersion);
+#if defined(__cplusplus) && !defined(COMPILE_OMG_PACKAGE)
 }
 #endif
 

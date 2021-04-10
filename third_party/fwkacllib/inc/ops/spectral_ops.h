@@ -14,8 +14,12 @@
  * limitations under the License.
  */
 
-#ifndef GE_OP_SPECTRAL_OPS_H
-#define GE_OP_SPECTRAL_OPS_H
+/*!
+ * \file spectral_ops.h
+ * \brief
+ */
+#ifndef OPS_BUILT_IN_OP_PROTO_INC_SPECTRAL_OPS_H_
+#define OPS_BUILT_IN_OP_PROTO_INC_SPECTRAL_OPS_H_
 
 #include "graph/operator.h"
 #include "graph/operator_reg.h"
@@ -23,17 +27,19 @@
 namespace ge {
 
 /**
-*@brief Real-valued fast Fourier transform.
+*@brief Real-valued fast Fourier transform . \n
 
 *@par Inputs:
 *@li input: A float32 tensor.
-*@li fft_length: An int32 tensor of shape [1]. The FFT length.
+*@li fft_length: An int32 tensor of shape [1]. The FFT length . \n
 
 *@par Outputs:
-*@li y: A complex64 tensor of the same rank as `input`. The inner-most \n
-dimension of `input` is replaced with the `fft_length / 2 + 1` unique \n
-frequency components of its 1D Fourier transform.
+*@li y: A complex64 tensor of the same rank as `input`. The inner-most
+dimension of `input` is replaced with the `fft_length / 2 + 1` unique
+frequency components of its 1D Fourier transform . \n
 
+*@par Third-party framework compatibility
+* Compatible with TensorFlow RFFT operator.
 */
 REG_OP(RFFT)
     .INPUT(input, TensorType({DT_FLOAT}))
@@ -43,4 +49,4 @@ REG_OP(RFFT)
 
 }  // namespace ge
 
-#endif //GE_OP_SPECTRAL_OPS_H
+#endif  // OPS_BUILT_IN_OP_PROTO_INC_SPECTRAL_OPS_H_

@@ -19,27 +19,53 @@
 
 #include "base.h"
 
-#ifdef __cplusplus
+#if defined(__cplusplus) && !defined(COMPILE_OMG_PACKAGE)
 extern "C" {
 #endif
+
+/**
+ * @ingroup event_flags
+ * @brief event op bit flags
+ */
+#define RT_EVENT_DEFAULT (0x00)
+#define RT_EVENT_WITH_FLAG (0x01)
 
 /**
  * @ingroup dvrt_event
  * @brief create event instance
  * @param [in|out] event   created event
  * @return RT_ERROR_NONE for ok
- * @return RT_ERROR_INVALID_RESOURCE_HANDLE for error input handle
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtEventCreate(rtEvent_t *event);
+
+/**
+ * @ingroup dvrt_event
+ * @brief create event instance with flag
+ * @param [in|out] event   created event  flag event op flag
+ * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for error input
+ */
+RTS_API rtError_t rtEventCreateWithFlag(rtEvent_t *event, uint32_t flag);
 
 /**
  * @ingroup dvrt_event
  * @brief destroy event instance
  * @param [in] event   event to destroy
  * @return RT_ERROR_NONE for ok
- * @return RT_ERROR_INVALID_RESOURCE_HANDLE for error input handle
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtEventDestroy(rtEvent_t event);
+
+/**
+ * @ingroup dvrt_event
+ * @brief get event id
+ * @param [in] event_ event to be get
+ * @param [in|out] event_id   event_id id
+ * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for error input
+ */
+RTS_API rtError_t rtGetEventID(rtEvent_t event, uint32_t *eventId);
 
 /**
  * @ingroup dvrt_event
@@ -47,7 +73,7 @@ RTS_API rtError_t rtEventDestroy(rtEvent_t event);
  * @param [int] event   event to record
  * @param [int] stream   stream handle
  * @return RT_ERROR_NONE for ok
- * @return RT_ERROR_INVALID_RESOURCE_HANDLE for error input handle
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtEventRecord(rtEvent_t event, rtStream_t stream);
 
@@ -65,7 +91,7 @@ RTS_API rtError_t rtEventReset(rtEvent_t event, rtStream_t stream);
  * @brief wait event to be complete
  * @param [in] event   event to wait
  * @return RT_ERROR_NONE for ok
- * @return RT_ERROR_INVALID_RESOURCE_HANDLE for error input handle
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtEventSynchronize(rtEvent_t event);
 
@@ -74,7 +100,7 @@ RTS_API rtError_t rtEventSynchronize(rtEvent_t event);
  * @brief Queries an event's status
  * @param [in] event   event to query
  * @return RT_ERROR_NONE for complete
- * @return RT_ERROR_NOT_READY for not complete
+ * @return RT_ERROR_EVENT_NOT_COMPLETE for not complete
  */
 RTS_API rtError_t rtEventQuery(rtEvent_t event);
 
@@ -100,13 +126,13 @@ RTS_API rtError_t rtEventGetTimeStamp(uint64_t *time, rtEvent_t event);
 /**
  * @ingroup dvrt_event
  * @brief name an event
- * @param [in] event_  event to be named
+ * @param [in] event  event to be named
  * @param [in] name  identification name
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input of event, name
  * @return RT_ERROR_DRV_ERR for driver error
  */
-RTS_API rtError_t rtNameEvent(rtEvent_t event_, const char *name);
+RTS_API rtError_t rtNameEvent(rtEvent_t event, const char *name);
 
 /**
  * @ingroup dvrt_event
@@ -115,9 +141,8 @@ RTS_API rtError_t rtNameEvent(rtEvent_t event_, const char *name);
  * @param [in|out] notify_   notify to be created
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
- * @return RT_ERROR_INVALID_RESOURCE_HANDLE for invalid resource handle
  */
-RTS_API rtError_t rtNotifyCreate(int32_t device_id, rtNotify_t *notify_);
+RTS_API rtError_t rtNotifyCreate(int32_t deviceId, rtNotify_t *notify);
 
 /**
  * @ingroup dvrt_event
@@ -127,7 +152,7 @@ RTS_API rtError_t rtNotifyCreate(int32_t device_id, rtNotify_t *notify_);
  * @return RT_ERROR_INVALID_VALUE for error input
  * @return RT_ERROR_DRV_ERR for driver error
  */
-RTS_API rtError_t rtNotifyDestroy(rtNotify_t notify_);
+RTS_API rtError_t rtNotifyDestroy(rtNotify_t notify);
 
 /**
  * @ingroup dvrt_event
@@ -136,10 +161,9 @@ RTS_API rtError_t rtNotifyDestroy(rtNotify_t notify_);
  * @param [in] stream_  input stream
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
- * @return RT_ERROR_INVALID_RESOURCE_HANDLE for invalid resource handle
- * @return RT_ERROR_INVALID_DEVICE for stream is not in current ctx
+ * @return RT_ERROR_STREAM_CONTEXT for stream is not in current ctx
  */
-RTS_API rtError_t rtNotifyRecord(rtNotify_t notify_, rtStream_t stream_);
+RTS_API rtError_t rtNotifyRecord(rtNotify_t notify, rtStream_t stream);
 
 /**
  * @ingroup dvrt_event
@@ -148,10 +172,9 @@ RTS_API rtError_t rtNotifyRecord(rtNotify_t notify_, rtStream_t stream_);
  * @param [in] stream_  input stream
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
- * @return RT_ERROR_INVALID_RESOURCE_HANDLE for invalid resource handle
- * @return RT_ERROR_INVALID_DEVICE for stream is not in current ctx
+ * @return RT_ERROR_STREAM_CONTEXT for stream is not in current ctx
  */
-RTS_API rtError_t rtNotifyWait(rtNotify_t notify_, rtStream_t stream_);
+RTS_API rtError_t rtNotifyWait(rtNotify_t notify, rtStream_t stream);
 
 /**
  * @ingroup dvrt_event
@@ -161,7 +184,7 @@ RTS_API rtError_t rtNotifyWait(rtNotify_t notify_, rtStream_t stream_);
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
  */
-RTS_API rtError_t rtNameNotify(rtNotify_t notify_, const char *name);
+RTS_API rtError_t rtNameNotify(rtNotify_t notify, const char *name);
 
 /**
  * @ingroup dvrt_event
@@ -171,7 +194,7 @@ RTS_API rtError_t rtNameNotify(rtNotify_t notify_, const char *name);
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
  */
-RTS_API rtError_t rtGetNotifyID(rtNotify_t notify_, uint32_t *notify_id);
+RTS_API rtError_t rtGetNotifyID(rtNotify_t notify, uint32_t *notifyId);
 
 /**
  * @ingroup dvrt_event
@@ -186,11 +209,10 @@ RTS_API rtError_t rtIpcSetNotifyName(rtNotify_t notify, char *name, uint32_t len
 /**
  * @ingroup dvrt_event
  * @brief Open IPC notify
- * @param [in] notify notify to be opened
+ * @param [out] notify the opened notify
  * @param [in] name   identification name
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
- * @return RT_ERROR_INVALID_RESOURCE_HANDLE for invalid resource handle
  */
 RTS_API rtError_t rtIpcOpenNotify(rtNotify_t *notify, const char *name);
 
@@ -217,7 +239,7 @@ RTS_API rtError_t rtNotifyGetAddrOffset(rtNotify_t notify, uint64_t *devAddrOffs
  */
 RTS_API rtError_t rtSetIpcNotifyPid(const char *name, int32_t pid[], int num);
 
-#ifdef __cplusplus
+#if defined(__cplusplus) && !defined(COMPILE_OMG_PACKAGE)
 }
 #endif
 

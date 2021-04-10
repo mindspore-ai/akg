@@ -222,10 +222,10 @@ file(
   ${TVM_DIR}/src/node/*.cc
   ${TVM_DIR}/src/schedule/*.cc
   ${TVM_DIR}/src/runtime/*.cc
-  ${TVM_DIR}/src/runtime/cce/*.cc
   ${TVM_DIR}/src/runtime/vm/*.cc
   ${TVM_DIR}/src/runtime/vm/profiler/*.cc
   ${TVM_DIR}/src/codegen/stackvm/*.cc
+  ${TVM_DIR}/src/runtime/cce/*.cc
   ${AKG_SOURCE_DIR}/src/poly/*.cc
   ${AKG_SOURCE_DIR}/src/poly/schedule_pass/*.cc
   ${AKG_SOURCE_DIR}/src/poly/schedule_pass_gpu/*.cc
@@ -243,6 +243,12 @@ file(
 file(GLOB RUNTIME_STUB_SRC ${AKG_SOURCE_DIR}/src/runtime/stub/*.cc)
 if(USE_CCE_RT OR USE_KC_AIR)
   list(REMOVE_ITEM COMPILER_SRCS ${RUNTIME_STUB_SRC})
+endif()
+
+if (USE_CCE_RT)
+  file(GLOB ASCEND_SRCS  ${AKG_SOURCE_DIR}/src/profiler/ascend/*.cc)
+  list(APPEND COMPILER_SRCS ${ASCEND_SRCS})
+  include_directories(AFTER "${AKG_SOURCE_DIR}/src/profiler/ascend")
 endif()
 
 
@@ -267,7 +273,7 @@ file(
 if(USE_CUDA)
   include(${TVM_DIR}/cmake/util/FindCUDA.cmake)
   include(${TVM_DIR}/cmake/modules/CUDA.cmake)
-  file(GLOB PROFILER_SRCS ${AKG_SOURCE_DIR}/src/profiler/*.cc)
+  file(GLOB PROFILER_SRCS ${AKG_SOURCE_DIR}/src/profiler/gpu/*.cc)
   list(APPEND COMPILER_SRCS ${PROFILER_SRCS})
 endif()
 
@@ -295,6 +301,13 @@ add_library(akg SHARED ${COMPILER_SRCS} ${RUNTIME_SRCS} ${TOPI_SRCS} ${AKG_EXTEN
 
 add_dependencies(akg akg::isl_fixed)
 target_link_libraries(akg ${TVM_LINKER_LIBS} ${TVM_RUNTIME_LINKER_LIBS} akg::isl_fixed ${GMP_LIBRARY} pthread)
+
+if(USE_CCE_RT)
+  find_library(profiler_acl msprofiler_fwkacl /usr/local/Ascend/fwkacllib/lib64)
+  find_library(profiler msprofiler_fwk /usr/local/Ascend/fwkacllib/lib64)
+  find_library(profiler_protobuf ascend_protobuf /usr/local/Ascend/fwkacllib/lib64)
+  target_link_libraries(akg ${profiler_acl} ${profiler} ${profiler_protobuf})
+endif()
 
 # Related headers
 target_include_directories(akg PRIVATE "${TVM_DIR}/topi/include")

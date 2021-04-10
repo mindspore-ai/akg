@@ -14,13 +14,24 @@
  * limitations under the License.
  */
 
-#ifndef GE_OP_SAVE_OPS_H_
-#define GE_OP_SAVE_OPS_H_
+/*!
+ * \file save_ops.h
+ * \brief
+ */
+#ifndef OPS_BUILT_IN_OP_PROTO_INC_SAVE_OPS_H_
+#define OPS_BUILT_IN_OP_PROTO_INC_SAVE_OPS_H_
 
 #include "graph/operator_reg.h"
 
 namespace ge {
 
+/**
+*@brief Mark which tensors need to be saved to the ckpt file.
+*@par Inputs:
+*tensors: A list of input tensor.It's a dynamic input.
+*@par Restrictions:
+*Warning: THIS FUNCTION IS EXPERIMENTAL. Please do not use.
+*/
 REG_OP(Save)
     .DYNAMIC_INPUT(tensors, TensorType:ALL())
     .OP_END_FACTORY_REG(Save)
@@ -28,4 +39,4 @@ REG_OP(Save)
 } // namespace ge
 
 
-#endif  // GE_OP_SAVE_OPS_H_
+#endif  // OPS_BUILT_IN_OP_PROTO_INC_SAVE_OPS_H_

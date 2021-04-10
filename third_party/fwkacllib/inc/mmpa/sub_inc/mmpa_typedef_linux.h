@@ -79,6 +79,8 @@ typedef long LONG;
 #define MMPA_THREAD_SCHED_OTHER SCHED_OTHER
 #define MMPA_THREAD_MIN_STACK_SIZE PTHREAD_STACK_MIN
 
+#define MM_MUTEX_INITIALIZER PTHREAD_MUTEX_INITIALIZER
+
 #define MMPA_MAX_NI 19
 #define MMPA_MIN_NI (-20)
 
@@ -86,6 +88,7 @@ typedef long LONG;
 #define EN_ERR 1
 #define EN_ERROR (-1)
 #define EN_INVALID_PARAM (-2)
+#define EN_TIMEOUT (-3)
 
 #ifdef __cplusplus
 #if __cplusplus

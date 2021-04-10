@@ -14,32 +14,39 @@
  * limitations under the License.
  */
 
-#ifndef GE_OP_MATRIX_CALCULATION_OPS_H
-#define GE_OP_MATRIX_CALCULATION_OPS_H
+/*!
+ * \file matrix_calculation_ops.h
+ * \brief
+ */
+#ifndef OPS_BUILT_IN_OP_PROTO_INC_MATRIX_CALCULATION_OPS_H_
+#define OPS_BUILT_IN_OP_PROTO_INC_MATRIX_CALCULATION_OPS_H_
 
 #include "graph/operator_reg.h"
 
 namespace ge {
 
 /**
-*@brief Multiplies matrix "a" by matrix "b", producing "a * b".
+*@brief Multiplies matrix "a" by matrix "b", producing "a * b" . \n
 
 *@par Inputs:
-*Two inputs, including:
+*Three inputs, including:
 * @li x1: A matrix Tensor. 2D. Must be one of the following types: float16,
 * float32, int32. Has format [ND, NHWC, FRACTAL_NZ].
 * @li x2: A matrix Tensor. 2D. Must be one of the following types: float16,
 * float32, int32. Has format [ND, NHWC, FRACTAL_NZ].
-* @li bias: A 1D Tensor. Must be one of the following types: float16,
-* float32, int32. Has format [ND, NHWC].
+* @li bias: A optional 1D Tensor. Must be one of the following types: float16,
+* float32, int32. Has format [ND, NHWC] . \n
 
 *@par Attributes:
-*@li transpose_a: A bool. If True, changes the shape of "x1" from [M, K] to [K, M].
-*@li transpose_b: A bool. If True, changes the shape of "x2" from [M, K] to [K, M].
+*@li transpose_x1: A bool. If True, changes the shape of "x1" from [M, K] to [K, M].
+*@li transpose_x2: A bool. If True, changes the shape of "x2" from [M, K] to [K, M] . \n
 
 *@par Outputs:
 *y: The result matrix Tensor. 2D. Must be one of the following types: float16,
-* float32, int32. Has format [ND, NHWC, FRACTAL_NZ].
+* float32, int32. Has format [ND, NHWC, FRACTAL_NZ] . \n
+
+*@par Third-party framework compatibility
+* Compatible with the TensorFlow operator BatchMatmul.
 */
 REG_OP(MatMul)
     .INPUT(x1, TensorType({DT_FLOAT, DT_FLOAT16, DT_INT32}))
@@ -51,53 +58,113 @@ REG_OP(MatMul)
     .OP_END_FACTORY_REG(MatMul)
 
 /**
-*@brief Performs Matrix-to-matrix Multiply, producing c=alpha[0]*a*b+beta[0]*c.
+*@brief Multiplies matrix "a" by matrix "b", producing "a * b" . \n
+
+*@par Inputs:
+*Two inputs, including:
+* @li x1: A matrix Tensor. 2D. Must be one of the following types: float16,
+* float32, int32. Has format [ND, NHWC, FRACTAL_NZ].
+* @li x2: A matrix Tensor. 2D. Must be one of the following types: float16,
+* float32, int32. Has format [ND, NHWC, FRACTAL_NZ].
+* @li bias: A 1D Tensor. Must be one of the following types: float16,
+* float32, int32. Has format [ND, NHWC] . \n
+
+*@par Attributes:
+*@li transpose_x1: A bool. If True, changes the shape of "x1" from [M, K] to [K, M].
+*@li transpose_x2: A bool. If True, changes the shape of "x2" from [M, K] to [K, M] . \n
+
+*@par Outputs:
+*y: The result matrix Tensor. 2D. Must be one of the following types: float16,
+* float32, int32. Has format [ND, NHWC, FRACTAL_NZ] . \n
+
+*@par Third-party framework compatibility
+* Compatible with the TensorFlow operator BatchMatmul.
+*/
+REG_OP(MatMulV2)
+    .INPUT(x1, TensorType({DT_FLOAT, DT_FLOAT16, DT_INT32, DT_INT8}))
+    .INPUT(x2, TensorType({DT_FLOAT, DT_FLOAT16, DT_INT32, DT_INT8}))
+    .OPTIONAL_INPUT(bias, TensorType({DT_FLOAT, DT_FLOAT16, DT_INT32}))
+    .OUTPUT(y, TensorType({DT_FLOAT, DT_FLOAT16, DT_INT32}))
+    .OPTIONAL_INPUT(offset_w, TensorType({DT_INT8}))
+    .ATTR(transpose_x1, Bool, false)
+    .ATTR(transpose_x2, Bool, false)
+    .ATTR(offset_x, Int, 0)
+    .OP_END_FACTORY_REG(MatMulV2)
+
+
+/**
+*@brief Performs Matrix-to-matrix Multiply, producing c=alpha[0]*a*b+beta[0]*c . \n
+
+*@attention Constraints:
+* For better performance, The k-axis must be aligned to 16 (input type
+* is float16) or 32 (input type is int8). \n
 
 *@par Inputs:
 *Five inputs, including:
-*@li a: A matrix Tensor. 4D. Must be one of the following types:\n float16, int8. Has format [FRACTAL_NZ].
-*@li b: A matrix Tensor. 4D. Must be one of the following types:\n float16, int8. When type is int8, has format [FRACTAL_Z], \n otherwise has format [FRACTAL_NZ].
-*@li c: A matrix Tensor. 2D or higher. Must be one of the following types: \n float16, int32, float32. When type is int32, has format [ND], \n otherwise has format [FRACTAL_NZ].
-*@li alpha: A 1D Tensor. The shape of alpha is [1].\n Must be one of the following types: float16, int32, float32. Has format [ND].
-*@li beta: A 1D Tensor. The shape of beta is [1].\n Must be one of the following types: float16, int32, float32. Has format [ND].
+*@li a: A matrix Tensor. Must be one of the following types: float16, int8.
+* Has format [ND, FRACTAL_NZ]. 2D(ND) or 4D(FRACTAL_NZ).
+*@li b: A matrix Tensor. Must be one of the following types: float16, int8.
+* Has format [ND, FRACTAL_NZ, FRACTAL_Z]. 2D(ND) or 4D(FRACTAL_NZ, FRACTAL_Z).
+*@li c: A matrix Tensor. Must be one of the following types: float16, int32,
+* float32. has format [ND, FRACTAL_NZ]. 2D(ND) or 4D(FRACTAL_NZ).
+*@li alpha: A 1D Tensor. The shape of alpha is [1].Must be one of the following
+* types: float16, int32, float32. Has format [ND].
+*@li beta: A 1D Tensor. The shape of beta is [1]. Must be one of the following
+* types: float16, int32, float32. Has format [ND].
+* The format of a, b, c has restriction:\n
+* When type of a is int8 and type of c is int32, the format of a, b, c should
+* all be ND, or a is FRACTAL_NZ and b is FRACTAL_Z and c is ND.\n
+* When type of a is int8 and type of c is float32, the format of a, b, c should
+* all be ND or a is FRACTAL_NZ and b is FRACTAL_Z and c is FRACTAL_NZ.\n
+* When type of a is float16 and type of c is float16, the format of a, b, c
+* should all be ND or FRACTAL_NZ.\n
+* When type of a is float16 and type of c is float32, the format of a, b, c
+* should all be ND or FRACTAL_NZ . \n
 
 *@par Attributes:
 *Two attributes, including:
-*@li transpose_a: Optional. A bool.\n If True, changes the shape of "a" from [M, K] to [K, M].\n Reserved parameters, not used for now.
-*@li transpose_b: Optional. A bool.\n If True, changes the shape of "b" from [M, K] to [K, M].\n Reserved parameters, not used for now.
+*@li transpose_a: Optional. A bool. If True, changes the shape of "a" from
+* [M, K] to [K, M].
+*@li transpose_b: Optional. A bool. If True, changes the shape of "b" from
+* [K, N] to [N, K] . \n
 
 *@par Outputs:
-*@out: The result matrix Tensor. 4D. Must be one of the following types:\n float16, float32, int32. Has format [FRACTAL_NZ].
+*y: The result matrix Tensor. Must be one of the following types: float16,
+* float32, int32. Has format [ND, FRACTAL_NZ], the format should be equal to a.
+* 2D(ND) or 4D(FRACTAL_NZ).
 */
 
-REG_OP(Gemm)
+REG_OP(GEMM)
     .INPUT(a, TensorType({DT_FLOAT16, DT_INT8}))
     .INPUT(b, TensorType({DT_FLOAT16, DT_INT8}))
     .INPUT(c, TensorType({DT_FLOAT, DT_FLOAT16, DT_INT32}))
     .INPUT(alpha, TensorType({DT_FLOAT, DT_FLOAT16, DT_INT32}))
     .INPUT(beta, TensorType({DT_FLOAT, DT_FLOAT16, DT_INT32}))
-    .OUTPUT(out, TensorType({DT_FLOAT, DT_FLOAT16, DT_INT32}))
+    .OUTPUT(y, TensorType({DT_FLOAT, DT_FLOAT16, DT_INT32}))
     .ATTR(transpose_a, Bool, false)
     .ATTR(transpose_b, Bool, false)
-    .OP_END_FACTORY_REG(Gemm)
+    .OP_END_FACTORY_REG(GEMM)
 
 /**
-*@brief Multiplies matrix "a" by matrix "b", producing "a * b".
+*@brief Multiplies matrix "a" by matrix "b", producing "a * b" . \n
 
 *@par Inputs:
 *Three inputs, including:
 * @li x1: A matrix Tensor. Must be one of the following types: float16,
 * float32, int32. 2D or higher. Has format [ND, NHWC, FRACTAL_NZ].
 * @li x2: A matrix Tensor. Must be one of the following types: float16,
-* float32, int32. 2D or higher. Has format [ND, NHWC, FRACTAL_NZ].
+* float32, int32. 2D or higher. Has format [ND, NHWC, FRACTAL_NZ] . \n
 
 *@par Attributes:
-*@li adj_x: A bool. If True, changes the shape of "x1" from [B, M, K] to [B, K, M].
-*@li adj_y: A bool. If True, changes the shape of "x2" from [B, M, K] to [B, K, M].
+*@li adj_x1: A bool. If True, changes the shape of "x1" from [B, M, K] to [B, K, M].
+*@li adj_x2: A bool. If True, changes the shape of "x2" from [B, M, K] to [B, K, M] . \n
 
 *@par Outputs:
 *y: The result matrix Tensor. 2D or higher. Must be one of the following types: float16,
-* float32, int32. 2D or higher. Has format [ND, NHWC, FRACTAL_NZ]. Has the same shape length as "x1" and "x2".
+* float32, int32. 2D or higher. Has format [ND, NHWC, FRACTAL_NZ]. Has the same shape length as "x1" and "x2" . \n
+
+*@par Third-party framework compatibility
+* Compatible with the TensorFlow operator BatchMatmul.
 */
 
 REG_OP(BatchMatMul)
@@ -108,60 +175,53 @@ REG_OP(BatchMatMul)
     .ATTR(adj_x2, Bool, false)
     .OP_END_FACTORY_REG(BatchMatMul)
 
-REG_OP(MeanCCE)
-    .INPUT(x, TensorType::ALL())
-    .INPUT(indices, TensorType::ALL())
-    .OUTPUT(y, TensorType::ALL())
-    .ATTR(keep_dims, Bool, false)
-    .ATTR(value1, ListInt, {})
-    .ATTR(mode, Int, 3)                 // 0:max pooling or 1:avg pooling
-    .ATTR(pad_mode, Int, 0)
-    .ATTR(global_pooling, Bool, true)
-    .ATTR(window, ListInt, {1,1})      // kernel size
-    .ATTR(pad, ListInt, {0,0,0,0})     // pad size
-    .ATTR(stride, ListInt, {1,1})      // stride size
-    .ATTR(ceil_mode, Int, 0)
-    .ATTR(data_mode, Int, 1)
-    .ATTR(nan_opt, Int, 0)
-    .ATTR(fomart, Int, 0)
-    .OP_END_FACTORY_REG(MeanCCE)
-
-REG_OP(MeanGrad)
-    .INPUT(x, TensorType::ALL())
-    .OUTPUT(y, TensorType::ALL())
-    .ATTR(mode, Int, 1)                 // 0:max pooling or 1:avg pooling
-    .ATTR(pad_mode, Int, 0)
-    .ATTR(global_pooling, Bool, false)
-    .ATTR(window, ListInt, {1,1})      // kernel size
-    .ATTR(pad, ListInt, {0,0,0,0})     // pad size
-    .ATTR(stride, ListInt, {1,1})      // stride size
-    .ATTR(ceil_mode, Int, 0)
-    .ATTR(data_mode, Int, 1)
-    .ATTR(nan_opt, Int, 0)
-    .ATTR(mean_grad_output_shape_value, ListInt, {1,1,1,1})
-    .ATTR(mean_grad_output_shape_format, Int, 1) //must be NHWC
-    .OP_END_FACTORY_REG(MeanGrad)
-
-REG_OP(MatMulCCE)
-    .INPUT(x1, TensorType({DT_FLOAT}))
-    .INPUT(x2, TensorType({DT_FLOAT}))
-    .OPTIONAL_INPUT(x3, TensorType({DT_FLOAT}))
-    .OUTPUT(y, TensorType({DT_FLOAT}))
-    .ATTR(transpose_a, Bool, false)
-    .ATTR(transpose_b, Bool, false)
-    .ATTR(has_bias, Bool, false)
-    .OP_END_FACTORY_REG(MatMulCCE)
 
 /**
-*@brief Computes half the L2 norm of a tensor without the sqrt.
+* @brief Multiplies matrix "a" by matrix "b", producing "a * b" . \n
+
+* @par Inputs:
+* Three inputs, including:
+* @li x1: A matrix Tensor. Must be one of the following types: float16,
+* float32, int32. 2D or higher. Has format [ND, NHWC, FRACTAL_NZ].
+* @li x2: A matrix Tensor. Must be one of the following types: float16,
+* float32, int32. 2D or higher. Has format [ND, NHWC, FRACTAL_NZ] . \n
+* @li bias: A matrix Tensor. Must be one of the following types: float16,
+* float32, int32. 2D or higher. Has format [ND, NHWC, FRACTAL_NZ] . \n
+
+* @par Attributes:
+* @li adj_x: A bool. If True, changes the shape of "x1" from [B, M, K] to [B, K, M].
+* @li adj_y: A bool. If True, changes the shape of "x2" from [B, M, K] to [B, K, M] . \n
+
+* @par Outputs:
+* y: The result matrix Tensor. 2D or higher. Must be one of the following types: float16,
+* float32, int32. 2D or higher. Has format [ND, NHWC, FRACTAL_NZ]. Has the same shape length as "x1" and "x2" . \n
+
+* @par Third-party framework compatibility
+* Compatible with the TensorFlow operator BatchMatmul.
+*/
+
+REG_OP(BatchMatMulV2)
+    .INPUT(x1, TensorType({DT_FLOAT, DT_FLOAT16, DT_INT32}))
+    .INPUT(x2, TensorType({DT_FLOAT, DT_FLOAT16, DT_INT32}))
+    .OPTIONAL_INPUT(bias, TensorType({DT_FLOAT, DT_FLOAT16, DT_INT32}))
+    .OUTPUT(y, TensorType({DT_FLOAT, DT_FLOAT16, DT_INT32}))
+    .ATTR(adj_x1, Bool, false)
+    .ATTR(adj_x2, Bool, false)
+    .OP_END_FACTORY_REG(BatchMatMulV2)
+
+
+/**
+*@brief Computes half the L2 norm of a tensor without the sqrt . \n
 
 *@par Inputs:
 
 * x: A Tensor.
-*     TensorType::FloatingDataType().
+*     TensorType::FloatingDataType() . \n
 
 *@par Outputs:
 *y: A Tensor. Has the same type as "x".
+*@par Third-party framework compatibility
+*Compatible with the TensorFlow operator L2Loss.
 */
 REG_OP(L2Loss)
     .INPUT(x, TensorType::FloatingDataType())
@@ -169,14 +229,18 @@ REG_OP(L2Loss)
     .OP_END_FACTORY_REG(L2Loss)
 
 /**
-*@brief: Returns a batched diagonal tensor with a given batched diagonal values.
+*@brief: Returns a batched diagonal tensor with a given batched diagonal values . \n
 
 *@par Inputs:
-*x: A Tensor. Must be one of the following types: float16, float32, int32, int8, uint8.
+*x: A Tensor. Must be one of the following types:
+*   float16, float32, double, int32, uint8, int16, int8, complex64, int64,
+*   qint8, quint8, qint32, uint16, complex128, uint32, uint64 . \n
 
 *@par Outputs:
-*y: A Tensor. Has the same type as "x".
+*y: A Tensor. Has the same type as "x" . \n
 
+*@par Third-party framework compatibility
+* Compatible with the TensorFlow operator MatrixDiag.
 */
 REG_OP(MatrixDiag)
     .INPUT(x, TensorType::BasicType())
@@ -184,16 +248,21 @@ REG_OP(MatrixDiag)
     .OP_END_FACTORY_REG(MatrixDiag)
 
 /**
-*@brief: Returns a batched diagonal tensor with a given batched diagonal values.
+*@brief: Returns a batched diagonal tensor with a given batched diagonal values . \n
 
 *@par Inputs:
 * Two inputs, including:
 *@li x: A Tensor. Must be one of the following types: float16, float32, int32, int8, uint8.
-*@li assist: A Tensor of the same type as "x".
+*@li assist: A Tensor of the same type as "x" . \n
 
 *@par Outputs:
-*y: A Tensor. Has the same type as "x".
+*y: A Tensor. Has the same type as "x" . \n
 
+*@par Third-party framework compatibility
+* Compatible with the TensorFlow operator MatrixDiag.
+*
+* @par Restrictions:
+* Warning: THIS FUNCTION IS DEPRECATED. Please use MatrixDiag instead.
 */
 REG_OP(MatrixDiagD)
     .INPUT(x, TensorType::BasicType())
@@ -202,14 +271,18 @@ REG_OP(MatrixDiagD)
     .OP_END_FACTORY_REG(MatrixDiagD)
 
 /**
-*@brief: Returns the batched diagonal part of a batched tensor.
+*@brief: Returns the batched diagonal part of a batched tensor . \n
 
 *@par Inputs:
-*x: A Tensor. Must be one of the following types: float16, float32, int32, int8, uint8.
+*x: A Tensor. Must be one of the following types:
+*   float16, float32, double, int32, uint8, int16, int8, complex64, int64,
+*   qint8, quint8, qint32, uint16, complex128, uint32, uint64 . \n
 
 *@par Outputs:
-*y: A Tensor. Has the same type as "x".
+*y: A Tensor. Has the same type as "x" . \n
 
+*@par Third-party framework compatibility
+* Compatible with the TensorFlow operator MatrixDiagPart.
 */
 REG_OP(MatrixDiagPart)
     .INPUT(x, TensorType::BasicType())
@@ -217,16 +290,21 @@ REG_OP(MatrixDiagPart)
     .OP_END_FACTORY_REG(MatrixDiagPart)
 
 /**
-*@brief: Returns the batched diagonal part of a batched tensor.
+*@brief: Returns the batched diagonal part of a batched tensor . \n
 
 *@par Inputs:
 * Two inputs, including:
 *@li x: A Tensor. Must be one of the following types: float16, float32, int32, int8, uint8.
-*@li assist: A Tensor of the same type as "x".
+*@li assist: A Tensor of the same type as "x" . \n
 
 *@par Outputs:
-*y: A Tensor. Has the same type as "x".
+*y: A Tensor. Has the same type as "x" . \n
 
+*@par Third-party framework compatibility
+* Compatible with the TensorFlow operator MatrixDiagPart.
+*
+* @par Restrictions:
+* Warning: THIS FUNCTION IS DEPRECATED. Please use MatrixDiagPart instead.
 */
 REG_OP(MatrixDiagPartD)
     .INPUT(x, TensorType::BasicType())
@@ -235,16 +313,20 @@ REG_OP(MatrixDiagPartD)
     .OP_END_FACTORY_REG(MatrixDiagPartD)
 
 /**
-*@brief: Returns a batched matrix tensor with new batched diagonal values.
+*@brief: Returns a batched matrix tensor with new batched diagonal values . \n
 
 *@par Inputs:
 * Two inputs, including:
-*@li x: A Tensor. Must be one of the following types: float16, float32, int32, int8, uint8.
-*@li diagonal: A Tensor of the same type as "x".
+*@li x: A Tensor. Must be one of the following types:
+*    float16, float32, double, int32, uint8, int16, int8, complex64, int64,
+*    qint8, quint8, qint32, uint16, complex128, uint32, uint64.
+*@li diagonal: A Tensor of the same type as "x" . \n
 
 *@par Outputs:
-*y: A Tensor. Has the same type as "x".
+*y: A Tensor. Has the same type as "x" . \n
 
+*@par Third-party framework compatibility
+* Compatible with the TensorFlow operator MatrixSetDiag.
 */
 REG_OP(MatrixSetDiag)
     .INPUT(x, TensorType::BasicType())
@@ -253,17 +335,22 @@ REG_OP(MatrixSetDiag)
     .OP_END_FACTORY_REG(MatrixSetDiag)
 
 /**
-*@brief: Returns a batched matrix tensor with new batched diagonal values.
+*@brief: Returns a batched matrix tensor with new batched diagonal values . \n
 
 *@par Inputs:
 * Three inputs, including:
 *@li x: A Tensor. Must be one of the following types: float16, float32, int32, int8, uint8.
 *@li diagonal: A Tensor of the same type as "x".
-*@li assist: A Tensor of the same type as "x".
+*@li assist: A Tensor of the same type as "x" . \n
 
 *@par Outputs:
-*y: A Tensor. Has the same type as "x".
+*y: A Tensor. Has the same type as "x" . \n
 
+*@par Third-party framework compatibility
+* Compatible with the TensorFlow operator MatrixSetDiag.
+*
+* @par Restrictions:
+* Warning: THIS FUNCTION IS DEPRECATED. Please use MatrixSetDiag instead.
 */
 REG_OP(MatrixSetDiagD)
     .INPUT(x, TensorType::BasicType())
@@ -273,26 +360,30 @@ REG_OP(MatrixSetDiagD)
     .OP_END_FACTORY_REG(MatrixSetDiagD)
 
 /**
-*@brief Applies sparse "updates" to individual values or slices in a Variable.
+*@brief Applies sparse "updates" to individual values or slices in a Variable . \n
 
 *@par Inputs:
 * Three inputs, including:
-*@li var: An ND Tensor. \n
-
-*Must be one of the following types: float16, float32, int8, uint8, bool
-*@li indices: An ND Tensor. \n
-
-*Must be one of the following types: int32
-*@li updates: An ND Tensor. \n
-
-*Must be one of the following types: float16, float32, int8, uint8, bool
+*@li var: An ND Tensor.
+*Must be one of the following types: float16, float32, int8, uint8, double,
+ * int64, complex64, qint8, quint8, qint32, uint16, complex128, half, uint32,
+ * uint64
+*@li indices: An ND Tensor.
+*Must be one of the following types: int32, int64
+*@li updates: An ND Tensor.
+*Must be one of the following types: float16, float32, int8, uint8, double,
+ * int64, complex64, qint8, quint8, qint32, uint16, complex128, half, uint32,
+ * uint64
 
 *@par Attributes:
-*use_locking: An optional bool. Defaults to "False". If "True", the operation will be protected by a lock.
+*use_locking: An optional bool. Defaults to "False". If "True",
+ * the operation will be protected by a lock . \n
 
 *@par Outputs:
-*var: A Tensor. Has the same type and format as input "var".
+*var: A Tensor. Has the same type and format as input "var" . \n
 
+*@par Third-party framework compatibility
+* Compatible with the TensorFlow operator ScatterNdUpdate.
 */
 REG_OP(ScatterNdUpdate)
     .INPUT(var, TensorType::BasicType())
@@ -303,52 +394,57 @@ REG_OP(ScatterNdUpdate)
     .OP_END_FACTORY_REG(ScatterNdUpdate)
 
 /**
-*@brief Applies sparse addition to individual values or slices in a Variable.
+*@brief Applies sparse addition to individual values or slices in a Variable . \n
 
 *@par Inputs:
 * Three inputs, including:
 *@li x: An ND Tensor. \n
 
-*Must be one of the following types: float16, float32, int32, int8, uint8
+*Must be one of the following types: float16, float32, bool, int8, uint8
 *@li indices: An ND Tensor. \n
 
 *Must be one of the following types: int32
 *@li updates: An ND Tensor. \n
 
-*Must be one of the following types: float16, float32, int32, int8, uint8
+*Must be one of the following types: float16, float32, bool, int8, uint8
 
 *@par Outputs:
-*y: A Tensor. Has the same type and format as input "x".
+*y: A Tensor. Has the same type and format as input "x" . \n
 
+*@par Third-party framework compatibility
+* Compatible with the TensorFlow operator TensorScatterUpdate.
 */
 REG_OP(TensorScatterUpdate)
-    .INPUT(x, TensorType({DT_FLOAT16, DT_FLOAT,DT_INT32,DT_INT8,DT_UINT8}))
+    .INPUT(x, TensorType::BasicType())
     .INPUT(indices, TensorType::IndexNumberType())
-    .INPUT(updates, TensorType({DT_FLOAT16, DT_FLOAT,DT_INT32,DT_INT8,DT_UINT8}))
-    .OUTPUT(y, TensorType({DT_FLOAT16, DT_FLOAT,DT_INT32,DT_INT8,DT_UINT8}))
+    .INPUT(updates, TensorType::BasicType())
+    .OUTPUT(y, TensorType::BasicType())
     .OP_END_FACTORY_REG(TensorScatterUpdate)
 
 /**
-*@brief Adds sparse "updates" to a variable reference.
+*@brief Adds sparse "updates" to a variable reference . \n
 
 *@par Inputs:
 * Three inputs, including:
-*@li var: An ND Tensor. \n
+*@li var: An ND Tensor . \n
 
 *Must be one of the following types: float16, float32, int32, int8, uint8
-*@li indices: An ND Tensor of type int32.
+*@li indices: An ND Tensor of type int32 or int64.
 
 
-*@li updates: An ND Tensor. \n
+*@li updates: An Tensor. format:NCHW, NHWC . \n
 
 *Must be one of the following types: float16, float32, int32, int8, uint8
 
 *@par Attributes:
-*use_locking: An optional bool. Defaults to "False". If "True", the operation will be protected by a lock.
+* use_locking: An optional bool. Defaults to "False". If "True", the operation
+* will be protected by a lock . \n
 
 *@par Outputs:
-*var: A Tensor. Has the same type and format as input "var".
+*var: A Tensor. Has the same type and format as input "var" . \n
 
+*@par Third-party framework compatibility
+* Compatible with the TensorFlow operator ScatterAdd.
 */
 REG_OP(ScatterAdd)
     .INPUT(var, TensorType({DT_FLOAT16, DT_FLOAT,DT_INT32,DT_INT8,DT_UINT8}))
@@ -359,27 +455,27 @@ REG_OP(ScatterAdd)
     .OP_END_FACTORY_REG(ScatterAdd)
 
 /**
-*@brief Divides a variable reference by sparse updates.
+*@brief Divides a variable reference by sparse updates . \n
 
 *@par Inputs:
 * Three inputs, including:
-*@li var: An NCHW, NHWC, or ND Tensor. \n
+*@li var: An ND Tensor.
+*Must be one of the following types: float16, float, int32, int8, uint8
 
-*Must be one of the following types: float16, float32, int32, int8, uint8
-*@li indices: An NCHW, NHWC, or ND Tensor. \n
-
+*@li indices: An ND Tensor.
 *Must be one of the following types: int32
-*@li updates: An NCHW, NHWC, or ND Tensor. \n
-
-*Must be one of the following types: float16, float32, int32, int8, uint8
+*@li updates: An ND Tensor.
+*Must be one of the following types: float16, float, int32, int8, uint8
 
 *@par Attributes:
-*@li use_locking: An optional bool. Defaults to "False". If "True", the operation will be protected by a lock.
-*@li isRef: An optional bool. Defaults to "True"
+*@li use_locking: An optional bool. Defaults to "False". If "True",
+* the operation will be protected by a lock . \n
 
 *@par Outputs:
-*var: A Tensor. Has the same type and format as input "var".
+*var: A Tensor. Has the same type and format as input "var" . \n
 
+*@par Third-party framework compatibility
+* Compatible with the TensorFlow operator ScatterDiv.
 */
 REG_OP(ScatterDiv)
     .INPUT(var, TensorType({DT_FLOAT16, DT_FLOAT,DT_INT32,DT_INT8,DT_UINT8}))
@@ -390,26 +486,25 @@ REG_OP(ScatterDiv)
     .OP_END_FACTORY_REG(ScatterDiv)
 
 /**
-*@brief Applies sparse addition to individual values or slices in a Variable.
+*@brief Applies sparse addition to individual values or slices in a Variable . \n
 
 *@par Inputs:
 * Three inputs, including:
-*@li var: An ND Tensor. \n
-
-*Must be one of the following types: float16, float32, int32, int8, uint8
-*@li indices: An ND Tensor. \n
-
+*@li var: An ND Tensor.
+*Must be one of the following types: float16, float, int32, int8, uint8
+*@li indices: An ND Tensor.
 *Must be one of the following types: int32
-*@li updates: An ND Tensor. \n
-
-*Must be one of the following types: float16, float32, int32, int8, uint8
-
+*@li updates: An ND Tensor.
+*Must be one of the following types: float16, float, int32, int8, uint8
 *@par Attributes:
-*use_locking: An optional bool. Defaults to "False". If "True", the operation will be protected by a lock.
+*use_locking: An optional bool. Defaults to "False". If "True",
+* the operation will be protected by a lock . \n
 
 *@par Outputs:
-*var: A Tensor. Has the same type and format as input "var".
+*var: A Tensor. Has the same type and format as input "var" . \n
 
+*@par Third-party framework compatibility
+* Compatible with the TensorFlow operator ScatterNdAdd.
 */
 REG_OP(ScatterNdAdd)
     .INPUT(var, TensorType({DT_FLOAT16, DT_FLOAT,DT_INT32,DT_INT8,DT_UINT8}))
@@ -420,7 +515,7 @@ REG_OP(ScatterNdAdd)
     .OP_END_FACTORY_REG(ScatterNdAdd)
 
 /**
-*@brief Applies sparse addition to individual values or slices in a Variable.
+*@brief Applies sparse addition to individual values or slices in a Variable . \n
 
 *@par Inputs:
 * Three inputs, including:
@@ -432,11 +527,13 @@ REG_OP(ScatterNdAdd)
 *Must be one of the following types: int32
 *@li updates: An ND Tensor. \n
 
-*Must be one of the following types: float16, float32, int32, int8, uint8
+* Must be one of the following types: float16, float32, int32, int8, uint8
 
 *@par Outputs:
-*y: A Tensor. Has the same type and format as input "x".
+*y: A Tensor. Has the same type and format as input "x" . \n
 
+*@par Third-party framework compatibility
+* Compatible with the TensorFlow operator TensorScatterAdd.
 */
 REG_OP(TensorScatterAdd)
     .INPUT(x, TensorType({DT_FLOAT16, DT_FLOAT,DT_INT32,DT_INT8,DT_UINT8}))
@@ -446,26 +543,26 @@ REG_OP(TensorScatterAdd)
     .OP_END_FACTORY_REG(TensorScatterAdd)
 
 /**
-*@brief Applies sparse subtraction to individual values or slices in a Variable.
+*@brief Applies sparse subtraction to individual values or slices in a Variable . \n
 
 *@par Inputs:
 * Three inputs, including:
-*@li var: An ND Tensor. \n
-
-*Must be one of the following types: float16, float32, int32, int8, uint8
-*@li indices: An ND Tensor. \n
-
-*Must be one of the following types: int32
-*@li updates: An ND Tensor. \n
-
-*Must be one of the following types: float16, float32, int32, int8, uint8
+*@li var: An ND Tensor.
+*Must be one of the following types: float16, float, int32, int8, uint8
+*@li indices: An ND Tensor.
+*Must be one of the following types: int32, int64
+*@li updates: An ND Tensor.
+*Must be one of the following types: float16, float, int32, int8, uint8
 
 *@par Attributes:
-*use_locking: An optional bool. Defaults to "False". If "True", the operation will be protected by a lock.
+*use_locking: An optional bool. Defaults to "False". If "True",
+* the operation will be protected by a lock . \n
 
 *@par Outputs:
-*var: A Tensor. Has the same type and format as input "var".
+* var: A Tensor. Has the same type and format as input "var" . \n
 
+*@par Third-party framework compatibility
+* Compatible with the TensorFlow operator ScatterNdSub.
 */
 REG_OP(ScatterNdSub)
     .INPUT(var, TensorType({DT_FLOAT16, DT_FLOAT,DT_INT32,DT_INT8,DT_UINT8}))
@@ -476,7 +573,7 @@ REG_OP(ScatterNdSub)
     .OP_END_FACTORY_REG(ScatterNdSub)
 
 /**
-*@brief Applies sparse addition to individual values or slices in a Variable.
+*@brief Applies sparse addition to individual values or slices in a Variable . \n
 
 *@par Inputs:
 * Three inputs, including:
@@ -491,8 +588,10 @@ REG_OP(ScatterNdSub)
 *Must be one of the following types: float16, float32, int32, int8, uint8
 
 *@par Outputs:
-*y: A Tensor. Has the same type and format as input "x".
+* y: A Tensor. Has the same type and format as input "x" . \n
 
+*@par Third-party framework compatibility
+* Compatible with the TensorFlow operator TensorScatterSub.
 */
 REG_OP(TensorScatterSub)
     .INPUT(x, TensorType({DT_FLOAT16, DT_FLOAT,DT_INT32,DT_INT8,DT_UINT8}))
@@ -502,26 +601,25 @@ REG_OP(TensorScatterSub)
     .OP_END_FACTORY_REG(TensorScatterSub)
 
 /**
-*@brief Subtracts sparse updates to a variable reference.
+*@brief Subtracts sparse updates to a variable reference . \n
 
 *@par Inputs:
 * Three inputs, including:
-*@li var: An ND Tensor. \n
-
-*Must be one of the following types: float16, float32, int32, int8, uint8
-*@li indices: An ND Tensor. \n
-
-*Must be one of the following types: int32
-*@li updates: An ND Tensor. \n
-
-*Must be one of the following types: float16, float32, int32, int8, uint8
-
+*@li var: An ND Tensor.
+*Must be one of the following types: float16, float, int32, int8, uint8
+*@li indices: An ND Tensor.
+*Must be one of the following types: int32, int64
+*@li updates: An ND Tensor.
+*Must be one of the following types: float16, float, int32, int8, uint8
 *@par Attributes:
-*use_locking: An optional bool. Defaults to "False". If "True", the operation will be protected by a lock.
+*use_locking: An optional bool. Defaults to "False". If "True",
+* the operation will be protected by a lock . \n
 
 *@par Outputs:
-*var: A Tensor. Has the same type and format as input "var".
+* var: A Tensor. Has the same type and format as input "var" . \n
 
+*@par Third-party framework compatibility
+* Compatible with the TensorFlow operator ScatterSub.
 */
 REG_OP(ScatterSub)
     .INPUT(var, TensorType({DT_FLOAT16, DT_FLOAT,DT_INT32,DT_INT8,DT_UINT8}))
@@ -532,16 +630,21 @@ REG_OP(ScatterSub)
     .OP_END_FACTORY_REG(ScatterSub)
 
 /**
-*@brief: Returns the batched diagonal part of a batched tensor with "assist".
+*@brief: Returns the batched diagonal part of a batched tensor with "assist" . \n
 
 *@par Inputs:
 * Two inputs, including:
 * @li x: A Tensor of type float16, float32, or int32.
-* @li assist: A Tensor of the same type as "x".
+* @li assist: A Tensor of the same type as "x" . \n
 
 *@par Outputs:
-*y: A Tensor. Has the same type as "x".
+*y: A Tensor. Has the same type as "x" . \n
 
+*@par Third-party framework compatibility
+* Compatible with the TensorFlow operator DiagPart.
+*
+* @par Restrictions:
+* Warning: THIS FUNCTION IS DEPRECATED. Please use DiagPart instead.
 */
 REG_OP(DiagPartD)
     .INPUT(x, TensorType({DT_FLOAT, DT_FLOAT16, DT_INT32}))
@@ -550,14 +653,17 @@ REG_OP(DiagPartD)
     .OP_END_FACTORY_REG(DiagPartD)
 
 /**
-*@brief: Returns the batched diagonal part of a batched tensor.
+*@brief: Returns the batched diagonal part of a batched tensor . \n
 
-*@par Inputs:\n
-*x: A Tensor. Must be one of the following types: float16, float32, int32, int64, double, complex64, complex128.
+*@par Inputs:
+*x: A Tensor. Must be one of the following types:
+*    float16, float32, int32, int64, double, complex64, complex128 . \n
 
 *@par Outputs:
-*y: A Tensor. Has the same type as "x".
+*y: A Tensor. Has the same type as "x" . \n
 
+*@par Third-party framework compatibility
+* Compatible with the TensorFlow operator DiagPart.
 */
 REG_OP(DiagPart)
     .INPUT(x, TensorType({DT_FLOAT, DT_FLOAT16, DT_INT32, DT_INT64, DT_DOUBLE,
@@ -567,23 +673,27 @@ REG_OP(DiagPart)
     .OP_END_FACTORY_REG(DiagPart)
 
 /**
-*@brief Also known as a "fully-connected" layer, computes an inner product with a set of learned weights, and (optionally) adds biases.
+*@brief Also known as a "fully-connected" layer, computes an inner product with a set of learned weights, and (optionally) adds biases . \n
 
 *@par Inputs:
 * Four inputs, including:
 *@li x: A Tensor of type float16, int8.
 *@li w: A weight matrix of type float16, int8.
 *@li b: A Tensor of type float16, int32, float32.
-*@li offset_w: A Tensor of type int8.
+*@li offset_w: A Tensor of type int8 . \n
 
 *@par Attributes:
 *@li num_output: Reserved.
-*@li transpose: A bool, specifying whether to transpose, either "true" or "false". Defaults to "false".
-*@li axis: Reserved.
-*@li offset_x: Reserved.
+*@li transpose: A bool, specifying weight whether to transpose, either "true" or "false". Defaults to "false".
+*@li axis: Optional. A int, 1 or 2, specifying which dimension the input "K" starts from. Defaults to 1.
+* The product of the subsequent dimensions starting form first dimension or the second dimension is "K".
+*@li offset_x: Reserved . \n
 
 *@par Outputs:
-*y: The result tensor of type float16, int8, float32.
+*y: The result tensor of type float16, int32, float32 . \n
+
+*@par Third-party framework compatibility
+* Compatible with the Caffe operator InnerProduct . \n
 
 *@par Quantization supported or not
 * Yes
@@ -601,27 +711,73 @@ REG_OP(FullyConnection)
     .OP_END_FACTORY_REG(FullyConnection)
 
 /**
-*@brief Computes the confusion matrix from predictions and labels.
+*@brief Also known as a "fully-connected-compress" layer, computes an inner product with a set of learned weights, and (optionally) adds biases . \n
+
+*@par Inputs:
+* Four inputs, including:
+*@li x: A Tensor of type uint8, int8.
+*@li w: A weight matrix of type int8, int8.
+*@li w: A compress index matrix of type int8, int8.
+*@li b: A Tensor of type float16, int32, int32.
+*@li offset_w: A Tensor of type int8.i
+
+*@par Attributes:
+*@li num_output: Reserved.
+*@li transpose: A bool, specifying whether to transpose, either "true" or "false". Defaults to "false".
+*@li axis: Reserved.
+*@li offset_x: Reserved . \n
+
+*@par Outputs:
+*y: The result tensor of type int32 . \n
+
+*@par Third-party framework compatibility
+* Compatible with the Caffe operator InnerProduct . \n
+
+*@par Quantization supported or not
+* Yes
+*/
+REG_OP(FullyConnectionCompress)
+    .INPUT(x, TensorType({DT_UINT8, DT_INT8}))
+    .INPUT(w, TensorType({DT_INT8}))
+    .INPUT(comress_index, TensorType({DT_INT8}))
+    .OPTIONAL_INPUT(b, TensorType({DT_INT32}))
+    .OPTIONAL_INPUT(offset_w, TensorType({DT_INT8}))
+    .OUTPUT(y, TensorType({DT_INT32}))
+    .REQUIRED_ATTR(num_output, Int)
+    .ATTR(transpose, Bool, false)
+    .ATTR(axis, Int, 1)
+    .ATTR(offset_x, Int, 0)
+    .OP_END_FACTORY_REG(FullyConnectionCompress)
+
+/**
+*@brief Computes the confusion matrix from predictions and labels . \n
 
 *@par Inputs:
 * Three inputs, including:
-*@li labels: A Tensor. Must be one of the following types: float16, float32, int32, int8.
-*@li predictions: A Tensor. Must be one of the following types: float16, float32, int32, int8.
-*@li weights: A Tensor. Must be one of the following types: float16, float32, int32, int8.
+*@li labels: A Tensor. Must be one of the following types: float16, float32,
+* int32, int8, uint8.
+*@li predictions: A Tensor. Must be one of the following types: float16,
+* float32, int32, int8, uint8.
+*@li weights: A Tensor. Must be one of the following types: float16, float32,
+* int32, int8, uint8 . \n
 
 *@par Attributes:
-*@li num_classes: An integer for the shape of the output matrix. No default value.
-*@li dtype: Data type of the confusion matrix. No default value.
+*@li num_classes: An integer for the shape of the output matrix.
+* No default value.
+*@li dtype: Data type of the confusion matrix. No default value . \n
 
 *@par Outputs:
 *y: A Tensor. Has the same type and format as input "labels"
 
 *@attention Constraints:
 *@li "weights", "labels", and "predictions" are 1D tensors.
-*@li The output is with shape (num_classes, num_classes), where, 1 <= num_classes <= 4096.
+*@li The output is with shape (num_classes, num_classes),
+* where, 1 <= num_classes <= 4096 . \n
 
 *@see Region()
 
+*@par Third-party framework compatibility
+* Compatible with the TensorFlow operator ConfusionMatrix.
 */
 REG_OP(ConfusionMatrix)
     .INPUT(labels, TensorType({DT_FLOAT, DT_INT32, DT_FLOAT16, DT_INT8, DT_UINT8}))
@@ -633,26 +789,27 @@ REG_OP(ConfusionMatrix)
     .OP_END_FACTORY_REG(ConfusionMatrix)
 
 /**
-*@brief Multiplies sparse updates into a variable reference.
+*@brief Multiplies sparse updates into a variable reference . \n
 
 *@par Inputs:
 * Three inputs, including:
-*@li var: An NCHW, NHWC, or ND Tensor. \n
-
-*Must be one of the following types: float16, float32, int32, int8, uint8
-*@li indices: An NCHW, NHWC, or ND Tensor. \n
-
+*@li var: An ND Tensor.
+*Must be one of the following types: float16, float, int32, int8, uint8
+*@li indices: An ND Tensor.
 *Must be one of the following types: int32
-*@li updates: An NCHW, NHWC, or ND Tensor. \n
+*@li updates: An ND Tensor . \n
 
-*Must be one of the following types: float16, float32, int32, int8, uint8
+*Must be one of the following types: float16, float, int32, int8, uint8
 
 *@par Attributes:
-*use_locking: An optional bool. Defaults to "False". If "True", the operation will be protected by a lock.
+*use_locking: An optional bool. Defaults to "False". If "True", the operation
+* will be protected by a lock . \n
 
 *@par Outputs:
-*var: A Tensor. Has the same type and format as input "var".
+*var: A Tensor. Has the same type and format as input "var" . \n
 
+*@par Third-party framework compatibility
+* Compatible with the TensorFlow operator ScatterMul.
 */
 REG_OP(ScatterMul)
     .INPUT(var, TensorType({DT_FLOAT16,DT_FLOAT,DT_INT32,DT_INT8,DT_UINT8}))
@@ -663,26 +820,29 @@ REG_OP(ScatterMul)
     .OP_END_FACTORY_REG(ScatterMul)
 
 /**
-*@brief Reduces sparse updates into a variable reference using the "min" operation.
+*@brief Reduces sparse updates into a variable reference using
+ * the "min" operation . \n
 
 *@par Inputs:
 * Three inputs, including:
-*@li var: An NCHW, NHWC, or ND Tensor. \n
+*@li var: An ND Tensor.
+*Must be one of the following types: float16, float, int32
 
-*Must be one of the following types: float16, float32, int32
-*@li indices: An NCHW, NHWC, or ND Tensor. \n
-
+*@li indices: An ND Tensor.
 *Must be one of the following types: int32
-*@li updates: An NCHW, NHWC, or ND Tensor. \n
 
-*Must be one of the following types: float16, float32, int32
+*@li updates: An ND Tensor.
+*Must be one of the following types: float16, float, int32
 
 *@par Attributes:
-*use_locking: An optional bool. Defaults to "False". If "True", the operation will be protected by a lock.
+*use_locking: An optional bool. Defaults to "False". If "True", the operation
+* will be protected by a lock . \n
 
 *@par Outputs:
-*var: A Tensor. Has the same type and format as input "var".
+*var: A Tensor. Has the same type and format as input "var" . \n
 
+*@par Third-party framework compatibility
+* Compatible with the TensorFlow operator ScatterMin.
 */
 REG_OP(ScatterMin)
     .INPUT(var, TensorType({DT_FLOAT16,DT_FLOAT,DT_INT32}))
@@ -693,26 +853,29 @@ REG_OP(ScatterMin)
     .OP_END_FACTORY_REG(ScatterMin)
 
 /**
-*@brief Reduces sparse updates into a variable reference using the "max" operation.
+*@brief Reduces sparse updates into a variable reference using the "max" operation . \n
 
 *@par Inputs:
 * Three inputs, including:
-*@li var: An NCHW, NHWC, or ND Tensor. \n
+*@li var: An ND Tensor . \n
 
-*Must be one of the following types: float16, float32, int32
-*@li indices: An NCHW, NHWC, or ND Tensor. \n
+*Must be one of the following types: float16, float, int32
+*@li indices: An NCHW, NHWC, or ND Tensor . \n
 
 *Must be one of the following types: int32
-*@li updates: An NCHW, NHWC, or ND Tensor. \n
+*@li updates: An NCHW, NHWC, or ND Tensor . \n
 
-*Must be one of the following types: float16, float32, int32
+*Must be one of the following types: float16, float, int32
 
 *@par Attributes:
-*use_locking: An optional bool. Defaults to "False". If "True", the operation will be protected by a lock.
+*use_locking: An optional bool. Defaults to "False".
+* If "True", the operation will be protected by a lock . \n
 
 *@par Outputs:
-*var: A Tensor. Has the same type and format as input "var".
+*var: A Tensor. Has the same type and format as input "var" . \n
 
+*@par Third-party framework compatibility
+* Compatible with the TensorFlow operator ScatterMax.
 */
 REG_OP(ScatterMax)
     .INPUT(var, TensorType({DT_FLOAT16,DT_FLOAT,DT_INT32}))
@@ -723,26 +886,29 @@ REG_OP(ScatterMax)
     .OP_END_FACTORY_REG(ScatterMax)
 
 /**
-*@brief Applies sparse updates to a variable reference.
+*@brief Applies sparse updates to a variable reference . \n
 
 *@par Inputs:
 * Three inputs, including:
-*@li var: An NCHW, NHWC, or ND Tensor. \n
+*@li var: An ND Tensor . \n
 
-*Must be one of the following types: float16, float32, int32, int8, uint8
-*@li indices: An NCHW, NHWC, or ND Tensor. \n
+*Must be one of the following types: float16, float, int32, int8, uint8
+*@li indices: An ND Tensor . \n
 
 *Must be one of the following types: int32
-*@li updates: An NCHW, NHWC, or ND Tensor. \n
+*@li updates: An ND Tensor . \n
 
-*Must be one of the following types: float16, float32, int32, int8, uint8
+*Must be one of the following types: float16, float, int32, int8, uint8
 
 *@par Attributes:
-*use_locking: An optional bool. Defaults to "False". If "True", the operation will be protected by a lock.
+*use_locking: An optional bool. Defaults to "False". If "True",
+* the operation will be protected by a lock . \n
 
 *@par Outputs:
-*var: A Tensor. Has the same type and format as input "var".
+*var: A Tensor. Has the same type and format as input "var" . \n
 
+*@par Third-party framework compatibility
+* Compatible with the TensorFlow operator ScatterUpdate.
 */
 REG_OP(ScatterUpdate)
     .INPUT(var, TensorType({DT_FLOAT16,DT_FLOAT,DT_INT8,DT_UINT8}))
@@ -753,7 +919,7 @@ REG_OP(ScatterUpdate)
     .OP_END_FACTORY_REG(ScatterUpdate)
 
 /**
-*@brief Returns a tensor with the `k[0]`-th to `k[1]`-th diagonals of the batched `input`.
+*@brief Returns a tensor with the `k[0]`-th to `k[1]`-th diagonals of the batched `input` . \n
 
 *@par Inputs:
 * Three inputs, including:
@@ -768,8 +934,10 @@ REG_OP(ScatterUpdate)
 *@li padding_value: The value to fill the area outside the specified diagonal band with. \n
 
 *@par Outputs:
-*diagonal: The extracted diagonal(s).
+*diagonal: The extracted diagonal(s) . \n
 
+*@par Third-party framework compatibility
+* Compatible with the TensorFlow operator ScatterUpdate.
 */
 REG_OP(MatrixDiagPartV2)
     .INPUT(input, TensorType::BasicType())
@@ -779,7 +947,7 @@ REG_OP(MatrixDiagPartV2)
     .OP_END_FACTORY_REG(MatrixDiagPartV2)
 
 /**
-*@brief Returns a batched matrix tensor with new batched diagonal values.
+*@brief Returns a batched matrix tensor with new batched diagonal values . \n
 
 *@par Inputs:
 * Three inputs, including:
@@ -794,8 +962,10 @@ REG_OP(MatrixDiagPartV2)
 *of a matrix band. `k[0]` must not be larger than `k[1]`. \n
 
 *@par Outputs:
-*output: Rank `r+1`, with `output.shape = input.shape`.
+*output: Rank `r+1`, with `output.shape = input.shape` . \n
 
+*@par Third-party framework compatibility
+* Compatible with the TensorFlow operator ScatterUpdate.
 */
 REG_OP(MatrixSetDiagV2)
     .INPUT(input, TensorType::BasicType())
@@ -805,7 +975,7 @@ REG_OP(MatrixSetDiagV2)
     .OP_END_FACTORY_REG(MatrixSetDiagV2)
 
 /**
-*@brief Returns a batched diagonal tensor with given batched diagonal values.
+*@brief Returns a batched diagonal tensor with given batched diagonal values . \n
 
 *@par Inputs:
 * Five inputs, including:
@@ -830,8 +1000,10 @@ REG_OP(MatrixSetDiagV2)
 *@li padding_value: The number to fill the area outside the specified diagonal band with. \n
 
 *@par Outputs:
-*output: Has rank `r+1` when `k` is an integer or `k[0] == k[1]`, rank `r` otherwise.
+*output: Has rank `r+1` when `k` is an integer or `k[0] == k[1]`, rank `r` otherwise . \n
 
+*@par Third-party framework compatibility
+* Compatible with the TensorFlow operator ScatterUpdate.
 */
 REG_OP(MatrixDiagV2)
     .INPUT(diagonal, TensorType::BasicType())
@@ -842,6 +1014,14 @@ REG_OP(MatrixDiagV2)
     .OUTPUT(output, TensorType::BasicType())
     .OP_END_FACTORY_REG(MatrixDiagV2)
 
+REG_OP(IndexAdd)
+    .INPUT(var, TensorType({DT_INT32, DT_INT8, DT_UINT8, DT_FLOAT32, DT_FLOAT16}))
+    .INPUT(indices, TensorType({DT_INT32}))
+    .INPUT(updates, TensorType({DT_INT32, DT_INT8, DT_UINT8, DT_FLOAT32, DT_FLOAT16}))
+    .OUTPUT(var_out, TensorType({DT_INT32, DT_INT8, DT_UINT8, DT_FLOAT32, DT_FLOAT16}))
+    .ATTR(axis, Int, 0)
+    .OP_END_FACTORY_REG(IndexAdd)
+
 }  // namespace ge
 
-#endif  // GE_OP_MATRIX_CALCULATION_OPS_H
+#endif  // OPS_BUILT_IN_OP_PROTO_INC_MATRIX_CALCULATION_OPS_H_

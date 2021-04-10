@@ -19,17 +19,15 @@ import os
 import subprocess
 import struct
 import re
-from tabulate import tabulate
+from akg import tvm
 
 OUTPUT_FORMAT_DATA = "./output_format_data_hwts.txt"
-BLOCK_LEN = 32
 max_time_consume = 9999999999
 def get_log_slice_id(file_name):
     pattern = re.compile(r'(?<=slice_)\d+')
     slice_ = pattern.findall(file_name)
     index = re.findall(r'\d+', slice_[0])
     return int(index[0])
-
 
 def get_file_join_name(input_path=None, file_name=None):
     """Function for getting join name from input path."""
@@ -57,226 +55,172 @@ def get_file_join_name(input_path=None, file_name=None):
     return file_join_name
 
 
-def get_first_runtime_task_trace(input_file=None):
-    """Function for getting first task trace from runtime."""
-    result_data = []
-    format_ = "BBHIQHHHHII"
-    format_last = "B"
-    with open(input_file, 'rb') as bin_data:
-        while True:
-            line_ = bin_data.read(96)
-            if line_:
-                if not line_.strip():
-                    continue
-            else:
-                break
-            if len(line_) == 96:
-                unpack_tuple = struct.unpack(format_, line_[0:32])
-                char_string = line_[32:95].decode().strip(b'\x00'.decode())
-                result_last = [hex(i) for i in struct.unpack(format_last, line_[95:96])]
-                byte01 = bin(int(result_last[0].replace('0x', ''), 16)).replace('0b', '').zfill(8)
-                persistant_1bit = byte01[-1]
-                reserved_7bit = byte01[0:7]
-                kernelname = char_string
-                result_data.append((unpack_tuple[0], unpack_tuple[1], unpack_tuple[2], unpack_tuple[3],
-                                    unpack_tuple[4], unpack_tuple[5], unpack_tuple[6], unpack_tuple[7],
-                                    unpack_tuple[8], unpack_tuple[9], unpack_tuple[10],
-                                    kernelname, persistant_1bit, reserved_7bit))
-    return result_data
-
-
-def get_44_tsch_fw_timeline(input_file=None):
-    """Function for getting tsch_fw_timeline from input file."""
-    result_data = []
-    format_ = "BBHIHHHHQII"
-    with open(input_file, 'rb') as bin_data:
-        while True:
-            line_ = bin_data.read(32)
-            if line_:
-                if not line_.strip():
-                    continue
-            else:
-                break
-            if len(line_) == 32:
-                result_ = struct.unpack(format_, line_)
-                result_data.append((result_[0], result_[1], result_[2], result_[3], result_[4], result_[5], result_[6],
-                                    result_[7], result_[8], result_[9], result_[10]))
-    return result_data
-
-
-def get_43_ai_core_data(input_file=None):
-    """Function for getting datas from aicore: ov/cnt/total_cyc/ov_cyc/pmu_cnt/stream_id."""
-    result_data = []
-    with open(input_file, 'rb') as ai_core_file:
-        while True:
-            line_ = ai_core_file.read(128)
-            if line_:
-                if not line_.strip():
-                    continue
-            else:
-                break
-            format_ = "BBHHHIIqqqqqqqqqqIIIIIIII"
-            result_ = [hex(i) for i in struct.unpack(format_, line_)]
-            byte01 = bin(int(result_[0].replace('0x', ''), 16)).replace('0b', '').zfill(8)
-            ov = byte01[-4]
-            cnt = byte01[0:4]
-            total_cyc = int(result_[7].replace('0x', ''), 16)
-            ov_cyc = int(result_[8].replace('0x', ''), 16)
-            pmu_cnt = tuple(int(i.replace('0x', ''), 16) for i in result_[9:17])
-            stream_id = int(result_[17].replace('0x', ''), 16)
-            result_data.append((ov, cnt, total_cyc, ov_cyc, stream_id, pmu_cnt))
-    return result_data
-
-
-def get_last_tsch_training_trace(input_file=None):
-    """Function for getting last tsch training trace from input file."""
-    result_data = []
-    format_ = "LLHHLL"
-    with open(input_file, 'rb') as bin_data:
-        while True:
-            line_ = bin_data.read(20)
-            if line_:
-                if not line_.strip():
-                    continue
-            else:
-                break
-            if len(line_) == 20:
-                result_ = struct.unpack(format_, line_)
-                result_data.append((result_[0], result_[1], result_[3], result_[2], result_[4], result_[5]))
-    return result_data
-
-
-def get_45_hwts_log(input_file=None):
-    """Function for getting hwts log from input file."""
-    format_ = ['QIIIIIIIIIIII', 'QIIQIIIIIIII', 'IIIIQIIIIIIII']
-    log_type = ['Start of task', 'End of task', 'Start of block', 'End of block', 'Block PMU']
-    type1, type2, type3 = [], [], []
-    with open(input_file, 'rb') as hwts_data:
-        while True:
-            line_ = hwts_data.read(64)
-            if line_:
-                if not line_.strip():
-                    continue
-            else:
-                break
-            byte_first_four = struct.unpack('BBHHH', line_[0:8])
-            byte_first = bin(byte_first_four[0]).replace('0b', '').zfill(8)
-            type_ = byte_first[-3:]
-            is_warn_res0_ov = byte_first[4]
-            cnt = int(byte_first[0:4], 2)
-            core_id = byte_first_four[1]
-            blk_id, task_id = byte_first_four[3], byte_first_four[4]
-            if type_ in ['000', '001', '010']:  # log type 0,1,2
-                result_ = struct.unpack(format_[0], line_[8:])
-                syscnt = result_[0]
-                stream_id = result_[1]
-                type1.append((log_type[int(type_, 2)], cnt, core_id, blk_id, task_id, syscnt, stream_id))
-
-            elif type_ == '011':  # log type 3
-                result_ = struct.unpack(format_[1], line_[8:])
-                syscnt = result_[0]
-                stream_id = result_[1]
-                if is_warn_res0_ov == '1':
-                    warn_status = result_[3]
-                else:
-                    warn_status = None
-                type2.append(
-                    (log_type[int(type_, 2)], cnt, is_warn_res0_ov, core_id, blk_id, task_id, syscnt, stream_id,
-                     warn_status))
-                type1.append((log_type[int(type_, 2)], cnt, core_id, blk_id, task_id, syscnt, stream_id))
-            elif type_ == '100':  # log type 4
-                result_ = struct.unpack(format_[2], line_[8:])
-                stream_id = result_[2]
-                if is_warn_res0_ov == '0':
-                    total_cyc = result_[4]
-                    ov_cyc = None
-                else:
-                    total_cyc = None
-                    ov_cyc = result_[4]
-                pmu_events = result_[-8:]
-                type3.append((log_type[int(type_, 2)], cnt, is_warn_res0_ov, core_id, blk_id, task_id, stream_id,
-                              total_cyc, ov_cyc, pmu_events))
-                type1.append((log_type[int(type_, 2)], cnt, core_id, blk_id, task_id, total_cyc, stream_id))
-
-    return type1, type2, type3
-
-
 def fwrite_format(output_data_path=OUTPUT_FORMAT_DATA, data_source=None, is_start=False):
     if is_start and os.path.exists(OUTPUT_FORMAT_DATA):
         os.remove(OUTPUT_FORMAT_DATA)
     with open(output_data_path, 'a+') as f:
-        f.write(data_source)
-        f.write("\n")
+        if isinstance(data_source, (list, tuple)):
+            for raw_data in data_source:
+                if isinstance(raw_data, (list, tuple)):
+                    raw_data = map(str, raw_data)
+                    raw_data = " ".join(raw_data)
+                f.write(raw_data)
+                f.write("\n")
+        else:
+            f.write(data_source)
+            f.write("\n")
 
+def validate_and_normalize_path(
+        path,
+        check_absolute_path=False,
+        allow_parent_dir=True,
+):
+    """
+    Validates path and returns its normalized form.
 
-def parsing(source_path):
-    """Function for parsing aicore data/tsch fw timeline data/HWTS data/last tsch training trace data."""
-    # subprocess.run("cp -r %s ./jobs/" % source_path, shell=True)
-    job_name = source_path.split('/')[-1]
-    job_path = "/var/log/npu/profiling/" + job_name
-    fwrite_format(data_source='====================starting  parse task ==================', is_start=True)
-    result = get_file_join_name(input_path=job_path, file_name='runtime.host.runtime')
-    if result:
-        runtime_task_trace_data = get_first_runtime_task_trace(input_file=result)
-        fwrite_format(data_source='====================first runtime task trace data==================')
-        fwrite_format(data_source=tabulate(runtime_task_trace_data,
-                                           ['mode', 'rpttype', 'bufsize', 'reserved', 'timestamp', 'eventname',
-                                            'tasktype', 'streamid',
-                                            'task_id', 'thread', 'device_id', 'kernelname', 'persistant_1bit',
-                                            'reserved_7bit'],
-                                           tablefmt='simple'))
-    result = get_file_join_name(input_path=job_path, file_name='aicore.data.43.dev.profiler_default_tag')
-    if result:
-        ai_core_data = get_43_ai_core_data(input_file=result)
-        fwrite_format(data_source='============================43 AI core data =========================')
-        fwrite_format(data_source=tabulate(ai_core_data,
-                                           ['Overflow', 'cnt', 'Total cycles', 'overflowed cycles', 'Stream ID',
-                                            'PMU events'],
-                                           tablefmt='simple'))
-    result = get_file_join_name(input_path=job_path, file_name='ts_track.data.44.dev.profiler_default_tag')
-    if result:
-        tsch_fw_timeline_data = get_44_tsch_fw_timeline(input_file=result)
-        fwrite_format(data_source='============================44 tsch fw timeline  data =========================')
-        fwrite_format(data_source=tabulate(tsch_fw_timeline_data,
-                                           ['mode', 'rptType', 'bufSize', 'reserved', 'task_type', 'task_state',
-                                            'stream_id',
-                                            'task_id', 'timestamp', 'thread', 'device_id'], tablefmt='simple'))
-    result = get_file_join_name(input_path=job_path, file_name='hwts.log.data.45.dev.profiler_default_tag')
-    start_time = 0
-    end_time = 0
-    if result:
-        data_1, data_2, data_3 = get_45_hwts_log(input_file=result)
-        fwrite_format(data_source='============================45 HWTS data ============================')
-        for i in data_1:
-            if i[0] == 'Start of task' and i[4] == 60000 and start_time == 0:
-                start_time = i[5]
-            if i[0] == 'End of task' and i[4] == 60000 and end_time == 0:
-                end_time = i[5]
+    If path has a valid scheme, treat path as url, otherwise consider path a
+    unix local path.
 
-        fwrite_format(data_source=tabulate(data_1,
-                                           ['Type', 'cnt', 'Core ID', 'Block ID', 'Task ID', 'Cycle counter',
-                                            'Stream ID'],
-                                           tablefmt='simple'))
-        fwrite_format(data_source=tabulate(data_2,
-                                           ['Type', 'cnt', 'WARN', 'Core ID', 'Block ID', 'Task ID', 'Cycle counter',
-                                            'Stream ID', 'WARN Status'],
-                                           tablefmt='simple'))
-        fwrite_format(data_source=tabulate(data_3,
-                                           ['Type', 'cnt', 'Overflow', 'Core ID', 'Block ID', 'Task ID', 'Stream ID',
-                                            'Total cycles',
-                                            'Overflowed cycles',
-                                            'PMU events'], tablefmt='simple'))
+    Note:
+        File scheme (rfc8089) is currently not supported.
 
-    result = get_file_join_name(input_path=job_path, file_name='training_trace.dev.profiler_default_tag')
-    if result:
-        tsch_training_trace_data = get_last_tsch_training_trace(input_file=result)
-        fwrite_format(data_source='============================last tsch training_trace data=========================')
-        fwrite_format(data_source=tabulate(tsch_training_trace_data,
-                                           ['id_lo', 'id_hi', 'stream_id', 'task_id', 'syscnt_lo', 'syscnt_hi'],
-                                           tablefmt='simple'))
+    Args:
+        path (str): Path to be normalized.
+        check_absolute_path (bool): Whether check path scheme is supported.
+        allow_parent_dir (bool): Whether allow parent dir in path.
 
+    Returns:
+        str, normalized path.
+    """
+    if not path:
+        raise RuntimeError("The path is invalid!")
+
+    path_str = str(path)
+    if not allow_parent_dir:
+        path_components = path_str.split("/")
+        if ".." in path_components:
+            raise RuntimeError("The parent path is not allowed!")
+
+    # path does not have valid schema, treat it as unix local path.
+    if check_absolute_path:
+        if not path_str.startswith("/"):
+            raise RuntimeError("The path is invalid!")
     try:
-        time_consume = abs(int(start_time) - int(end_time))
-        return time_consume if time_consume != 0 else max_time_consume
-    except SyntaxError:
-        return max_time_consume
+        # most unix systems allow
+        normalized_path = os.path.realpath(path)
+    except ValueError:
+        raise RuntimeError("The path is invalid!")
+
+    return normalized_path
+
+class HWTSLogParser:
+    """
+    The Parser for hwts log files.
+
+    Args:
+         input_path (str): The profiling job path. Such as: '/var/log/npu/profiling/JOBAIFGJEJFEDCBAEADIFJAAAAAAAAAA".
+         output_filename (str): The output data path and name. Such as: './output_format_data_hwts_0.txt'.
+    """
+
+    _source_file_target_old = 'hwts.log.data.45.dev.profiler_default_tag'
+    _source_file_target = 'hwts.data'
+    _dst_file_title = 'title:45 HWTS data'
+    _dst_file_column_title = 'Type           cnt  Core_ID  Block_ID  Task_ID  Cycle_counter   Stream_ID'
+
+    def __init__(self, input_path, output_filename=None, is_print=False):
+        self._input_path = input_path
+        self._output_filename = output_filename
+        self._source_flie_name = self._get_source_file()
+        self._is_print = is_print
+
+    def _get_source_file(self):
+        """Get hwts log file name, which was created by ada service."""
+
+        file_name = get_file_join_name(self._input_path, self._source_file_target)
+        if not file_name:
+            file_name = get_file_join_name(self._input_path, self._source_file_target_old)
+            if not file_name:
+                data_path = os.path.join(self._input_path, "data")
+                file_name = get_file_join_name(data_path, self._source_file_target)
+                if not file_name:
+                    file_name = get_file_join_name(data_path, self._source_file_target_old)
+                    if not file_name:
+                        msg = "Fail to find hwts log file, under profiling directory"
+                        raise RuntimeError(msg)
+
+        return file_name
+
+    def execute(self):
+        """
+        Execute the parser, get result data, and write it to the output file.
+
+        Returns:
+            bool, whether succeed to analyse hwts log.
+        """
+
+        content_format = ['QIIIIIIIIIIII', 'QIIQIIIIIIII', 'IIIIQIIIIIIII']
+        log_type = ['Start of task', 'End of task', 'Start of block', 'End of block', 'Block PMU']
+
+        result_data = ""
+
+        self._source_flie_name = validate_and_normalize_path(self._source_flie_name)
+        last_syscnt = 0
+        cycles = 0
+
+        kernel_label = tvm.get_global_func("ascend_get_kernel_label")()
+        with open(self._source_flie_name, 'rb') as hwts_data:
+            while True:
+                # read 64 bit data
+                line = hwts_data.read(64)
+                if line:
+                    if not line.strip():
+                        continue
+                else:
+                    break
+                byte_first_four = struct.unpack('BBHHH', line[0:8])
+                # byte_first[0:4] refers to count. byte_first[4] refers to is_warn_res0_0v.
+                # byte_first[5:8] refers to the type of ms.
+                byte_first = bin(byte_first_four[0]).replace('0b', '').zfill(8)
+                ms_type = byte_first[-3:]
+                is_warn_res0_ov = byte_first[4]
+                cnt = int(byte_first[0:4], 2)
+                core_id = byte_first_four[1]
+                blk_id, task_id = byte_first_four[3], byte_first_four[4]
+                if ms_type in ['000', '001', '010']:  # log type 0,1,2
+                    result = struct.unpack(content_format[0], line[8:])
+                    syscnt = result[0]
+                    stream_id = result[1]
+                elif ms_type == '011':  # log type 3
+                    result = struct.unpack(content_format[1], line[8:])
+                    syscnt = result[0]
+                    stream_id = result[1]
+                elif ms_type == '100':  # log type 4
+                    result = struct.unpack(content_format[2], line[8:])
+                    stream_id = result[2]
+                    if is_warn_res0_ov == '0':
+                        syscnt = result[4]
+                    else:
+                        syscnt = None
+                else:
+                    logger.info("Profiling: invalid hwts log record type %s", ms_type)
+                    continue
+
+                if int(task_id) < 25000:
+                    task_id = str(task_id)
+
+                if kernel_label == (str(stream_id) + '_' +str(task_id)):
+                    if log_type[int(ms_type, 2)] == "Start of task":
+                        last_syscnt = syscnt
+                    elif log_type[int(ms_type, 2)] == "End of task":
+                        cycles += syscnt - last_syscnt
+
+                if self._is_print:
+                    result_data += ("%-14s %-4s %-8s %-9s %-8s %-15s %s\n" %(log_type[int(ms_type, 2)], cnt, core_id,
+                                                                         blk_id, task_id, syscnt, stream_id))
+
+        if self._is_print:
+            fwrite_format(self._output_filename, data_source=self._dst_file_title, is_start=True)
+            fwrite_format(self._output_filename, data_source=self._dst_file_column_title)
+            fwrite_format(self._output_filename, data_source=result_data)
+
+        return cycles if cycles != 0 else max_time_consume

@@ -18,8 +18,9 @@
 #define __CCE_RUNTIME_BASE_H__
 
 #include <stdint.h>
+#include "toolchain/prof_callback.h"
 
-#ifdef __cplusplus
+#if defined(__cplusplus) && !defined(COMPILE_OMG_PACKAGE)
 extern "C" {
 #endif
 
@@ -32,44 +33,8 @@ extern "C" {
 #endif
 #endif
 
-/**
- * @ingroup dvrt_base
- * @brief runtime error numbers.
- */
-typedef enum tagRtError {
-    RT_ERROR_NONE = 0x0,                      // success
-    RT_ERROR_INVALID_VALUE = 0x1,             // invalid value
-    RT_ERROR_MEMORY_ALLOCATION = 0x2,         // memory allocation fail
-    RT_ERROR_INVALID_RESOURCE_HANDLE = 0x3,   // invalid handle
-    RT_ERROR_INVALID_DEVICE_POINTER = 0x4,    // invalid device point
-    RT_ERROR_INVALID_MEMCPY_DIRECTION = 0x5,  // invalid memory copy dirction
-    RT_ERROR_INVALID_DEVICE = 0x6,            // invalid device
-    RT_ERROR_NO_DEVICE = 0x7,                 // no valid device
-    RT_ERROR_CMD_OCCUPY_FAILURE = 0x8,        // command occpuy failure
-    RT_ERROR_SET_SIGNAL_FAILURE = 0x9,        // set signal failure
-    RT_ERROR_UNSET_SIGNAL_FAILURE = 0xA,      // unset signal failure
-    RT_ERROR_OPEN_FILE_FAILURE = 0xB,         // unset signal failure
-    RT_ERROR_WRITE_FILE_FAILURE = 0xC,
-    RT_ERROR_MEMORY_ADDRESS_UNALIGNED = 0xD,
-    RT_ERROR_DRV_ERR = 0xE,
-    RT_ERROR_LOST_HEARTBEAT = 0xF,
-    RT_ERROR_REPORT_TIMEOUT = 0x10,
-    RT_ERROR_NOT_READY = 0x11,
-    RT_ERROR_DATA_OPERATION_FAIL = 0x12,
-    RT_ERROR_INVALID_L2_INSTR_SIZE = 0x13,
-    RT_ERROR_DEVICE_PROC_HANG_OUT = 0x14,
-    RT_ERROR_DEVICE_POWER_UP_FAIL = 0x15,
-    RT_ERROR_DEVICE_POWER_DOWN_FAIL = 0x16,
-    RT_ERROR_FEATURE_NOT_SUPPROT = 0x17,
-    RT_ERROR_KERNEL_DUPLICATE = 0x18,         // register same kernel repeatly
-    RT_ERROR_MODEL_STREAM_EXE_FAILED = 0x91,  // the model stream failed
-    RT_ERROR_MODEL_LOAD_FAILED = 0x94,        // the model stream failed
-    RT_ERROR_END_OF_SEQUENCE = 0x95,          // end of sequence
-    RT_ERROR_NO_STREAM_CB_REG = 0x96,         // no callback register info for stream
-    RT_ERROR_DATA_DUMP_LOAD_FAILED = 0x97,    // data dump load info fail
-    RT_ERROR_CALLBACK_THREAD_UNSUBSTRIBE = 0x98,    // callback thread unsubstribe
-    RT_ERROR_RESERVED
-} rtError_t;
+typedef int32_t rtError_t;
+static const int32_t RT_ERROR_NONE = 0; // success
 
 /**
  * @ingroup dvrt_base
@@ -80,7 +45,8 @@ typedef enum tagRtExceptionType {
   RT_EXCEPTION_TS_DOWN = 1,
   RT_EXCEPTION_TASK_TIMEOUT = 2,
   RT_EXCEPTION_TASK_FAILURE = 3,
-  RT_EXCEPTION_DEV_RUNNING_DOWN = 4
+  RT_EXCEPTION_DEV_RUNNING_DOWN = 4,
+  RT_EXCEPTION_STREAM_ID_FREE_FAILED = 5
 } rtExceptionType;
 
 /**
@@ -114,7 +80,19 @@ typedef enum tagRtLimitType {
   RT_LIMIT_TYPE_LOW_POWER_TIMEOUT = 0,  // timeout for power down , ms
 } rtLimitType_t;
 
+typedef struct rtExceptionInfo {
+    uint32_t taskid;
+    uint32_t streamid;
+    uint32_t tid;
+    uint32_t deviceid;
+    uint32_t retcode;
+} rtExceptionInfo;
+
 typedef void (*rtErrorCallback)(rtExceptionType);
+
+typedef void (*rtTaskFailCallback)(rtExceptionInfo *exceptionInfo);
+
+typedef void (*rtDeviceStateCallback)(uint32_t devId, bool isOpen);
 
 /**
  * @ingroup dvrt_base
@@ -144,25 +122,37 @@ RTS_API rtError_t rtSetProfDirEx(const char *profDir, const char *address, const
  * @ingroup profiling_base
  * @brief init profiler object.
  */
-RTS_API rtError_t rtProfilerInit(const char *profdir, const char *address, const char *job_ctx);
+RTS_API rtError_t rtProfilerInit(const char *profDir, const char *address, const char *jobCtx);
+
+/**
+ * @ingroup profiling_base
+ * @brief config rts profiler.
+ */
+RTS_API rtError_t rtProfilerConfig(uint16_t type);
 
 /**
  * @ingroup profiling_base
  * @brief start rts profiler.
  */
-RTS_API rtError_t rtProfilerStart(void);
+RTS_API rtError_t rtProfilerStart(uint64_t profConfig, int32_t numsDev, uint32_t* deviceList);
 
 /**
  * @ingroup profiling_base
  * @brief stop rts profiler.
  */
-RTS_API rtError_t rtProfilerStop(void);
+RTS_API rtError_t rtProfilerStop(uint64_t profConfig, int32_t numsDev, uint32_t* deviceList);
 
 /**
  * @ingroup profiling_base
  * @brief ts send keypoint profiler log.
  */
 RTS_API rtError_t rtProfilerTrace(uint64_t id, bool notify, uint32_t flags, rtStream_t stream);
+
+/**
+ * @ingroup profiling_base
+ * @brief ts set profiling reporter callback.
+ */
+RTS_API rtError_t rtSetMsprofReporterCallback(MsprofReporterCallback callback);
 
 /**
  * @ingroup dvrt_base
@@ -178,19 +168,39 @@ RTS_API rtError_t rtPeekAtLastError();
 
 /**
  * @ingroup dvrt_base
- * @brief set polling receive mode for task report
- * @param [out] NA
- * @return RT_ERROR_NONE for ok
- */
-RTS_API rtError_t rtSetPollingMode();
-
-/**
- * @ingroup dvrt_base
  * @brief register callback for error code
  * @param [out] NA
  * @return RT_ERROR_NONE for ok
  */
 RTS_API rtError_t rtSetExceptCallback(rtErrorCallback callback);
+
+/**
+ * @ingroup dvrt_base
+ * @brief register callback for task fail
+ * @param [out] NA
+ * @return RT_ERROR_NONE for ok
+ */
+RTS_API rtError_t rtSetTaskFailCallback(rtTaskFailCallback callback);
+
+/**
+ * @ingroup dvrt_base
+ * @brief register callback for deviceid
+ * @param [in] uniName unique register name, can't be null
+ * @param [in] callback Device state callback function
+ * @param [out] NA
+ * @return RT_ERROR_NONE for ok
+ */
+RTS_API rtError_t rtRegDeviceStateCallback(const char *regName, rtDeviceStateCallback callback);
+
+/**
+ * @ingroup dvrt_base
+ * @brief register callback for fail task 
+ * @param [in] uniName unique register name, can't be null
+ * @param [in] callback fail task callback function
+ * @param [out] NA
+ * @return RT_ERROR_NONE for ok
+ */
+RTS_API rtError_t rtRegTaskFailCallbackByModule(const char *moduleName, rtTaskFailCallback callback);
 
 /**
  * @ingroup dvrt_base
@@ -203,7 +213,7 @@ typedef void *rtNotify_t;
  * @brief create label instance
  * @param [out]    label   created label
  * @return RT_ERROR_NONE for ok
- * @return RT_ERROR_INVALID_RESOURCE_HANDLE for error input handle
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtLabelCreate(rtLabel_t *label);
 
@@ -213,7 +223,7 @@ RTS_API rtError_t rtLabelCreate(rtLabel_t *label);
  * @param [in] label   set label
  * @param [in] stream  set stream
  * @return RT_ERROR_NONE for ok
- * @return RT_ERROR_INVALID_RESOURCE_HANDLE for error input handle
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtLabelSet(rtLabel_t label, rtStream_t stream);
 
@@ -222,7 +232,7 @@ RTS_API rtError_t rtLabelSet(rtLabel_t label, rtStream_t stream);
  * @brief destroy label instance
  * @param [in] label   label to destroy
  * @return RT_ERROR_NONE for ok
- * @return RT_ERROR_INVALID_RESOURCE_HANDLE for error input handle
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtLabelDestroy(rtLabel_t label);
 
@@ -235,7 +245,7 @@ RTS_API rtError_t rtLabelDestroy(rtLabel_t label);
  * @param [in] true_label   goto label
  * @param [in] stream  to submit label_switch task
  * @return RT_ERROR_NONE for ok
- * @return RT_ERROR_INVALID_RESOURCE_HANDLE for error input handle
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtLabelSwitch(void *ptr, rtCondition_t condition, uint32_t value, rtLabel_t trueLabel,
                                 rtStream_t stream);
@@ -246,7 +256,7 @@ RTS_API rtError_t rtLabelSwitch(void *ptr, rtCondition_t condition, uint32_t val
  * @param [in] label   goto label
  * @param [in] stream  to submit label_goto task
  * @return RT_ERROR_NONE for ok
- * @return RT_ERROR_INVALID_RESOURCE_HANDLE for error input handle
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtLabelGoto(rtLabel_t label, rtStream_t stream);
 
@@ -256,7 +266,7 @@ RTS_API rtError_t rtLabelGoto(rtLabel_t label, rtStream_t stream);
  * @param [in] label  instance
  * @param [in] name  label name
  * @return RT_ERROR_NONE for ok
- * @return RT_ERROR_INVALID_RESOURCE_HANDLE for error input handle
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtNameLabel(rtLabel_t label, const char *name);
 
@@ -268,7 +278,7 @@ RTS_API rtError_t rtNameLabel(rtLabel_t label, const char *name);
  * @param [in] labelInfoPtr  label content info ptr
  * @param [in] stream  set stream
  * @return RT_ERROR_NONE for ok
- * @return RT_ERROR_INVALID_RESOURCE_HANDLE for error input handle
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtLabelSwitchByIndex(void *ptr, uint32_t max, void *labelInfoPtr, rtStream_t stream);
 
@@ -278,7 +288,7 @@ RTS_API rtError_t rtLabelSwitchByIndex(void *ptr, uint32_t max, void *labelInfoP
  * @param [in] label  goto label
  * @param [in] stream  stream  to submit label_goto task
  * @return RT_ERROR_NONE for ok
- * @return RT_ERROR_INVALID_RESOURCE_HANDLE for error input handle
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtLabelGotoEx(rtLabel_t label, rtStream_t stream);
 
@@ -290,7 +300,7 @@ RTS_API rtError_t rtLabelGotoEx(rtLabel_t label, rtStream_t stream);
  * @param [in] dst  device ptr
  * @param [in] dstMax  dst size
  * @return RT_ERROR_NONE for ok
- * @return RT_ERROR_INVALID_RESOURCE_HANDLE for error input handle
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtLabelListCpy(rtLabel_t *label, uint32_t labelNumber, void *dst, uint32_t dstMax);
 
@@ -300,10 +310,21 @@ RTS_API rtError_t rtLabelListCpy(rtLabel_t *label, uint32_t labelNumber, void *d
  * @param [out] label  created label handle
  * @param [in] stream  label bind stream
  * @return RT_ERROR_NONE for ok
- * @return RT_ERROR_INVALID_RESOURCE_HANDLE for error input handle
+ * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtLabelCreateEx(rtLabel_t *label, rtStream_t stream);
-#ifdef __cplusplus
+
+/**
+ * @ingroup dvrt_base
+ * @brief get current thread last stream id and task id 
+ * @param [out] stream id and task id
+ * @param [in] null
+ * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for input null ptr
+ */
+RTS_API rtError_t rtGetTaskIdAndStreamID(uint32_t *taskId, uint32_t *streamId);
+
+#if defined(__cplusplus) && !defined(COMPILE_OMG_PACKAGE)
 }
 #endif
 

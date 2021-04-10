@@ -19,7 +19,7 @@
 
 #include "base.h"
 
-#ifdef __cplusplus
+#if defined(__cplusplus) && !defined(COMPILE_OMG_PACKAGE)
 extern "C" {
 #endif
 
@@ -36,8 +36,6 @@ typedef enum dvfsProfileMode {
  * @param [in] mode   dvfsProfileMode
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
- * @return RT_ERROR_INVALID_DEVICE for invalid device handle
- * @return RT_ERROR_OPEN_FILE_FAILURE for invalid file handle
  */
 RTS_API rtError_t rtSetDvfsProfile(DvfsProfileMode mode);
 
@@ -46,7 +44,6 @@ RTS_API rtError_t rtSetDvfsProfile(DvfsProfileMode mode);
  * @brief Set the performance mode of the device
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for invalid value
- * @return RT_ERROR_INVALID_DEVICE for invalid device handle
  */
 RTS_API rtError_t rtUnsetDvfsProfile();
 
@@ -56,13 +53,10 @@ RTS_API rtError_t rtUnsetDvfsProfile();
  * @param [in|out] pmode   dvfsProfileMode type pointer
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
- * @return RT_ERROR_INVALID_DEVICE for invalid device handle
- * @return RT_ERROR_OPEN_FILE_FAILURE for invalid file handle
- * @return RT_ERROR_NO_DEVICE for reading npu_freq_dnlimit failed
  */
 RTS_API rtError_t rtGetDvfsProfile(DvfsProfileMode *pmode);
 
-#ifdef __cplusplus
+#if defined(__cplusplus) && !defined(COMPILE_OMG_PACKAGE)
 }
 #endif
 

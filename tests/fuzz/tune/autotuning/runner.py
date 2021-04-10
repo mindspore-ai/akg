@@ -115,7 +115,6 @@ class KernelRunner:
             device_id = utils.get_device_id()
         else:
             device_id = idx + utils.get_device_id()
-        os.environ['PROFILING_DIR'] = "/var/log/npu/profiling/container/" + str(device_id)
         os.environ['DEVICE_ID'] = str(device_id)
         logger.debug('run %dth kernel', idx)
         logger.debug('++++++++++++++++++++++=device_id')

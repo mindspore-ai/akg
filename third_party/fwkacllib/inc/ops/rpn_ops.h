@@ -14,23 +14,27 @@
  * limitations under the License.
  */
 
-#ifndef GE_OP_RPN_OPS_H
-#define GE_OP_RPN_OPS_H
+/*!
+ * \file rpn_ops.h
+ * \brief
+ */
+#ifndef OPS_BUILT_IN_OP_PROTO_INC_RPN_OPS_H_
+#define OPS_BUILT_IN_OP_PROTO_INC_RPN_OPS_H_
 
 #include "graph/operator_reg.h"
 namespace ge {
 /**
 *@brief Iteratively removes lower scoring boxes which have an IoU greater than
 * iou_threshold with higher scoring box according to their
-* intersection-over-union (IoU).
+* intersection-over-union (IoU) . \n
 
 *@par Input:
 * @li box_scores: 2-D tensor with shape of [N, 8], including proposal boxes and
-* corresponding confidence scores.
+* corresponding confidence scores . \n
 
 * @par Attributes:
 * @li iou_threshold: An optional float. The threshold for deciding whether boxes
-* overlap too much with respect to IOU.
+* overlap too much with respect to IOU . \n
 
 * @par Outputs:
 * @li selected_boxes: 2-D tensor with shape of [N,5], representing filtered
@@ -38,7 +42,7 @@ namespace ge {
 * @li selected_idx: 1-D tensor with shape of [N], representing the index of
 * input proposal boxes.
 * @li selected_mask: 1-D tensor with shape of [N], the symbol judging whether
-* the output proposal boxes is valid.
+* the output proposal boxes is valid . \n
 
 * @attention Constraints:
 * The 2nd-dim of input box_scores must be equal to 8.\n
@@ -54,4 +58,4 @@ REG_OP(NMSWithMask)
     .OP_END_FACTORY_REG(NMSWithMask)
 }  // namespace ge
 
-#endif // GE_OP_TRAINING_OPS_H
+#endif  // OPS_BUILT_IN_OP_PROTO_INC_RPN_OPS_H_
