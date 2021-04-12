@@ -109,7 +109,7 @@ class CUDAModuleNode : public runtime::ModuleNode {
       options[0] = CU_JIT_MAX_REGISTERS;
       void* values[1];
       long register_nums =
-          MAX_REGISTER_PER_THREAD_BLOCK / wl.block_dim(0) * wl.block_dim(1) * wl.block_dim(2);
+          MAX_REGISTER_PER_THREAD_BLOCK / (wl.block_dim(0) * wl.block_dim(1) * wl.block_dim(2));
       values[0] = (void*)register_nums;
       CUDA_DRIVER_CALL(
           cuModuleLoadDataEx(&(module_[device_id]), data_.c_str(), 1, options, values));
