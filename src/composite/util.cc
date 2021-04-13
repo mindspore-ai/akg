@@ -17,10 +17,11 @@
 #include <fstream>
 
 namespace akg {
-bool IsBlockIdx(const std::string &name) { return name.find("blockIdx") != std::string::npos; }
+bool IsBlockIdx(const std::string &name) { return name.find(BLOCKIDX) != std::string::npos; }
 bool IsBlockIdxX(const std::string &name) { return name == BLOCK_IDX_X; }
 bool IsBlockIdxY(const std::string &name) { return name == BLOCK_IDX_Y; }
 bool IsBlockIdxZ(const std::string &name) { return name == BLOCK_IDX_Z; }
+bool IsThreadIdx(const std::string &name) { return name.find(THREADIDX) != std::string::npos; }
 bool IsThreadIdxX(const std::string &name) { return name == THREAD_IDX_X; }
 bool IsThreadIdxY(const std::string &name) { return name == THREAD_IDX_Y; }
 bool IsThreadIdxZ(const std::string &name) { return name == THREAD_IDX_Z; }

@@ -52,6 +52,10 @@ class Liveness():
         self.start = -1
         self.end = -1
         self.is_reduce = False
+    def __str__(self):
+        return "live_" + str(self.start) + "_" + str(self.end) + "_" + str(self.is_reduce)
+    def __repr__(self):
+        return "live_" + str(self.start) + "_" + str(self.end) + "_" + str(self.is_reduce)
 
 
 def liveness_analysis(desc_d, req_map):
@@ -304,7 +308,6 @@ def stitch_json_split(desc_d):
                 extra_list.append(node)
                 cur_list.append(node)
         stitch_node.append(cur_list)
-    stitch_node = [[item] + extra_subgraph_output[item] for item in extra_subgraph_output]
     stitch_node_name = [node for stitchnode in stitch_node for node in stitchnode]
 
     # initialize req_map
@@ -343,6 +346,8 @@ def stitch_json_split(desc_d):
                         raise err
             with open('stitch_info/' + sg.op_name + '_stitch_' + str(i + 1) + '.json', 'w+') as f:
                 f.write(stitch_json_str)
+            with open('stitch_info/' + sg.op_name + '_stitch.json', 'w+') as f:
+                f.write(json.dumps(desc_d))
         stitch_jsons.append(stitch_json_str)
     
     clean_op_list = [fake_op for fake_op in fake_output_list if fake_op in stitch_node_name]

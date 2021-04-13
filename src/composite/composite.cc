@@ -476,6 +476,14 @@ class CompositeJsonList {
     return merged_ir;
   }
 
+  void GetRealOutputs() {
+    auto outputs_name = GetNames(outputs_);
+    for (const auto &output : outputs_name) {
+      if (outputs2args_.find(output) != outputs2args_.end()) {
+        real_outputs_[output] = outputs2args_[output];
+      }
+    }
+  }
   Array<NodeRef> json_str_node_;
   Array<NodeRef> inputs_;
   Array<NodeRef> outputs_;
@@ -487,6 +495,7 @@ class CompositeJsonList {
   std::string target_;
   Array<NodeRef> all_args_;
   std::unordered_map<std::string, NodeRef> outputs2args_;
+  std::unordered_map<std::string, NodeRef> real_outputs_;
   std::string merge_name_;
   size_t each_ir_idx_{0};
   size_t block_json_idx_{0};
@@ -509,8 +518,9 @@ class CompositeJsonListGpu : public CompositeJsonList {
     std::vector<Stmt> stitch_irs = LowerStitchIRs(block_json, stitch_attr, attrs);
     StitchBufAlloc buf_manager;
     buf_manager.BufferAllocReuse(stitch_irs, alloc_map, reuse_map, clean_op_map, outputs2args_);
+    GetRealOutputs();
     auto stitched_ir = StitchFusionGpu(stitch_irs, merge_name_, stitch_attr, buf_manager.stitch_buffer_map,
-                                       buf_manager.buf_within_op_map, buf_manager.allocate_revoke);
+                                       buf_manager.buf_within_op_map, buf_manager.allocate_revoke, real_outputs_);
     return stitched_ir;
   }
 
