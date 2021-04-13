@@ -60,6 +60,7 @@
 #include <cmath>
 #include <vector>
 #include <string>
+#include <tvm/ir_pass.h>
 #include "literal/cuda_half_t.h"
 #include "codegen_cuda.h"
 
@@ -130,6 +131,33 @@ std::string CodeGenCUDA::Finish() {
     }
   }
 
+  // TODO add condition
+  decl_stream << "// built-in for half swizzle\n"
+                 "#include <cuda_fp16.h>\n"
+                 "struct __device_builtin__ __align__(8) half4 { half x, y, z, w; };\n"
+                 "\n"
+                 "#if defined(__CUDACC_RTC__)\n"
+                 "#define __CUDA_FP16_DECL__ __host__ __device__\n"
+                 "#else\n"
+                 "#define __CUDA_FP16_DECL__ static __device__ __inline__\n"
+                 "#endif\n"
+                 "\n"
+                 "// half4 ldg function support\n"
+                 "#if (defined(_MSC_VER) && defined(_WIN64)) || defined(__LP64__) || defined(__CUDACC_RTC__)\n"
+                 "#define __LDG_PTR   \"l\"\n"
+                 "#else\n"
+                 "// not sure about this one, it was copied from the half2 ldg() function\n"
+                 "#define __LDG_PTR   \"r\"\n"
+                 "#endif /*(defined(_MSC_VER) && defined(_WIN64)) || defined(__LP64__) || defined(__CUDACC_RTC__)*/\n"
+                 "\n"
+                 "#define __HALF4_TO_UI(var) *(reinterpret_cast<unsigned long *>(&(var)))\n"
+                 "__CUDA_FP16_DECL__ half4 __ldg(const  half4 *ptr)\n"
+                 "{\n"
+                 "    half4 ret;\n"
+                 "    asm (\"ld.global.nc.b64 %0, [%1];\"  : \"=l\"(__HALF4_TO_UI(ret)) : __LDG_PTR(ptr));\n"
+                 "    return ret;\n"
+                 "}\n\n";
+
   return CodeGenC::Finish();
 }
 
@@ -137,6 +165,11 @@ void CodeGenCUDA::VisitStmt_(const ir::For* op) {
   if (op->for_type == ir::ForType::Unrolled) {
     PrintIndent();
     stream << "#pragma unroll\n";
+  }
+  else if (op->for_type == ir::ForType::Swizzled) {
+    // remove this loop
+    PrintStmt(op->body);
+    return;
   }
   CodeGenC::VisitStmt_(op);
 }
@@ -163,7 +196,11 @@ void CodeGenCUDA::PrintType(Type t, std::ostream& os) {  // NOLINT(*)
           os << "half";
         } else if (lanes <= 8) {
           CHECK_EQ(lanes % 2, 0) << "only support even lane for half type";
-          os << "float" << lanes / 2;
+          if (lanes <= 4) { // added for swizzle
+            os << "half" << lanes;
+          } else {
+            os << "float" << lanes / 2;
+          }
         } else {
           fail = true;
         }
@@ -290,6 +327,7 @@ void CodeGenCUDA::PrintVecElemLoad(
     os << vec << "." << access[i];
   }
 }
+
 
 void CodeGenCUDA::PrintVecElemStore(
     const std::string& vec, Type t, int i, const std::string& value) {
@@ -516,8 +554,116 @@ void CodeGenCUDA::VisitExpr_(const Call *op, std::ostream& os) {
       return;
     }
     CodeGenC::VisitExpr_(op, os);
+  } else if (op->is_intrinsic(Call::reinterpret_cast_op)) {
+    os << "*(reinterpret_cast<";
+    PrintType(op->args[1].type(), os);
+    if (op->args[0].as<IntImm>()->value > 0) os << op->args[0];
+    os << "*>(&";
+    auto ld = op->args[1].as<Load>();
+    if (ld) {
+      auto var_name = ld->buffer_var->name_hint;
+      if (std::find_if(vec_loads.begin(), vec_loads.end(),
+                       [var_name](const Variable *v) { return (v->name_hint == var_name); }) != vec_loads.end()) {
+        os << "sw_" + var_name;
+      } else this->PrintExpr(op->args[1], os);
+    } else this->PrintExpr(op->args[1], os);
+    os << "))";
+  } else if (op->is_intrinsic(Call::ldg)) {
+    os << "__ldg((";
+    PrintType(op->args[1].type(), os);
+    os << this->PrintExpr(op->args[0]) << " *)(&" << this->PrintExpr(op->args[1]) << "))";
   } else {
     CodeGenC::VisitExpr_(op, os);
+  }
+}
+
+void CodeGenCUDA::VisitStmt_(const LetStmt* op) {
+  if (no_init_value){
+    no_init_value = false;
+    PrintIndent();
+    if (op->var.type() == Handle() &&
+        handle_data_type_.count(op->var.get())) {
+      PrintType(handle_data_type_.at(op->var.get()), stream);
+      stream << "* "
+             << AllocVarID(op->var.get())
+             << ";\n";
+    } else {
+      PrintType(op->var.type(), this->stream);
+      this->stream << ' '
+                   << AllocVarID(op->var.get())
+                   << ";\n";
+    }
+    PrintStmt(op->body);
+  } else {
+    CodeGenC::VisitStmt_(op);
+  }
+}
+
+void CodeGenCUDA::VisitExpr_(const Variable* op, std::ostream& os) {
+  // replace cce var with const index
+  if(replace_cce && loop_var == op){
+    os << current_index;
+  }
+  else {
+    CodeGenC::VisitExpr_(op, os);
+  }
+}
+
+void CodeGenCUDA::VisitExpr_(const Load* op, std::ostream& os) {
+  int lanes = op->type.lanes();
+  if (vec_store) {
+    static const char access[] = {'x', 'y', 'z', 'w', 'a', 'b', 'c', 'd'};
+    if (lanes == 2 || lanes == 4) {
+      os << op->buffer_var->name_hint << "." << access[current_index];
+    } else if(std::find_if(vec_loads.begin(), vec_loads.end(),
+                           [op] (const Variable* v) { return (v->name_hint==op->buffer_var->name_hint); }) != vec_loads.end()){
+      os << "sw_" << op->buffer_var->name_hint << "." << access[current_index];
+    } else{
+      // temp variable
+      os << op->buffer_var->name_hint << "[";
+      PrintExpr(op->index, os);
+      os << "]";
+    }
+  } else {
+    CodeGenC::VisitExpr_(op, os);
+  }
+}
+
+void CodeGenCUDA::VisitStmt_(const Store* op) {
+  Type t = op->value.type();
+  if (is_reinterpret && t.lanes() == 1) {
+    is_reinterpret = false;
+
+    std::string value = this->PrintExpr(op->value);
+    std::string ref  = this->GetBufferRef(t, op->buffer_var.get(), op->index);
+    this->PrintIndent();
+
+    Type elem_type = t.element_of();
+    stream << "*(reinterpret_cast<";
+    PrintType(elem_type, stream);
+    stream << loop_extent << "*>(&" << ref << ")) = " << value << ";\n";
+
+  } else if (vec_store) {
+    replace_cce = true;
+    static const char access[] = {'x', 'y', 'z', 'w', 'a', 'b', 'c', 'd'};
+    int lanes = op->buffer_var.type().lanes();
+    loop_extent = lanes;
+    for (int i = 0; i < lanes; i++){
+      this->PrintIndent();
+      current_index = i;
+      stream << op->buffer_var->name_hint << "." << access[i] << " = ";
+      PrintExpr(op->value, stream);
+      stream << ";\n";
+    }
+    replace_cce = false;
+    vec_store = false;
+  } else if (simple_store){
+    simple_store = false;
+    std::string value = this->PrintExpr(op->value);
+    this->PrintIndent();
+    stream << op->buffer_var->name_hint << " = " << value << ";\n";
+  } else{
+    CodeGenC::VisitStmt_(op);
   }
 }
 
@@ -548,12 +694,30 @@ void CodeGenCUDA::VisitStmt_(const AttrStmt* op) {
     const Variable* buffer = op->node.as<Variable>();
     int offset = op->value.as<IntImm>()->value;
     sm_offsets[buffer] = offset;
+  } else if (op->attr_key == "reinterpret_store") {
+    loop_extent = op->value;
+    // mark next store statement to be a reinterpret cast
+    is_reinterpret = true;
+  } else if (op->attr_key == "vec_store") {
+    loop_var = op->value.as<Variable>();
+    // mark next store statement to be a vector store
+    vec_store = true;
+  } else if (op->attr_key == "simple_store") {
+    // mark next store statement to be a basic store of type a = b
+    simple_store = true;
+  } else if (op->attr_key == "vec_load") {
+    vec_loads.insert(op->value.as<Variable>());
+  } else if (op->attr_key == "no_init_value") {
+    // mark next let statement to be a simple, empty declaration
+    no_init_value = true;
   }
   CodeGenC::VisitStmt_(op);
 }
 
 void CodeGenCUDA::VisitStmt_(const Allocate* op) {
-  CHECK(!is_zero(op->condition));
+  if (is_zero(op->condition)) {
+    stream << "// ";
+  }
   std::string vid = AllocVarID(op->buffer_var.get());
   if (op->new_expr.defined()) {
     // Prefer global static allocation for the program
@@ -637,6 +801,10 @@ void CodeGenCUDA::VisitExpr_(const Ramp* op, std::ostream& os) {
 }
 
 void CodeGenCUDA::VisitExpr_(const Broadcast* op, std::ostream& os) {   // NOLINT(*)
+  if (vec_store) {
+    PrintExpr(op->value, os);
+    return;
+  }
   if (op->type.is_int() && op->type.bits() == 8 && op->lanes == 4) {
     // make_int8x4
     const int64_t *p = as_const_int(op->value);

@@ -1,0 +1,22 @@
+{
+  "name": "Fused_Cast_BiasAdd_GkDropout_tuple_getitem_TensorAdd_fusion_13282325956852925231_0",
+  "operator": "Fused_Cast_BiasAdd_GkDropout_tuple_getitem_TensorAdd_fusion_13282325956852925231_0",
+  "domain": [
+    "{ S_0[ax0_ax1_fused] : 0 <= ax0_ax1_fused <= 3145727 }",
+    "{ S_1[ax0_ax1_fused] : 0 <= ax0_ax1_fused <= 3145727 }"
+  ],
+  "schedule": [
+    "{ S_0[ax0_ax1_fused] -> [ax0_ax1_fused/768]; S_1[ax0_ax1_fused] -> [ax0_ax1_fused/768] }",
+    "{ S_0[ax0_ax1_fused] -> [(ax0_ax1_fused mod 768)/4]; S_1[ax0_ax1_fused] -> [(ax0_ax1_fused mod 768)/4] }",
+    "{ S_0[ax0_ax1_fused] -> [(ax0_ax1_fused mod 768) mod 4]; S_1[ax0_ax1_fused] -> [(ax0_ax1_fused mod 768) mod 4] }",
+    "{ S_0[ax0_ax1_fused] -> [0]; S_1[ax0_ax1_fused] -> [1] }"
+  ],
+  "gpu": {
+    "blocks": [0],
+    "threads": [1]
+  },
+  "disable": [
+    "GpuDmaAnalysis",
+    "TileOuterBand"
+  ]
+}

@@ -16,6 +16,8 @@
 #ifndef POLY_PASS_H_
 #define POLY_PASS_H_
 
+#include <set>
+#include <ostream>
 #include "poly/isl.h"
 #include "poly/scop_info.h"
 #include "poly/pass_info.h"
@@ -34,6 +36,8 @@ class SchedulePass {
   std::string GetPassName() { return pass_name_; }
   std::string pass_name_;
   bool restart_{false};  // triggers restart during runtime
+
+  std::set<std::string> disabled_passes_;
 };
 
 bool LoadScheduleTreeFromFile(const std::string &filename, isl::schedule &schedule);

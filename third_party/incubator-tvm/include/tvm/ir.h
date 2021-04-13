@@ -583,6 +583,8 @@ class Call : public ExprNode {
   static constexpr const char* glsl_texture_store = "glsl_texture_store";
   static constexpr const char* prefetch = "prefetch";
   static constexpr const char* isnan = "isnan";
+  static constexpr const char* reinterpret_cast_op = "reinterpret_cast_op";
+  static constexpr const char* ldg = "ldg";
 
   /*! \brief Vectorizable intrinsic list. */
   static const char* vectorizable_intrinsics[];
@@ -1107,7 +1109,9 @@ enum class ForType : int {
   /*! \brief Vector SIMD loop annotaion. */
   Vectorized = 2,
   /*! \brief Unroll annotation. */
-  Unrolled = 3
+  Unrolled = 3,
+  /*! \brief Swizzle loop on GPU. */
+  Swizzled = 4
 };
 
 // Kevice api of for loop

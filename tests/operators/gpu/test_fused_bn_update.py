@@ -43,14 +43,17 @@ def compute_expect(input, c1, c2, c3, c4):
 
     return [out1, out2, out3]
 
-def test_fused_bn_update(shape, dtype="float32", c1=(1 / (256 * 7 * 7)), c2=1.001e-05, c3=1.00007975, c4=0.100000024, poly_sch=False):
+def test_fused_bn_update(shape, dtype="float32", c1=(1 / (256 * 7 * 7)), c2=1.001e-05, c3=1.00007975, c4=0.100000024, poly_sch=False, mind_trick=''):
     input = gen_data(shape, dtype)
     expect = compute_expect(input, c1, c2, c3, c4)
     attrs = [dtype, c1, c2, c3, c4]
     shapes = [input[0].shape] * 4
     dtypes = [dtype] * 4
     if poly_sch:
-        mod = utils.op_build_test(fused_bn_update, shapes, dtypes, kernel_name="fused_bn_update", op_attrs=attrs, attrs={"target": "cuda"})
+        if mind_trick:
+            mod = utils.op_build_test(fused_bn_update, shapes, dtypes, kernel_name="fused_bn_update", op_attrs=attrs, attrs={"target": "cuda", "mind_trick": mind_trick})
+        else:
+            mod = utils.op_build_test(fused_bn_update, shapes, dtypes, kernel_name="fused_bn_update", op_attrs=attrs, attrs={"target": "cuda"})
 
     outputs =  [np.full(shape, np.nan, dtype)] * 3
     attrs_list =  input + outputs

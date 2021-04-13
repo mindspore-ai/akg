@@ -36,7 +36,7 @@ def compute_py(data_f16, data_f32, layout, fill_data):
     output = np.full(np.shape(expect), np.nan, 'float32')
     return expect, output
 
-def test_fused_l2loss_grad(shape, layout, fill_data=4e-05, poly_sch=False):
+def test_fused_l2loss_grad(shape, layout, fill_data=4e-05, poly_sch=False, mind_trick=''):
     data_1 = gen_data(shape, 'float16')
     data_2 = gen_data(shape, 'float32')
 
@@ -45,7 +45,10 @@ def test_fused_l2loss_grad(shape, layout, fill_data=4e-05, poly_sch=False):
     dtype_list = ['float16', 'float32']
     op_attrs = [layout, fill_data]
     if poly_sch:
-        mod = utils.op_build_test(fused_l2loss_grad, input_list, dtype_list, kernel_name="fused_l2loss_grad", op_attrs=op_attrs, attrs={"target": "cuda"})
+        if mind_trick:
+            mod = utils.op_build_test(fused_l2loss_grad, input_list, dtype_list, kernel_name="fused_l2loss_grad", op_attrs=op_attrs, attrs={"target": "cuda", "mind_trick": mind_trick})
+        else:
+            mod = utils.op_build_test(fused_l2loss_grad, input_list, dtype_list, kernel_name="fused_l2loss_grad", op_attrs=op_attrs, attrs={"target": "cuda"})
     
     args = [data_1, data_2, output]
     output = utils.mod_launch(mod, args, expect = expect)

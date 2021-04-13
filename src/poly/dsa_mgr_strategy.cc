@@ -51,6 +51,7 @@ void DsaMgrStrategy::RegisterMemPromPasses() { RegisterPass(std::make_shared<Mem
 void DsaMgrStrategy::RegisterPasses() {
   passes_.clear();
   RegisterNormalizationPasses();
+  RegisterConstrainedScheduling();
   if (!scop_info_.user_config_.GetDisableGroup()) {
     RegisterPass(std::make_shared<GroupStatements>(pass_info_));
   }

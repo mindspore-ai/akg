@@ -85,5 +85,7 @@ REGISTER_PASS(SubstituteDivVar);
 REGISTER_PASS(UnrollNonConstantExtent)
 REGISTER_PASS(ValueNumbering);
 REGISTER_PASS(TensorAccessRewrite);
+REGISTER_PASS(SwizzleGPU);
+
 }  // namespace ir
 }  // namespace akg

@@ -64,7 +64,7 @@ from tests.operators.gpu.test_fused_bn_update_grad import test_fused_bn_update_g
 from tests.operators.gpu.test_fused_mul_div_rsqrt_mul_isfinite_red import test_fused_mul_div_rsqrt_mul_isfinite_red
 
 
-def add(poly_sch, fuzz_shape=None):
+def add(poly_sch, fuzz_shape=None, mind_trick_str=''):
     if fuzz_shape:
         test_ms_add(fuzz_shape, fuzz_shape, 'float32', poly_sch=poly_sch)
         return
@@ -74,12 +74,12 @@ def add(poly_sch, fuzz_shape=None):
                 'float32', poly_sch=poly_sch)
 
 
-def addn(poly_sch, fuzz_shape=None):
+def addn(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_addn((1, 1024, 1024), "float32", 2, poly_sch=poly_sch)
     test_ms_addn((1, 1024, 1024), "float16", 2, poly_sch=poly_sch)
 
 
-def bmm(poly_sch, fuzz_shape=None):
+def bmm(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_bmm((768, 768), (768, 768), 'float16', 'float16', layout1='NHDT', layout2='NHDT', layout_out='NHDT',
                 shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch, 
                 dim="0 0 128 128 0 1 128 128 0 2 64 4", bind_block="6 6", bind_thread="32 4")
@@ -158,19 +158,19 @@ def bmm(poly_sch, fuzz_shape=None):
                 dim="0 0 128 128 0 1 128 128 0 2 64 4", bind_block="24 32", bind_thread="32 4")
      """
 
-def cast(poly_sch, fuzz_shape=None):
+def cast(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_cast((32, 32, 14, 14, 16), "float16", "float32", poly_sch=poly_sch)
     test_ms_cast((32, 32, 14, 14, 16), "float32", "float16", poly_sch=poly_sch)
 
 
-def exp(poly_sch, fuzz_shape=None):
+def exp(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_exp((1024, 4096), 'float32', poly_sch=poly_sch)
     test_ms_exp((1024, 4096), 'float16', poly_sch=poly_sch)
     test_ms_exp((1024, 4095), 'float16', poly_sch=poly_sch)
     test_ms_exp((1024, 799), 'float16', poly_sch=poly_sch)
 
 
-def maximum(poly_sch, fuzz_shape=None):
+def maximum(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_maximum((32, 1024, 1024), (32, 1024, 1024),
                     'float32', poly_sch=poly_sch)
     test_ms_maximum((32, 1024, 1024), (1, 1024, 1024),
@@ -179,7 +179,7 @@ def maximum(poly_sch, fuzz_shape=None):
                     'float16', poly_sch=poly_sch)
 
 
-def minimum(poly_sch, fuzz_shape=None):
+def minimum(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_minimum((32, 1024, 1024), (32, 1024, 1024),
                     'float32', poly_sch=poly_sch)
     test_ms_minimum((32, 1024, 1024), (1, 1024, 1024),
@@ -188,33 +188,33 @@ def minimum(poly_sch, fuzz_shape=None):
                     'float16', poly_sch=poly_sch)
 
 
-def mul(poly_sch, fuzz_shape=None):
+def mul(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_mul((1024, 4096), 'float32', poly_sch=poly_sch)
 
 
-def divide(poly_sch, fuzz_shape=None):
+def divide(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_divide((1024, 1024), 'float32', poly_sch=poly_sch)
     test_ms_divide((1024, 1024), 'float16', poly_sch=poly_sch)
 
 
-def reshape(poly_sch, fuzz_shape=None):
+def reshape(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_reshape("float32", (64, 128, 1024),
                     (8192, 1024), poly_sch=poly_sch)
     test_ms_reshape("float16", (64, 128, 1024),
                     (8192, 1024), poly_sch=poly_sch)
 
 
-def rsqrt(poly_sch, fuzz_shape=None):
+def rsqrt(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_rsqrt((32, 1024, 1024), 'float32', poly_sch=poly_sch)
     test_ms_rsqrt((32, 1024, 1024), 'float16', poly_sch=poly_sch)
 
 
-def sqrt(poly_sch, fuzz_shape=None):
+def sqrt(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_sqrt((1024, 1024), "float32", poly_sch=poly_sch)
     test_ms_sqrt((1024, 1024), "float16", poly_sch=poly_sch)
 
 
-def sub(poly_sch, fuzz_shape=None):
+def sub(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_sub((32, 1024, 1024), (32, 1024, 1024),
                 'float32', poly_sch=poly_sch)
     test_ms_sub((32, 1024, 1024), (32, 1024, 1024),
@@ -224,36 +224,36 @@ def sub(poly_sch, fuzz_shape=None):
     test_ms_sub((4, 4, 4), (1, 4, 4), 'float32', poly_sch=poly_sch)
 
 
-def tile(poly_sch, fuzz_shape=None):
+def tile(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_tile((1024, 4096), (3,), 'float32', poly_sch=poly_sch)
     test_ms_tile((1024, 4096), (3,), 'float16', poly_sch=poly_sch)
 
 
-def one_hot(poly_sch, fuzz_shape=None):
+def one_hot(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_one_hot((1024,), 16, "int32", 1, 0, 0, poly_sch=poly_sch)
     test_ms_one_hot((1024,), 16, "float32", 1, 0, 0, poly_sch=poly_sch)
     test_ms_one_hot((32,), 16, "int32", 1, 0, 0, poly_sch=poly_sch)
     test_ms_one_hot((32,), 16, "float32", 1, 0, 0, poly_sch=poly_sch)
 
 
-def expand_dims(poly_sch, fuzz_shape=None):
+def expand_dims(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_expand_dims((32, 1024, 1024), 1, 'float32', poly_sch=poly_sch)
     test_expand_dims((32, 1024, 1024), 2, 'float16', poly_sch=poly_sch)
 
 
-def trans_data(poly_sch, fuzz_shape=None):
+def trans_data(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_trans_data((8, 24, 38, 38), (0, 2, 1, 3),
                        'float32', poly_sch=poly_sch)
     test_ms_trans_data((8, 24, 38, 38), (0, 2, 1, 3),
                        'float16', poly_sch=poly_sch)
 
 
-def log(poly_sch, fuzz_shape=None):
+def log(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_log((9, 1024, 1024), 'float16', poly_sch=poly_sch)
     test_ms_log((9, 1024, 1024), 'float32', poly_sch=poly_sch)
 
 
-def pow(poly_sch, fuzz_shape=None):
+def pow(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_pow((9, 1024, 1024), (9, 1024, 1024), 'float32', poly_sch=poly_sch)
     test_ms_pow((9, 1024, 1024), (9, 1024, 1), 'float32', poly_sch=poly_sch)
     test_ms_pow((9, 1024, 1024), (9, 1, 1), 'float32', poly_sch=poly_sch)
@@ -264,7 +264,7 @@ def pow(poly_sch, fuzz_shape=None):
     test_ms_pow((9, 1024, 1024), (1, 1, 1), 'float16', poly_sch=poly_sch)
 
 
-def abs(poly_sch, fuzz_shape=None):
+def abs(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_abs((1024, 1024), "float32", poly_sch=poly_sch)
     test_ms_abs((1024, 1024), "float16", poly_sch=poly_sch)
     test_ms_abs((1, ), "float32", poly_sch=poly_sch)
@@ -273,7 +273,7 @@ def abs(poly_sch, fuzz_shape=None):
     test_ms_abs((1, 1), "float16", poly_sch=poly_sch)
 
 
-def neg(poly_sch, fuzz_shape=None):
+def neg(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_neg((1024, 1024), "float32", poly_sch=poly_sch)
     test_ms_neg((1024, 1024), "float16", poly_sch=poly_sch)
     test_ms_neg((1, ), "float32", poly_sch=poly_sch)
@@ -282,7 +282,7 @@ def neg(poly_sch, fuzz_shape=None):
     test_ms_neg((1, 1), "float16", poly_sch=poly_sch)
 
 
-def round(poly_sch, fuzz_shape=None):
+def round(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_round((1024, 1024), "float32", poly_sch=poly_sch)
     test_ms_round((1024, 1024), "float16", poly_sch=poly_sch)
     test_ms_round((1, ), "float32", poly_sch=poly_sch)
@@ -291,7 +291,7 @@ def round(poly_sch, fuzz_shape=None):
     test_ms_round((1, 1), "float16", poly_sch=poly_sch)
 
 
-def reduce_sum(poly_sch, fuzz_shape=None):
+def reduce_sum(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_reduce_sum((256, 256), 'float32', axis=(1,),
                        keepdims=True, poly_sch=poly_sch)
     test_ms_reduce_sum((9, 1024, 1024), 'float32', axis=None,
@@ -304,31 +304,31 @@ def reduce_sum(poly_sch, fuzz_shape=None):
                        keepdims=True, poly_sch=poly_sch)
 
 
-def select(poly_sch, fuzz_shape=None):
+def select(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_select((2, ), (2, 2, 2),  "int8", "float16", poly_sch=poly_sch)
 
 
-def equal(poly_sch, fuzz_shape=None):
+def equal(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_equal(((1, 1024), (1, 1024)), 'float16', poly_sch=poly_sch)
     test_ms_equal(((1, 1024), (1, 1024)), 'float32', poly_sch=poly_sch)
 
 
-def less_equal(poly_sch, fuzz_shape=None):
+def less_equal(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_less_equal((1, 1024), (1, 1024), 'float16', poly_sch=poly_sch)
     test_ms_less_equal((1, 1024), (1, 1024), 'float32', poly_sch=poly_sch)
 
 
-def greater_equal(poly_sch, fuzz_shape=None):
+def greater_equal(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_greater_equal((1, 1024), (1, 1024), 'float16', poly_sch=poly_sch)
     test_ms_greater_equal((1, 1024), (1, 1024), 'float32', poly_sch=poly_sch)
 
 
-def reciprocal(poly_sch, fuzz_shape=None):
+def reciprocal(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_reciprocal((1, 1024), 'float16', poly_sch=poly_sch)
     test_ms_reciprocal((1, 1024), 'float32', poly_sch=poly_sch)
 
 
-def reduce_min(poly_sch, fuzz_shape=None):
+def reduce_min(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_reduce_min((9, 1024, 1024), 'float32', axis=None,
                        keepdims=False, poly_sch=poly_sch)
     test_ms_reduce_min((9, 1024, 1024), 'float16', axis=None,
@@ -339,7 +339,7 @@ def reduce_min(poly_sch, fuzz_shape=None):
                        keepdims=False, poly_sch=poly_sch)
 
 
-def reduce_max(poly_sch, fuzz_shape=None):
+def reduce_max(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_reduce_max((9, 1024, 1024), 'float32', axis=None,
                        keepdims=False, poly_sch=poly_sch)
     test_ms_reduce_max((9, 1024, 1024), 'float16', axis=None,
@@ -350,77 +350,77 @@ def reduce_max(poly_sch, fuzz_shape=None):
                        keepdims=False, poly_sch=poly_sch)
 
 
-def fused_pad(poly_sch, fuzz_shape=None):
+def fused_pad(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_fused_pad((7, 7, 3, 64), (0, 0, 0, 0), (0, 0, 1, 0),
                    layout='NHWC', pad_value=0.0, poly_sch=poly_sch)
 
 
-def fused_bn_reduce(poly_sch, fuzz_shape=None):
+def fused_bn_reduce(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_fused_bn_reduce((256, 7, 7, 2048), layout='NHWC', poly_sch=poly_sch)
 
 
-def fused_bn_update(poly_sch, fuzz_shape=None):
-    test_fused_bn_update((2048,), poly_sch=poly_sch)
+def fused_bn_update(poly_sch, fuzz_shape=None, mind_trick_str=''):
+    test_fused_bn_update((2048,), poly_sch=poly_sch, mind_trick=mind_trick_str)
 
 
-def fused_bn_follow_relu(poly_sch, fuzz_shape=None):
+def fused_bn_follow_relu(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_fused_bn_follow_relu(
         (256, 7, 7, 2048), layout='NHWC', poly_sch=poly_sch)
 
 
-def fused_bn_follow_relu_avgpool(poly_sch, fuzz_shape=None):
+def fused_bn_follow_relu_avgpool(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_fused_bn_follow_relu_avgpool(
         (256, 7, 7, 2048), layout='NHWC', poly_sch=poly_sch)
 
 
-def fused_bn_double_follow_relu(poly_sch, fuzz_shape=None):
+def fused_bn_double_follow_relu(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_fused_bn_double_follow_relu(
         (256, 7, 7, 2048), layout='NHWC', poly_sch=poly_sch)
 
 
-def fused_bn_reduce_grad(poly_sch, fuzz_shape=None):
+def fused_bn_reduce_grad(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_fused_bn_reduce_grad(
         (256, 56, 56, 256), layout='NHWC', poly_sch=poly_sch)
 
 
-def fused_relu_grad_bn_reduce_grad(poly_sch, fuzz_shape=None):
+def fused_relu_grad_bn_reduce_grad(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_fused_relu_grad_bn_reduce_grad(
         (64, ), (256, 112, 112, 64),  layout='NHWC', poly_sch=poly_sch)
 
 
-def fused_relu_grad_bn_double_reduce_grad(poly_sch, fuzz_shape=None):
+def fused_relu_grad_bn_double_reduce_grad(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_fused_relu_grad_bn_double_reduce_grad(
         (256,), (256, 56, 56, 256), layout="NHWC", poly_sch=poly_sch)
 
 
-def fused_l2loss_grad(poly_sch, fuzz_shape=None):
-    test_fused_l2loss_grad((1, 1, 256, 1024), layout='NHWC', poly_sch=poly_sch)
+def fused_l2loss_grad(poly_sch, fuzz_shape=None, mind_trick_str=''):
+    test_fused_l2loss_grad((1, 1, 256, 1024), layout='NHWC', poly_sch=poly_sch, mind_trick=mind_trick_str)
 
 
-def fused_is_finite(poly_sch, fuzz_shape=None):
+def fused_is_finite(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_fused_is_finite((1, 1, 256, 1024), layout='NHWC', poly_sch=poly_sch)
 
 
-def fused_relu_grad_bn_update_grad(poly_sch, fuzz_shape=None):
+def fused_relu_grad_bn_update_grad(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_fused_relu_grad_bn_update_grad(
         (256, 112, 112, 64), (64,), layout="NHWC", poly_sch=poly_sch)
 
 
-def fused_relu_grad_bn_double_update_grad(poly_sch, fuzz_shape=None):
+def fused_relu_grad_bn_double_update_grad(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_fused_relu_grad_bn_double_update_grad(
         (256, 56, 56, 256), (256, ), layout='NHWC', poly_sch=poly_sch)
 
 
-def fused_relu_grad(poly_sch, fuzz_shape=None):
-    test_fused_relu_grad((256, 56, 56, 256), poly_sch=poly_sch)
+def fused_relu_grad(poly_sch, fuzz_shape=None, mind_trick_str=''):
+    test_fused_relu_grad((256, 56, 56, 256), poly_sch=poly_sch, mind_trick=mind_trick_str)
 
 
-def fused_bn_update_grad(poly_sch, fuzz_shape=None):
+def fused_bn_update_grad(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_fused_bn_update_grad(
         (256, 56, 56, 256), (256,), layout="NHWC", poly_sch=poly_sch)
 
 
-def fused_mul_div_rsqrt_mul_isfinite_red(poly_sch, fuzz_shape=None):
+def fused_mul_div_rsqrt_mul_isfinite_red(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_fused_mul_div_rsqrt_mul_isfinite_red((64,), poly_sch=poly_sch)
 
 
@@ -490,11 +490,17 @@ if __name__ == '__main__':
         sys.exit()
 
     options, args = getopt.getopt(
-        sys.argv[1:], "f:", ["fuzz="])
+        sys.argv[1:], "f:", ["fuzz=", "mind-trick-string=", "mind-trick-file="])
+    mind_trick_str = ''
     fuzz_dim = 0
     for name, value in options:
         if name in ("-f", "--fuzz"):
             fuzz_dim = int(value)
+        if name == "--mind-trick-string":
+            mind_trick_str = value
+        if name == "--mind-trick-file":
+            with open(value, 'r') as f:
+                mind_trick_str = f.read()
 
     fail_op_list = dict()
     run_op_list = list()
@@ -520,7 +526,7 @@ if __name__ == '__main__':
             print("Fuzz shape: {}".format(fuzz_shape))
         try:
             print("Time of auto schedule:")
-            op(poly_sch=True, fuzz_shape=fuzz_shape)
+            op(poly_sch=True, fuzz_shape=fuzz_shape, mind_trick_str=mind_trick_str)
         except:
             if op.__name__ in fail_op_list:
                 fail_op_list[op.__name__].extend(

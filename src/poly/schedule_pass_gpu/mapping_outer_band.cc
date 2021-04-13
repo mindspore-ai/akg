@@ -202,6 +202,12 @@ isl::schedule MappingOuterBand::DoThreadMapping(const isl::schedule &sch) {
       return node;
     }
 
+    if (node.has_parent() && node.parent().isa<isl::schedule_node_mark>()) {
+      const std::string &marker = node.parent().as<isl::schedule_node_mark>().get_id().get_name();
+      if (marker == "mind_trick_swizzle_marker")
+        return node;
+    }
+
     size_t num_mapped_desc = NumMappedDescendant(thread_record, node);
 
     if (CanBeMappedToThread(node, thread_record)) {

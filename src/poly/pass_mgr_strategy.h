@@ -22,6 +22,7 @@
 
 #include "poly/schedule_pass/init_schedule.h"
 #include "poly/schedule_pass/compute_schedule.h"
+#include "poly/schedule_pass/constrain_schedule.h"
 
 namespace akg {
 namespace ir {
@@ -37,6 +38,11 @@ class PassMgrStrategy {
   }
   void RegisterNormalizationPasses() { RegisterPass(std::make_shared<InitSchedule>(pass_info_, scop_info_)); }
   void RegisterSchedulingPasses() { RegisterPass(std::make_shared<ComputeSchedule>(pass_info_, scop_info_)); }
+  void RegisterConstrainedScheduling() {
+    if (scop_info_.user_config_.GetEnableMindTrick()) {
+      RegisterPass(std::make_shared<ConstrainSchedule>(pass_info_, scop_info_));
+    }
+  }
   virtual void RegisterTilingPasses() = 0;   // each backend has different achievement
   virtual void RegisterMemPromPasses() = 0;  // each backend has different achievement
   virtual void RegisterPasses() = 0;

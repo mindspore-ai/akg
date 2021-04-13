@@ -92,6 +92,21 @@ def compile_cuda(code,
     file_target = path_target if path_target else temp_target
     cmd = ["nvcc"]
     cmd += ["--%s" % target, "-O3"]
+
+    mind_trick_gpu_flags = ".akg_gpu_compiler_flags_{}".format(os.getpid())
+    if os.path.isfile(mind_trick_gpu_flags):
+        with open(mind_trick_gpu_flags, 'r') as f:
+            # This file should contain one flag per line
+            for line in f:
+                # Ensure we only use flags we explicitely allow and avoid arbitrary flags users may try to inject
+                flag = line.rstrip()
+                if flag == "-use_fast_math":
+                    cmd += flag
+        try:
+            os.remove(mind_trick_gpu_flags)
+        except:
+            warnings.warn("Could not delete file {}".format(mind_trick_gpu_flags))
+
     if isinstance(arch, list):
         cmd += arch
     else:

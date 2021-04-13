@@ -36,7 +36,7 @@ void DumpSchTreeToFile(std::FILE *fp, const isl::schedule &sch) {
 
   CHECK(sch.get());
 
-  printer = isl_printer_to_file(isl_schedule_ctx(sch.get()), fp);
+  printer = isl_printer_to_file(isl_schedule_get_ctx(sch.get()), fp);
   printer = isl_printer_set_yaml_style(printer, ISL_YAML_STYLE_BLOCK);
   printer = isl_printer_print_schedule(printer, sch.get());
 
@@ -438,6 +438,11 @@ void ScopInfo::DumpScopDataAdvanced(std::ofstream &of) {
 }
 
 void UserConfig::DumpScopDataScheduleAttrs(std::ofstream &of) {
+  if (constrained_scheduling_output_ != "") {
+    PrintHeader(of, "constrained scheduling");
+    of << constrained_scheduling_output_ << std::endl;
+  }
+
   PrintHeader(of, "schedule attrs");
   of << "dump_poly_dir : " << GetDumpPolyDir() << std::endl;
 

@@ -54,6 +54,12 @@ def print_usage():
     logging.info(template.format("", "Set attribute of 'bind_block' when use '-f' command."))
     logging.info(template.format("--bind_thread=<args>", ""))
     logging.info(template.format("", "Set attribute of 'bind_thread' when use '-f' command."))
+    logging.info(template.format("--mind-trick-enable=<0|1>", ""))
+    logging.info(template.format("", "explicitly enable (--mind-trick-enable=1) or disable (--mind-trick-enable=0) mind tricks"))
+    logging.info(template.format("--mind-trick-file", ""))
+    logging.info(template.format("", "json mind trick file"))
+    logging.info(template.format("--mind-trick-string", ""))
+    logging.info(template.format("", "json mind-trick string"))
     logging.info("\n")
 
 
@@ -212,6 +218,7 @@ def main(argv):
     try:
         options, args = getopt.getopt(argv, "adcf:mh", ["auto", "manual", "ci", "profile",
                                                         "enable_atomic_add=", "dim=", "bind_block=", "bind_thread=",
+                                                        "mind-trick-enable=", "mind-trick-file=", "mind-trick-string=",
                                                         "help"])
         poly = True
         single_file = False
@@ -247,6 +254,13 @@ def main(argv):
                 attrs_list["bind_block"] = value
             elif option == "--bind_thread":
                 attrs_list["bind_thread"] = value
+            elif option == "--mind-trick-enable":
+                attrs_list['enable_mind_trick'] = int(value)
+            elif option == "--mind-trick-file":
+                with open(value, 'r') as f:
+                    attrs_list['mind_trick'] = f.read()
+            elif option == "--mind-trick-string":
+                attrs_list['mind_trick'] = value
     except:
         print_usage()
         return
