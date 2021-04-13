@@ -609,7 +609,8 @@ NodeRef Lower(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeRef> 
   NodeRef tmp = LowerStmt(sch, in_args, shape_vars, name, in_binds, in_attrs, simple_mode, polyhedral, tuning, target,
                           config, &args, &arg_list_0, &binds, &binds_0);
 #ifdef USE_AKG_COMPILE_STUB
-  CHECK(target == "cuda") << "target should be cuda, while now is " << target;
+  CHECK(target != "cce") << "Can not enable target cce, please make sure akg/build/libakg_ext.a "
+                            "downloaded successfully, then recompile the source codes";
   if (tuning || global_attrs.GetIntAttr(kHelpTiling, -1) > help_tiling_level["None"]) {
     return tmp;
   }
