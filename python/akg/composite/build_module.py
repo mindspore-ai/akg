@@ -555,7 +555,8 @@ def _enable_auto_inline(kernel_info):
     for op in kernel_info["op_desc"]:
         # For the TransData op operator, if the inline is not performed,
         # the operator fusion scene is difficult to handle for the poly.
-        if op['name'] == "TransData":
+        # So are MatMul/BatchMatMul with bias.
+        if op['name'] in ["TransData", "MatMul", "BatchMatMul"]:
             return True
     # For the Ascend, turn 'enable_auto_inline' off for composite op by default.
     return False
