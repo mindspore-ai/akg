@@ -17,6 +17,7 @@ import json
 import logging
 import inspect
 import numpy as np
+import subprocess
 from tests.common.gen_random import random_gaussian
 
 
@@ -365,7 +366,15 @@ def gen_json_data(op_desc):
     output_indexes = []
     expect = []
 
-    p = CodePrinter('json_data.py')
+    op_name = desc.get("op")
+    if len(op_name.split("_")) > 0:
+        op_hash = op_name.split("_")[-1]
+    else:
+        import time
+        op_hash = str(time.time())
+
+    uni_file_name = "json_data_" + op_hash + ".py"
+    p = CodePrinter(uni_file_name)
     idx = 0
 
     # Collect input which should be processed by atomic clean.
@@ -495,8 +504,8 @@ def gen_json_data(op_desc):
 
     p.close()
 
-    with open("json_data.py", 'r') as f:
+    with open(uni_file_name, 'r') as f:
         sent = f.read()
     exec(sent)
-
+    subprocess.run("rm %s" % uni_file_name, shell=True)
     return input_for_mod, expect, output_indexes
