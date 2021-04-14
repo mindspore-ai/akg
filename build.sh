@@ -72,7 +72,7 @@ acquire_lib_url()
 
     os_arch="${os_name}_${arch_name}"
     url_prefix="https://repo.mindspore.cn/public/ms-incubator/akg-binary/version"
-    lib_mark="202104/20210408/master_20210408100348_ff167085f4cf74432bf77e3cd5625d04f5789f09"
+    lib_mark="202104/20210414/master_20210414115042_b83fa5498267e25ea4e0e8593e03b8033a9eaf1e"
     lib_url="${url_prefix}/${lib_mark}/lib/${os_arch}/libakg_ext.a"
     echo "${lib_url}"
 }
