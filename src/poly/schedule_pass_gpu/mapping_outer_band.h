@@ -43,7 +43,7 @@ class MappingOuterBand : public SchedulePass {
   bool NeedAtomicAdd(const isl::schedule_node_band &band, size_t n_block_map);
   void MarkAtomicAddTensor(const isl::schedule_node_band &band);
   isl::schedule_node MapBlockHelper(const isl::schedule_node &node, MappingCfg *block_cfg, size_t n_block_map,
-                                    bool check_extent);
+                                    bool check_extent, std::unordered_map<size_t, size_t> map_idx_shift = {});
 
   isl::schedule DoThreadMapping(const isl::schedule &sch);
   size_t MapThreadHelper(isl::schedule_node &thread_root);
