@@ -64,7 +64,7 @@ std::string CreateDataFormatKey(const std::string &tensor_name);
 using FuncRefList = std::vector<FunctionRef>;
 using FuncRefMap = std::unordered_map<FunctionRef, FunctionRef, NodeHash, NodeEqual>;
 using FuncRefSet = std::unordered_set<FunctionRef, NodeHash, NodeEqual>;
-using FuncRefGraph = std::unordered_map<FunctionRef, FuncRefSet, NodeHash, NodeEqual>;
+using FuncRefGraph = std::unordered_map<FunctionRef, FuncRefList, NodeHash, NodeEqual>;
 using FuncTensorMap = std::unordered_map<FunctionRef, Tensor, NodeHash, NodeEqual>;
 using FuncStmtMap = std::unordered_map<FunctionRef, const Provide *, NodeHash, NodeEqual>;
 using FuncShape = std::unordered_map<FunctionRef, Array<Expr>, NodeHash, NodeEqual>;
@@ -80,7 +80,7 @@ struct BuildOpt {
   bool stitch{false};
   size_t stitch_ir_idx_{0};
   bool fold_dim{true};
-  FuncRefSet input_funcs;
+  FuncRefList input_funcs;
   FuncRefList output_funcs;
 
   bool enable_dump{true};
@@ -181,7 +181,7 @@ struct Graph {
   FuncRefGraph pre_graph;
   FuncRefGraph post_graph;
   FuncStmtMap func_stmts;
-  FuncRefSet input_funcs;
+  FuncRefList input_funcs;
   FuncRefList output_funcs;
   FuncRefSet visited_funcs;
   FuncShape func_shape;
@@ -200,7 +200,7 @@ struct Graph {
 
 class StmtToGraph : public IRVisitor {
  public:
-  StmtToGraph(const FuncRefSet &input_funcs, const FuncRefList &output_funcs) {
+  StmtToGraph(const FuncRefList &input_funcs, const FuncRefList &output_funcs) {
     g_.input_funcs = input_funcs;
     g_.output_funcs = output_funcs;
   };
@@ -209,24 +209,24 @@ class StmtToGraph : public IRVisitor {
   void Visit_(const Provide *op) override {
     auto call = op->value.as<Call>();
     CHECK(call);
-    FuncRefSet inputs = GetInputsFunc(call->args);
+    FuncRefList inputs = GetInputsFunc(call->args);
     FunctionRef output = op->func;
     g_.pre_graph[output] = inputs;
     for (const auto &input : inputs) {
-      g_.post_graph[input].insert(output);
+      g_.post_graph[input].emplace_back(output);
     }
     g_.func_stmts[op->func] = op;
     g_.func_shape[op->func] = op->args;
   }
-  FuncRefSet GetInputsFunc(const Array<Expr> &inputs) {
-    FuncRefSet set;
+  FuncRefList GetInputsFunc(const Array<Expr> &inputs) {
+    FuncRefList list;
     for (const auto &item : inputs) {
       if (auto call = item.as<Call>()) {
-        set.insert(call->func);
+        list.emplace_back(call->func);
         g_.func_shape[call->func] = call->args;
       }
     }
-    return set;
+    return list;
   }
 
  public:

@@ -48,7 +48,7 @@ class ElimTransformAnalysis {
     auto input = call->args[0].as<Call>()->func;
     // if output is kernel output and input is kernel input, cannot remove this op
     if (!(std::find(g_.output_funcs.begin(), g_.output_funcs.end(), output) != g_.output_funcs.end() &&
-          g_.input_funcs.count(input))) {
+          std::find(g_.input_funcs.begin(), g_.input_funcs.end(), input) != g_.input_funcs.end())) {
       // if not visited or input shape and output shape as same, can remove this op, change input shape to output
       // shape, replace output tensor to input tensor
       auto input_shape = result_.ShapeChanged(input) ? result_.changed_shapes[input] : g_.func_shape[input];
@@ -117,6 +117,26 @@ class ElimTransformAnalysis {
     }
   }
 
+  void AnalysisInplaceAssign(const FunctionRef &output) {
+    auto inputs = g_.pre_graph[output];
+    bool output_changed = result_.ShapeChanged(output);
+    auto output_shape = output_changed ? result_.changed_shapes[output] : g_.func_shape[output];
+    CHECK(inputs.size() == 3);
+    auto input = inputs[2];
+    if (!g_.visited_funcs.count(input)) {
+      // if not visited and output changed, change input shape
+      if (output_changed) {
+        result_.changed_shapes[input] = output_shape;
+      }
+    } else {
+      auto input_shape = result_.ShapeChanged(input) ? result_.changed_shapes[input] : g_.func_shape[input];
+      if (!EqualShape(output_shape, input_shape)) {
+        result_.changed_shapes[output] = input_shape;
+      }
+    }
+    // input0 and input1's shape should do nothing
+  }
+
   void AnalysisInner(const FunctionRef &output) {
     if (!g_.func_stmts.count(output)) return;
     auto provide = g_.func_stmts[output];
@@ -125,6 +145,8 @@ class ElimTransformAnalysis {
       AnalysisTransform(output);
     } else if (IsElemwise(op_name) && g_.CanChangeElem(output)) {
       AnalysisElemwise(output);
+    } else if (IsInplaceAssign(op_name)) {
+      AnalysisInplaceAssign(output);
     } else {
       // the op which can not change shape
       AnalysisOthers(output);

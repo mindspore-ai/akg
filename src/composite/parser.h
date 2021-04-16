@@ -75,7 +75,7 @@ class OpDescsParser {
 
  public:
   std::vector<OpDesc> op_descs_;
-  FuncRefSet input_funcs_;
+  FuncRefList input_funcs_;
   FuncRefList output_funcs_;
 
  private:
@@ -110,7 +110,7 @@ class OpDescsParser {
         Tensor t = placeholder(info.shape_, info.dtype_, info.name_);
         tensor_map_[info.name_] = t;
         if (std::find(input_tensors_.begin(), input_tensors_.end(), info.name_) != input_tensors_.end()) {
-          input_funcs_.insert(t->op);
+          input_funcs_.emplace_back(t->op);
         }
         if (std::find(output_tensors_.begin(), output_tensors_.end(), info.name_) != output_tensors_.end()) {
           output_funcs_.emplace_back(t->op);
