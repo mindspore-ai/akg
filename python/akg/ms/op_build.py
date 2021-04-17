@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # coding: utf-8
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2019-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -27,13 +27,10 @@ from akg.utils import kernel_exec as utils
 from akg.ms import save_gpu_param as gpu_utils
 from akg.utils import validation_check as vc_util
 from akg.tvm import _api_internal
-
+from akg.global_configs import CUDA_META_PATH
+from akg.global_configs import DUMP_IR_FLAG
 
 BINDS = "binds"
-MS_AKG_DUMP_IR = "MS_AKG_DUMP_IR"
-MS_AKG_DUMP_CODE = "MS_AKG_DUMP_CODE"
-MS_DAVINCI_KERNEL_PATH = "./kernel_meta/"
-
 
 @vc_util.check_input_type(list, (list, tuple), (list, tuple), (types.FunctionType, type(None)), str, str, dict)
 def op_build_to_func(opnames, computes, args, custom_schedule, device, kernel_name, attrs):
@@ -43,7 +40,7 @@ def op_build_to_func(opnames, computes, args, custom_schedule, device, kernel_na
         return None
 
     polyhedral = True
-    dump_ir = os.getenv(MS_AKG_DUMP_IR) == "on"
+    dump_ir = os.getenv(DUMP_IR_FLAG) == "on"
 
     try:
         tmp_outputs = [x.op for x in computes]
@@ -79,7 +76,7 @@ def op_build(opnames, computes, args, custom_schedule, device, kernel_name, attr
         return None
 
     if device == "cuda":
-        kernel_meta_path = "./cuda_meta_" + str(os.getpid()) + "/"
+        kernel_meta_path = CUDA_META_PATH 
         cuda_path = os.path.realpath(kernel_meta_path)
         if not os.path.isdir(cuda_path):
             os.makedirs(cuda_path)
