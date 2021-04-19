@@ -306,8 +306,8 @@ std::pair<isl::schedule_node, isl::schedule_node> MapInnerDimToThreads(const isl
 }
 
 isl::schedule_node CreateAndInsertMapFilter(const isl::schedule_node &node, const bool is_promotion,
-                                            isl::union_pw_aff_list upa_list, MappingCfg *mapping_cfg,
-                                            Mapping &mapping) {
+                                            isl::union_pw_aff_list upa_list, MappingCfg *mapping_cfg, Mapping &mapping,
+                                            std::unordered_map<size_t, size_t> map_idx_shift) {
   // create mapping filter
   CHECK(mapping_cfg != nullptr) << "threadconfig is null";
 
@@ -317,7 +317,8 @@ isl::schedule_node CreateAndInsertMapFilter(const isl::schedule_node &node, cons
   }
   size_t num_map = upa_list.size();
   for (size_t i = 0; i < num_map; ++i) {
-    std::pair<std::string, int> cfg = mapping_cfg->GetAt(i);
+    auto map_id = map_idx_shift.find(i) != map_idx_shift.end() ? map_idx_shift[i] : i;
+    std::pair<std::string, int> cfg = mapping_cfg->GetAt(map_id);
     if (cfg.first.find(WARP_COMPUTE) != std::string::npos && cfg.second == MAPPING_INVALID_WARP && is_promotion) {
       continue;
     }
@@ -331,7 +332,8 @@ isl::schedule_node CreateAndInsertMapFilter(const isl::schedule_node &node, cons
   for (size_t i = num_map; i < mapping_cfg->bound; ++i) {
     CHECK(!domain.is_null());
     auto universe = domain.universe();
-    std::pair<std::string, int> cfg = mapping_cfg->GetAt(i);
+    auto map_id = map_idx_shift.find(i) != map_idx_shift.end() ? map_idx_shift[i] : i;
+    std::pair<std::string, int> cfg = mapping_cfg->GetAt(map_id);
     auto id = isl::id(node.ctx(), cfg.first);
     mapping[id] = isl::union_pw_aff(universe, isl::val::zero(domain.ctx()));
   }

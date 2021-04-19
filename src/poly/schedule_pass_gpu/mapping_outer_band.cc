@@ -204,8 +204,9 @@ isl::schedule MappingOuterBand::DoThreadMapping(const isl::schedule &sch) {
 
     if (node.has_parent() && node.parent().isa<isl::schedule_node_mark>()) {
       const std::string &marker = node.parent().as<isl::schedule_node_mark>().get_id().get_name();
-      if (marker == "mind_trick_swizzle_marker")
+      if (marker == "mind_trick_swizzle_marker") {
         return node;
+      }
     }
 
     size_t num_mapped_desc = NumMappedDescendant(thread_record, node);
@@ -691,7 +692,8 @@ std::pair<std::string, std::string> MappingOuterBand::GetC1C0BlockConfig(size_t 
 }
 
 isl::schedule_node MappingOuterBand::MapBlockHelper(const isl::schedule_node &orig_node, MappingCfg *block_cfg,
-                                                    size_t n_block_map, bool check_extent) {
+                                                    size_t n_block_map, bool check_extent,
+                                                    std::unordered_map<size_t, size_t> map_idx_shift) {
   auto node = orig_node;
   auto band_node = node.as<isl::schedule_node_band>();
   if (!band_node || !band_node.permutable()) {
@@ -721,7 +723,7 @@ isl::schedule_node MappingOuterBand::MapBlockHelper(const isl::schedule_node &or
   node = node.child(0);
 
   Mapping mapping;
-  node = CreateAndInsertMapFilter(node, false, upa_list, block_cfg, mapping);
+  node = CreateAndInsertMapFilter(node, false, upa_list, block_cfg, mapping, map_idx_shift);
   scop_info_.upa_node_mapping_.emplace_back(std::make_pair(node.parent(), mapping));
 
   return node;
@@ -748,14 +750,26 @@ isl::schedule MappingOuterBand::DoBlockMapping(const isl::schedule &sch) {
   }
   // For scalar case that do not consider coincidence (reset during restart in pass mgr), there is usually only one
   // member in outer band and we can map the maximal block size to that member.
-  if (n_block_map == 1 && n_block_map < block_cfg->bound && !scop_info_.user_config_.GetConsiderCoincidence()) {
+  bool need_shift = n_block_map < block_cfg->bound && !scop_info_.user_config_.GetConsiderCoincidence();
+  std::unordered_map<size_t, size_t> map_idx_shift;
+  if (need_shift) {
     auto new_idx = 0;
     for (size_t i = 0; i < block_cfg->bound; ++i) {
       if (block_cfg->GetAt(i).second > block_cfg->GetAt(new_idx).second) {
         new_idx = i;
       }
     }
-    block_cfg->SwapConfig(0, new_idx);
+    if (scop_info_.analysis_result_.GetEnabledAutoTiling()) {
+      // for auto configs, simply exchange the value of configs idx, for example:
+      // [before] bx = 1(map), by = 1024; [after] bx = 1024(map), by = 1
+      block_cfg->SwapConfig(0, new_idx);
+    } else {
+      // for manual configs, we need to use the user-specifed config idx, so that we can record the shifted idx and it
+      // will be used in CreateAndInsertMapFilter, for example:
+      // [before] bx = 1(map), by = 1024; [after] bx = 1, by = 1024(map);
+      map_idx_shift.insert({0, new_idx});
+      map_idx_shift.insert({new_idx, 0});
+    }
   }
 
   if (scop_info_.user_config_.GetEnableAtomicAdd() && NeedAtomicAdd(band_node, n_block_map)) {
@@ -778,7 +792,8 @@ isl::schedule MappingOuterBand::DoBlockMapping(const isl::schedule &sch) {
 
   // Step 3. Map outer-most band for c1 tile as usual (and do not check extent when c0 tile is applied manually).
   auto map_c0_block = c0_block_cfg != nullptr;
-  node = MapBlockHelper(node, c1_block_cfg, n_block_map, !map_c0_block);
+  bool check_extent = !map_c0_block && map_idx_shift.empty();
+  node = MapBlockHelper(node, c1_block_cfg, n_block_map, check_extent, map_idx_shift);
   auto final_schedule = node.get_schedule();
 
   // Step 4. Map middle-level band (i.e. c0 tile band).
