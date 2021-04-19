@@ -407,7 +407,7 @@ Type ScopInfo::GetDtypeOf(const std::string &tensor_name) const {
       return i.second->dtype;
     }
   }
-  LOG(INFO) << " no such tensor in binds: " << tensor_name;
+  CHECK(false) << " no such tensor in binds: " << tensor_name;
   return Int(32);
 }
 
