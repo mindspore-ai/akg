@@ -21,7 +21,7 @@ void DumpHeader(std::ofstream &of, const std::string &str) {
 }
 
 void DumpIRAttr(const std::string &kernel_name, const IrAttrInfo &attr, size_t index) {
-  if (getenv("MS_AKG_DUMP_IR") == nullptr) return;
+  if (getenv(GetDumpIRFlag().c_str()) == nullptr) return;
   std::ofstream of;
   of.open("stitch_info/" + kernel_name + "_stitch.log", std::ios::app);
   if (!of.is_open()) return;
@@ -40,7 +40,7 @@ void DumpStitchInfo(const std::string &kernel_name, StitchAttrInfo &store_attr,
                     std::unordered_map<std::string, StitchBufferInfo> &stitch_buffer_map,
                     std::unordered_map<std::string, StitchBufferInfo> &buf_within_op_map,
                     std::vector<std::string> &allocate_revoke) {
-  if (getenv("MS_AKG_DUMP_IR") == nullptr) return;
+  if (getenv(GetDumpIRFlag().c_str()) == nullptr) return;
   std::ofstream of;
   of.open("stitch_info/" + kernel_name + "_stitch.log", std::ios::app);
   if (!of.is_open()) return;
@@ -91,7 +91,7 @@ void DumpStitchInfo(const std::string &kernel_name, StitchAttrInfo &store_attr,
 }
 
 void DumpStmt2File(const std::string &file_name, const Stmt &stmt) {
-  if (getenv("MS_AKG_DUMP_IR") == nullptr) return;
+  if (getenv(GetDumpIRFlag().c_str()) == nullptr) return;
   std::ofstream of(file_name);
   if (of) {
     of << stmt << std::endl;
@@ -100,7 +100,7 @@ void DumpStmt2File(const std::string &file_name, const Stmt &stmt) {
 }
 
 void DumpBuildInfo(const BuildInfo &info) {
-  if (getenv("MS_AKG_DUMP_IR") == nullptr) return;
+  if (getenv(GetDumpIRFlag().c_str()) == nullptr) return;
   auto dir_name = !info.opt.stitch
                     ? info.kernel_name + "_composite"
                     : "stitch_info/" + info.kernel_name + "_stitch_" + std::to_string(info.opt.stitch_ir_idx_);

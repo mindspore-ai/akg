@@ -19,6 +19,7 @@ import os
 import fcntl
 import hashlib
 import akg.tvm
+from akg.global_configs import get_cuda_meta_path
 
 
 @akg.tvm.register_func
@@ -55,7 +56,7 @@ def dump_cuda_meta(code, ptx, thread_info):
             elif isinstance(thread_info[thread_tag], akg.tvm.expr.IntImm):
                 thread_info_dict[thread_tag] = str(thread_info[thread_tag].value)
 
-    meta_path = "./cuda_meta_" + str(os.getpid()) + "/"
+    meta_path = get_cuda_meta_path()
     cuda_path = os.path.realpath(meta_path)
     if not os.path.isdir(cuda_path):
         os.makedirs(cuda_path)

@@ -43,7 +43,7 @@ class CompositeOptPassMgr {
     auto file_name = !info_.opt.stitch
                        ? info_.kernel_name + "_composite"
                        : "stitch_info/" + info_.kernel_name + "_stitch_" + std::to_string(info_.opt.stitch_ir_idx_);
-    auto enable_dump = info_.opt.enable_dump && getenv("MS_AKG_DUMP_IR") != nullptr;
+    auto enable_dump = info_.opt.enable_dump && getenv(GetDumpIRFlag().c_str()) != nullptr;
     auto dump_mng = DumpManager(file_name, enable_dump);
     auto stmt = s;
     dump_mng.DumpStmt("Origin", stmt);

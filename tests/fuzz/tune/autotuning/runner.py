@@ -220,7 +220,7 @@ class KernelRunner:
         tune_device = int(os.environ['DEVICE_ID'])
         tune_num = int(os.environ['DEVICE_TOTAL_NUM'])
         if os.environ['RUNTIME_MODE'] == "gpu":
-            subprocess.run("rm -rf cuda_meta_*", shell=True)
+            subprocess.run("rm -rf cuda_meta*", shell=True)
         else:
             def exec_cmds_with_pipe(cmd_list):
                 cmd_num = len(cmd_list)

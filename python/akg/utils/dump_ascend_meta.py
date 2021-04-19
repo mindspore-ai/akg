@@ -21,7 +21,7 @@ import json
 import hashlib
 import logging
 import akg.tvm
-from akg.global_configs import ASCEND_META_PATH
+from akg.global_configs import get_ascend_meta_path
 
 def write_code(js_dict, fname):
     if os.path.exists(fname):
@@ -55,7 +55,8 @@ def tvm_callback_cce_postproc(code, block_dim=1):
 
     # sha256
     buf_size = 64 * 1024  # once read 64kb
-    kernel_file_name = ASCEND_META_PATH + bin_file_name + bin_file_suffix
+    root_path = get_ascend_meta_path()
+    kernel_file_name = root_path + bin_file_name + bin_file_suffix
     sha256 = hashlib.sha256()
     with open(kernel_file_name, 'rb') as kf:
         while True:
@@ -66,9 +67,9 @@ def tvm_callback_cce_postproc(code, block_dim=1):
     title_dict["sha256"] = sha256.hexdigest()
 
     load_dict = {}
-    if not os.path.exists(ASCEND_META_PATH):
+    if not os.path.exists(get_ascend_meta_path()):
         try:
-            os.mkdir(ASCEND_META_PATH)
+            os.mkdir(root_path)
         except OSError as err:
             # 17, OSError: [Errno 17] File exists
             if err.errno == 17:
@@ -76,7 +77,7 @@ def tvm_callback_cce_postproc(code, block_dim=1):
             else:
                 raise err
     else:
-        fname = ASCEND_META_PATH + kernel_name + "wk.json"
+        fname = root_path + kernel_name + "wk.json"
         if os.path.exists(fname):
             with open(fname, "r") as f:
                 load_dict = json.load(f)
@@ -85,7 +86,7 @@ def tvm_callback_cce_postproc(code, block_dim=1):
     final_dict = title_dict.copy()
     final_dict.update(load_dict)
 
-    json_file = ASCEND_META_PATH + kernel_name + ".json"
+    json_file = root_path + kernel_name + ".json"
     write_code(final_dict, json_file)
 
     return code
