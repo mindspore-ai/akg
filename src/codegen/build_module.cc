@@ -737,10 +737,16 @@ void CreateCode(const std::string &code, const std::string &kernel_name, const s
   std::string file_path;
   std::string file_suffix;
   if (target_name.find("cce") != std::string::npos) {
-    file_path = std::string(kMsAscendKernelPath);
+    const auto *f = air::runtime::Registry::Get("get_ascend_meta_path");
+    CHECK(f != nullptr) << "Function get_ascend_meta_path is not registed";
+
+    file_path = (*f)().operator std::string();
     file_suffix = ".cce";
   } else if (target_name.find("cuda") != std::string::npos) {
-    file_path = std::string(kMsGpuKernelPath) + "_" + std::to_string(getpid()) + "/";
+    const auto *f = air::runtime::Registry::Get("get_cuda_meta_path");
+    CHECK(f != nullptr) << "Function get_cuda_meta_path is not registed";
+
+    file_path = (*f)().operator std::string();
     file_suffix = ".cu";
   }
 

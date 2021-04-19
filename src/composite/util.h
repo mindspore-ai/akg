@@ -19,8 +19,6 @@
 #include "picojson.h"
 
 namespace akg {
-constexpr auto kMsAscendKernelPath = "./kernel_meta/";
-constexpr auto kMsGpuKernelPath = "./cuda_meta";
 constexpr auto BLOCK_IDX_X = "blockIdx.x";
 constexpr auto BLOCK_IDX_Y = "blockIdx.y";
 constexpr auto BLOCK_IDX_Z = "blockIdx.z";
