@@ -14,7 +14,7 @@
 
 """test"""
 import time
-from tests.fuzz.tune.autotuning.job import launch
+from akg.auto_tune.job import launch
 from tests.common.test_run.matmul_run import matmul_execute
 
 time_start = time.time()

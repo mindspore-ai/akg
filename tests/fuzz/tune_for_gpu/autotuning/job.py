@@ -32,7 +32,7 @@ from autotuning.tuner import ModelBasedTuner, Tuner
 from autotuning.type_definitions import ConvDesc, ConvBackpropDesc, MatmulCubeDesc
 from autotuning.space_generators import get_space
 from autotuning.space import ListConfigSpace
-from autotuning.test_data_generators import gen_data
+from autotuning.data_generators import gen_data
 from autotuning.space_generators import gen_bool_list
 from autotuning.tuning_utils import *
 

@@ -602,6 +602,13 @@ def _build_to_module(desc_s_in, desc_d_in, attr=None, use_repo=True):
             tiling = get_repo([compute, shape, dtype, 'dim'])
             if tiling:
                 attr['dim'] = tiling
+            elif 'online_tuning' in attr:
+                from akg.auto_tune.composite_tuner import tune_composite
+                best_config = tune_composite(desc_s_in,
+                                             tune_level=attr["online_tuning"],
+                                             repo_path=_get_repository_file_path("repository.json"),
+                                             skip_exist=True)
+                attr.update(best_config)
         desc_d, desc_s = _set_compute_attrs(desc_d, attr)
 
     if 'parallel_fusion' in desc_d or 'buffer_stitch' in desc_d:
