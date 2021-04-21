@@ -27,6 +27,7 @@
 
 #include "poly/isl_util.h"
 #include "poly/log_util.h"
+#include "poly/gpu_isl_emitter.h"
 
 namespace akg {
 namespace ir {
@@ -326,6 +327,9 @@ void SchedulingMindTrick::ParseGpuInfo(const picojson::value &node) {
   // Parse thread info
   const picojson::value &threads = maybe(node, "threads");
   gpu_info_.thread_dimensions_ = to_int_vector(threads);
+
+  const picojson::value &swizzle = maybe(node, "swizzle");
+  gpu_info_.swizzle_dimensions_ = to_int_vector(swizzle);
 
   const picojson::value &flags = maybe(node, "compiler flags");
   gpu_info_.compiler_flags_ = to_string_vector(flags);
@@ -752,6 +756,20 @@ __isl_give isl_schedule *SchedulingMindTrick::ComputeScheduleSuggestion(void) {
   return result;
 }
 
+__isl_give isl_schedule_node *SchedulingMindTrick::SplitSwizzleDim(__isl_take isl_schedule_node *band, int dimension) {
+  isl_ctx *const ctx = isl_schedule_node_get_ctx(band);
+  isl_id *const marker = isl_id_alloc(ctx, MIND_TRICKS_SWIZZLE_MARKER, NULL);
+
+  band = isl_schedule_node_band_split(band, dimension);
+  isl_schedule_node *swizzle = isl_schedule_node_get_child(band, 0);
+  swizzle = isl_schedule_node_insert_mark(swizzle, marker);
+
+  isl_schedule_node_free(band);
+  band = isl_schedule_node_parent(swizzle);
+
+  return band;
+}
+
 __isl_give isl_schedule *SchedulingMindTrick::PrepareMappingOuterBand(__isl_take isl_schedule *const schedule,
                                                                       GpuConfig &info) {
   const std::vector<int> &block_dimensions = info.block_dimensions_;
@@ -788,12 +806,8 @@ __isl_give isl_schedule *SchedulingMindTrick::PrepareMappingOuterBand(__isl_take
 
   // Retrieve blocks/threads sizes from the schedule if not specified
   if (block_sizes.size() == 0 || thread_sizes.size() == 0) {
-    isl_union_map *const map = isl_schedule_node_band_get_partial_schedule_union_map(band);
-    isl_union_set *const applied = isl_union_set_apply(isl_union_set_copy(domain_), map);
-    isl_union_set *const lexmax = isl_union_set_lexmax(applied);
-    if (isl_union_set_isa_set(lexmax)) {
-      isl_set *const values = isl_set_from_union_set(lexmax);
-
+    isl_set *const values = isl_schedule_node_band_lexmax(band);
+    if (values) {
       if (info.block_sizes_.size() == 0) {
         info.block_sizes_ = extract_upper_bounds(values, info.block_dimensions_);
       }
@@ -803,7 +817,6 @@ __isl_give isl_schedule *SchedulingMindTrick::PrepareMappingOuterBand(__isl_take
       isl_set_free(values);
     } else {
       Warn("can not retrieve blocks/threads sizes");
-      isl_union_set_free(lexmax);
     }
   }
 
@@ -823,6 +836,11 @@ __isl_give isl_schedule *SchedulingMindTrick::PrepareMappingOuterBand(__isl_take
     innermost_start = 1 + *std::max_element(block_dimensions.begin(), block_dimensions.end());
   for (int dimension = innermost_start; dimension < size; ++dimension)
     band = isl_schedule_node_band_member_set_coincident(band, dimension, 0);
+  // Split the swizzle dimension
+  if (info.swizzle_dimensions_.size() == 1) {
+    const int swizzle_dim = info.swizzle_dimensions_[0];
+    band = SplitSwizzleDim(band, swizzle_dim);
+  }
   // Split blocks and threads into separate nodes (especially for reduce operators)
   const int outermost_thread = *std::min_element(thread_dimensions.begin(), thread_dimensions.end());
   band = isl_schedule_node_band_split(band, outermost_thread);
@@ -1038,7 +1056,7 @@ std::string SchedulingMindTrick::TemplateString(ScopInfo &scop_info, const isl::
     const unsigned size = list.size();
 
     picojson::array domain_json;
-    for (unsigned i = 0; i < size - 1; ++i) {
+    for (unsigned i = 0; i < size; ++i) {
       std::stringstream stream;
       stream << list.at(i);
       const std::string &component = stream.str();

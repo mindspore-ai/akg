@@ -1,10 +1,6 @@
 {
   "name": "Fused_Cast_BiasAdd_Gelu_fusion_7719078727474100806_0",
   "operator": "Fused_Cast_BiasAdd_Gelu_fusion_7719078727474100806_0",
-  "domain": [
-    "{ S_0[ax0_ax1_fused] : 0 <= ax0_ax1_fused <= 12582911 }",
-    "{ S_1[ax0_ax1_fused] : 0 <= ax0_ax1_fused <= 12582911 }"
-  ],
   "schedule": [
     "{ S_0[ax0_ax1_fused] -> [ax0_ax1_fused/3072]; S_1[ax0_ax1_fused] -> [ax0_ax1_fused/3072] }",
     "{ S_0[ax0_ax1_fused] -> [(ax0_ax1_fused mod 3072)/4]; S_1[ax0_ax1_fused] -> [(ax0_ax1_fused mod 3072)/4] }",
@@ -13,7 +9,8 @@
   ],
   "gpu": {
     "blocks": [0],
-    "threads": [1]
+    "threads": [1],
+    "swizzle": [2]
   },
   "disable": [
     "GpuDmaAnalysis",

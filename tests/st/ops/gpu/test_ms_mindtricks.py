@@ -115,6 +115,16 @@ def test_single_composite_file(input_file, attrs, poly):
             logging.info("Precision Error")
             raise ValueError("Precision Error")
 
+def test_mindtrick(operator_path, trick_path):
+    if os.path.isfile(operator_path) and os.path.isfile(trick_path):
+        trick = open(trick_path, "r")
+        attrs = {
+            "target": "cuda",
+            "mind_trick": trick.read(),
+        }
+        test_single_composite_file(operator_path, attrs, poly=True)
+    return True
+
 def test_composite_cases(operators=composite_operators):
     for operator in operators:
         operator_path = ""
@@ -133,13 +143,7 @@ def test_composite_cases(operators=composite_operators):
         else:
             logging.info("could not find trick for operator: " + operator)
 
-        if os.path.isfile(operator_path) and os.path.isfile(trick_path):
-            trick = open(trick_path, "r")
-            attrs = {
-                "target": "cuda",
-                "mind_trick": trick.read(),
-            }
-            test_single_composite_file(operator_path, attrs, poly=True)
+        test_mindtrick(operator_path, trick_path)
 
     return True
 

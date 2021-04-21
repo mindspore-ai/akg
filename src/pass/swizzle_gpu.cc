@@ -47,6 +47,10 @@ class SwizzleFinder : public IRVisitor {
       LOG(WARNING) << "Realize storage scope not implemented in swizzle pass (may not work as expected) : "
                    << op->value.as<StringImm>()->value;
       Visit(op->body);
+    } else if (op->attr_key == "pragma_swizzle") {
+      LOG(DEBUG) << "Pragma swizzle";
+      pragma_swizzle = true;
+      Visit(op->body);
     } else {
       IRVisitor::Visit_(op);
     }
@@ -58,8 +62,10 @@ class SwizzleFinder : public IRVisitor {
       LOG(INFO) << "Swizzle for loop ? var : " << op->loop_var->name_hint;
 
       loop_var = op->loop_var;
-      swizzlable = true;
-      swizzle_candidate = true;
+      if (pragma_swizzle) {
+        swizzlable = true;
+        swizzle_candidate = true;
+      }
       loop_loads = {};
       loop_stores = {};
       Visit(op->body);
@@ -69,6 +75,7 @@ class SwizzleFinder : public IRVisitor {
         swizzlable = false;
         return;
       }
+      pragma_swizzle = false;
       swizzle_candidate = false;
       // get all load and store from this loop and test if their range is 2, 4 or 0 (const)
       for (auto l : loop_loads) {
@@ -406,6 +413,7 @@ class SwizzleFinder : public IRVisitor {
   int current_max = 0;
   bool swizzle_candidate{false};
   bool contains_iterator{false};
+  bool pragma_swizzle{false};
   unsigned int swizzle_length{0};
   Var loop_var;
   // temp vars that are set inside a loop

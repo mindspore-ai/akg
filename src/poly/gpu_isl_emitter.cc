@@ -1219,6 +1219,12 @@ Stmt GpuIslEmitter::EmitMark(const isl::ast_node_mark &node) {
   }
 
   std::string mark = node.get_id().get_name();
+  if (mark == MIND_TRICKS_SWIZZLE_MARKER) {
+    auto stmt = EmitAst(node.get_node());
+    stmt = AttrStmt::make(make_zero(Int(32)), MIND_TRICKS_SWIZZLE_PRAGMA, Expr(1), stmt);
+    return stmt;
+  }
+
   if (IsStartsWith(mark, REDUCE_ATOMIC_FLAG)) {
     std::vector<std::string> strs = common::Split(mark, "_");
     CHECK_EQ(strs.size(), REDUCE_ATOMIC_FLAG_SIZE) << "atomic mark format is not right!.";

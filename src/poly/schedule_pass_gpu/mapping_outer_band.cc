@@ -21,6 +21,7 @@
 #include "poly/schedule_tree_util.h"
 #include "poly/sync_manager.h"
 #include "poly/scop.h"
+#include "poly/gpu_isl_emitter.h"
 
 namespace akg {
 namespace ir {
@@ -204,7 +205,7 @@ isl::schedule MappingOuterBand::DoThreadMapping(const isl::schedule &sch) {
 
     if (node.has_parent() && node.parent().isa<isl::schedule_node_mark>()) {
       const std::string &marker = node.parent().as<isl::schedule_node_mark>().get_id().get_name();
-      if (marker == "mind_trick_swizzle_marker") {
+      if (marker == MIND_TRICKS_SWIZZLE_MARKER) {
         return node;
       }
     }
