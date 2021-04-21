@@ -218,7 +218,7 @@ Stmt String2LowerStmtSimple(const StringImm *json_str, const Map<std::string, No
   Schedule sch = (*sch_create)(info.tensors, sch_name, poly);
   akg::BuildConfig config = akg::BuildConfig::Current();
   CHECK(config.defined());
-  const char *akg_dump_pass_ir = getenv("MS_AKG_DUMP_IR");
+  const char *akg_dump_pass_ir = getenv(GetDumpIRFlag().c_str());
   config->dump_pass_ir = akg_dump_pass_ir != nullptr;
   Array<NodeRef> args, shape_vars, arg_list_0;
   Map<Tensor, Buffer> binds, binds_0;
@@ -228,7 +228,7 @@ Stmt String2LowerStmtSimple(const StringImm *json_str, const Map<std::string, No
 }
 
 NodeRef CompositeWithJsonToFunc(const std::string &json_str, Map<std::string, NodeRef> attrs) {
-  const char *akg_dump_pass_ir = getenv("MS_AKG_DUMP_IR");
+  const char *akg_dump_pass_ir = getenv(GetDumpIRFlag().c_str());
   picojson::value v = String2Json(json_str);
   BuildInfo info;
   ExtractBuildInfo(v, info);
@@ -439,7 +439,7 @@ class CompositeJsonList {
     // Postprocess for segments: 1. Merge segments; 2. Process sync stmt; 3. Eliminate duplicate inputs.
     akg::BuildConfig final_config = akg::BuildConfig::Current();
     CHECK(final_config.defined());
-    final_config->dump_pass_ir = getenv("MS_AKG_DUMP_IR") != nullptr;
+    final_config->dump_pass_ir = getenv(GetDumpIRFlag().c_str()) != nullptr;
     auto res_ir = MergeStmts(block_irs, final_config);
 
     Array<NodeRef> ordered_args = ReorderArgs(inputs_, outputs_, all_args_, outputs2args_);
@@ -544,7 +544,7 @@ class CompositeJsonListGpu : public CompositeJsonList {
     Schedule sch = (*sch_create)(info.tensors, sch_name, poly_, grid_dims, block_dims, buffer_stitch);
     akg::BuildConfig config = akg::BuildConfig::Current();
     CHECK(config.defined());
-    config->dump_pass_ir = getenv("MS_AKG_DUMP_IR") != nullptr;
+    config->dump_pass_ir = getenv(GetDumpIRFlag().c_str()) != nullptr;
     // use each_ir_idx_ to distinct different subgraph
     std::string distinct_name = info.kernel_name + "_" + std::to_string(each_ir_idx_);
     Array<NodeRef> args, shape_vars, arg_list_0;

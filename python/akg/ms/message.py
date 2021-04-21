@@ -28,8 +28,8 @@ from akg import composite
 from . import cce
 from . import gpu
 from . import op_build
-from akg.global_configs import DUMP_IR_FLAG
-from akg.global_configs import DUMP_CODE_FLAG
+from akg.global_configs import get_dump_ir_flag
+from akg.global_configs import get_dump_code_flag
 
 
 @vc_util.check_input_type(str)
@@ -84,8 +84,8 @@ def _compilewithjson_to_module(json_str):
                 if kernel_info['attr']:
                     for ext_arg in kernel_info['attr']:
                         op_attrs.append(ext_arg['value'])
-                dump_ir = os.getenv(DUMP_IR_FLAG) == "on"
-                dump_code = os.getenv(DUMP_CODE_FLAG) == "on"
+                dump_ir = os.getenv(get_dump_ir_flag()) == "on"
+                dump_code = os.getenv(get_dump_code_flag()) == "on"
                 utils.op_build(op_func, input_shapes, input_types, op_attrs, kernel_info['op'], dump_ir=dump_ir,
                                dump_code=dump_code)
                 return True

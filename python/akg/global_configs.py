@@ -14,25 +14,20 @@
 
 """global_configs"""
 import akg.tvm
-
-CUDA_META_PATH = './cuda_meta/'
-ASCEND_META_PATH = './kernel_meta/'
-
-DUMP_IR_FLAG = 'MS_AKG_DUMP_IR'
-DUMP_CODE_FLAG = 'MS_AKG_DUMP_CODE'
+import os
 
 @akg.tvm.register_func
 def get_cuda_meta_path():
-  return CUDA_META_PATH
+  return './cuda_meta_' + str(os.getpid()) + "/"
 
 @akg.tvm.register_func
 def get_ascend_meta_path():
-  return ASCEND_META_PATH
+  return './kernel_meta/'
 
 @akg.tvm.register_func
 def get_dump_ir_flag():
-  return DUMP_IR_FLAG
+  return 'MS_AKG_DUMP_IR'
 
 @akg.tvm.register_func
 def get_dump_code_flag():
-  return DUMP_CODE_FLAG
+  return 'MS_AKG_DUMP_CODE'

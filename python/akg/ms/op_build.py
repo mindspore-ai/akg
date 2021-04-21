@@ -27,8 +27,8 @@ from akg.utils import kernel_exec as utils
 from akg.ms import save_gpu_param as gpu_utils
 from akg.utils import validation_check as vc_util
 from akg.tvm import _api_internal
-from akg.global_configs import CUDA_META_PATH
-from akg.global_configs import DUMP_IR_FLAG
+from akg.global_configs import get_cuda_meta_path
+from akg.global_configs import get_dump_ir_flag
 
 BINDS = "binds"
 
@@ -40,7 +40,7 @@ def op_build_to_func(opnames, computes, args, custom_schedule, device, kernel_na
         return None
 
     polyhedral = True
-    dump_ir = os.getenv(DUMP_IR_FLAG) == "on"
+    dump_ir = os.getenv(get_dump_ir_flag()) == "on"
 
     try:
         tmp_outputs = [x.op for x in computes]
@@ -76,7 +76,7 @@ def op_build(opnames, computes, args, custom_schedule, device, kernel_name, attr
         return None
 
     if device == "cuda":
-        kernel_meta_path = CUDA_META_PATH 
+        kernel_meta_path = get_cuda_meta_path() 
         cuda_path = os.path.realpath(kernel_meta_path)
         if not os.path.isdir(cuda_path):
             os.makedirs(cuda_path)

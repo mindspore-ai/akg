@@ -458,6 +458,13 @@ class GridBlockDimsAttr : public IRVisitor {
 };
 Map<std::string, NodeRef> BindBlockAndThread(GridBlockDims &dims, bool poly, const Map<std::string, NodeRef> &attrs);
 Stmt InsertSync(Stmt &s);
+
+inline std::string GetDumpIRFlag() {
+  const auto *f = air::runtime::Registry::Get("get_dump_ir_flag");
+  CHECK(f != nullptr) << "Function get_dump_ir_flag is not registed";
+
+  return (*f)().operator std::string();
+}
 }  // namespace akg
 
 #endif  // COMPOSITE_UTIL_H_

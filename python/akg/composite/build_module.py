@@ -24,6 +24,7 @@ from akg import tvm
 from akg.tvm import _api_internal
 from akg.topi.cuda.injective_single_kernel import schedule_injective
 import topi
+from akg.global_configs import get_dump_ir_flag
 
 
 def should_enable_atomic_add(kernel_info):
@@ -334,7 +335,7 @@ def stitch_json_split(desc_d):
         sg.ops = list(reversed(sg.ops))
         sg.op_name = desc_d['op']
         stitch_json_str = sub_graph_info(sg, desc_d)
-        if (os.getenv('MS_AKG_DUMP_IR') == "on"):
+        if (os.getenv(get_dump_ir_flag()) == "on"):
             if not os.path.exists("stitch_info"):
                 try:
                     os.mkdir("stitch_info")
@@ -837,7 +838,7 @@ def build_cuda(outputs, args, sch_name, kernel_name, attrs = False, poly = False
         attrs_t = dict(attrs.items())
     else:
         attrs_t = None
-    dump_ir = os.getenv('MS_AKG_DUMP_IR') == "on"
+    dump_ir = os.getenv(get_dump_ir_flag()) == "on"
     with tvm.build_config(dump_pass_ir = dump_ir):
         mod = akg.build(s, list(args), "cuda", name = kernel_name, binds = binds, attrs = attrs_t, polyhedral=bool(poly))
         return mod
