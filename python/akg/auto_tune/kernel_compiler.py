@@ -102,7 +102,11 @@ def get_matmul_cube_attrs(op_desc, config):
         tiling_param.append((config.m_l1, config.m_l0))
     tiling_param.extend([(16, 16), (16, 16), (config.k_l1, config.k_l0)])
     dim_info = ct_util.set_dims(tuple(tiling_param))
-    attrs = {'dim': dim_info, 'bypass': config.bypass}
+    attrs = {'dim': dim_info}
+    tuning_dict = config._asdict()
+    for key, value in tuning_dict.items():
+        if key not in ['n_l1', 'n_l0', 'm_l1', 'm_l0', 'k_l1', 'k_l0']:
+            attrs[key] = value
     return attrs
 def gen_kernel_matmul_cube(op_desc: MatmulCubeDesc, _, index_table,
                            config: MatmulCubeConfig = None, idx=None, gen_tiling_spaces=False):
