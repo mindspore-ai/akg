@@ -89,7 +89,7 @@ def liveness_analysis(desc_d, req_map):
 def is_reduce(tensor_name):
     return tensor_name.startswith('Reduce')
 
-def shared_memory_optimization(desc_d, req_map):
+def shared_memory_optimization(desc_d, req_map, outputs):
     sort_req_liveness = liveness_analysis(desc_d, req_map)
     sort_req_buf = list(sort_req_liveness.keys())
     alloc_map = dict()
@@ -107,7 +107,7 @@ def shared_memory_optimization(desc_d, req_map):
             # rule1: one buffer start larger equal to the reused buffer end.
             if sort_req_liveness[sort_req_buf[i]].start >= sort_req_liveness[sort_req_buf[j]].end:
                 # rule2: sizes are compatiable.
-                if req_map[sort_req_buf[i]] <= req_map[sort_req_buf[j]]:
+                if req_map[sort_req_buf[i]] <= req_map[sort_req_buf[j]] and sort_req_buf[j] not in outputs:
                     # rule3: make sure the candidate reused buffer is not using by other conflict variable.
                     for item in reverse_reuse_map.get(sort_req_buf[j], []):
                         if (sort_req_liveness[item].end >= sort_req_liveness[sort_req_buf[i]].end) or (sort_req_liveness[item].end >= sort_req_liveness[sort_req_buf[i]].start):
@@ -356,7 +356,7 @@ def stitch_json_split(desc_d):
     output_tensor_name += clean_op_list
     # start node for dominance tree is final_output_list + final_output_within_graph.
     start_node = final_output_list + final_output_within_graph
-    alloc_map, reuse_map = shared_memory_optimization(desc_d, req_map)
+    alloc_map, reuse_map = shared_memory_optimization(desc_d, req_map, output_tensor_name)
     # remove fake output from alloc_map and store them into clean_op_map
     clean_op_map = dict()
     for fake_op in clean_op_list:

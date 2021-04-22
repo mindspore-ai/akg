@@ -52,9 +52,12 @@ namespace schedule {
 class FuseOpAxis {
  public:
   explicit FuseOpAxis(const Schedule &sch,
-                      const std::unordered_map<IterVar, std::unordered_set<size_t>> &axis_reduce_group_ids) {
+                      const std::unordered_map<IterVar, std::unordered_set<size_t>> &axis_reduce_group_ids,
+                      const std::vector<size_t> &split_config, std::vector<size_t> &split_index)
+      : split_index_(split_index) {
     sch_ = sch;
     axis_reduce_group_ids_ = axis_reduce_group_ids;
+    split_config_ = split_config;
   }
 
   void Run() {
@@ -97,6 +100,8 @@ class FuseOpAxis {
   std::unordered_set<Operation> check_visited;
   std::unordered_set<Operation> fuse_visited;
   std::unordered_map<IterVar, std::unordered_set<size_t>> axis_reduce_group_ids_;
+  std::vector<size_t> split_config_;
+  std::vector<size_t> &split_index_;
 
   void RunCheck(const Operation &op) {
     // skip op that has been inlined
@@ -152,18 +157,21 @@ class FuseOpAxis {
         reduce_group_ids[i] = axis_reduce_group_ids_.at(axis[i]);
       }
     }
-    std::vector<size_t> split_index;
-    split_index.push_back(0);
+    split_index_.clear();
+    split_index_.push_back(0);
     for (size_t i = 1; i < axis.size(); ++i) {
       if (reduce_group_ids[i] != reduce_group_ids[i - 1]) {
-        split_index.push_back(i);
+        split_index_.push_back(i);
       }
     }
-    split_index.push_back(axis.size());
+    split_index_.push_back(axis.size());
+    if (!split_config_.empty()) {
+      split_index_ = split_config_;
+    }
     std::vector<Array<IterVar>> res;
-    for (size_t i = 0; i < split_index.size() - 1; ++i) {
+    for (size_t i = 0; i < split_index_.size() - 1; ++i) {
       Array<IterVar> cur_axis_group;
-      for (auto j = split_index[i]; j < split_index[i + 1]; ++j) {
+      for (auto j = split_index_[i]; j < split_index_[i + 1]; ++j) {
         cur_axis_group.push_back(axis[j]);
       }
       res.push_back(cur_axis_group);
@@ -547,7 +555,7 @@ class ComputeInfo : public IRVisitor {
       if (!arg.as<Variable>()) {
         arg = Simplify(arg, simplify_info_);
       }
-      std::vector<const Variable*> arg_vars;
+      std::vector<const Variable *> arg_vars;
       if (!arg.as<Variable>()) {
         auto arg_var_refs = akg::ir::GetVarsInExpr(arg);
         for (auto var_ref : arg_var_refs) {
@@ -694,7 +702,15 @@ class ComputeAtProcess {
   Schedule sch_;
 };
 
-void AutoFuse(Schedule sch) {
+void AutoFuse(Schedule sch, const std::string &split_str, std::vector<size_t> &split_index) {
+  auto split_vec = dmlc::Split(split_str, ' ');
+  std::vector<size_t> split_config;
+  for (const auto &c : split_vec) {
+    char *endptr = nullptr;
+    const int radix = 10;
+    size_t split = strtol(c.c_str(), &endptr, radix);
+    split_config.emplace_back(split);
+  }
   auto fuse_check = FuseCheck(sch);
   fuse_check.Run();
   if (!fuse_check.NeedToFuse()) {
@@ -702,7 +718,7 @@ void AutoFuse(Schedule sch) {
   }
   auto compute_info = ComputeInfo(sch);
   compute_info.Run();
-  FuseOpAxis(sch, compute_info.axis_reduce_group_ids_).Run();
+  FuseOpAxis(sch, compute_info.axis_reduce_group_ids_, split_config, split_index).Run();
   if (!fuse_check.compute_at_pairs_.empty()) {
     ComputeAtProcess(sch).Run(fuse_check.compute_at_pairs_);
   }

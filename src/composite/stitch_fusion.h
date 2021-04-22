@@ -39,7 +39,6 @@ inline std::ostream &operator<<(std::ostream &os, const StitchBufferInfo &x) {
 struct StitchAttrInfo {
   Expr broadcast_size;
   std::vector<StitchOpType> type_array;
-  bool switch_x_2_y{false};
 };
 
 struct IrAttrInfo {
@@ -49,7 +48,6 @@ struct IrAttrInfo {
   Map<std::string, NodeRef> attrs;
   Expr broadcast_size{0};
   Expr elemwise_size{0};
-  bool switch_x_2_y{false};
 };
 
 class StitchBufAlloc : public IRVisitor {
@@ -134,15 +132,17 @@ class StitchBufAlloc : public IRVisitor {
 
       if (buf_within_op_map.find(shared_name) != buf_within_op_map.end()) {
         // add replaced buffer into stitch_buffer_map.
-        StitchBufferInfo info;
-        info.name = name;
-        info.type = StorageType::Shared;
-        info.buf_name = alloc_stitch_info.buf_name;
-        info.alloc_size = alloc_size_per_block;
-        stitch_buffer_map[shared_name] = info;
-        // remember to reduce allocated_share_size_ due to reuse.
-        allocated_share_size_ -= alloc_size_per_block * data_type_.bytes();
-        allocate_revoke.push_back(shared_name);
+        if (allocated_share_size_ >= alloc_size_per_block * data_type_.bytes()) {
+          StitchBufferInfo info;
+          info.name = name;
+          info.type = StorageType::Shared;
+          info.buf_name = alloc_stitch_info.buf_name;
+          info.alloc_size = alloc_size_per_block;
+          stitch_buffer_map[shared_name] = info;
+          // remember to reduce allocated_share_size_ due to reuse.
+          allocated_share_size_ -= alloc_size_per_block * data_type_.bytes();
+          allocate_revoke.push_back(shared_name);
+        }
       }
       StitchBufferInfo info;
       info.name = name;
@@ -259,8 +259,8 @@ class StitchBufAlloc : public IRVisitor {
 
 class BufferStitchAttr : public GridBlockDimsAttr {
  public:
-  explicit BufferStitchAttr(
-    const std::function<Stmt(const StringImm *, const Map<std::string, NodeRef> &, bool, bool)> &f)
+  explicit BufferStitchAttr(const std::function<Stmt(const StringImm *, const Map<std::string, NodeRef> &, bool, bool,
+                                                     std::vector<size_t> &)> &f)
       : func_(f){};
 
   void SetStitchType(const StitchOpType &stitch_type) {
@@ -314,7 +314,7 @@ class BufferStitchAttr : public GridBlockDimsAttr {
       }
     }
     if (json_str) {
-      auto stmt = func_(json_str, attrs, poly, true);
+      auto stmt = func_(json_str, attrs, poly, true, split_index);
       Visit(stmt);
     }
   }
@@ -326,20 +326,13 @@ class BufferStitchAttr : public GridBlockDimsAttr {
     return size;
   }
 
- private:
-  // save loop_vars' extent for cases which need set dims.
-  void Visit_(const For *op) final {
-    Expr extent = op->extent;
-    loop_extent.push_back(extent);
-    Visit(op->body);
-  }
-
  public:
-  const std::function<Stmt(const StringImm *, const Map<std::string, NodeRef> &, bool, bool)> func_;
+  const std::function<Stmt(const StringImm *, const Map<std::string, NodeRef> &, bool, bool, std::vector<size_t> &)>
+    func_;
   Expr broadcast_size;
   Expr elemwise_size;
-  std::vector<Expr> loop_extent;
   StitchOpType stitch_type_{StitchOpType::Unknown};
+  std::vector<size_t> split_index;
 };
 
 IrAttrInfo GetIRAttr(StitchOpType type, BufferStitchAttr &stitch_attr_info, std::vector<StitchOpType> &type_array,

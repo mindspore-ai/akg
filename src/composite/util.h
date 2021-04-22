@@ -456,6 +456,8 @@ class GridBlockDimsAttr : public IRVisitor {
  public:
   GridBlockDims dims;
 };
+Map<std::string, NodeRef> SetAutoFuseAttr(const std::vector<size_t> &split_index,
+                                          const Map<std::string, NodeRef> &attrs);
 Map<std::string, NodeRef> BindBlockAndThread(GridBlockDims &dims, bool poly, const Map<std::string, NodeRef> &attrs);
 Stmt InsertSync(Stmt &s);
 
