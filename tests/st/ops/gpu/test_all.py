@@ -511,7 +511,7 @@ def test_ms_composite_buffer_stitch():
 @pytest.mark.platform_x86_gpu_training
 @pytest.mark.env_onecard
 def test_ms_mindtricks():
-    test_mindtricks()
+    test_mindtricks(["gpu", "composite"])
     return True
 
 

@@ -202,7 +202,13 @@ void CodeGenCUDA::VisitStmt_(const ir::For* op) {
   }
   else if (op->for_type == ir::ForType::Swizzled) {
     // remove this loop
+    if (unroll) {
+      replace_cce = true;
+      loop_var = op->loop_var.as<Variable>();
+    }
     PrintStmt(op->body);
+    replace_cce = false;
+    unroll = false;
     return;
   }
   CodeGenC::VisitStmt_(op);
@@ -688,16 +694,16 @@ void CodeGenCUDA::VisitExpr_(const Variable* op, std::ostream& os) {
 
 void CodeGenCUDA::VisitExpr_(const Load* op, std::ostream& os) {
   int lanes = op->type.lanes();
-  if (vec_store) {
+  if (vec_store || unroll_store) {
     static const char access[] = {'x', 'y', 'z', 'w', 'a', 'b', 'c', 'd'};
     if (lanes == 2 || lanes == 4) {
-      os << op->buffer_var->name_hint << "." << access[current_index];
+      os << PrintExpr(op->buffer_var) << "." << access[current_index];
     } else if(std::find_if(vec_loads.begin(), vec_loads.end(),
                            [op] (const Variable* v) { return (v->name_hint==op->buffer_var->name_hint); }) != vec_loads.end()){
-      os << "sw_" << op->buffer_var->name_hint << "." << access[current_index];
+      os << "sw_" << PrintExpr(op->buffer_var) << "." << access[current_index];
     } else{
       // temp variable
-      os << op->buffer_var->name_hint << "[";
+      os << PrintExpr(op->buffer_var) << "[";
       PrintExpr(op->index, os);
       os << "]";
     }
@@ -707,6 +713,7 @@ void CodeGenCUDA::VisitExpr_(const Load* op, std::ostream& os) {
 }
 
 void CodeGenCUDA::VisitStmt_(const Store* op) {
+  static const char access[] = {'x', 'y', 'z', 'w', 'a', 'b', 'c', 'd'};
   Type t = op->value.type();
   if (is_reinterpret && t.lanes() == 1) {
     is_reinterpret = false;
@@ -722,23 +729,33 @@ void CodeGenCUDA::VisitStmt_(const Store* op) {
 
   } else if (vec_store) {
     replace_cce = true;
-    static const char access[] = {'x', 'y', 'z', 'w', 'a', 'b', 'c', 'd'};
     int lanes = op->buffer_var.type().lanes();
     loop_extent = lanes;
     for (int i = 0; i < lanes; i++){
       this->PrintIndent();
       current_index = i;
-      stream << op->buffer_var->name_hint << "." << access[i] << " = ";
+      stream << PrintExpr(op->buffer_var) << "." << access[i] << " = ";
       PrintExpr(op->value, stream);
       stream << ";\n";
     }
     replace_cce = false;
     vec_store = false;
+  } else if (unroll) {
+    unroll_store = true;
+    for (int i = 0; i < loop_extent.as<IntImm>()->value; i++){
+      this->PrintIndent();
+      current_index = i;
+      stream << PrintExpr(op->buffer_var);
+      stream << '[' << PrintExpr(op->index);
+      stream << "] = " << PrintExpr(op->value);
+      stream << ";\n";
+    }
+    unroll_store = false;
   } else if (simple_store){
     simple_store = false;
     std::string value = this->PrintExpr(op->value);
     this->PrintIndent();
-    stream << op->buffer_var->name_hint << " = " << value << ";\n";
+    stream << PrintExpr(op->buffer_var) << " = " << value << ";\n";
   } else{
     CodeGenC::VisitStmt_(op);
   }
@@ -787,6 +804,10 @@ void CodeGenCUDA::VisitStmt_(const AttrStmt* op) {
   } else if (op->attr_key == "no_init_value") {
     // mark next let statement to be a simple, empty declaration
     no_init_value = true;
+  }  else if (op->attr_key == "swizzle_unroll") {
+    // mark loop for unrolling with special swizzle vars
+    loop_extent = op->value;
+    unroll = true;
   }
   CodeGenC::VisitStmt_(op);
 }
