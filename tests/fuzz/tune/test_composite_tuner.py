@@ -58,6 +58,6 @@ if __name__ == "__main__":
         sys.exit()
 
     time_start = time.time()
-    tune_composite(input_str, tune_level=1, skip_exist=skip_exist)
+    tune_composite(input_str, tune_level=1, repo_path=repo_path, skip_exist=skip_exist)
     time_end = time.time()
     logging.debug("launch time: %f", time_end - time_start)
