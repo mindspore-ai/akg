@@ -771,8 +771,8 @@ void GpuStrategy::InnerThreadOuterBlock() {
     TileAxis *axis;
     int64_t shape;
     std::tie(axis, shape) = pending_axes_[i];
-    auto idx = depth_ - 1 - (pending_axes_.size() - 1 - i);
-    idx = reverse_binding_ ? std::min(depth_, block_limit_.size()) - 1 - idx : idx;
+    auto idx = indexing.size() - 1 - (pending_axes_.size() - 1 - i);
+    idx = reverse_binding_ ? std::min(indexing.size(), block_limit_.size()) - 1 - idx : idx;
     auto rest_blocks = idx < block_limit_.size() ? std::min(block_limit_[idx], axis->block_constraints.map_extent_) : 1;
     ss << "axis " << axis->index << "_" << axis->dim_axis << " shape = " << shape << ", block_idx = " << idx
        << ", rest blocks = " << rest_blocks;
