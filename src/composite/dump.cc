@@ -32,7 +32,6 @@ void DumpIRAttr(const std::string &kernel_name, const IrAttrInfo &attr, size_t i
   of << "attrs:" << attr.attrs << std::endl;
   of << "broadcast_size:" << attr.broadcast_size << std::endl;
   of << "elemwise_size:" << attr.elemwise_size << std::endl;
-  of << "switch_x_2_y:" << attr.switch_x_2_y << std::endl;
   of.close();
 }
 
@@ -71,7 +70,6 @@ void DumpStitchInfo(const std::string &kernel_name, StitchAttrInfo &store_attr,
     of << type << " ";
   }
   of << std::endl;
-  of << "switch_x_2_y: " << store_attr.switch_x_2_y << std::endl;
 
   DumpHeader(of, "stitch_buffer_map");
   for (const auto &kv : stitch_buffer_map) {

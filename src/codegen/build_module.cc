@@ -460,7 +460,7 @@ NodeRef LowerStmt(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeR
                   const Map<std::string, NodeRef> &in_attrs, bool simple_mode, bool polyhedral, bool tuning,
                   const std::string &target, const BuildConfig &config, Array<NodeRef> *args,
                   Array<NodeRef> *arg_list_0, Map<Tensor, Buffer> *binds, Map<Tensor, Buffer> *binds_0,
-                  bool lower_list) {
+                  std::vector<size_t> *split_index, bool lower_list) {
   CHECK(sch.defined()) << "sch is not defined.";
   CHECK(!name.empty()) << "name is empty.";
   CHECK(find_if(name.begin(), name.end(), [](char c) { return !std::isalnum(c) && c != '_'; }) == name.end())
@@ -489,13 +489,13 @@ NodeRef LowerStmt(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeR
     akg::schedule::AutoInline(sch, target_platform, global_attrs.GetBoolAttr(kEnableCSE, false));
   }
   if (target_platform->device_type == kDLGPU && polyhedral && global_attrs.GetBoolAttr(kEnableAutoFuse, true)) {
-    akg::schedule::AutoFuse(sch);
+    akg::schedule::AutoFuse(sch, global_attrs.GetStringAttr(kAutoFuseSplit, ""), *split_index);
   }
 
   auto new_sch = sch.normalize();
   auto bounds = air::schedule::InferBound(new_sch);
   Stmt stmt = make_pass("schedule.ScheduleOps", new_sch, bounds, false);
- 
+
   stmt = NEXT_PASS(TensorAccessRewrite, stmt);
   if (target_platform->device_type == kDLGPU) {
     if (polyhedral) {
@@ -557,12 +557,12 @@ NodeRef LowerStmt(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeR
       stmt = NEXT_PASS(VectorizeLoop, stmt);
     }
     stmt = NEXT_PASS(InjectVirtualThread, stmt);
-    if (polyhedral && (global_attrs.GetBoolAttr(kEnableDoubleBuffer, false) 
-      || global_attrs.GetBoolAttr(kEnableTransferBuffer, false))) {
+    if (polyhedral && (global_attrs.GetBoolAttr(kEnableDoubleBuffer, false) ||
+                       global_attrs.GetBoolAttr(kEnableTransferBuffer, false))) {
       stmt = NEXT_PASS(InjectTransferBufferScope, stmt);
     }
-    stmt = NEXT_PASS(InjectDoubleBuffer, stmt, config->double_buffer_split_loop, 
-      global_attrs.GetBoolAttr(kEnableTransferBuffer, false));
+    stmt = NEXT_PASS(InjectDoubleBuffer, stmt, config->double_buffer_split_loop,
+                     global_attrs.GetBoolAttr(kEnableTransferBuffer, false));
     stmt = NEXT_PASS(StorageRewrite, stmt);
 
     if (target_platform->device_type == kDLGPU && polyhedral) {
@@ -613,8 +613,9 @@ NodeRef Lower(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeRef> 
   Array<NodeRef> arg_list_0;
   Map<Tensor, Buffer> binds;
   Map<Tensor, Buffer> binds_0;
+  std::vector<size_t> split_index;
   NodeRef tmp = LowerStmt(sch, in_args, shape_vars, name, in_binds, in_attrs, simple_mode, polyhedral, tuning, target,
-                          config, &args, &arg_list_0, &binds, &binds_0);
+                          config, &args, &arg_list_0, &binds, &binds_0, &split_index);
 #ifdef USE_AKG_COMPILE_STUB
   CHECK(target != "cce") << "Can not enable target cce, please make sure akg/build/libakg_ext.a "
                             "downloaded successfully, then recompile the source codes";

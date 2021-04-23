@@ -741,8 +741,9 @@ isl::schedule MappingOuterBand::DoBlockMapping(const isl::schedule &sch) {
   // Step 1. Determine max num dimension of blocks that can be mapped.
   auto block_cfg = scop_info_.user_config_.GetBlockConfig();
   CHECK(block_cfg != nullptr) << "block config is null";
-  auto n_block_map =
-    scop_info_.user_config_.GetEnableAkgReduceLib() ? band_node.n_member() : CountConsecutiveCoincident(band_node);
+  auto n_block_map = (scop_info_.user_config_.GetEnableAkgReduceLib() || scop_info_.user_config_.EnableStitchFusion())
+                       ? band_node.n_member()
+                       : CountConsecutiveCoincident(band_node);
   n_block_map = std::min(block_cfg->MaxDim(), n_block_map);
   n_block_map = std::min(block_cfg->bound, n_block_map);
   if (n_block_map < 1) {

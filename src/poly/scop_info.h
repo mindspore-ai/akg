@@ -247,6 +247,7 @@ class UserConfig {
       ParseBoolAttr(attrs, "enable_bank_conflict_opt", &enable_bank_conflict_);
       ParseBoolAttr(attrs, "enable_one_dim_thread", &enable_one_dim_thread_);
       ParseBoolAttr(attrs, "shared_inversed_thread_map", &shared_inversed_thread_map_);
+      ParseBoolAttr(attrs, "enable_stitch_fusion", &enable_stitch_fusion_);
       ParseIntAttr(attrs, "shared_vector_align", &shared_vector_align_);
       ParseIntAttr(attrs, "register_memory_depth", &register_depth_);
       ParseIntAttr(attrs, "shared_memory_depth", &shared_depth_);
@@ -435,6 +436,7 @@ class UserConfig {
     shared_inversed_thread_map_ = shared_inversed_thread_map;
   }
   bool GetSharedInversedThreadMap() { return shared_inversed_thread_map_; }
+  bool EnableStitchFusion() { return enable_stitch_fusion_; }
   void SetSharedVectorAlign(int shared_vector_align) { shared_vector_align_ = shared_vector_align; }
   int GetSharedVectorAlign() { return shared_vector_align_; }
 
@@ -596,6 +598,7 @@ class UserConfig {
   bool unroll_shared_{false};
   bool enable_bank_conflict_{false};
   bool shared_inversed_thread_map_{false};
+  bool enable_stitch_fusion_{false};
   int shared_vector_align_{0};
 
   // schedule_pass/mind_trick config

@@ -77,6 +77,7 @@ constexpr auto kDisableHalfToFloatSumOpt = "disable_half_to_float_sum_opt";
 constexpr auto kAkgTargetHostName = "stackvm";
 constexpr auto kEnableAutoInline = "enable_auto_inline";
 constexpr auto kEnableAutoFuse = "enable_auto_fuse";
+constexpr auto kAutoFuseSplit = "auto_fuse_split";
 constexpr auto kEnableCSE = "enable_common_subexpr_elim";
 constexpr auto kEnableFeatureLibrary = "enable_feature_library";
 constexpr auto kEnableFeatureLibraryPrePoly = "enable_feature_library_pre_poly";

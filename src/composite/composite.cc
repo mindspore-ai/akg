@@ -205,7 +205,7 @@ void ExtractBuildInfo(const picojson::value &input_json, BuildInfo &info) {
 }
 
 Stmt String2LowerStmtSimple(const StringImm *json_str, const Map<std::string, NodeRef> &attrs, bool poly,
-                            bool buffer_stitch) {
+                            bool buffer_stitch, std::vector<size_t> &split_index) {
   CHECK(json_str);
   picojson::value v = String2Json(json_str->value);
   BuildInfo info;
@@ -223,7 +223,7 @@ Stmt String2LowerStmtSimple(const StringImm *json_str, const Map<std::string, No
   Array<NodeRef> args, shape_vars, arg_list_0;
   Map<Tensor, Buffer> binds, binds_0;
   auto stmt = LowerStmt(sch, info.args, shape_vars, info.kernel_name + "_check", info.in_binds, attrs, false, poly,
-                        false, "cuda", config, &args, &arg_list_0, &binds, &binds_0, true);
+                        false, "cuda", config, &args, &arg_list_0, &binds, &binds_0, &split_index, true);
   return Downcast<Stmt>(stmt);
 }
 
@@ -499,6 +499,7 @@ class CompositeJsonList {
   std::string merge_name_;
   size_t each_ir_idx_{0};
   size_t block_json_idx_{0};
+  std::vector<size_t> split_index_;
 };
 
 class CompositeJsonListGpu : public CompositeJsonList {
@@ -549,8 +550,9 @@ class CompositeJsonListGpu : public CompositeJsonList {
     std::string distinct_name = info.kernel_name + "_" + std::to_string(each_ir_idx_);
     Array<NodeRef> args, shape_vars, arg_list_0;
     Map<Tensor, Buffer> binds, binds_0;
+    std::vector<size_t> split_index;
     auto stmt = LowerStmt(sch, info.args, shape_vars, distinct_name, info.in_binds, attrs, false, poly_, false, "cuda",
-                          config, &args, &arg_list_0, &binds, &binds_0, true);
+                          config, &args, &arg_list_0, &binds, &binds_0, &split_index, true);
     size_t count = 0;
     for (const auto &x : arg_list_0) {
       auto buffer = x.as<BufferNode>();
@@ -579,21 +581,22 @@ class CompositeJsonListGpu : public CompositeJsonList {
       using std::placeholders::_2;
       using std::placeholders::_3;
       using std::placeholders::_4;
-      const std::function<Stmt(const StringImm *, const Map<std::string, NodeRef> &, bool, bool)> f =
-        std::bind(&String2LowerStmtSimple, _1, _2, _3, _4);
+      using std::placeholders::_5;
+      const std::function<Stmt(const StringImm *, const Map<std::string, NodeRef> &, bool, bool, std::vector<size_t> &)>
+        f = std::bind(&String2LowerStmtSimple, _1, _2, _3, _4, _5);
       BufferStitchAttr stitch_attr_info(f);
       stitch_attr_info.GetBufferStitchAttr(stitch_json, op_v, attrs, poly_);
       auto dims = stitch_attr_info.dims;
       auto stitch_type = stitch_attr_info.stitch_type_;
-      if (each_ir_idx_ == 1) loop_extent_array = stitch_attr_info.loop_extent;
-      stitch_attr_info.loop_extent = loop_extent_array;  // only care about loop from first ir.
       dim_array.push_back(dims);                         // save current dims into array.
       IrAttrInfo ir_attr_info = GetIRAttr(stitch_type, stitch_attr_info, ir_type_array, dim_array, attrs);
       DumpIRAttr(kernel_name, ir_attr_info, each_ir_idx_);
       ir_type_array.push_back(stitch_type);  // Note this should be done AFTER GetIrAttr.
-      stitch_attr.broadcast_size = ir_attr_info.broadcast_size;
-      stitch_attr.switch_x_2_y = ir_attr_info.switch_x_2_y;
       auto new_attrs = BindBlockAndThread(ir_attr_info.dims, poly_, ir_attr_info.attrs);
+      if (each_ir_idx_ == 1) split_index_ = stitch_attr_info.split_index;
+      new_attrs = SetAutoFuseAttr(split_index_, new_attrs);
+      new_attrs.Set("enable_stitch_fusion", Expr(true));
+
       auto single_ir =
         String2LowerStmt(stitch_json.as<StringImm>(), new_attrs, ir_attr_info.grid_dims, ir_attr_info.block_dims, true);
       stitch_irs.emplace_back(InsertSync(single_ir));

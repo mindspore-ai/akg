@@ -93,6 +93,18 @@ std::string CreateDataFormatKey(const std::string &tensor_name) {
   return key;
 }
 
+Map<std::string, NodeRef> SetAutoFuseAttr(const std::vector<size_t> &split_index,
+                                          const Map<std::string, NodeRef> &attrs) {
+  Map<std::string, NodeRef> new_attrs;
+  if (attrs.defined()) new_attrs = attrs;
+  std::stringstream ss;
+  for (const auto &split : split_index) {
+    ss << split << " ";
+  }
+  new_attrs.Set("auto_fuse_split", Expr(ss.str()));
+  return new_attrs;
+}
+
 Map<std::string, NodeRef> BindBlockAndThread(GridBlockDims &dims, bool poly, const Map<std::string, NodeRef> &attrs) {
   Map<std::string, NodeRef> new_attrs;
   if (attrs.defined()) new_attrs = attrs;
