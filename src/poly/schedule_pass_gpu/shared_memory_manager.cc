@@ -529,7 +529,9 @@ void SharedMemoryManager::GatherBufferFootprintDefInfo(const isl::schedule_node 
     sizes.back() += 16;
   }
 
-  sizes = OptimizeSharedDimension(sizes);
+  if (bank_conflict_) {
+    sizes = OptimizeSharedDimension(sizes);
+  }
 
   isl::id tensor_id = tensor_info.tensor_id;
   isl::id cluster_id = tensor_info.dst_tensor_id;
