@@ -716,6 +716,7 @@ class AnalysisResult {
   void RecordUpdateTensor(const Tensor &tensor) { update_tensors_.push_back(tensor); }
   void RecordAttrStmt(const AttrStmt *attr_stmt) { attr_stmts_.push_back(attr_stmt); }
   void RecordAtomicTensors(const AtomicInfo &atomic_info) { atomic_tensors_.push_back(atomic_info); }
+  void RecordAtomicMarkers(const std::string &marker_name) { atomic_markers_.insert(marker_name); }
   void RecordReduceOutTensors(const std::string &tensor_name) { reduce_out_tensors_.insert(tensor_name); }
   void RecordContextParams(const isl::set &context_params) { context_params_ = context_params; }
   void RecoreMatrixMatmulMap(const std::string matrix_name, const std::string matrix_position) {
@@ -734,6 +735,7 @@ class AnalysisResult {
   std::unordered_set<std::string> GetCastTensors() const { return cast_tensors_; }
   isl::set GetContextParams() { return context_params_; }
   std::vector<AtomicInfo> GetAtomicTensors() { return atomic_tensors_; }
+  std::unordered_set<std::string> GetAtomicMarkers() { return atomic_markers_; }
   std::unordered_set<std::string> GetReduceOutTensors() { return reduce_out_tensors_; }
   isl::union_map GetReads() const { return reads_; }
   std::unordered_set<std::string> GetReduceAttrs() const { return reduce_attrs_; }
@@ -884,6 +886,7 @@ class AnalysisResult {
   isl::set context_params_;
 
   std::vector<AtomicInfo> atomic_tensors_;
+  std::unordered_set<std::string> atomic_markers_;
   std::unordered_set<std::string> reduce_out_tensors_;
   std::unordered_set<std::string> cast_tensors_;
   bool enabled_auto_tiling_{false};
