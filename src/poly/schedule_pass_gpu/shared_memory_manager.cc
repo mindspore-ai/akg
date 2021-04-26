@@ -182,7 +182,7 @@ isl::schedule_node SharedMemoryManager::MapCopiesToThreads(isl::schedule_node &r
 
     if (shared_inversed_thread_map_) {
       // Pretille - To make a vectorize loop more apparent with only the information of the mapping
-      const auto &domain =  band_node.as<isl::schedule_node_band>().get_partial_schedule().domain();
+      const auto &domain = band_node.as<isl::schedule_node_band>().get_partial_schedule().domain();
       const isl::id &current_computing_id_shared = domain.unwrap().range().set_list().get_at(0).get_tuple_id();
 
       std::vector<size_t> tensor_size;
@@ -192,15 +192,15 @@ isl::schedule_node SharedMemoryManager::MapCopiesToThreads(isl::schedule_node &r
         }
       }
       // Reverse because thread is innermost map
-      std::reverse(tensor_size.begin(),tensor_size.end());
+      std::reverse(tensor_size.begin(), tensor_size.end());
 
       auto ctx = band_node.ctx();
       const auto &space = band_node.as<isl::schedule_node_band>().get_space();
       const auto n_member = band_node.as<isl::schedule_node_band>().n_member();
       isl::multi_val tile_size = isl::multi_val::zero(space);
       for (size_t i = 0; i < n_member; ++i) {
-        const size_t size = tensor_size[i]/thread_cfg->GetAt(i).second;
-        tile_size = tile_size.set_val(n_member-1 - i, isl::val(ctx, size!=0?size:1));
+        const size_t size = tensor_size[i] / thread_cfg->GetAt(i).second;
+        tile_size = tile_size.set_val(n_member - 1 - i, isl::val(ctx, size != 0 ? size : 1));
       }
       band_node = TileBand(band_node, tile_size);
     }
@@ -234,6 +234,7 @@ isl::schedule_node SharedMemoryManager::MapCopiesToThreads(isl::schedule_node &r
       if (atomic_type != "" && atomic_node.has_children() && atomic_node.child(0).isa<isl::schedule_node_filter>()) {
         atomic_node =
           atomic_node.child(0).child(0).insert_mark(isl::id(atomic_node.ctx(), AtomicMarker("_" + atomic_type)));
+        scop_info_.analysis_result_.RecordAtomicMarkers(AtomicMarker("_" + atomic_type));
         atomic_node = atomic_node.parent().parent();
       }
       return atomic_node;
@@ -793,7 +794,7 @@ std::vector<size_t> SharedMemoryManager::OptimizeVectorAlign(std::vector<size_t>
   std::vector<size_t> res = sizes;
   if (shared_vector_align_ != 0) {
     int padsize = res.back() % shared_vector_align_;
-    res.back() += padsize?(shared_vector_align_-padsize):0;
+    res.back() += padsize ? (shared_vector_align_ - padsize) : 0;
   }
   return res;
 }

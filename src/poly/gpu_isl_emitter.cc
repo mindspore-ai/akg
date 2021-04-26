@@ -989,9 +989,19 @@ Stmt GpuIslEmitter::EmitIf(const isl::ast_node_if &node) {
   }
   cur_if_list_.pop_back();
   if (reduce_info_.init_stmt_emit_) {
-    reduce_info_.init_stmt_emit_ = false;
-    if (info_.user_config_.GetEnableAtomicAdd()) {
-      cond_expr = ConditionExprMod().Mutate(cond_expr);
+    if (info_.user_config_.GetEnableAtomicAdd() && !info_.analysis_result_.GetAtomicMarkers().empty()) {
+      std::string direction = info_.analysis_result_.GetReduceDirection();
+      std::string block_del = "";
+      bool is_found = false;
+      if (direction == X_DIRECTION) {
+        block_del = BLOCK_IDX_X;
+      } else {
+        block_del = BLOCK_IDX_Y;
+      }
+      cond_expr = ConditionExprMod(block_del, is_found).Mutate(cond_expr);
+      if (is_found) {
+        reduce_info_.init_stmt_emit_ = false;
+      }
     }
   }
 
