@@ -1,7 +1,6 @@
 {
   "name": "Fused_GkDropout_2353362030752466006_0",
   "operator": "Fused_GkDropout_2353362030752466006_0",
-  "domain": "{ S_0[cc0] : 0 <= cc0 <= 6291455; S_1[cc0] : 0 <= cc0 <= 6291455 }",
   "schedule": [
     "{ S_0[cc0] -> [cc0/3072]; S_1[cc0] -> [cc0/3072] }",
     "{ S_0[cc0] -> [(cc0 mod 3072)/4]; S_1[cc0] -> [(cc0 mod 3072)/4] }",
@@ -10,7 +9,8 @@
   ],
   "gpu": {
     "blocks": [0],
-    "threads": [1]
+    "threads": [1],
+    "swizzle": [2]
   },
   "disable": [
     "GpuDmaAnalysis",

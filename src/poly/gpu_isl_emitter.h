@@ -29,6 +29,9 @@ constexpr auto AKG_ALL_REDUCE = "akg_reduce::ALL_REDUCE";
 constexpr auto AKG_X_REDUCE = "akg_reduce::REDUCE2D_X";
 constexpr auto AKG_Y_REDUCE = "akg_reduce::REDUCE2D_Y";
 
+constexpr auto MIND_TRICKS_SWIZZLE_MARKER = "mind_trick_swizzle_marker";
+constexpr auto MIND_TRICKS_SWIZZLE_PRAGMA = "pragma_swizzle";
+
 // example:
 // red_init_SumOp_S_1_0
 constexpr auto REDUCE_FLAG_SIZE = 6;

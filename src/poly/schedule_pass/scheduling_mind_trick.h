@@ -68,6 +68,7 @@ class GpuConfig {
   std::vector<int> thread_sizes_;
   std::vector<int> block_dimensions_;
   std::vector<int> thread_dimensions_;
+  std::vector<int> swizzle_dimensions_;
   std::vector<std::string> compiler_flags_;
 };
 
@@ -208,6 +209,7 @@ class SchedulingMindTrick {
   // Various helpers to build the suggested schedule
   __isl_give isl_schedule *ComputeScheduleSuggestion(void);
   __isl_give isl_schedule *PrepareMappingOuterBand(__isl_take isl_schedule *schedule, GpuConfig &info);
+  __isl_give isl_schedule_node *SplitSwizzleDim(__isl_take isl_schedule_node *band, int dimension);
 
   ///////////////////////////////////////////////////////////////////////////
   // Soft constraints
