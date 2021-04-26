@@ -40,6 +40,17 @@ namespace ir {
 namespace poly {
 
 ////////////////////////////////////////////////////////////////////////////////
+// Local "implementation-detail" variables
+////////////////////////////////////////////////////////////////////////////////
+
+static const std::vector<std::string> unsupported_autogen_prefixes_ = {
+  "Fused_Cast_Transpose",
+};
+static const std::vector<std::string> unsupported_autogen_substrings_ = {
+  "Reduce",
+};
+
+////////////////////////////////////////////////////////////////////////////////
 // Constructors
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -155,30 +166,80 @@ static inline void RunInfo(const std::string &stage, const std::string &kernel_n
   log::Info(log::Verbosity::medium, text_bright_blue "schedule (loop nest):\n" + to_c_code_string(schedule));
 }
 
-bool ConstrainSchedule::KernelIsEligible(const isl::schedule &sch) const {
-  const std::string &kernel_name = scop_info_.user_config_.GetKernelName();
-
-  // For now, the only criterion for eligibility is the existence of a blacklist exists and
-  // its containing the current kernel name
+bool ConstrainSchedule::KernelIsBlacklisted(const isl::schedule &sch) const {
   const char *const blacklist_path = std::getenv(env_string_mind_tricks_operator_blacklist_);
   if (!blacklist_path) {
     Info(log::Verbosity::high, env_string_mind_tricks_operator_blacklist_ + std::string(" not set"));
-    return true;
+    return false;
   }
 
   std::fstream file(blacklist_path, std::ios::in);
   if (!file.is_open()) {
-    Warn(log::Verbosity::high, "could not open operator blacklist: " + std::string(blacklist_path));
-    return true;
+    Warn(log::Verbosity::low, "could not open operator blacklist: " + std::string(blacklist_path));
+    return false;
   }
 
+  const std::string &kernel_name = scop_info_.user_config_.GetKernelName();
   // Very basic analysis of the lines (no support for extra spaces, etc.)
   std::string line;
   while (getline(file, line)) {
     // Support for "comments" in the blacklist file
-    if (line[0] == '#') continue;
+    if (line[0] == '#') {
+      continue;
+    } else if (kernel_name == line) {
+      Info(log::Verbosity::high, "exact match found in blacklist");
+      scop_info_.user_config_.SetMindTrickStatus("blacklist");
+      return true;
+    } else if (kernel_name.rfind(line, 0) == 0) {
+      Info(log::Verbosity::high, "partial match found in blacklist");
+      scop_info_.user_config_.SetMindTrickStatus("blacklist");
+      return true;
+    }
+  }
 
-    if (kernel_name == line) return false;
+  return false;
+}
+
+bool ConstrainSchedule::ShouldAutogenMindTrick(const isl::schedule &sch) const {
+  const char *const env_autogen = std::getenv(env_string_mind_tricks_autogen_);
+  if (env_autogen) {
+    // "force" instead of "true" because this will override all the checks below.
+    const std::string &str = std::string(env_autogen);
+    if (str == "force") {
+      Info(log::Verbosity::low, "MindTrick autogen is forced via the environment");
+      return true;
+    } else if (str == "false") {
+      Info(log::Verbosity::low, "MindTrick autogen is disabled via the environment");
+      return false;
+    }
+  }
+
+  const bool enable_autogen = scop_info_.user_config_.GetEnableMindTrickAutogen();
+  if (!enable_autogen) {
+    return false;
+  }
+
+  const std::string &target = scop_info_.user_config_.GetTarget();
+  if (target != TARGET_CUDA) {
+    return false;
+  }
+
+  // Explicitely avoid autogen for reduce cases
+  if (scop_info_.user_config_.GetEnableAkgReduceLib()) {
+    return false;
+  }
+
+  // Check operator names for unsupported prefixes or substrings...
+  const std::string &kernel_name = scop_info_.user_config_.GetKernelName();
+  for (auto prefix : unsupported_autogen_prefixes_) {
+    if (kernel_name.rfind(prefix, 0) == 0) {
+      return false;
+    }
+  }
+  for (auto substring : unsupported_autogen_substrings_) {
+    if (kernel_name.find(substring) != std::string::npos) {
+      return false;
+    }
   }
 
   return true;
@@ -204,7 +265,9 @@ bool ConstrainSchedule::IsEnabled(void) {
 }
 
 isl::schedule ConstrainSchedule::Run(isl::schedule sch) {
-  if (!IsEnabled()) return sch;
+  if (!IsEnabled()) {
+    return sch;
+  }
 
   const std::string &target = scop_info_.user_config_.GetTarget();
   const std::string &kernel_name = scop_info_.user_config_.GetKernelName();
@@ -213,33 +276,42 @@ isl::schedule ConstrainSchedule::Run(isl::schedule sch) {
   const log::Verbosity saved_verbosity = log::GetVerbosityLevel();
   log::SetVerbosityLevel(static_cast<log::Verbosity>(verbosity_));
 
-  isl::schedule result = sch;
-
   // Make sure the constraints are available...
   // We expect this pass to be right after InitSchedule: most information is
   // initialized or computed in InitSchedule. However the constraints are
   // usually computed in ComputeSchedule (which we may disable afterwards!).
   pass_info_.constraints_ = MakeScheduleConstraints(sch, pass_info_);
 
+  // Attempt to create a template if templates are enabled
+  CreateMindTrickTemplate(sch);
+
   // Check whether we want to use ConstrainSchedule on this kernel
-  const bool eligible = KernelIsEligible(sch);
-  if (!eligible) {
-    Warn("ConstrainSchedule will ignore this operator...");
+  const bool blacklisted = KernelIsBlacklisted(sch);
+  if (blacklisted) {
+    scop_info_.user_config_.SetMindTrickStatus("blacklist");
+    Info(log::Verbosity::low, "blacklisted operator");
     return sch;
   }
 
-  const std::size_t total = mind_tricks_.size();
-  RunInfo("input", kernel_name, sch);
-  std::stringstream summary;
-  summary << pass_name_ << " has " << total << " tricks up its sleeve";
-  Info(log::Verbosity::low, summary);
+  const bool autogen = ShouldAutogenMindTrick(sch);
+  if (autogen) {
+    InsertAutoMindTrick(sch);
+  } else {
+    // Note that this status can be overwritten if there are manual tricks!
+    scop_info_.user_config_.SetMindTrickStatus("no-autogen");
+    Info(log::Verbosity::low, "no autogen for this operator");
+  }
 
-  CreateMindTrickTemplate(sch);
   if (target == TARGET_CUDA) {
     GpuCompilerFlagsTempfileRemove();
   }
 
+  const std::size_t total = mind_tricks_.size();
+  RunInfo("input", kernel_name, sch);
+  Info(log::Verbosity::low, pass_name_ + " has " + std::to_string(total) + " tricks up its sleeve");
+
   size_t current = 0;
+  isl::schedule result = sch;
   for (std::shared_ptr<SchedulingMindTrick> &mind_trick : mind_tricks_) {
     const std::string name = mind_trick->GetName();
     current++;
@@ -260,9 +332,6 @@ isl::schedule ConstrainSchedule::Run(isl::schedule sch) {
       continue;
     }
 
-    const bool needs_check = mind_trick->NeedsScheduleCheck();
-    if (!needs_check) Info(log::Verbosity::veryLow, text_bright_yellow "MindTrick requests no schedule check!");
-
     const isl::schedule &candidate = mind_trick->Apply(sch);
     const bool has_schedule = mind_trick->HasSchedule();
     if (!has_schedule) {
@@ -270,15 +339,23 @@ isl::schedule ConstrainSchedule::Run(isl::schedule sch) {
       continue;
     }
 
+    const bool needs_check = mind_trick->NeedsScheduleCheck();
+    if (!needs_check) {
+      Info(log::Verbosity::veryLow, text_bright_yellow "MindTrick requests no schedule check!");
+    }
+
     const bool valid = !needs_check || CheckSchedule(candidate);
     if (valid) {
-      if (needs_check) Info(log::Verbosity::low, text_green "schedule is valid!");
+      if (needs_check) {
+        Info(log::Verbosity::low, text_green "schedule is valid!");
+      }
       result = candidate;
       ExtractMindTrickInfo(mind_trick);
       LogMindTrick(mind_trick);
       if (target == TARGET_CUDA) {
         GpuCompilerFlagsTempfileCreate(mind_trick);
       }
+
       break;
     } else {
       Info(log::Verbosity::high, text_dim text_yellow + mind_trick->str());
@@ -295,22 +372,32 @@ void ConstrainSchedule::ExtractMindTrickInfo(const std::shared_ptr<SchedulingMin
   const std::string &target = scop_info_.user_config_.GetTarget();
   if (target == TARGET_CUDA) {
     ExtractGpuConfig(mind_trick);
+
+    const bool has_swizzle = mind_trick->HasGpuSwizzleDim();
+    scop_info_.user_config_.SetMindTrickGpuHasSwizzle(has_swizzle);
   }
 
   ExtractDisabledPasses(mind_trick);
   ExtractAttrs(mind_trick);
+
+  const MindTrickType &type = mind_trick->GetType();
+  const std::string &status = to_string(type);
+  scop_info_.user_config_.SetMindTrickStatus(status);
+
+  scop_info_.user_config_.SetMindTrickWasUsed(true);
 }
 
 void ConstrainSchedule::LogMindTrick(const std::shared_ptr<SchedulingMindTrick> &mind_trick) {
   const std::string kernel_name = scop_info_.user_config_.GetKernelName();
   const std::string mind_trick_name = mind_trick->GetName();
-  const std::string &output = mind_trick->str();
 
   Info(log::Verbosity::veryLow, text_reverse text_bright_blue " ConstrainSchedule ", false);
   Info(log::Verbosity::veryLow, text_bright_blue "using schedule from \'" + mind_trick_name + "\'");
-  Info(log::Verbosity::medium, text_dim text_green + mind_trick->str());
 
-  scop_info_.user_config_.SetConstrainedSchedulingOutput(output);
+  // Implementation note: str() is costly so we explicitely check the verbosity before we actually compute it.
+  if (log::GetVerbosityLevel() >= log::Verbosity::veryHigh) {
+    Info("\n" + mind_trick->str());
+  }
 }
 
 void ConstrainSchedule::ExtractGpuConfig(const std::shared_ptr<SchedulingMindTrick> &mind_trick) {
@@ -337,11 +424,29 @@ void ConstrainSchedule::CreateMindTrickTemplate(const isl::schedule &sch) {
   }
 
   const std::string kernel_name = scop_info_.user_config_.GetKernelName();
-  const std::string &filename = "mindtrick-template_" + kernel_name + ".json";
+  const std::string &filename = kernel_name + ".mindtrick-template.json";
 
   std::ofstream output(filename);
-  output << SchedulingMindTrick::TemplateString(scop_info_, sch);
+  output << SchedulingMindTrick::TemplateString(scop_info_, sch, MindTrickType::autogen);
   output.close();
+}
+
+void ConstrainSchedule::InsertAutoMindTrick(const isl::schedule &sch) {
+  const MindTrickType type = MindTrickType::autogen;
+  const std::string &text = SchedulingMindTrick::TemplateString(scop_info_, sch, type);
+  const std::string &kernel_name = scop_info_.user_config_.GetKernelName();
+  const std::string &trick_name = "autogen for " + kernel_name;
+
+  auto trick = std::make_shared<SchedulingMindTrick>(pass_info_, scop_info_, verbosity_);
+  trick->Parse(text);
+  trick->SetType(type);
+  trick->SetName(trick_name);
+
+  if (*trick) {
+    mind_tricks_.push_back(trick);
+  } else {
+    Warn("something was wrong with the automatic mind trick");
+  }
 }
 
 void ConstrainSchedule::ExtractAttrs(const std::shared_ptr<SchedulingMindTrick> &mind_trick) {

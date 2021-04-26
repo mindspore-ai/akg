@@ -321,7 +321,7 @@ Stmt GpuIslEmitter::Emit(const isl::ast_node &node) {
 
   // iter var node attr emit
   std::map<std::string, VarExpr>::iterator it;
-  for (it = iter_name_map_.begin(); it != iter_name_map_.end(); it++) {
+  for (it = iter_name_map_.begin(); it != iter_name_map_.end(); ++it) {
     IterVar axis = IterVarNode::make(Range(), it->second, air::kThreadIndex, it->second->name_hint);
     stmt = AttrStmt::make(axis, air::ir::attr::thread_extent, Expr(GetThreadExtent(it->second->name_hint)), stmt);
   }
@@ -332,6 +332,10 @@ Stmt GpuIslEmitter::Emit(const isl::ast_node &node) {
     CHECK(thread_cfg) << "thread config is null.";
     int tx = thread_cfg->GetX().second;
     stmt = AttrStmt::make(Expr(""), ORIGIN_THREAD_DIM_X, Expr(tx), stmt);
+  }
+
+  if (info_.user_config_.GetMindTrickWasUsed() && info_.user_config_.GetMindTrickGpuHasSwizzle()) {
+    stmt = AttrStmt::make(make_zero(Int(32)), MIND_TRICKS_SWIZZLE_PRAGMA, Expr(1), stmt);
   }
 
   return stmt;
@@ -488,7 +492,7 @@ Expr GpuIslEmitter::AdaptPolyNewVar(std::string name) {
   return e;
 }
 
-Expr GpuIslEmitter::AdaptBlockNewVar(const std::string name, MappingCfg *mapping_cfg) {
+Expr GpuIslEmitter::AdaptBlockNewVar(const std::string &name, MappingCfg *mapping_cfg) {
   Expr e;
   if (name.find(CONV_H_W) != std::string::npos) {
     int mx = mapping_cfg->GetX().second;
@@ -507,7 +511,7 @@ Expr GpuIslEmitter::AdaptBlockNewVar(const std::string name, MappingCfg *mapping
   return e;
 }
 
-Expr GpuIslEmitter::AdaptThreadNewVar(const std::string name, MappingCfg *mapping_cfg) {
+Expr GpuIslEmitter::AdaptThreadNewVar(const std::string &name, MappingCfg *mapping_cfg) {
   Expr e;
   int mx = mapping_cfg->GetX().second;
   if (name.find(WARP_COMPUTE) != std::string::npos) {

@@ -43,7 +43,8 @@ class ConstrainSchedule : public SchedulePass {
  private:
   bool CheckSchedule(const isl::schedule &) const;
 
-  bool KernelIsEligible(const isl::schedule &sch) const;
+  bool KernelIsBlacklisted(const isl::schedule &sch) const;
+  bool ShouldAutogenMindTrick(const isl::schedule &sch) const;
 
   void LoadMindTricks(void);
   void LoadMindTrickFromFile(const std::string &filename);
@@ -56,6 +57,7 @@ class ConstrainSchedule : public SchedulePass {
   void ExtractAttrs(const std::shared_ptr<SchedulingMindTrick> &mind_trick);
 
   void CreateMindTrickTemplate(const isl::schedule &sch);
+  void InsertAutoMindTrick(const isl::schedule &sch);
 
   void InitVerbosityLevel(void);
 
@@ -74,17 +76,6 @@ class ConstrainSchedule : public SchedulePass {
   static std::vector<std::string> MindTricksDirectories(void);
 
   ///////////////////////////////////////////////////////////////////////////
-  // Supported environment variables
-  ///////////////////////////////////////////////////////////////////////////
-
-  static constexpr const char *const env_string_mind_tricks_enable_ = "MS_AKG_MIND_TRICKS";
-  static constexpr const char *const env_string_mind_tricks_dir_ = "MS_AKG_MIND_TRICKS_DIR";
-  static constexpr const char *const env_string_mind_tricks_verbosity_ = "MS_AKG_MIND_TRICKS_VERBOSITY";
-  static constexpr const char *const env_string_mind_tricks_templates_ = "MS_AKG_MIND_TRICKS_TEMPLATES";
-  static constexpr const char *const env_string_mind_tricks_operator_blacklist_ =
-    "MS_AKG_MIND_TRICKS_OPERATOR_BLACKLIST";
-
-  ///////////////////////////////////////////////////////////////////////////
   // Logging
   ///////////////////////////////////////////////////////////////////////////
 
@@ -101,7 +92,8 @@ class ConstrainSchedule : public SchedulePass {
   void func(const akg::ir::poly::log::Verbosity level, const std::string &message, const bool prefix = true) const; \
   void func(const akg::ir::poly::log::Verbosity level, const std::stringstream &stream, const bool prefix = true) const;
 
-  declare_constrain_schedule_log_wrappers(Info) declare_constrain_schedule_log_wrappers(Warn)
+  declare_constrain_schedule_log_wrappers(Info)
+  declare_constrain_schedule_log_wrappers(Warn)
   declare_constrain_schedule_log_wrappers(Error)
 
 #undef declare_constrain_schedule_log_wrappers

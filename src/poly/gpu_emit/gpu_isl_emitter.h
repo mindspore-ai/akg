@@ -24,8 +24,8 @@ namespace ir {
 namespace poly {
 
 // add for mind tricks swizzle
-constexpr auto MIND_TRICKS_SWIZZLE_MARKER = "mind_trick_swizzle_marker";
-constexpr auto MIND_TRICKS_SWIZZLE_PRAGMA = "pragma_swizzle";
+constexpr auto MIND_TRICKS_PRESERVE_DIMENSION_MARKER = "mind_trick_preserve_dimension_marker";
+constexpr auto MIND_TRICKS_SWIZZLE_PRAGMA = "pragma_swizzle_kernel";
 
 // add for one dimension mapping
 constexpr auto ORIGIN_THREAD_DIM_X = "bind_thread_x";
@@ -42,8 +42,8 @@ class GpuIslEmitter : public IslEmitter {
   Stmt EmitStmt(const isl::ast_node_user &node) override;
   Stmt EmitMark(const isl::ast_node_mark &node_id) override;
   virtual Expr AdaptPolyNewVar(std::string name);
-  Expr AdaptThreadNewVar(const std::string name, MappingCfg *mapping_cfg);
-  Expr AdaptBlockNewVar(const std::string name, MappingCfg *mapping_cfg);
+  Expr AdaptThreadNewVar(const std::string &name, MappingCfg *mapping_cfg);
+  Expr AdaptBlockNewVar(const std::string &name, MappingCfg *mapping_cfg);
   int GetThreadExtent(const std::string &name);
   virtual Expr IterNameAdaptor(std::string name);
   std::map<std::string, VarExpr> iter_name_map_{{B0, VarExpr(BLOCK_IDX_X)},  {B1, VarExpr(BLOCK_IDX_Y)},

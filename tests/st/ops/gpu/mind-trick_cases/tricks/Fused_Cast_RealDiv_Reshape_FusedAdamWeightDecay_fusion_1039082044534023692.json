@@ -1,42 +1,32 @@
 {
   "name": "Fused_Cast_RealDiv_Reshape_FusedAdamWeightDecay_fusion_1039082044534023692_0",
-  "operator": "Fused_Cast_RealDiv_Reshape_FusedAdamWeightDecay_fusion_1039082044534023692_0",
-  "pattern": "{ domain: \"{ S_0[ax0, ax1] : 0 <= ax0 <= 767 and 0 <= ax1 <= 3071; S_2[ax0, ax1] : 0 <= ax0 <= 767 and 0 <= ax1 <= 3071; S_1[ax0, ax1] : 0 <= ax0 <= 767 and 0 <= ax1 <= 3071 }\", child: { sequence: [ { filter: \"{ S_0[ax0, ax1] }\", child: { schedule: \"[{ S_0[ax0, ax1] -> [(ax0)] }]\", child: { schedule: \"[{ S_0[ax0, ax1] -> [(ax1)] }]\" } } }, { filter: \"{ S_1[ax0, ax1] }\", child: { schedule: \"[{ S_1[ax0, ax1] -> [(ax0)] }]\", child: { schedule: \"[{ S_1[ax0, ax1] -> [(ax1)] }]\" } } }, { filter: \"{ S_2[ax0, ax1] }\", child: { schedule: \"[{ S_2[ax0, ax1] -> [(ax0)] }]\", child: { schedule: \"[{ S_2[ax0, ax1] -> [(ax1)] }]\" } } } ] } }",
-  "schedule": [
-    "{ S_0[ax0, ax1] -> [ax0]; S_1[ax0, ax1] -> [ax0]; S_2[ax0, ax1] -> [ax0] }",
-    "{ S_0[ax0, ax1] -> [ax1/4]; S_1[ax0, ax1] -> [ax1/4]; S_2[ax0, ax1] -> [ax1/4] }",
-    "{ S_0[ax0, ax1] -> [ax1 mod 4]; S_1[ax0, ax1] -> [ax1 mod 4]; S_2[ax0, ax1] -> [ax1 mod 4] }",
-    "{ S_0[ax0, ax1] -> [0]; S_1[ax0, ax1] -> [1]; S_2[ax0, ax1] -> [2] }"
-  ],
+  "pattern": "{ domain: \"{ S_2[ax1] : 0 <= ax1 <= 2359295; S_0[ax1] : 0 <= ax1 <= 2359295; S_1[ax1] : 0 <= ax1 <= 2359295 }\", child: { sequence: [ { filter: \"{ S_0[ax1] }\", child: { schedule: \"[{ S_0[ax1] -> [(ax1)] }]\" } }, { filter: \"{ S_1[ax1] }\", child: { schedule: \"[{ S_1[ax1] -> [(ax1)] }]\" } }, { filter: \"{ S_2[ax1] }\", child: { schedule: \"[{ S_2[ax1] -> [(ax1)] }]\" } } ] } }",
   "soft constraints": [
     {
       "statement": "S_0",
-      "meta": [2, 0],
+      "meta": [1, 0],
       "coefficients": [
-        "[?1, 0, ?3]",
-        "[?1, 1, ?3] (/4)",
-        "[?1, 1, ?3] (%4)",
-        "[0, 0, 0]"
+        "[1, ?11] (/4096)",
+        "[1, ?11] (%4096, /4)",
+        "[1, ?11] (%4)"
       ]
     },
     {
       "statement": "S_1",
-      "meta": [2, 0],
+      "meta": [1, 0],
       "coefficients": [
-        "[?1, 0, ?3]",
-        "[?1, 1, ?3] (/4)",
-        "[?1, 1, ?3] (%4)",
-        "[0, 0, 1]"
+        "[1, ?11] (/4096)",
+        "[1, ?11] (%4096, /4)",
+        "[1, ?11] (%4)"
       ]
     },
     {
       "statement": "S_2",
-      "meta": [2, 0],
+      "meta": [1, 0],
       "coefficients": [
-        "[?1, 0, ?3]",
-        "[?1, 1, ?3] (/4)",
-        "[?1, 1, ?3] (%4)",
-        "[0, 0, 2]"
+        "[1, ?11] (/4096)",
+        "[1, ?11] (%4096, /4)",
+        "[1, ?11] (%4)"
       ]
     }
   ],
