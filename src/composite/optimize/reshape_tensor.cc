@@ -52,7 +52,8 @@ class ReshapeTensorMutator : public IRMutator {
   }
 
   Stmt Mutate_(const Provide *op, const Stmt &s) {
-    static std::unordered_set<std::string> check_list = {"TensorAdd", "Add", "RealDiv", "Mul", "Minimum", "Maximum", "Sub"};
+    static std::unordered_set<std::string> check_list = {"TensorAdd", "Add",     "RealDiv", "Mul",
+                                                         "Minimum",   "Maximum", "Sub"};
     auto call = op->value.as<Call>();
     if (call == nullptr || check_list.find(call->name) == check_list.end()) {
       return IRMutator::Mutate_(op, s);
@@ -212,7 +213,7 @@ class ReshapeTensorMutator : public IRMutator {
     }
     auto call = op->value.as<Call>();
     return Provide::make(op->func, 0, Call::make(op->value.type(), call->name, input, Call::CallType::PureIntrinsic),
-                           op->args);
+                         op->args);
   }
 
   Stmt ModifyAttrMap(const AttrStmt *op, const Stmt &stmt, const Map<std::string, NodeRef> &attr_map) {
@@ -252,9 +253,9 @@ class ReshapeTensorMutator : public IRMutator {
       for (const auto &it : reshape_) {
         auto arg =
           Call::make(it.first->dtype, it.first->op->name, it.first->shape, Call::CallType::Halide, it.first->op);
-        auto reshape_stmt = Provide::make(
-          it.second->op, 0, Call::make(it.first->dtype, "Reshape", {arg}, Call::CallType::PureIntrinsic),
-          it.second->shape);
+        auto reshape_stmt =
+          Provide::make(it.second->op, 0, Call::make(it.first->dtype, "Reshape", {arg}, Call::CallType::PureIntrinsic),
+                        it.second->shape);
         Map<std::string, NodeRef> attrs;
         attrs.Set("shape", it.second->shape);
         auto reshape_attr = AttrStmt::make(attrs, "attrs", Expr(1), reshape_stmt);
@@ -353,12 +354,11 @@ class ReshapeTensorMutator : public IRMutator {
     }
     return std::make_tuple(shape_long, shape_tmp, shape_out);
   }
-
 };
 
 // When Matmul has DefaultFormat bias, reshape bias to FRACTAL_NZ format
 // If bias need pad, do pad as
-// input_2_reshape(1,1,1,16) = Reshape(input_2(2)):float16:PI 
+// input_2_reshape(1,1,1,16) = Reshape(input_2(2)):float16:PI
 class ReshapeMatmul : public ReshapeTensorMutator {
  public:
   explicit ReshapeMatmul() {}
@@ -383,7 +383,7 @@ class ReshapeMatmul : public ReshapeTensorMutator {
   }
 
   Stmt Mutate_(const Provide *op, const Stmt &s) {
-    static std::unordered_set<std::string> check_list = {"MatMul"};
+    static std::unordered_set<std::string> check_list = {"MatMul", "BatchMatMul"};
     auto call = op->value.as<Call>();
     if (call == nullptr || check_list.find(call->name) == check_list.end()) {
       return IRMutator::Mutate_(op, s);
@@ -468,9 +468,9 @@ class ReshapeMatmul : public ReshapeTensorMutator {
     return orig_shape;
   }
 
-  Array<Expr> InferShapeToFractalNz(const Array<Expr> &shape0, const Array<Expr> &shape1,
-                                    const Array<Expr> &shape_out, const Array<Expr> &shape_fractal,
-                                    const std::string &op_name, const Array<Expr> &shape_default) override {
+  Array<Expr> InferShapeToFractalNz(const Array<Expr> &shape0, const Array<Expr> &shape1, const Array<Expr> &shape_out,
+                                    const Array<Expr> &shape_fractal, const std::string &op_name,
+                                    const Array<Expr> &shape_default) override {
     auto dims = shape_out.size();
     auto batch = dims - 2;
     Array<Expr> shape_new;
@@ -491,8 +491,8 @@ class ReshapeMatmul : public ReshapeTensorMutator {
         shape_new.push_back(shape_fractal[shape_fractal.size() - 1]);
       }
     } else {
-       LOG(FATAL) << "[" << op_name << "] " << shape_fractal << " (FRACTAL_NZ) and " << shape_default
-                  << " (DefaultFormat) may need data format transformation for ";
+      LOG(FATAL) << "[" << op_name << "] " << shape_fractal << " (FRACTAL_NZ) and " << shape_default
+                 << " (DefaultFormat) may need data format transformation for ";
     }
     return shape_new;
   }
@@ -512,9 +512,13 @@ class ReshapeMatmul : public ReshapeTensorMutator {
   std::stack<bool> transpose_b;
 
   void PadBias(Array<Expr> &shape_default) {
-    if (shape_default.size() != 1) { return; }
+    if (shape_default.size() != 1) {
+      return;
+    }
     auto bias_length = (shape_default[0].as<IntImm>())->value;
-    if (bias_length % 16 == 0) { return; }
+    if (bias_length % 16 == 0) {
+      return;
+    }
     int64_t pad_length = (bias_length / 16) * 16 + 16;
     shape_default.Set(0, Expr(pad_length));
     LOG(INFO) << "Pad bias length from " << bias_length << " to " << pad_length;

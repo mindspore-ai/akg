@@ -15,6 +15,7 @@
  */
 #include "composite/optimize/optimize.h"
 #include <memory>
+#include "composite/optimize/rename_matmul.h"
 #include "composite/optimize/reshape_tensor.h"
 #include "composite/optimize/elim_transform_op.h"
 #include "composite/optimize/inplace_assign_mutator.h"
@@ -51,6 +52,8 @@ Stmt Optimize(Stmt &s, BuildInfo &info) {
   if (info.opt.target == "aicore") {
     pm.RegisterPass(std::make_shared<TypeCastInserter>());
   }
+  // rename MatMul to BatchMatMul
+  pm.RegisterPass(std::make_shared<RenameMatmul>());
   s = pm.Run(s);
   return s;
 }

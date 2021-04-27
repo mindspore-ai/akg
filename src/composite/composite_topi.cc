@@ -624,7 +624,7 @@ TVM_REGISTER_GLOBAL("BroadcastTo").set_body([](TVMArgs args, TVMRetValue *rv) {
   }
 });
 
-TVM_REGISTER_GLOBAL("BatchMatMul").set_body([](TVMArgs args, TVMRetValue *rv) {
+TVM_REGISTER_GLOBAL("cuda_BatchMatMul").set_body([](TVMArgs args, TVMRetValue *rv) {
   CHECK_GE(args.size(), 2);
   auto inputs = args[0].operator Array<NodeRef>();
   auto attrs = args[1].operator OpAttr();
@@ -718,7 +718,7 @@ TVM_REGISTER_GLOBAL("BatchMatMul").set_body([](TVMArgs args, TVMRetValue *rv) {
 });
 
 // only support fractal_zN: [ko mo mi ki] * [no ko ki ni] = [no mo mi ni]
-TVM_REGISTER_GLOBAL("aicore_MatMul").set_body([](TVMArgs args, TVMRetValue *rv) {
+TVM_REGISTER_GLOBAL("aicore_BatchMatMul").set_body([](TVMArgs args, TVMRetValue *rv) {
   CHECK_GE(args.size(), 2);
   auto attrs = args[1].operator OpAttr();
   CHECK(attrs.count("transpose_a"));
@@ -743,7 +743,7 @@ TVM_REGISTER_GLOBAL("aicore_MatMul").set_body([](TVMArgs args, TVMRetValue *rv) 
   auto left_shape = left_matrix->shape;
   auto right_shape = right_matrix->shape;
   CHECK_EQ(left_shape.size(), right_shape.size());
-  CHECK_EQ(left_shape.size(), 4);
+  CHECK_GE(left_shape.size(), 4);
 
   auto type_checker = [](const Tensor &input_data, const std::string name, const air::DataType type) {
     if (input_data->dtype != type) {
@@ -757,26 +757,33 @@ TVM_REGISTER_GLOBAL("aicore_MatMul").set_body([](TVMArgs args, TVMRetValue *rv) 
   Array<Expr> output_shape;
   Array<Expr> k;
   auto compute_mnk = [&output_shape, &k, &left_shape, &right_shape, transpose_a, transpose_b]() {
+    size_t dim = left_shape.size();
     Expr mo, mi, no, ni, ko, ki;
     if (transpose_a) {
-      mo = left_shape[0];
-      ko = left_shape[1];
-      ki = left_shape[2];
-      mi = left_shape[3];
+      mo = left_shape[dim - 4];
+      ko = left_shape[dim - 3];
+      ki = left_shape[dim - 2];
+      mi = left_shape[dim - 1];
     } else {
-      ko = left_shape[0];
-      mo = left_shape[1];
-      mi = left_shape[2];
-      ki = left_shape[3];
+      ko = left_shape[dim - 4];
+      mo = left_shape[dim - 3];
+      mi = left_shape[dim - 2];
+      ki = left_shape[dim - 1];
     }
     if (transpose_b) {
-      no = right_shape[1];
-      ni = right_shape[2];
+      no = right_shape[dim - 3];
+      ni = right_shape[dim - 2];
     } else {
-      no = right_shape[0];
-      ni = right_shape[3];
+      no = right_shape[dim - 4];
+      ni = right_shape[dim - 1];
     }
-    output_shape = {no, mo, mi, ni};
+    for (size_t i = 0; i < dim - 4; ++i) {
+      output_shape.push_back(left_shape[i]);
+    }
+    output_shape.push_back(no);
+    output_shape.push_back(mo);
+    output_shape.push_back(mi);
+    output_shape.push_back(ni);
     k = {ko, ki};
   };
 
@@ -795,22 +802,47 @@ TVM_REGISTER_GLOBAL("aicore_MatMul").set_body([](TVMArgs args, TVMRetValue *rv) 
   IterVar reduce_ki = air::reduce_axis(Range(0, k[1]), "ki");
   Array<IterVar> reduces = {reduce_ko, reduce_ki};
 
-  auto fcompute = [&left_matrix, &right_matrix, &transpose_a, &transpose_b, &reduces, &output_shape,
+  auto fcompute = [&left_matrix, &right_matrix, &transpose_a, &transpose_b, &reduces,
                    &Mmad](const Array<Var> &indices) {
-    Array<Expr> left_indice = {reduces[0], indices[1], indices[2], reduces[1]};
-    Array<Expr> right_indice = {indices[0], reduces[0], reduces[1], indices[3]};
+    size_t dim = indices.size();
+    Array<Expr> left_indice;
+    for (size_t i = 0; i < dim - 4; ++i) {
+      left_indice.push_back(indices[i]);
+    }
     if (transpose_a) {
-      left_indice = {indices[1], reduces[0], reduces[1], indices[2]};
+      left_indice.push_back(indices[dim - 3]);
+      left_indice.push_back(reduces[0]);
+      left_indice.push_back(reduces[1]);
+      left_indice.push_back(indices[dim - 2]);
+    } else {
+      left_indice.push_back(reduces[0]);
+      left_indice.push_back(indices[dim - 3]);
+      left_indice.push_back(indices[dim - 2]);
+      left_indice.push_back(reduces[1]);
+    }
+
+    Array<Expr> right_indice;
+    for (size_t i = 0; i < dim - 4; ++i) {
+      right_indice.push_back(indices[i]);
     }
     if (transpose_b) {
-      right_indice = {reduces[0], indices[0], indices[3], reduces[1]};
+      right_indice.push_back(reduces[0]);
+      right_indice.push_back(indices[dim - 4]);
+      right_indice.push_back(indices[dim - 1]);
+      right_indice.push_back(reduces[1]);
+    } else {
+      right_indice.push_back(indices[dim - 4]);
+      right_indice.push_back(reduces[0]);
+      right_indice.push_back(reduces[1]);
+      right_indice.push_back(indices[dim - 1]);
     }
+
     Expr res = Mmad(Cast::make(Float(32), left_matrix(left_indice) * right_matrix(right_indice)), reduces);
     return res;
   };
 
   // set output name
-  auto name = "T_matmul_" + left_matrix->op->name + "_" + right_matrix->op->name;
+  auto name = "T_batchmatmul_" + left_matrix->op->name + "_" + right_matrix->op->name;
 
   // set compute attrs
   auto set_compute_attrs_zN = [&left_matrix, &right_matrix, &inputs, transpose_a, transpose_b, attrs]() {
