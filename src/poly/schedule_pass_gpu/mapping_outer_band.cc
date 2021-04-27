@@ -515,7 +515,7 @@ size_t MappingOuterBand::MapThreadHelper(isl::schedule_node &thread_root) {
   }
 
   // split to keep nodes with coincident equals to 1
-  if (n_thread_map < band_node.n_member()) {
+  if (n_thread_map < band_node.n_member() && !scop_info_.user_config_.EnableStitchFusion()) {
     thread_root = band_node.split(n_thread_map);
     band_node = thread_root.as<isl::schedule_node_band>();
   } else {
