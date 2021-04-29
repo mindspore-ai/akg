@@ -42,7 +42,7 @@ Stmt Optimize(Stmt &s, BuildInfo &info) {
   pm.RegisterPass(std::make_shared<AxisAttrNormalize>());
   // fold dimension for multi-dim shape
   if (info.opt.fold_dim) {
-    pm.RegisterPass(std::make_shared<FoldDimension>());
+    pm.RegisterPass(std::make_shared<FoldDimension>(pm.info_));
   }
   // inplace_assign
   pm.RegisterPass(std::make_shared<InplaceAssignOpt>(pm.info_));

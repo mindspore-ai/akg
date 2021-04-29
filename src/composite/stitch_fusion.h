@@ -260,14 +260,14 @@ class StitchBufAlloc : public IRVisitor {
 class BufferStitchAttr : public GridBlockDimsAttr {
  public:
   explicit BufferStitchAttr(const std::function<Stmt(const StringImm *, const Map<std::string, NodeRef> &, bool, bool,
-                                                     std::vector<size_t> &)> &f)
+                                                     bool, std::vector<size_t> &)> &f)
       : func_(f){};
 
   void SetStitchType(const StitchOpType &stitch_type) {
     stitch_type_ = stitch_type > stitch_type_ ? stitch_type : stitch_type_;
   }
   void GetBufferStitchAttr(const Expr &json, std::vector<OpDesc> op_v, const Map<std::string, NodeRef> &attrs,
-                           bool poly) {
+                           bool poly, bool fold_dim) {
     const StringImm *json_str = nullptr;
     for (auto &op : op_v) {
       auto out_shape = op.output_tensor_info[0].shape_;
@@ -314,7 +314,7 @@ class BufferStitchAttr : public GridBlockDimsAttr {
       }
     }
     if (json_str) {
-      auto stmt = func_(json_str, attrs, poly, true, split_index);
+      auto stmt = func_(json_str, attrs, poly, true, fold_dim, split_index);
       Visit(stmt);
     }
   }
@@ -327,7 +327,8 @@ class BufferStitchAttr : public GridBlockDimsAttr {
   }
 
  public:
-  const std::function<Stmt(const StringImm *, const Map<std::string, NodeRef> &, bool, bool, std::vector<size_t> &)>
+  const std::function<Stmt(const StringImm *, const Map<std::string, NodeRef> &, bool, bool, bool,
+                           std::vector<size_t> &)>
     func_;
   Expr broadcast_size;
   Expr elemwise_size;

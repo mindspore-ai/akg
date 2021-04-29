@@ -192,7 +192,6 @@ void CollectBuildInfo(FuncTensorMap &tensor_map, BuildInfo &info) {
 
 void ExtractBuildInfo(const picojson::value &input_json, BuildInfo &info) {
   CHECK(input_json.is<picojson::object>());
-  info.opt.fold_dim = !info.opt.stitch;
   // 1. make stmt by input_json
   auto stmt = Parse(input_json, info);
   // 2. optimize stmt
@@ -205,11 +204,12 @@ void ExtractBuildInfo(const picojson::value &input_json, BuildInfo &info) {
 }
 
 Stmt String2LowerStmtSimple(const StringImm *json_str, const Map<std::string, NodeRef> &attrs, bool poly,
-                            bool buffer_stitch, std::vector<size_t> &split_index) {
+                            bool buffer_stitch, bool fold_dim, std::vector<size_t> &split_index) {
   CHECK(json_str);
   picojson::value v = String2Json(json_str->value);
   BuildInfo info;
   info.opt.stitch = buffer_stitch;
+  info.opt.fold_dim = fold_dim;
   info.opt.enable_dump = false;
   ExtractBuildInfo(v, info);
   std::string sch_name = GetSchedule(info.tensors);
@@ -408,6 +408,29 @@ class CompositeJsonList {
     return type;
   }
 
+  void CheckFoldDim(const NodeRef &block_json) {
+    std::vector<int> fold_index;
+    for (auto &stitch_json : Downcast<Array<Expr>>(block_json)) {
+      CHECK(stitch_json.as<StringImm>());
+      picojson::value v = String2Json(stitch_json.as<StringImm>()->value);
+      BuildInfo info;
+      ExtractBuildInfo(v, info);
+      if (info.opt.fold_dims_.empty()) {
+        fold_dim_ = false;
+        return;
+      }
+      if (fold_index.empty()) {
+        fold_index = info.opt.fold_dims_.begin()->second;
+      }
+      for (auto &kv : info.opt.fold_dims_) {
+        if (kv.second != fold_index) {
+          fold_dim_ = false;
+          return;
+        }
+      }
+    }
+  }
+
   Module Build() {
     CHECK(!json_str_node_.empty());
     std::vector<Stmt> block_irs;
@@ -424,6 +447,7 @@ class CompositeJsonList {
           break;
         }
         case STITCHING_JSON: {
+          CheckFoldDim(block_json);
           auto stitched_ir = StitchFusion(block_json, attrs);
           stitched_ir = ElimDuplicateInputs(inputs_).Run(stitched_ir);
           block_irs.push_back(stitched_ir);
@@ -492,6 +516,7 @@ class CompositeJsonList {
   Array<NodeRef> clean_op_map_list_;
   Array<NodeRef> attrs_list_;
   bool poly_{true};
+  bool fold_dim_{true};
   std::string target_;
   Array<NodeRef> all_args_;
   std::unordered_map<std::string, NodeRef> outputs2args_;
@@ -526,16 +551,17 @@ class CompositeJsonListGpu : public CompositeJsonList {
   }
 
   Stmt String2LowerStmt(const StringImm *json_str, const Map<std::string, NodeRef> &attrs) override {
-    return String2LowerStmt(json_str, attrs, 0, 0, false);
+    return String2LowerStmt(json_str, attrs, 0, 0, false, true);
   }
 
   Stmt String2LowerStmt(const StringImm *json_str, const Map<std::string, NodeRef> &attrs, int grid_dims,
-                        int block_dims, bool buffer_stitch) {
+                        int block_dims, bool buffer_stitch, bool fold_dim) {
     CHECK(json_str);
     picojson::value v = String2Json(json_str->value);
     BuildInfo info;
     info.opt.stitch_ir_idx_ = each_ir_idx_;
     info.opt.stitch = buffer_stitch;
+    info.opt.fold_dim = fold_dim;
     ExtractBuildInfo(v, info);
     // ensure merge_name_ is the same as original json name
     if (merge_name_.empty()) merge_name_ = info.kernel_name;
@@ -582,13 +608,15 @@ class CompositeJsonListGpu : public CompositeJsonList {
       using std::placeholders::_3;
       using std::placeholders::_4;
       using std::placeholders::_5;
-      const std::function<Stmt(const StringImm *, const Map<std::string, NodeRef> &, bool, bool, std::vector<size_t> &)>
-        f = std::bind(&String2LowerStmtSimple, _1, _2, _3, _4, _5);
+      using std::placeholders::_6;
+      const std::function<Stmt(const StringImm *, const Map<std::string, NodeRef> &, bool, bool, bool,
+                               std::vector<size_t> &)>
+        f = std::bind(&String2LowerStmtSimple, _1, _2, _3, _4, _5, _6);
       BufferStitchAttr stitch_attr_info(f);
-      stitch_attr_info.GetBufferStitchAttr(stitch_json, op_v, attrs, poly_);
+      stitch_attr_info.GetBufferStitchAttr(stitch_json, op_v, attrs, poly_, fold_dim_);
       auto dims = stitch_attr_info.dims;
       auto stitch_type = stitch_attr_info.stitch_type_;
-      dim_array.push_back(dims);                         // save current dims into array.
+      dim_array.push_back(dims);  // save current dims into array.
       IrAttrInfo ir_attr_info = GetIRAttr(stitch_type, stitch_attr_info, ir_type_array, dim_array, attrs);
       DumpIRAttr(kernel_name, ir_attr_info, each_ir_idx_);
       ir_type_array.push_back(stitch_type);  // Note this should be done AFTER GetIrAttr.
@@ -597,8 +625,8 @@ class CompositeJsonListGpu : public CompositeJsonList {
       new_attrs = SetAutoFuseAttr(split_index_, new_attrs);
       new_attrs.Set("enable_stitch_fusion", Expr(true));
 
-      auto single_ir =
-        String2LowerStmt(stitch_json.as<StringImm>(), new_attrs, ir_attr_info.grid_dims, ir_attr_info.block_dims, true);
+      auto single_ir = String2LowerStmt(stitch_json.as<StringImm>(), new_attrs, ir_attr_info.grid_dims,
+                                        ir_attr_info.block_dims, true, fold_dim_);
       stitch_irs.emplace_back(InsertSync(single_ir));
     }
     stitch_attr.type_array = ir_type_array;

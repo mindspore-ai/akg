@@ -419,6 +419,7 @@ class DimensionFolderPlan : public IRVisitor {
 
 class DimensionFolder : public IRMutator {
  public:
+  explicit DimensionFolder(BuildInfo &info) : info_(info) {}
   Stmt Fold(Stmt stmt) {
     DimensionFolderPlan plan;
     plan.Plan(stmt);
@@ -428,6 +429,7 @@ class DimensionFolder : public IRMutator {
     for (auto val : plan.tensors_) {
       fold_dims_.emplace(val.first, val.second->fold_dims);
     }
+    info_.opt.fold_dims_ = fold_dims_;
     return IRMutator::Mutate(stmt);
   }
 
@@ -525,8 +527,9 @@ class DimensionFolder : public IRMutator {
   std::unordered_map<FunctionRef, std::vector<int>, NodeHash, NodeEqual> fold_dims_;
   std::string update_attr_;
   FunctionRef attr_func_;
+  BuildInfo &info_;
 };
 
-Stmt FoldDimension::Run(const Stmt &stmt) { return DimensionFolder().Fold(stmt); }
+Stmt FoldDimension::Run(const Stmt &stmt) { return DimensionFolder(info_).Fold(stmt); }
 
 }  // namespace akg

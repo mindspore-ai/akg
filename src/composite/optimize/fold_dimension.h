@@ -20,9 +20,10 @@
 namespace akg {
 class FoldDimension : public CompositeOptPass {
  public:
-  FoldDimension() { pass_name_ = __FUNCTION__; }
+  FoldDimension(BuildInfo &info) : info_(info) { pass_name_ = __FUNCTION__; }
   ~FoldDimension() = default;
   Stmt Run(const Stmt &s) override;
+  BuildInfo &info_;
 };
 }  // namespace akg
 #endif  // COMPOSITE_OPTIMIZE_FOLD_DIMENSION_H_
