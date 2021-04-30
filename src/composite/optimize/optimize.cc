@@ -24,6 +24,7 @@
 #include "composite/optimize/fold_dimension.h"
 #include "composite/optimize/typecast_inserter.h"
 #include "composite/optimize/ops_combine.h"
+#include "composite/optimize/intrin_rewriter.h"
 
 namespace akg {
 Stmt Optimize(Stmt &s, BuildInfo &info) {
@@ -54,6 +55,10 @@ Stmt Optimize(Stmt &s, BuildInfo &info) {
   }
   // rename MatMul to BatchMatMul
   pm.RegisterPass(std::make_shared<RenameMatmul>());
+  // intrin rewrite in ascend
+  if (info.opt.target == "aicore") {
+    pm.RegisterPass(std::make_shared<IntrinRewriter>());
+  }
   s = pm.Run(s);
   return s;
 }
