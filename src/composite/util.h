@@ -78,6 +78,7 @@ struct BuildOpt {
   bool stitch{false};
   size_t stitch_ir_idx_{0};
   bool fold_dim{true};
+  std::unordered_map<FunctionRef, std::vector<int>, NodeHash, NodeEqual> fold_dims_;
   FuncRefList input_funcs;
   FuncRefList output_funcs;
 
