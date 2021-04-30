@@ -381,6 +381,8 @@ op_dsl = {
         (output[0]['tensor_name'], get_input(inputs[0][0])),
     "LessEqual": lambda inputs, output, attr: "%s = np.less_equal(%s, %s)" %
         (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0])),
+    "Less": lambda inputs, output, attr: "%s = np.less(%s, %s)" %
+        (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0])),
     "EquivFormat": lambda inputs, output, attr: "%s = %s" %
         (output[0]['tensor_name'], get_input(inputs[0][0])),
     "ExpandDims": lambda inputs, output, attr: "%s = np.expand_dims(%s, %s)" %
