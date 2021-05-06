@@ -118,14 +118,16 @@ def np_matmul(matrix_a, matrix_b, batch_tuple, M, K, N, trans_data=False, trans_
     res = out.reshape(out_shape).transpose(trans).copy()
     return res
 
+def gen_data(batch_tuple, M, K, N, trans_data=False, trans_weight=False,
+            dtype="float16", bias_dtype="float16", out_dtype="float16", bias=0, left_format="zZ", right_format="nZ", output_format="zN"):
+    fractal_a, fractal_b, out, bias_data, _, _ = gen_data_all(batch_tuple, M, K, N, trans_data, trans_weight, dtype, bias_dtype, out_dtype, bias, left_format, right_format, output_format)
+    return fractal_a, fractal_b, out, bias_data
 
-def genData(batch_tuple, M, K, N, trans_data=False, trans_weight=False,
+def gen_data_all(batch_tuple, M, K, N, trans_data=False, trans_weight=False,
             dtype="float16", bias_dtype="float16", out_dtype="float16", bias=0, left_format="zZ", right_format="nZ", output_format="zN"):
     shape_x, shape_y = get_shapes(batch_tuple, M, K, N, trans_data, trans_weight)
     matrix_a = random_gaussian(shape_x, miu=0.1, sigma=0.01).astype(dtype)
     matrix_b = random_gaussian(shape_y, miu=0.1, sigma=0.01).astype(dtype)
-    # matrix_a = np.ones(shape_x, dtype=np.float16)
-    # matrix_b = np.ones(shape_y, dtype=np.float16)
 
     # this change is for gen data speed
     matrix_a_for_np = matrix_a.astype(np.float32)
@@ -187,8 +189,7 @@ def genData(batch_tuple, M, K, N, trans_data=False, trans_weight=False,
         trans_x = tuple(range(batch_len)) + (batch_len + 2, batch_len + 0, batch_len + 1, batch_len + 3)
         fractal_a = matrix_b.reshape(batch_tuple + shape_y).transpose(trans_y).copy()
         fractal_b = matrix_a.reshape(batch_tuple + shape_x).transpose(trans_x).copy()
-    return fractal_a, fractal_b, out, bias_data
-
+    return fractal_a, fractal_b, out, bias_data, matrix_a, matrix_b 
 
 def matmul_data(batch_tuple, M, K, N, dtype, bias_dtype, out_dtype, bias, adj_x, adj_y, left_format=None, right_format=None, output_format=None, debug_logging=False):
     m_x = ()
@@ -197,7 +198,7 @@ def matmul_data(batch_tuple, M, K, N, dtype, bias_dtype, out_dtype, bias, adj_x,
     bias_data = ()
     logging.debug("gen data start!")
     a = datetime.now()
-    m_x, m_y, bench_mark, bias_data = genData(batch_tuple, M, K, N, adj_x, adj_y, dtype, bias_dtype, out_dtype, bias, left_format, right_format, output_format)
+    m_x, m_y, bench_mark, bias_data = gen_data(batch_tuple, M, K, N, adj_x, adj_y, dtype, bias_dtype, out_dtype, bias, left_format, right_format, output_format)
     b = datetime.now()
     logging.debug((b - a).seconds)
     logging.debug("gen data end!")
