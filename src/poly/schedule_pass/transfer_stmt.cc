@@ -38,9 +38,9 @@ isl::schedule TransferStmt::Run(isl::schedule curr_schedule) {
         filter = filter.subtract(pass_info_.transfer_stmt_);
         child = isl::manage(isl_schedule_node_filter_set_filter(child.copy(), filter.copy()));
         node = child.parent();
-        return node.get_schedule();
       }
     }
+    return node.get_schedule();
   }
   return curr_schedule;
 }

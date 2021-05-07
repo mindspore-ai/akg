@@ -26,7 +26,7 @@ namespace poly {
 bool Reschedule::IsL1OrUbMark(const isl::schedule_node &node) {
   if (node.isa<isl::schedule_node_mark>()) {
     auto tag = node.as<isl::schedule_node_mark>().get_id().get_name();
-    if (tag == REALIZE_C1 || tag == REALIZE_BUF) return true;
+    if (tag == REALIZE_C1 || tag == REALIZE_BUF || tag == REALIZE_C1BUFC1) return true;
   }
   return false;
 }
@@ -34,7 +34,7 @@ bool Reschedule::IsL1OrUbMark(const isl::schedule_node &node) {
 bool Reschedule::IsL0OrUbL0Mark(const isl::schedule_node &node) {
   if (node.isa<isl::schedule_node_mark>()) {
     auto tag = node.as<isl::schedule_node_mark>().get_id().get_name();
-    if (tag == REALIZE_C0 || tag == REALIZE_BUFC0) return true;
+    if (tag == REALIZE_C0 || tag == REALIZE_BUFC0 || tag == REALIZE_BUFC1) return true;
   }
   return false;
 }
@@ -57,10 +57,10 @@ void Reschedule::CollectTileBandData(const isl::schedule_node &node, struct Tile
 
   if (tile_band_data->mark.isa<isl::schedule_node_mark>()) {
     auto marktag = tile_band_data->mark.as<isl::schedule_node_mark>().get_id().get_name();
-    if (marktag == REALIZE_C0 || marktag == REALIZE_BUFC0) {
+    if (marktag == REALIZE_C0 || marktag == REALIZE_BUFC0 || marktag == REALIZE_BUFC1) {
       tile_band_data->l0_tiled = true;
       l0_build_options_.push_back(tile_band_data->ast_build_options);
-    } else if (marktag == REALIZE_C1 || marktag == REALIZE_BUF) {
+    } else if (marktag == REALIZE_C1 || marktag == REALIZE_BUF || marktag == REALIZE_C1BUFC1) {
       l1_build_options_.push_back(tile_band_data->ast_build_options);
     }
     tile_band_data->gemm_mark = node.parent().parent();

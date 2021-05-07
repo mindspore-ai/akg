@@ -1584,6 +1584,8 @@ void PlaceDataCopyBelowImplFakeReads(ScopInfo &scop_info, isl::schedule_node &tr
     }
     CHECK(node.isa<isl::schedule_node_mark>()) << "must find a mark node." << std::endl;
     auto tag = node.as<isl::schedule_node_mark>().get_id().get_name();
+    // Realize_L1 mark
+    // id has _local_ key word
     if (tag == REALIZE_C1) {
       isl::map stmt_extension = read_extension.range().unwrap();
       isl::id stmt_tensor_id = cluster_id;
@@ -1611,6 +1613,20 @@ void PlaceDataCopyBelowImplFakeReads(ScopInfo &scop_info, isl::schedule_node &tr
       }
     }
   }
+}
+isl::schedule_node FindChildExtension(const isl::schedule_node &node) {
+  isl::schedule_node res = node;
+  while (res.has_children()) {
+    if (res.isa<isl::schedule_node_extension>()) {
+      res = res.get_child(0);
+      if (res.isa<isl::schedule_node_sequence>()) {
+        res = res.get_child(0);
+      }
+      return res;
+    }
+    res = res.get_child(0);
+  }
+  return res;
 }
 
 isl::schedule_node PlaceDataCopyBelowImpl(ScopInfo &scop_info, isl::schedule_node tree,
@@ -1666,6 +1682,19 @@ isl::schedule_node PlaceDataCopyBelowImpl(ScopInfo &scop_info, isl::schedule_nod
   PlaceDataCopyBelowImplReadWrite(scop_info, tree, cluster, footprint, tensor_id, original_elements, exact_writes,
                                   read_extension, buffered_footprint, cluster_id, extension_map, read_id);
 
+  auto fake_copyin = scop_info.analysis_result_.GetFakeCopyin();
+  bool in_copyin_map = false;
+  fake_copyin.foreach_map([&in_copyin_map, &tensor_id](const isl::map &fake_map) -> void {
+    fake_map.foreach_basic_map([&in_copyin_map, &tensor_id](const isl::basic_map &basic_map) -> void {
+      const isl::map m = basic_map;
+      if (m.range().tuple_id().name() == tensor_id.name()) {
+        in_copyin_map = true;
+      }
+    });
+  });
+  if (in_copyin_map && scop_info.mmu_info_.IsGemm()) {
+    tree = FindChildExtension(tree);
+  }
   PlaceDataCopyBelowImplFakeReads(scop_info, tree, cluster, read_extension, cluster_id, sch);
 
   return tree;

@@ -42,9 +42,7 @@ namespace akg {
 namespace ir {
 namespace poly {
 
-void DsaMgrStrategy::RegisterTilingPasses() {
-  RegisterPass(std::make_shared<TileOuterBand>(pass_info_, scop_info_));
-}
+void DsaMgrStrategy::RegisterTilingPasses() { RegisterPass(std::make_shared<TileOuterBand>(pass_info_, scop_info_)); }
 
 void DsaMgrStrategy::RegisterMemPromPasses() { RegisterPass(std::make_shared<MemoryManager>(scop_info_)); }
 
