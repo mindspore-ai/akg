@@ -807,12 +807,18 @@ void GpuStrategy::SetMappingConfig() {
     ss << "(" << analyzer_->scop_info_.analysis_result_.GetReduceDirection() << ")";
   }
   analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
+
+  // we need bind one axis at least
   if (thread_cfg_.empty()) {
     thread_cfg_.emplace_back(1);
   }
   if (block_cfg_.empty()) {
     block_cfg_.emplace_back(1);
   }
+  if (block_count_ == 0) {
+    block_count_ = 1;
+  }
+
   std::string block_str = "";
   std::string thread_str = "";
   if (reverse_binding_) {
