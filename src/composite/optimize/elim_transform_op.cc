@@ -16,9 +16,9 @@
 #include "composite/optimize/elim_transform_op.h"
 
 namespace akg {
-class ElimTransformAnalysis {
+class ElimTransformAnalysisBackward {
  public:
-  ElimTransformAnalysis(Graph &g, BuildOpt &opt, AnalysisResult &result) : g_(g), opt_(opt), result_(result){};
+  ElimTransformAnalysisBackward(Graph &g, BuildOpt &opt, AnalysisResult &result) : g_(g), opt_(opt), result_(result){};
   void Run() {
     // from output to input, try to remove each transform op, when removed op, should change each tensor's shape by
     // elemwise op, and try to add reshape op when unelemwise op's input shape and output shape are changed.
@@ -108,7 +108,7 @@ class ElimTransformAnalysis {
       // b = reduce(a) -> t = trans(a); b = reduce(t)
       auto inputs = g_.pre_graph[output];
       for (const auto &input : inputs) {
-        g_.visited_funcs.insert(output);
+        g_.visited_funcs.insert(input);
         if (result_.ShapeChanged(input)) {
           LOG(INFO) << "IS UNELEMWISE, INPUT COLLECT RESHAPE";
           result_.CollectReshape(provide, input, g_.func_shape[input], result_.changed_shapes[input]);
@@ -127,11 +127,13 @@ class ElimTransformAnalysis {
       // if not visited and output changed, change input shape
       if (output_changed) {
         result_.changed_shapes[input] = output_shape;
+        g_.visited_funcs.insert(input);
       }
     } else {
       auto input_shape = result_.ShapeChanged(input) ? result_.changed_shapes[input] : g_.func_shape[input];
       if (!EqualShape(output_shape, input_shape)) {
         result_.changed_shapes[output] = input_shape;
+        g_.visited_funcs.insert(output);
       }
     }
     // input0 and input1's shape should do nothing
@@ -163,6 +165,184 @@ class ElimTransformAnalysis {
   AnalysisResult &result_;
 };
 
+class ElimTransformAnalysisForward {
+ public:
+  ElimTransformAnalysisForward(Graph &g, BuildOpt &opt, AnalysisResult &result) : g_(g), opt_(opt), result_(result){};
+  void Run() {
+    // from input to output, try to remove each transform op, when removed op, should change each tensor's shape by
+    // elemwise op, and try to add reshape op when unelemwise op's input shape and output shape are changed.
+    size_t settled_size;
+    do {
+      settled_size = g_.visited_funcs.size();
+      for (const auto &input : g_.input_funcs) {
+        if (!g_.post_graph.count(input)) continue;
+        for (const auto &output : g_.post_graph[input]) {
+          AnalysisInner(output);
+        }
+      }
+    } while (settled_size != g_.visited_funcs.size());
+
+    for (const auto &p : result_.to_be_removed) {
+      // if output removed, should collect opt.sames
+      if (std::find(g_.output_funcs.begin(), g_.output_funcs.end(), p->func) != g_.output_funcs.end()) {
+        opt_.sames[p->func] = result_.to_be_replaced[p->func];
+      }
+    }
+  }
+
+ private:
+  void AnalysisTransform(const FunctionRef &output) {
+    auto provide = g_.func_stmts[output];
+    auto call = provide->value.as<Call>();
+    CHECK(call);
+    CHECK(call->args.size() == 1);
+    CHECK(call->args[0].as<Call>());
+    auto input = call->args[0].as<Call>()->func;
+    // if output is kernel output and input is kernel input, cannot remove this op
+    if (!(std::find(g_.output_funcs.begin(), g_.output_funcs.end(), output) != g_.output_funcs.end() &&
+          std::find(g_.input_funcs.begin(), g_.input_funcs.end(), input) != g_.input_funcs.end())) {
+      // if not visited or input shape and output shape as same, can remove this op, change input shape to output
+      // shape, replace output tensor to input tensor
+      auto input_shape = result_.ShapeChanged(input) ? result_.changed_shapes[input] : g_.func_shape[input];
+      auto output_shape = result_.ShapeChanged(output) ? result_.changed_shapes[output] : g_.func_shape[output];
+      if (!g_.visited_funcs.count(output) || EqualShape(input_shape, output_shape)) {
+        result_.to_be_replaced[output] = input;
+        // if any tensor replace to input already, it should change to new input
+        for (auto &kv : result_.to_be_replaced) {
+          if (kv.second == output) {
+            kv.second = input;
+          }
+        }
+        result_.changed_shapes[output] = input_shape;
+        result_.to_be_removed.insert(provide);
+        g_.visited_funcs.insert(output);
+        g_.visited_funcs.insert(input);
+      }  // else if visited and input output shape are different, do noting, if input shape changed, already in set
+    }
+  }
+
+  void AnalysisElemwise(const FunctionRef &output) {
+    auto inputs = g_.pre_graph[output];
+    bool output_changed = result_.ShapeChanged(output);
+    auto output_shape = output_changed ? result_.changed_shapes[output] : g_.func_shape[output];
+    Array<Expr> changed_shape;
+    bool input_changed = false;
+    for (const auto &input : inputs) {
+      if (g_.visited_funcs.count(input) && result_.ShapeChanged(input)) {
+        changed_shape = result_.changed_shapes[input];
+        if (!g_.visited_funcs.count(output)) {
+          input_changed = true;
+          result_.changed_shapes[output] = changed_shape;
+          g_.visited_funcs.insert(output);
+          break;
+        } else {
+          if (!EqualShape(changed_shape, output_shape) && !ShapeIsOne(changed_shape)) {
+            // b = op(a) -> t = trans(a); b = op(t)
+            LOG(INFO) << "IS ELEMWISE, COLLECT RESHAPE";
+            result_.CollectReshape(g_.func_stmts[output], input, output_shape, changed_shape);
+          }
+        }
+      }
+    }
+    for (const auto &input : inputs) {
+      if (input_changed) {
+        if (!g_.visited_funcs.count(input) && !ShapeIsOne(g_.func_shape[input])) {
+          // if not visited and input changed, change input shape
+          result_.changed_shapes[input] = changed_shape;
+          g_.visited_funcs.insert(input);
+        } else {
+          // if visited, check input shape and out shape are same or not, if not, need reshape
+          auto input_shape = result_.ShapeChanged(input) ? result_.changed_shapes[input] : g_.func_shape[input];
+          if (!EqualShape(changed_shape, input_shape) && !ShapeIsOne(input_shape)) {
+            // b = op(a) -> t = trans(a); b = op(t)
+            LOG(INFO) << "IS ELEMWISE, COLLECT RESHAPE";
+            result_.CollectReshape(g_.func_stmts[output], input, input_shape, changed_shape);
+          }
+        }
+      } else {
+        // if not visited and output changed, change input shape
+        if (output_changed && !ShapeIsOne(g_.func_shape[input])) {
+          result_.changed_shapes[input] = output_shape;
+          g_.visited_funcs.insert(input);
+        }
+      }
+    }
+  }
+
+  void AnalysisOthers(const FunctionRef &output) {
+    auto provide = g_.func_stmts[output];
+    auto op_name = GetOpName(provide);
+    auto output_shape = result_.ShapeChanged(output) ? result_.changed_shapes[output] : g_.func_shape[output];
+    // if output shape changed, output need reshape
+    // b = reduce(a) -> t = reduce(a); b = trans(t)
+    g_.visited_funcs.insert(output);
+    if (result_.ShapeChanged(output)) {
+      LOG(INFO) << "IS UNELEMWISE, OUTPUT COLLECT RESHAPE";
+      result_.CollectReshape(provide, output, g_.func_shape[output], output_shape);
+    }
+    if (!(IsReduce(op_name) && ShapeIsOne(output_shape))) {  // we consider that allreduce op's input shape is flexable
+      // if input shape changed, input need reshape
+      // b = reduce(a) -> t = trans(a); b = reduce(t)
+      auto inputs = g_.pre_graph[output];
+      for (const auto &input : inputs) {
+        g_.visited_funcs.insert(input);
+        if (result_.ShapeChanged(input)) {
+          LOG(INFO) << "IS UNELEMWISE, INPUT COLLECT RESHAPE";
+          result_.CollectReshape(provide, input, g_.func_shape[input], result_.changed_shapes[input]);
+        }
+      }
+    }
+  }
+
+  void AnalysisInplaceAssign(const FunctionRef &output) {
+    auto inputs = g_.pre_graph[output];
+    bool output_changed = result_.ShapeChanged(output);
+    auto output_shape = output_changed ? result_.changed_shapes[output] : g_.func_shape[output];
+    CHECK(inputs.size() == 3);
+    auto input = inputs[2];
+    if (!g_.visited_funcs.count(input)) {
+      // if not visited and output changed, change input shape
+      if (output_changed) {
+        result_.changed_shapes[input] = output_shape;
+        g_.visited_funcs.insert(input);
+      }
+    } else {
+      auto input_shape = result_.ShapeChanged(input) ? result_.changed_shapes[input] : g_.func_shape[input];
+      if (!EqualShape(output_shape, input_shape)) {
+        result_.changed_shapes[output] = input_shape;
+        g_.visited_funcs.insert(output);
+      }
+    }
+    // input0 and input1's shape should do nothing
+  }
+
+  void AnalysisInner(const FunctionRef &output) {
+    if (!g_.func_stmts.count(output)) return;
+    auto provide = g_.func_stmts[output];
+    auto op_name = GetOpName(provide);
+    if (IsTransform(op_name)) {
+      AnalysisTransform(output);
+    } else if (IsElemwise(op_name) && g_.CanChangeElem(output)) {
+      AnalysisElemwise(output);
+    } else if (IsInplaceAssign(op_name)) {
+      AnalysisInplaceAssign(output);
+    } else {
+      // the op which can not change shape
+      AnalysisOthers(output);
+    }
+    if (!g_.post_graph.count(output)) return;
+    auto outputs = g_.post_graph[output];
+    for (const auto &out : outputs) {
+      AnalysisInner(out);
+    }
+  }
+
+ private:
+  Graph &g_;
+  BuildOpt &opt_;
+  AnalysisResult &result_;
+};
+
 class ElimTransformOpChecker : public IRVisitor {
  public:
   ElimTransformOpChecker() = default;
@@ -175,16 +355,31 @@ class ElimTransformOpChecker : public IRVisitor {
   bool can_elim{false};
 };
 
+Stmt ElimTransformBackward(const Stmt &s, BuildOpt &opt) {
+  auto f = StmtToGraph(opt.input_funcs, opt.output_funcs);
+  f.Visit(s);
+  AnalysisResult result;
+  auto analysis = ElimTransformAnalysisBackward(f.g_, opt, result);
+  analysis.Run();
+  result.Dump();
+  return DoAnalysis(result).Mutate(s);
+}
+Stmt ElimTransformForward(const Stmt &s, BuildOpt &opt) {
+  auto f = StmtToGraph(opt.input_funcs, opt.output_funcs);
+  f.Visit(s);
+  AnalysisResult result;
+  auto analysis = ElimTransformAnalysisForward(f.g_, opt, result);
+  analysis.Run();
+  result.Dump();
+  return DoAnalysis(result).Mutate(s);
+}
 Stmt ElimTransformOp::Run(const Stmt &s) {
   auto checker = ElimTransformOpChecker();
   checker.Visit(s);
   if (!checker.can_elim) return s;
-  auto f = StmtToGraph(info_.opt.input_funcs, info_.opt.output_funcs);
-  f.Visit(s);
-  AnalysisResult result;
-  auto analysis = ElimTransformAnalysis(f.g_, info_.opt, result);
-  analysis.Run();
-  result.Dump();
-  return DoAnalysis(result).Mutate(s);
+  LOG(INFO) << "ElimTransformBackward Start";
+  auto stmt = ElimTransformBackward(s, info_.opt);
+  LOG(INFO) << "ElimTransformForward Start";
+  return ElimTransformForward(stmt, info_.opt);
 }
 }  // namespace akg

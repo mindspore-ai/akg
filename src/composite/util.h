@@ -282,7 +282,12 @@ class DoAnalysis : public IRMutator {
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) override {
     if (op->attr_key == "attrs") {
       op_attrs_ = Downcast<Map<std::string, NodeRef>>(op->node);
-      auto stmt = IRMutator::Mutate_(op, s);
+      auto stmt = s;
+      if (op->body.as<Provide>() && GetOpName(op->body.as<Provide>()) == "BroadcastTo") {
+        stmt = this->Mutate(op->body);
+      } else {
+        stmt = IRMutator::Mutate_(op, s);
+      }
       op_attrs_ = {};
       return stmt;
     }
@@ -376,6 +381,11 @@ class DoAnalysis : public IRMutator {
       stmts.emplace_back(stmt);
       OutputTryAddReshape(op->func, new_provide.as<Provide>(), result_.need_reshape_map[op], stmts);
       return Block::make(stmts);
+    }
+    if (GetOpName(op) == "BroadcastTo" && !op_attrs_.empty()) {
+      auto new_attrs = op_attrs_;
+      new_attrs.Set("shape", provide.as<Provide>()->args);
+      provide = AttrStmt::make(new_attrs, "attrs", Expr(1), provide);
     }
     return provide;
   }
