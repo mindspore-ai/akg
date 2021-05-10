@@ -50,6 +50,7 @@ constexpr auto kRecordCore = "record_core";
 constexpr auto kEnableBisectOptimize = "enable_bisect_optimize";
 constexpr auto kEnableCoverProtectOptimize = "enable_cover_protect_optimize";
 constexpr auto kEnableDoubleBuffer = "enable_double_buffer";
+constexpr auto kEnableQuadrupleBuffer = "enable_quadruple_buffer";
 constexpr auto kEnableTransferBuffer = "enable_transfer_buffer";
 constexpr auto kEnableThreadGroup = "enable_thread_group";
 constexpr auto kEnableUnrollLoop = "enable_unroll_loop";
