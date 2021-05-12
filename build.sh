@@ -52,28 +52,17 @@ write_checksum()
 
 acquire_lib_url()
 {
-    os_info=`cat /etc/os-release | grep '^NAME=' | tr '[A-Z]' '[a-z]'`
-    os_name=""
-    if [[ "${os_info}" =~ "ubuntu" ]]; then
-        os_name="ubuntu"
-    elif [[ "${os_info}" =~ "euleros" ]]; then
-        os_name="euleros"
-    elif [[ "${os_info}" =~ "centos" ]]; then
-        os_name="centos"
-    fi
-
     arch_info=`arch | tr '[A-Z]' '[a-z]'`
     arch_name=""
     if [[ "${arch_info}" =~ "aarch64" ]]; then
         arch_name="aarch64"
-    elif [[ "${arch_info}" =~ "x86" ]]; then
-        arch_name="x86"
+    elif [[ "${arch_info}" =~ "x86_64" ]]; then
+        arch_name="x86_64"
     fi
 
-    os_arch="${os_name}_${arch_name}"
     url_prefix="https://repo.mindspore.cn/public/ms-incubator/akg-binary/version"
-    lib_mark="202105/20210510/master_20210510141337_1f4a3382326cf4060a81d6964d36303a6f35b260"
-    lib_url="${url_prefix}/${lib_mark}/lib/${os_arch}/libakg_ext.a"
+    lib_mark="202105/20210512/master_20210512115032_1f4a3382326cf4060a81d6964d36303a6f35b260"
+    lib_url="${url_prefix}/${lib_mark}/lib/${arch_name}/libakg_ext.a"
     echo "${lib_url}"
 }
 
