@@ -342,7 +342,7 @@ op_dsl = {
         (output[0]['tensor_name'], get_input(inputs[0][0])),
     "Cast": lambda inputs, output, attr: cast_str(inputs, output, attr),
     "Reshape": lambda inputs, output, attr: "%s = np.reshape(%s, %s)" %
-        (output[0]['tensor_name'], get_input(inputs[0][0]), get_attr(attr, "shape")),
+        (output[0]['tensor_name'], get_input(inputs[0][0]), output[0]['shape']),
     "OneHot": lambda inputs, output, attr: "%s = np.one_hot(%s, %s, %s, %s, %s, %s)" %
         (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]), get_input(inputs[2][0]),
         attr[0]['value'], attr[1]['value'], inputs[0][0]['data_type']),
