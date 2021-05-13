@@ -212,7 +212,7 @@ Tensor DiffConv(const Tensor &output, const Tensor &input, const Tensor &head, c
       Array<Expr> NCHW_flipped_weight_shape = {Expr(k_c), Expr(k_n), Expr(k_h), Expr(k_w)};
 
       if (conv_type == ADConvType::NORMAL) {
-        if (in_attrs.GetIntAttr("ad_conv_reuse_conv", 0) != 0) {
+        if (in_attrs.GetInt("ad_conv_reuse_conv", 0) != 0) {
           Array<Integer> Stride = {1, 1};
           Array<Integer> Dilation = {1, 1};
           Array<Integer> Pad = {Integer(k_h - 1 - p_top), Integer(k_h - 1 - p_bottom), Integer(k_w - 1 - p_left),
@@ -281,7 +281,7 @@ Tensor DiffConv(const Tensor &output, const Tensor &input, const Tensor &head, c
       Array<Expr> NCHW_trans_head_shape = {Expr(head_c), Expr(head_n), Expr(head_h), Expr(head_w)};
       Array<Integer> Pad = {Integer(p_top), Integer(p_bottom), Integer(p_left), Integer(p_right)};
       if (conv_type == ADConvType::NORMAL) {
-        if (in_attrs.GetIntAttr("ad_conv_reuse_conv", 0) != 0) {
+        if (in_attrs.GetInt("ad_conv_reuse_conv", 0) != 0) {
           Array<Integer> Stride = {1, 1};
           Array<Integer> Dilation = {Integer(s_h), Integer(s_w)};
           const PackedFunc *f = air::runtime::Registry::Get("akg.autodiff.conv_compute_forward");
@@ -1891,7 +1891,7 @@ void ADPassMergeMultipleBroadcast(Array<Tensor> &input_tensors, Array<Tensor> &o
 
 void ADRunAllPasses(Array<Tensor> &input_tensors, Array<Tensor> &output_tensors, AttrMap &in_attrs,
                     const Array<Tensor> &new_pld_array, const std::string &DOT_prefix) {
-  bool export_DOT_ = (in_attrs.GetIntAttr("export_DOT", 0) != 0);
+  bool export_DOT_ = (in_attrs.GetInt("export_DOT", 0) != 0);
   auto f_group = air::runtime::Registry::Get("akg.autodiff.export_to_DOT");
   if (f_group == nullptr) {
     export_DOT_ = false;
@@ -1916,7 +1916,7 @@ void ADRunAllPasses(Array<Tensor> &input_tensors, Array<Tensor> &output_tensors,
   // Pass 6: Swap tensors' order to find more reuse of Mul
   Array<Tensor> result_pld_pass6;
   ADPassSwapMultiplyOrder(result_pld_pass5, result_pld_pass6);
-  bool disable_isolating_ = (in_attrs.GetIntAttr("disable_isolating", 0) != 0);
+  bool disable_isolating_ = (in_attrs.GetInt("disable_isolating", 0) != 0);
   if (!disable_isolating_) {
     // Pass 7: Automatic finding of common computation nodes and isolating them
     Array<Tensor> result_pld_pass7;
@@ -1945,7 +1945,7 @@ void ADOptimizePasses(Array<Tensor> &input_tensors, Array<Tensor> &output_tensor
   if (attrs.defined()) {
     in_attrs = attrs;
   }
-  bool separate_output_ = (in_attrs.GetIntAttr("separate_output", 0) != 0);
+  bool separate_output_ = (in_attrs.GetInt("separate_output", 0) != 0);
   if (!separate_output_) {
     ADRunAllPasses(input_tensors, output_tensors, in_attrs, new_pld_array, "ad_pass_grouped");
   } else {

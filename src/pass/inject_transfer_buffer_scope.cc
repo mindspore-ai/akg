@@ -304,9 +304,9 @@ Stmt InjectTransferBufferScope(Stmt stmt) {
   resource_calc.Visit(new_stmt);
   if (tuning) {
     // tuning: manually control by attrs
-    enable_double_buffer = global_attrs.GetBoolAttr(kEnableDoubleBuffer, false);
-    enable_transfer_buffer = global_attrs.GetBoolAttr(kEnableTransferBuffer, false);
-    enable_thread_group = global_attrs.GetBoolAttr(kEnableThreadGroup, false);
+    enable_double_buffer = g_attrs.GetBool(kEnableDoubleBuffer, false);
+    enable_transfer_buffer = g_attrs.GetBool(kEnableTransferBuffer, false);
+    enable_thread_group = g_attrs.GetBool(kEnableThreadGroup, false);
   } else {
     // not tuning: auto-analyse
     const int total_shared_usage = resource_calc.GetTotalSharedUsage();
@@ -321,7 +321,7 @@ Stmt InjectTransferBufferScope(Stmt stmt) {
     if ((prefetch_outer_loop > MIN_OUTER_LOOP) && (local_mem_rate < 1) &&
         ((bind_thread_num < max_bind_thread_num / 2) || (prefetch_outer_loop < MAX_OUTER_LOOP))) {
       enable_transfer_buffer = true;
-      global_attrs.Set(kEnableTransferBuffer, air::make_const(Int(32), true));
+      g_attrs.Set(kEnableTransferBuffer, air::make_const(Int(32), true));
       if ((local_mem_rate < (1.0 / float(thread_group) / 2.0)) && (bind_thread_num < max_bind_thread_num)) {
         enable_thread_group = true;
       }

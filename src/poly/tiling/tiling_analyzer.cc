@@ -1411,7 +1411,7 @@ void TilingAnalyzer::AddTilingConstraints() {
 
   ReduceStrategy reduce_strategy(this);
   DmaAlignStrategy dma_align_stratgey(this);
-  
+
   if (!scop_info_.user_config_.GetIsTuning()) {
     actived_strategies.push_back(&reduce_strategy);
     actived_strategies.push_back(&dma_align_stratgey);
@@ -1623,7 +1623,7 @@ void TilingAnalyzer::DumpBufferUsageTimeable() {
 
 int TileCandidate::GetCoreNumConf() {
   int product_block = GetCoreValue("Core_num");
-  int user_defined_block = global_attrs.GetIntAttr(kEnableMulticore, -1);
+  int user_defined_block = g_attrs.GetInt(kEnableMulticore, -1);
   if (user_defined_block == -1) {
     // User is not defining core num, assume we can use maximal number.
     return product_block;

@@ -58,8 +58,8 @@ double TilingSolver::GetNewAllocRatioWhenFlattenFail(const std::string &error_in
  */
 double TilingSolver::GetNewAllocRatioWhenRewriteFail(int64_t memory_bits) {
   is_retry_ = true;
-  auto actual_allocs = global_attrs.GetFloatAttr(kAllocBits, 0.0);
-  auto last_adjust_ratio = global_attrs.GetFloatAttr(kUBRatio, 1.0);
+  auto actual_allocs = g_attrs.GetFloat(kAllocBits, 0.0);
+  auto last_adjust_ratio = g_attrs.GetFloat(kUBRatio, 1.0);
   auto adjust_ratio = 1.0;
 
   if (actual_allocs != 0) {
@@ -67,7 +67,7 @@ double TilingSolver::GetNewAllocRatioWhenRewriteFail(int64_t memory_bits) {
     auto expect_allocs = memory_bits * last_adjust_ratio;
     adjust_ratio = (expect_allocs / actual_allocs);
     ss << "Adjust memory allocation ratio to " << adjust_ratio << " times and retry tiling.";
-    global_attrs.Set(kUBRatio, air::make_const(Float(32), adjust_ratio));
+    g_attrs.Set(kUBRatio, air::make_const(Float(32), adjust_ratio));
     analyzer_.GetTileLogger().AppendLog(MICRO_TUNING, ss);
   }
   return adjust_ratio;
@@ -85,25 +85,25 @@ void TilingSolver::CollectMemoryLimit() {
     }
 
     // Handle previous error info if storage flatten fails and adjust allocation percentage.
-    auto error_info = global_attrs.GetStringAttr(kErrorInfo, "");
+    auto error_info = g_attrs.GetStr(kErrorInfo, "");
     if (!error_info.empty() && error_info.find("storage_flatten") != std::string::npos) {
       std::stringstream ss;
-      ss << "Get Error Info! -> " << global_attrs.GetStringAttr(kErrorInfo, "");
+      ss << "Get Error Info! -> " << g_attrs.GetStr(kErrorInfo, "");
       percentage_ = percentage_ * GetNewAllocRatioWhenFlattenFail(error_info);
       ss << "Adjust memory allocation to " << percentage_ << " of memory size and retry tiling.";
-      global_attrs.Set(kErrorInfo, StringImm::make(""));
+      g_attrs.Set(kErrorInfo, StringImm::make(""));
       analyzer_.GetTileLogger().AppendLog(MICRO_TUNING, ss);
     }
 
     // Init memory limit for each scope and reduce ratio of local.UB if storage rewrite fails previously.
     NpuInfo &d_info = NpuInfo::GetInstance();
-    auto error_scope = global_attrs.GetStringAttr(kErrorScope, "");
+    auto error_scope = g_attrs.GetStr(kErrorScope, "");
     for (auto i = 0; i < MEM_SCOPE_BULK; ++i) {
       this->mem_limit_[i] = d_info.GetMemoryLimitInScope(i) * percentage_;
       if (i == TilingMemScope::MEM_SCOPE_BUFFER && error_scope == DOT_LOCAL_BUF) {
         this->mem_limit_[i] =
           std::max(static_cast<int>(this->mem_limit_[i] * GetNewAllocRatioWhenRewriteFail(this->mem_limit_[i])), 1);
-        global_attrs.Set(kErrorScope, StringImm::make(""));
+        g_attrs.Set(kErrorScope, StringImm::make(""));
       }
     }
   } else {

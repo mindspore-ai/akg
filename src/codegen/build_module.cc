@@ -33,7 +33,7 @@
 #include "composite/util.h"
 
 namespace akg {
-AttrMap global_attrs;
+AttrMap g_attrs;
 Array<NodeRef> g_external_call_name;
 
 Tensor CreatePlaceholder(const NodeRef &arg) {
@@ -436,20 +436,20 @@ void FixParametricBinds(const Map<Tensor, Buffer> &binds, const Array<NodeRef> &
 }
 
 void DumpIr(const std::string &name, const BuildConfig &config, bool lower_list) {
-  global_attrs.Set(kKernelName, StringImm::make(name));
-  global_attrs.Set(kDumpPassIr, air::make_const(Int(32), config->dump_pass_ir));
+  g_attrs.Set(kKernelName, StringImm::make(name));
+  g_attrs.Set(kDumpPassIr, air::make_const(Int(32), config->dump_pass_ir));
   if (config->dump_pass_ir) {
     std::string dump_ir_dir;
-    if (global_attrs.GetStringAttr(kDumpIrDir, &dump_ir_dir)) {
+    if (g_attrs.GetStr(kDumpIrDir, &dump_ir_dir)) {
       PassMgr::SetDir(dump_ir_dir);
     } else {
       PassMgr::SetDir(name);
     }
     CreateDir(PassMgr::GetDir());
     std::string dump_poly_dir;
-    if (!global_attrs.GetStringAttr(kDumpPolyDir, &dump_poly_dir) || lower_list) {
+    if (!g_attrs.GetStr(kDumpPolyDir, &dump_poly_dir) || lower_list) {
       dump_poly_dir = PassMgr::GetDir() + "/poly";
-      global_attrs.Set(kDumpPolyDir, StringImm::make(dump_poly_dir));
+      g_attrs.Set(kDumpPolyDir, StringImm::make(dump_poly_dir));
       CreateDir(dump_poly_dir);
     }
   }
@@ -474,7 +474,7 @@ NodeRef LowerStmt(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeR
     *binds = in_binds;
   }
   if (in_attrs.defined()) {
-    global_attrs = in_attrs;
+    g_attrs = in_attrs;
   }
   PassMgr::ClearPassId();
 
@@ -485,11 +485,11 @@ NodeRef LowerStmt(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeR
 
   // Phase 0
   Target target_platform = Target::Create(target);
-  if (polyhedral && global_attrs.GetBoolAttr(kEnableAutoInline, true)) {
-    akg::schedule::AutoInline(sch, target_platform, global_attrs.GetBoolAttr(kEnableCSE, false));
+  if (polyhedral && g_attrs.GetBool(kEnableAutoInline, true)) {
+    akg::schedule::AutoInline(sch, target_platform, g_attrs.GetBool(kEnableCSE, false));
   }
-  if (target_platform->device_type == kDLGPU && polyhedral && global_attrs.GetBoolAttr(kEnableAutoFuse, true)) {
-    akg::schedule::AutoFuse(sch, global_attrs.GetStringAttr(kAutoFuseSplit, ""), *split_index);
+  if (target_platform->device_type == kDLGPU && polyhedral && g_attrs.GetBool(kEnableAutoFuse, true)) {
+    akg::schedule::AutoFuse(sch, g_attrs.GetStr(kAutoFuseSplit, ""), *split_index);
   }
 
   auto new_sch = sch.normalize();
@@ -514,7 +514,7 @@ NodeRef LowerStmt(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeR
         *arg_list_0 = arg_list_1;
         *binds_0 = binds_1;
       }
-      if (global_attrs.GetBoolAttr(kEnableFuseAxis, false)) {
+      if (g_attrs.GetBool(kEnableFuseAxis, false)) {
         Array<NodeRef> fuse_axis_res = NEXT_PASS(FuseAxis, stmt, *arg_list_0, *binds_0);
         CHECK_EQ(fuse_axis_res.size(), 3);
         stmt = air::Downcast<Stmt>(fuse_axis_res[0]);
@@ -523,23 +523,23 @@ NodeRef LowerStmt(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeR
       }
       PassMgr::SetArgs(*arg_list_0);
 
-      int level = global_attrs.GetIntAttr(kHelpTiling, -1);
+      int level = g_attrs.GetInt(kHelpTiling, -1);
       if (tuning || level > help_tiling_level["None"]) {
         if (tuning) {
           level = help_tiling_level["Tuning"];
         }
-        Map<std::string, NodeRef> attrs_1 = global_attrs;
+        Map<std::string, NodeRef> attrs_1 = g_attrs;
         attrs_1.Set(kDumpTuningLevel, air::make_const(Int(32), level));
         NodeRef tuning_spaces = NEXT_PASS(GenTuningSpace, stmt, target, *binds_0, attrs_1, false, new_sch);
         return tuning_spaces;
       }
 
-      Array<NodeRef> poly_res = NEXT_PASS(AutoPoly, stmt, *binds_0, target, global_attrs, false, false, new_sch);
+      Array<NodeRef> poly_res = NEXT_PASS(AutoPoly, stmt, *binds_0, target, g_attrs, false, false, new_sch);
       CHECK_EQ(poly_res.size(), 2);
       stmt = air::Downcast<Stmt>(poly_res[0]);
-      global_attrs.Set(kEnablePolySch, air::make_const(Int(32), true));
+      g_attrs.Set(kEnablePolySch, air::make_const(Int(32), true));
     } else {
-      global_attrs.Set(kEnablePolySch, air::make_const(Int(32), false));
+      g_attrs.Set(kEnablePolySch, air::make_const(Int(32), false));
     }
     // Phase 1
     stmt = NEXT_PASS(RemoveFakeOp, stmt);
@@ -557,17 +557,16 @@ NodeRef LowerStmt(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeR
       stmt = NEXT_PASS(VectorizeLoop, stmt);
     }
     stmt = NEXT_PASS(InjectVirtualThread, stmt);
-    if (polyhedral && (global_attrs.GetBoolAttr(kEnableDoubleBuffer, false) ||
-                       global_attrs.GetBoolAttr(kEnableTransferBuffer, false))) {
+    if (polyhedral && (g_attrs.GetBool(kEnableDoubleBuffer, false) || g_attrs.GetBool(kEnableTransferBuffer, false))) {
       stmt = NEXT_PASS(InjectTransferBufferScope, stmt);
     }
     stmt = NEXT_PASS(InjectDoubleBuffer, stmt, config->double_buffer_split_loop,
-                     global_attrs.GetBoolAttr(kEnableTransferBuffer, false));
+                     g_attrs.GetBool(kEnableTransferBuffer, false));
     stmt = NEXT_PASS(StorageRewrite, stmt);
 
     if (target_platform->device_type == kDLGPU && polyhedral) {
-      if (global_attrs.GetBoolAttr(kEnableSwizzleGPU, true)) {
-        stmt = NEXT_PASS(SwizzleGPU, stmt, global_attrs);
+      if (g_attrs.GetBool(kEnableSwizzleGPU, true)) {
+        stmt = NEXT_PASS(SwizzleGPU, stmt, g_attrs);
       }
     }
 
@@ -586,7 +585,7 @@ NodeRef LowerStmt(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeR
     if (BuildConfig::Current()->detect_global_barrier) {
       stmt = NEXT_PASS(ThreadSyncStmt, stmt, "global");
     }
-    if (!global_attrs.GetBoolAttr(kEnablePolySch, false)) {
+    if (!g_attrs.GetBool(kEnablePolySch, false)) {
       stmt = NEXT_PASS(ThreadSyncStmt, stmt, "shared");
     }
     stmt = NEXT_PASS(ThreadSyncStmt, stmt, "warp");
@@ -619,7 +618,7 @@ NodeRef Lower(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeRef> 
 #ifdef USE_AKG_COMPILE_STUB
   CHECK(target != "cce") << "Can not enable target cce, please make sure akg/build/libakg_ext.a "
                             "downloaded successfully, then recompile the source codes";
-  if (tuning || global_attrs.GetIntAttr(kHelpTiling, -1) > help_tiling_level["None"]) {
+  if (tuning || g_attrs.GetInt(kHelpTiling, -1) > help_tiling_level["None"]) {
     return tmp;
   }
   Stmt stmt = Downcast<Stmt>(tmp);
@@ -628,8 +627,8 @@ NodeRef Lower(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeRef> 
   return lowered_func;
 #else
   Stmt stmt = Downcast<Stmt>(tmp);
-  return LowerAscend(stmt, args, arg_list_0, binds, binds_0, shape_vars, name, simple_mode, polyhedral, tuning, target,
-                     config);
+  LowerData data{args, arg_list_0, binds, binds_0, shape_vars, name, simple_mode, polyhedral, tuning, target, config};
+  return LowerAscend(stmt, data);
 #endif
 }
 

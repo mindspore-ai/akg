@@ -91,28 +91,28 @@ void CreateDir(const std::string &file) {
   free(file_name);
 }
 
-int AttrMap::GetIntAttr(const std::string &attr_name, int dft_value) {
+int AttrMap::GetInt(const std::string &attr_name, int dft_value) {
   if (this->count(attr_name) == 0) {
     return dft_value;
   }
   const NodeRef &e = this->at(attr_name);
   return ir::GetInt32Const(Downcast<Expr>(e));
 }
-double AttrMap::GetFloatAttr(const std::string &attr_name, double dft_value) {
+double AttrMap::GetFloat(const std::string &attr_name, double dft_value) {
   if (this->count(attr_name) == 0) {
     return dft_value;
   }
   const NodeRef &e = this->at(attr_name);
   return ir::GetFloatConst(Downcast<Expr>(e));
 }
-bool AttrMap::GetBoolAttr(const std::string &attr_name, bool dft_value) {
-  int result = GetIntAttr(attr_name, static_cast<int>(dft_value));
+bool AttrMap::GetBool(const std::string &attr_name, bool dft_value) {
+  int result = GetInt(attr_name, static_cast<int>(dft_value));
   CHECK(result == 0 || result == 1) << "Bool attribute " << attr_name << " must be 0 or 1, but found "
                                     << this->at(attr_name);
   return static_cast<bool>(result);
 }
 
-bool AttrMap::GetStringAttr(const std::string &attr_name, std::string *const attr_to_set) {
+bool AttrMap::GetStr(const std::string &attr_name, std::string *attr_to_set) {
   if (this->count(attr_name) == 0) {
     return false;
   }
@@ -125,9 +125,9 @@ bool AttrMap::GetStringAttr(const std::string &attr_name, std::string *const att
   return true;
 }
 
-std::string AttrMap::GetStringAttr(const std::string &attr_name, const std::string &dft_value) {
+std::string AttrMap::GetStr(const std::string &attr_name, const std::string &dft_value) {
   std::string tmp;
-  if (GetStringAttr(attr_name, &tmp)) {
+  if (GetStr(attr_name, &tmp)) {
     return tmp;
   }
   return dft_value;
