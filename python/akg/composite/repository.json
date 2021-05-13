@@ -712,11 +712,7 @@
                         "enable_quadruple_buffer": true,
                         "bypass": 0
                     },
-                    "best_cycles": 59017.0,
-                    "date": "2021-04-15 23:15:15.823708",
-                    "file_name": "Fused_MatMul_fusion_16230329875186827966",
-                    "original_cycles": 3346111.3333333335,
-                    "tuning time": 69.36587262153625
+                    "file_name": "Fused_MatMul_fusion_16230329875186827966"
                 }
             }
         },
@@ -728,11 +724,7 @@
                         "enable_quadruple_buffer": true,
                         "bypass": 2
                     },
-                    "best_cycles": 434.0,
-                    "date": "2021-04-20 12:25:20.379590",
-                    "file_name": "Fused_MatMul_fusion_9718521447115329304",
-                    "original_cycles": Infinity,
-                    "tuning time": 0.0
+                    "file_name": "Fused_MatMul_fusion_9718521447115329304"
                 }
             }
         },
@@ -744,11 +736,7 @@
                         "enable_quadruple_buffer": true,
                         "bypass": 2
                     },
-                    "best_cycles": 3043.0,
-                    "date": "2021-04-15 21:05:30.044938",
-                    "file_name": "Fused_MatMul_fusion_412866505188866889",
-                    "original_cycles": 93090.33333333333,
-                    "tuning time": 66.61590027809143
+                    "file_name": "Fused_MatMul_fusion_412866505188866889"
                 }
             }
         },
@@ -760,11 +748,7 @@
                         "enable_quadruple_buffer": true,
                         "bypass": 0
                     },
-                    "best_cycles": 781.0,
-                    "date": "2021-04-15 19:59:02.499808",
-                    "file_name": "Fused_MatMul_fusion_12199297625125305098",
-                    "original_cycles": 3045.0,
-                    "tuning time": 0.0
+                    "file_name": "Fused_MatMul_fusion_12199297625125305098"
                 }
             }
         },
@@ -776,11 +760,55 @@
                         "enable_quadruple_buffer": true,
                         "bypass": 2
                     },
-                    "best_cycles": 11257.0,
-                    "date": "2021-04-15 19:42:57.450125",
-                    "file_name": "Fused_MatMul_split_905978054046527387",
-                    "original_cycles": 630840.3333333334,
-                    "tuning time": 148.04569959640503
+                    "file_name": "Fused_MatMul_split_905978054046527387"
+                }
+            }
+        },
+        "1908_152_16_16.64_1908_16_16.64_152_16_16": {
+            "float16--": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 0,
+                        "dim": " 0 0 8 8 0 1 19 19 0 2 16 16 0 3 16 16 0 4 3 1",
+                        "enable_quadruple_buffer": false
+                    },
+                    "file_name": "Fused_MatMul_split_5258244121405563286"
+                }
+            }
+        },
+        "64_1024_16_16.64_64_16_16.64_1024_16_16": {
+            "float16--": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 0,
+                        "dim": " 0 0 16 16 0 1 16 16 0 2 16 16 0 3 16 16 0 4 1 1",
+                        "enable_quadruple_buffer": false
+                    },
+                    "file_name": "Fused_MatMul_split_14429069632422502007"
+                }
+            }
+        },
+        "1908_76_16_16.64_1908_16_16.64_76_16_16": {
+            "float16--": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 0,
+                        "dim": " 0 0 8 8 0 1 19 19 0 2 16 16 0 3 16 16 0 4 3 1",
+                        "enable_quadruple_buffer": false
+                    },
+                    "file_name": "Fused_MatMul_split_9294236820876535206"
+                }
+            }
+        },
+        "64_512_16_16.64_64_16_16.64_512_16_16": {
+            "float16--": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 2,
+                        "dim": " 0 0 16 16 0 1 16 16 0 2 16 16 0 3 16 16 0 4 2 1",
+                        "enable_quadruple_buffer": true
+                    },
+                    "file_name": "Fused_MatMul_split_2965019690349343666"
                 }
             }
         }
@@ -793,11 +821,31 @@
                         "dim": " 0 0 16 16 0 1 6 6 0 2 16 16 0 3 16 16 0 4 4 4",
                         "bypass": 2
                     },
-                    "best_cycles": 3401.0,
-                    "date": "2021-04-22 15:32:44.534564",
-                    "file_name": "Fused_MatMul_TransData_fusion_13652942506256351033",
-                    "original_cycles": 141742.0,
-                    "tuning time": 259.6684148311615
+                    "file_name": "Fused_MatMul_TransData_fusion_13652942506256351033"
+                }
+            }
+        },
+        "64_152_16_16.64_64_16_16.2432_1024": {
+            "float16-.float32": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 0,
+                        "dim": " 0 0 16 16 0 1 8 8 0 2 16 16 0 3 16 16 0 4 4 2",
+                        "enable_quadruple_buffer": false
+                    },
+                    "file_name": "Fused_MatMul_TransData_fusion_11204941426357018698"
+                }
+            }
+        },
+        "64_76_16_16.64_64_16_16.1216_1024": {
+            "float16-.float32": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 2,
+                        "dim": " 0 0 4 4 0 1 19 19 0 2 16 16 0 3 16 16 0 4 8 1",
+                        "enable_quadruple_buffer": true
+                    },
+                    "file_name": "Fused_MatMul_TransData_fusion_6774916332121303400"
                 }
             }
         }
@@ -811,11 +859,7 @@
                         "enable_quadruple_buffer": true,
                         "bypass": 2
                     },
-                    "best_cycles": 63777.0,
-                    "date": "2021-04-15 20:39:21.384881",
-                    "file_name": "Fused_MatMul_fusion_13156080256881667250",
-                    "original_cycles": 3335857214.3333335,
-                    "tuning time": 183.46566677093506
+                    "file_name": "Fused_MatMul_fusion_13156080256881667250"
                 }
             }
         },
@@ -827,11 +871,31 @@
                         "enable_quadruple_buffer": true,
                         "bypass": 0
                     },
-                    "best_cycles": 69617.0,
-                    "date": "2021-04-22 15:27:33.271947",
-                    "file_name": "Fused_MatMul_split_11682258277936796048",
-                    "original_cycles": 5269025.0,
-                    "tuning time": 669.1260802745819
+                    "file_name": "Fused_MatMul_split_11682258277936796048"
+                }
+            }
+        },
+        "64_1908_16_16.64_152_16_16.1908_152_16_16": {
+            "float16-.float32": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 2,
+                        "dim": " 0 0 9 9 0 1 4 4 0 2 16 16 0 3 16 16 0 4 64 4",
+                        "enable_quadruple_buffer": false
+                    },
+                    "file_name": "Fused_MatMul_split_2386295298611908762"
+                }
+            }
+        },
+        "64_1908_16_16.64_76_16_16.1908_76_16_16": {
+            "float16-.float32": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 0,
+                        "dim": " 0 0 9 9 0 1 19 19 0 2 16 16 0 3 16 16 0 4 8 1",
+                        "enable_quadruple_buffer": false
+                    },
+                    "file_name": "Fused_MatMul_split_10140193613891141098"
                 }
             }
         }
@@ -844,11 +908,7 @@
                         "dim": " 0 0 8 8 0 1 24 24 0 2 16 16 0 3 16 16 0 4 2 1",
                         "bypass": 0
                     },
-                    "best_cycles": 41940.0,
-                    "date": "2021-04-15 21:03:48.537130",
-                    "file_name": "Fused_MatMul_fusion_3416089001773323850",
-                    "original_cycles": 4855481.333333333,
-                    "tuning time": 147.60337591171265
+                    "file_name": "Fused_MatMul_fusion_3416089001773323850"
                 }
             }
         },
@@ -859,11 +919,7 @@
                         "dim": " 0 0 16 16 0 1 6 6 0 2 16 16 0 3 16 16 0 4 8 8",
                         "bypass": 2
                     },
-                    "best_cycles": 3930.0,
-                    "date": "2021-04-15 18:10:17.139766",
-                    "file_name": "Fused_MatMul_fusion_12224329805786491742",
-                    "original_cycles": 144226.0,
-                    "tuning time": 77.11932134628296
+                    "file_name": "Fused_MatMul_fusion_12224329805786491742"
                 }
             }
         },
@@ -875,11 +931,7 @@
                         "enable_quadruple_buffer": true,
                         "bypass": 1
                     },
-                    "best_cycles": 542.0,
-                    "date": "2021-04-22 15:27:41.530216",
-                    "file_name": "Fused_MatMul_split_4936051937723241930",
-                    "original_cycles": 1174.0,
-                    "tuning time": 0.0
+                    "file_name": "Fused_MatMul_split_4936051937723241930"
                 }
             }
         },
@@ -890,11 +942,7 @@
                         "dim": " 0 0 1 1 0 1 16 16 0 2 16 16 0 3 64 16",
                         "bypass": 0
                     },
-                    "best_cycles": 430.0,
-                    "date": "2021-04-15 19:59:06.287053",
-                    "file_name": "Fused_MatMul_split_15311486657816719394",
-                    "original_cycles": 3333334042.6666665,
-                    "tuning time": 0.0
+                    "file_name": "Fused_MatMul_split_15311486657816719394"
                 }
             }
         },
@@ -905,11 +953,7 @@
                         "dim": " 0 0 8 8 0 1 24 24 0 2 16 16 0 3 16 16 0 4 4 1",
                         "bypass": 0
                     },
-                    "best_cycles": 12445.0,
-                    "date": "2021-04-22 13:34:10.512374",
-                    "file_name": "Fused_MatMul_split_17200163585673987002",
-                    "original_cycles": 963041.0,
-                    "tuning time": 565.006266117096
+                    "file_name": "Fused_MatMul_split_17200163585673987002"
                 }
             }
         },
@@ -920,11 +964,7 @@
                         "dim": " 0 0 16 4 0 1 16 16 0 2 16 16 0 3 16 16 0 4 64 1",
                         "bypass": 1
                     },
-                    "best_cycles": 53488.0,
-                    "date": "2021-04-15 19:58:13.721921",
-                    "file_name": "Fused_MatMul_fusion_12910035201205603425",
-                    "original_cycles": 2602625.3333333335,
-                    "tuning time": 171.22592544555664
+                    "file_name": "Fused_MatMul_fusion_12910035201205603425"
                 }
             }
         },
@@ -935,11 +975,31 @@
                         "dim": " 0 0 8 8 0 1 24 24 0 2 16 16 0 3 16 16 0 4 2 1",
                         "bypass": 1
                     },
-                    "best_cycles": 12308.0,
-                    "date": "2021-04-15 16:36:49.206036",
-                    "file_name": "Fused_MatMul_fusion_10672840892924897153",
-                    "original_cycles": 633343.6666666666,
-                    "tuning time": 160.99052572250366
+                    "file_name": "Fused_MatMul_fusion_10672840892924897153"
+                }
+            }
+        },
+        "64_1024_16_16.64_64_16_16.1024.64_1024_16_16": {
+            "float16-.float32.float16": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 2,
+                        "dim": " 0 0 16 16 0 1 4 4 0 2 16 16 0 3 16 16 0 4 64 4",
+                        "enable_quadruple_buffer": false
+                    },
+                    "file_name": "Fused_MatMul_split_11921242687936519194"
+                }
+            }
+        },
+        "64_64_16_16.64_1024_16_16.1024.64_1024_16_16": {
+            "float16-.float32.float16": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 0,
+                        "dim": " 0 0 16 16 0 1 4 4 0 2 16 16 0 3 16 16 0 4 64 4",
+                        "enable_quadruple_buffer": true
+                    },
+                    "file_name": "Fused_MatMul_split_11740767656766870286"
                 }
             }
         }
@@ -952,11 +1012,7 @@
                         "dim": " 0 0 8 8 0 1 6 6 0 2 16 16 0 3 16 16 0 4 8 8",
                         "bypass": 1
                     },
-                    "best_cycles": 4257.0,
-                    "date": "2021-04-17 17:27:00.608261",
-                    "file_name": "Fused_MatMul_GeLU_fusion_14563406264730303918",
-                    "original_cycles": 94086.66666666667,
-                    "tuning time": 285.8591341972351
+                    "file_name": "Fused_MatMul_GeLU_fusion_14563406264730303918"
                 }
             }
         },
@@ -967,11 +1023,7 @@
                         "dim": " 0 0 16 16 0 1 16 4 0 2 16 16 0 3 16 16 0 4 64 1",
                         "bypass": 2
                     },
-                    "best_cycles": 79333.0,
-                    "date": "2021-04-22 13:21:32.597109",
-                    "file_name": "Fused_MatMul_Mul_Mul_Mul_Add_Mul_Tanh_Add_Mul_Mul_split_16116815228249413430",
-                    "original_cycles": 4617737.0,
-                    "tuning time": 2033.0434083938599
+                    "file_name": "Fused_MatMul_Mul_Mul_Mul_Add_Mul_Tanh_Add_Mul_Mul_split_16116815228249413430"
                 }
             }
         },
@@ -982,11 +1034,7 @@
                         "dim": " 0 0 16 16 0 1 6 6 0 2 16 16 0 3 16 16 0 4 64 4",
                         "bypass": 2
                     },
-                    "best_cycles": 73412.0,
-                    "date": "2021-04-17 17:50:02.379607",
-                    "file_name": "Fused_MatMul_Mul_Mul_Mul_Add_Mul_Tanh_Add_Mul_Mul_split_2294299680818140148",
-                    "original_cycles": 3150588.6666666665,
-                    "tuning time": 631.8598346710205
+                    "file_name": "Fused_MatMul_Mul_Mul_Mul_Add_Mul_Tanh_Add_Mul_Mul_split_2294299680818140148"
                 }
             }
         }
@@ -999,11 +1047,7 @@
                         "dim": " 0 0 4 4 0 1 2 2 0 2 16 16 0 3 16 16 0 4 32 4",
                         "bypass": 1
                     },
-                    "best_cycles": 758.0,
-                    "date": "2021-04-15 21:18:14.404308",
-                    "file_name": "Fused_MatMul_Tanh_split_5167453498362750948",
-                    "original_cycles": 3097.0,
-                    "tuning time": 0.0
+                    "file_name": "Fused_MatMul_Tanh_split_5167453498362750948"
                 }
             }
         }
@@ -1016,11 +1060,7 @@
                         "dim": " 0 0 16 16 0 1 8 8 0 2 16 16 0 3 16 16 0 4 8 4",
                         "bypass": 0
                     },
-                    "best_cycles": 41293.0,
-                    "date": "2021-04-15 19:21:25.350380",
-                    "file_name": "Fused_MatMul_Mul_split_5893161904643857712",
-                    "original_cycles": 2876112.3333333335,
-                    "tuning time": 68.6453332901001
+                    "file_name": "Fused_MatMul_Mul_split_5893161904643857712"
                 }
             }
         },
@@ -1031,11 +1071,7 @@
                         "dim": " 0 0 16 16 0 1 8 8 0 2 16 16 0 3 16 16 0 4 2 2",
                         "bypass": 0
                     },
-                    "best_cycles": 2657.0,
-                    "date": "2021-04-15 17:48:05.256591",
-                    "file_name": "Fused_MatMul_Mul_split_8337537595842390737",
-                    "original_cycles": 93900.33333333333,
-                    "tuning time": 67.17892622947693
+                    "file_name": "Fused_MatMul_Mul_split_8337537595842390737"
                 }
             }
         }
@@ -1048,11 +1084,7 @@
                         "dim": " 0 0 8 8 0 1 16 16 0 2 16 16 0 3 16 16 0 4 8 4",
                         "bypass": 0
                     },
-                    "best_cycles": 43335.0,
-                    "date": "2021-04-22 12:35:10.054727",
-                    "file_name": "Fused_MatMul_Mul_TransData_split_16639598982659305620",
-                    "original_cycles": 4913392.0,
-                    "tuning time": 277.0337736606598
+                    "file_name": "Fused_MatMul_Mul_TransData_split_16639598982659305620"
                 }
             }
         },
@@ -1063,11 +1095,7 @@
                         "dim": " 0 0 16 16 0 1 8 8 0 2 16 16 0 3 16 16 0 4 2 2",
                         "bypass": 0
                     },
-                    "best_cycles": 3033.0,
-                    "date": "2021-04-22 16:06:26.640976",
-                    "file_name": "Fused_MatMul_Mul_TransData_split_12093989176879832592",
-                    "original_cycles": 9999999999.0,
-                    "tuning time": 287.46125841140747
+                    "file_name": "Fused_MatMul_Mul_TransData_split_12093989176879832592"
                 }
             }
         },
@@ -1078,11 +1106,7 @@
                         "dim": " 0 0 16 8 0 1 4 1 0 2 16 16 0 3 16 16 0 4 2 2",
                         "bypass": 0
                     },
-                    "best_cycles": 1628.0,
-                    "date": "2021-04-22 16:10:51.988854",
-                    "file_name": "Fused_MatMul_Mul_TransData_split_16324107032521552141",
-                    "original_cycles": 3362.0,
-                    "tuning time": 264.54896116256714
+                    "file_name": "Fused_MatMul_Mul_TransData_split_16324107032521552141"
                 }
             }
         }
@@ -1095,11 +1119,31 @@
                         "dim": " 0 0 16 16 0 1 16 16 0 2 16 16 0 3 16 16 0 4 8 4",
                         "bypass": 0
                     },
-                    "best_cycles": 41022.0,
-                    "date": "2021-04-15 16:07:37.961752",
-                    "file_name": "Fused_MatMul_AddN_fusion_2480595239960894228",
-                    "original_cycles": 2397902.3333333335,
-                    "tuning time": 86.02458047866821
+                    "file_name": "Fused_MatMul_AddN_fusion_2480595239960894228"
+                }
+            }
+        },
+        "256_1024_16_16.64_256_16_16.64_1024_16_16-": {
+            "float16---": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 0,
+                        "dim": " 0 0 16 16 0 1 16 16 0 2 16 16 0 3 16 16 0 4 8 4",
+                        "enable_quadruple_buffer": true
+                    },
+                    "file_name": "Fused_MatMul_AddN_fusion_2866961590119591045"
+                }
+            }
+        },
+        "256_512_16_16.64_256_16_16.64_512_16_16-": {
+            "float16---": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 2,
+                        "dim": " 0 0 16 16 0 1 16 16 0 2 16 16 0 3 16 16 0 4 8 1",
+                        "enable_quadruple_buffer": true
+                    },
+                    "file_name": "Fused_MatMul_AddN_fusion_3779005200589777013"
                 }
             }
         }
@@ -1112,11 +1156,7 @@
                         "dim": " 0 0 8 8 0 1 8 8 0 2 16 16 0 3 16 16 0 4 8 8",
                         "bypass": 2
                     },
-                    "best_cycles": 81121.0,
-                    "date": "2021-04-15 21:55:38.543257",
-                    "file_name": "Fused_MatMul_Mul_Mul_Mul_Add_Mul_Tanh_Add_Mul_Mul_Mul_Sub_Mul_Mul_Add_Mul_Mul_Ad_more_split_11278852061967671518",
-                    "original_cycles": 9999999998.0,
-                    "tuning time": 1001.7002274990082
+                    "file_name": "Fused_MatMul_Mul_Mul_Mul_Add_Mul_Tanh_Add_Mul_Mul_Mul_Sub_Mul_Mul_Add_Mul_Mul_Ad_more_split_11278852061967671518"
                 }
             }
         }
@@ -1130,11 +1170,7 @@
                         "enable_quadruple_buffer": true,
                         "bypass": 0
                     },
-                    "best_cycles": 338.0,
-                    "date": "2021-04-15 20:07:16.025849",
-                    "file_name": "Fused_MatMul_Mul_fusion_15943575768167229659",
-                    "original_cycles": 3333333899.0,
-                    "tuning time": 0.0
+                    "file_name": "Fused_MatMul_Mul_fusion_15943575768167229659"
                 }
             }
         },
@@ -1145,11 +1181,7 @@
                         "dim": " 0 0 16 2 0 1 16 8 0 2 16 16 0 3 16 16 0 4 2 1",
                         "bypass": 0
                     },
-                    "best_cycles": 858.0,
-                    "date": "2021-04-15 18:01:26.678024",
-                    "file_name": "Fused_MatMul_Mul_fusion_3135131880050035010",
-                    "original_cycles": 2214.3333333333335,
-                    "tuning time": 68.04596853256226
+                    "file_name": "Fused_MatMul_Mul_fusion_3135131880050035010"
                 }
             }
         },
@@ -1160,11 +1192,7 @@
                         "dim": " 0 0 8 8 0 1 8 8 0 2 16 16 0 3 16 16 0 4 16 1",
                         "bypass": 0
                     },
-                    "best_cycles": 16268.0,
-                    "date": "2021-04-15 20:07:12.514997",
-                    "file_name": "Fused_MatMul_Mul_fusion_6893368890801532151",
-                    "original_cycles": 629163.0,
-                    "tuning time": 68.25678038597107
+                    "file_name": "Fused_MatMul_Mul_fusion_6893368890801532151"
                 }
             }
         },
@@ -1175,11 +1203,7 @@
                         "dim": " 0 0 16 16 0 1 8 8 0 2 16 16 0 3 16 16 0 4 8 4",
                         "bypass": 0
                     },
-                    "best_cycles": 45819.0,
-                    "date": "2021-04-15 17:46:17.115407",
-                    "file_name": "Fused_MatMul_Mul_fusion_3452118797044888470",
-                    "original_cycles": 3334956891.6666665,
-                    "tuning time": 67.88815522193909
+                    "file_name": "Fused_MatMul_Mul_fusion_3452118797044888470"
                 }
             }
         }
@@ -1192,11 +1216,7 @@
                         "dim": " 0 0 16 16 0 1 8 8 0 2 16 16 0 3 16 16 0 4 6 2",
                         "bypass": 0
                     },
-                    "best_cycles": 12247.0,
-                    "date": "2021-04-22 15:43:49.937252",
-                    "file_name": "Fused_MatMul_Mul_TransData_fusion_15267408097074809349",
-                    "original_cycles": 1035799.0,
-                    "tuning time": 269.1884069442749
+                    "file_name": "Fused_MatMul_Mul_TransData_fusion_15267408097074809349"
                 }
             }
         },
@@ -1207,11 +1227,7 @@
                         "dim": " 0 0 32 32 0 1 4 4 0 2 16 16 0 3 16 16 0 4 12 2",
                         "bypass": 0
                     },
-                    "best_cycles": 71046.0,
-                    "date": "2021-04-22 14:37:26.267276",
-                    "file_name": "Fused_MatMul_Mul_TransData_fusion_6282775409896469651",
-                    "original_cycles": 9999999999.0,
-                    "tuning time": 833.9603037834167
+                    "file_name": "Fused_MatMul_Mul_TransData_fusion_6282775409896469651"
                 }
             }
         }
@@ -1224,11 +1240,7 @@
                         "dim": " 0 0 4 4 0 1 9 9 0 2 16 16 0 3 16 16 0 4 114 6",
                         "bypass": 0
                     },
-                    "best_cycles": 106264.0,
-                    "date": "2021-04-22 15:01:39.047717",
-                    "file_name": "Fused_MatMul_AddN_Mul_split_7269163875533874350",
-                    "original_cycles": 5422401.0,
-                    "tuning time": 351.76630878448486
+                    "file_name": "Fused_MatMul_AddN_Mul_split_7269163875533874350"
                 }
             }
         }
@@ -1241,11 +1253,7 @@
                         "dim": " 0 0 8 8 0 1 9 9 0 2 16 16 0 3 16 16 0 4 6 6",
                         "bypass": 0
                     },
-                    "best_cycles": 72502.0,
-                    "date": "2021-04-15 14:48:21.292362",
-                    "file_name": "Fused_MatMul_AddN_Mul_fusion_1822099970097543766",
-                    "original_cycles": 3149804.3333333335,
-                    "tuning time": 93.37549448013306
+                    "file_name": "Fused_MatMul_AddN_Mul_fusion_1822099970097543766"
                 }
             }
         }
@@ -1258,11 +1266,31 @@
                         "dim": " 0 0 16 8 0 1 6 6 0 2 16 16 0 3 16 16 0 4 64 8",
                         "bypass": 0
                     },
-                    "best_cycles": 15019.0,
-                    "date": "2021-04-15 16:26:34.785296",
-                    "file_name": "Fused_MatMul_AddN_split_11170314981163747876",
-                    "original_cycles": 716948.3333333334,
-                    "tuning time": 215.61878395080566
+                    "file_name": "Fused_MatMul_AddN_split_11170314981163747876"
+                }
+            }
+        },
+        "64_1024_16_16---.64_64_16_16.64_1024_16_16": {
+            "float16-----": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 2,
+                        "dim": " 0 0 8 8 0 1 16 16 0 2 16 16 0 3 16 16 0 4 8 1",
+                        "enable_quadruple_buffer": true
+                    },
+                    "file_name": "Fused_MatMul_AddN_split_2729119840494880363"
+                }
+            }
+        },
+        "64_512_16_16---.64_64_16_16.64_512_16_16": {
+            "float16-----": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 0,
+                        "dim": " 0 0 16 16 0 1 8 8 0 2 16 16 0 3 16 16 0 4 8 1",
+                        "enable_quadruple_buffer": true
+                    },
+                    "file_name": "Fused_MatMul_AddN_split_17325540413297432001"
                 }
             }
         }
@@ -1275,11 +1303,31 @@
                         "dim": " 0 0 16 16 0 1 12 4 0 2 16 16 0 3 16 16 0 4 64 1",
                         "bypass": 0
                     },
-                    "best_cycles": 16090.0,
-                    "date": "2021-04-22 16:00:57.698090",
-                    "file_name": "Fused_MatMul_AddN_TransData_split_1098589218033087256",
-                    "original_cycles": 1202204.0,
-                    "tuning time": 745.4092109203339
+                    "file_name": "Fused_MatMul_AddN_TransData_split_1098589218033087256"
+                }
+            }
+        },
+        "64_1024_16_16---.64_64_16_16.16384_1024": {
+            "float16-----": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 2,
+                        "dim": " 0 0 8 8 0 1 16 16 0 2 16 16 0 3 16 16 0 4 8 1",
+                        "enable_quadruple_buffer": true
+                    },
+                    "file_name": "Fused_MatMul_AddN_TransData_split_6203399627968788831"
+                }
+            }
+        },
+        "64_512_16_16---.64_64_16_16.8192_1024": {
+            "float16-----": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 0,
+                        "dim": " 0 0 16 16 0 1 8 8 0 2 16 16 0 3 16 16 0 4 8 4",
+                        "enable_quadruple_buffer": false
+                    },
+                    "file_name": "Fused_MatMul_AddN_TransData_split_89961247415507584"
                 }
             }
         }
@@ -1295,11 +1343,7 @@
                         "enable_rewrite_scalar_compute": true,
                         "multicore_scalar_rearrange": false
                     },
-                    "best_cycles": 28859.0,
-                    "date": "2021-04-15 20:20:17.319441",
-                    "file_name": "Fused_Greater_Select_Sqrt_Select_Maximum_Reshape_RealDiv_split_6992785669100572871",
-                    "original_cycles": 36123.333333333336,
-                    "tuning time": 731.9399816989899
+                    "file_name": "Fused_Greater_Select_Sqrt_Select_Maximum_Reshape_RealDiv_split_6992785669100572871"
                 }
             }
         }
@@ -1311,6 +1355,16 @@
             }
         },
         "1824_30522-.1824": {
+            "float32--": {
+                "dim": "0 0 8 1 0 1 4000 1"
+            }
+        },
+        "608_30522-.608": {
+            "float32--": {
+                "dim": "0 0 8 1 0 1 4000 1"
+            }
+        },
+        "2432_30522-.2432": {
             "float32--": {
                 "dim": "0 0 8 1 0 1 4000 1"
             }
@@ -1335,6 +1389,92 @@
     },
     "4.Reshape1.RealDiv13.BroadcastTo1.Mul16.Neg1.Reshape1.BroadcastTo1.Mul111.11": {
         "1824_30522.1824.1-.1824_30522": {
+            "float32----": {
+                "metadata": {
+                    "attrs": {
+                        "enable_pre_poly_loop_partition": true,
+                        "enable_post_poly_loop_partition": false,
+                        "enable_rewrite_scalar_compute": false,
+                        "dim": "0 0 8 1 0 1 960 1"
+                    }
+                }
+            }
+        },
+        "1216_30522.1216.1-.1216_30522": {
+            "float32----": {
+                "metadata": {
+                    "attrs": {
+                        "enable_pre_poly_loop_partition": true,
+                        "enable_post_poly_loop_partition": false,
+                        "enable_rewrite_scalar_compute": false,
+                        "dim": "0 0 8 1 0 1 960 1"
+                    }
+                }
+            }
+        },
+        "608_30522.608.1-.608_30522": {
+            "float32----": {
+                "metadata": {
+                    "attrs": {
+                        "enable_pre_poly_loop_partition": true,
+                        "enable_post_poly_loop_partition": false,
+                        "enable_rewrite_scalar_compute": false,
+                        "dim": "0 0 8 1 0 1 960 1"
+                    }
+                }
+            }
+        },
+        "2432_30522.2432.1-.2432_30522": {
+            "float32----": {
+                "metadata": {
+                    "attrs": {
+                        "enable_pre_poly_loop_partition": true,
+                        "enable_post_poly_loop_partition": false,
+                        "enable_rewrite_scalar_compute": false,
+                        "dim": "0 0 8 1 0 1 960 1"
+                    }
+                }
+            }
+        }
+    },
+    "4.RealDiv34.BroadcastTo1.Mul14.Neg1.Reshape1.BroadcastTo1.Mul17.10": {
+        "1-.1824.1824_30522-": {
+            "float32----": {
+                "metadata": {
+                    "attrs": {
+                        "enable_pre_poly_loop_partition": true,
+                        "enable_post_poly_loop_partition": false,
+                        "enable_rewrite_scalar_compute": false,
+                        "dim": "0 0 8 1 0 1 960 1"
+                    }
+                }
+            }
+        },
+        "1-.1216.1216_30522-": {
+            "float32----": {
+                "metadata": {
+                    "attrs": {
+                        "enable_pre_poly_loop_partition": true,
+                        "enable_post_poly_loop_partition": false,
+                        "enable_rewrite_scalar_compute": false,
+                        "dim": "0 0 8 1 0 1 960 1"
+                    }
+                }
+            }
+        },
+        "1-.608.608_30522-": {
+            "float32----": {
+                "metadata": {
+                    "attrs": {
+                        "enable_pre_poly_loop_partition": true,
+                        "enable_post_poly_loop_partition": false,
+                        "enable_rewrite_scalar_compute": false,
+                        "dim": "0 0 8 1 0 1 960 1"
+                    }
+                }
+            }
+        },
+        "1-.2432.2432_30522-": {
             "float32----": {
                 "metadata": {
                     "attrs": {
@@ -1375,11 +1515,7 @@
                         "dim": " 0 0 16 16 0 1 8 8 0 2 16 16 0 3 16 16 0 4 8 4",
                         "bypass": 0
                     },
-                    "best_cycles": 11531.0,
-                    "date": "2021-04-26 00:59:45.893136",
-                    "file_name": "Fused_MatMul_Mul_TransData_fusion_7303380372218911546",
-                    "original_cycles": Infinity,
-                    "tuning time": 0.0
+                    "file_name": "Fused_MatMul_Mul_TransData_fusion_7303380372218911546"
                 }
             }
         },
@@ -1390,11 +1526,7 @@
                         "dim": " 0 0 16 16 0 1 8 8 0 2 16 16 0 3 16 16 0 4 8 4",
                         "bypass": 0
                     },
-                    "best_cycles": 46772.0,
-                    "date": "2021-04-25 23:31:21.753649",
-                    "file_name": "Fused_MatMul_Mul_TransData_fusion_16128283306865675967",
-                    "original_cycles": Infinity,
-                    "tuning time": 0.0
+                    "file_name": "Fused_MatMul_Mul_TransData_fusion_16128283306865675967"
                 }
             }
         }
@@ -1407,11 +1539,40 @@
                         "bypass": 1,
                         "dim": " 0 0 1 1 0 1 1 1 0 2 32 8 0 3 16 16 0 4 16 16 0 5 16 16 0 6 4 1"
                     },
-                    "best_cycles": 20307.0,
-                    "date": "2021-04-28 05:51:00.851321",
-                    "file_name": "Fused_BatchMatMul_Mul_BroadcastTo_Add_split_14530217750547191269",
-                    "original_cycles": Infinity,
-                    "tuning time": 0.0
+                    "file_name": "Fused_BatchMatMul_Mul_BroadcastTo_Add_split_14530217750547191269"
+                }
+            }
+        },
+        "16_1_1_512.16_16_4_32_16_16-.16_16_32_32_16_16": {
+            "float16---": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 1,
+                        "dim": " 0 0 1 1 0 1 1 1 0 2 32 8 0 3 16 16 0 4 16 16 0 5 16 16 0 6 4 1"
+                    },
+                    "file_name": "Fused_BatchMatMul_Mul_BroadcastTo_Add_split_14530217750547191269"
+                }
+            }
+        },
+        "8_1_1_512.8_16_4_32_16_16-.8_16_32_32_16_16": {
+            "float16---": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 1,
+                        "dim": " 0 0 1 1 0 1 1 1 0 2 32 8 0 3 16 16 0 4 16 16 0 5 16 16 0 6 4 1"
+                    },
+                    "file_name": "Fused_BatchMatMul_Mul_BroadcastTo_Add_split_14530217750547191269"
+                }
+            }
+        },
+        "32_1_1_512.32_16_4_32_16_16-.32_16_32_32_16_16": {
+            "float16---": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 1,
+                        "dim": " 0 0 1 1 0 1 1 1 0 2 32 8 0 3 16 16 0 4 16 16 0 5 16 16 0 6 4 1"
+                    },
+                    "file_name": "Fused_BatchMatMul_Mul_BroadcastTo_Add_split_14530217750547191269"
                 }
             }
         }
@@ -1424,11 +1585,40 @@
                         "bypass": 1,
                         "dim": " 0 0 1 1 0 1 1 1 0 2 32 8 0 3 16 16 0 4 16 16 0 5 16 16 0 6 4 2"
                     },
-                    "best_cycles": 20350.0,
-                    "date": "2021-04-27 22:46:42.465333",
-                    "file_name": "Fused_BatchMatMul_FusedMulAdd_fusion_8913000759612651567",
-                    "original_cycles": Infinity,
-                    "tuning time": 0.0
+                    "file_name": "Fused_BatchMatMul_FusedMulAdd_fusion_8913000759612651567"
+                }
+            }
+        },
+        "16_16_4_32_16_16-.16_1_1_512.16_16_32_32_16_16": {
+            "float16---": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 1,
+                        "dim": " 0 0 1 1 0 1 1 1 0 2 32 8 0 3 16 16 0 4 16 16 0 5 16 16 0 6 4 2"
+                    },
+                    "file_name": "Fused_BatchMatMul_FusedMulAdd_fusion_8913000759612651567"
+                }
+            }
+        },
+        "8_16_4_32_16_16-.8_1_1_512.8_16_32_32_16_16": {
+            "float16---": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 1,
+                        "dim": " 0 0 1 1 0 1 1 1 0 2 32 8 0 3 16 16 0 4 16 16 0 5 16 16 0 6 4 2"
+                    },
+                    "file_name": "Fused_BatchMatMul_FusedMulAdd_fusion_8913000759612651567"
+                }
+            }
+        },
+        "32_1_1_512.32_16_4_32_16_16-.32_16_32_32_16_16": {
+            "float16---": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 1,
+                        "dim": " 0 0 1 1 0 1 1 1 0 2 32 8 0 3 16 16 0 4 16 16 0 5 16 16 0 6 4 1"
+                    },
+                    "file_name": "Fused_BatchMatMul_Mul_BroadcastTo_Add_split_14530217750547191269"
                 }
             }
         }
@@ -1441,11 +1631,40 @@
                         "bypass": 1,
                         "dim": " 0 0 1 1 0 1 1 1 0 2 32 32 0 3 32 8 0 4 16 16 0 5 16 16 0 6 4 4"
                     },
-                    "best_cycles": 18620.0,
-                    "date": "2021-04-27 18:39:21.354944",
-                    "file_name": "Fused_BatchMatMul_fusion_7659879321762288449",
-                    "original_cycles": Infinity,
-                    "tuning time": 0.0
+                    "file_name": "Fused_BatchMatMul_fusion_7659879321762288449"
+                }
+            }
+        },
+        "16_16_4_32_16_16-.16_16_32_32_16_16": {
+            "float16--": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 1,
+                        "dim": " 0 0 1 1 0 1 1 1 0 2 32 32 0 3 32 8 0 4 16 16 0 5 16 16 0 6 4 4"
+                    },
+                    "file_name": "Fused_BatchMatMul_fusion_7659879321762288449"
+                }
+            }
+        },
+        "8_16_4_32_16_16-.8_16_32_32_16_16": {
+            "float16--": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 1,
+                        "dim": " 0 0 1 1 0 1 1 1 0 2 32 32 0 3 32 8 0 4 16 16 0 5 16 16 0 6 4 4"
+                    },
+                    "file_name": "Fused_BatchMatMul_fusion_7659879321762288449"
+                }
+            }
+        },
+        "32_16_4_32_16_16-.32_16_32_32_16_16": {
+            "float16--": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 1,
+                        "dim": " 0 0 1 1 0 1 1 1 0 2 32 32 0 3 32 8 0 4 16 16 0 5 16 16 0 6 4 4"
+                    },
+                    "file_name": "Fused_BatchMatMul_fusion_7659879321762288449"
                 }
             }
         }
@@ -1458,11 +1677,7 @@
                         "dim": " 0 0 4 4 0 1 3 3 0 2 16 16 0 3 16 16 0 4 64 8",
                         "bypass": 1
                     },
-                    "best_cycles": 3768.0,
-                    "date": "2021-04-30 13:05:47.175791",
-                    "file_name": "Fused_MatMul_Abs_Sub_Mul_Exp_Mul_Mul_Exp_Add_RealDiv_split_14104498720617697820",
-                    "original_cycles": Infinity,
-                    "tuning time": 0.0
+                    "file_name": "Fused_MatMul_Abs_Sub_Mul_Exp_Mul_Mul_Exp_Add_RealDiv_split_14104498720617697820"
                 }
             }
         },
@@ -1473,11 +1688,7 @@
                         "dim": " 0 0 16 16 0 1 6 3 0 2 16 16 0 3 16 16 0 4 64 4",
                         "bypass": 0
                     },
-                    "best_cycles": 54001.0,
-                    "date": "2021-05-02 09:10:10.099699",
-                    "file_name": "Fused_MatMul_Abs_Sub_Mul_Exp_Mul_Mul_Exp_Add_RealDiv_split_13782726835086805411",
-                    "original_cycles": Infinity,
-                    "tuning time": 0.0
+                    "file_name": "Fused_MatMul_Abs_Sub_Mul_Exp_Mul_Mul_Exp_Add_RealDiv_split_13782726835086805411"
                 }
             }
         }
@@ -1490,11 +1701,7 @@
                         "dim": " 0 0 16 16 0 1 4 4 0 2 16 16 0 3 16 16 0 4 64 4",
                         "bypass": 0
                     },
-                    "best_cycles": 63412.0,
-                    "date": "2021-04-30 01:46:31.154779",
-                    "file_name": "Fused_MatMul_Abs_Mul_Exp_Mul_Mul_Add_Sub_Mul_Exp_Add_Add_Mul_RealDiv_Mul_split_18203187981312152781",
-                    "original_cycles": Infinity,
-                    "tuning time": 0.0
+                    "file_name": "Fused_MatMul_Abs_Mul_Exp_Mul_Mul_Add_Sub_Mul_Exp_Add_Add_Mul_RealDiv_Mul_split_18203187981312152781"
                 }
             }
         }
@@ -1518,11 +1725,55 @@
                         "bypass": 0,
                         "dim": " 0 0 8 8 0 1 16 16 0 2 16 16 0 3 16 16 0 4 8 1"
                     },
-                    "best_cycles": 45212.0,
-                    "date": "2021-05-07 19:57:22.074600",
-                    "file_name": "Fused_MatMul_Add_split_257258686220064633",
-                    "original_cycles": Infinity,
-                    "tuning time": 0.0
+                    "file_name": "Fused_MatMul_Add_split_257258686220064633"
+                }
+            }
+        },
+        "256_64_16_16.64_1024_16_16.256_1024_16_16.1024.64_1024_16_16": {
+            "float16--.float32.float16": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 0,
+                        "dim": " 0 0 8 8 0 1 16 16 0 2 16 16 0 3 16 16 0 4 8 1",
+                        "enable_quadruple_buffer": true
+                    },
+                    "file_name": "Fused_MatMul_Add_split_14726167052804581690"
+                }
+            }
+        },
+        "64_64_16_16.64_1024_16_16-.1024.64_1024_16_16": {
+            "float16--.float32.float16": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 0,
+                        "dim": " 0 0 16 16 0 1 4 4 0 2 16 16 0 3 16 16 0 4 64 4",
+                        "enable_quadruple_buffer": true
+                    },
+                    "file_name": "Fused_MatMul_Add_split_6453898597648904524"
+                }
+            }
+        },
+        "256_64_16_16.64_512_16_16.256_512_16_16.1024.64_512_16_16": {
+            "float16--.float32.float16": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 0,
+                        "dim": " 0 0 8 8 0 1 16 16 0 2 16 16 0 3 16 16 0 4 8 1",
+                        "enable_quadruple_buffer": true
+                    },
+                    "file_name": "Fused_MatMul_Add_split_1970955482489609450"
+                }
+            }
+        },
+        "64_64_16_16.64_512_16_16-.1024.64_512_16_16": {
+            "float16--.float32.float16": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 0,
+                        "dim": " 0 0 8 8 0 1 8 8 0 2 16 16 0 3 16 16 0 4 64 8",
+                        "enable_quadruple_buffer": true
+                    },
+                    "file_name": "Fused_MatMul_Add_split_12457772949477034285"
                 }
             }
         }
@@ -1535,11 +1786,7 @@
                         "dim": " 0 0 16 16 0 1 8 8 0 2 16 16 0 3 16 16 0 4 16 2",
                         "bypass": 2
                     },
-                    "best_cycles": 56495.0,
-                    "date": "2021-05-05 12:21:55.360996",
-                    "file_name": "Fused_MatMul_Add_split_257258686220064633",
-                    "original_cycles": 4797689.0,
-                    "tuning time": 414.50437784194946
+                    "file_name": "Fused_MatMul_Add_split_257258686220064633"
                 }
             }
         },
@@ -1550,11 +1797,7 @@
                         "dim": " 0 0 4 4 0 1 24 24 0 2 16 16 0 3 16 16 0 4 32 4",
                         "bypass": 2
                     },
-                    "best_cycles": 169396.0,
-                    "date": "2021-05-07 14:25:40.981588",
-                    "file_name": "Fused_MatMul_Add_split_9202570722540885418",
-                    "original_cycles": 9999999997.0,
-                    "tuning time": 706.2614169120789
+                    "file_name": "Fused_MatMul_Add_split_9202570722540885418"
                 }
             }
         },
@@ -1565,11 +1808,7 @@
                         "dim": " 0 0 4 4 0 1 16 16 0 2 16 16 0 3 16 16 0 4 8 8",
                         "bypass": 1
                     },
-                    "best_cycles": 39090.0,
-                    "date": "2021-05-07 11:24:24.846212",
-                    "file_name": "Fused_MatMul_Add_split_10602161826466675373",
-                    "original_cycles": 9999999997.0,
-                    "tuning time": 698.8001446723938
+                    "file_name": "Fused_MatMul_Add_split_10602161826466675373"
                 }
             }
         }
@@ -1582,6 +1821,86 @@
                         "enable_to_three_address": false,
                         "dim": "0 0 1 1 0 1 32 1 0 2 47 1 0 3 47 1"
                     }
+                }
+            }
+        },
+        "16_16_32_32_16_16--": {
+            "float16--": {
+                "metadata": {
+                    "attrs": {
+                        "enable_to_three_address": false,
+                        "dim": "0 0 1 1 0 1 32 1 0 2 47 1 0 3 47 1"
+                    }
+                }
+            }
+        },
+        "8_16_32_32_16_16--": {
+            "float16--": {
+                "metadata": {
+                    "attrs": {
+                        "enable_to_three_address": false,
+                        "dim": "0 0 1 1 0 1 32 1 0 2 47 1 0 3 47 1"
+                    }
+                }
+            }
+        },
+        "32_16_32_32_16_16--": {
+            "float16--": {
+                "metadata": {
+                    "attrs": {
+                        "enable_to_three_address": false,
+                        "dim": "0 0 1 1 0 1 32 1 0 2 47 1 0 3 47 1"
+                    }
+                }
+            }
+        }
+    },
+    "3.MatMul12_1_0.AddN4.4": {
+        "64_1908_16_16.1908_152_16_16.64_152_16_16.64_1908_16_16": {
+            "float32.float16-.float32": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 0,
+                        "dim": " 0 0 8 8 0 1 3 3 0 2 16 16 0 3 16 16 0 4 152 1",
+                        "enable_quadruple_buffer": true
+                    },
+                    "file_name": "Fused_MatMul_AddN_split_10660716149974261460"
+                }
+            }
+        },
+        "64_1908_16_16.1908_76_16_16.64_76_16_16.64_1908_16_16": {
+            "float32.float16-.float32": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 0,
+                        "dim": " 0 0 8 8 0 1 9 9 0 2 16 16 0 3 16 16 0 4 76 1",
+                        "enable_quadruple_buffer": true
+                    },
+                    "file_name": "Fused_MatMul_AddN_split_11069740691590515616"
+                }
+            }
+        }
+    },
+    "3.BatchMatMul12.Mul1.Add15.5": {
+        "16_1_1_512.16_16_4_32_16_16-.16_16_32_32_16_16": {
+            "float16---": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 1,
+                        "dim": " 0 0 1 1 0 1 1 1 0 2 32 8 0 3 16 16 0 4 16 16 0 5 16 16 0 6 4 1"
+                    },
+                    "file_name": "Fused_BatchMatMul_Mul_BroadcastTo_Add_split_14530217750547191269"
+                }
+            }
+        },
+        "16_16_4_32_16_16-": {
+            "float16---": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 1,
+                        "dim": " 0 0 1 1 0 1 1 1 0 2 32 8 0 3 16 16 0 4 16 16 0 5 16 16 0 6 4 2"
+                    },
+                    "file_name": "Fused_BatchMatMul_FusedMulAdd_fusion_8913000759612651567"
                 }
             }
         }
