@@ -12,32 +12,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""operator dsl function: conv using tensorcore"""
-import numpy as np
+"""operator dsl function: conv2d using tensorcore"""
 import akg.topi as topi
 import akg.tvm as tvm
-from akg.utils import validation_check as vc_util
 
-
-def conv_tc(data, weight, stride=[1, 1], pad=[0, 0, 0, 0], dilation=[1, 1], out_dtype="float32", name="out"):
-    batch_outer, in_h, in_w, in_c_outer = data.shape
-    out_c_outer, k_h, k_w, _ = weight.shape
-    pad_left, pad_right, pad_top, pad_bottom = pad
+def tensorcore_conv(data, weight, stride=[1, 1], pad=[0, 0, 0, 0], dilation=[1, 1], out_dtype="float32", name="out"):
+    batch, in_h, in_w, in_c = data.shape
+    out_c, k_h, k_w, _ = weight.shape
+    pad_top, pad_bottom, pad_left, pad_right  = pad
     s_h, s_w = stride
-    o_h = (in_h + pad_top + pad_bottom - k_h) // s_h + 1
-    o_w = (in_w + pad_left + pad_right - k_w) // s_w + 1
+    d_h, d_w = dilation
+    k_h_d = (k_h - 1) * d_h + 1
+    k_w_d = (k_w - 1) * d_w + 1
+    o_h = (in_h + pad_top + pad_bottom - k_h_d) // s_h + 1
+    o_w = (in_w + pad_left + pad_right - k_w_d) // s_w + 1
 
-    has_pad = not(pad_left == 0 and pad_right ==
-                  0 and pad_top == 0 and pad_bottom == 0)
+    has_pad = not(pad_left == 0 and pad_right == 0 and pad_top == 0 and pad_bottom == 0)
 
     if has_pad:
         data_pad = tvm.compute(
-            (batch_outer, in_h+pad_top+pad_bottom,
-             in_w+pad_left+pad_right, in_c_outer),
+            (batch, in_h+pad_top+pad_bottom, in_w+pad_left+pad_right, in_c),
             lambda n, h, w, i: tvm.if_then_else(
-                tvm.all(h >= pad_top, h - pad_bottom < in_h,
-                        w >= pad_left, w - pad_right < in_w),
-                data[n, h-pad_top, w - pad_left, i],
+                tvm.all(h >= pad_top, h - pad_bottom < in_h, w >= pad_left, w - pad_right < in_w),
+                data[n, h - pad_top, w - pad_left, i],
                 tvm.const(0.0, "float16"),
             ),
             name="Pad",
@@ -45,25 +42,25 @@ def conv_tc(data, weight, stride=[1, 1], pad=[0, 0, 0, 0], dilation=[1, 1], out_
     else:
         data_pad = data
 
-    rc = tvm.reduce_axis((0, in_c_outer), name="rc")
+    rc = tvm.reduce_axis((0, in_c), name="rc")
     rh = tvm.reduce_axis((0, k_h), name="rh")
     rw = tvm.reduce_axis((0, k_w), name="rw")
 
     if out_dtype == "float32":
         out = tvm.compute(
-            (batch_outer, o_h, o_w, out_c_outer),
+            (batch, o_h, o_w, out_c),
             lambda n, h, w, o: tvm.sum(
-                data_pad[n, (h * s_h + rh), (w * s_w + rw), rc].astype("float32") *
-                weight[o, rh, rw, rc].astype("float32"),
+                data_pad[n, (h * s_h + rh * d_h), (w * s_w + rw * d_w), rc].astype("float32")
+                * weight[o, rh, rw, rc].astype("float32"),
                 axis=[rc, rh, rw]),
             name=name
         )
     else:
         out = tvm.compute(
-            (batch_outer, o_h, o_w, out_c_outer),
+            (batch, o_h, o_w, out_c),
             lambda n, h, w, o: tvm.sum(
-                data_pad[n, (h * s_h + rh), (w * s_w + rw), rc] *
-                weight[o, rh, rw, rc],
+                data_pad[n, (h * s_h + rh * d_h), (w * s_w + rw * d_w), rc]
+                * weight[o, rh, rw, rc],
                 axis=[rc, rh, rw]),
             name=name
         )
