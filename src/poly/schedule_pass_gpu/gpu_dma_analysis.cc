@@ -168,17 +168,11 @@ std::vector<isl::id> GpuDmaAnalysis::SharedTensorAnalysis() {
 
   // mark reduce out tensors for auto tiling
   if (scop_info_.user_config_.GetTarget() == TARGET_CUDA && scop_info_.user_config_.GetEnableAkgReduceLib()) {
-    isl::schedule_node root = schedule_.get_root();
-    isl::schedule_node node = GetOuterBand(root);
-    if (node.isa<isl::schedule_node_band>()) {
-      scop_info_.analysis_result_.MarkReduceOutTensor(node.as<isl::schedule_node_band>());
-    }
-
-    auto reduce_out_tensors = scop_info_.analysis_result_.GetReduceOutTensors();
+    auto reduce_out_tensors = scop_info_.analysis_result_.GetReduceTensorInfoMap();
     if (!reduce_out_tensors.empty()) {
       id_sets.clear();
       for (auto tensor : reduce_out_tensors) {
-        id_sets.emplace(tensor);
+        id_sets.emplace(tensor.second.write_tensor_name);
       }
     }
   }

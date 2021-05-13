@@ -396,10 +396,10 @@ std::set<std::string> SharedMemoryManager::AnalysisReduceTensors() {
    * Also need to add these tensors for shared memory
    * promotion list.
    *********************************************/
-  auto reduce_out_tensors = scop_info_.analysis_result_.GetReduceOutTensors();
+  auto reduce_out_tensors = scop_info_.analysis_result_.GetReduceTensorInfoMap();
   for (const auto &item : reduce_out_tensors) {
-    if (id_sets.count(item) == 0) {
-      id_sets.emplace(item);
+    if (id_sets.count(item.second.write_tensor_name) == 0) {
+      id_sets.emplace(item.second.write_tensor_name);
     }
   }
 
@@ -754,8 +754,8 @@ bool SharedMemoryManager::InAtomicTensors(std::string name) {
 }
 
 bool SharedMemoryManager::InReduceTensors(std::string name) {
-  for (const auto &item : scop_info_.analysis_result_.GetReduceOutTensors()) {
-    if (item == name) {
+  for (const auto &item : scop_info_.analysis_result_.GetReduceTensorInfoMap()) {
+    if (item.second.write_tensor_name == name) {
       return true;
     }
   }
