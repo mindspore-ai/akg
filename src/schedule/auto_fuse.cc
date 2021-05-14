@@ -180,78 +180,31 @@ class FuseOpAxis {
   }
 };
 
-class BroadcastElemWiseDetector : public air::ir::IRVisitor {
- public:
-  explicit BroadcastElemWiseDetector(Array<IterVar> axis) : axis_(axis) {}
-
-  void Visit(const NodeRef &e) final {
-    if (!is_element_wise_) return;
-    IRVisitor::Visit(e);
-  }
-
-  void Visit_(const Call *op) final {
-    if (op->func.defined() && op->func.as<OperationNode>()) {
-      Array<Expr> args = op->args;
-      if (args.size() > axis_.size()) {
-        is_element_wise_ = false;
-        return;
-      }
-      for (size_t i = 1; i <= args.size(); ++i) {
-        auto args_index = args.size() - i;
-        auto axis_index = axis_.size() - i;
-        if (args[args_index].same_as(axis_[axis_index]->var)) {
-          continue;
-        } else if (is_zero(args[args_index]) && !is_one(axis_[axis_index]->dom->extent)) {
-          has_broadcast_ = true;
-        } else {
-          is_element_wise_ = false;
-          return;
-        }
-      }
-      if (args.size() < axis_.size()) {
-        has_broadcast_ = true;
-      }
-    } else {
-      IRVisitor::Visit_(op);
-    }
-  }
-
-  bool is_element_wise_{true};
-  bool has_broadcast_{false};
-
- private:
-  Array<IterVar> axis_;
-};
-
 class FuseCheck {
  public:
   explicit FuseCheck(const Schedule &sch) { sch_ = sch; }
 
-  void Run() {
-    ReduceCheck();
-    OutputBroadcastCheck();
-    ExternOpCheck();
-    if (!has_matmul_ && !has_reduce_ && !has_output_broadcast_) {
-      BroadcastElemwiseCheck();
-    }
-  }
-
   bool NeedToFuse() {
-    if (has_matmul_ || has_extern_) {
+    if (HasExternOp()) {
       return false;
     }
-    return has_reduce_ || has_output_broadcast_ || is_broadcast_elemwise_;
+    ReduceCheck();
+    if (has_reduce_ && !has_matmul_) {
+      OutputBroadcastRecord();
+      return true;
+    }
+    return false;
   }
 
-  void ExternOpCheck() {
+  bool HasExternOp() {
     for (const auto &s : sch_->stages) {
       auto op = s->op;
       CHECK(op.defined());
       if (op.as<air::ExternOpNode>()) {
-        has_extern_ = true;
-        break;
+        return true;
       }
     }
+    return false;
   }
 
   void ReduceCheck() {
@@ -268,7 +221,7 @@ class FuseCheck {
     }
   }
 
-  void OutputBroadcastCheck() {
+  void OutputBroadcastRecord() {
     GetOutputBroadcastPair();
     if (!output_broadcast_pairs_.empty()) {
       has_output_broadcast_ = true;
@@ -278,29 +231,6 @@ class FuseCheck {
     compute_at_pairs_ = output_broadcast_pairs_;
   }
 
-  void BroadcastElemwiseCheck() {
-    bool has_broadcast = false;
-    for (const auto &s : sch_->stages) {
-      auto op = s->op;
-      CHECK(op.defined());
-      if (auto compute_op = op.as<air::ComputeOpNode>()) {
-        auto broadcast_elemwise_detector = BroadcastElemWiseDetector(compute_op->axis);
-        for (const auto &e : compute_op->body) {
-          broadcast_elemwise_detector.Visit(e);
-        }
-        if (broadcast_elemwise_detector.has_broadcast_) {
-          has_broadcast = true;
-        }
-        if (!broadcast_elemwise_detector.is_element_wise_) {
-          return;
-        }
-      }
-    }
-    if (has_broadcast) {
-      is_broadcast_elemwise_ = true;
-    }
-  }
-
   std::unordered_map<Operation, Operation> compute_at_pairs_;
 
  private:
@@ -308,8 +238,6 @@ class FuseCheck {
   bool has_reduce_{false};
   bool has_matmul_{false};
   bool has_output_broadcast_{false};
-  bool is_broadcast_elemwise_{false};
-  bool has_extern_{false};
   std::unordered_map<Operation, std::unordered_set<Operation>> op_input_ops;
   std::unordered_map<Operation, Operation> output_broadcast_pairs_;
 
@@ -712,7 +640,6 @@ void AutoFuse(Schedule sch, const std::string &split_str, std::vector<size_t> &s
     split_config.emplace_back(split);
   }
   auto fuse_check = FuseCheck(sch);
-  fuse_check.Run();
   if (!fuse_check.NeedToFuse()) {
     return;
   }
