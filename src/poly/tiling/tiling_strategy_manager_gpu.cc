@@ -705,6 +705,10 @@ void GpuStrategy::InnerThreadOuterBlock() {
                                                                      : elem_per_thread_[inner_dim];
     item = std::min(item, max_elem_per_thread_);
     auto use = GetThreadSize(rest_threads, inner_dim, shape, item);
+    if (axis->forbid_iso && shape % use != 0) {
+      ss << ", forbid iso and adjust use: original = " << use;
+      use = analyzer_->FindDivisibleTilingFactor(use, shape);
+    }
     activated_threads *= use;
     ss << ", use = " << use << ", activated threads = " << activated_threads;
     thread_cfg_.emplace_back(use);
@@ -1187,6 +1191,13 @@ void GpuStrategy::BroadcastSpeedup() {
   // Only deal with broadcast + elemwise cases that all axes are fused into one.
   auto mod_axes = analyzer_->GetAxesContainsAttr(AT_MOD);
   if (depth != 1 || mod_axes.size() > 1U) {
+    analyzer_->GetTileLogger().AppendLine(GPU_MAPPING, "Cannot deal with this broadcast, make all axes tile divisible to speedup.");
+    analyzer_->ForEachAxisTopDown([this](TileAxis *axis) {
+      if (axis == analyzer_->RootAxis() || axis->range_extent.as<IntImm>() == nullptr) {
+        return;
+      }
+      axis->forbid_iso = true;
+    });
     return;
   }
 
