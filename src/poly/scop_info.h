@@ -835,7 +835,6 @@ class AnalysisResult {
 
   bool IsPureReduceSum(const Add *add, const std::string &prov_func_name);
   isl::union_map GetReduceWriteStmt(const isl::schedule_node_band &band);
-  void MarkReduceOutTensor(const isl::schedule_node_band &band);
   std::string GetReduceOpType(isl::id reduce_stmt);
   bool IsReduceInitStmt(const isl::id id) const;
 

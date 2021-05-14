@@ -1414,12 +1414,6 @@ std::string AnalysisResult::GetReduceOpType(isl::id reduce_stmt) {
   return std::string();
 }
 
-void AnalysisResult::MarkReduceOutTensor(const isl::schedule_node_band &band) {
-  auto target_stmt = GetReduceWriteStmt(band);
-  auto tensor = target_stmt.range();
-  tensor.foreach_set([this](const isl::set &s) -> void { RecordReduceOutTensors(s.get_tuple_name()); });
-}
-
 isl::union_map AnalysisResult::GetReduceWriteStmt(const isl::schedule_node_band &band) {
   auto band_domain = band.get_domain();
   auto write_domain = GetWrites().domain_factor_domain();

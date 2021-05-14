@@ -713,8 +713,9 @@ void SpaceAnalyzer::IdentifyPostFusionReduceTensors() {
   if (provides_ana_.empty()) {
     return;
   }
-  auto reduce_out_tensors = analyzer_->scop_info_.analysis_result_.GetReduceOutTensors();
-  if (reduce_out_tensors.empty()) {
+
+  auto reduce_out_tensors_gpu = analyzer_->scop_info_.analysis_result_.GetReduceTensorInfoMap();
+  if (reduce_out_tensors_gpu.empty()) {
     return;
   }
 
@@ -723,7 +724,14 @@ void SpaceAnalyzer::IdentifyPostFusionReduceTensors() {
     std::vector<ProvideEntry> pes = it.second;
     for (auto pe : pes) {
       for (auto src : pe.src) {
-        if (src.name == pe.dst.name || reduce_out_tensors.find(src.name) == reduce_out_tensors.end()) {
+        if (src.name == pe.dst.name || [&reduce_out_tensors_gpu](std::string str) -> bool {
+              for (auto &r : reduce_out_tensors_gpu) {
+                if (r.second.write_tensor_name == str) {
+                  return false;
+                }
+              }
+              return true;
+            }(src.name)) {
           continue;
         }
         root->MarkWithAttr(AttrInfo{AT_POST_FUSION_REDUCE_TENSOR, src.name});
