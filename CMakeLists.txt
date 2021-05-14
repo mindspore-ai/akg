@@ -153,6 +153,9 @@ endif()
 if(USE_CCE_PROFILING)
   add_definitions(-DUSE_CCE_PROFILING=1)
 endif()
+if(USE_CUDA)
+  add_definitions(-DUSE_CUDA)
+endif()
 
 # Generic compilation options
 include(CheckCXXCompilerFlag)
