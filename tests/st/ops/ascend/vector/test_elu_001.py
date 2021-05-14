@@ -15,7 +15,6 @@
 """elu testcases"""
 
 import os
-import pytest
 from tests.common.base import TestBase
 
 
@@ -52,10 +51,6 @@ class TestCase(TestBase):
         ]
         return
 
-    @pytest.mark.level0
-    @pytest.mark.platform_arm_ascend_training
-    @pytest.mark.platform_x86_ascend_training
-    @pytest.mark.env_onecard
     def test_run(self):
         self.common_run(self.testarg)
 
@@ -65,10 +60,6 @@ class TestCase(TestBase):
     def test_run_rpc_cloud(self):
         self.common_run(self.testarg_rpc_cloud)
 
-    @pytest.mark.level1
-    @pytest.mark.platform_arm_ascend_training
-    @pytest.mark.platform_x86_ascend_training
-    @pytest.mark.env_onecard
     def test_run_level1(self):
         self.common_run(self.testarg_level1)
 
