@@ -143,6 +143,16 @@ class FuseOpAxis {
     CHECK_NOTNULL(compute_op);
     if (compute_op->axis.size() > 1) {
       auto axis_groups = SplitAxisToGroups(compute_op->axis);
+      // As the fuse can only fuse iterVar that are consecutive between each other,
+      // the axis that needs the fuse must be consecutive.
+      // To make the axis are consecutive by reorder.
+      Array<IterVar> axis_order;
+      for (const auto &axis_group : axis_groups) {
+        for (const auto &ax : axis_group) {
+          axis_order.push_back(ax);
+        }
+      }
+      sch_[tensor].reorder(axis_order);
       for (const auto &axis_group : axis_groups) {
         IterVar fused_axis;
         sch_[tensor].fuse(axis_group, &fused_axis);
@@ -151,32 +161,44 @@ class FuseOpAxis {
   }
 
   std::vector<Array<IterVar>> SplitAxisToGroups(const Array<IterVar> &axis) {
-    std::vector<std::unordered_set<size_t>> reduce_group_ids(axis.size());
-    for (size_t i = 0; i < axis.size(); ++i) {
-      if (axis_reduce_group_ids_.count(axis[i])) {
-        reduce_group_ids[i] = axis_reduce_group_ids_.at(axis[i]);
-      }
-    }
-    split_index_.clear();
-    split_index_.push_back(0);
-    for (size_t i = 1; i < axis.size(); ++i) {
-      if (reduce_group_ids[i] != reduce_group_ids[i - 1]) {
-        split_index_.push_back(i);
-      }
-    }
-    split_index_.push_back(axis.size());
+    std::vector<Array<IterVar>> groups;
     if (!split_config_.empty()) {
+      split_index_.clear();
       split_index_ = split_config_;
-    }
-    std::vector<Array<IterVar>> res;
-    for (size_t i = 0; i < split_index_.size() - 1; ++i) {
-      Array<IterVar> cur_axis_group;
-      for (auto j = split_index_[i]; j < split_index_[i + 1]; ++j) {
-        cur_axis_group.push_back(axis[j]);
+      for (size_t i = 0; i < split_index_.size() - 1; ++i) {
+        Array<IterVar> cur_axis_group;
+        for (auto j = split_index_[i]; j < split_index_[i + 1]; ++j) {
+            cur_axis_group.push_back(axis[j]);
+        }
+        groups.push_back(cur_axis_group);
       }
-      res.push_back(cur_axis_group);
+      return groups;
     }
-    return res;
+
+    std::unordered_map<IterVar, std::unordered_set<size_t>> reduce_group_ids;
+    for (auto ax : axis) {
+      if (axis_reduce_group_ids_.count(ax)) {
+        reduce_group_ids[ax] = axis_reduce_group_ids_.at(ax);
+      } else {
+        reduce_group_ids[ax] = std::unordered_set<size_t>();
+      }
+    }
+    for (auto ax : axis) {
+      auto group_id = groups.size();
+      for (size_t j = 0; j < groups.size(); ++j) {
+        if (reduce_group_ids[ax] == reduce_group_ids[groups[j][0]]) {
+          group_id = j;
+          break;
+        }
+      }
+      if (group_id == groups.size()) {
+        Array<IterVar> cur_axis_group = {ax};
+        groups.push_back(cur_axis_group);
+      } else {
+        groups[group_id].push_back(ax);
+      }
+    }
+    return groups;
   }
 };
 
