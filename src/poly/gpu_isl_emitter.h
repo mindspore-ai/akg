@@ -52,6 +52,9 @@ constexpr auto DEFAULT_TENSOR_INDEX = "[0]";
 constexpr auto USELESS_INDEX = "0";
 constexpr auto USELESS_SHAPE_SIZE = "1";
 constexpr auto SCALAR_TENSOR_PREFIX = "acc_";
+constexpr auto SCALAR_KHT_PREFIX = "kahan_t";
+constexpr auto SCALAR_KHY_PREFIX = "kahan_y";
+constexpr auto SCALAR_KHC_PREFIX = "kahan_c";
 constexpr auto SHARED_MEMORY_PREFIX = "__shared__";
 constexpr auto SHARED_TENSOR_PREFIX = "red_buf";
 
@@ -59,6 +62,7 @@ constexpr auto REDUCE_LIB_TYPE_ORIGIN = "origin";
 constexpr auto REDUCE_LIB_TYPE_PARIS = "paris";
 constexpr auto AKG_REDUCE_LIB_SPACE = "akg_reduce";
 constexpr auto AKG_REDUCE_LIB_NAME = "AkgReduce";
+constexpr auto AKG_KAHAN_LIB_NAME = "AkgKahanAccumulation";
 constexpr auto PARIS_REDUCE_LIB_SPACE = "paris_reduce";
 constexpr auto PARIS_REDUCE_LIB_NAME = "ParisReduce";
 constexpr auto AKG_REDUCE_RETURN_NAME = "AkgAtomicReturn";
@@ -109,6 +113,10 @@ class ReduceEmitInfo {
 
   std::string shared_compute_name_;
   std::string scalar_tensor_name_;
+  std::string scalar_kht_name_;
+  std::string scalar_khy_name_;
+  std::string scalar_khc_name_;
+  Expr input_tensor_expr_;
 
   std::string reduce_op_;
   std::string reduce_stmt_index_;
@@ -119,7 +127,7 @@ class ReduceEmitInfo {
   std::set<std::string> added_tensors_;
   Stmt reduce_area_stmt_;
   Stmt origin_reduce_stmt_;
-  Tensor scalar_tensor_;
+  std::map<std::string, Tensor> scalar_tensor_;
   Tensor shared_tensor_;
   std::vector<Stmt> stmts_;
   Expr atomic_rhs_;
@@ -234,9 +242,10 @@ class GpuIslEmitter : public IslEmitter {
   void MakeAkgReduceFuncName();
   void ConstructAtomicReturnFuncName();
   void MakeReduceStmt();
+  Stmt TransferToKaHanInterface();
   Stmt MakeAtomicStmt();
 
-  void SetScalarTensorBind();
+  void SetScalarTensorBind(std::string scalar_tensor_name);
   void SetSharedTensorBind();
   void ResetStatus();
 

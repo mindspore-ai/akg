@@ -42,6 +42,12 @@
  *     wmma_scope.
  */
 
+
+/*
+ * 2021.05.17
+ * Add const akg_reduce::AkgKahanAccumulation for reduce
+ */
+
 #ifndef TVM_CODEGEN_CODEGEN_CUDA_H_
 #define TVM_CODEGEN_CODEGEN_CUDA_H_
 
@@ -57,6 +63,7 @@ namespace codegen {
 constexpr auto REDUCE_LIB_TYPE = "reduceLibType";
 constexpr auto AKG_REDUCE = "akg_reduce::AkgReduce";
 constexpr auto AKG_ATOMIC_RETURN = "akg_reduce::AkgAtomicReturn";
+constexpr auto AKG_KAHAN = "akg_reduce::AkgKahanAccumulation";
 constexpr auto PARIS_REDUCE = "paris_reduce::ParisReduce";
 constexpr auto PARIS_ATOMIC_RETURN = "paris_reduce::ParisReturn";
 constexpr auto ORIGIN_REDUCE_LIB = "origin";

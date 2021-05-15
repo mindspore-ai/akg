@@ -54,6 +54,14 @@
  *     Print offset shared memory when use total shared_memory of VisitStmt_(const Allocate* op)
  */
 
+/*
+ * 2021.5.17
+ *   Modify the functions:
+ *     add KaHan interface processing logic in VisitExpr_(const Call *op, std::ostream& os)
+ *     for the reduce sum operator
+ */
+
+
 #include <tvm/base.h>
 #include <tvm/runtime/registry.h>
 #include <tvm/packed_func_ext.h>
@@ -545,6 +553,21 @@ void CodeGenCUDA::VisitExpr_(const Call *op, std::ostream& os) {
       os << template_arg1.as<StringImm>()->value;
       os << ">(";
       for (size_t i = 2; i < op->args.size(); i++) {
+        this->PrintExpr(op->args[i], os);
+        if (i < op->args.size() - 1) {
+          os << ", ";
+        }
+      }
+      os << ")";
+      return;
+    }
+    if (op->name == AKG_KAHAN) {
+      CHECK_GE(op->args.size(), 1);
+      os << op->name << "<";
+      Expr template_arg0 = op->args[0];
+      this->PrintType(template_arg0.type(), os);
+      os << ">(";
+      for (size_t i = 1; i < op->args.size(); i++) {
         this->PrintExpr(op->args[i], os);
         if (i < op->args.size() - 1) {
           os << ", ";
