@@ -577,6 +577,7 @@ void GpuStrategy::InitMappingLimit() {
       thread_limit_ = {warp_sizes_, 8};
     }
   } else {
+    AdjustTotalThread();
     thread_limit_ = {max_x_y_dim_thread_, max_x_y_dim_thread_, max_z_dim_thread_};
   }
 
@@ -651,7 +652,7 @@ void GpuStrategy::InnerThreadOuterBlock() {
     TileAxis *axis;
     int64_t shape;
     std::tie(axis, shape) = pending_axes_[i];
-    int64_t rest_threads = std::min(max_x_y_dim_thread_ / activated_threads, thread_limit_[thread_cfg_.size()]);
+    int64_t rest_threads = std::min(total_available_thread_ / activated_threads, thread_limit_[thread_cfg_.size()]);
     ss << "axis " << axis->index << "_" << axis->dim_axis << " shape = " << shape
        << ", rest_threads = " << rest_threads;
     auto SkipMapping = [this, &axis, &shape, &ss, &inner_dim, &thread_dim]() {
@@ -1011,6 +1012,21 @@ void GpuStrategy::DetermineTemplate() {
   }
 
   template_ = reduce_axes_.size() == depth ? Template::ALL_REDUCE : Template::REDUCTION;
+}
+
+void GpuStrategy::AdjustTotalThread() {
+  auto buffer_count = analyzer_->buf_info_.size();
+  int ratio;
+  if (buffer_count > BUFFER_COUNT_LEVEL_3) {
+    ratio = THREAD_CONSTRAINT_RATIO_LEVEL_3;
+  } else if (buffer_count > BUFFER_COUNT_LEVEL_2) {
+    ratio = THREAD_CONSTRAINT_RATIO_LEVEL_2;
+  } else if (buffer_count > BUFFER_COUNT_LEVEL_1){
+    ratio = THREAD_CONSTRAINT_RATIO_LEVEL_1;
+  } else {
+    ratio = THREAD_CONSTRAINT_RATIO_LEVEL_0;
+  }
+  total_available_thread_ /= ratio;
 }
 
 void GpuStrategy::AdjustThreadMappingLimit() {
