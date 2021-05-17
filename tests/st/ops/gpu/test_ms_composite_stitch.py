@@ -23,33 +23,33 @@ from tests.common.tensorio import compare_tensor
 
 def test_composite_stitch(ci_path):
     files = os.listdir(ci_path)
+    flag = True
     for fi in files:
         with open(ci_path + fi, 'r') as f:
-            print("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%file: ", fi)
+            print("\033[94m%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%file: \033[0m", fi)
             desc = f.read()
-            poly = True
-            attrs = {}
-            reduce_lib_key = "enable_akg_reduce_lib"
-            attrs[reduce_lib_key] = poly
-            mod = composite.build(desc, attrs, poly=poly)
-            input_for_mod, expect, output_indexes = gen_json_data(desc)
-    output = utils.mod_launch(mod, input_for_mod, output_indexes)
+        poly = True
+        attrs = {}
+        reduce_lib_key = "enable_akg_reduce_lib"
+        attrs[reduce_lib_key] = poly
+        mod = composite.build(desc, attrs, poly=poly)
+        input_for_mod, expect, output_indexes = gen_json_data(desc)
+        output = utils.mod_launch(mod, input_for_mod, output_indexes)
 
-    rtol, atol = get_rtol_atol("FUSED", "float32")
-    flag = True
-    if len(output_indexes) > 1:
-        if not all(map(lambda x, y: compare_tensor(x, y, rtol=rtol, atol=atol), output, expect)):
-            logging.info(mod.imported_modules[0].get_source())
-            flag = False
-    else:
-        if not compare_tensor(output, expect, rtol=rtol, atol=atol):
-            logging.info(mod.imported_modules[0].get_source())
-            flag = False
-            if not flag:
-                logging.info("----------Error Json info is----------")
-                logging.info(desc)
-                raise ValueError("Precision Error")
-            else:
-                logging.info("Composite Json {} pass!".format(fi))
-            assert (flag)
+        rtol, atol = get_rtol_atol("FUSED", "float32")
+        flag = True
+        if len(output_indexes) > 1:
+            if not all(map(lambda x, y: compare_tensor(x, y, rtol=rtol, atol=atol), output, expect)):
+                logging.info(mod.imported_modules[0].get_source())
+                flag = False
+        else:
+            if not compare_tensor(output, expect, rtol=rtol, atol=atol):
+                logging.info(mod.imported_modules[0].get_source())
+                flag = False
+        if not flag:
+            logging.info("\033[91mComposite Json {} fail!\033[0m".format(fi))
+        else:
+            logging.info("\033[92mComposite Json {} pass!\033[0m".format(fi))
+    if not flag:
+        raise ValueError("Precision Error")
     logging.info("All ops are ok!")
