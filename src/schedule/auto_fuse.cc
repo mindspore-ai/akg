@@ -51,14 +51,12 @@ namespace schedule {
 
 class FuseOpAxis {
  public:
-  explicit FuseOpAxis(const Schedule &sch,
-                      const std::unordered_map<IterVar, std::unordered_set<size_t>> &axis_reduce_group_ids,
-                      const std::vector<size_t> &split_config, std::vector<size_t> &split_index)
-      : split_index_(split_index) {
-    sch_ = sch;
-    axis_reduce_group_ids_ = axis_reduce_group_ids;
-    split_config_ = split_config;
-  }
+  FuseOpAxis(const Schedule &sch, const std::unordered_map<IterVar, std::unordered_set<size_t>> &axis_reduce_group_ids,
+             const std::vector<size_t> &split_config, std::vector<size_t> &split_index)
+      : sch_(sch),
+        axis_reduce_group_ids_(axis_reduce_group_ids),
+        split_config_(split_config),
+        split_index_(split_index) {}
 
   void Run() {
     for (auto op : sch_->outputs) {
@@ -168,7 +166,7 @@ class FuseOpAxis {
       for (size_t i = 0; i < split_index_.size() - 1; ++i) {
         Array<IterVar> cur_axis_group;
         for (auto j = split_index_[i]; j < split_index_[i + 1]; ++j) {
-            cur_axis_group.push_back(axis[j]);
+          cur_axis_group.push_back(axis[j]);
         }
         groups.push_back(cur_axis_group);
       }
@@ -204,9 +202,10 @@ class FuseOpAxis {
 
 class FuseCheck {
  public:
-  explicit FuseCheck(const Schedule &sch) { sch_ = sch; }
+  FuseCheck(const Schedule &sch, const std::vector<size_t> &split_config) : sch_(sch), split_config_(split_config) {}
 
   bool NeedToFuse() {
+    if (!split_config_.empty()) return true;
     if (HasExternOp()) {
       return false;
     }
@@ -257,6 +256,7 @@ class FuseCheck {
 
  private:
   Schedule sch_;
+  std::vector<size_t> split_config_;
   bool has_reduce_{false};
   bool has_matmul_{false};
   bool has_output_broadcast_{false};
@@ -661,7 +661,7 @@ void AutoFuse(Schedule sch, const std::string &split_str, std::vector<size_t> &s
     size_t split = strtol(c.c_str(), &endptr, radix);
     split_config.emplace_back(split);
   }
-  auto fuse_check = FuseCheck(sch);
+  auto fuse_check = FuseCheck(sch, split_config);
   if (!fuse_check.NeedToFuse()) {
     return;
   }
