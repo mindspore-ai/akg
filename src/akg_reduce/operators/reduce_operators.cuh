@@ -141,6 +141,7 @@ __device__ void atomicMax(double *const addr, const double val) {
   } while (assumed != old);
 }
 
+#if __CUDA_ARCH__ >= 700
 __device__ void atomicMax(half *const addr, const half val) {
   if (__hge(*addr, val)) return;
   unsigned short int *const addr_as_usi = (unsigned short int *)addr;
@@ -151,6 +152,7 @@ __device__ void atomicMax(half *const addr, const half val) {
     old = atomicCAS(addr_as_usi, assumed, __half_as_ushort(val));
   } while (assumed != old);
 }
+#endif
 
 template <typename T>
 __device__ void AtomicMin(T *const addr, const T val) {
@@ -182,6 +184,7 @@ __device__ void atomicMin(double *const addr, const double val) {
   } while (assumed != old);
 }
 
+#if __CUDA_ARCH__ >= 700
 __device__ void atomicMin(half *const addr, const half val) {
   if (__hle(*addr, val)) return;
 
@@ -193,6 +196,7 @@ __device__ void atomicMin(half *const addr, const half val) {
     old = atomicCAS(addr_as_usi, assumed, __half_as_ushort(val));
   } while (assumed != old);
 }
+#endif
 
 // AtomicOp for diverse atomic ops by identifier
 // Atomic sample in cuda: int atomicMax(int* address, int val);

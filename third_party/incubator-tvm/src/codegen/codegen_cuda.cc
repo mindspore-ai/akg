@@ -64,6 +64,10 @@
 #include "literal/cuda_half_t.h"
 #include "codegen_cuda.h"
 
+#ifdef USE_CUDA
+#include <cuda_runtime.h>
+#endif
+
 namespace air {
 namespace codegen {
 
@@ -92,6 +96,24 @@ void CodeGenCUDA::AddFunction(LoweredFunc f) {
 }
 
 std::string CodeGenCUDA::Finish() {
+#ifdef USE_CUDA
+  int major, minor;
+  std::string major_str;
+  std::string minor_str;
+  cudaError_t e1 = cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, 0);
+  cudaError_t e2 = cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, 0);
+  if (e1 == cudaSuccess && e2 == cudaSuccess) {
+    major_str = std::to_string(major);
+    minor_str = std::to_string(minor);
+    if (minor_str.length() == 1) {
+      minor_str += "0";
+    }
+    decl_stream << "#ifndef __CUDA_ARCH__\n";
+    decl_stream << "#define __CUDA_ARCH__ " << major_str + minor_str << "\n";
+    decl_stream << "#endif\n";
+  }
+#endif
+
   if (need_reduce_lib_) {
     if (reduce_lib_type_ == ORIGIN_REDUCE_LIB) {
       decl_stream << "#include \"akg_reduce/reduce.cuh\"\n";
