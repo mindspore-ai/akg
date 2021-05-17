@@ -23,7 +23,6 @@ Testcase_ExpectedResult:
 
 """
 import os
-import pytest
 from tests.common.base import TestBase
 from tests.common.test_run.softmaxcrossentropywithlogits_run import softmaxcrossentropywithlogits_run
 
@@ -52,17 +51,9 @@ class TestCase(TestBase):
         ]
         return
 
-    @pytest.mark.level0
-    @pytest.mark.platform_arm_ascend_training
-    @pytest.mark.platform_x86_ascend_training
-    @pytest.mark.env_onecard
     def test_run(self):
         self.common_run(self.testarg)
 
-    @pytest.mark.level1
-    @pytest.mark.platform_arm_ascend_training
-    @pytest.mark.platform_x86_ascend_training
-    @pytest.mark.env_onecard
     def test_run_level1(self):
         self.common_run(self.testarg_level1)
 

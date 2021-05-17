@@ -16,7 +16,6 @@
 matmul gelu grad fusion
 """
 import os
-import pytest
 from tests.common.base import TestBase, get_splitted_cases
 from tests.common.test_run.matmul_gelu_grad_run import matmul_gelu_grad_execute
 
@@ -77,10 +76,7 @@ class TestCase(TestBase):
         self._log.info("============= {0} Teardown============".format(self.casename))
         return
 
-@pytest.mark.level0
-@pytest.mark.platform_arm_ascend_training
-@pytest.mark.platform_x86_ascend_training
-@pytest.mark.env_onecard
+
 def test0():
     a = TestCase()
     a.setup()
@@ -88,10 +84,6 @@ def test0():
     a.teardown()
 
 
-@pytest.mark.level0
-@pytest.mark.platform_arm_ascend_training
-@pytest.mark.platform_x86_ascend_training
-@pytest.mark.env_onecard
 def test1():
     a = TestCase()
     a.setup()
