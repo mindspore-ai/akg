@@ -196,6 +196,13 @@ class FuseOpAxis {
         groups[group_id].push_back(ax);
       }
     }
+    split_index_.clear();
+    size_t index = 0;
+    split_index_.emplace_back(index);
+    for (const auto &item : groups) {
+      index += item.size();
+      split_index_.emplace_back(index);
+    }
     return groups;
   }
 };
@@ -205,12 +212,11 @@ class FuseCheck {
   FuseCheck(const Schedule &sch, const std::vector<size_t> &split_config) : sch_(sch), split_config_(split_config) {}
 
   bool NeedToFuse() {
-    if (!split_config_.empty()) return true;
     if (HasExternOp()) {
       return false;
     }
     ReduceCheck();
-    if (has_reduce_ && !has_matmul_) {
+    if ((has_reduce_ && !has_matmul_) || !split_config_.empty()) {
       OutputBroadcastRecord();
       return true;
     }
