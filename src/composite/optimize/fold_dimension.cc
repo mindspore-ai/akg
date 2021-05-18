@@ -80,8 +80,9 @@ class DimensionFolderPlan : public IRVisitor {
         } else {
           reduce_axis_.insert(axis_vec.begin(), axis_vec.end());
         }
-        IRVisitor::Visit_(op);
-        return;
+      } else if (attrs.find("perm") != attrs.end()) {
+        Array<Expr> axis = Downcast<Array<Expr>>(attrs["perm"]);
+        transpose_perm_ = ExtractIntVector(axis);
       }
     }
     IRVisitor::Visit_(op);
@@ -119,6 +120,10 @@ class DimensionFolderPlan : public IRVisitor {
       CHECK(inputs.size() == 3);
       AddElemBroadRelation(inputs[1], inputs[0]);
       AddElemBroadRelation(inputs[2], output);
+    } else if (prim->name == "Transpose") {
+      CHECK(transpose_perm_.size() == inputs[0]->shape.size());
+      AddTransposeRelation(inputs[0], output, transpose_perm_);
+      transpose_perm_.clear();
     } else {
       for (FoldTensor *input : inputs) {
         Relation rel(output);
@@ -133,6 +138,8 @@ class DimensionFolderPlan : public IRVisitor {
 
  private:
   std::unordered_set<int64_t> reduce_axis_;
+  std::vector<int64_t> transpose_perm_;
+
   std::vector<FunctionRef> inputs_;
   int64_t total_dims_{0};
   int64_t folded_dims_{0};
@@ -202,6 +209,25 @@ class DimensionFolderPlan : public IRVisitor {
     }
     if (rel.backward_mapping.empty()) {
       rel.backward_mapping.push_back(-1);
+    }
+    domain.push_back(input->shape.size());
+    FoldRelation(input, &rel, domain);
+    input->succ.emplace_back(std::move(rel));
+  }
+
+  void AddTransposeRelation(FoldTensor *input, FoldTensor *output, const std::vector<int64_t> &perm) {
+    Relation rel(output);
+    rel.forward_mapping.resize(perm.size(), 0);
+    for (size_t i = 0; i < perm.size(); ++i) {
+      rel.forward_mapping[perm[i]] = i;
+      rel.backward_mapping.push_back(perm[i]);
+    }
+    std::vector<int> domain;
+    domain.push_back(0);
+    for (size_t i = 1; i < rel.forward_mapping.size(); ++i) {
+      if (rel.forward_mapping[i] != rel.forward_mapping[i-1] + 1) {
+        domain.push_back(i);
+      }
     }
     domain.push_back(input->shape.size());
     FoldRelation(input, &rel, domain);
@@ -442,10 +468,10 @@ class DimensionFolder : public IRMutator {
       }
       op = stmt.as<AttrStmt>();
       auto attrs = Downcast<Map<std::string, NodeRef>>(op->node);
-      if (update_attr_ == "axis") {
-        Array<Expr> val = Downcast<Array<Expr>>(attrs["axis"]);
+      if (update_attr_ == "axis" || update_attr_ == "perm") {
+        Array<Expr> val = Downcast<Array<Expr>>(attrs[update_attr_]);
         Array<Expr> new_axis = FoldShapeIndex(attr_func_, val);
-        attrs.Set("axis", new_axis);
+        attrs.Set(update_attr_, new_axis);
       } else if (update_attr_ == "shape") {
         Array<Expr> val = Downcast<Array<Expr>>(attrs["shape"]);
         Array<Expr> new_shape = FoldShape(attr_func_, val);
@@ -460,11 +486,16 @@ class DimensionFolder : public IRMutator {
     auto prim_op = op->value.as<Call>();
     CHECK(prim_op);
     Array<Expr> args;
-    bool is_reduce = IsReduce(prim_op->name);
+    std::string update_input_index;
+    if (IsReduce(prim_op->name)) {
+      update_input_index = "axis";
+    } else if (prim_op->name == "Transpose") {
+      update_input_index = "perm";
+    }
     for (const auto &arg : prim_op->args) {
       if (auto tensor = arg.as<Call>()) {
-        if (is_reduce) {
-          update_attr_ = "axis";
+        if (!update_input_index.empty()) {
+          update_attr_ = update_input_index;
           attr_func_ = tensor->func;
         }
         auto shape = FoldShape(tensor->func, tensor->args);
