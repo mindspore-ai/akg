@@ -291,16 +291,15 @@ Stmt GpuIslEmitter::EmitSync() {
   return Evaluate::make(Call::make(Int(32), STORAGE_SYNC, {StringImm::make(SYNC_SCOP_SHARED)}, Call::Intrinsic));
 }
 
-void GpuIslEmitter::SetScalarTensorBind() {
+void GpuIslEmitter::SetScalarTensorBind(std::string scalar_tensor_name) {
   Array<Expr> shapes;
   shapes.push_back(Expr(1));
   Type type = reduce_info_.reduce_data_type_info_;
-  std::string scalar_tensor_name = reduce_info_.scalar_tensor_name_;
   reduce_info_.added_tensors_.insert(scalar_tensor_name);
 
   Tensor tensor = placeholder(shapes, type, scalar_tensor_name);
   const Buffer buffer = decl_buffer(shapes, type, scalar_tensor_name);
-  reduce_info_.scalar_tensor_ = tensor;
+  reduce_info_.scalar_tensor_[scalar_tensor_name] = tensor;
 
   info_.user_config_.SetBind(tensor, buffer);
 }
@@ -332,6 +331,11 @@ Stmt GpuIslEmitter::EmitReduceInit(const isl::ast_node_user &node) {
   auto stmt_id = usr_expr.get_arg(0).as<isl::ast_expr_id>().get_id();
 
   CHECK(!reduce_info_.scalar_tensor_name_.empty()) << "scalar tensor info should not be empty!";
+  if (reduce_info_.reduce_op_.find("SumOp") != std::string::npos) {
+    CHECK(!reduce_info_.scalar_kht_name_.empty()) << "scalar tensor kht info should not be empty!";
+    CHECK(!reduce_info_.scalar_khy_name_.empty()) << "scalar tensor khy info should not be empty!";
+    CHECK(!reduce_info_.scalar_khc_name_.empty()) << "scalar tensor khc info should not be empty!";
+  }
 
   std::vector<std::string> strs = common::Split(stmt_id.name(), "_");
   CHECK_EQ(strs.size(), REDUCE_FLAG_SIZE) << "red init format is not right!.";
@@ -345,20 +349,32 @@ Stmt GpuIslEmitter::EmitReduceInit(const isl::ast_node_user &node) {
     }
   }
 
-  Array<Expr> args;
-  args.push_back(Expr(0));
-  Stmt scalar_stmt = Provide::make(reduce_info_.scalar_tensor_->op, 0, init_value, args);
-
   CHECK(reduce_info_.reduce_area_stmt_.defined());
   reduce_info_.stmts_.insert(reduce_info_.stmts_.begin(), reduce_info_.reduce_area_stmt_);
 
+  Array<Expr> args;
+  args.push_back(Expr(0));
+  Stmt scalar_stmt =
+    Provide::make(reduce_info_.scalar_tensor_[reduce_info_.scalar_tensor_name_]->op, 0, init_value, args);
   CHECK(scalar_stmt.defined());
   reduce_info_.stmts_.insert(reduce_info_.stmts_.begin(), scalar_stmt);
+
+  if (reduce_info_.reduce_op_.find("SumOp") != std::string::npos) {
+    Stmt scalar_khc =
+      Provide::make(reduce_info_.scalar_tensor_[reduce_info_.scalar_khc_name_]->op, 0, init_value, args);
+    CHECK(scalar_khc.defined());
+    reduce_info_.stmts_.insert(reduce_info_.stmts_.begin(), scalar_khc);
+  }
 
   MakeReduceStmt();
 
   Stmt stmt = Block::make(reduce_info_.stmts_);
   stmt = InsertRealizeWithMemType(stmt, isl::id(stmt_id.ctx(), reduce_info_.scalar_tensor_name_), MEM_TYPE_LOCAL);
+  if (reduce_info_.reduce_op_.find("SumOp") != std::string::npos) {
+    stmt = InsertRealizeWithMemType(stmt, isl::id(stmt_id.ctx(), reduce_info_.scalar_kht_name_), MEM_TYPE_LOCAL);
+    stmt = InsertRealizeWithMemType(stmt, isl::id(stmt_id.ctx(), reduce_info_.scalar_khy_name_), MEM_TYPE_LOCAL);
+    stmt = InsertRealizeWithMemType(stmt, isl::id(stmt_id.ctx(), reduce_info_.scalar_khc_name_), MEM_TYPE_LOCAL);
+  }
   stmt = InsertRealizeWithMemType(stmt, isl::id(stmt_id.ctx(), reduce_info_.shared_compute_name_), MEM_TYPE_SHARED);
 
   ResetStatus();
@@ -402,6 +418,7 @@ void GpuIslEmitter::ResetStatus() {
   reduce_info_.origin_reduce_stmt_ = Stmt();
   reduce_info_.gm_write_stmt_ = Stmt();
   reduce_info_.atomic_rhs_ = Expr();
+  reduce_info_.input_tensor_expr_ = Expr();
   is_out_most_stmt_ = true;
 }
 
@@ -427,6 +444,16 @@ Stmt GpuIslEmitter::EmitReduceUpdate(const isl::ast_node_user &node) {
     reduce_info_.reduce_op_ += strs[REDUCE_FLAG_TYPE_POS];
   }
   CHECK(!reduce_info_.reduce_op_.empty()) << "reduce op should not be empty!";
+
+  if (reduce_info_.reduce_op_.find("SumOp") != std::string::npos) {
+    reduce_info_.scalar_kht_name_ = SCALAR_KHT_PREFIX;
+    reduce_info_.scalar_kht_name_ += reduce_info_.reduce_stmt_index_;
+    reduce_info_.scalar_khy_name_ = SCALAR_KHY_PREFIX;
+    reduce_info_.scalar_khy_name_ += reduce_info_.reduce_stmt_index_;
+    reduce_info_.scalar_khc_name_ = SCALAR_KHC_PREFIX;
+    reduce_info_.scalar_khc_name_ += reduce_info_.reduce_stmt_index_;
+  }
+
   std::string stmt_name = strs[REDUCE_FLAG_STMT_PREFIX_POS] + "_" + strs[REDUCE_FLAG_STMT_NUM_POS];
   std::string origin_tensor_name = "";
   for (auto it : info_.analysis_result_.GetReduceTensorInfoMap()) {
@@ -448,10 +475,47 @@ Stmt GpuIslEmitter::EmitReduceUpdate(const isl::ast_node_user &node) {
   }
 
   MakeAkgReduceFuncName();
-  SetScalarTensorBind();
+  SetScalarTensorBind(reduce_info_.scalar_tensor_name_);
+  if (reduce_info_.reduce_op_.find("SumOp") != std::string::npos) {
+    SetScalarTensorBind(reduce_info_.scalar_kht_name_);
+    SetScalarTensorBind(reduce_info_.scalar_khy_name_);
+    SetScalarTensorBind(reduce_info_.scalar_khc_name_);
+  }
   SetSharedTensorBind();
 
   return Stmt();
+}
+
+Stmt GpuIslEmitter::TransferToKaHanInterface() {
+  std::string func_name = AKG_REDUCE_LIB_SPACE;
+  func_name += "::";
+  func_name += AKG_KAHAN_LIB_NAME;
+  Expr template_arg0 = make_const(reduce_info_.reduce_data_type_info_, 1);
+
+  Array<Expr> args;
+  args.push_back(Expr(0));
+
+  Tensor tt = reduce_info_.scalar_tensor_[reduce_info_.scalar_khy_name_];
+  Expr a1 = Call::make(tt->dtype, tt->op->func_name(), args, Call::Halide, tt->op, 0);
+  a1 = Call::make(a1.type(), "&", {a1}, Call::Extern);
+
+  tt = reduce_info_.scalar_tensor_[reduce_info_.scalar_kht_name_];
+  Expr a2 = Call::make(tt->dtype, tt->op->func_name(), args, Call::Halide, tt->op, 0);
+  a2 = Call::make(a2.type(), "&", {a2}, Call::Extern);
+
+  tt = reduce_info_.scalar_tensor_[reduce_info_.scalar_khc_name_];
+  Expr a3 = Call::make(tt->dtype, tt->op->func_name(), args, Call::Halide, tt->op, 0);
+  a3 = Call::make(a3.type(), "&", {a3}, Call::Extern);
+
+  tt = reduce_info_.scalar_tensor_[reduce_info_.scalar_tensor_name_];
+  Expr a4 = Call::make(tt->dtype, tt->op->func_name(), args, Call::Halide, tt->op, 0);
+  a4 = Call::make(a4.type(), "&", {a4}, Call::Extern);
+
+  CHECK(reduce_info_.input_tensor_expr_.defined());
+  Stmt stmt = Evaluate::make(
+    Call::make(Int(32), func_name, {template_arg0, a1, a2, a3, a4, reduce_info_.input_tensor_expr_}, Call::Extern));
+
+  return stmt;
 }
 
 void GpuIslEmitter::MakeReduceStmt() {
@@ -482,7 +546,7 @@ void GpuIslEmitter::MakeReduceStmt() {
 
   CHECK(buffer.defined());
 
-  Tensor tt = reduce_info_.scalar_tensor_;
+  Tensor tt = reduce_info_.scalar_tensor_[reduce_info_.scalar_tensor_name_];
   Array<Expr> args;
   args.push_back(Expr(0));
   Expr a4 = Call::make(tt->dtype, tt->op->func_name(), args, Call::Halide, tt->op, 0);
@@ -563,8 +627,23 @@ Stmt GpuIslEmitter::EmitReduceArea(const isl::ast_node_user &node) {
   Array<Expr> args_scalar;
   args_scalar.push_back(Expr(0));
 
-  stmt = AkgReduceStmtChange(reduce_info_.scalar_tensor_, args_scalar, reduce_info_.promoted_tensor_name_for_reduce_)
+  stmt = AkgReduceStmtChange(reduce_info_.scalar_tensor_[reduce_info_.scalar_tensor_name_], args_scalar,
+                             reduce_info_.promoted_tensor_name_for_reduce_)
            .Mutate(stmt);
+
+  if (reduce_info_.reduce_op_.find("SumOp") != std::string::npos) {
+    auto pro = stmt.as<Provide>();
+    CHECK(pro);
+    auto value = pro->value;
+    auto add = value.as<Add>();
+    CHECK(add);
+    auto add_a = add->a;
+    auto add_b = add->b;
+    reduce_info_.input_tensor_expr_ =
+      (add->a.as<Call>() && add->a.as<Call>()->name == reduce_info_.scalar_tensor_name_) ? add_b : add_a;
+    stmt = TransferToKaHanInterface();
+  }
+
   if (add_to_reduce_area) {
     reduce_info_.reduce_area_stmt_ = stmt;
     return Stmt();
