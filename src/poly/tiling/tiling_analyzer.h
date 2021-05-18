@@ -53,6 +53,14 @@ constexpr auto VECTORIZE_BYTE = 256;
 constexpr auto MAX_REPEAT = 255;
 constexpr auto MIN_CORE_GRANULARITY = 256;
 constexpr auto DESIRE_CORE_GRANULARITY = 8192;
+constexpr auto BUFFER_COUNT_LEVEL_0 = 50;
+constexpr auto BUFFER_COUNT_LEVEL_1 = 100;
+constexpr auto BUFFER_COUNT_LEVEL_2 = 150;
+constexpr auto BUFFER_COUNT_LEVEL_3 = 200;
+constexpr auto THREAD_CONSTRAINT_RATIO_LEVEL_0 = 1;
+constexpr auto THREAD_CONSTRAINT_RATIO_LEVEL_1 = 2;
+constexpr auto THREAD_CONSTRAINT_RATIO_LEVEL_2 = 4;
+constexpr auto THREAD_CONSTRAINT_RATIO_LEVEL_3 = 8;
 
 // Controlled by custom tiling.
 constexpr auto ALLOCATION_PERCENTAGE = 0.5;  // reserved for double buffer in default
