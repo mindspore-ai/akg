@@ -17,7 +17,8 @@
 #include <memory>
 #include "composite/optimize/rename_matmul.h"
 #include "composite/optimize/reshape_tensor.h"
-#include "composite/optimize/elim_transform_op.h"
+#include "composite/optimize/elim_reshape_backward.h"
+#include "composite/optimize/elim_reshape_forward.h"
 #include "composite/optimize/inplace_assign_mutator.h"
 #include "composite/optimize/broadcast_inserter.h"
 #include "composite/optimize/axis_attr_normalize.h"
@@ -37,8 +38,10 @@ Stmt Optimize(Stmt &s, BuildInfo &info) {
   if (info.opt.target == "aicore") {
     pm.RegisterPass(std::make_shared<OpsCombine>(pm.info_));
   }
-  // elemwise opt
-  pm.RegisterPass(std::make_shared<ElimTransformOp>(pm.info_));
+  // elim reshape backward
+  pm.RegisterPass(std::make_shared<ElimReshapeBackward>(pm.info_));
+  // elim reshape forward
+  pm.RegisterPass(std::make_shared<ElimReshapeForward>(pm.info_));
   // normalize axis attr
   pm.RegisterPass(std::make_shared<AxisAttrNormalize>());
   // fold dimension for multi-dim shape

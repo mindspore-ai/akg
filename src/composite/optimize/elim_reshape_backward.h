@@ -13,18 +13,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef COMPOSITE_OPTIMIZE_ELIM_TRANSFORM_OP_H_
-#define COMPOSITE_OPTIMIZE_ELIM_TRANSFORM_OP_H_
+#ifndef COMPOSITE_OPTIMIZE_ELIM_RESHAPE_BACKWARD_H_
+#define COMPOSITE_OPTIMIZE_ELIM_RESHAPE_BACKWARD_H_
 #include "composite/optimize/optimize.h"
 
 namespace akg {
-class ElimTransformOp : public CompositeOptPass {
+class ElimReshapeBackward: public CompositeOptPass {
  public:
-  explicit ElimTransformOp(BuildInfo &info) : info_(info) { pass_name_ = __FUNCTION__; }
-  ~ElimTransformOp() = default;
+  explicit ElimReshapeBackward(BuildInfo &info) : info_(info) { pass_name_ = __FUNCTION__; }
+  ~ElimReshapeBackward() = default;
   Stmt Run(const Stmt &s) override;
 
   BuildInfo &info_;
 };
 }  // namespace akg
-#endif  // COMPOSITE_OPTIMIZE_ELIM_TRANSFORM_OP_H_
+#endif  // COMPOSITE_OPTIMIZE_ELIM_RESHAPE_BACKWARD_H_
