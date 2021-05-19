@@ -1094,13 +1094,9 @@ def get_device_id():
 
 def get_gpu_cycles(mod, *mod_args, device_id=0, save_log=False, repeat_time=400):
     "get gpu profiling cycles."
-    func = tvm.get_global_func('GPUProfilerInit')
-    func("")
     from akg.utils.result_analysis import gpu_profiling
-    gpu_profiling(mod, *mod_args, repeat_time=repeat_time, device_id=device_id)
-    func = tvm.get_global_func('GPUProfilerStop')
-    a = func()
-    return int(a)
+    tcost = gpu_profiling(mod, *mod_args, repeat_time=repeat_time, device_id=device_id)
+    return tcost
 
 class TestUtils:
     """Class for getting cycle and core num."""

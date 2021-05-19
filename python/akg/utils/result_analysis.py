@@ -258,3 +258,4 @@ def gpu_profiling(mod, *args, repeat_time=1, device_id=0):
     ftimer = mod.time_evaluator(mod.entry_name, ctx, number=repeat_time)
     tcost = ftimer(*args).mean
     print("{}: exec={} sec/op".format(ctx, tcost))
+    return tcost

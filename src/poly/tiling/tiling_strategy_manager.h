@@ -59,6 +59,7 @@ class TilingStrategy {
   // gpu configs
   int64_t warp_sizes_ = 32;
   int64_t total_available_thread_ = 1024;
+  int64_t num_sm_ = 80;
   int64_t max_x_dim_block_ = pow(2, 31) - 1;
   int64_t max_y_z_dim_block_ = 65535;
   int64_t max_x_y_dim_thread_ = 1024;
@@ -312,7 +313,6 @@ class GpuStrategy : public TilingStrategy {
 
  private:
   void DetermineTemplate();
-  void AdjustTotalThread();
   void AdjustThreadMappingLimit();
 
   void InjectiveSpeedup();
