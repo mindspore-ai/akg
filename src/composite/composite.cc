@@ -542,8 +542,8 @@ class CompositeJsonListGpu : public CompositeJsonList {
     auto clean_op_map = Downcast<Map<std::string, Array<NodeRef>>>(clean_op_map_list_[block_json_idx_]);
     StitchAttrInfo stitch_attr;
     std::vector<Stmt> stitch_irs = LowerStitchIRs(block_json, stitch_attr, attrs);
-    StitchBufAlloc buf_manager;
-    buf_manager.BufferAllocReuse(stitch_irs, alloc_map, reuse_map, clean_op_map, outputs2args_);
+    StitchBufAlloc buf_manager(stitch_irs, alloc_map, reuse_map, clean_op_map, outputs2args_);
+    buf_manager.BufferAllocReuse();
     GetRealOutputs();
     auto stitched_ir = StitchFusionGpu(stitch_irs, merge_name_, stitch_attr, buf_manager.stitch_buffer_map,
                                        buf_manager.buf_within_op_map, buf_manager.allocate_revoke, real_outputs_);
