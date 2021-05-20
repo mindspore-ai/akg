@@ -80,7 +80,7 @@ def _compare_func(output, expect):
     return compare_tensor(output, expect, rtol=rtol, atol=atol)
 
 
-def get_result(desc, poly, attrs=None):
+def get_result(desc, poly, attrs=None, profiling=True):
     backend = _get_backend(desc)
     if attrs is None:
         attrs = {}
@@ -95,7 +95,7 @@ def get_result(desc, poly, attrs=None):
                    expect if isinstance(expect, (list, tuple)) else [expect])):
         logging.info(mod.imported_modules[0].get_source())
         return False
-    if backend == "cuda":
+    if profiling and backend == "cuda":
         inputs = to_tvm_nd_array(input_for_mod)
         expect = to_tvm_nd_array(expect)
         gpu_profiling(mod, *inputs, *expect, repeat_time=400)
@@ -103,13 +103,18 @@ def get_result(desc, poly, attrs=None):
 
 
 @pytest.mark.skip
-def test_single_file(input_file, attrs, poly):
+def test_single_file(input_file, attrs, poly, profiling=True):
+    if not input_file.endswith(".info") and not input_file.endswith(".json"):
+        print("Skip {}, only process file with .info or .json suffix".format(input_file))
+        return
+    print("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%file: ", input_file)
     with open(input_file, 'r') as f:
         desc = f.read()
-        if get_result(desc, poly, attrs):
+        if get_result(desc, poly, attrs, profiling):
             logging.info("Run Pass!")
         else:
             logging.info("Precision Error")
+            raise ValueError("Precision Error")
 
 
 @pytest.mark.skip
@@ -267,7 +272,7 @@ def main(argv):
         print_usage()
         return
 
-    if single_file and (file_name.endswith(".info") or file_name.endswith(".json")):
+    if single_file:
         test_single_file(file_name, attrs_list, poly)
     elif dir_test:
         test_json_dir(poly, use_custom)
