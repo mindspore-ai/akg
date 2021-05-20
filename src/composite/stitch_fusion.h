@@ -52,14 +52,20 @@ struct IrAttrInfo {
 
 class StitchBufAlloc : public IRVisitor {
  public:
-  explicit StitchBufAlloc(air::DataType data_type = Float(32)) : data_type_(data_type){};
+  StitchBufAlloc(const std::vector<Stmt> &stitch_irs, const Map<std::string, Array<NodeRef>> &alloc_map,
+                 const Map<std::string, Array<NodeRef>> &reuse_map,
+                 const Map<std::string, Array<NodeRef>> &global_stitch,
+                 const std::unordered_map<std::string, NodeRef> &outputs2args, air::DataType data_type = Float(32))
+      : stitch_irs_(stitch_irs),
+        alloc_map_(alloc_map),
+        reuse_map_(reuse_map),
+        global_stitch_(global_stitch),
+        outputs2args_(outputs2args),
+        data_type_(data_type){};
   ~StitchBufAlloc() override = default;
 
-  void BufferAllocReuse(const std::vector<Stmt> &stitch_irs, const Map<std::string, Array<NodeRef>> &alloc_map,
-                        const Map<std::string, Array<NodeRef>> &reuse_map,
-                        const Map<std::string, Array<NodeRef>> &global_stitch,
-                        const std::unordered_map<std::string, NodeRef> &outputs2args) {
-    for (const auto &ir : stitch_irs) {
+  void BufferAllocReuse() {
+    for (const auto &ir : stitch_irs_) {
       ir_idx_ += 1;
       if (total_block_) {
         block_extent_ = 1;
@@ -74,7 +80,7 @@ class StitchBufAlloc : public IRVisitor {
       }
     }
 
-    for (const auto &it : global_stitch) {
+    for (const auto &it : global_stitch_) {
       std::string name = it.first;
       if (name == "EMPTY") {
         break;
@@ -90,14 +96,14 @@ class StitchBufAlloc : public IRVisitor {
       stitch_buffer_map[ir_var] = info;
     }
 
-    for (const auto &it : alloc_map) {
+    for (const auto &it : alloc_map_) {
       std::string name = it.first;
       auto alloc_info = it.second[0].as<StringImm>()->value;
       CHECK_GT(total_block_, 0);
       uint64_t alloc_size_per_block = it.second[1].as<IntImm>()->value / total_block_;
       // first, check whether variable is already in buf_within_op_map. If NOT, do allocation or reuse.
-      CHECK(outputs2args.find(name) != outputs2args.end());
-      std::string ir_var = outputs2args.at(name).as<BufferNode>()->name;
+      CHECK(outputs2args_.find(name) != outputs2args_.end());
+      std::string ir_var = outputs2args_.at(name).as<BufferNode>()->name;
       std::string shared_name = ir_var + "_shared";
       std::string ir_var_shared;
       if (buf_within_op_map.find(shared_name) != buf_within_op_map.end()) {
@@ -116,21 +122,29 @@ class StitchBufAlloc : public IRVisitor {
       buf_alloc_op_[ir_var] = info;
     }
 
-    for (const auto &it : reuse_map) {
+    for (const auto &it : reuse_map_) {
       std::string name = it.first;
       if (name == "EMPTY") {
         break;
       }
       auto alloc_info = it.second[0].as<StringImm>()->value;
       uint64_t alloc_size_per_block = it.second[1].as<IntImm>()->value / total_block_;
-      CHECK(outputs2args.find(alloc_info) != outputs2args.end());
-      CHECK(outputs2args.find(name) != outputs2args.end());
-      auto ir_var_reuse = outputs2args.at(alloc_info).as<BufferNode>()->name;
-      auto ir_var = outputs2args.at(name).as<BufferNode>()->name;
+      CHECK(outputs2args_.find(alloc_info) != outputs2args_.end());
+      CHECK(outputs2args_.find(name) != outputs2args_.end());
+      auto ir_var_reuse = outputs2args_.at(alloc_info).as<BufferNode>()->name;
+      auto ir_var = outputs2args_.at(name).as<BufferNode>()->name;
       auto alloc_stitch_info = buf_alloc_op_[ir_var_reuse];
       std::string shared_name = ir_var + "_shared";
 
-      if (buf_within_op_map.find(shared_name) != buf_within_op_map.end()) {
+      bool can_reuse = true;
+      for (auto &kv : store_load_) {
+        if (shared_name != kv.first->buffer_var->name_hint) continue;
+        for (auto &item : kv.second) {
+          if (alloc_info == item->buffer_var->name_hint) can_reuse = false;
+        }
+      }
+
+      if (can_reuse && buf_within_op_map.find(shared_name) != buf_within_op_map.end()) {
         // add replaced buffer into stitch_buffer_map.
         if (allocated_share_size_ >= alloc_size_per_block * data_type_.bytes()) {
           StitchBufferInfo info;
@@ -248,8 +262,27 @@ class StitchBufAlloc : public IRVisitor {
     IRVisitor::Visit(op->body);
   }
 
+  void Visit_(const Store *op) final {
+    collect_load_ = true;
+    IRVisitor::Visit(op->value);
+    store_load_[op] = loads_;
+    loads_.clear();
+    collect_load_ = false;
+  }
+
+  void Visit_(const Load *op) final { loads_.emplace_back(op); }
+
+ private:
+  std::vector<Stmt> stitch_irs_;
+  Map<std::string, Array<NodeRef>> alloc_map_;
+  Map<std::string, Array<NodeRef>> reuse_map_;
+  Map<std::string, Array<NodeRef>> global_stitch_;
+  std::unordered_map<std::string, NodeRef> outputs2args_;
   air::DataType data_type_;
   std::unordered_map<std::string, StitchBufferInfo> buf_alloc_op_;
+  bool collect_load_{false};
+  std::vector<const Load *> loads_;
+  std::unordered_map<const Store *, std::vector<const Load *>> store_load_;
   int ir_idx_ = 0;
   int total_block_ = 0;
   int block_extent_ = 1;
