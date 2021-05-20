@@ -13,11 +13,12 @@
 # limitations under the License.
 
 """generate numpy data for composite json"""
+import os
+import tempfile
 import json
 import logging
 import inspect
 import numpy as np
-import subprocess
 from tests.common.gen_random import random_gaussian
 
 
@@ -414,7 +415,9 @@ def gen_json_data(op_desc):
         import time
         op_hash = str(time.time())
 
-    uni_file_name = "json_data_" + op_hash + ".py"
+    uni_file_name_suffix = ".json_data_" + op_hash + ".py"
+    fd, uni_file_name = tempfile.mkstemp(suffix=uni_file_name_suffix)
+    os.close(fd)
     p = CodePrinter(uni_file_name)
     idx = 0
 
@@ -548,5 +551,5 @@ def gen_json_data(op_desc):
     with open(uni_file_name, 'r') as f:
         sent = f.read()
     exec(sent)
-    subprocess.run("rm %s" % uni_file_name, shell=True)
+    os.remove(uni_file_name)
     return input_for_mod, expect, output_indexes
