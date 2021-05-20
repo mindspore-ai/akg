@@ -32,6 +32,13 @@ from akg.global_configs import get_dump_ir_flag
 
 BINDS = "binds"
 
+
+def _get_target(device):
+    if device == "aicore":
+        return "cce"
+    return device
+
+
 @vc_util.check_input_type(list, (list, tuple), (list, tuple), (types.FunctionType, type(None)), str, str, dict)
 def op_build_to_func(opnames, computes, args, custom_schedule, device, kernel_name, attrs):
     """op_build_to_func"""
@@ -53,9 +60,9 @@ def op_build_to_func(opnames, computes, args, custom_schedule, device, kernel_na
             if attrs:
                 binds = attrs.pop(BINDS, None)
                 rst = akg.build_to_func(s, args, name=kernel_name, attrs=attrs, polyhedral=polyhedral,
-                                        binds=binds, target=device)
+                                        binds=binds, target=_get_target(device))
             else:
-                rst = akg.build_to_func(s, args, name=kernel_name, polyhedral=polyhedral, target=device)
+                rst = akg.build_to_func(s, args, name=kernel_name, polyhedral=polyhedral, target=_get_target(device))
 
     except Exception:
         logging.error(traceback.format_exc())
@@ -69,11 +76,11 @@ def op_build(opnames, computes, args, custom_schedule, device, kernel_name, attr
         tmp_rst = op_build_to_func(opnames, computes, args, custom_schedule, device, kernel_name, attrs)
         if tmp_rst is not None:
             try:
-                _api_internal._BuildToModule(tmp_rst, device)
+                _api_internal._BuildToModule(tmp_rst, _get_target(device))
             except Exception:
                 logging.error(traceback.format_exc())
                 return None
-        return None
+        return True
 
     if device == "cuda":
         kernel_meta_path = get_cuda_meta_path() 
