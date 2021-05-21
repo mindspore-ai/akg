@@ -21,6 +21,8 @@
  * \file cuda_module.cc
  * 2020.09.19 - Modify operator() for kc_air.
  * 2020.09.22 - Separate the implementation of KC and GPU.
+ * 2021.06.08 - While compiling the cuda, limit the register num for per thread to avoid out of
+ * memory problem.
  */
 #include "cuda_module.h"
 
@@ -29,6 +31,7 @@
 #include <tvm/runtime/registry.h>
 
 #include <array>
+#include <cmath>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -108,8 +111,12 @@ class CUDAModuleNode : public runtime::ModuleNode {
       CUjit_option options[1];
       options[0] = CU_JIT_MAX_REGISTERS;
       void* values[1];
-      long register_nums =
-          MAX_REGISTER_PER_THREAD_BLOCK / (wl.block_dim(0) * wl.block_dim(1) * wl.block_dim(2));
+      int total_threads = wl.block_dim(0) * wl.block_dim(1) * wl.block_dim(2);
+      int total_warps = std::ceil(float(total_threads) / float(WARP_SIZE));
+      int total_register_unit_nums = MAX_REGISTER_PER_THREAD_BLOCK / REGISTER_UNIT_IN_WARP;
+      int register_unit_nums_per_warp = total_register_unit_nums / total_warps;
+      long register_nums = (register_unit_nums_per_warp * REGISTER_UNIT_IN_WARP) / WARP_SIZE;
+
       values[0] = (void*)register_nums;
       CUDA_DRIVER_CALL(
           cuModuleLoadDataEx(&(module_[device_id]), data_.c_str(), 1, options, values));
@@ -169,6 +176,8 @@ class CUDAModuleNode : public runtime::ModuleNode {
   std::mutex mutex_;
   std::array<CUfunction, kMaxNumGPUs> func_;
   const int MAX_REGISTER_PER_THREAD_BLOCK = 65536;
+  const int REGISTER_UNIT_IN_WARP = 256;
+  const int WARP_SIZE = 32;
 };
 
 // a wrapped function class to get packed func.
