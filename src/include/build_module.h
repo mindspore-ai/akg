@@ -23,7 +23,7 @@
 #include "codegen/util.h"
 
 namespace akg {
-extern AttrMap global_attrs;
+extern AttrMap g_attrs;
 extern Array<NodeRef> g_external_call_name;
 
 /*
@@ -96,11 +96,39 @@ class BuildRst : public NodeRef {
   TVM_DEFINE_NODE_REF_METHODS(BuildRst, NodeRef, BuildRstNode);
 };
 
-NodeRef LowerAscend(Stmt &stmt, Array<NodeRef> &args, Array<NodeRef> &arg_list_0, Map<Tensor, Buffer> &binds,
-                    Map<Tensor, Buffer> &binds_0, const Array<NodeRef> &shape_vars, const std::string &name,
-                    bool simple_mode, bool polyhedral, bool tuning, const std::string &target,
-                    const BuildConfig &config);
+enum class LowerStage { BEGIN, TUNING, POLY, BEFORE_FLATTEN, FLATTEN, BEFORE_REWRITE, REWRITE, END };
 
+class LowerData {
+ public:
+  LowerData(Array<NodeRef> &args, Array<NodeRef> &arg_list_0, Map<Tensor, Buffer> &binds, Map<Tensor, Buffer> &binds_0,
+            const Array<NodeRef> &shape_vars, const std::string &name, bool simple_mode, bool polyhedral, bool tuning,
+            const std::string &target, const BuildConfig &config)
+      : args_(args),
+        arg_list_0_(arg_list_0),
+        binds_(binds),
+        binds_0_(binds_0),
+        shape_vars_(shape_vars),
+        name(name),
+        simple_mode_(simple_mode),
+        polyhedral_(polyhedral),
+        tuning_(tuning),
+        target_(target),
+        config_(config) {}
+  Array<NodeRef> &args_;
+  Array<NodeRef> &arg_list_0_;
+  Map<Tensor, Buffer> &binds_;
+  Map<Tensor, Buffer> binds_0_;
+  const Array<NodeRef> &shape_vars_;
+  std::string name;
+  bool simple_mode_{false};
+  bool polyhedral_{false};
+  bool tuning_{false};
+  std::string target_;
+  const BuildConfig &config_;
+};
+
+NodeRef LowerAscend(Stmt &stmt, LowerData &data, LowerStage begin = LowerStage::BEGIN,
+                    LowerStage end = LowerStage::END);
 void RenameBinds(Map<Tensor, Buffer> &binds, const BuildConfig &config, Array<NodeRef> &tensor_args_list,
                  Array<NodeRef> &buffer_args_list, Map<Tensor, Tensor> &tensor_replace);
 

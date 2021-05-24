@@ -215,8 +215,8 @@ class DetectCanEliminatedCopy : public IRVisitor {
   std::unordered_set<FunctionRef, NodeHash, NodeEqual> producers_;
   std::unordered_set<FunctionRef, NodeHash, NodeEqual> not_copy_;
   const Map<Tensor, Buffer> &extern_buffers_;
-  bool can_remove_broadcast_ = global_attrs.GetBoolAttr(kEnableRemoveBroadcastCopy, false);
-  bool enable_compute_in_place_ = global_attrs.GetBoolAttr(kEnableComputeInPlace, false);
+  bool can_remove_broadcast_ = g_attrs.GetBool(kEnableRemoveBroadcastCopy, false);
+  bool enable_compute_in_place_ = g_attrs.GetBool(kEnableComputeInPlace, false);
 };
 
 class EliminateCopyAndRealize : public IRMutator {

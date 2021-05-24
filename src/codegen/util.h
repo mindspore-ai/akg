@@ -121,11 +121,11 @@ class AttrMap : public Map<std::string, NodeRef> {
  public:
   using Map<std::string, NodeRef>::operator=;
 
-  bool GetBoolAttr(const std::string &attr_name, bool dft_value);
-  int GetIntAttr(const std::string &attr_name, int dft_value);
-  double GetFloatAttr(const std::string &attr_name, double dft_value);
-  bool GetStringAttr(const std::string &attr_name, std::string *attr_to_set);
-  std::string GetStringAttr(const std::string &attr_name, const std::string &dft_value);
+  bool GetBool(const std::string &attr_name, bool dft_value);
+  int GetInt(const std::string &attr_name, int dft_value);
+  double GetFloat(const std::string &attr_name, double dft_value);
+  bool GetStr(const std::string &attr_name, std::string *attr_to_set);
+  std::string GetStr(const std::string &attr_name, const std::string &dft_value);
 };
 
 class PassTimer {

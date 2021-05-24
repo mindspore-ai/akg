@@ -63,8 +63,7 @@ class PassMgr {
     int args_num = sizeof...(Args) + 1;
     args_values_.resize(args_num);
     args_types_.resize(args_num);
-    air::runtime::detail::for_each(TVMArgsSetter(args_values_.data(), args_types_.data()),
-                                    std::forward<Args>(args)...);
+    air::runtime::detail::for_each(TVMArgsSetter(args_values_.data(), args_types_.data()), std::forward<Args>(args)...);
   }
 
   ~PassMgr() = default;
@@ -85,18 +84,10 @@ class PassMgr {
     return res;
   }
 
-  static void ClearPassId() {
-    tl_pass_id_ = -1;
-  }
-  static std::string &GetDir() {
-    return tl_dump_ir_dir_;
-  }
-  static void SetDir(const std::string &str) {
-    tl_dump_ir_dir_ = str;
-  }
-  static void SetArgs(const air::Array<NodeRef> &args) {
-    tl_args_ = args;
-  }
+  static void ClearPassId() { tl_pass_id_ = -1; }
+  static std::string &GetDir() { return tl_dump_ir_dir_; }
+  static void SetDir(const std::string &str) { tl_dump_ir_dir_ = str; }
+  static void SetArgs(const air::Array<NodeRef> &args) { tl_args_ = args; }
 
  private:
   void InitializeSubName();
@@ -144,8 +135,11 @@ template <typename... Args>
 PassMgr make_pass(const std::string &func, Args &&... args) {
   return PassMgr(func, std::forward<Args>(args)...);
 }
-
+#define GET_VA_ARG_1(...) GET_VA_ARG_1_(__VA_ARGS__, )  // Make sure that also for 1 argument it works
+#define GET_VA_ARG_1_(a1, ...) a1
 #define NEXT_PASS(PASS, args...) make_pass("ir_pass." #PASS, args).enable_timer()
+#define NEXT_PASS_IF(condition, PASS, args...) \
+  (condition) ? make_pass("ir_pass." #PASS, args).enable_timer() : GET_VA_ARG_1(args)
 }  // namespace akg
 
 #endif  // CODEGEN_PASS_MGR_H_

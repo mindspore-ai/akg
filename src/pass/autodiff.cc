@@ -322,8 +322,8 @@ Tensor DiffBuildingBlock(const Tensor &output, const Tensor &input, const Tensor
   if (attrs.defined()) {
     in_attrs = attrs;
   }
-  bool ad_conv_enable_ = (in_attrs.GetIntAttr("ad_conv_enable", 0) != 0);
-  bool keep_dims = (in_attrs.GetIntAttr("keep_dims", 0) != 0);
+  bool ad_conv_enable_ = (in_attrs.GetInt("ad_conv_enable", 0) != 0);
+  bool keep_dims = (in_attrs.GetInt("keep_dims", 0) != 0);
 
   if (ad_conv_enable_) {
     Tensor back_conv = DiffConv(output, input, head, attrs, new_pld_array);
@@ -482,7 +482,7 @@ DifferentiationResult Differentiate(const Tensor &output, const Array<Tensor> &i
     in_attrs = attrs;
   }
 
-  bool tensor_optimize_ = (in_attrs.GetIntAttr("tensor_optimize", 0) != 0);
+  bool tensor_optimize_ = (in_attrs.GetInt("tensor_optimize", 0) != 0);
   if (!tensor_optimize_) {
     return DifferentiationResultNode::make(result, adjoints, summands);
   } else {  // Running TIL optimization passes

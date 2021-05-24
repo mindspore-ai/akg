@@ -250,7 +250,7 @@ class TilingAnalyzer {
         binds_(scop_info.user_config_.GetBind()),
         sch_(sch),
         scop_info_(scop_info),
-        is_retry_(!global_attrs.GetStringAttr(kErrorInfo, "").empty()) {
+        is_retry_(!g_attrs.GetStr(kErrorInfo, "").empty()) {
           if (scop_info.mmu_info_.IsGemm()) {
             op_type_ = GEMM_OP;
           } else if (scop_info.mmu_info_.IsConv()) {
