@@ -215,8 +215,7 @@ class FuseCheck {
     if (HasExternOp()) {
       return false;
     }
-    ReduceCheck();
-    if ((has_reduce_ && !has_matmul_) || !split_config_.empty()) {
+    if (ReduceCheck() || !split_config_.empty()) {
       OutputBroadcastRecord();
       return true;
     }
@@ -234,18 +233,26 @@ class FuseCheck {
     return false;
   }
 
-  void ReduceCheck() {
+  bool ReduceCheck() {
+    auto has_reduce = false;
+    auto max_inner_non_reduce_axis = 10240;
     for (const auto &s : sch_->stages) {
       auto op = s->op;
       CHECK(op.defined());
       auto compute_op = op.as<air::ComputeOpNode>();
       if (compute_op && !compute_op->reduce_axis.empty()) {
-        has_reduce_ = true;
+        // For the matmul, do not perform fuse
         if (IsMatmul(op)) {
-          has_matmul_ = true;
+          return false;
         }
+        // Restrictions related to the Shared memory
+        if (GetInnerNonReduceAxisLen(compute_op) > max_inner_non_reduce_axis) {
+          return false;
+        }
+        has_reduce = true;
       }
     }
+    return has_reduce;
   }
 
   void OutputBroadcastRecord() {
@@ -263,8 +270,6 @@ class FuseCheck {
  private:
   Schedule sch_;
   std::vector<size_t> split_config_;
-  bool has_reduce_{false};
-  bool has_matmul_{false};
   bool has_output_broadcast_{false};
   std::unordered_map<Operation, std::unordered_set<Operation>> op_input_ops;
   std::unordered_map<Operation, Operation> output_broadcast_pairs_;
@@ -380,6 +385,29 @@ class FuseCheck {
       }
       op_input_ops[op] = input_ops;
     }
+  }
+
+  int64_t GetInnerNonReduceAxisLen(const air::ComputeOpNode *reduce_op) {
+    auto reduce = reduce_op->body[0].as<Reduce>();
+    CHECK_NOTNULL(reduce);
+    auto reduce_axis = reduce_op->reduce_axis;
+    auto source = reduce->source[0];
+    auto source_call = source.as<Call>();
+    CHECK(source_call->func.defined());
+    auto source_tensor = Downcast<Operation>(source_call->func).output(0);
+    auto source_shape = source_tensor->shape;
+    CHECK_EQ(source_call->args.size(), source_shape.size());
+    std::unordered_set<std::string> reduce_axis_names;
+    for (auto ax : reduce_axis) {
+      reduce_axis_names.insert(ax->var->name_hint);
+    }
+    // If the last axis is a reduce axis, return 0
+    if (auto var = source_call->args[source_call->args.size() - 1].as<Variable>()) {
+      if (reduce_axis_names.count(var->name_hint)) {
+        return 0;
+      }
+    }
+    return GetExprIntVal(source_shape[source_shape.size() - 1]);
   }
 
   bool EnableBroadcast(const ComputeOpNode *op1, const ComputeOpNode *op2) {
