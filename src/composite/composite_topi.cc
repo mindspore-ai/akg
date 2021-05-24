@@ -389,29 +389,6 @@ TVM_REGISTER_GLOBAL("OneHot").set_body([](TVMArgs args, TVMRetValue *rv) {
   *rv = topi::one_hot(indices, on_value, off_value, depth, axis, indices->dtype);
 });
 
-TVM_REGISTER_GLOBAL("Equal").set_body([](TVMArgs args, TVMRetValue *rv) {
-  CHECK_GE(args.size(), 1);
-  auto inputs = args[0].operator Array<NodeRef>();
-  CHECK(inputs[0]->IsInstance<TensorNode>());
-  CHECK(inputs[1]->IsInstance<TensorNode>());
-  auto data1 = Downcast<Tensor>(inputs[0]);
-  auto data2 = Downcast<Tensor>(inputs[1]);
-
-  CHECK_EQ(data1->shape.size(), data2->shape.size())
-    << "x and y must have the same shape. Got different number of dimension: " << data1->shape.size() << " vs "
-    << data2->shape.size();
-  CHECK_EQ(data1->dtype, data2->dtype) << "x and y must have the same dtype: " << data1->dtype << " vs "
-                                       << data2->dtype;
-  Expr true_expr = make_const(data1->dtype, true);
-  Expr false_expr = make_const(data1->dtype, false);
-
-  std::string name = "T_equal_";
-  (void)name.append(data1->op->name).append("_").append(data2->op->name);
-  *rv = compute(
-    data1->shape,
-    [&](const Array<Var> &indices) { return Select::make(data1(indices) == data2(indices), true_expr, false_expr); },
-    name, topi::kBroadcast);
-});
 
 TVM_REGISTER_GLOBAL("Reciprocal").set_body([](TVMArgs args, TVMRetValue *rv) {
   auto call = [](const Tensor &tensor) { return topi::divide(make_const(tensor->dtype, 1.0), tensor); };
@@ -452,11 +429,17 @@ TVM_REGISTER_GLOBAL("Select").set_body([](TVMArgs args, TVMRetValue *rv) {
   }
 });
 
+TVM_REGISTER_GLOBAL("Equal").set_body([](TVMArgs args, TVMRetValue *rv) {
+  TOPI_TWO_INPUTS_CALL(args, rv, topi::equal);
+});
+
 TVM_REGISTER_GLOBAL("Greater").set_body([](TVMArgs args, TVMRetValue *rv) {
   TOPI_TWO_INPUTS_CALL(args, rv, topi::greater);
 });
 
-TVM_REGISTER_GLOBAL("Less").set_body([](TVMArgs args, TVMRetValue *rv) { TOPI_TWO_INPUTS_CALL(args, rv, topi::less); });
+TVM_REGISTER_GLOBAL("Less").set_body([](TVMArgs args, TVMRetValue *rv) { 
+  TOPI_TWO_INPUTS_CALL(args, rv, topi::less); }
+);
 
 TVM_REGISTER_GLOBAL("GreaterEqual").set_body([](TVMArgs args, TVMRetValue *rv) {
   TOPI_TWO_INPUTS_CALL(args, rv, topi::greater_equal);
