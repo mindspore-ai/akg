@@ -1879,6 +1879,19 @@
                     "file_name": "Fused_MatMul_AddN_split_11069740691590515616"
                 }
             }
+        },
+        "64_1908_16_16.1908_114_16_16.64_114_16_16.64_1908_16_16": {
+            "float32.float16-.float32": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 0,
+                        "dim": " 0 0 8 8 0 1 9 9 0 2 16 16 0 3 16 16 0 4 114 3",
+                        "enable_quadruple_buffer": true
+                    },
+                    "best_cycles": 74698.0,
+                    "file_name": "Fused_MatMul_AddN_split_8909469003338933420"
+                }
+            }
         }
     },
     "3.BatchMatMul12.Mul1.Add15.5": {
@@ -1901,6 +1914,151 @@
                         "dim": " 0 0 1 1 0 1 1 1 0 2 32 8 0 3 16 16 0 4 16 16 0 5 16 16 0 6 4 2"
                     },
                     "file_name": "Fused_BatchMatMul_FusedMulAdd_fusion_8913000759612651567"
+                }
+            }
+        }
+    },
+    "2.MatMul12_1_0.2": {
+        "1_2_16_16.64_2_16_16.64_1_16_16": {
+            "float16-.float32": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 0,
+                        "dim": " 0 0 8 8 0 1 16 16 0 2 16 16 0 3 2 2",
+                        "enable_quadruple_buffer": true
+                    },
+                    "best_cycles": 368.0,
+                    "file_name": "Fused_MatMul_split_9888644474126159511"
+                }
+            }
+        },
+        "256_768_16_16.64_768_16_16.64_256_16_16": {
+            "float16-.float32": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 0,
+                        "dim": " 0 0 16 16 0 1 8 8 0 2 16 16 0 3 16 16 0 4 8 4",
+                        "enable_quadruple_buffer": false
+                    },
+                    "best_cycles": 41371.0,
+                    "file_name": "Fused_MatMul_fusion_3244976103656363788"
+                }
+            }
+        },
+        "64_114_16_16-.64_64_16_16": {
+            "float16-.float32": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 0,
+                        "dim": " 0 0 16 16 0 1 8 8 0 2 16 16 0 3 16 16 0 4 2 2",
+                        "enable_quadruple_buffer": false
+                    },
+                    "best_cycles": 2603.0,
+                    "file_name": "Fused_MatMul_fusion_2828551933525646439"
+                }
+            }
+        },
+        "64_2_16_16-.64_64_16_16": {
+            "float16-.float32": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 0,
+                        "dim": " 0 0 4 4 0 1 8 8 0 2 16 16 0 3 16 16 0 4 2 2",
+                        "enable_quadruple_buffer": true
+                    },
+                    "best_cycles": 888.0,
+                    "file_name": "Fused_MatMul_split_2522166208238944936"
+                }
+            }
+        },
+        "64_768_16_16-.64_64_16_16": {
+            "float16-.float32": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 0,
+                        "dim": " 0 0 16 16 0 1 8 8 0 2 16 16 0 3 16 16 0 4 8 1",
+                        "enable_quadruple_buffer": true
+                    },
+                    "best_cycles": 11100.0,
+                    "file_name": "Fused_MatMul_fusion_16826016203563861927"
+                }
+            }
+        },
+        "64_768_16_16.256_768_16_16.256_64_16_16": {
+            "float16-.float32": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 0,
+                        "dim": " 0 0 16 16 0 1 8 8 0 2 16 16 0 3 16 16 0 4 8 1",
+                        "enable_quadruple_buffer": true
+                    },
+                    "best_cycles": 44707.0,
+                    "file_name": "Fused_MatMul_fusion_7020400202049347164"
+                }
+            }
+        }
+    },
+    "3.MatMul23_0_0.AddN1.Cast1.45": {
+        "256_768_16_16.64_256_16_16.64_768_16_16--": {
+            "float16---.float32": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 0,
+                        "dim": " 0 0 8 8 0 1 16 16 0 2 16 16 0 3 16 16 0 4 8 1",
+                        "enable_quadruple_buffer": false
+                    },
+                    "best_cycles": 52000.0,
+                    "file_name": "Fused_MatMul_AddN_Cast_fusion_8710374695486129823"
+                }
+            }
+        }
+    },
+    "5.MatMul12_0_0.AddN1.Cast1.67": {
+        "64_768_16_16---.64_64_16_16.64_768_16_16-": {
+            "float16-----.float32": {
+                "metadata": {
+                    "attrs": {
+                        "bypass": 0,
+                        "dim": " 0 0 16 8 0 1 16 4 0 2 16 16 0 3 16 16 0 4 64 8",
+                        "enable_quadruple_buffer": true
+                    },
+                    "best_cycles": 17141.0,
+                    "file_name": "Fused_MatMul_AddN_Cast_split_9346076786807430457"
+                }
+            }
+        }
+    },
+    "2.Mul12.TransData1.23": {
+        "256_64_16_16.1.256_64_16_16.1024_4096": {
+            "float32---": {
+                "metadata": {
+                    "attrs": {
+                        "dim": " 0 0 4 1 0 1 8 1 0 2 16 1 0 3 2 1"
+                    },
+                    "best_cycles": 2821.0,
+                    "file_name": "Fused_Mul_TransData_fusion_9234057221823416594"
+                }
+            }
+        },
+        "64_256_16_16.1.64_256_16_16.4096_1024": {
+            "float32---": {
+                "metadata": {
+                    "attrs": {
+                        "dim": " 0 0 4 1 0 1 8 1 0 2 16 1 0 3 3 1"
+                    },
+                    "best_cycles": 2874.0,
+                    "file_name": "Fused_Mul_TransData_fusion_8065217199978576853"
+                }
+            }
+        },
+        "64_64_16_16.1.64_64_16_16.1024_1024": {
+            "float32---": {
+                "metadata": {
+                    "attrs": {
+                        "dim": " 0 0 4 1 0 1 12 1 0 2 16 1 0 3 3 1"
+                    },
+                    "best_cycles": 1328.0,
+                    "file_name": "Fused_Mul_TransData_fusion_17956360139806334361"
                 }
             }
         }
