@@ -782,7 +782,6 @@ void GpuStrategy::InnerThreadOuterBlock() {
     int64_t shape;
     std::tie(axis, shape) = pending_axes_[i];
     auto idx = indexing.size() - 1 - (pending_axes_.size() - 1 - i);
-    idx = reverse_binding_ ? std::min(indexing.size(), block_limit_.size()) - 1 - idx : idx;
     auto rest_blocks = idx < block_limit_.size() ? std::min(block_limit_[idx], axis->block_constraints.map_extent_) : 1;
     ss << "axis " << axis->index << "_" << axis->dim_axis << " shape = " << shape << ", block_idx = " << idx
        << ", rest blocks = " << rest_blocks;
@@ -832,12 +831,6 @@ void GpuStrategy::SetMappingConfig() {
   std::string block_str = "";
   std::string thread_str = "";
   if (reverse_binding_) {
-    for (int i = 0; i < static_cast<int>(block_cfg_.size()); ++i) {
-      if (i >= block_count_) {
-        continue;
-      }
-      block_str += (std::to_string(block_cfg_[i]) + " ");
-    }
     // pad binding to at least two dim to bind reduce axis at thread y
     for (size_t i = thread_cfg_.size(); i < 2; ++i) {
       thread_cfg_.emplace_back(1);
@@ -847,19 +840,19 @@ void GpuStrategy::SetMappingConfig() {
       thread_str += (std::to_string(thread_cfg_[i]) + " ");
     }
   } else {
-    // pad binding to at least two dim to bind reduce axis at block y
-    for (size_t i = block_cfg_.size(); i < 2; ++i) {
-      block_cfg_.emplace_back(1);
-    }
-    for (int i = block_cfg_.size() - 1; i >= 0; --i) {
-      if (i >= block_count_) {
-        continue;
-      }
-      block_str += (std::to_string(block_cfg_[i]) + " ");
-    }
     for (const auto &size : thread_cfg_) {
       thread_str += (std::to_string(size) + " ");
     }
+  }
+
+  for (size_t i = block_cfg_.size(); i < 2; ++i) {
+    block_cfg_.emplace_back(1);
+  }
+  for (int i = block_cfg_.size() - 1; i >= 0; --i) {
+    if (i >= block_count_) {
+      continue;
+    }
+    block_str += (std::to_string(block_cfg_[i]) + " ");
   }
 
   ss << "Block config = " << block_str;
