@@ -25,7 +25,7 @@
 namespace akg {
 class Emitter : public IRVisitor {
  public:
-  Emitter(FuncTensorMap &tensor_map, BuildOpt &opt) : tensor_map_(tensor_map), opt_(opt) {}
+  Emitter(BuildOpt &opt) : opt_(opt) {}
 
  private:
   void Visit_(const AttrStmt *op) override {
@@ -45,11 +45,11 @@ class Emitter : public IRVisitor {
     Array<NodeRef> real_input;
     for (const auto &input : inputs) {
       if (auto c = input.as<Call>()) {
-        if (tensor_map_.count(c->func) == 0) {
+        if (opt_.tensor_map.count(c->func) == 0) {
           Tensor t = placeholder(c->args, c->type, c->name);
-          tensor_map_[c->func] = t;
+          opt_.tensor_map[c->func] = t;
         }
-        real_input.push_back(tensor_map_[c->func]);
+        real_input.push_back(opt_.tensor_map[c->func]);
       } else {
         real_input.push_back(input);
       }
@@ -67,7 +67,7 @@ class Emitter : public IRVisitor {
       EmitAssign(t, inputs[0]);
     }
 
-    tensor_map_[op->func] = t;
+    opt_.tensor_map[op->func] = t;
   }
 
   void EmitAssign(Tensor &t, const Expr &input) {
@@ -76,33 +76,32 @@ class Emitter : public IRVisitor {
     auto bind_input = compute(
       t->shape, [&](const Array<Var> &indices) { return t(indices); },
       "assign_tensor_" + std::to_string(assign_count_));
-    tensor_map_[bind_input->op] = bind_input;
+    opt_.tensor_map[bind_input->op] = bind_input;
     opt_.sch_only.emplace_back(bind_input);
     opt_.inplaces[bind_input->op] = input;
     assign_count_++;
   }
 
  private:
-  FuncTensorMap &tensor_map_;
   BuildOpt &opt_;
   Map<std::string, NodeRef> op_attrs_;
   int assign_count_{0};
 };
 
-void CollectBinds(FuncTensorMap &tensor_map, BuildInfo &info) {
+void CollectBinds(BuildInfo &info) {
   for (const auto &kv : info.opt.inplaces) {
-    CHECK(tensor_map.count(kv.first)) << kv.first->func_name() << " not in tensor map";
-    CHECK(tensor_map.count(kv.second.as<Call>()->func))
+    CHECK(info.opt.tensor_map.count(kv.first)) << kv.first->func_name() << " not in tensor map";
+    CHECK(info.opt.tensor_map.count(kv.second.as<Call>()->func))
       << kv.second.as<Call>()->func->func_name() << " not in tensor map";
-    auto first = tensor_map[kv.first];
-    auto second = tensor_map[kv.second.as<Call>()->func];
+    auto first = info.opt.tensor_map[kv.first];
+    auto second = info.opt.tensor_map[kv.second.as<Call>()->func];
     auto buf = decl_buffer(second->shape, second->dtype, second->op->name);
     info.in_binds.Set(first, buf);
     info.in_binds.Set(second, buf);
   }
 }
 
-void ProcessSames(FuncTensorMap &tensor_map, BuildOpt &opt) {
+void ProcessSames(BuildOpt &opt) {
   // b = func(a)
   // c = InplaceAssign(x, y, b)     c = b
   // d = InplaceAssign(i, j, c)     d = c
@@ -110,8 +109,8 @@ void ProcessSames(FuncTensorMap &tensor_map, BuildOpt &opt) {
   while (!opt.sames.empty() && changed) {
     changed = false;
     for (auto it = opt.sames.begin(); it != opt.sames.end();) {
-      if (tensor_map.count(it->second)) {
-        tensor_map[it->first] = tensor_map[it->second];
+      if (opt.tensor_map.count(it->second)) {
+        opt.tensor_map[it->first] = opt.tensor_map[it->second];
         it = opt.sames.erase(it);
         changed = true;
       } else {
@@ -121,24 +120,24 @@ void ProcessSames(FuncTensorMap &tensor_map, BuildOpt &opt) {
   }
 }
 
-void CollectInputs(FuncTensorMap &tensor_map, BuildInfo &info) {
+void CollectInputs(BuildInfo &info) {
   for (const auto &input : info.input_names) {
     auto iter =
-      std::find_if(tensor_map.begin(), tensor_map.end(),
+      std::find_if(info.opt.tensor_map.begin(), info.opt.tensor_map.end(),
                    [&input](const std::pair<const FunctionRef, Tensor> &kv) { return kv.first->func_name() == input; });
-    CHECK(iter != tensor_map.end()) << "input Tensor " << input << " not built.";
+    CHECK(iter != info.opt.tensor_map.end()) << "input Tensor " << input << " not built.";
     LOG(INFO) << "input: " << input << " " << iter->second;
     info.args.push_back(iter->second);
   }
 }
 
-void CollectOutputsAndComputes(FuncTensorMap &tensor_map, BuildInfo &info) {
+void CollectOutputsAndComputes(BuildInfo &info) {
   int count = 0;
   for (const auto &output : info.output_names) {
     auto iter = std::find_if(
-      tensor_map.begin(), tensor_map.end(),
+      info.opt.tensor_map.begin(), info.opt.tensor_map.end(),
       [&output](const std::pair<const FunctionRef, Tensor> &kv) { return kv.first->func_name() == output; });
-    CHECK(iter != tensor_map.end()) << "output Tensor " << output << " not built.";
+    CHECK(iter != info.opt.tensor_map.end()) << "output Tensor " << output << " not built.";
     LOG(INFO) << "output: " << output << " " << iter->second;
     info.tensors.push_back(iter->second);
     if (!info.opt.fakeout.count(iter->first)) {
@@ -151,10 +150,10 @@ void CollectOutputsAndComputes(FuncTensorMap &tensor_map, BuildInfo &info) {
     }
   }
   for (const auto &inplace_itr : info.opt.inplaces) {
-    auto iter =
-      std::find_if(tensor_map.begin(), tensor_map.end(), [&inplace_itr](std::pair<const FunctionRef, Tensor> &kv) {
-        return kv.first->func_name() == inplace_itr.first->func_name();
-      });
+    auto iter = std::find_if(info.opt.tensor_map.begin(), info.opt.tensor_map.end(),
+                             [&inplace_itr](std::pair<const FunctionRef, Tensor> &kv) {
+                               return kv.first->func_name() == inplace_itr.first->func_name();
+                             });
     if (std::find_if(info.tensors.begin(), info.tensors.end(),
                      [&iter](const Tensor &t) { return t == iter->second; }) == info.tensors.end()) {
       info.tensors.push_back(iter->second);
@@ -168,24 +167,24 @@ void CollectSchOnlyComputes(BuildInfo &info) {
   }
 }
 
-void CollectIsolatedInplaceTensor(BuildOpt &opt, FuncTensorMap &tensor_map) {
+void CollectIsolatedInplaceTensor(BuildOpt &opt) {
   // tensors which have never be used before is isolated and not be created,
   // so we should create them after emit.
   for (const auto &kv : opt.inplaces) {
     auto c = kv.second.as<Call>();
-    if (tensor_map.find(c->func) == tensor_map.end()) {
-      tensor_map[c->func] = placeholder(c->args, c->type, c->name);
+    if (opt.tensor_map.find(c->func) == opt.tensor_map.end()) {
+      opt.tensor_map[c->func] = placeholder(c->args, c->type, c->name);
     }
   }
 }
 
-void CollectBuildInfo(FuncTensorMap &tensor_map, BuildInfo &info) {
+void CollectBuildInfo(BuildInfo &info) {
   DumpBuildInfo(info);
-  CollectIsolatedInplaceTensor(info.opt, tensor_map);
-  CollectBinds(tensor_map, info);
-  ProcessSames(tensor_map, info.opt);
-  CollectInputs(tensor_map, info);
-  CollectOutputsAndComputes(tensor_map, info);
+  CollectIsolatedInplaceTensor(info.opt);
+  CollectBinds(info);
+  ProcessSames(info.opt);
+  CollectInputs(info);
+  CollectOutputsAndComputes(info);
   CollectSchOnlyComputes(info);
   DumpBuildInfo(info);
 }
@@ -197,10 +196,9 @@ void ExtractBuildInfo(const picojson::value &input_json, BuildInfo &info) {
   // 2. optimize stmt
   stmt = Optimize(stmt, info);
   // 3. emit stmt by topi
-  FuncTensorMap tensor_map;
-  Emitter(tensor_map, info.opt).Visit(stmt);
+  Emitter(info.opt).Visit(stmt);
   // 4. collect build info: args, compute, binds
-  CollectBuildInfo(tensor_map, info);
+  CollectBuildInfo(info);
 }
 
 Stmt String2LowerStmtSimple(const StringImm *json_str, const Map<std::string, NodeRef> &attrs, bool poly,
@@ -541,7 +539,7 @@ class CompositeJsonListGpu : public CompositeJsonList {
     auto reuse_map = Downcast<Map<std::string, Array<NodeRef>>>(reuse_map_list_[block_json_idx_]);
     auto clean_op_map = Downcast<Map<std::string, Array<NodeRef>>>(clean_op_map_list_[block_json_idx_]);
     StitchAttrInfo stitch_attr;
-    std::vector<Stmt> stitch_irs = LowerStitchIRs(block_json, stitch_attr, attrs);
+    std::vector<Stmt> stitch_irs = LowerStitchIRs(block_json, stitch_attr, attrs, alloc_map);
     StitchBufAlloc buf_manager(stitch_irs, alloc_map, reuse_map, clean_op_map, outputs2args_);
     buf_manager.BufferAllocReuse();
     GetRealOutputs();
@@ -551,11 +549,35 @@ class CompositeJsonListGpu : public CompositeJsonList {
   }
 
   Stmt String2LowerStmt(const StringImm *json_str, const Map<std::string, NodeRef> &attrs) override {
-    return String2LowerStmt(json_str, attrs, 0, 0, false, true);
+    Map<std::string, Array<NodeRef>> alloc_map;
+    return String2LowerStmt(json_str, attrs, 0, 0, false, true, alloc_map);
   }
 
+  Map<std::string, NodeRef> SetSharedMemoryTensors(const Map<std::string, NodeRef> &attrs, const BuildInfo &info,
+                                                   const Map<std::string, Array<NodeRef>> &alloc_map) {
+    Map<std::string, NodeRef> new_attrs = attrs;
+    std::string shared_name;
+    for (auto &input : info.input_names) {
+      if (alloc_map.count(input)) {
+        shared_name += input + ", ";
+      }
+    }
+    for (auto &output : info.output_names) {
+      if (alloc_map.count(output)) {
+        auto iter = std::find_if(
+          info.opt.tensor_map.begin(), info.opt.tensor_map.end(),
+          [&output](const std::pair<const FunctionRef, Tensor> &kv) { return kv.first->func_name() == output; });
+        CHECK(iter != info.opt.tensor_map.end()) << "output Tensor " << output << " not built.";
+        LOG(INFO) << "output: " << output << " " << iter->second;
+        shared_name += iter->second->op->func_name() + ", ";
+      }
+    }
+    new_attrs.Set("shared_memory_tensors", Expr(shared_name));
+    return new_attrs;
+  }
   Stmt String2LowerStmt(const StringImm *json_str, const Map<std::string, NodeRef> &attrs, int grid_dims,
-                        int block_dims, bool buffer_stitch, bool fold_dim) {
+                        int block_dims, bool buffer_stitch, bool fold_dim,
+                        const Map<std::string, Array<NodeRef>> &alloc_map) {
     CHECK(json_str);
     picojson::value v = String2Json(json_str->value);
     BuildInfo info;
@@ -577,8 +599,9 @@ class CompositeJsonListGpu : public CompositeJsonList {
     Array<NodeRef> args, shape_vars, arg_list_0;
     Map<Tensor, Buffer> binds, binds_0;
     std::vector<size_t> split_index;
-    auto stmt = LowerStmt(sch, info.args, shape_vars, distinct_name, info.in_binds, attrs, false, poly_, false, "cuda",
-                          config, &args, &arg_list_0, &binds, &binds_0, &split_index, true);
+    auto new_attrs = SetSharedMemoryTensors(attrs, info, alloc_map);
+    auto stmt = LowerStmt(sch, info.args, shape_vars, distinct_name, info.in_binds, new_attrs, false, poly_, false,
+                          "cuda", config, &args, &arg_list_0, &binds, &binds_0, &split_index, true);
     size_t count = 0;
     for (const auto &x : arg_list_0) {
       auto buffer = x.as<BufferNode>();
@@ -594,7 +617,8 @@ class CompositeJsonListGpu : public CompositeJsonList {
   }
 
   std::vector<Stmt> LowerStitchIRs(const NodeRef &block_json, StitchAttrInfo &stitch_attr,
-                                   const Map<std::string, NodeRef> &attrs) {
+                                   const Map<std::string, NodeRef> &attrs,
+                                   const Map<std::string, Array<NodeRef>> &alloc_map) {
     std::vector<Stmt> stitch_irs;
     std::vector<Expr> loop_extent_array;
     std::vector<GridBlockDims> dim_array;
@@ -626,7 +650,7 @@ class CompositeJsonListGpu : public CompositeJsonList {
       new_attrs.Set("enable_stitch_fusion", Expr(true));
 
       auto single_ir = String2LowerStmt(stitch_json.as<StringImm>(), new_attrs, ir_attr_info.grid_dims,
-                                        ir_attr_info.block_dims, true, fold_dim_);
+                                        ir_attr_info.block_dims, true, fold_dim_, alloc_map);
       stitch_irs.emplace_back(InsertSync(single_ir));
     }
     stitch_attr.type_array = ir_type_array;

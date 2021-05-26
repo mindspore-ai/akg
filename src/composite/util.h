@@ -73,6 +73,7 @@ struct BuildOpt {
   FuncRefMap sames;              // the tensors which are same
   FuncRefSet fakeout;            // the tensors which are not output
   std::vector<Tensor> sch_only;  // the tensors which should only used in sch, not output
+  FuncTensorMap tensor_map;
 
   std::string target;
   bool stitch{false};
