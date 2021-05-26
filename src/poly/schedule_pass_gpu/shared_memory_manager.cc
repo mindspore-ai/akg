@@ -445,7 +445,6 @@ void SharedMemoryManager::CreateClusterList(const isl::schedule_node &node, cons
   }
 
   if (!configed_tensors_.empty()) {
-    id_sets.clear();
     for (const auto &item : configed_tensors_) {
       if (id_sets.count(item) == 0) {
         id_sets.emplace(item);

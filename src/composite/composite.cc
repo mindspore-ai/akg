@@ -559,7 +559,7 @@ class CompositeJsonListGpu : public CompositeJsonList {
     std::string shared_name;
     for (auto &input : info.input_names) {
       if (alloc_map.count(input)) {
-        shared_name += input + ", ";
+        shared_name += input + " ";
       }
     }
     for (auto &output : info.output_names) {
@@ -569,7 +569,7 @@ class CompositeJsonListGpu : public CompositeJsonList {
           [&output](const std::pair<const FunctionRef, Tensor> &kv) { return kv.first->func_name() == output; });
         CHECK(iter != info.opt.tensor_map.end()) << "output Tensor " << output << " not built.";
         LOG(INFO) << "output: " << output << " " << iter->second;
-        shared_name += iter->second->op->func_name() + ", ";
+        shared_name += iter->second->op->func_name() + " ";
       }
     }
     new_attrs.Set("shared_memory_tensors", Expr(shared_name));
