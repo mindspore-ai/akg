@@ -15,6 +15,7 @@
 # limitations under the License.
 
 """composite topi"""
+import akg.topi as topi
 from akg import tvm
 from akg.utils.format_transform import get_const
 from akg.utils import validation_check as vc_util
@@ -46,6 +47,56 @@ def elem_all(inputs, attrs):
     in_tensor = inputs[0]
     return tvm.extern((1,), [in_tensor], lambda ins, outs : kernel_ir(outs[0], ins[0]),
                       name = "elemall", dtype=in_tensor.dtype)
+
+@tvm.register_func("PadAkg")
+def pad(inputs, attrs):
+    if len(inputs) != 1:
+        raise ValueError("Num of inputs should be 1, but got %d." % len(inputs))
+    in_tensor = inputs[0]
+    attrs = {k: v for k, v in attrs.items()}
+    pad_before = attrs["head"]
+    pad_after = attrs["tail"]
+    pad_value = attrs["pad_val"]
+    n = len(in_tensor.shape)
+    if len(pad_before) != n or len(pad_after) != n:
+        raise ValueError(
+            "Input dimensions and pad dimensions dismatch: %d vs %d vs %d" % (n, len(pad_before), len(pad_after)))
+    output_name = "T_pad_" + in_tensor.op.name
+    return topi.nn.pad(in_tensor, pad_before, pad_after, pad_value, name=output_name)
+
+@tvm.register_func("UnPadAkg")
+def unpad(inputs, attrs):
+    def kernel_ir(dst, data):
+        ib = tvm.ir_builder.create()
+        original_shape_ = [get_const(x) for x in data.shape]
+        m0, n0 = original_shape_[-2:]
+        unpad_shape_ = [get_const(x) for x in unpad_after]
+        m1, n1 = unpad_shape_[-2:]
+        batch_dims = data.shape[:-2]
+
+        with ib.for_range_n(batch_dims, "bs") as i:
+            with ib.for_range(0, m0 - m1) as i_m1:
+                with ib.for_range(0, n0 - n1) as i_n1:
+                    output_args = i + [i_m1, i_n1]
+                    input_args = i + [i_m1, i_n1]
+                    ib.store(dst, output_args, ib.load(data, input_args))
+        return ib.get()
+
+    if len(inputs) != 1:
+        raise ValueError("Num of inputs should be 1, but got %d." % len(inputs))
+
+    in_tensor = inputs[0]
+    attrs = {k: v for k, v in attrs.items()}
+    n = len(in_tensor.shape)
+    unpad_after = attrs["tail"]
+    if n < 2:
+        raise ValueError("dimensions of input should greater than 1, but got %d." % n)
+    if len(unpad_after) != n:
+        raise ValueError("Input dimensions and unpad dimensions dismatch: %d vs %d" % (n, len(unpad_after)))
+    output_shape = [in_tensor.shape[i] - unpad_after[i] for i in range(0, n)]
+    output_name = "T_unpad_" + in_tensor.op.name
+    return tvm.extern(output_shape, [in_tensor], lambda ins, outs: kernel_ir(outs[0], ins[0]),
+        name = output_name, dtype=[in_tensor.dtype])
 
 
 @tvm.register_func("TransData")

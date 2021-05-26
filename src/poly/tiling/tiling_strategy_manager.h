@@ -303,17 +303,20 @@ class GpuStrategy : public TilingStrategy {
     BITWISE_REDUCTION,
     MATMUL,
     TRANSPOSE_OP,
+    PAD_OP,
     CUSTOM_CONFIG,
     TEMPLATE_BULK
   };
   void AddNpuConstraint();
   void AddGpuConstraint();
   std::vector<TileAxis::MappingConstraint> thread_binding_spaces_;  // [thread.x, thread.y, thread.z]
-  std::vector<TileAxis::MappingConstraint> block_binding_spaces_;  // [block.x, block.y, block.z]
+  std::vector<TileAxis::MappingConstraint> block_binding_spaces_;   // [block.x, block.y, block.z]
 
  private:
   void DetermineTemplate();
   void AdjustThreadMappingLimit();
+
+  void PadSpeedup();
 
   void InjectiveSpeedup();
 
@@ -348,7 +351,6 @@ class GpuStrategy : public TilingStrategy {
   // Step 3. Transform list of integer into string mapping config.
   void SetMappingConfig();
 
-
   int GetLocalAllocBufCount();
   Template template_{Template::DEFAULT};
   bool is_reduce_op_[TEMPLATE_BULK] = {false, false, true, true, true, false};
@@ -365,9 +367,9 @@ class GpuStrategy : public TilingStrategy {
   bool need_reverse_{false};
   bool reverse_binding_{false};
   int64_t fused_size_{1};
-  std::unordered_map<int, std::string> template_map_ = {{0, "DEFAULT"},   {1, "PURE_ELEM"},    {2, "BROADCAST_OP"},
-                                                        {3, "REDUCTION"}, {4, "ALL_REDUCE"},   {5, "BITWISE_REDUCTION"},
-                                                        {6, "MATMUL"},    {7, "TRANSPOSE_OP"}, {8, "CUSTOM_CONFIG"}};
+  std::unordered_map<int, std::string> template_map_ = {
+    {0, "DEFAULT"},           {1, "PURE_ELEM"}, {2, "BROADCAST_OP"}, {3, "REDUCTION"}, {4, "ALL_REDUCE"},
+    {5, "BITWISE_REDUCTION"}, {6, "MATMUL"},    {7, "TRANSPOSE_OP"}, {8, "PAD_OP"},    {9, "CUSTOM_CONFIG"}};
 };
 
 class MulticoreStrategy {
@@ -385,7 +387,7 @@ class MulticoreStrategy {
 
 class TilingPriorityScorer {
  public:
- TilingPriorityScorer(TilingAnalyzer &analyzer) : analyzer_(analyzer), logger_(analyzer.GetTileLogger()) {}
+  TilingPriorityScorer(TilingAnalyzer &analyzer) : analyzer_(analyzer), logger_(analyzer.GetTileLogger()) {}
   ~TilingPriorityScorer() {}
 
   /*

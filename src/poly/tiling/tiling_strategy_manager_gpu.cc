@@ -495,9 +495,12 @@ void GpuStrategy::ApplyCustomConstraint() {
 
 void GpuStrategy::AddGpuConstraint() {
   InitMappingLimit();
-  if (!analyzer_->scop_info_.user_config_.GetIsTuning() &&
-      (template_ == Template::BROADCAST_OP || template_ == Template::CUSTOM_CONFIG)) {
-    BroadcastSpeedup();
+  if (!analyzer_->scop_info_.user_config_.GetIsTuning()) {
+    if (template_ == Template::BROADCAST_OP || template_ == Template::CUSTOM_CONFIG) {
+      BroadcastSpeedup();
+    } else if (template_ == Template::PAD_OP) {
+      PadSpeedup();
+    }
   }
   BuildAxesQueue();
   if (analyzer_->scop_info_.user_config_.GetIsTuning()) {
@@ -992,6 +995,11 @@ void GpuStrategy::DetermineTemplate() {
     return;
   }
 
+  if (!analyzer_->GetAxesOfAttr(AttrInfo{AT_OP_TYPE, AT_PAD}).empty()) {
+    template_ = Template::PAD_OP;
+    return;
+  }
+
   auto reduce_axes_ = analyzer_->GetAxesOfAttr(AT_REDUCE_AXIS);
 
   if (reduce_axes_.empty()) {
@@ -1202,6 +1210,32 @@ void GpuStrategy::InjectiveSpeedup() {
   analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
 
   WriteConfigBack();
+}
+
+void GpuStrategy::PadSpeedup() {
+  analyzer_->GetTileLogger().AppendLine(GPU_MAPPING, "Detect PAD");
+  std::stringstream ss;
+  int64_t problem_size = 1;
+  std::vector<TileAxis *> axes;
+  analyzer_->ForEachAxisTopDown([this, &problem_size, &axes](TileAxis *axis) {
+    if (axis == analyzer_->RootAxis() || axis->range_extent.as<IntImm>() == nullptr) {
+      return;
+    }
+    problem_size *= axis->range_extent.as<IntImm>()->value;
+    axes.emplace_back(axis);
+  });
+  auto coef = std::max<int64_t>(1, int((problem_size / warp_sizes_) / (num_sm_ * 5)));
+  ss << "Total reduce coef = " << coef;
+  analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
+  for (int i = axes.size() - 1; i > 0; --i) {
+    auto axis = axes[i];
+    axis->thread_constraints.item_process_ = std::max<int64_t>(
+      min_elem_for_io_bound_, analyzer_->FindDivisibleTilingFactor(coef, axis->range_extent.as<IntImm>()->value));
+    coef = std::max<int64_t>(1, coef / axis->thread_constraints.item_process_);
+    ss << "axis " << axis->index << "_" << axis->dim_axis
+       << " set for-loop size = " << axis->thread_constraints.item_process_ << ", update coef = " << coef;
+    analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
+  }
 }
 
 void GpuStrategy::BroadcastSpeedup() {
