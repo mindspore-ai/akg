@@ -57,28 +57,24 @@ class TileSpaceCollector {
     for (size_t i = 0; i < band_size; ++i) {
       result_.emplace_back(std::vector<Result>());
       CollectTileAxisTopDown(i);
-      if (level_ >= DUMP_LEVEL_CANDIDATE || band_size != 1) {
-        static_cast<void>(ScanDown(0, i));
-        LOG(INFO) << "Band = " << i << ", tiling space size: " << result_.back().size();
-      }
+      static_cast<void>(ScanDown(0, i));
+      LOG(INFO) << "Band = " << i << ", tiling space size: " << result_.back().size();
     }
 
     if (band_size == 1) {  // fast path
       int tile_size = analyzer_.GetNumOfAxisInBand(0);
       CollectConstraint(tile_size, band_size);
-      if (level_ >= DUMP_LEVEL_CANDIDATE) {
-        auto &result = result_[0];
-        space_->tiling_candidate = air::runtime::NDArray::Empty(
-          {static_cast<int64_t>(result.size()), static_cast<int64_t>(tile_size)}, type, ctx);
-        auto spaceTilingDlPack = space_->tiling_candidate.ToDLPack();
-        auto ptr = reinterpret_cast<int *>(spaceTilingDlPack->dl_tensor.data);
-        for (auto i = 0; i < static_cast<int>(result.size()); ++i) {
-          for (int j = 0; j < tile_size; ++j) {
-            ptr[i * tile_size + j] = result[i].tile[j];
-          }
+      auto &result = result_[0];
+      space_->tiling_candidate = air::runtime::NDArray::Empty(
+        {static_cast<int64_t>(result.size()), static_cast<int64_t>(tile_size)}, type, ctx);
+      auto spaceTilingDlPack = space_->tiling_candidate.ToDLPack();
+      auto ptr = reinterpret_cast<int *>(spaceTilingDlPack->dl_tensor.data);
+      for (auto i = 0; i < static_cast<int>(result.size()); ++i) {
+        for (int j = 0; j < tile_size; ++j) {
+          ptr[i * tile_size + j] = result[i].tile[j];
         }
-        delete spaceTilingDlPack;
       }
+      delete spaceTilingDlPack;
     } else {
       std::vector<int> band_idx;
       std::vector<std::vector<int>> result;
@@ -91,19 +87,17 @@ class TileSpaceCollector {
       std::vector<int> tile(tile_size, 0);
       CombineBand(0, band_idx, tile, result);
       CollectConstraint(tile_size, band_size);
-      if (level_ >= DUMP_LEVEL_CANDIDATE) {
-        FreeResult();
-        space_->tiling_candidate = air::runtime::NDArray::Empty(
-          {static_cast<int64_t>(result.size()), static_cast<int64_t>(tile_size)}, type, ctx);
-        auto spaceTilingDlPack = space_->tiling_candidate.ToDLPack();
-        auto ptr2 = reinterpret_cast<int *>(spaceTilingDlPack->dl_tensor.data);
-        for (auto i = 0; i < static_cast<int>(result.size()); ++i) {
-          for (int j = 0; j < tile_size; ++j) {
-            ptr2[i * tile_size + j] = result[i][j];
-          }
+      FreeResult();
+      space_->tiling_candidate = air::runtime::NDArray::Empty(
+        {static_cast<int64_t>(result.size()), static_cast<int64_t>(tile_size)}, type, ctx);
+      auto spaceTilingDlPack = space_->tiling_candidate.ToDLPack();
+      auto ptr2 = reinterpret_cast<int *>(spaceTilingDlPack->dl_tensor.data);
+      for (auto i = 0; i < static_cast<int>(result.size()); ++i) {
+        for (int j = 0; j < tile_size; ++j) {
+          ptr2[i * tile_size + j] = result[i][j];
         }
-        delete spaceTilingDlPack;
       }
+      delete spaceTilingDlPack;
     }
   }
 

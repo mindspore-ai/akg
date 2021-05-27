@@ -607,7 +607,7 @@ NodeRef LowerFunc(Stmt &stmt, const std::string &name, const BuildConfig &config
 }
 NodeRef Lower(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeRef> &shape_vars, const std::string &name,
               const Map<Tensor, Buffer> &in_binds, const Map<std::string, NodeRef> &in_attrs, bool simple_mode,
-              bool polyhedral, bool tuning, const std::string &target, const BuildConfig &config) {
+              bool polyhedral, bool tuning, const std::string &target, const BuildConfig &config, bool get_stmt) {
   Array<NodeRef> args;
   Array<NodeRef> arg_list_0;
   Map<Tensor, Buffer> binds;
@@ -622,12 +622,14 @@ NodeRef Lower(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeRef> 
     return tmp;
   }
   Stmt stmt = Downcast<Stmt>(tmp);
-
+  if (get_stmt) {
+    return stmt;
+  }
   NodeRef lowered_func = LowerFunc(stmt, name, config, arg_list_0);
   return lowered_func;
 #else
   Stmt stmt = Downcast<Stmt>(tmp);
-  LowerData data{args, arg_list_0, binds, binds_0, shape_vars, name, simple_mode, polyhedral, tuning, target, config};
+  LowerData data{args, arg_list_0, binds, binds_0, shape_vars, name, simple_mode, polyhedral, tuning, target, config, get_stmt};
   return LowerAscend(stmt, data);
 #endif
 }

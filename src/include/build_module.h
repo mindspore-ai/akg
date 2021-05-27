@@ -57,7 +57,7 @@ NodeRef LowerFunc(Stmt &stmt, const std::string &name, const BuildConfig &config
 
 NodeRef Lower(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeRef> &shape_vars, const std::string &name,
               const Map<Tensor, Buffer> &in_binds, const Map<std::string, NodeRef> &in_attrs, bool simple_mode,
-              bool polyhedral, bool tuning, const std::string &target, const BuildConfig &config);
+              bool polyhedral, bool tuning, const std::string &target, const BuildConfig &config, bool get_stmt = false);
 
 air::runtime::Module BuildModule(const Schedule &inputs, const Array<NodeRef> &in_args,
                                  const Array<NodeRef> &shape_vars, const std::string &target_name,
@@ -96,13 +96,13 @@ class BuildRst : public NodeRef {
   TVM_DEFINE_NODE_REF_METHODS(BuildRst, NodeRef, BuildRstNode);
 };
 
-enum class LowerStage { BEGIN, TUNING, POLY, BEFORE_FLATTEN, FLATTEN, BEFORE_REWRITE, REWRITE, END };
+enum class LowerStage { BEGIN, TUNING, POLY, BEFORE_FLATTEN, FLATTEN, BEFORE_MULTICORE, BEFORE_REWRITE, REWRITE, END };
 
 class LowerData {
  public:
   LowerData(Array<NodeRef> &args, Array<NodeRef> &arg_list_0, Map<Tensor, Buffer> &binds, Map<Tensor, Buffer> &binds_0,
             const Array<NodeRef> &shape_vars, const std::string &name, bool simple_mode, bool polyhedral, bool tuning,
-            const std::string &target, const BuildConfig &config)
+            const std::string &target, const BuildConfig &config, bool get_feature = false)
       : args_(args),
         arg_list_0_(arg_list_0),
         binds_(binds),
@@ -113,7 +113,8 @@ class LowerData {
         polyhedral_(polyhedral),
         tuning_(tuning),
         target_(target),
-        config_(config) {}
+        config_(config),
+        get_feature_(get_feature) {}
   Array<NodeRef> &args_;
   Array<NodeRef> &arg_list_0_;
   Map<Tensor, Buffer> &binds_;
@@ -125,6 +126,7 @@ class LowerData {
   bool tuning_{false};
   std::string target_;
   const BuildConfig &config_;
+  bool get_feature_{false};
 };
 
 NodeRef LowerAscend(Stmt &stmt, LowerData &data, LowerStage begin = LowerStage::BEGIN,
