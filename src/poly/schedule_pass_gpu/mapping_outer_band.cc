@@ -709,17 +709,14 @@ isl::schedule_node MappingOuterBand::MapBlockHelper(const isl::schedule_node &or
     auto domain = band_node.get_schedule().get_domain();
     isl::union_pw_aff_list range_aff_list(band_node.ctx(), static_cast<int>(upa_list.size()));
     for (int i = upa_list.size() - 1; i >= 0; --i) {
-      auto idx = scop_info_.analysis_result_.GetReduceDirection() == Y_DIRECTION ? upa_list.size() - 1 - i : i;
-      auto range = upa_list.get_at(idx).intersect_domain(domain);
+      auto range = upa_list.get_at(i).intersect_domain(domain);
       range_aff_list = range_aff_list.add(range);
     }
     node = CheckMapSizeAndApplyTile(node, range_aff_list, block_cfg, false);
   }
 
   upa_list = upa_list.drop(n_block_map, upa_list.size() - n_block_map).reverse();
-  if (scop_info_.analysis_result_.GetReduceDirection() == Y_DIRECTION) {
-    upa_list = upa_list.reverse();
-  }
+
   node = node.insert_mark(isl::id(node.ctx(), BLOCK_MARKER));
   node = node.child(0);
 
@@ -826,9 +823,7 @@ bool MappingOuterBand::NeedAtomicAdd(const isl::schedule_node_band &band, size_t
   auto block_cfg = scop_info_.user_config_.GetBlockConfig();
   CHECK(block_cfg != nullptr) << "block config is null";
   while (non_coin_start_idx < block_cfg->bound) {
-    auto idx = scop_info_.analysis_result_.GetReduceDirection() == Y_DIRECTION
-                 ? non_coin_start_idx
-                 : block_cfg->bound - non_coin_start_idx - 1;
+    auto idx = block_cfg->bound - non_coin_start_idx - 1;
     if (block_cfg->GetAt(idx).second > 1) {
       return true;
     }

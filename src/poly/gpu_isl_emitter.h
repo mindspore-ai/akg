@@ -530,7 +530,7 @@ class AkgReduceStmtChange : public air::ir::IRMutator {
 
 class ConditionExprMod : public air::ir::IRMutator {
  public:
-  explicit ConditionExprMod(std::string block_del, bool &is_found) : block_del_(block_del), is_found_(is_found) {}
+  explicit ConditionExprMod(bool &is_found) : is_found_(is_found) {}
   ~ConditionExprMod() override = default;
 
   Expr Mutate_(const And *op, const Expr &e) override {
@@ -570,7 +570,7 @@ class ConditionExprMod : public air::ir::IRMutator {
 
     if (a.as<Variable>()) {
       auto v = a.as<Variable>();
-      if (v->name_hint == block_del_) {
+      if (v->name_hint == BLOCK_IDX_X) {
         lh_block = true;
       }
     }
@@ -583,7 +583,6 @@ class ConditionExprMod : public air::ir::IRMutator {
   }
 
  private:
-  std::string block_del_{""};
   bool &is_found_;
 };
 
