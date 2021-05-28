@@ -25,6 +25,7 @@
 
 #include "common/common_util.h"
 #include "pass/utils.h"
+#include "pass/rewrite_simplify_cce.h"
 #include "tvm.h"
 #include "poly/dsa_utils.h"
 

@@ -2924,5 +2924,23 @@ Array<VarExpr> GetVarsInExpr(const Expr &expr, bool exclude_upper_case_vars) {
   VariableMutator(ivar_set, exclude_upper_case_vars).Mutate(expr);
   return ivar_set;
 }
+
+#ifdef USE_AKG_COMPILE_STUB
+std::string GetProductName() { return "default"; }
+
+const char *const LOCAL_BUF = "LOCAL_BUF";
+const char *const LOCAL_C1 = "LOCAL_C1";
+const char *const LOCAL_C0B = "LOCAL_C0B";
+const char *const LOCAL_C0C = "LOCAL_C0C";
+const char *const LOCAL_C1_LOCAL_C0A = "LOCAL_C1_LOCAL_C0A";
+const char *const LOCAL_C1_LOCAL_C0B = "LOCAL_C1_LOCAL_C0B";
+const char *const LOCAL_BUF_LOCAL_C0C = "LOCAL_BUF_LOCAL_C0C";
+const char *const FRACTAL_C1 = "FRACTAL_C1";
+const char *const FRACTAL_C1_LOCAL_C0B = "FRACTAL_C1_LOCAL_C0B";
+#endif
 }  // namespace ir
+
+#ifdef USE_AKG_COMPILE_STUB
+std::string GetBufScope(const std::string &name) { return "buffer"; }
+#endif
 }  // namespace akg

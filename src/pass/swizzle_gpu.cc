@@ -24,6 +24,7 @@
 #include <string>
 
 #include "pass/utils.h"
+#include "pass/rewrite_simplify_cce.h"
 #include "src/common/util.h"
 
 namespace akg {

@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -174,4 +174,52 @@ using air::ir::RemoveNoOp;
 using air::ir::Simplify;
 using air::ir::Substitute;
 }  // namespace akg
+
+namespace air {
+namespace ir {
+/** Substitute variables with the given pointer with the replacement
+ * expression within expr. */
+Expr substitute(const Variable *var, Expr replacement, Expr expr);
+
+/** Substitute variables with the given pointer with the replacement
+ * expression within stmt. */
+Stmt substitute(const Variable *var, Expr replacement, Stmt stmt);
+
+inline Expr substitute(const VarExpr &var, const Expr replacement, const Expr expr) {
+  return substitute(var.get(), replacement, expr);
+}
+
+inline Stmt substitute(const VarExpr &var, const Expr replacement, const Stmt stmt) {
+  return substitute(var.get(), replacement, stmt);
+}
+
+/** Substitute variables with pointers in the map. */
+// @{
+Expr substitute(const std::map<const Variable *, Expr> &replacements, Expr expr);
+Stmt substitute(const std::map<const Variable *, Expr> &replacements, Stmt stmt);
+// @}
+
+/** Substitute expressions for other expressions. */
+// @{
+Expr substitute(Expr find, Expr replacement, Expr expr);
+Stmt substitute(Expr find, Expr replacement, Stmt stmt);
+// @}
+
+/* align_partition.cc needs to call this function from tvm */
+Stmt AppendStmts(const Stmt &a, const Stmt &b);
+
+/* simplify_passes_cce.cc needs to call this function from tvm */
+bool ExprUseVars(const Expr &expr, const std::unordered_set<const Variable *> &vars);
+
+/*!
+ * \brief partition loops in the stmt
+ * \param stmt The stmt to do loop partition
+ * \param split_const_loop flag to enable partition for const loop
+ * \param remove_div_mod removes the division and modulo in the indexing of a tensor by partitioning the loop
+ * \param partition_conv: whether to partition the convolution or not
+ * \return Transformed stmt.
+ */
+Stmt LoopPartitionCCE(Stmt stmt, bool split_const_loop, bool remove_div_mod = false, bool partition_conv = false);
+}  // namespace ir
+}  // namespace air
 #endif  // INCLUDE_AKG_TVM_H_

@@ -17,15 +17,12 @@
 #ifndef INCLUDE_AKG_IR_PASS_H_
 #define INCLUDE_AKG_IR_PASS_H_
 
-#include <tvm/expr.h>
-#include <tvm/buffer.h>
-#include <tvm/schedule.h>
-#include <tvm/lowered_func.h>
-#include <tvm.h>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 #include <string>
+#include "tvm.h"
+#include "pass/rewrite_simplify_cce.h"
 
 namespace akg {
 namespace ir {
@@ -86,24 +83,6 @@ Stmt InjectDoubleBufferScopeOnGpu(Stmt stmt);
  * \return The statement after transformed.
  */
 Stmt InjectTransferBufferScope(Stmt stmt);
-/*!
- * \brief Simplify expr using custom cce simplifiers.
- *
- * \param expr The expression to be simplified.
- * \return The result.
- *
- * \note Analyzer will call into sub-analyzers to get the result.
- */
-Expr Simplify_cce(Expr expr, const Map<Var, Range> &vrange = Map<Var, Range>());
-/*!
- * \brief Simplify stmt using custom cce simplifiers.
- *
- * \param expr The statement to be simplified.
- * \return The result.
- *
- * \note Analyzer will call into sub-analyzers to get the result.
- */
-Stmt Simplify_cce(const Stmt &stmt, const Map<Var, Range> &vrange = Map<Var, Range>());
 
 Stmt ElementwiseFlatten(Stmt stmt, const Map<Tensor, Buffer> &extern_buffer,
                         const Map<Tensor, Buffer> &new_extern_buffer);
@@ -208,55 +187,68 @@ Stmt TensorAccessRewrite(const Stmt stmt);
 
 Stmt SwizzleGPU(const Stmt &stmt, const Map<std::string, NodeRef> &attrs);
 
-}  // namespace ir
-}  // namespace akg
+Stmt AlignLastAxisLoopExtent(Stmt stmt, const Map<Tensor, Buffer> &extern_buffer);
 
-namespace air {
-namespace ir {
-/** Substitute variables with the given pointer with the replacement
- * expression within expr. */
-Expr substitute(const Variable *var, Expr replacement, Expr expr);
+Stmt AlignPartitionCCE(Stmt stmt);
 
-/** Substitute variables with the given pointer with the replacement
- * expression within stmt. */
-Stmt substitute(const Variable *var, Expr replacement, Stmt stmt);
+Stmt UnifyAllocate(const Stmt &stmt);
 
-inline Expr substitute(const VarExpr &var, const Expr replacement, const Expr expr) {
-  return substitute(var.get(), replacement, expr);
-}
+Stmt EliminateAtomicDma(Stmt stmt);
 
-inline Stmt substitute(const VarExpr &var, const Expr replacement, const Stmt stmt) {
-  return substitute(var.get(), replacement, stmt);
-}
+Stmt AutoReorder(Stmt stmt);
 
-/** Substitute variables with pointers in the map. */
-// @{
-Expr substitute(const std::map<const Variable *, Expr> &replacements, Expr expr);
-Stmt substitute(const std::map<const Variable *, Expr> &replacements, Stmt stmt);
-// @}
+Stmt BypassL1(const Stmt &stmt);
 
-/** Substitute expressions for other expressions. */
-// @{
-Expr substitute(Expr find, Expr replacement, Expr expr);
-Stmt substitute(Expr find, Expr replacement, Stmt stmt);
-// @}
+Stmt ExpandC0(Stmt stmt);
 
-/* align_partition.cc needs to call this function from tvm */
-Stmt AppendStmts(const Stmt &a, const Stmt &b);
+Stmt CastFilter(const Stmt &stmt);
 
-/* simplify_passes_cce.cc needs to call this function from tvm */
-bool ExprUseVars(const Expr &expr, const std::unordered_set<const Variable *> &vars);
+Stmt ConvertCondToExtent(Stmt stmt);
+
+Stmt StmtCSE(Stmt stmt, const Map<Tensor, Buffer> &extern_buffer);
+
+Stmt DeadCodeElim(Stmt stmt);
+
+Stmt ExprPatternRewrite(Stmt stmt);
+
+Stmt FeatureLibTransform(Stmt stmt);
+
+Stmt GatherLoopInfo(Stmt stmt);
+
+Stmt EliminateIf(Stmt stmt);
+
+Stmt InjectAttr(Stmt stmt);
+
+Stmt LoopSwitchHoist(Stmt stmt, bool hoist_allocate = false);
+
+Stmt LowerWith(Stmt stmt);
+
+Stmt MathIntrinRewrite(Stmt stmt);
+
+Stmt PostFusion(Stmt stmt, const Map<Tensor, Buffer> &extern_buffer, bool is_dynamic);
+
+Stmt PostProcessImg2col(Stmt stmt);
+
+Stmt ModDivEliminate(Stmt stmt);
+
+Stmt RealizeCompress(Stmt stmt);
+
+Stmt ReduceFusionOpt(Stmt stmt, const Map<Tensor, Buffer> &extern_buffer);
+
+Stmt SinkAllocate(const Stmt &stmt);
+
+Stmt StrideKernelOp(Stmt stmt, const Map<Tensor, Buffer> &extern_buffer, bool is_dynamic = false);
 
 /*!
- * \brief partition loops in the stmt
- * \param stmt The stmt to do loop partition
- * \param split_const_loop flag to enable partition for const loop
- * \param remove_div_mod removes the division and modulo in the indexing of a tensor by partitioning the loop
- * \param partition_conv: whether to partition the convolution or not
- * \return Transformed stmt.
+ * \brief Split complicated expression to three address code and do instruction selection
+ *        + reuse_variable = True: will try to minimize the newly generated variables
+ *        + minimum_split - use with "reuse_variable" to reuse newly generated tensors when exceeding this threshold
  */
-Stmt LoopPartitionCCE(Stmt stmt, bool split_const_loop, bool remove_div_mod = false, bool partition_conv = false);
-}  // namespace ir
-}  // namespace air
+Stmt ToThreeAddress(Stmt stmt, bool reuse_variable = false, int minimum_split = 10, bool cross_stmt_simplify = false);
 
+Stmt UnifyLoopVars(const Stmt &stmt, const Map<Tensor, Buffer> &extern_buffer, const Array<NodeRef> &arg_list);
+
+Stmt TileCoverCorrect(Stmt stmt);
+}  // namespace ir
+}  // namespace akg
 #endif  // INCLUDE_AKG_IR_PASS_H_

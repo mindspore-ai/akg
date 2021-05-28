@@ -24,6 +24,7 @@
 #include <functional>
 #include <unordered_map>
 #include "pass/utils.h"
+#include "pass/rewrite_simplify_cce.h"
 
 namespace akg {
 namespace ir {

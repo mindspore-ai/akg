@@ -21,12 +21,40 @@
 #include <tvm/ir_pass.h>
 #include <tvm/ir_visitor.h>
 #include <tvm/operation.h>
-
-#include "ir_pass.h"
-#include "poly/poly_util.h"
+#include "tvm.h"
 
 namespace akg {
 namespace ir {
+namespace {
+constexpr auto PRAGMA_CONV_BACKPROP_INPUT = "pragma_conv_backprop_input";
+constexpr auto PRAGMA_CONV_BACKPROP_FILTER = "pragma_conv_backprop_filter";
+constexpr auto PRAGMA_CONV_FEATURE_N = "pragma_conv_fm_n";
+constexpr auto PRAGMA_CONV_FEATURE_C = "pragma_conv_fm_c";
+constexpr auto PRAGMA_CONV_FEATURE_H = "pragma_conv_fm_h";
+constexpr auto PRAGMA_CONV_FEATURE_W = "pragma_conv_fm_w";
+constexpr auto PRAGMA_CONV_KERNEL_N = "pragma_conv_kernel_n";
+constexpr auto PRAGMA_CONV_KERNEL_H = "pragma_conv_kernel_h";
+constexpr auto PRAGMA_CONV_KERNEL_W = "pragma_conv_kernel_w";
+constexpr auto PRAGMA_CONV_PAD_TOP = "pragma_conv_padding_top";
+constexpr auto PRAGMA_CONV_PAD_BOTTOM = "pragma_conv_padding_bottom";
+constexpr auto PRAGMA_CONV_PAD_LEFT = "pragma_conv_padding_left";
+constexpr auto PRAGMA_CONV_PAD_RIGHT = "pragma_conv_padding_right";
+constexpr auto PRAGMA_CONV_STRIDE_H = "pragma_conv_stride_h";
+constexpr auto PRAGMA_CONV_STRIDE_W = "pragma_conv_stride_w";
+constexpr auto PRAGMA_CONV_DILATION_H = "pragma_conv_dilation_h";
+constexpr auto PRAGMA_CONV_DILATION_W = "pragma_conv_dilation_w";
+constexpr auto PRAGMA_CONV_TILE_B = "pragma_conv_batch_cut";
+constexpr auto PRAGMA_CONV_TILE_CIN = "pragma_conv_cin_cut";
+constexpr auto PRAGMA_CONV_TILE_CO = "pragma_conv_co_cut";
+constexpr auto PRAGMA_CONV_TILE_H = "pragma_conv_h_cut";
+constexpr auto PRAGMA_CONV_TILE_W = "pragma_conv_w_cut";
+constexpr auto PRAGMA_CONV_TILE_KH = "pragma_conv_kh_cut";
+constexpr auto PRAGMA_CONV_TILE_KW = "pragma_conv_kw_cut";
+constexpr auto PRAGMA_CONV_TILE_M = "pragma_conv_m_cut";
+constexpr auto PRAGMA_CONV_TILE_K = "pragma_conv_k_cut";
+constexpr auto PRAGMA_CONV_TILE_N = "pragma_conv_n_cut";
+}  // namespace
+
 #define IS_ATTR_EXIST(attrs_, key_) ((attrs_).count(key_) > 0)
 
 #define GET_INTIMM_ATTR(attrs_, key_) (attrs_)[key_].as<IntImm>()->value
@@ -48,13 +76,13 @@ class Convolution : public IRVisitor {
   void Visit_(const AttrStmt *op) final {
     if (op->attr_key == "pragma_attrs") {
       attrs_ = Downcast<Map<std::string, NodeRef>>(op->node);
-      if (attrs_.count(ATTR_CONV_BACKPROP_INPUT) > 0) {
-        CHECK(attrs_[ATTR_CONV_BACKPROP_INPUT].as<IntImm>());
-        isConvBackpropInput_ = GET_INTIMM_ATTR(attrs_, ATTR_CONV_BACKPROP_INPUT);
+      if (attrs_.count(PRAGMA_CONV_BACKPROP_INPUT) > 0) {
+        CHECK(attrs_[PRAGMA_CONV_BACKPROP_INPUT].as<IntImm>());
+        isConvBackpropInput_ = GET_INTIMM_ATTR(attrs_, PRAGMA_CONV_BACKPROP_INPUT);
       }
-      if (attrs_.count(ATTR_CONV_BACKPROP_FILTER) > 0) {
-        CHECK(attrs_[ATTR_CONV_BACKPROP_FILTER].as<IntImm>());
-        isConvBackpropFilter_ = GET_INTIMM_ATTR(attrs_, ATTR_CONV_BACKPROP_FILTER);
+      if (attrs_.count(PRAGMA_CONV_BACKPROP_FILTER) > 0) {
+        CHECK(attrs_[PRAGMA_CONV_BACKPROP_FILTER].as<IntImm>());
+        isConvBackpropFilter_ = GET_INTIMM_ATTR(attrs_, PRAGMA_CONV_BACKPROP_FILTER);
       }
     } else if (op->attr_key == "pragma_im2col") {
       isConv_ = true;
