@@ -120,6 +120,7 @@ constexpr auto AT_OP_TYPE = "OP_TYPE";
 constexpr auto AT_ELEMWISE = "ELEMWISE";
 constexpr auto AT_TRANSFORM = "TRANSFORM";
 constexpr auto AT_TRANSPOSE = "TRANSPOSE";
+constexpr auto AT_PAD = "PAD";
 constexpr auto AT_BROADCAST = "BROADCAST";
 constexpr auto AT_REDUCE = "REDUCE";
 constexpr auto AT_REDUCE_DST_LAST = "REDUCE_DST_LAST";

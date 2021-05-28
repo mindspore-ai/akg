@@ -209,8 +209,10 @@ class SpaceVisitor : public IRVisitor {
       auto dst_vars_size = CountUniqueLoopName(dst_vars);
       auto src_vars_size = CountUniqueLoopName(src_vars);
       std::string type = "";
-      if (this->local_buf_.find(s.name) == this->local_buf_.end()) type += "DMA2_";
-      if (this->local_buf_.find(d.name) == this->local_buf_.end()) type += "DMA3_";
+      if (analyzer_->scop_info_.user_config_.GetTarget() == TARGET_CCE) {
+        if (this->local_buf_.find(s.name) == this->local_buf_.end()) type += "DMA2_";
+        if (this->local_buf_.find(d.name) == this->local_buf_.end()) type += "DMA3_";
+      }
       if (src_vars_size == 0 && analyzer_->scop_info_.user_config_.GetTarget() != TARGET_CUDA) {
         return type + "SP_CALL";
       }
@@ -284,6 +286,12 @@ class SpaceVisitor : public IRVisitor {
     };
 
     std::string basic_op_type = "";
+    bool is_unpad = (dst.name.find("unpad") != std::string::npos) || (dst.name.find("Unpad") != std::string::npos);
+    bool is_pad = (dst.name.find("pad") != std::string::npos || dst.name.find("Pad") != std::string::npos);
+    if (!is_unpad && is_pad){
+      basic_op_type += AT_PAD;
+      basic_op_type += "_";
+    }
     if (srcs.empty()) {
       // Dst = const
       if (this->local_buf_.find(dst.name) == this->local_buf_.end()) basic_op_type += "DMA3_";
@@ -329,7 +337,7 @@ void SpaceAnalyzer::AnalyzeSpecialAxes() {
 }
 
 void SpaceAnalyzer::IdentifyInsnType() {
-  std::unordered_set<std::string> care_types = {AT_ELEMWISE, AT_BROADCAST, AT_DMA, AT_TRANSFORM};
+  std::unordered_set<std::string> care_types = {AT_ELEMWISE, AT_BROADCAST, AT_DMA, AT_TRANSFORM, AT_PAD};
   for (auto it : provides_ana_) {
     std::vector<ProvideEntry> pes = it.second;
     for (auto pe : pes) {
@@ -340,7 +348,9 @@ void SpaceAnalyzer::IdentifyInsnType() {
       }
       for (auto ct : care_types) {
         if (pe.basic_op_type.find(ct) == std::string::npos) continue;
-        if (ct == AT_BROADCAST) {
+        if (ct == AT_PAD) {
+          analyzer_->RootAxis()->MarkWithAttr(AttrInfo{AT_OP_TYPE, AT_PAD});
+        } else if (ct == AT_BROADCAST) {
           MarkBroadcastAxes(pe);
           MarkBroadcastInnerMostAxis(pe);
         }
