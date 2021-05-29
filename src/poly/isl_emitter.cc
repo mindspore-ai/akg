@@ -469,7 +469,10 @@ Stmt IslEmitter::EmitAccessNode(const std::string &name, const Node *node, const
   bool is_copyin_from_another_band = IsCopyinFromAnotherBand(access);
 
   auto memory_hoist = buffer_footprint_info.cluster->ComputeBufferedFootprints();
-  if (is_copyin_from_another_band) {
+  // the second dataflow of copyin tensor, the stride caculation flow should be same with normal
+  // should not use the special process of copyin_from_another_band
+  bool is_second_dataflow_copyin = info_.mmu_info_.IsGemm() && (buf_def.DstMemType() == MemType::C0A_ || buf_def.DstMemType() == MemType::C0B_);
+  if (is_copyin_from_another_band && !is_second_dataflow_copyin) {
     memory_hoist = buffer_footprint_info.cluster->IdentityBufferFootprint();
   }
 
@@ -480,11 +483,12 @@ Stmt IslEmitter::EmitAccessNode(const std::string &name, const Node *node, const
     memory_hoist = buffer_footprint_info.cluster->UnshiftedBufferFootprint(memory_hoist, fp_id);
   }
   memory_hoist = memory_hoist.set_tuple_id(isl_dim_out, buffer_footprint_info.cluster_id);
-
   auto schedule = isl::map::from(buffer_footprint_info.outer_schedule.intersect_domain(Domain()));
   CHECK(schedule.is_single_valued()) << schedule << " is not single-valued schedule";
   auto ast_to_schedule = isl::pw_multi_aff(schedule).pullback(iterator_map);
-  ast_to_schedule = AffSubForAstToSchedule(ast_to_schedule, IsTransferStmt(), is_copyin_from_another_band);
+  if (!is_second_dataflow_copyin) {
+    ast_to_schedule = AffSubForAstToSchedule(ast_to_schedule, IsTransferStmt(), is_copyin_from_another_band);
+  }
 
   auto ast_to_original = isl::pw_multi_aff(access).pullback(iterator_map);
   auto ast_to_scheduled_original = ast_to_schedule.range_product(ast_to_original);
