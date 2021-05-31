@@ -17,20 +17,13 @@
 
 #ifndef PASS_UTILS_H_
 #define PASS_UTILS_H_
-#include <tvm.h>
-#include <tvm/ir.h>
-#include <tvm/ir_visitor.h>
-#include <tvm/ir_mutator.h>
-#include <tvm/expr_operator.h>
-#include <tvm/ir_pass.h>
-#include <ir_pass.h>
 #include <string>
 #include <unordered_map>
 #include <vector>
 #include <unordered_set>
 #include <queue>
-
-#include "../src/arithmetic/pattern_match.h"
+#include <arithmetic/pattern_match.h>
+#include "tvm.h"
 
 namespace akg {
 namespace ir {
@@ -81,10 +74,8 @@ class Bound {
     bound.max = max;
     return bound;
   }
-  
-  bool defined(){
-    return this->min.defined() && this->max.defined();
-  }
+
+  bool defined() { return this->min.defined() && this->max.defined(); }
 };
 
 enum class Interval { LTZERO = -2, LEZERO, ZERO, GEZERO, GTZERO, UNKNOWN };
@@ -392,7 +383,40 @@ class AttrIRMutator : public IRMutator {
 Array<Expr> GetBinaryOpExprChildren(const Expr &e);
 
 Array<VarExpr> GetVarsInExpr(const Expr &expr, bool exclude_upper_case_vars = false);
+
+/// Get index of item in array
+/// \tparam T
+/// \param array
+/// \param elem
+/// \param index
+/// \return
+template <typename T>
+bool GetIndexOfElement(const Array<T> &array, const T &elem, size_t &index) {
+  for (size_t i = 0; i < array.size(); ++i) {
+    const auto item = array[i];
+    if (Equal(elem, item)) {
+      index = i;
+      return true;
+    }
+  }
+
+  return false;
+}
+
+std::string GetProductName();
+
+extern const char *const LOCAL_BUF;
+extern const char *const LOCAL_C1;
+extern const char *const LOCAL_C0B;
+extern const char *const LOCAL_C0C;
+extern const char *const LOCAL_C1_LOCAL_C0A;
+extern const char *const LOCAL_C1_LOCAL_C0B;
+extern const char *const LOCAL_BUF_LOCAL_C0C;
+extern const char *const FRACTAL_C1;
+extern const char *const FRACTAL_C1_LOCAL_C0B;
 }  // namespace ir
+
+std::string GetBufScope(const std::string &name);
 }  // namespace akg
 
 #endif  // PASS_UTILS_H_

@@ -21,40 +21,40 @@ namespace ir {
 /* ConvolutionModel */
 ConvolutionModel::ConvolutionModel(const Map<std::string, NodeRef> &attrs, bool is_dynamic)
     : attrs_(attrs), is_dynamic_(is_dynamic) {
-  Expr n = GET_EXPR_ATTR(attrs_, ATTR_CONV_FEATURE_N, 0);
-  Expr c = GET_EXPR_ATTR(attrs_, ATTR_CONV_FEATURE_C, 0);
-  CHECK_GT(attrs_.count(ATTR_CONV_FEATURE_H), 0);
-  Expr h = GET_EXPR_ATTR(attrs_, ATTR_CONV_FEATURE_H, 0);
-  Expr w = GET_EXPR_ATTR(attrs_, ATTR_CONV_FEATURE_W, 0);
+  Expr n = GET_EXPR_ATTR(attrs_, PRAGMA_CONV_FEATURE_N, 0);
+  Expr c = GET_EXPR_ATTR(attrs_, PRAGMA_CONV_FEATURE_C, 0);
+  CHECK_GT(attrs_.count(PRAGMA_CONV_FEATURE_H), 0);
+  Expr h = GET_EXPR_ATTR(attrs_, PRAGMA_CONV_FEATURE_H, 0);
+  Expr w = GET_EXPR_ATTR(attrs_, PRAGMA_CONV_FEATURE_W, 0);
 
-  Expr cout = GET_EXPR_ATTR(attrs_, ATTR_CONV_KERNEL_N, 0);
-  Expr kh = GET_EXPR_ATTR(attrs_, ATTR_CONV_KERNEL_H, 0);
-  Expr kw = GET_EXPR_ATTR(attrs_, ATTR_CONV_KERNEL_W, 0);
+  Expr cout = GET_EXPR_ATTR(attrs_, PRAGMA_CONV_KERNEL_N, 0);
+  Expr kh = GET_EXPR_ATTR(attrs_, PRAGMA_CONV_KERNEL_H, 0);
+  Expr kw = GET_EXPR_ATTR(attrs_, PRAGMA_CONV_KERNEL_W, 0);
 
-  Expr pad_top = GET_EXPR_ATTR(attrs_, ATTR_CONV_PAD_TOP, 0);
-  Expr pad_bottom = GET_EXPR_ATTR(attrs_, ATTR_CONV_PAD_BOTTOM, 0);
-  Expr pad_left = GET_EXPR_ATTR(attrs_, ATTR_CONV_PAD_LEFT, 0);
-  Expr pad_right = GET_EXPR_ATTR(attrs_, ATTR_CONV_PAD_RIGHT, 0);
+  Expr pad_top = GET_EXPR_ATTR(attrs_, PRAGMA_CONV_PAD_TOP, 0);
+  Expr pad_bottom = GET_EXPR_ATTR(attrs_, PRAGMA_CONV_PAD_BOTTOM, 0);
+  Expr pad_left = GET_EXPR_ATTR(attrs_, PRAGMA_CONV_PAD_LEFT, 0);
+  Expr pad_right = GET_EXPR_ATTR(attrs_, PRAGMA_CONV_PAD_RIGHT, 0);
 
-  Expr stride_h = GET_EXPR_ATTR(attrs_, ATTR_CONV_STRIDE_H, 0);
-  Expr stride_w = GET_EXPR_ATTR(attrs_, ATTR_CONV_STRIDE_W, 0);
+  Expr stride_h = GET_EXPR_ATTR(attrs_, PRAGMA_CONV_STRIDE_H, 0);
+  Expr stride_w = GET_EXPR_ATTR(attrs_, PRAGMA_CONV_STRIDE_W, 0);
 
-  Expr dilation_h = GET_EXPR_ATTR(attrs_, ATTR_CONV_DILATION_H, 0);
-  Expr dilation_w = GET_EXPR_ATTR(attrs_, ATTR_CONV_DILATION_W, 0);
+  Expr dilation_h = GET_EXPR_ATTR(attrs_, PRAGMA_CONV_DILATION_H, 0);
+  Expr dilation_w = GET_EXPR_ATTR(attrs_, PRAGMA_CONV_DILATION_W, 0);
 
   conv_ = {n,          c,        h,         w,        cout,     kh,         kw,        pad_top,
            pad_bottom, pad_left, pad_right, stride_h, stride_w, dilation_h, dilation_w};
 
-  Expr cut_b = GET_EXPR_ATTR(attrs_, ATTR_CONV_TILE_B, 0);
-  Expr cut_ci = GET_EXPR_ATTR(attrs_, ATTR_CONV_TILE_CIN, 0);
-  Expr cut_co = GET_EXPR_ATTR(attrs_, ATTR_CONV_TILE_CO, 0);
-  Expr cut_h = GET_EXPR_ATTR(attrs_, ATTR_CONV_TILE_H, 0);
-  Expr cut_w = GET_EXPR_ATTR(attrs_, ATTR_CONV_TILE_W, 0);
-  Expr cut_kh = GET_EXPR_ATTR(attrs_, ATTR_CONV_TILE_KH, kh);
-  Expr cut_kw = GET_EXPR_ATTR(attrs_, ATTR_CONV_TILE_KW, kw);
-  Expr cut_m = GET_EXPR_ATTR(attrs_, ATTR_CONV_TILE_M, 0);
-  Expr cut_k = GET_EXPR_ATTR(attrs_, ATTR_CONV_TILE_K, 0);
-  Expr cut_n = GET_EXPR_ATTR(attrs_, ATTR_CONV_TILE_N, 0);
+  Expr cut_b = GET_EXPR_ATTR(attrs_, PRAGMA_CONV_TILE_B, 0);
+  Expr cut_ci = GET_EXPR_ATTR(attrs_, PRAGMA_CONV_TILE_CIN, 0);
+  Expr cut_co = GET_EXPR_ATTR(attrs_, PRAGMA_CONV_TILE_CO, 0);
+  Expr cut_h = GET_EXPR_ATTR(attrs_, PRAGMA_CONV_TILE_H, 0);
+  Expr cut_w = GET_EXPR_ATTR(attrs_, PRAGMA_CONV_TILE_W, 0);
+  Expr cut_kh = GET_EXPR_ATTR(attrs_, PRAGMA_CONV_TILE_KH, kh);
+  Expr cut_kw = GET_EXPR_ATTR(attrs_, PRAGMA_CONV_TILE_KW, kw);
+  Expr cut_m = GET_EXPR_ATTR(attrs_, PRAGMA_CONV_TILE_M, 0);
+  Expr cut_k = GET_EXPR_ATTR(attrs_, PRAGMA_CONV_TILE_K, 0);
+  Expr cut_n = GET_EXPR_ATTR(attrs_, PRAGMA_CONV_TILE_N, 0);
 
   tile_ = {cut_b, cut_ci, cut_co, cut_h, cut_w, cut_kh, cut_kw, cut_m, cut_k, cut_n};
 }

@@ -35,6 +35,24 @@ TVM_REGISTER_API("ir_pass.LoopPartitionCCE").set_body([](const TVMArgs args, TVM
   }
 });
 
+TVM_REGISTER_API("ir_pass.LoopSwitchHoist").set_body([](const TVMArgs args, TVMRetValue *ret) {
+  CHECK_EQ(args.size(), 2);
+  *ret = LoopSwitchHoist(args[0], args[1]);
+});
+
+TVM_REGISTER_API("ir_pass.ToThreeAddress").set_body([](const TVMArgs args, TVMRetValue *ret) {
+  if (args.size() == 1) {
+    *ret = ToThreeAddress(args[0]);
+  } else if (args.size() == 2) {
+    *ret = ToThreeAddress(args[0], args[1]);
+  } else if (args.size() == 3) {
+    *ret = ToThreeAddress(args[0], args[1], args[2]);
+  } else {
+    CHECK_EQ(args.size(), 4);
+    *ret = ToThreeAddress(args[0], args[1], args[2], args[3]);
+  }
+});
+
 #define REGISTER_PASS(PassName) TVM_REGISTER_API("ir_pass." #PassName).set_body_typed(PassName);
 
 REGISTER_PASS(AutoPoly);
@@ -86,6 +104,32 @@ REGISTER_PASS(UnrollNonConstantExtent)
 REGISTER_PASS(ValueNumbering);
 REGISTER_PASS(TensorAccessRewrite);
 REGISTER_PASS(SwizzleGPU);
-
+REGISTER_PASS(AlignLastAxisLoopExtent);
+REGISTER_PASS(AlignPartitionCCE);
+REGISTER_PASS(UnifyAllocate);
+REGISTER_PASS(EliminateAtomicDma);
+REGISTER_PASS(AutoReorder);
+REGISTER_PASS(BypassL1);
+REGISTER_PASS(ExpandC0);
+REGISTER_PASS(CastFilter);
+REGISTER_PASS(ConvertCondToExtent);
+REGISTER_PASS(StmtCSE);
+REGISTER_PASS(DeadCodeElim);
+REGISTER_PASS(ExprPatternRewrite);
+REGISTER_PASS(FeatureLibTransform);
+REGISTER_PASS(GatherLoopInfo);
+REGISTER_PASS(EliminateIf);
+REGISTER_PASS(InjectAttr);
+REGISTER_PASS(LowerWith);
+REGISTER_PASS(MathIntrinRewrite);
+REGISTER_PASS(PostFusion);
+REGISTER_PASS(PostProcessImg2col);
+REGISTER_PASS(ModDivEliminate);
+REGISTER_PASS(RealizeCompress);
+REGISTER_PASS(ReduceFusionOpt);
+REGISTER_PASS(SinkAllocate);
+REGISTER_PASS(StrideKernelOp);
+REGISTER_PASS(UnifyLoopVars);
+REGISTER_PASS(TileCoverCorrect);
 }  // namespace ir
 }  // namespace akg
