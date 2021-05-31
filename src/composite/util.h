@@ -238,6 +238,13 @@ struct NeedReshape {
   Array<Expr> origin_shape;
 };
 
+/*
+ * collect these mutate info, then use AnalysisResultMutator to mutate the halide stmts:
+ * 1. tensors which should be replaced.
+ * 2. stmts wich should be removed.
+ * 3. tensors which should change shape
+ * 4. tensors which should add reshape.
+ */
 struct AnalysisResult {
   FuncRefMap to_be_replaced;
   std::unordered_set<const Provide *> to_be_removed;
@@ -247,6 +254,16 @@ struct AnalysisResult {
   void CollectReshape(const Provide *op, const FunctionRef &func, const Array<Expr> &origin_shape,
                       const Array<Expr> &changed_shape) {
     if (EqualShape(origin_shape, changed_shape)) return;
+    if (need_reshape_map.count(op)) {
+      for (auto it = need_reshape_map[op].begin(); it < need_reshape_map[op].end();) {
+        // if tensor need update reshape, remove it first.
+        if ((*it).func == func) {
+          it = need_reshape_map[op].erase(it);
+        } else {
+          ++it;
+        }
+      }
+    }
     NeedReshape nr;
     nr.func = to_be_replaced.count(func) ? to_be_replaced[func] : func;
     nr.origin_shape = origin_shape;
@@ -275,9 +292,9 @@ struct AnalysisResult {
   }
 };
 
-class DoAnalysis : public IRMutator {
+class AnalysisResultMutator : public IRMutator {
  public:
-  explicit DoAnalysis(AnalysisResult result) : result_(std::move(result)){};
+  explicit AnalysisResultMutator(AnalysisResult result) : result_(std::move(result)){};
 
  private:
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) override {

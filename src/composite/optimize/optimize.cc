@@ -17,8 +17,7 @@
 #include <memory>
 #include "composite/optimize/rename_matmul.h"
 #include "composite/optimize/reshape_tensor.h"
-#include "composite/optimize/elim_reshape_backward.h"
-#include "composite/optimize/elim_reshape_forward.h"
+#include "composite/optimize/elim_reshape.h"
 #include "composite/optimize/inplace_assign_mutator.h"
 #include "composite/optimize/broadcast_inserter.h"
 #include "composite/optimize/axis_attr_normalize.h"
