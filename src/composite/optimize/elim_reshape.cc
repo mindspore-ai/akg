@@ -69,7 +69,8 @@ void ElimReshapeAnalysis::AnalysisTransform(const FunctionRef &output) {
   auto output_shape = result_.ShapeChanged(output) ? result_.changed_shapes[output] : g_.func_shape[output];
   if ((forward_ && !g_.visited_funcs.count(output)) || (!forward_ && !g_.visited_funcs.count(input)) ||
       EqualShape(input_shape, output_shape)) {
-    result_.to_be_replaced[output] = input;
+    auto output_replace = result_.to_be_replaced.count(input) ? result_.to_be_replaced[input] : input;
+    result_.to_be_replaced[output] = output_replace;
     // if any tensor replace to input already, it should change to new input
     for (auto &kv : result_.to_be_replaced) {
       if (kv.second == output) {
@@ -87,47 +88,76 @@ void ElimReshapeAnalysis::AnalysisTransform(const FunctionRef &output) {
   }  // else if visited and input output shape are different, do noting, if input shape changed, already in set
 }
 
-void ElimReshapeAnalysis::AnalysisElemwise(const FunctionRef &output) {
+bool ElimReshapeAnalysis::AnalysisElemwise(const FunctionRef &output) {
+  // If the boundary between the broadcast axis and the elewise axis is broken by reshape,
+  // the AnalysisElemwise process cannot be performed and return false.
+  // Otherwise, return true.
   if (forward_) {
-    AnalysisElemwiseForward(output);
+    return AnalysisElemwiseForward(output);
   } else {
-    AnalysisElemwiseBackward(output);
+    return AnalysisElemwiseBackward(output);
   }
 }
-void ElimReshapeAnalysis::AnalysisElemwiseBackward(const FunctionRef &output) {
+bool ElimReshapeAnalysis::AnalysisElemwiseBackward(const FunctionRef &output) {
   auto inputs = g_.pre_graph[output];
-  bool output_changed = result_.ShapeChanged(output);
+  auto output_changed = result_.ShapeChanged(output);
   auto output_shape = output_changed ? result_.changed_shapes[output] : g_.func_shape[output];
+  auto input_map_shape_change = BroadcastReshapeUtil::GetInputsChangeShape(output, g_, output_shape);
+  if (input_map_shape_change.empty()) {
+    return false;
+  }
   for (const auto &input : inputs) {
     auto input_shape = result_.ShapeChanged(input) ? result_.changed_shapes[input] : g_.func_shape[input];
+    CHECK(input_map_shape_change.count(input));
+    auto input_shape_change = input_map_shape_change[input];
     if (ShapeIsOne(input_shape)) continue;
     if (!g_.visited_funcs.count(input)) {
       // if not visited and output changed, change input shape
       if (output_changed) {
-        result_.changed_shapes[input] = output_shape;
+        result_.changed_shapes[input] = input_shape_change;
         g_.visited_funcs.insert(input);
       }
     } else {
-      // if visited, check input shape and out shape are same or not, if not, need reshape
-      if (!EqualShape(output_shape, input_shape)) {
-        // b = op(a) -> t = trans(a); b = op(t)
-        LOG(INFO) << "[ELEMWISE] RESHAPE: " << input->func_name() << ": " << output_shape << "->" << input_shape;
-        result_.CollectReshape(g_.func_stmts[output], input, output_shape, input_shape);
+      // if visited, check input_shape and input_shape_change are same or not, if not, need reshape
+      if (!EqualShape(input_shape_change, input_shape)) {
+        LOG(INFO) << "[ELEMWISE] RESHAPE: " << input->func_name() << ": " << input_shape_change << "->" << input_shape;
+        result_.CollectReshape(g_.func_stmts[output], input, input_shape_change, input_shape);
       }
     }
   }
+  return true;
 }
 
-void ElimReshapeAnalysis::AnalysisElemwiseForward(const FunctionRef &output) {
+bool ElimReshapeAnalysis::AnalysisElemwiseForward(const FunctionRef &output) {
   auto inputs = g_.pre_graph[output];
+  bool output_changed = false;
   for (const auto &input : inputs) {
     if (result_.ShapeChanged(input) && !g_.visited_funcs.count(output)) {
-      result_.changed_shapes[output] = result_.changed_shapes[input];
+      auto input_shape = result_.changed_shapes[input];
+      auto output_shape_change = input_shape;
+      if (!EqualShape(g_.func_shape[output], g_.func_shape[input])) {
+        output_shape_change =
+          BroadcastReshapeUtil::GetOutputShapeChange(g_.func_shape[output], g_.func_shape[input], input_shape);
+        if (output_shape_change.empty()) {
+          return false;
+        }
+      }
+      output_changed = true;
+      result_.changed_shapes[output] = output_shape_change;
       g_.visited_funcs.insert(output);
       break;
     }
   }
-  AnalysisElemwiseBackward(output);
+  if (!AnalysisElemwiseBackward(output)) {
+    // If other inputs cannot broadcast to the updated output,
+    // the change of the output should be rolled back.
+    if (output_changed) {
+      result_.changed_shapes.erase(output);
+      g_.visited_funcs.erase(output);
+    }
+    return false;
+  }
+  return true;
 }
 
 void ElimReshapeAnalysis::AnalysisOthers(const FunctionRef &output) {
@@ -202,7 +232,9 @@ void ElimReshapeAnalysis::AnalysisInner(const FunctionRef &output) {
   if (IsTransform(op_name)) {
     AnalysisTransform(output);
   } else if (IsElemwise(op_name) && g_.CanChangeElem(output)) {
-    AnalysisElemwise(output);
+    if (!AnalysisElemwise(output)) {
+      return AnalysisOthers(output);
+    }
   } else if (IsInplaceAssign(op_name)) {
     AnalysisInplaceAssign(output);
   } else {

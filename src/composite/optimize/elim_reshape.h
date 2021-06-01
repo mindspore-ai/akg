@@ -28,9 +28,9 @@ class ElimReshapeAnalysis {
   void AnalysisForward();
   void AnalysisBackkward();
   void AnalysisTransform(const FunctionRef &output);
-  void AnalysisElemwise(const FunctionRef &output);
-  void AnalysisElemwiseBackward(const FunctionRef &output);
-  void AnalysisElemwiseForward(const FunctionRef &output);
+  bool AnalysisElemwise(const FunctionRef &output);
+  bool AnalysisElemwiseBackward(const FunctionRef &output);
+  bool AnalysisElemwiseForward(const FunctionRef &output);
   void AnalysisOthers(const FunctionRef &output);
   void AnalysisInplaceAssign(const FunctionRef &output);
   void AnalysisInner(const FunctionRef &output);
