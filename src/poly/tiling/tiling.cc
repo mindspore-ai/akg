@@ -438,7 +438,7 @@ std::pair<TileSizes, std::deque<ParamInfo>> GenerateTiling(const isl::schedule &
   if (analyzer.scop_info_.user_config_.GetIsDynamic()) {
     std::tie(dims, param_info) = generator.GenerateDynamic();
   } else if ((scop_info.user_config_.GetPragmaSpeedUpTiling() && analyzer.op_type_ == VECTOR_OP) ||
-             !g_attrs.GetStr(kErrorInfo, "").empty()) {
+             !g_attrs.GetStr(kErrorInfo, "").empty() || analyzer.scop_info_.user_config_.GetTarget() == TARGET_CUDA) {
     dims = generator.GenerateQuickly();
   } else {
     dims = generator.Generate();
