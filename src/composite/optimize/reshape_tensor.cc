@@ -281,7 +281,7 @@ class ReshapeTensorMutator : public IRMutator {
     }
   }
 
-  static Tensor RecoverTensor(const Expr &e) {
+  Tensor RecoverTensor(const Expr &e) {
     Tensor ret;
     auto call = e.as<Call>();
     if (call == nullptr || call->call_type != Call::CallType::Halide) {

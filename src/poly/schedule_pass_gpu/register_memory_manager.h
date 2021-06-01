@@ -18,6 +18,7 @@
 #define REGISTER_MEMORY_MANAGER_H_
 
 #include "poly/schedule_pass.h"
+#include "poly/schedule_tree_util.h"
 
 namespace akg {
 namespace ir {
@@ -26,10 +27,6 @@ namespace poly {
 constexpr auto MAX_REGISTER_PER_THREAD_BLOCK = 65536;
 constexpr auto BYTES_PER_REGISTER = 4;
 constexpr auto REGISTER_ALLOC_RATIO = 1.0;  // percentage of local memory that allocated to tensors
-constexpr auto M_N_K_COUNT = 3;
-constexpr auto M_POSITION = 0;
-constexpr auto N_POSITION = 1;
-constexpr auto K_POSITION = 2;
 
 /*
  * Manager shared memory in GPU.
@@ -42,6 +39,9 @@ class RegisterMemoryManager : public SchedulePass {
     if (!scop_info.user_config_.GetLocalTensors().empty()) {
       configed_tensors_ = Split(scop_info.user_config_.GetLocalTensors(), " ");
     }
+    if (scop_info_.user_config_.GetEnableMatmul()) {
+      local_tensor_c_ = GetMatmulTensorsName(scop_info)[MATRIX_C];
+    }
   };
   ~RegisterMemoryManager() {}
 
@@ -49,13 +49,9 @@ class RegisterMemoryManager : public SchedulePass {
 
   isl::schedule HoistRegisterMemoryOnDepth(isl::schedule_node &node, size_t depth);
 
-  isl::union_set GatherMappingsTo(MappingCfg *cfg);
-
   void CreateTensorCluster(const isl::schedule_node &node, const isl::union_map &outer_sch);
 
   void GatherBufferFootprintDefInfo(const isl::schedule_node &node, BufferDefInfo &tensor_info);
-
-  bool ReuseTensorCluster(const TensorFootprintCluster &cluster, const isl::multi_union_pw_aff &outer_pw_aff);
 
   bool IsPromote(const TensorFootprintCluster &fp_cluster, const isl::multi_union_pw_aff &partial_sched_mupa,
                  const isl::multi_union_pw_aff &thread_schedule);
@@ -71,13 +67,12 @@ class RegisterMemoryManager : public SchedulePass {
   isl::schedule_node GetRegisterPromotedNode(isl::schedule_node &root);
   isl::schedule HoistRegisterMemoryOnMark(isl::schedule_node root);
 
-  isl::schedule_node CollectMarkNode(isl::schedule_node root, const std::string local_position_mark);
-
-  isl::schedule_node MapPromotionTensorToWarps(isl::schedule_node &root);
+  isl::schedule_node TileTensorAccordingInterfaceValue(isl::schedule_node &root);
   isl::multi_val GetRealTileSizeVal(const isl::schedule_node &node, const std::string &matrix_name,
                                     const std::string &matrix_major);
+  std::string GetPromotedWriteName();
 
-  void SharedTensors();
+  void GetActualPromotedSharedTensors();
 
   bool IsReadOrWriteBand(isl::schedule_node node);
 
@@ -89,7 +84,7 @@ class RegisterMemoryManager : public SchedulePass {
   bool memory_exceeding_{false};
   bool hoist_compute_local_tensor_{true};
   bool hoist_tensor_all_{false};
-  std::string local_tensor_c_{COMPUTE};
+  std::string local_tensor_c_;
   std::string shared_tensors_;
 };
 

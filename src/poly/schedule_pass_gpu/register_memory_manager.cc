@@ -20,74 +20,38 @@
 
 #include "poly/scop.h"
 #include "poly/dma_inject.h"
-#include "poly/schedule_tree_util.h"
 #include "poly/poly_util.h"
 
 namespace akg {
 namespace ir {
 namespace poly {
 
-isl::union_set RegisterMemoryManager::GatherMappingsTo(MappingCfg *cfg) {
-  isl::schedule_node root = schedule_.get_root();
-  auto domain_node = root.as<isl::schedule_node_domain>();
-  auto domain = domain_node.domain();
-  auto mapping_filters = CollectNode<isl::schedule_node_filter>(schedule_);
-
-  std::vector<isl::id> filters;
-  for (size_t idx = 0; idx < cfg->bound; ++idx) {
-    auto value = cfg->GetAt(idx);
-    auto id = isl::id(root.ctx(), value.first);
-    filters.push_back(id);
-  }
-  mapping_filters = FilterNode(mapping_filters, filters);
-
-  auto mapping = isl::union_set::empty(domain.ctx());
-  for (auto item : mapping_filters) {
-    if (item.isa<isl::schedule_node_filter>()) {
-      auto filter = item.as<isl::schedule_node_filter>();
-      if (filter.has_parent() && !filter.parent().isa<isl::schedule_node_mark>()) {
-        continue;
-      }
-
-      isl::union_set uset = filter.get_filter();
-      std::vector<isl::set> vset;
-      uset.foreach_set([&vset](isl::set s) { vset.push_back(s); });
-      if (!vset.empty()) {
-        auto filter_name = vset[0].get_tuple_name();
-        if (filter_name == READ_ID_NAME || filter_name == WRITE_ID_NAME) {
-          continue;
-        }
-      }
-
-      mapping = mapping.unite(filter.filter());
-    }
-  }
-  return mapping;
-}
-
-void RegisterMemoryManager::SharedTensors() {
+void RegisterMemoryManager::GetActualPromotedSharedTensors() {
   for (const auto &buffer : scop_info_.analysis_result_.active_buffer_footprints_) {
     auto cluster_id = buffer.second.cluster_id;
-    auto buf_def = scop_info_.analysis_result_.GetBufferDefInfo(cluster_id);
-    shared_tensors_ += buf_def.tensor_id.name() + " ";
+    shared_tensors_ += cluster_id.name() + " ";
   }
 }
 
 isl::schedule RegisterMemoryManager::HoistRegisterMemoryOnDepth(isl::schedule_node &node, size_t depth) {
-  auto block_cfg = scop_info_.user_config_.GetBlockConfig();
   auto res_node = node;
-  auto block_mapping = GatherMappingsTo(block_cfg);
+  isl::schedule_node root_node = node.get_schedule().get_root();
+
+  auto block_cfg = scop_info_.user_config_.GetBlockConfig();
+  CHECK(block_cfg != nullptr) << "block config is null";
+  auto replace_cfg = scop_info_.user_config_.GetReplaceConfig();
+  auto block_mapping = GetBlockMappingFilterInfo(root_node, block_cfg, replace_cfg);
+
   auto thread_cfg = scop_info_.user_config_.GetThreadConfig();
-  auto mapping = GatherMappingsTo(thread_cfg).intersect(block_mapping);
+  if (scop_info_.user_config_.GetEnableTensorCoreUsePoly()) {
+    thread_cfg = replace_cfg[WARP_COMPUTE];
+  }
+  CHECK(thread_cfg != nullptr) << "thread config is null";
+  auto mapping = GatherMappingsTo(root_node, thread_cfg).intersect(block_mapping);
 
   auto partial_sched = LocalSchedule(node);
-  auto tmp_sched = partial_sched.intersect_domain(mapping);
-  if (scop_info_.user_config_.GetEnableMatmul() && scop_info_.user_config_.GetEnableTensorCoreUsePoly()) {
-    tmp_sched = partial_sched;
-  }
-  CreateTensorCluster(node, tmp_sched);
-
-  isl::schedule_node root_node = node.get_schedule().get_root();
+  partial_sched = partial_sched.intersect_domain(mapping);
+  CreateTensorCluster(node, partial_sched);
 
   isl::schedule sch = schedule_;
   if (memory_exceeding_) {
@@ -115,11 +79,11 @@ isl::schedule RegisterMemoryManager::HoistRegisterMemoryOnDepth(isl::schedule_no
 
       if (scop_info_.user_config_.GetEnableMatmul() && !hoist_tensor_all_) {
         if (!hoist_compute_local_tensor_) {
-          if (buffer_info.dst_tensor_id.get_name() == local_tensor_c_ + LOCAL_SUFFIX) {
+          if (!IsTensorAB(buffer_info.dst_tensor_id.get_name(), scop_info_)) {
             continue;
           }
         } else {
-          if (buffer_info.dst_tensor_id.get_name() != local_tensor_c_ + LOCAL_SUFFIX) {
+          if (IsTensorAB(buffer_info.dst_tensor_id.get_name(), scop_info_)) {
             continue;
           }
         }
@@ -185,18 +149,6 @@ isl::schedule RegisterMemoryManager::HoistRegisterMemoryOnDepth(isl::schedule_no
   }
 }
 
-bool RegisterMemoryManager::UnrolledLoop(const TensorFootprintCluster &fp_cluster) {
-  auto box_sizes = fp_cluster.GetFixedBoxSizes();
-  size_t tmp_size = 1;
-  for (auto size : box_sizes) {
-    tmp_size = tmp_size * size;
-  }
-  if (tmp_size != 1) {
-    return true;
-  }
-  return false;
-}
-
 /*Check if the given "group" can be promoted to registers for the given
  * mapping to thread identifiers and within the given outer schedule */
 bool RegisterMemoryManager::IsPromote(const TensorFootprintCluster &fp_cluster,
@@ -209,15 +161,6 @@ bool RegisterMemoryManager::IsPromote(const TensorFootprintCluster &fp_cluster,
   /* check that whether the mapping relation between single thread
    * and outer schedule points and group elements pair is injective. */
   return thread_schedule_mapping.is_injective();
-}
-
-/* Check that whether the mapping relation between instance statement
- * and outer schedule points and tensor elements pair is reusable. */
-bool RegisterMemoryManager::ReuseTensorCluster(const TensorFootprintCluster &cluster,
-                                               const isl::multi_union_pw_aff &outer_pw_aff) {
-  /* compute the mapping relation between statement instance and outer schedule space and tensor elements pair */
-  isl::union_map state_schedule_mapping = ScheduleTensorMapping(outer_pw_aff, cluster.OrigianlAccessRelations());
-  return !state_schedule_mapping.is_injective();
 }
 
 void RegisterMemoryManager::CreateTensorCluster(const isl::schedule_node &node, const isl::union_map &outer_sch) {
@@ -271,23 +214,14 @@ void RegisterMemoryManager::CreateTensorCluster(const isl::schedule_node &node, 
 
   std::vector<BufferDefInfo> promoted_infos;
 
-  if (scop_info_.user_config_.GetEnableMatmul()) {
-    std::unordered_map<std::string, std::string> matmul_map = scop_info_.analysis_result_.GetMatrixMatmulMap();
-    for (auto i : matmul_map) {
-      if (i.second == MATRIX_C) {
-        local_tensor_c_ = i.first;
-      }
-    }
-  }
-
   for (const auto &item : tensor_list) {
     if (scop_info_.user_config_.GetEnableMatmul() && !hoist_tensor_all_) {
       if (!hoist_compute_local_tensor_) {
-        if (item.get_name() == local_tensor_c_) {
+        if (!IsTensorAB(item.get_name(), scop_info_)) {
           continue;
         }
       } else {
-        if (item.get_name() != local_tensor_c_) {
+        if (IsTensorAB(item.get_name(), scop_info_)) {
           continue;
         }
       }
@@ -354,7 +288,11 @@ void RegisterMemoryManager::IsOutofMemory(std::vector<BufferDefInfo> promoted_in
     auto box_sizes = promoted_info.footprints_cluster->GetFixedBoxSizes();
     if (!box_sizes.empty()) {
       auto tensor_size = std::accumulate(box_sizes.begin(), box_sizes.end(), 1, std::multiplies<size_t>());
-      auto data_bytes = scop_info_.user_config_.GetDataType(promoted_info.tensor_id.get_name());
+      if (scop_info_.user_config_.GetEnableTensorCoreUsePoly()) {
+        tensor_size = (promoted_info.tensor_id.get_name() == local_tensor_c_) ? (tensor_size / alloc_threads)
+                                                                              : (tensor_size * 2 / alloc_threads);
+      }
+      auto data_bytes = scop_info_.user_config_.GetDataBytes(promoted_info.tensor_id.get_name());
       total_alloc_size += tensor_size * std::max<int>(1, data_bytes / BYTES_PER_REGISTER);
       if (total_alloc_size * alloc_threads >= MAX_REGISTER_PER_THREAD_BLOCK * REGISTER_ALLOC_RATIO) {
         memory_exceeding_ = true;
@@ -459,7 +397,8 @@ bool RegisterMemoryManager::IsReadOrWriteBand(isl::schedule_node node) {
 isl::schedule_node RegisterMemoryManager::GetRegisterPromotedNode(isl::schedule_node &root) {
   isl::schedule_node hoist_register_node = root;
   root.foreach_descendant_top_down([&hoist_register_node](const isl::schedule_node &node) -> bool {
-    if (auto sequence_node = node.as<isl::schedule_node_sequence>()) {
+    if (node.isa<isl::schedule_node_sequence>()) {
+      auto sequence_node = node.as<isl::schedule_node_sequence>();
       if (sequence_node.parent().isa<isl::schedule_node_extension>() &&
           sequence_node.parent().parent().isa<isl::schedule_node_band>()) {
         hoist_register_node = sequence_node.parent().parent();
@@ -469,7 +408,8 @@ isl::schedule_node RegisterMemoryManager::GetRegisterPromotedNode(isl::schedule_
         return false;
       }
     }
-    if (auto mark_node = node.as<isl::schedule_node_mark>()) {
+    if (node.isa<isl::schedule_node_mark>()) {
+      auto mark_node = node.as<isl::schedule_node_mark>();
       if (mark_node.get_id().get_name() == THREAD_MARKER && mark_node.parent().isa<isl::schedule_node_band>()) {
         hoist_register_node = mark_node.parent();
         return false;
@@ -480,30 +420,14 @@ isl::schedule_node RegisterMemoryManager::GetRegisterPromotedNode(isl::schedule_
   return hoist_register_node;
 }
 
-isl::schedule_node RegisterMemoryManager::CollectMarkNode(isl::schedule_node root,
-                                                          const std::string local_position_mark) {
-  isl::schedule_node hoist_node;
-  root.foreach_descendant_top_down([&hoist_node, &local_position_mark](const isl::schedule_node &node) -> bool {
-    if (auto mark_node = node.as<isl::schedule_node_mark>()) {
-      // ignore nested mark nodes
-      if (mark_node.get_id().get_name() == local_position_mark) {
-        hoist_node = mark_node;
-        return false;
-      }
-    }
-    return true;
-  });
-  return hoist_node;
-}
-
 isl::schedule RegisterMemoryManager::HoistRegisterMemoryOnMark(isl::schedule_node root) {
   std::string config_shared_tensors = scop_info_.user_config_.GetSharedTensors();
   auto c_mark = PROMOTE_GLOBAL_TO_REGISTER_C;
   if (config_shared_tensors.find(local_tensor_c_) != std::string::npos) {
-    c_mark = PROMOTE_GLOBAL_TO_SHARED_C;
+    c_mark = PROMOTE_SHARED_TO_REGISTER_C;
   }
 
-  auto mark_node = CollectMarkNode(root, c_mark);
+  auto mark_node = CollectMarkNodeOnPromotion(root, c_mark);
   auto tmp_hoist_node = mark_node.parent();
 
   while (!tmp_hoist_node.isa<isl::schedule_node_band>()) {
@@ -527,8 +451,8 @@ isl::schedule RegisterMemoryManager::HoistRegisterMemoryOnMark(isl::schedule_nod
   auto sch = HoistRegisterMemoryOnDepth(hoist_compute_node, depth);
 
   auto hoist_ab_root = sch.get_root();
-  auto ab_mark = PROMOTE_SHARED_TO_REGISTER;
-  auto mark_ab_node = CollectMarkNode(hoist_ab_root, ab_mark);
+  auto ab_mark = PROMOTE_SHARED_TO_REGISTER_AB;
+  auto mark_ab_node = CollectMarkNodeOnPromotion(hoist_ab_root, ab_mark);
   auto hoist_ab_node = mark_ab_node.del().parent();
   auto hoist_ab_depth = hoist_ab_node.schedule_depth();
   hoist_compute_local_tensor_ = false;
@@ -537,12 +461,19 @@ isl::schedule RegisterMemoryManager::HoistRegisterMemoryOnMark(isl::schedule_nod
   return sch;
 }
 
-isl::schedule_node RegisterMemoryManager::MapPromotionTensorToWarps(isl::schedule_node &root) {
-  std::string write_name = WRITE_ID_NAME;
+std::string RegisterMemoryManager::GetPromotedWriteName() {
+  std::string write_name = GML_WRITE_ID_NAME;
   std::string shared_tensors = shared_tensors_;
   if (shared_tensors.find(local_tensor_c_) != std::string::npos) {
     write_name = SHARED_WRITE_ID_NAME;
   }
+  return write_name;
+}
+
+// According to the value of the conv interface, the size of the tensor is split to confirm the size of the fragment.
+isl::schedule_node RegisterMemoryManager::TileTensorAccordingInterfaceValue(isl::schedule_node &root) {
+  CHECK(scop_info_.user_config_.GetReplaceConfig().count(WARP_COMPUTE)) << "Cannot map to warp.";
+  std::string write_name = GetPromotedWriteName();
   auto CollectReadWriteFilter = [this, write_name](isl::schedule_node node) -> isl::schedule_node {
     if (!node.isa<isl::schedule_node_filter>()) {
       return node;
@@ -551,75 +482,36 @@ isl::schedule_node RegisterMemoryManager::MapPromotionTensorToWarps(isl::schedul
     if (!is_all_sets_read_or_write) {
       return node;
     }
-    auto band_node = GetCanMappingNode(node);
-    CHECK(scop_info_.user_config_.GetReplaceConfig().count(WARP_COMPUTE)) << "Cannot map to warp.";
-    auto mapping_cfg = scop_info_.user_config_.GetReplaceConfig()[WARP_COMPUTE];
-    auto original_x = mapping_cfg->GetX().second;
-    auto original_y = mapping_cfg->GetY().second;
 
+    auto start_depth = node.get_tree_depth();
+
+    auto band_node = GetCanMappingNode(node);
     std::string id_name = GetPromotionTensorName(band_node, scop_info_.analysis_result_.buffer_def_infos_);
     if (id_name.empty() || !scop_info_.analysis_result_.GetMatrixMatmulMap().count(id_name) ||
         !scop_info_.analysis_result_.GetMatrixMatmulMajor().count(id_name)) {
-      return band_node;
+      return node;
     }
 
+    bool is_conv = scop_info_.user_config_.GetEnableConvTensorCore();
+    if (is_conv) {
+      band_node = AdjustConvScheduleTreeStructure(band_node);
+    }
+
+    auto mapping_cfg = scop_info_.user_config_.GetReplaceConfig()[WARP_COMPUTE];
+    CHECK(mapping_cfg != nullptr) << "mapping config is null";
     // split member that does not involved in thread mapping
-    bool has_split = false;
     auto mem_size = band_node.as<isl::schedule_node_band>().n_member();
     if (mem_size > mapping_cfg->bound) {
       band_node = band_node.as<isl::schedule_node_band>().split(mem_size - mapping_cfg->bound);
       band_node = band_node.child(0);
-      has_split = true;
     }
 
-    auto matrix_name = scop_info_.analysis_result_.GetMatrixMatmulMap()[id_name];
-    auto matrix_major = scop_info_.analysis_result_.GetMatrixMatmulMajor()[id_name];
+    std::string matrix_name = scop_info_.analysis_result_.GetMatrixMatmulMap()[id_name];
+    std::string matrix_major = scop_info_.analysis_result_.GetMatrixMatmulMajor()[id_name];
     isl::multi_val tile_size_val = GetRealTileSizeVal(band_node, matrix_name, matrix_major);
     band_node = TileBand(band_node, tile_size_val);
 
-    // In order to ensure that the data when promotion and calculation are consistent, map the m axis of MATRIX_A to
-    // w0, and map the n axis of MATRIX_B to w1.
-    bool need_coalesce = false;
-    if (matrix_name == MATRIX_A) {
-      need_coalesce = (matrix_major == ROW_MAJOR) ? true : false;
-      mapping_cfg->ModifySize(N_POSITION, MAPPING_INVALID_WARP);
-    } else if (matrix_name == MATRIX_B) {
-      need_coalesce = (matrix_major == ROW_MAJOR) ? true : false;
-      mapping_cfg->ModifySize(M_POSITION, MAPPING_INVALID_WARP);
-    } else {
-      need_coalesce = true;
-    }
-
-    Mapping mapping;
-    auto after_map_pair = MapInnerDimToThreads(band_node, true, mapping_cfg, mapping, need_coalesce);
-    band_node = after_map_pair.first;
-
-    if (matrix_name == MATRIX_A) {
-      need_coalesce = true;
-      mapping_cfg->ModifySize(N_POSITION, original_y);
-    } else if (matrix_name == MATRIX_B) {
-      mapping_cfg->ModifySize(M_POSITION, original_x);
-    }
-
-    bool locate_is_child = false;
-    if (band_node.child(0).as<isl::schedule_node_mark>()) {
-      band_node = band_node.child(0);
-      locate_is_child = true;
-    }
-    if (band_node.as<isl::schedule_node_mark>()) {
-      auto marker_name = band_node.as<isl::schedule_node_mark>().get_id().get_name();
-      if (marker_name.find(THREAD_MARKER) != std::string::npos) {
-        band_node = band_node.del().insert_mark(isl::id(band_node.ctx(), matrix_name));
-      }
-    }
-    band_node = locate_is_child ? band_node.parent() : band_node;
-    std::string fragment_mark = FRAGMENT;
-    fragment_mark += matrix_name.at(matrix_name.size() - 1);
-    band_node = band_node.insert_mark(fragment_mark);
-
-    band_node = has_split ? band_node.parent() : band_node;
-
-    node = band_node.parent();
+    node = band_node.ancestor(band_node.get_tree_depth() - start_depth);
     return node;
   };
 
@@ -628,35 +520,31 @@ isl::schedule_node RegisterMemoryManager::MapPromotionTensorToWarps(isl::schedul
 
 isl::multi_val RegisterMemoryManager::GetRealTileSizeVal(const isl::schedule_node &node, const std::string &matrix_name,
                                                          const std::string &matrix_major) {
-  auto title_size_count = static_cast<int>(pass_info_.tile_sizes_.size());
   auto ctx = node.ctx();
   auto space = node.as<isl::schedule_node_band>().get_space();
   isl::multi_val tile_size_val = isl::multi_val::zero(space);
 
-  auto init_number = title_size_count > M_N_K_COUNT ? title_size_count - M_N_K_COUNT : 0;
-  auto del_position = init_number;
-  bool need_coalesce = false;
-  if (matrix_name == MATRIX_B) {
-    need_coalesce = (matrix_major == ROW_MAJOR) ? true : false;
-    del_position += M_POSITION;
-  } else if (matrix_name == MATRIX_A) {
-    need_coalesce = (matrix_major == COL_MAJOR) ? true : false;
-    del_position += N_POSITION;
-  } else {
-    del_position += K_POSITION;
-  }
-
+  int m = scop_info_.analysis_result_.GetMmaMode().m;
+  int n = scop_info_.analysis_result_.GetMmaMode().n;
+  int k = scop_info_.analysis_result_.GetMmaMode().k;
   std::vector<int> tile_size_number;
-  for (auto i = init_number; i < title_size_count; ++i) {
-    if (i == del_position) {
-      continue;
-    }
-    tile_size_number.emplace_back(static_cast<int>(pass_info_.tile_sizes_[i].c0_tiling_size));
+  bool need_reverse = false;
+  if (matrix_name == MATRIX_B) {
+    need_reverse = (matrix_major == ROW_MAJOR) ? true : false;
+    tile_size_number.emplace_back(m);
+    tile_size_number.emplace_back(k);
+  } else if (matrix_name == MATRIX_A) {
+    need_reverse = (matrix_major == COL_MAJOR) ? true : false;
+    tile_size_number.emplace_back(n);
+    tile_size_number.emplace_back(k);
+  } else {
+    tile_size_number.emplace_back(m);
+    tile_size_number.emplace_back(n);
   }
 
   auto len = static_cast<int>(tile_size_number.size());
   for (auto i = 0; i < len; ++i) {
-    int pos = need_coalesce ? len - 1 - i : i;
+    int pos = need_reverse ? len - 1 - i : i;
     tile_size_val = tile_size_val.set_val(pos, isl::val(ctx, tile_size_number[i]));
   }
 
@@ -664,30 +552,7 @@ isl::multi_val RegisterMemoryManager::GetRealTileSizeVal(const isl::schedule_nod
 }
 
 isl::schedule RegisterMemoryManager::Run(isl::schedule sch) {
-  auto GetGMWriteFilter = [this](isl::schedule_node node) -> isl::schedule_node {
-    if (!node.isa<isl::schedule_node_filter>()) {
-      return node;
-    }
-    isl::union_set uset = node.as<isl::schedule_node_filter>().get_filter();
-    bool is_gm_write = false;
-    uset.foreach_set([&is_gm_write](isl::set s) {
-      if (s.get_tuple_name() == WRITE_ID_NAME) {
-        is_gm_write = true;
-      }
-    });
-    if (is_gm_write && node.has_parent() && node.parent().isa<isl::schedule_node_sequence>()) {
-      node = node.child(0).insert_mark(PROMOTE_LOCAL_TO_GLOBAL);
-      node = node.parent();
-    }
-    return node;
-  };
-
-  auto node = sch.root().child(0);
-  if (node.isa<isl::schedule_node_context>()) {
-    node = node.del();
-  }
-  node = InsertContextNode(node, scop_info_);
-  sch = node.schedule();
+  sch = InsertContextNode(sch, scop_info_);
 
   if (!scop_info_.user_config_.UseRegisterMemory()) {
     return sch;
@@ -700,22 +565,29 @@ isl::schedule RegisterMemoryManager::Run(isl::schedule sch) {
   schedule_ = sch;
   auto root = sch.get_root();
 
+  if (scop_info_.user_config_.GetEnableMatmul()) {
+    GetActualPromotedSharedTensors();
+    sch = HoistRegisterMemoryOnMark(root);
+    if (scop_info_.user_config_.GetEnableTensorCoreUsePoly()) {
+      root = sch.get_root();
+      sch = TileTensorAccordingInterfaceValue(root).get_schedule();
+    }
+    std::string write_name = GetPromotedWriteName();
+    std::string marker_name = PROMOTE_REGISTER_TO_GLOBAL;
+    if (write_name == SHARED_WRITE_ID_NAME) {
+      marker_name = PROMOTE_REGISTER_TO_SHARED;
+    }
+    sch = InsertMarkerForThreadGroup(sch, write_name, marker_name);
+    return sch;
+  }
+
   auto res_node = GetRegisterPromotedNode(root);
   if (res_node.isa<isl::schedule_node_band>()) {
     auto depth = UpdateDepth(res_node);
     if (scop_info_.user_config_.GetRegisterDepth() >= 0) {
       depth = scop_info_.user_config_.GetRegisterDepth();
     }
-    if (scop_info_.user_config_.GetEnableMatmul()) {
-      sch = HoistRegisterMemoryOnMark(root);
-      if (scop_info_.user_config_.GetEnableTensorCoreUsePoly()) {
-        root = sch.get_root();
-        sch = MapPromotionTensorToWarps(root).get_schedule();
-      }
-      sch = sch.get_root().map_descendant_bottom_up(GetGMWriteFilter).get_schedule();
-    } else {
-      sch = HoistRegisterMemory(root, depth);
-    }
+    sch = HoistRegisterMemory(root, depth);
   }
 
   return sch;

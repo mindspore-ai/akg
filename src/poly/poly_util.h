@@ -331,10 +331,15 @@ constexpr auto T2 = "t2";
 constexpr auto TILE_WITH_C1 = "C1";
 constexpr auto TILE_WITH_C0 = "C0";
 constexpr auto TILE_WITH_C0_C1 = "C0_C1";
+constexpr auto TILE_WITH_WARP_C1 = "WARP_C1";
 constexpr auto REPLACE = "replace_";
 constexpr auto COMPUTE = "compute";
 constexpr auto PROMOTE = "promote_";
 constexpr auto WARP_COMPUTE = "warp_compute";
+constexpr auto CONV_O = "conv_o";
+constexpr auto CONV_N = "conv_n";
+constexpr auto CONV_H_W = "conv_h_w";
+
 constexpr auto BLOCK_IDX_X = "blockIdx.x";
 constexpr auto BLOCK_IDX_Y = "blockIdx.y";
 constexpr auto BLOCK_IDX_Z = "blockIdx.z";
@@ -351,12 +356,14 @@ constexpr auto SYNC_SCOP_GLOBAL = "global";
 
 constexpr auto ROW_MAJOR = "row_major";
 constexpr auto COL_MAJOR = "col_major";
+constexpr auto REDUCE_AREA_FLAG = "reduce_area";
 
 /******************************************************
  * Following const is the mark tags for schedule tree
  ******************************************************/
 constexpr auto REALIZE = "realize";
 constexpr auto CONV_GEMM = "conv_gemm";
+constexpr auto CONV_KHKW_OUTER = "conv_khkw_outer";
 constexpr auto FUSE_VECTOR = "fuse_vector";
 constexpr auto MULTICORE_COINCIDENT = "multicore_coincident_";
 
@@ -367,15 +374,24 @@ constexpr auto CALL_IM2COL_UB = "cce_img2col_ub";
 constexpr auto ATTR_IM2COL_KEY = "im2colKey";
 
 constexpr auto MAPPING_INVALID_WARP = INT_MAX;
+// promote marker for poly
 constexpr auto PROMOTE_GLOBAL_TO_SHARED_AB = "promote_global_to_shared_ab";
 constexpr auto PROMOTE_GLOBAL_TO_SHARED_C = "promote_global_to_shared_c";
-constexpr auto PROMOTE_SHARED_TO_REGISTER = "promote_shared_to_register";
+constexpr auto PROMOTE_SHARED_TO_REGISTER_AB = "promote_shared_to_register_ab";
+constexpr auto PROMOTE_SHARED_TO_REGISTER_C = "promote_shared_to_register_c";
 constexpr auto PROMOTE_GLOBAL_TO_REGISTER_C = "promote_global_to_register_c";
-constexpr auto PROMOTE_LOCAL_TO_GLOBAL = "promote_local_to_global";
+// promote marker for thread group
+constexpr auto PROMOTE_REGISTER_TO_GLOBAL = "promote_register_to_global";
+constexpr auto PROMOTE_REGISTER_TO_SHARED = "promote_register_to_shared";
+constexpr auto PROMOTE_SHARED_TO_GLOBAL = "promote_shared_to_global";
+
 constexpr auto PROMOTE_VECTORIZATION = "promote_vectorization";
+constexpr auto SKIP_MARKER = "skip";
+constexpr auto MAP_TO_WARP = "map_to_warp";
 constexpr auto THREAD_MARKER = "thread_marker";
 constexpr auto BLOCK_MARKER = "block_marker";
 constexpr auto WARP_MARKER = "warp_marker";
+constexpr auto KH_KW_MARKER = "kh_kw_marker";
 constexpr auto VECTORIZATION_MARKER = "vectorization_marker";
 constexpr auto REDUCE_MARKER = "reduce_marker_";
 constexpr auto ATOMIC_MARKER = "atomic";
@@ -389,6 +405,8 @@ constexpr auto READ_ID_NAME = "GMread";
 constexpr auto WRITE_ID_NAME = "GMwrite";
 constexpr auto SHARED_READ_ID_NAME = "SHAREDread";
 constexpr auto SHARED_WRITE_ID_NAME = "SHAREDwrite";
+constexpr auto GML_READ_ID_NAME = "GMLread";
+constexpr auto GML_WRITE_ID_NAME = "GMLwrite";
 
 constexpr auto AKG_REDUCE_SUM = "SumOp";
 constexpr auto AKG_REDUCE_MIN = "MinOp";
@@ -400,6 +418,7 @@ constexpr auto AKG_REDUCE_UNSUPPORTED = "X";
 constexpr auto MATRIX_A = "matrix_a";
 constexpr auto MATRIX_B = "matrix_b";
 constexpr auto MATRIX_C = "matrix_c";
+constexpr auto MATRIX_ELSE = "matrix_else";
 constexpr auto FRAGMENT = "fragment_";
 constexpr auto LOCAL_SUFFIX = "_local";
 constexpr auto SHARE_SUFFIX = "_shared";

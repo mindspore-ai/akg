@@ -26,6 +26,7 @@
 #include "composite/optimize/ops_combine.h"
 #include "composite/optimize/intrin_rewriter.h"
 #include "composite/optimize/complex_expander.h"
+#include "composite/optimize/delete_cast.h"
 
 namespace akg {
 Stmt Optimize(Stmt &s, BuildInfo &info) {
@@ -58,6 +59,10 @@ Stmt Optimize(Stmt &s, BuildInfo &info) {
   }
   // rename MatMul to BatchMatMul
   pm.RegisterPass(std::make_shared<RenameMatmul>());
+  // delete cast for MatMul fusion
+  if (info.opt.target == "cuda") {
+    pm.RegisterPass(std::make_shared<DeleteCast>());
+  }
   // intrin rewrite in ascend
   if (info.opt.target == "aicore") {
     pm.RegisterPass(std::make_shared<IntrinRewriter>());

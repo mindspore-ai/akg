@@ -29,7 +29,8 @@ isl::id RealizeManager::GetRealizeId(const isl::schedule_node &node, std::string
   return isl::id(node.ctx(), realize_id);
 }
 
-isl::schedule_node RealizeManager::InsertExtensionNodeBefore(const isl::schedule_node &node, const std::string tensor_name) {
+isl::schedule_node RealizeManager::InsertExtensionNodeBefore(const isl::schedule_node &node,
+                                                             const std::string tensor_name) {
   auto space = GetExtensionSpace(node, tensor_name);
   isl::schedule_node graft = isl::schedule_node::from_extension(space);
   auto extension_node = node;
@@ -49,6 +50,8 @@ isl::map RealizeManager::GetExtensionSpace(const isl::schedule_node &node, const
 isl::schedule_node RealizeManager::BreadthFirstTopDown(const isl::schedule_node &root, bool &end) {
   std::queue<isl::schedule_node> bfs_queue;
   bfs_queue.push(root);
+  std::unordered_set<std::string> promotion_read_set = {READ_ID_NAME, SHARED_READ_ID_NAME, GML_READ_ID_NAME};
+  std::unordered_set<std::string> promotion_write_set = {WRITE_ID_NAME, SHARED_WRITE_ID_NAME, GML_WRITE_ID_NAME};
 
   isl::schedule_node top;
   while (!bfs_queue.empty()) {
@@ -65,8 +68,8 @@ isl::schedule_node RealizeManager::BreadthFirstTopDown(const isl::schedule_node 
     }
     auto filter_node = top.as<isl::schedule_node_filter>();
     std::string filter_name = GetFilterName(filter_node);
-    if (filter_name != READ_ID_NAME && filter_name != WRITE_ID_NAME &&
-        filter_name != SHARED_READ_ID_NAME && filter_name != SHARED_WRITE_ID_NAME) {
+    if (promotion_read_set.find(filter_name) == promotion_read_set.end() &&
+        promotion_write_set.find(filter_name) == promotion_write_set.end()) {
       continue;
     }
     std::string tensor_name = GetTensorName(filter_node);
@@ -74,19 +77,19 @@ isl::schedule_node RealizeManager::BreadthFirstTopDown(const isl::schedule_node 
       continue;
     }
     // Insert realize node for read node
-    if (filter_name == READ_ID_NAME || filter_name == SHARED_READ_ID_NAME) {
+    if (promotion_read_set.find(filter_name) != promotion_read_set.end()) {
       top = InsertExtensionNodeBefore(top.child(0), tensor_name).parent();
       names_set_.insert(tensor_name);
       break;
     }
     // Insert realize node for write node
-    if (filter_name == WRITE_ID_NAME || filter_name == SHARED_WRITE_ID_NAME) {
+    if (promotion_write_set.find(filter_name) != promotion_write_set.end()) {
       size_t i = 0;
       auto top_parent = top.parent();
       for (; i < top_parent.n_children(); ++i) {
         auto tmp_name = GetFilterName(top_parent.child(i).as<isl::schedule_node_filter>());
-        if ((tmp_name != READ_ID_NAME) && (tmp_name != WRITE_ID_NAME) &&
-            (tmp_name != SHARED_READ_ID_NAME) && (tmp_name != SHARED_WRITE_ID_NAME)) {
+        if (promotion_read_set.find(tmp_name) == promotion_read_set.end() &&
+            promotion_write_set.find(tmp_name) == promotion_write_set.end()) {
           break;
         }
       }
@@ -107,9 +110,7 @@ std::string RealizeManager::GetFilterName(const isl::schedule_node_filter &filte
   if (filter_node) {
     isl::union_set uset = filter_node.get_filter();
     std::vector<isl::set> vset;
-    uset.foreach_set([&vset](isl::set s) {
-      vset.push_back(s);
-    });
+    uset.foreach_set([&vset](isl::set s) { vset.push_back(s); });
     if (!vset.empty()) {
       filter_name = vset[0].get_tuple_name();
     }
@@ -122,9 +123,7 @@ std::string RealizeManager::GetTensorName(const isl::schedule_node_filter &filte
   if (filter_node) {
     isl::union_set uset = filter_node.get_filter();
     std::vector<isl::set> vset;
-    uset.foreach_set([&vset](isl::set s) {
-      vset.push_back(s);
-    });
+    uset.foreach_set([&vset](isl::set s) { vset.push_back(s); });
     if (!vset.empty()) {
       tensor_name = vset[0].unwrap().get_tuple_id(isl_dim_out).get_name();
     }
@@ -142,10 +141,12 @@ isl::schedule_node RealizeManager::InsertRealize(const isl::schedule_node &root)
   while (!end) {
     res_root = BreadthFirstTopDown(res_root, end);
   }
+
   return res_root;
 }
 
 isl::schedule RealizeManager::Run(isl::schedule sch) {
+  sch = scop_info_.sync_manager_.InsertPromotionSync(sch);
   auto root = sch.get_root();
   auto res_root = InsertRealize(root);
   names_set_.clear();

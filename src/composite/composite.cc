@@ -54,9 +54,14 @@ class Emitter : public IRVisitor {
         real_input.push_back(input);
       }
     }
+    if (op_name == "MatMul") {
+      op_name = "BatchMatMul";
+    }
     const auto *topi_f = air::runtime::Registry::Get(op_name);
-    if (topi_f == nullptr) {
-      topi_f = air::runtime::Registry::Get(opt_.target + '_' + op_name);
+    if (topi_f == nullptr && opt_.target != "") {
+      std::string target = opt_.target;
+      target[0] = std::toupper(target[0]);
+      topi_f = air::runtime::Registry::Get(target + op_name);
     }
     CHECK(topi_f) << "Akg topi has no op: " << op_name;
     if (op_name == "Reshape") {  // reshape's attr may have shape [-1], it will cause error.

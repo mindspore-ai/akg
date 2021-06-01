@@ -22,6 +22,12 @@
  * \brief Memory access pattern analysis and optimization.
  *  Re-write data access to enable memory sharing when possible.
  */
+
+/*!
+ * 2021.06.07
+ *     Add function for Merging shared memory of the same life cycle.
+ */
+
 #include <tvm/ir.h>
 #include <tvm/ir_pass.h>
 #include <tvm/ir_mutator.h>
@@ -79,6 +85,11 @@ class LinearAccessPatternFinder final : public IRVisitor {
   };
 
   void Visit_(const Allocate* op) final {
+    auto it_shared = tensor_scope_.find(op->buffer_var->name_hint);
+    if (it_shared != tensor_scope_.end() && it_shared->second == "shared") {
+      shared_tensor_.emplace(op->buffer_var->name_hint);
+      tensor_bounds_[op->buffer_var->name_hint] = op->extents;
+    }
     size_t level = scope_.size();
     const Variable* buf = op->buffer_var.get();
     auto it = alloc_info_.find(buf);
@@ -179,6 +190,10 @@ class LinearAccessPatternFinder final : public IRVisitor {
       const Variable* buf = op->node.as<Variable>();
       alloc_info_[buf].storage_scope =
           StorageScope::make(op->value.as<StringImm>()->value);
+      tensor_scope_[buf->name_hint] = op->value.as<StringImm>()->value;
+      IRVisitor::Visit_(op);
+    } else if (op->attr_key == air::ir::attr::pragma_tensor_core) {
+      tensor_core_on_ = true;
       IRVisitor::Visit_(op);
     } else {
       IRVisitor::Visit_(op);
@@ -196,6 +211,76 @@ class LinearAccessPatternFinder final : public IRVisitor {
     VisitNewScope(op);
   }
 
+  inline bool Matched() {
+    if (!tensor_core_on_) {
+      return false;
+    }
+    LivenessAnalysis(linear_seq_);
+    return !trans_tensor_.empty();
+  }
+
+  void LivenessAnalysis(const std::vector<StmtEntry> &seq) {
+    std::unordered_set<const Variable *> touched;
+    for (size_t i = seq.size(); i > 0; --i) {
+      const StmtEntry &s = seq[i - 1];
+      for (const Variable *buffer : s.touched) {
+        if (!touched.count(buffer)) {
+          touched.insert(buffer);
+          event_map_[s.stmt].push_back(buffer);
+        }
+      }
+    }
+    touched.clear();
+    int level = 0;
+    for (auto it = event_map_.begin(); it != event_map_.end(); ++it) {
+      if (it->second.size() > 1) {
+        for (size_t i = 0; i < it->second.size(); ++i) {
+          if (shared_tensor_.find(it->second[i]->name_hint) != shared_tensor_.end()) {
+            same_var_[level].push_back(GetRef<Var>(it->second[i]));
+            same_live_[level].push_back(it->second[i]->name_hint);
+            auto itstr = same_live_.find(level);
+            auto itvar = same_var_.find(level);
+            CHECK(itstr != same_live_.end());
+            CHECK(itvar != same_var_.end());
+            trans_tensor_[it->second[i]->name_hint] = itstr->second[0];
+            auto bounds = tensor_bounds_.find(itstr->second[0]);
+            CHECK(bounds != tensor_bounds_.end());
+            Expr offset = IntImm::make(Int(32), 1);
+            for (size_t bd = 0; bd < bounds->second.size(); ++bd) {
+              offset = Mul::make(offset, bounds->second[bd]);
+            }
+            shared_offset_[it->second[i]->name_hint] = offset;
+            shared_offset_[itstr->second[0]] = Expr(0);
+            trans_var_[it->second[i]->name_hint] = itvar->second[0];
+
+            auto itsrc = tensor_bounds_.find(itstr->second[0]);
+            CHECK(itsrc != tensor_bounds_.end());
+            Expr tmpsrc = itsrc->second[0];
+            for (size_t bd = 1; bd < itsrc->second.size(); ++bd) {
+              tmpsrc = tmpsrc * itsrc->second[bd];
+            }
+            Array<Expr> new_bounds;
+            if (it->second[i]->name_hint == itstr->second[0]) {
+              new_bounds.push_back(tmpsrc);
+            } else {
+              auto itdst = tensor_bounds_.find(it->second[i]->name_hint);
+              CHECK(itdst != tensor_bounds_.end());
+              Expr tmpdst = itdst->second[0];
+              for (size_t bd = 1; bd < itdst->second.size(); ++bd) {
+                tmpdst = tmpdst * itdst->second[bd];
+              }
+              new_bounds.push_back(tmpsrc + tmpdst);
+            }
+            tensor_bounds_[itstr->second[0]] = new_bounds;
+          }
+        }
+        level++;        
+      }
+    }
+  }
+
+  friend class SharedMemRewriter;
+
   // linearized access sequence.
   std::vector<StmtEntry> linear_seq_;
   // The storage scope of each buffer
@@ -206,6 +291,104 @@ class LinearAccessPatternFinder final : public IRVisitor {
   bool in_thread_env_{false};
   // The scope stack.
   std::vector<StmtEntry> scope_;
+  bool tensor_core_on_{false};
+  std::unordered_map<const Node *, std::vector<const Variable *>> event_map_;
+  std::unordered_map<int, std::vector<std::string>> same_live_;
+  std::unordered_map<int, std::vector<Var>> same_var_;
+  std::unordered_map<std::string, std::string> trans_tensor_;
+  std::unordered_map<std::string, Var> trans_var_;
+  std::unordered_map<std::string, Array<Expr>> tensor_bounds_;
+  std::unordered_map<std::string, Expr> shared_offset_;
+  std::unordered_map<std::string, std::string> tensor_scope_;
+  std::unordered_set<std::string> shared_tensor_;
+};
+
+class SharedMemRewriter : public IRMutator {
+ public:
+  explicit SharedMemRewriter(const LinearAccessPatternFinder &finder)
+      : trans_tensor_(finder.trans_tensor_),
+        trans_var_(finder.trans_var_),
+        tensor_bounds_(finder.tensor_bounds_),
+        shared_offset_(finder.shared_offset_) {}
+
+  Stmt Mutate_(const Store *op, const Stmt &s) final {
+    Stmt stmt = IRMutator::Mutate_(op, s);
+    op = stmt.as<Store>();
+    if (op == nullptr) {
+      return stmt;
+    }
+    auto it = trans_tensor_.find(op->buffer_var->name_hint);
+    if (it != trans_tensor_.end() && it->first != it->second) {
+      auto itoffset = shared_offset_.find(it->first);
+      CHECK(itoffset != shared_offset_.end());
+      Expr new_index = op->index + itoffset->second;
+      auto itvar = trans_var_.find(op->buffer_var->name_hint);
+      CHECK(itvar != trans_var_.end());
+      return Store::make(itvar->second, op->value, new_index, op->predicate);
+    }
+    return stmt;
+  }
+
+  Expr Mutate_(const Load *op, const Expr &e) final {
+    Expr expr = IRMutator::Mutate_(op, e);
+    op = expr.as<Load>();
+    auto it = trans_tensor_.find(op->buffer_var->name_hint);
+    if (it != trans_tensor_.end() && it->first != it->second) {
+      auto itoffset = shared_offset_.find(it->first);
+      CHECK(itoffset != shared_offset_.end());
+      Expr new_index = op->index + itoffset->second;
+      auto itvar = trans_var_.find(op->buffer_var->name_hint);
+      CHECK(itvar != trans_var_.end());
+      return Load::make(op->type, itvar->second, new_index, op->predicate);
+    }
+    return expr;
+  }
+
+  Expr Mutate_(const Variable *op, const Expr &e) final {
+    auto it = trans_tensor_.find(op->name_hint);
+    if (it != trans_tensor_.end() && it->first != it->second) {
+      return Variable::make(op->type, it->second);
+    }
+    return e;
+  }
+
+  Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
+    Stmt stmt = IRMutator::Mutate_(op, s);
+    op = stmt.as<AttrStmt>();
+    if (op != nullptr && op->attr_key == air::ir::attr::storage_scope) {
+      auto it = trans_tensor_.find(op->node.as<Variable>()->name_hint);
+      if (it != trans_tensor_.end() && it->first != it->second) {
+        return op->body;
+      }
+    }
+    return stmt;
+  }
+
+  Stmt Mutate_(const Allocate *op, const Stmt &s) final {
+    Stmt stmt = IRMutator::Mutate_(op, s);
+    op = stmt.as<Allocate>();
+    if (op == nullptr) {
+      return stmt;
+    }
+    auto it = trans_tensor_.find(op->buffer_var->name_hint);
+    if (it != trans_tensor_.end()) {
+      if (it->first != it->second) {
+        return op->body;
+      } else {
+        auto bd = tensor_bounds_.find(it->second);
+        CHECK(bd != tensor_bounds_.end());
+        return Allocate::make(op->buffer_var, op->type, bd->second, op->condition,
+            op->body, op->new_expr, op->free_function);
+      }
+    }
+    return stmt;
+  }
+
+ private:
+  std::unordered_map<std::string, std::string> trans_tensor_;
+  std::unordered_map<std::string, Var> trans_var_;
+  std::unordered_map<std::string, Array<Expr>> tensor_bounds_;
+  std::unordered_map<std::string, Expr> shared_offset_;
 };
 
 // Verify if the statement can be run safely via inplace fashion
@@ -1010,6 +1193,11 @@ LoweredFunc PointerValueTypeRewrite(LoweredFunc f) {
 }
 
 Stmt StorageRewrite(Stmt stmt) {
+  LinearAccessPatternFinder finder;
+  finder.Visit(stmt);
+  if (finder.Matched()) {
+    stmt = SharedMemRewriter(finder).Mutate(stmt);
+  }
   stmt = StoragePlanRewriter().Rewrite(stmt, true);
   return VectorAllocRewriter().Mutate(stmt);
 }

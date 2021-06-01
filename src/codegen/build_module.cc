@@ -542,6 +542,7 @@ NodeRef LowerStmt(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeR
       g_attrs.Set(kEnablePolySch, air::make_const(Int(32), false));
     }
     // Phase 1
+    stmt = NEXT_PASS(ReconstructLayout, stmt);
     stmt = NEXT_PASS(RemoveFakeOp, stmt);
     stmt = NEXT_PASS(RewriteForTensorCore, stmt, new_sch, *binds_0);
     stmt = NEXT_PASS(StorageFlatten, stmt, *binds_0, 64, config->instrument_bound_checkers);
@@ -557,11 +558,11 @@ NodeRef LowerStmt(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeR
       stmt = NEXT_PASS(VectorizeLoop, stmt);
     }
     stmt = NEXT_PASS(InjectVirtualThread, stmt);
-    if (polyhedral && (g_attrs.GetBool(kEnableDoubleBuffer, false) || g_attrs.GetBool(kEnableTransferBuffer, false))) {
+    if (polyhedral) {
       stmt = NEXT_PASS(InjectTransferBufferScope, stmt);
     }
     stmt = NEXT_PASS(InjectDoubleBuffer, stmt, config->double_buffer_split_loop,
-                     g_attrs.GetBool(kEnableTransferBuffer, false));
+                     g_attrs.GetBool(kEnableDoubleBuffer, false));
     stmt = NEXT_PASS(StorageRewrite, stmt);
 
     if (target_platform->device_type == kDLGPU && polyhedral) {

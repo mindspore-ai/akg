@@ -38,24 +38,23 @@ class MappingOuterBand : public SchedulePass {
 
   virtual isl::schedule Run(isl::schedule sch);
 
-  isl::schedule DoBlockMapping(const isl::schedule &sch);
-  std::pair<std::string, std::string> GetC1C0BlockConfig(size_t n_block_map, int member_size);
-  bool NeedAtomicAdd(const isl::schedule_node_band &band, size_t n_block_map);
-  void MarkAtomicAddTensor(const isl::schedule_node_band &band);
-  isl::schedule_node MapBlockHelper(const isl::schedule_node &node, MappingCfg *block_cfg, size_t n_block_map,
-                                    bool check_extent, std::unordered_map<size_t, size_t> map_idx_shift = {});
-
   isl::schedule DoThreadMapping(const isl::schedule &sch);
-  size_t MapThreadHelper(isl::schedule_node &thread_root);
+
+  isl::schedule DoBlockMapping(const isl::schedule &sch);
+
   size_t NumMappedDescendant(const RoadMap &thread_roadmap, const isl::schedule_node parent);
 
   bool CanBeMappedToThread(const isl::schedule_node node, const RoadMap &thread_record);
 
   isl::schedule_node FillRemainingThreads(isl::schedule_node &node, size_t begin);
 
-  size_t CountConsecutiveCoincident(const isl::schedule_node_band &band_node);
+  isl::schedule_node MapSequenceNode(const isl::schedule_node &orig_node, const RoadMap &thread_record);
 
-  isl::schedule_node DoThreadSynchronization(const isl::schedule_node &node);
+  /*
+   * Functions related to synchronization.
+   */
+  isl::schedule_node DoThreadSynchronization(const isl::schedule_node &node,
+                                             const std::vector<MappingCfg *> other_mapping_cfg = {});
 
   // preparation for synchronization
   isl::multi_union_pw_aff MapDomainToWarp(const isl::schedule_node &nod, MappingCfg *mapping_cfg,
@@ -68,12 +67,6 @@ class MappingOuterBand : public SchedulePass {
                                     const isl::multi_union_pw_aff &domain_to_warp);
   SyncCandidate *CountSyncNumberAmongLoop(SyncCandidate *head);
   int GetBestSyncStartPoint(bool is_outer);
-
-  size_t GetReduceId() const;
-  std::string GetMarkerName(const isl::schedule_node &node, std::string find_name);
-  isl::schedule DetectAndMarkReduce(const isl::schedule &sch);
-  isl::schedule InsertReduceMarker(const isl::schedule &sch);
-  isl::schedule_node InsertReduceExtension(const isl::schedule_node &node);
 
  private:
   PassInfo &pass_info_;

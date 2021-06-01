@@ -13,11 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "build_module.h"
 #include "tiling_strategy_manager.h"
 
 #include <numeric>
 
 #include "tiling_analyzer.h"
+#include "poly/schedule_pass_gpu/register_memory_manager.h"
+
 namespace akg {
 namespace ir {
 namespace poly {
@@ -30,24 +33,242 @@ void GpuDmaAnalysisStrategy::AddGpuConstraint() {
 void CastStrategy::AddGpuConstraint() { MarkDataSize(); }
 
 void GemmStrategy::AddGpuConstraint() {
-  if (!analyzer_->scop_info_.user_config_.GetEnableTensorCore()) {
+  if (!analyzer_->scop_info_.user_config_.GetEnableTensorCore() ||
+      analyzer_->scop_info_.analysis_result_.GetIsGpuDmaAnalysed() ||
+      analyzer_->scop_info_.user_config_.GetEnableConvTensorCore()) {
     return;
   }
-  auto interested_info = GetInterestedInfo(interested_attr_key);
-  for (auto it : interested_info) {
-    TileAxis *axis = it.first;
-    axis->TileRestrainToSingleValue(CastIntToExpr(64), TileLevel::CACHE1);
-    axis->TileRestrainToSingleValue(CastIntToExpr(16), TileLevel::CACHE0);
-    for (const auto &attr : it.second) {
-      if (attr.attr_value == "mi") {
-        axis->thread_constraints.map_min_ = warp_sizes_;
-        axis->thread_constraints.map_extent_ = warp_sizes_;
-      } else if (attr.attr_value == "ni") {
-        axis->thread_constraints.map_min_ = 4;
-        axis->thread_constraints.map_extent_ = 4;
+
+  Mma mma = analyzer_->scop_info_.analysis_result_.GetMmaMode();
+
+  // Step 1. Collect Batch, M, N, K axis info.
+  std::unique_ptr<Mma> shape = InitGemmShape(mma);
+  if (shape == nullptr) {
+    return;
+  }
+
+  Mma middle_band = {shape->m / mma.m, shape->n / mma.n, shape->k / mma.k};
+  std::stringstream ss;
+  ss << "[Gemm] M = " << shape->m << " N = " << shape->n << " K = " << shape->k << ", middle band = [" << middle_band.m
+     << ", " << middle_band.n << ", " << middle_band.k << "]";
+  analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
+
+  GpuInfo &gpu_info = GpuInfo::GetInstance();
+  sm_bytes_ = gpu_info.GetMemoryLimitInScope(MEM_SCOPE_SHARED);
+  sm_bytes_ = sm_bytes_ / 3 * 4;
+  reg_bytes_ = MAX_REGISTER_PER_THREAD_BLOCK * REGISTER_ALLOC_RATIO;
+
+  auto b_axes = analyzer_->GetAxesOfAttr(AttrInfo{AT_GEMM, "bi"});
+  for (auto bo : analyzer_->GetAxesOfAttr(AttrInfo{AT_GEMM, "bo"})) {
+    b_axes.push_back(bo);
+  }
+  for (auto b_axis : b_axes) {
+    CHECK(b_axis->range_extent.as<IntImm>()) << "Dynamic shape is not supported in tensor core for now.";
+    b_axis->TileRestrainToSingleValue(CastIntToExpr(MIN_TILE), CACHE1);
+    b_axis->TileRestrainToSingleValue(CastIntToExpr(MIN_TILE), CACHE0);
+    b_axis->thread_constraints.map_min_ = MIN_TILE;
+    b_axis->thread_constraints.map_extent_ = MIN_TILE;
+    min_blocks_ /= b_axis->range_extent.as<IntImm>()->value;
+    ss << "Map batch axis " << b_axis->range_extent.as<IntImm>()->value << " to block.";
+    analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
+  }
+  min_blocks_ = std::max<int>(1, min_blocks_);
+
+  // Step 2. Calculate macro M, N, K tile size.
+  CalculateMacroMma(*shape, mma);
+
+  // Step 3. Calculate possible number of warps.
+  auto warp_sizes = CalculateNumOfWarps(mma);
+  std::tie(w0_for_m_, w1_for_n_) = warp_sizes;
+  middle_band.m /= w0_for_m_;
+  middle_band.n /= w1_for_n_;
+  std::string warp_cfg = std::to_string(w0_for_m_) + " " + std::to_string(w1_for_n_);
+  analyzer_->scop_info_.user_config_.RecordReplaceConfig(WARP_COMPUTE, warp_cfg, MappingType::REPLACE_THREADS);
+
+  // Step 4. Set mapping and tiling config.
+  SetFinalConfig(macro_mma_, mma);
+}
+
+std::pair<int64_t, int64_t> GemmStrategy::CalculateNumOfWarps(Mma mma) {
+  int w0 = 1;
+  int w1 = 1;
+  int use_local_group = (macro_mma_.m / mma.m) * (macro_mma_.n / mma.n);
+  CHECK_GE(use_local_group, 1);
+  if (use_local_group > 8) {
+    default_num_warps_ = 4;
+  } else if (use_local_group > 1) {
+    default_num_warps_ = 2;
+  }
+  std::tie(w0, w1) = GetDivisibleFactorForMN(macro_mma_.m, macro_mma_.n, default_num_warps_, mma);
+  std::stringstream ss;
+  ss << "[Gemm] Try warp " << default_num_warps_ << " -> " << w0 << " * " << w1;
+  analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
+  return std::make_pair(w0, w1);
+}
+
+std::unique_ptr<Mma> GemmStrategy::InitGemmShape(Mma mma) {
+  auto m_axes = analyzer_->GetAxesOfAttr(AttrInfo{AT_GEMM, "mi"});
+  auto n_axes = analyzer_->GetAxesOfAttr(AttrInfo{AT_GEMM, "ni"});
+  auto k_axes = analyzer_->GetAxesOfAttr(AttrInfo{AT_GEMM, "ki"});
+  if (m_axes.size() != 1U || n_axes.size() != 1U || k_axes.size() != 1U) {
+    return nullptr;
+  }
+
+  m_axis_ = m_axes[0];
+  n_axis_ = n_axes[0];
+  k_axis_ = k_axes[0];
+  if (m_axis_->range_extent.as<IntImm>() == nullptr || n_axis_->range_extent.as<IntImm>() == nullptr ||
+      k_axis_->range_extent.as<IntImm>() == nullptr) {
+    return nullptr;
+  }
+  auto shape_m = m_axis_->range_extent.as<IntImm>()->value;
+  auto shape_n = n_axis_->range_extent.as<IntImm>()->value;
+  auto shape_k = k_axis_->range_extent.as<IntImm>()->value;
+  CHECK_EQ(shape_m % mma.m, 0) << "Shape m " << shape_m << " should be multiples of mma.m " << mma.m
+                               << " to enable tensor core.";
+  CHECK_EQ(shape_n % mma.n, 0) << "Shape n " << shape_n << " should be multiples of mma.n " << mma.n
+                               << " to enable tensor core.";
+  CHECK_EQ(shape_k % mma.k, 0) << "Shape k " << shape_k << " should be multiples of mma.k " << mma.k
+                               << " to enable tensor core.";
+
+  return std::unique_ptr<Mma>(new (std::nothrow) Mma{shape_m, shape_n, shape_k});
+}
+
+int GemmStrategy::EstimateSharedSize(Mma alloc, int dtype) {
+  std::string a_major = ROW_MAJOR;
+  std::string b_major = ROW_MAJOR;
+  auto major_map = analyzer_->scop_info_.analysis_result_.GetMatrixMatmulMajor();
+  auto matmul_map = analyzer_->scop_info_.analysis_result_.GetMatrixMatmulMap();
+  for (auto i : matmul_map) {
+    if (i.second == MATRIX_A) {
+      CHECK(major_map.find(i.first) != major_map.end());
+      a_major = major_map[i.first];
+    } else if (i.second == MATRIX_B) {
+      CHECK(major_map.find(i.first) != major_map.end());
+      b_major = major_map[i.first];
+    }
+  }
+
+  // bank conflit avoid strategy
+  auto matrix_a_size = a_major == ROW_MAJOR ? (alloc.m * (alloc.k + 16)) : ((alloc.m + 16) * alloc.k);
+  auto matrix_b_size = b_major == COL_MAJOR ? (alloc.n * (alloc.k + 16)) : ((alloc.n + 16) * alloc.k);
+  auto matrix_c_size = alloc.m * alloc.n;
+  auto alloc_shared = (matrix_a_size + matrix_b_size) * dtype;  // single op does not alloc shared for matrix_c
+  std::stringstream ss;
+  ss << "[Shared] A(" << a_major << "), B(" << b_major << "); This config results matrix_a_size = " << matrix_a_size
+     << " matrix_b_size = " << matrix_b_size << " matrix_c_size = " << matrix_c_size
+     << " --> alloc shared = " << alloc_shared;
+  analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
+  return alloc_shared;
+}
+
+int GemmStrategy::EstimateRegisterSize(Mma alloc, int dtype) {
+  auto alloc_reg_unit = std::max<int>(1, dtype / BYTES_PER_REGISTER);
+  auto matrix_a_size = alloc.m * alloc.k * 2;
+  auto matrix_b_size = alloc.n * alloc.k * 2;
+  auto matrix_c_size = alloc.m * alloc.n;
+  auto alloc_reg = (matrix_a_size + matrix_b_size + matrix_c_size) * alloc_reg_unit;
+  std::stringstream ss;
+  ss << "[Reg] This config results matrix_a_size = " << matrix_a_size << " matrix_b_size = " << matrix_b_size
+     << " matrix_c_size = " << matrix_c_size << " --> alloc reg = " << alloc_reg;
+  analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
+
+  return alloc_reg;
+}
+
+void GemmStrategy::CalculateMacroMma(Mma shape, Mma mma) {
+  std::stringstream ss;
+  Mma default_macro_mma = macro_mma_;
+  Mma macro_mma = {std::min<int>(macro_mma_.m, shape.m), std::min<int>(macro_mma_.n, shape.n),
+                   std::min<int>(macro_mma_.k, shape.k)};
+  ss << "[Init macro mma]: [" << macro_mma.m << ", " << macro_mma.n << ", " << macro_mma.k << "]";
+  analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
+  while (shape.m % macro_mma_.m != 0 && macro_mma_.m - tile_stride_ >= mma.m) {
+    macro_mma_.m -= tile_stride_;
+  }
+  while (shape.n % macro_mma_.n != 0 && macro_mma_.n - tile_stride_ >= mma.n) {
+    macro_mma_.n -= tile_stride_;
+  }
+  if (shape.m % macro_mma_.m != 0) {
+    macro_mma_.m /= 2;
+  }
+  if (shape.n % macro_mma_.n != 0) {
+    macro_mma_.n /= 2;
+  }
+  while (shape.k % macro_mma_.k != 0 && macro_mma_.k / 2 >= mma.k) {
+    macro_mma_.k /= 2;
+  }
+  while ((shape.m / macro_mma_.m) * (shape.n / macro_mma_.n) < min_blocks_ && macro_mma_.m == default_macro_mma.m &&
+         macro_mma_.n == default_macro_mma.n) {
+    (shape.m < shape.n) ? macro_mma_.m /= 2 : macro_mma_.n /= 2;
+  }
+  if ((shape.m / macro_mma_.m) * (shape.n / macro_mma_.n) < min_blocks_ && shape.k % (macro_mma_.k * 2) == 0 &&
+      shape.k / (macro_mma_.k * 2) > 1) {
+    macro_mma_.k *= 2;
+  }
+  if (shape.k == macro_mma_.k) {
+    g_attrs.Set(kEnableTransferBuffer, air::make_const(Int(32), false));
+  }
+  ss << "[Final macro mma]: [" << macro_mma.m << ", " << macro_mma.n << ", " << macro_mma.k << "]";
+  analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
+}
+
+void GemmStrategy::SetFinalConfig(Mma macro_mma, Mma mma) {
+  std::stringstream ss;
+  m_axis_->TileRestrainToSingleValue(CastIntToExpr(macro_mma.m), CACHE1);
+  m_axis_->thread_constraints.map_min_ = w0_for_m_ * w1_for_n_;
+  m_axis_->thread_constraints.map_extent_ = w0_for_m_ * w1_for_n_;
+  m_axis_->TileRestrainToSingleValue(CastIntToExpr(mma.m), CACHE0);
+
+  n_axis_->TileRestrainToSingleValue(CastIntToExpr(macro_mma.n), CACHE1);
+  n_axis_->thread_constraints.map_min_ = warp_sizes_;
+  n_axis_->thread_constraints.map_extent_ = warp_sizes_;
+  n_axis_->TileRestrainToSingleValue(CastIntToExpr(mma.n), CACHE0);
+
+  k_axis_->TileRestrainToSingleValue(CastIntToExpr(macro_mma.k), CACHE1);
+  k_axis_->thread_constraints.map_min_ = MIN_TILE;
+  k_axis_->thread_constraints.map_extent_ = MIN_TILE;
+  k_axis_->TileRestrainToSingleValue(CastIntToExpr(mma.k), CACHE0);
+  ss << "[Final config] : L1(M, N, K) = " << macro_mma.m << ", " << macro_mma.n << ", " << macro_mma.k;
+  ss << "; L0(M, N, K) = " << mma.m << ", " << mma.n << ", " << mma.k;
+  ss << "; Thread(W0, W1, TX) = " << w0_for_m_ << ", " << w1_for_n_ << ", " << warp_sizes_;
+  analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
+}
+
+std::pair<int64_t, int64_t> GemmStrategy::GetDivisibleFactorForMN(int64_t shape_m, int64_t shape_n,
+                                                                  int64_t total_factor, Mma mma) {
+  auto TryCombination = [&shape_m, &shape_n, &mma](int64_t factor1, int64_t factor2) -> bool {
+    return (shape_m % factor1 == 0 && shape_n % factor2 == 0 && shape_m / factor1 >= mma.m &&
+            shape_n / factor2 >= mma.n);
+  };
+  auto SwapWarp = [&shape_m, &shape_n, &mma](int64_t w0, int64_t w1) -> std::pair<int64_t, int64_t> {
+    int64_t max_w0 = shape_m / mma.m;
+    int64_t max_w1 = shape_n / mma.n;
+    if ((max_w0 - max_w1 > 0) ^ (w0 - w1 > 0)) {
+      return std::make_pair(w1, w0);
+    }
+    return std::make_pair(w0, w1);
+  };
+  int64_t w0 = std::sqrt(total_factor);
+  int64_t w1 = total_factor / w0;
+  CHECK_EQ(w0 * w1, total_factor);
+  std::tie(w0, w1) = SwapWarp(w0, w1);
+
+  if (TryCombination(w0, w1)) {
+    return std::make_pair(w0, w1);
+  } else {
+    while (total_factor > 1) {
+      total_factor /= 2;
+      w0 = std::sqrt(total_factor);
+      w1 = total_factor / w0;
+      CHECK_EQ(w0 * w1, total_factor);
+      std::tie(w0, w1) = SwapWarp(w0, w1);
+      if (TryCombination(w0, w1)) {
+        return std::make_pair(w0, w1);
       }
     }
   }
+  return std::make_pair(1, 1);
 }
 
 void ReduceStrategy::AddGpuConstraint() {
@@ -530,7 +751,8 @@ void GpuStrategy::AddGpuConstraint() {
     InjectiveSpeedup();
   }
   SetMappingConfig();
-  if (template_ != Template::MATMUL || !analyzer_->scop_info_.user_config_.GetEnableTensorCore()) {
+  if (!((template_ == Template::MATMUL || template_ == Template::CONV) &&
+        analyzer_->scop_info_.user_config_.GetEnableTensorCore())) {
     analyzer_->ForEachAxisTopDown([this](TileAxis *axis) {
       if (axis == analyzer_->RootAxis()) {
         return;
@@ -604,6 +826,8 @@ void GpuStrategy::InitMappingLimit() {
     block_limit_ = {max_x_dim_block_, max_y_z_dim_block_, max_y_z_dim_block_};
   } else if (template_ == Template::ALL_REDUCE && !analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib()) {
     block_limit_ = {1};
+  } else if (template_ == Template::CONV) {
+    block_limit_ = {max_x_dim_block_, max_y_z_dim_block_, max_y_z_dim_block_, max_y_z_dim_block_};
   } else {
     block_limit_ = {max_x_dim_block_, max_y_z_dim_block_, max_y_z_dim_block_};
   }
@@ -622,7 +846,8 @@ void GpuStrategy::BuildAxesQueue() {
       return;
     }
     const auto r = axis->range_extent.as<IntImm>();
-    if (r && r->value > 0) {
+    // For Conv, kh and kw are invalid for pending_axes
+    if (r && r->value > 0 && !axis->is_inner) {
       this->pending_axes_.push_front(std::make_pair(axis, r->value));
     }
 
@@ -644,6 +869,10 @@ void GpuStrategy::InnerThreadOuterBlock() {
 
   auto thread_dim = std::min(thread_limit_.size(), max_dim_);
   auto block_dim = std::min(block_limit_.size(), max_dim_);
+
+  if (analyzer_->scop_info_.user_config_.GetEnableConvTensorCore()) {
+    block_dim = block_limit_.size();
+  }
 
   // tile from inner to outer and map to thread
   analyzer_->GetTileLogger().AppendLine(GPU_MAPPING, "-----Map to thread-----");
@@ -702,6 +931,13 @@ void GpuStrategy::InnerThreadOuterBlock() {
       SkipMapping();
       continue;
     }
+
+    // For Conv, hi and wi are invalid for thread mapping
+    if (axis->HasAttr(AttrInfo{AT_CONV, "hi"}) || axis->HasAttr(AttrInfo{AT_CONV, "wi"})) {
+      SkipMapping();
+      continue;
+    }
+
     if (rest_threads <= 1) {
       if (axis->mc_sup ||
           (template_ == Template::REDUCTION && analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib())) {
@@ -855,14 +1091,33 @@ void GpuStrategy::SetMappingConfig() {
     }
   }
 
-  for (size_t i = block_cfg_.size(); i < 2; ++i) {
-    block_cfg_.emplace_back(1);
-  }
-  for (int i = block_cfg_.size() - 1; i >= 0; --i) {
-    if (i >= block_count_) {
-      continue;
+  if (analyzer_->scop_info_.user_config_.GetEnableConvTensorCore()) {
+    // For Conv, the H and W axis should mul to map
+    // The axis sequence is M H W OC
+    constexpr auto h_axis_index = 2;
+    constexpr auto w_axis_index = 1;
+    for (int i = block_cfg_.size() - 1; i >= 0; --i) {
+      if (i >= block_count_) {
+        continue;
+      }
+      if (i == h_axis_index) {
+        block_str += (std::to_string(block_cfg_[h_axis_index] * block_cfg_[w_axis_index]) + " ");
+        i = w_axis_index;
+      } else {
+        block_str += (std::to_string(block_cfg_[i]) + " ");
+      }
     }
-    block_str += (std::to_string(block_cfg_[i]) + " ");
+  } else {
+    // pad binding to at least two dim to bind reduce axis at block y
+    for (size_t i = block_cfg_.size(); i < 2; ++i) {
+      block_cfg_.emplace_back(1);
+    }
+    for (int i = block_cfg_.size() - 1; i >= 0; --i) {
+      if (i >= block_count_) {
+        continue;
+      }
+      block_str += (std::to_string(block_cfg_[i]) + " ");
+    }
   }
 
   ss << "Block config = " << block_str;
@@ -872,6 +1127,10 @@ void GpuStrategy::SetMappingConfig() {
   ss << "Tile = ";
   analyzer_->ForEachAxisTopDown([this, &ss](TileAxis *axis) {
     if (axis == analyzer_->RootAxis()) {
+      return;
+    }
+    // For Conv, kh and kw are invalid for Tile
+    if (axis->is_inner) {
       return;
     }
     ss << axis->c1_constraints.tile_extent_ << ",";
@@ -1004,6 +1263,11 @@ void GpuStrategy::DetermineTemplate() {
 
   if (!analyzer_->GetAxesOfAttr(AttrInfo{AT_OP_TYPE, AT_PAD}).empty()) {
     template_ = Template::PAD_OP;
+    return;
+  }
+
+  if (!analyzer_->GetAxesOfAttr(AT_CONV).empty()) {
+    template_ = Template::CONV;
     return;
   }
 
@@ -1488,6 +1752,234 @@ void CustomTilingStrategy::AddGpuConstraint() {
   }
 }
 
+void ConvStrategy::AddGpuConstraint() {
+  if (!analyzer_->scop_info_.user_config_.GetEnableTensorCore() ||
+      analyzer_->scop_info_.analysis_result_.GetIsGpuDmaAnalysed() ||
+      !analyzer_->scop_info_.user_config_.GetEnableConvTensorCore()) {
+    return;
+  }
+
+  Mma mma = analyzer_->scop_info_.analysis_result_.GetMmaMode();
+
+  // Step 1. Collect M, H, W, N, K axis info.
+  std::unique_ptr<MmaConv> shape = InitGemmShape(mma);
+  if (shape == nullptr) {
+    return;
+  }
+
+  MmaConv middle_band = {shape->m / mma.m, shape->h, shape->w, shape->n / mma.n, shape->k / mma.k};
+  std::stringstream ss;
+  ss << "[Conv] M = " << shape->m << " H = " << shape->h << " W = " << shape->w << " N = " << shape->n
+     << " K = " << shape->k << ", middle band = [" << middle_band.m << ", " << middle_band.h << ", " << middle_band.w
+     << middle_band.n << ", " << middle_band.k << "]";
+  analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
+
+  // Step 2. Calculate macro M, H, W, N, K tile size.
+  CalculateMacroMma(*shape, mma);
+
+  // Step 3. Calculate possible number of warps.
+  auto warp_sizes = CalculateNumOfWarps(mma);
+  std::tie(w0_for_m_, w1_for_n_) = warp_sizes;
+  middle_band.m /= w0_for_m_;
+  middle_band.n /= w1_for_n_;
+  std::string warp_cfg = std::to_string(w0_for_m_) + " " + std::to_string(w1_for_n_);
+  analyzer_->scop_info_.user_config_.RecordReplaceConfig(WARP_COMPUTE, warp_cfg, MappingType::REPLACE_THREADS);
+  analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
+
+  // Step 4. Set mapping and tiling config.
+  SetFinalConfig(macro_mma_, mma);
+}
+
+std::pair<int64_t, int64_t> ConvStrategy::CalculateNumOfWarps(Mma mma) {
+  int w0 = 1;
+  int w1 = 1;
+  // H and W do not participate in the calculation of the warp level
+  int use_local_group = (macro_mma_.m / mma.m) * (macro_mma_.n / mma.n);
+  CHECK_GE(use_local_group, 1);
+  if (use_local_group >= 8) {
+    default_num_warps_ = 4;
+  } else if (use_local_group > 1) {
+    default_num_warps_ = 2;
+  }
+  std::tie(w0, w1) = GetDivisibleFactorForMN(macro_mma_.m, macro_mma_.n, default_num_warps_, mma);
+  std::stringstream ss;
+  ss << "[Conv] Try warp " << default_num_warps_ << " -> " << w0 << " * " << w1;
+  analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
+  return std::make_pair(w0, w1);
+}
+
+std::unique_ptr<MmaConv> ConvStrategy::InitGemmShape(Mma mma) {
+  auto m_axes = analyzer_->GetAxesOfAttr(AttrInfo{AT_CONV, "mi"});
+  auto h_axes = analyzer_->GetAxesOfAttr(AttrInfo{AT_CONV, "hi"});
+  auto w_axes = analyzer_->GetAxesOfAttr(AttrInfo{AT_CONV, "wi"});
+  auto n_axes = analyzer_->GetAxesOfAttr(AttrInfo{AT_CONV, "oc"});
+  auto k_axes = analyzer_->GetAxesOfAttr(AttrInfo{AT_CONV, "ic"});
+  if (m_axes.size() != 1U || h_axes.size() != 1U || w_axes.size() != 1U || n_axes.size() != 1U || k_axes.size() != 1U) {
+    return nullptr;
+  }
+
+  m_axis_ = m_axes[0];
+  h_axis_ = h_axes[0];
+  w_axis_ = w_axes[0];
+  n_axis_ = n_axes[0];
+  k_axis_ = k_axes[0];
+  if (m_axis_->range_extent.as<IntImm>() == nullptr || h_axis_->range_extent.as<IntImm>() == nullptr ||
+      w_axis_->range_extent.as<IntImm>() == nullptr || n_axis_->range_extent.as<IntImm>() == nullptr ||
+      k_axis_->range_extent.as<IntImm>() == nullptr) {
+    return nullptr;
+  }
+  auto shape_m = m_axis_->range_extent.as<IntImm>()->value;
+  auto shape_h = h_axis_->range_extent.as<IntImm>()->value;
+  auto shape_w = w_axis_->range_extent.as<IntImm>()->value;
+  auto shape_n = n_axis_->range_extent.as<IntImm>()->value;
+  auto shape_k = k_axis_->range_extent.as<IntImm>()->value;
+  CHECK_EQ(shape_m % mma.m, 0) << "Shape m " << shape_m << " should be multiples of mma.m " << mma.m
+                               << " to enable tensor core.";
+  CHECK_EQ(shape_n % mma.n, 0) << "Shape n " << shape_n << " should be multiples of mma.n " << mma.n
+                               << " to enable tensor core.";
+  CHECK_EQ(shape_k % mma.k, 0) << "Shape k " << shape_k << " should be multiples of mma.k " << mma.k
+                               << " to enable tensor core.";
+
+  return std::unique_ptr<MmaConv>(new (std::nothrow) MmaConv{shape_m, shape_h, shape_w, shape_n, shape_k});
+}
+
+void ConvStrategy::CalculateMacroMma(MmaConv shape, Mma mma) {
+  std::stringstream ss;
+  MmaConv macro_mma = {std::min<int>(macro_mma_.m, shape.m), std::min<int>(macro_mma_.h, shape.h),
+                       std::min<int>(macro_mma_.w, shape.w), std::min<int>(macro_mma_.n, shape.n),
+                       std::min<int>(macro_mma_.k, shape.k)};
+  ss << "[Init macro mma]: [" << macro_mma.m << ", " << macro_mma.h << ", " << macro_mma.w << ", " << macro_mma.n
+     << ", " << macro_mma.k << "]";
+  analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
+  while (shape.m % macro_mma_.m != 0 && macro_mma_.m / 2 >= mma.m) {
+    macro_mma_.m /= 2;
+  }
+  while (shape.n % macro_mma_.n != 0 && macro_mma_.n / 2 >= mma.n) {
+    macro_mma_.n /= 2;
+  }
+  while (shape.k % macro_mma_.k != 0 && macro_mma_.k / 2 >= mma.k) {
+    macro_mma_.k /= 2;
+  }
+
+  // Data volume in the M direction and data volume in the N direction should be close
+  if (macro_mma_.m > macro_mma_.n) {
+    while (macro_mma_.m > macro_mma_.n) {
+      macro_mma_.m /= 2;
+    }
+  } else if (macro_mma_.m < macro_mma_.n) {
+    // split h and w direction, increase the data volume
+    int temp_h = shape.h;
+    int temp_w = shape.w;
+    while (macro_mma_.m * macro_mma_.w * macro_mma_.h < macro_mma_.n) {
+      if (temp_w % 2 == 0) {
+        macro_mma_.w *= 2;
+        temp_w /= 2;
+      } else if (temp_h % 2 == 0) {
+        macro_mma_.h *= 2;
+        temp_h /= 2;
+      } else {
+        break;
+      }
+    }
+  }
+
+  while ((shape.m / macro_mma_.m) * (shape.h / macro_mma_.h) * (shape.w / macro_mma_.w) * (shape.n / macro_mma_.n) <
+           min_blocks_ &&
+         macro_mma_.m / mma.m > 4 && macro_mma_.n / mma.n > 4) {
+    // decrease h and increase the use of block
+    if (macro_mma_.h % 2 == 0) {
+      macro_mma_.h /= 2;
+      continue;
+    }
+
+    // decrease w and increase the use of block
+    if (macro_mma_.w % 2 == 0) {
+      macro_mma_.w /= 2;
+      continue;
+    }
+
+    (shape.m < shape.n) ? macro_mma_.m /= 2 : macro_mma_.n /= 2;
+  }
+
+  if ((shape.m / macro_mma_.m) * (shape.h / macro_mma_.h) * (shape.w / macro_mma_.w) * (shape.n / macro_mma_.n) <
+        min_blocks_ &&
+      shape.k % (macro_mma_.k * 2) == 0 && shape.k / (macro_mma_.k * 2) > 1) {
+    macro_mma_.k *= 2;
+  }
+  ss << "[Final macro mma]: [" << macro_mma.m << ", " << macro_mma.h << ", " << macro_mma.w << ", " << macro_mma.n
+     << ", " << macro_mma.k << "]";
+  analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
+}
+
+void ConvStrategy::SetFinalConfig(MmaConv macro_mma, Mma mma) {
+  std::stringstream ss;
+  m_axis_->TileRestrainToSingleValue(CastIntToExpr(macro_mma.m), CACHE1);
+  m_axis_->thread_constraints.map_min_ = w0_for_m_ * w1_for_n_;
+  m_axis_->thread_constraints.map_extent_ = w0_for_m_ * w1_for_n_;
+  m_axis_->TileRestrainToSingleValue(CastIntToExpr(mma.m), CACHE0);
+
+  h_axis_->TileRestrainToSingleValue(CastIntToExpr(macro_mma.h), CACHE1);
+  h_axis_->thread_constraints.map_min_ = MIN_TILE;
+  h_axis_->thread_constraints.map_extent_ = MIN_TILE;
+  h_axis_->TileRestrainToSingleValue(CastIntToExpr(1), CACHE0);
+
+  w_axis_->TileRestrainToSingleValue(CastIntToExpr(macro_mma.w), CACHE1);
+  w_axis_->thread_constraints.map_min_ = MIN_TILE;
+  w_axis_->thread_constraints.map_extent_ = MIN_TILE;
+  w_axis_->TileRestrainToSingleValue(CastIntToExpr(1), CACHE0);
+
+  n_axis_->TileRestrainToSingleValue(CastIntToExpr(macro_mma.n), CACHE1);
+  n_axis_->thread_constraints.map_min_ = warp_sizes_;
+  n_axis_->thread_constraints.map_extent_ = warp_sizes_;
+  n_axis_->TileRestrainToSingleValue(CastIntToExpr(mma.n), CACHE0);
+
+  k_axis_->TileRestrainToSingleValue(CastIntToExpr(macro_mma.k), CACHE1);
+  k_axis_->thread_constraints.map_min_ = MIN_TILE;
+  k_axis_->thread_constraints.map_extent_ = MIN_TILE;
+  k_axis_->TileRestrainToSingleValue(CastIntToExpr(mma.k), CACHE0);
+  ss << "[Final config] : L1(M, H, W, N, K) = " << macro_mma.m << ", " << macro_mma.h << ", " << macro_mma.w << ", "
+     << macro_mma.n << ", " << macro_mma.k;
+  ss << "; L0(M, H, W, N, K) = " << mma.m << ", " << 1 << ", " << 1 << ", " << mma.n << ", " << mma.k;
+  ss << "; Thread(W0, W1, TX) = " << w0_for_m_ << ", " << w1_for_n_ << ", " << warp_sizes_;
+  analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
+}
+
+std::pair<int64_t, int64_t> ConvStrategy::GetDivisibleFactorForMN(int64_t shape_m, int64_t shape_n,
+                                                                  int64_t total_factor, Mma mma) {
+  auto TryCombination = [&shape_m, &shape_n, &mma](int64_t factor1, int64_t factor2) -> bool {
+    return (shape_m % factor1 == 0 && shape_n % factor2 == 0 && shape_m / factor1 >= mma.m &&
+            shape_n / factor2 >= mma.n);
+  };
+  auto SwapWarp = [&shape_m, &shape_n, &mma](int64_t w0, int64_t w1) -> std::pair<int64_t, int64_t> {
+    int64_t max_w0 = shape_m / mma.m;
+    int64_t max_w1 = shape_n / mma.n;
+    if ((max_w0 - max_w1 > 0) ^ (w0 - w1 > 0)) {
+      return std::make_pair(w1, w0);
+    }
+    return std::make_pair(w0, w1);
+  };
+  int64_t w0 = std::sqrt(total_factor);
+  int64_t w1 = total_factor / w0;
+  CHECK_EQ(w0 * w1, total_factor);
+  std::tie(w0, w1) = SwapWarp(w0, w1);
+
+  if (TryCombination(w0, w1)) {
+    return std::make_pair(w0, w1);
+  } else {
+    while (total_factor > 1) {
+      total_factor /= 2;
+      w0 = std::sqrt(total_factor);
+      w1 = total_factor / w0;
+      CHECK_EQ(w0 * w1, total_factor);
+      std::tie(w0, w1) = SwapWarp(w0, w1);
+      if (TryCombination(w0, w1)) {
+        return std::make_pair(w0, w1);
+      }
+    }
+  }
+  return std::make_pair(1, 1);
+}
+
 // No constraint found in cuda
 
 void ModStrategy::AddGpuConstraint() {}
@@ -1509,8 +2001,6 @@ void DynamicBoundStrategy::AddGpuConstraint() {}
 void ShiftAxisStrategy::AddGpuConstraint() {}
 
 void ModShiftAxisStrategy::AddGpuConstraint() {}
-
-void ConvStrategy::AddGpuConstraint() {}
 
 // end of null constraint
 

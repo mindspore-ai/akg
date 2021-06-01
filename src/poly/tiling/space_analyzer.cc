@@ -136,7 +136,7 @@ class SpaceVisitor : public IRVisitor {
     dst_tensor = MatchLoopByName(dst_tensor);
     dst_tensor.args = op->args;
     dst_tensor.band_index = band_count_;
-    dst_tensor.type_byte = analyzer_->scop_info_.user_config_.GetDataType(dst_tensor.name);
+    dst_tensor.type_byte = analyzer_->scop_info_.user_config_.GetDataBytes(dst_tensor.name);
     prov.basic_op_type = basic_op_type.empty() ? GetBasicOpType(dst_tensor, src_tensor) : basic_op_type;
     prov.flow = GetFlowFromBasicOpType(prov.basic_op_type);
     prov.band_index = band_count_;
@@ -386,6 +386,9 @@ void SpaceAnalyzer::MarkGemmAxes(const ProvideEntry &pe) {
   auto EmplaceVarsInTensor = [](Tensor tensor, VarNames &var_list) -> void {
     for (const auto &vars_i : tensor.var_names) {
       for (const auto &name : vars_i) {
+        if (IsNum(name)) {
+          continue;
+        }
         var_list.emplace_back(name);
       }
     }
@@ -427,8 +430,20 @@ void SpaceAnalyzer::MarkGemmAxes(const ProvideEntry &pe) {
   }
 
   // construct relationship between loop indices and loop type(b/m/n/k) and mark axis with corresponding attribute
-  std::string attr_key = analyzer_->op_type_ == CONV_OP ? AT_CONV : AT_GEMM;
-  auto loop_indices_map = ExtractLoopIndicesFromMatrices({mx_c, mx_a, mx_b});
+  std::string attr_key = "";
+  if (analyzer_->scop_info_.user_config_.GetEnableConvTensorCore()) {
+    attr_key = AT_CONV;
+  } else {
+    attr_key = AT_GEMM;
+  }
+
+  std::unordered_map<std::string, std::string> loop_indices_map;
+  if (analyzer_->scop_info_.user_config_.GetEnableConvTensorCore()) {
+    loop_indices_map = ExtractLoopIndicesFromMatricesConv({mx_c, mx_a, mx_b});
+  } else {
+    loop_indices_map = ExtractLoopIndicesFromMatrices({mx_c, mx_a, mx_b});
+  }
+
   auto FindAxisAndMark = [this, &loop_indices_map, &attr_key](Band loops) {
     for (const auto &loop : loops) {
       auto index = loop->loop_var.get()->name_hint;
@@ -941,8 +956,29 @@ void SpaceAnalyzer::IdentifyCustomTiling() {
       const auto mode = ctn->tile_mode.as<StringImm>();
       CHECK(mode) << "Custom tiling mode must be set as string";
       if (mode->value == "COMMON") {
-        if (ctn->mem_ratio != -1) {
-          analyzer_->RootAxis()->MarkWithAttr(AttrInfo{AT_MEM_RATIO, std::to_string(ctn->mem_ratio)});
+        if (analyzer_->scop_info_.user_config_.GetTarget() == TARGET_CUDA) {
+          if (!ctn->thread_min.empty()) {
+            analyzer_->RootAxis()->MarkWithAttr(AttrInfo{AT_THREAD_MIN, ParseArrayExpr(ctn->thread_min)});
+          }
+          if (!ctn->thread_max.empty()) {
+            analyzer_->RootAxis()->MarkWithAttr(AttrInfo{AT_THREAD_MAX, ParseArrayExpr(ctn->thread_max)});
+          }
+          if (!ctn->thread_mod.empty()) {
+            analyzer_->RootAxis()->MarkWithAttr(AttrInfo{AT_THREAD_MOD, ParseArrayExpr(ctn->thread_mod)});
+          }
+          if (!ctn->block_min.empty()) {
+            analyzer_->RootAxis()->MarkWithAttr(AttrInfo{AT_BLOCK_MIN, ParseArrayExpr(ctn->block_min)});
+          }
+          if (!ctn->block_max.empty()) {
+            analyzer_->RootAxis()->MarkWithAttr(AttrInfo{AT_BLOCK_MAX, ParseArrayExpr(ctn->block_max)});
+          }
+          if (!ctn->block_mod.empty()) {
+            analyzer_->RootAxis()->MarkWithAttr(AttrInfo{AT_BLOCK_MOD, ParseArrayExpr(ctn->block_mod)});
+          }
+        } else {
+          if (ctn->mem_ratio != -1) {
+            analyzer_->RootAxis()->MarkWithAttr(AttrInfo{AT_MEM_RATIO, std::to_string(ctn->mem_ratio)});
+          }
         }
       } else {
         std::string attr_value = "";
@@ -1026,6 +1062,15 @@ std::string SpaceAnalyzer::ParseAllTypeExpr(const Expr constraint) {
   } else {
     return "";
   }
+}
+
+std::string SpaceAnalyzer::ParseArrayExpr(const Array<Expr> constraint) {
+  std::stringstream ss;
+  for (auto val : constraint) {
+    ss << val;
+    ss << ",";
+  }
+  return ss.str();
 }
 
 bool IsNameMatch(const std::string &match_from, const std::string &match_to) {

@@ -20,7 +20,9 @@
 #include "poly/scop_builder.h"
 #include "poly/poly_util.h"
 #include "poly/npu_isl_emitter.h"
-#include "poly/gpu_isl_emitter.h"
+#include "poly/gpu_emit/gpu_isl_emitter.h"
+#include "poly/gpu_emit/gpu_isl_emitter_reduce.h"
+#include "poly/gpu_emit/gpu_isl_emitter_tensor_core.h"
 #include "poly/dsa_mgr_strategy.h"
 #include "poly/gpu_mgr_strategy.h"
 #include "poly/schedule_pass_mgr.h"
@@ -137,12 +139,20 @@ isl::schedule Scop::Transform(const isl::schedule &input_schedule) {
     }
   }
   if (info_.user_config_.GetTarget() == TARGET_CUDA) {
-    auto reduce_st_map = info_.analysis_result_.GetReduceTensorInfoMap();
-    info_.user_config_.SetEnableAkgReduceLib((!reduce_st_map.empty()) && (!info_.user_config_.GetEnableMatmul()));
+    auto reduce_tensor_info = info_.analysis_result_.GetReduceTensorInfoMap();
+    bool is_reduce = !reduce_tensor_info.empty() && !info_.user_config_.GetEnableMatmul() &&
+                     info_.user_config_.GetEnableAkgReduceLib();
+    bool is_matmul = !reduce_tensor_info.empty() && !info_.user_config_.GetEnableAkgReduceLib() &&
+                     info_.user_config_.GetEnableMatmul();
+    bool is_tensor_core = !reduce_tensor_info.empty() && !info_.user_config_.GetEnableAkgReduceLib() &&
+                          info_.user_config_.GetEnableTensorCore();
+    info_.user_config_.SetEnableAkgReduceLib(is_reduce);
+    info_.user_config_.SetEnableMatmul(is_matmul);
+    info_.user_config_.SetEnableTensorCore(is_tensor_core);
     if (info_.user_config_.GetEnableAkgReduceLib()) {
       bool has_supported_op = false;
       LOG(INFO) << "====== Reduce op type ========";
-      for (auto it : reduce_st_map) {
+      for (auto it : reduce_tensor_info) {
         LOG(INFO) << it.first << " -> " << info_.analysis_result_.GetReduceOpType(it.first);
         auto type = info_.analysis_result_.GetReduceOpType(it.first);
         if (type == AKG_REDUCE_UNSUPPORTED) {
@@ -262,7 +272,13 @@ Stmt GenHalide(ScopInfo &info, const isl::schedule &sch, bool used_for_tile_out_
         stmt = NPUIslEmitter(info, node_info_repo, iters).Emit(ast_node);
       } else if (info.user_config_.GetTarget() == TARGET_CUDA) {
         PrintHeader("GpuIslEmitter");
-        stmt = GpuIslEmitter(info, node_info_repo, iters).Emit(ast_node);
+        if (info.user_config_.GetEnableAkgReduceLib()) {
+          stmt = GpuIslEmitterReduce(info, node_info_repo, iters).Emit(ast_node);
+        } else if (info.user_config_.GetEnableTensorCore()) {
+          stmt = GpuIslEmitterTensorCore(info, node_info_repo, iters).Emit(ast_node);
+        } else {
+          stmt = GpuIslEmitter(info, node_info_repo, iters).Emit(ast_node);
+        }
       }
     } else {
       PrintHeader("IslEmitter");
@@ -272,7 +288,13 @@ Stmt GenHalide(ScopInfo &info, const isl::schedule &sch, bool used_for_tile_out_
     if (info.user_config_.GetTarget() == TARGET_CCE) {
       stmt = NPUIslEmitter(info, node_info_repo, iters).Emit(ast_node);
     } else if (info.user_config_.GetTarget() == TARGET_CUDA) {
-      stmt = GpuIslEmitter(info, node_info_repo, iters).Emit(ast_node);
+      if (info.user_config_.GetEnableAkgReduceLib()) {
+        stmt = GpuIslEmitterReduce(info, node_info_repo, iters).Emit(ast_node);
+      } else if (info.user_config_.GetEnableTensorCore()) {
+        stmt = GpuIslEmitterTensorCore(info, node_info_repo, iters).Emit(ast_node);
+      } else {
+        stmt = GpuIslEmitter(info, node_info_repo, iters).Emit(ast_node);
+      }
     }
   }
 

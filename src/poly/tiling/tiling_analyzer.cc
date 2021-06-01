@@ -1353,6 +1353,7 @@ void TilingAnalyzer::AddPostTilingConstraints() {
     ReduceStrategy reduce_strategy(this);
     ModStrategy mod_strategy(this);
     GemmStrategy gemm_strategy(this);
+    ConvStrategy conv_strategy(this);
     GpuDmaAnalysisStrategy dma_analysis_strategy(this);
     CustomTilingStrategy custom_strategy(this);
     GpuStrategy gpu_strategy(this);
@@ -1365,6 +1366,7 @@ void TilingAnalyzer::AddPostTilingConstraints() {
         actived_strategies.push_back(&reduce_strategy);
         actived_strategies.push_back(&mod_strategy);
         actived_strategies.push_back(&gemm_strategy);
+        actived_strategies.push_back(&conv_strategy);
       }
       actived_strategies.push_back(&gpu_strategy);
     }

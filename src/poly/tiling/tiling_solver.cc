@@ -847,15 +847,19 @@ TileCandidate *TraverseSolver::Solve() {
       }
     }
 
-    if (analyzer_.op_type_ == GEMM_OP) {
+    if (analyzer_.op_type_ == GEMM_OP || analyzer_.scop_info_.user_config_.GetTarget() == TARGET_CUDA) {
       for (TileAxis *axis : cand_.GetTileAxis()) {
         std::unique_ptr<TileInfo> info(new (std::nothrow) TileInfo(axis, CACHE0, band));
         CHECK(info) << "memory alloc fail";
         if (IsTilable(info.get())) {
-          if (DoTiling(info.get())) break;
+          if (analyzer_.scop_info_.user_config_.GetEnableTensorCoreUsePoly() || DoTiling(info.get())) {
+            break;
+          }
         }
       }
+    }
 
+    if (analyzer_.op_type_ == GEMM_OP) {
       std::vector<TileAxis *> ko_axes = this->analyzer_.GetAxesOfAttr(AttrInfo{AT_GEMM, "ko"});
       std::vector<TileAxis *> mo_axes = this->analyzer_.GetAxesOfAttr(AttrInfo{AT_GEMM, "mo"});
       std::vector<TileAxis *> no_axes = this->analyzer_.GetAxesOfAttr(AttrInfo{AT_GEMM, "no"});

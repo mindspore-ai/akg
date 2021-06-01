@@ -19,6 +19,7 @@
 #include <tvm.h>
 #include <dmlc/common.h>
 
+#include "common/common_util.h"
 #include "pass/utils.h"
 
 struct FuncIndex {
@@ -239,10 +240,17 @@ class FuseCheck {
     for (const auto &s : sch_->stages) {
       auto op = s->op;
       CHECK(op.defined());
+      auto tensor = op.output(0);
       auto compute_op = op.as<air::ComputeOpNode>();
       if (compute_op && !compute_op->reduce_axis.empty()) {
         // For the matmul, do not perform fuse
         if (IsMatmul(op)) {
+          IterVar fused_axis;
+          Array<IterVar> need_fused_axis;
+          for (size_t i = 0; i < compute_op->axis.size() - 2; ++i) {
+            need_fused_axis.push_back(compute_op->axis[i]);
+          }
+          sch_[tensor].fuse(need_fused_axis, &fused_axis);
           return false;
         }
         // Restrictions related to the Shared memory
@@ -301,8 +309,8 @@ class FuseCheck {
       return false;
     }
     auto mul = source[0].as<Mul>();
-    auto left = mul->a.as<Call>();
-    auto right = mul->b.as<Call>();
+    auto left = akg::common::SplitCast(mul->a, compute_op->output_dtype(0)).as<Call>();
+    auto right = akg::common::SplitCast(mul->b, compute_op->output_dtype(0)).as<Call>();
     if (!left || !right || left->args.size() != right->args.size()) {
       return false;
     }

@@ -704,13 +704,17 @@ void CodeGenC::VisitStmt_(const Store* op) {
       if (pos_call != std::string::npos) {
         value = value.substr(0, pos_call) + ")" + value.substr(pos_call);
       }
-      ref = ref.replace(ref.find(vectorize_var_), vectorize_var_.length(), "0");
+      while (ref.find(vectorize_var_) != std::string::npos) {
+        ref = ref.replace(ref.find(vectorize_var_), vectorize_var_.length(), "0");
+      }
       auto scale = std::to_string(vectorize_scale_.as<IntImm>()->value);
       auto pos_end = ref.find("]");
       if (pos_end != std::string::npos) {
         ref = ref.substr(0, pos_end) + " / " + scale + ref.substr(pos_end);
       }
-      value = value.replace(value.find(vectorize_var_), vectorize_var_.length(), "0");
+      while (value.find(vectorize_var_) != std::string::npos) {
+        value = value.replace(value.find(vectorize_var_), vectorize_var_.length(), "0");
+      }
       pos_end = value.find("]");
       if (pos_end != std::string::npos) {
         value = value.substr(0, pos_end) + " / " + scale + value.substr(pos_end);

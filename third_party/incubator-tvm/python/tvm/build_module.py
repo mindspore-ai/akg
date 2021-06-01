@@ -406,7 +406,7 @@ def lower(sch,
     else:
         stmt = ir_pass.VectorizeLoop(stmt)
     stmt = ir_pass.InjectVirtualThread(stmt)
-    stmt = ir_pass.InjectDoubleBuffer(stmt, cfg.double_buffer_split_loop)
+    stmt = ir_pass.InjectDoubleBuffer(stmt, cfg.double_buffer_split_loop, False)
     stmt = ir_pass.StorageRewrite(stmt)
     stmt = ir_pass.UnrollLoop(
         stmt,

@@ -22,6 +22,7 @@
 #include <memory>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <iostream>
 
 namespace akg {
@@ -129,11 +130,13 @@ struct SyncCandidate {
       std::cout << std::endl;
       std::cout << "Block level sync count: " << std::endl;
       for (const auto &p : node->num_block_sync_to) {
-        std::cout << "[No." << node->idx << "]" << " -> [No." << p.first->idx << "] : #" << p.second << " sync." << std::endl;
+        std::cout << "[No." << node->idx << "]"
+                  << " -> [No." << p.first->idx << "] : #" << p.second << " sync." << std::endl;
       }
       std::cout << "Warp level sync count: " << std::endl;
       for (const auto &p : node->num_warp_sync_to) {
-        std::cout << "[No." << node->idx << "]" << " -> [No." << p.first->idx << "] : #" << p.second << " sync." << std::endl;
+        std::cout << "[No." << node->idx << "]"
+                  << " -> [No." << p.first->idx << "] : #" << p.second << " sync." << std::endl;
       }
       std::cout << "====================================================" << std::endl;
     });
@@ -146,7 +149,7 @@ class SyncManager {
   ~SyncManager() {}
 
   isl::schedule_node InsertExtensionNode(const isl::schedule_node &node, SyncLevel level, bool after);
-  isl::schedule_node InsertPromotionSync(const isl::schedule_node &tree);
+  isl::schedule InsertPromotionSync(const isl::schedule &sch);
 
  private:
   isl::ctx ctx_;
@@ -157,6 +160,8 @@ class SyncManager {
   isl::id GetWarpSyncId() const;
 
   isl::map GetExtensionSpace(const isl::schedule_node &node, SyncLevel level);
+
+  bool IsRepeatSync(const isl::schedule_node orig_node);
 };
 }  // namespace poly
 }  // namespace ir

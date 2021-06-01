@@ -1331,55 +1331,37 @@ isl::schedule_node InsertExtensionBeforeOrAfter(ScopInfo &scop_info, isl::schedu
   int index = tree.parent().get_ancestor_child_position(tree.ancestor(2));
 
   if (tree.parent().isa<isl::schedule_node_filter>()) {
+    int children_number = tree.ancestor(2).n_children();
+    CHECK(children_number > 0) << "sequence node must have children";
     if (isl_bool_true == before) {
       tree = tree.ancestor(2).child(0).child(0);
     } else {
-      int size = tree.ancestor(2).n_children();
-      tree = tree.ancestor(2).child(size - 1).child(0);
+      auto domain = schedule.domain();
+      bool is_promoted_shared = false;
+      domain.foreach_set([&is_promoted_shared](const isl::set &set) -> void {
+        if (set.get_tuple_name() == SHARED_WRITE_ID_NAME) {
+          is_promoted_shared = true;
+        }
+      });
+      int size = children_number - 1;
+      if (is_promoted_shared) {
+        for (int i = size; i >= 0; --i) {
+          auto filter_node = tree.ancestor(2).child(i).as<isl::schedule_node_filter>();
+          isl::union_set uset = filter_node.get_filter();
+          std::vector<isl::set> vset;
+          uset.foreach_set([&vset](isl::set s) { vset.push_back(s); });
+          if (vset.empty() || vset[0].get_tuple_name() != WRITE_ID_NAME) {
+            continue;
+          }
+          size = (i == 0) ? 0 : i - 1;
+          break;
+        }
+      }
+      tree = tree.ancestor(2).child(size).child(0);
     }
   }
 
   if (scop_info.user_config_.GetTarget() == TARGET_CUDA && USE_SIMPLE_EXTENSION) {
-    if (auto graft_band = graft.child(0).as<isl::schedule_node_band>()) {
-      auto graft_domain = graft_band.get_partial_schedule().domain();
-      bool is_compute_shared = false;
-      graft_domain.foreach_set([&is_compute_shared](isl::set s) {
-        if (s.get_tuple_name() == SHARED_WRITE_ID_NAME) {
-          is_compute_shared = true;
-        }
-      });
-
-      if (!is_compute_shared) {
-        return InsertExtensionSimple(tree, graft, before, index);
-      }
-
-      auto IsComputePromotion = [](const isl::schedule_node &node) -> bool {
-        if (!node.isa<isl::schedule_node_filter>()) {
-          return false;
-        }
-        auto filter_node = node.as<isl::schedule_node_filter>();
-        isl::union_set uset = filter_node.get_filter();
-        bool is_compute_gm = false;
-        uset.foreach_set([&is_compute_gm](isl::set s) {
-          if (s.get_tuple_name() == WRITE_ID_NAME) {
-            is_compute_gm = true;
-          }
-        });
-        return is_compute_gm;
-      };
-
-      if (!tree.has_parent()) {
-        return InsertExtensionSimple(tree, graft, before, index);
-      }
-      auto gm_node = tree.parent();
-      bool is_wrong_order = gm_node.has_previous_sibling() && gm_node.previous_sibling().has_previous_sibling() &&
-                            IsComputePromotion(gm_node.previous_sibling());
-      if (!is_wrong_order) {
-        return InsertExtensionSimple(tree, graft, before, index);
-      }
-      gm_node = gm_node.previous_sibling().previous_sibling().child(0);
-      tree = gm_node;
-    }
     return InsertExtensionSimple(tree, graft, before, index);
   }
 

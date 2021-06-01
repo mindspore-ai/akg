@@ -74,17 +74,19 @@ def gen_data(shape1, shape2, dtype, out_dtype="float32", layout1="NHDT", layout2
     return lhs, rhs, bias, output, expect
 
 
-def test_ms_bmm(shape1, shape2, dtype, out_dtype="float32", layout1="NHDT", layout2="NHDT", layout_out="NHDT", 
-                                       shape_bias=None, add_bias=False, tensor_core=True, poly_sch=False, dim="", bind_block="", bind_thread=""):
+def test_ms_bmm(shape1, shape2, dtype, out_dtype="float32", layout1="NHDT", layout2="NHDT", layout_out="NHDT",
+                shape_bias=None, add_bias=False, tensor_core=True, poly_sch=False, attrs=None):
     op_attrs = [out_dtype, layout1, layout2, layout_out, tensor_core, add_bias]
 
     if poly_sch:
-        attrs = {"target": "cuda", "use_shared_memory": True, "enable_auto_fuse": False,
-                 "dim": dim, "bind_block": bind_block, "bind_thread": bind_thread}
+        default_attrs = {"target": "cuda"}
+        if attrs:
+            default_attrs.update(attrs)
         if tensor_core:
-            attrs.update({"pragma_enable_tensor_core": True, "vector_load_type": "float4", "pragma_enable_matmul": True})
+            default_attrs.update({"pragma_enable_matmul": True, "enable_auto_inline": False})
+        print(default_attrs)
         mod = utils.op_build_test(batch_matmul, (shape1, shape2, shape_bias), (dtype, dtype, out_dtype), op_attrs=op_attrs,
-                  attrs=attrs, kernel_name="batch_matmul")
+                                  attrs=default_attrs, kernel_name="batch_matmul")
 
     lhs, rhs, bias, output, expect = gen_data(
         shape1, shape2, dtype, out_dtype, layout1, layout2, layout_out, shape_bias, add_bias)

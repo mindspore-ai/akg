@@ -21,6 +21,8 @@
 #include <arithmetic/compute_expr.h>
 #include <ir_pass.h>
 #include "build_module.h"
+#include "utils.h"
+#include "common/common_util.h"
 
 namespace akg {
 namespace ir {
@@ -28,9 +30,7 @@ constexpr auto PREFETCH_SCOPE = "double_buffer_scope";
 constexpr auto THREAD_GROUP_OFFSET = "thread_group_offset";
 constexpr auto WMMA_FACTOR_AB = 16;
 constexpr auto WMMA_FACTOR_C = 32;
-constexpr auto BITS_PER_BYTE = 8;
 constexpr int REGISTER_FILE_SIZE_PER_SM = 256 * 1024;
-constexpr int MAX_SHARED_USAGE = 48 * 1024;
 constexpr int TOTAL_THREAD_NUM_PER_BLOCK = 1024;
 constexpr int MIN_OUTER_LOOP = 2;
 constexpr int MAX_OUTER_LOOP = 64;
@@ -60,35 +60,49 @@ class PrefetchScopeInjector : public IRMutator {
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
     if (op->attr_key == air::ir::attr::storage_scope && op->value.as<StringImm>()->value == "shared") {
       touched_.insert(op->node.as<Variable>());
-    }
-    if (op->attr_key ==  "shared_mem_promoted_complete") {
+    } else if (op->attr_key == "shared_mem_promoted_complete") {
       if_shared_promoted_ = true;
-    }
-    if (op->attr_key == "promote_vectorization") {
-      is_vectorize_ = true;
-      auto res = IRMutator::Mutate_(op, s);
-      if (need_prefetch_) {
-        res = AttrStmt::make(prefetch_var_, PREFETCH_SCOPE, 1, res);
-        if_prefetch_injected_ = true;
-        need_prefetch_ = false;
+    } else if (op->attr_key == "promote_register_to_global" || op->attr_key == "promote_register_to_shared") {
+      if_shared_finished_ = true;
+    } else if (op->attr_key == "promote_vectorization") {
+      if (IsPrefetchBlock(s) && HasOuterLoop()) {
+        if (loop_nest_.back()->extent.as<IntImm>() != nullptr) {
+          prefetch_outer_loop_ = (loop_nest_.back()->extent).as<IntImm>()->value;
+          if_prefetch_injected_ = true;
+          return AttrStmt::make(prefetch_var_, PREFETCH_SCOPE, 1, s);
+        }
       }
-      is_vectorize_ = false;
-      return res;
+      return s;
     }
     return IRMutator::Mutate_(op, s);
   }
 
   Stmt Mutate_(const Evaluate *op, const Stmt &s) final {
     if (is_const(op->value)) return IRMutator::Mutate_(op, s);
-    const Call *call = op->value.as<Call>();
-    if (call) {
+    if (const auto call = op->value.as<Call>()) {
       if (call->is_intrinsic(air::ir::intrinsic::tvm_storage_sync)) {
         if (if_prefetch_injected_ && (!if_shared_promoted_)) {
-          return AttrStmt::make(Var(""), "delete_this_sync", Expr("delete_this_sync"), s);
+          return AttrStmt::make(Var(""), "delete_this_sync", 1, s);
+        } else if (if_shared_promoted_ && (!if_shared_finished_)) {
+          return AttrStmt::make(Var(""), "delete_this_sync_for_db", 1, s);
         }
       }
     }
     return IRMutator::Mutate_(op, s);
+  }
+
+  Stmt Mutate_(const IfThenElse *op, const Stmt &s) final {
+    Stmt stmt = IRMutator::Mutate_(op, s);
+    if (const auto ifthenelse = stmt.as<IfThenElse>()) {
+      if (auto attr = ifthenelse->then_case.as<AttrStmt>()) {
+        if (attr->attr_key == PREFETCH_SCOPE) {
+          Stmt rotated_stmt = IfThenElse::make(ifthenelse->condition, attr->body, ifthenelse->else_case);
+          rotated_stmt = AttrStmt::make(attr->node, attr->attr_key, attr->value, rotated_stmt);
+          return rotated_stmt;
+        }
+      }
+    }
+    return stmt;
   }
 
   bool IsPrefetchBlock(const Stmt &s) {
@@ -106,34 +120,37 @@ class PrefetchScopeInjector : public IRMutator {
       if (IsPrefetchBlock(attr->body)) {
         return true;
       }
+    } else if (auto cond = s.as<IfThenElse>()) {
+      if (IsPrefetchBlock(cond->then_case)) {
+        return true;
+      }
     }
     return false;
   }
   bool HasOuterLoop() { return !loop_nest_.empty(); }
   Stmt Mutate_(const For *op, const Stmt &s) final {
     if (IsPrefetchBlock(s) && HasOuterLoop()) {
-      prefetch_outer_loop_ = (loop_nest_.back()->extent).as<IntImm>()->value;
-      if (is_vectorize_) {
-        need_prefetch_ = true;
-        return s;
+      if (loop_nest_.back()->extent.as<IntImm>() != nullptr) {
+        prefetch_outer_loop_ = (loop_nest_.back()->extent).as<IntImm>()->value;
+        if_prefetch_injected_ = true;
+        return AttrStmt::make(prefetch_var_, PREFETCH_SCOPE, 1, s);
       }
-      if_prefetch_injected_ = true;
-      return AttrStmt::make(prefetch_var_, PREFETCH_SCOPE, 1, s);
-    } else {
-      loop_nest_.push_back(op);
-      auto stmt = IRMutator::Mutate_(op, s);
-      loop_nest_.pop_back();
-      return stmt;
     }
+    loop_nest_.push_back(op);
+    auto stmt = IRMutator::Mutate_(op, s);
+    loop_nest_.pop_back();
+    return stmt;
   }
 
   Stmt Mutate_(const Store *op, const Stmt &s) final {
     if (IsPrefetchBlock(s) && HasOuterLoop()) {
-      if_prefetch_injected_ = true;
-      return AttrStmt::make(prefetch_var_, PREFETCH_SCOPE, 1, s);
-    } else {
-      return IRMutator::Mutate_(op, s);
+      if (loop_nest_.back()->extent.as<IntImm>() != nullptr) {
+        prefetch_outer_loop_ = (loop_nest_.back()->extent).as<IntImm>()->value;
+        if_prefetch_injected_ = true;
+        return AttrStmt::make(prefetch_var_, PREFETCH_SCOPE, 1, s);
+      }
     }
+    return IRMutator::Mutate_(op, s);
   }
 
   const bool GetIfPrefetchInjected() { return if_prefetch_injected_; }
@@ -148,6 +165,7 @@ class PrefetchScopeInjector : public IRMutator {
   bool is_vectorize_{false};
   bool if_prefetch_injected_{false};
   bool if_shared_promoted_{false};
+  bool if_shared_finished_{false};
   int prefetch_outer_loop_;
 };
 
@@ -169,26 +187,27 @@ class IfResouceIsEnough : public IRVisitor {
       }
       return IRVisitor::Visit_(op);
     } else if (op->attr_key == air::ir::attr::storage_scope) {
-      auto alloc = op->body.as<Allocate>();
-      if (!promote_local_usage_.defined()) {
-        promote_local_usage_ = make_const(alloc->extents[0].type(), 0);
-      }
-      Expr dtype_factor = alloc->type.bits() / BITS_PER_BYTE;
-      if (op->value.as<StringImm>()->value == "shared") {
-        if (!shared_usage_.defined()) {
-          shared_usage_ = make_const(alloc->extents[0].type(), 0);
+      if (auto alloc = op->body.as<Allocate>()) {
+        if (!promote_local_usage_.defined()) {
+          promote_local_usage_ = make_const(alloc->extents[0].type(), 0);
         }
-        shared_usage_ += air::arith::ComputeReduce<Mul>(alloc->extents, Expr()) * alloc->type.lanes() * dtype_factor;
-      } else if (op->value.as<StringImm>()->value == "local") {
-        promote_local_usage_ +=
-          air::arith::ComputeReduce<Mul>(alloc->extents, Expr()) * alloc->type.lanes() * dtype_factor;
-      } else if (op->value.as<StringImm>()->value == "wmma.accumulator") {
-        promote_local_usage_ += air::arith::ComputeReduce<Mul>(alloc->extents, Expr()) * alloc->type.lanes() /
-                                Expr(WMMA_FACTOR_C) * dtype_factor;
-      } else if (op->value.as<StringImm>()->value == "wmma.matrix_b" ||
-                 op->value.as<StringImm>()->value == "wmma.matrix_a") {
-        promote_local_usage_ += air::arith::ComputeReduce<Mul>(alloc->extents, Expr()) * alloc->type.lanes() /
-                                Expr(WMMA_FACTOR_AB) * dtype_factor;
+        if (op->value.as<StringImm>()->value == "shared") {
+          if (!shared_usage_.defined()) {
+            shared_usage_ = make_const(alloc->extents[0].type(), 0);
+          }
+          shared_usage_ +=
+            air::arith::ComputeReduce<Mul>(alloc->extents, Expr()) * alloc->type.lanes() * alloc->type.bytes();
+        } else if (op->value.as<StringImm>()->value == "local") {
+          promote_local_usage_ +=
+            air::arith::ComputeReduce<Mul>(alloc->extents, Expr()) * alloc->type.lanes() * alloc->type.bytes();
+        } else if (op->value.as<StringImm>()->value == "wmma.accumulator") {
+          promote_local_usage_ += air::arith::ComputeReduce<Mul>(alloc->extents, Expr()) * alloc->type.lanes() /
+                                  Expr(WMMA_FACTOR_C) * alloc->type.bytes();
+        } else if (op->value.as<StringImm>()->value == "wmma.matrix_b" ||
+                   op->value.as<StringImm>()->value == "wmma.matrix_a") {
+          promote_local_usage_ += air::arith::ComputeReduce<Mul>(alloc->extents, Expr()) * alloc->type.lanes() /
+                                  Expr(WMMA_FACTOR_AB) * alloc->type.bytes();
+        }
       }
       return IRVisitor::Visit_(op);
     } else if (op->attr_key == PREFETCH_SCOPE) {
@@ -201,8 +220,7 @@ class IfResouceIsEnough : public IRVisitor {
       for (unsigned i = 0; i < transfer_loop_nest_.size(); i++) {
         current_local_usage *= transfer_loop_nest_[i]->extent - transfer_loop_nest_[i]->min;
       }
-      Expr dtype_factor = prefetch_data_type_.bits() / BITS_PER_BYTE;
-      prefetch_local_usage_ += current_local_usage * dtype_factor;
+      prefetch_local_usage_ += current_local_usage * prefetch_data_type_.bytes();
       transfer_loop_nest_.clear();
       in_prefetch_buffer_scope_ = false;
     } else {
@@ -216,7 +234,11 @@ class IfResouceIsEnough : public IRVisitor {
   }
 
   void Visit_(const Store *op) {
-    if (in_prefetch_buffer_scope_) prefetch_data_type_ = op->value.as<Load>()->type;
+    if (in_prefetch_buffer_scope_) {
+      if (const auto load = op->value.as<Load>()) {
+        prefetch_data_type_ = load->type;
+      }
+    }
     return IRVisitor::Visit_(op);
   }
 
@@ -272,7 +294,8 @@ class ThreadGroupScopeInjector : public IRMutator {
       Stmt body = Mutate(op->body);
       return AttrStmt::make(op->node, op->attr_key, op->value,
                             AttrStmt::make(thread_var_, THREAD_GROUP_OFFSET, thread_offset_, body));
-    } else if (op->attr_key == "promote_local_to_global" || op->attr_key == "shared_mem_promoted_complete") {
+    } else if (op->attr_key == "promote_register_to_shared" || op->attr_key == "promote_shared_to_global" ||
+               op->attr_key == "promote_register_to_global" || op->attr_key == "shared_mem_promoted_complete") {
       Stmt body = Mutate(op->body);
       return AttrStmt::make(
         op->node, op->attr_key, op->value,
@@ -305,12 +328,12 @@ Stmt InjectTransferBufferScope(Stmt stmt) {
   if (tuning) {
     // tuning: manually control by attrs
     enable_double_buffer = g_attrs.GetBool(kEnableDoubleBuffer, false);
-    enable_transfer_buffer = g_attrs.GetBool(kEnableTransferBuffer, false);
+    enable_transfer_buffer = g_attrs.GetBool(kEnableTransferBuffer, true);
     enable_thread_group = g_attrs.GetBool(kEnableThreadGroup, false);
   } else {
     // not tuning: auto-analyse
     const int total_shared_usage = resource_calc.GetTotalSharedUsage();
-    float shared_mem_rate = float(total_shared_usage * 2) / float(MAX_SHARED_USAGE);
+    float shared_mem_rate = float(total_shared_usage * 2) / float(common::ADVANCED_SHARED_MEMORY_SIZE);
     const int bind_thread_num = resource_calc.GetBindThreadNum();
     const int total_local_usage = resource_calc.GetTotalLocalUsage();
     float local_mem_rate = float(total_local_usage * bind_thread_num) / float(REGISTER_FILE_SIZE_PER_SM);
@@ -327,22 +350,34 @@ Stmt InjectTransferBufferScope(Stmt stmt) {
       }
     }
   }
-   if (enable_transfer_buffer || enable_double_buffer) {
-     if (enable_thread_group) {
+  // avoid enabling two modes
+  if (enable_double_buffer) {
+    enable_transfer_buffer = false;
+  }
+  Stmt stmt_after_prefetch = stmt;
+  if (enable_transfer_buffer || enable_double_buffer) {
+    if (enable_thread_group) {
       const Var thread_group_var = resource_calc.GetThreadGroupVar();
       const Expr thread_group_offset = resource_calc.GetThreadGoupOffset();
-      return ThreadGroupScopeInjector().Inject(new_stmt, thread_group, thread_group_var, thread_group_offset); 
-     } else {
-       return new_stmt;
-     }
-   } else {
-     return stmt;
-   }
+      stmt_after_prefetch =
+        ThreadGroupScopeInjector().Inject(new_stmt, thread_group, thread_group_var, thread_group_offset);
+    } else {
+      stmt_after_prefetch = new_stmt;
+    }
+  }
+  // add an attr of prefetch_mode
+  int prefetch_mode = static_cast<int>(PrefetchMode::DEFAULT);
+  if (enable_double_buffer && enable_thread_group) {
+    prefetch_mode = static_cast<int>(PrefetchMode::DOUBLEBUFFER_THREADGROUP);
+  } else if (enable_transfer_buffer && enable_thread_group) {
+    prefetch_mode = static_cast<int>(PrefetchMode::TRANSFERBUFFER_THREADGROUP);
+  } else if (enable_double_buffer) {
+    prefetch_mode = static_cast<int>(PrefetchMode::DOUBLEBUFFER);
+  } else if (enable_transfer_buffer) {
+    prefetch_mode = static_cast<int>(PrefetchMode::TRANSFERBUFFER);
+  }
+  return AttrStmt::make(Expr("INFO"), ATTR_PREFETCH_MODE, prefetch_mode, stmt_after_prefetch);
 }
 
 }  // namespace ir
 }  // namespace akg
-
-
-
-  

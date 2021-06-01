@@ -229,8 +229,96 @@ std::vector<isl::schedule_node> BandsSplitAfterDepth(const std::vector<isl::sche
   return MapWithFunc(split_at_depth, bands);
 }
 
+isl::schedule InsertMarkerForThreadGroup(const isl::schedule sch, const std::string write_name,
+                                         const std::string marker_name) {
+  auto GetPromotedWriteFilter = [write_name, marker_name](isl::schedule_node node) -> isl::schedule_node {
+    if (!node.isa<isl::schedule_node_filter>()) {
+      return node;
+    }
+    isl::union_set uset = node.as<isl::schedule_node_filter>().get_filter();
+    bool is_gm_write = false;
+    uset.foreach_set([&is_gm_write, write_name](isl::set s) {
+      if (s.get_tuple_name() == write_name) {
+        is_gm_write = true;
+      }
+    });
+    if (is_gm_write && node.has_parent() && node.parent().isa<isl::schedule_node_sequence>()) {
+      node = node.child(0).insert_mark(marker_name);
+      node = node.parent();
+    }
+    return node;
+  };
+  auto final_sch = sch.get_root().map_descendant_bottom_up(GetPromotedWriteFilter).schedule();
+  return final_sch;
+}
+
+isl::schedule_node AdjustConvScheduleTreeStructure(const isl::schedule_node &orig_node, const bool is_promotion) {
+  auto node = orig_node;
+  if (!node.isa<isl::schedule_node_band>()) {
+    return node;
+  }
+
+  auto band_node = node.as<isl::schedule_node_band>();
+  auto orig_number = band_node.n_member();
+  if (orig_number <= 2) {
+    return node;
+  }
+
+  // original node
+  auto orig_partial_schedule = band_node.get_partial_schedule();
+  bool orig_permutable = band_node.get_permutable();
+  std::vector<bool> orig_coincident;
+  for (int i = 0; i < static_cast<int>(orig_number); ++i) {
+    orig_coincident.push_back(band_node.member_get_coincident(i));
+  }
+
+  isl::union_pw_aff_list new_partial_schedule(node.ctx(), orig_number);
+  auto InsertPartialSchedule = [&new_partial_schedule](isl::schedule_node node) -> void {
+    auto partial_schedule = node.as<isl::schedule_node_band>().get_partial_schedule();
+    for (int i = 0; i < static_cast<int>(partial_schedule.size()); ++i) {
+      new_partial_schedule = new_partial_schedule.add(partial_schedule.get_at(i));
+    }
+  };
+
+  // split n axis
+  node = node.as<isl::schedule_node_band>().split(1);
+  auto n_node = node;
+  node = node.del();
+
+  // split h and w axis
+  const int h_w_axis_size = 2;
+  int real_h_w_axis_size = is_promotion ? static_cast<int>(orig_number) - h_w_axis_size : h_w_axis_size;
+  node = node.as<isl::schedule_node_band>().split(real_h_w_axis_size);
+  InsertPartialSchedule(node);
+  node = node.del();
+  InsertPartialSchedule(n_node);
+
+  // split o and other axis
+  InsertPartialSchedule(node);
+
+  node = node.insert_partial_schedule(isl::multi_union_pw_aff(orig_partial_schedule.get_space(), new_partial_schedule));
+  band_node = node.as<isl::schedule_node_band>();
+  band_node = band_node.set_permutable(orig_permutable);
+  for (int i = 0; i < static_cast<int>(orig_number); ++i) {
+    band_node = band_node.member_set_coincident(i, orig_coincident[i]);
+  }
+  return band_node;
+}
+
+std::string GetMarkerName(const isl::schedule_node &node, std::string find_name) {
+  std::string marker_name = "";
+  if (node.isa<isl::schedule_node_mark>()) {
+    marker_name = node.as<isl::schedule_node_mark>().get_id().get_name();
+    if (marker_name.find(find_name) != std::string::npos) {
+      return marker_name;
+    }
+    marker_name = "";
+  }
+  return marker_name;
+}
+
 isl::union_pw_aff_list GetUPAList(const isl::schedule_node &node, isl::multi_union_pw_aff &partial_schedule,
-                                  const bool is_promotion, bool need_coalesce) {
+                                  const bool is_promotion, const bool need_reverse) {
   if (is_promotion) {
     // we need to to get range of promoted band from extension node so that we can correctly fix stride
     auto parent = node;
@@ -245,21 +333,20 @@ isl::union_pw_aff_list GetUPAList(const isl::schedule_node &node, isl::multi_uni
 
   auto upa_list = partial_schedule.get_union_pw_aff_list().reverse();
 
-  if (need_coalesce) {
+  if (need_reverse) {
     upa_list = upa_list.reverse();
   }
   return upa_list;
 }
 
-std::pair<isl::schedule_node, isl::schedule_node> MapInnerDimToThreads(const isl::schedule_node &node,
-                                                                       const bool is_promotion, MappingCfg *mapping_cfg,
-                                                                       Mapping &mapping, bool need_coalesce) {
+isl::schedule_node MapInnerDimToThreads(const isl::schedule_node &node, const bool is_promotion,
+                                        MappingCfg *mapping_cfg, Mapping &mapping, const bool need_reverse) {
   CHECK(mapping_cfg != nullptr) << "thread config is null";
   isl::schedule_node_band band_node = node.as<isl::schedule_node_band>();
   size_t n_thread_map = std::min(static_cast<size_t>(band_node.n_member()), mapping_cfg->bound);
   CHECK_LE(n_thread_map, mapping_cfg->MaxDim()) << "mapping to too many threads.";
   auto partial_schedule = band_node.get_partial_schedule();
-  auto upa_list = GetUPAList(node, partial_schedule, is_promotion, need_coalesce);
+  auto upa_list = GetUPAList(node, partial_schedule, is_promotion, need_reverse);
 
   // append prefix to partial schedule for tiling
   auto add_prefix_schedule = partial_schedule;
@@ -278,12 +365,12 @@ std::pair<isl::schedule_node, isl::schedule_node> MapInnerDimToThreads(const isl
   }
   auto prefix_upa_list = add_prefix_schedule.get_union_pw_aff_list().reverse();
 
-  if (need_coalesce) {
+  if (need_reverse) {
     prefix_upa_list = prefix_upa_list.reverse();
   }
 
-  isl::schedule_node fix_node = CheckMapSizeAndApplyTile(node, prefix_upa_list, mapping_cfg, need_coalesce);
-  bool tiled = !fix_node.is_equal(node);
+  isl::schedule_node fix_node = CheckMapSizeAndApplyTile(node, prefix_upa_list, mapping_cfg, need_reverse);
+  bool is_tiled = !fix_node.is_equal(node);
 
   // drop un-mapped aff after tiling
   upa_list = upa_list.drop(n_thread_map, upa_list.size() - n_thread_map);
@@ -294,15 +381,11 @@ std::pair<isl::schedule_node, isl::schedule_node> MapInnerDimToThreads(const isl
 
   auto after_map_node = CreateAndInsertMapFilter(fix_node, is_promotion, upa_list, mapping_cfg, mapping);
   after_map_node = after_map_node.parent();
-  if (is_promotion && tiled) {
+  if (is_tiled) {
     after_map_node = after_map_node.parent();
   }
 
-  isl::schedule_node after_fix_node = after_map_node;
-  if (tiled && after_fix_node.has_parent()) {
-    after_fix_node = after_fix_node.parent();
-  }
-  return std::make_pair(after_map_node, after_fix_node);
+  return after_map_node;
 }
 
 isl::schedule_node CreateAndInsertMapFilter(const isl::schedule_node &node, const bool is_promotion,
@@ -370,13 +453,13 @@ isl::schedule_node CreateAndInsertMapFilter(const isl::schedule_node &node, cons
  */
 isl::schedule_node CheckMapSizeAndApplyTile(const isl::schedule_node &mapping_root,
                                             const isl::union_pw_aff_list &aff_list, MappingCfg *mapping_cfg,
-                                            bool need_coalesce) {
+                                            const bool need_reverse) {
   bool need_tile = false;
   std::vector<int> mapping_sizes;
   CHECK(mapping_cfg != nullptr) << "mapping config is null";
   size_t block_count = 0;
   for (size_t i = 0; i < aff_list.size(); ++i) {
-    auto aff = aff_list.get_at(i);
+    auto aff = aff_list.get_at(i).floor();
     auto extent = aff.max_val().get_num_si() + 1;
     if (mapping_cfg->type == MappingType::BLOCKS) {
       if (aff_list.size() - 1 - i < mapping_cfg->bound) {
@@ -409,7 +492,7 @@ isl::schedule_node CheckMapSizeAndApplyTile(const isl::schedule_node &mapping_ro
 
   auto len = static_cast<int>(mapping_sizes.size());
   for (auto i = len - 1; i >= 0; --i) {
-    int pos = need_coalesce ? i : len - 1 - i;
+    int pos = need_reverse ? i : len - 1 - i;
     tile_size = tile_size.set_val(pos, isl::val(ctx, mapping_sizes[i]));
   }
 
@@ -734,6 +817,127 @@ isl::schedule_node InsertExtensionNodeBeforeOrAfter(const isl::schedule_node &no
     extension_node = extension_node.graft_after(graft);
   }
   return extension_node;
+}
+
+isl::union_set GetBlockMappingFilterInfo(const isl::schedule_node node, MappingCfg *block_cfg,
+                                         std::unordered_map<std::string, MappingCfg *> replace_cfg) {
+  isl::union_set mapping;
+  for (auto it : replace_cfg) {
+    auto cfg = it.second;
+    if (cfg->type == MappingType::REPLACE_BLOCKS) {
+      if (mapping.is_null()) {
+        mapping = GatherMappingsTo(node, cfg);
+      } else {
+        mapping = mapping.intersect(GatherMappingsTo(node, cfg));
+      }
+    }
+  }
+  if (mapping.is_null()) {
+    mapping = GatherMappingsTo(node, block_cfg);
+  }
+  return mapping;
+}
+
+isl::union_set GatherMappingsTo(const isl::schedule_node &root, MappingCfg *cfg) {
+  auto domain_node = root.as<isl::schedule_node_domain>();
+  auto domain = domain_node.domain();
+  auto sch = root.get_schedule();
+  auto mapping_filters = CollectNode<isl::schedule_node_filter>(sch);
+
+  std::vector<isl::id> filters;
+  for (size_t idx = 0; idx < cfg->bound; ++idx) {
+    auto value = cfg->GetAt(idx);
+    auto id = isl::id(root.ctx(), value.first);
+    filters.push_back(id);
+  }
+  mapping_filters = FilterNode(mapping_filters, filters);
+
+  auto mapping = isl::union_set::empty(domain.ctx());
+  for (auto item : mapping_filters) {
+    if (item.isa<isl::schedule_node_filter>()) {
+      auto filter = item.as<isl::schedule_node_filter>();
+      if (filter.has_parent() && !filter.parent().isa<isl::schedule_node_mark>()) {
+        continue;
+      }
+
+      isl::union_set uset = filter.get_filter();
+      std::vector<isl::set> vset;
+      uset.foreach_set([&vset](isl::set s) { vset.push_back(s); });
+      if (!vset.empty()) {
+        auto filter_name = vset[0].get_tuple_name();
+        if (filter_name == READ_ID_NAME || filter_name == WRITE_ID_NAME) {
+          continue;
+        }
+      }
+
+      mapping = mapping.unite(filter.filter());
+    }
+  }
+  return mapping;
+}
+
+/* Check that whether the mapping relation between instance statement
+ * and outer schedule points and tensor elements pair is reusable. */
+bool ReuseTensorCluster(const TensorFootprintCluster &cluster, const isl::multi_union_pw_aff &outer_pw_aff) {
+  /* compute the mapping relation between statement instance and outer schedule space and tensor elements pair */
+  /* Here we use the property of bijective to decide whether promote this tensor to shared.
+   * For element wise operator, S -> tensor_schedule is bijective.
+   * It should not be promoted to shared/local memory.
+   * For reduced operator, S -> tensor_schedule is not bijective.
+   * It should be promoted to shared/local memory.
+   * For stencil operator in sciencetific computing, S -> tensor_schedule is not bijective.
+   * It should be promoted to shared/local memory.
+   * *******************************************************************************************/
+  isl::union_map state_schedule_mapping = ScheduleTensorMapping(outer_pw_aff, cluster.OrigianlAccessRelations());
+  return !state_schedule_mapping.is_injective();
+}
+
+isl::schedule_node CollectMarkNodeOnPromotion(isl::schedule_node root, const std::string mark) {
+  isl::schedule_node hoist_node;
+  root.foreach_descendant_top_down([&hoist_node, &mark](const isl::schedule_node &node) -> bool {
+    if (auto mark_node = node.as<isl::schedule_node_mark>()) {
+      // ignore nested mark nodes
+      if (mark_node.get_id().get_name() == mark) {
+        hoist_node = mark_node;
+        return false;
+      }
+    }
+    return true;
+  });
+  return hoist_node;
+}
+
+std::unordered_map<std::string, std::string> GetMatmulTensorsName(ScopInfo &scop_info) {
+  std::unordered_map<std::string, std::string> tensors;
+  if (scop_info.user_config_.GetEnableMatmul()) {
+    std::unordered_map<std::string, std::string> matmul_map = scop_info.analysis_result_.GetMatrixMatmulMap();
+    for (auto i : matmul_map) {
+      if (i.second == MATRIX_C) {
+        tensors.emplace(MATRIX_C, i.first);
+      } else if (i.second == MATRIX_A) {
+        tensors.emplace(MATRIX_A, i.first);
+      } else if (i.second == MATRIX_B) {
+        tensors.emplace(MATRIX_B, i.first);
+      } else if (i.second == MATRIX_ELSE) {
+        tensors.emplace(MATRIX_ELSE, i.first);
+      }
+    }
+  }
+  return tensors;
+}
+
+bool IsTensorAB(const std::string &item, ScopInfo &scop_info) {
+  auto tensors = GetMatmulTensorsName(scop_info);
+  size_t pos = 0;
+  std::string item_tensor_name = item;
+  if ((pos = item_tensor_name.find(LOCAL_SUFFIX)) != std::string::npos ||
+      (pos = item_tensor_name.find(SHARE_SUFFIX)) != std::string::npos) {
+    item_tensor_name = item_tensor_name.erase(pos, item_tensor_name.size() - pos);
+  }
+  if (item_tensor_name != tensors[MATRIX_A] && item_tensor_name != tensors[MATRIX_B]) {
+    return false;
+  }
+  return true;
 }
 
 }  // namespace poly

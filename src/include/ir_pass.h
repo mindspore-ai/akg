@@ -84,6 +84,14 @@ Stmt InjectDoubleBufferScopeOnGpu(Stmt stmt);
  */
 Stmt InjectTransferBufferScope(Stmt stmt);
 
+/*!
+ * \brief  Rearrange the buffer of shared memory to eliminate the bank conflict.
+ *
+ * \param expr The statement to be rearranged.
+ * \return The statement after rearranged.
+ */
+Stmt ReconstructLayout(const Stmt &stmt);
+
 Stmt ElementwiseFlatten(Stmt stmt, const Map<Tensor, Buffer> &extern_buffer,
                         const Map<Tensor, Buffer> &new_extern_buffer);
 

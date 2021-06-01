@@ -45,7 +45,7 @@ void GPUMgrStrategy::RegisterPasses() {
   }
   RegisterPass(std::make_shared<MappingOuterBand>(pass_info_, scop_info_));
   RegisterMemPromPasses();
-  RegisterPass(std::make_shared<RealizeManager>());
+  RegisterPass(std::make_shared<RealizeManager>(pass_info_, scop_info_));
 }
 
 }  // namespace poly

@@ -65,7 +65,7 @@ bool IsOtherOp(const std::string &op_name) {
   // if topi support more, add to this list
   std::unordered_set<std::string> elems = {"MatMul",      "BatchMatMul",   "Conv",        "Transpose", "Tile",
                                            "Assign",      "InplaceAssign", "EquivFormat", "TransData", "AddMinValue",
-                                           "BroadcastTo", "PadAkg",        "UnPadAkg"};
+                                           "BroadcastTo", "PadAkg",        "UnPadAkg",    "Conv2D"};
   return elems.find(op_name) != elems.end();
 }
 bool IsElemwise(const std::string &op_name) {
