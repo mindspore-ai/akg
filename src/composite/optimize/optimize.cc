@@ -27,6 +27,7 @@
 #include "composite/optimize/intrin_rewriter.h"
 #include "composite/optimize/complex_expander.h"
 #include "composite/optimize/delete_cast.h"
+#include "composite/optimize/transdata_rewriter.h"
 
 namespace akg {
 Stmt Optimize(Stmt &s, BuildInfo &info) {
@@ -34,6 +35,10 @@ Stmt Optimize(Stmt &s, BuildInfo &info) {
   // reshape optimize
   if (info.opt.target == "aicore") {
     pm.RegisterPass(std::make_shared<ReshapeTensor>());
+  }
+  // rewrite the TransData op
+  if (info.opt.target == "aicore") {
+    pm.RegisterPass(std::make_shared<TransDataRewriter>());
   }
   // ops combine
   if (info.opt.target == "aicore") {
