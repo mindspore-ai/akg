@@ -499,6 +499,8 @@ void GpuStrategy::AddGpuConstraint() {
       BroadcastSpeedup();
     } else if (template_ == Template::PAD_OP) {
       PadSpeedup();
+    } else if (template_ == Template::TRANSPOSE_OP) {
+      TransposeSpeedup();
     }
   }
   BuildAxesQueue();
@@ -564,12 +566,6 @@ void GpuStrategy::InitMappingLimit() {
       thread_limit_ = {1};
     }
   } else if (template_ == Template::TRANSPOSE_OP) {
-    analyzer_->scop_info_.user_config_.SetEnableOneDimThread(true);
-    analyzer_->scop_info_.user_config_.SetTransposeOp(true);
-    analyzer_->scop_info_.user_config_.SetUseSharedMemory(true);
-    analyzer_->ForEachAxisTopDown([this](TileAxis *axis) {
-      axis->thread_constraints.item_process_ = std::max(axis->thread_constraints.item_process_, min_elem_for_io_bound_);
-    });
     auto max_dim_thread = static_cast<int64_t>(std::floor(std::sqrt(total_available_thread_)));
     thread_limit_ = {max_dim_thread, max_dim_thread};
   } else if (template_ == Template::MATMUL) {
@@ -671,12 +667,15 @@ void GpuStrategy::InnerThreadOuterBlock() {
         tile = tile_min;
       } else {
         if (axis->block_constraints.map_extent_ > 1) {
+          // block.min <= shape / tile <= block.max
           tile =
             std::max(tile, std::max<int64_t>(ceil(static_cast<float>(shape) / axis->block_constraints.map_extent_), 1));
         } else {
           tile = std::min(tile, shape);
         }
       }
+      tile = std::max<int64_t>(tile, tile_min);
+      tile = std::min<int64_t>(tile, tile_extent);
       axis->TileRestrainLower(tile, TileLevel::CACHE1);
       ss << ", tile = " << tile;
       if (axis->block_constraints.map_extent_ > 1) {
@@ -1209,6 +1208,18 @@ void GpuStrategy::InjectiveSpeedup() {
   analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
 
   WriteConfigBack();
+}
+
+void GpuStrategy::TransposeSpeedup() {
+  analyzer_->GetTileLogger().AppendLine(GPU_MAPPING, "TransposeSpeedup");
+  analyzer_->scop_info_.user_config_.SetEnableOneDimThread(true);
+  analyzer_->scop_info_.user_config_.SetTransposeOp(true);
+  analyzer_->scop_info_.user_config_.SetUseSharedMemory(true);
+  auto inner_axes = analyzer_->GetAxesOfAttr(AT_TRANSPOSE_INNERMOST_AXIS);
+  for (auto axis : inner_axes) {
+    axis->TileRestrainLower(min_elem_for_io_bound_, TileLevel::CACHE1);
+    axis->thread_constraints.item_process_ = min_elem_for_io_bound_;
+  }
 }
 
 void GpuStrategy::PadSpeedup() {

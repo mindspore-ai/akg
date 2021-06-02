@@ -316,6 +316,8 @@ class GpuStrategy : public TilingStrategy {
   void DetermineTemplate();
   void AdjustThreadMappingLimit();
 
+  void TransposeSpeedup();
+
   void PadSpeedup();
 
   void InjectiveSpeedup();

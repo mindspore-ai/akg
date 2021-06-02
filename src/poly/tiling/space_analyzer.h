@@ -81,9 +81,9 @@ class SpaceAnalyzer {
   void IdentifyCustomTiling();
 
   // utils
+  void MarkInnerMostAxis(std::vector<Tensor> tensors, const std::string &attr_key);
   void MarkGemmAxes(const ProvideEntry &pe);
   void MarkBroadcastAxes(const ProvideEntry &pe);
-  void MarkBroadcastInnerMostAxis(const ProvideEntry &pe);
   std::vector<Expr> FindModConstraint(const Expr &arg, std::vector<Expr> constraints);
   const For *GetBufferInnerAxis(Tensor t, int offset = 1);
   void SetAttrForAxis(int tile_band, int tile_axis, const std::string &attr_key, const std::string &attr_value);
