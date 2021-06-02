@@ -96,7 +96,19 @@ class BuildRst : public NodeRef {
   TVM_DEFINE_NODE_REF_METHODS(BuildRst, NodeRef, BuildRstNode);
 };
 
-enum class LowerStage { BEGIN, TUNING, POLY, BEFORE_FLATTEN, FLATTEN, BEFORE_MULTICORE, BEFORE_REWRITE, REWRITE, END };
+// Keep LowerStage continuous!
+enum LowerStage : int16_t {
+  BEGIN = 0,
+  TUNING,
+  POLY,
+  BEFORE_FLATTEN,
+  FLATTEN,
+  BEFORE_MULTICORE,
+  BEFORE_REWRITE,
+  REWRITE,
+  BEFORE_LOWERFUNC,
+  END
+};
 
 class LowerData {
  public:
