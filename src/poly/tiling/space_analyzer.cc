@@ -288,7 +288,7 @@ class SpaceVisitor : public IRVisitor {
     std::string basic_op_type = "";
     bool is_unpad = (dst.name.find("unpad") != std::string::npos) || (dst.name.find("Unpad") != std::string::npos);
     bool is_pad = (dst.name.find("pad") != std::string::npos || dst.name.find("Pad") != std::string::npos);
-    if (!is_unpad && is_pad){
+    if (!is_unpad && is_pad) {
       basic_op_type += AT_PAD;
       basic_op_type += "_";
     }
@@ -337,7 +337,7 @@ void SpaceAnalyzer::AnalyzeSpecialAxes() {
 }
 
 void SpaceAnalyzer::IdentifyInsnType() {
-  std::unordered_set<std::string> care_types = {AT_ELEMWISE, AT_BROADCAST, AT_DMA, AT_TRANSFORM, AT_PAD};
+  std::unordered_set<std::string> care_types = {AT_ELEMWISE, AT_BROADCAST, AT_TRANSPOSE, AT_DMA, AT_TRANSFORM, AT_PAD};
   for (auto it : provides_ana_) {
     std::vector<ProvideEntry> pes = it.second;
     for (auto pe : pes) {

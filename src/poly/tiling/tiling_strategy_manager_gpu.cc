@@ -248,8 +248,7 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu() {
   int proposal = use_local ? 8 : 32;
   auto default_elem_per_thread = possible_reduce_blocks > 1
                                    ? std::max(std::min<int>(proposal, (possible_blocks / min_blocks + 1) / 2 * 2), 1)
-                                 : IsHalfReduce() ? 64
-                                                  : SpItemPerThread::FULL;
+                                   : IsHalfReduce() ? 64 : SpItemPerThread::FULL;
 
   auto original_ept = default_elem_per_thread;
   // try to increase thread loop (no more than twice as original)
@@ -565,12 +564,14 @@ void GpuStrategy::InitMappingLimit() {
       thread_limit_ = {1};
     }
   } else if (template_ == Template::TRANSPOSE_OP) {
-    analyzer_->scop_info_.user_config_.SetUseSharedMemory(false);
-    analyzer_->scop_info_.user_config_.SetUseRegisterMemory(false);
+    analyzer_->scop_info_.user_config_.SetEnableOneDimThread(true);
+    analyzer_->scop_info_.user_config_.SetTransposeOp(true);
+    analyzer_->scop_info_.user_config_.SetUseSharedMemory(true);
     analyzer_->ForEachAxisTopDown([this](TileAxis *axis) {
       axis->thread_constraints.item_process_ = std::max(axis->thread_constraints.item_process_, min_elem_for_io_bound_);
     });
-    thread_limit_ = {max_x_y_dim_thread_, max_x_y_dim_thread_};
+    auto max_dim_thread = static_cast<int64_t>(std::floor(std::sqrt(total_available_thread_)));
+    thread_limit_ = {max_dim_thread, max_dim_thread};
   } else if (template_ == Template::MATMUL) {
     // This is a naive tiling strategy used in gpu when thread and block configs are already set.
     // This strategy will tile up to three inner-most axes to 32 (for thread binding).
@@ -660,9 +661,8 @@ void GpuStrategy::InnerThreadOuterBlock() {
     auto SkipMapping = [this, &axis, &shape, &ss, &inner_dim, &thread_dim]() {
       axis->thread_constraints.map_extent_ = 1;
       auto tile = inner_dim < thread_dim ? elem_per_thread_[inner_dim] : 1;
-      tile = tile == SpItemPerThread::AUTO   ? std::min(axis->thread_constraints.item_process_, max_elem_per_thread_)
-             : tile == SpItemPerThread::FULL ? std::min(shape, max_elem_per_thread_)
-                                             : 1;
+      tile = tile == SpItemPerThread::AUTO ? std::min(axis->thread_constraints.item_process_, max_elem_per_thread_)
+                                           : tile == SpItemPerThread::FULL ? std::min(shape, max_elem_per_thread_) : 1;
       auto tile_min = axis->c1_constraints.tile_min_.as<IntImm>()->value;
       auto tile_extent = axis->c1_constraints.tile_extent_.as<IntImm>()->value;
       if (tile_min == tile_extent && tile_extent != MIN_TILE) {
@@ -1143,9 +1143,8 @@ void GpuStrategy::InjectiveSpeedup() {
   auto parallel_size = GetProposalParallelSize();
   auto proposal_blocks = parallel_size.first;
   auto proposal_threads = parallel_size.second;
-  auto proposal_elem_per_thread = coaleasced_size < warp_sizes_        ? 1
-                                  : total_blocks < proposal_blocks * 8 ? min_elem_for_io_bound_
-                                                                       : 8;
+  auto proposal_elem_per_thread =
+    coaleasced_size < warp_sizes_ ? 1 : total_blocks < proposal_blocks * 8 ? min_elem_for_io_bound_ : 8;
 
   auto shrinked_threads = std::min<int64_t>(total_threads / proposal_threads, proposal_blocks / total_blocks);
   auto shrinked_blocks = total_blocks / proposal_blocks;

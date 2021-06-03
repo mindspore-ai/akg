@@ -439,7 +439,8 @@ class UserConfig {
   bool EnableStitchFusion() { return enable_stitch_fusion_; }
   void SetSharedVectorAlign(int shared_vector_align) { shared_vector_align_ = shared_vector_align; }
   int GetSharedVectorAlign() { return shared_vector_align_; }
-
+  void SetTransposeOp(bool has_transpose) { has_transpose_ = has_transpose; }
+  bool HasTranspose() { return has_transpose_; }
  private:
   // tools for parsing user config
   static void ParseIntAttr(const Map<std::string, NodeRef> &attrs, const std::string &attr_name, int *attr_to_set) {
@@ -648,6 +649,8 @@ class UserConfig {
   std::string dump_poly_dir_;
 
   Schedule origin_sch_;
+
+  bool has_transpose_{false};
 };
 
 struct OperatorDomainSpace {

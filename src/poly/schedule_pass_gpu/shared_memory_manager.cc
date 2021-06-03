@@ -45,6 +45,9 @@ isl::schedule SharedMemoryManager::Run(isl::schedule sch) {
     use_config_ = true;
   }
   CHECK_GE(depth_, 0) << "shared depth should be greater than or equal with zero!";
+  if (scop_info_.user_config_.HasTranspose()) {
+    scop_info_.user_config_.SetEnableBankConflict(true);
+  }
   bank_conflict_ = scop_info_.user_config_.GetEnableBankConflict();
   shared_inversed_thread_map_ = scop_info_.user_config_.GetSharedInversedThreadMap();
   shared_vector_align_ = scop_info_.user_config_.GetSharedVectorAlign();
@@ -209,6 +212,7 @@ isl::schedule_node SharedMemoryManager::MapCopiesToThreads(isl::schedule_node &r
     if (scop_info_.user_config_.GetVectorLoadType() || scop_info_.user_config_.GetEnableTensorCoreUsePoly()) {
       scop_info_.user_config_.SetEnableOneDimThread(true);
     }
+
     if (scop_info_.user_config_.GetEnableOneDimThread()) {
       mapping_cfg = GetCurrentConfig(band_node);
 
@@ -596,11 +600,13 @@ isl::schedule_node SharedMemoryManager::HoistClusters(const isl::schedule_node &
       use_reuse_filter = false;
     }
     bool is_injective = !ReuseTensorCluster(*fp_cluster, partial_sched_mupa);
-    if (scop_info_.user_config_.GetEnableMatmul()) {
-      is_injective = false;
-    }
+
     if (memory_requirement < remaining_memory) {
-      if (use_reuse_filter && is_injective && !CoalescingAccessWay(root_node, res_node, *fp_cluster)) {
+      bool need_shared_memory =
+        !use_reuse_filter || !is_injective || CoalescingAccessWay(root_node, res_node, *fp_cluster);
+      need_shared_memory |= scop_info_.user_config_.GetEnableMatmul();
+      need_shared_memory |= scop_info_.user_config_.HasTranspose();
+      if (!need_shared_memory) {
         continue;
       }
       GatherBufferFootprintDefInfo(res_node, buffer_info);
