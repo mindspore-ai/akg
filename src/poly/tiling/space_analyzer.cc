@@ -352,7 +352,23 @@ void SpaceAnalyzer::IdentifyInsnType() {
           analyzer_->RootAxis()->MarkWithAttr(AttrInfo{AT_OP_TYPE, AT_PAD});
         } else if (ct == AT_BROADCAST) {
           MarkBroadcastAxes(pe);
-          MarkBroadcastInnerMostAxis(pe);
+          Tensor target;
+          for (auto src : pe.src) {
+            if (src.loops.size() < pe.dst.loops.size()) {
+              target = src;
+              break;
+            } else if (src.loops.size() > pe.dst.loops.size()) {
+              target = pe.dst;
+              break;
+            }
+          }
+          MarkInnerMostAxis({target}, AT_BROADCAST_INNERMOST_AXIS);
+        } else if (ct == AT_TRANSPOSE) {
+          std::vector<Tensor> tensors = {pe.dst};
+          for (auto src : pe.src) {
+            tensors.emplace_back(src);
+          }
+          MarkInnerMostAxis(tensors, AT_TRANSPOSE_INNERMOST_AXIS);
         }
         analyzer_->RootAxis()->MarkWithAttr(AttrInfo{pe.basic_op_type, pe.dst.name});
         for (auto src : pe.src) {
@@ -440,6 +456,23 @@ void SpaceAnalyzer::MarkGemmAxes(const ProvideEntry &pe) {
   }
 }
 
+void SpaceAnalyzer::MarkInnerMostAxis(std::vector<Tensor> tensors, const std::string &attr_key) {
+  for (auto target : tensors) {
+    for (int i = target.var_names.size() - 1; i >= 0; --i) {
+      auto it = target.loops.find(i);
+      if (it != target.loops.end()) {
+        for (auto l : it->second) {
+          auto axis = analyzer_->Axis(l);
+          if (axis != nullptr) {
+            axis->MarkWithAttr(AttrInfo{attr_key, target.name});
+          }
+        }
+        break;
+      }
+    }
+  }
+}
+
 void SpaceAnalyzer::MarkBroadcastAxes(const ProvideEntry &pe) {
   std::unordered_set<TileAxis *> broadcasted;
   for (auto dst_it : pe.dst.loops) {
@@ -467,32 +500,6 @@ void SpaceAnalyzer::MarkBroadcastAxes(const ProvideEntry &pe) {
 
   for (auto axis : broadcasted) {
     axis->MarkWithAttr(AttrInfo{AT_OP_TYPE, AT_BROADCAST});
-  }
-}
-
-void SpaceAnalyzer::MarkBroadcastInnerMostAxis(const ProvideEntry &pe) {
-  Tensor target;
-  for (auto src : pe.src) {
-    if (src.loops.size() < pe.dst.loops.size()) {
-      target = src;
-      break;
-    } else if (src.loops.size() > pe.dst.loops.size()) {
-      target = pe.dst;
-      break;
-    }
-  }
-
-  for (int i = target.var_names.size() - 1; i >= 0; --i) {
-    auto it = target.loops.find(i);
-    if (it != target.loops.end()) {
-      for (auto l : it->second) {
-        auto axis = analyzer_->Axis(l);
-        if (axis != nullptr) {
-          axis->MarkWithAttr(AttrInfo{AT_BROADCAST_INNERMOST_AXIS, target.name});
-        }
-      }
-      break;
-    }
   }
 }
 
