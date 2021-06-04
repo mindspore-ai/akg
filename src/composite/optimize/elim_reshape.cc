@@ -93,6 +93,8 @@ void ElimReshapeAnalysis::AnalysisElemwiseBackward(const FunctionRef &output) {
   bool output_changed = result_.ShapeChanged(output);
   auto output_shape = output_changed ? result_.changed_shapes[output] : g_.func_shape[output];
   for (const auto &input : inputs) {
+    auto input_shape = result_.ShapeChanged(input) ? result_.changed_shapes[input] : g_.func_shape[input];
+    if (ShapeIsOne(input_shape)) continue;
     if (!g_.visited_funcs.count(input)) {
       // if not visited and output changed, change input shape
       if (output_changed) {
@@ -101,8 +103,7 @@ void ElimReshapeAnalysis::AnalysisElemwiseBackward(const FunctionRef &output) {
       }
     } else {
       // if visited, check input shape and out shape are same or not, if not, need reshape
-      auto input_shape = result_.ShapeChanged(input) ? result_.changed_shapes[input] : g_.func_shape[input];
-      if (!EqualShape(output_shape, input_shape) && !ShapeIsOne(input_shape)) {
+      if (!EqualShape(output_shape, input_shape)) {
         // b = op(a) -> t = trans(a); b = op(t)
         LOG(INFO) << "[ELEMWISE] RESHAPE: " << input->func_name() << ": " << output_shape << "->" << input_shape;
         result_.CollectReshape(g_.func_stmts[output], input, output_shape, input_shape);
@@ -118,11 +119,15 @@ void ElimReshapeAnalysis::AnalysisElemwiseForward(const FunctionRef &output) {
   Array<Expr> changed_shape;
   bool input_changed = false;
   for (const auto &input : inputs) {
+    auto input_shape = result_.ShapeChanged(input) ? result_.changed_shapes[input] : g_.func_shape[input];
+    if (ShapeIsOne(input_shape)) continue;
     if (g_.visited_funcs.count(input) && result_.ShapeChanged(input)) {
-      changed_shape = result_.changed_shapes[input];
+      changed_shape = input_shape;
       if (!g_.visited_funcs.count(output)) {
         input_changed = true;
+        output_changed = true;
         result_.changed_shapes[output] = changed_shape;
+        output_shape = changed_shape;
         g_.visited_funcs.insert(output);
         break;
       } else {
@@ -135,25 +140,33 @@ void ElimReshapeAnalysis::AnalysisElemwiseForward(const FunctionRef &output) {
     }
   }
   for (const auto &input : inputs) {
+    auto input_shape = result_.ShapeChanged(input) ? result_.changed_shapes[input] : g_.func_shape[input];
+    if (ShapeIsOne(input_shape)) continue;
     if (input_changed) {
-      if (!g_.visited_funcs.count(input) && !ShapeIsOne(g_.func_shape[input])) {
+      if (!g_.visited_funcs.count(input)) {
         // if not visited and input changed, change input shape
         result_.changed_shapes[input] = changed_shape;
         g_.visited_funcs.insert(input);
       } else {
-        // if visited, check input shape and out shape are same or not, if not, need reshape
-        auto input_shape = result_.ShapeChanged(input) ? result_.changed_shapes[input] : g_.func_shape[input];
-        if (!EqualShape(changed_shape, input_shape) && !ShapeIsOne(input_shape)) {
-          // b = op(a) -> t = trans(a); b = op(t)
+        // if visited, check input shape and changed input shape are same or not, if not, need reshape
+        if (!EqualShape(changed_shape, input_shape)) {
           LOG(INFO) << "[ELEMWISE] RESHAPE: " << input->func_name() << ": " << changed_shape << "->" << input_shape;
           result_.CollectReshape(g_.func_stmts[output], input, changed_shape, input_shape);
         }
       }
     } else {
-      // if not visited and output changed, change input shape
-      if (!g_.visited_funcs.count(input) && output_changed && !ShapeIsOne(g_.func_shape[input])) {
-        result_.changed_shapes[input] = output_shape;
-        g_.visited_funcs.insert(input);
+      if (output_changed) {
+        // if not visited and output changed, change input shape
+        if (!g_.visited_funcs.count(input)) {
+          result_.changed_shapes[input] = output_shape;
+          g_.visited_funcs.insert(input);
+        } else {
+          // if visited, check input shape and out shape are same or not, if not, need reshape
+          if (!EqualShape(output_shape, input_shape)) {
+            LOG(INFO) << "[ELEMWISE] RESHAPE: " << input->func_name() << ": " << output_shape << "->" << input_shape;
+            result_.CollectReshape(g_.func_stmts[output], input, output_shape, input_shape);
+          }
+        }
       }
     }
   }
