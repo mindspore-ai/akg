@@ -33,6 +33,12 @@ void ElimReshapeAnalysis::Run() {
     // if output removed, should collect opt.sames
     if (std::find(g_.output_funcs.begin(), g_.output_funcs.end(), p->func) != g_.output_funcs.end()) {
       opt_.sames[p->func] = result_.to_be_replaced[p->func];
+    } else {
+      for (auto pair : opt_.sames) {
+        if (pair.second == p->func) {
+          opt_.sames[pair.second] = result_.to_be_replaced[p->func];
+        }
+      }
     }
   }
 }
