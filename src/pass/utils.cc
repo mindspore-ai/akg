@@ -2882,6 +2882,23 @@ Array<Expr> GetBinaryOpExprChildren(const Expr &e) {
   }
 }
 
+/// Get the calculate op name of expr of binary operation
+/// \param e - Expr to be processed
+/// \return Expr op name - If e is not binary op, then return empty Expr.
+Expr GetBinaryOpName(const Expr &e) {
+  if (e.as<Add>()) {
+    return Expr("add");
+  } else if (e.as<Sub>()) {
+    return Expr("sub");
+  } else if (e.as<Mul>()) {
+    return Expr("mul");
+  } else if (e.as<Div>()) {
+    return Expr("div");
+  } else {
+    return Expr();
+  }
+}
+
 /// Get all Var in expr
 /// \param expr - Expr to be processed
 /// \return Array<VarExpr> - List of var in expr
