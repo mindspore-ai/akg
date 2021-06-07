@@ -111,3 +111,9 @@ def test_yolov3_darknet53_gpu_level1_test0():
 @pytest.mark.env_onecard
 def test_yolov3_darknet53_gpu_level1_test1():
     test_network("./gpu/yolov3_darknet53/level1", 2, 1)
+
+@pytest.mark.level0
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
+def test_retinaface_resnet50_gpu_level0():
+    test_network("./gpu/retinaface_resnet50/level0")
