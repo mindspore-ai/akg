@@ -66,6 +66,7 @@ class TilingStrategy {
   int64_t max_z_dim_thread_ = 64;
   size_t max_dim_ = 3;
   int64_t max_elem_per_thread_ = 1024;
+  size_t tranpose_tiling_constraints_ = 32;
 };
 
 class TilingStrategyManager {
