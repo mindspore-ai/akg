@@ -17,6 +17,7 @@
 
 #ifndef PASS_UTILS_H_
 #define PASS_UTILS_H_
+#include <dmlc/common.h>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -32,6 +33,13 @@ using air::ir::substitute;
 
 static const float HALF_MIN = 5.960464e-08;  // minimum number of float16
 static const float HALF_MAX = 65504.0;       // maximum number of float16
+
+struct  PairHash {
+  template <typename T>
+  size_t operator()(const std::pair<T, T> &a) const {
+    return dmlc::HashCombine(std::hash<T>()(a.first), std::hash<T>()(a.second));
+  }
+};
 
 using UnorderSet = std::unordered_set<Var, NodeHash, NodeEqual>;
 bool IsCover(const Array<Expr> &big, const Array<Expr> &small);
@@ -382,6 +390,8 @@ class AttrIRMutator : public IRMutator {
 
 Array<Expr> GetBinaryOpExprChildren(const Expr &e);
 
+Expr GetBinaryOpName(const Expr &e);
+
 Array<VarExpr> GetVarsInExpr(const Expr &expr, bool exclude_upper_case_vars = false);
 
 /// Get index of item in array
@@ -414,6 +424,12 @@ extern const char *const LOCAL_C1_LOCAL_C0B;
 extern const char *const LOCAL_BUF_LOCAL_C0C;
 extern const char *const FRACTAL_C1;
 extern const char *const FRACTAL_C1_LOCAL_C0B;
+
+static constexpr auto ATTR_PREFETCH_MODE = "prefetch_mode";
+enum class PrefetchMode {
+  DEFAULT = 0, TRANSFERBUFFER, DOUBLEBUFFER, TRANSFERBUFFER_THREADGROUP, DOUBLEBUFFER_THREADGROUP
+};
+
 }  // namespace ir
 
 std::string GetBufScope(const std::string &name);

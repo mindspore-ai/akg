@@ -74,6 +74,22 @@ inline air::Expr SplitCast(const air::Expr &input, const air::Type &target_type)
   return air::Expr();
 }
 
+inline std::string GetGlobalName(std::string input) {
+  auto pos_shared = input.find("_shared");
+  if (pos_shared != std::string::npos) {
+    return input.substr(0, pos_shared);
+  }
+  auto pos_local = input.find("_local");
+  if (pos_local != std::string::npos) {
+    return input.substr(0, pos_local);
+  }
+  return input;
+}
+
+// Restrictions of GPU shared memory
+constexpr size_t SHARED_MEMORY_SIZE{49152};
+constexpr size_t ADVANCED_SHARED_MEMORY_SIZE{61440};
+
 }  // namespace common
 }  // namespace akg
 #endif  // COMMON_UTIL_H_
