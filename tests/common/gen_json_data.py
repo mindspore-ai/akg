@@ -92,9 +92,10 @@ def reduce_str(inputs, output, attr, op_type):
 def cast_str(inputs, output, attr):
     """gen cast string"""
     dst_type = get_attr(attr, "dst_type")
-    s = "%s = np.array(%s).astype(np.%s) if isinstance(%s, (float, int)) else %s.astype(np.%s)" % (
-        output[0]['tensor_name'], get_input(inputs[0][0]), dst_type, get_input(inputs[0][0]),
-        get_input(inputs[0][0]), dst_type)
+    if inputs[0][0].get('value', None) is not None:
+        s = "%s = np.array(%s).astype(np.%s)" % (output[0]['tensor_name'], get_input(inputs[0][0]), dst_type)
+    else:
+        s = "%s = %s.astype(np.%s)" % (output[0]['tensor_name'], get_input(inputs[0][0]), dst_type)
     return s
 
 
