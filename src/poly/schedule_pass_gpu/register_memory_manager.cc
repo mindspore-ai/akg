@@ -693,6 +693,10 @@ isl::schedule RegisterMemoryManager::Run(isl::schedule sch) {
     return sch;
   }
 
+  if (scop_info_.user_config_.GetEnableAkgReduceLib()) {
+    return sch;
+  }
+
   schedule_ = sch;
   auto root = sch.get_root();
 
