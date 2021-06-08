@@ -25,6 +25,7 @@
 #include "composite/optimize/typecast_inserter.h"
 #include "composite/optimize/ops_combine.h"
 #include "composite/optimize/intrin_rewriter.h"
+#include "composite/optimize/complex_expander.h"
 
 namespace akg {
 Stmt Optimize(Stmt &s, BuildInfo &info) {
@@ -61,6 +62,8 @@ Stmt Optimize(Stmt &s, BuildInfo &info) {
   if (info.opt.target == "aicore") {
     pm.RegisterPass(std::make_shared<IntrinRewriter>());
   }
+  // expand complex op
+  pm.RegisterPass(std::make_shared<ComplexExpander>());
   s = pm.Run(s);
   return s;
 }

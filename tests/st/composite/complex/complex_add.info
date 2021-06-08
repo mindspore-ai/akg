@@ -1,0 +1,197 @@
+{
+    "composite": true,
+    "composite_graph": "16157",
+    "id": 874,
+    "input_desc": [[{
+                "data_type": "complex64",
+                "format": "DefaultFormat",
+                "shape": [512, 384],
+                "tensor_name": "input_0"
+            }],
+            [{
+                "data_type": "complex64",
+                "format": "DefaultFormat",
+                "shape": [512, 384],
+                "tensor_name": "input_1"
+            }]],
+    "op": "FuseRealImagAddComplex_1",
+    "op_desc": [
+           {
+            "attr": {},
+            "impl_path": "",
+            "input_desc": [[{
+                        "data_type": "complex64",
+                        "format": "DefaultFormat",
+                        "name": "x",
+                        "shape": [512, 384],
+                        "tensor_name": "input_0"
+                    }
+                ]],
+            "name": "CReal",
+            "output_desc": [{
+                    "data_type": "float32",
+                    "format": "DefaultFormat",
+                    "name": "y",
+                    "shape": [512, 384],
+                    "tensor_name": "real_0"
+                }
+            ]
+         },
+         {
+            "attr": {},
+            "impl_path": "",
+            "input_desc": [[{
+                        "data_type": "complex64",
+                        "format": "DefaultFormat",
+                        "name": "x",
+                        "shape": [512, 384],
+                        "tensor_name": "input_0"
+                    }
+                ]],
+            "name": "CImag",
+            "output_desc": [{
+                    "data_type": "float32",
+                    "format": "DefaultFormat",
+                    "name": "y",
+                    "shape": [512, 384],
+                    "tensor_name": "imag_0"
+                }
+            ]
+         },
+         {
+            "attr": {},
+            "impl_path": "",
+            "input_desc": [[{
+                        "data_type": "complex64",
+                        "format": "DefaultFormat",
+                        "name": "x",
+                        "shape": [512, 384],
+                        "tensor_name": "input_1"
+                    }
+                ]],
+            "name": "CReal",
+            "output_desc": [{
+                    "data_type": "float32",
+                    "format": "DefaultFormat",
+                    "name": "y",
+                    "shape": [512, 384],
+                    "tensor_name": "real_1"
+                }
+            ]
+         },
+         {
+            "attr": {},
+            "impl_path": "",
+            "input_desc": [[{
+                        "data_type": "complex64",
+                        "format": "DefaultFormat",
+                        "name": "x",
+                        "shape": [512, 384],
+                        "tensor_name": "input_1"
+                    }
+                ]],
+            "name": "CImag",
+            "output_desc": [{
+                    "data_type": "float32",
+                    "format": "DefaultFormat",
+                    "name": "y",
+                    "shape": [512, 384],
+                    "tensor_name": "imag_1"
+                }
+            ]
+         },
+         {
+            "attr": {},
+            "impl_path": "",
+            "input_desc": [[{
+                        "data_type": "float32",
+                        "format": "DefaultFormat",
+                        "name": "x",
+                        "shape": [512, 384],
+                        "tensor_name": "real_0"
+                    },
+                    {
+                        "data_type": "float32",
+                        "format": "DefaultFormat",
+                        "name": "y",
+                        "shape": [512, 384],
+                        "tensor_name": "real_1"
+                    }
+                ]],
+            "name": "Add",
+            "output_desc": [{
+                    "data_type": "float32",
+                    "format": "DefaultFormat",
+                    "name": "y",
+                    "shape": [512, 384],
+                    "tensor_name": "real_0_1"
+                }
+            ]
+         },
+         {
+            "attr": {},
+            "impl_path": "",
+            "input_desc": [[{
+                        "data_type": "float32",
+                        "format": "DefaultFormat",
+                        "name": "x",
+                        "shape": [512, 384],
+                        "tensor_name": "imag_0"
+                    },
+                    {
+                        "data_type": "float32",
+                        "format": "DefaultFormat",
+                        "name": "y",
+                        "shape": [512, 384],
+                        "tensor_name": "imag_1"
+                    }
+                ]],
+            "name": "Add",
+            "output_desc": [{
+                    "data_type": "float32",
+                    "format": "DefaultFormat",
+                    "name": "y",
+                    "shape": [512, 384],
+                    "tensor_name": "imag_0_1"
+                }
+            ]
+        },
+          {
+            "attr": {},
+            "impl_path": "",
+            "input_desc": [[{
+                        "data_type": "float32",
+                        "format": "DefaultFormat",
+                        "name": "x",
+                        "shape": [512, 384],
+                        "tensor_name": "real_0_1"
+                    },
+                    {
+                        "data_type": "float32",
+                        "format": "DefaultFormat",
+                        "name": "y",
+                        "shape": [512, 384],
+                        "tensor_name": "imag_0_1"
+                    }
+                ]],
+            "name": "Complex",
+            "output_desc": [{
+                    "data_type": "complex64",
+                    "format": "DefaultFormat",
+                    "name": "y",
+                    "shape": [512, 384],
+                    "tensor_name": "output_0_0"
+                }
+            ]
+        }
+    ],
+    "output_desc": [{
+            "data_type": "complex64",
+            "format": "DefaultFormat",
+            "shape": [512, 384],
+            "tensor_name": "output_0_0"
+        }
+    ],
+    "platform": "AKG",
+    "process": "cuda"
+}
