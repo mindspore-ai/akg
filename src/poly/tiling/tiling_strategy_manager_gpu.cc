@@ -1224,9 +1224,26 @@ void GpuStrategy::TransposeSpeedup() {
   analyzer_->scop_info_.user_config_.SetTransposeOp(true);
   analyzer_->scop_info_.user_config_.SetUseSharedMemory(true);
   auto inner_axes = analyzer_->GetAxesOfAttr(AT_TRANSPOSE_INNERMOST_AXIS);
-  for (auto axis : inner_axes) {
-    axis->TileRestrainLower(min_elem_for_io_bound_, TileLevel::CACHE1);
-    axis->thread_constraints.item_process_ = min_elem_for_io_bound_;
+  if (inner_axes.size() == 1) {
+    inner_axes[0]->TileRestrainLower(tranpose_tiling_constraints_, TileLevel::CACHE1);
+    inner_axes[0]->thread_constraints.item_process_ = min_elem_for_io_bound_;
+  } else {
+    std::vector<TileAxis *> axes;
+    analyzer_->ForEachAxisTopDown([this, &axes](TileAxis *axis) {
+      if (axis == analyzer_->RootAxis() || axis->range_extent.as<IntImm>() == nullptr) {
+        return;
+      }
+      axes.emplace_back(axis);
+    });
+    for (auto axis : axes) {
+      if (find(inner_axes.begin(), inner_axes.end(), axis) != inner_axes.end()) {
+        axis->TileRestrainLower(tranpose_tiling_constraints_, TileLevel::CACHE1);
+        axis->thread_constraints.item_process_ = min_elem_for_io_bound_;
+      } else {
+        axis->TileRestrainUpper(1, TileLevel::CACHE1);
+        axis->thread_constraints.item_process_ = min_elem_for_io_bound_;
+      }
+    }
   }
 }
 

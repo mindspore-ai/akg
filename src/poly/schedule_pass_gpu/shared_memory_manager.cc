@@ -786,8 +786,6 @@ std::vector<size_t> SharedMemoryManager::OptimizeBankConflict(std::vector<size_t
   if (res.back() % 2 == 0) {
     if (scop_info_.user_config_.GetEnableMatmul()) {
       res.back() += 16;
-    } else if (bank_conflict_ && res.back() < 32) {
-      res.back() = 33;
     } else {
       res.back() += 1;
     }
