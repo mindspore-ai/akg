@@ -98,6 +98,40 @@ def unpad(inputs, attrs):
     return tvm.extern(output_shape, [in_tensor], lambda ins, outs: kernel_ir(outs[0], ins[0]),
         name = output_name, dtype=[in_tensor.dtype])
 
+@tvm.register_func("CReal")
+def creal(inputs, attrs):
+    in_tensor = inputs[0]
+    out_shape = in_tensor.shape[:-1]
+    def fcompute(*index):
+        out_index = [x for x in index]
+        out_index.append(0)
+        return in_tensor(*out_index)
+    return tvm.compute(out_shape, fcompute, name = "real")
+
+@tvm.register_func("CImag")
+def cimag(inputs, attrs):
+    in_tensor = inputs[0]
+    out_shape = in_tensor.shape[:-1]
+    def fcompute(*index):
+        out_index = [x for x in index]
+        out_index.append(1)
+        return in_tensor(*out_index)
+    return tvm.compute(out_shape, fcompute, name = "imag")
+
+@tvm.register_func("Complex")
+def complex(inputs, attrs):
+    def mix_func(dst, real, imag):
+        ib = tvm.ir_builder.create()
+        with ib.for_range_n(real.shape, "i") as i:
+            ib.store(dst, i + [0], ib.load(real, i))
+            ib.store(dst, i + [1], ib.load(imag, i))
+        return ib.get()
+    real, imag = inputs[0], inputs[1]
+    shape = [x for x in real.shape]
+    shape.append(2)
+    return tvm.extern(shape, [real, imag],
+                      lambda ins, outs : mix_func(outs[0], ins[0], ins[1]),
+                      name = "complex", dtype=real.dtype)
 
 @tvm.register_func("TransData")
 def trans_data(inputs, attrs):
