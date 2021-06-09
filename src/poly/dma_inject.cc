@@ -1549,6 +1549,12 @@ void PlaceDataCopyBelowImplReadWrite(ScopInfo &scop_info, isl::schedule_node &tr
       if (!scop_info.IsInBinds(tensor_id)) reads = false;
     }
   }
+  if (scop_info.analysis_result_.IsFakeCopyin(tensor_id)) {
+    auto dst_buffer = scop_info.analysis_result_.GetBufferDefInfo(cluster_id);
+    if (dst_buffer.DstMemType() == MemType::BUF_C0_) {
+      reads = false;
+    }
+  }
 
   auto fp_space_identity = isl::multi_aff::identity(footprint.get_space().range().map_from_set());
   auto buffer_def = scop_info.analysis_result_.GetBufferDefInfo(cluster_id);
@@ -1682,17 +1688,17 @@ isl::schedule_node PlaceDataCopyBelowImpl(ScopInfo &scop_info, isl::schedule_nod
   PlaceDataCopyBelowImplReadWrite(scop_info, tree, cluster, footprint, tensor_id, original_elements, exact_writes,
                                   read_extension, buffered_footprint, cluster_id, extension_map, read_id);
 
-  auto fake_copyin = scop_info.analysis_result_.GetFakeCopyin();
-  bool in_copyin_map = false;
-  fake_copyin.foreach_map([&in_copyin_map, &tensor_id](const isl::map &fake_map) -> void {
-    fake_map.foreach_basic_map([&in_copyin_map, &tensor_id](const isl::basic_map &basic_map) -> void {
-      const isl::map m = basic_map;
-      if (m.range().tuple_id().name() == tensor_id.name()) {
-        in_copyin_map = true;
-      }
-    });
-  });
-  if (in_copyin_map && scop_info.mmu_info_.IsGemm()) {
+  auto end_with = [](const std::string &full_string, const std::string &end) {
+    if (full_string.length() >= end.length()) {
+      return (0 == full_string.compare(full_string.length() - end.length(), end.length(), end));
+    }
+    return false;
+  };
+
+  if (scop_info.analysis_result_.IsFakeCopyin(tensor_id) && scop_info.mmu_info_.IsGemm()) {
+    if (end_with(cluster_id.name(), BUF)) {
+      return tree;
+    }
     tree = FindChildExtension(tree);
   }
   PlaceDataCopyBelowImplFakeReads(scop_info, tree, cluster, read_extension, cluster_id, sch);

@@ -42,10 +42,13 @@ isl::schedule ComputeTransferCopyin::Run(isl::schedule sch) {
     // compute transfer copyin
     isl::union_map target_acc = raw_writes.intersect_domain(stmt);
     isl::union_map relation = target_acc.reverse().apply_range(reads);
+    isl::union_map self_relation = target_acc.reverse().apply_range(target_acc);
+    isl::union_map bind_transfer_copyin = transfer_copyin.apply_range(self_relation);
     transfer_copyin = transfer_copyin.apply_range(relation);
     isl::union_map copyin = transfer_copyin.intersect_range(raw_copyin.range().universe());
     scop_info_.analysis_result_.RecordReads(scop_info_.analysis_result_.GetReads().unite(copyin));
     scop_info_.analysis_result_.RecordCopyin(scop_info_.analysis_result_.GetCopyin().unite(copyin));
+    scop_info_.analysis_result_.RecordBindCopyin(scop_info_.analysis_result_.GetFakeCopyin().unite(bind_transfer_copyin));
     transfer_copyin = transfer_copyin.subtract(copyin);
     reads = reads.subtract(raw_copyin);
     reads = reads.subtract(fake_copyin.domain_factor_domain());

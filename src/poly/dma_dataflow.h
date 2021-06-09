@@ -87,6 +87,7 @@ struct BufferDefInfo {
   bool IsGemmDataC12C0();
   bool IsGemmWeightC12C0();
   bool IsIm2col();
+  bool IsBindCopyinDataFlow();
   MemType SrcMemType();
   MemType DstMemType();
 };
