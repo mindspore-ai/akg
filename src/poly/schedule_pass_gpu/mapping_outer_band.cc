@@ -491,11 +491,6 @@ size_t MappingOuterBand::MapThreadHelper(isl::schedule_node &thread_root) {
     }
   }
 
-  // When akg reduce lib is enabled, we can try to map other injective statements whose coincidence equals 0
-  if (n_thread_map < thread_cfg->bound && scop_info_.user_config_.GetEnableAkgReduceLib()) {
-    n_thread_map = thread_cfg->bound;
-  }
-
   if (n_thread_map < 1) {
     return 0;
   }
