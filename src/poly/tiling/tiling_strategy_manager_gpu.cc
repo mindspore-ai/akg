@@ -280,10 +280,18 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu() {
      << "]";
   analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
 
-  for (auto axis : injective_axes_) {
-    axis->thread_constraints.map_min_ = injective_threads;
-    axis->thread_constraints.map_extent_ = injective_threads;
-    axis->thread_constraints.item_process_ = MIN_TILE;
+  auto inject_len = injective_axes_.size();
+  for (size_t i = 0; i < inject_len; ++i) {
+    auto axis_in = injective_axes_[i];
+    if (i == inject_len - 1) {
+      axis_in->thread_constraints.map_min_ = injective_threads;
+      axis_in->thread_constraints.map_extent_ = injective_threads;
+      axis_in->thread_constraints.item_process_ = MIN_TILE;
+    } else {
+      axis_in->thread_constraints.map_min_ = MIN_TILE;
+      axis_in->thread_constraints.map_extent_ = MIN_TILE;
+      axis_in->thread_constraints.item_process_ = MIN_TILE;
+    }
   }
   for (auto axis : reduce_axes_) {
     axis->thread_constraints.map_extent_ = reduce_threads;
