@@ -17,7 +17,7 @@
 #include "composite/optimize/typecast_inserter.h"
 
 namespace akg {
-class TypeCastInserterMutator : public IRMutator {
+class EqualCastInserterMutator : public IRMutator {
  public:
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) override {
     if (op->attr_key == "attrs" && op->body.as<Provide>()) {
@@ -72,5 +72,44 @@ class TypeCastInserterMutator : public IRMutator {
   };
 };
 
-Stmt TypeCastInserter::Run(const Stmt &s) { return TypeCastInserterMutator().Mutate(s); }
+// change bool -> int32 to bool -> fp16 -> int32
+class BoolCastInserterMutator : public IRMutator {
+ public:
+  Stmt Mutate_(const AttrStmt *op, const Stmt &s) override {
+    if (op->attr_key == "attrs" && op->body.as<Provide>()) {
+      auto attrs = Downcast<Map<std::string, NodeRef>>(op->node);
+      if (attrs.find("dst_type") == attrs.end() || !attrs["dst_type"].as<StringImm>() ||
+          attrs["dst_type"].as<StringImm>()->value != "int32") {
+        return s;
+      }
+      const auto *provide = op->body.as<Provide>();
+      auto call = provide->value.as<Call>();
+      CHECK(call);
+      if (call->name == "Cast" && call->args[0].as<Call>() && call->args[0].as<Call>()->type == Bool(1)) {
+        auto input0 = call->args[0];
+        auto in0_shape = call->args[0].as<Call>()->args;
+        Tensor t0 = placeholder(in0_shape, Float(16), "fp16_input1");
+        Map<std::string, NodeRef> attrs0, attrs1;
+        attrs0.Set("dst_type", StringImm::make("float16"));
+        attrs1.Set("dst_type", StringImm::make("int32"));
+        auto arg0 = Call::make(t0->dtype, t0->op->name, t0->shape, Call::CallType::Halide, t0->op);
+        auto cast0 = Call::make(Float(16), "Cast", {input0}, Call::CallType::Intrinsic);
+        auto cast1 = Call::make(Int(32), "Cast", {arg0}, Call::CallType::Intrinsic);
+        auto assign_cast0 = Provide::make(t0->op, 0, cast0, in0_shape);
+        auto assign_cast1 = Provide::make(provide->func, 0, cast1, in0_shape);
+        auto new_attr0 = AttrStmt::make(attrs0, "attrs", Expr(1), assign_cast0);
+        auto new_attr1 = AttrStmt::make(attrs1, "attrs", Expr(1), assign_cast1);
+        auto new_block = Block::make(new_attr0, new_attr1);
+        return new_block;
+      }
+    }
+    return s;
+  }
+};
+
+Stmt TypeCastInserter::Run(const Stmt &s) {
+  auto s1 = EqualCastInserterMutator().Mutate(s);
+  auto s2 = BoolCastInserterMutator().Mutate(s1);
+  return s2;
+}
 }  // namespace akg
