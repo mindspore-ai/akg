@@ -588,6 +588,7 @@ void TileOuterBand::TileTypeC0(isl::schedule_node &node, int *full_tile_min, int
     }
   }
   std::vector<isl::union_set> filter_before_mmu;
+  std::vector<TileType> tile_type_before_mmu;
 
   for (unsigned int set_index = 0; set_index < domain_list.size(); ++set_index) {
     isl::set set_i = domain_list.get_at(set_index);
@@ -598,6 +599,12 @@ void TileOuterBand::TileTypeC0(isl::schedule_node &node, int *full_tile_min, int
     if (index + 1 < mmu_index) {
       filter_before_mmu.resize(mmu_index - 1);
       filter_before_mmu[index] = isl::union_set(set_i);
+      tile_type_before_mmu.resize(mmu_index - 1);
+      if (!scop_info_.analysis_result_.GetFakeCopyin().is_empty()) {
+        tile_type_before_mmu[index] = TileType::BUFC1;
+      } else {
+        tile_type_before_mmu[index] = TileType::BUFC0;
+      }
     }
     if (index + 1 == mmu_index || index == mmu_index) {
       filter_mmu = filter_mmu.is_null() ? isl::union_set(set_i) : filter_mmu.add_set(set_i);
@@ -606,6 +613,7 @@ void TileOuterBand::TileTypeC0(isl::schedule_node &node, int *full_tile_min, int
       filter_after_mmu = filter_after_mmu.is_null() ? isl::union_set(set_i) : filter_after_mmu.add_set(set_i);
     }
   }
+  CHECK_EQ(filter_before_mmu.size(), tile_type_before_mmu.size());
 
   isl::union_set_list filters =
     isl::union_set_list(node.ctx(), static_cast<int>(scop_info_.analysis_result_.stmt_type_.size() - 1));
@@ -624,10 +632,10 @@ void TileOuterBand::TileTypeC0(isl::schedule_node &node, int *full_tile_min, int
   } else if ((!filter_before_mmu.empty() || !filter_after_mmu.is_null()) && !filter_mmu.is_null()) {
     auto pos = 0;
     node = node.insert_sequence(filters);
-    for (auto a : filter_before_mmu) {
+    for (size_t index = 0; index < tile_type_before_mmu.size(); ++index) {
       node = TileBand(node.child(pos).child(0), sizes);
       node = IsolateTiles(before_tile_node, node, tile_type, full_tile_min, full_tile_max, isolate);
-      node = MarkTileBand(node, TileType::BUFC1);
+      node = MarkTileBand(node, tile_type_before_mmu[index]);
       node = node.parent().parent();
       ++pos;
     }

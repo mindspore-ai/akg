@@ -197,10 +197,11 @@ class StmtDataFlowInfo {
 
   bool SameNameFlow(const std::vector<std::string> &left, const std::vector<std::string> &right);
   bool SameMemFlow(const MemFlow &left, const MemFlow &right) const;
-
+  std::unordered_set<std::string> GetReadTensor();
+  std::unordered_set<std::string> GetWriteTensor();
   template <typename T>
   std::vector<T> MergedFlow(const std::vector<T> &left, const std::vector<T> &right);
-
+  
   isl::id stmt_id_;
   bool is_cube_;
   FlowMap reads_;
@@ -220,11 +221,19 @@ class DMADataFlow {
    ********************************************/
   void FusionAnalysis();
 
+  int PreFusionAnalysis(StmtDataFlowInfo* target);
+
   /********************************************
    *  get nameflow and memflow of each tensor
    *******************************************/
   void OpDataflowInfo(std::map<std::string, std::vector<std::string>> &nameflow,
                       std::map<std::string, MemFlow> &memflow);
+                      
+  bool FindTensor(FlowMap& flow_map, std::unordered_set<std::string> &tensor_set);
+
+  bool HasMmu();
+
+  StmtDataFlowInfo* GetMmuInfo();
 
  private:
   /*********************************************
