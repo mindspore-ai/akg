@@ -108,13 +108,15 @@ class CUDAModuleNode : public runtime::ModuleNode {
     std::lock_guard<std::mutex> lock(mutex_);
     // must recheck under the lock scope
     if (module_[device_id] == nullptr) {
+      // See detail: https://docs.nvidia.com/cuda/cuda-occupancy-calculator/index.htmlt
       CUjit_option options[1];
       options[0] = CU_JIT_MAX_REGISTERS;
       void* values[1];
       int total_threads = wl.block_dim(0) * wl.block_dim(1) * wl.block_dim(2);
       int total_warps = std::ceil(float(total_threads) / float(WARP_SIZE));
+      int limit_warps = (total_warps + WARP_ALLOC_GRAN - 1) / WARP_ALLOC_GRAN * WARP_ALLOC_GRAN;
       int total_register_unit_nums = MAX_REGISTER_PER_THREAD_BLOCK / REGISTER_UNIT_IN_WARP;
-      int register_unit_nums_per_warp = total_register_unit_nums / total_warps;
+      int register_unit_nums_per_warp = total_register_unit_nums / limit_warps;
       long register_nums = (register_unit_nums_per_warp * REGISTER_UNIT_IN_WARP) / WARP_SIZE;
 
       values[0] = (void*)register_nums;
@@ -178,6 +180,7 @@ class CUDAModuleNode : public runtime::ModuleNode {
   const int MAX_REGISTER_PER_THREAD_BLOCK = 65536;
   const int REGISTER_UNIT_IN_WARP = 256;
   const int WARP_SIZE = 32;
+  const int WARP_ALLOC_GRAN = 4;
 };
 
 // a wrapped function class to get packed func.

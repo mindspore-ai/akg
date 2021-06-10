@@ -760,15 +760,6 @@ void GpuStrategy::AddGpuConstraint() {
       axis->TileRestrainToSingleValue(axis->c1_constraints.tile_min_, TileLevel::CACHE0);
     });
   }
-  // TODO: This is a very naive strategy to avoid cuda launch out of resources
-  //       and we should fix this in register memory promotion pass.
-  if (template_ != Template::REDUCTION && template_ != Template::ALL_REDUCE) {
-    auto local_buf_count = GetLocalAllocBufCount();
-    auto thread_size = std::accumulate(thread_cfg_.begin(), thread_cfg_.end(), 1, std::multiplies<int>());
-    if (local_buf_count >= 4 || local_buf_count * 4 * thread_size >= 65536) {
-      analyzer_->scop_info_.user_config_.SetUseRegisterMemory(false);
-    }
-  }
 }
 
 void GpuStrategy::InitMappingLimit() {
