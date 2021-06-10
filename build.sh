@@ -59,9 +59,8 @@ acquire_lib_url()
     elif [[ "${arch_info}" =~ "x86_64" ]]; then
         arch_name="x86_64"
     fi
-
     url_prefix="https://repo.mindspore.cn/public/ms-incubator/akg-binary/version"
-    lib_mark="202106/20210601/master_20210601171952_3f999fa10387da65f6d4a2a044e9fd3ad21da16f"
+    lib_mark="202106/20210610/master_20210610165225_fc8a1d1eef69e2d828b98701a771fc4268b551db"
     lib_url="${url_prefix}/${lib_mark}/lib/${arch_name}/libakg_ext.a"
     echo "${lib_url}"
 }
