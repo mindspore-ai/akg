@@ -95,7 +95,7 @@ class SpaceVisitor : public IRVisitor {
     auto GetSrc = [&, this](const NodeRef &op) {
       if (const auto call = op.as<Call>()) {
         src_call.emplace_back(call);
-      } else if (op.as<Select>()) {
+      } else if (op.as<Select>() && analyzer_->scop_info_.user_config_.GetTarget() == TARGET_CCE) {
         basic_op_type = "CALL";
       }
     };
