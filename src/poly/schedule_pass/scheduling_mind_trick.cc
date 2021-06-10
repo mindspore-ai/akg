@@ -27,7 +27,7 @@
 
 #include "poly/isl_util.h"
 #include "poly/log_util.h"
-#include "poly/gpu_isl_emitter.h"
+#include "poly/gpu_emit/gpu_isl_emitter.h"
 
 namespace akg {
 namespace ir {

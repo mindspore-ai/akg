@@ -44,6 +44,11 @@
 
 
 /*
+ * 2021.3.22
+ *   Refactor the function Simplify_name.
+ */
+ 
+/*
  * 2021.05.17
  * Add const akg_reduce::AkgKahanAccumulation for reduce
  */
@@ -72,7 +77,6 @@ constexpr auto PARIS_REDUCE_LIB = "paris";
 class CodeGenCUDA final : public CodeGenC {
  public:
   CodeGenCUDA();
-  std::string Simplify_name(std::string input);
   void Init(bool output_ssa);
   void AddFunction(LoweredFunc f);
   std::string Finish();
@@ -162,7 +166,7 @@ class CodeGenCUDA final : public CodeGenC {
   Expr matrix_b_major = StringImm::make("col_major");
   std::unordered_map<std::string, std::string> matrix_abc;
   // indicate which TensorCore interface
-  std::string wmma_scope;
+  std::string wmma_scope = "nvcuda";
 
   std::unordered_map<const Variable*, int> sm_offsets;
   std::unordered_map<const Variable*, std::string> fragment_shapes;

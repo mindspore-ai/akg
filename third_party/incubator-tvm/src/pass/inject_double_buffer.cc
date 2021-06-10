@@ -67,6 +67,51 @@ class DoubleBufferDetector : public IRVisitor {
   std::unordered_set<const Variable*> touched_;
 };
 
+class StripSyncAndAllocs : public IRMutator {
+ public:
+  explicit StripSyncAndAllocs(bool use_double_shared)
+  : use_double_buffer_(use_double_shared) {}
+
+  Stmt Mutate_(const Block* op, const Stmt& s) final {
+    Stmt first = Mutate(op->first);
+    Stmt rest = Mutate(op->rest);
+    if (const auto attr = first.as<AttrStmt>()) {
+      if (attr->attr_key == "delete_this_sync"
+        || (use_double_buffer_ && attr->attr_key == "delete_this_sync_for_db")) {
+        return rest;
+      }
+    }
+    return Block::make(first, rest);
+  }
+
+  Stmt Mutate_(const AttrStmt* op, const Stmt& s) final {
+    if (op->attr_key == attr::storage_scope) {
+      if (auto alloc = op->body.as<Allocate>()) {
+        int fragment_size_ = (arith::ComputeReduce<Mul>(alloc->extents, Expr())
+          * alloc->type.lanes() * alloc->type.bytes()).as<IntImm>()->value;
+        auto it = fragment_info_.find(alloc->buffer_var.get());
+        if ( it == fragment_info_.end()
+          || ( it != fragment_info_.end() && (fragment_size_ > (it->second)) ) ) {
+          fragment_info_[alloc->buffer_var.as<Variable>()] = fragment_size_;
+          fragment_allocs_.emplace_back( AttrStmt::make(op->node, op->attr_key, op->value, Evaluate::make(0)) );
+          fragment_allocs_.emplace_back(
+            Allocate::make(alloc->buffer_var, alloc->type, alloc->extents, alloc->condition, Evaluate::make(0))
+          );
+        }
+        return Mutate(alloc->body);
+      }
+    }
+    return IRMutator::Mutate_(op, s);
+  }
+
+  std::vector<Stmt> GetFragmentAllocs() { return fragment_allocs_; }
+
+ private:
+  bool use_double_buffer_{false};
+  std::vector<Stmt> fragment_allocs_;
+  std::unordered_map<const Variable*, int> fragment_info_;
+};
+
 class StripDoubleBufferWrite : public IRMutator {
  public:
   Stmt Mutate_(const AttrStmt* op, const Stmt& s) final {
@@ -76,11 +121,6 @@ class StripDoubleBufferWrite : public IRMutator {
       return IRMutator::Mutate_(op, s);
     }
   }
-};
-
-class StripTailAlloc : public IRMutator {
- public:
-  Stmt Mutate_(const Allocate* op, const Stmt& s) final { return Mutate(op->body); }
 };
 
 class StripTransferWriteIndex : public IRMutator {
@@ -192,8 +232,8 @@ class ThreadGroupInjector : public IRMutator {
 
 class DoubleBufferInjector : public IRMutator {
  public:
-  explicit DoubleBufferInjector(int split_loop, bool use_transfer_buffer)
-      : split_loop_(split_loop), use_transfer_buffer_(use_transfer_buffer) {}
+  explicit DoubleBufferInjector(int split_loop, bool use_double_shared)
+      : split_loop_(split_loop), use_double_buffer_(use_double_shared) {}
 
   Stmt Inject(const Stmt& stmt) {
     DoubleBufferDetector detector;
@@ -212,14 +252,11 @@ class DoubleBufferInjector : public IRMutator {
       if (it != dbuffer_info_.end()) {
         it->second.scope = op->value.as<StringImm>()->value;
         return Mutate(op->body);
-      } else {
-        return IRMutator::Mutate_(op, s);
       }
     } else if (op->attr_key == attr::double_buffer_scope) {
       return MakeProducer(op, s);
-    } else {
-      return IRMutator::Mutate_(op, s);
     }
+    return IRMutator::Mutate_(op, s);
   }
 
   Stmt Mutate_(const Allocate* op, const Stmt& s) final {
@@ -232,32 +269,32 @@ class DoubleBufferInjector : public IRMutator {
       it->second.transfer_buffer = Var(op->buffer_var->name_hint + "_transfer");
       it->second.transfer_buffer_extents.push_back(make_const(op->extents[0].type(), 1));
       Stmt stmt = IRMutator::Mutate_(op, s);
-      op = stmt.as<Allocate>();
-      CHECK(it->second.loop != nullptr);
-      auto& alloc_nest = loop_allocs_[it->second.loop];
-      alloc_nest.emplace_back(AttrStmt::make(op->buffer_var, attr::storage_scope,
-                                             StringImm::make(it->second.scope), Evaluate::make(0)));
-      if (!use_transfer_buffer_) {
-        Array<Expr> new_extents{make_const(op->extents[0].type(), 2)};
-        for (Expr e : op->extents) {
-          new_extents.push_back(e);
+      if (const auto alloc = stmt.as<Allocate>()) {
+        CHECK(it->second.loop != nullptr);
+        auto& alloc_nest = loop_allocs_[it->second.loop];
+        alloc_nest.emplace_back(AttrStmt::make(alloc->buffer_var, attr::storage_scope,
+                                              StringImm::make(it->second.scope), Evaluate::make(0)));
+        if (use_double_buffer_) {
+          Array<Expr> new_extents{make_const(alloc->extents[0].type(), 2)};
+          for (Expr e : alloc->extents) {
+            new_extents.push_back(e);
+          }
+          alloc_nest.emplace_back(Allocate::make(alloc->buffer_var, alloc->type, new_extents, alloc->condition,
+                                                Evaluate::make(0)));
+        } else {
+          alloc_nest.emplace_back(Allocate::make(alloc->buffer_var, alloc->type, alloc->extents, alloc->condition,
+                                                Evaluate::make(0)));
         }
-        alloc_nest.emplace_back(Allocate::make(op->buffer_var, op->type, new_extents, op->condition,
-                                               Evaluate::make(0)));
-      } else {
-        alloc_nest.emplace_back(Allocate::make(op->buffer_var, op->type, op->extents, op->condition,
-                                               Evaluate::make(0)));
         alloc_nest.emplace_back(
             AttrStmt::make(it->second.transfer_buffer, air::ir::attr::storage_scope,
-                           StringImm::make(it->second.transfer_buffer_scope), Evaluate::make(0)));
+                            StringImm::make(it->second.transfer_buffer_scope), Evaluate::make(0)));
         alloc_nest.emplace_back(Allocate::make(it->second.transfer_buffer, it->second.type,
-                                               it->second.transfer_buffer_extents,
-                                               it->second.condition, Evaluate::make(0)));
+                                                it->second.transfer_buffer_extents,
+                                                it->second.condition, Evaluate::make(0)));
+        return alloc->body;
       }
-      return op->body;
-    } else {
-      return IRMutator::Mutate_(op, s);
     }
+    return IRMutator::Mutate_(op, s);
   }
 
   Stmt Mutate_(const For* op, const Stmt& s) final {
@@ -266,14 +303,13 @@ class DoubleBufferInjector : public IRMutator {
       transfer_loop_nest_.push_back(op);
     }
     Stmt stmt = IRMutator::Mutate_(op, s);
-    if (use_transfer_buffer_) {
-      const For* orig_loop = stmt.as<For>();
-      auto iter = loop_transfer_.find(op);
-      if (iter != loop_transfer_.end()) {
-        stmt =
-            For::make(orig_loop->loop_var, orig_loop->min, orig_loop->extent, orig_loop->for_type,
-                      orig_loop->device_api, Block::make(orig_loop->body, MergeSeq(iter->second)));
-      }
+    const For* orig_loop = stmt.as<For>();
+    auto iter = loop_transfer_.find(op);
+    std::vector<Stmt> fragment_allocs;
+    if (iter != loop_transfer_.end()) {
+      stmt =
+          For::make(orig_loop->loop_var, orig_loop->min, orig_loop->extent, orig_loop->for_type,
+                    orig_loop->device_api, Block::make(orig_loop->body, MergeSeq(iter->second)));
     }
     auto it = loop_pre_.find(op);
     if (it != loop_pre_.end()) {
@@ -291,25 +327,24 @@ class DoubleBufferInjector : public IRMutator {
         Var outer_var(old_loop->loop_var->name_hint + ".outer", old_loop->loop_var.type());
         std::unordered_map<const Variable*, Expr> vmap;
         std::vector<Stmt> loop_seq;
+        StripSyncAndAllocs body_remover(use_double_buffer_);
+        Stmt old_loop_body = body_remover.Mutate(old_loop->body);
+        fragment_allocs = body_remover.GetFragmentAllocs();
         for (int32_t i = 0; i < split_loop_; ++i) {
           vmap[old_loop->loop_var.get()] = outer_var * factor + make_const(factor.type(), i);
-          loop_seq.emplace_back(Substitute(old_loop->body, vmap));
+          loop_seq.emplace_back(Substitute(old_loop_body, vmap));
         }
-        Stmt loop;
-        if (use_transfer_buffer_) {
-          // Add syncthreads at the end of main loop
-          loop = For::make(outer_var, zero, outer_ext, old_loop->for_type, old_loop->device_api, 
-            Block::make(MergeSeq(loop_seq), Evaluate::make(
-                  Call::make(Int(32), "tvm_storage_sync", {StringImm::make("shared")}, Call::Intrinsic)
-            ))
-          );
-        } else {
-          loop = For::make(outer_var, zero, outer_ext, old_loop->for_type, old_loop->device_api, MergeSeq(loop_seq));
-        }
+        // Add syncthreads at the end of main loop
+        Stmt loop = For::make(outer_var, zero, outer_ext, old_loop->for_type, old_loop->device_api, 
+          Block::make(MergeSeq(loop_seq), Evaluate::make(
+                Call::make(Int(32), "tvm_storage_sync", {StringImm::make("shared")}, Call::Intrinsic)
+          ))
+        );
         // tail
         std::vector<Stmt> tail_seq;
-        Stmt tail_body = StripDoubleBufferWrite().Mutate(old_loop->body);
-        tail_body = StripTailAlloc().Mutate(tail_body);
+        StripSyncAndAllocs tail_remover(false);
+        old_loop_body = tail_remover.Mutate(old_loop->body);
+        Stmt tail_body = StripDoubleBufferWrite().Mutate(old_loop_body);
         for (int32_t i = 0; i < split_loop_; ++i) {
           Expr idx = tail_base + make_const(tail_base.type(), i);
           vmap[old_loop->loop_var.get()] = idx;
@@ -318,13 +353,14 @@ class DoubleBufferInjector : public IRMutator {
         }
         stmt = Block::make(loop, MergeSeq(tail_seq));
       }
+      // Move fragment allocation statements to the top of the current loop
+      Stmt loop_pre_stmt = MergeNest(fragment_allocs, MergeSeq(it->second));
       // Add syncthreads after the first prefetch
-      stmt = Block::make(
-        Block::make(MergeSeq(it->second), Evaluate::make(
-          Call::make(Int(32), "tvm_storage_sync", {StringImm::make("shared")}, Call::Intrinsic)
-        )),
-        stmt
-      );
+      loop_pre_stmt  = Block::make(
+        loop_pre_stmt,
+        Evaluate::make(Call::make(Int(32), "tvm_storage_sync", {StringImm::make("shared")}, Call::Intrinsic))
+        );
+      stmt = Block::make(loop_pre_stmt, stmt);
     }
     it = loop_allocs_.find(op);
     if (it != loop_allocs_.end()) {
@@ -336,16 +372,11 @@ class DoubleBufferInjector : public IRMutator {
 
   Stmt Mutate_(const Store* op, const Stmt& s) final {
     Stmt stmt = IRMutator::Mutate_(op, s);
-    op = stmt.as<Store>();
-    auto it = dbuffer_info_.find(op->buffer_var.get());
-    if (it != dbuffer_info_.end()) {
-      StorageEntry& e = it->second;
-      CHECK(in_double_buffer_scope_);
-      if (!use_transfer_buffer_) {
-        CHECK(e.stride.defined());
-        return Store::make(op->buffer_var, op->value, e.switch_write_var * e.stride + op->index,
-                           op->predicate);
-      } else {
+    if (const auto store = stmt.as<Store>()) {
+      auto it = dbuffer_info_.find(store->buffer_var.get());
+      if (it != dbuffer_info_.end()) {
+        StorageEntry& e = it->second;
+        CHECK(in_double_buffer_scope_);
         Expr transfer_index = make_const(e.loop->loop_var.type(), 0);
         Expr transfer_extent = make_const(e.transfer_buffer_extents[0].type(), 1);
         for (unsigned i = 0; i < transfer_loop_nest_.size(); i++) {
@@ -359,14 +390,20 @@ class DoubleBufferInjector : public IRMutator {
           transfer_extent *= transfer_loop_nest_[i]->extent - transfer_loop_nest_[i]->min;
         }
         e.transfer_buffer_extents.push_back(transfer_extent);
-        air::DataType transfer_type = op->value.as<Load>()->type;
+        air::DataType transfer_type = store->value.as<Load>()->type;
         if (e.type != transfer_type) {
           e.type = transfer_type;
         }
         Stmt transfer_store =
-            Store::make(e.transfer_buffer, op->value, transfer_index, op->predicate);
-        transfer_store =
-            AttrStmt::make(op->buffer_var, TRANSFER_WRITE_INDEX, op->index, transfer_store);
+            Store::make(e.transfer_buffer, store->value, transfer_index, store->predicate);
+        if (use_double_buffer_) {
+          CHECK(e.stride.defined());
+          transfer_store =
+            AttrStmt::make(store->buffer_var, TRANSFER_WRITE_INDEX, e.switch_write_var * e.stride + store->index, transfer_store);
+        } else {
+          transfer_store =
+            AttrStmt::make(store->buffer_var, TRANSFER_WRITE_INDEX, store->index, transfer_store);
+        }
         return transfer_store;
       }
     }
@@ -375,31 +412,16 @@ class DoubleBufferInjector : public IRMutator {
 
   Expr Mutate_(const Load* op, const Expr& e) final {
     Expr expr = IRMutator::Mutate_(op, e);
-    op = expr.as<Load>();
-    auto it = dbuffer_info_.find(op->buffer_var.get());
-    if ((!use_transfer_buffer_ && it != dbuffer_info_.end())) {
-      const StorageEntry& e = it->second;
-      CHECK(e.stride.defined());
-      CHECK(e.switch_read_var.defined());
-      return Load::make(op->type, op->buffer_var, e.switch_read_var * e.stride + op->index,
-                        op->predicate);
-    } else {
-      return expr;
-    }
-  }
-
-  Stmt Mutate_(const Block* op, const Stmt& s) final {
-    Stmt first = Mutate(op->first);
-    Stmt rest = Mutate(op->rest);
-    if (const auto attr = op->first.as<AttrStmt>()) {
-      if (attr->attr_key == "delete_this_sync") {
-        return rest;
+    if (const auto load = expr.as<Load>()) {
+      auto it = dbuffer_info_.find(load->buffer_var.get());
+      if ((use_double_buffer_ && it != dbuffer_info_.end())) {
+        const StorageEntry& e = it->second;
+        CHECK(e.stride.defined());
+        CHECK(e.switch_read_var.defined());
+        return Load::make(load->type, load->buffer_var, e.switch_read_var * e.stride + load->index, load->predicate);
       }
     }
-    if (first.same_as(op->first) && rest.same_as(op->rest)) {
-      return s;
-    }
-    return Block::make(first, rest);
+    return expr;
   }
 
   Expr Mutate_(const Variable* op, const Expr& e) final {
@@ -430,21 +452,19 @@ class DoubleBufferInjector : public IRMutator {
     std::unordered_map<const Variable*, Expr> vmap;
     vmap[e.loop->loop_var.get()] = zero;
     Stmt transfer_stmt;
-    if (!use_transfer_buffer_) {
+    if (use_double_buffer_) {
       vmap[e.switch_write_var.get()] = zero;
-    } else {
-      transfer_stmt = TransferBufferInjector().Mutate(body);
-      body = StripTransferWriteIndex().Mutate(body);
-      transfer_stmt = Substitute(transfer_stmt, vmap);
     }
+    transfer_stmt = TransferBufferInjector().Mutate(body);
+    body = StripTransferWriteIndex().Mutate(body);
     loop_pre_[e.loop].emplace_back(Substitute(body, vmap));
+    loop_pre_[e.loop].emplace_back(Substitute(transfer_stmt, vmap));
     vmap[e.loop->loop_var.get()] = loop_shift;
-    if (!use_transfer_buffer_) {
+    if (use_double_buffer_) {
       vmap[e.switch_write_var.get()] = indexmod(loop_shift, two);
-    } else {
-      loop_pre_[e.loop].emplace_back(transfer_stmt);
-    }
+    } 
     body = Substitute(body, vmap);
+    transfer_stmt = Substitute(transfer_stmt, vmap);
     body = AttrStmt::make(buffer, air::ir::attr::double_buffer_write, 1, body);
     body = IfThenElse::make(loop_shift < e.loop->extent, body);
     transfer_stmt = AttrStmt::make(e.transfer_buffer, attr::double_buffer_write, 1, transfer_stmt);
@@ -479,7 +499,7 @@ class DoubleBufferInjector : public IRMutator {
   // Whether split loop
   int32_t split_loop_;
   // Whether use transfer buffer to replace the second shared buffer
-  bool use_transfer_buffer_{false};
+  bool use_double_buffer_{false};
   // Whether we are inside double buffer scope.
   bool in_double_buffer_scope_{false};
   // The current loop nest
@@ -496,8 +516,8 @@ class DoubleBufferInjector : public IRMutator {
   std::vector<const For*> transfer_loop_nest_;
 };
 
-Stmt InjectDoubleBuffer(Stmt stmt, int split_loop, bool use_transfer_buffer) {
-  Stmt new_stmt = DoubleBufferInjector(split_loop, use_transfer_buffer).Inject(stmt);
+Stmt InjectDoubleBuffer(Stmt stmt, int split_loop, bool use_double_shared) {
+  Stmt new_stmt = DoubleBufferInjector(split_loop, use_double_shared).Inject(stmt);
   new_stmt = ThreadGroupInjector().Inject(new_stmt);
   return new_stmt;
 }

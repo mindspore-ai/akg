@@ -281,6 +281,29 @@ class ConvStrategy : public TilingStrategy {
 
   void RestrainH(TileAxis *axis);
   void RestrainW(TileAxis *axis);
+
+  // gpu tensor core strategy steps
+  std::unique_ptr<MmaConv> InitGemmShape(Mma mma);
+  std::pair<int64_t, int64_t> CalculateNumOfWarps(Mma mma);
+  void CalculateMacroMma(MmaConv shape, Mma mma);
+  void SetFinalConfig(MmaConv macro_mma, Mma mma);
+
+  // Return a combination of total factor that can be divisible by shape_m and shape_n.
+  std::pair<int64_t, int64_t> GetDivisibleFactorForMN(int64_t shape_m, int64_t shape_n, int64_t total_factor, Mma mma);
+
+  int w0_for_m_{1};
+  int w1_for_n_{1};
+  TileAxis *m_axis_{nullptr};
+  TileAxis *h_axis_{nullptr};
+  TileAxis *w_axis_{nullptr};
+  TileAxis *n_axis_{nullptr};
+  TileAxis *k_axis_{nullptr};
+  int sm_bytes_{1};
+  int reg_bytes_{1};
+  int64_t num_sm_{80};
+  int64_t min_blocks_{400};
+  int64_t default_num_warps_{1};
+  MmaConv macro_mma_{128, 1, 1, 128, 32};
 };
 
 class GemmStrategy : public TilingStrategy {
@@ -289,6 +312,32 @@ class GemmStrategy : public TilingStrategy {
   ~GemmStrategy() {}
   void AddNpuConstraint();
   void AddGpuConstraint();
+
+  // gpu tensor core strategy steps
+  std::unique_ptr<Mma> InitGemmShape(Mma mma);
+  std::pair<int64_t, int64_t> CalculateNumOfWarps(Mma mma);
+  void CalculateMacroMma(Mma shape, Mma mma);
+  void SetFinalConfig(Mma macro_mma, Mma mma);
+
+  // common utils
+  int EstimateSharedSize(Mma alloc, int dtype);
+  int EstimateRegisterSize(Mma alloc, int dtype);
+  // Return a combination of total factor that can be divisible by shape_m and shape_n.
+  std::pair<int64_t, int64_t> GetDivisibleFactorForMN(int64_t shape_m, int64_t shape_n, int64_t total_factor, Mma mma);
+
+  std::string interested_attr_key = AT_GEMM;
+  int w0_for_m_{1};
+  int w1_for_n_{1};
+  TileAxis *m_axis_{nullptr};
+  TileAxis *n_axis_{nullptr};
+  TileAxis *k_axis_{nullptr};
+  int sm_bytes_{1};
+  int reg_bytes_{1};
+  int64_t num_sm_{80};
+  int64_t min_blocks_{2048};
+  int64_t default_num_warps_{1};
+  int64_t tile_stride_{32};
+  Mma macro_mma_{128, 128, 32};
 };
 
 class GpuStrategy : public TilingStrategy {
@@ -306,6 +355,7 @@ class GpuStrategy : public TilingStrategy {
     TRANSPOSE_OP,
     PAD_OP,
     CUSTOM_CONFIG,
+    CONV,
     TEMPLATE_BULK
   };
   void AddNpuConstraint();
@@ -371,8 +421,9 @@ class GpuStrategy : public TilingStrategy {
   bool reverse_binding_{false};
   int64_t fused_size_{1};
   std::unordered_map<int, std::string> template_map_ = {
-    {0, "DEFAULT"},           {1, "PURE_ELEM"}, {2, "BROADCAST_OP"}, {3, "REDUCTION"}, {4, "ALL_REDUCE"},
-    {5, "BITWISE_REDUCTION"}, {6, "MATMUL"},    {7, "TRANSPOSE_OP"}, {8, "PAD_OP"},    {9, "CUSTOM_CONFIG"}};
+    {0, "DEFAULT"},    {1, "PURE_ELEM"},         {2, "BROADCAST_OP"}, {3, "REDUCTION"},
+    {4, "ALL_REDUCE"}, {5, "BITWISE_REDUCTION"}, {6, "MATMUL"},       {7, "TRANSPOSE_OP"},
+    {8, "PAD_OP"},     {9, "CUSTOM_CONFIG"},     {10, "CONV"}};
 };
 
 class MulticoreStrategy {

@@ -83,7 +83,7 @@ std::unordered_set<std::string> AnalysisResult::ExtractWithStmtId() const {
   return res;
 }
 
-int UserConfig::GetDataType(const std::string &name) const {
+int UserConfig::GetDataBytes(const std::string &name) const {
   for (auto i : GetBind()) {
     if (i.first->op->name == name) {
       int size = i.first->dtype.bytes();
@@ -93,6 +93,16 @@ int UserConfig::GetDataType(const std::string &name) const {
   return 1;
 }
 
+Type UserConfig::GetDataType(const std::string &name) const {
+  for (auto i : GetBind()) {
+    if (i.first->op->name == name) {
+      Type type = i.first->dtype;
+      return type;
+    }
+  }
+  CHECK(false) << "Get Data Type fail!";
+  return Type();
+}
 std::string CubeInfo::ExtractStringFromAttrs(const std::string &name) const {
   for (auto i : analysis_result_.GetStmtOpInfoMap()) {
     if (!i.second.isMMU) {
@@ -1241,9 +1251,11 @@ CondVarsMap AnalysisResult::GetCondVarsMap() {
   return cond_vars;
 }
 
-const BufferDefInfo &AnalysisResult::GetBufferDefInfo(const isl::id &tensor_id) const {
+const BufferDefInfo &AnalysisResult::GetBufferDefInfo(const isl::id &tensor_id, const bool is_dst_tensor_id) const {
   for (const auto &idx : BufferDefInfos()) {
-    if (idx.dst_tensor_id.get_name() == tensor_id.get_name()) {
+    bool is_contains_target_tensor = (is_dst_tensor_id && idx.dst_tensor_id.get_name() == tensor_id.get_name()) ||
+                                     (!is_dst_tensor_id && idx.tensor_id.get_name() == tensor_id.get_name());
+    if (is_contains_target_tensor) {
       return idx;
     }
   }
@@ -1442,6 +1454,8 @@ static std::string MemTypeToString(const MemType &memType) {
       return "SHARED";
     case MemType::LOCAL_:
       return "LOCAL";
+    case MemType::DDR_LOCAL_:
+      return "GML";
     default:
       return "";
   }
@@ -1449,8 +1463,14 @@ static std::string MemTypeToString(const MemType &memType) {
 
 std::string ScopInfo::GetIslReadName(const isl::id &cluster_id) {
   auto tensor_info = analysis_result_.GetBufferDefInfo(cluster_id);
-  MemType memType = tensor_info.SrcMemType();
-  return MemTypeToString(memType) + "read";
+  MemType src_memType = tensor_info.SrcMemType();
+  if (user_config_.GetTarget() == TARGET_CUDA) {
+    MemType dst_memType = tensor_info.DstMemType();
+    if (src_memType == MemType::DDR && dst_memType == MemType::LOCAL_) {
+      return MemTypeToString(MemType::DDR_LOCAL_) + "read";
+    }
+  }
+  return MemTypeToString(src_memType) + "read";
 }
 
 std::string ScopInfo::GetIslWriteName(const isl::id &cluster_id) {
@@ -1458,6 +1478,15 @@ std::string ScopInfo::GetIslWriteName(const isl::id &cluster_id) {
     auto tensor_info = analysis_result_.GetBufferDefInfo(cluster_id);
     MemType memType = tensor_info.DstMemType();
     return MemTypeToString(memType) + "write";
+  }
+
+  if (user_config_.GetTarget() == TARGET_CUDA) {
+    auto tensor_info = analysis_result_.GetBufferDefInfo(cluster_id, false);
+    MemType src_memType = tensor_info.SrcMemType();
+    MemType dst_memType = tensor_info.DstMemType();
+    if (src_memType == MemType::DDR && dst_memType == MemType::LOCAL_) {
+      return MemTypeToString(MemType::DDR_LOCAL_) + "write";
+    }
   }
   return MemTypeToString(MemType::DDR) + "write";
 }

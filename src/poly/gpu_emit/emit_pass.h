@@ -17,12 +17,15 @@
 #ifndef EMIT_PASS_H_
 #define EMIT_PASS_H_
 #include "../isl_emitter.h"
-#include "../gpu_isl_emitter.h"
+#include "gpu_isl_emitter.h"
+#include "gpu_isl_emitter_reduce.h"
+#include "gpu_isl_emitter_tensor_core.h"
 
 namespace akg {
 namespace ir {
 namespace poly {
-Stmt EmitForTensorCore(Stmt stmt, TensorCoreInfo &info);
+Stmt EmitForTensorCore(Stmt stmt, TensorCoreInfo &info, ScopInfo &scop_info);
+Stmt EmitForReduce(Stmt stmt, ScopInfo &scop_info);
 Stmt EmitForTensorCoreDesignOne(Stmt stmt, TensorCoreInfo &info);
 }  // namespace poly
 }  // namespace ir

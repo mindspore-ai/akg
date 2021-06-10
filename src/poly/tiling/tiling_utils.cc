@@ -189,6 +189,56 @@ std::unordered_map<std::string, std::string> ExtractLoopIndicesFromMatrices(std:
   return cube_var_map;
 }
 
+std::unordered_map<std::string, std::string> ExtractLoopIndicesFromMatricesConv(std::vector<VarNames> var_names_list) {
+  CHECK_EQ(var_names_list.size(), 3)
+    << "Matmul should have exactly three matrices in C(output), A(lhs) and B(rhs) order.";
+  VarNames mx_c = var_names_list[0];
+  VarNames mx_a = var_names_list[1];
+  VarNames mx_b = var_names_list[2];
+
+  VarNames gemm_m, gemm_n, gemm_k;
+  std::unordered_set<std::string> stack;
+
+  for (const auto &var : mx_a) {
+    stack.insert(var);
+  }
+
+  // 1. N = B_vars - A_vars;
+  //    [B, K] = A_vars & B_vars
+  for (const auto &var : mx_b) {
+    auto it = stack.find(var);
+    if (it != stack.end()) {
+      gemm_k.emplace_back(var);
+      stack.erase(it);
+    } else {
+      gemm_n.emplace_back(var);
+    }
+  }
+
+  // 2. M = A_vars - B - K
+  for (const auto &var : mx_a) {
+    if (stack.find(var) != stack.end()) {
+      gemm_m.emplace_back(var);
+    }
+  }
+
+  CHECK_LE(gemm_m.size(), ConvFormatM.size());
+  CHECK_LE(gemm_n.size(), ConvFormatN.size());
+  CHECK_LE(gemm_k.size(), ConvFormatK.size());
+
+  std::unordered_map<std::string, std::string> cube_var_map;
+  for (auto i = static_cast<int>(gemm_m.size()) - 1; i >= 0; --i) {
+    cube_var_map[gemm_m[i]] = ConvFormatM[static_cast<int>(gemm_m.size()) - 1 - i];
+  }
+  for (auto i = static_cast<int>(gemm_n.size()) - 1; i >= 0; --i) {
+    cube_var_map[gemm_n[i]] = ConvFormatN[static_cast<int>(gemm_n.size()) - 1 - i];
+  }
+  for (auto i = static_cast<int>(gemm_k.size()) - 1; i >= 0; --i) {
+    cube_var_map[gemm_k[i]] = ConvFormatK[static_cast<int>(gemm_k.size()) - 1 - i];
+  }
+  return cube_var_map;
+}
+
 VarNames VisitVarNames(const air::Expr &arg, VarNames var_names, bool add_num) {
   if (const auto var = arg.as<air::ir::Variable>()) {
     var_names.emplace_back(var->name_hint);
@@ -220,6 +270,15 @@ VarNames VisitVarNames(const air::Expr &arg, VarNames var_names, bool add_num) {
   }
   return var_names;
 }
+
+bool IsNum(const std::string &name) {
+  for (auto c : name) {
+    if (c > '9' || c < '0') {
+      return false;
+    }
+  }
+  return true;
+};
 
 }  // namespace poly
 }  // namespace ir

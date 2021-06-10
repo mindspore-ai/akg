@@ -917,18 +917,18 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCuda(isl::schedule_node nod
   // get tile size
   node = SetTileSizeAndTile(node, TILE_WITH_C1);
 
-  if (scop_info_.user_config_.GetEnableTileC0()) {
-    node = SetTileSizeAndTile(node.child(0), TILE_WITH_C0);
-    node = node.parent();
-  }
-
   // tile matmul operator
-  if (!scop_info_.user_config_.GetEnableMatmul()) {
-    return node;
+  if (scop_info_.user_config_.GetEnableMatmul()) {
+    node = MatmulTile(node);
   }
-  size_t start_depth = node.get_tree_depth();
+  return node;
+}
 
-  isl::schedule_node_band band_node = node.as<isl::schedule_node_band>();
+isl::schedule_node TileOuterBand::MatmulTile(const isl::schedule_node &node) {
+  auto tile_node = node;
+  size_t start_depth = tile_node.get_tree_depth();
+
+  isl::schedule_node_band band_node = tile_node.as<isl::schedule_node_band>();
   size_t count_coincident = 0;
   for (size_t i = 0; i < band_node.n_member(); ++i) {
     if (!band_node.member_get_coincident(i)) {
@@ -938,50 +938,99 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCuda(isl::schedule_node nod
   }
 
   // split the k axis
-  node = band_node.split(count_coincident);
-  std::string shared_tensors = scop_info_.user_config_.GetSharedTensors();
-  auto insert_marker = PROMOTE_GLOBAL_TO_REGISTER_C;
-  if (shared_tensors.find(COMPUTE) != std::string::npos) {
-    insert_marker = PROMOTE_GLOBAL_TO_SHARED_C;
-  }
-  node = node.child(0).insert_mark(isl::id(node.ctx(), insert_marker));
-  auto sqlit_node = SplitBmmStatement(node.child(0));
-  node = sqlit_node.is_equal(node.child(0)) ? sqlit_node : sqlit_node.child(0);
-  node = node.child(0).insert_mark(isl::id(node.ctx(), PROMOTE_GLOBAL_TO_SHARED_AB));
+  tile_node = band_node.split(count_coincident);
+  tile_node = InsertPromoteMarker(tile_node);
 
   if (scop_info_.user_config_.GetEnableTensorCoreUsePoly()) {
-    // The second tile of tensor_core for mapping to warp.
     auto replace_cfg_map = scop_info_.user_config_.GetReplaceConfig();
     if (replace_cfg_map.count(WARP_COMPUTE) == 0) {
-      auto thread_cfg = scop_info_.user_config_.GetThreadConfig();
-      CHECK(thread_cfg != nullptr) << "thread config is null";
-
-      int total_warp = 1;
-      for (size_t j = 0; j < thread_cfg->bound; ++j) {
-        total_warp *= thread_cfg->GetAt(j).second;
-      }
-      total_warp = std::ceil(total_warp / WARP_SIZE);
-      size_t warp_dim_x = std::sqrt(total_warp);
-      size_t warp_dim_y = total_warp / warp_dim_x;
-      std::string new_warp_cfg = std::to_string(warp_dim_x) + " " + std::to_string(warp_dim_y);
-      scop_info_.user_config_.RecordReplaceConfig(WARP_COMPUTE, new_warp_cfg, MappingType::REPLACE_THREADS);
+      ResetWarpMappingConfig();
     }
-
-    node = SetTileSizeAndTile(node.child(0), TILE_WITH_C0_C1, count_coincident);
+    // The second tiling of tensor_core is to split the k-axis.
+    tile_node = SetTileSizeAndTile(tile_node.child(0), TILE_WITH_C0_C1, count_coincident);
   }
 
-  // the last tile of tensor_core
-  node = SetTileSizeAndTile(node.child(0), TILE_WITH_C0);
+  // The third tiling of tensor_core is to map to warp.
+  tile_node = SetTileSizeAndTile(tile_node.child(0), TILE_WITH_WARP_C1, count_coincident);
   if (!scop_info_.user_config_.GetEnableTensorCoreUsePoly()) {
-    node = node.child(0);
+    tile_node = tile_node.child(0);
   }
-  node = node.insert_mark(isl::id(node.ctx(), PROMOTE_SHARED_TO_REGISTER));
-  node = node.ancestor(node.get_tree_depth() - start_depth);
+  tile_node = tile_node.insert_mark(isl::id(tile_node.ctx(), PROMOTE_SHARED_TO_REGISTER_AB));
+  // Locate the band to be mapped.
+  tile_node = tile_node.child(0).insert_mark(MAP_TO_WARP).child(0);
+  tile_node = tile_node.child(0).insert_mark(SKIP_MARKER).child(0);
 
-  return node;
+  // The last tiling of tensor_core is to calculate the size of fragment.
+  tile_node = SetTileSizeAndTile(tile_node, TILE_WITH_C0);
+  tile_node = tile_node.child(0).insert_mark(SKIP_MARKER);
+
+  if (scop_info_.user_config_.GetEnableConvTensorCore()) {
+    int child_depth = KH_KW_DEPTH;
+    while (tile_node.has_children() && child_depth != 0) {
+      --child_depth;
+      tile_node = tile_node.child(0);
+    }
+    if (tile_node.child(0).isa<isl::schedule_node_band>()) {
+      tile_node = tile_node.insert_mark(KH_KW_MARKER);
+    }
+  }
+
+  tile_node = tile_node.ancestor(tile_node.get_tree_depth() - start_depth);
+  return tile_node;
 }
 
-isl::schedule_node TileOuterBand::SplitBmmStatement(const isl::schedule_node &node) {
+void TileOuterBand::ResetWarpMappingConfig() {
+  auto thread_cfg = scop_info_.user_config_.GetThreadConfig();
+  CHECK(thread_cfg != nullptr) << "thread config is null";
+
+  int total_warp = 1;
+  for (size_t j = 0; j < thread_cfg->bound; ++j) {
+    total_warp *= thread_cfg->GetAt(j).second;
+  }
+  total_warp = std::ceil(total_warp / WARP_SIZE);
+  size_t warp_dim_x = std::sqrt(total_warp);
+  size_t warp_dim_y = total_warp / warp_dim_x;
+  std::string new_warp_cfg = std::to_string(warp_dim_x) + " " + std::to_string(warp_dim_y);
+  scop_info_.user_config_.RecordReplaceConfig(WARP_COMPUTE, new_warp_cfg, MappingType::REPLACE_THREADS);
+}
+
+isl::schedule_node TileOuterBand::InsertPromoteMarker(const isl::schedule_node node) {
+  isl::schedule_node tile_node = node.child(0);
+  bool is_matrixc_promote_shared = IsMatrixCPromoteToShared();
+
+  // Add different promotion marks in different positions.
+  if (is_matrixc_promote_shared) {
+    tile_node = tile_node.insert_mark(isl::id(tile_node.ctx(), PROMOTE_GLOBAL_TO_SHARED_C)).child(0);
+    tile_node = tile_node.insert_mark(isl::id(tile_node.ctx(), PROMOTE_SHARED_TO_REGISTER_C)).child(0);
+  } else {
+    tile_node = tile_node.insert_mark(isl::id(tile_node.ctx(), PROMOTE_GLOBAL_TO_REGISTER_C)).child(0);
+  }
+
+  tile_node = tile_node.child(0).insert_mark(isl::id(tile_node.ctx(), PROMOTE_GLOBAL_TO_SHARED_AB));
+  return tile_node;
+}
+
+bool TileOuterBand::IsMatrixCPromoteToShared() {
+  std::string shared_tensors = scop_info_.user_config_.GetSharedTensors();
+  if (shared_tensors.empty()) {
+    return false;
+  }
+
+  shared_tensors += " ";
+  auto pos = shared_tensors.find(" ");
+  while (pos != std::string::npos) {
+    std::string tensor = shared_tensors.substr(0, pos);
+    auto matmul_map = scop_info_.analysis_result_.GetMatrixMatmulMap();
+    if (matmul_map.count(tensor) && (matmul_map[tensor] == MATRIX_C || matmul_map[tensor] == MATRIX_ELSE)) {
+      return true;
+    }
+    shared_tensors = shared_tensors.substr(pos + 1, shared_tensors.size());
+    pos = shared_tensors.find(" ");
+  }
+  return false;
+}
+
+isl::schedule_node TileOuterBand::SplitMatmulStatement(const isl::schedule_node &node) {
   isl::schedule_node tile_node = node;
   auto all_reduce_map = scop_info_.analysis_result_.GetReduceTensorInfoMap();
   ReduceManager reduce_manager;
@@ -1011,7 +1060,26 @@ isl::schedule_node TileOuterBand::SetTileSizeAndTile(const isl::schedule_node &n
   const unsigned int n_member = node.as<isl::schedule_node_band>().n_member();
   auto title_size = static_cast<unsigned int>(tile_sizes_.size());
   unsigned int dim_num = (n_member <= title_size) ? n_member : title_size;
-  std::vector<int> tile_size = GetTileSizeOfLevel(n_member, dim_num, tile_level, tile_sizes_, count_coincident);
+  std::vector<int> tile_size;
+  auto replace_cfg_map = scop_info_.user_config_.GetReplaceConfig();
+  if (tile_level == TILE_WITH_WARP_C1) {
+    std::vector<int> warp_list;
+    CHECK_NE(replace_cfg_map.count(WARP_COMPUTE), 0) << "Can't find warpconfig";
+    auto warp_cfg = replace_cfg_map[WARP_COMPUTE];
+    for (size_t i = 0, j = 0; i < n_member; ++i) {
+      auto c1 = static_cast<int>(tile_sizes_[i].c1_tiling_size);
+      auto c0 = static_cast<int>(tile_sizes_[i].c0_tiling_size);
+      c1 = (static_cast<int>(i) < count_coincident) ? c1 : c0;
+      if (c0 == scop_info_.analysis_result_.GetMmaMode().m && j < warp_cfg->bound) {
+        c1 = std::max(c1 / warp_cfg->GetAt(j).second, c0);
+        ++j;
+      }
+      warp_list.push_back(c1);
+    }
+    tile_size = GetTileSizeOfLevel(n_member, dim_num, tile_level, tile_sizes_, count_coincident, warp_list);
+  } else {
+    tile_size = GetTileSizeOfLevel(n_member, dim_num, tile_level, tile_sizes_, count_coincident);
+  }
   isl::multi_val sizes = ComputeBandTilesSizes(node, &tile_size[0]);
   return TileBand(node, sizes);
 }

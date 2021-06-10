@@ -76,7 +76,28 @@ isl::schedule_node ReorderFilters(const isl::schedule_node &node,
   return isl::manage(new_node);
 }
 
-isl::schedule_node InsertContextNode(isl::schedule_node &node, ScopInfo &scop_info) {
+size_t CountConsecutiveCoincident(const isl::schedule_node &node) {
+  size_t count = 0;
+  if (!node.isa<isl::schedule_node_band>()) {
+    return count;
+  }
+
+  isl::schedule_node_band band_node = node.as<isl::schedule_node_band>();
+  while (count < band_node.n_member()) {
+    if (!band_node.member_get_coincident(static_cast<int>(count))) {
+      break;
+    }
+    ++count;
+  }
+  return count;
+}
+
+isl::schedule InsertContextNode(const isl::schedule &sch, ScopInfo &scop_info) {
+  auto node = sch.root().child(0);
+  if (node.isa<isl::schedule_node_context>()) {
+    node = node.del();
+  }
+
   // step1. get config
   std::unordered_map<isl::id, int, isl::IslIdIslHash> mapping_ids_with_sizes;
   auto block_cfg = scop_info.user_config_.GetBlockConfig();
@@ -117,7 +138,7 @@ isl::schedule_node InsertContextNode(isl::schedule_node &node, ScopInfo &scop_in
   scop_info.analysis_result_.RecordContextParams(context_set);
   // step3. insert context
   node = node.insert_context(context_set.from_params());
-  return node;
+  return node.get_schedule();
 }
 
 isl::union_map DependenceAnalysis(const isl::union_map &sources, const isl::union_map &targets,
@@ -317,7 +338,8 @@ bool ReplaceScheduleTree(isl::schedule &schedule, ScopInfo &info) {
 }
 
 std::vector<int> GetTileSizeOfLevel(const int member_size, const int dim_size, const std::string &tile_level,
-                                    TileSizes tile_sizes, const int count_coincident) {
+                                    TileSizes tile_sizes, const int count_coincident,
+                                    const std::vector<int> warp_list) {
   std::vector<int> tile_size(member_size, 0);
   for (auto i = 0; i < member_size; ++i) {
     if (i >= dim_size) {
@@ -329,6 +351,8 @@ std::vector<int> GetTileSizeOfLevel(const int member_size, const int dim_size, c
       tile_size[i] = static_cast<int>(tile_sizes[i].c0_tiling_size);
     } else if (tile_level == TILE_WITH_C1) {
       tile_size[i] = static_cast<int>(tile_sizes[i].c1_tiling_size);
+    } else if (tile_level == TILE_WITH_WARP_C1) {
+      tile_size[i] = warp_list[i];
     } else {
       // The tiling size of n and m is warp_number times of c0_tiling_size, which is equivalent to extracting the for
       // loop generated during mapping.This avoids the if condition and facilitates isl_emitter.
@@ -339,7 +363,8 @@ std::vector<int> GetTileSizeOfLevel(const int member_size, const int dim_size, c
   return tile_size;
 }
 
-std::string GetPromotionTensorName(const isl::schedule_node &node, const std::vector<BufferDefInfo> &buffer_def_infos) {
+std::string GetPromotionTensorName(const isl::schedule_node &node, 
+                                   const std::vector<BufferDefInfo> &buffer_def_infos) {
   std::string id_name = "";
   if (!node.isa<isl::schedule_node_band>()) {
     return id_name;
@@ -347,10 +372,15 @@ std::string GetPromotionTensorName(const isl::schedule_node &node, const std::ve
   for (size_t i = 0; i < buffer_def_infos.size(); ++i) {
     auto tensor_id = buffer_def_infos[i].tensor_id;
     isl::union_set id_domain = node.as<isl::schedule_node_band>().get_partial_schedule().domain();
+    id_domain = id_domain.unwrap().range();
     id_domain.foreach_set([tensor_id, &id_name](const isl::set &s) -> void {
-      if (s.to_str().find(tensor_id.get_name()) != std::string::npos) {
-        id_name = tensor_id.get_name();
+      std::string node_tensor_name = s.get_tuple_name();
+      size_t pos = 0;
+      if ((pos = node_tensor_name.find(LOCAL_SUFFIX)) != std::string::npos ||
+           (pos = node_tensor_name.find(SHARE_SUFFIX)) != std::string::npos) {
+        node_tensor_name = node_tensor_name.erase(pos, node_tensor_name.size() - pos);
       }
+      id_name = (node_tensor_name == tensor_id.get_name()) ? node_tensor_name : id_name;
     });
 
     if (!id_name.empty()) {

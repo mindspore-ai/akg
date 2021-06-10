@@ -53,11 +53,12 @@ struct MappingCfg {
   std::pair<std::string, int> x;
   std::pair<std::string, int> y;
   std::pair<std::string, int> z;
+  std::vector<std::pair<std::string, int>> dim;
 
  public:
   MappingType type{NONE};
   size_t bound{0};
-  size_t MaxDim() { return 3; }
+  size_t MaxDim() { return std::max(dim.size(), static_cast<size_t>(3)); }
   std::string GetPrefix(MappingType type) {
     CHECK_NE(type, MappingType::NONE);
     if (type == MappingType::BLOCKS || type == MappingType::REPLACE_BLOCKS) {
@@ -66,17 +67,21 @@ struct MappingCfg {
       return "t";
     }
   }
-  void BindFromStr(const std::string &cfg, const std::string &id_name = "") {
+  void BindFromStr(const std::string &cfg, const std::string &id_name = "", const bool enable_max_dim = true) {
     std::vector<std::string> res = common::Split(cfg, " ");
-    CHECK_LE(res.size(), MaxDim());
+    if (enable_max_dim) {
+      CHECK_LE(res.size(), MaxDim());
+    }
     for (size_t i = 0; i < res.size(); ++i) {
       CHECK(!res[i].empty());
       auto size = static_cast<int>(std::strtol(res[i].c_str(), nullptr, 10));
-      BindAt(i, size, id_name);
+      BindAt(i, size, id_name, enable_max_dim);
     }
   }
-  void BindAt(size_t pos, int size, const std::string &id_name = "") {
-    CHECK_LT(pos, MaxDim());
+  void BindAt(size_t pos, int size, const std::string &id_name = "", const bool enable_max_dim = true) {
+    if (enable_max_dim) {
+      CHECK_LT(pos, MaxDim());
+    }
     bound = std::max(bound, pos + 1);
     std::string id = "";
     if (!id_name.empty()) {
@@ -89,18 +94,27 @@ struct MappingCfg {
     } else if (pos == 1) {
       y.first = id;
       y.second = size;
-    } else {
+    } else if (pos == 2) {
       z.first = id;
       z.second = size;
     }
+    std::pair<std::string, int> dim_pos;
+    dim_pos.first = id;
+    dim_pos.second = size;
+    dim.push_back(dim_pos);
   }
   std::pair<std::string, int> GetAt(size_t pos) {
     if (pos == 0) {
       return GetX();
     } else if (pos == 1) {
       return GetY();
-    } else {
+    } else if (pos == 2) {
       return GetZ();
+    } else {
+      CHECK_LT(pos, dim.size());
+      auto res = dim[pos];
+      res.second = res.second == 0 ? 1 : res.second;
+      return res;
     }
   }
   std::pair<std::string, int> GetX() {
@@ -123,6 +137,7 @@ struct MappingCfg {
     x.second = 0;
     y.second = 0;
     z.second = 0;
+    dim.clear();
   }
   void SwapConfig(size_t pos1, size_t pos2) {
     auto cfg1 = GetAt(pos1);
@@ -237,8 +252,9 @@ class UserConfig {
     ParseBoolAttr(attrs, "enable_atomic_add", &enable_atomic_add_);
 
     if (GetTarget() == TARGET_CUDA) {
-      ParseBoolAttr(attrs, "enable_tile_c0", &enable_tile_c0_);
       ParseBoolAttr(attrs, "pragma_enable_tensor_core", &enable_tensor_core_);
+      ParseBoolAttr(attrs, "pragma_enable_emit_core", &pragma_enable_emit_core_);
+      ParseBoolAttr(attrs, "pragma_enable_conv_tensor_core", &enable_conv_tensor_core_);
       ParseBoolAttr(attrs, "pragma_enable_matmul", &enable_matmul_);
       ParseBoolAttr(attrs, "enable_tensor_core_use_poly", &enable_tensor_core_use_poly_);
       ParseBoolAttr(attrs, "enable_akg_reduce_lib", &enable_akg_reduce_lib_);
@@ -286,11 +302,12 @@ class UserConfig {
     this->block_cfg_.BindFromStr(block_cfg);
   }
   void SetThreadConfig(const std::string &thread_cfg);
-  void RecordReplaceConfig(const std::string id, const std::string replace_cfg_str, const MappingType mapping_type) {
+  void RecordReplaceConfig(const std::string id, const std::string replace_cfg_str, const MappingType mapping_type,
+                           const bool enable_max_dim = true) {
     MappingCfg *replace_cfg(new (std::nothrow) MappingCfg());
     CHECK(replace_cfg) << "memory alloc fail.";
     replace_cfg->type = mapping_type;
-    replace_cfg->BindFromStr(replace_cfg_str, id);
+    replace_cfg->BindFromStr(replace_cfg_str, id, enable_max_dim);
     this->replace_cfg_[id] = replace_cfg;
   }
   void SetC0BlockSize(const std::vector<int> c0_block_size) { c0_block_size_ = c0_block_size; }
@@ -394,12 +411,12 @@ class UserConfig {
   std::string GetIterPrefix(bool is_spec_gemm = false) const {
     return is_spec_gemm ? kGemmIterNamePrefix : kIterNamePrefix;
   }
-  int GetDataType(const std::string &name) const;
+  int GetDataBytes(const std::string &name) const;
+  Type GetDataType(const std::string &name) const;
 
   // dump all info
   void DumpScopDataScheduleAttrs(std::ofstream &of);
 
-  bool GetEnableTileC0() { return enable_tile_c0_; }
   bool GetEnableAtomicAdd() { return enable_atomic_add_; }
 
   bool GetEnableAkgReduceLib() { return enable_akg_reduce_lib_; }
@@ -409,13 +426,25 @@ class UserConfig {
   bool GetEnableMatmul() { return enable_matmul_; }
   void SetEnableMatmul(bool enable_matmul) { enable_matmul_ = enable_matmul; }
 
-  bool GetEnableTensorCore() { return enable_tensor_core_; }
-  void SetEnableTensorCore(bool use_tensor_core) { enable_tensor_core_ = use_tensor_core; }
-
-  bool GetEnableTensorCoreUsePoly() { return enable_tensor_core_use_poly_; }
-  void SetEnableTensorCoreUsePoly(bool enable_tensor_core_use_poly) {
-    enable_tensor_core_use_poly_ = enable_tensor_core_use_poly;
+  bool GetEnableTensorCore() {
+    SetEnableTensorCore(enable_tensor_core_);
+    return enable_tensor_core_;
   }
+  void SetEnableTensorCore(bool enable_tensor_core) { enable_tensor_core_ = enable_matmul_ && enable_tensor_core; }
+
+  bool GetEnableEmitCore() { return pragma_enable_emit_core_; }
+  void SetEnableEmitCore(bool pragma_enable_emit_core) { pragma_enable_emit_core_ = pragma_enable_emit_core; }
+
+  bool GetEnableTensorCoreUsePoly() {
+    SetEnableTensorCoreUsePoly(enable_tensor_core_use_poly_);
+    return enable_tensor_core_use_poly_;
+  }
+  void SetEnableTensorCoreUsePoly(bool enable_tensor_core_use_poly) {
+    enable_tensor_core_use_poly_ = enable_tensor_core_ && enable_tensor_core_use_poly;
+  }
+
+  bool GetEnableConvTensorCore() { return enable_conv_tensor_core_; }
+  void SetEnableConvTensorCore(bool enable_conv_tensor_core) { enable_conv_tensor_core_ = enable_conv_tensor_core; }
 
   bool GetEnableOneDimThread() { return enable_one_dim_thread_; }
   void SetEnableOneDimThread(bool enable_one_dim_thread) { enable_one_dim_thread_ = enable_one_dim_thread; }
@@ -426,12 +455,14 @@ class UserConfig {
   void SetUseRegisterMemory(bool use_register_memory) { use_register_memory_ = use_register_memory; }
   int GetRegisterDepth() { return register_depth_; }
   int GetSharedDepth() { return shared_depth_; }
+  void SetSharedTensors(std::string shared_tensors) { shared_tensors_ = shared_tensors; }
   std::string GetSharedTensors() { return shared_tensors_; }
   std::string GetReduceLibType() { return reduce_lib_type_; }
   std::string GetLocalTensors() { return local_tensors_; }
   void SetEnableBankConflict(bool enable_bank_conflict) { enable_bank_conflict_ = enable_bank_conflict; }
   bool GetEnableBankConflict() { return enable_bank_conflict_; }
   int GetVectorLoadType() { return vector_load_type_; }
+  void SetVectorLoadType(int vector_load_type) { vector_load_type_ = vector_load_type; }
   void SetSharedInversedThreadMap(bool shared_inversed_thread_map) {
     shared_inversed_thread_map_ = shared_inversed_thread_map;
   }
@@ -554,12 +585,14 @@ class UserConfig {
   bool tile_size_is_var_{false};
   bool outer_band_need_split_{false};
 
-  bool enable_tile_c0_{false};
   bool enable_atomic_add_{false};
   // tensor_core config
   bool enable_matmul_{false};
   bool enable_tensor_core_{false};
+  bool pragma_enable_emit_core_{true};
   bool enable_tensor_core_use_poly_{false};
+  // conv config
+  bool enable_conv_tensor_core_{false};
   // lib config
   bool enable_akg_reduce_lib_{true};
   // memory config
@@ -691,6 +724,20 @@ struct ReduceTensorInfo {
 
 using ReduceTensorInfoMap = std::unordered_map<isl::id, ReduceTensorInfo, isl::IslIdIslHash>;
 
+struct Mma {
+  int64_t m;
+  int64_t n;
+  int64_t k;
+};
+
+struct MmaConv {
+  int64_t m;
+  int64_t h;
+  int64_t w;
+  int64_t n;
+  int64_t k;
+};
+
 class AnalysisResult {
  public:
   AnalysisResult() = default;
@@ -722,27 +769,27 @@ class AnalysisResult {
   void RecordAtomicMarkers(const std::string &marker_name) { atomic_markers_.insert(marker_name); }
   void RecordReduceOutTensors(const std::string &tensor_name) { reduce_out_tensors_.insert(tensor_name); }
   void RecordContextParams(const isl::set &context_params) { context_params_ = context_params; }
-  void RecoreMatrixMatmulMap(const std::string matrix_name, const std::string matrix_position) {
+  void RecordMatrixMatmulMap(const std::string matrix_name, const std::string matrix_position) {
     matrix_matmul_map_.emplace(matrix_name, matrix_position);
   }
   void RecordCastTensors(const std::string tensor_name) { cast_tensors_.insert(tensor_name); }
-  void RecoreSharedTensorBitsMap(const std::string tensor_name, const int tensor_bits) {
+  void RecordSharedTensorBitsMap(const std::string tensor_name, const int tensor_bits) {
     shared_tensor_bits_map_.emplace(tensor_name, tensor_bits);
   }
   std::unordered_map<std::string, int> GetSharedTensorBitsMap() const { return shared_tensor_bits_map_; }
-  void RecoreMatrixMatmulMajor(const std::string matrix_name, const std::string matrix_major) {
-    matrix_matmul_major_.emplace(matrix_name, matrix_major);
+  void RecordMatrixMatmulMajor(const std::string matrix_name, const std::string matrix_major) {
+    matrix_matmul_major_[matrix_name] = matrix_major;
   }
+  void SetMmaMode(Mma mma) { mma_ = mma; }
   std::unordered_map<std::string, std::string> GetMatrixMatmulMap() const { return matrix_matmul_map_; }
   std::unordered_map<std::string, std::string> GetMatrixMatmulMajor() const { return matrix_matmul_major_; }
+  Mma GetMmaMode() const { return mma_; }
   std::unordered_set<std::string> GetCastTensors() const { return cast_tensors_; }
   isl::set GetContextParams() { return context_params_; }
   std::vector<AtomicInfo> GetAtomicTensors() { return atomic_tensors_; }
   std::unordered_set<std::string> GetAtomicMarkers() { return atomic_markers_; }
   std::unordered_set<std::string> GetReduceOutTensors() { return reduce_out_tensors_; }
   isl::union_map GetReads() const { return reads_; }
-  std::unordered_set<std::string> GetReduceAttrs() const { return reduce_attrs_; }
-  std::unordered_set<std::string> GetNotReduceAttrs() const { return not_reduce_attrs_; }
   isl::union_map &GetWrites() { return writes_; }
   isl::union_map GetWrites() const { return writes_; }
   isl::union_map &GetCopyin() { return copyin_; }
@@ -799,7 +846,7 @@ class AnalysisResult {
 
   int CountBufferDefInfo(const isl::id &tensor_id) const;
   const std::vector<BufferDefInfo> &BufferDefInfos() const { return buffer_def_infos_; }
-  const BufferDefInfo &GetBufferDefInfo(const isl::id &tensor_id) const;
+  const BufferDefInfo &GetBufferDefInfo(const isl::id &tensor_id, const bool is_dst_tensor_id = true) const;
   bool HasBufferDefInfo(const isl::id &tensor_id) const;
   const std::vector<std::pair<isl::union_set, BufferedFootPrintInfo>> &ActiveBufferFootprints() const {
     return active_buffer_footprints_;
@@ -815,12 +862,27 @@ class AnalysisResult {
   void RecordReduceAttrs(const std::unordered_set<std::string> &reduce_attrs) {
     reduce_attrs_ = std::move(reduce_attrs);
   }
+  std::unordered_set<std::string> GetReduceAttrs() const { return reduce_attrs_; }
   void ClearReduceAttrs() { reduce_attrs_.clear(); }
 
   void RecordNotReduceAttrs(const std::unordered_set<std::string> &not_reduce_attrs) {
     not_reduce_attrs_ = std::move(not_reduce_attrs);
   }
+  std::unordered_set<std::string> GetNotReduceAttrs() const { return not_reduce_attrs_; }
   void ClearNotReduceAttrs() { not_reduce_attrs_.clear(); }
+
+  void RecordReduceAxisForMatmul(const std::vector<const Variable *> &reduce_axis) {
+    reduce_axis_ = std::move(reduce_axis);
+  }
+  std::vector<const Variable *> GetReduceAxisForMatmul() const { return reduce_axis_; }
+
+  void RecordNotReduceAxisForMatmul(const std::vector<Var> &not_reduce_axis) {
+    not_reduce_axis_ = std::move(not_reduce_axis);
+  }
+  std::vector<Var> GetNotReduceAxisForMatmul() const { return not_reduce_axis_; }
+
+  void RecordBatchAxisNumForMatmul(const unsigned int &batch_axis_num) { batch_axis_num_ = std::move(batch_axis_num); }
+  unsigned int GetBatchAxisNumForMatmul() const { return batch_axis_num_; }
 
   void RecordReduceDirection(const std::string reduce_direction) { reduce_direction_ = reduce_direction; }
   std::string GetReduceDirection() const { return reduce_direction_; }
@@ -857,9 +919,12 @@ class AnalysisResult {
   ReduceMap reduces_;
   ReduceTensorInfoMap reduce_tensor_info_;
   std::string reduce_direction_;
+  std::vector<isl::id> reduce_init_ids_;
   std::unordered_set<std::string> reduce_attrs_;
   std::unordered_set<std::string> not_reduce_attrs_;
-  std::vector<isl::id> reduce_init_ids_;
+  std::vector<const Variable *> reduce_axis_;
+  std::vector<Var> not_reduce_axis_;
+  unsigned int batch_axis_num_;
 
   isl::union_map reads_;
   isl::union_map writes_;
@@ -896,6 +961,7 @@ class AnalysisResult {
   std::unordered_map<std::string, int> shared_tensor_bits_map_;
   TensorScheduleRepo tensor_schedule_repo_;
   std::unordered_map<std::string, std::string> matrix_matmul_major_;
+  Mma mma_;
 };
 
 class CubeInfo {
@@ -1056,12 +1122,15 @@ class ScopInfo {
   std::string GetIslWriteName(const isl::id &cluster_id);
   static bool IsRead(const isl::id &id) { return IsEndsWith(id.get_name(), kReadSuffix); }
   static bool IsWrite(const isl::id &id) { return IsEndsWith(id.get_name(), kWriteSuffix); }
+  static bool IsGMLWrite(const isl::id &id) { return id.get_name() == std::string("GMLwrite"); }
   static bool IsGMWrite(const isl::id &id) { return id.get_name() == std::string("GMwrite"); }
   static bool IsGMRead(const isl::id &id) { return id.get_name() == std::string("GMread"); }
   static bool IsSync(const isl::id &id) { return IsStartsWith(id.name(), SYNC_FLAG); }
   static bool IsRealize(const isl::id &id) { return IsStartsWith(id.get_name(), "REALIZE"); }
   static bool IsReduceInit(const isl::id &id) { return IsStartsWith(id.get_name(), "red_init"); }
   static bool IsReduceUpdate(const isl::id &id) { return IsStartsWith(id.get_name(), "red_update"); }
+  static bool IsReduceInit(const std::string &name) { return IsStartsWith(name, "red_init"); }
+  static bool IsReduceUpdate(const std::string &name) { return IsStartsWith(name, "red_update"); }
 
  public:
   isl::ctx ctx_;

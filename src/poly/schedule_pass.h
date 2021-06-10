@@ -82,7 +82,12 @@ isl::union_map ComputeFakeCopyin(const isl::schedule &schedule, const isl::union
 /*
  * Insert a context node beyond to determine bound block and thread sizes for Gpu.
  */
-isl::schedule_node InsertContextNode(isl::schedule_node &node, ScopInfo &scop_info);
+isl::schedule InsertContextNode(const isl::schedule &sch, ScopInfo &scop_info);
+
+/*
+ * Get the number of axis whose coincidence is 1 in the current band node.
+ */
+size_t CountConsecutiveCoincident(const isl::schedule_node &node);
 
 /*
  * Tile a node band based on given tile sizes.
@@ -90,12 +95,14 @@ isl::schedule_node InsertContextNode(isl::schedule_node &node, ScopInfo &scop_in
 isl::schedule_node TileBand(isl::schedule_node node, const isl::multi_val &sizes);
 
 std::vector<int> GetTileSizeOfLevel(const int member_size, const int dim_size, const std::string &tile_level,
-                                    TileSizes tile_sizes, const int count_coincident = -1);
+                                    TileSizes tile_sizes, const int count_coincident = -1,
+                                    const std::vector<int> warp_list = {});
 
 /*
  * Obtain the information needed during the data promotion phase.
  */
-std::string GetPromotionTensorName(const isl::schedule_node &node, const std::vector<BufferDefInfo> &buffer_def_infos);
+std::string GetPromotionTensorName(const isl::schedule_node &node, 
+                                   const std::vector<BufferDefInfo> &buffer_def_infos);
 
 bool IsReadOrWriteTensor(const isl::schedule_node &node, const std::string read_name, const std::string write_name);
 

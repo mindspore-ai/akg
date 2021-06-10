@@ -46,6 +46,8 @@ from tests.operators.gpu.test_ms_greater_equal import test_ms_greater_equal
 from tests.operators.gpu.test_ms_reciprocal import test_ms_reciprocal
 from tests.operators.gpu.test_ms_reduce_max import test_ms_reduce_max
 from tests.operators.gpu.test_ms_reduce_min import test_ms_reduce_min
+from tests.operators.gpu.test_ms_conv import test_ms_conv
+from tests.operators.gpu.test_ms_conv_tensorcore import test_ms_conv_tc
 from tests.operators.gpu.test_fused_pad import test_fused_pad
 from tests.operators.gpu.test_fused_bn_reduce import test_fused_bn_reduce
 from tests.operators.gpu.test_fused_bn_update import test_fused_bn_update
@@ -80,83 +82,43 @@ def addn(poly_sch, fuzz_shape=None, mind_trick_str=''):
 
 
 def bmm(poly_sch, fuzz_shape=None, mind_trick_str=''):
+    # Test for FP32 MatMul (Non-TensorCore)
+    test_ms_bmm((768, 768), (768, 768), 'float32', 'float32', layout1='NHDT', layout2='NHDT', layout_out='NHDT',
+                shape_bias=(1, ), add_bias=False, tensor_core=False, poly_sch=poly_sch)
+
+    # Test for FP16 MatMul (Enable TensorCore)
+    test_ms_bmm((768, 768), (768, 768), 'float16', 'float16', layout1='NHDT', layout2='NHTD', layout_out='NHDT',
+                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch,
+                attrs={"dim": "0 0 128 16 0 1 128 16 0 2 32 8", "bind_block": "6 6", "bind_thread": "128 1"})
+    test_ms_bmm((768, 768), (768, 768), 'float16', 'float32', layout1='NHDT', layout2='NHDT', layout_out='NHDT',
+                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch,
+                attrs={"dim": "0 0 128 16 0 1 128 16 0 2 32 8", "bind_block": "6 6", "bind_thread": "128 1"})
+    test_ms_bmm((32, 12, 128, 128), (32, 12, 128, 64), 'float16', 'float32', layout1='NHDT', layout2='NHTD', layout_out='NHDT',
+                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch,
+                attrs={"dim": "0 0 1 1 0 1 64 16 0 2 64 16 0 3 64 8", "bind_block": "1 384", "bind_thread": "128 1"})
     test_ms_bmm((768, 768), (768, 768), 'float16', 'float16', layout1='NHDT', layout2='NHDT', layout_out='NHDT',
-                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch, 
-                dim="0 0 128 128 0 1 128 128 0 2 64 4", bind_block="6 6", bind_thread="32 4")
+                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch,
+                attrs={"dim": "0 0 128 16 0 1 128 16 0 2 64 8", "bind_block": "6 6", "bind_thread": "128 1"})
     test_ms_bmm((768, 768), (768, 768), 'float16', 'float16', layout1='NHTD', layout2='NHTD', layout_out='NHDT',
-                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch, 
-                dim="0 0 128 128 0 1 128 128 0 2 64 4", bind_block="6 6", bind_thread="32 8")
+                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch,
+                attrs={"dim": "0 0 128 32 0 1 128 32 0 2 64 4", "bind_block": "6 6", "bind_thread": "256 1"})
     test_ms_bmm((32, 12, 128, 128), (32, 12, 128, 64), 'float16', 'float16', layout1='NHDT', layout2='NHTD', layout_out='NHDT',
-                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch, 
-                dim="0 0 1 1 0 1 1 1 0 2 64 64 0 3 64 64 0 4 64 4", bind_block="12 32", bind_thread="32 4")
+                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch,
+                attrs={"dim": "0 0 1 1 0 1 64 16 0 2 64 16 0 3 64 8", "bind_block": "1 384", "bind_thread": "128 1"})
     test_ms_bmm((32, 12, 128, 64), (32, 12, 128, 64), 'float16', 'float16', layout1='NHDT', layout2='NHDT', layout_out='NHDT',
-                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch, 
-                dim="0 0 1 1 0 1 1 1 0 2 64 64 0 3 64 64 0 4 64 4", bind_block="12 32", bind_thread="32 4")
-    """ Bert Batch64
-    test_ms_bmm((8192, 768), (768, 768), 'float16', 'float16', layout1='NHDT', layout2='NHDT', layout_out='NHDT',
-                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch, 
-                dim="0 0 128 128 0 1 128 128 0 2 64 4", bind_block="6 64", bind_thread="32 4")
-    test_ms_bmm((8192, 768), (8192, 768), 'float16', 'float16', layout1='NHTD', layout2='NHTD', layout_out='NHDT',
-                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch, 
-                dim="0 0 64 64 0 1 64 64 0 2 64 4", bind_block="12 12", bind_thread="32 4")
-    test_ms_bmm((64, 12, 128, 128), (64, 12, 128, 64), 'float16', 'float16', layout1='NHDT', layout2='NHTD', layout_out='NHDT',
-                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch, 
-                dim="0 0 1 1 0 1 1 1 0 2 64 64 0 3 64 64 0 4 64 4", bind_block="12 64", bind_thread="32 4")
-    test_ms_bmm((64, 12, 128, 64), (64, 12, 128, 64), 'float16', 'float16', layout1='NHDT', layout2='NHDT', layout_out='NHDT',
-                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch, 
-                dim="0 0 1 1 0 1 1 1 0 2 64 64 0 1 128 128 0 2 64 4", bind_block="2 12 64", bind_thread="32 4")
-    test_ms_bmm((8192, 768), (8192, 3072), 'float16', 'float16', layout1='NHTD', layout2='NHTD', layout_out='NHDT',
-                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch, 
-                dim="0 0 128 128 0 1 128 128 0 2 64 4", bind_block="24 6", bind_thread="32 8")
-    test_ms_bmm((8192, 3072), (8192, 768), 'float16', 'float16', layout1='NHTD', layout2='NHTD', layout_out='NHDT',
-                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch, 
-                dim="0 0 128 128 0 1 128 128 0 2 64 4", bind_block="6 24", bind_thread="32 8")
-    test_ms_bmm((8192, 768), (3072, 768), 'float16', 'float16', layout1='NHDT', layout2='NHDT', layout_out='NHDT',
-                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch, 
-                dim="0 0 128 128 0 1 128 128 0 2 64 4", bind_block="24 64", bind_thread="32 4")
-    test_ms_bmm((8192, 3072), (768, 3072), 'float16', 'float16', layout1='NHDT', layout2='NHDT', layout_out='NHDT',
-                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch, 
-                dim="0 0 128 128 0 1 128 128 0 2 64 4", bind_block="6 64", bind_thread="32 8")
-    test_ms_bmm((8192, 3072), (3072, 768), 'float16', 'float16', layout1='NHDT', layout2='NHTD', layout_out='NHDT',
-                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch, 
-                dim="0 0 128 128 0 1 128 128 0 2 64 4", bind_block="6 64", bind_thread="32 8")
-    test_ms_bmm((8192, 768), (768, 3072), 'float16', 'float16', layout1='NHDT', layout2='NHTD', layout_out='NHDT',
-                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch, 
-                dim="0 0 128 128 0 1 128 128 0 2 64 4", bind_block="24 64", bind_thread="32 4")
-    """
-    
-    """ Bert Batch32
-    test_ms_bmm((4096, 768), (768, 768), 'float16', 'float16', layout1='NHDT', layout2='NHDT', layout_out='NHDT',
-                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch, 
-                dim="0 0 128 128 0 1 128 128 0 2 64 4", bind_block="6 32", bind_thread="32 4")
+                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch,
+                attrs={"dim": "0 0 1 1 0 1 64 16 0 2 64 16 0 3 64 8", "bind_block": "1 384", "bind_thread": "128 1"})
+
+    # Auto tiling pass cases for scheme two
+
     test_ms_bmm((32, 12, 128, 128), (32, 12, 128, 64), 'float16', 'float16', layout1='NHDT', layout2='NHTD', layout_out='NHDT',
-                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch, 
-                dim="0 0 1 1 0 1 1 1 0 2 64 64 0 3 64 64 0 4 64 4", bind_block="12 32", bind_thread="32 4")
-    test_ms_bmm((4096, 768), (4096, 768), 'float16', 'float16', layout1='NHTD', layout2='NHTD', layout_out='NHDT',
-                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch, 
-                dim="0 0 128 128 0 1 128 128 0 2 64 4", bind_block="6 6", bind_thread="32 4")
-    test_ms_bmm((32, 12, 128, 64), (32, 12, 128, 64), 'float16', 'float16', layout1='NHDT', layout2='NHDT', layout_out='NHDT',
-                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch, 
-                dim="0 0 1 1 0 1 1 1 0 2 32 32 0 3 64 64 0 4 32 4", bind_block="12 32", bind_thread="32 4")
-    test_ms_bmm((4096, 768), (4096, 3072), 'float16', 'float16', layout1='NHTD', layout2='NHTD', layout_out='NHDT',
-                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch, 
-                dim="0 0 128 128 0 1 128 128 0 2 64 4", bind_block="24 6", bind_thread="32 8")
-    test_ms_bmm((4096, 3072), (768, 3072), 'float16', 'float16', layout1='NHDT', layout2='NHDT', layout_out='NHDT',
-                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch, 
-                dim="0 0 128 128 0 1 128 128 0 2 64 4", bind_block="6 32", bind_thread="32 8")
-    test_ms_bmm((4096, 3072), (4096, 768), 'float16', 'float16', layout1='NHTD', layout2='NHTD', layout_out='NHDT',
-                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch, 
-                dim="0 0 128 128 0 1 128 128 0 2 64 4", bind_block="6 24", bind_thread="32 8")
-    test_ms_bmm((4096, 3072), (3072, 768), 'float16', 'float16', layout1='NHDT', layout2='NHTD', layout_out='NHDT',
-                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch, 
-                dim="0 0 128 128 0 1 128 128 0 2 64 4", bind_block="6 32", bind_thread="32 4")
-    test_ms_bmm((4096, 768), (3072, 768), 'float16', 'float16', layout1='NHDT', layout2='NHDT', layout_out='NHDT',
-                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch, 
-                dim="0 0 128 128 0 1 128 128 0 2 64 4", bind_block="24 32", bind_thread="32 4")
-    test_ms_bmm((4096, 768), (768, 3072), 'float16', 'float16', layout1='NHDT', layout2='NHTD', layout_out='NHDT',
-                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch, 
-                dim="0 0 128 128 0 1 128 128 0 2 64 4", bind_block="24 32", bind_thread="32 4")
-     """
+                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch)
+    test_ms_bmm((256, 128), (64, 128), 'float16', 'float16', layout1='NHDT', layout2='NHDT', layout_out='NHDT',
+                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch)
+    test_ms_bmm((128, 32), (128, 512), 'float16', 'float16', layout1='NHTD', layout2='NHTD', layout_out='NHDT',
+                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch)
+    test_ms_bmm((128, 64), (64, 32), 'float16', 'float16', layout1='NHDT', layout2='NHTD', layout_out='NHDT',
+                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch)
 
 def cast(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_cast((32, 32, 14, 14, 16), "float16", "float32", poly_sch=poly_sch)
@@ -303,6 +265,28 @@ def reduce_sum(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_reduce_sum((9, 1024), 'float16', axis=1,
                        keepdims=True, poly_sch=poly_sch)
 
+
+def conv(poly_sch, fuzz_shape=None, mind_trick_str=''):
+    test_ms_conv((32, 64, 56, 56), (64, 64, 3, 3), (1, 1),
+                 (1, 1, 1, 1), (1, 1), "float32", "float32")
+
+
+def conv_tc(poly_sch, fuzz_shape=None, mind_trick_str=''):
+    test_ms_conv_tc((16, 4, 4, 16), (16, 3, 3, 16), (1, 1), (0, 0, 0, 0), (1, 1), "float16", "float32",
+                    attrs={"dim": "0 0 16 16 0 1 1 1 0 2 1 1 0 3 16 16 0 4 16 8",
+                           "bind_block": "1 4 1", "bind_thread": "32 1"})
+
+    test_ms_conv_tc((16, 16, 16, 16), (16, 3, 3, 16), (1, 1), (0, 0, 0, 0), (1, 1), "float16", "float32",
+                    attrs={"dim": "0 0 16 16 0 1 2 1 0 2 2 1 0 3 16 16 0 4 16 8",
+                           "bind_block": "1 1 1", "bind_thread": "32 1"})
+
+    test_ms_conv_tc((64, 6, 6, 64), (64, 3, 3, 64), (1, 1), (0, 0, 0, 0), (1, 1), "float16", "float32",
+                    attrs={"dim": "0 0 32 16 0 1 2 1 0 2 2 1 0 3 32 16 0 4 32 8",
+                           "bind_block": "2 4 2", "bind_thread": "32 4"})
+
+    test_ms_conv_tc((64, 6, 6, 64), (64, 3, 3, 64), (1, 1), (0, 0, 0, 0), (1, 1), "float16", "float32",
+                    attrs={"dim": "0 0 32 16 0 1 1 1 0 2 1 1 0 3 32 16 0 4 32 8",
+                           "bind_block": "2 16 2", "bind_thread": "32 4"})
 
 def select(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_select((2, ), (2, 2, 2),  "int8", "float16", poly_sch=poly_sch)
@@ -466,6 +450,7 @@ if __name__ == '__main__':
               "sub": sub, "reduce_max": reduce_max, "reduce_min": reduce_min,
               "reduce_sum": reduce_sum, "expand_dims": expand_dims, "one_hot": one_hot,
               "reshape": reshape, "tile": tile, "trans_data": trans_data,
+              "conv": conv, "conv_tc": conv_tc,
               "fused_pad": fused_pad,
               "fused_bn_reduce": fused_bn_reduce,
               "fused_bn_update": fused_bn_update,

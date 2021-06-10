@@ -225,3 +225,43 @@ def trans_data(inputs, attrs):
     else:
         raise ValueError("TransData for src_format %s and dst_format %s is not supported"
                          % (src_format, dst_format))
+
+@tvm.register_func("Conv2D")
+def conv2d_nhwc(inputs, attrs):
+    attrs = {k: v for k, v in attrs.items()}
+    # Check inputs and attrs
+    if len(inputs) != 2:
+        raise ValueError("length of inputs shoule be 2, but got %d." % len(inputs))
+    if "stride" not in attrs:
+        raise ValueError("stride not be found in the attrs")
+    data = inputs[0]
+    weight = inputs[1]
+    output_name = "T_conv2d_nhwc_" + data.op.name + "_" + weight.op.name
+    stride = attrs["stride"]
+    data_dtype = data.dtype
+    weight_dtype = weight.dtype
+    # Check data type
+    vc_util.ops_dtype_check(data_dtype, vc_util.DtypeForDavinci.FLOAT16)
+    vc_util.ops_dtype_check(weight_dtype, vc_util.DtypeForDavinci.FLOAT16)
+    # Check shape
+    if len(data.shape) != 4 or len(weight.shape) != 4:
+        raise ValueError("shape of data and weight should be 4-dim, but got %d and %d." % (len(data.shape),
+            len(weight.shape)))
+    # Compute output
+    n, in_h, in_w, in_c = data.shape
+    out_c, k_h, k_w, in_c = weight.shape
+    _, _, s_h, s_w = stride
+    o_h = (in_h - k_h) // s_h + 1
+    o_w =(in_w - k_w) // s_w + 1
+    rc = tvm.reduce_axis((0, in_c), name="rc")
+    rh = tvm.reduce_axis((0, k_h), name="rh")
+    rw = tvm.reduce_axis((0, k_w), name="rw")
+    output = tvm.compute(
+        (n, o_h, o_w, out_c),
+        lambda n, h, w, o: tvm.sum(
+            data[n, (h * s_h + rh), (w * s_w + rw), rc]
+            * weight[o, rh, rw, rc],
+            axis=[rc, rh, rw]),
+        name=output_name
+    )
+    return output

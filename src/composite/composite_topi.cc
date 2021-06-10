@@ -607,7 +607,7 @@ TVM_REGISTER_GLOBAL("BroadcastTo").set_body([](TVMArgs args, TVMRetValue *rv) {
   }
 });
 
-TVM_REGISTER_GLOBAL("cuda_BatchMatMul").set_body([](TVMArgs args, TVMRetValue *rv) {
+TVM_REGISTER_GLOBAL("CudaBatchMatMul").set_body([](TVMArgs args, TVMRetValue *rv) {
   CHECK_GE(args.size(), 2);
   auto inputs = args[0].operator Array<NodeRef>();
   auto attrs = args[1].operator OpAttr();
@@ -618,6 +618,8 @@ TVM_REGISTER_GLOBAL("cuda_BatchMatMul").set_body([](TVMArgs args, TVMRetValue *r
   auto right_matrix = Downcast<Tensor>(inputs[1]);
   CHECK(attrs.count("transpose_a"));
   CHECK(attrs.count("transpose_b"));
+  CHECK(attrs.count("dst_type"));
+  auto dst_type = GetString(attrs["dst_type"]);
   bool transpose_a = static_cast<bool>(ir::GetInt32Const(Downcast<Expr>(attrs["transpose_a"])));
   bool transpose_b = static_cast<bool>(ir::GetInt32Const(Downcast<Expr>(attrs["transpose_b"])));
   auto left_shape = left_matrix->shape;
@@ -625,8 +627,8 @@ TVM_REGISTER_GLOBAL("cuda_BatchMatMul").set_body([](TVMArgs args, TVMRetValue *r
   CHECK_EQ(left_shape.size(), right_shape.size());
 
   auto type_checker = [](const Tensor &input_data, const std::string name) {
-    if (input_data->dtype != Float(16) && input_data->dtype != Float(32)) {
-      LOG(FATAL) << "dtype of " << name << " should be float16 or float32";
+    if (input_data->dtype != Float(16)) {
+      LOG(FATAL) << "dtype of input tensor " << name << " should be float16";
     }
   };
 
@@ -655,7 +657,7 @@ TVM_REGISTER_GLOBAL("cuda_BatchMatMul").set_body([](TVMArgs args, TVMRetValue *r
   size_t batch_dim = 0;
   IterVar reduce_k;
   auto fcompute = [&left_matrix, &right_matrix, &transpose_a, &transpose_b, &reduce_k,
-                   &batch_dim](const Array<Var> &indices) {
+                   &batch_dim, &dst_type](const Array<Var> &indices) {
     Array<Expr> left_indice;
     Array<Expr> right_indice;
     for (size_t i = 0; i < batch_dim; ++i) {
@@ -684,6 +686,11 @@ TVM_REGISTER_GLOBAL("cuda_BatchMatMul").set_body([](TVMArgs args, TVMRetValue *r
     Expr right_buffer = Call::make(right_matrix->dtype, right_matrix->op->name, right_indice, Call::CallType::Halide,
                                    right_matrix->op, right_matrix->value_index);
 
+    if (dst_type == "float32") {
+      left_buffer = Cast::make(Float(32), left_buffer);
+      right_buffer = Cast::make(Float(32), right_buffer);
+    }
+
     auto matrix_mul = Mul::make(left_buffer, right_buffer);
     Array<IterVar> reduces;
     reduces.push_back(reduce_k);
@@ -701,7 +708,7 @@ TVM_REGISTER_GLOBAL("cuda_BatchMatMul").set_body([](TVMArgs args, TVMRetValue *r
 });
 
 // only support fractal_zN: [ko mo mi ki] * [no ko ki ni] = [no mo mi ni]
-TVM_REGISTER_GLOBAL("aicore_BatchMatMul").set_body([](TVMArgs args, TVMRetValue *rv) {
+TVM_REGISTER_GLOBAL("AicoreBatchMatMul").set_body([](TVMArgs args, TVMRetValue *rv) {
   CHECK_GE(args.size(), 2);
   auto attrs = args[1].operator OpAttr();
   CHECK(attrs.count("transpose_a"));

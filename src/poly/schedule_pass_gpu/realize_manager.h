@@ -25,7 +25,9 @@ namespace poly {
 
 class RealizeManager : public SchedulePass {
  public:
-  explicit RealizeManager() { pass_name_ = __FUNCTION__; }
+  explicit RealizeManager(PassInfo &pass_info, ScopInfo &scop_info) : pass_info_(pass_info), scop_info_(scop_info) {
+    pass_name_ = __FUNCTION__;
+  };
   ~RealizeManager() {}
 
   virtual isl::schedule Run(isl::schedule sch);
@@ -33,6 +35,8 @@ class RealizeManager : public SchedulePass {
   isl::schedule_node InsertRealize(const isl::schedule_node &root);
 
  private:
+  PassInfo &pass_info_;
+  ScopInfo &scop_info_;
   std::set<std::string> names_set_{};
 
   isl::id GetRealizeId(const isl::schedule_node &node, std::string tensor_name) const;

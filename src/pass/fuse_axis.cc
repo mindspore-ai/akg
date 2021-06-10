@@ -23,6 +23,7 @@
 #include <tvm.h>
 #include <ir_pass.h>
 #include <pass/ir_util.h>
+#include <pass/utils.h>
 
 namespace akg {
 namespace ir {
@@ -59,13 +60,6 @@ namespace ir {
 
 using VarPair = std::pair<const Variable *, const Variable *>;
 using IterVarPair = std::pair<const IterVarNode *, const IterVarNode *>;
-
-struct PairHash {
-  template <typename T>
-  size_t operator()(const std::pair<T, T> &a) const {
-    return dmlc::HashCombine(std::hash<T>()(a.first), std::hash<T>()(a.second));
-  }
-};
 
 struct ArrayIterVarHash {
   size_t operator()(const Array<IterVar> &arr) const {

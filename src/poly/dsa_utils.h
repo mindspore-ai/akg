@@ -75,7 +75,7 @@ extern const char *const PRAGMA_MMU_C1WRITE;
 extern const char *const K_C1;
 extern const char *const PRAGMA_GEMM_C0;
 
-enum MemType { DDR = 1, C1_, BUF_, C0A_, C0B_, C0C_, BUF_C0_, BUF_C1_, SHARED_, LOCAL_ };
+enum MemType { DDR = 1, C1_, BUF_, C0A_, C0B_, C0C_, BUF_C0_, BUF_C1_, SHARED_, LOCAL_, DDR_LOCAL_ };
 using DataFlowAttrs = std::vector<std::pair<MemType, std::string>>;
 
 extern const DataFlowAttrs Mmu_Conv_A;

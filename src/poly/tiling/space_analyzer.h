@@ -90,6 +90,7 @@ class SpaceAnalyzer {
   void SetAttrForTensor(const std::string &tensor_name, int pos, const std::string &attr_key,
                         const std::string &attr_value);
   std::string ParseAllTypeExpr(const Expr constraint);
+  std::string ParseArrayExpr(const Array<Expr> constraint);
 };
 }  // namespace poly
 }  // namespace ir

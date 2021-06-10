@@ -30,6 +30,10 @@
  * 2021.01.13 - Add mark of TensorCore, data access vectorization.
  */
 
+/*
+ * 2021.05.27 - Add intrinsic var for GEMM op fusion on TensorCore.
+ */
+
 #ifndef TVM_IR_H_
 #define TVM_IR_H_
 
@@ -1637,6 +1641,21 @@ constexpr const char* tvm_fill_fragment = "tvm_fill_fragment";
  *  }
  */
 constexpr const char* tvm_store_matrix_sync = "tvm_store_matrix_sync";
+
+/*!
+ * \brief akg intrinsic for tensor core fragment operator fusion.
+ *
+ *  void akg_fragment_elem(Var fragment_c, Expr index_c,
+ *                    Var fragment_a, Expr index_a,
+ *                    Var fragment_b, Expr index_b,
+ *                    Expr op_name) {
+ *    akg::wmma::fragment_add / fragment_sub / fragment_mul / fragment_div(
+ *                           fragment_c[index_c], fragment_a[index_a],
+ *                           fragment_b[index_b]);
+ *  }
+ */
+constexpr const char* akg_fragment_elem = "akg_fragment_elem";
+
 constexpr const char* tvm_cce_string_print = "tvm_cce_string_print";
 
 }   // namespace intrinsic

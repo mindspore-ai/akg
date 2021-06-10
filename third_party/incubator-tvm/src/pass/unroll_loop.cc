@@ -62,6 +62,9 @@ class LoopUnroller : public IRMutator {
     } else if (op->attr_key == attr::promote_vectorization) {
       enable_vectorize_ = true;
       return IRMutator::Mutate_(op, stmt);
+    } else if (op->attr_key == "no_unroll") {
+      no_unroll_ = true;
+      return IRMutator::Mutate_(op, stmt);
     } else if (op->attr_key == "pragma_auto_unroll_max_step") {
       int value = 0;
       CHECK(arith::GetConstInt(op->value, &value));
@@ -89,6 +92,12 @@ class LoopUnroller : public IRMutator {
       op = stmt.as<For>();
       return For::make(op->loop_var, op->min, op->extent, ForType::Vectorized, op->device_api, op->body);
     }
+
+    if (no_unroll_) {
+      no_unroll_ = false;
+      return IRMutator::Mutate_(op, s);
+    }
+
     Stmt stmt = IRMutator::Mutate_(op, s);
     op = stmt.as<For>();
     int value = GetExtent(op);
@@ -215,6 +224,7 @@ class LoopUnroller : public IRMutator {
   int step_count_{0};
   // Flag for enable vectorization
   bool enable_vectorize_{false};
+  bool no_unroll_{false};
 };
 
 

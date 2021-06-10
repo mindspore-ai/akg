@@ -26,6 +26,7 @@ namespace akg {
 namespace ir {
 namespace poly {
 enum class ReferenceType : int16_t { Read, Write };
+constexpr auto SYNC_NUMBER_BEFORE_GMWRITE = 3;
 
 struct ScopedFootprint {
   size_t GetBoxDim() const { return box.get_size().size(); }

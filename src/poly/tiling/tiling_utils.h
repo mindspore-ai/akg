@@ -141,8 +141,11 @@ using Band = std::vector<const air::ir::For *>;
 using VarNames = std::vector<std::string>;
 
 std::unordered_map<std::string, std::string> ExtractLoopIndicesFromMatrices(std::vector<VarNames> var_names_list);
+std::unordered_map<std::string, std::string> ExtractLoopIndicesFromMatricesConv(std::vector<VarNames> var_names_list);
 
 VarNames VisitVarNames(const air::Expr &arg, VarNames var_names, bool add_num = true);
+
+bool IsNum(const std::string &name);
 
 /* Data format definition */
 const VarNames DsaNCHW = {"N", "C", "H", "W", "C0"};
@@ -160,6 +163,10 @@ const VarNames FormatM = {"mi", "mo"};
 const VarNames FormatN = {"ni", "no"};
 const VarNames FormatK = {"ki", "ko"};
 const VarNames FormatB = {"bi", "bo"};
+
+const VarNames ConvFormatM = {"wi", "hi", "mi"};
+const VarNames ConvFormatN = {"oc"};
+const VarNames ConvFormatK = {"ic", "kw", "kh"};
 
 }  // namespace poly
 }  // namespace ir

@@ -55,12 +55,23 @@
  */
 
 /*
+ * 2021.3.22
+ *   Refactor the function Simplify_name.
+ */
+ 
+/*
  * 2021.5.17
  *   Modify the functions:
  *     add KaHan interface processing logic in VisitExpr_(const Call *op, std::ostream& os)
  *     for the reduce sum operator
  */
 
+/*
+ * 2021.5.27
+ *   Add function for GEMM op fusion on TensorCore.
+ */
+
+#include "codegen_cuda.h"
 
 #include <tvm/base.h>
 #include <tvm/runtime/registry.h>
@@ -68,6 +79,7 @@
 #include <cmath>
 #include <vector>
 #include <string>
+#include "common/common_util.h"
 #include <tvm/ir_pass.h>
 #include "literal/cuda_half_t.h"
 #include "codegen_cuda.h"
@@ -81,14 +93,6 @@ namespace codegen {
 
 CodeGenCUDA::CodeGenCUDA() {
   restrict_keyword_ = "__restrict__";
-}
-
-std::string CodeGenCUDA::Simplify_name(std::string input) {
-  auto pos = input.find("_local");
-  if (pos != std::string::npos) {
-    return input.substr(0, pos);
-  }
-  return input;
 }
 
 void CodeGenCUDA::Init(bool output_ssa) {
@@ -155,7 +159,7 @@ std::string CodeGenCUDA::Finish() {
 
   if (need_mma_h_) {
     if (wmma_scope == "akg") {
-      decl_stream << "#include \"akg_mma_lib/m16n16k4.hpp\"\n";
+      decl_stream << "#include \"akg_mma_lib/wmma.hpp\"\n";
     } else{
       decl_stream << "#include <mma.h>\n";
     }
@@ -455,7 +459,7 @@ void CodeGenCUDA::VisitExpr_(const Call *op, std::ostream& os) {
     Expr new_args = op->args[4];
     Expr warp_tile;
     auto var_node = op->args[0].as<Variable>();
-    auto it_matrix = matrix_abc.find(Simplify_name(var_node->name_hint));
+    auto it_matrix = matrix_abc.find(akg::common::GetGlobalName(var_node->name_hint));
     if (it_matrix != matrix_abc.end()) {
       if (it_matrix->second == "matrix_a") {
         if (op->args[7].as<StringImm>()->value == "row_major") {
@@ -468,6 +472,12 @@ void CodeGenCUDA::VisitExpr_(const Call *op, std::ostream& os) {
           warp_tile = warp_tile_k;
         } else {
           warp_tile = warp_tile_n;
+        }
+      } else if (it_matrix->second == "accumulator") {
+        if (op->args[7].as<StringImm>()->value == "row_major") {
+          warp_tile = warp_tile_n;
+        } else {
+          LOG(FATAL) << "Not support matrix to load fragment accumulator!"; 
         }
       } else {
         LOG(FATAL) << "Not support matrix to load !"; 
@@ -486,6 +496,9 @@ void CodeGenCUDA::VisitExpr_(const Call *op, std::ostream& os) {
     this->PrintExpr(op->args[5], os);
     os << ", ";
     this->PrintExpr(op->args[6], os);
+    if (it_matrix != matrix_abc.end() && it_matrix->second == "accumulator") {
+      os << ", nvcuda::wmma::mem_row_major";
+    }
     os << ")";
   } else if (op->is_intrinsic(intrinsic::tvm_store_matrix_sync)) {
     need_mma_h_ = true;
@@ -537,6 +550,25 @@ void CodeGenCUDA::VisitExpr_(const Call *op, std::ostream& os) {
         this->PrintExpr(new_args, os);
       }
       os << "]" << ((i < 3) ? ", ": ")");
+    }
+  } else if (op->is_intrinsic(intrinsic::akg_fragment_elem)) {
+    need_mma_h_ = true;
+    os << wmma_scope << "::wmma::fragment_" << op->args[op->args.size() - 1].as<StringImm>()->value << "(";
+    if (op->args.size() == 7) {
+      for (int i = 0; i < 3; ++i) {
+        this->PrintExpr(op->args[i * 2], os);
+        os << "[";
+        this->PrintExpr(op->args[i * 2 + 1], os);
+        os << "]" << ((i < 2) ? ", " : ")");
+      }
+    } else if (op->args.size() == 6) {
+      for (int i = 0; i < 2; ++i) {
+        this->PrintExpr(op->args[i * 2], os);
+        os << "[";
+        this->PrintExpr(op->args[i * 2 + 1], os);
+        os << "]" << ((i < 1) ? ", " : "");
+      }
+      os << ", " << op->args[4] << ")";
     }
   } else if ((op->call_type == Call::Extern) || (op->call_type == Call::PureExtern)) {
     if (op->name == "&") {
@@ -796,7 +828,7 @@ void CodeGenCUDA::VisitStmt_(const Allocate* op) {
       if (pos != std::string::npos) {
         matrix_scope = matrix_scope.substr(pos + 1);
       }
-      matrix_abc.insert(std::make_pair(Simplify_name(vid), matrix_scope));
+      matrix_abc.insert(std::make_pair(akg::common::GetGlobalName(vid), matrix_scope));
       if (scope == "wmma.matrix_a" || scope == "wmma.matrix_b") {
         CHECK(op->type == Float(16) || op->type == Int(8) || op->type == UInt(8))
           << "Matrix_a and matrix_b only support half or char or unsigned char type for now";

@@ -18,6 +18,7 @@
 #define SHARED_MEMORY_MANAGER_H_
 
 #include "poly/schedule_pass.h"
+#include "common/common_util.h"
 
 namespace akg {
 namespace ir {
@@ -32,9 +33,6 @@ class SharedMemoryManager : public SchedulePass {
  public:
   explicit SharedMemoryManager(ScopInfo &scop_info) : scop_info_(scop_info) {
     pass_name_ = __FUNCTION__;
-    // use 48KB in current GPU
-    share_memory_size_ = 49152;
-    tensor_core_share_memory_size_ = 61440;
     if (!scop_info.user_config_.GetSharedTensors().empty()) {
       configed_tensors_ = Split(scop_info.user_config_.GetSharedTensors(), " ");
     }
@@ -45,8 +43,6 @@ class SharedMemoryManager : public SchedulePass {
   virtual isl::schedule Run(isl::schedule sch);
 
   isl::schedule_node HoistSharedMemoryOnDepth(const isl::schedule_node &root, size_t &remain_memory, size_t depth);
-
-  isl::union_set GatherMappingsTo(MappingCfg *cfg);
 
   isl::schedule_node MapCopiesToThreads(isl::schedule_node &root, bool unroll);
 
@@ -64,8 +60,6 @@ class SharedMemoryManager : public SchedulePass {
 
   isl::schedule_node HoistToBlockThreadMemory(isl::schedule_node &tree, GpuMemType type, const isl::id &tensor_id,
                                               TensorFootprintCluster &cluster, bool force_last_extension_odd);
-
-  bool ReuseTensorCluster(const TensorFootprintCluster &cluster, const isl::multi_union_pw_aff &outer_pw_aff);
 
   bool CoalescingAccessWay(const isl::schedule_node &root, const isl::schedule_node &node,
                            const TensorFootprintCluster &cluster);
@@ -86,24 +80,18 @@ class SharedMemoryManager : public SchedulePass {
   std::set<std::string> AnalysisReduceTensors();
 
   size_t Bytes(const isl::id tensor_id);
-  isl::schedule_node CollectMarkNode(isl::schedule_node root, const std::string mark);
 
   isl::schedule_node HoistSharedMemoryOnMark(const isl::schedule_node &root, size_t &remain_memory, size_t depth);
 
  private:
   ScopInfo &scop_info_;
   isl::schedule schedule_;
-  size_t share_memory_size_;
-  size_t tensor_core_share_memory_size_;
   int depth_{1};
   bool use_config_{false};
   std::vector<std::string> configed_tensors_;
   bool unroll_copies_;
   bool bank_conflict_{false};
   bool hoist_tensor_c_ = true;
-  std::string tensor_c_;
-  std::string tensor_a_;
-  std::string tensor_b_;
   bool shared_inversed_thread_map_{false};
   int shared_vector_align_{0};
 };

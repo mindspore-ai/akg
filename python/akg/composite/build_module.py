@@ -26,6 +26,17 @@ from akg.topi.cuda.injective_single_kernel import schedule_injective
 import topi
 from akg.global_configs import get_dump_ir_flag
 
+def should_enable_tensor_core(kernel_info):
+    for op in kernel_info["op_desc"]:
+        if op['name'] in ["MatMul", "Conv2D"]:
+            return True
+    return False
+
+def should_enable_conv_tensor_core(kernel_info):
+    for op in kernel_info["op_desc"]:
+        if op["name"] == "Conv2D":
+            return True
+    return False
 
 def should_enable_atomic_add(kernel_info):
     for op in kernel_info["op_desc"]:
@@ -824,6 +835,12 @@ def _build(desc_s, desc_d, attrs=None, poly=True, use_repo=True):
     if backend == 'cuda':
         if poly:
             attrs["enable_akg_reduce_lib"] = True
+            if "pragma_enable_matmul" not in attrs.keys():
+                attrs['pragma_enable_matmul'] = should_enable_tensor_core(desc_d)
+                attrs['enable_auto_inline'] = (not should_enable_tensor_core(desc_d))
+            if "pragma_enable_conv_tensor_core" not in attrs.keys():
+                attrs["pragma_enable_conv_tensor_core"] = should_enable_conv_tensor_core(desc_d)
+                attrs["enable_auto_fuse"] = (not should_enable_conv_tensor_core(desc_d))
         return _build_to_module_gpu(desc_s, desc_d, attrs, poly)
     else:
         return _build_to_module(desc_s, desc_d, attrs, use_repo)
