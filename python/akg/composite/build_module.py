@@ -636,41 +636,54 @@ def _build_to_module(desc_s_in, desc_d_in, attr=None, use_repo=True):
             if not repo:
                 return default
         return repo
-    if attr is None:
-        attr = {'dim': ''}
-    desc_d = desc_d_in
-    desc_s = desc_s_in
-    attr["pragma_rmselfdep"] = _pragma_rmselfdep(desc_d)
-    attr["enable_auto_inline"] = _enable_auto_inline(desc_d)
-    if use_repo:
-        compute, shape, dtype = generate_trait(desc_d)
-        repo_attr = get_repo([compute, shape, dtype, 'metadata', 'attrs'], repository, {})
-        if not repo_attr:
-            matmul_desc = get_matmul_desc(desc_d)
-            if matmul_desc != None:
-                input_shape_str = get_input_shape_str(matmul_desc)
-                repo_attr = get_vague_repo("MatMul", input_shape_str, repository, {})
-                print("use fuzzy attr: " ,repo_attr)
-            else:
-                repo_attr = get_repo([compute, 'metadata', 'attrs'], repository, {})
-        for a in repo_attr:
-            if not attr.get(a):
-                attr[a] = repo_attr[a]
-        if attr.get('dim') in (None, ''):
-            tiling = get_repo([compute, shape, dtype, 'dim'], repository)
-            if tiling:
-                attr['dim'] = tiling
-            elif 'online_tuning' in attr:
-                from akg.auto_tune.composite_tuner import tune_composite
-                best_config = tune_composite(desc_s_in,
-                                             tune_level=attr["online_tuning"],
-                                             repo_path=_get_repository_file_path("repository.json"),
-                                             skip_exist=True)
-                attr.update(best_config)
-        desc_d, desc_s = _set_compute_attrs(desc_d, attr)
 
-    if 'parallel_fusion' in desc_d or 'buffer_stitch' in desc_d:
-        return _build_json_list_to_module(desc_d, attr, True, 'cce')
+    def update_attr(desc_s, desc_d, attr, support_online_tuning=True):
+        if attr is None:
+            attr = {'dim': ''}
+        attr["pragma_reschedule"] = 1
+        attr["pragma_rmselfdep"] = _pragma_rmselfdep(desc_d)
+        attr["enable_auto_inline"] = _enable_auto_inline(desc_d)
+        if use_repo:
+            compute, shape, dtype = generate_trait(desc_d)
+            repo_attr = get_repo([compute, shape, dtype, 'metadata', 'attrs'], repository, {})
+            if not repo_attr:
+                matmul_desc = get_matmul_desc(desc_d)
+                if matmul_desc != None:
+                    input_shape_str = get_input_shape_str(matmul_desc)
+                    repo_attr = get_vague_repo("MatMul", input_shape_str, repository, {})
+                    print("use fuzzy attr: " ,repo_attr)
+                else:
+                    repo_attr = get_repo([compute, 'metadata', 'attrs'], repository, {})
+            for a in repo_attr:
+                if not attr.get(a):
+                    attr[a] = repo_attr[a]
+            if attr.get('dim') in (None, ''):
+                tiling = get_repo([compute, shape, dtype, 'dim'], repository)
+                if tiling:
+                    attr['dim'] = tiling
+                elif support_online_tuning and 'online_tuning' in attr:
+                    from akg.auto_tune.composite_tuner import tune_composite
+                    best_config = tune_composite(desc_s_in,
+                                                tune_level=attr["online_tuning"],
+                                                repo_path=_get_repository_file_path("repository.json"),
+                                                skip_exist=True)
+                    attr.update(best_config)
+            _, desc_s = _set_compute_attrs(desc_d, attr)
+        return desc_s, attr
+
+    if 'parallel_fusion' in desc_d_in or 'buffer_stitch' in desc_d_in:
+        block_jsons, input_tensor_name, output_tensor_name, attrs_list, alloc_map_list, reuse_map_list, \
+            clean_op_map_list = _json_need_split(desc_d_in, attr, True, "cce")
+        if 'parallel_fusion' in desc_d_in:
+            for i, [cur_json, cur_attr] in enumerate(zip(block_jsons, attrs_list)):
+                block_jsons[i], attrs_list[i] = update_attr(cur_json, json.loads(cur_json), cur_attr, False)
+        else:
+            desc_s, attr = update_attr(desc_s_in, desc_d_in, attr)
+        func = tvm.get_global_func("composite_with_json_list")
+        return func(block_jsons, input_tensor_name, output_tensor_name, alloc_map_list, reuse_map_list, \
+                    clean_op_map_list, attrs_list, True, "cce")
+
+    desc_s, attr = update_attr(desc_s_in, desc_d_in, attr)
     func = tvm.get_global_func("composite_with_json")
     return func(desc_s, attr, True)
 
@@ -779,13 +792,6 @@ def _json_need_split(desc_d, attrs, poly, target):
         clean_op_map_list.append(clean_op_map)
     return block_jsons, input_tensor_name, output_tensor_name, attrs_list, alloc_map_list, reuse_map_list, clean_op_map_list
 
-def _build_json_list_to_module(desc_d, attrs, poly, target):
-    func = tvm.get_global_func("composite_with_json_list")
-    block_jsons, input_tensor_name, output_tensor_name, attrs_list, alloc_map_list, reuse_map_list, \
-    clean_op_map_list = _json_need_split(desc_d, attrs, poly, target)
-    return func(block_jsons, input_tensor_name, output_tensor_name, alloc_map_list, reuse_map_list, \
-                clean_op_map_list, attrs_list, poly, target)
-
 def _build_to_module_gpu(desc_s, desc_d, attrs=None, poly=False):
     """
     build kernel with compute description in json format
@@ -811,29 +817,44 @@ def _build_to_module_gpu(desc_s, desc_d, attrs=None, poly=False):
             if not repo:
                 return default
         return repo
-    if attrs is None:
-        attrs = {'dim': ''}
-    compute, shape, dtype = generate_trait(desc_d)
-    batchmatmul = _is_batchmatmul(desc_d)
-    if batchmatmul:
-        shape = "any_shape"
-    repo_attr = get_repo([compute, shape, dtype, 'metadata', 'attrs'], {})
-    if repo_attr and batchmatmul:
-        repo_attr = _set_tiling_attrs(desc_d['output_desc'][0]['shape'], repo_attr)
-    if not repo_attr:
-        repo_attr = get_repo([compute, 'metadata', 'attrs'], {})
-    for a in repo_attr:
-        if not attrs.get(a):
-            attrs[a] = repo_attr[a]
-    attr_list = ['dim', 'bind_block', 'bind_thread']
-    for item in attr_list:
-        if attrs.get(item) in (None, ''):
-            value = get_repo([compute, shape, dtype, item])
-            if value:
-                attrs[item] = value
+
+    def update_attr(desc_d, attrs):
+        if attrs is None:
+            attrs = {'dim': ''}
+        compute, shape, dtype = generate_trait(desc_d)
+        batchmatmul = _is_batchmatmul(desc_d)
+        if batchmatmul:
+            shape = "any_shape"
+        repo_attr = get_repo([compute, shape, dtype, 'metadata', 'attrs'], {})
+        if repo_attr and batchmatmul:
+            repo_attr = _set_tiling_attrs(desc_d['output_desc'][0]['shape'], repo_attr)
+        if not repo_attr:
+            repo_attr = get_repo([compute, 'metadata', 'attrs'], {})
+        for a in repo_attr:
+            if not attrs.get(a):
+                attrs[a] = repo_attr[a]
+        attr_list = ['dim', 'bind_block', 'bind_thread']
+        for item in attr_list:
+            if attrs.get(item) in (None, ''):
+                value = get_repo([compute, shape, dtype, item])
+                if value:
+                    attrs[item] = value
+        return desc_d, attrs
 
     if 'parallel_fusion' in desc_d or 'buffer_stitch' in desc_d:
-        return _build_json_list_to_module(desc_d, attrs, poly, 'cuda')
+        block_jsons, input_tensor_name, output_tensor_name, attrs_list, alloc_map_list, reuse_map_list, \
+            clean_op_map_list = _json_need_split(desc_d, attrs, poly, 'cuda')
+        if 'parallel_fusion' in desc_d:
+            for i, [cur_json, cur_attr] in enumerate(zip(block_jsons, attrs_list)):
+                cur_desc_d, attrs_list[i] = update_attr(json.loads(cur_json), cur_attr)
+                block_jsons[i] = json.dumps(cur_desc_d)
+        else:
+            desc_d, attrs = update_attr(desc_d, attrs)
+        func = tvm.get_global_func("composite_with_json_list")
+        return func(block_jsons, input_tensor_name, output_tensor_name, alloc_map_list, reuse_map_list, \
+                    clean_op_map_list, attrs_list, poly, "cuda")
+
+    desc_d, attrs = update_attr(desc_d, attrs)
     attrs = _update_attrs_gpu(desc_d, attrs, poly)
     func = tvm.get_global_func("composite_with_json")
     return func(desc_s, attrs, poly)

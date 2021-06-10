@@ -15,13 +15,15 @@
  */
 #ifndef AKG_SRC_COMPOSITE_BLOCK_FUSION_H_
 #define AKG_SRC_COMPOSITE_BLOCK_FUSION_H_
+#include <string>
 #include <vector>
 #include "ir_pass.h"
 
 namespace akg {
 namespace ir {
-std::vector<Stmt> PipelineFusion(const std::vector<Stmt> &stmts, const Array<Array<NodeRef>> &pipeline_groups);
-Stmt BlockFusion(const std::vector<Stmt> &stmts);
+std::vector<Stmt> PipelineFusion(const std::vector<Stmt> &stmts, const Array<Array<NodeRef>> &pipeline_groups,
+                                 const std::string &target);
+Stmt BlockFusion(const std::vector<Stmt> &stmts, const std::string &target);
 }  // namespace ir
 }  // namespace akg
 #endif  // AKG_SRC_COMPOSITE_BLOCK_FUSION_H_
