@@ -1115,8 +1115,7 @@ void GpuStrategy::InjectiveSpeedup() {
       auto thread_loop = std::max<int>(1, tile_size / thread_size);
       tile_size = std::min(shape, thread_loop * lower);
       axis->TileRestrainToSingleValue(tile_size, TileLevel::CACHE1);
-
-      axis->block_constraints.map_extent_ = shape / tile_size;
+      axis->block_constraints.map_extent_ = ceil(static_cast<float>(shape) / tile_size);
     }
   }
   WriteConfigBack();
