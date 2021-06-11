@@ -1095,11 +1095,22 @@ StmtIdHashMap ScopInfo::StmtCopyinMap() {
   StmtIdHashMap stmt_copyin_map;
   isl::union_map copyin_stmt = analysis_result_.GetCopyin().domain_factor_domain();
   for (auto stmt : copyin_stmt.get_map_list()) {
-    auto stmtId = stmt.domain().get_tuple_id();
+    auto stmt_id = stmt.domain().get_tuple_id();
     auto read_tensor = stmt.get_tuple_id(isl_dim_out);
-    stmt_copyin_map[stmtId].push_back(read_tensor);
+    stmt_copyin_map[stmt_id].push_back(read_tensor);
   }
   return stmt_copyin_map;
+}
+
+StmtIdHashMap ScopInfo::StmtBindCopyinMap() {
+  StmtIdHashMap stmt_bind_copyin_map;
+  isl::union_map bind_copyin_stmt = analysis_result_.GetBindCopyin().domain_factor_domain();
+  for (auto stmt : bind_copyin_stmt.get_map_list()) {
+    auto stmt_id = stmt.domain().get_tuple_id();
+    auto read_tensor = stmt.get_tuple_id(isl_dim_out);
+    stmt_bind_copyin_map[stmt_id].push_back(read_tensor);
+  }
+  return stmt_bind_copyin_map;
 }
 
 bool ScopInfo::IsCopyinTensor(const std::string &tensor_name) {
@@ -1108,6 +1119,16 @@ bool ScopInfo::IsCopyinTensor(const std::string &tensor_name) {
   for (const auto &item : copyin_map) {
     for (const auto &tensor : item.second) {
       if (tensor.get_name() == tensor_name) return true;
+    }
+  }
+  return false;
+}
+
+bool ScopInfo::IsFunctionalCopyin(const std::string tensor_name, const StmtIdHashMap &func_map) {
+  CHECK_NE(tensor_name, "");
+  for (const auto &item : func_map) {
+    for (const auto &tensor : item.second) {
+      if (tensor.name() == tensor_name) return true;
     }
   }
   return false;
@@ -1430,6 +1451,20 @@ isl::union_map AnalysisResult::GetReduceWriteStmt(const isl::schedule_node_band 
   auto band_domain = band.get_domain();
   auto write_domain = GetWrites().domain_factor_domain();
   return write_domain.intersect_domain(band_domain);
+}
+
+bool AnalysisResult::IsFakeCopyin(const isl::id &tensor_id) {
+  auto fake_copyin = GetFakeCopyin();
+  bool in_copyin_map = false;
+  fake_copyin.foreach_map([&in_copyin_map, &tensor_id](const isl::map &fake_map) -> void {
+    fake_map.foreach_basic_map([&in_copyin_map, &tensor_id](const isl::basic_map &basic_map) -> void {
+      const isl::map m = basic_map;
+      if (m.range().tuple_id().name() == tensor_id.name()) {
+        in_copyin_map = true;
+      }
+    });
+  });
+  return in_copyin_map;
 }
 
 static std::string MemTypeToString(const MemType &memType) {

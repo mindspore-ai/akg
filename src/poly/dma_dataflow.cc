@@ -167,6 +167,9 @@ bool BufferDefInfo::IsGemmDataC12C0() { return (SrcMemType() == MemType::C1_ && 
 bool BufferDefInfo::IsGemmWeightC12C0() { return (SrcMemType() == MemType::C1_ && DstMemType() == MemType::C0B_); }
 
 bool BufferDefInfo::IsIm2col() { return (SrcMemType() == MemType::C1_ && DstMemType() == MemType::C1_); }
+
+bool BufferDefInfo::IsBindCopyinDataFlow() { return (data_stream.size() == 2) && (data_stream[1].second == MemType::BUF_C1_); }
+
 MemType BufferDefInfo::SrcMemType() {
   // tensor dataflow at least one data
   CHECK_GE(data_stream.size(), 1);

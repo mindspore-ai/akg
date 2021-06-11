@@ -304,9 +304,14 @@ void MemoryManager::GatherBufferFootprintDefInfo(const isl::schedule_node &tree,
 
 void MemoryManager::CollectBufferFootprintDefInfo(BufferDefInfo &tensor_info, const isl::union_map &schedule_prom,
                                                   const isl::schedule_node &node) {
+  auto writes = scop_info_.analysis_result_.GetWrites();
+  if (scop_info_.IsInBinds(tensor_info.tensor_id) && scop_info_.IsFunctionalCopyin(tensor_info.tensor_id.name(), scop_info_.StmtBindCopyinMap()) &&
+    tensor_info.IsBindCopyinDataFlow()) {
+    writes = writes.unite(scop_info_.analysis_result_.GetBindCopyin());
+  }
   tensor_info.footprints_cluster = TensorFootprintCluster::HoistBufferFootprintCluster(
     schedule_prom, tensor_info.ancester_tensor_id, scop_info_.analysis_result_.GetReads(),
-    scop_info_.analysis_result_.GetCopyin(), scop_info_.analysis_result_.GetWrites(),
+    scop_info_.analysis_result_.GetCopyin(), writes,
     scop_info_.analysis_result_.GetFakeCopyin());
   if (tensor_info.footprints_cluster != nullptr) {
     tensor_info.footprint_cluster_map.emplace_back(std::make_pair(node, tensor_info.footprints_cluster));
@@ -457,8 +462,8 @@ void MemoryManager::AddStateTensorsDataFlow() {
     auto it = std::find(tensor_mem_flows[name].begin(), tensor_mem_flows[name].end(), BUF_C1_);
     auto it2 = std::find(tensor_mem_flows[name].begin(), tensor_mem_flows[name].end(), C1_);
     if (it != tensor_mem_flows[name].end() && it2 != tensor_mem_flows[name].end()) {
-      std::vector<std::string> name_flow1, name_flow2;
-      MemFlow mem_flow1, mem_flow2;
+      std::vector<std::string> name_flow1, name_flow2, name_flow3;
+      MemFlow mem_flow1, mem_flow2, mem_flow3;
       if (scop_info_.mmu_info_.IsConv() || scop_info_.mmu_info_.IsGemm()) {
         name_flow1.push_back(tensor_name_flows[name][0]);
         mem_flow1.push_back(tensor_mem_flows[name][0]);
@@ -474,9 +479,19 @@ void MemoryManager::AddStateTensorsDataFlow() {
         name_flow2.push_back(tensor_name_flows[name][3]);
         mem_flow2.push_back(tensor_mem_flows[name][3]);
       }
+
       if (scop_info_.mmu_info_.IsConv() && scop_info_.mmu_info_.IsA(name)) {
         name_flow2.push_back(tensor_name_flows[name][4]);
         mem_flow2.push_back(tensor_mem_flows[name][4]);
+      }
+
+      if (scop_info_.IsInBinds(name)) {
+        // add copyin tensor, gm write dataflow
+        name_flow3.push_back(tensor_name_flows[name][0]);
+        mem_flow3.push_back(tensor_mem_flows[name][0]);
+        name_flow3.push_back(tensor_name_flows[name][1]);
+        mem_flow3.push_back(tensor_mem_flows[name][1]);
+        AddTensorDataFlow(mem_flow3, name_flow3, REALIZE_C1);
       }
 
       AddTensorDataFlow(mem_flow1, name_flow1);
@@ -541,7 +556,7 @@ void MemoryManager::AddOneBufferDefInfo(const isl::id &ancestor_id,
   scop_info_.analysis_result_.buffer_def_infos_.push_back(promoted_info);
 }
 
-void MemoryManager::AddTensorDataFlow(const std::vector<MemType> &memflow, const std::vector<std::string> &nameflow) {
+void MemoryManager::AddTensorDataFlow(const std::vector<MemType> &memflow, const std::vector<std::string> &nameflow, std::string mark_tag_specific) {
   CHECK(memflow.size() == nameflow.size());
   uint64_t i = 0;
   /*********************************************
@@ -584,6 +599,9 @@ void MemoryManager::AddTensorDataFlow(const std::vector<MemType> &memflow, const
   bool isCopyin = scop_info_.IsCopyinTensor(tensor_id.get_name());
   if (!isCopyin && dst_mem_type == MemType::BUF_C1_) {
     mark_tag = REALIZE_C1BUFC1;
+  }
+  if (!mark_tag_specific.empty()) {
+    mark_tag = mark_tag_specific;
   }
 
   std::vector<size_t> sizes;

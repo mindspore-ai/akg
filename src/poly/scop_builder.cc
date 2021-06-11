@@ -590,6 +590,7 @@ isl::schedule MakeScheduleTree(const isl::space &param_space, isl::set param_set
   scop_info.analysis_result_.RecordWrites(isl::union_map::empty(param_space));
   scop_info.analysis_result_.RecordCopyin(isl::union_map::empty(param_space));
   scop_info.analysis_result_.RecordFakeCopyin(isl::union_map::empty(param_space));
+  scop_info.analysis_result_.RecordBindCopyin(isl::union_map::empty(param_space));
   scop_info.analysis_result_.RecordTransferStmt(isl::union_set::empty(param_space));
   scop_info.analysis_result_.RecordInnerBandDependency(isl::union_map::empty(param_space));
   isl::set set = isl::set::universe(param_space);

@@ -746,6 +746,7 @@ class AnalysisResult {
   void RecordWrites(const isl::union_map &writes) { writes_ = writes; }
   void RecordReads(const isl::union_map &reads) { reads_ = reads; }
 
+  void RecordBindCopyin(const isl::union_map &bind_copyin) { bind_copyin_ = bind_copyin; }
   void RecordCopyin(const isl::union_map &copyin) { copyin_ = copyin; }
   void RecordFakeCopyin(const isl::union_map &fake_copyin) { fake_copyin_ = fake_copyin; }
   void RecordTransferStmt(const isl::union_set &transfer_stmt) { transfer_stmt_ = transfer_stmt; }
@@ -794,6 +795,7 @@ class AnalysisResult {
   isl::union_map GetWrites() const { return writes_; }
   isl::union_map &GetCopyin() { return copyin_; }
   isl::union_map GetCopyin() const { return copyin_; }
+  isl::union_map GetBindCopyin() const { return bind_copyin_; }
   isl::union_map GetFakeCopyin() const { return fake_copyin_; }
   isl::union_set GetTransferStmt() const { return transfer_stmt_; }
   isl::union_map GetInnerBandDependency() const { return inter_band_dependency_; }
@@ -909,6 +911,8 @@ class AnalysisResult {
   TensorScheduleRepo GetTensorScheduleRepo() const { return tensor_schedule_repo_; }
   void SetTensorScheduleRepo(const TensorScheduleRepo &repo) { tensor_schedule_repo_ = std::move(repo); }
 
+  bool IsFakeCopyin(const isl::id &tensor_id);
+
  public:
   std::vector<std::pair<std::string, STMT_OP_TYPE>> stmt_type_;
   std::vector<std::pair<isl::union_set, BufferedFootPrintInfo>> active_buffer_footprints_;
@@ -928,6 +932,7 @@ class AnalysisResult {
 
   isl::union_map reads_;
   isl::union_map writes_;
+  isl::union_map bind_copyin_;
   isl::union_map copyin_;
   isl::union_map fake_copyin_;
   isl::union_set transfer_stmt_;
@@ -1098,7 +1103,9 @@ class ScopInfo {
   StmtIdHashMap StmtWriteMap();
   StmtIdHashMap StmtReadMap();
   StmtIdHashMap StmtCopyinMap();
-  bool IsCopyinTensor(const std::string &tensorName);
+  StmtIdHashMap StmtBindCopyinMap();
+  bool IsCopyinTensor(const std::string &tensor_name);
+  bool IsFunctionalCopyin(const std::string tensor_name, const StmtIdHashMap &func_map);
 
   Tensor FindTensorInOrig(const isl::id &var);
   Tensor FindTensorInOrig(const std::string &str);
