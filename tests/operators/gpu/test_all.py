@@ -35,7 +35,7 @@ from tests.operators.gpu.test_ms_expand_dims import test_expand_dims
 from tests.operators.gpu.test_ms_trans_data import test_ms_trans_data
 from tests.operators.gpu.test_ms_log import test_ms_log
 from tests.operators.gpu.test_ms_pow import test_ms_pow
-from tests.operators.gpu.test_ms_reduce_sum import test_ms_reduce_sum
+
 from tests.operators.gpu.test_ms_abs import test_ms_abs
 from tests.operators.gpu.test_ms_neg import test_ms_neg
 from tests.operators.gpu.test_ms_round import test_ms_round
@@ -44,8 +44,11 @@ from tests.operators.gpu.test_ms_equal import test_ms_equal
 from tests.operators.gpu.test_ms_less_equal import test_ms_less_equal
 from tests.operators.gpu.test_ms_greater_equal import test_ms_greater_equal
 from tests.operators.gpu.test_ms_reciprocal import test_ms_reciprocal
+from tests.operators.gpu.test_ms_reduce_sum import test_ms_reduce_sum
 from tests.operators.gpu.test_ms_reduce_max import test_ms_reduce_max
 from tests.operators.gpu.test_ms_reduce_min import test_ms_reduce_min
+from tests.operators.gpu.test_ms_reduce_and import test_ms_reduce_and
+from tests.operators.gpu.test_ms_reduce_or import test_ms_reduce_or
 from tests.operators.gpu.test_ms_conv import test_ms_conv
 from tests.operators.gpu.test_ms_conv_tensorcore import test_ms_conv_tc
 from tests.operators.gpu.test_fused_pad import test_fused_pad
@@ -334,6 +337,19 @@ def reduce_max(poly_sch, fuzz_shape=None, mind_trick_str=''):
                        keepdims=False, poly_sch=poly_sch)
 
 
+def reduce_and(poly_sch, fuzz_shape=None, mind_trick_str=''):
+    test_ms_reduce_and((32768,), 'bool', axis=None,
+                       keepdims=True, poly_sch=poly_sch)
+    test_ms_reduce_and((1024, 1024), 'bool', axis=1,
+                       keepdims=True, poly_sch=poly_sch)
+
+
+def reduce_or(poly_sch, fuzz_shape=None, mind_trick_str=''):
+    test_ms_reduce_or((32768,), 'bool', axis=None,
+                       keepdims=True, poly_sch=poly_sch)
+    test_ms_reduce_or((1024, 1024), 'bool', axis=1,
+                       keepdims=True, poly_sch=poly_sch)
+
 def fused_pad(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_fused_pad((7, 7, 3, 64), (0, 0, 0, 0), (0, 0, 1, 0),
                    layout='NHWC', pad_value=0.0, poly_sch=poly_sch)
@@ -447,8 +463,8 @@ if __name__ == '__main__':
               "equal": equal, "exp": exp, "greater_equal": greater_equal, "less_equal": less_equal,
               "log": log, "max": maximum, "min": minimum, "mul": mul, "neg": neg, "pow": pow,
               "reciprocal": reciprocal, "round": round, "rsqrt": rsqrt, "select": select, "sqrt": sqrt,
-              "sub": sub, "reduce_max": reduce_max, "reduce_min": reduce_min,
-              "reduce_sum": reduce_sum, "expand_dims": expand_dims, "one_hot": one_hot,
+              "sub": sub, "reduce_max": reduce_max, "reduce_min": reduce_min, "reduce_and":reduce_and,
+              "reduce_or":reduce_or, "reduce_sum": reduce_sum, "expand_dims": expand_dims, "one_hot": one_hot,
               "reshape": reshape, "tile": tile, "trans_data": trans_data,
               "conv": conv, "conv_tc": conv_tc,
               "fused_pad": fused_pad,

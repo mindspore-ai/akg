@@ -42,4 +42,4 @@ def test_ms_reduce_sum(in_shape, in_dtype, axis=None, keepdims=False, poly_sch=F
         print(mod.imported_modules[0].get_source())
         raise AssertionError("Test fail")
     data, expect = to_tvm_nd_array([data, expect])
-    gpu_profiling(mod, data, expect, 400)
+    gpu_profiling(mod, data, expect, repeat_time=400)
