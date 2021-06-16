@@ -729,7 +729,18 @@ def _set_reducemax_attrs(desc_d, attrs):
         attrs['bind_thread'] = str(blockdim_x) + ' ' + str(blockdim_y)
     return attrs
 
-def _json_need_split(desc_d, attrs):
+def _update_attrs_gpu(kernel_info, attrs, poly):
+    if poly:
+        attrs["enable_akg_reduce_lib"] = True
+        if "pragma_enable_matmul" not in attrs.keys() and should_enable_tensor_core(kernel_info):
+            attrs['pragma_enable_matmul'] = True
+            attrs['enable_auto_inline'] = False
+        if "pragma_enable_conv_tensor_core" not in attrs.keys() and should_enable_conv_tensor_core(kernel_info):
+            attrs["pragma_enable_conv_tensor_core"] = True
+            attrs["enable_auto_fuse"] = False
+    return attrs
+
+def _json_need_split(desc_d, attrs, poly, target):
     block_jsons = []
     input_tensor_name = []
     output_tensor_name = []
@@ -752,6 +763,8 @@ def _json_need_split(desc_d, attrs):
                 cur_attrs = attrs.copy()
 
             cur_attrs["enable_atomic_add"] = should_enable_atomic_add(json.loads(block_jsons[i]))
+            if target == "cuda":
+                cur_attrs = _update_attrs_gpu(desc_d, cur_attrs, poly)
             attrs_list.append(cur_attrs)
             alloc_map_list.append(alloc_map)
             reuse_map_list.append(reuse_map)
@@ -769,7 +782,7 @@ def _json_need_split(desc_d, attrs):
 def _build_json_list_to_module(desc_d, attrs, poly, target):
     func = tvm.get_global_func("composite_with_json_list")
     block_jsons, input_tensor_name, output_tensor_name, attrs_list, alloc_map_list, reuse_map_list, \
-    clean_op_map_list = _json_need_split(desc_d, attrs)
+    clean_op_map_list = _json_need_split(desc_d, attrs, poly, target)
     return func(block_jsons, input_tensor_name, output_tensor_name, alloc_map_list, reuse_map_list, \
                 clean_op_map_list, attrs_list, poly, target)
 
@@ -821,6 +834,7 @@ def _build_to_module_gpu(desc_s, desc_d, attrs=None, poly=False):
 
     if 'parallel_fusion' in desc_d or 'buffer_stitch' in desc_d:
         return _build_json_list_to_module(desc_d, attrs, poly, 'cuda')
+    attrs = _update_attrs_gpu(desc_d, attrs, poly)
     func = tvm.get_global_func("composite_with_json")
     return func(desc_s, attrs, poly)
 
@@ -833,14 +847,6 @@ def _build(desc_s, desc_d, attrs=None, poly=True, use_repo=True):
         if not poly:
             attrs["enable_atomic_add"] = False
     if backend == 'cuda':
-        if poly:
-            attrs["enable_akg_reduce_lib"] = True
-            if "pragma_enable_matmul" not in attrs.keys():
-                attrs['pragma_enable_matmul'] = should_enable_tensor_core(desc_d)
-                attrs['enable_auto_inline'] = (not should_enable_tensor_core(desc_d))
-            if "pragma_enable_conv_tensor_core" not in attrs.keys():
-                attrs["pragma_enable_conv_tensor_core"] = should_enable_conv_tensor_core(desc_d)
-                attrs["enable_auto_fuse"] = (not should_enable_conv_tensor_core(desc_d))
         return _build_to_module_gpu(desc_s, desc_d, attrs, poly)
     else:
         return _build_to_module(desc_s, desc_d, attrs, use_repo)
