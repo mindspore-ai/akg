@@ -97,6 +97,8 @@ class TileOuterBand : public SchedulePass {
   isl::schedule_node MatmulTile(const isl::schedule_node &node);
   void CustomMappingConfig(const std::vector<std::string> &str, const int index);
 
+  void CheckVectorizedForElemwiseOp(isl::schedule_node node);
+
  private:
   PassInfo &pass_info_;
   ScopInfo &scop_info_;

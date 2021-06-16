@@ -336,6 +336,7 @@ isl::schedule MappingOuterBand::DoThreadMapping(const isl::schedule &sch) {
                        this](isl::schedule_node node) -> isl::schedule_node {
     // batch matmul operator
     bool is_bmm_stmt = false;
+
     if (scop_info_.user_config_.GetEnableTensorCoreUsePoly()) {
       if (node.has_parent() && !GetMarkerName(node.parent(), SKIP_MARKER).empty()) {
         node = node.parent().del();
@@ -356,6 +357,13 @@ isl::schedule MappingOuterBand::DoThreadMapping(const isl::schedule &sch) {
     }
 
     if (CanBeMappedToThread(node, thread_record)) {
+      // vectorization for elementwise Op
+      if (scop_info_.user_config_.GetEnableVectorization()) {
+        node = node.parent();
+        if (node.has_parent() && !GetMarkerName(node.parent(), SKIP_MARKER).empty()) {
+          node = node.parent().del();
+        }
+      }
       auto node_bak = node;
       size_t mapped_threads = 0;
       if (scop_info_.user_config_.GetEnableAkgReduceLib() && node.has_parent() &&

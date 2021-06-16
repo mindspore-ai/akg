@@ -76,6 +76,10 @@ class RegisterMemoryManager : public SchedulePass {
 
   bool IsReadOrWriteBand(isl::schedule_node node);
 
+  isl::schedule_node GetVectorizationPromotedNode(isl::schedule_node &root);
+
+  isl::schedule_node PromotedNodeUnderSequence(isl::schedule_node_sequence &node);
+
  private:
   PassInfo &pass_info_;
   ScopInfo &scop_info_;

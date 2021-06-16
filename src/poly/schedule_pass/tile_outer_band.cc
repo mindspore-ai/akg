@@ -22,6 +22,7 @@
 #include "poly/reduce_manager.h"
 
 #include <cmath>
+#include <iostream>
 
 namespace akg {
 namespace ir {
@@ -981,6 +982,13 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCuda(isl::schedule_node nod
 
   // get tile size
   node = SetTileSizeAndTile(node, TILE_WITH_C1);
+
+  // vectorize for elementwise OP
+  if (scop_info_.user_config_.GetEnableVectorization()) {
+    node = SetTileSizeAndTile(node.child(0), TILE_WITH_C0);
+    node = node.insert_mark("skip");
+    node = node.parent().parent();
+  }
 
   // tile matmul operator
   if (scop_info_.user_config_.GetEnableMatmul()) {

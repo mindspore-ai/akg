@@ -466,7 +466,7 @@ def main(argv):
             for p in all_json_path:
                 test_json_dir(poly, use_custom, p, online_tuning)
         else:
-            test_json_dir(poly, use_custom, online_tuning)
+            test_json_dir(poly, use_custom, online_tuning=online_tuning)
 
     elif ci_test:
         poly = False

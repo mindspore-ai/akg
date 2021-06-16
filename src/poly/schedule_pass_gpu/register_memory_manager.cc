@@ -106,7 +106,8 @@ isl::schedule RegisterMemoryManager::HoistRegisterMemoryOnDepth(isl::schedule_no
         continue;
       }
 
-      if (!scop_info_.user_config_.GetEnableTensorCore() && !scop_info_.user_config_.GetEnableMatmul()) {
+      if (!scop_info_.user_config_.GetEnableTensorCore() && !scop_info_.user_config_.GetEnableMatmul() &&
+          !scop_info_.user_config_.GetEnableVectorization()) {
         if (!ReuseTensorCluster(*fp_cluster, partial_sched_mupa)) {
           continue;
         }
@@ -396,7 +397,7 @@ bool RegisterMemoryManager::IsReadOrWriteBand(isl::schedule_node node) {
 
 isl::schedule_node RegisterMemoryManager::GetRegisterPromotedNode(isl::schedule_node &root) {
   isl::schedule_node hoist_register_node = root;
-  root.foreach_descendant_top_down([&hoist_register_node](const isl::schedule_node &node) -> bool {
+  root.foreach_descendant_top_down([&hoist_register_node, this](const isl::schedule_node &node) -> bool {
     if (node.isa<isl::schedule_node_sequence>()) {
       auto sequence_node = node.as<isl::schedule_node_sequence>();
       if (sequence_node.parent().isa<isl::schedule_node_extension>() &&
@@ -408,10 +409,74 @@ isl::schedule_node RegisterMemoryManager::GetRegisterPromotedNode(isl::schedule_
         return false;
       }
     }
+
     if (node.isa<isl::schedule_node_mark>()) {
       auto mark_node = node.as<isl::schedule_node_mark>();
-      if (mark_node.get_id().get_name() == THREAD_MARKER && mark_node.parent().isa<isl::schedule_node_band>()) {
+      if (scop_info_.user_config_.GetEnableVectorization()) {
+        if (mark_node.get_id().get_name() == THREAD_MARKER &&
+            mark_node.child(0).child(0).isa<isl::schedule_node_band>()) {
+          hoist_register_node = mark_node.child(0).child(0);
+          return false;
+        }
+      } else if (mark_node.get_id().get_name() == THREAD_MARKER && mark_node.parent().isa<isl::schedule_node_band>()) {
         hoist_register_node = mark_node.parent();
+        return false;
+      }
+    }
+    return true;
+  });
+  return hoist_register_node;
+}
+
+isl::schedule_node RegisterMemoryManager::PromotedNodeUnderSequence(isl::schedule_node_sequence &node) {
+  int band_node_num = 0;
+  auto root = node.get_schedule().get_root();
+  auto tmp_node = root;
+
+  for (size_t i = 0; i < node.n_children(); ++i) {
+    if (IsReadOrWriteBand(node.child(i).child(0))) {
+      continue;
+    }
+    band_node_num += 1;
+    tmp_node = node.child(i);
+  }
+
+  auto hoist_register_node = root;
+  if (band_node_num == 1) {
+    tmp_node.foreach_descendant_top_down([&hoist_register_node](const isl::schedule_node &node) -> bool {
+      if (node.isa<isl::schedule_node_mark>()) {
+        auto mark_node = node.as<isl::schedule_node_mark>();
+        if (mark_node.get_id().get_name() == THREAD_MARKER &&
+            mark_node.child(0).child(0).isa<isl::schedule_node_band>()) {
+          hoist_register_node = mark_node.child(0).child(0);
+          return false;
+        }
+      }
+      return true;
+    });
+  }
+  return hoist_register_node;
+}
+
+isl::schedule_node RegisterMemoryManager::GetVectorizationPromotedNode(isl::schedule_node &root) {
+  isl::schedule_node hoist_register_node = root;
+  root.foreach_descendant_top_down([&hoist_register_node, this](const isl::schedule_node &node) -> bool {
+    if (node.isa<isl::schedule_node_sequence>()) {
+      auto sequence_node = node.as<isl::schedule_node_sequence>();
+      if (sequence_node.parent().isa<isl::schedule_node_extension>() &&
+          sequence_node.parent().parent().isa<isl::schedule_node_band>()) {
+        hoist_register_node = PromotedNodeUnderSequence(sequence_node);
+        return false;
+      } else if (sequence_node.parent().isa<isl::schedule_node_band>()) {
+        return false;
+      }
+    }
+
+    if (node.isa<isl::schedule_node_mark>()) {
+      auto mark_node = node.as<isl::schedule_node_mark>();
+      if (mark_node.get_id().get_name() == THREAD_MARKER &&
+          mark_node.child(0).child(0).isa<isl::schedule_node_band>()) {
+        hoist_register_node = mark_node.child(0).child(0);
         return false;
       }
     }
@@ -577,13 +642,71 @@ isl::schedule RegisterMemoryManager::Run(isl::schedule sch) {
     return sch;
   }
 
-  auto res_node = GetRegisterPromotedNode(root);
+  auto CollectGMLReadWriteFilter = [this](isl::schedule_node node) -> isl::schedule_node {
+    if (!node.isa<isl::schedule_node_filter>()) {
+      return node;
+    }
+
+    bool is_all_sets_read_or_write = IsReadOrWriteTensor(node, GML_READ_ID_NAME, GML_WRITE_ID_NAME);
+    if (!is_all_sets_read_or_write) {
+      return node;
+    }
+
+    auto filter = node.as<isl::schedule_node_filter>().filter();
+    auto filter_set = filter.unwrap();
+    bool is_vectorization_tensor = false;
+    filter_set.range().foreach_set([this, &is_vectorization_tensor](const isl::set &s) -> void {
+      std::string promoted_tensor = s.get_tuple_name();
+      for (auto buffer : scop_info_.analysis_result_.active_buffer_footprints_) {
+        auto cluster_id = buffer.second.cluster_id;
+        if (cluster_id.get_name() == promoted_tensor) {
+          auto cluster = buffer.second.cluster;
+          auto box_sizes = cluster->GetFixedBoxSizes();
+          auto local_size = 1;
+          for (auto i : box_sizes) {
+            local_size = local_size * i;
+          }
+          if (local_size == 4 || local_size == 8) {
+            // vectorization mode fp32 or fp16
+            is_vectorization_tensor = true;
+          }
+        }
+      }
+    });
+
+    if (!is_vectorization_tensor) {
+      return node;
+    }
+
+    if (node.n_children() > 0 && node.child(0).isa<isl::schedule_node_band>()) {
+      node = node.child(0).insert_mark(PROMOTE_VECTORIZATION);
+      node = node.parent();
+    }
+    return node;
+  };
+
+  isl::schedule_node res_node = root;
+  if (scop_info_.user_config_.GetEnableVectorization()) {
+    res_node = GetVectorizationPromotedNode(root);
+    if (res_node.isa<isl::schedule_node_domain>()) {
+      return sch;
+    }
+  } else {
+    res_node = GetRegisterPromotedNode(root);
+  }
+
   if (res_node.isa<isl::schedule_node_band>()) {
     auto depth = UpdateDepth(res_node);
     if (scop_info_.user_config_.GetRegisterDepth() >= 0) {
       depth = scop_info_.user_config_.GetRegisterDepth();
     }
     sch = HoistRegisterMemory(root, depth);
+
+    if (scop_info_.user_config_.GetEnableVectorization()) {
+      auto tmp_root = sch.get_root();
+      tmp_root = tmp_root.map_descendant_bottom_up(CollectGMLReadWriteFilter);
+      sch = tmp_root.get_schedule();
+    }
   }
 
   return sch;

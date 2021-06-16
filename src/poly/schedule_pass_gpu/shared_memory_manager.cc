@@ -161,7 +161,8 @@ isl::schedule_node SharedMemoryManager::MapCopiesToThreads(isl::schedule_node &r
     }
 
     auto mapping_cfg = thread_cfg;
-    if (scop_info_.user_config_.GetVectorLoadType() || scop_info_.user_config_.GetEnableTensorCoreUsePoly()) {
+    if ((scop_info_.user_config_.GetVectorLoadType() && !scop_info_.user_config_.GetEnableVectorization()) ||
+        scop_info_.user_config_.GetEnableTensorCoreUsePoly()) {
       scop_info_.user_config_.SetEnableOneDimThread(true);
     }
 
@@ -265,6 +266,11 @@ MappingCfg *SharedMemoryManager::GetCurrentConfig(isl::schedule_node &node) {
 
   auto shares_tensor_bits_map = scop_info_.analysis_result_.GetSharedTensorBitsMap();
   if (enable_vectorization && !shares_tensor_bits_map.count(id_name)) {
+    enable_vectorization = false;
+  }
+
+  // vectorization for elementwise OP
+  if (!scop_info_.user_config_.GetEnableMatmul()) {
     enable_vectorization = false;
   }
 

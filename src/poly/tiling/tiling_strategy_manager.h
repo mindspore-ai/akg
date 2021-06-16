@@ -361,6 +361,10 @@ class GpuStrategy : public TilingStrategy {
 
   void InjectiveSpeedup();
 
+  void VectorizationSpeedup();
+  void CheckVectorizationForElemwiseOp(isl::schedule sch);
+  bool IsVectorized();
+
   void BroadcastSpeedup();
   std::unordered_set<int> broadcast_idx_;
 
@@ -418,6 +422,7 @@ class GpuStrategy : public TilingStrategy {
     {8, "PAD_OP"},     {9, "CUSTOM_CONFIG"},     {10, "CONV"}};
   std::unordered_map<int, std::string> mapping_idx_pos_ = {{0, "x"}, {1, "y"}, {2, "z"}};
   std::unordered_map<int, std::string> reduce_y_idx_pos_ = {{0, "y"}, {1, "x"}};
+  int vectorized_bytes_{1};
 };
 
 class MulticoreStrategy {
