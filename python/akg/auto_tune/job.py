@@ -75,7 +75,7 @@ def gen_bool_list(attr_list):
 
 def get_matmul_op_desc(json_input):
     for op_desc in json_input["op_desc"]:
-        if op_desc["name"] == "MatMul":
+        if op_desc["name"] == "MatMul" or op_desc["name"] == "BatchMatMul":
             return op_desc
     return None
 
