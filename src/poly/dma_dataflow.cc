@@ -385,7 +385,7 @@ void StmtDataFlowInfo::UpdateFlowInfo(std::map<std::string, std::vector<std::str
         nameflow[read.first] = MergedFlow(nameflow[read.first], read.second.name_flow_);
       }
     }
-
+    
     if (memflow.find(read.first) == memflow.end()) {
       memflow[read.first] = read.second.mem_type_flow_;
     } else {
@@ -491,47 +491,66 @@ void DMADataFlow::CreateStmtDataFlow(STMT_OP_TYPE op_type, const isl::id &stmt_i
   }
 }
 
+StmtDataFlowInfo* DMADataFlow::GetMmuInfo(){
+  for(auto &s : op_data_flow_){
+    if(s.second.is_cube_) return &(s.second);
+  }
+  return nullptr;
+}
+
+std::unordered_set<std::string> StmtDataFlowInfo::GetReadTensor(){
+  std::unordered_set<std::string> res;
+  for(auto read : reads_){
+    res.insert(read.first);
+  }
+  return res;
+}
+
+std::unordered_set<std::string> StmtDataFlowInfo::GetWriteTensor(){
+  std::unordered_set<std::string> res;
+  for(auto write : writes_){
+    res.insert(write.first);
+  }
+  return res;
+}
+
+bool DMADataFlow::FindTensor(FlowMap& flow_map, std::unordered_set<std::string> &tensor_set){
+  for(auto w : flow_map){
+    if(tensor_set.find(w.first)!= tensor_set.end()){
+      return true;      
+    };
+  }
+  return false;
+}
+
 void DMADataFlow::FusionAnalysis() {
-  bool has_mmu = false;
-  bool mmu_pre_fusion = has_mmu;
-  bool mmu_post_fusion = has_mmu;
-  int state_num = 0;
+  StmtDataFlowInfo* mmu_flow = GetMmuInfo();
+  int s_count = op_data_flow_.size();
+  if(s_count <= 1 || mmu_flow == nullptr) return;
+  auto pre_count = PreFusionAnalysis(mmu_flow);
+  if(pre_count + 1  == s_count) return;
+  for(auto &s : op_data_flow_){
+    s.second.UpdateTensorMemType(MemType::BUF_C0_);
+  }    
+}
 
-  // analysis has cube pre fusion and post fusion
-  for (const auto &state : op_data_flow_) {
-    if (has_mmu && state_num > 0) mmu_post_fusion = true;
-
-    if (state.second.is_cube_) {
-      has_mmu = true;
-      if (state_num > 0) mmu_pre_fusion = true;
-    }
-    state_num++;
-  }
-
-  if (!mmu_pre_fusion && !mmu_post_fusion) return;
-
-  bool start_pre_fusion = has_mmu;
-  bool start_post_fusion = false;
-
-  for (auto state = op_data_flow_.begin(); state != op_data_flow_.end(); ++state) {
-    if (state->second.is_cube_) {
-      start_pre_fusion = false;
-      start_post_fusion = true;
-    }
-
-    if (mmu_pre_fusion && start_pre_fusion) {
-      state->second.UpdateTensorMemType(MemType::BUF_C1_);
-    }
-
-    if (mmu_post_fusion && start_post_fusion) {
-      state->second.UpdateTensorMemType(MemType::BUF_C0_);
+int DMADataFlow::PreFusionAnalysis(StmtDataFlowInfo* target){
+  auto res = 0;
+  auto rtensors = target->GetReadTensor();
+  for(auto &s : op_data_flow_){
+    if(s.second.stmt_id_ == target->stmt_id_) continue;
+    auto writes = s.second.writes_;
+    if(FindTensor(writes, rtensors)){
+      s.second.UpdateTensorMemType(MemType::BUF_C1_);
+      res += PreFusionAnalysis(&s.second) + 1;
     }
   }
+  return res;
 }
 
 void DMADataFlow::OpDataflowInfo(std::map<std::string, std::vector<std::string>> &nameflow,
                                  std::map<std::string, MemFlow> &memflow) {
-  for (auto state : op_data_flow_) {
+  for (auto &state : op_data_flow_) {
     state.second.UpdateFlowInfo(nameflow, memflow);
   }
   CHECK_EQ(nameflow.size(), memflow.size());
