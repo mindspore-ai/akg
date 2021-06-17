@@ -559,7 +559,7 @@ def _set_compute_attrs(desc_d_in, attr):
 
 def _pragma_rmselfdep(kernel_info):
     for op in kernel_info["op_desc"]:
-        if op['name'] == "MatMul":
+        if op['name'] == "MatMul" or op['name'] == "BatchMatMul":
             return False
     return True
 
