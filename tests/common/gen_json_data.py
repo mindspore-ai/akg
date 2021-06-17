@@ -396,9 +396,50 @@ op_dsl = {
     "Assign": lambda inputs, output, attr: "%s = %s; %s = %s" %
         (get_input(inputs[0][0]), get_input(inputs[1][0]), output[0]['tensor_name'],
         get_input(inputs[1][0])), 
-    "MatMul": lambda inputs, output, attr: matmul_str(inputs, output, attr)
+    "MatMul": lambda inputs, output, attr: matmul_str(inputs, output, attr),
+    "Conv2D": lambda inputs, output, attr: conv_2d_str(inputs, output, attr)
 }
 
+def conv_2d_str(inputs, output, attr):
+    support_list = {"float16": 'np.float16', "float32": 'np.float32'}
+    shape_data = inputs[0][0]['shape']
+    shape_data_name = inputs[0][0]['tensor_name']
+    shape_filter = inputs[1][0]['shape']
+    shape_filter_name = inputs[1][0]['tensor_name']
+    dtype = inputs[0][0]['data_type']
+    padding = get_attr(attr, "pad_list")
+    has_pad = np.sum(padding) > 0
+    stride = get_attr(attr, "stride")[2:]
+    dilation = get_attr(attr, "dilation")[2:]
+    out_dtype = output[0]["data_type"]
+    output_name = output[0]["tensor_name"]
+
+    res = ""
+    res += "n, h, w, c = {} \n".format(shape_data)
+    res += ("out_c, kh, kw, c = {}\n").format(shape_filter)
+    res += ("s_h, s_w = {}\n").format(stride)
+    res += ("d_h, d_w = {}\n").format(dilation)
+    res += ("p_l, p_r, p_t, p_b = {}\n").format(padding)
+    res += ("out_h = (h + p_t + p_b - kh) // s_h + 1\n")
+    res += ("out_w = (w + p_l + p_r - kw) // s_w + 1\n")
+
+    res += ("out_shape = (n, out_h, out_w, out_c)\n")
+    res += ("shape_data_pad = (n, h + p_t + p_b, w + p_l + p_r, c)\n")
+
+    res += ("data_pad = np.zeros(shape_data_pad).astype({})\n").format(support_list[dtype])
+    if has_pad:
+        res += ("data_pad[:, p_t:p_t+h, p_l:p_l+w, :] = {}\n".format(shape_data_name))
+    else:
+        res += ("data_pad = {}\n".format(shape_data_name))
+
+    res += ("whd = (kh - 1) * d_h + 1\n")
+    res += ("wwd = (kw - 1) * d_w + 1\n")
+    res += ("{} = np.zeros(out_shape).astype({})\n").format(output_name, support_list[out_dtype])
+    res += ("for i in range(out_h):\n")
+    res += ("    for j in range(out_w):\n")
+    res += ("        for f in range(out_c):\n")
+    res += ("            {}[:, i, j, f] = np.sum(data_pad[:, i*s_h:i*s_h+whd:d_h, j*s_w:j*s_w+wwd:d_w, :].astype('float32') *{}[f, :, :, :].astype('float32'),axis=(1, 2, 3))\n".format(output_name, shape_filter_name))
+    return res
 
 def gen_json_data(op_desc):
     """Generating test data for composite json"""
