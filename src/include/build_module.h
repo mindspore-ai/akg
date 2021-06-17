@@ -112,9 +112,12 @@ enum LowerStage : int16_t {
 
 class LowerData {
  public:
-  LowerData(Array<NodeRef> &args, Array<NodeRef> &arg_list_0, Map<Tensor, Buffer> &binds, Map<Tensor, Buffer> &binds_0,
-            const Array<NodeRef> &shape_vars, const std::string &name, bool simple_mode, bool polyhedral, bool tuning,
-            const std::string &target, const BuildConfig &config, bool get_feature = false)
+  LowerData() = default;
+  ~LowerData() = default;
+  LowerData(const Array<NodeRef> &args, const Array<NodeRef> &arg_list_0, const Map<Tensor, Buffer> &binds,
+            const Map<Tensor, Buffer> &binds_0, const Array<NodeRef> &shape_vars, const std::string &name,
+            bool simple_mode, bool polyhedral, bool tuning, const std::string &target,
+            const BuildConfig &config, bool get_feature = false)
       : args_(args),
         arg_list_0_(arg_list_0),
         binds_(binds),
@@ -127,17 +130,17 @@ class LowerData {
         target_(target),
         config_(config),
         get_feature_(get_feature) {}
-  Array<NodeRef> &args_;
-  Array<NodeRef> &arg_list_0_;
-  Map<Tensor, Buffer> &binds_;
+  Array<NodeRef> args_;
+  Array<NodeRef> arg_list_0_;
+  Map<Tensor, Buffer> binds_;
   Map<Tensor, Buffer> binds_0_;
-  const Array<NodeRef> &shape_vars_;
+  Array<NodeRef> shape_vars_;
   std::string name;
   bool simple_mode_{false};
   bool polyhedral_{false};
   bool tuning_{false};
   std::string target_;
-  const BuildConfig &config_;
+  BuildConfig config_;
   bool get_feature_{false};
 };
 
