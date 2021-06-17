@@ -412,7 +412,6 @@ class UserConfig {
     return is_spec_gemm ? kGemmIterNamePrefix : kIterNamePrefix;
   }
   int GetDataBytes(const std::string &name) const;
-  Type GetDataType(const std::string &name) const;
 
   // dump all info
   void DumpScopDataScheduleAttrs(std::ofstream &of);

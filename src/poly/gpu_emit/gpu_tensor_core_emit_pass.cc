@@ -1057,7 +1057,7 @@ class TensorCoreInterfaceEmit : public IRMutator {
     CHECK(op);
 
     auto left_expr = MakeLeftCallFromProvide(op);
-    Type type = scop_info_.user_config_.GetDataType(op->func->func_name());
+    Type type = scop_info_.GetDtypeOf(op->func->func_name());
     auto *add = op->value.as<Add>();
     CHECK(add) << "format error of bmm";
     auto mul = akg::common::SplitCast(add->b, type).as<Mul>();
@@ -1152,7 +1152,7 @@ class TensorCoreInterfaceEmit : public IRMutator {
 
   Expr MakeLeftCallFromProvide(const Provide *op) {
     std::string name = op->func->func_name();
-    Type type = scop_info_.user_config_.GetDataType(name);
+    Type type = scop_info_.GetDtypeOf(name);
     Expr dst = Call::make(type, name, op->args, Call::Halide, op->func, 0);
     return dst;
   }
