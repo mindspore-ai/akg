@@ -32,9 +32,12 @@ constexpr auto SHARED = "shared";
 constexpr auto ALLOC = "ALLOC";
 constexpr auto MEM_LIMIT = 49152;
 static std::unordered_map<std::string, air::Type> type_mapping = {
-  {"float64", air::Float(64)}, {"float32", air::Float(32)}, {"float16", air::Float(16)}, {"bool", air::Bool()},
-  {"int64", air::Int(64)},     {"int32", air::Int(32)},     {"int16", air::Int(16)},     {"int8", air::Int(8)},
-  {"uint64", air::UInt(64)},   {"uint32", air::UInt(32)},   {"uint16", air::UInt(16)},   {"uint8", air::UInt(8)},
+  {"float64", air::Float(64)},       {"float32", air::Float(32)},
+  {"float16", air::Float(16)},       {"bool", air::Bool()},
+  {"int64", air::Int(64)},           {"int32", air::Int(32)},
+  {"int16", air::Int(16)},           {"int8", air::Int(8)},
+  {"uint64", air::UInt(64)},         {"uint32", air::UInt(32)},
+  {"uint16", air::UInt(16)},         {"uint8", air::UInt(8)},
   {"complex128", air::Float(64, 2)}, {"complex64", air::Float(32, 2)},
 };
 
@@ -57,6 +60,7 @@ bool IsOtherOp(const std::string &op_name);
 bool IsElemwise(const std::string &op_name);
 bool EqualShape(const Array<Expr> &shape1, const Array<Expr> &shape2);
 bool ShapeIsOne(const Array<Expr> &shape);
+bool ShapeCanBroadcast(const Array<Expr> &shape1, const Array<Expr> &shape2);
 std::string GetOpName(const Provide *p);
 std::string CreateDataFormatKey(const std::string &tensor_name);
 
@@ -188,12 +192,14 @@ struct Graph {
   FuncShape func_shape;
   bool CanChangeElem(const FunctionRef &output) {
     // if all input shape same as output shape, it can be changed.
-    // consider special case: if elemwise input tensor shape is [1], can auto broadcast
+    // consider special case: if elemwise input tensor can broadcast to output tensor.
     auto inputs = pre_graph[output];
     for (const auto &input : inputs) {
-      if (!EqualShape(func_shape[input], func_shape[output]) && !ShapeIsOne(func_shape[input])) {
-        return false;
+      if (EqualShape(func_shape[input], func_shape[output]) ||
+          ShapeCanBroadcast(func_shape[input], func_shape[output])) {
+        continue;
       }
+      return false;
     }
     return true;
   }
@@ -432,6 +438,13 @@ class AnalysisResultMutator : public IRMutator {
   int count_{0};
   Map<std::string, NodeRef> op_attrs_;
 };
+
+namespace BroadcastReshapeUtil {
+Array<Expr> GetOutputShapeChange(const Array<Expr> &output_shape_ori, const Array<Expr> &input_shape_ori,
+                                 const Array<Expr> &input_shape_change);
+
+FuncShape GetInputsChangeShape(const FunctionRef &output, Graph &g, const Array<Expr> &output_shape);
+}  // namespace BroadcastReshapeUtil
 
 struct GridBlockDims {
   int blockdim_x{1};
