@@ -302,6 +302,7 @@ class ConvStrategy : public TilingStrategy {
   int reg_bytes_{1};
   int64_t num_sm_{80};
   int64_t min_blocks_{400};
+  int64_t real_blocks_{0};
   int64_t default_num_warps_{1};
   MmaConv macro_mma_{128, 1, 1, 128, 32};
 };
