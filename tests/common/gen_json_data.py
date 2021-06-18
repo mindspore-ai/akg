@@ -120,8 +120,6 @@ def transpose_str(inputs, output, attr):
 def trans_data_two2fractal(input_, src_format, dst_format):
     shape = list(input_.shape)
     dtype = input_.dtype
-    if dtype == "float32":
-        input_ = input_.astype(np.float16)
     if src_format == "DefaultFormat" or src_format == "NCHW":
         m, n = shape[-2], shape[-1]
         m1, n1 = m // 16, n // 16
@@ -152,7 +150,7 @@ def trans_data_two2fractal(input_, src_format, dst_format):
                 dst_format, src_format))
         transpose_axis = [x + len(shape) - 2 for x in transpose_axis]
         transpose_axis = [x for x in range(len(shape) - 2)] + transpose_axis
-        bench_mark = reshape_input.transpose(transpose_axis).astype('float16')
+        bench_mark = reshape_input.transpose(transpose_axis)
         return bench_mark
     raise ValueError("src_format %s is not supported!" % src_format)
 
@@ -542,20 +540,13 @@ def gen_json_data(op_desc):
                 shape_default = default_tensor["shape"]
                 orig_shape = shape_fractal[:-4] + [shape_fractal[-3] * shape_fractal[-2]] + [shape_fractal[-4] * shape_fractal[-1]]
                 shape_tmp = []
-                shape_out = []
-                diff_dims = len(orig_shape) - len(shape_default)
-                for i in range(diff_dims):
+                shape_new = []
+                for i in range(len(shape_default) - 2):
+                    shape_new.append(shape_default[i])
+                for i in range(len(shape_default), 2):
                     shape_tmp.append(1)
-                    shape_out.append(orig_shape[i])
                 for i in range(len(shape_default)):
                     shape_tmp.append(shape_default[i])
-                    if orig_shape[i + diff_dims] == 1:
-                        shape_out.append(shape_default[i])
-                    else:
-                        shape_out.append(orig_shape[i + diff_dims])
-                shape_new = []
-                for i in range(len(shape_out) - 2):
-                    shape_new.append(shape_out[i])
                 if shape_tmp[-2] == 1 and shape_tmp[-1] == 1:
                     shape_new.extend([1, 1, 1, 1])
                 elif shape_tmp[-2] == 1 and shape_tmp[-1] == shape_default[-1]:
@@ -567,6 +558,8 @@ def gen_json_data(op_desc):
                         % (default_tensor["tensor_name"], shape_new, default_tensor["value"],
                            default_tensor["data_type"])
                 else:
+                    if np.zeros(shape_default).size != np.zeros(shape_new).size:
+                        raise ValueError("It is error to reshape %s to %s!" % (shape_default, shape_new))
                     sent_reshape_tensor = "%s = np.reshape(%s, %s)" \
                         % (default_tensor["tensor_name"], default_tensor["tensor_name"], tuple(shape_new))
                 p.out(sent_reshape_tensor, True)
