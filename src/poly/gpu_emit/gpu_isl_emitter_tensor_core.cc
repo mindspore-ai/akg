@@ -33,23 +33,6 @@ Stmt GpuIslEmitterTensorCore::Emit(const isl::ast_node &node) {
   return stmt;
 }
 
-Stmt GpuIslEmitterTensorCore::EmitStmt(const isl::ast_node_user &node) {
-  CHECK(node.get_expr().isa<isl::ast_expr_op>());
-  isl::ast_expr_op usr_expr = node.get_expr().as<isl::ast_expr_op>();
-  CHECK(usr_expr);
-  auto stmt_id = usr_expr.get_arg(0).as<isl::ast_expr_id>().get_id();
-  auto node_id = node.get_annotation();
-
-  if (info_.IsGMWrite(stmt_id) || info_.IsGMLWrite(stmt_id)) {
-    auto iterator_map = node_info_map_.at(node_id).iterator_map;
-    auto original = iterator_map.range_factor_domain().range_factor_range();
-    auto srcid = original.get_tuple_id(isl_dim_out);
-    bool no_need_to_emit = GpuIslEmitter::NoNeedToEmitForTempTensor(srcid);
-    if (no_need_to_emit) return Stmt();
-  }
-  return GpuIslEmitter::EmitStmt(node);
-}
-
 Stmt GpuIslEmitterTensorCore::EmitMark(const isl::ast_node_mark &node) {
   std::string mark = node.get_id().get_name();
   // add for tensor core

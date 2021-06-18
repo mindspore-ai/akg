@@ -659,7 +659,7 @@ class InitStmtIndexModify : public IRMutator {
         if (is_found) {
           init_stmt_emit_ = false;
         }
-        return IfThenElse::make(condition, op->then_case, op->else_case);
+        return condition.defined() ? IfThenElse::make(condition, op->then_case, op->else_case) : op->then_case;
       }
     }
     return stmt;

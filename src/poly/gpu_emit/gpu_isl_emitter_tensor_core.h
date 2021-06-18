@@ -77,7 +77,6 @@ class GpuIslEmitterTensorCore : public GpuIslEmitter {
   Stmt Emit(const isl::ast_node &node) final;
 
  private:
-  Stmt EmitStmt(const isl::ast_node_user &node) final;
   Stmt EmitMark(const isl::ast_node_mark &node_id) final;
   isl::multi_aff TensorAccessMultAff(isl::id &tensor_id, const Array<Expr> &subscripts, const isl::id &stmt_id);
   TensorCoreInfo tensor_core_info_;
