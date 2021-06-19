@@ -21,7 +21,7 @@ AKG composes with three basic optimization module, normalization, auto schedule 
   <img src="docs/akg-design.png" style="zoom:80%" div align=center/>
 
 ## Hardware Backends Support
-At present, `GPU V100/A100` are supported. More Backends are on the list.
+At present, `Ascend910` and `GPU V100/A100` are supported. More Backends are on the list.
 
 ## Build
 
@@ -31,12 +31,30 @@ See [MindSpore README.md](https://gitee.com/mindspore/mindspore/blob/master/READ
 ### Build Standalone
 We suggest you build and run akg together with MindSpore. And we also provide a way to run case in standalone mode for convenience sake.
 Refer to [MindSpore Installation](https://www.mindspore.cn/install/en) for more information about compilation dependencies.
+- Build on Ascend910
+
+  [git-lfs](https://github.com/git-lfs/git-lfs/wiki/installation) needs to be installed before cloning the source codes.
   ```
-  bash build.sh -e $target // target can set 'gpu'
+  git clone https://gitee.com/mindspore/akg.git
+  cd akg
+  bash build.sh -e ascend
+  ```
+
+- Build on GPU
+  ```
+  git clone https://gitee.com/mindspore/akg.git
+  cd akg
+  bash build.sh -e gpu
   ```
 
 ## Run Standalone
 1. Set Environment
+
+- Ascend910
+  ```
+  cd tests
+  source ./test_env.sh
+  ```
 
 - GPU V100/A100
   ```
@@ -46,10 +64,16 @@ Refer to [MindSpore Installation](https://www.mindspore.cn/install/en) for more 
 
 2. Run test
 
+- Ascend910
+  ```
+  cd tests/st/ops/ascend/vector
+  pytest -s test_abs_001.py -m "level0" # run level0 testcases
+  ```
+
 - GPU V100/A100
   ```
   cd tests/operators/gpu
-  python3 test_all.py -s "op_name" #replace op_name with the operator name which you want to test
+  python3 test_all.py "op_name" # replace op_name with the operator name which you want to test
   ```
 
 ## Contributing

@@ -65,44 +65,41 @@ set(AKG_EXTEND )
 if(NOT USE_CUDA)
   set(AKG_EXTEND_FILE )
   set(LIB_PATH1 ${AKG_SOURCE_DIR}/libakg_ext.a)
-  set(LIB_PATH2 ${AKG_SOURCE_DIR}/build/libakg_ext.a)
+  set(LIB_PATH2 ${CMAKE_CURRENT_BINARY_DIR}/libakg_ext.a)
 
-  if(EXISTS ${LIB_PATH1})  # Search libakg_ext.a in akg/
+  if(EXISTS ${LIB_PATH1})  # Search libakg_ext.a in akg_source_dir/
     set(AKG_EXTEND_FILE ${LIB_PATH1})
+    message("-- Find ${LIB_PATH1}")
   else()
-    if(EXISTS ${LIB_PATH2})  # Search libakg_ext.a in akg/build/
+    if(EXISTS ${LIB_PATH2})  # If .a not found, search .a in akg_build_dir/
       set(AKG_EXTEND_FILE ${LIB_PATH2})
-    elseif(NOT USE_KC_AIR AND NOT USE_CCE_PROFILING)  # Download libakg_ext.a to akg/build/
-      execute_process(COMMAND bash ${AKG_SOURCE_DIR}/build.sh -a
+      message("-- Find ${LIB_PATH2}")
+    elseif(NOT USE_KC_AIR AND NOT USE_CCE_PROFILING)  # If .a not found, search .o in akg_source_dir/prebuild
+      execute_process(COMMAND bash ${AKG_SOURCE_DIR}/build.sh -o
               WORKING_DIRECTORY ${AKG_SOURCE_DIR}
-              OUTPUT_VARIABLE OUTPUT_URL
+              OUTPUT_VARIABLE EXEC_OUTPUT
               RESULT_VARIABLE RESULT)
-      if(RESULT EQUAL 0 AND OUTPUT_URL MATCHES "libakg_ext.a")
-        # Download library
-        string(STRIP ${OUTPUT_URL} LIB_URL)
-        message("-- Downloading ${LIB_URL} --> ${LIB_PATH2}")
-        file(DOWNLOAD ${LIB_URL} ${LIB_PATH2} STATUS DOWNLOAD_STATUS)
-        message("-- Download status: ${DOWNLOAD_STATUS}")
-        list(GET DOWNLOAD_STATUS 0 DOWNLOAD_CODE)
-        if(DOWNLOAD_CODE EQUAL 0)
-          set(AKG_EXTEND_FILE ${LIB_PATH2})
-        endif()
+      message("${EXEC_OUTPUT}")
+      if(RESULT EQUAL 0)
+        string(STRIP ${EXEC_OUTPUT} AKG_EXTEND_DIR)
+        file(GLOB AKG_EXTEND ${AKG_EXTEND_DIR}/*.o)
+        message("-- Find .o in ${AKG_EXTEND_DIR}")
       endif()
     endif()
   endif()
 
-  message("-- AKG_EXTEND_FILE: ${AKG_EXTEND_FILE}")
   if(EXISTS ${AKG_EXTEND_FILE})
     file(COPY ${AKG_EXTEND_FILE} DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/akg_extend)
     execute_process(COMMAND ar -x libakg_ext.a
             WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/akg_extend)
     file(GLOB AKG_EXTEND ${CMAKE_CURRENT_BINARY_DIR}/akg_extend/*.o)
   endif()
-endif()
-if(NOT AKG_EXTEND)
-  message("-- Build without AKG_EXTEND support")
-else()
-  message("-- Build with AKG_EXTEND support")
+
+  if(NOT AKG_EXTEND)
+    message("-- Warning: Build AKG without Ascend back-end support")
+  else()
+    message("-- Build AKG with Ascend back-end support")
+  endif()
 endif()
 
 file(COPY ${AKG_SOURCE_DIR}/python/akg DESTINATION

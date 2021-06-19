@@ -616,8 +616,19 @@ NodeRef Lower(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeRef> 
   NodeRef tmp = LowerStmt(sch, in_args, shape_vars, name, in_binds, in_attrs, simple_mode, polyhedral, tuning, target,
                           config, &args, &arg_list_0, &binds, &binds_0, &split_index);
 #ifdef USE_AKG_COMPILE_STUB
-  CHECK(target != "cce") << "Can not enable target cce, please make sure akg/build/libakg_ext.a "
-                            "downloaded successfully, then recompile the source codes";
+  CHECK(target != "cce") << "Can not enable target cce, because akg Ascend back-end's binary file is not linked to"
+                            " libakg.so during the compiling process, please check the following cases:\n"
+                            "case 1: If compile akg with -DUSE_KC_AIR=1 or -DUSE_CCE_PROFILING=1, check if libakg_ext.a"
+                            " exists in akg_source_dir(CMAKE_CURRENT_SOURCE_DIR) or"
+                            " akg_build_dir(CMAKE_CURRENT_BINARY_DIR).\n"
+                            "case 2: If compile akg without -DUSE_KC_AIR=1 and -DUSE_CCE_PROFILING=1(compiling akg"
+                            " from mindspore belongs to this case), then you can perform the following steps:\n"
+                            "        1. Check if git lfs is installed, in not, install git lfs, refer"
+                            " https://github.com/git-lfs/git-lfs/wiki/installation\n"
+                            "        2. After installing git lfs, executing the following commands:\n"
+                            "           cd akg_source_dir (e.g. cd /home/user_name/akg)\n"
+                            "           git lfs pull\n"
+                            "        3. Re-compile the source codes";
   if (tuning || g_attrs.GetInt(kHelpTiling, -1) > help_tiling_level["None"]) {
     return tmp;
   }
