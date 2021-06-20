@@ -198,6 +198,26 @@ __device__ void atomicMin(half *const addr, const half val) {
 }
 #endif
 
+// atomicAnd: int
+__device__ void atomicAnd(int *const addr, const int val) {
+  unsigned int *const addr_as_ui = (unsigned int *)addr;
+  unsigned int old = *addr_as_ui, assumed;
+  do {
+    assumed = old;
+    old = atomicCAS(addr_as_ui, assumed, (unsigned int)(val && int(assumed)));
+  } while (assumed != old);
+}
+
+// atomicOr: int
+__device__ void atomicOr(int *const addr, const int val) {
+  unsigned int *const addr_as_ui = (unsigned int *)addr;
+  unsigned int old = *addr_as_ui, assumed;
+  do {
+    assumed = old;
+    old = atomicCAS(addr_as_ui, assumed, (unsigned int)(val || int(assumed)));
+  } while (assumed != old);
+}
+
 // AtomicOp for diverse atomic ops by identifier
 // Atomic sample in cuda: int atomicMax(int* address, int val);
 template <typename T, int identifier>
@@ -216,6 +236,16 @@ struct AtomicOp<T, 1> {
 template <typename T>
 struct AtomicOp<T, 2> {
   __device__ __forceinline__ void Compute(T *global_addr, T value) { atomicMin(global_addr, value); }
+};
+
+template <typename T>
+struct AtomicOp<T, 3> {
+  __device__ __forceinline__ void Compute(T *global_addr, T value) { atomicAnd(global_addr, value); }
+};
+
+template <typename T>
+struct AtomicOp<T, 4> {
+  __device__ __forceinline__ void Compute(T *global_addr, T value) { atomicOr(global_addr, value); }
 };
 
 }  // namespace akg_reduce

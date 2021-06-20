@@ -73,12 +73,16 @@ Expr Cast::make(DataType t, Expr value) {
 Expr And::make(Expr a, Expr b) {
   CHECK(a.defined()) << "ValueError: a is undefined";
   CHECK(b.defined()) << "ValueError: b is undefined";
-  CHECK(a.type().is_bool());
-  CHECK(b.type().is_bool());
+  CHECK(a.type().is_bool()||a.type().is_int());
+  CHECK(b.type().is_bool()||b.type().is_int());
   CHECK(a.type() == b.type()) << "TypeError: mismatched types";
 
   NodePtr<And> node = make_node<And>();
-  node->type = Bool(a.type().lanes());
+  if (a.type().is_bool()) {
+    node->type = Bool(a.type().lanes());
+  } else {
+    node->type = Int(32);
+  }
   node->a = std::move(a);
   node->b = std::move(b);
   return Expr(node);
@@ -87,12 +91,16 @@ Expr And::make(Expr a, Expr b) {
 Expr Or::make(Expr a, Expr b) {
   CHECK(a.defined()) << "ValueError: a is undefined";
   CHECK(b.defined()) << "ValueError: b is undefined";
-  CHECK(a.type().is_bool());
-  CHECK(b.type().is_bool());
+  CHECK(a.type().is_bool()||a.type().is_int());
+  CHECK(b.type().is_bool()||b.type().is_int());
   CHECK(a.type() == b.type()) << "TypeError: mismatched types";
 
   NodePtr<Or> node = make_node<Or>();
-  node->type = Bool(a.type().lanes());
+  if (a.type().is_bool()) {
+    node->type = Bool(a.type().lanes());
+  } else {
+    node->type = Int(32);
+  }
   node->a = std::move(a);
   node->b = std::move(b);
   return Expr(node);
