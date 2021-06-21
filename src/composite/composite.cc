@@ -206,6 +206,13 @@ void ExtractBuildInfo(const picojson::value &input_json, BuildInfo &info) {
   CollectBuildInfo(info);
 }
 
+akg::BuildConfig GetConfig() {
+  akg::BuildConfig config = akg::BuildConfig::Current();
+  CHECK(config.defined());
+  config->dump_pass_ir = getenv(GetDumpIRFlag().c_str()) != nullptr;
+  return config;
+}
+
 Stmt String2LowerStmtSimple(const StringImm *json_str, const Map<std::string, NodeRef> &attrs, bool poly,
                             bool buffer_stitch, bool fold_dim, std::vector<size_t> &split_index) {
   CHECK(json_str);
@@ -219,10 +226,7 @@ Stmt String2LowerStmtSimple(const StringImm *json_str, const Map<std::string, No
   const auto *sch_create = air::runtime::Registry::Get("select_cuda_scheduler");
   CHECK(sch_create != nullptr);
   Schedule sch = (*sch_create)(info.tensors, sch_name, poly);
-  akg::BuildConfig config = akg::BuildConfig::Current();
-  CHECK(config.defined());
-  const char *akg_dump_pass_ir = getenv(GetDumpIRFlag().c_str());
-  config->dump_pass_ir = akg_dump_pass_ir != nullptr;
+  auto config = GetConfig();
   Array<NodeRef> args, shape_vars, arg_list_0;
   Map<Tensor, Buffer> binds, binds_0;
   auto stmt = LowerStmt(sch, info.args, shape_vars, info.kernel_name + "_check", info.in_binds, attrs, false, poly,
@@ -231,17 +235,13 @@ Stmt String2LowerStmtSimple(const StringImm *json_str, const Map<std::string, No
 }
 
 NodeRef CompositeWithJsonToFunc(const std::string &json_str, Map<std::string, NodeRef> attrs) {
-  const char *akg_dump_pass_ir = getenv(GetDumpIRFlag().c_str());
   picojson::value v = String2Json(json_str);
   BuildInfo info;
   ExtractBuildInfo(v, info);
   Array<Operation> ops;
   std::for_each(info.tensors.begin(), info.tensors.end(), [&ops](const Tensor &t) { ops.push_back(t->op); });
   Schedule sch = create_schedule(ops);
-  akg::BuildConfig config = akg::BuildConfig::Current();
-  CHECK(config.defined());
-  config->dump_pass_ir = akg_dump_pass_ir != nullptr;
-  attrs.Set("pragma_reschedule", make_const(Int(32), 1));
+  auto config = GetConfig();
   if (attrs.find("kernel_name") != attrs.end()) {
     CHECK(attrs["kernel_name"]->IsInstance<StringImm>());
     info.kernel_name = attrs["kernel_name"].as<StringImm>()->value;
@@ -278,8 +278,7 @@ NodeRef CompositeLower(const std::string &json_str, const Map<std::string, NodeR
   Array<Operation> ops;
   std::for_each(info.tensors.begin(), info.tensors.end(), [&ops](const Tensor &t) { ops.push_back(t->op); });
   Schedule sch = create_schedule(ops);
-  akg::BuildConfig config = akg::BuildConfig::Current();
-  CHECK(config.defined());
+  auto config = GetConfig();
   bool tuning = attrs.find("tuning") != attrs.end();
   std::string target = "cce";
   if (GetProcess(json_str) == "cuda") {
@@ -289,6 +288,7 @@ NodeRef CompositeLower(const std::string &json_str, const Map<std::string, NodeR
   return akg::Lower(sch, info.args, shape_vars, info.kernel_name, info.in_binds, attrs, false, true, tuning, target,
                     config);
 }
+
 std::vector<std::string> GetNames(const Array<NodeRef> &io) {
   std::vector<std::string> names;
   for (const auto &arg : io) {
@@ -298,6 +298,7 @@ std::vector<std::string> GetNames(const Array<NodeRef> &io) {
   }
   return names;
 }
+
 Array<NodeRef> ReorderArgs(const Array<NodeRef> &inputs, const Array<NodeRef> &outputs, const Array<NodeRef> &all_args,
                            std::unordered_map<std::string, NodeRef> &outputs2args) {
   // reorder args_list, now args_list satisfies: op1_input op2_input ... op1_output op2_output ...
@@ -380,6 +381,13 @@ class ElimDuplicateInputs : public IRMutator {
   std::unordered_map<std::string, Var> vars_;
   std::vector<std::string> names_;
 };
+
+#define DUMP_ORIGIN_IR(dump_manager, arg0) dump_manager.DumpStmt("Origin", arg0)
+#define TRANSFORM_AND_TRY_DUMP(dump_manager, out0, call, arg0, ...) \
+  do {                                                              \
+    out0 = call(arg0, ##__VA_ARGS__);                               \
+    dump_manager.DumpStmt(#call, out0);                             \
+  } while (0)
 
 class CompositeJsonList {
  public:
@@ -464,44 +472,14 @@ class CompositeJsonList {
     }
 
     // Postprocess for segments: 1. Merge segments; 2. Process sync stmt; 3. Eliminate duplicate inputs.
-    akg::BuildConfig final_config = akg::BuildConfig::Current();
-    CHECK(final_config.defined());
-    final_config->dump_pass_ir = getenv(GetDumpIRFlag().c_str()) != nullptr;
-    auto res_ir = MergeStmts(block_irs, final_config);
-
-    Array<NodeRef> ordered_args = ReorderArgs(inputs_, outputs_, all_args_, outputs2args_);
-    auto rst = LowerFunc(res_ir, merge_name_, final_config, ordered_args);
-    auto build_rst = BuildRstNode::make(rst, merge_name_);
+    auto res_ir = MergeStmts(block_irs);
+    auto build_rst = PostprocessToBuildRst(res_ir);
     return BuildToModule(build_rst, target_);
   }
 
  protected:
-  Stmt MergeStmts(std::vector<Stmt> block_irs, const BuildConfig &config) {
-    auto dump_mng = DumpManager(merge_name_ + "_merge", config->dump_pass_ir);
-    dump_mng.DumpStmt("Origin", block_irs);
-
-    Stmt merged_ir;
-    if (block_irs.size() == 1) {
-      merged_ir = block_irs[0];
-    } else {
-      auto attrs = Downcast<Map<std::string, NodeRef>>(attrs_list_[0]);
-      if (attrs.find("pipeline_groups") != attrs.end()) {
-        auto pipeline_groups = Downcast<Array<Array<NodeRef>>>(attrs["pipeline_groups"]);
-        block_irs = ir::PipelineFusion(block_irs, pipeline_groups);
-        dump_mng.DumpStmt("PipelineFusion", block_irs);
-      }
-
-      merged_ir = ir::BlockFusion(block_irs);
-      dump_mng.DumpStmt("BlockFusion", merged_ir);
-    }
-
-    merged_ir = ir::ProcessSyncInnerThread(merged_ir);
-    dump_mng.DumpStmt("ProcessSyncInnerThread", merged_ir);
-    merged_ir = ElimDuplicateInputs(inputs_).Run(merged_ir);
-    dump_mng.DumpStmt("ElimDuplicateInputs", merged_ir);
-
-    return merged_ir;
-  }
+  virtual Stmt MergeStmts(std::vector<Stmt> &block_irs) = 0;
+  virtual NodeRef PostprocessToBuildRst(Stmt &stmt) = 0;
 
   void GetRealOutputs() {
     auto outputs_name = GetNames(outputs_);
@@ -530,6 +508,7 @@ class CompositeJsonList {
   std::vector<size_t> split_index_;
 };
 
+#ifdef USE_AKG_COMPILE_STUB
 class CompositeJsonListGpu : public CompositeJsonList {
  public:
   CompositeJsonListGpu(const Array<NodeRef> &json_str_node, const Array<NodeRef> &inputs, const Array<NodeRef> &outputs,
@@ -596,9 +575,7 @@ class CompositeJsonListGpu : public CompositeJsonList {
     const auto *sch_create = air::runtime::Registry::Get("select_cuda_scheduler");
     CHECK(sch_create != nullptr);
     Schedule sch = (*sch_create)(info.tensors, sch_name, poly_, grid_dims, block_dims, buffer_stitch);
-    akg::BuildConfig config = akg::BuildConfig::Current();
-    CHECK(config.defined());
-    config->dump_pass_ir = getenv(GetDumpIRFlag().c_str()) != nullptr;
+    auto config = GetConfig();
     // use each_ir_idx_ to distinct different subgraph
     std::string distinct_name = info.kernel_name + "_" + std::to_string(each_ir_idx_);
     Array<NodeRef> args, shape_vars, arg_list_0;
@@ -661,16 +638,209 @@ class CompositeJsonListGpu : public CompositeJsonList {
     stitch_attr.type_array = ir_type_array;
     return stitch_irs;
   }
+
+ private:
+  Stmt MergeStmts(std::vector<Stmt> &block_irs) final {
+    auto config = GetConfig();
+    auto dump_mng = DumpManager(merge_name_ + "_merge", config->dump_pass_ir);
+    DUMP_ORIGIN_IR(dump_mng, block_irs);
+
+    Stmt merged_ir;
+    if (block_irs.size() == 1) {
+      merged_ir = block_irs[0];
+    } else {
+      auto attrs = Downcast<Map<std::string, NodeRef>>(attrs_list_[0]);
+      if (attrs.find("pipeline_groups") != attrs.end()) {
+        auto pipeline_groups = Downcast<Array<Array<NodeRef>>>(attrs["pipeline_groups"]);
+        TRANSFORM_AND_TRY_DUMP(dump_mng, block_irs, ir::PipelineFusion, block_irs, pipeline_groups, target_);
+      }
+      TRANSFORM_AND_TRY_DUMP(dump_mng, merged_ir, ir::BlockFusion, block_irs, target_);
+    }
+
+    TRANSFORM_AND_TRY_DUMP(dump_mng, merged_ir, ir::ProcessSyncInnerThread, merged_ir);
+    auto ElimDupInputs = [](Stmt stmt, const Array<NodeRef> &inputs) { return ElimDuplicateInputs(inputs).Run(stmt); };
+    TRANSFORM_AND_TRY_DUMP(dump_mng, merged_ir, ElimDupInputs, merged_ir, inputs_);
+    return merged_ir;
+  }
+
+  NodeRef PostprocessToBuildRst(Stmt &stmt) final {
+    auto config = GetConfig();
+    Array<NodeRef> ordered_args = ReorderArgs(inputs_, outputs_, all_args_, outputs2args_);
+    auto rst = LowerFunc(stmt, merge_name_, config, ordered_args);
+    return BuildRstNode::make(rst, merge_name_);
+  }
 };
+#else
+class CompositeJsonListAscend : public CompositeJsonList {
+ public:
+  CompositeJsonListAscend(const Array<NodeRef> &json_str_node, const Array<NodeRef> &inputs,
+                          const Array<NodeRef> &outputs, const Array<NodeRef> &alloc_map_list,
+                          const Array<NodeRef> &reuse_map_list, const Array<NodeRef> &clean_op_map_list,
+                          const Array<NodeRef> &attrs_list, bool poly, std::string target)
+      : CompositeJsonList(json_str_node, inputs, outputs, alloc_map_list, reuse_map_list, clean_op_map_list, attrs_list,
+                          poly, target) {}
+  Stmt StitchFusion(const NodeRef &block_json, Map<std::string, NodeRef> &attrs) override {
+    return String2LowerStmt(Downcast<Array<Expr>>(block_json)[0].as<StringImm>(), attrs);
+  }
+
+  Stmt String2LowerStmt(const StringImm *json_str, const Map<std::string, NodeRef> &attrs) override {
+    CHECK(json_str);
+    picojson::value v = String2Json(json_str->value);
+    BuildInfo info;
+    info.opt.stitch_ir_idx_ = each_ir_idx_;
+    info.opt.stitch = false;
+    info.opt.fold_dim = true;
+    ExtractBuildInfo(v, info);
+    // ensure merge_name_ is the same as original json name
+    if (merge_name_.empty()) merge_name_ = info.kernel_name;
+    Array<Operation> ops;
+    std::for_each(info.tensors.begin(), info.tensors.end(), [&ops](const Tensor &t) { ops.push_back(t->op); });
+    Schedule sch = create_schedule(ops);
+    auto config = GetConfig();
+    // use each_ir_idx_ to distinct different subgraph
+    std::string distinct_name = info.kernel_name + "_" + std::to_string(each_ir_idx_);
+    Array<NodeRef> args, shape_vars, arg_list_0;
+    Map<Tensor, Buffer> binds, binds_0;
+    std::vector<size_t> split_index;
+    auto node_ref = LowerStmt(sch, info.args, shape_vars, distinct_name, info.in_binds, attrs, false, poly_, false,
+                              "cce", config, &args, &arg_list_0, &binds, &binds_0, &split_index, true);
+    auto stmt = Downcast<Stmt>(node_ref);
+    LowerData data(info.args, arg_list_0, binds, binds_0, shape_vars, distinct_name, false, true, false, "cce", config);
+    node_ref = LowerAscend(stmt, data, LowerStage::BEGIN, LowerStage::BEFORE_REWRITE);
+
+    lower_datas_.emplace_back(data);
+
+    size_t count = 0;
+    for (const auto &x : data.arg_list_0_) {
+      auto buffer = x.as<BufferNode>();
+      CHECK(buffer) << "arg must be a BufferNode";
+      if (std::find(info.input_names.begin(), info.input_names.end(), buffer->name) == std::end(info.input_names)) {
+        CHECK(count < info.output_names.size());
+        outputs2args_[info.output_names[count]] = x;
+        count++;
+      }
+      all_args_.push_back(x);
+    }
+    return Downcast<Stmt>(node_ref);
+  }
+
+ private:
+  Stmt MergeStmts(std::vector<Stmt> &block_irs) final {
+    auto dump_mng = DumpManager(merge_name_ + "_merge", getenv(GetDumpIRFlag().c_str()) != nullptr);
+    DUMP_ORIGIN_IR(dump_mng, block_irs);
+
+    Stmt merged_ir;
+    if (block_irs.size() == 1) {
+      merged_ir = block_irs[0];
+    } else {
+      auto attrs = Downcast<Map<std::string, NodeRef>>(attrs_list_[0]);
+      if (attrs.find("pipeline_groups") != attrs.end()) {
+        auto pipeline_groups = Downcast<Array<Array<NodeRef>>>(attrs["pipeline_groups"]);
+        TRANSFORM_AND_TRY_DUMP(dump_mng, block_irs, ir::PipelineFusion, block_irs, pipeline_groups, target_);
+        RearrangeLowerData(pipeline_groups);
+      }
+      auto RewriteBlocks = [this](std::vector<Stmt> &block_irs) {
+        for (size_t i = 0; i < block_irs.size(); ++i) {
+          lower_datas_[i].name = std::string("part_").append(std::to_string(i));
+          block_irs[i] = Downcast<Stmt>(
+            LowerAscend(block_irs[i], lower_datas_[i], LowerStage::REWRITE, LowerStage::BEFORE_LOWERFUNC));
+        }
+        return block_irs;
+      };
+      TRANSFORM_AND_TRY_DUMP(dump_mng, block_irs, RewriteBlocks, block_irs);
+      TRANSFORM_AND_TRY_DUMP(dump_mng, merged_ir, ir::BlockFusion, block_irs, target_);
+    }
+
+    auto ElimDupInputs = [](Stmt &stmt, const Array<NodeRef> &inputs) { return ElimDuplicateInputs(inputs).Run(stmt); };
+    TRANSFORM_AND_TRY_DUMP(dump_mng, merged_ir, ElimDupInputs, merged_ir, inputs_);
+    return merged_ir;
+  }
+
+  void RearrangeLowerData(const Array<Array<NodeRef>> &pipeline_groups) {
+    std::set<size_t> visited;
+    std::vector<std::set<size_t>> groups;
+    groups.resize(pipeline_groups.size());
+    for (size_t i = 0; i < pipeline_groups.size(); ++i) {
+      for (auto group_id : pipeline_groups[i]) {
+        auto segment_id = group_id.as<IntImm>()->value;
+        groups[i].insert(segment_id);
+        visited.insert(segment_id);
+      }
+    }
+
+    std::vector<LowerData> new_data;
+    for (size_t i = 0; i < lower_datas_.size(); ++i) {
+      if (visited.count(i) == 0) {
+        new_data.push_back(lower_datas_[i]);
+      }
+    }
+
+    for (const auto &g : groups) {
+      MergeLowerData(g);
+      new_data.push_back(final_data_);
+    }
+
+    lower_datas_ = new_data;
+  }
+
+  void MergeLowerData(const std::set<size_t> &specified = {}) {
+    bool all_merge = specified.empty();
+    final_data_ = LowerData();
+    for (size_t idx = 0; idx < lower_datas_.size(); ++idx) {
+      auto &lower_data = lower_datas_[idx];
+
+      if (!all_merge && specified.count(idx) == 0) continue;
+      for (auto arg : lower_data.args_) {
+        final_data_.args_.push_back(arg);
+      }
+      for (auto arg_list : lower_data.arg_list_0_) {
+        final_data_.arg_list_0_.push_back(arg_list);
+      }
+      for (auto iter : lower_data.binds_) {
+        final_data_.binds_.Set(iter.first, iter.second);
+      }
+      for (auto iter : lower_data.binds_0_) {
+        final_data_.binds_0_.Set(iter.first, iter.second);
+      }
+      for (auto shape_var : lower_data.shape_vars_) {
+        final_data_.shape_vars_.push_back(shape_var);
+      }
+
+      final_data_.config_ = lower_data.config_;
+      final_data_.name = lower_data.name;
+    }
+  }
+
+  NodeRef PostprocessToBuildRst(Stmt &stmt) final {
+    MergeLowerData();
+    auto config = GetConfig();
+    Array<NodeRef> ordered_args = ReorderArgs(inputs_, outputs_, all_args_, outputs2args_);
+    final_data_.arg_list_0_ = ordered_args;
+    final_data_.name = merge_name_;
+    auto rst = LowerAscend(stmt, final_data_, LowerStage::END, LowerStage::END);
+    return BuildRstNode::make(rst, merge_name_);
+  }
+
+  std::vector<LowerData> lower_datas_;
+  LowerData final_data_;
+};
+#endif
 
 Module CompositeWithJsonList(const Array<NodeRef> &json_str_node, const Array<NodeRef> &inputs,
                              const Array<NodeRef> &outputs, const Array<NodeRef> &alloc_map_list,
                              const Array<NodeRef> &reuse_map_list, const Array<NodeRef> &clean_op_map_list,
                              const Array<NodeRef> &attrs_list, bool poly, const std::string &target) {
+#ifdef USE_AKG_COMPILE_STUB
   if (target == "cuda") {
     return CompositeJsonListGpu(json_str_node, inputs, outputs, alloc_map_list, reuse_map_list, clean_op_map_list,
                                 attrs_list, poly, target)
       .Build();
+#else
+  if (target == "cce") {
+    return CompositeJsonListAscend(json_str_node, inputs, outputs, alloc_map_list, reuse_map_list, clean_op_map_list,
+                                   attrs_list, poly, target)
+      .Build();
+#endif
   } else {
     CHECK(0) << "UNSUPPORTED TARGET: " << target;
     return Module();
