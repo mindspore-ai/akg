@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 
 import math
 import random
+import logging
 import numpy as np
 import akg.tvm
 from akg.utils.validation_check import MAX_DATA_SIZE
@@ -124,3 +125,86 @@ def gen_random_shape(shape_dim, slope=0, min_value=None, max_value=None):
     for mn, mx in zip(shape_min, shape_extent):
         random_shape.append(random.randint(mn, mx))
     return random_shape
+
+
+def precheck(desc):
+    """
+    This utils is used to:
+        1. Run a precheck for those testing cases that have only element-wise computations and then
+        2. Return a reasonable mean value for generating random Gaussian input data.
+    to avoid the precision error caused by computing division by zero, the reciprocal of zero or the root squared of
+    zero.
+    """
+    elemwise_op_func_map = {
+        "Neg": lambda a: -a, "Abs": lambda a: abs(a), "Cast": lambda a: a, "Log": lambda a: math.log(a),
+        "Exp": lambda a: math.exp(a), "Sqrt": lambda a: math.sqrt(a), "Rsqrt": lambda a: 1/math.sqrt(a),
+        "Reciprocal": lambda a: 1/a, "Square": lambda a: a**2,
+        "Add": lambda a, b: a+b, "Sub": lambda a, b: a-b, "Mul": lambda a, b: a*b, "RealDiv": lambda a, b: a/b,
+        "Minimum": lambda a, b: min(a, b), "Maximum": lambda a, b: max(a, b), "Pow": lambda a, b: pow(a, b)
+    }
+    stop_forward = set()
+    variable = dict()
+
+    def update_stop_forward(out_desc):
+        for out_tensor in out_desc:
+            stop_forward.add(out_tensor['tensor_name'])
+
+    def need_jump(op_desc):
+        for in_desc in op_desc['input_desc']:
+            for in_tensor in in_desc:
+                if in_tensor['tensor_name'] in stop_forward:
+                    update_stop_forward(op_desc['output_desc'])
+                    return True
+        return False
+
+    def fill_input_value(input_desc, input_value):
+        inputs = []
+        for in_desc in input_desc:
+            for in_tensor in in_desc:
+                if "value" in in_tensor:
+                    val = in_tensor["value"]
+                elif in_tensor['tensor_name'] in variable:
+                    val = variable[in_tensor['tensor_name']]
+                else:
+                    val = input_value
+                inputs.append(val)
+        return inputs
+
+    def compute_math(op_name, inputs, input_value):
+        if op_name == "Rsqrt" and abs(inputs[0]) <= 0.01:
+            logging.info(
+                "The input with mean value {} fails the precheck because zero has no square root".format(input_value))
+            return None
+        elif op_name == "Reciprocal" and abs(inputs[0]) <= 0.01:
+            logging.info(
+                "The input with mean value {} fails the precheck because zero has no reciprocal".format(input_value))
+            return None
+        elif op_name == "RealDiv" and abs(inputs[1]) <= 0.01:
+            logging.info(
+                "The input with mean value {} fails the precheck because zero cannot be a divisor".format(input_value))
+            return None
+        else:
+            return elemwise_op_func_map[op_name](*inputs)
+
+    def check_pass(input_value):
+        for op_desc in desc['op_desc']:
+            if op_desc['name'] not in elemwise_op_func_map:
+                update_stop_forward(op_desc['output_desc'])
+            elif not need_jump(op_desc):
+                inputs = fill_input_value(op_desc['input_desc'], input_value)
+                output = op_desc['output_desc'][0]['tensor_name']
+                if compute_math(op_desc['name'], inputs, input_value) is None:
+                    return False
+                variable[output] = compute_math(op_desc['name'], inputs, input_value)
+        return True
+
+    initial_input = 1
+    while not check_pass(initial_input):
+        initial_input += 1
+        if initial_input > 20:
+            logging.info(
+                "Input mean value check failed! Just use mean value 1. Precision error may occur! ")
+            return 1
+    logging.info(
+        "Input data with mean value {} is generated".format(initial_input))
+    return initial_input
