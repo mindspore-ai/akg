@@ -93,16 +93,6 @@ int UserConfig::GetDataBytes(const std::string &name) const {
   return 1;
 }
 
-Type UserConfig::GetDataType(const std::string &name) const {
-  for (auto i : GetBind()) {
-    if (i.first->op->name == name) {
-      Type type = i.first->dtype;
-      return type;
-    }
-  }
-  CHECK(false) << "Get Data Type fail!";
-  return Type();
-}
 std::string CubeInfo::ExtractStringFromAttrs(const std::string &name) const {
   for (auto i : analysis_result_.GetStmtOpInfoMap()) {
     if (!i.second.isMMU) {

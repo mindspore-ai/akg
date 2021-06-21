@@ -513,7 +513,7 @@ class AtomicReturnStmtEmit : public IRMutator {
       auto op = stmt.as<Provide>();
       CHECK(op);
       atomic_data_.atomic_rhs_ = op->value;
-      atomic_data_.output_tensor_data_type_info_ = scop_info_.user_config_.GetDataType(op->func->func_name());
+      atomic_data_.output_tensor_data_type_info_ = scop_info_.GetDtypeOf(op->func->func_name());
 
       ConstructAtomicReturnFuncName();
       return MakeAtomicStmt();
