@@ -15,6 +15,7 @@
 import os
 import sys
 import json
+import time
 import pytest
 import logging
 from akg import composite
@@ -24,7 +25,7 @@ from akg.utils.result_analysis import gpu_profiling
 from akg.utils.format_transform import to_tvm_nd_array
 from tests.common.gen_json_data import gen_json_data
 from tests.common.base import get_rtol_atol
-from tests.common.tensorio import compare_tensor
+from tests.common.tensorio import compare_tensor, dump_tensor
 
 logging.getLogger().setLevel(logging.INFO)
 
@@ -79,6 +80,41 @@ def _compare_func(output, expect):
     rtol, atol = get_rtol_atol("FUSED", str(output.dtype))
     return compare_tensor(output, expect, rtol=rtol, atol=atol)
 
+def _dump_data(path, input, output, expect):
+    input = input if isinstance(input, (list, tuple)) else [input]
+    output = output if isinstance(output, (list, tuple)) else [output]
+    expect = expect if isinstance(expect, (list, tuple)) else [expect]
+
+    file_name_prefix = path + "/data/"
+    if not os.path.isdir(file_name_prefix):
+        os.makedirs(file_name_prefix)
+
+    for i, data in enumerate(input):
+        dump_tensor(data, file_name_prefix + 'input_' + str(i))
+
+    for i, data in enumerate(output):
+        dump_tensor(data, file_name_prefix + 'output_' + str(i))
+    
+    for i, data in enumerate(expect):
+        dump_tensor(data, file_name_prefix + 'expect_' + str(i))
+
+def _dump_info(desc, build_attrs, poly, input, output, expect): 
+    dump_path = os.getenv("AKG_DUMP_TESTCASE_INFO_PATH")
+    if not dump_path or dump_path == "":
+        # dump data to the current dir by default
+        dump_path = "./DUMP"
+
+    json_info = _get_json_dict(desc)
+    op_name = json_info['op']
+    today = time.strftime('%Y-%m-%d', time.localtime(time.time()))
+    dump_path = dump_path + "/" + today + '/' + op_name + "/"
+
+    dump_path = os.path.realpath(dump_path)
+    if not os.path.isdir(dump_path):
+        os.makedirs(dump_path)
+    
+    _dump_data(dump_path, input, output, expect)
+        
 
 def get_result(desc, poly, attrs=None, profiling=True):
     backend = _get_backend(desc)
@@ -94,6 +130,9 @@ def get_result(desc, poly, attrs=None, profiling=True):
     if not all(map(_compare_func, output if isinstance(output, (list, tuple)) else [output],
                    expect if isinstance(expect, (list, tuple)) else [expect])):
         logging.info(mod.imported_modules[0].get_source())
+
+        _dump_info(desc, build_attrs, poly, input_for_mod, output, expect)
+
         return False
     if profiling and backend == "cuda":
         inputs = to_tvm_nd_array(input_for_mod)
