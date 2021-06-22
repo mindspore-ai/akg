@@ -777,7 +777,7 @@ def _json_need_split(desc_d, attrs, poly, target):
 
             cur_attrs["enable_atomic_add"] = should_enable_atomic_add(json.loads(block_jsons[i]))
             if target == "cuda":
-                cur_attrs = _update_attrs_gpu(desc_d, cur_attrs, poly)
+                cur_attrs = _update_attrs_gpu(json.loads(block_jsons[i]), cur_attrs, poly)
             attrs_list.append(cur_attrs)
             alloc_map_list.append(alloc_map)
             reuse_map_list.append(reuse_map)

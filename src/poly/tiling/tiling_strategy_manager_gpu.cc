@@ -1782,6 +1782,15 @@ std::pair<int64_t, int64_t> ConvStrategy::CalculateNumOfWarps(Mma mma) {
   } else if (use_local_group > 1) {
     default_num_warps_ = 2;
   }
+
+  if ((macro_mma_.n / mma.n) % 2 != 0) {
+    default_num_warps_ = 2;
+  }
+
+  if (macro_mma_.k == 64 && macro_mma_.n >= 128) {
+    default_num_warps_ = 8;
+  }
+
   std::tie(w0, w1) = GetDivisibleFactorForMN(macro_mma_.m, macro_mma_.n, default_num_warps_, mma);
   std::stringstream ss;
   ss << "[Conv] Try warp " << default_num_warps_ << " -> " << w0 << " * " << w1;
@@ -1835,38 +1844,35 @@ void ConvStrategy::CalculateMacroMma(MmaConv shape, Mma mma) {
   while (shape.m % macro_mma_.m != 0 && macro_mma_.m / 2 >= mma.m) {
     macro_mma_.m /= 2;
   }
-  while (shape.n % macro_mma_.n != 0 && macro_mma_.n / 2 >= mma.n) {
-    macro_mma_.n /= 2;
+
+  // If n is bigger than 128 and is not multiple of 128, the case is not supported now
+  if (shape.n % macro_mma_.n != 0) {
+    macro_mma_.n = shape.n;
   }
+
   while (shape.k % macro_mma_.k != 0 && macro_mma_.k / 2 >= mma.k) {
     macro_mma_.k /= 2;
   }
 
   // Data volume in the M direction and data volume in the N direction should be close
-  if (macro_mma_.m > macro_mma_.n) {
-    while (macro_mma_.m > macro_mma_.n) {
-      macro_mma_.m /= 2;
-    }
-  } else if (macro_mma_.m < macro_mma_.n) {
-    // split h and w direction, increase the data volume
-    int temp_h = shape.h;
-    int temp_w = shape.w;
-    while (macro_mma_.m * macro_mma_.w * macro_mma_.h < macro_mma_.n) {
-      if (temp_w % 2 == 0) {
-        macro_mma_.w *= 2;
-        temp_w /= 2;
-      } else if (temp_h % 2 == 0) {
-        macro_mma_.h *= 2;
-        temp_h /= 2;
-      } else {
-        break;
-      }
+  // split h and w direction, increase the data volume
+  int temp_h = shape.h;
+  int temp_w = shape.w;
+  while (macro_mma_.m * macro_mma_.w * macro_mma_.h < 128) {
+    if (temp_w % 2 == 0) {
+      macro_mma_.w *= 2;
+      temp_w /= 2;
+    } else if (temp_h % 2 == 0) {
+      macro_mma_.h *= 2;
+      temp_h /= 2;
+    } else {
+      break;
     }
   }
 
   while ((shape.m / macro_mma_.m) * (shape.h / macro_mma_.h) * (shape.w / macro_mma_.w) * (shape.n / macro_mma_.n) <
-           min_blocks_ &&
-         macro_mma_.m / mma.m > 4 && macro_mma_.n / mma.n > 4) {
+           (min_blocks_ - 32) &&
+         macro_mma_.m / mma.m * macro_mma_.h * macro_mma_.w > 4) {
     // decrease h and increase the use of block
     if (macro_mma_.h % 2 == 0) {
       macro_mma_.h /= 2;
@@ -1879,12 +1885,14 @@ void ConvStrategy::CalculateMacroMma(MmaConv shape, Mma mma) {
       continue;
     }
 
-    (shape.m < shape.n) ? macro_mma_.m /= 2 : macro_mma_.n /= 2;
+    if (macro_mma_.m / 2 >= mma.m) {
+      macro_mma_.m /= 2;
+    }
   }
 
-  if ((shape.m / macro_mma_.m) * (shape.h / macro_mma_.h) * (shape.w / macro_mma_.w) * (shape.n / macro_mma_.n) <
-        min_blocks_ &&
-      shape.k % (macro_mma_.k * 2) == 0 && shape.k / (macro_mma_.k * 2) > 1) {
+  real_blocks_ =
+    (shape.m / macro_mma_.m) * (shape.h / macro_mma_.h) * (shape.w / macro_mma_.w) * (shape.n / macro_mma_.n);
+  if (real_blocks_ > (min_blocks_ - 32)) {
     macro_mma_.k *= 2;
   }
   ss << "[Final macro mma]: [" << macro_mma.m << ", " << macro_mma.h << ", " << macro_mma.w << ", " << macro_mma.n
