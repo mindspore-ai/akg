@@ -13,12 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "build_module.h"
-#include "tiling_strategy_manager.h"
+#include "./tiling_strategy_manager.h"
 
 #include <numeric>
 
-#include "tiling_analyzer.h"
+#include "../../src/include/build_module.h"
+#include "./tiling_analyzer.h"
 #include "poly/schedule_pass_gpu/register_memory_manager.h"
 
 namespace akg {
@@ -59,9 +59,8 @@ void GemmStrategy::AddGpuConstraint() {
   reg_bytes_ = MAX_REGISTER_PER_THREAD_BLOCK * REGISTER_ALLOC_RATIO;
 
   auto b_axes = analyzer_->GetAxesOfAttr(AttrInfo{AT_GEMM, "bi"});
-  for (auto bo : analyzer_->GetAxesOfAttr(AttrInfo{AT_GEMM, "bo"})) {
-    b_axes.push_back(bo);
-  }
+  auto bo_axes = analyzer_->GetAxesOfAttr(AttrInfo{AT_GEMM, "bo"});
+  std::copy(bo_axes.begin(), bo_axes.end(), std::back_inserter(b_axes));
   for (auto b_axis : b_axes) {
     CHECK(b_axis->range_extent.as<IntImm>()) << "Dynamic shape is not supported in tensor core for now.";
     b_axis->TileRestrainToSingleValue(CastIntToExpr(MIN_TILE), CACHE1);
@@ -274,14 +273,13 @@ std::pair<int64_t, int64_t> GemmStrategy::GetDivisibleFactorForMN(int64_t shape_
 void ReduceStrategy::AddGpuConstraint() {
   reduce_axes_ = analyzer_->GetAxesOfAttr(AT_REDUCE_AXIS);
   size_t depth = 0;
-  analyzer_->ForEachAxisTopDown([this, &depth](TileAxis *axis) {
+  auto HasTranspose = [this](const AttrInfo &info) {
+    std::string key = info.attr_key;
+    return key.find(AT_TRANSPOSE) != std::string::npos;
+  };
+  analyzer_->ForEachAxisTopDown([this, &depth, &HasTranspose](TileAxis *axis) {
     if (!has_transpose_) {
-      for (const auto &attr : axis->attrs) {
-        if (attr.attr_key.find(AT_TRANSPOSE) != std::string::npos) {
-          has_transpose_ = true;
-          break;
-        }
-      }
+      has_transpose_ = std::any_of(axis->attrs.begin(), axis->attrs.end(), HasTranspose);
     }
 
     if (axis == analyzer_->RootAxis()) {
@@ -306,15 +304,12 @@ void ReduceStrategy::AddGpuConstraint() {
 }
 
 void ReduceStrategy::SimpleStrategyOnGpu() {
-  if (all_reduce_ || has_transpose_) {
-    auto extent = all_reduce_ ? MIN_TILE : warp_sizes_;
-    bool is_tuning = analyzer_->scop_info_.user_config_.GetIsTuning();
-    for (auto axis : reduce_axes_) {
-      axis->block_constraints.map_extent_ = MIN_TILE;
-      axis->thread_constraints.map_extent_ = MIN_TILE;
-      if (!is_tuning) {
-        axis->TileRestrainToSingleValue(CastIntToExpr(extent), TileLevel::CACHE1);
-      }
+  bool is_tuning = analyzer_->scop_info_.user_config_.GetIsTuning();
+  for (auto axis : reduce_axes_) {
+    axis->block_constraints.map_extent_ = MIN_TILE;
+    axis->thread_constraints.map_extent_ = MIN_TILE;
+    if (!is_tuning) {
+      axis->TileRestrainEntire(TileLevel::CACHE1);
     }
   }
 }
@@ -566,14 +561,14 @@ void ReduceStrategy::DealWith4DFusedReduce() {
     if (num_mod_axis < 1) {
       continue;
     }
-    axis->TileRestrainToSingleValue(CastIntToExpr(last_mod_value), TileLevel::CACHE1);
+    axis->TileRestrainLower(CastIntToExpr(last_mod_value), TileLevel::CACHE1);
     if (last_mod_value > max_x_y_dim_thread_) {
       LOG(WARNING) << "Cannot bind axis to " << last_mod_value << " threads, maximal thread number is "
                    << max_x_y_dim_thread_
                    << ". If fusing more than two axes together, footprint box calculated by isl may not be correct.";
       continue;
     }
-    axis->thread_constraints.map_extent_ = last_mod_value;
+    axis->thread_constraints.map_min_ = last_mod_value;
   }
 }
 
@@ -617,10 +612,10 @@ int GpuStrategy::GetLocalAllocBufCount() {
 }
 
 void GpuStrategy::ApplyCustomConstraint() {
-  auto ParseBindingConstraint = [](const std::string constraint, size_t max_size) {
+  auto ParseBindingConstraint = [](const std::string &constraint, size_t max_size) {
     std::vector<std::string> sp = akg::common::Split(constraint, ",");
     std::vector<int64_t> ret;
-    for (auto val : sp) {
+    for (auto &val : sp) {
       if (ret.size() == max_size) {
         break;
       }
@@ -765,7 +760,6 @@ void GpuStrategy::AddGpuConstraint() {
 void GpuStrategy::InitMappingLimit() {
   max_x_y_dim_thread_ = analyzer_->scop_info_.user_config_.GetMaxElemPerThread();
   DetermineTemplate();
-  std::stringstream ss;
   reverse_binding_ = analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib() &&
                      analyzer_->scop_info_.analysis_result_.GetReduceDirection() == Y_DIRECTION;
 
@@ -1136,9 +1130,6 @@ void GpuStrategy::SetMappingConfig() {
 
 int64_t GpuStrategy::GetThreadSize(const int64_t rest_threads, size_t inner_dim, const int64_t shape,
                                    const int64_t item) {
-  // TODO: how to set best thread size according to current rest_thread and shape
-  //       is not sure and profiling test is needed.
-
   // Current experience is that let mapped threads divisible by warp_size to increase performance.
   int64_t thread_extent = item == SpItemPerThread::FULL ? rest_threads : ceil(static_cast<float>(shape) / item);
   thread_extent = std::min(thread_extent, shape);
@@ -1163,7 +1154,7 @@ int64_t GpuStrategy::TileAfterThreadMapping(TileAxis *axis, size_t inner_dim, in
 
   auto tile = item == SpItemPerThread::FULL ? std::min(tile_extent, thread_size * max_elem_per_thread_)
                                             : std::min(tile_extent, thread_size * item);
-
+  tile = std::max<int64_t>(tile, tile_min);
   if (analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib()) {
     if (tile < tile_mod) {
       // tile axis with mod value
@@ -1388,7 +1379,7 @@ void GpuStrategy::InjectiveSpeedup() {
     } else if (problem_size <= warp_sizes_ * thread_coef.first * num_sm_ * active_blocks_per_sm.first) {
       thread_size = analyzer_->FindDivisibleTilingFactor(warp_sizes_ * thread_coef.first, problem_size);
       block_size = num_sm_ * active_blocks_per_sm.first;
-    } else if (problem_size <= warp_sizes_ * thread_coef.first * num_sm_ * active_blocks_per_sm.first) {
+    } else if (problem_size <= warp_sizes_ * thread_coef.second * num_sm_ * active_blocks_per_sm.second) {
       thread_size = analyzer_->FindDivisibleTilingFactor(warp_sizes_ * thread_coef.second, problem_size);
       block_size = num_sm_ * active_blocks_per_sm.second;
     } else {
@@ -1513,7 +1504,7 @@ void GpuStrategy::PadSpeedup() {
     problem_size *= axis->range_extent.as<IntImm>()->value;
     axes.emplace_back(axis);
   });
-  auto coef = std::max<int64_t>(1, int((problem_size / warp_sizes_) / (num_sm_ * 5)));
+  auto coef = std::max<int64_t>(1, static_cast<int64_t>((problem_size / warp_sizes_) / (num_sm_ * 5)));
   ss << "Total reduce coef = " << coef;
   analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
   for (int i = axes.size() - 1; i > 0; --i) {
@@ -1657,9 +1648,9 @@ void GpuStrategy::GpuVectorBroadcastStrategy() {
       coalesced_size = coalesced_size == 0 ? 1 : coalesced_size;
     }
 
-    int elem_per_thread = 8;
     int min_block = coalesced_size < warp_sizes_ ? 1024 : 512;
     if (coalesced_size >= warp_sizes_) {
+      int elem_per_thread = 8;
       axis->thread_constraints.item_process_ =
         std::min(elem_per_thread, std::max<int>((fused_size_ / possible_threads / min_block + 1) / 2 * 2, 1));
       ss << "thread for-loop speedup = " << axis->thread_constraints.item_process_;
