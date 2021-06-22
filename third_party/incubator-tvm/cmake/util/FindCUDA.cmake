@@ -15,6 +15,10 @@
 # specific language governing permissions and limitations
 # under the License.
 
+#
+# 2021.6.22 - Supports configuring cuda search path from environment variable.
+#
+
 #######################################################
 # Enhanced version of find CUDA.
 #
@@ -37,6 +41,9 @@
 #
 macro(find_cuda use_cuda)
   set(__use_cuda ${use_cuda})
+  if(DEFINED ENV{CUDA_HOME} AND NOT $ENV{CUDA_HOME} STREQUAL "")
+    set(__use_cuda $ENV{CUDA_HOME})
+  endif()
   if(__use_cuda STREQUAL "ON")
     find_package(CUDA QUIET)
   elseif(IS_DIRECTORY ${__use_cuda})

@@ -77,7 +77,7 @@ setup(
     package_dir={'akg': 'build/akg'},
     include_package_data=True,
     install_requires=[
-        'scipy >= 1.5.3',
+        'scipy >= 1.5.2',
         'numpy >= 1.17.0',
         'decorator >= 4.4.0'
     ],
