@@ -280,6 +280,20 @@ def test_ocean_model_gpu_level0():
     test_network("./gpu/ocean_model/level0")
 
 
+@pytest.mark.level1
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
+def test_ocean_model_gpu_level1_test0():
+    test_network("./gpu/ocean_model/level1", 2, 0)
+
+
+@pytest.mark.level1
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
+def test_ocean_model_gpu_level1_test1():
+    test_network("./gpu/ocean_model/level1", 2, 1)
+
+
 @pytest.mark.level0
 @pytest.mark.platform_x86_gpu_training
 @pytest.mark.env_onecard

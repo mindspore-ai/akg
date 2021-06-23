@@ -20,6 +20,7 @@ import logging
 import inspect
 import numpy as np
 from tests.common.gen_random import random_gaussian
+from tests.common.test_utils import precheck
 
 
 def get_attr(attr_desc, attr_type):
@@ -493,6 +494,7 @@ def gen_json_data(op_desc):
             if op["input_desc"][1][0]["tensor_name"] == sum_out:
                 clean_input.append(op["input_desc"][0][0]["tensor_name"])
 
+    input_mean_value = precheck(desc)
     for input_desc in desc["input_desc"] if desc["input_desc"] is not None else []:
         shape = [1] if not input_desc[0]["shape"] else input_desc[0]["shape"]
         dtype = input_desc[0]["data_type"]
@@ -500,7 +502,7 @@ def gen_json_data(op_desc):
         if tensor_name in clean_input:
             item = np.zeros(shape).astype(dtype)
         else:
-            item = random_gaussian(shape, miu=1, sigma=0.1).astype(dtype)
+            item = random_gaussian(shape, miu=input_mean_value, sigma=0.1).astype(dtype)
         input_for_mod.append(item)
         input_order[tensor_name] = idx
         input_dict[tensor_name] = item
