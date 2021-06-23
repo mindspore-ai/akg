@@ -57,6 +57,7 @@ class Reschedule : public SchedulePass {
   ~Reschedule() {}
 
   virtual isl::schedule Run(isl::schedule sch);
+  isl::schedule RescheduleSerializeSccs(const isl::union_set &active_domain, const bool need_dist) const;
 
  private:
   static bool IsL1OrUbMark(const isl::schedule_node &node);
@@ -68,7 +69,6 @@ class Reschedule : public SchedulePass {
   bool ValidateReorderedSchedule(const isl::schedule &new_schedule);
   isl::schedule_node TryRestoreStmtOrder(const isl::schedule_node &node, const std::vector<isl::id> &filter_total_order,
                                          const std::vector<std::vector<isl::id>> &filter_partial_order);
-  isl::schedule RescheduleSerializeSccs(const isl::union_set &active_domain, const bool need_dist) const;
   isl::schedule_node ReschedulePreserveFilterOrder(const isl::schedule_node &node, const isl::union_set &active_domain,
                                                    const bool need_dist);
   static PointBandInfo SavePointBand(const isl::schedule_node &node);

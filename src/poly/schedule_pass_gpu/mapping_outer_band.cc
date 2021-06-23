@@ -375,7 +375,8 @@ isl::schedule MappingOuterBand::DoThreadMapping(const isl::schedule &sch) {
       } else {
         // others operator
         OperatorMappingStrategy others_op(pass_info_, scop_info_);
-        mapped_threads = others_op.MapThreadHelper(node);
+        bool need_reverse = scop_info_.analysis_result_.GetReduceDirection() == Y_DIRECTION;
+        mapped_threads = others_op.MapThreadHelper(node, need_reverse);
       }
 
       if (!node_bak.is_equal(node)) {

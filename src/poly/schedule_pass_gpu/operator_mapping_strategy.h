@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,7 +32,7 @@ class OperatorMappingStrategy {
 
   size_t GetFinalMappingThreadNumber(isl::schedule_node &node, const size_t thread_cfg_bound,
                                      const size_t n_thread_map);
-  virtual size_t MapThreadHelper(isl::schedule_node &thread_root);
+  virtual size_t MapThreadHelper(isl::schedule_node &thread_root, const bool need_reverse);
   virtual isl::schedule_node MapBlockHelper(const isl::schedule_node &orig_node, MappingCfg *block_cfg,
                                             size_t n_block_map, bool check_extent,
                                             std::unordered_map<size_t, size_t> map_idx_shift = {});
@@ -52,10 +52,16 @@ class ReduceMappingStrategy : public OperatorMappingStrategy {
 
   bool NeedAtomicAdd(const isl::schedule_node_band &band, size_t n_block_map);
   void MarkAtomicAddTensor(const isl::schedule_node_band &band);
-  size_t GetReduceId() const;
+  // Check whether the reduce operator is included, and split the reduce statement into a separate filter.
   isl::schedule DetectAndMarkReduce(const isl::schedule &sch);
+
+ private:
+  // After splitting the reduce fusion operator, reschedule all the filters, mainly because the reduce statement affects
+  // other statements after the fusion.
+  isl::schedule RescheduleForReduce(const isl::schedule &sch);
   isl::schedule InsertReduceMarker(const isl::schedule &sch);
   isl::schedule_node InsertReduceExtension(const isl::schedule_node &node);
+  size_t GetReduceId() const;
 };
 
 class BatchMatmulMappingStrategy : public OperatorMappingStrategy {
