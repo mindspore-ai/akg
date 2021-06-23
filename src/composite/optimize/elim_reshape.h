@@ -22,7 +22,7 @@ class ElimReshapeAnalysis {
  public:
   ElimReshapeAnalysis(Graph &g, BuildOpt &opt, AnalysisResult &result, bool forward)
       : g_(g), opt_(opt), result_(result), forward_(forward){};
-  void Run();
+  bool Run();
 
  private:
   void AnalysisForward();
@@ -34,6 +34,7 @@ class ElimReshapeAnalysis {
   void AnalysisOthers(const FunctionRef &output);
   void AnalysisInplaceAssign(const FunctionRef &output);
   void AnalysisInner(const FunctionRef &output);
+  bool AnalysisElimValid();
 
  private:
   Graph &g_;

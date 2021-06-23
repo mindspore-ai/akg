@@ -261,10 +261,11 @@ struct AnalysisResult {
   void CollectReshape(const Provide *op, const FunctionRef &func, const Array<Expr> &origin_shape,
                       const Array<Expr> &changed_shape) {
     if (EqualShape(origin_shape, changed_shape)) return;
+    auto func_real = to_be_replaced.count(func) ? to_be_replaced[func] : func;
     if (need_reshape_map.count(op)) {
       for (auto it = need_reshape_map[op].begin(); it < need_reshape_map[op].end();) {
         // if tensor need update reshape, remove it first.
-        if ((*it).func == func) {
+        if ((*it).func == func || (*it).func == func_real) {
           it = need_reshape_map[op].erase(it);
         } else {
           ++it;
@@ -272,11 +273,12 @@ struct AnalysisResult {
       }
     }
     NeedReshape nr;
-    nr.func = to_be_replaced.count(func) ? to_be_replaced[func] : func;
+    nr.func = func_real;
     nr.origin_shape = origin_shape;
     need_reshape_map[op].emplace_back(nr);
   }
-  void Dump() {
+  void Dump(bool valid) {
+    LOG(INFO) << "\n=======elim_valid: " << valid << "=======\n";
     LOG(INFO) << "\n=======to_be_replaced=======\n";
     for (const auto &item : to_be_replaced) {
       LOG(INFO) << item.first->func_name() << " -> " << item.second->func_name() << "\n";
@@ -301,7 +303,8 @@ struct AnalysisResult {
 
 class AnalysisResultMutator : public IRMutator {
  public:
-  explicit AnalysisResultMutator(AnalysisResult result) : result_(std::move(result)){};
+  explicit AnalysisResultMutator(AnalysisResult result, const std::string &id)
+      : result_(std::move(result)), id_(std::move(id)){};
 
  private:
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) override {
@@ -429,13 +432,14 @@ class AnalysisResultMutator : public IRMutator {
 
   Tensor NewTensor(const Array<Expr> &shape) {
     std::stringstream ss;
-    ss << "tmp_" << count_++;
+    ss << "tmp_" << id_ << "_" << count_++;
     return placeholder(shape, Int(1), ss.str());
   }
 
  private:
   AnalysisResult result_;
   int count_{0};
+  std::string id_;
   Map<std::string, NodeRef> op_attrs_;
 };
 
