@@ -18,6 +18,7 @@
 #
 # 2020.7.14 - Modify current directory of tvm.
 # 2020.11.18 - Include CUPTI path.
+# 2021.6.22 - Give hint when cuda library is not found.
 #
 
 # CUDA Module
@@ -33,12 +34,26 @@ endif(CUDA_FOUND)
 
 if(USE_CUDA)
   if(NOT CUDA_FOUND)
-    message(FATAL_ERROR "Cannot find CUDA, USE_CUDA=" ${USE_CUDA})
+    message(FATAL_ERROR "Cannot find CUDA, USE_CUDA=${USE_CUDA}. Please set environment variable CUDA_HOME to cuda \
+            installation position. (e.g. export CUDA_HOME=/home/user_name/cuda)")
   endif()
   message(STATUS "Build with CUDA support")
   file(GLOB RUNTIME_CUDA_SRCS ${TVM_DIR}/src/runtime/cuda/*.cc)
   list(APPEND RUNTIME_SRCS ${RUNTIME_CUDA_SRCS})
   list(APPEND COMPILER_SRCS ${TVM_DIR}/src/codegen/opt/build_cuda_on.cc)
+
+  if(NOT CUDA_NVRTC_LIBRARY)
+    message(FATAL_ERROR "Failed to find nvrtc library file, please set environment variable CUDA_HOME to cuda \
+            installation position. (e.g. export CUDA_HOME=/home/user_name/cuda)")
+  endif()
+  if(NOT CUDA_CUDART_LIBRARY)
+    message(FATAL_ERROR "Failed to find cudart library file, please set environment variable CUDA_HOME to cuda \
+            installation position. (e.g. export CUDA_HOME=/home/user_name/cuda)")
+  endif()
+  if(NOT CUDA_CUDA_LIBRARY)
+    message(FATAL_ERROR "Failed to find cuda library file, please set environment variable CUDA_HOME to cuda \
+            installation position. (e.g. export CUDA_HOME=/home/user_name/cuda)")
+  endif()
 
   list(APPEND TVM_LINKER_LIBS ${CUDA_NVRTC_LIBRARY})
   list(APPEND TVM_RUNTIME_LINKER_LIBS ${CUDA_CUDART_LIBRARY})
