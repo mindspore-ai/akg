@@ -30,6 +30,10 @@
  * 2021.01.13 - Modify new implements for host device splitter.
  */
 
+/*
+ * 2021.06.25 - Keep all args of func.
+ */
+
 #include <stdlib.h>
 
 #include <tvm/ir.h>
@@ -239,45 +243,8 @@ class HostDeviceSplitter : public IRMutator {
       }
     }
 
-    bool use_real_args = false;
-    for (size_t i = 0; i < args_real.size(); ++i) {
-      if (args_real[i]->name_hint.find("fake") != std::string::npos) {
-        use_real_args = true;
-      }
-    }
-
-    if (!use_real_args) {
-      // Reorder args to match args_real
-      Array<Var> ordered_args;
-      std::unordered_set<Var, NodeHash, NodeEqual> args_set;
-      std::unordered_set<Var, NodeHash, NodeEqual> args_real_set;
-      for (size_t i = 0; i < n->args.size(); ++i) {
-        args_set.insert(n->args[i]);
-      }
-      for (size_t i = 0; i < args_real.size(); ++i) {
-        args_real_set.insert(args_real[i]);
-        if (args_set.find(args_real[i]) != args_set.end()) {
-          ordered_args.push_back(args_real[i]);
-        }
-      }
-      for (size_t i = 0; i < n->args.size(); ++i) {
-        if (args_real_set.find(n->args[i]) == args_real_set.end()) {
-          ordered_args.push_back(n->args[i]);
-        }
-      }
-      n->args = ordered_args;
-    } else {
-      for (size_t i = 0; i < args_real.size(); ++i) {
-        if (n->handle_data_type.find(args_real[i]) == n->handle_data_type.end() &&
-            args_real[i]->name_hint.find("fake") != std::string::npos) {
-          auto it = handle_data_type_.find(args_real[i].get());
-          if (it != handle_data_type_.end()) {
-            n->handle_data_type.Set(args_real[i], it->second);
-          }
-        }
-      }
-      n->args = args_real;
-    }
+    // When the akg func is currently called, all args passed into func need to be retained
+    n->args = args_real;
 
     LoweredFunc f_device(n);
     Array<Expr> call_args;
