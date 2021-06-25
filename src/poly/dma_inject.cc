@@ -1442,10 +1442,13 @@ void UpdateTensorShape(ScopInfo &scop_info, const isl::map &read_extension) {
   static_cast<void>(UpdateBufferDefInfoSizes(scop_info, cluster_id, shape));
 }
 
-isl::schedule_node InsertStmtExtension(ScopInfo &scop_info, isl::schedule_node tree, isl::map read,
-                                       isl::map read_extension, const isl::union_map &raw_reads,
-                                       const isl::union_map &raw_writes, const isl::union_map &raw_copyin,
-                                       const isl::union_map &schedule, BufferDefInfo &def) {
+/****************************************************************************
+ * actor do the add read extension related stmt to current schedule tree
+ * **************************************************************************/
+isl::schedule_node InsertStmtExtensionActor(ScopInfo &scop_info, isl::schedule_node tree, isl::map read,
+                                            isl::map read_extension, const isl::union_map &raw_reads,
+                                            const isl::union_map &raw_writes, const isl::union_map &raw_copyin,
+                                            const isl::union_map &schedule, BufferDefInfo &def, std::map<unsigned int, const isl::map> &stmt_dict) {
   isl::union_map reads = isl::union_map(read);
   isl::union_map writes = raw_writes.intersect_range(reads.range());
   isl::union_map dependence = DependenceAnalysis(writes, reads, writes, schedule);
@@ -1462,7 +1465,10 @@ isl::schedule_node InsertStmtExtension(ScopInfo &scop_info, isl::schedule_node t
   stmt_ext.foreach_map([&](const isl::map &m) -> void {
     std::string name = m.range().get_tuple_name();
     unsigned int index = WrappedStrtol(name.substr(name.find('_') + 1, name.length() - 1));
-    stmt_ext_map.insert(std::make_pair(index, m));
+    if (stmt_dict.count(index) == 0) {
+      stmt_ext_map.insert(std::make_pair(index, m));
+      stmt_dict.insert(std::make_pair(index, m));
+    }
   });
 
   for (auto it = stmt_ext_map.rbegin(); it != stmt_ext_map.rend(); ++it) {
@@ -1477,22 +1483,42 @@ isl::schedule_node InsertStmtExtension(ScopInfo &scop_info, isl::schedule_node t
     /* insert extension node */
     tree = InsertExtensionBeforeOrAfter(scop_info, tree.get_child(0), stmt_extension, stmtSchedule, isl_bool_true);
   }
+  return tree;
+}
 
-  /* next */
+isl::schedule_node InsertStmtExtension(ScopInfo &scop_info, isl::schedule_node tree, isl::map read,
+                                       isl::map read_extension, const isl::union_map &raw_reads,
+                                       const isl::union_map &raw_writes, const isl::union_map &raw_copyin,
+                                       const isl::union_map &schedule, BufferDefInfo &def, std::map<unsigned int, const isl::map> &stmt_dict) {
+  /* parse syntax tree */
+  isl::union_map reads = isl::union_map(read);
+  isl::union_map writes = raw_writes.intersect_range(reads.range());
+  isl::union_map dependence = DependenceAnalysis(writes, reads, writes, schedule);
+  isl::union_set stmt = dependence.domain().universe();
+
   reads = raw_reads.intersect_domain(stmt);
   reads = reads.subtract(raw_copyin);
   if (!reads.is_empty()) {
     isl::union_map relation = writes.reverse().apply_range(reads);
-    isl::union_map readExt = isl::union_map(read_extension);
-    readExt = readExt.apply_range(relation);
-    isl::map_list readList = reads.get_map_list();
-    int n = readList.size();
+    isl::union_map read_ext = isl::union_map(read_extension);
+    read_ext = read_ext.apply_range(relation);
+    isl::map_list read_list = reads.get_map_list();
+    int n = read_list.size();
+    std::vector<isl::map> read_queue;
+    // first item is isl::map for read, second itme is isl::map for read extension
+    std::vector<std::pair<isl::map, isl::map>> read_extension_queue;
+    // firstly, we will add current related stmt to current schedule tree
     for (int i = 0; i < n; ++i) {
-      read = readList.get_at(i);
-      readExt = readExt.intersect_range(isl::union_set(read.range()));
-      read_extension = isl::map::from(readExt);
-      tree =
-        InsertStmtExtension(scop_info, tree, read, read_extension, raw_reads, raw_writes, raw_copyin, schedule, def);
+      auto cur_read = read_list.get_at(i);
+      read_queue.push_back(cur_read);
+      isl::union_map read_ext_tmp = read_ext.intersect_range(isl::union_set(cur_read.range()));
+      auto cur_read_extension = isl::map::from(read_ext_tmp);
+      read_extension_queue.push_back(std::make_pair(cur_read, cur_read_extension));
+      tree = InsertStmtExtensionActor(scop_info, tree, cur_read, cur_read_extension, raw_reads, raw_writes, raw_copyin, schedule, def, stmt_dict);
+    }
+    // secondly, we will traverse the syntax stmts tree breathly
+    for (auto item : read_extension_queue) {
+      tree = InsertStmtExtension(scop_info, tree, item.first, item.second, raw_reads, raw_writes, raw_copyin, schedule, def, stmt_dict);
     }
   }
   return tree;
@@ -1533,7 +1559,7 @@ void PlaceDataCopyBelowImplReadWrite(ScopInfo &scop_info, isl::schedule_node &tr
   }
   if (scop_info.analysis_result_.IsFakeCopyin(tensor_id)) {
     auto dst_buffer = scop_info.analysis_result_.GetBufferDefInfo(cluster_id);
-    if (dst_buffer.DstMemType() == MemType::BUF_C0_) {
+    if (dst_buffer.DstMemType() == MemType::BUF_C0_ || dst_buffer.DstMemType() == MemType::BUF_C1_) {
       reads = false;
     }
   }
@@ -1584,19 +1610,35 @@ void PlaceDataCopyBelowImplFakeReads(ScopInfo &scop_info, isl::schedule_node &tr
       }
       stmt_extension = stmt_extension.set_tuple_id(isl_dim_out, stmt_tensor_id);
 
-      isl::union_set readTensor = isl::union_set(stmt_extension.range());
+      isl::union_set read_tensor = isl::union_set(stmt_extension.range());
       isl::union_map reads_map =
-        scop_info.analysis_result_.GetFakeCopyin().domain_factor_domain().intersect_range(readTensor.universe());
+        scop_info.analysis_result_.GetFakeCopyin().domain_factor_domain().intersect_range(read_tensor.universe());
       if (!reads_map.is_empty()) {
         isl::union_map raw_reads = scop_info.analysis_result_.GetReads().domain_factor_domain();
         isl::union_map raw_writes = scop_info.analysis_result_.GetWrites().domain_factor_domain();
         isl::union_map raw_copyin = scop_info.analysis_result_.GetCopyin().domain_factor_domain();
 
-        isl::map_list readList = reads_map.get_map_list();
-        int n = readList.size();
+        isl::map_list read_list = reads_map.get_map_list();
+        int n = read_list.size();
+        std::map<unsigned int, const isl::map> stmt_dict;
+        /**********************************************************************************
+         * we need to add stmt to the schedule tree by topological order,
+         * so we need to use BFS order to parse the syntax tree
+         * S_5 --> S_3 |--> S_0
+         *             |--> S_2
+         *     --> S_4 |--> S_0
+         *             |--> S_2
+         *  one of the reasonable order is as follows:
+         *  S_5 -> S_3 -> S_4 -> S_0 -> S_2
+         *  and we also should check the stmt that has already add to the
+         *  schedule should not add multiply times, as the S_0 and S_2 in this example.
+         * *********************************************************************************/
         for (int i = 0; i < n; ++i) {
-          tree = InsertStmtExtension(scop_info, tree, readList.get_at(i), stmt_extension, raw_reads, raw_writes,
-                                     raw_copyin, sched, buffer_def);
+          // firstly, add extension related stmt to schedule tree
+          tree = InsertStmtExtensionActor(scop_info, tree, read_list.get_at(i), stmt_extension, raw_reads, raw_writes, raw_copyin, sched, buffer_def, stmt_dict);
+          // secondly, parse the syntax relation tree to add other stmt to schedule tree
+          tree = InsertStmtExtension(scop_info, tree, read_list.get_at(i), stmt_extension, raw_reads, raw_writes,
+                                     raw_copyin, sched, buffer_def, stmt_dict);
         }
       }
     }
