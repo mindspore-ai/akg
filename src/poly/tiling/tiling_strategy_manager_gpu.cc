@@ -1892,7 +1892,7 @@ void ConvStrategy::CalculateMacroMma(MmaConv shape, Mma mma) {
 
   real_blocks_ =
     (shape.m / macro_mma_.m) * (shape.h / macro_mma_.h) * (shape.w / macro_mma_.w) * (shape.n / macro_mma_.n);
-  if (real_blocks_ > (min_blocks_ - 32)) {
+  if ((real_blocks_ > (min_blocks_ - 32)) && (shape.k % (macro_mma_.k * 2) == 0)) {
     macro_mma_.k *= 2;
   }
   ss << "[Final macro mma]: [" << macro_mma.m << ", " << macro_mma.h << ", " << macro_mma.w << ", " << macro_mma.n
