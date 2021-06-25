@@ -40,22 +40,6 @@
             }
         }
     },
-    "2.BatchMatMul12.2": {
-        "any_shape": {
-            "float16--": {
-                "metadata": {
-                    "attrs": {
-                        "use_shared_memory": true,
-                        "pragma_enable_tensor_core": true,
-                        "pragma_enable_matmul": true,
-                        "enable_auto_fuse": false,
-                        "vector_load_type": "float4",
-                        "bind_thread": "32 4"
-                    }
-                }
-            }
-        }
-    },
     "12.GreaterEqual6.Cast1.LessEqual7.Cast1.AddN8.Reshape1.Cast1.Mul14.Mul17.Mul1.Mul117.Mul121.Sub2021.Mul1.Mul225.Mul14.Mul1.ReduceSum1.Mul730.Mul731.Mul110.22232425293032": {
         "metadata": {
             "attrs": {
