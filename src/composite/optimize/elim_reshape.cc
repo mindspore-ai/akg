@@ -16,7 +16,7 @@
 #include "composite/optimize/elim_reshape.h"
 
 namespace akg {
-void ElimReshapeAnalysis::Run() {
+bool ElimReshapeAnalysis::Run() {
   // from input to output, try to remove each transform op, when removed op, should change each tensor's shape by
   // elemwise op, and try to add reshape op when unelemwise op's input shape and output shape are changed.
   size_t settled_size;
@@ -28,6 +28,12 @@ void ElimReshapeAnalysis::Run() {
       AnalysisBackkward();
     }
   } while (settled_size != g_.visited_funcs.size());
+
+  bool elim_valid = AnalysisElimValid();
+  result_.Dump(elim_valid);
+  if (!elim_valid) {
+    return false;
+  }
 
   for (const auto &p : result_.to_be_removed) {
     // if output removed, should collect opt.sames
@@ -41,6 +47,55 @@ void ElimReshapeAnalysis::Run() {
       }
     }
   }
+  return true;
+}
+
+bool ElimReshapeAnalysis::AnalysisElimValid() {
+  auto &elim_reshapes = result_.to_be_removed;
+  auto &insert_reshapes = result_.need_reshape_map;
+  // The less the number of reshape operators, the better
+  auto elim_op_count = elim_reshapes.size();
+  size_t insert_op_count = 0;
+  for (auto kv : insert_reshapes) {
+    insert_op_count += kv.second.size();
+  }
+  if (insert_op_count < elim_op_count) {
+    return true;
+  } else if (insert_op_count > elim_op_count) {
+    return false;
+  }
+
+  // The less dimensionality increased by reshape operators, the better
+  auto elim_dim_inc = 0;
+  for (const auto &provide : elim_reshapes) {
+    auto out_shape = provide->args;
+    auto call = provide->value.as<Call>();
+    CHECK(call);
+    CHECK_EQ(call->args.size(), 1);
+    CHECK(call->args[0].as<Call>());
+    auto input_shape = call->args[0].as<Call>()->args;
+    elim_dim_inc += static_cast<int>(out_shape.size() - input_shape.size());
+  }
+  auto insert_dim_inc = 0;
+  for (const auto &kv : insert_reshapes) {
+    auto output_func = kv.first->func;
+    for (const auto &nr : kv.second) {
+      auto func = nr.func;
+      auto shape_change = result_.changed_shapes.count(func) ? result_.changed_shapes[func] : g_.func_shape[func];
+      auto ori_shape = nr.origin_shape;
+      if (func == output_func) {
+        // for output: reshape ori_shape to shape_change
+        insert_dim_inc += static_cast<int>(shape_change.size() - ori_shape.size());
+      } else {
+        // for input: reshape shape_change to ori_shape
+        insert_dim_inc += static_cast<int>(ori_shape.size() - shape_change.size());
+      }
+    }
+  }
+  if (insert_dim_inc < elim_dim_inc) {
+    return true;
+  }
+  return false;
 }
 
 void ElimReshapeAnalysis::AnalysisForward() {
@@ -231,9 +286,9 @@ void ElimReshapeAnalysis::AnalysisInner(const FunctionRef &output) {
   auto op_name = GetOpName(provide);
   if (IsTransform(op_name)) {
     AnalysisTransform(output);
-  } else if (IsElemwise(op_name) && g_.CanChangeElem(output)) {
+  } else if ((IsElemwise(op_name) && g_.CanChangeElem(output)) || op_name == "BroadcastTo") {
     if (!AnalysisElemwise(output)) {
-      return AnalysisOthers(output);
+      AnalysisOthers(output);
     }
   } else if (IsInplaceAssign(op_name)) {
     AnalysisInplaceAssign(output);
@@ -254,28 +309,53 @@ void ElimReshapeAnalysis::AnalysisInner(const FunctionRef &output) {
     }
   }
 }
-Stmt ElimReshapeBackward::Run(const Stmt &s) {
-  auto checker = ElimReshapeOpChecker();
-  checker.Visit(s);
-  if (!checker.can_elim) return s;
-  auto f = StmtToGraph(info_.opt.input_funcs, info_.opt.output_funcs);
-  f.Visit(s);
-  AnalysisResult result;
-  auto analysis = ElimReshapeAnalysis(f.g_, info_.opt, result, false);
-  analysis.Run();
-  result.Dump();
-  return AnalysisResultMutator(result).Mutate(s);
+
+std::string GetId(std::string name, int count) {
+  std::stringstream id;
+  id << name << "_" << count;
+  return id.str();
 }
-Stmt ElimReshapeForward::Run(const Stmt &s) {
+
+Stmt ElimReshapeBackward::Run(const Stmt &stmt) {
+  auto s = stmt;
   auto checker = ElimReshapeOpChecker();
   checker.Visit(s);
   if (!checker.can_elim) return s;
-  auto f = StmtToGraph(info_.opt.input_funcs, info_.opt.output_funcs);
-  f.Visit(s);
-  AnalysisResult result;
-  auto analysis = ElimReshapeAnalysis(f.g_, info_.opt, result, true);
-  analysis.Run();
-  result.Dump();
-  return AnalysisResultMutator(result).Mutate(s);
+  auto count = 0;
+  auto max_try_count = 10;
+  while (count++ < max_try_count) {
+    auto f = StmtToGraph(info_.opt.input_funcs, info_.opt.output_funcs);
+    f.Visit(s);
+    AnalysisResult result;
+    auto analysis = ElimReshapeAnalysis(f.g_, info_.opt, result, false);
+    bool elim_valid = analysis.Run();
+    if (!elim_valid) {
+      return s;
+    }
+    s = AnalysisResultMutator(result, GetId("b", count)).Mutate(s);
+  }
+  LOG(WARNING) << "ElimReshapeBackward reach to max_try_count!";
+  return s;
+}
+Stmt ElimReshapeForward::Run(const Stmt &stmt) {
+  auto s = stmt;
+  auto checker = ElimReshapeOpChecker();
+  checker.Visit(s);
+  if (!checker.can_elim) return s;
+  auto count = 0;
+  auto max_try_count = 10;
+  while (count++ < max_try_count) {
+    auto f = StmtToGraph(info_.opt.input_funcs, info_.opt.output_funcs);
+    f.Visit(s);
+    AnalysisResult result;
+    auto analysis = ElimReshapeAnalysis(f.g_, info_.opt, result, true);
+    bool elim_valid = analysis.Run();
+    if (!elim_valid) {
+      return s;
+    }
+    s = AnalysisResultMutator(result, GetId("f", count)).Mutate(s);
+  }
+  LOG(WARNING) << "ElimReshapeForward reach to max_try_count!";
+  return s;
 }
 }  // namespace akg
