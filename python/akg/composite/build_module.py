@@ -28,7 +28,7 @@ from akg.global_configs import get_dump_ir_flag
 
 def should_enable_tensor_core(kernel_info):
     for op in kernel_info["op_desc"]:
-        if op['name'] in ["MatMul", "Conv2D"]:
+        if op['name'] in ["BatchMatMul", "MatMul", "Conv2D"]:
             return True
     return False
 
