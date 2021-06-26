@@ -142,18 +142,19 @@ def get_result(desc, poly, attrs=None, profiling=True):
 
 
 @pytest.mark.skip
-def test_single_file(input_file, attrs, poly, profiling=True):
+def test_single_file(input_file, attrs, poly, profiling=True, max_run_times=3):
     if not input_file.endswith(".info") and not input_file.endswith(".json"):
         print("Skip {}, only process file with .info or .json suffix".format(input_file))
         return
-    print("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%file: ", input_file)
+    logging.info("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%file: {}".format(input_file))
     with open(input_file, 'r') as f:
         desc = f.read()
-        if get_result(desc, poly, attrs, profiling):
-            logging.info("Run Pass!")
-        else:
-            logging.info("Precision Error")
-            raise ValueError("Precision Error")
+        for i in range(max_run_times):
+            if get_result(desc, poly, attrs, profiling):
+                logging.info("Run Pass! max run time: {}, current run time: {}".format(max_run_times, i + 1))
+                return
+            logging.info("Precision error! max run time: {}, current run time: {}".format(max_run_times, i + 1))
+        raise ValueError("Precision Error")
 
 
 @pytest.mark.skip
