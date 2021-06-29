@@ -308,8 +308,9 @@ target_link_libraries(akg ${TVM_LINKER_LIBS} ${TVM_RUNTIME_LINKER_LIBS} akg::isl
 if(USE_CCE_RT)
   find_library(profiler_acl msprofiler_fwkacl /usr/local/Ascend/fwkacllib/lib64)
   find_library(profiler msprofiler_fwk /usr/local/Ascend/fwkacllib/lib64)
-  find_library(profiler_protobuf ascend_protobuf /usr/local/Ascend/fwkacllib/lib64)
-  target_link_libraries(akg ${profiler_acl} ${profiler} ${profiler_protobuf})
+  find_library(profiler_protobuf ascend_protobuf /usr/local/Ascend/fwkacllib/lib64) 
+  find_library(ge_runner ge_runner /usr/local/Ascend/fwkacllib/lib64)
+  target_link_libraries(akg ${ge_runner} ${profiler_acl} ${profiler} ${profiler_protobuf})
 endif()
 
 # Related headers
