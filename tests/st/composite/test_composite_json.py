@@ -56,7 +56,8 @@ def print_usage():
     logging.info(template.format("--bind_thread=<args>", ""))
     logging.info(template.format("", "Set attribute of 'bind_thread' when use '-f' command."))
     logging.info(template.format("--mind-trick-enable=<0|1>", ""))
-    logging.info(template.format("", "explicitly enable (--mind-trick-enable=1) or disable (--mind-trick-enable=0) mind tricks"))
+    logging.info(
+        template.format("", "explicitly enable (--mind-trick-enable=1) or disable (--mind-trick-enable=0) mind tricks"))
     logging.info(template.format("--mind-trick-file", ""))
     logging.info(template.format("", "json mind trick file"))
     logging.info(template.format("--mind-trick-string", ""))
@@ -76,9 +77,13 @@ def _get_backend(desc):
     return json_obj["process"]
 
 
-def _compare_func(output, expect):
-    rtol, atol = get_rtol_atol("FUSED", str(output.dtype))
+def _compare_func(output, expect, compare_tolerance=None):
+    if compare_tolerance is not None:
+        rtol = atol = compare_tolerance
+    else:
+        rtol, atol = get_rtol_atol("FUSED", str(output.dtype))
     return compare_tensor(output, expect, rtol=rtol, atol=atol)
+
 
 def _dump_data(path, input, output, expect):
     input = input if isinstance(input, (list, tuple)) else [input]
@@ -94,11 +99,12 @@ def _dump_data(path, input, output, expect):
 
     for i, data in enumerate(output):
         dump_tensor(data, file_name_prefix + 'output_' + str(i))
-    
+
     for i, data in enumerate(expect):
         dump_tensor(data, file_name_prefix + 'expect_' + str(i))
 
-def _dump_info(desc, build_attrs, poly, input, output, expect): 
+
+def _dump_info(desc, build_attrs, poly, input, output, expect):
     dump_path = os.getenv("AKG_DUMP_TESTCASE_INFO_PATH")
     if not dump_path or dump_path == "":
         # dump data to the current dir by default
@@ -112,28 +118,151 @@ def _dump_info(desc, build_attrs, poly, input, output, expect):
     dump_path = os.path.realpath(dump_path)
     if not os.path.isdir(dump_path):
         os.makedirs(dump_path)
-    
+
     _dump_data(dump_path, input, output, expect)
-        
+
+
+class IOInfo(object):
+    def __init__(self, name, dtype):
+        self.name = name
+        self.dtype = dtype
+
+    def __str__(self):
+        return "(" + str(self.name) + ", " + str(self.dtype) + ")"
+
+    def __repr__(self):
+        return "(" + str(self.name) + ", " + str(self.dtype) + ")"
+
+    def __hash__(self):
+        return hash(self.name + self.dtype)
+
+    def __eq__(self, other):
+        if not isinstance(other, IOInfo):
+            return False
+        return self.name == other.name and self.dtype == other.dtype
+
+
+def precision_analyze(desc: dict, tensors):
+    exclude_op_list = ["Minimum", "Maximum", "Reshape", "ZerosLike", "Tile", "Select", "InplaceAssign", "Greater",
+                       "SelectGT", "SelectLT", "LessEqual", "Less", "EquivFormat", "ExpandDims", "Transpose",
+                       "TransData", "BroadcastTo", "Assign"]
+    input_tensors = []
+    for input_desc in desc["input_desc"] if desc["input_desc"] is not None else []:
+        input_tensors.append(IOInfo(input_desc[0]["tensor_name"], input_desc[0]["data_type"]))
+
+    # Construct graph of current json
+    graph = {}
+    ops = {}  # recorder the operator that generates the current output
+    for op in desc["op_desc"]:
+        if op["name"] == "InplaceAssign":
+            output = IOInfo(op["input_desc"][0][0]["tensor_name"], op["input_desc"][0][0]["data_type"])
+            input = IOInfo(op["input_desc"][1][0]["tensor_name"], op["input_desc"][1][0]["data_type"])
+            graph[output] = [input]
+            ops[output] = op["name"]
+            fake_output = False
+            for attr in op["attr"]:
+                if attr["name"] == "fake_output":
+                    fake_output = attr["value"]
+            if not fake_output:
+                output = IOInfo(op["output_desc"][0]["tensor_name"], op["output_desc"][0]["data_type"])
+                input = IOInfo(op["input_desc"][2][0]["tensor_name"], op["input_desc"][2][0]["data_type"])
+                graph[output] = [input]
+                ops[output] = op["name"]
+        else:
+            output = IOInfo(op["output_desc"][0]["tensor_name"], op["output_desc"][0]["data_type"])
+            inputs = []
+            for input_desc in op["input_desc"]:
+                inputs.append(IOInfo(input_desc[0]["tensor_name"], input_desc[0]["data_type"]))
+            graph[output] = inputs
+            ops[output] = op["name"]
+
+    def _precision_reduce(x: IOInfo):
+        if x in input_tensors:
+            logging.debug("Skip {}, because it comes from input tensors".format(x))
+            return False
+        if x in ops and ops[x] in exclude_op_list:
+            logging.debug("Skip {}, because it comes from [{}] that will not reduce precision".format(x, ops[x]))
+            return False
+        return True
+
+    # DFS search for each tensor in tensors to check if they are casted from fp16
+    tensors = tensors if isinstance(tensors, (list, tuple)) else [tensors]
+    cast_from_fp16 = [False for _ in range(len(tensors))]
+    for i, tensor in enumerate(tensors):
+        logging.debug("[{}/{}] Analyzing sources of {}...".format(i + 1, len(tensors), tensor))
+        visited = []
+        stack = [tensor]
+        while len(stack) > 0:
+            cur_tensor = stack[-1]
+            stack.pop()
+            # If output comes from a fp16 tensor, and this tensor is produced by operators that will increase
+            # the rounding errors(such as Add), then we mark the output cast_from_fp16
+            if cur_tensor.dtype == "float16" and _precision_reduce(cur_tensor):
+                logging.info("{} --> {}".format(tensor, cur_tensor))
+                cast_from_fp16[i] = True
+                break
+            if cur_tensor not in visited:
+                visited.append(cur_tensor)
+                if cur_tensor not in graph:
+                    continue
+                for t in graph[cur_tensor]:
+                    stack.append(t)
+    return cast_from_fp16
+
+
+def get_compare_tolerance(json_str: str, output_indexes: list):
+    desc = json.loads(json_str)
+    compare_tolerance = []
+
+    # Collects output tensors of current json based on output_indexes.
+    io = []
+    for input_desc in desc["input_desc"] if desc["input_desc"] is not None else []:
+        io.append(IOInfo(input_desc[0]["tensor_name"], input_desc[0]["data_type"]))
+    for output_desc in desc["output_desc"]:
+        io.append(IOInfo(output_desc["tensor_name"], output_desc["data_type"]))
+    outputs = [io[idx] for idx in output_indexes]
+
+    analyze_indexes = []  # holds the index of float32 outputs
+    for i, o in enumerate(outputs):
+        if o.dtype == "float16":
+            compare_tolerance.append(1e-3)
+        else:
+            compare_tolerance.append(1e-4)
+            if o.dtype == "float32":
+                analyze_indexes.append(i)
+    if not analyze_indexes:
+        return compare_tolerance
+
+    # Check if these float32 outputs are cast from fp16, if so, use 1e-3 rtol and atol when comparing with numpy
+    logging.debug("=============== Precision Analyze ===============")
+    analyze_outputs = [outputs[idx] for idx in analyze_indexes]
+    cast_from_fp16 = precision_analyze(desc, analyze_outputs)
+    for i, v in enumerate(cast_from_fp16):
+        if v:
+            compare_tolerance[analyze_indexes[i]] = 1e-3
+            logging.warning("{} will use tolerance {} when comparing with expect."
+                            .format(outputs[analyze_indexes[i]], compare_tolerance[analyze_indexes[i]]))
+    logging.debug("============= Precision Analyze End =============")
+
+    return compare_tolerance
+
 
 def get_result(desc, poly, attrs=None, profiling=True, need_compare=True):
     backend = _get_backend(desc)
-    if attrs is None:
-        attrs = {}
 
-    build_attrs = attrs if attrs else None
-    mod = composite.build(desc, build_attrs, poly=poly)
+    mod = composite.build(desc, attrs, poly=poly)
     if not need_compare:
         return True
     input_for_mod, expect, output_indexes = gen_json_data(desc)
     output = utils.mod_launch(mod, input_for_mod, output_indexes)
 
-    if not all(map(_compare_func, output if isinstance(output, (list, tuple)) else [output],
-                   expect if isinstance(expect, (list, tuple)) else [expect])):
-        logging.info(mod.imported_modules[0].get_source())
-
-        _dump_info(desc, build_attrs, poly, input_for_mod, output, expect)
-
+    compare_tolerance = get_compare_tolerance(desc, output_indexes)
+    compare_res = list(map(_compare_func, output if isinstance(output, (list, tuple)) else [output],
+                           expect if isinstance(expect, (list, tuple)) else [expect], compare_tolerance))
+    if not all(compare_res):
+        logging.debug(mod.imported_modules[0].get_source())
+        _dump_info(desc, attrs, poly, input_for_mod, output, expect)
+        logging.warning("Compare results: {}".format(compare_res))
         return False
     if profiling and backend == "cuda":
         inputs = to_tvm_nd_array(input_for_mod)
@@ -266,9 +395,9 @@ def main(argv):
     import getopt
     try:
         options, args = getopt.getopt(argv, "atdcf:mh", ["auto", "manual", "ci", "profile", "tune"
-                                                        "enable_atomic_add=", "dim=", "bind_block=", "bind_thread=",
-                                                        "mind-trick-enable=", "mind-trick-file=", "mind-trick-string=",
-                                                        "help"])
+                                                         "enable_atomic_add=", "dim=", "bind_block=", "bind_thread=",
+                                                         "mind-trick-enable=", "mind-trick-file=", "mind-trick-string=",
+                                                         "help"])
         poly = True
         single_file = False
         dir_test = False
