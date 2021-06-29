@@ -116,14 +116,15 @@ def _dump_info(desc, build_attrs, poly, input, output, expect):
     _dump_data(dump_path, input, output, expect)
         
 
-def get_result(desc, poly, attrs=None, profiling=True):
+def get_result(desc, poly, attrs=None, profiling=True, need_compare=True):
     backend = _get_backend(desc)
     if attrs is None:
         attrs = {}
 
     build_attrs = attrs if attrs else None
     mod = composite.build(desc, build_attrs, poly=poly)
-
+    if not need_compare:
+        return True
     input_for_mod, expect, output_indexes = gen_json_data(desc)
     output = utils.mod_launch(mod, input_for_mod, output_indexes)
 
@@ -158,9 +159,8 @@ def test_single_file(input_file, attrs, poly, profiling=True, max_run_times=3):
 
 
 @pytest.mark.skip
-def test_json_dir(poly, use_custom):
-    json_dir = "./json_dir/"
-    json_dims_file = "./json_dir/dims.json"
+def test_json_dir(poly, use_custom, json_dir="./json_dir/", online_tuning=0):
+    json_dims_file = json_dir + "dims.json"
     dims_dict = {}
     if use_custom:
         with open(json_dims_file, 'r') as f:
@@ -172,11 +172,15 @@ def test_json_dir(poly, use_custom):
         if input_file == "dims.json":
             continue
         with open(json_dir + input_file, 'r') as f:
-            logging.info("Begin run No.%d file:%s" % (idx, input_file))
+            logging.info("Begin run [No.%d/%d] file:%s" % (idx, len(files), input_file))
             idx = idx + 1
             desc = f.read()
             attrs = dims_dict.get(input_file, {}) if use_custom else {}
-            if not get_result(desc, poly, attrs):
+            need_compare = True
+            if online_tuning:
+                attrs["online_tuning"] = online_tuning
+                need_compare = False
+            if not get_result(desc, poly, attrs, need_compare=need_compare):
                 logging.info("----------Error Json name is----------")
                 logging.info(input_file)
                 raise ValueError("Precision Error")
@@ -271,6 +275,7 @@ def main(argv):
         use_custom = False
         ci_test = False
         use_profiling = False
+        online_tuning = 0
         attrs_list = {}
         for option, value in options:
             if option in ("-h", "--help"):
@@ -281,6 +286,7 @@ def main(argv):
             elif option in ("-m", "--manual"):
                 poly = False
             elif option in ("-t", "--tune"):
+                online_tuning = 1
                 attrs_list["online_tuning"] = 1
             elif option == "--ci":
                 ci_test = True
@@ -315,7 +321,22 @@ def main(argv):
     if single_file:
         test_single_file(file_name, attrs_list, poly)
     elif dir_test:
-        test_json_dir(poly, use_custom)
+        if len(args) == 1:
+            all_json_path = list()
+            json_path = args[0]
+            if os.path.exists(json_path) and os.path.isdir(json_path):
+                files = os.listdir(json_path)
+                if len(files) > 0 and os.path.isfile(json_path + files[0]):
+                    all_json_path.append(json_path)
+                else:
+                    # parent dir
+                    for f in files:
+                        all_json_path.append(json_path + f + "/")
+            for p in all_json_path:
+                test_json_dir(poly, use_custom, p, online_tuning)
+        else:
+            test_json_dir(poly, use_custom, online_tuning)
+
     elif ci_test:
         poly = False
         test_ci(use_profiling, poly)

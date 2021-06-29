@@ -54,6 +54,7 @@ constexpr auto MAX_REPEAT = 255;
 constexpr auto MIN_CORE_GRANULARITY = 256;
 constexpr auto DESIRE_CORE_GRANULARITY = 8192;
 
+
 // Controlled by custom tiling.
 constexpr auto ALLOCATION_PERCENTAGE = 0.5;  // reserved for double buffer in default
 
@@ -109,6 +110,21 @@ struct AttrInfo {
   std::string attr_value;
 };
 
+enum Template {
+  DEFAULT = 0,
+  PURE_ELEM,
+  BROADCAST_OP,
+  REDUCTION,
+  ALL_REDUCE,
+  BITWISE_REDUCTION,
+  MATMUL,
+  TRANSPOSE_OP,
+  PAD_OP,
+  CUSTOM_CONFIG,
+  CONV,
+  TEMPLATE_BULK
+};
+
 // valid attr_key used in AttrInfo
 constexpr auto AT_VECTORIZED = "VECTORIZED";
 constexpr auto AT_TOT = "TOT";
@@ -143,9 +159,12 @@ constexpr auto AT_MEM_RATIO = "MEM_RATIO";
 constexpr auto AT_THREAD_MIN = "THREAD_MIN";
 constexpr auto AT_THREAD_MAX = "THREAD_MAX";
 constexpr auto AT_THREAD_MOD = "THREAD_MOD";
+constexpr auto AT_THREAD_CFG = "THREAD_CONFIG";
 constexpr auto AT_BLOCK_MIN = "BLOCK_MIN";
 constexpr auto AT_BLOCK_MAX = "BLOCK_MAX";
 constexpr auto AT_BLOCK_MOD = "BLOCK_MOD";
+constexpr auto AT_BLOCK_CFG = "BLOCK_CONFIG";
+constexpr auto AT_TEMPLATE = "TEMPLATE";
 
 class TilingAnalyzer;
 
@@ -188,6 +207,7 @@ class TileAxis {
   int dyn_shape_limit{-1};
   std::string axis_type_{""};  // record the type of special axis type
   std::vector<AttrInfo> attrs;
+  std::unordered_map<std::string, Var> var_names;  // used in inequality solver to record unique var address
   inline Constraint GetConstConstraint(TileLevel level) const {
     Constraint cons = level == CACHE1 ? this->c1_constraints : this->c0_constraints;
     const auto tile_min = cons.tile_min_.as<IntImm>();

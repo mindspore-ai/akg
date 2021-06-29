@@ -345,20 +345,7 @@ class GpuStrategy : public TilingStrategy {
  public:
   explicit GpuStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {}
   ~GpuStrategy() {}
-  enum Template {
-    DEFAULT = 0,
-    PURE_ELEM,
-    BROADCAST_OP,
-    REDUCTION,
-    ALL_REDUCE,
-    BITWISE_REDUCTION,
-    MATMUL,
-    TRANSPOSE_OP,
-    PAD_OP,
-    CUSTOM_CONFIG,
-    CONV,
-    TEMPLATE_BULK
-  };
+
   void AddNpuConstraint();
   void AddGpuConstraint();
   std::vector<TileAxis::MappingConstraint> thread_binding_spaces_;  // [thread.x, thread.y, thread.z]
@@ -405,6 +392,8 @@ class GpuStrategy : public TilingStrategy {
   // Step 3. Transform list of integer into string mapping config.
   void SetMappingConfig();
 
+  void MarkMappingInRootAxis();
+
   int GetLocalAllocBufCount();
   Template template_{Template::DEFAULT};
   bool is_reduce_op_[TEMPLATE_BULK] = {false, false, true, true, true, false};
@@ -414,6 +403,8 @@ class GpuStrategy : public TilingStrategy {
   std::vector<int64_t> thread_limit_;
   std::vector<int64_t> block_cfg_;
   std::vector<int64_t> thread_cfg_;
+  std::unordered_map<TileAxis *, int64_t> thread_cfg_map_;
+  std::unordered_map<TileAxis *, int64_t> block_cfg_map_;
   int block_count_{0};  // number of mapped blocks
   int64_t elem_per_thread_[3]{SpItemPerThread::AUTO};
   int64_t min_elem_for_io_bound_ = 2;
@@ -425,6 +416,8 @@ class GpuStrategy : public TilingStrategy {
     {0, "DEFAULT"},    {1, "PURE_ELEM"},         {2, "BROADCAST_OP"}, {3, "REDUCTION"},
     {4, "ALL_REDUCE"}, {5, "BITWISE_REDUCTION"}, {6, "MATMUL"},       {7, "TRANSPOSE_OP"},
     {8, "PAD_OP"},     {9, "CUSTOM_CONFIG"},     {10, "CONV"}};
+  std::unordered_map<int, std::string> mapping_idx_pos_ = {{0, "x"}, {1, "y"}, {2, "z"}};
+  std::unordered_map<int, std::string> reduce_y_idx_pos_ = {{0, "y"}, {1, "x"}};
 };
 
 class MulticoreStrategy {

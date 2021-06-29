@@ -109,7 +109,14 @@ def lower(sch, args, shape_params=None, name="default_function", binds=None, att
                                polyhedral, tuning, target, cfg)
 
     level = tmp_attrs.get("help_tiling")
-    if tuning or (level is not None and level > help_tiling_level['None']):
+    if attrs.get("use_new_space", False):
+        # new space: constraints format
+        print("NEW SPACE: ", ret)
+        space = dict()
+        space['tune_schedule'] = ret.tune_schedule
+        space['tune_constraints'] = ret.tune_constraints
+        return space
+    elif tuning or (level is not None and level > help_tiling_level['None']):
         level = help_tiling_level['Tuning'] if tuning else level
         global tuning_spaces
         tuning_spaces = {}

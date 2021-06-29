@@ -285,6 +285,19 @@ NodeRef CompositeLower(const std::string &json_str, const Map<std::string, NodeR
     target = "cuda";
   }
   Array<NodeRef> shape_vars;
+
+  if (attrs.find("ret_mode") != attrs.end()) {
+    // This is used during auto tuning.
+    if (attrs["ret_mode"]->IsInstance<IntImm>() && attrs["ret_mode"].as<IntImm>()->value == 1) {
+      auto feature = std::vector<float>();
+      // Set last arg to true to get pure stmt.
+      auto stmt = Downcast<Stmt>(akg::Lower(sch, info.args, shape_vars, info.kernel_name, info.in_binds, attrs, false,
+                                            true, false, target, config, true));
+      // Return args as well to get binds through get_binds api in python.
+      return Array<NodeRef>({stmt, info.args});
+    }
+  }
+
   return akg::Lower(sch, info.args, shape_vars, info.kernel_name, info.in_binds, attrs, false, true, tuning, target,
                     config);
 }

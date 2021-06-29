@@ -48,6 +48,7 @@ class InequalitySolver : TilingSolver {
   ~InequalitySolver() {}
   TileCandidate *Solve();
   std::deque<ParamInfo> param_info_{};
+  Array<Expr> GetMemoryConstraints() { return memory_constraints_; }
 
  private:
   struct TilingMemInfo {
@@ -72,11 +73,12 @@ class InequalitySolver : TilingSolver {
   void CalculateMemoryInBuffer(const TilingAnalyzer::BufferEntry *buf, TilingMemInfo *mem_info);
   Expr EstimateAlignment(const TilingAnalyzer::BufferEntry *buf, TileAxis *axis, Expr tile) const;
 
-  Array<Expr> CollectMemoryConstraints();
+  void CollectMemoryConstraints();
 
   bool ContainVar(Expr expr, Var var);
   Expr GetSubstitutedExpr(const NodeRef &op);
 
+  Array<Expr> memory_constraints_;
   Map<Var, Expr> defined_vars_{};
   bool tile_success_{true};
   std::unique_ptr<TilingMemInfo> tiling_mem_info_{nullptr};

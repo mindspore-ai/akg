@@ -25,6 +25,7 @@ from akg.tvm import _api_internal
 from akg.topi.cuda.injective_single_kernel import schedule_injective
 import topi
 from akg.global_configs import get_dump_ir_flag
+from akg.utils.kernel_exec import ReturnType
 
 def should_enable_tensor_core(kernel_info):
     for op in kernel_info["op_desc"]:
@@ -571,6 +572,33 @@ def _enable_auto_inline(kernel_info):
     # For the Ascend, turn 'enable_auto_inline' off for composite op by default.
     return False
 
+def _get_feature(desc_s, attr):
+    composite_lower = tvm.get_global_func("composite_lower")
+    stmt, args = composite_lower(desc_s, attr)
+    from akg.tvm import build_module
+    binds, _ = build_module.get_binds(args)
+    if "cuda" in desc_s:
+        from akg.utils.auto_tuning import get_features_from_stmts
+        feature = get_features_from_stmts(stmts=[stmt], binds=[binds], n_skip_cache=0)[0]
+    else:
+        from akg.utils.auto_tuning import get_features_from_stmts_npu
+        feature = get_features_from_stmts_npu(stmts=[stmt], binds=[binds], n_skip_cache=0)[0]
+    return feature
+
+def _build_for_tuning(desc_s, attrs, func):
+    if attrs.get("ret_mode") == ReturnType.FEAT:
+        return _get_feature(desc_s, attrs)
+    elif attrs.get("ret_mode") in [ReturnType.DEFAULT, ReturnType.MOD]:
+        return func(desc_s, attrs, True)
+    elif attrs.get("ret_mode") == ReturnType.MOD_AND_FEAT:
+        # get both module and feature
+        attrs["ret_mode"] = ReturnType.FEAT
+        feature = _get_feature(desc_s, attrs)
+        attrs["ret_mode"] = ReturnType.MOD
+        mod = func(desc_s, attrs, True)
+        return mod, feature
+    else:
+        raise ValueError("ret_mode gets a wrong value: {}, should be in DEFAULT, FEAT, MOD, MOD_AND_FEAT".format(attrs.get("ret_mode")))
 
 def _build_to_module(desc_s_in, desc_d_in, attr=None, use_repo=True):
     """
@@ -640,9 +668,8 @@ def _build_to_module(desc_s_in, desc_d_in, attr=None, use_repo=True):
     def update_attr(desc_s, desc_d, attr, support_online_tuning=True):
         if attr is None:
             attr = {'dim': ''}
-        attr["pragma_reschedule"] = 1
-        attr["pragma_rmselfdep"] = _pragma_rmselfdep(desc_d)
-        attr["enable_auto_inline"] = _enable_auto_inline(desc_d)
+        attr = _update_attrs_ascend(desc_d, attr)
+        
         if use_repo:
             compute, shape, dtype = generate_trait(desc_d)
             repo_attr = get_repo([compute, shape, dtype, 'metadata', 'attrs'], repository, {})
@@ -662,12 +689,7 @@ def _build_to_module(desc_s_in, desc_d_in, attr=None, use_repo=True):
                 if tiling:
                     attr['dim'] = tiling
                 elif support_online_tuning and 'online_tuning' in attr:
-                    from akg.auto_tune.composite_tuner import tune_composite
-                    best_config = tune_composite(desc_s_in,
-                                                tune_level=attr["online_tuning"],
-                                                repo_path=_get_repository_file_path("repository.json"),
-                                                skip_exist=True)
-                    attr.update(best_config)
+                    attr = _get_online_tune_attr(desc_s_in, attr, _get_repository_file_path("repository.json"))
             _, desc_s = _set_compute_attrs(desc_d, attr)
         return desc_s, attr
 
@@ -685,6 +707,8 @@ def _build_to_module(desc_s_in, desc_d_in, attr=None, use_repo=True):
 
     desc_s, attr = update_attr(desc_s_in, desc_d_in, attr)
     func = tvm.get_global_func("composite_with_json")
+    if "ret_mode" in attr:
+        return _build_for_tuning(desc_s, attr, func)
     return func(desc_s, attr, True)
 
 def _reducemax_pattern(kernel_info):
@@ -752,6 +776,12 @@ def _update_attrs_gpu(kernel_info, attrs, poly):
             attrs["pragma_enable_conv_tensor_core"] = True
             attrs["enable_auto_fuse"] = False
     return attrs
+
+def _update_attrs_ascend(desc_d, attr):
+    attr["pragma_reschedule"] = 1
+    attr["pragma_rmselfdep"] = _pragma_rmselfdep(desc_d)
+    attr["enable_auto_inline"] = _enable_auto_inline(desc_d)
+    return attr
 
 def _json_need_split(desc_d, attrs, poly, target):
     block_jsons = []
@@ -839,6 +869,8 @@ def _build_to_module_gpu(desc_s, desc_d, attrs=None, poly=False):
                 value = get_repo([compute, shape, dtype, item])
                 if value:
                     attrs[item] = value
+        if attrs.get('dim') in (None, '') and 'online_tuning' in attrs:
+            attrs = _get_online_tune_attr(desc_s, attrs, _get_repository_file_path("repository.json"))
         return desc_d, attrs
 
     if 'parallel_fusion' in desc_d or 'buffer_stitch' in desc_d:
@@ -857,7 +889,31 @@ def _build_to_module_gpu(desc_s, desc_d, attrs=None, poly=False):
     desc_d, attrs = update_attr(desc_d, attrs)
     attrs = _update_attrs_gpu(desc_d, attrs, poly)
     func = tvm.get_global_func("composite_with_json")
+    if "ret_mode" in attrs:
+        return _build_for_tuning(desc_s, attrs, func)
     return func(desc_s, attrs, poly)
+
+def _get_online_tune_attr(desc_s, attrs, repo_path, use_new_space=False):
+    if use_new_space:
+        from akg import auto_tune
+        task_options = auto_tune.TaskOptions(tune_level=attrs["online_tuning"],
+                                            use_new_space=use_new_space, 
+                                            attrs=attrs, 
+                                            generate_trait=generate_trait)
+        # TODO(baiji): recover this line to use actual repo (e.g. repository.json) instead of testing repo (tuner_v2_repo.json)
+        # task_options.repo_path = repo_path
+        best_config = auto_tune.tune_composite_v2(desc_s,
+                                                  task_options=task_options)
+    else:
+        from akg.auto_tune.composite_tuner import tune_composite
+        best_config = tune_composite(desc_s,
+                                    tune_level=attrs["online_tuning"],
+                                    repo_path=_get_repository_file_path("repository.json"),
+                                    skip_exist=True)
+    attrs.update(best_config)
+    pop_keys = ["online_tuning", "help_tiling", "tuning", "use_new_space"]
+    clean_attrs = {k: v for k, v in attrs.items() if k not in pop_keys}
+    return clean_attrs
 
 def _build(desc_s, desc_d, attrs=None, poly=True, use_repo=True):
     if attrs is None:
@@ -906,19 +962,26 @@ def get_tiling_space(kernel_desc, level=1, attr=None):
         attr = {}
     attr['help_tiling'] = level
     attr['tuning'] = 'on'
-    if 'enable_auto_inline' not in attr:
-        attr['enable_auto_inline'] = False
-    attr['pragma_reschedule'] = 1
+    desc_d = json.loads(kernel_desc)
+    backend = desc_d['process']
+
+    if backend == "cuda":
+        attr = _update_attrs_gpu(desc_d, attr, True)
+    else:
+        attr = _update_attrs_ascend(desc_d, attr)
     func = tvm.get_global_func('composite_lower')
     ret = func(kernel_desc, attr)
     spaces = {}
-    spaces['index'] = ret.index_table.asnumpy().tolist()
-    spaces['c1_range'] = ret.c1_tile_range_table.asnumpy().tolist()
-    spaces['c0_range'] = ret.c0_tile_range_table.asnumpy().tolist()
-    spaces['c1_mod'] = ret.c1_tile_mod_table.asnumpy().tolist()
-    spaces['c0_mod'] = ret.c0_tile_mod_table.asnumpy().tolist()
-    if level >= 2:
-        spaces['tuning_space'] = ret.tiling_candidate.asnumpy().tolist()
+    if attr.get("use_new_space", False):
+        spaces['tune_space'] = ret
+    else:
+        spaces['index'] = ret.index_table.asnumpy().tolist()
+        spaces['c1_range'] = ret.c1_tile_range_table.asnumpy().tolist()
+        spaces['c0_range'] = ret.c0_tile_range_table.asnumpy().tolist()
+        spaces['c1_mod'] = ret.c1_tile_mod_table.asnumpy().tolist()
+        spaces['c0_mod'] = ret.c0_tile_mod_table.asnumpy().tolist()
+        if level >= 2:
+            spaces['tuning_space'] = ret.tiling_candidate.asnumpy().tolist()
     return spaces
 
 @tvm.register_func("akg_build_gpu_module")

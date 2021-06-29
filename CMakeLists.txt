@@ -235,6 +235,7 @@ file(
   ${AKG_SOURCE_DIR}/src/poly/tiling/*.cc
   ${AKG_SOURCE_DIR}/src/poly/gpu_emit/*.cc
   ${AKG_SOURCE_DIR}/src/api/*.cc
+  ${AKG_SOURCE_DIR}/src/auto_tune/*.cc
   ${AKG_SOURCE_DIR}/src/pass/*.cc
   ${AKG_SOURCE_DIR}/src/schedule/*.cc
   ${AKG_SOURCE_DIR}/src/codegen/*.cc

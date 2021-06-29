@@ -457,7 +457,7 @@ def conv_2d_str(inputs, output, attr):
     res += ("            {}[:, i, j, f] = np.sum(data_pad[:, i*s_h:i*s_h+whd:d_h, j*s_w:j*s_w+wwd:d_w, :].astype('float32') *{}[f, :, :, :].astype('float32'),axis=(1, 2, 3))\n".format(output_name, shape_filter_name))
     return res
 
-def gen_json_data(op_desc):
+def gen_json_data(op_desc, with_compute=True):
     """Generating test data for composite json"""
     desc = json.loads(op_desc)
     input_for_mod = []
@@ -601,9 +601,13 @@ def gen_json_data(op_desc):
         output_indexes.extend(inplace_tensors_index)
 
     p.close()
+    # compute the expect data
+    if with_compute:
+        with open(uni_file_name, 'r') as f:
+            sent = f.read()
+        exec(sent)
+        os.remove(uni_file_name)
+        return input_for_mod, expect, output_indexes
+    else:
+        return input_for_mod, None, output_indexes
 
-    with open(uni_file_name, 'r') as f:
-        sent = f.read()
-    exec(sent)
-    os.remove(uni_file_name)
-    return input_for_mod, expect, output_indexes

@@ -32,6 +32,7 @@ from timeit import default_timer as timer
 from threading import Thread
 from functools import reduce
 import numpy as np
+from enum import IntEnum
 
 import akg
 from akg.build_module import help_tiling_level
@@ -75,6 +76,12 @@ WGT_ELEM_BYTES = (BLOCK_OUT * BLOCK_REDUCE * WGT_WIDTH // 8)
 OUT_ELEM_BYTES = (BLOCK_IN * BLOCK_OUT * OUT_WIDTH // 8)
 GLB_ELEM_BYTES = (16 * OUT_WIDTH // 8)
 
+class ReturnType(IntEnum):
+    """Return Type IntEnum"""
+    DEFAULT = 0
+    FEAT = 1
+    MOD = 2
+    MOD_AND_FEAT = 3
 
 def debug_mode(debug_flag):
     """
@@ -431,10 +438,12 @@ def profiling_analyse(device_id, time_before_launch):
             ["awk", "{print $2}"],
             ["head", "-n1"],
         ]
-        p = exec_cmds_with_pipe(cmd_list)
-        for _ in range(5):
+        for _ in range(200):
+            p = exec_cmds_with_pipe(cmd_list)
             if p[0].decode('utf8').strip() == '':
                 time.sleep(1)
+            else:
+                break
         try:
             job_file = p[0].decode('utf8').strip().split('/')[-2]
         except BaseException:
@@ -449,8 +458,14 @@ def profiling_analyse(device_id, time_before_launch):
             raise RuntimeError("The JOB file is too old")
             return None
 
-        hwtslog_parser = HWTSLogParser(file_abs_path)
-        return hwtslog_parser.execute()
+        count = 0
+        while count < 5:
+            try:
+                hwtslog_parser = HWTSLogParser(file_abs_path)
+                return hwtslog_parser.execute()
+            except:
+                time.sleep(1)
+                count += 1
     except SyntaxError as e:
         logging.error(e)
         return PROF_ERROR_CODE
@@ -942,7 +957,7 @@ def create_gpu_mod(sch_tmpl, s, op_func, op_var, shape_var, kernel_name, attrs, 
 
 def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
              attrs=None, log_cce=False, dump_ir=True, dump_code=True,
-             polyhedral=True, tuning=False):
+             polyhedral=True, tuning=False, ret_mode=ReturnType.MOD):
     """
     Return module built from op_func with given inputs.
 
@@ -1030,6 +1045,20 @@ def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
         return mod
 
     binds = None if not attrs else attrs.pop(BINDS, None)
+    if ret_mode in [ReturnType.FEAT, ReturnType.MOD_AND_FEAT]:
+        if binds is None:
+            binds, _ = get_binds(op_var)
+        cfg = _api_internal._GetCurrentBuildConfig()
+        stmt, args = _api_internal._Lower(s, op_var, shape_params, kernel_name,
+                                    binds, attrs, False, True, False, target,
+                                    cfg, True)
+        from akg.utils.auto_tuning import get_features_from_stmts
+        feature = get_features_from_stmts(stmts=[stmt], binds=[binds], n_skip_cache=0)[0]
+        if ret_mode == ReturnType.FEAT:
+            return feature
+        mod = _api_internal._BuildStmtToModule(stmt, kernel_name, cfg, args, target)
+        return mod, feature
+
     if target == CUDA:
         return create_gpu_mod(None, s, op_func, op_var, shape_var, kernel_name, attrs, polyhedral, binds, dump_ir,
                               dump_code, tuning)

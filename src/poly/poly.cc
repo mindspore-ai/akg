@@ -58,7 +58,11 @@ class Poly {
     if (is_dynamic) stmt_ = RestoreCombinedParams(stmt_, scop_->info_);
 
     if (is_tuning) {
-      spaces_ = GenerateTilingSpace(sched, scop_->info_, stmt_, scop_->info_.user_config_.GetDumpTuningLevel());
+      if (scop_->info_.user_config_.GetUseNewSpace()) {
+        spaces_ = GenerateTuningSpace(sched, scop_->info_, stmt_, scop_->info_.user_config_.GetDumpTuningLevel()); 
+      } else {
+        spaces_ = GenerateTilingSpace(sched, scop_->info_, stmt_, scop_->info_.user_config_.GetDumpTuningLevel());
+      }
       return;
     }
 
