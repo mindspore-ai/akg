@@ -291,7 +291,9 @@ std::vector<DimensionPeeler::Peeling> DimensionPeeler::GetPeelSpace(int limit_de
       cand_axis.emplace_back(std::make_pair(axis_space_[i].get(), i));
     }
   }
-  CollectDepth(Peeling(), 0);
+  if (!cand_axis.empty()) {
+    CollectDepth(Peeling(), 0);
+  }
   return peelings; 
 }
 

@@ -124,6 +124,9 @@ class DimensionFolderPlan : public IRVisitor {
       CHECK(transpose_perm_.size() == inputs[0]->shape.size());
       AddTransposeRelation(inputs[0], output, transpose_perm_);
       transpose_perm_.clear();
+    } else if (prim->name == "Reshape") {
+      CHECK(inputs.size() == 1);
+      AddReshapeRelation(inputs[0], output);
     } else {
       for (FoldTensor *input : inputs) {
         Relation rel(output);
@@ -234,6 +237,32 @@ class DimensionFolderPlan : public IRVisitor {
     input->succ.emplace_back(std::move(rel));
   }
 
+  void AddReshapeRelation(FoldTensor *input, FoldTensor *output) {
+    Relation rel(output);
+    int64_t input_size = 1;
+    int64_t output_size = 1;
+    int input_base = 0;
+    int output_base = 0;
+    int input_idx = 0;
+    int output_idx = 0;
+    while (input_idx < static_cast<int>(input->shape.size())) {
+      input_size *= input->shape[input_idx++];
+      rel.forward_mapping.push_back(output_base);
+      while (output_size < input_size) {
+        CHECK(output_idx < static_cast<int>(output->shape.size()));
+        output_size *= output->shape[output_idx++];
+        rel.backward_mapping.push_back(input_base);
+      }
+      if (input_size == output_size) {
+        input_size = 1;
+        output_size = 1;
+        input_base = input_idx;
+        output_base = output_idx;
+      }
+    }
+    input->succ.emplace_back(std::move(rel));
+  }
+
   void Dump() {
     std::cout << "\nTensor          Split      Relation\n-----------------------\n";
     for (auto val : tensors_) {
@@ -319,13 +348,6 @@ class DimensionFolderPlan : public IRVisitor {
   }
 
   void Propagation(FoldTensor *t) {
-    auto get_output_fold_dim = [](Relation *rel, int i) -> int {
-      int output_fold_dim = rel->forward_mapping[i];
-      if (output_fold_dim >= 0) {
-        output_fold_dim = rel->to->fold_dims[output_fold_dim];
-      }
-      return output_fold_dim;
-    };
     if (backward_visited_.count(t)) {
       return;
     }
@@ -336,19 +358,7 @@ class DimensionFolderPlan : public IRVisitor {
       std::cout << "[Propagation] " << rel.to << " -> " << t << std::endl;
 #endif
       if (rel.to->update > rel.backward_commit) {
-        int cur_dim = -1;
-        int cur_out_dim = -1;
-        for (size_t i = 0; i < t->fold_dims.size(); ++i) {
-          int output_fold_dim = get_output_fold_dim(&rel, i);
-          if (cur_dim == -1 || t->fold_dims[i] != t->fold_dims[cur_dim]) {
-            cur_dim = i;
-            cur_out_dim = output_fold_dim;
-          } else if (output_fold_dim != cur_out_dim) {
-            UpdateFoldDim(t, cur_dim, i - 1);
-            cur_dim = i;
-            cur_out_dim = output_fold_dim;
-          }
-        }
+        DoPropagate(rel.to, t, rel.backward_mapping, rel.forward_mapping);
         rel.backward_commit = rel.to->update;
       }
     }
@@ -356,13 +366,6 @@ class DimensionFolderPlan : public IRVisitor {
   }
 
   void PropagationForward(FoldTensor *top, Relation &relation) {
-    auto get_input_fold_dim = [top, &relation](int i) -> int {
-      int input_fold_dim = relation.backward_mapping[i];
-      if (input_fold_dim >= 0) {
-        input_fold_dim = top->fold_dims[input_fold_dim];
-      }
-      return input_fold_dim;
-    };
     FoldTensor *t = relation.to;
 #if FOLD_DIM_DUMP
     std::cout << "[PropagationForward] " << top << " -> " << t << std::endl;
@@ -371,23 +374,58 @@ class DimensionFolderPlan : public IRVisitor {
       return;
     }
     if (top->update > relation.forward_commit) {
-      int cur_dim = -1;
-      int cur_in_dim = -1;
-      for (size_t i = 0; i < t->fold_dims.size(); ++i) {
-        int input_fold_dim = get_input_fold_dim(i);
-        if (cur_dim == -1 || t->fold_dims[i] != t->fold_dims[cur_dim]) {
-          cur_dim = i;
-          cur_in_dim = input_fold_dim;
-        } else if (input_fold_dim != cur_in_dim) {
-          UpdateFoldDim(t, cur_dim, i - 1);
-          cur_dim = i;
-          cur_in_dim = input_fold_dim;
-        }
-      }
+      DoPropagate(top, t, relation.forward_mapping, relation.backward_mapping);
       relation.forward_commit = top->update;
     }
     Propagation(t);
     backward_visited_.insert(t);
+  }
+
+  void DoPropagate(FoldTensor *from, FoldTensor *to, const std::vector<int> &forward_map,
+                   const std::vector<int> &backward_map) {
+    int cur_dim = -1;
+    int cur_from_dim = -1;
+    size_t to_idx = 0;
+    while (to_idx < to->fold_dims.size()) {
+      int from_idx = backward_map[to_idx];
+      if (from_idx >= 0) {
+        from_idx = from->fold_dims[from_idx];
+      }
+      bool block_split = false;
+      int block_num = 1;
+      for (size_t i = to_idx + 1; i < to->fold_dims.size(); ++i) {
+        if (backward_map[i] != backward_map[to_idx]) {
+          break;
+        }
+        if (block_num == 0) {
+          for (size_t j = from_idx + 1; j < from->fold_dims.size(); ++j) {
+            if (forward_map[j] != forward_map[from_idx]) {
+              break;
+            }
+            if (from->fold_dims[j] != from->fold_dims[from_idx]) {
+              block_split = true;
+              break;
+            }
+            cur_dim = -1;
+          }
+        }
+        block_num++;
+        if (block_split) {
+          UpdateFoldDim(to, i, i);
+        }
+      }
+      if (block_num == 1) {
+        if (cur_dim == -1 || to->fold_dims[to_idx] != to->fold_dims[cur_dim]) {
+          cur_dim = to_idx;
+          cur_from_dim = from_idx;
+        } else if (from_idx != cur_from_dim) {
+          UpdateFoldDim(to, cur_dim, to_idx - 1);
+          cur_dim = to_idx;
+          cur_from_dim = from_idx;
+        }
+      }
+      to_idx += block_num;
+    }
   }
 
   void UpdateFoldDim(FoldTensor *t, int start, int end) {
@@ -504,7 +542,7 @@ class DimensionFolder : public IRMutator {
         args.push_back(arg);
       }
     }
-    if (prim_op->name == "BroadcastTo") {
+    if (prim_op->name == "BroadcastTo" || prim_op->name == "Reshape") {
       update_attr_ = "shape";
       attr_func_ = op->func;
     }
