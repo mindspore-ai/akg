@@ -57,6 +57,38 @@ class IfTensorCore : public IRVisitor {
 
 class PrefetchScopeInjector : public IRMutator {
  public:
+  bool HasShared(const Stmt &s) {
+    if (auto store = s.as<Store>()) {
+      is_nested_block_ = true;
+      auto it = touched_.find(store->buffer_var.get());
+      if (it != touched_.end()) {
+        prefetch_var_ = store->buffer_var;
+        return true;
+      }
+    } else if (auto loop = s.as<For>()) {
+      if (HasShared(loop->body)) {
+        return true;
+      }
+    } else if (auto attr = s.as<AttrStmt>()) {
+      if (HasShared(attr->body)) {
+        return true;
+      }
+    } else if (auto cond = s.as<IfThenElse>()) {
+      if (HasShared(cond->then_case)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool HasConstantOuterLoop() {
+    return ((!loop_nest_.empty()) && (loop_nest_.back()->extent.as<IntImm>() != nullptr));
+  }
+
+  bool IsPrefetchBlock(const Stmt &s) {
+    return (HasShared(s) && HasConstantOuterLoop());
+  }
+
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
     if (op->attr_key == air::ir::attr::storage_scope && op->value.as<StringImm>()->value == "shared") {
       touched_.insert(op->node.as<Variable>());
@@ -65,20 +97,44 @@ class PrefetchScopeInjector : public IRMutator {
     } else if (op->attr_key == "promote_register_to_global" || op->attr_key == "promote_register_to_shared") {
       if_shared_finished_ = true;
     } else if (op->attr_key == "promote_vectorization") {
-      if (IsPrefetchBlock(s) && HasOuterLoop()) {
-        if (loop_nest_.back()->extent.as<IntImm>() != nullptr) {
-          prefetch_outer_loop_ = (loop_nest_.back()->extent).as<IntImm>()->value;
-          if_prefetch_injected_ = true;
-          return AttrStmt::make(prefetch_var_, PREFETCH_SCOPE, 1, s);
-        }
+      if (IsPrefetchBlock(s)) {
+        prefetch_outer_loop_ = (loop_nest_.back()->extent).as<IntImm>()->value;
+        if_prefetch_injected_ = true;
+        return AttrStmt::make(prefetch_var_, PREFETCH_SCOPE, 1, s);
       }
       return s;
     }
     return IRMutator::Mutate_(op, s);
   }
 
+  Stmt Mutate_(const For *op, const Stmt &s) final {
+    if (IsPrefetchBlock(s)) {
+      prefetch_outer_loop_ = (loop_nest_.back()->extent).as<IntImm>()->value;
+      if_prefetch_injected_ = true;
+      return AttrStmt::make(prefetch_var_, PREFETCH_SCOPE, 1, s);
+    } else if (is_nested_block_) {
+      return s;
+    } else {
+      loop_nest_.push_back(op);
+      auto stmt = IRMutator::Mutate_(op, s);
+      loop_nest_.pop_back();
+      return stmt;
+    }
+  }
+
+  Stmt Mutate_(const Store *op, const Stmt &s) final {
+    if (IsPrefetchBlock(s)) {
+      prefetch_outer_loop_ = (loop_nest_.back()->extent).as<IntImm>()->value;
+      if_prefetch_injected_ = true;
+      return AttrStmt::make(prefetch_var_, PREFETCH_SCOPE, 1, s);
+    }
+    return IRMutator::Mutate_(op, s);
+  }
+
   Stmt Mutate_(const Evaluate *op, const Stmt &s) final {
-    if (is_const(op->value)) return IRMutator::Mutate_(op, s);
+    if (is_const(op->value)) {
+      return IRMutator::Mutate_(op, s);
+    }
     if (const auto call = op->value.as<Call>()) {
       if (call->is_intrinsic(air::ir::intrinsic::tvm_storage_sync)) {
         if (if_prefetch_injected_ && (!if_shared_promoted_)) {
@@ -105,54 +161,6 @@ class PrefetchScopeInjector : public IRMutator {
     return stmt;
   }
 
-  bool IsPrefetchBlock(const Stmt &s) {
-    if (auto store = s.as<Store>()) {
-      auto it = touched_.find(store->buffer_var.get());
-      if (it != touched_.end()) {
-        prefetch_var_ = store->buffer_var;
-        return true;
-      }
-    } else if (auto loop = s.as<For>()) {
-      if (IsPrefetchBlock(loop->body)) {
-        return true;
-      }
-    } else if (auto attr = s.as<AttrStmt>()) {
-      if (IsPrefetchBlock(attr->body)) {
-        return true;
-      }
-    } else if (auto cond = s.as<IfThenElse>()) {
-      if (IsPrefetchBlock(cond->then_case)) {
-        return true;
-      }
-    }
-    return false;
-  }
-  bool HasOuterLoop() { return !loop_nest_.empty(); }
-  Stmt Mutate_(const For *op, const Stmt &s) final {
-    if (IsPrefetchBlock(s) && HasOuterLoop()) {
-      if (loop_nest_.back()->extent.as<IntImm>() != nullptr) {
-        prefetch_outer_loop_ = (loop_nest_.back()->extent).as<IntImm>()->value;
-        if_prefetch_injected_ = true;
-        return AttrStmt::make(prefetch_var_, PREFETCH_SCOPE, 1, s);
-      }
-    }
-    loop_nest_.push_back(op);
-    auto stmt = IRMutator::Mutate_(op, s);
-    loop_nest_.pop_back();
-    return stmt;
-  }
-
-  Stmt Mutate_(const Store *op, const Stmt &s) final {
-    if (IsPrefetchBlock(s) && HasOuterLoop()) {
-      if (loop_nest_.back()->extent.as<IntImm>() != nullptr) {
-        prefetch_outer_loop_ = (loop_nest_.back()->extent).as<IntImm>()->value;
-        if_prefetch_injected_ = true;
-        return AttrStmt::make(prefetch_var_, PREFETCH_SCOPE, 1, s);
-      }
-    }
-    return IRMutator::Mutate_(op, s);
-  }
-
   const bool GetIfPrefetchInjected() { return if_prefetch_injected_; }
 
   const int GetPrefetchOuterLoop() { return prefetch_outer_loop_; }
@@ -166,6 +174,7 @@ class PrefetchScopeInjector : public IRMutator {
   bool if_prefetch_injected_{false};
   bool if_shared_promoted_{false};
   bool if_shared_finished_{false};
+  bool is_nested_block_{false};
   int prefetch_outer_loop_;
 };
 
