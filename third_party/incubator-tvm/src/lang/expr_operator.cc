@@ -510,20 +510,33 @@ Expr sum(Expr source, Array<IterVar> rdom) {
 }
 
 Expr all(Expr source, Array<IterVar> rdom) {
-  CHECK(source.type().is_bool());
+  CHECK(source.type().is_bool() || source.type().is_int());
   Var x("x", source.type()), y("y", source.type());
   Expr result = ir::And::make(x, y);
-  Expr identity_element = make_const(source.type(), true);
+  Expr identity_element;
+  if (source.type().is_bool()) {
+    identity_element = make_const(source.type(), true);
+  } else {
+    // is_int
+    identity_element = make_const(source.type(), 1);
+  }
+  
   ir::CommReducer combiner =
     ir::CommReducerNode::make({x}, {y}, {result}, {identity_element});
   return ir::Reduce::make(combiner, {source}, rdom, make_const(Bool(1), true), 0);
 }
 
 Expr any(Expr source, Array<IterVar> rdom) {
-  CHECK(source.type().is_bool());
+  CHECK(source.type().is_bool() || source.type().is_int());
   Var x("x", source.type()), y("y", source.type());
   Expr result = ir::Or::make(x, y);
-  Expr identity_element = make_const(source.type(), false);
+  Expr identity_element;
+  if (source.type().is_bool()) {
+    identity_element = make_const(source.type(), false);
+  } else {
+    // is_int
+    identity_element = make_const(source.type(), 0);
+  }
   ir::CommReducer combiner =
     ir::CommReducerNode::make({x}, {y}, {result}, {identity_element});
   return ir::Reduce::make(combiner, {source}, rdom, make_const(Bool(1), true), 0);

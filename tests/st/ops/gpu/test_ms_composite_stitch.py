@@ -36,20 +36,22 @@ def test_composite_stitch(ci_path):
         input_for_mod, expect, output_indexes = gen_json_data(desc)
         output = utils.mod_launch(mod, input_for_mod, output_indexes)
 
-        rtol, atol = get_rtol_atol("FUSED", "float32")
-        flag = True
+        rtol = 0.001
+        atol = 0.005
+        case_flag = True
         if len(output_indexes) > 1:
             if not all(map(lambda x, y: compare_tensor(x, y, rtol=rtol, atol=atol), output, expect)):
                 logging.info(mod.imported_modules[0].get_source())
-                flag = False
+                case_flag = False
         else:
             if not compare_tensor(output, expect, rtol=rtol, atol=atol):
                 logging.info(mod.imported_modules[0].get_source())
-                flag = False
-        if not flag:
+                case_flag = False
+        if not case_flag:
             logging.info("\033[91mComposite Json {} fail!\033[0m".format(fi))
         else:
             logging.info("\033[92mComposite Json {} pass!\033[0m".format(fi))
+        flag &= case_flag
     if not flag:
         raise ValueError("Precision Error")
     logging.info("All ops are ok!")
