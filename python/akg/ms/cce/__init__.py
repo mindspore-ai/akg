@@ -75,3 +75,4 @@ from .zeros_like import ZerosLike
 from .floordiv import FloorDiv
 from .prod_force_se_a import ProdForceSeA
 from .lamb_apply_optimizer_assign import LambApplyOptimizerAssign
+from .prod_force_se_a_grad import ProdForceSeAGrad
