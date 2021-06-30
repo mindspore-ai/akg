@@ -1520,6 +1520,9 @@ void GpuStrategy::PadSpeedup() {
 
 void GpuStrategy::BroadcastSpeedup() {
   analyzer_->GetTileLogger().AppendLine(GPU_MAPPING, "BroadcastSpeedup");
+  if (!analyzer_->scop_info_.user_config_.EnableStitchFusion()) {
+    analyzer_->scop_info_.user_config_.SetEnableOneDimThread(true);
+  }
   size_t depth = 0;
   analyzer_->ForEachAxisTopDown([this, &depth](TileAxis *axis) {
     if (axis == analyzer_->RootAxis() || axis->range_extent.as<IntImm>() == nullptr) {
