@@ -28,6 +28,8 @@
 #include "composite/optimize/complex_expander.h"
 #include "composite/optimize/delete_cast.h"
 #include "composite/optimize/transdata_rewriter.h"
+#include "composite/optimize/clean_zero_align.h"
+
 
 namespace akg {
 Stmt Optimize(Stmt &s, BuildInfo &info) {
@@ -74,6 +76,9 @@ Stmt Optimize(Stmt &s, BuildInfo &info) {
   }
   // expand complex op
   pm.RegisterPass(std::make_shared<ComplexExpander>());
+  if (info.opt.target == "aicore") {
+    pm.RegisterPass(std::make_shared<CleanZeroAligner>(pm.info_));
+  }
   s = pm.Run(s);
   return s;
 }
