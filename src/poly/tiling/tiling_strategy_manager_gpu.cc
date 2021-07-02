@@ -755,6 +755,11 @@ void GpuStrategy::AddGpuConstraint() {
       axis->TileRestrainToSingleValue(axis->c1_constraints.tile_min_, TileLevel::CACHE0);
     });
   }
+
+  analyzer_->RootAxis()->MarkWithAttr(AttrInfo{AT_TEMPLATE, template_map_[template_]});
+  if (analyzer_->scop_info_.user_config_.GetEnableConvTensorCore()) {
+    MarkMappingInRootAxis();
+  }
 }
 
 void GpuStrategy::MarkMappingInRootAxis() {
