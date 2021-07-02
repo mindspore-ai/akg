@@ -168,6 +168,9 @@ const VarNames ConvFormatM = {"wi", "hi", "mi"};
 const VarNames ConvFormatN = {"oc"};
 const VarNames ConvFormatK = {"ic", "kw", "kh"};
 
+constexpr auto NO_PRUNE = 0;
+constexpr auto PRUNE_MEM_EXCEED = 1;
+constexpr auto PRUNE_ALIGNED_MEM_EXCEED = 2;
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

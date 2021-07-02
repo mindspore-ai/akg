@@ -288,6 +288,7 @@ void TileCandidate::InitTileAxis(TileLevel level) {
     } else {
       tile_var = dynamic_mem_info_->tile_var_map[var_name];
     }
+    axis->var_names[var_name] = tile_var;
     Update(tile_var);
 
     if (cons.tile_extent_.as<IntImm>()->value != -1) {
@@ -1362,12 +1363,11 @@ void TilingAnalyzer::AddPostTilingConstraints() {
     } else {
       if (scop_info_.user_config_.GetIsTuning()) {
         actived_strategies.push_back(&custom_strategy);
-      } else {
-        actived_strategies.push_back(&reduce_strategy);
-        actived_strategies.push_back(&mod_strategy);
-        actived_strategies.push_back(&gemm_strategy);
-        actived_strategies.push_back(&conv_strategy);
       }
+      actived_strategies.push_back(&reduce_strategy);
+      actived_strategies.push_back(&mod_strategy);
+      actived_strategies.push_back(&gemm_strategy);
+      actived_strategies.push_back(&conv_strategy);
       actived_strategies.push_back(&gpu_strategy);
     }
     strategy_manager->SetStrategies(actived_strategies);

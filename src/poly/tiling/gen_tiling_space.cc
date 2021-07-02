@@ -224,11 +224,11 @@ class TileSpaceCollector {
         bool break_constraint =
           ((tile != tile_min->value) && (tile != tile_extent->value) && (tile % tile_mod->value != 0)) ||
           (axis->forbid_iso && tile_extent->value % tile != 0);
-        if (analyzer_.scop_info_.user_config_.GetPruneTuningSpace() && break_constraint) {
+        if (analyzer_.scop_info_.user_config_.GetPruneTuningSpaceLevel() && break_constraint) {
           continue;
         }
         cand_.UpdateConstTile(axis, tile);
-        if (analyzer_.scop_info_.user_config_.GetPruneTuningSpace() && !cand_.SpaceVerify(axis, CACHE1, band_idx)) {
+        if (analyzer_.scop_info_.user_config_.GetPruneTuningSpaceLevel() && !cand_.SpaceVerify(axis, CACHE1, band_idx)) {
           continue;
         }
         if (!ScanDown(axis_idx + 1, band_idx)) {
@@ -250,17 +250,21 @@ class TileSpaceCollector {
     int64_t mem_sz, align_sz;
     if (analyzer_.scop_info_.user_config_.GetTarget() == TARGET_CCE) {
       std::tie(mem_sz, align_sz) = cand_.MemInfer(MEM_SCOPE_BUFFER, band_idx);
-      if (analyzer_.scop_info_.user_config_.GetPruneTuningSpace() && align_sz > mem_limit_[MEM_SCOPE_BUFFER]) {
+      if (analyzer_.scop_info_.user_config_.GetPruneTuningSpaceLevel() == PRUNE_ALIGNED_MEM_EXCEED && align_sz > mem_limit_[MEM_SCOPE_BUFFER]) {
         return false;
       }
+      if (analyzer_.scop_info_.user_config_.GetPruneTuningSpaceLevel() == PRUNE_MEM_EXCEED && mem_sz > mem_limit_[MEM_SCOPE_BUFFER]) {
+        return false;
+      }
+
     } else {
       int64_t shared_sz, local_sz;
       std::tie(shared_sz, std::ignore) = cand_.MemInfer(MEM_SCOPE_SHARED, band_idx);
-      if (analyzer_.scop_info_.user_config_.GetPruneTuningSpace() && shared_sz > mem_limit_[MEM_SCOPE_SHARED]) {
+      if (analyzer_.scop_info_.user_config_.GetPruneTuningSpaceLevel() && shared_sz > mem_limit_[MEM_SCOPE_SHARED]) {
         return false;
       }
       std::tie(local_sz, std::ignore) = cand_.MemInfer(MEM_SCOPE_LOCAL, band_idx);
-      if (analyzer_.scop_info_.user_config_.GetPruneTuningSpace() && local_sz > mem_limit_[MEM_SCOPE_LOCAL]) {
+      if (analyzer_.scop_info_.user_config_.GetPruneTuningSpaceLevel() && local_sz > mem_limit_[MEM_SCOPE_LOCAL]) {
         return false;
       }
       mem_sz = std::max(shared_sz, local_sz);
@@ -294,7 +298,7 @@ class TileSpaceCollector {
 
     // pruning
     if (analyzer_.scop_info_.user_config_.GetTarget() == TARGET_CCE &&
-        analyzer_.scop_info_.user_config_.GetPruneTuningSpace()) {
+        analyzer_.scop_info_.user_config_.GetPruneTuningSpaceLevel()) {
       for (auto &result : result_.back()) {
         // skip memory align tiling
         if ((mem_sz == result.mem_size) && (align_sz > result.align_size) && (LargerThan(result.tile))) {

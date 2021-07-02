@@ -210,7 +210,7 @@ class UserConfig {
     ParseBoolAttr(attrs, "pragma_speedup_tiling", &pragma_speedup_tiling_);
     ParseBoolAttr(attrs, "pragma_allow_tail_tiling", &pragma_allow_tail_tiling_);
     ParseBoolAttr(attrs, "pragma_analyze_multicore", &pragma_analyze_multicore_);
-    ParseBoolAttr(attrs, "prune_tuning_space", &prune_tuning_space_);
+    ParseIntAttr(attrs, "prune_tuning_space_level", &prune_tuning_space_level_);
     ParseBoolAttr(attrs, "pragma_checkcoincident", &tile_check_coincident_);
     ParseIntAttr(attrs, "max_unroll_loop", &max_unroll_loop_);
     ParseBoolAttr(attrs, "unroll_shared", &unroll_shared_);
@@ -250,6 +250,7 @@ class UserConfig {
     ParseStringAttr(attrs, "dump_poly_dir", &dump_poly_dir_);
 
     ParseBoolAttr(attrs, "enable_atomic_add", &enable_atomic_add_);
+    ParseBoolAttr(attrs, "use_new_space", &use_new_space_);
 
     if (GetTarget() == TARGET_CUDA) {
       ParseBoolAttr(attrs, "pragma_enable_tensor_core", &enable_tensor_core_);
@@ -321,7 +322,7 @@ class UserConfig {
   bool GetPragmaAnalyzeReuseBuffer() const { return pragma_analyze_reuse_buffer_; }
   bool GetPragmaAllowTailTiling() const { return pragma_allow_tail_tiling_; }
   bool GetPragmaAnalyzeMulticore() const { return pragma_analyze_multicore_; }
-  bool GetPruneTuningSpace() const { return prune_tuning_space_; }
+  int GetPruneTuningSpaceLevel() const { return prune_tuning_space_level_; }
   bool GetTileCheckCoincident() const { return tile_check_coincident_; }
   void SetTileCheckCoincident(const bool tile_check_coincident) { tile_check_coincident_ = tile_check_coincident; }
   int GetMaxUnrollLoop() const { return max_unroll_loop_; }
@@ -415,6 +416,8 @@ class UserConfig {
 
   // dump all info
   void DumpScopDataScheduleAttrs(std::ofstream &of);
+
+  bool GetUseNewSpace() { return use_new_space_; }
 
   bool GetEnableAtomicAdd() { return enable_atomic_add_; }
 
@@ -585,6 +588,7 @@ class UserConfig {
   bool outer_band_need_split_{false};
 
   bool enable_atomic_add_{false};
+  bool use_new_space_{false};
   // tensor_core config
   bool enable_matmul_{false};
   bool enable_tensor_core_{false};
@@ -625,7 +629,7 @@ class UserConfig {
   bool pragma_speedup_tiling_{false};
   bool pragma_allow_tail_tiling_{true};
   bool pragma_analyze_multicore_{true};
-  bool prune_tuning_space_{true};
+  int prune_tuning_space_level_{0};  // 0: no_prune; 1: prune mem-exceed; 2: prune aligned_mem-exceed
   bool tile_check_coincident_{true};
   int max_unroll_loop_{1};
   bool unroll_shared_{false};

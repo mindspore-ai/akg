@@ -46,6 +46,7 @@ Stmt DsaHalideOptimizer(const Stmt &s, bool dynamic_shape = false);
 Stmt RestoreCombinedParams(Stmt stmt, ScopInfo &info);
 std::pair<TileSizes, std::deque<ParamInfo>> GenerateTiling(const isl::schedule &sch, ScopInfo &scop_info, Stmt body);
 NodeRef GenerateTilingSpace(const isl::schedule &sch, ScopInfo &scop_info, Stmt body, int dump_level);
+NodeRef GenerateTuningSpace(const isl::schedule &sch, ScopInfo &scop_info, Stmt body, int dump_level);
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

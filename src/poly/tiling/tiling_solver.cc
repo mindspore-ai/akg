@@ -76,7 +76,11 @@ double TilingSolver::GetNewAllocRatioWhenRewriteFail(int64_t memory_bits) {
 void TilingSolver::CollectMemoryLimit() {
   if (analyzer_.scop_info_.user_config_.GetTarget() == TARGET_CCE) {
     // Init memory allocation percentage.
-    percentage_ = ALLOCATION_PERCENTAGE;
+    if (analyzer_.scop_info_.user_config_.GetIsTuning()) {
+      percentage_ = 1.0;
+    } else {
+      percentage_ = ALLOCATION_PERCENTAGE;
+    }
     for (auto attr : analyzer_.RootAxis()->attrs) {
       if (attr.attr_key != AT_MEM_RATIO) continue;
       CHECK_NE(attr.attr_value, "");
@@ -152,6 +156,7 @@ void InequalitySolver::InitTileAxis(TileLevel level) {
     } else {
       tile_var = tiling_mem_info_->tile_var_map[var_name];
     }
+    axis->var_names[var_name] = tile_var;
     UpdateLevelTile(axis, tile_var);
 
     // Step 2: Update for axes with determined tiling factor.
@@ -190,17 +195,17 @@ TileCandidate *InequalitySolver::Solve() {
       UpdateMemInfo();
     }
 
-    Array<Expr> memory_constraints = CollectMemoryConstraints();
+    CollectMemoryConstraints();
 
     auto tile_axes = cand_.GetTileAxis();
     for (auto i = static_cast<int>(tile_axes.size()) - 1; i >= 0; --i) {
       TileAxis *axis = tile_axes[i];
-      DetermineTileFactor(axis, CACHE1, memory_constraints);
+      DetermineTileFactor(axis, CACHE1, memory_constraints_);
     }
     if (analyzer_.op_type_ != VECTOR_OP) {
       for (auto i = static_cast<int>(tile_axes.size()) - 1; i >= 0; --i) {
         TileAxis *axis = tile_axes[i];
-        DetermineTileFactor(axis, CACHE0, memory_constraints);
+        DetermineTileFactor(axis, CACHE0, memory_constraints_);
       }
     }
   }
@@ -365,7 +370,11 @@ void InequalitySolver::DetermineTileFactor(TileAxis *axis, TileLevel level, cons
     } else {
       shape_range = l1_expr;
       tile_min = axis->c0_constraints.tile_min_;
-      tile_range = CanonicalSimplify(Min::make(axis->c0_constraints.tile_extent_, shape_range));
+      if (shape_range.type() != axis->c0_constraints.tile_extent_.type()) {
+        tile_range = CanonicalSimplify(Min::make(Cast::make(shape_range.type(), axis->c0_constraints.tile_extent_), shape_range));
+      } else {
+        tile_range = CanonicalSimplify(Min::make(axis->c0_constraints.tile_extent_, shape_range));
+      }
     }
 
     if (analyzer_.arith_ana_.CanProve(mem_constraint <= 0)) {
@@ -589,8 +598,10 @@ void InequalitySolver::CalculateMemoryInBuffer(const TilingAnalyzer::BufferEntry
   std::stringstream ss;
   bool this_band_buf = (buf->scope == MEM_SCOPE_GM);
   Expr buf_shape = CastInt64ToExpr(buf->size * buf->expand_size);
-  bool is_l0_buf = buf->scope == MEM_SCOPE_CACHE1;
-
+  bool is_l0_buf = buf->scope > MEM_SCOPE_CACHE1 && buf->scope <= MEM_SCOPE_CACHE0_C;
+  if (analyzer_.op_type_ != VECTOR_OP) {
+    is_l0_buf = is_l0_buf || buf->scope == MEM_SCOPE_BUFFER;
+  }
   if (buf->scope != MEM_SCOPE_GM) {
     for (auto &axis : *(buf->tile_axis)) {
       if (axis == this->analyzer_.RootAxis() || axis->index != tiling_band_) {
@@ -606,7 +617,7 @@ void InequalitySolver::CalculateMemoryInBuffer(const TilingAnalyzer::BufferEntry
       if (analyzer_.arith_ana_.CanProve(tile_var > axis->range_extent)) tile_var = axis->range_extent;
 
       // Make tile var align to 32 Bytes.
-      if (analyzer_.scop_info_.user_config_.GetTarget() == TARGET_CCE) {
+      if (analyzer_.scop_info_.user_config_.GetTarget() == TARGET_CCE && !analyzer_.scop_info_.user_config_.GetIsTuning()) {
         tile_var = EstimateAlignment(buf, axis, tile_var);
       }
 
@@ -741,9 +752,8 @@ void InequalitySolver::UpdateMemInfoWithBufReuse() {
   }
 }
 
-Array<Expr> InequalitySolver::CollectMemoryConstraints() {
+void InequalitySolver::CollectMemoryConstraints() {
   auto mem_info = tiling_mem_info_.get();
-  Array<Expr> memory_constraints;
   for (int i = 1; i < MEM_SCOPE_BULK; ++i) {
     if (!mem_info->max_live_size[i].defined()) {
       continue;
@@ -757,10 +767,9 @@ Array<Expr> InequalitySolver::CollectMemoryConstraints() {
       continue;
     }
 
-    memory_constraints.push_back(constraint);
+    memory_constraints_.push_back(constraint);
     param_info_.push_back(ParamInfo{"AttrStmt", Expr("[MemoryLimit_" + memory_map_[i] + "]"), constraint});
   }
-  return memory_constraints;
 }
 
 bool InequalitySolver::ContainVar(Expr expr, Var var) {

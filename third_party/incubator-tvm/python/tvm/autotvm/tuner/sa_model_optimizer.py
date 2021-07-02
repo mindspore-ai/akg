@@ -45,8 +45,8 @@ class SimulatedAnnealingOptimizer:
         Print log every `log_interval` iterations
     """
 
-    def __init__(self, space, n_iter=500, temp=(1, 0), persistent=True, parallel_size=128,
-                 early_stop=50, log_interval=50):
+    def __init__(self, space, n_iter=20, temp=(1, 0), persistent=True, parallel_size=128,
+                 early_stop=20, log_interval=20):
         self.space = space
         self.n_iter = n_iter
         self.temp = temp
@@ -55,18 +55,29 @@ class SimulatedAnnealingOptimizer:
         self.early_stop = early_stop or 1e9
         self.log_interval = log_interval
         self.points = None
+    
+    def get_configs(self, indexes):
+        ret = np.empty((len(indexes), len(self.space.get(0).feature)), dtype=object)
+        for i, ii in enumerate(indexes):
+            ret[i, :] = np.array(self.space.get(ii).feature, dtype=object)
 
-    def find_best(self, model, num, exclusive):
+        return ret
+
+    def find_best(self, model, num, exclusive, n_iter=None):
         """find best configs based on simulated annealing"""
         tic = time.time()
-        temp, n_iter, early_stop, log_interval = self.temp, self.n_iter, self.early_stop, self.log_interval
-
+        temp, early_stop, log_interval = self.temp, self.early_stop, self.log_interval
+        if n_iter is None:
+            n_iter = self.n_iter
         if self.persistent and self.points is not None:
             points = self.points
         else:
             points = np.random.choice(self.space.length, self.parallel_size)
 
-        scores = 1e8 / model.predict(points)
+        # change points in space to configs
+        configs = self.get_configs(points)
+
+        scores = 1e8 / model.predict(configs, x_type="config")
 
         # build heap and insert initial points
         heap_items = [(float('-inf'), -i) for i in range(num)]
@@ -95,7 +106,8 @@ class SimulatedAnnealingOptimizer:
             for i, p in enumerate(points):
                 new_points[i] = self.space.random_walk(p)
 
-            new_scores = 1e8 / model.predict(new_points)
+            new_configs = self.get_configs(new_points)
+            new_scores = 1e8 / model.predict(new_configs, x_type="config")
 
             ac_prob = np.exp(np.minimum((new_scores - scores) / (t + 1e-5), 1))
             ac_index = np.random.random(len(ac_prob)) < ac_prob

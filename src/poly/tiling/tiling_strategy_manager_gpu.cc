@@ -757,6 +757,37 @@ void GpuStrategy::AddGpuConstraint() {
   }
 }
 
+void GpuStrategy::MarkMappingInRootAxis() {
+  auto thread_cfg = analyzer_->scop_info_.user_config_.GetThreadConfig();
+  CHECK(thread_cfg);
+  for (auto it : mapping_idx_pos_) {
+    if (it.first >= int(thread_cfg->bound)) {
+      continue;
+    }
+    auto map_value = std::to_string(thread_cfg->GetAt(it.first).second);
+    std::string attr_value = it.second + "_" + map_value;
+    analyzer_->RootAxis()->MarkWithAttr(AttrInfo{AT_THREAD_CFG, attr_value});
+  }
+  auto block_cfg = analyzer_->scop_info_.user_config_.GetBlockConfig();
+  CHECK(block_cfg);
+  for (auto it : mapping_idx_pos_) {
+    if (it.first >= int(block_cfg->bound)) {
+      continue;
+    }
+    std::string attr_key = AT_BLOCK_CFG;
+    if (it.first == 0) {
+      attr_key += "_mi";
+    } else if (it.first == 1) {
+      attr_key += "_hi";
+    } else if (it.first == 2) {
+      attr_key += "_oc";
+    }
+    auto map_value = std::to_string(block_cfg->GetAt(it.first).second);
+    std::string attr_value = it.second + "_" + map_value;
+    analyzer_->RootAxis()->MarkWithAttr(AttrInfo{attr_key, attr_value});
+  }
+}
+
 void GpuStrategy::InitMappingLimit() {
   max_x_y_dim_thread_ = analyzer_->scop_info_.user_config_.GetMaxElemPerThread();
   DetermineTemplate();
@@ -904,6 +935,11 @@ void GpuStrategy::InnerThreadOuterBlock() {
         pending_axes_.push_back(std::make_pair(axis, std::max<int64_t>(ceil(static_cast<float>(shape) / tile), 1)));
         ss << ", map to block.";
       }
+      if (axis->mc_sup || analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib()) {
+        std::string attr_value =
+          reverse_binding_ ? reduce_y_idx_pos_[inner_dim] + "_1" : mapping_idx_pos_[inner_dim] + "_1";
+        axis->MarkWithAttr(AttrInfo{AT_THREAD_CFG, attr_value});
+      }
       analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
     };
 
@@ -949,6 +985,10 @@ void GpuStrategy::InnerThreadOuterBlock() {
     activated_threads *= use;
     ss << ", use = " << use << ", activated threads = " << activated_threads;
     thread_cfg_.emplace_back(use);
+    std::string attr_value = reverse_binding_ ? reduce_y_idx_pos_[inner_dim] : mapping_idx_pos_[inner_dim];
+    attr_value = attr_value + "_" + std::to_string(use);
+    axis->MarkWithAttr(AttrInfo{AT_THREAD_CFG, attr_value});
+    thread_cfg_map_[axis] = thread_cfg_.size() - 1;
     axis->thread_constraints.map_extent_ = use;
     auto tile = TileAfterThreadMapping(axis, inner_dim, use, item);
     pending_axes_.push_back(std::make_pair(axis, std::max<int64_t>(ceil(static_cast<float>(shape) / tile), 1)));
@@ -1028,10 +1068,14 @@ void GpuStrategy::InnerThreadOuterBlock() {
     activated_blocks *= use;
     ss << ", use = " << use << ", activated blocks = " << activated_blocks;
     block_cfg_[pending_axes_.size() - 1 - i] = use;
+    block_cfg_map_[axis] = pending_axes_.size() - 1 - i;
     axis->block_constraints.map_extent_ = use;
     if (analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib() || axis->mc_sup) {
       ++block_count_;
     }
+    std::string attr_value = mapping_idx_pos_[block_count_ - 1] + "_" + std::to_string(use);
+    axis->MarkWithAttr(AttrInfo{AT_BLOCK_CFG, attr_value});
+
     CHECK(axis->range_extent.as<IntImm>());
     auto extent = axis->range_extent.as<IntImm>()->value;
     axis->TileRestrainUpper(std::max<int64_t>(ceil(static_cast<float>(extent) / use), 1), TileLevel::CACHE1);
@@ -1716,6 +1760,12 @@ void CustomTilingStrategy::AddGpuConstraint() {
           }
         } else if (items[0] == "FACTOR") {
           axis->TileRestrainToSingleValue(CastToExpr(items[1]), lv);
+        } else if (items[0] == "CANDIDATE") {
+          if (lv == CACHE1) {
+            axis->InsertC1CandFactor(CastToExpr(items[1]));
+          } else {
+            axis->InsertC0CandFactor(CastToExpr(items[1]));
+          }
         } else if (items[0] == "FORBIDISO") {
           axis->forbid_iso = true;
         } else if (items[0] == "MAX") {
