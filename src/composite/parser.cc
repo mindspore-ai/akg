@@ -123,8 +123,8 @@ Stmt MakeStmt(const std::vector<OpDesc> &op_descs) {
 
     Tensor output = Downcast<Tensor>(op_desc.output_descs[0]);
     auto op_name = op_desc.op_name;
-    auto stmt =
-      Provide::make(output->op, 0, Call::make(Int(32), op_name, input, Call::CallType::PureIntrinsic), output->shape);
+    auto stmt = Provide::make(output->op, 0, Call::make(output->dtype, op_name, input, Call::CallType::PureIntrinsic),
+                              output->shape);
     if (!op_desc.attrs.empty()) {
       stmt = AttrStmt::make(op_desc.attrs, "attrs", Expr(1), stmt);
     }

@@ -48,7 +48,6 @@ def should_enable_atomic_add(kernel_info):
                 return True
     return False
 
-
 class Graph():
     def __init__(self, output):
         self.tensors = set(output)
@@ -81,7 +80,7 @@ def liveness_analysis(desc_d, req_map):
             out_name = out_desc['tensor_name']
             if out_name in req_liveness:
                 if is_reduce(op_info['name']):
-                    req_liveness[out_name].is_reduce = True   
+                    req_liveness[out_name].is_reduce = True
                 if req_liveness[out_name].end == -1:
                     req_liveness[out_name].end = idx
                     req_liveness[out_name].start = idx
@@ -115,6 +114,8 @@ def shared_memory_optimization(desc_d, req_map, outputs):
             alloc_map[sort_req_buf[i]] = ['ALLOC', req_map[sort_req_buf[i]]]
             continue
         for j in range(len(sort_req_liveness) - 1, i, -1):
+            if desc_d['process'] == 'aicore':
+                continue
             # whether reuseable.
             # rule1: one buffer start larger equal to the reused buffer end.
             if sort_req_liveness[sort_req_buf[i]].start >= sort_req_liveness[sort_req_buf[j]].end:
@@ -125,7 +126,7 @@ def shared_memory_optimization(desc_d, req_map, outputs):
                         if (sort_req_liveness[item].end >= sort_req_liveness[sort_req_buf[i]].end) or (sort_req_liveness[item].end >= sort_req_liveness[sort_req_buf[i]].start):
                             find_conflit = True
                             break
-                    if not find_conflit: 
+                    if not find_conflit:
                         if sort_req_buf[j] not in reverse_reuse_map:
                             reverse_reuse_map[sort_req_buf[j]] = [sort_req_buf[i]]
                         else:
@@ -153,13 +154,13 @@ def parse_merged_json(desc_d, stitch_tensor_name, input_tensor_name, output_tens
     Args:
         desc_d (dict): The dict of compute description.
         stitch_tensor_name (list[string]): The list of stitch node tensors.
-            stitch nodes are regarded as edges of sub_graphs. The smallest number of sub_graph is the length of 
+            stitch nodes are regarded as edges of sub_graphs. The smallest number of sub_graph is the length of
             stitch_tensor_name + 1.
 
         input_tensor_name (list[string]): The list of input tensors.
         output_tensor_name (list[string]): The list of output tensors.
             output tensors would be regarded as inter_output_tensor and final_output_tensor. The main difference
-            of the two kinds of tensors is whether out-degree is zero, in which final_output_tensor is the tensor 
+            of the two kinds of tensors is whether out-degree is zero, in which final_output_tensor is the tensor
             with zero out-degree in merged graph and otherwise, it is inter_output_tensor.
 
     Returns:
@@ -169,12 +170,12 @@ def parse_merged_json(desc_d, stitch_tensor_name, input_tensor_name, output_tens
             output tensors in this list are are final_output_tensor and the subgraph they belong to doesn't
             include stitch nodes.
         final_output_within_graph (list[string]): The list of final output tensors.
-            output tensors in this list are final_output_tensor and the subgraph they belong to also includes 
+            output tensors in this list are final_output_tensor and the subgraph they belong to also includes
             stitch node.
-            
+
     '''
-    # Initialize sub_graph number as the smallest possible number of sub graph. 
-    # sub graphs number might increase based on graph structure. 
+    # Initialize sub_graph number as the smallest possible number of sub graph.
+    # sub graphs number might increase based on graph structure.
     sub_graph_length = len(stitch_tensor_name)
     sub_graph_node = [set() for _ in range(sub_graph_length)]
     # use dict to save extra outputs for each sub_graph.
@@ -199,7 +200,7 @@ def parse_merged_json(desc_d, stitch_tensor_name, input_tensor_name, output_tens
                     sub_graph_length += 1
                     sub_graph_node += [set()]
                     final_output_graph = False
-            
+
             # out_desc not in in_out_dict means out-degree is zero.
             if out_desc['tensor_name'] not in in_out_dict:
                 final_output_graph = True
@@ -225,8 +226,12 @@ def parse_merged_json(desc_d, stitch_tensor_name, input_tensor_name, output_tens
                         in_out_dict[sub_input_desc['tensor_name']] = [out_desc['tensor_name']]
                     else:
                         in_out_dict[sub_input_desc['tensor_name']].append(out_desc['tensor_name'])
-    
+
     return extra_subgraph_output, list(final_output_list), final_output_within_graph
+
+def get_type_bits(data_type):
+    type_bits_map = {'float32': 32, 'float16': 16}
+    return type_bits_map.get(data_type, 1)
 
 def collect_subgraph_info(desc_d, sub_stitch_graphs, req_map, input_tensor_name, output_tensor_name, stitch_node_list):
     inplace_assign_map = {}
@@ -245,8 +250,9 @@ def collect_subgraph_info(desc_d, sub_stitch_graphs, req_map, input_tensor_name,
                 if out_tensor_name in sg.tensors:
                     sg.ops.append(op_info)
                     if out_tensor_name in req_map:
-                        if out_desc['shape']:
-                            req_map[out_tensor_name] = reduce(lambda x, y: x * y, out_desc['shape'])
+                        if out_desc['shape'] and out_desc['data_type']:
+                            type_bits = get_type_bits(out_desc['data_type'])
+                            req_map[out_tensor_name] = reduce(lambda x, y: x * y, out_desc['shape']) * type_bits
                         else:
                             req_map[out_tensor_name] = 1
 
@@ -331,8 +337,8 @@ def stitch_json_split(desc_d):
     # add final output into stitch_op.
     stitch_node += [[op] for op in final_output_list if op not in stitch_node_name]
     stitch_node_list = [node for stitchnode in stitch_node for node in stitchnode]
-    # each output tensor can only be parsed as output once in all subgraphs. 
-    # All tensors in stitch_node_list will be put into output_name. 
+    # each output tensor can only be parsed as output once in all subgraphs.
+    # All tensors in stitch_node_list will be put into output_name.
     # Save other output tensors which are not in stitch_node_name for the output collection of subgraphs.
     complement_output = [tensor for tensor in output_tensor_name if tensor not in stitch_node_list]
 
@@ -362,7 +368,7 @@ def stitch_json_split(desc_d):
             with open('stitch_info/' + sg.op_name + '_stitch.json', 'w+') as f:
                 f.write(json.dumps(desc_d))
         stitch_jsons.append(stitch_json_str)
-    
+
     clean_op_list = [fake_op for fake_op in fake_output_list if fake_op in stitch_node_name]
     # add fake outputs into output_tensor_name
     output_tensor_name += clean_op_list
@@ -600,6 +606,37 @@ def _build_for_tuning(desc_s, attrs, func):
     else:
         raise ValueError("ret_mode gets a wrong value: {}, should be in DEFAULT, FEAT, MOD, MOD_AND_FEAT".format(attrs.get("ret_mode")))
 
+def split_stitch_attr(attr, split_num):
+    common_attr = {}
+    sub_attr = [{} for _ in range(split_num)]
+    if attr is None or not isinstance(attr, dict):
+        return common_attr, sub_attr
+    for k, v in attr.items():
+        if isinstance(k, str) and k.startswith("sub_attr_"):
+            continue
+        common_attr[k] = v
+    for i in range(split_num):
+        key = "sub_attr_" + str(i + 1)
+        if key in attr:
+            for k, v in attr[key].items():
+                sub_attr[i][k] = v
+    return common_attr, sub_attr
+
+
+def combine_stitch_attr(common_attr, sub_attr):
+    attr = {}
+    for k, v in common_attr.items():
+        attr[k] = v
+    for i, a in enumerate(sub_attr):
+        if not a:
+            continue
+        key = "sub_attr_" + str(i + 1)
+        attr[key] = {}
+        for k, v in a.items():
+            attr[key][k] = v
+    return attr
+
+
 def _build_to_module(desc_s_in, desc_d_in, attr=None, use_repo=True):
     """
     build kernel with compute description in json format
@@ -617,6 +654,14 @@ def _build_to_module(desc_s_in, desc_d_in, attr=None, use_repo=True):
         file_path = _get_repository_file_path("repository.json")
         repository = read_repo_file(file_path)
 
+    def get_attr(repo):
+        if not isinstance(repo, dict) or len(repo) == 0:
+            return {}
+        for key, value in repo.items():
+            if key == "attrs":
+                return value
+            else:
+                return get_attr(value)
 
     def get_repo(keys, repo, default=None):
         for key in keys:
@@ -625,12 +670,23 @@ def _build_to_module(desc_s_in, desc_d_in, attr=None, use_repo=True):
                 return default
         return repo
 
-    def update_attr(desc_s, desc_d, attr, support_online_tuning=True):
+    def _auto_set_single_block(desc_d, attr):
+        if not attr.get("enable_multicore", None) and desc_d.get("extra", None):
+            if desc_d["extra"].get("BlockMode", "") == "single_block":
+                attr["enable_multicore"] = 0
+        return attr
+
+    def update_attr(desc_s, desc_d, attr, given_attrs=None, support_online_tuning=True):
         if attr is None:
             attr = {'dim': ''}
         attr = _update_attrs_ascend(desc_d, attr)
-        
-        if use_repo:
+        attr = _auto_set_single_block(desc_d, attr)
+        if given_attrs is not None:
+            for key, value in given_attrs.items():
+                if not attr.get(key):
+                    attr[key] = value
+            _, desc_s = _set_compute_attrs(desc_d, attr)
+        elif use_repo:
             compute, shape, dtype = generate_trait(desc_d)
             repo_attr = get_repo([compute, shape, dtype, 'metadata', 'attrs'], repository, {})
             if not repo_attr:
@@ -647,16 +703,46 @@ def _build_to_module(desc_s_in, desc_d_in, attr=None, use_repo=True):
             _, desc_s = _set_compute_attrs(desc_d, attr)
         return desc_s, attr
 
+    def get_parallel_repo(desc_d):
+        compute, shape, dtype = generate_trait(desc_d)
+        repo_attr = get_repo([compute, shape, dtype, 'BlockPlan'], repository, {})
+        return repo_attr
+
+    def get_stitch_repo(desc_d):
+        compute, shape, dtype = generate_trait(desc_d)
+        repo_attr = get_repo([compute, shape, dtype], repository, {})
+        return repo_attr
+
     if 'parallel_fusion' in desc_d_in or 'buffer_stitch' in desc_d_in:
         block_jsons, input_tensor_name, output_tensor_name, attrs_list, alloc_map_list, reuse_map_list, \
             clean_op_map_list = _json_need_split(desc_d_in, attr, True, "cce")
         if 'parallel_fusion' in desc_d_in:
-            for i, [cur_json, cur_attr] in enumerate(zip(block_jsons, attrs_list)):
-                block_jsons[i], attrs_list[i] = update_attr(cur_json, json.loads(cur_json), cur_attr, False)
+            parallel_repo = get_parallel_repo(desc_d_in)
+            if parallel_repo:
+                # "BlockPlan" should be: [{"block_plan": x1, attr1: x2, attr2: x3}, ...]
+                for i, [cur_json, cur_attr, cur_plan] in enumerate(zip(block_jsons, attrs_list, parallel_repo)):
+                    # When BlockPlan is active, the body should be run as single block
+                    cur_attr["enable_multicore"] = 0
+                    block_jsons[i], attrs_list[i] = update_attr(cur_json, json.loads(cur_json), cur_attr, cur_plan["attrs"], False)
+            else:
+                for i, [cur_json, cur_attr] in enumerate(zip(block_jsons, attrs_list)):
+                    block_jsons[i], attrs_list[i] = update_attr(cur_json, json.loads(cur_json), cur_attr, None, False)
         else:
-            desc_s, attr = update_attr(desc_s_in, desc_d_in, attr)
+            split_jsons_num = len(block_jsons[0])
+            common_attr, sub_attr = split_stitch_attr(attrs_list[0], split_jsons_num)
+            stitch_repo = get_stitch_repo(desc_d_in)
+            if stitch_repo and common_attr.get("peeling") is None:
+                common_attr_repo, sub_attr_repo = split_stitch_attr(stitch_repo, split_jsons_num)
+                common_attr.update(common_attr_repo)
+                for i, cur_json in enumerate(block_jsons[0]):
+                    block_jsons[0][i], sub_attr[i] = update_attr(cur_json, json.loads(cur_json), sub_attr[i],
+                                                                 sub_attr_repo[i])
+            else:
+                for i, cur_json in enumerate(block_jsons[0]):
+                    block_jsons[0][i], sub_attr[i] = update_attr(cur_json, json.loads(cur_json), sub_attr[i], {})
+            attrs_list[0] = combine_stitch_attr(common_attr, sub_attr)
         func = tvm.get_global_func("composite_with_json_list")
-        return func(block_jsons, input_tensor_name, output_tensor_name, alloc_map_list, reuse_map_list, \
+        return func(block_jsons, input_tensor_name, output_tensor_name, alloc_map_list, reuse_map_list,
                     clean_op_map_list, attrs_list, True, "cce")
 
     desc_s, attr = update_attr(desc_s_in, desc_d_in, attr)
@@ -708,7 +794,8 @@ def _set_tiling_attrs(out_shape, attrs):
     return attrs
 
 def _set_reducemax_attrs(desc_d, attrs):
-    if _reducemax_pattern(desc_d)[0]:
+    backend = desc_d['process']
+    if backend == 'cuda' and _reducemax_pattern(desc_d)[0]:
         attrs['enable_tile_c0'] = True
         elem_per_thread = 4
         blockdim_x = 64
@@ -851,8 +938,8 @@ def _get_online_tune_attr(desc_s, attrs, repo_path, use_new_space=False):
     if use_new_space:
         from akg import auto_tune
         task_options = auto_tune.TaskOptions(tune_level=attrs["online_tuning"],
-                                            use_new_space=use_new_space, 
-                                            attrs=attrs, 
+                                            use_new_space=use_new_space,
+                                            attrs=attrs,
                                             generate_trait=generate_trait)
         # TODO(baiji): recover this line to use actual repo (e.g. repository.json) instead of testing repo (tuner_v2_repo.json)
         # task_options.repo_path = repo_path

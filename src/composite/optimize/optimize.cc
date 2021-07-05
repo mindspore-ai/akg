@@ -25,11 +25,11 @@
 #include "composite/optimize/typecast_inserter.h"
 #include "composite/optimize/ops_combine.h"
 #include "composite/optimize/intrin_rewriter.h"
+#include "composite/optimize/peel_dimension.h"
 #include "composite/optimize/complex_expander.h"
 #include "composite/optimize/delete_cast.h"
 #include "composite/optimize/transdata_rewriter.h"
 #include "composite/optimize/clean_zero_align.h"
-
 
 namespace akg {
 Stmt Optimize(Stmt &s, BuildInfo &info) {
@@ -70,9 +70,11 @@ Stmt Optimize(Stmt &s, BuildInfo &info) {
   if (info.opt.target == "cuda") {
     pm.RegisterPass(std::make_shared<DeleteCast>());
   }
-  // intrin rewrite in ascend
   if (info.opt.target == "aicore") {
+    // intrin rewrite
     pm.RegisterPass(std::make_shared<IntrinRewriter>());
+    // peel dimension on given axes
+    pm.RegisterPass(std::make_shared<PeelDimension>(pm.info_));
   }
   // expand complex op
   pm.RegisterPass(std::make_shared<ComplexExpander>());

@@ -2062,5 +2062,14 @@
                 }
             }
         }
+    },
+    "2.Add12.Cast1.ReduceMax1.Cast1.Sub14.Exp1.ReduceSum1.Log1.Sub14.10": {
+        "1824_30522.30522.1824_30522": {
+            "float32--": {
+                "peeling": "0 1824",
+                "best_cycles": 88014,
+                "file_name": "Fused_Add_Cast_ReduceMax_Cast_Sub_Exp_ReduceSum_Log_Sub_split_1441484207057638165"
+            }
+        }
     }
 }

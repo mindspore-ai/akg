@@ -17,6 +17,17 @@
 #include <fstream>
 
 namespace akg {
+std::string type2string(const air::Type &type) {
+  std::string type_str;
+  for (const auto &it : type_mapping) {
+    if (it.second == type) {
+      type_str = it.first;
+      break;
+    }
+  }
+  return type_str;
+}
+
 bool IsBlockIdx(const std::string &name) { return name.find(BLOCKIDX) != std::string::npos; }
 bool IsBlockIdxX(const std::string &name) { return name == BLOCK_IDX_X; }
 bool IsBlockIdxY(const std::string &name) { return name == BLOCK_IDX_Y; }
@@ -389,4 +400,10 @@ FuncShape GetInputsChangeShape(const FunctionRef &output, Graph &g, const Array<
 }
 }  // namespace BroadcastReshapeUtil
 
+akg::BuildConfig GetConfig() {
+  akg::BuildConfig config = akg::BuildConfig::Current();
+  CHECK(config.defined());
+  config->dump_pass_ir = getenv(GetDumpIRFlag().c_str()) != nullptr;
+  return config;
+}
 }  // namespace akg

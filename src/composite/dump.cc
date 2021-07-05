@@ -88,6 +88,14 @@ void DumpStitchInfo(const std::string &kernel_name, StitchAttrInfo &store_attr,
   of.close();
 }
 
+void DumpStr2File(const std::string &file_name, const std::string &str) {
+  if (getenv(GetDumpIRFlag().c_str()) == nullptr) return;
+  std::ofstream of(file_name);
+  if (of) {
+    of << str << std::endl;
+    of.close();
+  }
+}
 void DumpStmt2File(const std::string &file_name, const Stmt &stmt) {
   if (getenv(GetDumpIRFlag().c_str()) == nullptr) return;
   std::ofstream of(file_name);
@@ -105,5 +113,31 @@ void DumpBuildInfo(const BuildInfo &info) {
   std::ofstream of(dir_name + "/composite.log", std::ios::app);
   DumpHeader(of, "BuildInfo");
   of << info;
+}
+
+void DumpLowerData(const LowerData &data) {
+  std::stringstream ss;
+
+  ss << "args: " << std::endl;
+  for (auto arg : data.args_) {
+    ss << arg << std::endl;
+  }
+
+  ss << "arg_list_0: " << std::endl;
+  for (auto arg_list : data.arg_list_0_) {
+    ss << arg_list << std::endl;
+  }
+
+  ss << "binds: " << std::endl;
+  for (auto iter : data.binds_) {
+    ss << iter.first << ": " << iter.second << std::endl;
+  }
+
+  ss << "binds_0: " << std::endl;
+  for (auto iter : data.binds_0_) {
+    ss << iter.first << ": " << iter.second << std::endl;
+  }
+
+  LOG(INFO) << ss.str();
 }
 }  // namespace akg
