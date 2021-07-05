@@ -103,6 +103,19 @@ struct MappingCfg {
     dim_pos.second = size;
     dim.push_back(dim_pos);
   }
+  std::pair<std::string, int> GetAt(std::string cfg_name) {
+    std::pair<std::string, int> fixed_pos_cfg = {};
+    if (cfg_name == T0 || cfg_name == B0) {
+      fixed_pos_cfg = GetX();
+    } else if (cfg_name == T1 || cfg_name == B1) {
+      fixed_pos_cfg = GetY();
+    } else if (cfg_name == T2 || cfg_name == B2) {
+      fixed_pos_cfg = GetZ();
+    } else {
+      LOG(FATAL) << "Mapping config can only contain t0, t1, t2, b0, b1 and b2.";
+    };
+    return fixed_pos_cfg;
+  }
   std::pair<std::string, int> GetAt(size_t pos) {
     if (pos == 0) {
       return GetX();
@@ -451,6 +464,16 @@ class UserConfig {
   bool GetEnableOneDimThread() { return enable_one_dim_thread_; }
   void SetEnableOneDimThread(bool enable_one_dim_thread) { enable_one_dim_thread_ = enable_one_dim_thread; }
 
+  std::unordered_map<int, std::string> GetCustomInnerMapping() { return custom_inner_mapping_; }
+  void RecordCustomInnerMapping(const int axis_dim, const std::string inner_mapping) {
+    custom_inner_mapping_[axis_dim] = inner_mapping;
+  }
+
+  std::unordered_map<int, std::string> GetCustomOuterMapping() { return custom_outer_mapping_; }
+  void RecordCustomOuterMapping(const int axis_dim, const std::string outer_mapping) {
+    custom_outer_mapping_[axis_dim] = outer_mapping;
+  }
+
   bool UseRegisterMemory() { return use_register_memory_; }
   bool UseSharedMemory() { return use_shared_memory_; }
   void SetUseSharedMemory(bool use_shared_memory) { use_shared_memory_ = use_shared_memory; }
@@ -474,6 +497,7 @@ class UserConfig {
   int GetSharedVectorAlign() { return shared_vector_align_; }
   void SetTransposeOp(bool has_transpose) { has_transpose_ = has_transpose; }
   bool HasTranspose() { return has_transpose_; }
+
  private:
   // tools for parsing user config
   static void ParseIntAttr(const Map<std::string, NodeRef> &attrs, const std::string &attr_name, int *attr_to_set) {
@@ -679,6 +703,10 @@ class UserConfig {
   bool conv_special_dma_{false};
   bool dynamic_shape_conv_full_parametric_{false};
 
+  // custom mapping config
+  std::unordered_map<int, std::string> custom_inner_mapping_;
+  std::unordered_map<int, std::string> custom_outer_mapping_;
+
   // dump config
   int dump_tuning_level_{0};
   bool dump_pass_ir_{false};
@@ -824,6 +852,10 @@ class AnalysisResult {
   void InsertConditionalWriteBufferFootprints(const std::string &s) { conditional_write_buffer_footprints_.insert(s); }
   bool GetIsTiled() const { return is_tiled_; }
   void SetIsTiled(bool is_tiled) { is_tiled_ = is_tiled; }
+  bool GetIsCustomMapping() const { return is_custom_mapping_; }
+  void SetIsCustomMapping(bool is_custom_mapping) { is_custom_mapping_ = is_custom_mapping; }
+  bool GetIsOuterBlockMapping() const { return is_outer_block_mapping_; }
+  void SetIsOuterBlockMapping(bool is_outer_block_mapping) { is_outer_block_mapping_ = is_outer_block_mapping; }
   bool GetIsGpuDmaAnalysed() const { return is_gpu_dma_analysed_; }
   void SetIsGpuDmaAnalysed(bool is_gpu_dma_analysed) { is_gpu_dma_analysed_ = is_gpu_dma_analysed; }
   void SetScheduleMapBeforeTile(const isl::union_map &schedule_map_before_tile) {
@@ -970,6 +1002,10 @@ class AnalysisResult {
   TensorScheduleRepo tensor_schedule_repo_;
   std::unordered_map<std::string, std::string> matrix_matmul_major_;
   Mma mma_;
+
+  // custom mapping
+  bool is_custom_mapping_{false};
+  bool is_outer_block_mapping_{false};
 };
 
 class CubeInfo {

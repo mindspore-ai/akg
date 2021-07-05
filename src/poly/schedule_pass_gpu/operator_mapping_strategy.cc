@@ -61,11 +61,12 @@ size_t OperatorMappingStrategy::MapThreadHelper(isl::schedule_node &thread_root,
   if (n_thread_map < 1) {
     return 0;
   }
+  auto orig_thread_root = thread_root;
   n_thread_map = GetFinalMappingThreadNumber(thread_root, thread_cfg->bound, n_thread_map);
 
   // Map band under thread_root from inner dim to outer dim.
   Mapping mapping;
-  thread_root = MapInnerDimToThreads(thread_root, false, thread_cfg, mapping, need_reverse);
+  thread_root = MapInnerDimToThreads(thread_root, thread_cfg, mapping, false, need_reverse);
   auto tile_node = GetMarkerName(thread_root, THREAD_MARKER).empty() ? thread_root.child(0) : thread_root;
   scop_info_.upa_node_mapping_.emplace_back(std::make_pair(tile_node, mapping));
 
@@ -103,13 +104,12 @@ isl::schedule_node OperatorMappingStrategy::MapBlockHelper(const isl::schedule_n
     node = CheckMapSizeAndApplyTile(node, range_aff_list, block_cfg, false);
   }
 
-  upa_list = upa_list.drop(n_block_map, upa_list.size() - n_block_map).reverse();
-
   node = node.insert_mark(isl::id(node.ctx(), BLOCK_MARKER));
   node = node.child(0);
 
   Mapping mapping;
-  node = CreateAndInsertMapFilter(node, false, upa_list, block_cfg, mapping, map_idx_shift);
+  upa_list = upa_list.drop(n_block_map, upa_list.size() - n_block_map).reverse();
+  node = AnalysisNodeAndInsertMapFilter(node, false, upa_list, block_cfg, mapping, map_idx_shift);
   scop_info_.upa_node_mapping_.emplace_back(std::make_pair(node.parent(), mapping));
 
   return node;
@@ -148,7 +148,7 @@ size_t ReduceMappingStrategy::MapThreadHelper(isl::schedule_node &thread_root) {
   // Map band under thread_root from inner dim to outer dim.
   Mapping mapping;
   bool is_y_reduce = scop_info_.analysis_result_.GetReduceDirection() == Y_DIRECTION;
-  thread_root = MapInnerDimToThreads(thread_root, false, thread_cfg, mapping, is_y_reduce);
+  thread_root = MapInnerDimToThreads(thread_root, thread_cfg, mapping, false, is_y_reduce);
 
   // If the current band is split during the mapping process, split the reduce axis and non-reduce axis of
   // the outer band.
@@ -455,7 +455,7 @@ size_t BatchMatmulMappingStrategy::MapThreadHelper(isl::schedule_node &thread_ro
 
   // Map band under thread_root from inner dim to outer dim.
   Mapping mapping;
-  thread_root = MapInnerDimToThreads(thread_root, false, warp_cfg, mapping, true);
+  thread_root = MapInnerDimToThreads(thread_root, warp_cfg, mapping, false, true);
   bool is_tiled = GetMarkerName(thread_root, THREAD_MARKER).empty();
   thread_root = is_tiled ? thread_root.child(0) : thread_root;
   thread_root = thread_root.del().insert_mark(isl::id(thread_root.ctx(), WARP_MARKER));

@@ -229,8 +229,8 @@ std::vector<isl::schedule_node> BandsSplitAfterDepth(const std::vector<isl::sche
   return MapWithFunc(split_at_depth, bands);
 }
 
-isl::schedule InsertMarkerForThreadGroup(const isl::schedule sch, const std::string write_name,
-                                         const std::string marker_name) {
+isl::schedule InsertMarkerForThreadGroup(const isl::schedule &sch, const std::string &write_name,
+                                         const std::string &marker_name) {
   auto GetPromotedWriteFilter = [write_name, marker_name](isl::schedule_node node) -> isl::schedule_node {
     if (!node.isa<isl::schedule_node_filter>()) {
       return node;
@@ -339,16 +339,9 @@ isl::union_pw_aff_list GetUPAList(const isl::schedule_node &node, isl::multi_uni
   return upa_list;
 }
 
-isl::schedule_node MapInnerDimToThreads(const isl::schedule_node &node, const bool is_promotion,
-                                        MappingCfg *mapping_cfg, Mapping &mapping, const bool need_reverse) {
-  CHECK(mapping_cfg != nullptr) << "thread config is null";
-  isl::schedule_node_band band_node = node.as<isl::schedule_node_band>();
-  size_t n_thread_map = std::min(static_cast<size_t>(band_node.n_member()), mapping_cfg->bound);
-  CHECK_LE(n_thread_map, mapping_cfg->MaxDim()) << "mapping to too many threads.";
-  auto partial_schedule = band_node.get_partial_schedule();
-  auto upa_list = GetUPAList(node, partial_schedule, is_promotion, need_reverse);
-
-  // append prefix to partial schedule for tiling
+// append prefix to partial schedule for tiling
+isl::union_pw_aff_list GetPrefixPartialSchedule(const isl::multi_union_pw_aff partial_schedule,
+                                                const isl::schedule_node node, const bool need_reverse) {
   auto add_prefix_schedule = partial_schedule;
   size_t max_distance_to_filter = 2;
   size_t i = 0;
@@ -368,7 +361,19 @@ isl::schedule_node MapInnerDimToThreads(const isl::schedule_node &node, const bo
   if (need_reverse) {
     prefix_upa_list = prefix_upa_list.reverse();
   }
+  return prefix_upa_list;
+}
 
+isl::schedule_node MapInnerDimToThreads(const isl::schedule_node &node, MappingCfg *mapping_cfg, Mapping &mapping,
+                                        const bool is_promotion, const bool need_reverse) {
+  CHECK(mapping_cfg != nullptr) << "thread config is null";
+  isl::schedule_node_band band_node = node.as<isl::schedule_node_band>();
+  size_t n_thread_map = std::min(static_cast<size_t>(band_node.n_member()), mapping_cfg->bound);
+  CHECK_LE(n_thread_map, mapping_cfg->MaxDim()) << "mapping to too many threads.";
+  auto partial_schedule = band_node.get_partial_schedule();
+  auto upa_list = GetUPAList(node, partial_schedule, is_promotion, need_reverse);
+
+  auto prefix_upa_list = GetPrefixPartialSchedule(partial_schedule, node, need_reverse);
   isl::schedule_node fix_node = CheckMapSizeAndApplyTile(node, prefix_upa_list, mapping_cfg, need_reverse);
   bool is_tiled = !fix_node.is_equal(node);
 
@@ -379,7 +384,7 @@ isl::schedule_node MapInnerDimToThreads(const isl::schedule_node &node, const bo
   fix_node = fix_node.insert_mark(isl::id(fix_node.ctx(), THREAD_MARKER));
   fix_node = fix_node.child(0);
 
-  auto after_map_node = CreateAndInsertMapFilter(fix_node, is_promotion, upa_list, mapping_cfg, mapping);
+  auto after_map_node = AnalysisNodeAndInsertMapFilter(fix_node, is_promotion, upa_list, mapping_cfg, mapping);
   after_map_node = after_map_node.parent();
   if (is_tiled) {
     after_map_node = after_map_node.parent();
@@ -388,9 +393,9 @@ isl::schedule_node MapInnerDimToThreads(const isl::schedule_node &node, const bo
   return after_map_node;
 }
 
-isl::schedule_node CreateAndInsertMapFilter(const isl::schedule_node &node, const bool is_promotion,
-                                            isl::union_pw_aff_list upa_list, MappingCfg *mapping_cfg, Mapping &mapping,
-                                            std::unordered_map<size_t, size_t> map_idx_shift) {
+isl::schedule_node AnalysisNodeAndInsertMapFilter(const isl::schedule_node &node, const bool is_promotion,
+                                                  isl::union_pw_aff_list upa_list, MappingCfg *mapping_cfg,
+                                                  Mapping &mapping, std::unordered_map<size_t, size_t> map_idx_shift) {
   // create mapping filter
   CHECK(mapping_cfg != nullptr) << "threadconfig is null";
 
@@ -398,13 +403,11 @@ isl::schedule_node CreateAndInsertMapFilter(const isl::schedule_node &node, cons
   if (node.ancestor(2) && node.ancestor(2).isa<isl::schedule_node_filter>()) {
     domain = node.ancestor(2).as<isl::schedule_node_filter>().get_filter();
   }
+
   size_t num_map = upa_list.size();
   for (size_t i = 0; i < num_map; ++i) {
     auto map_id = map_idx_shift.find(i) != map_idx_shift.end() ? map_idx_shift[i] : i;
     std::pair<std::string, int> cfg = mapping_cfg->GetAt(map_id);
-    if (cfg.first.find(WARP_COMPUTE) != std::string::npos && cfg.second == MAPPING_INVALID_WARP && is_promotion) {
-      continue;
-    }
     auto upa = upa_list.get_at(i);
     CHECK_GT(cfg.second, 0);
     upa = upa.mod(isl::val(node.ctx(), cfg.second));
@@ -412,6 +415,7 @@ isl::schedule_node CreateAndInsertMapFilter(const isl::schedule_node &node, cons
     mapping[id] = upa;
     domain = upa.domain();
   }
+
   for (size_t i = num_map; i < mapping_cfg->bound; ++i) {
     CHECK(!domain.is_null());
     auto universe = domain.universe();
@@ -421,6 +425,10 @@ isl::schedule_node CreateAndInsertMapFilter(const isl::schedule_node &node, cons
     mapping[id] = isl::union_pw_aff(universe, isl::val::zero(domain.ctx()));
   }
 
+  return InsertMapFilter(node, is_promotion, mapping);
+}
+
+isl::schedule_node InsertMapFilter(const isl::schedule_node &node, const bool is_promotion, Mapping &mapping) {
   // extract unique domain
   auto map_domain = mapping.cbegin()->second.domain();
   if (!is_promotion) {
@@ -453,31 +461,57 @@ isl::schedule_node CreateAndInsertMapFilter(const isl::schedule_node &node, cons
  */
 isl::schedule_node CheckMapSizeAndApplyTile(const isl::schedule_node &mapping_root,
                                             const isl::union_pw_aff_list &aff_list, MappingCfg *mapping_cfg,
-                                            const bool need_reverse) {
+                                            const bool need_reverse,
+                                            std::unordered_map<int, std::string> custom_mapping) {
   bool need_tile = false;
   std::vector<int> mapping_sizes;
   CHECK(mapping_cfg != nullptr) << "mapping config is null";
   size_t block_count = 0;
+  int extent = 0;
+  int map_size = 0;
+
+  auto RecordMappingSizes = [&mapping_sizes, &need_tile, &map_size, &extent](const bool is_config,
+                                                                             const bool is_thread) -> void {
+    if (is_config) {
+      if (is_thread) {
+        need_tile = need_tile || extent > map_size;
+      } else {
+        need_tile = need_tile || (extent > map_size && extent % map_size != 0);
+      }
+    }
+    mapping_sizes.emplace_back(map_size);
+  };
+
   for (size_t i = 0; i < aff_list.size(); ++i) {
     auto aff = aff_list.get_at(i).floor();
-    auto extent = aff.max_val().get_num_si() + 1;
+    extent = aff.max_val().get_num_si() + 1;
+    map_size = extent;
+    // custom mapping
+    if (!custom_mapping.empty()) {
+      bool is_config = (custom_mapping.count(static_cast<int>(i)) != 0);
+      if (is_config) {
+        auto mapping_i = custom_mapping[static_cast<int>(i)];
+        map_size = mapping_cfg->GetAt(mapping_i).second;
+      }
+      RecordMappingSizes(is_config, false);
+      continue;
+    }
+
     if (mapping_cfg->type == MappingType::BLOCKS) {
-      if (aff_list.size() - 1 - i < mapping_cfg->bound) {
-        auto map_size = mapping_cfg->GetAt(block_count).second;
+      // block mapping
+      bool is_config = (aff_list.size() - 1 - i < mapping_cfg->bound);
+      if (is_config) {
+        map_size = mapping_cfg->GetAt(block_count).second;
         ++block_count;
-        need_tile = need_tile || (extent > map_size && extent % map_size != 0);
-        mapping_sizes.emplace_back(map_size);
-      } else {
-        mapping_sizes.emplace_back(extent);
       }
+      RecordMappingSizes(is_config, false);
     } else {
-      if (i < mapping_cfg->bound) {
-        auto map_size = mapping_cfg->GetAt(i).second;
-        need_tile = need_tile || extent > map_size;
-        mapping_sizes.emplace_back(map_size);
-      } else {
-        mapping_sizes.emplace_back(extent);
+      // thread mapping
+      bool is_config = (i < mapping_cfg->bound);
+      if (is_config) {
+        map_size = mapping_cfg->GetAt(i).second;
       }
+      RecordMappingSizes(is_config, true);
     }
   }
 
@@ -606,7 +640,7 @@ isl::multi_union_pw_aff MapDomainToThread(const isl::schedule_node &node, Mappin
 // this function map domain from all the mapping with specific marker: thread_marker or block_marker.
 // we foreach the upa_node_mapping and check whether a mapping belongs to thread/block marker.
 isl::multi_union_pw_aff MapDomainAllWithType(const isl::schedule_node &node, MappingCfg *mapping_cfg,
-                                             const UpaNodeMapping &upa_node_mapping, const std::string map_type) {
+                                             const UpaNodeMapping &upa_node_mapping, const std::string &map_type) {
   CHECK((map_type == THREAD_MARKER || map_type == BLOCK_MARKER)) << "map_type should be THREAD_MARKER or BLCOK_MARKER.";
   std::vector<isl::id> ids;
   for (size_t i = 0; i < mapping_cfg->bound; ++i) {
@@ -892,7 +926,7 @@ bool ReuseTensorCluster(const TensorFootprintCluster &cluster, const isl::multi_
   return !state_schedule_mapping.is_injective();
 }
 
-isl::schedule_node CollectMarkNodeOnPromotion(isl::schedule_node root, const std::string mark) {
+isl::schedule_node CollectMarkNodeOnPromotion(const isl::schedule_node &root, const std::string &mark) {
   isl::schedule_node hoist_node;
   root.foreach_descendant_top_down([&hoist_node, &mark](const isl::schedule_node &node) -> bool {
     if (auto mark_node = node.as<isl::schedule_node_mark>()) {

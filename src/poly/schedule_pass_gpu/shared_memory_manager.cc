@@ -56,7 +56,7 @@ isl::schedule SharedMemoryManager::Run(isl::schedule sch) {
   size_t remain_memory = common::SHARED_MEMORY_SIZE;
 
   if (scop_info_.user_config_.GetEnableMatmul()) {
-    remain_memory =akg::common::ADVANCED_SHARED_MEMORY_SIZE;
+    remain_memory = akg::common::ADVANCED_SHARED_MEMORY_SIZE;
     root = HoistSharedMemoryOnMark(root, remain_memory, depth_).root();
   } else {
     root = HoistSharedMemoryOnDepth(root, remain_memory, depth_).root();
@@ -219,7 +219,7 @@ isl::schedule_node SharedMemoryManager::MapCopiesToThreads(isl::schedule_node &r
     }
 
     Mapping mapping;
-    band_node = MapInnerDimToThreads(band_node, true, mapping_cfg, mapping, false);
+    band_node = MapInnerDimToThreads(band_node, mapping_cfg, mapping, true, false);
     auto InsertAtomicMarker = [atomic_type, this](isl::schedule_node atomic_node) -> isl::schedule_node {
       if (atomic_type != "" && atomic_node.has_children() && atomic_node.child(0).isa<isl::schedule_node_filter>()) {
         atomic_node =
@@ -706,7 +706,7 @@ std::string SharedMemoryManager::InAtomicTensors(isl::schedule_node &node) {
   return atomic_type;
 }
 
-bool SharedMemoryManager::InAtomicTensors(std::string name) {
+bool SharedMemoryManager::InAtomicTensors(const std::string &name) {
   for (const auto &item : scop_info_.analysis_result_.GetAtomicTensors()) {
     if (item.tensor_name == name) {
       return true;
@@ -715,7 +715,7 @@ bool SharedMemoryManager::InAtomicTensors(std::string name) {
   return false;
 }
 
-bool SharedMemoryManager::InReduceTensors(std::string name) {
+bool SharedMemoryManager::InReduceTensors(const std::string &name) {
   for (const auto &item : scop_info_.analysis_result_.GetReduceTensorInfoMap()) {
     if (item.second.write_tensor_name == name) {
       return true;
@@ -724,21 +724,21 @@ bool SharedMemoryManager::InReduceTensors(std::string name) {
   return false;
 }
 
-std::string SharedMemoryManager::AtomicMarker(std::string type) { return ATOMIC_MARKER + type; }
+std::string SharedMemoryManager::AtomicMarker(const std::string &type) { return ATOMIC_MARKER + type; }
 
 size_t SharedMemoryManager::Bytes(const isl::id tensor_id) {
   Type type = scop_info_.GetDtypeOf(tensor_id);
   return static_cast<size_t>(type.bytes());
 }
 
-std::vector<size_t> SharedMemoryManager::OptimizeSharedDimension(std::vector<size_t> sizes) {
+std::vector<size_t> SharedMemoryManager::OptimizeSharedDimension(const std::vector<size_t> &sizes) {
   std::vector<size_t> res = sizes;
   res = OptimizeBankConflict(res);
   res = OptimizeVectorAlign(res);
   return res;
 }
 
-std::vector<size_t> SharedMemoryManager::OptimizeBankConflict(std::vector<size_t> sizes) {
+std::vector<size_t> SharedMemoryManager::OptimizeBankConflict(const std::vector<size_t> &sizes) {
   std::vector<size_t> res = sizes;
   if (res.back() % 2 == 0) {
     if (bank_conflict_ && res.back() < 32) {
@@ -750,7 +750,7 @@ std::vector<size_t> SharedMemoryManager::OptimizeBankConflict(std::vector<size_t
   return res;
 }
 
-std::vector<size_t> SharedMemoryManager::OptimizeVectorAlign(std::vector<size_t> sizes) {
+std::vector<size_t> SharedMemoryManager::OptimizeVectorAlign(const std::vector<size_t> &sizes) {
   std::vector<size_t> res = sizes;
   if (shared_vector_align_ != 0) {
     int padsize = res.back() % shared_vector_align_;
