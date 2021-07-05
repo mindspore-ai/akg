@@ -147,6 +147,72 @@ class CutSetTopDown final : protected IRVisitor {
   isl::multi_id tuple;
 };
 
+class GetBatchNum final : public IRVisitor {
+ public:
+  GetBatchNum(const NodeRef node) { IRVisitor::Visit(node); }
+  ~GetBatchNum() override = default;
+
+  void Visit_(const Call *op) final {
+    if (visited_axis.size() == 0) {
+      batch_axis_num = op->args.size();
+      for (size_t i = 0; i < op->args.size(); i++) {
+        visited_axis.push_back(op->args[i]);
+      }
+    } else {
+      unsigned int same_axis_num = 0;
+      for (size_t i = 0; (i < op->args.size()) && (i < visited_axis.size()); i++) {
+        if (Equal(op->args[i], visited_axis[i])) {
+          same_axis_num++;
+        } else {
+          break;
+        }
+      }
+      if (batch_axis_num > same_axis_num) batch_axis_num = same_axis_num;
+    }
+    IRVisitor::Visit_(op);
+  }
+
+ public:
+  std::vector<Expr> visited_axis;
+  unsigned int batch_axis_num{0};
+};
+
+class ExtractAxisUsed : public IRVisitor {
+ public:
+  ExtractAxisUsed(std::vector<const Variable *> &vec, std::unordered_set<std::string> red) : vec_(vec), red_(red) {}
+  ~ExtractAxisUsed() override = default;
+  void Visit_(const Variable *op) final {
+    if (red_.count(op->name_hint) == 1) {
+      vec_.push_back(op);
+    }
+    IRVisitor::Visit_(op);
+  }
+
+  void Run(const NodeRef &ref) { IRVisitor::Visit(ref); }
+
+ private:
+  std::vector<const Variable *> &vec_;
+  std::unordered_set<std::string> red_;
+};
+
+class ExtractAxisNotUsed : public IRVisitor {
+ public:
+  ExtractAxisNotUsed(std::vector<const Variable *> &vec, std::unordered_set<std::string> red) : vec_(vec), red_(red) {}
+  ~ExtractAxisNotUsed() override = default;
+  void Visit_(const Variable *op) final {
+    if (red_.count(op->name_hint) == 0) {
+      vec_.push_back(op);
+    }
+    IRVisitor::Visit_(op);
+  }
+
+  void Run(const NodeRef &ref) { IRVisitor::Visit(ref); }
+
+ private:
+  std::vector<const Variable *> &vec_;
+  std::unordered_set<std::string> red_;
+};
+
 class ScopMakeScheduleTree final : protected IRVisitor {
  public:
   ScopMakeScheduleTree(const NodeRef s, ScopInfo &scop_info, const isl::set set, const isl::id_list outer,
@@ -176,33 +242,9 @@ class ScopMakeScheduleTree final : protected IRVisitor {
         (scop_info_.user_config_.GetEnableAkgReduceLib() || scop_info_.user_config_.GetEnableMatmul())) {
       RecordReduceInfo(op, op_domain, id);
     }
-    auto matmul_map = scop_info_.analysis_result_.GetMatrixMatmulMap();
-    if (!matmul_map.empty()) {
-      std::string accumulator = "";
-      auto mp = GetMatmulTensorsName(scop_info_);
-      if (mp.find(MATRIX_C) != mp.end()) {
-        accumulator = mp[MATRIX_C];
-      }
-      CHECK(accumulator != "") << "MatMul info not enough!";
-      Array<Expr> elem_tensors = GetBinaryOpExprChildren(op->value);
-      if (!elem_tensors.empty()) {
-        auto left = elem_tensors[0].as<Call>();
-        auto right = elem_tensors[1].as<Call>();
-        if ((left || right) && (matmul_map.find(left->name) != matmul_map.end() || matmul_map.find(right->name) != matmul_map.end())) {
-          if (op->func->func_name() != accumulator) {
-            scop_info_.analysis_result_.RecordMatrixMatmulMap(op->func->func_name(), MATRIX_ELSE);
-            scop_info_.analysis_result_.RecordMatrixMatmulMajor(op->func->func_name(), ROW_MAJOR);
-          }
-          if (left && left->name != accumulator) {
-            scop_info_.analysis_result_.RecordMatrixMatmulMap(left->name, MATRIX_ELSE);
-            scop_info_.analysis_result_.RecordMatrixMatmulMajor(left->name, ROW_MAJOR);
-          }
-          if (right && right->name != accumulator) {
-            scop_info_.analysis_result_.RecordMatrixMatmulMap(right->name, MATRIX_ELSE);
-            scop_info_.analysis_result_.RecordMatrixMatmulMajor(right->name, ROW_MAJOR);
-          }
-        }
-      }
+
+    if (scop_info_.user_config_.GetEnableMatmul()) {
+      RecordMatrixInfoForFuse(op);
     }
 
     isl::union_map new_reads, new_writes, new_to_inner;
@@ -238,6 +280,38 @@ class ScopMakeScheduleTree final : protected IRVisitor {
     found = true;
   }
 
+  void RecordMatrixInfoForFuse(const Provide *op) {
+    auto matmul_map = scop_info_.analysis_result_.GetMatrixMatmulMap();
+    if (!matmul_map.empty()) {
+      std::string accumulator = "";
+      auto mp = GetMatmulTensorsName(scop_info_);
+      if (mp.find(MATRIX_C) != mp.end()) {
+        accumulator = mp[MATRIX_C];
+      }
+      CHECK(accumulator != "") << "MatMul info not enough!";
+      Array<Expr> elem_tensors = GetBinaryOpExprChildren(op->value);
+      if (!elem_tensors.empty()) {
+        auto left = elem_tensors[0].as<Call>();
+        auto right = elem_tensors[1].as<Call>();
+        if ((left || right) &&
+            (matmul_map.find(left->name) != matmul_map.end() || matmul_map.find(right->name) != matmul_map.end())) {
+          if (op->func->func_name() != accumulator) {
+            scop_info_.analysis_result_.RecordMatrixMatmulMap(op->func->func_name(), MATRIX_ELSE);
+            scop_info_.analysis_result_.RecordMatrixMatmulMajor(op->func->func_name(), ROW_MAJOR);
+          }
+          if (left && left->name != accumulator) {
+            scop_info_.analysis_result_.RecordMatrixMatmulMap(left->name, MATRIX_ELSE);
+            scop_info_.analysis_result_.RecordMatrixMatmulMajor(left->name, ROW_MAJOR);
+          }
+          if (right && right->name != accumulator) {
+            scop_info_.analysis_result_.RecordMatrixMatmulMap(right->name, MATRIX_ELSE);
+            scop_info_.analysis_result_.RecordMatrixMatmulMajor(right->name, ROW_MAJOR);
+          }
+        }
+      }
+    }
+  }
+
   void SetReduceWriteDataType(ReduceTensorInfo &reduce_tensor_info) {
     auto init_value = reduce_tensor_info.init_value;
     if (!init_value.defined()) {
@@ -268,11 +342,31 @@ class ScopMakeScheduleTree final : protected IRVisitor {
   }
 
   void RecordReduceInfo(const Provide *op, OperatorDomainSpace op_domain, isl::id red_id) {
-    auto reduce_attrs = scop_info_.analysis_result_.GetReduceAttrs();
-    if (reduce_attrs.empty()) {
+    if (scop_info_.analysis_result_.GetReduceMap().count(op) == 0) {
       return;
     }
-    bool is_all_reduce = scop_info_.analysis_result_.GetNotReduceAttrs().size() == 0;
+
+    auto reduce_iter_var = scop_info_.analysis_result_.GetReduceMap().at(op);
+    std::unordered_set<std::string> reduce_attrs;
+    for (auto &r : reduce_iter_var) {
+      reduce_attrs.insert(r->var->name_hint);
+    }
+
+    auto args = op->args;
+    std::vector<const Variable *> vars_not_reduce;
+    std::vector<const Variable *> vars_reduce;
+    for (auto &a : args) {
+      ExtractAxisNotUsed(vars_not_reduce, reduce_attrs).Run(a);
+    }
+
+    ExtractAxisUsed(vars_reduce, reduce_attrs).Run(op->value);
+
+    GetBatchNum get_batch_num(op->value);
+    scop_info_.analysis_result_.RecordNotReduceAxisForMatmul(vars_not_reduce);
+    scop_info_.analysis_result_.RecordReduceAxisForMatmul(vars_reduce);
+    scop_info_.analysis_result_.RecordBatchAxisNumForMatmul(get_batch_num.batch_axis_num);
+
+    bool is_all_reduce = vars_not_reduce.size() == 0;
     scop_info_.user_config_.SetTileCheckCoincident(!is_all_reduce);
     isl::ctx ctx = op_domain.tuple.ctx();
 
@@ -364,8 +458,8 @@ class ScopMakeScheduleTree final : protected IRVisitor {
 
     const Variable *axis_var[2];
     const Variable *reduce_axis_var;
-    axis_var[0] = axis[batch_num_axis].as<Variable>();
-    axis_var[1] = axis.back().as<Variable>();
+    axis_var[0] = axis[batch_num_axis];
+    axis_var[1] = axis.back();
     reduce_axis_var = reduce_axis.back();
 
     class CollectInfoOfBody : public IRVisitor {
@@ -510,7 +604,7 @@ class ScopMakeScheduleTree final : protected IRVisitor {
     }
 
     SetMmaModeForTensor(tensor_a_name, tensor_b_name);
-    
+
     scop_info_.user_config_.SetEnableMatmul(true);
     scop_info_.user_config_.SetEnableTensorCore(true);
     scop_info_.user_config_.SetEnableTensorCoreUsePoly(true);
@@ -801,89 +895,7 @@ class ScopMakeScheduleTree final : protected IRVisitor {
           }
         }
       }
-      if (scop_info_.user_config_.GetTarget() == TARGET_CUDA &&
-          (scop_info_.user_config_.GetEnableAkgReduceLib() || scop_info_.user_config_.GetEnableMatmul())) {
-        class ExtractReductionAttrs final : public IRVisitor {
-         public:
-          ExtractReductionAttrs(const Stmt stmt, std::unordered_set<std::string> &left_args)
-              : extract_left_args(left_args) {
-            IRVisitor::Visit(stmt);
-          }
-          ~ExtractReductionAttrs() override = default;
-
-          void Visit_(const Variable *op) final {
-            if (!extract_left_args.count(op->name_hint)) {
-              extract_reduce_attrs.insert(op->name_hint);
-              for (auto &i : extract_reduce_axis) {
-                if (i == op) return;
-              }
-              extract_reduce_axis.push_back(op);
-            }
-          }
-
-          void Visit_(const Call *op) final {
-            if (visited_axis.size() == 0) {
-              batch_axis_num = op->args.size();
-              for (size_t i = 0; i < op->args.size(); i++) {
-                visited_axis.push_back(op->args[i]);
-              }
-            } else {
-              unsigned int same_axis_num = 0;
-              for (size_t i = 0; (i < op->args.size()) && (i < visited_axis.size()); i++) {
-                if (Equal(op->args[i], visited_axis[i])) {
-                  same_axis_num++;
-                } else {
-                  break;
-                }
-              }
-              if (batch_axis_num > same_axis_num) batch_axis_num = same_axis_num;
-            }
-            IRVisitor::Visit_(op);
-          }
-
-         public:
-          std::unordered_set<std::string> extract_reduce_attrs;
-          std::unordered_set<std::string> extract_left_args;
-          std::vector<const Variable *> extract_reduce_axis;
-          std::vector<Expr> visited_axis;
-          unsigned int batch_axis_num{0};
-        };
-
-        const auto pro = op->body.as<Provide>();
-        CHECK(pro);
-        for (auto i = 0u; i < pro->args.size(); ++i) {
-          auto args_i = pro->args[i];
-          auto mod = args_i.as<FloorMod>();
-          if (mod != nullptr && mod->a.as<Variable>()) {
-            left_args.insert(mod->a.as<Variable>()->name_hint);
-            left_axis_for_matmul.push_back(Downcast<Var>(mod->a));
-          }
-          auto div = args_i.as<FloorDiv>();
-          if (div != nullptr && div->a.as<Variable>()) {
-            left_args.insert(div->a.as<Variable>()->name_hint);
-            left_axis_for_matmul.push_back(Downcast<Var>(div->a));
-          }
-          if (mod == nullptr && div == nullptr && args_i.as<Variable>()) {
-            left_args.insert(args_i.as<Variable>()->name_hint);
-            left_axis_for_matmul.push_back(Downcast<Var>(args_i));
-          }
-        }
-
-        ExtractReductionAttrs extract_reduce_attr(op->body, left_args);
-        scop_info_.analysis_result_.RecordReduceAttrs(extract_reduce_attr.extract_reduce_attrs);
-        scop_info_.analysis_result_.RecordNotReduceAttrs(left_args);
-        if (scop_info_.user_config_.GetEnableMatmul()) {
-          scop_info_.analysis_result_.RecordReduceAxisForMatmul(extract_reduce_attr.extract_reduce_axis);
-          scop_info_.analysis_result_.RecordNotReduceAxisForMatmul(left_axis_for_matmul);
-          scop_info_.analysis_result_.RecordBatchAxisNumForMatmul(extract_reduce_attr.batch_axis_num);
-        }
-        sch = MakeScheduleTreeHelper(op->body, scop_info_, set, outer, macro_stmt);
-        scop_info_.analysis_result_.ClearReduceAttrs();
-        scop_info_.analysis_result_.ClearNotReduceAttrs();
-        left_args.clear();
-      } else {
-        sch = MakeScheduleTreeHelper(op->body, scop_info_, set, outer, macro_stmt);
-      }
+      sch = MakeScheduleTreeHelper(op->body, scop_info_, set, outer, macro_stmt);
     } else if (op->attr_key == air::ir::attr::buffer_bind_scope) {
       Op_buffer_bind_scope(op);
       sch = MakeScheduleTreeHelper(op->body, scop_info_, set, outer, macro_stmt);
@@ -906,8 +918,6 @@ class ScopMakeScheduleTree final : protected IRVisitor {
   isl::set set;
   isl::id_list outer;
   ssize_t macro_stmt{-1};
-  std::unordered_set<std::string> left_args;
-  std::vector<Var> left_axis_for_matmul;
 };
 
 isl::schedule MakeScheduleTreeHelper(const NodeRef &s, ScopInfo &scop_info, const isl::set &set,
