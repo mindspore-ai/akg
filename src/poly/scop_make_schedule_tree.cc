@@ -422,7 +422,7 @@ class ScopMakeScheduleTree final : protected IRVisitor {
     return true;
   }
 
-  bool IsExistTensor(const std::string tensor_name, Type &tensor_type) {
+  bool IsExistTensor(const std::string &tensor_name, Type &tensor_type) {
     auto all_tensors = scop_info_.user_config_.GetRealizeTensors();
     for (auto it : all_tensors) {
       if (it->op->name == tensor_name) {
@@ -514,8 +514,11 @@ class ScopMakeScheduleTree final : protected IRVisitor {
     scop_info_.user_config_.SetEnableMatmul(true);
     scop_info_.user_config_.SetEnableTensorCore(true);
     scop_info_.user_config_.SetEnableTensorCoreUsePoly(true);
-    scop_info_.user_config_.SetVectorLoadType(128);   // Default vectorization access mode (128 bits).
     scop_info_.user_config_.SetEnableAkgReduceLib(false);
+    // Default vectorization access mode (128 bits).
+    if (scop_info_.user_config_.GetVectorLoadType() == 0) {
+      scop_info_.user_config_.SetVectorLoadType(PROMOTE_VECTORIZATION_BIT);
+    }
 
     if (tensor_c_type == Float(16)) {
       std::string shared_tensors = tensor_a_name + " " + tensor_b_name + " " + tensor_c->name;
@@ -525,7 +528,7 @@ class ScopMakeScheduleTree final : protected IRVisitor {
     return true;
   }
 
-  void SetMmaModeForTensor(const std::string tensor_a_name, const std::string tensor_b_name) {
+  void SetMmaModeForTensor(const std::string &tensor_a_name, const std::string &tensor_b_name) {
     std::string custom_dim = scop_info_.user_config_.GetBDim();
     if (!custom_dim.empty() && !scop_info_.user_config_.GetEnableConvTensorCore()) {
       const int each_axis_size = 4;
@@ -802,7 +805,7 @@ class ScopMakeScheduleTree final : protected IRVisitor {
           (scop_info_.user_config_.GetEnableAkgReduceLib() || scop_info_.user_config_.GetEnableMatmul())) {
         class ExtractReductionAttrs final : public IRVisitor {
          public:
-          ExtractReductionAttrs(const Stmt stmt, std::unordered_set<std::string> left_args)
+          ExtractReductionAttrs(const Stmt stmt, std::unordered_set<std::string> &left_args)
               : extract_left_args(left_args) {
             IRVisitor::Visit(stmt);
           }
@@ -843,7 +846,7 @@ class ScopMakeScheduleTree final : protected IRVisitor {
           std::unordered_set<std::string> extract_left_args;
           std::vector<const Variable *> extract_reduce_axis;
           std::vector<Expr> visited_axis;
-          unsigned int batch_axis_num;
+          unsigned int batch_axis_num{0};
         };
 
         const auto pro = op->body.as<Provide>();

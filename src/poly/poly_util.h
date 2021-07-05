@@ -386,6 +386,7 @@ constexpr auto PROMOTE_REGISTER_TO_SHARED = "promote_register_to_shared";
 constexpr auto PROMOTE_SHARED_TO_GLOBAL = "promote_shared_to_global";
 
 constexpr auto PROMOTE_VECTORIZATION = "promote_vectorization";
+constexpr auto PROMOTE_VECTORIZATION_BIT = 128;
 constexpr auto SKIP_MARKER = "skip";
 constexpr auto MAP_TO_WARP = "map_to_warp";
 constexpr auto THREAD_MARKER = "thread_marker";
