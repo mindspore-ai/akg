@@ -15,9 +15,9 @@ unchanged:
  #if defined(__cplusplus)
  }
  #endif
-unchanged:
---- isl_0.22/include/isl/schedule.h	2021-01-26 13:29:02.345994411 +0100
-+++ isl/include/isl/schedule.h	2021-01-26 13:25:07.713990422 +0100
+diff -u isl/include/isl/schedule.h isl/include/isl/schedule.h
+--- isl/include/isl/schedule.h	2021-01-26 13:25:07.713990422 +0100
++++ isl/include/isl/schedule.h	2021-07-05 11:39:37.300055714 +0200
 @@ -9,7 +9,7 @@
  #include <isl/set_type.h>
  #include <isl/list.h>
@@ -27,7 +27,7 @@ unchanged:
  #if defined(__cplusplus)
  extern "C" {
  #endif
-@@ -209,6 +209,57 @@ __isl_give isl_printer *isl_printer_prin
+@@ -209,6 +209,124 @@
  void isl_schedule_dump(__isl_keep isl_schedule *schedule);
  __isl_give char *isl_schedule_to_str(__isl_keep isl_schedule *schedule);
  
@@ -42,6 +42,66 @@ unchanged:
 +typedef struct isl_sched_edge isl_sched_edge;
 +struct isl_sched_graph;
 +typedef struct isl_sched_graph isl_sched_graph;
++
++/* --- New types --- */
++
++enum isl_influence_coeff_type {
++  isl_cst,
++  isl_param,
++  isl_var
++};
++typedef enum isl_influence_coeff_type isl_influence_coeff_type;
++
++struct isl_influence_equal {
++  char *statement1;
++  char *statement2;
++  int sched_dim;
++  int sched_dim1;
++  int sched_dim2;
++  isl_influence_coeff_type type;
++  int coef_dim1;
++  int coef_dim2;
++  int scanned;
++};
++typedef struct isl_influence_equal isl_influence_equal;
++
++struct isl_influence_equal_list {
++  int size;
++  int mem;
++  struct isl_influence_equal *data;
++};
++typedef struct isl_influence_equal_list isl_influence_equal_list;
++
++struct isl_influence {
++  char *statement_name;
++  isl_influence_coeff_type type;
++  int sched_dim;
++  int coef_dim;
++  int val;
++  int scanned;
++};
++typedef struct isl_influence isl_influence;
++
++struct isl_influence_list {
++  int size;
++  int mem;
++  struct isl_influence *data;
++};
++typedef struct isl_influence_list isl_influence_list;
++
++struct isl_influence_sol {
++  int size;
++  int mem;
++  int *data;
++};
++typedef struct isl_influence_sol isl_influence_sol;
++
++struct isl_influence_sol_list {
++  int size;
++  int mem;
++  isl_influence_sol *data;
++};
++typedef struct isl_influence_sol_list isl_influence_sol_list;
 +
 +/* isl_sched_node functions */
 +int isl_sched_node_par_coef_offset(struct isl_sched_node *node);
@@ -70,16 +130,23 @@ unchanged:
 +/* isl_sched_graph functions */
 +struct isl_sched_node* isl_sched_graph_get_node(struct isl_sched_graph *graph, int i);
 +
++
 +/* --- AKG influence --- */
-+extern isl_basic_set* (*isl_influence_set_coef)(
-+    isl_ctx *ctx, struct isl_sched_graph *graph, isl_basic_set *bset);
-+extern isl_basic_set* (*isl_influence_set_equal)(
-+    isl_ctx *ctx, struct isl_sched_graph *graph, isl_basic_set *bset);
-+extern int (*isl_influence_maxvar)(struct isl_sched_graph* graph);
-+extern int (*isl_influence_check_coincident)(struct isl_sched_graph* graph, isl_vec* sol);
-+extern struct isl_sched_graph* (*isl_influence_sol_list_free)(struct isl_sched_graph* graph);
-+extern struct isl_sched_graph* (*isl_influence_sol_add_elem)(isl_vec* sol, struct isl_sched_graph* graph);
-+extern int(*isl_influence_sol_get_elem)(int sched, int pos, struct isl_sched_graph* graph);
++extern int isl_influence_enabled;
++isl_basic_set *isl_influence_set_coef(isl_ctx *ctx, struct isl_sched_graph *graph, isl_basic_set *bset);
++isl_basic_set *isl_influence_set_equal(isl_ctx *ctx, struct isl_sched_graph *graph, isl_basic_set *bset);
++int isl_influence_maxvar(struct isl_sched_graph *graph);
++int isl_influence_check_coincident(struct isl_sched_graph *graph, isl_vec *sol);
++struct isl_sched_graph *isl_influence_sol_add_elem(isl_vec *sol, struct isl_sched_graph *graph);
++int isl_influence_sol_get_elem(int sched, int pos, struct isl_sched_graph *graph);
++struct isl_sched_graph *isl_influence_sol_list_free(struct isl_sched_graph *graph);
++
++void *isl_influence_list_free(isl_influence_list *inf_list);
++void *isl_influence_equal_list_free(isl_influence_equal_list *inf_equal_list);
++
++__isl_give isl_schedule *akg_isl_schedule_constraints_compute_schedule_influence(
++  __isl_take isl_schedule_constraints *sc, isl_influence_list *inf_coef, isl_influence_equal_list *inf_equal);
++
 +/* ======================= AKG influence patch -- end ======================= */
 +
  #if defined(__cplusplus)
@@ -131,8 +198,8 @@ unchanged:
  
  #endif
 diff -u isl/isl_scheduler.c isl/isl_scheduler.c
---- isl/isl_scheduler.c	2021-02-05 09:56:15.186697283 +0100
-+++ isl/isl_scheduler.c	2021-03-31 14:49:38.568015437 +0200
+--- isl/isl_scheduler.c	2021-03-31 14:49:38.568015437 +0200
++++ isl/isl_scheduler.c	2021-07-05 11:47:38.881846782 +0200
 @@ -39,7 +39,6 @@
  #include <isl_morph.h>
  #include <isl/ilp.h>
@@ -141,7 +208,24 @@ diff -u isl/isl_scheduler.c isl/isl_scheduler.c
  /*
   * The scheduling algorithm implemented in this file was inspired by
   * Bondhugula et al., "Automatic Transformations for Communication-Minimized
-@@ -303,6 +302,12 @@
+@@ -50,6 +49,16 @@
+  */
+ 
+ 
++/* ====================== AKG influence patch -- start ====================== */
++static const char *inf_types_str[] = {
++  [isl_cst] = "isl_cst",
++  [isl_param] = "isl_param",
++  [isl_var] = "isl_var",
++};
++int isl_influence_enabled = { 0 };
++/* ======================= AKG influence patch -- end ======================= */
++
++
+ /* Internal information about a node that is used during the construction
+  * of a schedule.
+  * space represents the original space in which the domain lives;
+@@ -303,6 +312,12 @@
  	return is_condition(edge) || is_conditional_validity(edge);
  }
  
@@ -154,28 +238,28 @@ diff -u isl/isl_scheduler.c isl/isl_scheduler.c
  /* Internal information about the dependence graph used during
   * the construction of the schedule.
   *
-@@ -395,6 +400,11 @@
+@@ -395,6 +410,11 @@
  	int weak;
  
  	int max_weight;
 +/* ====================== AKG influence patch -- start ====================== */
 +	struct isl_influence_list *inf_list;
 +	struct isl_influence_equal_list *inf_equal_list;
-+	struct isl_influenec_sol_list* inf_sol_list;
++	struct isl_influence_sol_list* inf_sol_list;
 +/* ======================= AKG influence patch -- end ======================= */
  };
  
  /* Initialize node_table based on the list of nodes.
-@@ -757,6 +767,8 @@
+@@ -757,6 +777,8 @@
  		isl_hash_table_free(ctx, graph->edge_table[i]);
  	isl_hash_table_free(ctx, graph->node_table);
  	isl_basic_set_free(graph->lp);
-+	if(isl_influence_sol_list_free)
++	if(isl_influence_enabled)
 +		graph=isl_influence_sol_list_free(graph);
  }
  
  /* For each "set" on which this function is called, increment
-@@ -1233,7 +1245,6 @@
+@@ -1233,7 +1255,6 @@
  		return isl_stat_error;
  	if (compressed && (!hull || !compress || !decompress))
  		return isl_stat_error;
@@ -183,7 +267,7 @@ diff -u isl/isl_scheduler.c isl/isl_scheduler.c
  	return isl_stat_ok;
  error:
  	isl_set_free(set);
-@@ -3222,6 +3233,7 @@
+@@ -3222,6 +3243,7 @@
   * In particular, the non-triviality region enforces that at least
   * one of the linear combinations in the rows of node->indep is non-zero.
   */
@@ -191,11 +275,11 @@ diff -u isl/isl_scheduler.c isl/isl_scheduler.c
  static __isl_give isl_vec *solve_lp(isl_ctx *ctx, struct isl_sched_graph *graph)
  {
  	int i;
-@@ -3237,16 +3249,68 @@
+@@ -3237,16 +3259,68 @@
  			trivial = construct_trivial(node, node->indep);
  		else
  			trivial = isl_mat_zero(ctx, 0, 0);
-+		
++
  		graph->region[i].trivial = trivial;
  	}
  	lp = isl_basic_set_copy(graph->lp);
@@ -235,13 +319,13 @@ diff -u isl/isl_scheduler.c isl/isl_scheduler.c
 +				if (akg_debug >= 1)  fprintf(stderr, "\ninfluence schedule did not find solution, another try with use_coincidence=0:\n");
 +			} else
 +			{
-+				isl_basic_set_free(lp_backup);	
++				isl_basic_set_free(lp_backup);
 +			}
 +
 +		}
 +		else
 +	    {
-+			isl_basic_set_free(lp_backup);	
++			isl_basic_set_free(lp_backup);
 +			isl_basic_set_free(lp_backup_inf);
 +		}
 +	}
@@ -261,7 +345,7 @@ diff -u isl/isl_scheduler.c isl/isl_scheduler.c
  /* Extract the coefficients for the variables of "node" from "sol".
   *
   * Each schedule coefficient c_i_x is represented as the difference
-@@ -3271,6 +3335,12 @@
+@@ -3271,6 +3345,12 @@
  	if (!csol)
  		return NULL;
  
@@ -274,7 +358,7 @@ diff -u isl/isl_scheduler.c isl/isl_scheduler.c
  	for (i = 0; i < node->nvar; ++i) {
  		pos = 1 + node_var_coef_pos(node, i);
  		if (node->nonneg)
-@@ -3304,10 +3374,15 @@
+@@ -3304,10 +3384,15 @@
  	if (sol->size == 0)
  		isl_die(sol->ctx, isl_error_internal,
  			"no solution found", goto error);
@@ -292,7 +376,7 @@ diff -u isl/isl_scheduler.c isl/isl_scheduler.c
  	for (i = 0; i < graph->n; ++i) {
  		struct isl_sched_node *node = &graph->node[i];
  		int pos;
-@@ -3325,11 +3400,13 @@
+@@ -3325,11 +3410,13 @@
  			goto error;
  		pos = node_cst_coef_offset(node);
  		node->sched = isl_mat_set_element(node->sched,
@@ -307,7 +391,7 @@ diff -u isl/isl_scheduler.c isl/isl_scheduler.c
  		for (j = 0; j < node->nvar; ++j)
  			node->sched = isl_mat_set_element(node->sched,
  					row, 1 + node->nparam + j, csol->el[j]);
-@@ -3340,6 +3417,14 @@
+@@ -3340,6 +3427,14 @@
  
  	graph->n_row++;
  	graph->n_total_row++;
@@ -322,7 +406,7 @@ diff -u isl/isl_scheduler.c isl/isl_scheduler.c
  
  	return 0;
  error:
-@@ -3917,14 +4002,16 @@
+@@ -3917,14 +4012,16 @@
  static int compute_maxvar(struct isl_sched_graph *graph)
  {
  	int i;
@@ -341,7 +425,7 @@ diff -u isl/isl_scheduler.c isl/isl_scheduler.c
  		nvar = node->nvar + graph->n_row - node->rank;
  		if (nvar > graph->maxvar)
  			graph->maxvar = nvar;
-@@ -3968,6 +4055,10 @@
+@@ -3968,6 +4065,10 @@
  	sub->max_row = graph->max_row;
  	sub->n_total_row = graph->n_total_row;
  	sub->band_start = graph->band_start;
@@ -352,7 +436,7 @@ diff -u isl/isl_scheduler.c isl/isl_scheduler.c
  
  	return isl_stat_ok;
  }
-@@ -3997,6 +4088,11 @@
+@@ -3997,6 +4098,11 @@
  {
  	struct isl_sched_graph split = { 0 };
  
@@ -364,7 +448,7 @@ diff -u isl/isl_scheduler.c isl/isl_scheduler.c
  	if (extract_sub_graph(ctx, graph, node_pred, edge_pred, data,
  				&split) < 0)
  		goto error;
-@@ -5396,6 +5492,30 @@
+@@ -5396,6 +5502,30 @@
  		return NULL;
  
  	lp = isl_basic_set_copy(graph->lp);
@@ -395,7 +479,7 @@ diff -u isl/isl_scheduler.c isl/isl_scheduler.c
  	return non_neg_lexmin(graph, lp, n_edge, want_integral);
  }
  
-@@ -5991,6 +6111,11 @@
+@@ -5991,6 +6121,11 @@
  	int use_coincidence;
  	int force_coincidence = 0;
  	int check_conditional;
@@ -407,7 +491,7 @@ diff -u isl/isl_scheduler.c isl/isl_scheduler.c
  
  	if (sort_sccs(graph) < 0)
  		return isl_stat_error;
-@@ -5998,10 +6123,17 @@
+@@ -5998,10 +6133,17 @@
  	clear_local_edges(graph);
  	check_conditional = need_condition_check(graph);
  	has_coincidence = has_any_coincidence(graph);
@@ -422,11 +506,11 @@ diff -u isl/isl_scheduler.c isl/isl_scheduler.c
 +		if(graph->maxvar > isl_maxvar)
 +			graph->maxvar = isl_maxvar;
 +	}
-+	
++
  	use_coincidence = has_coincidence;
  	while (graph->n_row < graph->maxvar) {
  		isl_vec *sol;
-@@ -6014,19 +6146,34 @@
+@@ -6014,19 +6156,34 @@
  		if (setup_lp(ctx, graph, use_coincidence) < 0)
  			return isl_stat_error;
  		sol = solve_lp(ctx, graph);
@@ -454,15 +538,15 @@ diff -u isl/isl_scheduler.c isl/isl_scheduler.c
  			return isl_stat_ok;
  		}
  		coincident = !has_coincidence || use_coincidence;
-+		
++
 +		if(akg_influence && graph->n > 1){
 +			coincident=isl_influence_check_coincident(graph,sol);
 +		}
-+			
++
  		if (update_schedule(graph, sol, coincident) < 0)
  			return isl_stat_error;
  
-@@ -7688,6 +7835,10 @@
+@@ -7688,6 +7845,10 @@
  
  	if (graph->scc <= 1 || isl_options_get_schedule_whole_component(ctx))
  		return compute_schedule_wcc_whole(node, graph);
@@ -473,7 +557,7 @@ diff -u isl/isl_scheduler.c isl/isl_scheduler.c
  	else
  		return compute_schedule_wcc_clustering(node, graph);
  }
-@@ -7735,6 +7886,10 @@
+@@ -7735,6 +7896,10 @@
  	else
  		node = isl_schedule_node_insert_sequence(node, filters);
  
@@ -484,7 +568,7 @@ diff -u isl/isl_scheduler.c isl/isl_scheduler.c
  	for (component = 0; component < graph->scc; ++component) {
  		node = isl_schedule_node_child(node, component);
  		node = isl_schedule_node_child(node, 0);
-@@ -7775,7 +7930,10 @@
+@@ -7775,7 +7940,10 @@
  			return isl_schedule_node_free(node);
  	}
  
@@ -496,7 +580,7 @@ diff -u isl/isl_scheduler.c isl/isl_scheduler.c
  		return compute_component_schedule(node, graph, 1);
  
  	return compute_schedule_wcc(node, graph);
-@@ -7806,6 +7964,11 @@
+@@ -7806,6 +7974,11 @@
  	isl_union_set *domain;
  	isl_size n;
  
@@ -508,18 +592,11 @@ diff -u isl/isl_scheduler.c isl/isl_scheduler.c
  	sc = isl_schedule_constraints_align_params(sc);
  
  	domain = isl_schedule_constraints_get_domain(sc);
-@@ -7852,0 +8016,62 @@
+@@ -7852 +8025,809 @@
+ }
 +
 +/* ====================== AKG influence patch -- start ====================== */
-+isl_basic_set* (*isl_influence_set_coef)(
-+    isl_ctx *ctx, struct isl_sched_graph *graph, isl_basic_set *bset) = { 0 };
-+isl_basic_set* (*isl_influence_set_equal)(
-+    isl_ctx *ctx, struct isl_sched_graph *graph, isl_basic_set *bset) = { 0 };
-+int (*isl_influence_maxvar)(struct isl_sched_graph* graph) = { 0 };
-+int (*isl_influence_check_coincident)(struct isl_sched_graph *graph,isl_vec* sol) = { 0 };
-+struct isl_sched_graph* (*isl_influence_sol_list_free)(struct isl_sched_graph* graph) = { 0 } ;
-+struct isl_sched_graph* (*isl_influence_sol_add_elem)(isl_vec* sol, struct isl_sched_graph* graph) = { 0 };
-+int  (*isl_influence_sol_get_elem)(int sched, int pos, struct isl_sched_graph* graph) = { 0 };
++
 +int  isl_sched_node_par_coef_offset(struct isl_sched_node *node) {
 +  return node_par_coef_offset(node);
 +}
@@ -570,4 +647,758 @@ diff -u isl/isl_scheduler.c isl/isl_scheduler.c
 +int isl_inf_vec_get_size(isl_vec* vec){
 +  return(int) vec->size;
 +}
++
++#ifdef ISL_INFLUENCE_DEBUG
++  #define isl_influence_log(format, ...) \
++    do { \
++      fprintf(stderr, (format), __VA_ARGS__); \
++    } while (0)
++#else
++  #define isl_influence_log(format, ...) \
++    do { \
++      (void) format; \
++    } while (0)
++#endif
++
++#define ISL_INFLUENCE_BLOCK_SIZE 8
++
++struct isl_sched_graph *isl_influence_sol_list_free(isl_sched_graph *graph) {
++  isl_influence_log("Entering isl_influence_sol_list_free\n");
++
++  isl_influence_sol_list *inf = graph->inf_sol_list;
++  if (inf) {
++    isl_influence_log("inf-mem: %d\n", inf->mem);
++    for (int i = 0; i < inf->mem; i++) {
++      isl_influence_sol *p = &inf->data[i];
++      p->mem = 0;
++      p->size = 0;
++      free(p->data);
++      p->data = NULL;
++    }
++    free(inf->data);
++    inf->data = NULL;
++    inf->size = 0;
++    inf->mem = 0;
++    free(inf);
++  }
++  graph->inf_sol_list = NULL;
++  isl_influence_log("Leaving isl_influence_sol_list_free\n");
++  return graph;
++}
++struct isl_sched_graph *isl_influence_sol_add_elem(isl_vec *sol, struct isl_sched_graph *graph) {
++  isl_influence_log("Entering isl_influence_sol_add_elem\n");
++
++  if (!sol) {
++    return graph;
++  }
++
++  isl_influence_sol_list *inf = graph->inf_sol_list;
++  if (!inf) {
++    inf = (isl_influence_sol_list *)calloc(1, sizeof(isl_influence_sol_list));
++    if (!inf) {
++      isl_influence_log("MEM ERROR: isl_influence_sol_add_elem could not allocate memory for isl_influence_sol_list\n");
++      return graph;
++    }
++    inf->mem = 0;
++    inf->size = 0;
++    inf->data = NULL;
++  }
++
++  if (inf->mem == 0) {
++    inf->mem = ISL_INFLUENCE_BLOCK_SIZE;
++    inf->data = (isl_influence_sol *)calloc(inf->mem, sizeof(isl_influence_sol));
++    if (inf->data == NULL) {
++      isl_influence_log("MEM ERROR: isl_influence_sol_add_elem could not allocate memory for isl_influence_sol_list\n");
++      return graph;
++    }
++  }
++
++  if (inf->mem == inf->size) {
++    inf->mem += ISL_INFLUENCE_BLOCK_SIZE;
++    inf->data = (isl_influence_sol *)realloc(inf->data, inf->mem * sizeof(isl_influence_sol));
++    if (inf->data == NULL) {
++      isl_influence_log("MEM ERROR: isl_influence_sol_add_elem could not reallocate memory isl_influence_sol\n");
++      return graph;
++    }
++  }
++
++  isl_influence_sol *p = &inf->data[inf->size];
++  const int sol_size = isl_inf_vec_get_size(sol);
++  p->data = (int *)calloc((size_t)sol_size, sizeof(int));
++
++  if (p->data == NULL) {
++    isl_influence_log("MEM ERROR: isl_influence_sol_add_elem could not allocate memory\n");
++    return graph;
++  }
++
++  p->mem = sol_size;
++  isl_ctx *ctx = isl_vec_get_ctx(sol);
++
++  for (int i = 0; i < p->mem; i++) {
++    isl_printer *printer = isl_printer_to_str(ctx);
++    isl_val *const val = isl_influence_vec_get_elem(sol, i);
++
++    printer = isl_printer_print_val(printer, val);
++    char *const str = isl_printer_get_str(printer);
++
++    const int value = atoi(isl_printer_get_str(printer));
++    p->data[i] = value;
++    p->size++;
++
++    free(str);
++    isl_printer_free(printer);
++    isl_val_free(val);
++  }
++
++  inf->size++;
++
++  isl_influence_log("inf->mem: %d\n", inf->mem);
++  isl_influence_log("inf->size: %d\n", inf->size);
++  isl_influence_log("Leaving isl_influence_sol_add_elem\n");
++
++  graph->inf_sol_list = inf;
++  return graph;
++}
++
++int isl_influence_sol_get_elem(int dim, int pos, struct isl_sched_graph *graph) {
++  isl_influence_sol_list *inf = graph->inf_sol_list;
++
++  if (NULL == inf) {
++    return -1;
++  }
++
++  isl_influence_sol *p = NULL;
++  int retval;
++
++  if (dim < inf->size) {
++    p = &inf->data[dim];
++  } else {
++    isl_influence_log(
++        "ERROR: isl_influence_sol_get_elem index out of range isl_influence_sol_list size : %d < dim: %d\n",
++        inf->size, dim);
++    retval = -1;
++  }
++
++  if (1 + pos < p->size) {
++    retval = p->data[1 + pos];
++  } else {
++    isl_influence_log(
++        "ERROR: isl_influence_sol_get_elem index out of range isl_ifnluence_sol size: %d < pos: %d\n",
++        p->size, pos);
++    retval = -1;
++  }
++
++  return retval;
++}
++
++void print_basic_set(isl_basic_set *set, const char *str) {
++  isl_ctx *const ctx = isl_basic_set_get_ctx(set);
++  const int print_debug = isl_options_get_akg_print_debug(ctx);
++  if (print_debug) {
++    isl_printer *printer = isl_printer_to_str(ctx);
++    printer = isl_printer_print_basic_set(printer, set);
++    char *const printed_str = isl_printer_get_str(printer);
++
++    isl_influence_log("%s\n", str);
++    isl_influence_log("%s\n", printed_str);
++
++    isl_printer_free(printer);
++    free(printed_str);
++  }
++}
++
++void *isl_influence_equal_list_free(isl_influence_equal_list *inf_equal_list) {
++  if (inf_equal_list->data) {
++    for (int i = 0; i < inf_equal_list->size; ++i) {
++      free(inf_equal_list->data[i].statement1);
++      free(inf_equal_list->data[i].statement2);
++    }
++    free(inf_equal_list->data);
++    inf_equal_list->data = NULL;
++    inf_equal_list->mem = 0;
++    inf_equal_list->size = 0;
++  }
++  free(inf_equal_list);
++  return NULL;
++}
++
++void *isl_influence_list_free(isl_influence_list *inf_list) {
++  if (inf_list->data) {
++    for (int i = 0; i < inf_list->size; ++i) {
++      free(inf_list->data[i].statement_name);
++    }
++    free(inf_list->data);
++    inf_list->data = NULL;
++    inf_list->mem = 0;
++    inf_list->size = 0;
++  }
++  free(inf_list);
++  return NULL;
++}
++
++isl_basic_set *hack_coefficients(isl_basic_set *coef, const char *msg, int pos, int lb, int ub) {
++  isl_ctx *const ctx = isl_basic_set_get_ctx(coef);
++
++  isl_val *const v_ub = isl_val_int_from_si(ctx, ub);
++  isl_val *const v_lb = isl_val_int_from_si(ctx, lb);
++
++  isl_size dim = isl_basic_set_n_dim(coef);
++  isl_influence_log("pos: %d\n", pos);
++
++  if (pos < (int)dim) {
++    const int influence_schedule = isl_options_get_akg_influence_scheduler(ctx);
++    if (influence_schedule) {
++      coef = isl_basic_set_upper_bound_val(coef, isl_dim_set, pos, isl_val_copy(v_ub));
++      coef = isl_basic_set_lower_bound_val(coef, isl_dim_set, pos, isl_val_copy(v_lb));
++      isl_influence_log(" -> i%d = (%d, %d)\n", pos, lb, ub);
++    }
++  }
++
++  isl_val_free(v_ub);
++  isl_val_free(v_lb);
++
++  return coef;
++}
++
++isl_basic_set *create_constraint(isl_basic_set *coef, const char *msg, int pos1, int pos2) {
++  isl_ctx *ctx = isl_basic_set_get_ctx(coef);
++  const int influence_schedule = isl_options_get_akg_influence_scheduler(ctx);
++  if (influence_schedule) {
++    isl_local_space *ls = isl_basic_set_get_local_space(coef);
++    isl_constraint *c = isl_constraint_alloc_equality(isl_local_space_copy(ls));
++    c = isl_constraint_set_coefficient_si(c, isl_dim_set, pos1, 1);
++    c = isl_constraint_set_coefficient_si(c, isl_dim_set, pos2, -1);
++    coef = isl_basic_set_add_constraint(coef, c);
++    print_basic_set(coef, msg);
++
++    isl_influence_log("--> i%d = i%d\n", pos1, pos2);
++    isl_local_space_free(ls);
++  }
++
++  return coef;
++}
++
++isl_basic_set *graph_find_basic_set_by_statement_name(struct isl_sched_graph *graph, const char *name,
++                                                      int *node_index) {
++  isl_basic_set *bset = NULL;
++
++  for (int i = 0; i < graph->n && bset == NULL; ++i) {
++    struct isl_sched_node *node = isl_sched_graph_get_node(graph, i);
++    isl_map *ma = isl_sched_node_extract_schedule(node);
++    const char *strstat = isl_map_get_tuple_name(ma, isl_dim_in);
++
++    if (strcmp(strstat, name) == 0) {
++      bset = graph->lp;
++      *node_index = i;
++    }
++
++    isl_map_free(ma);
++  }
++  return bset;
++}
++
++int get_pos_from_bset(isl_basic_set *bset, struct isl_sched_node *node, isl_influence_equal *inf, int coef_dim) {
++  int pos = -1;
++
++  switch (inf->type) {
++    case isl_cst:
++      pos = isl_sched_node_cst_coef_offset(node);
++      break;
++    case isl_param:
++      pos = isl_sched_node_par_coef_offset(node) - coef_dim;
++      break;
++    case isl_var:
++      pos = isl_sched_node_par_coef_offset(node) - isl_sched_node_get_nparam(node) - coef_dim * 2 - 1;
++      break;
++    default:
++      break;
++  }
++
++  isl_influence_log("coefficient position for coef_dim=%d: %d\n", coef_dim, pos);
++
++  return pos;
++}
++
++void print_influence(isl_influence_equal_list *equal, isl_influence_list *coef) {
++  isl_influence_log("Start printing isl_influence hard constraints\n");
++  for (int i = 0; coef && i < coef->size; i++) {
++    isl_influence *inf = &coef->data[i];
++    isl_influence_log("hard constraint\t\t[%d:%d]\n", i + 1, coef->size);
++    isl_influence_log("statement:\t\t%s\n", inf->statement_name);
++    isl_influence_log("type:\t\t%s\n", inf_types_str[(int) inf->type]);
++    isl_influence_log("sched_dim:\t\t%d\n", inf->sched_dim);
++    isl_influence_log("coef_dim:\t\t%d\n", inf->coef_dim);
++    isl_influence_log("val:\t\t%d\n", inf->val);
++  }
++  isl_influence_log("End printing isl_influence hard constraints\n");
++
++  isl_influence_log("Start printing isl_influence soft constraints\n");
++  for (int i = 0; equal && i < equal->size; i++) {
++    isl_influence_equal *inf_equal = &equal->data[i];
++    isl_influence_log("soft constraint\t\t[%d:%d]\n", i + 1, equal->size);
++    isl_influence_log("statement1:\t\t%s\n", inf_equal->statement1);
++    isl_influence_log("statement2:\t\t%s\n", inf_equal->statement2);
++    isl_influence_log("sched_dim1:\t\t%d\n", inf_equal->sched_dim1);
++    isl_influence_log("sched_dim2:\t\t%d\n", inf_equal->sched_dim2);
++    isl_influence_log("type:\t\t%s\n", inf_types_str[(int) inf_equal->type]);
++    isl_influence_log("coef_dim1:\t\t%d\n", inf_equal->coef_dim1);
++    isl_influence_log("coef_dim2:\t\t%d\n", inf_equal->coef_dim2);
++  }
++  isl_influence_log("End  printing isl_influence soft constraints\n");
++}
++
++int report_influence(isl_influence_equal_list *equal, isl_influence_list *coef, isl_influence_sol_list *sol,
++                     int maxvar) {
++  int bad_equal = 0;
++  int bad_coef = 0;
++  int result = 1;
++  for (int i = 0; i < coef->size; i++) {
++    isl_influence *inf = &coef->data[i];
++    if (inf->scanned != 1) {
++      isl_influence_log("warning: influence hard constraint [%d] was not processed\n", i);
++      isl_influence_log("statement:\t\t%s\n", inf->statement_name);
++      isl_influence_log("type:\t\t\t%s\n", inf_types_str[(int) inf->type]);
++      isl_influence_log("sched_dim:\t\t%d\n", inf->sched_dim);
++      isl_influence_log("coef_dim:\t\t%d\n", inf->coef_dim);
++      isl_influence_log("val:\t\t%d\n", inf->val);
++      bad_coef++;
++      result = 0;
++    }
++  }
++
++  for (int i = 0; i < equal->size; i++) {
++    isl_influence_equal *inf_equal = &equal->data[i];
++    if (inf_equal->scanned != 1) {
++      isl_influence_log("warning: influence soft constraint [%d] was not processed\n", i);
++      isl_influence_log("statement1:\t\t%s\n", inf_equal->statement1);
++      isl_influence_log("statement2:\t\t%s\n", inf_equal->statement2);
++      isl_influence_log("type:\t\t\t%s\n", inf_types_str[(int) inf_equal->type]);
++      isl_influence_log("sched_dim1:\t\t%d\n", inf_equal->sched_dim1);
++      isl_influence_log("sched_dim2:\t\t%d\n", inf_equal->sched_dim2);
++      isl_influence_log("coef_dim1:\t\t%d\n", inf_equal->coef_dim1);
++      isl_influence_log("coef_dim2:\t\t%d\n", inf_equal->coef_dim2);
++      bad_equal++;
++      result = 0;
++    }
++  }
++
++  if (bad_coef == 0)
++    isl_influence_log("%d influence hard coef constraints correctly processed\n", coef->size);
++  else
++    isl_influence_log("%d influence hard coef constraints were not processed\n", bad_coef);
++
++  if (bad_equal == 0)
++    isl_influence_log("%d influence equal constraints correctly processed\n", equal->size);
++  else
++    isl_influence_log("%d influence equal constraints were not processed\n", bad_equal);
++
++  if (!sol || sol->size != maxvar) {
++    isl_influence_log("isl influence could not find solution for all dimensions");
++    result = 0;
++  }
++
++  return result;
++}
++
++int set_params(isl_influence_equal *inf, int *sched_from, int *sched_to, int *coef_from, int *coef_to, int actual_dim) {
++  int retval = 0;
++
++  if (actual_dim == 0 && inf->sched_dim1 != inf->sched_dim2) {
++    return retval;
++  } else if (actual_dim == inf->sched_dim1) {
++    if (inf->sched_dim1 >= inf->sched_dim2) {
++      *sched_from = inf->sched_dim2;
++      *sched_to = inf->sched_dim1;
++      *coef_from = inf->coef_dim2;
++      *coef_to = inf->coef_dim1;
++      retval = 1;
++
++    } else {
++      isl_influence_log("cannot set future coef for dimension: %d and inf_equal:\n", actual_dim);
++      isl_influence_log("inf->sched_dim1: %d\n", inf->sched_dim1);
++      isl_influence_log("inf->sched_dim2: %d\n", inf->sched_dim2);
++    }
++
++  } else if (actual_dim == inf->sched_dim2) {
++    if (inf->sched_dim2 >= inf->sched_dim1) {
++      *sched_from = inf->sched_dim1;
++      *sched_to = inf->sched_dim2;
++      *coef_from = inf->coef_dim1;
++      *coef_to = inf->coef_dim2;
++      retval = 1;
++    } else {
++      isl_influence_log("cannot set fuuture coef for dimension: %d and inf_equal:\n", actual_dim);
++      isl_influence_log("inf->sched_dim1: %d\n", inf->sched_dim1);
++      isl_influence_log("inf->sched_dim2: %d\n", inf->sched_dim2);
++    }
++  }
++
++  return retval;
++}
++isl_basic_set *isl_influence_set_equal(isl_ctx *ctx, struct isl_sched_graph *graph, isl_basic_set *bset) {
++  // loop over iinfluence list equal
++  isl_influence_log("Enter isl_influence_set_equal for dimension --> %d\n", graph->n_row);
++  isl_influence_equal_list *inf_list = graph->inf_equal_list;
++  for (int i = 0; i < inf_list->size; i++) {
++    isl_influence_equal *inf_equal = &inf_list->data[i];
++
++    if (inf_equal->sched_dim1 > inf_equal->sched_dim2) {
++      isl_influence_log(
++          "Error: isl cannot compute soft constraint [%d] from dimension %d to dimension %d\n",
++          i, inf_equal->sched_dim2, inf_equal->sched_dim1);
++      isl_influence_log("Reason: destination coefficient unknown\n");
++    }
++    int sched_from;
++    int sched_to;
++    int coef_from;
++    int coef_to;
++    if (!set_params(inf_equal, &sched_from, &sched_to, &coef_from, &coef_to, graph->n_row)) continue;
++
++    isl_basic_set *bset_from;
++    isl_basic_set *bset_to;
++
++    int node_index_from = -1;
++    int node_index_to = -1;
++
++    bset_from = graph_find_basic_set_by_statement_name(graph, inf_equal->statement1, &node_index_from);
++    bset_to = graph_find_basic_set_by_statement_name(graph, inf_equal->statement2, &node_index_to);
++
++    if (bset_from != NULL && bset_to != NULL && node_index_from != -1 && node_index_to != -1) {
++      int pos_from;
++      int pos_to;
++      isl_influence_log("scanning equal constraint for influence equal constraint[%d:%d]\n", i + 1, inf_list->size);
++      isl_influence_log("statement from:\t%s\n", inf_equal->statement2);
++      isl_influence_log("statement to:\t%s\n", inf_equal->statement1);
++      isl_influence_log("sched_dim from:\t%d\n", sched_from);
++      isl_influence_log("sched_dim to:\t%d\n", sched_to);
++      isl_influence_log("coef_dim from:\t%d\n", coef_from);
++      isl_influence_log("coef_dim to:\t%d\n", coef_to);
++      isl_influence_log("type:\t%s\n", inf_types_str[(int) inf_equal->type]);
++      isl_influence_log("isl_influence_set_equal: copying coef from %s to %s\n", inf_equal->statement2, inf_equal->statement1);
++
++      print_basic_set(bset_from, "bset from:");
++      print_basic_set(bset_to, "bset to:");
++      isl_influence_log("node from:\t%d\n", node_index_from);
++      isl_influence_log("node to:\t%d\n", node_index_to);
++      pos_from = get_pos_from_bset(bset_from, isl_sched_graph_get_node(graph, node_index_from), inf_equal, coef_from);
++      pos_to = get_pos_from_bset(bset_to, isl_sched_graph_get_node(graph, node_index_to), inf_equal, coef_to);
++
++      if (inf_equal->sched_dim2 == inf_equal->sched_dim1) {
++        bset = create_constraint(bset, "constraint created", pos_from, pos_to);
++        if (inf_equal->type == isl_var) bset = create_constraint(bset, "constraint created", pos_from - 1, pos_to - 1);
++      } else {
++        int val = isl_influence_sol_get_elem(sched_from, pos_from, graph);
++        isl_influence_log("val=%d\n", val);
++        bset = hack_coefficients(bset, "isl_equal", pos_to, val, val);
++        if (inf_equal->type == isl_var) {
++          val = isl_influence_sol_get_elem(sched_from, pos_from - 1, graph);
++          bset = hack_coefficients(bset, "is_equal", pos_to - 1, val, val);
++        }
++      }
++      inf_equal->scanned = 1;
++    }
++  }
++  isl_influence_log("Leave isl_influence_set_equal\n");
++  return bset;
++}
++
++__isl_give isl_schedule *akg_isl_schedule_constraints_compute_schedule_influence(
++  __isl_take isl_schedule_constraints *sc, isl_influence_list *inf_coef, isl_influence_equal_list *inf_equal) {
++  isl_ctx *ctx = isl_schedule_constraints_get_ctx(sc);
++  struct isl_sched_graph graph = {0};
++  isl_schedule *sched;
++  isl_schedule_node *node;
++
++  isl_union_set *domain;
++  isl_size n;
++
++  isl_influence_log("isl_schedule_constraints_compute_schedule : start printing constraints\n");
++  isl_printer *p;
++  p = isl_printer_to_str(ctx);
++  p = isl_printer_set_yaml_style(p, ISL_YAML_STYLE_BLOCK);
++  p = isl_printer_print_schedule_constraints(p, sc);
++  char *log_string = isl_printer_get_str(p);
++
++  isl_influence_log("%s\n", log_string);
++
++  isl_printer_free(p);
++  free(log_string);
++
++  isl_influence_log("isl_schedule_constraints_compute_schedule : end printing constraints\n");
++
++  print_influence(inf_equal, inf_coef);
++
++  graph.inf_list = inf_coef;
++  graph.inf_equal_list = inf_equal;
++
++  sc = isl_schedule_constraints_align_params(sc);
++
++  domain = isl_schedule_constraints_get_domain(sc);
++  n = isl_union_set_n_set(domain);
++  if (n == 0) {
++    isl_schedule_constraints_free(sc);
++    return isl_schedule_from_domain(domain);
++  }
++
++  if (n < 0 || isl_sched_graph_init(&graph, sc) < 0) {
++    domain = isl_union_set_free(domain);
++  }
++
++  node = isl_schedule_node_from_domain(domain);
++  node = isl_schedule_node_child(node, 0);
++
++  if (graph.n > 0) {
++    node = isl_schedule_node_compute_schedule(node, &graph);
++  }
++  sched = isl_schedule_node_get_schedule(node);
++  int result = report_influence(inf_equal, inf_coef, graph.inf_sol_list, graph.maxvar);
++
++  isl_schedule_node_free(node);
++  isl_sched_graph_free(ctx, &graph);
++  isl_schedule_constraints_free(sc);
++
++  if (!result) {
++    isl_influence_log("isl_influence failed, will fallback to default isl\n");
++    isl_schedule_free(sched);
++    sched = NULL;
++  }
++  return sched;
++}
++
++isl_basic_set *isl_influence_set_coef(isl_ctx *ctx, struct isl_sched_graph *graph, isl_basic_set *bset) {
++  isl_influence_log("Enter isl_influence_set_coef for dimension --> %d\n", graph->n_row);
++
++  isl_influence_list *inf_list = graph->inf_list;
++  int dimension = graph->n_row;
++
++  for (int i = 0; i < graph->n; ++i) {
++    struct isl_sched_node *node = isl_sched_graph_get_node(graph, i);
++    isl_map *ma = isl_sched_node_extract_schedule(node);
++    isl_influence_log("statement:\n");
++    if (ma != NULL) {
++      isl_printer *p;
++      p = isl_printer_to_str(ctx);
++      p = isl_printer_print_map(p, ma);
++
++      char *log_str = isl_printer_get_str(p);
++      isl_influence_log("%s\n", log_str);
++
++      isl_printer_free(p);
++      free(log_str);
++    }
++    isl_influence_log("end statement\n");
++    const char *strstat = isl_map_get_tuple_name(ma, isl_dim_in);
++    isl_map_free(ma);
++
++    for (int j = 0; j < inf_list->size; j++) {
++      isl_influence *inf = &inf_list->data[j];
++
++      if (inf->sched_dim == dimension && strcmp(strstat, inf->statement_name) == 0) {
++        int pos;
++        int ub = inf->val;
++        int lb = inf->val;
++        isl_influence_log("scanning isl coefficients for influence[%d:%d]:\n", j + 1,inf_list->size);
++
++        // S_0,S_1,...,S_n-1,S_n
++        isl_influence_log("statement_name:\t\t%s\n", inf->statement_name);
++        // i,j,k.... (only apply for type=isl_var_plus | isl_var_minus
++        isl_influence_log("sched_dim:\t\t%d\n", inf->sched_dim);
++        // coefficient index
++        isl_influence_log("rank variable:\t\t%d\n", inf->coef_dim);
++        int nparam = isl_sched_node_get_nparam(node);
++        int nvar = isl_sched_node_get_nvar(node);
++        isl_influence_log("statement variables:\t%d\n", nvar);
++        // coefficient value
++        isl_influence_log("coefficient value:\t%d\n", inf->val);
++        isl_influence_log("type:\t\t%s\n", inf_types_str[(int)(inf->type)]);
++        print_basic_set(bset, "lp  problem to influence:");
++        switch (inf->type) {
++          case isl_cst:
++            pos = isl_sched_node_cst_coef_offset(node);
++            bset = hack_coefficients(bset, "isl_cst", pos, ub, lb);
++            inf->scanned = 1;
++            break;
++          case isl_param:
++            isl_influence_log("Statement param (node->nparam): %d\n", nparam);
++            pos = isl_sched_node_cst_coef_offset(node) - (nparam - inf->coef_dim);
++            bset = hack_coefficients(bset, "isl_param", pos, ub, lb);
++            inf->scanned = 1;
++            break;
++          case isl_var:
++            // dim_+ coefficient	;
++            if (inf->coef_dim <= nvar) {
++              pos = isl_sched_node_cst_coef_offset(node) - nparam - 1 - inf->coef_dim * 2;
++              if (inf->val > 0) {
++                bset = hack_coefficients(bset, "isl_var_+", pos, ub, lb);
++                // dim_- coeffiecient
++                pos--;
++                bset = hack_coefficients(bset, "isl_var_-", pos, 0, 0);
++                inf->scanned = 1;
++              } else if (inf->val == 0) {
++                // dim_+ coefficient
++                bset = hack_coefficients(bset, "isl_var_+", pos, 0, 0);
++                // dim_- coeffiecient
++                pos--;
++                bset = hack_coefficients(bset, "isl_var_-", pos, 0, 0);
++                inf->scanned = 1;
++
++              } else if (inf->val < 0) {
++                bset = hack_coefficients(bset, "isl_var_+", pos, 0, 0);
++                // dim_- coeffiecient
++                pos--;
++                bset = hack_coefficients(bset, "isl_var_-", pos, -ub, -lb);
++                inf->scanned = 1;
++              } else {
++                isl_influence_log("invalid inf->val: %d\n", inf->val);
++              }
++            } else {
++              isl_influence_log("Warning: dimension overflow --> dimension required: %d max dimensions: %d\n", inf->coef_dim, nvar);
++            }
++            break;
++          default:
++            isl_influence_log("unknown influence coef type\n");
++            break;
++        }
++        print_basic_set(bset, "lp influenced problem:");
++      }
++    }
++  }
++  isl_influence_log("Leave isl_influence_set_coef\n");
++  return bset;
++}
++
++int isl_influence_maxvar(struct isl_sched_graph *graph) {
++  isl_influence_log("Entering isl_influence_maxvar\n");
++  int maxvar = 0;
++  int previous = maxvar;
++  int var;
++  isl_influence_list *inf_list = graph->inf_list;
++  isl_influence_equal_list *inf_equal_list = graph->inf_equal_list;
++
++  for (int i = 0; NULL != inf_list && i < inf_list->size; i++) {
++    isl_influence *inf = &inf_list->data[i];
++    var = inf->sched_dim + 1;
++    if (maxvar < var) {
++      maxvar = var;
++    }
++  }
++  for (int i = 0; NULL != inf_equal_list && i < inf_equal_list->size; i++) {
++    isl_influence_equal *inf_equal = &inf_equal_list->data[i];
++    var = inf_equal->sched_dim1 + 1;
++
++    if (maxvar < var) {
++      maxvar = var;
++    }
++
++    var = inf_equal->sched_dim2 + 1;
++
++    if (maxvar < var) {
++      maxvar = var;
++    }
++  }
++
++  isl_influence_log("isl_influence_maxvar: %d (previous maxvar: %d)\n", maxvar, previous);
++  isl_influence_log("Leaving isl_influence_maxvar\n");
++  return maxvar;
++}
++
++int isl_influence_check_coincident(struct isl_sched_graph *graph, isl_vec *sol) {
++  int coincident = graph->n > 1 ? 1 : 0;
++  int pos = 0;
++
++  isl_influence_log(
++      "Entering isl_influence_check_coincidence for dimension %d, number of nodes (statements): %d\n",
++      graph->n_row, graph->n);
++  int *vec = (int *)calloc(graph->n * 3, sizeof(int));
++
++  for (int i = 0; i < graph->n; ++i) {
++    isl_sched_node *node = isl_sched_graph_get_node(graph, i);
++    int cst_offset = isl_sched_node_cst_coef_offset(node);
++    int nparam = isl_sched_node_get_nparam(node);
++    int nvar = isl_sched_node_get_nvar(node);
++
++    isl_influence_log("graph node:\t %d\n", i);
++    isl_influence_log("cst_offset:\t %d\n", cst_offset);
++    isl_influence_log("nparam:\t\t %d\n", nparam);
++    isl_influence_log("var:\t\t %d\n", nvar);
++
++    vec[pos++] = cst_offset;
++    vec[pos++] = nparam;
++    vec[pos++] = nvar;
++  }
++
++  int is_equal;
++
++  for (int i = 0; i < graph->n; ++i)
++    for (int j = i; j < graph->n; ++j) {
++      if (j == i) continue;
++
++      isl_influence_log("calculating coincidence for statement %d and %d\n", i, j);
++
++      int cst_offset_S0 = vec[i * 3];
++      int cst_offset_S1 = vec[j * 3];
++
++      is_equal = isl_influence_int_eq(sol, 1 + cst_offset_S0, 1 + cst_offset_S1);
++
++      isl_influence_log(
++          "S_%d_i%d, S_%d_i%d, cst coefficient equal: %d\n",
++          i, cst_offset_S0, j, cst_offset_S1, is_equal);
++
++      if (is_equal == 0) {
++        coincident = 0;
++        break;
++      }
++
++      isl_influence_log("param coefficient(s) equal:\n");
++
++      int nparam_S0 = vec[i * 3 + 1];
++      int nparam_S1 = vec[j * 3 + 1];
++
++      if (nparam_S0 != 0 && nparam_S1 != 0 && nparam_S0 == nparam_S1) {
++        int nparam_pos_0 = cst_offset_S0 - nparam_S0;
++        int nparam_pos_1 = cst_offset_S1 - nparam_S1;
++
++        for (int k = nparam_pos_0, l = nparam_pos_1; k < nparam_pos_0 + nparam_S0; k++, l++) {
++          is_equal = isl_influence_int_eq(sol, 1 + k, 1 + l);
++          isl_influence_log("S_%d_i%d, S_%d_i%d equal: %d\n", i, k, j, l, is_equal);
++          if (is_equal == 0) {
++            coincident = 0;
++            break;
++          }
++        }
++      } else {
++        isl_influence_log("no parameters found or number of paramters distinct for each statement\n");
++      }
++
++      isl_influence_log("variable coefficients equal:\n");
++
++      int nvar_S0 = vec[i * 3 + 2];
++      int nvar_S1 = vec[j * 3 + 2];
++
++      if (nvar_S0 != nvar_S1) {
++        coincident = 0;
++        break;
++      }
++
++      int nvar_pos_0 = cst_offset_S0 - nparam_S0 - 2 * nvar_S0;
++      int nvar_pos_1 = cst_offset_S1 - nparam_S1 - 2 * nvar_S1;
++
++      for (int k = nvar_pos_0, l = nvar_pos_1; k < nvar_pos_0 + 2 * nvar_S0; k++, l++) {
++        is_equal = isl_influence_int_eq(sol, 1 + k, 1 + l);
++        isl_influence_log("S_%d_i%d, S_%d_i%d equal: %d\n", i, k, j, l, is_equal);
++        if (is_equal == 0) {
++          coincident = 0;
++          break;
++        }
++      }
++    }
++
++  free(vec);
++
++  isl_influence_log("Leaving isl_check_coincident result: %d\n", coincident);
++
++  return coincident;
++}
++
++
 +/* ======================= AKG influence patch -- end ======================= */
