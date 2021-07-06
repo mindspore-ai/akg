@@ -60,7 +60,7 @@ bool ReduceManager::AreSequentialStatements(isl::union_set first_statements, isl
 }
 
 isl::schedule_node ReduceManager::ReorderStatements(const isl::schedule_node &node, isl::union_set before,
-                                                    isl::union_set after, const bool split_reduce_dependent) {
+                                                    isl::union_set after) {
   isl::union_set middle = CollectDomain(node);
   isl::schedule_node order_node = node;
   isl::union_set_list filter_list;
@@ -90,11 +90,6 @@ isl::schedule_node ReduceManager::ReorderStatements(const isl::schedule_node &no
     return order_node;
   }
   order_node = order_node.insert_sequence(filter_list);
-
-  if (!split_reduce_dependent) {
-    order_node = order_node.child(0);
-    return order_node;
-  }
   order_node = order_node.insert_mark(INSERT_SYNC);
   order_node = order_node.child(0).child(depth);
 
@@ -103,7 +98,7 @@ isl::schedule_node ReduceManager::ReorderStatements(const isl::schedule_node &no
 
 // Separate the reduce statement from other statements
 bool ReduceManager::SplitReduceStatements(isl::schedule_node &node, isl::union_set reduce_statements,
-                                          isl::union_map dependences, const bool split_reduce_dependent) {
+                                          isl::union_map dependences) {
   auto domain = CollectDomain(node);
   auto injective_statements = domain.subtract(reduce_statements);
   if (injective_statements.is_empty()) {
@@ -130,16 +125,6 @@ bool ReduceManager::SplitReduceStatements(isl::schedule_node &node, isl::union_s
     return false;
   }
 
-  if (!split_reduce_dependent) {
-    if (AreSequentialStatements(domain.subtract(reduction_dependent_stmt), reduction_dependent_stmt, dependences) &&
-        !reduction_dependent_stmt.is_empty()) {
-      node = ReorderStatements(node, domain.subtract(reduction_dependent_stmt), reduction_dependent_stmt,
-                               split_reduce_dependent);
-      return true;
-    }
-    return false;
-  }
-
   // Check the rest statements are sequential after splitting reduction dependent and independent statements from
   // reduction statements
   if (!AreSequentialStatements(reduction_indenpendent_stmt, domain.subtract(reduction_indenpendent_stmt),
@@ -149,7 +134,7 @@ bool ReduceManager::SplitReduceStatements(isl::schedule_node &node, isl::union_s
   }
 
   // Reorder statements in "reduction-independent-stmt -> reduction-stmt -> reduction-dependent-stmt" order
-  node = ReorderStatements(node, reduction_indenpendent_stmt, reduction_dependent_stmt, split_reduce_dependent);
+  node = ReorderStatements(node, reduction_indenpendent_stmt, reduction_dependent_stmt);
 
   return true;
 }

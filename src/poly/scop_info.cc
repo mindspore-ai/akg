@@ -1113,7 +1113,7 @@ bool ScopInfo::IsCopyinTensor(const std::string &tensor_name) {
   return false;
 }
 
-bool ScopInfo::IsFunctionalCopyin(const std::string tensor_name, const StmtIdHashMap &func_map) {
+bool ScopInfo::IsFunctionalCopyin(const std::string &tensor_name, const StmtIdHashMap &func_map) {
   CHECK_NE(tensor_name, "");
   for (const auto &item : func_map) {
     for (const auto &tensor : item.second) {

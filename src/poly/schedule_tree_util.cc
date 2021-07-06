@@ -422,6 +422,9 @@ isl::schedule_node AnalysisNodeAndInsertMapFilter(const isl::schedule_node &node
 }
 
 isl::schedule_node InsertMapFilter(const isl::schedule_node &node, const bool is_promotion, Mapping &mapping) {
+  if (mapping.size() == 0) {
+    return node;
+  }
   // extract unique domain
   auto map_domain = mapping.cbegin()->second.domain();
   if (!is_promotion) {

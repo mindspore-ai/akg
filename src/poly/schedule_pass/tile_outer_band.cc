@@ -1197,31 +1197,6 @@ bool TileOuterBand::IsMatrixCPromoteToShared() {
   return false;
 }
 
-isl::schedule_node TileOuterBand::SplitMatmulStatement(const isl::schedule_node &node) {
-  isl::schedule_node tile_node = node;
-  auto all_reduce_map = scop_info_.analysis_result_.GetReduceTensorInfoMap();
-  ReduceManager reduce_manager;
-
-  auto band_node = tile_node.as<isl::schedule_node_band>();
-  auto band_node_domain = band_node.get_partial_schedule().domain();
-  StatementMap all_statements = scop_info_.analysis_result_.GetStatementMap();
-  isl::union_map reduce_statement_map = isl::union_map::empty(node.ctx());
-  isl::union_set reduce_statements = isl::union_set::empty(node.ctx());
-
-  for (auto it = all_reduce_map.begin(); it != all_reduce_map.end(); ++it) {
-    reduce_statement_map = reduce_statement_map.unite(it->second.stmt_map);
-    auto this_reduce = reduce_manager.GetReduceStatements(band_node_domain, reduce_statement_map, all_statements);
-    if (!this_reduce.is_empty()) {
-      reduce_statements = reduce_statements.unite(this_reduce);
-    }
-  }
-
-  if (!reduce_manager.SplitReduceStatements(tile_node, reduce_statements, pass_info_.dependences_, false)) {
-    return node;
-  }
-  return tile_node;
-}
-
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

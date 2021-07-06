@@ -179,7 +179,7 @@ class GetBatchNum final : public IRVisitor {
 
 class ExtractAxisUsed : public IRVisitor {
  public:
-  ExtractAxisUsed(std::vector<const Variable *> &vec, std::unordered_set<std::string> red) : vec_(vec), red_(red) {}
+  ExtractAxisUsed(std::vector<const Variable *> &vec, std::unordered_set<std::string> &red) : vec_(vec), red_(red) {}
   ~ExtractAxisUsed() override = default;
   void Visit_(const Variable *op) final {
     if (red_.count(op->name_hint) == 1) {
@@ -192,12 +192,12 @@ class ExtractAxisUsed : public IRVisitor {
 
  private:
   std::vector<const Variable *> &vec_;
-  std::unordered_set<std::string> red_;
+  std::unordered_set<std::string> &red_;
 };
 
 class ExtractAxisNotUsed : public IRVisitor {
  public:
-  ExtractAxisNotUsed(std::vector<const Variable *> &vec, std::unordered_set<std::string> red) : vec_(vec), red_(red) {}
+  ExtractAxisNotUsed(std::vector<const Variable *> &vec, std::unordered_set<std::string> &red) : vec_(vec), red_(red) {}
   ~ExtractAxisNotUsed() override = default;
   void Visit_(const Variable *op) final {
     if (red_.count(op->name_hint) == 0) {
@@ -210,7 +210,7 @@ class ExtractAxisNotUsed : public IRVisitor {
 
  private:
   std::vector<const Variable *> &vec_;
-  std::unordered_set<std::string> red_;
+  std::unordered_set<std::string> &red_;
 };
 
 class ScopMakeScheduleTree final : protected IRVisitor {
@@ -241,6 +241,28 @@ class ScopMakeScheduleTree final : protected IRVisitor {
     if (scop_info_.user_config_.GetTarget() == TARGET_CUDA &&
         (scop_info_.user_config_.GetEnableAkgReduceLib() || scop_info_.user_config_.GetEnableMatmul())) {
       RecordReduceInfo(op, op_domain, id);
+
+      if (scop_info_.analysis_result_.GetReduceTensorInfoMap().count(id) != 0) {
+        auto type = scop_info_.analysis_result_.GetReduceOpType(id);
+        if (AkgSupportedReduceOp.count(type) == 0) {
+          scop_info_.user_config_.SetEnableAkgReduceLib(false);
+        }
+
+        if (CheckMatmul(op)) {
+          scop_info_.user_config_.SetEnableMatmul(true);
+          scop_info_.user_config_.SetEnableTensorCore(true);
+          scop_info_.user_config_.SetEnableTensorCoreUsePoly(true);
+          scop_info_.user_config_.SetEnableAkgReduceLib(false);
+          // Default vectorization access mode (128 bits).
+          if (scop_info_.user_config_.GetVectorLoadType() == 0) {
+            scop_info_.user_config_.SetVectorLoadType(PROMOTE_VECTORIZATION_BIT);
+          }
+        } else {
+          scop_info_.user_config_.SetEnableMatmul(false);
+          scop_info_.user_config_.SetEnableTensorCore(false);
+          scop_info_.user_config_.SetEnableTensorCoreUsePoly(false);
+        }
+      }
     }
 
     if (scop_info_.user_config_.GetEnableMatmul()) {
@@ -389,17 +411,8 @@ class ScopMakeScheduleTree final : protected IRVisitor {
     reduce_tensor_info.stmt_map = upa;
     scop_info_.analysis_result_.RecordReduceTensorInfoMap(red_id, reduce_tensor_info);
     auto type = scop_info_.analysis_result_.GetReduceOpType(red_id);
-
-    bool is_matmul = false;
     if (AkgSupportedReduceOp.count(type) == 0) {
-      is_matmul = CheckMatmul(op);
-      if (!is_matmul) {
-        return;
-      }
-    } else {
-      scop_info_.user_config_.SetEnableMatmul(false);
-      scop_info_.user_config_.SetEnableTensorCore(false);
-      scop_info_.user_config_.SetEnableTensorCoreUsePoly(false);
+      return;
     }
 
     reduce_tensor_info.write_tensor_name = op->func->func_name();
@@ -443,9 +456,6 @@ class ScopMakeScheduleTree final : protected IRVisitor {
     });
     if (reduce_direction.empty()) {
       LOG(WARNING) << "Cannot identify reduce direction for stmt " << red_id;
-    }
-    if (is_matmul) {
-      reduce_direction = X_DIRECTION;
     }
     scop_info_.analysis_result_.RecordReduceDirection(reduce_direction);
   }
@@ -604,15 +614,6 @@ class ScopMakeScheduleTree final : protected IRVisitor {
     }
 
     SetMmaModeForTensor(tensor_a_name, tensor_b_name);
-
-    scop_info_.user_config_.SetEnableMatmul(true);
-    scop_info_.user_config_.SetEnableTensorCore(true);
-    scop_info_.user_config_.SetEnableTensorCoreUsePoly(true);
-    scop_info_.user_config_.SetEnableAkgReduceLib(false);
-    // Default vectorization access mode (128 bits).
-    if (scop_info_.user_config_.GetVectorLoadType() == 0) {
-      scop_info_.user_config_.SetVectorLoadType(PROMOTE_VECTORIZATION_BIT);
-    }
 
     if (tensor_c_type == Float(16)) {
       std::string shared_tensors = tensor_a_name + " " + tensor_b_name + " " + tensor_c->name;
