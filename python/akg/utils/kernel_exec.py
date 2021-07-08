@@ -56,8 +56,6 @@ logging.getLogger().setLevel(logging.INFO)
 rpc_machine = {}
 rpc_lb = {}
 
-kc_air_mode = "CCE"
-
 PERFORMANCE_TEST_FILE = "PERFORMANCE_TEST_FILE"
 BINDS = "binds"
 CUDA = "cuda"
@@ -470,12 +468,12 @@ def profiling_analyse(device_id, time_before_launch):
         logging.error(e)
         return PROF_ERROR_CODE
 
-def mod_launch_air(mod, args, outputs):
+
+def mod_launch_air(mod, args, outputs, device_id):
     """launch mod on kc_air."""
-    if kc_air_mode == "CUDA":
-        ctx = akg.tvm.ndarray.gpu(0)
-    else:
-        ctx = akg.tvm.ndarray.cce(0)
+
+    # Currently akg runs through this function in CCE RT mode
+    ctx = akg.tvm.ndarray.cce(device_id)
     arg_list = []
     for a in args:
         if isinstance(a, np.ndarray):
@@ -506,7 +504,7 @@ def mod_launch_air(mod, args, outputs):
     return None
 
 @func_time_required
-def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=0, expect=None, repeat_time=400):
+def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=-1, expect=None, repeat_time=400):
     """
     unified run CCE kernel api.
 
@@ -523,6 +521,8 @@ def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=0, expect=None,
     """
 
     gc.collect()
+    if device_id == -1:
+        device_id = int(os.environ.get("DEVICE_ID", 0))
     if mod.imported_modules[0].type_key == CUDA:
         ctx = akg.tvm.context(CUDA, device_id)
         mod_args = [akg.tvm.nd.array(a, ctx) for a in args]
@@ -554,7 +554,7 @@ def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=0, expect=None,
     if mode in ('rpc', 'rpc_cloud'):
         return mod_launch_rpc(mode, mod, args, outputs, tuning)
     if mode in ('ca', 'air', 'air_cloud'):
-        return mod_launch_air(mod, args, outputs)
+        return mod_launch_air(mod, args, outputs, device_id)
     if mode in ("compile_cloud", "compile_mini"):
         return expect
     if mode in ("csim", "ccesim", "cdiff"):
