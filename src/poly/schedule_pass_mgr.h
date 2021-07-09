@@ -31,7 +31,7 @@ class SchedulePassMgr {
   void RegisterPass(std::shared_ptr<SchedulePass>pass);
   isl::schedule Run(const isl::schedule &sch);
   isl::schedule Run(const isl::schedule &sch, const std::vector<std::shared_ptr<SchedulePass>> &passes);
-  isl::schedule Run(const isl::schedule &sch, PassMgrStrategy &strategy);
+  isl::schedule Run(const isl::schedule &sch, std::shared_ptr<PassMgrStrategy> strategy);
   ~SchedulePassMgr() {}
 
   bool need_restart_{false};
