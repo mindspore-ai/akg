@@ -80,6 +80,12 @@ class RegisterMemoryManager : public SchedulePass {
 
   isl::schedule_node PromotedNodeUnderSequence(isl::schedule_node_sequence &node);
 
+  isl::schedule RunMatmul(isl::schedule_node root);
+
+  isl::schedule RunReduce(isl::schedule_node root);
+
+  isl::schedule RunElementWise(isl::schedule_node root);
+
  private:
   PassInfo &pass_info_;
   ScopInfo &scop_info_;
