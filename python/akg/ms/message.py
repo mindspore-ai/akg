@@ -32,15 +32,9 @@ from akg.global_configs import get_dump_ir_flag
 from akg.global_configs import get_dump_code_flag
 
 
-@vc_util.check_input_type(str)
-def _compilewithjson_to_module(json_str):
+@vc_util.check_input_type(dict, dict)
+def _compilewithjson_to_module(kernel_info, attrs):
     """compile with json."""
-    try:
-        kernel_info = json.loads(json_str)
-    except jd.JSONDecodeError:
-        logging.error(traceback.format_exc())
-        return False
-
     supported_processors = ['cuda', 'aicore']
     processor = 'cuda'
     if 'process' in kernel_info:
@@ -49,9 +43,12 @@ def _compilewithjson_to_module(json_str):
         logging.error("supported processors: {}, current processor: {}".format(supported_processors, processor))
         return False
 
+    if processor == 'cuda' and 'compute_capability' in kernel_info:
+        attrs['compute_capability'] = kernel_info['compute_capability']
+
     if 'composite' in kernel_info and kernel_info['composite'] is True:
         try:
-            composite.build(json_str)
+            composite.build(kernel_info, attrs)
             return True
         except Exception:
             logging.error(traceback.format_exc())
@@ -126,7 +123,6 @@ def _compilewithjson_to_module(json_str):
 
     output = op_func(**args)
     schedule_func = None
-    attrs = {}
     if isinstance(output, (list, tuple)):
         from inspect import isfunction
         tmp_outputs = []
@@ -151,5 +147,15 @@ def _compilewithjson_to_module(json_str):
     return True
 
 
-def compilewithjson(json_str):
-    return _compilewithjson_to_module(json_str)
+def compilewithjson(json_str, attrs=None):
+    if attrs is None:
+        attrs = {}
+    try:
+        kernel_info = json.loads(json_str)
+        if isinstance(attrs, str):
+            attrs = json.loads(attrs)
+    except jd.JSONDecodeError:
+        logging.error(traceback.format_exc())
+        return False
+
+    return _compilewithjson_to_module(kernel_info, attrs)
