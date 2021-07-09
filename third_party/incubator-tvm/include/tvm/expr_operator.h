@@ -29,6 +29,7 @@
 /*
  * 2019.12.30 - Add new operator for expr.
  * 2020.08.10 - Add isinf, isfinite, infinity.
+ * 2021.07.09 - Add include file akg_expr_operator.h
  */
 
 #ifndef TVM_EXPR_OPERATOR_H_
@@ -836,4 +837,6 @@ inline Expr operator%(const Expr& a, const TB& b) {
 }
 
 }  // namespace air
+
+#include "akg_expr_operator.h"
 #endif  // TVM_EXPR_OPERATOR_H_

@@ -17,6 +17,10 @@
  * under the License.
  */
 
+/*
+ * 2021.07.09 - Add include file akg_elemwise.h
+ */
+
 /*!
  * \file elemwise.h
  * \brief Elementwise op constructions
@@ -361,4 +365,7 @@ inline Tensor full_like(const Tensor& x,
 }
 
 }  // namespace topi
+
+#include "akg_elemwise.h"
+
 #endif  // TOPI_ELEMWISE_H_

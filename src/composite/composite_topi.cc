@@ -172,6 +172,30 @@ void CommonMaximumGrad(TVMArgs args, TVMRetValue *rv, bool ge) {
 
 TVM_REGISTER_GLOBAL("Abs").set_body([](TVMArgs args, TVMRetValue *rv) { TOPI_ONE_INPUT_CALL(args, rv, topi::abs); });
 
+TVM_REGISTER_GLOBAL("Asinh").set_body([](TVMArgs args, TVMRetValue *rv) {
+  TOPI_ONE_INPUT_CALL(args, rv, topi::asinh);
+});
+
+TVM_REGISTER_GLOBAL("Acosh").set_body([](TVMArgs args, TVMRetValue *rv) {
+  TOPI_ONE_INPUT_CALL(args, rv, topi::acosh);
+});
+
+TVM_REGISTER_GLOBAL("LogicalNot").set_body([](TVMArgs args, TVMRetValue *rv) {
+  TOPI_ONE_INPUT_CALL(args, rv, topi::logical_not);
+});
+
+TVM_REGISTER_GLOBAL("LogicalAnd").set_body([](TVMArgs args, TVMRetValue *rv) {
+  TOPI_TWO_INPUTS_CALL(args, rv, topi::logical_and);
+});
+
+TVM_REGISTER_GLOBAL("LogicalOr").set_body([](TVMArgs args, TVMRetValue *rv) {
+  TOPI_TWO_INPUTS_CALL(args, rv, topi::logical_or);
+});
+
+TVM_REGISTER_GLOBAL("NotEqual").set_body([](TVMArgs args, TVMRetValue *rv) {
+  TOPI_TWO_INPUTS_CALL(args, rv, topi::not_equal);
+});
+
 TVM_REGISTER_GLOBAL("Round").set_body([](TVMArgs args, TVMRetValue *rv) {
   auto call = [](const air::Tensor &tensor) {
     std::string name = "T_round_" + tensor->op->name;
@@ -191,6 +215,18 @@ TVM_REGISTER_GLOBAL("Neg").set_body([](TVMArgs args, TVMRetValue *rv) {
 });
 
 TVM_REGISTER_GLOBAL("Exp").set_body([](TVMArgs args, TVMRetValue *rv) { TOPI_ONE_INPUT_CALL(args, rv, topi::exp); });
+
+TVM_REGISTER_GLOBAL("IsNan").set_body([](TVMArgs args, TVMRetValue *rv) {
+  TOPI_ONE_INPUT_CALL(args, rv, topi::isnan);
+});
+
+TVM_REGISTER_GLOBAL("IsInf").set_body([](TVMArgs args, TVMRetValue *rv) {
+  TOPI_ONE_INPUT_CALL(args, rv, topi::isinf);
+});
+
+TVM_REGISTER_GLOBAL("IsFinite").set_body([](TVMArgs args, TVMRetValue *rv) {
+  TOPI_ONE_INPUT_CALL(args, rv, topi::isfinite);
+});
 
 TVM_REGISTER_GLOBAL("Tanh").set_body([](TVMArgs args, TVMRetValue *rv) {
   auto call = [](const Tensor &tensor) {
@@ -212,6 +248,30 @@ TVM_REGISTER_GLOBAL("RealDiv").set_body([](TVMArgs args, TVMRetValue *rv) {
   TOPI_TWO_INPUTS_CALL(args, rv, topi::divide);
 });
 
+TVM_REGISTER_GLOBAL("Div").set_body([](TVMArgs args, TVMRetValue *rv) {
+  TOPI_TWO_INPUTS_CALL(args, rv, topi::divide);
+});
+
+TVM_REGISTER_GLOBAL("FloorDiv").set_body([](TVMArgs args, TVMRetValue *rv) {
+  TOPI_TWO_INPUTS_CALL(args, rv, topi::floor_divide);
+});
+
+TVM_REGISTER_GLOBAL("Mod").set_body([](TVMArgs args, TVMRetValue *rv) {
+  TOPI_TWO_INPUTS_CALL(args, rv, topi::mod);
+});
+
+TVM_REGISTER_GLOBAL("FloorMod").set_body([](TVMArgs args, TVMRetValue *rv) {
+  TOPI_TWO_INPUTS_CALL(args, rv, topi::floor_mod);
+});
+
+TVM_REGISTER_GLOBAL("Floor").set_body([](TVMArgs args, TVMRetValue *rv) {
+  TOPI_ONE_INPUT_CALL(args, rv, topi::floor);
+});
+
+TVM_REGISTER_GLOBAL("Erf").set_body([](TVMArgs args, TVMRetValue *rv) {
+  TOPI_ONE_INPUT_CALL(args, rv, topi::erf);
+});
+
 TVM_REGISTER_GLOBAL("Mul").set_body([](TVMArgs args, TVMRetValue *rv) {
   TOPI_TWO_INPUTS_CALL(args, rv, topi::multiply);
 });
@@ -225,6 +285,26 @@ TVM_REGISTER_GLOBAL("Maximum").set_body([](TVMArgs args, TVMRetValue *rv) {
 });
 
 TVM_REGISTER_GLOBAL("Log").set_body([](TVMArgs args, TVMRetValue *rv) { TOPI_ONE_INPUT_CALL(args, rv, topi::log); });
+
+TVM_REGISTER_GLOBAL("Sin").set_body([](TVMArgs args, TVMRetValue *rv) {
+  TOPI_ONE_INPUT_CALL(args, rv, topi::sin);
+});
+
+TVM_REGISTER_GLOBAL("Cos").set_body([](TVMArgs args, TVMRetValue *rv) {
+  TOPI_ONE_INPUT_CALL(args, rv, topi::cos);
+});
+
+TVM_REGISTER_GLOBAL("Asin").set_body([](TVMArgs args, TVMRetValue *rv) {
+  TOPI_ONE_INPUT_CALL(args, rv, topi::asin);
+});
+
+TVM_REGISTER_GLOBAL("ACos").set_body([](TVMArgs args, TVMRetValue *rv) {
+  TOPI_ONE_INPUT_CALL(args, rv, topi::acos);
+});
+
+TVM_REGISTER_GLOBAL("Sign").set_body([](TVMArgs args, TVMRetValue *rv) {
+  TOPI_ONE_INPUT_CALL(args, rv, topi::sign);
+});
 
 TVM_REGISTER_GLOBAL("ReduceSum").set_body([](TVMArgs args, TVMRetValue *rv) {
   CHECK_GE(args.size(), 2);
@@ -437,7 +517,7 @@ TVM_REGISTER_GLOBAL("Greater").set_body([](TVMArgs args, TVMRetValue *rv) {
   TOPI_TWO_INPUTS_CALL(args, rv, topi::greater);
 });
 
-TVM_REGISTER_GLOBAL("Less").set_body([](TVMArgs args, TVMRetValue *rv) { 
+TVM_REGISTER_GLOBAL("Less").set_body([](TVMArgs args, TVMRetValue *rv) {
   TOPI_TWO_INPUTS_CALL(args, rv, topi::less); }
 );
 
@@ -901,6 +981,22 @@ TVM_REGISTER_GLOBAL("AicoreBatchMatMul").set_body([](TVMArgs args, TVMRetValue *
   }
 
   *rv = c_tensor;
+});
+
+TVM_REGISTER_GLOBAL("Atan").set_body([](TVMArgs args, TVMRetValue *rv) {
+  TOPI_ONE_INPUT_CALL(args, rv, topi::atan);
+});
+
+TVM_REGISTER_GLOBAL("Atan2").set_body([](TVMArgs args, TVMRetValue *rv) {
+  auto inputs = args[0].operator Array<NodeRef>();
+  CHECK_EQ(inputs.size(), 2);
+  Tensor x_tensor = Downcast<Tensor>(inputs[0]);
+  Tensor y_tensor = Downcast<Tensor>(inputs[1]);
+  *rv = topi::atan2(x_tensor, y_tensor);
+});
+
+TVM_REGISTER_GLOBAL("Expm1").set_body([](TVMArgs args, TVMRetValue *rv) {
+  TOPI_ONE_INPUT_CALL(args, rv, topi::expm1);
 });
 
 }  // namespace akg
