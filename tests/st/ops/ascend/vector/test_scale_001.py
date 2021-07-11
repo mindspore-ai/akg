@@ -55,7 +55,7 @@ class TestCase(TestBase):
             ("scale_1", scale_run, ((1, 16, 256, 32), (1, 16, 1, 1), (1, 16, 1, 1), "int32", "cce_scale_int32")),
         ]
 
-    @pytest.mark.level0
+    @pytest.mark.level2
     @pytest.mark.platform_arm_ascend_training
     @pytest.mark.platform_x86_ascend_training
     @pytest.mark.env_onecard

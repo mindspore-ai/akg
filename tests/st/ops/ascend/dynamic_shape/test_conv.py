@@ -12,7 +12,7 @@ def test_conv1():
                   [14, 2048, 64, 128, 128, 14, 64], "dynamic", "bypassL1")
 
 
-@pytest.mark.level0
+@pytest.mark.level2
 @pytest.mark.platform_arm_ascend_training
 @pytest.mark.platform_x86_ascend_training
 @pytest.mark.env_onecard
@@ -22,7 +22,7 @@ def test_conv2():
                   [14, 256, 208, 64, 128, 14, 64], "dynamic")
 
 
-@pytest.mark.level0
+@pytest.mark.level2
 @pytest.mark.platform_arm_ascend_training
 @pytest.mark.platform_x86_ascend_training
 @pytest.mark.env_onecard
@@ -32,7 +32,7 @@ def test_conv3():
                   [14, 512, 64, 32, 512, 14, 64], "dynamic", "bypassL1")
 
 
-@pytest.mark.level0
+@pytest.mark.level2
 @pytest.mark.platform_arm_ascend_training
 @pytest.mark.platform_x86_ascend_training
 @pytest.mark.env_onecard
@@ -41,7 +41,7 @@ def test_conv4():
                   [30, 128, 112, 32, 128, 30, 8], "dynamic")
 
 
-@pytest.mark.level0
+@pytest.mark.level2
 @pytest.mark.platform_arm_ascend_training
 @pytest.mark.platform_x86_ascend_training
 @pytest.mark.env_onecard
@@ -50,7 +50,7 @@ def test_conv5():
                   [28, 512, 784, 16, 32, 28, 8], "dynamic")
 
 
-@pytest.mark.level0
+@pytest.mark.level2
 @pytest.mark.platform_arm_ascend_training
 @pytest.mark.platform_x86_ascend_training
 @pytest.mark.env_onecard
@@ -59,7 +59,7 @@ def test_conv6():
                   [7, 512, 64, 32, 512, 7, 128], "dynamic", "bypassL1")
 
 
-@pytest.mark.level0
+@pytest.mark.level2
 @pytest.mark.platform_arm_ascend_training
 @pytest.mark.platform_x86_ascend_training
 @pytest.mark.env_onecard
@@ -68,7 +68,7 @@ def test_conv7():
                   [7, 1024, 112, 32, 256, 14, 16], "dynamic")
 
 
-@pytest.mark.level0
+@pytest.mark.level2
 @pytest.mark.platform_arm_ascend_training
 @pytest.mark.platform_x86_ascend_training
 @pytest.mark.env_onecard
@@ -77,7 +77,7 @@ def test_conv8():
                   [16, 256, 208, 64, 128, 16, 16], "dynamic", "bypassL1")
 
 
-@pytest.mark.level0
+@pytest.mark.level2
 @pytest.mark.platform_arm_ascend_training
 @pytest.mark.platform_x86_ascend_training
 @pytest.mark.env_onecard
@@ -86,7 +86,7 @@ def test_conv9():
                   [7, 128, 252, 64, 128, 56, 16], "dynamic")
 
 
-@pytest.mark.level0
+@pytest.mark.level2
 @pytest.mark.platform_arm_ascend_training
 @pytest.mark.platform_x86_ascend_training
 @pytest.mark.env_onecard
@@ -95,7 +95,7 @@ def test_conv10():
                   [8, 64, 224, 16, 64, 56, 16], "dynamic")
 
 
-@pytest.mark.level0
+@pytest.mark.level2
 @pytest.mark.platform_arm_ascend_training
 @pytest.mark.platform_x86_ascend_training
 @pytest.mark.env_onecard
@@ -104,7 +104,7 @@ def test_conv11():
                   [61, 64, 448, 16, 64, 230, 1], "dynamic", "bypassL1"),
 
 
-@pytest.mark.level0
+@pytest.mark.level2
 @pytest.mark.platform_arm_ascend_training
 @pytest.mark.platform_x86_ascend_training
 @pytest.mark.env_onecard
@@ -113,7 +113,7 @@ def test_conv12():
                   [14, 128, 448, 16, 64, 28, 32], "dynamic")
 
 
-@pytest.mark.level0
+@pytest.mark.level2
 @pytest.mark.platform_arm_ascend_training
 @pytest.mark.platform_x86_ascend_training
 @pytest.mark.env_onecard
@@ -122,7 +122,7 @@ def test_conv13():
                   [13, 256, 112, 64, 256, 28, 32], "dynamic")
 
 
-@pytest.mark.level0
+@pytest.mark.level2
 @pytest.mark.platform_arm_ascend_training
 @pytest.mark.platform_x86_ascend_training
 @pytest.mark.env_onecard
@@ -131,7 +131,7 @@ def test_conv14():
                   [7, 2048, 64, 16, 512, 7, 32], "dynamic", "bypassL1")
 
 
-@pytest.mark.level0
+@pytest.mark.level2
 @pytest.mark.platform_arm_ascend_training
 @pytest.mark.platform_x86_ascend_training
 @pytest.mark.env_onecard
@@ -140,7 +140,7 @@ def test_conv15():
                   [9, 512, 49, 32, 512, 9, 32], "dynamic", "bypassL1")
 
 
-@pytest.mark.level0
+@pytest.mark.level2
 @pytest.mark.platform_arm_ascend_training
 @pytest.mark.platform_x86_ascend_training
 @pytest.mark.env_onecard
@@ -149,7 +149,7 @@ def test_conv16():
                   [56, 256, 784, 16, 32, 56, 4], "dynamic", "bypassL1")
 
 
-@pytest.mark.level0
+@pytest.mark.level2
 @pytest.mark.platform_arm_ascend_training
 @pytest.mark.platform_x86_ascend_training
 @pytest.mark.env_onecard
@@ -158,7 +158,7 @@ def test_conv17():
                   [56, 64, 784, 16, 32, 56, 4], "dynamic")
 
 
-@pytest.mark.level0
+@pytest.mark.level2
 @pytest.mark.platform_arm_ascend_training
 @pytest.mark.platform_x86_ascend_training
 @pytest.mark.env_onecard
@@ -167,7 +167,7 @@ def test_conv18():
                   [58, 64, 448, 16, 64, 58, 4], "dynamic")
 
 
-@pytest.mark.level0
+@pytest.mark.level2
 @pytest.mark.platform_arm_ascend_training
 @pytest.mark.platform_x86_ascend_training
 @pytest.mark.env_onecard
@@ -176,7 +176,7 @@ def test_conv19():
                   [7, 512, 196, 64, 256, 56, 16], "dynamic")
 
 
-@pytest.mark.level0
+@pytest.mark.level2
 @pytest.mark.platform_arm_ascend_training
 @pytest.mark.platform_x86_ascend_training
 @pytest.mark.env_onecard
@@ -185,7 +185,7 @@ def test_conv20():
                   [13, 1024, 112, 32, 256, 28, 32], "dynamic", "bypassL1")
 
 
-@pytest.mark.level0
+@pytest.mark.level2
 @pytest.mark.platform_arm_ascend_training
 @pytest.mark.platform_x86_ascend_training
 @pytest.mark.env_onecard
@@ -195,7 +195,7 @@ def test_conv21():
                   [14, 2048, 64, 128, 128, 14, 64], "partial_dynamic", "bypassL1")
 
 
-@pytest.mark.level0
+@pytest.mark.level2
 @pytest.mark.platform_arm_ascend_training
 @pytest.mark.platform_x86_ascend_training
 @pytest.mark.env_onecard

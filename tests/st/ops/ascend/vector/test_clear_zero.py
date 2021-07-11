@@ -38,7 +38,7 @@ class TestCase(TestBase):
         self._log.info("TestCase:{0} Setup case".format(self.casename))
         return True
 
-    @pytest.mark.level0
+    @pytest.mark.level2
     @pytest.mark.platform_arm_ascend_training
     @pytest.mark.platform_x86_ascend_training
     @pytest.mark.env_onecard
