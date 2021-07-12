@@ -90,7 +90,7 @@ def test0():
     a.teardown()
 
 
-@pytest.mark.level0
+@pytest.mark.level2
 @pytest.mark.platform_arm_ascend_training
 @pytest.mark.platform_x86_ascend_training
 @pytest.mark.env_onecard
@@ -101,7 +101,7 @@ def test1():
     a.teardown()
 
 
-@pytest.mark.level0
+@pytest.mark.level2
 @pytest.mark.platform_arm_ascend_training
 @pytest.mark.platform_x86_ascend_training
 @pytest.mark.env_onecard

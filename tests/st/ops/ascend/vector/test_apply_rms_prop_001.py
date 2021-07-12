@@ -51,7 +51,7 @@ class TestCase(TestBase):
             ("apply_rms_prop_1", apply_rms_prop_run, ((1, 1, 64, 128), "float32", 0.1, 0.5, 0.8, 1e-6)),
         ]
 
-    @pytest.mark.level0
+    @pytest.mark.level2
     @pytest.mark.platform_arm_ascend_training
     @pytest.mark.platform_x86_ascend_training
     @pytest.mark.env_onecard

@@ -53,7 +53,7 @@ class TestCase(TestBase):
             ("reduce_min_5", reduce_min_run, ((1024,), (0,), True, "int32", "cce_reduce_min_int32")),
         ]
 
-    @pytest.mark.level0
+    @pytest.mark.level2
     @pytest.mark.platform_arm_ascend_training
     @pytest.mark.platform_x86_ascend_training
     @pytest.mark.env_onecard
