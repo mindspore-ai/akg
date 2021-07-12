@@ -55,13 +55,12 @@ class StitchBufAlloc : public IRVisitor {
   StitchBufAlloc(const std::vector<Stmt> &stitch_irs, const Map<std::string, Array<NodeRef>> &alloc_map,
                  const Map<std::string, Array<NodeRef>> &reuse_map,
                  const Map<std::string, Array<NodeRef>> &global_stitch,
-                 const std::unordered_map<std::string, NodeRef> &outputs2args, air::DataType data_type = Float(32))
+                 const std::unordered_map<std::string, NodeRef> &outputs2args)
       : stitch_irs_(stitch_irs),
         alloc_map_(alloc_map),
         reuse_map_(reuse_map),
         global_stitch_(global_stitch),
-        outputs2args_(outputs2args),
-        data_type_(data_type){};
+        outputs2args_(outputs2args){};
   ~StitchBufAlloc() override = default;
 
   void BufferAllocReuse() {
@@ -109,7 +108,7 @@ class StitchBufAlloc : public IRVisitor {
       if (buf_within_op_map.find(shared_name) != buf_within_op_map.end()) {
         ir_var_shared = shared_name;
       } else {
-        allocated_share_size_ += alloc_size_per_block * data_type_.bytes();
+        allocated_share_size_ += alloc_size_per_block;
         ir_var_shared = ir_var + "_shared_stitch";
       }
 
@@ -146,7 +145,7 @@ class StitchBufAlloc : public IRVisitor {
 
       if (can_reuse && buf_within_op_map.find(shared_name) != buf_within_op_map.end()) {
         // add replaced buffer into stitch_buffer_map.
-        if (allocated_share_size_ >= alloc_size_per_block * data_type_.bytes()) {
+        if (allocated_share_size_ >= alloc_size_per_block) {
           StitchBufferInfo info;
           info.name = name;
           info.type = StorageType::Shared;
@@ -154,7 +153,7 @@ class StitchBufAlloc : public IRVisitor {
           info.alloc_size = alloc_size_per_block;
           stitch_buffer_map[shared_name] = info;
           // remember to reduce allocated_share_size_ due to reuse.
-          allocated_share_size_ -= alloc_size_per_block * data_type_.bytes();
+          allocated_share_size_ -= alloc_size_per_block;
           allocate_revoke.push_back(shared_name);
         }
       }
@@ -177,7 +176,7 @@ class StitchBufAlloc : public IRVisitor {
       bool cover_overflow_size = false;
       std::string moveout_var;
       for (const auto &iv : reuse_free_map) {
-        if (iv.second.alloc_size * data_type_.bytes() >= overflow_size) {
+        if (iv.second.alloc_size >= overflow_size) {
           moveout_var = iv.first;
           cover_overflow_size = true;
         } else {
@@ -263,11 +262,9 @@ class StitchBufAlloc : public IRVisitor {
   }
 
   void Visit_(const Store *op) final {
-    collect_load_ = true;
     IRVisitor::Visit(op->value);
     store_load_[op] = loads_;
     loads_.clear();
-    collect_load_ = false;
   }
 
   void Visit_(const Load *op) final { loads_.emplace_back(op); }
@@ -278,9 +275,7 @@ class StitchBufAlloc : public IRVisitor {
   Map<std::string, Array<NodeRef>> reuse_map_;
   Map<std::string, Array<NodeRef>> global_stitch_;
   std::unordered_map<std::string, NodeRef> outputs2args_;
-  air::DataType data_type_;
   std::unordered_map<std::string, StitchBufferInfo> buf_alloc_op_;
-  bool collect_load_{false};
   std::vector<const Load *> loads_;
   std::unordered_map<const Store *, std::vector<const Load *>> store_load_;
   int ir_idx_ = 0;
@@ -376,6 +371,9 @@ Stmt StitchFusionGpu(std::vector<Stmt> &stitch_irs, const std::string &kernel_na
                      std::unordered_map<std::string, StitchBufferInfo> &buf_within_op_map,
                      std::vector<std::string> &allocate_revoke,
                      const std::unordered_map<std::string, NodeRef> &real_outputs);
+Stmt StitchFusionAscend(std::vector<Stmt> &stitch_irs, const std::string &kernel_name,
+                        std::unordered_map<std::string, NodeRef> &stitch_buffer,
+                        const std::unordered_map<std::string, NodeRef> &real_outputs);
 }  // namespace akg
 
 #endif  // STITCH_FUSION_H_

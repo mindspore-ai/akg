@@ -22,20 +22,14 @@
 #include <vector>
 
 #include "composite/block_fusion.h"
+#include "composite/util.h"
 #include "composite/sync_process.h"
 
 namespace akg {
 namespace ir {
 namespace {
-constexpr auto kBlockIdx = "blockIdx.";
-constexpr auto kThreadIdx = "threadIdx.";
-constexpr auto kBlockIdxX = "blockIdx.x";
-constexpr auto kThreadIdxX = "threadIdx.x";
-constexpr auto kThreadExtent = "thread_extent";
 constexpr auto kPipelineTotalSMem = "pipeline_total_shared_memory";
 constexpr auto kTotalSMem = "total_shared_memory";
-constexpr int kBlockIdxLen = 9;
-constexpr int kThreadIdxLen = 10;
 }  // namespace
 
 struct FuncInfo {
@@ -110,15 +104,15 @@ class ArrangedSharedMemoryInfo : public IRVisitor {
 class DimCollector : public IRVisitor {
  public:
   void Visit_(const AttrStmt *op) override {
-    if (op->attr_key == kThreadExtent) {
+    if (op->attr_key == air::ir::attr::thread_extent) {
       const IterVarNode *iv = op->node.as<IterVarNode>();
       CHECK(iv);
       Expr extent;
       std::string name = iv->var->name_hint;
-      if (name.compare(0, kBlockIdxLen, kBlockIdx) == 0) {
+      if (name.compare(0, BLOCKIDX_LEN, BLOCKIDX) == 0) {
         block_idxs_.emplace_back(iv->var, op->value);
       } else {
-        CHECK_EQ(name.compare(0, kThreadIdxLen, kThreadIdx), 0);
+        CHECK_EQ(name.compare(0, THREADIDX_LEN, THREADIDX), 0);
         thread_idxs_.emplace_back(iv->var, op->value);
       }
     }
@@ -153,17 +147,17 @@ class DimCompressor : public IRMutator {
     return Mutate(s);
   }
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) {
-    if (op->attr_key == kThreadExtent) {
+    if (op->attr_key == air::ir::attr::thread_extent) {
       const IterVarNode *iv = op->node.as<IterVarNode>();
       CHECK(iv);
       Expr extent;
       std::string name = iv->var->name_hint;
       bool is_left = false;
-      if (name.compare(0, kBlockIdxLen, kBlockIdx) == 0) {
+      if (name.compare(0, BLOCKIDX_LEN, BLOCKIDX) == 0) {
         is_left = LeftIdx(iv->var);
         extent = CompressIdx(dim_collector_.block_idxs_);
       } else {
-        CHECK_EQ(name.compare(0, kThreadIdxLen, kThreadIdx), 0);
+        CHECK_EQ(name.compare(0, THREADIDX_LEN, THREADIDX), 0);
         is_left = LeftIdx(iv->var);
         extent = CompressIdx(dim_collector_.thread_idxs_);
       }
@@ -241,7 +235,7 @@ class DimInfoVisitor : public IRVisitor {
   }
 
   void Visit_(const AttrStmt *op) {
-    if (op->attr_key == kThreadExtent) {
+    if (op->attr_key == air::ir::attr::thread_extent) {
       const IterVarNode *iv = op->node.as<IterVarNode>();
       CHECK(iv);
       std::string name = iv->var->name_hint;
@@ -256,14 +250,14 @@ class DimInfoVisitor : public IRVisitor {
   FuncInfo &info_;
 
  private:
-  std::string block_name_{kBlockIdxX};
-  std::string thread_name_{kThreadIdxX};
+  std::string block_name_{BLOCK_IDX_X};
+  std::string thread_name_{THREAD_IDX_X};
 };
 
 class RemoveDimAttr : public IRMutator {
  public:
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) {
-    if (op->attr_key == kThreadExtent) {
+    if (op->attr_key == air::ir::attr::thread_extent) {
       return IRMutator::Mutate(op->body);
     }
     return IRMutator::Mutate_(op, s);
@@ -275,7 +269,7 @@ class BlockIndexRewrite final : public IRMutator {
   explicit BlockIndexRewrite(int offset) : offset_(offset) {}
   ~BlockIndexRewrite() override = default;
   Expr Mutate_(const Variable *op, const Expr &e) {
-    if (op->name_hint == kBlockIdxX && offset_ != 0) {
+    if (op->name_hint == BLOCK_IDX_X && offset_ != 0) {
       return Sub::make(e, Expr(offset_));
     }
     return e;
@@ -305,12 +299,12 @@ void ProcessDim(std::vector<FuncInfo> &funcs, Var &block_var, Var &thread_var) {
     // Replace all variable to left one.
     std::unordered_map<const Variable *, Expr> vmap;
     if (!IsVarDefault(left_block)) {
-      auto block_var_tmp = Variable::make(left_block->type, kBlockIdxX);
+      auto block_var_tmp = Variable::make(left_block->type, BLOCK_IDX_X);
       vmap[left_block.get()] = block_var_tmp;
       func.block = block_var_tmp;
     }
     if (!IsVarDefault(left_thread)) {
-      auto thread_var_tmp = Variable::make(left_thread->type, kThreadIdxX);
+      auto thread_var_tmp = Variable::make(left_thread->type, THREAD_IDX_X);
       vmap[left_thread.get()] = thread_var_tmp;
       func.thread = thread_var_tmp;
     }
@@ -489,10 +483,10 @@ class LowerPipelineFusionGpu : public LowerPipelineFusion {
     }
 
     if (IsVarDefault(block_var_)) {
-      block_var_ = Variable::make(Int(32), kBlockIdxX);
+      block_var_ = Variable::make(Int(32), BLOCK_IDX_X);
     }
     if (IsVarDefault(thread_var_)) {
-      thread_var_ = Variable::make(Int(32), kThreadIdxX);
+      thread_var_ = Variable::make(Int(32), THREAD_IDX_X);
     }
   }
 
@@ -564,14 +558,14 @@ class LowerPipelineFusionGpu : public LowerPipelineFusion {
     Expr fusion_tx_ext = make_const(Int(32), max_thread_num_);  // update it by fusion thread extent
 
     IterVar thread_iv = IterVarNode::make(Range(make_const(Int(32), 0), fusion_tx_ext), thread_var_,
-                                          air::IterVarType::kThreadIndex, kThreadIdxX);
+                                          air::IterVarType::kThreadIndex, THREAD_IDX_X);
     IterVar block_iv = IterVarNode::make(Range(make_const(Int(32), 0), fusion_bx_ext), block_var_,
-                                         air::IterVarType::kThreadIndex, kBlockIdxX);
+                                         air::IterVarType::kThreadIndex, BLOCK_IDX_X);
     if (total_shared_memory_ > 0) {
       stmt = AttrStmt::make(make_zero(Int(32)), kPipelineTotalSMem, IntImm::make(Int(32), total_shared_memory_), stmt);
     }
-    stmt = AttrStmt::make(thread_iv, kThreadExtent, fusion_tx_ext, stmt);
-    stmt = AttrStmt::make(block_iv, kThreadExtent, fusion_bx_ext, stmt);
+    stmt = AttrStmt::make(thread_iv, air::ir::attr::thread_extent, fusion_tx_ext, stmt);
+    stmt = AttrStmt::make(block_iv, air::ir::attr::thread_extent, fusion_bx_ext, stmt);
   }
 
   Var block_var_;
@@ -621,7 +615,7 @@ class LowerPipelineFusionAscend : public LowerPipelineFusion {
     }
 
     if (IsVarDefault(block_var_)) {
-      block_var_ = Variable::make(Int(32), kBlockIdxX);
+      block_var_ = Variable::make(Int(32), BLOCK_IDX_X);
     }
   }
 
@@ -646,8 +640,8 @@ class LowerPipelineFusionAscend : public LowerPipelineFusion {
   void AddNewDimAttrs(Stmt &stmt) {
     Expr fusion_bx_ext = make_const(Int(32), max_block_num_);  // update it by fusion block extent
     IterVar block_iv = IterVarNode::make(Range(make_const(Int(32), 0), fusion_bx_ext), block_var_,
-                                         air::IterVarType::kThreadIndex, kBlockIdxX);
-    stmt = AttrStmt::make(block_iv, kThreadExtent, fusion_bx_ext, stmt);
+                                         air::IterVarType::kThreadIndex, BLOCK_IDX_X);
+    stmt = AttrStmt::make(block_iv, air::ir::attr::thread_extent, fusion_bx_ext, stmt);
   }
 
   Var block_var_;
@@ -728,10 +722,10 @@ class LowerBlockFusionGpu : public LowerStmtsFusion {
     }
 
     if (IsVarDefault(block_var_)) {
-      block_var_ = Variable::make(Int(32), kBlockIdxX);
+      block_var_ = Variable::make(Int(32), BLOCK_IDX_X);
     }
     if (IsVarDefault(thread_var_)) {
-      thread_var_ = Variable::make(Int(32), kThreadIdxX);
+      thread_var_ = Variable::make(Int(32), THREAD_IDX_X);
     }
   }
 
@@ -758,14 +752,14 @@ class LowerBlockFusionGpu : public LowerStmtsFusion {
     Expr fusion_tx_ext = make_const(Int(32), max_thread_num_);  // update it by fusion thread extent
 
     IterVar thread_iv = IterVarNode::make(Range(make_const(Int(32), 0), fusion_tx_ext), thread_var_,
-                                          air::IterVarType::kThreadIndex, kThreadIdxX);
+                                          air::IterVarType::kThreadIndex, THREAD_IDX_X);
     IterVar block_iv = IterVarNode::make(Range(make_const(Int(32), 0), fusion_bx_ext), block_var_,
-                                         air::IterVarType::kThreadIndex, kBlockIdxX);
+                                         air::IterVarType::kThreadIndex, BLOCK_IDX_X);
     if (total_shared_memory_ > 0) {
       stmt = AttrStmt::make(make_zero(Int(32)), kTotalSMem, IntImm::make(Int(32), total_shared_memory_), stmt);
     }
-    stmt = AttrStmt::make(thread_iv, kThreadExtent, fusion_tx_ext, stmt);
-    stmt = AttrStmt::make(block_iv, kThreadExtent, fusion_bx_ext, stmt);
+    stmt = AttrStmt::make(thread_iv, air::ir::attr::thread_extent, fusion_tx_ext, stmt);
+    stmt = AttrStmt::make(block_iv, air::ir::attr::thread_extent, fusion_bx_ext, stmt);
   }
 
   Var block_var_;
@@ -828,7 +822,7 @@ class LowerBlockFusionAscend : public LowerStmtsFusion {
     }
 
     if (IsVarDefault(block_var_)) {
-      block_var_ = Variable::make(Int(32), kBlockIdxX);
+      block_var_ = Variable::make(Int(32), BLOCK_IDX_X);
     }
   }
 
@@ -845,8 +839,8 @@ class LowerBlockFusionAscend : public LowerStmtsFusion {
   void AddNewDimAttrs(Stmt &stmt) {
     Expr fusion_bx_ext = make_const(Int(32), max_block_num_);  // update it by fusion block extent
     IterVar block_iv = IterVarNode::make(Range(make_const(Int(32), 0), fusion_bx_ext), block_var_,
-                                         air::IterVarType::kThreadIndex, kBlockIdxX);
-    stmt = AttrStmt::make(block_iv, kThreadExtent, fusion_bx_ext, stmt);
+                                         air::IterVarType::kThreadIndex, BLOCK_IDX_X);
+    stmt = AttrStmt::make(block_iv, air::ir::attr::thread_extent, fusion_bx_ext, stmt);
   }
 
   Var block_var_;

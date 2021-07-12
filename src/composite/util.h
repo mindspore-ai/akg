@@ -15,6 +15,7 @@
  */
 #ifndef COMPOSITE_UTIL_H_
 #define COMPOSITE_UTIL_H_
+#include <map>
 #include "tvm.h"
 #include "picojson.h"
 
@@ -28,6 +29,7 @@ constexpr auto THREAD_IDX_Z = "threadIdx.z";
 constexpr auto BLOCKIDX = "blockIdx.";
 constexpr auto THREADIDX = "threadIdx.";
 constexpr auto BLOCKIDX_LEN = 9;
+constexpr auto THREADIDX_LEN = 10;
 constexpr auto SHARED = "shared";
 constexpr auto ALLOC = "ALLOC";
 constexpr auto MEM_LIMIT = 49152;
@@ -40,6 +42,8 @@ static std::unordered_map<std::string, air::Type> type_mapping = {
   {"uint16", air::UInt(16)},         {"uint8", air::UInt(8)},
   {"complex128", air::Float(64, 2)}, {"complex64", air::Float(32, 2)},
 };
+
+std::string type2string(const air::Type &type);
 
 std::string GetProcess(const std::string &json_str);
 std::string GetSchedule(Array<Tensor> &outputs);
@@ -72,7 +76,15 @@ using FuncTensorMap = std::unordered_map<FunctionRef, Tensor, NodeHash, NodeEqua
 using FuncStmtMap = std::unordered_map<FunctionRef, const Provide *, NodeHash, NodeEqual>;
 using FuncShape = std::unordered_map<FunctionRef, Array<Expr>, NodeHash, NodeEqual>;
 using FuncExprMap = std::unordered_map<FunctionRef, Expr, NodeHash, NodeEqual>;
+using NodeMap = std::unordered_map<NodeRef, NodeRef, NodeHash, NodeEqual>;
 
+struct PeelInfo {
+  Stmt stmt;
+  std::string peeling;
+  std::map<int, int> peels;
+  std::unordered_map<std::string, std::vector<int>> peeled_tensors;
+  Array<NodeRef> real_peeled_tensors;
+};
 struct BuildOpt {
   FuncExprMap inplaces;          // the tensors which should be in bind
   FuncRefMap sames;              // the tensors which are same
@@ -82,7 +94,9 @@ struct BuildOpt {
 
   std::string target;
   bool stitch{false};
+  bool tuning{false};
   size_t stitch_ir_idx_{0};
+  PeelInfo peel_info;
   bool fold_dim{true};
   std::unordered_map<FunctionRef, std::vector<int>, NodeHash, NodeEqual> fold_dims_;
   FuncRefList input_funcs;
@@ -210,7 +224,7 @@ class StmtToGraph : public IRVisitor {
   StmtToGraph(const FuncRefList &input_funcs, const FuncRefList &output_funcs) {
     g_.input_funcs = input_funcs;
     g_.output_funcs = output_funcs;
-  };
+  }
 
  private:
   void Visit_(const Provide *op) override {
@@ -514,6 +528,33 @@ inline std::string GetDumpIRFlag() {
 
   return (*f)().operator std::string();
 }
+
+akg::BuildConfig GetConfig();
+
+class VarSubstitute : public IRMutator {
+ public:
+  explicit VarSubstitute(const Buffer b) : buffer_{b} {}
+  ~VarSubstitute() override = default;
+
+  Expr Mutate_(const Load *op, const Expr &e) final {
+    auto name = op->buffer_var.get()->name_hint;
+    if (name == buffer_->name) {
+      return Load::make(op->type, buffer_->data, op->index, op->predicate);
+    }
+    return IRMutator::Mutate_(op, e);
+  }
+
+  Stmt Mutate_(const Store *op, const Stmt &s) final {
+    auto name = op->buffer_var.get()->name_hint;
+    if (name == buffer_->name) {
+      return Store::make(buffer_->data, op->value, op->index, op->predicate);
+    }
+    return IRMutator::Mutate_(op, s);
+  }
+
+ private:
+  Buffer buffer_;
+};
 }  // namespace akg
 
 #endif  // COMPOSITE_UTIL_H_

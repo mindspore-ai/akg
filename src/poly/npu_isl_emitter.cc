@@ -516,7 +516,7 @@ Stmt NPUIslEmitter::EmitFor(const isl::ast_node_for &node) {
   }
 
   auto original_multicore_info = multicore_info;
-  bool should_insert_multi_core = InjectMulticore(iter);
+  bool should_insert_multi_core = info_.user_config_.GetEnableMulticore() != 0 && InjectMulticore(iter);
 
   // emit body
   Stmt body_stmt = EmitAst(node.get_body());

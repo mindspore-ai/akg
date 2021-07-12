@@ -16,16 +16,14 @@
 
 #include "composite/dimension_peeling.h"
 
-#define PEEL_DUMP  0
+#define PEEL_DUMP 0
 
 namespace akg {
 
-void AffinityAnalyzer::Analyze(Stmt stmt) {
-  IRVisitor::Visit(stmt);
-}
+void AffinityAnalyzer::Analyze(Stmt stmt) { IRVisitor::Visit(stmt); }
 
-void AffinityAnalyzer::VisitProd(Dim *dim, std::function<bool(Dim*, Dim*, int)> fun) {
-  std::vector<Dim*> stack;
+void AffinityAnalyzer::VisitProd(Dim *dim, std::function<bool(Dim *, Dim *, int)> fun) {
+  std::vector<Dim *> stack;
   stack.push_back(dim);
   while (!stack.empty()) {
     auto d = stack.back();
@@ -38,13 +36,13 @@ void AffinityAnalyzer::VisitProd(Dim *dim, std::function<bool(Dim*, Dim*, int)> 
   }
 }
 
-void AffinityAnalyzer::VisitCons(Dim *dim, std::function<bool(Dim*, Dim*, int)> fun) {
-  std::vector<Dim*> stack;
+void AffinityAnalyzer::VisitCons(Dim *dim, std::function<bool(Dim *, Dim *, int)> fun) {
+  std::vector<Dim *> stack;
   stack.push_back(dim);
   while (!stack.empty()) {
     auto d = stack.back();
     stack.pop_back();
-    for (auto &cons: d->cons) {
+    for (auto &cons : d->cons) {
       if (fun(d, cons.first, cons.second)) {
         stack.emplace_back(cons.first);
       }
@@ -54,29 +52,29 @@ void AffinityAnalyzer::VisitCons(Dim *dim, std::function<bool(Dim*, Dim*, int)> 
 
 void AffinityAnalyzer::Dump(std::ostringstream &os) {
   std::vector<std::string> aff_str = {"None", "Elem", "Broad", "Red", "Resh"};
-  os<<"*********** Affinity Dump **************"<<std::endl;
+  os << "*********** Affinity Dump **************" << std::endl;
   for (auto &t : tensors_) {
-    std::unordered_map<Tensor*, int> prod_idx;
-    os<<t->ref.get()<<"="<<t->op<<"(";
+    std::unordered_map<Tensor *, int> prod_idx;
+    os << t->ref.get() << "=" << t->op << "(";
     for (size_t i = 0; i < t->prod.size(); ++i) {
-      os<<t->prod[i]->ref.get();
+      os << t->prod[i]->ref.get();
       if (i < t->prod.size() - 1) {
         os << ",";
       }
       prod_idx[t->prod[i]] = i;
     }
-    os<<")\n";
+    os << ")\n";
     for (size_t i = 0; i < t->dims.size(); ++i) {
       auto dim = t->dims[i].get();
-      os<<"  "<<i<<"%%["<<dim->size<<"] : ";
+      os << "  " << i << "%%[" << dim->size << "] : ";
       for (size_t j = 0; j < dim->prod.size(); ++j) {
         auto &prod = dim->prod[j];
-        os<<prod_idx[prod.first->tensor]<<"."<<prod.first->index<<"%%"<<aff_str[prod.second];
+        os << prod_idx[prod.first->tensor] << "." << prod.first->index << "%%" << aff_str[prod.second];
         if (j < dim->prod.size() - 1) {
-          os<<",";
+          os << ",";
         }
       }
-      os<<std::endl;
+      os << std::endl;
     }
   }
 }
@@ -133,7 +131,7 @@ void AffinityAnalyzer::AddElemBroadRelation(Tensor *input, Tensor *output) {
   for (size_t i = dim_offset; i < output->dims.size(); ++i) {
     auto prod_dim = input->dims[i - dim_offset].get();
     auto cons_dim = output->dims[i].get();
-    int affinity = prod_dim->size ==  cons_dim->size ?  AF_ELEMWISE : AF_BROADCAST;
+    int affinity = prod_dim->size == cons_dim->size ? AF_ELEMWISE : AF_BROADCAST;
     cons_dim->prod.emplace_back(std::make_pair(prod_dim, affinity));
     prod_dim->cons.emplace_back(std::make_pair(cons_dim, affinity));
   }
@@ -185,7 +183,7 @@ std::vector<int64_t> AffinityAnalyzer::ExtractIntVector(Array<Expr> &vec) {
   return res;
 }
 
-AffinityAnalyzer::Tensor* AffinityAnalyzer::NewTensor(FunctionRef ref, std::string op, Array<Expr> shape) {
+AffinityAnalyzer::Tensor *AffinityAnalyzer::NewTensor(FunctionRef ref, std::string op, Array<Expr> shape) {
   std::unique_ptr<Tensor> t(new Tensor());
   auto dims = ExtractIntVector(shape);
   int index = 0;
@@ -204,11 +202,9 @@ AffinityAnalyzer::Tensor* AffinityAnalyzer::NewTensor(FunctionRef ref, std::stri
   return p;
 }
 
-class PeelMutator: public IRMutator {
+class PeelMutator : public IRMutator {
  public:
-  PeelMutator(std::function<Array<Expr>(FunctionRef, Array<Expr>)> peel_func)
-  : peel_func_(peel_func) {
-  }
+  PeelMutator(std::function<Array<Expr>(FunctionRef, Array<Expr>)> peel_func) : peel_func_(peel_func) {}
 
   Stmt Mutate_(const Provide *op, const Stmt &s) {
     auto prim_op = op->value.as<Call>();
@@ -248,7 +244,7 @@ void DimensionPeeler::Analyze(Stmt s) {
 #if PEEL_DUMP
   std::ostringstream os;
   aff.Dump(os);
-  std::cout<<os.str();
+  std::cout << os.str();
 #endif
   auto dom = BuildAxisSpace(aff);
   for (size_t i = 0; i < axis_space_.size(); ++i) {
@@ -264,9 +260,10 @@ std::vector<int64_t> DimensionPeeler::GetAxisSpace() {
   return space;
 }
 
-std::vector<DimensionPeeler::Peeling> DimensionPeeler::GetPeelSpace(int limit_depth, std::unordered_set<int> *limit_range) {
+std::vector<DimensionPeeler::Peeling> DimensionPeeler::GetPeelSpace(int limit_depth,
+                                                                    std::unordered_set<int> *limit_range) {
   std::vector<Peeling> peelings;
-  std::vector<std::pair<Axis*, int>> cand_axis;
+  std::vector<std::pair<Axis *, int>> cand_axis;
   std::function<void(Peeling, int)> CollectDepth;
   CollectDepth = [&](Peeling seed, int index) {
     auto a = cand_axis[index].first;
@@ -294,7 +291,18 @@ std::vector<DimensionPeeler::Peeling> DimensionPeeler::GetPeelSpace(int limit_de
   if (!cand_axis.empty()) {
     CollectDepth(Peeling(), 0);
   }
-  return peelings; 
+  return peelings;
+}
+
+std::unordered_map<std::string, std::vector<int>> DimensionPeeler::GetPeelTensors(const Peeling &peeling) {
+  std::unordered_map<std::string, std::vector<int>> peel_tensors;
+  for (auto &kv : dim_map_) {
+    auto dim = GetPeelDims(kv.first, peeling);
+    if (!dim.empty() && dim[0] != -1) {
+      peel_tensors.insert({kv.first->func_name(), dim});
+    }
+  }
+  return peel_tensors;
 }
 
 Stmt DimensionPeeler::GetPeelBody(const Peeling &peeling) {
@@ -352,7 +360,7 @@ std::vector<int64_t> DimensionPeeler::GetDivisors(int64_t n) {
   return res;
 }
 
-DimensionPeeler::Tensor* DimensionPeeler::BuildAxisSpace(AffinityAnalyzer &aff) {
+DimensionPeeler::Tensor *DimensionPeeler::BuildAxisSpace(AffinityAnalyzer &aff) {
   auto DomLevel = [](const std::string op) -> int {
     if (IsElemwise(op) || op == "InplaceAssign" || op == "Assign" || op == "BroadcastTo") {
       return 1;
@@ -365,7 +373,7 @@ DimensionPeeler::Tensor* DimensionPeeler::BuildAxisSpace(AffinityAnalyzer &aff) 
     }
     return 0;
   };
-  Tensor *dom = nullptr; 
+  Tensor *dom = nullptr;
   int dom_level = -1;
   for (auto it = aff.tensors_.rbegin(); it != aff.tensors_.rend(); it++) {
     auto t = it->get();
@@ -385,24 +393,24 @@ DimensionPeeler::Tensor* DimensionPeeler::BuildAxisSpace(AffinityAnalyzer &aff) 
     axis_space_.emplace_back(std::move(axis));
   }
 #if PEEL_DUMP
-  std::cout<<"Select Dom Op: op="<<dom->ref.get()<<", name="<<dom->op<<", AxisSpace:"<<std::endl;
+  std::cout << "Select Dom Op: op=" << dom->ref.get() << ", name=" << dom->op << ", AxisSpace:" << std::endl;
   for (size_t i = 0; i < axis_space_.size(); ++i) {
     Axis *axis = axis_space_[i].get();
-    std::cout<<"  "<<i<<"%%["<<axis->size<<"] : ";
+    std::cout << "  " << i << "%%[" << axis->size << "] : ";
     for (size_t j = 0; j < axis->peel_val.size(); ++j) {
-      std::cout<<axis->peel_val[j];
-      if (j < axis->peel_val.size() - 1) std::cout<<",";
+      std::cout << axis->peel_val[j];
+      if (j < axis->peel_val.size() - 1) std::cout << ",";
     }
-    std::cout<<std::endl;
+    std::cout << std::endl;
   }
 #endif
   return dom;
 }
 
 void DimensionPeeler::MapDimToSpace(AffinityAnalyzer &aff, Dim *dom_dim, int axis_idx) {
-  std::vector<Dim*> prod_visit;
-  std::vector<Dim*> cons_visit;
-  std::unordered_set<Dim*> visited;
+  std::vector<Dim *> prod_visit;
+  std::vector<Dim *> cons_visit;
+  std::unordered_set<Dim *> visited;
   auto ProdVisitor = [&](Dim *dim, Dim *prod, int affinity) -> bool {
     if (visited.count(prod)) return false;
     if (prod != nullptr) visited.insert(prod);
@@ -429,10 +437,8 @@ void DimensionPeeler::MapDimToSpace(AffinityAnalyzer &aff, Dim *dom_dim, int axi
   };
   AddDimMap(dom_dim, axis_idx);
   visited.insert(dom_dim);
-  if (!dom_dim->prod.empty())
-    prod_visit.emplace_back(dom_dim);
-  if (!dom_dim->cons.empty())
-    cons_visit.emplace_back(dom_dim);
+  if (!dom_dim->prod.empty()) prod_visit.emplace_back(dom_dim);
+  if (!dom_dim->cons.empty()) cons_visit.emplace_back(dom_dim);
   while (!prod_visit.empty() || !cons_visit.empty()) {
     while (!prod_visit.empty()) {
       Dim *dim = prod_visit.back();
@@ -440,7 +446,7 @@ void DimensionPeeler::MapDimToSpace(AffinityAnalyzer &aff, Dim *dom_dim, int axi
       aff.VisitProd(dim, ProdVisitor);
     }
     while (!cons_visit.empty()) {
-      Dim * dim = cons_visit.back();
+      Dim *dim = cons_visit.back();
       cons_visit.pop_back();
       aff.VisitCons(dim, ConsVisitor);
     }
@@ -453,10 +459,10 @@ bool DimensionPeeler::Propagation(int axis_idx, Dim *from, Dim *to, int affinity
   } else if (affinity == AffinityAnalyzer::AF_BROADCAST) {
     return false;
   } else if (affinity == AffinityAnalyzer::AF_REDUCE) {
-    axis_space_[axis_idx]->peel_val.clear(); 
+    axis_space_[axis_idx]->peel_val.clear();
     return false;
   } else {
-    CHECK(0); // TODO: add other type and update axis->peel_val
+    CHECK(0);  // TODO: add other type and update axis->peel_val
   }
   return true;
 }
@@ -471,10 +477,55 @@ void DimensionPeeler::AddDimMap(Dim *dim, int axis_idx) {
     dim_map_.emplace(dim->tensor->ref, std::move(map));
   }
 #if PEEL_DUMP
-  std::cout<<"DimMap: "<<dim->tensor->ref.get()<<"%%"<<dim->tensor->op
-           <<": "<<dim->index<<" -> "<<axis_idx<<std::endl;
+  std::cout << "DimMap: " << dim->tensor->ref.get() << "%%" << dim->tensor->op << ": " << dim->index << " -> "
+            << axis_idx << std::endl;
 #endif
-} 
+}
 
+DimensionPeeler::Peeling Str2Peeling(const std::string &peeling) {
+  std::vector<std::string> vec;
+  std::istringstream iss(peeling);
+  std::string s;
+  while (iss >> s) {
+    vec.push_back(s);
+  }
+
+  const int entry_size = 2;
+  if (vec.size() % entry_size != 0) {
+    LOG(FATAL)
+      << "Parse peeling failed, valid peeling's format is a string composed of axis value pair(e.g. \"0 1024 1 "
+         "1024\", \"0 1024\", \"1 1024\"), but current is: "
+      << peeling;
+  }
+
+  DimensionPeeler::Peeling ret;
+  char *endptr = nullptr;
+  const int base = 10;
+  for (size_t i = 0; i < vec.size(); i += entry_size) {
+    int axis = static_cast<int>(strtol(vec[i].c_str(), &endptr, base));
+    if (*endptr) {
+      LOG(FATAL) << "Parse peeling axis failed, axis should be integer, but got " << vec[i];
+    }
+    int64_t value = strtol(vec[i + 1].c_str(), &endptr, base);
+    if (*endptr) {
+      LOG(FATAL) << "Parse peeling value failed, value should be integer, but got " << vec[i + 1];
+    }
+    ret.push_back(std::make_pair(axis, value));
+  }
+
+  return ret;
+}
+
+Expr Peeling2Str(const DimensionPeeler::Peeling &peeling) {
+  std::string ret;
+  for (size_t i = 0; i < peeling.size(); ++i) {
+    ret += std::to_string(peeling[i].first);
+    ret += " ";
+    ret += std::to_string(peeling[i].second);
+    if (i != peeling.size() - 1) {
+      ret += " ";
+    }
+  }
+  return Expr(ret);
+}
 }  // namespace akg
-

@@ -196,6 +196,7 @@ class UserConfig {
 
     // Mind-trick pass
     ParseIntAttr(attrs, "constrain_schedule_verbosity", &constrain_schedule_verbosity_);
+    ParseIntAttr(attrs, "enable_multicore", &enable_multicore_);
     ParseBoolAttr(attrs, "enable_mind_trick", &enable_mind_trick_);
     ParseStringAttr(attrs, "mind_trick", &mind_trick_);
 
@@ -322,6 +323,7 @@ class UserConfig {
   bool GetPragmaAnalyzeReuseBuffer() const { return pragma_analyze_reuse_buffer_; }
   bool GetPragmaAllowTailTiling() const { return pragma_allow_tail_tiling_; }
   bool GetPragmaAnalyzeMulticore() const { return pragma_analyze_multicore_; }
+  int GetEnableMulticore() const { return enable_multicore_; }
   int GetPruneTuningSpaceLevel() const { return prune_tuning_space_level_; }
   bool GetTileCheckCoincident() const { return tile_check_coincident_; }
   void SetTileCheckCoincident(const bool tile_check_coincident) { tile_check_coincident_ = tile_check_coincident; }
@@ -629,6 +631,7 @@ class UserConfig {
   bool pragma_speedup_tiling_{false};
   bool pragma_allow_tail_tiling_{true};
   bool pragma_analyze_multicore_{true};
+  int enable_multicore_{-1};
   int prune_tuning_space_level_{0};  // 0: no_prune; 1: prune mem-exceed; 2: prune aligned_mem-exceed
   bool tile_check_coincident_{true};
   int max_unroll_loop_{1};

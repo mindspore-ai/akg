@@ -255,6 +255,8 @@ def get_result(desc, poly, attrs=None, profiling=True, need_compare=True):
         return True
     input_for_mod, expect, output_indexes = gen_json_data(desc)
     output = utils.mod_launch(mod, input_for_mod, output_indexes)
+    if isinstance(output, tuple):
+        output = output[0]
 
     compare_tolerance = get_compare_tolerance(desc, output_indexes)
     compare_res = list(map(_compare_func, output if isinstance(output, (list, tuple)) else [output],

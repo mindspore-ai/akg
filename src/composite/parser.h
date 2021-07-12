@@ -152,20 +152,7 @@ class OpDescsParser {
     tensor_info.emplace_back(info);
   }
 
-  void ParseInputTensors(const picojson::array &tensor_descs, OpDesc &op_desc_info) {
-    Map<std::string, NodeRef> &attrs = op_desc_info.attrs;
-    std::vector<TensorInfo> tensor_info;
-    for (const auto &tensor_desc_l0 : tensor_descs) {
-      CHECK(tensor_desc_l0.is<picojson::array>());
-      const picojson::array &tensor_desc_l1 = tensor_desc_l0.get<picojson::array>();
-      for (const auto &tensor_desc : tensor_desc_l1) {
-        CHECK(tensor_desc.is<picojson::object>());
-        const picojson::object &tensor_desc_info = tensor_desc.get<picojson::object>();
-        ParseTensorInfo(tensor_desc_info, tensor_info);
-      }
-    }
-
-    // Gather data format information of input tensors
+  void ParseTensorFormat(const std::vector<TensorInfo> &tensor_info, Map<std::string, NodeRef> &attrs) {
     for (const auto &info : tensor_info) {
       if (!info.format_.empty()) {
         auto key = CreateDataFormatKey(info.name_);
@@ -176,6 +163,21 @@ class OpDescsParser {
         attrs.Set(key, format);
       }
     }
+  }
+
+  void ParseInputTensors(const picojson::array &tensor_descs, OpDesc &op_desc_info) {
+    std::vector<TensorInfo> tensor_info;
+    for (const auto &tensor_desc_l0 : tensor_descs) {
+      CHECK(tensor_desc_l0.is<picojson::array>());
+      const picojson::array &tensor_desc_l1 = tensor_desc_l0.get<picojson::array>();
+      for (const auto &tensor_desc : tensor_desc_l1) {
+        CHECK(tensor_desc.is<picojson::object>());
+        const picojson::object &tensor_desc_info = tensor_desc.get<picojson::object>();
+        ParseTensorInfo(tensor_desc_info, tensor_info);
+      }
+    }
+    // Gather data format information of input tensors
+    ParseTensorFormat(tensor_info, op_desc_info.attrs);
     op_desc_info.input_tensor_info = tensor_info;
     MakeTensors(tensor_info, op_desc_info.input_descs);
   }
@@ -187,6 +189,8 @@ class OpDescsParser {
       const picojson::object &tensor_desc_info = tensor_desc.get<picojson::object>();
       ParseTensorInfo(tensor_desc_info, tensor_info);
     }
+    // Gather data format information of output tensors
+    ParseTensorFormat(tensor_info, op_desc_info.attrs);
     op_desc_info.output_tensor_info = tensor_info;
     MakeTensors(tensor_info, op_desc_info.output_descs);
   }

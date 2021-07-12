@@ -57,7 +57,8 @@ NodeRef LowerFunc(Stmt &stmt, const std::string &name, const BuildConfig &config
 
 NodeRef Lower(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeRef> &shape_vars, const std::string &name,
               const Map<Tensor, Buffer> &in_binds, const Map<std::string, NodeRef> &in_attrs, bool simple_mode,
-              bool polyhedral, bool tuning, const std::string &target, const BuildConfig &config, bool get_stmt = false);
+              bool polyhedral, bool tuning, const std::string &target, const BuildConfig &config,
+              bool get_stmt = false);
 
 air::runtime::Module BuildModule(const Schedule &inputs, const Array<NodeRef> &in_args,
                                  const Array<NodeRef> &shape_vars, const std::string &target_name,
@@ -144,6 +145,8 @@ class LowerData {
   bool get_feature_{false};
 };
 
+Buffer DeclBuffer(const NodeRef &arg, const int data_alignment, const int offset_factor,
+                  const std::string &pre_name = "");
 NodeRef LowerAscend(Stmt &stmt, LowerData &data, LowerStage begin = LowerStage::BEGIN,
                     LowerStage end = LowerStage::END);
 void RenameBinds(Map<Tensor, Buffer> &binds, const BuildConfig &config, Array<NodeRef> &tensor_args_list,

@@ -21,6 +21,7 @@
 #include <codegen/util.h>
 #include "composite/util.h"
 #include "stitch_fusion.h"
+#include "build_module.h"
 
 namespace akg {
 class DumpManager {
@@ -80,6 +81,7 @@ class DumpManager {
   bool active_{false};
   int id_{0};
 };
+void DumpStr2File(const std::string &file_name, const std::string &str);
 void DumpStmt2File(const std::string &file_name, const Stmt &stmt);
 void DumpStitchInfo(const std::string &kernel_name, StitchAttrInfo &store_attr,
                     std::unordered_map<std::string, StitchBufferInfo> &stitch_buffer_map,
@@ -88,6 +90,7 @@ void DumpStitchInfo(const std::string &kernel_name, StitchAttrInfo &store_attr,
 void DumpIRAttr(const std::string &kernel_name, const IrAttrInfo &attr, size_t index);
 void DumpHeader(std::ofstream &of, const std::string &str);
 void DumpBuildInfo(const BuildInfo &info);
+void DumpLowerData(const LowerData &data);
 }  // namespace akg
 
 #endif  // COMPOSITE_DUMP_H_

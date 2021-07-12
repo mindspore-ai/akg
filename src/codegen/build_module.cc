@@ -62,8 +62,7 @@ Tensor CreatePlaceholder(const NodeRef &arg) {
   return Operation(n).output(0);
 }
 
-Buffer DeclBuffer(const NodeRef &arg, const int data_alignment, const int offset_factor,
-                  const std::string &pre_name = "") {
+Buffer DeclBuffer(const NodeRef &arg, const int data_alignment, const int offset_factor, const std::string &pre_name) {
   // use default value.
   Array<Expr> strides;
 
@@ -630,7 +629,8 @@ NodeRef Lower(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeRef> 
   return lowered_func;
 #else
   Stmt stmt = Downcast<Stmt>(tmp);
-  LowerData data{args, arg_list_0, binds, binds_0, shape_vars, name, simple_mode, polyhedral, tuning, target, config, get_stmt};
+  LowerData data{args,        arg_list_0, binds,  binds_0, shape_vars, name,
+                 simple_mode, polyhedral, tuning, target,  config,     get_stmt};
   return LowerAscend(stmt, data);
 #endif
 }

@@ -395,9 +395,7 @@ def profiling_mode_run(mod, args, outputs, tuning, device_id):
         logging.error("OOPS, can't correctly parsing cycles!")
     TestUtils.record_cycle(cycle)
     logging.info('=====parsing cycles==============================')
-    if tuning:
-        return out_list[0] if len(out_list) == 1 else tuple(out_list), {'run_time': cycle}
-    return out_list[0] if len(out_list) == 1 else tuple(out_list)
+    return out_list[0] if len(out_list) == 1 else tuple(out_list), {'run_time': cycle}
 
 
 def profiling_analyse(device_id, time_before_launch):

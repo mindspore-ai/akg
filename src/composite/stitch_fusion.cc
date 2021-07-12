@@ -33,12 +33,12 @@ Var GetReplaceVar(const Var &var, std::unordered_map<std::string, Var> &vars, co
   return replace;
 }
 
-class StitchMutate : public IRMutator {
+class StitchMutateGPU : public IRMutator {
  public:
-  explicit StitchMutate(std::unordered_map<std::string, StitchBufferInfo> &stitch_buffer_map,
-                        std::unordered_map<std::string, StitchBufferInfo> &buf_within_op_map,
-                        std::vector<std::string> &allocate_revoke, StitchAttrInfo &store_attr,
-                        const std::unordered_map<std::string, NodeRef> &real_outputs)
+  explicit StitchMutateGPU(std::unordered_map<std::string, StitchBufferInfo> &stitch_buffer_map,
+                           std::unordered_map<std::string, StitchBufferInfo> &buf_within_op_map,
+                           std::vector<std::string> &allocate_revoke, StitchAttrInfo &store_attr,
+                           const std::unordered_map<std::string, NodeRef> &real_outputs)
       : stitch_buffer_map_(stitch_buffer_map),
         buf_within_op_map_(buf_within_op_map),
         allocate_revoke_(allocate_revoke),
@@ -337,12 +337,10 @@ Stmt StitchFusionGpu(std::vector<Stmt> &stitch_irs, const std::string &kernel_na
                      const std::unordered_map<std::string, NodeRef> &real_outputs) {
   DumpStitchInfo(kernel_name, store_attr, stitch_buffer_map, buf_within_op_map, allocate_revoke);
   DumpStmt2File("stitch_info/" + kernel_name + "_before_stitch.cc", Block::make(stitch_irs));
-  auto func = StitchMutate(stitch_buffer_map, buf_within_op_map, allocate_revoke, store_attr, real_outputs);
+  auto func = StitchMutateGPU(stitch_buffer_map, buf_within_op_map, allocate_revoke, store_attr, real_outputs);
   CHECK(stitch_irs.size() > 1);
   size_t i = 0;
   for (auto &ir : stitch_irs) {
-    auto f = GridBlockDimsAttr();
-    f.Visit(ir);
     func.phase = i;
     ir = func.Run(ir);
     if (func.add_condition) {
@@ -359,6 +357,111 @@ Stmt StitchFusionGpu(std::vector<Stmt> &stitch_irs, const std::string &kernel_na
   stmt = Simplify(stmt);
   stmt = RemoveNoOp(stmt);
   DumpStmt2File("stitch_info/" + kernel_name + "_after_stitch_simplify.cc", stmt);
+  return stmt;
+}
+
+class StitchMutateAscend : public IRMutator {
+ public:
+  explicit StitchMutateAscend(std::unordered_map<std::string, NodeRef> &stitch_buffer,
+                              const std::unordered_map<std::string, NodeRef> &real_outputs)
+      : stitch_buffer_(stitch_buffer), real_outputs_(real_outputs) {}
+
+  Stmt Run(Stmt &s) {
+    s = Mutate(s);
+    s = AddStitchBufRealize(s);
+    return s;
+  }
+
+ private:
+  Stmt AddStitchBufRealize(Stmt &s) {
+    auto stmt = s;
+    for (auto &kv : stitch_buffer_vars_) {
+      auto t = kv.second;
+      Region bounds;
+      for (auto j : t->shape) {
+        bounds.push_back(Range::make_by_min_extent(Expr(0), j));
+      }
+      stmt = Realize::make(t->op, t->value_index, t->dtype, bounds, const_true(1), stmt);
+      stmt = AttrStmt::make(t->op, air::ir::attr::realize_scope, Expr("local.L1"), stmt);
+    }
+    return stmt;
+  }
+  Expr Mutate_(const Call *op, const Expr &e) final {
+    if (op->func.defined() && IsStitchBuffer(op->func->func_name())) {
+      auto name = op->func->func_name();
+      auto stitch_buffer = GetStitchBuffer(name);
+      auto stitch_name = stitch_buffer.as<BufferNode>()->name + "_stitch_local_L1";
+      CHECK(stitch_buffer_vars_.count(stitch_name));
+      auto stitch_var = stitch_buffer_vars_[stitch_name];
+      return Call::make(op->type, stitch_var->op->name, op->args, op->call_type, stitch_var->op, op->value_index);
+    }
+    return IRMutator::Mutate_(op, e);
+  }
+  Stmt Mutate_(const Provide *op, const Stmt &s) final {
+    auto stmt = Provide::make(op->func, op->value_index, this->Mutate(op->value), op->args);
+    auto gm_write = stmt;
+    auto name = op->func->func_name();
+    if (IsStitchBuffer(name)) {
+      auto stitch_name = name + "_stitch_local_L1";
+      bool new_buffer = !stitch_buffer_vars_.count(stitch_name);
+      auto stitch_buffer = GetStitchBuffer(name);
+      auto stitch_var = new_buffer ? NewL1Tensor(stitch_name, stitch_buffer.as<BufferNode>()->shape,
+                                                 stitch_buffer.as<BufferNode>()->dtype)
+                                   : stitch_buffer_vars_[stitch_name];
+      stmt = Provide::make(stitch_var->op, op->value_index, this->Mutate(op->value), op->args);
+      if (IsOutput(name)) {
+        stmt = Block::make(stmt, gm_write);
+      }
+    }
+    return stmt;
+  }
+  Tensor NewL1Tensor(const std::string &name, const Array<Expr> &shape, const Type &dtype) {
+    auto tensor = placeholder(shape, dtype, name);
+    stitch_buffer_vars_[name] = tensor;
+    return tensor;
+  }
+  NodeRef GetStitchBuffer(const std::string &name) {
+    CHECK(IsStitchBuffer(name));
+    if (stitch_buffer_.count(name)) return stitch_buffer_[name];
+    for (auto &kv : stitch_buffer_) {
+      if (kv.second.as<BufferNode>()->name == name) {
+        return kv.second;
+      }
+    }
+    return {};
+  }
+  bool IsStitchBuffer(const std::string &name) {
+    if (stitch_buffer_.count(name)) return true;
+    for (auto &kv : stitch_buffer_) {
+      if (kv.second.as<BufferNode>()->name == name) {
+        return true;
+      }
+    }
+    return false;
+  }
+  bool IsOutput(const std::string &name) {
+    for (auto &kv : real_outputs_) {
+      if (name == kv.second.as<BufferNode>()->name) {
+        return true;
+      }
+    }
+    return false;
+  }
+  std::unordered_map<std::string, NodeRef> stitch_buffer_;
+  std::unordered_map<std::string, NodeRef> real_outputs_;
+  std::unordered_map<std::string, Tensor> stitch_buffer_vars_;
+};
+Stmt StitchFusionAscend(std::vector<Stmt> &stitch_irs, const std::string &kernel_name,
+                        std::unordered_map<std::string, NodeRef> &stitch_buffer,
+                        const std::unordered_map<std::string, NodeRef> &real_outputs) {
+  CHECK(stitch_irs.size() > 1);
+  for (const auto &kv : stitch_buffer) {
+    LOG(INFO) << kv.first << " -> " << kv.second.as<BufferNode>()->name;
+  }
+  DumpStmt2File("stitch_info/" + kernel_name + "_before_stitch.cc", Block::make(stitch_irs));
+  auto stmt = Block::make(stitch_irs);
+  stmt = StitchMutateAscend(stitch_buffer, real_outputs).Run(stmt);
+  DumpStmt2File("stitch_info/" + kernel_name + "_after_stitch.cc", stmt);
   return stmt;
 }
 }  // namespace akg
