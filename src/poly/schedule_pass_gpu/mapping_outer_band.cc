@@ -29,7 +29,7 @@ namespace ir {
 namespace poly {
 
 isl::schedule_node MappingOuterBand::DoThreadSynchronization(const isl::schedule_node &node,
-                                                             const std::vector<MappingCfg *> other_mapping_cfg) {
+                                                             const std::vector<MappingCfg *> &other_mapping_cfg) {
   auto sync_node = node;
   auto sync_manager = scop_info_.sync_manager_;
   auto thread_cfg = scop_info_.user_config_.GetThreadConfig();
@@ -233,7 +233,7 @@ isl::schedule_node MappingOuterBand::FillRemainingThreads(isl::schedule_node &no
 
   isl::schedule_node_band band_node = node.as<isl::schedule_node_band>();
   Mapping mapping;
-  auto after_map_node = MapInnerDimToThreads(band_node, false, thread_cfg, mapping, false);
+  auto after_map_node = MapInnerDimToThreads(band_node, thread_cfg, mapping, false, false);
   bool is_tiled = GetMarkerName(after_map_node, THREAD_MARKER).empty();
   after_map_node = is_tiled ? after_map_node.child(0) : after_map_node;
   scop_info_.upa_node_mapping_.emplace_back(std::make_pair(after_map_node, mapping));
@@ -449,7 +449,7 @@ isl::schedule MappingOuterBand::DoBlockMapping(const isl::schedule &sch) {
       block_cfg->SwapConfig(0, new_idx);
     } else {
       // for manual configs, we need to use the user-specifed config idx, so that we can record the shifted idx and it
-      // will be used in CreateAndInsertMapFilter, for example:
+      // will be used in AnalysisNodeAndInsertMapFilter, for example:
       // [before] bx = 1(map), by = 1024; [after] bx = 1, by = 1024(map);
       map_idx_shift.insert({0, new_idx});
       map_idx_shift.insert({new_idx, 0});
@@ -478,8 +478,148 @@ isl::schedule MappingOuterBand::DoBlockMapping(const isl::schedule &sch) {
   return final_schedule;
 }
 
+isl::schedule_node MappingOuterBand::InsertCustomMappingFilter(const isl::schedule_node &node,
+                                                               isl::union_pw_aff_list upa_list, MappingCfg *mapping_cfg,
+                                                               Mapping &mapping,
+                                                               std::unordered_map<int, std::string> custom_mapping,
+                                                               std::unordered_set<std::string> outer_mapping_cfg) {
+  isl::union_set domain = node.get_schedule().get_domain();
+
+  std::unordered_set<std::string> current_mapping_cfg;
+  for (size_t i = 0; i < upa_list.size(); ++i) {
+    if (custom_mapping.count(static_cast<int>(i)) == 0) {
+      continue;
+    }
+    auto mapping_i = custom_mapping[static_cast<int>(i)];
+    current_mapping_cfg.emplace(mapping_i);
+    std::pair<std::string, int> cfg = mapping_cfg->GetAt(mapping_i);
+
+    auto upa = upa_list.get_at(i);
+    CHECK_GT(cfg.second, 0);
+    upa = upa.mod(isl::val(node.ctx(), cfg.second));
+    auto id = isl::id(node.ctx(), cfg.first);
+    mapping[id] = upa;
+    domain = upa.domain();
+  }
+
+  if (!outer_mapping_cfg.empty()) {
+    for (size_t i = 0; i < mapping_cfg->bound; ++i) {
+      CHECK(!domain.is_null());
+      auto universe = domain.universe();
+      if (current_mapping_cfg.find(mapping_cfg->GetAt(i).first) != current_mapping_cfg.end()) {
+        continue;
+      }
+
+      if (outer_mapping_cfg.find(mapping_cfg->GetAt(i).first) != outer_mapping_cfg.end()) {
+        continue;
+      }
+      std::pair<std::string, int> cfg = mapping_cfg->GetAt(i);
+      auto id = isl::id(node.ctx(), cfg.first);
+      mapping[id] = isl::union_pw_aff(universe, isl::val::zero(domain.ctx()));
+    }
+  }
+
+  return InsertMapFilter(node, false, mapping);
+}
+
+isl::schedule_node MappingOuterBand::MapCustomHelper(const isl::schedule_node orig_node, const bool is_inner,
+                                                     MappingCfg *mapping_cfg) {
+  auto node = orig_node;
+  auto band_node = node.as<isl::schedule_node_band>();
+  if (!band_node || !band_node.permutable()) {
+    return node;
+  }
+
+  std::unordered_map<int, std::string> custom_mapping_cfg = {};
+  int start_node_depth = node.get_tree_depth();
+  auto partial_schedule = band_node.get_partial_schedule();
+  auto upa_list = partial_schedule.get_union_pw_aff_list();
+  Mapping mapping;
+
+  if (is_inner) {
+    custom_mapping_cfg = scop_info_.user_config_.GetCustomInnerMapping();
+    CHECK(!custom_mapping_cfg.empty()) << "The custom inner configuration was not obtained.";
+
+    auto prefix_upa_list = GetPrefixPartialSchedule(partial_schedule, node, true);
+    isl::schedule_node fix_node =
+      CheckMapSizeAndApplyTile(node, prefix_upa_list, mapping_cfg, true, custom_mapping_cfg);
+    node = node.insert_mark(isl::id(node.ctx(), THREAD_MARKER)).child(0);
+    std::unordered_set<std::string> outer_mapping_cfg = {SKIP_MARKER};
+
+    for (auto outer_mapping : scop_info_.user_config_.GetCustomOuterMapping()) {
+      outer_mapping_cfg.emplace(outer_mapping.second);
+    }
+    node = InsertCustomMappingFilter(node, upa_list, mapping_cfg, mapping, custom_mapping_cfg, outer_mapping_cfg);
+
+  } else {
+    custom_mapping_cfg = scop_info_.user_config_.GetCustomOuterMapping();
+    CHECK(!custom_mapping_cfg.empty()) << "The custom outer configuration was not obtained.";
+
+    auto domain = band_node.get_schedule().get_domain();
+    isl::union_pw_aff_list range_aff_list(band_node.ctx(), static_cast<int>(upa_list.size()));
+    for (int i = upa_list.size() - 1; i >= 0; --i) {
+      auto range = upa_list.get_at(i).intersect_domain(domain);
+      range_aff_list = range_aff_list.add(range);
+    }
+    node = CheckMapSizeAndApplyTile(node, range_aff_list, mapping_cfg, true, custom_mapping_cfg);
+    node = node.insert_mark(isl::id(node.ctx(), BLOCK_MARKER)).child(0);
+    node = InsertCustomMappingFilter(node, upa_list, mapping_cfg, mapping, custom_mapping_cfg);
+  }
+
+  scop_info_.upa_node_mapping_.emplace_back(std::make_pair(node.parent(), mapping));
+  int end_node_depth = node.get_tree_depth() - start_node_depth;
+  node = node.ancestor(end_node_depth);
+  return node;
+}
+
+isl::schedule MappingOuterBand::DoCustomMapping(const isl::schedule &sch) {
+  auto thread_cfg = scop_info_.user_config_.GetThreadConfig();
+  CHECK(thread_cfg != nullptr) << "thread config is null";
+
+  RoadMap thread_record;
+  auto MapFromInner = [&thread_record, thread_cfg, this](isl::schedule_node node) -> isl::schedule_node {
+    if (CanBeMappedToThread(node, thread_record)) {
+      auto node_bak = node;
+      node = MapCustomHelper(node, true, thread_cfg);
+      if (!node_bak.is_equal(node)) {
+        node = node.parent();
+        thread_record.emplace_back(std::make_pair(node, thread_cfg->bound));
+      } else {
+        thread_record.emplace_back(std::make_pair(node, 0));
+      }
+      return node;
+    }
+    if (node.n_children() <= 1 || NumMappedDescendant(thread_record, node) <= 0) {
+      return node;
+    }
+    node = MapSequenceNode(node, thread_record);
+    if (node.isa<isl::schedule_node_sequence>()) {
+      node = DoThreadSynchronization(node);
+    }
+
+    return node;
+  };
+  auto node = sch.get_root().map_descendant_bottom_up(MapFromInner);
+
+  node = GetOuterBand(node);
+  if (scop_info_.analysis_result_.GetIsOuterBlockMapping()) {
+    auto block_cfg = scop_info_.user_config_.GetBlockConfig();
+    CHECK(block_cfg != nullptr) << "block config is null";
+    node = MapCustomHelper(node, false, block_cfg);
+  } else {
+    node = MapCustomHelper(node, false, thread_cfg);
+  }
+
+  return node.get_schedule();
+}
+
 isl::schedule MappingOuterBand::Run(isl::schedule sch) {
   sch = InsertContextNode(sch, scop_info_);
+
+  if (scop_info_.analysis_result_.GetIsCustomMapping()) {
+    sch = DoCustomMapping(sch);
+    return sch;
+  }
 
   if (scop_info_.user_config_.GetEnableAkgReduceLib()) {
     ReduceMappingStrategy reduce_op(pass_info_, scop_info_);

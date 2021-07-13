@@ -76,9 +76,18 @@ void TileOuterBand::InitDimensionInfo(const isl::schedule &sch_init) {
     return;
   }
 
+  int dim_info_entry_size = 4;
+  const std::vector<std::string> thread_block_list = {T0, T1, T2, B0, B1, B2};
+  for (auto i : thread_block_list) {
+    if (dim.find(i) != std::string::npos) {
+      scop_info_.analysis_result_.SetIsCustomMapping(true);
+      dim_info_entry_size = 6;
+      break;
+    }
+  }
+
   const std::string pattern = " ";
   std::vector<std::string> str = Split(dim, pattern);
-  const int dim_info_entry_size = 4;
   CHECK(!str.empty() && !(str.size() % dim_info_entry_size)) << "Error: You need to set dim !";
   int sequence = 0;
   for (size_t i = 0; i < str.size(); i += dim_info_entry_size) {
@@ -108,7 +117,55 @@ void TileOuterBand::InitDimensionInfo(const isl::schedule &sch_init) {
     dim_info.dim_seq = sequence;
     sequence++;
     scop_info_.analysis_result_.InsertDimensionInfo(dim_info);
+
+    if (scop_info_.analysis_result_.GetIsCustomMapping()) {
+      CustomMappingConfig(str, i);
+    }
   }
+}
+
+void TileOuterBand::CustomMappingConfig(const std::vector<std::string> &str, const int index) {
+  CHECK(str.size() >= 6) << "The configuration length of custom mapping must not be less than 6.";
+  int axis_number = static_cast<int>(WrappedStrtol(str[index + 1]));
+  auto CheckCustomMapping = [this](std::unordered_map<int, std::string> custom_mapping_map) -> void {
+    const std::unordered_set<std::string> thread_set = {T0, T1, T2};
+    const std::unordered_set<std::string> block_set = {B0, B1, B2};
+
+    size_t thread_prefix = 0;
+    size_t block_prefix = 0;
+    for (auto custom_mapping : custom_mapping_map) {
+      if (thread_set.find(custom_mapping.second) != thread_set.end()) {
+        ++thread_prefix;
+      } else if (block_set.find(custom_mapping.second) != block_set.end()) {
+        ++block_prefix;
+      } else {
+        LOG(FATAL) << "The custom configuration must be t0, t1, t2, b0, b1 and b2.";
+      }
+    }
+    if (thread_prefix != custom_mapping_map.size() && block_prefix != custom_mapping_map.size()) {
+      LOG(FATAL) << "All of the inner configuration or the outer configuration must be threads or blocks.";
+    }
+
+    if (thread_prefix == custom_mapping_map.size()) {
+      scop_info_.analysis_result_.SetIsOuterBlockMapping(false);
+    } else {
+      scop_info_.analysis_result_.SetIsOuterBlockMapping(true);
+    }
+  };
+  std::string outer_mapping = str[index + 4];
+  if (outer_mapping != "-") {
+    scop_info_.user_config_.RecordCustomOuterMapping(axis_number, outer_mapping);
+  }
+
+  std::string inner_mapping = str[index + 5];
+  if (inner_mapping != "-") {
+    scop_info_.user_config_.RecordCustomInnerMapping(axis_number, inner_mapping);
+  }
+
+  CheckCustomMapping(scop_info_.user_config_.GetCustomInnerMapping());
+  CheckCustomMapping(scop_info_.user_config_.GetCustomOuterMapping());
+  scop_info_.user_config_.RecordCustomInnerMapping(-1, "");
+  scop_info_.user_config_.RecordCustomOuterMapping(-1, "");
 }
 
 void TileOuterBand::MergeTilingInfo() {
@@ -151,7 +208,7 @@ isl::schedule TileOuterBand::Run(isl::schedule sch) {
 }
 
 isl::schedule_node TileOuterBand::ReverseTraverseChild(isl::schedule_node node,
-                                                       const std::function<isl::schedule_node(isl::schedule_node)> f) {
+                                                       const std::function<isl::schedule_node(isl::schedule_node)> &f) {
   if (node.isa<isl::schedule_node_band>()) {
     tile_sizes_ = tiles_[0].dim_infos;
     node = node.map_descendant_bottom_up(f);

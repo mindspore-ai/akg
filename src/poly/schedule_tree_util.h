@@ -95,20 +95,23 @@ std::vector<isl::schedule_node> BandsSplitAfterDepth(const std::vector<isl::sche
                                                      isl::schedule_node &root, size_t depth);
 isl::union_pw_aff_list GetUPAList(const isl::schedule_node &node, isl::multi_union_pw_aff &partial_schedule,
                                   const bool is_promotion, const bool need_reverse);
-isl::schedule_node MapInnerDimToThreads(const isl::schedule_node &node, const bool is_promotion,
-                                        MappingCfg *mapping_cfg, Mapping &mapping, const bool need_reverse);
-isl::schedule_node CreateAndInsertMapFilter(const isl::schedule_node &node, const bool is_promotion,
-                                            isl::union_pw_aff_list upa_list, MappingCfg *mapping_cfg, Mapping &mapping,
-                                            std::unordered_map<size_t, size_t> map_idx_shift = {});
+isl::schedule_node MapInnerDimToThreads(const isl::schedule_node &node, MappingCfg *mapping_cfg, Mapping &mapping,
+                                        const bool is_promotion, const bool need_reverse);
+isl::schedule_node AnalysisNodeAndInsertMapFilter(const isl::schedule_node &node, const bool is_promotion,
+                                                  isl::union_pw_aff_list upa_list, MappingCfg *mapping_cfg,
+                                                  Mapping &mapping,
+                                                  std::unordered_map<size_t, size_t> map_idx_shift = {});
+isl::schedule_node InsertMapFilter(const isl::schedule_node &node, const bool is_promotion, Mapping &mapping);
 isl::schedule_node CheckMapSizeAndApplyTile(const isl::schedule_node &thread_root,
                                             const isl::union_pw_aff_list &aff_list, MappingCfg *mapping_cfg,
-                                            const bool need_reverse);
+                                            const bool need_reverse,
+                                            std::unordered_map<int, std::string> custom_mapping = {});
 
 bool IsEqualNode(const isl::schedule_node node1, const isl::schedule_node node2);
 isl::multi_union_pw_aff MapDomainToThread(const isl::schedule_node &node, MappingCfg *mapping_cfg,
                                           const UpaNodeMapping &upa_node_mapping);
 isl::multi_union_pw_aff MapDomainAllWithType(const isl::schedule_node &node, MappingCfg *mapping_cfg,
-                                             const UpaNodeMapping &upa_node_mapping, const std::string map_type);
+                                             const UpaNodeMapping &upa_node_mapping, const std::string &map_type);
 
 isl::map CreateMapIncreaseDim(isl::space space, unsigned dim);
 
@@ -121,8 +124,8 @@ isl::schedule_node UnrollByMarkOptions(isl::schedule_node &node, uint64_t unroll
 isl::map GetExtensionSpace(const isl::schedule_node &node, const isl::id &id);
 isl::schedule_node InsertExtensionNodeBeforeOrAfter(const isl::schedule_node &node, const isl::id &id, bool before);
 
-isl::schedule InsertMarkerForThreadGroup(const isl::schedule sch, const std::string write_name,
-                                         const std::string marker_name);
+isl::schedule InsertMarkerForThreadGroup(const isl::schedule &sch, const std::string &write_name,
+                                         const std::string &marker_name);
 std::string GetMarkerName(const isl::schedule_node &node, std::string find_name);
 
 isl::union_set GetBlockMappingFilterInfo(const isl::schedule_node node, MappingCfg *block_cfg,
@@ -131,13 +134,16 @@ isl::union_set GatherMappingsTo(const isl::schedule_node &root, MappingCfg *cfg)
 
 bool ReuseTensorCluster(const TensorFootprintCluster &cluster, const isl::multi_union_pw_aff &outer_pw_aff);
 
-isl::schedule_node CollectMarkNodeOnPromotion(isl::schedule_node root, const std::string mark);
+isl::schedule_node CollectMarkNodeOnPromotion(const isl::schedule_node &root, const std::string &mark);
 
 std::unordered_map<std::string, std::string> GetMatmulTensorsName(ScopInfo &scop_info);
 
 bool IsTensorAB(const std::string &item, ScopInfo &scop_info);
 
 isl::schedule_node AdjustConvScheduleTreeStructure(const isl::schedule_node &orig_node, const bool is_promotion = true);
+
+isl::union_pw_aff_list GetPrefixPartialSchedule(const isl::multi_union_pw_aff partial_schedule,
+                                                const isl::schedule_node node, const bool need_reverse);
 
 }  // namespace poly
 }  // namespace ir

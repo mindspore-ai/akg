@@ -42,6 +42,13 @@ class MappingOuterBand : public SchedulePass {
 
   isl::schedule DoBlockMapping(const isl::schedule &sch);
 
+  isl::schedule DoCustomMapping(const isl::schedule &sch);
+  isl::schedule_node MapCustomHelper(const isl::schedule_node orig_node, const bool is_inner, MappingCfg *mapping_cfg);
+  isl::schedule_node InsertCustomMappingFilter(const isl::schedule_node &node, isl::union_pw_aff_list upa_list,
+                                               MappingCfg *mapping_cfg, Mapping &mapping,
+                                               std::unordered_map<int, std::string> custom_mapping,
+                                               std::unordered_set<std::string> outer_mapping_cfg = {});
+
   size_t NumMappedDescendant(const RoadMap &thread_roadmap, const isl::schedule_node parent);
 
   bool CanBeMappedToThread(const isl::schedule_node node, const RoadMap &thread_record);
@@ -54,7 +61,7 @@ class MappingOuterBand : public SchedulePass {
    * Functions related to synchronization.
    */
   isl::schedule_node DoThreadSynchronization(const isl::schedule_node &node,
-                                             const std::vector<MappingCfg *> other_mapping_cfg = {});
+                                             const std::vector<MappingCfg *> &other_mapping_cfg = {});
 
   // preparation for synchronization
   isl::multi_union_pw_aff MapDomainToWarp(const isl::schedule_node &nod, MappingCfg *mapping_cfg,

@@ -66,16 +66,16 @@ class SharedMemoryManager : public SchedulePass {
 
   void UpdateDepth(const isl::schedule_node &root);
 
-  std::vector<size_t> OptimizeSharedDimension(std::vector<size_t> sizes);
-  std::vector<size_t> OptimizeBankConflict(std::vector<size_t> sizes);
-  std::vector<size_t> OptimizeVectorAlign(std::vector<size_t> sizes);
+  std::vector<size_t> OptimizeSharedDimension(const std::vector<size_t> &sizes);
+  std::vector<size_t> OptimizeBankConflict(const std::vector<size_t> &sizes);
+  std::vector<size_t> OptimizeVectorAlign(const std::vector<size_t> &sizes);
   bool UnderThreadMarker(size_t depth);
 
   std::string InAtomicTensors(isl::schedule_node &node);
-  bool InAtomicTensors(std::string name);
-  bool InReduceTensors(std::string name);
+  bool InAtomicTensors(const std::string &name);
+  bool InReduceTensors(const std::string &name);
 
-  std::string AtomicMarker(std::string type);
+  std::string AtomicMarker(const std::string &type);
 
   std::set<std::string> AnalysisReduceTensors();
 

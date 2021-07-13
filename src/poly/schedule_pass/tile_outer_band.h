@@ -56,7 +56,7 @@ class TileOuterBand : public SchedulePass {
 
   void ShowDimInfo();
   isl::schedule_node ReverseTraverseChild(isl::schedule_node node,
-                                          const std::function<isl::schedule_node(isl::schedule_node)> f);
+                                          const std::function<isl::schedule_node(isl::schedule_node)> &f);
   isl::schedule_node MarkOuterPermutableCuda(isl::schedule_node node);
   isl::schedule_node MarkOuterPermutableNpu(isl::schedule_node node);
   int IsOuterTilable(const isl::schedule_node &node);
@@ -95,6 +95,7 @@ class TileOuterBand : public SchedulePass {
   isl::schedule_node InsertPromoteMarker(const isl::schedule_node node);
   void ResetWarpMappingConfig();
   isl::schedule_node MatmulTile(const isl::schedule_node &node);
+  void CustomMappingConfig(const std::vector<std::string> &str, const int index);
 
  private:
   PassInfo &pass_info_;
