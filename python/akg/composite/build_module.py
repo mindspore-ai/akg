@@ -109,7 +109,6 @@ def shared_memory_optimization(desc_d, req_map, outputs):
     for i in range(len(sort_req_liveness)):
         reuse = False
         find_conflit = False
-        ### TODO: the check is used due to the initialization clause position of reduce computation.
         if sort_req_liveness[sort_req_buf[i]].is_reduce:
             alloc_map[sort_req_buf[i]] = ['ALLOC', req_map[sort_req_buf[i]]]
             continue
@@ -809,7 +808,8 @@ def _set_reducemax_attrs(desc_d, attrs):
 
 def _update_attrs_gpu(kernel_info, attrs, poly):
     if poly:
-        attrs["enable_akg_reduce_lib"] = True
+        if "enable_akg_reduce_lib" not in attrs.keys():
+            attrs["enable_akg_reduce_lib"] = True
         if "pragma_enable_matmul" not in attrs.keys() and should_enable_tensor_core(kernel_info):
             attrs['pragma_enable_matmul'] = True
             attrs['enable_auto_inline'] = False
@@ -941,8 +941,6 @@ def _get_online_tune_attr(desc_s, attrs, repo_path, use_new_space=False):
                                             use_new_space=use_new_space,
                                             attrs=attrs,
                                             generate_trait=generate_trait)
-        # TODO(baiji): recover this line to use actual repo (e.g. repository.json) instead of testing repo (tuner_v2_repo.json)
-        # task_options.repo_path = repo_path
         best_config = auto_tune.tune_composite_v2(desc_s,
                                                   task_options=task_options)
     else:
