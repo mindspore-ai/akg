@@ -135,7 +135,7 @@ class CSE {
       count_used_number(op);
     }
     for (const auto op : counter) {
-      if (op.second > 1){
+      if (op.second > 1) {
         RemoveShortCommonExpr(op.first, op.first);
       }
     }
@@ -173,7 +173,7 @@ class CSE {
   }
 
   void RemoveShortCommonExpr(const Operation op, const Operation root) {
-    if (const auto cur_op  = op.as<ComputeOpNode>()) {
+    if (const auto cur_op = op.as<ComputeOpNode>()) {
       for (const auto parent : cur_op->InputTensors()) {
         if (counter.count(parent->op) && counter[parent->op] > 0) {
           counter[parent->op] -= counter[root];
@@ -187,7 +187,55 @@ class CSE {
   std::unordered_map<Operation, int> counter;
 };
 
-void AutoInline(Schedule sch, const Target &target ,bool enable_cse) {
+std::unordered_set<Operation, NodeHash, NodeEqual> GetFilterOp(const Array<Expr> &filter_exprs) {
+  std::unordered_set<Operation, NodeHash, NodeEqual> filter_op;
+  for (const auto &arg : filter_exprs) {
+    PostOrderVisit(arg, [&filter_op](const NodeRef &node) {
+      if (auto call = node.as<Call>()) {
+        if (call->func.defined() && call->func->IsInstance<ComputeOpNode>()) {
+          filter_op.insert(Downcast<Operation>(call->func));
+        }
+      }
+    });
+  }
+  return filter_op;
+}
+
+class GetCubeMatmulInput : public IRVisitor {
+ public:
+  Array<Expr> Run(Schedule sch) {
+    for (Stage s : sch->stages) {
+      auto op = s->op;
+      if (op->tag == "dense" || op->tag == "batch_matmul" || op->tag == "matmul") {
+        auto compute_op = op.as<ComputeOpNode>();
+        CHECK(compute_op);
+        for (const auto &e : compute_op->body) {
+          Visit(e);
+        }
+      }
+    }
+    return input_exprs_;
+  }
+
+ private:
+  void Visit_(const Reduce *op) override {
+    if (op->combiner.defined() && op->combiner->result.size() > 0) {
+      auto call = op->combiner->result[0].as<Call>();
+      // "mad" : call of cube matmul in the cce
+      if (call && call->name == "mad" && call->call_type == Call::PureIntrinsic) {
+        auto mad_real_args = op->source;
+        for (auto arg : mad_real_args) {
+          input_exprs_.push_back(arg);
+        }
+      }
+    }
+    return IRVisitor::Visit_(op);
+  }
+
+  Array<Expr> input_exprs_;
+};
+
+void AutoInline(Schedule sch, const Target &target, bool enable_cse) {
   // Note: do not support inline of hybrid ops and extern ops
   std::unordered_set<Operation, NodeHash, NodeEqual> uninlinable;
   for (const Stage &s : sch->stages) {
@@ -213,8 +261,15 @@ void AutoInline(Schedule sch, const Target &target ,bool enable_cse) {
   }
 
   std::unordered_set<Operation> common_subexpr;
-  if (target->device_type == kDLGPU && enable_cse){
+  if (target->device_type == kDLGPU && enable_cse) {
     common_subexpr = CSE().FindCommonSubexpr(sch);
+  }
+
+  // For the CCE, do not perform the inline for input exprs of some calls
+  if (target->device_type == kDLCce) {
+    auto input_exprs = GetCubeMatmulInput().Run(sch);
+    auto filter_op = GetFilterOp(input_exprs);
+    uninlinable.insert(filter_op.begin(), filter_op.end());
   }
 
   for (Stage s : sch->stages) {

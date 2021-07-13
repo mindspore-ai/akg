@@ -704,7 +704,7 @@ TVM_REGISTER_GLOBAL("CudaBatchMatMul").set_body([](TVMArgs args, TVMRetValue *rv
   Array<Expr> output_shape = compute_out(left_shape, right_shape, transpose_a, transpose_b, batch_dim);
   reduce_k = air::reduce_axis(Range(0, k), "reduce_axis");
   auto name = "T_batch_matmul_" + left_matrix->op->name + "_" + right_matrix->op->name;
-  *rv = compute(output_shape, fcompute, name);
+  *rv = compute(output_shape, fcompute, name, "matmul");
 });
 
 // only support fractal_zN: [ko mo mi ki] * [no ko ki ni] = [no mo mi ni]
@@ -882,7 +882,7 @@ TVM_REGISTER_GLOBAL("AicoreBatchMatMul").set_body([](TVMArgs args, TVMRetValue *
   auto com_attrs = set_compute_attrs_zN();
 
   // compute matmul(a,b)
-  auto c_tensor = compute(output_shape, fcompute, name, "", com_attrs);
+  auto c_tensor = compute(output_shape, fcompute, name, "matmul", com_attrs);
 
   if (inputs.size() > 2) {
     auto bias = Downcast<Tensor>(inputs[2]);
