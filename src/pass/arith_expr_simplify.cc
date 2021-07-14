@@ -145,6 +145,9 @@ Expr ArithExprSimplifier::ScaleSubstitute(const Expr &e,
       sumexpr = sumexpr.defined() ? Add::make(sumexpr, item_expr) : item_expr;
     }
   }
+  if (!sumexpr.defined()) {
+    sumexpr = e;
+  }
   return sumexpr;
 }
 
