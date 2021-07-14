@@ -255,12 +255,16 @@ def get_result(desc, poly, attrs=None, profiling=True, need_compare=True):
         return True
     input_for_mod, expect, output_indexes = gen_json_data(desc)
     output = utils.mod_launch(mod, input_for_mod, output_indexes)
-    if isinstance(output, tuple):
+    # In profiling mode, mod_launch will return compute outputs and profiling value, only compute outputs needed here
+    if isinstance(output, tuple) and len(output) > 0 and isinstance(output[-1], dict):
         output = output[0]
+    output = output if isinstance(output, (list, tuple)) else [output]
+    expect = expect if isinstance(expect, (list, tuple)) else [expect]
+    if len(output) != len(expect):
+        raise RuntimeError("output and expect have different length, {} vs {}".format(len(output), len(expect)))
 
     compare_tolerance = get_compare_tolerance(desc, output_indexes)
-    compare_res = list(map(_compare_func, output if isinstance(output, (list, tuple)) else [output],
-                           expect if isinstance(expect, (list, tuple)) else [expect], compare_tolerance))
+    compare_res = list(map(_compare_func, output, expect, compare_tolerance))
     if not all(compare_res):
         logging.debug(mod.imported_modules[0].get_source())
         _dump_info(desc, attrs, poly, input_for_mod, output, expect)
