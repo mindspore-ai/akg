@@ -46,28 +46,31 @@ class TileOuterBand : public SchedulePass {
     Invalid,
   };
   virtual isl::schedule Run(isl::schedule sch);
-  isl::schedule RunCuda(isl::schedule sch);
-  isl::schedule RunNpu(isl::schedule sch);
+  // general function
+  isl::schedule TileOuterBandHelper(const isl::schedule sch,
+                                    const std::function<isl::schedule_node(isl::schedule_node)> &f);
   void InitDimensionInfo(const isl::schedule &);
   void MergeTilingInfo();
-  std::vector<std::vector<int>> AddTileInfo(const std::vector<std::vector<int>> &partition_info);
+  void ShowDimInfo();
   std::string GetbDim() const { return scop_info_.user_config_.GetBDim(); }
   std::string GetcDim();
-
-  void ShowDimInfo();
   isl::schedule_node ReverseTraverseChild(isl::schedule_node node,
                                           const std::function<isl::schedule_node(isl::schedule_node)> &f);
-  isl::schedule_node MarkOuterPermutableCuda(isl::schedule_node node);
-  isl::schedule_node MarkOuterPermutableNpu(isl::schedule_node node);
   int IsOuterTilable(const isl::schedule_node &node);
   int IsCandidate(const isl::schedule_node &node);
   bool IsPermutable(const isl::schedule_node &node, bool checkCoincident);
   isl::schedule_node InsertEmptyPermutableBand(isl::schedule_node node);
   bool SubtreeHasPermutableBands(const isl::schedule_node &node);
+  isl::multi_val ComputeBandTilesSizes(const isl::schedule_node &node, const int *tile_size);
+  bool BoolNot(bool b) { return !b; }
+
+  // npu related functions
+  isl::schedule RunNpu(isl::schedule sch);
+  isl::schedule_node MarkOuterPermutableNpu(isl::schedule_node node);
+  std::vector<std::vector<int>> AddTileInfo(const std::vector<std::vector<int>> &partition_info);
   isl::schedule_node MarkTileBand(isl::schedule_node node, TileType tile_type);
   isl::schedule_node TileBandAndCollectMark(isl::schedule_node node, const int *tile_size, int *full_tile_min,
                                             int *full_tile_max, TileType tile_type, bool isolate);
-  isl::multi_val ComputeBandTilesSizes(const isl::schedule_node &node, const int *tile_size);
   isl::multi_val MultiValFromIntList(const isl::space &space, int dim, const int *list);
   void TileTypeC0(isl::schedule_node &node, int *full_tile_min, int *full_tile_max, TileType &tile_type, bool &isolate,
                   isl::multi_val &sizes);
@@ -87,15 +90,18 @@ class TileOuterBand : public SchedulePass {
   void ComputeHInfo(int &h_base, bool &head, bool &tail, int &h_head, int &h_tail, int &win_h, int &win_cut_h);
   void ComputeWInfo(int &w_base, bool &head, bool &tail, int &w_head, int &w_tail, int &win_w, int &win_cut_w);
   bool NeedIsolate();
-  bool BoolNot(bool b) { return !b; }
-  isl::schedule_node SplitMatmulStatement(const isl::schedule_node &node);
+
+  // cuda related functions
+  isl::schedule RunCuda(isl::schedule sch);
+  isl::schedule_node MarkOuterPermutableCuda(isl::schedule_node node);
   isl::schedule_node SetTileSizeAndTile(const isl::schedule_node &node, const std::string &tile_level,
                                         const int count_coincident = -1);
-  bool IsMatrixCPromoteToShared();
   isl::schedule_node InsertPromoteMarker(const isl::schedule_node node);
   void ResetWarpMappingConfig();
   isl::schedule_node MatmulTile(const isl::schedule_node &node);
   void CustomMappingConfig(const std::vector<std::string> &str, const int index);
+  bool IsMatrixCPromoteToShared();
+  isl::schedule_node SplitMatmulStatement(const isl::schedule_node &node);
 
  private:
   PassInfo &pass_info_;
