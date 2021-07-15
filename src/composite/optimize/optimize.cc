@@ -34,6 +34,8 @@
 namespace akg {
 Stmt Optimize(Stmt &s, BuildInfo &info) {
   auto pm = CompositeOptPassMgr(info);
+  // insert broadcast
+  pm.RegisterPass(std::make_shared<BroadcastInserter>());
   // reshape optimize
   if (info.opt.target == "aicore") {
     pm.RegisterPass(std::make_shared<ReshapeTensor>());
@@ -58,8 +60,6 @@ Stmt Optimize(Stmt &s, BuildInfo &info) {
   }
   // inplace_assign
   pm.RegisterPass(std::make_shared<InplaceAssignOpt>(pm.info_));
-  // insert broadcast
-  pm.RegisterPass(std::make_shared<BroadcastInserter>());
   // insert cast for equal(int32) in ascend
   if (info.opt.target == "aicore") {
     pm.RegisterPass(std::make_shared<TypeCastInserter>());
