@@ -66,7 +66,7 @@ class TestCase(TestBase):
             ("batch_to_space_nd_run14", batch_to_space_nd_run, ((576, 5, 5, 2048), "float16", (12, 12), ((27, 0), (0, 27)), "batch_to_space_nd_output")),
         ]
 
-    @pytest.mark.level2
+    @pytest.mark.level0
     @pytest.mark.platform_arm_ascend_training
     @pytest.mark.platform_x86_ascend_training
     @pytest.mark.env_onecard

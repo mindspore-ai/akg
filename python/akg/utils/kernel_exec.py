@@ -33,6 +33,7 @@ from threading import Thread
 from functools import reduce
 import numpy as np
 from enum import IntEnum
+import ctypes
 
 import akg
 from akg.build_module import help_tiling_level
@@ -467,10 +468,32 @@ def profiling_analyse(device_id, time_before_launch):
         return PROF_ERROR_CODE
 
 
+def array_as_continue(arr):
+    assert isinstance(arr, np.ndarray)
+    arr = np.ascontiguousarray(arr, dtype=arr.dtype)
+    assert arr.flags['C_CONTIGUOUS']
+    return arr
+
+
+def get_launch_args(arg_list, outputs):
+    launch_args = []
+    outputs = set(outputs)
+    for i in range(len(arg_list)):
+        arg = arg_list[i]
+        if isinstance(arg, np.ndarray):
+            data = arg.ctypes.data_as(ctypes.c_void_p)
+            nbytes = arg.size * arg.dtype.itemsize
+            is_output = 1 if i in outputs else 0
+            launch_args.append(data)
+            launch_args.append(nbytes)
+            launch_args.append(is_output)
+        else:
+            launch_args.append(arg)
+    return launch_args
+
 def mod_launch_air(mod, args, outputs, device_id):
     """launch mod on kc_air."""
 
-    # Currently akg runs through this function in CCE RT mode
     ctx = akg.tvm.ndarray.cce(device_id)
     arg_list = []
     for a in args:
@@ -501,6 +524,40 @@ def mod_launch_air(mod, args, outputs, device_id):
     logging.error("kc_air runtime error, please check!")
     return None
 
+
+def ascend_run(kernel_name, args, outputs, device_id):
+    """launch mod on ascend."""
+    # Currently akg runs through this function in CCE RT mode
+    arg_list = []
+    for a in args:
+        if isinstance(a, np.ndarray):
+            arg_list.append(array_as_continue(a))
+        elif isinstance(a, (list, tuple)):
+            for aa in a:
+                if isinstance(aa, np.ndarray):
+                    arg_list.append(array_as_continue(a))
+                else:
+                    arg_list.append(aa)
+        else:
+            arg_list.append(a)
+    outputs = [len(arg_list) + i if i < 0 else i for i in outputs]
+    launch_args_list = get_launch_args(arg_list, outputs)
+    tvm.get_global_func("ascend_run")(kernel_name, device_id, *launch_args_list)
+    out_list = []
+    for i in outputs:
+        out = arg_list[i]
+        out_list.append(out)
+    return out_list[0] if len(out_list) == 1 else tuple(out_list)
+
+
+def get_kernel_name(code):
+    kernel_name_end_pos = code.find("_kernel")
+    kernel_name_start_pos = code[:kernel_name_end_pos].rfind(" ") + 1
+    kernel_name = code[kernel_name_start_pos:kernel_name_end_pos]
+    if not kernel_name:
+        raise ValueError("fail to get kernel_name")
+    return kernel_name
+
 @func_time_required
 def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=-1, expect=None, repeat_time=400):
     """
@@ -521,7 +578,8 @@ def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=-1, expect=None
     gc.collect()
     if device_id == -1:
         device_id = int(os.environ.get("DEVICE_ID", 0))
-    if mod.imported_modules[0].type_key == CUDA:
+    module = mod.imported_modules[0]
+    if module.type_key == CUDA:
         ctx = akg.tvm.context(CUDA, device_id)
         mod_args = [akg.tvm.nd.array(a, ctx) for a in args]
         mod(*mod_args)
@@ -551,6 +609,12 @@ def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=-1, expect=None
         return output, stat_info
     if mode in ('rpc', 'rpc_cloud'):
         return mod_launch_rpc(mode, mod, args, outputs, tuning)
+
+    # The air_cloud is the current default mode and needs to be modified in the future
+    if mode == 'air_cloud':
+        kernel_name = get_kernel_name(module.get_source())
+        return ascend_run(kernel_name, args, outputs, device_id)
+
     if mode in ('ca', 'air', 'air_cloud'):
         return mod_launch_air(mod, args, outputs, device_id)
     if mode in ("compile_cloud", "compile_mini"):

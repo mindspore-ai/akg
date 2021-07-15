@@ -53,7 +53,7 @@ class TestCase(TestBase):
             ("triplet_loss_0", triplet_loss_ad_run, ((4, 5), "float16", 6.0, "triplet_loss_fp16")),
         ]
 
-    @pytest.mark.level2
+    @pytest.mark.level0
     @pytest.mark.platform_arm_ascend_training
     @pytest.mark.platform_x86_ascend_training
     @pytest.mark.env_onecard

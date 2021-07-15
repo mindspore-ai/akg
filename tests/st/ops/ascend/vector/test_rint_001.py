@@ -67,7 +67,7 @@ class TestCase(TestBase):
             ("rint_001", rint_run, ((2, 3, 3, 3), "float32")),
         ]
 
-    @pytest.mark.level2
+    @pytest.mark.level0
     @pytest.mark.platform_arm_ascend_training
     @pytest.mark.platform_x86_ascend_training
     @pytest.mark.env_onecard
