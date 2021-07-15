@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,19 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""operator dsl function: batch_matmul"""
-import numpy as np
+"""operator dsl function: conv2d"""
 import akg.topi as topi
 import akg.tvm as tvm
-from akg.utils import validation_check as vc_util
 
-def conv(data, weight, stride=[1,1], pad=[0,0,0,0], dilation=[1,1], name="out"):
+def conv(data, weight, stride=[1, 1], pad=[0, 0, 0, 0], dilation=[1, 1], name="out"):
     batch, in_c, in_h, in_w = data.shape
     out_c, in_c, k_h, k_w = weight.shape
-    pad_left, pad_right, pad_top, pad_bottom = pad
+    pad_top, pad_bottom, pad_left, pad_right = pad
     s_h, s_w = stride
-    o_h = (in_h + pad_top + pad_bottom - k_h) // s_h + 1
-    o_w = (in_w + pad_left + pad_right - k_w) // s_w + 1
+    d_h, d_w = dilation
+    k_h_d = (k_h - 1) * d_h + 1
+    k_w_d = (k_w - 1) * d_w + 1
+    o_h = (in_h + pad_top + pad_bottom - k_h_d) // s_h + 1
+    o_w = (in_w + pad_left + pad_right - k_w_d) // s_w + 1
     out_shape = (batch, out_c, o_h, o_w)
 
     data_pad = topi.nn.pad(data, [0, 0, pad_top, pad_left], [0, 0, pad_bottom, pad_right], 0.0)
@@ -34,8 +35,10 @@ def conv(data, weight, stride=[1,1], pad=[0,0,0,0], dilation=[1,1], name="out"):
     rw = tvm.reduce_axis((0, k_w), name="rw")
 
     out = tvm.compute(out_shape,
-                      lambda n,c,h,w: tvm.sum(data_pad[n, rc, h * s_h + rh, w * s_w + rw]*weight[c, rc, rh, rw],
-                                              axis=[rc, rh, rw]), name=name)
+                    lambda n, c, h, w: tvm.sum(
+                        data_pad[n, rc, h * s_h + rh * d_h, w * s_w + rw * d_w] * weight[c, rc, rh, rw],
+                        axis=[rc, rh, rw]),
+                    name=name)
     # use for relu condition
     # out = tvm.compute(out.shape, lambda *i: tvm.max(out(*i), tvm.const(0, out.dtype)), name="relu")
     return out

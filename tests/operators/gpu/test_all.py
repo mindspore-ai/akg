@@ -50,7 +50,6 @@ from tests.operators.gpu.test_ms_reduce_min import test_ms_reduce_min
 from tests.operators.gpu.test_ms_reduce_and import test_ms_reduce_and
 from tests.operators.gpu.test_ms_reduce_or import test_ms_reduce_or
 from tests.operators.gpu.test_ms_conv import test_ms_conv
-from tests.operators.gpu.test_ms_conv_tensorcore import test_ms_conv_tc
 from tests.operators.gpu.test_fused_pad import test_fused_pad
 from tests.operators.gpu.test_fused_bn_reduce import test_fused_bn_reduce
 from tests.operators.gpu.test_fused_bn_update import test_fused_bn_update
@@ -270,26 +269,20 @@ def reduce_sum(poly_sch, fuzz_shape=None, mind_trick_str=''):
 
 
 def conv(poly_sch, fuzz_shape=None, mind_trick_str=''):
-    test_ms_conv((32, 64, 56, 56), (64, 64, 3, 3), (1, 1),
-                 (1, 1, 1, 1), (1, 1), "float32", "float32")
+    # Test for FP32 Conv2D (Non-TensorCore)
+    test_ms_conv(shape_data=(32, 64, 56, 56), shape_weight=(64, 64, 3, 3), stride=(1, 1), padding=(1, 1, 1, 1),
+            dilation=(1, 1), dtype="float32", out_dtype="float32", layout="NCHW", tensor_core=False,
+            attrs={"shared_memory_tensors": "input_1 input_2", "dim": " 0 0 1 1 0 1 1 1 0 2 8 8 0 3 56 56 0 4 2 2",
+                "bind_block": "64 32", "bind_thread": "28 4"})
 
+    # Test for FP16 Conv2D (TensorCore) with auto-tiling
+    test_ms_conv((16, 4, 4, 16), (16, 3, 3, 16), (1, 1), (0, 0, 0, 0), (1, 1), "float16", "float16")
 
-def conv_tc(poly_sch, fuzz_shape=None, mind_trick_str=''):
-    test_ms_conv_tc((16, 4, 4, 16), (16, 3, 3, 16), (1, 1), (0, 0, 0, 0), (1, 1), "float16", "float32",
-                    attrs={"dim": "0 0 16 16 0 1 1 1 0 2 1 1 0 3 16 16 0 4 16 8",
-                           "bind_block": "1 4 1", "bind_thread": "32 1"})
+    test_ms_conv((16, 16, 16, 16), (16, 3, 3, 16), (1, 1), (0, 0, 0, 0), (1, 1), "float16", "float16")
 
-    test_ms_conv_tc((16, 16, 16, 16), (16, 3, 3, 16), (1, 1), (0, 0, 0, 0), (1, 1), "float16", "float32",
-                    attrs={"dim": "0 0 16 16 0 1 2 1 0 2 2 1 0 3 16 16 0 4 16 8",
-                           "bind_block": "1 1 1", "bind_thread": "32 1"})
+    test_ms_conv((64, 6, 6, 64), (64, 3, 3, 64), (1, 1), (0, 0, 0, 0), (1, 1), "float16", "float16")
 
-    test_ms_conv_tc((64, 6, 6, 64), (64, 3, 3, 64), (1, 1), (0, 0, 0, 0), (1, 1), "float16", "float32",
-                    attrs={"dim": "0 0 32 16 0 1 2 1 0 2 2 1 0 3 32 16 0 4 32 8",
-                           "bind_block": "2 4 2", "bind_thread": "32 4"})
-
-    test_ms_conv_tc((64, 6, 6, 64), (64, 3, 3, 64), (1, 1), (0, 0, 0, 0), (1, 1), "float16", "float32",
-                    attrs={"dim": "0 0 32 16 0 1 1 1 0 2 1 1 0 3 32 16 0 4 32 8",
-                           "bind_block": "2 16 2", "bind_thread": "32 4"})
+    test_ms_conv((64, 6, 6, 64), (64, 3, 3, 64), (1, 1), (0, 0, 0, 0), (1, 1), "float16", "float32")
 
 def select(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_select((2, ), (2, 2, 2),  "int8", "float16", poly_sch=poly_sch)
@@ -463,10 +456,9 @@ if __name__ == '__main__':
               "equal": equal, "exp": exp, "greater_equal": greater_equal, "less_equal": less_equal,
               "log": log, "max": maximum, "min": minimum, "mul": mul, "neg": neg, "pow": pow,
               "reciprocal": reciprocal, "round": round, "rsqrt": rsqrt, "select": select, "sqrt": sqrt,
-              "sub": sub, "reduce_max": reduce_max, "reduce_min": reduce_min, "reduce_and":reduce_and,
-              "reduce_or":reduce_or, "reduce_sum": reduce_sum, "expand_dims": expand_dims, "one_hot": one_hot,
-              "reshape": reshape, "tile": tile, "trans_data": trans_data,
-              "conv": conv, "conv_tc": conv_tc,
+              "sub": sub, "reduce_max": reduce_max, "reduce_min": reduce_min,
+              "reduce_sum": reduce_sum, "expand_dims": expand_dims, "one_hot": one_hot,
+              "reshape": reshape, "tile": tile, "trans_data": trans_data, "conv": conv,
               "fused_pad": fused_pad,
               "fused_bn_reduce": fused_bn_reduce,
               "fused_bn_update": fused_bn_update,
