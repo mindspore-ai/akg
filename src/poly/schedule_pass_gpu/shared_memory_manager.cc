@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+#include "poly/schedule_pass_gpu/operator_shared_strategy.h"
 #include "shared_memory_manager.h"
 #include "poly/schedule_tree_util.h"
 #include "poly/scop.h"
@@ -33,13 +33,62 @@ isl::schedule SharedMemoryManager::Run(isl::schedule sch) {
   schedule_ = sch;
   auto root = sch.get_root();
 
+  PrepareInfoForPromotion(root);
+
+  if (scop_info_.user_config_.GetEnableAkgReduceLib()) {
+    return RunReduce(root);
+  } else if (scop_info_.user_config_.GetEnableMatmul()) {
+    return RunMatmul(root);
+  } else {
+    return RunElemwise(root);
+  }
+}
+
+isl::schedule SharedMemoryManager::RunReduce(isl::schedule_node &root) {
+  is_reduce_ = true;
+  // collect all bands at the given depth in the schedule tree
+  root = HoistSharedMemoryOnDepth(root).root();
+  root = MapCopiesToThreads(root, unroll_shared_);
+  schedule_ = root.get_schedule();
+  schedule_ = InsertContextNode(schedule_, scop_info_);
+
+  return schedule_;
+}
+isl::schedule SharedMemoryManager::RunElemwise(isl::schedule_node &root) {
+  // collect all bands at the given depth in the schedule tree
+  root = HoistSharedMemoryOnDepth(root).root();
+  root = MapCopiesToThreads(root, unroll_shared_);
+  schedule_ = root.get_schedule();
+  schedule_ = InsertContextNode(schedule_, scop_info_);
+
+  return schedule_;
+}
+
+isl::schedule SharedMemoryManager::RunMatmul(isl::schedule_node &root) {
+  is_matmul_ = true;
+  // collect all bands at the given depth in the schedule tree
+  remain_memory_ = akg::common::ADVANCED_SHARED_MEMORY_SIZE;
+  root = HoistSharedMemoryOnMark(root).root();
+  root = MapCopiesToThreads(root, unroll_shared_);
+  schedule_ = root.get_schedule();
+  schedule_ = InsertMarkerForThreadGroup(schedule_, WRITE_ID_NAME, PROMOTE_SHARED_TO_GLOBAL);
+  schedule_ = InsertContextNode(schedule_, scop_info_);
+
+  return schedule_;
+}
+
+void SharedMemoryManager::PrepareInfoForPromotion(const isl::schedule_node &root) {
   // Update the variable/tensor to share
   if (!scop_info_.user_config_.GetSharedTensors().empty()) {
     configed_tensors_ = Split(scop_info_.user_config_.GetSharedTensors(), " ");
   }
 
   // Compute the depth where the shared memory have to be generated
-  UpdateDepth(root);
+  auto outer_band = GetOuterBand(root);
+  if (outer_band.isa<isl::schedule_node_band>()) {
+    depth_ = outer_band.as<isl::schedule_node_band>().n_member();
+  }
+
   if (scop_info_.user_config_.GetSharedDepth() >= 0) {
     depth_ = scop_info_.user_config_.GetSharedDepth();
     use_config_ = true;
@@ -51,69 +100,58 @@ isl::schedule SharedMemoryManager::Run(isl::schedule sch) {
   bank_conflict_ = scop_info_.user_config_.GetEnableBankConflict();
   shared_inversed_thread_map_ = scop_info_.user_config_.GetSharedInversedThreadMap();
   shared_vector_align_ = scop_info_.user_config_.GetSharedVectorAlign();
-
-  // collect all bands at the given depth in the schedule tree
-  size_t remain_memory = common::SHARED_MEMORY_SIZE;
-
-  if (scop_info_.user_config_.GetEnableMatmul()) {
-    remain_memory = akg::common::ADVANCED_SHARED_MEMORY_SIZE;
-    root = HoistSharedMemoryOnMark(root, remain_memory, depth_).root();
-  } else {
-    root = HoistSharedMemoryOnDepth(root, remain_memory, depth_).root();
+  if (scop_info_.user_config_.GetVectorLoadType() && !scop_info_.user_config_.GetEnableVectorization()) {
+    scop_info_.user_config_.SetEnableOneDimThread(true);
+    enable_one_dim_ = true;
   }
-  bool unroll_shared = scop_info_.user_config_.GetUnrollShared();
-  root = MapCopiesToThreads(root, unroll_shared);
-  schedule_ = root.get_schedule();
-  if (scop_info_.user_config_.GetEnableMatmul()) {
-    schedule_ = InsertMarkerForThreadGroup(schedule_, WRITE_ID_NAME, PROMOTE_SHARED_TO_GLOBAL);
-  }
-
-  schedule_ = InsertContextNode(schedule_, scop_info_);
-
-  return schedule_;
+  unroll_shared_ = scop_info_.user_config_.GetUnrollShared();
 }
 
-isl::schedule_node SharedMemoryManager::HoistSharedMemoryOnMark(const isl::schedule_node &root, size_t &remain_memory,
-                                                                size_t depth) {
+isl::schedule_node SharedMemoryManager::HoistSharedMemoryOnMark(const isl::schedule_node &root) {
   auto ab_mark_node = CollectMarkNodeOnPromotion(root, PROMOTE_GLOBAL_TO_SHARED_AB);
   auto ab_promote_node = ab_mark_node.parent();
   hoist_tensor_c_ = false;
-  auto ab_res_node = ManageToShareBelow(this->schedule_, ab_promote_node, remain_memory);
+  auto ab_res_node = ManageToShareBelow(this->schedule_, ab_promote_node);
   auto tensor_c_name = GetMatmulTensorsName(scop_info_)[MATRIX_C];
   if (find(configed_tensors_.begin(), configed_tensors_.end(), tensor_c_name) != configed_tensors_.end()) {
     auto c_mark_node = CollectMarkNodeOnPromotion(ab_res_node.get_schedule().get_root(), PROMOTE_GLOBAL_TO_SHARED_C);
     auto c_promote_node = c_mark_node.parent();
     hoist_tensor_c_ = true;
-    remain_memory = akg::common::ADVANCED_SHARED_MEMORY_SIZE;
-    auto c_res_node = ManageToShareBelow(c_promote_node.get_schedule(), c_promote_node, remain_memory);
+    remain_memory_ = akg::common::ADVANCED_SHARED_MEMORY_SIZE;
+    auto c_res_node = ManageToShareBelow(c_promote_node.get_schedule(), c_promote_node);
     return c_res_node;
   }
   return ab_res_node;
 }
 
-isl::schedule_node SharedMemoryManager::HoistSharedMemoryOnDepth(const isl::schedule_node &root, size_t &remain_memory,
-                                                                 size_t depth) {
-  auto fn = [depth, &remain_memory, this](isl::schedule_node node) -> isl::schedule_node {
-    auto res_node = node;
-    if (node.isa<isl::schedule_node_band>()) {
-      if (ContainsDepth(node, depth)) {
-        auto node_splitted = BandSplitAtDepth(node, depth);
-        if (!use_config_ && IsAncestorMapToThread(node_splitted)) {
-          LOG(INFO) << "a subtree under the thread_marker cannot "
-                    << "be promoted.";
-          return node;
-        }
-        res_node = ManageToShareBelow(this->schedule_, node_splitted, remain_memory);
-      }
+isl::schedule_node SharedMemoryManager::HoistSharedMemoryOnDepth(const isl::schedule_node &root) {
+  auto fn = [this](isl::schedule_node node) -> isl::schedule_node {
+    if (!node.isa<isl::schedule_node_band>()) {
+      return node;
     }
+
+    size_t depth_before = node.schedule_depth();
+    size_t depth_after = depth_before + node.as<isl::schedule_node_band>().n_member();
+    bool is_contain_depth = (depth_before < depth_ && depth_after >= depth_);
+    if (!is_contain_depth) {
+      return node;
+    }
+
+    auto node_splitted = BandSplitAtDepth(node, depth_);
+    if (!use_config_ && IsAncestorMapToThread(node_splitted)) {
+      LOG(INFO) << "a subtree under the thread_marker cannot "
+                << "be promoted.";
+      return node;
+    }
+    auto res_node = ManageToShareBelow(this->schedule_, node_splitted);
     return res_node;
   };
 
   auto root_node = root;
-  if (depth == 0) {
+  if (depth_ == 0) {
     root_node = GenerateEmptyBandInRoot(root_node);
-    auto node_splitted = BandSplitAtDepth(root_node, depth);
-    node_splitted = ManageToShareBelow(schedule_, node_splitted, remain_memory);
+    auto node_splitted = BandSplitAtDepth(root_node, depth_);
+    node_splitted = ManageToShareBelow(schedule_, node_splitted);
     return node_splitted;
   }
 
@@ -132,41 +170,12 @@ isl::schedule_node SharedMemoryManager::MapCopiesToThreads(isl::schedule_node &r
     }
 
     auto band_node = GetCanMappingNode(node);
-    std::string atomic_type = InAtomicTensors(node);
+
     auto thread_cfg = scop_info_.user_config_.GetThreadConfig();
 
-    if (shared_inversed_thread_map_) {
-      // Pretille - To make a vectorize loop more apparent with only the information of the mapping
-      const auto &domain = band_node.as<isl::schedule_node_band>().get_partial_schedule().domain();
-      const isl::id &current_computing_id_shared = domain.unwrap().range().set_list().get_at(0).get_tuple_id();
-
-      std::vector<size_t> tensor_size;
-      for (BufferDefInfo &buffer_info : scop_info_.analysis_result_.buffer_def_infos_) {
-        if (current_computing_id_shared == buffer_info.dst_tensor_id) {
-          tensor_size = buffer_info.sizes;
-        }
-      }
-      // Reverse because thread is innermost map
-      std::reverse(tensor_size.begin(), tensor_size.end());
-
-      auto ctx = band_node.ctx();
-      const auto &space = band_node.as<isl::schedule_node_band>().get_space();
-      const auto n_member = band_node.as<isl::schedule_node_band>().n_member();
-      isl::multi_val tile_size = isl::multi_val::zero(space);
-      for (size_t i = 0; i < n_member; ++i) {
-        const size_t size = tensor_size[i] / thread_cfg->GetAt(i).second;
-        tile_size = tile_size.set_val(n_member - 1 - i, isl::val(ctx, size != 0 ? size : 1));
-      }
-      band_node = TileBand(band_node, tile_size);
-    }
-
     auto mapping_cfg = thread_cfg;
-    if ((scop_info_.user_config_.GetVectorLoadType() && !scop_info_.user_config_.GetEnableVectorization()) ||
-        scop_info_.user_config_.GetEnableTensorCoreUsePoly()) {
-      scop_info_.user_config_.SetEnableOneDimThread(true);
-    }
 
-    if (scop_info_.user_config_.GetEnableOneDimThread()) {
+    if (enable_one_dim_) {
       mapping_cfg = GetCurrentConfig(band_node);
 
       bool use_thread_cfg = true;
@@ -221,20 +230,23 @@ isl::schedule_node SharedMemoryManager::MapCopiesToThreads(isl::schedule_node &r
 
     Mapping mapping;
     band_node = MapInnerDimToThreads(band_node, mapping_cfg, mapping, true, false);
-    auto InsertAtomicMarker = [atomic_type, this](isl::schedule_node atomic_node) -> isl::schedule_node {
-      if (atomic_type != "" && atomic_node.has_children() && atomic_node.child(0).isa<isl::schedule_node_filter>()) {
-        atomic_node =
-          atomic_node.child(0).child(0).insert_mark(isl::id(atomic_node.ctx(), AtomicMarker("_" + atomic_type)));
-        scop_info_.analysis_result_.RecordAtomicMarkers(AtomicMarker("_" + atomic_type));
-        atomic_node = atomic_node.parent().parent();
+    if (is_reduce_) {
+      std::string atomic_type = InAtomicTensors(node);
+      auto InsertAtomicMarker = [atomic_type, this](isl::schedule_node atomic_node) -> isl::schedule_node {
+        if (atomic_type != "" && atomic_node.has_children() && atomic_node.child(0).isa<isl::schedule_node_filter>()) {
+          atomic_node =
+            atomic_node.child(0).child(0).insert_mark(isl::id(atomic_node.ctx(), AtomicMarker("_" + atomic_type)));
+          scop_info_.analysis_result_.RecordAtomicMarkers(AtomicMarker("_" + atomic_type));
+          atomic_node = atomic_node.parent().parent();
+        }
+        return atomic_node;
+      };
+      if (band_node.isa<isl::schedule_node_mark>()) {
+        band_node = InsertAtomicMarker(band_node);
+      } else if (band_node.has_children() && band_node.child(0).isa<isl::schedule_node_mark>()) {
+        band_node = InsertAtomicMarker(band_node.child(0));
+        band_node = band_node.parent();
       }
-      return atomic_node;
-    };
-    if (band_node.isa<isl::schedule_node_mark>()) {
-      band_node = InsertAtomicMarker(band_node);
-    } else if (band_node.has_children() && band_node.child(0).isa<isl::schedule_node_mark>()) {
-      band_node = InsertAtomicMarker(band_node.child(0));
-      band_node = band_node.parent();
     }
 
     if (has_split) {
@@ -330,170 +342,43 @@ MappingCfg *SharedMemoryManager::GetCurrentConfig(isl::schedule_node &node) {
   return mapping_cfg;
 }
 
-isl::schedule_node SharedMemoryManager::ManageToShareBelow(const isl::schedule &root_sch, isl::schedule_node &node,
-                                                           size_t &remaining_memory) {
+isl::schedule_node SharedMemoryManager::ManageToShareBelow(const isl::schedule &root_sch, isl::schedule_node &node) {
   isl::schedule_node root_node = root_sch.get_root();
 
   CHECK(use_config_ || !IsAncestorMapToThread(node)) << "shared memory promotion cannot below thread_marker.";
 
-  auto partial_sched = LocalSchedule(node);
-
   // Collect block config.
-  auto cfg = scop_info_.user_config_.GetBlockConfig();
+  auto cfg_block = scop_info_.user_config_.GetBlockConfig();
   isl::union_set mapping;
-  for (auto it : scop_info_.user_config_.GetReplaceConfig()) {
-    auto cfg = it.second;
-    if (cfg->type == MappingType::REPLACE_BLOCKS) {
-      if (mapping.is_null()) {
-        mapping = GatherMappingsTo(root_node, cfg);
-      } else {
-        mapping = mapping.intersect(GatherMappingsTo(root_node, cfg));
+  if (is_matmul_) {
+    for (auto it : scop_info_.user_config_.GetReplaceConfig()) {
+      auto cfg = it.second;
+      if (cfg->type == MappingType::REPLACE_BLOCKS) {
+        if (mapping.is_null()) {
+          mapping = GatherMappingsTo(root_node, cfg);
+        } else {
+          mapping = mapping.intersect(GatherMappingsTo(root_node, cfg));
+        }
       }
     }
   }
   if (mapping.is_null()) {
-    mapping = GatherMappingsTo(root_node, cfg);
+    mapping = GatherMappingsTo(root_node, cfg_block);
   }
 
+  auto partial_sched = LocalSchedule(node);
   auto out_sched = partial_sched.intersect_domain(mapping);
-  CreateClusterList(node, out_sched);
-  return HoistClusters(root_node, node, remaining_memory);
-}
-
-std::set<std::string> SharedMemoryManager::AnalysisReduceTensors() {
-  std::set<std::string> id_sets;
-  if (!scop_info_.user_config_.GetEnableAkgReduceLib()) {
-    return id_sets;
+  if (is_reduce_) {
+    ReduceSharedStrategy reduce_op(scop_info_);
+    reduce_op.CreateClusterList(node, out_sched);
+  } else if (is_matmul_) {
+    BatchMatmulSharedStrategy matmul_op(scop_info_);
+    matmul_op.CreateClusterList(node, out_sched, hoist_tensor_c_);
+  } else {
+    OperatorSharedStrategy other_op(scop_info_);
+    other_op.CreateClusterList(node, out_sched);
   }
-
-  /*************************************************
-   * In order to enable cuda atomic operator, add
-   * these tensors for shared memory promotion list
-   *************************************************/
-  auto atomic_tensors = scop_info_.analysis_result_.GetAtomicTensors();
-  if (!atomic_tensors.empty()) {
-    id_sets.clear();
-    for (const auto &item : atomic_tensors) {
-      if (id_sets.count(item.tensor_name) == 0) {
-        id_sets.emplace(item.tensor_name);
-      }
-    }
-  }
-
-  /***********************************************
-   * For the condition that it is without cuda
-   * atomic usage, but with reduce operation.
-   * Also need to add these tensors for shared memory
-   * promotion list.
-   *********************************************/
-  auto reduce_out_tensors = scop_info_.analysis_result_.GetReduceTensorInfoMap();
-  for (const auto &item : reduce_out_tensors) {
-    if (id_sets.count(item.second.write_tensor_name) == 0) {
-      id_sets.emplace(item.second.write_tensor_name);
-    }
-  }
-
-  return id_sets;
-}
-
-void SharedMemoryManager::CreateClusterList(const isl::schedule_node &node, const isl::union_map &outer_sch) {
-  isl::union_map reads = scop_info_.analysis_result_.GetReads();
-  isl::union_map writes = scop_info_.analysis_result_.GetWrites();
-  isl::union_map copyin = scop_info_.analysis_result_.GetCopyin();
-  isl::union_map fake_copyin = scop_info_.analysis_result_.GetFakeCopyin();
-
-  auto read_map = scop_info_.StmtReadMap();
-  auto write_map = scop_info_.StmtWriteMap();
-  auto stmt_map = scop_info_.analysis_result_.GetStmtOpInfoMap();
-  std::vector<isl::id> tensor_list;
-  std::set<std::string> id_sets;
-  std::set<std::string> read_sets;
-  std::set<std::string> write_sets;
-  for (auto item : read_map) {
-    for (auto item_id : item.second) {
-      if (read_sets.count(item_id.get_name()) == 0) {
-        read_sets.insert(item_id.get_name());
-      }
-    }
-  }
-  for (auto item : write_map) {
-    for (auto item_id : item.second) {
-      if (write_sets.count(item_id.get_name()) == 0) {
-        write_sets.insert(item_id.get_name());
-      }
-    }
-  }
-  /*********************************************************
-   * manage only read tensors to share memory
-   * for read and write tensor, should be managed to local memory
-   ********************************************************/
-  std::set_difference(read_sets.begin(), read_sets.end(), write_sets.begin(), write_sets.end(),
-                      std::inserter(id_sets, id_sets.begin()));
-
-  if (scop_info_.user_config_.GetEnableAkgReduceLib()) {
-    id_sets = AnalysisReduceTensors();
-  }
-
-  if (!configed_tensors_.empty()) {
-    for (const auto &item : configed_tensors_) {
-      if (id_sets.count(item) == 0) {
-        id_sets.emplace(item);
-      }
-    }
-  }
-
-  if (scop_info_.user_config_.GetEnableMatmul()) {
-    auto tensors = GetMatmulTensorsName(scop_info_);
-    if (id_sets.count(tensors[MATRIX_A]) == 0) {
-      id_sets.emplace(tensors[MATRIX_A]);
-    }
-    if (id_sets.count(tensors[MATRIX_B]) == 0) {
-      id_sets.emplace(tensors[MATRIX_B]);
-    }
-  }
-
-  for (auto item : id_sets) {
-    tensor_list.push_back(isl::id(scop_info_.ctx_, item));
-  }
-
-  for (const auto &item : tensor_list) {
-    if (scop_info_.user_config_.GetEnableMatmul()) {
-      if (!hoist_tensor_c_) {
-        if (!IsTensorAB(item.get_name(), scop_info_)) {
-          continue;
-        }
-      } else {
-        if (IsTensorAB(item.get_name(), scop_info_)) {
-          continue;
-        }
-      }
-    }
-
-    isl::id dst_tensor_id = GpuDstId(GpuMemType::SHARED, item);
-    std::vector<size_t> buffer_sizes;
-    std::vector<std::pair<isl::id, MemType>> data_stream;
-    data_stream.push_back(std::make_pair(item, MemType::DDR));
-    data_stream.push_back(std::make_pair(item, MemType::SHARED_));
-    BufferDefInfo promoted_info = BufferDefInfo{item,
-                                                dst_tensor_id,
-                                                item,
-                                                MemType::DDR,
-                                                "",
-                                                false,
-                                                false,
-                                                data_stream,
-                                                Tensor(),
-                                                Handle(),
-                                                buffer_sizes,
-                                                nullptr,
-                                                isl::union_map::empty(isl::space(scop_info_.ctx_, 0))};
-    promoted_info.footprints_cluster =
-      TensorFootprintCluster::HoistBufferFootprintCluster(outer_sch, item, reads, copyin, writes, fake_copyin);
-    if (promoted_info.footprints_cluster != nullptr) {
-      promoted_info.footprint_cluster_map.emplace_back(std::make_pair(node, promoted_info.footprints_cluster));
-      scop_info_.analysis_result_.buffer_def_infos_.push_back(promoted_info);
-    }
-  }
+  return HoistClusters(root_node, node);
 }
 
 void SharedMemoryManager::GatherBufferFootprintDefInfo(const isl::schedule_node &node, BufferDefInfo &tensor_info) {
@@ -507,12 +392,12 @@ void SharedMemoryManager::GatherBufferFootprintDefInfo(const isl::schedule_node 
 
   isl::id tensor_id = tensor_info.tensor_id;
 
-  if (scop_info_.user_config_.GetEnableMatmul() && tensor_id.get_name() == GetMatmulTensorsName(scop_info_)[MATRIX_C]) {
+  if (is_matmul_ && tensor_id.get_name() == GetMatmulTensorsName(scop_info_)[MATRIX_C]) {
     sizes.back() += 8;
   }
 
   if (bank_conflict_) {
-    sizes = OptimizeSharedDimension(sizes);
+    OptimizeSharedDimension(sizes);
   }
 
   isl::id cluster_id = tensor_info.dst_tensor_id;
@@ -539,7 +424,7 @@ void SharedMemoryManager::GatherBufferFootprintDefInfo(const isl::schedule_node 
 }
 
 isl::schedule_node SharedMemoryManager::HoistClusters(const isl::schedule_node &root_node,
-                                                      const isl::schedule_node &node, size_t &remaining_memory) {
+                                                      const isl::schedule_node &node) {
   auto partial_sched_mupa = ShortScheduleMupa(root_node, node);
   auto res_node = node;
   for (size_t index = 0; index < scop_info_.analysis_result_.buffer_def_infos_.size(); index++) {
@@ -550,45 +435,32 @@ isl::schedule_node SharedMemoryManager::HoistClusters(const isl::schedule_node &
     }
     auto id = buffer_info.tensor_id;
 
-    if (scop_info_.user_config_.GetEnableMatmul()) {
-      if (!hoist_tensor_c_) {
-        if (!IsTensorAB(id.get_name(), scop_info_)) {
-          continue;
-        }
-      } else {
-        if (IsTensorAB(id.get_name(), scop_info_)) {
-          continue;
-        }
-      }
-    }
-
     auto box_sizes = fp_cluster->GetFixedBoxSizes();
     if (box_sizes.size() == 0) {
       LOG(FATAL) << "Can not manage a scalar tensor";
     }
 
-    box_sizes = OptimizeSharedDimension(box_sizes);
+    OptimizeSharedDimension(box_sizes);
 
     auto approximation_size = std::accumulate(box_sizes.begin(), box_sizes.end(), 1, std::multiplies<size_t>());
     size_t byte = Bytes(id);
     size_t memory_requirement = approximation_size * byte;
     bool use_reuse_filter = true;
-    if (InAtomicTensors(buffer_info.tensor_id.name()) || InReduceTensors(buffer_info.tensor_id.name())) {
+    if (InAtomicTensors(buffer_info.tensor_id.name()) || InReduceTensors(buffer_info.tensor_id.name()) || is_matmul_ ||
+        scop_info_.user_config_.HasTranspose()) {
       use_reuse_filter = false;
     }
     bool is_injective = !ReuseTensorCluster(*fp_cluster, partial_sched_mupa);
 
-    if (memory_requirement < remaining_memory) {
+    if (memory_requirement < remain_memory_) {
       bool need_shared_memory =
         !use_reuse_filter || !is_injective || CoalescingAccessWay(root_node, res_node, *fp_cluster);
-      need_shared_memory |= scop_info_.user_config_.GetEnableMatmul();
-      need_shared_memory |= scop_info_.user_config_.HasTranspose();
       if (!need_shared_memory) {
         continue;
       }
       GatherBufferFootprintDefInfo(res_node, buffer_info);
       res_node = HoistToBlockThreadMemory(res_node, GpuMemType::SHARED, id, *(fp_cluster), true);
-      remaining_memory -= memory_requirement;
+      remain_memory_ -= memory_requirement;
 
       // collect active_buffer_footprints_ info for codegen
       auto out_schedule = LocalSchedule(res_node);
@@ -609,13 +481,11 @@ isl::schedule_node SharedMemoryManager::HoistToBlockThreadMemory(isl::schedule_n
                                                                  bool force_last_extension_odd) {
   auto out_schedule = LocalSchedule(tree);
   auto active_domains = CollectDomain(tree);
-
   isl::id dst_tensor_id = GpuDstId(type, tensor_id);
   auto sizes = cluster.GetFixedBoxSizes();
   if (force_last_extension_odd) {
-    sizes = OptimizeSharedDimension(sizes);
+    OptimizeSharedDimension(sizes);
   }
-
   auto res_node = PlaceOuterDataCopyBelow(scop_info_, tree, cluster, tensor_id, dst_tensor_id, out_schedule,
                                           schedule_.get_domain().get_space());
   return res_node;
@@ -658,32 +528,6 @@ bool SharedMemoryManager::CoalescingAccessWay(const isl::schedule_node &root, co
       if (!access_by_adjacent_inner.is_subset(element_next)) {
         return true;
       }
-    }
-  }
-  return false;
-}
-
-void SharedMemoryManager::UpdateDepth(const isl::schedule_node &root) {
-  auto outer_band = GetOuterBand(root);
-  auto cfg = scop_info_.user_config_.GetBlockConfig();
-  if (outer_band.isa<isl::schedule_node_band>()) {
-    auto block_depth = cfg->bound + 1;
-    auto outer_band_depth = outer_band.as<isl::schedule_node_band>().n_member();
-    block_depth = std::min<int>(block_depth, outer_band_depth);
-    if (block_depth > outer_band_depth && !UnderThreadMarker(block_depth)) {
-      depth_ = block_depth;
-    } else {
-      depth_ = outer_band_depth;
-    }
-  }
-}
-
-bool SharedMemoryManager::UnderThreadMarker(size_t depth) {
-  isl::schedule_node root = this->schedule_.get_root();
-  auto bands = BandsContainingScheduleDepth(root, depth);
-  for (auto item : bands) {
-    if (IsAncestorMapToThread(item)) {
-      return true;
     }
   }
   return false;
@@ -737,32 +581,28 @@ size_t SharedMemoryManager::Bytes(const isl::id tensor_id) {
   return static_cast<size_t>(type.bytes());
 }
 
-std::vector<size_t> SharedMemoryManager::OptimizeSharedDimension(const std::vector<size_t> &sizes) {
-  std::vector<size_t> res = sizes;
-  res = OptimizeBankConflict(res);
-  res = OptimizeVectorAlign(res);
-  return res;
+void SharedMemoryManager::OptimizeSharedDimension(std::vector<size_t> &sizes) {
+  OptimizeBankConflict(sizes);
+  OptimizeVectorAlign(sizes);
 }
 
-std::vector<size_t> SharedMemoryManager::OptimizeBankConflict(const std::vector<size_t> &sizes) {
-  std::vector<size_t> res = sizes;
-  if (res.back() % 2 == 0) {
-    if (bank_conflict_ && res.back() < 32) {
-      res.back() = 33;
-    } else {
-      res.back() += 1;
-    }
+void SharedMemoryManager::OptimizeBankConflict(std::vector<size_t> &sizes) {
+  if (sizes.back() % 2 != 0) {
+    return;
   }
-  return res;
+  if (bank_conflict_ && sizes.back() < 32) {
+    sizes.back() = 33;
+  } else {
+    sizes.back() += 1;
+  }
 }
 
-std::vector<size_t> SharedMemoryManager::OptimizeVectorAlign(const std::vector<size_t> &sizes) {
-  std::vector<size_t> res = sizes;
-  if (shared_vector_align_ != 0) {
-    int padsize = res.back() % shared_vector_align_;
-    res.back() += padsize ? (shared_vector_align_ - padsize) : 0;
+void SharedMemoryManager::OptimizeVectorAlign(std::vector<size_t> &sizes) {
+  if (shared_vector_align_ == 0) {
+    return;
   }
-  return res;
+  int padsize = sizes.back() % shared_vector_align_;
+  sizes.back() += padsize ? (shared_vector_align_ - padsize) : 0;
 }
 
 }  // namespace poly

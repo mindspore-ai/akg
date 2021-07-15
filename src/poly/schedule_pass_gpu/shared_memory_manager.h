@@ -36,27 +36,25 @@ class SharedMemoryManager : public SchedulePass {
     if (!scop_info.user_config_.GetSharedTensors().empty()) {
       configed_tensors_ = Split(scop_info.user_config_.GetSharedTensors(), " ");
     }
-    unroll_copies_ = false;
   };
   ~SharedMemoryManager() {}
 
   virtual isl::schedule Run(isl::schedule sch);
+  isl::schedule RunReduce(isl::schedule_node &root);
+  isl::schedule RunElemwise(isl::schedule_node &root);
+  isl::schedule RunMatmul(isl::schedule_node &root);
 
-  isl::schedule_node HoistSharedMemoryOnDepth(const isl::schedule_node &root, size_t &remain_memory, size_t depth);
+  isl::schedule_node HoistSharedMemoryOnDepth(const isl::schedule_node &root);
 
   isl::schedule_node MapCopiesToThreads(isl::schedule_node &root, bool unroll);
 
   MappingCfg *GetCurrentConfig(isl::schedule_node &node);
 
-  isl::schedule_node ManageToShareBelow(const isl::schedule &root_sch, isl::schedule_node &node,
-                                        size_t &remaining_memory);
-
-  void CreateClusterList(const isl::schedule_node &node, const isl::union_map &outer_sch);
+  isl::schedule_node ManageToShareBelow(const isl::schedule &root_sch, isl::schedule_node &node);
 
   void GatherBufferFootprintDefInfo(const isl::schedule_node &node, BufferDefInfo &tensor_info);
 
-  isl::schedule_node HoistClusters(const isl::schedule_node &root, const isl::schedule_node &node,
-                                   size_t &remaining_memory);
+  isl::schedule_node HoistClusters(const isl::schedule_node &root, const isl::schedule_node &node);
 
   isl::schedule_node HoistToBlockThreadMemory(isl::schedule_node &tree, GpuMemType type, const isl::id &tensor_id,
                                               TensorFootprintCluster &cluster, bool force_last_extension_odd);
@@ -64,12 +62,9 @@ class SharedMemoryManager : public SchedulePass {
   bool CoalescingAccessWay(const isl::schedule_node &root, const isl::schedule_node &node,
                            const TensorFootprintCluster &cluster);
 
-  void UpdateDepth(const isl::schedule_node &root);
-
-  std::vector<size_t> OptimizeSharedDimension(const std::vector<size_t> &sizes);
-  std::vector<size_t> OptimizeBankConflict(const std::vector<size_t> &sizes);
-  std::vector<size_t> OptimizeVectorAlign(const std::vector<size_t> &sizes);
-  bool UnderThreadMarker(size_t depth);
+  void OptimizeSharedDimension(std::vector<size_t> &sizes);
+  void OptimizeBankConflict(std::vector<size_t> &sizes);
+  void OptimizeVectorAlign(std::vector<size_t> &sizes);
 
   std::string InAtomicTensors(isl::schedule_node &node);
   bool InAtomicTensors(const std::string &name);
@@ -77,23 +72,27 @@ class SharedMemoryManager : public SchedulePass {
 
   std::string AtomicMarker(const std::string &type);
 
-  std::set<std::string> AnalysisReduceTensors();
-
   size_t Bytes(const isl::id tensor_id);
 
-  isl::schedule_node HoistSharedMemoryOnMark(const isl::schedule_node &root, size_t &remain_memory, size_t depth);
+  isl::schedule_node HoistSharedMemoryOnMark(const isl::schedule_node &root);
+
+  void PrepareInfoForPromotion(const isl::schedule_node &root);
 
  private:
   ScopInfo &scop_info_;
   isl::schedule schedule_;
-  int depth_{1};
+  size_t depth_{1};
   bool use_config_{false};
   std::vector<std::string> configed_tensors_;
-  bool unroll_copies_;
   bool bank_conflict_{false};
-  bool hoist_tensor_c_ = true;
+  bool hoist_tensor_c_{false};
   bool shared_inversed_thread_map_{false};
   int shared_vector_align_{0};
+  bool is_reduce_{false};
+  bool is_matmul_{false};
+  bool enable_one_dim_{false};
+  bool unroll_shared_{false};
+  size_t remain_memory_{common::SHARED_MEMORY_SIZE};
 };
 
 }  // namespace poly

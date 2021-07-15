@@ -130,13 +130,6 @@ isl::schedule_node GenerateEmptyBandInRoot(isl::schedule_node &root) {
   return node;
 }
 
-bool ContainsDepth(isl::schedule_node &node, size_t depth) {
-  auto depth_before = node.schedule_depth();
-  auto band = node.as<isl::schedule_node_band>();
-  auto depth_after = depth_before + band.n_member();
-  return depth_before < depth && depth_after >= depth;
-}
-
 int GetScheduleDepth(isl::schedule &root) {
   int depth = 0;
   auto root_node = root.get_root();
