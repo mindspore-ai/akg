@@ -1,0 +1,32 @@
+{
+  "name": "Fused_Cast_BiasAdd_Gelu_fusion_7971173442909348882_0",
+  "pattern": "{ domain: \"{ S_0[ax0, ax1] : 0 <= ax0 <= 639 and 0 <= ax1 <= 767; S_1[ax0, ax1] : 0 <= ax0 <= 639 and 0 <= ax1 <= 767 }\", child: { sequence: [ { filter: \"{ S_0[ax0, ax1] }\", child: { schedule: \"[{ S_0[ax0, ax1] -> [(ax0)] }]\", child: { schedule: \"[{ S_0[ax0, ax1] -> [(ax1)] }]\" } } }, { filter: \"{ S_1[ax0, ax1] }\", child: { schedule: \"[{ S_1[ax0, ax1] -> [(ax0)] }]\", child: { schedule: \"[{ S_1[ax0, ax1] -> [(ax1)] }]\" } } } ] } }",
+  "soft constraints": [
+    {
+      "statement": "S_0",
+      "meta": [2, 0],
+      "coefficients": [
+        "[1, 0, ?]",
+        "[0, 1, ?12] (/4)",
+        "[0, 1, ?12] (%4)"
+      ]
+    },
+    {
+      "statement": "S_1",
+      "meta": [2, 0],
+      "coefficients": [
+        "[1, 0, ?]",
+        "[0, 1, ?22] (/4)",
+        "[0, 1, ?22] (%4)"
+      ]
+    }
+  ],
+  "gpu": {
+    "blocks": [0],
+    "threads": [1],
+    "swizzle": [2]
+  },
+  "disable": [
+    "TileOuterBand"
+  ]
+}

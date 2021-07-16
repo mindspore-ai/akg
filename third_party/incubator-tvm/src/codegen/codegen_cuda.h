@@ -143,6 +143,10 @@ class CodeGenCUDA final : public CodeGenC {
   bool simple_store{false};
   // whether store uses vector format
   bool vec_store{false};
+  // true if we are currently unrolling loop
+  bool unroll{false};
+  // indicates we are unrolling a store
+  bool unroll_store{false};
   // var from Loads to modify with vector load
   std::set<const Variable*> vec_loads;
   // whether replace cce variable with constant in vec_store

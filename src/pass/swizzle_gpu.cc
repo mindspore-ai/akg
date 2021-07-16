@@ -22,6 +22,8 @@
 #include <tvm/ir_pass.h>
 #include <tvm.h>
 #include <string>
+#include <iostream>
+#include <fstream>
 
 #include "pass/utils.h"
 #include "pass/rewrite_simplify_cce.h"
@@ -52,6 +54,10 @@ class SwizzleFinder : public IRVisitor {
       LOG(DEBUG) << "Pragma swizzle";
       pragma_swizzle = true;
       Visit(op->body);
+    } else if (op->attr_key == "pragma_swizzle_kernel") {
+      LOG(DEBUG) << "Pragma swizzle activated for kernel, enabling auto-swizzle";
+      force_swizzle = true;
+      Visit(op->body);
     } else {
       IRVisitor::Visit_(op);
     }
@@ -60,13 +66,15 @@ class SwizzleFinder : public IRVisitor {
   void Visit_(const For *op) final {
     swizzle_length = GetExtent(op);
     if (swizzle_length == 2 || swizzle_length == 4) {
-      LOG(INFO) << "Swizzle for loop ? var : " << op->loop_var->name_hint;
-
-      loop_var = op->loop_var;
+      if (force_swizzle) {
+        pragma_swizzle = true;
+      }
       if (pragma_swizzle) {
+        LOG(INFO) << "Swizzle for loop ? var : " << op->loop_var->name_hint;
         swizzlable = true;
         swizzle_candidate = true;
       }
+      loop_var = op->loop_var;
       loop_loads = {};
       loop_stores = {};
       Visit(op->body);
@@ -74,60 +82,110 @@ class SwizzleFinder : public IRVisitor {
         // loop contains another loop
         LOG(DEBUG) << op->loop_var->name_hint << " not swizzlable : loop contains another loop";
         swizzlable = false;
-        return;
       }
       pragma_swizzle = false;
       swizzle_candidate = false;
-      // get all load and store from this loop and test if their range is 2, 4 or 0 (const)
-      for (auto l : loop_loads) {
-        int ext = load_indexes[l].second - load_indexes[l].first;
-        if (ext != (int)swizzle_length && ext != 0) {
-          swizzlable = false;
-          LOG(DEBUG) << op->loop_var->name_hint
-                     << " not swizzlable : range of load is not 0, 2 or 4 : " << ExprToString(load_indexes[l].first);
-          break;
-        } else if (ext == 0) {
-          // do not swizzle variables that are constant inside loop
-          if (swizzle_temp_vars.count(l->buffer_var->name_hint) > 0 &&
-              set_temp_vars.count(l->buffer_var->name_hint) == 0) {
-            swizzle_temp_vars.erase(l->buffer_var->name_hint);
+
+      if (swizzlable) {
+        // get all load and store from this loop and test if their range is 2, 4 or 0 (const)
+        for (auto l : loop_loads) {
+          int ext = load_indexes[l].second - load_indexes[l].first;
+          if (ext != (int)swizzle_length && ext != 0) {
+            LOG(DEBUG) << l->buffer_var->name_hint << " : range of load is not 0, 2 or 4 : " << ext;
+            if (swizzle_temp_vars.count(l->buffer_var->name_hint) > 0){
+              swizzle_temp_vars.erase(l->buffer_var->name_hint);
+            }
             temp_vars.insert(l->buffer_var->name_hint);
+
+          } else if (ext == 0) {
+            // do not swizzle variables that are constant inside loop
+            if (swizzle_temp_vars.count(l->buffer_var->name_hint) > 0 &&
+                set_temp_vars.count(l->buffer_var->name_hint) == 0) {
+              LOG(DEBUG) << l->buffer_var->name_hint << " is constant inside loop, adding it to temp_vars";
+              swizzle_temp_vars.erase(l->buffer_var->name_hint);
+              temp_vars.insert(l->buffer_var->name_hint);
+            }
+          } else {
+            unroll_loops.insert(op);
           }
         }
-      }
-      for (auto s : loop_stores) {
-        int ext = store_indexes[s].second - store_indexes[s].first;
-        if (ext != (int)swizzle_length && ext != 0) {
-          swizzlable = false;
-          LOG(DEBUG) << op->loop_var->name_hint
-                     << " not swizzlable : range of store is not 0, 2 or 4 : " << ExprToString(store_indexes[s].first);
-          break;
-        } else if (ext == 0) {
-          // cannot swizzle if variable is an argument with range 0 (disable loop swizzle for safety)
-          if (swizzle_temp_vars.count(s->buffer_var->name_hint) == 0) {
+        for (auto s : loop_stores) {
+          int ext = store_indexes[s].second - store_indexes[s].first;
+          if (ext != (int)swizzle_length && ext != 0) {
             swizzlable = false;
-            LOG(DEBUG) << op->loop_var->name_hint << " not swizzlable : range of store is 0 on variable : "
+            LOG(DEBUG) << op->loop_var->name_hint << " not swizzlable : range of store is not 0, 2 or 4 : "
                        << ExprToString(store_indexes[s].first);
             break;
+          } else if (ext == 0) {
+            // cannot swizzle if variable is an argument with range 0 (disable loop swizzle for safety)
+            if (swizzle_temp_vars.count(s->buffer_var->name_hint) == 0) {
+              swizzlable = false;
+              LOG(DEBUG) << op->loop_var->name_hint << " not swizzlable : range of store is 0 on variable : "
+                         << ExprToString(store_indexes[s].first);
+              break;
+            }
           }
 
           // check if store value contains var
           // Warning : this check does not verify loop variables that are not in a load
-          if (!store_loads[s].empty() && swizzle_stores.count(s) == 0) {
-            // Variable value changes at each loop iteration
-            swizzle_stores.insert(s);
-          } else {
+          if (store_loads[s].empty()) {
             // remove from swizzle_temp_vars
             swizzle_temp_vars.erase(s->buffer_var->name_hint);
             temp_vars.insert(s->buffer_var->name_hint);
+            LOG(DEBUG) << s->buffer_var->name_hint << " does not contain loop var, adding it to temp_vars";
+          } else {
+            // Variable value changes at each loop iteration, we can swizzle this store
+            if (swizzle_stores.count(s) == 0) {
+              if (((s->value.type().is_float() && s->value.type().bits() <= 32) ||
+                   (s->value.type().is_int() && s->value.type().bits() == 32))) {
+                LOG(DEBUG) << "Store " << s->buffer_var->name_hint
+                           << " matches all requirements, and its value changes at each step.";
+                swizzle_stores.insert(s);
+              } else {
+                LOG(DEBUG) << "Store variable " << s->buffer_var->name_hint
+                           << " has invalid type, unroll the loop instead (partial swizzle)\n"
+                           << " value type : " << s->value.type() << " bits : " << s->value.type().bits();
+                swizzlable = false;
+                unroll_loops.insert(op);
+              }
+            }
+            // check if load has correct format in single store
+            if (swizzlable && single_stores.count(s) > 0) {
+              auto ld = *(store_loads[s].begin());
+              if (temp_vars.count(ld->buffer_var->name_hint) > 0) {
+                LOG(DEBUG) << "Store variable " << s->buffer_var->name_hint << " not eligible for in-place swizzle (load not swizzlable)";
+                single_stores.erase(s);
+              }
+            }
           }
         }
       }
       if (swizzlable) {
         swizzle_loops.push_back(op);
+      } else {
+        // loop not swizzlable, remove all vars inside that are in swizzle_temp_vars
+        LOG(DEBUG) << "Loop not swizzlable, removing swizzle vars";
+        for (auto s : loop_stores) {
+          if (swizzle_temp_vars.count(s->buffer_var->name_hint) > 0) {
+            LOG(DEBUG) << "Removing " << s->buffer_var->name_hint;
+            swizzle_temp_vars.erase(s->buffer_var->name_hint);
+            temp_vars.insert(s->buffer_var->name_hint);
+          }
+        }
+        for (auto ld : loop_loads) {
+          if (swizzle_temp_vars.count(ld->buffer_var->name_hint) > 0) {
+            LOG(DEBUG) << "Removing " << ld->buffer_var->name_hint;
+            swizzle_temp_vars.erase(ld->buffer_var->name_hint);
+            temp_vars.insert(ld->buffer_var->name_hint);
+          }
+        }
       }
 
     } else {
+      LOG(DEBUG) << "Found loop on var " << op->loop_var->name_hint << ", extent: " << swizzle_length;
+      if (swizzle_length == -1 && pragma_swizzle) {
+        LOG(WARNING) << "Pragma swizzle detected but unable to get loop extent !";
+      }
       Visit(op->body);
     }
   }
@@ -139,7 +197,7 @@ class SwizzleFinder : public IRVisitor {
       auto *v = op->index.template as<Variable>();
       auto *i = op->index.template as<IntImm>();
       if (((v == nullptr || v->name_hint != loop_var->name_hint) && (i == nullptr || i->value != 0)) ||
-          !((t.is_float() || t.is_int()) && t.bits() <= 32)) {
+          !((t.is_float() && t.bits() <= 32) || (t.is_int() && t.bits() == 32))) {
         // this temp var does not look like a swizzle var, treat it as any regular temp var
         LOG(DEBUG) << "Irregular potential swizzle var : " << op->buffer_var->name_hint;
         temp_vars.insert(op->buffer_var->name_hint);
@@ -156,9 +214,9 @@ class SwizzleFinder : public IRVisitor {
   }
 
   void Visit_(const Load *op) final {
+    loop_loads.push_back(op);
     if (swizzle_candidate && swizzlable) {
       LOG(DEBUG) << "Load : " << op->buffer_var->name_hint << " index : " << ExprToString(op->index);
-      loop_loads.push_back(op);
       compute_var = true;
       current_min = 1;
       current_max = 1;
@@ -168,17 +226,40 @@ class SwizzleFinder : public IRVisitor {
       IRVisitor::Visit(op->index);
       // add this load to array
       compute_var = false;
-      if (current_min > current_max) std::swap(current_min, current_max);
-      load_indexes.insert(std::make_pair(op, std::make_pair(current_min, current_max)));
-      if (current_store != nullptr &&
-          ((contains_iterator && (op->type.is_float() || op->type.is_int()) && op->type.bits() <= 32) ||
-           swizzle_temp_vars.count(op->buffer_var->name_hint) > 0)) {
-        LOG(DEBUG) << "Load contains iterator or swizzle temp var";
-        store_loads[current_store].insert(op);
+      if (current_min > current_max) {
+        std::swap(current_min, current_max);
       }
-      contains_iterator = false;
-      LOG(DEBUG) << "End Load : " << op->buffer_var->name_hint << " range estimation : " << current_max - current_min;
-      IRVisitor::Visit(op->predicate);
+      load_indexes.insert(std::make_pair(op, std::make_pair(current_min, current_max)));
+      if (current_store != nullptr) {
+        store_loads[current_store].insert(op);
+
+        if ((contains_iterator &&
+             ((op->type.is_float() && op->type.bits() <= 32) || (op->type.is_int() && op->type.bits() == 32))) ||
+            swizzle_temp_vars.count(op->buffer_var->name_hint) > 0) {
+          LOG(DEBUG) << "Load contains iterator or swizzle temp var (current store: " << current_store->buffer_var
+                     << ")";
+          var_size[op->buffer_var->name_hint] = swizzle_length;
+          if (pragma_swizzle) {
+            std::string var_name = op->buffer_var->name_hint;
+            if (swizzle_candidate &&
+                std::find_if(swizzle_stores.begin(), swizzle_stores.end(), [var_name](const Store *s) {
+                  return (s->buffer_var->name_hint == var_name);
+                }) == swizzle_stores.end()) {
+              // add this var to swizzle_loads if it has not been met in a store before
+              swizzle_loads.insert(op);
+            }
+          }
+        }
+        contains_iterator = false;
+        LOG(DEBUG) << "End Load : " << op->buffer_var->name_hint << " range estimation : " << current_max - current_min;
+        IRVisitor::Visit(op->predicate);
+      }
+    } else {
+      if (swizzle_temp_vars.count(op->buffer_var->name_hint) > 0) {
+        LOG(DEBUG) << "Swizzle temp_var" << op->buffer_var->name_hint << "outside swizzlable loop, removing";
+        temp_vars.insert(op->buffer_var->name_hint);
+        swizzle_temp_vars.erase(op->buffer_var->name_hint);
+      }
     }
     IRVisitor::Visit_(op);
   }
@@ -187,16 +268,16 @@ class SwizzleFinder : public IRVisitor {
   // compute value for each of its elements (a, b or array)
   // add map<Store, pair> to evaluate extent inside each load/store
   void Visit_(const Store *op) final {
+    LOG(DEBUG) << "Store : " << op->buffer_var->name_hint << " index : " << ExprToString(op->index)
+               << "     value : " << ExprToString(op->value);
+    loop_stores.push_back(op);
+    compute_var = true;
+    contains_iterator = false;
+    current_store = op;
+    store_loads[op] = {};
+    current_min = 1;
+    current_max = 1;
     if (swizzle_candidate && swizzlable) {
-      LOG(DEBUG) << "Store : " << op->buffer_var->name_hint << " index : " << ExprToString(op->index)
-                 << "     value : " << ExprToString(op->value);
-      loop_stores.push_back(op);
-      compute_var = true;
-      contains_iterator = false;
-      current_store = op;
-      store_loads[op] = {};
-      current_min = 1;
-      current_max = 1;
       checkSwizzleVar(op, op->value.type());
       if (swizzle_temp_vars.count(op->buffer_var->name_hint) > 0) {
         set_temp_vars.insert(op->buffer_var->name_hint);
@@ -205,24 +286,34 @@ class SwizzleFinder : public IRVisitor {
       IRVisitor::Visit(op->index);
       // check for single Load (allows inplace swizzle)
       const Load *ld = op->value.as<Load>();
-      if (ld && ld->type == op->value.type() && (ld->type.is_float() || ld->type.is_int()) && ld->type.bits() <= 32) {
+      if (ld && ld->type == op->value.type() &&
+          ((ld->type.is_float() && ld->type.bits() <= 32) || (ld->type.is_int() && ld->type.bits() == 32))) {
         LOG(DEBUG) << "Single store   Value : " << op->value << std::endl
                    << "ld : " << ld->buffer_var << "[" << ld->index << "]";
         single_stores.insert(current_store);
       }
       // add this store to array
       compute_var = false;
-      if (current_min > current_max) std::swap(current_min, current_max);
-      store_indexes.insert(std::make_pair(op, std::make_pair(current_min, current_max)));
-      if (contains_iterator && (op->value.type().is_float() || op->value.type().is_int()) &&
-          op->value.type().bits() <= 32) {
+
+      if (contains_iterator && ((op->value.type().is_float() && op->value.type().bits() <= 32) ||
+                                (op->value.type().is_int() && op->value.type().bits() == 32))) {
         swizzle_stores.insert(op);
       }
       contains_iterator = false;
 
       LOG(DEBUG) << "End Store index : " << op->buffer_var->name_hint
                  << " range estimation : " << current_max - current_min;
+    } else {
+      if (swizzle_temp_vars.count(op->buffer_var->name_hint) > 0) {
+        LOG(DEBUG) << "Swizzle temp_var " << op->buffer_var->name_hint << "outside loop, removing";
+        temp_vars.insert(op->buffer_var->name_hint);
+        swizzle_temp_vars.erase(op->buffer_var->name_hint);
+      }
     }
+    if (current_min > current_max) {
+      std::swap(current_min, current_max);
+    }
+    store_indexes.insert(std::make_pair(op, std::make_pair(current_min, current_max)));
     IRVisitor::Visit_(op);
     current_store = nullptr;
     LOG(DEBUG) << "End Store " << op->buffer_var->name_hint;
@@ -236,6 +327,7 @@ class SwizzleFinder : public IRVisitor {
       var_size[op->buffer_var->name_hint] = size;
     } else {
       temp_vars.insert(op->buffer_var->name_hint);
+      LOG(DEBUG) << op->buffer_var->name_hint << " does not have valid size, adding it to temp_vars";
     }
     IRVisitor::Visit_(op);
   }
@@ -257,7 +349,7 @@ class SwizzleFinder : public IRVisitor {
   }
 
   void Visit_(const Variable *op) final {
-    if (swizzle_candidate && swizzlable && compute_var) {
+    if (swizzle_candidate && compute_var) {
       if (op->name_hint == loop_var->name_hint) {
         contains_iterator = true;
         current_min = 0;
@@ -278,27 +370,25 @@ class SwizzleFinder : public IRVisitor {
   }
 
   void Visit_(const Mul *op) final {
-    if (swizzle_candidate && swizzlable) {
-      if (compute_var) {
-        Visit(op->a);
-        int tmp_min = current_min, tmp_max = current_max;
+    if (swizzle_candidate && compute_var) {
+      Visit(op->a);
+      int tmp_min = current_min, tmp_max = current_max;
 
-        Visit(op->b);
+      Visit(op->b);
 
-        int tmp = std::min(std::min(current_min * tmp_min, current_max * tmp_min),
-                           std::min(current_min * tmp_max, current_max * tmp_max));
-        current_max = std::max(std::max(current_min * tmp_min, current_max * tmp_min),
-                               std::max(current_min * tmp_max, current_max * tmp_max));
-        current_min = tmp;
+      int tmp = std::min(std::min(current_min * tmp_min, current_max * tmp_min),
+                         std::min(current_min * tmp_max, current_max * tmp_max));
+      current_max = std::max(std::max(current_min * tmp_min, current_max * tmp_min),
+                             std::max(current_min * tmp_max, current_max * tmp_max));
+      current_min = tmp;
 
-        return;
-      }
+      return;
     }
     IRVisitor::Visit_(op);
   }
 
   void Visit_(const Add *op) final {
-    if (swizzle_candidate && swizzlable && compute_var) {
+    if (swizzle_candidate && compute_var) {
       Visit(op->a);
       int tmp_min = current_min, tmp_max = current_max;
 
@@ -314,7 +404,7 @@ class SwizzleFinder : public IRVisitor {
   }
 
   void Visit_(const Sub *op) final {
-    if (swizzle_candidate && swizzlable && compute_var) {
+    if (swizzle_candidate && compute_var) {
       Visit(op->b);
       int tmp_min = current_min, tmp_max = current_max;
 
@@ -330,25 +420,22 @@ class SwizzleFinder : public IRVisitor {
   }
 
   void Visit_(const Div *op) final {
-    if (swizzle_candidate && swizzlable) {
-      if (compute_var) {
+    if (swizzle_candidate && compute_var) {
         Visit(op->a);
         int tmp_min = current_min, tmp_max = current_max;
-
         Visit(op->b);
 
         if (current_min == 0 || current_max == 0) {
           swizzlable = false;
           LOG(WARNING) << "Possible division by zero detected in " << getDebugInfo(op);
+          return;
         }
         int tmp = std::min(std::min(tmp_min / current_min, tmp_min / current_max),
                            std::min(tmp_max / current_min, tmp_max / current_max));
         current_max = std::max(std::max(tmp_min / current_min, tmp_min / current_max),
                                std::max(tmp_max / current_min, tmp_max / current_max));
         current_min = tmp;
-
         return;
-      }
     }
     IRVisitor::Visit_(op);
   }
@@ -356,6 +443,7 @@ class SwizzleFinder : public IRVisitor {
   void Visit_(const IfThenElse *op) final {
     if (swizzle_candidate) {
       swizzlable = false;
+      LOG(DEBUG) << "Found if condition inside loop, disabling swizzle";
     }
     IRVisitor::Visit_(op);
   }
@@ -378,6 +466,7 @@ class SwizzleFinder : public IRVisitor {
 
   std::set<const Store *> single_stores{};
   std::vector<const For *> swizzle_loops{};
+  std::set<const For *> unroll_loops{};
   std::set<std::basic_string<char>> temp_vars{};
   std::set<std::basic_string<char>> swizzle_temp_vars{};
   std::set<const Load *> input_arguments{};
@@ -385,6 +474,7 @@ class SwizzleFinder : public IRVisitor {
   std::set<const Store *> swizzle_stores{};
   std::set<const Load *> swizzle_loads{};
   bool swizzlable{false};
+  bool force_swizzle{false};
   std::map<const Store *, std::set<const Load *>> store_loads;
   std::map<std::basic_string<char>, int> var_size{};
 
@@ -415,7 +505,7 @@ class SwizzleFinder : public IRVisitor {
   bool swizzle_candidate{false};
   bool contains_iterator{false};
   bool pragma_swizzle{false};
-  unsigned int swizzle_length{0};
+  int swizzle_length{0};
   Var loop_var;
   // temp vars that are set inside a loop
   std::set<std::basic_string<char>> set_temp_vars{};
@@ -428,46 +518,93 @@ class SwizzleFinder : public IRVisitor {
 
 class Swizzle : public IRMutator {
  public:
-  explicit Swizzle(std::basic_string<char> name) : finder() { kernel_name = std::move(name); };
+  explicit Swizzle(const std::basic_string<char> &name) : finder(), kernel_name(name) { };
 
   ~Swizzle() override = default;
 
   Stmt VisitAndMutate(Stmt stmt) {
+    if (const char *env_p = std::getenv("MS_AKG_FORCE_SWIZZLE")) {
+      if (!strcmp(env_p, "1")) {
+        finder.force_swizzle = true;
+        LOG(WARNING) << "Forced swizzle, pass will ignore pragma Attrs from scheduling";
+      }
+    }
     LOG(DEBUG) << "Visit statement";
     finder.Visit(stmt);
-    if (!finder.swizzle_loops.empty()) {
+    if (!finder.swizzle_loops.empty() || !finder.unroll_loops.empty()) {
       auto ret = Mutate(stmt);
       if (!ret.same_as(stmt)) {
-        LOG(INFO) << "Total swizzled loops for " << kernel_name << " : " << finder.swizzle_loops.size();
+        LOG(INFO) << "Total swizzled loops for " << kernel_name << " : "
+                  << (finder.swizzle_loops.size() + finder.unroll_loops.size());
+        if (const char *env_p = std::getenv("MS_AKG_PRINT_SWIZZLE_STATS")) {
+          if (!strcmp(env_p, "1")) {
+            print_stats();
+          }
+        }
         return ret;
       }
     }
+    if (const char *env_p = std::getenv("MS_AKG_PRINT_SWIZZLE_STATS")) {
+      if (!strcmp(env_p, "1")) {
+        print_stats();
+      }
+    }
+
     LOG(INFO) << "Total swizzled loops for " << kernel_name << " : 0";
     return stmt;
   }
 
+  // create a new swizzle variable
+  Var MakeVar(std::basic_string<char> name, air::DataType t, int loop_extent) {
+    if (t.is_int()) {
+      t = Int(t.bits(), loop_extent);
+    } else {
+      // Float(16, 4) -> half4
+      // Generate the right DataType
+      t = Float(t.bits(), loop_extent);
+    }
+    auto new_var = Variable::make(t, "sw_" + name);
+    replace_vars[name] = new_var;
+    LOG(DEBUG) << "Declaring new var " << new_var->name_hint << " of type " << new_var->type;
+    return new_var;
+  }
+
   Stmt Mutate_(const For *op, const Stmt &s) final {
     auto f = std::find(std::begin(finder.swizzle_loops), std::end(finder.swizzle_loops), op);
+    loop_extent = SwizzleFinder::GetExtent(op);
     if (f != std::end(finder.swizzle_loops)) {
       swizzling = true;
       LOG(DEBUG) << "Swizzle " << op->loop_var->name_hint;
       Stmt s2 = swizzle_loop(op, s);
       swizzling = false;
       return s2;
+    } else if (std::find(std::begin(finder.unroll_loops), std::end(finder.unroll_loops), op) !=
+               std::end(finder.unroll_loops)) {
+      auto min = op->min.as<IntImm>();
+      if (min && loop_extent > 0) {
+        unrolling = true;
+        LOG(DEBUG) << "Unroll " << op->loop_var->name_hint;
+        Stmt s2 = swizzle_loop(op, s);
+        unrolling = false;
+        return AttrStmt::make(s, "swizzle_unroll", Expr(loop_extent), s2);
+      } else {
+        return s;
+      }
     }
 
     auto body = Mutate(op->body);
     // auto unroll loops
     ForType t = op->for_type;
     int ext = SwizzleFinder::GetExtent(op);
-    if (ext > 0 && t == ForType::Serial) t = ForType::Unrolled;
+    if (ext > 0 && t == ForType::Serial) {
+      t = ForType::Unrolled;
+    }
     return For::make(op->loop_var, op->min, op->extent, t, op->device_api, body);
   }
 
   // modify loop to apply swizzle
   Stmt swizzle_loop(const For *op, const Stmt &s) {
     auto min = op->min.as<IntImm>();
-    loop_extent = SwizzleFinder::GetExtent(op);
     if (min && loop_extent > 0) {
       currentLoop = op;
       auto body = Mutate(op->body);
@@ -478,11 +615,18 @@ class Swizzle : public IRMutator {
     // something wrong happened during extent evaluation, we do not mutate
     LOG(WARNING) << "Could not mutate loop (invalid loop extent)";
     ForType t = op->for_type;
-    if (loop_extent > 0 && t == ForType::Serial) t = ForType::Unrolled;
+    if (loop_extent > 0 && t == ForType::Serial) {
+      t = ForType::Unrolled;
+    }
     return For::make(op->loop_var, op->min, op->extent, t, op->device_api, op->body);
   }
 
   Stmt Mutate_(const Store *op, const Stmt &s) final {
+    Stmt new_stmt, end_stmt;
+    Array<Expr> value_args;
+    Expr index;
+    air::DataType t;
+    Var new_var;
     if (swizzling) {
       loop_extent = SwizzleFinder::GetExtent(currentLoop);
       if (std::find(finder.single_stores.begin(), finder.single_stores.end(), op) != finder.single_stores.end()) {
@@ -500,6 +644,7 @@ class Swizzle : public IRMutator {
           // (swizzle temp var) sw_var ... ldg
           // check temp variable is declared
           CHECK(replace_vars.find(op->buffer_var->name_hint) != replace_vars.end());
+          full_reads++;
           buffer_var = replace_vars[op->buffer_var->name_hint];
           value = Call::make(op->value.type(), Call::ldg, value_args, Call::Intrinsic);
           Stmt s2 = Store::make(buffer_var, value, op->index, op->predicate);
@@ -507,9 +652,11 @@ class Swizzle : public IRMutator {
         } else if (finder.temp_vars.count(op->buffer_var->name_hint) > 0) {
           // (temp var) reinterpret cast ... ldg
           value = Call::make(op->value.type(), Call::ldg, value_args, Call::Intrinsic);
+          part_reads++;
         } else {
           // (output var) reinterpret cast ... reinterpret cast
           value = Call::make(op->value.type(), Call::reinterpret_cast_op, value_args, Call::Intrinsic);
+          full_writes++;
         }
 
         auto index = air::ir::Substitute(op->index, {{Var{currentLoop->loop_var}, make_const(Int(32), 0)}});
@@ -519,19 +666,12 @@ class Swizzle : public IRMutator {
       } else {
         // store with != 1 load
         Expr value = Mutate(op->value);
-        LOG(DEBUG) << "check type: " << op->value.type() << " " << op->value;
         CHECK(op->value.type().is_float() || op->value.type().is_int());
         CHECK_LE(op->value.type().bits(), 32);
+
         if (std::find(finder.swizzle_stores.begin(), finder.swizzle_stores.end(), op) != finder.swizzle_stores.end()) {
           LOG(DEBUG) << "Mutate Store : index contains loop var " << currentLoop->loop_var->name_hint << std::endl
                      << "Value :" << op->value;
-
-          Stmt new_stmt, end_stmt;
-          Expr index;
-          Array<Expr> value_args;
-
-          air::DataType t;
-          Var new_var;
           if (replace_vars.find(op->buffer_var->name_hint) != replace_vars.end()) {
             new_var = replace_vars[op->buffer_var->name_hint];
             t = new_var.type();
@@ -548,6 +688,8 @@ class Swizzle : public IRMutator {
 
           LOG(DEBUG) << "(Vector store) replace previous buffer var : " << op->buffer_var
                      << " type : " << op->buffer_var->type << " with " << new_var << " type : " << new_var->type;
+          full_writes++;
+
           Expr new_value = Broadcast::make(value, loop_extent);
           index = Ramp::make(0, 1, loop_extent);
           Expr predicate = Broadcast::make(Expr(1), loop_extent);
@@ -605,6 +747,7 @@ class Swizzle : public IRMutator {
                 LOG(DEBUG) << "(Vector load) replace previous buffer var : " << ld->buffer_var
                            << " type : " << ld->buffer_var->type << " with " << new_var2
                            << " type : " << new_var2->type;
+                full_reads++;
 
                 new_stmt = LetStmt::make(new_var2, ldg_input, new_stmt);
                 new_stmt = AttrStmt::make(s, "vec_load", ld->buffer_var, new_stmt);
@@ -634,6 +777,40 @@ class Swizzle : public IRMutator {
           }
         }
       }
+    } else if (unrolling) {
+      // store cannot be swizzled, try to swizzle load vars inside anyway
+      for (auto ld : finder.store_loads[op]) {
+        if (std::find(finder.temp_vars.begin(), finder.temp_vars.end(), ld->buffer_var->name_hint) ==
+              finder.temp_vars.end() &&
+            std::find(finder.swizzle_loads.begin(), finder.swizzle_loads.end(), ld) != finder.swizzle_loads.end()) {
+          // declare swizzle variable
+          Var new_var2;
+          air::DataType t2;
+          new_stmt = s;
+          if (replace_vars.find(ld->buffer_var->name_hint) == replace_vars.end()) {
+            new_var2 = MakeVar(ld->buffer_var->name_hint, ld->type, loop_extent);
+            t2 = new_var2.type();
+            declared.insert(ld->buffer_var->name_hint);
+
+            // 2. declaration  half4 sw_T_where = __ldg( ... )
+            index = air::ir::Substitute(ld->index, {{Var{currentLoop->loop_var}, make_const(Int(32), 0)}});
+            index = Simplify_cce(index);
+            Expr expr_ld = Load::make(ld->type, ld->buffer_var, index, ld->predicate);
+            value_args = {make_const(Int(32), loop_extent), expr_ld};
+            Expr ldg_input = Call::make(t2, Call::ldg, value_args, Call::Intrinsic);
+
+            LOG(DEBUG) << "(Partial swizzle, vector load) replace previous buffer var : " << ld->buffer_var
+                       << " type : " << ld->buffer_var->type << " with " << new_var2 << " type : " << new_var2->type;
+            part_reads++;
+
+            new_stmt = LetStmt::make(new_var2, ldg_input, new_stmt);
+            new_stmt = AttrStmt::make(s, "vec_load", ld->buffer_var, new_stmt);
+          } else {
+            new_stmt = AttrStmt::make(s, "vec_load", ld->buffer_var, new_stmt);
+          }
+          return new_stmt;
+        }
+      }
     }
     return IRMutator::Mutate_(op, s);
   }
@@ -656,21 +833,39 @@ class Swizzle : public IRMutator {
       replace_vars[op->buffer_var->name_hint] = new_var;
       declared.insert(op->buffer_var->name_hint);
       Stmt body = Mutate(op->body);
-      Stmt new_stmt;
       Stmt let_stmt = LetStmt::make(new_var, Broadcast::make(make_const(op->type, 0), size), body);
       Stmt attr = AttrStmt::make(s, "no_init_value", Expr(0), let_stmt);
       Stmt new_allocate = Allocate::make(op->buffer_var, op->type, op->extents, const_false(), attr);
 
-      return new_allocate;  // Block::make(attr, attr1);
+      return new_allocate;
     }
     return IRMutator::Mutate_(op, s);
   }
 
+  void print_stats() {
+    std::ofstream myfile;
+    auto filename = kernel_name + ".swizzle_stats.yaml";
+    myfile.open(filename);
+    myfile << "swizzle: enabled" << std::endl;
+    myfile << "operator: " << kernel_name << std::endl;
+    myfile << "reads:" << std::endl;
+    myfile << "  full: " << full_reads << std::endl;
+    myfile << "  part: " << part_reads << std::endl;
+    myfile << "writes:" << std::endl;
+    myfile << "  full: " << full_writes << std::endl;
+
+    myfile.close();
+    LOG(INFO) << "Wrote swizzle stats to file " << filename;
+  }
+
  private:
-  //  int nb_loops;
+  int full_reads{0};
+  int full_writes{0};
+  int part_reads{0};
   SwizzleFinder finder;
   const For *currentLoop{};
   bool swizzling = false;
+  bool unrolling = false;
   int loop_extent{};
   std::set<std::basic_string<char>> declared{};
   std::unordered_map<std::basic_string<char>, Var> replace_vars{};
@@ -716,18 +911,22 @@ static void ParseBoolAttr(const Map<std::string, NodeRef> &attrs, const std::str
 Stmt SwizzleGPU(const Stmt &stmt, const Map<std::string, NodeRef> &attrs) {
   bool disable_swizzle = false;
   ParseBoolAttr(attrs, "disable_swizzle", &disable_swizzle);
-  if (const char *env_p = std::getenv("MS_AKG_DISABLE_SWIZZLE"))
-    if (!strcmp(env_p, "1")) disable_swizzle = true;
+  if (const char *env_p = std::getenv("MS_AKG_DISABLE_SWIZZLE")) {
+    if (!strcmp(env_p, "1")) {
+      disable_swizzle = true;
+    }
+  }
   if (disable_swizzle) {
     LOG(INFO) << "SwizzleGPU pass disabled";
     return stmt;
   }
   std::string kernel_name_;
   ParseStringAttr(attrs, "kernel_name", &kernel_name_);
-  if (kernel_name_.empty())
+  if (kernel_name_.empty()) {
     LOG(WARNING) << "Kernel name not found !";
-  else
+  } else {
     LOG(INFO) << "BEGIN_PASS SwizzleGPU on " << kernel_name_;
+  }
   auto sw = Swizzle(kernel_name_);
   Stmt s = sw.VisitAndMutate(stmt);
 

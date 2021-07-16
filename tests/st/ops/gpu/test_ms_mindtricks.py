@@ -109,10 +109,16 @@ def test_gpu_cases():
 def test_single_composite_file(input_file, attrs, poly):
     with open(input_file, 'r') as f:
         desc = f.read()
+        operator_name = json.loads(desc)["op"]
+
+        logging.info("\033[1mTesting %s\033[0m", operator_name)
         if get_result(desc, poly, attrs):
-            logging.info("Run Pass!")
+            logging.info("\033[1m\033[32m%s: Success\033[0m", operator_name)
         else:
-            logging.info("Precision Error")
+            logging.info("\033[1m\033[33m%s: Precision Error\033[0m", operator_name)
+            logging.info("input: %s", str(input_file))
+            logging.info("attrs: %s", str(attrs))
+            logging.info("poly: %s", str(poly))
             raise ValueError("Precision Error")
 
 def test_mindtrick(operator_path, trick_path):
@@ -125,7 +131,7 @@ def test_mindtrick(operator_path, trick_path):
         test_single_composite_file(operator_path, attrs, poly=True)
     return True
 
-def test_composite_cases(operators=composite_operators):
+def test_composite_cases(operators):
     for operator in operators:
         operator_path = ""
         if os.path.isfile(composite_operators_dir + "/" + operator + ".info"):
@@ -133,7 +139,7 @@ def test_composite_cases(operators=composite_operators):
         elif os.path.isfile(composite_operators_dir + "/" + operator + ".json"):
             operator_path = composite_operators_dir + "/" + operator + ".json"
         else:
-            logging.info("could not find desc for operator: " + operator)
+            logging.info("could not find desc for operator: %s", operator)
 
         trick_path = ""
         if operator in tricks_filenames:
@@ -141,7 +147,7 @@ def test_composite_cases(operators=composite_operators):
         elif os.path.isfile(tricks_dir + "/" + operator + ".json"):
             trick_path = tricks_dir + "/" + operator + ".json"
         else:
-            logging.info("could not find trick for operator: " + operator)
+            logging.info("could not find trick for operator: %s", operator)
 
         test_mindtrick(operator_path, trick_path)
 
@@ -149,7 +155,7 @@ def test_composite_cases(operators=composite_operators):
 
 ########################################################################################################################
 
-def test_mindtricks(cases=["gpu", "composite"]):
+def test_mindtricks(cases):
     if "gpu" in cases:
         test_gpu_cases()
     if "composite" in cases:
@@ -160,4 +166,4 @@ def test_mindtricks(cases=["gpu", "composite"]):
 ########################################################################################################################
 
 if __name__ == '__main__':
-    test_mindtricks()
+    test_mindtricks(["gpu", "composite"])
