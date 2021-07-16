@@ -26,7 +26,7 @@ class BroadcastInserterMutator : public IRMutator {
       auto call = provide->value.as<Call>();
       CHECK(call);
       //for unary input op
-      if (call->args.size() == 1) {
+      if (call->args.size() == 1 && call->name != "BroadcastTo") {
         Expr arg = call->args[0];
         if (arg.as<IntImm>() || arg.as<UIntImm>() || arg.as<FloatImm>()) {
           return DoInsert(arg, 0, provide, call, op);
