@@ -475,6 +475,8 @@ class UserConfig {
   void RecordCustomOuterMapping(const int axis_dim, const std::string outer_mapping) {
     custom_outer_mapping_[axis_dim] = outer_mapping;
   }
+  bool GetEnableVectorization() { return enable_vectorization_; }
+  void SetEnableVectorization(bool enable_vectorization) { enable_vectorization_ = enable_vectorization; }
 
   bool UseRegisterMemory() { return use_register_memory_; }
   bool UseSharedMemory() { return use_shared_memory_; }
@@ -641,6 +643,7 @@ class UserConfig {
   // vectorization
   int vector_load_type_{0};
   bool enable_one_dim_thread_{false};
+  bool enable_vectorization_{false};
 
   // tiling config
   std::string b_dim_;

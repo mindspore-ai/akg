@@ -103,6 +103,8 @@ class TileOuterBand : public SchedulePass {
   bool IsMatrixCPromoteToShared();
   isl::schedule_node SplitMatmulStatement(const isl::schedule_node &node);
 
+  void CheckVectorizedForElemwiseOp(isl::schedule_node node);
+
  private:
   PassInfo &pass_info_;
   ScopInfo &scop_info_;

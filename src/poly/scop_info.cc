@@ -728,8 +728,7 @@ void UserConfig::RegisterParam(const Expr &expr) {
 }
 
 MappingCfg *UserConfig::GetThreadConfig() {
-  bool enable_replace_cfg =
-    (this->enable_one_dim_thread_ || this->vector_load_type_ || this->enable_tensor_core_use_poly_);
+  bool enable_replace_cfg = (this->enable_one_dim_thread_ || this->enable_tensor_core_use_poly_);
   if (!enable_replace_cfg) {
     return &thread_cfg_;
   }
@@ -746,7 +745,7 @@ MappingCfg *UserConfig::GetThreadConfig() {
 
 void UserConfig::SetThreadConfig(const std::string &thread_cfg) {
   this->thread_cfg_.type = THREADS;
-  if (this->enable_one_dim_thread_ || this->vector_load_type_ || this->enable_tensor_core_use_poly_) {
+  if (this->enable_one_dim_thread_ || this->enable_tensor_core_use_poly_) {
     std::vector<std::string> res = common::Split(thread_cfg, " ");
     int size = 1;
     for (size_t i = 0; i < res.size(); ++i) {

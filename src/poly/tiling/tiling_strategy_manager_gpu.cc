@@ -752,6 +752,15 @@ void GpuStrategy::AddGpuConstraint() {
   if (template_ == Template::PURE_ELEM) {
     InjectiveSpeedup();
   }
+
+  // Vectorization for Elementwise Op
+  if (template_ == Template::PURE_ELEM || template_ == Template::BROADCAST_OP || template_ == Template::PAD_OP) {
+    CheckVectorizationForElemwiseOp(analyzer_->sch_);
+  }
+  if (analyzer_->scop_info_.user_config_.GetEnableVectorization()) {
+    VectorizationSpeedup();
+  }
+
   SetMappingConfig();
   if (!((template_ == Template::MATMUL || template_ == Template::CONV) &&
         analyzer_->scop_info_.user_config_.GetEnableTensorCore())) {
@@ -759,7 +768,9 @@ void GpuStrategy::AddGpuConstraint() {
       if (axis == analyzer_->RootAxis()) {
         return;
       }
-      axis->TileRestrainToSingleValue(axis->c1_constraints.tile_min_, TileLevel::CACHE0);
+      if (!analyzer_->scop_info_.user_config_.GetEnableVectorization()) {
+        axis->TileRestrainToSingleValue(axis->c1_constraints.tile_min_, TileLevel::CACHE0);
+      }
     });
   }
 
@@ -767,6 +778,123 @@ void GpuStrategy::AddGpuConstraint() {
   if (analyzer_->scop_info_.user_config_.GetEnableConvTensorCore()) {
     MarkMappingInRootAxis();
   }
+}
+
+void GpuStrategy::VectorizationSpeedup() {
+  std::stringstream ss;
+  std::vector<TileAxis *> vectorization_axes;
+  analyzer_->ForEachAxisTopDown([this, &vectorization_axes](TileAxis *axis) {
+    if (axis == analyzer_->RootAxis() || axis->range_extent.as<IntImm>() == nullptr) {
+      return;
+    }
+    vectorization_axes.emplace_back(axis);
+  });
+
+  auto WriteConfigBack = [this, &vectorization_axes, &ss]() {
+    for (size_t i = 0; i < vectorization_axes.size(); ++i) {
+      ss << "replace block " << block_cfg_[i] << " with " << vectorization_axes[i]->block_constraints.map_extent_
+         << " replace thread " << thread_cfg_[vectorization_axes.size() - 1 - i] << " with "
+         << vectorization_axes[i]->thread_constraints.map_extent_;
+      analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
+      block_cfg_[i] = vectorization_axes[i]->block_constraints.map_extent_;
+      thread_cfg_[vectorization_axes.size() - 1 - i] = vectorization_axes[i]->thread_constraints.map_extent_;
+    }
+  };
+
+  if (vectorization_axes.size() == 1) {
+    vectorization_axes[0]->TileRestrainToSingleValue(vectorized_bytes_, TileLevel ::CACHE0);
+    vectorization_axes[0]->thread_constraints.map_extent_ =
+      vectorization_axes[0]->thread_constraints.map_extent_ / vectorized_bytes_;
+  } else {
+    for (size_t i = 0; i < vectorization_axes.size(); ++i) {
+      if (i != vectorization_axes.size() - 1) {
+        vectorization_axes[i]->TileRestrainToSingleValue(1, TileLevel ::CACHE0);
+      } else {
+        vectorization_axes[i]->TileRestrainToSingleValue(vectorized_bytes_, TileLevel ::CACHE0);
+        vectorization_axes[i]->thread_constraints.map_extent_ =
+          vectorization_axes[i]->thread_constraints.map_extent_ / vectorized_bytes_;
+      }
+    }
+  }
+
+  WriteConfigBack();
+}
+
+bool GpuStrategy::IsVectorized() {
+  auto reads_access = analyzer_->scop_info_.analysis_result_.GetReads().domain_factor_domain();
+  auto write_access = analyzer_->scop_info_.analysis_result_.GetWrites().domain_factor_domain();
+  auto original_access = reads_access.unite(write_access);
+
+  std::vector<Array<Expr>> tensors_shape;
+
+  std::vector<Type> tensor_types;
+  for (auto a : original_access.get_map_list()) {
+    auto id = a.get_tuple_id(isl_dim_out).to_str();
+    Tensor tensor = analyzer_->scop_info_.FindTensor(id);
+    tensors_shape.emplace_back(tensor->shape);
+    Type type = analyzer_->scop_info_.GetDtypeOf(id);
+    int bytes = type.bytes();
+    auto tmp_bytes = (4 / bytes) * 4;  // Default vectorization mode fp32 = 4Bytes
+    vectorized_bytes_ = std::max(tmp_bytes, vectorized_bytes_);
+    if (tensor_types.empty()) {
+      tensor_types.emplace_back(type);
+    } else {
+      if (type != tensor_types[0]) {
+        return false;
+      }
+    }
+    if (type == Bool(1)) {
+      return false;
+    }
+  }
+
+  // To avoid out of memory in local promotion
+  int64_t alloc_thread = 1;
+  for (size_t i = 0; i < thread_cfg_.size(); ++i) {
+    alloc_thread *= thread_cfg_[i];
+  }
+  auto tensor_nums = original_access.get_map_list().size();
+  // Default vectorization mode fp32 = 128bits
+  if (tensor_nums * alloc_thread >= MAX_REGISTER_PER_THREAD_BLOCK) {
+    return false;
+  }
+
+  for (auto i : tensors_shape) {
+    if (i[i.size() - 1].as<IntImm>()->value % vectorized_bytes_ != 0) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+void GpuStrategy::CheckVectorizationForElemwiseOp(isl::schedule sch) {
+  if (!IsVectorized()) {
+    return;
+  }
+
+  auto root = sch.get_root();
+  isl::schedule_node node = GetOuterBand(root);
+  if (!node.as<isl::schedule_node_band>().get_permutable()) {
+    return;
+  }
+
+  std::vector<int> axes;
+  analyzer_->ForEachAxisTopDown([this, &axes](TileAxis *axis) {
+    if (axis == analyzer_->RootAxis()) {
+      return;
+    }
+    axes.emplace_back(axis->c1_constraints.tile_extent_.as<IntImm>()->value);
+  });
+
+  if (axes[axes.size() - 1] % vectorized_bytes_ != 0) {
+    return;
+  }
+
+  if (analyzer_->scop_info_.user_config_.GetVectorLoadType() == 0) {
+    analyzer_->scop_info_.user_config_.SetVectorLoadType(128);  // Default vectorization mode fp32 =128bits
+  }
+  analyzer_->scop_info_.user_config_.SetEnableVectorization(true);
 }
 
 void GpuStrategy::MarkMappingInRootAxis() {
