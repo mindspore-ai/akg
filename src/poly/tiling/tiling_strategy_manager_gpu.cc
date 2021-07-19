@@ -277,7 +277,8 @@ void ReduceStrategy::AddGpuConstraint() {
     std::string key = info.attr_key;
     return key.find(AT_TRANSPOSE) != std::string::npos;
   };
-  analyzer_->ForEachAxisTopDown([this, &depth, &HasTranspose](TileAxis *axis) {
+  int64_t reduce_length = 1;
+  analyzer_->ForEachAxisTopDown([this, &depth, &reduce_length, &HasTranspose](TileAxis *axis) {
     if (!has_transpose_) {
       has_transpose_ = std::any_of(axis->attrs.begin(), axis->attrs.end(), HasTranspose);
     }
@@ -290,12 +291,18 @@ void ReduceStrategy::AddGpuConstraint() {
       injective_axes_.emplace_back(axis);
       return;
     }
+    if (auto ext = axis->range_extent.as<IntImm>()) {
+      reduce_length *= ext->value;
+    }
     if (std::count(reduce_axes_.begin(), reduce_axes_.end(), axis)) {
       return;
     }
     reduce_axes_.emplace_back(axis);
   });
   all_reduce_ = reduce_axes_.size() == depth;
+  if (reduce_length <= 32) {
+    analyzer_->scop_info_.user_config_.SetEnableAkgReduceLib(false);
+  }
   if (analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib()) {
     AkgReduceLibStrategyOnGpu();
   } else {
