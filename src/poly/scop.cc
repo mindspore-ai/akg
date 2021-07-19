@@ -34,6 +34,9 @@ void Scop::ParseUserConfig(std::string target, const Map<std::string, NodeRef> &
                            const Map<Tensor, Buffer> &extern_buffer, bool is_spec_gemm, bool is_tuning, bool is_dynamic,
                            const Schedule &sch) {
   info_.user_config_.SetTarget(target);
+  if (info_.user_config_.GetTarget() == TARGET_CCE) {
+    info_.user_config_.SetEnableRestart(true);
+  }
   info_.user_config_.SetAttrs(attrs);
   info_.user_config_.SetBind(extern_buffer);
   info_.user_config_.SetOriginBind(extern_buffer);
@@ -131,7 +134,7 @@ isl::schedule Scop::Transform(const isl::schedule &input_schedule) {
 
     // We offer a restart mechanism for scalar stmt that cannot tile: do not consider coincidence
     // and re-compute/re-tile to generate final schedule.
-    if (mgr.need_restart_) {
+    if (mgr.need_restart_ && info_.user_config_.GetEnableRestart()) {
       info_.user_config_.SetConsiderCoincidence(false);
       DsaMgrStrategy scalar_strategy(info_);
       final_schedule = mgr.Run(input_schedule, scalar_strategy);
@@ -170,7 +173,7 @@ isl::schedule Scop::Transform(const isl::schedule &input_schedule) {
     info_.user_config_.SetConsiderCoincidence(true);
     GPUMgrStrategy gpu_strategy(info_);
     final_schedule = mgr.Run(input_schedule, gpu_strategy);
-    if (mgr.need_restart_) {
+    if (mgr.need_restart_ && info_.user_config_.GetEnableRestart()) {
       info_.user_config_.SetConsiderCoincidence(false);
       if (info_.analysis_result_.GetEnabledAutoTiling()) {
         auto block_cfg = info_.user_config_.GetBlockConfig();

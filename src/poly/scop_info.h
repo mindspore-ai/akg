@@ -202,6 +202,8 @@ class UserConfig {
 
   void SetAttrs(const Map<std::string, NodeRef> &attrs) {
     if (attrs.empty()) return;
+    ParseBoolAttr(attrs, "enable_restart", &enable_restart_);
+
     ParseDynamicShapeAttr(attrs, "dynamic_shape", &dynamic_shape_);
     ParseIntAttr(attrs, "dynamic_shape_bound", &dynamic_shape_bound_);
     ParseBoolAttr(attrs, "pragma_tilesize_is_var", &tile_size_is_var_);
@@ -295,6 +297,8 @@ class UserConfig {
   }
 
   std::string GetTarget() { return target_; }
+  bool GetEnableRestart() { return enable_restart_; }
+  void SetEnableRestart(bool enable_restart) { enable_restart_ = enable_restart; }
   // getter for dynamic shape config
   bool GetIsDynamic() const { return is_dynamic_; }
   std::vector<NodeRef> GetDynamicShape() { return dynamic_shape_; }
@@ -604,6 +608,7 @@ class UserConfig {
   std::unordered_map<std::string, Var> params_;
   std::unordered_map<std::string, Expr> params_rev_map_;
   std::map<int64_t, Expr> param_tiling_map_;
+  bool enable_restart_{false};
   bool is_spec_gemm_{false};
 
   // dynamic shape config
