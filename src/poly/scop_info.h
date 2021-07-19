@@ -902,27 +902,15 @@ class AnalysisResult {
   ReduceMap &GetReduceMap() { return reduces_; }
   ReduceMap GetReduceMap() const { return reduces_; }
 
-  void RecordReduceAttrs(const std::unordered_set<std::string> &reduce_attrs) {
-    reduce_attrs_ = std::move(reduce_attrs);
-  }
-  std::unordered_set<std::string> GetReduceAttrs() const { return reduce_attrs_; }
-  void ClearReduceAttrs() { reduce_attrs_.clear(); }
-
-  void RecordNotReduceAttrs(const std::unordered_set<std::string> &not_reduce_attrs) {
-    not_reduce_attrs_ = std::move(not_reduce_attrs);
-  }
-  std::unordered_set<std::string> GetNotReduceAttrs() const { return not_reduce_attrs_; }
-  void ClearNotReduceAttrs() { not_reduce_attrs_.clear(); }
-
   void RecordReduceAxisForMatmul(const std::vector<const Variable *> &reduce_axis) {
     reduce_axis_ = std::move(reduce_axis);
   }
   std::vector<const Variable *> GetReduceAxisForMatmul() const { return reduce_axis_; }
 
-  void RecordNotReduceAxisForMatmul(const std::vector<Var> &not_reduce_axis) {
+  void RecordNotReduceAxisForMatmul(const std::vector<const Variable *> &not_reduce_axis) {
     not_reduce_axis_ = std::move(not_reduce_axis);
   }
-  std::vector<Var> GetNotReduceAxisForMatmul() const { return not_reduce_axis_; }
+  std::vector<const Variable *> GetNotReduceAxisForMatmul() const { return not_reduce_axis_; }
 
   void RecordBatchAxisNumForMatmul(const unsigned int &batch_axis_num) { batch_axis_num_ = std::move(batch_axis_num); }
   unsigned int GetBatchAxisNumForMatmul() const { return batch_axis_num_; }
@@ -968,7 +956,7 @@ class AnalysisResult {
   std::unordered_set<std::string> reduce_attrs_;
   std::unordered_set<std::string> not_reduce_attrs_;
   std::vector<const Variable *> reduce_axis_;
-  std::vector<Var> not_reduce_axis_;
+  std::vector<const Variable *> not_reduce_axis_;
   unsigned int batch_axis_num_;
 
   isl::union_map reads_;
