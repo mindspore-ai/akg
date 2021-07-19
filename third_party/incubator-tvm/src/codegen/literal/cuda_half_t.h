@@ -17,12 +17,17 @@
  * under the License.
  */
 
+/*
+ * 2021.7.9 - Add include file akg_cuda_half_t.h.
+ */
+
 /*!
  * \file cuda_half_t.h
  * \brief half_t (fp16) definition for cuda codegen.
  */
 #ifndef TVM_CODEGEN_LITERAL_CUDA_HALF_T_H_
 #define TVM_CODEGEN_LITERAL_CUDA_HALF_T_H_
+
 
 static constexpr const char* _cuda_half_t_def = R"(
 typedef unsigned short uint16_t;
@@ -277,25 +282,6 @@ TVM_HALF_OPERATOR(bool, >=)
 TVM_HALF_OPERATOR(bool, <=)
 )";
 
-static constexpr const char* _cuda_half_util = R"(
-// Pack two half value.
-static inline __device__ __host__ unsigned
-__pack_half2(const half x, const half y) {
-  unsigned v0 = *((unsigned short *)&x);
-  unsigned v1 = *((unsigned short *)&y);
-  return (v1 << 16) | v0;
-}
-static inline __device__ __host__ half hpow(half x, half y) {
-  float tmp_x = __half2float(x);
-  float tmp_y = __half2float(y);
-  float result = powf(tmp_x, tmp_y);
-  return __float2half(result);
-}
-static inline __device__ __host__ half htanh(half x) {
-  float tmp_x = __half2float(x);
-  float result = tanhf(tmp_x);
-  return __float2half(result);
-}
-)";
+#include "akg_cuda_half_t.h"
 
 #endif  // TVM_CODEGEN_LITERAL_CUDA_HALF_T_H_

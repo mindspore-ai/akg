@@ -218,7 +218,7 @@ def np_matmul_str(inputs, output, attr):
     if input_1['data_type'] == "float16":
         tmp = "%s = %s.astype(np.float32)" % (get_input(input_1), get_input(input_1))
         res = res + tmp + "\n"
-    
+
     if trans_a and trans_b:
         res += "%s = np.dot(np.swapaxes(%s, -1, -2), np.swapaxes(%s, -1, -2))" %\
               (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]))
@@ -264,10 +264,10 @@ def matmul_str(inputs, output, attr):
 
     left_format = get_attr(attr, "left_format")
     if left_format == None:
-        left_format = get_attr(attr, "pri_format") 
+        left_format = get_attr(attr, "pri_format")
     right_format = get_attr(attr, "right_format")
     if right_format == None:
-        right_format = get_attr(attr, "pri_format") 
+        right_format = get_attr(attr, "pri_format")
     trans_a = get_attr(attr, "transpose_a")
     trans_b = get_attr(attr, "transpose_b")
     left_input = inputs[0][0]
@@ -298,7 +298,7 @@ def matmul_str(inputs, output, attr):
     has_bias = (len(inputs) > 2)
     if has_bias:
         bias=inputs[2][0]
-        bias_shape = right_ori_shape[-2] if trans_b else right_ori_shape[-1] 
+        bias_shape = right_ori_shape[-2] if trans_b else right_ori_shape[-1]
         if bias['shape'][0] != bias_shape:
             res += "%s = random_gaussian([%s, ], miu=1, sigma=0.1).astype(np.%s) \n" % (get_input(bias), str(bias_shape), bias['data_type'])
 
@@ -309,19 +309,35 @@ def matmul_str(inputs, output, attr):
     func_name = "matmul_func"
     params = [get_input(i[0]) for i in inputs]
     func = func_pack(func_name, res, params, output_name)
-    return func + "%s = %s(%s)\n" %(output_name, func_name, ','.join(params)) 
+    return func + "%s = %s(%s)\n" %(output_name, func_name, ','.join(params))
 
 def func_pack(func_name, func_body, params, ret):
     lines = func_body.split('\n')
     body_lines = ['\t' + line for line in lines]
-    func_header = 'def ' + func_name + '(' + ','.join(params) + '):\n' 
+    func_header = 'def ' + func_name + '(' + ','.join(params) + '):\n'
     new_body = '\n'.join(body_lines) + '\n\treturn '+ ret + '\n'
     return func_header + new_body
-    
+
 op_dsl = {
     "ReduceSum": lambda inputs, output, attr: reduce_str(inputs, output, attr, "sum"),
     "ReduceMax": lambda inputs, output, attr: reduce_str(inputs, output, attr, "max"),
     "ReduceMin": lambda inputs, output, attr: reduce_str(inputs, output, attr, "min"),
+    "Sin": lambda inputs, output, attr: "%s = np.sin(%s)" %
+        (output[0]['tensor_name'], get_input(inputs[0][0])),
+    "Cos": lambda inputs, output, attr: "%s = np.cos(%s)" %
+        (output[0]['tensor_name'], get_input(inputs[0][0])),
+    "Asin": lambda inputs, output, attr: "%s = np.arcsin(%s)" %
+        (output[0]['tensor_name'], get_input(inputs[0][0])),
+    "ACos": lambda inputs, output, attr: "%s = np.arccos(%s)" %
+        (output[0]['tensor_name'], get_input(inputs[0][0])),
+    "Sign": lambda inputs, output, attr: "%s = np.sign(%s)" %
+        (output[0]['tensor_name'], get_input(inputs[0][0])),
+    "IsNan": lambda inputs, output, attr: "%s = np.isnan(%s)" %
+        (output[0]['tensor_name'], get_input(inputs[0][0])),
+    "IsInf": lambda inputs, output, attr: "%s = np.isinf(%s)" %
+        (output[0]['tensor_name'], get_input(inputs[0][0])),
+    "IsFinite": lambda inputs, output, attr: "%s = np.isfinite(%s)" %
+        (output[0]['tensor_name'], get_input(inputs[0][0])),
     "Tanh": lambda inputs, output, attr: "%s = np.tanh(%s)" %
         (output[0]['tensor_name'], get_input(inputs[0][0])),
     "Mul": lambda inputs, output, attr: "%s = np.multiply(%s, %s)" %
@@ -411,9 +427,17 @@ op_dsl = {
     "BatchMatMul": lambda inputs, output, attr: matmul_str(inputs, output, attr),
     "Assign": lambda inputs, output, attr: "%s = %s; %s = %s" %
         (get_input(inputs[0][0]), get_input(inputs[1][0]), output[0]['tensor_name'],
-        get_input(inputs[1][0])), 
+        get_input(inputs[1][0])),
     "MatMul": lambda inputs, output, attr: matmul_str(inputs, output, attr),
-    "Conv2D": lambda inputs, output, attr: conv_2d_str(inputs, output, attr)
+    "Conv2D": lambda inputs, output, attr: conv_2d_str(inputs, output, attr),
+    "Asinh": lambda inputs, output, attr: "%s = np.arcsinh(%s)" %
+        (output[0]['tensor_name'], get_input(inputs[0][0])),
+    "Acosh": lambda inputs, output, attr: "%s = np.arccosh(%s)" %
+        (output[0]['tensor_name'], get_input(inputs[0][0])),
+    "Atan2": lambda inputs, output, attr: "%s = np.arctan2(%s)" %
+        (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0])),
+    "Expm1": lambda inputs, output, attr: "%s = np.expm1(%s)" %
+        (output[0]['tensor_name'], get_input(inputs[0][0])),
 }
 
 def conv_2d_str(inputs, output, attr):

@@ -57,6 +57,13 @@ namespace poly {
   X(elewise_single_rec)           \
   X(elewise_single_log)           \
   X(elewise_single_exp)           \
+  X(elewise_single_sin)           \
+  X(elewise_single_cos)           \
+  X(elewise_single_asin)          \
+  X(elewise_single_acos)          \
+  X(elewise_single_isinf)         \
+  X(elewise_single_isfinite)      \
+  X(elewise_single_isnan)         \
   X(elewise_single_sqrt)          \
   X(elewise_single_rsqrt)         \
   X(vec_single_cast)              \
@@ -116,13 +123,26 @@ namespace poly {
   X(pow)                          \
   X(isnan)                        \
   X(load_im2col_c1_buf)           \
-  X(tanh)
+  X(tanh)                         \
+  X(asinh)                        \
+  X(acosh)                        \
+  X(elewise_single_atan)          \
+  X(elewise_binary_atan2)         \
+  X(elewise_single_expm1)         \
+  X(elewise_single_erf)
 
 #define GENERATE_ENUM(ENUM) ENUM,
 
 enum class PolyOpType : int { FOREACH(GENERATE_ENUM) };
 
 const std::map<std::string, PolyOpType> POLY_SUPPORTED_OPS = {
+  {"sin", PolyOpType::elewise_single_sin},
+  {"cos", PolyOpType::elewise_single_cos},
+  {"asin", PolyOpType::elewise_single_asin},
+  {"acos", PolyOpType::elewise_single_acos},
+  {"isnan", PolyOpType::elewise_single_isnan},
+  {"isinf", PolyOpType::elewise_single_isinf},
+  {"isfinite", PolyOpType::elewise_single_isfinite},
   {"log", PolyOpType::elewise_single_log},
   {"exp", PolyOpType::elewise_single_exp},
   {"sqrt", PolyOpType::elewise_single_sqrt},
@@ -166,6 +186,12 @@ const std::map<std::string, PolyOpType> POLY_SUPPORTED_OPS = {
   {"isnan", PolyOpType::isnan},
   {"load_im2col_c1_buf", PolyOpType::load_im2col_c1_buf},
   {"tanh", PolyOpType::tanh},
+  {"asinh", PolyOpType::asinh},
+  {"acosh", PolyOpType::acosh},
+  {"atan", PolyOpType::elewise_single_atan},
+  {"atan2", PolyOpType::elewise_binary_atan2},
+  {"expm1", PolyOpType::elewise_single_expm1},
+  {"erf", PolyOpType::elewise_single_erf},
 };
 
 unsigned int WrappedStrtol(const std::string &str);

@@ -53,6 +53,12 @@
  * Add const akg_reduce::AkgKahanAccumulation for reduce
  */
 
+/*
+ * 2021.7.07
+ *   Add function for Mod op fusion: VisitExpr_(const Mod* op, std::ostream& os).
+ *   If op is int type, generate code: op->a % op->b, else fmod(op->a, op->b).
+ */
+
 #ifndef TVM_CODEGEN_CODEGEN_CUDA_H_
 #define TVM_CODEGEN_CODEGEN_CUDA_H_
 
@@ -108,6 +114,7 @@ class CodeGenCUDA final : public CodeGenC {
   void VisitStmt_(const LetStmt *op) final;
   void VisitExpr_(const Variable *op, std::ostream &os) final;
   void VisitExpr_(const Load *op, std::ostream &os) final;
+  void VisitExpr_(const Mod *op, std::ostream &os) final;
   void VisitStmt_(const Store *op) final;
 
  private:
