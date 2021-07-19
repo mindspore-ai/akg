@@ -367,6 +367,26 @@ TVM_REGISTER_GLOBAL("ReduceMin").set_body([](TVMArgs args, TVMRetValue *rv) {
   TOPI_ONE_INPUT_CALL(args, rv, call);
 });
 
+TVM_REGISTER_GLOBAL("Argmax").set_body([](TVMArgs args, TVMRetValue *rv) {
+  CHECK_GE(args.size(), 2);
+  auto attrs = args[1].operator OpAttr();
+  CHECK(attrs.count("axis"));
+  auto axis = ArrayOrInt(attrs["axis"]);
+
+  auto call = [&axis](const Tensor &tensor) { return topi::argmax(tensor, axis, false); };
+  TOPI_ONE_INPUT_CALL(args, rv, call);
+});
+
+TVM_REGISTER_GLOBAL("Argmin").set_body([](TVMArgs args, TVMRetValue *rv) {
+  CHECK_GE(args.size(), 2);
+  auto attrs = args[1].operator OpAttr();
+  CHECK(attrs.count("axis"));
+  auto axis = ArrayOrInt(attrs["axis"]);
+
+  auto call = [&axis](const Tensor &tensor) { return topi::argmin(tensor, axis, false); };
+  TOPI_ONE_INPUT_CALL(args, rv, call);
+});
+
 TVM_REGISTER_GLOBAL("OneHot").set_body([](TVMArgs args, TVMRetValue *rv) {
   CHECK_GE(args.size(), 2);
   auto inputs = args[0].operator Array<NodeRef>();
@@ -388,7 +408,6 @@ TVM_REGISTER_GLOBAL("OneHot").set_body([](TVMArgs args, TVMRetValue *rv) {
 
   *rv = topi::one_hot(indices, on_value, off_value, depth, axis, indices->dtype);
 });
-
 
 TVM_REGISTER_GLOBAL("Reciprocal").set_body([](TVMArgs args, TVMRetValue *rv) {
   auto call = [](const Tensor &tensor) { return topi::divide(make_const(tensor->dtype, 1.0), tensor); };

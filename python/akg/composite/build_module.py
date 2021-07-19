@@ -635,6 +635,11 @@ def combine_stitch_attr(common_attr, sub_attr):
             attr[key][k] = v
     return attr
 
+def _arg_max_min_pattern(kernel_info):
+    for op in kernel_info['op_desc']:
+        if op['name'] == 'Argmax' or op['name'] == 'Argmin':
+            return True
+    return False
 
 def _build_to_module(desc_s_in, desc_d_in, attr=None, use_repo=True):
     """
@@ -808,8 +813,13 @@ def _set_reducemax_attrs(desc_d, attrs):
 
 def _update_attrs_gpu(kernel_info, attrs, poly):
     if poly:
-        if "enable_akg_reduce_lib" not in attrs.keys():
+        if _arg_max_min_pattern(kernel_info):
+            # disable auto_fuse and akg_reduce_lib for argmax and argmin
+            attrs["enable_akg_reduce_lib"] = False
+            attrs["enable_auto_fuse"] = False
+        elif "enable_akg_reduce_lib" not in attrs.keys():
             attrs["enable_akg_reduce_lib"] = True
+
         if "pragma_enable_matmul" not in attrs.keys() and should_enable_tensor_core(kernel_info):
             attrs['pragma_enable_matmul'] = True
             attrs['enable_auto_inline'] = False
