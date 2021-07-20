@@ -944,17 +944,17 @@ def _build_to_module_gpu(desc_s, desc_d, attrs=None, poly=False):
         return _build_for_tuning(desc_s, attrs, func)
     return func(desc_s, attrs, poly)
 
-def _get_online_tune_attr(desc_s, attrs, repo_path, use_new_space=False):
+def _get_online_tune_attr(desc_s, attrs, repo_path, use_new_space=True):
     if use_new_space:
         from akg import auto_tune
         task_options = auto_tune.TaskOptions(tune_level=attrs["online_tuning"],
-                                            use_new_space=use_new_space,
-                                            attrs=attrs,
-                                            generate_trait=generate_trait)
+                                             use_new_space=use_new_space,
+                                             attrs=attrs,
+                                             generate_trait=generate_trait)
         best_config = auto_tune.tune_composite_v2(desc_s,
                                                   task_options=task_options)
     else:
-        from akg.auto_tune.composite_tuner import tune_composite
+        from tests.prev_version_auto_tune.composite_tuner import tune_composite
         best_config = tune_composite(desc_s,
                                     tune_level=attrs["online_tuning"],
                                     repo_path=_get_repository_file_path("repository.json"),

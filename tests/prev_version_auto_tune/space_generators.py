@@ -18,9 +18,9 @@ from typing import NamedTuple
 from collections import namedtuple
 from tests.common.test_run import matmul_run
 from akg.utils import validation_check as vc_util
-from akg.auto_tune.type_definitions import ConvDesc, ConvBackpropDesc, MatmulCubeDesc, ConvConfig, ConvBackpropInputConfig, ConvBackpropFilterConfig, MatmulCubeConfig
-from akg.auto_tune.space import ListConfigSpace
-from akg.auto_tune.kernel_compiler import compile_kernel
+from tests.prev_version_auto_tune.type_definitions import ConvDesc, ConvBackpropDesc, MatmulCubeDesc, ConvConfig, ConvBackpropInputConfig, ConvBackpropFilterConfig, MatmulCubeConfig
+from tests.prev_version_auto_tune.space import ListConfigSpace
+from tests.prev_version_auto_tune.kernel_compiler import compile_kernel
 
 
 def _get_space_vector(op_type: str, op_desc):

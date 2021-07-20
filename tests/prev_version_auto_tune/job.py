@@ -25,16 +25,16 @@ from multiprocessing import Process, Manager
 from akg import composite
 from akg.utils import kernel_exec as utils
 from akg.composite.build_module import generate_trait
-from akg.auto_tune.runner import KernelRunner, error_time_list, error_time_string
-from akg.auto_tune.tuner import ModelBasedTuner, Tuner
-from akg.auto_tune.type_definitions import ConvDesc, ConvBackpropDesc, MatmulCubeDesc
-from akg.auto_tune.space_generators import get_space
-from akg.auto_tune.space import ListConfigSpace
-from akg.auto_tune.data_generators import gen_data
-from akg.auto_tune.kernel_compiler import get_matmul_cube_attrs
+from tests.prev_version_auto_tune.runner import KernelRunner, error_time_list, error_time_string
+from tests.prev_version_auto_tune.tuner import ModelBasedTuner, Tuner
+from tests.prev_version_auto_tune.type_definitions import ConvDesc, ConvBackpropDesc, MatmulCubeDesc
+from tests.prev_version_auto_tune.space_generators import get_space
+from tests.prev_version_auto_tune.space import ListConfigSpace
+from tests.prev_version_auto_tune.data_generators import gen_data
+from tests.prev_version_auto_tune.kernel_compiler import get_matmul_cube_attrs
 
 
-logger = logging.getLogger('akg.auto_tune.job')
+logger = logging.getLogger('tests.prev_version_auto_tune.job')
 
 json_file = './res/' + "{0}" + ".json"
 json_load = './autotuning/shapes/' + "{0}"
@@ -435,7 +435,7 @@ def save_tuning_result(key, op_type, op_desc, json_desc, index_table, tuner, rep
             param = [tile_cici, tile_khkh, tile_kwkw, tile_coco, tile_bb, tile_hh, tile_ww, tile_mm, tile_kk, tile_nn]
             tiling_param = (param)
         elif op_type == "json":
-            from akg.auto_tune.runner import get_attr_from_config
+            from tests.prev_version_auto_tune.runner import get_attr_from_config
             tiling_param = get_attr_from_config(set_dim_configs, index_table)
         else:
             tiling = [[getattr(set_dim_configs, name), 1]
