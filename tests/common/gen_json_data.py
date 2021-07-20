@@ -322,6 +322,10 @@ op_dsl = {
     "ReduceSum": lambda inputs, output, attr: reduce_str(inputs, output, attr, "sum"),
     "ReduceMax": lambda inputs, output, attr: reduce_str(inputs, output, attr, "max"),
     "ReduceMin": lambda inputs, output, attr: reduce_str(inputs, output, attr, "min"),
+    "CumSum": lambda inputs, output, attr: "%s = np.cumsum(%s, %s)" %
+        (output[0]['tensor_name'], get_input(inputs[0][0]), get_attr(attr, "axis")),
+    "CumProd": lambda inputs, output, attr: "%s = np.cumprod(%s, %s)" %
+        (output[0]['tensor_name'], get_input(inputs[0][0]), get_attr(attr, "axis")),
     "Sin": lambda inputs, output, attr: "%s = np.sin(%s)" %
         (output[0]['tensor_name'], get_input(inputs[0][0])),
     "Cos": lambda inputs, output, attr: "%s = np.cos(%s)" %
