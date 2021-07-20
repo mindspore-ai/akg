@@ -101,7 +101,6 @@ class TileOuterBand : public SchedulePass {
   isl::schedule_node MatmulTile(const isl::schedule_node &node);
   void CustomMappingConfig(const std::vector<std::string> &str, const int index);
   bool IsMatrixCPromoteToShared();
-  isl::schedule_node SplitMatmulStatement(const isl::schedule_node &node);
 
   void CheckVectorizedForElemwiseOp(isl::schedule_node node);
 

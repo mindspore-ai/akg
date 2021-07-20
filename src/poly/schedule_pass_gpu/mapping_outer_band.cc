@@ -510,14 +510,16 @@ isl::schedule_node MappingOuterBand::InsertCustomMappingFilter(const isl::schedu
     domain = upa.domain();
   }
 
+  // Set other configurations to 0.
   if (!outer_mapping_cfg.empty()) {
     for (size_t i = 0; i < mapping_cfg->bound; ++i) {
       CHECK(!domain.is_null());
       auto universe = domain.universe();
+      // Remove the configuration that has been mapped.
       if (current_mapping_cfg.find(mapping_cfg->GetAt(i).first) != current_mapping_cfg.end()) {
         continue;
       }
-
+      // Remove the configuration in the outer mapping.
       if (outer_mapping_cfg.find(mapping_cfg->GetAt(i).first) != outer_mapping_cfg.end()) {
         continue;
       }
@@ -530,6 +532,7 @@ isl::schedule_node MappingOuterBand::InsertCustomMappingFilter(const isl::schedu
   return InsertMapFilter(node, false, mapping);
 }
 
+// Map the inner and outer bands to the inner and outer mapping configuration.
 isl::schedule_node MappingOuterBand::MapCustomHelper(const isl::schedule_node orig_node, const bool is_inner,
                                                      MappingCfg *mapping_cfg) {
   auto node = orig_node;
@@ -553,7 +556,7 @@ isl::schedule_node MappingOuterBand::MapCustomHelper(const isl::schedule_node or
       CheckMapSizeAndApplyTile(node, prefix_upa_list, mapping_cfg, true, custom_mapping_cfg);
     node = node.insert_mark(isl::id(node.ctx(), THREAD_MARKER)).child(0);
     std::unordered_set<std::string> outer_mapping_cfg = {SKIP_MARKER};
-
+    // In the mapping of the inner band, other configurations except the inner and outer layers need to be set to 0.
     for (auto outer_mapping : scop_info_.user_config_.GetCustomOuterMapping()) {
       outer_mapping_cfg.emplace(outer_mapping.second);
     }
@@ -585,6 +588,7 @@ isl::schedule MappingOuterBand::DoCustomMapping(const isl::schedule &sch) {
   CHECK(thread_cfg != nullptr) << "thread config is null";
 
   RoadMap thread_record;
+  // Map the inner band to the inner mapping configuration.
   auto MapFromInner = [&thread_record, thread_cfg, this](isl::schedule_node node) -> isl::schedule_node {
     if (CanBeMappedToThread(node, thread_record)) {
       auto node_bak = node;
@@ -610,6 +614,7 @@ isl::schedule MappingOuterBand::DoCustomMapping(const isl::schedule &sch) {
   auto node = sch.get_root().map_descendant_bottom_up(MapFromInner);
 
   node = GetOuterBand(node);
+  // Map the outer band to the outer mapping configuration.
   if (scop_info_.analysis_result_.GetIsOuterBlockMapping()) {
     auto block_cfg = scop_info_.user_config_.GetBlockConfig();
     CHECK(block_cfg != nullptr) << "block config is null";

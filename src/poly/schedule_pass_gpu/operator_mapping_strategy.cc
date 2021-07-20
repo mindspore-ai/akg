@@ -256,7 +256,7 @@ isl::schedule ReduceMappingStrategy::DetectAndMarkReduce(const isl::schedule &sc
 
     isl::union_map dependences = pass_info_.dependences_.subtract(pass_info_.force_dependences_);
     auto node_bak = node;
-    if (!reduce_manager.SplitReduceStatements(node, reduce_statements, dependences, true)) {
+    if (!reduce_manager.SplitReduceStatements(node, reduce_statements, dependences)) {
       return node_bak;
     }
     done_separate = all_reduce_map.empty();

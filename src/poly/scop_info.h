@@ -1143,7 +1143,7 @@ class ScopInfo {
   StmtIdHashMap StmtCopyinMap();
   StmtIdHashMap StmtBindCopyinMap();
   bool IsCopyinTensor(const std::string &tensor_name);
-  bool IsFunctionalCopyin(const std::string tensor_name, const StmtIdHashMap &func_map);
+  bool IsFunctionalCopyin(const std::string &tensor_name, const StmtIdHashMap &func_map);
 
   Tensor FindTensorInOrig(const isl::id &var);
   Tensor FindTensorInOrig(const std::string &str);
