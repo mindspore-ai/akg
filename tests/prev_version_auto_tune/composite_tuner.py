@@ -17,7 +17,7 @@
 """
 auto tuner function
 """
-from akg.auto_tune.job import launch_json
+from tests.prev_version_auto_tune.job import launch_json
 
 
 def tune_composite(json_str, tune_level=0, repo_path="repo.json", skip_exist=False):
@@ -53,6 +53,6 @@ def tune_composite(json_str, tune_level=0, repo_path="repo.json", skip_exist=Fal
             elif bst.best_config is not None:
                 best_config = best_results[0].best_config.input
                 index_table = best_results[0].index_table
-                from akg.auto_tune.runner import get_attr_from_config
+                from tests.prev_version_auto_tune.runner import get_attr_from_config
                 attrs = get_attr_from_config(best_config, index_table)
     return attrs

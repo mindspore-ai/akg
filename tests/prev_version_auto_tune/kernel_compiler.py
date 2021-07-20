@@ -23,7 +23,7 @@ from akg.ops.nn import conv_bn1
 from akg.ops.nn import conv, conv_backprop_input, conv_backprop_filter, batchmatmul
 from akg.ops.nn import matmul
 from tests.common.test_run import batchmatmul_run, matmul_run
-from akg.auto_tune.type_definitions import ConvDesc, ConvBackpropDesc, MatmulCubeDesc, ConvConfig, ConvBackpropInputConfig, ConvBackpropFilterConfig, MatmulCubeConfig
+from tests.prev_version_auto_tune.type_definitions import ConvDesc, ConvBackpropDesc, MatmulCubeDesc, ConvConfig, ConvBackpropInputConfig, ConvBackpropFilterConfig, MatmulCubeConfig
 
 
 def gen_kernel_conv(op_desc: ConvDesc, input_shape, index_table,

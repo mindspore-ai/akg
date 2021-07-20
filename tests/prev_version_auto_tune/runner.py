@@ -25,9 +25,9 @@ import numpy as np
 from akg import composite
 from akg.utils import custom_tiling as ct_util
 from akg.utils import kernel_exec as utils
-from akg.auto_tune.kernel_compiler import compile_kernel
-from akg.auto_tune.data_generators import gen_data
-from akg.auto_tune.kernel_compiler import get_matmul_cube_attrs
+from tests.prev_version_auto_tune.kernel_compiler import compile_kernel
+from tests.prev_version_auto_tune.data_generators import gen_data
+from tests.prev_version_auto_tune.kernel_compiler import get_matmul_cube_attrs
 logger = logging.getLogger('fuzz.tune.autotuning.runner')
 
 error_time_list = [

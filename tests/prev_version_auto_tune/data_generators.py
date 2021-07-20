@@ -18,7 +18,7 @@ from typing import NamedTuple
 import numpy as np
 from tests.common.gen_json_data import gen_json_data
 from tests.common.test_run import batchmatmul_run, conv_run, conv_backprop_input_run, conv_backprop_filter_run, matmul_run
-from akg.auto_tune.type_definitions import ConvDesc, ConvBackpropDesc, MatmulCubeDesc
+from tests.prev_version_auto_tune.type_definitions import ConvDesc, ConvBackpropDesc, MatmulCubeDesc
 
 def _gen_data_json(op_desc):
     """Generating test data for composite json"""

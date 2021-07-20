@@ -21,8 +21,8 @@ import numpy as np
 from multiprocessing import Process
 from tvm.autotvm.tuner.xgboost_cost_model import XgbCostModel
 from tvm.autotvm.tuner.sa_model_optimizer import SimulatedAnnealingOptimizer
-from akg.auto_tune.space import ConfigSpace
-from akg.auto_tune.runner import KernelRunner
+from tests.prev_version_auto_tune.space import ConfigSpace
+from tests.prev_version_auto_tune.runner import KernelRunner
 
 logger = logging.getLogger('fuzz.tune.autotuning.tuner')
 

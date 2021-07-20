@@ -16,7 +16,7 @@
 import os
 import sys
 import time
-from akg.auto_tune.job import launch_json
+from tests.prev_version_auto_tune.job import launch_json
 
 
 def run_json_tuning():

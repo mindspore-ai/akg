@@ -27,8 +27,8 @@ from functools import reduce
 from akg import composite
 from akg.composite.build_module import generate_trait
 from akg.composite.build_module import parallel_json_split, stitch_json_split
-from akg.auto_tune.job import launch_json
-from akg.auto_tune.runner import get_attr_from_config
+from tests.prev_version_auto_tune.job import launch_json
+from tests.prev_version_auto_tune.runner import get_attr_from_config
 from akg.utils import kernel_exec as utils
 import akg.composite.peel as pt
 from tests.common.gen_json_data import gen_json_data

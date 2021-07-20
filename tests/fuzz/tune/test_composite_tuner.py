@@ -18,7 +18,7 @@ import sys
 import time
 import getopt
 import logging
-from akg.auto_tune.composite_tuner import tune_composite
+from tests.prev_version_auto_tune.composite_tuner import tune_composite
 
 logging.getLogger().setLevel(logging.WARNING)
 
