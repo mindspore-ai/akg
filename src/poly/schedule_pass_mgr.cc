@@ -85,10 +85,10 @@ isl::schedule SchedulePassMgr::Run(const isl::schedule &sch, const std::vector<s
   return final_sch;
 }
 
-isl::schedule SchedulePassMgr::Run(const isl::schedule &sch, PassMgrStrategy &strategy) {
+isl::schedule SchedulePassMgr::Run(const isl::schedule &sch, std::shared_ptr<PassMgrStrategy> strategy) {
   CHECK(sch);
-  strategy.RegisterPasses();
-  std::vector<std::shared_ptr<SchedulePass>> passes = strategy.GetPasses();
+  strategy->RegisterPasses();
+  std::vector<std::shared_ptr<SchedulePass>> passes = strategy->GetPasses();
   return Run(sch, passes);
 }
 

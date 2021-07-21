@@ -126,74 +126,42 @@ isl::schedule Scop::GenIsl() {
 isl::schedule Scop::Transform(const isl::schedule &input_schedule) {
   auto final_schedule = input_schedule;
   SchedulePassMgr mgr(info_);
+  std::shared_ptr<PassMgrStrategy> pass_stra(nullptr);
+  info_.user_config_.SetConsiderCoincidence(true);
   if (info_.user_config_.GetTarget() == TARGET_CCE) {
-    info_.user_config_.SetConsiderCoincidence(true);
-    DsaMgrStrategy dsa_strategy(info_);
-    final_schedule = mgr.Run(input_schedule, dsa_strategy);
-    info_.DumpTransform("dsa_transfrom.log", dsa_strategy.pass_info_);
-
-    // We offer a restart mechanism for scalar stmt that cannot tile: do not consider coincidence
-    // and re-compute/re-tile to generate final schedule.
-    if (mgr.need_restart_ && info_.user_config_.GetEnableRestart()) {
-      info_.user_config_.SetConsiderCoincidence(false);
-      DsaMgrStrategy scalar_strategy(info_);
-      final_schedule = mgr.Run(input_schedule, scalar_strategy);
-      info_.DumpTransform("scalar_transform.log", scalar_strategy.pass_info_);
-    }
+    pass_stra.reset(new DsaMgrStrategy(info_));
+  } else if (info_.user_config_.GetTarget() == TARGET_CUDA) {
+    pass_stra.reset(new GPUMgrStrategy(info_));
   }
-  if (info_.user_config_.GetTarget() == TARGET_CUDA) {
-    auto reduce_tensor_info = info_.analysis_result_.GetReduceTensorInfoMap();
-    bool is_reduce = !reduce_tensor_info.empty() && !info_.user_config_.GetEnableMatmul() &&
-                     info_.user_config_.GetEnableAkgReduceLib();
-    bool is_matmul = !reduce_tensor_info.empty() && !info_.user_config_.GetEnableAkgReduceLib() &&
-                     info_.user_config_.GetEnableMatmul();
-    bool is_tensor_core = !reduce_tensor_info.empty() && !info_.user_config_.GetEnableAkgReduceLib() &&
-                          info_.user_config_.GetEnableTensorCore();
-    info_.user_config_.SetEnableAkgReduceLib(is_reduce);
-    info_.user_config_.SetEnableMatmul(is_matmul);
-    info_.user_config_.SetEnableTensorCore(is_tensor_core);
-    if (info_.user_config_.GetEnableAkgReduceLib()) {
-      bool has_supported_op = false;
-      LOG(INFO) << "====== Reduce op type ========";
-      for (auto it : reduce_tensor_info) {
-        LOG(INFO) << it.first << " -> " << info_.analysis_result_.GetReduceOpType(it.first);
-        auto type = info_.analysis_result_.GetReduceOpType(it.first);
-        if (type == AKG_REDUCE_UNSUPPORTED) {
-          LOG(INFO) << "detect unsupported type, disable akg reduce lib.";
-          info_.user_config_.SetEnableAkgReduceLib(false);
-          break;
-        }
-        has_supported_op = has_supported_op || AkgSupportedReduceOp.count(type);
-      }
-      if (!has_supported_op) {
-        LOG(INFO) << "no supported reduce op, disable akg reduce lib.";
-      }
-    }
+  final_schedule = mgr.Run(input_schedule, pass_stra);
+  info_.DumpTransform("dsa_transfrom.log", pass_stra->pass_info_);
 
-    info_.user_config_.SetConsiderCoincidence(true);
-    GPUMgrStrategy gpu_strategy(info_);
-    final_schedule = mgr.Run(input_schedule, gpu_strategy);
-    if (mgr.need_restart_ && info_.user_config_.GetEnableRestart()) {
-      info_.user_config_.SetConsiderCoincidence(false);
-      if (info_.analysis_result_.GetEnabledAutoTiling()) {
-        auto block_cfg = info_.user_config_.GetBlockConfig();
-        if (block_cfg) {
-          block_cfg->Reset();
-        }
-        auto thread_cfg = info_.user_config_.GetThreadConfig();
-        if (thread_cfg) {
-          thread_cfg->Reset();
-        }
-      }
-      GPUMgrStrategy scalar_strategy(info_);
-      final_schedule = mgr.Run(input_schedule, scalar_strategy);
-      info_.DumpTransform("scalar_transform.log", scalar_strategy.pass_info_);
+  // We offer a restart mechanism for scalar stmt that cannot tile: do not consider coincidence
+  // and re-compute/re-tile to generate final schedule.
+  if (mgr.need_restart_ && info_.user_config_.GetEnableRestart()) {
+    info_.user_config_.SetConsiderCoincidence(false);
+    if (info_.user_config_.GetTarget() == TARGET_CCE) {
+      pass_stra.reset(new DsaMgrStrategy(info_));
+    } else if (info_.user_config_.GetTarget() == TARGET_CUDA) {
+      pass_stra.reset(new GPUMgrStrategy(info_));
     }
+    if ((info_.user_config_.GetTarget() == TARGET_CUDA) && (info_.analysis_result_.GetEnabledAutoTiling())) {
+      auto block_cfg = info_.user_config_.GetBlockConfig();
+      if (block_cfg) {
+        block_cfg->Reset();
+      }
+      auto thread_cfg = info_.user_config_.GetThreadConfig();
+      if (thread_cfg) {
+        thread_cfg->Reset();
+      }
+    }
+    final_schedule = mgr.Run(input_schedule, pass_stra);
+    info_.DumpTransform("scalar_transform.log", pass_stra->pass_info_);
   }
 
   if (final_schedule.get()) info_.analysis_result_.SetTransformedSchedule(final_schedule);
   return final_schedule;
-}
+}  // namespace poly
 
 isl::id_list CreateIteratorList(const isl::schedule &schedule_iter, const std::string &prefix) {
   int depth = 0;
