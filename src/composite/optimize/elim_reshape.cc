@@ -165,7 +165,7 @@ bool ElimReshapeAnalysis::AnalysisElemwiseBackward(const FunctionRef &output) {
     auto input_shape = result_.ShapeChanged(input) ? result_.changed_shapes[input] : g_.func_shape[input];
     CHECK(input_map_shape_change.count(input));
     auto input_shape_change = input_map_shape_change[input];
-    if (ShapeIsOne(input_shape)) continue;
+    if (ShapeIsOne(input_shape) && !ShapeSizeIsOne(output_shape)) continue;
     if (!g_.visited_funcs.count(input)) {
       // if not visited and output changed, change input shape
       if (output_changed) {
@@ -284,6 +284,8 @@ void ElimReshapeAnalysis::AnalysisInner(const FunctionRef &output) {
   if (!g_.func_stmts.count(output)) return;
   auto provide = g_.func_stmts[output];
   auto op_name = GetOpName(provide);
+  auto inputs = g_.pre_graph[output];
+  if (op_name == "BroadcastTo" && inputs.empty()) return;
   if (IsTransform(op_name)) {
     AnalysisTransform(output);
   } else if ((IsElemwise(op_name) && g_.CanChangeElem(output)) || op_name == "BroadcastTo") {
