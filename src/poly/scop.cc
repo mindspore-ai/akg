@@ -128,6 +128,36 @@ isl::schedule Scop::Transform(const isl::schedule &input_schedule) {
   SchedulePassMgr mgr(info_);
   std::shared_ptr<PassMgrStrategy> pass_stra(nullptr);
   info_.user_config_.SetConsiderCoincidence(true);
+  if (info_.user_config_.GetTarget() == TARGET_CUDA) {
+    auto reduce_tensor_info = info_.analysis_result_.GetReduceTensorInfoMap();
+    bool is_reduce = !reduce_tensor_info.empty() && !info_.user_config_.GetEnableMatmul() &&
+                     info_.user_config_.GetEnableAkgReduceLib();
+    bool is_matmul = !reduce_tensor_info.empty() && !info_.user_config_.GetEnableAkgReduceLib() &&
+                     info_.user_config_.GetEnableMatmul();
+    bool is_tensor_core = !reduce_tensor_info.empty() && !info_.user_config_.GetEnableAkgReduceLib() &&
+                          info_.user_config_.GetEnableTensorCore();
+    info_.user_config_.SetEnableAkgReduceLib(is_reduce);
+    info_.user_config_.SetEnableMatmul(is_matmul);
+    info_.user_config_.SetEnableTensorCore(is_tensor_core);
+    if (info_.user_config_.GetEnableAkgReduceLib()) {
+      bool has_supported_op = false;
+      LOG(INFO) << "====== Reduce op type ========";
+      for (auto it : reduce_tensor_info) {
+        LOG(INFO) << it.first << " -> " << info_.analysis_result_.GetReduceOpType(it.first);
+        auto type = info_.analysis_result_.GetReduceOpType(it.first);
+        if (type == AKG_REDUCE_UNSUPPORTED) {
+          LOG(INFO) << "detect unsupported type, disable akg reduce lib.";
+          info_.user_config_.SetEnableAkgReduceLib(false);
+          break;
+        }
+        has_supported_op = has_supported_op || AkgSupportedReduceOp.count(type);
+      }
+      if (!has_supported_op) {
+        LOG(INFO) << "no supported reduce op, disable akg reduce lib.";
+      }
+    }
+  }
+
   if (info_.user_config_.GetTarget() == TARGET_CCE) {
     pass_stra.reset(new DsaMgrStrategy(info_));
   } else if (info_.user_config_.GetTarget() == TARGET_CUDA) {
