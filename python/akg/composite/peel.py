@@ -20,15 +20,16 @@ import akg.tvm
 class CompositePeel(object):
     """Provide interface for C++ DimensionPeeler"""
 
-    def __init__(self, desc):
+    def __init__(self, desc, attrs):
         self.desc = desc
+        self.analyze_attrs = attrs
         self.stmt = None
         self.build_info = None
         self.peeling_space = None
 
     def analyze(self):
         func = akg.tvm.get_global_func("composite_peel_analyze")
-        ret = func(self.desc)
+        ret = func(self.desc, self.analyze_attrs)
         self.stmt = ret["stmt"]
         self.build_info = ret["build_info"]
         self.peeling_space = ret["peeling_space"]
@@ -50,15 +51,30 @@ class CompositePeel(object):
         return dump_func(peeled_body, self.build_info)
 
 
-def composite_peel_analyze(desc):
+def composite_peel_analyze(desc, attrs):
     """
     Analyzes the peeling space for a give json str.
     Args:
        desc: json str
+       attrs: dict of attr
 
     Returns:
        CompositePeel.
     """
-    peel = CompositePeel(desc)
+    peel = CompositePeel(desc, attrs)
     peel.analyze()
     return peel
+
+
+def check_fold_dim(descs):
+    """
+    Check if we can fold dim on all json str in descs, returns True only if all these json str can fold dim.
+    Args:
+       descs: list of json str
+
+    Returns:
+       Bool.
+    """
+    func = akg.tvm.get_global_func("check_fold_dim")
+    fold_dim = func(descs)
+    return fold_dim

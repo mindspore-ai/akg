@@ -97,6 +97,28 @@ Array<NodeRef> ReorderArgs(const Array<NodeRef> &inputs, const Array<NodeRef> &o
   return ordered_args;
 }
 
+bool CheckFoldDim(const NodeRef &block_json) {
+  std::vector<int> fold_index;
+  for (auto &stitch_json : Downcast<Array<Expr>>(block_json)) {
+    CHECK(stitch_json.as<StringImm>());
+    picojson::value v = String2Json(stitch_json.as<StringImm>()->value);
+    BuildInfo info;
+    ExtractBuildInfo(v, info);
+    if (info.opt.fold_dims_.empty()) {
+      return false;
+    }
+    if (fold_index.empty()) {
+      fold_index = info.opt.fold_dims_.begin()->second;
+    }
+    for (auto &kv : info.opt.fold_dims_) {
+      if (kv.second != fold_index) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 class ElimDuplicateInputs : public IRMutator {
  public:
   explicit ElimDuplicateInputs(const Array<NodeRef> &inputs) { names_ = GetNames(inputs); }
@@ -181,7 +203,7 @@ class CompositeJsonList {
           break;
         }
         case STITCHING_JSON: {
-          CheckFoldDim(block_json);
+          fold_dim_ = CheckFoldDim(block_json);
           auto stitched_ir = StitchFusion(block_json, attrs);
           stitched_ir = ElimDuplicateInputs(inputs_).Run(stitched_ir);
           block_irs.push_back(stitched_ir);
@@ -214,29 +236,6 @@ class CompositeJsonList {
       type = STITCHING_JSON;
     }
     return type;
-  }
-
-  void CheckFoldDim(const NodeRef &block_json) {
-    std::vector<int> fold_index;
-    for (auto &stitch_json : Downcast<Array<Expr>>(block_json)) {
-      CHECK(stitch_json.as<StringImm>());
-      picojson::value v = String2Json(stitch_json.as<StringImm>()->value);
-      BuildInfo info;
-      ExtractBuildInfo(v, info);
-      if (info.opt.fold_dims_.empty()) {
-        fold_dim_ = false;
-        return;
-      }
-      if (fold_index.empty()) {
-        fold_index = info.opt.fold_dims_.begin()->second;
-      }
-      for (auto &kv : info.opt.fold_dims_) {
-        if (kv.second != fold_index) {
-          fold_dim_ = false;
-          return;
-        }
-      }
-    }
   }
 
   void GetRealOutputs() {
@@ -1013,11 +1012,16 @@ Stmt GetPeeledBody(const Stmt &stmt, const std::string &peeling) {
   return peeler.GetPeelBody(parsed_peeling);
 }
 
-Map<std::string, NodeRef> CompositePeelAnalyze(const std::string &json_str) {
+Map<std::string, NodeRef> CompositePeelAnalyze(const std::string &json_str, const Map<std::string, NodeRef> &attrs) {
   CHECK(!json_str.empty());
   picojson::value v = String2Json(json_str);
   BuildInfo info;
   info.opt.tuning = true;
+  if (attrs.defined() && attrs.find("fold_dim") != attrs.end()) {
+    CHECK(attrs["fold_dim"].as<ExprNode>());
+    auto fold_dim = ir::GetInt32Const(Downcast<Expr>(attrs["fold_dim"]));
+    info.opt.fold_dim = static_cast<bool>(fold_dim);
+  }
   ExtractBuildInfo(v, info);
 
   DimensionPeeler peeler;
@@ -1053,4 +1057,5 @@ Map<std::string, NodeRef> CompositePeelAnalyze(const std::string &json_str) {
 TVM_REGISTER_GLOBAL("composite_with_json_list").set_body_typed(CompositeWithJsonList);
 TVM_REGISTER_GLOBAL("get_peeled_body").set_body_typed(GetPeeledBody);
 TVM_REGISTER_GLOBAL("composite_peel_analyze").set_body_typed(CompositePeelAnalyze);
+TVM_REGISTER_GLOBAL("check_fold_dim").set_body_typed(CheckFoldDim);
 }  // namespace akg
