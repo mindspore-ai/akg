@@ -1502,7 +1502,7 @@ void GpuStrategy::InjectiveSpeedup() {
   std::vector<TileAxis *> injective_axes;
   auto problem_size = 1;
   analyzer_->ForEachAxisTopDown([this, &injective_axes, &problem_size](TileAxis *axis) {
-    if (axis == analyzer_->RootAxis() || axis->range_extent.as<IntImm>() == nullptr) {
+    if (axis == analyzer_->RootAxis() || axis->range_extent.as<IntImm>() == nullptr || axis->is_inner) {
       return;
     }
     injective_axes.emplace_back(axis);

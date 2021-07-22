@@ -49,6 +49,8 @@ from tests.operators.gpu.test_ms_reduce_max import test_ms_reduce_max
 from tests.operators.gpu.test_ms_reduce_min import test_ms_reduce_min
 from tests.operators.gpu.test_ms_reduce_and import test_ms_reduce_and
 from tests.operators.gpu.test_ms_reduce_or import test_ms_reduce_or
+from tests.operators.gpu.test_ms_cumsum import test_ms_cumsum
+from tests.operators.gpu.test_ms_cumprod import test_ms_cumprod
 from tests.operators.gpu.test_ms_conv import test_ms_conv
 from tests.operators.gpu.test_fused_pad import test_fused_pad
 from tests.operators.gpu.test_fused_bn_reduce import test_fused_bn_reduce
@@ -255,19 +257,6 @@ def round(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_round((1, 1), "float16", poly_sch=poly_sch)
 
 
-def reduce_sum(poly_sch, fuzz_shape=None, mind_trick_str=''):
-    test_ms_reduce_sum((256, 256), 'float32', axis=(1,),
-                       keepdims=True, poly_sch=poly_sch)
-    test_ms_reduce_sum((9, 1024, 1024), 'float32', axis=None,
-                       keepdims=False, poly_sch=poly_sch)
-    test_ms_reduce_sum((9, 1024, 1024), 'float32', axis=2,
-                       keepdims=True, poly_sch=poly_sch)
-    test_ms_reduce_sum((9, 1024), 'float16', axis=None,
-                       keepdims=False, poly_sch=poly_sch)
-    test_ms_reduce_sum((9, 1024), 'float16', axis=1,
-                       keepdims=True, poly_sch=poly_sch)
-
-
 def conv(poly_sch, fuzz_shape=None, mind_trick_str=''):
     # Test for FP32 Conv2D (Non-TensorCore)
     test_ms_conv(shape_data=(32, 64, 56, 56), shape_weight=(64, 64, 3, 3), stride=(1, 1), padding=(1, 1, 1, 1),
@@ -307,6 +296,18 @@ def reciprocal(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_reciprocal((1, 1024), 'float16', poly_sch=poly_sch)
     test_ms_reciprocal((1, 1024), 'float32', poly_sch=poly_sch)
 
+def reduce_sum(poly_sch, fuzz_shape=None, mind_trick_str=''):
+    test_ms_reduce_sum((256, 256), 'float32', axis=(1,),
+                       keepdims=True, poly_sch=poly_sch)
+    test_ms_reduce_sum((9, 1024, 1024), 'float32', axis=None,
+                       keepdims=False, poly_sch=poly_sch)
+    test_ms_reduce_sum((9, 1024, 1024), 'float32', axis=2,
+                       keepdims=True, poly_sch=poly_sch)
+    test_ms_reduce_sum((9, 1024), 'float16', axis=None,
+                       keepdims=False, poly_sch=poly_sch)
+    test_ms_reduce_sum((9, 1024), 'float16', axis=1,
+                       keepdims=True, poly_sch=poly_sch)
+
 
 def reduce_min(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_reduce_min((9, 1024, 1024), 'float32', axis=None,
@@ -342,6 +343,17 @@ def reduce_or(poly_sch, fuzz_shape=None, mind_trick_str=''):
                        keepdims=True, poly_sch=poly_sch)
     test_ms_reduce_or((1024, 1024), 'bool', axis=1,
                        keepdims=True, poly_sch=poly_sch)
+
+
+def cumsum(poly_sch, fuzz_shape=None, mind_trick_str=''):
+    test_ms_cumsum((65, 49, 21), "float32", axis=2, poly_sch=poly_sch)
+    test_ms_cumsum((65, 49, 21), "float16", axis=0, poly_sch=poly_sch)
+
+
+def cumprod(poly_sch, fuzz_shape=None, mind_trick_str=''):
+    test_ms_cumprod((65, 49, 21), "float32", axis=2, poly_sch=poly_sch)
+    test_ms_cumprod((65, 49, 21), "float16", axis=0, poly_sch=poly_sch)
+
 
 def fused_pad(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_fused_pad((7, 7, 3, 64), (0, 0, 0, 0), (0, 0, 1, 0),
@@ -457,7 +469,8 @@ if __name__ == '__main__':
               "log": log, "max": maximum, "min": minimum, "mul": mul, "neg": neg, "pow": pow,
               "reciprocal": reciprocal, "round": round, "rsqrt": rsqrt, "select": select, "sqrt": sqrt,
               "sub": sub, "reduce_max": reduce_max, "reduce_min": reduce_min,
-              "reduce_sum": reduce_sum, "expand_dims": expand_dims, "one_hot": one_hot,
+              "reduce_sum": reduce_sum, "cumsum": cumsum, "cumprod": cumprod,
+              "expand_dims": expand_dims, "one_hot": one_hot,
               "reshape": reshape, "tile": tile, "trans_data": trans_data, "conv": conv,
               "fused_pad": fused_pad,
               "fused_bn_reduce": fused_bn_reduce,

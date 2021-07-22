@@ -265,3 +265,59 @@ def conv2d_nhwc(inputs, attrs):
         name=output_name
     )
     return output
+
+@tvm.register_func("CumSum")
+def cumsum(inputs, attrs):
+    if len(inputs) != 1:
+        raise ValueError("length of inputs shoule be 1, but got %d." % len(inputs))
+    in_tensor = inputs[0]
+    shape = in_tensor.shape
+    attrs = {k: v for k, v in attrs.items()}
+    axis = int(attrs["axis"][0]) if "axis" in attrs else 0
+    exclusive = attrs["exclusive"].value if "exclusive" in attrs else False
+    reverse = attrs["reverse"].value if "reverse" in attrs else False
+    output_name = "T_cumsum_" + in_tensor.op.name
+    def kernel_ir(data, dst):
+        ib = tvm.ir_builder.create()
+        # axes before cumm-axis
+        with ib.for_range_n(shape[:axis], "i0") as i0:
+            # axes after cumm-axis
+            with ib.for_range_n(shape[axis+1:], "i1") as i1:
+                idx_0 = i0 + [0] + i1 if not reverse else i0 + [shape[axis] - 1] + i1
+                ib.store(dst, idx_0,  ib.load(data, idx_0) if not exclusive else tvm.const(0, data.dtype))
+                # iterate the cumm-axis to do cumulated sum (start from 1)
+                with ib.for_range(1, shape[axis], name="cum_idx") as m:
+                    idx_pre = i0 + [m - 1] + i1 if not reverse else i0 + [shape[axis] - m] + i1
+                    idx_cur = i0 +[m] + i1 if not reverse else i0 + [shape[axis] - 1 - m] + i1
+                    ib.store(dst, idx_cur, ib.load(dst, idx_pre) + ib.load(data, idx_cur if not exclusive else idx_pre))
+        return ib.get()
+    return tvm.extern(shape, [in_tensor], lambda ins, outs : kernel_ir(ins[0], outs[0]), name=output_name,
+                          dtype=in_tensor.dtype)
+
+@tvm.register_func("CumProd")
+def cumprod(inputs, attrs):
+    if len(inputs) != 1:
+        raise ValueError("length of inputs shoule be 1, but got %d." % len(inputs))
+    in_tensor = inputs[0]
+    shape = in_tensor.shape
+    attrs = {k: v for k, v in attrs.items()}
+    axis = int(attrs["axis"][0]) if "axis" in attrs else 0
+    exclusive = attrs["exclusive"].value if "exclusive" in attrs else False
+    reverse = attrs["reverse"].value if "reverse" in attrs else False
+    output_name = "T_cumprod_" + in_tensor.op.name
+    def kernel_ir(data, dst):
+        ib = tvm.ir_builder.create()
+        # axes before cumm-axis
+        with ib.for_range_n(shape[:axis], "i0") as i0:
+            # axes after cumm-axis
+            with ib.for_range_n(shape[axis+1:], "i1") as i1:
+                idx_0 = i0 + [0] + i1 if not reverse else i0 + [shape[axis] - 1] + i1
+                ib.store(dst, idx_0, tvm.const(1, data.dtype) if exclusive else ib.load(data, idx_0))
+                # iterate the cumm-axis to do cumulated production (start from 1)
+                with ib.for_range(1, shape[axis], name="cum_idx") as m:
+                    idx_pre = i0 + [m - 1] + i1 if not reverse else i0 + [shape[axis] - m] + i1
+                    idx_cur = i0 +[m] + i1 if not reverse else i0 + [shape[axis] - 1 - m] + i1
+                    ib.store(dst, idx_cur, ib.load(dst, idx_pre) * ib.load(data, idx_pre if exclusive else idx_cur))
+        return ib.get()
+    return tvm.extern(shape, [in_tensor], lambda ins, outs : kernel_ir(ins[0], outs[0]), name=output_name,
+                          dtype=in_tensor.dtype)
