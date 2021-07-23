@@ -208,7 +208,7 @@ def plan_block(candidate: list):
         for bc, [peel_info, spaces, _] in zip(block_candidate, candidate):
             bc = bc if bc > 0 else 1
             hit = False
-            peel_axis, _ = list(peel_info.items())[0] # only one outer axis
+            peel_axis, _ = list(peel_info.items())[0]  # only one outer axis
             block_hint = bc
             for i in range(bc):
                 # spaces: [[[0, 20], [2, 16]], [[0, 10], [2, 16]], ...]
@@ -236,6 +236,7 @@ def plan_block(candidate: list):
     core_base = BLOCK_TOTAL / sum(coefs)
     block_candidate = [math.floor(coef * core_base) for coef in coefs]
     return _get_blocks_by_candidate(block_candidate, candidate)
+
 
 def tune_parallel_segment(desc_in: str, repo_path: str):
     def _get_max_peel(peel):
@@ -338,13 +339,17 @@ def remove_buffer_exceed_space(space, max_alloc):
 def tune_stitch_segment(desc_in: str, repo_path: str):
     descs, _, _, alloc_map, _, _ = stitch_json_split(json.loads(desc_in))
     max_alloc = get_max_alloc(alloc_map)
-    peels = [pt.composite_peel_analyze(desc) for desc in descs]
+
+    fold_dim = pt.check_fold_dim(descs)
+    peel_attrs = {"fold_dim": fold_dim}
+    peels = [pt.composite_peel_analyze(desc, peel_attrs) for desc in descs]
     peeling_spaces = [p.get_peeling_space() for p in peels]
-    best_tuning_info = {"run_time": float("inf"), "attrs": None}
     peeling_spaces = reduce(lambda x, y: set(x).intersection(set(y)), peeling_spaces)
     peeling_spaces = get_block_candidate_space(peeling_spaces)
     peeling_spaces = remove_buffer_exceed_space(peeling_spaces, max_alloc)
     logging.info("peeling_spaces: {}".format(peeling_spaces))
+
+    best_tuning_info = {"run_time": float("inf"), "attrs": None}
     for idx, peeling in enumerate(peeling_spaces):
         with ProfilingDirCleaner():
             try:
