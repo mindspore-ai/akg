@@ -176,7 +176,7 @@ class CompositeJsonList {
   CompositeJsonList(const Array<NodeRef> &json_str_node, const Array<NodeRef> &inputs, const Array<NodeRef> &outputs,
                     const Array<NodeRef> &alloc_map_list, const Array<NodeRef> &reuse_map_list,
                     const Array<NodeRef> &clean_op_map_list, const Array<NodeRef> &attrs_list, bool poly,
-                    std::string target)
+                    const std::string &target)
       : json_str_node_(json_str_node),
         inputs_(inputs),
         outputs_(outputs),
@@ -271,7 +271,7 @@ class CompositeJsonListGpu : public CompositeJsonList {
   CompositeJsonListGpu(const Array<NodeRef> &json_str_node, const Array<NodeRef> &inputs, const Array<NodeRef> &outputs,
                        const Array<NodeRef> &alloc_map_list, const Array<NodeRef> &reuse_map_list,
                        const Array<NodeRef> &clean_op_map_list, const Array<NodeRef> &attrs_list, bool poly,
-                       std::string target)
+                       const std::string &target)
       : CompositeJsonList(json_str_node, inputs, outputs, alloc_map_list, reuse_map_list, clean_op_map_list, attrs_list,
                           poly, target) {}
 
@@ -445,7 +445,7 @@ class PeelInfoMutator : public IRMutator {
   }
 
  private:
-  virtual Array<Expr> FixArgs(const Array<Expr> &args) = 0;
+  virtual Array<Expr> FixArgs(const Array<Expr> &args, const std::string &name) = 0;
   virtual Stmt ExtraModify(Stmt &s) { return s; }
 
   bool IsPeeledTensor(const std::string &name) {
@@ -459,13 +459,14 @@ class PeelInfoMutator : public IRMutator {
 
   Expr Mutate_(const Call *op, const Expr &e) final {
     if (op->func.defined() && IsPeeledTensor(op->func->func_name())) {
-      return Call::make(op->type, op->name, FixArgs(op->args), op->call_type, op->func, op->value_index);
+      return Call::make(op->type, op->name, FixArgs(op->args, op->name), op->call_type, op->func, op->value_index);
     }
     return IRMutator::Mutate_(op, e);
   }
   Stmt Mutate_(const Provide *op, const Stmt &s) final {
     if (IsPeeledTensor(op->func->func_name())) {
-      return Provide::make(op->func, op->value_index, this->Mutate(op->value), FixArgs(op->args));
+      return Provide::make(op->func, op->value_index, this->Mutate(op->value),
+                           FixArgs(op->args, op->func->func_name()));
     }
     return IRMutator::Mutate_(op, s);
   }
@@ -492,7 +493,7 @@ class AddPeelInfoForLoop : public PeelInfoMutator {
     return s;
   }
 
-  Array<Expr> FixArgs(const Array<Expr> &args) override {
+  Array<Expr> FixArgs(const Array<Expr> &args, const std::string &) override {
     Array<Expr> new_args;
     for (size_t i = 0; i < args.size(); ++i) {
       if (peel_info_.peels.find(i) != peel_info_.peels.end()) {
@@ -503,9 +504,17 @@ class AddPeelInfoForLoop : public PeelInfoMutator {
     return new_args;
   }
 
- private:
   std::map<int, Var> loop_var_;
 };
+
+std::pair<bool, int64_t> GetTensorPeel(size_t i, const std::vector<std::pair<int, int64_t>> &dims) {
+  for (auto dim : dims) {
+    if (i == static_cast<size_t>(dim.first)) {
+      return {true, dim.second};
+    }
+  }
+  return {false, 1};
+}
 
 class AddInnerForAndBlockInfo : public PeelInfoMutator {
  public:
@@ -515,30 +524,40 @@ class AddInnerForAndBlockInfo : public PeelInfoMutator {
     block_var_ = Variable::make(Int(32), BLOCK_IDX_X);
     inner_size_ = peel_info_.peels.begin()->second / block_dim_;
     offset_ = Add::make(Mul::make(block_var_, Expr(inner_size_)), loop_var_);
+
+    for (auto iter : outputs2args) {
+      name_map_[iter.second.as<BufferNode>()->name] = iter.first;
+    }
   }
 
  private:
+  std::string GetOriginName(const std::string &name) {
+    if (name_map_.find(name) != name_map_.end()) {
+      return name_map_[name];
+    }
+    return name;
+  }
   Stmt ExtraModify(Stmt &s) override {
     // Add inner For.
-    if (inner_size_ > 1) {
-      s = For::make(loop_var_, 0, inner_size_, ForType::Serial, DeviceAPI::None, s);
-    }
+    s = For::make(loop_var_, 0, inner_size_, ForType::Serial, DeviceAPI::None, s);
 
     // Add block info.
-    if (block_dim_ > 1) {
-      Expr block_ext = make_const(Int(32), block_dim_);
-      IterVar block_iv = IterVarNode::make(Range(make_const(Int(32), 0), block_ext), block_var_,
-                                           air::IterVarType::kThreadIndex, BLOCK_IDX_X);
-      s = AttrStmt::make(block_iv, air::ir::attr::thread_extent, block_ext, s);
-    }
+    Expr block_ext = make_const(Int(32), block_dim_);
+    IterVar block_iv = IterVarNode::make(Range(make_const(Int(32), 0), block_ext), block_var_,
+                                         air::IterVarType::kThreadIndex, BLOCK_IDX_X);
+    s = AttrStmt::make(block_iv, air::ir::attr::thread_extent, block_ext, s);
 
     return s;
   }
 
-  Array<Expr> FixArgs(const Array<Expr> &args) override {
+  Array<Expr> FixArgs(const Array<Expr> &args, const std::string &name) override {
     Array<Expr> new_args;
+    std::string origin_name = GetOriginName(name);
+    auto peel_iter = peel_info_.peeled_tensors.find(origin_name);
+    CHECK(peel_iter != peel_info_.peeled_tensors.end());
     for (size_t i = 0; i < args.size(); ++i) {
-      if (peel_info_.peels.find(i) != peel_info_.peels.end()) {
+      auto peel_tensor = GetTensorPeel(i, peel_iter->second);
+      if (peel_tensor.first) {
         new_args.push_back(offset_);
       }
       new_args.push_back(args[i]);
@@ -548,10 +567,11 @@ class AddInnerForAndBlockInfo : public PeelInfoMutator {
 
  private:
   int block_dim_{1};
+  std::unordered_map<std::string, std::string> name_map_;
   Var loop_var_{"inner_peel"};
   int inner_size_{1};
   Var block_var_;
-  Expr offset_;
+  Expr offset_{Expr(0)};
 };
 
 class CompositeJsonListAscend : public CompositeJsonList {
@@ -559,7 +579,7 @@ class CompositeJsonListAscend : public CompositeJsonList {
   CompositeJsonListAscend(const Array<NodeRef> &json_str_node, const Array<NodeRef> &inputs,
                           const Array<NodeRef> &outputs, const Array<NodeRef> &alloc_map_list,
                           const Array<NodeRef> &reuse_map_list, const Array<NodeRef> &clean_op_map_list,
-                          const Array<NodeRef> &attrs_list, bool poly, std::string target)
+                          const Array<NodeRef> &attrs_list, bool poly, const std::string &target)
       : CompositeJsonList(json_str_node, inputs, outputs, alloc_map_list, reuse_map_list, clean_op_map_list, attrs_list,
                           poly, target) {}
   Stmt StitchFusion(const NodeRef &block_json, Map<std::string, NodeRef> &attrs) override {
@@ -617,7 +637,19 @@ class CompositeJsonListAscend : public CompositeJsonList {
     }
   }
 
-  void AddPeelInfoForData(LowerData &data, PeelInfo &peel_info) {
+  void AddPeelInfoForData(LowerData &data, PeelInfo &peel_info,
+                          std::unordered_map<std::string, NodeRef> &outputs2args) {
+    std::unordered_map<std::string, std::string> name_map;
+    for (auto iter : outputs2args) {
+      name_map[iter.second.as<BufferNode>()->name] = iter.first;
+    }
+    auto GetOriginName = [&name_map](const std::string &name) {
+      if (name_map.find(name) != name_map.end()) {
+        return name_map[name];
+      }
+      return name;
+    };
+
     Array<NodeRef> out_args;
     Map<Tensor, Buffer> out_binds;
     for (const auto &kv : data.binds_0_) {
@@ -636,9 +668,12 @@ class CompositeJsonListAscend : public CompositeJsonList {
           if (x == t) {
             auto old_shape = x.as<BufferNode>()->shape;
             Array<Expr> new_shape;
+            auto peel_iter = peel_info.peeled_tensors.find(GetOriginName(x.as<BufferNode>()->name));
+            CHECK(peel_iter != peel_info.peeled_tensors.end());
             for (size_t i = 0; i < old_shape.size(); ++i) {
-              if (peel_info.peels.find(i) != peel_info.peels.end()) {
-                new_shape.push_back(peel_info.peels[i]);
+              auto peel_tensor = GetTensorPeel(i, peel_iter->second);
+              if (peel_tensor.first) {
+                new_shape.push_back(static_cast<int>(peel_tensor.second));
               }
               new_shape.push_back(old_shape[i]);
             }
@@ -699,7 +734,7 @@ class CompositeJsonListAscend : public CompositeJsonList {
   Stmt AddPeelInfoForLoopAndData(Stmt &s, LowerData &data, Map<std::string, NodeRef> &attrs) {
     PeelInfo peel_info = GetPeelInfoFromAttrs(attrs);
     GetPeeledTensors(data, peel_info, outputs2args_);
-    AddPeelInfoForData(data, peel_info);
+    AddPeelInfoForData(data, peel_info, outputs2args_);
     s = AddPeelInfoForLoop(peel_info, data.binds_0_).Run(s);
     DumpStmt2File("stitch_info/" + merge_name_ + "_after_add_loop.cc", s);
     return s;
@@ -797,7 +832,7 @@ class CompositeJsonListAscend : public CompositeJsonList {
   Stmt AddPeelInfoAndBlockAttr(Stmt &s, LowerData &data, PeelInfo &peel_info,
                                std::unordered_map<std::string, NodeRef> &outputs2args, int block) {
     GetPeeledTensors(data, peel_info, outputs2args);
-    AddPeelInfoForData(data, peel_info);
+    AddPeelInfoForData(data, peel_info, outputs2args);
     s = AddInnerForAndBlockInfo(peel_info, block, data.binds_0_, outputs2args).Run(s);
     return s;
   }
@@ -976,7 +1011,7 @@ class CompositeJsonListAscend : public CompositeJsonList {
     return BuildRstNode::make(rst, merge_name_);
   }
 
-  std::unordered_map<std::string, std::vector<int>> peeled_tensors_;
+  std::unordered_map<std::string, std::vector<std::pair<int, int64_t>>> peeled_tensors_;
   std::vector<LowerData> stitch_lower_datas_;
   std::vector<LowerData> lower_datas_;
   LowerData final_data_;
