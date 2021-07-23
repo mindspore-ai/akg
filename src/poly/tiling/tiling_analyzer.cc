@@ -231,6 +231,7 @@ void TileAxis::TileRestrainUpper(const Expr &value, TileLevel level) {
   auto old_upper = constraint.tile_extent_;
   auto new_value = value.type() == old_upper.type() ? value : Cast::make(old_upper.type(), value);
   auto new_upper = CanonicalSimplify(Min::make(old_upper, new_value));
+  new_upper = CanonicalSimplify(Max::make(constraint.tile_min_, new_upper));
   constraint.tile_extent_ = new_upper;
 }
 
@@ -239,6 +240,7 @@ void TileAxis::TileRestrainLower(const Expr &value, TileLevel level) {
   auto old_lower = constraint.tile_min_;
   auto new_value = value.type() == old_lower.type() ? value : Cast::make(old_lower.type(), value);
   auto new_lower = CanonicalSimplify(Max::make(old_lower, new_value));
+  new_lower = CanonicalSimplify(Min::make(constraint.tile_extent_, new_lower));
   constraint.tile_min_ = new_lower;
 }
 
