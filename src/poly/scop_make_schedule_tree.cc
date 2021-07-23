@@ -281,7 +281,9 @@ class ScopMakeScheduleTree final : protected IRVisitor {
     new_reads_with_conds = new_reads.curry().intersect_domain(read_set.unbind_params(op_domain.tuple)).uncurry();
     /// has Select
 #if (SELECT_DOMAIN_OPT)
-    new_reads_with_conds = CutSetTopDown().Run(op->value, op_domain.tuple, new_reads_with_conds, read_set);
+    if (scop_info_.user_config_.GetTarget() == TARGET_CCE) {
+        new_reads_with_conds = CutSetTopDown().Run(op->value, op_domain.tuple, new_reads_with_conds, read_set);
+    }
 #endif
     new_writes_with_conds = new_writes.curry().intersect_domain(write_set.unbind_params(op_domain.tuple)).uncurry();
 
@@ -706,9 +708,12 @@ class ScopMakeScheduleTree final : protected IRVisitor {
 
 #if (SELECT_DOMAIN_OPT)
     auto ec = ExtractCond();
-    std::vector<Expr> cond_vec = ec.run(cond);
-    if (!ec.hasBothOrAndAnd()) {
-      cut_set = CutSet(cond_vec, set, false, ec.IsOr());
+    std::vector<Expr> cond_vec;
+    if (scop_info_.user_config_.GetTarget() == TARGET_CCE) {
+        cond_vec = ec.run(cond);
+        if (!ec.hasBothOrAndAnd()) {
+            cut_set = CutSet(cond_vec, set, false, ec.IsOr());
+        }
     }
 #endif
     static_cast<void>(MakeScheduleTreeHelper(op->then_case, scop_info_, cut_set, outer, macro_stmt));
@@ -716,9 +721,11 @@ class ScopMakeScheduleTree final : protected IRVisitor {
     // Build schedule for the else case without updating the schedule if defined
     if (op->else_case.defined()) {
 #if (SELECT_DOMAIN_OPT)
-      if (!ec.hasBothOrAndAnd()) {
-        cut_set = CutSet(cond_vec, set, true, !ec.IsOr());
-      }
+        if (scop_info_.user_config_.GetTarget() == TARGET_CCE) {
+            if (!ec.hasBothOrAndAnd()) {
+                cut_set = CutSet(cond_vec, set, true, !ec.IsOr());
+            }
+        }
 #endif
       static_cast<void>(MakeScheduleTreeHelper(op->else_case, scop_info_, cut_set, outer, macro_stmt));
     }

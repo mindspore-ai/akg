@@ -28,7 +28,7 @@ def get_attr(attr_desc, attr_type):
     for attr in attr_desc:
         if attr["name"] == attr_type:
             return attr["value"]
-    logging.warning("attr {} not found, please check.".format(attr_type))
+    logging.warning("attr %s not found, please check.", attr_type)
     return None
 
 
@@ -156,7 +156,7 @@ def trans_data_two2fractal(input_, src_format, dst_format):
     raise ValueError("src_format %s is not supported!" % src_format)
 
 
-def trans_data_fractal2two(input_, src_format, dst_format, shape_origin):
+def trans_data_fractal2two(input_, shape_origin):
     shape_origin = [int(_) for _ in shape_origin]
     shape = list(input_.shape)
     n1, m1, m0, n0 = shape[-4:]
@@ -190,9 +190,8 @@ def get_trans_data_str(input_name, output_name, ori_shape, src_format, dst_forma
                                                 output_name, trans_data_two2fractal.__name__, input_name,
                                                 src_format, dst_format)
     elif src_format == 'FRACTAL_NZ' and (dst_format == 'DefaultFormat' or dst_format == "NCHW"):
-        res = "%s \n%s = %s(%s, '%s', '%s', %s)" % (inspect.getsource(trans_data_fractal2two),
-                                                    output_name, trans_data_fractal2two.__name__, input_name,
-                                                    src_format, dst_format, ori_shape)
+        res = "%s \n%s = %s(%s, %s)" % (inspect.getsource(trans_data_fractal2two),
+                                        output_name, trans_data_fractal2two.__name__, input_name, ori_shape)
     else:
         raise ValueError("src_format(%s) and dst_format(%s) is not supported!" % (src_format, dst_format))
     return res
@@ -290,10 +289,10 @@ def matmul_str(inputs, output, attr):
         res = res + right_trans_str + "\n"
     has_batch = (len(left_input['shape']) > 4)
     if has_batch:
-        matmul_str = batchmatmul_str(inputs, output, attr)
+        mm_str = batchmatmul_str(inputs, output, attr)
     else:
-        matmul_str = np_matmul_str(inputs, output, attr)
-    res = res + matmul_str + "\n"
+        mm_str = np_matmul_str(inputs, output, attr)
+    res = res + mm_str + "\n"
 
     has_bias = (len(inputs) > 2)
     if has_bias:
@@ -438,10 +437,14 @@ op_dsl = {
         (output[0]['tensor_name'], get_input(inputs[0][0])),
     "Acosh": lambda inputs, output, attr: "%s = np.arccosh(%s)" %
         (output[0]['tensor_name'], get_input(inputs[0][0])),
-    "Atan2": lambda inputs, output, attr: "%s = np.arctan2(%s)" %
+    "Atan2": lambda inputs, output, attr: "%s = np.arctan2(%s, %s)" %
         (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0])),
     "Expm1": lambda inputs, output, attr: "%s = np.expm1(%s)" %
         (output[0]['tensor_name'], get_input(inputs[0][0])),
+    "LogicalNot": lambda inputs, output, attr: "%s = np.logical_not(%s)" %
+        (output[0]['tensor_name'], get_input(inputs[0][0])),
+    "LogicalAnd": lambda inputs, output, attr: "%s = np.logical_and(%s, %s)" %
+        (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0])),
 }
 
 def conv_2d_str(inputs, output, attr):
