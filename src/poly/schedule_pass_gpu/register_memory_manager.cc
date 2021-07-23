@@ -354,6 +354,11 @@ isl::schedule RegisterMemoryManager::HoistRegisterMemory(isl::schedule_node root
   bands = BandsSplitAfterDepth(bands, root, depth);
 
   isl::schedule tmp_sch = root.get_schedule();
+  if (!bands.size()) {
+    memory_exceeding_ = false;
+    return tmp_sch;
+  }
+
   int distance_to_extension = 3;
   for (auto band : bands) {
     if (IsThreadMappedMark(band)) {
@@ -640,7 +645,6 @@ isl::schedule RegisterMemoryManager::RunReduce(isl::schedule_node root) {
     do {
       sch = HoistRegisterMemory(root, depth);
       depth = depth + 1;
-      memory_exceeding_ = false;
     } while (memory_exceeding_);
   }
   return sch;
@@ -710,7 +714,6 @@ isl::schedule RegisterMemoryManager::RunElementWise(isl::schedule_node root) {
     do {
       sch = HoistRegisterMemory(root, depth);
       depth = depth + 1;
-      memory_exceeding_ = false;
     } while (memory_exceeding_);
 
     if (scop_info_.user_config_.GetEnableVectorization()) {
