@@ -275,8 +275,13 @@ class ScopMakeScheduleTree final : protected IRVisitor {
     isl::set write_set = set;
     isl::set reduction_set = set;
     Stmt stmt = Downcast<Stmt>(s);
-    std::tie(new_reads, new_writes, new_to_inner) =
+
+    std::unordered_map<std::string, std::vector<std::string>> all_axis;
+    std::tie(new_reads, new_writes, new_to_inner, all_axis) =
       ConstructPolyAccesses(op_domain, stmt, scop_info_.analysis_result_.GetAccessMap());
+    for (auto axis : all_axis) {
+      scop_info_.analysis_result_.RecordTensorAllAxis(axis.first, axis.second);
+    }
 
     new_reads_with_conds = new_reads.curry().intersect_domain(read_set.unbind_params(op_domain.tuple)).uncurry();
     /// has Select
@@ -686,8 +691,14 @@ class ScopMakeScheduleTree final : protected IRVisitor {
 
     // Update the reads/writes sets of scop_info by analyzing the condition
     Stmt condition = Stmt(GetObjPtr<Object>(cond.get()));
-    std::tie(new_reads, new_writes, new_to_inner) =
+
+    std::unordered_map<std::string, std::vector<std::string>> all_axis;
+    std::tie(new_reads, new_writes, new_to_inner, all_axis) =
       ConstructPolyAccesses(op_domain, condition, scop_info_.analysis_result_.GetAccessMap());
+    for (auto axis : all_axis) {
+      scop_info_.analysis_result_.RecordTensorAllAxis(axis.first, axis.second);
+    }
+
     StmtOpInfo stmt_op_Info;
     for (auto a : new_reads.get_map_list()) {
       auto tensor_id = a.get_tuple_id(isl_dim_out);
@@ -751,8 +762,13 @@ class ScopMakeScheduleTree final : protected IRVisitor {
           stmt = AttrStmt::make(item->node, item->attr_key, item->value, stmt);
         }
       }
-      std::tie(new_reads, new_writes, new_to_inner) =
+
+      std::unordered_map<std::string, std::vector<std::string>> all_axis;
+      std::tie(new_reads, new_writes, new_to_inner, all_axis) =
         ConstructPolyAccesses(op_domain, stmt, scop_info_.analysis_result_.GetAccessMap());
+      for (auto axis : all_axis) {
+        scop_info_.analysis_result_.RecordTensorAllAxis(axis.first, axis.second);
+      }
 
       ParseStmtOps(id, op, scop_info_.analysis_result_, new_reads, new_writes);
 

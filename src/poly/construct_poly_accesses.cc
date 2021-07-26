@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@ namespace poly {
 
 std::pair<isl::map, isl::map> ConstructPolyAccess(const OperatorDomainSpace &domain, const Node *op,
                                                   const std::string &tensor, const Array<Expr> &dimensions,
-                                                  AccessMap &accesses) {
+                                                  AccessMap &accesses, std::vector<std::string> &tensor_axis) {
   // create a tensor coordinate to store the accessed relation
   auto coordinate =
     CollectTensorCoordinate(domain.param_space, isl::id(domain.param_space.ctx(), tensor), dimensions.size());
@@ -47,6 +47,9 @@ std::pair<isl::map, isl::map> ConstructPolyAccess(const OperatorDomainSpace &dom
     if (!domain_aff_bounds.is_null()) {
       domain_aff_bounds = domain_aff_bounds.unbind_params_insert_domain(coordinate);
       tensor_access = tensor_access.intersect(domain_aff_bounds.eq_set(identity.get_aff(static_cast<int>(dim_idx))));
+      if (dimensions[dim_idx].as<Variable>()) {
+        tensor_axis.push_back(dimensions[dim_idx].as<Variable>()->name_hint);
+      }
     }
   }
 
@@ -56,8 +59,8 @@ std::pair<isl::map, isl::map> ConstructPolyAccess(const OperatorDomainSpace &dom
   return {tensor_map, isl::map::from(identity)};
 }
 
-std::tuple<isl::union_map, isl::union_map, isl::union_map> ConstructPolyAccesses(const OperatorDomainSpace &domain,
-                                                                                 const Stmt &s, AccessMap &accesses) {
+std::tuple<isl::union_map, isl::union_map, isl::union_map, std::unordered_map<std::string, std::vector<std::string>>>
+ConstructPolyAccesses(const OperatorDomainSpace &domain, const Stmt &s, AccessMap &accesses) {
   class AttrsExtractor final : public IRVisitor {
    public:
     AttrsExtractor() {}
@@ -397,7 +400,12 @@ std::tuple<isl::union_map, isl::union_map, isl::union_map> ConstructPolyAccesses
         if (op->func.defined() && op->func->num_outputs() != 1) {
           var_name = var_name + "_v" + std::to_string(op->value_index);
         }
-        std::tie(reads_tmp, toinner_tmp) = ConstructPolyAccess(domain, op, var_name, op->args, accesses);
+        std::vector<std::string> reads_tensor_axis = {};
+        std::tie(reads_tmp, toinner_tmp) =
+          ConstructPolyAccess(domain, op, var_name, op->args, accesses, reads_tensor_axis);
+        if (all_axis_.count(var_name) == 0) {
+          all_axis_[var_name] = reads_tensor_axis;
+        }
         reads = reads.unite(reads_tmp);
         to_inner_ = to_inner_.add_map(toinner_tmp);
       }
@@ -410,7 +418,12 @@ std::tuple<isl::union_map, isl::union_map, isl::union_map> ConstructPolyAccesses
       if (op->func->num_outputs() != 1) {
         var_name = var_name + "_v" + std::to_string(op->value_index);
       }
-      std::tie(writes_tmp, toinner_tmp) = ConstructPolyAccess(domain, op, var_name, op->args, accesses);
+      std::vector<std::string> writes_tensor_axis = {};
+      std::tie(writes_tmp, toinner_tmp) =
+        ConstructPolyAccess(domain, op, var_name, op->args, accesses, writes_tensor_axis);
+      if (all_axis_.count(var_name) == 0) {
+        all_axis_[var_name] = writes_tensor_axis;
+      }
       writes = writes.unite(writes_tmp);
       to_inner_ = to_inner_.add_map(toinner_tmp);
     }
@@ -426,13 +439,13 @@ std::tuple<isl::union_map, isl::union_map, isl::union_map> ConstructPolyAccesses
       isl::union_map reads_tmp, writes_tmp, toinner_tmp;
 
       Stmt stmt_a(GetObjPtr(op->a.get()));
-      std::tie(reads_tmp, writes_tmp, toinner_tmp) = ConstructPolyAccesses(domain, stmt_a, accesses);
+      std::tie(reads_tmp, writes_tmp, toinner_tmp, all_axis_) = ConstructPolyAccesses(domain, stmt_a, accesses);
       reads = reads.unite(reads_tmp);
       writes = writes.unite(writes_tmp);
       to_inner_ = to_inner_.unite(toinner_tmp);
 
       Stmt stmt_b(GetObjPtr(op->b.get()));
-      std::tie(reads_tmp, writes_tmp, toinner_tmp) = ConstructPolyAccesses(domain, stmt_b, accesses);
+      std::tie(reads_tmp, writes_tmp, toinner_tmp, all_axis_) = ConstructPolyAccesses(domain, stmt_b, accesses);
       reads = reads.unite(reads_tmp);
       writes = writes.unite(writes_tmp);
       to_inner_ = to_inner_.unite(toinner_tmp);
@@ -442,13 +455,13 @@ std::tuple<isl::union_map, isl::union_map, isl::union_map> ConstructPolyAccesses
       isl::union_map reads_tmp, writes_tmp, toinner_tmp;
 
       Stmt stmt_a(GetObjPtr(op->a.get()));
-      std::tie(reads_tmp, writes_tmp, toinner_tmp) = ConstructPolyAccesses(domain, stmt_a, accesses);
+      std::tie(reads_tmp, writes_tmp, toinner_tmp, all_axis_) = ConstructPolyAccesses(domain, stmt_a, accesses);
       reads = reads.unite(reads_tmp);
       writes = writes.unite(writes_tmp);
       to_inner_ = to_inner_.unite(toinner_tmp);
 
       Stmt stmt_b(GetObjPtr(op->b.get()));
-      std::tie(reads_tmp, writes_tmp, toinner_tmp) = ConstructPolyAccesses(domain, stmt_b, accesses);
+      std::tie(reads_tmp, writes_tmp, toinner_tmp, all_axis_) = ConstructPolyAccesses(domain, stmt_b, accesses);
       reads = reads.unite(reads_tmp);
       writes = writes.unite(writes_tmp);
       to_inner_ = to_inner_.unite(toinner_tmp);
@@ -458,13 +471,13 @@ std::tuple<isl::union_map, isl::union_map, isl::union_map> ConstructPolyAccesses
       isl::union_map reads_tmp, writes_tmp, toinner_tmp;
 
       Stmt stmt_a(GetObjPtr(op->a.get()));
-      std::tie(reads_tmp, writes_tmp, toinner_tmp) = ConstructPolyAccesses(domain, stmt_a, accesses);
+      std::tie(reads_tmp, writes_tmp, toinner_tmp, all_axis_) = ConstructPolyAccesses(domain, stmt_a, accesses);
       reads = reads.unite(reads_tmp);
       writes = writes.unite(writes_tmp);
       to_inner_ = to_inner_.unite(toinner_tmp);
 
       Stmt stmt_b(GetObjPtr(op->b.get()));
-      std::tie(reads_tmp, writes_tmp, toinner_tmp) = ConstructPolyAccesses(domain, stmt_b, accesses);
+      std::tie(reads_tmp, writes_tmp, toinner_tmp, all_axis_) = ConstructPolyAccesses(domain, stmt_b, accesses);
       reads = reads.unite(reads_tmp);
       writes = writes.unite(writes_tmp);
       to_inner_ = to_inner_.unite(toinner_tmp);
@@ -474,13 +487,13 @@ std::tuple<isl::union_map, isl::union_map, isl::union_map> ConstructPolyAccesses
       isl::union_map reads_tmp, writes_tmp, toinner_tmp;
 
       Stmt stmt_a(GetObjPtr(op->a.get()));
-      std::tie(reads_tmp, writes_tmp, toinner_tmp) = ConstructPolyAccesses(domain, stmt_a, accesses);
+      std::tie(reads_tmp, writes_tmp, toinner_tmp, all_axis_) = ConstructPolyAccesses(domain, stmt_a, accesses);
       reads = reads.unite(reads_tmp);
       writes = writes.unite(writes_tmp);
       to_inner_ = to_inner_.unite(toinner_tmp);
 
       Stmt stmt_b(GetObjPtr(op->b.get()));
-      std::tie(reads_tmp, writes_tmp, toinner_tmp) = ConstructPolyAccesses(domain, stmt_b, accesses);
+      std::tie(reads_tmp, writes_tmp, toinner_tmp, all_axis_) = ConstructPolyAccesses(domain, stmt_b, accesses);
       reads = reads.unite(reads_tmp);
       writes = writes.unite(writes_tmp);
       to_inner_ = to_inner_.unite(toinner_tmp);
@@ -490,13 +503,13 @@ std::tuple<isl::union_map, isl::union_map, isl::union_map> ConstructPolyAccesses
       isl::union_map reads_tmp, writes_tmp, toinner_tmp;
 
       Stmt stmt_a(GetObjPtr(op->a.get()));
-      std::tie(reads_tmp, writes_tmp, toinner_tmp) = ConstructPolyAccesses(domain, stmt_a, accesses);
+      std::tie(reads_tmp, writes_tmp, toinner_tmp, all_axis_) = ConstructPolyAccesses(domain, stmt_a, accesses);
       reads = reads.unite(reads_tmp);
       writes = writes.unite(writes_tmp);
       to_inner_ = to_inner_.unite(toinner_tmp);
 
       Stmt stmt_b(GetObjPtr(op->b.get()));
-      std::tie(reads_tmp, writes_tmp, toinner_tmp) = ConstructPolyAccesses(domain, stmt_b, accesses);
+      std::tie(reads_tmp, writes_tmp, toinner_tmp, all_axis_) = ConstructPolyAccesses(domain, stmt_b, accesses);
       reads = reads.unite(reads_tmp);
       writes = writes.unite(writes_tmp);
       to_inner_ = to_inner_.unite(toinner_tmp);
@@ -506,13 +519,13 @@ std::tuple<isl::union_map, isl::union_map, isl::union_map> ConstructPolyAccesses
       isl::union_map reads_tmp, writes_tmp, toinner_tmp;
 
       Stmt stmt_a(GetObjPtr(op->a.get()));
-      std::tie(reads_tmp, writes_tmp, toinner_tmp) = ConstructPolyAccesses(domain, stmt_a, accesses);
+      std::tie(reads_tmp, writes_tmp, toinner_tmp, all_axis_) = ConstructPolyAccesses(domain, stmt_a, accesses);
       reads = reads.unite(reads_tmp);
       writes = writes.unite(writes_tmp);
       to_inner_ = to_inner_.unite(toinner_tmp);
 
       Stmt stmt_b(GetObjPtr(op->b.get()));
-      std::tie(reads_tmp, writes_tmp, toinner_tmp) = ConstructPolyAccesses(domain, stmt_b, accesses);
+      std::tie(reads_tmp, writes_tmp, toinner_tmp, all_axis_) = ConstructPolyAccesses(domain, stmt_b, accesses);
       reads = reads.unite(reads_tmp);
       writes = writes.unite(writes_tmp);
       to_inner_ = to_inner_.unite(toinner_tmp);
@@ -531,7 +544,7 @@ std::tuple<isl::union_map, isl::union_map, isl::union_map> ConstructPolyAccesses
       IRVisitor::Visit_(op);
       isl::union_map reads_tmp, writes_tmp, toinner_tmp;
 
-      std::tie(reads_tmp, writes_tmp, toinner_tmp) = ConstructPolyAccesses(domain, op->body, accesses);
+      std::tie(reads_tmp, writes_tmp, toinner_tmp, all_axis_) = ConstructPolyAccesses(domain, op->body, accesses);
       reads = reads.unite(reads_tmp);
       writes = writes.unite(writes_tmp);
       to_inner_ = to_inner_.unite(toinner_tmp);
@@ -543,6 +556,7 @@ std::tuple<isl::union_map, isl::union_map, isl::union_map> ConstructPolyAccesses
     isl::union_map reads, writes;
     isl::union_map to_inner_;
     AttrsExtractor extractor;
+    std::unordered_map<std::string, std::vector<std::string>> all_axis_;
 
     RelationAccessesParser(const Stmt stmt, const OperatorDomainSpace &space, AccessMap &accesses)
         : domain(space),
@@ -555,7 +569,7 @@ std::tuple<isl::union_map, isl::union_map, isl::union_map> ConstructPolyAccesses
     }
     ~RelationAccessesParser() override = default;
   } parser(s, domain, accesses);
-  return std::make_tuple(parser.reads, parser.writes, parser.to_inner_);
+  return std::make_tuple(parser.reads, parser.writes, parser.to_inner_, parser.all_axis_);
 }
 }  // namespace poly
 }  // namespace ir
