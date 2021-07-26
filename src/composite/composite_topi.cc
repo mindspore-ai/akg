@@ -256,9 +256,7 @@ TVM_REGISTER_GLOBAL("FloorDiv").set_body([](TVMArgs args, TVMRetValue *rv) {
   TOPI_TWO_INPUTS_CALL(args, rv, topi::floor_divide);
 });
 
-TVM_REGISTER_GLOBAL("Mod").set_body([](TVMArgs args, TVMRetValue *rv) {
-  TOPI_TWO_INPUTS_CALL(args, rv, topi::mod);
-});
+TVM_REGISTER_GLOBAL("Mod").set_body([](TVMArgs args, TVMRetValue *rv) { TOPI_TWO_INPUTS_CALL(args, rv, topi::mod); });
 
 TVM_REGISTER_GLOBAL("FloorMod").set_body([](TVMArgs args, TVMRetValue *rv) {
   TOPI_TWO_INPUTS_CALL(args, rv, topi::floor_mod);
@@ -268,9 +266,7 @@ TVM_REGISTER_GLOBAL("Floor").set_body([](TVMArgs args, TVMRetValue *rv) {
   TOPI_ONE_INPUT_CALL(args, rv, topi::floor);
 });
 
-TVM_REGISTER_GLOBAL("Erf").set_body([](TVMArgs args, TVMRetValue *rv) {
-  TOPI_ONE_INPUT_CALL(args, rv, topi::erf);
-});
+TVM_REGISTER_GLOBAL("Erf").set_body([](TVMArgs args, TVMRetValue *rv) { TOPI_ONE_INPUT_CALL(args, rv, topi::erf); });
 
 TVM_REGISTER_GLOBAL("Mul").set_body([](TVMArgs args, TVMRetValue *rv) {
   TOPI_TWO_INPUTS_CALL(args, rv, topi::multiply);
@@ -286,25 +282,15 @@ TVM_REGISTER_GLOBAL("Maximum").set_body([](TVMArgs args, TVMRetValue *rv) {
 
 TVM_REGISTER_GLOBAL("Log").set_body([](TVMArgs args, TVMRetValue *rv) { TOPI_ONE_INPUT_CALL(args, rv, topi::log); });
 
-TVM_REGISTER_GLOBAL("Sin").set_body([](TVMArgs args, TVMRetValue *rv) {
-  TOPI_ONE_INPUT_CALL(args, rv, topi::sin);
-});
+TVM_REGISTER_GLOBAL("Sin").set_body([](TVMArgs args, TVMRetValue *rv) { TOPI_ONE_INPUT_CALL(args, rv, topi::sin); });
 
-TVM_REGISTER_GLOBAL("Cos").set_body([](TVMArgs args, TVMRetValue *rv) {
-  TOPI_ONE_INPUT_CALL(args, rv, topi::cos);
-});
+TVM_REGISTER_GLOBAL("Cos").set_body([](TVMArgs args, TVMRetValue *rv) { TOPI_ONE_INPUT_CALL(args, rv, topi::cos); });
 
-TVM_REGISTER_GLOBAL("Asin").set_body([](TVMArgs args, TVMRetValue *rv) {
-  TOPI_ONE_INPUT_CALL(args, rv, topi::asin);
-});
+TVM_REGISTER_GLOBAL("Asin").set_body([](TVMArgs args, TVMRetValue *rv) { TOPI_ONE_INPUT_CALL(args, rv, topi::asin); });
 
-TVM_REGISTER_GLOBAL("ACos").set_body([](TVMArgs args, TVMRetValue *rv) {
-  TOPI_ONE_INPUT_CALL(args, rv, topi::acos);
-});
+TVM_REGISTER_GLOBAL("ACos").set_body([](TVMArgs args, TVMRetValue *rv) { TOPI_ONE_INPUT_CALL(args, rv, topi::acos); });
 
-TVM_REGISTER_GLOBAL("Sign").set_body([](TVMArgs args, TVMRetValue *rv) {
-  TOPI_ONE_INPUT_CALL(args, rv, topi::sign);
-});
+TVM_REGISTER_GLOBAL("Sign").set_body([](TVMArgs args, TVMRetValue *rv) { TOPI_ONE_INPUT_CALL(args, rv, topi::sign); });
 
 TVM_REGISTER_GLOBAL("ReduceSum").set_body([](TVMArgs args, TVMRetValue *rv) {
   CHECK_GE(args.size(), 2);
@@ -453,8 +439,29 @@ TVM_REGISTER_GLOBAL("Argmax").set_body([](TVMArgs args, TVMRetValue *rv) {
   CHECK(attrs.count("axis"));
   auto axis = ArrayOrInt(attrs["axis"]);
 
-  auto call = [&axis](const Tensor &tensor) { return topi::argmax(tensor, axis, false); };
-  TOPI_ONE_INPUT_CALL(args, rv, call);
+  auto inputs = args[0].operator Array<NodeRef>();
+  auto data = Downcast<Tensor>(inputs[0]);
+
+  bool reduce_on_single_element = false;
+  if (axis.size() == 1 && data->shape.size() >= 1) {
+    auto axis_size = (int64_t)Downcast<Integer>(data->shape[axis[0]]);
+    if (axis_size == 1) {
+      reduce_on_single_element = true;
+    }
+  }
+  if (reduce_on_single_element) {
+    size_t reduce_axis = (int64_t)axis[0];
+    Array<Expr> reduce_shape;
+    for (size_t i = 0; i < data->shape.size(); i++) {
+      if (i != reduce_axis) reduce_shape.push_back(data->shape[i]);
+    }
+    *rv = compute(
+      reduce_shape, [&](const Array<Var> &indices) { return make_const(data->dtype, 0); }, data->op->name + "_red",
+      topi::kBroadcast);
+  } else {
+    auto call = [&axis](const Tensor &tensor) { return topi::argmax(tensor, axis, false); };
+    TOPI_ONE_INPUT_CALL(args, rv, call);
+  }
 });
 
 TVM_REGISTER_GLOBAL("Argmin").set_body([](TVMArgs args, TVMRetValue *rv) {
@@ -463,8 +470,29 @@ TVM_REGISTER_GLOBAL("Argmin").set_body([](TVMArgs args, TVMRetValue *rv) {
   CHECK(attrs.count("axis"));
   auto axis = ArrayOrInt(attrs["axis"]);
 
-  auto call = [&axis](const Tensor &tensor) { return topi::argmin(tensor, axis, false); };
-  TOPI_ONE_INPUT_CALL(args, rv, call);
+  auto inputs = args[0].operator Array<NodeRef>();
+  auto data = Downcast<Tensor>(inputs[0]);
+
+  bool reduce_on_single_element = false;
+  if (axis.size() == 1 && data->shape.size() >= 1) {
+    auto axis_size = (int64_t)Downcast<Integer>(data->shape[axis[0]]);
+    if (axis_size == 1) {
+      reduce_on_single_element = true;
+    }
+  }
+  if (reduce_on_single_element) {
+    size_t reduce_axis = (int64_t)axis[0];
+    Array<Expr> reduce_shape;
+    for (size_t i = 0; i < data->shape.size(); i++) {
+      if (i != reduce_axis) reduce_shape.push_back(data->shape[i]);
+    }
+    *rv = compute(
+      reduce_shape, [&](const Array<Var> &indices) { return make_const(data->dtype, 0); }, data->op->name + "_red",
+      topi::kBroadcast);
+  } else {
+    auto call = [&axis](const Tensor &tensor) { return topi::argmin(tensor, axis, false); };
+    TOPI_ONE_INPUT_CALL(args, rv, call);
+  }
 });
 
 TVM_REGISTER_GLOBAL("OneHot").set_body([](TVMArgs args, TVMRetValue *rv) {
@@ -536,9 +564,7 @@ TVM_REGISTER_GLOBAL("Greater").set_body([](TVMArgs args, TVMRetValue *rv) {
   TOPI_TWO_INPUTS_CALL(args, rv, topi::greater);
 });
 
-TVM_REGISTER_GLOBAL("Less").set_body([](TVMArgs args, TVMRetValue *rv) {
-  TOPI_TWO_INPUTS_CALL(args, rv, topi::less); }
-);
+TVM_REGISTER_GLOBAL("Less").set_body([](TVMArgs args, TVMRetValue *rv) { TOPI_TWO_INPUTS_CALL(args, rv, topi::less); });
 
 TVM_REGISTER_GLOBAL("GreaterEqual").set_body([](TVMArgs args, TVMRetValue *rv) {
   TOPI_TWO_INPUTS_CALL(args, rv, topi::greater_equal);
@@ -755,8 +781,8 @@ TVM_REGISTER_GLOBAL("CudaBatchMatMul").set_body([](TVMArgs args, TVMRetValue *rv
 
   size_t batch_dim = 0;
   IterVar reduce_k;
-  auto fcompute = [&left_matrix, &right_matrix, &transpose_a, &transpose_b, &reduce_k,
-                   &batch_dim, &dst_type](const Array<Var> &indices) {
+  auto fcompute = [&left_matrix, &right_matrix, &transpose_a, &transpose_b, &reduce_k, &batch_dim,
+                   &dst_type](const Array<Var> &indices) {
     Array<Expr> left_indice;
     Array<Expr> right_indice;
     for (size_t i = 0; i < batch_dim; ++i) {
@@ -1002,9 +1028,7 @@ TVM_REGISTER_GLOBAL("AicoreBatchMatMul").set_body([](TVMArgs args, TVMRetValue *
   *rv = c_tensor;
 });
 
-TVM_REGISTER_GLOBAL("Atan").set_body([](TVMArgs args, TVMRetValue *rv) {
-  TOPI_ONE_INPUT_CALL(args, rv, topi::atan);
-});
+TVM_REGISTER_GLOBAL("Atan").set_body([](TVMArgs args, TVMRetValue *rv) { TOPI_ONE_INPUT_CALL(args, rv, topi::atan); });
 
 TVM_REGISTER_GLOBAL("Atan2").set_body([](TVMArgs args, TVMRetValue *rv) {
   auto inputs = args[0].operator Array<NodeRef>();
