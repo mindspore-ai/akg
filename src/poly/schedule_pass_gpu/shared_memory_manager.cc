@@ -100,9 +100,9 @@ void SharedMemoryManager::PrepareInfoForPromotion(const isl::schedule_node &root
   bank_conflict_ = scop_info_.user_config_.GetEnableBankConflict();
   shared_inversed_thread_map_ = scop_info_.user_config_.GetSharedInversedThreadMap();
   shared_vector_align_ = scop_info_.user_config_.GetSharedVectorAlign();
-  if (scop_info_.user_config_.GetVectorLoadType() && !scop_info_.user_config_.GetEnableVectorization()) {
+  if (scop_info_.user_config_.GetVectorLoadType() && !scop_info_.user_config_.GetEnableVectorization() &&
+      !scop_info_.user_config_.EnableStitchFusion()) {
     scop_info_.user_config_.SetEnableOneDimThread(true);
-    enable_one_dim_ = true;
   }
   unroll_shared_ = scop_info_.user_config_.GetUnrollShared();
 }
@@ -175,7 +175,7 @@ isl::schedule_node SharedMemoryManager::MapCopiesToThreads(isl::schedule_node &r
 
     auto mapping_cfg = thread_cfg;
 
-    if (enable_one_dim_) {
+    if (scop_info_.user_config_.GetEnableOneDimThread()) {
       mapping_cfg = GetCurrentConfig(band_node);
 
       bool use_thread_cfg = true;

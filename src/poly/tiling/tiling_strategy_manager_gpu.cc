@@ -301,6 +301,9 @@ void ReduceStrategy::AddGpuConstraint() {
   });
   all_reduce_ = reduce_axes_.size() == depth;
   if (reduce_length <= 32) {
+    if (!analyzer_->scop_info_.user_config_.EnableStitchFusion()) {
+      analyzer_->scop_info_.user_config_.SetEnableOneDimThread(true);
+    }
     analyzer_->scop_info_.user_config_.SetEnableAkgReduceLib(false);
   }
   if (analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib()) {
@@ -1649,7 +1652,9 @@ void GpuStrategy::InjectiveSpeedup() {
 
 void GpuStrategy::TransposeSpeedup() {
   analyzer_->GetTileLogger().AppendLine(GPU_MAPPING, "TransposeSpeedup");
-  analyzer_->scop_info_.user_config_.SetEnableOneDimThread(true);
+  if (!analyzer_->scop_info_.user_config_.EnableStitchFusion()) {
+    analyzer_->scop_info_.user_config_.SetEnableOneDimThread(true);
+  }
   analyzer_->scop_info_.user_config_.SetTransposeOp(true);
   analyzer_->scop_info_.user_config_.SetUseSharedMemory(true);
   auto inner_axes = analyzer_->GetAxesOfAttr(AT_TRANSPOSE_INNERMOST_AXIS);

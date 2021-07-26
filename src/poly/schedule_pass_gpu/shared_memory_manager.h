@@ -90,7 +90,6 @@ class SharedMemoryManager : public SchedulePass {
   int shared_vector_align_{0};
   bool is_reduce_{false};
   bool is_matmul_{false};
-  bool enable_one_dim_{false};
   bool unroll_shared_{false};
   size_t remain_memory_{common::SHARED_MEMORY_SIZE};
 };
