@@ -272,6 +272,15 @@ std::pair<int64_t, int64_t> GemmStrategy::GetDivisibleFactorForMN(int64_t shape_
 
 void ReduceStrategy::AddGpuConstraint() {
   reduce_axes_ = analyzer_->GetAxesOfAttr(AT_REDUCE_AXIS);
+  if (reduce_axes_.empty()) {
+    return;
+  }
+  if (analyzer_->scop_info_.user_config_.GetThreadConfig() != nullptr &&
+      analyzer_->scop_info_.user_config_.GetBlockConfig() != nullptr &&
+      analyzer_->scop_info_.user_config_.GetThreadConfig()->bound > 0 &&
+      analyzer_->scop_info_.user_config_.GetBlockConfig()->bound > 0) {
+    return;
+  }
   size_t depth = 0;
   auto HasTranspose = [this](const AttrInfo &info) {
     std::string key = info.attr_key;
@@ -306,14 +315,13 @@ void ReduceStrategy::AddGpuConstraint() {
     }
     analyzer_->scop_info_.user_config_.SetEnableAkgReduceLib(false);
   }
-  if (analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib()) {
-    AkgReduceLibStrategyOnGpu();
-  } else {
-    SimpleStrategyOnGpu();
+  if (!analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib()) {
+    DisableReduceMapping();
   }
+  AkgReduceLibStrategyOnGpu();
 }
 
-void ReduceStrategy::SimpleStrategyOnGpu() {
+void ReduceStrategy::DisableReduceMapping() {
   bool is_tuning = analyzer_->scop_info_.user_config_.GetIsTuning();
   for (auto axis : reduce_axes_) {
     axis->block_constraints.map_extent_ = MIN_TILE;
@@ -352,7 +360,8 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu() {
     }
   }
 
-  bool square_thread = analyzer_->scop_info_.analysis_result_.GetReduceDirection() == Y_DIRECTION;
+  bool square_thread = analyzer_->scop_info_.analysis_result_.GetReduceDirection() == Y_DIRECTION && 
+                       analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib();
   int64_t total_reduce_size = 1;
   int64_t total_injective_size = 1;
   int64_t injective_threads = 1;
@@ -520,6 +529,9 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu() {
     }
   }
   for (auto axis : reduce_axes_) {
+    if (axis->thread_constraints.map_min_ == axis->thread_constraints.map_extent_) {
+      continue;
+    }
     axis->thread_constraints.map_extent_ = reduce_threads;
     axis->thread_constraints.item_process_ = default_elem_per_thread;
   }
