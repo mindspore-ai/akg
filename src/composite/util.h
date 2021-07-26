@@ -64,6 +64,7 @@ bool IsOtherOp(const std::string &op_name);
 bool IsElemwise(const std::string &op_name);
 bool EqualShape(const Array<Expr> &shape1, const Array<Expr> &shape2);
 bool ShapeIsOne(const Array<Expr> &shape);
+bool ShapeSizeIsOne(const Array<Expr> &shape);
 bool ShapeCanBroadcast(const Array<Expr> &shape1, const Array<Expr> &shape2);
 std::string GetOpName(const Provide *p);
 std::string CreateDataFormatKey(const std::string &tensor_name);

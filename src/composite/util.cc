@@ -94,6 +94,13 @@ bool EqualShape(const Array<Expr> &shape1, const Array<Expr> &shape2) {
 }
 
 bool ShapeIsOne(const Array<Expr> &shape) { return shape.size() == 1 && Equal(shape[0], 1); }
+bool ShapeSizeIsOne(const Array<Expr> &shape) {
+  Expr size = 1;
+  for (auto &i : shape) {
+    size *= i;
+  }
+  return Equal(Simplify(size), 1);
+}
 
 bool ShapeCanBroadcast(const Array<Expr> &shape1, const Array<Expr> &shape2) {
   if (shape1.size() > shape2.size()) {
