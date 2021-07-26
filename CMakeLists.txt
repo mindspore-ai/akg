@@ -250,9 +250,14 @@ if(USE_CCE_RT OR USE_KC_AIR)
 endif()
 
 if (USE_CCE_RT)
-  file(GLOB ASCEND_SRCS  ${AKG_SOURCE_DIR}/src/profiler/ascend/*.cc)
+  file(
+    GLOB
+    ASCEND_SRCS
+    ${AKG_SOURCE_DIR}/src/profiler/ascend/*.cc
+    ${AKG_SOURCE_DIR}/src/runtime/ascend/*.cc)
   list(APPEND COMPILER_SRCS ${ASCEND_SRCS})
   include_directories(AFTER "${AKG_SOURCE_DIR}/src/profiler/ascend")
+  include_directories(AFTER "${AKG_SOURCE_DIR}/src/runtime/ascend")
 endif()
 
 

@@ -149,7 +149,7 @@ class TestCase(TestBase):
              ((1, 512, 28, 28), (1024, 512, 1, 1), (0, 0, 0, 0), (2, 2), (1, 1))),
         ]
 
-        self.testarg_level2 = [
+        self.testarg_level0 = [
             # Fail in MakeAPI: ("conv_ad_1_3_8_8", conv_topi_input_ad, ((1, 3, 8, 8), (1, 3, 4, 4), (2, 2), (0, 0), "float16"), [(16, 65535), (16, 65535), (16, 0), (16, 0)]),
             ## Additional test cases from issues #1106
             ("test_resnet50_conv_input_ad_022", conv_input_ad_run,
@@ -191,12 +191,12 @@ class TestCase(TestBase):
         """
         self.common_run(self.testarg_level1)
 
-    def test_run_level2(self):
+    def test_run_level0(self):
         """
         run case.#
         :return:
         """
-        self.common_run(self.testarg_level2)
+        self.common_run(self.testarg_level0)
 
     def test(self, split_nums, split_idx):
         self.common_run(get_splitted_cases(self.testarg, split_nums, split_idx))
@@ -210,7 +210,7 @@ class TestCase(TestBase):
         return
 
 
-@pytest.mark.level2
+@pytest.mark.level0
 @pytest.mark.platform_arm_ascend_training
 @pytest.mark.platform_x86_ascend_training
 @pytest.mark.env_onecard
@@ -221,7 +221,7 @@ def test0():
     a.teardown()
 
 
-@pytest.mark.level2
+@pytest.mark.level0
 @pytest.mark.platform_arm_ascend_training
 @pytest.mark.platform_x86_ascend_training
 @pytest.mark.env_onecard

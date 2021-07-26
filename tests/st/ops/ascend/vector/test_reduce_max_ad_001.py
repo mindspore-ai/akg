@@ -69,7 +69,7 @@ class TestCase(TestBase):
             #("reduce_max_ad_6", reduce_max_ad_run, ((1024,), (0,), True, "int32", False, "cce_reduce_max_int32"), [(1,1)], False),
         ]
 
-    @pytest.mark.level2
+    @pytest.mark.level0
     @pytest.mark.platform_arm_ascend_training
     @pytest.mark.platform_x86_ascend_training
     @pytest.mark.env_onecard

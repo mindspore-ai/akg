@@ -79,7 +79,7 @@ class TestCase(TestBase):
         ]
         return
 
-    @pytest.mark.level2
+    @pytest.mark.level0
     @pytest.mark.platform_arm_ascend_training
     @pytest.mark.platform_x86_ascend_training
     @pytest.mark.env_onecard
@@ -94,7 +94,7 @@ class TestCase(TestBase):
         if len(self.testarg_rpc_cloud) > 0:
             self.common_run([self.testarg_rpc_cloud[0]])
 
-    @pytest.mark.level2
+    @pytest.mark.level0
     @pytest.mark.platform_arm_ascend_training
     @pytest.mark.platform_x86_ascend_training
     @pytest.mark.env_onecard

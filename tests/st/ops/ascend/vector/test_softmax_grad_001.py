@@ -54,7 +54,7 @@ class TestCase(TestBase):
             ("softmax_grad_1", softmax_grad_run, ((8, 4718, 6), "float32", -1, "cce_softmax_grad_fp32")),
         ]
 
-    @pytest.mark.level2
+    @pytest.mark.level0
     @pytest.mark.platform_arm_ascend_training
     @pytest.mark.platform_x86_ascend_training
     @pytest.mark.env_onecard

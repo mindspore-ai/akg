@@ -57,6 +57,7 @@ def gen_data(dtype, shape):
 
     output1 = np.full((m, k), 0.0).astype(support_list[dtype])
     output2 = np.full((k,), 0.0).astype(support_list[dtype])
+    output3 = np.full((k,), 0.0).astype(support_list[dtype])
     head = random_gaussian((m,), miu=1, sigma=0.1).astype(support_list[dtype])
 
     expect_x = -(x - mean) / (scale * scale) * head.reshape(-1, 1)
@@ -66,4 +67,4 @@ def gen_data(dtype, shape):
         axis=0)
     expects = (expect_x, expect_mean, expect_sigma)
 
-    return expects, head, x, mean, scale, (output1, output2, output2)
+    return expects, head, x, mean, scale, (output1, output2, output3)
