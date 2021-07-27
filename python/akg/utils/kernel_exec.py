@@ -26,7 +26,6 @@ import time
 import random
 import subprocess
 import re
-import logging
 import tvm
 from timeit import default_timer as timer
 from threading import Thread
@@ -36,11 +35,11 @@ from enum import IntEnum
 import ctypes
 
 import akg
-from akg.build_module import help_tiling_level
-from akg import backend as cce
 import akg.tvm
 from akg.tvm import autotvm
 from akg.tvm import rpc
+from akg.tvm import _api_internal
+from akg.build_module import help_tiling_level
 from akg.utils import result_analysis as ra_util
 from akg.utils import format_transform as ft_util
 from akg.utils import custom_tiling as ct_util
@@ -48,7 +47,6 @@ from akg.utils import validation_check as vc_util
 from akg.utils.dsl_create import TensorUtils
 from akg.backend.parsing_profiling_data import HWTSLogParser
 from akg.backend.parsing_profiling_data import validate_and_normalize_path
-
 
 sh = logging.StreamHandler(sys.stdout)
 logging.getLogger().addHandler(sh)
@@ -75,12 +73,14 @@ WGT_ELEM_BYTES = (BLOCK_OUT * BLOCK_REDUCE * WGT_WIDTH // 8)
 OUT_ELEM_BYTES = (BLOCK_IN * BLOCK_OUT * OUT_WIDTH // 8)
 GLB_ELEM_BYTES = (16 * OUT_WIDTH // 8)
 
+
 class ReturnType(IntEnum):
     """Return Type IntEnum"""
     DEFAULT = 0
     FEAT = 1
     MOD = 2
     MOD_AND_FEAT = 3
+
 
 def debug_mode(debug_flag):
     """
@@ -95,17 +95,21 @@ def debug_mode(debug_flag):
     # the number in pass_list such as 0,1,2,3 represents the order of the pass called
     pass_list = []
     if debug_flag == 1:
+        from akg.tvm import ir_pass
         pass_list.append((0, ir_pass.inject_dma_intrin))
     return pass_list
 
+
 def func_time_required(func_name):
     """Checking the Time Required for Function Running."""
+
     def wrapper(*args, **kwargs):
         t0 = time.time()
         result = func_name(*args, **kwargs)
         t1 = time.time()
         logging.info("func_time_required func:%s, running:%lf seconds", func_name.__name__, (t1 - t0))
         return result
+
     return wrapper
 
 
@@ -128,7 +132,7 @@ def create_code(kernel_name, code_path=None, code=None, code_type=CCE):
 
     if not code_path:
         code_path = "./"
-    
+
     if code_type == CCE and len(code_path) > 4 and code_path[-4:].lower() == postfix:
         real_path = code_path
     elif code_type == CUDA and len(code_path) > 3 and code_path[-3:].lower() == postfix:
@@ -141,20 +145,21 @@ def create_code(kernel_name, code_path=None, code=None, code_type=CCE):
     dir_path = r"/".join(real_path.split(r"/")[:-1])
     if not os.path.isdir(dir_path):
         os.makedirs(dir_path)
-    
+
     with open(real_path, 'wt') as ss:
         ss.write(code)
 
 
-
 def gen_name_kernel(kernel, dtype, shapes):
     """generate kernel name."""
+
     def _flat_array(srclist, dstlist):
         for i in srclist:
             if isinstance(i, (list, tuple)):
                 _flat_array(i, dstlist)
             else:
                 dstlist.append(i)
+
     res = ''
     flat = []
     _flat_array(shapes, flat)
@@ -197,11 +202,13 @@ def load_rpc_server_info(mode):
 
 def dispatch(rank=0):
     """Function for lock waiting dispatch handle version 1."""
+
     def _sort_by_value(d):
         items = list(d.items())
         random.shuffle(items)
         items.sort(key=lambda x: x[1])
         return [item[0] for item in items]
+
     for k, v in rpc_lb.items():
         logging.info("######rpc_lb[%s]=%f", rpc_machine[k][0], v)
     lb_list = _sort_by_value(rpc_lb)
@@ -396,7 +403,10 @@ def profiling_mode_run(mod, args, outputs, tuning, device_id):
         logging.error("OOPS, can't correctly parsing cycles!")
     TestUtils.record_cycle(cycle)
     logging.info('=====parsing cycles==============================')
-    return out_list[0] if len(out_list) == 1 else tuple(out_list), {'run_time': cycle}
+    output_data = out_list[0] if len(out_list) == 1 else tuple(out_list)
+    if tuning:
+        return output_data, {'run_time': cycle}
+    return output_data
 
 
 def profiling_analyse(device_id, time_before_launch):
@@ -424,7 +434,6 @@ def profiling_analyse(device_id, time_before_launch):
         public_path = os.getenv('PROFILING_DIR')
         if public_path is None:
             raise RuntimeError("Environment PROFILING_DIR not set!")
-            return None
 
         public_path = validate_and_normalize_path(public_path)
         cmd_list = [
@@ -453,14 +462,13 @@ def profiling_analyse(device_id, time_before_launch):
 
         if file_create_time < time_before_launch:
             raise RuntimeError("The JOB file is too old")
-            return None
 
         count = 0
         while count < 5:
             try:
                 hwtslog_parser = HWTSLogParser(file_abs_path)
                 return hwtslog_parser.execute()
-            except:
+            except BaseException:
                 time.sleep(1)
                 count += 1
     except SyntaxError as e:
@@ -490,6 +498,7 @@ def get_launch_args(arg_list, outputs):
         else:
             launch_args.append(arg)
     return launch_args
+
 
 def mod_launch_air(mod, args, outputs, device_id):
     """launch mod on kc_air."""
@@ -558,6 +567,7 @@ def get_kernel_name(code):
         raise ValueError("fail to get kernel_name")
     return kernel_name
 
+
 @func_time_required
 def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=-1, expect=None, repeat_time=400):
     """
@@ -587,7 +597,7 @@ def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=-1, expect=None
         if not tuning:
             return out_list[0] if len(out_list) == 1 else tuple(out_list)
         else:
-            cycles = get_gpu_cycles(mod, *mod_args, device_id=device_id, save_log=True, repeat_time=repeat_time)
+            cycles = get_gpu_cycles(mod, *mod_args, device_id=device_id, repeat_time=repeat_time)
             return out_list[0] if len(out_list) == 1 else tuple(out_list), {'run_time': cycles}
 
     stat_info = {}
@@ -745,6 +755,7 @@ def recursive_copy(obj):
         return copy_obj
     return obj
 
+
 def gen_inputs_and_shape_params(input_shapes, input_types, inputs, shape_params):
     """
     Generate akg.tvm.placeholder as inputs for op with given input_shapes and input_types
@@ -777,6 +788,7 @@ def gen_inputs_and_shape_params(input_shapes, input_types, inputs, shape_params)
         else:
             inputs.append(akg.tvm.placeholder(shape, dtype, "input_%d" % (i + 1)))
 
+
 def gen_attrs_params(op_attrs, attrs_params):
     """
     Parsing attrs given by op_attrs.
@@ -794,14 +806,18 @@ def gen_attrs_params(op_attrs, attrs_params):
         elif isinstance(tmp_attr, akg.tvm.expr.Var):
             attrs_params.append(tmp_attr)
 
-def get_dim_from_func_map(attrs, op_func, args):
+
+def get_dim_from_func_map(attrs, op_func, args, input_shapes, input_types, op_attrs):
     """
     Get tiling parameter from map defined in op_func.
 
     Args:
         attrs (dict): tiling parameter.
         op_func (function returning an op or (op, [op_vars])): The op build function.
-
+        args (list): input tensors and attributes(if exists) of op_func.
+        input_shapes (iterable of iterable of int): the dim sizes for input for op.
+        input_types (iterable of iterable of str): the dtypes for each input.
+        op_attrs (list or tuple): extra attributes for the op.
     """
     if attrs is None or 'dim' not in attrs or not attrs['dim']:
         dim_info = ""
@@ -829,6 +845,7 @@ def get_dim_from_func_map(attrs, op_func, args):
 
         attrs['dim'] = dim_info
     return attrs
+
 
 def parsing_output(output, attrs, compute_func, sch_tmpl, gpu_binds):
     """
@@ -863,6 +880,7 @@ def parsing_output(output, attrs, compute_func, sch_tmpl, gpu_binds):
         gpu_binds = sch_tmpl['binds']
     return output, compute_func, sch_tmpl, gpu_binds
 
+
 def gen_op_var(inputs, output, op_var):
     """
     Combine inputs and outputs about the op.
@@ -885,6 +903,7 @@ def gen_op_var(inputs, output, op_var):
             op_var = op_var + [output]
     return op_var
 
+
 def gen_shape_var(attrs_params, shape_params, shape_var):
     """
     Combine shape of inputs and extra attributes about the op.
@@ -895,8 +914,13 @@ def gen_shape_var(attrs_params, shape_params, shape_var):
         shape_var (list): shape of inputs and extra attributes for the op.
     """
     if attrs_params:
-        [shape_var.append(i) for i in attrs_params if i not in shape_var]
-    [shape_var.append(i) for i in shape_params if i not in shape_var]
+        for i in attrs_params:
+            if i not in shape_var:
+                shape_var.append(i)
+    for i in shape_params:
+        if i not in shape_var:
+            shape_var.append(i)
+
 
 def gen_spaces_dim_key(op_func, args, s, op_var, kernel_name, attrs, polyhedral, tuning, target):
     """
@@ -931,6 +955,7 @@ def gen_spaces_dim_key(op_func, args, s, op_var, kernel_name, attrs, polyhedral,
             set_dim_key = str(args)
         return spaces, set_dim_key
 
+
 def create_gpu_mod(sch_tmpl, s, op_func, op_var, shape_var, kernel_name, attrs, polyhedral, binds, dump_ir, dump_code,
                    tuning):
     """
@@ -963,8 +988,6 @@ def create_gpu_mod(sch_tmpl, s, op_func, op_var, shape_var, kernel_name, attrs, 
     if sch_tmpl is not None:
         if sch_tmpl['target'] != CUDA:
             raise ValueError("Only support cuda as target when using schedule template.")
-        global kc_air_mode
-        kc_air_mode = "CUDA"
         with akg.tvm.target.cuda() as target:
             if not tuning:
                 s = sch_tmpl['schedule'](sch_tmpl['output'])
@@ -981,7 +1004,7 @@ def create_gpu_mod(sch_tmpl, s, op_func, op_var, shape_var, kernel_name, attrs, 
                 task = autotvm.task.create(_autotune_template,
                                            args=list(),
                                            target='cuda')
-                
+
                 print("task config: ", task.config_space)
 
                 # set measure_option
@@ -994,9 +1017,9 @@ def create_gpu_mod(sch_tmpl, s, op_func, op_var, shape_var, kernel_name, attrs, 
                 tuner = autotvm.tuner.RandomTuner(task)
                 if not os.path.exists(kernel_name + '.log'):
                     tuner.tune(n_trial=len(task.config_space),
-                    measure_option=measure_option,
-                    callbacks=[autotvm.callback.log_to_file(kernel_name + '.log')])
-                
+                               measure_option=measure_option,
+                               callbacks=[autotvm.callback.log_to_file(kernel_name + '.log')])
+
                 # query best config
                 dispatch_context = autotvm.apply_history_best(kernel_name + '.log')
                 best_config = dispatch_context.query(task.target, task.workload)
@@ -1005,10 +1028,10 @@ def create_gpu_mod(sch_tmpl, s, op_func, op_var, shape_var, kernel_name, attrs, 
 
                 # apply best config
                 with autotvm.apply_history_best(kernel_name + '.log'):
-                        s, op_var = _autotune_template()
-                        mod = akg.build(s, op_var, "cuda", shape_var, name=kernel_name, attrs=attrs,
-                                    polyhedral=False, binds=gpu_binds)
-    else :
+                    s, op_var = _autotune_template()
+                    mod = akg.build(s, op_var, "cuda", shape_var, name=kernel_name, attrs=attrs,
+                                    polyhedral=False, binds=binds)
+    else:
         with akg.build_config(dump_pass_ir=dump_ir):
             mod = akg.build(s, op_var, target, shape_var, name=kernel_name, attrs=attrs, polyhedral=polyhedral,
                             binds=binds)
@@ -1016,6 +1039,7 @@ def create_gpu_mod(sch_tmpl, s, op_func, op_var, shape_var, kernel_name, attrs, 
         source_code = mod.imported_modules[0].get_source()
         create_code(kernel_name, "./", source_code, CUDA)
     return mod
+
 
 def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
              attrs=None, log_cce=False, dump_ir=True, dump_code=True,
@@ -1040,7 +1064,7 @@ def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
         module.
     """
     inputs = []
-    shape_params = []    # save all the shape params for dynamic_shape cases
+    shape_params = []  # save all the shape params for dynamic_shape cases
     gen_inputs_and_shape_params(input_shapes, input_types, inputs, shape_params)
 
     attrs_params = []
@@ -1058,7 +1082,7 @@ def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
     # restore inputs to make sure that tensor names are not changed by op_func
     inputs = inputs_backup
     # set dim
-    attrs = get_dim_from_func_map(attrs, op_func, args)
+    attrs = get_dim_from_func_map(attrs, op_func, args, input_shapes, input_types, op_attrs)
 
     compute_func = None  # func which is defined in dsl for doing compute_inline or other
     sch_tmpl = None
@@ -1109,11 +1133,12 @@ def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
     binds = None if not attrs else attrs.pop(BINDS, None)
     if ret_mode in [ReturnType.FEAT, ReturnType.MOD_AND_FEAT]:
         if binds is None:
-            binds, _ = get_binds(op_var)
+            from akg.tvm import build_module
+            binds, _ = build_module.get_binds(op_var)
         cfg = _api_internal._GetCurrentBuildConfig()
         stmt, args = _api_internal._Lower(s, op_var, shape_params, kernel_name,
-                                    binds, attrs, False, True, False, target,
-                                    cfg, True)
+                                          binds, attrs, False, True, False, target,
+                                          cfg, True)
         from akg.utils.auto_tuning import get_features_from_stmts
         feature = get_features_from_stmts(stmts=[stmt], binds=[binds], n_skip_cache=0)[0]
         if ret_mode == ReturnType.FEAT:
@@ -1183,14 +1208,17 @@ def get_device_id():
         logging.error(e)
         return 0
 
-def get_gpu_cycles(mod, *mod_args, device_id=0, save_log=False, repeat_time=400):
-    "get gpu profiling cycles."
+
+def get_gpu_cycles(mod, *mod_args, device_id=0, repeat_time=400):
+    """get gpu profiling cycles."""
     from akg.utils.result_analysis import gpu_profiling
     tcost = gpu_profiling(mod, *mod_args, repeat_time=repeat_time, device_id=device_id)
     return tcost
 
+
 class TestUtils:
     """Class for getting cycle and core num."""
+
     @staticmethod
     def record_cycle(cycle):
         if os.environ.get(PERFORMANCE_TEST_FILE):
@@ -1201,13 +1229,14 @@ class TestUtils:
     @staticmethod
     def record_core(stmt):
         """Function for getting performance data from cores."""
+
         def get_core_num():
             core_num = 1
             if hasattr(stmt, 'attr_key') and stmt.attr_key == 'thread_extent':
                 core_num = stmt.value
             return core_num
+
         if os.environ.get(PERFORMANCE_TEST_FILE):
             result_file = os.environ.get(PERFORMANCE_TEST_FILE)
             with open(result_file, "a+") as f:
                 f.write("{0}; ".format(get_core_num()))
-

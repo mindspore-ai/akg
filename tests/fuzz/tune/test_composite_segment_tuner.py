@@ -101,7 +101,8 @@ def tuning_with_1block(json_str, tune_level=0, repo_path="repo.json", skip_exist
 def get_profiling(desc: str, results: dict, attrs=None):
     mod = composite.build(desc, attrs, poly=True)
     inputs, expect, output_indexes = gen_json_data(desc)
-    output, stat_info = utils.mod_launch(mod, list(inputs), output_indexes, device_id=utils.get_device_id())
+    output, stat_info = utils.mod_launch(mod, list(inputs), output_indexes, tuning=True,
+                                         device_id=utils.get_device_id())
 
     results["run_time"] = stat_info["run_time"]
     if not all(map(_compare_func, output if isinstance(output, (list, tuple)) else [output],
@@ -238,7 +239,7 @@ def plan_block(candidate: list):
     return _get_blocks_by_candidate(block_candidate, candidate)
 
 
-def tune_parallel_segment(desc_in: str, repo_path: str):
+def tune_parallel_segment(desc_in: str, repo_path: str, skip_exist: bool):
     def _get_max_peel(peel):
         # only outer peel axis now.
         peel_space_strs = peel.get_peeling_space()
@@ -258,7 +259,8 @@ def tune_parallel_segment(desc_in: str, repo_path: str):
         return {outer_axis: res[outer_axis]}, "{} {}".format(outer_axis, res[outer_axis]), peel_spaces
 
     def _tune(body_desc):
-        best_tuned_info = tuning_with_1block(body_desc)  # here should return elapse time and tiling ars
+        # here should return elapse time and tiling ars
+        best_tuned_info = tuning_with_1block(body_desc, skip_exist=skip_exist)
         if best_tuned_info.get("elapse", float("inf")) == float("inf"):
             print("Cannot get tuning info, will check body's elapse by profiling!")
             with ProfilingDirCleaner() as pdc:
@@ -298,11 +300,11 @@ def tune_parallel_segment(desc_in: str, repo_path: str):
 
 
 def get_max_alloc(alloc_map):
-    max = 0
+    max_alloc = 0
     for i in alloc_map.values():
-        if len(i) == 2 and max < i[1]:
-            max = i[1]
-    return max
+        if len(i) == 2 and max_alloc < i[1]:
+            max_alloc = i[1]
+    return max_alloc
 
 
 def get_block_candidate_space(space):
@@ -336,7 +338,7 @@ def remove_buffer_exceed_space(space, max_alloc):
     return peel_spaces
 
 
-def tune_stitch_segment(desc_in: str, repo_path: str):
+def tune_stitch_segment(desc_in: str, repo_path: str, skip_exist: bool):
     descs, _, _, alloc_map, _, _ = stitch_json_split(json.loads(desc_in))
     max_alloc = get_max_alloc(alloc_map)
 
@@ -359,7 +361,7 @@ def tune_stitch_segment(desc_in: str, repo_path: str):
                 for desc_idx, peel_desc in enumerate(peel_descs):
                     logging.info("=============== Current peeling: {} [{}/{}], tuning sub json [{}/{}] =============="
                                  .format(peeling, idx + 1, len(peeling_spaces), desc_idx + 1, len(peel_descs)))
-                    tilings.append(tuning_with_1block(peel_desc)["args"])
+                    tilings.append(tuning_with_1block(peel_desc, skip_exist=skip_exist)["args"])
 
                 attrs = {"peeling": peeling}
                 for i, t in enumerate(tilings):
@@ -391,27 +393,27 @@ def tune_stitch_segment(desc_in: str, repo_path: str):
         logging.info("Tuning finished, but can not find a best tuning info for current json!")
 
 
-def tune_composite_segment(json_str, repo_path=""):
+def tune_composite_segment(json_str, repo_path="", skip_exist=False):
     desc = json.loads(json_str)
     if "parallel_fusion" in desc:
-        tune_parallel_segment(json_str, repo_path)
+        tune_parallel_segment(json_str, repo_path, skip_exist)
     elif "buffer_stitch" in desc:
-        tune_stitch_segment(json_str, repo_path)
+        tune_stitch_segment(json_str, repo_path, skip_exist)
 
 
-def tune_single_file(input_file, repo_path):
+def tune_single_file(input_file, repo_path, skip_exist=False):
     if not input_file.endswith(".info") and not input_file.endswith(".json"):
         print("Skip {}, only process file with .info or .json suffix".format(input_file))
         return
     with open(input_file, 'r') as f:
         json_str = f.read()
         time_start = time.time()
-        tune_composite_segment(json_str, repo_path)
+        tune_composite_segment(json_str, repo_path, skip_exist)
         time_end = time.time()
         logging.debug("launch time: %f", time_end - time_start)
 
 
-if __name__ == "__main__":
+def main():
     try:
         if sys.argv[1] in ("-h", "--help"):
             sys.exit()
@@ -430,13 +432,17 @@ if __name__ == "__main__":
         if not repo_path:
             logging.warning("ERROR: Empty repository path.")
             sys.exit()
-    except:
+    except BaseException:
         print_usage()
         sys.exit()
 
     if os.path.isfile(input_str):
-        tune_single_file(input_str, repo_path)
+        tune_single_file(input_str, repo_path, skip_exist)
     else:
         files = os.listdir(input_str)
         for file in files:
-            tune_single_file(input_str + "/" + file, repo_path)
+            tune_single_file(input_str + "/" + file, repo_path, skip_exist)
+
+
+if __name__ == "__main__":
+    main()
