@@ -83,7 +83,7 @@ struct PeelInfo {
   Stmt stmt;
   std::string peeling;
   std::map<int, int> peels;
-  std::unordered_map<std::string, std::vector<int>> peeled_tensors;
+  std::unordered_map<std::string, std::vector<std::pair<int, int64_t>>> peeled_tensors;
   Array<NodeRef> real_peeled_tensors;
 };
 struct BuildOpt {

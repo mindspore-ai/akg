@@ -89,8 +89,8 @@ class DimensionPeeler {
   std::vector<int64_t> GetAxisSpace();
   std::vector<Peeling> GetPeelSpace(int limit_depth = 0, std::unordered_set<int> *limit_range = nullptr);
   Stmt GetPeelBody(const Peeling &peeling);
-  std::vector<int> GetPeelDims(FunctionRef tensor, const Peeling &peeling);
-  std::unordered_map<std::string, std::vector<int>> GetPeelTensors(const Peeling &peeling);
+  std::vector<std::pair<int, int64_t>> GetPeelDims(FunctionRef tensor, const Peeling &peeling);
+  std::unordered_map<std::string, std::vector<std::pair<int, int64_t>>> GetPeelTensors(const Peeling &peeling);
 
  private:
   struct Axis {
@@ -144,8 +144,10 @@ class DumpPeelDims : public IRVisitor {
     auto dims = peeler_.GetPeelDims(ref, peeling_);
     std::cout << "[";
     for (size_t i = 0; i < dims.size(); ++i) {
-      std::cout << dims[i];
-      if (i < dims.size() - 1) std::cout << ",";
+      std::cout << dims[i].first << "|" << dims[i].second;
+      if (i < dims.size() - 1) {
+        std::cout << ",";
+      }
     }
     std::cout << "]";
   }
