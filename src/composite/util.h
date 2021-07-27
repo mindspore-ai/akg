@@ -80,11 +80,64 @@ using FuncExprMap = std::unordered_map<FunctionRef, Expr, NodeHash, NodeEqual>;
 using NodeMap = std::unordered_map<NodeRef, NodeRef, NodeHash, NodeEqual>;
 
 struct PeelInfo {
+  using Peeling = std::vector<std::pair<int, int64_t>>;  // dim, split_val
+  Peeling Getdim(const std::string &name) {
+    for (auto &kv : real_peeled_tensors) {
+      if (kv.first.as<BufferNode>() && kv.first.as<BufferNode>()->name == name) {
+        return kv.second;
+      }
+    }
+    return {};
+  }
+  Peeling Getdim(const NodeRef &buffer) {
+    if (real_peeled_tensors.count(buffer)) return real_peeled_tensors[buffer];
+    return {};
+  }
+  void SetPeels(const Peeling &dims) {
+    for (auto &kv : dims) {
+      peels.insert(kv);
+    }
+  }
+  void SetPeelTensors(const std::unordered_map<std::string, Peeling> &tensors) {
+    peeled_tensors = tensors;
+  }
+  std::unordered_map<std::string, Peeling> GetPeelTensors() {
+    return peeled_tensors;
+  }
+  void CollectRealPeelTensors(Array<NodeRef> args, std::unordered_map<std::string, NodeRef> &outputs2args) {
+    for (auto &t : peeled_tensors) {
+      auto real_tensor = t.first;
+      if (outputs2args.count(t.first)) {
+        real_tensor = outputs2args[t.first].as<BufferNode>()->name;
+      }
+      for (auto &arg : args) {
+        auto buffer = arg.as<BufferNode>();
+        CHECK(buffer) << "arg must be a BufferNode";
+        if (buffer->name == real_tensor) {
+          real_peeled_tensors[arg] = t.second;
+        }
+      }
+    }
+  }
+  bool IsPeeledTensor(const std::string &name) {
+    for (auto &kv : real_peeled_tensors) {
+      if (kv.first.as<BufferNode>()->name == name) {
+        return true;
+      }
+    }
+    return false;
+  }
+  bool IsPeeledTensor(const NodeRef &buffer) {
+    return real_peeled_tensors.count(buffer);
+  }
+
   Stmt stmt;
   std::string peeling;
   std::map<int, int> peels;
-  std::unordered_map<std::string, std::vector<std::pair<int, int64_t>>> peeled_tensors;
-  Array<NodeRef> real_peeled_tensors;
+
+ private:
+  std::unordered_map<std::string, Peeling> peeled_tensors;
+  std::unordered_map<NodeRef, Peeling, NodeHash, NodeEqual> real_peeled_tensors;
 };
 struct BuildOpt {
   FuncExprMap inplaces;          // the tensors which should be in bind

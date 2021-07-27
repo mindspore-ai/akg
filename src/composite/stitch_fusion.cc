@@ -378,7 +378,13 @@ class StitchMutateAscend : public IRMutator {
     for (auto &kv : stitch_buffer_vars_) {
       auto t = kv.second;
       Region bounds;
+      size_t i = 0;
+      auto align = 32 / t->dtype.bytes();
       for (auto j : t->shape) {
+        if (i > 0 && !Equal(j, 1)) {
+          j = Simplify(floordiv(j + align - 1, align) * align);
+        }
+        ++i;
         bounds.push_back(Range::make_by_min_extent(Expr(0), j));
       }
       stmt = Realize::make(t->op, t->value_index, t->dtype, bounds, const_true(1), stmt);
@@ -397,9 +403,41 @@ class StitchMutateAscend : public IRMutator {
     }
     return IRMutator::Mutate_(op, e);
   }
+
+  Stmt Mutate_(const For *op, const Stmt &s) final {
+    auto f = op;
+    std::vector<const For *> fors;
+    fors.emplace_back(op);
+    while (f->body.as<For>()) {
+      f = f->body.as<For>();
+      fors.emplace_back(f);
+    }
+    if (f->body.as<Provide>()) {
+      ub_to_gm_ = {};
+      auto first = this->Mutate(f->body);
+      if (ub_to_gm_.defined()) {
+        Stmt rest = ub_to_gm_;
+        size_t i = fors.size();
+        std::unordered_map<const Variable *, Expr> value_map;
+        for (auto it = fors.rbegin(); it < fors.rend(); ++it) {
+          --i;
+          const For *fs = *it;
+          auto loopvar = Var("cc" + std::to_string(i), fs->loop_var->type);
+          value_map[fs->loop_var.get()] = loopvar;
+          first = For::make(fs->loop_var, fs->min, fs->extent, fs->for_type, fs->device_api, first);
+          rest = For::make(loopvar, fs->min, fs->extent, fs->for_type, fs->device_api, rest);
+        }
+        rest = air::ir::Substitute(rest, value_map);
+        ub_to_gm_ = {};
+        return Block::make(first, rest);
+      }
+    }
+    return IRMutator::Mutate_(op, s);
+  }
+
   Stmt Mutate_(const Provide *op, const Stmt &s) final {
     auto stmt = Provide::make(op->func, op->value_index, this->Mutate(op->value), op->args);
-    auto gm_write = stmt;
+    auto ub_to_gm = stmt;
     auto name = op->func->func_name();
     if (IsStitchBuffer(name)) {
       auto stitch_name = name + "_stitch_local_L1";
@@ -410,7 +448,7 @@ class StitchMutateAscend : public IRMutator {
                                    : stitch_buffer_vars_[stitch_name];
       stmt = Provide::make(stitch_var->op, op->value_index, this->Mutate(op->value), op->args);
       if (IsOutput(name)) {
-        stmt = Block::make(stmt, gm_write);
+        ub_to_gm_ = ub_to_gm;
       }
     }
     return stmt;
@@ -447,6 +485,7 @@ class StitchMutateAscend : public IRMutator {
     }
     return false;
   }
+  Stmt ub_to_gm_;
   std::unordered_map<std::string, NodeRef> stitch_buffer_;
   std::unordered_map<std::string, NodeRef> real_outputs_;
   std::unordered_map<std::string, Tensor> stitch_buffer_vars_;
