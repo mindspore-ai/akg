@@ -488,7 +488,8 @@ NodeRef LowerStmt(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeR
     akg::schedule::AutoInline(sch, target_platform, g_attrs.GetBool(kEnableCSE, false));
   }
   if (target_platform->device_type == kDLGPU && polyhedral && g_attrs.GetBool(kEnableAutoFuse, true)) {
-    akg::schedule::AutoFuse(sch, g_attrs.GetStr(kAutoFuseSplit, ""), *split_index);
+    akg::schedule::AutoFuse(sch, g_attrs.GetStr(kAutoFuseSplit, ""), *split_index,
+                            g_attrs.GetBool("enable_stitch_fusion", 0));
   }
 
   auto new_sch = sch.normalize();
