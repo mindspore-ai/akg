@@ -46,7 +46,7 @@ Stmt PeelDimension::Run(const Stmt &stmt) {
   DimensionPeeler peeler;
   peeler.Analyze(stmt);
   auto parsed_peeling = Str2Peeling(info_.opt.peel_info.peeling);
-  info_.opt.peel_info.peeled_tensors = peeler.GetPeelTensors(parsed_peeling);
+  info_.opt.peel_info.SetPeelTensors(peeler.GetPeelTensors(parsed_peeling));
   auto peeled_stmt = peeler.GetPeelBody(parsed_peeling);
   DumpPeeledJson(peeled_stmt, info_);
   return peeled_stmt;

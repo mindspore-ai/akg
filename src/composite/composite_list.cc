@@ -429,6 +429,15 @@ class CompositeJsonListGpu : public CompositeJsonList {
 };
 
 #else
+std::pair<bool, int64_t> GetTensorPeel(size_t i, const std::vector<std::pair<int, int64_t>> &dims) {
+  for (auto dim : dims) {
+    if (i == static_cast<size_t>(dim.first)) {
+      return {true, dim.second};
+    }
+  }
+  return {false, 1};
+}
+
 class PeelInfoMutator : public IRMutator {
  public:
   PeelInfoMutator(const PeelInfo &peel_info, const Map<Tensor, Buffer> &extern_buffer)
@@ -448,23 +457,14 @@ class PeelInfoMutator : public IRMutator {
   virtual Array<Expr> FixArgs(const Array<Expr> &args, const std::string &name) = 0;
   virtual Stmt ExtraModify(Stmt &s) { return s; }
 
-  bool IsPeeledTensor(const std::string &name) {
-    for (auto &tensor : peel_info_.real_peeled_tensors) {
-      if (tensor.as<BufferNode>()->name == name) {
-        return true;
-      }
-    }
-    return false;
-  }
-
   Expr Mutate_(const Call *op, const Expr &e) final {
-    if (op->func.defined() && IsPeeledTensor(op->func->func_name())) {
+    if (op->func.defined() && peel_info_.IsPeeledTensor(op->func->func_name())) {
       return Call::make(op->type, op->name, FixArgs(op->args, op->name), op->call_type, op->func, op->value_index);
     }
     return IRMutator::Mutate_(op, e);
   }
   Stmt Mutate_(const Provide *op, const Stmt &s) final {
-    if (IsPeeledTensor(op->func->func_name())) {
+    if (peel_info_.IsPeeledTensor(op->func->func_name())) {
       return Provide::make(op->func, op->value_index, this->Mutate(op->value),
                            FixArgs(op->args, op->func->func_name()));
     }
@@ -493,10 +493,12 @@ class AddPeelInfoForLoop : public PeelInfoMutator {
     return s;
   }
 
-  Array<Expr> FixArgs(const Array<Expr> &args, const std::string &) override {
+  Array<Expr> FixArgs(const Array<Expr> &args, const std::string &name) override {
+    auto dim = peel_info_.Getdim(name);
     Array<Expr> new_args;
-    for (size_t i = 0; i < args.size(); ++i) {
-      if (peel_info_.peels.find(i) != peel_info_.peels.end()) {
+    for (int i = 0; i < static_cast<int>(args.size()); ++i) {
+      auto peel_tensor = GetTensorPeel(i, dim);
+      if (peel_tensor.first) {
         new_args.push_back(loop_var_[i]);
       }
       new_args.push_back(args[i]);
@@ -507,36 +509,16 @@ class AddPeelInfoForLoop : public PeelInfoMutator {
   std::map<int, Var> loop_var_;
 };
 
-std::pair<bool, int64_t> GetTensorPeel(size_t i, const std::vector<std::pair<int, int64_t>> &dims) {
-  for (auto dim : dims) {
-    if (i == static_cast<size_t>(dim.first)) {
-      return {true, dim.second};
-    }
-  }
-  return {false, 1};
-}
-
 class AddInnerForAndBlockInfo : public PeelInfoMutator {
  public:
-  AddInnerForAndBlockInfo(const PeelInfo &peel_info, int block_dim, const Map<Tensor, Buffer> &extern_buffer,
-                          const std::unordered_map<std::string, NodeRef> &outputs2args)
+  AddInnerForAndBlockInfo(const PeelInfo &peel_info, int block_dim, const Map<Tensor, Buffer> &extern_buffer)
       : PeelInfoMutator(peel_info, extern_buffer), block_dim_(block_dim) {
     block_var_ = Variable::make(Int(32), BLOCK_IDX_X);
     inner_size_ = peel_info_.peels.begin()->second / block_dim_;
     offset_ = Add::make(Mul::make(block_var_, Expr(inner_size_)), loop_var_);
-
-    for (auto iter : outputs2args) {
-      name_map_[iter.second.as<BufferNode>()->name] = iter.first;
-    }
   }
 
  private:
-  std::string GetOriginName(const std::string &name) {
-    if (name_map_.find(name) != name_map_.end()) {
-      return name_map_[name];
-    }
-    return name;
-  }
   Stmt ExtraModify(Stmt &s) override {
     // Add inner For.
     s = For::make(loop_var_, 0, inner_size_, ForType::Serial, DeviceAPI::None, s);
@@ -551,12 +533,10 @@ class AddInnerForAndBlockInfo : public PeelInfoMutator {
   }
 
   Array<Expr> FixArgs(const Array<Expr> &args, const std::string &name) override {
+    auto dim = peel_info_.Getdim(name);
     Array<Expr> new_args;
-    std::string origin_name = GetOriginName(name);
-    auto peel_iter = peel_info_.peeled_tensors.find(origin_name);
-    CHECK(peel_iter != peel_info_.peeled_tensors.end());
-    for (size_t i = 0; i < args.size(); ++i) {
-      auto peel_tensor = GetTensorPeel(i, peel_iter->second);
+    for (int i = 0; i < static_cast<int>(args.size()); ++i) {
+      auto peel_tensor = GetTensorPeel(i, dim);
       if (peel_tensor.first) {
         new_args.push_back(offset_);
       }
@@ -567,7 +547,6 @@ class AddInnerForAndBlockInfo : public PeelInfoMutator {
 
  private:
   int block_dim_{1};
-  std::unordered_map<std::string, std::string> name_map_;
   Var loop_var_{"inner_peel"};
   int inner_size_{1};
   Var block_var_;
@@ -620,75 +599,32 @@ class CompositeJsonListAscend : public CompositeJsonList {
     return new_binds;
   }
 
-  static void GetPeeledTensors(LowerData &data, PeelInfo &peel_info,
-                               std::unordered_map<std::string, NodeRef> &outputs2args) {
-    for (auto &t : peel_info.peeled_tensors) {
-      auto real_tensor = t.first;
-      if (outputs2args.count(t.first)) {
-        real_tensor = outputs2args[t.first].as<BufferNode>()->name;
-      }
-      for (auto &arg : data.arg_list_0_) {
-        auto buffer = arg.as<BufferNode>();
-        CHECK(buffer) << "arg must be a BufferNode";
-        if (buffer->name == real_tensor) {
-          peel_info.real_peeled_tensors.push_back(arg);
-        }
-      }
-    }
-  }
-
-  void AddPeelInfoForData(LowerData &data, PeelInfo &peel_info,
-                          std::unordered_map<std::string, NodeRef> &outputs2args) {
-    std::unordered_map<std::string, std::string> name_map;
-    for (auto iter : outputs2args) {
-      name_map[iter.second.as<BufferNode>()->name] = iter.first;
-    }
-    auto GetOriginName = [&name_map](const std::string &name) {
-      if (name_map.find(name) != name_map.end()) {
-        return name_map[name];
-      }
-      return name;
-    };
-
+  void AddPeelInfoForData(LowerData &data, PeelInfo &peel_info) {
     Array<NodeRef> out_args;
     Map<Tensor, Buffer> out_binds;
     for (const auto &kv : data.binds_0_) {
-      bool found = false;
-      for (auto &t : peel_info.real_peeled_tensors) {
-        if (kv.second == t) found = true;
-      }
-      if (!found) out_binds.Set(kv.first, kv.second);
+      if (!peel_info.IsPeeledTensor(kv.second)) out_binds.Set(kv.first, kv.second);
     }
 
     Map<Buffer, Buffer> buffer_replace;
     for (const auto &x : data.arg_list_0_) {
-      if (x->IsInstance<BufferNode>()) {
-        bool changed = false;
-        for (auto &t : peel_info.real_peeled_tensors) {
-          if (x == t) {
-            auto old_shape = x.as<BufferNode>()->shape;
-            Array<Expr> new_shape;
-            auto peel_iter = peel_info.peeled_tensors.find(GetOriginName(x.as<BufferNode>()->name));
-            CHECK(peel_iter != peel_info.peeled_tensors.end());
-            for (size_t i = 0; i < old_shape.size(); ++i) {
-              auto peel_tensor = GetTensorPeel(i, peel_iter->second);
-              if (peel_tensor.first) {
-                new_shape.push_back(static_cast<int>(peel_tensor.second));
-              }
-              new_shape.push_back(old_shape[i]);
-            }
-            auto config = GetConfig();
-            Tensor tt = air::placeholder(new_shape, x.as<BufferNode>()->dtype, x.as<BufferNode>()->name);
-            auto buf = DeclBuffer(tt, config->data_alignment, config->offset_factor);
-            out_args.push_back(buf);
-            out_binds.Set(tt, buf);
-            buffer_replace.Set(GetRef<Buffer>(x.as<BufferNode>()), buf);
-            changed = true;
-            break;
+      if (x->IsInstance<BufferNode>() && peel_info.IsPeeledTensor(x)) {
+        auto dim = peel_info.Getdim(x);
+        auto old_shape = x.as<BufferNode>()->shape;
+        Array<Expr> new_shape;
+        for (int i = 0; i < static_cast<int>(old_shape.size()); ++i) {
+          auto peel_tensor = GetTensorPeel(i, dim);
+          if (peel_tensor.first) {
+            new_shape.push_back(static_cast<int>(peel_tensor.second));
           }
+          new_shape.push_back(old_shape[i]);
         }
-        if (changed) continue;
-        out_args.push_back(x);
+        auto config = GetConfig();
+        Tensor tt = air::placeholder(new_shape, x.as<BufferNode>()->dtype, x.as<BufferNode>()->name);
+        auto buf = DeclBuffer(tt, config->data_alignment, config->offset_factor);
+        out_args.push_back(buf);
+        out_binds.Set(tt, buf);
+        buffer_replace.Set(GetRef<Buffer>(x.as<BufferNode>()), buf);
       } else {
         out_args.push_back(x);
       }
@@ -724,17 +660,15 @@ class CompositeJsonListAscend : public CompositeJsonList {
       CHECK(peeling);
       auto parsed_peeling = Str2Peeling(peeling->value);
       CHECK(!parsed_peeling.empty());
-      for (auto &kv : parsed_peeling) {
-        peel_info.peels.insert(kv);
-      }
-      peel_info.peeled_tensors = peeled_tensors_;
+      peel_info.SetPeels(parsed_peeling);
+      peel_info.SetPeelTensors(peeled_tensors_);
     }
     return peel_info;
   }
   Stmt AddPeelInfoForLoopAndData(Stmt &s, LowerData &data, Map<std::string, NodeRef> &attrs) {
     PeelInfo peel_info = GetPeelInfoFromAttrs(attrs);
-    GetPeeledTensors(data, peel_info, outputs2args_);
-    AddPeelInfoForData(data, peel_info, outputs2args_);
+    peel_info.CollectRealPeelTensors(data.arg_list_0_, outputs2args_);
+    AddPeelInfoForData(data, peel_info);
     s = AddPeelInfoForLoop(peel_info, data.binds_0_).Run(s);
     DumpStmt2File("stitch_info/" + merge_name_ + "_after_add_loop.cc", s);
     return s;
@@ -795,7 +729,7 @@ class CompositeJsonListAscend : public CompositeJsonList {
       info.opt.peel_info.peeling = peeling->value;
     }
     ExtractBuildInfo(v, info);
-    peeled_tensors_.insert(info.opt.peel_info.peeled_tensors.begin(), info.opt.peel_info.peeled_tensors.end());
+    peeled_tensors_.insert(info.opt.peel_info.GetPeelTensors().begin(), info.opt.peel_info.GetPeelTensors().end());
     // ensure merge_name_ is the same as original json name
     if (merge_name_.empty()) merge_name_ = info.kernel_name;
     Array<Operation> ops;
@@ -831,9 +765,9 @@ class CompositeJsonListAscend : public CompositeJsonList {
 
   Stmt AddPeelInfoAndBlockAttr(Stmt &s, LowerData &data, PeelInfo &peel_info,
                                std::unordered_map<std::string, NodeRef> &outputs2args, int block) {
-    GetPeeledTensors(data, peel_info, outputs2args);
-    AddPeelInfoForData(data, peel_info, outputs2args);
-    s = AddInnerForAndBlockInfo(peel_info, block, data.binds_0_, outputs2args).Run(s);
+    peel_info.CollectRealPeelTensors(data.arg_list_0_, outputs2args);
+    AddPeelInfoForData(data, peel_info);
+    s = AddInnerForAndBlockInfo(peel_info, block, data.binds_0_).Run(s);
     return s;
   }
 
@@ -852,7 +786,7 @@ class CompositeJsonListAscend : public CompositeJsonList {
     }
     peeled_tensors_.clear();
     ExtractBuildInfo(v, info);
-    peeled_tensors_.insert(info.opt.peel_info.peeled_tensors.begin(), info.opt.peel_info.peeled_tensors.end());
+    peeled_tensors_.insert(info.opt.peel_info.GetPeelTensors().begin(), info.opt.peel_info.GetPeelTensors().end());
 
     // ensure merge_name_ is the same as original json name
     if (merge_name_.empty()) merge_name_ = info.kernel_name;

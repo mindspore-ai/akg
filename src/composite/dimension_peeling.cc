@@ -299,7 +299,7 @@ std::unordered_map<std::string, std::vector<std::pair<int, int64_t>>> DimensionP
   std::unordered_map<std::string, std::vector<std::pair<int, int64_t>>> peel_tensors;
   for (auto &kv : dim_map_) {
     auto dim = GetPeelDims(kv.first, peeling);
-    if (!dim.empty() && dim[0].first != -1) {
+    if (!dim.empty() && !std::all_of(dim.begin(), dim.end(), [](std::pair<int, int64_t> &i) { return i.first == -1; })) {
       peel_tensors.insert({kv.first->func_name(), dim});
     }
   }
