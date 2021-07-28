@@ -66,6 +66,12 @@ def test_alexnet_gpu_level0():
 def test_alexnet_gpu_level0_perf():
     test_network("gpu", "alexnet", "level0", check_performance=True)
 
+@pytest.mark.level1
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
+def test_alexnet_gpu_level1_perf():
+    test_network("gpu", "alexnet", "level1", check_performance=True)
+
 
 @pytest.mark.level0
 @pytest.mark.platform_x86_gpu_training
