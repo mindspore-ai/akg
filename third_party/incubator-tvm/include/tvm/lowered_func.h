@@ -25,6 +25,7 @@
 
 /*
  * 2019.12.30 - Add new var array for args_real.
+ * 2021.07.16 - Add member workspace in LoweredFunc.
  */
 
 #ifndef TVM_LOWERED_FUNC_H_
@@ -95,6 +96,11 @@ class LoweredFuncNode : public ir::FunctionBaseNode {
    * to corresponding API specific kernel launchs or function calls.
    */
   Array<IterVar> thread_axis;
+  /*! \brief workspace used by the function
+   *   The workspace refers to the extra global memory needed,
+   *   inputs and outputs memory not included.
+   */
+  NodeRef workspace;
   /*!
    * \brief The hint data type of Var handles defined in LetStmt
    *  Can be used as hint when generating type signiture.
@@ -130,6 +136,7 @@ class LoweredFuncNode : public ir::FunctionBaseNode {
     v->Visit("args", &args);
     v->Visit("args_real", &args_real);
     v->Visit("thread_axis", &thread_axis);
+    v->Visit("workspace", &workspace);
     v->Visit("handle_data_type", &handle_data_type);
     v->Visit("func_type", &func_type);
     v->Visit("is_packed_func", &is_packed_func);

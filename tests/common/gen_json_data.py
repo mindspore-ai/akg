@@ -19,6 +19,7 @@ import json
 import logging
 import inspect
 import numpy as np
+from akg.global_configs import get_ascend_meta_path
 from tests.common.gen_random import random_gaussian
 from tests.common.test_utils import precheck
 
@@ -488,6 +489,21 @@ def conv_2d_str(inputs, output, attr):
     res += ("            {}[:, i, j, f] = np.sum(data_pad[:, i*s_h:i*s_h+whd:d_h, j*s_w:j*s_w+wwd:d_w, :].astype('float32') *{}[f, :, :, :].astype('float32'),axis=(1, 2, 3))\n".format(output_name, shape_filter_name))
     return res
 
+
+def gen_workspace_data(kernel_name):
+    workspace_tensors = []
+    json_file = get_ascend_meta_path() + kernel_name + ".json"
+    if os.path.isfile(json_file):
+        with open(json_file, 'r') as f:
+            kernel_json = f.read()
+            kernel_desc = json.loads(kernel_json)
+            if "workspace" in kernel_desc:
+                workspace_bytes = kernel_desc["workspace"]["size"]
+                item = np.full(workspace_bytes, np.nan, np.int8)
+                workspace_tensors.append(item)
+    return workspace_tensors
+
+
 def gen_json_data(op_desc, with_compute=True):
     """Generating test data for composite json"""
     desc = json.loads(op_desc)
@@ -630,6 +646,15 @@ def gen_json_data(op_desc, with_compute=True):
         p.out("inplace_tensors = {}".format(inplace_tensors), True)
         p.out("expect.extend(inplace_tensors)", True)
         output_indexes.extend(inplace_tensors_index)
+
+    # Add workspace tensors to input_for_mod
+    workspace_tensors = gen_workspace_data(op_name)
+    if len(workspace_tensors) > 0:
+        # workspace tensors are placed after inputs and outputs, so index in output_indexes should
+        # be converted to positive number first, otherwise -1 will point to the last workspace tensor
+        # instead of the last output tensor.
+        output_indexes = [i if i > 0 else i + len(input_for_mod) for i in output_indexes]
+        input_for_mod.extend(workspace_tensors)
 
     p.close()
     # compute the expect data
