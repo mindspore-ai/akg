@@ -50,6 +50,16 @@ bool ElimReshapeAnalysis::Run() {
   return true;
 }
 
+FunctionRef GetFuncFromPos(const Provide *provide, const size_t &pos, const FuncRefList &inputs) {
+  if (pos < inputs.size()) {
+    return inputs[pos];
+  }
+  auto call = provide->value.as<Call>();
+  CHECK(call);
+  CHECK_EQ(pos, call->args.size());
+  return provide->func;
+}
+
 bool ElimReshapeAnalysis::AnalysisElimValid() {
   auto &elim_reshapes = result_.to_be_removed;
   auto &insert_reshapes = result_.need_reshape_map;
@@ -78,9 +88,10 @@ bool ElimReshapeAnalysis::AnalysisElimValid() {
   }
   auto insert_dim_inc = 0;
   for (const auto &kv : insert_reshapes) {
-    auto output_func = kv.first->func;
+    auto provide = kv.first;
+    auto output_func = provide->func;
     for (const auto &nr : kv.second) {
-      auto func = nr.func;
+      auto func = GetFuncFromPos(provide, nr.pos, g_.pre_graph[output_func]);
       auto shape_change = result_.changed_shapes.count(func) ? result_.changed_shapes[func] : g_.func_shape[func];
       auto ori_shape = nr.origin_shape;
       if (func == output_func) {
@@ -161,7 +172,8 @@ bool ElimReshapeAnalysis::AnalysisElemwiseBackward(const FunctionRef &output) {
   if (input_map_shape_change.empty()) {
     return false;
   }
-  for (const auto &input : inputs) {
+  for (size_t i = 0; i < inputs.size(); ++i) {
+    const auto &input = inputs[i];
     auto input_shape = result_.ShapeChanged(input) ? result_.changed_shapes[input] : g_.func_shape[input];
     CHECK(input_map_shape_change.count(input));
     auto input_shape_change = input_map_shape_change[input];
@@ -176,7 +188,7 @@ bool ElimReshapeAnalysis::AnalysisElemwiseBackward(const FunctionRef &output) {
       // if visited, check input_shape and input_shape_change are same or not, if not, need reshape
       if (!EqualShape(input_shape_change, input_shape)) {
         LOG(INFO) << "[ELEMWISE] RESHAPE: " << input->func_name() << ": " << input_shape_change << "->" << input_shape;
-        result_.CollectReshape(g_.func_stmts[output], input, input_shape_change, input_shape);
+        result_.CollectReshape(g_.func_stmts[output], i, input_shape_change, input_shape);
       }
     }
   }
@@ -225,18 +237,23 @@ void ElimReshapeAnalysis::AnalysisOthers(const FunctionRef &output) {
   if (result_.ShapeChanged(output)) {
     LOG(INFO) << "[UNELEMWISE] OUTPUT RESHAPE: " << output->func_name() << ": " << g_.func_shape[output] << "->"
               << output_shape;
-    result_.CollectReshape(provide, output, g_.func_shape[output], output_shape);
+    // input_size denote the pos of output
+    auto call = provide->value.as<Call>();
+    CHECK(call);
+    auto input_size = call->args.size();
+    result_.CollectReshape(provide, input_size, g_.func_shape[output], output_shape);
   }
   if (!(IsReduce(op_name) && ShapeIsOne(output_shape))) {  // we consider that allreduce op's input shape is flexable
     // if input shape changed, input need reshape
     // b = reduce(a) -> t = trans(a); b = reduce(t)
     auto inputs = g_.pre_graph[output];
-    for (const auto &input : inputs) {
+    for (size_t i = 0; i < inputs.size(); ++i) {
+      const auto &input = inputs[i];
       g_.visited_funcs.insert(input);
       if (result_.ShapeChanged(input)) {
         LOG(INFO) << "[UNELEMWISE] INPUT RESHAPE: " << input->func_name() << ": " << g_.func_shape[input] << "->"
                   << result_.changed_shapes[input];
-        result_.CollectReshape(provide, input, g_.func_shape[input], result_.changed_shapes[input]);
+        result_.CollectReshape(provide, i, g_.func_shape[input], result_.changed_shapes[input]);
       }
     }
   }
@@ -274,7 +291,8 @@ void ElimReshapeAnalysis::AnalysisInplaceAssign(const FunctionRef &output) {
         LOG(INFO) << "[INPLACEASSIGN] INPUT RESHAPE: " << input1->func_name() << ": " << input0_shape << "->"
                   << input1_shape;
         auto provide = g_.func_stmts[output];
-        result_.CollectReshape(provide, input1, input0_shape, input1_shape);
+        size_t input1_pos = 1;
+        result_.CollectReshape(provide, input1_pos, input0_shape, input1_shape);
       }
     }
   }
@@ -312,7 +330,7 @@ void ElimReshapeAnalysis::AnalysisInner(const FunctionRef &output) {
   }
 }
 
-std::string GetId(std::string name, int count) {
+std::string GetId(const std::string &name, int count) {
   std::stringstream id;
   id << name << "_" << count;
   return id.str();
