@@ -1,0 +1,9 @@
+# Akg
+"akg/"                                                                                            "invalid-name"
+"akg/"                                                                                            "arguments-differ"
+"akg/"                                                                                            "unused-argument"
+"akg/tests/"                                                                                      "missing-docstring"
+"akg/tests/"                                                                                      "import-self"
+"akg/tests/"                                                                                      "unused-variable"
+"akg/tests/"                                                                                      "unnecessary-lambda"
+"akg/tests/"                                                                                      "logging-format-interpolation"

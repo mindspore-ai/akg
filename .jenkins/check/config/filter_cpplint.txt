@@ -1,0 +1,3 @@
+# Akg
+"akg/"                                                                             "build/header_guard"
+"akg/"                                                                             "build/c++11"
