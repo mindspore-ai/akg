@@ -121,7 +121,7 @@ bool CheckFoldDim(const NodeRef &block_json) {
 
 class ElimDuplicateInputs : public IRMutator {
  public:
-  explicit ElimDuplicateInputs(const Array<NodeRef> &inputs) { names_ = GetNames(inputs); }
+  explicit ElimDuplicateInputs(const Array<NodeRef> &inputs) : names_(GetNames(inputs)) {}
   Stmt Run(Stmt &stmt) {
     is_mutate_ = false;
     static_cast<void>(Mutate(stmt));

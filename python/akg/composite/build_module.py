@@ -852,6 +852,7 @@ def _json_need_split(desc_d, attrs, poly, target):
                 stitch_jsons, _, _, alloc_map, reuse_map, clean_op_map = stitch_json_split(block_jsons[i])
                 block_jsons[i] = stitch_jsons
                 cur_attrs = _set_reducemax_attrs(json.loads(stitch_jsons), attrs.copy())
+                cur_attrs["enable_stitch_fusion"]=True
             else:
                 alloc_map, reuse_map, clean_op_map = dict(), dict(), dict()
                 cur_attrs = attrs.copy()
@@ -867,6 +868,7 @@ def _json_need_split(desc_d, attrs, poly, target):
         stitch_jsons, input_tensor_name, output_tensor_name, alloc_map, reuse_map, clean_op_map = stitch_json_split(desc_d)
         block_jsons.append(stitch_jsons)
         attrs = _set_reducemax_attrs(desc_d, attrs)
+        attrs["enable_stitch_fusion"]=True
         attrs_list.append(attrs)
         alloc_map_list.append(alloc_map)
         reuse_map_list.append(reuse_map)
