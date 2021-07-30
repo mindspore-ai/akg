@@ -7,3 +7,4 @@
 "akg/tests/"                                                                                      "unused-variable"
 "akg/tests/"                                                                                      "unnecessary-lambda"
 "akg/tests/"                                                                                      "logging-format-interpolation"
+"akg/tests/"                                                                                      "attribute-defined-outside-init"
