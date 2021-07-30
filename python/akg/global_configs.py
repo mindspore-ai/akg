@@ -18,7 +18,7 @@ import os
 
 @akg.tvm.register_func
 def get_cuda_meta_path():
-  return './cuda_meta_' + str(os.getpid()) + "/"
+  return './cuda_meta/'
 
 @akg.tvm.register_func
 def get_ascend_meta_path():
