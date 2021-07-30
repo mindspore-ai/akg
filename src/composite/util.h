@@ -98,12 +98,8 @@ struct PeelInfo {
       peels.insert(kv);
     }
   }
-  void SetPeelTensors(const std::unordered_map<std::string, Peeling> &tensors) {
-    peeled_tensors = tensors;
-  }
-  std::unordered_map<std::string, Peeling> GetPeelTensors() {
-    return peeled_tensors;
-  }
+  void SetPeelTensors(const std::unordered_map<std::string, Peeling> &tensors) { peeled_tensors = tensors; }
+  std::unordered_map<std::string, Peeling> GetPeelTensors() { return peeled_tensors; }
   void CollectRealPeelTensors(Array<NodeRef> args, std::unordered_map<std::string, NodeRef> &outputs2args) {
     for (auto &t : peeled_tensors) {
       auto real_tensor = t.first;
@@ -127,9 +123,7 @@ struct PeelInfo {
     }
     return false;
   }
-  bool IsPeeledTensor(const NodeRef &buffer) {
-    return real_peeled_tensors.count(buffer);
-  }
+  bool IsPeeledTensor(const NodeRef &buffer) { return real_peeled_tensors.count(buffer); }
 
   Stmt stmt;
   std::string peeling;
@@ -309,7 +303,7 @@ class StmtToGraph : public IRVisitor {
 };
 
 struct NeedReshape {
-  FunctionRef func;
+  size_t pos;
   Array<Expr> origin_shape;
 };
 
@@ -326,14 +320,13 @@ struct AnalysisResult {
   std::unordered_map<FunctionRef, Array<Expr>, NodeHash, NodeEqual> changed_shapes;
   std::unordered_map<const Provide *, std::vector<NeedReshape>> need_reshape_map;
   bool ShapeChanged(const FunctionRef &tensor) { return changed_shapes.find(tensor) != changed_shapes.end(); }
-  void CollectReshape(const Provide *op, const FunctionRef &func, const Array<Expr> &origin_shape,
+  void CollectReshape(const Provide *op, const size_t &pos, const Array<Expr> &origin_shape,
                       const Array<Expr> &changed_shape) {
     if (EqualShape(origin_shape, changed_shape)) return;
-    auto func_real = to_be_replaced.count(func) ? to_be_replaced[func] : func;
     if (need_reshape_map.count(op)) {
       for (auto it = need_reshape_map[op].begin(); it < need_reshape_map[op].end();) {
         // if tensor need update reshape, remove it first.
-        if ((*it).func == func || (*it).func == func_real) {
+        if ((*it).pos == pos) {
           it = need_reshape_map[op].erase(it);
         } else {
           ++it;
@@ -341,7 +334,7 @@ struct AnalysisResult {
       }
     }
     NeedReshape nr;
-    nr.func = func_real;
+    nr.pos = pos;
     nr.origin_shape = origin_shape;
     need_reshape_map[op].emplace_back(nr);
   }
@@ -363,9 +356,11 @@ struct AnalysisResult {
     for (const auto &item : need_reshape_map) {
       LOG(INFO) << item.first->func->func_name() << " -> \n";
       for (const auto &j : item.second) {
-        LOG(INFO) << j.func->func_name() << " -> " << j.origin_shape << "\n";
+        LOG(INFO) << "tensor at pos(" << j.pos << ") reshape to"
+                  << " -> " << j.origin_shape << "\n";
       }
     }
+    LOG(INFO) << "\n=======dump_end=======\n";
   }
 };
 
@@ -420,11 +415,12 @@ class AnalysisResultMutator : public IRMutator {
     auto new_call_p = new_call.as<Call>();
     // input need reshape
     Array<Expr> new_args;
+    size_t input_func_pos = 0;
     for (auto &arg : new_call_p->args) {
       auto tmp_arg = arg;
       if (auto input = arg.as<Call>()) {
         for (const auto &nr : nr_vec) {
-          if (nr.func == input->func) {
+          if (nr.pos == input_func_pos) {
             // if input shape changed, input need reshape
             // b = reduce(a) -> t = trans(a); b = reduce(t)
             auto tensor = NewTensor(nr.origin_shape);
@@ -435,6 +431,7 @@ class AnalysisResultMutator : public IRMutator {
             break;
           }
         }
+        input_func_pos++;
       }
       new_args.push_back(tmp_arg);
     }
@@ -442,8 +439,12 @@ class AnalysisResultMutator : public IRMutator {
   }
   void OutputTryAddReshape(const FunctionRef &output, const Provide *provide, const std::vector<NeedReshape> &nr_vec,
                            std::vector<Stmt> &stmts) {
+    // input_size denote the pos of output
+    auto call = provide->value.as<Call>();
+    CHECK(call);
+    auto input_size = call->args.size();
     for (const auto &nr : nr_vec) {
-      if (nr.func == output) {
+      if (nr.pos == input_size) {
         // if output shape changed, output need reshape
         // b = reduce(a) -> t = reduce(a); b = trans(t)
         auto tensor = NewTensor(nr.origin_shape);
