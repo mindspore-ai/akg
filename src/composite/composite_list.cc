@@ -60,8 +60,9 @@ std::vector<std::string> GetNames(const Array<NodeRef> &io) {
 }
 
 Array<NodeRef> ReorderArgs(const Array<NodeRef> &inputs, const Array<NodeRef> &outputs, const Array<NodeRef> &all_args,
-                           std::unordered_map<std::string, NodeRef> &outputs2args) {
-  // reorder args_list, now args_list satisfies: op1_input op2_input ... op1_output op2_output ...
+                           std::unordered_map<std::string, NodeRef> &outputs2args,
+                           const Array<NodeRef> &workspace = {}) {
+  // reorder args_list, now args_list satisfies: op1_input op2_input ... op1_output op2_output ... op1_workspace ...
   // suppose all args info from original json satisfies this order
   Array<NodeRef> input_args, ordered_args;
   std::map<std::string, std::vector<NodeRef>> vmap;
@@ -94,6 +95,11 @@ Array<NodeRef> ReorderArgs(const Array<NodeRef> &inputs, const Array<NodeRef> &o
       ordered_args.push_back(outputs2args[output]);
     }
   }
+  // workspace follows after inputs and outputs
+  for (const auto &it : workspace) {
+    ordered_args.push_back(it);
+  }
+
   return ordered_args;
 }
 
@@ -257,6 +263,8 @@ class CompositeJsonList {
   bool fold_dim_{true};
   std::string target_;
   Array<NodeRef> all_args_;
+  Array<NodeRef> workspace_args_;
+  Map<Tensor, Buffer> workspace_binds_;
   std::unordered_map<std::string, NodeRef> outputs2args_;
   std::unordered_map<std::string, NodeRef> real_outputs_;
   std::string merge_name_;
@@ -569,7 +577,8 @@ class CompositeJsonListAscend : public CompositeJsonList {
     std::vector<Stmt> stitch_irs = LowerStitchIRs(block_json, attrs);
     auto stitch_buffer = GetStitchBuffer(alloc_map);
     GetRealOutputs();
-    auto stitched_ir = StitchFusionAscend(stitch_irs, merge_name_, stitch_buffer, real_outputs_);
+    auto stitched_ir =
+      StitchFusionAscend(stitch_irs, merge_name_, stitch_buffer, real_outputs_, workspace_args_, workspace_binds_);
     MergeLowerData(stitch_lower_datas_);
     FixLowerDataForStitch();
     stitched_ir = AddPeelInfoForLoopAndData(stitched_ir, final_data_, attrs);
@@ -581,9 +590,13 @@ class CompositeJsonListAscend : public CompositeJsonList {
   }
 
   void FixLowerDataForStitch() {
-    Array<NodeRef> ordered_args = ReorderArgs(inputs_, outputs_, all_args_, outputs2args_);
+    Array<NodeRef> ordered_args = ReorderArgs(inputs_, outputs_, all_args_, outputs2args_, workspace_args_);
     final_data_.arg_list_0_ = ordered_args;
     final_data_.binds_0_ = FixBinds(final_data_.binds_0_, ordered_args);
+    // Add workspace tensors to binds
+    for (const auto &it : workspace_binds_) {
+      final_data_.binds_0_.Set(it.first, it.second);
+    }
     final_data_.name = merge_name_;
   }
 
@@ -938,7 +951,7 @@ class CompositeJsonListAscend : public CompositeJsonList {
   NodeRef PostprocessToBuildRst(Stmt &stmt) final {
     MergeLowerData(lower_datas_);
     auto config = GetConfig();
-    Array<NodeRef> ordered_args = ReorderArgs(inputs_, outputs_, all_args_, outputs2args_);
+    Array<NodeRef> ordered_args = ReorderArgs(inputs_, outputs_, all_args_, outputs2args_, workspace_args_);
     final_data_.arg_list_0_ = ordered_args;
     final_data_.name = merge_name_;
     auto rst = LowerAscend(stmt, final_data_, LowerStage::END, LowerStage::END);

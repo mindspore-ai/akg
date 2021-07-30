@@ -373,7 +373,8 @@ Stmt StitchFusionGpu(std::vector<Stmt> &stitch_irs, const std::string &kernel_na
                      const std::unordered_map<std::string, NodeRef> &real_outputs);
 Stmt StitchFusionAscend(std::vector<Stmt> &stitch_irs, const std::string &kernel_name,
                         std::unordered_map<std::string, NodeRef> &stitch_buffer,
-                        const std::unordered_map<std::string, NodeRef> &real_outputs);
+                        const std::unordered_map<std::string, NodeRef> &real_outputs, Array<NodeRef> &workspace_args,
+                        Map<Tensor, Buffer> &workspace_binds);
 }  // namespace akg
 
 #endif  // STITCH_FUSION_H_

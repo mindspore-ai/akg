@@ -23,6 +23,7 @@ import logging
 import akg.tvm
 from akg.global_configs import get_ascend_meta_path
 
+
 def write_code(js_dict, fname):
     if os.path.exists(fname):
         os.remove(fname)
@@ -30,8 +31,34 @@ def write_code(js_dict, fname):
         json.dump(js_dict, f, sort_keys=True, indent=4, separators=(',', ':'))
 
 
+def parse_int_const(value):
+    if isinstance(value, int):
+        return value
+    elif isinstance(value, (akg.tvm.expr.IntImm, akg.tvm.expr.UIntImm)):
+        return value.value
+    return None
+
+
+def parse_workspace(workspace):
+    if not isinstance(workspace, akg.tvm.container.Map):
+        return None
+
+    total_bytes = 0
+    if "total_bytes" in workspace:
+        total_bytes = parse_int_const(workspace["total_bytes"])
+
+    if total_bytes is None or total_bytes == 0:
+        return None
+
+    workspace_dict = {
+        "num": 1,
+        "size": [total_bytes]
+    }
+    return workspace_dict
+
+
 @akg.tvm.register_func
-def tvm_callback_cce_postproc(code, block_dim=1):
+def tvm_callback_cce_postproc(code, block_dim=1, workspace=None):
     """Function for dumping ascend meta."""
     if "__aicore__" in code:
         title_dict = {"magic": "RT_DEV_BINARY_MAGIC_ELF"}
@@ -65,6 +92,11 @@ def tvm_callback_cce_postproc(code, block_dim=1):
                 break
             sha256.update(data)
     title_dict["sha256"] = sha256.hexdigest()
+
+    # workspace
+    workspace_dict = parse_workspace(workspace)
+    if workspace_dict is not None:
+        title_dict["workspace"] = workspace_dict
 
     load_dict = {}
     if not os.path.exists(get_ascend_meta_path()):

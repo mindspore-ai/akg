@@ -24,14 +24,9 @@
 
 /*
  * 2019.12.30 - Add new implements for host device splitter.
- */
-
-/*
  * 2021.01.13 - Modify new implements for host device splitter.
- */
-
-/*
  * 2021.06.25 - Keep all args of func.
+ * 2021.07.16 - Collect workspace information from stmt, and pass it to lower function.
  */
 
 #include <stdlib.h>
@@ -77,9 +72,12 @@ class IRUseDefAnalysis : public IRMutator {
         this->HandleDef(ch->handle_var.get());
       }
       return IRMutator::Mutate_(op, s);
-    } else {
-      return IRMutator::Mutate_(op, s);
+    } else if (op->attr_key == "workspace") {
+      if (!workspace_.defined() && op->node.defined()) {
+        workspace_ = op->node;
+      }
     }
+    return IRMutator::Mutate_(op, s);
   }
 
   Stmt Mutate_(const LetStmt *op, const Stmt& s) final {
@@ -174,6 +172,7 @@ class IRUseDefAnalysis : public IRMutator {
   Array<Var> undefined_;
   Array<IterVar> thread_axis_;
   Array<Expr> thread_extent_;
+  NodeRef workspace_;
   std::unordered_map<const Variable*, int> use_count_;
   std::unordered_map<const Variable*, int> def_count_;
 };
@@ -226,6 +225,7 @@ class HostDeviceSplitter : public IRMutator {
     n->name = os.str();
     n->func_type = kDeviceFunc;
     n->thread_axis = m.thread_axis_;
+    n->workspace = m.workspace_;
     // Strictly order the arguments: Var pointers, positional arguments.
     for (Var v : m.undefined_) {
       if (v.type().is_handle()) {
