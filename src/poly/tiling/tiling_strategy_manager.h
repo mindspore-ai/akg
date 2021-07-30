@@ -173,7 +173,7 @@ class ReduceStrategy : public TilingStrategy {
   void AddGpuConstraint();
   void DealWith4DFusedReduce(const std::vector<akg::ir::poly::TileAxis *> &reduce_axes);
 
-  void SimpleStrategyOnGpu();
+  void DisableReduceMapping();
 
   // Used by setting scop_info.enable_akg_reduce_lib.
   void AkgReduceLibStrategyOnGpu();
