@@ -1,10 +1,16 @@
 {
   "name": "Fused_AddN_fusion_9584919353229493170_0",
-  "operator": "Fused_AddN_fusion_9584919353229493170_0",
-  "schedule": [
-    "{ S_0[cc0] -> [cc0/4096] }",
-    "{ S_0[cc0] -> [(cc0 mod 4096)/4] }",
-    "{ S_0[cc0] -> [(cc0 mod 4096) mod 4] }"
+  "pattern": "{ domain: \"{ S_0[cc0] : 0 <= cc0 <= 3145727 }\", child: { schedule: \"[{ S_0[cc0] -> [(cc0)] }]\" } }",
+  "soft constraints": [
+    {
+      "statement":"S_0",
+      "meta": [1, 0],
+      "coefficients": [
+        "[1, ?11] (/4096)",
+        "[1, ?11] (%4096, /4)",
+        "[1, ?11] (%4)"
+      ]
+    }
   ],
   "gpu": {
     "blocks": [0],
@@ -13,7 +19,6 @@
     "compiler flags": ["--use_fast_math"]
   },
   "disable": [
-    "GpuDmaAnalysis",
     "TileOuterBand"
   ]
 }

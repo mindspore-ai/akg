@@ -438,10 +438,8 @@ void ScopInfo::DumpScopDataAdvanced(std::ofstream &of) {
 }
 
 void UserConfig::DumpScopDataScheduleAttrs(std::ofstream &of) {
-  if (constrained_scheduling_output_ != "") {
-    PrintHeader(of, "constrained scheduling");
-    of << constrained_scheduling_output_ << std::endl;
-  }
+  PrintHeader(of, "MindTrick");
+  of << "mind trick status : " << mind_trick_status_ << std::endl;
 
   PrintHeader(of, "schedule attrs");
   of << "dump_poly_dir : " << GetDumpPolyDir() << std::endl;

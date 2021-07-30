@@ -30,29 +30,57 @@ namespace ir {
 namespace poly {
 
 ////////////////////////////////////////////////////////////////////////////////
+// C++ wrappers for some missing isl functions wrappers
+////////////////////////////////////////////////////////////////////////////////
+
+bool isl_aff_is_cst(const isl::aff &a);
+
+std::string isl_set_get_dim_name(const isl::set &s, enum isl_dim_type type, unsigned int pos);
+isl::id isl_set_get_dim_id(const isl::set &s, enum isl_dim_type type, unsigned int pos);
+int isl_set_find_dim_by_id(const isl::set &s, enum isl_dim_type type, const isl::id &id);
+int isl_set_find_dim_by_name(const isl::set &s, enum isl_dim_type type, const std::string &name);
+unsigned isl_set_dim(const isl::set &s, enum isl_dim_type type);
+long isl_set_plain_get_num_si(const isl::set &s, unsigned int pos);
+isl::val isl_set_plain_get_val_if_fixed(const isl::set &s, enum isl_dim_type type, unsigned int pos);
+isl::set isl_set_move_dims(const isl::set &s, enum isl_dim_type dst_type, unsigned int dst_pos,
+                           enum isl_dim_type src_type, unsigned int src_pos, unsigned int n);
+
+std::string isl_map_get_dim_name(const isl::map &m, enum isl_dim_type type, unsigned int pos);
+isl::id isl_map_get_dim_id(const isl::map &m, enum isl_dim_type type, unsigned int pos);
+bool isl_map_involves_dims(const isl::map &m, enum isl_dim_type type, unsigned int first, unsigned n);
+isl::map isl_map_drop_constraints_not_involving_dims(const isl::map &m, enum isl_dim_type type, unsigned int first,
+                                                     unsigned n);
+
+isl::union_map isl_union_map_align_params(const isl::union_map &map, const isl::space &space);
+
+isl::union_pw_aff_list isl_union_pw_aff_list_insert(const isl::union_pw_aff_list &list, unsigned int pos,
+                                                    const isl::union_pw_aff &aff);
+
+isl::space isl_space_set_alloc(isl::ctx ctx, unsigned int nparam, unsigned int dim);
+isl::id isl_space_get_dim_id(const isl::space &space, enum isl_dim_type type, unsigned int pos);
+isl::space isl_space_set_dim_id(const isl::space &space, enum isl_dim_type type, unsigned int pos, const isl::id &id);
+
+////////////////////////////////////////////////////////////////////////////////
 // Misc.
 ////////////////////////////////////////////////////////////////////////////////
 
-long isl_set_plain_get_num_si(const isl::set &s, int dim);
-long isl_set_plain_get_num_si(__isl_keep isl_set *const set, int dim);
+std::vector<std::string> isl_set_dim_names(const isl::set &set, enum isl_dim_type type);
+std::vector<std::string> isl_set_all_names(const isl::set &set);
 
-std::vector<int> extract_upper_bounds(const isl::set &s, const std::vector<int> &dimensions);
-std::vector<int> extract_upper_bounds(__isl_keep isl_set *const set, const std::vector<int> &dimensions);
+std::vector<int> isl_set_lexmax_extract_upper_bounds(const isl::set &set, const std::vector<std::string> &names);
+std::vector<int> isl_set_lexmax_extract_upper_bounds(const isl::set &s, const std::vector<int> &dimensions);
+
+isl::space isl_space_copy_param_names(const isl::space &space, const isl::space &source);
 
 // Combining isl_spaces
 isl::space isl_space_set_cat(const isl::space &left, const isl::space &right);
-__isl_give isl_space *isl_space_set_cat(__isl_take isl_space *left, __isl_take isl_space *right);
 
 // Utilities for isl_multi_union_pw_aff*
 isl::multi_union_pw_aff isl_multi_union_pw_aff_cat(const isl::multi_union_pw_aff &left,
                                                    const isl::multi_union_pw_aff &right);
-__isl_give isl_multi_union_pw_aff *isl_multi_union_pw_aff_cat(__isl_take isl_multi_union_pw_aff *left,
-                                                              __isl_take isl_multi_union_pw_aff *right);
 
 isl::multi_union_pw_aff isl_multi_union_pw_aff_insert(const isl::multi_union_pw_aff &aff, unsigned pos,
                                                       const isl::union_pw_aff &el);
-__isl_give isl_multi_union_pw_aff *isl_multi_union_pw_aff_insert(__isl_take isl_multi_union_pw_aff *aff, unsigned pos,
-                                                                 __isl_take isl_union_pw_aff *el);
 
 ////////////////////////////////////////////////////////////////////////////////
 // isl_schedule_node utilities
@@ -61,25 +89,38 @@ __isl_give isl_multi_union_pw_aff *isl_multi_union_pw_aff_insert(__isl_take isl_
 bool isl_schedule_node_is_band(const isl::schedule_node &node);
 bool isl_schedule_node_is_sequence(const isl::schedule_node &node);
 bool isl_schedule_node_has_single_child(const isl::schedule_node &node);
-bool isl_schedule_node_band_can_unsplit(const isl::schedule_node &node);
-
-isl_bool isl_schedule_node_is_band(__isl_keep isl_schedule_node *const node);
-isl_bool isl_schedule_node_is_sequence(__isl_keep isl_schedule_node *const node);
-isl_bool isl_schedule_node_has_single_child(__isl_keep isl_schedule_node *const node);
-isl_bool isl_schedule_node_band_can_unsplit(__isl_keep isl_schedule_node *const band);
+bool isl_schedule_node_band_can_unsplit(const isl::schedule_node_band &band);
 
 ////////////////////////////////////////////////////////////////////////////////
 // isl_schedule_node_band utilities
 ////////////////////////////////////////////////////////////////////////////////
 
-__isl_give isl_bool *isl_schedule_node_band_get_coincidence(__isl_keep isl_schedule_node *const band);
-__isl_give isl_schedule_node *isl_schedule_node_band_set_coincidence(__isl_take isl_schedule_node *band,
-                                                                     __isl_take isl_bool *const coincidence);
-__isl_give isl_schedule_node *isl_schedule_node_band_copy_properties(__isl_take isl_schedule_node *band,
-                                                                     __isl_keep isl_schedule_node *const original);
-__isl_give isl_schedule_node *isl_schedule_node_band_replace_partial_schedule(
-  __isl_take isl_schedule_node *band, __isl_take isl_multi_union_pw_aff *schedule, isl_bool keep_properties);
-__isl_give isl_set *isl_schedule_node_band_lexmax(__isl_keep isl_schedule_node *const band);
+std::vector<bool> isl_schedule_node_band_get_coincidence(const isl::schedule_node_band &band);
+
+isl::schedule_node_band isl_schedule_node_band_set_coincidence(const isl::schedule_node_band &band,
+                                                               const std::vector<bool> &coincidence);
+
+isl::schedule_node_band isl_schedule_node_band_member_copy_properties(const isl::schedule_node_band &band, int pos,
+                                                                      const isl::schedule_node_band &wrapped_original);
+
+isl::schedule_node_band isl_schedule_node_band_copy_properties(const isl::schedule_node &node,
+                                                               const isl::schedule_node &original);
+isl::schedule_node_band isl_schedule_node_band_copy_properties(const isl::schedule_node &node,
+                                                               const isl::schedule_node_band &original);
+isl::schedule_node_band isl_schedule_node_band_copy_properties(const isl::schedule_node_band &band,
+                                                               const isl::schedule_node &original);
+isl::schedule_node_band isl_schedule_node_band_copy_properties(const isl::schedule_node_band &band,
+                                                               const isl::schedule_node_band &original);
+
+isl::schedule_node_band isl_schedule_node_band_replace_partial_schedule(const isl::schedule_node &node,
+                                                                        const isl::multi_union_pw_aff &partial,
+                                                                        bool keep_properties);
+isl::schedule_node_band isl_schedule_node_band_replace_partial_schedule(const isl::schedule_node_band &band,
+                                                                        const isl::multi_union_pw_aff &partial,
+                                                                        bool keep_properties);
+
+isl::set isl_schedule_node_band_lexmax(const isl::schedule_node &node);
+isl::set isl_schedule_node_band_lexmax(const isl::schedule_node_band &band);
 
 ////////////////////////////////////////////////////////////////////////////////
 // isl_schedule_node_band transformations
@@ -89,49 +130,33 @@ __isl_give isl_set *isl_schedule_node_band_lexmax(__isl_keep isl_schedule_node *
 // AST options are not preserved.
 
 // interchange dimensions 'first' and 'second'
-isl::schedule_node isl_schedule_node_band_interchange(const isl::schedule_node &band, int first, int second);
-__isl_give isl_schedule_node *isl_schedule_node_band_interchange(__isl_take isl_schedule_node *band, int first,
-                                                                 int second);
+isl::schedule_node_band isl_schedule_node_band_interchange(const isl::schedule_node_band &band, unsigned int first,
+                                                           unsigned int second);
 
 // strip mine only dimension 'dim'
-isl::schedule_node isl_schedule_node_band_stripmine(const isl::schedule_node &band, int dim, int value);
-isl::schedule_node isl_schedule_node_band_stripmine(const isl::schedule_node &band, int dim, const isl::val &value);
-
-__isl_give isl_schedule_node *isl_schedule_node_band_stripmine(__isl_take isl_schedule_node *band, int dim, int value);
-__isl_give isl_schedule_node *isl_schedule_node_band_stripmine(__isl_take isl_schedule_node *band, int dim,
-                                                               __isl_take isl_val *value);
+isl::schedule_node_band isl_schedule_node_band_stripmine(const isl::schedule_node_band &band, unsigned int dim,
+                                                         int value);
+isl::schedule_node_band isl_schedule_node_band_stripmine(const isl::schedule_node_band &band, unsigned int dim,
+                                                         const isl::val &value);
 
 // collapse dimensions 'dim' and 'dim + 1'
-isl::schedule_node isl_schedule_node_band_collapse(const isl::schedule_node &band, int dim);
-__isl_give isl_schedule_node *isl_schedule_node_band_collapse(__isl_take isl_schedule_node *band, int dim);
+isl::schedule_node_band isl_schedule_node_band_collapse(const isl::schedule_node_band &band, unsigned int dim);
 
 // modulo/scale/scale down a given dimension of a target statement
-isl::schedule_node isl_schedule_node_band_fine_mod(const isl::schedule_node &band, const std::string &name,
-                                                   int dimension, int value);
-isl::schedule_node isl_schedule_node_band_fine_scale(const isl::schedule_node &band, const std::string &name,
-                                                     int dimension, int value);
-isl::schedule_node isl_schedule_node_band_fine_scale_down(const isl::schedule_node &band, const std::string &name,
-                                                          int dimension, int value);
-isl::schedule_node isl_schedule_node_band_fine_mod(const isl::schedule_node &band, const std::string &name,
-                                                   int dimension, const isl::val &value);
-isl::schedule_node isl_schedule_node_band_fine_scale(const isl::schedule_node &band, const std::string &name,
-                                                     int dimension, const isl::val &value);
-isl::schedule_node isl_schedule_node_band_fine_scale_down(const isl::schedule_node &band, const std::string &name,
-                                                          int dimension, const isl::val &value);
-
-__isl_give isl_schedule_node *isl_schedule_node_band_fine_mod(__isl_take isl_schedule_node *band, const char *name,
-                                                              int dimension, int value);
-__isl_give isl_schedule_node *isl_schedule_node_band_fine_scale(__isl_take isl_schedule_node *band, const char *name,
-                                                                int dimension, int value);
-__isl_give isl_schedule_node *isl_schedule_node_band_fine_scale_down(__isl_take isl_schedule_node *band,
-                                                                     const char *name, int dimension, int value);
-__isl_give isl_schedule_node *isl_schedule_node_band_fine_mod(__isl_take isl_schedule_node *band, const char *name,
-                                                              int dimension, __isl_take isl_val *value);
-__isl_give isl_schedule_node *isl_schedule_node_band_fine_scale(__isl_take isl_schedule_node *band, const char *name,
-                                                                int dimension, __isl_take isl_val *value);
-__isl_give isl_schedule_node *isl_schedule_node_band_fine_scale_down(__isl_take isl_schedule_node *band,
-                                                                     const char *name, int dimension,
-                                                                     __isl_take isl_val *value);
+isl::schedule_node_band isl_schedule_node_band_fine_mod(const isl::schedule_node_band &band, const std::string &name,
+                                                        unsigned int dimension, int value);
+isl::schedule_node_band isl_schedule_node_band_fine_scale(const isl::schedule_node_band &band, const std::string &name,
+                                                          unsigned int dimension, int value);
+isl::schedule_node_band isl_schedule_node_band_fine_scale_down(const isl::schedule_node_band &band,
+                                                               const std::string &name, unsigned int dimension,
+                                                               int value);
+isl::schedule_node_band isl_schedule_node_band_fine_mod(const isl::schedule_node_band &band, const std::string &name,
+                                                        unsigned int dimension, const isl::val &value);
+isl::schedule_node_band isl_schedule_node_band_fine_scale(const isl::schedule_node_band &band, const std::string &name,
+                                                          unsigned int dimension, const isl::val &value);
+isl::schedule_node_band isl_schedule_node_band_fine_scale_down(const isl::schedule_node_band &band,
+                                                               const std::string &name, unsigned int dimension,
+                                                               const isl::val &value);
 
 ////////////////////////////////////////////////////////////////////////////////
 // schedule tree transformations (on a schedule_node)
@@ -139,23 +164,19 @@ __isl_give isl_schedule_node *isl_schedule_node_band_fine_scale_down(__isl_take 
 
 // Merge two nested isl_schedule_node_band.
 // Assuming the input schedule_node_band has only one child and this child is an isl_schedule_node_band.
-isl::schedule_node isl_schedule_node_band_unsplit(const isl::schedule_node &band);
-__isl_give isl_schedule_node *isl_schedule_node_band_unsplit(__isl_take isl_schedule_node *band);
+isl::schedule_node_band isl_schedule_node_band_unsplit(const isl::schedule_node_band &band);
 
 // Call isl_schedule_node_band_unsplit() until it is not possible
-isl::schedule_node isl_schedule_node_band_fully_unsplit(const isl::schedule_node &band);
-__isl_give isl_schedule_node *isl_schedule_node_band_fully_unsplit(__isl_take isl_schedule_node *band);
+isl::schedule_node_band isl_schedule_node_band_fully_unsplit(const isl::schedule_node_band &band);
 
 // Call isl_schedule_node_band_split() until it is not possible
-isl::schedule_node isl_schedule_node_band_fully_split(const isl::schedule_node &band);
-__isl_give isl_schedule_node *isl_schedule_node_band_fully_split(__isl_take isl_schedule_node *band);
+isl::schedule_node isl_schedule_node_band_fully_split(const isl::schedule_node_band &band);
 
 ////////////////////////////////////////////////////////////////////////////////
 // isl_schedule transformations
 ////////////////////////////////////////////////////////////////////////////////
 
-isl::schedule isl_schedule_collapse(const isl::schedule &schedule, int first, int last);
-__isl_give isl_schedule *isl_schedule_collapse(__isl_take isl_schedule *schedule, int first, int last);
+isl::schedule isl_schedule_collapse(const isl::schedule &schedule, unsigned int first, unsigned int last);
 
 ////////////////////////////////////////////////////////////////////////////////
 // "Readable" strings conversions

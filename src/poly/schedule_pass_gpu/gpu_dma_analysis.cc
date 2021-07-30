@@ -39,7 +39,11 @@ void GpuDmaAnalysis::RemoveInjectiveTensorFromMemFlows(isl::schedule schedule) {
   isl::schedule_node root = schedule.get_root();
   isl::schedule_node node = GetOuterBand(root);
   if (node.isa<isl::schedule_node_band>()) {
-    node = GetTiledNode(schedule, node);
+    const bool schedule_from_mindtrick = scop_info_.user_config_.GetMindTrickWasUsed();
+    const bool mindtrick_has_mapping = scop_info_.user_config_.GetMindTrickGpuHasMapping();
+    if (!schedule_from_mindtrick && !mindtrick_has_mapping) {
+      node = GetTiledNode(schedule, node);
+    }
     ResetMemFlows(root, node);
   }
 }

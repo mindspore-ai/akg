@@ -49,16 +49,18 @@ tricks_filenames = {
 }
 
 composite_operators_dir = mind_trick_cases_dir + "/operators"
-composite_operators = [
-    "Fused_AddN_fusion_9584919353229493170",
-    "Fused_Cast_BiasAdd_Gelu_fusion_7719078727474100806",
-    "Fused_Cast_BiasAdd_GkDropout_tuple_getitem_TensorAdd_fusion_13282325956852925231",
-    "Fused_Cast_RealDiv_Reshape_FusedAdamWeightDecay_fusion_1039082044534023692",
-    "Fused_Cast_RealDiv_Reshape_FusedAdamWeightDecay_fusion_1545859458890067484",
-    "Fused_Cast_RealDiv_Reshape_FusedAdamWeightDecay_fusion_1976850843332086880",
-    "Fused_GkDropout_2353362030752466006",
-    "Fused_Transpose_split_18185609042134105765",
-]
+composite_targets = {
+    "miscellaneous": [
+        "Fused_AddN_fusion_9584919353229493170",
+        "Fused_Cast_BiasAdd_Gelu_fusion_7719078727474100806",
+        "Fused_Cast_BiasAdd_GkDropout_tuple_getitem_TensorAdd_fusion_13282325956852925231",
+        "Fused_Cast_RealDiv_Reshape_FusedAdamWeightDecay_fusion_1039082044534023692",
+        "Fused_Cast_RealDiv_Reshape_FusedAdamWeightDecay_fusion_1545859458890067484",
+        "Fused_Cast_RealDiv_Reshape_FusedAdamWeightDecay_fusion_1976850843332086880",
+        "Fused_GkDropout_2353362030752466006",
+        "Fused_Transpose_split_18185609042134105765",
+    ],
+}
 
 ########################################################################################################################
 
@@ -131,25 +133,41 @@ def test_mindtrick(operator_path, trick_path):
         test_single_composite_file(operator_path, attrs, poly=True)
     return True
 
+def test_composite_operator(target, with_autogen=True, with_trick=False, without_trick=False, attrs=None):
+    operator = composite_operators_dir + "/" + target + ".info"
+    trick = tricks_dir + "/" + target + ".json"
+
+    # Depending on the operator, we may want to test it both with and without tricks
+    # or just one of the two.
+    # We also need to be sure a trick exists
+    test_with_trick = with_trick and os.path.isfile(trick)
+    test_without_trick = without_trick or not os.path.isfile(trick)
+
+    if with_autogen:
+        current_attrs = {} if attrs is None else attrs
+        current_attrs["enable_mind_trick_autogen"] = 1
+        test_single_composite_file(operator, current_attrs, poly=True)
+    if test_with_trick:
+        test_mindtrick(operator, trick);
+    if test_without_trick:
+        test_single_composite_file(operator, attrs, poly=True);
+
+def batch_test_targets(reason, targets, with_autogen=True, with_trick=False, without_trick=False, attrs=None):
+    """Quickly test multiple targets using test_composite_operator()"""
+    log_header = "\033[1m\033[7m " + str(reason) + " \033[0m "
+    log_header += "with_autogen=" + str(with_autogen) + ", with_trick=" + str(with_trick) + ", without_trick=" + str(without_trick)
+    logging.info(log_header)
+
+    for target in targets:
+        test_composite_operator(target, with_autogen, with_trick, without_trick, attrs)
+    logging.info("")
+
+    return True
+
 def test_composite_cases(operators):
-    for operator in operators:
-        operator_path = ""
-        if os.path.isfile(composite_operators_dir + "/" + operator + ".info"):
-            operator_path = composite_operators_dir + "/" + operator + ".info"
-        elif os.path.isfile(composite_operators_dir + "/" + operator + ".json"):
-            operator_path = composite_operators_dir + "/" + operator + ".json"
-        else:
-            logging.info("could not find desc for operator: %s", operator)
-
-        trick_path = ""
-        if operator in tricks_filenames:
-            trick_path = tricks_dir + "/" + tricks_filenames[operator]
-        elif os.path.isfile(tricks_dir + "/" + operator + ".json"):
-            trick_path = tricks_dir + "/" + operator + ".json"
-        else:
-            logging.info("could not find trick for operator: %s", operator)
-
-        test_mindtrick(operator_path, trick_path)
+    for reason in operators:
+        batch_test_targets(reason, operators[reason], with_autogen=False, with_trick=True, without_trick=False)
+        batch_test_targets(reason, operators[reason], with_autogen=True, with_trick=False, without_trick=False)
 
     return True
 
@@ -159,7 +177,7 @@ def test_mindtricks(cases):
     if "gpu" in cases:
         test_gpu_cases()
     if "composite" in cases:
-        test_composite_cases(composite_operators)
+        test_composite_cases(composite_targets)
 
     return True
 

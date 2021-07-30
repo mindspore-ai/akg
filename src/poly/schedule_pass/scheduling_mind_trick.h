@@ -35,32 +35,53 @@
 #include "poly/schedule_pass.h"
 #include "poly/pass_info.h"
 #include "poly/scop_info.h"
-#include "poly/isl_influence.h"
 
 namespace akg {
 namespace ir {
 namespace poly {
 
-// Implementation notes
-//
-// 1. The class is non copyable.
-//    We use raw pointers to isl objects because the C++ wrapped objects are
-//    not practical in cases where the isl object is optional and std::optional
-//    curretly is not an option.
-//    Hence, we directly manage the isl objects. To avoid further complications
-//    with copy-constructors, move-constructors, isl_*_free(), isl_*_copy(),
-//    etc., the class is non copyable.
+///////////////////////////////////////////////////////////////////////////
+// Supported environment variables
+///////////////////////////////////////////////////////////////////////////
 
-// data_value: tuple of <scheduling dim, coeff dim, coeff type, list of stmt name>
-// using data_value = std::tuple<int, int, isl_influence_coeff_type, std::vector<std::string>>;
+static constexpr const char *const env_string_mind_tricks_enable_ = "MS_AKG_MIND_TRICKS";
+static constexpr const char *const env_string_mind_tricks_dir_ = "MS_AKG_MIND_TRICKS_DIR";
+static constexpr const char *const env_string_mind_tricks_verbosity_ = "MS_AKG_MIND_TRICKS_VERBOSITY";
+static constexpr const char *const env_string_mind_tricks_templates_ = "MS_AKG_MIND_TRICKS_TEMPLATES";
+static constexpr const char *const env_string_mind_tricks_operator_blacklist_ = "MS_AKG_MIND_TRICKS_OPERATOR_BLACKLIST";
+
+static constexpr const char *const env_string_mind_tricks_autogen_ = "MS_AKG_MIND_TRICKS_AUTOGEN";
+static constexpr const char *const env_string_mind_tricks_autogen_swizzle_ = "MS_AKG_MIND_TRICKS_AUTOGEN_SWIZZLE";
+
+////////////////////////////////////////////////////////////////////////////////
+// Miscellaneous useful types or classes for SchedulingMindTrick
+////////////////////////////////////////////////////////////////////////////////
+
+enum class SoftToken {
+  INVALID_TOKEN = -1,
+  OPEN_BRACKET,       // 0
+  CLOSE_BRACKET,      // 1
+  OPEN_PARENTHESIS,   // 2
+  CLOSE_PARENTHESIS,  // 3
+  COMMA,              // 4
+  QUESTION_MARK,      // 5
+  MINUS,              // 6
+  DIVISION,           // 7
+  MODULO,             // 8
+  DIGIT,              // 9
+};
 
 // single_data: tuple of <stmt name, scheduling dim, coeff dim, coeff type, value>
 using single_data = std::tuple<std::string, int, int, isl_influence_coeff_type, int>;
 
 // div_mod_data
-// * if division: tuple of <stmt name, scheduling dim, divisor>
-// * if modulo: tuple of <stmt name, scheduling dim,  modulo value>
-using div_mod_data = std::tuple<std::string, int, int>;
+// tuple of <stmt name, scheduling dim, pair of <token type, value>>
+// token type can either be modulo or division
+using div_mod_data = std::tuple<std::string, int, std::pair<SoftToken, int>>;
+
+////////////////////////////////////////////////////////////////////////////////
+// GpuConfig
+////////////////////////////////////////////////////////////////////////////////
 
 class GpuConfig {
  public:
@@ -70,15 +91,30 @@ class GpuConfig {
   std::vector<int> thread_dimensions_;
   std::vector<int> swizzle_dimensions_;
   std::vector<std::string> compiler_flags_;
+  bool automap_{false};
+  bool was_automapped_{false};
+  bool has_swizzle_dim_{false};
+
+  bool CanPrepareMappingOuterBand(const isl::schedule &schedule) const;
+  void OffsetThreadDimensions(int offset);
 };
+
+////////////////////////////////////////////////////////////////////////////////
+// MindTrickType
+////////////////////////////////////////////////////////////////////////////////
 
 enum class MindTrickType {
   none = 0,
   manual,
+  autogen,
 };
 
 std::string to_string(MindTrickType t);
 MindTrickType MindTrickTypeFromString(const std::string &str);
+
+////////////////////////////////////////////////////////////////////////////////
+// SchedulingMindTrick
+////////////////////////////////////////////////////////////////////////////////
 
 class SchedulingMindTrick {
  public:
@@ -135,8 +171,8 @@ class SchedulingMindTrick {
   ///////////////////////////////////////////////////////////////////////////
 
   void SetName(const std::string &name);
-  std::string GetName(void) const;
-  std::string GetTarget(void) const;
+  const std::string &GetName(void) const;
+  const std::string &GetTarget(void) const;
 
   ///////////////////////////////////////////////////////////////////////////
   // Misc. attributes
@@ -150,10 +186,11 @@ class SchedulingMindTrick {
   // GPU Mapping
   ///////////////////////////////////////////////////////////////////////////
 
-  void GuessGpuConfig(void);
+  GpuConfig ExtractGpuConfig(const isl::schedule &schedule, const GpuConfig &info);
   std::string GetGpuBlocks(void) const;
   std::string GetGpuThreads(void) const;
-  std::vector<std::string> GetGpuCompilerFlags(void) const;
+  const std::vector<std::string> &GetGpuCompilerFlags(void) const;
+  bool HasGpuSwizzleDim(void) const;
 
   ///////////////////////////////////////////////////////////////////////////
   // Pass toggling
@@ -195,6 +232,17 @@ class SchedulingMindTrick {
   void ParseSoftConstraints(const picojson::value &node);
 
   ///////////////////////////////////////////////////////////////////////////
+  // Soft constraints parser utils
+  ///////////////////////////////////////////////////////////////////////////
+
+  SoftToken GetSoftToken(const char &token) const;
+  bool HasValidNextToken(const char &token1, const char &token2) const;
+  void FlushSoftData();
+  bool CheckSoftExpression(const std::string &expr);
+  std::pair<int, isl_influence_coeff_type> DetermineCoeffType(unsigned int incr, unsigned int nb_vars,
+                                                              unsigned int nb_params) const;
+
+  ///////////////////////////////////////////////////////////////////////////
   // Schedule
   ///////////////////////////////////////////////////////////////////////////
 
@@ -204,19 +252,44 @@ class SchedulingMindTrick {
   // Schedule suggestion
   ///////////////////////////////////////////////////////////////////////////
 
-  void BuildSuggestedSchedule(void);
+  void BuildSuggestedSchedule(const isl::schedule &initial);
+  isl::schedule ComputeScheduleSuggestion(const isl::schedule &initial);
 
-  // Various helpers to build the suggested schedule
-  __isl_give isl_schedule *ComputeScheduleSuggestion(void);
-  __isl_give isl_schedule *PrepareMappingOuterBand(__isl_take isl_schedule *schedule, GpuConfig &info);
-  __isl_give isl_schedule_node *SplitSwizzleDim(__isl_take isl_schedule_node *band, int dimension);
+  ///////////////////////////////////////////////////////////////////////////
+  // GPU specific utilities
+  ///////////////////////////////////////////////////////////////////////////
+
+  isl::schedule GpuPostProcessSchedule(const isl::schedule &schedule, GpuConfig &info);
+
+  void GpuPrepareMappingOuterBandFindSizes(const isl::schedule &schedule, GpuConfig &info);
+  isl::schedule_node_band GpuPrepareMappingOuterBandTrustUser(const isl::schedule_node_band &band,
+                                                              const GpuConfig &info);
+  isl::schedule GpuPrepareMappingOuterBand(const isl::schedule &schedule, GpuConfig &info);
+
+  isl::schedule_node_band DetectAndSplitSwizzleDim(const isl::schedule_node_band &band, GpuConfig &info);
+  isl::schedule_node_band SplitSwizzleDim(const isl::schedule_node_band &band, GpuConfig &info, int dimension);
+
+  isl::schedule_node_band GpuStripmineUniqueCoincidentDimension(const isl::schedule_node_band &band, int &innermost,
+                                                                const int thread_max);
+  isl::schedule_node_band GpuAutomapThreads(const isl::schedule_node_band &band, GpuConfig &config, int &innermost,
+                                            const int thread_max);
+  isl::schedule_node_band GpuCollapseRemainingDimensions(const isl::schedule_node_band &band, GpuConfig &config,
+                                                         int &innermost);
+  isl::schedule_node_band GpuAutomapBlocks(const isl::schedule_node_band &band, GpuConfig &config, int &innermost);
+  isl::schedule GpuAutomap(const isl::schedule &schedule, GpuConfig &config);
+  bool GpuShouldAutomap(const GpuConfig &config) const;
+
+  isl::schedule GpuAutoDisablePasses(const isl::schedule &schedule, const GpuConfig &config);
 
   ///////////////////////////////////////////////////////////////////////////
   // Soft constraints
   ///////////////////////////////////////////////////////////////////////////
 
-  void CollectSoftConstraintsData(std::string stmt_name, unsigned int sched_dim, int coeff_dim,
-                                  isl_influence_coeff_type coeff_type, std::string coeff_vec_i);
+  static std::string AutoGenSoftConstraints(ScopInfo &scop_info, const isl::schedule &sch);
+
+  void CollectSoftConstraintsData(std::string stmt_name, unsigned int dim, unsigned int nb_vars, unsigned int nb_params,
+                                  std::string expr);
+
   void BuildSoftConstraints();
   void BuildInfluenceList(std::vector<single_data> singles);
   void BuildInfluenceEqualList(std::map<std::string, std::vector<single_data>> linked);
@@ -224,11 +297,15 @@ class SchedulingMindTrick {
   void BuildInfluencedSchedule(void);
   void IslInfluenceToggle(bool toggle);
 
-  __isl_give isl_schedule *AdjustSchedule(__isl_take isl_schedule *schedule, const std::vector<div_mod_data> &modulos,
-                                          const std::vector<div_mod_data> &divisions);
+  isl::schedule AdjustSchedule(const isl::schedule &schedule, const std::vector<div_mod_data> &modulos_divisions);
 
-  // Misc helpers
-  std::vector<std::string> split_string(std::string str, std::string delim);
+  ///////////////////////////////////////////////////////////////////////////
+  // Miscellaneous methods
+  ///////////////////////////////////////////////////////////////////////////
+
+  std::vector<std::string> split_string(std::string str, std::string delim) const;
+  int FindStripmineFactor(int val, int limit, bool greedy = false) const;
+  int FindInnermostCoincidentDimension(const isl::schedule_node_band &band);
 
   ///////////////////////////////////////////////////////////////////////////
   // Internal data
@@ -242,10 +319,10 @@ class SchedulingMindTrick {
 
   std::string operator_{""};
   std::string pattern_{""};
-  isl_schedule *explicit_tree_{nullptr};
+  isl::schedule explicit_tree_;
 
-  isl_union_set *domain_{nullptr};
-  isl_schedule *suggested_schedule_{nullptr};
+  isl::union_set domain_;
+  isl::schedule suggested_schedule_;
   std::string suggested_schedule_string_{""};
   std::vector<std::string> suggested_schedule_vector_;
 
@@ -253,12 +330,12 @@ class SchedulingMindTrick {
 
   std::vector<single_data> singles_;
   std::map<std::string, std::vector<single_data>> linked_;
-  std::vector<div_mod_data> modulos_;
-  std::vector<div_mod_data> divisions_;
+
+  std::vector<div_mod_data> modulos_divisions_;
   isl_influence_list *influence_list_{nullptr};
   isl_influence_equal_list *influence_equal_list_{nullptr};
   std::string parse_soft_constraints_log_str_{""};
-  isl_schedule *influenced_schedule_{nullptr};
+  isl::schedule influenced_schedule_;
 
   bool check_schedule_{true};
 
@@ -276,6 +353,8 @@ class SchedulingMindTrick {
   int verbosity_{0};
 
   std::string LogPrefixText(const bool prefix = true) const;
+  void DebugSchedule(const isl::schedule &schedule, const std::string &message = "",
+                     const log::Verbosity level = log::Verbosity::high) const;
 
   // clang-format off
 #define declare_scheduling_mind_trick_log_wrappers(func)                                                            \

@@ -213,7 +213,9 @@ class UserConfig {
     ParseIntAttr(attrs, "constrain_schedule_verbosity", &constrain_schedule_verbosity_);
     ParseIntAttr(attrs, "enable_multicore", &enable_multicore_);
     ParseBoolAttr(attrs, "enable_mind_trick", &enable_mind_trick_);
-    ParseStringAttr(attrs, "mind_trick", &mind_trick_);
+    ParseBoolAttr(attrs, "enable_mind_trick_autogen", &enable_mind_trick_autogen_);
+    ParseStringAttr(attrs, "mind_trick", &mind_trick_json_);
+    ParseBoolAttr(attrs, "mind_trick_autogen_gpu_automap", &mind_trick_gpu_autogen_automap_);
 
     ParseStringAttr(attrs, "dim", &b_dim_);
     ParseStringAttr(attrs, "bind_elem_per_thread", &elem_per_thread_);
@@ -352,9 +354,21 @@ class UserConfig {
 
   // getter/setter for schedule_pass config
   int GetConstrainScheduleVerbosity() const { return constrain_schedule_verbosity_; }
+  void SetEnableMindTrick(bool status) { enable_mind_trick_ = status; }
   bool GetEnableMindTrick() const { return enable_mind_trick_; }
-  std::string GetMindTrick() const { return mind_trick_; }
-  void SetConstrainedSchedulingOutput(const std::string &output) { constrained_scheduling_output_ = output; }
+  void SetEnableMindTrickAutogen(bool status) { enable_mind_trick_autogen_ = status; }
+  bool GetEnableMindTrickAutogen() const { return enable_mind_trick_autogen_; }
+  std::string GetMindTrick() const { return mind_trick_json_; }
+  std::string GetMindTrickStatus(void) const { return mind_trick_status_; }
+  void SetMindTrickStatus(const std::string &status) { mind_trick_status_ = status; }
+  void SetMindTrickWasUsed(bool used) { mind_trick_was_used_ = used; }
+  bool GetMindTrickWasUsed() const { return mind_trick_was_used_; }
+  void SetMindTrickGpuHasMapping(bool status) { mind_trick_gpu_has_mapping_ = status; }
+  bool GetMindTrickGpuHasMapping(void) const { return mind_trick_gpu_has_mapping_; }
+  void SetMindTrickGpuHasSwizzle(bool status) { mind_trick_gpu_has_swizzle_ = status; }
+  bool GetMindTrickGpuHasSwizzle(void) const { return mind_trick_gpu_has_swizzle_; }
+  void SetMindTrickGpuAutogenAutomap(bool status) { mind_trick_gpu_autogen_automap_ = status; }
+  bool GetMindTrickGpuAutogenAutomap(void) const { return mind_trick_gpu_autogen_automap_; }
 
   // getter for schedule tree transform config
   bool GetRemoveSelfDependence() const { return remove_self_dependence_; }
@@ -673,11 +687,16 @@ class UserConfig {
   bool enable_stitch_fusion_{false};
   int shared_vector_align_{0};
 
-  // schedule_pass/mind_trick config
+  // mind_trick config
   int constrain_schedule_verbosity_{-1};
   bool enable_mind_trick_{true};
-  std::string mind_trick_{""};
-  std::string constrained_scheduling_output_{""};
+  bool enable_mind_trick_autogen_{false};
+  std::string mind_trick_json_{""};
+  std::string mind_trick_status_{"null"};
+  bool mind_trick_was_used_{false};
+  bool mind_trick_gpu_has_mapping_{false};
+  bool mind_trick_gpu_has_swizzle_{false};
+  bool mind_trick_gpu_autogen_automap_{true};
 
   // schedule tree transform config
   bool remove_self_dependence_{true};

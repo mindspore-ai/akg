@@ -351,7 +351,7 @@ isl::schedule MappingOuterBand::DoThreadMapping(const isl::schedule &sch) {
     // swizzle
     if (node.has_parent() && node.parent().isa<isl::schedule_node_mark>()) {
       const std::string &marker = node.parent().as<isl::schedule_node_mark>().get_id().get_name();
-      if (marker == MIND_TRICKS_SWIZZLE_MARKER) {
+      if (marker == MIND_TRICKS_PRESERVE_DIMENSION_MARKER) {
         return node;
       }
     }
