@@ -2071,5 +2071,23 @@
                 "file_name": "Fused_Add_Cast_ReduceMax_Cast_Sub_Exp_ReduceSum_Log_Sub_split_1441484207057638165"
             }
         }
+    },
+    "3.Reshape2.Reshape2.Add12.Reshape6.Add12.ReduceSum1.Mul1.Sub13.Mul11.ReduceSum1.791012": {
+        "512_1024.12288_1024-.24_512_1.24_512_1024-.24_512_1": {
+            "float32------": {
+                "peeling": "0 24 1 64",
+                "best_cycles": 33558,
+                "file_name": "Fused_Reshape_Reshape_Add_Reshape_Add_ReduceSum_Mul_Sub_Mul_ReduceSum_split_2580544647217296434"
+            }
+        }
+    },
+    "2.Mul2.Add12.Cast1.ReduceMax2.Reshape1.Cast1.Sub14.Exp1.ReduceSum1.Reshape1.RealDiv13.Cast1.13": {
+        "24_16_32_32_16_16.24_1_1_512.24_16_32_32_16_16": {
+            "float16--": {
+                "peeling": "0 24 1 16 3 32",
+                "best_cycles": 290506,
+                "file_name": "Fused_Mul_Add_Cast_ReduceMax_Reshape_Cast_Sub_Exp_ReduceSum_Reshape_RealDiv_Cast_split_16754049541375441580"
+            }
+        }
     }
 }
