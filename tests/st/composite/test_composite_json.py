@@ -331,11 +331,11 @@ def get_op_cycles_info(desc, cycle_info_file, old_op_cycles=100000000):
 
 def test_ci(profile=False, poly=False):
     pwd = os.path.dirname(os.path.abspath(__file__))
-    ci_path = pwd + "/need_adapt/"
+    ci_path = pwd + "/ascend_ci/"
     target_process = ["cuda", "aicore"]
     if profile:
         need_update = False
-        base_json_file = pwd + "/need_adapt/base.json"
+        base_json_file = pwd + "/ascend_ci/base.json"
         cycle_info_file = pwd + "/cycle_path/a.txt"
         os.environ['PROFILING'] = "true"
         os.environ['CYCLES_PATH'] = os.getcwd() + '/' + cycle_info_file
