@@ -76,3 +76,4 @@ from .floordiv import FloorDiv
 from .prod_force_se_a import ProdForceSeA
 from .lamb_apply_optimizer_assign import LambApplyOptimizerAssign
 from .prod_force_se_a_grad import ProdForceSeAGrad
+from .load_im2col import LoadIm2Col

@@ -15,7 +15,7 @@
 import numpy as np
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
-from tests.common.test_op import load_im2col
+from akg.ops.nn import load_im2col
 from akg.utils.result_analysis import allclose_nparray
 from tests.common.gen_random import random_gaussian
 
@@ -33,7 +33,7 @@ def load_im2col_run(fmap_shape, kernel_shape, stride, padding, dtype, attrs):
 
     debug = False
     if debug:
-      allclose_nparray(exp_output, acu_output, rtol=5e-3, atol=5e-3)
+        allclose_nparray(exp_output, acu_output, rtol=5e-3, atol=5e-3)
     res = compare_tensor(acu_output, exp_output, rtol=5e-03, equal_nan=True)
 
     return inputs,acu_output,exp_output, res
