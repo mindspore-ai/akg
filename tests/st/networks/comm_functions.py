@@ -132,8 +132,8 @@ def compare_base_line(pwd, new_csv, network, level, op_name):
             the ratio of degradation is ((18 - 9) / 9) >= 1,
             we can't tolerate this performance degradation, return 'False'.
     """
-    keys = ["2", "5", "10", "100", "default"]
-    values = [5.0, 2.0, 1.0, 0.5, 0.3]
+    keys = ["100", "200", "default"]
+    values = [1.0, 0.5, 0.3]
     def get_threshold(data):
         threshold = 0
         for k,v in zip(keys, values):
@@ -143,6 +143,13 @@ def compare_base_line(pwd, new_csv, network, level, op_name):
                 threshold = v
                 break
         return threshold if threshold != 0 else values[-1]
+    def is_degredation(base, new):
+        if new <= base:
+            return False
+        if base < 50:
+            return (new - base) > 50
+        ratio = (new - base) / base
+        return ratio >= get_threshold(base)
     new = find_op_profiling(new_csv, network, level, op_name)
     kernel_name = new['Name'].iloc[0]
     base_line = pd.read_csv(os.path.join(pwd, save_file))
@@ -153,12 +160,7 @@ def compare_base_line(pwd, new_csv, network, level, op_name):
         columns = list(query.columns)
         base_perf = float(query[columns[-3]].iloc[0])
         new_pref = float(new['Avg(us)'].iloc[0])
-        if new_pref <= base_perf:
-            return True
-        ratio = (new_pref - base_perf) / base_perf
-        if ratio < get_threshold(base_perf):
-            return True
-        else:
+        if is_degredation(base_perf, new_pref):
             logging.warning("-----------------------------------")
             logging.warning("new performance:")
             logging.warning(new[['Avg(us)', 'Max(us)', 'Min(us)']])
@@ -167,6 +169,8 @@ def compare_base_line(pwd, new_csv, network, level, op_name):
             logging.warning(query[columns[-3:]])
             logging.warning("-----------------------------------")
             return False
+        else:
+            return True
     else:
         logging.info("baseline performance was not found!")
         return True
