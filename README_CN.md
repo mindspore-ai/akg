@@ -21,7 +21,7 @@ AKG由三个基本的优化模块组成：规范化、自动调度和后端优�
   <img src="docs/akg-design.png" style="zoom:80%" div align=center/>
 
 ## 硬件后端支持
-当前支持`gpu v100/A100`，更多硬件后端支持待开发。
+当前支持`Ascend910`，`gpu v100/A100`等，更多硬件后端支持待开发。
 
 ## 构建
 
@@ -31,12 +31,30 @@ AKG由三个基本的优化模块组成：规范化、自动调度和后端优�
 ### 独立构建
 我们建议您从MindSpore侧构建运行AKG代码，但同时为了方便开发，我们提供了独立编译运行AKG的方式。
 详细的编译依赖请参考[MindSpore安装指南](https://www.mindspore.cn/install)。
+- 构建Ascend910版本
+
+  在下载代码前需安装[git-lfs软件](https://github.com/git-lfs/git-lfs/wiki/installation)。
   ```
-  bash build.sh -e $target // target can set 'gpu'
+  git clone https://gitee.com/mindspore/akg.git
+  cd akg
+  bash build.sh -e ascend
+  ```
+
+- 构建GPU版本
+  ```
+  git clone https://gitee.com/mindspore/akg.git
+  cd akg
+  bash build.sh -e gpu
   ```
 
 ## 运行
 1. 设置环境变量
+
+- Ascend910
+  ```
+  cd tests
+  source ./test_env.sh
+  ```
 
 - GPU V100/A100
 
@@ -47,10 +65,16 @@ AKG由三个基本的优化模块组成：规范化、自动调度和后端优�
 
 2. 运行测试用例
 
+- Ascend910
+  ```
+  cd tests/st/ops/ascend/vector
+  pytest -s test_abs_001.py -m "level0" # 运行level0测试用例
+  ```
+
 - GPU V100/A100
   ```
   cd tests/operators/gpu
-  python3 test_all.py -a "op_name" #运行op_name算子测试用例
+  python3 test_all.py "op_name" # 运行op_name算子测试用例
   ```
 
 ## 贡献

@@ -20,13 +20,13 @@ OUTPUT_PATH="${AKG_DIR}/output"
 usage()
 {
     echo "Usage:"
-    echo "bash build.sh [-e gpu|ascend] [-j[n]] [-t on|off] [-a]"
+    echo "bash build.sh [-e gpu|ascend] [-j[n]] [-t on|off] [-o]"
     echo ""
     echo "Options:"
     echo "    -e Hardware environment: gpu or ascend"
     echo "    -j[n] Set the threads when building (Default: -j8)"
     echo "    -t Unit test: on or off (Default: off)"
-    echo "    -a Download libakg_ext.a"
+    echo "    -o Output .o file directory"
 }
 
 mk_new_dir()
@@ -50,19 +50,18 @@ write_checksum()
     done
 }
 
-acquire_lib_url()
+check_binary_file()
 {
-    arch_info=`arch | tr '[A-Z]' '[a-z]'`
-    arch_name=""
-    if [[ "${arch_info}" =~ "aarch64" ]]; then
-        arch_name="aarch64"
-    elif [[ "${arch_info}" =~ "x86_64" ]]; then
-        arch_name="x86_64"
+  local binary_dir="$1"
+  for cur_file in `ls "${binary_dir}"/*.o`
+  do
+    file_lines=`cat "${cur_file}" | wc -l`
+    if [ ${file_lines} -eq 3 ]; then
+      echo "-- Warning: ${cur_file} is not a valid binary file."
+      return 1
     fi
-    url_prefix="https://repo.mindspore.cn/public/ms-incubator/akg-binary/version"
-    lib_mark="202107/20210729/master_20210729165122_9b0803f9c839e5aeacb05a8a6997edbed7c00804"
-    lib_url="${url_prefix}/${lib_mark}/lib/${arch_name}/libakg_ext.a"
-    echo "${lib_url}"
+  done
+  return 0
 }
 
 if [ ! -n "$1" ]; then
@@ -74,7 +73,7 @@ fi
 # Parse arguments
 THREAD_NUM=32
 CMAKE_ARGS=""
-while getopts 'e:j:t:a' opt
+while getopts 'e:j:t:o' opt
 do
     case "${opt}" in
         e)
@@ -93,8 +92,45 @@ do
             ;;
         t)
             ;;
-        a)
-            acquire_lib_url
+        o)
+            arch_info=`arch | tr '[A-Z]' '[a-z]'`
+            arch_name=""
+            if [[ "${arch_info}" =~ "aarch64" ]]; then
+              arch_name="aarch64"
+            elif [[ "${arch_info}" =~ "x86_64" ]]; then
+              arch_name="x86_64"
+            else
+              echo "-- Warning: Only supports aarch64 and x86_64, but current is ${arch_info}"
+              exit 1
+            fi
+
+            akg_extend_dir="${AKG_DIR}/prebuild/${arch_name}"
+            if [ ! -d "${akg_extend_dir}" ]; then
+              echo "-- Warning: Prebuild binary file directory ${akg_extend_dir} not exits"
+              exit 1
+            fi
+
+            check_binary_file "${akg_extend_dir}"
+            if [ $? -ne 0 ]; then
+              GIT_LFS=`which git-lfs`
+              if [ $? -ne 0 ]; then
+                echo "-- Warning: git lfs not found, you can perform the following steps:"
+                echo "            1. Install git lfs, refer https://github.com/git-lfs/git-lfs/wiki/installation"
+                echo "            2. After installing git lfs, executing the following commands:"
+                echo "               cd ${AKG_DIR}"
+                echo "               git lfs pull"
+                echo "            3. Re-compile the source codes"
+                exit 1
+              else
+                echo "-- Warning: git lfs found, but lfs files is not downloaded, you can perform the following steps:"
+                echo "            1. Download files tracked by git lfs, executing the following commands:"
+                echo "               cd ${AKG_DIR}"
+                echo "               git lfs pull"
+                echo "            2. Re-compile the source codes"
+                exit 1
+              fi
+            fi
+            echo "${akg_extend_dir}"
             exit 0
             ;;
         *)
