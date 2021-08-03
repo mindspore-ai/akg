@@ -19,8 +19,8 @@
 
 #include <string>
 #include "toolchain/prof_callback.h"
+#include "toolchain/prof_acl_api.h"
 
-using Status = int32_t;
 
 enum ProfCommandHandleType {
   kProfCommandhandleInit = 0,
@@ -51,7 +51,7 @@ class ProfileMgr {
     reporter_cb_ = func;
   }
 
-  int32_t CommandHandle(ProfCommandHandleType type, void *data, uint32_t len);
+  Status CommandHandle(ProfCommandHandleType type, void *data, uint32_t len);
 
   static ProfileMgr &GetInstance();
 

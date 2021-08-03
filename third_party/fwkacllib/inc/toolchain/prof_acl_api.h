@@ -84,6 +84,7 @@
 #endif
 
 #include <cstdint>
+#include <stddef.h>
 
 namespace Msprofiler {
 namespace Api {
@@ -98,5 +99,46 @@ namespace Api {
 MSVP_PROF_API uint64_t ProfGetOpExecutionTime(const void *data, uint32_t len, uint32_t index);
 }
 }
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+MSVP_PROF_API uint64_t ProfGetOpExecutionTime(const void *data, uint32_t len, uint32_t index);
+
+typedef uint32_t Status;
+typedef struct aclprofSubscribeConfig aclprofSubscribeConfig1;
+///
+/// @ingroup AscendCL
+/// @brief subscribe profiling data of graph
+/// @param [in] graphId: the graph id subscribed
+/// @param [in] profSubscribeConfig: pointer to config of model subscribe
+/// @return Status result of function
+///
+Status aclgrphProfGraphSubscribe(const uint32_t graphId,
+    const aclprofSubscribeConfig1 *profSubscribeConfig);
+
+///
+/// @ingroup AscendCL
+/// @brief unsubscribe profiling data of graph
+/// @param [in] graphId: the graph id subscribed
+/// @return Status result of function
+///
+Status aclgrphProfGraphUnSubscribe(const uint32_t graphId);
+
+/**
+ * @ingroup AscendCL
+ * @brief get graph id from subscription data
+ *
+ * @param  opInfo [IN]     pointer to subscription data
+ * @param  opInfoLen [IN]  memory size of subscription data
+ *
+ * @retval graph id of subscription data
+ * @retval 0 for failed
+ */
+size_t aclprofGetGraphId(const void *opInfo, size_t opInfoLen, uint32_t index);
+#ifdef __cplusplus
+}
+#endif
 
 #endif  // MSPROFILER_API_PROF_ACL_API_H_
