@@ -260,6 +260,18 @@ def convert_fracal_shape(ori_shape, fractal):
     if fractal == "zZ":
         return ori_shape[:-4] + (ori_shape[-4] * ori_shape[-2], ori_shape[-3] * ori_shape[-1])
 
+def strided_slice_str(inputs, output, attr):
+    begin = get_attr(attr, "begin")
+    end = get_attr(attr, "end")
+    strides = get_attr(attr, "strides")
+    slice_str = ""
+    for i in range(len(begin)):
+        slice_str += str(begin[i]) + ':' + str(end[i]) + ':' + str(strides[i])
+        if not i == len(begin) - 1:
+            slice_str += ","
+    res = "%s = %s[%s]" % (output[0]['tensor_name'], get_input(inputs[0][0]), slice_str)
+    return res
+
 def matmul_str(inputs, output, attr):
 
     left_format = get_attr(attr, "left_format")
@@ -322,6 +334,7 @@ op_dsl = {
     "ReduceSum": lambda inputs, output, attr: reduce_str(inputs, output, attr, "sum"),
     "ReduceMax": lambda inputs, output, attr: reduce_str(inputs, output, attr, "max"),
     "ReduceMin": lambda inputs, output, attr: reduce_str(inputs, output, attr, "min"),
+    "StridedSlice": lambda inputs, output, attr: strided_slice_str(inputs, output, attr),
     "CumSum": lambda inputs, output, attr: "%s = np.cumsum(%s, %s)" %
         (output[0]['tensor_name'], get_input(inputs[0][0]), get_attr(attr, "axis")),
     "CumProd": lambda inputs, output, attr: "%s = np.cumprod(%s, %s)" %

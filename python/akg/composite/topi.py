@@ -133,6 +133,89 @@ def complex(inputs, attrs):
                       lambda ins, outs : mix_func(outs[0], ins[0], ins[1]),
                       name = "complex", dtype=real.dtype)
 
+@tvm.register_func("StridedSlice")
+def StridedSlice(inputs, attrs):
+    in_tensor = inputs[0]
+    shape = in_tensor.shape
+    begin = list(attrs["begin"])
+    end = list(attrs["end"])
+    strides = list(attrs["strides"])
+    slice_len = len(begin)
+
+    begin_pos = [0] if "begin_mask" not in attrs else bin(int(attrs["begin_mask"]))[-1:1:-1]
+    end_pos = [0] if "end_mask" not in attrs else bin(int(attrs["end_mask"]))[-1:1:-1]
+    ellipsis_pos = [0] if "ellipsis_mask" not in attrs else bin(int(attrs["ellipsis_mask"]))[-1:1:-1]
+    new_axis_pos = [0] if "new_axis_mask" not in attrs else bin(int(attrs["new_axis_mask"]))[-1:1:-1]
+    shrink_axis_pos = [0] if "shrink_axis_mask" not in attrs else bin(int(attrs["shrink_axis_mask"]))[-1:1:-1]
+
+    out_shape = []
+    i, j = 0, 0
+    has_ellipsis = False
+    shrink_axes = []
+    while i < slice_len or j < len(shape):
+        if j >= slice_len or i >= slice_len:
+            out_shape.append(shape[j])
+            begin.append(0)
+            end.append(shape[j])
+            strides.append(1)
+            i += 1
+            j += 1
+            continue
+        if i < len(begin_pos) and begin_pos[i] == '1':
+            begin[i] = -1 if int(strides[i]) < 0 else 0
+        if i < len(end_pos) and end_pos[i] == '1':
+            end[i] = -1 if int(strides[i]) < 0 else shape[j]
+        if i < len(ellipsis_pos) and ellipsis_pos[i] == '1':
+            out_shape.append(shape[j])
+            begin[i] = 0
+            end[i] = shape[j]
+            strides[i] = 1
+            i += 1
+            j += 1
+            continue
+        if i < len(new_axis_pos) and new_axis_pos[i] == '1':
+            out_shape.append(1)
+            begin[i] = 1
+            end[i] = 1
+            strides[i] = 1
+            in_tensor = topi.expand_dims(in_tensor, i, 1)
+            i += 1
+            continue
+        if i < len(shrink_axis_pos) and shrink_axis_pos[i] == '1':
+            shrink_axes.append(i)
+            i += 1
+            j += 1
+            continue
+        if int(begin[i]) < 0:
+            begin[i] += shape[j]
+        if int(end[i]) < 0:
+            end[i] += shape[j]
+        if int(begin[i]) < 0:
+            begin[i] = 0
+        elif int(begin[i]) >= int(shape[j]):
+            begin[i] = shape[j] - 1
+        if int(end[i]) < 0:
+            end[i] = -1
+        elif int(end[i]) >= int(shape[j]):
+            end[i] = shape[j]
+        out_idx = (end[i] - begin[i]) // strides[i]
+        if not int(out_idx * strides[i]) == int(end[i] - begin[i]):
+            out_idx += 1
+        out_shape.append(out_idx)
+        i += 1
+        j += 1
+    def get_old_indices(indices, idx):
+        old_indices = list(indices)
+        old_indices.insert(idx, begin[idx])
+        return old_indices
+    for shrink_axis in reversed(shrink_axes):
+        new_shape = list(in_tensor.shape)
+        new_shape.pop(shrink_axis)
+        in_tensor = tvm.compute(new_shape, lambda *indices: in_tensor(*get_old_indices(indices, shrink_axis)))
+        begin.pop(shrink_axis)
+        strides.pop(shrink_axis)
+    return tvm.compute(out_shape, lambda *i: in_tensor(*[b + idx * s for b, s, idx in zip(begin, strides, i)]))
+
 @tvm.register_func("TransData")
 def trans_data(inputs, attrs):
     attrs = {k: v for k, v in attrs.items()}
