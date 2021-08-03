@@ -21,6 +21,7 @@
 #include "tvm.h"
 #include <tvm/runtime/registry.h>
 #include "runtime_error_codes.h"
+#include <climits>
 
 using std::vector;
 
@@ -148,7 +149,8 @@ inline unsigned int UlongToUint(uint64_t u) {
   return static_cast<unsigned int>(u);
 }
 
-bool AscendKernelRuntime::Run(const std::string &kernel_name, const std::vector<TensorDevicePtr> &input_tensors) {
+bool AscendKernelRuntime::Run(const std::string &kernel_name, const std::vector<TensorDevicePtr> &input_tensors,
+                              const std::vector<int64_t> &input_shape_args) {
   uint32_t blockdim = 1;  // default blockdim equal to 1.
   auto kernel_pack_ptr = GetKernelPack(kernel_name);
   auto func_stub = GetFuncStub(*kernel_pack_ptr, &blockdim);
@@ -161,9 +163,15 @@ bool AscendKernelRuntime::Run(const std::string &kernel_name, const std::vector<
   for (auto tensor : input_tensors) {
     runtimeargs.push_back(tensor->GetDeviceAddress());
   }
+  for (const auto &shape_arg : input_shape_args) {
+    runtimeargs.push_back(reinterpret_cast<void *>(shape_arg));
+  }
   rtL2Ctrl_t *l2ctrl = nullptr;
   const void *stubFunc = reinterpret_cast<void *>(func_stub);
   auto argsSize = static_cast<uint32_t>(UlongToUint(sizeof(void *)) * runtimeargs.size());
+  if (input_shape_args.size() > 0 && blockdim == INT_MAX) {
+    blockdim = input_shape_args[input_shape_args.size() - 1];
+  }
   auto ret = rtKernelLaunch(stubFunc, blockdim, runtimeargs.data(), argsSize, l2ctrl, stream());
   SyncStream();
   if (ret != RT_ERROR_NONE) {
@@ -244,7 +252,8 @@ void AscendKernelRuntime::RunOpAssignMemory(const std::vector<TensorDevicePtr> &
   }
 }
 
-void AscendKernelRuntime::RunOpImpl(const std::string &kernel_name, const std::vector<TensorDevicePtr> &input_tensors) {
+void AscendKernelRuntime::RunOpImpl(const std::string &kernel_name, const std::vector<TensorDevicePtr> &input_tensors,
+                                    const std::vector<int64_t> &input_shape_args) {
   // InitResource
   if (!Init()) {
     LOG(FATAL) << "Kernel runtime init error.";
@@ -256,7 +265,7 @@ void AscendKernelRuntime::RunOpImpl(const std::string &kernel_name, const std::v
     SyncHostToDevice(tensor->GetDataSize(), tensor->GetHostAddress(), tensor->GetDeviceAddress());
   }
   // run op
-  if (!Run(kernel_name, input_tensors)) {
+  if (!Run(kernel_name, input_tensors, input_shape_args)) {
     LOG(FATAL) << "Kernel runtime run error.";
   }
   // get output
@@ -276,15 +285,21 @@ TVM_REGISTER_GLOBAL("ascend_run").set_body([](TVMArgs args, TVMRetValue *ret) {
   auto kernel_name = args[0].operator std::string();
   auto device_id = static_cast<uint32_t>(args[1].operator int());
   auto input_tensors = std::vector<TensorDevicePtr>();
+  auto input_shape_args = std::vector<int64_t>();
   for (auto i = 2; i < args.size();) {
-    auto data_ptr = args[i++].operator void *();
-    auto nbytes = static_cast<size_t>(args[i++].operator uint64_t());
-    auto is_output = args[i++].operator bool();
-    input_tensors.push_back(std::make_shared<TensorDevice>(data_ptr, nbytes, is_output));
+    if (args[i].type_code() == kDLInt) {
+      auto shape_args = args[i++].operator int64_t();
+      input_shape_args.push_back(shape_args);
+    } else {
+      auto data_ptr = args[i++].operator void *();
+      auto nbytes = static_cast<size_t>(args[i++].operator uint64_t());
+      auto is_output = args[i++].operator bool();
+      input_tensors.push_back(std::make_shared<TensorDevice>(data_ptr, nbytes, is_output));
+    }
   }
   auto kernel_runtime_ptr = std::make_shared<AscendKernelRuntime>();
   kernel_runtime_ptr->set_device_id(device_id);
-  kernel_runtime_ptr->RunOpImpl(kernel_name, input_tensors);
+  kernel_runtime_ptr->RunOpImpl(kernel_name, input_tensors, input_shape_args);
 });
 
 }  // namespace runtime

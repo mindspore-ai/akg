@@ -38,13 +38,15 @@ class AscendKernelRuntime {
   void SetContext();
   void CreateContext();
   void ReleaseDeviceRes();
-  bool Run(const std::string &kernel_name, const std::vector<TensorDevicePtr> &input_tensors);
+  bool Run(const std::string &kernel_name, const std::vector<TensorDevicePtr> &input_tensors,
+           const std::vector<int64_t> &input_shape_args);
   bool SyncStream();
   bool MemcpyAsync(void *dst, const void *src, uint64_t size, int32_t kind);
   void RunOpAssignMemory(const std::vector<TensorDevicePtr> &tensors);
   bool SyncDeviceToHost(size_t size, void *device_ptr, void *host_ptr);
   bool SyncHostToDevice(size_t size, const void *host_ptr, void *device_ptr);
-  void RunOpImpl(const std::string &kernel_name, const std::vector<TensorDevicePtr> &input_tensors);
+  void RunOpImpl(const std::string &kernel_name, const std::vector<TensorDevicePtr> &input_tensors,
+                 const std::vector<int64_t> &input_shape_args);
 
   void set_device_id(uint32_t device_id) { device_id_ = device_id; }
   uint32_t device_id() { return device_id_; }

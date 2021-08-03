@@ -8,3 +8,4 @@
 "akg/tests/"                                                                                      "unnecessary-lambda"
 "akg/tests/"                                                                                      "logging-format-interpolation"
 "akg/tests/"                                                                                      "attribute-defined-outside-init"
+"akg/tests/"                                                                                      "expression-not-assigned"
