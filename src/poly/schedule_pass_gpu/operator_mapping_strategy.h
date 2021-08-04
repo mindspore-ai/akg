@@ -18,7 +18,6 @@
 #define POLY_OPRATOR_MAPPING_STRATEGY_H_
 
 #include "poly/schedule_pass.h"
-#include "poly/reduce_manager.h"
 
 namespace akg {
 namespace ir {
@@ -52,16 +51,9 @@ class ReduceMappingStrategy : public OperatorMappingStrategy {
 
   bool NeedAtomicAdd(const isl::schedule_node_band &band, size_t n_block_map);
   void MarkAtomicAddTensor(const isl::schedule_node_band &band);
-  // Check whether the reduce operator is included, and split the reduce statement into a separate filter.
-  isl::schedule DetectAndMarkReduce(const isl::schedule &sch);
 
  private:
-  // After splitting the reduce fusion operator, reschedule all the filters, mainly because the reduce statement affects
-  // other statements after the fusion.
-  isl::schedule RescheduleForReduce(const isl::schedule &sch);
-  isl::schedule InsertReduceMarker(const isl::schedule &sch);
   isl::schedule_node InsertReduceExtension(const isl::schedule_node &node);
-  size_t GetReduceId() const;
 };
 
 class BatchMatmulMappingStrategy : public OperatorMappingStrategy {

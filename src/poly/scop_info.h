@@ -843,10 +843,6 @@ class AnalysisResult {
     matrix_matmul_major_[matrix_name] = matrix_major;
   }
   void SetMmaMode(Mma mma) { mma_ = mma; }
-  void RecordTensorAllAxis(std::string tensor_name, std::vector<std::string> all_axis) {
-    tensor_all_axis_[tensor_name] = all_axis;
-  }
-  std::unordered_map<std::string, std::vector<std::string>> GetTensorAllAxis() const { return tensor_all_axis_; }
   std::unordered_map<std::string, std::string> GetMatrixMatmulMap() const { return matrix_matmul_map_; }
   std::unordered_map<std::string, std::string> GetMatrixMatmulMajor() const { return matrix_matmul_major_; }
   Mma GetMmaMode() const { return mma_; }
@@ -1028,9 +1024,6 @@ class AnalysisResult {
   // custom mapping
   bool is_custom_mapping_{false};
   bool is_outer_block_mapping_{false};
-
-  // All axis of each tensor
-  std::unordered_map<std::string, std::vector<std::string>> tensor_all_axis_;
 };
 
 class CubeInfo {

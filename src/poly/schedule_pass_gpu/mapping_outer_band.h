@@ -18,7 +18,6 @@
 #define POLY_MAPPING_H_
 
 #include "poly/schedule_pass.h"
-#include "poly/reduce_manager.h"
 
 namespace akg {
 namespace ir {
