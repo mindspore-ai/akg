@@ -110,7 +110,7 @@ def shared_memory_optimization(desc_d, req_map, outputs):
         reuse = False
         find_conflit = False
         if sort_req_liveness[sort_req_buf[i]].is_reduce:
-            alloc_map[sort_req_buf[i]] = ['ALLOC', req_map[sort_req_buf[i]]]
+            alloc_map[sort_req_buf[i]] = [req_map[sort_req_buf[i]][1], req_map[sort_req_buf[i]][0]]
             continue
         for j in range(len(sort_req_liveness) - 1, i, -1):
             if desc_d['process'] == 'aicore':
@@ -119,10 +119,11 @@ def shared_memory_optimization(desc_d, req_map, outputs):
             # rule1: one buffer start larger equal to the reused buffer end.
             if sort_req_liveness[sort_req_buf[i]].start >= sort_req_liveness[sort_req_buf[j]].end:
                 # rule2: sizes are compatiable.
-                if req_map[sort_req_buf[i]] <= req_map[sort_req_buf[j]] and sort_req_buf[j] not in outputs:
+                if req_map[sort_req_buf[i]][0] <= req_map[sort_req_buf[j]][0] and sort_req_buf[j] not in outputs:
                     # rule3: make sure the candidate reused buffer is not using by other conflict variable.
                     for item in reverse_reuse_map.get(sort_req_buf[j], []):
-                        if (sort_req_liveness[item].end >= sort_req_liveness[sort_req_buf[i]].end) or (sort_req_liveness[item].end >= sort_req_liveness[sort_req_buf[i]].start):
+                        if (sort_req_liveness[item].end >= sort_req_liveness[sort_req_buf[i]].end) \
+                            or (sort_req_liveness[item].end >= sort_req_liveness[sort_req_buf[i]].start):
                             find_conflit = True
                             break
                     if not find_conflit:
@@ -131,16 +132,17 @@ def shared_memory_optimization(desc_d, req_map, outputs):
                         else:
                             reverse_reuse_map[sort_req_buf[j]].append(sort_req_buf[i])
                         # rule4: prefer to reuse buffer with same size.
-                        if req_map[sort_req_buf[i]] == req_map[sort_req_buf[j]]:
-                            reuse_map[sort_req_buf[i]] = [sort_req_buf[j], req_map[sort_req_buf[i]]]
+                        if req_map[sort_req_buf[i]][0] == req_map[sort_req_buf[j]][0]:
+                            reuse_map[sort_req_buf[i]] = [sort_req_buf[j], req_map[sort_req_buf[i]][0]]
                             reuse = True
                             break
                         else:
-                            reuse_map[sort_req_buf[i]] = [sort_req_buf[j], req_map[sort_req_buf[i]]]
+                            reuse_map[sort_req_buf[i]] = [sort_req_buf[j], req_map[sort_req_buf[i]][0]]
                             reuse = True
         if not reuse:
-            alloc_map[sort_req_buf[i]] = ['ALLOC', req_map[sort_req_buf[i]]]
+            alloc_map[sort_req_buf[i]] = [req_map[sort_req_buf[i]][1], req_map[sort_req_buf[i]][0]]
     return alloc_map, reuse_map
+
 
 def is_tensor(op_info):
     return 'value' not in op_info
@@ -251,9 +253,10 @@ def collect_subgraph_info(desc_d, sub_stitch_graphs, req_map, input_tensor_name,
                     if out_tensor_name in req_map:
                         if out_desc['shape'] and out_desc['data_type']:
                             type_bits = get_type_bits(out_desc['data_type'])
-                            req_map[out_tensor_name] = reduce(lambda x, y: x * y, out_desc['shape']) * type_bits
+                            req_map[out_tensor_name] = \
+                                [reduce(lambda x, y: x * y, out_desc['shape']) * type_bits, out_desc['data_type']]
                         else:
-                            req_map[out_tensor_name] = 1
+                            req_map[out_tensor_name] = [1, out_desc['data_type']]
 
                     if out_tensor_name in sg.output_name and out_tensor_name not in added_output:
                         sg.output.append(out_desc)
@@ -377,9 +380,13 @@ def stitch_json_split(desc_d):
     # remove fake output from alloc_map and store them into clean_op_map
     clean_op_map = dict()
     for fake_op in clean_op_list:
-        clean_info = alloc_map[fake_op] if fake_op in alloc_map else reuse_map[fake_op]
+        if fake_op in alloc_map:
+            clean_info = alloc_map[fake_op]
+            alloc_map.pop(fake_op)
+        else:
+            clean_info = reuse_map[fake_op]
+            reuse_map.pop(fake_op)
         clean_op_map[inplace_assign_map[fake_op]] = clean_info
-        alloc_map.pop(fake_op) if fake_op in alloc_map else reuse_map.pop(fake_op)
 
     if not alloc_map:
         alloc_map['EMPTY'] = []
@@ -959,7 +966,7 @@ def _get_online_tune_attr(desc_s, attrs, repo_path, use_new_space=True):
         from tests.prev_version_auto_tune.composite_tuner import tune_composite
         best_config = tune_composite(desc_s,
                                     tune_level=attrs["online_tuning"],
-                                    repo_path=_get_repository_file_path("repository.json"),
+                                    repo_path=repo_path,
                                     skip_exist=True)
     attrs.update(best_config)
     pop_keys = ["online_tuning", "help_tiling", "tuning", "use_new_space"]

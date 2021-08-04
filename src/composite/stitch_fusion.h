@@ -26,6 +26,7 @@ struct StitchBufferInfo {
   StorageType type{StorageType::Unknown};
   std::string buf_name;
   uint64_t alloc_size = 0;
+  Type dtype;
 };
 inline std::ostream &operator<<(std::ostream &os, const StitchBufferInfo &x) {
   os << "StitchBufferInfo: \n"
@@ -97,7 +98,7 @@ class StitchBufAlloc : public IRVisitor {
 
     for (const auto &it : alloc_map_) {
       std::string name = it.first;
-      auto alloc_info = it.second[0].as<StringImm>()->value;
+      auto dtype = it.second[0].as<StringImm>()->value;
       CHECK_GT(total_block_, 0);
       uint64_t alloc_size_per_block = it.second[1].as<IntImm>()->value / total_block_;
       // first, check whether variable is already in buf_within_op_map. If NOT, do allocation or reuse.
@@ -117,6 +118,7 @@ class StitchBufAlloc : public IRVisitor {
       info.type = StorageType::Shared;
       info.buf_name = ir_var_shared;
       info.alloc_size = alloc_size_per_block;
+      info.dtype = type_mapping[dtype];
       stitch_buffer_map[ir_var] = info;
       buf_alloc_op_[ir_var] = info;
     }
@@ -191,6 +193,7 @@ class StitchBufAlloc : public IRVisitor {
         stitch_buffer_map[moveout_var] = moveout_info;
       }
       if (!cover_overflow_size) {
+        CHECK(0) << "MEMORY OVERFLOW! NEED WORKSPACE!";
         auto covered_size = 0;
         for (const auto &iv : reuse_free_map) {
           auto moveout_info = stitch_buffer_map[iv.first];
@@ -253,7 +256,7 @@ class StitchBufAlloc : public IRVisitor {
       info.name = name;
       info.type = StorageType::Shared;
       info.buf_name = name;
-      info.alloc_size = size;
+      info.alloc_size = size * op->type.bytes();
       buf_within_op_map[name] = info;
 
       gather_shared_ = false;
