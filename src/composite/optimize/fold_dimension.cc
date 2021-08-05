@@ -240,7 +240,7 @@ class DimensionFolderPlan : public IRVisitor {
   void AddReshapeRelation(FoldTensor *input, FoldTensor *output) {
     Relation rel(output);
     int64_t input_size = 1;
-    int64_t output_size = 1;
+    int64_t output_size = 0;
     int input_base = 0;
     int output_base = 0;
     int input_idx = 0;
@@ -250,12 +250,13 @@ class DimensionFolderPlan : public IRVisitor {
       rel.forward_mapping.push_back(output_base);
       while (output_size < input_size) {
         CHECK(output_idx < static_cast<int>(output->shape.size()));
-        output_size *= output->shape[output_idx++];
+        auto dim_size = output->shape[output_idx++];
+        output_size = output_size > 0 ? output_size * dim_size : dim_size;
         rel.backward_mapping.push_back(input_base);
       }
       if (input_size == output_size) {
         input_size = 1;
-        output_size = 1;
+        output_size = 0;
         input_base = input_idx;
         output_base = output_idx;
       }
