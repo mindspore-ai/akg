@@ -15,13 +15,12 @@
  */
 
 #include "operator_mapping_strategy.h"
-
-#include <numeric>
-
 #include "poly/schedule_pass/reschedule.h"
 #include "poly/schedule_tree_util.h"
 #include "poly/sync_manager.h"
 #include "poly/scop.h"
+
+#include <numeric>
 
 namespace akg {
 namespace ir {
@@ -168,11 +167,6 @@ size_t ReduceMappingStrategy::MapThreadHelper(isl::schedule_node &thread_root) {
   return thread_cfg->bound;
 }
 
-size_t ReduceMappingStrategy::GetReduceId() const {
-  static size_t reduce_count = 0;
-  return reduce_count++;
-}
-
 isl::schedule_node ReduceMappingStrategy::InsertReduceExtension(const isl::schedule_node &node) {
   auto thread_cfg = scop_info_.user_config_.GetThreadConfig();
   CHECK(thread_cfg != nullptr) << "thread config is null";
@@ -211,186 +205,6 @@ isl::schedule_node ReduceMappingStrategy::InsertReduceExtension(const isl::sched
   insert_node = insert_node.parent().insert_mark(REDUCE_AREA_FLAG);
 
   return insert_node;
-}
-
-isl::schedule ReduceMappingStrategy::DetectAndMarkReduce(const isl::schedule &sch) {
-  auto final_schedule = sch;
-  auto thread_cfg = scop_info_.user_config_.GetThreadConfig();
-  CHECK(thread_cfg != nullptr) << "threadconfig is null";
-  if (thread_cfg->bound == 0) {
-    return final_schedule;
-  }
-
-  auto all_reduce_map = scop_info_.analysis_result_.GetReduceTensorInfoMap();
-  ReduceManager reduce_manager;
-  bool done_separate = false;
-  auto GetInnerMostBand = [&done_separate, &all_reduce_map, &reduce_manager, thread_cfg,
-                           this](isl::schedule_node node) -> isl::schedule_node {
-    if (done_separate) {
-      return node;
-    }
-    auto band_node = node.as<isl::schedule_node_band>();
-    if (!band_node || !band_node.permutable()) {
-      return node;
-    }
-
-    auto band_node_domain = band_node.get_partial_schedule().domain();
-    StatementMap all_statements = scop_info_.analysis_result_.GetStatementMap();
-    isl::union_map reduce_statement_map = isl::union_map::empty(node.ctx());
-    isl::union_set reduce_statements = isl::union_set::empty(node.ctx());
-
-    for (auto it = all_reduce_map.begin(); it != all_reduce_map.end();) {
-      reduce_statement_map = reduce_statement_map.unite(it->second.stmt_map);
-      auto this_reduce = reduce_manager.GetReduceStatements(band_node_domain, reduce_statement_map, all_statements);
-      if (!this_reduce.is_empty()) {
-        reduce_statements = reduce_statements.unite(this_reduce);
-        all_reduce_map.erase(it++);
-      } else {
-        ++it;
-      }
-    }
-
-    if (reduce_statements.n_set() < 1) {
-      return node;
-    }
-
-    isl::union_map dependences = pass_info_.dependences_.subtract(pass_info_.force_dependences_);
-    auto node_bak = node;
-    if (!reduce_manager.SplitReduceStatements(node, reduce_statements, dependences)) {
-      return node_bak;
-    }
-    done_separate = all_reduce_map.empty();
-    return node;
-  };
-  final_schedule = sch.get_root().map_descendant_bottom_up(GetInnerMostBand).get_schedule();
-  if (done_separate) {
-    final_schedule = InsertReduceMarker(final_schedule);
-    final_schedule = RescheduleForReduce(final_schedule);
-  }
-  return final_schedule;
-}
-
-isl::schedule ReduceMappingStrategy::InsertReduceMarker(const isl::schedule &sch) {
-  isl::schedule final_schedule = sch;
-  auto all_reduce_map = scop_info_.analysis_result_.GetReduceTensorInfoMap();
-  auto InsertMarker = [&all_reduce_map, this](isl::schedule_node node) -> isl::schedule_node {
-    ReduceManager reduce_manager;
-    auto band_node = node.as<isl::schedule_node_band>();
-    if (!band_node) {
-      return node;
-    }
-
-    for (auto it = all_reduce_map.begin(); it != all_reduce_map.end();) {
-      isl::union_map reduce_statement_map = it->second.stmt_map;
-      isl::id reduce_id = it->first;
-      auto band_node_domain = band_node.get_partial_schedule().domain();
-      auto op_type = scop_info_.analysis_result_.GetReduceOpType(reduce_id) + "_";
-
-      StatementMap all_statements = scop_info_.analysis_result_.GetStatementMap();
-      isl::union_set reduce_statements =
-        reduce_manager.GetReduceStatements(band_node_domain, reduce_statement_map, all_statements);
-      if (reduce_statements.n_set() != 1) {
-        ++it;
-        continue;
-      }
-
-      all_reduce_map.erase(it++);
-      std::string reduce_marker_name =
-        REDUCE_MARKER + op_type + reduce_id.get_name() + "_" + std::to_string(GetReduceId());
-      auto reduce_node = band_node.insert_mark(reduce_marker_name);
-      return reduce_node;
-    }
-    return band_node;
-  };
-  final_schedule = final_schedule.get_root().map_descendant_bottom_up(InsertMarker).get_schedule();
-  return final_schedule;
-}
-
-isl::schedule ReduceMappingStrategy::RescheduleForReduce(const isl::schedule &sch) {
-  auto IsContainCoincidentZero = [](const isl::schedule_node node) -> bool {
-    if (!node.isa<isl::schedule_node_band>()) {
-      return true;
-    }
-
-    auto band_node = node.as<isl::schedule_node_band>();
-    for (int i = 0; i < static_cast<int>(band_node.n_member()); ++i) {
-      if (band_node.member_get_coincident(i) == 0) {
-        return true;
-      }
-    }
-    return false;
-  };
-
-  auto SetAllCoincident = [](const isl::schedule_node node) -> isl::schedule_node {
-    if (!node.isa<isl::schedule_node_band>()) {
-      return node;
-    }
-
-    auto band_node = node.as<isl::schedule_node_band>();
-    for (int i = 0; i < static_cast<int>(band_node.n_member()); ++i) {
-      if (band_node.member_get_coincident(i) == 0) {
-        band_node = band_node.member_set_coincident(i, 1);
-      }
-    }
-    return band_node;
-  };
-
-  auto root = sch.get_root();
-  auto node = root;
-  root.foreach_descendant_top_down([&node](const isl::schedule_node &orig_node) -> bool {
-    if (!GetMarkerName(orig_node, REDUCE_MARKER).empty() && orig_node.tree_depth() >= 2 &&
-        orig_node.ancestor(2).isa<isl::schedule_node_sequence>()) {
-      node = orig_node.ancestor(2);
-      return false;
-    }
-    return true;
-  });
-  if (node.is_equal(root)) {
-    return sch;
-  }
-
-  int child_number = static_cast<int>(node.n_children());
-  Reschedule reschedule(scop_info_, pass_info_);
-  for (int i = 0; i < child_number; ++i) {
-    auto child_node = node.child(i);
-    if (!child_node.isa<isl::schedule_node_filter>() || !child_node.has_children()) {
-      continue;
-    }
-
-    // Ignore the related statements of the reduce operator.
-    if (!GetMarkerName(child_node.child(0), REDUCE_MARKER).empty()) {
-      continue;
-    }
-
-    // Ignore all related statements that coincide with 1.
-    if (!IsContainCoincidentZero(child_node.child(0))) {
-      continue;
-    }
-
-    auto active_domain = child_node.as<isl::schedule_node_filter>().get_filter();
-    auto after_reschedule_node = reschedule.RescheduleSerializeSccs(active_domain, false).get_root();
-    after_reschedule_node =
-      after_reschedule_node.has_children() ? after_reschedule_node.child(0) : after_reschedule_node;
-
-    // Adjust the coincident of the original schedule tree according to the result of the reschedule.
-    bool is_seq =
-      after_reschedule_node.isa<isl::schedule_node_sequence>() || after_reschedule_node.isa<isl::schedule_node_set>();
-    if (!is_seq) {
-      bool is_contain_coincient_zero = IsContainCoincidentZero(after_reschedule_node);
-      node = is_contain_coincient_zero ? node : SetAllCoincident(child_node.child(0)).ancestor(2);
-    } else {
-      int j = 0;
-      int reschedule_child_number = static_cast<int>(after_reschedule_node.n_children());
-      for (; j < reschedule_child_number; ++j) {
-        auto reschedule_child_node = after_reschedule_node.child(j);
-        if (!reschedule_child_node.has_children() || IsContainCoincidentZero(reschedule_child_node.child(0))) {
-          break;
-        }
-      }
-      node = (j != reschedule_child_number) ? node : SetAllCoincident(child_node.child(0)).ancestor(2);
-    }
-  }
-  return node.get_schedule();
 }
 
 bool ReduceMappingStrategy::NeedAtomicAdd(const isl::schedule_node_band &band, size_t n_block_map) {

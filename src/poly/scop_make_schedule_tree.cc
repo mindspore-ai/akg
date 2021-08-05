@@ -275,19 +275,14 @@ class ScopMakeScheduleTree final : protected IRVisitor {
     isl::set write_set = set;
     isl::set reduction_set = set;
     Stmt stmt = Downcast<Stmt>(s);
-
-    std::unordered_map<std::string, std::vector<std::string>> all_axis;
-    std::tie(new_reads, new_writes, new_to_inner, all_axis) =
+    std::tie(new_reads, new_writes, new_to_inner) =
       ConstructPolyAccesses(op_domain, stmt, scop_info_.analysis_result_.GetAccessMap());
-    for (auto axis : all_axis) {
-      scop_info_.analysis_result_.RecordTensorAllAxis(axis.first, axis.second);
-    }
 
     new_reads_with_conds = new_reads.curry().intersect_domain(read_set.unbind_params(op_domain.tuple)).uncurry();
     /// has Select
 #if (SELECT_DOMAIN_OPT)
     if (scop_info_.user_config_.GetTarget() == TARGET_CCE) {
-        new_reads_with_conds = CutSetTopDown().Run(op->value, op_domain.tuple, new_reads_with_conds, read_set);
+      new_reads_with_conds = CutSetTopDown().Run(op->value, op_domain.tuple, new_reads_with_conds, read_set);
     }
 #endif
     new_writes_with_conds = new_writes.curry().intersect_domain(write_set.unbind_params(op_domain.tuple)).uncurry();
@@ -693,14 +688,8 @@ class ScopMakeScheduleTree final : protected IRVisitor {
 
     // Update the reads/writes sets of scop_info by analyzing the condition
     Stmt condition = Stmt(GetObjPtr<Object>(cond.get()));
-
-    std::unordered_map<std::string, std::vector<std::string>> all_axis;
-    std::tie(new_reads, new_writes, new_to_inner, all_axis) =
+    std::tie(new_reads, new_writes, new_to_inner) =
       ConstructPolyAccesses(op_domain, condition, scop_info_.analysis_result_.GetAccessMap());
-    for (auto axis : all_axis) {
-      scop_info_.analysis_result_.RecordTensorAllAxis(axis.first, axis.second);
-    }
-
     StmtOpInfo stmt_op_Info;
     for (auto a : new_reads.get_map_list()) {
       auto tensor_id = a.get_tuple_id(isl_dim_out);
@@ -721,10 +710,10 @@ class ScopMakeScheduleTree final : protected IRVisitor {
     auto ec = ExtractCond();
     std::vector<Expr> cond_vec;
     if (scop_info_.user_config_.GetTarget() == TARGET_CCE) {
-        cond_vec = ec.run(cond);
-        if (!ec.hasBothOrAndAnd()) {
-            cut_set = CutSet(cond_vec, set, false, ec.IsOr());
-        }
+      cond_vec = ec.run(cond);
+      if (!ec.hasBothOrAndAnd()) {
+        cut_set = CutSet(cond_vec, set, false, ec.IsOr());
+      }
     }
 #endif
     static_cast<void>(MakeScheduleTreeHelper(op->then_case, scop_info_, cut_set, outer, macro_stmt));
@@ -732,11 +721,11 @@ class ScopMakeScheduleTree final : protected IRVisitor {
     // Build schedule for the else case without updating the schedule if defined
     if (op->else_case.defined()) {
 #if (SELECT_DOMAIN_OPT)
-        if (scop_info_.user_config_.GetTarget() == TARGET_CCE) {
-            if (!ec.hasBothOrAndAnd()) {
-                cut_set = CutSet(cond_vec, set, true, !ec.IsOr());
-            }
+      if (scop_info_.user_config_.GetTarget() == TARGET_CCE) {
+        if (!ec.hasBothOrAndAnd()) {
+          cut_set = CutSet(cond_vec, set, true, !ec.IsOr());
         }
+      }
 #endif
       static_cast<void>(MakeScheduleTreeHelper(op->else_case, scop_info_, cut_set, outer, macro_stmt));
     }
@@ -769,13 +758,8 @@ class ScopMakeScheduleTree final : protected IRVisitor {
           stmt = AttrStmt::make(item->node, item->attr_key, item->value, stmt);
         }
       }
-
-      std::unordered_map<std::string, std::vector<std::string>> all_axis;
-      std::tie(new_reads, new_writes, new_to_inner, all_axis) =
+      std::tie(new_reads, new_writes, new_to_inner) =
         ConstructPolyAccesses(op_domain, stmt, scop_info_.analysis_result_.GetAccessMap());
-      for (auto axis : all_axis) {
-        scop_info_.analysis_result_.RecordTensorAllAxis(axis.first, axis.second);
-      }
 
       ParseStmtOps(id, op, scop_info_.analysis_result_, new_reads, new_writes);
 

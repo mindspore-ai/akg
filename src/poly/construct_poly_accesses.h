@@ -30,10 +30,10 @@ namespace poly {
 
 std::pair<isl::map, isl::map> ConstructPolyAccess(const OperatorDomainSpace &domain, const Node *op,
                                                   const std::string &tensor, const Array<Expr> &dimensions,
-                                                  AccessMap &accesses, std::vector<std::string> &tensor_axis);
+                                                  AccessMap &accesses);
 
-std::tuple<isl::union_map, isl::union_map, isl::union_map, std::unordered_map<std::string, std::vector<std::string>>>
-ConstructPolyAccesses(const OperatorDomainSpace &domain, const Stmt &s, AccessMap &accesses);
+std::tuple<isl::union_map, isl::union_map, isl::union_map> ConstructPolyAccesses(const OperatorDomainSpace &domain,
+                                                                                 const Stmt &s, AccessMap &accesses);
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

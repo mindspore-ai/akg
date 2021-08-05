@@ -16,13 +16,13 @@
 
 #include "mapping_outer_band.h"
 #include "poly/schedule_pass_gpu/operator_mapping_strategy.h"
-
-#include <numeric>
-
+#include "poly/gpu_emit/gpu_isl_emitter.h"
 #include "poly/schedule_tree_util.h"
+#include "poly/reduce_manager.h"
 #include "poly/sync_manager.h"
 #include "poly/scop.h"
-#include "poly/gpu_emit/gpu_isl_emitter.h"
+
+#include <numeric>
 
 namespace akg {
 namespace ir {
@@ -635,8 +635,8 @@ isl::schedule MappingOuterBand::Run(isl::schedule sch) {
   }
 
   if (scop_info_.user_config_.GetEnableAkgReduceLib()) {
-    ReduceMappingStrategy reduce_op(pass_info_, scop_info_);
-    sch = reduce_op.DetectAndMarkReduce(sch);
+    ReduceManager reduce_manager(pass_info_, scop_info_);
+    sch = reduce_manager.DetectAndMarkReduce(sch);
   }
 
   sch = DoThreadMapping(sch);
