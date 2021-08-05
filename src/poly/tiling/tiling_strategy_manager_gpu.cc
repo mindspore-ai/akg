@@ -309,16 +309,22 @@ void ReduceStrategy::AddGpuConstraint() {
     reduce_axes_.emplace_back(axis);
   });
   all_reduce_ = reduce_axes_.size() == depth;
-  if (reduce_length <= 32) {
-    if (!analyzer_->scop_info_.user_config_.EnableStitchFusion()) {
+
+  if (!analyzer_->scop_info_.user_config_.EnableStitchFusion()) {
+    if (reduce_length <= 32) {
       analyzer_->scop_info_.user_config_.SetEnableOneDimThread(true);
     }
-    analyzer_->scop_info_.user_config_.SetEnableAkgReduceLib(false);
+    if ((analyzer_->scop_info_.analysis_result_.GetReduceDirection() == Y_DIRECTION && reduce_length <= 32) ||
+        (analyzer_->scop_info_.analysis_result_.GetReduceDirection() == X_DIRECTION && reduce_length < 32)) {
+      analyzer_->scop_info_.user_config_.SetEnableAkgReduceLib(false);
+    }
   }
+
   if (!analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib()) {
     DisableReduceMapping();
+  } else {
+    AkgReduceLibStrategyOnGpu();
   }
-  AkgReduceLibStrategyOnGpu();
 }
 
 void ReduceStrategy::DisableReduceMapping() {
