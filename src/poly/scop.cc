@@ -189,7 +189,6 @@ isl::schedule Scop::Transform(const isl::schedule &input_schedule) {
     info_.DumpTransform("scalar_transform.log", pass_stra->pass_info_);
   }
 
-  if (final_schedule.get()) info_.analysis_result_.SetTransformedSchedule(final_schedule);
   return final_schedule;
 }  // namespace poly
 
@@ -221,6 +220,7 @@ size_t &AstNodeNum() {
 }
 constexpr auto AST_NODE_ID_PREFIX = "__node_";
 Stmt GenHalide(ScopInfo &info, const isl::schedule &sch, bool used_for_tile_out_band) {
+  if (sch.get()) info.analysis_result_.SetTransformedSchedule(sch);
   if (!used_for_tile_out_band) {
     // we should check the return value to be isl_stat_ok, but it returns isl_stat_error, so we skip this check.
     static_cast<void>(isl_options_set_ast_build_group_coscheduled(sch.ctx().get(), isl_bool_true));
