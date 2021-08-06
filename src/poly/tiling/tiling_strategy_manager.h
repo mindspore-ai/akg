@@ -352,6 +352,8 @@ class GpuStrategy : public TilingStrategy {
   std::vector<TileAxis::MappingConstraint> block_binding_spaces_;   // [block.x, block.y, block.z]
 
  private:
+  void ShowOptions();
+
   void DetermineTemplate();
   void AdjustThreadMappingLimit();
 
