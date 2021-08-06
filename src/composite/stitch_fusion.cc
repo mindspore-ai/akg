@@ -257,9 +257,9 @@ Stmt EmitNewAllocate(Stmt &stmt, const std::unordered_set<const Store *> &new_al
                      std::unordered_map<std::string, StitchBufferInfo> &stitch_buffer_map) {
   for (auto &store : new_allocate) {
     CHECK(stitch_buffer_map.count(store->buffer_var->name_hint));
-    stmt = Allocate::make(store->buffer_var, Float(32),
-                          {static_cast<int>(stitch_buffer_map[store->buffer_var->name_hint].alloc_size)}, const_true(),
-                          stmt);
+    auto info = stitch_buffer_map[store->buffer_var->name_hint];
+    stmt = Allocate::make(store->buffer_var, info.dtype, {static_cast<int>(info.alloc_size) / info.dtype.bytes()},
+                          const_true(), stmt);
     stmt = AttrStmt::make(store->buffer_var, air::ir::attr::storage_scope, StringImm::make("shared"), stmt);
   }
   return stmt;
