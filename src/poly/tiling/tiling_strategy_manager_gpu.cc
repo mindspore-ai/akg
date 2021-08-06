@@ -313,10 +313,12 @@ void ReduceStrategy::AddGpuConstraint() {
   if (!analyzer_->scop_info_.user_config_.EnableStitchFusion()) {
     if (reduce_length <= 32) {
       analyzer_->scop_info_.user_config_.SetEnableOneDimThread(true);
+      analyzer_->GetTileLogger().AppendLine(GPU_MAPPING, "ReduceLength <= 32, enable onedim thread.");
     }
     if ((analyzer_->scop_info_.analysis_result_.GetReduceDirection() == Y_DIRECTION && reduce_length <= 32) ||
         (analyzer_->scop_info_.analysis_result_.GetReduceDirection() == X_DIRECTION && reduce_length < 32)) {
       analyzer_->scop_info_.user_config_.SetEnableAkgReduceLib(false);
+      analyzer_->GetTileLogger().AppendLine(GPU_MAPPING, "Small Reduction (Y<=32, X<32), disable akg reduce lib.");
     }
   }
 
@@ -744,7 +746,22 @@ void GpuStrategy::ApplyCustomConstraint() {
   });
 }
 
+void GpuStrategy::ShowOptions() {
+  std::stringstream ss;
+  ss << "Options:\n";
+  std::string indent = "  ";
+  ss << indent << "[EnableAkgReduceLib]: " << analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib() << "\n";
+  ss << indent << "[EnableAtomicAdd]: " << analyzer_->scop_info_.user_config_.GetEnableAtomicAdd() << "\n";
+  ss << indent << "[EnableStitchFusion]: " << analyzer_->scop_info_.user_config_.EnableStitchFusion() << "\n";
+  ss << indent << "[EnableMatmul]: " << analyzer_->scop_info_.user_config_.GetEnableMatmul() << "\n";
+  ss << indent << "[EnableTensorCore]: " << analyzer_->scop_info_.user_config_.GetEnableTensorCore() << "\n";
+  ss << indent << "[EnableConvTensorCore]: " << analyzer_->scop_info_.user_config_.GetEnableConvTensorCore() << "\n";
+  ss << indent << "[EnableOneDimThread]: " << analyzer_->scop_info_.user_config_.GetEnableOneDimThread() << "\n";
+  analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
+}
+
 void GpuStrategy::AddGpuConstraint() {
+  ShowOptions();
   InitMappingLimit();
   if (!analyzer_->scop_info_.user_config_.GetIsTuning()) {
     if (template_ == Template::BROADCAST_OP || template_ == Template::CUSTOM_CONFIG) {
@@ -1033,6 +1050,13 @@ void GpuStrategy::BuildAxesQueue() {
       axis->block_constraints.map_extent_ == 0 ? r->value : axis->block_constraints.map_extent_;
     axis->thread_constraints.map_extent_ =
       axis->thread_constraints.map_extent_ == 0 ? r->value : axis->thread_constraints.map_extent_;
+    if (!axis->mc_sup && !analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib()) {
+      axis->block_constraints.map_extent_ = 1;
+      axis->thread_constraints.map_extent_ = 1;
+      std::stringstream ss;
+      ss << "Axis " << axis->index << "_" << axis->dim_axis << " Coincidence = 0 and Akg-reduce-lib not enabled, disable block/thread mapping.";
+      analyzer_->GetTileLogger().AppendLog(GPU_MAPPING,  ss);
+    }
   });
 }
 
@@ -1092,14 +1116,16 @@ void GpuStrategy::InnerThreadOuterBlock() {
       tile = std::min<int64_t>(tile, tile_extent);
       axis->TileRestrainLower(tile, TileLevel::CACHE1);
       ss << ", tile = " << tile;
-      if (axis->block_constraints.map_extent_ > 1) {
-        pending_axes_.push_back(std::make_pair(axis, std::max<int64_t>(ceil(static_cast<float>(shape) / tile), 1)));
-        ss << ", map to block.";
-      }
+
       if (axis->mc_sup || analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib()) {
+        if (axis->block_constraints.map_extent_ > 1) {
+          pending_axes_.push_back(std::make_pair(axis, std::max<int64_t>(ceil(static_cast<float>(shape) / tile), 1)));
+          ss << ", map to block.";
+        }
         std::string attr_value =
           reverse_binding_ ? reduce_y_idx_pos_[inner_dim] + "_1" : mapping_idx_pos_[inner_dim] + "_1";
         axis->MarkWithAttr(AttrInfo{AT_THREAD_CFG, attr_value});
+        ss << ", mark with attr " << AT_THREAD_CFG << ": " << attr_value;
       }
       analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
     };
@@ -1149,6 +1175,7 @@ void GpuStrategy::InnerThreadOuterBlock() {
     std::string attr_value = reverse_binding_ ? reduce_y_idx_pos_[inner_dim] : mapping_idx_pos_[inner_dim];
     attr_value = attr_value + "_" + std::to_string(use);
     axis->MarkWithAttr(AttrInfo{AT_THREAD_CFG, attr_value});
+    ss << ", mark with attr " << AT_THREAD_CFG << ": " << attr_value;
     thread_cfg_map_[axis] = thread_cfg_.size() - 1;
     axis->thread_constraints.map_extent_ = use;
     auto tile = TileAfterThreadMapping(axis, inner_dim, use, item);
@@ -1233,9 +1260,9 @@ void GpuStrategy::InnerThreadOuterBlock() {
     axis->block_constraints.map_extent_ = use;
     if (analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib() || axis->mc_sup) {
       ++block_count_;
+      std::string attr_value = mapping_idx_pos_[block_count_ - 1] + "_" + std::to_string(use);
+      axis->MarkWithAttr(AttrInfo{AT_BLOCK_CFG, attr_value});
     }
-    std::string attr_value = mapping_idx_pos_[block_count_ - 1] + "_" + std::to_string(use);
-    axis->MarkWithAttr(AttrInfo{AT_BLOCK_CFG, attr_value});
 
     CHECK(axis->range_extent.as<IntImm>());
     auto extent = axis->range_extent.as<IntImm>()->value;
