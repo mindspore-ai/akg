@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # coding: utf-8
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,10 +20,11 @@ import fcntl
 import hashlib
 import akg.tvm
 from akg.global_configs import get_cuda_meta_path
+from akg.utils.util import parse_workspace, write_code
 
 
 @akg.tvm.register_func
-def dump_cuda_meta(code, ptx, thread_info):
+def dump_cuda_meta(code, ptx, thread_info, workspace=None):
     """
     Function for dumping cuda meta.
 
@@ -31,30 +32,41 @@ def dump_cuda_meta(code, ptx, thread_info):
         code: gpu code.
         ptx: ptx code.
         thread_info: thread info, written to json file.
+        workspace: workspace info, which will be allocated in global memory.
     """
+    title_dict = dict()
+
     # kernel name
     kernel_name = code.split("_kernel")[0].split(" ")[-1]
+    title_dict["kernelName"] = kernel_name
 
     # sha256 of ptx
     sha256 = hashlib.sha256()
     sha256.update(ptx.encode("utf-8"))
     hash_str = sha256.hexdigest()
+    title_dict["sha256"] = hash_str
 
     # thread info
     thread_info_dict = {
-        "blockIdx.x": "1",
-        "blockIdx.y": "1",
-        "blockIdx.z": "1",
-        "threadIdx.x": "1",
-        "threadIdx.y": "1",
-        "threadIdx.z": "1"
+        "blockIdx.x": 1,
+        "blockIdx.y": 1,
+        "blockIdx.z": 1,
+        "threadIdx.x": 1,
+        "threadIdx.y": 1,
+        "threadIdx.z": 1
     }
     for thread_tag in thread_info_dict.keys():
         if thread_tag in thread_info:
             if isinstance(thread_info[thread_tag], int):
-                thread_info_dict[thread_tag] = str(thread_info[thread_tag])
+                thread_info_dict[thread_tag] = thread_info[thread_tag]
             elif isinstance(thread_info[thread_tag], akg.tvm.expr.IntImm):
-                thread_info_dict[thread_tag] = str(thread_info[thread_tag].value)
+                thread_info_dict[thread_tag] = thread_info[thread_tag].value
+    title_dict.update(thread_info_dict)
+
+    # workspace
+    workspace_dict = parse_workspace(workspace)
+    if workspace_dict is not None:
+        title_dict["workspace"] = workspace_dict
 
     meta_path = get_cuda_meta_path()
     cuda_path = os.path.realpath(meta_path)
@@ -76,16 +88,4 @@ def dump_cuda_meta(code, ptx, thread_info):
 
     # save json file to cuda meta
     json_file = os.path.realpath(meta_path + kernel_name + ".json")
-    if os.path.exists(json_file):
-        os.remove(json_file)
-    with os.fdopen(os.open(json_file, os.O_WRONLY | os.O_CREAT, 0o400), 'w') as fo:
-        fo.write("{\n")
-        fo.write('"kernelName" : ' + '"' + kernel_name + "_kernel0" + '",\n')
-        fo.write('"blockIdx.x" : ' + thread_info_dict["blockIdx.x"] + ',\n')
-        fo.write('"blockIdx.y" : ' + thread_info_dict["blockIdx.y"] + ',\n')
-        fo.write('"blockIdx.z" : ' + thread_info_dict["blockIdx.z"] + ',\n')
-        fo.write('"threadIdx.x" : ' + thread_info_dict["threadIdx.x"] + ',\n')
-        fo.write('"threadIdx.y" : ' + thread_info_dict["threadIdx.y"] + ',\n')
-        fo.write('"threadIdx.z" : ' + thread_info_dict["threadIdx.z"] + ',\n')
-        fo.write('"sha256" : ' + '"' + hash_str + '"\n')
-        fo.write("}\n")
+    write_code(title_dict, json_file)

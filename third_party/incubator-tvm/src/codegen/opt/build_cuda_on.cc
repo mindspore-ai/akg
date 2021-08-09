@@ -26,7 +26,8 @@
 
 /*
  * 2020.8.14 - Get thread info inside BuildCUDA function,
- *             enbale dump cuda meta.
+ *             enable dump cuda meta.
+ * 2021.8.9 - Pass workspace to cuda meta dump function.
  */
 
 #if defined(__linux__)
@@ -140,8 +141,10 @@ runtime::Module BuildCUDA(Array<LoweredFunc> funcs) {
   cg.Init(output_ssa);
 
   Map<std::string, Expr> thread_info;
+  NodeRef workspace;
   for (LoweredFunc f : funcs) {
     cg.AddFunction(f);
+    workspace = f->workspace;
 
     for (const auto &axis : f->thread_axis) {
       auto thread_tag = axis->thread_tag;
@@ -169,7 +172,7 @@ runtime::Module BuildCUDA(Array<LoweredFunc> funcs) {
   }
 
   if (const auto* f = Registry::Get("dump_cuda_meta")) {
-    (*f)(code, ptx, thread_info);
+    (*f)(code, ptx, thread_info, workspace);
   }
 
   return CUDAModuleCreate(ptx, fmt, ExtractFuncInfo(funcs), code);

@@ -21,6 +21,35 @@
 #include <fstream>
 
 namespace akg {
+struct WorkspaceInfo {
+  Array<Expr> name;
+  Array<Expr> offset;
+  Array<Expr> type;
+  int64_t total_bytes{0};
+};
+
+int64_t GetTotalSize(const Array<Expr> &shape) {
+  int64_t total_sz = 1;
+  for (const auto &s : shape) {
+    if (s.as<IntImm>()) {
+      total_sz *= s.as<IntImm>()->value;
+    } else if (s.as<UIntImm>()) {
+      total_sz *= s.as<UIntImm>()->value;
+    } else {
+      LOG(FATAL) << "shape element should be of type IntImm or UIntImm";
+    }
+  }
+  return total_sz;
+}
+
+int64_t GetTotalBytesAligned(const Array<Expr> &shape, const Type &dtype, int align = 1) {
+  CHECK(align > 0);
+  int64_t total_sz = GetTotalSize(shape);
+  total_sz *= dtype.bytes();
+  total_sz = (total_sz + align - 1) / align * align;
+  return total_sz;
+}
+
 Var GetReplaceVar(const Var &var, std::unordered_map<std::string, Var> &vars, const std::string &name,
                   const StitchBufferInfo &info) {
   Var replace;
@@ -161,6 +190,21 @@ class StitchMutateGPU : public IRMutator {
     return IRMutator::Mutate_(op, s);
   }
 
+  Buffer GetReplaceBuffer(const Var &var, const StitchBufferInfo &info) {
+    CHECK(var.defined());
+    Buffer buf;
+    if (var_buf_.find(var) == var_buf_.end()) {
+      int64_t sh = info.alloc_size / info.dtype.bytes();
+      Array<Expr> shape;
+      shape.push_back(IntImm::make(Int(64), sh));
+      buf = BufferNode::make(var, info.dtype, shape, {}, 0, var->name_hint, "", -1, 0, BufferType::kDefault);
+      var_buf_[var] = buf;
+    } else {
+      buf = var_buf_[var];
+    }
+    return buf;
+  }
+
   Expr Mutate_(const Load *op, const Expr &e) final {
     Var var = op->buffer_var;
     auto name = var->name_hint;
@@ -173,6 +217,13 @@ class StitchMutateGPU : public IRMutator {
           rm_block_ = true;
           index = this->Mutate(index);
           rm_block_ = false;
+          return Load::make(op->type, replace, index, op->predicate);
+        } else {  // use workspace
+          auto buf = GetReplaceBuffer(replace, info);
+          if (workspace_.find(buf) == workspace_.end()) {
+            workspace_.insert(buf);
+          }
+          index = this->Mutate(index);
           return Load::make(op->type, replace, index, op->predicate);
         }
       }
@@ -195,6 +246,7 @@ class StitchMutateGPU : public IRMutator {
   }
 
  public:
+  std::unordered_set<NodeRef, air::ExprHash, air::NodeEqual> workspace_;
   std::unordered_set<const Store *> new_allocate_;
   std::unordered_map<NodeRef, Expr, air::NodeHash, air::NodeEqual> itervars_;
   Expr condition;
@@ -205,6 +257,7 @@ class StitchMutateGPU : public IRMutator {
   bool rm_block_{false};
   std::unordered_map<std::string, StitchBufferInfo> &stitch_buffer_map_;
   std::unordered_map<std::string, StitchBufferInfo> &buf_within_op_map_;
+  std::unordered_map<Var, Buffer, air::NodeHash, air::NodeEqual> var_buf_;
   std::vector<std::string> &allocate_revoke_;
   StitchAttrInfo &store_attr_;
   std::unordered_map<std::string, Var> vars_;
@@ -252,6 +305,34 @@ class AddCondition : public IRMutator {
   bool visit_{true};
   const Allocate *last_alloc{nullptr};
 };
+
+Stmt EmitWorkspace(Stmt &stmt, const std::unordered_set<NodeRef, air::NodeHash, air::NodeEqual> &workspace,
+                   Array<NodeRef> &workspace_args) {
+  if (workspace.empty()) {
+    return stmt;
+  }
+  WorkspaceInfo info{};
+  for (const auto &it : workspace) {
+    // Add workspace to args
+    workspace_args.push_back(it);
+    auto buf = it.as<BufferNode>();
+    CHECK(buf);
+    NodePtr<ExprNode> type_node = make_node<ExprNode>();
+    type_node->type = buf->dtype;
+    info.name.push_back(buf->name);
+    info.offset.push_back(IntImm::make(Int(64), info.total_bytes));
+    info.type.push_back(Expr(type_node));
+    info.total_bytes += GetTotalBytesAligned(buf->shape, buf->dtype);
+  }
+  // Add workspace information to stmt, which will be used later when generate the cuda kernel function.
+  Map<std::string, NodeRef> attr;
+  attr.Set("name", info.name);
+  attr.Set("offset", info.offset);
+  attr.Set("type", info.type);
+  attr.Set("total_bytes", IntImm::make(Int(64), info.total_bytes));
+  stmt = AttrStmt::make(attr, "workspace", Expr(1), stmt);
+  return stmt;
+}
 
 Stmt EmitNewAllocate(Stmt &stmt, const std::unordered_set<const Store *> &new_allocate,
                      std::unordered_map<std::string, StitchBufferInfo> &stitch_buffer_map) {
@@ -335,7 +416,7 @@ Stmt StitchFusionGpu(std::vector<Stmt> &stitch_irs, const std::string &kernel_na
                      std::unordered_map<std::string, StitchBufferInfo> &stitch_buffer_map,
                      std::unordered_map<std::string, StitchBufferInfo> &buf_within_op_map,
                      std::vector<std::string> &allocate_revoke,
-                     const std::unordered_map<std::string, NodeRef> &real_outputs) {
+                     const std::unordered_map<std::string, NodeRef> &real_outputs, Array<NodeRef> &workspace_args) {
   DumpStitchInfo(kernel_name, store_attr, stitch_buffer_map, buf_within_op_map, allocate_revoke);
   DumpStmt2File("stitch_info/" + kernel_name + "_before_stitch.cc", Block::make(stitch_irs));
   auto func = StitchMutateGPU(stitch_buffer_map, buf_within_op_map, allocate_revoke, store_attr, real_outputs);
@@ -352,6 +433,7 @@ Stmt StitchFusionGpu(std::vector<Stmt> &stitch_irs, const std::string &kernel_na
     ir = Block::make(ir, Evaluate::make(Expr("=============split===============")));
   }
   auto stmt = Block::make(stitch_irs);
+  stmt = EmitWorkspace(stmt, func.workspace_, workspace_args);
   stmt = EmitNewAllocate(stmt, func.new_allocate_, stitch_buffer_map);
   stmt = EmitUnifyIterVars(stmt, func.itervars_);
   DumpStmt2File("stitch_info/" + kernel_name + "_after_stitch.cc", stmt);
@@ -379,13 +461,6 @@ class StitchMutateAscend : public IRMutator {
   }
 
  private:
-  struct WorkspaceInfo {
-    Array<Expr> name;
-    Array<Expr> offset;
-    Array<Expr> type;
-    int64_t total_bytes{0};
-  };
-
   Stmt AddStitchBufRealize(Stmt &s) {
     auto stmt = s;
     for (auto &kv : stitch_buffer_vars_) {
@@ -486,28 +561,6 @@ class StitchMutateAscend : public IRMutator {
       }
     }
     return stmt;
-  }
-
-  int64_t GetTotalSize(const Array<Expr> &shape) {
-    int64_t total_sz = 1;
-    for (const auto &s : shape) {
-      if (s.as<IntImm>()) {
-        total_sz *= s.as<IntImm>()->value;
-      } else if (s.as<UIntImm>()) {
-        total_sz *= s.as<UIntImm>()->value;
-      } else {
-        LOG(FATAL) << "shape element should be of type IntImm or UIntImm";
-      }
-    }
-    return total_sz;
-  }
-
-  int64_t GetTotalBytesAligned(const Array<Expr> &shape, const Type &dtype, int align = 1) {
-    CHECK(align > 0);
-    int64_t total_sz = GetTotalSize(shape);
-    total_sz *= dtype.bytes();
-    total_sz = (total_sz + align - 1) / align * align;
-    return total_sz;
   }
 
   Tensor NewStitchTensor(const std::string &name, const Array<Expr> &shape, const Type &dtype,
