@@ -22,39 +22,7 @@ import hashlib
 import logging
 import akg.tvm
 from akg.global_configs import get_ascend_meta_path
-
-
-def write_code(js_dict, fname):
-    if os.path.exists(fname):
-        os.remove(fname)
-    with os.fdopen(os.open(fname, os.O_WRONLY | os.O_CREAT, 0o400), 'w') as f:
-        json.dump(js_dict, f, sort_keys=True, indent=4, separators=(',', ':'))
-
-
-def parse_int_const(value):
-    if isinstance(value, int):
-        return value
-    elif isinstance(value, (akg.tvm.expr.IntImm, akg.tvm.expr.UIntImm)):
-        return value.value
-    return None
-
-
-def parse_workspace(workspace):
-    if not isinstance(workspace, akg.tvm.container.Map):
-        return None
-
-    total_bytes = 0
-    if "total_bytes" in workspace:
-        total_bytes = parse_int_const(workspace["total_bytes"])
-
-    if total_bytes is None or total_bytes == 0:
-        return None
-
-    workspace_dict = {
-        "num": 1,
-        "size": [total_bytes]
-    }
-    return workspace_dict
+from akg.utils.util import parse_workspace, write_code
 
 
 @akg.tvm.register_func

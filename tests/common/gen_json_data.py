@@ -19,7 +19,7 @@ import json
 import logging
 import inspect
 import numpy as np
-from akg.global_configs import get_ascend_meta_path
+from akg.global_configs import get_ascend_meta_path, get_cuda_meta_path
 from tests.common.gen_random import random_gaussian
 from tests.common.test_utils import precheck
 
@@ -503,9 +503,16 @@ def conv_2d_str(inputs, output, attr):
     return res
 
 
-def gen_workspace_data(kernel_name):
+def gen_workspace_data(kernel_name, process):
     workspace_tensors = []
-    json_file = get_ascend_meta_path() + kernel_name + ".json"
+    json_file = ""
+    if process == "aicore":
+        json_file = get_ascend_meta_path() + kernel_name + ".json"
+    elif process == "cuda":
+        json_file = get_cuda_meta_path() + kernel_name + ".json"
+    else:
+        logging.warning("Invalid process: {}".format(process))
+
     if os.path.isfile(json_file):
         with open(json_file, 'r') as f:
             kernel_json = f.read()
@@ -514,6 +521,9 @@ def gen_workspace_data(kernel_name):
                 workspace_bytes = kernel_desc["workspace"]["size"]
                 item = np.full(workspace_bytes, np.nan, np.int8)
                 workspace_tensors.append(item)
+    else:
+        logging.warning("Kernel json file {} not found".format(json_file))
+
     return workspace_tensors
 
 
@@ -661,7 +671,8 @@ def gen_json_data(op_desc, with_compute=True):
         output_indexes.extend(inplace_tensors_index)
 
     # Add workspace tensors to input_for_mod
-    workspace_tensors = gen_workspace_data(op_name)
+    process = desc.get("process", None)
+    workspace_tensors = gen_workspace_data(op_name, process)
     if len(workspace_tensors) > 0:
         # workspace tensors are placed after inputs and outputs, so index in output_indexes should
         # be converted to positive number first, otherwise -1 will point to the last workspace tensor

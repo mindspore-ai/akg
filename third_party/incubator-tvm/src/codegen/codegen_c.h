@@ -40,6 +40,11 @@
  *   vectorize_scale_
  */
 
+/*
+ * 2021.08.09 - Add struct WorkspaceInfo.
+ *            - CodeGenC adds function GetWorkspaceList, PrintWorkspace.
+ */
+
 #ifndef TVM_CODEGEN_CODEGEN_C_H_
 #define TVM_CODEGEN_CODEGEN_C_H_
 
@@ -57,6 +62,13 @@ namespace air {
 namespace codegen {
 
 using namespace ir;
+
+struct WorkspaceInfo {
+  std::string name;
+  int64_t offset;
+  Type type;
+};
+
 /*!
  * \brief A base class to generate C code.
  *
@@ -192,6 +204,11 @@ class CodeGenC :
       const std::string& vec, Type t, int i, const std::string& value);
   // Get a cast type from to
   virtual std::string CastFromTo(std::string value, Type from, Type target);
+  // Get workspace information list.
+  void GetWorkspaceList(const NodeRef &workspace, std::vector<WorkspaceInfo> &list);
+  // print workspace
+  virtual void PrintWorkspace(const std::vector<WorkspaceInfo> &workspace, const std::string &workspace_keyword,
+                              std::ostream& os);
 
   // add for reduce
   bool need_reduce_lib_{false};

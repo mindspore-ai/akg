@@ -41,6 +41,10 @@
  *     VisitStmt_(const For* op)
  */
 
+/*
+ * 2021.08.09 - CodeGenC add workspace information inside kernel function.
+ */
+
 #include <iomanip>
 #include <cctype>
 #include "codegen_c.h"
@@ -104,9 +108,21 @@ void CodeGenC::AddFunction(LoweredFunc f) {
   }
 
   this->stream << "void " << f->name << "(";
+
+  std::string workspace_keyword("workspace");
+  std::vector<WorkspaceInfo> workspace;
+  GetWorkspaceList(f->workspace, workspace);
+  std::unordered_set<std::string> workspace_names;
+  for (const auto &info : workspace) {
+    workspace_names.insert(info.name);
+  }
+
   for (size_t i = 0; i < f->args.size(); ++i) {
     Var v = f->args[i];
     std::string vid = AllocVarID(v.get());
+    if (workspace_names.find(v->name_hint) != workspace_names.end()) {
+      continue;
+    }
     if (i != 0) stream << ", ";
     if (v.type().is_handle()) {
       auto it = alloc_storage_scope_.find(v.get());
@@ -129,7 +145,12 @@ void CodeGenC::AddFunction(LoweredFunc f) {
     }
     stream << ' ' << vid;
   }
+  // Add workspace parameter at last
+  if (!workspace.empty()) {
+    stream << ", int8_t* " << restrict_keyword_ << ' ' << workspace_keyword;
+  }
   stream << ") {\n";
+  PrintWorkspace(workspace, workspace_keyword, stream);
   this->PreFunctionBody(f);
   int func_scope = this->BeginScope();
   this->PrintStmt(f->body);
@@ -337,6 +358,43 @@ std::string CodeGenC::CastFromTo(std::string value, Type from, Type target) {
   this->PrintType(target, os);
   os << ")" << value << ")";
   return os.str();
+}
+
+void CodeGenC::GetWorkspaceList(const NodeRef &workspace, std::vector<WorkspaceInfo> &list) {
+  if (!workspace.defined()) {
+    return;
+  }
+  auto workspace_list = Downcast<Map<std::string, NodeRef>>(workspace);
+  CHECK(workspace_list.find("name") != workspace_list.end());
+  CHECK(workspace_list.find("offset") != workspace_list.end());
+  CHECK(workspace_list.find("type") != workspace_list.end());
+  auto name = Downcast<Array<Expr>>(workspace_list["name"]);
+  auto offset = Downcast<Array<Expr>>(workspace_list["offset"]);
+  auto type = Downcast<Array<Expr>>(workspace_list["type"]);
+  CHECK(name.size() == offset.size());
+  CHECK(name.size() == type.size());
+  for (size_t i = 0; i < name.size(); ++i) {
+    WorkspaceInfo info;
+    CHECK(name[i].as<StringImm>());
+    info.name = name[i].as<StringImm>()->value;
+    CHECK(offset[i].as<IntImm>());
+    info.offset = offset[i].as<IntImm>()->value;
+    info.type = type[i].type();
+    list.push_back(info);
+  }
+}
+
+void CodeGenC::PrintWorkspace(const std::vector<WorkspaceInfo> &workspace, const std::string &workspace_keyword,
+                              std::ostream& os) {
+  for (const auto &info : workspace) {
+    os << "  ";
+    PrintType(info.type, os);
+    os << "* " << info.name << " = (";
+    PrintType(info.type, os);
+    os << "*)(";
+    os << workspace_keyword;
+    os << " + " << info.offset << ");\n";
+  }
 }
 
 void CodeGenC::BindThreadIndex(const IterVar& iv) {

@@ -292,8 +292,9 @@ class CompositeJsonListGpu : public CompositeJsonList {
     StitchBufAlloc buf_manager(stitch_irs, alloc_map, reuse_map, clean_op_map, outputs2args_);
     buf_manager.BufferAllocReuse();
     GetRealOutputs();
-    auto stitched_ir = StitchFusionGpu(stitch_irs, merge_name_, stitch_attr, buf_manager.stitch_buffer_map,
-                                       buf_manager.buf_within_op_map, buf_manager.allocate_revoke, real_outputs_);
+    auto stitched_ir =
+      StitchFusionGpu(stitch_irs, merge_name_, stitch_attr, buf_manager.stitch_buffer_map,
+                      buf_manager.buf_within_op_map, buf_manager.allocate_revoke, real_outputs_, workspace_args_);
     return stitched_ir;
   }
 
@@ -430,7 +431,7 @@ class CompositeJsonListGpu : public CompositeJsonList {
 
   NodeRef PostprocessToBuildRst(Stmt &stmt) final {
     auto config = GetConfig();
-    Array<NodeRef> ordered_args = ReorderArgs(inputs_, outputs_, all_args_, outputs2args_);
+    Array<NodeRef> ordered_args = ReorderArgs(inputs_, outputs_, all_args_, outputs2args_, workspace_args_);
     auto rst = LowerFunc(stmt, merge_name_, config, ordered_args);
     return BuildRstNode::make(rst, merge_name_);
   }

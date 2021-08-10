@@ -191,9 +191,9 @@ class StitchBufAlloc : public IRVisitor {
         moveout_info.type = StorageType::Global;
         moveout_info.buf_name = moveout_info.buf_name + "_global";
         stitch_buffer_map[moveout_var] = moveout_info;
+        stitch_buffer_map[moveout_var].alloc_size *= total_block_;
       }
       if (!cover_overflow_size) {
-        CHECK(0) << "MEMORY OVERFLOW! NEED WORKSPACE!";
         auto covered_size = 0;
         for (const auto &iv : reuse_free_map) {
           auto moveout_info = stitch_buffer_map[iv.first];
@@ -201,6 +201,7 @@ class StitchBufAlloc : public IRVisitor {
           moveout_info.type = StorageType::Global;
           moveout_info.buf_name = moveout_info.buf_name + "_global";
           stitch_buffer_map[iv.first].type = StorageType::Global;
+          stitch_buffer_map[iv.first].alloc_size *= total_block_;
           if (static_cast<uint64_t>(covered_size) >= overflow_size) {
             break;
           }
@@ -373,7 +374,7 @@ Stmt StitchFusionGpu(std::vector<Stmt> &stitch_irs, const std::string &kernel_na
                      std::unordered_map<std::string, StitchBufferInfo> &stitch_buffer_map,
                      std::unordered_map<std::string, StitchBufferInfo> &buf_within_op_map,
                      std::vector<std::string> &allocate_revoke,
-                     const std::unordered_map<std::string, NodeRef> &real_outputs);
+                     const std::unordered_map<std::string, NodeRef> &real_outputs, Array<NodeRef> &workspace_args);
 Stmt StitchFusionAscend(std::vector<Stmt> &stitch_irs, const std::string &kernel_name,
                         std::unordered_map<std::string, NodeRef> &stitch_buffer,
                         const std::unordered_map<std::string, NodeRef> &real_outputs, Array<NodeRef> &workspace_args,
