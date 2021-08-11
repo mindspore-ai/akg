@@ -47,6 +47,7 @@ from akg.utils import validation_check as vc_util
 from akg.utils.dsl_create import TensorUtils
 from akg.backend.parsing_profiling_data import HWTSLogParser
 from akg.backend.parsing_profiling_data import validate_and_normalize_path
+from akg.backend import aic_model
 
 sh = logging.StreamHandler(sys.stdout)
 logging.getLogger().addHandler(sh)
@@ -366,36 +367,23 @@ def mod_launch_rpc(mode, mod, args, outputs, tuning=False):
     return None
 
 
-def profiling_mode_run(mod, args, outputs, tuning, device_id):
+def profiling_mode_run(kernel_name, args, outputs, tuning, device_id):
     """
     Function for collecting cycle data from device.
 
     Args:
-        mod: CCE Module.
+        kernel_name: name of kernel.
         args: list or tuple of numpy array.
         outputs: list or tuple of output argment index.
         tuning: tuning model.
         device_id: device_id on device.
     """
-    ctx = akg.tvm.ndarray.cce(device_id)
-
     tvm.get_global_func("ascend_start_profiling")(device_id)
-
-    arg_list = []
-    for a in args:
-        arg_list.append(akg.tvm.nd.array(a, ctx))
-
     time_before_launch = time.time()
-    mod(*arg_list)
-    ctx.sync()
-
+    output_data = ascend_run(kernel_name, args, outputs, device_id)
     tvm.get_global_func("ascend_stop_profiling")()
 
-    out_list = []
     cycle = profiling_analyse(device_id, time_before_launch)
-    for i in outputs:
-        out = arg_list[len(arg_list) + i if i < 0 else i].asnumpy()
-        out_list.append(out)
     logging.info('=====parsing cycles==============================')
     if cycle != PROF_ERROR_CODE:
         logging.info(cycle)
@@ -403,7 +391,6 @@ def profiling_mode_run(mod, args, outputs, tuning, device_id):
         logging.error("OOPS, can't correctly parsing cycles!")
     TestUtils.record_cycle(cycle)
     logging.info('=====parsing cycles==============================')
-    output_data = out_list[0] if len(out_list) == 1 else tuple(out_list)
     if tuning:
         return output_data, {'run_time': cycle}
     return output_data
@@ -600,19 +587,14 @@ def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=-1, expect=None
             cycles = get_gpu_cycles(mod, *mod_args, device_id=device_id, repeat_time=repeat_time)
             return out_list[0] if len(out_list) == 1 else tuple(out_list), {'run_time': cycles}
 
+    kernel_name = get_kernel_name(module.get_source())
     stat_info = {}
     profiling_mode = get_profiling_mode()
     if profiling_mode:
-        return profiling_mode_run(mod, args, outputs, tuning, device_id)
+        return profiling_mode_run(kernel_name, args, outputs, tuning, device_id)
     mode = get_runtime_mode()
-    if mode == 'aic':
+    if mode.startswith("aic"):
         output = aic_model.launch(mod, args, outputs)
-        if not tuning:
-            return output
-        ra_util.get_ticks(stat_info)
-        return output, stat_info
-    if mode == 'aic_cloud':
-        output = aic_model.launch(mod, args, outputs, spec=aic_model.Spec.CLOUD)
         if not tuning:
             return output
         ra_util.get_ticks(stat_info)
@@ -622,7 +604,6 @@ def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=-1, expect=None
 
     # The air_cloud is the current default mode and needs to be modified in the future
     if mode == 'air_cloud':
-        kernel_name = get_kernel_name(module.get_source())
         return ascend_run(kernel_name, args, outputs, device_id)
 
     if mode in ('ca', 'air', 'air_cloud'):

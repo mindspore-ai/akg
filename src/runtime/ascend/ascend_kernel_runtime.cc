@@ -23,6 +23,10 @@
 #include "runtime_error_codes.h"
 #include <climits>
 
+#ifdef USE_CCE_PROFILING
+#include "profile_mgr.h"
+#endif
+
 using std::vector;
 
 namespace air {
@@ -178,6 +182,16 @@ bool AscendKernelRuntime::Run(const std::string &kernel_name, const std::vector<
     LOG(FATAL) << "Call runtime rtKernelLaunch error, ret[" << GetErrorMsg(ret) << "]";
     return false;
   }
+#ifdef USE_CCE_PROFILING
+  uint32_t stream_id;
+  uint32_t task_id;
+  auto rt_ret = rtGetTaskIdAndStreamID(&task_id, &stream_id);
+  if (rt_ret != RT_ERROR_NONE) {
+    LOG(FATAL) << "Profiling get task_id stream_id failed";
+  }
+  auto label = std::to_string(stream_id) + "_" + std::to_string(task_id);
+  ProfileMgr::GetInstance().SetKernelLabel(label);
+#endif
   return true;
 }
 
