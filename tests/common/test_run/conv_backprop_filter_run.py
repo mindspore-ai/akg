@@ -129,7 +129,7 @@ def conv_backprop_filter_run(fmap_shape, filter_shape, pad_, stride_, dilation_,
     input_file = os.environ.get("RANDOM_DATA_DISK_PATH", "")
     expect_file = input_file + "/" + gen_kernel_name([input_shape], [conv_dtype],
                               op_attrs=[fmap_shape, filter_shape, pad_, stride_, dilation_],
-                              kernel_name='conv_backprop_filter') + ".bin"
+                              kernel_name='conv_backprop_filter', attrs=attrs) + ".bin"
 
     print("gen_data begin.")
     dy_data, dx_data, expect = gen_data(x_shape, w_shape, pad_, stride_, dilation_, expect_file, attrs=attrs)

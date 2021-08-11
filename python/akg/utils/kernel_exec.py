@@ -546,7 +546,9 @@ def ascend_run(kernel_name, args, outputs, device_id):
     return out_list[0] if len(out_list) == 1 else tuple(out_list)
 
 
-def get_kernel_name(code):
+def get_kernel_name_from_mod(mod):
+    module = mod.imported_modules[0]
+    code = module.get_source()
     kernel_name_end_pos = code.find("_kernel")
     kernel_name_start_pos = code[:kernel_name_end_pos].rfind(" ") + 1
     kernel_name = code[kernel_name_start_pos:kernel_name_end_pos]
@@ -561,7 +563,7 @@ def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=-1, expect=None
     unified run CCE kernel api.
 
     Args:
-        mod (str): CCE Module, string of runtime choose, can set ca aic and rpc.
+        mod (Module): module for runtime
         args (Union[list, tuple]): list or tuple of numpy array.
         outputs (Union[list, tuple]): list or tuple of output argment index.
         tuning (bool): tuning model.
@@ -587,7 +589,7 @@ def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=-1, expect=None
             cycles = get_gpu_cycles(mod, *mod_args, device_id=device_id, repeat_time=repeat_time)
             return out_list[0] if len(out_list) == 1 else tuple(out_list), {'run_time': cycles}
 
-    kernel_name = get_kernel_name(module.get_source())
+    kernel_name = get_kernel_name_from_mod(mod)
     stat_info = {}
     profiling_mode = get_profiling_mode()
     if profiling_mode:
@@ -625,7 +627,7 @@ def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=-1, expect=None
     raise ValueError("mode must be aic, rpc, aic_cloud, ca, compile_cloud, compile_mini, cpu, csim, ccesim or cdiff")
 
 
-def gen_kernel_name(input_shapes, input_types, op_attrs=None, kernel_name=""):
+def gen_kernel_name(input_shapes, input_types, op_attrs=None, kernel_name="", attrs=None):
     """generate kernel name."""
     dir_max_length = 250
     shape_info = ''
@@ -678,6 +680,17 @@ def gen_kernel_name(input_shapes, input_types, op_attrs=None, kernel_name=""):
     if len(kernel_name) > dir_max_length:
         logging.info("Dir name %s exceed maximal length, use first %d char as dir name.", kernel_name, dir_max_length)
         kernel_name = kernel_name[:dir_max_length]
+
+    # When the test cases is executed by multiple processes, different test cases of dynamic shape may generate
+    # the same kernel_name.json and kernel_name.o in the kernel_meta directory, and different processes
+    # will overlap and delete each other, resulting in failure.
+    # This problem can be avoided by adding process id to kernel_name.
+    if isinstance(attrs, dict) and ("dynamic" in attrs.keys() or "partial_dynamic" in attrs.keys()):
+        pid_suffix = "_" + str(os.getpid())
+        kernel_name = kernel_name + pid_suffix
+        if len(kernel_name) > dir_max_length:
+            real_kernel_name_len = dir_max_length - len(pid_suffix)
+            kernel_name = kernel_name[:real_kernel_name_len] + pid_suffix
     return kernel_name
 
 
@@ -707,7 +720,7 @@ def op_build_test(op_func, input_shapes, input_types, op_attrs=None, kernel_name
     if isinstance(attrs, dict) and 'tuning' in attrs.keys():
         kernel_name = kernel_name
     else:
-        kernel_name = gen_kernel_name(input_shapes, input_types, op_attrs, kernel_name)
+        kernel_name = gen_kernel_name(input_shapes, input_types, op_attrs, kernel_name, attrs)
     logging.debug('kernel_name---------- %s', str(kernel_name))
     mod = op_build(op_func, input_shapes, input_types, op_attrs, kernel_name,
                    attrs, log_cce, dump_ir, dump_code,

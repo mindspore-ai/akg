@@ -100,7 +100,8 @@ def conv_input_ad_run(fmap_shape, filter_shape, pad_, stride_, dilation_, attrs=
     dx_input_shapes = [y_5D_shape, kernel_shape_fractal]
 
     input_file = os.environ.get("RANDOM_DATA_DISK_PATH", "")
-    expect_file = input_file + "/" + gen_kernel_name([dx_input_shapes], [conv_dtype], op_attrs=[fmap_shape, filter_shape, pad_, stride_, dilation_, attrs], kernel_name='conv_input_ad') + ".bin"
+    expect_file = input_file + "/" + gen_kernel_name([dx_input_shapes], [conv_dtype], op_attrs=[fmap_shape, filter_shape, pad_, stride_, dilation_, attrs],
+                                                     kernel_name='conv_input_ad', attrs=attrs) + ".bin"
 
     print("gen_data begin.")
     fmap_data, filter_data, expect = gen_data_dx(fmap_shape, filter_shape, pad_, stride_, dilation_, expect_file, attrs=attrs)

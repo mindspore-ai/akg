@@ -57,7 +57,7 @@ def conv_backprop_input_run(fmap_shape, filter_shape, pad_, stride_, dilation_, 
     input_file = os.environ.get("RANDOM_DATA_DISK_PATH", "")
     expect_file = input_file + "/" + gen_kernel_name([input_shape], [conv_dtype],
                               op_attrs=[fmap_shape, filter_shape, pad_, stride_, dilation_, attrs],
-                              kernel_name='conv_backprop_input') + ".bin"
+                              kernel_name='conv_backprop_input', attrs=attrs) + ".bin"
     fmap_data, filter_data, expect = gen_data(fmap_shape, filter_shape, pad_, stride_, dilation_, expect_file, attrs=attrs)
 
     out_data = np.full(expect.shape, np.nan, 'float16')
