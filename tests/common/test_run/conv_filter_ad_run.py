@@ -179,7 +179,8 @@ def conv_filter_ad_run(fmap_shape, filter_shape, pad_, stride_, dilation_,  attr
 
     input_file = os.environ.get("RANDOM_DATA_DISK_PATH", "")
     expect_file = input_file + "/" + gen_kernel_name([dw_input_shapes], [conv_dtype],
-                              op_attrs=[fmap_shape, filter_shape, pad_, stride_, dilation_], kernel_name='conv_filter_ad') + ".bin"
+                                                     op_attrs=[fmap_shape, filter_shape, pad_, stride_, dilation_],
+                                                     kernel_name='conv_filter_ad', attrs=attrs) + ".bin"
     print("gen_data begin.")
     dy_data, dx_data, expect = gen_data_dw(x_shape, w_shape, pad_, stride_, dilation_, expect_file, attrs=attrs)
     print("gen_data finished.")

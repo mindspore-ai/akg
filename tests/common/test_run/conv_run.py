@@ -46,7 +46,8 @@ def conv_run(fmap_shape, filter_shape, pad, stride, dilation, use_bias=False, at
         input_shape = [(IN, IC // C0, IH, IW, C0), (WC // C0 * WH * WW, WN // 16, 16, C0)]
 
     input_file = os.environ.get("RANDOM_DATA_DISK_PATH", "")
-    expect_file = input_file + "/" + gen_kernel_name([input_shape], [conv_dtype], op_attrs=[fmap_shape, filter_shape, pad, stride, dilation, use_bias, attrs], kernel_name='conv') + ".bin"
+    expect_file = input_file + "/" + gen_kernel_name([input_shape], [conv_dtype], op_attrs=[fmap_shape, filter_shape, pad, stride, dilation, use_bias, attrs],
+                                                     kernel_name='conv', attrs=attrs) + ".bin"
 
     all_dynamic = 0      # kh kw pad stride
     partial_dynamic = 0  # fn fc1 fh fw wN wC
