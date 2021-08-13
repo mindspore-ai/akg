@@ -38,7 +38,7 @@ def dump_cuda_meta(code, ptx, thread_info, workspace=None):
 
     # kernel name
     kernel_name = code.split("_kernel")[0].split(" ")[-1]
-    title_dict["kernelName"] = kernel_name
+    title_dict["kernelName"] = kernel_name + "_kernel0"
 
     # sha256 of ptx
     sha256 = hashlib.sha256()
