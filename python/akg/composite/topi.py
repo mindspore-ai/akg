@@ -211,6 +211,8 @@ def StridedSlice(inputs, attrs):
     for shrink_axis in reversed(shrink_axes):
         new_shape = list(in_tensor.shape)
         new_shape.pop(shrink_axis)
+        if not new_shape:
+            return tvm.compute([1], in_tensor)
         in_tensor = tvm.compute(new_shape, lambda *indices: in_tensor(*get_old_indices(indices, shrink_axis)))
         begin.pop(shrink_axis)
         strides.pop(shrink_axis)
