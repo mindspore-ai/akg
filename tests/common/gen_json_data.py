@@ -447,6 +447,8 @@ op_dsl = {
         get_input(inputs[1][0])),
     "MatMul": lambda inputs, output, attr: matmul_str(inputs, output, attr),
     "Conv2D": lambda inputs, output, attr: conv_2d_str(inputs, output, attr),
+    "PadAkg": lambda inputs, output, attr: pad_str(inputs, output, attr),
+    "UnPadAkg": lambda inputs, output, attr: unpad_str(inputs, output, attr),
     "Asinh": lambda inputs, output, attr: "%s = np.arcsinh(%s)" %
         (output[0]['tensor_name'], get_input(inputs[0][0])),
     "Acosh": lambda inputs, output, attr: "%s = np.arccosh(%s)" %
@@ -500,6 +502,28 @@ def conv_2d_str(inputs, output, attr):
     res += ("    for j in range(out_w):\n")
     res += ("        for f in range(out_c):\n")
     res += ("            {}[:, i, j, f] = np.sum(data_pad[:, i*s_h:i*s_h+whd:d_h, j*s_w:j*s_w+wwd:d_w, :].astype('float32') *{}[f, :, :, :].astype('float32'),axis=(1, 2, 3))\n".format(output_name, shape_filter_name))
+    return res
+
+def pad_str(inputs, output, attr):
+    tail_value = get_attr(attr, "tail")
+    head_value = get_attr(attr, "head")
+    value = get_attr(attr, "pad_val")
+    pad_width = list(zip(head_value, tail_value))
+    res = "%s = np.pad(%s, %s, mode='constant', constant_values=(%s, %s))" %(
+        output[0]['tensor_name'], get_input(inputs[0][0]), pad_width, value, value)
+    return res
+
+def unpad_str(inputs, output, attr):
+    input_shape = inputs[0][0]['shape']
+    unpad_after = get_attr(attr, "tail")
+    res = ""
+    res += "m, n = {} - {}, {} - {}\n".format(input_shape[-2], unpad_after[-2], input_shape[-1], unpad_after[-1])
+    res += "if {} == 4:\n".format(len(input_shape))
+    res += "    %s = %s[:, :, :m, :n]\n" %(
+        output[0]['tensor_name'], get_input(inputs[0][0]))
+    res += "elif {} == 2:\n".format(len(input_shape))
+    res += "    %s = %s[:m, :n]\n" %(
+        output[0]['tensor_name'], get_input(inputs[0][0]))
     return res
 
 
