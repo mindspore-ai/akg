@@ -62,8 +62,8 @@ class SharedMemoryManager : public SchedulePass {
   bool CoalescingAccessWay(const isl::schedule_node &root, const isl::schedule_node &node,
                            const TensorFootprintCluster &cluster);
 
-  void OptimizeSharedDimension(std::vector<size_t> &sizes);
-  void OptimizeBankConflict(std::vector<size_t> &sizes);
+  void OptimizeSharedDimension(std::vector<size_t> &sizes, Type type);
+  void OptimizeBankConflict(std::vector<size_t> &sizes, Type type);
   void OptimizeVectorAlign(std::vector<size_t> &sizes);
 
   std::string InAtomicTensors(isl::schedule_node &node);

@@ -391,13 +391,14 @@ void SharedMemoryManager::GatherBufferFootprintDefInfo(const isl::schedule_node 
   sizes = fp_cluster->GetFixedBoxSizes();
 
   isl::id tensor_id = tensor_info.tensor_id;
+  Type type = scop_info_.GetDtypeOf(tensor_id);
 
   if (is_matmul_ && tensor_id.get_name() == GetMatmulTensorsName(scop_info_)[MATRIX_C]) {
     sizes.back() += 8;
   }
 
   if (bank_conflict_) {
-    OptimizeSharedDimension(sizes);
+    OptimizeSharedDimension(sizes, type);
   }
 
   isl::id cluster_id = tensor_info.dst_tensor_id;
@@ -408,7 +409,6 @@ void SharedMemoryManager::GatherBufferFootprintDefInfo(const isl::schedule_node 
     shapes.push_back(Expr(static_cast<int>(i)));
   }
 
-  Type type = scop_info_.GetDtypeOf(tensor_id);
   Tensor tensor = placeholder(shapes, type, cluster_id.get_name());
   const Buffer buffer = decl_buffer(shapes, scop_info_.GetDtypeOf(tensor_id), cluster_id.get_name());
   scop_info_.user_config_.SetBind(tensor, buffer);
@@ -440,7 +440,7 @@ isl::schedule_node SharedMemoryManager::HoistClusters(const isl::schedule_node &
       LOG(FATAL) << "Can not manage a scalar tensor";
     }
 
-    OptimizeSharedDimension(box_sizes);
+    OptimizeSharedDimension(box_sizes, scop_info_.GetDtypeOf(id));
 
     auto approximation_size = std::accumulate(box_sizes.begin(), box_sizes.end(), 1, std::multiplies<size_t>());
     size_t byte = Bytes(id);
@@ -484,7 +484,7 @@ isl::schedule_node SharedMemoryManager::HoistToBlockThreadMemory(isl::schedule_n
   isl::id dst_tensor_id = GpuDstId(type, tensor_id);
   auto sizes = cluster.GetFixedBoxSizes();
   if (force_last_extension_odd) {
-    OptimizeSharedDimension(sizes);
+    OptimizeSharedDimension(sizes, scop_info_.GetDtypeOf(dst_tensor_id));
   }
   auto res_node = PlaceOuterDataCopyBelow(scop_info_, tree, cluster, tensor_id, dst_tensor_id, out_schedule,
                                           schedule_.get_domain().get_space());
@@ -581,19 +581,23 @@ size_t SharedMemoryManager::Bytes(const isl::id tensor_id) {
   return static_cast<size_t>(type.bytes());
 }
 
-void SharedMemoryManager::OptimizeSharedDimension(std::vector<size_t> &sizes) {
-  OptimizeBankConflict(sizes);
+void SharedMemoryManager::OptimizeSharedDimension(std::vector<size_t> &sizes, Type type) {
+  OptimizeBankConflict(sizes, type);
   OptimizeVectorAlign(sizes);
 }
 
-void SharedMemoryManager::OptimizeBankConflict(std::vector<size_t> &sizes) {
+void SharedMemoryManager::OptimizeBankConflict(std::vector<size_t> &sizes, Type type) {
   if (sizes.back() % 2 != 0) {
     return;
   }
   if (bank_conflict_ && sizes.back() < 32) {
     sizes.back() = 33;
   } else {
-    sizes.back() += 1;
+    size_t pad = 1;
+    if (scop_info_.user_config_.HasTranspose()) {
+      pad = std::max<size_t>(1, 4 / type.bytes());
+    }
+    sizes.back() += pad;
   }
 }
 

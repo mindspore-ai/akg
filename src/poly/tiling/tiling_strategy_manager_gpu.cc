@@ -324,6 +324,9 @@ void ReduceStrategy::AddGpuConstraint() {
 
   if (!analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib()) {
     DisableReduceMapping();
+    if (analyzer_->scop_info_.analysis_result_.GetReduceDirection() == X_DIRECTION) {
+      AkgReduceLibStrategyOnGpu();
+    }
   } else {
     AkgReduceLibStrategyOnGpu();
   }
@@ -436,7 +439,11 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu() {
       AlignToPowerOfTwo(std::min<int64_t>(tx_range.second, ceil(static_cast<float>(tx_range.second) / ty_range.first)));
     tx_range.second = AlignToPowerOfTwo(std::min(tx_range.second, total_injective_size));
   } else {
-    tx_range.first = AlignToPowerOfTwo(std::min(warp_sizes_, total_reduce_size));
+    if (analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib()) {
+      tx_range.first = AlignToPowerOfTwo(std::min(warp_sizes_, total_reduce_size));
+    } else {
+      tx_range.first = 1;
+    }
     ty_range.first = AlignToPowerOfTwo(std::min<int64_t>(min_ty, total_injective_size));
     tx_range.second =
       AlignToPowerOfTwo(std::min<int64_t>(tx_range.second, ceil(static_cast<float>(tx_range.second) / ty_range.first)));
@@ -448,26 +455,38 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu() {
   auto max_coef = std::max(ty_range.second / ty_range.first, tx_range.second / tx_range.first);
   if (square_thread) {
     int coef = 1;
-    while (coef <= max_coef) {
+    while (coef < max_coef) {
       if (total_reduce_size % (ty_range.first * coef) == 0 ||
           (coef < max_coef / 2 && total_reduce_size % (ty_range.first * coef * 2) != 0)) {
         break;
       }
       coef *= 2;
     }
-    reduce_threads = ty_range.first * coef;
+    if (analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib()) {
+      reduce_threads = ty_range.first * coef;
+    }
     injective_threads = tx_range.second / coef;
   } else {
     int coef = 1;
-    while (coef <= max_coef) {
+    while (coef < max_coef) {
       if (total_reduce_size % (tx_range.second / coef) == 0 ||
           (coef < max_coef / 2 && total_reduce_size % (tx_range.second / coef / 2) != 0)) {
         break;
       }
       coef *= 2;
     }
-    reduce_threads = tx_range.second / coef;
+    if (analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib()) {
+      reduce_threads = tx_range.second / coef;
+    }
     injective_threads = ty_range.first * coef;
+    if (total_reduce_size < warp_sizes_) {
+      // we increase thread y for small reduction cases
+      while ((coef < max_coef) && (total_injective_size % injective_threads == 0) && 
+             (total_injective_size / injective_threads > min_blocks)) {
+        coef *= 2;
+        injective_threads = ty_range.first * coef;
+      }
+    }
   }
   for (auto axis : reduce_axes_) {
     for (const auto &attr : axis->attrs) {
@@ -492,22 +511,26 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu() {
   auto default_elem_per_thread = possible_reduce_blocks > 1
                                    ? std::max(std::min<int>(proposal, (possible_blocks / min_blocks + 1) / 2 * 2), 1)
                                    : IsHalfReduce() ? 64 : SpItemPerThread::FULL;
+  if (!analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib()) {
+    default_elem_per_thread = 1;
+  } else {
+    auto original_ept = default_elem_per_thread;
+    // try to increase thread loop (no more than twice as original)
+    while (possible_blocks > default_elem_per_thread && possible_blocks % default_elem_per_thread != 0) {
+      ++default_elem_per_thread;
+    }
+    if (original_ept * 2 < default_elem_per_thread) {
+      default_elem_per_thread = original_ept;
+    }
+    // try to decrease thread loop (no less than half of original)
+    while (possible_blocks > default_elem_per_thread && possible_blocks % default_elem_per_thread != 0) {
+      --default_elem_per_thread;
+    }
+    if (default_elem_per_thread * 2 < original_ept) {
+      default_elem_per_thread = original_ept;
+    }
+  }
 
-  auto original_ept = default_elem_per_thread;
-  // try to increase thread loop (no more than twice as original)
-  while (possible_blocks > default_elem_per_thread && possible_blocks % default_elem_per_thread != 0) {
-    ++default_elem_per_thread;
-  }
-  if (original_ept * 2 < default_elem_per_thread) {
-    default_elem_per_thread = original_ept;
-  }
-  // try to decrease thread loop (no less than half of original)
-  while (possible_blocks > default_elem_per_thread && possible_blocks % default_elem_per_thread != 0) {
-    --default_elem_per_thread;
-  }
-  if (default_elem_per_thread * 2 < original_ept) {
-    default_elem_per_thread = original_ept;
-  }
   std::stringstream ss;
   ss << "total_injective_size " << total_injective_size << " total_reduce_size " << total_reduce_size;
   analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
@@ -1266,7 +1289,14 @@ void GpuStrategy::InnerThreadOuterBlock() {
 
     CHECK(axis->range_extent.as<IntImm>());
     auto extent = axis->range_extent.as<IntImm>()->value;
-    axis->TileRestrainUpper(std::max<int64_t>(ceil(static_cast<float>(extent) / use), 1), TileLevel::CACHE1);
+    auto thread_size = axis->thread_constraints.map_extent_;
+    auto upper = std::max<int64_t>(ceil(static_cast<float>(extent) / use), 1);
+    bool partial_block_and_thread = (axis->c1_constraints.tile_min_.as<IntImm>()->value > upper) && (use > thread_size);
+    if (partial_block_and_thread) {
+      axis->TileRestrainToSingleValue(upper, TileLevel::CACHE1);
+    } else {
+      axis->TileRestrainUpper(upper, TileLevel::CACHE1);
+    }
     ss << ", tile range = [" << axis->c1_constraints.tile_min_ << ", " << axis->c1_constraints.tile_extent_ << "]";
     analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
   }
@@ -1515,6 +1545,9 @@ void GpuStrategy::AdjustThreadMappingLimit() {
   analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
   analyzer_->ForEachAxisTopDown([this, &map_mins](TileAxis *axis) {
     if (axis == this->analyzer_->RootAxis()) {
+      return;
+    }
+    if (!axis->mc_sup && !analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib()) {
       return;
     }
     map_mins.emplace_back(axis->thread_constraints.map_min_);
