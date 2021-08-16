@@ -62,7 +62,7 @@ picojson::value String2Json(const std::string &json_str) {
 }
 bool IsReduce(const std::string &op_name) {
   // if topi support more, add to this list
-  std::unordered_set<std::string> elems = {"ReduceSum", "ReduceMax", "ReduceMin", "Argmax", "Argmin"};
+  std::unordered_set<std::string> elems = {"ReduceSum", "ReduceProd", "ReduceMax", "ReduceMin", "Argmax", "Argmin"};
   return elems.find(op_name) != elems.end();
 }
 bool IsTransform(const std::string &op_name) {

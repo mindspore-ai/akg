@@ -37,6 +37,9 @@ __global__ void Reduce1DMultiBlock(int x_len, T *arr, T *output, int item_per_th
 
 ## 4. Updates
 
+### 2021.8.16
+- Support ProdOp, AtomicProd. Now you can use akg-reduce-lib to implement a ReduceProd kernel.
+
 ### 2021.1.12
 - Update the algorithms when those reduce-length are irregular (not the pow of 2). The new irregular reduction implementations have a better performance.
 

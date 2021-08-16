@@ -303,6 +303,17 @@ TVM_REGISTER_GLOBAL("ReduceSum").set_body([](TVMArgs args, TVMRetValue *rv) {
   TOPI_ONE_INPUT_CALL(args, rv, call);
 });
 
+TVM_REGISTER_GLOBAL("ReduceProd").set_body([](TVMArgs args, TVMRetValue *rv) {
+  CHECK_GE(args.size(), 2);
+  auto attrs = args[1].operator OpAttr();
+  CHECK(attrs.count("axis"));
+  CHECK(attrs.count("keep_dims"));
+  air::Array<air::Integer> axis = ArrayOrInt(attrs["axis"]);
+  auto keepdims = static_cast<bool>(ir::GetInt32Const(Downcast<Expr>(attrs["keep_dims"])));
+  auto call = [&axis, &keepdims](const air::Tensor &tensor) { return topi::prod(tensor, axis, keepdims); };
+  TOPI_ONE_INPUT_CALL(args, rv, call);
+});
+
 TVM_REGISTER_GLOBAL("Pow").set_body([](TVMArgs args, TVMRetValue *rv) { TOPI_TWO_INPUTS_CALL(args, rv, topi::power); });
 
 TVM_REGISTER_GLOBAL("Sub").set_body([](TVMArgs args, TVMRetValue *rv) {

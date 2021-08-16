@@ -22,7 +22,7 @@
 namespace akg_reduce {
 
 /*
-  AkgReduce supports Sum, Max, Min, And(logical), Or(logical)
+  AkgReduce supports Sum, Max, Min, And(logical), Or(logical), Prod
 */
 struct SumOp {
   // "sum" operator.
@@ -92,6 +92,20 @@ struct OrOp {
   }
 
   const static int identifier = 4;
+};
+
+struct ProdOp {
+  // "prod" operator.
+  template <typename T>
+  __device__ __forceinline__ T operator()(const T &a, const T &b) const {
+    return a * b;
+  }
+
+  // NOTE: operator "*" doesn't support const volatile half * const volatile half, we cast them.
+  __device__ __forceinline__ volatile half operator()(const volatile half &a, const volatile half &b) const {
+    return __hmul(((const half)a), ((const half)b));
+  }
+  const static int identifier = 5;
 };
 
 // Implement of AtomicMax,Min for float by AtomicCAS
@@ -218,6 +232,59 @@ __device__ void atomicOr(int *const addr, const int val) {
   } while (assumed != old);
 }
 
+/**
+ * @brief atomic return function for ProdOp
+ *
+ * @param addr return address in global memory
+ * @param val  the value in shared memory
+ */
+template <typename T>
+__device__ void AtomicProd(T *const addr, const T val) {
+  AtomicProd(addr, val);
+}
+
+__device__ void AtomicProd(int *const addr, const int val) {
+  unsigned int *const addr_as_ui = (unsigned int *)addr;
+  unsigned int old = *addr_as_ui, assumed;
+  do {
+    assumed = old;
+    old = atomicCAS(addr_as_ui, assumed, (unsigned int)(val * int(assumed)));
+  } while (assumed != old);
+}
+
+__device__ void AtomicProd(float *const addr, const float val) {
+  unsigned int *const addr_as_ui = (unsigned int *)addr;
+  unsigned int old = *addr_as_ui, assumed;
+  do {
+    assumed = old;
+    old = atomicCAS(addr_as_ui, assumed, __float_as_uint(val * __uint_as_float(assumed)));
+  } while (assumed != old);
+}
+
+__device__ void AtomicProd(double *const addr, const double val) {
+  // NOTE: since atomicCAS only support unsigned long long int, but no signed version,
+  // we use unint64 to support our transformation. In fact, __longlong_as_double is a
+  // function only for reinterpret, signed or unsigned don't change the bits in this address.
+  unsigned long long int *const addr_as_ull = (unsigned long long int *)addr;
+  unsigned long long int old = *addr_as_ull, assumed;
+  do {
+    assumed = old;
+    old = atomicCAS(addr_as_ull, assumed, __double_as_longlong(val * __longlong_as_double(assumed)));
+  } while (assumed != old);
+}
+
+#if __CUDA_ARCH__ >= 700
+__device__ void AtomicProd(half *const addr, const half val) {
+  unsigned short int *const addr_as_usi = (unsigned short int *)addr;
+  unsigned short int old = *addr_as_usi, assumed;
+  do {
+    assumed = old;
+    old = atomicCAS(addr_as_usi, assumed, __half_as_ushort(val * __ushort_as_half(assumed)));
+  } while (assumed != old);
+}
+#endif
+
+
 // AtomicOp for diverse atomic ops by identifier
 // Atomic sample in cuda: int atomicMax(int* address, int val);
 template <typename T, int identifier>
@@ -246,6 +313,11 @@ struct AtomicOp<T, 3> {
 template <typename T>
 struct AtomicOp<T, 4> {
   __device__ __forceinline__ void Compute(T *global_addr, T value) { atomicOr(global_addr, value); }
+};
+
+template <typename T>
+struct AtomicOp<T, 5> {
+  __device__ __forceinline__ void Compute(T *global_addr, T value) { AtomicProd(global_addr, value); }
 };
 
 }  // namespace akg_reduce
