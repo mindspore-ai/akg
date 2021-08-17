@@ -17,8 +17,14 @@
 """composite topi"""
 import akg.topi as topi
 from akg import tvm
+from akg.tvm.hybrid import script
 from akg.utils.format_transform import get_const
 from akg.utils import validation_check as vc_util
+
+import logging
+import os
+from pathlib import Path
+import importlib.util
 
 
 @tvm.register_func("ElemAny")
@@ -406,3 +412,76 @@ def cumprod(inputs, attrs):
         return ib.get()
     return tvm.extern(shape, [in_tensor], lambda ins, outs : kernel_ir(ins[0], outs[0]), name=output_name,
                           dtype=in_tensor.dtype)
+
+@tvm.register_func("UserDefined")
+def user_defined(inputs, attrs):
+
+    op_desc_attr = []
+    source_str = ""
+    op_imply_path = ""
+    func_name = ""
+    func_type = ""
+
+    for ext_arg in attrs.items():
+        attr_name = ext_arg[0]
+        if attr_name == "func_source_str":
+            source_str = ext_arg[1].value
+        elif attr_name == "op_imply_path":
+            op_imply_path = ext_arg[1].value
+        elif attr_name == "func_name":
+            func_name = ext_arg[1].value
+        elif attr_name == "func_type":
+            func_type = ext_arg[1].value
+        elif not (attr_name == "akg" or "_format" in attr_name):
+            # store the rest of op attr for op build
+            op_desc_attr.append(ext_arg)
+
+    op_attrs = []
+    ir_builder_attrs = {}
+    for ext_arg in op_desc_attr:
+        if func_type == "ir_builder":
+            # ir_builder functions take attrs as a dict/tvm.Map
+            ir_builder_attrs[ext_arg[0]] = ext_arg[1]
+        else:
+            op_attrs.append(ext_arg[1])
+
+    func_kernel = None
+    if len(source_str) > 0:
+        capture = locals()
+        capture["source_str"] = source_str
+
+        func_mod = compile(source_str, "", "exec")
+        exec(func_mod)
+        func_kernel = locals()[func_name]
+
+    elif len(op_imply_path) > 0:
+        if os.path.isfile(op_imply_path):
+            custom_mod_name = Path(op_imply_path).resolve().stem
+            mod_spec = importlib.util.spec_from_file_location(
+                custom_mod_name, op_imply_path)
+            custom_mod = importlib.util.module_from_spec(mod_spec)
+            mod_spec.loader.exec_module(custom_mod)
+            func_kernel = getattr(custom_mod, func_name, None)
+        else:
+            logging.error("Can't find file under path: %s",
+                          str(op_imply_path))
+    else:
+        logging.error(
+            "Neither source_str nor op_imply_path is provided in the json file")
+
+    if func_kernel is None:
+        logging.error(
+            "Failed in compiling op function from userdefine op")
+
+    output = None
+    if func_type == "hybrid":
+        hybrid_func = script(func_kernel, capture=capture)
+        inputs = list(inputs) + op_attrs
+        output = hybrid_func(*inputs)
+    elif func_type == "ir_builder":
+        output = func_kernel(inputs, ir_builder_attrs)
+    else:
+        inputs = list(inputs) + op_attrs
+        output = func_kernel(*inputs)
+
+    return output
