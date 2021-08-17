@@ -69,8 +69,8 @@ def test_alexnet_gpu_level0_perf():
 @pytest.mark.level1
 @pytest.mark.platform_x86_gpu_training
 @pytest.mark.env_onecard
-def test_alexnet_gpu_level1_perf():
-    test_network("gpu", "alexnet", "level1", check_performance=True)
+def test_alexnet_gpu_level1_tensorcore():
+    test_network("gpu", "alexnet", "level1_tensorcore", check_performance=True)
 
 
 @pytest.mark.level0
@@ -500,6 +500,13 @@ def test_resnet101_gpu_level1():
     test_network("gpu", "resnet101", "level1", check_performance=True)
 
 
+@pytest.mark.level1
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
+def test_resnet101_gpu_level1_tensorcore():
+    test_network("gpu", "resnet101", "level1_tensorcore", check_performance=True)
+
+
 @pytest.mark.level0
 @pytest.mark.platform_x86_gpu_training
 @pytest.mark.env_onecard
@@ -738,6 +745,13 @@ def test_wide_deep_gpu_level1():
     test_network("gpu", "wide_deep", "level1", check_performance=True)
 
 
+@pytest.mark.level1
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
+def test_wide_deep_gpu_level1_tensorcore():
+    test_network("gpu", "wide_deep", "level1_tensorcore", check_performance=True)
+
+
 @pytest.mark.level0
 @pytest.mark.platform_x86_gpu_training
 @pytest.mark.env_onecard
@@ -799,3 +813,10 @@ def test_yolov3_darknet53_gpu_level1_test0():
 @pytest.mark.env_onecard
 def test_yolov3_darknet53_gpu_level1_test1():
     test_network("gpu", "yolov3_darknet53", "level1", 2, 1, check_performance=True)
+
+
+@pytest.mark.level1
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
+def test_yolov3_darknet53_gpu_level1_tensorcore():
+    test_network("gpu", "yolov3_darknet53", "level1_tensorcore", check_performance=True)
