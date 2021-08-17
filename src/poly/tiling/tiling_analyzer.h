@@ -109,21 +109,6 @@ struct AttrInfo {
   std::string attr_value;
 };
 
-enum Template {
-  DEFAULT = 0,
-  PURE_ELEM,
-  BROADCAST_OP,
-  REDUCTION,
-  ALL_REDUCE,
-  BITWISE_REDUCTION,
-  MATMUL,
-  TRANSPOSE_OP,
-  PAD_OP,
-  CUSTOM_CONFIG,
-  CONV,
-  TEMPLATE_BULK
-};
-
 // valid attr_key used in AttrInfo
 constexpr auto AT_VECTORIZED = "VECTORIZED";
 constexpr auto AT_TOT = "TOT";
@@ -132,12 +117,7 @@ constexpr auto AT_DMA = "DMA";
 constexpr auto AT_DMA2 = "DMA2";
 constexpr auto AT_DMA3 = "DMA3";
 constexpr auto AT_OP_TYPE = "OP_TYPE";
-constexpr auto AT_ELEMWISE = "ELEMWISE";
-constexpr auto AT_TRANSFORM = "TRANSFORM";
-constexpr auto AT_TRANSPOSE = "TRANSPOSE";
-constexpr auto AT_PAD = "PAD";
-constexpr auto AT_BROADCAST = "BROADCAST";
-constexpr auto AT_REDUCE = "REDUCE";
+
 constexpr auto AT_REDUCE_DST_LAST = "REDUCE_DST_LAST";
 constexpr auto AT_REDUCE_SRC_LAST = "REDUCE_SRC_LAST";
 constexpr auto AT_TRANSPOSE_INNERMOST_AXIS = "TRANSPOSE_INNERMOST_AXIS";

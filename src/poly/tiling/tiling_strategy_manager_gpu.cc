@@ -899,8 +899,8 @@ void GpuStrategy::AddGpuConstraint() {
       }
     });
   }
-
-  analyzer_->RootAxis()->MarkWithAttr(AttrInfo{AT_TEMPLATE, template_map_[template_]});
+  auto template_str = analyzer_->scop_info_.analysis_result_.ShowOpTemplate(template_);
+  analyzer_->RootAxis()->MarkWithAttr(AttrInfo{AT_TEMPLATE, template_str});
   if (analyzer_->scop_info_.user_config_.GetEnableConvTensorCore()) {
     MarkMappingInRootAxis();
   }
@@ -1369,7 +1369,8 @@ void GpuStrategy::InnerThreadOuterBlock() {
 
 void GpuStrategy::SetMappingConfig() {
   std::stringstream ss;
-  ss << "Use template " << template_map_[template_];
+
+  ss << "Use template " << analyzer_->scop_info_.analysis_result_.ShowOpTemplate(template_);
   if (template_ == Template::REDUCTION) {
     ss << "(" << analyzer_->scop_info_.analysis_result_.GetReduceDirection() << ")";
   }

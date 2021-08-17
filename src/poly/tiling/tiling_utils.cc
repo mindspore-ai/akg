@@ -239,47 +239,6 @@ std::unordered_map<std::string, std::string> ExtractLoopIndicesFromMatricesConv(
   return cube_var_map;
 }
 
-VarNames VisitVarNames(const air::Expr &arg, VarNames var_names, bool add_num) {
-  if (const auto var = arg.as<air::ir::Variable>()) {
-    var_names.emplace_back(var->name_hint);
-  } else if (const auto sub = arg.as<air::ir::Sub>()) {
-    var_names = VisitVarNames(sub->a, var_names, add_num);
-    var_names = VisitVarNames(sub->b, var_names, add_num);
-  } else if (const auto add = arg.as<air::ir::Add>()) {
-    var_names = VisitVarNames(add->a, var_names, add_num);
-    var_names = VisitVarNames(add->b, var_names, add_num);
-  } else if (const auto mul = arg.as<air::ir::Mul>()) {
-    var_names = VisitVarNames(mul->a, var_names, add_num);
-    var_names = VisitVarNames(mul->b, var_names, add_num);
-  } else if (const auto div = arg.as<air::ir::Div>()) {
-    var_names = VisitVarNames(div->a, var_names, add_num);
-    var_names = VisitVarNames(div->b, var_names, add_num);
-  } else if (const auto mod = arg.as<air::ir::Mod>()) {
-    var_names = VisitVarNames(mod->a, var_names, add_num);
-    var_names = VisitVarNames(mod->b, var_names, add_num);
-  } else if (const auto int_imm = arg.as<air::ir::IntImm>()) {
-    if (add_num) {
-      var_names.emplace_back(std::to_string(int_imm->value));
-    }
-  } else if (const auto f_mod = arg.as<air::ir::FloorMod>()) {
-    var_names = VisitVarNames(f_mod->a, var_names, add_num);
-    var_names = VisitVarNames(f_mod->b, var_names, add_num);
-  } else if (const auto f_div = arg.as<air::ir::FloorDiv>()) {
-    var_names = VisitVarNames(f_div->a, var_names, add_num);
-    var_names = VisitVarNames(f_div->b, var_names, add_num);
-  }
-  return var_names;
-}
-
-bool IsNum(const std::string &name) {
-  for (auto c : name) {
-    if (c > '9' || c < '0') {
-      return false;
-    }
-  }
-  return true;
-};
-
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

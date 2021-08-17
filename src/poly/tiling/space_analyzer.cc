@@ -27,298 +27,13 @@
 namespace akg {
 namespace ir {
 namespace poly {
-class SpaceVisitor : public IRVisitor {
- public:
-  explicit SpaceVisitor(TilingAnalyzer *analyzer) : analyzer_(analyzer) {}
-  ~SpaceVisitor() override = default;
-  using ProvideEntry = SpaceAnalyzer::ProvideEntry;
-  using Tensor = SpaceAnalyzer::Tensor;
-
-  void Collect() {
-    CHECK(analyzer_);
-    this->Visit(analyzer_->Halide());
-  }
-
-  void Visit_(const AttrStmt *op) final {
-    cur_attr_ = op;
-    IRVisitor::Visit_(op);
-  }
-  void Visit_(const Realize *op) final {
-    local_buf_.insert(op->func->func_name());
-    IRVisitor::Visit_(op);
-  }
-  void Visit_(const Provide *op) final {
-    AnalyzeProvide(op);
-    IRVisitor::Visit_(op);
-  }
-  void Visit_(const For *op) final {
-    loop_count_ += 1;
-    cur_loop_ = op;
-    cur_band_.emplace_back(cur_loop_);
-    AppendAttrForLoop();
-    IRVisitor::Visit_(op);
-    cur_loop_ = op;
-    loop_count_ -= 1;
-    // end of an outer band
-    if (loop_count_ == 0) {
-      band_count_ += 1;
-      cur_band_.clear();
-    }
-  }
-  void Visit_(const IfThenElse *op) final {
-    cur_if_ = op;
-    IRVisitor::Visit_(op);
-    cur_if_ = op;
-  }
-
-  // Provides stmt after analysis.
-  std::unordered_map<const For *, std::vector<ProvideEntry>> provides_ana_;
-
- private:
-  TilingAnalyzer *analyzer_{nullptr};
-  const For *cur_loop_{nullptr};
-  const AttrStmt *cur_attr_{nullptr};
-  const IfThenElse *cur_if_{nullptr};
-  Band cur_band_;
-  int loop_count_ = 0;
-  size_t band_count_ = 0;
-  std::unordered_set<std::string> local_buf_;
-  std::unordered_map<std::string, int> op_flow_map_ = {{AT_DMA2, FLOW_DMA2}, {AT_DMA3, FLOW_DMA3}, {AT_REDUCE, FLOW_V}};
-
-  void AnalyzeProvide(const Provide *op) {
-    if (cur_loop_ == nullptr) return;
-    ProvideEntry prov;
-    std::string basic_op_type = "";
-    std::vector<Tensor> src_tensor;
-    Tensor dst_tensor;
-    std::vector<const Call *> src_call;
-    auto GetSrc = [&, this](const NodeRef &op) {
-      if (const auto call = op.as<Call>()) {
-        src_call.emplace_back(call);
-      } else if (op.as<Select>() && analyzer_->scop_info_.user_config_.GetTarget() == TARGET_CCE) {
-        basic_op_type = "CALL";
-      }
-    };
-    air::ir::PostOrderVisit(op->value, GetSrc);
-
-    for (auto call : src_call) {
-      Tensor tensor;
-      tensor.name = call->name;
-      // get variable names
-      for (auto arg : call->args) {
-        VarNames vname;
-        vname = VisitVarNames(arg, vname);
-        tensor.var_names.emplace_back(vname);
-      }
-      tensor = MatchLoopByName(tensor);
-      tensor.args = call->args;
-      tensor.band_index = band_count_;
-      tensor.type_byte = call->type.bytes();
-      src_tensor.emplace_back(tensor);
-    }
-
-    auto src_length = static_cast<int>(src_tensor.size());
-    for (auto st : src_tensor) {
-      if (st.name == "mad" || st.name == LOAD_IM2COL) {
-        basic_op_type = "SP_CALL";
-      }
-    }
-    if (analyzer_->scop_info_.user_config_.GetTarget() == TARGET_CCE && src_length > 2 && basic_op_type != "SP_CALL") {
-      LOG(WARNING) << "Detect provide has " << src_tensor.size() << " source tensors.";
-      LOG(WARNING) << "After ToThreeAddress pass, number of ops in src should be less than 2.";
-    }
-    dst_tensor.name = op->func->func_name();
-    for (auto arg : op->args) {
-      VarNames vname;
-      vname = VisitVarNames(arg, vname);
-      dst_tensor.var_names.emplace_back(vname);
-    }
-    dst_tensor = MatchLoopByName(dst_tensor);
-    dst_tensor.args = op->args;
-    dst_tensor.band_index = band_count_;
-    dst_tensor.type_byte = analyzer_->scop_info_.user_config_.GetDataBytes(dst_tensor.name);
-    prov.basic_op_type = basic_op_type.empty() ? GetBasicOpType(dst_tensor, src_tensor) : basic_op_type;
-    prov.flow = GetFlowFromBasicOpType(prov.basic_op_type);
-    prov.band_index = band_count_;
-    prov.src = src_tensor;
-    prov.dst = dst_tensor;
-    prov.op = op;
-    prov.cond = cur_if_;
-    provides_ana_[cur_loop_].emplace_back(prov);
-  }
-
-  std::unordered_set<int> GetFlowFromBasicOpType(const std::string &basic_op_type) {
-    std::unordered_set<int> flows;
-    for (auto it : op_flow_map_) {
-      if (basic_op_type.find(it.first) != std::string::npos) {
-        flows.insert(it.second);
-      }
-    }
-    if (basic_op_type.find(AT_ELEMWISE) != std::string::npos && flows.empty()) {
-      flows.insert(FLOW_V);
-    }
-    return flows;
-  }
-
-  // Match variable to loop by name since the name in current band is unique.
-  // If name is not unique, it means the axis is separated into different chunks
-  // and they will need same alignment rule.
-  Tensor MatchLoopByName(Tensor tensor) {
-    std::unordered_map<size_t, std::vector<const For *>> loop_pos;
-    for (size_t p = 0; p < tensor.var_names.size(); ++p) {
-      for (auto name : tensor.var_names[p]) {
-        for (auto i = static_cast<int>(cur_band_.size()) - 1; i >= 0; i--) {
-          const For *loop = cur_band_[i];
-          if (loop != nullptr && loop->loop_var.get()->name_hint == name) {
-            loop_pos[p].emplace_back(loop);
-            break;
-          }
-        }
-      }
-    }
-    tensor.loops = loop_pos;
-    return tensor;
-  }
-
-  std::string GetBasicOpType(const Tensor dst, const std::vector<Tensor> &srcs) {
-    auto IsNum = [](const std::string &name) -> bool {
-      for (auto c : name) {
-        if (c > '9' || c < '0') {
-          return false;
-        }
-      }
-      return true;
-    };
-
-    auto CountUniqueLoopName = [&IsNum](std::vector<VarNames> var_names) -> size_t {
-      std::unordered_set<std::string> uni_name;
-      for (auto names : var_names) {
-        for (auto n : names) {
-          if (IsNum(n)) {
-            continue;
-          }
-          uni_name.insert(n);
-        }
-      }
-      return uni_name.size();
-    };
-
-    auto GetSingleOpType = [&IsNum, &CountUniqueLoopName, this](const Tensor d, const Tensor s) -> std::string {
-      auto dst_vars = d.var_names;
-      auto src_vars = s.var_names;
-      auto dst_vars_size = CountUniqueLoopName(dst_vars);
-      auto src_vars_size = CountUniqueLoopName(src_vars);
-      std::string type = "";
-      if (analyzer_->scop_info_.user_config_.GetTarget() == TARGET_CCE) {
-        if (this->local_buf_.find(s.name) == this->local_buf_.end()) type += "DMA2_";
-        if (this->local_buf_.find(d.name) == this->local_buf_.end()) type += "DMA3_";
-      }
-      if (src_vars_size == 0 && analyzer_->scop_info_.user_config_.GetTarget() != TARGET_CUDA) {
-        return type + "SP_CALL";
-      }
-      if (dst_vars_size < src_vars_size) {
-        if (d.loops.size() < s.loops.size() && d.name != s.name) {
-          // A[i,0] = B[i,j]
-          return type + AT_REDUCE;
-        } else {
-          return type + "UNKNOWN";
-        }
-      } else if (dst_vars_size > src_vars_size) {
-        // A[i,j] = B[i,0]
-        return type + AT_BROADCAST;
-      } else {
-        // Index size is the same.
-        while (!dst_vars.empty() && !src_vars.empty()) {
-          // detect transpose first
-          VarNames dst_name = dst_vars.back();
-          VarNames src_name = src_vars.back();
-          dst_vars.pop_back();
-          src_vars.pop_back();
-          VarNames dst_pure_name;
-          VarNames src_pure_name;
-          for (auto n : dst_name) {
-            if (!IsNum(n)) {
-              dst_pure_name.emplace_back(n);
-            }
-          }
-          for (auto n : src_name) {
-            if (!IsNum(n)) {
-              src_pure_name.emplace_back(n);
-            }
-          }
-          if (dst_pure_name.size() == src_pure_name.size()) {
-            for (size_t j = 0; j < dst_pure_name.size(); ++j) {
-              if (dst_pure_name[j] != src_pure_name[j]) {
-                return type + AT_TRANSPOSE;
-              }
-            }
-          }
-        }
-        if (d.loops.size() == s.loops.size()) {
-          // A[i,j] = B[i,j]
-          return type + AT_ELEMWISE;
-        } else {
-          // AutoFused case in cuda
-          if (analyzer_->scop_info_.user_config_.GetTarget() == TARGET_CUDA && d.args.size() == s.args.size()) {
-            for (size_t i = 0; i < d.args.size(); ++i) {
-              if (Equal(d.args[i], s.args[i])) {
-                continue;
-              }
-              if (analyzer_->arith_ana_.CanProve(s.args[i] == 0)) {
-                // A[floordiv(i, 128), floormod(i, 128)] = B[0, floormod(i, 128)]
-                type += AT_BROADCAST;
-              } else if (analyzer_->arith_ana_.CanProve(d.args[i] == 0)) {
-                // A[0, floormod(i, 128)] = B[floordiv(i, 128), floormod(i, 128)]
-                type += AT_REDUCE;
-              } else {
-                type += AT_TRANSFORM;
-              }
-              type += ("|" + std::to_string(i) + "_");
-            }
-          } else {
-            // A[0,i] = B[i,i]
-            type += AT_TRANSFORM;
-          }
-          return type;
-        }
-      }
-      return type;
-    };
-
-    std::string basic_op_type = "";
-    bool is_unpad = (dst.name.find("unpad") != std::string::npos) || (dst.name.find("Unpad") != std::string::npos);
-    bool is_pad = (dst.name.find("pad") != std::string::npos || dst.name.find("Pad") != std::string::npos);
-    if (!is_unpad && is_pad) {
-      basic_op_type += AT_PAD;
-      basic_op_type += "_";
-    }
-    if (srcs.empty()) {
-      // Dst = const
-      if (this->local_buf_.find(dst.name) == this->local_buf_.end()) basic_op_type += "DMA3_";
-      basic_op_type += "INIT";
-    } else {
-      for (auto s : srcs) {
-        basic_op_type += GetSingleOpType(dst, s);
-        basic_op_type += "_";
-      }
-    }
-    return basic_op_type;
-  }
-
-  void AppendAttrForLoop() {
-    if (cur_loop_ == nullptr || cur_attr_ == nullptr) return;
-    TileAxis *axis = analyzer_->Axis(cur_loop_);
-    if (axis != nullptr) axis->MarkWithAttr(AttrInfo{"ATTR", cur_attr_->attr_key});
-    cur_attr_ = nullptr;
-  }
-};
 
 // API for analysis, used in auto tiling.
 void SpaceAnalyzer::AnalyzeSpecialAxes() {
   // Step 1: Collect info, mainly about provide stmt.
-  SpaceVisitor visitor(analyzer_);
-  visitor.Collect();
-  provides_ana_ = std::move(visitor.provides_ana_);
+  OpTypeCollector op_type_collector(analyzer_->scop_info_, analyzer_->body_);
+  op_type_collector.Collect();
+  provides_ana_ = std::move(op_type_collector.provides_ana_);
 
   // Step 2: Use analyzed info to identify tiling space for special axis.
   IdentifyInsnType();
@@ -352,7 +67,7 @@ void SpaceAnalyzer::IdentifyInsnType() {
           analyzer_->RootAxis()->MarkWithAttr(AttrInfo{AT_OP_TYPE, AT_PAD});
         } else if (ct == AT_BROADCAST) {
           MarkBroadcastAxes(pe);
-          Tensor target;
+          TensorEntry target;
           for (auto src : pe.src) {
             if (src.loops.size() < pe.dst.loops.size()) {
               target = src;
@@ -364,7 +79,7 @@ void SpaceAnalyzer::IdentifyInsnType() {
           }
           MarkInnerMostAxis({target}, AT_BROADCAST_INNERMOST_AXIS);
         } else if (ct == AT_TRANSPOSE) {
-          std::vector<Tensor> tensors = {pe.dst};
+          std::vector<TensorEntry> tensors = {pe.dst};
           for (auto src : pe.src) {
             tensors.emplace_back(src);
           }
@@ -383,7 +98,7 @@ void SpaceAnalyzer::MarkGemmAxes(const ProvideEntry &pe) {
   VarNames mx_c, mx_a, mx_b;
   int index_a = -1;
   int index_b = -1;
-  auto EmplaceVarsInTensor = [](Tensor tensor, VarNames &var_list) -> void {
+  auto EmplaceVarsInTensor = [](TensorEntry tensor, VarNames &var_list) -> void {
     for (const auto &vars_i : tensor.var_names) {
       for (const auto &name : vars_i) {
         if (IsNum(name)) {
@@ -471,7 +186,7 @@ void SpaceAnalyzer::MarkGemmAxes(const ProvideEntry &pe) {
   }
 }
 
-void SpaceAnalyzer::MarkInnerMostAxis(std::vector<Tensor> tensors, const std::string &attr_key) {
+void SpaceAnalyzer::MarkInnerMostAxis(std::vector<TensorEntry> tensors, const std::string &attr_key) {
   for (auto target : tensors) {
     for (int i = target.var_names.size() - 1; i >= 0; --i) {
       auto it = target.loops.find(i);
@@ -537,7 +252,7 @@ void SpaceAnalyzer::IdentifyVectorizedAxes() {
       if (skip) {
         continue;
       }
-      Tensor dst_tensor = pe.dst;
+      TensorEntry dst_tensor = pe.dst;
       const For *dst_last = GetBufferInnerAxis(dst_tensor);
       // skip if dst is scalar
       if (dst_last == nullptr) {
@@ -600,8 +315,8 @@ void SpaceAnalyzer::IdentifyAlignAxes() {
   for (auto it : provides_ana_) {
     std::vector<ProvideEntry> pes = it.second;
     for (auto pe : pes) {
-      std::vector<Tensor> src_tensors = pe.src;
-      Tensor dst_tensor = pe.dst;
+      std::vector<TensorEntry> src_tensors = pe.src;
+      TensorEntry dst_tensor = pe.dst;
       if (pe.basic_op_type.find(AT_TRANSPOSE) != std::string::npos) {
         const For *dst_last = GetBufferInnerAxis(dst_tensor);
         if (dst_last != nullptr) {
@@ -635,8 +350,8 @@ void SpaceAnalyzer::IdentifyAlignAxes() {
         int64_t gm_block = 1;
         const For *src_last = nullptr;
         std::string src_name = "";
-        auto IdentifySrcAlign = [this, &gm_block, &src_last, &src_name](const std::vector<Tensor> &src_tensors,
-                                                                        const Tensor dst_tensor) {
+        auto IdentifySrcAlign = [this, &gm_block, &src_last, &src_name](const std::vector<TensorEntry> &src_tensors,
+                                                                        const TensorEntry dst_tensor) {
           for (auto src : src_tensors) {
             if (src.name != dst_tensor.name) {
               src_last = GetBufferInnerAxis(src);
@@ -684,7 +399,7 @@ void SpaceAnalyzer::IdentifyAlignAxes() {
   }
 }
 
-const For *SpaceAnalyzer::GetBufferInnerAxis(Tensor t, int offset) {
+const For *SpaceAnalyzer::GetBufferInnerAxis(TensorEntry t, int offset) {
   int last_dim = static_cast<int>(t.var_names.size()) - offset;
   auto it = t.loops.find(last_dim);
   if (it != t.loops.end() && it->second.size() == 1U) return it->second[0];
@@ -717,7 +432,7 @@ void SpaceAnalyzer::IdentifyReduceAxes() {
       } else {
         MarkAttr(dst_last, AT_REDUCE_DST_LAST, pe.dst.name);
       }
-      for (Tensor src : pe.src) {
+      for (TensorEntry src : pe.src) {
         if (src.name == pe.dst.name) continue;
         const For *src_last = GetBufferInnerAxis(src);
         MarkAttr(src_last, AT_REDUCE_SRC_LAST, src.name);
@@ -853,7 +568,7 @@ void SpaceAnalyzer::IdentifyModAxes() {
     }
     return res;
   };
-  auto Process = [this, GetModValue](Tensor t) {
+  auto Process = [this, GetModValue](TensorEntry t) {
     for (size_t a = 0; a < t.args.size(); ++a) {
       std::vector<Expr> constraints;
       constraints = FindModConstraint(t.args[a], constraints);
@@ -914,8 +629,8 @@ void SpaceAnalyzer::IdentifyCastAxes() {
   for (auto it : provides_ana_) {
     std::vector<ProvideEntry> pes = it.second;
     for (auto pe : pes) {
-      Tensor dst = pe.dst;
-      std::vector<Tensor> srcs = pe.src;
+      TensorEntry dst = pe.dst;
+      std::vector<TensorEntry> srcs = pe.src;
       std::string attr_value = "";
       for (auto s : srcs) {
         if (dst.type_byte == s.type_byte) continue;
@@ -1096,7 +811,7 @@ void SpaceAnalyzer::SetAttrForTensor(const std::string &tensor_name, int pos, co
   for (auto it : provides_ana_) {
     std::vector<ProvideEntry> pes = it.second;
     for (auto pe : pes) {
-      Tensor dst = pe.dst;
+      TensorEntry dst = pe.dst;
       if (IsNameMatch(dst.name, tensor_name)) {
         if (target == nullptr) {
           if (pos >= static_cast<int>(dst.var_names.size())) {
@@ -1118,7 +833,7 @@ void SpaceAnalyzer::SetAttrForTensor(const std::string &tensor_name, int pos, co
           found = true;
         }
       }
-      for (Tensor src : pe.src) {
+      for (TensorEntry src : pe.src) {
         if (IsNameMatch(src.name, tensor_name)) {
           if (target == nullptr) {
             if (pos >= static_cast<int>(src.var_names.size())) {
