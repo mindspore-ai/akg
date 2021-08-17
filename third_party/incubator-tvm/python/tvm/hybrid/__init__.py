@@ -26,6 +26,7 @@ HalideIR.
 """
 
 # 2019.12.30 - Enhance function script.
+# 2021.08.17 - Update getting source logic to support UserDefined ops
 
 # TODO(@were): Make this module more complete.
 # 1. Support HalideIR dumping to Hybrid Script
@@ -95,7 +96,10 @@ def script(pyfunc=None, intrinsics=None, capture=None):
             if _is_tvm_arg_types(args):
                 _patch_intrins_to_calls(intrinsics=intrinsics)
                 _patch_intrins_to_runtime(intrinsics=intrinsics)
-                src = _pruned_source(func)
+                if capture.get("source_str"):
+                    src = capture["source_str"]
+                else:
+                    src = _pruned_source(func)
                 op = source_to_op(src, args, func.__globals__, closure_vars)
                 _unpatch_intrins_from_runtime(intrinsics=intrinsics)
                 _unpatch_intrins_from_calls(intrinsics=intrinsics)
