@@ -26,7 +26,7 @@ project(akg C CXX)
 set(AKG_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 set(TVM_DIR "${AKG_SOURCE_DIR}/third_party/incubator-tvm")
 
-if(NOT CMAKE_SYSTEM_NAME MATCHES "Windows" AND NOT USE_KC_AIR AND NOT USE_CCE_PROFILING)
+if(NOT CMAKE_SYSTEM_NAME MATCHES "Windows" AND NOT USE_KC_AIR)
   add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=0)
 endif()
 
@@ -74,7 +74,7 @@ if(NOT USE_CUDA)
     if(EXISTS ${LIB_PATH2})  # If .a not found, search .a in akg_build_dir/
       set(AKG_EXTEND_FILE ${LIB_PATH2})
       message("-- Find ${LIB_PATH2}")
-    elseif(NOT USE_KC_AIR AND NOT USE_CCE_PROFILING)  # If .a not found, search .o in akg_source_dir/prebuild
+    elseif(NOT USE_KC_AIR)  # If .a not found, search .o in akg_source_dir/prebuild
       execute_process(COMMAND bash ${AKG_SOURCE_DIR}/build.sh -o
               WORKING_DIRECTORY ${AKG_SOURCE_DIR}
               OUTPUT_VARIABLE EXEC_OUTPUT
