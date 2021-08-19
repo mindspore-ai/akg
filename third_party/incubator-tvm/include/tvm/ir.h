@@ -1278,6 +1278,8 @@ constexpr const char* promote_vectorization = "promote_vectorization";
 constexpr const char* bind_thread_x = "bind_thread_x";
 /*! \brief Mark for tensorcore interface*/
 constexpr const char* wmma_scope = "wmma_scope";
+/*! \brief Mark of tensor_of_tensor */
+constexpr const char* atomic_tot = "atomic_tot";
 
 /*!
  * \brief Mark of prefetch scope, value=offset,

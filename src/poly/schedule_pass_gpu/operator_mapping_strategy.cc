@@ -344,6 +344,91 @@ isl::schedule ConvMappingStrategy::MoveKernelHWBand(isl::schedule sch) {
   return sch;
 }
 
+size_t TOTMappingStrategy::MapThreadHelper(isl::schedule_node &thread_root) {
+  auto thread_cfg = scop_info_.user_config_.GetThreadConfig();
+  CHECK(thread_cfg != nullptr) << "thread config is null";
+  if (thread_cfg->bound < 1 || !thread_root.isa<isl::schedule_node_band>()) {
+    return 0;
+  }
+
+  int start_node_depth = thread_root.get_tree_depth();
+  // Determine max num dimension of threads that can be mapped.
+  auto n_thread_map = CountConsecutiveCoincident(thread_root);
+  if (n_thread_map < 1) {
+    return 0;
+  }
+
+  if (n_thread_map < thread_root.as<isl::schedule_node_band>().n_member()) {
+    thread_root = thread_root.as<isl::schedule_node_band>().split(n_thread_map);
+  }
+
+  // Map band under thread_root from inner dim to outer dim.
+  auto band_node = thread_root.as<isl::schedule_node_band>();
+  auto partial_schedule = band_node.get_partial_schedule();
+  auto upa_list = partial_schedule.get_union_pw_aff_list();
+
+  std::unordered_map<int, std::string> tot_mapping = GetRequiredMappingCfg(thread_cfg);
+  auto prefix_upa_list = GetPrefixPartialSchedule(partial_schedule, thread_root, true);
+  thread_root = CheckMapSizeAndApplyTile(thread_root, prefix_upa_list, thread_cfg, true, tot_mapping);
+  thread_root = thread_root.insert_mark(isl::id(thread_root.ctx(), THREAD_MARKER)).child(0);
+
+  std::unordered_set<std::string> outer_mapping_cfg = {SKIP_MARKER};
+  Mapping mapping;
+  thread_root = InsertRequiredMappingFilter(thread_root, upa_list, thread_cfg, mapping, tot_mapping, outer_mapping_cfg);
+
+  scop_info_.upa_node_mapping_.emplace_back(std::make_pair(thread_root.parent(), mapping));
+
+  int end_node_depth = thread_root.get_tree_depth() - start_node_depth;
+  thread_root = thread_root.ancestor(end_node_depth);
+  return thread_cfg->bound;
+}
+
+isl::schedule_node TOTMappingStrategy::MapBlockHelper(const isl::schedule_node &orig_node, MappingCfg *block_cfg,
+                                                      size_t n_block_map, bool check_extent,
+                                                      std::unordered_map<size_t, size_t> &map_idx_shift) {
+  auto node = orig_node;
+  auto band_node = node.as<isl::schedule_node_band>();
+  if (!band_node || !band_node.permutable()) {
+    LOG(WARNING) << "No permutable outer band node to map block.";
+    return node;
+  }
+
+  auto partial_schedule = band_node.get_partial_schedule();
+  auto upa_list = partial_schedule.get_union_pw_aff_list();
+
+  auto domain = band_node.get_schedule().get_domain();
+  isl::union_pw_aff_list range_aff_list(band_node.ctx(), static_cast<int>(upa_list.size()));
+  for (int i = upa_list.size() - 1; i >= 0; --i) {
+    auto range = upa_list.get_at(i).intersect_domain(domain);
+    range_aff_list = range_aff_list.add(range);
+  }
+
+  std::unordered_map<int, std::string> tot_mapping = GetRequiredMappingCfg(block_cfg);
+  node = CheckMapSizeAndApplyTile(node, range_aff_list, block_cfg, true, tot_mapping);
+  node = node.insert_mark(isl::id(node.ctx(), BLOCK_MARKER)).child(0);
+  Mapping mapping;
+  node = InsertRequiredMappingFilter(node, upa_list, block_cfg, mapping, tot_mapping);
+
+  scop_info_.upa_node_mapping_.emplace_back(std::make_pair(node.parent(), mapping));
+  return node;
+}
+
+std::unordered_map<int, std::string> TOTMappingStrategy::GetRequiredMappingCfg(MappingCfg *mapping_cfg) {
+  CHECK(mapping_cfg != nullptr) << "mapping config is null";
+  std::unordered_map<int, std::string> tot_mapping = {};
+  int last_axis = scop_info_.analysis_result_.GetLastAxisInScheduleTree();
+  CHECK(last_axis != -1) << "last axis is -1";
+  tot_mapping[last_axis] = mapping_cfg->GetAt(0).first;
+  for (int i = mapping_cfg->bound - 1, j = 1; i >= 0; --i) {
+    if (i == last_axis) {
+      continue;
+    }
+    tot_mapping[i] = mapping_cfg->GetAt(j).first;
+    ++j;
+  }
+  return tot_mapping;
+}
+
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

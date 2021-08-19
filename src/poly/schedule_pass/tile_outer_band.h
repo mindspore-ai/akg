@@ -24,6 +24,8 @@ namespace ir {
 namespace poly {
 
 constexpr auto KH_KW_DEPTH = 2;
+constexpr auto DIM_SIZE = 4;
+constexpr auto CUSTOM_DIM_SIZE = 6;
 
 /*
  * Tile the outer band accoding to TilingInfo. In this pass, we get the out-most band,
@@ -99,10 +101,8 @@ class TileOuterBand : public SchedulePass {
   isl::schedule_node InsertPromoteMarker(const isl::schedule_node node);
   void ResetWarpMappingConfig();
   isl::schedule_node MatmulTile(const isl::schedule_node &node);
-  void CustomMappingConfig(const std::vector<std::string> &str, const int index);
+  void CheckCustomMapping(const std::unordered_map<int, std::string> &custom_mapping_map);
   bool IsMatrixCPromoteToShared();
-
-  void CheckVectorizedForElemwiseOp(isl::schedule_node node);
 
  private:
   PassInfo &pass_info_;

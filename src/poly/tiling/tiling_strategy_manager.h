@@ -244,8 +244,27 @@ class ShiftAxisStrategy : public TilingStrategy {
   void AddNpuConstraint();
   void AddGpuConstraint();
 
+  void TileEntirely() {
+    auto interested_info = GetInterestedInfo(interested_attr_key);
+    for (auto it : interested_info) {
+      TileAxis *axis = it.first;
+      int64_t const_extent = axis->GetConstExtent();
+      if (const_extent == -1) {
+        continue;
+      }
+      shifted_axes_.insert(axis);
+      for (const auto &attr : it.second) {
+        CHECK_NE(attr.attr_value, "");
+        auto share_time = static_cast<int>(std::strtol(attr.attr_value.c_str(), nullptr, 10));
+        axis->TileRestrainToSingleValue(const_extent * (share_time + 1), CACHE1);
+        break;
+      }
+    }
+  }
+
   std::string interested_attr_key = AT_SHIFT;
-};
+  std::unordered_set<TileAxis *> shifted_axes_;
+};  // namespace poly
 
 class ModShiftAxisStrategy : public TilingStrategy {
  public:
@@ -401,6 +420,8 @@ class GpuStrategy : public TilingStrategy {
   void MarkMappingInRootAxis();
 
   int GetLocalAllocBufCount();
+  bool NeedModifyOrderOfAxis();
+  void SetCoalescedAccess();
   Template template_{Template::DEFAULT};
   bool is_reduce_op_[TEMPLATE_BULK] = {false, false, true, true, true, false};
 

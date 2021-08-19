@@ -660,73 +660,80 @@ isl::union_map RemoveReduceOpSelfDependence(ScopInfo &scop_info, PassInfo &pass_
    * value: reduce axis no. of this reduce stmt, if the no. >= 1, it is the reduce statement
    * *********************************************/
   std::unordered_map<std::string, int> is_tuple_reduce_op;
-  pass_info.dependences_.foreach_map([&scop_info, &pass_info, &preserved_dependences,
-                                      &is_tuple_reduce_op](const isl::map &m) -> void {
-    if (m.domain().get_tuple_id() != m.range().get_tuple_id()) {
-      preserved_dependences = preserved_dependences.add_map(m);
-    } else {  // self dependence
-      isl::id tuple_id = m.domain().get_tuple_id();
-      std::string tuple_id_key = tuple_id.get_name();
-      if (is_tuple_reduce_op.count(tuple_id_key) == 0) {
-        std::vector<std::string> reduce_axis_list;
-        ReduceOp res = std::make_pair(false, "");
-        ReduceAxisInfo reduce_axis_info = IsMultiAxisSelfDependence(pass_info.dependences_, tuple_id);
-        is_tuple_reduce_op[tuple_id_key] = reduce_axis_info.second;
-        if (reduce_axis_info.first) {
-          res = CheckIsStmtReduceOp(scop_info.analysis_result_.GetReads(), scop_info.analysis_result_.GetWrites(),
-                                    tuple_id, reduce_axis_list);
-          if (!(res.first || CheckIsStmtReduceOp(pass_info.dependences_, tuple_id, reduce_axis_list))) {
-            is_tuple_reduce_op[tuple_id_key] = 0;
+  pass_info.dependences_.foreach_map(
+    [&scop_info, &pass_info, &preserved_dependences, &is_tuple_reduce_op](const isl::map &m) -> void {
+      if (m.domain().get_tuple_id() != m.range().get_tuple_id()) {
+        preserved_dependences = preserved_dependences.add_map(m);
+      } else {  // self dependence
+        isl::id tuple_id = m.domain().get_tuple_id();
+        std::string tuple_id_key = tuple_id.get_name();
+        if (is_tuple_reduce_op.count(tuple_id_key) == 0) {
+          std::vector<std::string> reduce_axis_list;
+          ReduceOp res = std::make_pair(false, "");
+          ReduceAxisInfo reduce_axis_info = IsMultiAxisSelfDependence(pass_info.dependences_, tuple_id);
+          is_tuple_reduce_op[tuple_id_key] = reduce_axis_info.second;
+          if (reduce_axis_info.first) {
+            res = CheckIsStmtReduceOp(scop_info.analysis_result_.GetReads(), scop_info.analysis_result_.GetWrites(),
+                                      tuple_id, reduce_axis_list);
+            if (!(res.first || CheckIsStmtReduceOp(pass_info.dependences_, tuple_id, reduce_axis_list))) {
+              is_tuple_reduce_op[tuple_id_key] = 0;
+            }
+          }
+
+          if (is_tuple_reduce_op[tuple_id_key] >= 2) {
+            ReduceTensorInfo reduce_tensor_info;
+            reduce_tensor_info.axis_vec = reduce_axis_list;
+            reduce_tensor_info.stmt_map = isl::union_map::empty(isl::space(scop_info.ctx_, 0));
+            scop_info.analysis_result_.RecordReduceTensorInfoMap(tuple_id, reduce_tensor_info);
+          }
+
+          /***************************************************
+           * New flow of atomic add optimization on poly npu
+           * will store the reduce tensor info for npu isl emitter.
+           ****************************************************/
+          if (is_tuple_reduce_op[tuple_id_key] >= 1 && scop_info.user_config_.GetEnableAtomicAdd() &&
+              !res.second.empty()) {
+            scop_info.analysis_result_.RecordReduceOutTensors(res.second);
           }
         }
 
-        if (is_tuple_reduce_op[tuple_id_key] >= 2) {
-          ReduceTensorInfo reduce_tensor_info;
-          reduce_tensor_info.axis_vec = reduce_axis_list;
-          reduce_tensor_info.stmt_map = isl::union_map::empty(isl::space(scop_info.ctx_, 0));
-          scop_info.analysis_result_.RecordReduceTensorInfoMap(tuple_id, reduce_tensor_info);
-        }
-
-        /***************************************************
-         * New flow of atomic add optimization on poly npu
-         * will store the reduce tensor info for npu isl emitter.
-         ****************************************************/
-        if (is_tuple_reduce_op[tuple_id_key] >= 1 && scop_info.user_config_.GetEnableAtomicAdd() &&
-            !res.second.empty()) {
-          scop_info.analysis_result_.RecordReduceOutTensors(res.second);
+        // for reduce axis number is smaller than one, keep the dependences relation
+        if (is_tuple_reduce_op[tuple_id_key] <= 1) {
+          preserved_dependences = preserved_dependences.add_map(m);
         }
       }
-
-      // for reduce axis number is smaller than one, keep the dependences relation
-      if (is_tuple_reduce_op[tuple_id_key] <= 1) {
-        preserved_dependences = preserved_dependences.add_map(m);
-      }
-    }
-  });
+    });
   return preserved_dependences;
 }
 
 /*
  * Removes all self dependences in the program. Use with special care.
+ * If tensor_name_map is not empty, only the self-dependency of tensor in tensor_name_map is deleted.
  */
-isl::union_map RemoveSelfDependence(PassInfo &pass_info) {
+isl::union_map RemoveSelfDependence(PassInfo &pass_info, std::map<std::string, std::string> tensor_name_map) {
   isl::union_map preserved = isl::union_map::empty(pass_info.dependences_.get_space());
   isl::union_map removed = isl::union_map::empty(pass_info.dependences_.get_space());
-  pass_info.dependences_.foreach_map([&](const isl::map &m) -> void {
-    if (m.domain().get_tuple_id() != m.range().get_tuple_id()) {
+  pass_info.dependences_.foreach_map([&preserved, &removed, tensor_name_map](const isl::map &m) -> void {
+    auto domian_id = m.domain().get_tuple_id();
+    if (domian_id != m.range().get_tuple_id()) {
       preserved = preserved.add_map(m);
     } else {
-      removed = removed.add_map(m);
+      if (!tensor_name_map.empty() && tensor_name_map.count(domian_id.get_name()) == 0) {
+        preserved = preserved.add_map(m);
+      } else {
+        removed = removed.add_map(m);
+      }
     }
   });
   if (!removed.is_empty()) LOG(INFO) << "force remove self dependence: " << removed;
   return preserved;
 }
 
-static bool HasAllReduce(std::unordered_map<isl::id, size_t, isl::IslIdIslHash> &reduce_repo, OperatorDomainMap &domain_map) {
+static bool HasAllReduce(std::unordered_map<isl::id, size_t, isl::IslIdIslHash> &reduce_repo,
+                         OperatorDomainMap &domain_map) {
   for (auto item : domain_map) {
     auto dim = item.second.param_space.dim(isl_dim_param);
-    if ( reduce_repo.count(item.first) > 0 && dim - reduce_repo[item.first] == 0) {
+    if (reduce_repo.count(item.first) > 0 && dim - reduce_repo[item.first] == 0) {
       return true;
     }
   }

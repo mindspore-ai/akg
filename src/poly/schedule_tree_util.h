@@ -101,11 +101,15 @@ isl::schedule_node AnalysisNodeAndInsertMapFilter(const isl::schedule_node &node
                                                   isl::union_pw_aff_list upa_list, MappingCfg *mapping_cfg,
                                                   Mapping &mapping,
                                                   std::unordered_map<size_t, size_t> map_idx_shift = {});
+isl::schedule_node InsertRequiredMappingFilter(const isl::schedule_node &node, isl::union_pw_aff_list upa_list,
+                                               MappingCfg *mapping_cfg, Mapping &mapping,
+                                               std::unordered_map<int, std::string> required_mapping,
+                                               std::unordered_set<std::string> outer_mapping_cfg = {});
 isl::schedule_node InsertMapFilter(const isl::schedule_node &node, const bool is_promotion, Mapping &mapping);
 isl::schedule_node CheckMapSizeAndApplyTile(const isl::schedule_node &thread_root,
                                             const isl::union_pw_aff_list &aff_list, MappingCfg *mapping_cfg,
                                             const bool need_reverse,
-                                            std::unordered_map<int, std::string> custom_mapping = {});
+                                            std::unordered_map<int, std::string> required_mapping = {});
 
 bool IsEqualNode(const isl::schedule_node node1, const isl::schedule_node node2);
 isl::multi_union_pw_aff MapDomainToThread(const isl::schedule_node &node, MappingCfg *mapping_cfg,
@@ -114,6 +118,9 @@ isl::multi_union_pw_aff MapDomainAllWithType(const isl::schedule_node &node, Map
                                              const UpaNodeMapping &upa_node_mapping, const std::string &map_type);
 
 isl::map CreateMapIncreaseDim(isl::space space, unsigned dim);
+bool IsSubsetForIncreaseDim(const isl::map access, size_t tensor_dim, size_t node_dim);
+int GetLastAxis(const isl::schedule_node node, isl::union_map original_access,
+                std::unordered_set<std::string> skip_tensors);
 
 std::vector<isl::schedule_node> CollectFnNode(const std::function<bool(const isl::schedule_node &)> &fn,
                                               const isl::schedule_node &root);

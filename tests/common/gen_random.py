@@ -114,3 +114,72 @@ def random_gaussian(size, miu=0, sigma=8, epsilon=0, seed=None):
 def gen_epsilon(dtype):
     """Generate suggested epsilon according to data type."""
     return 1e-7 if dtype == np.float32 else 1e-3
+
+def gen_indices_tensor_scatter_add(shape1, shape2, dtype2):
+    assert dtype2 == "int32", "Currently only support int32 indices"
+    indices = np.zeros(shape2, dtype2)
+    indices = indices.reshape(-1, indices.shape[-1])
+    for i in range(indices.shape[0]):
+        update_idx = []
+        for j in range(indices.shape[1]):
+            # add outbounds situation
+            if np.random.random() < 0.1:
+                if np.random.random() < 0.5:
+                    # less than 0
+                    indices[i][j] = -1
+                else:
+                    # larger than original shape
+                    indices[i][j] = shape1[j] + 10
+            else:
+                indices[i][j] = np.random.randint(shape1[j], size=())
+    indices = indices.reshape(shape2)
+    return indices
+
+def gen_indices_gather(shape1, shape2, dtype2, axis):
+    assert dtype2 == "int32", "Currently only support int32 indices"
+    indices = np.random.randint(low=0, high=shape1[axis], size=shape2).astype(dtype2)
+    offset = np.random.choice((0, 0, 10, -10), shape2).astype(dtype2)
+    indices += offset
+    return indices
+
+def gen_indices_unsorted_segment_sum(shape1, shape2, dtype2, num):
+    # currently only support 1D
+    assert dtype2 == "int32", "Currently only support int32 indices"
+    return np.random.randint(low=0, high=num, size=shape2).astype(dtype2)
+
+def gen_indices_gather_nd(shape1, shape2, dtype2):
+    out_dim1 = 1
+    for i in range(len(shape2) - 1):
+        out_dim1 = out_dim1 * shape2[i]
+    assert dtype2 == "int32", "Currently only support int32 indices"
+    indices = np.zeros([shape2[-1], out_dim1]).astype(dtype2)
+    for i in range(shape2[-1]):
+        # add outbounds situation
+        if np.random.random() < 0.1:
+            if np.random.random() < 0.5:
+                # less than 0
+                indices[i] = np.random.randint(low=0, high=shape1[i], size=out_dim1) - 10
+            else:
+                # larger than original shape
+                indices[i] = np.random.randint(low=0, high=shape1[i], size=out_dim1) + 10
+        else:
+            indices[i] = np.random.randint(low=0, high=shape1[i], size=out_dim1)
+
+    indices = indices.transpose()
+    indices = indices.reshape(shape2)
+    return indices
+
+def gen_indices(indices_argument):
+    op_name = indices_argument.name
+    data_shape = indices_argument.data_shape
+    indices_shape = indices_argument.indices_shape
+    indices_dtype = indices_argument.indices_dtype
+    attrs = indices_argument.attrs
+    if op_name == "Gather":
+        return gen_indices_gather(data_shape, indices_shape, indices_dtype, attrs)
+    elif op_name == "GatherNd":
+        return gen_indices_gather_nd(data_shape, indices_shape, indices_dtype)
+    elif op_name == "UnsortedSegmentSum":
+        return gen_indices_unsorted_segment_sum(data_shape, indices_shape, indices_dtype, attrs)
+    assert op_name == "TensorScatterAdd", "Input OP Name Not Known!"
+    return gen_indices_tensor_scatter_add(data_shape, indices_shape, indices_dtype)

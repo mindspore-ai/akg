@@ -54,7 +54,7 @@ TileAxis::TileAxis(TileAxis *p, int i, int da, bool mc, const std::pair<std::str
   }
 }
 
-TileAxis::TileAxis(const Expr &l1_size, Expr l0_size, std::string at, TilingAnalyzer *ta, bool inner)
+TileAxis::TileAxis(const Expr &l1_size, const Expr &l0_size, const std::string &at, TilingAnalyzer *ta, bool inner)
     : forbid_iso(false), is_inner(inner), axis_type_(std::move(at)), analyzer_(ta) {
   is_pragma = true;
   range_min = MIN_TILE;
@@ -1241,7 +1241,7 @@ class LinearAccessPatternBuilder : public IRVisitor {
     {SHARED_, MEM_SCOPE_SHARED}, {LOCAL_, MEM_SCOPE_LOCAL}};
 };
 
-std::vector<TileAxis *> TilingAnalyzer::GetAxesContainsAttr(const std::string attr_key) const {
+std::vector<TileAxis *> TilingAnalyzer::GetAxesContainsAttr(const std::string &attr_key) const {
   std::vector<TileAxis *> axes;
   auto AddAxisWithAttr = [&attr_key, &axes](TileAxis *a) {
     for (const auto &attr : a->attrs) {
@@ -1255,7 +1255,7 @@ std::vector<TileAxis *> TilingAnalyzer::GetAxesContainsAttr(const std::string at
   return axes;
 }
 
-std::vector<TileAxis *> TilingAnalyzer::GetAxesOfAttr(const std::string attr_key) const {
+std::vector<TileAxis *> TilingAnalyzer::GetAxesOfAttr(const std::string &attr_key) const {
   std::vector<TileAxis *> axes;
   auto AddAxisWithAttr = [&attr_key, &axes](TileAxis *a) {
     for (const auto &attr : a->attrs) {
@@ -1269,7 +1269,7 @@ std::vector<TileAxis *> TilingAnalyzer::GetAxesOfAttr(const std::string attr_key
   return axes;
 }
 
-std::vector<TileAxis *> TilingAnalyzer::GetAxesOfAttr(const AttrInfo attr_info) const {
+std::vector<TileAxis *> TilingAnalyzer::GetAxesOfAttr(const AttrInfo &attr_info) const {
   std::vector<TileAxis *> axes;
   auto AddAxisWithAttr = [&attr_info, &axes](TileAxis *a) {
     for (const auto &attr : a->attrs) {
@@ -1355,6 +1355,7 @@ void TilingAnalyzer::AddPostTilingConstraints() {
   if (scop_info_.user_config_.GetTarget() == TARGET_CUDA) {
     ReduceStrategy reduce_strategy(this);
     ModStrategy mod_strategy(this);
+    ShiftAxisStrategy shift_strategy(this);
     GemmStrategy gemm_strategy(this);
     ConvStrategy conv_strategy(this);
     GpuDmaAnalysisStrategy dma_analysis_strategy(this);
@@ -1368,6 +1369,7 @@ void TilingAnalyzer::AddPostTilingConstraints() {
       }
       actived_strategies.push_back(&reduce_strategy);
       actived_strategies.push_back(&mod_strategy);
+      actived_strategies.push_back(&shift_strategy);
       actived_strategies.push_back(&gemm_strategy);
       actived_strategies.push_back(&conv_strategy);
       actived_strategies.push_back(&gpu_strategy);
@@ -1452,7 +1454,7 @@ void TilingAnalyzer::AddTilingConstraints() {
 
 bool TilingAnalyzer::Prepare() {
   logger_ = std::unique_ptr<TileLogger>(new (std::nothrow) TileLogger(
-  scop_info_.AddDumpDir("tiling.log"), !scop_info_.user_config_.GetDumpPolyDir().empty()));
+    scop_info_.AddDumpDir("tiling.log"), !scop_info_.user_config_.GetDumpPolyDir().empty()));
   CHECK(logger_) << "memory alloc fail.";
   // Stage 1: Analyze schedule tree.
   ScheduleTreeAnalyzer sch_ana(this, this->sch_);

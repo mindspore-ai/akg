@@ -292,7 +292,7 @@ void ReduceStrategy::AddGpuConstraint() {
       has_transpose_ = std::any_of(axis->attrs.begin(), axis->attrs.end(), HasTranspose);
     }
 
-    if (axis == analyzer_->RootAxis()) {
+    if (axis == analyzer_->RootAxis() || axis->is_inner) {
       return;
     }
     ++depth;
@@ -371,7 +371,7 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu() {
     }
   }
 
-  bool square_thread = analyzer_->scop_info_.analysis_result_.GetReduceDirection() == Y_DIRECTION && 
+  bool square_thread = analyzer_->scop_info_.analysis_result_.GetReduceDirection() == Y_DIRECTION &&
                        analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib();
   int64_t total_reduce_size = 1;
   int64_t total_injective_size = 1;
@@ -783,6 +783,63 @@ void GpuStrategy::ShowOptions() {
   analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
 }
 
+bool GpuStrategy::NeedModifyOrderOfAxis() {
+  int last_axis = analyzer_->scop_info_.analysis_result_.GetLastAxisInScheduleTree();
+  if (last_axis < 0 || last_axis >= static_cast<int>(pending_axes_.size())) {
+    return false;
+  }
+
+  int real_pos = static_cast<int>(pending_axes_.size()) - 1 - last_axis;
+  if (real_pos == 0) {
+    return false;
+  }
+
+  TileAxis *axis;
+  int64_t shape;
+  std::tie(axis, shape) = pending_axes_[real_pos];
+  pending_axes_.erase(pending_axes_.begin() + real_pos, pending_axes_.begin() + real_pos + 1);
+  pending_axes_.push_front(std::make_pair(axis, shape));
+  return true;
+}
+
+// For the tensor of tensor operator, confirm whether coalesced access is required in the calculation phase.
+void GpuStrategy::SetCoalescedAccess() {
+  isl::schedule_node root = analyzer_->sch_.get_root();
+  isl::schedule_node node = GetOuterBand(root);
+  if (!node.isa<isl::schedule_node_band>()) {
+    return;
+  }
+
+  if (analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib() || analyzer_->scop_info_.user_config_.GetEnableMatmul()) {
+    return;
+  }
+
+  auto band_node = node.as<isl::schedule_node_band>();
+  auto n_parallel_axis = CountConsecutiveCoincident(band_node);
+  node = band_node.split(n_parallel_axis);
+
+  std::unordered_set<std::string> skip_tensors = analyzer_->scop_info_.analysis_result_.GetTensorsNotPromote();
+  for (auto inner_tensor : analyzer_->scop_info_.analysis_result_.GetInnerTensor()) {
+    skip_tensors.emplace(inner_tensor);
+  }
+
+  // Get read and write tensor information.
+  auto reads_access = analyzer_->scop_info_.analysis_result_.GetReads().domain_factor_domain();
+  int last_axis = GetLastAxis(node, reads_access, skip_tensors);
+  if (last_axis != -1) {
+    analyzer_->scop_info_.analysis_result_.SetLastAxisInScheduleTree(last_axis);
+    return;
+  }
+
+  auto write_access = analyzer_->scop_info_.analysis_result_.GetWrites().domain_factor_domain();
+  last_axis = GetLastAxis(node, write_access, skip_tensors);
+  if (last_axis != -1) {
+    analyzer_->scop_info_.analysis_result_.SetLastAxisInScheduleTree(last_axis);
+    return;
+  }
+}
+
+
 void GpuStrategy::AddGpuConstraint() {
   ShowOptions();
   InitMappingLimit();
@@ -809,8 +866,16 @@ void GpuStrategy::AddGpuConstraint() {
     }
     return;
   }
+  // tensor of tensor
+  bool need_injective_speed_up = true;
+  if ((template_ == Template::PURE_ELEM || template_ == Template::BROADCAST_OP) &&
+      analyzer_->scop_info_.analysis_result_.GetTensorOfTensor()) {
+    SetCoalescedAccess();
+    need_injective_speed_up = !NeedModifyOrderOfAxis();
+  }
+
   InnerThreadOuterBlock();
-  if (template_ == Template::PURE_ELEM) {
+  if (template_ == Template::PURE_ELEM && need_injective_speed_up) {
     InjectiveSpeedup();
   }
 
@@ -2245,6 +2310,14 @@ std::pair<int64_t, int64_t> ConvStrategy::GetDivisibleFactorForMN(int64_t shape_
   return std::make_pair(1, 1);
 }
 
+void ShiftAxisStrategy::AddGpuConstraint() {
+  TileEntirely();
+  for (auto axis : shifted_axes_) {
+    axis->block_constraints.map_extent_ = 1;
+    axis->thread_constraints.map_extent_ = 1;
+  }
+}
+
 // No constraint found in cuda
 
 void ModStrategy::AddGpuConstraint() {}
@@ -2262,8 +2335,6 @@ void PassDownAttrStrategy::AddGpuConstraint() {}
 void DynamicShapeLimitStrategy::AddGpuConstraint() {}
 
 void DynamicBoundStrategy::AddGpuConstraint() {}
-
-void ShiftAxisStrategy::AddGpuConstraint() {}
 
 void ModShiftAxisStrategy::AddGpuConstraint() {}
 

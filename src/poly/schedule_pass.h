@@ -64,7 +64,7 @@ isl::schedule_constraints MakeScheduleConstraints(const isl::schedule &schedule,
 
 isl::union_map RemoveReduceOpSelfDependence(ScopInfo &scop_info, PassInfo &pass_info);
 
-isl::union_map RemoveSelfDependence(PassInfo &pass_info);
+isl::union_map RemoveSelfDependence(PassInfo &pass_info, std::map<std::string, std::string> tensor_name_map = {});
 
 isl::union_map RemoveInvariantDependence(const isl::schedule &schedule, PassInfo &pass_info, ScopInfo &scop_info);
 
@@ -101,8 +101,7 @@ std::vector<int> GetTileSizeOfLevel(const int member_size, const int dim_size, c
 /*
  * Obtain the information needed during the data promotion phase.
  */
-std::string GetPromotionTensorName(const isl::schedule_node &node, 
-                                   const std::vector<BufferDefInfo> &buffer_def_infos);
+std::string GetPromotionTensorName(const isl::schedule_node &node, const std::vector<BufferDefInfo> &buffer_def_infos);
 
 bool IsReadOrWriteTensor(const isl::schedule_node &node, const std::string read_name, const std::string write_name);
 

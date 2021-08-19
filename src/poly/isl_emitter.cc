@@ -613,6 +613,12 @@ Stmt IslEmitter::EmitUserStmtContent(const Block *block_node) {
   return stmt;
 }
 
+Stmt IslEmitter::EmitUserStmtContent(const AttrStmt *attr_node) {
+  Stmt stmt = EmitUserStmtContent(attr_node->body.get());
+  stmt = AttrStmt::make(attr_node->node, attr_node->_type_key, attr_node->value, stmt);
+  return stmt;
+}
+
 Stmt IslEmitter::EmitUserStmtContent(const Node *node) {
   if (node->IsInstance<Provide>()) {
     const auto op = static_cast<const Provide *>(node);
@@ -631,6 +637,10 @@ Stmt IslEmitter::EmitUserStmtContent(const Node *node) {
   } else if (node->IsInstance<Evaluate>()) {
     LOG(WARNING) << "found Evaluate in isl::ast_node_user";
     const auto op = static_cast<const Evaluate *>(node);
+    return EmitUserStmtContent(op);
+  } else if (node->IsInstance<AttrStmt>()) {
+    LOG(WARNING) << "found AttrStmt in isl::ast_node_user";
+    const auto op = static_cast<const AttrStmt *>(node);
     return EmitUserStmtContent(op);
   } else {
     CHECK(false) << "unknown node type in isl::ast_node_user: " << node << " " << node->_type_key;

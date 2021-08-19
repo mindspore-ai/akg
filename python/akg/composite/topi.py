@@ -485,3 +485,151 @@ def user_defined(inputs, attrs):
         output = func_kernel(*inputs)
 
     return output
+
+@tvm.register_func("GatherNd")
+def gather_nd(inputs, attrs):
+    if len(inputs) != 2:
+        raise ValueError(f"2 inputs expected, but got {len(input)}")
+    data, indices = inputs
+
+    data_shape = list(data.shape)
+    indices_shape = list(indices.shape)
+    indices_last_dim = len(indices_shape) - 1
+    left_shape = indices_shape[:indices_last_dim]
+    right_shape = data_shape[int(indices_shape[indices_last_dim]):]
+    def gen_ir(data, indices, out):
+        ib = tvm.ir_builder.create()
+        with ib.for_range_n(left_shape, 'i') as i:
+            with ib.for_range_n(right_shape, 'j') as j:
+                read_idx = []
+                inbound = True
+                for k in range(0, int(indices_shape[-1])):
+                    temp_idx = ib.load(indices, i + [k])
+                    if k == 0:
+                        inbound = tvm.all((temp_idx >= 0), (temp_idx < data_shape[k]))
+                    else:
+                        inbound = tvm.all(inbound, (temp_idx >= 0), (temp_idx < data_shape[k]))
+                    read_idx.append(temp_idx)
+                with ib.if_scope(inbound):
+                    ib.store(out, i + j, ib.load(data, read_idx + j))
+                with ib.else_scope():
+                    ib.store(out, i + j, tvm.const(0, data.dtype))
+        return ib.get()
+
+    output_name = "T_gathernd_" + data.op.name + "_" + indices.op.name
+    output_shape = left_shape + right_shape
+    out_buf = tvm.decl_buffer(output_shape, data.dtype, output_name)
+    return tvm.extern([output_shape], [data, indices], lambda ins, outs: gen_ir(ins[0], ins[1], outs[0]),
+                                          dtype=data.dtype, out_buffers=[out_buf], name=output_name)
+
+@tvm.register_func("TensorScatterAdd")
+def tensor_scatter_add(inputs, attrs):
+    if len(inputs) != 3:
+        raise ValueError(f"3 inputs expected, but got {len(input)}")
+    data, indices, updates = inputs
+    data_shape = list(data.shape)
+    indices_shape = list(indices.shape)
+    is_1d_indices = False
+    if len(indices_shape) == 1:
+        indices_shape.append(1)
+        is_1d_indices = True
+    left_shape = indices_shape[:-1]
+    right_shape = data_shape[int(indices_shape[-1]):]
+    def gen_ir(data, indices, updates, out):
+        ib = tvm.ir_builder.create()
+        with ib.for_range_n(left_shape, "i") as i:
+            with ib.for_range_n(right_shape, "j") as j:
+                index_read = i + j
+                index_write = []
+                inbound = True
+                if is_1d_indices:
+                    temp_idx = ib.load(indices, i)
+                    inbound = tvm.all((temp_idx >= 0), (temp_idx < data_shape[0]))
+                    index_write.append(temp_idx)
+                else:
+                    for k in range(0, int(indices_shape[-1])):
+                        temp_idx = ib.load(indices, i+[k])
+                        if k == 0:
+                            inbound = tvm.all((temp_idx >= 0), (temp_idx < data_shape[k]))
+                        else:
+                            inbound = tvm.all(inbound, (temp_idx >= 0), (temp_idx < data_shape[k]))
+                        index_write.append(temp_idx)
+                index_write = index_write + j
+                with ib.if_scope(inbound):
+                    temp = ib.load(updates, index_read) + ib.load(out, index_write)
+                    ib.store(out, index_write, temp)
+        return ib.get()
+
+    output_name = "T_tsa_" + data.op.name + "_" + indices.op.name + "_" + updates.op.name
+    out_buf = tvm.decl_buffer(data.shape, data.dtype, output_name)
+    return tvm.extern([data.shape], [data, indices, updates], lambda ins, outs: gen_ir(ins[0], ins[1], ins[2], outs[0]),
+                                          dtype=data.dtype, out_buffers=[out_buf], name=output_name)
+
+@tvm.register_func("UnsortedSegmentSum")
+def tensor_unsorted_segment_sum(inputs, attrs):
+    attrs = {k: v for k, v in attrs.items()}
+    num = attrs['num_segments']
+    op_id = attrs['op_id'] if 'op_id' in attrs else 0
+    if len(inputs) != 2:
+        raise ValueError(f"2 inputs expected, but got {len(input)}")
+    data, indices = inputs
+    data_shape = list(data.shape)
+    indices_shape = list(indices.shape)
+    segment_len = len(data_shape) - len(indices_shape)
+    if segment_len < 0:
+        raise ValueError(f'input rank should not be less than segment_id rank')
+    for i, v in enumerate(indices_shape):
+        if int(v) != int(data_shape[i]):
+            raise ValueError(f'input shape at dim {i} is not equal to segment_id shape at dim {i}')
+    output_shape = [num]
+    if segment_len > 0:
+        output_shape += data_shape[len(indices_shape):]
+    if len(indices_shape) > 1:
+        raise ValueError('only 1-D segment currently supported')
+
+    def gen_ir(data, indices, out):
+        ib = tvm.ir_builder.create()
+        with ib.for_range_n(indices_shape, "i") as i:
+            read_idx = ib.load(indices, i)
+            # 1-D segment
+            with ib.for_range_n(data_shape[1:], 'j') as j:
+                inbound = tvm.all((read_idx >= 0), (read_idx < num))
+                with ib.if_scope(inbound):
+                    val = ib.load(data, i + j) + ib.load(out, [read_idx] + j)
+                    ib.store(out, [read_idx] + j, val)
+        return ib.get()
+
+    output_name = "T_uss_" + data.op.name + "_" + indices.op.name
+    out_buf = tvm.decl_buffer(output_shape, data.dtype, output_name)
+    return tvm.extern([data.shape], [data, indices], lambda ins, outs: gen_ir(ins[0], ins[1], outs[0]),
+                                          dtype=data.dtype, out_buffers=[out_buf], name=output_name)
+
+@tvm.register_func("Gather")
+def gather(inputs, attrs):
+    attrs = {k: v for k, v in attrs.items()}
+    axis = int(attrs["axis"][0]) if "axis" in attrs else 0
+    if len(inputs) != 2:
+        raise ValueError(f"2 inputs expected, but got {len(input)}")
+    data, indices = inputs
+    data_shape = list(data.shape)
+    indices_shape = list(indices.shape)
+    output_shape = data_shape[: axis] + indices_shape + data_shape[axis + 1:]
+
+    def gen_ir(data, indices, out):
+        ib = tvm.ir_builder.create()
+        with ib.for_range_n(data_shape[: axis], "i") as i:
+            with ib.for_range_n(indices_shape, "j") as j:
+                load_idx = ib.load(indices, j)
+                inbound = tvm.all(load_idx >= 0, load_idx < data_shape[axis])
+                read_idx = i + [load_idx]
+                with ib.for_range_n(data_shape[axis + 1:], "k") as k:
+                    with ib.if_scope(inbound):
+                        ib.store(out, i + j + k, ib.load(data, read_idx + k))
+                    with ib.else_scope():
+                        ib.store(out, i + j + k, tvm.const(0, data.dtype))
+        return ib.get()
+
+    output_name = "T_gather_" + data.op.name + "_" + indices.op.name + "_" + str(axis)
+    out_buf = tvm.decl_buffer(output_shape, data.dtype, output_name)
+    return tvm.extern([data.shape], [data, indices], lambda ins, outs: gen_ir(ins[0], ins[1], outs[0]),
+                                          dtype=data.dtype, out_buffers=[out_buf], name=output_name)

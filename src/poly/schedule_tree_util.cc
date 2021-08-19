@@ -447,6 +447,51 @@ isl::schedule_node InsertMapFilter(const isl::schedule_node &node, const bool is
   return map_filter_node;
 }
 
+isl::schedule_node InsertRequiredMappingFilter(const isl::schedule_node &node, isl::union_pw_aff_list upa_list,
+                                               MappingCfg *mapping_cfg, Mapping &mapping,
+                                               std::unordered_map<int, std::string> required_mapping,
+                                               std::unordered_set<std::string> outer_mapping_cfg) {
+  isl::union_set domain = node.get_schedule().get_domain();
+
+  std::unordered_set<std::string> current_mapping_cfg;
+  for (size_t i = 0; i < upa_list.size(); ++i) {
+    if (required_mapping.count(static_cast<int>(i)) == 0) {
+      continue;
+    }
+    auto mapping_i = required_mapping[static_cast<int>(i)];
+    std::pair<std::string, int> cfg = mapping_cfg->GetAt(mapping_i);
+    current_mapping_cfg.emplace(cfg.first);
+
+    auto upa = upa_list.get_at(i);
+    CHECK_GT(cfg.second, 0);
+    upa = upa.mod(isl::val(node.ctx(), cfg.second));
+    auto id = isl::id(node.ctx(), cfg.first);
+    mapping[id] = upa;
+    domain = upa.domain();
+  }
+
+  // Set other configurations to 0.
+  if (!outer_mapping_cfg.empty()) {
+    for (size_t i = 0; i < mapping_cfg->bound; ++i) {
+      CHECK(!domain.is_null());
+      auto universe = domain.universe();
+      // Remove the configuration that has been mapped.
+      if (current_mapping_cfg.find(mapping_cfg->GetAt(i).first) != current_mapping_cfg.end()) {
+        continue;
+      }
+      // Remove the configuration in the outer mapping.
+      if (outer_mapping_cfg.find(mapping_cfg->GetAt(i).first) != outer_mapping_cfg.end()) {
+        continue;
+      }
+      std::pair<std::string, int> cfg = mapping_cfg->GetAt(i);
+      auto id = isl::id(node.ctx(), cfg.first);
+      mapping[id] = isl::union_pw_aff(universe, isl::val::zero(domain.ctx()));
+    }
+  }
+
+  return InsertMapFilter(node, false, mapping);
+}
+
 /*
  * When mapping size is smaller than the extent of corresponding axis, we may encounter several problems if the axis
  * is not tiled. Firstly, for case that extent is multiplies of mapping sizes, directly mapping the axis will
@@ -458,7 +503,7 @@ isl::schedule_node InsertMapFilter(const isl::schedule_node &node, const bool is
 isl::schedule_node CheckMapSizeAndApplyTile(const isl::schedule_node &mapping_root,
                                             const isl::union_pw_aff_list &aff_list, MappingCfg *mapping_cfg,
                                             const bool need_reverse,
-                                            std::unordered_map<int, std::string> custom_mapping) {
+                                            std::unordered_map<int, std::string> required_mapping) {
   bool need_tile = false;
   std::vector<int> mapping_sizes;
   CHECK(mapping_cfg != nullptr) << "mapping config is null";
@@ -483,10 +528,10 @@ isl::schedule_node CheckMapSizeAndApplyTile(const isl::schedule_node &mapping_ro
     extent = aff.max_val().get_num_si() + 1;
     map_size = extent;
     // custom mapping
-    if (!custom_mapping.empty()) {
-      bool is_config = (custom_mapping.count(static_cast<int>(i)) != 0);
+    if (!required_mapping.empty()) {
+      bool is_config = (required_mapping.count(static_cast<int>(i)) != 0);
       if (is_config) {
-        auto mapping_i = custom_mapping[static_cast<int>(i)];
+        auto mapping_i = required_mapping[static_cast<int>(i)];
         map_size = mapping_cfg->GetAt(mapping_i).second;
       }
       RecordMappingSizes(is_config, false);
@@ -701,6 +746,61 @@ isl::map CreateMapIncreaseDim(isl::space space, unsigned dim) {
   isl::aff aff = identity.get_aff(dim);
   identity = identity.set_aff(dim, aff + 1);
   return isl::map(identity);
+}
+
+bool IsSubsetForIncreaseDim(const isl::map access, size_t tensor_dim, size_t node_dim) {
+  auto schedule_space = access.get_space().domain();
+  auto tensor_space = access.get_space().range();
+  auto element_next = CreateMapIncreaseDim(tensor_space, tensor_dim);
+
+  auto schedule_next = CreateMapIncreaseDim(schedule_space, node_dim);
+  auto access_by_adjacent_inner = schedule_next.apply_domain(access).apply_range(access);
+  if (!access_by_adjacent_inner.is_subset(element_next)) {
+    return false;
+  }
+  return true;
+}
+
+int GetLastAxis(const isl::schedule_node node, isl::union_map original_access,
+                std::unordered_set<std::string> skip_tensors) {
+  if (!node.isa<isl::schedule_node_band>()) {
+    return -1;
+  }
+  // Get current node information.
+  auto active_domains = CollectDomain(node);
+  auto local_access = original_access.intersect_domain(active_domains);
+  auto schedule = LocalSchedule(node);
+  auto schedule_access = local_access.apply_domain(schedule);
+
+  int node_depth = static_cast<int>(node.as<isl::schedule_node_band>().n_member());
+  for (auto access : schedule_access.get_map_list()) {
+    // Skip the related tensor in tensor of tensor.
+    auto tensor_name = access.range().get_tuple_name();
+    if (skip_tensors.count(tensor_name) != 0) {
+      continue;
+    }
+
+    int tensor_dim = -1;
+    for (int i = static_cast<int>(access.range().n_dim()) - 1; i >= 0; --i) {
+      auto axis_i = access.range().dim_max(i);
+      if (!axis_i.is_equal(isl::pw_aff(axis_i.domain(), isl::val(axis_i.ctx(), 0)))) {
+        tensor_dim = i;
+        break;
+      }
+    }
+
+    if (tensor_dim < 0) {
+      continue;
+    }
+
+    for (int i = node_depth - 1; i >= 0; --i) {
+      if (!IsSubsetForIncreaseDim(access, tensor_dim, i)) {
+        continue;
+      }
+      return i;
+    }
+  }
+  return -1;
 }
 
 std::vector<isl::schedule_node> CollectFnNode(const std::function<bool(const isl::schedule_node &)> &fn,

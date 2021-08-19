@@ -33,7 +33,9 @@ class TensorAccessRewriter : public IRMutator {
   }
 
   Expr Mutate_(const Call *op, const Expr &e) override {
-    if (op->name == "tensor_load") {
+    Expr expr = IRMutator::Mutate_(op, e);
+    op = expr.as<Call>();
+    if (op != nullptr && op->name == "tensor_load") {
       auto it = tensors_.find(op->args[0].as<Variable>());
       CHECK(it != tensors_.end());
       Tensor t = it->second;
@@ -42,8 +44,8 @@ class TensorAccessRewriter : public IRMutator {
         args.push_back(op->args[i]);
       }
       return Call::make(t->dtype, t->op->name, args, Call::CallType::Halide, t->op, t->value_index);
-    } 
-    return IRMutator::Mutate_(op, e);
+    }
+    return expr;
   }
 
   Stmt Mutate_(const Evaluate *op, const Stmt &s) override {

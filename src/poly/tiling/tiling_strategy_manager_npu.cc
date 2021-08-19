@@ -281,22 +281,7 @@ void DynamicBoundStrategy::AddNpuConstraint() {
   }
 }
 
-void ShiftAxisStrategy::AddNpuConstraint() {
-  auto interested_info = GetInterestedInfo(interested_attr_key);
-  for (auto it : interested_info) {
-    TileAxis *axis = it.first;
-    int64_t const_extent = axis->GetConstExtent();
-    if (const_extent == -1) {
-      continue;
-    }
-    for (const auto &attr : it.second) {
-      CHECK_NE(attr.attr_value, "");
-      auto share_time = static_cast<int>(std::strtol(attr.attr_value.c_str(), nullptr, 10));
-      axis->TileRestrainToSingleValue(const_extent * (share_time + 1), CACHE1);
-      break;
-    }
-  }
-}
+void ShiftAxisStrategy::AddNpuConstraint() { TileEntirely(); }
 
 void ModShiftAxisStrategy::AddNpuConstraint() {
   auto interested_info = GetInterestedInfo(interested_attr_key);

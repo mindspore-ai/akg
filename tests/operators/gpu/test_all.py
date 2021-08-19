@@ -52,6 +52,13 @@ from tests.operators.gpu.test_ms_reduce_or import test_ms_reduce_or
 from tests.operators.gpu.test_ms_cumsum import test_ms_cumsum
 from tests.operators.gpu.test_ms_cumprod import test_ms_cumprod
 from tests.operators.gpu.test_ms_conv import test_ms_conv
+from tests.operators.gpu.test_ms_gather import test_ms_gather
+from tests.operators.gpu.test_ms_gather_nd import test_ms_gather_nd
+from tests.operators.gpu.test_ms_tensor_scatter_add import test_ms_tensor_scatter_add
+from tests.operators.gpu.test_fused_gather_mul_scatter_add import test_fused_gather_mul_scatter_add
+from tests.operators.gpu.test_ms_unsorted_segment_sum import test_ms_unsorted_segment_sum
+from tests.operators.gpu.test_fused_gather_nd_reduce_sum_mul_unsorted_segment_sum import test_fused_gather_nd_reduce_sum_mul_unsorted_segment_sum
+
 from tests.operators.gpu.test_fused_pad import test_fused_pad
 from tests.operators.gpu.test_fused_bn_reduce import test_fused_bn_reduce
 from tests.operators.gpu.test_fused_bn_update import test_fused_bn_update
@@ -68,7 +75,7 @@ from tests.operators.gpu.test_fused_relu_grad_bn_double_update_grad import test_
 from tests.operators.gpu.test_fused_relu_grad import test_fused_relu_grad
 from tests.operators.gpu.test_fused_bn_update_grad import test_fused_bn_update_grad
 from tests.operators.gpu.test_fused_mul_div_rsqrt_mul_isfinite_red import test_fused_mul_div_rsqrt_mul_isfinite_red
-
+from tests.operators.gpu.test_fused_gather_gather_add_mul_max_exp_scatter_add import test_fused_gather_gather_add_mul_max_exp_scatter_add
 
 def add(poly_sch, fuzz_shape=None, mind_trick_str=''):
     if fuzz_shape:
@@ -344,16 +351,30 @@ def reduce_or(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_reduce_or((1024, 1024), 'bool', axis=1,
                        keepdims=True, poly_sch=poly_sch)
 
+def gather(poly_sch, fuzz_shape=None, mind_trick_str=''):
+    test_ms_gather((19717, 8, 1), 'float32', (108365, ), 'int32', 0, poly_sch=True)
 
-def cumsum(poly_sch, fuzz_shape=None, mind_trick_str=''):
-    test_ms_cumsum((65, 49, 21), "float32", axis=2, poly_sch=poly_sch)
-    test_ms_cumsum((65, 49, 21), "float16", axis=0, poly_sch=poly_sch)
+def gather_nd(poly_sch, fuzz_shape=None, mind_trick_str=''):
+    test_ms_gather_nd((19717, 1, 3), 'float32', (108365, 1), 'int32', 0, poly_sch=True)
 
+def tensor_scatter_add(poly_sch, fuzz_shape=None, mind_trick_str=''):
+    test_ms_tensor_scatter_add((19717, 8, 1), 'float32', (108365, 1), 'int32', 0, poly_sch=True,
+        attrs={"dim": "0 0 8 8 0 1 128 128", "bind_block": "847 1", "bind_thread": "128 8"})
 
-def cumprod(poly_sch, fuzz_shape=None, mind_trick_str=''):
-    test_ms_cumprod((65, 49, 21), "float32", axis=2, poly_sch=poly_sch)
-    test_ms_cumprod((65, 49, 21), "float16", axis=0, poly_sch=poly_sch)
+def unsorted_segment_sum(poly_sch, fuzz_shape=None, mind_trick_str=''):
+    test_ms_unsorted_segment_sum((108365, 8, 1), 'float32', (108365,), 'int32', 19717, poly_sch=True)
 
+def fused_gather_mul_scatter_add(poly_sch, fuzz_shape=None, mind_trick_str=''):
+    test_fused_gather_mul_scatter_add((19717, 8, 8), (108365, ), (108365, 8, 8), (108365, 1), 'float32', 'int32', 0, poly_sch=True,
+        attrs={"dim": "0 0 16 16 0 1 8 8 0 2 8 8", "bind_block": "1 1 6773", "bind_thread": "8 8 16"})
+
+def fused_gather_nd_reduce_sum_mul_unsorted_segment_sum(poly_sch, fuzz_shape=None, mind_trick_str=''):
+    test_fused_gather_nd_reduce_sum_mul_unsorted_segment_sum(
+        (19717, 8, 8), (108365, 1), (108365, 8, 1), (108365,), 'float32', 'int32', -1, True, 19717, poly_sch=True)
+
+def fused_gather_gather_add_mul_max_exp_scatter_add(poly_sch, fuzz_shape=None, mind_trick_str=''):
+    test_fused_gather_gather_add_mul_max_exp_scatter_add((19717, 8, 1), (108365, ), (1,), (108365, ),
+                                                          'float32', 'int32', 0, poly_sch=True)
 
 def fused_pad(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_fused_pad((7, 7, 3, 64), (0, 0, 0, 0), (0, 0, 1, 0),
@@ -468,10 +489,14 @@ if __name__ == '__main__':
               "equal": equal, "exp": exp, "greater_equal": greater_equal, "less_equal": less_equal,
               "log": log, "max": maximum, "min": minimum, "mul": mul, "neg": neg, "pow": pow,
               "reciprocal": reciprocal, "round": round, "rsqrt": rsqrt, "select": select, "sqrt": sqrt,
-              "sub": sub, "reduce_max": reduce_max, "reduce_min": reduce_min,
-              "reduce_sum": reduce_sum, "cumsum": cumsum, "cumprod": cumprod,
-              "expand_dims": expand_dims, "one_hot": one_hot,
-              "reshape": reshape, "tile": tile, "trans_data": trans_data, "conv": conv,
+              "sub": sub, "reduce_max": reduce_max, "reduce_min": reduce_min, "reduce_and":reduce_and,
+              "reduce_or":reduce_or, "reduce_sum": reduce_sum, "expand_dims": expand_dims, "one_hot": one_hot,
+              "reshape": reshape, "tile": tile, "trans_data": trans_data,
+              "conv": conv, "gather":gather, "gather_nd":gather_nd,
+              "tensor_scatter_add":tensor_scatter_add,
+              "unsorted_segment_sum": unsorted_segment_sum,
+              "fused_gather_mul_scatter_add":fused_gather_mul_scatter_add,
+              "fused_gather_nd_reduce_sum_mul_unsorted_segment_sum": fused_gather_nd_reduce_sum_mul_unsorted_segment_sum,
               "fused_pad": fused_pad,
               "fused_bn_reduce": fused_bn_reduce,
               "fused_bn_update": fused_bn_update,
@@ -487,7 +512,9 @@ if __name__ == '__main__':
               "fused_relu_grad_bn_double_update_grad": fused_relu_grad_bn_double_update_grad,
               "fused_relu_grad": fused_relu_grad,
               "fused_bn_update_grad": fused_bn_update_grad,
-              "fused_mul_div_rsqrt_mul_isfinite_red": fused_mul_div_rsqrt_mul_isfinite_red
+              "fused_mul_div_rsqrt_mul_isfinite_red": fused_mul_div_rsqrt_mul_isfinite_red,
+              "fused_gather_mul_scatter_add": fused_gather_mul_scatter_add,
+              "fused_gather_gather_add_mul_max_exp_scatter_add": fused_gather_gather_add_mul_max_exp_scatter_add,
               }
     all_f = list(op_map.values())
     op_map["all"] = all_f

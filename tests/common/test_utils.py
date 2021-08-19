@@ -17,6 +17,7 @@
 import math
 import random
 import logging
+from copy import deepcopy
 import numpy as np
 import akg.tvm
 from akg.utils.validation_check import MAX_DATA_SIZE
@@ -208,3 +209,70 @@ def precheck(desc):
     logging.info(
         "Input data with mean value {} is generated".format(initial_input))
     return initial_input
+
+
+def gather_nd_np(data, indices):
+    data_shape = data.shape
+    indices_shape = indices.shape
+    new_indices = indices.reshape(-1, indices.shape[-1])
+    left_shape = indices_shape[:-1]
+    right_shape = data_shape[int(indices_shape[-1]):]
+    out_shape = left_shape + right_shape
+    out = np.zeros(out_shape, np.float32).reshape(new_indices.shape[0], -1)
+    new_data = deepcopy(data).reshape(-1, int(np.prod(data_shape[int(indices_shape[-1]):])))
+    for i in range(new_indices.shape[0]):
+        for j in range(out.shape[1]):
+            index_read = [i,0]
+            index_write = [0,0]
+            inbound = True
+            for k in range(0, int(indices_shape[-1])):
+                temp_idx = new_indices[i, k]
+                inbound = np.all((inbound, (temp_idx >= 0), (temp_idx < data_shape[k])))
+                index_write[0] += int(temp_idx * data.strides[k] / data.itemsize)
+                index_write[0] = int(index_write[0] / out.shape[1])
+            index_read[1] = j
+            if inbound:
+                index_write[1] = j
+                out[tuple(index_read)] = new_data[tuple(index_write)]
+    return out.reshape(out_shape)
+
+
+def tensor_scatter_add_np(data, indices, updates):
+    data_shape = data.shape
+    indices_shape = indices.shape
+    updates_shape = updates.shape
+    if indices.ndim > 1:
+        new_indices = indices.reshape(-1, indices.shape[-1])
+        out = deepcopy(data).reshape(-1, int(np.prod(data_shape[int(indices_shape[-1]):])))
+    else:
+        new_indices = indices.reshape(-1, 1)
+        out = deepcopy(data).reshape(-1, int(np.prod(data_shape[1:])))
+    new_updates = updates.reshape(new_indices.shape[0], -1)
+    for i in range(new_indices.shape[0]):
+        for j in range(out.shape[1]):
+            index_read = [i,0]
+            index_write = [0,0]
+            inbound = True
+            for k in range(0, int(indices_shape[-1])):
+                temp_idx = new_indices[i, k]
+                inbound = np.all((inbound, (temp_idx >= 0), (temp_idx < data_shape[k])))
+                index_write[0] += int(temp_idx * data.strides[k] / data.itemsize)
+                index_write[0] = int(index_write[0] / out.shape[1])
+            index_read[1] = j
+            if inbound:
+                index_write[1] = j
+                temp = new_updates[tuple(index_read)] + out[tuple(index_write)]
+                out[tuple(index_write)] = temp
+    return out.reshape(data_shape)
+
+
+def gather_np(data, indices, axis):
+    Ni, Nk = data.shape[:axis], data.shape[axis + 1:]
+    Nj = indices.shape
+    expect = np.zeros(Ni + Nj + Nk, data.dtype)
+    for i in np.ndindex(Ni):
+        for j in np.ndindex(Nj):
+            for k in np.ndindex(Nk):
+                if 0 <= indices[j] < data.shape[axis]:
+                    expect[i + j + k] = data[i + (indices[j],) + k]
+    return expect

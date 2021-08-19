@@ -52,6 +52,13 @@ std::set<std::string> OperatorSharedStrategy::GetInitPromotedTensor() {
    ********************************************************/
   std::set_difference(read_sets.begin(), read_sets.end(), write_sets.begin(), write_sets.end(),
                       std::inserter(id_sets, id_sets.begin()));
+
+  if (scop_info_.analysis_result_.GetTensorOfTensor()) {
+    id_sets.clear();
+    std::set_union(read_sets.begin(), read_sets.end(), write_sets.begin(), write_sets.end(),
+                   std::inserter(id_sets, id_sets.begin()));
+  }
+
   return id_sets;
 }
 
@@ -106,9 +113,22 @@ void OperatorSharedStrategy::RecordCustomPromotedTensors(std::set<std::string> &
   }
 }
 
+void OperatorSharedStrategy::DeleteNotPromotedTensors(std::set<std::string> &id_sets) {
+  if (scop_info_.analysis_result_.GetTensorsNotPromote().empty()) {
+    return;
+  }
+  std::unordered_set<std::string> tensors = scop_info_.analysis_result_.GetTensorsNotPromote();
+  for (const auto &item : tensors) {
+    if (id_sets.count(item)) {
+      id_sets.erase(item);
+    }
+  }
+}
+
 void OperatorSharedStrategy::CreateClusterList(const isl::schedule_node &node, const isl::union_map &outer_sch) {
   std::set<std::string> id_sets = GetInitPromotedTensor();
   RecordCustomPromotedTensors(id_sets);
+  DeleteNotPromotedTensors(id_sets);
   RecordPromotedTensorInfo(node, outer_sch, id_sets);
 }
 

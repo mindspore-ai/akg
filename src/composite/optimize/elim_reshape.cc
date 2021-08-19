@@ -336,8 +336,50 @@ std::string GetId(const std::string &name, int count) {
   return id.str();
 }
 
+class TSA : public IRMutator {
+ public:
+  explicit TSA(AnalysisResult &result) : result_(result){};
+  ~TSA() = default;
+
+ private:
+  Stmt Mutate_(const Provide *op, const Stmt &s) final {
+    auto op_name = GetOpName(op);
+    auto call = op->value.as<Call>();
+    CHECK(call);
+    if (IsTransform(op_name)) {
+      CHECK(call->args[0].as<Call>());
+      reshape_[op->func] = call->args[0];
+      p_.emplace_back(op);
+    }
+    if (op_name == "TensorScatterAdd") {
+      CHECK(call->args.size() == 3);
+      CHECK(call->args[1].as<Call>());
+      auto arg1 = call->args[1].as<Call>()->func;
+      if (reshape_.count(arg1) && call->args[1].as<Call>()->args.size() == 2) {
+        for (auto &it : p_) {
+          if (it->func == arg1) {
+            result_.to_be_removed.insert(it);
+          }
+        }
+        auto new_call = Call::make(call->type, op_name, {call->args[0], reshape_[arg1], call->args[2]}, call->call_type,
+                                   call->func, call->value_index);
+        return Provide::make(op->func, op->value_index, new_call, op->args);
+      }
+    }
+    return IRMutator::Mutate_(op, s);
+  }
+
+  AnalysisResult &result_;
+  FuncExprMap reshape_;
+  std::vector<const Provide*> p_;
+};
+
 Stmt ElimReshapeBackward::Run(const Stmt &stmt) {
   auto s = stmt;
+  AnalysisResult as;
+  s = TSA(as).Mutate(s);
+  s = AnalysisResultMutator(as).Mutate(s);
+
   auto checker = ElimReshapeOpChecker();
   checker.Visit(s);
   if (!checker.can_elim) return s;
@@ -357,6 +399,7 @@ Stmt ElimReshapeBackward::Run(const Stmt &stmt) {
   LOG(WARNING) << "ElimReshapeBackward reach to max_try_count!";
   return s;
 }
+
 Stmt ElimReshapeForward::Run(const Stmt &stmt) {
   auto s = stmt;
   auto checker = ElimReshapeOpChecker();

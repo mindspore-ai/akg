@@ -97,6 +97,7 @@ class IslEmitter {
   virtual Stmt EmitUserStmtContent(const IfThenElse *if_node);
   virtual Stmt EmitUserStmtContent(const For *for_node);
   virtual Stmt EmitUserStmtContent(const Block *block_node);
+  virtual Stmt EmitUserStmtContent(const AttrStmt *stmt_node);
 
   // Loop isl iters info
   virtual void PushIter(const Variable *iter);
