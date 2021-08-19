@@ -58,6 +58,7 @@ from tests.operators.gpu.test_ms_tensor_scatter_add import test_ms_tensor_scatte
 from tests.operators.gpu.test_fused_gather_mul_scatter_add import test_fused_gather_mul_scatter_add
 from tests.operators.gpu.test_ms_unsorted_segment_sum import test_ms_unsorted_segment_sum
 from tests.operators.gpu.test_fused_gather_nd_reduce_sum_mul_unsorted_segment_sum import test_fused_gather_nd_reduce_sum_mul_unsorted_segment_sum
+from tests.operators.gpu.test_ms_standard_normal import test_ms_standard_normal
 
 from tests.operators.gpu.test_fused_pad import test_fused_pad
 from tests.operators.gpu.test_fused_bn_reduce import test_fused_bn_reduce
@@ -351,6 +352,12 @@ def reduce_or(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_reduce_or((1024, 1024), 'bool', axis=1,
                        keepdims=True, poly_sch=poly_sch)
 
+
+def standard_normal(poly_sch, fuzz_shape=None, mind_trick_str=''):
+    test_ms_standard_normal(1, (1987, 64), 'float32', poly_sch=True)
+    test_ms_standard_normal(2, (5025, 64, 3), 'float32', poly_sch=True)
+
+
 def gather(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_gather((19717, 8, 1), 'float32', (108365, ), 'int32', 0, poly_sch=True)
 
@@ -515,6 +522,7 @@ if __name__ == '__main__':
               "fused_mul_div_rsqrt_mul_isfinite_red": fused_mul_div_rsqrt_mul_isfinite_red,
               "fused_gather_mul_scatter_add": fused_gather_mul_scatter_add,
               "fused_gather_gather_add_mul_max_exp_scatter_add": fused_gather_gather_add_mul_max_exp_scatter_add,
+              "standard_normal": standard_normal,
               }
     all_f = list(op_map.values())
     op_map["all"] = all_f

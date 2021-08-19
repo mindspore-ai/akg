@@ -16,6 +16,7 @@
 # under the License.
 
 # 2021.3.25 - Add for_range_n, load and store api
+# 2021.8.23 - Add generate_call api
 
 """Developer API of IR node builder make function."""
 from __future__ import absolute_import as _abs
@@ -275,6 +276,27 @@ class IRBuilder(object):
                 stmt = _make.For(loop_vars[i], 0, extents[i], for_type_id, 0, stmt)
             self.emit(stmt)
         return WithScope(loop_vars, _exit_cb)
+
+    def extern_call(self, *args, op_name="", dtype='float32'):
+        """Generate call node.
+
+        Parameters
+        ----------
+        args : list of Expr
+            The input arguments to the call.
+
+        op_name: str
+            The function name.
+
+        dtype : str, optional
+            The data type of output.
+
+        Returns
+        -------
+        expr:  Expr
+           The result of random tensor.
+        """
+        return _make.Call(dtype, op_name, args, _Call.Extern, None, 0)
 
     def load(self, buf, index):
         """Load element from tensor buffer.
