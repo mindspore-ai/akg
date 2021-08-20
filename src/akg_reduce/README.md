@@ -27,7 +27,7 @@ __global__ void Reduce1DMultiBlock(int x_len, T *arr, T *output, int item_per_th
     }
   }
   __syncthreads();
-  AkgReduce<T, ReduceOp, 32, 1, ALL_REDUCE>(op, &temp_output[0], red_buf, acc);
+  AkgReduce<T, ReduceOp, 32, 1, ALL_REDUCE>(op, &temp_output[0], red_buf, acc, 32);
   __syncthreads();
   if (threadIdx.x == 0) {
     AkgAtomicReturn<T, ReduceOp>(temp_output[0], &output[0], op);
@@ -36,6 +36,9 @@ __global__ void Reduce1DMultiBlock(int x_len, T *arr, T *output, int item_per_th
 ```
 
 ## 4. Updates
+
+### 2021.8.20
+- Fix bugs when using "shfl.down" function in irregular cases. Since "shfl.down" is a wrap-based functions but irregular reduction algorithms broke this rule. To safe reduction, we use volatile shared algorithm instead. 
 
 ### 2021.8.16
 - Support ProdOp, AtomicProd. Now you can use akg-reduce-lib to implement a ReduceProd kernel.
