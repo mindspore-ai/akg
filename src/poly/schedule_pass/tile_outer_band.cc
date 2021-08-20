@@ -19,6 +19,7 @@
 #include "poly/scop.h"
 #include "poly/schedule_pass/transfer_stmt.h"
 #include "poly/schedule_pass/try_mark_scalar_stmt.h"
+#include "poly/schedule_tree_util.h"
 #include "poly/reduce_manager.h"
 
 #include <cmath>
@@ -203,12 +204,12 @@ void TileOuterBand::InitDimensionInfo(const isl::schedule &sch_init) {
     return;
   }
 
-  int dim_info_entry_size = 4;
+  int dim_info_entry_size = DIM_SIZE;
   const std::vector<std::string> thread_block_list = {T0, T1, T2, B0, B1, B2};
   for (auto i : thread_block_list) {
     if (dim.find(i) != std::string::npos) {
       scop_info_.analysis_result_.SetIsCustomMapping(true);
-      dim_info_entry_size = 6;
+      dim_info_entry_size = CUSTOM_DIM_SIZE;
       break;
     }
   }
@@ -246,8 +247,26 @@ void TileOuterBand::InitDimensionInfo(const isl::schedule &sch_init) {
     scop_info_.analysis_result_.InsertDimensionInfo(dim_info);
 
     if (scop_info_.analysis_result_.GetIsCustomMapping()) {
-      CustomMappingConfig(str, i);
+      CHECK(str.size() >= CUSTOM_DIM_SIZE)
+        << "The configuration length of custom mapping must not be less than " << CUSTOM_DIM_SIZE << "!";
+      int axis_number = static_cast<int>(WrappedStrtol(str[i + 1]));
+      std::string outer_mapping = str[i + 4];
+      if (outer_mapping != "-") {
+        scop_info_.user_config_.RecordCustomOuterMapping(axis_number, outer_mapping);
+      }
+
+      std::string inner_mapping = str[i + 5];
+      if (inner_mapping != "-") {
+        scop_info_.user_config_.RecordCustomInnerMapping(axis_number, inner_mapping);
+      }
     }
+  }
+
+  if (scop_info_.analysis_result_.GetIsCustomMapping()) {
+    CheckCustomMapping(scop_info_.user_config_.GetCustomInnerMapping());
+    CheckCustomMapping(scop_info_.user_config_.GetCustomOuterMapping());
+    scop_info_.user_config_.RecordCustomInnerMapping(-1, "");
+    scop_info_.user_config_.RecordCustomOuterMapping(-1, "");
   }
 }
 
@@ -396,48 +415,30 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableNpu(isl::schedule_node node
   return node;
 }
 
-void TileOuterBand::CustomMappingConfig(const std::vector<std::string> &str, const int index) {
-  CHECK(str.size() >= 6) << "The configuration length of custom mapping must not be less than 6.";
-  int axis_number = static_cast<int>(WrappedStrtol(str[index + 1]));
-  auto CheckCustomMapping = [this](std::unordered_map<int, std::string> custom_mapping_map) -> void {
-    const std::unordered_set<std::string> thread_set = {T0, T1, T2};
-    const std::unordered_set<std::string> block_set = {B0, B1, B2};
+void TileOuterBand::CheckCustomMapping(const std::unordered_map<int, std::string> &custom_mapping_map) {
+  const std::unordered_set<std::string> thread_set = {T0, T1, T2};
+  const std::unordered_set<std::string> block_set = {B0, B1, B2};
 
-    size_t thread_prefix = 0;
-    size_t block_prefix = 0;
-    for (auto custom_mapping : custom_mapping_map) {
-      if (thread_set.find(custom_mapping.second) != thread_set.end()) {
-        ++thread_prefix;
-      } else if (block_set.find(custom_mapping.second) != block_set.end()) {
-        ++block_prefix;
-      } else {
-        LOG(FATAL) << "The custom configuration must be t0, t1, t2, b0, b1 and b2.";
-      }
-    }
-    if (thread_prefix != custom_mapping_map.size() && block_prefix != custom_mapping_map.size()) {
-      LOG(FATAL) << "All of the inner configuration or the outer configuration must be threads or blocks.";
-    }
-
-    if (thread_prefix == custom_mapping_map.size()) {
-      scop_info_.analysis_result_.SetIsOuterBlockMapping(false);
+  size_t thread_prefix = 0;
+  size_t block_prefix = 0;
+  for (auto custom_mapping : custom_mapping_map) {
+    if (thread_set.find(custom_mapping.second) != thread_set.end()) {
+      ++thread_prefix;
+    } else if (block_set.find(custom_mapping.second) != block_set.end()) {
+      ++block_prefix;
     } else {
-      scop_info_.analysis_result_.SetIsOuterBlockMapping(true);
+      LOG(FATAL) << "The custom configuration must be t0, t1, t2, b0, b1 and b2.";
     }
-  };
-  std::string outer_mapping = str[index + 4];
-  if (outer_mapping != "-") {
-    scop_info_.user_config_.RecordCustomOuterMapping(axis_number, outer_mapping);
+  }
+  if (thread_prefix != custom_mapping_map.size() && block_prefix != custom_mapping_map.size()) {
+    LOG(FATAL) << "All of the inner configuration or the outer configuration must be threads or blocks.";
   }
 
-  std::string inner_mapping = str[index + 5];
-  if (inner_mapping != "-") {
-    scop_info_.user_config_.RecordCustomInnerMapping(axis_number, inner_mapping);
+  if (thread_prefix == custom_mapping_map.size()) {
+    scop_info_.analysis_result_.SetIsOuterBlockMapping(false);
+  } else {
+    scop_info_.analysis_result_.SetIsOuterBlockMapping(true);
   }
-
-  CheckCustomMapping(scop_info_.user_config_.GetCustomInnerMapping());
-  CheckCustomMapping(scop_info_.user_config_.GetCustomOuterMapping());
-  scop_info_.user_config_.RecordCustomInnerMapping(-1, "");
-  scop_info_.user_config_.RecordCustomOuterMapping(-1, "");
 }
 
 std::vector<std::vector<int>> TileOuterBand::AddTileInfo(const std::vector<std::vector<int>> &partition_info) {

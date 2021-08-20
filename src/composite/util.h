@@ -16,6 +16,7 @@
 #ifndef COMPOSITE_UTIL_H_
 #define COMPOSITE_UTIL_H_
 #include <map>
+#include <utility>
 #include "tvm.h"
 #include "picojson.h"
 
@@ -366,7 +367,7 @@ struct AnalysisResult {
 
 class AnalysisResultMutator : public IRMutator {
  public:
-  explicit AnalysisResultMutator(AnalysisResult result, const std::string &id)
+  explicit AnalysisResultMutator(AnalysisResult result, std::string id="0")
       : result_(std::move(result)), id_(std::move(id)){};
 
  private:

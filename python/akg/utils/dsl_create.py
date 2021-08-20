@@ -15,6 +15,8 @@
 # limitations under the License.
 
 """dsl create helping function"""
+import collections
+import itertools
 import logging
 import math
 import akg
@@ -326,6 +328,16 @@ def broadcast_gradient_args(x, y):
             ry.append(i)
 
     return rx, ry
+
+def get_broadcast_shape(*shapes):
+    shape_out = collections.deque()
+    reversed_shapes = map(reversed, shapes)
+    for items in itertools.zip_longest(*reversed_shapes, fillvalue=1):
+        max_size = 0 if 0 in items else max(items)
+        if any(item not in (1, max_size) for item in items):
+            raise ValueError(f'operands could not be broadcast together with shapes {*shapes,}')
+        shape_out.appendleft(max_size)
+    return list(shape_out)
 
 def zero_const(dtype):
     return akg.tvm.const(0, dtype)

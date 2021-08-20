@@ -76,6 +76,18 @@ class ConvMappingStrategy : public OperatorMappingStrategy {
   isl::schedule MoveKernelHWBand(isl::schedule sch);
 };
 
+class TOTMappingStrategy : public OperatorMappingStrategy {
+ public:
+  explicit TOTMappingStrategy(PassInfo &pass_info, ScopInfo &scop_info)
+      : OperatorMappingStrategy(pass_info, scop_info) {}
+  ~TOTMappingStrategy() {}
+
+  size_t MapThreadHelper(isl::schedule_node &thread_root);
+  isl::schedule_node MapBlockHelper(const isl::schedule_node &orig_node, MappingCfg *block_cfg, size_t n_block_map,
+                                    bool check_extent, std::unordered_map<size_t, size_t> &map_idx_shift);
+  std::unordered_map<int, std::string> GetRequiredMappingCfg(MappingCfg *mapping_cfg);
+};
+
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

@@ -105,14 +105,14 @@ struct MappingCfg {
   }
   std::pair<std::string, int> GetAt(std::string cfg_name) {
     std::pair<std::string, int> fixed_pos_cfg = {};
-    if (cfg_name == T0 || cfg_name == B0) {
+    if (cfg_name.find(T0) != std::string::npos || cfg_name.find(B0) != std::string::npos) {
       fixed_pos_cfg = GetX();
-    } else if (cfg_name == T1 || cfg_name == B1) {
+    } else if (cfg_name.find(T1) != std::string::npos || cfg_name.find(B1) != std::string::npos) {
       fixed_pos_cfg = GetY();
-    } else if (cfg_name == T2 || cfg_name == B2) {
+    } else if (cfg_name.find(T2) != std::string::npos || cfg_name.find(B2) != std::string::npos) {
       fixed_pos_cfg = GetZ();
     } else {
-      LOG(FATAL) << "Mapping config can only contain t0, t1, t2, b0, b1 and b2.";
+      LOG(FATAL) << "Mapping config can contain t0, t1, t2, b0, b1 and b2.";
     };
     return fixed_pos_cfg;
   }
@@ -908,6 +908,25 @@ class AnalysisResult {
     tiling_constraints_ = std::move(tiling_constraints);
   }
 
+  std::map<std::string, std::string> GetTensorOfTensorStmt() const { return tensor_of_tensor_stmt_; }
+  void RecordTensorOfTensorStmt(const std::string &id_name, const std::string &op_type) {
+    tensor_of_tensor_stmt_[id_name] = op_type;
+  }
+
+  bool GetTensorOfTensor() const { return is_tensor_of_tensor_; }
+  void SetTensorOfTensor(const bool &is_tensor_of_tensor) { is_tensor_of_tensor_ = is_tensor_of_tensor; }
+
+  int GetLastAxisInScheduleTree() const { return last_axis_in_schedule_tree_; }
+  void SetLastAxisInScheduleTree(const int last_axis_in_schedule_tree) {
+    last_axis_in_schedule_tree_ = last_axis_in_schedule_tree;
+  }
+
+  std::unordered_set<std::string> GetTensorsNotPromote() const { return tensors_not_promote_; }
+  void RecordTensorsNotPromote(const std::string &tensor_name) { tensors_not_promote_.insert(tensor_name); }
+
+  std::unordered_set<std::string> GetInnerTensor() const { return inner_tensor_; }
+  void RecordInnerTensor(const std::string &tensor_name) { inner_tensor_.insert(tensor_name); }
+
   // dump all data
   void DumpScopDataBasics(std::ofstream &of);
 
@@ -1024,6 +1043,15 @@ class AnalysisResult {
   // custom mapping
   bool is_custom_mapping_{false};
   bool is_outer_block_mapping_{false};
+
+  // All axis of each tensor
+  std::unordered_map<std::string, std::vector<std::string>> tensor_all_axis_;
+  // tensor_of_tensor
+  std::map<std::string, std::string> tensor_of_tensor_stmt_;
+  std::unordered_set<std::string> tensors_not_promote_;
+  std::unordered_set<std::string> inner_tensor_;
+  int last_axis_in_schedule_tree_{-1};
+  bool is_tensor_of_tensor_{false};
 };
 
 class CubeInfo {

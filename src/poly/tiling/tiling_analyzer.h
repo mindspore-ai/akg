@@ -54,7 +54,6 @@ constexpr auto MAX_REPEAT = 255;
 constexpr auto MIN_CORE_GRANULARITY = 256;
 constexpr auto DESIRE_CORE_GRANULARITY = 8192;
 
-
 // Controlled by custom tiling.
 constexpr auto ALLOCATION_PERCENTAGE = 0.5;  // reserved for double buffer in default
 
@@ -171,7 +170,7 @@ class TilingAnalyzer;
 class TileAxis {
  public:
   TileAxis(TileAxis *p, int i, int da, bool mc, const std::pair<std::string, int> &ds, bool inner, TilingAnalyzer *ta);
-  TileAxis(const Expr &l1_size, Expr l0_size, std::string at, TilingAnalyzer *ta, bool inner = false);
+  TileAxis(const Expr &l1_size, const Expr &l0_size, const std::string &at, TilingAnalyzer *ta, bool inner = false);
   ~TileAxis() {}
   struct Constraint {
     Expr tile_mod_{MIN_TILE};
@@ -265,12 +264,12 @@ class TilingAnalyzer {
         sch_(sch),
         scop_info_(scop_info),
         is_retry_(!g_attrs.GetStr(kErrorInfo, "").empty()) {
-          if (scop_info.mmu_info_.IsGemm()) {
-            op_type_ = GEMM_OP;
-          } else if (scop_info.mmu_info_.IsConv()) {
-            op_type_ = CONV_OP;
-          } else {
-            op_type_ = VECTOR_OP;
+    if (scop_info.mmu_info_.IsGemm()) {
+      op_type_ = GEMM_OP;
+    } else if (scop_info.mmu_info_.IsConv()) {
+      op_type_ = CONV_OP;
+    } else {
+      op_type_ = VECTOR_OP;
     }
   }
 
@@ -306,9 +305,9 @@ class TilingAnalyzer {
 
   inline Stmt Halide() const { return body_; }
 
-  std::vector<TileAxis *> GetAxesContainsAttr(std::string attr_key) const;
-  std::vector<TileAxis *> GetAxesOfAttr(std::string attr_key) const;
-  std::vector<TileAxis *> GetAxesOfAttr(AttrInfo attr_info) const;
+  std::vector<TileAxis *> GetAxesContainsAttr(const std::string &attr_key) const;
+  std::vector<TileAxis *> GetAxesOfAttr(const std::string &attr_key) const;
+  std::vector<TileAxis *> GetAxesOfAttr(const AttrInfo &attr_info) const;
 
   TileAxis *Axis(const For *loop) const {
     auto it = tile_axis_.find(loop);
@@ -339,7 +338,8 @@ class TilingAnalyzer {
   std::unordered_map<TilingAnalyzer::BufferEntry *, std::pair<int, int>> buffer_usage_timetable_;
   std::unordered_map<std::string, std::shared_ptr<BufferEntry>> buf_info_;
   bool is_retry_{false};
-  std::vector<TileAxis::MappingConstraint> binding_spaces_;  // [thread.x[min, max, mod], thread.y, thread.z, block.x, block.y, block.z]
+  std::vector<TileAxis::MappingConstraint>
+    binding_spaces_;  // [thread.x[min, max, mod], thread.y, thread.z, block.x, block.y, block.z]
  private:
   void AddTilingConstraints();
   void AddPostTilingConstraints();

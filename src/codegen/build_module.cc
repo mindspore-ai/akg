@@ -523,6 +523,7 @@ NodeRef LowerStmt(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeR
       }
       PassMgr::SetArgs(*arg_list_0);
 
+      stmt = NEXT_PASS(RewriteTensorIndex, stmt);
       int level = g_attrs.GetInt(kHelpTiling, -1);
       if (tuning || level > help_tiling_level["None"]) {
         if (tuning) {
@@ -533,11 +534,11 @@ NodeRef LowerStmt(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeR
         NodeRef tuning_spaces = NEXT_PASS(GenTuningSpace, stmt, target, *binds_0, attrs_1, false, new_sch);
         return tuning_spaces;
       }
-
       Array<NodeRef> poly_res = NEXT_PASS(AutoPoly, stmt, *binds_0, target, g_attrs, false, false, new_sch);
       CHECK_EQ(poly_res.size(), 2);
       stmt = air::Downcast<Stmt>(poly_res[0]);
       g_attrs.Set(kEnablePolySch, air::make_const(Int(32), true));
+      stmt = NEXT_PASS(LowerWith, stmt);
     } else {
       g_attrs.Set(kEnablePolySch, air::make_const(Int(32), false));
     }

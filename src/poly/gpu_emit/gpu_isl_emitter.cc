@@ -16,6 +16,7 @@
 
 #include "gpu_isl_emitter.h"
 #include "emit_pass.h"
+#include "ir_pass.h"
 #include <sstream>
 #include <algorithm>
 
@@ -137,7 +138,16 @@ Stmt GpuIslEmitter::EmitStmt(const isl::ast_node_user &node) {
   } else if (info_.IsSync(stmt_id)) {
     return EmitSync();
   } else {
-    return EmitUserStmt(node);
+    Stmt stmt = EmitUserStmt(node);
+    auto tot = info_.analysis_result_.GetTensorOfTensorStmt();
+    auto id_name = stmt_id.get_name();
+    if (tot.count(id_name)) {
+      std::string marker_name = ATOMIC_MARKER;
+      marker_name += "_";
+      marker_name += tot[id_name];
+      stmt = AttrStmt::make(Expr("INFO"), marker_name, StringImm::make(marker_name), stmt);
+    }
+    return stmt;
   }
 }
 
@@ -319,6 +329,12 @@ Stmt GpuIslEmitter::Emit(const isl::ast_node &node) {
   // emit realize for temporary tensor
   stmt = EmitRealizeForGlobalTensor(stmt);
 
+  if (!info_.analysis_result_.GetTensorOfTensorStmt().empty()) {
+    stmt = LowerWith(stmt);
+    stmt = AtomicReturnStmtEmit(info_).Mutate(stmt);
+    stmt = AttrStmt::make(Expr("INFO"), REDUCE_LIB_TYPE_FLAG, info_.user_config_.GetReduceLibType(), stmt);
+  }
+
   // iter var node attr emit
   std::map<std::string, VarExpr>::iterator it;
   for (it = iter_name_map_.begin(); it != iter_name_map_.end(); ++it) {
@@ -392,7 +408,7 @@ Stmt GpuIslEmitter::EmitMark(const isl::ast_node_mark &node) {
   Stmt stmt;
 
   if ((mark == PROMOTE_VECTORIZATION) || (mark == PROMOTE_REGISTER_TO_GLOBAL) || (mark == PROMOTE_REGISTER_TO_SHARED) ||
-      (mark == PROMOTE_SHARED_TO_GLOBAL)) {
+      (mark == PROMOTE_SHARED_TO_GLOBAL) || IsStartsWith(mark, REDUCE_ATOMIC_FLAG)) {
     stmt = EmitAst(node.get_node());
     if (!stmt.defined()) {
       return Stmt();
@@ -586,6 +602,106 @@ Stmt GpuIslEmitter::EmitAccessNodeFromPromoteAcsProvide(isl::id var, const Node 
   Tensor t = info_.FindTensor(var);
   Stmt s = Provide::make(t->op, 0, provide->value, args);
   return s;
+}
+
+Stmt AtomicReturnStmtEmit::Mutate_(const AttrStmt *op, const Stmt &s) {
+  auto key = op->attr_key;
+  if (IsStartsWith(key, REDUCE_ATOMIC_FLAG)) {
+    in_atomic_area_ = true;
+    std::vector<std::string> strs = common::Split(key, "_");
+    CHECK_EQ(strs.size(), REDUCE_ATOMIC_FLAG_SIZE) << "atomic mark format is not right!.";
+    atomic_data_.reduce_op_.clear();
+    if (AkgSupportedReduceOp.count(strs[REDUCE_ATOMIC_FLAG_TYPE_POS])) {
+      atomic_data_.reduce_op_ = AKG_REDUCE_LIB_SPACE;
+      atomic_data_.reduce_op_ += "::";
+      atomic_data_.reduce_op_ += strs[REDUCE_ATOMIC_FLAG_TYPE_POS];
+    } else {
+      CHECK(false) << "reduce op type is not supported!";
+    }
+  }
+  return IRMutator::Mutate_(op, s);
+}
+
+Stmt AtomicReturnStmtEmit::Mutate_(const Provide *op, const Stmt &s) {
+  if (in_atomic_area_) {
+    in_atomic_area_ = false;
+    Stmt stmt = IRMutator::Mutate_(op, s);
+    atomic_data_.gm_write_stmt_ = stmt;
+    auto op = stmt.as<Provide>();
+    CHECK(op);
+    auto value = op->value;
+    auto value_call = value.as<Call>();
+    auto value_add = value.as<Add>();
+    if (value_call) {
+      atomic_data_.atomic_rhs_ = op->value;
+    }
+    if (value_add) {
+      auto a = value_add->a.as<Call>();
+      auto b = value_add->b.as<Call>();
+      if (a && a->name != op->func->func_name()) {
+        atomic_data_.atomic_rhs_ = value_add->a;
+      } else if (b && b->name != op->func->func_name()) {
+        atomic_data_.atomic_rhs_ = value_add->b;
+      } else {
+        CHECK(false) << "no support atomic return type";
+      }
+    }
+    CHECK(atomic_data_.atomic_rhs_.defined()) << "atomic_data_.atomic_rhs_ is not defined";
+    atomic_data_.output_tensor_data_type_info_ = scop_info_.GetDtypeOf(op->func->func_name());
+
+    ConstructAtomicReturnFuncName();
+    return MakeAtomicStmt();
+  }
+  return IRMutator::Mutate_(op, s);
+}
+
+void AtomicReturnStmtEmit::ConstructAtomicReturnFuncName() {
+  std::string reduce_lib_namespace = "";
+  std::string reduce_return_name = "";
+  if (scop_info_.user_config_.GetReduceLibType() == REDUCE_LIB_TYPE_ORIGIN) {
+    reduce_lib_namespace = AKG_REDUCE_LIB_SPACE;
+    reduce_return_name = AKG_REDUCE_RETURN_NAME;
+  } else if (scop_info_.user_config_.GetReduceLibType() == REDUCE_LIB_TYPE_PARIS) {
+    reduce_lib_namespace = PARIS_REDUCE_LIB_SPACE;
+    reduce_return_name = PARIS_REDUCE_RETURN_NAME;
+  } else {
+    CHECK(false) << "reduce lib type is invalid!";
+  }
+  std::string ret = "";
+  ret += reduce_lib_namespace;
+  ret += "::";
+  ret += reduce_return_name;
+
+  atomic_data_.akg_atomic_api_ = ret;
+  ret = "";
+
+  std::string op = atomic_data_.reduce_op_;
+  ret += op;
+
+  atomic_data_.akg_atomic_template_arg_ = ret;
+}
+
+Stmt AtomicReturnStmtEmit::MakeAtomicStmt() {
+  std::string func_name = atomic_data_.akg_atomic_api_;
+
+  Expr template_arg0 = make_const(atomic_data_.output_tensor_data_type_info_, 1);
+  CHECK(!atomic_data_.akg_atomic_template_arg_.empty());
+  Expr template_arg1 = StringImm::make(atomic_data_.akg_atomic_template_arg_);
+
+  Expr a1 = atomic_data_.atomic_rhs_;
+
+  auto p = atomic_data_.gm_write_stmt_.as<Provide>();
+  CHECK(p);
+
+  Expr a2 = Call::make(p->value.type(), p->func->func_name(), p->args, Call::Halide, p->func, 0);
+  a2 = Call::make(a2.type(), "&", {a2}, Call::Extern);
+
+  std::string op_info = atomic_data_.reduce_op_ + "()";
+
+  Array<Expr> args;
+  Expr a3 = Call::make(Int(32), atomic_data_.reduce_op_, args, Call::Extern);
+
+  return Evaluate::make(Call::make(Int(32), func_name, {template_arg0, template_arg1, a1, a2, a3}, Call::Extern));
 }
 
 }  // namespace poly

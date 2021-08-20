@@ -33,6 +33,7 @@ class OperatorSharedStrategy {
                                 const std::set<std::string> &id_sets);
   void CreateClusterList(const isl::schedule_node &node, const isl::union_map &outer_sch);
   void RecordCustomPromotedTensors(std::set<std::string> &id_sets);
+  void DeleteNotPromotedTensors(std::set<std::string> &id_sets);
 
  protected:
   ScopInfo &scop_info_;

@@ -31,6 +31,25 @@ constexpr auto MIND_TRICKS_SWIZZLE_PRAGMA = "pragma_swizzle_kernel";
 constexpr auto ORIGIN_THREAD_DIM_X = "bind_thread_x";
 constexpr auto SHARED_MEM_PROMOTED_COMPLETE = "shared_mem_promoted_complete";
 
+// example:
+// atomic_SumOp
+constexpr auto REDUCE_ATOMIC_FLAG_SIZE = 2;
+constexpr auto REDUCE_ATOMIC_FLAG = "atomic";
+constexpr auto REDUCE_ATOMIC_FLAG_POS = 0;
+constexpr auto REDUCE_ATOMIC_FLAG_TYPE_POS = 1;
+
+constexpr auto REDUCE_LIB_TYPE_ORIGIN = "origin";
+constexpr auto REDUCE_LIB_TYPE_PARIS = "paris";
+constexpr auto AKG_REDUCE_LIB_SPACE = "akg_reduce";
+constexpr auto AKG_REDUCE_LIB_NAME = "AkgReduce";
+constexpr auto AKG_KAHAN_LIB_NAME = "AkgKahanAccumulation";
+constexpr auto PARIS_REDUCE_LIB_SPACE = "paris_reduce";
+constexpr auto PARIS_REDUCE_LIB_NAME = "ParisReduce";
+constexpr auto AKG_REDUCE_RETURN_NAME = "AkgAtomicReturn";
+constexpr auto PARIS_REDUCE_RETURN_NAME = "ParisReturn";
+constexpr auto REDUCE_LIB_TYPE_FLAG = "reduceLibType";
+constexpr auto REDUCE_INIT_FLAG = "InitStmt";
+
 class GpuIslEmitter : public IslEmitter {
  public:
   GpuIslEmitter(ScopInfo &info, const NodeInfoRepo &n, const isl::id_list &i) : IslEmitter(info, n, i) {}
@@ -80,6 +99,33 @@ class GpuIslEmitter : public IslEmitter {
   Stmt EmitRealizeForGlobalTensor(Stmt stmt);
 
   std::unordered_map<const Variable *, Expr> stride_modify_iter_map_;
+};
+
+struct AtomicReturnData {
+  std::string reduce_op_;
+  std::string akg_atomic_api_;
+  std::string akg_atomic_template_arg_;
+  Type output_tensor_data_type_info_;
+  Expr atomic_rhs_;
+  Stmt gm_write_stmt_;
+};
+
+class AtomicReturnStmtEmit : public IRMutator {
+ public:
+  explicit AtomicReturnStmtEmit(ScopInfo &scop_info) : scop_info_(scop_info) {}
+
+  Stmt Mutate_(const AttrStmt *op, const Stmt &s);
+
+  Stmt Mutate_(const Provide *op, const Stmt &s);
+
+  void ConstructAtomicReturnFuncName();
+
+  Stmt MakeAtomicStmt();
+
+ private:
+  ScopInfo &scop_info_;
+  AtomicReturnData atomic_data_;
+  bool in_atomic_area_{false};
 };
 
 }  // namespace poly

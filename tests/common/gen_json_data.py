@@ -18,10 +18,13 @@ import tempfile
 import json
 import logging
 import inspect
+from collections import namedtuple
+
 import numpy as np
+import scipy as sp
 from akg.global_configs import get_ascend_meta_path, get_cuda_meta_path
-from tests.common.gen_random import random_gaussian
-from tests.common.test_utils import precheck
+from tests.common.gen_random import random_gaussian, gen_indices
+from tests.common.test_utils import precheck, tensor_scatter_add_np, gather_np
 
 
 def get_attr(attr_desc, attr_type):
@@ -381,6 +384,18 @@ op_dsl = {
     "RealDiv": lambda inputs, output, attr: "%s = np.divide(%s, %s)" %
         (output[0]['tensor_name'], get_input(
         inputs[0][0]), get_input(inputs[1][0])),
+    "Div": lambda inputs, output, attr: "%s = np.divide(%s, %s)" %
+        (output[0]['tensor_name'], get_input(
+        inputs[0][0]), get_input(inputs[1][0])),
+    "FloorDiv": lambda inputs, output, attr: "%s = np.floor_divide(%s, %s)" %
+        (output[0]['tensor_name'], get_input(
+        inputs[0][0]), get_input(inputs[1][0])),
+    "Mod": lambda inputs, output, attr: "%s = np.fmod(%s, %s)" %
+        (output[0]['tensor_name'], get_input(
+        inputs[0][0]), get_input(inputs[1][0])),
+    "FloorMod": lambda inputs, output, attr: "%s = np.mod(%s, %s)" %
+        (output[0]['tensor_name'], get_input(
+        inputs[0][0]), get_input(inputs[1][0])),
     "Minimum": lambda inputs, output, attr: "%s = np.minimum(%s, %s)" %
         (output[0]['tensor_name'], get_input(
         inputs[0][0]), get_input(inputs[1][0])),
@@ -408,6 +423,9 @@ op_dsl = {
     "Reciprocal": lambda inputs, output, attr: "%s = np.divide(1.0, %s)" %
         (output[0]['tensor_name'], get_input(inputs[0][0])),
     "Equal": lambda inputs, output, attr: "%s = np.equal(%s, %s)" %
+        (output[0]['tensor_name'], get_input(
+        inputs[0][0]), get_input(inputs[1][0])),
+    "NotEqual": lambda inputs, output, attr: "%s = np.not_equal(%s, %s)" %
         (output[0]['tensor_name'], get_input(
         inputs[0][0]), get_input(inputs[1][0])),
     "GreaterEqual": lambda inputs, output, attr: "%s = np.greater_equal(%s, %s)" %
@@ -461,6 +479,20 @@ op_dsl = {
         (output[0]['tensor_name'], get_input(inputs[0][0])),
     "LogicalAnd": lambda inputs, output, attr: "%s = np.logical_and(%s, %s)" %
         (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0])),
+    "LogicalOr": lambda inputs, output, attr: "%s = np.logical_or(%s, %s)" %
+        (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0])),
+    "Erf": lambda inputs, output, attr: "%s = sp.special.erf(%s)" %
+        (output[0]['tensor_name'], get_input(inputs[0][0])),
+    "TensorScatterAdd": lambda inputs, output, attr: "%s = tensor_scatter_add_np(%s, %s, %s)" %
+        (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]),
+        get_input(inputs[2][0])),
+    "GatherNd": lambda inputs, output, attr: "%s = %s[tuple(%s.transpose().tolist())]" %
+        (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0])),
+    "UnsortedSegmentSum": lambda inputs, output, attr: "%s = np.zeros([%s,] + %s[%s:]);  np.add.at(%s, %s, %s)" %
+        (output[0]['tensor_name'], get_attr(attr, 'num_segments'), inputs[0][0]['shape'], len(inputs[1][0]['shape']),
+        output[0]['tensor_name'], get_input(inputs[1][0]), get_input(inputs[0][0])),
+    "Gather": lambda inputs, output, attr: "%s = gather_np(%s, %s, %s)" %
+        (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]), get_attr(attr, "axis"))
 }
 
 def conv_2d_str(inputs, output, attr):
@@ -573,11 +605,21 @@ def gen_json_data(op_desc, with_compute=True):
     p = CodePrinter(uni_file_name)
     idx = 0
 
-    # Collect input which should be processed by atomic clean.
+    # Collect input which should be processed by atomic clean / or should be indices.
     clean_input = []
+    indices_input = {}
+    MakeIndices = namedtuple("MakeIndices", "name data_shape indices_shape indices_dtype attrs")
     sum_out = None
     for op in desc["op_desc"]:
-        if op["name"] == "ReduceSum":
+        if op["name"] in ("ReduceSum", "UnsortedSegmentSum"):
+            if op["name"] == "UnsortedSegmentSum":
+                assert op["input_desc"][1][0]["data_type"] == "int32", "Default indices type should be int32"
+                assert op["attr"][1]["name"] == "num_segments", "UnsortedSegmentSum only accepts num_segments attribute."
+                indices_input[op["input_desc"][1][0]["tensor_name"]] = \
+                    MakeIndices(name=op["name"], data_shape=op["input_desc"][0][0]["shape"],
+                                indices_shape=op["input_desc"][1][0]["shape"],
+                                indices_dtype=op["input_desc"][1][0]["data_type"],
+                                attrs=op["attr"][1]["value"])
             for a in op["attr"]:
                 if a["name"] == "enable_atomic_add":
                     sum_out = op["output_desc"][0]["tensor_name"]
@@ -587,6 +629,20 @@ def gen_json_data(op_desc, with_compute=True):
                 continue
             if op["input_desc"][1][0]["tensor_name"] == sum_out:
                 clean_input.append(op["input_desc"][0][0]["tensor_name"])
+        elif op["name"] in ("TensorScatterAdd", "Gather", "GatherNd"):
+            assert op["input_desc"][1][0]["data_type"] == "int32", "Default indices type should be int32"
+            indices_input[op["input_desc"][1][0]["tensor_name"]] = \
+                MakeIndices(name=op["name"], data_shape=op["input_desc"][0][0]["shape"],
+                            indices_shape=op["input_desc"][1][0]["shape"],
+                            indices_dtype=op["input_desc"][1][0]["data_type"],
+                            attrs=None)
+            if op["name"] == "Gather":
+                assert op["attr"][0]["name"] == "axis", "Gather only accepts axis attribute."
+                indices_input[op["input_desc"][1][0]["tensor_name"]] = \
+                    MakeIndices(name=op["name"], data_shape=op["input_desc"][0][0]["shape"],
+                                indices_shape=op["input_desc"][1][0]["shape"],
+                                indices_dtype=op["input_desc"][1][0]["data_type"],
+                                attrs=op["attr"][0]["value"])
 
     input_mean_value = precheck(desc)
     for input_desc in desc["input_desc"] if desc["input_desc"] is not None else []:
@@ -595,6 +651,8 @@ def gen_json_data(op_desc, with_compute=True):
         tensor_name = input_desc[0]["tensor_name"]
         if tensor_name in clean_input:
             item = np.zeros(shape).astype(dtype)
+        elif tensor_name in indices_input.keys():
+            item = gen_indices(indices_input[tensor_name])
         else:
             item = random_gaussian(shape, miu=input_mean_value, sigma=0.1).astype(dtype)
         input_for_mod.append(item)

@@ -883,7 +883,25 @@ class ScopMakeScheduleTree final : protected IRVisitor {
   }
 
   void Visit_(const AttrStmt *op) final {
-    if (op->attr_key == air::ir::attr::reduce_update) {
+    if (op->attr_key == air::ir::attr::atomic_tot) {
+      size_t stmt_index = scop_info_.analysis_result_.GetStatementMap().size();
+      isl::id id(set.ctx(), macro_stmt >= 0 ? kStatementLabel + std::to_string(macro_stmt)
+                                            : kStatementLabel + std::to_string(stmt_index));
+      CHECK(op->value.as<StringImm>());
+      scop_info_.analysis_result_.RecordTensorOfTensorStmt(id.get_name(), op->value.as<StringImm>()->value);
+      sch = MakeScheduleTreeHelper(op->body, scop_info_, set, outer, macro_stmt);
+    } else if (op->attr_key == "TENSOR_OF_TENSOR") {
+      scop_info_.analysis_result_.SetTensorOfTensor(true);
+      sch = MakeScheduleTreeHelper(op->body, scop_info_, set, outer, macro_stmt);
+    } else if (op->attr_key == "TENSOR_NOT_PROMOTE") {
+      CHECK(op->value.as<StringImm>());
+      scop_info_.analysis_result_.RecordTensorsNotPromote(op->value.as<StringImm>()->value);
+      sch = MakeScheduleTreeHelper(op->body, scop_info_, set, outer, macro_stmt);
+    } else if (op->attr_key == "INNER_TENSOR") {
+      CHECK(op->value.as<StringImm>());
+      scop_info_.analysis_result_.RecordInnerTensor(op->value.as<StringImm>()->value);
+      sch = MakeScheduleTreeHelper(op->body, scop_info_, set, outer, macro_stmt);
+    } else if (op->attr_key == air::ir::attr::reduce_update) {
       Array<IterVar> red = Downcast<Array<IterVar>>(op->node);
       const auto pro = op->body.as<Provide>();
       if (pro) {

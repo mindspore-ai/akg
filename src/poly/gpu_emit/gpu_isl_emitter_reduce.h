@@ -38,13 +38,6 @@ constexpr auto REDUCE_FLAG_STMT_PREFIX_POS = 3;
 constexpr auto REDUCE_FLAG_STMT_NUM_POS = 4;
 constexpr auto REDUCE_FLAG_REDUCE_INDEX = 5;
 
-// example:
-// atomic_SumOp
-constexpr auto REDUCE_ATOMIC_FLAG_SIZE = 2;
-constexpr auto REDUCE_ATOMIC_FLAG = "atomic";
-constexpr auto REDUCE_ATOMIC_FLAG_POS = 0;
-constexpr auto REDUCE_ATOMIC_FLAG_TYPE_POS = 1;
-
 constexpr auto DEFAULT_TENSOR_INDEX = "[0]";
 
 constexpr auto USELESS_INDEX = "0";
@@ -55,18 +48,6 @@ constexpr auto SCALAR_KHY_PREFIX = "kahan_y";
 constexpr auto SCALAR_KHC_PREFIX = "kahan_c";
 constexpr auto SHARED_MEMORY_PREFIX = "__shared__";
 constexpr auto SHARED_TENSOR_PREFIX = "red_buf";
-
-constexpr auto REDUCE_LIB_TYPE_ORIGIN = "origin";
-constexpr auto REDUCE_LIB_TYPE_PARIS = "paris";
-constexpr auto AKG_REDUCE_LIB_SPACE = "akg_reduce";
-constexpr auto AKG_REDUCE_LIB_NAME = "AkgReduce";
-constexpr auto AKG_KAHAN_LIB_NAME = "AkgKahanAccumulation";
-constexpr auto PARIS_REDUCE_LIB_SPACE = "paris_reduce";
-constexpr auto PARIS_REDUCE_LIB_NAME = "ParisReduce";
-constexpr auto AKG_REDUCE_RETURN_NAME = "AkgAtomicReturn";
-constexpr auto PARIS_REDUCE_RETURN_NAME = "ParisReturn";
-constexpr auto REDUCE_LIB_TYPE_FLAG = "reduceLibType";
-constexpr auto REDUCE_INIT_FLAG = "InitStmt";
 
 constexpr auto MEM_TYPE_SHARED = "shared";
 constexpr auto MEM_TYPE_LOCAL = "local";

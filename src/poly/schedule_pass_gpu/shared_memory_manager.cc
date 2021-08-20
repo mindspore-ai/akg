@@ -426,9 +426,49 @@ void SharedMemoryManager::GatherBufferFootprintDefInfo(const isl::schedule_node 
 isl::schedule_node SharedMemoryManager::HoistClusters(const isl::schedule_node &root_node,
                                                       const isl::schedule_node &node) {
   auto partial_sched_mupa = ShortScheduleMupa(root_node, node);
-  auto res_node = node;
+
+  std::vector<BufferDefInfo> buffer_def_infos_origin;
+  std::vector<BufferDefInfo> buffer_def_infos_temp;
+  auto origin_binds = scop_info_.user_config_.GetOriginBind();
+  std::unordered_set<std::string> tensor_name;
+
+  for (auto i : origin_binds) {
+    if (!i.first.defined()) continue;
+    tensor_name.insert(i.first->op->name);
+  }
+
   for (size_t index = 0; index < scop_info_.analysis_result_.buffer_def_infos_.size(); index++) {
     BufferDefInfo &buffer_info = scop_info_.analysis_result_.buffer_def_infos_[index];
+    if (tensor_name.count(buffer_info.tensor_id.get_name())) {
+      buffer_def_infos_origin.push_back(buffer_info);
+    } else {
+      buffer_def_infos_temp.push_back(buffer_info);
+    }
+  }
+
+  auto res_node = node;
+  if (scop_info_.analysis_result_.GetTensorOfTensor()) {
+    SharedPromotion(buffer_def_infos_temp, res_node, root_node, node, partial_sched_mupa);
+    SharedPromotion(buffer_def_infos_origin, res_node, root_node, node, partial_sched_mupa);
+
+    scop_info_.analysis_result_.buffer_def_infos_.clear();
+    for (auto &b : buffer_def_infos_temp) {
+      scop_info_.analysis_result_.buffer_def_infos_.push_back(b);
+    }
+    for (auto &b : buffer_def_infos_origin) {
+      scop_info_.analysis_result_.buffer_def_infos_.push_back(b);
+    }
+  } else {
+    SharedPromotion(scop_info_.analysis_result_.buffer_def_infos_, res_node, root_node, node, partial_sched_mupa);
+  }
+  return res_node;
+}
+
+void SharedMemoryManager::SharedPromotion(std::vector<BufferDefInfo> &bd, isl::schedule_node &res_node,
+                                          const isl::schedule_node &root_node, const isl::schedule_node &node,
+                                          const isl::multi_union_pw_aff &partial_sched_mupa) {
+  for (size_t index = 0; index < bd.size(); index++) {
+    BufferDefInfo &buffer_info = bd[index];
     auto fp_cluster = buffer_info.GetFootPrintClusterGPU(node);
     if ((fp_cluster == nullptr || !fp_cluster->foot_print_.box.is_valid())) {
       continue;
@@ -472,7 +512,6 @@ isl::schedule_node SharedMemoryManager::HoistClusters(const isl::schedule_node &
       buffer_info.find_buffer = true;
     }
   }
-  return res_node;
 }
 
 isl::schedule_node SharedMemoryManager::HoistToBlockThreadMemory(isl::schedule_node &tree, GpuMemType type,
@@ -520,12 +559,7 @@ bool SharedMemoryManager::CoalescingAccessWay(const isl::schedule_node &root, co
     auto schedule = ShortSchedule(inner_band);
     auto schedule_access = local_access.apply_domain(schedule);
     for (auto access : schedule_access.get_map_list()) {
-      auto schedule_space = access.get_space().domain();
-      auto tensor_space = access.get_space().range();
-      auto element_next = CreateMapIncreaseDim(tensor_space, tensor_dim - 1);
-      auto schedule_next = CreateMapIncreaseDim(schedule_space, inner_depth - 1);
-      auto access_by_adjacent_inner = schedule_next.apply_domain(access).apply_range(access);
-      if (!access_by_adjacent_inner.is_subset(element_next)) {
+      if (!IsSubsetForIncreaseDim(access, tensor_dim - 1, inner_depth - 1)) {
         return true;
       }
     }

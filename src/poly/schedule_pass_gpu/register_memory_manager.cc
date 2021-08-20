@@ -205,9 +205,16 @@ void RegisterMemoryManager::CreateTensorCluster(const isl::schedule_node &node, 
     if (scop_info_.user_config_.GetEnableMatmul()) {
       tensor_list.push_back(item);
     } else {
-      if (!shared_dst_tensor_ids.count(item.get_name() + SHARE_SUFFIX)) {
-        tensor_list.push_back(item);
+      if (shared_dst_tensor_ids.count(item.get_name() + SHARE_SUFFIX)) {
+        continue;
       }
+
+      std::unordered_set<std::string> tensors = scop_info_.analysis_result_.GetTensorsNotPromote();
+      if (tensors.count(item.get_name())) {
+        continue;
+      }
+
+      tensor_list.push_back(item);
     }
   }
 

@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "poly/schedule_tree_util.h"
 #include "gpu_dma_analysis.h"
 #include "poly/scop.h"
 

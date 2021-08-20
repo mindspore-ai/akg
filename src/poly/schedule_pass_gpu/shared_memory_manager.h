@@ -77,6 +77,9 @@ class SharedMemoryManager : public SchedulePass {
   isl::schedule_node HoistSharedMemoryOnMark(const isl::schedule_node &root);
 
   void PrepareInfoForPromotion(const isl::schedule_node &root);
+  void SharedPromotion(std::vector<BufferDefInfo> &bd, isl::schedule_node &res_node,
+                       const isl::schedule_node &root_node, const isl::schedule_node &node,
+                       const isl::multi_union_pw_aff &partial_sched_mupa);
 
  private:
   ScopInfo &scop_info_;
