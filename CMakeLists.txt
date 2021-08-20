@@ -246,14 +246,21 @@ if(USE_CCE_RT OR USE_KC_AIR)
   list(REMOVE_ITEM COMPILER_SRCS ${RUNTIME_STUB_SRC})
 endif()
 
+if(USE_CCE_PROFILING)
+  file (
+    GLOB
+    CCE_PROFILING_SRCS
+    ${AKG_SOURCE_DIR}/src/profiler/ascend/*.cc)
+  list(APPEND COMPILER_SRCS ${CCE_PROFILING_SRCS})
+  include_directories(AFTER "${AKG_SOURCE_DIR}/src/profiler/ascend")
+endif()
+
 if (USE_CCE_RT)
   file(
     GLOB
-    ASCEND_SRCS
-    ${AKG_SOURCE_DIR}/src/profiler/ascend/*.cc
+    ASCEND_RUNTIME_SRCS
     ${AKG_SOURCE_DIR}/src/runtime/ascend/*.cc)
-  list(APPEND COMPILER_SRCS ${ASCEND_SRCS})
-  include_directories(AFTER "${AKG_SOURCE_DIR}/src/profiler/ascend")
+  list(APPEND COMPILER_SRCS ${ASCEND_RUNTIME_SRCS})
   include_directories(AFTER "${AKG_SOURCE_DIR}/src/runtime/ascend")
 endif()
 
@@ -308,7 +315,7 @@ add_library(akg SHARED ${COMPILER_SRCS} ${RUNTIME_SRCS} ${TOPI_SRCS} ${AKG_EXTEN
 add_dependencies(akg akg::isl_fixed)
 target_link_libraries(akg ${TVM_LINKER_LIBS} ${TVM_RUNTIME_LINKER_LIBS} akg::isl_fixed ${GMP_LIBRARY} pthread)
 
-if(USE_CCE_RT)
+if(USE_CCE_PROFILING)
   find_library(profiler_acl msprofiler_fwkacl /usr/local/Ascend/fwkacllib/lib64)
   find_library(profiler msprofiler_fwk /usr/local/Ascend/fwkacllib/lib64)
   find_library(profiler_protobuf ascend_protobuf /usr/local/Ascend/fwkacllib/lib64) 
