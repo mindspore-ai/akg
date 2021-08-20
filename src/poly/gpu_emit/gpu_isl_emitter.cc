@@ -523,6 +523,8 @@ Expr GpuIslEmitter::AdaptBlockNewVar(const std::string &name, MappingCfg *mappin
     return iter_name_map_[B2];
   } else if (name.find(CONV_O) != std::string::npos) {
     return iter_name_map_[B0];
+  } else {
+    return AdaptOneConfigForMulAxis(mapping_cfg, name, false);
   }
   return e;
 }
@@ -541,30 +543,46 @@ Expr GpuIslEmitter::AdaptThreadNewVar(const std::string &name, MappingCfg *mappi
       return e;
     }
   } else {
-    Expr div_e = iter_name_map_[T0];
-    for (size_t i = 0; i < mapping_cfg->bound; ++i) {
-      std::string thread_id_name = "t" + std::to_string(i);
-      if (name.find(thread_id_name) == std::string::npos) {
-        continue;
-      }
+    e = AdaptOneConfigForMulAxis(mapping_cfg, name, true);
+  }
+  return e;
+}
 
-      e = iter_name_map_[T0];
-      int thread_id_number = mapping_cfg->GetAt(i).second;
+Expr GpuIslEmitter::AdaptOneConfigForMulAxis(MappingCfg *mapping_cfg, const std::string &orig_name,
+                                             const bool is_thread) {
+  std::string config_name = T0;
+  std::string custom_name = CUSTOM;
+  std::string name = orig_name;
+  if (name.find(custom_name) != std::string::npos) {
+    config_name = name.substr(custom_name.size(), config_name.size());
+    int suffix_len = custom_name.size() + config_name.size();
+    name = name.substr(suffix_len + 1, name.size() - suffix_len);
+  }
 
-      if (i == 0) {
-        e = Mod::make(e, thread_id_number);
-        return e;
-      }
+  Expr e;
+  for (size_t i = 0; i < mapping_cfg->bound; ++i) {
+    std::string config_id_name = is_thread ? THREAD_STR : BLOCK_STR;
+    config_id_name += std::to_string(i);
+    if (name.find(config_id_name) == std::string::npos) {
+      continue;
+    }
 
-      for (size_t j = 0; j < i; ++j) {
-        thread_id_number = mapping_cfg->GetAt(j).second;
-        e = Div::make(e, thread_id_number);
-      }
+    e = iter_name_map_[config_name];
+    int config_id_number = mapping_cfg->GetAt(i).second;
 
-      thread_id_number = mapping_cfg->GetAt(i).second;
-      e = Mod::make(e, thread_id_number);
+    if (i == 0) {
+      e = Mod::make(e, config_id_number);
       return e;
     }
+
+    for (size_t j = 0; j < i; ++j) {
+      config_id_number = mapping_cfg->GetAt(j).second;
+      e = Div::make(e, config_id_number);
+    }
+
+    config_id_number = mapping_cfg->GetAt(i).second;
+    e = Mod::make(e, config_id_number);
+    return e;
   }
   return e;
 }

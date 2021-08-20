@@ -63,6 +63,7 @@ class GpuIslEmitter : public IslEmitter {
   virtual Expr AdaptPolyNewVar(std::string name);
   Expr AdaptThreadNewVar(const std::string &name, MappingCfg *mapping_cfg);
   Expr AdaptBlockNewVar(const std::string &name, MappingCfg *mapping_cfg);
+  Expr AdaptOneConfigForMulAxis(MappingCfg *mapping_cfg, const std::string &orig_name, const bool is_thread);
   int GetThreadExtent(const std::string &name);
   virtual Expr IterNameAdaptor(std::string name);
   std::map<std::string, VarExpr> iter_name_map_{{B0, VarExpr(BLOCK_IDX_X)},  {B1, VarExpr(BLOCK_IDX_Y)},

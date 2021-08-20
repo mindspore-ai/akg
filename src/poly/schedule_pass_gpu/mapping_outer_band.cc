@@ -508,47 +508,101 @@ isl::schedule MappingOuterBand::DoBlockMapping(const isl::schedule &sch) {
 
 // Map the inner and outer bands to the inner and outer mapping configuration.
 isl::schedule_node MappingOuterBand::MapCustomHelper(const isl::schedule_node orig_node, const bool is_inner,
-                                                     MappingCfg *mapping_cfg) {
+                                                     MappingCfg *mapping_cfg,
+                                                     std::unordered_map<int, std::string> custom_mapping_cfg) {
   auto node = orig_node;
   auto band_node = node.as<isl::schedule_node_band>();
   if (!band_node || !band_node.permutable()) {
     return node;
   }
 
-  std::unordered_map<int, std::string> custom_mapping_cfg = {};
+  // Prepare for tiling before mapping of block and thread respectively.
   int start_node_depth = node.get_tree_depth();
   auto partial_schedule = band_node.get_partial_schedule();
   auto upa_list = partial_schedule.get_union_pw_aff_list();
-  Mapping mapping;
+  auto prefix_upa_list = GetPrefixPartialSchedule(partial_schedule, node, true);
 
-  if (is_inner) {
-    custom_mapping_cfg = scop_info_.user_config_.GetCustomInnerMapping();
-    CHECK(!custom_mapping_cfg.empty()) << "The custom inner configuration was not obtained.";
-
-    auto prefix_upa_list = GetPrefixPartialSchedule(partial_schedule, node, true);
-    isl::schedule_node fix_node =
-      CheckMapSizeAndApplyTile(node, prefix_upa_list, mapping_cfg, true, custom_mapping_cfg);
-    node = node.insert_mark(isl::id(node.ctx(), THREAD_MARKER)).child(0);
-    std::unordered_set<std::string> outer_mapping_cfg = {SKIP_MARKER};
-    // In the mapping of the inner band, other configurations except the inner and outer layers need to be set to 0.
-    for (auto outer_mapping : scop_info_.user_config_.GetCustomOuterMapping()) {
-      outer_mapping_cfg.emplace(outer_mapping.second);
-    }
-    node = InsertRequiredMappingFilter(node, upa_list, mapping_cfg, mapping, custom_mapping_cfg, outer_mapping_cfg);
-
-  } else {
-    custom_mapping_cfg = scop_info_.user_config_.GetCustomOuterMapping();
-    CHECK(!custom_mapping_cfg.empty()) << "The custom outer configuration was not obtained.";
-
+  auto GetRangeAffList = [upa_list, band_node]() -> isl::union_pw_aff_list {
     auto domain = band_node.get_schedule().get_domain();
     isl::union_pw_aff_list range_aff_list(band_node.ctx(), static_cast<int>(upa_list.size()));
     for (int i = upa_list.size() - 1; i >= 0; --i) {
       auto range = upa_list.get_at(i).intersect_domain(domain);
       range_aff_list = range_aff_list.add(range);
     }
-    node = CheckMapSizeAndApplyTile(node, range_aff_list, mapping_cfg, true, custom_mapping_cfg);
-    node = node.insert_mark(isl::id(node.ctx(), BLOCK_MARKER)).child(0);
-    node = InsertRequiredMappingFilter(node, upa_list, mapping_cfg, mapping, custom_mapping_cfg);
+    return range_aff_list;
+  };
+
+  // Set the axis bound to each thread and block.
+  std::unordered_map<std::string, std::set<int>> one_config_for_mul_axis;
+  for (auto one_config : custom_mapping_cfg) {
+    auto axis = one_config.first;
+    auto axis_config = one_config.second;
+    one_config_for_mul_axis[axis_config].emplace(axis);
+  }
+
+  // Set different variables for thread and block.
+  std::string mark_name = BLOCK_MARKER;
+  std::string cfg_name = BLOCK_STR;
+  MappingType mapping_type = MappingType::REPLACE_BLOCKS;
+  isl::union_pw_aff_list all_upa_list = GetRangeAffList();
+  std::unordered_set<std::string> mul_outer_mapping_cfg = {};
+  std::unordered_set<std::string> one_outer_mapping_cfg = {};
+  if (is_inner) {
+    mark_name = THREAD_MARKER;
+    cfg_name = THREAD_STR;
+    mapping_type = MappingType::REPLACE_THREADS;
+    all_upa_list = prefix_upa_list;
+    mul_outer_mapping_cfg = {SKIP_MARKER};
+    one_outer_mapping_cfg = {SKIP_MARKER};
+    // In the mapping of the inner band, other configurations except the inner and outer layers need to be set to 0.
+    for (auto outer_mapping : scop_info_.user_config_.GetCustomOuterMapping()) {
+      one_outer_mapping_cfg.emplace(outer_mapping.second);
+    }
+    for (auto one_config : one_config_for_mul_axis) {
+      if (one_config.second.size() == 1) {
+        continue;
+      }
+      one_outer_mapping_cfg.emplace(one_config.first);
+    }
+  }
+
+  // Only one axis is bound to each thread and block.
+  std::unordered_map<int, std::string> new_custom_mapping_cfg;
+  for (auto one_config : custom_mapping_cfg) {
+    if (one_config_for_mul_axis[one_config.second].size() != 1) {
+      continue;
+    }
+    new_custom_mapping_cfg.emplace(one_config);
+  }
+
+  Mapping mapping;
+  node = CheckMapSizeAndApplyTile(node, all_upa_list, mapping_cfg, true, new_custom_mapping_cfg);
+  node = node.insert_mark(isl::id(node.ctx(), mark_name)).child(0);
+  node =
+    InsertRequiredMappingFilter(node, upa_list, mapping_cfg, mapping, new_custom_mapping_cfg, one_outer_mapping_cfg);
+
+  // Each thread and block are bound to multiple axes.
+  for (auto one_config : one_config_for_mul_axis) {
+    if (one_config.second.size() == 1) {
+      continue;
+    }
+
+    node = node.child(0);
+    new_custom_mapping_cfg.clear();
+
+    int config_size = 0;
+    for (auto it = one_config.second.rbegin(); it != one_config.second.rend(); ++it, ++config_size) {
+      new_custom_mapping_cfg[*it] = cfg_name + std::to_string(config_size);
+    }
+
+    int total_cfg = mapping_cfg->GetAt(one_config.first).second;
+    std::string new_cfg = SetOneConfigForMulAxis(node, false, total_cfg, one_config.second);
+    std::string replace_name = CUSTOM + one_config.first;
+    scop_info_.user_config_.RecordReplaceConfig(replace_name, new_cfg, mapping_type, false);
+    auto new_mapping_cfg = scop_info_.user_config_.GetReplaceConfig()[replace_name];
+    node = CheckMapSizeAndApplyTile(node, all_upa_list, new_mapping_cfg, true, new_custom_mapping_cfg);
+    node = InsertRequiredMappingFilter(node, upa_list, new_mapping_cfg, mapping, new_custom_mapping_cfg,
+                                       mul_outer_mapping_cfg);
   }
 
   scop_info_.upa_node_mapping_.emplace_back(std::make_pair(node.parent(), mapping));
@@ -565,8 +619,10 @@ isl::schedule MappingOuterBand::DoCustomMapping(const isl::schedule &sch) {
   // Map the inner band to the inner mapping configuration.
   auto MapFromInner = [&thread_record, thread_cfg, this](isl::schedule_node node) -> isl::schedule_node {
     if (CanBeMappedToThread(node, thread_record)) {
+      auto inner_mapping_cfg = scop_info_.user_config_.GetCustomInnerMapping();
+      CHECK(!inner_mapping_cfg.empty()) << "The custom inner configuration was not obtained.";
       auto node_bak = node;
-      node = MapCustomHelper(node, true, thread_cfg);
+      node = MapCustomHelper(node, true, thread_cfg, inner_mapping_cfg);
       if (!node_bak.is_equal(node)) {
         node = node.parent();
         thread_record.emplace_back(std::make_pair(node, thread_cfg->bound));
@@ -588,13 +644,15 @@ isl::schedule MappingOuterBand::DoCustomMapping(const isl::schedule &sch) {
   auto node = sch.get_root().map_descendant_bottom_up(MapFromInner);
 
   node = GetOuterBand(node);
+  auto outer_mapping_cfg = scop_info_.user_config_.GetCustomOuterMapping();
+  CHECK(!outer_mapping_cfg.empty()) << "The custom outer configuration was not obtained.";
   // Map the outer band to the outer mapping configuration.
   if (scop_info_.analysis_result_.GetIsOuterBlockMapping()) {
     auto block_cfg = scop_info_.user_config_.GetBlockConfig();
     CHECK(block_cfg != nullptr) << "block config is null";
-    node = MapCustomHelper(node, false, block_cfg);
+    node = MapCustomHelper(node, false, block_cfg, outer_mapping_cfg);
   } else {
-    node = MapCustomHelper(node, false, thread_cfg);
+    node = MapCustomHelper(node, false, thread_cfg, outer_mapping_cfg);
   }
 
   return node.get_schedule();

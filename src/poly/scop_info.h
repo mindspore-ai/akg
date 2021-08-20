@@ -112,7 +112,15 @@ struct MappingCfg {
     } else if (cfg_name.find(T2) != std::string::npos || cfg_name.find(B2) != std::string::npos) {
       fixed_pos_cfg = GetZ();
     } else {
-      LOG(FATAL) << "Mapping config can contain t0, t1, t2, b0, b1 and b2.";
+      bool is_find = false;
+      for (auto one_dim : dim) {
+        if (one_dim.first.find(cfg_name) != std::string::npos) {
+          fixed_pos_cfg = one_dim;
+          is_find = true;
+          break;
+        }
+      }
+      CHECK(is_find) << "The corresponding configuration was not found.";
     };
     return fixed_pos_cfg;
   }
