@@ -15,101 +15,118 @@
  */
 
 #include "composite/optimize/typecast_inserter.h"
-
+#include "src/pass/ir_util.h"
+/**
+ * input0 = xxx : Int32
+ * input1 = xxx : Int32
+ *
+ * output(1024) = Equal(input0(1024), input1(1024))
+ * output1(1024) = Cast(ouput(1024), 'int32')
+ *
+ * ->
+ *
+ * cast_0 = Cast(input0(1024), 'fp32')
+ * cast_1 = Cast(input1(1024), 'fp32')
+ * output(1024) = Equal(cast0, cast1)
+ * tmp_output(1024) = Cast(output(1024), 'fp16')
+ * output1(1024) = Cast(tmp_output(1024), 'int32')
+ */
 namespace akg {
+
+Expr TensorToCall(const Tensor &tensor) {
+  return Call::make(tensor->dtype, tensor->op->name, tensor->shape, Call::CallType::Halide, tensor->op);
+}
+
+Stmt CastStmtMaker(const Tensor &input_tensor, const Tensor &output_tensor, std::string cast_type) {
+  auto input_call = TensorToCall(input_tensor);
+  auto cast_call = Call::make(output_tensor->dtype, "Cast", {input_call}, Call::CallType::Intrinsic);
+  auto provide = Provide::make(output_tensor->op, 0, cast_call, output_tensor->shape);
+  Map<std::string, NodeRef> attr_node;
+  attr_node.Set("dst_type", StringImm::make(cast_type));
+  auto attr_pack = AttrStmt::make(attr_node, "attrs", Expr(1), provide);
+  return attr_pack;
+}
+
 class EqualCastInserterMutator : public IRMutator {
  public:
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) override {
-    if (op->attr_key == "attrs" && op->body.as<Provide>()) {
-      const auto *provide = op->body.as<Provide>();
-      CHECK(provide);
+    if (EqualCast(op)) {
+      auto provide = op->body.as<Provide>();
       auto call = provide->value.as<Call>();
-      CHECK(call);
-      auto it = typecast_ops_.find(call->name);
-      if (it != typecast_ops_.end() && call->type == Int(32)) {
-        CHECK_EQ(call->args.size(), 2);
-        if (call->args[0].as<Call>() && call->args[1].as<Call>() && call->args[0].as<Call>()->type == Int(32) &&
-            call->args[1].as<Call>()->type == Int(32)) {
-          auto input0 = call->args[0];
-          auto input1 = call->args[1];
-          auto in0_shape = call->args[0].as<Call>()->args;
-          auto in1_shape = call->args[1].as<Call>()->args;
-          Tensor t0 = placeholder(in0_shape, Float(32), "cmp_input1");
-          Tensor t1 = placeholder(in1_shape, Float(32), "cmp_input2");
-          Tensor t2 = placeholder(provide->args, Float(32), "cmp_output");
-          Map<std::string, NodeRef> attrs0, attrs1, attrs2, attrs3;
-          attrs0.Set("dst_type", StringImm::make("float32"));
-          attrs1.Set("dst_type", StringImm::make("float32"));
-          attrs3.Set("dst_type", StringImm::make("float32"));
-
-          auto arg0 = Call::make(t0->dtype, t0->op->name, t0->shape, Call::CallType::Halide, t0->op);
-          auto arg1 = Call::make(t1->dtype, t1->op->name, t1->shape, Call::CallType::Halide, t1->op);
-          auto arg2 = Call::make(t2->dtype, t2->op->name, t2->shape, Call::CallType::Halide, t2->op);
-          auto cast0 = Call::make(t0->dtype, "Cast", {input0}, Call::CallType::Intrinsic);
-          auto cast1 = Call::make(t1->dtype, "Cast", {input1}, Call::CallType::Intrinsic);
-          auto cmp_op = Call::make(Float(32), call->name, {arg0, arg1}, Call::CallType::Intrinsic);
-          auto assign_cast0 = Provide::make(t0->op, 0, cast0, in0_shape);
-          auto assign_cast1 = Provide::make(t1->op, 0, cast1, in1_shape);
-          auto assign_cmp = Provide::make(t2->op, 0, cmp_op, provide->args);
-          auto value_int32 = Call::make(Float(32), "Cast", {arg2}, Call::CallType::Intrinsic);
-          auto new_provide = Provide::make(provide->func, provide->value_index, value_int32, provide->args);
-          auto new_attr0 = AttrStmt::make(attrs0, "attrs", Expr(1), assign_cast0);
-          auto new_attr1 = AttrStmt::make(attrs1, "attrs", Expr(1), assign_cast1);
-          auto new_attr2 = AttrStmt::make(attrs2, "attrs", Expr(1), assign_cmp);
-          auto new_attr3 = AttrStmt::make(attrs3, "attrs", Expr(1), new_provide);
-          auto new_body = Block::make(Block::make(new_attr0, new_attr1), Block::make(new_attr2, new_attr3));
-          auto new_attr = AttrStmt::make(op->node, op->attr_key, op->value, new_body);
-          return new_attr;
-        }
-      }
+      Tensor input_a = Downcast<Operation>(call->args[0].as<Call>()->func).output(0);
+      Tensor input_b = Downcast<Operation>(call->args[1].as<Call>()->func).output(0);
+      Tensor cast_output_a = placeholder(input_a->shape, Float(32), "cmp_input1");
+      Tensor cast_output_b = placeholder(input_b->shape, Float(32), "cmp_input2");
+      Stmt cast_a = CastStmtMaker(input_a, cast_output_a, "float32");
+      Stmt cast_b = CastStmtMaker(input_b, cast_output_b, "float32");
+      auto cmp_call = Call::make(call->type, call->name, {TensorToCall(cast_output_a), TensorToCall(cast_output_b)},
+                                 Call::CallType::Intrinsic);
+      auto cmp_provide = Provide::make(provide->func, 0, cmp_call, provide->args);
+      Stmt cmp_stmt = AttrStmt::make(op->node, op->attr_key, op->value, cmp_provide);
+      return air::ir::MergeSeq({cast_a, cast_b, cmp_stmt});
     }
     return IRMutator::Mutate_(op, s);
   }
 
  private:
-  std::unordered_map<std::string, unsigned> typecast_ops_ = {
-    {"Equal", -1}, {"LessEqual", -1}, {"Less", -1}, {"Greater", -1}, {"GreaterEqual", -1},
-  };
+  bool EqualCast(const AttrStmt *op) {
+    auto provide = op->body.as<Provide>();
+    if (op->attr_key == "attrs" && provide) {
+      auto call = provide->value.as<Call>();
+      if (call && typecast_ops_.find(call->name) != typecast_ops_.end() && call->args.size()) {
+        auto arg0 = call->args[0].as<Call>();
+        auto arg1 = call->args[1].as<Call>();
+        if (arg0 && arg1 && arg0->type == Int(32) && arg1->type == Int(32)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  const std::unordered_set<std::string> typecast_ops_ = {"Equal", "LessEqual", "Less", "Greater", "GreaterEqual"};
 };
 
 // change bool -> int32 to bool -> fp16 -> int32
 class BoolCastInserterMutator : public IRMutator {
  public:
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) override {
-    if (op->attr_key == "attrs" && op->body.as<Provide>()) {
-      auto attrs = Downcast<Map<std::string, NodeRef>>(op->node);
-      if (attrs.find("dst_type") == attrs.end() || !attrs["dst_type"].as<StringImm>() ||
-          attrs["dst_type"].as<StringImm>()->value != "int32") {
-        return s;
-      }
-      const auto *provide = op->body.as<Provide>();
-      auto call = provide->value.as<Call>();
-      CHECK(call);
-      if (call->name == "Cast" && call->args[0].as<Call>() && call->args[0].as<Call>()->type == Bool(1)) {
-        auto input0 = call->args[0];
-        auto in0_shape = call->args[0].as<Call>()->args;
-        Tensor t0 = placeholder(in0_shape, Float(16), "fp16_input1");
-        Map<std::string, NodeRef> attrs0, attrs1;
-        attrs0.Set("dst_type", StringImm::make("float16"));
-        attrs1.Set("dst_type", StringImm::make("int32"));
-        auto arg0 = Call::make(t0->dtype, t0->op->name, t0->shape, Call::CallType::Halide, t0->op);
-        auto cast0 = Call::make(Float(16), "Cast", {input0}, Call::CallType::Intrinsic);
-        auto cast1 = Call::make(Int(32), "Cast", {arg0}, Call::CallType::Intrinsic);
-        auto assign_cast0 = Provide::make(t0->op, 0, cast0, in0_shape);
-        auto assign_cast1 = Provide::make(provide->func, 0, cast1, in0_shape);
-        auto new_attr0 = AttrStmt::make(attrs0, "attrs", Expr(1), assign_cast0);
-        auto new_attr1 = AttrStmt::make(attrs1, "attrs", Expr(1), assign_cast1);
-        auto new_block = Block::make(new_attr0, new_attr1);
-        return new_block;
-      }
+    if (CastToInt(op)) {
+      auto provide = op->body.as<Provide>();
+      auto cast_call = provide->value.as<Call>();
+      auto input_call = cast_call->args[0].as<Call>();
+      Tensor input_tensor = Downcast<Operation>(input_call->func).output(0);
+      Tensor cast_tmp_tensor = placeholder(input_call->args, Float(16), "fp16_input1");
+      Tensor output_tensor = Downcast<Operation>(provide->func).output(0);
+      Stmt cast_float = CastStmtMaker(input_tensor, cast_tmp_tensor, "float16");
+      Stmt cast_int = CastStmtMaker(cast_tmp_tensor, output_tensor, "int32");
+      return Block::make(cast_float, cast_int);
     }
     return s;
+  }
+
+ private:
+  bool CastToInt(const AttrStmt *op) {
+    auto provide = op->body.as<Provide>();
+    if (op->attr_key == "attrs" && provide) {
+      auto attrs = Downcast<Map<std::string, NodeRef>>(op->node);
+      if (attrs.find("dst_type") != attrs.end()) {
+        auto dst_type = attrs["dst_type"].as<StringImm>();
+        if (dst_type && dst_type->value == "int32") {
+          auto call = provide->value.as<Call>();
+          if (call && call->name == "Cast" && call->args[0].as<Call>() && call->args[0].as<Call>()->type == Bool(1)) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
   }
 };
 
 Stmt TypeCastInserter::Run(const Stmt &s) {
-  auto s1 = EqualCastInserterMutator().Mutate(s);
-  auto s2 = BoolCastInserterMutator().Mutate(s1);
-  return s2;
+  Stmt stmt = EqualCastInserterMutator().Mutate(s);
+  stmt = BoolCastInserterMutator().Mutate(stmt);
+  return stmt;
 }
 }  // namespace akg
