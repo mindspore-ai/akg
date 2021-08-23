@@ -1414,6 +1414,7 @@ std::string AnalysisResult::GetReduceOpType(isl::id reduce_stmt) {
   if (it == red_map.end()) {
     return std::string();
   }
+  if (!it->second.stmt_node->IsInstance<Provide>()) return std::string();
   auto provide = static_cast<const Provide *>(it->second.stmt_node);
   if (provide == nullptr) {
     return std::string();
