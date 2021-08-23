@@ -21,7 +21,7 @@ import logging
 from akg import composite
 from akg.utils import custom_tiling
 from akg.utils import kernel_exec as utils
-from akg.utils.result_analysis import gpu_profiling
+from akg.utils.result_analysis import gpu_profiling, get_compare_tolerance
 from akg.utils.format_transform import to_tvm_nd_array
 from tests.common.gen_json_data import gen_json_data
 from tests.common.base import get_rtol_atol
@@ -120,131 +120,6 @@ def _dump_info(desc, build_attrs, poly, input, output, expect):
         os.makedirs(dump_path)
 
     _dump_data(dump_path, input, output, expect)
-
-
-class IOInfo(object):
-    def __init__(self, name, dtype):
-        self.name = name
-        self.dtype = dtype
-
-    def __str__(self):
-        return "(" + str(self.name) + ", " + str(self.dtype) + ")"
-
-    def __repr__(self):
-        return "(" + str(self.name) + ", " + str(self.dtype) + ")"
-
-    def __hash__(self):
-        return hash(self.name + self.dtype)
-
-    def __eq__(self, other):
-        if not isinstance(other, IOInfo):
-            return False
-        return self.name == other.name and self.dtype == other.dtype
-
-
-def precision_analyze(desc: dict, tensors):
-    exclude_op_list = ["Minimum", "Maximum", "Reshape", "ZerosLike", "Tile", "Select", "InplaceAssign", "Greater",
-                       "SelectGT", "SelectLT", "LessEqual", "Less", "EquivFormat", "ExpandDims", "Transpose",
-                       "TransData", "BroadcastTo", "Assign"]
-    input_tensors = []
-    for input_desc in desc["input_desc"] if desc["input_desc"] is not None else []:
-        input_tensors.append(IOInfo(input_desc[0]["tensor_name"], input_desc[0]["data_type"]))
-
-    # Construct graph of current json
-    graph = {}
-    ops = {}  # recorder the operator that generates the current output
-    for op in desc["op_desc"]:
-        if op["name"] == "InplaceAssign":
-            output = IOInfo(op["input_desc"][0][0]["tensor_name"], op["input_desc"][0][0]["data_type"])
-            input = IOInfo(op["input_desc"][1][0]["tensor_name"], op["input_desc"][1][0]["data_type"])
-            graph[output] = [input]
-            ops[output] = op["name"]
-            fake_output = False
-            for attr in op["attr"]:
-                if attr["name"] == "fake_output":
-                    fake_output = attr["value"]
-            if not fake_output:
-                output = IOInfo(op["output_desc"][0]["tensor_name"], op["output_desc"][0]["data_type"])
-                input = IOInfo(op["input_desc"][2][0]["tensor_name"], op["input_desc"][2][0]["data_type"])
-                graph[output] = [input]
-                ops[output] = op["name"]
-        else:
-            output = IOInfo(op["output_desc"][0]["tensor_name"], op["output_desc"][0]["data_type"])
-            inputs = []
-            for input_desc in op["input_desc"]:
-                inputs.append(IOInfo(input_desc[0]["tensor_name"], input_desc[0]["data_type"]))
-            graph[output] = inputs
-            ops[output] = op["name"]
-
-    def _precision_reduce(x: IOInfo):
-        if x in input_tensors:
-            logging.debug("Skip {}, because it comes from input tensors".format(x))
-            return False
-        if x in ops and ops[x] in exclude_op_list:
-            logging.debug("Skip {}, because it comes from [{}] that will not reduce precision".format(x, ops[x]))
-            return False
-        return True
-
-    # DFS search for each tensor in tensors to check if they are casted from fp16
-    tensors = tensors if isinstance(tensors, (list, tuple)) else [tensors]
-    cast_from_fp16 = [False for _ in range(len(tensors))]
-    for i, tensor in enumerate(tensors):
-        logging.debug("[{}/{}] Analyzing sources of {}...".format(i + 1, len(tensors), tensor))
-        visited = []
-        stack = [tensor]
-        while len(stack) > 0:
-            cur_tensor = stack[-1]
-            stack.pop()
-            # If output comes from a fp16 tensor, and this tensor is produced by operators that will increase
-            # the rounding errors(such as Add), then we mark the output cast_from_fp16
-            if cur_tensor.dtype == "float16" and _precision_reduce(cur_tensor):
-                logging.info("{} --> {}".format(tensor, cur_tensor))
-                cast_from_fp16[i] = True
-                break
-            if cur_tensor not in visited:
-                visited.append(cur_tensor)
-                if cur_tensor not in graph:
-                    continue
-                for t in graph[cur_tensor]:
-                    stack.append(t)
-    return cast_from_fp16
-
-
-def get_compare_tolerance(json_str: str, output_indexes: list):
-    desc = json.loads(json_str)
-    compare_tolerance = []
-
-    # Collects output tensors of current json based on output_indexes.
-    io = []
-    for input_desc in desc["input_desc"] if desc["input_desc"] is not None else []:
-        io.append(IOInfo(input_desc[0]["tensor_name"], input_desc[0]["data_type"]))
-    for output_desc in desc["output_desc"]:
-        io.append(IOInfo(output_desc["tensor_name"], output_desc["data_type"]))
-    outputs = [io[idx] for idx in output_indexes]
-
-    analyze_indexes = []  # holds the index of float32 outputs
-    for i, o in enumerate(outputs):
-        if o.dtype == "float16":
-            compare_tolerance.append(1e-3)
-        else:
-            compare_tolerance.append(1e-4)
-            if o.dtype == "float32":
-                analyze_indexes.append(i)
-    if not analyze_indexes:
-        return compare_tolerance
-
-    # Check if these float32 outputs are cast from fp16, if so, use 1e-3 rtol and atol when comparing with numpy
-    logging.debug("=============== Precision Analyze ===============")
-    analyze_outputs = [outputs[idx] for idx in analyze_indexes]
-    cast_from_fp16 = precision_analyze(desc, analyze_outputs)
-    for i, v in enumerate(cast_from_fp16):
-        if v:
-            compare_tolerance[analyze_indexes[i]] = 1e-3
-            logging.warning("{} will use tolerance {} when comparing with expect."
-                            .format(outputs[analyze_indexes[i]], compare_tolerance[analyze_indexes[i]]))
-    logging.debug("============= Precision Analyze End =============")
-
-    return compare_tolerance
 
 
 def get_result(desc, poly, attrs=None, profiling=True, need_compare=True):
