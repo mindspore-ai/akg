@@ -355,7 +355,7 @@ def gather(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_gather((19717, 8, 1), 'float32', (108365, ), 'int32', 0, poly_sch=True)
 
 def gather_nd(poly_sch, fuzz_shape=None, mind_trick_str=''):
-    test_ms_gather_nd((19717, 1, 3), 'float32', (108365, 1), 'int32', 0, poly_sch=True)
+    test_ms_gather_nd((19717, 1, 3), 'float32', (108365, 1), 'int32', poly_sch=True)
 
 def tensor_scatter_add(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_tensor_scatter_add((19717, 8, 1), 'float32', (108365, 1), 'int32', 0, poly_sch=True,

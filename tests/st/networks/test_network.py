@@ -286,7 +286,7 @@ def test_googlenet_gpu_level0_perf():
 @pytest.mark.level1
 @pytest.mark.platform_x86_gpu_training
 @pytest.mark.env_onecard
-def test_googlenet_fm_gpu_level1():
+def test_googlenet_gpu_level1():
     test_network("gpu", "googlenet", "level1", check_performance=True)
 
 
@@ -818,5 +818,12 @@ def test_yolov3_darknet53_gpu_level1_test1():
 @pytest.mark.level1
 @pytest.mark.platform_x86_gpu_training
 @pytest.mark.env_onecard
-def test_yolov3_darknet53_gpu_level1_tensorcore():
-    test_network("gpu", "yolov3_darknet53", "level1_tensorcore", check_performance=True)
+def test_yolov3_darknet53_gpu_level1_tensorcore_test0():
+    test_network("gpu", "yolov3_darknet53", "level1_tensorcore", 2, 0, check_performance=True)
+
+
+@pytest.mark.level1
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
+def test_yolov3_darknet53_gpu_level1_tensorcore_test1():
+    test_network("gpu", "yolov3_darknet53", "level1_tensorcore", 2, 1, check_performance=True)

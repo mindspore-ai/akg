@@ -45,6 +45,10 @@ from tests.st.ops.gpu.test_ms_greater_equal import test_ms_greater_equal
 from tests.st.ops.gpu.test_ms_reciprocal import test_ms_reciprocal
 from tests.st.ops.gpu.test_ms_reduce_max import test_ms_reduce_max
 from tests.st.ops.gpu.test_ms_reduce_min import test_ms_reduce_min
+from tests.st.ops.gpu.test_ms_gather import test_ms_gather
+from tests.st.ops.gpu.test_ms_gather_nd import test_ms_gather_nd
+from tests.st.ops.gpu.test_ms_tensor_scatter_add import test_ms_tensor_scatter_add
+from tests.st.ops.gpu.test_ms_unsorted_segment_sum import test_ms_unsorted_segment_sum
 from tests.st.ops.gpu.test_fused_pad import test_fused_pad
 from tests.st.ops.gpu.test_fused_bn_reduce import test_fused_bn_reduce
 from tests.st.ops.gpu.test_fused_bn_update import test_fused_bn_update
@@ -367,6 +371,38 @@ def test_reduce_max():
     test_ms_reduce_max((9, 1024, 1024), 'float16', axis=None, keepdims=False, poly_sch=True)
     test_ms_reduce_max((9, 1024, 1024), 'float32', axis=2, keepdims=False, poly_sch=True)
     test_ms_reduce_max((9, 1024, 1024), 'float16', axis=2, keepdims=False, poly_sch=True)
+    return True
+
+
+@pytest.mark.level0
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
+def test_gather():
+    test_ms_gather((1024, 8, 1), 'float32', (512, ), 'int32', 0, poly_sch=True)
+    return True
+
+
+@pytest.mark.level0
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
+def test_gather_nd():
+    test_ms_gather_nd((512, 1, 3), 'float32', (1024, 1), 'int32', poly_sch=True)
+    return True
+
+
+@pytest.mark.level0
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
+def test_tensor_scatter_add():
+    test_ms_tensor_scatter_add((1024, 8, 1), 'float32', (2048, 1), 'int32', 0, poly_sch=True)
+    return True
+
+
+@pytest.mark.level0
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
+def test_unsorted_segment_sum():
+    test_ms_unsorted_segment_sum((512, 8, 1), 'float32', (512,), 'int32', 1024, poly_sch=True)
     return True
 
 
