@@ -53,7 +53,7 @@ class BroadcastInserterMutator : public IRMutator {
   Stmt DoInsert(const Expr &e, const size_t i, const Provide *provide, const Call *call, const AttrStmt *op) {
     Stmt first, second;
     std::string name = "broadcast_" + std::to_string(name_idx_++);
-    Tensor t = placeholder(provide->args, call->type, name);
+    Tensor t = placeholder(provide->args, e.type(), name);
     first = Provide::make(t->op, 0, Call::make(Int(32), "BroadcastTo", {e}, Call::CallType::PureIntrinsic), t->shape);
     Map<std::string, NodeRef> attrs = Downcast<Map<std::string, NodeRef>>(op->node);
     attrs.Set("shape", t->shape);
