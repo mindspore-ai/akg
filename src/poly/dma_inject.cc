@@ -1448,7 +1448,8 @@ void UpdateTensorShape(ScopInfo &scop_info, const isl::map &read_extension) {
 isl::schedule_node InsertStmtExtensionActor(ScopInfo &scop_info, isl::schedule_node tree, isl::map read,
                                             isl::map read_extension, const isl::union_map &raw_reads,
                                             const isl::union_map &raw_writes, const isl::union_map &raw_copyin,
-                                            const isl::union_map &schedule, BufferDefInfo &def, std::map<unsigned int, const isl::map> &stmt_dict) {
+                                            const isl::union_map &schedule, BufferDefInfo &def,
+                                            std::map<unsigned int, const isl::map> &stmt_dict) {
   isl::union_map reads = isl::union_map(read);
   isl::union_map writes = raw_writes.intersect_range(reads.range());
   isl::union_map dependence = DependenceAnalysis(writes, reads, writes, schedule);
@@ -1489,7 +1490,8 @@ isl::schedule_node InsertStmtExtensionActor(ScopInfo &scop_info, isl::schedule_n
 isl::schedule_node InsertStmtExtension(ScopInfo &scop_info, isl::schedule_node tree, isl::map read,
                                        isl::map read_extension, const isl::union_map &raw_reads,
                                        const isl::union_map &raw_writes, const isl::union_map &raw_copyin,
-                                       const isl::union_map &schedule, BufferDefInfo &def, std::map<unsigned int, const isl::map> &stmt_dict) {
+                                       const isl::union_map &schedule, BufferDefInfo &def,
+                                       std::map<unsigned int, const isl::map> &stmt_dict) {
   /* parse syntax tree */
   isl::union_map reads = isl::union_map(read);
   isl::union_map writes = raw_writes.intersect_range(reads.range());
@@ -1514,11 +1516,13 @@ isl::schedule_node InsertStmtExtension(ScopInfo &scop_info, isl::schedule_node t
       isl::union_map read_ext_tmp = read_ext.intersect_range(isl::union_set(cur_read.range()));
       auto cur_read_extension = isl::map::from(read_ext_tmp);
       read_extension_queue.push_back(std::make_pair(cur_read, cur_read_extension));
-      tree = InsertStmtExtensionActor(scop_info, tree, cur_read, cur_read_extension, raw_reads, raw_writes, raw_copyin, schedule, def, stmt_dict);
+      tree = InsertStmtExtensionActor(scop_info, tree, cur_read, cur_read_extension, raw_reads, raw_writes, raw_copyin,
+                                      schedule, def, stmt_dict);
     }
     // secondly, we will traverse the syntax stmts tree breathly
     for (auto item : read_extension_queue) {
-      tree = InsertStmtExtension(scop_info, tree, item.first, item.second, raw_reads, raw_writes, raw_copyin, schedule, def, stmt_dict);
+      tree = InsertStmtExtension(scop_info, tree, item.first, item.second, raw_reads, raw_writes, raw_copyin, schedule,
+                                 def, stmt_dict);
     }
   }
   return tree;
@@ -1635,7 +1639,8 @@ void PlaceDataCopyBelowImplFakeReads(ScopInfo &scop_info, isl::schedule_node &tr
          * *********************************************************************************/
         for (int i = 0; i < n; ++i) {
           // firstly, add extension related stmt to schedule tree
-          tree = InsertStmtExtensionActor(scop_info, tree, read_list.get_at(i), stmt_extension, raw_reads, raw_writes, raw_copyin, sched, buffer_def, stmt_dict);
+          tree = InsertStmtExtensionActor(scop_info, tree, read_list.get_at(i), stmt_extension, raw_reads, raw_writes,
+                                          raw_copyin, sched, buffer_def, stmt_dict);
           // secondly, parse the syntax relation tree to add other stmt to schedule tree
           tree = InsertStmtExtension(scop_info, tree, read_list.get_at(i), stmt_extension, raw_reads, raw_writes,
                                      raw_copyin, sched, buffer_def, stmt_dict);
@@ -1826,7 +1831,41 @@ isl::schedule_node PlaceOuterDataCopyBelow(ScopInfo &scop_info, const isl::sched
                                 cluster.RichReadRelations(), cluster.RichWriteRelations(), sch);
 }
 
+// this function put the cluster with const offset at the end of list.
+// should_split will be set to 0 since two clusters both with offset will be merged finally.
+// here is not a perfect solution, exploiting the merge function would be better.
+void SortFootPrintsByOffset(std::vector<std::unique_ptr<TensorFootprintCluster>> &clusters) {
+  auto HasConstOffset = [](const std::unique_ptr<TensorFootprintCluster> &cluster) {
+    auto &foot_print = cluster->foot_print_;
+    if (foot_print.is_valid) {
+      auto &box = cluster->foot_print_.box;
+      if (!box.is_null() && box.is_valid()) {
+        auto offset_affs = box.get_offset();
+        for (unsigned dim = 0; dim < offset_affs.size(); ++dim) {
+          auto aff = offset_affs.get_at(dim);
+          int offset = 0, num_vars = 0;
+          GetAffOffsetAndNumVars(aff, offset, num_vars);
+          if (offset != 0 && num_vars > 0) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  };
+  std::vector<std::unique_ptr<TensorFootprintCluster>> sorted_clusters;
+  for (auto &cluster : clusters) {
+    if (HasConstOffset(cluster)) {
+      sorted_clusters.push_back(std::move(cluster));
+    } else {
+      sorted_clusters.insert(sorted_clusters.begin(), std::move(cluster));
+    }
+  }
+  clusters = std::move(sorted_clusters);
+}
+
 void UniteInterleavedReadsAndWrites(std::vector<std::unique_ptr<TensorFootprintCluster>> &clusters) {
+  SortFootPrintsByOffset(clusters);
   for (size_t i = 0; i < clusters.size(); ++i) {
     for (size_t j = i + 1; j < clusters.size(); ++j) {
       auto box_i = clusters[i].get()->foot_print_.box;
