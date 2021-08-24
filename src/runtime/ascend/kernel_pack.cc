@@ -16,7 +16,6 @@
 #include <dmlc/common.h>
 #include "runtime/rt.h"
 #include "kernel.h"
-// #include "securec.h"
 
 namespace air {
 namespace runtime {
@@ -56,13 +55,6 @@ bool KernelPack::ReadFromJsonFileHelper(std::ifstream &kernelbin) {
     return false;
   }
   memset(kernel_, 0, sizeof(KernelPack) + binsize);
-  // if (memset_s(kernel_, sizeof(KernelPack) + binsize, 0, sizeof(KernelPack) + binsize) != EOK) {
-  //   LOG(FATAL) << "memset kernel_ failed.";
-  //   delete[] kernel_;
-  //   kernel_ = nullptr;
-  //   kernelbin.close();
-  //   return false;
-  // }
   kernel_->len = binsize;
   (void)kernelbin.seekg(0, std::ios::beg);
   (void)kernelbin.read(kernel_->contents, SizeToLong(kernel_->len));

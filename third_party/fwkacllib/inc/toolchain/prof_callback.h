@@ -52,6 +52,17 @@ struct ReporterData {
 };
 
 /**
+ * @name  MsprofHashData
+ * @brief struct of data to hash
+ */
+struct MsprofHashData {
+    int deviceId;                             // the index of device
+    size_t dataLen;                           // the length of data
+    unsigned char *data;                      // the data content
+    uint64_t hashId;                          // the id of hashed data
+};
+
+/**
  * @name  MsprofReporterModuleId
  * @brief module id of data to report
  */
@@ -71,6 +82,8 @@ enum MsprofReporterCallbackType {
     MSPROF_REPORTER_REPORT = 0,           // report data
     MSPROF_REPORTER_INIT,                 // init reporter
     MSPROF_REPORTER_UNINIT,               // uninit reporter
+    MSPROF_REPORTER_DATA_MAX_LEN,         // data max length for calling report callback
+    MSPROF_REPORTER_HASH                  // hash data to id
 };
 
 /**
@@ -104,7 +117,26 @@ enum MsprofCtrlCallbackType {
     MSPROF_CTRL_INIT_ACL_ENV = 0,           // start profiling with acl env
     MSPROF_CTRL_INIT_ACL_JSON,              // start profiling with acl.json
     MSPROF_CTRL_INIT_GE_OPTIONS,            // start profiling with ge env and options
-    MSPROF_CTRL_FINALIZE                    // stop profiling
+    MSPROF_CTRL_FINALIZE,                   // stop profiling
+    MSPROF_CTRL_REPORT_FUN_P,               // for report callback
+    MSPROF_CTRL_PROF_SWITCH_ON,             // for prof switch on
+    MSPROF_CTRL_PROF_SWITCH_OFF             // for prof switch off
+};
+
+#define    PROF_COMMANDHANDLE_TYPE_INIT              (0)
+#define    PROF_COMMANDHANDLE_TYPE_START             (1)
+#define    PROF_COMMANDHANDLE_TYPE_STOP              (2)
+#define    PROF_COMMANDHANDLE_TYPE_FINALIZE          (3)
+#define    PROF_COMMANDHANDLE_TYPE_MODEL_SUBSCRIBE   (4)
+#define    PROF_COMMANDHANDLE_TYPE_MODEL_UNSUBSCRIBE (5)
+
+#define MSPROF_MAX_DEV_NUM (64)
+
+struct MsprofCommandHandle {
+    uint64_t profSwitch;
+    uint32_t devNums; // length of device id list
+    uint32_t devIdList[MSPROF_MAX_DEV_NUM];
+    uint32_t modelId;
 };
 
 /**
@@ -125,6 +157,23 @@ typedef int32_t (*MsprofCtrlCallback)(uint32_t type, void *data, uint32_t len);
  */
 typedef void (*MsprofSetDeviceCallback)(uint32_t devId, bool isOpenDevice);
 
+/*
+ * @name  MsprofInit
+ * @brief Profiling module init
+ * @param [in] dataType: profiling type: ACL Env/ACL Json/GE Option
+ * @param [in] data: profiling switch data
+ * @param [in] dataLen: Length of data
+ * @return 0:SUCCESS, >0:FAILED
+ */
+int32_t MsprofInit(uint32_t dataType, void *data, uint32_t dataLen);
+
+/*
+ * @name AscendCL
+ * @brief Finishing Profiling
+ * @param NULL
+ * @return 0:SUCCESS, >0:FAILED
+ */
+int32_t MsprofFinalize();
 #ifdef __cplusplus
 }
 #endif

@@ -19,16 +19,27 @@
 
 #include "base.h"
 
-#if defined(__cplusplus) && !defined(COMPILE_OMG_PACKAGE)
+#if defined(__cplusplus)
 extern "C" {
 #endif
+
+typedef enum rtEventWaitStatus {
+    EVENT_STATUS_COMPLETE = 0,
+    EVENT_STATUS_NOT_READY = 1,
+    EVENT_STATUS_MAX = 2,
+} rtEventWaitStatus_t;
 
 /**
  * @ingroup event_flags
  * @brief event op bit flags
  */
-#define RT_EVENT_DEFAULT (0x00)
-#define RT_EVENT_WITH_FLAG (0x01)
+#define RT_EVENT_DEFAULT (0x0E)
+#define RT_EVENT_WITH_FLAG (0x0B)
+
+#define RT_EVENT_DDSYNC_NS    0x01U
+#define RT_EVENT_STREAM_MARK  0x02U
+#define RT_EVENT_DDSYNC       0x04U
+#define RT_EVENT_TIME_LINE    0x08U
 
 /**
  * @ingroup dvrt_event
@@ -106,6 +117,16 @@ RTS_API rtError_t rtEventQuery(rtEvent_t event);
 
 /**
  * @ingroup dvrt_event
+ * @brief Queries an event's wait status
+ * @param [in] event   event to query
+ * @param [in out] EVENT_WAIT_STATUS status
+ * @return EVENT_STATUS_COMPLETE for complete
+ * @return EVENT_STATUS_NOT_READY for not complete
+ */
+RTS_API rtError_t rtEventQueryWaitStatus(rtEvent_t event, rtEventWaitStatus_t *status);
+
+/**
+ * @ingroup dvrt_event
  * @brief computes the elapsed time between events.
  * @param [in] time   time between start and end in ms
  * @param [in] start  starting event
@@ -178,6 +199,18 @@ RTS_API rtError_t rtNotifyWait(rtNotify_t notify, rtStream_t stream);
 
 /**
  * @ingroup dvrt_event
+ * @brief Wait for a notify with time out
+ * @param [in] notify_ notify to be wait
+ * @param [in] stream_  input stream
+ * @param [in] timeOut  input timeOut
+ * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for error input
+ * @return RT_ERROR_STREAM_CONTEXT for stream is not in current ctx
+ */
+RTS_API rtError_t rtNotifyWaitWithTimeOut(rtNotify_t notify_, rtStream_t stream_, uint32_t timeOut);
+
+/**
+ * @ingroup dvrt_event
  * @brief Name a notify
  * @param [in] notify_ notify to be named
  * @param [in|out] name   identification name
@@ -239,7 +272,7 @@ RTS_API rtError_t rtNotifyGetAddrOffset(rtNotify_t notify, uint64_t *devAddrOffs
  */
 RTS_API rtError_t rtSetIpcNotifyPid(const char *name, int32_t pid[], int num);
 
-#if defined(__cplusplus) && !defined(COMPILE_OMG_PACKAGE)
+#if defined(__cplusplus)
 }
 #endif
 

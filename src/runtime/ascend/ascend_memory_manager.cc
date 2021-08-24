@@ -13,9 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <thread>
 #include <dmlc/common.h>
 #include "ascend_memory_manager.h"
 #include "runtime/mem.h"
+#include "runtime_error_codes.h"
 
 namespace air {
 namespace runtime {
@@ -46,15 +48,26 @@ uint64_t GetDefaultDeviceMemSize() {
 void AscendMemoryManager::MallocDeviceMemory() {
   auto context_mem = 0;
   device_mem_size_ = context_mem == 0 ? GetDefaultDeviceMemSize() : context_mem;
-  auto ret = rtMalloc(reinterpret_cast<void **>(&device_mem_base_), device_mem_size_, RT_MEMORY_HBM);
-  device_mem_offset_ = device_mem_size_;
+  rtError_t ret;
+  auto max_retry = 3;
+  for (auto i = 0; i < max_retry; ++i) {
+    ret = rtMalloc(reinterpret_cast<void **>(&device_mem_base_), device_mem_size_, RT_MEMORY_HBM);
+    if (ret == ACL_ERROR_RT_MEMORY_ALLOCATION) {
+      LOG(WARNING) << "Device may be occupied, sleep 1s and retry again!";
+      device_mem_base_ = nullptr;
+      std::this_thread::sleep_for(std::chrono::microseconds(1000000));
+    } else {
+      break;
+    }
+  }
+
   if (ret != RT_ERROR_NONE) {
     LOG(FATAL) << "rtMalloc mem size[" << device_mem_size_ << "] fail, ret[" << ret << "]";
   } else {
+    device_mem_offset_ = device_mem_size_;
     LOG(INFO) << "Call rtMalloc to allocate device memory Success, size : " << device_mem_size_
               << " bytes , address : " << reinterpret_cast<void *>(device_mem_base_);
   }
-  // AscendMemoryPool::GetInstance().Init(device_mem_base_, device_mem_size_, dynamic_mem_offset_);
 }
 
 void AscendMemoryManager::FreeDeviceMemory() {
