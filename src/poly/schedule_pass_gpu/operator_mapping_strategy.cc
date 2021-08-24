@@ -242,12 +242,14 @@ void ReduceMappingStrategy::MarkAtomicAddTensor(const isl::schedule_node_band &b
     [this, &stmt_ids](const isl::map m) { stmt_ids.insert(m.get_tuple_id(isl_dim_type::isl_dim_in)); });
   tensor.foreach_set([this, &stmt_ids](const isl::set &s) -> void {
     for (auto it : scop_info_.analysis_result_.GetReduceTensorInfoMap()) {
-      auto provide = static_cast<const Provide *>(it.second.stmt_node);
-      if (stmt_ids.count(it.first) == 0 || provide->func->func_name() != s.get_tuple_name()) {
-        continue;
+      if (it.second.stmt_node->IsInstance<Provide>()) {
+        auto provide = static_cast<const Provide *>(it.second.stmt_node);
+        if (stmt_ids.count(it.first) == 0 || provide->func->func_name() != s.get_tuple_name()) {
+          continue;
+        }
+        auto type = scop_info_.analysis_result_.GetReduceOpType(it.first);
+        scop_info_.analysis_result_.RecordAtomicTensors(AtomicInfo{s.get_tuple_name(), type});
       }
-      auto type = scop_info_.analysis_result_.GetReduceOpType(it.first);
-      scop_info_.analysis_result_.RecordAtomicTensors(AtomicInfo{s.get_tuple_name(), type});
     }
   });
 }

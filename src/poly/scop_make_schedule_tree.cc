@@ -346,18 +346,24 @@ class ScopMakeScheduleTree final : protected IRVisitor {
 
   void SetReduceInitValue(ReduceTensorInfo &reduce_tensor_info) {
     Expr init_value;
+    if (!reduce_tensor_info.stmt_node->IsInstance<Provide>()) {
+      return;
+    }
     auto provide = static_cast<const Provide *>(reduce_tensor_info.stmt_node);
     if (provide == nullptr) {
       return;
     }
     auto red_tensor_name = provide->func->func_name();
     for (auto it : scop_info_.analysis_result_.GetStatementMap()) {
-      auto prev_provide = static_cast<const Provide *>(it.second);
-      if (prev_provide == nullptr || prev_provide == provide || prev_provide->func->func_name() != red_tensor_name) {
-        continue;
+      if (it.second->IsInstance<Provide>()) {
+        auto prev_provide = static_cast<const Provide *>(it.second);
+        if (prev_provide == nullptr || prev_provide == provide || prev_provide->func->func_name() != red_tensor_name) {
+          continue;
+        }
+        init_value = prev_provide->value;
+        scop_info_.analysis_result_.RecordReduceInitIds(it.first);
+        break;
       }
-      init_value = prev_provide->value;
-      scop_info_.analysis_result_.RecordReduceInitIds(it.first);
     }
     if (!init_value.defined()) {
       return;
