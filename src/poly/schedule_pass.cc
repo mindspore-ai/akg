@@ -166,6 +166,16 @@ isl::union_map ComputeAllDependences(const isl::schedule &schedule, const isl::u
   return flowDeps.unite(falseDeps).coalesce();
 }
 
+isl::union_map ComputeRAW(const isl::schedule &schedule, const isl::union_map &reads_um,
+                          const isl::union_map &writes_um) {
+  auto reads = reads_um.domain_factor_domain();
+  auto writes = writes_um.domain_factor_domain();
+  auto sch = schedule.get_map();
+
+  // RAW
+  return DependenceAnalysis(writes, reads, writes, sch);
+}
+
 isl::schedule_node GetOuterBand(const isl::schedule_node &root) {
   auto outer_band = root;
 
@@ -363,8 +373,7 @@ std::vector<int> GetTileSizeOfLevel(const int member_size, const int dim_size, c
   return tile_size;
 }
 
-std::string GetPromotionTensorName(const isl::schedule_node &node, 
-                                   const std::vector<BufferDefInfo> &buffer_def_infos) {
+std::string GetPromotionTensorName(const isl::schedule_node &node, const std::vector<BufferDefInfo> &buffer_def_infos) {
   std::string id_name = "";
   if (!node.isa<isl::schedule_node_band>()) {
     return id_name;
@@ -377,7 +386,7 @@ std::string GetPromotionTensorName(const isl::schedule_node &node,
       std::string node_tensor_name = s.get_tuple_name();
       size_t pos = 0;
       if ((pos = node_tensor_name.find(LOCAL_SUFFIX)) != std::string::npos ||
-           (pos = node_tensor_name.find(SHARE_SUFFIX)) != std::string::npos) {
+          (pos = node_tensor_name.find(SHARE_SUFFIX)) != std::string::npos) {
         node_tensor_name = node_tensor_name.erase(pos, node_tensor_name.size() - pos);
       }
       id_name = (node_tensor_name == tensor_id.get_name()) ? node_tensor_name : id_name;
