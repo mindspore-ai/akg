@@ -210,7 +210,6 @@ def func(size_, miu_=0, sigma_=8, seed_=None):
     res = random_func_list[func_idx]
     return res
 
-
 @func_time_required
 def random_gaussian(size, miu=0, sigma=8, epsilon=0, seed=None):
     """Generate random array with absolution value obeys gaussian distribution."""
@@ -265,6 +264,36 @@ def random_gaussian(size, miu=0, sigma=8, epsilon=0, seed=None):
     data_pool = np.concatenate(tuple(data_copy_list), axis=0)
     return data_pool[0:data_len].reshape(size) + epsilon
 
+def random_data_to_disk(size, miu=None, sigma=None, seed=None, random_data_disk_path=None):
+    """
+    Generate local disk data
+    :param size:  Generate disk data size
+    :param miu:   Average value
+    :param sigma: Standard deviation
+    :param seed:  Seed of random number
+    :param random_data_disk_path: Specify the disk data save path
+    :return:
+    """
+    if miu is None or sigma is None:
+        miu_sigma_list = [[1, 0.1]]
+    else:
+        miu_sigma_list = []
+        for i in miu:
+            for j in sigma:
+                miu_sigma_list.append([i, j])
+
+    for miu_sigma in miu_sigma_list:
+        random_data = size // 8
+        random_data = random_gaussian(tuple([random_data]), miu=miu_sigma[0], sigma=miu_sigma[1], seed=seed)
+        if random_data_disk_path is None:
+            random_data_disk_path = os.environ.get("RANDOM_DATA_DISK_PATH")
+            if random_data_disk_path is None:
+                raise ValueError("Environment variable is missing from the current environment RANDOM_DATA_DISK_PATH "
+                                 ": {0}".format(random_data_disk_path))
+        data_path = random_data_disk_path + "/random_data_%s_%s.bin" % (str(miu_sigma[0]), str(miu_sigma[1]))
+        with open(data_path, "w+") as file:
+            random_data.tofile(file)
+            file.close()
 
 def gen_epsilon(dtype):
     """Generate suggested epsilon according to data type."""
@@ -741,10 +770,16 @@ def conv_2d_str(inputs, output, attr):
     return res
 
 
-def gen_json_data(op_desc, with_compute=True):
+def gen_json_data(op_desc, with_compute=True, input_for_mod=None):
     """Generating test data for composite json"""
     desc = json.loads(op_desc)
-    input_for_mod = []
+
+    if input_for_mod is None:
+        input_for_mod = []
+        gen_input = True
+    else:
+        gen_input = False
+
     input_dict = {}
     input_order = {}
     output_indexes = []
@@ -783,14 +818,18 @@ def gen_json_data(op_desc, with_compute=True):
         shape = [1] if not input_desc[0]["shape"] else input_desc[0]["shape"]
         dtype = input_desc[0]["data_type"]
         tensor_name = input_desc[0]["tensor_name"]
-        if tensor_name in clean_input:
-            item = np.zeros(shape).astype(dtype)
+        if gen_input or (input_for_mod is None or idx >= len(input_for_mod)):
+            if tensor_name in clean_input:
+                item = np.zeros(shape).astype(dtype)
+            else:
+                item = random_gaussian(
+                    shape, miu=input_mean_value, sigma=0.1).astype(dtype)
+            input_for_mod.append(item)
+            input_dict[tensor_name] = item
         else:
-            item = random_gaussian(
-                shape, miu=input_mean_value, sigma=0.1).astype(dtype)
-        input_for_mod.append(item)
+            input_dict[tensor_name] = input_for_mod[idx]
+
         input_order[tensor_name] = idx
-        input_dict[tensor_name] = item
         p.out("%s = np.array(input_dict.get('%s'))" % (tensor_name, tensor_name),
               new_line=False if idx == 0 else True)
         idx += 1
@@ -868,8 +907,9 @@ def gen_json_data(op_desc, with_compute=True):
     for output_desc in desc["output_desc"]:
         shape = [1] if not output_desc["shape"] else output_desc["shape"]
         dtype = output_desc["data_type"]
-        item = np.full(shape, np.nan, dtype)
-        input_for_mod.append(item)
+        if gen_input:
+            item = np.full(shape, np.nan, dtype)
+            input_for_mod.append(item)
         tensor_name = output_desc["tensor_name"]
         if tensor_name not in fake_output_tensors:
             real_idx = idx - out_nums
