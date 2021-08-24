@@ -45,6 +45,7 @@ from tests.operators.gpu.test_ms_less_equal import test_ms_less_equal
 from tests.operators.gpu.test_ms_greater_equal import test_ms_greater_equal
 from tests.operators.gpu.test_ms_reciprocal import test_ms_reciprocal
 from tests.operators.gpu.test_ms_reduce_sum import test_ms_reduce_sum
+from tests.operators.gpu.test_ms_reduce_prod import test_ms_reduce_prod
 from tests.operators.gpu.test_ms_reduce_max import test_ms_reduce_max
 from tests.operators.gpu.test_ms_reduce_min import test_ms_reduce_min
 from tests.operators.gpu.test_ms_reduce_and import test_ms_reduce_and
@@ -315,6 +316,15 @@ def reduce_sum(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_reduce_sum((9, 1024), 'float16', axis=1,
                        keepdims=True, poly_sch=poly_sch)
 
+def reduce_prod(poly_sch, fuzz_shape=None, mind_trick_str=''):
+    test_ms_reduce_prod((32,), 'float32', axis=None,
+                       keepdims=False, poly_sch=poly_sch)
+    test_ms_reduce_prod((65536, 3), 'float32', axis=(1,),
+                       keepdims=True, poly_sch=poly_sch)
+    test_ms_reduce_prod((256, 32, 1024), 'float32', axis=(1,),
+                       keepdims=False, poly_sch=poly_sch)
+
+
 
 def reduce_min(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_reduce_min((9, 1024, 1024), 'float32', axis=None,
@@ -490,7 +500,7 @@ if __name__ == '__main__':
               "log": log, "max": maximum, "min": minimum, "mul": mul, "neg": neg, "pow": pow,
               "reciprocal": reciprocal, "round": round, "rsqrt": rsqrt, "select": select, "sqrt": sqrt,
               "sub": sub, "reduce_max": reduce_max, "reduce_min": reduce_min, "reduce_and":reduce_and,
-              "reduce_or":reduce_or, "reduce_sum": reduce_sum, "expand_dims": expand_dims, "one_hot": one_hot,
+              "reduce_or":reduce_or, "reduce_sum": reduce_sum, "reduce_prod":reduce_prod, "expand_dims": expand_dims, "one_hot": one_hot,
               "reshape": reshape, "tile": tile, "trans_data": trans_data,
               "conv": conv, "gather":gather, "gather_nd":gather_nd,
               "tensor_scatter_add":tensor_scatter_add,

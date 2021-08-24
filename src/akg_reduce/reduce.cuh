@@ -81,7 +81,7 @@ __inline__ __device__ void AkgReduce(const ReduceOp op,         // The operator
 /**
  * @brief Atomic return function, from shared memory to global memory
  * @tparam T                  Dtype: half, float, double, int, signed char, bool;
- * @tparam ReduceOp           Operators for reduce: SumOp, MaxOp, MinOp, AndOp, OrOp;
+ * @tparam ReduceOp           Operators for reduce: SumOp, MaxOp, MinOp, AndOp, OrOp, ProdOp;
  */
 template <typename T, typename ReduceOp>
 __device__ __forceinline__ void AkgAtomicReturn(const T shared_result, // Reduction result on the shared memory

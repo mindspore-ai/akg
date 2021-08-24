@@ -440,6 +440,7 @@ constexpr auto AKG_REDUCE_MIN = "MinOp";
 constexpr auto AKG_REDUCE_MAX = "MaxOp";
 constexpr auto AKG_REDUCE_AND = "AndOp";
 constexpr auto AKG_REDUCE_OR = "OrOp";
+constexpr auto AKG_REDUCE_PROD = "ProdOp";
 constexpr auto AKG_REDUCE_UNSUPPORTED = "X";
 
 constexpr auto MATRIX_A = "matrix_a";
@@ -451,7 +452,7 @@ constexpr auto LOCAL_SUFFIX = "_local";
 constexpr auto SHARE_SUFFIX = "_shared";
 
 const std::unordered_set<std::string> AkgSupportedReduceOp = {AKG_REDUCE_SUM, AKG_REDUCE_MIN, AKG_REDUCE_MAX,
-                                                              AKG_REDUCE_AND, AKG_REDUCE_OR};
+                                                              AKG_REDUCE_AND, AKG_REDUCE_OR, AKG_REDUCE_PROD};
 
 const std::vector<std::string> ConvATTRList = {ATTR_CONV_FEATURE_W,  ATTR_CONV_KERNEL_H,   ATTR_CONV_KERNEL_W,
                                                ATTR_CONV_STRIDE_H,   ATTR_CONV_STRIDE_W,   ATTR_CONV_DILATION_H,
