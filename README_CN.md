@@ -77,14 +77,17 @@ AKG由三个基本的优化模块组成：规范化、自动调度和后端优�
   python3 test_all.py "op_name" # 运行op_name算子测试用例
   ```
 
+## 使用AKG生成高性能算子
+见[Wiki](https://gitee.com/mindspore/akg/wikis)。
+
 ## 贡献
 
 欢迎您的贡献，具体细节请参考[MindSpore贡献者Wiki](https://gitee.com/mindspore/mindspore/blob/master/CONTRIBUTING.md)。
 
 ## 版本说明
 
-版本说明详见[RELEASE](RELEASE.md).
+版本说明详见[RELEASE](RELEASE.md)。
 
 ## 许可证
 
-[Apache License 2.0](LICENSE)
+[Apache License 2.0](LICENSE)。

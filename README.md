@@ -76,6 +76,9 @@ Refer to [MindSpore Installation](https://www.mindspore.cn/install/en) for more 
   python3 test_all.py "op_name" # replace op_name with the operator name which you want to test
   ```
 
+## Using AKG to generate high performance kernels
+See [Wiki](https://gitee.com/mindspore/akg/wikis).
+
 ## Contributing
 
 Welcome contributions. See [MindSpore Contributor Wiki](https://gitee.com/mindspore/mindspore/blob/master/CONTRIBUTING.md) for
