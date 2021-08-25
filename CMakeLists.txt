@@ -316,11 +316,10 @@ add_dependencies(akg akg::isl_fixed)
 target_link_libraries(akg ${TVM_LINKER_LIBS} ${TVM_RUNTIME_LINKER_LIBS} akg::isl_fixed ${GMP_LIBRARY} pthread)
 
 if(USE_CCE_PROFILING)
-  find_library(profiler_acl msprofiler_fwkacl /usr/local/Ascend/fwkacllib/lib64)
-  find_library(profiler msprofiler_fwk /usr/local/Ascend/fwkacllib/lib64)
-  find_library(profiler_protobuf ascend_protobuf /usr/local/Ascend/fwkacllib/lib64) 
-  find_library(ge_runner ge_runner /usr/local/Ascend/fwkacllib/lib64)
-  target_link_libraries(akg ${ge_runner} ${profiler_acl} ${profiler} ${profiler_protobuf})
+  set(ASCEND_PATH /usr/local/Ascend)
+  set(ASCEND_RUNTIME_PATH ${ASCEND_PATH}/fwkacllib/lib64)
+  find_library(PROFILING msprofiler ${ASCEND_RUNTIME_PATH})
+  target_link_libraries(akg -Wl,--no-as-needed ${PROFILING})
 endif()
 
 # Related headers

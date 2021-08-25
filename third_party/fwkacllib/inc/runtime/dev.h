@@ -19,7 +19,7 @@
 
 #include "base.h"
 
-#if defined(__cplusplus) && !defined(COMPILE_OMG_PACKAGE)
+#if defined(__cplusplus)
 extern "C" {
 #endif
 
@@ -27,45 +27,68 @@ extern "C" {
 #define RT_CAPABILITY_NOT_SUPPORT (0x0)
 
 typedef struct tagRTDeviceInfo {
-  uint8_t env_type;  // 0: FPGA  1: EMU 2: ESL
-  uint32_t ctrl_cpu_ip;
-  uint32_t ctrl_cpu_id;
-  uint32_t ctrl_cpu_core_num;
-  uint32_t ctrl_cpu_endian_little;
-  uint32_t ts_cpu_core_num;
-  uint32_t ai_cpu_core_num;
-  uint32_t ai_core_num;
-  uint32_t ai_core_freq;
-  uint32_t ai_cpu_core_id;
-  uint32_t ai_core_id;
-  uint32_t aicpu_occupy_bitmap;
-  uint32_t hardware_version;
-  uint32_t ts_num;
+    uint8_t env_type;  // 0: FPGA  1: EMU 2: ESL
+    uint32_t ctrl_cpu_ip;
+    uint32_t ctrl_cpu_id;
+    uint32_t ctrl_cpu_core_num;
+    uint32_t ctrl_cpu_endian_little;
+    uint32_t ts_cpu_core_num;
+    uint32_t ai_cpu_core_num;
+    uint32_t ai_core_num;
+    uint32_t ai_core_freq;
+    uint32_t ai_cpu_core_id;
+    uint32_t ai_core_id;
+    uint32_t aicpu_occupy_bitmap;
+    uint32_t hardware_version;
+    uint32_t ts_num;
 } rtDeviceInfo_t;
 
 typedef enum tagRtRunMode {
-  RT_RUN_MODE_OFFLINE = 0,
-  RT_RUN_MODE_ONLINE = 1,
-  RT_RUN_MODE_AICPU_SCHED = 2,
-  RT_RUN_MODE_RESERVED
+    RT_RUN_MODE_OFFLINE = 0,
+    RT_RUN_MODE_ONLINE = 1,
+    RT_RUN_MODE_AICPU_SCHED = 2,
+    RT_RUN_MODE_RESERVED
 } rtRunMode;
 
 typedef enum tagRtAicpuDeployType {
-  AICPU_DEPLOY_CROSS_OS = 0x0,
-  AICPU_DEPLOY_CROSS_PROCESS = 0x1,
-  AICPU_DEPLOY_CROSS_THREAD = 0x2,
-  AICPU_DEPLOY_RESERVED
+    AICPU_DEPLOY_CROSS_OS = 0x0,
+    AICPU_DEPLOY_CROSS_PROCESS = 0x1,
+    AICPU_DEPLOY_CROSS_THREAD = 0x2,
+    AICPU_DEPLOY_RESERVED
 } rtAicpuDeployType_t;
 
 typedef enum tagRtFeatureType {
-  FEATURE_TYPE_MEMCPY = 0,
-  FEATURE_TYPE_RSV
+    FEATURE_TYPE_MEMCPY = 0,
+    FEATURE_TYPE_MEMORY = 1,
+    FEATURE_TYPE_RSV
 } rtFeatureType_t;
 
+typedef enum tagRtDeviceFeatureType {
+  FEATURE_TYPE_SCHE,
+  FEATURE_TYPE_BLOCKING_OPERATOR,
+  FEATURE_TYPE_END,
+} rtDeviceFeatureType_t;
+
 typedef enum tagMemcpyInfo {
-  MEMCPY_INFO_SUPPORT_ZEROCOPY = 0,
-  MEMCPY_INFO_RSV
+    MEMCPY_INFO_SUPPORT_ZEROCOPY = 0,
+    MEMCPY_INFO_RSV
 } rtMemcpyInfo_t;
+
+typedef enum tagMemoryInfo {
+    MEMORY_INFO_TS_4G_LIMITED = 0,
+    MEMORY_INFO_RSV
+} rtMemoryInfo_t;
+
+typedef enum tagRtDeviceModuleType {
+    RT_MODULE_TYPE_SYSTEM = 0,  /**< system info*/
+    RT_MODULE_TYPE_AICPU,       /** < aicpu info*/
+    RT_MODULE_TYPE_CCPU,        /**< ccpu_info*/
+    RT_MODULE_TYPE_DCPU,        /**< dcpu info*/
+    RT_MODULE_TYPE_AICORE,      /**< AI CORE info*/
+    RT_MODULE_TYPE_TSCPU,       /**< tscpu info*/
+    RT_MODULE_TYPE_PCIE,        /**< PCIE info*/
+    RT_MODULE_TYPE_VECTOR_CORE, /**< VECTOR CORE info*/
+} rtDeviceModuleType_t;
 
 /**
  * @ingroup dvrt_dev
@@ -185,7 +208,7 @@ RTS_API rtError_t rtDisableP2P(uint32_t devIdDes, uint32_t phyIdSrc);
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
  */
-RTS_API rtError_t rtDeviceCanAccessPeer(int32_t* canAccessPeer, uint32_t device, uint32_t peerDevice);
+RTS_API rtError_t rtDeviceCanAccessPeer(int32_t *canAccessPeer, uint32_t device, uint32_t peerDevice);
 
 /**
  * @ingroup dvrt_dev
@@ -356,7 +379,8 @@ RTS_API rtError_t rtSetDeviceWithoutTsd(int32_t device);
  * @return RT_ERROR_INVALID_VALUE for error input
  */
 RTS_API rtError_t rtDeviceResetWithoutTsd(int32_t device);
-#if defined(__cplusplus) && !defined(COMPILE_OMG_PACKAGE)
+
+#if defined(__cplusplus)
 }
 #endif
 

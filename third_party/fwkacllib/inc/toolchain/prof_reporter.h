@@ -41,42 +41,44 @@ namespace Engine {
  *  the Reporter class .used to send data to profiling
  */
 class MSVP_PROF_API Reporter {
- public:
-  virtual ~Reporter() {}
+public:
+    virtual ~Reporter() {}
 
- public:
-  /**
-   * @ingroup reporter
-   * @name  : Report
-   * @brief : API of libmsprof, report data to libmsprof, it's a non-blocking function \n
-              The data will be firstly appended to cache, if the cache is full, data will be ignored
-   * @param data [IN] const ReporterData * the data send to libmsporf
-   * @retval PROFILING_SUCCESS 0 (success)
-   * @retval PROFILING_FAILED -1 (failed)
-   *
-   * @par depend:
-   * @li libmsprof
-   * @li prof_reporter.h
-   * @since c60
-   * @see Flush
-   */
-  virtual int Report(const ReporterData *data) = 0;
+public:
+    /**
+     * @ingroup reporter
+     * @name  : Report
+     * @brief : API of libmsprof, report data to libmsprof, it's a non-blocking function \n
+                The data will be firstly appended to cache, if the cache is full, data will be ignored
+    * @param data [IN] const ReporterData * the data send to libmsporf
+    * @retval PROFILING_SUCCESS 0 (success)
+    * @retval PROFILING_FAILED -1 (failed)
+    *
+    * @par depend:
+    * @li libmsprof
+    * @li prof_reporter.h
+    * @since c60
+    * @see Flush
+    */
+    virtual int Report(const ReporterData *data) = 0;
 
-  /**
-   * @ingroup reporter
-   * @name  : Flush
-   * @brief : API of libmsprof, notify libmsprof send data over, it's a blocking function \n
-              The all datas of cache will be write to file or send to host
-   * @retval PROFILING_SUCCESS 0 (success)
-   * @retval PROFILING_FAILED -1 (failed)
-   *
-   * @par depend:
-   * @li libmsprof
-   * @li prof_reporter.h
-   * @since c60
-   * @see ProfMgrStop
-   */
-  virtual int Flush() = 0;
+    /**
+     * @ingroup reporter
+     * @name  : Flush
+     * @brief : API of libmsprof, notify libmsprof send data over, it's a blocking function \n
+                The all datas of cache will be write to file or send to host
+    * @retval PROFILING_SUCCESS 0 (success)
+    * @retval PROFILING_FAILED -1 (failed)
+    *
+    * @par depend:
+    * @li libmsprof
+    * @li prof_reporter.h
+    * @since c60
+    * @see ProfMgrStop
+    */
+    virtual int Flush() = 0;
+
+    virtual uint32_t GetReportDataMaxLen() = 0;
 };
 
 }  // namespace Engine

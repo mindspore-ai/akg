@@ -26,68 +26,10 @@ constexpr uint32_t kProfilingDeviceNum = 1;
 constexpr auto kRtSetDeviceRegName = "profiling";
 constexpr Status PROF_SUCCESS = 0;
 constexpr Status PROF_FAILED = 0xFFFFFFFF;
-}
+}  // namespace
 
-namespace Analysis {
-namespace Dvvp {
-namespace ProfilerSpecial {
-  extern int32_t MsprofilerInit();
-}
-}
-}
-
-int32_t _aclprofGetDeviceByModelId(uint32_t modelId, uint32_t &deviceId) { return 0; }
-
-bool _aclprofGetInitFlag() { return true; }
-
-int32_t _aclprofRegisterCtrlCallback(MsprofCtrlCallback func) {
-  air::runtime::ProfileMgr::GetInstance().RegCtrlCallback(func);
-  return PROF_SUCCESS;
-}
-
-int32_t _aclprofRegisterSetDeviceCallback(MsprofSetDeviceCallback func) {
-  air::runtime::ProfileMgr::GetInstance().RegSetDeviceCallback(func);
-  auto rt_ret = rtRegDeviceStateCallback(kRtSetDeviceRegName, static_cast<rtDeviceStateCallback>(func));
-  if (rt_ret != PROF_SUCCESS) {
-    LOG(WARNING) << "Pass MsprofSetDeviceCallback to runtime failed.";
-    return rt_ret;
-  }
-
-  return PROF_SUCCESS;
-}
-
-int32_t _aclprofRegisterReporterCallback(MsprofReporterCallback func) {
-  air::runtime::ProfileMgr::GetInstance().RegReporterCallback(func);
-  return PROF_SUCCESS;
-}
-
-int32_t _aclprofCommandHandle(uint32_t type, void *data, uint32_t len) {
-  return air::runtime::ProfileMgr::GetInstance().CommandHandle((ProfCommandHandleType)type, data, len);
-}
-
-Status RegProfCtrlCallback(MsprofCtrlCallback func) {
-  air::runtime::ProfileMgr::GetInstance().RegCtrlCallback(func);
-  return PROF_SUCCESS;
-}
-
-Status RegProfSetDeviceCallback(MsprofSetDeviceCallback func) {
-  air::runtime::ProfileMgr::GetInstance().RegSetDeviceCallback(func);
-  auto rt_ret = rtRegDeviceStateCallback(kRtSetDeviceRegName, static_cast<rtDeviceStateCallback>(func));
-  if (rt_ret != PROF_SUCCESS) {
-    LOG(WARNING) << "Pass MsprofSetDeviceCallback to runtime failed.";
-    return rt_ret;
-  }
-
-  return PROF_SUCCESS;
-}
-
-Status RegProfReporterCallback(MsprofReporterCallback func) {
-  air::runtime::ProfileMgr::GetInstance().RegReporterCallback(func);
-  return PROF_SUCCESS;
-}
-
-Status ProfCommandHandle(ProfCommandHandleType type, void *data, uint32_t len) {
-  return air::runtime::ProfileMgr::GetInstance().CommandHandle(type, data, len);
+Status ProfCommandHandle(ProfCommandHandleType type) {
+  return air::runtime::ProfileMgr::GetInstance().CommandHandle(type);
 }
 
 bool IsInitialize() { return true; }
@@ -141,7 +83,8 @@ Status ProfileMgr::GetProfConf(MsprofGeOptions *prof) {
     return PROF_FAILED;
   }
 
-  const std::string prof_options_str = "{\"output\":\"" + std::string(profile_dir) + "\", \"training_trace\":\"on\", \
+  const std::string prof_options_str = "{\"output\":\"" + std::string(profile_dir) +
+                                       "\", \"training_trace\":\"on\", \
       \"task_trace\":\"on\", \"aic_metrics\":\"PipeUtilization\", \"aicpu\":\"on\"}";
 
   if (memcpy(prof->options, prof_options_str.c_str(), prof_options_str.size()) == nullptr) {
@@ -170,15 +113,14 @@ bool ProfileMgr::StartupProfiling(uint32_t device_id) {
 bool ProfileMgr::ProfStartUp(MsprofGeOptions *prof_conf) {
   LOG(INFO) << "Prof start up. ";
 
-  if (ctrl_cb_ == nullptr) {
-    LOG(ERROR) << "MsprofCtrlCallback callback is nullptr.";
-    return false;
+  bool ret = ProfRegisterCtrlCallback();
+  if (!ret) {
+    return ret;
   }
 
   // call profiling start up api
-  int32_t cb_ret =
-    ctrl_cb_(static_cast<uint32_t>(MsprofCtrlCallbackType::MSPROF_CTRL_INIT_GE_OPTIONS),
-                                static_cast<void *>(prof_conf), sizeof(MsprofGeOptions));
+  int32_t cb_ret = MsprofInit(static_cast<uint32_t>(MsprofCtrlCallbackType::MSPROF_CTRL_INIT_GE_OPTIONS),
+                              static_cast<void *>(prof_conf), sizeof(MsprofGeOptions));
   if (cb_ret != PROF_SUCCESS) {
     LOG(ERROR) << "Call msprofCtrlCallback failed, ret: " << cb_ret;
     return false;
@@ -194,45 +136,20 @@ bool ProfileMgr::StopProfiling() {
   // plugin unregister
   PluginUnInit();
   // stop runtime profiler
-  auto module = GetProfilingModule();
-  uint32_t device_ids[kProfilingDeviceNum] = {GetCurrentDeviceId()};
-
-  auto rt_ret = rtProfilerStop(module, kProfilingDeviceNum, device_ids);
-  if (rt_ret != RT_ERROR_NONE) {
-    LOG(ERROR) << "Call rtProfilerStop failed";
-    return false;
-  }
-
-  // stop profiling
-  if (ctrl_cb_ == nullptr) {
-    LOG(ERROR) << "MsprofCtrlCallback callback is nullptr.";
-    return false;
-  }
-
-  int32_t cb_ret =
-    ctrl_cb_(static_cast<uint32_t>(MsprofCtrlCallbackType::MSPROF_CTRL_FINALIZE), nullptr, 0);
+  int32_t cb_ret = MsprofFinalize();
   if (cb_ret != 0) {
-    LOG(WARNING) << "Call msprofCtrlCallback failed, ret: " << cb_ret;
+    LOG(WARNING) << "Call MsprofFinalize failed, ret: " << cb_ret;
     return false;
   }
   return true;
 }
 
-Status ProfileMgr::CommandHandle(ProfCommandHandleType type, void *data, uint32_t len) {
+Status ProfileMgr::CommandHandle(ProfCommandHandleType type) {
   LOG(INFO) << "ProfCommandHandle start, type:" << type;
   if (type == kProfCommandhandleInit) {
     auto cb_ret = ProfileMgr::GetInstance().PluginInit();
     if (cb_ret != PROF_SUCCESS) {
       LOG(ERROR) << "Profiling plugin int failed.";
-      return PROF_FAILED;
-    }
-
-    // call runtime profiler API
-    auto module = GetProfilingModule();
-    auto device_id = GetCurrentDeviceId();
-    auto ret = rtProfilerStart(module, kProfilingDeviceNum, &device_id);
-    if (ret != RT_ERROR_NONE) {
-      LOG(ERROR) << "Call rtProfilerStart failed, ret:" << ret;
       return PROF_FAILED;
     }
   }
@@ -244,8 +161,39 @@ ProfileMgr &ProfileMgr::GetInstance() {
   return mgr;
 }
 
-void ProfileMgr::ForceMsprofilerInit() {
-  Analysis::Dvvp::ProfilerSpecial::MsprofilerInit();
+bool ProfileMgr::ProfRegisterCtrlCallback() const {
+  rtError_t rt_ret = rtProfRegisterCtrlCallback(GE, CtrlCallbackHandle);
+  if (rt_ret != RT_ERROR_NONE) {
+    LOG(ERROR) << "Call rtProfRegisterCtrlCallback failed.";
+    return false;
+  }
+
+  return true;
+}
+
+rtError_t CtrlCallbackHandle(uint32_t rt_type, void *data, uint32_t len) {
+  if (rt_type == RT_PROF_CTRL_REPORTER) {
+    ProfileMgr::GetInstance().RegReporterCallback(reinterpret_cast<MsprofReporterCallback>(data));
+    LOG(INFO) << "Set MsprofReporterCallback success.";
+  } else if (rt_type == RT_PROF_CTRL_SWITCH) {
+    Status ret = ProfCtrlSwitchHandle(data);
+    if (ret != PROF_SUCCESS) {
+      LOG(ERROR) << "Start runtime profiler failed.";
+    }
+  }
+
+  return RT_ERROR_NONE;
+}
+
+Status ProfCtrlSwitchHandle(void *data) {
+  if (data == nullptr) {
+    LOG(ERROR) << "Ctrl switch handl data is nullptr.";
+    return PROF_FAILED;
+  }
+
+  rtProfCommandHandle_t *prof_config_param = reinterpret_cast<rtProfCommandHandle_t *>(data);
+  auto type = static_cast<ProfCommandHandleType>(prof_config_param->type);
+  return ProfCommandHandle(type);
 }
 
 TVM_REGISTER_GLOBAL("ascend_start_profiling").set_body([](TVMArgs args, TVMRetValue *ret) {
@@ -260,5 +208,5 @@ TVM_REGISTER_GLOBAL("ascend_get_kernel_label").set_body([](TVMArgs args, TVMRetV
   *ret = ProfileMgr::GetInstance().GetKernelLabel();
 });
 
-}
-}
+}  // namespace runtime
+}  // namespace air

@@ -19,7 +19,7 @@
 
 #include "base.h"
 
-#if defined(__cplusplus) && !defined(COMPILE_OMG_PACKAGE)
+#if defined(__cplusplus)
 extern "C" {
 #endif
 
@@ -30,24 +30,24 @@ extern "C" {
 typedef void *rtContext_t;
 
 typedef enum tagDryRunFlag {
-  RT_DRYRUN_FLAG_FALSE = 0,
-  RT_DRYRUN_FLAG_TRUE = 1,
+    RT_DRYRUN_FLAG_FALSE = 0,
+    RT_DRYRUN_FLAG_TRUE = 1,
 } rtDryRunFlag_t;
 
 typedef enum tagCtxMode {
-  RT_CTX_NORMAL_MODE = 0,
-  RT_CTX_GEN_MODE = 1,
+    RT_CTX_NORMAL_MODE = 0,
+    RT_CTX_GEN_MODE = 1,
 } rtCtxMode_t;
 
 typedef struct tagRtGroupInfo {
-  int32_t groupId;
-  uint32_t flag;
-  uint32_t aicoreNum;
-  uint32_t aicpuNum;
-  uint32_t aivectorNum;
-  uint32_t sdmaNum;
-  uint32_t activeStreamNum;
-  void*  extrPtr;
+    int32_t groupId;
+    uint32_t flag;
+    uint32_t aicoreNum;
+    uint32_t aicpuNum;
+    uint32_t aivectorNum;
+    uint32_t sdmaNum;
+    uint32_t activeStreamNum;
+    void *extrPtr;
 } rtGroupInfo_t;
 
 /**
@@ -156,7 +156,8 @@ RTS_API rtError_t rtGetGroupCount(uint32_t *count);
  * @return RT_ERROR_NONE for ok
  */
 RTS_API rtError_t rtSetCtxINFMode(bool mode);
-#if defined(__cplusplus) && !defined(COMPILE_OMG_PACKAGE)
+
+#if defined(__cplusplus)
 }
 #endif
 

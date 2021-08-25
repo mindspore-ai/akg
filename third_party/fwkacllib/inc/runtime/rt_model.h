@@ -19,7 +19,7 @@
 
 #include "base.h"
 
-#if defined(__cplusplus) && !defined(COMPILE_OMG_PACKAGE)
+#if defined(__cplusplus)
 extern "C" {
 #endif
 
@@ -50,6 +50,9 @@ typedef enum tagModelTaskType {
     RT_MODEL_TASK_STREAM_LABEL_SWITCH_BY_INDEX,
     RT_MODEL_TASK_STREAM_LABEL_GOTO,
     RT_MODEL_TASK_MODEL_EXIT,
+    RT_MODEL_TASK_ALL_KERNEL,
+    RT_MODEL_TASK_PROFILER_TRACE_EX,
+    RT_MODEL_TASK_FFTS_TASK,
 } rtModelTaskType_t;
 
 typedef enum tagModelStreamType {
@@ -127,6 +130,18 @@ typedef struct tagKernelTaskInfo {
     uint16_t *argsOffset;
 } rtKernelTaskInfo_t;
 
+typedef struct tagAllKernelTaskInfo {
+    uint16_t blockDim;
+    uint16_t argsCount;
+    uint16_t argsSize;
+    uint16_t reserved;
+    void *devfunc;
+    void *handle;
+    uint8_t *smDesc;
+    uint8_t *args;
+    uint16_t *argsOffset;
+} rtAllKernelTaskInfo_t;
+
 typedef struct tagKernelTaskInfoEx {
     uint32_t flags;
     uint32_t argsSize;
@@ -183,6 +198,13 @@ typedef struct tagProfilerTraceTaskInfo {
     uint32_t flags;
     uint32_t reserved[6];
 } rtProfilerTrace_t;
+
+typedef struct tagProfilerTraceExTaskInfo {
+    uint64_t profilerTraceId;
+    uint64_t modelId;
+    uint16_t tagId;
+    uint8_t reserved[22];
+} rtProfilerTraceEx_t;
 
 typedef struct tagrtMemcpyAsyncTaskInfo {
     void *dst;
@@ -251,6 +273,7 @@ typedef struct tagTaskInfo {
     union {
         rtKernelTaskInfoEx_t kernelTaskEx;
         rtKernelTaskInfo_t kernelTask;
+        rtAllKernelTaskInfo_t allKernelTask;
         rtEventTaskInfo_t eventTask;
         rtStreamSwitchTaskInfo_t streamSwitchTask;
         rtStreamActiveTaskInfo_t streamActiveTask;
@@ -258,6 +281,7 @@ typedef struct tagTaskInfo {
         rtLabelSwitchTaskInfo_t labelSwitchTask;
         rtLabelGotoTaskInfo_t labelGotoTask;
         rtProfilerTrace_t profilertraceTask;
+        rtProfilerTraceEx_t profilertraceExTask;
         rtMemcpyAsyncTaskInfo_t memcpyAsyncTask;
         rtNotifyTaskInfo_t notifyTask;
         rtReduceAsyncTaskInfo_t reduceAsyncTask;
@@ -272,13 +296,29 @@ typedef struct tagTaskInfo {
     } u;
 } rtTaskInfo_t;
 
+typedef struct tagNodeInfo_t {
+    uint32_t nodeIdx;
+    uint32_t reserved[1];
+} rtNodeInfo;
+
+typedef struct tagHwtsInfo_t {
+    uint16_t taskId;
+    uint16_t sqExeHead;
+    uint16_t streamExeHead;
+    uint16_t reserved[2];
+} rtHwtsInfo;
+
 typedef struct tagLabelDevInfo_t {
     uint16_t modelId;
     uint16_t streamId;
     uint16_t labelId;
+    union {
+        rtNodeInfo nodeInfo;
+        rtHwtsInfo hwtsInfo;
+        uint16_t reserved[5];
+    }u;
 }rtLabelDevInfo;
 
-typedef void *rtModel_t;
 typedef rtError_t (*rtTaskGenCallback)(rtModel_t model, rtTaskInfo_t *taskInfo);
 
 /**
@@ -450,7 +490,7 @@ RTS_API rtError_t rtDebugRegister(rtModel_t model, uint32_t flag, const void *ad
  */
 RTS_API rtError_t rtDebugUnRegister(rtModel_t model);
 
-#if defined(__cplusplus) && !defined(COMPILE_OMG_PACKAGE)
+#if defined(__cplusplus)
 }
 #endif
 

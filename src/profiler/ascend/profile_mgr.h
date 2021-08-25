@@ -20,7 +20,8 @@
 #include <string>
 #include "toolchain/prof_callback.h"
 #include "toolchain/prof_acl_api.h"
-
+#include "toolchain/slog.h"
+#include "runtime/base.h"
 
 enum ProfCommandHandleType {
   kProfCommandhandleInit = 0,
@@ -39,19 +40,15 @@ class ProfileMgr {
   ProfileMgr() = default;
   ~ProfileMgr() = default;
 
-  void RegCtrlCallback(MsprofCtrlCallback func) {
-    ctrl_cb_ = func;
-  }
+  void RegCtrlCallback(MsprofCtrlCallback func) { ctrl_cb_ = func; }
 
-  void RegSetDeviceCallback(MsprofSetDeviceCallback func) {
-    set_device_cb_ = func;
-  }
+  void RegSetDeviceCallback(MsprofSetDeviceCallback func) { set_device_cb_ = func; }
 
-  void RegReporterCallback(MsprofReporterCallback func) {
-    reporter_cb_ = func;
-  }
+  void RegReporterCallback(MsprofReporterCallback func) { reporter_cb_ = func; }
 
-  Status CommandHandle(ProfCommandHandleType type, void *data, uint32_t len);
+  bool ProfRegisterCtrlCallback() const;
+
+  Status CommandHandle(ProfCommandHandleType type);
 
   static ProfileMgr &GetInstance();
 
@@ -63,9 +60,7 @@ class ProfileMgr {
 
   bool StopProfiling();
 
-  void ForceMsprofilerInit();
-
-  void SetKernelLabel(std::string &label) { kernel_label_ = label; }
+  void SetKernelLabel(const std::string &label) { kernel_label_ = label; }
 
   std::string GetKernelLabel() const { return kernel_label_; }
 
@@ -77,13 +72,15 @@ class ProfileMgr {
   Status PluginInit() const;
   void PluginUnInit() const;
 
-  MsprofCtrlCallback ctrl_cb_ {nullptr};
-  MsprofSetDeviceCallback set_device_cb_ {nullptr};
-  MsprofReporterCallback reporter_cb_ {nullptr};
-  uint32_t device_id_ {0};
+  MsprofCtrlCallback ctrl_cb_{nullptr};
+  MsprofSetDeviceCallback set_device_cb_{nullptr};
+  MsprofReporterCallback reporter_cb_{nullptr};
+  uint32_t device_id_{0};
   std::string kernel_label_;
 };
 
-}
-}
+rtError_t CtrlCallbackHandle(uint32_t rt_type, void *data, uint32_t len);
+Status ProfCtrlSwitchHandle(void *data);
+}  // namespace runtime
+}  // namespace air
 #endif
