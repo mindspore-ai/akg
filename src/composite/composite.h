@@ -20,5 +20,6 @@
 #include "composite/util.h"
 namespace akg {
 void ExtractBuildInfo(const picojson::value &input_json, BuildInfo &info);
+Schedule GetScheduleWithBuildInfo(const BuildInfo &info);
 }  // namespace akg
 #endif  // COMPOSITE_COMPOSITE_H_

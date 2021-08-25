@@ -114,30 +114,4 @@ void DumpBuildInfo(const BuildInfo &info) {
   DumpHeader(of, "BuildInfo");
   of << info;
 }
-
-void DumpLowerData(const LowerData &data) {
-  std::stringstream ss;
-
-  ss << "args: " << std::endl;
-  for (auto arg : data.args_) {
-    ss << arg << std::endl;
-  }
-
-  ss << "arg_list_0: " << std::endl;
-  for (auto arg_list : data.arg_list_0_) {
-    ss << arg_list << std::endl;
-  }
-
-  ss << "binds: " << std::endl;
-  for (auto iter : data.binds_) {
-    ss << iter.first << ": " << iter.second << std::endl;
-  }
-
-  ss << "binds_0: " << std::endl;
-  for (auto iter : data.binds_0_) {
-    ss << iter.first << ": " << iter.second << std::endl;
-  }
-
-  LOG(INFO) << ss.str();
-}
 }  // namespace akg

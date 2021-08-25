@@ -209,56 +209,37 @@ void ExtractBuildInfo(const picojson::value &input_json, BuildInfo &info) {
   CollectBuildInfo(info);
 }
 
-NodeRef CompositeWithJsonToFunc(const std::string &json_str, const Map<std::string, NodeRef> &attrs) {
+Schedule GetScheduleWithBuildInfo(const BuildInfo &info) {
+  Array<Operation> ops;
+  std::for_each(info.tensors.begin(), info.tensors.end(), [&ops](const Tensor &t) { ops.push_back(t->op); });
+  return create_schedule(ops);
+}
+
+Module CompositeWithJson(const std::string &json_str, const Map<std::string, NodeRef> &attrs, bool poly) {
   picojson::value v = String2Json(json_str);
   BuildInfo info;
   ExtractBuildInfo(v, info);
-  Array<Operation> ops;
-  std::for_each(info.tensors.begin(), info.tensors.end(), [&ops](const Tensor &t) { ops.push_back(t->op); });
-  Schedule sch = create_schedule(ops);
+  Schedule sch = GetScheduleWithBuildInfo(info);
   auto config = GetConfig();
   if (attrs.find("kernel_name") != attrs.end()) {
     CHECK(attrs["kernel_name"]->IsInstance<StringImm>());
     info.kernel_name = attrs["kernel_name"].as<StringImm>()->value;
   }
-  Array<NodeRef> shape_vars;
+  auto target = GetProcess(v);
   auto build_rst =
-    akg::BuildToFunc(sch, info.args, shape_vars, info.kernel_name, info.in_binds, attrs, true, "cce", config);
+    akg::BuildToFunc(sch, info.args, Array<NodeRef>{}, info.kernel_name, info.in_binds, attrs, poly, target, config);
   CHECK(build_rst.defined());
-  return std::move(build_rst);
-}
-
-Module CompositeWithJsonGpu(const std::string &json_str, const Map<std::string, NodeRef> &attrs, bool poly) {
-  picojson::value v = String2Json(json_str);
-  BuildInfo info;
-  ExtractBuildInfo(v, info);
-  const auto *build_func = air::runtime::Registry::Get("akg_build_gpu_module");
-  CHECK(build_func != nullptr);
-  std::string sch = GetSchedule(info.tensors);
-  return (*build_func)(info.tensors, info.args, sch, info.kernel_name, attrs, poly, info.in_binds);
-}
-
-Module CompositeWithJson(const std::string &json_str, const Map<std::string, NodeRef> &attrs, bool poly) {
-  if (GetProcess(json_str) == "cuda") {
-    return CompositeWithJsonGpu(json_str, attrs, poly);
-  }
-  auto build_rst = CompositeWithJsonToFunc(json_str, attrs);
-  return BuildToModule(build_rst);
+  return BuildToModule(build_rst, target);
 }
 
 NodeRef CompositeLower(const std::string &json_str, const Map<std::string, NodeRef> &attrs) {
   picojson::value v = String2Json(json_str);
   BuildInfo info;
   ExtractBuildInfo(v, info);
-  Array<Operation> ops;
-  std::for_each(info.tensors.begin(), info.tensors.end(), [&ops](const Tensor &t) { ops.push_back(t->op); });
-  Schedule sch = create_schedule(ops);
+  Schedule sch = GetScheduleWithBuildInfo(info);
   auto config = GetConfig();
   bool tuning = attrs.find("tuning") != attrs.end();
-  std::string target = "cce";
-  if (GetProcess(json_str) == "cuda") {
-    target = "cuda";
-  }
+  auto target = GetProcess(v);
   Array<NodeRef> shape_vars;
 
   if (attrs.find("ret_mode") != attrs.end()) {
@@ -277,7 +258,6 @@ NodeRef CompositeLower(const std::string &json_str, const Map<std::string, NodeR
                     config);
 }
 
-TVM_REGISTER_GLOBAL("composite_with_json_to_func").set_body_typed(CompositeWithJsonToFunc);
 TVM_REGISTER_GLOBAL("composite_with_json").set_body_typed(CompositeWithJson);
 TVM_REGISTER_GLOBAL("composite_lower").set_body_typed(CompositeLower);
 }  // namespace akg

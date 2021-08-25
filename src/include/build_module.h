@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@
 #include <exception>
 
 #include "codegen/util.h"
+#include "codegen/lower.h"
 
 namespace akg {
 extern AttrMap g_attrs;
@@ -45,15 +46,6 @@ class MemoryAllocationException : public std::exception {
   uint64_t need_bits_{0};
   uint64_t alloc_bits_{0};
 };
-
-NodeRef LowerStmt(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeRef> &shape_vars,
-                  const std::string &name, const Map<Tensor, Buffer> &in_binds,
-                  const Map<std::string, NodeRef> &in_attrs, bool simple_mode, bool polyhedral, bool tuning,
-                  const std::string &target, const BuildConfig &config, Array<NodeRef> *args,
-                  Array<NodeRef> *arg_list_0, Map<Tensor, Buffer> *binds, Map<Tensor, Buffer> *binds_0,
-                  std::vector<size_t> *split_index, bool lower_list = false);
-
-NodeRef LowerFunc(Stmt &stmt, const std::string &name, const BuildConfig &config, const Array<NodeRef> &all_args);
 
 NodeRef Lower(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeRef> &shape_vars, const std::string &name,
               const Map<Tensor, Buffer> &in_binds, const Map<std::string, NodeRef> &in_attrs, bool simple_mode,
@@ -97,58 +89,12 @@ class BuildRst : public NodeRef {
   TVM_DEFINE_NODE_REF_METHODS(BuildRst, NodeRef, BuildRstNode);
 };
 
-// Keep LowerStage continuous!
-enum LowerStage : int16_t {
-  BEGIN = 0,
-  TUNING,
-  POLY,
-  BEFORE_FLATTEN,
-  FLATTEN,
-  BEFORE_MULTICORE,
-  BEFORE_REWRITE,
-  REWRITE,
-  BEFORE_LOWERFUNC,
-  END
-};
-
-class LowerData {
- public:
-  LowerData() = default;
-  ~LowerData() = default;
-  LowerData(const Array<NodeRef> &args, const Array<NodeRef> &arg_list_0, const Map<Tensor, Buffer> &binds,
-            const Map<Tensor, Buffer> &binds_0, const Array<NodeRef> &shape_vars, const std::string &name,
-            bool simple_mode, bool polyhedral, bool tuning, const std::string &target,
-            const BuildConfig &config, bool get_feature = false)
-      : args_(args),
-        arg_list_0_(arg_list_0),
-        binds_(binds),
-        binds_0_(binds_0),
-        shape_vars_(shape_vars),
-        name(name),
-        simple_mode_(simple_mode),
-        polyhedral_(polyhedral),
-        tuning_(tuning),
-        target_(target),
-        config_(config),
-        get_feature_(get_feature) {}
-  Array<NodeRef> args_;
-  Array<NodeRef> arg_list_0_;
-  Map<Tensor, Buffer> binds_;
-  Map<Tensor, Buffer> binds_0_;
-  Array<NodeRef> shape_vars_;
-  std::string name;
-  bool simple_mode_{false};
-  bool polyhedral_{false};
-  bool tuning_{false};
-  std::string target_;
-  BuildConfig config_;
-  bool get_feature_{false};
-};
+NodeRef LowerFunc(Stmt &stmt, const std::string &name, const BuildConfig &config, const Array<NodeRef> &all_args);
 
 Buffer DeclBuffer(const NodeRef &arg, const int data_alignment, const int offset_factor,
                   const std::string &pre_name = "");
-NodeRef LowerAscend(Stmt &stmt, LowerData &data, LowerStage begin = LowerStage::BEGIN,
-                    LowerStage end = LowerStage::END);
+void GetBinds(const Array<NodeRef> &args, const Map<Tensor, Buffer> &binds, const BuildConfig &config,
+              Array<NodeRef> *out_args, Map<Tensor, Buffer> *out_binds);
 void RenameBinds(Map<Tensor, Buffer> &binds, const BuildConfig &config, Array<NodeRef> &tensor_args_list,
                  Array<NodeRef> &buffer_args_list, Map<Tensor, Tensor> &tensor_replace);
 

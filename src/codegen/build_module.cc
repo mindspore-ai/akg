@@ -27,6 +27,7 @@
 #include <sys/stat.h>
 
 #include "build_module.h"
+#include "codegen/lower.h"
 #include "ir_pass.h"
 #include "schedule_pass.h"
 #include "codegen/pass_mgr.h"
@@ -434,220 +435,19 @@ void FixParametricBinds(const Map<Tensor, Buffer> &binds, const Array<NodeRef> &
   }
 }
 
-void DumpIr(const std::string &name, const BuildConfig &config, bool lower_list) {
-  g_attrs.Set(kKernelName, StringImm::make(name));
-  g_attrs.Set(kDumpPassIr, air::make_const(Int(32), config->dump_pass_ir));
-  if (config->dump_pass_ir) {
-    std::string dump_ir_dir;
-    if (g_attrs.GetStr(kDumpIrDir, &dump_ir_dir)) {
-      PassMgr::SetDir(dump_ir_dir);
-    } else {
-      PassMgr::SetDir(name);
-    }
-    CreateDir(PassMgr::GetDir());
-    std::string dump_poly_dir;
-    if (!g_attrs.GetStr(kDumpPolyDir, &dump_poly_dir) || lower_list) {
-      dump_poly_dir = PassMgr::GetDir() + "/poly";
-      g_attrs.Set(kDumpPolyDir, StringImm::make(dump_poly_dir));
-      CreateDir(dump_poly_dir);
-    }
-  }
-}
-
-NodeRef LowerStmt(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeRef> &shape_vars,
-                  const std::string &name, const Map<Tensor, Buffer> &in_binds,
-                  const Map<std::string, NodeRef> &in_attrs, bool simple_mode, bool polyhedral, bool tuning,
-                  const std::string &target, const BuildConfig &config, Array<NodeRef> *args,
-                  Array<NodeRef> *arg_list_0, Map<Tensor, Buffer> *binds, Map<Tensor, Buffer> *binds_0,
-                  std::vector<size_t> *split_index, bool lower_list) {
-  CHECK(sch.defined()) << "sch is not defined.";
-  CHECK(!name.empty()) << "name is empty.";
-  CHECK(find_if(name.begin(), name.end(), [](char c) { return !std::isalnum(c) && c != '_'; }) == name.end())
-    << "kernel name contains invalid chars: " << name;
-
-  if (in_args.defined()) {
-    *args = in_args;
-  }
-
-  if (in_binds.defined()) {
-    *binds = in_binds;
-  }
-  if (in_attrs.defined()) {
-    g_attrs = in_attrs;
-  }
-  PassMgr::ClearPassId();
-
-  // dump lowerstmt
-  DumpIr(name + "_0", config, lower_list);
-
-  GetBinds(*args, *binds, config, arg_list_0, binds_0);
-
-  // Phase 0
-  Target target_platform = Target::Create(target);
-  if (polyhedral && g_attrs.GetBool(kEnableAutoInline, true)) {
-    akg::schedule::AutoInline(sch, target_platform, g_attrs.GetBool(kEnableCSE, false));
-  }
-  if (target_platform->device_type == kDLGPU && polyhedral && g_attrs.GetBool(kEnableAutoFuse, true)) {
-    akg::schedule::AutoFuse(sch, g_attrs.GetStr(kAutoFuseSplit, ""), *split_index,
-                            g_attrs.GetBool("enable_stitch_fusion", 0));
-  }
-
-  auto new_sch = sch.normalize();
-  auto bounds = air::schedule::InferBound(new_sch);
-  Stmt stmt = make_pass("schedule.ScheduleOps", new_sch, bounds, false);
-
-  stmt = NEXT_PASS(TensorAccessRewrite, stmt);
-  if (target_platform->device_type == kDLGPU) {
-    if (polyhedral) {
-      stmt = NEXT_PASS(ReplaceSeparator, stmt);
-      stmt = NEXT_PASS(RewriteMultiValueFunc, stmt);
-      Map<Tensor, Tensor> replace;
-      RenameBinds(*binds_0, config, *args, *arg_list_0, replace);
-      stmt = NEXT_PASS(RenameRealize, stmt, *binds_0, replace);
-
-      Array<NodeRef> arg_list_1;
-      Map<Tensor, Buffer> binds_1;
-      GetFlattenedBinds(*args, *binds_0, config, arg_list_1, binds_1, false);
-      Stmt stmt1 = NEXT_PASS(ElementwiseFlatten, stmt, *binds_0, binds_1);
-      if (stmt1.get() != stmt.get()) {
-        stmt = stmt1;
-        *arg_list_0 = arg_list_1;
-        *binds_0 = binds_1;
-      }
-      if (g_attrs.GetBool(kEnableFuseAxis, false)) {
-        Array<NodeRef> fuse_axis_res = NEXT_PASS(FuseAxis, stmt, *arg_list_0, *binds_0);
-        CHECK_EQ(fuse_axis_res.size(), 3);
-        stmt = air::Downcast<Stmt>(fuse_axis_res[0]);
-        *arg_list_0 = air::Downcast<Array<NodeRef>>(fuse_axis_res[1]);
-        *binds_0 = air::Downcast<Map<Tensor, Buffer>>(fuse_axis_res[2]);
-      }
-      PassMgr::SetArgs(*arg_list_0);
-
-      stmt = NEXT_PASS(RewriteTensorIndex, stmt);
-      int level = g_attrs.GetInt(kHelpTiling, -1);
-      if (tuning || level > help_tiling_level["None"]) {
-        if (tuning) {
-          level = help_tiling_level["Tuning"];
-        }
-        Map<std::string, NodeRef> attrs_1 = g_attrs;
-        attrs_1.Set(kDumpTuningLevel, air::make_const(Int(32), level));
-        NodeRef tuning_spaces = NEXT_PASS(GenTuningSpace, stmt, target, *binds_0, attrs_1, false, new_sch);
-        return tuning_spaces;
-      }
-      Array<NodeRef> poly_res = NEXT_PASS(AutoPoly, stmt, *binds_0, target, g_attrs, false, false, new_sch);
-      CHECK_EQ(poly_res.size(), 2);
-      stmt = air::Downcast<Stmt>(poly_res[0]);
-      g_attrs.Set(kEnablePolySch, air::make_const(Int(32), true));
-      stmt = NEXT_PASS(LowerWith, stmt);
-    } else {
-      g_attrs.Set(kEnablePolySch, air::make_const(Int(32), false));
-    }
-    // Phase 1
-    stmt = NEXT_PASS(ReconstructLayout, stmt);
-    stmt = NEXT_PASS(RemoveFakeOp, stmt);
-    stmt = NEXT_PASS(RewriteForTensorCore, stmt, new_sch, *binds_0);
-    stmt = NEXT_PASS(StorageFlatten, stmt, *binds_0, 64, config->instrument_bound_checkers);
-    stmt = NEXT_PASS(CanonicalSimplify, stmt);
-
-    // Phase 2
-    if (!simple_mode) {
-      stmt = NEXT_PASS(LoopPartition, stmt, config->partition_const_loop);
-    }
-    if (config->disable_vectorize) {
-      stmt = NEXT_PASS(SkipVectorize, stmt);
-    } else {
-      stmt = NEXT_PASS(VectorizeLoop, stmt);
-    }
-    stmt = NEXT_PASS(InjectVirtualThread, stmt);
-    if (polyhedral) {
-      stmt = NEXT_PASS(InjectTransferBufferScope, stmt);
-    }
-    stmt = NEXT_PASS(InjectDoubleBuffer, stmt, config->double_buffer_split_loop,
-                     g_attrs.GetBool(kEnableDoubleBuffer, false));
-    stmt = NEXT_PASS(StorageRewrite, stmt);
-
-    if (target_platform->device_type == kDLGPU && polyhedral) {
-      if (g_attrs.GetBool(kEnableSwizzleGPU, true)) {
-        stmt = NEXT_PASS(SwizzleGPU, stmt, g_attrs);
-      }
-    }
-
-    stmt = NEXT_PASS(UnrollLoop, stmt, config->auto_unroll_max_step, config->auto_unroll_max_depth,
-                     config->auto_unroll_max_extent, config->unroll_explicit);
-
-    // Phase 3
-    stmt = NEXT_PASS(Simplify, stmt);
-    stmt = NEXT_PASS(RemoveNoOp, stmt);
-    if (config->instrument_bound_checkers) {
-      stmt = NEXT_PASS(InstrumentBoundCheckers, stmt);
-    }
-    if (!config->disable_select_rewriting) {
-      stmt = NEXT_PASS(RewriteUnsafeSelect, stmt);
-    }
-    if (BuildConfig::Current()->detect_global_barrier) {
-      stmt = NEXT_PASS(ThreadSyncStmt, stmt, "global");
-    }
-    if (!g_attrs.GetBool(kEnablePolySch, false)) {
-      stmt = NEXT_PASS(ThreadSyncStmt, stmt, "shared");
-    }
-    stmt = NEXT_PASS(ThreadSyncStmt, stmt, "warp");
-    stmt = NEXT_PASS(InferFragmentStmt, stmt);
-    stmt = NEXT_PASS(LowerThreadAllreduceStmt, stmt, target_platform->thread_warp_size);
-
-    if (simple_mode) {
-      return stmt;
-    }
-  }
-  return stmt;
-}
 NodeRef LowerFunc(Stmt &stmt, const std::string &name, const BuildConfig &config, const Array<NodeRef> &all_args) {
-  PassMgr::ClearPassId();
-  // dump lowerfunc
-  DumpIr(name + "_1", config, false);
+  // Lower the function.
+  ConfigDumpIr(name + "_1", config, false);
   LoweredFunc lowered_func = NEXT_PASS(MakeAPI, stmt, name, all_args, 0, config->restricted_func);
   return lowered_func;
 }
+
 NodeRef Lower(Schedule sch, const Array<NodeRef> &in_args, const Array<NodeRef> &shape_vars, const std::string &name,
               const Map<Tensor, Buffer> &in_binds, const Map<std::string, NodeRef> &in_attrs, bool simple_mode,
               bool polyhedral, bool tuning, const std::string &target, const BuildConfig &config, bool get_stmt) {
-  Array<NodeRef> args;
-  Array<NodeRef> arg_list_0;
-  Map<Tensor, Buffer> binds;
-  Map<Tensor, Buffer> binds_0;
-  std::vector<size_t> split_index;
-  NodeRef tmp = LowerStmt(sch, in_args, shape_vars, name, in_binds, in_attrs, simple_mode, polyhedral, tuning, target,
-                          config, &args, &arg_list_0, &binds, &binds_0, &split_index);
-#ifdef USE_AKG_COMPILE_STUB
-  CHECK(target != "cce") << "Can not enable target cce, because akg Ascend back-end's binary file is not linked to"
-                            " libakg.so during the compiling process, please check the following cases:\n"
-                            "case 1: If compile akg with -DUSE_KC_AIR=1, check if libakg_ext.a exists in"
-                            " akg_source_dir(CMAKE_CURRENT_SOURCE_DIR) or akg_build_dir(CMAKE_CURRENT_BINARY_DIR)."
-                            " If not, you need:\n"
-                            "        1. Compile libakg_ext.a by yourself, put it to akg_source_dir or akg_build_dir\n"
-                            "        2. Re-compile the source codes\n"
-                            "case 2: If compile akg without -DUSE_KC_AIR=1(compiling akg from mindspore belongs to"
-                            " this case), then you can perform the following steps:\n"
-                            "        1. Check if git-lfs is installed, if not, install git-lfs, refer"
-                            " https://github.com/git-lfs/git-lfs/wiki/installation\n"
-                            "        2. After installing git lfs, executing the following commands:\n"
-                            "           cd akg_source_dir (e.g. cd /home/user_name/akg)\n"
-                            "           git lfs pull\n"
-                            "        3. Re-compile the source codes";
-  if (tuning || g_attrs.GetInt(kHelpTiling, -1) > help_tiling_level["None"]) {
-    return tmp;
-  }
-  Stmt stmt = Downcast<Stmt>(tmp);
-  if (get_stmt) {
-    return stmt;
-  }
-  NodeRef lowered_func = LowerFunc(stmt, name, config, arg_list_0);
-  return lowered_func;
-#else
-  Stmt stmt = Downcast<Stmt>(tmp);
-  LowerData data{args,        arg_list_0, binds,  binds_0, shape_vars, name,
-                 simple_mode, polyhedral, tuning, target,  config,     get_stmt};
-  return LowerAscend(stmt, data);
-#endif
+  LowerData data = LowerDataNode::make(sch, in_args, in_binds, in_attrs, target, name, config, polyhedral, tuning,
+                                       simple_mode, shape_vars);
+  return LowerImpl::Instance().Run(data, get_stmt);
 }
 
 void BuildForDevice(const Array<LoweredFunc> &flist, const std::string &target_name,

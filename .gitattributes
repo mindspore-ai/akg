@@ -42,7 +42,6 @@ prebuild/x86_64/coarsen-img2col.cc.o filter=lfs diff=lfs merge=lfs -text
 prebuild/x86_64/cover_protection_optimize.cc.o filter=lfs diff=lfs merge=lfs -text
 prebuild/x86_64/multi_core_loop_switch_hoist.cc.o filter=lfs diff=lfs merge=lfs -text
 prebuild/x86_64/auto_double_buffer.cc.o filter=lfs diff=lfs merge=lfs -text
-prebuild/x86_64/build_module.cc.o filter=lfs diff=lfs merge=lfs -text
 prebuild/x86_64/pooling_transform.cc.o filter=lfs diff=lfs merge=lfs -text
 prebuild/x86_64/rewrite_by_align_dynamic.cc.o filter=lfs diff=lfs merge=lfs -text
 prebuild/x86_64/emit_insn.cc.o filter=lfs diff=lfs merge=lfs -text
@@ -91,7 +90,6 @@ prebuild/aarch64/cover_protection_optimize.cc.o filter=lfs diff=lfs merge=lfs -t
 prebuild/aarch64/dataflow_analyze.cc.o filter=lfs diff=lfs merge=lfs -text
 prebuild/aarch64/elim_vector_mask.cc.o filter=lfs diff=lfs merge=lfs -text
 prebuild/aarch64/insn_builder_dma.cc.o filter=lfs diff=lfs merge=lfs -text
-prebuild/aarch64/build_module.cc.o filter=lfs diff=lfs merge=lfs -text
 prebuild/aarch64/dma_sink.cc.o filter=lfs diff=lfs merge=lfs -text
 prebuild/aarch64/inject_thread_bind.cc.o filter=lfs diff=lfs merge=lfs -text
 prebuild/aarch64/emit_insn.cc.o filter=lfs diff=lfs merge=lfs -text
@@ -120,3 +118,5 @@ prebuild/aarch64/pooling_transform.cc.o filter=lfs diff=lfs merge=lfs -text
 prebuild/aarch64/build_cce.cc.o filter=lfs diff=lfs merge=lfs -text
 prebuild/aarch64/multi_core_loop_switch_hoist.cc.o filter=lfs diff=lfs merge=lfs -text
 prebuild/aarch64/replace_fargmax_cast.cc.o filter=lfs diff=lfs merge=lfs -text
+prebuild/x86_64/lower_cce.cc.o filter=lfs diff=lfs merge=lfs -text
+prebuild/aarch64/lower_cce.cc.o filter=lfs diff=lfs merge=lfs -text

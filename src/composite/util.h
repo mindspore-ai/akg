@@ -46,8 +46,7 @@ static std::unordered_map<std::string, air::Type> type_mapping = {
 
 std::string type2string(const air::Type &type);
 
-std::string GetProcess(const std::string &json_str);
-std::string GetSchedule(Array<Tensor> &outputs);
+std::string GetProcess(const picojson::value &json);
 bool IsBlockIdx(const std::string &name);
 bool IsBlockIdxX(const std::string &name);
 bool IsBlockIdxY(const std::string &name);
