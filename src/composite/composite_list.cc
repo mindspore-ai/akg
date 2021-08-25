@@ -26,8 +26,10 @@
 #include "composite/sync_process.h"
 #include "dimension_peeling.h"
 #include "codegen/pass_mgr.h"
+#include "codegen/stage_lower.h"
 
 namespace akg {
+namespace lower {
 Stmt String2LowerStmtSimple(const StringImm *json_str, const Map<std::string, NodeRef> &attrs, bool poly,
                             bool buffer_stitch, bool fold_dim, std::vector<size_t> &split_index) {
   CHECK(json_str);
@@ -37,16 +39,14 @@ Stmt String2LowerStmtSimple(const StringImm *json_str, const Map<std::string, No
   info.opt.fold_dim = fold_dim;
   info.opt.enable_dump = false;
   ExtractBuildInfo(v, info);
-  std::string sch_name = GetSchedule(info.tensors);
-  const auto *sch_create = air::runtime::Registry::Get("select_cuda_scheduler");
-  CHECK(sch_create != nullptr);
-  Schedule sch = (*sch_create)(info.tensors, sch_name, poly);
-  auto config = GetConfig();
-  Array<NodeRef> args, shape_vars, arg_list_0;
-  Map<Tensor, Buffer> binds, binds_0;
-  auto stmt = LowerStmt(sch, info.args, shape_vars, info.kernel_name + "_check", info.in_binds, attrs, false, poly,
-                        false, "cuda", config, &args, &arg_list_0, &binds, &binds_0, &split_index, true);
-  return Downcast<Stmt>(stmt);
+
+  LowerData data = LowerDataNode::make(GetScheduleWithBuildInfo(info), info.args, info.in_binds, attrs, "cuda",
+                                       info.kernel_name + "_check", GetConfig(), poly);
+  auto node_ref = StageLower(data).RunTo(StageType::BeforeLowerFunc).Node();
+  for (auto si : data->split_index) {
+    split_index.push_back(int64_t(si));
+  }
+  return Downcast<Stmt>(node_ref);
 }
 
 std::vector<std::string> GetNames(const Array<NodeRef> &io) {
@@ -233,6 +233,20 @@ class CompositeJsonList {
   virtual Stmt MergeStmts(std::vector<Stmt> &block_irs) = 0;
   virtual NodeRef PostprocessToBuildRst(Stmt &stmt) = 0;
 
+  void CollectOutputMap(const BuildInfo &info, const Array<NodeRef> &args,
+                        std::unordered_map<std::string, NodeRef> &outputs2args) {
+    size_t count = 0;
+    for (const auto &x : args) {
+      auto buffer = x.as<BufferNode>();
+      CHECK(buffer) << "Arg must be a BufferNode";
+      if (std::find(info.input_names.begin(), info.input_names.end(), buffer->name) == std::end(info.input_names)) {
+        CHECK(count < info.output_names.size());
+        outputs2args[info.output_names[count]] = x;
+        count++;
+      }
+    }
+  }
+
   enum JsonType { NORMAL_JSON, STITCHING_JSON, UNKNOWN };
   JsonType GetJsonType(const NodeRef &json) {
     JsonType type = UNKNOWN;
@@ -273,7 +287,6 @@ class CompositeJsonList {
   std::vector<size_t> split_index_;
 };
 
-#ifdef USE_AKG_COMPILE_STUB
 class CompositeJsonListGpu : public CompositeJsonList {
  public:
   CompositeJsonListGpu(const Array<NodeRef> &json_str_node, const Array<NodeRef> &inputs, const Array<NodeRef> &outputs,
@@ -337,28 +350,13 @@ class CompositeJsonListGpu : public CompositeJsonList {
     ExtractBuildInfo(v, info);
     // ensure merge_name_ is the same as original json name
     if (merge_name_.empty()) merge_name_ = info.kernel_name;
-    std::string sch_name = GetSchedule(info.tensors);
-    const auto *sch_create = air::runtime::Registry::Get("select_cuda_scheduler");
-    CHECK(sch_create != nullptr);
-    Schedule sch = (*sch_create)(info.tensors, sch_name, poly_, grid_dims, block_dims, buffer_stitch);
-    auto config = GetConfig();
-    // use each_ir_idx_ to distinct different subgraph
-    std::string distinct_name = info.kernel_name + "_" + std::to_string(each_ir_idx_);
-    Array<NodeRef> args, shape_vars, arg_list_0;
-    Map<Tensor, Buffer> binds, binds_0;
-    std::vector<size_t> split_index;
     auto new_attrs = SetSharedMemoryTensors(attrs, info, alloc_map);
-    auto stmt = LowerStmt(sch, info.args, shape_vars, distinct_name, info.in_binds, new_attrs, false, poly_, false,
-                          "cuda", config, &args, &arg_list_0, &binds, &binds_0, &split_index, true);
-    size_t count = 0;
-    for (const auto &x : arg_list_0) {
-      auto buffer = x.as<BufferNode>();
-      CHECK(buffer) << "arg must be a BufferNode";
-      if (std::find(info.input_names.begin(), info.input_names.end(), buffer->name) == std::end(info.input_names)) {
-        CHECK(count < info.output_names.size());
-        outputs2args_[info.output_names[count]] = x;
-        count++;
-      }
+
+    LowerData data = LowerDataNode::make(GetScheduleWithBuildInfo(info), info.args, info.in_binds, new_attrs, "cuda",
+                                         info.kernel_name + "_" + std::to_string(each_ir_idx_), GetConfig(), poly_);
+    auto stmt = StageLower(data).RunTo(StageType::BeforeLowerFunc).Node();
+    CollectOutputMap(info, data->arg_list_0, outputs2args_);
+    for (const auto &x : data->arg_list_0) {
       all_args_.push_back(x);
     }
     return Downcast<Stmt>(stmt);
@@ -437,7 +435,6 @@ class CompositeJsonListGpu : public CompositeJsonList {
   }
 };
 
-#else
 std::pair<bool, int64_t> GetTensorPeel(size_t i, const std::vector<std::pair<int, int64_t>> &dims) {
   for (auto dim : dims) {
     if (i == static_cast<size_t>(dim.first)) {
@@ -584,21 +581,22 @@ class CompositeJsonListAscend : public CompositeJsonList {
     FixLowerDataForStitch();
     stitched_ir = AddPeelInfoForLoopAndData(stitched_ir, final_data_, attrs);
     g_attrs.Set(kEnableMulticore, Expr(1));
+
     stitched_ir =
-      Downcast<Stmt>(LowerAscend(stitched_ir, final_data_, LowerStage::FLATTEN, LowerStage::BEFORE_REWRITE));
+      Downcast<Stmt>(StageLower(final_data_, stitched_ir, StageType::Flattern).RunTo(StageType::BeforeRewrite).Node());
     lower_datas_.emplace_back(final_data_);
     return stitched_ir;
   }
 
   void FixLowerDataForStitch() {
     Array<NodeRef> ordered_args = ReorderArgs(inputs_, outputs_, all_args_, outputs2args_, workspace_args_);
-    final_data_.arg_list_0_ = ordered_args;
-    final_data_.binds_0_ = FixBinds(final_data_.binds_0_, ordered_args);
+    final_data_->arg_list_0 = ordered_args;
+    final_data_->binds_0 = FixBinds(final_data_->binds_0, ordered_args);
     // Add workspace tensors to binds
     for (const auto &it : workspace_binds_) {
-      final_data_.binds_0_.Set(it.first, it.second);
+      final_data_->binds_0.Set(it.first, it.second);
     }
-    final_data_.name = merge_name_;
+    final_data_->name = merge_name_;
   }
 
   static Map<Tensor, Buffer> FixBinds(const Map<Tensor, Buffer> &origin_binds, const Array<NodeRef> &ordered_args) {
@@ -616,12 +614,12 @@ class CompositeJsonListAscend : public CompositeJsonList {
   void AddPeelInfoForData(LowerData &data, PeelInfo &peel_info) {
     Array<NodeRef> out_args;
     Map<Tensor, Buffer> out_binds;
-    for (const auto &kv : data.binds_0_) {
+    for (const auto &kv : data->binds_0) {
       if (!peel_info.IsPeeledTensor(kv.second)) out_binds.Set(kv.first, kv.second);
     }
 
     Map<Buffer, Buffer> buffer_replace;
-    for (const auto &x : data.arg_list_0_) {
+    for (const auto &x : data->arg_list_0) {
       if (x->IsInstance<BufferNode>() && peel_info.IsPeeledTensor(x)) {
         auto dim = peel_info.Getdim(x);
         auto old_shape = x.as<BufferNode>()->shape;
@@ -643,8 +641,8 @@ class CompositeJsonListAscend : public CompositeJsonList {
         out_args.push_back(x);
       }
     }
-    data.arg_list_0_ = out_args;
-    data.binds_0_ = out_binds;
+    data->arg_list_0 = out_args;
+    data->binds_0 = out_binds;
     ReplaceBufferForALLArgsAndOutputs2args(buffer_replace);
   }
 
@@ -681,9 +679,9 @@ class CompositeJsonListAscend : public CompositeJsonList {
   }
   Stmt AddPeelInfoForLoopAndData(Stmt &s, LowerData &data, Map<std::string, NodeRef> &attrs) {
     PeelInfo peel_info = GetPeelInfoFromAttrs(attrs);
-    peel_info.CollectRealPeelTensors(data.arg_list_0_, outputs2args_);
+    peel_info.CollectRealPeelTensors(data->arg_list_0, outputs2args_);
     AddPeelInfoForData(data, peel_info);
-    s = AddPeelInfoForLoop(peel_info, data.binds_0_).Run(s);
+    s = AddPeelInfoForLoop(peel_info, data->binds_0).Run(s);
     DumpStmt2File("stitch_info/" + merge_name_ + "_after_add_loop.cc", s);
     return s;
   }
@@ -746,32 +744,14 @@ class CompositeJsonListAscend : public CompositeJsonList {
     peeled_tensors_.insert(info.opt.peel_info.GetPeelTensors().begin(), info.opt.peel_info.GetPeelTensors().end());
     // ensure merge_name_ is the same as original json name
     if (merge_name_.empty()) merge_name_ = info.kernel_name;
-    Array<Operation> ops;
-    std::for_each(info.tensors.begin(), info.tensors.end(), [&ops](const Tensor &t) { ops.push_back(t->op); });
-    Schedule sch = create_schedule(ops);
-    auto config = GetConfig();
-    // use each_ir_idx_ to distinct different subgraph
-    std::string distinct_name = info.kernel_name + "_" + std::to_string(each_ir_idx_);
-    Array<NodeRef> args, shape_vars, arg_list_0;
-    Map<Tensor, Buffer> binds, binds_0;
-    std::vector<size_t> split_index;
-    auto node_ref = LowerStmt(sch, info.args, shape_vars, distinct_name, info.in_binds, attrs, false, poly_, false,
-                              "cce", config, &args, &arg_list_0, &binds, &binds_0, &split_index, true);
-    auto stmt = Downcast<Stmt>(node_ref);
-    LowerData data(info.args, arg_list_0, binds, binds_0, shape_vars, distinct_name, false, true, false, "cce", config);
-    node_ref = LowerAscend(stmt, data, LowerStage::BEGIN, LowerStage::BEFORE_FLATTEN);
 
+    LowerData data = LowerDataNode::make(GetScheduleWithBuildInfo(info), info.args, info.in_binds, attrs, "cce",
+                                         info.kernel_name + "_" + std::to_string(each_ir_idx_), GetConfig(), poly_);
+    auto node_ref = StageLower(data).RunTo(StageType::BeforeFlattern).Node();
     stitch_lower_datas_.emplace_back(data);
 
-    size_t count = 0;
-    for (const auto &x : arg_list_0) {
-      auto buffer = x.as<BufferNode>();
-      CHECK(buffer) << "arg must be a BufferNode";
-      if (std::find(info.input_names.begin(), info.input_names.end(), buffer->name) == std::end(info.input_names)) {
-        CHECK(count < info.output_names.size());
-        outputs2args_[info.output_names[count]] = x;
-        count++;
-      }
+    CollectOutputMap(info, data->arg_list_0, outputs2args_);
+    for (const auto &x : data->arg_list_0) {
       all_args_.push_back(x);
     }
     return Downcast<Stmt>(node_ref);
@@ -779,9 +759,9 @@ class CompositeJsonListAscend : public CompositeJsonList {
 
   Stmt AddPeelInfoAndBlockAttr(Stmt &s, LowerData &data, PeelInfo &peel_info,
                                std::unordered_map<std::string, NodeRef> &outputs2args, int block) {
-    peel_info.CollectRealPeelTensors(data.arg_list_0_, outputs2args);
+    peel_info.CollectRealPeelTensors(data->arg_list_0, outputs2args);
     AddPeelInfoForData(data, peel_info);
-    s = AddInnerForAndBlockInfo(peel_info, block, data.binds_0_).Run(s);
+    s = AddInnerForAndBlockInfo(peel_info, block, data->binds_0).Run(s);
     return s;
   }
 
@@ -804,61 +784,37 @@ class CompositeJsonListAscend : public CompositeJsonList {
 
     // ensure merge_name_ is the same as original json name
     if (merge_name_.empty()) merge_name_ = info.kernel_name;
-    Array<Operation> ops;
-    std::for_each(info.tensors.begin(), info.tensors.end(), [&ops](const Tensor &t) { ops.push_back(t->op); });
-    Schedule sch = create_schedule(ops);
     auto config = GetConfig();
     // use each_ir_idx_ to distinct different subgraph
     std::string distinct_name = info.kernel_name + "_" + std::to_string(each_ir_idx_);
-    Array<NodeRef> args, shape_vars, arg_list_0;
-    Map<Tensor, Buffer> binds, binds_0;
-    std::vector<size_t> split_index;
-    auto node_ref = LowerStmt(sch, info.args, shape_vars, distinct_name, info.in_binds, attrs, false, poly_, false,
-                              "cce", config, &args, &arg_list_0, &binds, &binds_0, &split_index, true);
-    auto stmt = Downcast<Stmt>(node_ref);
 
-    LowerData data(info.args, arg_list_0, binds, binds_0, shape_vars, distinct_name, false, true, false, "cce", config);
+    LowerData data = LowerDataNode::make(GetScheduleWithBuildInfo(info), info.args, info.in_binds, attrs, "cce",
+                                         distinct_name, config, poly_);
+    auto sc = StageLower(data);
 
     if (attrs.find("block_plan") != attrs.end()) {
-      node_ref = LowerAscend(stmt, data, LowerStage::BEGIN, LowerStage::BEFORE_FLATTEN);
-      stmt = Downcast<Stmt>(node_ref);
+      sc.RunTo(StageType::BeforeFlattern);
 
       std::unordered_map<std::string, NodeRef> tmp_outputs2args;
-      size_t count = 0;
-      for (const auto &x : data.arg_list_0_) {
-        auto buffer = x.as<BufferNode>();
-        CHECK(buffer) << "arg must be a BufferNode";
-        if (std::find(info.input_names.begin(), info.input_names.end(), buffer->name) == std::end(info.input_names)) {
-          CHECK(count < info.output_names.size());
-          tmp_outputs2args[info.output_names[count]] = x;
-          count++;
-        }
-      }
+      CollectOutputMap(info, data->arg_list_0, tmp_outputs2args);
 
       auto block_plan = attrs["block_plan"].as<IntImm>();
       CHECK(block_plan);
       int block = block_plan->value;
       PeelInfo peel_info = GetPeelInfoFromAttrs(attrs);
-      stmt = AddPeelInfoAndBlockAttr(stmt, data, peel_info, tmp_outputs2args, block);
-      stmt = NEXT_PASS(CanonicalSimplify, stmt);
-      node_ref = LowerAscend(stmt, data, LowerStage::FLATTEN, LowerStage::BEFORE_REWRITE);
-    } else {
-      node_ref = LowerAscend(stmt, data, LowerStage::BEGIN, LowerStage::BEFORE_REWRITE);
+      sc.ApplyMutator([this, &peel_info, &tmp_outputs2args, &block](NodeRef &node_ref, LowerData &data) {
+        auto stmt = Downcast<Stmt>(node_ref);
+        stmt = AddPeelInfoAndBlockAttr(stmt, data, peel_info, tmp_outputs2args, block);
+        node_ref = NEXT_PASS(CanonicalSimplify, stmt);
+      });
     }
+    sc.RunTo(StageType::BeforeRewrite);
     lower_datas_.emplace_back(data);
-
-    size_t count = 0;
-    for (const auto &x : data.arg_list_0_) {
-      auto buffer = x.as<BufferNode>();
-      CHECK(buffer) << "arg must be a BufferNode";
-      if (std::find(info.input_names.begin(), info.input_names.end(), buffer->name) == std::end(info.input_names)) {
-        CHECK(count < info.output_names.size());
-        outputs2args_[info.output_names[count]] = x;
-        count++;
-      }
+    CollectOutputMap(info, data->arg_list_0, outputs2args_);
+    for (const auto &x : data->arg_list_0) {
       all_args_.push_back(x);
     }
-    return Downcast<Stmt>(node_ref);
+    return Downcast<Stmt>(sc.Node());
   }
 
  private:
@@ -868,9 +824,9 @@ class CompositeJsonListAscend : public CompositeJsonList {
 
     auto RewriteBlocks = [this](std::vector<Stmt> &block_irs) {
       for (size_t i = 0; i < block_irs.size(); ++i) {
-        lower_datas_[i].name = std::string("part_").append(std::to_string(i));
-        block_irs[i] =
-          Downcast<Stmt>(LowerAscend(block_irs[i], lower_datas_[i], LowerStage::REWRITE, LowerStage::BEFORE_LOWERFUNC));
+        lower_datas_[i]->name = std::string("part_").append(std::to_string(i));
+        block_irs[i] = Downcast<Stmt>(
+          StageLower(lower_datas_[i], block_irs[i], StageType::Rewrite).RunTo(StageType::BeforeLowerFunc).Node());
       }
       return block_irs;
     };
@@ -922,30 +878,33 @@ class CompositeJsonListAscend : public CompositeJsonList {
   }
 
   void MergeLowerData(const std::vector<LowerData> &lower_datas, const std::set<size_t> &specified = {}) {
+    // Not merge attrs, simple_mode, tuning, split_index
     bool all_merge = specified.empty();
-    final_data_ = LowerData();
+    final_data_ = LowerDataNode::make();
     for (size_t idx = 0; idx < lower_datas.size(); ++idx) {
       auto &lower_data = lower_datas[idx];
 
       if (!all_merge && specified.count(idx) == 0) continue;
-      for (auto arg : lower_data.args_) {
-        final_data_.args_.push_back(arg);
+      for (auto arg : lower_data->args) {
+        final_data_->args.push_back(arg);
       }
-      for (auto arg_list : lower_data.arg_list_0_) {
-        final_data_.arg_list_0_.push_back(arg_list);
+      for (auto arg_list : lower_data->arg_list_0) {
+        final_data_->arg_list_0.push_back(arg_list);
       }
-      for (auto iter : lower_data.binds_) {
-        final_data_.binds_.Set(iter.first, iter.second);
+      for (auto iter : lower_data->binds) {
+        final_data_->binds.Set(iter.first, iter.second);
       }
-      for (auto iter : lower_data.binds_0_) {
-        final_data_.binds_0_.Set(iter.first, iter.second);
+      for (auto iter : lower_data->binds_0) {
+        final_data_->binds_0.Set(iter.first, iter.second);
       }
-      for (auto shape_var : lower_data.shape_vars_) {
-        final_data_.shape_vars_.push_back(shape_var);
+      for (auto shape_var : lower_data->shape_vars) {
+        final_data_->shape_vars.push_back(shape_var);
       }
 
-      final_data_.config_ = lower_data.config_;
-      final_data_.name = lower_data.name;
+      final_data_->config = lower_data->config;
+      final_data_->name = lower_data->name;
+      final_data_->polyhedral = lower_data->polyhedral;
+      final_data_->target = lower_data->target;
     }
   }
 
@@ -953,9 +912,9 @@ class CompositeJsonListAscend : public CompositeJsonList {
     MergeLowerData(lower_datas_);
     auto config = GetConfig();
     Array<NodeRef> ordered_args = ReorderArgs(inputs_, outputs_, all_args_, outputs2args_, workspace_args_);
-    final_data_.arg_list_0_ = ordered_args;
-    final_data_.name = merge_name_;
-    auto rst = LowerAscend(stmt, final_data_, LowerStage::END, LowerStage::END);
+    final_data_->arg_list_0 = ordered_args;
+    final_data_->name = merge_name_;
+    auto rst = StageLower(final_data_, stmt, StageType::End).RunTo().Node();
     return BuildRstNode::make(rst, merge_name_);
   }
 
@@ -964,27 +923,23 @@ class CompositeJsonListAscend : public CompositeJsonList {
   std::vector<LowerData> lower_datas_;
   LowerData final_data_;
 };
-#endif
 
 Module CompositeWithJsonList(const Array<NodeRef> &json_str_node, const Array<NodeRef> &inputs,
                              const Array<NodeRef> &outputs, const Array<NodeRef> &alloc_map_list,
                              const Array<NodeRef> &reuse_map_list, const Array<NodeRef> &clean_op_map_list,
                              const Array<NodeRef> &attrs_list, bool poly, const std::string &target) {
-#ifdef USE_AKG_COMPILE_STUB
   if (target == "cuda") {
     return CompositeJsonListGpu(json_str_node, inputs, outputs, alloc_map_list, reuse_map_list, clean_op_map_list,
                                 attrs_list, poly, target)
       .Build();
-#else
-  if (target == "cce") {
+  } else if (target == "cce") {
     return CompositeJsonListAscend(json_str_node, inputs, outputs, alloc_map_list, reuse_map_list, clean_op_map_list,
                                    attrs_list, poly, target)
       .Build();
-#endif
-  } else {
-    CHECK(0) << "UNSUPPORTED TARGET: " << target;
-    return Module();
   }
+
+  CHECK(0) << "UNSUPPORTED TARGET: " << target;
+  return Module();
 }
 
 Stmt GetPeeledBody(const Stmt &stmt, const std::string &peeling) {
@@ -1036,9 +991,10 @@ Map<std::string, NodeRef> CompositePeelAnalyze(const std::string &json_str, cons
   ret.Set("peeling_space", parsed_peeling_space);
   return ret;
 }
+}  // namespace lower
 
-TVM_REGISTER_GLOBAL("composite_with_json_list").set_body_typed(CompositeWithJsonList);
-TVM_REGISTER_GLOBAL("get_peeled_body").set_body_typed(GetPeeledBody);
-TVM_REGISTER_GLOBAL("composite_peel_analyze").set_body_typed(CompositePeelAnalyze);
-TVM_REGISTER_GLOBAL("check_fold_dim").set_body_typed(CheckFoldDim);
+TVM_REGISTER_GLOBAL("composite_with_json_list").set_body_typed(lower::CompositeWithJsonList);
+TVM_REGISTER_GLOBAL("get_peeled_body").set_body_typed(lower::GetPeeledBody);
+TVM_REGISTER_GLOBAL("composite_peel_analyze").set_body_typed(lower::CompositePeelAnalyze);
+TVM_REGISTER_GLOBAL("check_fold_dim").set_body_typed(lower::CheckFoldDim);
 }  // namespace akg

@@ -37,21 +37,20 @@ bool IsThreadIdxX(const std::string &name) { return name == THREAD_IDX_X; }
 bool IsThreadIdxY(const std::string &name) { return name == THREAD_IDX_Y; }
 bool IsThreadIdxZ(const std::string &name) { return name == THREAD_IDX_Z; }
 
-std::string GetProcess(const std::string &json_str) {
-  size_t pos = json_str.find("\"process\"");
-  if (pos != std::string::npos && json_str.find("cuda", pos) != std::string::npos) {
-    return "cuda";
+std::string GetProcess(const picojson::value &input_json) {
+  const picojson::value::object &input_obj = input_json.get<picojson::object>();
+  std::string target;
+  auto iter = input_obj.find("process");
+  if (iter != input_obj.end()) {
+    CHECK(iter->second.is<std::string>());
+    target = iter->second.get<std::string>();
   }
-  return "aicore";
-}
 
-std::string GetSchedule(Array<Tensor> &outputs) {
-  for (const Tensor &t : outputs) {
-    if (t->op->tag == "comm_reduce" || t->op->tag == "comm_reduce_idx") {
-      return "reduce";
-    }
+  if (target == "aicore") {
+    target = "cce";
   }
-  return "injective";
+
+  return target;
 }
 
 picojson::value String2Json(const std::string &json_str) {
@@ -74,11 +73,11 @@ bool IsInplaceAssign(const std::string &op_name) { return op_name == "InplaceAss
 bool IsAssign(const std::string &op_name) { return op_name == "Assign"; }
 bool IsOtherOp(const std::string &op_name) {
   // if topi support more, add to this list
-  std::unordered_set<std::string> elems = {"MatMul", "BatchMatMul", "Conv", "Transpose", "Tile",
-                                           "Assign", "InplaceAssign", "EquivFormat", "TransData", "AddMinValue",
-                                           "BroadcastTo", "PadAkg", "UnPadAkg", "Conv2D", "CumSum",
-                                           "CumProd", "StridedSlice", "UserDefined", "GatherNd", "TensorScatterAdd",
-                                           "UnsortedSegmentSum", "Gather"};
+  std::unordered_set<std::string> elems = {
+    "MatMul",      "BatchMatMul", "Conv",         "Transpose",   "Tile",     "Assign",           "InplaceAssign",
+    "EquivFormat", "TransData",   "AddMinValue",  "BroadcastTo", "PadAkg",   "UnPadAkg",         "Conv2D",
+    "CumSum",      "CumProd",     "StridedSlice", "UserDefined", "GatherNd", "TensorScatterAdd", "UnsortedSegmentSum",
+    "Gather"};
   return elems.find(op_name) != elems.end();
 }
 bool IsElemwise(const std::string &op_name) {

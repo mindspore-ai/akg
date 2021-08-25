@@ -90,7 +90,6 @@ void DumpStitchInfo(const std::string &kernel_name, StitchAttrInfo &store_attr,
 void DumpIRAttr(const std::string &kernel_name, const IrAttrInfo &attr, size_t index);
 void DumpHeader(std::ofstream &of, const std::string &str);
 void DumpBuildInfo(const BuildInfo &info);
-void DumpLowerData(const LowerData &data);
 }  // namespace akg
 
 #endif  // COMPOSITE_DUMP_H_

@@ -1083,33 +1083,3 @@ def get_tiling_space(kernel_desc, level=1, attr=None):
         if level >= 2:
             spaces['tuning_space'] = ret.tiling_candidate.asnumpy().tolist()
     return spaces
-
-
-@tvm.register_func("akg_build_gpu_module")
-def build_cuda(outputs, args, sch_name, kernel_name, attrs=False, poly=False, binds=None):
-    s = select_cuda_scheduler(outputs, sch_name, poly)
-    if attrs:
-        attrs_t = dict(attrs.items())
-    else:
-        attrs_t = None
-    dump_ir = os.getenv(get_dump_ir_flag()) == "on"
-    with tvm.build_config(dump_pass_ir=dump_ir):
-        mod = akg.build(s, list(args), "cuda", name=kernel_name, binds=binds, attrs=attrs_t, polyhedral=bool(poly))
-        return mod
-
-
-@tvm.register_func("select_cuda_scheduler")
-def select_cuda_scheduler(outputs, sch_name, poly=False, grid_dims=0, block_dims=0, buffer_stitch=False):
-    scheduler = {
-        "injective": topi.cuda.injective_single_kernel.schedule_injective,
-        "reduce": topi.cuda.reduce_opt.schedule_reduce,
-    }
-    with tvm.target.cuda():
-        if bool(poly):
-            s = akg.tvm.create_schedule([x.op for x in list(outputs)])
-        else:
-            if grid_dims and block_dims and sch_name == "injective":
-                s = scheduler[sch_name](outputs, grid_dims, block_dims, buffer_stitch=buffer_stitch)
-            else:
-                s = scheduler[sch_name](outputs, grid_dims, block_dims)
-        return s
