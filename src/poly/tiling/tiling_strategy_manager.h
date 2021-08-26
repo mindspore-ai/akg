@@ -416,6 +416,8 @@ class GpuStrategy : public TilingStrategy {
 
   // Step 3. Transform list of integer into string mapping config.
   void SetMappingConfig();
+  void SetThreadMappingConfig();
+  void SetBlockMappingConfig();
 
   void MarkMappingInRootAxis();
 

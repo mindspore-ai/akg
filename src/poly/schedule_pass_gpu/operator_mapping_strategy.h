@@ -25,32 +25,76 @@ namespace poly {
 
 class OperatorMappingStrategy {
  public:
-  explicit OperatorMappingStrategy(PassInfo &pass_info, ScopInfo &scop_info)
-      : pass_info_(pass_info), scop_info_(scop_info) {}
+  explicit OperatorMappingStrategy(ScopInfo &scop_info) : scop_info_(scop_info) {}
+  explicit OperatorMappingStrategy(ScopInfo &scop_info, MappingCfg *mapping_cfg, bool is_thread_mapping = true,
+                                   bool is_promotion_mapping = false)
+      : scop_info_(scop_info),
+        mapping_cfg_(mapping_cfg),
+        is_thread_mapping_(is_thread_mapping),
+        is_promotion_mapping_(is_promotion_mapping) {
+    CHECK(mapping_cfg != nullptr) << "mapping config is null";
+  }
   ~OperatorMappingStrategy() {}
 
-  size_t GetFinalMappingThreadNumber(isl::schedule_node &node, const size_t thread_cfg_bound,
-                                     const size_t n_thread_map);
-  virtual size_t MapThreadHelper(isl::schedule_node &thread_root, const bool need_reverse);
-  virtual isl::schedule_node MapBlockHelper(const isl::schedule_node &orig_node, MappingCfg *block_cfg,
-                                            size_t n_block_map, bool check_extent,
-                                            std::unordered_map<size_t, size_t> map_idx_shift = {});
+  virtual size_t MapThreadHelper(isl::schedule_node &thread_root);
+  virtual isl::schedule_node MapBlockHelper(const isl::schedule_node &orig_node);
+  isl::schedule_node MapThreadBlockHelper(const isl::schedule_node &orig_node);
+
+  // Core mapping function
+  isl::schedule_node MapDimToThreadsBlocks(const isl::schedule_node &node);
+  isl::schedule_node AnalysisNodeAndInsertMapFilter(const isl::schedule_node &node,
+                                                    const isl::union_pw_aff_list &upa_list);
+  isl::schedule_node InsertMapFilter(const isl::schedule_node &node);
+  isl::schedule_node CheckMapSizeAndApplyTile(const isl::schedule_node &mapping_root,
+                                              const isl::union_pw_aff_list &aff_list);
+  isl::union_pw_aff_list GetUpaList(const isl::schedule_node &node, isl::multi_union_pw_aff &partial_schedule);
+  isl::union_pw_aff_list GetPrefixPartialSchedule(const isl::multi_union_pw_aff &partial_schedule,
+                                                  const isl::schedule_node &node);
+
+  // Modify the mapping strategy
+  std::string SetOneConfigForMulAxis(const isl::schedule_node &node, const int orig_total_cfg,
+                                     const std::unordered_set<int> &excluded_axis_pos = {});
+  void SetRequiredMappingCfg(const isl::schedule_node &node, int start_pos = -1, int end_pos = INT_MAX);
+  void InitRepeatedMappingConfig();
+  void SetRepeatedMappingStrategy(const std::string &mapping_str);
+  MappingCfg *GetRepeatedReplaceMappingConfig(const isl::schedule_node &node, const std::string &replace_mapping_name);
+  void ReadjustRequireddMappingStrategy(const bool is_repeated_mapping, const std::string &repeated_mapping_idx = "",
+                                        const std::string &mapping_str = "");
+
+  // The mapping strategy for each axis.
+  MappingStrategyMap required_mapping_strategy_;
+  // Store the information of the corresponding filter after mapping.
+  MappingScheduleInfoMap mapping_sch_info_map_;
+
+  // The mapping relationship between axis and threadIdx/blockIdx is many-to-one.
+  std::unordered_map<std::string, std::unordered_set<int>> repeated_mapping_cfg_axis_;
+  // The mapping relationship between axis and threadIdx/blockIdx is one-to-one.
+  std::unordered_map<std::string, std::unordered_set<int>> non_repeated_mapping_cfg_axis_;
+
+  bool is_insert_filter_{true};    // Whether to insert the filter node generated after the mapping.
+  bool is_need_reverse_{true};     // Whether to start mapping from the inner axis.
+  bool is_set_config_zero_{true};  // Whether to set the redundant configuration to 0 when mapping.
 
  protected:
-  PassInfo &pass_info_;
   ScopInfo &scop_info_;
+  MappingCfg *mapping_cfg_{nullptr};
+  bool is_thread_mapping_;
+  bool is_promotion_mapping_;
 };
 
 class ReduceMappingStrategy : public OperatorMappingStrategy {
  public:
-  explicit ReduceMappingStrategy(PassInfo &pass_info, ScopInfo &scop_info)
-      : OperatorMappingStrategy(pass_info, scop_info) {}
+  explicit ReduceMappingStrategy(ScopInfo &scop_info, MappingCfg *mapping_cfg, bool is_thread_mapping = true,
+                                 bool is_promotion_mapping = false)
+      : OperatorMappingStrategy(scop_info, mapping_cfg, is_thread_mapping, is_promotion_mapping) {}
   ~ReduceMappingStrategy() {}
 
   size_t MapThreadHelper(isl::schedule_node &thread_root);
 
   bool NeedAtomicAdd(const isl::schedule_node_band &band, size_t n_block_map);
   void MarkAtomicAddTensor(const isl::schedule_node_band &band);
+  void UpadateSplitMappingStatregy(const int split_pos);
+  size_t GetFinalMappingThreadNumber(isl::schedule_node &node, const size_t n_thread_map);
 
  private:
   isl::schedule_node InsertReduceExtension(const isl::schedule_node &node);
@@ -58,8 +102,9 @@ class ReduceMappingStrategy : public OperatorMappingStrategy {
 
 class BatchMatmulMappingStrategy : public OperatorMappingStrategy {
  public:
-  explicit BatchMatmulMappingStrategy(PassInfo &pass_info, ScopInfo &scop_info)
-      : OperatorMappingStrategy(pass_info, scop_info) {}
+  explicit BatchMatmulMappingStrategy(ScopInfo &scop_info, MappingCfg *mapping_cfg, bool is_thread_mapping = true,
+                                      bool is_promotion_mapping = false)
+      : OperatorMappingStrategy(scop_info, mapping_cfg, is_thread_mapping, is_promotion_mapping) {}
   ~BatchMatmulMappingStrategy() {}
 
   size_t MapThreadHelper(isl::schedule_node &thread_root);
@@ -67,25 +112,10 @@ class BatchMatmulMappingStrategy : public OperatorMappingStrategy {
 
 class ConvMappingStrategy : public OperatorMappingStrategy {
  public:
-  explicit ConvMappingStrategy(PassInfo &pass_info, ScopInfo &scop_info)
-      : OperatorMappingStrategy(pass_info, scop_info) {}
+  explicit ConvMappingStrategy(ScopInfo &scop_info) : OperatorMappingStrategy(scop_info) {}
   ~ConvMappingStrategy() {}
 
-  isl::schedule_node ResetConvBlockMappingConfig(const isl::schedule_node &orig_node, MappingCfg *block_cfg,
-                                                 const bool check_extent);
-  isl::schedule MoveKernelHWBand(isl::schedule sch);
-};
-
-class TOTMappingStrategy : public OperatorMappingStrategy {
- public:
-  explicit TOTMappingStrategy(PassInfo &pass_info, ScopInfo &scop_info)
-      : OperatorMappingStrategy(pass_info, scop_info) {}
-  ~TOTMappingStrategy() {}
-
-  size_t MapThreadHelper(isl::schedule_node &thread_root);
-  isl::schedule_node MapBlockHelper(const isl::schedule_node &orig_node, MappingCfg *block_cfg, size_t n_block_map,
-                                    bool check_extent, std::unordered_map<size_t, size_t> &map_idx_shift);
-  std::unordered_map<int, std::string> GetRequiredMappingCfg(MappingCfg *mapping_cfg);
+  isl::schedule MoveKernelHWBand(const isl::schedule &sch);
 };
 
 }  // namespace poly

@@ -190,7 +190,7 @@ def _set_reducemax_attrs(desc_d, attrs):
         blockdim_y = 16
         griddim_x = 1
         griddim_y = _reducemax_pattern(desc_d)[1] / (blockdim_y * elem_per_thread)
-        attrs['dim'] = ' 0 0 128 64 0 1 128 128'
+        attrs['dim'] = ' 0 0 128 64 b1 t1 0 1 128 128 b0 t0'
         attrs['bind_block'] = str(griddim_x) + ' ' + str(griddim_y)
         attrs['bind_thread'] = str(blockdim_x) + ' ' + str(blockdim_y)
     return attrs

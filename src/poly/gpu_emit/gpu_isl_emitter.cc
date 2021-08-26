@@ -502,30 +502,9 @@ Expr GpuIslEmitter::AdaptPolyNewVar(std::string name) {
   if (mapping_cfg->type == MappingType::REPLACE_THREADS) {
     e = AdaptThreadNewVar(name, mapping_cfg);
   } else {
-    e = AdaptBlockNewVar(name, mapping_cfg);
+    e = AdaptOneConfigForMulAxis(mapping_cfg, name, false);
   }
   CHECK(e.defined()) << "new var is null";
-  return e;
-}
-
-Expr GpuIslEmitter::AdaptBlockNewVar(const std::string &name, MappingCfg *mapping_cfg) {
-  Expr e;
-  if (name.find(CONV_H_W) != std::string::npos) {
-    int mx = mapping_cfg->GetX().second;
-    if (name.find(B0) != std::string::npos) {
-      e = Mod::make(iter_name_map_[B1], mx);
-      return e;
-    } else if (name.find(B1) != std::string::npos) {
-      e = Div::make(iter_name_map_[B1], mx);
-      return e;
-    }
-  } else if (name.find(CONV_N) != std::string::npos) {
-    return iter_name_map_[B2];
-  } else if (name.find(CONV_O) != std::string::npos) {
-    return iter_name_map_[B0];
-  } else {
-    return AdaptOneConfigForMulAxis(mapping_cfg, name, false);
-  }
   return e;
 }
 
@@ -551,11 +530,11 @@ Expr GpuIslEmitter::AdaptThreadNewVar(const std::string &name, MappingCfg *mappi
 Expr GpuIslEmitter::AdaptOneConfigForMulAxis(MappingCfg *mapping_cfg, const std::string &orig_name,
                                              const bool is_thread) {
   std::string config_name = T0;
-  std::string custom_name = CUSTOM;
+  std::string repeated_name = REPEATED_MAPPING;
   std::string name = orig_name;
-  if (name.find(custom_name) != std::string::npos) {
-    config_name = name.substr(custom_name.size(), config_name.size());
-    int suffix_len = custom_name.size() + config_name.size();
+  if (name.find(repeated_name) != std::string::npos) {
+    config_name = name.substr(repeated_name.size(), config_name.size());
+    int suffix_len = repeated_name.size() + config_name.size();
     name = name.substr(suffix_len + 1, name.size() - suffix_len);
   }
 
