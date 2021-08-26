@@ -46,8 +46,7 @@ uint64_t GetDefaultDeviceMemSize() {
 }  // namespace
 
 void AscendMemoryManager::MallocDeviceMemory() {
-  auto context_mem = 0;
-  device_mem_size_ = context_mem == 0 ? GetDefaultDeviceMemSize() : context_mem;
+  device_mem_size_ = GetDefaultDeviceMemSize();
   rtError_t ret;
   auto max_retry = 3;
   for (auto i = 0; i < max_retry; ++i) {

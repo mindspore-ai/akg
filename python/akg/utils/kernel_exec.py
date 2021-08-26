@@ -685,7 +685,7 @@ def gen_kernel_name(input_shapes, input_types, op_attrs=None, kernel_name="", at
     # the same kernel_name.json and kernel_name.o in the kernel_meta directory, and different processes
     # will overlap and delete each other, resulting in failure.
     # This problem can be avoided by adding process id to kernel_name.
-    if isinstance(attrs, dict) and ("dynamic" in attrs.keys() or "partial_dynamic" in attrs.keys()):
+    if isinstance(attrs, dict) and (attrs.get("dynamic") or attrs.get("partial_dynamic")):
         pid_suffix = "_" + str(os.getpid())
         kernel_name = kernel_name + pid_suffix
         if len(kernel_name) > dir_max_length:
