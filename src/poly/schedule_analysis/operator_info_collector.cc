@@ -445,7 +445,7 @@ size_t OpTypeCollector::CountUniqueLoopName(std::vector<VarNames> &var_names, bo
   return uni_name.size();
 }
 
-bool OpTypeCollector::IsTranspose(std::vector<VarNames> &dst_vars, std::vector<VarNames> &src_vars) {
+bool OpTypeCollector::IsTranspose(std::vector<VarNames> dst_vars, std::vector<VarNames> src_vars) {
   if (dst_vars.empty() || src_vars.empty()) {
     return false;
   }
@@ -475,6 +475,34 @@ bool OpTypeCollector::IsTranspose(std::vector<VarNames> &dst_vars, std::vector<V
     }
   }
   return false;
+}
+
+bool OpTypeCollector::HaveSameNums(const std::vector<VarNames> &dst_vars, const std::vector<VarNames> &src_vars) {
+  std::vector<std::string> dst_nums;
+  for (auto names : dst_vars) {
+    for (auto n : names) {
+      if (IsNum(n)) {
+        dst_nums.push_back(n);
+      }
+    }
+  }
+  std::vector<std::string> src_nums;
+  for (auto names : src_vars) {
+    for (auto n : names) {
+      if (IsNum(n)) {
+        src_nums.push_back(n);
+      }
+    }
+  }
+  if (dst_nums.size() != src_nums.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < dst_nums.size(); i++) {
+    if (dst_nums[i] != src_nums[i]) {
+      return false;
+    }
+  }
+  return true;
 }
 
 std::string OpTypeCollector::GetFusedCaseType(const TensorEntry &d, const TensorEntry &s) {
@@ -536,11 +564,11 @@ std::string OpTypeCollector::GetSingleOpType(const TensorEntry &d, const TensorE
       return type + AT_TRANSPOSE;
     }
     if (d.loops.size() == s.loops.size()) {
-      if (dst_vars_size_with_num == src_vars_size_with_num) {
+      if ((dst_vars_size_with_num == src_vars_size_with_num) && HaveSameNums(dst_vars, src_vars)) {
         // A[i,j] = B[i,j]
         return type + AT_ELEMWISE;
       } else {
-        // A[i] = B[i - 1] or A[i] = B[floormod(i, 4096)]
+        // A[i] = B[i - 1] or A[i] = B[floormod(i, 4096)] or A[10 - i] = A[9 - i] + B[i]
         return type + AT_PARTIAL_ELEM;
       }
     } else {

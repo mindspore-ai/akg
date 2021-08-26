@@ -164,7 +164,7 @@ class RemoveTrivialLoop : public IRMutator {
   Stmt Mutate_(const For *op, const Stmt &s) final {
     auto min = op->min.as<IntImm>();
     auto extent = op->extent.as<IntImm>();
-    if (min != nullptr && extent != nullptr && extent->value - min->value == 1) {
+    if (min != nullptr && extent != nullptr && extent->value == 1) {
       Map<Var, Expr> vmap;
       vmap.Set(op->loop_var, op->min);
       auto body = IRMutator::Mutate(op->body);

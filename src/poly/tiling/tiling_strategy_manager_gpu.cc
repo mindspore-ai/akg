@@ -632,8 +632,7 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu(int band_index) {
       ? std::max(
           std::min<int>(proposal, ((possible_blocks / SafeDivisor(min_blocks) + 1) / binary_factor_) * binary_factor_),
           1)
-    : IsHalfReduce() ? double_warp_size_
-                     : static_cast<int>(SpItemPerThread::FULL);
+      : IsHalfReduce() ? double_warp_size_ : static_cast<int>(SpItemPerThread::FULL);
   UpdateAxes(possible_blocks, default_elem_per_thread);
 }
 
@@ -952,7 +951,9 @@ void GpuStrategy::AddGpuConstraint() {
       continue;
     }
 
-    if ((template_ == Template::PURE_ELEM || template_ == Template::EXTERN_CALL) && need_injective_speed_up) {
+    if ((template_ == Template::PURE_ELEM || template_ == Template::PARTIAL_ELEM ||
+         template_ == Template::EXTERN_CALL) &&
+        need_injective_speed_up) {
       InjectiveSpeedup();
     }
 
@@ -1165,12 +1166,18 @@ void GpuStrategy::BuildAxesQueue() {
       axis->block_constraints.map_extent_ == 0 ? axis->extent_val : axis->block_constraints.map_extent_;
     axis->thread_constraints.map_extent_ =
       axis->thread_constraints.map_extent_ == 0 ? axis->extent_val : axis->thread_constraints.map_extent_;
-    if (!axis->mc_sup && !analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib()) {
+    if (!axis->mc_sup &&
+        (!analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib() || template_ == Template::PARTIAL_ELEM)) {
       axis->block_constraints.map_extent_ = 1;
       axis->thread_constraints.map_extent_ = 1;
       std::stringstream ss;
-      ss << "Axis " << axis->index << "_" << axis->dim_axis
-         << " Coincidence = 0 and Akg-reduce-lib not enabled, disable block/thread mapping.";
+      ss << "Axis " << axis->index << "_" << axis->dim_axis;
+      if (template_ == Template::PARTIAL_ELEM) {
+        axis->c1_constraints.tile_extent_ = 1;
+        ss << " Coincidence = 0 and template = PARTIAL_ELEM, disable block/thread mapping.";
+      } else {
+        ss << " Coincidence = 0 and Akg-reduce-lib not enabled, disable block/thread mapping.";
+      }
       analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
     }
   });
@@ -1183,8 +1190,7 @@ void GpuStrategy::SkipMapping(TileAxis *axis, int64_t shape, std::stringstream &
   auto tile = inner_dim < thread_dim ? elem_per_thread_[inner_dim] : 1;
   tile = tile == static_cast<int64_t>(SpItemPerThread::AUTO)
            ? std::min(axis->thread_constraints.item_process_, max_elem_per_thread_)
-         : tile == static_cast<int64_t>(SpItemPerThread::FULL) ? std::min(shape, max_elem_per_thread_)
-                                                               : 1;
+           : tile == static_cast<int64_t>(SpItemPerThread::FULL) ? std::min(shape, max_elem_per_thread_) : 1;
   CHECK(axis->c1_constraints.tile_min_.as<IntImm>() && axis->c1_constraints.tile_extent_.as<IntImm>());
   auto tile_min = axis->c1_constraints.tile_min_.as<IntImm>()->value;
   auto tile_extent = axis->c1_constraints.tile_extent_.as<IntImm>()->value;

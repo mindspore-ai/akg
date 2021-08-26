@@ -135,6 +135,8 @@ void SharedMemoryManager::CreateClusterForOperator(const isl::schedule_node &nod
     // matmul operator
     remain_memory_ = akg::common::ADVANCED_SHARED_MEMORY_SIZE;
     create_cluster.CreateClusterListForGemm(node, mark_names_);
+  } else if (current_outer_bn_->template_type == Template::PARTIAL_ELEM) {
+    create_cluster.CreateClusterListForPartialElementWise(node, mark_names_);
   } else {
     create_cluster.CreateClusterListForElementWise(node, mark_names_);
   }

@@ -21,15 +21,17 @@ from tests.common.test_run import cumprod_run
 # TestCase= class: put to tests/*/
 ############################################################
 class TestCase(TestBase):
-    def setup(self):
-        case_name = "cumprod_run"
-        case_path = os.getcwd()
-
-        self.params_init(case_name, case_path)
-
+    def __init__(self):
+        self.case_name = "cumprod_run"
+        self.case_path = os.getcwd()
         self.args_default = [
             ("000_case", cumprod_run, ((16, 3, 3, 16), "float32", 0, False, False), ["level0"]),
+            ("001_case", cumprod_run, ((32, 3, 3, 16), "float32", 1, True, False), ["level0"]),
+            ("002_case", cumprod_run, ((64, 3, 3, 16), "float32", 2, True, True), ["level0"]),
         ]
+
+    def setup(self):
+        self.params_init(self.case_name, self.case_path)
         return True
 
     @pytest.mark.level0

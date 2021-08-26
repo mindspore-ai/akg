@@ -19,20 +19,31 @@ from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
 from tests.common.tensorio import compare_tensor
 from akg.composite import cumprod as cumprod_ir_builder
+from scipy.ndimage.interpolation import shift
 
 def gen_data(shape, dtype, axis, exclusive, reverse):
     support_list = {"float16": np.float16, "float32": np.float32}
     data = random_gaussian(shape, miu=1, sigma=0.1).astype(support_list[dtype])
-    expect = np.cumprod(data, axis)
+    if reverse:
+        expect = np.flip(data, axis)
+        expect = np.cumprod(expect, axis)
+    else:
+        expect = np.cumprod(data, axis)
+    if exclusive:
+        shift_axis = [0] * len(data.shape)
+        shift_axis[axis] = 1
+        expect = shift(expect, shift_axis, cval=1)
+    if reverse:
+        expect = np.flip(expect, axis)
     output = np.full(shape, np.nan, dtype)
     return data, output, expect
 
 def cumprod_run(shape, dtype, axis=0, exclusive=False, reverse=False, poly_sch=True, attrs=None):
     if not attrs:
         attrs = {"target": "cuda"}
-    def cumprod(input, target=attrs["target"]):
+    def cumprod(data):
         op_attrs = {"axis": axis if isinstance(axis, list) else [axis], "exclusive": exclusive, "reverse": reverse}
-        return cumprod_ir_builder([input,], op_attrs)
+        return cumprod_ir_builder([data,], op_attrs)
     mod = utils.op_build_test(cumprod, [shape], [dtype], kernel_name="cumprod", polyhedral=poly_sch, attrs=attrs)
 
     data, output, expect = gen_data(shape, dtype, axis, exclusive, reverse)
