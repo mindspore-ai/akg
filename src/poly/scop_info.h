@@ -799,10 +799,58 @@ struct MmaConv {
   int64_t k;
 };
 
+constexpr auto AT_TRANSFORM = "TRANSFORM";
+constexpr auto AT_TRANSPOSE = "TRANSPOSE";
+constexpr auto AT_PAD = "PAD";
+constexpr auto AT_BROADCAST = "BROADCAST";
+constexpr auto AT_REDUCE = "REDUCE";
+constexpr auto AT_ELEMWISE = "ELEMWISE";
+constexpr auto AT_CALL = "CALL";
+
+enum Template {
+  DEFAULT = 0,
+  PURE_ELEM,
+  BROADCAST_OP,
+  REDUCTION,
+  ALL_REDUCE,
+  BITWISE_REDUCTION,
+  MATMUL,
+  TRANSPOSE_OP,
+  PAD_OP,
+  CUSTOM_CONFIG,
+  CONV,
+  EXTERN_CALL,
+  TEMPLATE_BULK
+};
+
 class AnalysisResult {
  public:
   AnalysisResult() = default;
   ~AnalysisResult() = default;
+
+  using VarNames = std::vector<std::string>;
+
+  // represent a tensor
+  // e.g. for(cc0,0,8){input_red(cc0)=0;}
+  // => Tensor{name:input_red,loops:[cc0]}
+  struct TensorEntry {
+      std::string name;
+      Array<Expr> args;
+      std::vector<VarNames> var_names;
+      std::unordered_map<size_t, std::vector<const For *>> loops;
+      size_t band_index{0};
+      int type_byte{1};
+  };
+  // represent a provide stmt
+  struct ProvideEntry {
+      std::string basic_op_type;
+      std::unordered_set<int> flow;
+      std::vector<TensorEntry> src;
+      TensorEntry dst;
+      size_t band_index{0};
+      const Provide *op{nullptr};
+      const IfThenElse *cond{nullptr};
+  };
 
   void RecordWrites(const isl::union_map &writes) { writes_ = writes; }
   void RecordReads(const isl::union_map &reads) { reads_ = reads; }
@@ -984,14 +1032,29 @@ class AnalysisResult {
   void SetTensorScheduleRepo(const TensorScheduleRepo &repo) { tensor_schedule_repo_ = std::move(repo); }
 
   bool IsFakeCopyin(const isl::id &tensor_id);
+  void RecordProvideAnalysis(const For * op, ProvideEntry prov) {
+    provides_ana_[op].emplace_back(prov);
+  }
+  std::unordered_map<const For *, std::vector<ProvideEntry>> GetProvideAnalysis() {
+    return provides_ana_;
+  }
+  void SetOpTemplate(Template op_template) { op_template_ = op_template; }
+  Template GetOpTemplate() { return op_template_; }
+  std::string ShowOpTemplate(Template op_template) { return template_map_[op_template]; }
 
  public:
   std::vector<std::pair<std::string, STMT_OP_TYPE>> stmt_type_;
   std::vector<std::pair<isl::union_set, BufferedFootPrintInfo>> active_buffer_footprints_;
   std::vector<BufferDefInfo> buffer_def_infos_;
   BufferDefInfo default_buffer_def_info_;
+  std::unordered_map<const For *, std::vector<ProvideEntry>> provides_ana_;
+  std::unordered_map<int, std::string> template_map_ = {
+    {0, "DEFAULT"},    {1, "PURE_ELEM"},         {2, "BROADCAST_OP"}, {3, "REDUCTION"},
+    {4, "ALL_REDUCE"}, {5, "BITWISE_REDUCTION"}, {6, "MATMUL"},       {7, "TRANSPOSE_OP"},
+    {8, "PAD_OP"},     {9, "CUSTOM_CONFIG"},     {10, "CONV"}};
 
  private:
+  Template op_template_{Template::DEFAULT};
   ReduceMap reduces_;
   ReduceTensorInfoMap reduce_tensor_info_;
   std::string reduce_direction_;

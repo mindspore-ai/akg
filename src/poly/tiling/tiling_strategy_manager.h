@@ -439,10 +439,6 @@ class GpuStrategy : public TilingStrategy {
   bool need_reverse_{false};
   bool reverse_binding_{false};
   int64_t fused_size_{1};
-  std::unordered_map<int, std::string> template_map_ = {
-    {0, "DEFAULT"},    {1, "PURE_ELEM"},         {2, "BROADCAST_OP"}, {3, "REDUCTION"},
-    {4, "ALL_REDUCE"}, {5, "BITWISE_REDUCTION"}, {6, "MATMUL"},       {7, "TRANSPOSE_OP"},
-    {8, "PAD_OP"},     {9, "CUSTOM_CONFIG"},     {10, "CONV"}};
   std::unordered_map<int, std::string> mapping_idx_pos_ = {{0, "x"}, {1, "y"}, {2, "z"}};
   std::unordered_map<int, std::string> reduce_y_idx_pos_ = {{0, "y"}, {1, "x"}};
   int vectorized_bytes_{1};

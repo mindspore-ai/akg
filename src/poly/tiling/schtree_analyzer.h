@@ -28,6 +28,7 @@
 #include <cmath>
 #include <unordered_set>
 
+#include "poly/scop_builder.h"
 #include "poly/tiling/tiling_analyzer.h"
 
 namespace akg {

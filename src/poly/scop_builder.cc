@@ -495,6 +495,47 @@ void ParseStmtOps(const isl::id &id, const Provide *stmt, AnalysisResult &result
   ParseStmtOps(id, stmt->value, result, stmt->func);
 }
 
+VarNames VisitVarNames(const air::Expr &arg, VarNames var_names, bool add_num) {
+  if (const auto var = arg.as<air::ir::Variable>()) {
+    var_names.emplace_back(var->name_hint);
+  } else if (const auto sub = arg.as<air::ir::Sub>()) {
+    var_names = VisitVarNames(sub->a, var_names, add_num);
+    var_names = VisitVarNames(sub->b, var_names, add_num);
+  } else if (const auto add = arg.as<air::ir::Add>()) {
+    var_names = VisitVarNames(add->a, var_names, add_num);
+    var_names = VisitVarNames(add->b, var_names, add_num);
+  } else if (const auto mul = arg.as<air::ir::Mul>()) {
+    var_names = VisitVarNames(mul->a, var_names, add_num);
+    var_names = VisitVarNames(mul->b, var_names, add_num);
+  } else if (const auto div = arg.as<air::ir::Div>()) {
+    var_names = VisitVarNames(div->a, var_names, add_num);
+    var_names = VisitVarNames(div->b, var_names, add_num);
+  } else if (const auto mod = arg.as<air::ir::Mod>()) {
+    var_names = VisitVarNames(mod->a, var_names, add_num);
+    var_names = VisitVarNames(mod->b, var_names, add_num);
+  } else if (const auto int_imm = arg.as<air::ir::IntImm>()) {
+    if (add_num) {
+      var_names.emplace_back(std::to_string(int_imm->value));
+    }
+  } else if (const auto f_mod = arg.as<air::ir::FloorMod>()) {
+    var_names = VisitVarNames(f_mod->a, var_names, add_num);
+    var_names = VisitVarNames(f_mod->b, var_names, add_num);
+  } else if (const auto f_div = arg.as<air::ir::FloorDiv>()) {
+    var_names = VisitVarNames(f_div->a, var_names, add_num);
+    var_names = VisitVarNames(f_div->b, var_names, add_num);
+  }
+  return var_names;
+}
+
+bool IsNum(const std::string &name) {
+  for (auto c : name) {
+    if (c > '9' || c < '0') {
+      return false;
+    }
+  }
+  return true;
+};
+
 /* "macro_stmt" is introduced to handle IfThenElse IR Node type. In particular, an if statement with its body should
  * be handled as one "macro" statement. "macro_stmt" records the statement label of the entire "macro" statements. In
  * other words, each "kStatementLabel" of a Provide or Store type should be the same with its enclosing IfThenElse
@@ -584,6 +625,362 @@ isl::set CutSet(std::vector<Expr> cond_vec, const isl::set &set, bool is_else = 
   return set.intersect(set_vec[0]);
 }
 
+void OpTypeCollector::Collect() {
+  this->Visit(stmt_);
+}
+
+void OpTypeCollector::AnalyzeOpTemplate() {
+  std::string concated_op_type;
+  for (auto it : provides_ana_) {
+    std::vector<ProvideEntry> pes = it.second;
+    for (auto pe : pes) {
+      concated_op_type += pe.basic_op_type + ",";
+      if (scop_info_.user_config_.GetTarget() == TARGET_CUDA &&
+          pe.basic_op_type.find(AT_TRANSPOSE) != std::string::npos &&
+          pe.basic_op_type.find(AT_ELEMWISE) != std::string::npos) {
+        AnalyzeGemmAxes(pe);
+      }
+    }
+  }
+  if (scop_info_.analysis_result_.GetOpTemplate() != Template::DEFAULT) {
+    return;
+  }
+
+  if (concated_op_type.find(AT_CALL) != std::string::npos) {
+    scop_info_.analysis_result_.SetOpTemplate(Template::EXTERN_CALL);
+  } else if (concated_op_type.find(AT_REDUCE) != std::string::npos) {
+    scop_info_.analysis_result_.SetOpTemplate(Template::REDUCTION);
+  } else if (concated_op_type.find(AT_TRANSPOSE) != std::string::npos) {
+    scop_info_.analysis_result_.SetOpTemplate(Template::TRANSPOSE_OP);
+  } else if (concated_op_type.find(AT_PAD) != std::string::npos) {
+    scop_info_.analysis_result_.SetOpTemplate(Template::PAD_OP);
+  } else if (concated_op_type.find(AT_BROADCAST) != std::string::npos || concated_op_type.find(AT_TRANSFORM) != std::string::npos) {
+    scop_info_.analysis_result_.SetOpTemplate(Template::BROADCAST_OP);
+  } else {
+    scop_info_.analysis_result_.SetOpTemplate(Template::PURE_ELEM);
+  }
+}
+
+void OpTypeCollector::WriteToScopInfo() {
+  for (auto it : provides_ana_) {
+    auto cur_loop = it.first;
+    auto provs = it.second;
+    for (auto prov : provs) {
+      scop_info_.analysis_result_.RecordProvideAnalysis(cur_loop, prov);
+    }
+  }
+}
+
+void OpTypeCollector::Dump() {
+  LOG(INFO) << "OP TEMPLATE = " << scop_info_.analysis_result_.ShowOpTemplate(scop_info_.analysis_result_.GetOpTemplate());
+  for (auto it : provides_ana_) {
+    auto loop = it.first;
+    auto provs = it.second;
+    LOG(INFO) << "Under loop " << loop->loop_var->name_hint;
+    for (auto prov : provs) {
+      LOG(INFO) << "[DST] " << prov.dst.name << " [OPTYPE] " << prov.basic_op_type;
+    }
+  }
+}
+
+void OpTypeCollector::Visit_(const AttrStmt *op) {
+  cur_attr_ = op;
+  IRVisitor::Visit_(op);
+}
+
+void OpTypeCollector::Visit_(const Realize *op) {
+  local_buf_.insert(op->func->func_name());
+  IRVisitor::Visit_(op);
+}
+
+void OpTypeCollector::Visit_(const Provide *op) {
+  AnalyzeProvide(op);
+  IRVisitor::Visit_(op);
+}
+
+void OpTypeCollector::Visit_(const For *op) {
+  loop_count_ += 1;
+  cur_loop_ = op;
+  cur_band_.emplace_back(cur_loop_);
+  IRVisitor::Visit_(op);
+  cur_loop_ = op;
+  loop_count_ -= 1;
+  // end of an outer band
+  if (loop_count_ == 0) {
+    band_count_ += 1;
+    cur_band_.clear();
+  }
+}
+
+void OpTypeCollector::Visit_(const IfThenElse *op) {
+  cur_if_ = op;
+  IRVisitor::Visit_(op);
+  cur_if_ = op;
+}
+
+void OpTypeCollector::AnalyzeProvide(const Provide *op) {
+  if (cur_loop_ == nullptr) return;
+  ProvideEntry prov;
+  std::string basic_op_type = "";
+  std::vector<TensorEntry> src_tensor;
+  TensorEntry dst_tensor;
+  std::vector<const Call *> src_call;
+  auto GetSrc = [&, this](const NodeRef &op) {
+    if (const auto call = op.as<Call>()) {
+      if (call->call_type == Call::Extern && scop_info_.user_config_.GetTarget() == TARGET_CUDA) {
+        basic_op_type = AT_CALL;
+      } else {
+        src_call.emplace_back(call);
+      }
+    } else if (op.as<Select>() && scop_info_.user_config_.GetTarget() == TARGET_CCE) {
+      basic_op_type = AT_CALL;
+    }
+  };
+  air::ir::PostOrderVisit(op->value, GetSrc);
+
+  for (auto call : src_call) {
+    TensorEntry tensor;
+    tensor.name = call->name;
+    // get variable names
+    for (auto arg : call->args) {
+      VarNames vname;
+      vname = VisitVarNames(arg, vname);
+      tensor.var_names.emplace_back(vname);
+    }
+    tensor = MatchLoopByName(tensor);
+    tensor.args = call->args;
+    tensor.band_index = band_count_;
+    tensor.type_byte = call->type.bytes();
+    src_tensor.emplace_back(tensor);
+  }
+
+  auto src_length = static_cast<int>(src_tensor.size());
+  for (auto st : src_tensor) {
+    if (st.name == "mad" || st.name == LOAD_IM2COL) {
+      basic_op_type = "SP_CALL";
+    }
+  }
+  if (scop_info_.user_config_.GetTarget() == TARGET_CCE && src_length > 2 && basic_op_type != "SP_CALL") {
+    LOG(WARNING) << "Detect provide has " << src_tensor.size() << " source tensors.";
+    LOG(WARNING) << "After ToThreeAddress pass, number of ops in src should be less than 2.";
+  }
+  dst_tensor.name = op->func->func_name();
+  for (auto arg : op->args) {
+    VarNames vname;
+    vname = VisitVarNames(arg, vname);
+    dst_tensor.var_names.emplace_back(vname);
+  }
+  dst_tensor = MatchLoopByName(dst_tensor);
+  dst_tensor.args = op->args;
+  dst_tensor.band_index = band_count_;
+  dst_tensor.type_byte = scop_info_.user_config_.GetDataBytes(dst_tensor.name);
+  prov.basic_op_type = basic_op_type.empty() ? GetBasicOpType(dst_tensor, src_tensor) : basic_op_type;
+  prov.band_index = band_count_;
+  prov.src = src_tensor;
+  prov.dst = dst_tensor;
+  prov.op = op;
+  prov.cond = cur_if_;
+  provides_ana_[cur_loop_].emplace_back(prov);
+}
+
+
+void OpTypeCollector::AnalyzeGemmAxes(const ProvideEntry &pe) {
+  VarNames mx_c, mx_a, mx_b;
+  int index_a = -1;
+  int index_b = -1;
+  auto EmplaceVarsInTensor = [](TensorEntry tensor, VarNames &var_list) -> void {
+    for (const auto &vars_i : tensor.var_names) {
+      for (const auto &name : vars_i) {
+        if (IsNum(name)) {
+          continue;
+        }
+        var_list.emplace_back(name);
+      }
+    }
+  };
+
+  // Visit source tensors to fill mx_a and mx_b. Also, we need to check whether this provide stmt
+  // is in `C = C + A * B` form and directly return if the form is broken.
+  if (pe.src.size() != 3U) {
+    return;
+  }
+  EmplaceVarsInTensor(pe.dst, mx_c);
+  bool found_c = false;
+  for (size_t i = 0; i < pe.src.size(); ++i) {
+    auto src = pe.src[i];
+    if (src.name == pe.dst.name) {
+      VarNames src_c;
+      EmplaceVarsInTensor(src, src_c);
+      if (src_c.size() != mx_c.size()) {
+        return;
+      }
+      for (size_t i = 0; i < src_c.size(); ++i) {
+        if (src_c[i] != mx_c[i]) {
+          return;
+        }
+      }
+      found_c = true;
+    } else if (index_a == -1) {
+      EmplaceVarsInTensor(src, mx_a);
+      index_a = i;
+    } else if (index_b == -1) {
+      EmplaceVarsInTensor(src, mx_b);
+      index_b = i;
+    } else {
+      return;
+    }
+  }
+  if (!found_c || mx_a.empty()) {
+    return;
+  }
+
+  // construct relationship between loop indices and loop type(b/m/n/k) and mark axis with corresponding attribute
+  std::string attr_key = "";
+  if (scop_info_.user_config_.GetEnableConvTensorCore()) {
+    scop_info_.analysis_result_.SetOpTemplate(Template::CONV);
+  } else {
+    scop_info_.analysis_result_.SetOpTemplate(Template::MATMUL);
+  }
+}
+
+
+// Match variable to loop by name since the name in current band is unique.
+// If name is not unique, it means the axis is separated into different chunks
+// and they will need same alignment rule.
+TensorEntry OpTypeCollector::MatchLoopByName(TensorEntry tensor) {
+  std::unordered_map<size_t, std::vector<const For *>> loop_pos;
+  for (size_t p = 0; p < tensor.var_names.size(); ++p) {
+    for (auto name : tensor.var_names[p]) {
+      for (auto i = static_cast<int>(cur_band_.size()) - 1; i >= 0; i--) {
+        const For *loop = cur_band_[i];
+        if (loop != nullptr && loop->loop_var.get()->name_hint == name) {
+          loop_pos[p].emplace_back(loop);
+          break;
+        }
+      }
+    }
+  }
+  tensor.loops = loop_pos;
+  return tensor;
+}
+
+std::string OpTypeCollector::GetBasicOpType(const TensorEntry dst, const std::vector<TensorEntry> &srcs) {
+  auto CountUniqueLoopName = [](std::vector<VarNames> var_names) -> size_t {
+    std::unordered_set<std::string> uni_name;
+    for (auto names : var_names) {
+      for (auto n : names) {
+        if (IsNum(n)) {
+          continue;
+        }
+        uni_name.insert(n);
+      }
+    }
+    return uni_name.size();
+  };
+
+  auto GetSingleOpType = [&CountUniqueLoopName, this](const TensorEntry d, const TensorEntry s) -> std::string {
+    auto dst_vars = d.var_names;
+    auto src_vars = s.var_names;
+    auto dst_vars_size = CountUniqueLoopName(dst_vars);
+    auto src_vars_size = CountUniqueLoopName(src_vars);
+    std::string type = "";
+    if (scop_info_.user_config_.GetTarget() == TARGET_CCE) {
+      if (this->local_buf_.find(s.name) == this->local_buf_.end()) type += "DMA2_";
+      if (this->local_buf_.find(d.name) == this->local_buf_.end()) type += "DMA3_";
+    }
+    if (src_vars_size == 0 && scop_info_.user_config_.GetTarget() != TARGET_CUDA) {
+      return type + "SP_CALL";
+    }
+    if (dst_vars_size < src_vars_size) {
+      if (d.loops.size() < s.loops.size() && d.name != s.name) {
+        // A[i,0] = B[i,j]
+        return type + AT_REDUCE;
+      } else {
+        return type + "UNKNOWN";
+      }
+    } else if (dst_vars_size > src_vars_size) {
+      // A[i,j] = B[i,0]
+      return type + AT_BROADCAST;
+    } else {
+      // Index size is the same.
+      while (!dst_vars.empty() && !src_vars.empty()) {
+        // detect transpose first
+        VarNames dst_name = dst_vars.back();
+        VarNames src_name = src_vars.back();
+        dst_vars.pop_back();
+        src_vars.pop_back();
+        VarNames dst_pure_name;
+        VarNames src_pure_name;
+        for (auto n : dst_name) {
+          if (!IsNum(n)) {
+            dst_pure_name.emplace_back(n);
+          }
+        }
+        for (auto n : src_name) {
+          if (!IsNum(n)) {
+            src_pure_name.emplace_back(n);
+          }
+        }
+        if (dst_pure_name.size() == src_pure_name.size()) {
+          for (size_t j = 0; j < dst_pure_name.size(); ++j) {
+            if (dst_pure_name[j] != src_pure_name[j]) {
+              return type + AT_TRANSPOSE;
+            }
+          }
+        }
+      }
+      if (d.loops.size() == s.loops.size()) {
+        // A[i,j] = B[i,j]
+        return type + AT_ELEMWISE;
+      } else {
+        // AutoFused case in cuda
+        if (scop_info_.user_config_.GetTarget() == TARGET_CUDA && d.args.size() == s.args.size()) {
+          for (size_t i = 0; i < d.args.size(); ++i) {
+            if (Equal(d.args[i], s.args[i])) {
+              continue;
+            }
+            if (arith_ana_.CanProve(s.args[i] == 0)) {
+              // A[floordiv(i, 128), floormod(i, 128)] = B[0, floormod(i, 128)]
+              type += AT_BROADCAST;
+            } else if (arith_ana_.CanProve(d.args[i] == 0)) {
+              // A[0, floormod(i, 128)] = B[floordiv(i, 128), floormod(i, 128)]
+              type += AT_REDUCE;
+            } else {
+              type += AT_TRANSFORM;
+            }
+            type += ("|" + std::to_string(i) + "_");
+          }
+        } else {
+          // A[0,i] = B[i,i]
+          type += AT_TRANSFORM;
+        }
+        return type;
+      }
+    }
+    return type;
+  };
+
+  std::string basic_op_type = "";
+  bool is_unpad = (dst.name.find("unpad") != std::string::npos) || (dst.name.find("Unpad") != std::string::npos);
+  bool is_pad = (dst.name.find("pad") != std::string::npos || dst.name.find("Pad") != std::string::npos);
+  if (!is_unpad && is_pad) {
+    basic_op_type += AT_PAD;
+    basic_op_type += "_";
+  }
+  if (srcs.empty()) {
+    // Dst = const
+    if (this->local_buf_.find(dst.name) == this->local_buf_.end()) basic_op_type += "DMA3_";
+    basic_op_type += "INIT";
+  } else {
+    for (auto s : srcs) {
+      basic_op_type += GetSingleOpType(dst, s);
+      basic_op_type += "_";
+    }
+  }
+  return basic_op_type;
+}
+
+
 isl::schedule MakeScheduleTree(const isl::space &param_space, isl::set param_set, const Stmt &stmt,
                                ScopInfo &scop_info) {
   scop_info.analysis_result_.RecordReads(isl::union_map::empty(param_space));
@@ -599,7 +996,11 @@ isl::schedule MakeScheduleTree(const isl::space &param_space, isl::set param_set
   isl::id_list outer(param_space.ctx(), 0);
   ssize_t macro_stmt = -1;
   auto schedule = MakeScheduleTreeHelper(stmt, scop_info, set, outer, macro_stmt);
-
+  OpTypeCollector op_type_collector(scop_info, stmt);
+  op_type_collector.Collect();
+  op_type_collector.AnalyzeOpTemplate();
+  op_type_collector.WriteToScopInfo();
+  op_type_collector.Dump();
   return schedule;
 }
 }  // namespace poly

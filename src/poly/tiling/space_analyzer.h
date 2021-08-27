@@ -25,6 +25,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "poly/scop_builder.h"
 #include "poly/tiling/tiling_analyzer.h"
 #include "poly/tiling/custom_tiling.h"
 
@@ -36,28 +37,8 @@ class SpaceAnalyzer {
   explicit SpaceAnalyzer(TilingAnalyzer *analyzer) : analyzer_(analyzer) {}
   ~SpaceAnalyzer() {}
 
-  // represent a tensor
-  // e.g. for(cc0,0,8){input_red(cc0)=0;}
-  // => Tensor{name:input_red,loops:[cc0]}
-  struct Tensor {
-    std::string name;
-    Array<Expr> args;
-    std::vector<VarNames> var_names;
-    std::unordered_map<size_t, std::vector<const For *>> loops;
-    size_t band_index{0};
-    int type_byte{1};
-  };
-  // represent a provide stmt
-  struct ProvideEntry {
-    std::string basic_op_type;
-    std::unordered_set<int> flow;
-    std::vector<Tensor> src;
-    Tensor dst;
-    size_t band_index{0};
-    const Provide *op{nullptr};
-    const IfThenElse *cond{nullptr};
-  };
-
+  using TensorEntry = AnalysisResult::TensorEntry;
+  using ProvideEntry = AnalysisResult::ProvideEntry;
   void AnalyzeSpecialAxes();
 
  private:
@@ -81,11 +62,11 @@ class SpaceAnalyzer {
   void IdentifyCustomTiling();
 
   // utils
-  void MarkInnerMostAxis(std::vector<Tensor> tensors, const std::string &attr_key);
+  void MarkInnerMostAxis(std::vector<TensorEntry> tensors, const std::string &attr_key);
   void MarkGemmAxes(const ProvideEntry &pe);
   void MarkBroadcastAxes(const ProvideEntry &pe);
   std::vector<Expr> FindModConstraint(const Expr &arg, std::vector<Expr> constraints);
-  const For *GetBufferInnerAxis(Tensor t, int offset = 1);
+  const For *GetBufferInnerAxis(TensorEntry t, int offset = 1);
   void SetAttrForAxis(int tile_band, int tile_axis, const std::string &attr_key, const std::string &attr_value);
   void SetAttrForTensor(const std::string &tensor_name, int pos, const std::string &attr_key,
                         const std::string &attr_value);
