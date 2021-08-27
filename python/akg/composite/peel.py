@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import akg.tvm
 
 
@@ -40,15 +41,21 @@ class CompositePeel(object):
         peeling_space = [s.value for s in self.peeling_space]
         return peeling_space
 
-    def get_peeled_desc(self, peeling):
+    def get_peeled_desc(self, peeling, peel_idx=0):
         """
         Returns a peeled json str using the give peeling, peeling is str composed of axis value pairs,
-          e.g. "0 1024 1 1024", "0 1024", "1, 1024" are valid ones
+          e.g. "0 1024 1 1024", "0 1024", "1 1024" are valid ones
         """
         func = akg.tvm.get_global_func("get_peeled_body")
         peeled_body = func(self.stmt, peeling)
         dump_func = akg.tvm.get_global_func("dump_to_json")
-        return dump_func(peeled_body, self.build_info)
+        peeled_str = dump_func(peeled_body, self.build_info)
+        peeled_desc = json.loads(peeled_str)
+        if "op" in peeled_desc:
+            peeling_str = peeling.replace(" ", "_")
+            peeled_desc["op"] = peeled_desc["op"] + "_" + peeling_str + "_peel_" + str(peel_idx)
+            peeled_str = json.dumps(peeled_desc)
+        return peeled_str
 
 
 def composite_peel_analyze(desc, attrs):
@@ -77,4 +84,5 @@ def check_fold_dim(descs):
     """
     func = akg.tvm.get_global_func("check_fold_dim")
     fold_dim = func(descs)
+    fold_dim = bool(fold_dim)
     return fold_dim

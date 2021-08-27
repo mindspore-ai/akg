@@ -231,7 +231,7 @@ class ReshapeTensorMutator : public IRMutator {
       for (const auto &it : attr_map) {
         if (format_key.find(it.first) != format_key.end()) {
           update_attr_map = true;
-          attr_map_new.Set(format_key[it.first], it.second);
+          attr_map_new.Set(format_key[it.first], StringImm::make("FRACTAL_NZ"));
         } else {
           attr_map_new.Set(it.first, it.second);
         }

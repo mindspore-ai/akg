@@ -211,7 +211,11 @@ class CompositeJsonList {
         }
         case STITCHING_JSON: {
           auto &stitch_origin_json = stitch_origin_jsons_[block_json_idx_];
-          fold_dim_ = CheckFoldDim(block_json);
+          if (attrs.defined() && attrs.find("fold_dim") != attrs.end()) {
+            fold_dim_ = GetBoolValueFromAttr(attrs, "fold_dim");
+          } else {
+            fold_dim_ = CheckFoldDim(block_json);
+          }
           GetOriginPeelInfo(stitch_origin_json, attrs);
           auto stitched_ir = StitchFusion(block_json, attrs);
           stitched_ir = ElimDuplicateInputs(inputs_).Run(stitched_ir);
@@ -763,6 +767,10 @@ class CompositeJsonListAscend : public CompositeJsonList {
       info.opt.peel_info.peeling = peeling->value;
     }
     ExtractBuildInfo(v, info);
+    if (attrs.find("kernel_name") != attrs.end()) {
+      CHECK(attrs["kernel_name"]->IsInstance<StringImm>());
+      info.kernel_name = attrs["kernel_name"].as<StringImm>()->value;
+    }
     // ensure merge_name_ is the same as original json name
     if (merge_name_.empty()) merge_name_ = info.kernel_name;
 
@@ -802,7 +810,10 @@ class CompositeJsonListAscend : public CompositeJsonList {
     peeled_tensors_.clear();
     ExtractBuildInfo(v, info);
     peeled_tensors_.insert(info.opt.peel_info.GetPeelTensors().begin(), info.opt.peel_info.GetPeelTensors().end());
-
+    if (attrs.find("kernel_name") != attrs.end()) {
+      CHECK(attrs["kernel_name"]->IsInstance<StringImm>());
+      info.kernel_name = attrs["kernel_name"].as<StringImm>()->value;
+    }
     // ensure merge_name_ is the same as original json name
     if (merge_name_.empty()) merge_name_ = info.kernel_name;
     auto config = GetConfig();
@@ -977,9 +988,7 @@ Map<std::string, NodeRef> CompositePeelAnalyze(const std::string &json_str, cons
   BuildInfo info;
   info.opt.tuning = true;
   if (attrs.defined() && attrs.find("fold_dim") != attrs.end()) {
-    CHECK(attrs["fold_dim"].as<ExprNode>());
-    auto fold_dim = ir::GetInt32Const(Downcast<Expr>(attrs["fold_dim"]));
-    info.opt.fold_dim = static_cast<bool>(fold_dim);
+    info.opt.fold_dim = GetBoolValueFromAttr(attrs, "fold_dim");
   }
   ExtractBuildInfo(v, info);
 

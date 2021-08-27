@@ -15,6 +15,7 @@
  */
 #include "util.h"
 #include <fstream>
+#include "pass/utils.h"
 
 namespace akg {
 std::string type2string(const air::Type &type) {
@@ -124,6 +125,13 @@ std::string GetOpName(const Provide *p) {
 std::string CreateDataFormatKey(const std::string &tensor_name) {
   std::string key = tensor_name + "_format";
   return key;
+}
+bool GetBoolValueFromAttr(const Map<std::string, NodeRef> &attrs, const std::string &key) {
+  CHECK(attrs.defined());
+  CHECK(attrs.find(key) != attrs.end());
+  CHECK(attrs[key].as<ExprNode>());
+  auto value = ir::GetInt32Const(Downcast<Expr>(attrs[key]));
+  return static_cast<bool>(value);
 }
 
 Map<std::string, NodeRef> SetAutoFuseAttr(const std::vector<size_t> &split_index,

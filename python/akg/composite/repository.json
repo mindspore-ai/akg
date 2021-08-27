@@ -2067,7 +2067,17 @@
         "1824_30522.30522.1824_30522": {
             "float32--": {
                 "peeling": "0 1824",
-                "best_cycles": 88014,
+                "fold_dim": false,
+                "sub_attr_1": {
+                    "dim": "0 0 21760 1 "
+                },
+                "sub_attr_2": {
+                    "dim": "0 0 21824 1 "
+                },
+                "sub_attr_3": {
+                    "dim": "0 0 21824 1 "
+                },
+                "best_cycles": 81393.0,
                 "file_name": "Fused_Add_Cast_ReduceMax_Cast_Sub_Exp_ReduceSum_Log_Sub_split_1441484207057638165"
             }
         }
@@ -2076,7 +2086,14 @@
         "512_1024.12288_1024-.24_512_1.24_512_1024-.24_512_1": {
             "float32------": {
                 "peeling": "0 24 1 64",
-                "best_cycles": 33558,
+                "fold_dim": false,
+                "sub_attr_1": {
+                    "dim": "0 0 8 1 0 1 1024 1 "
+                },
+                "sub_attr_2": {
+                    "dim": "0 0 8 1 0 1 1024 1 "
+                },
+                "best_cycles": 24048.0,
                 "file_name": "Fused_Reshape_Reshape_Add_Reshape_Add_ReduceSum_Mul_Sub_Mul_ReduceSum_split_2580544647217296434"
             }
         }
@@ -2085,8 +2102,246 @@
         "24_16_32_32_16_16.24_1_1_512.24_16_32_32_16_16": {
             "float16--": {
                 "peeling": "0 24 1 16 3 32",
-                "best_cycles": 290506,
+                "fold_dim": false,
+                "sub_attr_1": {
+                    "dim": "0 0 32 1 0 1 16 1 0 2 16 1 "
+                },
+                "sub_attr_2": {
+                    "dim": "0 0 16 1 0 1 32 1 0 2 16 1 "
+                },
+                "sub_attr_3": {
+                    "dim": "0 0 32 1 0 1 16 1 "
+                },
+                "best_cycles": 269423.0,
                 "file_name": "Fused_Mul_Add_Cast_ReduceMax_Reshape_Cast_Sub_Exp_ReduceSum_Reshape_RealDiv_Cast_split_16754049541375441580"
+            }
+        }
+    },
+    "2.Mul1.Add13.Cast1.Cast1.ReduceMax1.Reshape1.Cast1.Sub15.Exp1.ReduceSum1.Reshape1.RealDiv13.Cast1.1314": {
+        "96_1_4_4_16_16.96_16_4_4_16_16--": {
+            "float16-.float32.float16": {
+                "peeling": "0 96 1 2 3 4",
+                "fold_dim": false,
+                "sub_attr_1": {
+                    "dim": "0 0 8 1 0 1 4 1 0 2 16 1 0 3 16 1 "
+                },
+                "sub_attr_2": {
+                    "dim": "0 0 8 1 0 1 16 1 0 2 4 1 0 3 16 1 "
+                },
+                "sub_attr_3": {
+                    "dim": "0 0 8 1 0 1 4 1 0 2 16 1 "
+                },
+                "best_cycles": 18618.0,
+                "file_name": "Fused_Mul_Add_Cast_Cast_ReduceMax_Reshape_Cast_Sub_Exp_ReduceSum_Reshape_RealDiv_more_split_5527944652472493705"
+            }
+        },
+        "96_1_3_3_16_16.96_16_3_3_16_16--": {
+            "float16-.float32.float16": {
+                "peeling": "0 32 1 4 3 3",
+                "fold_dim": false,
+                "best_cycles": 12827.0,
+                "file_name": "Fused_Mul_Add_Cast_Cast_ReduceMax_Reshape_Cast_Sub_Exp_ReduceSum_Reshape_RealDiv_more_split_17769672873325289783"
+            }
+        },
+        "96_1_1_1_16_16.96_16_1_1_16_16--": {
+            "float16-.float32.float16": {
+                "peeling": "0 32",
+                "fold_dim": false,
+                "sub_attr_1": {
+                    "dim": "0 0 3 1 0 1 16 1 0 2 16 1 0 3 16 1 "
+                },
+                "sub_attr_2": {
+                    "dim": "0 0 3 1 0 1 16 1 0 2 16 1 0 3 16 1 "
+                },
+                "sub_attr_3": {
+                    "dim": "0 0 3 1 0 1 16 1 0 2 16 1 "
+                },
+                "best_cycles": 3766.0,
+                "file_name": "Fused_Mul_Add_Cast_Cast_ReduceMax_Reshape_Cast_Sub_Exp_ReduceSum_Reshape_RealDiv_more_split_10733286479458326662"
+            }
+        },
+        "96_1_8_8_16_16.96_16_8_8_16_16--": {
+            "float16-.float32.float16": {
+                "peeling": "0 96 1 4 3 8",
+                "fold_dim": false,
+                "sub_attr_1": {
+                    "dim": "0 0 4 1 0 1 8 1 0 2 16 1 0 3 16 1 "
+                },
+                "sub_attr_2": {
+                    "dim": "0 0 4 1 0 1 16 1 0 2 8 1 0 3 16 1 "
+                },
+                "sub_attr_3": {
+                    "dim": "0 0 4 1 0 1 8 1 0 2 16 1 "
+                },
+                "best_cycles": 55698.0,
+                "file_name": "Fused_Mul_Add_Cast_Cast_ReduceMax_Reshape_Cast_Sub_Exp_ReduceSum_Reshape_RealDiv_more_split_11972175627654038085"
+            }
+        },
+        "96_1_2_2_16_16.96_16_2_2_16_16--": {
+            "float16-.float32.float16": {
+                "peeling": "0 32 1 2 3 2",
+                "fold_dim": false,
+                "sub_attr_1": {
+                    "dim": "0 0 3 1 0 1 8 1 0 2 2 1 0 3 16 1 0 4 16 1 "
+                },
+                "sub_attr_2": {
+                    "dim": "0 0 3 1 0 1 8 1 0 2 16 1 0 3 2 1 0 4 16 1 "
+                },
+                "sub_attr_3": {
+                    "dim": "0 0 3 1 0 1 8 1 0 2 2 1 0 3 16 1 "
+                },
+                "best_cycles": 7400.0,
+                "file_name": "Fused_Mul_Add_Cast_Cast_ReduceMax_Reshape_Cast_Sub_Exp_ReduceSum_Reshape_RealDiv_more_split_16824960098612968618"
+            }
+        }
+    },
+    "2.Mul2.Add12.Cast1.Cast1.ReduceMax1.Reshape1.Cast1.Sub15.Exp1.ReduceSum1.Reshape1.RealDiv13.Cast1.1314": {
+        "96_16_4_4_16_16.96_1_4_4_16_16.96_16_4_4_16_16-": {
+            "float16-.float32.float16": {
+                "peeling": "0 96 1 2 3 4",
+                "fold_dim": false,
+                "sub_attr_1": {
+                    "dim": "0 0 8 1 0 1 4 1 0 2 16 1 0 3 16 1 "
+                },
+                "sub_attr_2": {
+                    "dim": "0 0 8 1 0 1 16 1 0 2 4 1 0 3 16 1 "
+                },
+                "sub_attr_3": {
+                    "dim": "0 0 8 1 0 1 4 1 0 2 16 1 "
+                },
+                "best_cycles": 18684.0,
+                "file_name": "Fused_Mul_Add_Cast_Softmax_Cast_fusion_12316574558392985464"
+            }
+        },
+        "96_16_3_3_16_16.96_1_3_3_16_16.96_16_3_3_16_16-": {
+            "float16-.float32.float16": {
+                "peeling": "0 32 1 4 3 3",
+                "fold_dim": false,
+                "best_cycles": 12996.0,
+                "file_name": "Fused_Mul_Add_Cast_Softmax_Cast_fusion_5141463207992575463"
+            }
+        },
+        "96_16_1_1_16_16.96_1_1_1_16_16.96_16_1_1_16_16-": {
+            "float16-.float32.float16": {
+                "peeling": "0 32",
+                "fold_dim": false,
+                "sub_attr_1": {
+                    "dim": "0 0 3 1 0 1 16 1 0 2 16 1 0 3 16 1 "
+                },
+                "sub_attr_2": {
+                    "dim": "0 0 3 1 0 1 16 1 0 2 16 1 0 3 16 1 "
+                },
+                "sub_attr_3": {
+                    "dim": "0 0 3 1 0 1 16 1 0 2 16 1 "
+                },
+                "best_cycles": 3789.0,
+                "file_name": "Fused_Mul_Add_Cast_Softmax_Cast_fusion_7110711442187343277"
+            }
+        },
+        "96_16_8_8_16_16.96_1_8_8_16_16.96_16_8_8_16_16-": {
+            "float16-.float32.float16": {
+                "peeling": "0 96 1 4 3 8",
+                "fold_dim": false,
+                "sub_attr_1": {
+                    "dim": "0 0 4 1 0 1 8 1 0 2 16 1 0 3 16 1 "
+                },
+                "sub_attr_2": {
+                    "dim": "0 0 4 1 0 1 16 1 0 2 8 1 0 3 16 1 "
+                },
+                "sub_attr_3": {
+                    "dim": "0 0 4 1 0 1 8 1 0 2 16 1 "
+                },
+                "best_cycles": 55603.0,
+                "file_name": "Fused_Mul_Add_Cast_Softmax_Cast_fusion_10284402896677931170"
+            }
+        },
+        "96_16_2_2_16_16.96_1_2_2_16_16.96_16_2_2_16_16-": {
+            "float16-.float32.float16": {
+                "peeling": "0 32 1 2 3 2",
+                "fold_dim": false,
+                "sub_attr_1": {
+                    "dim": "0 0 3 1 0 1 8 1 0 2 2 1 0 3 16 1 0 4 16 1 "
+                },
+                "sub_attr_2": {
+                    "dim": "0 0 3 1 0 1 8 1 0 2 16 1 0 3 2 1 0 4 16 1 "
+                },
+                "sub_attr_3": {
+                    "dim": "0 0 3 1 0 1 8 1 0 2 2 1 0 3 16 1 "
+                },
+                "best_cycles": 7523.0,
+                "file_name": "Fused_Mul_Add_Cast_Softmax_Cast_fusion_6068504580623971387"
+            }
+        }
+    },
+    "1.Cast1.Reshape1.Cast1.ReduceSum1.Mul1.Sub13.Mul11.ReduceSum1.1358": {
+        "96_64_1024-.6144_1.6144_1024.6144_1": {
+            "float32.float16.float32--": {
+                "peeling": "0 128",
+                "fold_dim": false,
+                "sub_attr_1": {
+                    "dim": "0 0 24 1 0 1 1024 1 "
+                },
+                "sub_attr_2": {
+                    "dim": "0 0 24 1 0 1 1024 1 "
+                },
+                "best_cycles": 9355.0,
+                "file_name": "Fused_Cast_Reshape_Cast_ReduceSum_Mul_Sub_Mul_ReduceSum_split_11587580791364741340"
+            }
+        },
+        "96_48_1024-.4608_1.4608_1024.4608_1": {
+            "float32.float16.float32--": {
+                "peeling": "0 96",
+                "fold_dim": false,
+                "sub_attr_1": {
+                    "dim": "0 0 24 1 0 1 1024 1 "
+                },
+                "sub_attr_2": {
+                    "dim": "0 0 24 1 0 1 1024 1 "
+                },
+                "best_cycles": 7481.0,
+                "file_name": "Fused_Cast_Reshape_Cast_ReduceSum_Mul_Sub_Mul_ReduceSum_split_4605410359646324850"
+            }
+        },
+        "96_16_1024-.1536_1.1536_1024.1536_1": {
+            "float32.float16.float32--": {
+                "peeling": "0 32",
+                "fold_dim": false,
+                "sub_attr_1": {
+                    "dim": "0 0 24 1 0 1 1024 1 "
+                },
+                "sub_attr_2": {
+                    "dim": "0 0 8 1 0 1 576 1 "
+                },
+                "best_cycles": 3379.0,
+                "file_name": "Fused_Cast_Reshape_Cast_ReduceSum_Mul_Sub_Mul_ReduceSum_split_5365222013230027439"
+            }
+        },
+        "96_128_1024-.12288_1.12288_1024.12288_1": {
+            "float32.float16.float32--": {
+                "peeling": "0 96",
+                "fold_dim": false,
+                "sub_attr_1": {
+                    "dim": "0 0 16 1 0 1 1024 1 "
+                },
+                "sub_attr_2": {
+                    "dim": "0 0 8 1 0 1 1024 1 "
+                },
+                "best_cycles": 17608.0,
+                "file_name": "Fused_Cast_Reshape_Cast_ReduceSum_Mul_Sub_Mul_ReduceSum_split_9525971584944570972"
+            }
+        },
+        "96_32_1024-.3072_1.3072_1024.3072_1": {
+            "float32.float16.float32--": {
+                "peeling": "0 96",
+                "fold_dim": false,
+                "sub_attr_1": {
+                    "dim": "0 0 16 1 0 1 1024 1 "
+                },
+                "sub_attr_2": {
+                    "dim": "0 0 8 1 0 1 704 1 "
+                },
+                "best_cycles": 5749.0,
+                "file_name": "Fused_Cast_Reshape_Cast_ReduceSum_Mul_Sub_Mul_ReduceSum_split_17414949353385617647"
             }
         }
     }

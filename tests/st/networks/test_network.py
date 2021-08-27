@@ -19,15 +19,18 @@ from tests.common.base import get_splitted_cases
 from tests.st.composite.test_composite_json import test_single_file
 from tests.st.networks.comm_functions import compare_base_line
 
+
 @pytest.mark.skip
 def test_network(backend, network, level, split_nums=1, split_idx=0, check_performance=False):
     pwd = os.path.dirname(os.path.abspath(__file__))
     script_file = os.path.join(pwd, "test_composite_json.py")
+
     def prepare_script(pwd, script_file):
         if os.path.isfile(script_file):
             return
         src = os.path.join(pwd, "../composite/test_composite_json.py")
         subprocess.call("cp %s %s" % (src, script_file), shell=True)
+
     prepare_script(pwd, script_file)
     output = os.path.join(pwd, "output" + "_" + backend, network, level)
     if not os.path.isdir(output):
@@ -47,7 +50,7 @@ def test_network(backend, network, level, split_nums=1, split_idx=0, check_perfo
             if os.path.isfile(file_result):
                 os.remove(file_result)
             if subprocess.call("nvprof --csv --log-file %s python3 test_composite_json.py -f %s" %
-                (file_result, file_path), shell=True):
+                               (file_result, file_path), shell=True):
                 raise ValueError("Test %s failed" % file_path)
             if not compare_base_line(pwd, file_result, network, level, file_name):
                 raise ValueError("Performance degradation of %s!" % file_path)
@@ -65,6 +68,7 @@ def test_alexnet_gpu_level0():
 @pytest.mark.env_onecard
 def test_alexnet_gpu_level0_perf():
     test_network("gpu", "alexnet", "level0", check_performance=True)
+
 
 @pytest.mark.level1
 @pytest.mark.platform_x86_gpu_training
@@ -827,3 +831,11 @@ def test_yolov3_darknet53_gpu_level1_tensorcore_test0():
 @pytest.mark.env_onecard
 def test_yolov3_darknet53_gpu_level1_tensorcore_test1():
     test_network("gpu", "yolov3_darknet53", "level1_tensorcore", 2, 1, check_performance=True)
+
+
+@pytest.mark.level0
+@pytest.mark.platform_arm_ascend_training
+@pytest.mark.platform_x86_ascend_training
+@pytest.mark.env_onecard
+def test_transformer_ascend_level0():
+    test_network("ascend", "transformer", "level0")

@@ -634,6 +634,7 @@ def _build_for_tuning(desc_s, attrs, func):
         raise ValueError("ret_mode gets a wrong value: {}, should be in DEFAULT, FEAT, MOD, MOD_AND_FEAT".
                          format(attrs.get("ret_mode")))
 
+
 def split_stitch_attr(attr, split_num):
     common_attr = {}
     sub_attr = [{} for _ in range(split_num)]
@@ -764,18 +765,20 @@ def _build_to_module(desc_s_in, desc_d_in, attr=None, use_repo=True):
                 for i, [cur_json, cur_attr] in enumerate(zip(block_jsons, attrs_list)):
                     block_jsons[i], attrs_list[i] = update_attr(cur_json, json.loads(cur_json), cur_attr, None, False)
         else:
-            split_jsons_num = len(block_jsons[0])
-            common_attr, sub_attr = split_stitch_attr(attrs_list[0], split_jsons_num)
-            stitch_repo = get_stitch_repo(desc_d_in)
-            if stitch_repo and common_attr.get("peeling") is None:
-                common_attr_repo, sub_attr_repo = split_stitch_attr(stitch_repo, split_jsons_num)
-                common_attr.update(common_attr_repo)
-                for i, cur_json in enumerate(block_jsons[0]):
-                    block_jsons[0][i], sub_attr[i] = update_attr(cur_json, json.loads(cur_json), sub_attr[i],
-                                                                 sub_attr_repo[i])
-            else:
-                for i, cur_json in enumerate(block_jsons[0]):
-                    block_jsons[0][i], sub_attr[i] = update_attr(cur_json, json.loads(cur_json), sub_attr[i], {})
+            if attrs_list[0].get("peeling") is None:
+                # Read buffer stitch attr from repo
+                stitch_repo = get_stitch_repo(desc_d_in)
+                if stitch_repo.get("peeling") is not None:
+                    attrs_list[0].update(stitch_repo)
+                elif "online_tuning" in attr:
+                    # If buffer stitch attr not in repo, use online tuning
+                    tuning_attr = _get_online_tune_attr(desc_s_in, attrs_list[0],
+                                                        _get_repository_file_path("repository.json"))
+                    attrs_list[0].update(tuning_attr)
+            # Update sub json attr
+            common_attr, sub_attr = split_stitch_attr(attrs_list[0], len(block_jsons[0]))
+            for i, cur_json in enumerate(block_jsons[0]):
+                block_jsons[0][i], sub_attr[i] = update_attr(cur_json, json.loads(cur_json), sub_attr[i], {})
             attrs_list[0] = combine_stitch_attr(common_attr, sub_attr)
         func = tvm.get_global_func("composite_with_json_list")
         return func(block_jsons, stitch_origin_jsons, input_tensor_name, output_tensor_name,
@@ -994,7 +997,12 @@ def _build_to_module_gpu(desc_s, desc_d, attrs=None, poly=False):
 
 
 def _get_online_tune_attr(desc_s, attrs, repo_path, use_new_space=True):
-    if use_new_space:
+    desc_d = json.loads(desc_s)
+    if "buffer_stitch" in desc_d:
+        from akg import auto_tune
+        best_config = auto_tune.tune_stitch_segment(desc_s,
+                                                    repo_path=repo_path)
+    elif use_new_space:
         from akg import auto_tune
         task_options = auto_tune.TaskOptions(tune_level=attrs["online_tuning"],
                                              use_new_space=use_new_space,

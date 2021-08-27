@@ -218,6 +218,9 @@ Schedule GetScheduleWithBuildInfo(const BuildInfo &info) {
 Module CompositeWithJson(const std::string &json_str, const Map<std::string, NodeRef> &attrs, bool poly) {
   picojson::value v = String2Json(json_str);
   BuildInfo info;
+  if (attrs.find("fold_dim") != attrs.end()) {
+    info.opt.fold_dim = GetBoolValueFromAttr(attrs, "fold_dim");
+  }
   ExtractBuildInfo(v, info);
   Schedule sch = GetScheduleWithBuildInfo(info);
   auto config = GetConfig();
@@ -235,6 +238,9 @@ Module CompositeWithJson(const std::string &json_str, const Map<std::string, Nod
 NodeRef CompositeLower(const std::string &json_str, const Map<std::string, NodeRef> &attrs) {
   picojson::value v = String2Json(json_str);
   BuildInfo info;
+  if (attrs.find("fold_dim") != attrs.end()) {
+    info.opt.fold_dim = GetBoolValueFromAttr(attrs, "fold_dim");
+  }
   ExtractBuildInfo(v, info);
   Schedule sch = GetScheduleWithBuildInfo(info);
   auto config = GetConfig();
