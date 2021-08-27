@@ -88,9 +88,10 @@ class DimensionPeeler {
   void Analyze(Stmt s);
   std::vector<int64_t> GetAxisSpace();
   std::vector<Peeling> GetPeelSpace(int limit_depth = 0, std::unordered_set<int> *limit_range = nullptr);
+  Stmt GetPeelBody(std::unordered_map<std::string, Peeling> config);
   Stmt GetPeelBody(const Peeling &peeling);
-  std::vector<std::pair<int, int64_t>> GetPeelDims(FunctionRef tensor, const Peeling &peeling);
-  std::unordered_map<std::string, std::vector<std::pair<int, int64_t>>> GetPeelTensors(const Peeling &peeling);
+  Peeling GetPeelDims(const std::string &tensor, const Peeling &peeling);
+  std::unordered_map<std::string, Peeling> GetPeelTensors(const Peeling &peeling);
 
  private:
   struct Axis {
@@ -101,7 +102,7 @@ class DimensionPeeler {
   Stmt stmt_;
   std::vector<std::unique_ptr<Axis>> axis_space_;
   // axis_idx -> dim_idx
-  std::unordered_map<FunctionRef, std::vector<int>, NodeHash, NodeEqual> dim_map_;
+  std::unordered_map<std::string, std::vector<int>> dim_map_;
 
   std::vector<int64_t> GetDivisors(int64_t n);
   Tensor *BuildAxisSpace(AffinityAnalyzer &aff);
@@ -141,7 +142,7 @@ class DumpPeelDims : public IRVisitor {
     IRVisitor::Visit(node);
   }
   void PrintPeeling(FunctionRef ref) {
-    auto dims = peeler_.GetPeelDims(ref, peeling_);
+    auto dims = peeler_.GetPeelDims(ref->func_name(), peeling_);
     std::cout << "[";
     for (size_t i = 0; i < dims.size(); ++i) {
       std::cout << dims[i].first << "|" << dims[i].second;

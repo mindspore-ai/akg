@@ -294,21 +294,21 @@ std::vector<DimensionPeeler::Peeling> DimensionPeeler::GetPeelSpace(int limit_de
   return peelings;
 }
 
-std::unordered_map<std::string, std::vector<std::pair<int, int64_t>>> DimensionPeeler::GetPeelTensors(
-  const Peeling &peeling) {
-  std::unordered_map<std::string, std::vector<std::pair<int, int64_t>>> peel_tensors;
+std::unordered_map<std::string, Peeling> DimensionPeeler::GetPeelTensors(const Peeling &peeling) {
+  std::unordered_map<std::string, Peeling> peel_tensors;
   for (auto &kv : dim_map_) {
     auto dim = GetPeelDims(kv.first, peeling);
-    if (!dim.empty() && !std::all_of(dim.begin(), dim.end(), [](std::pair<int, int64_t> &i) { return i.first == -1; })) {
-      peel_tensors.insert({kv.first->func_name(), dim});
+    if (!dim.empty() &&
+        !std::all_of(dim.begin(), dim.end(), [](std::pair<int, int64_t> &i) { return i.first == -1; })) {
+      peel_tensors.insert({kv.first, dim});
     }
   }
   return peel_tensors;
 }
 
 Stmt DimensionPeeler::GetPeelBody(const Peeling &peeling) {
-  auto PeelFunc = [&peeling, this](FunctionRef tensor, Array<Expr> shape) -> Array<Expr> {
-    auto it = this->dim_map_.find(tensor);
+  auto PeelFunc = [&peeling, this](const FunctionRef &tensor, Array<Expr> shape) -> Array<Expr> {
+    auto it = this->dim_map_.find(tensor->func_name());
     if (it == this->dim_map_.end()) {
       return shape;
     }
@@ -329,7 +329,7 @@ Stmt DimensionPeeler::GetPeelBody(const Peeling &peeling) {
       }
       if (dim_val != 1) {
         CHECK(dim_val % p.second == 0);
-        new_shape.Set(dim_map[p.first], make_const(Int(32), dim_val / p.second));
+        new_shape.Set(dim_idx, make_const(Int(32), dim_val / p.second));
       }
     }
     return new_shape;
@@ -337,8 +337,38 @@ Stmt DimensionPeeler::GetPeelBody(const Peeling &peeling) {
   return PeelMutator(PeelFunc).Mutate(stmt_);
 }
 
-std::vector<std::pair<int, int64_t>> DimensionPeeler::GetPeelDims(FunctionRef tensor, const Peeling &peeling) {
-  std::vector<std::pair<int, int64_t>> dims(peeling.size(), {-1, 1});
+Stmt DimensionPeeler::GetPeelBody(std::unordered_map<std::string, Peeling> config) {
+  auto PeelFunc = [&config](const FunctionRef &tensor, Array<Expr> shape) -> Array<Expr> {
+    if (!config.count(tensor->func_name())) {
+      return shape;
+    }
+    auto &dim_map = config[tensor->func_name()];
+    Array<Expr> new_shape = shape;
+    for (auto &kv : dim_map) {
+      auto dim_idx = kv.first;
+      if (dim_idx == -1) {
+        continue;
+      }
+      int64_t dim_val = 0;
+      if (auto op = new_shape[dim_idx].as<IntImm>()) {
+        dim_val = op->value;
+      } else if (auto op = new_shape[dim_idx].as<UIntImm>()) {
+        dim_val = op->value;
+      } else {
+        CHECK(0);
+      }
+      if (dim_val != 1) {
+        CHECK(dim_val % kv.second == 0);
+        new_shape.Set(dim_idx, make_const(Int(32), dim_val / kv.second));
+      }
+    }
+    return new_shape;
+  };
+  return PeelMutator(PeelFunc).Mutate(stmt_);
+}
+
+Peeling DimensionPeeler::GetPeelDims(const std::string &tensor, const Peeling &peeling) {
+  Peeling dims(peeling.size(), {-1, 1});
   auto it = dim_map_.find(tensor);
   if (it != dim_map_.end()) {
     auto &map = it->second;
@@ -469,13 +499,13 @@ bool DimensionPeeler::Propagation(int axis_idx, Dim *from, Dim *to, int affinity
 }
 
 void DimensionPeeler::AddDimMap(Dim *dim, int axis_idx) {
-  auto it = this->dim_map_.find(dim->tensor->ref);
+  auto it = this->dim_map_.find(dim->tensor->ref->func_name());
   if (it != this->dim_map_.end()) {
     it->second[axis_idx] = dim->index;
   } else {
     std::vector<int> map(this->axis_space_.size(), -1);
     map[axis_idx] = dim->index;
-    dim_map_.emplace(dim->tensor->ref, std::move(map));
+    dim_map_.emplace(dim->tensor->ref->func_name(), std::move(map));
   }
 #if PEEL_DUMP
   std::cout << "DimMap: " << dim->tensor->ref.get() << "%%" << dim->tensor->op << ": " << dim->index << " -> "

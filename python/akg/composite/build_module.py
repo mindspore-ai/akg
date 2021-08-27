@@ -223,8 +223,8 @@ def parse_merged_json(desc_d, stitch_tensor_name, input_tensor_name, output_tens
                     if tmp_name in output_tensor_name:
                         inter_output_list.add(sub_input_desc['tensor_name'])
                     for subgraph in sub_graph_node[0: idx]:
-                        extra_output = is_tensor(
-                            sub_input_desc) and tmp_name not in stitch_tensor_name and tmp_name not in input_tensor_name
+                        extra_output = is_tensor(sub_input_desc) and tmp_name not in stitch_tensor_name \
+                                       and tmp_name not in input_tensor_name
                         used_by_other_sg = tmp_name in subgraph
                         used_as_output = tmp_name in output_tensor_name
                         extra_output = extra_output and (used_by_other_sg or used_as_output)
@@ -328,9 +328,8 @@ def stitch_json_split(desc_d):
     output_tensor_name = [tensor['tensor_name'] for tensor in desc_d['output_desc']]
     stitch_node = desc_d['buffer_stitch']['stitch_op']
     stitch_node_name = [node for stitchnode in stitch_node for node in stitchnode]
-    extra_subgraph_output, final_output_list, final_output_within_graph = parse_merged_json(desc_d, stitch_node_name,
-                                                                                            input_tensor_name,
-                                                                                            output_tensor_name)
+    extra_subgraph_output, final_output_list, final_output_within_graph = \
+        parse_merged_json(desc_d, stitch_node_name, input_tensor_name, output_tensor_name)
 
     # traverse extra_subgraph_output to save extra output into subgraph.
     stitch_node = []
@@ -351,20 +350,19 @@ def stitch_json_split(desc_d):
     stitch_node = stitch_node[:-1] + [stitch_node[-1] + final_output_within_graph]
     # add final output into stitch_op.
     stitch_node += [[op] for op in final_output_list if op not in stitch_node_name]
-    stitch_node_list = [node for stitchnode in stitch_node for node in stitchnode]
+    stitchnode_list = [node for stitchnode in stitch_node for node in stitchnode]
     # each output tensor can only be parsed as output once in all subgraphs.
     # All tensors in stitch_node_list will be put into output_name.
     # Save other output tensors which are not in stitch_node_name for the output collection of subgraphs.
-    complement_output = [tensor for tensor in output_tensor_name if tensor not in stitch_node_list]
+    complement_output = [tensor for tensor in output_tensor_name if tensor not in stitchnode_list]
 
     # initialize sub_stitch_graphs.
     sub_stitch_graphs = []
     for i, stitch_op in enumerate(stitch_node):
         sub_stitch_graphs.append(Graph(stitch_op))
 
-    sub_stitch_graphs, inplace_assign_map, fake_output_list = collect_subgraph_info(desc_d, sub_stitch_graphs, req_map,
-                                                                                    input_tensor_name,
-                                                                                    complement_output, stitch_node_list)
+    sub_stitch_graphs, inplace_assign_map, fake_output_list = \
+        collect_subgraph_info(desc_d, sub_stitch_graphs, req_map, input_tensor_name, complement_output, stitchnode_list)
     # reverse op order to generate topological subgraph
     for i, sg in enumerate(sub_stitch_graphs):
         sg.ops = list(reversed(sg.ops))
@@ -633,9 +631,8 @@ def _build_for_tuning(desc_s, attrs, func):
         mod = func(desc_s, attrs, True)
         return mod, feature
     else:
-        raise ValueError("ret_mode gets a wrong value: {}, should be in DEFAULT, FEAT, MOD, MOD_AND_FEAT".format(
-            attrs.get("ret_mode")))
-
+        raise ValueError("ret_mode gets a wrong value: {}, should be in DEFAULT, FEAT, MOD, MOD_AND_FEAT".
+                         format(attrs.get("ret_mode")))
 
 def split_stitch_attr(attr, split_num):
     common_attr = {}
@@ -752,8 +749,8 @@ def _build_to_module(desc_s_in, desc_d_in, attr=None, use_repo=True):
         return repo_attr
 
     if 'parallel_fusion' in desc_d_in or 'buffer_stitch' in desc_d_in:
-        block_jsons, input_tensor_name, output_tensor_name, attrs_list, alloc_map_list, reuse_map_list, \
-            clean_op_map_list = _json_need_split(desc_d_in, attr, True, "cce")
+        block_jsons, stitch_origin_jsons, input_tensor_name, output_tensor_name, attrs_list, \
+        alloc_map_list, reuse_map_list, clean_op_map_list = _json_need_split(desc_d_in, attr, True, "cce")
         if 'parallel_fusion' in desc_d_in:
             parallel_repo = get_parallel_repo(desc_d_in)
             if parallel_repo:
@@ -781,8 +778,8 @@ def _build_to_module(desc_s_in, desc_d_in, attr=None, use_repo=True):
                     block_jsons[0][i], sub_attr[i] = update_attr(cur_json, json.loads(cur_json), sub_attr[i], {})
             attrs_list[0] = combine_stitch_attr(common_attr, sub_attr)
         func = tvm.get_global_func("composite_with_json_list")
-        return func(block_jsons, input_tensor_name, output_tensor_name, alloc_map_list, reuse_map_list,
-                    clean_op_map_list, attrs_list, True, "cce")
+        return func(block_jsons, stitch_origin_jsons, input_tensor_name, output_tensor_name,
+                    alloc_map_list, reuse_map_list, clean_op_map_list, attrs_list, True, "cce")
 
     desc_s, attr = update_attr(desc_s_in, desc_d_in, attr)
     func = tvm.get_global_func("composite_with_json")
@@ -878,6 +875,7 @@ def _update_attrs_ascend(desc_d, attr):
 
 def _json_need_split(desc_d, attrs, poly, target):
     block_jsons = []
+    stitch_origin_jsons = []
     input_tensor_name = []
     output_tensor_name = []
     attrs_list = []
@@ -887,6 +885,7 @@ def _json_need_split(desc_d, attrs, poly, target):
 
     if 'parallel_fusion' in desc_d:
         block_jsons, input_tensor_name, output_tensor_name = parallel_json_split(desc_d)
+        stitch_origin_jsons = block_jsons
         if desc_d["parallel_fusion"]["fusion_type"] == "block_pipeline_fusion":
             attrs["pipeline_groups"] = desc_d["parallel_fusion"]['type_info']
         for i, _ in enumerate(block_jsons):
@@ -907,8 +906,9 @@ def _json_need_split(desc_d, attrs, poly, target):
             reuse_map_list.append(reuse_map)
             clean_op_map_list.append(clean_op_map)
     elif 'buffer_stitch' in desc_d:
-        stitch_jsons, input_tensor_name, output_tensor_name, alloc_map, reuse_map, clean_op_map = stitch_json_split(
-            desc_d)
+        stitch_origin_jsons.append(json.dumps(desc_d))
+        stitch_jsons, input_tensor_name, output_tensor_name, alloc_map, reuse_map, clean_op_map \
+            = stitch_json_split(desc_d)
         block_jsons.append(stitch_jsons)
         attrs = _set_reducemax_attrs(desc_d, attrs)
         attrs["enable_stitch_fusion"] = True
@@ -916,7 +916,8 @@ def _json_need_split(desc_d, attrs, poly, target):
         alloc_map_list.append(alloc_map)
         reuse_map_list.append(reuse_map)
         clean_op_map_list.append(clean_op_map)
-    return block_jsons, input_tensor_name, output_tensor_name, attrs_list, alloc_map_list, reuse_map_list, clean_op_map_list
+    return block_jsons, stitch_origin_jsons, input_tensor_name, output_tensor_name, attrs_list, \
+           alloc_map_list, reuse_map_list, clean_op_map_list
 
 
 def _build_to_module_gpu(desc_s, desc_d, attrs=None, poly=False):
@@ -972,8 +973,8 @@ def _build_to_module_gpu(desc_s, desc_d, attrs=None, poly=False):
         return desc_d, attrs
 
     if 'parallel_fusion' in desc_d or 'buffer_stitch' in desc_d:
-        block_jsons, input_tensor_name, output_tensor_name, attrs_list, alloc_map_list, reuse_map_list, \
-            clean_op_map_list = _json_need_split(desc_d, attrs, poly, 'cuda')
+        block_jsons, stitch_origin_jsons, input_tensor_name, output_tensor_name, attrs_list, \
+        alloc_map_list, reuse_map_list, clean_op_map_list = _json_need_split(desc_d, attrs, poly, 'cuda')
         if 'parallel_fusion' in desc_d:
             for i, [cur_json, cur_attr] in enumerate(zip(block_jsons, attrs_list)):
                 cur_desc_d, attrs_list[i] = update_attr(json.loads(cur_json), cur_attr)
@@ -981,8 +982,8 @@ def _build_to_module_gpu(desc_s, desc_d, attrs=None, poly=False):
         else:
             desc_d, attrs = update_attr(desc_d, attrs)
         func = tvm.get_global_func("composite_with_json_list")
-        return func(block_jsons, input_tensor_name, output_tensor_name, alloc_map_list, reuse_map_list,
-                    clean_op_map_list, attrs_list, poly, "cuda")
+        return func(block_jsons, stitch_origin_jsons, input_tensor_name, output_tensor_name,
+                    alloc_map_list, reuse_map_list, clean_op_map_list, attrs_list, poly, "cuda")
 
     desc_d, attrs = update_attr(desc_d, attrs)
     attrs = _update_attrs_gpu(desc_d, attrs, poly)

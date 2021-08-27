@@ -79,8 +79,8 @@ using FuncShape = std::unordered_map<FunctionRef, Array<Expr>, NodeHash, NodeEqu
 using FuncExprMap = std::unordered_map<FunctionRef, Expr, NodeHash, NodeEqual>;
 using NodeMap = std::unordered_map<NodeRef, NodeRef, NodeHash, NodeEqual>;
 
+using Peeling = std::vector<std::pair<int, int64_t>>;  // dim, split_val
 struct PeelInfo {
-  using Peeling = std::vector<std::pair<int, int64_t>>;  // dim, split_val
   Peeling Getdim(const std::string &name) {
     for (auto &kv : real_peeled_tensors) {
       if (kv.first.as<BufferNode>() && kv.first.as<BufferNode>()->name == name) {

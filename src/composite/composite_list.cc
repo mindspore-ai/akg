@@ -179,11 +179,12 @@ class ElimDuplicateInputs : public IRMutator {
 
 class CompositeJsonList {
  public:
-  CompositeJsonList(const Array<NodeRef> &json_str_node, const Array<NodeRef> &inputs, const Array<NodeRef> &outputs,
-                    const Array<NodeRef> &alloc_map_list, const Array<NodeRef> &reuse_map_list,
-                    const Array<NodeRef> &clean_op_map_list, const Array<NodeRef> &attrs_list, bool poly,
-                    const std::string &target)
+  CompositeJsonList(const Array<NodeRef> &json_str_node, const Array<NodeRef> &stitch_origin_jsons,
+                    const Array<NodeRef> &inputs, const Array<NodeRef> &outputs, const Array<NodeRef> &alloc_map_list,
+                    const Array<NodeRef> &reuse_map_list, const Array<NodeRef> &clean_op_map_list,
+                    const Array<NodeRef> &attrs_list, bool poly, const std::string &target)
       : json_str_node_(json_str_node),
+        stitch_origin_jsons_(stitch_origin_jsons),
         inputs_(inputs),
         outputs_(outputs),
         alloc_map_list_(alloc_map_list),
@@ -209,7 +210,9 @@ class CompositeJsonList {
           break;
         }
         case STITCHING_JSON: {
+          auto &stitch_origin_json = stitch_origin_jsons_[block_json_idx_];
           fold_dim_ = CheckFoldDim(block_json);
+          GetOriginPeelInfo(stitch_origin_json, attrs);
           auto stitched_ir = StitchFusion(block_json, attrs);
           stitched_ir = ElimDuplicateInputs(inputs_).Run(stitched_ir);
           block_irs.push_back(stitched_ir);
@@ -258,6 +261,21 @@ class CompositeJsonList {
     return type;
   }
 
+  void GetOriginPeelInfo(const NodeRef &stitch_origin_json, Map<std::string, NodeRef> &attrs) {
+    peeled_tensors_.clear();
+    CHECK(stitch_origin_json.as<StringImm>());
+    picojson::value v = String2Json(stitch_origin_json.as<StringImm>()->value);
+    BuildInfo info;
+    info.opt.fold_dim = fold_dim_;
+    if (attrs.find("peeling") != attrs.end()) {
+      auto peeling = attrs["peeling"].as<StringImm>();
+      CHECK(peeling != nullptr);
+      info.opt.peel_info.peeling = peeling->value;
+    }
+    ExtractBuildInfo(v, info);
+    peeled_tensors_ = info.opt.peel_info.GetPeelTensors();
+  }
+
   void GetRealOutputs() {
     auto outputs_name = GetNames(outputs_);
     for (const auto &output : outputs_name) {
@@ -267,6 +285,7 @@ class CompositeJsonList {
     }
   }
   Array<NodeRef> json_str_node_;
+  Array<NodeRef> stitch_origin_jsons_;
   Array<NodeRef> inputs_;
   Array<NodeRef> outputs_;
   Array<NodeRef> alloc_map_list_;
@@ -285,16 +304,18 @@ class CompositeJsonList {
   size_t each_ir_idx_{0};
   size_t block_json_idx_{0};
   std::vector<size_t> split_index_;
+  std::unordered_map<std::string, Peeling> peeled_tensors_;
 };
 
 class CompositeJsonListGpu : public CompositeJsonList {
  public:
-  CompositeJsonListGpu(const Array<NodeRef> &json_str_node, const Array<NodeRef> &inputs, const Array<NodeRef> &outputs,
+  CompositeJsonListGpu(const Array<NodeRef> &json_str_node, const Array<NodeRef> &stitch_origin_jsons,
+                       const Array<NodeRef> &inputs, const Array<NodeRef> &outputs,
                        const Array<NodeRef> &alloc_map_list, const Array<NodeRef> &reuse_map_list,
                        const Array<NodeRef> &clean_op_map_list, const Array<NodeRef> &attrs_list, bool poly,
                        const std::string &target)
-      : CompositeJsonList(json_str_node, inputs, outputs, alloc_map_list, reuse_map_list, clean_op_map_list, attrs_list,
-                          poly, target) {}
+      : CompositeJsonList(json_str_node, stitch_origin_jsons, inputs, outputs, alloc_map_list, reuse_map_list,
+                          clean_op_map_list, attrs_list, poly, target) {}
 
   Stmt StitchFusion(const NodeRef &block_json, Map<std::string, NodeRef> &attrs) override {
     auto alloc_map = Downcast<Map<std::string, Array<NodeRef>>>(alloc_map_list_[block_json_idx_]);
@@ -561,14 +582,14 @@ class AddInnerForAndBlockInfo : public PeelInfoMutator {
 
 class CompositeJsonListAscend : public CompositeJsonList {
  public:
-  CompositeJsonListAscend(const Array<NodeRef> &json_str_node, const Array<NodeRef> &inputs,
-                          const Array<NodeRef> &outputs, const Array<NodeRef> &alloc_map_list,
-                          const Array<NodeRef> &reuse_map_list, const Array<NodeRef> &clean_op_map_list,
-                          const Array<NodeRef> &attrs_list, bool poly, const std::string &target)
-      : CompositeJsonList(json_str_node, inputs, outputs, alloc_map_list, reuse_map_list, clean_op_map_list, attrs_list,
-                          poly, target) {}
+  CompositeJsonListAscend(const Array<NodeRef> &json_str_node, const Array<NodeRef> &stitch_origin_jsons,
+                          const Array<NodeRef> &inputs, const Array<NodeRef> &outputs,
+                          const Array<NodeRef> &alloc_map_list, const Array<NodeRef> &reuse_map_list,
+                          const Array<NodeRef> &clean_op_map_list, const Array<NodeRef> &attrs_list, bool poly,
+                          const std::string &target)
+      : CompositeJsonList(json_str_node, stitch_origin_jsons, inputs, outputs, alloc_map_list, reuse_map_list,
+                          clean_op_map_list, attrs_list, poly, target) {}
   Stmt StitchFusion(const NodeRef &block_json, Map<std::string, NodeRef> &attrs) override {
-    peeled_tensors_.clear();
     auto alloc_map = Downcast<Map<std::string, Array<NodeRef>>>(alloc_map_list_[block_json_idx_]);
     auto reuse_map = Downcast<Map<std::string, Array<NodeRef>>>(reuse_map_list_[block_json_idx_]);
     auto clean_op_map = Downcast<Map<std::string, Array<NodeRef>>>(clean_op_map_list_[block_json_idx_]);
@@ -735,13 +756,13 @@ class CompositeJsonListAscend : public CompositeJsonList {
     info.opt.stitch_ir_idx_ = each_ir_idx_;
     info.opt.stitch = stitch;
     info.opt.fold_dim = fold_dim_;
+    info.opt.peel_info.SetPeelTensors(peeled_tensors_);
     if (attrs.find("peeling") != attrs.end()) {
       auto peeling = attrs["peeling"].as<StringImm>();
       CHECK(peeling != nullptr);
       info.opt.peel_info.peeling = peeling->value;
     }
     ExtractBuildInfo(v, info);
-    peeled_tensors_.insert(info.opt.peel_info.GetPeelTensors().begin(), info.opt.peel_info.GetPeelTensors().end());
     // ensure merge_name_ is the same as original json name
     if (merge_name_.empty()) merge_name_ = info.kernel_name;
 
@@ -918,23 +939,23 @@ class CompositeJsonListAscend : public CompositeJsonList {
     return BuildRstNode::make(rst, merge_name_);
   }
 
-  std::unordered_map<std::string, std::vector<std::pair<int, int64_t>>> peeled_tensors_;
   std::vector<LowerData> stitch_lower_datas_;
   std::vector<LowerData> lower_datas_;
   LowerData final_data_;
 };
 
-Module CompositeWithJsonList(const Array<NodeRef> &json_str_node, const Array<NodeRef> &inputs,
-                             const Array<NodeRef> &outputs, const Array<NodeRef> &alloc_map_list,
-                             const Array<NodeRef> &reuse_map_list, const Array<NodeRef> &clean_op_map_list,
-                             const Array<NodeRef> &attrs_list, bool poly, const std::string &target) {
+Module CompositeWithJsonList(const Array<NodeRef> &json_str_node, const Array<NodeRef> &stitch_origin_jsons,
+                             const Array<NodeRef> &inputs, const Array<NodeRef> &outputs,
+                             const Array<NodeRef> &alloc_map_list, const Array<NodeRef> &reuse_map_list,
+                             const Array<NodeRef> &clean_op_map_list, const Array<NodeRef> &attrs_list, bool poly,
+                             const std::string &target) {
   if (target == "cuda") {
-    return CompositeJsonListGpu(json_str_node, inputs, outputs, alloc_map_list, reuse_map_list, clean_op_map_list,
-                                attrs_list, poly, target)
+    return CompositeJsonListGpu(json_str_node, stitch_origin_jsons, inputs, outputs, alloc_map_list, reuse_map_list,
+                                clean_op_map_list, attrs_list, poly, target)
       .Build();
   } else if (target == "cce") {
-    return CompositeJsonListAscend(json_str_node, inputs, outputs, alloc_map_list, reuse_map_list, clean_op_map_list,
-                                   attrs_list, poly, target)
+    return CompositeJsonListAscend(json_str_node, stitch_origin_jsons, inputs, outputs, alloc_map_list, reuse_map_list,
+                                   clean_op_map_list, attrs_list, poly, target)
       .Build();
   }
 
