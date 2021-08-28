@@ -152,6 +152,9 @@ isl::schedule_node AdjustConvScheduleTreeStructure(const isl::schedule_node &ori
 isl::union_pw_aff_list GetPrefixPartialSchedule(const isl::multi_union_pw_aff partial_schedule,
                                                 const isl::schedule_node node, const bool need_reverse);
 
+std::string SetOneConfigForMulAxis(const isl::schedule_node node, const bool is_promotion, const int orig_total_cfg,
+                                   const std::set<int> &axis_pos = {});
+
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

@@ -308,29 +308,13 @@ MappingCfg *SharedMemoryManager::GetCurrentConfig(isl::schedule_node &node) {
   auto replace_cfg_map = scop_info_.user_config_.GetReplaceConfig();
   id_name = PROMOTE + id_name;
   if (replace_cfg_map.count(id_name) == 0) {
-    auto partial_schedule = node.as<isl::schedule_node_band>().get_partial_schedule();
-    auto upa_list = GetUPAList(node, partial_schedule, true, false);
-
     auto thread_cfg = scop_info_.user_config_.GetThreadConfig();
     CHECK(thread_cfg != nullptr) << "thread config is null";
-
-    int total_thread = 1;
+    int total_cfg = 1;
     for (size_t i = 0; i < thread_cfg->bound; ++i) {
-      total_thread *= thread_cfg->GetAt(i).second;
+      total_cfg *= thread_cfg->GetAt(i).second;
     }
-
-    std::string new_cfg = "";
-    int mapping_dim = static_cast<int>(upa_list.size());
-    for (int i = 0; i < mapping_dim; ++i) {
-      auto extend = upa_list.get_at(i).floor().max_val().get_num_si() + 1;
-      if (extend >= total_thread || (i == mapping_dim - 1 && extend < total_thread)) {
-        new_cfg += (std::to_string(total_thread) + " ");
-        break;
-      }
-
-      total_thread /= extend;
-      new_cfg += (std::to_string(extend) + " ");
-    }
+    std::string new_cfg = SetOneConfigForMulAxis(node, true, total_cfg);
 
     if (new_cfg.empty()) {
       return nullptr;

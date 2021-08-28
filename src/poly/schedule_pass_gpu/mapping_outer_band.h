@@ -43,7 +43,8 @@ class MappingOuterBand : public SchedulePass {
 
   // custom mapping
   isl::schedule DoCustomMapping(const isl::schedule &sch);
-  isl::schedule_node MapCustomHelper(const isl::schedule_node orig_node, const bool is_inner, MappingCfg *mapping_cfg);
+  isl::schedule_node MapCustomHelper(const isl::schedule_node orig_node, const bool is_inner, MappingCfg *mapping_cfg,
+                                     std::unordered_map<int, std::string> custom_mapping_cfg);
   std::unordered_map<int, std::string> GetRequiredMappingCfg(MappingCfg *mapping_cfg);
 
   size_t NumMappedDescendant(const RoadMap &thread_roadmap, const isl::schedule_node parent);

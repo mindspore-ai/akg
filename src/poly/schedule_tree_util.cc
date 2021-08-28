@@ -1070,6 +1070,39 @@ bool IsTensorAB(const std::string &item, ScopInfo &scop_info) {
   return true;
 }
 
+// Map a thread/block configuration to multiple axis.
+std::string SetOneConfigForMulAxis(const isl::schedule_node node, const bool is_promotion, const int orig_total_cfg,
+                                   const std::set<int> &axis_pos) {
+  auto partial_schedule = node.as<isl::schedule_node_band>().get_partial_schedule();
+  auto upa_list = GetUPAList(node, partial_schedule, is_promotion, false);
+
+  std::string new_cfg = "";
+  int total_cfg = orig_total_cfg;
+  int mapping_dim = static_cast<int>(upa_list.size());
+  int config_size = 0;
+  for (int i = 0; i < mapping_dim; ++i) {
+    if (!axis_pos.empty() && axis_pos.count(mapping_dim - 1 - i) == 0) {
+      continue;
+    }
+    auto extend = upa_list.get_at(i).floor().max_val().get_num_si() + 1;
+    if (extend >= total_cfg || (i == mapping_dim - 1 && extend < total_cfg)) {
+      new_cfg += (std::to_string(total_cfg) + " ");
+      ++config_size;
+      break;
+    }
+
+    total_cfg /= extend;
+    new_cfg += (std::to_string(extend) + " ");
+    ++config_size;
+  }
+
+  while (config_size < static_cast<int>(axis_pos.size())) {
+    new_cfg += (std::to_string(1) + " ");
+    ++config_size;
+  }
+  return new_cfg;
+}
+
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

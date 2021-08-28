@@ -348,6 +348,8 @@ constexpr auto REALIZE_ = "realize_";
 constexpr auto REALIZE_PREFIX = "REALIZE_";
 constexpr auto REALIZE_PREFIX_LEN = 8;
 
+constexpr auto BLOCK_STR = "b";
+constexpr auto THREAD_STR = "t";
 constexpr auto B0 = "b0";
 constexpr auto B1 = "b1";
 constexpr auto B2 = "b2";
@@ -360,6 +362,7 @@ constexpr auto TILE_WITH_C0_C1 = "C0_C1";
 constexpr auto TILE_WITH_WARP_C1 = "WARP_C1";
 constexpr auto REPLACE = "replace_";
 constexpr auto COMPUTE = "compute";
+constexpr auto CUSTOM = "custom_";
 constexpr auto PROMOTE = "promote_";
 constexpr auto WARP_COMPUTE = "warp_compute";
 constexpr auto CONV_O = "conv_o";
