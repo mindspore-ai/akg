@@ -409,7 +409,7 @@ void GemmStrategy::AddNpuConstraint() {
 
 // Adjust max core for element-wise and inner-most reduction operations to balance core number and granularity.
 int MulticoreStrategy::GetProposalCoreNum() {
-  int max_core = cand_.GetCoreNumConf();
+  int max_core = GetCoreNumConf();
   int problem_size = 1;
 
   for (auto axis : this->cand_.GetTileAxis()) {
@@ -502,7 +502,7 @@ int64_t MulticoreStrategy::AdjustTilingAccordingToMulticoreConstraint(TileAxis *
     return origin_factor;
   }
   if ((tiling_factor <= min_factor_for_enough_data) ||
-      (min_factor_for_enough_data >= cand_.GetCoreNumConf() * max_factor_for_full_cores)) {
+      (min_factor_for_enough_data >= GetCoreNumConf() * max_factor_for_full_cores)) {
     logger_.AppendLine(DO_TILING, "Cannot increase degree of parallelism by adjusting current tiling factor, return.");
     return origin_factor;
   }

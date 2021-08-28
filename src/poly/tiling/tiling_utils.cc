@@ -20,6 +20,21 @@ namespace akg {
 namespace ir {
 namespace poly {
 
+int GetCoreNumConf() {
+  int product_block = GetCoreValue("Core_num");
+  int user_defined_block = g_attrs.GetInt(kEnableMulticore, -1);
+  if (user_defined_block == -1) {
+    // User is not defining core num, assume we can use maximal number.
+    return product_block;
+  } else if (user_defined_block > 1) {
+    // Use core according to user and product.
+    return std::min(product_block, user_defined_block);
+  } else {
+    // User disables multicore.
+    return 1;
+  }
+}
+
 void TileLogger::AppendLine(LogStage stage, const std::string &line) {
   if (stage == ANA_SCHETREE) {
     analyze_schedule_tree_stage_.emplace_back(line);

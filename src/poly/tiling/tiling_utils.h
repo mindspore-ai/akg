@@ -21,8 +21,10 @@
 
 #include <tvm/target_info.h>
 #include <tvm/ir.h>
+#include <tvm/packed_func_ext.h>
 
 #include "common/target_info.h"
+#include "build_module.h"
 #include "poly/dsa_utils.h"
 
 namespace akg {
@@ -45,6 +47,8 @@ enum TilingMemScope {
   // end
   MEM_SCOPE_BULK,
 };
+
+int GetCoreNumConf();
 
 class NpuInfo {
  public:
