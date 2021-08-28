@@ -59,6 +59,12 @@
  *   If op is int type, generate code: op->a % op->b, else fmod(op->a, op->b).
  */
 
+/*
+ * 2021.8.19
+ *   Add const standard_normal for random.
+ *   Add need_random_lib_.
+ */
+
 #ifndef TVM_CODEGEN_CODEGEN_CUDA_H_
 #define TVM_CODEGEN_CODEGEN_CUDA_H_
 
@@ -79,6 +85,7 @@ constexpr auto PARIS_REDUCE = "paris_reduce::ParisReduce";
 constexpr auto PARIS_ATOMIC_RETURN = "paris_reduce::ParisReturn";
 constexpr auto ORIGIN_REDUCE_LIB = "origin";
 constexpr auto PARIS_REDUCE_LIB = "paris";
+constexpr auto STANDARD_NORMAL = "StandardNormal";
 
 class CodeGenCUDA final : public CodeGenC {
  public:
@@ -141,6 +148,8 @@ class CodeGenCUDA final : public CodeGenC {
   bool need_math_constants_h_{false};
   // whether need mma.h
   bool need_mma_h_{false};
+  // whether need random lib
+  bool need_random_lib_{false};
 
   // whether next store will be a reinterpret_cast
   bool is_reinterpret{false};

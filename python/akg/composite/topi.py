@@ -633,3 +633,26 @@ def gather(inputs, attrs):
     out_buf = tvm.decl_buffer(output_shape, data.dtype, output_name)
     return tvm.extern([data.shape], [data, indices], lambda ins, outs: gen_ir(ins[0], ins[1], outs[0]),
                                           dtype=data.dtype, out_buffers=[out_buf], name=output_name)
+
+
+@tvm.register_func("StandardNormal")
+def standard_normal(attrs):
+    attrs = {k: v for k, v in attrs.items()}
+    seed = attrs["seed"]
+    shape = attrs["shape"]
+    dtype = attrs["dtype"].value
+    def gen_ir(out):
+        ib = tvm.ir_builder.create()
+        with ib.for_range_n(shape, "i") as i:
+            temp = ib.extern_call(seed, op_name="StandardNormal", dtype=dtype)
+            ib.store(out, i, temp)
+        return ib.get()
+
+    output_name = "randnorm"
+    out_buf = tvm.decl_buffer(shape, dtype, "res")
+    return tvm.extern([shape],
+                      [],
+                      lambda ins, outs: gen_ir(outs[0]),
+                      dtype=dtype,
+                      out_buffers=[out_buf],
+                      name=output_name)

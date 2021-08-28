@@ -71,6 +71,11 @@
  *   Add function for GEMM op fusion on TensorCore.
  */
 
+/*
+ * 2021.8.19
+ *   Add function for random ops if need_random_lib_ is true.
+ */
+
 #include "codegen_cuda.h"
 
 #include <tvm/base.h>
@@ -132,6 +137,9 @@ std::string CodeGenCUDA::Finish() {
     } else if (reduce_lib_type_ == PARIS_REDUCE_LIB) {
       decl_stream << "#include \"paris_reduce/paris_reduce.cuh\"\n";
     }
+  }
+  if (need_random_lib_) {
+    decl_stream << "#include \"akg_random/random.cuh\"\n";
   }
   if (enable_fp16_) {
     decl_stream << "#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 530)\n";
@@ -600,7 +608,16 @@ void CodeGenCUDA::VisitExpr_(const Call *op, std::ostream& os) {
       os << ")";
       return;
     }
-
+    if (op->name == STANDARD_NORMAL) {
+      need_random_lib_ = true;
+      CHECK_GE(op->args.size(), 1);
+      os << "akg_random::";
+      os << op->name;
+      os << "(";
+      os << op->args[0];
+      os << ")";
+      return;
+    }
     if ((op->name == AKG_REDUCE) || (op->name == AKG_ATOMIC_RETURN) ||
         (op->name == PARIS_REDUCE) || (op->name == PARIS_ATOMIC_RETURN)) {
       CHECK_GE(op->args.size(), 2);
