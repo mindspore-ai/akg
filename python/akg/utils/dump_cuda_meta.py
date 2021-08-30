@@ -71,7 +71,7 @@ def dump_cuda_meta(code, ptx, thread_info, workspace=None):
     meta_path = get_cuda_meta_path()
     cuda_path = os.path.realpath(meta_path)
     if not os.path.isdir(cuda_path):
-        os.makedirs(cuda_path)
+        os.makedirs(cuda_path, exist_ok=True)
 
     # save ptx file to cuda meta
     ptx_file = os.path.realpath(meta_path + kernel_name + ".ptx")

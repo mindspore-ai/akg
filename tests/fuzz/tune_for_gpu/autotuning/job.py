@@ -43,7 +43,7 @@ logger = logging.getLogger('fuzz.tune.autotuning.job')
 storage_dir = './res/'
 
 if not os.path.exists(storage_dir):
-    os.makedirs(storage_dir)
+    os.makedirs(storage_dir, exist_ok=True)
 
 json_file = './res/' + "{0}" + ".json"
 json_load = './autotuning/shapes/' + "{0}"
