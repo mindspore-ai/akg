@@ -290,24 +290,30 @@ class TestBase(object):
 
                             if runres:
                                 break
+                            else:
+                                self.data_dump(input, output, arg, retry)
+                                if rtol == 0:
+                                    rtol = atol = 1e-4
+                                    for datas in [input, output]:
+                                        for data in list(datas):
+                                            if isinstance(data, np.ndarray) and data.dtype == "float16":
+                                                rtol, atol = get_rtol_atol("", "float16")
+                                                break
+                                    self._log.error("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+                                    self._log.error(
+                                        "Caution: the 'rtol' and 'atol' is default $$$$$(%s, %s)$$$$$" % (rtol, atol))
+                                    self._log.error("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
+
+                                if isinstance(expect, (tuple, list)):
+                                    for i, tmp in enumerate(expect):
+                                        count_unequal_element(tmp, output[i], rtol, atol)
+                                else:
+                                    if not isinstance(expect, np.ndarray):
+                                        expect = np.atleast_1d(expect)
+                                    count_unequal_element(expect, output, rtol, atol)
                 if not runres:
                     self._log.error("common_run :: circle {0} fail !".format(self.translate_func_name(arg)))
                     self._log.error("common_run :: CompareResult: %s", str(compare_res))
-
-                    if rtol == 0:
-                        self._log.error("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
-                        self._log.error("Caution: the 'rtol' and 'atol' is default $$$$$1e-4$$$$$")
-                        self._log.error("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@")
-                        rtol = atol = 1e-4
-
-                    if isinstance(expect, (tuple, list)):
-                        for i, tmp in enumerate(expect):
-                            count_unequal_element(tmp, output[i], rtol, atol)
-                    else:
-                        if not isinstance(expect, np.ndarray):
-                            expect = np.atleast_1d(expect)
-                        count_unequal_element(expect, output, rtol, atol)
-
                     if not self.collect_data(input, output, cce_file_name, ir_file_name, arg, kernel_name):
                         self._log.error("common_run :: collect data failed")
                     self.case_result = False
@@ -430,17 +436,8 @@ class TestBase(object):
 
     def collect_data(self, input, output, cce_file_name, ir_file_name, arg, kernel_name):
         ret_val = True
-        # dump input and output
-        dump_file_list = self.data_dump(input, output, arg)
         self._log.warning("dump input and output as follow:")
         if os.environ.get("FTP_HOST"):
-            for dump_file in dump_file_list:
-                ftp_url = self.upload_file_ftp("dump_shape", dump_file)
-                if not ftp_url:
-                    self._log.error("upload_file_ftp failed for dump_file : {0}".format(dump_file))
-                    ret_val = False
-                else:
-                    self._log.warning("dump_file ftp_url : {0}".format(ftp_url))
             # dump ir
             if not ir_file_name:
                 self._log.error("collect_ir failed")
@@ -474,7 +471,7 @@ class TestBase(object):
                               .format(case_failed_save_path, cce_file_name))
         return ret_val
 
-    def data_dump(self, input, output, arg):
+    def data_dump(self, input, output, arg, retry_count):
         dump_file_list = []
         operator_name = str(arg[1]).split("_run")[0].split()[-1]
         data_dir = "./data/{0}/".format(operator_name)
@@ -490,10 +487,18 @@ class TestBase(object):
                 seq = [operator_name, kays, str(index + 1)] + list(map(str, arg[2])) + [".t"]
                 dump_file_name = "_".join(seq).replace("[", "").replace("]", "").replace(",", "-") \
                     .replace(" ", "").replace("(", "").replace(")", "").replace("_.", ".")
+                dump_file_name += str(retry_count)
                 dump_file_name += str(time.time())
                 dump_file = os.path.join(data_dir, dump_file_name)
                 dump_file_list.append(dump_file)
                 tensorio.dump_tensor(i, dump_file)
+        if os.environ.get("FTP_HOST"):
+            for dump_file in dump_file_list:
+                ftp_url = self.upload_file_ftp("dump_shape", dump_file)
+                if not ftp_url:
+                    self._log.error("upload_file_ftp failed for dump_file : {0}".format(dump_file))
+                else:
+                    self._log.warning("dump_file ftp_url : {0}".format(ftp_url))
         return dump_file_list
 
 
