@@ -556,6 +556,25 @@ def get_kernel_name_from_mod(mod):
         raise ValueError("fail to get kernel_name")
     return kernel_name
 
+def mod_launch_ascend_profiling(mod, args, outputs=(-1,), tuning=False, device_id=-1):
+    gc.collect()
+    if device_id == -1:
+        device_id = int(os.environ.get("DEVICE_ID", 0))
+    kernel_name = get_kernel_name_from_mod(mod)
+    return profiling_mode_run(kernel_name, args, outputs, tuning, device_id)
+
+def mod_launch_gpu(mod, args, outputs=(-1,), tuning=False, device_id=-1, repeat_time=400):
+    if device_id == -1:
+        device_id = int(os.environ.get("DEVICE_ID", 0))
+    ctx = akg.tvm.context(CUDA, device_id)
+    mod_args = [akg.tvm.nd.array(a, ctx) for a in args]
+    mod(*mod_args)
+    out_list = [mod_args[len(args) + i if i < 0 else i].asnumpy() for i in outputs]
+    if not tuning:
+        return out_list[0] if len(out_list) == 1 else tuple(out_list)
+    else:
+        cycles = get_gpu_cycles(mod, *mod_args, device_id=device_id, repeat_time=repeat_time)
+        return out_list[0] if len(out_list) == 1 else tuple(out_list), {'run_time': cycles}
 
 @func_time_required
 def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=-1, expect=None, repeat_time=400):
@@ -579,15 +598,7 @@ def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=-1, expect=None
         device_id = int(os.environ.get("DEVICE_ID", 0))
     module = mod.imported_modules[0]
     if module.type_key == CUDA:
-        ctx = akg.tvm.context(CUDA, device_id)
-        mod_args = [akg.tvm.nd.array(a, ctx) for a in args]
-        mod(*mod_args)
-        out_list = [mod_args[len(args) + i if i < 0 else i].asnumpy() for i in outputs]
-        if not tuning:
-            return out_list[0] if len(out_list) == 1 else tuple(out_list)
-        else:
-            cycles = get_gpu_cycles(mod, *mod_args, device_id=device_id, repeat_time=repeat_time)
-            return out_list[0] if len(out_list) == 1 else tuple(out_list), {'run_time': cycles}
+        return mod_launch_gpu(mod, args, outputs, tuning, device_id, repeat_time)
 
     kernel_name = get_kernel_name_from_mod(mod)
     stat_info = {}

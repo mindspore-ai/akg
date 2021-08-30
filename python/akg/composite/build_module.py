@@ -609,12 +609,10 @@ def _get_feature(desc_s, attr):
     stmt, args = composite_lower(desc_s, attr)
     from akg.tvm import build_module
     binds, _ = build_module.get_binds(args)
-    if "cuda" in desc_s:
-        from akg.utils.auto_tuning import get_features_from_stmts
-        feature = get_features_from_stmts(stmts=[stmt], binds=[binds], n_skip_cache=0)[0]
-    else:
-        from akg.utils.auto_tuning import get_features_from_stmts_npu
-        feature = get_features_from_stmts_npu(stmts=[stmt], binds=[binds], n_skip_cache=0)[0]
+    desc_d = json.loads(desc_s)
+    target = desc_d.get("process")
+    from akg.utils.auto_tuning import get_features_from_stmts
+    feature = get_features_from_stmts(target=target, stmts=[stmt], binds=[binds], n_skip_cache=0)[0]
     return feature
 
 
@@ -999,7 +997,8 @@ def _get_online_tune_attr(desc_s, attrs, repo_path, use_new_space=True):
         task_options = auto_tune.TaskOptions(tune_level=attrs["online_tuning"],
                                              use_new_space=use_new_space,
                                              attrs=attrs,
-                                             generate_trait=generate_trait)
+                                             generate_trait=generate_trait,
+                                             mode="online")
         best_config = auto_tune.tune_composite_v2(desc_s,
                                                   task_options=task_options)
     else:

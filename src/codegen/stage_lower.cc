@@ -149,6 +149,8 @@ StageLower &StageLower::RunTo(StageType to) {
   }
 
   cur_stage_ = StageManager::Instance().NextStageType(data_->target, to);
+
+  g_attrs = AttrMap();
   return *this;
 }
 }  // namespace lower

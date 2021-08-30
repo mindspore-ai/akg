@@ -16,7 +16,6 @@
 #ifndef POLY_TILING_ANALYZER_H_
 #define POLY_TILING_ANALYZER_H_
 
-#include <tvm/packed_func_ext.h>
 #include <vector>
 #include <deque>
 #include <memory>
@@ -28,12 +27,10 @@
 #include <unordered_set>
 #include <utility>
 
-#include "build_module.h"
 #include "pass/expr_alg_simplify.h"
 #include "pass/utils.h"
 #include "poly/scop_info.h"
 #include "poly/tiling/tiling_utils.h"
-#include "poly/dsa_utils.h"
 
 namespace akg {
 namespace ir {
@@ -415,7 +412,6 @@ class TileCandidate {
     };
     std::sort(this->tile_axis_.begin(), this->tile_axis_.end(), priority_cmp);
   }
-  static int GetCoreNumConf();
   int GetMinFactorToEnableMulticore(TileAxis *axis);
   int GetMaximalPendingBlocks(TileAxis *excluded_axis);
   int GetDmaCopySizeWithinAxis(TileAxis *axis);

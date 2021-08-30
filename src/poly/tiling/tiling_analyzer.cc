@@ -1627,21 +1627,6 @@ void TilingAnalyzer::DumpBufferUsageTimeable() {
   }
 }
 
-int TileCandidate::GetCoreNumConf() {
-  int product_block = GetCoreValue("Core_num");
-  int user_defined_block = g_attrs.GetInt(kEnableMulticore, -1);
-  if (user_defined_block == -1) {
-    // User is not defining core num, assume we can use maximal number.
-    return product_block;
-  } else if (user_defined_block > 1) {
-    // Use core according to user and product.
-    return std::min(product_block, user_defined_block);
-  } else {
-    // User disables multicore.
-    return 1;
-  }
-}
-
 int64_t TilingAnalyzer::FindDivisibleTilingFactor(int64_t limit, int64_t range) {
   CHECK(range > 0 && limit > 0) << "Need positive range and limit.";
   if (range <= limit) return range;

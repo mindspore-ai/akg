@@ -99,9 +99,9 @@ def unpack_feature(byte_arr: bytearray) -> Tuple[np.ndarray, np.ndarray, np.ndar
             n_stmts = struct.unpack_from("f", byte_arr, offset=offset)
             n_stmts = int(n_stmts[0] + 0.5)
             if n_stmts == 0:
-              # no feature is extracted
-              features.append(np.zeros((1, vec_len)))
-              continue
+                # no feature is extracted
+                features.append(np.zeros((1, vec_len)))
+                continue
 
             tmp_vec_len = (size - 1) // n_stmts
             offset += SIZE_OF_FLOAT32
@@ -134,17 +134,7 @@ def unpack_feature(byte_arr: bytearray) -> Tuple[np.ndarray, np.ndarray, np.ndar
     task_ids = 0  # TODO: should we use this?
     return np.array(features, dtype=object), np.array(normalized_throughputs), np.array(task_ids)
 
-def get_features_from_stmts_npu(stmts, binds, n_skip_cache=0, max_n_buf=5):
-    func = akg.tvm.get_global_func("get_features_from_stmts_npu")
-    byte_arr  = func(stmts, binds, n_skip_cache, max_n_buf)
-    return unpack_feature(byte_arr)[0]
-
-def get_features_from_stmts(stmts, binds, n_skip_cache=0, max_n_buf=2):
+def get_features_from_stmts(target, stmts, binds, n_skip_cache=0, max_n_buf=5, store_path="./"):
     func = akg.tvm.get_global_func("get_features_from_stmts")
-    byte_arr  = func(stmts, binds, n_skip_cache, max_n_buf)
+    byte_arr  = func(target, stmts, binds, n_skip_cache, max_n_buf, store_path)
     return unpack_feature(byte_arr)[0]
-
-def get_features_throughputs_from_stmts(stmts, throughputs, n_skip_cache=0):
-    func = akg.tvm.get_global_func("get_features_thoughputs_from_stmts")
-    byte_arr  = func(stmts, throughputs, n_skip_cache)
-    return unpack_feature(byte_arr)
