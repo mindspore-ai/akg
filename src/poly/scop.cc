@@ -116,8 +116,7 @@ isl::schedule Scop::GenIsl() {
   Stmt stmt = body_;
   // Make schedule
   isl::schedule schedule_tmp = MakeScheduleTree(param_space, param_set, stmt, info_);
-
-  info_.CreateDataFlowInfo();
+  info_.CreateDataFlow();
   info_.mmu_info_.UpdateComputeAttrInfo();
   info_.mmu_info_.ComputeByPassL1();
   return schedule_tmp;

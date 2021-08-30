@@ -29,7 +29,6 @@
 #include "poly/isl.h"
 #include "poly/stmt_parse.h"
 #include "poly/dsa_utils.h"
-
 namespace akg {
 namespace ir {
 namespace poly {
@@ -115,134 +114,71 @@ inline std::ostream &operator<<(std::ostream &os, const BufferDefInfo &def_info)
   return os;
 }
 
+
+enum STMT_OP_TYPE { MMU_CONV = 1, MMU_GEMM, INST, IM2COL_BUF, MMU_SPEC_GEMM };
+
 using StmtIdHashMap = std::unordered_map<isl::id, std::vector<isl::id>, isl::IslIdIslHash>;
 using MemFlow = std::vector<MemType>;
-using FlowMap = std::unordered_map<std::string, TensorDataFlow>;
-using StateFlowMap = std::map<std::string, StmtDataFlowInfo>;
-
-inline std::ostream &operator<<(std::ostream &os, const StmtIdHashMap &sthash) {
-  os << "\nStmtIdHashMap:";
-  for (auto i : sthash) {
-    os << "\n     stmt_id: "
-       << "( " << i.first << " )";
-    for (auto j : i.second) {
-      os << "\n        tensor: "
-         << "( " << j << " )";
-    }
+using TensorDF = std::vector<std::pair<MemType, std::string>>;
+using TensorDfMap = std::unordered_map<std::string, TensorDF>;
+struct StmtDataFlow {
+  TensorDfMap read;
+  TensorDfMap write;
+};
+struct CmpByStmtOrder {
+  bool operator()(const std::string &a, const std::string &b) {
+    return a.length() < b.length() || (a.length() == b.length() && a < b);
   }
-  return os;
-}
-
-enum STMT_OP_TYPE { MMU_CONV = 1, MMU_GEMM, INST, IM2COL_BUF };
-enum TENSOR_DATAFLOW_TYPE {
-  MMU_CONV_A = 1,
-  MMU_CONV_B,
-  MMU_CONV_C,
-  MMU_GEMM_A,
-  MMU_GEMM_B,
-  MMU_GEMM_C,
-  IM2COL_C1,
-  INST_BUF
 };
+using OpDataFlow = std::map<std::string, StmtDataFlow, CmpByStmtOrder>;
 
-struct TensorDataFlow {
-  std::vector<std::string> name_flow_;
-  MemFlow mem_type_flow_;
-
-  void Initial(const std::string &name, const DataFlowAttrs &attrs);
-};
-
-class StmtDataFlowInfo {
+/******************************************
+ * conv pre fusion case
+ *      DDR -> BUFC1
+ *      DDR -> C1 -> C1 -> C0A
+ * merged to:
+ *      DDR -> BUFC1 -> C1 -> C1 -> C0A
+ * conv post fusion case
+ *      DDR -> BUFC0 -> C0C
+ *      DDR -> BUFC0
+ * merged to:
+ *      DDR -> BUFC0 -> C0C
+ * ****************************************/
+class DataFlow {
  public:
-  StmtDataFlowInfo(const isl::id &id, bool is_cube) : stmt_id_(id), is_cube_(is_cube) {}
-  StmtDataFlowInfo() { is_cube_ = false; }
-  ~StmtDataFlowInfo() {}
+  DataFlow(const DataFlow &) = delete;
+  DataFlow &operator=(const DataFlow &) = delete;
+  virtual ~DataFlow() = default;
 
-  void AddReadTensor(const std::string &name, TENSOR_DATAFLOW_TYPE type);
-  void AddWriteTensor(const std::string &name, TENSOR_DATAFLOW_TYPE type);
+  void AddFlow(const std::string &stmt_id, const std::string &tesnor, bool read, const DataFlowAttrs &flow,
+               std::string buffer_prefix = "");
+  OpDataFlow &GetOpFlow();
+  std::unordered_map<std::string, TensorDF> GetCombinedFlow();
+  std::pair<std::map<std::string, MemFlow>, std::map<std::string, std::vector<std::string>>> ExtractCombinedFlow();
+  void SetMmuFlow(const std::string &stmt_id);
+  StmtDataFlow &GetStmtFlow(const std::string &stmt_id);
+  std::string GetMmuId();
+  void Print();
+  void Clear();
 
-  void CreateTensorDataFlow(TENSOR_DATAFLOW_TYPE type, const std::string &name, TensorDataFlow &dataflow);
-
-  void MmuConvA(const std::string &name, TensorDataFlow &dataflow);
-  void MmuConvB(const std::string &name, TensorDataFlow &dataflow);
-  void MmuConvC(const std::string &name, TensorDataFlow &dataflow);
-  void MmuGEMMA(const std::string &name, TensorDataFlow &dataflow);
-  void MmuGEMMB(const std::string &name, TensorDataFlow &dataflow);
-  void MmuGEMMC(const std::string &name, TensorDataFlow &dataflow);
-  void InstBUF(const std::string &name, TensorDataFlow &dataflow);
-  void Im2colC1(const std::string &name, TensorDataFlow &dataflow);
-
-  /******************************************
-   *  update all memType BUF to updateType
-   ******************************************/
-  void UpdateTensorMemType(MemType upateType);
-
-  /******************************************
-   * push reads_/writes_ tensor info to nameflow and memflow
-   * if tensor exists in map merge two flow:
-   * conv pre fusion case
-   *      DDR -> BUFC1
-   *      DDR -> C1 -> C1 -> C0A
-   * merged to:
-   *      DDR -> BUFC1 -> C1 -> C1 -> C0A
-   * conv post fusion case
-   *      DDR -> BUFC0 -> C0C
-   *      DDR -> BUFC0
-   * merged to:
-   *      DDR -> BUFC0 -> C0C
-   * if two flow is same, not changed.
-   * ****************************************/
-  void UpdateFlowInfo(std::map<std::string, std::vector<std::string>> &nameflow,
-                      std::map<std::string, MemFlow> &memflow);
-
-  bool SameNameFlow(const std::vector<std::string> &left, const std::vector<std::string> &right);
-  bool SameMemFlow(const MemFlow &left, const MemFlow &right) const;
-  std::unordered_set<std::string> GetReadTensor();
-  std::unordered_set<std::string> GetWriteTensor();
-  template <typename T>
-  std::vector<T> MergedFlow(const std::vector<T> &left, const std::vector<T> &right);
-  
-  isl::id stmt_id_;
-  bool is_cube_;
-  FlowMap reads_;
-  FlowMap writes_;
-};
-
-class DMADataFlow {
- public:
-  DMADataFlow() {}
-  ~DMADataFlow() {}
-
-  void CreateStmtDataFlow(STMT_OP_TYPE opType, const isl::id &stmtId, const StmtOpInfo &stmtOp, StmtIdHashMap &readMap,
-                          StmtIdHashMap &writeMap);
-  /********************************************
-   *  analysis stmt fusion condition
-   *  change mem type
-   ********************************************/
-  void FusionAnalysis();
-
-  int PreFusionAnalysis(StmtDataFlowInfo* target);
-
-  /********************************************
-   *  get nameflow and memflow of each tensor
-   *******************************************/
-  void OpDataflowInfo(std::map<std::string, std::vector<std::string>> &nameflow,
-                      std::map<std::string, MemFlow> &memflow);
-                      
-  bool FindTensor(FlowMap& flow_map, std::unordered_set<std::string> &tensor_set);
-
-  bool HasMmu();
-
-  StmtDataFlowInfo* GetMmuInfo();
+  static DataFlow &Get() {
+    static DataFlow instance;
+    return instance;
+  };
 
  private:
-  /*********************************************
-   * The key of OpDataFlow is operator stmt id in schedule tree.
-   * S_0, S_1, S_2, S_3, S_4
-   *
-   *********************************************/
-  StateFlowMap op_data_flow_;
+  DataFlow() = default;
+  OpDataFlow op_data_flow_;
+  std::string mmu_stmt_id_;
 };
+
+void DispatchDataFlow(STMT_OP_TYPE op_type, const isl::id &stmt_id, const StmtOpInfo &stmt_op, StmtIdHashMap &read_map,
+                      StmtIdHashMap &write_map);
+void FusionAnalysis();
+
+void UpdateMemType(std::string stmt_id, MemType type);
+int PreFusionAnalysis(const std::string &target);
+
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg
