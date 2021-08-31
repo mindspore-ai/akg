@@ -86,7 +86,7 @@ def op_build(opnames, computes, args, custom_schedule, device, kernel_name, attr
         kernel_meta_path = get_cuda_meta_path() 
         cuda_path = os.path.realpath(kernel_meta_path)
         if not os.path.isdir(cuda_path):
-            os.makedirs(cuda_path)
+            os.makedirs(cuda_path, exist_ok=True)
         if not opnames:
             logging.error("no opname given.")
             return None

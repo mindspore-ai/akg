@@ -92,7 +92,7 @@ def _dump_data(path, input, output, expect):
 
     file_name_prefix = path + "/data/"
     if not os.path.isdir(file_name_prefix):
-        os.makedirs(file_name_prefix)
+        os.makedirs(file_name_prefix, exist_ok=True)
 
     for i, data in enumerate(input):
         dump_tensor(data, file_name_prefix + 'input_' + str(i))
@@ -117,7 +117,7 @@ def _dump_info(desc, build_attrs, poly, input, output, expect):
 
     dump_path = os.path.realpath(dump_path)
     if not os.path.isdir(dump_path):
-        os.makedirs(dump_path)
+        os.makedirs(dump_path, exist_ok=True)
 
     _dump_data(dump_path, input, output, expect)
 

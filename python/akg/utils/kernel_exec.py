@@ -145,7 +145,7 @@ def create_code(kernel_name, code_path=None, code=None, code_type=CCE):
             real_path = code_path + r"/" + kernel_name + postfix
     dir_path = r"/".join(real_path.split(r"/")[:-1])
     if not os.path.isdir(dir_path):
-        os.makedirs(dir_path)
+        os.makedirs(dir_path, exist_ok=True)
 
     with open(real_path, 'wt') as ss:
         ss.write(code)
@@ -1130,7 +1130,7 @@ def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
     if mode == "cpu":
         mod = akg.tvm.build(s, op_var, "llvm")
         if not os.path.isdir("./cpu/ir/"):
-            os.makedirs("./cpu/ir/")
+            os.makedirs("./cpu/ir/", exist_ok=True)
         with os.fdopen(os.open("./cpu/ir/" + kernel_name + ".cc", os.O_WRONLY | os.O_CREAT, 0o400), 'w') as irf:
             irf.write(akg.tvm.lower(s, op_var, shape_var, simple_mode=True))
         return mod
