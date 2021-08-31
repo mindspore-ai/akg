@@ -213,39 +213,45 @@ def count_unequal_element(data_expected, data_actual, rtol, atol):
     """Function for asserting unequal elements in data_actual and data_expected."""
     if not data_expected.shape == data_actual.shape:
         raise AssertionError("'data_expected' and 'data_actual' should have the same shape")
-    list_a = data_expected.flatten()
-    list_b = data_actual.flatten()
     count = 0
     eps = 1e-10
-    all_printed = True
-    for i, aa in enumerate(list_a):
-        a = list_b[i]
-        b = aa
+    if data_expected.dtype == np.bool_ and data_actual.dtype == np.bool_:
+        unequal_index = np.where(np.not_equal(data_expected, data_actual))
+    else:
+        res_elewise = np.isclose(data_actual, data_expected, atol=atol, rtol=rtol, equal_nan=False)
+        unequal_index = np.where(np.logical_not(res_elewise))
+    if not isinstance(unequal_index, tuple):
+        raise ValueError("unequal_index should be tuple but get %s" % type(unequal_index))
+    index_len = len(unequal_index)
+    unequal_num = unequal_index[0].size
+    unequal_actual = data_actual[unequal_index]
+    unequal_expected = data_expected[unequal_index]
+    log_max_count = 32
+    while count < unequal_num:
+        if count >= log_max_count:
+            break
+        index = []
+        for i in range(index_len):
+            index.append(unequal_index[i][count])
+        a = unequal_actual[count]
+        b = unequal_expected[count]
         is_bool = isinstance(a, np.bool_) or isinstance(b, np.bool_)
         is_nan = np.isnan(a) or np.isnan(b)
         is_numeric = not (is_bool or is_nan)
-        if (is_bool and a != b) or (is_numeric and abs(a - b) > (atol + rtol * abs(b))) or is_nan:
-            if count < 100:
-                index = flattened_index_to_real_index(i, data_expected.shape)
-                if is_numeric:
-                    b_1 = b + eps if b == 0.0 else b
-                    logging.error("%s: Actual[%s] Expected[%s] Ratio[%s]",
-                                  str(index), str(a), str(b), str(abs(a - b) / abs(b_1)))
-                else:
-                    logging.error("%s: Actual[%s] Expected[%s]", str(index), str(a), str(b))
-            else:
-                all_printed = False
-            count += 1
+        if is_numeric:
+            b_1 = b + eps if b == 0.0 else b
+            logging.error("%s: Actual[%s] Expected[%s] Ratio[%s]",
+                          str(index), str(a), str(b), str(abs(a - b) / abs(b_1)))
+        else:
+            logging.error("%s: Actual[%s] Expected[%s]", str(index), str(a), str(b))
+        count += 1
 
     if count != 0:
-        if not all_printed:
+        if unequal_num > log_max_count:
             logging.error("...")
-            logging.error("Total %s mismatch detected!!!, Only print 100...", str(count))
+            logging.error("Total %s mismatch detected!!!, Only print %s..." % (unequal_num, log_max_count))
         else:
-            logging.error("Total %s mismatch detected!!!", str(count))
-
-    if not count <= int(len(list_a)):
-        raise AssertionError
+            logging.error("Total %s mismatch detected!!!" % unequal_num)
 
 
 def allclose_nparray(data_expected, data_actual, rtol, atol=1e-08):

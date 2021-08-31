@@ -483,7 +483,7 @@ class TestBase(object):
             output = [output]
         data_dict = {"input": input, "output": output}
         for kays in data_dict.keys():
-            for index, i in enumerate(data_dict[kays]):
+            for index, data in enumerate(data_dict[kays]):
                 seq = [operator_name, kays, str(index + 1)] + list(map(str, arg[2])) + [".t"]
                 dump_file_name = "_".join(seq).replace("[", "").replace("]", "").replace(",", "-") \
                     .replace(" ", "").replace("(", "").replace(")", "").replace("_.", ".")
@@ -491,7 +491,11 @@ class TestBase(object):
                 dump_file_name += str(time.time())
                 dump_file = os.path.join(data_dir, dump_file_name)
                 dump_file_list.append(dump_file)
-                tensorio.dump_tensor(i, dump_file)
+                if isinstance(data, (tuple, list)):
+                    for i in range(len(data)):
+                        tensorio.dump_tensor(data[i], dump_file + "_" + str(i))
+                else:
+                    tensorio.dump_tensor(data, dump_file)
         if os.environ.get("FTP_HOST"):
             for dump_file in dump_file_list:
                 ftp_url = self.upload_file_ftp("dump_shape", dump_file)

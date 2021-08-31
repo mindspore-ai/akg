@@ -150,14 +150,7 @@ class ExprHasher : public air::ir::ExprFunctor<size_t(const Expr &n)> {
   size_t VisitExpr_(const Add *op) final { return VisitExpr(op->a) + VisitExpr(op->b); }
   size_t VisitExpr_(const Sub *op) final { return VisitExpr(op->a) - VisitExpr(op->b); }
   size_t VisitExpr_(const Mul *op) final { return VisitExpr(op->a) * VisitExpr(op->b); }
-  size_t VisitExpr_(const Div *op) final {
-    size_t t = VisitExpr(op->b);
-    if (t != 0) {
-      return VisitExpr(op->a) / t;
-    } else {
-      return VisitExpr(op->a) + 1;
-    }
-  }
+  size_t VisitExpr_(const Div *op) final { return dmlc::HashCombine(VisitExpr(op->a), VisitExpr(op->b)); }
   size_t VisitExpr_(const Call *op) final {
     if (op->call_type == Call::CallType::PureIntrinsic) {
       pure_intrinsic_level++;
