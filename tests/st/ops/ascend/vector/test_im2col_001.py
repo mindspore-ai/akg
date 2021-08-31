@@ -49,6 +49,9 @@ class TestCase(TestBase):
             ("mansch_im2col", im2col_run, ((1, 1, 48, 48, 16), (3, 3), (3, 3), (0, 0, 0, 0), "float16")),
             ("mansch_im2col", im2col_run, ((1, 1, 64, 64, 16), (2, 2), (2, 2), (0, 0, 0, 0), "float16")),
             ("mansch_im2col", im2col_run, ((1, 1, 96, 96, 16), (3, 3), (3, 3), (0, 0, 0, 0), "float16")),
+            ("mansch_im2col", im2col_run, ((4, 2, 160, 160, 16), (3, 3), (1, 1), (1, 1, 1, 1), "float16")),
+            ("mansch_im2col", im2col_run, ((4, 2, 320, 320, 16), (3, 3), (2, 2), (0, 1, 0, 1), "float16")),
+            ("mansch_im2col", im2col_run, ((2, 32, 96, 160, 16), (1, 1), (1, 1), (0, 0, 0, 0), "float16"))
         ]
         return
 

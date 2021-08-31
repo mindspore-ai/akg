@@ -15,9 +15,10 @@
 from tests.common.tensorio import compare_tensor
 import numpy as np
 from akg.utils import kernel_exec as utils
-from tests.common.test_op.im2col_compute import im2col_manual_schedule
+from tests.common.test_op.im2col import im2col_manual_schedule
 from tests.common.base import get_rtol_atol
 from tests.common.gen_random import random_gaussian
+
 
 def im2col_benchmark(data, kernel, pad, stride):
 
@@ -32,7 +33,7 @@ def im2col_benchmark(data, kernel, pad, stride):
 
     data_pad_shape = (N, C1, H + pad_t + pad_b, W + pad_l + pad_r, C0)
     data_pad = np.full(data_pad_shape, 0, dtype=data.dtype)
-    data_pad[:, :, pad_b: pad_b + H, pad_l: pad_l + W, :] = data
+    data_pad[:, :, pad_t: pad_t + H, pad_l: pad_l + W, :] = data
 
     expect_shape = (N,
                     (Ho * Wo + block_size - 1) // block_size,
@@ -47,21 +48,23 @@ def im2col_benchmark(data, kernel, pad, stride):
                 for c1 in range(C1):
                     for kh in range(kernel_h):
                         for kw in range(kernel_w):
-                            for c0 in range(C0):
-                                expect[n, (ho*Wo+wo) // block_size, c1*kernel_h*kernel_w+kh*kernel_w+kw, (ho*Wo+ wo) % block_size, c0] = data_pad[n, c1, ho*stride_h + kh, wo*stride_w + kw, c0]
+                            expect[n, (ho*Wo+wo) // block_size, c1*kernel_h*kernel_w+kh*kernel_w+kw, (ho*Wo + wo) %
+                                   block_size, :] = data_pad[n, c1, ho*stride_h + kh, wo*stride_w + kw, :]
     return expect
 
 
 def im2col_run(shape, kernel, stride, pad, dtype, polyhedral=False, attrs=None):
-    expect, data, res = gen_data(dtype, kernel, pad, shape, stride)
-
     if polyhedral:
-        raise Exception("ERROR: no DSL with poly support for im2col, please select manual schedule version")
+        raise Exception(
+            "ERROR: no DSL with poly support for im2col, please select manual schedule version")
     else:
-        mod = im2col_manual_schedule(shape, kernel, stride, pad, dtype, attrs=attrs, polyhedral=polyhedral)
+        mod = utils.op_build_test(im2col_manual_schedule, [shape],
+                                  [dtype], kernel_name="im2col_manual_schedule",
+                                  op_attrs=[kernel, stride, pad], attrs=attrs, polyhedral=polyhedral)
+    expect, data, res = gen_data(dtype, kernel, pad, shape, stride)
     output = utils.mod_launch(mod, [data, res], expect=expect)
-
-    return data, output, expect, compare_tensor(output, expect, rtol=5e-03, equal_nan=True)
+    atol, rtol = get_rtol_atol("im2col", dtype)
+    return data, output, expect, compare_tensor(output, expect, atol=atol, rtol=rtol, equal_nan=True)
 
 
 def gen_data(dtype, kernel, pad, shape, stride):
@@ -69,4 +72,3 @@ def gen_data(dtype, kernel, pad, shape, stride):
     expect = im2col_benchmark(data, kernel, pad, stride).astype(dtype)
     res = np.full(expect.shape, np.nan, dtype)
     return expect, data, res
-
