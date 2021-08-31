@@ -19,25 +19,31 @@ import os
 import struct
 import numpy as np
 from tests.common.log import Log
-from tests.common.gen_random import random_gaussian
 
 
 def dump_tensor(tensor, file_path):
-    rank = len(tensor.shape)
-    t = (rank,) + tensor.shape
-    desc = struct.pack('I%dI' % rank, *t)
-    with open(file_path, 'wb') as f:
-        f.write(desc)
-        f.write(tensor.tobytes())
+    if isinstance(tensor, np.ndarray):
+        np.save(file_path, tensor)
+    else:
+        rank = len(tensor.shape)
+        t = (rank,) + tensor.shape
+        desc = struct.pack('I%dI' % rank, *t)
+        with open(file_path, 'wb') as f:
+            f.write(desc)
+            f.write(tensor.tobytes())
 
 
 def load_tensor(file_path, dtype=None):
-    with open(file_path, 'rb') as f:
-        content = f.read()
-    rank = struct.unpack_from('I', content, 0)[0]
-    shape = struct.unpack_from('%dI' % rank, content, 4)
-    data = np.frombuffer(
-        content[4 + rank * 4:], dtype=dtype).reshape(shape)
+    if file_path.endswith(".npy"):
+        data = np.load(file_path)
+        return len(data.shape), data.shape, data
+    else:
+        with open(file_path, 'rb') as f:
+            content = f.read()
+        rank = struct.unpack_from('I', content, 0)[0]
+        shape = struct.unpack_from('%dI' % rank, content, 4)
+        data = np.frombuffer(
+            content[4 + rank * 4:], dtype=dtype).reshape(shape)
     return rank, shape, data
 
 
