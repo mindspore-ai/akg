@@ -18,20 +18,20 @@ from akg.utils.result_analysis import gpu_profiling
 from akg.utils.format_transform import to_tvm_nd_array
 from akg.ops.array_gpu.standard_normal import standard_normal
 
-def gen_data(shape, dtype):
-    output = np.zeros(shape, dtype=dtype)
-    expect = np.zeros(shape, dtype=dtype)
+def gen_data(shape):
+    output = np.zeros(shape, dtype="float32")
+    expect = np.zeros(shape, dtype="float32")
     return output, expect
 
-def test_ms_standard_normal(seed, shape, dtype, poly_sch=False):
+def test_ms_standard_normal(seed, shape, poly_sch=False):
     if poly_sch:
         mod = utils.op_build_test(standard_normal,
                                   [],[],
                                   kernel_name="StandardNormal",
-                                  op_attrs=[seed, shape, dtype],
+                                  op_attrs=[seed, shape],
                                   attrs={"target": "cuda"})
 
-    output, expect = gen_data(shape, dtype)
+    output, expect = gen_data(shape)
     output = utils.mod_launch(mod, (output,), expect=expect)
     res = output.shape == expect.shape
     res &= abs(np.mean(output) - 0) < 1e-1

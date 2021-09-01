@@ -493,7 +493,9 @@ op_dsl = {
         (output[0]['tensor_name'], get_attr(attr, 'num_segments'), inputs[0][0]['shape'], len(inputs[1][0]['shape']),
         output[0]['tensor_name'], get_input(inputs[1][0]), get_input(inputs[0][0])),
     "Gather": lambda inputs, output, attr: "%s = gather_np(%s, %s, %s)" %
-        (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]), get_attr(attr, "axis"))
+        (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]), get_attr(attr, "axis")),
+    "StandardNormal": lambda inputs, output, attr: "%s = np.random.standard_normal(%s)" %
+        (output[0]['tensor_name'], get_attr(attr, "shape"))
 }
 
 def conv_2d_str(inputs, output, attr):

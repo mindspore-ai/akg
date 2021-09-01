@@ -636,11 +636,11 @@ def gather(inputs, attrs):
 
 
 @tvm.register_func("StandardNormal")
-def standard_normal(attrs):
+def standard_normal(inputs, attrs):
     attrs = {k: v for k, v in attrs.items()}
     seed = attrs["seed"]
     shape = attrs["shape"]
-    dtype = attrs["dtype"].value
+    dtype = "float32"
     def gen_ir(out):
         ib = tvm.ir_builder.create()
         with ib.for_range_n(shape, "i") as i:

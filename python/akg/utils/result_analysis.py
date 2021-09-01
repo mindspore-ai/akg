@@ -302,8 +302,9 @@ def precision_analyze(desc: dict, tensors):
         else:
             output = IOInfo(op["output_desc"][0]["tensor_name"], op["output_desc"][0]["data_type"])
             inputs = []
-            for input_desc in op["input_desc"]:
-                inputs.append(IOInfo(input_desc[0]["tensor_name"], input_desc[0]["data_type"]))
+            if op["input_desc"]:
+                for input_desc in op["input_desc"]:
+                    inputs.append(IOInfo(input_desc[0]["tensor_name"], input_desc[0]["data_type"]))
             graph[output] = inputs
             ops[output] = op["name"]
 

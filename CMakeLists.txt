@@ -342,6 +342,7 @@ install(
   ${AKG_SOURCE_DIR}/src/akg_reduce
   ${AKG_SOURCE_DIR}/src/paris_reduce
   ${AKG_SOURCE_DIR}/src/akg_mma_lib
+  ${AKG_SOURCE_DIR}/src/akg_random
   DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/akg/include)
 file(GLOB REPOSITORY_FILE_LIST ${AKG_SOURCE_DIR}/python/akg/composite/*.json)
 install(FILES ${REPOSITORY_FILE_LIST} DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/akg/config)

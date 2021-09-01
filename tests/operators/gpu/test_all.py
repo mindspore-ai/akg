@@ -364,8 +364,8 @@ def reduce_or(poly_sch, fuzz_shape=None, mind_trick_str=''):
 
 
 def standard_normal(poly_sch, fuzz_shape=None, mind_trick_str=''):
-    test_ms_standard_normal(1, (1987, 64), 'float32', poly_sch=True)
-    test_ms_standard_normal(2, (5025, 64, 3), 'float32', poly_sch=True)
+    test_ms_standard_normal(1, (1987, 64), poly_sch=True)
+    test_ms_standard_normal(2, (5025, 64, 3), poly_sch=True)
 
 
 def gather(poly_sch, fuzz_shape=None, mind_trick_str=''):
