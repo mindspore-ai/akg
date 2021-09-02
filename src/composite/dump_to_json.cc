@@ -198,7 +198,7 @@ class DumpToJsonVisitor : public IRVisitor {
                                Expr value = Expr()) {
     picojson::object tensor;
     tensor["tensor_name"] = picojson::value(name);
-    tensor["format"] = picojson::value(GetFormatFromAttr(name));
+    tensor["format"] = picojson::value("DefaultFormat");
     tensor["data_type"] = picojson::value(type2string(type));
     tensor["shape"] = picojson::value(ParseArray(shape));
     if (value.defined()) {

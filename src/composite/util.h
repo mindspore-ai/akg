@@ -68,6 +68,7 @@ bool ShapeSizeIsOne(const Array<Expr> &shape);
 bool ShapeCanBroadcast(const Array<Expr> &shape1, const Array<Expr> &shape2);
 std::string GetOpName(const Provide *p);
 std::string CreateDataFormatKey(const std::string &tensor_name);
+bool GetBoolValueFromAttr(const Map<std::string, NodeRef> &attrs, const std::string &key);
 
 using FuncRefList = std::vector<FunctionRef>;
 using FuncRefMap = std::unordered_map<FunctionRef, FunctionRef, NodeHash, NodeEqual>;
@@ -366,7 +367,7 @@ struct AnalysisResult {
 
 class AnalysisResultMutator : public IRMutator {
  public:
-  explicit AnalysisResultMutator(AnalysisResult result, std::string id="0")
+  explicit AnalysisResultMutator(AnalysisResult result, std::string id = "0")
       : result_(std::move(result)), id_(std::move(id)){};
 
  private:
