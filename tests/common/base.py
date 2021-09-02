@@ -14,9 +14,7 @@
 
 """Test Base class"""
 import os
-import sys
 import time
-import tarfile
 import datetime
 import collections
 import numpy as np
@@ -265,9 +263,6 @@ class TestBase(object):
                 else:
                     compare_res = [runres]
 
-                kernel_name = self.get_kernel_name(args, func)
-                cce_file_name = self.collect_cce(kernel_name)
-                ir_file_name = self.collect_ir(kernel_name)
                 if not runres:
                     runtime_mode = os.environ.get("RUNTIME_MODE")
                     if runtime_mode in ["rpc", "rpc_cloud", "air", "air_cloud"]:
@@ -314,15 +309,9 @@ class TestBase(object):
                 if not runres:
                     self._log.error("common_run :: circle {0} fail !".format(self.translate_func_name(arg)))
                     self._log.error("common_run :: CompareResult: %s", str(compare_res))
-                    if not self.collect_data(input, output, cce_file_name, ir_file_name, arg, kernel_name):
-                        self._log.error("common_run :: collect data failed")
                     self.case_result = False
                 else:
                     self._log.info("common_run :: circle {0} pass !".format(self.translate_func_name(arg)))
-                    if cce_file_name and os.path.exists(cce_file_name):
-                        os.remove(cce_file_name)
-                    if ir_file_name and os.path.exists(ir_file_name):
-                        os.remove(ir_file_name)
                     self.case_result &= True
 
             endtime = datetime.datetime.now()
@@ -416,23 +405,6 @@ class TestBase(object):
 
         ftp.ftp_close()
         return ftp_url
-
-    def collect_ir(self, kernel_name):
-        if not os.path.exists(kernel_name):
-            self._log.warning("not exist ir directory for :{kernel_name}".format(kernel_name=kernel_name))
-            return None
-
-        file_name = kernel_name + ".tar.gz"
-        with tarfile.open(file_name, "w:gz") as tar:
-            tar.add(kernel_name, arcname=os.path.basename(kernel_name))
-        return file_name
-
-    def collect_cce(self, kernel_name):
-        file_name = kernel_name + ".cce"
-        if not os.path.exists(file_name):
-            self._log.warning("not exist cce file for :{file_name}".format(file_name=file_name))
-            return None
-        return file_name
 
     def collect_data(self, input, output, cce_file_name, ir_file_name, arg, kernel_name):
         ret_val = True
