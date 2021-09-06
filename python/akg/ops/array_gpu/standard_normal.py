@@ -17,17 +17,16 @@ import akg.tvm
 from akg.utils import validation_check as vc_util
 from ...composite import standard_normal as cuda_standard_normal
 
-@vc_util.check_input_type(int, tuple, str)
-def standard_normal(seed, shape, dtype):
+@vc_util.check_input_type(int, tuple)
+def standard_normal(seed, shape):
     """
     Operator dsl function for standard_normal.
 
     Args:
         seed (int): Random seed.
         shape (tuple(int)): Output shape.
-        dtype (str): Output dtype.
 
     Returns:
-        Tensor with the given shape and dtype.
+        Tensor with the given shape.
     """
-    return cuda_standard_normal({"seed": seed, "shape": shape, "dtype": dtype})
+    return cuda_standard_normal(None, {"seed": seed, "shape": shape})

@@ -508,9 +508,10 @@ def generate_trait(desc):
             traits = [str(len(desc['input_desc']))]
         for op in desc['op_desc'] if desc['op_desc'] is not None else []:
             input_idx = []
-            for input_desc in op['input_desc']:
-                if input_desc[0].get('value', None) is None:
-                    input_idx.append(counter - tensor_idx[input_desc[0]['tensor_name']])
+            if op['input_desc']:
+                for input_desc in op['input_desc']:
+                    if input_desc[0].get('value', None) is None:
+                        input_idx.append(counter - tensor_idx[input_desc[0]['tensor_name']])
             input_idx.sort()
             input_idx_str = ''.join([str(i) for i in input_idx])
             op_trait = op['name'] + input_idx_str
