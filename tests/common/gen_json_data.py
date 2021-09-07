@@ -215,6 +215,8 @@ def np_matmul_str(inputs, output, attr):
     input_0 = inputs[0][0]
     input_1 = inputs[1][0]
     res = ""
+    # Because when matmul calculations are performed on Gpu and Ascend, fp32 is used for accumulation when
+    # the input data is fp16, so the input data is casted to fp32
     if input_0['data_type'] == "float16":
         tmp = "%s = %s.astype(np.float32)" % (get_input(input_0), get_input(input_0))
         res = res + tmp + "\n"
@@ -223,37 +225,19 @@ def np_matmul_str(inputs, output, attr):
         res = res + tmp + "\n"
 
     if trans_a and trans_b:
-        res += "%s = np.dot(np.swapaxes(%s, -1, -2), np.swapaxes(%s, -1, -2))" %\
+        res += "%s = np.matmul(np.swapaxes(%s, -1, -2), np.swapaxes(%s, -1, -2))" %\
               (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]))
     elif trans_a:
-        res += "%s = np.dot(np.swapaxes(%s, -1, -2), %s)" %\
+        res += "%s = np.matmul(np.swapaxes(%s, -1, -2), %s)" %\
               (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]))
     elif trans_b:
-        res += "%s = np.dot(%s, np.swapaxes(%s, -1, -2))" %\
+        res += "%s = np.matmul(%s, np.swapaxes(%s, -1, -2))" %\
               (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]))
     else:
-        res += "%s = np.dot(%s, %s)" %\
+        res += "%s = np.matmul(%s, %s)" %\
               (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]))
     if output[0]['data_type'] == "float16":
         res += "\n" + "%s = %s.astype(np.float16)" % (output[0]['tensor_name'], output[0]['tensor_name'])
-    return res
-
-
-def batchmatmul_str(inputs, output, attr):
-    trans_a = get_attr(attr, "transpose_a")
-    trans_b = get_attr(attr, "transpose_b")
-    if trans_a and trans_b:
-        res = "%s = np.matmul(np.swapaxes(%s, -1, -2), np.swapaxes(%s, -1, -2))" %\
-              (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]))
-    elif trans_a:
-        res = "%s = np.matmul(np.swapaxes(%s, -1, -2), %s)" %\
-              (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]))
-    elif trans_b:
-        res = "%s = np.matmul(%s, np.swapaxes(%s, -1, -2))" %\
-              (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]))
-    else:
-        res = "%s = np.matmul(%s, %s)" %\
-              (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]))
     return res
 
 def convert_fracal_shape(ori_shape, fractal):
@@ -303,11 +287,7 @@ def matmul_str(inputs, output, attr):
         right_ori_shape = convert_fracal_shape(right_input['shape'], "zN")
         right_trans_str = get_trans_data_str(right_input_name, right_input_name, right_ori_shape, right_format, 'DefaultFormat')
         res = res + right_trans_str + "\n"
-    has_batch = (len(left_input['shape']) > 4)
-    if has_batch:
-        mm_str = batchmatmul_str(inputs, output, attr)
-    else:
-        mm_str = np_matmul_str(inputs, output, attr)
+    mm_str = np_matmul_str(inputs, output, attr)
     res = res + mm_str + "\n"
 
     has_bias = (len(inputs) > 2)

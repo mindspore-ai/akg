@@ -814,6 +814,14 @@ class InstructionMutator : IRMutator {
   Expr MulExprMutator(Expr &imm, const T *op) {
     Expr l = Mutate(op->a);
     Expr r = Mutate(op->b);
+
+    // The precision of fp16 is low. We found that in some scenarios,
+    // after the equivalent change of the calculation equation in the MulExprMutator,
+    // the results will have precision errors.
+    if (op->type.is_float16()) {
+      return Mul::make(T::make(l, r), imm);
+    }
+
     if (is_constant(l)) {
       return Mutate(T::make(ConstantFold<Mul>(imm, l), Mul::make(r, imm)));
     } else if (is_constant(r)) {

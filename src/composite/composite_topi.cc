@@ -844,7 +844,7 @@ TVM_REGISTER_GLOBAL("CudaBatchMatMul").set_body([](TVMArgs args, TVMRetValue *rv
 });
 
 // only support fractal_zN: [ko mo mi ki] * [no ko ki ni] = [no mo mi ni]
-TVM_REGISTER_GLOBAL("AicoreBatchMatMul").set_body([](TVMArgs args, TVMRetValue *rv) {
+void AicoreCubeMatMul(const TVMArgs &args, TVMRetValue *rv) {
   CHECK_GE(args.size(), 2);
   auto attrs = args[1].operator OpAttr();
   CHECK(attrs.count("transpose_a"));
@@ -1037,6 +1037,139 @@ TVM_REGISTER_GLOBAL("AicoreBatchMatMul").set_body([](TVMArgs args, TVMRetValue *
   }
 
   *rv = c_tensor;
+}
+
+void AicoreVectorMatMul(const TVMArgs &args, TVMRetValue *rv) {
+  auto attrs = args[1].operator OpAttr();
+  CHECK(attrs.count("transpose_a"));
+  CHECK(attrs.count("transpose_b"));
+  bool transpose_a = static_cast<bool>(ir::GetInt32Const(Downcast<Expr>(attrs["transpose_a"])));
+  bool transpose_b = static_cast<bool>(ir::GetInt32Const(Downcast<Expr>(attrs["transpose_b"])));
+  auto inputs = args[0].operator Array<NodeRef>();
+  CHECK_GE(inputs.size(), 2);
+  CHECK(inputs[0]->IsInstance<TensorNode>());
+  CHECK(inputs[1]->IsInstance<TensorNode>());
+  auto left_matrix = Downcast<Tensor>(inputs[0]);
+  auto right_matrix = Downcast<Tensor>(inputs[1]);
+  auto left_shape = left_matrix->shape;
+  auto right_shape = right_matrix->shape;
+  CHECK_EQ(left_shape.size(), right_shape.size());
+  CHECK_GE(left_shape.size(), 2);
+
+  // For the matmul, if use fp16 to accumulate, there will be some precision problems.
+  // Therefore, for the VectorMatMul, the input needs to be casted to fp32.
+  auto dtype = left_matrix->dtype;
+  if (dtype == Float(16)) {
+    left_matrix = topi::cast(left_matrix, Float(32));
+    right_matrix = topi::cast(right_matrix, Float(32));
+  }
+
+  // compute m n k
+  Array<Expr> output_shape;
+  Expr k;
+  auto compute_mnk = [&output_shape, &k, &left_shape, &right_shape, transpose_a, transpose_b]() {
+    size_t dim = left_shape.size();
+    Expr m, n;
+    if (transpose_a) {
+      k = left_shape[dim - 2];
+      m = left_shape[dim - 1];
+    } else {
+      m = left_shape[dim - 2];
+      k = left_shape[dim - 1];
+    }
+    if (transpose_b) {
+      n = right_shape[dim - 2];
+    } else {
+      n = right_shape[dim - 1];
+    }
+    for (size_t i = 0; i < dim - 2; ++i) {
+      output_shape.push_back(left_shape[i]);
+    }
+    output_shape.push_back(m);
+    output_shape.push_back(n);
+  };
+
+  compute_mnk();
+
+  // define fcompute
+  IterVar reduce_k = air::reduce_axis(Range(0, k), "k");
+
+  auto fcompute = [&left_matrix, &right_matrix, &transpose_a, &transpose_b, &reduce_k](const Array<Var> &indices) {
+    size_t dim = indices.size();
+    Array<Expr> left_indice;
+    for (size_t i = 0; i < dim - 2; ++i) {
+      left_indice.push_back(indices[i]);
+    }
+    if (transpose_a) {
+      left_indice.push_back(reduce_k);
+      left_indice.push_back(indices[dim - 2]);
+    } else {
+      left_indice.push_back(indices[dim - 2]);
+      left_indice.push_back(reduce_k);
+    }
+
+    Array<Expr> right_indice;
+    for (size_t i = 0; i < dim - 2; ++i) {
+      right_indice.push_back(indices[i]);
+    }
+    if (transpose_b) {
+      right_indice.push_back(indices[dim - 1]);
+      right_indice.push_back(reduce_k);
+    } else {
+      right_indice.push_back(reduce_k);
+      right_indice.push_back(indices[dim - 1]);
+    }
+
+    Expr res = air::sum(left_matrix(left_indice) * right_matrix(right_indice), {reduce_k});
+    return res;
+  };
+
+  // set output name
+  auto name = "T_batchmatmul_" + left_matrix->op->name + "_" + right_matrix->op->name;
+
+  // compute matmul(a,b)
+  auto c_tensor = compute(output_shape, fcompute, name, "matmul");
+
+  CHECK(attrs.count("dst_type"));
+  auto dst_type = GetString(attrs["dst_type"]);
+  if (dst_type == "float16") {
+    c_tensor = topi::cast(c_tensor, Float(16));
+  }
+
+  // bias add
+  if (inputs.size() > 2) {
+    auto bias = Downcast<Tensor>(inputs[2]);
+    if (bias->dtype != c_tensor->dtype) {
+      bias = topi::cast(bias, c_tensor->dtype);
+    }
+    c_tensor = topi::add(c_tensor, bias);
+  }
+
+  *rv = c_tensor;
+}
+
+TVM_REGISTER_GLOBAL("AicoreBatchMatMul").set_body([](TVMArgs args, TVMRetValue *rv) {
+  CHECK_GE(args.size(), 2);
+  auto attrs = args[1].operator OpAttr();
+  CHECK(attrs.count("left_format"));
+  CHECK(attrs.count("right_format"));
+  auto left_format = GetString(attrs["left_format"]);
+  auto right_format = GetString(attrs["right_format"]);
+
+  auto is_default_format = [](const std::string &format_name) -> bool {
+    if (format_name == "DefaultFormat" || format_name == "NCHW") {
+      return true;
+    }
+    return false;
+  };
+
+  if (left_format == "FRACTAL_NZ" && right_format == "FRACTAL_NZ") {
+    return AicoreCubeMatMul(args, rv);
+  } else if (is_default_format(left_format) && is_default_format(right_format)) {
+    return AicoreVectorMatMul(args, rv);
+  } else {
+    LOG(FATAL) << "format of " << left_format << "*" << right_format << " is not supported";
+  }
 });
 
 TVM_REGISTER_GLOBAL("Atan").set_body([](TVMArgs args, TVMRetValue *rv) { TOPI_ONE_INPUT_CALL(args, rv, topi::atan); });
