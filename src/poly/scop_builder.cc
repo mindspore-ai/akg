@@ -1045,15 +1045,15 @@ class ExtractAxisNotUsed : public IRVisitor {
   std::unordered_set<std::string> &red_;
 };
 
-class ReduceInfoCollector {
+class OperatorInfoCollector {
  public:
-  ReduceInfoCollector(ScopInfo &scop_info) : scop_info_(scop_info) {}
-  ~ReduceInfoCollector() = default;
+  OperatorInfoCollector(ScopInfo &scop_info) : scop_info_(scop_info) {}
+  ~OperatorInfoCollector() = default;
   void Run() {
-    auto op_type = scop_info_.analysis_result_.ShowOpTemplate(scop_info_.analysis_result_.GetOpTemplate());
-    if (op_type == "REDUCTION" || op_type == "ALL_REDUCE" || op_type == "BITWISE_REDUCTION") {
+    auto op_type = scop_info_.analysis_result_.GetOpTemplate();
+    if (op_type == Template::REDUCTION) {
       RecordReduceInfo();
-    } else if (op_type == "MATMUL" || op_type == "CONV") {
+    } else if (op_type == Template::MATMUL || op_type == Template::CONV) {
       RecordMatmulInfo();
     }
   }
@@ -1089,6 +1089,9 @@ class ReduceInfoCollector {
 
       bool is_all_reduce = vars_not_reduce.size() == 0;
       scop_info_.user_config_.SetTileCheckCoincident(!is_all_reduce);
+      if (is_all_reduce) {
+        scop_info_.analysis_result_.SetOpTemplate(Template::ALL_REDUCTION);
+      }
       isl::ctx ctx = op_domain.tuple.ctx();
 
       isl::aff_list aff_list = isl::aff_list(ctx, 0);
@@ -1110,6 +1113,9 @@ class ReduceInfoCollector {
       reduce_tensor_info.stmt_map = upa;
       scop_info_.analysis_result_.RecordReduceTensorInfoMap(red_id, reduce_tensor_info);
       auto type = scop_info_.analysis_result_.GetReduceOpType(red_id);
+      if (type == AKG_REDUCE_AND || type == AKG_REDUCE_OR) {
+        scop_info_.analysis_result_.SetOpTemplate(Template::BITWISE_REDUCTION);
+      }
       if (AkgSupportedReduceOp.count(type) != 0) {
         reduce_tensor_info.write_tensor_name = op->func->func_name();
         SetReduceInitValue(reduce_tensor_info);
@@ -1154,13 +1160,10 @@ class ReduceInfoCollector {
           LOG(WARNING) << "Cannot identify reduce direction for stmt " << red_id;
         }
         scop_info_.analysis_result_.RecordReduceDirection(reduce_direction);
-      } else {
-        scop_info_.user_config_.SetEnableAkgReduceLib(false);
+        if (scop_info_.user_config_.GetEnableAkgReduceLib()) {
+          scop_info_.analysis_result_.SetUseGpuReduceLib(true);
+        }
       }
-
-      scop_info_.user_config_.SetEnableMatmul(false);
-      scop_info_.user_config_.SetEnableTensorCore(false);
-      scop_info_.user_config_.SetEnableTensorCoreUsePoly(false);
     }
   }
 
@@ -1216,23 +1219,18 @@ class ReduceInfoCollector {
       isl::space space = op_domain_space.params().add_named_tuple_id_ui(red_id, aff_list.size());
       space = op_domain_space.product(space).unwrap();
       isl::union_map upa = isl::union_map(isl::map(isl::multi_aff(space, aff_list)));
-
+      bool use_tensor_core = false;
       if (CheckMatmul(op)) {
-        scop_info_.user_config_.SetEnableMatmul(true);
-        scop_info_.user_config_.SetEnableTensorCore(true);
-        scop_info_.user_config_.SetEnableTensorCoreUsePoly(true);
-        scop_info_.user_config_.SetEnableAkgReduceLib(false);
         // Default vectorization access mode (128 bits).
         if (scop_info_.user_config_.GetVectorLoadType() == 0) {
           scop_info_.user_config_.SetVectorLoadType(PROMOTE_VECTORIZATION_BIT);
         }
         RecordMatrixInfoForFuse(op);
-      } else {
-        scop_info_.user_config_.SetEnableAkgReduceLib(false);
-        scop_info_.user_config_.SetEnableMatmul(false);
-        scop_info_.user_config_.SetEnableTensorCore(false);
-        scop_info_.user_config_.SetEnableTensorCoreUsePoly(false);
+        use_tensor_core = true;
       }
+      scop_info_.user_config_.SetEnableMatmul(use_tensor_core);
+      scop_info_.user_config_.SetEnableTensorCore(use_tensor_core);
+      scop_info_.user_config_.SetEnableTensorCoreUsePoly(use_tensor_core);
     }
   }
 
@@ -1526,8 +1524,8 @@ isl::schedule MakeScheduleTree(const isl::space &param_space, isl::set param_set
   op_type_collector.WriteToScopInfo();
   op_type_collector.Dump();
   if (scop_info.user_config_.GetTarget() == TARGET_CUDA) {
-    ReduceInfoCollector reduce_info_coll(scop_info);
-    reduce_info_coll.Run();
+    OperatorInfoCollector op_info_coll(scop_info);
+    op_info_coll.Run();
   }
   return schedule;
 }

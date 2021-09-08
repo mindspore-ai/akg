@@ -373,7 +373,6 @@ class GpuStrategy : public TilingStrategy {
  private:
   void ShowOptions();
 
-  void DetermineTemplate();
   void AdjustThreadMappingLimit();
 
   void TransposeSpeedup();

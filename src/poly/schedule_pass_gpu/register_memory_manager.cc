@@ -744,7 +744,7 @@ isl::schedule RegisterMemoryManager::Run(isl::schedule sch) {
 
   if (scop_info_.user_config_.GetEnableMatmul()) {
     sch = RunMatmul(root);
-  } else if (scop_info_.user_config_.GetEnableAkgReduceLib()) {
+  } else if (scop_info_.analysis_result_.GetUseGpuReduceLib()) {
     sch = RunReduce(root);
   } else {
     sch = RunElementWise(root);

@@ -224,8 +224,8 @@ bool ConstrainSchedule::ShouldAutogenMindTrick(const isl::schedule &sch) const {
     return false;
   }
 
-  // Explicitely avoid autogen for reduce cases
-  if (scop_info_.user_config_.GetEnableAkgReduceLib()) {
+  // Explicitly avoid autogen for reduce cases
+  if (scop_info_.analysis_result_.GetUseGpuReduceLib()) {
     return false;
   }
 

@@ -317,12 +317,12 @@ void ReduceStrategy::AddGpuConstraint() {
     }
     if ((analyzer_->scop_info_.analysis_result_.GetReduceDirection() == Y_DIRECTION && reduce_length <= 32) ||
         (analyzer_->scop_info_.analysis_result_.GetReduceDirection() == X_DIRECTION && reduce_length < 32)) {
-      analyzer_->scop_info_.user_config_.SetEnableAkgReduceLib(false);
+      analyzer_->scop_info_.analysis_result_.SetUseGpuReduceLib(false);
       analyzer_->GetTileLogger().AppendLine(GPU_MAPPING, "Small Reduction (Y<=32, X<32), disable akg reduce lib.");
     }
   }
 
-  if (!analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib()) {
+  if (!analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib()) {
     DisableReduceMapping();
     if (analyzer_->scop_info_.analysis_result_.GetReduceDirection() == X_DIRECTION) {
       AkgReduceLibStrategyOnGpu();
@@ -345,16 +345,8 @@ void ReduceStrategy::DisableReduceMapping() {
 
 void ReduceStrategy::AkgReduceLibStrategyOnGpu() {
   // disable atomic-add for bitwise-reduction
-  bool disable_atomic = !analyzer_->scop_info_.user_config_.GetEnableAtomicAdd();
-  if (!disable_atomic) {
-    for (auto it : analyzer_->scop_info_.analysis_result_.GetReduceTensorInfoMap()) {
-      if (analyzer_->scop_info_.analysis_result_.GetReduceOpType(it.first) == AKG_REDUCE_AND ||
-          analyzer_->scop_info_.analysis_result_.GetReduceOpType(it.first) == AKG_REDUCE_OR) {
-        disable_atomic = true;
-        break;
-      }
-    }
-  }
+  bool disable_atomic = !analyzer_->scop_info_.user_config_.GetEnableAtomicAdd() ||
+    analyzer_->scop_info_.analysis_result_.GetOpTemplate() == Template::BITWISE_REDUCTION;
   if (disable_atomic) {
     for (auto axis : reduce_axes_) {
       axis->block_constraints.map_extent_ = MIN_TILE;
@@ -371,19 +363,13 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu() {
     }
   }
 
-  bool square_thread = analyzer_->scop_info_.analysis_result_.GetReduceDirection() == Y_DIRECTION &&
-                       analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib();
-  int64_t total_reduce_size = 1;
-  int64_t total_injective_size = 1;
-  int64_t injective_threads = 1;
-  int64_t reduce_threads = 1;
-  int64_t possible_reduce_blocks = 1;
-  int64_t possible_injective_blocks = 1;
-
   if (!all_reduce_) {
     DealWith4DFusedReduce();
   }
-  bool use_local = UseRegisterMem();
+
+  int64_t total_reduce_size = 1;
+  int64_t possible_reduce_blocks = 1;
+  int64_t reduce_threads = 1;
 
   for (auto axis : reduce_axes_) {
     CHECK(axis->range_extent.as<IntImm>());
@@ -398,6 +384,11 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu() {
       reduce_threads *= axis->thread_constraints.map_min_;
     }
   }
+
+  int64_t total_injective_size = 1;
+  int64_t possible_injective_blocks = 1;
+  int64_t injective_threads = 1;
+
   for (auto axis : injective_axes_) {
     CHECK(axis->range_extent.as<IntImm>());
     total_injective_size *= axis->range_extent.as<IntImm>()->value;
@@ -416,6 +407,9 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu() {
     return;
   }
 
+  bool square_thread = analyzer_->scop_info_.analysis_result_.GetReduceDirection() == Y_DIRECTION &&
+                      analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib();
+  bool use_local = UseRegisterMem();
   int64_t min_blocks = square_thread ? 32 : 512;
   int64_t min_elem_per_thread = use_local ? 2 : 8;
   int64_t min_ty = 8;
@@ -439,7 +433,7 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu() {
       AlignToPowerOfTwo(std::min<int64_t>(tx_range.second, ceil(static_cast<float>(tx_range.second) / ty_range.first)));
     tx_range.second = AlignToPowerOfTwo(std::min(tx_range.second, total_injective_size));
   } else {
-    if (analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib()) {
+    if (analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib()) {
       tx_range.first = AlignToPowerOfTwo(std::min(warp_sizes_, total_reduce_size));
     } else {
       tx_range.first = 1;
@@ -462,9 +456,7 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu() {
       }
       coef *= 2;
     }
-    if (analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib()) {
-      reduce_threads = ty_range.first * coef;
-    }
+    reduce_threads = ty_range.first * coef;
     injective_threads = tx_range.second / coef;
   } else {
     int coef = 1;
@@ -475,7 +467,7 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu() {
       }
       coef *= 2;
     }
-    if (analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib()) {
+    if (analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib()) {
       reduce_threads = tx_range.second / coef;
     }
     injective_threads = ty_range.first * coef;
@@ -511,9 +503,7 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu() {
   auto default_elem_per_thread = possible_reduce_blocks > 1
                                    ? std::max(std::min<int>(proposal, (possible_blocks / min_blocks + 1) / 2 * 2), 1)
                                    : IsHalfReduce() ? 64 : SpItemPerThread::FULL;
-  if (!analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib()) {
-    default_elem_per_thread = 1;
-  } else {
+  if (analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib()) {
     auto original_ept = default_elem_per_thread;
     // try to increase thread loop (no more than twice as original)
     while (possible_blocks > default_elem_per_thread && possible_blocks % default_elem_per_thread != 0) {
@@ -529,6 +519,8 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu() {
     if (default_elem_per_thread * 2 < original_ept) {
       default_elem_per_thread = original_ept;
     }
+  } else {
+    default_elem_per_thread = 1;
   }
 
   std::stringstream ss;
@@ -773,7 +765,7 @@ void GpuStrategy::ShowOptions() {
   std::stringstream ss;
   ss << "Options:\n";
   std::string indent = "  ";
-  ss << indent << "[EnableAkgReduceLib]: " << analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib() << "\n";
+  ss << indent << "[EnableAkgReduceLib]: " << analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib() << "\n";
   ss << indent << "[EnableAtomicAdd]: " << analyzer_->scop_info_.user_config_.GetEnableAtomicAdd() << "\n";
   ss << indent << "[EnableStitchFusion]: " << analyzer_->scop_info_.user_config_.EnableStitchFusion() << "\n";
   ss << indent << "[EnableMatmul]: " << analyzer_->scop_info_.user_config_.GetEnableMatmul() << "\n";
@@ -810,7 +802,7 @@ void GpuStrategy::SetCoalescedAccess() {
     return;
   }
 
-  if (analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib() || analyzer_->scop_info_.user_config_.GetEnableMatmul()) {
+  if (analyzer_->scop_info_.user_config_.GetEnableMatmul()) {
     return;
   }
 
@@ -1056,10 +1048,29 @@ void GpuStrategy::MarkMappingInRootAxis() {
 
 void GpuStrategy::InitMappingLimit() {
   max_x_y_dim_thread_ = analyzer_->scop_info_.user_config_.GetMaxElemPerThread();
-  DetermineTemplate();
-  reverse_binding_ = analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib() &&
-                     analyzer_->scop_info_.analysis_result_.GetReduceDirection() == Y_DIRECTION;
+  
+  // Determine op template
+  size_t depth = 0;
+  analyzer_->ForEachAxisTopDown([this, &depth](TileAxis *axis) {
+    if (axis == analyzer_->RootAxis()) {
+      return;
+    }
+    ++depth;
+  });
+  depth_ = depth;
+  if (analyzer_->scop_info_.user_config_.GetThreadConfig() != nullptr &&
+      analyzer_->scop_info_.user_config_.GetBlockConfig() != nullptr &&
+      analyzer_->scop_info_.user_config_.GetThreadConfig()->bound > 0 &&
+      analyzer_->scop_info_.user_config_.GetBlockConfig()->bound > 0) {
+    template_ = Template::CUSTOM_CONFIG;
+  } else {
+    template_ = analyzer_->scop_info_.analysis_result_.GetOpTemplate();
+  }
 
+  reverse_binding_ = analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib() &&
+                                          analyzer_->scop_info_.analysis_result_.GetReduceDirection() == Y_DIRECTION;
+
+  // Thread configuration
   if (template_ == Template::CUSTOM_CONFIG) {
     auto thread_config = analyzer_->scop_info_.user_config_.GetThreadConfig();
     for (size_t i = 0; i < thread_config->bound; ++i) {
@@ -1071,8 +1082,8 @@ void GpuStrategy::InitMappingLimit() {
     }
   } else if (template_ == Template::REDUCTION || template_ == Template::BITWISE_REDUCTION) {
     thread_limit_ = {max_x_y_dim_thread_, max_x_y_dim_thread_};
-  } else if (template_ == Template::ALL_REDUCE) {
-    if (analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib()) {
+  } else if (template_ == Template::ALL_REDUCTION) {
+    if (analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib()) {
       thread_limit_ = {max_x_y_dim_thread_, max_x_y_dim_thread_};
     } else {
       thread_limit_ = {1};
@@ -1096,6 +1107,7 @@ void GpuStrategy::InitMappingLimit() {
     AdjustThreadMappingLimit();
   }
 
+  // Block configuration
   if (template_ == Template::CUSTOM_CONFIG) {
     auto block_config = analyzer_->scop_info_.user_config_.GetBlockConfig();
     for (int i = 0; i < static_cast<int>(block_config->bound) - 1; ++i) {
@@ -1104,9 +1116,7 @@ void GpuStrategy::InitMappingLimit() {
       }
       block_limit_.emplace_back(block_config->GetAt(i).second);
     }
-  } else if (template_ <= Template::REDUCTION) {
-    block_limit_ = {max_x_dim_block_, max_y_z_dim_block_, max_y_z_dim_block_};
-  } else if (template_ == Template::ALL_REDUCE && !analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib()) {
+  } else if (template_ == Template::ALL_REDUCTION && !analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib()) {
     block_limit_ = {1};
   } else if (template_ == Template::CONV) {
     block_limit_ = {max_x_dim_block_, max_y_z_dim_block_, max_y_z_dim_block_, max_y_z_dim_block_};
@@ -1138,7 +1148,7 @@ void GpuStrategy::BuildAxesQueue() {
       axis->block_constraints.map_extent_ == 0 ? r->value : axis->block_constraints.map_extent_;
     axis->thread_constraints.map_extent_ =
       axis->thread_constraints.map_extent_ == 0 ? r->value : axis->thread_constraints.map_extent_;
-    if (!axis->mc_sup && !analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib()) {
+    if (!axis->mc_sup && !analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib()) {
       axis->block_constraints.map_extent_ = 1;
       axis->thread_constraints.map_extent_ = 1;
       std::stringstream ss;
@@ -1205,7 +1215,7 @@ void GpuStrategy::InnerThreadOuterBlock() {
       axis->TileRestrainLower(tile, TileLevel::CACHE1);
       ss << ", tile = " << tile;
 
-      if (axis->mc_sup || analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib()) {
+      if (axis->mc_sup || analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib()) {
         if (axis->block_constraints.map_extent_ > 1) {
           pending_axes_.push_back(std::make_pair(axis, std::max<int64_t>(ceil(static_cast<float>(shape) / tile), 1)));
           ss << ", map to block.";
@@ -1236,7 +1246,7 @@ void GpuStrategy::InnerThreadOuterBlock() {
 
     if (rest_threads <= 1) {
       if (axis->mc_sup ||
-          (template_ == Template::REDUCTION && analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib())) {
+          (template_ == Template::REDUCTION && analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib())) {
         thread_cfg_.emplace_back(1);
       }
       SkipMapping();
@@ -1346,7 +1356,7 @@ void GpuStrategy::InnerThreadOuterBlock() {
     block_cfg_[pending_axes_.size() - 1 - i] = use;
     block_cfg_map_[axis] = pending_axes_.size() - 1 - i;
     axis->block_constraints.map_extent_ = use;
-    if (analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib() || axis->mc_sup) {
+    if (analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib() || axis->mc_sup) {
       ++block_count_;
       std::string attr_value = mapping_idx_pos_[block_count_ - 1] + "_" + std::to_string(use);
       axis->MarkWithAttr(AttrInfo{AT_BLOCK_CFG, attr_value});
@@ -1483,7 +1493,7 @@ int64_t GpuStrategy::TileAfterThreadMapping(TileAxis *axis, size_t inner_dim, in
   auto tile = item == SpItemPerThread::FULL ? std::min(tile_extent, thread_size * max_elem_per_thread_)
                                             : std::min(tile_extent, thread_size * item);
   tile = std::max<int64_t>(tile, tile_min);
-  if (analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib()) {
+  if (analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib()) {
     if (tile < tile_mod) {
       // tile axis with mod value
       // e.g. tile cc0 with 128 in the following code
@@ -1541,66 +1551,6 @@ int64_t GpuStrategy::TileAfterThreadMapping(TileAxis *axis, size_t inner_dim, in
   return tile;
 }
 
-void GpuStrategy::DetermineTemplate() {
-  size_t depth = 0;
-  analyzer_->ForEachAxisTopDown([this, &depth](TileAxis *axis) {
-    if (axis == analyzer_->RootAxis()) {
-      return;
-    }
-    ++depth;
-  });
-  depth_ = depth;
-  if (analyzer_->scop_info_.user_config_.GetThreadConfig() != nullptr &&
-      analyzer_->scop_info_.user_config_.GetBlockConfig() != nullptr &&
-      analyzer_->scop_info_.user_config_.GetThreadConfig()->bound > 0 &&
-      analyzer_->scop_info_.user_config_.GetBlockConfig()->bound > 0) {
-    template_ = Template::CUSTOM_CONFIG;
-    return;
-  }
-
-  for (auto it : analyzer_->scop_info_.analysis_result_.GetReduceTensorInfoMap()) {
-    if (analyzer_->scop_info_.analysis_result_.GetReduceOpType(it.first) == AKG_REDUCE_AND ||
-        analyzer_->scop_info_.analysis_result_.GetReduceOpType(it.first) == AKG_REDUCE_OR) {
-      template_ = Template::BITWISE_REDUCTION;
-      return;
-    }
-  }
-
-  if (!analyzer_->GetAxesOfAttr(AT_GEMM).empty()) {
-    template_ = Template::MATMUL;
-    return;
-  }
-
-  if (!analyzer_->GetAxesOfAttr(AttrInfo{AT_OP_TYPE, AT_PAD}).empty()) {
-    template_ = Template::PAD_OP;
-    return;
-  }
-
-  if (!analyzer_->GetAxesOfAttr(AT_CONV).empty()) {
-    template_ = Template::CONV;
-    return;
-  }
-
-  auto reduce_axes_ = analyzer_->GetAxesOfAttr(AT_REDUCE_AXIS);
-
-  if (reduce_axes_.empty()) {
-    bool has_transpose = false;
-    analyzer_->ForEachAxisTopDown([this, &has_transpose](TileAxis *axis) {
-      if (has_transpose) {
-        return;
-      }
-      has_transpose =
-        axis->HasAttr(AT_TRANSPOSE, true) || (axis->HasAttr(AT_BROADCAST, true) && axis->HasAttr(AT_TRANSFORM, true));
-    });
-    bool is_pure_elem =
-      (analyzer_->GetAxesContainsAttr(AT_BROADCAST).empty() && analyzer_->GetAxesContainsAttr(AT_TRANSFORM).empty());
-    template_ = has_transpose ? Template::TRANSPOSE_OP : is_pure_elem ? Template::PURE_ELEM : Template::BROADCAST_OP;
-    return;
-  }
-
-  template_ = reduce_axes_.size() == depth ? Template::ALL_REDUCE : Template::REDUCTION;
-}
-
 void GpuStrategy::AdjustThreadMappingLimit() {
   std::stringstream ss;
   std::vector<int64_t> map_mins;
@@ -1613,7 +1563,7 @@ void GpuStrategy::AdjustThreadMappingLimit() {
     if (axis == this->analyzer_->RootAxis()) {
       return;
     }
-    if (!axis->mc_sup && !analyzer_->scop_info_.user_config_.GetEnableAkgReduceLib()) {
+    if (!axis->mc_sup && !analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib()) {
       return;
     }
     map_mins.emplace_back(axis->thread_constraints.map_min_);

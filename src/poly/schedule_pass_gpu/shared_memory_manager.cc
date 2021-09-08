@@ -35,7 +35,7 @@ isl::schedule SharedMemoryManager::Run(isl::schedule sch) {
 
   PrepareInfoForPromotion(root);
 
-  if (scop_info_.user_config_.GetEnableAkgReduceLib()) {
+  if (scop_info_.analysis_result_.GetUseGpuReduceLib()) {
     return RunReduce(root);
   } else if (scop_info_.user_config_.GetEnableMatmul()) {
     return RunMatmul(root);
