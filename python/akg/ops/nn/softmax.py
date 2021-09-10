@@ -69,6 +69,7 @@ def softmax(data, axis):
             "pragma_modshift": 1,
             "pragma_outerband_need_split": 1,
             "enable_post_poly_loop_partition": False,
+            "pragma_disable_whole_component": False,
             "dynamic_shape": ds.set_dynamic_shape_limit_for_tensor(
                 output, 2048, axis) +
                              ds.set_poly_upper_bound_for_tensor(

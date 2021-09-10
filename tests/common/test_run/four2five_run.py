@@ -37,6 +37,8 @@ def four2five_execute(shape, dtype, format, dst_type, attrs=None):
     op_attrs = [format, dst_type]
     if attrs is None:
         attrs = {}
+    attrs["pragma_disable_whole_component"] = False
+    attrs["pragma_disable_loop_reversal"] = False
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)

@@ -55,6 +55,7 @@ def np_sparse_softmax_cross_entropy_with_logits(shape1, dtype1, shape2, dtype2, 
 def sparse_softmax_cross_entropy_with_logits_run(shape1, dtype1, shape2, dtype2, reduction, kernel_name, attrs):
     op_attrs = [reduction]
 
+    attrs["pragma_disable_whole_component"] = False
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)

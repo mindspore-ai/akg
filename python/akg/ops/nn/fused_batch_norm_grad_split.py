@@ -163,6 +163,7 @@ set_attr_map_bng1_ = {
 
     str(((32, 64, 14, 14, 16), "float16")): [("single_sum", True)],
     str(((32, 128, 7, 7, 16), "float16")): [("single_sum", True)],
+    str(((32, 32, 14, 14, 16), "float32")): [("pragma_disable_whole_component", False)],
 }
 
 def set_attr_func_bng1_(*args):

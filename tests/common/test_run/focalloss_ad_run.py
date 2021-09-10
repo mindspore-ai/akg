@@ -132,6 +132,7 @@ def get_expect(prediction, labels, grad, gamma):
 
 def focalloss_grad_run(shape, dtype, label_dtype, gamma, attrs):
     kernel_name = utils.gen_name_kernel("focalloss_grad", dtype, shape)
+    attrs["pragma_disable_whole_component"] = False
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)

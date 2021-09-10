@@ -29,6 +29,7 @@ def softmax_grad_run(shape, dtype, axis, kernel_name, attrs=None):
     input_types = [dtype, dtype]
     op_attrs = [axis]
 
+    attrs["pragma_disable_whole_component"] = False
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)

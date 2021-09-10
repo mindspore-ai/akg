@@ -94,6 +94,7 @@ def maxpool_grad_run(shape, kernel, stride, pad, dtype, attrs):
     _, [yh, yw] = cal_pad_shapes_by_strategy(shape, kernel, stride, pad)
     y_shape = (shape[0], shape[1], yh, yw, shape[4])
 
+    attrs["pragma_disable_whole_component"] = False
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
