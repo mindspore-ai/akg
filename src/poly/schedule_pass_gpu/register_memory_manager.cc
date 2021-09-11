@@ -42,7 +42,13 @@ isl::schedule RegisterMemoryManager::HoistRegisterMemoryOnDepth(isl::schedule_no
   auto replace_cfg = scop_info_.user_config_.GetReplaceConfig();
   auto block_mapping = GetBlockMappingFilterInfo(root_node, block_cfg, replace_cfg);
 
+  int64_t alloc_threads = 1;
   auto thread_cfg = scop_info_.user_config_.GetThreadConfig();
+  if (thread_cfg != nullptr) {
+    for (size_t i = 0; i < thread_cfg->bound; ++i) {
+      alloc_threads *= thread_cfg->GetAt(i).second;
+    }
+  }
   if (scop_info_.user_config_.GetEnableTensorCoreUsePoly()) {
     thread_cfg = replace_cfg[WARP_COMPUTE];
   }
@@ -54,9 +60,6 @@ isl::schedule RegisterMemoryManager::HoistRegisterMemoryOnDepth(isl::schedule_no
   CreateTensorCluster(node, partial_sched);
 
   isl::schedule sch = schedule_;
-  if (memory_exceeding_) {
-    return sch;
-  }
 
   auto thread_schedule = MapDomainAllWithType(root_node, thread_cfg, scop_info_.upa_node_mapping_, THREAD_MARKER);
   auto block_schedule = MapDomainAllWithType(root_node, block_cfg, scop_info_.upa_node_mapping_, BLOCK_MARKER);
@@ -112,37 +115,50 @@ isl::schedule RegisterMemoryManager::HoistRegisterMemoryOnDepth(isl::schedule_no
       }
     }
 
-    auto active_domains = CollectDomain(res_node);
-    isl::id dst_tensor_id = buffer_info.dst_tensor_id;
-    GatherBufferFootprintDefInfo(res_node, buffer_info);
-    if (scop_info_.user_config_.GetEnableMatmul()) {
-      if (tensor_id.get_name().find(SHARE_SUFFIX) != std::string::npos) {
-        std::shared_ptr<TensorFootprintCluster> src_fp_cluster;
-        isl::union_map sch_map = scop_info_.analysis_result_.GetScheduleMapBeforeTile();
-        for (auto &buffer : scop_info_.analysis_result_.active_buffer_footprints_) {
-          if (tensor_id == buffer.second.cluster_id) {
-            src_fp_cluster = buffer.second.cluster;
-            break;
+    auto tensor_size = std::accumulate(box_sizes.begin(), box_sizes.end(), 1, std::multiplies<size_t>());
+    if (scop_info_.user_config_.GetEnableTensorCoreUsePoly()) {
+      tensor_size = (buffer_info.tensor_id.get_name() == local_tensor_c_) ? (tensor_size / alloc_threads)
+                                                                          : (tensor_size * 2 / alloc_threads);
+    }
+    auto data_bytes = scop_info_.user_config_.GetDataBytes(buffer_info.tensor_id.get_name());
+    tensor_size = tensor_size * std::max<int>(1, data_bytes / BYTES_PER_REGISTER);
+    size_t memory_requirement = tensor_size * alloc_threads;
+
+    if (memory_requirement <= remain_memory_) {
+      auto active_domains = CollectDomain(res_node);
+      isl::id dst_tensor_id = buffer_info.dst_tensor_id;
+      GatherBufferFootprintDefInfo(res_node, buffer_info);
+      if (scop_info_.user_config_.GetEnableMatmul()) {
+        if (tensor_id.get_name().find(SHARE_SUFFIX) != std::string::npos) {
+          std::shared_ptr<TensorFootprintCluster> src_fp_cluster;
+          isl::union_map sch_map = scop_info_.analysis_result_.GetScheduleMapBeforeTile();
+          for (auto &buffer : scop_info_.analysis_result_.active_buffer_footprints_) {
+            if (tensor_id == buffer.second.cluster_id) {
+              src_fp_cluster = buffer.second.cluster;
+              break;
+            }
           }
-        }
-        if (src_fp_cluster != nullptr) {
-          node = PlaceInnerDataCopyBelow(scop_info_, node, *fp_cluster, *src_fp_cluster, tensor_id, dst_tensor_id,
-                                         tensor_id, sch_map);
+          if (src_fp_cluster != nullptr) {
+            node = PlaceInnerDataCopyBelow(scop_info_, node, *fp_cluster, *src_fp_cluster, tensor_id, dst_tensor_id,
+                                           tensor_id, sch_map);
+          }
+        } else {
+          node = PlaceOuterDataCopyBelow(scop_info_, node, *fp_cluster, tensor_id, dst_tensor_id, partial_sched,
+                                         schedule_.get_domain().get_space());
         }
       } else {
         node = PlaceOuterDataCopyBelow(scop_info_, node, *fp_cluster, tensor_id, dst_tensor_id, partial_sched,
                                        schedule_.get_domain().get_space());
       }
-    } else {
-      node = PlaceOuterDataCopyBelow(scop_info_, node, *fp_cluster, tensor_id, dst_tensor_id, partial_sched,
-                                     schedule_.get_domain().get_space());
-    }
 
-    // active_buffer_footprints for codegen
-    scop_info_.analysis_result_.active_buffer_footprints_.emplace_back(std::make_pair(
-      active_domains, BufferedFootPrintInfo{std::shared_ptr<TensorFootprintCluster>(std::move(fp_cluster)),
-                                            partial_sched, dst_tensor_id}));
-    buffer_info.find_buffer = true;
+      remain_memory_ -= memory_requirement;
+
+      // active_buffer_footprints for codegen
+      scop_info_.analysis_result_.active_buffer_footprints_.emplace_back(std::make_pair(
+        active_domains, BufferedFootPrintInfo{std::shared_ptr<TensorFootprintCluster>(std::move(fp_cluster)),
+                                              partial_sched, dst_tensor_id}));
+      buffer_info.find_buffer = true;
+    }
   }
   sch = node.get_schedule();
   return sch;
@@ -271,39 +287,47 @@ void RegisterMemoryManager::CreateTensorCluster(const isl::schedule_node &node, 
     }
   }
 
-  IsOutofMemory(promoted_infos);
-
-  if (!memory_exceeding_) {
-    for (auto promoted_info : promoted_infos) {
+  for (auto promoted_info : promoted_infos) {
+    auto name = promoted_info.tensor_id.get_name();
+    if (CheckRAW(name)) {
+      scop_info_.analysis_result_.buffer_def_infos_.insert(scop_info_.analysis_result_.buffer_def_infos_.begin(),
+                                                           promoted_info);
+    } else {
       scop_info_.analysis_result_.buffer_def_infos_.push_back(promoted_info);
     }
   }
 }
 
-void RegisterMemoryManager::IsOutofMemory(std::vector<BufferDefInfo> promoted_infos) {
-  int64_t alloc_threads = 1;
-  auto thread_cfg = scop_info_.user_config_.GetThreadConfig();
-  if (thread_cfg != nullptr) {
-    for (size_t i = 0; i < thread_cfg->bound; ++i) {
-      alloc_threads *= thread_cfg->GetAt(i).second;
+bool RegisterMemoryManager::CheckRAW(std::string &name) {
+  isl::union_map reads = scop_info_.analysis_result_.GetReads();
+  isl::union_map reads_filter = isl::union_map::empty(scop_info_.GetCtx());
+  auto reads_range = reads.range();
+  isl::union_set reads_uset = isl::union_set::empty(scop_info_.GetCtx());
+  reads_range.foreach_set([this, name, &reads_uset](const isl::set &s) -> void {
+    std::string tensor_name = s.get_tuple_name();
+    if (tensor_name == name) {
+      reads_uset = reads_uset.add_set(s);
     }
-  }
-  size_t total_alloc_size = 0;
-  for (auto promoted_info : promoted_infos) {
-    auto box_sizes = promoted_info.footprints_cluster->GetFixedBoxSizes();
-    if (!box_sizes.empty()) {
-      auto tensor_size = std::accumulate(box_sizes.begin(), box_sizes.end(), 1, std::multiplies<size_t>());
-      if (scop_info_.user_config_.GetEnableTensorCoreUsePoly()) {
-        tensor_size = (promoted_info.tensor_id.get_name() == local_tensor_c_) ? (tensor_size / alloc_threads)
-                                                                              : (tensor_size * 2 / alloc_threads);
-      }
-      auto data_bytes = scop_info_.user_config_.GetDataBytes(promoted_info.tensor_id.get_name());
-      total_alloc_size += tensor_size * std::max<int>(1, data_bytes / BYTES_PER_REGISTER);
-      if (total_alloc_size * alloc_threads >= MAX_REGISTER_PER_THREAD_BLOCK * REGISTER_ALLOC_RATIO) {
-        memory_exceeding_ = true;
-        break;
-      }
+  });
+
+  reads_filter = reads.intersect_range(reads_uset);
+  isl::union_map writes = scop_info_.analysis_result_.GetWrites();
+  isl::union_map writes_filter = isl::union_map::empty(scop_info_.GetCtx());
+  auto writes_range = writes.range();
+  isl::union_set writes_uset = isl::union_set::empty(scop_info_.GetCtx());
+  writes_range.foreach_set([this, name, &writes_uset](const isl::set &s) -> void {
+    std::string tensor_name = s.get_tuple_name();
+    if (tensor_name == name) {
+      writes_uset = writes_uset.add_set(s);
     }
+  });
+
+  writes_filter = writes.intersect_range(writes_uset);
+  isl::union_map rawmap = ComputeRAW(scop_info_.origin_schedule_, reads_filter, writes_filter);
+  if (rawmap.is_empty()) {
+    return false;
+  } else {
+    return true;
   }
 }
 
@@ -362,7 +386,6 @@ isl::schedule RegisterMemoryManager::HoistRegisterMemory(isl::schedule_node root
 
   isl::schedule tmp_sch = root.get_schedule();
   if (!bands.size()) {
-    memory_exceeding_ = false;
     return tmp_sch;
   }
 
@@ -649,10 +672,7 @@ isl::schedule RegisterMemoryManager::RunReduce(isl::schedule_node root) {
     if (scop_info_.user_config_.GetRegisterDepth() >= 0) {
       depth = scop_info_.user_config_.GetRegisterDepth();
     }
-    do {
-      sch = HoistRegisterMemory(root, depth);
-      depth = depth + 1;
-    } while (memory_exceeding_);
+    sch = HoistRegisterMemory(root, depth);
   }
   return sch;
 }
@@ -718,10 +738,7 @@ isl::schedule RegisterMemoryManager::RunElementWise(isl::schedule_node root) {
       depth = scop_info_.user_config_.GetRegisterDepth();
     }
 
-    do {
-      sch = HoistRegisterMemory(root, depth);
-      depth = depth + 1;
-    } while (memory_exceeding_);
+    sch = HoistRegisterMemory(root, depth);
 
     if (scop_info_.user_config_.GetEnableVectorization()) {
       auto tmp_root = sch.get_root();

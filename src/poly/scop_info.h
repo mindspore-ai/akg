@@ -1303,6 +1303,7 @@ class ScopInfo {
   TimeRecords time_records_;
   SyncManager sync_manager_;
   UpaNodeMapping upa_node_mapping_;
+  isl::schedule origin_schedule_;
 };
 
 class PartitionSingle {

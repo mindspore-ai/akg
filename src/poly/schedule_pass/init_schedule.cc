@@ -151,6 +151,7 @@ isl::schedule InitSchedule::Run(isl::schedule sch) {
     ModDependencesBeforeGroup(sch);
   }
 
+  scop_info_.origin_schedule_ = sch;
   return sch;
 }
 

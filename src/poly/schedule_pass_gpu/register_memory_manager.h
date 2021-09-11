@@ -42,6 +42,7 @@ class RegisterMemoryManager : public SchedulePass {
     if (scop_info_.user_config_.GetEnableMatmul()) {
       local_tensor_c_ = GetMatmulTensorsName(scop_info)[MATRIX_C];
     }
+    remain_memory_ = MAX_REGISTER_PER_THREAD_BLOCK * REGISTER_ALLOC_RATIO;
   };
   ~RegisterMemoryManager() {}
 
@@ -59,8 +60,6 @@ class RegisterMemoryManager : public SchedulePass {
   bool UnrolledLoop(const TensorFootprintCluster &fp_cluster);
 
   isl::schedule HoistRegisterMemory(isl::schedule_node root, size_t depth);
-
-  void IsOutofMemory(std::vector<BufferDefInfo> promoted_infos);
 
   size_t UpdateDepth(const isl::schedule_node &root);
 
@@ -86,16 +85,18 @@ class RegisterMemoryManager : public SchedulePass {
 
   isl::schedule RunElementWise(isl::schedule_node root);
 
+  bool CheckRAW(std::string &name);
+
  private:
   PassInfo &pass_info_;
   ScopInfo &scop_info_;
   isl::schedule schedule_;
   std::vector<std::string> configed_tensors_;
-  bool memory_exceeding_{false};
   bool hoist_compute_local_tensor_{true};
   bool hoist_tensor_all_{false};
   std::string local_tensor_c_;
   std::string shared_tensors_;
+  size_t remain_memory_{0};
 };
 
 }  // namespace poly

@@ -48,6 +48,8 @@ isl::union_map DependenceAnalysis(const isl::union_map &sources, const isl::unio
                                   const isl::union_map &kills, const isl::union_map &sch);
 isl::union_map ComputeAllDependences(const isl::schedule &schedule, const isl::union_map &reads_um,
                                      const isl::union_map &writes_um);
+isl::union_map ComputeRAW(const isl::schedule &schedule, const isl::union_map &reads_um,
+                          const isl::union_map &writes_um);
 isl::schedule_node GetOuterBand(const isl::schedule_node &root);
 bool IsSequenceOrSet(const isl::schedule_node &node);
 
