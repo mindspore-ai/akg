@@ -506,47 +506,25 @@ def np_matmul_str(inputs, output, attr):
         res = res + tmp + "\n"
 
     if trans_a and trans_b:
-        res += "%s = np.dot(np.swapaxes(%s, -1, -2), np.swapaxes(%s, -1, -2))" %\
+        res += "%s = np.matmul(np.swapaxes(%s, -1, -2), np.swapaxes(%s, -1, -2))" %\
             (output[0]['tensor_name'], get_input(
                 inputs[0][0]), get_input(inputs[1][0]))
     elif trans_a:
-        res += "%s = np.dot(np.swapaxes(%s, -1, -2), %s)" %\
+        res += "%s = np.matmul(np.swapaxes(%s, -1, -2), %s)" %\
             (output[0]['tensor_name'], get_input(
                 inputs[0][0]), get_input(inputs[1][0]))
     elif trans_b:
-        res += "%s = np.dot(%s, np.swapaxes(%s, -1, -2))" %\
+        res += "%s = np.matmul(%s, np.swapaxes(%s, -1, -2))" %\
             (output[0]['tensor_name'], get_input(
                 inputs[0][0]), get_input(inputs[1][0]))
     else:
-        res += "%s = np.dot(%s, %s)" %\
+        res += "%s = np.matmul(%s, %s)" %\
             (output[0]['tensor_name'], get_input(
                 inputs[0][0]), get_input(inputs[1][0]))
     if output[0]['data_type'] == "float16":
         res += "\n" + \
             "%s = %s.astype(np.float16)" % (
                 output[0]['tensor_name'], output[0]['tensor_name'])
-    return res
-
-
-def batchmatmul_str(inputs, output, attr):
-    trans_a = get_attr(attr, "transpose_a")
-    trans_b = get_attr(attr, "transpose_b")
-    if trans_a and trans_b:
-        res = "%s = np.matmul(np.swapaxes(%s, -1, -2), np.swapaxes(%s, -1, -2))" %\
-              (output[0]['tensor_name'], get_input(
-                  inputs[0][0]), get_input(inputs[1][0]))
-    elif trans_a:
-        res = "%s = np.matmul(np.swapaxes(%s, -1, -2), %s)" %\
-              (output[0]['tensor_name'], get_input(
-                  inputs[0][0]), get_input(inputs[1][0]))
-    elif trans_b:
-        res = "%s = np.matmul(%s, np.swapaxes(%s, -1, -2))" %\
-              (output[0]['tensor_name'], get_input(
-                  inputs[0][0]), get_input(inputs[1][0]))
-    else:
-        res = "%s = np.matmul(%s, %s)" %\
-              (output[0]['tensor_name'], get_input(
-                  inputs[0][0]), get_input(inputs[1][0]))
     return res
 
 
@@ -588,12 +566,8 @@ def matmul_str(inputs, output, attr):
         right_trans_str = get_trans_data_str(
             right_input_name, right_input_name, right_ori_shape, right_format, 'DefaultFormat')
         res = res + right_trans_str + "\n"
-    has_batch = (len(left_input['shape']) > 4)
-    if has_batch:
-        matmul_str = batchmatmul_str(inputs, output, attr)
-    else:
-        matmul_str = np_matmul_str(inputs, output, attr)
-    res = res + matmul_str + "\n"
+    mm_str = np_matmul_str(inputs, output, attr)
+    res = res + mm_str + "\n"
 
     has_bias = (len(inputs) > 2)
     if has_bias:
