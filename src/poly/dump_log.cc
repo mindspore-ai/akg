@@ -450,6 +450,7 @@ void UserConfig::DumpScopDataScheduleAttrs(std::ofstream &of) {
   of << "pragma_rmselfdep : " << GetRemoveSelfDependence() << std::endl;
   of << "pragma_force_rmselfdep : " << GetForceRemoveSelfDependence() << std::endl;
   of << "pragma_reschedule : " << GetComputeReschedule() << std::endl;
+  of << "pragma_disable_whole_component: " << GetDisableWholeComponent() << std::endl;
   of << "pragma_disable_schedule_shift : " << GetDisableScheduleShift() << std::endl;
   of << "pragma_enable_schedule_max_constant : " << GetEnableScheduleMaxConstant() << std::endl;
   of << "pragma_disable_loop_reversal : " << GetDisableLoopReversal() << std::endl;

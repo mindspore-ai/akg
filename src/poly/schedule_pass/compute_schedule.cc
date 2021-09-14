@@ -41,14 +41,26 @@ void ComputeSchedule::SetIslOptions() {
   int status = isl_options_set_schedule_unit_max_var_coefficient_sum(ctx, 1);
   CHECK(status == isl_stat_ok);
 
-  if (scop_info_.user_config_.GetComputeReschedule()) {
-    status = isl_options_set_schedule_whole_component(ctx, 0);
-    CHECK(status == isl_stat_ok);
+  if (scop_info_.user_config_.GetTarget() != TARGET_CUDA) {
+    if (scop_info_.user_config_.GetDisableWholeComponent()) {
+      status = isl_options_set_schedule_whole_component(ctx, 0);
+      CHECK(status == isl_stat_ok);
+    } else {
+      status = isl_options_set_schedule_maximize_coincidence(ctx, 0);
+      CHECK(status == isl_stat_ok);
+      status = isl_options_set_schedule_whole_component(ctx, 1);
+      CHECK(status == isl_stat_ok);
+    }
   } else {
-    status = isl_options_set_schedule_maximize_coincidence(ctx, 0);
-    CHECK(status == isl_stat_ok);
-    status = isl_options_set_schedule_whole_component(ctx, 1);
-    CHECK(status == isl_stat_ok);
+    if (scop_info_.user_config_.GetComputeReschedule()) {
+      status = isl_options_set_schedule_whole_component(ctx, 0);
+      CHECK(status == isl_stat_ok);
+    } else {
+      status = isl_options_set_schedule_maximize_coincidence(ctx, 0);
+      CHECK(status == isl_stat_ok);
+      status = isl_options_set_schedule_whole_component(ctx, 1);
+      CHECK(status == isl_stat_ok);
+    }
   }
 
   if (scop_info_.user_config_.GetDisableScheduleShift()) {

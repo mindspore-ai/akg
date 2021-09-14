@@ -63,8 +63,9 @@ def gen_data(dtype1, dtype2, reduction, shape1, shape2, scale=1.0):
 def sparse_softmax_cross_entropy_with_logits_ad_run(shape1, dtype1, shape2, dtype2, reduction, kernel_name, scale=1.0, attrs=None):
     expect, labels, logits, output = gen_data(dtype1, dtype2, reduction, shape1, shape2, scale=scale)
     op_attrs = [reduction]
-
     op_attrs = op_attrs + [scale]
+
+    attrs["pragma_disable_whole_component"] = False
     mod = utils.op_build_test(sparse_softmax_cross_entropy_with_logits_ad.sparse_softmax_cross_entropy_with_logits_ad,
                               [shape1, shape2], [dtype1, dtype2], op_attrs=op_attrs, kernel_name=kernel_name, attrs=attrs)
 

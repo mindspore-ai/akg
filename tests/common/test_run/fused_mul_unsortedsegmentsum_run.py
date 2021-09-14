@@ -60,6 +60,8 @@ def mul_unsortedsegmentsum(input1, input2, ids_tensor, num_segments):
 
 
 def fused_mul_unsortedsegmentsum_execute(shape1, shape2, ids_shape, num_segments, dtype, attrs):
+    attrs["pragma_disable_whole_component"] = False
+    attrs["pragma_disable_loop_reversal"] = False
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)

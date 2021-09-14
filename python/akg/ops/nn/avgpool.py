@@ -193,6 +193,7 @@ def avgpool(data, kernel, stride, strategy):
     dim_info, _ = avgpool_set_dim_func(data, kernel, stride, strategy)
     attrs = {DIM: dim_info}
     attrs['disable_half_to_float_sum_opt'] = True
+    attrs['pragma_disable_whole_component'] = False
 
     shape = [x.value for x in data.shape]
     dtype = data.dtype

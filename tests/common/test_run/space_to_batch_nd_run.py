@@ -20,6 +20,7 @@ from tests.common.test_op import space_to_batch_nd
 
 def space_to_batch_nd_run(input_shape, input_dtype, block, pad, kernel_name, attrs=None):
     op_attrs = [block, pad]
+    attrs["pragma_disable_whole_component"] = False
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)

@@ -47,6 +47,8 @@ def strided_slice_grad_execute(input_shape, begin, end, strides, begin_mask, end
     check_grad_shape(input_shape, begin, end, strides,
                      begin_mask, end_mask, ellipsis_mask, new_axis_mask, shrink_axis_mask,
                      grad_shape, dtype)
+    attrs["pragma_disable_whole_component"] = False
+    attrs["pragma_disable_loop_reversal"] = False
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)

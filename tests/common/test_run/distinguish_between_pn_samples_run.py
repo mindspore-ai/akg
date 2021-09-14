@@ -44,7 +44,7 @@ def generate_expect(input, threshold):
 def distinguish_between_pn_samples_run(shape, threshold, dtype, attrs=None):
     if dtype == 'float32':
         threshold = int(threshold * 1000) / 1000.0
-
+    attrs["pragma_disable_whole_component"] = False
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)

@@ -244,6 +244,7 @@ class UserConfig {
     ParseBoolAttr(attrs, "pragma_rmselfdep", &remove_self_dependence_);
     ParseBoolAttr(attrs, "pragma_force_rmselfdep", &force_remove_self_dependence_);
     ParseBoolAttr(attrs, "pragma_reschedule", &compute_reschedule_);
+    ParseBoolAttr(attrs, "pragma_disable_whole_component", &disable_whole_component_);
     ParseBoolAttr(attrs, "pragma_remove_invariant_dependence", &remove_invariant_dependence_);
     ParseBoolAttr(attrs, "pragma_disable_schedule_shift", &disable_schedule_shift_);
     ParseBoolAttr(attrs, "pragma_enable_schedule_max_constant", &enable_schedule_max_constant_);
@@ -383,6 +384,7 @@ class UserConfig {
   bool GetForceRemoveSelfDependence() const { return force_remove_self_dependence_; }
   bool GetRemoveInvariantDependence() const { return remove_invariant_dependence_; }
   bool GetComputeReschedule() const { return compute_reschedule_; }
+  bool GetDisableWholeComponent() const { return disable_whole_component_; }
   bool GetDisableScheduleShift() const { return disable_schedule_shift_; }
   bool GetEnableScheduleMaxConstant() const { return enable_schedule_max_constant_; }
   bool GetDisableLoopReversal() const { return disable_loop_reversal_; }
@@ -711,9 +713,10 @@ class UserConfig {
   bool force_remove_self_dependence_{false};
   bool remove_invariant_dependence_{true};
   bool compute_reschedule_{false};
+  bool disable_whole_component_{true};
   bool disable_schedule_shift_{false};
   bool enable_schedule_max_constant_{false};
-  bool disable_loop_reversal_{false};
+  bool disable_loop_reversal_{true};
   bool disable_loop_fusion_{false};
   bool reorder_schedule_{false};
   bool sink_last_axis_{true};

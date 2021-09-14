@@ -42,6 +42,7 @@ def get_dynamic_attrs():
     attrs = {
         "help_tiling": 0,
         "pragma_sink_last_axis": False,
+        "pragma_disable_whole_component": False,
         "enable_pre_poly_loop_partition": True,
         "dynamic_shape_bound": 65535,
         "enable_post_poly_loop_partition": False,

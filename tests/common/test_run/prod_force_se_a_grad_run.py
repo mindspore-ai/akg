@@ -69,6 +69,7 @@ def prod_force_grad_cpu(grad_tensor, in_deriv_tensor, nlist_tensor, natoms=192):
     return grad_net
 
 def prod_force_se_a_grad_run(input_shapes, input_dtype, attrs = {}):
+    attrs["pragma_disable_whole_component"] = False
     mod = utils.op_build_test(prod_force_se_a_grad.ProdForceSeAGrad, input_shapes, input_dtype, kernel_name = "force_grad", attrs = attrs)
     args, expect, input1, input2, input3 = gen_data(input_shapes)
     output = utils.mod_launch(mod, args, expect=expect)

@@ -28,6 +28,7 @@ def fused_layer_norm_grad_execute(shape, begin_norm_axis, begin_params_axis, dty
     if begin_params_axis < 0:
         begin_params_axis = in_rank + begin_params_axis
 
+    attrs["pragma_disable_whole_component"] = False
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)

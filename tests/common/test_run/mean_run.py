@@ -57,6 +57,8 @@ def compute_blockdim(shape, axis, dtype):
 def mean_execute(shape, dtype, axis, keepdims, kernel_name, attrs):
     if attrs is None:
         attrs = {}
+    attrs["pragma_disable_whole_component"] = False
+    attrs["pragma_disable_loop_reversal"] = False
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)

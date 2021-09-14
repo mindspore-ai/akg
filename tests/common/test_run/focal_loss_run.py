@@ -41,6 +41,7 @@ def benchmark(x, y, gamma):
 
 
 def focal_loss_run(shape, p_dtype, t_dtype, gamma, kernel_name, attrs):
+    attrs["pragma_disable_whole_component"] = False
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
