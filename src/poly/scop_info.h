@@ -820,7 +820,7 @@ enum Template {
   PURE_ELEM,
   BROADCAST_OP,
   REDUCTION,
-  ALL_REDUCE,
+  ALL_REDUCTION,
   BITWISE_REDUCTION,
   MATMUL,
   TRANSPOSE_OP,
@@ -1033,6 +1033,9 @@ class AnalysisResult {
   std::string GetReduceOpType(isl::id reduce_stmt);
   bool IsReduceInitStmt(const isl::id id) const;
 
+  void SetUseGpuReduceLib(bool use_gpu_reduce_lib) { use_gpu_reduce_lib_ = use_gpu_reduce_lib; }
+  bool GetUseGpuReduceLib() { return use_gpu_reduce_lib_; }
+
   bool GetEnabledAutoTiling() const { return enabled_auto_tiling_; }
   void SetEnableAutoTiling(bool enabled_auto_tiling) { enabled_auto_tiling_ = enabled_auto_tiling; }
 
@@ -1058,11 +1061,12 @@ class AnalysisResult {
   std::unordered_map<const For *, std::vector<ProvideEntry>> provides_ana_;
   std::unordered_map<int, std::string> template_map_ = {
     {0, "DEFAULT"},    {1, "PURE_ELEM"},         {2, "BROADCAST_OP"}, {3, "REDUCTION"},
-    {4, "ALL_REDUCE"}, {5, "BITWISE_REDUCTION"}, {6, "MATMUL"},       {7, "TRANSPOSE_OP"},
+    {4, "ALL_REDUCTION"}, {5, "BITWISE_REDUCTION"}, {6, "MATMUL"},       {7, "TRANSPOSE_OP"},
     {8, "PAD_OP"},     {9, "CUSTOM_CONFIG"},     {10, "CONV"}};
 
  private:
   Template op_template_{Template::DEFAULT};
+  bool use_gpu_reduce_lib_{false};
   ReduceMap reduces_;
   ReduceTensorInfoMap reduce_tensor_info_;
   std::string reduce_direction_;

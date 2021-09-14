@@ -135,7 +135,7 @@ size_t ReduceMappingStrategy::MapThreadHelper(isl::schedule_node &thread_root) {
   }
 
   // When akg reduce lib is enabled, we can try to map other injective statements whose coincidence equals 0
-  if (n_thread_map < thread_cfg->bound && scop_info_.user_config_.GetEnableAkgReduceLib()) {
+  if (n_thread_map < thread_cfg->bound && scop_info_.analysis_result_.GetUseGpuReduceLib()) {
     n_thread_map = thread_cfg->bound;
   }
 
@@ -208,7 +208,7 @@ isl::schedule_node ReduceMappingStrategy::InsertReduceExtension(const isl::sched
 }
 
 bool ReduceMappingStrategy::NeedAtomicAdd(const isl::schedule_node_band &band, size_t n_block_map) {
-  if (!scop_info_.user_config_.GetEnableAkgReduceLib()) {
+  if (!scop_info_.analysis_result_.GetUseGpuReduceLib()) {
     return false;
   }
 

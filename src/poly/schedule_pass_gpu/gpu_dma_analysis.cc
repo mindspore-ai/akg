@@ -172,7 +172,7 @@ std::vector<isl::id> GpuDmaAnalysis::SharedTensorAnalysis() {
                       std::inserter(id_sets, id_sets.begin()));
 
   // mark reduce out tensors for auto tiling
-  if (scop_info_.user_config_.GetTarget() == TARGET_CUDA && scop_info_.user_config_.GetEnableAkgReduceLib()) {
+  if (scop_info_.analysis_result_.GetUseGpuReduceLib()) {
     auto reduce_out_tensors = scop_info_.analysis_result_.GetReduceTensorInfoMap();
     if (!reduce_out_tensors.empty()) {
       id_sets.clear();

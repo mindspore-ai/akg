@@ -366,7 +366,7 @@ isl::schedule MappingOuterBand::DoThreadMapping(const isl::schedule &sch) {
       }
       auto node_bak = node;
       size_t mapped_threads = 0;
-      if (scop_info_.user_config_.GetEnableAkgReduceLib() && node.has_parent() &&
+      if (scop_info_.analysis_result_.GetUseGpuReduceLib() && node.has_parent() &&
           !GetMarkerName(node.parent(), REDUCE_MARKER).empty()) {
         // reduce operator
         is_reduce_stmt = true;
@@ -442,7 +442,7 @@ isl::schedule MappingOuterBand::DoBlockMapping(const isl::schedule &sch) {
   // Step 1. Determine max num dimension of blocks that can be mapped.
   auto block_cfg = scop_info_.user_config_.GetBlockConfig();
   CHECK(block_cfg != nullptr) << "block config is null";
-  auto n_block_map = (scop_info_.user_config_.GetEnableAkgReduceLib() || scop_info_.user_config_.EnableStitchFusion())
+  auto n_block_map = (scop_info_.analysis_result_.GetUseGpuReduceLib() || scop_info_.user_config_.EnableStitchFusion())
                        ? band_node.n_member()
                        : CountConsecutiveCoincident(band_node);
   n_block_map = std::min(block_cfg->MaxDim(), n_block_map);
@@ -475,7 +475,7 @@ isl::schedule MappingOuterBand::DoBlockMapping(const isl::schedule &sch) {
   }
 
   // Step 2. Map outer-most band for c1 tile as usual (and do not check extent when c0 tile is applied manually).
-  if (scop_info_.user_config_.GetEnableAkgReduceLib()) {
+  if (scop_info_.analysis_result_.GetUseGpuReduceLib()) {
     // reduce operator
     ReduceMappingStrategy reduce_op(pass_info_, scop_info_);
     if (scop_info_.user_config_.GetEnableAtomicAdd() && reduce_op.NeedAtomicAdd(band_node, n_block_map)) {
@@ -666,7 +666,7 @@ isl::schedule MappingOuterBand::Run(isl::schedule sch) {
     return sch;
   }
 
-  if (scop_info_.user_config_.GetEnableAkgReduceLib()) {
+  if (scop_info_.analysis_result_.GetUseGpuReduceLib()) {
     ReduceManager reduce_manager(pass_info_, scop_info_);
     sch = reduce_manager.DetectAndMarkReduce(sch);
   }

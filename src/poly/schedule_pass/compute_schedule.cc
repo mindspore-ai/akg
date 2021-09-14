@@ -75,7 +75,7 @@ void ComputeSchedule::SetIslOptions() {
 }
 
 isl::schedule ComputeSchedule::PermuteOuterBand(const isl::schedule sch) {
-  if (!scop_info_.user_config_.GetEnableAkgReduceLib()) {
+  if (!scop_info_.analysis_result_.GetUseGpuReduceLib()) {
     return sch;
   }
   auto node = GetOuterBand(sch.get_root());
