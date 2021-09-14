@@ -3,7 +3,7 @@ set(gtest_CFLAGS "-D_FORTIFY_SOURCE=2 -O2 -fstack-protector-all -Wl,-z,relro,-z,
 
 if(ENABLE_GITEE)
     set(GTEST_URL "https://gitee.com/mirrors/googletest/repository/archive/release-1.8.1.tar.gz")
-    set(GTEST_MD5 "0ec077324f27c2685635ad4cc9bdc263")
+    set(GTEST_MD5 "711b149c9a74e4602235bcc3f8d4b60f")
 else()
     set(GTEST_URL "https://github.com/google/googletest/archive/release-1.8.1.tar.gz")
     set(GTEST_MD5 "2e6fbeb6a91310a16efe181886c59596")

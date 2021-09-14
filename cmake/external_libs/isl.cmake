@@ -5,7 +5,7 @@ set(isl_DEPEND_LIB_DIR "-DGMP_LIBRARY=${GMP_LIBRARY}")
 
 if(ENABLE_GITEE)
     set(ISL_URL "https://gitee.com/mirrors/isl/repository/archive/isl-0.22?format=tar.gz")
-    set(ISL_MD5 "2098cec031b46c5837404a0de0e0b8ba")
+    set(ISL_MD5 "edff5e9d0f62446ccaeb1e746903f5c8")
 else()
     set(ISL_URL "http://isl.gforge.inria.fr/isl-0.22.tar.gz")
     set(ISL_MD5 "671d0a5e10467a5c6db0893255278845")
