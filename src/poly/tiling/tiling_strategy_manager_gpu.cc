@@ -287,7 +287,8 @@ void ReduceStrategy::AddGpuConstraint() {
     return key.find(AT_TRANSPOSE) != std::string::npos;
   };
   int64_t reduce_length = 1;
-  analyzer_->ForEachAxisTopDown([this, &depth, &reduce_length, &HasTranspose](TileAxis *axis) {
+  int64_t nonreduce_length = 1;
+  analyzer_->ForEachAxisTopDown([this, &depth, &reduce_length, &nonreduce_length, &HasTranspose](TileAxis *axis) {
     if (!has_transpose_) {
       has_transpose_ = std::any_of(axis->attrs.begin(), axis->attrs.end(), HasTranspose);
     }
@@ -298,6 +299,9 @@ void ReduceStrategy::AddGpuConstraint() {
     ++depth;
     if (axis->mc_sup) {
       injective_axes_.emplace_back(axis);
+      if (auto ext = axis->range_extent.as<IntImm>()) {
+        nonreduce_length *= ext->value;
+      }
       return;
     }
     if (auto ext = axis->range_extent.as<IntImm>()) {
@@ -315,10 +319,18 @@ void ReduceStrategy::AddGpuConstraint() {
       analyzer_->scop_info_.user_config_.SetEnableOneDimThread(true);
       analyzer_->GetTileLogger().AppendLine(GPU_MAPPING, "ReduceLength <= 32, enable onedim thread.");
     }
-    if ((analyzer_->scop_info_.analysis_result_.GetReduceDirection() == Y_DIRECTION && reduce_length <= 32) ||
-        (analyzer_->scop_info_.analysis_result_.GetReduceDirection() == X_DIRECTION && reduce_length < 32)) {
+    if ((analyzer_->scop_info_.analysis_result_.GetReduceDirection() == Y_DIRECTION &&
+        reduce_length <= reduce_length_limit) ||
+        (analyzer_->scop_info_.analysis_result_.GetReduceDirection() == X_DIRECTION &&
+        reduce_length < reduce_length_limit)) {
       analyzer_->scop_info_.analysis_result_.SetUseGpuReduceLib(false);
       analyzer_->GetTileLogger().AppendLine(GPU_MAPPING, "Small Reduction (Y<=32, X<32), disable akg reduce lib.");
+    }
+    if (analyzer_->scop_info_.analysis_result_.GetReduceDirection() == X_DIRECTION &&
+        reduce_length < 2 * reduce_length_limit && nonreduce_length > max_y_z_dim_block_ * max_x_y_dim_thread_) {
+      analyzer_->scop_info_.analysis_result_.SetUseGpuReduceLib(false);
+      analyzer_->GetTileLogger().AppendLine(GPU_MAPPING,
+        "Small Reduction (X<64) and large nonreduction axis (exceeding block and thread limit) , disable akg reduce lib.");
     }
   }
 
