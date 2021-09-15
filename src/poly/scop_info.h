@@ -1201,7 +1201,7 @@ class CubeInfo {
   void UpdateComputeAttrInfo();
   void FindComputeAttr(const std::vector<std::string> &op_keys);
   bool IsFilterCanByPass();
-  bool IsConvHeadTail(const std::string &conv_output, const isl::id &stmtId, const StmtOpInfo &op_info,
+  bool IsConvHeadTail(const isl::id &stmtId, const StmtOpInfo &op_info,
                       const StmtIdHashMap &op_write_map);
   std::string ConvOutName();
   void ComputeByPassL1();
@@ -1262,7 +1262,8 @@ class ScopInfo {
   isl::ctx GetCtx() const { return ctx_; }
   bool MayWriteAfterRead(const std::string &name) const;
   bool IsElewiseVMStmt(const isl::id &id) const;
-  void CreateDataFlowInfo();
+  void CreateDataFlow();
+
   StmtIdHashMap StmtWriteMap();
   StmtIdHashMap StmtReadMap();
   StmtIdHashMap StmtCopyinMap();

@@ -1123,8 +1123,7 @@ bool ScopInfo::IsFunctionalCopyin(const std::string &tensor_name, const StmtIdHa
   return false;
 }
 
-bool CubeInfo::IsConvHeadTail(const std::string &conv_output, const isl::id &stmtId, const StmtOpInfo &op_info,
-                              const StmtIdHashMap &op_write_map) {
+bool CubeInfo::IsConvHeadTail(const isl::id &stmtId, const StmtOpInfo &op_info, const StmtIdHashMap &op_write_map) {
   if (!IsConv()) return false;
 
   if (op_info.isMMU || op_info.isMMUAssign) return false;
@@ -1134,70 +1133,69 @@ bool CubeInfo::IsConvHeadTail(const std::string &conv_output, const isl::id &stm
   if (op_write_map.find(stmtId) == op_write_map.end()) return false;
 
   if (op_write_map.at(stmtId).size() != 1) return false;
-
   if (op_info.ops[0] == PolyOpType::broadcast || op_info.ops[0] == PolyOpType::assignment) {
     isl::id writeId = op_write_map.at(stmtId)[0];
-    if (writeId.get_name() == conv_output) return true;
+    if (writeId.get_name() == this->ConvOutName()) return true;
   }
 
   return false;
 }
 
-void ScopInfo::CreateDataFlowInfo() {
-  StmtIdHashMap op_write_map = StmtWriteMap();
-  StmtIdHashMap op_read_map = StmtReadMap();
-  std::string conv_output;
-  if (mmu_info_.IsConv()) {
-    conv_output = mmu_info_.ConvOutName();
-  }
-  uint64_t stmtNum = analysis_result_.GetStmtOpInfoMap().size();
-  analysis_result_.stmt_type_.resize(stmtNum);
-  DMADataFlow dma_dataflow;
-  for (auto stmt : analysis_result_.GetStmtOpInfoMap()) {
-    std::string name = stmt.first.get_name();
+void ScopInfo::CreateDataFlow() {
+  auto GetStmtType = [this](const StmtOpInfo &stmt) {
+    if (stmt.isMMU && mmu_info_.IsConv()) {
+      return STMT_OP_TYPE::MMU_CONV;
+    } else if (stmt.isMMU && !mmu_info_.IsConv()) {
+      if (stmt.A_.find(_FRACTAL_C1) != std::string::npos || stmt.A_.find(LOCAL_C1) != std::string::npos ||
+          stmt.B_.find(LOCAL_C1) != std::string::npos || stmt.B_.find(_FRACTAL_C1) != std::string::npos) {
+        return STMT_OP_TYPE::MMU_SPEC_GEMM;
+      }
+      return STMT_OP_TYPE::MMU_GEMM;
+    } else if (stmt.isIm2col || stmt.is_load_im2col) {
+      return STMT_OP_TYPE::IM2COL_BUF;
+    } else {
+      return STMT_OP_TYPE::INST;
+    }
+  };
+
+  auto SetStmtType = [this](int index, std::string name, STMT_OP_TYPE type) {
+    analysis_result_.stmt_type_[index] = std::make_pair(name, type);
+  };
+
+  auto GetStmtIndex = [](const isl::id &stmt_id) {
+    std::string name = stmt_id.get_name();
     size_t pos = name.find("_");
     CHECK(pos != name.size() - 1);
     std::string subNum = name.substr(pos + 1, name.size() - pos - 1);
     char *endptr = nullptr;
     const int radix = 10;
-    size_t num = strtol(subNum.c_str(), &endptr, radix);
+    size_t index = strtol(subNum.c_str(), &endptr, radix);
     if (endptr == nullptr || *endptr != '\0') LOG(FATAL) << "failed to convert string " << subNum << " to number";
+    return index;
+  };
 
-    if (mmu_info_.IsConv() && mmu_info_.IsConvHeadTail(conv_output, stmt.first, stmt.second, op_write_map)) {
-      analysis_result_.stmt_type_[num] = std::make_pair(stmt.first.get_name(), STMT_OP_TYPE::INST);
-      continue;
-    }
-
-    if (stmt.second.isMMU && mmu_info_.IsConv()) {
-      analysis_result_.stmt_type_[num] = std::make_pair(stmt.first.get_name(), STMT_OP_TYPE::MMU_CONV);
-      dma_dataflow.CreateStmtDataFlow(STMT_OP_TYPE::MMU_CONV, stmt.first, stmt.second, op_read_map, op_write_map);
-    }
-
-    if (stmt.second.isMMU && !mmu_info_.IsConv()) {
-      analysis_result_.stmt_type_[num] = std::make_pair(stmt.first.get_name(), STMT_OP_TYPE::MMU_GEMM);
-      dma_dataflow.CreateStmtDataFlow(STMT_OP_TYPE::MMU_GEMM, stmt.first, stmt.second, op_read_map, op_write_map);
-    }
-
-    if (stmt.second.isIm2col || stmt.second.is_load_im2col) {
-      analysis_result_.stmt_type_[num] = std::make_pair(stmt.first.get_name(), STMT_OP_TYPE::IM2COL_BUF);
-      dma_dataflow.CreateStmtDataFlow(STMT_OP_TYPE::IM2COL_BUF, stmt.first, stmt.second, op_read_map, op_write_map);
-    }
-
-    if (!stmt.second.isMMU && !stmt.second.isMMUAssign) {
-      analysis_result_.stmt_type_[num] = std::make_pair(stmt.first.get_name(), STMT_OP_TYPE::INST);
-      dma_dataflow.CreateStmtDataFlow(STMT_OP_TYPE::INST, stmt.first, stmt.second, op_read_map, op_write_map);
-    }
-
-    if (stmt.second.isMMUAssign) {
-      analysis_result_.stmt_type_[num] = std::make_pair(stmt.first.get_name(), STMT_OP_TYPE::INST);
+  StmtIdHashMap op_write_map = StmtWriteMap();
+  StmtIdHashMap op_read_map = StmtReadMap();
+  std::string conv_output;
+  uint64_t stmtNum = analysis_result_.GetStmtOpInfoMap().size();
+  analysis_result_.stmt_type_.resize(stmtNum);
+  for (auto &stmt : analysis_result_.GetStmtOpInfoMap()) {
+    auto &id = stmt.first;
+    auto &stmt_info = stmt.second;
+    auto index = GetStmtIndex(id);
+    bool no_flow = stmt_info.isMMUAssign || mmu_info_.IsConvHeadTail(id, stmt_info, op_write_map);
+    if (no_flow) {
+      SetStmtType(index, id.get_name(), STMT_OP_TYPE::INST);
+    } else {
+      auto stmt_type = GetStmtType(stmt_info);
+      SetStmtType(index, id.get_name(), stmt_type);
+      DispatchDataFlow(stmt_type, id, stmt_info, op_read_map, op_write_map);
     }
   }
-  dma_dataflow.FusionAnalysis();
-  std::map<std::string, std::vector<std::string>> tensor_name_flows;
-  std::map<std::string, MemFlow> tensor_mem_flows;
-  dma_dataflow.OpDataflowInfo(tensor_name_flows, tensor_mem_flows);
-  analysis_result_.SetTensorNameFlows(tensor_name_flows);
-  analysis_result_.SetTensorMemFlows(tensor_mem_flows);
+  FusionAnalysis();
+  auto data_flow = DataFlow::Get().ExtractCombinedFlow();
+  analysis_result_.SetTensorMemFlows(data_flow.first);
+  analysis_result_.SetTensorNameFlows(data_flow.second);
 }
 
 void ScopInfo::AddPartitionInfoToData(const std::vector<std::vector<int>> &partition_info) {
