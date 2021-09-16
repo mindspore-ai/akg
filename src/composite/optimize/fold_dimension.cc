@@ -124,9 +124,6 @@ class DimensionFolderPlan : public IRVisitor {
       CHECK(transpose_perm_.size() == inputs[0]->shape.size());
       AddTransposeRelation(inputs[0], output, transpose_perm_);
       transpose_perm_.clear();
-    } else if (prim->name == "Reshape") {
-      CHECK(inputs.size() == 1);
-      AddReshapeRelation(inputs[0], output);
     } else {
       for (FoldTensor *input : inputs) {
         Relation rel(output);
