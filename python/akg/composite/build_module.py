@@ -276,7 +276,7 @@ def _get_repository(file_name, desc_d, target=None):
     return repository
 
 
-def _get_repo_attr(compute, shape, dtype, repo, batchmatmul):
+def _get_repo_attr(desc_d, compute, shape, dtype, repo, batchmatmul):
     repo_attr = get_attr_from_dict([compute, shape, dtype, 'metadata', 'attrs'], repo, {})
     if repo_attr and batchmatmul:
         repo_attr = _set_tiling_attrs(desc_d['output_desc'][0]['shape'], repo_attr)
@@ -381,7 +381,7 @@ def _build_to_module_gpu(desc_s, desc_d, attrs=None, poly=False):
         batchmatmul = "BatchMatMul" in all_ops
         if batchmatmul:
             shape = "any_shape"
-        repo_attr = _get_repo_attr(compute, shape, dtype, repository_gpu, batchmatmul)
+        repo_attr = _get_repo_attr(desc_d, compute, shape, dtype, repository_gpu, batchmatmul)
         attrs = merge_attrs(attrs, repo_attr)
         attr_list = ['dim', 'bind_block', 'bind_thread']
         for item in attr_list:
@@ -447,7 +447,7 @@ def _build_to_module_ascend(desc_s_in, desc_d_in, attr=None, use_repo=True):
             _, desc_s = _set_compute_attrs(desc_d, attr)
         elif use_repo:
             compute, shape, dtype = generate_trait(desc_d)
-            repo_attr = _get_repo_attr(compute, shape, dtype, repository, False)
+            repo_attr = _get_repo_attr(desc_d, compute, shape, dtype, repository, False)
             attr = merge_attrs(attr, repo_attr)
             if attr.get('dim') in (None, ''):
                 tiling = get_attr_from_dict([compute, shape, dtype, 'dim'], repository)
@@ -492,7 +492,7 @@ def _build_to_module_ascend(desc_s_in, desc_d_in, attr=None, use_repo=True):
                 elif "online_tuning" in attr:
                     # If buffer stitch attr not in repo, use online tuning
                     tuning_attr = _get_online_tune_attr(desc_s_in, attrs_list[0],
-                                                        _get_repository_file_path("repository.json"))
+                                                        get_repository_file_path("repository.json"))
                     attrs_list[0].update(tuning_attr)
             # Update sub json attr
             common_attr, sub_attr = split_stitch_attr(attrs_list[0], len(block_jsons[0]))
