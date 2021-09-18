@@ -75,7 +75,7 @@ void ComputeSchedule::SetIslOptions() {
     CHECK(status == isl_stat_ok);
   }
 
-  if (scop_info_.user_config_.GetDisableLoopReversal()) {
+  if (scop_info_.user_config_.GetDisableLoopReversal() && scop_info_.user_config_.GetTarget() == TARGET_CCE) {
     status = isl_options_set_schedule_nonneg_var_coefficient(ctx, 1);
     CHECK(status == isl_stat_ok);
   }
