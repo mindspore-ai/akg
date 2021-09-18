@@ -53,5 +53,12 @@
                 "bind_thread": "128 8"
             }
         }
+    },
+    "7.Sub45.Exp1.Mul15.Sub15.Cast1.Cast1.RealDiv1213.Mul78.ReduceSum1.Mul1.Add14.111217": {
+        "metadata": {
+            "attrs": {
+                "pragma_reschedule": true
+            }
+        }
     }
 }
