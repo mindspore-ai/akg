@@ -201,6 +201,8 @@ def fused_bn_grad_5D_all_run(shape, dtype, eps, kernel_name, attrs):
     shape_nc1c0 = (shape[0], shape[1], 1, 1, shape[4])
     shape_c1c0 = (1, shape[1], 1, 1, shape[4])
 
+    attrs["pragma_disable_whole_component"] = False
+    attrs["pragma_disable_loop_reversal"] = False
     in_shapes = [shape, shape, shape_c1c0, shape_c1c0, shape_c1c0]
     in_dtypes = [dtype, dtype, "float32", "float32", "float32"]
     # np.random.seed(3)
