@@ -163,13 +163,7 @@ __device__ __forceinline__ void ReduceXInBlock(T *shared_buf,     // Shared memo
     }
   }
   __syncthreads();
-  // choose proper algorithm for different scenarios.
-  if (BlockDimX == UpperBound) {
-    if (tx < 32)
-      WarpReduceShfl<ReduceOp, BlockDimX>(shared_buf, op, tx, ty);
-  } else {
-    WarpReduceSafe<ReduceOp, BlockDimX, UpperBound>(shared_buf, op, tx, ty);
-  }
+  WarpReduceSafe<ReduceOp, BlockDimX, UpperBound>(shared_buf, op, tx, ty);
   __syncthreads();
 }
 
