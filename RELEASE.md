@@ -1,3 +1,22 @@
+## Release 1.5.0
+### Major Features and Improvements
+  * [STABLE] New operators developing: Tensor of Tensor operators(Gather/GatherNd/TensorScatterAdd/UnsortedSegmentSum), which can be used to support GNN networks.[!323](https://gitee.com/mindspore/akg/pulls/323)(GPU)
+  * [STABLE] Add a topi op of UserDefine Op in AKG, which can be compiled from func_source_string or op_imply_path.[!319](https://gitee.com/mindspore/akg/pulls/319)(GPU)
+  * [STABLE] Lower interface Refactor: add StageLower for stage lower case.[!310](https://gitee.com/mindspore/akg/pulls/310)(GPU)
+  * [STABLE] The profiling suit for new runtime process.[!306](https://gitee.com/mindspore/akg/pulls/306)(ASCEND)
+
+### Bug fixes
+  * Fixed memory promotion bug: sort the clusters before merging.[!338](https://gitee.com/mindspore/akg/pulls/338) (ASCEND)
+  * Fixed irregular-reduce bug: replace shfl.down with shared memory reducetion.[!332](https://gitee.com/mindspore/akg/pulls/332) (GPU)
+  * Fixed foldDimension bug: build wrong axis relation of relation.[!302](https://gitee.com/mindspore/akg/pulls/302) (GPU)
+
+### Contributors
+Thanks goes to these wonderful people:
+
+yangsijia, xxxxxxw, polyhedral, zhangrenwei, yiyanzhi, xixixian, hujiahui8, zhengzuohe, lishanni, zhangzhaochuang, xuhui, liu
+chao, gengzhen, xiaruijie,chenlei_autodiff, lingyunli63, wYann, lvwenyuan, peiwenfang, hanhuifeng, gaoxiong, chengyun
+Contributions of any kind are welcome!
+
 ## Release 1.3.0
 ### Major Features and Improvements
   * [STABLE] Support optimizing GEMM && Conv by using polyhedral + Tensorcore, as well as providing an akg::fragment_add/sub/mul/div library for GEMM op fusions. [!156](https://gitee.com/mindspore/akg/pulls/156) (GPU)
