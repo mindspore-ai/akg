@@ -168,9 +168,9 @@ class CodeGenCUDA final : public CodeGenC {
   // whether replace cce variable with constant in vec_store
   bool replace_cce{false};
   // variable to replace
-  const Variable* loop_var;
+  const Variable* loop_var{nullptr};
   // index to replace cce with
-  int current_index;
+  int current_index{0};
   // do not set value to next LetStmt if true
   bool no_init_value{false};
   // ignore next allocate stmt if true (trick to bypass some tests)

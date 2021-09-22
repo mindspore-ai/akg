@@ -615,6 +615,8 @@ void CodeGenCUDA::VisitExpr_(const Call *op, std::ostream& os) {
       os << op->name;
       os << "(";
       os << op->args[0];
+      os << ",";
+      os << op->args[1];
       os << ")";
       return;
     }
@@ -860,7 +862,8 @@ void CodeGenCUDA::VisitStmt_(const Allocate* op) {
       << "Can only handle constant size stack allocation for now";
     const Variable* buffer = op->buffer_var.as<Variable>();
     std::string scope = alloc_storage_scope_.at(buffer);
-    if (scope.find("wmma.") == 0) {
+    std::string prefix = "wmma.";
+    if (scope.compare(0, prefix.size(), prefix) == 0) {
       std::string matrix_scope = scope;
       auto pos = matrix_scope.find(".");
       if (pos != std::string::npos) {
