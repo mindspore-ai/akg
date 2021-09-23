@@ -22,6 +22,11 @@
  */
 // Flattens storage from multi-dimensional array to 1D
 // buffer access as in Halide pipeline.
+
+/*
+ * 2021.9.22
+ *   Add index as argument for StandardNormal function.
+ */
 #include <tvm/arithmetic.h>
 #include <tvm/ir.h>
 #include <tvm/expr.h>
@@ -143,6 +148,16 @@ class StorageFlattener : public IRMutator {
           Call::Intrinsic));
     } else {
       Stmt body = e.buffer.vstore(e.RelIndex(op->args), op->value);
+      if (body.as<Store>() && op->value.as<Call>() &&
+          op->value.as<Call>()->name == "StandardNormal") {
+        auto call_node = op->value.as<Call>();
+        Array<Expr> new_args;
+        new_args.push_back(call_node->args[0]);
+        new_args.push_back(body.as<Store>()->index);
+        auto new_value = Call::make(call_node->type, call_node->name, new_args,
+                                    call_node->call_type, call_node->func, call_node->value_index);
+        body = e.buffer.vstore(e.RelIndex(op->args), new_value);
+      }
       if (create_bound_attributes_ && ShapeIsValid(e.buffer->shape)) {
         shape_collector_.push_back(
             std::make_pair(e.buffer->data, e.buffer->shape));
