@@ -60,5 +60,40 @@
                 "pragma_reschedule": true
             }
         }
+    },
+    "11.Add12.Add14.Add17.Cast7.Add12.Mul111.Sub1314.Mul12.ReduceSum1.Mul119.Mul1.Mul622.ReduceSum7.Mul122.ReduceSum8.Mul1.Mul16.Add14.Mul1.Mul1330.Mul116.151721222931": {
+        "metadata": {
+            "attrs": {
+                "pragma_reschedule": true
+            }
+        }
+    },
+    "8.Add23.Mul12.Sub67.Mul12.ReduceSum1.Mul112.Mul1.Mul615.ReduceSum7.Mul115.ReduceSum8.Mul1.Mul16.Add14.Mul1.Mul1323.Mul116.81014152224": {
+        "metadata": {
+            "attrs": {
+                "pragma_reschedule": true
+            }
+        }
+    },
+    "7.Cast1.Mul13.Sub56.Mul12.ReduceSum1.Mul111.Mul1.Mul614.ReduceSum7.Mul114.ReduceSum8.Mul1.Mul16.Add14.Mul1.Mul1322.Mul116.913142123": {
+        "metadata": {
+            "attrs": {
+                "pragma_reschedule": true
+            }
+        }
+    },
+    "11.Add23.Cast2.Add12.Add17.Add110.Mul110.Sub1314.Mul12.ReduceSum1.Mul119.Mul1.Mul622.ReduceSum7.Mul122.ReduceSum8.Mul1.Mul16.Add14.Mul1.Mul1330.Mul116.151721222931": {
+        "metadata": {
+            "attrs": {
+                "pragma_reschedule": true
+            }
+        }
+    },
+    "13.GreaterEqual6.Cast1.LessEqual8.Cast1.Add56.Add18.Add111.Cast11.Add12.Reshape1.Mul17.Mul110.Mul1.Mul121.Mul121.Sub2425.Mul12.ReduceSum1.Mul130.Mul1.Mul633.ReduceSum7.Mul133.ReduceSum8.Mul1.Mul16.Add14.Mul1.Mul1341.Mul116.262832334042": {
+        "metadata": {
+            "attrs": {
+                "pragma_reschedule": true
+            }
+        }
     }
 }
