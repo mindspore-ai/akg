@@ -15,6 +15,8 @@
  */
 
 #include "poly/scop.h"
+#include "poly/tune_info_adapter.h"
+
 namespace akg {
 namespace ir {
 /*!
@@ -59,7 +61,8 @@ class Poly {
 
     if (is_tuning) {
       if (scop_->info_.user_config_.GetUseNewSpace()) {
-        spaces_ = GenerateTuningSpace(sched, scop_->info_, stmt_, scop_->info_.user_config_.GetDumpTuningLevel()); 
+        auto tune_info = GenerateTuningInfo(sched, &scop_->info_, stmt_);
+        spaces_ = GenerateTuningSpace(tune_info.get(), scop_->info_.user_config_.GetDumpTuningLevel());
       } else {
         spaces_ = GenerateTilingSpace(sched, scop_->info_, stmt_, scop_->info_.user_config_.GetDumpTuningLevel());
       }

@@ -18,17 +18,11 @@
 
 #include "ir_pass.h"
 #include "gpu_isl_emitter.h"
+#include "auto_tune/tune_info.h"
 
 namespace akg {
 namespace ir {
 namespace poly {
-
-/*!
- * IslEmitter for GPU
- */
-constexpr auto AKG_ALL_REDUCE = "akg_reduce::ALL_REDUCE";
-constexpr auto AKG_X_REDUCE = "akg_reduce::REDUCE2D_X";
-constexpr auto AKG_Y_REDUCE = "akg_reduce::REDUCE2D_Y";
 
 // example:
 // red_init_SumOp_S_1_0
@@ -42,12 +36,8 @@ constexpr auto DEFAULT_TENSOR_INDEX = "[0]";
 
 constexpr auto USELESS_INDEX = "0";
 constexpr auto USELESS_SHAPE_SIZE = "1";
-constexpr auto SCALAR_TENSOR_PREFIX = "acc_";
-constexpr auto SCALAR_KHT_PREFIX = "kahan_t";
-constexpr auto SCALAR_KHY_PREFIX = "kahan_y";
-constexpr auto SCALAR_KHC_PREFIX = "kahan_c";
+
 constexpr auto SHARED_MEMORY_PREFIX = "__shared__";
-constexpr auto SHARED_TENSOR_PREFIX = "red_buf";
 
 constexpr auto MEM_TYPE_SHARED = "shared";
 constexpr auto MEM_TYPE_LOCAL = "local";

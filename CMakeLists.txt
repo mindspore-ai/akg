@@ -102,8 +102,16 @@ if(NOT USE_CUDA)
   endif()
 endif()
 
-file(COPY ${AKG_SOURCE_DIR}/python/akg DESTINATION
-    ${CMAKE_CURRENT_BINARY_DIR})
+if (BUILD_AUTO_TUNE)
+  set(PY_AUTOTUNE ${AKG_SOURCE_DIR}/python/akg/auto_tune)
+  if (EXISTS ${PY_AUTOTUNE})
+    file(COPY ${PY_AUTOTUNE} DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+  else()
+    message(FATAL_ERROR "Files ${PY_AUTOTUNE} does not exist. Please build auto tune in tuning-service branch or remove -DBUILD_AUTO_TUNE option.")
+  endif()
+else()
+  file(COPY ${AKG_SOURCE_DIR}/python/akg DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+endif()
 
 # Utility functions
 include(${TVM_DIR}/cmake/util/Util.cmake)
@@ -202,6 +210,13 @@ file(GLOB_RECURSE GROUP_INCLUDE "${TVM_DIR}/src/*.h"
 assign_source_group("Source" ${GROUP_SOURCE})
 assign_source_group("Include" ${GROUP_INCLUDE})
 
+if (BUILD_AUTO_TUNE)
+  # Build auto tune lib only
+  file(GLOB COMPILER_SRCS ${AKG_SOURCE_DIR}/src/auto_tune/*.cc)
+  add_library(tune SHARED ${COMPILER_SRCS})
+  install(TARGETS tune DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/auto_tune)
+  return()
+endif()
 # Source file lists
 file(
   GLOB
@@ -240,6 +255,27 @@ file(
   ${AKG_SOURCE_DIR}/src/composite/optimize/*.cc
   ${AKG_SOURCE_DIR}/src/common/*.cc
   ${AKG_SOURCE_DIR}/src/runtime/stub/*.cc)
+
+# Check if auto tune lib exists and remove stub if exists
+if (USE_AUTO_TUNE)
+  find_library(AUTO_TUNE_LIB NAMES tune HINTS ${CMAKE_CURRENT_BINARY_DIR})
+  if (EXISTS ${AUTO_TUNE_LIB})
+    message("-- Find ${AUTO_TUNE_LIB}")
+    file(GLOB AUTO_TUNE_STUB_SRC ${AKG_SOURCE_DIR}/src/auto_tune/*.cc)
+    list(REMOVE_ITEM COMPILER_SRCS ${AUTO_TUNE_STUB_SRC})
+  else()
+    find_python_package(PY_LIB)
+    find_library(AUTO_TUNE_LIB NAMES tune HINTS ${PY_LIB}/auto_tune)
+    if (EXISTS ${AUTO_TUNE_LIB})
+      message("-- Find ${AUTO_TUNE_LIB} and copy to ${CMAKE_CURRENT_BINARY_DIR}")
+      file(COPY ${AUTO_TUNE_LIB} DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+      file(GLOB AUTO_TUNE_STUB_SRC ${AKG_SOURCE_DIR}/src/auto_tune/*.cc)
+      list(REMOVE_ITEM COMPILER_SRCS ${AUTO_TUNE_STUB_SRC})
+    else()
+      message("Cannot use auto tune: lib not found.")
+    endif()
+  endif()
+endif()
 
 file(GLOB RUNTIME_STUB_SRC ${AKG_SOURCE_DIR}/src/runtime/stub/*.cc)
 if(USE_CCE_RT OR USE_KC_AIR)
@@ -313,7 +349,12 @@ endif(USE_CUDA)
 add_library(akg SHARED ${COMPILER_SRCS} ${RUNTIME_SRCS} ${TOPI_SRCS} ${AKG_EXTEND})
 
 add_dependencies(akg akg::isl_fixed)
-target_link_libraries(akg ${TVM_LINKER_LIBS} ${TVM_RUNTIME_LINKER_LIBS} akg::isl_fixed ${GMP_LIBRARY} pthread)
+
+if (EXISTS ${AUTO_TUNE_LIB})
+  target_link_libraries(akg ${TVM_LINKER_LIBS} ${TVM_RUNTIME_LINKER_LIBS} akg::isl_fixed ${GMP_LIBRARY} pthread ${AUTO_TUNE_LIB})
+else()
+  target_link_libraries(akg ${TVM_LINKER_LIBS} ${TVM_RUNTIME_LINKER_LIBS} akg::isl_fixed ${GMP_LIBRARY} pthread)
+endif()
 
 if(USE_CCE_PROFILING)
   set(ASCEND_PATH /usr/local/Ascend)
@@ -328,6 +369,9 @@ target_include_directories(akg PRIVATE "${TVM_DIR}/topi/include")
 # Installation rules
 if(ENABLE_AKG)
   install(TARGETS akg DESTINATION lib${LIB_SUFFIX})
+  if (EXISTS ${AUTO_TUNE_LIB})
+    install(FILES ${AUTO_TUNE_LIB} DESTINATION lib${LIB_SUFFIX})
+  endif()
 else()
   install(TARGETS akg DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/akg/lib)
 endif()
@@ -346,4 +390,3 @@ install(
   DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/akg/include)
 file(GLOB REPOSITORY_FILE_LIST ${AKG_SOURCE_DIR}/python/akg/composite/*.json)
 install(FILES ${REPOSITORY_FILE_LIST} DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/akg/config)
-

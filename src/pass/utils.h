@@ -452,6 +452,7 @@ constexpr auto REDUCE_LIB_TYPE_ORIGIN = "origin";
 constexpr auto REDUCE_LIB_TYPE_PARIS = "paris";
 constexpr auto AKG_REDUCE_LIB_SPACE = "akg_reduce";
 constexpr auto AKG_REDUCE_LIB_NAME = "AkgReduce";
+constexpr auto AKG_KAHAN_LIB_NAME = "AkgKahanAccumulation";
 constexpr auto PARIS_REDUCE_LIB_SPACE = "paris_reduce";
 constexpr auto PARIS_REDUCE_LIB_NAME = "ParisReduce";
 constexpr auto AKG_REDUCE_RETURN_NAME = "AkgAtomicReturn";

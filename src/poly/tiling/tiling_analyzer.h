@@ -31,14 +31,13 @@
 #include "pass/utils.h"
 #include "poly/scop_info.h"
 #include "poly/tiling/tiling_utils.h"
+#include "auto_tune/tune_info.h"
 
 namespace akg {
 namespace ir {
 namespace poly {
 // common integers
 constexpr auto ALIGN_BYTES = 32;
-constexpr auto MMA_UNIT = 16;
-constexpr auto MIN_TILE = 1;
 constexpr auto EXCEED_MEM_CODE = -2;
 constexpr auto BISEC_REDUCE_MEM_EXPANSION = 2;
 constexpr auto DUMP_LEVEL_GENERAL = 1;
@@ -94,8 +93,6 @@ inline Expr CastIntToExpr(const int value) { return air::ir::IntImm::make(Int(32
 
 enum TileOpType { VECTOR_OP, CONV_OP, GEMM_OP };
 
-enum TileLevel { CACHE0 = 0, CACHE1 };
-
 enum TileVarId { UNDEFINE = -1, VAR };
 
 enum SpItemPerThread { FULL = -1, AUTO };
@@ -135,12 +132,9 @@ constexpr auto AT_MEM_RATIO = "MEM_RATIO";
 constexpr auto AT_THREAD_MIN = "THREAD_MIN";
 constexpr auto AT_THREAD_MAX = "THREAD_MAX";
 constexpr auto AT_THREAD_MOD = "THREAD_MOD";
-constexpr auto AT_THREAD_CFG = "THREAD_CONFIG";
 constexpr auto AT_BLOCK_MIN = "BLOCK_MIN";
 constexpr auto AT_BLOCK_MAX = "BLOCK_MAX";
 constexpr auto AT_BLOCK_MOD = "BLOCK_MOD";
-constexpr auto AT_BLOCK_CFG = "BLOCK_CONFIG";
-constexpr auto AT_TEMPLATE = "TEMPLATE";
 
 class TilingAnalyzer;
 

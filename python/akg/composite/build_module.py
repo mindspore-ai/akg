@@ -205,13 +205,16 @@ def _set_atomic_add_attrs(desc_d, attrs, poly):
 
 
 def _get_online_tune_attr(desc_s, attrs, repo_path, use_new_space=True):
+    try:
+        import auto_tune
+    except ImportError:
+        raise ImportError("Import auto_tune fail, please install auto_tune using pip")
+
     desc_d = json.loads(desc_s)
     if "buffer_stitch" in desc_d:
-        from akg import auto_tune
         best_config = auto_tune.tune_stitch_segment(desc_s,
                                                     repo_path=repo_path)
     elif use_new_space:
-        from akg import auto_tune
         task_options = auto_tune.TaskOptions(tune_level=attrs["online_tuning"],
                                              use_new_space=use_new_space,
                                              attrs=attrs,

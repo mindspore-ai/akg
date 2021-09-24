@@ -357,3 +357,19 @@ function(akg_add_pkg pkg_name )
         endif()
     endif()
 endfunction()
+
+function(find_python_package out_lib)
+  # Use PYTHON_EXECUTABLE if it is defined, otherwise default to python
+  if("${PYTHON_EXECUTABLE}" STREQUAL "")
+    set(PYTHON_EXECUTABLE "python3")
+  else()
+    set(PYTHON_EXECUTABLE "${PYTHON_EXECUTABLE}")
+  endif()
+
+  execute_process(
+          COMMAND "${PYTHON_EXECUTABLE}" -c "from distutils.sysconfig import get_python_lib; print(get_python_lib())"
+          RESULT_VARIABLE result
+          OUTPUT_VARIABLE lib)
+  string(STRIP "${lib}" lib)
+  set(${out_lib} ${lib} PARENT_SCOPE)
+endfunction()
