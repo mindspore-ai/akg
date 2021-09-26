@@ -273,6 +273,8 @@ def matmul4D_compute(x, y, bias_value, out_dtype, left_format, right_format, out
         "pragma_weight_transpose_block_inner": weight_trans_block_in,
         "pragma_conv_bypass_l1": bypass,
         "bias": bias_name,
+        "pragma_gemm_output_shape": output_shape_zN,
+        "pragma_gemm_k": [k // utils.BLOCK_REDUCE, utils.BLOCK_REDUCE]
     })
 
     if bias_value == None and out_dtype == "float16":
