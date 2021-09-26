@@ -2942,6 +2942,40 @@ Array<VarExpr> GetVarsInExpr(const Expr &expr, bool exclude_upper_case_vars) {
   return ivar_set;
 }
 
+/// Checks Expr is a halide call or a binaryop that contains halide call
+/// \param e - Expr to be processed
+/// \return true if Expr is a halide call
+bool IsHalideCall(const Expr &e) {
+  auto call = e.as<Call>();
+  if (call && call->call_type == Call::Halide) {
+    return true;
+  }
+  if (GetBinaryOpName(e).defined()) {
+    return ContainsHalideCall(GetBinaryOpExprChildren(e));
+  }
+  return false;
+}
+
+/// Checks if any Expr in Array is a halide call or a binaryop that contains halide call
+/// \param args - Array of Expr to be processed
+/// \return true if Array contains a halide call
+bool ContainsHalideCall(const Array<Expr> args) {
+  return std::any_of(args.begin(), args.end(), IsHalideCall);
+}
+
+/// Get expr's reduce type
+/// \param args - Expr to be processed
+/// \return std::string of reduce type
+std::string GetOpReduceType(const Expr value) {
+  if (value.as<Max>()) return AKG_REDUCE_MAX;
+  if (value.as<Min>()) return AKG_REDUCE_MIN;
+  if (value.as<Add>()) return AKG_REDUCE_SUM;
+  if (value.as<Mul>()) return AKG_REDUCE_PROD;
+  if (value.as<And>()) return AKG_REDUCE_AND;
+  if (value.as<Or>()) return AKG_REDUCE_OR;
+  return AKG_REDUCE_UNSUPPORTED;
+}
+
 #ifdef USE_AKG_COMPILE_STUB
 std::string GetProductName() { return "default"; }
 

@@ -77,6 +77,7 @@ StageResult CudaLowerBegin(Stmt &, LowerData &data) {
     data->binds_0 = air::Downcast<Map<Tensor, Buffer>>(fuse_axis_res[2]);
   }
   PassMgr::SetArgs(data->arg_list_0);
+  stmt = NEXT_PASS(AddAttrForLayoutOp, stmt);
   stmt = NEXT_PASS(RewriteTensorIndex, stmt);
   return {stmt, false};
 }

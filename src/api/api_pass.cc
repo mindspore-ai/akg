@@ -93,6 +93,7 @@ REGISTER_PASS(RemoveAssert);
 REGISTER_PASS(RewriteFloorDiv);
 REGISTER_PASS(HalfReduceSumRewrite);
 REGISTER_PASS(ScalarComputeRewrite);
+REGISTER_PASS(AddAttrForLayoutOp);
 REGISTER_PASS(RewriteTensorIndex);
 REGISTER_PASS(RewriteVarTensorIdx);
 REGISTER_PASS(SinkIfStmt);

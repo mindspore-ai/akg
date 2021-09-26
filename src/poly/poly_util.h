@@ -20,6 +20,7 @@
 #include <ir_pass.h>
 #include <chrono>
 #include "isl.h"
+#include <pass/utils.h>
 
 namespace akg {
 namespace ir {
@@ -437,14 +438,6 @@ constexpr auto SHARED_READ_ID_NAME = "SHAREDread";
 constexpr auto SHARED_WRITE_ID_NAME = "SHAREDwrite";
 constexpr auto GML_READ_ID_NAME = "GMLread";
 constexpr auto GML_WRITE_ID_NAME = "GMLwrite";
-
-constexpr auto AKG_REDUCE_SUM = "SumOp";
-constexpr auto AKG_REDUCE_MIN = "MinOp";
-constexpr auto AKG_REDUCE_MAX = "MaxOp";
-constexpr auto AKG_REDUCE_AND = "AndOp";
-constexpr auto AKG_REDUCE_OR = "OrOp";
-constexpr auto AKG_REDUCE_PROD = "ProdOp";
-constexpr auto AKG_REDUCE_UNSUPPORTED = "X";
 
 constexpr auto MATRIX_A = "matrix_a";
 constexpr auto MATRIX_B = "matrix_b";

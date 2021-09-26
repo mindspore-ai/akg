@@ -439,14 +439,14 @@ class ScopMakeScheduleTree final : protected IRVisitor {
       CHECK(op->value.as<StringImm>());
       scop_info_.analysis_result_.RecordTensorOfTensorStmt(id.get_name(), op->value.as<StringImm>()->value);
       sch = MakeScheduleTreeHelper(op->body, scop_info_, set, outer, macro_stmt);
-    } else if (op->attr_key == "TENSOR_OF_TENSOR") {
+    } else if (op->attr_key == AKG_TENSOR_OF_TENSOR) {
       scop_info_.analysis_result_.SetTensorOfTensor(true);
       sch = MakeScheduleTreeHelper(op->body, scop_info_, set, outer, macro_stmt);
-    } else if (op->attr_key == "TENSOR_NOT_PROMOTE") {
+    } else if (op->attr_key == AKG_TENSOR_NOT_PROMOTE) {
       CHECK(op->value.as<StringImm>());
       scop_info_.analysis_result_.RecordTensorsNotPromote(op->value.as<StringImm>()->value);
       sch = MakeScheduleTreeHelper(op->body, scop_info_, set, outer, macro_stmt);
-    } else if (op->attr_key == "INNER_TENSOR") {
+    } else if (op->attr_key == AKG_INNER_TENSOR) {
       CHECK(op->value.as<StringImm>());
       scop_info_.analysis_result_.RecordInnerTensor(op->value.as<StringImm>()->value);
       sch = MakeScheduleTreeHelper(op->body, scop_info_, set, outer, macro_stmt);
