@@ -531,6 +531,8 @@ def build(kernel_desc, attrs=None, poly=True, use_repo=True):
         attrs = dict()
     backend = desc_d['process']
     attrs = _set_atomic_add_attrs(desc_d, attrs, poly)
+    if "enable_elementwise_flatten" not in attrs.keys():
+        attrs["enable_elementwise_flatten"] = False
     if backend == 'cuda':
         return _build_to_module_gpu(desc_s, desc_d, attrs, poly)
     else:

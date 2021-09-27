@@ -59,14 +59,16 @@ StageResult CudaLowerBegin(Stmt &, LowerData &data) {
   RenameBinds(data->binds_0, data->config, data->args, data->arg_list_0, replace);
   stmt = NEXT_PASS(RenameRealize, stmt, data->binds_0, replace);
 
-  Array<NodeRef> arg_list_tmp;
-  Map<Tensor, Buffer> binds_tmp;
-  GetFlattenedBinds(data->args, data->binds_0, data->config, arg_list_tmp, binds_tmp, false);
-  Stmt stmt_tmp = NEXT_PASS(ElementwiseFlatten, stmt, data->binds_0, binds_tmp);
-  if (stmt_tmp.get() != stmt.get()) {
-    stmt = stmt_tmp;
-    data->arg_list_0 = arg_list_tmp;
-    data->binds_0 = binds_tmp;
+  if (g_attrs.GetBool(kEnableElementwiseFlatten, true)) {
+    Array<NodeRef> arg_list_tmp;
+    Map<Tensor, Buffer> binds_tmp;
+    GetFlattenedBinds(data->args, data->binds_0, data->config, arg_list_tmp, binds_tmp, false);
+    Stmt stmt_tmp = NEXT_PASS(ElementwiseFlatten, stmt, data->binds_0, binds_tmp);
+    if (stmt_tmp.get() != stmt.get()) {
+      stmt = stmt_tmp;
+      data->arg_list_0 = arg_list_tmp;
+      data->binds_0 = binds_tmp;
+    }
   }
 
   if (g_attrs.GetBool(kEnableFuseAxis, false)) {
