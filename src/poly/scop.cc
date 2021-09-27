@@ -232,6 +232,10 @@ Stmt GenHalide(ScopInfo &info, const isl::schedule &sch, bool used_for_tile_out_
   if (info.user_config_.GetTarget() == TARGET_CPU) {
     builder = builder.set_eliminate_for(false);
   }
+  // Keep the for whose extent is 1, and the subsequent processing flow will eliminate the for.
+  if (info.user_config_.GetTarget() == TARGET_CCE && !info.user_config_.GetIsDynamic()) {
+    builder = builder.set_eliminate_for(false);
+  }
   builder = builder.set_at_each_domain(gather);
 
   auto iter_prefix = info.user_config_.GetIterPrefix(info.mmu_info_.IsSpecGemm());

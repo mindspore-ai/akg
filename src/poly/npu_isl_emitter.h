@@ -134,7 +134,12 @@ class NPUIslEmitter : public IslEmitter {
     int multicore_depth{0};
     /* coincidence array of current band, indicating whether the loop of depth N can use multicore */
     std::vector<int> coincidence;
+    /* record the map between the coincident_member and the multicore_depth */
+    std::unordered_map<size_t, int> coincident_map_depth;
+    /* identifies different multicore_info */
+    int id;
   } multicore_info;
+  int multicore_info_count_{0};
 };
 }  // namespace poly
 }  // namespace ir
