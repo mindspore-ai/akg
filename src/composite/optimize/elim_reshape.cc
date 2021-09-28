@@ -336,6 +336,11 @@ std::string GetId(const std::string &name, int count) {
   return id.str();
 }
 
+/*B(64,1) = Reshape(A(64))
+  C = TensorScatterAdd(par, B(64,1), update)
+  ----------------------->
+  C = TensorScatterAdd(par, A(64), update)
+*/
 class TSA : public IRMutator {
  public:
   explicit TSA(AnalysisResult &result) : result_(result){};
@@ -353,9 +358,10 @@ class TSA : public IRMutator {
     }
     if (op_name == "TensorScatterAdd") {
       CHECK(call->args.size() == 3);
-      CHECK(call->args[1].as<Call>());
-      auto arg1 = call->args[1].as<Call>()->func;
-      if (reshape_.count(arg1) && call->args[1].as<Call>()->args.size() == 2) {
+      auto index = call->args[1].as<Call>();
+      CHECK(index);
+      auto arg1 = index->func;
+      if (reshape_.count(arg1) && index->args.size() == 2 && index->args[1].as<IntImm>()->value == 1) {
         for (auto &it : p_) {
           if (it->func == arg1) {
             result_.to_be_removed.insert(it);
@@ -371,7 +377,7 @@ class TSA : public IRMutator {
 
   AnalysisResult &result_;
   FuncExprMap reshape_;
-  std::vector<const Provide*> p_;
+  std::vector<const Provide *> p_;
 };
 
 Stmt ElimReshapeBackward::Run(const Stmt &stmt) {
