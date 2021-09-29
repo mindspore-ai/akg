@@ -40,14 +40,14 @@ void ComputeSchedule::SetIslOptions() {
   auto ctx = pass_info_.constraints_.ctx().get();
   int status = isl_options_set_schedule_unit_max_var_coefficient_sum(ctx, 1);
   CHECK(status == isl_stat_ok);
+  status = isl_options_set_schedule_treat_coalescing(ctx, 0);
+  CHECK(status == isl_stat_ok);
 
   if (scop_info_.user_config_.GetTarget() != TARGET_CUDA) {
     if (scop_info_.user_config_.GetDisableWholeComponent()) {
       status = isl_options_set_schedule_whole_component(ctx, 0);
       CHECK(status == isl_stat_ok);
     } else {
-      status = isl_options_set_schedule_maximize_coincidence(ctx, 0);
-      CHECK(status == isl_stat_ok);
       status = isl_options_set_schedule_whole_component(ctx, 1);
       CHECK(status == isl_stat_ok);
     }
@@ -56,8 +56,6 @@ void ComputeSchedule::SetIslOptions() {
       status = isl_options_set_schedule_whole_component(ctx, 0);
       CHECK(status == isl_stat_ok);
     } else {
-      status = isl_options_set_schedule_maximize_coincidence(ctx, 0);
-      CHECK(status == isl_stat_ok);
       status = isl_options_set_schedule_whole_component(ctx, 1);
       CHECK(status == isl_stat_ok);
     }
@@ -75,7 +73,7 @@ void ComputeSchedule::SetIslOptions() {
     CHECK(status == isl_stat_ok);
   }
 
-  if (scop_info_.user_config_.GetDisableLoopReversal() && scop_info_.user_config_.GetTarget() == TARGET_CCE) {
+  if (scop_info_.user_config_.GetDisableLoopReversal()) {
     status = isl_options_set_schedule_nonneg_var_coefficient(ctx, 1);
     CHECK(status == isl_stat_ok);
   }

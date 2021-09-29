@@ -104,7 +104,6 @@ def conv_input_ad_run(fmap_shape, filter_shape, pad_, stride_, dilation_, attrs=
     else:
         attrs1 = attrs.copy()
     attrs1["pragma_disable_whole_component"] = False
-    attrs1["pragma_disable_loop_reversal"] = False
     input_file = os.environ.get("RANDOM_DATA_DISK_PATH", "")
     expect_file = input_file + "/" + gen_kernel_name([dx_input_shapes], [conv_dtype], op_attrs=[fmap_shape, filter_shape, pad_, stride_, dilation_, attrs],
                                                      kernel_name='conv_input_ad', attrs=attrs) + ".bin"

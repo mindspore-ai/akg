@@ -74,7 +74,6 @@ def maxpool_set_dim_func(data, kernel, stride, pad):
         "pragma_reschedule": 1,
         "pragma_reorder_schedule": True,
         "pragma_opt_for_dsa": 1,
-        "pragma_disable_loop_reversal": 1,
         "loop_partition_unroll": False,
     }
     attr_map.clear()

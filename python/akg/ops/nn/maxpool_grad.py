@@ -31,7 +31,6 @@ def get_attrs():
         "pragma_reschedule": 1,
         "pragma_disable_schedule_shift": 1,
         "pragma_opt_for_dsa": 1,
-        "pragma_disable_loop_reversal": 1,
         "loop_partition_unroll": False,
         "enable_pre_poly_loop_partition": False
     }

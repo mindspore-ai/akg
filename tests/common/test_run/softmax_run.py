@@ -51,7 +51,6 @@ def compute_blockdim(shape, axis, dtype):
 
 def softmax_execute(shape, dtype, axis, kernel_name, attrs):
     attrs["pragma_disable_whole_component"] = False
-    attrs["pragma_disable_loop_reversal"] = False
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
