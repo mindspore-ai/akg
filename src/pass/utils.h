@@ -430,6 +430,27 @@ enum class PrefetchMode {
   DEFAULT = 0, TRANSFERBUFFER, DOUBLEBUFFER, TRANSFERBUFFER_THREADGROUP, DOUBLEBUFFER_THREADGROUP
 };
 
+constexpr auto REDUCE_LIB_TYPE_ORIGIN = "origin";
+constexpr auto REDUCE_LIB_TYPE_PARIS = "paris";
+constexpr auto AKG_REDUCE_LIB_SPACE = "akg_reduce";
+constexpr auto AKG_REDUCE_LIB_NAME = "AkgReduce";
+constexpr auto PARIS_REDUCE_LIB_SPACE = "paris_reduce";
+constexpr auto PARIS_REDUCE_LIB_NAME = "ParisReduce";
+constexpr auto AKG_REDUCE_RETURN_NAME = "AkgAtomicReturn";
+constexpr auto PARIS_REDUCE_RETURN_NAME = "ParisReturn";
+
+struct AtomicReturnData {
+  std::string reduce_op;
+  std::string akg_atomic_api;
+  std::string akg_atomic_template_arg;
+  Type output_tensor_data_type_info;
+  Expr atomic_rhs;
+  Stmt gm_write_stmt;
+};
+
+void ConstructAtomicReturnFuncName(const std::string &reduce_lib, const std::string &reduce_op,
+                                   std::string &akg_atomic_api, std::string &akg_atomic_template_arg);
+Stmt MakeAtomicStmt(const AtomicReturnData &atomic_data);
 }  // namespace ir
 
 std::string GetBufScope(const std::string &name);

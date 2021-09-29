@@ -2955,6 +2955,44 @@ const char *const LOCAL_BUF_LOCAL_C0C = "LOCAL_BUF_LOCAL_C0C";
 const char *const FRACTAL_C1 = "FRACTAL_C1";
 const char *const FRACTAL_C1_LOCAL_C0B = "FRACTAL_C1_LOCAL_C0B";
 #endif
+
+void ConstructAtomicReturnFuncName(const std::string &reduce_lib, const std::string &reduce_op,
+                                   std::string &akg_atomic_api, std::string &akg_atomic_template_arg) {
+  std::string reduce_lib_namespace = "";
+  std::string reduce_return_name = "";
+  if (reduce_lib == REDUCE_LIB_TYPE_ORIGIN) {
+    reduce_lib_namespace = AKG_REDUCE_LIB_SPACE;
+    reduce_return_name = AKG_REDUCE_RETURN_NAME;
+  } else if (reduce_lib == REDUCE_LIB_TYPE_PARIS) {
+    reduce_lib_namespace = PARIS_REDUCE_LIB_SPACE;
+    reduce_return_name = PARIS_REDUCE_RETURN_NAME;
+  } else {
+    CHECK(false) << "reduce lib type is invalid!"
+                 << "\n";
+  }
+  akg_atomic_api = reduce_lib_namespace + "::" + reduce_return_name;
+  akg_atomic_template_arg = reduce_op;
+}
+
+Stmt MakeAtomicStmt(const AtomicReturnData &atomic_data) {
+  std::string func_name = atomic_data.akg_atomic_api;
+
+  Expr template_arg0 = make_const(atomic_data.output_tensor_data_type_info, 1);
+  CHECK(!atomic_data.akg_atomic_template_arg.empty());
+  Expr template_arg1 = StringImm::make(atomic_data.akg_atomic_template_arg);
+
+  Expr arg0 = atomic_data.atomic_rhs;
+
+  auto p = atomic_data.gm_write_stmt.as<Provide>();
+  CHECK(p);
+  Expr arg1 = Call::make(p->value.type(), p->func->func_name(), p->args, Call::Halide, p->func, 0);
+  arg1 = Call::make(arg1.type(), "&", {arg1}, Call::Extern);
+
+  Array<Expr> args;
+  Expr arg2 = Call::make(Int(32), atomic_data.reduce_op, args, Call::Extern);
+
+  return Evaluate::make(Call::make(Int(32), func_name, {template_arg0, template_arg1, arg0, arg1, arg2}, Call::Extern));
+}
 }  // namespace ir
 
 #ifdef USE_AKG_COMPILE_STUB
