@@ -69,7 +69,6 @@ def prod_force_cpu(net_deriv_tensor, in_deriv_tensor, nlist_tensor, natoms=192):
 
 def prod_force_se_a_run(input_shapes, input_dtype, attrs = {}):
     attrs["pragma_disable_whole_component"] = False
-    attrs["pragma_disable_loop_reversal"] = False
     mod = utils.op_build_test(prod_force_se_a.ProdForceSeA, input_shapes, input_dtype, kernel_name = "force", attrs = attrs)
     args, expect, input1, input2, input3 = gen_data(input_shapes)
     output = utils.mod_launch(mod, args, expect=expect)
