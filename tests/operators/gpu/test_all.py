@@ -100,30 +100,8 @@ def bmm(poly_sch, fuzz_shape=None, mind_trick_str=''):
                 shape_bias=(1, ), add_bias=False, tensor_core=False, poly_sch=poly_sch)
 
     # Test for FP16 MatMul (Enable TensorCore)
-    test_ms_bmm((768, 768), (768, 768), 'float16', 'float16', layout1='NHDT', layout2='NHTD', layout_out='NHDT',
-                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch,
-                attrs={"dim": "0 0 128 16 0 1 128 16 0 2 32 8", "bind_block": "6 6", "bind_thread": "128 1"})
-    test_ms_bmm((768, 768), (768, 768), 'float16', 'float32', layout1='NHDT', layout2='NHDT', layout_out='NHDT',
-                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch,
-                attrs={"dim": "0 0 128 16 0 1 128 16 0 2 32 8", "bind_block": "6 6", "bind_thread": "128 1"})
-    test_ms_bmm((32, 12, 128, 128), (32, 12, 128, 64), 'float16', 'float32', layout1='NHDT', layout2='NHTD', layout_out='NHDT',
-                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch,
-                attrs={"dim": "0 0 1 1 0 1 64 16 0 2 64 16 0 3 64 8", "bind_block": "1 384", "bind_thread": "128 1"})
-    test_ms_bmm((768, 768), (768, 768), 'float16', 'float16', layout1='NHDT', layout2='NHDT', layout_out='NHDT',
-                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch,
-                attrs={"dim": "0 0 128 16 0 1 128 16 0 2 64 8", "bind_block": "6 6", "bind_thread": "128 1"})
-    test_ms_bmm((768, 768), (768, 768), 'float16', 'float16', layout1='NHTD', layout2='NHTD', layout_out='NHDT',
-                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch,
-                attrs={"dim": "0 0 128 32 0 1 128 32 0 2 64 4", "bind_block": "6 6", "bind_thread": "256 1"})
-    test_ms_bmm((32, 12, 128, 128), (32, 12, 128, 64), 'float16', 'float16', layout1='NHDT', layout2='NHTD', layout_out='NHDT',
-                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch,
-                attrs={"dim": "0 0 1 1 0 1 64 16 0 2 64 16 0 3 64 8", "bind_block": "1 384", "bind_thread": "128 1"})
     test_ms_bmm((32, 12, 128, 64), (32, 12, 128, 64), 'float16', 'float16', layout1='NHDT', layout2='NHDT', layout_out='NHDT',
-                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch,
-                attrs={"dim": "0 0 1 1 0 1 64 16 0 2 64 16 0 3 64 8", "bind_block": "1 384", "bind_thread": "128 1"})
-
-    # Auto tiling pass cases for scheme two
-
+                shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch)
     test_ms_bmm((32, 12, 128, 128), (32, 12, 128, 64), 'float16', 'float16', layout1='NHDT', layout2='NHTD', layout_out='NHDT',
                 shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch)
     test_ms_bmm((256, 128), (64, 128), 'float16', 'float16', layout1='NHDT', layout2='NHDT', layout_out='NHDT',
@@ -269,9 +247,7 @@ def round(poly_sch, fuzz_shape=None, mind_trick_str=''):
 def conv(poly_sch, fuzz_shape=None, mind_trick_str=''):
     # Test for FP32 Conv2D (Non-TensorCore)
     test_ms_conv(shape_data=(32, 64, 56, 56), shape_weight=(64, 64, 3, 3), stride=(1, 1), padding=(1, 1, 1, 1),
-            dilation=(1, 1), dtype="float32", out_dtype="float32", layout="NCHW", tensor_core=False,
-            attrs={"shared_memory_tensors": "input_1 input_2", "dim": " 0 0 1 1 0 1 1 1 0 2 8 8 0 3 56 56 0 4 2 2",
-                "bind_block": "64 32", "bind_thread": "28 4"})
+            dilation=(1, 1), dtype="float32", out_dtype="float32", layout="NCHW", tensor_core=False)
 
     # Test for FP16 Conv2D (TensorCore) with auto-tiling
     test_ms_conv((16, 4, 4, 16), (16, 3, 3, 16), (1, 1), (0, 0, 0, 0), (1, 1), "float16", "float16")
@@ -375,15 +351,13 @@ def gather_nd(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_gather_nd((19717, 1, 3), 'float32', (108365, 1), 'int32', poly_sch=True)
 
 def tensor_scatter_add(poly_sch, fuzz_shape=None, mind_trick_str=''):
-    test_ms_tensor_scatter_add((19717, 8, 1), 'float32', (108365, 1), 'int32', 0, poly_sch=True,
-        attrs={"dim": "0 0 8 8 0 1 128 128", "bind_block": "847 1", "bind_thread": "128 8"})
+    test_ms_tensor_scatter_add((19717, 8, 1), 'float32', (108365, 1), 'int32', 0, poly_sch=True)
 
 def unsorted_segment_sum(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_ms_unsorted_segment_sum((108365, 8, 1), 'float32', (108365,), 'int32', 19717, poly_sch=True)
 
 def fused_gather_mul_scatter_add(poly_sch, fuzz_shape=None, mind_trick_str=''):
-    test_fused_gather_mul_scatter_add((19717, 8, 8), (108365, ), (108365, 8, 8), (108365, 1), 'float32', 'int32', 0, poly_sch=True,
-        attrs={"dim": "0 0 16 16 0 1 8 8 0 2 8 8", "bind_block": "1 1 6773", "bind_thread": "8 8 16"})
+    test_fused_gather_mul_scatter_add((19717, 8, 8), (108365, ), (108365, 8, 8), (108365, 1), 'float32', 'int32', 0, poly_sch=True)
 
 def fused_gather_nd_reduce_sum_mul_unsorted_segment_sum(poly_sch, fuzz_shape=None, mind_trick_str=''):
     test_fused_gather_nd_reduce_sum_mul_unsorted_segment_sum(

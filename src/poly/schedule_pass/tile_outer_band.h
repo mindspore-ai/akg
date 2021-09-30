@@ -101,7 +101,7 @@ class TileOuterBand : public SchedulePass {
   isl::schedule_node InsertPromoteMarker(const isl::schedule_node node);
   void ResetWarpMappingConfig();
   isl::schedule_node MatmulTile(const isl::schedule_node &node);
-  void CheckCustomMapping(const std::unordered_map<int, std::string> &custom_mapping_map);
+  void CheckCustomMapping(const MappingStrategyMap &custom_mapping_map);
   bool IsMatrixCPromoteToShared();
 
  private:

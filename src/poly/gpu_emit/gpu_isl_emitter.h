@@ -54,7 +54,6 @@ class GpuIslEmitter : public IslEmitter {
   Stmt EmitMark(const isl::ast_node_mark &node_id) override;
   virtual Expr AdaptPolyNewVar(std::string name);
   Expr AdaptThreadNewVar(const std::string &name, MappingCfg *mapping_cfg);
-  Expr AdaptBlockNewVar(const std::string &name, MappingCfg *mapping_cfg);
   Expr AdaptOneConfigForMulAxis(MappingCfg *mapping_cfg, const std::string &orig_name, const bool is_thread);
   int GetThreadExtent(const std::string &name);
   virtual Expr IterNameAdaptor(std::string name);

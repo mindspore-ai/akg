@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "poly/schedule_pass_gpu/operator_shared_strategy.h"
+#include "poly/schedule_pass_gpu/operator_mapping_strategy.h"
 #include "shared_memory_manager.h"
 #include "poly/schedule_tree_util.h"
 #include "poly/scop.h"
@@ -228,8 +229,10 @@ isl::schedule_node SharedMemoryManager::MapCopiesToThreads(isl::schedule_node &r
       band_node = TileBand(band_node, tile_size);
     }
 
-    Mapping mapping;
-    band_node = MapInnerDimToThreads(band_node, mapping_cfg, mapping, true, false);
+    OperatorMappingStrategy others_op(scop_info_, mapping_cfg, true, true);
+    others_op.SetRequiredMappingCfg(band_node);
+    // Map band under thread_root from inner dim to outer dim.
+    band_node = others_op.MapDimToThreadsBlocks(band_node);
     if (is_reduce_) {
       std::string atomic_type = InAtomicTensors(node);
       auto InsertAtomicMarker = [atomic_type, this](isl::schedule_node atomic_node) -> isl::schedule_node {
@@ -314,7 +317,8 @@ MappingCfg *SharedMemoryManager::GetCurrentConfig(isl::schedule_node &node) {
     for (size_t i = 0; i < thread_cfg->bound; ++i) {
       total_cfg *= thread_cfg->GetAt(i).second;
     }
-    std::string new_cfg = SetOneConfigForMulAxis(node, true, total_cfg);
+    OperatorMappingStrategy others_op(scop_info_, thread_cfg, true, true);
+    std::string new_cfg = others_op.SetOneConfigForMulAxis(node, total_cfg);
 
     if (new_cfg.empty()) {
       return nullptr;
@@ -332,26 +336,15 @@ isl::schedule_node SharedMemoryManager::ManageToShareBelow(const isl::schedule &
   CHECK(use_config_ || !IsAncestorMapToThread(node)) << "shared memory promotion cannot below thread_marker.";
 
   // Collect block config.
-  auto cfg_block = scop_info_.user_config_.GetBlockConfig();
-  isl::union_set mapping;
-  if (is_matmul_) {
-    for (auto it : scop_info_.user_config_.GetReplaceConfig()) {
-      auto cfg = it.second;
-      if (cfg->type == MappingType::REPLACE_BLOCKS) {
-        if (mapping.is_null()) {
-          mapping = GatherMappingsTo(root_node, cfg);
-        } else {
-          mapping = mapping.intersect(GatherMappingsTo(root_node, cfg));
-        }
-      }
-    }
-  }
-  if (mapping.is_null()) {
-    mapping = GatherMappingsTo(root_node, cfg_block);
-  }
+  auto block_cfg = scop_info_.user_config_.GetBlockConfig();
+  CHECK(block_cfg != nullptr) << "block config is null";
+  auto replace_cfg = scop_info_.user_config_.GetReplaceConfig();
+  MappingStrategyMap mapping_strategy = scop_info_.user_config_.GetOuterMappingStrategy();
+  std::unordered_set<std::string> non_repeated_idx = GetNonRepeatedIdx(mapping_strategy);
+  auto mapping_filter_info = GetMappingFilterInfo(root_node, block_cfg, replace_cfg, non_repeated_idx);
 
   auto partial_sched = LocalSchedule(node);
-  auto out_sched = partial_sched.intersect_domain(mapping);
+  auto out_sched = partial_sched.intersect_domain(mapping_filter_info);
   if (is_reduce_) {
     ReduceSharedStrategy reduce_op(scop_info_);
     reduce_op.CreateClusterList(node, out_sched);
