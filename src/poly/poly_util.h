@@ -350,6 +350,7 @@ constexpr auto REALIZE_PREFIX_LEN = 8;
 
 constexpr auto BLOCK_STR = "b";
 constexpr auto THREAD_STR = "t";
+constexpr auto WARP_STR = "w";
 constexpr auto B0 = "b0";
 constexpr auto B1 = "b1";
 constexpr auto B2 = "b2";
@@ -362,12 +363,9 @@ constexpr auto TILE_WITH_C0_C1 = "C0_C1";
 constexpr auto TILE_WITH_WARP_C1 = "WARP_C1";
 constexpr auto REPLACE = "replace_";
 constexpr auto COMPUTE = "compute";
-constexpr auto CUSTOM = "custom_";
+constexpr auto REPEATED_MAPPING = "repeated_";
 constexpr auto PROMOTE = "promote_";
 constexpr auto WARP_COMPUTE = "warp_compute";
-constexpr auto CONV_O = "conv_o";
-constexpr auto CONV_N = "conv_n";
-constexpr auto CONV_H_W = "conv_h_w";
 
 constexpr auto BLOCK_IDX_X = "blockIdx.x";
 constexpr auto BLOCK_IDX_Y = "blockIdx.y";
@@ -455,7 +453,7 @@ constexpr auto LOCAL_SUFFIX = "_local";
 constexpr auto SHARE_SUFFIX = "_shared";
 
 const std::unordered_set<std::string> AkgSupportedReduceOp = {AKG_REDUCE_SUM, AKG_REDUCE_MIN, AKG_REDUCE_MAX,
-                                                              AKG_REDUCE_AND, AKG_REDUCE_OR, AKG_REDUCE_PROD};
+                                                              AKG_REDUCE_AND, AKG_REDUCE_OR,  AKG_REDUCE_PROD};
 
 const std::vector<std::string> ConvATTRList = {ATTR_CONV_FEATURE_W,  ATTR_CONV_KERNEL_H,   ATTR_CONV_KERNEL_W,
                                                ATTR_CONV_STRIDE_H,   ATTR_CONV_STRIDE_W,   ATTR_CONV_DILATION_H,

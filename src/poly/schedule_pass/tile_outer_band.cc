@@ -252,21 +252,19 @@ void TileOuterBand::InitDimensionInfo(const isl::schedule &sch_init) {
       int axis_number = static_cast<int>(WrappedStrtol(str[i + 1]));
       std::string outer_mapping = str[i + 4];
       if (outer_mapping != "-") {
-        scop_info_.user_config_.RecordCustomOuterMapping(axis_number, outer_mapping);
+        scop_info_.user_config_.RecordOuterMappingStrategy(axis_number, outer_mapping);
       }
 
       std::string inner_mapping = str[i + 5];
       if (inner_mapping != "-") {
-        scop_info_.user_config_.RecordCustomInnerMapping(axis_number, inner_mapping);
+        scop_info_.user_config_.RecordInnerMappingStrategy(axis_number, inner_mapping);
       }
     }
   }
 
   if (scop_info_.analysis_result_.GetIsCustomMapping()) {
-    CheckCustomMapping(scop_info_.user_config_.GetCustomInnerMapping());
-    CheckCustomMapping(scop_info_.user_config_.GetCustomOuterMapping());
-    scop_info_.user_config_.RecordCustomInnerMapping(-1, "");
-    scop_info_.user_config_.RecordCustomOuterMapping(-1, "");
+    CheckCustomMapping(scop_info_.user_config_.GetInnerMappingStrategy());
+    CheckCustomMapping(scop_info_.user_config_.GetOuterMappingStrategy());
   }
 }
 
@@ -415,16 +413,16 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableNpu(isl::schedule_node node
   return node;
 }
 
-void TileOuterBand::CheckCustomMapping(const std::unordered_map<int, std::string> &custom_mapping_map) {
+void TileOuterBand::CheckCustomMapping(const MappingStrategyMap &custom_mapping_map) {
   const std::unordered_set<std::string> thread_set = {T0, T1, T2};
   const std::unordered_set<std::string> block_set = {B0, B1, B2};
 
   size_t thread_prefix = 0;
   size_t block_prefix = 0;
   for (auto custom_mapping : custom_mapping_map) {
-    if (thread_set.find(custom_mapping.second) != thread_set.end()) {
+    if (thread_set.find(custom_mapping.second.mapping_idx) != thread_set.end()) {
       ++thread_prefix;
-    } else if (block_set.find(custom_mapping.second) != block_set.end()) {
+    } else if (block_set.find(custom_mapping.second.mapping_idx) != block_set.end()) {
       ++block_prefix;
     } else {
       LOG(FATAL) << "The custom configuration must be t0, t1, t2, b0, b1 and b2.";
@@ -1081,7 +1079,7 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCuda(isl::schedule_node nod
   // vectorize for elementwise OP
   if (scop_info_.user_config_.GetEnableVectorization()) {
     node = SetTileSizeAndTile(node.child(0), TILE_WITH_C0);
-    node = node.insert_mark("skip");
+    node = node.child(0).insert_mark(SKIP_MARKER);
     node = node.parent().parent();
   }
 

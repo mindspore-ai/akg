@@ -192,6 +192,13 @@ struct BufferedFootPrintInfo {
   isl::union_map outer_schedule;
   isl::id cluster_id;
 };
+
+struct MappingStrategy {
+  std::string mapping_idx;
+  int offset{0};
+};
+
+using MappingStrategyMap = std::map<int, MappingStrategy>;
 using Binds = Map<Tensor, Buffer>;
 using TimeRecords = std::vector<std::string>;
 
@@ -494,15 +501,22 @@ class UserConfig {
   bool GetEnableOneDimThread() { return enable_one_dim_thread_; }
   void SetEnableOneDimThread(bool enable_one_dim_thread) { enable_one_dim_thread_ = enable_one_dim_thread; }
 
-  std::unordered_map<int, std::string> GetCustomInnerMapping() { return custom_inner_mapping_; }
-  void RecordCustomInnerMapping(const int axis_dim, const std::string inner_mapping) {
-    custom_inner_mapping_[axis_dim] = inner_mapping;
+  MappingStrategyMap GetInnerMappingStrategy() { return inner_mapping_strategy_; }
+  void RecordInnerMappingStrategy(const int axis_dim, const std::string inner_mapping_idx, const int offset = 0) {
+    MappingStrategy mapping_strategy;
+    mapping_strategy.mapping_idx = inner_mapping_idx;
+    mapping_strategy.offset = offset;
+    inner_mapping_strategy_[axis_dim] = mapping_strategy;
   }
 
-  std::unordered_map<int, std::string> GetCustomOuterMapping() { return custom_outer_mapping_; }
-  void RecordCustomOuterMapping(const int axis_dim, const std::string outer_mapping) {
-    custom_outer_mapping_[axis_dim] = outer_mapping;
+  MappingStrategyMap GetOuterMappingStrategy() { return outer_mapping_strategy_; }
+  void RecordOuterMappingStrategy(const int axis_dim, const std::string outer_mapping_idx, const int offset = 0) {
+    MappingStrategy mapping_strategy;
+    mapping_strategy.mapping_idx = outer_mapping_idx;
+    mapping_strategy.offset = offset;
+    outer_mapping_strategy_[axis_dim] = mapping_strategy;
   }
+
   bool GetEnableVectorization() { return enable_vectorization_; }
   void SetEnableVectorization(bool enable_vectorization) { enable_vectorization_ = enable_vectorization; }
 
@@ -745,8 +759,8 @@ class UserConfig {
   bool dynamic_shape_conv_full_parametric_{false};
 
   // custom mapping config
-  std::unordered_map<int, std::string> custom_inner_mapping_;
-  std::unordered_map<int, std::string> custom_outer_mapping_;
+  MappingStrategyMap inner_mapping_strategy_;
+  MappingStrategyMap outer_mapping_strategy_;
 
   // dump config
   int dump_tuning_level_{0};
@@ -763,6 +777,11 @@ struct OperatorDomainSpace {
   isl::multi_id tuple;
 };
 
+struct MappingScheduleInfo {
+  isl::union_pw_aff schedule_upa;
+  int64_t offset{0};
+};
+
 using AccessMap = std::unordered_map<const Node *, isl::id>;
 using StatementMap = std::unordered_map<isl::id, const Node *, isl::IslIdIslHash>;
 using OperatorDomainMap = std::unordered_map<isl::id, OperatorDomainSpace, isl::IslIdIslHash>;
@@ -770,8 +789,8 @@ using ReduceMap = std::unordered_map<const Provide *, Array<IterVar>>;
 using CondVarsMap = std::unordered_map<isl::id, std::unordered_set<std::string>, isl::IslIdIslHash>;
 using BufferBindVec = std::vector<std::pair<const NodeRef, const Expr>>;
 
-using Mapping = std::unordered_map<isl::id, isl::union_pw_aff, isl::IslIdIslHash>;
-using UpaNodeMapping = std::vector<std::pair<isl::schedule_node, Mapping>>;
+using MappingScheduleInfoMap = std::unordered_map<isl::id, MappingScheduleInfo, isl::IslIdIslHash>;
+using UpaNodeMapping = std::vector<std::pair<isl::schedule_node, MappingScheduleInfoMap>>;
 struct AtomicInfo {
   std::string tensor_name;
   std::string tensor_type;
@@ -845,22 +864,22 @@ class AnalysisResult {
   // e.g. for(cc0,0,8){input_red(cc0)=0;}
   // => Tensor{name:input_red,loops:[cc0]}
   struct TensorEntry {
-      std::string name;
-      Array<Expr> args;
-      std::vector<VarNames> var_names;
-      std::unordered_map<size_t, std::vector<const For *>> loops;
-      size_t band_index{0};
-      int type_byte{1};
+    std::string name;
+    Array<Expr> args;
+    std::vector<VarNames> var_names;
+    std::unordered_map<size_t, std::vector<const For *>> loops;
+    size_t band_index{0};
+    int type_byte{1};
   };
   // represent a provide stmt
   struct ProvideEntry {
-      std::string basic_op_type;
-      std::unordered_set<int> flow;
-      std::vector<TensorEntry> src;
-      TensorEntry dst;
-      size_t band_index{0};
-      const Provide *op{nullptr};
-      const IfThenElse *cond{nullptr};
+    std::string basic_op_type;
+    std::unordered_set<int> flow;
+    std::vector<TensorEntry> src;
+    TensorEntry dst;
+    size_t band_index{0};
+    const Provide *op{nullptr};
+    const IfThenElse *cond{nullptr};
   };
 
   void RecordWrites(const isl::union_map &writes) { writes_ = writes; }
@@ -1046,12 +1065,8 @@ class AnalysisResult {
   void SetTensorScheduleRepo(const TensorScheduleRepo &repo) { tensor_schedule_repo_ = std::move(repo); }
 
   bool IsFakeCopyin(const isl::id &tensor_id);
-  void RecordProvideAnalysis(const For * op, ProvideEntry prov) {
-    provides_ana_[op].emplace_back(prov);
-  }
-  std::unordered_map<const For *, std::vector<ProvideEntry>> GetProvideAnalysis() {
-    return provides_ana_;
-  }
+  void RecordProvideAnalysis(const For *op, ProvideEntry prov) { provides_ana_[op].emplace_back(prov); }
+  std::unordered_map<const For *, std::vector<ProvideEntry>> GetProvideAnalysis() { return provides_ana_; }
   void SetOpTemplate(Template op_template) { op_template_ = op_template; }
   Template GetOpTemplate() { return op_template_; }
   std::string ShowOpTemplate(Template op_template) { return template_map_[op_template]; }
@@ -1063,9 +1078,9 @@ class AnalysisResult {
   BufferDefInfo default_buffer_def_info_;
   std::unordered_map<const For *, std::vector<ProvideEntry>> provides_ana_;
   std::unordered_map<int, std::string> template_map_ = {
-    {0, "DEFAULT"},    {1, "PURE_ELEM"},         {2, "BROADCAST_OP"}, {3, "REDUCTION"},
+    {0, "DEFAULT"},       {1, "PURE_ELEM"},         {2, "BROADCAST_OP"}, {3, "REDUCTION"},
     {4, "ALL_REDUCTION"}, {5, "BITWISE_REDUCTION"}, {6, "MATMUL"},       {7, "TRANSPOSE_OP"},
-    {8, "PAD_OP"},     {9, "CUSTOM_CONFIG"},     {10, "CONV"}};
+    {8, "PAD_OP"},        {9, "CUSTOM_CONFIG"},     {10, "CONV"},        {11, "EXTERN_CALL"}};
 
  private:
   Template op_template_{Template::DEFAULT};
@@ -1120,7 +1135,7 @@ class AnalysisResult {
 
   // custom mapping
   bool is_custom_mapping_{false};
-  bool is_outer_block_mapping_{false};
+  bool is_outer_block_mapping_{true};
 
   // All axis of each tensor
   std::unordered_map<std::string, std::vector<std::string>> tensor_all_axis_;
@@ -1201,8 +1216,7 @@ class CubeInfo {
   void UpdateComputeAttrInfo();
   void FindComputeAttr(const std::vector<std::string> &op_keys);
   bool IsFilterCanByPass();
-  bool IsConvHeadTail(const isl::id &stmtId, const StmtOpInfo &op_info,
-                      const StmtIdHashMap &op_write_map);
+  bool IsConvHeadTail(const isl::id &stmtId, const StmtOpInfo &op_info, const StmtIdHashMap &op_write_map);
   std::string ConvOutName();
   void ComputeByPassL1();
   void UpdateFractalIntInfoConvForward(int range_idx);

@@ -41,17 +41,11 @@ class MappingOuterBand : public SchedulePass {
 
   isl::schedule DoBlockMapping(const isl::schedule &sch);
 
-  // custom mapping
-  isl::schedule DoCustomMapping(const isl::schedule &sch);
-  isl::schedule_node MapCustomHelper(const isl::schedule_node orig_node, const bool is_inner, MappingCfg *mapping_cfg,
-                                     std::unordered_map<int, std::string> custom_mapping_cfg);
-  std::unordered_map<int, std::string> GetRequiredMappingCfg(MappingCfg *mapping_cfg);
+  size_t NumMappedDescendant(const RoadMap &thread_roadmap, const isl::schedule_node &parent);
 
-  size_t NumMappedDescendant(const RoadMap &thread_roadmap, const isl::schedule_node parent);
+  bool CanBeMappedToThread(const isl::schedule_node &node, const RoadMap &thread_record);
 
-  bool CanBeMappedToThread(const isl::schedule_node node, const RoadMap &thread_record);
-
-  isl::schedule_node FillRemainingThreads(isl::schedule_node &node, size_t begin);
+  isl::schedule_node FillRemainingThreads(const isl::schedule_node &orig_node, size_t begin);
 
   isl::schedule_node MapSequenceNode(const isl::schedule_node &orig_node, const RoadMap &thread_record);
 
@@ -62,8 +56,8 @@ class MappingOuterBand : public SchedulePass {
                                              const std::vector<MappingCfg *> &other_mapping_cfg = {});
 
   // preparation for synchronization
-  isl::multi_union_pw_aff MapDomainToWarp(const isl::schedule_node &nod, MappingCfg *mapping_cfg,
-                                          isl::multi_union_pw_aff domain_threads);
+  isl::multi_union_pw_aff MapDomainToWarp(const isl::schedule_node &node, MappingCfg *mapping_cfg,
+                                          const isl::multi_union_pw_aff &domain_threads);
   bool IsOuterBandWithNoCoincident(const isl::schedule_node &node);
 
   // strategies for determine optimal sync position between mapped threads in an isl sequence node.
@@ -72,6 +66,7 @@ class MappingOuterBand : public SchedulePass {
                                     const isl::multi_union_pw_aff &domain_to_warp);
   SyncCandidate *CountSyncNumberAmongLoop(SyncCandidate *head);
   int GetBestSyncStartPoint(bool is_outer);
+  void AdjustBlockConfig(MappingCfg *block_cfg, unsigned long n_block_map);
 
  private:
   PassInfo &pass_info_;

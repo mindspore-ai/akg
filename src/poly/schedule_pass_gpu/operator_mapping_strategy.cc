@@ -26,31 +26,420 @@ namespace akg {
 namespace ir {
 namespace poly {
 
-size_t OperatorMappingStrategy::GetFinalMappingThreadNumber(isl::schedule_node &node, const size_t thread_cfg_bound,
-                                                            const size_t n_thread_map) {
-  auto final_n_thread_map = n_thread_map;
-  isl::schedule_node_band band_node = node.as<isl::schedule_node_band>();
-  // Split band node according to mapping config and coincidence of band node.
-  if (final_n_thread_map > thread_cfg_bound) {
-    node = band_node.split(final_n_thread_map - thread_cfg_bound);
-    node = node.child(0);
-    final_n_thread_map = thread_cfg_bound;
-    band_node = node.as<isl::schedule_node_band>();
+isl::union_pw_aff_list OperatorMappingStrategy::GetUpaList(const isl::schedule_node &node,
+                                                           isl::multi_union_pw_aff &partial_schedule) {
+  if (is_promotion_mapping_) {
+    // we need to to get range of promoted band from extension node so that we can correctly fix stride
+    auto parent = node;
+    while (parent && parent.has_parent() && !parent.isa<isl::schedule_node_extension>()) {
+      parent = parent.parent();
+    }
+    if (parent.isa<isl::schedule_node_extension>()) {
+      auto extension = parent.as<isl::schedule_node_extension>();
+      partial_schedule = partial_schedule.intersect_domain(extension.get_extension().range());
+    }
   }
 
-  // Split to keep nodes with coincident equals to 1.
-  if (final_n_thread_map < band_node.n_member() && !scop_info_.user_config_.EnableStitchFusion()) {
-    node = band_node.split(final_n_thread_map);
-  } else {
-    final_n_thread_map = static_cast<size_t>(band_node.n_member());
-  }
-  return final_n_thread_map;
+  auto upa_list = partial_schedule.get_union_pw_aff_list();
+  return upa_list;
 }
 
-size_t OperatorMappingStrategy::MapThreadHelper(isl::schedule_node &thread_root, const bool need_reverse) {
-  auto thread_cfg = scop_info_.user_config_.GetThreadConfig();
-  CHECK(thread_cfg != nullptr) << "thread config is null";
-  if (thread_cfg->bound < 1 || !thread_root.isa<isl::schedule_node_band>()) {
+// append prefix to partial schedule for tiling
+isl::union_pw_aff_list OperatorMappingStrategy::GetPrefixPartialSchedule(
+  const isl::multi_union_pw_aff &partial_schedule, const isl::schedule_node &node) {
+  auto add_prefix_schedule = partial_schedule;
+  isl::union_pw_aff_list prefix_upa_list(node.ctx(), static_cast<int>(add_prefix_schedule.size()));
+  if (!is_thread_mapping_) {
+    auto domain = node.get_schedule().get_domain();
+    for (int i = 0; i < static_cast<int>(add_prefix_schedule.size()); ++i) {
+      auto range = add_prefix_schedule.get_at(i).intersect_domain(domain);
+      prefix_upa_list = prefix_upa_list.add(range);
+    }
+  } else {
+    size_t max_distance_to_filter = 2;
+    size_t i = 0;
+    auto filter = node;
+    while (i < max_distance_to_filter && filter.has_parent()) {
+      filter = filter.parent();
+      if (filter.isa<isl::schedule_node_filter>()) {
+        break;
+      }
+      ++i;
+    }
+    if (filter.isa<isl::schedule_node_filter>()) {
+      add_prefix_schedule = add_prefix_schedule.intersect_domain(filter.as<isl::schedule_node_filter>().get_filter());
+    }
+    prefix_upa_list = add_prefix_schedule.get_union_pw_aff_list();
+  }
+  return prefix_upa_list;
+}
+
+isl::schedule_node OperatorMappingStrategy::InsertMapFilter(const isl::schedule_node &node) {
+  if (mapping_sch_info_map_.size() == 0) {
+    return node;
+  }
+  // extract unique domain
+  auto map_domain = mapping_sch_info_map_.cbegin()->second.schedule_upa.domain();
+  if (!is_promotion_mapping_) {
+    for (const auto &kvp : mapping_sch_info_map_) {
+      CHECK(map_domain.is_equal(kvp.second.schedule_upa.domain()));
+    }
+  }
+
+  auto map_filter = map_domain.universe();
+  for (const auto &kvp : mapping_sch_info_map_) {
+    auto id = kvp.first;
+    auto upa = kvp.second.schedule_upa;
+    auto offset = kvp.second.offset;
+    upa = upa.sub(isl::union_pw_aff::param_on_domain(map_domain.universe(), id));
+    upa = upa.add(isl::union_pw_aff(upa.domain(), isl::val(upa.ctx(), (long)offset)));
+    map_filter = map_filter.intersect(upa.zero_union_set());
+  }
+
+  // insert mapping filter
+  isl::schedule_node map_filter_node = node;
+  map_filter_node = is_insert_filter_ ? map_filter_node.insert_filter(map_filter) : map_filter_node;
+  return map_filter_node;
+}
+
+isl::schedule_node OperatorMappingStrategy::AnalysisNodeAndInsertMapFilter(const isl::schedule_node &node,
+                                                                           const isl::union_pw_aff_list &upa_list) {
+  isl::union_set domain = node.get_schedule().get_domain();
+  if (node.ancestor(2) && node.ancestor(2).isa<isl::schedule_node_filter>()) {
+    domain = node.ancestor(2).as<isl::schedule_node_filter>().get_filter();
+  }
+
+  std::unordered_set<std::string> current_mapping_cfg;
+  for (size_t i = 0; i < upa_list.size(); ++i) {
+    if (required_mapping_strategy_.count(static_cast<int>(i)) == 0) {
+      continue;
+    }
+    auto mapping_i = required_mapping_strategy_[static_cast<int>(i)].mapping_idx;
+    auto offset_i = required_mapping_strategy_[static_cast<int>(i)].offset;
+    std::pair<std::string, int> cfg = mapping_cfg_->GetAt(mapping_i);
+    current_mapping_cfg.emplace(cfg.first);
+
+    auto upa = upa_list.get_at(i);
+    CHECK_GT(cfg.second, 0);
+    upa = upa.mod(isl::val(node.ctx(), cfg.second));
+    auto id = isl::id(node.ctx(), cfg.first);
+    MappingScheduleInfo mapping_schedule_info;
+    mapping_schedule_info.schedule_upa = upa;
+    mapping_schedule_info.offset = offset_i;
+    mapping_sch_info_map_[id] = mapping_schedule_info;
+    domain = upa.domain();
+  }
+
+  // Set other configurations to 0.
+  if (is_set_config_zero_) {
+    for (size_t i = 0; i < mapping_cfg_->bound; ++i) {
+      CHECK(!domain.is_null());
+      auto universe = domain.universe();
+      // Remove the configuration that has been mapped.
+      if (current_mapping_cfg.find(mapping_cfg_->GetAt(i).first) != current_mapping_cfg.end()) {
+        continue;
+      }
+      std::pair<std::string, int> cfg = mapping_cfg_->GetAt(i);
+      auto id = isl::id(node.ctx(), cfg.first);
+      MappingScheduleInfo mapping_schedule_info;
+      mapping_schedule_info.schedule_upa = isl::union_pw_aff(universe, isl::val::zero(domain.ctx()));
+      mapping_sch_info_map_[id] = mapping_schedule_info;
+    }
+  }
+
+  return InsertMapFilter(node);
+}
+
+/*
+ * When mapping size is smaller than the extent of corresponding axis, we may encounter several problems if the axis
+ * is not tiled. Firstly, for case that extent is multiplies of mapping sizes, directly mapping the axis will
+ * generate a for loop with stride equals to `extent / mapping size`, which is not firently to emit halide ir.
+ * Secondly, for case that etxnet is not divisible by mapping size, we need to generate a for loop that has offset
+ * with `min` in it to deal with the tail part. This type of for loop can be generated by tiling schedule tree.
+ * Therefore, we must check map size and apply tile before mapping.
+ */
+isl::schedule_node OperatorMappingStrategy::CheckMapSizeAndApplyTile(const isl::schedule_node &mapping_root,
+                                                                     const isl::union_pw_aff_list &aff_list) {
+  if (required_mapping_strategy_.empty()) {
+    return mapping_root;
+  }
+  bool need_tile = false;
+  std::vector<int> mapping_sizes;
+
+  for (size_t i = 0; i < aff_list.size(); ++i) {
+    auto aff = aff_list.get_at(i).floor();
+    auto extent = aff.max_val().get_num_si() + 1;
+    auto map_size = extent;
+    bool is_config = (required_mapping_strategy_.count(static_cast<int>(i)) != 0);
+    if (is_config) {
+      auto mapping_i = required_mapping_strategy_[static_cast<int>(i)].mapping_idx;
+      map_size = mapping_cfg_->GetAt(mapping_i).second - required_mapping_strategy_[static_cast<int>(i)].offset;
+    }
+    if (is_thread_mapping_) {
+      need_tile = need_tile || extent > map_size;
+    } else {
+      need_tile = need_tile || (extent > map_size && extent % map_size != 0);
+    }
+    mapping_sizes.emplace_back(map_size);
+  }
+
+  if (!need_tile) {
+    return mapping_root;
+  }
+
+  isl::multi_val tile_size;
+  auto ctx = mapping_root.ctx();
+  auto space = mapping_root.as<isl::schedule_node_band>().get_space();
+  tile_size = isl::multi_val::zero(space);
+
+  for (int i = 0; i < static_cast<int>(mapping_sizes.size()); ++i) {
+    tile_size = tile_size.set_val(i, isl::val(ctx, mapping_sizes[i]));
+  }
+
+  return TileBand(mapping_root, tile_size).child(0);
+}
+
+isl::schedule_node OperatorMappingStrategy::MapDimToThreadsBlocks(const isl::schedule_node &node) {
+  isl::schedule_node_band band_node = node.as<isl::schedule_node_band>();
+  auto partial_schedule = band_node.get_partial_schedule();
+  auto upa_list = GetUpaList(node, partial_schedule);
+
+  auto prefix_upa_list = GetPrefixPartialSchedule(partial_schedule, node);
+  isl::schedule_node fix_node = CheckMapSizeAndApplyTile(node, prefix_upa_list);
+  bool is_tiled = !fix_node.is_equal(node);
+
+  // insert node with specific marker
+  if (is_insert_filter_) {
+    auto marker_name = is_thread_mapping_ ? THREAD_MARKER : BLOCK_MARKER;
+    fix_node = fix_node.insert_mark(isl::id(fix_node.ctx(), marker_name)).child(0);
+  }
+
+  auto after_map_node = AnalysisNodeAndInsertMapFilter(fix_node, upa_list);
+  after_map_node = is_insert_filter_ ? after_map_node.parent() : after_map_node;
+  if (is_tiled) {
+    after_map_node = after_map_node.parent();
+  }
+
+  return after_map_node;
+}
+
+// Map a thread/block configuration to multiple axis.
+std::string OperatorMappingStrategy::SetOneConfigForMulAxis(const isl::schedule_node &node, const int orig_total_cfg,
+                                                            const std::unordered_set<int> &excluded_axis_pos) {
+  auto partial_schedule = node.as<isl::schedule_node_band>().get_partial_schedule();
+  if (!is_promotion_mapping_) {
+    partial_schedule = partial_schedule.intersect_domain(node.domain());
+  }
+  auto upa_list = GetUpaList(node, partial_schedule);
+  upa_list = is_need_reverse_ ? upa_list.reverse() : upa_list;
+
+  std::string new_cfg = "";
+  int config_size = 0;
+  int total_cfg = orig_total_cfg;
+  int mapping_dim = static_cast<int>(upa_list.size());
+  for (int i = 0; i < mapping_dim; ++i) {
+    if (!excluded_axis_pos.empty() && excluded_axis_pos.count(i) == 0) {
+      continue;
+    }
+    auto extend = upa_list.get_at(i).floor().max_val().get_num_si() + 1;
+    if (extend >= total_cfg || (i == mapping_dim - 1 && extend < total_cfg)) {
+      new_cfg += (std::to_string(total_cfg) + " ");
+      ++config_size;
+      break;
+    }
+
+    total_cfg /= extend;
+    new_cfg += (std::to_string(extend) + " ");
+    ++config_size;
+  }
+
+  while (config_size < static_cast<int>(excluded_axis_pos.size())) {
+    new_cfg += (std::to_string(1) + " ");
+    ++config_size;
+  }
+  return new_cfg;
+}
+
+void OperatorMappingStrategy::SetRequiredMappingCfg(const isl::schedule_node &node, int start_pos, int end_pos) {
+  required_mapping_strategy_.clear();
+  if (!node.isa<isl::schedule_node_band>()) {
+    return;
+  }
+
+  auto band_node = node.as<isl::schedule_node_band>();
+  start_pos = std::max(0, start_pos);
+  end_pos = std::min(static_cast<int>(band_node.n_member()) - 1, end_pos);
+
+  int last_axis = scop_info_.analysis_result_.GetLastAxisInScheduleTree();
+  int current_mapping_pos = 0;
+  if (last_axis >= start_pos && last_axis <= end_pos) {
+    required_mapping_strategy_[last_axis].mapping_idx = mapping_cfg_->GetAt(current_mapping_pos).first;
+    ++current_mapping_pos;
+  }
+
+  for (int i = start_pos; i <= end_pos; ++i) {
+    int current_axis_pos = i;
+    if (is_need_reverse_) {
+      current_axis_pos = end_pos - current_axis_pos;
+    }
+
+    if (current_mapping_pos >= static_cast<int>(mapping_cfg_->bound) || current_axis_pos == last_axis) {
+      continue;
+    }
+
+    required_mapping_strategy_[current_axis_pos].mapping_idx = mapping_cfg_->GetAt(current_mapping_pos).first;
+    ++current_mapping_pos;
+  }
+}
+
+/*
+ * Initialize repeated_mapping_cfg_axis_ and non_repeated_mapping_cfg_axis_.
+ * E.g: axis_0 --> tx  axis_1 --> tx  axis_2 --> ty  axis_3 --> tz
+ * repeated_mapping_cfg_axis_: tx --> {axis_0, axis_1}
+ * non_repeated_mapping_cfg_axis_: ty --> axis_2  tz --> axis_3
+ */
+void OperatorMappingStrategy::InitRepeatedMappingConfig() {
+  if (required_mapping_strategy_.empty()) {
+    return;
+  }
+
+  std::unordered_map<std::string, std::unordered_set<int>> all_config_repeated_pos;
+  for (auto cfg : required_mapping_strategy_) {
+    std::unordered_set<int> one_config_repeated_axis;
+    auto mapping_idx = cfg.second.mapping_idx;
+    if (all_config_repeated_pos.find(mapping_idx) != all_config_repeated_pos.end()) {
+      one_config_repeated_axis = all_config_repeated_pos[mapping_idx];
+    }
+    one_config_repeated_axis.emplace(cfg.first);
+    all_config_repeated_pos[mapping_idx] = one_config_repeated_axis;
+  }
+
+  for (auto repeated_pos : all_config_repeated_pos) {
+    if (repeated_pos.second.size() > 1) {
+      repeated_mapping_cfg_axis_[repeated_pos.first] = repeated_pos.second;
+    } else {
+      non_repeated_mapping_cfg_axis_[repeated_pos.first] = repeated_pos.second;
+    }
+  }
+}
+
+// For the case where multiple axes are mapped to the same threadIdx/blockIdx, the corresponding thread/block is
+// reallocated according to the size of the axis.
+// E.g: required_mapping_strategy_: axis_0 --> tx  axis_1 --> tx
+// required_mapping_strategy_: axis_0 --> replace_tx_ty  axis_1 --> replace_tx_tx
+void OperatorMappingStrategy::SetRepeatedMappingStrategy(const std::string &mapping_str) {
+  if (required_mapping_strategy_.empty()) {
+    return;
+  }
+
+  auto mapping_size = required_mapping_strategy_.size();
+  int new_number = is_need_reverse_ ? mapping_size - 1 : 0;
+  auto tmp_required_mapping_strategy_ = required_mapping_strategy_;
+  for (auto mapping_i : tmp_required_mapping_strategy_) {
+    MappingStrategy mapping_strategy;
+    mapping_strategy.offset = mapping_i.second.offset;
+    mapping_strategy.mapping_idx = mapping_str + std::to_string(new_number);
+    required_mapping_strategy_[mapping_i.first] = mapping_strategy;
+    new_number = is_need_reverse_ ? new_number - 1 : new_number + 1;
+  }
+}
+
+// Set the corresponding mapping configuration according to the strategy obtained by SetRepeatedMappingStrategy and the
+// size of the axis of the current band.
+MappingCfg *OperatorMappingStrategy::GetRepeatedReplaceMappingConfig(const isl::schedule_node &node,
+                                                                     const std::string &replace_mapping_name) {
+  if (required_mapping_strategy_.empty()) {
+    return nullptr;
+  }
+
+  std::unordered_set<int> excluded_axis_pos;
+  for (auto cfg : required_mapping_strategy_) {
+    excluded_axis_pos.emplace(cfg.first);
+  }
+
+  int replace_mapping_size = mapping_cfg_->GetAt(replace_mapping_name).second;
+  auto new_cfg_str = SetOneConfigForMulAxis(node, replace_mapping_size, excluded_axis_pos);
+  auto mapping_type = MappingType::REPLACE_THREADS;
+  if (mapping_cfg_->type == MappingType::BLOCKS) {
+    mapping_type = MappingType::REPLACE_BLOCKS;
+  }
+
+  auto mapping_name = REPEATED_MAPPING + replace_mapping_name;
+  scop_info_.user_config_.RecordReplaceConfig(mapping_name, new_cfg_str, mapping_type);
+  return scop_info_.user_config_.GetReplaceConfig()[mapping_name];
+}
+
+// Determine the current mapping strategy based on whether multiple axes are mapped to the same threadIdx/blockIdx.
+// E.g: repeated_mapping_cfg_axis_: tx --> {axis_0, axis_1}
+// required_mapping_strategy_: axis_0 --> replace_tx_tx  axis_1 --> replace_tx_ty
+void OperatorMappingStrategy::ReadjustRequireddMappingStrategy(const bool is_repeated_mapping,
+                                                               const std::string &repeated_mapping_idx,
+                                                               const std::string &mapping_str) {
+  if (required_mapping_strategy_.empty()) {
+    return;
+  }
+
+  auto tmp_required_mapping_strategy = required_mapping_strategy_;
+  required_mapping_strategy_.clear();
+  if (is_repeated_mapping) {
+    for (auto axis : repeated_mapping_cfg_axis_[repeated_mapping_idx]) {
+      MappingStrategy mapping_strategy;
+      mapping_strategy.mapping_idx = repeated_mapping_idx;
+      mapping_strategy.offset = tmp_required_mapping_strategy[axis].offset;
+      required_mapping_strategy_[axis] = mapping_strategy;
+    }
+    SetRepeatedMappingStrategy(mapping_str);
+  } else {
+    for (auto all_axis : non_repeated_mapping_cfg_axis_) {
+      for (auto axis : all_axis.second) {
+        MappingStrategy mapping_strategy;
+        mapping_strategy.mapping_idx = all_axis.first;
+        mapping_strategy.offset = tmp_required_mapping_strategy[axis].offset;
+        required_mapping_strategy_[axis] = mapping_strategy;
+      }
+    }
+  }
+}
+
+isl::schedule_node OperatorMappingStrategy::MapThreadBlockHelper(const isl::schedule_node &orig_node) {
+  if (required_mapping_strategy_.empty()) {
+    SetRequiredMappingCfg(orig_node);
+  }
+  InitRepeatedMappingConfig();
+  bool is_contains_repeated_mapping = !repeated_mapping_cfg_axis_.empty();
+
+  auto node = orig_node;
+  // Map one axis to one block/thread configuration.
+  if (!non_repeated_mapping_cfg_axis_.empty()) {
+    ReadjustRequireddMappingStrategy(false);
+    if (is_contains_repeated_mapping) {
+      is_insert_filter_ = false;
+      is_set_config_zero_ = false;
+    }
+    node = MapDimToThreadsBlocks(node);
+  }
+
+  // Map multiple axes to one block/thread configuration.
+  if (is_contains_repeated_mapping) {
+    std::string mappng_str = mapping_cfg_->type == MappingType::BLOCKS ? BLOCK_STR : THREAD_STR;
+    size_t i = 0;
+    for (auto cfg : repeated_mapping_cfg_axis_) {
+      ReadjustRequireddMappingStrategy(true, cfg.first, mappng_str);
+      if (i == repeated_mapping_cfg_axis_.size() - 1) {
+        is_insert_filter_ = true;
+        is_set_config_zero_ = true;
+      }
+      mapping_cfg_ = GetRepeatedReplaceMappingConfig(node, cfg.first);
+      CHECK(mapping_cfg_ != nullptr) << "mapping config is null";
+      node = MapDimToThreadsBlocks(node);
+      ++i;
+    }
+  }
+  return node;
+}
+
+size_t OperatorMappingStrategy::MapThreadHelper(isl::schedule_node &thread_root) {
+  if (mapping_cfg_->bound < 1 || !thread_root.isa<isl::schedule_node_band>()) {
     return 0;
   }
 
@@ -61,13 +450,11 @@ size_t OperatorMappingStrategy::MapThreadHelper(isl::schedule_node &thread_root,
     return 0;
   }
   auto orig_thread_root = thread_root;
-  n_thread_map = GetFinalMappingThreadNumber(thread_root, thread_cfg->bound, n_thread_map);
 
   // Map band under thread_root from inner dim to outer dim.
-  Mapping mapping;
-  thread_root = MapInnerDimToThreads(thread_root, thread_cfg, mapping, false, need_reverse);
+  thread_root = MapThreadBlockHelper(thread_root);
   auto tile_node = GetMarkerName(thread_root, THREAD_MARKER).empty() ? thread_root.child(0) : thread_root;
-  scop_info_.upa_node_mapping_.emplace_back(std::make_pair(tile_node, mapping));
+  scop_info_.upa_node_mapping_.emplace_back(std::make_pair(tile_node, mapping_sch_info_map_));
 
   // Do unroll if needed.
   if (scop_info_.user_config_.GetMaxUnrollLoop() != 1) {
@@ -77,12 +464,10 @@ size_t OperatorMappingStrategy::MapThreadHelper(isl::schedule_node &thread_root,
 
   int end_node_depth = thread_root.get_tree_depth() - start_node_depth;
   thread_root = thread_root.ancestor(end_node_depth);
-  return thread_cfg->bound;
+  return mapping_cfg_->bound;
 }
 
-isl::schedule_node OperatorMappingStrategy::MapBlockHelper(const isl::schedule_node &orig_node, MappingCfg *block_cfg,
-                                                           size_t n_block_map, bool check_extent,
-                                                           std::unordered_map<size_t, size_t> map_idx_shift) {
+isl::schedule_node OperatorMappingStrategy::MapBlockHelper(const isl::schedule_node &orig_node) {
   auto node = orig_node;
   auto band_node = node.as<isl::schedule_node_band>();
   if (!band_node || !band_node.permutable()) {
@@ -90,34 +475,18 @@ isl::schedule_node OperatorMappingStrategy::MapBlockHelper(const isl::schedule_n
     return node;
   }
 
-  auto partial_schedule = band_node.get_partial_schedule();
-  auto upa_list = partial_schedule.get_union_pw_aff_list();
+  int start_node_depth = node.get_tree_depth();
+  node = MapThreadBlockHelper(node);
+  node = GetMarkerName(node, BLOCK_MARKER).empty() ? node.child(0) : node;
+  scop_info_.upa_node_mapping_.emplace_back(std::make_pair(node, mapping_sch_info_map_));
 
-  if (check_extent) {
-    auto domain = band_node.get_schedule().get_domain();
-    isl::union_pw_aff_list range_aff_list(band_node.ctx(), static_cast<int>(upa_list.size()));
-    for (int i = upa_list.size() - 1; i >= 0; --i) {
-      auto range = upa_list.get_at(i).intersect_domain(domain);
-      range_aff_list = range_aff_list.add(range);
-    }
-    node = CheckMapSizeAndApplyTile(node, range_aff_list, block_cfg, false);
-  }
-
-  node = node.insert_mark(isl::id(node.ctx(), BLOCK_MARKER));
-  node = node.child(0);
-
-  Mapping mapping;
-  upa_list = upa_list.drop(n_block_map, upa_list.size() - n_block_map).reverse();
-  node = AnalysisNodeAndInsertMapFilter(node, false, upa_list, block_cfg, mapping, map_idx_shift);
-  scop_info_.upa_node_mapping_.emplace_back(std::make_pair(node.parent(), mapping));
-
+  int end_node_depth = node.get_tree_depth() - start_node_depth;
+  node = node.ancestor(end_node_depth);
   return node;
 }
 
 size_t ReduceMappingStrategy::MapThreadHelper(isl::schedule_node &thread_root) {
-  auto thread_cfg = scop_info_.user_config_.GetThreadConfig();
-  CHECK(thread_cfg != nullptr) << "thread config is null";
-  if (thread_cfg->bound < 1 || !thread_root.isa<isl::schedule_node_band>()) {
+  if (mapping_cfg_->bound < 1 || !thread_root.isa<isl::schedule_node_band>()) {
     return 0;
   }
 
@@ -135,19 +504,17 @@ size_t ReduceMappingStrategy::MapThreadHelper(isl::schedule_node &thread_root) {
   }
 
   // When akg reduce lib is enabled, we can try to map other injective statements whose coincidence equals 0
-  if (n_thread_map < thread_cfg->bound && scop_info_.analysis_result_.GetUseGpuReduceLib()) {
-    n_thread_map = thread_cfg->bound;
+  if (n_thread_map < mapping_cfg_->bound && scop_info_.analysis_result_.GetUseGpuReduceLib()) {
+    n_thread_map = mapping_cfg_->bound;
   }
 
   if (n_thread_map < 1) {
     return 0;
   }
-  n_thread_map = GetFinalMappingThreadNumber(thread_root, thread_cfg->bound, n_thread_map);
+  n_thread_map = GetFinalMappingThreadNumber(thread_root, n_thread_map);
 
   // Map band under thread_root from inner dim to outer dim.
-  Mapping mapping;
-  bool is_y_reduce = scop_info_.analysis_result_.GetReduceDirection() == Y_DIRECTION;
-  thread_root = MapInnerDimToThreads(thread_root, thread_cfg, mapping, false, is_y_reduce);
+  thread_root = MapThreadBlockHelper(thread_root);
 
   // If the current band is split during the mapping process, split the reduce axis and non-reduce axis of
   // the outer band.
@@ -163,14 +530,62 @@ size_t ReduceMappingStrategy::MapThreadHelper(isl::schedule_node &thread_root) {
   // The band corresponding to the reduce statement has a REDUCE_MARKER that needs to be deleted at the beginning.
   int end_node_depth = thread_root.get_tree_depth() - start_node_depth + 1;
   thread_root = thread_root.ancestor(end_node_depth);
-  scop_info_.upa_node_mapping_.emplace_back(std::make_pair(thread_root, mapping));
-  return thread_cfg->bound;
+  scop_info_.upa_node_mapping_.emplace_back(std::make_pair(thread_root, mapping_sch_info_map_));
+  return mapping_cfg_->bound;
+}
+
+/*
+ * Adjust the mapping strategy after splitting the fixed position axis.
+ * E.g: required_mapping_strategy_: axis_0 --> tx  axis_1 --> tx  axis_2 --> ty  axis_3 --> tz
+ * split_pos = 2
+ * required_mapping_strategy_: axis_0 --> ty  axis_1 --> tz
+ */
+void ReduceMappingStrategy::UpadateSplitMappingStatregy(const int split_pos) {
+  if (required_mapping_strategy_.empty()) {
+    return;
+  }
+
+  bool need_redistribute = false;
+  auto tmp_required_mapping_strategy_ = required_mapping_strategy_;
+  for (auto strategy : tmp_required_mapping_strategy_) {
+    if (strategy.first < split_pos) {
+      continue;
+    }
+    if (!need_redistribute) {
+      required_mapping_strategy_.clear();
+      need_redistribute = true;
+    }
+    MappingStrategy mapping_strategy;
+    mapping_strategy.mapping_idx = strategy.second.mapping_idx;
+    required_mapping_strategy_[strategy.first - split_pos] = mapping_strategy;
+  }
+}
+
+// Split the mappable axis into a single band according to the dimensions of the mapping configuration.
+size_t ReduceMappingStrategy::GetFinalMappingThreadNumber(isl::schedule_node &node, const size_t n_thread_map) {
+  auto final_n_thread_map = n_thread_map;
+  isl::schedule_node_band band_node = node.as<isl::schedule_node_band>();
+  // Split band node according to mapping config and coincidence of band node.
+  auto mapping_cfg_bound = mapping_cfg_->bound;
+  if (final_n_thread_map > mapping_cfg_bound) {
+    node = band_node.split(final_n_thread_map - mapping_cfg_bound);
+    UpadateSplitMappingStatregy(final_n_thread_map - mapping_cfg_bound);
+    node = node.child(0);
+    final_n_thread_map = mapping_cfg_bound;
+    band_node = node.as<isl::schedule_node_band>();
+  }
+
+  // Split to keep nodes with coincident equals to 1.
+  if (final_n_thread_map < band_node.n_member() && !scop_info_.user_config_.EnableStitchFusion()) {
+    node = band_node.split(final_n_thread_map);
+    UpadateSplitMappingStatregy(final_n_thread_map);
+  } else {
+    final_n_thread_map = static_cast<size_t>(band_node.n_member());
+  }
+  return final_n_thread_map;
 }
 
 isl::schedule_node ReduceMappingStrategy::InsertReduceExtension(const isl::schedule_node &node) {
-  auto thread_cfg = scop_info_.user_config_.GetThreadConfig();
-  CHECK(thread_cfg != nullptr) << "thread config is null";
-
   isl::schedule_node insert_node = node;
   isl::schedule_node parent_node = node;
   isl::schedule_node ancestor_node = node;
@@ -222,11 +637,9 @@ bool ReduceMappingStrategy::NeedAtomicAdd(const isl::schedule_node_band &band, s
     return false;
   }
 
-  auto block_cfg = scop_info_.user_config_.GetBlockConfig();
-  CHECK(block_cfg != nullptr) << "block config is null";
-  while (non_coin_start_idx < block_cfg->bound) {
-    auto idx = block_cfg->bound - non_coin_start_idx - 1;
-    if (block_cfg->GetAt(idx).second > 1) {
+  while (non_coin_start_idx < mapping_cfg_->bound) {
+    auto idx = mapping_cfg_->bound - non_coin_start_idx - 1;
+    if (mapping_cfg_->GetAt(idx).second > 1) {
       return true;
     }
     ++non_coin_start_idx;
@@ -255,9 +668,7 @@ void ReduceMappingStrategy::MarkAtomicAddTensor(const isl::schedule_node_band &b
 }
 
 size_t BatchMatmulMappingStrategy::MapThreadHelper(isl::schedule_node &thread_root) {
-  auto warp_cfg = scop_info_.user_config_.GetReplaceConfig()[WARP_COMPUTE];
-  CHECK(warp_cfg != nullptr) << "warp config is null";
-  if (warp_cfg->bound < 1 || !thread_root.isa<isl::schedule_node_band>()) {
+  if (mapping_cfg_->bound < 1 || !thread_root.isa<isl::schedule_node_band>()) {
     return 0;
   }
 
@@ -267,58 +678,20 @@ size_t BatchMatmulMappingStrategy::MapThreadHelper(isl::schedule_node &thread_ro
   if (n_thread_map < 1) {
     return 0;
   }
-  n_thread_map = GetFinalMappingThreadNumber(thread_root, warp_cfg->bound, n_thread_map);
 
   // Map band under thread_root from inner dim to outer dim.
-  Mapping mapping;
-  thread_root = MapInnerDimToThreads(thread_root, warp_cfg, mapping, false, true);
+  thread_root = MapThreadBlockHelper(thread_root);
   bool is_tiled = GetMarkerName(thread_root, THREAD_MARKER).empty();
   thread_root = is_tiled ? thread_root.child(0) : thread_root;
   thread_root = thread_root.del().insert_mark(isl::id(thread_root.ctx(), WARP_MARKER));
 
   int end_node_depth = thread_root.get_tree_depth() - start_node_depth;
   thread_root = thread_root.ancestor(end_node_depth);
-  scop_info_.upa_node_mapping_.emplace_back(std::make_pair(thread_root, mapping));
-  return warp_cfg->bound;
+  scop_info_.upa_node_mapping_.emplace_back(std::make_pair(thread_root, mapping_sch_info_map_));
+  return mapping_cfg_->bound;
 }
 
-isl::schedule_node ConvMappingStrategy::ResetConvBlockMappingConfig(const isl::schedule_node &orig_node,
-                                                                    MappingCfg *block_cfg, const bool check_extent) {
-  if (!orig_node.isa<isl::schedule_node_band>()) {
-    return orig_node;
-  }
-  const unsigned outer_band_axis_size = 4;
-  auto node = orig_node;
-  CHECK_GE(node.as<isl::schedule_node_band>().n_member(), outer_band_axis_size);
-
-  // For the convolution operator, n axis is mapped to blockIdx.z, h axis and w axis are mapped to blockIdx.y, o axis
-  // is mapped to blockIdx.x,
-  node = node.as<isl::schedule_node_band>().split(1);
-  auto new_cfg = std::to_string(block_cfg->GetZ().second);
-  scop_info_.user_config_.RecordReplaceConfig(CONV_N, new_cfg, MappingType::REPLACE_BLOCKS);
-  auto conv_o_block_cfg = scop_info_.user_config_.GetReplaceConfig()[CONV_N];
-  node = MapBlockHelper(node, conv_o_block_cfg, 1, check_extent);
-
-  node = node.child(0).child(0).as<isl::schedule_node_band>().split(2);
-  auto partial_schedule = node.as<isl::schedule_node_band>().get_partial_schedule();
-  partial_schedule = partial_schedule.intersect_domain(node.get_domain());
-  auto upa_list = partial_schedule.get_union_pw_aff_list();
-  auto extent_h = upa_list.get_at(0).floor().max_val().get_num_si() + 1;
-  auto bind_block_h = std::min(static_cast<int>(extent_h), block_cfg->GetY().second);
-  new_cfg = std::to_string(block_cfg->GetY().second / bind_block_h) + " " + std::to_string(bind_block_h);
-  scop_info_.user_config_.RecordReplaceConfig(CONV_H_W, new_cfg, MappingType::REPLACE_BLOCKS);
-  auto conv_h_w_block_cfg = scop_info_.user_config_.GetReplaceConfig()[CONV_H_W];
-  node = MapBlockHelper(node, conv_h_w_block_cfg, 2, check_extent);
-
-  node = node.child(0).child(0);
-  new_cfg = std::to_string(block_cfg->GetX().second);
-  scop_info_.user_config_.RecordReplaceConfig(CONV_O, new_cfg, MappingType::REPLACE_BLOCKS);
-  auto conv_n_block_cfg = scop_info_.user_config_.GetReplaceConfig()[CONV_O];
-  node = MapBlockHelper(node, conv_n_block_cfg, 1, check_extent);
-  return node;
-}
-
-isl::schedule ConvMappingStrategy::MoveKernelHWBand(isl::schedule sch) {
+isl::schedule ConvMappingStrategy::MoveKernelHWBand(const isl::schedule &sch) {
   auto node = sch.root();
   isl::multi_union_pw_aff kh_mupa = isl::multi_union_pw_aff::zero(node.get_domain().get_space().set_from_params());
   isl::multi_union_pw_aff kw_mupa = kh_mupa;
@@ -342,93 +715,8 @@ isl::schedule ConvMappingStrategy::MoveKernelHWBand(isl::schedule sch) {
     }
     return node;
   };
-  sch = sch.get_root().map_descendant_bottom_up(MapFromInner).get_schedule();
-  return sch;
-}
-
-size_t TOTMappingStrategy::MapThreadHelper(isl::schedule_node &thread_root) {
-  auto thread_cfg = scop_info_.user_config_.GetThreadConfig();
-  CHECK(thread_cfg != nullptr) << "thread config is null";
-  if (thread_cfg->bound < 1 || !thread_root.isa<isl::schedule_node_band>()) {
-    return 0;
-  }
-
-  int start_node_depth = thread_root.get_tree_depth();
-  // Determine max num dimension of threads that can be mapped.
-  auto n_thread_map = CountConsecutiveCoincident(thread_root);
-  if (n_thread_map < 1) {
-    return 0;
-  }
-
-  if (n_thread_map < thread_root.as<isl::schedule_node_band>().n_member()) {
-    thread_root = thread_root.as<isl::schedule_node_band>().split(n_thread_map);
-  }
-
-  // Map band under thread_root from inner dim to outer dim.
-  auto band_node = thread_root.as<isl::schedule_node_band>();
-  auto partial_schedule = band_node.get_partial_schedule();
-  auto upa_list = partial_schedule.get_union_pw_aff_list();
-
-  std::unordered_map<int, std::string> tot_mapping = GetRequiredMappingCfg(thread_cfg);
-  auto prefix_upa_list = GetPrefixPartialSchedule(partial_schedule, thread_root, true);
-  thread_root = CheckMapSizeAndApplyTile(thread_root, prefix_upa_list, thread_cfg, true, tot_mapping);
-  thread_root = thread_root.insert_mark(isl::id(thread_root.ctx(), THREAD_MARKER)).child(0);
-
-  std::unordered_set<std::string> outer_mapping_cfg = {SKIP_MARKER};
-  Mapping mapping;
-  thread_root = InsertRequiredMappingFilter(thread_root, upa_list, thread_cfg, mapping, tot_mapping, outer_mapping_cfg);
-
-  scop_info_.upa_node_mapping_.emplace_back(std::make_pair(thread_root.parent(), mapping));
-
-  int end_node_depth = thread_root.get_tree_depth() - start_node_depth;
-  thread_root = thread_root.ancestor(end_node_depth);
-  return thread_cfg->bound;
-}
-
-isl::schedule_node TOTMappingStrategy::MapBlockHelper(const isl::schedule_node &orig_node, MappingCfg *block_cfg,
-                                                      size_t n_block_map, bool check_extent,
-                                                      std::unordered_map<size_t, size_t> &map_idx_shift) {
-  auto node = orig_node;
-  auto band_node = node.as<isl::schedule_node_band>();
-  if (!band_node || !band_node.permutable()) {
-    LOG(WARNING) << "No permutable outer band node to map block.";
-    return node;
-  }
-
-  auto partial_schedule = band_node.get_partial_schedule();
-  auto upa_list = partial_schedule.get_union_pw_aff_list();
-
-  auto domain = band_node.get_schedule().get_domain();
-  isl::union_pw_aff_list range_aff_list(band_node.ctx(), static_cast<int>(upa_list.size()));
-  for (int i = upa_list.size() - 1; i >= 0; --i) {
-    auto range = upa_list.get_at(i).intersect_domain(domain);
-    range_aff_list = range_aff_list.add(range);
-  }
-
-  std::unordered_map<int, std::string> tot_mapping = GetRequiredMappingCfg(block_cfg);
-  node = CheckMapSizeAndApplyTile(node, range_aff_list, block_cfg, true, tot_mapping);
-  node = node.insert_mark(isl::id(node.ctx(), BLOCK_MARKER)).child(0);
-  Mapping mapping;
-  node = InsertRequiredMappingFilter(node, upa_list, block_cfg, mapping, tot_mapping);
-
-  scop_info_.upa_node_mapping_.emplace_back(std::make_pair(node.parent(), mapping));
-  return node;
-}
-
-std::unordered_map<int, std::string> TOTMappingStrategy::GetRequiredMappingCfg(MappingCfg *mapping_cfg) {
-  CHECK(mapping_cfg != nullptr) << "mapping config is null";
-  std::unordered_map<int, std::string> tot_mapping = {};
-  int last_axis = scop_info_.analysis_result_.GetLastAxisInScheduleTree();
-  CHECK(last_axis != -1) << "last axis is -1";
-  tot_mapping[last_axis] = mapping_cfg->GetAt(0).first;
-  for (int i = mapping_cfg->bound - 1, j = 1; i >= 0; --i) {
-    if (i == last_axis) {
-      continue;
-    }
-    tot_mapping[i] = mapping_cfg->GetAt(j).first;
-    ++j;
-  }
-  return tot_mapping;
+  auto final_sch = sch.get_root().map_descendant_bottom_up(MapFromInner).get_schedule();
+  return final_sch;
 }
 
 }  // namespace poly

@@ -66,6 +66,7 @@ class RegisterMemoryManager : public SchedulePass {
   isl::schedule_node GetRegisterPromotedNode(isl::schedule_node &root);
   isl::schedule HoistRegisterMemoryOnMark(isl::schedule_node root);
 
+  isl::schedule_node AdjustConvScheduleTreeStructure(const isl::schedule_node &orig_node);
   isl::schedule_node TileTensorAccordingInterfaceValue(isl::schedule_node &root);
   isl::multi_val GetRealTileSizeVal(const isl::schedule_node &node, const std::string &matrix_name,
                                     const std::string &matrix_major);

@@ -645,9 +645,7 @@ void OpTypeCollector::AnalyzeOpTemplate() {
     return;
   }
 
-  if (concated_op_type.find(AT_CALL) != std::string::npos) {
-    scop_info_.analysis_result_.SetOpTemplate(Template::EXTERN_CALL);
-  } else if (concated_op_type.find(AT_REDUCE) != std::string::npos) {
+  if (concated_op_type.find(AT_REDUCE) != std::string::npos) {
     scop_info_.analysis_result_.SetOpTemplate(Template::REDUCTION);
   } else if (concated_op_type.find(AT_TRANSPOSE) != std::string::npos) {
     scop_info_.analysis_result_.SetOpTemplate(Template::TRANSPOSE_OP);
@@ -656,7 +654,9 @@ void OpTypeCollector::AnalyzeOpTemplate() {
   } else if (concated_op_type.find(AT_BROADCAST) != std::string::npos ||
              concated_op_type.find(AT_TRANSFORM) != std::string::npos) {
     scop_info_.analysis_result_.SetOpTemplate(Template::BROADCAST_OP);
-  } else {
+  } else if (concated_op_type.find(AT_CALL) != std::string::npos) {
+    scop_info_.analysis_result_.SetOpTemplate(Template::EXTERN_CALL);
+  } else  {
     scop_info_.analysis_result_.SetOpTemplate(Template::PURE_ELEM);
   }
 }

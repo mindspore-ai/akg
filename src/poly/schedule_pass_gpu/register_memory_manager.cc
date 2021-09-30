@@ -40,20 +40,18 @@ isl::schedule RegisterMemoryManager::HoistRegisterMemoryOnDepth(isl::schedule_no
   auto block_cfg = scop_info_.user_config_.GetBlockConfig();
   CHECK(block_cfg != nullptr) << "block config is null";
   auto replace_cfg = scop_info_.user_config_.GetReplaceConfig();
-  auto block_mapping = GetBlockMappingFilterInfo(root_node, block_cfg, replace_cfg);
+  MappingStrategyMap mapping_strategy = scop_info_.user_config_.GetOuterMappingStrategy();
+  std::unordered_set<std::string> non_repeated_idx = GetNonRepeatedIdx(mapping_strategy);
+  auto block_mapping = GetMappingFilterInfo(root_node, block_cfg, replace_cfg, non_repeated_idx);
 
-  int64_t alloc_threads = 1;
   auto thread_cfg = scop_info_.user_config_.GetThreadConfig();
-  if (thread_cfg != nullptr) {
-    for (size_t i = 0; i < thread_cfg->bound; ++i) {
-      alloc_threads *= thread_cfg->GetAt(i).second;
-    }
-  }
-  if (scop_info_.user_config_.GetEnableTensorCoreUsePoly()) {
-    thread_cfg = replace_cfg[WARP_COMPUTE];
-  }
   CHECK(thread_cfg != nullptr) << "thread config is null";
-  auto mapping = GatherMappingsTo(root_node, thread_cfg).intersect(block_mapping);
+  auto thread_mapping = isl::union_set::empty(block_mapping.ctx());
+  mapping_strategy = scop_info_.user_config_.GetInnerMappingStrategy();
+  non_repeated_idx = GetNonRepeatedIdx(mapping_strategy);
+  thread_mapping = GetMappingFilterInfo(root_node, thread_cfg, replace_cfg, non_repeated_idx);
+
+  auto mapping = block_mapping.intersect(thread_mapping);
 
   auto partial_sched = LocalSchedule(node);
   partial_sched = partial_sched.intersect_domain(mapping);
@@ -67,6 +65,13 @@ isl::schedule RegisterMemoryManager::HoistRegisterMemoryOnDepth(isl::schedule_no
   auto tmp_node = res_node;
   if (node.isa<isl::schedule_node_band>()) {
     tmp_node = res_node.child(0);
+  }
+
+  int64_t alloc_threads = 1;
+  if (thread_cfg != nullptr) {
+    for (size_t i = 0; i < thread_cfg->bound; ++i) {
+      alloc_threads *= thread_cfg->GetAt(i).second;
+    }
   }
 
   auto partial_sched_mupa = ShortScheduleMupa(root_node, tmp_node);
@@ -565,6 +570,59 @@ std::string RegisterMemoryManager::GetPromotedWriteName() {
     write_name = SHARED_WRITE_ID_NAME;
   }
   return write_name;
+}
+
+isl::schedule_node RegisterMemoryManager::AdjustConvScheduleTreeStructure(const isl::schedule_node &orig_node) {
+  auto node = orig_node;
+  if (!node.isa<isl::schedule_node_band>()) {
+    return node;
+  }
+
+  auto band_node = node.as<isl::schedule_node_band>();
+  auto orig_number = band_node.n_member();
+  if (orig_number <= 2) {
+    return node;
+  }
+
+  // original node
+  auto orig_partial_schedule = band_node.get_partial_schedule();
+  bool orig_permutable = band_node.get_permutable();
+  std::vector<bool> orig_coincident;
+  for (int i = 0; i < static_cast<int>(orig_number); ++i) {
+    orig_coincident.push_back(band_node.member_get_coincident(i));
+  }
+
+  isl::union_pw_aff_list new_partial_schedule(node.ctx(), orig_number);
+  auto InsertPartialSchedule = [&new_partial_schedule](isl::schedule_node node) -> void {
+    auto partial_schedule = node.as<isl::schedule_node_band>().get_partial_schedule();
+    for (int i = 0; i < static_cast<int>(partial_schedule.size()); ++i) {
+      new_partial_schedule = new_partial_schedule.add(partial_schedule.get_at(i));
+    }
+  };
+
+  // split n axis
+  node = node.as<isl::schedule_node_band>().split(1);
+  auto n_node = node;
+  node = node.del();
+
+  // split h and w axis
+  const int h_w_axis_size = 2;
+  int real_h_w_axis_size = static_cast<int>(orig_number) - h_w_axis_size;
+  node = node.as<isl::schedule_node_band>().split(real_h_w_axis_size);
+  InsertPartialSchedule(node);
+  node = node.del();
+  InsertPartialSchedule(n_node);
+
+  // split o and other axis
+  InsertPartialSchedule(node);
+
+  node = node.insert_partial_schedule(isl::multi_union_pw_aff(orig_partial_schedule.get_space(), new_partial_schedule));
+  band_node = node.as<isl::schedule_node_band>();
+  band_node = band_node.set_permutable(orig_permutable);
+  for (int i = 0; i < static_cast<int>(orig_number); ++i) {
+    band_node = band_node.member_set_coincident(i, orig_coincident[i]);
+  }
+  return band_node;
 }
 
 // According to the value of the conv interface, the size of the tensor is split to confirm the size of the fragment.

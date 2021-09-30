@@ -245,59 +245,6 @@ isl::schedule InsertMarkerForThreadGroup(const isl::schedule &sch, const std::st
   return final_sch;
 }
 
-isl::schedule_node AdjustConvScheduleTreeStructure(const isl::schedule_node &orig_node, const bool is_promotion) {
-  auto node = orig_node;
-  if (!node.isa<isl::schedule_node_band>()) {
-    return node;
-  }
-
-  auto band_node = node.as<isl::schedule_node_band>();
-  auto orig_number = band_node.n_member();
-  if (orig_number <= 2) {
-    return node;
-  }
-
-  // original node
-  auto orig_partial_schedule = band_node.get_partial_schedule();
-  bool orig_permutable = band_node.get_permutable();
-  std::vector<bool> orig_coincident;
-  for (int i = 0; i < static_cast<int>(orig_number); ++i) {
-    orig_coincident.push_back(band_node.member_get_coincident(i));
-  }
-
-  isl::union_pw_aff_list new_partial_schedule(node.ctx(), orig_number);
-  auto InsertPartialSchedule = [&new_partial_schedule](isl::schedule_node node) -> void {
-    auto partial_schedule = node.as<isl::schedule_node_band>().get_partial_schedule();
-    for (int i = 0; i < static_cast<int>(partial_schedule.size()); ++i) {
-      new_partial_schedule = new_partial_schedule.add(partial_schedule.get_at(i));
-    }
-  };
-
-  // split n axis
-  node = node.as<isl::schedule_node_band>().split(1);
-  auto n_node = node;
-  node = node.del();
-
-  // split h and w axis
-  const int h_w_axis_size = 2;
-  int real_h_w_axis_size = is_promotion ? static_cast<int>(orig_number) - h_w_axis_size : h_w_axis_size;
-  node = node.as<isl::schedule_node_band>().split(real_h_w_axis_size);
-  InsertPartialSchedule(node);
-  node = node.del();
-  InsertPartialSchedule(n_node);
-
-  // split o and other axis
-  InsertPartialSchedule(node);
-
-  node = node.insert_partial_schedule(isl::multi_union_pw_aff(orig_partial_schedule.get_space(), new_partial_schedule));
-  band_node = node.as<isl::schedule_node_band>();
-  band_node = band_node.set_permutable(orig_permutable);
-  for (int i = 0; i < static_cast<int>(orig_number); ++i) {
-    band_node = band_node.member_set_coincident(i, orig_coincident[i]);
-  }
-  return band_node;
-}
-
 std::string GetMarkerName(const isl::schedule_node &node, std::string find_name) {
   std::string marker_name = "";
   if (node.isa<isl::schedule_node_mark>()) {
@@ -308,270 +255,6 @@ std::string GetMarkerName(const isl::schedule_node &node, std::string find_name)
     marker_name = "";
   }
   return marker_name;
-}
-
-isl::union_pw_aff_list GetUPAList(const isl::schedule_node &node, isl::multi_union_pw_aff &partial_schedule,
-                                  const bool is_promotion, const bool need_reverse) {
-  if (is_promotion) {
-    // we need to to get range of promoted band from extension node so that we can correctly fix stride
-    auto parent = node;
-    while (parent && parent.has_parent() && !parent.isa<isl::schedule_node_extension>()) {
-      parent = parent.parent();
-    }
-    if (parent.isa<isl::schedule_node_extension>()) {
-      auto extension = parent.as<isl::schedule_node_extension>();
-      partial_schedule = partial_schedule.intersect_domain(extension.get_extension().range());
-    }
-  }
-
-  auto upa_list = partial_schedule.get_union_pw_aff_list().reverse();
-
-  if (need_reverse) {
-    upa_list = upa_list.reverse();
-  }
-  return upa_list;
-}
-
-// append prefix to partial schedule for tiling
-isl::union_pw_aff_list GetPrefixPartialSchedule(const isl::multi_union_pw_aff partial_schedule,
-                                                const isl::schedule_node node, const bool need_reverse) {
-  auto add_prefix_schedule = partial_schedule;
-  size_t max_distance_to_filter = 2;
-  size_t i = 0;
-  auto filter = node;
-  while (i < max_distance_to_filter && filter.has_parent()) {
-    filter = filter.parent();
-    if (filter.isa<isl::schedule_node_filter>()) {
-      break;
-    }
-    ++i;
-  }
-  if (filter.isa<isl::schedule_node_filter>()) {
-    add_prefix_schedule = add_prefix_schedule.intersect_domain(filter.as<isl::schedule_node_filter>().get_filter());
-  }
-  auto prefix_upa_list = add_prefix_schedule.get_union_pw_aff_list().reverse();
-
-  if (need_reverse) {
-    prefix_upa_list = prefix_upa_list.reverse();
-  }
-  return prefix_upa_list;
-}
-
-isl::schedule_node MapInnerDimToThreads(const isl::schedule_node &node, MappingCfg *mapping_cfg, Mapping &mapping,
-                                        const bool is_promotion, const bool need_reverse) {
-  CHECK(mapping_cfg != nullptr) << "thread config is null";
-  isl::schedule_node_band band_node = node.as<isl::schedule_node_band>();
-  size_t n_thread_map = std::min(static_cast<size_t>(band_node.n_member()), mapping_cfg->bound);
-  CHECK_LE(n_thread_map, mapping_cfg->MaxDim()) << "mapping to too many threads.";
-  auto partial_schedule = band_node.get_partial_schedule();
-  auto upa_list = GetUPAList(node, partial_schedule, is_promotion, need_reverse);
-
-  auto prefix_upa_list = GetPrefixPartialSchedule(partial_schedule, node, need_reverse);
-  isl::schedule_node fix_node = CheckMapSizeAndApplyTile(node, prefix_upa_list, mapping_cfg, need_reverse);
-  bool is_tiled = !fix_node.is_equal(node);
-
-  // drop un-mapped aff after tiling
-  upa_list = upa_list.drop(n_thread_map, upa_list.size() - n_thread_map);
-
-  // insert node with specific marker
-  fix_node = fix_node.insert_mark(isl::id(fix_node.ctx(), THREAD_MARKER));
-  fix_node = fix_node.child(0);
-
-  auto after_map_node = AnalysisNodeAndInsertMapFilter(fix_node, is_promotion, upa_list, mapping_cfg, mapping);
-  after_map_node = after_map_node.parent();
-  if (is_tiled) {
-    after_map_node = after_map_node.parent();
-  }
-
-  return after_map_node;
-}
-
-isl::schedule_node AnalysisNodeAndInsertMapFilter(const isl::schedule_node &node, const bool is_promotion,
-                                                  isl::union_pw_aff_list upa_list, MappingCfg *mapping_cfg,
-                                                  Mapping &mapping, std::unordered_map<size_t, size_t> map_idx_shift) {
-  // create mapping filter
-  CHECK(mapping_cfg != nullptr) << "threadconfig is null";
-
-  isl::union_set domain = node.get_schedule().get_domain();
-  if (node.ancestor(2) && node.ancestor(2).isa<isl::schedule_node_filter>()) {
-    domain = node.ancestor(2).as<isl::schedule_node_filter>().get_filter();
-  }
-
-  size_t num_map = upa_list.size();
-  for (size_t i = 0; i < num_map; ++i) {
-    auto map_id = map_idx_shift.find(i) != map_idx_shift.end() ? map_idx_shift[i] : i;
-    std::pair<std::string, int> cfg = mapping_cfg->GetAt(map_id);
-    auto upa = upa_list.get_at(i);
-    CHECK_GT(cfg.second, 0);
-    upa = upa.mod(isl::val(node.ctx(), cfg.second));
-    auto id = isl::id(node.ctx(), cfg.first);
-    mapping[id] = upa;
-    domain = upa.domain();
-  }
-
-  for (size_t i = num_map; i < mapping_cfg->bound; ++i) {
-    CHECK(!domain.is_null());
-    auto universe = domain.universe();
-    auto map_id = map_idx_shift.find(i) != map_idx_shift.end() ? map_idx_shift[i] : i;
-    std::pair<std::string, int> cfg = mapping_cfg->GetAt(map_id);
-    auto id = isl::id(node.ctx(), cfg.first);
-    mapping[id] = isl::union_pw_aff(universe, isl::val::zero(domain.ctx()));
-  }
-
-  return InsertMapFilter(node, is_promotion, mapping);
-}
-
-isl::schedule_node InsertMapFilter(const isl::schedule_node &node, const bool is_promotion, Mapping &mapping) {
-  if (mapping.size() == 0) {
-    return node;
-  }
-  // extract unique domain
-  auto map_domain = mapping.cbegin()->second.domain();
-  if (!is_promotion) {
-    for (const auto &kvp : mapping) {
-      CHECK(map_domain.is_equal(kvp.second.domain()));
-    }
-  }
-
-  auto map_filter = map_domain.universe();
-  for (const auto &kvp : mapping) {
-    auto id = kvp.first;
-    auto upa = kvp.second;
-    upa = upa.sub(isl::union_pw_aff::param_on_domain(map_domain.universe(), id));
-    map_filter = map_filter.intersect(upa.zero_union_set());
-  }
-
-  // insert mapping filter
-  isl::schedule_node map_filter_node = node;
-  map_filter_node = map_filter_node.insert_filter(map_filter);
-  return map_filter_node;
-}
-
-isl::schedule_node InsertRequiredMappingFilter(const isl::schedule_node &node, isl::union_pw_aff_list upa_list,
-                                               MappingCfg *mapping_cfg, Mapping &mapping,
-                                               std::unordered_map<int, std::string> required_mapping,
-                                               std::unordered_set<std::string> outer_mapping_cfg) {
-  isl::union_set domain = node.get_schedule().get_domain();
-
-  std::unordered_set<std::string> current_mapping_cfg;
-  for (size_t i = 0; i < upa_list.size(); ++i) {
-    if (required_mapping.count(static_cast<int>(i)) == 0) {
-      continue;
-    }
-    auto mapping_i = required_mapping[static_cast<int>(i)];
-    std::pair<std::string, int> cfg = mapping_cfg->GetAt(mapping_i);
-    current_mapping_cfg.emplace(cfg.first);
-
-    auto upa = upa_list.get_at(i);
-    CHECK_GT(cfg.second, 0);
-    upa = upa.mod(isl::val(node.ctx(), cfg.second));
-    auto id = isl::id(node.ctx(), cfg.first);
-    mapping[id] = upa;
-    domain = upa.domain();
-  }
-
-  // Set other configurations to 0.
-  if (!outer_mapping_cfg.empty()) {
-    for (size_t i = 0; i < mapping_cfg->bound; ++i) {
-      CHECK(!domain.is_null());
-      auto universe = domain.universe();
-      // Remove the configuration that has been mapped.
-      if (current_mapping_cfg.find(mapping_cfg->GetAt(i).first) != current_mapping_cfg.end()) {
-        continue;
-      }
-      // Remove the configuration in the outer mapping.
-      if (outer_mapping_cfg.find(mapping_cfg->GetAt(i).first) != outer_mapping_cfg.end()) {
-        continue;
-      }
-      std::pair<std::string, int> cfg = mapping_cfg->GetAt(i);
-      auto id = isl::id(node.ctx(), cfg.first);
-      mapping[id] = isl::union_pw_aff(universe, isl::val::zero(domain.ctx()));
-    }
-  }
-
-  return InsertMapFilter(node, false, mapping);
-}
-
-/*
- * When mapping size is smaller than the extent of corresponding axis, we may encounter several problems if the axis
- * is not tiled. Firstly, for case that extent is multiplies of mapping sizes, directly mapping the axis will
- * generate a for loop with stride equals to `extent / mapping size`, which is not firently to emit halide ir.
- * Secondly, for case that etxnet is not divisible by mapping size, we need to generate a for loop that has offset
- * with `min` in it to deal with the tail part. This type of for loop can be generated by tiling schedule tree.
- * Therefore, we must check map size and apply tile before mapping.
- */
-isl::schedule_node CheckMapSizeAndApplyTile(const isl::schedule_node &mapping_root,
-                                            const isl::union_pw_aff_list &aff_list, MappingCfg *mapping_cfg,
-                                            const bool need_reverse,
-                                            std::unordered_map<int, std::string> required_mapping) {
-  bool need_tile = false;
-  std::vector<int> mapping_sizes;
-  CHECK(mapping_cfg != nullptr) << "mapping config is null";
-  size_t block_count = 0;
-  int extent = 0;
-  int map_size = 0;
-
-  auto RecordMappingSizes = [&mapping_sizes, &need_tile, &map_size, &extent](const bool is_config,
-                                                                             const bool is_thread) -> void {
-    if (is_config) {
-      if (is_thread) {
-        need_tile = need_tile || extent > map_size;
-      } else {
-        need_tile = need_tile || (extent > map_size && extent % map_size != 0);
-      }
-    }
-    mapping_sizes.emplace_back(map_size);
-  };
-
-  for (size_t i = 0; i < aff_list.size(); ++i) {
-    auto aff = aff_list.get_at(i).floor();
-    extent = aff.max_val().get_num_si() + 1;
-    map_size = extent;
-    // custom mapping
-    if (!required_mapping.empty()) {
-      bool is_config = (required_mapping.count(static_cast<int>(i)) != 0);
-      if (is_config) {
-        auto mapping_i = required_mapping[static_cast<int>(i)];
-        map_size = mapping_cfg->GetAt(mapping_i).second;
-      }
-      RecordMappingSizes(is_config, false);
-      continue;
-    }
-
-    if (mapping_cfg->type == MappingType::BLOCKS) {
-      // block mapping
-      bool is_config = (aff_list.size() - 1 - i < mapping_cfg->bound);
-      if (is_config) {
-        map_size = mapping_cfg->GetAt(block_count).second;
-        ++block_count;
-      }
-      RecordMappingSizes(is_config, false);
-    } else {
-      // thread mapping
-      bool is_config = (i < mapping_cfg->bound);
-      if (is_config) {
-        map_size = mapping_cfg->GetAt(i).second;
-      }
-      RecordMappingSizes(is_config, true);
-    }
-  }
-
-  if (!need_tile) {
-    return mapping_root;
-  }
-
-  isl::multi_val tile_size;
-  auto ctx = mapping_root.ctx();
-  auto space = mapping_root.as<isl::schedule_node_band>().get_space();
-  tile_size = isl::multi_val::zero(space);
-
-  auto len = static_cast<int>(mapping_sizes.size());
-  for (auto i = len - 1; i >= 0; --i) {
-    int pos = need_reverse ? i : len - 1 - i;
-    tile_size = tile_size.set_val(pos, isl::val(ctx, mapping_sizes[i]));
-  }
-
-  return TileBand(mapping_root, tile_size).child(0);
 }
 
 bool IsEqualNode(const isl::schedule_node node1, const isl::schedule_node node2) {
@@ -655,7 +338,7 @@ isl::multi_union_pw_aff MapDomainToThread(const isl::schedule_node &node, Mappin
           if (mapping.count(thread_id) == 0) {
             break;
           }
-          upa_list = upa_list.add(mapping.at(thread_id));
+          upa_list = upa_list.add(mapping.at(thread_id).schedule_upa);
         }
         if (upa_list.size() == thread_ids.size()) {
           auto domain_upa_node = CollectDomain(upa_node);
@@ -714,7 +397,7 @@ isl::multi_union_pw_aff MapDomainAllWithType(const isl::schedule_node &node, Map
       if (mapping.count(id) == 0) {
         break;
       }
-      upa_list = upa_list.add(mapping.at(id));
+      upa_list = upa_list.add(mapping.at(id).schedule_upa);
     }
     if (upa_list.size() == ids.size()) {
       auto domain_upa_node = CollectDomain(upa_node);
@@ -949,36 +632,62 @@ isl::schedule_node InsertExtensionNodeBeforeOrAfter(const isl::schedule_node &no
   return extension_node;
 }
 
-isl::union_set GetBlockMappingFilterInfo(const isl::schedule_node node, MappingCfg *block_cfg,
-                                         std::unordered_map<std::string, MappingCfg *> replace_cfg) {
-  isl::union_set mapping;
-  for (auto it : replace_cfg) {
-    auto cfg = it.second;
-    if (cfg->type == MappingType::REPLACE_BLOCKS) {
-      if (mapping.is_null()) {
-        mapping = GatherMappingsTo(node, cfg);
-      } else {
-        mapping = mapping.intersect(GatherMappingsTo(node, cfg));
-      }
+std::unordered_set<std::string> GetNonRepeatedIdx(const MappingStrategyMap &mapping_strategy) {
+  std::unordered_set<std::string> non_repeated_idx;
+  for (auto strategy : mapping_strategy) {
+    auto mapping_idx = strategy.second.mapping_idx;
+    if (non_repeated_idx.find(mapping_idx) != non_repeated_idx.end()) {
+      non_repeated_idx.erase(mapping_idx);
+    } else {
+      non_repeated_idx.emplace(mapping_idx);
     }
   }
-  if (mapping.is_null()) {
-    mapping = GatherMappingsTo(node, block_cfg);
-  }
-  return mapping;
+  return non_repeated_idx;
 }
 
-isl::union_set GatherMappingsTo(const isl::schedule_node &root, MappingCfg *cfg) {
+isl::union_set GetMappingFilterInfo(const isl::schedule_node node, MappingCfg *mapping_cfg,
+                                    const std::unordered_map<std::string, MappingCfg *> &replace_cfg,
+                                    const std::unordered_set<std::string> &non_repeated_idx) {
+  isl::union_set mapping_filter = GatherMappingsTo(node, mapping_cfg, non_repeated_idx);
+  for (auto it : replace_cfg) {
+    auto cfg = it.second;
+    auto type = mapping_cfg->type == MappingType::BLOCKS ? MappingType::REPLACE_BLOCKS : MappingType::REPLACE_THREADS;
+    if (cfg->type != type) {
+      continue;
+    }
+
+    auto tmp_mapping_filter = GatherMappingsTo(node, cfg);
+    if (mapping_filter.is_empty()) {
+      mapping_filter = tmp_mapping_filter;
+    }
+
+    if (!tmp_mapping_filter.is_empty()) {
+      mapping_filter = mapping_filter.intersect(tmp_mapping_filter);
+    }
+  }
+
+  return mapping_filter;
+}
+
+isl::union_set GatherMappingsTo(const isl::schedule_node &root, MappingCfg *mapping_cfg,
+                                const std::unordered_set<std::string> &non_repeated_idx) {
   auto domain_node = root.as<isl::schedule_node_domain>();
   auto domain = domain_node.domain();
   auto sch = root.get_schedule();
   auto mapping_filters = CollectNode<isl::schedule_node_filter>(sch);
 
   std::vector<isl::id> filters;
-  for (size_t idx = 0; idx < cfg->bound; ++idx) {
-    auto value = cfg->GetAt(idx);
-    auto id = isl::id(root.ctx(), value.first);
-    filters.push_back(id);
+  if (!non_repeated_idx.empty()) {
+    for (auto idx : non_repeated_idx) {
+      auto id = isl::id(root.ctx(), idx);
+      filters.push_back(id);
+    }
+  } else {
+    for (size_t idx = 0; idx < mapping_cfg->bound; ++idx) {
+      auto value = mapping_cfg->GetAt(idx);
+      auto id = isl::id(root.ctx(), value.first);
+      filters.push_back(id);
+    }
   }
   mapping_filters = FilterNode(mapping_filters, filters);
 
@@ -1068,39 +777,6 @@ bool IsTensorAB(const std::string &item, ScopInfo &scop_info) {
     return false;
   }
   return true;
-}
-
-// Map a thread/block configuration to multiple axis.
-std::string SetOneConfigForMulAxis(const isl::schedule_node node, const bool is_promotion, const int orig_total_cfg,
-                                   const std::set<int> &axis_pos) {
-  auto partial_schedule = node.as<isl::schedule_node_band>().get_partial_schedule();
-  auto upa_list = GetUPAList(node, partial_schedule, is_promotion, false);
-
-  std::string new_cfg = "";
-  int total_cfg = orig_total_cfg;
-  int mapping_dim = static_cast<int>(upa_list.size());
-  int config_size = 0;
-  for (int i = 0; i < mapping_dim; ++i) {
-    if (!axis_pos.empty() && axis_pos.count(mapping_dim - 1 - i) == 0) {
-      continue;
-    }
-    auto extend = upa_list.get_at(i).floor().max_val().get_num_si() + 1;
-    if (extend >= total_cfg || (i == mapping_dim - 1 && extend < total_cfg)) {
-      new_cfg += (std::to_string(total_cfg) + " ");
-      ++config_size;
-      break;
-    }
-
-    total_cfg /= extend;
-    new_cfg += (std::to_string(extend) + " ");
-    ++config_size;
-  }
-
-  while (config_size < static_cast<int>(axis_pos.size())) {
-    new_cfg += (std::to_string(1) + " ");
-    ++config_size;
-  }
-  return new_cfg;
 }
 
 }  // namespace poly

@@ -315,14 +315,14 @@ void ReduceStrategy::AddGpuConstraint() {
   all_reduce_ = reduce_axes_.size() == depth;
 
   if (!analyzer_->scop_info_.user_config_.EnableStitchFusion()) {
-    if (reduce_length <= 32) {
+    if (reduce_length <= reduce_length_limit) {
       analyzer_->scop_info_.user_config_.SetEnableOneDimThread(true);
       analyzer_->GetTileLogger().AppendLine(GPU_MAPPING, "ReduceLength <= 32, enable onedim thread.");
     }
     if ((analyzer_->scop_info_.analysis_result_.GetReduceDirection() == Y_DIRECTION &&
-        reduce_length <= reduce_length_limit) ||
+         reduce_length <= reduce_length_limit) ||
         (analyzer_->scop_info_.analysis_result_.GetReduceDirection() == X_DIRECTION &&
-        reduce_length < reduce_length_limit)) {
+         reduce_length < reduce_length_limit)) {
       analyzer_->scop_info_.analysis_result_.SetUseGpuReduceLib(false);
       analyzer_->GetTileLogger().AppendLine(GPU_MAPPING, "Small Reduction (Y<=32, X<32), disable akg reduce lib.");
     }
@@ -330,7 +330,8 @@ void ReduceStrategy::AddGpuConstraint() {
         reduce_length < 2 * reduce_length_limit && nonreduce_length > max_y_z_dim_block_ * max_x_y_dim_thread_) {
       analyzer_->scop_info_.analysis_result_.SetUseGpuReduceLib(false);
       analyzer_->GetTileLogger().AppendLine(GPU_MAPPING,
-        "Small Reduction (X<64) and large nonreduction axis (exceeding block and thread limit) , disable akg reduce lib.");
+                                            "Small Reduction (X<64) and large nonreduction axis (exceeding block and "
+                                            "thread limit) , disable akg reduce lib.");
     }
   }
 
@@ -358,7 +359,7 @@ void ReduceStrategy::DisableReduceMapping() {
 void ReduceStrategy::AkgReduceLibStrategyOnGpu() {
   // disable atomic-add for bitwise-reduction
   bool disable_atomic = !analyzer_->scop_info_.user_config_.GetEnableAtomicAdd() ||
-    analyzer_->scop_info_.analysis_result_.GetOpTemplate() == Template::BITWISE_REDUCTION;
+                        analyzer_->scop_info_.analysis_result_.GetOpTemplate() == Template::BITWISE_REDUCTION;
   if (disable_atomic) {
     for (auto axis : reduce_axes_) {
       axis->block_constraints.map_extent_ = MIN_TILE;
@@ -420,7 +421,7 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu() {
   }
 
   bool square_thread = analyzer_->scop_info_.analysis_result_.GetReduceDirection() == Y_DIRECTION &&
-                      analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib();
+                       analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib();
   bool use_local = UseRegisterMem();
   int64_t min_blocks = square_thread ? 32 : 512;
   int64_t min_elem_per_thread = use_local ? 2 : 8;
@@ -485,8 +486,8 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu() {
     injective_threads = ty_range.first * coef;
     if (total_reduce_size < warp_sizes_) {
       // we increase thread y for small reduction cases
-      while ((coef < max_coef) && (total_injective_size % injective_threads == 0) && 
-             (total_injective_size / injective_threads > min_blocks)) {
+      while ((coef < max_coef) && (total_injective_size % injective_threads == 0) &&
+          (total_injective_size / injective_threads > min_blocks)) {
         coef *= 2;
         injective_threads = ty_range.first * coef;
       }
@@ -514,7 +515,8 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu() {
   int proposal = use_local ? 8 : 32;
   auto default_elem_per_thread = possible_reduce_blocks > 1
                                    ? std::max(std::min<int>(proposal, (possible_blocks / min_blocks + 1) / 2 * 2), 1)
-                                   : IsHalfReduce() ? 64 : SpItemPerThread::FULL;
+                                 : IsHalfReduce() ? 64
+                                                  : SpItemPerThread::FULL;
   if (analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib()) {
     auto original_ept = default_elem_per_thread;
     // try to increase thread loop (no more than twice as original)
@@ -843,7 +845,6 @@ void GpuStrategy::SetCoalescedAccess() {
   }
 }
 
-
 void GpuStrategy::AddGpuConstraint() {
   ShowOptions();
   InitMappingLimit();
@@ -872,14 +873,15 @@ void GpuStrategy::AddGpuConstraint() {
   }
   // tensor of tensor
   bool need_injective_speed_up = true;
-  if ((template_ == Template::PURE_ELEM || template_ == Template::BROADCAST_OP) &&
+  if ((template_ == Template::PURE_ELEM || template_ == Template::BROADCAST_OP || template_ == Template::EXTERN_CALL ||
+      (template_ == Template::REDUCTION && !analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib())) &&
       analyzer_->scop_info_.analysis_result_.GetTensorOfTensor()) {
     SetCoalescedAccess();
     need_injective_speed_up = !NeedModifyOrderOfAxis();
   }
 
   InnerThreadOuterBlock();
-  if (template_ == Template::PURE_ELEM && need_injective_speed_up) {
+  if ((template_ == Template::PURE_ELEM || template_ == Template::EXTERN_CALL) && need_injective_speed_up) {
     InjectiveSpeedup();
   }
 
@@ -1060,7 +1062,7 @@ void GpuStrategy::MarkMappingInRootAxis() {
 
 void GpuStrategy::InitMappingLimit() {
   max_x_y_dim_thread_ = analyzer_->scop_info_.user_config_.GetMaxElemPerThread();
-  
+
   // Determine op template
   size_t depth = 0;
   analyzer_->ForEachAxisTopDown([this, &depth](TileAxis *axis) {
@@ -1080,7 +1082,7 @@ void GpuStrategy::InitMappingLimit() {
   }
 
   reverse_binding_ = analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib() &&
-                                          analyzer_->scop_info_.analysis_result_.GetReduceDirection() == Y_DIRECTION;
+                     analyzer_->scop_info_.analysis_result_.GetReduceDirection() == Y_DIRECTION;
 
   // Thread configuration
   if (template_ == Template::CUSTOM_CONFIG) {
@@ -1164,8 +1166,9 @@ void GpuStrategy::BuildAxesQueue() {
       axis->block_constraints.map_extent_ = 1;
       axis->thread_constraints.map_extent_ = 1;
       std::stringstream ss;
-      ss << "Axis " << axis->index << "_" << axis->dim_axis << " Coincidence = 0 and Akg-reduce-lib not enabled, disable block/thread mapping.";
-      analyzer_->GetTileLogger().AppendLog(GPU_MAPPING,  ss);
+      ss << "Axis " << axis->index << "_" << axis->dim_axis
+         << " Coincidence = 0 and Akg-reduce-lib not enabled, disable block/thread mapping.";
+      analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
     }
   });
 }
@@ -1260,6 +1263,7 @@ void GpuStrategy::InnerThreadOuterBlock() {
       if (axis->mc_sup ||
           (template_ == Template::REDUCTION && analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib())) {
         thread_cfg_.emplace_back(1);
+        thread_cfg_map_[axis] = thread_cfg_.size() - 1;
       }
       SkipMapping();
       continue;
@@ -1301,7 +1305,7 @@ void GpuStrategy::InnerThreadOuterBlock() {
   // If all axes for block mapping are element-wise, we can map them in any order
   // so we need a greedy algorithm to map the most blocks;
   // otherwise, we can simply map from outer to inner in sequence.
-  if (template_ == Template::PURE_ELEM) {
+  if (template_ == Template::PURE_ELEM || template_ == Template::EXTERN_CALL) {
     std::map<int64_t, std::vector<size_t>, std::greater<int64_t>> sorted_by_gcd;
     for (size_t i = pending_axes_.size() - 1; i >= ori_size; --i) {
       auto block_limit = i == 0 ? max_x_dim_block_ : max_y_z_dim_block_;
@@ -1366,7 +1370,7 @@ void GpuStrategy::InnerThreadOuterBlock() {
     activated_blocks *= use;
     ss << ", use = " << use << ", activated blocks = " << activated_blocks;
     block_cfg_[pending_axes_.size() - 1 - i] = use;
-    block_cfg_map_[axis] = pending_axes_.size() - 1 - i;
+    block_cfg_map_[axis] = idx;
     axis->block_constraints.map_extent_ = use;
     if (analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib() || axis->mc_sup) {
       ++block_count_;
@@ -1389,27 +1393,12 @@ void GpuStrategy::InnerThreadOuterBlock() {
   }
 }
 
-void GpuStrategy::SetMappingConfig() {
-  std::stringstream ss;
-
-  ss << "Use template " << analyzer_->scop_info_.analysis_result_.ShowOpTemplate(template_);
-  if (template_ == Template::REDUCTION) {
-    ss << "(" << analyzer_->scop_info_.analysis_result_.GetReduceDirection() << ")";
-  }
-  analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
-
+void GpuStrategy::SetThreadMappingConfig() {
   // we need bind one axis at least
   if (thread_cfg_.empty()) {
     thread_cfg_.emplace_back(1);
   }
-  if (block_cfg_.empty()) {
-    block_cfg_.emplace_back(1);
-  }
-  if (block_count_ == 0) {
-    block_count_ = 1;
-  }
 
-  std::string block_str = "";
   std::string thread_str = "";
   if (reverse_binding_) {
     // pad binding to at least two dim to bind reduce axis at thread y
@@ -1426,7 +1415,43 @@ void GpuStrategy::SetMappingConfig() {
     }
   }
 
-  if (analyzer_->scop_info_.user_config_.GetEnableConvTensorCore()) {
+  std::stringstream ss;
+  ss << "Thread config = " << thread_str;
+  analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
+  ss << "Thread mapping strategy: ";
+
+  int64_t mapping_size = static_cast<int64_t>(thread_cfg_.size()) - 1;
+  std::unordered_map<int64_t, std::string> mapping_axis_pos = {{0, T0}, {1, T1}, {2, T2}};
+  for (auto cfg_map : thread_cfg_map_) {
+    int axis_pos = cfg_map.first->dim_axis;
+    int mapping_pos = cfg_map.second;
+    bool is_tensor_core = analyzer_->scop_info_.user_config_.GetEnableConvTensorCore();
+    int real_pos = (reverse_binding_ || is_tensor_core) ? mapping_size - mapping_pos : mapping_pos;
+    analyzer_->scop_info_.user_config_.RecordInnerMappingStrategy(axis_pos, mapping_axis_pos[real_pos]);
+    std::string mapping_str = is_tensor_core ? WARP_STR : THREAD_STR;
+    ss << "Map axis " << cfg_map.first->index << "_" << axis_pos << " to " << mapping_str + mapping_idx_pos_[real_pos]
+       << "; ";
+  }
+  analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
+  if (template_ == Template::CUSTOM_CONFIG) {
+    return;
+  }
+  analyzer_->scop_info_.user_config_.SetThreadConfig(thread_str);
+}
+
+void GpuStrategy::SetBlockMappingConfig() {
+  // we need bind one axis at least
+  if (block_cfg_.empty()) {
+    block_cfg_.emplace_back(1);
+  }
+  if (block_count_ == 0) {
+    block_count_ = 1;
+  }
+
+  std::string block_str = "";
+  std::unordered_map<int64_t, std::string> mapping_axis_block;
+  bool is_tensor_core = analyzer_->scop_info_.user_config_.GetEnableConvTensorCore();
+  if (is_tensor_core) {
     // For Conv, the H and W axis should mul to map
     // The axis sequence is M H W OC
     constexpr auto h_axis_index = 2;
@@ -1443,10 +1468,6 @@ void GpuStrategy::SetMappingConfig() {
       }
     }
   } else {
-    // pad binding to at least two dim to bind reduce axis at block y
-    for (size_t i = block_cfg_.size(); i < 2; ++i) {
-      block_cfg_.emplace_back(1);
-    }
     for (int i = block_cfg_.size() - 1; i >= 0; --i) {
       if (i >= block_count_) {
         continue;
@@ -1455,10 +1476,46 @@ void GpuStrategy::SetMappingConfig() {
     }
   }
 
+  std::stringstream ss;
   ss << "Block config = " << block_str;
   analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
-  ss << "Thread config = " << thread_str;
+  ss << "Block mapping strategy: ";
+
+  int64_t difference = -1;
+  const int64_t max_block_cfg = 3;
+  int64_t mapping_size = std::min(static_cast<int64_t>(block_cfg_.size()), max_block_cfg) - 1;
+  for (auto cfg_map : block_cfg_map_) {
+    auto max_tmp = cfg_map.second > mapping_size ? cfg_map.second - mapping_size : 0;
+    difference = std::max(difference, max_tmp);
+  }
+  std::unordered_map<int64_t, std::string> mapping_axis_pos = {{0, B0}, {1, B1}, {2, B2}};
+  for (auto cfg_map : block_cfg_map_) {
+    int axis_pos = cfg_map.first->dim_axis;
+    int mapping_pos = is_tensor_core ? cfg_map.second : cfg_map.second - difference;
+    int real_pos = (is_tensor_core && mapping_pos >= mapping_size) ? mapping_pos - 1 : mapping_pos;
+    analyzer_->scop_info_.user_config_.RecordOuterMappingStrategy(axis_pos, mapping_axis_pos[real_pos]);
+    ss << "Map axis " << cfg_map.first->index << "_" << axis_pos << " to " << BLOCK_STR + mapping_idx_pos_[real_pos]
+       << "; ";
+  }
   analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
+  if (template_ == Template::CUSTOM_CONFIG) {
+    return;
+  }
+  analyzer_->scop_info_.user_config_.SetBlockConfig(block_str);
+}
+
+void GpuStrategy::SetMappingConfig() {
+  std::stringstream ss;
+
+  ss << "Use template " << analyzer_->scop_info_.analysis_result_.ShowOpTemplate(template_);
+  if (template_ == Template::REDUCTION) {
+    ss << "(" << analyzer_->scop_info_.analysis_result_.GetReduceDirection() << ")";
+  }
+  analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
+
+  SetThreadMappingConfig();
+  SetBlockMappingConfig();
+
   ss << "Tile = ";
   analyzer_->ForEachAxisTopDown([this, &ss](TileAxis *axis) {
     if (axis == analyzer_->RootAxis()) {
@@ -1471,11 +1528,6 @@ void GpuStrategy::SetMappingConfig() {
     ss << axis->c1_constraints.tile_extent_ << ",";
   });
   analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
-  if (template_ == Template::CUSTOM_CONFIG) {
-    return;
-  }
-  analyzer_->scop_info_.user_config_.SetBlockConfig(block_str);
-  analyzer_->scop_info_.user_config_.SetThreadConfig(thread_str);
 }
 
 int64_t GpuStrategy::GetThreadSize(const int64_t rest_threads, size_t inner_dim, const int64_t shape,
@@ -1688,7 +1740,7 @@ void GpuStrategy::InjectiveSpeedup() {
   auto parallel_size = GetProposalParallelSize();
   auto proposal_blocks = parallel_size.first;
   auto proposal_threads = parallel_size.second;
-  auto proposal_elem_per_thread =
+  auto proposal_elem_per_thread = 
     coaleasced_size < warp_sizes_ ? 1 : total_blocks < proposal_blocks * 8 ? min_elem_for_io_bound_ : 8;
 
   auto shrinked_threads = std::min<int64_t>(total_threads / proposal_threads, proposal_blocks / total_blocks);
