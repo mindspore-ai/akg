@@ -25,7 +25,7 @@ namespace ir {
 
 class TmpTensorChecker : public IRVisitor {
  public:
-  explicit TmpTensorChecker(std::map<FunctionRef, bool> tmpTensorMap) : tmpTensorMap_(std::move(tmpTensorMap)) {}
+  explicit TmpTensorChecker(const std::map<FunctionRef, bool> &tmpTensorMap) : tmpTensorMap_(tmpTensorMap) {}
   void Visit_(const Call *op) override {
     if (tmpTensorMap_.find(op->func) != tmpTensorMap_.end()) {
       tmpTensorMap_[op->func] = true;
@@ -49,13 +49,14 @@ class JacobianMutator : public IRMutator {
    */
   JacobianMutator(Tensor input, Array<Expr> indices) : input_(std::move(input)), indices_(std::move(indices)) {}
   JacobianMutator(Tensor input, Tensor old_output, Array<Expr> indices, Array<IterVar> jac_indices,
-                  std::map<FunctionRef, Tensor> tensor_mapping, std::map<FunctionRef, bool> tmp_result = {})
+                  const std::map<FunctionRef, Tensor> &tensor_mapping,
+                  const std::map<FunctionRef, bool> &tmp_result = {})
       : input_(std::move(input)),
         old_output_(std::move(old_output)),
         indices_(std::move(indices)),
         jac_indices_(std::move(jac_indices)),
-        tensor_mapping_(std::move(tensor_mapping)),
-        tmp_result_(std::move(tmp_result)) {}
+        tensor_mapping_(tensor_mapping),
+        tmp_result_(tmp_result) {}
   /*!
    * \brief Differentiate wrt the input variable.
    * \param input The input variable.
@@ -99,6 +100,8 @@ class JacobianMutator : public IRMutator {
   Expr Mutate_(const Variable *op, const Expr &e) override {
     if (input_var_.operator->() && input_var_.get() == op && op->type.is_float()) {
       return FloatImm::make(op->type, 1.0);
+    } else if (let_bind_varmap_.count(op)) {
+      return let_bind_varmap_[op];
     } else {
       return make_zero(op->type);
     }
@@ -113,7 +116,7 @@ class JacobianMutator : public IRMutator {
         }
         return Cast::make(op->type, condition);
       } else if (tensor_mapping_.find(op->func) != tensor_mapping_.end()) {
-        Array<Expr> call_args;
+        Array<Expr> call_args = op->args;
 
         if (old_output_ == Downcast<Operation>(op->func).output(op->value_index)) {
           for (auto index : jac_indices_) {
@@ -121,9 +124,6 @@ class JacobianMutator : public IRMutator {
           }
         }
 
-        for (auto index : op->args) {
-          call_args.push_back(index);
-        }
         return Call::make(op->type, op->name + "_" + input_->op->name + "_jac", call_args, op->call_type,
                           tensor_mapping_[op->func]->op);
       } else {
@@ -329,16 +329,12 @@ class JacobianMutator : public IRMutator {
     }
 
     auto new_value = this->Mutate(op->value);
-    Array<Expr> provide_arg;
+    Array<Expr> provide_arg = op->args;
 
     if (old_output_ == Downcast<Operation>(op->func).output(op->value_index)) {
       for (auto index : jac_indices_) {
         provide_arg.push_back(index);
       }
-    }
-
-    for (auto index : op->args) {
-      provide_arg.push_back(index);
     }
 
     Stmt jac_body = Provide::make(tensor_mapping_[op->func]->op, op->value_index, new_value, provide_arg);
@@ -348,6 +344,16 @@ class JacobianMutator : public IRMutator {
     }
 
     return jac_body;
+  }
+
+  Stmt Mutate_(const LetStmt *op, const Stmt &s) final {
+    Var var_grad = op->var.copy_with_suffix("_grad");
+    let_bind_varmap_[op->var.get()] = var_grad;
+
+    Stmt new_body = IRMutator::Mutate(op->body);
+    Expr new_value = IRMutator::Mutate(op->value);
+    new_body = LetStmt::make(var_grad, new_value, new_body);
+    return LetStmt::make(op->var, op->value, new_body);
   }
 
   std::map<FunctionRef, bool> getTmpTensor() const { return tmp_result_; }
@@ -365,6 +371,7 @@ class JacobianMutator : public IRMutator {
   std::unordered_map<Tensor, const Realize *> realize_node_;
   std::unordered_map<FunctionRef, Stmt, air::NodeHash, air::NodeEqual> realize_body_;
   std::unordered_map<FunctionRef, const AttrStmt *, air::NodeHash, air::NodeEqual> attr_node_;
+  std::unordered_map<const Variable *, Expr> let_bind_varmap_;
 };
 
 Expr Jacobian(const Expr &expr, const Tensor &input, const Array<Expr> &indices) {
@@ -372,7 +379,7 @@ Expr Jacobian(const Expr &expr, const Tensor &input, const Array<Expr> &indices)
 }
 
 Stmt Jacobian(const Stmt &stmt, const Tensor &input, const Array<Expr> &indices, const Array<IterVar> &jac_indices,
-              const std::map<FunctionRef, Tensor> tensor_mapping, const Tensor &old_output) {
+              const std::map<FunctionRef, Tensor> &tensor_mapping, const Tensor &old_output) {
   auto autodiff_mutator = JacobianMutator(input, old_output, indices, jac_indices, tensor_mapping);
   Stmt result = autodiff_mutator.Mutate(stmt);
 
@@ -387,8 +394,8 @@ Stmt Jacobian(const Stmt &stmt, const Tensor &input, const Array<Expr> &indices,
 
 Expr Derivative(const Expr &expr, const VarExpr &var) { return JacobianMutator(var).Mutate(expr); }
 
-Tensor Jacobian(const Tensor &output, const Tensor &input, bool &used_head, bool optimize, bool keep_dims,
-                const Tensor &head) {
+Tensor JacobianComputeOp(const Tensor &output, const Tensor &input, bool &used_head, bool optimize, bool keep_dims,
+                         const Tensor &head) {
   const auto op = output->op.as<ComputeOpNode>();
   CHECK(op) << "A Compute op is expected but get : " << output->op;
 
@@ -458,112 +465,15 @@ Tensor Jacobian(const Tensor &output, const Tensor &input, bool &used_head, bool
   return tensor;
 }
 
-Tensor HybridTensorDot(const Tensor &jac, const Tensor &head, const Array<IterVar> &itervars,
-                       const Array<Expr> &reduction_extent) {
-  const auto op = jac->op.as<air::HybridOpNode>();
-  Tensor output_jac = op->outputs[0];
-  Stmt jac_body = op->body;
-  CHECK(op) << "A Hybrid op is expected but get : " << jac->op;
-
-  // here we collect the arg for all tensors
-  // itervar for the output/grad: jac_i0_grad, jac_i1_grad, ...
-  // itervar for reduction: i0_red, i1_red, ...
-  // call arg for jac: [jac_i0_grad, jac_i1_grad, ..., i0_red, i1_red, ...]
-  // call arg for head: [i0_red, i1_red, ...]
-  // call arg for output/grad: [jac_i0_grad, jac_i1_grad, ...]
-  Array<Expr> grad_arg;
-  Array<Expr> jac_arg;
-  Array<Expr> head_arg;
-  Array<Expr> output_shape;
-  Array<IterVar> tensor_dot_itervars;
-
-  for (auto iv : itervars) {
-    IterVar new_v = IterVarNode::make(iv->dom, iv->var.copy_with_suffix("_grad"), iv->iter_type, iv->thread_tag);
-    output_shape.push_back(iv->dom->extent);
-    tensor_dot_itervars.push_back(new_v);
-
-    jac_arg.push_back(new_v->var);
-    grad_arg.push_back(new_v->var);
-  }
-
-  // create the placeholder for the output of the tensor dot, namely the grad
-  Tensor output_grad =
-    PlaceholderOpNode::make(output_jac->op->name + "_grad", output_shape, output_jac->dtype).output(0);
-
-  Array<IterVar> reduction_axis;
-  size_t count = 0;
-  for (auto ext : reduction_extent) {
-    IterVar new_v =
-      IterVarNode::make(Range(0, ext), Var("i" + std::to_string(count) + "_red"), air::IterVarType::kDataPar);
-    reduction_axis.push_back(new_v);
-
-    jac_arg.push_back(new_v->var);
-    head_arg.push_back(new_v->var);
-
-    count++;
-  }
-
-  // create expr: head[i0_red, i1_red, ...] * jac[jac_i0_grad, jac_i1_grad, ..., i0_red, i1_red, ...]
-  Expr head_call = Call::make(head->dtype, head->op->name, head_arg, Call::CallType::Halide, head->op);
-  Expr jac_call = Call::make(output_jac->dtype, output_jac->op->name, jac_arg, Call::CallType::Halide, output_jac->op);
-  Expr prod_head_jac = Mul::make(head_call, jac_call);
-
-  // create provide stmt:
-  // grad[jac_i0_grad, ...] = grad[jac_i0_grad, ...] + head[i0_red, ...] * jac[jac_i0_grad, ..., i0_red, ...]
-  Expr grad_call =
-    Call::make(output_grad->dtype, output_grad->op->name, grad_arg, Call::CallType::Halide, output_grad->op);
-  Expr reduction_incre = Add::make(grad_call, prod_head_jac);
-  Stmt reduction_body = Provide::make(output_grad->op, output_grad->value_index, reduction_incre, grad_arg);
-
-  for (auto index = reduction_axis.rbegin(); index != reduction_axis.rend(); ++index) {
-    reduction_body = For::make((*index)->var, (*index)->dom->min, (*index)->dom->extent, air::ir::ForType::Serial,
-                               air::ir::DeviceAPI::None, reduction_body);
-  }
-
-  Stmt tensorDot_init =
-    Provide::make(output_grad->op, output_grad->value_index, air::ir::FloatImm::make(output_grad->dtype, 0), grad_arg);
-  Stmt tensorDot_body = Block::make(tensorDot_init, reduction_body);
-
-  for (auto index = tensor_dot_itervars.rbegin(); index != tensor_dot_itervars.rend(); ++index) {
-    tensorDot_body = For::make((*index)->var, (*index)->dom->min, (*index)->dom->extent, air::ir::ForType::Serial,
-                               air::ir::DeviceAPI::None, tensorDot_body);
-  }
-
-  auto result_stmt = Block::make(jac_body, tensorDot_body);
-
-  // previous output_jac becomes a local variable now
-  // add realize node for this tensor
-  Region region;
-  for (auto dim : output_jac->shape) {
-    region.push_back(Range::make_by_min_extent(0, dim));
-  }
-  result_stmt =
-    Realize::make(output_jac->op, output_jac->value_index, output_jac->dtype, region, const_true(), result_stmt);
-  result_stmt = AttrStmt::make(output_jac->op, "realize_scope", StringImm::make("local"), result_stmt);
-
-  // add head as the first input of the result tensor
-  Array<Tensor> new_input = {head};
-  for (auto old_input : op->inputs) {
-    new_input.push_back(old_input);
-  }
-
-  Tensor tensor = air::HybridOpNode::make(op->name + "_grad", op->tag, op->attrs, new_input, {output_grad}, {}, {}, {},
-                                          {}, result_stmt)
-                    .output(0);
-  return tensor;
-}
-
-Tensor JacobianHybrid(const Tensor &output, const Tensor &input, const Tensor &head) {
+Tensor JacobianHybrid(const Tensor &output, const Tensor &input) {
   const auto op = output->op.as<air::HybridOpNode>();
   CHECK(op) << "A Hybrid op is expected but get : " << output->op;
 
   // We have to clone the iteration axes because otherwise the original expression
   // cannot be used together with the derivative (it will lead to errors during lowering)
-  Array<IterVar> new_axis;
   std::unordered_map<const Variable *, Expr> vmap;
   for (IterVar iv : op->axis) {
     IterVar new_v = IterVarNode::make(iv->dom, iv->var.copy_with_suffix(""), iv->iter_type, iv->thread_tag);
-    new_axis.push_back(new_v);
     vmap[iv->var.operator->()] = new_v;
   }
 
@@ -576,8 +486,6 @@ Tensor JacobianHybrid(const Tensor &output, const Tensor &input, const Tensor &h
   size_t i = 0;
   for (Expr ext : input->shape) {
     IterVar new_v = IterVarNode::make(Range(0, ext), Var("jac_i" + std::to_string(i)), air::IterVarType::kDataPar);
-    // Append them to new_axis
-    new_axis.push_back(new_v);
     // We also need a separate array of these itervars
     input_itervars.push_back(new_v);
     jac_itervars.push_back(new_v);
@@ -598,13 +506,20 @@ Tensor JacobianHybrid(const Tensor &output, const Tensor &input, const Tensor &h
                     .output(0);
   ;
 
-  // if head is not null, grad = tensordot(jac, head)
-  if (head.get()) {
-    tensor = HybridTensorDot(tensor, head, jac_itervars, op->outputs[0]->shape);
-  }
-
   return tensor;
 }
 
+Tensor Jacobian(const Tensor &output, const Tensor &input, bool &used_head, bool optimize, bool keep_dims,
+                const Tensor &head) {
+  if (output->op.as<ComputeOpNode>()) {
+    return JacobianComputeOp(output, input, used_head, optimize, keep_dims, head);
+  } else if (output->op.as<air::HybridOpNode>()) {
+    if (head->op->func_name() == "identity") used_head = true;
+    return JacobianHybrid(output, input);
+  } else {
+    LOG(FATAL) << "Unsupported output op type: " << output->op;
+    return Tensor();
+  }
+}
 }  // namespace ir
 }  // namespace akg

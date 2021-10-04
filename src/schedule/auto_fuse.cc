@@ -111,8 +111,8 @@ class FuseCheck {
           // This code will be deleted in the future:
           IterVar fused_axis;
           Array<IterVar> need_fused_axis;
-          for (size_t i = 0; i < compute_op->axis.size() - 2; ++i) {
-            need_fused_axis.push_back(compute_op->axis[i]);
+          for (size_t i = 2; i < compute_op->axis.size(); ++i) {
+            need_fused_axis.push_back(compute_op->axis[i - 2]);
           }
           sch_[tensor].fuse(need_fused_axis, &fused_axis);
           return false;

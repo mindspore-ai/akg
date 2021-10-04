@@ -102,23 +102,6 @@ TVM_DLL Tensor Jacobian(const Tensor &output, const Tensor &input, bool &used_he
                         bool keep_dims = false, const Tensor &head = Tensor());
 
 /*!
- * \brief Get the tensor representing the Jacobian of a hybrid op, with respect to the input.
- *
- *  Note that if \p output depends on \p input indirectly (by using some other tensor
- *  depending on \p input ), this dependency won't contribute to the resulting Jacobian.
- *
- * \param output The tensor to differentiate, which should be a hybrid op.
- * \param input The input tensor, which \p output should directly use.
- * \param head The adjoint of the output, in other words, some tensor, by which the Jacobians
- *             will be multiplied. Its shape must be of the form `prefix + output.shape`. If the
- *             null pointer is provided, the identity tensor of shape
- *             `output.shape + output.shape` will be used.
- * \return The tensor representing the Jacobian of shape `output.shape + input.shape` if head is null,
- *         or the Grad of shape `input.shape`.
- */
-TVM_DLL Tensor JacobianHybrid(const Tensor &output, const Tensor &input, const Tensor &head = Tensor());
-
-/*!
  * \brief The building block for reverse-mode AD.
  *
  *  Differentiate \p output wrt \p input and multiply the result by \p head on the left using tensor
