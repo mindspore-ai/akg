@@ -7,7 +7,7 @@ if(ENABLE_GITEE)
     set(ISL_URL "https://gitee.com/mirrors/isl/repository/archive/isl-0.22?format=tar.gz")
     set(ISL_MD5 "edff5e9d0f62446ccaeb1e746903f5c8")
 else()
-    set(ISL_URL "http://isl.gforge.inria.fr/isl-0.22.tar.gz")
+    set(ISL_URL "https://sourceforge.net/projects/libisl/files/isl-0.22.tar.gz/download")
     set(ISL_MD5 "671d0a5e10467a5c6db0893255278845")
 endif()
 
