@@ -162,6 +162,8 @@ Stmt HalfReduceSumRewrite(Stmt stmt, const Map<Tensor, Buffer> &extern_buffer);
 
 Stmt ScalarComputeRewrite(const Stmt &stmt);
 
+Stmt AddAttrForLayoutOp(Stmt stmt);
+
 Stmt RewriteTensorIndex(Stmt stmt);
 
 Stmt RewriteVarTensorIdx(Stmt stmt, const Map<Tensor, Buffer> &extern_buffer);

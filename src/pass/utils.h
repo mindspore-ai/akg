@@ -415,6 +415,12 @@ bool GetIndexOfElement(const Array<T> &array, const T &elem, size_t &index) {
 
 std::string GetProductName();
 
+bool IsHalideCall(const Expr &e);
+
+bool ContainsHalideCall(const Array<Expr> args);
+
+std::string GetOpReduceType(const Expr value);
+
 extern const char *const LOCAL_BUF;
 extern const char *const LOCAL_C1;
 extern const char *const LOCAL_C0B;
@@ -424,6 +430,18 @@ extern const char *const LOCAL_C1_LOCAL_C0B;
 extern const char *const LOCAL_BUF_LOCAL_C0C;
 extern const char *const FRACTAL_C1;
 extern const char *const FRACTAL_C1_LOCAL_C0B;
+
+constexpr auto AKG_REDUCE_SUM = "SumOp";
+constexpr auto AKG_REDUCE_MIN = "MinOp";
+constexpr auto AKG_REDUCE_MAX = "MaxOp";
+constexpr auto AKG_REDUCE_AND = "AndOp";
+constexpr auto AKG_REDUCE_OR = "OrOp";
+constexpr auto AKG_REDUCE_PROD = "ProdOp";
+constexpr auto AKG_REDUCE_UNSUPPORTED = "X";
+
+constexpr auto AKG_TENSOR_NOT_PROMOTE = "TENSOR_NOT_PROMOTE";
+constexpr auto AKG_INNER_TENSOR = "INNER_TENSOR";
+constexpr auto AKG_TENSOR_OF_TENSOR = "TENSOR_OF_TENSOR";
 
 static constexpr auto ATTR_PREFETCH_MODE = "prefetch_mode";
 enum class PrefetchMode {

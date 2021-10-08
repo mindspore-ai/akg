@@ -88,8 +88,6 @@ class RewriteTensorIdx : public IRMutator {
 
     // remake provide now
     if (!lhs_tensor_idx_.empty()) {
-      is_tensor_of_tensor_ = true;
-      tensors_not_promote_.insert(op->func->func_name());
       // build a new value
       Array<Expr> idx_args;
       Expr extent = Expr(0);
@@ -122,7 +120,6 @@ class RewriteTensorIdx : public IRMutator {
       idx_args.push_back(Call::make(type_, "orig", {new_op->value}, Call::PureIntrinsic));
       Expr val = Call::make(type_, "with", idx_args, Call::PureIntrinsic);
       stmt = Provide::make(new_op->func, new_op->value_index, val, new_args);
-      stmt = AddAttrForAtomicToT(new_op, op, stmt);
     }
 
     lhs_tensor_idx_.clear();
@@ -134,7 +131,6 @@ class RewriteTensorIdx : public IRMutator {
     if (in_args_ && op->call_type == Call::Halide) {
       halide_call_ = true;
       if (cache_idx_.count(op->func.get()) == 0) {
-        inner_tensors_.insert(op->func->func_name());
         cache_idx_[op->func.get()] = i_;
         i_ = i_ + 2;
       }
@@ -154,8 +150,6 @@ class RewriteTensorIdx : public IRMutator {
 
     // for call not in provide, rhs always
     if (!rhs_tensor_idx_.empty()) {
-      is_tensor_of_tensor_ = true;
-      tensors_not_promote_.insert(op->func->func_name());
       Array<Expr> idx_args;
       Expr ne = e;
 
@@ -188,32 +182,6 @@ class RewriteTensorIdx : public IRMutator {
     return cache_idx_[op->func.get()];
   }
 
-  Stmt AddAttrForAtomicToT(const Provide *new_op, const Provide *op, Stmt stmt) {
-    auto Get = [new_op, op, stmt](const Expr a, const Expr b, std::string op_type) -> Stmt {
-      auto func_name = op->func->func_name();
-      auto call_a = a.as<Call>();
-      auto call_b = b.as<Call>();
-      if (call_a && call_b && (call_a->name == func_name || call_b->name == func_name)) {
-        return AttrStmt::make(new_op->func, "atomic_tot", Expr(op_type), stmt);
-      }
-      return stmt;
-    };
-
-    if (auto atomic_op = op->value.as<Max>()) {
-      stmt = Get(atomic_op->a, atomic_op->b, "MaxOp");
-    } else if (auto atomic_op = op->value.as<Min>()) {
-      stmt = Get(atomic_op->a, atomic_op->b, "MinOp");
-    } else if (auto atomic_op = op->value.as<And>()) {
-      stmt = Get(atomic_op->a, atomic_op->b, "AndOp");
-    } else if (auto atomic_op = op->value.as<Or>()) {
-      stmt = Get(atomic_op->a, atomic_op->b, "OrOp");
-    } else if (auto atomic_op = op->value.as<Add>()) {
-      stmt = Get(atomic_op->a, atomic_op->b, "SumOp");
-    }
-
-    return stmt;
-  }
-
   std::unordered_map<Expr, int, air::NodeHash, air::NodeEqual> lhs_tensor_idx_;
   std::unordered_map<Expr, int, air::NodeHash, air::NodeEqual> rhs_tensor_idx_;
   std::unordered_map<const Node *, Type> realize_type_;
@@ -221,36 +189,17 @@ class RewriteTensorIdx : public IRMutator {
   // in args
   bool in_args_{false};
   bool halide_call_{false};
-  Type type;
   int i_{0};
   // for inner tensor index
   std::map<const Node *, int> cache_idx_;
 
  public:
   bool has_invalid_tensor_expr_{false};
-  std::unordered_set<std::string> tensors_not_promote_;
-  std::unordered_set<std::string> inner_tensors_;
-  bool is_tensor_of_tensor_{false};
 };
 
 Stmt RewriteTensorIndex(const Stmt stmt) {
   auto mutator = RewriteTensorIdx();
   auto new_stmt = mutator.Mutate(stmt);
-  if (!mutator.tensors_not_promote_.empty()) {
-    for (auto &t : mutator.tensors_not_promote_) {
-      new_stmt = AttrStmt::make(Expr("INFO"), "TENSOR_NOT_PROMOTE", Expr(t), new_stmt);
-    }
-  }
-
-  if (!mutator.inner_tensors_.empty()) {
-    for (auto &t : mutator.inner_tensors_) {
-      new_stmt = AttrStmt::make(Expr("INFO"), "INNER_TENSOR", Expr(t), new_stmt);
-    }
-  }
-
-  if (mutator.is_tensor_of_tensor_) {
-    new_stmt = AttrStmt::make(Expr("INFO"), "TENSOR_OF_TENSOR", Expr("TENSOR_OF_TENSOR"), new_stmt);
-  }
 
   return mutator.has_invalid_tensor_expr_ ? stmt : new_stmt;
 }
