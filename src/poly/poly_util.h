@@ -130,7 +130,8 @@ namespace poly {
   X(elewise_single_atan)          \
   X(elewise_binary_atan2)         \
   X(elewise_single_expm1)         \
-  X(elewise_single_erf)
+  X(elewise_single_erf)           \
+  X(elewise_single_tot)
 
 #define GENERATE_ENUM(ENUM) ENUM,
 
@@ -193,6 +194,7 @@ const std::map<std::string, PolyOpType> POLY_SUPPORTED_OPS = {
   {"atan2", PolyOpType::elewise_binary_atan2},
   {"expm1", PolyOpType::elewise_single_expm1},
   {"erf", PolyOpType::elewise_single_erf},
+  {"tot_op", PolyOpType::elewise_single_tot},
 };
 
 unsigned int WrappedStrtol(const std::string &str);

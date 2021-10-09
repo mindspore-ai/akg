@@ -1172,6 +1172,138 @@ TVM_REGISTER_GLOBAL("AicoreBatchMatMul").set_body([](TVMArgs args, TVMRetValue *
   }
 });
 
+#ifdef ENABLE_GENERAL_TOT
+TVM_REGISTER_GLOBAL("Gather").set_body([](TVMArgs args, TVMRetValue *rv) {
+  auto inputs = args[0].operator Array<NodeRef>();
+  CHECK(inputs[0]->IsInstance<TensorNode>());
+  CHECK(inputs[1]->IsInstance<TensorNode>());
+  auto input0 = Downcast<Tensor>(inputs[0]);
+  auto input1 = Downcast<Tensor>(inputs[1]);
+  auto attrs = args[1].operator OpAttr();
+  CHECK(attrs.count("axis"));
+  auto axis = (size_t)ir::GetInt32Const(Downcast<Array<Expr>>(attrs["axis"])[0]);
+  auto x_shape = input0->shape;
+  auto y_shape = input1->shape;
+  CHECK(y_shape.size() == 1);
+  Map<std::string, NodeRef> com_attrs;
+  com_attrs.Set("no_inline", Expr(-1)); // out tensor is not inlined
+  // used for replace_tot, out = gather(par, index)
+  com_attrs.Set("tensor_of_tensor_pos", Expr(0)); // to mark tensor_not_promote
+  com_attrs.Set("first_index_pos", Expr(1)); // to mark inner_tensor
+  // used for recover_tot, out = tot_op(par, index)
+  com_attrs.Set("is_fakeout", Expr(0)); // to remove fakeout
+  com_attrs.Set("realout_pos", Expr(-1)); // -1 means provide func
+  com_attrs.Set("first_dst_pos", Expr((int)axis)); // which axis in dst_tenosr
+  com_attrs.Set("outbound_return_zero", Expr(1)); // need else stmt
+  com_attrs.Set("is_atomic_add", Expr(0));
+  Array<Expr> output_shape;
+  for (size_t i = 0; i < x_shape.size(); ++i) {
+    if (i == axis) {
+      output_shape.push_back(y_shape[0]);
+    } else {
+      output_shape.push_back(x_shape[i]);
+    }
+  }
+  auto fcompute = [&input0, &input1, &axis](const Array<Var> &indices) {
+    Array<Expr> x_shape;
+    Array<Expr> y_shape;
+    for (size_t i = 0; i < indices.size(); ++i) {
+      x_shape.push_back(indices[i]);
+      if (axis == i) {
+        y_shape.push_back(indices[i]);
+      }
+    }
+    Expr x = Call::make(input0->dtype, input0->op->name, x_shape, Call::CallType::Halide, input0->op);
+    Expr y = Call::make(input1->dtype, input1->op->name, y_shape, Call::CallType::Halide, input1->op);
+    Expr gather_call = Call::make(input0->dtype, "Gather", {x, y}, Call::PureIntrinsic);
+    return gather_call;
+  };
+
+  std::string name = "T_gather_" + input0->op->name + "_" + input1->op->name + "_" + std::to_string(axis);
+  auto res_tensor = compute(output_shape, fcompute, name, "tot", com_attrs);
+  *rv = res_tensor;
+});
+
+TVM_REGISTER_GLOBAL("TensorScatterAdd").set_body([](TVMArgs args, TVMRetValue *rv) {
+  auto inputs = args[0].operator Array<NodeRef>();
+  CHECK(inputs[0]->IsInstance<TensorNode>());
+  CHECK(inputs[1]->IsInstance<TensorNode>());
+  CHECK(inputs[2]->IsInstance<TensorNode>());
+  auto input0 = Downcast<Tensor>(inputs[0]);
+  auto input1 = Downcast<Tensor>(inputs[1]);
+  auto input2 = Downcast<Tensor>(inputs[2]);
+  auto par_shape = input0->shape;
+  auto index_shape = input1->shape;
+  auto update_shape = input2->shape;
+  int depth = 1;
+  auto index_rank = index_shape.size();
+  if (index_rank > 1) {
+    depth = ir::GetInt32Const(index_shape[index_rank - 1]);
+  }
+  /* the axis for par_batch is unused after replace_tot. Reshape is
+  needed if par_batch is < 0
+  */
+  size_t par_batch = par_shape.size() - update_shape.size();
+  CHECK(par_batch >= 0);
+  // output_shape should comes from real axis
+  auto output_shape = par_shape;
+  for (size_t i = par_batch; i < par_shape.size(); ++i) {
+    output_shape.Set(i - par_batch, update_shape[i]);
+  }
+  Map<std::string, NodeRef> com_attrs;
+  com_attrs.Set("no_inline", Expr(1)); // up is not inlined
+  // used for replace_tot, fakeout = tsa(par, up, index)
+  com_attrs.Set("tensor_of_tensor_pos", Expr(0)); // to mark tensor_not_promote
+  com_attrs.Set("first_index_pos", Expr(2)); // to mark inner_tensor
+  // used for recover_tot, fakeout = tot_op(par, up, index)
+  com_attrs.Set("is_fakeout", Expr(1)); // to remove fakeout
+  com_attrs.Set("realout_pos", Expr(0));
+  com_attrs.Set("first_dst_pos", Expr(0)); // which axis in tensor_of_tensor
+  com_attrs.Set("outbound_return_zero", Expr(0)); // no else stmt
+  com_attrs.Set("is_atomic_add", Expr(1));
+
+  auto fcompute = [&index_rank, &depth, &par_batch, &input0, &input1, &input2](const Array<Var> &indices) {
+    Array<Expr> output_index;
+    for (size_t i = 0; i < indices.size(); ++i) {
+      output_index.push_back(indices[i]);
+    }
+    Expr par = Call::make(input0->dtype, input0->op->name, output_index, Call::CallType::Halide, input0->op);
+
+    Array<Expr> update_index;
+    for (size_t i = par_batch; i < indices.size(); ++i) {
+      update_index.push_back(indices[i]);
+    }
+    Expr update = Call::make(input2->dtype, input2->op->name, update_index, Call::CallType::Halide, input2->op);
+
+    Array<Expr> index_index{update_index[0]};
+    if (index_rank > 2) {
+      for (size_t i = 1; i < index_rank - 1; ++i) {
+        index_index.push_back(update_index[i]);
+      }
+    }
+    Array<Expr> args{par, update};
+    if (index_rank > 1) {
+      for (int i = 0; i < depth; ++i) {
+        auto index_full = index_index;
+        index_full.push_back(Expr(i));
+        auto index = Call::make(input1->dtype, input1->op->name, index_full, Call::CallType::Halide, input1->op);
+        args.push_back(index);
+      }
+      Expr tsa_call = Call::make(input0->dtype, "TensorScatterAdd", args, Call::PureIntrinsic);
+      return tsa_call;
+    }
+
+    Expr index = Call::make(input1->dtype, input1->op->name, index_index, Call::CallType::Halide, input1->op);
+    args.push_back(index);
+    Expr tsa_call = Call::make(input0->dtype, "TensorScatterAdd", args, Call::PureIntrinsic);
+    return tsa_call;
+  };
+  std::string name = "tensor_scatter_add";
+  auto res_tensor = compute(output_shape, fcompute, name, "tot", com_attrs);
+  *rv = res_tensor;
+});
+#endif
+
 TVM_REGISTER_GLOBAL("Atan").set_body([](TVMArgs args, TVMRetValue *rv) { TOPI_ONE_INPUT_CALL(args, rv, topi::atan); });
 
 TVM_REGISTER_GLOBAL("Atan2").set_body([](TVMArgs args, TVMRetValue *rv) {

@@ -21,6 +21,7 @@
 #include "composite/parser.h"
 #include "composite/optimize/optimize.h"
 #include "composite/dump.h"
+#include "pass/utils.h"
 
 namespace akg {
 class Emitter : public IRVisitor {
@@ -71,7 +72,7 @@ class Emitter : public IRVisitor {
     if (op_name == "Assign") {
       EmitAssign(t, inputs[0]);
     }
-
+    CollectNoinlineCandidate(real_input, t, op_name);
     opt_.tensor_map[op->func] = t;
   }
 
@@ -85,6 +86,27 @@ class Emitter : public IRVisitor {
     opt_.sch_only.emplace_back(bind_input);
     opt_.inplaces[bind_input->op] = input;
     assign_count_++;
+  }
+
+  void CollectNoinlineCandidate(const Array<NodeRef> &real_input, const Tensor &t,
+                                const std::string &op_name) {
+#ifdef ENABLE_GENERAL_TOT
+    if (t->op->tag != "tot") {
+      return;
+    }
+    const auto &attrs = t->op->attrs;
+    auto no_inline = ir::GetInt32Const(Downcast<Expr>(attrs["no_inline"]));
+    NodeRef arg(t);
+    if (no_inline != -1) {
+      arg = real_input[no_inline];
+    }
+    auto iter = std::find_if(opt_.noinline_candidate.begin(), opt_.noinline_candidate.end(),
+                             [&arg](const Tensor &cand) { return Downcast<Tensor>(arg)->op->name == cand->op->name; });
+    if (iter == opt_.noinline_candidate.end()) {
+      opt_.noinline_candidate.push_back(Downcast<Tensor>(arg));
+    }
+#endif
+    return;
   }
 
  private:
@@ -136,6 +158,24 @@ void CollectInputs(BuildInfo &info) {
   }
 }
 
+// Make noninline_indeed tensors not auto-inlined by inserting to args
+void InsertNoInlineTensors2Outputs(BuildInfo &info) {
+  for (const auto &candidate : info.opt.noinline_candidate) {
+    auto iter = std::find_if(info.args.begin(), info.args.end(), [&candidate](const NodeRef &arg) {
+      return candidate->op->name == Downcast<Tensor>(arg)->op->name;
+    });
+    if (iter == info.args.end()) {
+      info.args.push_back(candidate);
+      info.opt.noinline_indeed.push_back(candidate);
+    }
+    auto it = std::find_if(info.tensors.begin(), info.tensors.end(),
+                           [&candidate](const Tensor &tensor) { return candidate->op->name == tensor->op->name; });
+    if (it == info.tensors.end()) {
+      info.tensors.push_back(candidate);
+    }
+  }
+}
+
 void CollectOutputsAndComputes(BuildInfo &info) {
   int count = 0;
   for (const auto &output : info.output_names) {
@@ -164,6 +204,7 @@ void CollectOutputsAndComputes(BuildInfo &info) {
       info.tensors.push_back(iter->second);
     }
   }
+  InsertNoInlineTensors2Outputs(info);
 }
 
 void CollectSchOnlyComputes(BuildInfo &info) {

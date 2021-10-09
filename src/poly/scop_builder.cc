@@ -328,6 +328,9 @@ void ParseStmtOpCall(const isl::id &id, const Call *call, AnalysisResult &result
     } else if (POLY_SUPPORTED_OPS.count(call->name)) {
       auto it = POLY_SUPPORTED_OPS.find(call->name);
       result.GetStmtOpInfoMap().at(id).ops.push_back(it->second);
+    } else if (call->name.rfind("tot_op_", 0) == 0) {
+      auto it = POLY_SUPPORTED_OPS.find("tot_op");
+      result.GetStmtOpInfoMap().at(id).ops.push_back(it->second);
     } else {
       LOG(FATAL) << "Unknown pure intrinsic: " << call->name.c_str() << std::endl;
     }
