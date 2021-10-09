@@ -1080,7 +1080,7 @@ class AnalysisResult {
   std::unordered_map<int, std::string> template_map_ = {
     {0, "DEFAULT"},       {1, "PURE_ELEM"},         {2, "BROADCAST_OP"}, {3, "REDUCTION"},
     {4, "ALL_REDUCTION"}, {5, "BITWISE_REDUCTION"}, {6, "MATMUL"},       {7, "TRANSPOSE_OP"},
-    {8, "PAD_OP"},        {9, "CUSTOM_CONFIG"},     {10, "CONV"}};
+    {8, "PAD_OP"},        {9, "CUSTOM_CONFIG"},     {10, "CONV"},        {11, "EXTERN_CALL"}};
 
  private:
   Template op_template_{Template::DEFAULT};

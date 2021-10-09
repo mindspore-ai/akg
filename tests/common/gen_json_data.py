@@ -592,7 +592,7 @@ def gen_json_data(op_desc, with_compute=True):
     clean_input = []
     indices_input = {}
     MakeIndices = namedtuple("MakeIndices", "name data_shape indices_shape indices_dtype attrs")
-    sum_out = None
+    sum_out = []
     for op in desc["op_desc"]:
         if op["name"] in ("ReduceSum", "UnsortedSegmentSum"):
             if op["name"] == "UnsortedSegmentSum":
@@ -605,12 +605,12 @@ def gen_json_data(op_desc, with_compute=True):
                                 attrs=op["attr"][1]["value"])
             for a in op["attr"]:
                 if a["name"] == "enable_atomic_add":
-                    sum_out = op["output_desc"][0]["tensor_name"]
+                    sum_out.append(op["output_desc"][0]["tensor_name"])
                     break
         elif op["name"] == "InplaceAssign":
             if not sum_out:
                 continue
-            if op["input_desc"][1][0]["tensor_name"] == sum_out:
+            if op["input_desc"][1][0]["tensor_name"] in sum_out:
                 clean_input.append(op["input_desc"][0][0]["tensor_name"])
         elif op["name"] in ("TensorScatterAdd", "Gather", "GatherNd"):
             assert op["input_desc"][1][0]["data_type"] == "int32", "Default indices type should be int32"

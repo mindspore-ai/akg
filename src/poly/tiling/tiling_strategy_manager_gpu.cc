@@ -315,7 +315,7 @@ void ReduceStrategy::AddGpuConstraint() {
   all_reduce_ = reduce_axes_.size() == depth;
 
   if (!analyzer_->scop_info_.user_config_.EnableStitchFusion()) {
-    if (reduce_length <= 32) {
+    if (reduce_length <= reduce_length_limit) {
       analyzer_->scop_info_.user_config_.SetEnableOneDimThread(true);
       analyzer_->GetTileLogger().AppendLine(GPU_MAPPING, "ReduceLength <= 32, enable onedim thread.");
     }
@@ -487,7 +487,7 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu() {
     if (total_reduce_size < warp_sizes_) {
       // we increase thread y for small reduction cases
       while ((coef < max_coef) && (total_injective_size % injective_threads == 0) &&
-             (total_injective_size / injective_threads > min_blocks)) {
+          (total_injective_size / injective_threads > min_blocks)) {
         coef *= 2;
         injective_threads = ty_range.first * coef;
       }
@@ -873,14 +873,15 @@ void GpuStrategy::AddGpuConstraint() {
   }
   // tensor of tensor
   bool need_injective_speed_up = true;
-  if ((template_ == Template::PURE_ELEM || template_ == Template::BROADCAST_OP) &&
+  if ((template_ == Template::PURE_ELEM || template_ == Template::BROADCAST_OP || template_ == Template::EXTERN_CALL ||
+      (template_ == Template::REDUCTION && !analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib())) &&
       analyzer_->scop_info_.analysis_result_.GetTensorOfTensor()) {
     SetCoalescedAccess();
     need_injective_speed_up = !NeedModifyOrderOfAxis();
   }
 
   InnerThreadOuterBlock();
-  if (template_ == Template::PURE_ELEM && need_injective_speed_up) {
+  if ((template_ == Template::PURE_ELEM || template_ == Template::EXTERN_CALL) && need_injective_speed_up) {
     InjectiveSpeedup();
   }
 
@@ -1304,7 +1305,7 @@ void GpuStrategy::InnerThreadOuterBlock() {
   // If all axes for block mapping are element-wise, we can map them in any order
   // so we need a greedy algorithm to map the most blocks;
   // otherwise, we can simply map from outer to inner in sequence.
-  if (template_ == Template::PURE_ELEM) {
+  if (template_ == Template::PURE_ELEM || template_ == Template::EXTERN_CALL) {
     std::map<int64_t, std::vector<size_t>, std::greater<int64_t>> sorted_by_gcd;
     for (size_t i = pending_axes_.size() - 1; i >= ori_size; --i) {
       auto block_limit = i == 0 ? max_x_dim_block_ : max_y_z_dim_block_;
