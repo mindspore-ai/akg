@@ -316,9 +316,13 @@ class ShapeCompacter : public IRMutator {
 
   Stmt Mutate_(const Realize *op, const Stmt &s) override {
     Stmt ret = this->Mutate(op->body);
-    CHECK_GT(funcDic_.count(op->func->func_name()), 0);
-    return Realize::make(funcDic_[op->func->func_name()], op->value_index, op->type, {Range(0, size_)}, op->condition,
-                         ret);
+    if (funcDic_.count(op->func->func_name())) {
+      return Realize::make(funcDic_[op->func->func_name()], op->value_index, op->type, {Range(0, size_)}, op->condition,
+                           ret);
+
+    } else {
+      return ret;
+    }
   }
 
   Stmt Mutate_(const ProducerConsumer *op, const Stmt &s) override {
@@ -343,14 +347,23 @@ class ShapeCompacter : public IRMutator {
   Stmt Mutate_(const Provide *op, const Stmt &s) final {
     auto value = this->Mutate(op->value);
     FunctionRef newFunc;
-    if (op->func.as<ComputeOpNode>() && !funcDic_.count(op->func->func_name())) {
-      auto oldOp = op->func.as<ComputeOpNode>();
-      CHECK(!oldOp->axis.empty());
-      auto newIter =
-        IterVarNode::make(Range(Expr(0), size_), newVar_, oldOp->axis[0]->iter_type, oldOp->axis[0]->thread_tag);
-      auto newOp = ComputeOpNode::make(oldOp->name, oldOp->tag, oldOp->attrs, {newIter}, {value});
-      funcDic_[oldOp->name] = newOp;
+    if (!funcDic_.count(op->func->func_name())) {
+      if (op->func.as<ComputeOpNode>()) {
+        auto oldOp = op->func.as<ComputeOpNode>();
+        CHECK(!oldOp->axis.empty());
+        auto newIter =
+          IterVarNode::make(Range(Expr(0), size_), newVar_, oldOp->axis[0]->iter_type, oldOp->axis[0]->thread_tag);
+        auto newOp = ComputeOpNode::make(oldOp->name, oldOp->tag, oldOp->attrs, {newIter}, {value});
+        funcDic_[oldOp->name] = newOp;
+      } else if (op->func.as<PlaceholderOpNode>()) {
+        auto oldOp = op->func.as<PlaceholderOpNode>();
+        auto newOp = PlaceholderOpNode::make(oldOp->name, {size_}, oldOp->dtype);
+        funcDic_[oldOp->name] = newOp;
+      } else {
+        LOG(FATAL) << "Can't deal with the type of this op func: " << op->func->func_name();
+      }
     }
+
     newFunc = funcDic_[op->func->func_name()];
     return Provide::make(newFunc, op->value_index, value, {newVar_});
   }
