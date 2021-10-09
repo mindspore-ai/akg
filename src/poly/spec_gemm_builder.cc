@@ -61,7 +61,7 @@ Stmt SpecGemmBuilder::Build(const Expr &mad_init_cond) {
   attrs.Set("dump_poly_dir", StringImm::make(info_.user_config_.GetDumpPolyDir()));
   attrs.Set("pragma_tilesize_is_var", makeIntImm(info_.user_config_.GetTileSizeIsVar()));
   Array<NodeRef> res_poly =
-    AutoPoly(res, gemm_binds, info_.user_config_.GetTarget(), attrs, true, info_.user_config_.GetIsDynamic());
+    AutoPoly(res, gemm_binds, info_.user_config_.GetTarget(), info_.user_config_.GetIsDynamic(), attrs);
   CHECK_GE(res_poly.size(), 1);
   PartitionSingle::free();
   return air::Downcast<Stmt>(res_poly[0]);

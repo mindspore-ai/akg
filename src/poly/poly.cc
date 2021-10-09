@@ -34,12 +34,13 @@ class Poly {
   }
 
   void Run(const Stmt &stmt, const Map<Tensor, Buffer> &extern_buffer, std::string target,
-           const Map<std::string, NodeRef> &attrs, const bool is_spec_gemm, bool is_tuning, bool is_dynamic,
+           const Map<std::string, NodeRef> &spec_gemm_attrs, bool is_tuning, bool is_dynamic,
            const Schedule &origin_sch) {
     stmt_ = stmt;
     scop_.reset(new poly::Scop(Simplify_cce(stmt_), isl_ctx_));
     CHECK(scop_ != nullptr);
-    scop_->ParseUserConfig(target, attrs, extern_buffer, is_spec_gemm, is_tuning, is_dynamic, origin_sch);
+    scop_->ParseUserConfig(target, extern_buffer, spec_gemm_attrs, is_tuning, is_dynamic, origin_sch);
+    bool is_spec_gemm = !spec_gemm_attrs.empty();
 
     std::chrono::high_resolution_clock::time_point timer_start;
     // generate isl schedule from Halide
@@ -113,17 +114,16 @@ class Poly {
 
 /// Interface for lower pass
 Array<NodeRef> AutoPoly(const Stmt &stmt, const Map<Tensor, Buffer> &extern_buffer, std::string target,
-                        const Map<std::string, NodeRef> &attrs, const bool is_specgemm, const bool is_dynamic,
-                        Schedule sch) {
+                        const bool is_dynamic, const Map<std::string, NodeRef> &spec_gemm_attrs, Schedule sch) {
   Poly poly;
-  poly.Run(stmt, extern_buffer, target, attrs, is_specgemm, false, is_dynamic, sch);
+  poly.Run(stmt, extern_buffer, target, spec_gemm_attrs, false, is_dynamic, sch);
   return Array<NodeRef>({poly.GetStmt(), poly.GetTilingParams()});
 }
 
 NodeRef GenTuningSpace(const Stmt &stmt, std::string target, const Map<Tensor, Buffer> &extern_buffer,
-                       const Map<std::string, NodeRef> &attrs, const bool is_specgemm, Schedule sch) {
+                       const Map<std::string, NodeRef> &spec_gemm_attrs, Schedule sch) {
   Poly poly;
-  poly.Run(stmt, extern_buffer, target, attrs, is_specgemm, true, false, sch);
+  poly.Run(stmt, extern_buffer, target, spec_gemm_attrs, true, false, sch);
   return poly.GetSpaces();
 }
 }  // namespace ir

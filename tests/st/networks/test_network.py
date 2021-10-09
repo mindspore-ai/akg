@@ -34,7 +34,7 @@ def test_network(backend, network, level, split_nums=1, split_idx=0, check_perfo
     prepare_script(pwd, script_file)
     output = os.path.join(pwd, "output" + "_" + backend, network, level)
     if not os.path.isdir(output):
-        os.makedirs(output)
+        os.makedirs(output, exist_ok=True)
     files_path = os.path.join(pwd, backend, network, level)
     all_files = os.listdir(files_path)
     files = get_splitted_cases(all_files, split_nums, split_idx)

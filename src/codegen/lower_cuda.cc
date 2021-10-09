@@ -88,9 +88,9 @@ StageResult CudaLowerStageTuning(Stmt &stmt, LowerData &data) {
   // Stage1 is about Tuning things.
   int level = data->tuning ? help_tiling_level["Tuning"] : g_attrs.GetInt(kHelpTiling, -1);
   if (data->polyhedral && level > help_tiling_level["None"]) {
-    Map<std::string, NodeRef> attrs_tmp = g_attrs;
-    attrs_tmp.Set(kDumpTuningLevel, air::make_const(Int(32), level));
-    NodeRef tuning_spaces = NEXT_PASS(GenTuningSpace, stmt, data->target, data->binds_0, attrs_tmp, false, data->sch);
+    g_attrs.Set(kDumpTuningLevel, air::make_const(Int(32), level));
+    Map<std::string, NodeRef> spec_gemm_attrs = {};
+    NodeRef tuning_spaces = NEXT_PASS(GenTuningSpace, stmt, data->target, data->binds_0, spec_gemm_attrs, data->sch);
     return {tuning_spaces, true};
   }
   return {stmt, false};
@@ -99,7 +99,8 @@ StageResult CudaLowerStageTuning(Stmt &stmt, LowerData &data) {
 StageResult CudaLowerPoly(Stmt &stmt, LowerData &data) {
   // Stage2 is about Polyheral.
   if (data->polyhedral) {
-    Array<NodeRef> poly_res = NEXT_PASS(AutoPoly, stmt, data->binds_0, data->target, g_attrs, false, false, data->sch);
+    Map<std::string, NodeRef> spec_gemm_attrs = {};
+    Array<NodeRef> poly_res = NEXT_PASS(AutoPoly, stmt, data->binds_0, data->target, false, spec_gemm_attrs, data->sch);
     CHECK_EQ(poly_res.size(), 2);
     stmt = air::Downcast<Stmt>(poly_res[0]);
     g_attrs.Set(kEnablePolySch, air::make_const(Int(32), true));
