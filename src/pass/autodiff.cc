@@ -37,10 +37,14 @@ TVM_STATIC_IR_FUNCTOR(IRPrinter, vtable)
 
 TVM_REGISTER_NODE_TYPE(DifferentiationResultNode);
 
-DifferentiationResult DifferentiateComputeOp(const Tensor &output, const Array<Tensor> &inputs,
-                                             const Tensor &head_or_null, const Map<std::string, NodeRef> &attrs,
-                                             const Array<Tensor> &new_pld_array, const FDiffBuildingBlock &fdiff,
-                                             const Map<Tensor, Array<Tensor>> &override_deps) {
+DifferentiationResult Differentiate(const Tensor &output, const Array<Tensor> &inputs, const Tensor &head_or_null,
+                                    const Map<std::string, NodeRef> &attrs, const Array<Tensor> &new_pld_array,
+                                    const FDiffBuildingBlock &fdiff, const Map<Tensor, Array<Tensor>> &override_deps) {
+  if (!output.get()) {
+    LOG(FATAL) << "output is a null pointer.";
+    return DifferentiationResult();
+  }
+
   Tensor head = head_or_null;
 
   // If the head is a null pointer, create an identity tensor
@@ -169,23 +173,6 @@ DifferentiationResult DifferentiateComputeOp(const Tensor &output, const Array<T
   }
 }
 
-DifferentiationResult DifferentiateHybridOp(const Tensor &output, const Array<Tensor> &inputs,
-                                            const Tensor &head_or_null) {
-  // Adjoints corresponding to inputs
-  Array<Tensor> result;
-  std::unordered_map<Tensor, Tensor> adjoints;
-  Array<Tensor> jacInput = inputs.empty() ? output->op->InputTensors() : inputs;
-
-  for (auto input : jacInput) {
-    // Compute an adjoint for each input
-    auto adjoint = JacobianHybrid(output, input, head_or_null);
-    result.push_back(adjoint);
-    adjoints[input] = adjoint;
-  }
-
-  return DifferentiationResultNode::make(result, adjoints, {});
-}
-
 Tensor DiffBuildingBlock(const Tensor &output, const Tensor &input, const Tensor &head,
                          const Map<std::string, NodeRef> &attrs, const Array<Tensor> &new_pld_array) {
   AttrMap in_attrs;
@@ -225,21 +212,6 @@ Tensor DiffBuildingBlock(const Tensor &output, const Tensor &input, const Tensor
   result = InlineTailCall(result);
 
   return result;
-}
-
-DifferentiationResult Differentiate(const Tensor &output, const Array<Tensor> &inputs, const Tensor &head_or_null,
-                                    const Map<std::string, NodeRef> &attrs, const Array<Tensor> &new_pld_array,
-                                    const FDiffBuildingBlock &fdiff, const Map<Tensor, Array<Tensor>> &override_deps) {
-  if (!output.get()) {
-    LOG(FATAL) << "output is a null pointer.";
-    return DifferentiationResult();
-  }
-
-  if (output->op.as<air::HybridOpNode>()) {
-    return DifferentiateHybridOp(output, inputs, head_or_null);
-  }
-
-  return DifferentiateComputeOp(output, inputs, head_or_null, attrs, new_pld_array, fdiff, override_deps);
 }
 
 TVM_REGISTER_API("akg.autodiff.Jacobian").set_body([](const TVMArgs args, TVMRetValue *ret) {
