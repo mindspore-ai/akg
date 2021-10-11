@@ -1425,7 +1425,7 @@ void GpuStrategy::SetThreadMappingConfig() {
   for (auto cfg_map : thread_cfg_map_) {
     int axis_pos = cfg_map.first->dim_axis;
     int mapping_pos = cfg_map.second;
-    bool is_tensor_core = analyzer_->scop_info_.user_config_.GetEnableConvTensorCore();
+    bool is_tensor_core = analyzer_->scop_info_.user_config_.GetEnableTensorCore();
     int real_pos = (reverse_binding_ || is_tensor_core) ? mapping_size - mapping_pos : mapping_pos;
     analyzer_->scop_info_.user_config_.RecordInnerMappingStrategy(axis_pos, mapping_axis_pos[real_pos]);
     std::string mapping_str = is_tensor_core ? WARP_STR : THREAD_STR;
@@ -1450,8 +1450,8 @@ void GpuStrategy::SetBlockMappingConfig() {
 
   std::string block_str = "";
   std::unordered_map<int64_t, std::string> mapping_axis_block;
-  bool is_tensor_core = analyzer_->scop_info_.user_config_.GetEnableConvTensorCore();
-  if (is_tensor_core) {
+  bool is_conv = analyzer_->scop_info_.user_config_.GetEnableConvTensorCore();
+  if (is_conv) {
     // For Conv, the H and W axis should mul to map
     // The axis sequence is M H W OC
     constexpr auto h_axis_index = 2;
@@ -1491,8 +1491,8 @@ void GpuStrategy::SetBlockMappingConfig() {
   std::unordered_map<int64_t, std::string> mapping_axis_pos = {{0, B0}, {1, B1}, {2, B2}};
   for (auto cfg_map : block_cfg_map_) {
     int axis_pos = cfg_map.first->dim_axis;
-    int mapping_pos = is_tensor_core ? cfg_map.second : cfg_map.second - difference;
-    int real_pos = (is_tensor_core && mapping_pos >= mapping_size) ? mapping_pos - 1 : mapping_pos;
+    int mapping_pos = is_conv ? cfg_map.second : cfg_map.second - difference;
+    int real_pos = (is_conv && mapping_pos >= mapping_size) ? mapping_pos - 1 : mapping_pos;
     analyzer_->scop_info_.user_config_.RecordOuterMappingStrategy(axis_pos, mapping_axis_pos[real_pos]);
     ss << "Map axis " << cfg_map.first->index << "_" << axis_pos << " to " << BLOCK_STR + mapping_idx_pos_[real_pos]
        << "; ";
