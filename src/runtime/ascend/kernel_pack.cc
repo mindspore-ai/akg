@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 #include <dmlc/common.h>
+#include <tvm/runtime/registry.h>
 #include "runtime/rt.h"
 #include "kernel.h"
 
 namespace air {
 namespace runtime {
-constexpr auto kCceKernelMeta = "./kernel_meta/";
 constexpr auto kJsonSuffix = ".json";
 static uintptr_t kernel_stub_gen_ = 0;
 
@@ -148,7 +148,9 @@ uintptr_t GetFuncStub(const KernelPack &kernel_pack, uint32_t *block_dim) {
 }
 
 KernelPackPtr GetKernelPack(const std::string &kernel_name) {
-  std::string cce_json = kCceKernelMeta;
+  const auto *f = Registry::Get("get_ascend_meta_path");
+  CHECK(f != nullptr) << "Function get_ascend_meta_path is not registered";
+  std::string cce_json = (*f)().operator std::string();
   (void)cce_json.append(kernel_name).append(kJsonSuffix);
   KernelPackPtr ret = std::make_shared<KernelPack>();
   if (!ret->LoadKernelMeta(cce_json)) {

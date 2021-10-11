@@ -34,7 +34,7 @@ class MadMarker : public IRMutator {
 
   void InsertInsnAttr(const Provide *p, const std::string &str) {
     for (const auto &i : insn_attrs_) {
-      if (i.first == p) LOG(WARNING) << "Provide* " << p << " was registed in insn_attrs_ with " << str;
+      if (i.first == p) LOG(WARNING) << "Provide* " << p << " was registered in insn_attrs_ with " << str;
     }
     insn_attrs_.emplace_back(p, str);
   }
