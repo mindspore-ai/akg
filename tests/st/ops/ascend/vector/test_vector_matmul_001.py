@@ -14,7 +14,7 @@
 
 """
 test for this case set cloud
-def launch(kernel, args, output = (-1,), kernel_meta_path = './kernel_meta', spec=Spec.CLOUD):
+def launch(kernel, args, output = (-1,)):
 
 vector matmul is a special operator for cloud, the data type of
 the input tensor is float32. dataflow is DDR -> UB -> DDR

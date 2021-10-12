@@ -20,9 +20,10 @@ import subprocess
 import json
 import numpy as np
 import akg.tvm
+from akg.global_configs import get_ascend_meta_path
 
 
-def launch(kernel, args, output=(-1,), kernel_meta_path='./kernel_meta'):
+def launch(kernel, args, output=(-1,)):
     """
     simulated run CCE kernel by aic model.
 
@@ -30,7 +31,6 @@ def launch(kernel, args, output=(-1,), kernel_meta_path='./kernel_meta'):
         kernel (str): str of kernel name, or CCE Module.
         args (Union[list, tuple]): list or tuple of numpy array.
         output (Union[list, tuple]): list or tuple of output argment index.
-        kernel_meta_path : kernel meta directory path of the kernel.
     Returns:
         output numpy array, or tuple of numpy array if multi-output.
     """
@@ -64,6 +64,7 @@ def launch(kernel, args, output=(-1,), kernel_meta_path='./kernel_meta'):
     if not os.path.exists(model_path):
         subprocess.call(["ln", "-s", aic_model_path + "/model", model_path])
 
+    kernel_meta_path = get_ascend_meta_path()
     kernel_meta_realpath = os.path.realpath(kernel_meta_path)
     if not os.path.exists(kernel_meta_realpath):
         msg = "The parameter kernel_meta_realpath  can not be found, please check"

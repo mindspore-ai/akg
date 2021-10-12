@@ -581,7 +581,7 @@ Stmt InsertSync(Stmt &s);
 
 inline std::string GetDumpIRFlag() {
   const auto *f = air::runtime::Registry::Get("get_dump_ir_flag");
-  CHECK(f != nullptr) << "Function get_dump_ir_flag is not registed";
+  CHECK(f != nullptr) << "Function get_dump_ir_flag is not registered";
 
   return (*f)().operator std::string();
 }
