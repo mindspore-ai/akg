@@ -1044,6 +1044,9 @@ void SchedulingMindTrick::ParseAttrs(const picojson::value &node) {
       const air::DataType type = air::Int(32);
       const air::NodeRef ref = air::ir::IntImm::make(type, integer_value);
       attrs_.Set(key, ref);
+      if (key == "bypass") {
+        attrs_.Set("bypassL1", ref);
+      }
     }
   }
 }
