@@ -203,7 +203,6 @@ def _set_atomic_add_attrs(desc_d, attrs, poly):
             attrs["enable_atomic_add"] = False
     return attrs
 
-
 def _get_online_tune_attr(desc_s, attrs, repo_path, use_new_space=True):
     desc_d = json.loads(desc_s)
     if "buffer_stitch" in desc_d:
@@ -348,6 +347,10 @@ def _update_attrs_gpu(all_ops, attrs, poly):
         if "pragma_enable_conv_tensor_core" not in attrs.keys() and "Conv2D" in all_ops:
             attrs["pragma_enable_conv_tensor_core"] = True
             attrs["enable_auto_fuse"] = False
+        # Close general tot by default
+        enable_general_tot = False
+        if "has_tot_ops" not in attrs.keys() and any([i in all_ops for i in ["Gather", "TensorScatterAdd"]]):
+            attrs["has_tot_ops"] = enable_general_tot
     return attrs
 
 
@@ -408,6 +411,9 @@ def _build_to_module_gpu(desc_s, desc_d, attrs=None, poly=False):
 
     desc_d, attrs = update_attr(desc_d, attrs)
     attrs = _update_attrs_gpu(all_ops, attrs, poly)
+    if "has_tot_ops" in attrs.keys() and attrs["has_tot_ops"]:
+        func = tvm.get_global_func("composite_with_json_tot")
+        return func(desc_s, attrs, poly)
     func = tvm.get_global_func("composite_with_json")
     if "ret_mode" in attrs:
         return _build_for_tuning(desc_s, attrs, func)

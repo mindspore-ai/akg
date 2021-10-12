@@ -1023,6 +1023,10 @@ void GpuStrategy::CheckVectorizationForElemwiseOp(isl::schedule sch) {
     return;
   }
 
+  if (analyzer_->scop_info_.user_config_.GetHasTotOps()) {
+    return;
+  }
+
   if (analyzer_->scop_info_.user_config_.GetVectorLoadType() == 0) {
     analyzer_->scop_info_.user_config_.SetVectorLoadType(128);  // Default vectorization mode fp32 =128bits
   }

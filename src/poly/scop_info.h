@@ -293,6 +293,7 @@ class UserConfig {
       ParseBoolAttr(attrs, "pragma_enable_matmul", &enable_matmul_);
       ParseBoolAttr(attrs, "enable_tensor_core_use_poly", &enable_tensor_core_use_poly_);
       ParseBoolAttr(attrs, "enable_akg_reduce_lib", &enable_akg_reduce_lib_);
+      ParseBoolAttr(attrs, "has_tot_ops", &has_tot_ops_);
       ParseBoolAttr(attrs, "use_register_memory", &use_register_memory_);
       ParseBoolAttr(attrs, "use_shared_memory", &use_shared_memory_);
       ParseBoolAttr(attrs, "enable_bank_conflict_opt", &enable_bank_conflict_);
@@ -473,6 +474,8 @@ class UserConfig {
 
   bool GetEnableAkgReduceLib() { return enable_akg_reduce_lib_; }
   void SetEnableAkgReduceLib(bool enable_akg_reduce_lib) { enable_akg_reduce_lib_ = enable_akg_reduce_lib; }
+
+  bool GetHasTotOps() { return has_tot_ops_; }
 
   // tensor core info
   bool GetEnableMatmul() { return enable_matmul_; }
@@ -669,6 +672,8 @@ class UserConfig {
   bool enable_conv_tensor_core_{false};
   // lib config
   bool enable_akg_reduce_lib_{true};
+  // tensor of tensor config
+  bool has_tot_ops_{false};
   // memory config
   bool use_register_memory_{true};
   bool use_shared_memory_{true};
