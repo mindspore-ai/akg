@@ -17,12 +17,8 @@ import akg.tvm
 import os
 
 @akg.tvm.register_func
-def get_cuda_meta_path():
-  return './cuda_meta/'
-
-@akg.tvm.register_func
-def get_ascend_meta_path():
-  return './kernel_meta/'
+def get_kernel_meta_path():
+  return os.path.realpath(os.getenv('MS_COMPILER_CACHE_PATH', './')) + '/kernel_meta/'
 
 @akg.tvm.register_func
 def get_dump_ir_flag():

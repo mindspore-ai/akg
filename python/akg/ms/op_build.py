@@ -27,7 +27,7 @@ from akg.utils import kernel_exec as utils
 from akg.ms import save_gpu_param as gpu_utils
 from akg.utils import validation_check as vc_util
 from akg.tvm import _api_internal
-from akg.global_configs import get_cuda_meta_path
+from akg.global_configs import get_kernel_meta_path
 from akg.global_configs import get_dump_ir_flag
 
 BINDS = "binds"
@@ -83,7 +83,7 @@ def op_build(opnames, computes, args, custom_schedule, device, kernel_name, attr
         return True
 
     if device == "cuda":
-        kernel_meta_path = get_cuda_meta_path() 
+        kernel_meta_path = get_kernel_meta_path()
         cuda_path = os.path.realpath(kernel_meta_path)
         if not os.path.isdir(cuda_path):
             os.makedirs(cuda_path, exist_ok=True)

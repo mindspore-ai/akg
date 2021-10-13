@@ -22,7 +22,7 @@ from collections import namedtuple
 
 import numpy as np
 import scipy as sp
-from akg.global_configs import get_ascend_meta_path, get_cuda_meta_path
+from akg.global_configs import get_kernel_meta_path
 from tests.common.gen_random import random_gaussian, gen_indices
 from tests.common.test_utils import precheck, tensor_scatter_add_np, gather_np
 
@@ -542,15 +542,9 @@ def unpad_str(inputs, output, attr):
     return res
 
 
-def gen_workspace_data(kernel_name, process):
+def gen_workspace_data(kernel_name):
     workspace_tensors = []
-    json_file = ""
-    if process == "aicore":
-        json_file = get_ascend_meta_path() + kernel_name + ".json"
-    elif process == "cuda":
-        json_file = get_cuda_meta_path() + kernel_name + ".json"
-    else:
-        logging.warning("Invalid process: {}".format(process))
+    json_file = get_kernel_meta_path() + kernel_name + ".json"
 
     if os.path.isfile(json_file):
         with open(json_file, 'r') as f:
@@ -736,8 +730,7 @@ def gen_json_data(op_desc, with_compute=True):
         output_indexes.extend(inplace_tensors_index)
 
     # Add workspace tensors to input_for_mod
-    process = desc.get("process", None)
-    workspace_tensors = gen_workspace_data(op_name, process)
+    workspace_tensors = gen_workspace_data(op_name)
     if len(workspace_tensors) > 0:
         # workspace tensors are placed after inputs and outputs, so index in output_indexes should
         # be converted to positive number first, otherwise -1 will point to the last workspace tensor

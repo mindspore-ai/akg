@@ -554,17 +554,12 @@ namespace {
 void CreateCode(const std::string &code, const std::string &kernel_name, const std::string &target_name) {
   std::string file_path;
   std::string file_suffix;
+  const auto *f = air::runtime::Registry::Get("get_kernel_meta_path");
+  CHECK(f != nullptr) << "Function get_kernel_meta_path is not registered";
+  file_path = (*f)().operator std::string();
   if (target_name.find("cce") != std::string::npos) {
-    const auto *f = air::runtime::Registry::Get("get_ascend_meta_path");
-    CHECK(f != nullptr) << "Function get_ascend_meta_path is not registered";
-
-    file_path = (*f)().operator std::string();
     file_suffix = ".cce";
   } else if (target_name.find("cuda") != std::string::npos) {
-    const auto *f = air::runtime::Registry::Get("get_cuda_meta_path");
-    CHECK(f != nullptr) << "Function get_cuda_meta_path is not registered";
-
-    file_path = (*f)().operator std::string();
     file_suffix = ".cu";
   }
 
