@@ -48,12 +48,12 @@ Stmt Optimize(Stmt &s, BuildInfo &info) {
   if (info.opt.target == "aicore") {
     pm.RegisterPass(std::make_shared<OpsCombine>(pm.info_));
   }
+  // normalize axis attr
+  pm.RegisterPass(std::make_shared<AxisAttrNormalize>());
   // elim reshape backward
   pm.RegisterPass(std::make_shared<ElimReshapeBackward>(pm.info_));
   // elim reshape forward
   pm.RegisterPass(std::make_shared<ElimReshapeForward>(pm.info_));
-  // normalize axis attr
-  pm.RegisterPass(std::make_shared<AxisAttrNormalize>());
   // fold dimension for multi-dim shape
   if (info.opt.fold_dim) {
     pm.RegisterPass(std::make_shared<FoldDimension>(pm.info_));
