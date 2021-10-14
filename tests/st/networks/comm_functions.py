@@ -67,7 +67,7 @@ def find_op_profiling(csv_file, network, level, op_name):
     data = data_cleaning(data, network, level)
 
     if len(data['Name']) <= 0:
-        raise ValueError("Please check the profiling file %s.csv of %s network." % (op_name, os.path.dirname(file).split('/')[-2]))
+        raise ValueError("Please check the profiling file %s.csv of %s network." % (op_name, network))
     return data
 
 def process_results(directory):
