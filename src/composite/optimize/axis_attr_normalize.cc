@@ -27,7 +27,12 @@ class AxisAttrNormalizer : public IRMutator {
       auto attrs = Downcast<Map<std::string, NodeRef>>(op->node);
       if (attrs.find("axis") != attrs.end()) {
         rank_ = 0;
+        is_allreduce_ = false;
         Stmt body = IRMutator::Mutate(op->body);
+        if (is_allreduce_) {
+          attrs.Set("axis", Array<Expr>());
+          return AttrStmt::make(attrs, op->attr_key, op->value, body);
+        }
         if (attrs["axis"].as<IntImm>()) {
           Array<Expr> new_axis = {make_const(Int(32), CalIndex(attrs["axis"].as<IntImm>()->value))};
           attrs.Set("axis", new_axis);
@@ -72,6 +77,9 @@ class AxisAttrNormalizer : public IRMutator {
         rank_++;
       }
     }
+    if (IsReduce(GetOpName(op)) && ShapeIsOne(op->args)) {
+      is_allreduce_ = true;
+    }
     return s;
   }
 
@@ -87,6 +95,7 @@ class AxisAttrNormalizer : public IRMutator {
 
  private:
   int64_t rank_{0};
+  bool is_allreduce_{false};
 };
 
 Stmt AxisAttrNormalize::Run(const Stmt &stmt) { return AxisAttrNormalizer().Mutate(stmt); }
