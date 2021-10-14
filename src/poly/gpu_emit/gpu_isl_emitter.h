@@ -38,7 +38,6 @@ constexpr auto REDUCE_ATOMIC_FLAG = "atomic";
 constexpr auto REDUCE_ATOMIC_FLAG_POS = 0;
 constexpr auto REDUCE_ATOMIC_FLAG_TYPE_POS = 1;
 
-constexpr auto AKG_KAHAN_LIB_NAME = "AkgKahanAccumulation";
 constexpr auto REDUCE_LIB_TYPE_FLAG = "reduceLibType";
 constexpr auto REDUCE_INIT_FLAG = "InitStmt";
 

@@ -18,6 +18,7 @@
 
 #include "poly/scop_info.h"
 #include "poly/pass_info.h"
+#include "auto_tune/tune_info.h"
 
 namespace akg {
 namespace ir {
@@ -46,7 +47,7 @@ Stmt DsaHalideOptimizer(const Stmt &s, bool dynamic_shape = false);
 Stmt RestoreCombinedParams(Stmt stmt, ScopInfo &info);
 std::pair<TileSizes, std::deque<ParamInfo>> GenerateTiling(const isl::schedule &sch, ScopInfo &scop_info, Stmt body);
 NodeRef GenerateTilingSpace(const isl::schedule &sch, ScopInfo &scop_info, Stmt body, int dump_level);
-NodeRef GenerateTuningSpace(const isl::schedule &sch, ScopInfo &scop_info, Stmt body, int dump_level);
+NodeRef GenerateTuningSpace(TuneInfo *tune_info, int dump_level);
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

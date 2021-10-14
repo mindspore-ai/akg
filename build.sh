@@ -20,13 +20,14 @@ OUTPUT_PATH="${AKG_DIR}/output"
 usage()
 {
     echo "Usage:"
-    echo "bash build.sh [-e gpu|ascend] [-j[n]] [-t on|off] [-o]"
+    echo "bash build.sh [-e gpu|ascend] [-j[n]] [-t on|off] [-o] [-u]"
     echo ""
     echo "Options:"
     echo "    -e Hardware environment: gpu or ascend"
     echo "    -j[n] Set the threads when building (Default: -j8)"
     echo "    -t Unit test: on or off (Default: off)"
     echo "    -o Output .o file directory"
+    echo "    -u Enable auto tune"
 }
 
 mk_new_dir()
@@ -73,7 +74,7 @@ fi
 # Parse arguments
 THREAD_NUM=32
 CMAKE_ARGS=""
-while getopts 'e:j:t:o' opt
+while getopts 'e:j:u:t:o' opt
 do
     case "${opt}" in
         e)
@@ -91,6 +92,9 @@ do
             THREAD_NUM=${OPTARG}
             ;;
         t)
+            ;;
+        u)
+            CMAKE_ARGS="${CMAKE_ARGS} -DUSE_AUTO_TUNE=1"
             ;;
         o)
             arch_info=`arch | tr '[A-Z]' '[a-z]'`
@@ -146,6 +150,7 @@ mk_new_dir "${BUILD_DIR}"
 mk_new_dir "${OUTPUT_PATH}"
 
 echo "---------------- AKG: build start ----------------"
+
 # Build target
 cd $BUILD_DIR
 cmake .. ${CMAKE_ARGS}

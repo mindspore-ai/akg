@@ -16,8 +16,18 @@
 
 export RUNTIME_MODE="air_cloud"
 
+setup_autotune() {
+  PYTHON=$(which python3)
+  PYLIB=$(${PYTHON} -c "from distutils.sysconfig import get_python_lib; print(get_python_lib())")
+  TUNELIB=${PYLIB}/auto_tune
+  export LD_LIBRARY_PATH=${TUNELIB}:${LD_LIBRARY_PATH}
+  echo "Setup for auto tune: export LD_LIBRARY_PATH=${TUNELIB}"
+}
+
 if [ $# -eq 1 ] && [ $1 = "gpu_ci" ]; then
   echo "Argument gpu_ci is used in CI and will be deprecated."
+elif [ $# -eq 1 ] && [ $1 = "mstune" ] ; then
+  setup_autotune
 else
   CUR_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
   AKG_DIR="${AKG_DIR:-${CUR_DIR}/..}"
@@ -28,6 +38,8 @@ else
   export PYTHONPATH=${TVM_ROOT}/python:${TVM_ROOT}/topi:${TVM_ROOT}/topi/python:${AKG_DIR}:${AKG_DIR}/tests/common:${AKG_DIR}/python:${AKG_DIR}/tests/operators/gpu:${AKG_DIR}/tests/fuzz/tune_for_gpu:${PYTHONPATH}
   if [ $# -eq 1 ] && [ $1 = "gpu" ]; then
     export LD_LIBRARY_PATH=/usr/local/cuda/extras/CUPTI/lib64:${LD_LIBRARY_PATH}
+  elif [ $# -eq 1 ] && [ $1 = "tune" ] ; then
+    setup_autotune
   fi
 
   echo "LD_LIBRARY_PATH: ${LD_LIBRARY_PATH}"

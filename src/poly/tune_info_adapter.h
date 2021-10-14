@@ -1,4 +1,3 @@
-
 /**
  * Copyright 2021 Huawei Technologies Co., Ltd
  *
@@ -14,17 +13,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "auto_tune/tune_info.h"
 
-#include "poly/scop.h"
+#include "scop_info.h"
+#include "tiling/tiling_analyzer.h"
+#include "tiling/tiling.h"
 
 namespace akg {
 namespace ir {
 namespace poly {
 
-using namespace air;
-NodeRef GenerateTuningSpace(TuneInfo *tune_info, int dump_level) {
-  return NodeRef(make_node<Node>());
-}
+std::unique_ptr<TuneInfo> GenerateTuningInfo(const isl::schedule &sch, ScopInfo *scop_info, Stmt body);
 
 }  // namespace poly
 }  // namespace ir
