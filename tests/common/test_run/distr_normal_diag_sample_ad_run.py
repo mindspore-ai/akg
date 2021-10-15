@@ -24,7 +24,7 @@ def sample_ad_run(shape, dtype, kernel_name="", attrs=None):
 
     mod = utils.op_build_test(distr_normal_diag_sample_ad.normal_diag_sample_ad, [head.shape, mean.shape, scale.shape, eps.shape],
                                          [dtype, dtype, dtype, dtype], kernel_name=kernel_name,
-                                         op_attrs=None, attrs=None, log_cce=True, dump_code=True, polyhedral=True)
+                                         op_attrs=None, attrs=None, log_code=True, dump_code=True, polyhedral=True)
     outputs = utils.mod_launch(mod, [head, mean, scale, eps, *outputs], outputs=tuple(range(-len(outputs), 0)), expect=expects)
     outputs = list(outputs)
     

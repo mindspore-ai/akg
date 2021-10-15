@@ -545,7 +545,6 @@ def unpad_str(inputs, output, attr):
 def gen_workspace_data(kernel_name):
     workspace_tensors = []
     json_file = get_kernel_meta_path() + kernel_name + ".json"
-
     if os.path.isfile(json_file):
         with open(json_file, 'r') as f:
             kernel_json = f.read()
@@ -555,7 +554,7 @@ def gen_workspace_data(kernel_name):
                 item = np.full(workspace_bytes, np.nan, np.int8)
                 workspace_tensors.append(item)
     else:
-        logging.warning("Kernel json file {} not found".format(json_file))
+        logging.warning("Kernel json file %s not found", json_file)
 
     return workspace_tensors
 

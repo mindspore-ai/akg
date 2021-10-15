@@ -17,7 +17,7 @@ from tests.common.base import get_rtol_atol
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
 from akg.ops.array_gpu import gather_nd
-from akg.utils.result_analysis import gpu_profiling
+from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
 from tests.common.gen_random import random_gaussian, gen_indices_gather_nd
 from tests.common.test_utils import gather_nd_np
@@ -60,4 +60,4 @@ def test_ms_gather_nd(shape1, dtype1, shape2, dtype2, poly_sch=False):
 
     params, indices, output, expect = to_tvm_nd_array(
         [params, indices, output, expect])
-    gpu_profiling(mod, params, indices, output, expect, repeat_time=400)
+    target_profiling(mod, params, indices, output, expect, repeat_time=400)

@@ -44,7 +44,6 @@ def _reducemax_pattern(kernel_info):
             return True, reduce_size
     return False, 0
 
-
 def generate_trait(desc):
     """ generate trait of kernel description """
 
@@ -195,7 +194,6 @@ def _set_reducemax_attrs(desc_d, attrs):
         attrs['bind_thread'] = str(blockdim_x) + ' ' + str(blockdim_y)
     return attrs
 
-
 def _set_atomic_add_attrs(desc_d, attrs, poly):
     if "enable_atomic_add" not in attrs.keys():
         attrs["enable_atomic_add"] = _should_enable_atomic_add(desc_d)
@@ -252,6 +250,8 @@ def merge_attrs(attrs_a, attrs_b):
 
 
 def read_repo_file(repo_file):
+    if not os.path.exists(repo_file):
+        return {}
     with open(repo_file, 'r') as f:
         repo = json.loads(f.read())
     return repo
@@ -365,8 +365,7 @@ def _update_attrs_ascend(all_ops, attr):
     attr["enable_auto_inline"] = any([i in all_ops for i in ["BatchMatMul", "MatMul"]])
     return attr
 
-
-def _build_to_module_gpu(desc_s, desc_d, attrs=None, poly=False):
+def _build_to_module(desc_s, desc_d, attrs=None, poly=False):
     """
     build kernel with compute description in json format
     Args:
@@ -377,7 +376,10 @@ def _build_to_module_gpu(desc_s, desc_d, attrs=None, poly=False):
     Returns:
        Module.
     """
-    repository_gpu = _get_repository("repository_gpu.json", desc_d)
+
+    process = desc_d['process']
+    file_name = "repository_" + process + ".json"
+    repository = _get_repository(file_name, desc_d)
     all_ops = set([op['name'] for op in desc_d['op_desc']])
 
     def update_attr(desc_d, attrs):
@@ -387,21 +389,23 @@ def _build_to_module_gpu(desc_s, desc_d, attrs=None, poly=False):
         batchmatmul = "BatchMatMul" in all_ops
         if batchmatmul:
             shape = "any_shape"
-        repo_attr = _get_repo_attr(desc_d, compute, shape, dtype, repository_gpu, batchmatmul)
+        repo_attr = _get_repo_attr(desc_d, compute, shape, dtype, repository, batchmatmul)
         attrs = merge_attrs(attrs, repo_attr)
-        attr_list = ['dim', 'bind_block', 'bind_thread']
+        attr_list = ['dim']
+        if process == 'cuda':
+            attr_list.extend(['bind_block', 'bind_thread'])
         for item in attr_list:
             if attrs.get(item) in (None, ''):
-                value = get_attr_from_dict([compute, shape, dtype, item], repository_gpu)
+                value = get_attr_from_dict([compute, shape, dtype, item], repository)
                 if value:
                     attrs[item] = value
         if attrs.get('dim') in (None, '') and 'online_tuning' in attrs:
-            attrs = _get_online_tune_attr(desc_s, attrs, get_repository_file_path("repository_gpu.json"))
+            attrs = _get_online_tune_attr(desc_s, attrs, get_repository_file_path(file_name))
         return desc_d, attrs
 
     if 'parallel_fusion' in desc_d or 'buffer_stitch' in desc_d:
         block_jsons, stitch_origin_jsons, input_tensor_name, output_tensor_name, attrs_list, \
-            alloc_map_list, reuse_map_list, clean_op_map_list = _json_need_split(desc_d, attrs, poly, 'cuda')
+            alloc_map_list, reuse_map_list, clean_op_map_list = _json_need_split(desc_d, attrs, poly, process)
         if 'parallel_fusion' in desc_d:
             for i, [cur_json, cur_attr] in enumerate(zip(block_jsons, attrs_list)):
                 cur_desc_d, attrs_list[i] = update_attr(json.loads(cur_json), cur_attr)
@@ -410,7 +414,7 @@ def _build_to_module_gpu(desc_s, desc_d, attrs=None, poly=False):
             desc_d, attrs = update_attr(desc_d, attrs)
         func = tvm.get_global_func("composite_with_json_list")
         return func(block_jsons, stitch_origin_jsons, input_tensor_name, output_tensor_name,
-                    alloc_map_list, reuse_map_list, clean_op_map_list, attrs_list, poly, "cuda")
+                    alloc_map_list, reuse_map_list, clean_op_map_list, attrs_list, poly, process)
 
     desc_d, attrs = update_attr(desc_d, attrs)
     attrs = _update_attrs_gpu(all_ops, attrs, poly)
@@ -421,7 +425,6 @@ def _build_to_module_gpu(desc_s, desc_d, attrs=None, poly=False):
     if "ret_mode" in attrs:
         return _build_for_tuning(desc_s, attrs, func)
     return func(desc_s, attrs, poly)
-
 
 def _build_to_module_ascend(desc_s_in, desc_d_in, attr=None, use_repo=True):
     """
@@ -542,10 +545,10 @@ def build(kernel_desc, attrs=None, poly=True, use_repo=True):
     attrs = _set_atomic_add_attrs(desc_d, attrs, poly)
     if "enable_elementwise_flatten" not in attrs.keys():
         attrs["enable_elementwise_flatten"] = False
-    if backend == 'cuda':
-        return _build_to_module_gpu(desc_s, desc_d, attrs, poly)
-    else:
+    if backend == 'aicore':
         return _build_to_module_ascend(desc_s, desc_d, attrs, use_repo)
+    else:
+        return _build_to_module(desc_s, desc_d, attrs, use_repo)
 
 
 def get_tiling_space(kernel_desc, level=1, attr=None):

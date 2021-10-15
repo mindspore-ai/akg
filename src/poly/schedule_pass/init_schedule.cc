@@ -129,7 +129,8 @@ isl::schedule InitSchedule::Run(isl::schedule sch) {
    * When union_set is not a set, i.e., there exist multiple liveouts, introduce dependences
    * between these liveouts by calling ForceDepBetweenLiveouts.
    */
-  if (scop_info_.user_config_.GetTarget() == TARGET_CUDA) {
+  if (scop_info_.user_config_.GetTarget() == TARGET_CUDA ||
+      scop_info_.user_config_.GetTarget() == TARGET_CPU ) {
     pass_info_.force_dependences_ = isl::union_map::empty(sch.ctx());
     auto sinks = RemoveLeafSelfDependence(pass_info_.dependences_).domain();
     auto domain = sch.get_root().as<isl::schedule_node_domain>().get_domain();
@@ -147,7 +148,7 @@ isl::schedule InitSchedule::Run(isl::schedule sch) {
 
   pass_info_.orig_dependences_ = pass_info_.dependences_;
 
-  if (scop_info_.user_config_.GetTarget() != TARGET_CUDA) {
+  if (scop_info_.user_config_.GetTarget() == TARGET_CCE) {
     ModDependencesBeforeGroup(sch);
   }
 

@@ -123,6 +123,37 @@ class LLVMModuleNode final : public runtime::ModuleNode {
           << "Cannot emit target CGFT_AssemblyFile";
 #endif
       pass.run(*m);
+    } else if (fmt == "k" || fmt == "kernel") {
+#if TVM_LLVM_VERSION <= 60
+      std::unique_ptr<llvm::Module> m = llvm::CloneModule(mptr_);
+#else
+      llvm::ValueToValueMapTy Vmap;
+      auto module_id = mptr_->getModuleIdentifier();
+      auto filter = [module_id](const llvm::GlobalValue *GV) {
+        if (GV->getGlobalIdentifier() == module_id + "_lambda" ||
+            GV->getGlobalIdentifier() == module_id + "_kernel") {
+          return true;
+        }
+        return false;
+      };
+      std::unique_ptr<llvm::Module> m = llvm::CloneModule(*mptr_, Vmap, filter);
+#endif
+      llvm::legacy::PassManager pass;
+      CHECK(tm_);
+#if TVM_LLVM_VERSION <= 60
+      CHECK(tm_->addPassesToEmitFile(
+          pass, dest, llvm::TargetMachine::CGFT_ObjectFile) == 0)
+          << "Cannot emit target CGFT_ObjectFile";
+#elif TVM_LLVM_VERSION <= 90
+      CHECK(tm_->addPassesToEmitFile(
+          pass, dest, nullptr, llvm::TargetMachine::CGFT_ObjectFile) == 0)
+          << "Cannot emit target CGFT_ObjectFile";
+#else
+      CHECK(tm_->addPassesToEmitFile(
+          pass, dest, nullptr, llvm::CGFT_ObjectFile) == 0)
+          << "Cannot emit target CGFT_ObjectFile";
+#endif
+      pass.run(*m);
     } else if (fmt == "ll") {
       mptr_->print(dest, nullptr);
     } else if (fmt == "bc") {
@@ -222,7 +253,7 @@ class LLVMModuleNode final : public runtime::ModuleNode {
     llvm::SMDiagnostic err;
     module_ = llvm::parseIRFile(file_name, err, *ctx_);
     if (module_.get() == nullptr) {
-      std::string msg = err.getMessage();
+      std::string msg = std::string(err.getMessage());
       LOG(FATAL) << "Fail to load ir file " << file_name << "\n"
                  << "line " << err.getLineNo() << ":" << msg;
     }
@@ -231,7 +262,7 @@ class LLVMModuleNode final : public runtime::ModuleNode {
     if (mtarget != nullptr) {
       llvm::MDString* pstr = llvm::dyn_cast<llvm::MDString>(mtarget);
       CHECK(pstr != nullptr);
-      target_ = pstr->getString();
+      target_ = std::string(pstr->getString());
     } else {
       std::ostringstream os;
       os << "llvm -target " << module_->getTargetTriple();
@@ -263,18 +294,22 @@ class LLVMModuleNode final : public runtime::ModuleNode {
     builder.setTargetOptions(opt);
     auto tm = std::unique_ptr<llvm::TargetMachine>(builder.selectTarget());
     std::unique_ptr<llvm::TargetMachine> tm_sys = GetLLVMTargetMachine("llvm");
+    bool is_match = true;
     if (tm_sys->getTargetTriple().getArch() != tm->getTargetTriple().getArch()) {
-      LOG(FATAL) << "Cannot run module, architecture mismatch "
+      LOG(ERROR) << "Cannot run module, architecture mismatch "
                  << " module=" << tm->getTargetTriple().str()
-                 << " system=" << tm_sys->getTargetTriple().str();
+                 << " system=" << tm_sys->getTargetTriple().str()
+                 << " Use " << tm_sys->getTargetTriple().str() << " replace";
+      is_match = false;
     }
-    llvm::DataLayout layout(tm->createDataLayout());
-    CHECK(layout == mptr_->getDataLayout())
-        << "Data layout mismatch between module("
-        << mptr_->getDataLayout().getStringRepresentation() << ")"
-        << " and ExecutionEngine ("
-        << layout.getStringRepresentation() << ")";
-    ee_ = builder.create(tm.release());
+    llvm::DataLayout layout(is_match ? tm->createDataLayout() : tm_sys->createDataLayout());
+    if (layout != mptr_->getDataLayout()) {
+      LOG(ERROR) << "Data layout mismatch between module("
+                 << mptr_->getDataLayout().getStringRepresentation() << ")"
+                 << " and ExecutionEngine ("
+                 << layout.getStringRepresentation() << ")";
+    }
+    ee_ = builder.create(is_match ? tm.release() : tm_sys.release());
     CHECK(ee_ != nullptr)
         << "Failed to initialize git engine for " << mptr_->getTargetTriple();
     ee_->runStaticConstructorsDestructors(false);
@@ -336,9 +371,13 @@ TVM_REGISTER_API("codegen.llvm_lookup_intrinsic_id")
 
 TVM_REGISTER_API("codegen.build_llvm")
 .set_body([](TVMArgs args, TVMRetValue* rv) {
+    Array<LoweredFunc> funcs = args[0];
     auto n = make_object<LLVMModuleNode>();
     n->Init(args[0], args[1]);
     *rv = runtime::Module(n);
+    if (const auto* f = runtime::Registry::Get("dump_cpu_meta")) {
+      (*f)(*rv, funcs[0]->name);
+    }
   });
 
 TVM_REGISTER_API("codegen.llvm_version_major")

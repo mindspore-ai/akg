@@ -26,7 +26,7 @@ def logprob_ad_run(shape, dtype, kernel_name="", attrs=None):
 
     mod = utils.op_build_test(distr_bernoulli_logprob_ad.bernoulli_logprob_ad, [head.shape, x.shape, probs.shape],
                                          [dtype, dtype, dtype], kernel_name=kernel_name,
-                                         op_attrs=None, attrs=None, log_cce=True, dump_code=True, polyhedral=True)
+                                         op_attrs=None, attrs=None, log_code=True, dump_code=True, polyhedral=True)
     outputs = utils.mod_launch(mod, [head, x, probs, *outputs], outputs=tuple(range(-len(outputs), 0)), expect=expects)
     outputs = list(outputs)
 

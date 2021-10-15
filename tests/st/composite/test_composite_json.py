@@ -18,10 +18,11 @@ import json
 import time
 import pytest
 import logging
+import akg.tvm as tvm
 from akg import composite
 from akg.utils import custom_tiling
 from akg.utils import kernel_exec as utils
-from akg.utils.result_analysis import gpu_profiling, get_compare_tolerance
+from akg.utils.result_analysis import target_profiling, get_compare_tolerance
 from akg.utils.format_transform import to_tvm_nd_array
 from tests.common.gen_json_data import gen_json_data
 from tests.common.base import get_rtol_atol
@@ -85,8 +86,8 @@ def _compare_func(output, expect, compare_tolerance=None):
     return compare_tensor(output, expect, rtol=rtol, atol=atol)
 
 
-def _dump_data(path, input, output, expect):
-    input = input if isinstance(input, (list, tuple)) else [input]
+def _dump_data(path, inputs, output, expect):
+    inputs= inputs if isinstance(inputs, (list, tuple)) else [inputs]
     output = output if isinstance(output, (list, tuple)) else [output]
     expect = expect if isinstance(expect, (list, tuple)) else [expect]
 
@@ -104,7 +105,7 @@ def _dump_data(path, input, output, expect):
         dump_tensor(data, file_name_prefix + 'expect_' + str(i))
 
 
-def _dump_info(desc, build_attrs, poly, input, output, expect):
+def _dump_info(desc, build_attrs, poly, inputs, output, expect):
     dump_path = os.getenv("AKG_DUMP_TESTCASE_INFO_PATH")
     if not dump_path or dump_path == "":
         # dump data to the current dir by default
@@ -119,7 +120,9 @@ def _dump_info(desc, build_attrs, poly, input, output, expect):
     if not os.path.isdir(dump_path):
         os.makedirs(dump_path, exist_ok=True)
 
-    _dump_data(dump_path, input, output, expect)
+    logging.debug("build attrs : %s", str(build_attrs))
+    logging.debug("use poly : %s", str(poly))
+    _dump_data(dump_path, inputs, output, expect)
 
 
 def get_result(desc, poly, attrs=None, profiling=True, need_compare=True):
@@ -143,12 +146,12 @@ def get_result(desc, poly, attrs=None, profiling=True, need_compare=True):
     if not all(compare_res):
         logging.debug(mod.imported_modules[0].get_source())
         _dump_info(desc, attrs, poly, input_for_mod, output, expect)
-        logging.warning("Compare results: {}".format(compare_res))
+        logging.warning("Compare results: %s", str(compare_res))
         return False
-    if profiling and backend == "cuda":
-        inputs = to_tvm_nd_array(input_for_mod)
-        expect = to_tvm_nd_array(expect)
-        gpu_profiling(mod, *inputs, *expect, repeat_time=400)
+    if profiling and backend in ["cuda", "cpu"]:
+        ctx = tvm.context(backend, 0)
+        inputs = to_tvm_nd_array(input_for_mod, ctx)
+        target_profiling(mod, *inputs, target=backend, repeat_time=1000)
     return True
 
 
@@ -157,14 +160,14 @@ def test_single_file(input_file, attrs, poly, profiling=True, max_run_times=3):
     if not input_file.endswith(".info") and not input_file.endswith(".json"):
         print("Skip {}, only process file with .info or .json suffix".format(input_file))
         return
-    logging.info("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%file: {}".format(input_file))
+    logging.info("test file: %s", input_file)
     with open(input_file, 'r') as f:
         desc = f.read()
         for i in range(max_run_times):
             if get_result(desc, poly, attrs, profiling):
-                logging.info("Run Pass! max run time: {}, current run time: {}".format(max_run_times, i + 1))
+                logging.info("Run Pass! max run time: %d, current run time: %d", max_run_times, i + 1)
                 return
-            logging.info("Precision error! max run time: {}, current run time: {}".format(max_run_times, i + 1))
+            logging.info("Precision error! max run time: %d, current run time: %d", max_run_times, i + 1)
         raise ValueError("Precision Error")
 
 
@@ -182,7 +185,7 @@ def test_json_dir(poly, use_custom, json_dir="./json_dir/", online_tuning=0):
         if input_file == "dims.json":
             continue
         with open(json_dir + input_file, 'r') as f:
-            logging.info("Begin run [No.%d/%d] file:%s" % (idx, len(files), input_file))
+            logging.info("Begin run [No.%d/%d] file:%s", idx, len(files), input_file)
             idx = idx + 1
             desc = f.read()
             attrs = dims_dict.get(input_file, {}) if use_custom else {}
@@ -197,7 +200,7 @@ def test_json_dir(poly, use_custom, json_dir="./json_dir/", online_tuning=0):
     logging.info("All Json files run PASS!")
 
 
-def get_op_cycles_info(desc, cycle_info_file, old_op_cycles=100000000):
+def get_op_cycles_info(cycle_info_file, old_op_cycles=100000000):
     with open(cycle_info_file, 'r') as f:
         op_cycles = int(f.read())
     diff = old_op_cycles - op_cycles
@@ -225,20 +228,19 @@ def test_ci(profile=False, poly=False):
             desc = f.read()
             json_desc = json.loads(desc)
             if "process" not in json_desc or json_desc["process"] not in target_process:
-                logging.info("------ Skip {}".format(fi))
+                logging.info("------ Skip %s", fi)
                 continue
-            print("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%  fi: ", fi)
+            print("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%  fi: %s", fi)
             flag = get_result(desc, poly)
             if not flag:
                 logging.info("----------Error Json info is----------")
                 logging.info(desc)
                 raise ValueError("Precision Error")
             elif not profile:
-                logging.info("Composite Json {} pass!".format(fi))
+                logging.info("Composite Json %s pass!", fi)
             else:
                 old_op_cycles = old_dict[fi]
-                op_cycles, diff = get_op_cycles_info(
-                    desc, cycle_info_file, old_op_cycles)
+                op_cycles, diff = get_op_cycles_info( cycle_info_file, old_op_cycles)
                 logging.info("~~~~~~~~~~~cycle diff is~~~~~~~~~~~")
                 logging.info(diff)
                 if diff > 500:
@@ -324,7 +326,7 @@ def main(argv):
                     attrs_list['mind_trick'] = f.read()
             elif option == "--mind-trick-string":
                 attrs_list['mind_trick'] = value
-    except:
+    except Exception as e:
         print_usage()
         return
 

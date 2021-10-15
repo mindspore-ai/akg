@@ -22,6 +22,7 @@
 #include <vector>
 #include "codegen/util.h"
 #include "codegen/pass_mgr.h"
+#include "build_module.h"
 
 namespace akg {
 extern AttrMap g_attrs;
@@ -116,5 +117,41 @@ void ConfigDumpIr(const std::string &name, const BuildConfig &config, bool lower
 Stmt LowerInitWithSchedule(LowerData &data);
 std::string GetErrorHint(const std::string &target);
 using StageResult = std::pair<NodeRef, bool>;
+
+inline StageResult LowerStageTuning(Stmt &stmt, LowerData &data) {
+  int level = data->tuning ? help_tiling_level["Tuning"] : g_attrs.GetInt(kHelpTiling, -1);
+  if (data->polyhedral && level > help_tiling_level["None"]) {
+    g_attrs.Set(kDumpTuningLevel, air::make_const(Int(32), level));
+    Map<std::string, NodeRef> spec_gemm_attrs = {};
+    NodeRef tuning_spaces = NEXT_PASS(GenTuningSpace, stmt, data->target, data->binds_0, spec_gemm_attrs, data->sch);
+    return {tuning_spaces, true};
+  }
+  return {stmt, false};
+}
+
+inline StageResult LowerPoly(Stmt &stmt, LowerData &data) {
+  if (data->polyhedral) {
+    Map<std::string, NodeRef> spec_gemm_attrs = {};
+    Array<NodeRef> poly_res = NEXT_PASS(AutoPoly, stmt, data->binds_0, data->target, false, spec_gemm_attrs, data->sch);
+    CHECK_EQ(poly_res.size(), 2);
+    stmt = air::Downcast<Stmt>(poly_res[0]);
+    g_attrs.Set(kEnablePolySch, air::make_const(Int(32), true));
+  }
+  return {stmt, false};
+}
+
+inline StageResult LowerDone(Stmt &stmt, LowerData &data) {
+  if (data->simple_mode) {
+    return {stmt, true};
+  }
+  return {LowerFunc(stmt, data->name, data->config, data->arg_list_0), true};
+}
+
+inline StageResult LowerFlattern(Stmt &stmt, LowerData &data) {
+  stmt = NEXT_PASS(StorageFlatten, stmt, data->binds_0, 64, data->config->instrument_bound_checkers);
+  stmt = NEXT_PASS(CanonicalSimplify, stmt);
+  return {stmt, false};
+}
+
 }  // namespace akg
 #endif  // CODEGEN_LOEWR_H_

@@ -139,14 +139,13 @@ class ReduceInfoCollect : public IRVisitor {
     CHECK(block_cfg) << "thread config is null.";
     int tx = thread_cfg->GetX().second;
     int ty = thread_cfg->GetY().second;
-    int by = block_cfg->GetY().second;
     std::string direction = scop_info_.analysis_result_.GetReduceDirection();
     CHECK(!direction.empty()) << "direction should not be empty!";
     std::string direction_size = "";
-    if (direction == X_DIRECTION) {
-      direction_size = std::to_string(tx);
-    } else {
+    if (direction == Y_DIRECTION) {
       direction_size = std::to_string(ty);
+    } else {
+      direction_size = std::to_string(tx);
     }
 
     std::string reduce_lib_namespace = "";
@@ -176,7 +175,7 @@ class ReduceInfoCollect : public IRVisitor {
     ret += ", ";
     ret += std::to_string(ty);
     std::string reduce_type = "";
-    if (by == 1 && ty == 1) {
+    if (direction == ALL_DIRECTION) {
       reduce_type = AKG_ALL_REDUCE;
     } else if (direction == X_DIRECTION) {
       reduce_type = AKG_X_REDUCE;
@@ -234,7 +233,7 @@ class ReduceInfoCollect : public IRVisitor {
 
 class AkgReduceStmtChange : public air::ir::IRMutator {
  public:
-  explicit AkgReduceStmtChange(Tensor t, Array<Expr> args, std::string name) : t(t), args(args), name(name) {}
+  explicit AkgReduceStmtChange(Tensor t, Array<Expr> args, std::string &name) : t(t), args(args), name(name) {}
   ~AkgReduceStmtChange() override = default;
 
   Expr Mutate_(const Call *op, const Expr &e) final {

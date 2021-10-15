@@ -1386,6 +1386,12 @@ void TilingAnalyzer::AddPostTilingConstraints() {
       }
     }
     return;
+  } else if (scop_info_.user_config_.GetTarget() == TARGET_CPU) {
+    CpuStrategy cpu_strategy(this);
+    actived_strategies.push_back(&cpu_strategy);
+    strategy_manager->SetStrategies(actived_strategies);
+    strategy_manager->ExecuteCpu();
+    return;
   }
 }
 
@@ -1399,6 +1405,14 @@ void TilingAnalyzer::AddTilingConstraints() {
     actived_strategies.push_back(&cast_strategy);
     strategy_manager->SetStrategies(actived_strategies);
     strategy_manager->ExecuteGpu();
+    return;
+  }
+
+  if (scop_info_.user_config_.GetTarget() == TARGET_CPU) {
+    CastStrategy cast_strategy(this);
+    actived_strategies.push_back(&cast_strategy);
+    strategy_manager->SetStrategies(actived_strategies);
+    strategy_manager->ExecuteCpu();
     return;
   }
 
@@ -1456,6 +1470,7 @@ bool TilingAnalyzer::Prepare() {
   logger_ = std::unique_ptr<TileLogger>(new (std::nothrow) TileLogger(
     scop_info_.AddDumpDir("tiling.log"), !scop_info_.user_config_.GetDumpPolyDir().empty()));
   CHECK(logger_) << "memory alloc fail.";
+
   // Stage 1: Analyze schedule tree.
   ScheduleTreeAnalyzer sch_ana(this, this->sch_);
   root_axis_ = sch_ana.Build(this->Halide());
@@ -1478,6 +1493,7 @@ bool TilingAnalyzer::Prepare() {
 
   // Stage 2: Analyze Halide IR and add tiling constraints.
   SpaceAnalyzer space_analyzer(this);
+
   space_analyzer.AnalyzeSpecialAxes();
 
   AddTilingConstraints();

@@ -113,6 +113,16 @@ typedef int (*FTVMParallelLambda)(
     int task_id, TVMParallelGroupEnv* penv, void* cdata);
 
 /*!
+ * \brief The callback function to execute a parallel lambda
+ *          with akg runtime.
+ * \param task_id the task id of the function.
+ * \param penv The parallel environment backs the execution.
+ * \param cdata The supporting closure data.
+ */
+typedef int (*FAKGParallelLambda)(
+    int task_id, int num_task, void* cdata);
+
+/*!
  * \brief Backend function for running parallel jobs.
  *
  * \param flambda The parallel function to be launched.
@@ -125,6 +135,7 @@ typedef int (*FTVMParallelLambda)(
 TVM_DLL int TVMBackendParallelLaunch(FTVMParallelLambda flambda,
                                      void* cdata,
                                      int num_task);
+
 
 /*!
  * \brief BSP barrrier between parallel threads

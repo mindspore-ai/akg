@@ -73,6 +73,8 @@ class CodeGenCPU : public CodeGenLLVM {
   // Lazy entry for function call.
   llvm::FunctionType* ftype_tvm_static_init_callback_{nullptr};
   llvm::FunctionType* ftype_tvm_static_init_{nullptr};
+  llvm::FunctionType* ftype_alloc_launch_{nullptr};
+  llvm::FunctionType* ftype_free_launch_{nullptr};
 
  private:
   // the parallel group information
@@ -134,6 +136,8 @@ class CodeGenCPU : public CodeGenLLVM {
   llvm::Function* f_tvm_parallel_launch_{nullptr};
   llvm::Function* f_tvm_parallel_barrier_{nullptr};
   llvm::Function* f_tvm_register_system_symbol_{nullptr};
+  llvm::Function* f_tvm_alloc_launch_{nullptr};
+  llvm::Function* f_tvm_free_launch_{nullptr};
   // Current parallel environment scope.
   ParallelEnv parallel_env_;
   // global to packed function handle
@@ -149,6 +153,14 @@ class CodeGenCPU : public CodeGenLLVM {
                                     llvm::Type* ty);
   // Adds the DWARF debug information for |function| to |dbg_info_|.
   void AddDebugInformation(llvm::Function* function);
+
+  Array<Var> args_real_;
+  Var extern_links_{"extern_links"};
+  Var parallel_launch_{"AKGBackendParallelLaunch"};
+  Var alloc_launch_{"TVMBackendAllocWorkspace"};
+  Var free_launch_{"TVMBackendFreeWorkspace"};
+  std::unordered_map<std::string, std::tuple<llvm::Value*, llvm::Type*,
+    llvm::FunctionType*>> extern_func_map_;
 };
 
 }  // namespace codegen

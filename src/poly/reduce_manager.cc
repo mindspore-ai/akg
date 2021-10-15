@@ -255,24 +255,32 @@ isl::schedule_node ReduceManager::ReorderStatements(const isl::schedule_node &no
   isl::schedule_node order_node = node;
   isl::union_set_list filter_list;
   size_t depth = (before.is_empty() && !after.is_empty()) ? 0 : 1;
-  auto AddToFilterList = [this, &filter_list](const isl::set &s) -> void {
-    isl::union_set_list first_uset = isl::union_set_list(isl::union_set(s));
-    filter_list = filter_list.is_null() ? first_uset : filter_list.add(isl::union_set(s));
+  auto AddMiddleToFilterList = [this, &filter_list, &middle]() -> void {
+    if (need_split_reduce_) {
+      middle.foreach_set([this, &filter_list](const isl::set &s) -> void {
+        isl::union_set_list first_uset = isl::union_set_list(isl::union_set(s));
+        filter_list = filter_list.is_null() ? first_uset : filter_list.add(isl::union_set(s));
+      });
+    } else {
+      filter_list = filter_list.add(middle);
+    }
   };
 
   if (!before.is_empty() && after.is_empty()) {
     middle = middle.subtract(before);
     filter_list = isl::union_set_list(before);
-    middle.foreach_set(AddToFilterList);
+    AddMiddleToFilterList();
   } else if (before.is_empty() && !after.is_empty()) {
     middle = middle.subtract(after);
-    middle.foreach_set(AddToFilterList);
+    AddMiddleToFilterList();
     filter_list = filter_list.add(after);
-  } else {
+  } else if (!before.is_empty() && !after.is_empty()) {
     middle = middle.subtract(before).subtract(after);
     filter_list = isl::union_set_list(before);
-    middle.foreach_set(AddToFilterList);
+    AddMiddleToFilterList();
     filter_list = filter_list.add(after);
+  } else {
+    AddMiddleToFilterList();
   }
 
   if (filter_list.size() == 1) {
@@ -323,10 +331,31 @@ bool ReduceManager::SplitReduceStatements(isl::schedule_node &node, isl::union_s
     return false;
   }
 
+  if (scop_info_.user_config_.GetTarget() == TARGET_CPU) {
+    SplitInitStatements(reduction_indenpendent_stmt);
+    need_split_reduce_ = false;
+  }
+
   // Reorder statements in "reduction-independent-stmt -> reduction-stmt -> reduction-dependent-stmt" order
   node = ReorderStatements(node, reduction_indenpendent_stmt, reduction_dependent_stmt);
 
   return true;
+}
+
+// Separate the init statement from other statements
+void ReduceManager::SplitInitStatements(isl::union_set &reduction_indenpendent_stmt) {
+  auto init_statements = isl::union_set::empty(reduction_indenpendent_stmt.ctx());
+  for (auto init_stmt : scop_info_.analysis_result_.GetReduceInitIds()) {
+    reduction_indenpendent_stmt.foreach_set([init_stmt, &init_statements](const isl::set &set) {
+      isl::id id = set.get_tuple_id();
+      if (id.to_str() == init_stmt.to_str()) {
+        init_statements = init_statements.unite(set);
+        return;
+      }
+    });
+  }
+
+  reduction_indenpendent_stmt = init_statements;
 }
 
 }  // namespace poly

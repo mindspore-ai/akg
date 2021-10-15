@@ -131,7 +131,7 @@ def unpack_feature(byte_arr: bytearray) -> Tuple[np.ndarray, np.ndarray, np.ndar
     offset += m * SIZE_OF_FLOAT32
 
     assert offset == len(byte_arr), "%d vs %d" % (offset, len(byte_arr))
-    task_ids = 0  # TODO: should we use this?
+    task_ids = 0
     return np.array(features, dtype=object), np.array(normalized_throughputs), np.array(task_ids)
 
 def get_features_from_stmts(target, stmts, binds, n_skip_cache=0, max_n_buf=5, store_path="./"):

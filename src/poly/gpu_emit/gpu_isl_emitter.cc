@@ -28,86 +28,11 @@ Expr GpuIslEmitter::EmitLoad(const isl::ast_expr &expr, const Type type) {
   if (PRINT_EMITTER) {
     LOG(INFO) << ">>>>>>>>>>>>INPUT AST_NODE[LOAD]<<<<<<<<<<<<<<\n" << expr;
   }
-  if (auto op = expr.as<isl::ast_expr_op>()) {
-    if (auto access = op.as<isl::ast_expr_op_access>()) {
-      CHECK(op.get_arg(0).as<isl::ast_expr_id>());
-      auto var = op.get_arg(0).as<isl::ast_expr_id>().get_id();
-      Array<Expr> local_args;
-      for (unsigned int i = 1; i < op.get_n_arg(); ++i) {
-        local_args.push_back(Interpret(op.get_arg(i)));
-      }
-
-      Tensor t = info_.FindTensor(var);
-      auto call = Call::make(type, t->op->name, local_args, Call::CallType::Halide, t->op, t->value_index);
-      if (PRINT_EMITTER) {
-        LOG(INFO) << ">>>>>>>>>>>>OUTPUT STMT<<<<<<<<<<<<\n" << call;
-      }
-      return call;
-    }
+  auto value = IslEmitter::EmitLoad(expr, type);
+  if (PRINT_EMITTER) {
+    LOG(INFO) << ">>>>>>>>>>>>OUTPUT STMT<<<<<<<<<<<<\n" << value;
   }
-  return Expr();
-}
-
-Stmt GpuIslEmitter::EmitRead(const isl::ast_node_user &node) {
-  isl::id node_id = node.get_annotation();
-  isl::pw_multi_aff iterator_map = node_info_map_.at(node_id).iterator_map;
-  isl::pw_multi_aff hoisted = iterator_map.range_factor_range();
-  isl::pw_multi_aff original = iterator_map.range_factor_domain().range_factor_range();
-
-  isl::id original_tensor = original.get_tuple_id(isl_dim_out);
-
-  auto build = node_info_map_.at(node_id).build;
-  auto lhs = build.access_from(isl::multi_pw_aff(hoisted));
-  auto rhs = build.access_from(isl::multi_pw_aff(original));
-
-  Type type = info_.GetDtypeOf(rhs);
-  if (auto op = lhs.as<isl::ast_expr_op>()) {
-    if (auto access = op.as<isl::ast_expr_op_access>()) {
-      Expr value = EmitLoad(rhs, type);
-      auto var = op.get_arg(0).as<isl::ast_expr_id>().get_id();
-
-      Array<Expr> local_args;
-      for (unsigned int i = 1; i < op.get_n_arg(); ++i) {
-        local_args.push_back(Interpret(op.get_arg(i)));
-      }
-
-      Tensor t = info_.FindTensor(var);
-      CHECK(t.defined());
-      return Provide::make(t->op, 0, value, local_args);
-    }
-  }
-  return Stmt();
-}
-
-Stmt GpuIslEmitter::EmitWrite(const isl::ast_node_user &node) {
-  auto node_id = node.get_annotation();
-  CHECK_GT(node_info_map_.count(node_id), 0);
-  auto iterator_map = node_info_map_.at(node_id).iterator_map;
-  auto hoisted = iterator_map.range_factor_range();
-  auto original = iterator_map.range_factor_domain().range_factor_range();
-
-  auto build = node_info_map_.at(node_id).build;
-  auto rhs = build.access_from(isl::multi_pw_aff(hoisted));
-  auto lhs = build.access_from(isl::multi_pw_aff(original));
-  Type type = info_.GetDtypeOf(lhs);
-
-  if (auto op = lhs.as<isl::ast_expr_op>()) {
-    if (auto access = op.as<isl::ast_expr_op_access>()) {
-      Expr value = EmitLoad(rhs, type);
-      auto var = op.get_arg(0).as<isl::ast_expr_id>().get_id();
-
-      Array<Expr> local_args;
-      for (unsigned int i = 1; i < op.get_n_arg(); ++i) {
-        local_args.push_back(Interpret(op.get_arg(static_cast<int>(i))));
-      }
-
-      Tensor t = info_.FindTensor(var);
-      CHECK(t.defined());
-
-      return Provide::make(t->op, 0, value, local_args);
-    }
-  }
-  return Stmt();
+  return value;
 }
 
 Stmt GpuIslEmitter::EmitSync() {

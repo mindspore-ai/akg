@@ -41,7 +41,7 @@ def avgpool_ad_run(shape, kernel, stride, pad, dtype, polyhedral=False, attrs=No
         input = random_gaussian(shape, miu=1, sigma=0.1).astype(support_list[dtype])
         y = avgpool_run.benchmark(input, kernel, stride, pad)
         mod = utils.op_build_test(avgpool, [y.shape, shape], [dtype, dtype], op_attrs=[kernel, stride, pad],
-                                  kernel_name=kernel_name, attrs=attrs, log_cce=True, dump_code=True, tuning=t)
+                                  kernel_name=kernel_name, attrs=attrs, log_code=True, dump_code=True, tuning=t)
         if t:
             expect, head, output = gen_data(dtype, input, kernel, pad, stride, support_list, y)
             return mod, expect, (head, input, output)
@@ -51,7 +51,7 @@ def avgpool_ad_run(shape, kernel, stride, pad, dtype, polyhedral=False, attrs=No
         input = random_gaussian(shape, miu=1, sigma=0.1).astype(support_list[dtype])
         y = avgpool_run.benchmark(input, kernel, stride, pad)
         mod = utils.op_build_test(avgpool, [y.shape, shape], [dtype, dtype], op_attrs=[kernel, stride, pad],
-                                  kernel_name=kernel_name, attrs=attrs, log_cce=True, dump_code=True)
+                                  kernel_name=kernel_name, attrs=attrs, log_code=True, dump_code=True)
         expect, head, output = gen_data(dtype, input, kernel, pad, stride, support_list, y)
         output = utils.mod_launch(mod, [head, input, output], expect=expect)
 

@@ -210,6 +210,8 @@ class UserConfig {
   void SetTarget(const std::string target) {
     if (target == "aicore") {
       target_ = "cce";
+    } else if (target == "llvm") {
+      target_ = "cpu";
     } else {
       target_ = target;
     }
@@ -306,7 +308,10 @@ class UserConfig {
       ParseStringAttr(attrs, "shared_memory_tensors", &shared_tensors_);
       ParseStringAttr(attrs, "reduce_lib_type", &reduce_lib_type_);
       ParseStringAttr(attrs, "local_memory_tensors", &local_tensors_);
-      ParseVectorLoadTypeAttr(attrs, "vector_load_type", &vector_load_type_);
+      ParseVectorLengthAttr(attrs, "vector_length", &vector_length_);
+    } else if (GetTarget() == TARGET_CPU) {
+      ParseVectorLengthAttr(attrs, "vector_length", &vector_length_, false);
+      ParseBoolAttr(attrs, "pragma_enable_matmul", &enable_matmul_);
     }
 
     if (force_remove_self_dependence_) {
@@ -535,8 +540,8 @@ class UserConfig {
   std::string GetLocalTensors() { return local_tensors_; }
   void SetEnableBankConflict(bool enable_bank_conflict) { enable_bank_conflict_ = enable_bank_conflict; }
   bool GetEnableBankConflict() { return enable_bank_conflict_; }
-  int GetVectorLoadType() { return vector_load_type_; }
-  void SetVectorLoadType(int vector_load_type) { vector_load_type_ = vector_load_type; }
+  int GetVectorLength() { return vector_length_; }
+  void SetVectorLength(int vector_length) { vector_length_ = vector_length; }
   void SetSharedInversedThreadMap(bool shared_inversed_thread_map) {
     shared_inversed_thread_map_ = shared_inversed_thread_map;
   }
@@ -623,20 +628,31 @@ class UserConfig {
     }
   }
 
-  static void ParseVectorLoadTypeAttr(const Map<std::string, NodeRef> &attrs, const std::string &attr_name,
-                                      int *attr_to_set) {
-    std::string str_cfg = "";
-    ParseStringAttr(attrs, attr_name, &str_cfg);
-    // Vectorization only supports float1/float2/float3/float4
-    std::string support_type = "float";
-    if (str_cfg.size() != support_type.size() + 1 || str_cfg.find(support_type) != 0) {
-      return;
+  static void ParseVectorLengthAttr(const Map<std::string, NodeRef> &attrs, const std::string &attr_name,
+                                      int *attr_to_set, bool is_cuda = true) {
+    if (is_cuda) {
+      std::string str_cfg = "";
+      ParseStringAttr(attrs, attr_name, &str_cfg);
+      // Vectorization only supports float1/float2/float3/float4
+      std::string support_type = "float";
+      if (str_cfg.size() != support_type.size() + 1 || str_cfg.find(support_type) != 0) {
+        return;
+      }
+      int type_num = std::stoi(str_cfg.substr(support_type.size()));
+      if (type_num < 1 || type_num > 4) {
+        return;
+      }
+      *attr_to_set = type_num * (Float(32).bits());
+    } else {
+      int bits = -1;
+      ParseIntAttr(attrs, attr_name, &bits);
+      // Vectorization only supports 128/256/512
+      const std::unordered_set<int> support_set = {128, 256, 512};
+      if (support_set.count(bits) == 0) {
+        return;
+      }
+      *attr_to_set = bits / 32;
     }
-    int type_num = std::stoi(str_cfg.substr(support_type.size()));
-    if (type_num < 1 || type_num > 4) {
-      return;
-    }
-    *attr_to_set = type_num * (Float(32).bits());
   }
 
  private:
@@ -689,7 +705,7 @@ class UserConfig {
   // local memory tensor list
   std::string local_tensors_;
   // vectorization
-  int vector_load_type_{0};
+  int vector_length_{0};
   bool enable_one_dim_thread_{false};
   bool enable_vectorization_{false};
 
@@ -854,6 +870,7 @@ enum Template {
   PAD_OP,
   CUSTOM_CONFIG,
   CONV,
+  CPU,
   EXTERN_CALL,
   TEMPLATE_BULK
 };
@@ -1317,6 +1334,7 @@ class ScopInfo {
   static bool IsGMRead(const isl::id &id) { return id.get_name() == std::string("GMread"); }
   static bool IsSync(const isl::id &id) { return IsStartsWith(id.name(), SYNC_FLAG); }
   static bool IsRealize(const isl::id &id) { return IsStartsWith(id.get_name(), "REALIZE"); }
+  static bool IsCall(const isl::id &id) { return IsStartsWith(id.get_name(), "Call"); }
   static bool IsReduceInit(const isl::id &id) { return IsStartsWith(id.get_name(), "red_init"); }
   static bool IsReduceUpdate(const isl::id &id) { return IsStartsWith(id.get_name(), "red_update"); }
   static bool IsReduceInit(const std::string &name) { return IsStartsWith(name, "red_init"); }

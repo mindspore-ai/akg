@@ -340,7 +340,7 @@ diff -Npur isl-0.22/include/isl/aff_type.h isl/include/isl/aff_type.h
 diff -Npur isl-0.22/include/isl/ast_build.h isl/include/isl/ast_build.h
 --- isl-0.22/include/isl/ast_build.h	2019-11-02 02:05:27.000000000 +0800
 +++ isl/include/isl/ast_build.h	2021-10-08 14:40:05.224984474 +0800
-@@ -67,6 +67,7 @@ __isl_null isl_ast_build *isl_ast_build_
+@@ -67,10 +67,14 @@ __isl_null isl_ast_build *isl_ast_build_
  __isl_give isl_ast_build *isl_ast_build_set_options(
  	__isl_take isl_ast_build *build,
  	__isl_take isl_union_map *options);
@@ -348,6 +348,13 @@ diff -Npur isl-0.22/include/isl/ast_build.h isl/include/isl/ast_build.h
  __isl_give isl_ast_build *isl_ast_build_set_iterators(
  	__isl_take isl_ast_build *build,
  	__isl_take isl_id_list *iterators);
+ __isl_export
++__isl_give isl_ast_build *isl_ast_build_set_eliminate_for(
++	__isl_take isl_ast_build *build, isl_bool eliminate_for);
++__isl_export
+ __isl_give isl_ast_build *isl_ast_build_set_at_each_domain(
+ 	__isl_take isl_ast_build *build,
+ 	__isl_give isl_ast_node *(*fn)(__isl_take isl_ast_node *node,
 diff -Npur isl-0.22/include/isl/ast.h isl/include/isl/ast.h
 --- isl-0.22/include/isl/ast.h	2019-10-01 05:34:48.000000000 +0800
 +++ isl/include/isl/ast.h	2021-10-08 14:40:05.224984474 +0800
@@ -1471,10 +1478,72 @@ diff -Npur isl-0.22/isl_aff.c isl/isl_aff.c
  	return NULL;
  }
  
+diff -Npur isl-0.22/isl_ast_build.c isl/isl_ast_build.c
+--- isl-0.22/isl_ast_build.c	2019-09-25 00:10:51.000000000 +0800
++++ isl/isl_ast_build.c	2021-10-14 13:21:00.908090659 +0800
+@@ -142,6 +142,7 @@ __isl_give isl_ast_build *isl_ast_build_
+ 	build->options = isl_union_map_empty(isl_space_params_alloc(ctx, 0));
+ 	build->depth = n;
+ 	build->iterators = isl_id_list_alloc(ctx, n);
++	build->enable_eliminate_for = isl_bool_true;
+ 	for (i = 0; i < n; ++i) {
+ 		isl_id *id;
+ 		if (isl_set_has_dim_id(set, isl_dim_set, i))
+@@ -223,6 +224,7 @@ __isl_give isl_ast_build *isl_ast_build_
+ 	dup->create_leaf = build->create_leaf;
+ 	dup->create_leaf_user = build->create_leaf_user;
+ 	dup->node = isl_schedule_node_copy(build->node);
++	dup->enable_eliminate_for = build->enable_eliminate_for;
+ 	if (build->loop_type) {
+ 		int i;
+ 
+@@ -496,6 +498,19 @@ __isl_give isl_ast_build *isl_ast_build_
+ 
+ 	return build;
+ }
++
++/* Set whether to turn on the optimization of the for-node elimination. */
++__isl_give isl_ast_build *isl_ast_build_set_eliminate_for(
++	__isl_take isl_ast_build *build, isl_bool eliminate_for)
++{
++	build = isl_ast_build_cow(build);
++	if (!build)
++		return isl_ast_build_free(build);
++
++	build->enable_eliminate_for = eliminate_for;
++
++	return build;
++}
+ 
+ /* Clear all information that is specific to this code generation
+  * and that is (probably) not meaningful to any nested code generation.
+diff -Npur isl-0.22/isl_ast_build_private.h isl/isl_ast_build_private.h
+--- isl-0.22/isl_ast_build_private.h	2019-09-25 00:10:51.000000000 +0800
++++ isl/isl_ast_build_private.h	2021-10-14 13:21:00.908090659 +0800
+@@ -197,6 +197,7 @@ struct isl_ast_build {
+ 	int n;
+ 	enum isl_ast_loop_type *loop_type;
+ 	isl_set *isolated;
++	isl_bool enable_eliminate_for;
+ };
+ 
+ __isl_give isl_ast_build *isl_ast_build_clear_local_info(
 diff -Npur isl-0.22/isl_ast_codegen.c isl/isl_ast_codegen.c
 --- isl-0.22/isl_ast_codegen.c	2019-11-02 02:05:27.000000000 +0800
 +++ isl/isl_ast_codegen.c	2021-10-08 14:40:05.228984442 +0800
-@@ -3644,8 +3644,20 @@ static __isl_give isl_ast_graft_list *ge
+@@ -1518,7 +1518,10 @@ static __isl_give isl_ast_graft *create_
+ 	sub_build = isl_ast_build_set_loop_bounds(sub_build,
+ 						isl_basic_set_copy(bounds));
+ 	degenerate = isl_ast_build_has_value(sub_build);
+-	eliminated = isl_ast_build_has_affine_value(sub_build, depth);
++	if (sub_build->enable_eliminate_for)
++		eliminated = isl_ast_build_has_affine_value(sub_build, depth);
++	else
++		eliminated = isl_bool_false;
+ 	if (degenerate < 0 || eliminated < 0)
+ 		executed = isl_union_map_free(executed);
+ 	if (!degenerate)
+@@ -3644,8 +3647,20 @@ static __isl_give isl_ast_graft_list *ge
  	domain = isl_set_from_union_set(schedule_domain);
  
  	isolated = isl_ast_build_get_isolated(build);

@@ -238,7 +238,7 @@ runtime::Module BuildAMDGPU(Array<LoweredFunc> funcs, std::string target) {
     llvm::SMDiagnostic err;
     std::unique_ptr<llvm::Module> mlib = llvm::parseIRFile(path, err, *ctx);
     if (mlib.get() == nullptr) {
-      std::string msg = err.getMessage();
+      std::string msg = std::string(err.getMessage());
       LOG(FATAL) << "Fail to load bitcode file " << path << "\n"
                  << "line " << err.getLineNo() << ":" << msg;
     }

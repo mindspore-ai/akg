@@ -29,7 +29,7 @@ def logprob_ad_run(shape, dtype, kernel_name="", attrs=None):
         kernel_name=kernel_name,
         op_attrs=None,
         attrs=None,
-        log_cce=True,
+        log_code=True,
         dump_code=True,
         polyhedral=True,
     )

@@ -36,12 +36,9 @@
 #include <utility>
 #include <vector>
 
-#include "build_module.h"
 #include "ir_pass.h"
 #include "codegen/lower.h"
 #include "codegen/stage_lower.h"
-#include "codegen/pass_mgr.h"
-#include "codegen/util.h"
 #include "composite/util.h"
 
 namespace akg {
@@ -86,26 +83,12 @@ StageResult CudaLowerBegin(Stmt &, LowerData &data) {
 
 StageResult CudaLowerStageTuning(Stmt &stmt, LowerData &data) {
   // Stage1 is about Tuning things.
-  int level = data->tuning ? help_tiling_level["Tuning"] : g_attrs.GetInt(kHelpTiling, -1);
-  if (data->polyhedral && level > help_tiling_level["None"]) {
-    g_attrs.Set(kDumpTuningLevel, air::make_const(Int(32), level));
-    Map<std::string, NodeRef> spec_gemm_attrs = {};
-    NodeRef tuning_spaces = NEXT_PASS(GenTuningSpace, stmt, data->target, data->binds_0, spec_gemm_attrs, data->sch);
-    return {tuning_spaces, true};
-  }
-  return {stmt, false};
+  return LowerStageTuning(stmt, data);
 }
 
 StageResult CudaLowerPoly(Stmt &stmt, LowerData &data) {
   // Stage2 is about Polyheral.
-  if (data->polyhedral) {
-    Map<std::string, NodeRef> spec_gemm_attrs = {};
-    Array<NodeRef> poly_res = NEXT_PASS(AutoPoly, stmt, data->binds_0, data->target, false, spec_gemm_attrs, data->sch);
-    CHECK_EQ(poly_res.size(), 2);
-    stmt = air::Downcast<Stmt>(poly_res[0]);
-    g_attrs.Set(kEnablePolySch, air::make_const(Int(32), true));
-  }
-  return {stmt, false};
+  return LowerPoly(stmt, data);
 }
 
 StageResult CudaLowerBeforeFlattern(Stmt &stmt, LowerData &data) {
@@ -120,9 +103,7 @@ StageResult CudaLowerBeforeFlattern(Stmt &stmt, LowerData &data) {
 
 StageResult CudaLowerFlattern(Stmt &stmt, LowerData &data) {
   // Keep Stage4 do flatten only.
-  stmt = NEXT_PASS(StorageFlatten, stmt, data->binds_0, 64, data->config->instrument_bound_checkers);
-  stmt = NEXT_PASS(CanonicalSimplify, stmt);
-  return {stmt, false};
+  return LowerFlattern(stmt, data);
 }
 
 StageResult CudaLowerBeforeRewrite(Stmt &stmt, LowerData &data) {
@@ -161,11 +142,9 @@ StageResult CudaLowerBeforeLowerFunc(Stmt &stmt, LowerData &data) {
   stmt = NEXT_PASS(LowerThreadAllreduceStmt, stmt, target_platform->thread_warp_size);
   return {stmt, false};
 }
+
 StageResult CudaLowerDone(Stmt &stmt, LowerData &data) {
-  if (data->simple_mode) {
-    return {stmt, true};
-  }
-  return {LowerFunc(stmt, data->name, data->config, data->arg_list_0), true};
+  return LowerDone(stmt, data);
 }
 
 namespace lower {

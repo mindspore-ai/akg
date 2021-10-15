@@ -107,9 +107,9 @@ def refine_shape(shape, reduce_axis=None):
     return _refine_shape_no_reduce()
 
 
-def refine_reduce_axis(input, axis):
+def refine_reduce_axis(input_shape, axis):
     """make reduce axis legal."""
-    shape = get_shape(input)
+    shape = get_shape(input_shape)
     if axis is None:
         axis = [i for i in range(len(shape))]
     elif isinstance(axis, int):
@@ -202,8 +202,6 @@ def to_tvm_nd_array(data, ctx=None):
     """convert other types to tvm nd array with specified context"""
     if ctx is None:
         ctx = akg.tvm.context("cuda", 0)
-    if isinstance(data, list):
+    if isinstance(data, (list, tuple)):
         return [akg.tvm.nd.array(d, ctx) for d in data]
-    if isinstance(data, tuple):
-        return (akg.tvm.nd.array(d, ctx) for d in data)
     return akg.tvm.nd.array(data, ctx)

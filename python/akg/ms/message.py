@@ -35,12 +35,12 @@ from akg.global_configs import get_dump_code_flag
 @vc_util.check_input_type(dict, dict)
 def _compilewithjson_to_module(kernel_info, attrs):
     """compile with json."""
-    supported_processors = ['cuda', 'aicore']
+    supported_processors = ['cuda', 'aicore', 'cpu']
     processor = 'cuda'
     if 'process' in kernel_info:
         processor = kernel_info['process']
     if processor not in supported_processors:
-        logging.error("supported processors: {}, current processor: {}".format(supported_processors, processor))
+        logging.error("supported processors: %s, current processor: %s", supported_processors, processor)
         return False
 
     if processor == 'cuda' and 'compute_capability' in kernel_info:

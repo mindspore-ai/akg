@@ -26,9 +26,7 @@ project(akg C CXX)
 set(AKG_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 set(TVM_DIR "${AKG_SOURCE_DIR}/third_party/incubator-tvm")
 
-if(NOT CMAKE_SYSTEM_NAME MATCHES "Windows" AND NOT USE_KC_AIR)
-  add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=0)
-endif()
+add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=1)
 
 # Find gmp
 find_path(GMP_INCLUDE_DIR NAME gmp.h HINTS /usr /usr/local PATH_SUFFIXES include include/x86_64-linux-gnu)
@@ -62,7 +60,7 @@ link_directories(${AKG_RPATH})
 
 # Search AKG_EXTEND by order
 set(AKG_EXTEND )
-if(NOT USE_CUDA)
+if(NOT USE_CUDA AND NOT USE_LLVM)
   set(AKG_EXTEND_FILE )
   set(LIB_PATH1 ${AKG_SOURCE_DIR}/libakg_ext.a)
   set(LIB_PATH2 ${CMAKE_CURRENT_BINARY_DIR}/libakg_ext.a)
@@ -120,7 +118,7 @@ tvm_option(USE_ASAN "Build with AddressSanitizer" OFF)
 tvm_option(USE_CUDA "Build with CUDA" OFF)
 tvm_option(USE_CUDNN "Build with cuDNN" OFF)
 tvm_option(USE_LLVM "Build with LLVM" OFF)
-
+tvm_option(USE_OPENMP "Build with OpenMP" ON)
 
 tvm_option(
   USE_DEFAULT_LOG
@@ -164,10 +162,10 @@ endif()
 
 # Generic compilation options
 include(CheckCXXCompilerFlag)
-check_cxx_compiler_flag("-std=c++11" SUPPORT_CXX11)
-if(NOT SUPPORT_CXX11)
+check_cxx_compiler_flag("-std=c++17" SUPPORT_CXX17)
+if(NOT SUPPORT_CXX17)
   message(
-    FATAL_ERROR "-- please choose a compiler which support C++ 11 standard")
+    FATAL_ERROR "-- please choose a compiler which support C++ 17 standard")
 endif()
 
 check_cxx_compiler_flag("-march=native" NATIVE_BUILD)
@@ -180,7 +178,7 @@ set(CMAKE_SKIP_RPATH TRUE)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -pipe -Wall -fPIC -fstack-protector-all")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,-z,relro,-z,now,-z,noexecstack")
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -pipe -Wall -fPIC -fstack-protector-all")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -pipe -Wall -fPIC -fstack-protector-all")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wl,-z,relro,-z,now,-z,noexecstack")
 
 if("${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
@@ -322,15 +320,29 @@ file(
 if(USE_CUDA)
   include(${TVM_DIR}/cmake/util/FindCUDA.cmake)
   include(${TVM_DIR}/cmake/modules/CUDA.cmake)
+  include(${TVM_DIR}/cmake/util/FindLLVM.cmake)
   file(GLOB PROFILER_SRCS ${AKG_SOURCE_DIR}/src/profiler/gpu/*.cc)
   list(APPEND COMPILER_SRCS ${PROFILER_SRCS})
+  if(USE_LLVM)
+    find_llvm_macro(${USE_LLVM})
+    if(NOT LLVM_FOUND)
+      message(WARNING "Not found LLVM, CPU backend will be not support!")
+      set(USE_LLVM OFF)
+    endif()
+  endif()
 endif()
 
 if(USE_LLVM)
   include(${TVM_DIR}/cmake/util/FindLLVM.cmake)
-  file(GLOB LLVM_SRCS ${TVM_DIR}/src/codegen/llvm/*.cc)
-  list(APPEND COMPILER_SRCS ${LLVM_SRCS})
   include(${TVM_DIR}/cmake/modules/LLVM.cmake)
+  file(GLOB RUNTIME_CPU_SRCS ${AKG_SOURCE_DIR}/src/runtime/*.cc)
+  list(APPEND COMPILER_SRCS ${RUNTIME_CPU_SRCS})
+  set_source_files_properties(${RUNTIME_CPU_SRCS}
+                              PROPERTIES COMPILE_FLAGS "${CPU_SRCS_FLAGS}")
+endif()
+
+if(USE_OPENMP)
+  include(${TVM_DIR}/cmake/modules/OpenMP.cmake)
 endif()
 
 if(USE_RPC)

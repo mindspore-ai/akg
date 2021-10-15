@@ -21,7 +21,6 @@
 #include <exception>
 
 #include "codegen/util.h"
-#include "codegen/lower.h"
 
 namespace akg {
 extern AttrMap g_attrs;

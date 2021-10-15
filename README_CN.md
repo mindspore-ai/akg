@@ -21,7 +21,7 @@ AKG由三个基本的优化模块组成：规范化、自动调度和后端优�
   <img src="docs/akg-design.png" style="zoom:80%" div align=center/>
 
 ## 硬件后端支持
-当前支持`Ascend910`，`gpu v100/A100`等，更多硬件后端支持待开发。
+当前支持`Ascend910`、`NVIDIA V100/A100`和`CPU`等，更多硬件后端支持待开发。
 
 ## 构建
 
@@ -47,6 +47,13 @@ AKG由三个基本的优化模块组成：规范化、自动调度和后端优�
   bash build.sh -e gpu
   ```
 
+- 构建CPU版本
+  ```
+  git clone https://gitee.com/mindspore/akg.git
+  cd akg
+  bash build.sh -e cpu
+  ```
+
 ## 运行
 1. 设置环境变量
 
@@ -56,11 +63,16 @@ AKG由三个基本的优化模块组成：规范化、自动调度和后端优�
   source ./test_env.sh
   ```
 
-- GPU V100/A100
-
+- NVIDIA V100/A100
   ```
   cd tests
   source ./test_env.sh gpu
+  ```
+
+- CPU
+  ```
+  cd tests
+  source ./test_env.sh cpu
   ```
 
 2. 运行测试用例
@@ -71,10 +83,16 @@ AKG由三个基本的优化模块组成：规范化、自动调度和后端优�
   pytest -s test_abs_001.py -m "level0" # 运行level0测试用例
   ```
 
-- GPU V100/A100
+- NVIDIA V100/A100
   ```
-  cd tests/operators/gpu
-  python3 test_all.py "op_name" # 运行op_name算子测试用例
+  cd tests/operators
+  python3 test_all.py -t gpu "op_name" # 运行op_name算子测试用例
+  ```
+
+- CPU
+  ```
+  cd tests/operators
+  python3 test_all.py -t cpu "op_name" # 运行op_name算子测试用例
   ```
 
 ## 使用AKG生成高性能算子

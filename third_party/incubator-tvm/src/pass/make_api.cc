@@ -213,7 +213,7 @@ LoweredFunc MakeAPI(Stmt body,
     body = Block::make(set_device, body);
   }
   n->body = MergeNest(
-      {seq_init, binder.init_nest(), seq_check, binder.asserts()}, body);
+      {seq_init, binder.init_nest(), seq_check}, body);
   LoweredFunc f(n);
   Array<Var> undefined = UndefinedVars(f->body, f->args);
   if (undefined.size() != 0) {

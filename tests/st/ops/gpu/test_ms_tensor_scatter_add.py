@@ -16,7 +16,7 @@ from tests.common.base import get_rtol_atol
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
 from akg.ops.array_gpu import tensor_scatter_add
-from akg.utils.result_analysis import gpu_profiling
+from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
 from tests.common.gen_random import random_gaussian, gen_indices_tensor_scatter_add
 from tests.common.test_utils import tensor_scatter_add_np
@@ -66,4 +66,4 @@ def test_ms_tensor_scatter_add(data_shape, data_type, indices_shape, indices_typ
 
     params, indices, updates, output, expect = to_tvm_nd_array(
         [params, indices, updates, output, expect])
-    gpu_profiling(mod, params, indices, updates, output, expect, repeat_time=400)
+    target_profiling(mod, params, indices, updates, output, expect, repeat_time=400)

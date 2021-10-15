@@ -659,7 +659,7 @@ void OpTypeCollector::AnalyzeOpTemplate() {
     scop_info_.analysis_result_.SetOpTemplate(Template::BROADCAST_OP);
   } else if (concated_op_type.find(AT_CALL) != std::string::npos) {
     scop_info_.analysis_result_.SetOpTemplate(Template::EXTERN_CALL);
-  } else  {
+  } else {
     scop_info_.analysis_result_.SetOpTemplate(Template::PURE_ELEM);
   }
 }
@@ -1153,6 +1153,20 @@ class OperatorInfoCollector {
           if (reduce_position == -1) {
             return;
           }
+
+          bool is_all_reduce = true;
+          for (int i = 0; i < static_cast<int>(op->args.size()); ++i) {
+            if (op->args[i].as<IntImm>() == nullptr || op->args[i].as<IntImm>()->value != 0) {
+              is_all_reduce = false;
+              break;
+            }
+          }
+
+          if (is_all_reduce) {
+            reduce_direction = ALL_DIRECTION;
+            return;
+          }
+
           if (reduce_position == call_size - non_variable_count - 1) {
             reduce_direction = X_DIRECTION;
           } else {
@@ -1225,8 +1239,8 @@ class OperatorInfoCollector {
       bool use_tensor_core = false;
       if (CheckMatmul(op)) {
         // Default vectorization access mode (128 bits).
-        if (scop_info_.user_config_.GetVectorLoadType() == 0) {
-          scop_info_.user_config_.SetVectorLoadType(PROMOTE_VECTORIZATION_BIT);
+        if (scop_info_.user_config_.GetVectorLength() == 0 && scop_info_.user_config_.GetTarget() != TARGET_CPU) {
+          scop_info_.user_config_.SetVectorLength(PROMOTE_VECTORIZATION_BIT);
         }
         RecordMatrixInfoForFuse(op);
         use_tensor_core = true;
@@ -1526,7 +1540,7 @@ isl::schedule MakeScheduleTree(const isl::space &param_space, isl::set param_set
   op_type_collector.AnalyzeOpTemplate();
   op_type_collector.WriteToScopInfo();
   op_type_collector.Dump();
-  if (scop_info.user_config_.GetTarget() == TARGET_CUDA) {
+  if (scop_info.user_config_.GetTarget() == TARGET_CUDA || scop_info.user_config_.GetTarget() == TARGET_CPU) {
     OperatorInfoCollector op_info_coll(scop_info);
     op_info_coll.Run();
   }

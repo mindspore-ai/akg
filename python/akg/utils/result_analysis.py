@@ -249,9 +249,9 @@ def count_unequal_element(data_expected, data_actual, rtol, atol):
     if count != 0:
         if unequal_num > log_max_count:
             logging.error("...")
-            logging.error("Total %s mismatch detected!!!, Only print %s..." % (unequal_num, log_max_count))
+            logging.error("Total %s mismatch detected!!!, Only print %s...", str(unequal_num), str(log_max_count))
         else:
-            logging.error("Total %s mismatch detected!!!" % unequal_num)
+            logging.error("Total %s mismatch detected!!!", str(unequal_num))
 
 
 def allclose_nparray(data_expected, data_actual, rtol, atol=1e-08):
@@ -293,8 +293,8 @@ def precision_analyze(desc: dict, tensors):
     for op in desc["op_desc"]:
         if op["name"] == "InplaceAssign":
             output = IOInfo(op["input_desc"][0][0]["tensor_name"], op["input_desc"][0][0]["data_type"])
-            input = IOInfo(op["input_desc"][1][0]["tensor_name"], op["input_desc"][1][0]["data_type"])
-            graph[output] = [input]
+            inputs = IOInfo(op["input_desc"][1][0]["tensor_name"], op["input_desc"][1][0]["data_type"])
+            graph[output] = [inputs]
             ops[output] = op["name"]
             fake_output = False
             for attr in op["attr"]:
@@ -302,8 +302,8 @@ def precision_analyze(desc: dict, tensors):
                     fake_output = attr["value"]
             if not fake_output:
                 output = IOInfo(op["output_desc"][0]["tensor_name"], op["output_desc"][0]["data_type"])
-                input = IOInfo(op["input_desc"][2][0]["tensor_name"], op["input_desc"][2][0]["data_type"])
-                graph[output] = [input]
+                inputs = IOInfo(op["input_desc"][2][0]["tensor_name"], op["input_desc"][2][0]["data_type"])
+                graph[output] = [inputs]
                 ops[output] = op["name"]
         else:
             output = IOInfo(op["output_desc"][0]["tensor_name"], op["output_desc"][0]["data_type"])
@@ -378,16 +378,22 @@ def get_compare_tolerance(json_str: str, output_indexes: list):
     for i, v in enumerate(cast_from_fp16):
         if v:
             compare_tolerance[analyze_indexes[i]] = 1e-3
-            logging.warning("{} will use tolerance {} when comparing with expect."
-                            .format(outputs[analyze_indexes[i]], compare_tolerance[analyze_indexes[i]]))
+            logging.warning("%s will use tolerance %s when comparing with expect.",
+                            str(outputs[analyze_indexes[i]]), str(compare_tolerance[analyze_indexes[i]]))
     logging.debug("============= Precision Analyze End =============")
 
     return compare_tolerance
 
-def gpu_profiling(mod, *args, repeat_time=1, device_id=0):
-    """Do profiling on gpu for cuda op"""
-    ctx = tvm.context("cuda", device_id)
-    ftimer = mod.time_evaluator(mod.entry_name, ctx, number=repeat_time)
+
+def target_profiling(mod, *args, target="cuda", repeat_time=1, device_id=0):
+    """Do profiling on gpu/cpu for op"""
+    ctx = tvm.context(target, device_id)
+    if target == "llvm":
+        ftimer = mod.time_evaluator(mod.entry_name, ctx, number=repeat_time,
+            repeat=3, min_repeat_ms=1000)
+        mod.time_evaluator(mod.entry_name, ctx, number=1000)(*args)
+    else:
+        ftimer = mod.time_evaluator(mod.entry_name, ctx, number=repeat_time)
     tcost = ftimer(*args).mean
-    print("{}: exec={} sec/op".format(ctx, tcost))
+    print("{}: exec={} ms/op".format(ctx, tcost * 1000))
     return tcost

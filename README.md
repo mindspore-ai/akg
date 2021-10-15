@@ -21,7 +21,7 @@ AKG composes with three basic optimization module, normalization, auto schedule 
   <img src="docs/akg-design.png" style="zoom:80%" div align=center/>
 
 ## Hardware Backends Support
-At present, `Ascend910` and `GPU V100/A100` are supported. More Backends are on the list.
+At present, `Ascend910`, `NVIDIA V100/A100` and `CPU` are supported. More Backends are on the list.
 
 ## Build
 
@@ -47,6 +47,13 @@ Refer to [MindSpore Installation](https://www.mindspore.cn/install/en) for more 
   bash build.sh -e gpu
   ```
 
+- Build on CPU
+  ```
+  git clone https://gitee.com/mindspore/akg.git
+  cd akg
+  bash build.sh -e cpu
+  ```
+
 ## Run Standalone
 1. Set Environment
 
@@ -56,10 +63,16 @@ Refer to [MindSpore Installation](https://www.mindspore.cn/install/en) for more 
   source ./test_env.sh
   ```
 
-- GPU V100/A100
+- NVIDIA V100/A100
   ```
   cd tests
   source ./test_env.sh gpu
+  ```
+
+- CPU V100/A100
+  ```
+  cd tests
+  source ./test_env.sh cpu
   ```
 
 2. Run test
@@ -72,8 +85,14 @@ Refer to [MindSpore Installation](https://www.mindspore.cn/install/en) for more 
 
 - GPU V100/A100
   ```
-  cd tests/operators/gpu
-  python3 test_all.py "op_name" # replace op_name with the operator name which you want to test
+  cd tests/operators
+  python3 test_all.py -t gpu "op_name" # replace op_name with the operator name which you want to test
+  ```
+
+- CPU
+  ```
+  cd tests/operators
+  python3 test_all.py -t cpu "op_name" # replace op_name with the operator name which you want to test
   ```
 
 ## Using AKG to generate high performance kernels
