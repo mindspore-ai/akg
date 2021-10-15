@@ -376,18 +376,16 @@ TVM_REGISTER_GLOBAL("Cast").set_body([](TVMArgs args, TVMRetValue *rv) {
 
   auto call = [](const Tensor &tensor, Type type) {
     std::string name = "T_cast_" + tensor->op->name;
-    if (tensor->dtype == air::Bool() && type == air::Float(32)) {
-      return topi::cast(topi::cast(tensor, air::Float(16), name), type, name);
-    } else if (tensor->dtype == air::Float(32) && type == air::Bool()) {
+    if (tensor->dtype == air::Float(32) && type == air::Bool()) {
       const char *runtime_mode = std::getenv("RUNTIME_MODE");
-      if (runtime_mode == nullptr || (runtime_mode != nullptr && std::strstr(runtime_mode, "cloud") == nullptr)) {
+      if (runtime_mode == nullptr || (runtime_mode != nullptr && std::strstr(runtime_mode, "cloud") != nullptr)) {
+        auto zero = make_zero(tensor->dtype);
+        return topi::not_equal(tensor, zero);
+      } else {
         auto tmp = topi::cast(tensor, air::Float(16), name + "tmp");
         auto zero = make_zero(air::Float(16));
         auto res = topi::not_equal(tmp, zero);
         return topi::cast(res, type, name);
-      } else {
-        auto zero = make_zero(tensor->dtype);
-        return topi::not_equal(tensor, zero);
       }
     }
 
