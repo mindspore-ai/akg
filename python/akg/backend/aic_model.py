@@ -20,7 +20,7 @@ import subprocess
 import json
 import numpy as np
 import akg.tvm
-from akg.global_configs import get_ascend_meta_path
+from akg.global_configs import get_kernel_meta_path
 
 
 def launch(kernel, args, output=(-1,)):
@@ -64,7 +64,7 @@ def launch(kernel, args, output=(-1,)):
     if not os.path.exists(model_path):
         subprocess.call(["ln", "-s", aic_model_path + "/model", model_path])
 
-    kernel_meta_path = get_ascend_meta_path()
+    kernel_meta_path = get_kernel_meta_path()
     kernel_meta_realpath = os.path.realpath(kernel_meta_path)
     if not os.path.exists(kernel_meta_realpath):
         msg = "The parameter kernel_meta_realpath  can not be found, please check"

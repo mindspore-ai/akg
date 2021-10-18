@@ -148,8 +148,8 @@ uintptr_t GetFuncStub(const KernelPack &kernel_pack, uint32_t *block_dim) {
 }
 
 KernelPackPtr GetKernelPack(const std::string &kernel_name) {
-  const auto *f = Registry::Get("get_ascend_meta_path");
-  CHECK(f != nullptr) << "Function get_ascend_meta_path is not registered";
+  const auto *f = Registry::Get("get_kernel_meta_path");
+  CHECK(f != nullptr) << "Function get_kernel_meta_path is not registered";
   std::string cce_json = (*f)().operator std::string();
   (void)cce_json.append(kernel_name).append(kJsonSuffix);
   KernelPackPtr ret = std::make_shared<KernelPack>();

@@ -21,7 +21,7 @@ import json
 import hashlib
 import logging
 import akg.tvm
-from akg.global_configs import get_ascend_meta_path
+from akg.global_configs import get_kernel_meta_path
 from akg.utils.util import parse_workspace, write_code
 
 
@@ -50,7 +50,7 @@ def tvm_callback_cce_postproc(code, block_dim=1, workspace=None):
 
     # sha256
     buf_size = 64 * 1024  # once read 64kb
-    root_path = get_ascend_meta_path()
+    root_path = get_kernel_meta_path()
     kernel_file_name = root_path + bin_file_name + bin_file_suffix
     sha256 = hashlib.sha256()
     with open(kernel_file_name, 'rb') as kf:
@@ -67,7 +67,7 @@ def tvm_callback_cce_postproc(code, block_dim=1, workspace=None):
         title_dict["workspace"] = workspace_dict
 
     load_dict = {}
-    if not os.path.exists(get_ascend_meta_path()):
+    if not os.path.exists(get_kernel_meta_path()):
         try:
             os.mkdir(root_path)
         except OSError as err:

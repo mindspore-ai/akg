@@ -19,7 +19,7 @@ import os
 import fcntl
 import hashlib
 import akg.tvm
-from akg.global_configs import get_cuda_meta_path
+from akg.global_configs import get_kernel_meta_path
 from akg.utils.util import parse_workspace, write_code
 
 
@@ -68,7 +68,7 @@ def dump_cuda_meta(code, ptx, thread_info, workspace=None):
     if workspace_dict is not None:
         title_dict["workspace"] = workspace_dict
 
-    meta_path = get_cuda_meta_path()
+    meta_path = get_kernel_meta_path()
     cuda_path = os.path.realpath(meta_path)
     if not os.path.isdir(cuda_path):
         os.makedirs(cuda_path, exist_ok=True)
