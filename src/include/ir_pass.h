@@ -65,11 +65,11 @@ Stmt RewriteMultiValueFunc(Stmt stmt);
 Stmt RenameRealize(Stmt stmt, const Map<Tensor, Buffer> &extern_buffer, const Map<Tensor, Tensor> &replace);
 
 Array<NodeRef> AutoPoly(const Stmt &body, const Map<Tensor, Buffer> &extern_buffer, std::string target,
-                        const Map<std::string, NodeRef> &attrs, const bool is_specgemm, const bool is_dynamic,
+                        const bool is_dynamic, const Map<std::string, NodeRef> &spec_gemm_attrs = {},
                         Schedule sch = Schedule());
 
 NodeRef GenTuningSpace(const Stmt &body, std::string target, const Map<Tensor, Buffer> &extern_buffer,
-                       const Map<std::string, NodeRef> &attrs, const bool is_specgemm, Schedule sch = Schedule());
+                       const Map<std::string, NodeRef> &spec_gemm_attrs = {}, Schedule sch = Schedule());
 
 Expr CastNormalize(const Expr &expr, const air::DataType cast_type);
 

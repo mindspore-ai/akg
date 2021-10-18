@@ -22,6 +22,7 @@
 #include "codegen/util.h"
 #include "contrib/cce_parm/cceconf.h"
 #include "base/expr_builder.h"
+#include "build_module.h"
 
 namespace akg {
 class AutoPolyTestBase : public ::testing::Test {
@@ -32,33 +33,32 @@ class AutoPolyTestBase : public ::testing::Test {
   void RegisterTensor(const air::Tensor &tensor);
   void SetRunMode(const std::string &mode);
   void GlobalAttrSetIsDynamic(bool arg) {
-    g_attrs_.Set("is_dynamic", arg ? UTExprBuilder::IntImm(1, air::Int(1)) :
+    g_attrs.Set("is_dynamic", arg ? UTExprBuilder::IntImm(1, air::Int(1)) :
                                           UTExprBuilder::IntImm(0, air::Int(1)));
   }
 
   void GlobalAttrSetDynamic(bool arg) {
-    g_attrs_.Set("dynamic", arg ? UTExprBuilder::IntImm(1, air::Int(1)) :
+    g_attrs.Set("dynamic", arg ? UTExprBuilder::IntImm(1, air::Int(1)) :
                                        UTExprBuilder::IntImm(0, air::Int(1)));
   }
 
   void GlobalAttrSetDumpPassIR(bool arg) {
-    g_attrs_.Set("dump_pass_ir", arg ? UTExprBuilder::IntImm(1, air::Int(1)) :
+    g_attrs.Set("dump_pass_ir", arg ? UTExprBuilder::IntImm(1, air::Int(1)) :
                                             UTExprBuilder::IntImm(0, air::Int(1)));
   }
 
   void GlobalAttrSetDumpPolyDir(const std::string &path) {
-    g_attrs_.Set("dump_poly_dir", air::ir::StringImm::make(path));
+    g_attrs.Set("dump_poly_dir", air::ir::StringImm::make(path));
   }
 
   void GlobalAttrSetKernalName(const std::string &name) {
-    g_attrs_.Set("kernel_name", air::ir::StringImm::make(name));
+    g_attrs.Set("kernel_name", air::ir::StringImm::make(name));
   }
 
   static std::map<std::string, std::string> map_mode_;
 
  protected:
   air::Map<air::Tensor, air::Buffer> binds_;
-  AttrMap g_attrs_;
 };  // class AutoPolyTestBase
 }  // namespace akg
 #endif

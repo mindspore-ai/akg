@@ -111,7 +111,7 @@ class AutoPolyTest1 : public AutoPolyTestBase {
 
 TEST_F(AutoPolyTest1, RunPass) {
   SetRunMode("cloud");
-  air::Array<air::NodeRef> stmts_out = ir::AutoPoly(stmt_, binds_, "cce", g_attrs_, false, false);
+  air::Array<air::NodeRef> stmts_out = ir::AutoPoly(stmt_, binds_, "cce", false);
   ASSERT_EQ(stmts_out.size(), 2);
   air::NodeRef stmt = stmts_out[0];
   std::vector<std::tuple<std::string, const air::ir::Provide*, uint64_t>> infos_lhs =
@@ -205,7 +205,7 @@ class AutoPolyTest2 : public AutoPolyTestBase {
 
 TEST_F(AutoPolyTest2, RunPass) {
   SetRunMode("cloud");
-  air::Array<air::NodeRef> stmts_out = ir::AutoPoly(stmt_, binds_, "cce", g_attrs_, false, false);
+  air::Array<air::NodeRef> stmts_out = ir::AutoPoly(stmt_, binds_, "cce", false);
   ASSERT_EQ(stmts_out.size(), 2);
   air::NodeRef stmt = stmts_out[0];
   std::vector<std::tuple<std::string, const air::ir::Provide*, uint64_t>> infos_lhs =
@@ -303,7 +303,7 @@ class AutoPolyTest3 : public AutoPolyTestBase {
 
 TEST_F(AutoPolyTest3, RunPass) {
   SetRunMode("cloud");
-  air::Array<air::NodeRef> stmts_out = ir::AutoPoly(stmt_, binds_, "cce", g_attrs_, false, false);
+  air::Array<air::NodeRef> stmts_out = ir::AutoPoly(stmt_, binds_, "cce", false);
   ASSERT_EQ(stmts_out.size(), 2);
   air::NodeRef stmt = stmts_out[0];
   std::vector<std::tuple<std::string, const air::ir::Provide*, uint64_t>> infos_lhs =

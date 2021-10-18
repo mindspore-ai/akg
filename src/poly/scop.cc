@@ -26,29 +26,33 @@
 #include "poly/dsa_mgr_strategy.h"
 #include "poly/gpu_mgr_strategy.h"
 #include "poly/schedule_pass_mgr.h"
+#include "build_module.h"
 
 namespace akg {
 namespace ir {
 namespace poly {
-void Scop::ParseUserConfig(std::string target, const Map<std::string, NodeRef> &attrs,
-                           const Map<Tensor, Buffer> &extern_buffer, bool is_spec_gemm, bool is_tuning, bool is_dynamic,
+void Scop::ParseUserConfig(std::string target, const Map<Tensor, Buffer> &extern_buffer,
+                           const Map<std::string, NodeRef> &spec_gemm_attrs, bool is_tuning, bool is_dynamic,
                            const Schedule &sch) {
   info_.user_config_.SetTarget(target);
   if (info_.user_config_.GetTarget() == TARGET_CCE) {
     info_.user_config_.SetEnableRestart(true);
   }
-  info_.user_config_.SetAttrs(attrs);
+  if (spec_gemm_attrs.empty()) {
+    info_.user_config_.SetAttrs(g_attrs);
+    info_.mmu_info_.SetAttrs(g_attrs);
+  } else {
+    info_.user_config_.SetAttrs(spec_gemm_attrs);
+    info_.mmu_info_.SetAttrs(spec_gemm_attrs);
+    info_.mmu_info_.SetSpecGemm(true);
+    info_.mmu_info_.SetConvAttrInfo(spec_gemm_attrs);
+  }
+  
   info_.user_config_.SetBind(extern_buffer);
   info_.user_config_.SetOriginBind(extern_buffer);
   info_.user_config_.SetIsTuning(is_tuning);
   info_.user_config_.SetDynamic(is_dynamic);
   info_.user_config_.SetScheduleInfo(sch);
-
-  info_.mmu_info_.SetAttrs(attrs);
-  info_.mmu_info_.SetSpecGemm(is_spec_gemm);
-  if (info_.mmu_info_.IsSpecGemm()) {
-    info_.mmu_info_.SetConvAttrInfo(attrs);
-  }
 }
 
 isl::set CreateParamsSet(ScopInfo &info) {
