@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "poly/schedule_pass/constrain_schedule.h"
+#include "build_module.h"
 
 #include <unistd.h>
 #include <cstdio>
@@ -202,19 +203,23 @@ bool ConstrainSchedule::KernelIsBlacklisted(const isl::schedule &sch) const {
 
 bool ConstrainSchedule::ShouldAutogenMindTrick(const isl::schedule &sch) const {
   const char *const env_autogen = std::getenv(env_string_mind_tricks_autogen_);
+  bool enable_autogen = scop_info_.user_config_.GetEnableMindTrickAutogen();
+
   if (env_autogen) {
     // "force" instead of "true" because this will override all the checks below.
     const std::string &str = std::string(env_autogen);
     if (str == "force") {
       Info(log::Verbosity::low, "MindTrick autogen is forced via the environment");
       return true;
-    } else if (str == "false") {
+    } else if (str == "disable") {
       Info(log::Verbosity::low, "MindTrick autogen is disabled via the environment");
       return false;
+    } else if  (str == "normal") {
+      Info(log::Verbosity::low, "MindTrick autogen is enable via the environment");
+      enable_autogen = true;
     }
   }
 
-  const bool enable_autogen = scop_info_.user_config_.GetEnableMindTrickAutogen();
   if (!enable_autogen) {
     return false;
   }
@@ -452,6 +457,12 @@ void ConstrainSchedule::InsertAutoMindTrick(const isl::schedule &sch) {
 void ConstrainSchedule::ExtractAttrs(const std::shared_ptr<SchedulingMindTrick> &mind_trick) {
   const air::Map<std::string, air::NodeRef> &attrs = mind_trick->GetAttrs();
   scop_info_.user_config_.SetAttrs(attrs);
+  // update g_attrs
+  if (!attrs.empty()) {
+    for (const auto& kv: attrs) {
+      g_attrs.Set(kv.first, kv.second);
+    }
+  }
 }
 
 void ConstrainSchedule::InitVerbosityLevel(void) {
