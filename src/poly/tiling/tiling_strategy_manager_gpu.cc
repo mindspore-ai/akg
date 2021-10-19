@@ -493,6 +493,8 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu() {
       }
     }
   }
+
+  // Check mod and try to make number of thread align to mod.
   for (auto axis : reduce_axes_) {
     for (const auto &attr : axis->attrs) {
       if (attr.attr_key != AT_MOD) {
@@ -503,9 +505,13 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu() {
       axis->TileRestrainMod(CastInt64ToExpr(mod_value), TileLevel::CACHE1);
     }
     if (use_local) {
+      auto ori_reduce_threads = reduce_threads;
       auto tile_mod = axis->c1_constraints.tile_mod_.as<IntImm>()->value;
       while (tile_mod > reduce_threads && tile_mod % reduce_threads != 0) {
         --reduce_threads;
+      }
+      if (ori_reduce_threads / reduce_threads > 2) {
+        reduce_threads = ori_reduce_threads;
       }
     }
   }
