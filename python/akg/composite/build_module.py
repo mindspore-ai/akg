@@ -453,7 +453,6 @@ def _build_to_module_ascend(desc_s_in, desc_d_in, attr=None, use_repo=True):
             for key, value in given_attrs.items():
                 if not attr.get(key):
                     attr[key] = value
-            _, desc_s = _set_compute_attrs(desc_d, attr)
         elif use_repo:
             compute, shape, dtype = generate_trait(desc_d)
             repo_attr = _get_repo_attr(desc_d, compute, shape, dtype, repository, False)
@@ -464,7 +463,7 @@ def _build_to_module_ascend(desc_s_in, desc_d_in, attr=None, use_repo=True):
                     attr['dim'] = tiling
                 elif support_online_tuning and 'online_tuning' in attr:
                     attr = _get_online_tune_attr(desc_s_in, attr, get_repository_file_path("repository.json"))
-            _, desc_s = _set_compute_attrs(desc_d, attr)
+        _, desc_s = _set_compute_attrs(desc_d, attr)
         return desc_s, attr
 
     def get_parallel_repo(desc_d):
