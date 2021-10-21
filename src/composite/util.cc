@@ -77,7 +77,7 @@ bool IsOtherOp(const std::string &op_name) {
   std::unordered_set<std::string> elems = {
     "MatMul",      "BatchMatMul", "Conv",         "Transpose",   "Tile",     "Assign",           "InplaceAssign",
     "EquivFormat", "TransData",   "AddMinValue",  "BroadcastTo", "PadAkg",   "UnPadAkg",         "Conv2D",
-    "CumSum",      "CumProd",     "StridedSlice", "UserDefined", "GatherNd", "TensorScatterAdd", "UnsortedSegmentSum",
+    "CumSum",      "CumProd",     "StridedSlice", "Custom",      "GatherNd", "TensorScatterAdd", "UnsortedSegmentSum",
     "Gather"};
   return elems.find(op_name) != elems.end();
 }

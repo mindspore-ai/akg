@@ -37,9 +37,11 @@ def elem_any(inputs, attrs):
             with ib.if_scope(ib.load(data, i) > zero):
                 ib.store(dst, 0, one)
         return ib.get()
+
     in_tensor = inputs[0]
-    return tvm.extern((1,), [in_tensor], lambda ins, outs : kernel_ir(outs[0], ins[0]),
-                      name = "elemany", dtype=in_tensor.dtype)
+    return tvm.extern((1,), [in_tensor], lambda ins, outs: kernel_ir(outs[0], ins[0]),
+                      name="elemany", dtype=in_tensor.dtype)
+
 
 @tvm.register_func("ElemAll")
 def elem_all(inputs, attrs):
@@ -50,9 +52,11 @@ def elem_all(inputs, attrs):
             with ib.if_scope(ib.load(data, i) == zero):
                 ib.store(dst, 0, zero)
         return ib.get()
+
     in_tensor = inputs[0]
-    return tvm.extern((1,), [in_tensor], lambda ins, outs : kernel_ir(outs[0], ins[0]),
-                      name = "elemall", dtype=in_tensor.dtype)
+    return tvm.extern((1,), [in_tensor], lambda ins, outs: kernel_ir(outs[0], ins[0]),
+                      name="elemall", dtype=in_tensor.dtype)
+
 
 @tvm.register_func("PadAkg")
 def pad(inputs, attrs):
@@ -69,6 +73,7 @@ def pad(inputs, attrs):
             "Input dimensions and pad dimensions dismatch: %d vs %d vs %d" % (n, len(pad_before), len(pad_after)))
     output_name = "T_pad_" + in_tensor.op.name
     return topi.nn.pad(in_tensor, pad_before, pad_after, pad_value, name=output_name)
+
 
 @tvm.register_func("UnPadAkg")
 def unpad(inputs, attrs):
@@ -102,27 +107,34 @@ def unpad(inputs, attrs):
     output_shape = [in_tensor.shape[i] - unpad_after[i] for i in range(0, n)]
     output_name = "T_unpad_" + in_tensor.op.name
     return tvm.extern(output_shape, [in_tensor], lambda ins, outs: kernel_ir(outs[0], ins[0]),
-        name = output_name, dtype=[in_tensor.dtype])
+                      name=output_name, dtype=[in_tensor.dtype])
+
 
 @tvm.register_func("CReal")
 def creal(inputs, attrs):
     in_tensor = inputs[0]
     out_shape = in_tensor.shape[:-1]
+
     def fcompute(*index):
         out_index = [x for x in index]
         out_index.append(0)
         return in_tensor(*out_index)
-    return tvm.compute(out_shape, fcompute, name = "real")
+
+    return tvm.compute(out_shape, fcompute, name="real")
+
 
 @tvm.register_func("CImag")
 def cimag(inputs, attrs):
     in_tensor = inputs[0]
     out_shape = in_tensor.shape[:-1]
+
     def fcompute(*index):
         out_index = [x for x in index]
         out_index.append(1)
         return in_tensor(*out_index)
-    return tvm.compute(out_shape, fcompute, name = "imag")
+
+    return tvm.compute(out_shape, fcompute, name="imag")
+
 
 @tvm.register_func("Complex")
 def complex(inputs, attrs):
@@ -132,12 +144,14 @@ def complex(inputs, attrs):
             ib.store(dst, i + [0], ib.load(real, i))
             ib.store(dst, i + [1], ib.load(imag, i))
         return ib.get()
+
     real, imag = inputs[0], inputs[1]
     shape = [x for x in real.shape]
     shape.append(2)
     return tvm.extern(shape, [real, imag],
-                      lambda ins, outs : mix_func(outs[0], ins[0], ins[1]),
-                      name = "complex", dtype=real.dtype)
+                      lambda ins, outs: mix_func(outs[0], ins[0], ins[1]),
+                      name="complex", dtype=real.dtype)
+
 
 @tvm.register_func("StridedSlice")
 def StridedSlice(inputs, attrs):
@@ -210,10 +224,12 @@ def StridedSlice(inputs, attrs):
         out_shape.append(out_idx)
         i += 1
         j += 1
+
     def get_old_indices(indices, idx):
         old_indices = list(indices)
         old_indices.insert(idx, begin[idx])
         return old_indices
+
     for shrink_axis in reversed(shrink_axes):
         new_shape = list(in_tensor.shape)
         new_shape.pop(shrink_axis)
@@ -223,6 +239,7 @@ def StridedSlice(inputs, attrs):
         begin.pop(shrink_axis)
         strides.pop(shrink_axis)
     return tvm.compute(out_shape, lambda *i: in_tensor(*[b + idx * s for b, s, idx in zip(begin, strides, i)]))
+
 
 @tvm.register_func("TransData")
 def trans_data(inputs, attrs):
@@ -262,15 +279,16 @@ def trans_data(inputs, attrs):
                     with ib.for_range(0, m1) as i_m1:
                         with ib.for_range(0, m0) as i_m0:
                             with ib.for_range(0, n0) as i_n0:
-                                with ib.if_scope(tvm.all((i_m1*cs + i_m0) < m, (i_n1*cs + i_n0) < n)):
-                                    output_args = i + [i_m1*cs + i_m0, i_n1*cs + i_n0]
+                                with ib.if_scope(tvm.all((i_m1 * cs + i_m0) < m, (i_n1 * cs + i_n0) < n)):
+                                    output_args = i + [i_m1 * cs + i_m0, i_n1 * cs + i_n0]
                                     input_args = i + [i_n1, i_m1, i_m0, i_n0]
                                     ib.store(output, output_args,
                                              ib.load(input_, input_args))
             return ib.get()
+
         # If it is implemented with tvm.compute,
         # the generated stmt is difficult to process for poly in the fusion scene
-        return tvm.extern(original_shape, [data], lambda ins, outs : kernel_ir(ins[0], outs[0]), name=output_name,
+        return tvm.extern(original_shape, [data], lambda ins, outs: kernel_ir(ins[0], outs[0]), name=output_name,
                           dtype=data.dtype)
 
     def _default2zn(data):
@@ -302,6 +320,7 @@ def trans_data(inputs, attrs):
             input_indices.append(n_indice)
             res = tvm.if_then_else(tvm.any(m_indice >= m, n_indice >= n), tvm.const(0, dtype), data(*input_indices))
             return res
+
         output = tvm.compute(output_shape, fcompute, name=output_name)
         return output
 
@@ -316,6 +335,7 @@ def trans_data(inputs, attrs):
     else:
         raise ValueError("TransData for src_format %s and dst_format %s is not supported"
                          % (src_format, dst_format))
+
 
 @tvm.register_func("Conv2D")
 def conv2d_nhwc(inputs, attrs):
@@ -337,13 +357,13 @@ def conv2d_nhwc(inputs, attrs):
     # Check shape
     if len(data.shape) != 4 or len(weight.shape) != 4:
         raise ValueError("shape of data and weight should be 4-dim, but got %d and %d." % (len(data.shape),
-            len(weight.shape)))
+                                                                                           len(weight.shape)))
     # Compute output
     n, in_h, in_w, in_c = data.shape
     out_c, k_h, k_w, in_c = weight.shape
     _, _, s_h, s_w = stride
     o_h = (in_h - k_h) // s_h + 1
-    o_w =(in_w - k_w) // s_w + 1
+    o_w = (in_w - k_w) // s_w + 1
     rc = tvm.reduce_axis((0, in_c), name="rc")
     rh = tvm.reduce_axis((0, k_h), name="rh")
     rw = tvm.reduce_axis((0, k_w), name="rw")
@@ -357,6 +377,7 @@ def conv2d_nhwc(inputs, attrs):
     )
     return output
 
+
 @tvm.register_func("CumSum")
 def cumsum(inputs, attrs):
     if len(inputs) != 1:
@@ -368,22 +389,25 @@ def cumsum(inputs, attrs):
     exclusive = attrs["exclusive"].value if "exclusive" in attrs else False
     reverse = attrs["reverse"].value if "reverse" in attrs else False
     output_name = "T_cumsum_" + in_tensor.op.name
+
     def kernel_ir(data, dst):
         ib = tvm.ir_builder.create()
         # axes before cumm-axis
         with ib.for_range_n(shape[:axis], "i0") as i0:
             # axes after cumm-axis
-            with ib.for_range_n(shape[axis+1:], "i1") as i1:
+            with ib.for_range_n(shape[axis + 1:], "i1") as i1:
                 idx_0 = i0 + [0] + i1 if not reverse else i0 + [shape[axis] - 1] + i1
-                ib.store(dst, idx_0,  ib.load(data, idx_0) if not exclusive else tvm.const(0, data.dtype))
+                ib.store(dst, idx_0, ib.load(data, idx_0) if not exclusive else tvm.const(0, data.dtype))
                 # iterate the cumm-axis to do cumulated sum (start from 1)
                 with ib.for_range(1, shape[axis], name="cum_idx") as m:
                     idx_pre = i0 + [m - 1] + i1 if not reverse else i0 + [shape[axis] - m] + i1
-                    idx_cur = i0 +[m] + i1 if not reverse else i0 + [shape[axis] - 1 - m] + i1
+                    idx_cur = i0 + [m] + i1 if not reverse else i0 + [shape[axis] - 1 - m] + i1
                     ib.store(dst, idx_cur, ib.load(dst, idx_pre) + ib.load(data, idx_cur if not exclusive else idx_pre))
         return ib.get()
-    return tvm.extern(shape, [in_tensor], lambda ins, outs : kernel_ir(ins[0], outs[0]), name=output_name,
-                          dtype=in_tensor.dtype)
+
+    return tvm.extern(shape, [in_tensor], lambda ins, outs: kernel_ir(ins[0], outs[0]), name=output_name,
+                      dtype=in_tensor.dtype)
+
 
 @tvm.register_func("CumProd")
 def cumprod(inputs, attrs):
@@ -396,32 +420,35 @@ def cumprod(inputs, attrs):
     exclusive = attrs["exclusive"].value if "exclusive" in attrs else False
     reverse = attrs["reverse"].value if "reverse" in attrs else False
     output_name = "T_cumprod_" + in_tensor.op.name
+
     def kernel_ir(data, dst):
         ib = tvm.ir_builder.create()
         # axes before cumm-axis
         with ib.for_range_n(shape[:axis], "i0") as i0:
             # axes after cumm-axis
-            with ib.for_range_n(shape[axis+1:], "i1") as i1:
+            with ib.for_range_n(shape[axis + 1:], "i1") as i1:
                 idx_0 = i0 + [0] + i1 if not reverse else i0 + [shape[axis] - 1] + i1
                 ib.store(dst, idx_0, tvm.const(1, data.dtype) if exclusive else ib.load(data, idx_0))
                 # iterate the cumm-axis to do cumulated production (start from 1)
                 with ib.for_range(1, shape[axis], name="cum_idx") as m:
                     idx_pre = i0 + [m - 1] + i1 if not reverse else i0 + [shape[axis] - m] + i1
-                    idx_cur = i0 +[m] + i1 if not reverse else i0 + [shape[axis] - 1 - m] + i1
+                    idx_cur = i0 + [m] + i1 if not reverse else i0 + [shape[axis] - 1 - m] + i1
                     ib.store(dst, idx_cur, ib.load(dst, idx_pre) * ib.load(data, idx_pre if exclusive else idx_cur))
         return ib.get()
-    return tvm.extern(shape, [in_tensor], lambda ins, outs : kernel_ir(ins[0], outs[0]), name=output_name,
-                          dtype=in_tensor.dtype)
 
-@tvm.register_func("UserDefined")
-def user_defined(inputs, attrs):
+    return tvm.extern(shape, [in_tensor], lambda ins, outs: kernel_ir(ins[0], outs[0]), name=output_name,
+                      dtype=in_tensor.dtype)
 
+
+@tvm.register_func("Custom")
+def custom(inputs, attrs):
     op_desc_attr = []
     source_str = ""
     op_imply_path = ""
     func_name = ""
     func_type = ""
 
+    attr_names = []
     for ext_arg in attrs.items():
         attr_name = ext_arg[0]
         if attr_name == "func_source_str":
@@ -432,18 +459,23 @@ def user_defined(inputs, attrs):
             func_name = ext_arg[1].value
         elif attr_name == "func_type":
             func_type = ext_arg[1].value
+        elif attr_name == "attr_names":
+            attr_names = ext_arg[1]
         elif not (attr_name == "akg" or "_format" in attr_name):
             # store the rest of op attr for op build
             op_desc_attr.append(ext_arg)
 
-    op_attrs = []
+    if not isinstance(attr_names, (tvm.container.Array, tuple, list)):
+        attr_names = [attr_names]
+
+    op_attrs = {}
     ir_builder_attrs = {}
     for ext_arg in op_desc_attr:
         if func_type == "ir_builder":
             # ir_builder functions take attrs as a dict/tvm.Map
             ir_builder_attrs[ext_arg[0]] = ext_arg[1]
-        else:
-            op_attrs.append(ext_arg[1])
+        if ext_arg[0] in attr_names:
+            op_attrs[ext_arg[0]] = ext_arg[1]
 
     func_kernel = None
     if len(source_str) > 0:
@@ -476,20 +508,21 @@ def user_defined(inputs, attrs):
     output = None
     if func_type == "hybrid":
         hybrid_func = script(func_kernel, capture=capture)
-        inputs = list(inputs) + op_attrs
-        output = hybrid_func(*inputs)
+        inputs = list(inputs)
+        output = hybrid_func(*inputs, **op_attrs)
     elif func_type == "ir_builder":
         output = func_kernel(inputs, ir_builder_attrs)
     else:
-        inputs = list(inputs) + op_attrs
-        output = func_kernel(*inputs)
+        inputs = list(inputs)
+        output = func_kernel(*inputs, **op_attrs)
 
     return output
+
 
 @tvm.register_func("GatherNd")
 def gather_nd(inputs, attrs):
     if len(inputs) != 2:
-        raise ValueError(f"2 inputs expected, but got {len(input)}")
+        raise ValueError(f"2 inputs expected, but got {len(inputs)}")
     data, indices = inputs
 
     data_shape = list(data.shape)
@@ -497,6 +530,7 @@ def gather_nd(inputs, attrs):
     indices_last_dim = len(indices_shape) - 1
     left_shape = indices_shape[:indices_last_dim]
     right_shape = data_shape[int(indices_shape[indices_last_dim]):]
+
     def gen_ir(data, indices, out):
         ib = tvm.ir_builder.create()
         with ib.for_range_n(left_shape, 'i') as i:
@@ -520,12 +554,13 @@ def gather_nd(inputs, attrs):
     output_shape = left_shape + right_shape
     out_buf = tvm.decl_buffer(output_shape, data.dtype, output_name)
     return tvm.extern([output_shape], [data, indices], lambda ins, outs: gen_ir(ins[0], ins[1], outs[0]),
-                                          dtype=data.dtype, out_buffers=[out_buf], name=output_name)
+                      dtype=data.dtype, out_buffers=[out_buf], name=output_name)
+
 
 @tvm.register_func("TensorScatterAdd")
 def tensor_scatter_add(inputs, attrs):
     if len(inputs) != 3:
-        raise ValueError(f"3 inputs expected, but got {len(input)}")
+        raise ValueError(f"3 inputs expected, but got {len(inputs)}")
     data, indices, updates = inputs
     data_shape = list(data.shape)
     indices_shape = list(indices.shape)
@@ -535,6 +570,7 @@ def tensor_scatter_add(inputs, attrs):
         is_1d_indices = True
     left_shape = indices_shape[:-1]
     right_shape = data_shape[int(indices_shape[-1]):]
+
     def gen_ir(data, indices, updates, out):
         ib = tvm.ir_builder.create()
         with ib.for_range_n(left_shape, "i") as i:
@@ -548,7 +584,7 @@ def tensor_scatter_add(inputs, attrs):
                     index_write.append(temp_idx)
                 else:
                     for k in range(0, int(indices_shape[-1])):
-                        temp_idx = ib.load(indices, i+[k])
+                        temp_idx = ib.load(indices, i + [k])
                         if k == 0:
                             inbound = tvm.all((temp_idx >= 0), (temp_idx < data_shape[k]))
                         else:
@@ -563,7 +599,8 @@ def tensor_scatter_add(inputs, attrs):
     output_name = "T_tsa_" + data.op.name + "_" + indices.op.name + "_" + updates.op.name
     out_buf = tvm.decl_buffer(data.shape, data.dtype, output_name)
     return tvm.extern([data.shape], [data, indices, updates], lambda ins, outs: gen_ir(ins[0], ins[1], ins[2], outs[0]),
-                                          dtype=data.dtype, out_buffers=[out_buf], name=output_name)
+                      dtype=data.dtype, out_buffers=[out_buf], name=output_name)
+
 
 @tvm.register_func("UnsortedSegmentSum")
 def tensor_unsorted_segment_sum(inputs, attrs):
@@ -571,7 +608,7 @@ def tensor_unsorted_segment_sum(inputs, attrs):
     num = attrs['num_segments']
     op_id = attrs['op_id'] if 'op_id' in attrs else 0
     if len(inputs) != 2:
-        raise ValueError(f"2 inputs expected, but got {len(input)}")
+        raise ValueError(f"2 inputs expected, but got {len(inputs)}")
     data, indices = inputs
     data_shape = list(data.shape)
     indices_shape = list(indices.shape)
@@ -602,14 +639,15 @@ def tensor_unsorted_segment_sum(inputs, attrs):
     output_name = "T_uss_" + data.op.name + "_" + indices.op.name
     out_buf = tvm.decl_buffer(output_shape, data.dtype, output_name)
     return tvm.extern([data.shape], [data, indices], lambda ins, outs: gen_ir(ins[0], ins[1], outs[0]),
-                                          dtype=data.dtype, out_buffers=[out_buf], name=output_name)
+                      dtype=data.dtype, out_buffers=[out_buf], name=output_name)
+
 
 @tvm.register_func("Gather")
 def gather(inputs, attrs):
     attrs = {k: v for k, v in attrs.items()}
     axis = int(attrs["axis"][0]) if "axis" in attrs else 0
     if len(inputs) != 2:
-        raise ValueError(f"2 inputs expected, but got {len(input)}")
+        raise ValueError(f"2 inputs expected, but got {len(inputs)}")
     data, indices = inputs
     data_shape = list(data.shape)
     indices_shape = list(indices.shape)
@@ -632,7 +670,7 @@ def gather(inputs, attrs):
     output_name = "T_gather_" + data.op.name + "_" + indices.op.name + "_" + str(axis)
     out_buf = tvm.decl_buffer(output_shape, data.dtype, output_name)
     return tvm.extern([data.shape], [data, indices], lambda ins, outs: gen_ir(ins[0], ins[1], outs[0]),
-                                          dtype=data.dtype, out_buffers=[out_buf], name=output_name)
+                      dtype=data.dtype, out_buffers=[out_buf], name=output_name)
 
 
 @tvm.register_func("StandardNormal")
@@ -641,6 +679,7 @@ def standard_normal(inputs, attrs):
     seed = attrs["seed"]
     shape = attrs["shape"]
     dtype = "float32"
+
     def gen_ir(out):
         ib = tvm.ir_builder.create()
         with ib.for_range_n(shape, "i") as i:
