@@ -23,6 +23,11 @@
  */
 #ifndef TVM_CODEGEN_LLVM_LLVM_COMMON_H_
 #define TVM_CODEGEN_LLVM_LLVM_COMMON_H_
+
+#ifdef _MSC_VER
+#pragma warning(disable : 4141 4291 4146 4624)
+#endif
+
 #ifdef TVM_LLVM_VERSION
 
 #include <llvm/ExecutionEngine/MCJIT.h>
@@ -32,6 +37,12 @@
 #include <llvm/Support/SourceMgr.h>
 
 #include <llvm/IR/Value.h>
+#if TVM_LLVM_VERSION >= 100
+#include <llvm/IR/IntrinsicsAMDGPU.h>
+#include <llvm/IR/IntrinsicsARM.h>
+#include <llvm/IR/IntrinsicsNVPTX.h>
+#include <llvm/IR/IntrinsicsX86.h>
+#endif
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/Argument.h>
 #include <llvm/IR/BasicBlock.h>
@@ -56,6 +67,7 @@
 
 #if TVM_LLVM_VERSION >= 100
 #include <llvm/Support/Alignment.h>
+#include <llvm/Support/Host.h>
 #endif
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/MemoryBuffer.h>

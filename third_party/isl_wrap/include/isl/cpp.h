@@ -516,6 +516,7 @@ public:
   inline isl::ast_node node_from(isl::schedule schedule) const;
   inline isl::ast_node node_from_schedule_map(isl::union_map schedule) const;
   inline isl::ast_build set_iterators(isl::id_list iterators) const;
+  inline isl::ast_build set_eliminate_for(bool eliminate_for) const;
 };
 
 // declarations for isl::ast_expr
@@ -4714,6 +4715,19 @@ isl::ast_build ast_build::set_iterators(isl::id_list iterators) const
   if (!res)
     exception::throw_last_error(saved_ctx);
   return manage(res).copy_callbacks(*this);
+}
+
+isl::ast_build ast_build::set_eliminate_for(bool eliminate_for) const
+{
+  if (!ptr)
+    exception::throw_invalid("NULL input", __FILE__, __LINE__);
+  auto saved_ctx = ctx();
+  options_scoped_set_on_error saved_on_error(saved_ctx, exception::on_error);
+  isl_bool tmp = eliminate_for ? isl_bool_true : isl_bool_false;
+  auto res = isl_ast_build_set_eliminate_for(copy(), tmp);
+  if (!res)
+    exception::throw_last_error(saved_ctx);
+  return manage(res);
 }
 
 // implementations for isl::ast_expr

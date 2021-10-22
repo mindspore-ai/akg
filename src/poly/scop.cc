@@ -19,12 +19,14 @@
 
 #include "poly/scop_builder.h"
 #include "poly/poly_util.h"
+#include "poly/cpu_isl_emitter.h"
 #include "poly/npu_isl_emitter.h"
 #include "poly/gpu_emit/gpu_isl_emitter.h"
 #include "poly/gpu_emit/gpu_isl_emitter_reduce.h"
 #include "poly/gpu_emit/gpu_isl_emitter_tensor_core.h"
 #include "poly/dsa_mgr_strategy.h"
 #include "poly/gpu_mgr_strategy.h"
+#include "poly/cpu_mgr_strategy.h"
 #include "poly/schedule_pass_mgr.h"
 #include "build_module.h"
 
@@ -136,6 +138,8 @@ isl::schedule Scop::Transform(const isl::schedule &input_schedule) {
     pass_stra.reset(new DsaMgrStrategy(info_));
   } else if (info_.user_config_.GetTarget() == TARGET_CUDA) {
     pass_stra.reset(new GPUMgrStrategy(info_));
+  } else if (info_.user_config_.GetTarget() == TARGET_CPU) {
+    pass_stra.reset(new CPUMgrStrategy(info_));
   }
   final_schedule = mgr.Run(input_schedule, pass_stra);
   info_.DumpTransform("dsa_transfrom.log", pass_stra->pass_info_);
@@ -148,6 +152,8 @@ isl::schedule Scop::Transform(const isl::schedule &input_schedule) {
       pass_stra.reset(new DsaMgrStrategy(info_));
     } else if (info_.user_config_.GetTarget() == TARGET_CUDA) {
       pass_stra.reset(new GPUMgrStrategy(info_));
+    } else if (info_.user_config_.GetTarget() == TARGET_CPU) {
+      pass_stra.reset(new CPUMgrStrategy(info_));
     }
     if ((info_.user_config_.GetTarget() == TARGET_CUDA) && (info_.analysis_result_.GetEnabledAutoTiling())) {
       auto block_cfg = info_.user_config_.GetBlockConfig();
@@ -216,6 +222,9 @@ Stmt GenHalide(ScopInfo &info, const isl::schedule &sch, bool used_for_tile_out_
 
   // set up ast builder
   auto builder = isl::ast_build(sch.ctx());
+  if (info.user_config_.GetTarget() == TARGET_CPU) {
+    builder = builder.set_eliminate_for(false);
+  }
   builder = builder.set_at_each_domain(gather);
 
   auto iter_prefix = info.user_config_.GetIterPrefix(info.mmu_info_.IsSpecGemm());
@@ -254,6 +263,9 @@ Stmt GenHalide(ScopInfo &info, const isl::schedule &sch, bool used_for_tile_out_
         } else {
           stmt = GpuIslEmitter(info, node_info_repo, iters).Emit(ast_node);
         }
+      } else if (info.user_config_.GetTarget() == TARGET_CPU) {
+        PrintHeader("CpuIslEmitter");
+        stmt = CpuIslEmitter(info, node_info_repo, iters).Emit(ast_node);
       }
     } else {
       PrintHeader("IslEmitter");
@@ -270,6 +282,8 @@ Stmt GenHalide(ScopInfo &info, const isl::schedule &sch, bool used_for_tile_out_
       } else {
         stmt = GpuIslEmitter(info, node_info_repo, iters).Emit(ast_node);
       }
+    } else if (info.user_config_.GetTarget() == TARGET_CPU) {
+      stmt = CpuIslEmitter(info, node_info_repo, iters).Emit(ast_node);
     }
   }
 

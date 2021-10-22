@@ -108,6 +108,7 @@ class Module(ModuleBase):
             Additional arguments passed to fcompile
         """
         from pathlib import Path
+        fmt = ''
         if isinstance(file_name, Path):
             file_name = str(file_name)
 
@@ -126,11 +127,12 @@ class Module(ModuleBase):
         else:
             if self.type_key == "llvm":
                 object_format = "o"
+                fmt = 'k'
             else:
                 assert self.type_key == "c"
                 object_format = "cc"
         path_obj = temp.relpath("lib." + object_format)
-        self.save(path_obj)
+        self.save(path_obj, fmt)
         files = [path_obj]
         is_system_lib = self.type_key == "llvm" and self.get_function("__tvm_is_system_module")()
         if self.imported_modules:

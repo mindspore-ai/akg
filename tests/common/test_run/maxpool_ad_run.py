@@ -44,14 +44,14 @@ def maxpool_ad_run(shape, kernel, stride, pad, dtype, optimized, polyhedral=Fals
             else:
                 mod = utils.op_build_test(maxpool_ad_no_custom_diff_poly_all_max, [head.shape, shape],
                                 [dtype, dtype], kernel_name="maxpool_ad_no_custom_diff_poly_all_max",
-                                op_attrs=[kernel, stride, pad], attrs=attrs, log_cce=False, dump_code=True, polyhedral=polyhedral)
+                                op_attrs=[kernel, stride, pad], attrs=attrs, log_code=False, dump_code=True, polyhedral=polyhedral)
                 output = utils.mod_launch(mod, [head, input, output], expect=expect)
     else:
         if optimized:
             if first_max:
                 mod = utils.op_build_test(maxpool_ad, [head.shape, shape, forward.shape, mask.shape],
                                         [dtype, dtype, dtype, dtype], kernel_name="maxpool_ad_first_max",
-                                        op_attrs=[kernel, stride, pad], attrs=attrs, log_cce=False, dump_code=True, polyhedral=polyhedral)
+                                        op_attrs=[kernel, stride, pad], attrs=attrs, log_code=False, dump_code=True, polyhedral=polyhedral)
                 output = utils.mod_launch(mod, [head, input, forward, mask, output], expect=expect)
             else:
                 mod = maxpool_ad_manual_schedule_all_max(shape, kernel, stride, pad, dtype, attrs=attrs, polyhedral=polyhedral)
@@ -62,7 +62,7 @@ def maxpool_ad_run(shape, kernel, stride, pad, dtype, optimized, polyhedral=Fals
             else:
                 mod = utils.op_build_test(maxpool_ad_no_custom_diff_manual_schedule_all_max, [head.shape, shape],
                                 [dtype, dtype], kernel_name="maxpool_ad_no_custom_diff_manual_schedule_all_max",
-                                op_attrs=[kernel, stride, pad], attrs=attrs, log_cce=False, dump_code=True, polyhedral=polyhedral)
+                                op_attrs=[kernel, stride, pad], attrs=attrs, log_code=False, dump_code=True, polyhedral=polyhedral)
                 output = utils.mod_launch(mod, [head, input, output], expect=expect)
     
     if 'tuning' in attrs.keys():

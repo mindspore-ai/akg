@@ -49,6 +49,8 @@ std::string GetProcess(const picojson::value &input_json) {
 
   if (target == "aicore") {
     target = "cce";
+  } else if (target == "cpu") {
+    target = "llvm";
   }
 
   return target;

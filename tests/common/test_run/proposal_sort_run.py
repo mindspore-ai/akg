@@ -45,7 +45,7 @@ def proposal_sort_run(shape, topk: int, dtype, kernel_name, attrs):
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
         mod = utils.op_build_test(proposal_sort.proposal_sort, [shape], [dtype], op_attrs=op_attrs,
-                                  kernel_name=kernel_name, attrs=attrs, log_cce=False, tuning=t)
+                                  kernel_name=kernel_name, attrs=attrs, log_code=False, tuning=t)
         if t:
             data, expect, output = np_proposal_sort(shape, topk,  dtype)
             return mod, expect, (data, output)
@@ -53,7 +53,7 @@ def proposal_sort_run(shape, topk: int, dtype, kernel_name, attrs):
             return mod
     else:
         mod = utils.op_build_test(proposal_sort.proposal_sort, [shape], [dtype], op_attrs=op_attrs,
-                                  kernel_name=kernel_name, attrs=attrs, log_cce=False)
+                                  kernel_name=kernel_name, attrs=attrs, log_code=False)
         data, expect, output = np_proposal_sort(shape, topk, dtype)
         output = utils.mod_launch(mod, (data, output), expect=expect)
         test_case_result = compare_tensor(output, expect, rtol=5e-03, equal_nan=True)

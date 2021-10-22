@@ -16,15 +16,17 @@
 # under the License.
 
 # OpenMP Module
-if(USE_OPENMP STREQUAL "gnu")
+if(USE_OPENMP STREQUAL "gnu" OR USE_OPENMP STREQUAL "ON")
   find_package(OpenMP)
   if(OPENMP_FOUND)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
     list(APPEND TVM_RUNTIME_LINKER_LIBS ${OpenMP_CXX_LIBRARIES})
     add_definitions(-DTVM_THREADPOOL_USE_OPENMP=1)
+    add_definitions(-DAKG_USE_OPENMP=1)
     message(STATUS "Build with OpenMP ${OpenMP_CXX_LIBRARIES}")
   else()
     add_definitions(-DTVM_THREADPOOL_USE_OPENMP=0)
+    add_definitions(-DAKG_USE_OPENMP=0)
     message(WARNING "OpenMP cannot be found, use TVM threadpool instead.")
   endif()
 elseif(USE_OPENMP STREQUAL "intel")

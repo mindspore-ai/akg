@@ -32,6 +32,8 @@ void GpuDmaAnalysisStrategy::AddGpuConstraint() {
 
 void CastStrategy::AddGpuConstraint() { MarkDataSize(); }
 
+void CastStrategy::AddCpuConstraint() { MarkDataSize(); }
+
 void GemmStrategy::AddGpuConstraint() {
   if (!analyzer_->scop_info_.user_config_.GetEnableTensorCore() ||
       analyzer_->scop_info_.analysis_result_.GetIsGpuDmaAnalysed() ||
@@ -487,7 +489,7 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu() {
     if (total_reduce_size < warp_sizes_) {
       // we increase thread y for small reduction cases
       while ((coef < max_coef) && (total_injective_size % injective_threads == 0) &&
-          (total_injective_size / injective_threads > min_blocks)) {
+             (total_injective_size / injective_threads > min_blocks)) {
         coef *= 2;
         injective_threads = ty_range.first * coef;
       }
@@ -874,7 +876,7 @@ void GpuStrategy::AddGpuConstraint() {
   // tensor of tensor
   bool need_injective_speed_up = true;
   if ((template_ == Template::PURE_ELEM || template_ == Template::BROADCAST_OP || template_ == Template::EXTERN_CALL ||
-      (template_ == Template::REDUCTION && !analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib())) &&
+       (template_ == Template::REDUCTION && !analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib())) &&
       analyzer_->scop_info_.analysis_result_.GetTensorOfTensor()) {
     SetCoalescedAccess();
     need_injective_speed_up = !NeedModifyOrderOfAxis();
@@ -1027,8 +1029,8 @@ void GpuStrategy::CheckVectorizationForElemwiseOp(isl::schedule sch) {
     return;
   }
 
-  if (analyzer_->scop_info_.user_config_.GetVectorLoadType() == 0) {
-    analyzer_->scop_info_.user_config_.SetVectorLoadType(128);  // Default vectorization mode fp32 =128bits
+  if (analyzer_->scop_info_.user_config_.GetVectorLength() == 0) {
+    analyzer_->scop_info_.user_config_.SetVectorLength(128);  // Default vectorization mode fp32 =128bits
   }
   analyzer_->scop_info_.user_config_.SetEnableVectorization(true);
 }
@@ -1212,8 +1214,9 @@ void GpuStrategy::InnerThreadOuterBlock() {
     auto SkipMapping = [this, &axis, &shape, &ss, &inner_dim, &thread_dim]() {
       axis->thread_constraints.map_extent_ = 1;
       auto tile = inner_dim < thread_dim ? elem_per_thread_[inner_dim] : 1;
-      tile = tile == SpItemPerThread::AUTO ? std::min(axis->thread_constraints.item_process_, max_elem_per_thread_)
-                                           : tile == SpItemPerThread::FULL ? std::min(shape, max_elem_per_thread_) : 1;
+      tile = tile == SpItemPerThread::AUTO   ? std::min(axis->thread_constraints.item_process_, max_elem_per_thread_)
+             : tile == SpItemPerThread::FULL ? std::min(shape, max_elem_per_thread_)
+                                             : 1;
       auto tile_min = axis->c1_constraints.tile_min_.as<IntImm>()->value;
       auto tile_extent = axis->c1_constraints.tile_extent_.as<IntImm>()->value;
       if (tile_min == tile_extent && tile_extent != MIN_TILE) {
@@ -1744,8 +1747,9 @@ void GpuStrategy::InjectiveSpeedup() {
   auto parallel_size = GetProposalParallelSize();
   auto proposal_blocks = parallel_size.first;
   auto proposal_threads = parallel_size.second;
-  auto proposal_elem_per_thread = 
-    coaleasced_size < warp_sizes_ ? 1 : total_blocks < proposal_blocks * 8 ? min_elem_for_io_bound_ : 8;
+  auto proposal_elem_per_thread = coaleasced_size < warp_sizes_        ? 1
+                                  : total_blocks < proposal_blocks * 8 ? min_elem_for_io_bound_
+                                                                       : 8;
 
   auto shrinked_threads = std::min<int64_t>(total_threads / proposal_threads, proposal_blocks / total_blocks);
   auto shrinked_blocks = total_blocks / proposal_blocks;

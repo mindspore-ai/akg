@@ -42,6 +42,7 @@ class ReduceManager {
   isl::schedule InsertReduceMarker(const isl::schedule &sch);
 
  private:
+  void SplitInitStatements(isl::union_set &reduction_indenpendent_stmt);
   isl::union_set GetReduceStatements(isl::union_set domain, isl::union_map reduce_statement_map,
                                      StatementMap all_statements);
   isl::schedule_node ReorderStatements(const isl::schedule_node &node, isl::union_set before, isl::union_set after);
@@ -54,6 +55,7 @@ class ReduceManager {
 
   PassInfo &pass_info_;
   ScopInfo &scop_info_;
+  bool need_split_reduce_{true};
 };
 
 }  // namespace poly

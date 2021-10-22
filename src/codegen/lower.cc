@@ -170,14 +170,17 @@ Stmt LowerInitWithSchedule(LowerData &data) {
   GetBinds(data->args, data->binds, data->config, &data->arg_list_0, &data->binds_0);
   // Phase 0
   Target target_platform = Target::Create(data->target);
-  if (data->polyhedral && g_attrs.GetBool(kEnableAutoInline, true)) {
-    akg::schedule::AutoInline(data->sch, target_platform, g_attrs.GetBool(kEnableCSE, false));
-  }
-  if (target_platform->device_type == kDLGPU && data->polyhedral && g_attrs.GetBool(kEnableAutoFuse, true)) {
-    std::vector<size_t> split_index;
-    akg::schedule::AutoFuse(data->sch, g_attrs.GetStr(kAutoFuseSplit, ""), split_index,
-                            g_attrs.GetBool("enable_stitch_fusion", 0));
-    data->split_index = Array<Integer>(split_index.begin(), split_index.end());
+  if (data->polyhedral) {
+    if (g_attrs.GetBool(kEnableAutoInline, true)) {
+      akg::schedule::AutoInline(data->sch, target_platform, g_attrs.GetBool(kEnableCSE, false));
+    }
+    if ((target_platform->device_type == kDLGPU || target_platform->device_type == kDLCPU) &&
+      g_attrs.GetBool(kEnableAutoFuse, true)) {
+      std::vector<size_t> split_index;
+      akg::schedule::AutoFuse(data->sch, g_attrs.GetStr(kAutoFuseSplit, ""), split_index,
+                              g_attrs.GetBool("enable_stitch_fusion", 0));
+      data->split_index = Array<Integer>(split_index.begin(), split_index.end());
+    }
   }
 
   data->sch = data->sch.normalize();

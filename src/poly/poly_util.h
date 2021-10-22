@@ -274,6 +274,7 @@ class FindInnerRealize : public air::ir::IRMutator {
 }  // namespace poly
 constexpr auto TARGET_CCE = "cce";
 constexpr auto TARGET_CUDA = "cuda";
+constexpr auto TARGET_CPU = "cpu";
 
 constexpr auto ATTR_CONV_FEATURE_NAME = "feature";
 constexpr auto ATTR_CONV_FILTER_NAME = "filter";
@@ -363,6 +364,8 @@ constexpr auto T2 = "t2";
 constexpr auto TILE_WITH_C1 = "C1";
 constexpr auto TILE_WITH_C0 = "C0";
 constexpr auto TILE_WITH_C0_C1 = "C0_C1";
+constexpr auto TILE_WITH_LAST_C1 = "LAST_C1";
+constexpr auto TILE_WITH_LAST_C0 = "LAST_C0";
 constexpr auto TILE_WITH_WARP_C1 = "WARP_C1";
 constexpr auto REPLACE = "replace_";
 constexpr auto COMPUTE = "compute";
@@ -415,6 +418,13 @@ constexpr auto PROMOTE_REGISTER_TO_GLOBAL = "promote_register_to_global";
 constexpr auto PROMOTE_REGISTER_TO_SHARED = "promote_register_to_shared";
 constexpr auto PROMOTE_SHARED_TO_GLOBAL = "promote_shared_to_global";
 
+// promote marker for ForType
+constexpr auto FOR_SERIAL = "for_serial";
+constexpr auto FOR_PARALLEL = "for_parallel";
+constexpr auto FOR_VECTORIZED = "for_vectorized";
+constexpr auto FOR_UNROLLED = "for_unrolled";
+constexpr auto FOR_SWIZZLED = "for_swizzled";
+
 constexpr auto PROMOTE_VECTORIZATION = "promote_vectorization";
 constexpr auto PROMOTE_VECTORIZATION_BIT = 128;
 constexpr auto SKIP_MARKER = "skip";
@@ -426,6 +436,7 @@ constexpr auto KH_KW_MARKER = "kh_kw_marker";
 constexpr auto VECTORIZATION_MARKER = "vectorization_marker";
 constexpr auto REDUCE_MARKER = "reduce_marker_";
 constexpr auto ATOMIC_MARKER = "atomic";
+constexpr auto ALL_DIRECTION = "ALL_DIRECTION";
 constexpr auto X_DIRECTION = "X_DIRECTION";
 constexpr auto Y_DIRECTION = "Y_DIRECTION";
 constexpr auto REDUCE_INIT = "red_init_";
@@ -460,6 +471,12 @@ const std::vector<std::string> FastPoolingATTRList = {
   ATTR_CONV_STRIDE_W,  ATTR_CONV_DILATION_H, ATTR_CONV_DILATION_W, ATTR_CONV_PAD_LEFT, ATTR_CONV_PAD_RIGHT,
   ATTR_CONV_PAD_TOP,   ATTR_CONV_PAD_BOTTOM, ATTR_CONV_TILE_H,     ATTR_CONV_TILE_W};
 
+const std::unordered_map<std::string, air::ir::ForType> AkgSupportedForType = {
+  {FOR_SERIAL, air::ir::ForType::Serial},
+  {FOR_PARALLEL, air::ir::ForType::Parallel},
+  {FOR_VECTORIZED, air::ir::ForType::Vectorized},
+  {FOR_UNROLLED, air::ir::ForType::Unrolled},
+  {FOR_SWIZZLED, air::ir::ForType::Swizzled}};
 }  // namespace ir
 }  // namespace akg
 #endif  // POLY_UTIL_H_

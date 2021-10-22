@@ -20,10 +20,10 @@ OUTPUT_PATH="${AKG_DIR}/output"
 usage()
 {
     echo "Usage:"
-    echo "bash build.sh [-e gpu|ascend] [-j[n]] [-t on|off] [-o] [-u]"
+    echo "bash build.sh [-e cpu|gpu|ascend] [-j[n]] [-t on|off] [-o] [-u]"
     echo ""
     echo "Options:"
-    echo "    -e Hardware environment: gpu or ascend"
+    echo "    -e Hardware environment: cpu, gpu or ascend"
     echo "    -j[n] Set the threads when building (Default: -j8)"
     echo "    -t Unit test: on or off (Default: off)"
     echo "    -o Output .o file directory"
@@ -73,15 +73,20 @@ fi
 
 # Parse arguments
 THREAD_NUM=32
+SIMD_SET=off
 CMAKE_ARGS=""
 while getopts 'e:j:u:t:o' opt
 do
     case "${opt}" in
         e)
             if [[ "${OPTARG}" == "gpu" ]]; then
-                CMAKE_ARGS="${CMAKE_ARGS} -DUSE_CUDA=ON -DUSE_RPC=ON"
+                CMAKE_ARGS="${CMAKE_ARGS} -DUSE_CUDA=ON -DUSE_LLVM=ON -DUSE_RPC=ON"
             elif [[ "${OPTARG}" == "ascend" ]]; then
                 CMAKE_ARGS="${CMAKE_ARGS} -DUSE_CCE_RT=1"
+            elif [[ "${OPTARG}" == "cpu" ]]; then
+                # AKG requires LLVM on CPU, the optimal version is 12.xx.xx.
+                # if not found in the environment, it will find another existing version to use.
+                CMAKE_ARGS="${CMAKE_ARGS} -DUSE_LLVM=ON -DUSE_RPC=ON"
             else
                 echo "Unknown parameter ${OPTARG}!"
                 usage

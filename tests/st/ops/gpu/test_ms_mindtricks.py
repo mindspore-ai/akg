@@ -27,7 +27,7 @@ import logging
 # For composite cases
 from akg import composite
 from akg.utils import kernel_exec as utils
-from akg.utils.result_analysis import gpu_profiling
+from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
 from tests.common.gen_json_data import gen_json_data
 from tests.common.base import get_rtol_atol
@@ -96,7 +96,7 @@ def get_result(desc, poly, attrs=None):
     if backend == "cuda":
         inputs = to_tvm_nd_array(input_for_mod)
         expect = to_tvm_nd_array(expect)
-        gpu_profiling(mod, *inputs, *expect, repeat_time=400)
+        target_profiling(mod, *inputs, *expect, repeat_time=400)
     return True
 
 def test_gpu_cases():

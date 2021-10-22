@@ -60,6 +60,7 @@ PERFORMANCE_TEST_FILE = "PERFORMANCE_TEST_FILE"
 BINDS = "binds"
 CUDA = "cuda"
 CCE = "cce"
+LLVM = "llvm"
 RANDOM_SEED_NUM = 20
 PROF_ERROR_CODE = 9999999999
 
@@ -128,6 +129,8 @@ def create_code(kernel_name, code_path=None, code=None, code_type=CCE):
         postfix = ".cce"
     elif code_type == CUDA:
         postfix = ".cu"
+    elif code_type == LLVM:
+        postfix = ".ll"
     else:
         logging.info("the target code type %s is not supported.", code_type)
 
@@ -137,6 +140,8 @@ def create_code(kernel_name, code_path=None, code=None, code_type=CCE):
     if code_type == CCE and len(code_path) > 4 and code_path[-4:].lower() == postfix:
         real_path = code_path
     elif code_type == CUDA and len(code_path) > 3 and code_path[-3:].lower() == postfix:
+        real_path = code_path
+    elif code_type == LLVM and len(code_path) > 3 and code_path[-3:].lower() == postfix:
         real_path = code_path
     else:
         if code_path[-1] == r"/":
@@ -563,17 +568,17 @@ def mod_launch_ascend_profiling(mod, args, outputs=(-1,), tuning=False, device_i
     kernel_name = get_kernel_name_from_mod(mod)
     return profiling_mode_run(kernel_name, args, outputs, tuning, device_id)
 
-def mod_launch_gpu(mod, args, outputs=(-1,), tuning=False, device_id=-1, repeat_time=400):
+def mod_launch_default(mod, args, outputs=(-1,), target=CUDA, tuning=False, device_id=-1, repeat_time=400):
     if device_id == -1:
         device_id = int(os.environ.get("DEVICE_ID", 0))
-    ctx = akg.tvm.context(CUDA, device_id)
+    ctx = akg.tvm.context(target, device_id)
     mod_args = [akg.tvm.nd.array(a, ctx) for a in args]
     mod(*mod_args)
     out_list = [mod_args[len(args) + i if i < 0 else i].asnumpy() for i in outputs]
     if not tuning:
         return out_list[0] if len(out_list) == 1 else tuple(out_list)
     else:
-        cycles = get_gpu_cycles(mod, *mod_args, device_id=device_id, repeat_time=repeat_time)
+        cycles = get_cycles(mod, *mod_args, target=target, device_id=device_id, repeat_time=repeat_time)
         return out_list[0] if len(out_list) == 1 else tuple(out_list), {'run_time': cycles}
 
 @func_time_required
@@ -596,9 +601,11 @@ def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=-1, expect=None
     gc.collect()
     if device_id == -1:
         device_id = int(os.environ.get("DEVICE_ID", 0))
-    module = mod.imported_modules[0]
-    if module.type_key == CUDA:
-        return mod_launch_gpu(mod, args, outputs, tuning, device_id, repeat_time)
+
+    module = mod if mod.type_key == LLVM else mod.imported_modules[0]
+    target = module.type_key
+    if target == LLVM or target == CUDA:
+        return mod_launch_default(mod, args, outputs, target, tuning, device_id, repeat_time)
 
     kernel_name = get_kernel_name_from_mod(mod)
     stat_info = {}
@@ -707,7 +714,7 @@ def gen_kernel_name(input_shapes, input_types, op_attrs=None, kernel_name="", at
 
 @func_time_required
 def op_build_test(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
-                  attrs=None, log_cce=False, dump_ir=True, dump_code=True,
+                  attrs=None, log_code=False, dump_ir=True, dump_code=True,
                   polyhedral=True, tuning=False):
     """
     Return module from op_build with given inputs, distinguish tuning mode.
@@ -719,7 +726,7 @@ def op_build_test(op_func, input_shapes, input_types, op_attrs=None, kernel_name
         op_attrs (list or tuple): extra attributes for the op.
         kernel_name (str): name of op.
         attrs (dict): tiling parameter.
-        log_cce (bool): False by default.
+        log_code (bool): False by default.
         dump_ir (bool): True by default.
         dump_code (bool): False by default.
         polyhedral (bool): True by default.
@@ -734,7 +741,7 @@ def op_build_test(op_func, input_shapes, input_types, op_attrs=None, kernel_name
         kernel_name = gen_kernel_name(input_shapes, input_types, op_attrs, kernel_name, attrs)
     logging.debug('kernel_name---------- %s', str(kernel_name))
     mod = op_build(op_func, input_shapes, input_types, op_attrs, kernel_name,
-                   attrs, log_cce, dump_ir, dump_code,
+                   attrs, log_code, dump_ir, dump_code,
                    polyhedral, tuning)
     return mod
 
@@ -1047,7 +1054,7 @@ def create_gpu_mod(sch_tmpl, s, op_func, op_var, shape_var, kernel_name, attrs, 
 
 
 def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
-             attrs=None, log_cce=False, dump_ir=True, dump_code=True,
+             attrs=None, log_code=False, dump_ir=True, dump_code=True,
              polyhedral=True, tuning=False, ret_mode=ReturnType.MOD):
     """
     Return module built from op_func with given inputs.
@@ -1059,7 +1066,7 @@ def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
         op_attrs (list or tuple): extra attributes for the op.
         kernel_name (str): name of op.
         attrs (dict): tiling parameter.
-        log_cce (bool): False by default.
+        log_code (bool): False by default.
         dump_ir (bool): True by default.
         dump_code (bool): False by default.
         polyhedral (bool): True by default.
@@ -1119,23 +1126,14 @@ def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
         compute_func(s)
         polyhedral = False
 
-    target = CCE
-    if attrs and attrs.get("target", "cce") == CUDA:
-        target = CUDA
+    target = attrs.get("target") if attrs and attrs.get("target", None) else CCE
 
     level = attrs.get("help_tiling") if attrs and "help_tiling" in attrs else None
     if tuning or (level is not None and level > help_tiling_level['None']):
         return gen_spaces_dim_key(op_func, args, s, op_var, kernel_name, attrs, polyhedral, tuning, target)
-    mode = get_runtime_mode()
-    if mode == "cpu":
-        mod = akg.tvm.build(s, op_var, "llvm")
-        if not os.path.isdir("./cpu/ir/"):
-            os.makedirs("./cpu/ir/", exist_ok=True)
-        with os.fdopen(os.open("./cpu/ir/" + kernel_name + ".cc", os.O_WRONLY | os.O_CREAT, 0o400), 'w') as irf:
-            irf.write(akg.tvm.lower(s, op_var, shape_var, simple_mode=True))
-        return mod
 
     binds = None if not attrs else attrs.pop(BINDS, None)
+    target_name = target.split()[0]
     if ret_mode in [ReturnType.FEAT, ReturnType.MOD_AND_FEAT]:
         if binds is None:
             from akg.tvm import build_module
@@ -1151,20 +1149,25 @@ def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
         mod = _api_internal._BuildStmtToModule(stmt, kernel_name, cfg, args, target)
         return mod, feature
 
-    if target == CUDA:
+    if target_name == CUDA:
         return create_gpu_mod(None, s, op_func, op_var, shape_var, kernel_name, attrs, polyhedral, binds, dump_ir,
                               dump_code, tuning)
+    elif target_name == LLVM:
+        with akg.build_config(dump_pass_ir=dump_ir, unroll_explicit=True):
+            mod = akg.build(s, op_var, target, shape_var, name=kernel_name, attrs=attrs,
+                            polyhedral=polyhedral, binds=binds)
+            source_code = mod.get_source()
+    elif target_name == CCE:
+        with akg.build_config(dump_pass_ir=dump_ir):
+            mod = akg.build(s, op_var, target, shape_var, name=kernel_name, attrs=attrs,
+                            polyhedral=polyhedral, binds=binds)
+            source_code = mod.imported_modules[0].get_source()
 
-    target = CCE
-    with akg.build_config(dump_pass_ir=dump_ir):
-        mod = akg.build(s, op_var, target, shape_var, name=kernel_name, attrs=attrs, polyhedral=polyhedral, binds=binds)
-
-    source_code = mod.imported_modules[0].get_source()
-    if log_cce:
-        logging.debug("#################cce code####################")
+    if log_code:
+        logging.debug("#################code####################")
         logging.debug(source_code)
     if dump_code:
-        create_code(kernel_name, "./", source_code, target)
+        create_code(kernel_name, "./", source_code, target_name)
     return mod
 
 
@@ -1214,10 +1217,10 @@ def get_device_id():
         return 0
 
 
-def get_gpu_cycles(mod, *mod_args, device_id=0, repeat_time=400):
-    """get gpu profiling cycles."""
-    from akg.utils.result_analysis import gpu_profiling
-    tcost = gpu_profiling(mod, *mod_args, repeat_time=repeat_time, device_id=device_id)
+def get_cycles(mod, *mod_args, target="cuda", device_id=0, repeat_time=400):
+    """get profiling cycles."""
+    from akg.utils.result_analysis import target_profiling
+    tcost = target_profiling(mod, *mod_args, target=target, repeat_time=repeat_time, device_id=device_id)
     return tcost
 
 

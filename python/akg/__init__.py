@@ -88,6 +88,7 @@ from .autodiff import get_variables
 from .autodiff import register_variables
 from . import lang
 from .utils.dump_cuda_meta import dump_cuda_meta
+from .utils.dump_cpu_meta import dump_cpu_meta
 from .utils.dump_ascend_meta import tvm_callback_cce_postproc
 
 __all__ = ["differentiate"]

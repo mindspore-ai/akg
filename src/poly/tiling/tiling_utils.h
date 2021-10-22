@@ -112,7 +112,16 @@ class GpuInfo {
 };
 
 /* Log utils */
-enum LogStage { ANA_SCHETREE, ANA_BUF_LIVE_EXTENT, ANA_TILING_SPACE, DO_TILING, DO_TUNING, MICRO_TUNING, GPU_MAPPING };
+enum LogStage {
+  ANA_SCHETREE,
+  ANA_BUF_LIVE_EXTENT,
+  ANA_TILING_SPACE,
+  DO_TILING,
+  DO_TUNING,
+  MICRO_TUNING,
+  GPU_MAPPING,
+  CPU_MAPPING
+};
 
 class TileLogger {
  public:

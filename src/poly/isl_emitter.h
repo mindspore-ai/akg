@@ -22,6 +22,7 @@
 
 #include "ir_pass.h"
 #include "poly/scop_info.h"
+#include "pass/utils.h"
 
 namespace akg {
 namespace ir {
@@ -83,11 +84,15 @@ class IslEmitter {
   virtual bool IsCopyinFromAnotherBand(isl::multi_aff &access);
 
   // Virtual emitters for different type node
+  virtual Expr EmitLoad(const isl::ast_expr &expr, Type type);
   virtual Stmt Emit(const isl::ast_node &node);
   virtual Stmt EmitFor(const isl::ast_node_for &node);
   virtual Stmt EmitIf(const isl::ast_node_if &node);
   virtual Stmt EmitMark(const isl::ast_node_mark &node);
   virtual Stmt EmitBlock(const isl::ast_node_block &node);
+  virtual Stmt EmitRead(const isl::ast_node_user &node);
+  virtual Stmt EmitWrite(const isl::ast_node_user &node);
+  virtual Stmt EmitCall(const isl::ast_node_user &node);
   virtual Stmt EmitUserStmt(const isl::ast_node_user &node);
   virtual Stmt EmitStmt(const isl::ast_node_user &node);
   virtual Stmt EmitAst(const isl::ast_node &node);
@@ -132,6 +137,9 @@ class IslEmitter {
   // emit in if
   std::vector<const Node *> cur_if_list_;
   std::unordered_map<isl::id, std::vector<const Node *>, isl::IslIdIslHash> if_map_;
+
+  // emit for ast_node_for
+  ForType for_type_ = ForType::Serial;
 };
 
 class ExtractIterfromExpr : public air::ir::IRVisitor {

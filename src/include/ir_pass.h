@@ -92,6 +92,8 @@ Stmt InjectTransferBufferScope(Stmt stmt);
  */
 Stmt ReconstructLayout(const Stmt &stmt);
 
+Stmt ReductionFactor(const Stmt &stmt, const Map<Tensor, Buffer> &extern_buffer);
+
 Stmt ElementwiseFlatten(Stmt stmt, const Map<Tensor, Buffer> &extern_buffer,
                         const Map<Tensor, Buffer> &new_extern_buffer);
 

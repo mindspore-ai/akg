@@ -460,6 +460,8 @@ void BuildForDevice(const Array<LoweredFunc> &flist, const std::string &target_n
   DLDeviceType device_type = DLDeviceType::kDLCce;
   if (target->device_type == DLDeviceType::kDLGPU) {
     device_type = DLDeviceType::kDLGPU;
+  } else if (target->device_type == DLDeviceType::kDLCPU) {
+    device_type = DLDeviceType::kDLCPU;
   }
 
   Array<LoweredFunc> fhost;
@@ -480,7 +482,7 @@ void BuildForDevice(const Array<LoweredFunc> &flist, const std::string &target_n
     }
   }
 
-  if (target_name == "cuda") {
+  if (target->target_name == "cuda") {
     for (size_t i = 0; i < fdevice.size(); ++i) {
       fdevice.Set(i, NEXT_PASS(LowerWarpMemory, fdevice[i], target->thread_warp_size));
     }
@@ -491,27 +493,27 @@ void BuildForDevice(const Array<LoweredFunc> &flist, const std::string &target_n
     fhost.Set(i, NEXT_PASS(LowerTVMBuiltin, fhost[i]));
   }
 
-  Target target_host = Target::Create(target_host_name);
-
   for (size_t i = 0; i < fdevice.size(); ++i) {
-    if (target_name == "cuda") {
+    if (target->target_name == "cuda") {
       fdevice.Set(i, NEXT_PASS(LowerDeviceStorageAccessInfo, fdevice[i]));
     }
-    fdevice.Set(i, NEXT_PASS(LowerIntrin, fdevice[i], target->target_name));
+    fdevice.Set(i, NEXT_PASS(LowerIntrin, fdevice[i], target_name));
   }
 
   for (size_t i = 0; i < fhost.size(); ++i) {
-    if (target_name == "cuda") {
+    if (target->target_name == "cuda") {
       fhost.Set(i, NEXT_PASS(LowerDeviceStorageAccessInfo, fhost[i]));
     }
-    fhost.Set(i, NEXT_PASS(LowerIntrin, fhost[i], target_host->target_name));
+    fhost.Set(i, NEXT_PASS(LowerIntrin, fhost[i], target_host_name));
     fhost.Set(i, NEXT_PASS(CombineContextCall, fhost[i]));
   }
 
   for (const auto &func : fhost) {
     out_flist->push_back(func);
   }
-  *out_mdev = air::codegen::Build(fdevice, target_name, g_external_call_name);
+  if (!fdevice.empty()) {
+    *out_mdev = air::codegen::Build(fdevice, target_name, g_external_call_name);
+  }
   return;
 }
 
@@ -561,6 +563,8 @@ void CreateCode(const std::string &code, const std::string &kernel_name, const s
     file_suffix = ".cce";
   } else if (target_name.find("cuda") != std::string::npos) {
     file_suffix = ".cu";
+  } else if (target_name.find("llvm") != std::string::npos) {
+    file_suffix = ".ll";
   }
 
   if (file_path.empty()) {
@@ -583,6 +587,11 @@ void CreateCode(const std::string &code, const std::string &kernel_name, const s
 
 air::runtime::Module BuildToModule(const NodeRef &ref, const std::string &target_name) {
   CHECK(!target_name.empty()) << "target_name is empty.";
+  std::string host_name = kAkgTargetHostName;
+  Target target_platform = Target::Create(target_name);
+  if (target_platform->target_name == "llvm") {
+    host_name = target_name;
+  }
 
   auto build_rst = Downcast<BuildRst>(ref);
   auto res = build_rst->rst;
@@ -605,17 +614,19 @@ air::runtime::Module BuildToModule(const NodeRef &ref, const std::string &target
   for (auto iter : target_flist) {
     Array<LoweredFunc> out_flist;
     air::runtime::Module out_mdev;
-    BuildForDevice(iter.second, iter.first, kAkgTargetHostName, &out_flist, &out_mdev);
+    BuildForDevice(iter.second, iter.first, host_name, &out_flist, &out_mdev);
 
     // Save the current lowered functions of the host and the device module.
     for (const auto &func : out_flist) {
       fhost_all.push_back(func);
     }
-    device_modules.push_back(out_mdev);
+    if (out_mdev.defined()) {
+      device_modules.push_back(out_mdev);
+    }
   }
 
   // Generate a unified host module.
-  air::runtime::Module mhost = air::codegen::Build(fhost_all, kAkgTargetHostName, g_external_call_name);
+  air::runtime::Module mhost = air::codegen::Build(fhost_all, host_name, g_external_call_name);
 
   // Import all modules.
   for (const auto &mdev : device_modules) {
@@ -624,10 +635,10 @@ air::runtime::Module BuildToModule(const NodeRef &ref, const std::string &target
 
   const char *akg_dump_code = getenv("MS_AKG_DUMP_CODE");
   if (akg_dump_code != nullptr) {
-    auto mod0 = mhost->imports()[0];
-    CHECK(mod0.defined());
-
-    CreateCode(mod0->GetSource(), build_rst->kernel_name, target_name);
+    auto mods = mhost->imports();
+    auto mod = mods.empty() ? mhost : mods[0];
+    CHECK(mod.defined());
+    CreateCode(mod->GetSource(), build_rst->kernel_name, target_name);
   }
 
   return mhost;

@@ -91,7 +91,7 @@ void CodeGenLLVM::InitTarget(llvm::TargetMachine* tm) {
       native_vector_bits_ = 128;
     } else {
       native_vector_bits_ = 128;
-      std::string arch_name = tm->getTargetTriple().getArchName();
+      std::string arch_name = std::string(tm->getTargetTriple().getArchName());
       LOG(WARNING) << "Set native vector bits to be 128 for " << arch_name;
     }
   }
@@ -189,7 +189,7 @@ void CodeGenLLVM::HandleImport(const std::string& code) {
        code.substr(code.length() - 3) == ".bc")) {
     mlib = llvm::parseIRFile(code, err, *ctx_);
     if (mlib.get() == nullptr) {
-      std::string msg = err.getMessage();
+      std::string msg = std::string(err.getMessage());
       LOG(FATAL) << "Fail to load bitcode file " << code << "\n"
                  << "line " << err.getLineNo() << ":" << msg;
     }
@@ -198,7 +198,7 @@ void CodeGenLLVM::HandleImport(const std::string& code) {
         llvm::MemoryBuffer::getMemBuffer(code);
     mlib = llvm::parseIR(*buf, err, *ctx_);
     if (mlib.get() == nullptr) {
-      std::string msg = err.getMessage();
+      std::string msg = std::string(err.getMessage());
       LOG(FATAL) << "Fail to load llvm ir "
                  << "line " << err.getLineNo() << ":" << msg
                  << "\ncontent:\n"  << code;
@@ -319,7 +319,11 @@ llvm::Type* CodeGenLLVM::LLVMType(const Type& t) const {
     }
   }
   if (t.lanes() != 1) {
+#if TVM_LLVM_VERSION >= 110
+    return llvm::FixedVectorType::get(etype, t.lanes());
+#else
     return llvm::VectorType::get(etype, t.lanes());
+#endif
   } else {
     return etype;
   }
@@ -440,16 +444,31 @@ CodeGenLLVM::CreateDebugInfo(llvm::Module* module) {
 }
 
 llvm::Value* CodeGenLLVM::CreateBroadcast(llvm::Value* value, int lanes) {
-  llvm::Constant* undef = llvm::UndefValue::get(
-      llvm::VectorType::get(value->getType(), lanes));
+#if TVM_LLVM_VERSION >= 110
+  llvm::Type* type = llvm::FixedVectorType::get(value->getType(), lanes);
+#else
+  llvm::Type* type = llvm::VectorType::get(value->getType(), lanes);
+#endif
+  llvm::Constant* undef = llvm::UndefValue::get(type);
   llvm::Constant* zero = ConstInt32(0);
   value = builder_->CreateInsertElement(undef, value, zero);
+#if TVM_LLVM_VERSION >=120
+  llvm::Constant* mask = llvm::ConstantVector::getSplat(llvm::ElementCount::getFixed(lanes), zero);
+#elif TVM_LLVM_VERSION >= 110
+  llvm::Constant* mask =
+      llvm::ConstantVector::getSplat(llvm::ElementCount(lanes, /*Scalable=*/false), zero);
+#else
   llvm::Constant* mask = llvm::ConstantVector::getSplat(lanes, zero);
+#endif
   return builder_->CreateShuffleVector(value, undef, mask);
 }
 
 llvm::Value* CodeGenLLVM::CreateVecSlice(llvm::Value* vec, int begin, int extent) {
+#if TVM_LLVM_VERSION >= 110
+  int num_elems = llvm::cast<llvm::FixedVectorType>(vec->getType())->getNumElements();
+#else
   int num_elems = static_cast<int>(vec->getType()->getVectorNumElements());
+#endif
   if (extent == num_elems && begin == 0) return vec;
   CHECK(begin >= 0 && extent <= num_elems) << "Slicing out of bound!\n";
   std::vector<llvm::Constant*> indices;
@@ -465,8 +484,13 @@ llvm::Value* CodeGenLLVM::CreateVecSlice(llvm::Value* vec, int begin, int extent
 }
 
 llvm::Value* CodeGenLLVM::CreateVecFlip(llvm::Value* vec) {
+#if TVM_LLVM_VERSION >= 110
+  int num_elems = llvm::cast<llvm::FixedVectorType>(vec->getType())->getNumElements();
+  std::vector<int> indices;
+#else
   int num_elems = static_cast<int>(vec->getType()->getVectorNumElements());
   std::vector<unsigned> indices;
+#endif
   for (int i = 0; i < num_elems; ++i) {
     indices.push_back(num_elems - i - 1);
   }
@@ -475,7 +499,11 @@ llvm::Value* CodeGenLLVM::CreateVecFlip(llvm::Value* vec) {
 
 llvm::Value* CodeGenLLVM::CreateVecPad(llvm::Value* vec, int target_lanes) {
   llvm::Value* mask = llvm::UndefValue::get(LLVMType(Int(32, target_lanes)));
+#if TVM_LLVM_VERSION >= 110
+  int num_elems = llvm::cast<llvm::FixedVectorType>(vec->getType())->getNumElements();
+#else
   int num_elems = static_cast<int>(vec->getType()->getVectorNumElements());
+#endif
   if (num_elems == target_lanes) return vec;
   CHECK_LT(num_elems, target_lanes);
   for (int i = 0; i < num_elems; ++i) {
@@ -489,23 +517,35 @@ llvm::Value* CodeGenLLVM::CreateVecConcat(std::vector<llvm::Value*> vecs) {
   int total_lanes = 0;
 
   for (llvm::Value* v : vecs) {
-    total_lanes += static_cast<int>(
-        v->getType()->getVectorNumElements());
+#if TVM_LLVM_VERSION >= 110
+    total_lanes += llvm::cast<llvm::FixedVectorType>(v->getType())->getNumElements();
+#else
+    total_lanes += static_cast<int>(v->getType()->getVectorNumElements());
+#endif
   }
   while (vecs.size() > 1) {
     std::vector<llvm::Value*> new_vecs;
     for (size_t i = 0; i < vecs.size() - 1; i += 2) {
       llvm::Value* lhs = vecs[i];
       llvm::Value* rhs = vecs[i + 1];
+#if TVM_LLVM_VERSION >= 110
+      const size_t lhs_lanes = llvm::cast<llvm::FixedVectorType>(lhs->getType())->getNumElements();
+      const size_t rhs_lanes = llvm::cast<llvm::FixedVectorType>(rhs->getType())->getNumElements();
+#else
       const size_t lhs_lanes = lhs->getType()->getVectorNumElements();
       const size_t rhs_lanes = rhs->getType()->getVectorNumElements();
+#endif
       if (lhs_lanes < rhs_lanes) {
         lhs = CreateVecPad(lhs, rhs_lanes);
       } else if (rhs_lanes < lhs_lanes) {
         rhs = CreateVecPad(rhs, lhs_lanes);
       }
       const size_t shared_lanes = std::max(lhs_lanes, rhs_lanes);
+#if TVM_LLVM_VERSION >= 110
+      std::vector<int> mask;
+#else
       std::vector<unsigned> mask;
+#endif
       for (size_t i = 0; i < lhs_lanes; ++i) {
         mask.push_back(i);
       }
@@ -755,21 +795,49 @@ llvm::Value* CodeGenLLVM::CreateIntrinsic(const Call* op) {
     return builder_->CreateFCmpUNO(a, a);
   } else if (op->is_intrinsic("vectorlow")) {
     llvm::Value *v = MakeValue(op->args[0]);
+#if TVM_LLVM_VERSION >= 110
+    int l = llvm::cast<llvm::FixedVectorType>(v->getType())->getNumElements();
+#else
     int l = v->getType()->getVectorNumElements();
+#endif
     return CreateVecSlice(v, 0, l/2);
   } else if (op->is_intrinsic("vectorhigh")) {
     llvm::Value *v = MakeValue(op->args[0]);
+#if TVM_LLVM_VERSION >= 110
+    int l = llvm::cast<llvm::FixedVectorType>(v->getType())->getNumElements();
+#else
     int l = v->getType()->getVectorNumElements();
+#endif
     return CreateVecSlice(v, l/2, l/2);
   } else if (op->is_intrinsic("vectorcombine")) {
     llvm::Value *v0 = MakeValue(op->args[0]);
     llvm::Value *v1 = MakeValue(op->args[1]);
+#if TVM_LLVM_VERSION >= 110
+    int num_elems = llvm::cast<llvm::FixedVectorType>(v0->getType())->getNumElements() * 2;
+    std::vector<int> indices;
+#else
     int num_elems = static_cast<int>(v0->getType()->getVectorNumElements()) * 2;
     std::vector<unsigned> indices;
+#endif
     for (int i = 0; i < num_elems; ++i) {
       indices.push_back(i);
     }
     return builder_->CreateShuffleVector(v0, v1, indices);
+  } else if (op->is_intrinsic("MatrixTranspose")) {
+    llvm::Value *v0 = MakeValue(op->args[0]);
+    unsigned row = op->args[1].as<IntImm>()->value;
+    unsigned col = op->args[2].as<IntImm>()->value;
+#if TVM_LLVM_VERSION >= 110
+    std::vector<int> indices;
+#else
+    std::vector<unsigned> indices;
+#endif
+    for (unsigned i = 0; i < row; i++) {
+      for (unsigned j = 0; j < col; j++) {
+        indices.push_back(j * row + i);
+      }
+    }
+    return builder_->CreateShuffleVector(v0, v0, indices);
   } else {
     LOG(FATAL) << "unknown intrinsic " << op->name;
     return nullptr;
@@ -959,7 +1027,12 @@ llvm::Value* CodeGenLLVM::VisitExpr_(const Load* op) {
     int alignment, native_bits;
     GetAlignment(t, op->buffer_var.get(), op->index, &alignment, &native_bits);
     llvm::Value* ptr = CreateBufferPtr(t, buffer, index);
+#if TVM_LLVM_VERSION >= 110
+    llvm::LoadInst* load =
+        builder_->CreateAlignedLoad(ptr, llvm::Align(alignment), is_volatile);
+#else
     llvm::LoadInst* load = builder_->CreateAlignedLoad(ptr, alignment, is_volatile);
+#endif
     AddAliasInfo(load, op->buffer_var.get(), op->index, t);
     return load;
   } else {
@@ -974,7 +1047,12 @@ llvm::Value* CodeGenLLVM::VisitExpr_(const Load* op) {
         llvm::Value* ptr = CreateBufferPtr(
             t.element_of(), buffer, MakeValue(ramp->base));
         ptr = builder_->CreatePointerCast(ptr, LLVMType(t)->getPointerTo(addrspace));
+#if TVM_LLVM_VERSION >= 110
+        llvm::LoadInst* load = builder_->CreateAlignedLoad(
+            ptr, llvm::Align(alignment), is_volatile);
+#else
         llvm::LoadInst* load = builder_->CreateAlignedLoad(ptr, alignment, is_volatile);
+#endif
         AddAliasInfo(load, op->buffer_var.get(), op->index, t);
         return load;
       }
@@ -985,8 +1063,13 @@ llvm::Value* CodeGenLLVM::VisitExpr_(const Load* op) {
   llvm::Value* ret = llvm::UndefValue::get(LLVMType(t));
   auto f = [&](int i, llvm::Value* index) {
     llvm::Value* ptr = CreateBufferPtr(t.element_of(), buffer, index);
+#if TVM_LLVM_VERSION >= 110
+    llvm::LoadInst* load = builder_->CreateAlignedLoad(
+        ptr, llvm::Align(basic_align), is_volatile);
+#else
     llvm::LoadInst* load = builder_->CreateAlignedLoad(
         ptr, basic_align, is_volatile);
+#endif
     ret = builder_->CreateInsertElement(ret, load, ConstInt32(i));
     AddAliasInfo(load, op->buffer_var.get(), Expr(), t);
   };
@@ -1055,7 +1138,12 @@ void CodeGenLLVM::VisitStmt_(const Store* op) {
     int alignment, native_bits;
     GetAlignment(t, op->buffer_var.get(), op->index, &alignment, &native_bits);
     llvm::Value* ptr = CreateBufferPtr(t, buffer, index);
+#if TVM_LLVM_VERSION >= 110
+    llvm::StoreInst* store =
+        builder_->CreateAlignedStore(value, ptr, llvm::Align(alignment), is_volatile);
+#else
     llvm::StoreInst* store = builder_->CreateAlignedStore(value, ptr, alignment, is_volatile);
+#endif
     AddAliasInfo(store, op->buffer_var.get(), op->index, op->value.type());
     return;
   } else {
@@ -1070,7 +1158,12 @@ void CodeGenLLVM::VisitStmt_(const Store* op) {
         llvm::Value* ptr = CreateBufferPtr(
             t.element_of(), buffer, MakeValue(ramp->base));
         ptr = builder_->CreatePointerCast(ptr, LLVMType(t)->getPointerTo(addrspace));
+#if TVM_LLVM_VERSION >= 110
+        llvm::StoreInst* store =
+            builder_->CreateAlignedStore(value, ptr, llvm::Align(alignment), is_volatile);
+#else
         llvm::StoreInst* store = builder_->CreateAlignedStore(value, ptr, alignment, is_volatile);
+#endif
         AddAliasInfo(store, op->buffer_var.get(), op->index, op->value.type());
         return;
       }
@@ -1081,16 +1174,21 @@ void CodeGenLLVM::VisitStmt_(const Store* op) {
   int basic_align = t.bits() / 8;
   auto f = [&](int i, llvm::Value* index) {
     llvm::Value* ptr = CreateBufferPtr(t.element_of(), buffer, index);
+#if TVM_LLVM_VERSION >= 110
+    llvm::StoreInst* store = builder_->CreateAlignedStore(
+        builder_->CreateExtractElement(value, i),
+        ptr, llvm::Align(basic_align), is_volatile);
+#else
     llvm::StoreInst* store = builder_->CreateAlignedStore(
         builder_->CreateExtractElement(value, i),
         ptr, basic_align, is_volatile);
+#endif
     AddAliasInfo(store, op->buffer_var.get(), Expr(), op->value.type());
   };
   this->Scalarize(op->index, f);
 }
 
 void CodeGenLLVM::VisitStmt_(const For* op) {
-  CHECK(is_zero(op->min));
   analyzer_->Bind(op->loop_var, Range::make_by_min_extent(op->min, op->extent));
   if (op->for_type == ForType::Unrolled) {
     LOG(WARNING) << "Unroll hint get ignore at CodeGenLLVM backend, "
@@ -1098,7 +1196,7 @@ void CodeGenLLVM::VisitStmt_(const For* op) {
   } else {
     CHECK(op->for_type == ForType::Serial);
   }
-  CreateSerialFor(MakeValue(op->min), MakeValue(op->extent),
+  CreateSerialFor(MakeValue(op->min), MakeValue(op->min + op->extent),
                   ConstInt32(1), op->loop_var, op->body);
 }
 

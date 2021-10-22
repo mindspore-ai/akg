@@ -31,6 +31,7 @@ class TilingStrategy {
   ~TilingStrategy() {}
   virtual void AddNpuConstraint(){};
   virtual void AddGpuConstraint(){};
+  virtual void AddCpuConstraint(){};
 
   std::string interested_attr_key;
 
@@ -68,6 +69,10 @@ class TilingStrategy {
   int64_t max_elem_per_thread_ = 1024;
   size_t tranpose_tiling_constraints_ = 32;
   int64_t reduce_length_limit = 32;
+  
+  // cpu config
+  int64_t thread_num_ = 8;
+  int64_t vector_size_ = 4;
 };
 
 class TilingStrategyManager {
@@ -88,6 +93,12 @@ class TilingStrategyManager {
   void ExecuteGpu() {
     for (auto strategy : this->strategies_) {
       strategy->AddGpuConstraint();
+    }
+  }
+
+  void ExecuteCpu() {
+    for (auto strategy : this->strategies_) {
+      strategy->AddCpuConstraint();
     }
   }
 
@@ -138,6 +149,7 @@ class CastStrategy : public TilingStrategy {
   ~CastStrategy() {}
   void AddNpuConstraint();
   void AddGpuConstraint();
+  void AddCpuConstraint();
   void MarkDataSize() {
     auto interested_info = GetInterestedInfo(interested_attr_key);
     for (auto it : interested_info) {
@@ -444,6 +456,41 @@ class GpuStrategy : public TilingStrategy {
   std::unordered_map<int, std::string> mapping_idx_pos_ = {{0, "x"}, {1, "y"}, {2, "z"}};
   std::unordered_map<int, std::string> reduce_y_idx_pos_ = {{0, "y"}, {1, "x"}};
   int vectorized_bytes_{1};
+};
+
+class CpuStrategy : public TilingStrategy {
+ public:
+  explicit CpuStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {}
+  ~CpuStrategy() {}
+  void AddNpuConstraint() {}
+  void AddGpuConstraint() {}
+  void AddCpuConstraint();
+
+ private:
+  void DetermineTemplate();
+
+  void InjectiveSpeedup();
+  void InitMappingLimit();
+  void BuildAxesQueue();
+  void SetMappingConfig();
+  void SetCoalescedAccess();
+  void SetUnrollTileValue(TileAxis *axis, const int64_t axis_size, int64_t &tile_left);
+  void SetParallelTileValue(TileAxis *axis, const int64_t axis_size, const int64_t data_size,
+                            bool is_unroll_axis = false, int64_t tile_left = 1);
+
+  Template template_{Template::DEFAULT};
+
+  std::deque<std::pair<TileAxis *, int64_t>> pending_axes_;
+  std::unordered_map<int, std::string> template_map_ = {
+    {0, "DEFAULT"},    {1, "PURE_ELEM"},         {2, "BROADCAST_OP"}, {3, "REDUCTION"},
+    {4, "ALL_REDUCE"}, {5, "BITWISE_REDUCTION"}, {6, "MATMUL"},       {7, "TRANSPOSE_OP"},
+    {8, "PAD_OP"},     {9, "CUSTOM_CONFIG"},     {10, "CONV"},        {11, "CPU"}};
+  size_t depth_{0};
+  int min_exec_num_per_thread_{MIN_EXEC_NUM_PER_THREAD};
+  int best_parallel_num_{BEST_PARALLEL_NUM};
+  int parallel_decrease_value_{PARALLEL_DECREASE_VALUE};
+  int best_unroll_num_{BEST_UNROLL_NUM};
+  int min_unroll_num_{MIN_UNROLL_NUM};
 };
 
 class MulticoreStrategy {

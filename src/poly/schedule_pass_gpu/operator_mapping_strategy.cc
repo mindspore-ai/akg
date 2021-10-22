@@ -628,8 +628,9 @@ bool ReduceMappingStrategy::NeedAtomicAdd(const isl::schedule_node_band &band, s
   }
 
   auto non_coin_start_idx = CountConsecutiveCoincident(band);
-  bool is_all_reduce =
-    band.n_member() == 1 && scop_info_.analysis_result_.GetReduceDirection() == X_DIRECTION && non_coin_start_idx == 1;
+  bool is_reduce_x = scop_info_.analysis_result_.GetReduceDirection() == X_DIRECTION ||
+                     scop_info_.analysis_result_.GetReduceDirection() == ALL_DIRECTION;
+  bool is_all_reduce = band.n_member() == 1 && is_reduce_x && non_coin_start_idx == 1;
   if (is_all_reduce) {
     non_coin_start_idx = 0;  // Compare block size of position 0 to enable atomic add for all reduce ops
   }

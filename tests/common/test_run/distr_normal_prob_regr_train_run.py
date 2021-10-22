@@ -25,7 +25,7 @@ def prob_regression_run(shape, dtype, kernel_name, attrs):
 
     mod = utils.op_build_test(distr_normal_prob_regr_train.prob_regression_train, [x.shape, w.shape, y.shape],
                                          [dtype, dtype, dtype], kernel_name=kernel_name,
-                                         op_attrs=[], attrs=None, log_cce=True, dump_code=True, polyhedral=True)
+                                         op_attrs=[], attrs=None, log_code=True, dump_code=True, polyhedral=True)
 
     output = utils.mod_launch(mod, [x, w, y, output], expect=expect)
     return (x, w, y), output, expect, compare_tensor(output, expect, rtol=5e-03, equal_nan=True)

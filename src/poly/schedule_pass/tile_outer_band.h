@@ -104,12 +104,26 @@ class TileOuterBand : public SchedulePass {
   void CheckCustomMapping(const MappingStrategyMap &custom_mapping_map);
   bool IsMatrixCPromoteToShared();
 
+  // cpu related functions
+  isl::schedule RunCpu(isl::schedule sch);
+  isl::schedule_node MarkOuterPermutableCpu(isl::schedule_node node);
+  isl::multi_val GetVectorizationTileSize(const isl::schedule_node node);
+  isl::schedule_node SplitReduceStatements(const isl::schedule_node &node);
+  isl::schedule_node InsertAllMarker(const isl::schedule_node &orig_node, const bool is_all_reduce);
+  isl::schedule_node IsolateTilesForCpu(const isl::schedule_node &node, const std::string &tile_level = "");
+  isl::schedule_node InsertMarkerForLoop(const isl::schedule_node &orig_node, const std::string &marker_name);
+  isl::schedule_node TileReduceX(const isl::schedule_node &node);
+  isl::schedule_node TileReduceY(const isl::schedule_node &node);
+  isl::schedule_node SwitchSchedule(isl::schedule_node &node);
+
  private:
   PassInfo &pass_info_;
   ScopInfo &scop_info_;
   Tiles tiles_;
   TileSizes tile_sizes_;
   std::vector<std::vector<int>> partition_info_;
+  int last_axis_pos_{-1};
+  int start_pos_{0};
 };
 
 }  // namespace poly
