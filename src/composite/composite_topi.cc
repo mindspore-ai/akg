@@ -969,9 +969,11 @@ void AicoreCubeMatMul(const TVMArgs &args, TVMRetValue *rv) {
   auto name = "T_batchmatmul_" + left_matrix->op->name + "_" + right_matrix->op->name;
 
   // set compute attrs
-  auto set_compute_attrs_zN = [&left_matrix, &right_matrix, &inputs, transpose_a, transpose_b, attrs]() {
+  auto set_compute_attrs_zN = [&left_matrix, &right_matrix, &inputs, &output_shape, &dst_type, &k, transpose_a, transpose_b, attrs]() {
     Map<std::string, NodeRef> com_attrs;
 
+    com_attrs.Set("pragma_gemm_output_shape", output_shape);
+    com_attrs.Set("pragma_gemm_k", k);
     com_attrs.Set("pragma_gemm_data", Expr(left_matrix->op->name));
     com_attrs.Set("pragma_gemm_weight", Expr(right_matrix->op->name));
     com_attrs.Set("pragma_conv_bypass_l1", Expr(0));
