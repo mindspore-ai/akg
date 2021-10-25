@@ -32,8 +32,8 @@ namespace air {
 namespace runtime {
 class AscendKernelRuntime {
  public:
-  AscendKernelRuntime() = default;
-  ~AscendKernelRuntime() = default;
+  AscendKernelRuntime(uint32_t device_id);
+  ~AscendKernelRuntime();
   bool Init();
   void SetContext();
   void CreateContext();
