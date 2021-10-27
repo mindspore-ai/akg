@@ -23,8 +23,6 @@ namespace poly {
 
 void CPUMgrStrategy::RegisterTilingPasses() { RegisterPass(std::make_shared<TileOuterBand>(pass_info_, scop_info_)); }
 
-void CPUMgrStrategy::RegisterMemPromPasses() {}
-
 void CPUMgrStrategy::RegisterPasses() {
   passes_.clear();
   RegisterNormalizationPasses();
@@ -32,10 +30,6 @@ void CPUMgrStrategy::RegisterPasses() {
   RegisterSchedulingPasses();
   RegisterPass(std::make_shared<AnalyzeSchedule>(scop_info_));
   RegisterTilingPasses();
-  if (scop_info_.user_config_.GetIsTuning()) {
-    return;
-  }
-  RegisterMemPromPasses();
 }
 
 }  // namespace poly

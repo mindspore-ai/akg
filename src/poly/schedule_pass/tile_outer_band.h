@@ -106,9 +106,6 @@ class TileOuterBand : public SchedulePass {
 
   // cpu related functions
   isl::schedule RunCpu(isl::schedule sch);
-  void AnalyzeLastAxis(const isl::schedule sch);
-  int GetCoalescedAccess(const isl::schedule_node &orig_node);
-  void SetTensorLastAxis(const isl::schedule_node &orig_node);
 
   isl::schedule_node MarkOuterPermutableCpu(isl::schedule_node node);
 
@@ -127,6 +124,8 @@ class TileOuterBand : public SchedulePass {
   ScopInfo &scop_info_;
   Tiles tiles_;
   TileSizes tile_sizes_;
+  TileSizes tile_sizes_all_;
+  size_t cur_band_index_{0};
   std::vector<std::vector<int>> partition_info_;
   int last_axis_pos_{-1};
   int start_pos_{0};

@@ -315,21 +315,19 @@ void ReduceStrategy::AddGpuConstraint() {
     reduce_axes_.emplace_back(axis);
   });
   all_reduce_ = reduce_axes_.size() == depth;
-
+  auto direction = analyzer_->scop_info_.analysis_result_.GetReduceDirectionOfBand();
   if (!analyzer_->scop_info_.user_config_.EnableStitchFusion()) {
     if (reduce_length <= reduce_length_limit) {
       analyzer_->scop_info_.user_config_.SetEnableOneDimThread(true);
       analyzer_->GetTileLogger().AppendLine(GPU_MAPPING, "ReduceLength <= 32, enable onedim thread.");
     }
-    if ((analyzer_->scop_info_.analysis_result_.GetReduceDirection() == Y_DIRECTION &&
-         reduce_length <= reduce_length_limit) ||
-        (analyzer_->scop_info_.analysis_result_.GetReduceDirection() == X_DIRECTION &&
-         reduce_length < reduce_length_limit)) {
+    if ((direction == ReduceDirection::Y && reduce_length <= reduce_length_limit) ||
+        (direction == ReduceDirection::X && reduce_length < reduce_length_limit)) {
       analyzer_->scop_info_.analysis_result_.SetUseGpuReduceLib(false);
       analyzer_->GetTileLogger().AppendLine(GPU_MAPPING, "Small Reduction (Y<=32, X<32), disable akg reduce lib.");
     }
-    if (analyzer_->scop_info_.analysis_result_.GetReduceDirection() == X_DIRECTION &&
-        reduce_length < 2 * reduce_length_limit && nonreduce_length > max_y_z_dim_block_ * max_x_y_dim_thread_) {
+    if (direction == ReduceDirection::X && reduce_length < 2 * reduce_length_limit &&
+        nonreduce_length > max_y_z_dim_block_ * max_x_y_dim_thread_) {
       analyzer_->scop_info_.analysis_result_.SetUseGpuReduceLib(false);
       analyzer_->GetTileLogger().AppendLine(GPU_MAPPING,
                                             "Small Reduction (X<64) and large nonreduction axis (exceeding block and "
@@ -339,7 +337,7 @@ void ReduceStrategy::AddGpuConstraint() {
 
   if (!analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib()) {
     DisableReduceMapping();
-    if (analyzer_->scop_info_.analysis_result_.GetReduceDirection() == X_DIRECTION) {
+    if (direction == ReduceDirection::X) {
       AkgReduceLibStrategyOnGpu();
     }
   } else {
@@ -421,8 +419,8 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu() {
   if (is_special_4d) {
     return;
   }
-
-  bool square_thread = analyzer_->scop_info_.analysis_result_.GetReduceDirection() == Y_DIRECTION &&
+  auto direction = analyzer_->scop_info_.analysis_result_.GetReduceDirectionOfBand();
+  bool square_thread = direction == ReduceDirection::Y &&
                        analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib();
   bool use_local = UseRegisterMem();
   int64_t min_blocks = square_thread ? 32 : 512;
@@ -798,7 +796,7 @@ void GpuStrategy::ShowOptions() {
 }
 
 bool GpuStrategy::NeedModifyOrderOfAxis() {
-  int last_axis = analyzer_->scop_info_.analysis_result_.GetLastAxisInScheduleTree();
+  int last_axis = analyzer_->scop_info_.analysis_result_.GetLastAxisOfBand();
   if (last_axis < 0 || last_axis >= static_cast<int>(pending_axes_.size())) {
     return false;
   }
@@ -841,14 +839,14 @@ void GpuStrategy::SetCoalescedAccess() {
   auto reads_access = analyzer_->scop_info_.analysis_result_.GetReads().domain_factor_domain();
   int last_axis = GetLastAxis(node, reads_access, skip_tensors);
   if (last_axis != -1) {
-    analyzer_->scop_info_.analysis_result_.SetLastAxisInScheduleTree(last_axis);
+    analyzer_->scop_info_.analysis_result_.SetLastAxisOfBand(last_axis);
     return;
   }
 
   auto write_access = analyzer_->scop_info_.analysis_result_.GetWrites().domain_factor_domain();
   last_axis = GetLastAxis(node, write_access, skip_tensors);
   if (last_axis != -1) {
-    analyzer_->scop_info_.analysis_result_.SetLastAxisInScheduleTree(last_axis);
+    analyzer_->scop_info_.analysis_result_.SetLastAxisOfBand(last_axis);
     return;
   }
 }
@@ -1092,9 +1090,9 @@ void GpuStrategy::InitMappingLimit() {
   } else {
     template_ = analyzer_->scop_info_.analysis_result_.GetOpTemplate();
   }
-
-  reverse_binding_ = analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib() &&
-                     analyzer_->scop_info_.analysis_result_.GetReduceDirection() == Y_DIRECTION;
+  ReduceDirection direct = analyzer_->scop_info_.analysis_result_.GetReduceDirectionOfBand();
+  bool use_lib = analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib();
+  reverse_binding_ = use_lib && direct == ReduceDirection::Y;
 
   // Thread configuration
   if (template_ == Template::CUSTOM_CONFIG) {
@@ -1107,12 +1105,10 @@ void GpuStrategy::InitMappingLimit() {
       thread_limit_.emplace_back(thread_config->GetAt(idx).second);
     }
   } else if (template_ == Template::REDUCTION || template_ == Template::BITWISE_REDUCTION) {
-    thread_limit_ = {max_x_y_dim_thread_, max_x_y_dim_thread_};
-  } else if (template_ == Template::ALL_REDUCTION) {
-    if (analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib()) {
-      thread_limit_ = {max_x_y_dim_thread_, max_x_y_dim_thread_};
-    } else {
+    if (direct == ReduceDirection::ALL && !use_lib) {
       thread_limit_ = {1};
+    } else {
+      thread_limit_ = {max_x_y_dim_thread_, max_x_y_dim_thread_};
     }
   } else if (template_ == Template::TRANSPOSE_OP) {
     auto max_dim_thread = static_cast<int64_t>(std::floor(std::sqrt(total_available_thread_)));
@@ -1142,7 +1138,7 @@ void GpuStrategy::InitMappingLimit() {
       }
       block_limit_.emplace_back(block_config->GetAt(i).second);
     }
-  } else if (template_ == Template::ALL_REDUCTION && !analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib()) {
+  } else if (template_ == Template::REDUCTION && direct == ReduceDirection::ALL && !use_lib) {
     block_limit_ = {1};
   } else if (template_ == Template::CONV) {
     block_limit_ = {max_x_dim_block_, max_y_z_dim_block_, max_y_z_dim_block_, max_y_z_dim_block_};
@@ -1535,7 +1531,7 @@ void GpuStrategy::SetMappingConfig() {
 
   ss << "Use template " << analyzer_->scop_info_.analysis_result_.ShowOpTemplate(template_);
   if (template_ == Template::REDUCTION) {
-    ss << "(" << analyzer_->scop_info_.analysis_result_.GetReduceDirection() << ")";
+    ss << "(" << analyzer_->scop_info_.analysis_result_.ShowReduceDirectionOfBand() << ")";
   }
   analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
 

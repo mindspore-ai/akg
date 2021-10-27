@@ -30,7 +30,6 @@ class CPUMgrStrategy : public PassMgrStrategy {
   ~CPUMgrStrategy() override = default;
 
   void RegisterTilingPasses() override;
-  void RegisterMemPromPasses() override;
   void RegisterPasses() override;
 };
 

@@ -275,7 +275,6 @@ def fused_gather_gather_add_mul_max_exp_scatter_add(poly_sch, fuzz_shape, attrs)
 
 def fused_gather_mul_scatter_add(poly_sch, fuzz_shape, attrs):
     attrs2 = attrs
-    attrs2.update({"dim": "0 0 16 16 0 1 8 8 0 2 8 8", "bind_block": "1 1 6773", "bind_thread": "8 8 16"})
     if fuzz_shape:
         input_shape = fuzz_shape
         test_fused_gather_mul_scatter_add(input_shape, (108365, ), (108365, 8, 8), (108365, 1), 'float32', 'int32', 0, poly_sch=poly_sch,
@@ -633,7 +632,6 @@ def sub(poly_sch, fuzz_shape, attrs):
     test_ms_sub((4, 4, 4), (1, 4, 4), 'float32', poly_sch=poly_sch, attrs=attrs)
 
 def tensor_scatter_add(poly_sch, fuzz_shape, attrs):
-    attrs.update({"dim": "0 0 8 8 0 1 128 128", "bind_block": "847 1", "bind_thread": "128 8"})
     if fuzz_shape:
         input_shape = fuzz_shape
         test_ms_tensor_scatter_add(input_shape, 'float32', input_shape, 'int32', 0, poly_sch=poly_sch,

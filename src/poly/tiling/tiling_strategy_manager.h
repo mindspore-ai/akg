@@ -476,11 +476,7 @@ class CpuStrategy : public TilingStrategy {
 
   Template template_{Template::DEFAULT};
 
-  std::deque<std::pair<TileAxis *, int64_t>> pending_axes_;
-  std::unordered_map<int, std::string> template_map_ = {
-    {0, "DEFAULT"},    {1, "PURE_ELEM"},         {2, "BROADCAST_OP"}, {3, "REDUCTION"},
-    {4, "ALL_REDUCE"}, {5, "BITWISE_REDUCTION"}, {6, "MATMUL"},       {7, "TRANSPOSE_OP"},
-    {8, "PAD_OP"},     {9, "CUSTOM_CONFIG"},     {10, "CONV"},        {11, "CPU"}};
+  std::vector<std::vector<std::pair<TileAxis *, int64_t>>> pending_axes_;
   int min_exec_num_per_thread_{MIN_EXEC_NUM_PER_THREAD};
   int best_parallel_num_{BEST_PARALLEL_NUM};
   int parallel_decrease_value_{PARALLEL_DECREASE_VALUE};

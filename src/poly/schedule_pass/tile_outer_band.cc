@@ -150,18 +150,11 @@ isl::schedule_node TileOuterBand::ReverseTraverseChild(isl::schedule_node node,
     node = node.map_descendant_bottom_up(f);
   } else {
     // multiple outer bands, use same filter strategy as in auto tiling
-    unsigned int band_idx = 0;
     for (auto i = 0; i < static_cast<int>(node.n_children()); ++i) {
-      tile_sizes_ = band_idx < tiles_.size() ? tiles_[band_idx].dim_infos : tiles_[0].dim_infos;
-      if (node.get_child(i).isa<isl::schedule_node_filter>()) {
-        auto filter = node.get_child(i).as<isl::schedule_node_filter>();
-        if (!filter.get_filter().is_empty() && filter.has_children() &&
-            filter.get_child(0).isa<isl::schedule_node_band>()) {
-          band_idx += 1;
-        }
-      }
+      tile_sizes_ = cur_band_index_ < tiles_.size() ? tiles_[cur_band_index_].dim_infos : tiles_[0].dim_infos;
       node = node.child(i).map_descendant_bottom_up(f);
       node = node.parent();
+      cur_band_index_++;
     }
   }
   return node;
@@ -169,7 +162,7 @@ isl::schedule_node TileOuterBand::ReverseTraverseChild(isl::schedule_node node,
 
 void TileOuterBand::ShowDimInfo() {
   for (size_t i = 0; i < tiles_.size(); ++i) {
-    LOG(INFO) << "No: " << i << ", tiling_flag: " << tiles_[i].tiling_flag;
+    LOG(INFO) << "band No." << i << ", tiling_flag: " << tiles_[i].tiling_flag;
 
     for (const auto &dim_info : tiles_[i].dim_infos) {
       std::stringstream ss;
@@ -276,6 +269,7 @@ void TileOuterBand::MergeTilingInfo() {
   int64_t tiles_num = 0;
   auto tile_sizes = scop_info_.analysis_result_.GetTileSizes();
   for (unsigned i = 0; i < tile_sizes.size(); ++i) {
+    tile_sizes_all_.emplace_back(tile_sizes[i]);
     if (tiles_num <= tile_sizes[i].index) {
       tiles_num = tile_sizes[i].index + 1;
     }
@@ -1055,7 +1049,7 @@ isl::schedule TileOuterBand::RunCuda(const isl::schedule sch) {
     // restore schedule before tiling as input of GenerateTilingSpace
     return sch;
   }
-  pass_info_.tile_sizes_ = tile_sizes_;
+  pass_info_.tile_sizes_ = tile_sizes_all_;
 
   return final_schedule;
 }
@@ -1208,7 +1202,6 @@ bool TileOuterBand::IsMatrixCPromoteToShared() {
 
 isl::schedule TileOuterBand::RunCpu(const isl::schedule sch) {
   scop_info_.analysis_result_.SetScheduleMapBeforeTile(sch.get_map());
-  AnalyzeLastAxis(sch);
 
   using std::placeholders::_1;
   auto final_schedule = TileOuterBandHelper(sch, std::bind(&TileOuterBand::MarkOuterPermutableCpu, this, _1));
@@ -1222,75 +1215,9 @@ isl::schedule TileOuterBand::RunCpu(const isl::schedule sch) {
     // restore schedule before tiling as input of GenerateTilingSpace
     return sch;
   }
-  pass_info_.tile_sizes_ = tile_sizes_;
+  pass_info_.tile_sizes_ = tile_sizes_all_;
 
   return final_schedule;
-}
-
-int TileOuterBand::GetCoalescedAccess(const isl::schedule_node &orig_node) {
-  if (!orig_node.isa<isl::schedule_node_band>()) {
-    return -1;
-  }
-
-  auto node = orig_node;
-  auto band_node = node.as<isl::schedule_node_band>();
-  auto n_parallel_axis = CountConsecutiveCoincident(band_node);
-  node = band_node.split(n_parallel_axis);
-
-  std::unordered_set<std::string> skip_tensors;
-  // Get read and write tensor information.
-  auto reads_access = scop_info_.analysis_result_.GetReads().domain_factor_domain();
-  int last_axis = GetLastAxis(node, reads_access, skip_tensors);
-  if (last_axis != -1) {
-    return last_axis;
-  }
-
-  auto write_access = scop_info_.analysis_result_.GetWrites().domain_factor_domain();
-  last_axis = GetLastAxis(node, write_access, skip_tensors);
-  if (last_axis != -1) {
-    return last_axis;
-  }
-  return -1;
-}
-
-void TileOuterBand::SetTensorLastAxis(const isl::schedule_node &orig_node) {
-  if (!orig_node.isa<isl::schedule_node_band>()) {
-    return;
-  }
-
-  auto tempplate = scop_info_.analysis_result_.GetOpTemplate();
-  auto n_member = static_cast<int>(orig_node.as<isl::schedule_node_band>().n_member());
-  bool is_reduce_op = (tempplate == Template::ALL_REDUCTION || tempplate == Template::REDUCTION ||
-                       tempplate == Template::BITWISE_REDUCTION);
-  int last_axis = -1;
-  if (is_reduce_op) {
-    if (scop_info_.analysis_result_.GetReduceDirection() == Y_DIRECTION) {
-      last_axis = 0;
-    } else {
-      last_axis = n_member - 1;
-    }
-  } else if (tempplate == Template::BROADCAST_OP) {
-    last_axis = n_member - 1;
-  } else {
-    last_axis = GetCoalescedAccess(orig_node);
-  }
-  scop_info_.analysis_result_.SetLastAxisInScheduleTree(last_axis);
-}
-
-void TileOuterBand::AnalyzeLastAxis(const isl::schedule sch) {
-  isl::schedule_node node = GetOuterBand(sch.root());
-
-  if (node.isa<isl::schedule_node_band>()) {
-    SetTensorLastAxis(node);
-    return;
-  }
-
-  size_t number = node.n_children();
-  for (size_t i = 0; i < number; ++i) {
-    auto child_node = node.child(i).child(0);
-    SetTensorLastAxis(child_node);
-    node = child_node.parent().parent();
-  }
 }
 
 /***************************************************************************
@@ -1308,12 +1235,12 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCpu(isl::schedule_node node
     node = InsertEmptyPermutableBand(node);
   }
 
-  last_axis_pos_ = scop_info_.analysis_result_.GetLastAxisInScheduleTree();
+  last_axis_pos_ = scop_info_.analysis_result_.GetLastAxisOfBand(cur_band_index_);
   if (last_axis_pos_ == -1) {
     return node;
   }
 
-  if (scop_info_.analysis_result_.GetReduceDirection() == X_DIRECTION) {
+  if (scop_info_.analysis_result_.GetReduceDirectionOfBand(cur_band_index_) == ReduceDirection::X) {
     return TileReduceX(node);
   }
 
@@ -1323,7 +1250,7 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCpu(isl::schedule_node node
 isl::schedule_node TileOuterBand::TileOtherOperators(const isl::schedule_node &orig_node) {
   auto node = orig_node;
   size_t start_depth = node.get_tree_depth();
-  bool is_all_reduce = (scop_info_.analysis_result_.GetReduceDirection() == ALL_DIRECTION);
+  bool is_all_reduce = (scop_info_.analysis_result_.GetReduceDirectionOfBand(cur_band_index_) == ReduceDirection::ALL);
   node = is_all_reduce ? SplitReduceStatements(node).child(0) : node;
 
   // first tiling: parallel
@@ -1345,7 +1272,7 @@ isl::schedule_node TileOuterBand::TileOtherOperators(const isl::schedule_node &o
 }
 
 isl::schedule_node TileOuterBand::TileReduceX(const isl::schedule_node &orig_node) {
-  if (scop_info_.analysis_result_.GetReduceDirection() != X_DIRECTION) {
+  if (scop_info_.analysis_result_.GetReduceDirectionOfBand(cur_band_index_) != ReduceDirection::X) {
     return orig_node;
   }
 

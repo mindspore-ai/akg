@@ -37,8 +37,6 @@ class SpaceAnalyzer {
   explicit SpaceAnalyzer(TilingAnalyzer *analyzer) : analyzer_(analyzer) {}
   ~SpaceAnalyzer() {}
 
-  using TensorEntry = AnalysisResult::TensorEntry;
-  using ProvideEntry = AnalysisResult::ProvideEntry;
   void AnalyzeSpecialAxes();
 
  private:

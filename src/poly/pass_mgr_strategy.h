@@ -43,9 +43,10 @@ class PassMgrStrategy {
       RegisterPass(std::make_shared<ConstrainSchedule>(pass_info_, scop_info_));
     }
   }
-  virtual void RegisterTilingPasses() = 0;   // each backend has different achievement
-  virtual void RegisterMemPromPasses() = 0;  // each backend has different achievement
   virtual void RegisterPasses() = 0;
+  virtual void RegisterTilingPasses() = 0;   // each backend has different achievement
+  virtual void RegisterMemPromPasses(){}
+
   const std::vector<std::shared_ptr<SchedulePass>> &GetPasses() const { return passes_; };
 
   virtual ~PassMgrStrategy() = default;
