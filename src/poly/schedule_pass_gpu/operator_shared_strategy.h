@@ -40,6 +40,7 @@ class OperatorSharedStrategy {
   ScopInfo &scop_info_;
   std::unordered_set<std::string> mark_names_;
   int band_index_;
+  bool is_local_{false};
 };
 
 class ReduceSharedStrategy : public OperatorSharedStrategy {
@@ -61,6 +62,16 @@ class BatchMatmulSharedStrategy : public OperatorSharedStrategy {
   void CreateClusterList(const isl::schedule_node &node);
 };
 
+class CpuMemoryStrategy : public OperatorSharedStrategy {
+ public:
+  explicit CpuMemoryStrategy(ScopInfo &scop_info, std::unordered_set<std::string> &mark_names, int filter_pos)
+      : OperatorSharedStrategy(scop_info, mark_names, filter_pos) {
+    is_local_ = true;
+  }
+  ~CpuMemoryStrategy() {}
+  std::set<std::string> GetInitPromotedTensor();
+  void CreateClusterList(const isl::schedule_node &node);
+};
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

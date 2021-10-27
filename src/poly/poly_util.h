@@ -440,11 +440,20 @@ constexpr auto PROMOTE_GLOBAL_TO_SHARED_C = "promote_global_to_shared_c";
 constexpr auto PROMOTE_SHARED_TO_REGISTER_AB = "promote_shared_to_register_ab";
 constexpr auto PROMOTE_SHARED_TO_REGISTER_C = "promote_shared_to_register_c";
 constexpr auto PROMOTE_GLOBAL_TO_REGISTER_C = "promote_global_to_register_c";
+constexpr auto PROMOTE_GLOBAL_TO_REGISTER_AB = "promote_global_to_register_ab";
+constexpr auto PROMOTE_GLOBAL_TO_REGISTER_A = "promote_global_to_register_a";
+constexpr auto PROMOTE_GLOBAL_TO_REGISTER_B = "promote_global_to_register_b";
+
 // promote marker for thread group
 constexpr auto PROMOTE_GLOBAL_TO_SHARED = "promote_global_to_shared";
 constexpr auto PROMOTE_REGISTER_TO_GLOBAL = "promote_register_to_global";
 constexpr auto PROMOTE_REGISTER_TO_SHARED = "promote_register_to_shared";
 constexpr auto PROMOTE_SHARED_TO_GLOBAL = "promote_shared_to_global";
+
+// Tensor mark
+constexpr auto TENSOR_A = "tensor_a";
+constexpr auto TENSOR_B = "tensor_b";
+constexpr auto TENSOR_C = "tensor_c";
 
 // promote marker for ForType
 constexpr auto FOR_SERIAL = "for_serial";
@@ -452,6 +461,12 @@ constexpr auto FOR_PARALLEL = "for_parallel";
 constexpr auto FOR_VECTORIZED = "for_vectorized";
 constexpr auto FOR_UNROLLED = "for_unrolled";
 constexpr auto FOR_SWIZZLED = "for_swizzled";
+
+// call node added in filter
+constexpr auto CALL_SPLIT_STR = "__";
+constexpr auto CALL_FLAG = "Call";
+constexpr auto MATRIX_TRANSPOSE = "MatrixTranspose";
+constexpr auto REDUCE_PREFIX = "Reduce";
 
 constexpr auto PROMOTE_VECTORIZATION = "promote_vectorization";
 constexpr auto PROMOTE_VECTORIZATION_BIT = 128;
