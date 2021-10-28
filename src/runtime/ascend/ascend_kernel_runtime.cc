@@ -33,6 +33,10 @@ namespace air {
 namespace runtime {
 static thread_local rtContext_t thread_local_rt_context{nullptr};
 
+AscendKernelRuntime::AscendKernelRuntime(uint32_t device_id) {
+  set_device_id(device_id);
+}
+
 void AscendKernelRuntime::SetContext() {
   if (rt_context_ == nullptr) {
     return;
@@ -124,6 +128,10 @@ bool AscendKernelRuntime::InitDevice() {
     LOG(FATAL) << "Call rtStreamCreate, ret[" << GetErrorMsg(ret) << "]";
   }
   return true;
+}
+
+AscendKernelRuntime::~AscendKernelRuntime() {
+  ReleaseDeviceRes();
 }
 
 bool AscendKernelRuntime::ResetDevice(uint32_t device_id) {
@@ -292,7 +300,6 @@ void AscendKernelRuntime::RunOpImpl(const std::string &kernel_name, const std::v
   for (const auto &tensor : input_tensors) {
     tensor->SetDeviceAddress(nullptr);
   }
-  ReleaseDeviceRes();
 }
 
 TVM_REGISTER_GLOBAL("ascend_run").set_body([](TVMArgs args, TVMRetValue *ret) {
@@ -311,9 +318,8 @@ TVM_REGISTER_GLOBAL("ascend_run").set_body([](TVMArgs args, TVMRetValue *ret) {
       input_tensors.push_back(std::make_shared<TensorDevice>(data_ptr, nbytes, is_output));
     }
   }
-  auto kernel_runtime_ptr = std::make_shared<AscendKernelRuntime>();
-  kernel_runtime_ptr->set_device_id(device_id);
-  kernel_runtime_ptr->RunOpImpl(kernel_name, input_tensors, input_shape_args);
+  auto kernel_runtime = AscendKernelRuntime(device_id);
+  kernel_runtime.RunOpImpl(kernel_name, input_tensors, input_shape_args);
 });
 
 }  // namespace runtime
