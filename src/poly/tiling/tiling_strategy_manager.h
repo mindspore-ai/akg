@@ -69,7 +69,7 @@ class TilingStrategy {
   int64_t max_elem_per_thread_ = 1024;
   size_t tranpose_tiling_constraints_ = 32;
   int64_t reduce_length_limit = 32;
-  
+
   // cpu config
   int64_t thread_num_ = 8;
   int64_t vector_size_ = 4;
@@ -467,13 +467,9 @@ class CpuStrategy : public TilingStrategy {
   void AddCpuConstraint();
 
  private:
-  void DetermineTemplate();
-
-  void InjectiveSpeedup();
-  void InitMappingLimit();
   void BuildAxesQueue();
-  void SetMappingConfig();
-  void SetCoalescedAccess();
+  void RecordTileValue();
+  void SetMultiLevelTileValue();
   void SetUnrollTileValue(TileAxis *axis, const int64_t axis_size, int64_t &tile_left);
   void SetParallelTileValue(TileAxis *axis, const int64_t axis_size, const int64_t data_size,
                             bool is_unroll_axis = false, int64_t tile_left = 1);
@@ -485,7 +481,6 @@ class CpuStrategy : public TilingStrategy {
     {0, "DEFAULT"},    {1, "PURE_ELEM"},         {2, "BROADCAST_OP"}, {3, "REDUCTION"},
     {4, "ALL_REDUCE"}, {5, "BITWISE_REDUCTION"}, {6, "MATMUL"},       {7, "TRANSPOSE_OP"},
     {8, "PAD_OP"},     {9, "CUSTOM_CONFIG"},     {10, "CONV"},        {11, "CPU"}};
-  size_t depth_{0};
   int min_exec_num_per_thread_{MIN_EXEC_NUM_PER_THREAD};
   int best_parallel_num_{BEST_PARALLEL_NUM};
   int parallel_decrease_value_{PARALLEL_DECREASE_VALUE};

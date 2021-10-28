@@ -22,8 +22,7 @@ namespace poly {
 
 void CPUMgrStrategy::RegisterTilingPasses() { RegisterPass(std::make_shared<TileOuterBand>(pass_info_, scop_info_)); }
 
-void CPUMgrStrategy::RegisterMemPromPasses() {
-}
+void CPUMgrStrategy::RegisterMemPromPasses() {}
 
 void CPUMgrStrategy::RegisterPasses() {
   passes_.clear();

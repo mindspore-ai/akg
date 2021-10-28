@@ -779,6 +779,65 @@ bool IsTensorAB(const std::string &item, ScopInfo &scop_info) {
   return true;
 }
 
+isl::schedule_node SinkFixedPositionAxis(const isl::schedule_node &orig_node, const int sink_pos) {
+  if (!orig_node.isa<isl::schedule_node_band>()) {
+    return orig_node;
+  }
+  auto band_node = orig_node.as<isl::schedule_node_band>();
+  int band_node_member = static_cast<int>(band_node.n_member());
+  if (sink_pos >= band_node_member - 1 || sink_pos < 0) {
+    return orig_node;
+  }
+
+  int permutable = band_node.get_permutable();
+  if (permutable != 1) {
+    return orig_node;
+  }
+
+  auto partial_schedule = band_node.get_partial_schedule();
+  isl::union_pw_aff_list new_upa = isl::union_pw_aff_list();
+  // make new union pw aff list
+  for (int i = 0; i < static_cast<int>(partial_schedule.size()); ++i) {
+    if (sink_pos == i) {
+      continue;
+    }
+    isl::union_pw_aff upa = partial_schedule.get_union_pw_aff(i);
+    if (new_upa.is_null()) {
+      new_upa = isl::union_pw_aff_list(upa);
+    } else {
+      new_upa = new_upa.add(upa);
+    }
+  }
+  if (new_upa.is_null()) {
+    new_upa = isl::union_pw_aff_list(partial_schedule.get_union_pw_aff(sink_pos));
+  } else {
+    new_upa = new_upa.add(partial_schedule.get_union_pw_aff(sink_pos));
+  }
+
+  std::vector<bool> coincident;
+  for (int i = 0; i < band_node_member; ++i) {
+    if (i == sink_pos) {
+      continue;
+    }
+    coincident.push_back(band_node.member_get_coincident(i));
+  }
+  coincident.push_back(band_node.member_get_coincident(sink_pos));
+
+  // make multi_union_pw_aff
+  isl::multi_union_pw_aff mupa = isl::multi_union_pw_aff(partial_schedule.get_space(), new_upa);
+
+  // delete old node
+  auto node = orig_node;
+  node = node.del();
+  // insert new node
+  node = node.insert_partial_schedule(mupa);
+  node = node.as<isl::schedule_node_band>().set_permutable(permutable);
+  for (int i = 0; i < band_node_member; ++i) {
+    node = node.as<isl::schedule_node_band>().member_set_coincident(i, coincident[i]);
+  }
+  return node;
+}
+
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

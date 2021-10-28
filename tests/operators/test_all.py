@@ -147,13 +147,13 @@ def bmm(poly_sch, fuzz_shape, attrs):
                 add_bias=False, tensor_core=False, poly_sch=poly_sch, attrs=attrs)
 
     # test_ms_bmm((32, 12, 128, 128), (32, 12, 128, 64), 'float16', 'float16', layout1='NHDT', layout2='NHTD', layout_out='NHDT',
-    #             shape_bias=(1, ), add_bias=False, tensor_core=False, poly_sch=poly_sch)
+    #             shape_bias=(1, ), add_bias=False, tensor_core=False, poly_sch=poly_sch, attrs=attrs)
     # test_ms_bmm((256, 128), (64, 128), 'float16', 'float16', layout1='NHDT', layout2='NHDT', layout_out='NHDT',
-    #             shape_bias=(1, ), add_bias=False, tensor_core=False, poly_sch=poly_sch)
+    #             shape_bias=(1, ), add_bias=False, tensor_core=False, poly_sch=poly_sch, attrs=attrs)
     # test_ms_bmm((128, 32), (128, 512), 'float16', 'float16', layout1='NHTD', layout2='NHTD', layout_out='NHDT',
-    #             shape_bias=(1, ), add_bias=False, tensor_core=False, poly_sch=poly_sch)
+    #             shape_bias=(1, ), add_bias=False, tensor_core=False, poly_sch=poly_sch, attrs=attrs)
     # test_ms_bmm((128, 64), (64, 32), 'float16', 'float16', layout1='NHDT', layout2='NHTD', layout_out='NHDT',
-    #             shape_bias=(1, ), add_bias=False, tensor_core=False, poly_sch=poly_sch)
+    #             shape_bias=(1, ), add_bias=False, tensor_core=False, poly_sch=poly_sch, attrs=attrs)
 
 def abs_op(poly_sch, fuzz_shape, attrs):
     if fuzz_shape:
@@ -776,7 +776,7 @@ if __name__ == '__main__':
         default_attrs['repeat_time'] = 1000
 
     def cpu_filter(item):
-        op_filter = ["standard_normal", "conv"]
+        op_filter = ["standard_normal", "conv", "fused_gather_mul_scatter_add",  "fused_gather_gather_add_mul_max_exp_scatter_add" ]
         return item[0] not in op_filter
     op_map["all"] = list((dict(filter(cpu_filter, op_map.items())) if default_attrs['target'] == "llvm" else op_map).values())
     if len(sys.argv) == 1:
