@@ -93,9 +93,10 @@ def _dump_data(path, inputs, output, expect):
 
     file_name_prefix = path + "/data/"
     if not os.path.isdir(file_name_prefix):
+        # pylint: disable=unexpected-keyword-arg
         os.makedirs(file_name_prefix, exist_ok=True)
 
-    for i, data in enumerate(input):
+    for i, data in enumerate(inputs):
         dump_tensor(data, file_name_prefix + 'input_' + str(i))
 
     for i, data in enumerate(output):
@@ -118,6 +119,7 @@ def _dump_info(desc, build_attrs, poly, inputs, output, expect):
 
     dump_path = os.path.realpath(dump_path)
     if not os.path.isdir(dump_path):
+        # pylint: disable=unexpected-keyword-arg
         os.makedirs(dump_path, exist_ok=True)
 
     logging.debug("build attrs : %s", str(build_attrs))
@@ -276,6 +278,8 @@ def test_ci_ascend():
 
 def main(argv):
     import getopt
+    # disable pylint too broad Exception
+    # pylint: disable=W0703
     try:
         options, args = getopt.getopt(argv, "atdcf:mh", ["auto", "manual", "ci", "profile", "tune"
                                                          "enable_atomic_add=", "dim=", "bind_block=", "bind_thread=",
