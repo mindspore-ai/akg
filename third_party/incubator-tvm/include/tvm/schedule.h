@@ -24,6 +24,7 @@
 
 /*
  * 2019.12.30 - Add new function of buffer_align and buffer_tile.
+ * 2021.10.28 - Add no_inline_inject flag in stage to prevent inline inject
  */
 
 // Acknowledgement: Many schedule primitives originate from Halide and Loopy.
@@ -510,6 +511,8 @@ class StageNode : public Node {
   bool is_opengl{false};
   /*! \brief Whether apply double buffer optimization to this stage */
   bool double_buffer{false};
+  /*! \brief Whether inline inject is allowed for this op */
+  bool no_inline_inject{false};
   /*!
    * \brief The parent group of the current stage.
    *  The stage cannot be assigned to stages outside the group.
