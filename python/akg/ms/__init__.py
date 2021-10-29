@@ -17,4 +17,5 @@
 """__init__"""
 from .op_build import op_build, op_build_to_func
 from .message import compilewithjson
+from .message import compilewithjsonname
 from .cce import *
