@@ -26,7 +26,9 @@ project(akg C CXX)
 set(AKG_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 set(TVM_DIR "${AKG_SOURCE_DIR}/third_party/incubator-tvm")
 
-add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=1)
+if(NOT CMAKE_SYSTEM_NAME MATCHES "Windows" AND NOT USE_KC_AIR AND NOT USE_LLVM)
+  add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=0)
+endif()
 
 # Find gmp
 find_path(GMP_INCLUDE_DIR NAME gmp.h HINTS /usr /usr/local PATH_SUFFIXES include include/x86_64-linux-gnu)
