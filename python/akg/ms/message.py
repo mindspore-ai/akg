@@ -159,3 +159,7 @@ def compilewithjson(json_str, attrs=None):
         return False
 
     return _compilewithjson_to_module(kernel_info, attrs)
+
+def compilewithjsonname(json_file, attrs=None):
+    with open(json_file, 'r') as f:
+        return compilewithjson(f.read().strip(), attrs)
