@@ -21,6 +21,12 @@
  * \file codegen_llvm_cpu.h
  * \brief Common base class for generating into LLVM IR on CPU host.
  */
+
+/*
+ * 2021.11.01
+ *   Adapt LLVM 12 interface support
+ */
+
 #ifndef TVM_CODEGEN_LLVM_CODEGEN_CPU_H_
 #define TVM_CODEGEN_LLVM_CODEGEN_CPU_H_
 

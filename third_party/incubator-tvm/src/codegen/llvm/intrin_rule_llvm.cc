@@ -31,9 +31,6 @@ namespace llvm {
 TVM_REGISTER_GLOBAL("tvm.intrin.rule.llvm.prefetch")
 .set_body(DispatchLLVMIntrin<::llvm::Intrinsic::prefetch, 0>);
 
-TVM_REGISTER_GLOBAL("tvm.intrin.rule.llvm.exp")
-.set_body(DispatchLLVMPureIntrin<::llvm::Intrinsic::exp, 1>);
-
 TVM_REGISTER_GLOBAL("tvm.intrin.rule.llvm.fma")
 .set_body(DispatchLLVMPureIntrin<::llvm::Intrinsic::fmuladd, 1>);
 
