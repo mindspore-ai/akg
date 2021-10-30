@@ -48,6 +48,8 @@ void TileLogger::AppendLine(LogStage stage, const std::string &line) {
     micro_tuning_stage_.emplace_back(line);
   } else if (stage == GPU_MAPPING) {
     gpu_mapping_stage_.emplace_back(line);
+  } else if (stage == CPU_TILING) {
+    cpu_tiling_stage_.emplace_back(line);
   } else {
     do_tuning_stage_.emplace_back(line);
   }
@@ -95,6 +97,10 @@ bool TileLogger::DumpLogFile() {
   for (const auto &line : gpu_mapping_stage_) {
     of << line << std::endl;
   }
+  of << "============ Cpu tiling stage ============" << std::endl;
+  for (const auto &line : cpu_tiling_stage_) {
+    of << line << std::endl;
+  }
   of << "===========================================" << std::endl;
   of.close();
   ClearCache();
@@ -109,6 +115,7 @@ void TileLogger::ClearCache() {
   do_tuning_stage_.clear();
   micro_tuning_stage_.clear();
   gpu_mapping_stage_.clear();
+  cpu_tiling_stage_.clear();
 }
 
 void TileLogger::LogFatalAndSaveLog(const std::string &fatal_log) {

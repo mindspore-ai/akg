@@ -120,7 +120,7 @@ enum LogStage {
   DO_TUNING,
   MICRO_TUNING,
   GPU_MAPPING,
-  CPU_MAPPING
+  CPU_TILING
 };
 
 class TileLogger {
@@ -147,6 +147,7 @@ class TileLogger {
   LogFile do_tuning_stage_;
   LogFile micro_tuning_stage_;
   LogFile gpu_mapping_stage_;
+  LogFile cpu_tiling_stage_;
 };
 
 /* Halide & Schedule tree analysis utils */

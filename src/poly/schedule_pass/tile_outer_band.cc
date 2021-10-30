@@ -1199,6 +1199,7 @@ bool TileOuterBand::IsMatrixCPromoteToShared() {
 
 isl::schedule TileOuterBand::RunCpu(const isl::schedule sch) {
   scop_info_.analysis_result_.SetScheduleMapBeforeTile(sch.get_map());
+  AnalyzeLastAxis(sch);
 
   using std::placeholders::_1;
   auto final_schedule = TileOuterBandHelper(sch, std::bind(&TileOuterBand::MarkOuterPermutableCpu, this, _1));
@@ -1217,6 +1218,72 @@ isl::schedule TileOuterBand::RunCpu(const isl::schedule sch) {
   return final_schedule;
 }
 
+int TileOuterBand::GetCoalescedAccess(const isl::schedule_node &orig_node) {
+  if (!orig_node.isa<isl::schedule_node_band>()) {
+    return -1;
+  }
+
+  auto node = orig_node;
+  auto band_node = node.as<isl::schedule_node_band>();
+  auto n_parallel_axis = CountConsecutiveCoincident(band_node);
+  node = band_node.split(n_parallel_axis);
+
+  std::unordered_set<std::string> skip_tensors;
+  // Get read and write tensor information.
+  auto reads_access = scop_info_.analysis_result_.GetReads().domain_factor_domain();
+  int last_axis = GetLastAxis(node, reads_access, skip_tensors);
+  if (last_axis != -1) {
+    return last_axis;
+  }
+
+  auto write_access = scop_info_.analysis_result_.GetWrites().domain_factor_domain();
+  last_axis = GetLastAxis(node, write_access, skip_tensors);
+  if (last_axis != -1) {
+    return last_axis;
+  }
+  return -1;
+}
+
+void TileOuterBand::SetTensorLastAxis(const isl::schedule_node &orig_node) {
+  if (!orig_node.isa<isl::schedule_node_band>()) {
+    return;
+  }
+
+  auto tempplate = scop_info_.analysis_result_.GetOpTemplate();
+  auto n_member = static_cast<int>(orig_node.as<isl::schedule_node_band>().n_member());
+  bool is_reduce_op = (tempplate == Template::ALL_REDUCTION || tempplate == Template::REDUCTION ||
+                       tempplate == Template::BITWISE_REDUCTION);
+  int last_axis = -1;
+  if (is_reduce_op) {
+    if (scop_info_.analysis_result_.GetReduceDirection() == Y_DIRECTION) {
+      last_axis = 0;
+    } else {
+      last_axis = n_member - 1;
+    }
+  } else if (tempplate == Template::BROADCAST_OP) {
+    last_axis = n_member - 1;
+  } else {
+    last_axis = GetCoalescedAccess(orig_node);
+  }
+  scop_info_.analysis_result_.SetLastAxisInScheduleTree(last_axis);
+}
+
+void TileOuterBand::AnalyzeLastAxis(const isl::schedule sch) {
+  isl::schedule_node node = GetOuterBand(sch.root());
+
+  if (node.isa<isl::schedule_node_band>()) {
+    SetTensorLastAxis(node);
+    return;
+  }
+
+  size_t number = node.n_children();
+  for (size_t i = 0; i < number; ++i) {
+    auto child_node = node.child(i).child(0);
+    SetTensorLastAxis(child_node);
+    node = child_node.parent().parent();
+  }
+}
+
 /***************************************************************************
  * steps:
  * 1. get tile size.
@@ -1232,98 +1299,40 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCpu(isl::schedule_node node
     node = InsertEmptyPermutableBand(node);
   }
 
-  auto reduce_direction = scop_info_.analysis_result_.GetReduceDirection();
   last_axis_pos_ = scop_info_.analysis_result_.GetLastAxisInScheduleTree();
-  LOG(INFO) << "last_axis_pos_: " << last_axis_pos_;
-  if (reduce_direction == X_DIRECTION) {
+  if (last_axis_pos_ == -1) {
+    return node;
+  }
+
+  if (scop_info_.analysis_result_.GetReduceDirection() == X_DIRECTION) {
     return TileReduceX(node);
   }
-  if (reduce_direction == Y_DIRECTION) {
-    return TileReduceY(node);
-  }
 
+  return TileOtherOperators(node);
+}
+
+isl::schedule_node TileOuterBand::TileOtherOperators(const isl::schedule_node &orig_node) {
+  auto node = orig_node;
   size_t start_depth = node.get_tree_depth();
-
-  bool is_all_reduce = reduce_direction == ALL_DIRECTION;
+  bool is_all_reduce = (scop_info_.analysis_result_.GetReduceDirection() == ALL_DIRECTION);
   node = is_all_reduce ? SplitReduceStatements(node).child(0) : node;
-  node = IsolateTilesForCpu(node, TILE_WITH_C1);
 
-  node = IsolateTilesForCpu(node, TILE_WITH_C0);
-  // vectorized tiling
-  node = IsolateTilesForCpu(node);
+  // first tiling: parallel
+  node = IsolateTilesCpu(node, TILE_WITH_C1);
+
+  // second tiling: unroll
+  node = IsolateTilesCpu(node, TILE_WITH_C0);
+
+  // sink last axis
+  node = SinkFixedPositionAxis(node, last_axis_pos_);
+  auto band_node = node.as<isl::schedule_node_band>();
+  node = band_node.split(band_node.n_member() - 1).child(0);
+
+  // last tiling: vectorized
+  node = IsolateTilesCpu(node);
+
   node = InsertAllMarker(node, is_all_reduce);
-  node = node.ancestor(node.get_tree_depth() - start_depth);
-  return node;
-}
-
-/***************************************************************************
- * symmetrically switch order of axes in the last schedule node
- * 1. get switched schedule
- * 2. get switched coincident
- * 3. delete old node
- * 4. insert new node
- ***************************************************************************/
-isl::schedule_node TileOuterBand::SwitchSchedule(isl::schedule_node &node) {
-  if (!node.isa<isl::schedule_node_band>()) {
-    return node;
-  }
-  auto schedule = node.as<isl::schedule_node_band>().get_partial_schedule();
-  isl::union_pw_aff_list upal = isl::union_pw_aff_list();
-
-  // save permutable value for this band
-  int n = node.as<isl::schedule_node_band>().n_member();
-  int permutable = node.as<isl::schedule_node_band>().get_permutable();
-  if (permutable == 1) {
-    for (int i = n - 1; i >= 0; --i) {
-      isl::union_pw_aff upa = schedule.get_union_pw_aff(i);
-      if (upal.is_null()) {
-        upal = isl::union_pw_aff_list(upa);
-      } else {
-        upal = upal.add(upa);
-      }
-    }
-  } else {
-    return node;
-  }
-  std::vector<int> coincident;
-  for (int i = 0; i < n; ++i) {
-    coincident.push_back(node.as<isl::schedule_node_band>().member_get_coincident(n - i - 1));
-  }
-
-  // make multi_union_pw_aff
-  isl::multi_union_pw_aff mupa = isl::multi_union_pw_aff(schedule.get_space(), upal);
-
-  // delete old node
-  node = node.del();
-
-  // insert new node
-  node = node.insert_partial_schedule(mupa);
-  node = node.as<isl::schedule_node_band>().set_permutable(permutable);
-  for (int i = 0; i < n; ++i) {
-    node = node.as<isl::schedule_node_band>().member_set_coincident(i, coincident[i]);
-  }
-  return node;
-}
-
-isl::schedule_node TileOuterBand::TileReduceY(const isl::schedule_node &orig_node) {
-  if (scop_info_.analysis_result_.GetReduceDirection() != Y_DIRECTION) {
-    return orig_node;
-  }
-  isl::schedule_node node = orig_node;
-  node = IsolateTilesForCpu(node, TILE_WITH_C1);
-  node = IsolateTilesForCpu(node, TILE_WITH_C0);
-  // let non-reduce axis be the inner band for vectorization.
-  node = SwitchSchedule(node);
-  isl::schedule_node_band band_node = node.as<isl::schedule_node_band>();
-  node = band_node.split(band_node.n_member() - 1);
-  node = node.child(0);
-  // vectorized tiling
-  node = IsolateTilesForCpu(node);
-  node = InsertAllMarker(node, false);
-  node = node.parent();
-  node = InsertMarkerForLoop(node, FOR_PARALLEL);
-
-  return node;
+  return node.ancestor(node.get_tree_depth() - start_depth);
 }
 
 isl::schedule_node TileOuterBand::TileReduceX(const isl::schedule_node &orig_node) {
@@ -1337,23 +1346,22 @@ isl::schedule_node TileOuterBand::TileReduceX(const isl::schedule_node &orig_nod
   node = band_node.split(band_node.n_member() - 1);
 
   // tile non_reduce axis
-  node = IsolateTilesForCpu(node, TILE_WITH_C1);
-  node = IsolateTilesForCpu(node, TILE_WITH_C0);
+  node = IsolateTilesCpu(node, TILE_WITH_C1);
+  node = IsolateTilesCpu(node, TILE_WITH_C0);
   node = node.child(0);
 
   // tile reduce axis
   start_pos_ = static_cast<int>(band_node.n_member() - 1);
-  node = IsolateTilesForCpu(node, TILE_WITH_LAST_C1);
-  node = IsolateTilesForCpu(node, TILE_WITH_LAST_C0);
+  node = IsolateTilesCpu(node, TILE_WITH_LAST_C1);
+  node = IsolateTilesCpu(node, TILE_WITH_LAST_C0);
 
   // vetorized tile
-  node = IsolateTilesForCpu(node);
+  node = IsolateTilesCpu(node);
+
   bool is_insert_mark = false;
-  if (last_axis_pos_ != -1) {
-    node = InsertMarkerForLoop(node, FOR_VECTORIZED).parent();
-    is_insert_mark = !GetMarkerName(node.child(0), FOR_VECTORIZED).empty();
-    node = InsertMarkerForLoop(node, FOR_UNROLLED).parent();
-  }
+  node = InsertMarkerForLoop(node, FOR_VECTORIZED).parent();
+  is_insert_mark = !GetMarkerName(node.child(0), FOR_VECTORIZED).empty();
+  node = InsertMarkerForLoop(node, FOR_UNROLLED).parent();
   node = node.parent();
 
   // split reduce statement
@@ -1364,14 +1372,8 @@ isl::schedule_node TileOuterBand::TileReduceX(const isl::schedule_node &orig_nod
   return node;
 }
 
-isl::schedule_node TileOuterBand::IsolateTilesForCpu(const isl::schedule_node &node, const std::string &tile_level) {
-  bool is_vectorized = tile_level.empty();
-  // If the last axis is not found, unroll and vectorized tiling are not performed.
-  if ((is_vectorized || tile_level.find(TILE_WITH_C0) != std::string::npos) && last_axis_pos_ == -1) {
-    LOG(WARNING) << "The last axis was not found!";
-    return node;
-  }
-
+isl::schedule_node TileOuterBand::IsolateTilesCpu(const isl::schedule_node &orig_node, const std::string &tile_level) {
+  auto node = orig_node;
   const int n_member = node.as<isl::schedule_node_band>().n_member();
   const int tile_number = static_cast<int>(tile_sizes_.size());
   CHECK(start_pos_ < tile_number) << "The starting position cannot be greater than or equal to the tiling size.";
@@ -1379,7 +1381,7 @@ isl::schedule_node TileOuterBand::IsolateTilesForCpu(const isl::schedule_node &n
 
   isl::multi_val current_tile_sizes;
   std::vector<int> full_tile_max(n_member, MAX_STRIDE);
-  if (is_vectorized) {
+  if (tile_level.empty()) {
     // Get the size of the vectorized tiling.
     current_tile_sizes = GetVectorizationTileSize(node);
   } else {
@@ -1393,8 +1395,8 @@ isl::schedule_node TileOuterBand::IsolateTilesForCpu(const isl::schedule_node &n
     if (i >= dim_num || j >= tile_number) {
       continue;
     }
-    int tiling_size =
-      is_vectorized ? static_cast<int>(tile_sizes_[j].c0_tiling_size) : static_cast<int>(tile_sizes_[j].c1_tiling_size);
+    int tiling_size = tile_level.empty() ? static_cast<int>(tile_sizes_[last_axis_pos_].c0_tiling_size)
+                                         : static_cast<int>(tile_sizes_[j].c1_tiling_size);
     int current_tiling_size = current_tile_sizes.val(i).get_num_si();
     if (MAX_STRIDE == tiling_size) continue;
     if (tiling_size > current_tiling_size) {
@@ -1409,46 +1411,23 @@ isl::schedule_node TileOuterBand::IsolateTilesForCpu(const isl::schedule_node &n
   return after_tile_node;
 }
 
-isl::schedule_node TileOuterBand::InsertMarkerForLoop(const isl::schedule_node &orig_node,
-                                                      const std::string &marker_name) {
-  if (!orig_node.isa<isl::schedule_node_band>()) {
-    return orig_node;
-  }
-
-  auto band_node = orig_node.as<isl::schedule_node_band>();
-  auto partial_schedule = band_node.get_partial_schedule().intersect_domain(orig_node.get_domain());
-  auto upa_list = partial_schedule.get_union_pw_aff_list();
-  auto extent = upa_list.get_at(0).floor().max_val().get_num_si();
-  if (extent <= 1) {
-    return orig_node;
-  }
-  return orig_node.insert_mark(marker_name);
-}
-
 isl::schedule_node TileOuterBand::InsertAllMarker(const isl::schedule_node &orig_node, const bool is_all_reduce) {
   if (!orig_node.isa<isl::schedule_node_band>()) {
     return orig_node;
   }
   auto node = orig_node;
   bool is_insert_mark = false;
-  if (last_axis_pos_ != -1) {
-    // Insert vectoried marker on the last band.
-    node = InsertMarkerForLoop(node, FOR_VECTORIZED).parent();
-    is_insert_mark = !GetMarkerName(node.child(0), FOR_VECTORIZED).empty();
+  // Insert vectoried marker on the last band.
+  node = InsertMarkerForLoop(node, FOR_VECTORIZED).parent();
+  is_insert_mark = !GetMarkerName(node.child(0), FOR_VECTORIZED).empty();
 
-    CHECK(last_axis_pos_ >= start_pos_) << "The current node does not contain axis that need to be vectorized.";
-    bool is_split = (last_axis_pos_ != start_pos_);
-    // Determine the position of the axis to be vectorized.
-    auto band_node = node.as<isl::schedule_node_band>();
-    node = is_split ? band_node.split(last_axis_pos_ - start_pos_).child(0) : node;
-    // Insert the unroll marker on the axis corresponding to the vectorization.
-    node = InsertMarkerForLoop(node, FOR_UNROLLED).parent();
-    node = is_split ? node.parent() : node;
-  }
+  // Insert the unroll marker on the axis corresponding to the vectorization.
+  node = InsertMarkerForLoop(node, FOR_UNROLLED).parent();
+  node = node.parent();
 
   if (is_all_reduce) {
-    // For the reduce statement of the all_reduce operator, insert the reduce_area mark on the parallel and unroll loop
-    // axis.
+    // For the reduce statement of the all_reduce operator, insert the reduce_area mark on the parallel and unroll
+    // loop axis.
     node = is_insert_mark ? node.insert_mark(REDUCE_AREA_FLAG) : node;
   }
 
@@ -1460,22 +1439,44 @@ isl::schedule_node TileOuterBand::InsertAllMarker(const isl::schedule_node &orig
     is_insert_mark = !GetMarkerName(node, FOR_PARALLEL).empty();
     node = is_insert_mark ? node.insert_mark(REDUCE_AREA_FLAG) : node;
   }
+
   return node;
 }
 
-isl::schedule_node TileOuterBand::SplitReduceStatements(const isl::schedule_node &node) {
-  isl::schedule_node tile_node = node;
+isl::schedule_node TileOuterBand::InsertMarkerForLoop(const isl::schedule_node &orig_node,
+                                                      const std::string &marker_name, const int insert_pos) {
+  if (!orig_node.isa<isl::schedule_node_band>()) {
+    return orig_node;
+  }
+
+  auto band_node = orig_node.as<isl::schedule_node_band>();
+  auto partial_schedule = band_node.get_partial_schedule().intersect_domain(orig_node.get_domain());
+  auto upa_list = partial_schedule.get_union_pw_aff_list();
+  auto extent = upa_list.get_at(insert_pos).floor().max_val().get_num_si();
+  if (extent <= 1) {
+    return orig_node;
+  }
+
+  auto node = orig_node;
+  if (insert_pos > 0) {
+    node = band_node.split(insert_pos).child(0);
+  }
+  return node.insert_mark(marker_name);
+}
+
+isl::schedule_node TileOuterBand::SplitReduceStatements(const isl::schedule_node &orig_node) {
+  isl::schedule_node tile_node = orig_node;
   auto all_reduce_map = scop_info_.analysis_result_.GetReduceTensorInfoMap();
   ReduceManager reduce_manager(pass_info_, scop_info_);
   isl::union_set reduce_statements = reduce_manager.GetCurrentNodeReduceStatements(tile_node, all_reduce_map, false);
 
   if (!reduce_manager.SplitReduceStatements(tile_node, reduce_statements, pass_info_.dependences_)) {
-    return node;
+    return orig_node;
   }
   return tile_node;
 }
 
-isl::multi_val TileOuterBand::GetVectorizationTileSize(const isl::schedule_node node) {
+isl::multi_val TileOuterBand::GetVectorizationTileSize(const isl::schedule_node &orig_node) {
   auto reads_access = scop_info_.analysis_result_.GetReads().domain_factor_domain();
   auto write_access = scop_info_.analysis_result_.GetWrites().domain_factor_domain();
   auto original_access = reads_access.unite(write_access);
@@ -1492,12 +1493,10 @@ isl::multi_val TileOuterBand::GetVectorizationTileSize(const isl::schedule_node 
     }
   }
 
-  CHECK(last_axis_pos_ >= start_pos_) << "The current node does not contain axis that need to be vectorized.";
-  int tile_size = static_cast<int>(node.as<isl::schedule_node_band>().n_member());
-  std::vector<int> vectorization_tile_size(tile_size, 1);
-  vectorization_tile_size[last_axis_pos_ - start_pos_] = vectorized_length;
+  int tile_size = static_cast<int>(orig_node.as<isl::schedule_node_band>().n_member());
+  std::vector<int> vectorization_tile_size(tile_size, vectorized_length);
 
-  return ComputeBandTilesSizes(node, &vectorization_tile_size[0]);
+  return ComputeBandTilesSizes(orig_node, &vectorization_tile_size[0]);
 }
 
 }  // namespace poly

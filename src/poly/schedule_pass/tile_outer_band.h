@@ -106,15 +106,21 @@ class TileOuterBand : public SchedulePass {
 
   // cpu related functions
   isl::schedule RunCpu(isl::schedule sch);
+  void AnalyzeLastAxis(const isl::schedule sch);
+  int GetCoalescedAccess(const isl::schedule_node &orig_node);
+  void SetTensorLastAxis(const isl::schedule_node &orig_node);
+
   isl::schedule_node MarkOuterPermutableCpu(isl::schedule_node node);
-  isl::multi_val GetVectorizationTileSize(const isl::schedule_node node);
-  isl::schedule_node SplitReduceStatements(const isl::schedule_node &node);
+
+  isl::schedule_node TileReduceX(const isl::schedule_node &orig_node);
+  isl::schedule_node TileOtherOperators(const isl::schedule_node &orig_node);
+
+  isl::multi_val GetVectorizationTileSize(const isl::schedule_node &orig_node);
+  isl::schedule_node SplitReduceStatements(const isl::schedule_node &orig_node);
+  isl::schedule_node IsolateTilesCpu(const isl::schedule_node &orig_node, const std::string &tile_level = "");
   isl::schedule_node InsertAllMarker(const isl::schedule_node &orig_node, const bool is_all_reduce);
-  isl::schedule_node IsolateTilesForCpu(const isl::schedule_node &node, const std::string &tile_level = "");
-  isl::schedule_node InsertMarkerForLoop(const isl::schedule_node &orig_node, const std::string &marker_name);
-  isl::schedule_node TileReduceX(const isl::schedule_node &node);
-  isl::schedule_node TileReduceY(const isl::schedule_node &node);
-  isl::schedule_node SwitchSchedule(isl::schedule_node &node);
+  isl::schedule_node InsertMarkerForLoop(const isl::schedule_node &orig_node, const std::string &marker_name,
+                                         const int insert_pos = 0);
 
  private:
   PassInfo &pass_info_;
