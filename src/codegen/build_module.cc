@@ -36,6 +36,7 @@
 namespace akg {
 AttrMap g_attrs;
 Array<NodeRef> g_external_call_name;
+CsrMap g_csr;
 
 Tensor CreatePlaceholder(const NodeRef &arg) {
   auto n = air::make_node<PlaceholderOpNode>();

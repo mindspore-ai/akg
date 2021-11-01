@@ -18,6 +18,8 @@
 
 #include <tvm/ir.h>
 
+#include "build_module.h"
+#include "pass/utils.h"
 #include "common/common_util.h"
 #include "pass/convolution_model.h"
 #include "poly/poly_util.h"
@@ -1016,6 +1018,9 @@ class AnalysisResult {
   bool GetTensorOfTensor() const { return is_tensor_of_tensor_; }
   void SetTensorOfTensor(const bool &is_tensor_of_tensor) { is_tensor_of_tensor_ = is_tensor_of_tensor; }
 
+  bool GetCsr() const { return is_csr_; }
+  void SetCsr(const bool &is_csr) { is_csr_ = is_csr; }
+
   int GetLastAxisInScheduleTree() const { return last_axis_in_schedule_tree_; }
   void SetLastAxisInScheduleTree(const int last_axis_in_schedule_tree) {
     last_axis_in_schedule_tree_ = last_axis_in_schedule_tree;
@@ -1167,6 +1172,7 @@ class AnalysisResult {
   std::unordered_set<std::string> inner_tensor_;
   int last_axis_in_schedule_tree_{-1};
   bool is_tensor_of_tensor_{false};
+  bool is_csr_{false};
 };
 
 class CubeInfo {

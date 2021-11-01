@@ -25,6 +25,7 @@
 namespace akg {
 extern AttrMap g_attrs;
 extern Array<NodeRef> g_external_call_name;
+extern CsrMap g_csr;
 
 /*
  * Custom exception used when memory allocation fails and triggers micro-tuning to try to recover from failure.

@@ -178,7 +178,7 @@ Stmt FuseWholeReduceUB(const Stmt &stmt, const Map<std::string, NodeRef> &attrs)
     CHECK(realize);
     auto block = realize->body.as<Block>();
     CHECK(block);
-    s = TensorSubstitute2(s, f.reduce_ubs_[i], realize->func, realize->value_index);
+    s = TensorStringSubstitute(s, f.reduce_ubs_[i], realize->func, realize->value_index);
     auto op_after_reduce = GetOpAfterReduce(s, attrs, realize->func->func_name());
     auto body = Block::make(Block::make(block->first, s), Block::make(block->rest, op_after_reduce));
     s = Realize::make(realize->func, realize->value_index, realize->type, realize->bounds, realize->condition, body);

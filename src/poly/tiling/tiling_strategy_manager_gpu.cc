@@ -16,7 +16,7 @@
 #include "./tiling_strategy_manager.h"
 
 #include <numeric>
-
+#include <build_module.h>
 #include "../../src/include/build_module.h"
 #include "./tiling_analyzer.h"
 #include "poly/schedule_pass_gpu/register_memory_manager.h"
@@ -1169,19 +1169,29 @@ void GpuStrategy::BuildAxesQueue() {
       this->pending_axes_.push_front(std::make_pair(axis, r->value));
     }
 
-    // init map extent to shape if they are not modified by other constraints
-    axis->block_constraints.map_extent_ =
-      axis->block_constraints.map_extent_ == 0 ? r->value : axis->block_constraints.map_extent_;
-    axis->thread_constraints.map_extent_ =
-      axis->thread_constraints.map_extent_ == 0 ? r->value : axis->thread_constraints.map_extent_;
-    if (!axis->mc_sup && !analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib()) {
+    if (axis->range_extent.as<Variable>() != nullptr && !g_csr.empty()) {
       axis->block_constraints.map_extent_ = 1;
       axis->thread_constraints.map_extent_ = 1;
       std::stringstream ss;
       ss << "Axis " << axis->index << "_" << axis->dim_axis
-         << " Coincidence = 0 and Akg-reduce-lib not enabled, disable block/thread mapping.";
+         << " has a dynamic extent, disable block/thread mapping.";
       analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
-    }
+      axis->c1_constraints.tile_extent_ = 1;
+    } else {
+      // init map extent to shape if they are not modified by other constraints
+      axis->block_constraints.map_extent_ =
+        axis->block_constraints.map_extent_ == 0 ? r->value : axis->block_constraints.map_extent_;
+      axis->thread_constraints.map_extent_ =
+        axis->thread_constraints.map_extent_ == 0 ? r->value : axis->thread_constraints.map_extent_;
+      if (!axis->mc_sup && !analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib()) {
+        axis->block_constraints.map_extent_ = 1;
+        axis->thread_constraints.map_extent_ = 1;
+        std::stringstream ss;
+        ss << "Axis " << axis->index << "_" << axis->dim_axis 
+           << " Coincidence = 0 and Akg-reduce-lib not enabled, disable block/thread mapping.";
+        analyzer_->GetTileLogger().AppendLog(GPU_MAPPING,  ss);
+      }
+    } 
   });
 }
 
@@ -1506,6 +1516,9 @@ void GpuStrategy::SetBlockMappingConfig() {
     int axis_pos = cfg_map.first->dim_axis;
     int mapping_pos = is_conv ? cfg_map.second : cfg_map.second - difference;
     int real_pos = (is_conv && mapping_pos >= mapping_size) ? mapping_pos - 1 : mapping_pos;
+    if (!g_csr.empty() && real_pos >= block_count_) {
+      continue;
+    }
     analyzer_->scop_info_.user_config_.RecordOuterMappingStrategy(axis_pos, mapping_axis_pos[real_pos]);
     ss << "Map axis " << cfg_map.first->index << "_" << axis_pos << " to " << BLOCK_STR + mapping_idx_pos_[real_pos]
        << "; ";

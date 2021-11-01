@@ -34,6 +34,12 @@ using VarNames = std::vector<std::string>;
 using TensorEntry = AnalysisResult::TensorEntry;
 using ProvideEntry = AnalysisResult::ProvideEntry;
 
+struct ToTTensor {
+  std::string name;
+  std::set<std::string> loop_vars;
+  std::vector<int64_t> indices;
+};
+
 isl::space CreateParamsSpace(const isl::ctx &ctx);
 
 isl::space CreateParamsSpace(const isl::ctx &ctx, const std::unordered_map<std::string, air::Var> &params);
@@ -100,6 +106,7 @@ class OpTypeCollector : public IRVisitor {
   void AnalyzeGemmAxes(const ProvideEntry &pe);
   TensorEntry MatchLoopByName(TensorEntry tensor);
   std::string GetBasicOpType(const TensorEntry dst, const std::vector<TensorEntry> &srcs);
+  TensorEntry MakeTensorEntry(const ToTTensor &tot);
 };
 
 VarNames VisitVarNames(const air::Expr &arg, VarNames var_names, bool add_num = true);

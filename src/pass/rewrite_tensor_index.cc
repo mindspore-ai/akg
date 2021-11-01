@@ -13,12 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "utils.h"
 #include <tvm/ir_pass.h>
 #include <tvm/ir_mutator.h>
 #include <tvm.h>
 #include <pass/ir_util.h>
 #include <pass/storage_access.h>
 #include "ir_pass.h"
+#include "build_module.h"
 
 namespace akg {
 namespace ir {
@@ -64,6 +66,31 @@ realize one_hot_hybrid([0, 16], [0, 30522]) {
 
 class RewriteTensorIdx : public IRMutator {
  public:
+  Stmt Mutate_(const For *op, const Stmt &s) final {
+    auto stmt = IRMutator::Mutate_(op, s);
+    auto new_op = stmt.as<For>();
+    if (new_op != nullptr) {
+      bool is_min_binary = IsBinaryOp(new_op->min);
+      bool is_max_binary = IsBinaryOp(new_op->extent);
+      if (!is_min_binary && is_max_binary) {
+        auto extent = new_op->extent.as<Sub>();
+        if (extent != nullptr && extent->a.as<Call>() != nullptr && extent->b.as<Call>() != nullptr) {
+          Var max_var = Variable::make(new_op->loop_var.type(), "MAX_VAR");
+          auto new_stmt = For::make(new_op->loop_var, new_op->min, max_var,
+                                    new_op->for_type, new_op->device_api, new_op->body);
+          g_csr.Set(max_var, new_op->extent);
+          g_csr.Set(extent->a, extent->a);
+          g_csr.Set(extent->b, extent->b);
+          return new_stmt;
+        }
+      } else if (is_min_binary) {
+        LOG(INFO) << "Currently cannot support dynamic shapes in lower bound or both bounds."
+                  << "Fall back to original statment.";
+      }
+    }
+    return stmt;
+  }
+
   Stmt Mutate_(const Realize *op, const Stmt &s) final {
     std::vector<Expr> extents;
     for (const auto &i : op->bounds) {
@@ -80,8 +107,7 @@ class RewriteTensorIdx : public IRMutator {
     rhs_tensor_idx_.clear();
     Stmt stmt = IRMutator::Mutate_(op, s);
     for (size_t i = 0; i < op->args.size(); ++i) {
-      const Call *call = op->args[i].as<Call>();
-      if (call && call->call_type == Call::Halide) {
+      if (IsHalideCall(op->args[i])) {
         lhs_tensor_idx_[op->args[i]] = static_cast<int>(i);
       }
     }
@@ -128,6 +154,9 @@ class RewriteTensorIdx : public IRMutator {
   }
 
   Expr Mutate_(const Call *op, const Expr &e) final {
+    if (op == nullptr) return e;
+    std::unordered_map<Expr, int, air::NodeHash, air::NodeEqual> local_rhs_tensor_idx_;
+
     if (in_args_ && op->call_type == Call::Halide) {
       halide_call_ = true;
       if (cache_idx_.count(op->func.get()) == 0) {
@@ -143,24 +172,25 @@ class RewriteTensorIdx : public IRMutator {
       halide_call_ = false;
       static_cast<void>(this->Mutate(op->args[i]));
       if (op->call_type == Call::Halide && halide_call_) {
-        rhs_tensor_idx_[op->args[i]] = static_cast<int>(i);
+        local_rhs_tensor_idx_[op->args[i]] = static_cast<int>(i);
       }
     }
     in_args_ = false;
 
     // for call not in provide, rhs always
-    if (!rhs_tensor_idx_.empty()) {
+    if (!local_rhs_tensor_idx_.empty()) {
       Array<Expr> idx_args;
       Expr ne = e;
 
-      for (const auto &i : rhs_tensor_idx_) {
+      for (const auto &i : local_rhs_tensor_idx_) {
         int idx = GetTensorIdx(i.first);
         ne = air::ir::substitute(i.first, Expr(idx), ne);
-        Expr call = Call::make(op->type, "rhs", {i.first, Expr(i.second), Expr(idx)}, Call::PureIntrinsic);
+        Expr call = Call::make(op->type, "rhs", {Mutate_(i.first.as<Call>(), i.first), Expr(i.second), Expr(idx)}, 
+                               Call::PureIntrinsic);
         idx_args.push_back(call);
       }
       idx_args.push_back(Call::make(op->type, "orig", {ne}, Call::PureIntrinsic));
-      rhs_tensor_idx_.clear();
+      local_rhs_tensor_idx_.clear();
 
       return Call::make(op->type, "with", idx_args, Call::PureIntrinsic);
     }
@@ -172,14 +202,31 @@ class RewriteTensorIdx : public IRMutator {
   int GetTensorIdx(const Expr &v) {
     const Call *op = v.as<Call>();
     if ((op == nullptr) || (cache_idx_.count(op->func.get()) == 0)) {
-      has_invalid_tensor_expr_ = true;
-      LOG(INFO) << "found invalid tensor expr " << v
-                << " in rewrite_tensor_index, will fallback to rewrite_var_tensor_idx";
+      if (!IsBinaryOp(v)) {
+        has_invalid_tensor_expr_ = true;
+        LOG(INFO) << "found invalid tensor expr " << v
+                  << " in rewrite_tensor_index, will fallback to rewrite_var_tensor_idx";
+        
+        return -1;
+      }
 
-      return -1;
+      return 0;
     }
 
     return cache_idx_[op->func.get()];
+  }
+
+  bool IsBinaryOp(const Expr v) {
+    bool res = (v.as<Add>() != nullptr);
+    res |= (v.as<Sub>() != nullptr);
+    res |= (v.as<Mul>() != nullptr);
+    res |= (v.as<Div>() != nullptr);
+    res |= (v.as<Mod>() != nullptr);
+    res |= (v.as<FloorDiv>() != nullptr);
+    res |= (v.as<FloorMod>() != nullptr);
+    res |= (v.as<Min>() != nullptr);
+    res |= (v.as<Max>() != nullptr);
+    return res;
   }
 
   std::unordered_map<Expr, int, air::NodeHash, air::NodeEqual> lhs_tensor_idx_;

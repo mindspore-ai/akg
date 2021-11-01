@@ -22,6 +22,7 @@
 #include "poly/cpu_isl_emitter.h"
 #include "poly/npu_isl_emitter.h"
 #include "poly/gpu_emit/gpu_isl_emitter.h"
+#include "poly/gpu_emit/gpu_isl_emitter_csr.h"
 #include "poly/gpu_emit/gpu_isl_emitter_reduce.h"
 #include "poly/gpu_emit/gpu_isl_emitter_tensor_core.h"
 #include "poly/dsa_mgr_strategy.h"
@@ -113,6 +114,12 @@ isl::schedule Scop::GenIsl() {
       new_binds.Set(t, b);
     }
     info_.user_config_.SetBind(new_binds);
+  } else if (!g_csr.empty()) {
+    for (const auto& it: g_csr) {
+      if (auto var = it.first.as<Variable>()) {
+        params.emplace(var->name_hint, air::Downcast<Var>(it.first));
+      }
+    }
   }
 
   isl::space param_space = CreateParamsSpace(ctx_, params);
@@ -279,6 +286,8 @@ Stmt GenHalide(ScopInfo &info, const isl::schedule &sch, bool used_for_tile_out_
         stmt = GpuIslEmitterReduce(info, node_info_repo, iters).Emit(ast_node);
       } else if (info.user_config_.GetEnableTensorCore()) {
         stmt = GpuIslEmitterTensorCore(info, node_info_repo, iters).Emit(ast_node);
+      } else if (info.analysis_result_.GetCsr()) {
+        stmt = GpuIslEmitterCsr(info, node_info_repo, iters).Emit(ast_node);
       } else {
         stmt = GpuIslEmitter(info, node_info_repo, iters).Emit(ast_node);
       }

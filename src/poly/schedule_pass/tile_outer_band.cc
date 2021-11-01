@@ -16,6 +16,7 @@
 
 #include "tile_outer_band.h"
 
+#include "build_module.h"
 #include "poly/scop.h"
 #include "poly/schedule_tree_util.h"
 #include "poly/schedule_pass/transfer_stmt.h"
@@ -1075,7 +1076,15 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCuda(isl::schedule_node nod
   }
 
   // get tile size
-  node = SetTileSizeAndTile(node, TILE_WITH_C1);
+  if (!g_csr.empty()) {
+    // skip loop with csr dynamic extent
+    node = node.as<isl::schedule_node_band>().split(1);
+    node = SetTileSizeAndTile(node, TILE_WITH_C1);
+    node = node.child(0).child(0).insert_mark(SKIP_MARKER);
+    node = node.parent().parent();
+  } else {
+    node = SetTileSizeAndTile(node, TILE_WITH_C1);
+  }
 
   // vectorize for elementwise OP
   if (scop_info_.user_config_.GetEnableVectorization()) {

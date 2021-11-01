@@ -371,7 +371,7 @@ class ReduceStmtEmit : public IRMutator {
       decl.tensor = t;
     }
     scop_info_.user_config_.SetBind(t, buf);
-    stmt = TensorSubstitute2(stmt, t->op->func_name(), t->op, t->value_index);
+    stmt = TensorStringSubstitute(stmt, t->op->func_name(), t->op, t->value_index);
     stmt = Realize::make(t->op, t->value_index, t->dtype, bounds, const_true(1), stmt);
     stmt = AttrStmt::make(t->op, air::ir::attr::realize_scope, Expr(mem), stmt);
 

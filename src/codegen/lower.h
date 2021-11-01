@@ -26,6 +26,7 @@
 
 namespace akg {
 extern AttrMap g_attrs;
+extern CsrMap g_csr;
 
 // Use to store the necessary for Lower.
 class LowerData;

@@ -52,7 +52,11 @@ Stmt RmEmptyEmitAttr(Stmt stmt);
 
 Stmt TensorSubstitute(const Stmt &stmt, const FunctionRef &a, const FunctionRef &b, int b_value_index);
 
-Stmt TensorSubstitute2(const Stmt &stmt, const std::string &a, const FunctionRef &b, int b_value_index);
+Stmt TensorStringSubstitute(const Stmt &stmt, const std::string &a, const FunctionRef &b, int b_value_index);
+
+Expr TensorSubstitute(const Expr &e, const FunctionRef &a, const FunctionRef &b, int b_value_index);
+
+Expr TensorStringSubstitute(const Expr &e, const std::string &a, const FunctionRef &b, int b_value_index);
 
 Stmt SubstituteLoopVar(Stmt &s, const Variable *old_var, const Expr &new_var);
 
@@ -442,6 +446,7 @@ constexpr auto AKG_REDUCE_UNSUPPORTED = "X";
 constexpr auto AKG_TENSOR_NOT_PROMOTE = "TENSOR_NOT_PROMOTE";
 constexpr auto AKG_INNER_TENSOR = "INNER_TENSOR";
 constexpr auto AKG_TENSOR_OF_TENSOR = "TENSOR_OF_TENSOR";
+constexpr auto AKG_CSR = "CSR";
 
 static constexpr auto ATTR_PREFETCH_MODE = "prefetch_mode";
 enum class PrefetchMode {

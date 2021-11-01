@@ -129,6 +129,13 @@ class AttrMap : public Map<std::string, NodeRef> {
   std::string GetStr(const std::string &attr_name, const std::string &dft_value);
 };
 
+class CsrMap : public Map<NodeRef, NodeRef> {
+ public:
+  void Clear() {
+    this->CopyOnWrite()->data.clear();
+  }
+};
+
 class PassTimer {
  public:
   ~PassTimer() = default;

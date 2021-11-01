@@ -34,8 +34,13 @@ class AttrForLayoutOp : public IRMutator {
     CHECK(op);
     if (ContainsHalideCall(op->args)) {
       is_tensor_of_tensor_ = true;
-      stmt = AddAttrForAtomicToT(stmt.as<Provide>(), op, stmt);
       tensors_not_promote_.insert(op->func->func_name());
+      if (CheckBinaryCall(op)) {
+        stmt = AddAttrForAtomicToT(stmt.as<Provide>(), op, stmt);
+      }
+    }
+    if (op->func.defined() && ContainsCSR(op->func->func_name())) {
+      is_csr_ = true;
     }
     return stmt;
   }
@@ -63,31 +68,24 @@ class AttrForLayoutOp : public IRMutator {
   }
 
  private:
-
   Stmt AddAttrForAtomicToT(const Provide *new_op, const Provide *op, Stmt stmt) {
-    if (CheckBinary(op)) {
-      return AttrStmt::make(new_op->func, "atomic_tot", Expr(GetOpReduceType(op->value)), stmt);
-    }
-    return stmt;
+    return AttrStmt::make(new_op->func, "atomic_tot", Expr(GetOpReduceType(op->value)), stmt);
   }
 
-  bool CheckBinary(const Provide *op) {
+  bool ContainsCSR(std::string name) {
+    return name.find("csr") != std::string::npos;
+  }
+
+  bool CheckBinaryCall(const Provide* op) {
     CHECK(op);
-    if (GetBinaryOpName(op->value).defined()) {
+    if (GetOpReduceType(op->value) != AKG_REDUCE_UNSUPPORTED) {
       auto array = GetBinaryOpExprChildren(op->value);
-      return CheckValidBinaryExprForToT(array[0], array[1], op);
+      auto func_name = op->func->func_name();
+      auto call_a = array[0].as<Call>();
+      auto call_b = array[1].as<Call>();
+      if (call_a && call_b && (call_a->name == func_name || call_b->name == func_name)) return true;
     }
-    return false;
-  }
-
-  bool CheckValidBinaryExprForToT(Expr a, Expr b, const Provide *op) {
-    auto func_name = op->func->func_name();
-    auto call_a = a.as<Call>();
-    auto call_b = b.as<Call>();
-    if (call_a && call_b && (call_a->name == func_name || call_b->name == func_name)) {
-      return true;
-    }
-    return false;
+    return ContainsHalideCall(op->args);
   }
 
   // in args
@@ -98,6 +96,7 @@ class AttrForLayoutOp : public IRMutator {
   std::unordered_set<std::string> tensors_not_promote_;
   std::unordered_set<std::string> inner_tensors_;
   bool is_tensor_of_tensor_{false};
+  bool is_csr_{false};
 };
 
 Stmt AddAttrForLayoutOp(const Stmt stmt) {
@@ -117,6 +116,10 @@ Stmt AddAttrForLayoutOp(const Stmt stmt) {
 
   if (mutator.is_tensor_of_tensor_) {
     new_stmt = AttrStmt::make(Expr("INFO"), AKG_TENSOR_OF_TENSOR, Expr(AKG_TENSOR_OF_TENSOR), new_stmt);
+  }
+
+  if (mutator.is_csr_) {
+    new_stmt = AttrStmt::make(Expr("INFO"), AKG_CSR, Expr(AKG_CSR), new_stmt);
   }
 
   return new_stmt;

@@ -1433,7 +1433,7 @@ std::string AnalysisResult::GetReduceOpType(isl::id reduce_stmt) {
     return AKG_REDUCE_PROD;
   }  
   if (const auto add = provide->value.as<Add>()) {
-    return IsPureReduceSum(add, provide->func->func_name()) ? AKG_REDUCE_SUM : AKG_REDUCE_UNSUPPORTED;
+    return GetCsr() || IsPureReduceSum(add, provide->func->func_name()) ? AKG_REDUCE_SUM : AKG_REDUCE_UNSUPPORTED;
   }
   return std::string();
 }

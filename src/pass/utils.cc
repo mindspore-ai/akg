@@ -484,11 +484,11 @@ class CTensorSubstitute : public IRMutator {
   int b_value_index_{0};
 };
 
-class CTensorSubstitute2 : public IRMutator {
+class CTensorStringSubstitute : public IRMutator {
  public:
-  CTensorSubstitute2(const std::string &a, const FunctionRef b, int b_value_index)
+  CTensorStringSubstitute(const std::string &a, const FunctionRef b, int b_value_index)
       : a_{a}, b_{b}, b_value_index_{b_value_index} {}
-  ~CTensorSubstitute2() override = default;
+  ~CTensorStringSubstitute() override = default;
   Expr Mutate_(const Call *op, const Expr &e) final {
     if (op->call_type == Call::Halide) {
       if (op->func.defined() && op->func->func_name() == a_) {
@@ -523,8 +523,16 @@ Stmt TensorSubstitute(const Stmt &stmt, const FunctionRef &a, const FunctionRef 
   return CTensorSubstitute(a, b, b_value_index).Mutate(stmt);
 }
 
-Stmt TensorSubstitute2(const Stmt &stmt, const std::string &a, const FunctionRef &b, int b_value_index) {
-  return CTensorSubstitute2(a, b, b_value_index).Mutate(stmt);
+Stmt TensorStringSubstitute(const Stmt &stmt, const std::string &a, const FunctionRef &b, int b_value_index) {
+  return CTensorStringSubstitute(a, b, b_value_index).Mutate(stmt);
+}
+
+Expr TensorSubstitute(const Expr &e, const FunctionRef &a, const FunctionRef &b, int b_value_index) {
+  return CTensorSubstitute(a, b, b_value_index).Mutate(e);
+}
+
+Expr TensorStringSubstitute(const Expr &e, const std::string &a, const FunctionRef &b, int b_value_index) {
+  return CTensorStringSubstitute(a, b, b_value_index).Mutate(e);
 }
 
 Stmt SubstituteLoopVar(Stmt &s, const Variable *old_var, const Expr &new_var) {

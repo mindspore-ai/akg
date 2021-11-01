@@ -1550,7 +1550,7 @@ class FixOpAfterReduce : public IRMutator {
       realizes.insert(op);
     }
     if (fix_ && !op_after_reduce_flag_[count_ - 1]) {
-      fix_stmt_ = TensorSubstitute2(fix_stmt_, op->func->func_name(), op->func, op->value_index);
+      fix_stmt_ = TensorStringSubstitute(fix_stmt_, op->func->func_name(), op->func, op->value_index);
       auto attr = op->body.as<AttrStmt>();
       if (!(attr && attr->attr_key == air::ir::attr::realize_scope)) {
         fix_ = false;

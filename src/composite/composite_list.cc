@@ -477,7 +477,7 @@ class PeelInfoMutator : public IRMutator {
 
   Stmt Run(Stmt &s) {
     for (const auto &it : extern_buffer_) {
-      s = ir::TensorSubstitute2(s, it.second->name, it.first->op, it.first->value_index);
+      s = ir::TensorStringSubstitute(s, it.second->name, it.first->op, it.first->value_index);
     }
     s = this->Mutate(s);
     s = ExtraModify(s);

@@ -56,6 +56,10 @@ class GpuIslEmitter : public IslEmitter {
   Expr AdaptOneConfigForMulAxis(MappingCfg *mapping_cfg, const std::string &orig_name, const bool is_thread);
   int GetThreadExtent(const std::string &name);
   virtual Expr IterNameAdaptor(std::string name);
+  Stmt EmitAccessNodeFromPromoteAcsCall(isl::id var, const Node *node, Array<Expr> &args) override;
+  Stmt EmitIf(const isl::ast_node_if &node) override;
+  virtual Stmt SubstituteTensorStmt(const Stmt &s, Tensor origin, Tensor replaced);
+  virtual Stmt EmitTensorOfTensorStmt(const Stmt &s);
   std::map<std::string, VarExpr> iter_name_map_{{B0, VarExpr(BLOCK_IDX_X)},  {B1, VarExpr(BLOCK_IDX_Y)},
                                                 {B2, VarExpr(BLOCK_IDX_Z)},  {T0, VarExpr(THREAD_IDX_X)},
                                                 {T1, VarExpr(THREAD_IDX_Y)}, {T2, VarExpr(THREAD_IDX_Z)}};
@@ -64,10 +68,8 @@ class GpuIslEmitter : public IslEmitter {
   // override emitters for GPU
   Stmt EmitBlock(const isl::ast_node_block &node) final;
   Stmt EmitFor(const isl::ast_node_for &node) final;
-  Stmt EmitIf(const isl::ast_node_if &node) final;
   Expr EmitLoad(const isl::ast_expr &lhs, Type type) final;
 
-  Stmt EmitAccessNodeFromPromoteAcsCall(isl::id var, const Node *node, Array<Expr> &args);
   Stmt EmitAccessNodeFromPromoteAcsProvide(isl::id var, const Node *node, Array<Expr> &args);
 
   Stmt EmitSync();
