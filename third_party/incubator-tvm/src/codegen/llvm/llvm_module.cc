@@ -21,6 +21,12 @@
  * \file llvm_module.cc
  * \brief LLVM runtime module for TVM
  */
+
+/*
+ * 2021.11.01
+ *   Add dump cpu info.
+ */
+
 #ifdef TVM_LLVM_VERSION
 #include <tvm/runtime/packed_func.h>
 #include <tvm/codegen.h>

@@ -25,6 +25,12 @@
  *  used by compiled tvm operators, usually user do not need to use these
  *  function directly.
  */
+
+/*
+ * 2021.11.01
+ *   Add AKG backend interface.
+ */
+
 #ifndef TVM_RUNTIME_C_BACKEND_API_H_
 #define TVM_RUNTIME_C_BACKEND_API_H_
 

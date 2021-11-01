@@ -21,6 +21,13 @@
  * \file llvm_common.h
  * \brief Common utilities for llvm initialization.
  */
+
+/*
+ * 2021.11.01
+ *   Adapt LLVM 12 interface support
+ *   Add some intrinsics.
+ */
+
 #ifndef TVM_CODEGEN_LLVM_LLVM_COMMON_H_
 #define TVM_CODEGEN_LLVM_LLVM_COMMON_H_
 

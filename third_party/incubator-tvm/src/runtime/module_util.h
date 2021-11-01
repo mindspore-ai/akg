@@ -21,6 +21,12 @@
  * \file module_util.h
  * \brief Helper utilities for module building
  */
+
+/*
+ * 2021.11.01
+ *   Add AKG backend interface.
+ */
+
 #ifndef TVM_RUNTIME_MODULE_UTIL_H_
 #define TVM_RUNTIME_MODULE_UTIL_H_
 

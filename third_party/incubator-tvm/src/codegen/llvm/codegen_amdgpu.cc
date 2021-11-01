@@ -21,6 +21,12 @@
  * \file codegen_amdgpu.cc
  * \brief AMDGPU code generator.
  */
+
+/*
+ * 2021.11.01
+ *   Adapt LLVM 12 interface support
+ */
+
 #ifdef TVM_LLVM_VERSION
 
 #include <tvm/runtime/device_api.h>

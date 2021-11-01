@@ -20,6 +20,12 @@
 /*!
  * \file llvm_common.cc
  */
+
+/*
+ * 2021.11.01
+ *   Adapt LLVM 12 interface support
+ */
+
 #ifdef TVM_LLVM_VERSION
 
 #include <tvm/base.h>

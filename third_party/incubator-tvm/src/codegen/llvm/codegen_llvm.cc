@@ -20,6 +20,13 @@
 /*!
  * \file codegen_llvm.cc
  */
+
+/*
+ * 2021.11.01
+ *   Adapt LLVM 12 interface support
+ *   Add some intrinsics.
+ */
+
 #ifdef TVM_LLVM_VERSION
 // Part of the code are adapted from Halide's CodeGen_LLVM
 #include <tvm/runtime/device_api.h>
@@ -838,6 +845,33 @@ llvm::Value* CodeGenLLVM::CreateIntrinsic(const Call* op) {
       }
     }
     return builder_->CreateShuffleVector(v0, v0, indices);
+  } else if (op->is_intrinsic("exp")) {
+    auto x_type = op->args[0].type();
+    auto float_type = DataType(kDLFloat, x_type.bits(), x_type.lanes());
+    auto int_type = DataType(kDLInt, x_type.bits(), x_type.lanes());
+    Expr x = ir::Cast::make(float_type, op->args[0]);
+    Expr param_0 = make_const(float_type, 0.693147f);
+    Expr param_1 = make_const(float_type, 1.f / 120.f);
+    Expr param_2 = make_const(float_type, 1.f / 24.f);
+    Expr param_3 = make_const(float_type, 1.f / 6.f);
+    Expr param_4 = make_const(float_type, 0.5f);
+    Expr param_5 = make_const(float_type, 1.f);
+    Expr param_6 = make_const(float_type, 88.f);
+    Expr param_7 = make_const(float_type, -88.f);
+    Expr param_8 = make_const(int_type, 127);
+    Expr param_9 = make_const(int_type, 23);
+
+    Expr input = ir::Max::make(param_7, ir::Min::make(param_6, x));
+    Expr integer = ir::Cast::make(int_type, input / param_0);
+    Expr decimal = input - integer * param_0;
+    Expr int_exp = ir::Call::make(int_type, ir::Call::shift_left, {integer + param_8, param_9}, ir::Call::Intrinsic);
+    Expr tmp = (param_1 * decimal + param_2) * decimal;
+    tmp = decimal * (param_4 + (param_3 + tmp) * decimal);
+    Expr decimal_exp = param_5 + decimal * (param_5 + tmp);
+    llvm::Value *decimal_value = MakeValue(decimal_exp);
+    llvm::Value *int_value = MakeValue(int_exp);
+    llvm::Value *float_value = builder_->CreateBitCast(int_value, decimal_value->getType());
+    return CreateMul(float_type, decimal_value, float_value);
   } else {
     LOG(FATAL) << "unknown intrinsic " << op->name;
     return nullptr;
