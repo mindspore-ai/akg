@@ -45,6 +45,7 @@
 
 namespace akg {
 extern AttrMap g_attrs;
+extern CsrMap g_csr;
 namespace lower {
 enum class StageType : int16_t {
   Begin = 0,

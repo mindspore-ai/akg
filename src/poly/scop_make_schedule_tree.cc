@@ -442,6 +442,9 @@ class ScopMakeScheduleTree final : protected IRVisitor {
     } else if (op->attr_key == AKG_TENSOR_OF_TENSOR) {
       scop_info_.analysis_result_.SetTensorOfTensor(true);
       sch = MakeScheduleTreeHelper(op->body, scop_info_, set, outer, macro_stmt);
+    } else if (op->attr_key == AKG_CSR) {
+      scop_info_.analysis_result_.SetCsr(true);
+      sch = MakeScheduleTreeHelper(op->body, scop_info_, set, outer, macro_stmt);
     } else if (op->attr_key == AKG_TENSOR_NOT_PROMOTE) {
       CHECK(op->value.as<StringImm>());
       scop_info_.analysis_result_.RecordTensorsNotPromote(op->value.as<StringImm>()->value);

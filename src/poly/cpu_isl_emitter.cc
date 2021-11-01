@@ -151,7 +151,7 @@ Stmt CpuIslEmitter::InsertRealize(const Stmt &from, const isl::id &var) {
   auto tt = placeholder(t->shape, t->dtype, t->op->name);
   stmt = TensorSubstitute(stmt, t->op, tt->op, tt->value_index);
   t = tt;
-  stmt = TensorSubstitute2(stmt, t->op->func_name(), t->op, t->value_index);
+  stmt = TensorStringSubstitute(stmt, t->op->func_name(), t->op, t->value_index);
   stmt = Realize::make(t->op, t->value_index, t->dtype, bounds, const_true(1), stmt);
   stmt = AttrStmt::make(t->op, air::ir::attr::realize_scope, Expr(LOCAL_MEMORY), stmt);
   return stmt;

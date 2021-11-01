@@ -94,6 +94,9 @@ StageResult CudaLowerPoly(Stmt &stmt, LowerData &data) {
 StageResult CudaLowerBeforeFlattern(Stmt &stmt, LowerData &data) {
   if (data->polyhedral) {
     stmt = NEXT_PASS(LowerWith, stmt);
+    if (!g_csr.empty()) {
+      stmt = NEXT_PASS(RestoreCsrLoop, stmt);
+    }
   }
   stmt = NEXT_PASS(ReconstructLayout, stmt);
   stmt = NEXT_PASS(RemoveFakeOp, stmt);

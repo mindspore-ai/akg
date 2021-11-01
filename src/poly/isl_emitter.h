@@ -76,12 +76,12 @@ class IslEmitter {
   Stmt EmitAccessNode(const std::string &name, const Node *node, const Array<Expr> &tensor_index,
                       const VarMap &var_map_tmp);
   Stmt EmitAccessNodeFromPromoteAcsProvide(isl::id var, const Node *node, Array<Expr> &args);
-  Stmt EmitAccessNodeFromPromoteAcsCall(isl::id var, const Node *node, Array<Expr> &args);
   Stmt EmitAccessNodeProvide(const Node *node, const VarMap &var_map_tmp, BufferedFootPrintInfo &buffer_fp_info);
   virtual Stmt EmitAccessNodeCall(const Node *node, const VarMap &var_map_tmp, BufferedFootPrintInfo &buffer_fp_info);
   virtual isl::multi_aff TensorAccessMultAff(isl::id &tensor_id, const Array<Expr> &subscripts, const isl::id &stmt_id);
   virtual bool IsTransferStmt();
   virtual bool IsCopyinFromAnotherBand(isl::multi_aff &access);
+  virtual Stmt EmitAccessNodeFromPromoteAcsCall(isl::id var, const Node *node, Array<Expr> &args);
 
   // Virtual emitters for different type node
   virtual Expr EmitLoad(const isl::ast_expr &expr, Type type);

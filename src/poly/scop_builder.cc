@@ -20,6 +20,7 @@
 #include <tvm/operation.h>
 #include <tvm/schedule.h>
 
+#include "build_module.h"
 #include "pass/utils.h"
 #include "construct_poly_accesses.h"
 #include "poly/dsa_utils.h"
@@ -722,6 +723,165 @@ void OpTypeCollector::Visit_(const IfThenElse *op) {
   cur_if_ = op;
 }
 
+class CollectToTTensor : public IRVisitor {
+ public:
+  void Visit_(const Variable *op) final {
+    loop_vars_.insert(op->name_hint);
+  }
+
+  void Visit_(const IntImm *op) final {
+    if (scope_halide_) {
+      indices_.push_back(op->value);
+    }
+  }
+
+  void Visit_(const Call *op) final {
+    if (op->call_type == Call::PureIntrinsic) {
+      if (op->name == "with") {
+        int size = static_cast<int>(op->args.size());
+        CHECK(size);
+        if (auto sub_op = op->args[0].as<Call>()) {
+          if (sub_op->name == "lhs" && !scope_collect_) {
+            CHECK(sub_op->args.size() == 3);
+            RemoveRewriteIdx_(sub_op->args[1]);
+            CollectLHS_(sub_op->args);
+            for (int ii = 1; ii < size; ++ii) {
+              IRVisitor::Visit(op->args[ii]);
+            }
+            return;
+          } else if (sub_op->name == "rhs") {
+            CHECK(sub_op->args.size() == 3);
+            if (auto idx = sub_op->args[1].as<IntImm>()) {
+              rhs_idx_.insert(idx->value);
+            }
+            if (!scope_collect_) {
+              Array<Expr> arr;
+              // orig call containing tensor name is visited first
+              arr.push_back(op->args[size - 1]);
+              for (int ii = 0; ii < size - 1; ++ii) {
+                arr.push_back(op->args[ii]);
+              }
+              CollectRHS_(arr, "");
+              return;
+            }
+          }
+        }
+      } else if (op->name == "orig") {
+        CHECK(static_cast<int>(op->args.size()));
+        auto sub_op = op->args[0].as<Call>();
+        if (sub_op != nullptr && sub_op->call_type == Call::Halide && scope_collect_ && scope_rhs_) {
+          if (tensor_name_.empty()) {
+            tensor_name_ = sub_op->func->func_name();
+          }
+          scope_halide_ = true;
+          for (int ii = 0; ii < static_cast<int>(sub_op->args.size()); ++ii) {
+            if (rhs_idx_.count(ii) == 0) {
+              IRVisitor::Visit(sub_op->args[ii]);
+            }
+          }
+          scope_halide_ = false;
+          return;
+        }
+      }
+    } else if (op->call_type == Call::Halide) {
+      scope_halide_ = true;
+      if (!scope_collect_) {
+        CollectRHS_(op->args, op->func->func_name());
+        scope_halide_ = false;
+        return;
+      }
+    }
+    for (auto e: op->args) {
+      IRVisitor::Visit(e);
+    }
+    scope_halide_ = false;
+  }
+
+  void Visit_(const Provide *op) final {
+    lhs.name = op->func->func_name();
+    for (int ii = 0; ii < static_cast<int>(op->args.size()); ++ii) {
+      if (auto idx = op->args[ii].as<IntImm>()) {
+        lhs_idx_[idx->value] = ii;
+      }
+    }
+    CollectLHS_(op->args);
+    IRVisitor::Visit(op->value);
+  }
+
+  void Visit_(const Select *op) final {
+    IRVisitor::Visit(op->true_value);
+    IRVisitor::Visit(op->false_value);
+  }
+
+  ToTTensor lhs;
+  std::vector<ToTTensor> rhs;
+
+ private:
+  void RemoveRewriteIdx_(const Expr &e) {
+    if (auto idx = e.as<IntImm>()) {
+      if (lhs_idx_.count(idx->value) > 0) {
+        int erase_idx = lhs_idx_[idx->value];
+        CHECK(static_cast<int>(lhs.indices.size()) > erase_idx);
+        lhs.indices.erase(lhs.indices.begin() + erase_idx);
+      }
+    }
+  }
+
+  void CollectLoopVars_(Array<Expr> args) {
+    loop_vars_.clear();
+    indices_.clear();
+    tensor_name_ = "";
+    scope_collect_ = true;
+    for (auto e: args) {
+      IRVisitor::Visit(e);
+    }
+    scope_collect_ = false;
+  }
+
+  void CollectLHS_(Array<Expr> args) {
+    CollectLoopVars_(args);
+    lhs.loop_vars.insert(loop_vars_.begin(), loop_vars_.end());
+    std::copy(indices_.begin(), indices_.end(), std::back_inserter(lhs.indices));
+  }
+
+  void CollectRHS_(Array<Expr> args, std::string func_name) {
+    ToTTensor rhs_tensor;
+    scope_rhs_ = true;
+    CollectLoopVars_(args);
+    scope_rhs_ = false;
+    rhs_idx_.clear();
+    rhs_tensor.name = func_name.empty()? tensor_name_ : func_name;
+    rhs_tensor.loop_vars.insert(loop_vars_.begin(), loop_vars_.end());
+    rhs_tensor.indices.assign(indices_.begin(), indices_.end());
+    rhs.push_back(rhs_tensor);
+  }
+
+  bool scope_collect_{false};
+  bool scope_halide_{false};
+  bool scope_rhs_{false};
+  std::string tensor_name_;
+  std::set<std::string> loop_vars_;
+  std::vector<int64_t> indices_;
+  std::unordered_map<int, int64_t> lhs_idx_;
+  std::unordered_set<int> rhs_idx_;
+};
+
+TensorEntry OpTypeCollector::MakeTensorEntry(const ToTTensor &tot) {
+  TensorEntry tensor;
+  tensor.name = tot.name;
+  for (std::string var: tot.loop_vars) {
+    tensor.args.push_back(Expr(var));
+    VarNames vname;
+    vname.push_back(var);
+    tensor.var_names.push_back(vname);
+  }
+  for (int idx: tot.indices) {
+    tensor.args.push_back(Expr(idx));
+  }
+  tensor = MatchLoopByName(tensor);
+  return tensor;
+}
+
 void OpTypeCollector::AnalyzeProvide(const Provide *op) {
   if (cur_loop_ == nullptr) return;
   ProvideEntry prov;
@@ -764,6 +924,7 @@ void OpTypeCollector::AnalyzeProvide(const Provide *op) {
       basic_op_type = "SP_CALL";
     }
   }
+
   if (scop_info_.user_config_.GetTarget() == TARGET_CCE && src_length > 2 && basic_op_type != "SP_CALL") {
     LOG(WARNING) << "Detect provide has " << src_tensor.size() << " source tensors.";
     LOG(WARNING) << "After ToThreeAddress pass, number of ops in src should be less than 2.";
@@ -778,6 +939,18 @@ void OpTypeCollector::AnalyzeProvide(const Provide *op) {
   dst_tensor.args = op->args;
   dst_tensor.band_index = band_count_;
   dst_tensor.type_byte = scop_info_.user_config_.GetDataBytes(dst_tensor.name);
+
+  if (scop_info_.analysis_result_.GetTensorOfTensor()) {
+    auto tot_tensors = CollectToTTensor();
+    tot_tensors.Visit_(op);
+    TensorEntry lhs = MakeTensorEntry(tot_tensors.lhs);
+    std::vector<TensorEntry> rhs;
+    for (auto rhs_tensor: tot_tensors.rhs) {
+      rhs.push_back(MakeTensorEntry(rhs_tensor));
+    }
+    basic_op_type = GetBasicOpType(lhs, rhs);
+  }
+
   prov.basic_op_type = basic_op_type.empty() ? GetBasicOpType(dst_tensor, src_tensor) : basic_op_type;
   prov.band_index = band_count_;
   prov.src = src_tensor;
@@ -896,7 +1069,11 @@ std::string OpTypeCollector::GetBasicOpType(const TensorEntry dst, const std::ve
     if (dst_vars_size < src_vars_size) {
       if (d.loops.size() < s.loops.size() && d.name != s.name) {
         // A[i,0] = B[i,j]
-        return type + AT_REDUCE;
+        if (g_csr.empty()) {
+          return type + AT_REDUCE;
+        } else {
+          return type + AT_BROADCAST;
+        }
       } else {
         return type + "UNKNOWN";
       }
@@ -1126,53 +1303,57 @@ class OperatorInfoCollector {
         scop_info_.analysis_result_.UpdateReduceTensorInfoMap(red_id, reduce_tensor_info);
 
         std::string reduce_direction;
-        PostOrderVisit(op->value, [&reduce_direction, &reduce_attrs, op](const NodeRef &node) -> void {
-          if (reduce_direction == Y_DIRECTION) {
-            return;
-          }
-          auto call = node.as<Call>();
-          if (call == nullptr || call->call_type != Call::CallType::Halide ||
-              call->func->func_name() == op->func->func_name() || call->args.empty()) {
-            return;
-          }
-          int call_size = static_cast<int>(call->args.size());
-          int reduce_position = -1;
-          int non_variable_count = 0;
-          bool is_continuous = true;
-          for (int i = call_size - 1; i >= 0; --i) {
-            auto last_axis = call->args[i];
-            auto mod = last_axis.as<FloorMod>();
-            auto var = mod != nullptr ? mod->a.as<Variable>() : last_axis.as<Variable>();
-            if (var != nullptr) {
-              reduce_position = reduce_attrs.count(var->name_hint) ? i : reduce_position;
-              is_continuous = false;
-            } else if (var == nullptr && is_continuous) {
-              ++non_variable_count;
+        if (scop_info_.analysis_result_.GetCsr()) {
+          reduce_direction = X_DIRECTION;
+        } else {
+          PostOrderVisit(op->value, [&reduce_direction, &reduce_attrs, op](const NodeRef &node) -> void {
+            if (reduce_direction == Y_DIRECTION) {
+              return;
             }
-          }
-          if (reduce_position == -1) {
-            return;
-          }
-
-          bool is_all_reduce = true;
-          for (int i = 0; i < static_cast<int>(op->args.size()); ++i) {
-            if (op->args[i].as<IntImm>() == nullptr || op->args[i].as<IntImm>()->value != 0) {
-              is_all_reduce = false;
-              break;
+            auto call = node.as<Call>();
+            if (call == nullptr || call->call_type != Call::CallType::Halide ||
+                call->func->func_name() == op->func->func_name() || call->args.empty()) {
+              return;
             }
-          }
+            int call_size = static_cast<int>(call->args.size());
+            int reduce_position = -1;
+            int non_variable_count = 0;
+            bool is_continuous = true;
+            for (int i = call_size - 1; i >= 0; --i) {
+              auto last_axis = call->args[i];
+              auto mod = last_axis.as<FloorMod>();
+              auto var = mod != nullptr ? mod->a.as<Variable>() : last_axis.as<Variable>();
+              if (var != nullptr) {
+                reduce_position = reduce_attrs.count(var->name_hint) ? i : reduce_position;
+                is_continuous = false;
+              } else if (var == nullptr && is_continuous) {
+                ++non_variable_count;
+              }
+            }
+            if (reduce_position == -1) {
+              return;
+            }
 
-          if (is_all_reduce) {
-            reduce_direction = ALL_DIRECTION;
-            return;
-          }
+            bool is_all_reduce = true;
+            for (int i = 0; i < static_cast<int>(op->args.size()); ++i) {
+              if (op->args[i].as<IntImm>() == nullptr || op->args[i].as<IntImm>()->value != 0) {
+                is_all_reduce = false;
+                break;
+              }
+            }
 
-          if (reduce_position == call_size - non_variable_count - 1) {
-            reduce_direction = X_DIRECTION;
-          } else {
-            reduce_direction = Y_DIRECTION;
-          }
-        });
+            if (is_all_reduce) {
+              reduce_direction = ALL_DIRECTION;
+              return;
+            }
+
+            if (reduce_position == call_size - non_variable_count - 1) {
+              reduce_direction = X_DIRECTION;
+            } else {
+              reduce_direction = Y_DIRECTION;
+            }
+          });
+        }
         if (reduce_direction.empty()) {
           LOG(WARNING) << "Cannot identify reduce direction for stmt " << red_id;
         }

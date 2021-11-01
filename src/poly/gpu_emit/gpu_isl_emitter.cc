@@ -248,6 +248,13 @@ int GpuIslEmitter::GetThreadExtent(const std::string &name) {
   return 1;
 }
 
+Stmt GpuIslEmitter::EmitTensorOfTensorStmt(const Stmt &s) {
+  Stmt stmt = LowerWith(s);
+  stmt = AtomicReturnStmtEmit(info_).Mutate(stmt);
+  stmt = AttrStmt::make(Expr("INFO"), REDUCE_LIB_TYPE_FLAG, info_.user_config_.GetReduceLibType(), stmt);
+  return stmt;
+}
+
 Stmt GpuIslEmitter::Emit(const isl::ast_node &node) {
   Stmt stmt = EmitAst(node);
 
@@ -255,9 +262,7 @@ Stmt GpuIslEmitter::Emit(const isl::ast_node &node) {
   stmt = EmitRealizeForGlobalTensor(stmt);
 
   if (!info_.analysis_result_.GetTensorOfTensorStmt().empty()) {
-    stmt = LowerWith(stmt);
-    stmt = AtomicReturnStmtEmit(info_).Mutate(stmt);
-    stmt = AttrStmt::make(Expr("INFO"), REDUCE_LIB_TYPE_FLAG, info_.user_config_.GetReduceLibType(), stmt);
+    stmt = EmitTensorOfTensorStmt(stmt);
   }
 
   // iter var node attr emit
@@ -366,6 +371,12 @@ std::string GpuIslEmitter::FindRealizeScopeToString(const isl::id &var) {
 
 Expr GpuIslEmitter::FindRealizeScope(const isl::id &var) { return Expr(FindRealizeScopeToString(var)); }
 
+Stmt GpuIslEmitter::SubstituteTensorStmt(const Stmt &s, Tensor origin, Tensor replaced) {
+  auto stmt = TensorSubstitute(s, origin->op, replaced->op, replaced->value_index);
+  stmt = TensorStringSubstitute(stmt, replaced->op->func_name(), replaced->op, replaced->value_index);
+  return stmt;
+}
+
 Stmt GpuIslEmitter::InsertRealize(Stmt stmt, const isl::id &var) {
   stmt = FindInnerRealize(var.get_name()).Mutate(stmt);
 
@@ -386,15 +397,14 @@ Stmt GpuIslEmitter::InsertRealize(Stmt stmt, const isl::id &var) {
   auto buf = info_.user_config_.GetBind().at(t);
 
   auto tt = placeholder(t->shape, t->dtype, t->op->name);
-
-  stmt = TensorSubstitute(stmt, t->op, tt->op, tt->value_index);
+  
+  stmt = SubstituteTensorStmt(stmt, t, tt);
   t = tt;
   if (info_.analysis_result_.CountBufferDefInfo(var)) {
     auto decl = info_.analysis_result_.GetBufferDefInfo(var);
     decl.tensor = t;
   }
   info_.user_config_.SetBind(t, buf);
-  stmt = TensorSubstitute2(stmt, t->op->func_name(), t->op, t->value_index);
   stmt = Realize::make(t->op, t->value_index, t->dtype, bounds, const_true(1), stmt);
   stmt = AttrStmt::make(t->op, air::ir::attr::realize_scope, FindRealizeScope(var), stmt);
 
@@ -560,15 +570,18 @@ Stmt AtomicReturnStmtEmit::Mutate_(const Provide *op, const Stmt &s) {
     if (value_add) {
       auto a = value_add->a.as<Call>();
       auto b = value_add->b.as<Call>();
-      if (a && a->name != op->func->func_name()) {
-        atomic_data_.atomic_rhs = value_add->a;
-      } else if (b && b->name != op->func->func_name()) {
+      if (a && a->name == op->func->func_name()) {
         atomic_data_.atomic_rhs = value_add->b;
+      } else if (b && b->name == op->func->func_name()) {
+        atomic_data_.atomic_rhs = value_add->a;
       } else {
         CHECK(false) << "no support atomic return type";
       }
     }
-    CHECK(atomic_data_.atomic_rhs.defined()) << "atomic_data_.atomic_rhs_ is not defined";
+    if (!atomic_data_.atomic_rhs.defined()){
+      CHECK(ContainsHalideCall(op->args)) << "atomic_data_.atomic_rhs_ is not defined";
+      atomic_data_.atomic_rhs = value;
+    }
     atomic_data_.output_tensor_data_type_info = scop_info_.GetDtypeOf(op->func->func_name());
 
     ConstructAtomicReturnFuncName(scop_info_.user_config_.GetReduceLibType(), atomic_data_.reduce_op,

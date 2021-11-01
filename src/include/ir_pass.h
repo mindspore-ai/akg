@@ -245,6 +245,8 @@ Stmt ModDivEliminate(Stmt stmt);
 
 Stmt RealizeCompress(Stmt stmt);
 
+Stmt RestoreCsrLoop(Stmt stmt);
+
 Stmt ReduceFusionOpt(Stmt stmt, const Map<Tensor, Buffer> &extern_buffer);
 
 Stmt SinkAllocate(const Stmt &stmt);

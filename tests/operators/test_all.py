@@ -76,6 +76,9 @@ from tests.operators.test_op.test_ms_trans_data import test_ms_trans_data
 from tests.operators.test_op.test_ms_unsorted_segment_sum import test_ms_unsorted_segment_sum
 from tests.operators.test_op.test_ms_standard_normal import test_ms_standard_normal
 from tests.operators.test_op.test_ms_reduce_prod import test_ms_reduce_prod
+from tests.operators.test_op.test_ms_csrmv import test_ms_csrmv
+from tests.operators.test_op.test_csr_reduce_sum import test_csr_reduce_sum
+from tests.operators.test_op.test_csr_mul import test_csr_mul
 
 def add(poly_sch, fuzz_shape, attrs):
     if fuzz_shape:
@@ -688,6 +691,31 @@ def reduce_prod(poly_sch, fuzz_shape, attrs):
     test_ms_reduce_prod((256, 32, 1024), 'float32', axis=(1,),
                        keepdims=False, poly_sch=poly_sch, attrs=attrs)
 
+def csrmv(poly_sch, fuzz_shape, attrs):
+    if fuzz_shape:
+        input_shape = fuzz_shape
+        test_ms_csrmv(input_shape, 'float32', (100, 1), poly_sch=poly_sch, attrs=attrs)
+        return
+    test_ms_csrmv((100, 100), 'float32', (100, 1), 'float32', poly_sch=True, attrs=attrs)
+
+def csr_reduce_sum(poly_sch, fuzz_shape, attrs):
+    if fuzz_shape:
+        input_shape = fuzz_shape
+        test_csr_reduce_sum(input_shape, 'float32', 'int32', -1, poly_sch=poly_sch, attrs=attrs)
+        return
+    test_csr_reduce_sum((1987, 800), 'float32', 'int32', -1, poly_sch=poly_sch, attrs=attrs)
+    test_csr_reduce_sum((10000, 10000), 'float32', 'int32', -1, poly_sch=poly_sch, attrs=attrs)
+
+def csr_mul(poly_sch, fuzz_shape, attrs):
+    if fuzz_shape:
+        input_shape = fuzz_shape
+        test_csr_mul(input_shape, fuzz_shape, 'float32', 'int32', poly_sch=poly_sch, attrs=attrs)
+        return
+    test_csr_mul((800,), (1987, 800), 'float32', 'int32', poly_sch=poly_sch, attrs=attrs)
+    test_csr_mul((1987, 1), (1987, 800), 'float32', 'int32', poly_sch=poly_sch, attrs=attrs)
+    test_csr_mul((1, 800), (1987, 800), 'float32', 'int32', poly_sch=poly_sch, attrs=attrs)
+    test_csr_mul((1987, 800), (1987, 800), 'float32', 'int32', poly_sch=poly_sch, attrs=attrs)
+
 
 class Logger(object):
     def __init__(self, filename, stream):
@@ -744,7 +772,8 @@ if __name__ == '__main__':
               "reduce_or": reduce_or, "reshape": reshape, "round": round_op, "rsqrt": rsqrt, "select": select,
               "sub": sub, "tensor_scatter_add": tensor_scatter_add, "tile": tile, "trans_data": trans_data,
               "unsorted_segment_sum": unsorted_segment_sum, "standard_normal": standard_normal,
-              "reduce_prod": reduce_prod}
+              "reduce_prod": reduce_prod, "csrmv": csrmv, "csr_reduce_sum": csr_reduce_sum, "csr_mul": csr_mul,
+              }
     options, args = getopt.getopt(
         sys.argv[1:], "f:t:r:p", ["fuzz=", "target=", "mind-trick-string=", "mind-trick-file=",
         "profiling-repeat-time=", "--profiling"])
@@ -776,7 +805,8 @@ if __name__ == '__main__':
         default_attrs['repeat_time'] = 1000
 
     def cpu_filter(item):
-        op_filter = ["standard_normal", "conv", "fused_gather_mul_scatter_add",  "fused_gather_gather_add_mul_max_exp_scatter_add" ]
+        op_filter = ["standard_normal", "conv", "fused_gather_mul_scatter_add",  "fused_gather_gather_add_mul_max_exp_scatter_add",
+                     "csr_reduce_sum", "csr_mul"]
         return item[0] not in op_filter
     op_map["all"] = list((dict(filter(cpu_filter, op_map.items())) if default_attrs['target'] == "llvm" else op_map).values())
     if len(sys.argv) == 1:

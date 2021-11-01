@@ -27,7 +27,7 @@ namespace ir {
 Stmt FixBindBuffer(const Stmt &stmt, const Map<Tensor, Buffer> &extern_buffer) {
   Stmt s = stmt;
   for (const auto &it : extern_buffer) {
-    s = TensorSubstitute2(s, it.second->name, it.first->op, it.first->value_index);
+    s = TensorStringSubstitute(s, it.second->name, it.first->op, it.first->value_index);
   }
   return s;
 }

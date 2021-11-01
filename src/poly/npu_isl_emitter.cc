@@ -1398,7 +1398,7 @@ Stmt NPUIslEmitter::InsertRealize(Stmt stmt, const isl::id &var, bool is_C0) {
   info_.user_config_.SetBind(t, buf);
 
   if (!info_.mmu_info_.IsIm2col()) {
-    stmt = TensorSubstitute2(stmt, t->op->func_name(), t->op, t->value_index);
+    stmt = TensorStringSubstitute(stmt, t->op->func_name(), t->op, t->value_index);
   }
 
   // If pragma_fuse_inst is next, this realize may be inst realize. We move it inside of pragma_fuse_inst.

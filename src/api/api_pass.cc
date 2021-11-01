@@ -128,6 +128,7 @@ REGISTER_PASS(PostProcessImg2col);
 REGISTER_PASS(ModDivEliminate);
 REGISTER_PASS(RealizeCompress);
 REGISTER_PASS(ReduceFusionOpt);
+REGISTER_PASS(RestoreCsrLoop);
 REGISTER_PASS(SinkAllocate);
 REGISTER_PASS(StrideKernelOp);
 REGISTER_PASS(UnifyLoopVars);
