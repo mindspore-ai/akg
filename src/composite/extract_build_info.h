@@ -13,14 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef COMPOSITE_DUMP_TO_JSON_H_
-#define COMPOSITE_DUMP_TO_JSON_H_
-
-#include <string>
-#include "tvm.h"
+#ifndef COMPOSITE_EXTRACT_BUILD_INFO_H_
+#define COMPOSITE_EXTRACT_BUILD_INFO_H_
+#include "picojson.h"
+#include "composite/utils/util.h"
 
 namespace akg {
-std::string DumpToJson(const Stmt &stmt, const Map<std::string, NodeRef> &info);
+void ExtractBuildInfo(const picojson::value &input_json, BuildInfo &info);
 }  // namespace akg
-
-#endif  // COMPOSITE_DUMP_TO_JSON_H_
+#endif  // COMPOSITE_EXTRACT_BUILD_INFO_H_

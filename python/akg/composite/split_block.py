@@ -16,6 +16,7 @@
 
 import json
 
+
 class Graph():
     def __init__(self, output):
         self.tensors = set(output)
@@ -26,6 +27,7 @@ class Graph():
         self.core_num = 0
         self.output = []
         self.op_name = 'Fused'
+
 
 def parallel_json_split(desc_d):
     """
@@ -101,6 +103,21 @@ def parallel_json_split(desc_d):
         op_json_str['core_num'] = g.core_num
         op_json_str['platform'] = "AKG"
         op_json_str['process'] = desc_d['process']
+
+        if "buffer_stitch" in desc_d:
+            total_stitch_nodes = set()
+            stitch_nodes = [node for node_list in desc_d["buffer_stitch"]["stitch_op"] for node in node_list]
+            for op in g.ops:
+                op_inputs = [inp[0]["tensor_name"] for inp in op["input_desc"]]
+                op_outputs = [out["tensor_name"] for out in op["output_desc"]]
+                total_stitch_nodes.update(set(stitch_nodes).intersection(set(op_inputs + op_outputs)))
+            sorted_stitch_nodes = []
+            for origin_stitch_node in stitch_nodes:
+                if origin_stitch_node in total_stitch_nodes:
+                    sorted_stitch_nodes.append(origin_stitch_node)
+            if sorted_stitch_nodes:
+                op_json_str["buffer_stitch"] = {"stitch_op": [[stitch_node] for stitch_node in sorted_stitch_nodes]}
+
         op_result.append(op_json_str)
 
     # all sub json info saved in op_jsons list

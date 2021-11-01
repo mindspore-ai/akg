@@ -1,5 +1,5 @@
 /**
- * Copyright 2020-2021 Huawei Technologies Co., Ltd
+ * Copyright 2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,16 +14,17 @@
  * limitations under the License.
  */
 
-#include "composite/composite.h"
+#include "composite/extract_build_info.h"
 
-#include "build_module.h"
-#include "composite/util.h"
-#include "composite/parser.h"
+#include <algorithm>
+#include <cctype>
+#include <string>
+#include <utility>
 #include "composite/optimize/optimize.h"
-#include "composite/dump.h"
-#include "pass/utils.h"
+#include "composite/parser.h"
 
 namespace akg {
+namespace {
 class Emitter : public IRVisitor {
  public:
   explicit Emitter(BuildOpt &opt) : opt_(opt) {}
@@ -88,8 +89,7 @@ class Emitter : public IRVisitor {
     assign_count_++;
   }
 
-  void CollectNoinlineCandidate(const Array<NodeRef> &real_input, const Tensor &t,
-                                const std::string &op_name) {
+  void CollectNoinlineCandidate(const Array<NodeRef> &real_input, const Tensor &t, const std::string &op_name) {
 #ifdef ENABLE_GENERAL_TOT
     if (t->op->tag != "tot") {
       return;
@@ -234,6 +234,7 @@ void CollectBuildInfo(BuildInfo &info) {
   CollectSchOnlyComputes(info);
   DumpBuildInfo(info);
 }
+}  // namespace
 
 void ExtractBuildInfo(const picojson::value &input_json, BuildInfo &info) {
   CHECK(input_json.is<picojson::object>());
@@ -249,62 +250,4 @@ void ExtractBuildInfo(const picojson::value &input_json, BuildInfo &info) {
   // 4. collect build info: args, compute, binds
   CollectBuildInfo(info);
 }
-
-Schedule GetScheduleWithBuildInfo(const BuildInfo &info) {
-  Array<Operation> ops;
-  std::for_each(info.tensors.begin(), info.tensors.end(), [&ops](const Tensor &t) { ops.push_back(t->op); });
-  return create_schedule(ops);
-}
-
-Module CompositeWithJson(const std::string &json_str, const Map<std::string, NodeRef> &attrs, bool poly) {
-  picojson::value v = String2Json(json_str);
-  BuildInfo info;
-  if (attrs.find("fold_dim") != attrs.end()) {
-    info.opt.fold_dim = GetBoolValueFromAttr(attrs, "fold_dim");
-  }
-  ExtractBuildInfo(v, info);
-  Schedule sch = GetScheduleWithBuildInfo(info);
-  auto config = GetConfig();
-  if (attrs.find("kernel_name") != attrs.end()) {
-    CHECK(attrs["kernel_name"]->IsInstance<StringImm>());
-    info.kernel_name = attrs["kernel_name"].as<StringImm>()->value;
-  }
-  auto target = GetProcess(v);
-  auto build_rst =
-    akg::BuildToFunc(sch, info.args, Array<NodeRef>{}, info.kernel_name, info.in_binds, attrs, poly, target, config);
-  CHECK(build_rst.defined());
-  return BuildToModule(build_rst, target);
-}
-
-NodeRef CompositeLower(const std::string &json_str, const Map<std::string, NodeRef> &attrs) {
-  picojson::value v = String2Json(json_str);
-  BuildInfo info;
-  if (attrs.find("fold_dim") != attrs.end()) {
-    info.opt.fold_dim = GetBoolValueFromAttr(attrs, "fold_dim");
-  }
-  ExtractBuildInfo(v, info);
-  Schedule sch = GetScheduleWithBuildInfo(info);
-  auto config = GetConfig();
-  bool tuning = attrs.find("tuning") != attrs.end();
-  auto target = GetProcess(v);
-  Array<NodeRef> shape_vars;
-
-  if (attrs.find("ret_mode") != attrs.end()) {
-    // This is used during auto tuning.
-    if (attrs["ret_mode"]->IsInstance<IntImm>() && attrs["ret_mode"].as<IntImm>()->value == 1) {
-      auto feature = std::vector<float>();
-      // Set last arg to true to get pure stmt.
-      auto stmt = Downcast<Stmt>(akg::Lower(sch, info.args, shape_vars, info.kernel_name, info.in_binds, attrs, false,
-                                            true, false, target, config, true));
-      // Return args as well to get binds through get_binds api in python.
-      return Array<NodeRef>({stmt, info.args});
-    }
-  }
-
-  return akg::Lower(sch, info.args, shape_vars, info.kernel_name, info.in_binds, attrs, false, true, tuning, target,
-                    config);
-}
-
-TVM_REGISTER_GLOBAL("composite_with_json").set_body_typed(CompositeWithJson);
-TVM_REGISTER_GLOBAL("composite_lower").set_body_typed(CompositeLower);
 }  // namespace akg

@@ -13,9 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "dump_to_json.h"
+#include "composite/utils/dump_to_json.h"
 #include "picojson.h"
-#include "composite/util.h"
+#include "composite/utils/util.h"
 
 namespace akg {
 class DumpToJsonVisitor : public IRVisitor {

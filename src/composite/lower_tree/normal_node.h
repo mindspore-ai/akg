@@ -13,16 +13,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef COMPOSITE_OPTIMIZE_AXIS_ATTR_NORMALIZE_H_
-#define COMPOSITE_OPTIMIZE_AXIS_ATTR_NORMALIZE_H_
-#include "composite/optimize/optimize.h"
+#ifndef AKG_SRC_COMPOSITE_LOWER_TREE_NORMAL_NODE_H_
+#define AKG_SRC_COMPOSITE_LOWER_TREE_NORMAL_NODE_H_
+#include "composite/lower_tree/base_node.h"
 
 namespace akg {
-class AxisAttrNormalize : public CompositeOptPass {
+namespace lower {
+constexpr auto kNormal = "Normal";
+class NormalLowerNode : public BaseLowerNode {
  public:
-  AxisAttrNormalize() { pass_name_ = __FUNCTION__; }
-  ~AxisAttrNormalize() = default;
-  Stmt Run(const Stmt &s) override;
+  explicit NormalLowerNode(const std::string &target) : BaseLowerNode(target) { name_ = __FUNCTION__; }
+  ~NormalLowerNode() override {}
+
+  void ExcuteImpl(StageType stage) override;
 };
+}  // namespace lower
 }  // namespace akg
-#endif  // COMPOSITE_OPTIMIZE_AXIS_ATTR_NORMALIZE_H_
+#endif  // AKG_SRC_COMPOSITE_LOWER_TREE_NORMAL_NODE_H_

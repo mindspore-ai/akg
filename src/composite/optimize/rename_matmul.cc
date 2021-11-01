@@ -27,13 +27,10 @@ class RenameMatmulMutator : public IRMutator {
     if (call == nullptr || call->name != "MatMul") {
       return IRMutator::Mutate_(op, s);
     }
-    return Provide::make(op->func, 0,
-                         Call::make(op->value.type(), "BatchMatMul", call->args, Call::CallType::PureIntrinsic),
-                         op->args);
+    return Provide::make(
+      op->func, 0, Call::make(op->value.type(), "BatchMatMul", call->args, Call::CallType::PureIntrinsic), op->args);
   }
 };
 
-Stmt RenameMatmul::Run(const Stmt &s) {
-  return RenameMatmulMutator().Mutate(s);
-}
+Stmt RenameMatmul::Run(const Stmt &s) { return RenameMatmulMutator().Mutate(s); }
 }  // namespace akg

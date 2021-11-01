@@ -225,7 +225,7 @@ class DimensionFolderPlan : public IRVisitor {
     std::vector<int> domain;
     domain.push_back(0);
     for (size_t i = 1; i < rel.forward_mapping.size(); ++i) {
-      if (rel.forward_mapping[i] != rel.forward_mapping[i-1] + 1) {
+      if (rel.forward_mapping[i] != rel.forward_mapping[i - 1] + 1) {
         domain.push_back(i);
       }
     }

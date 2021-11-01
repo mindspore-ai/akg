@@ -31,7 +31,7 @@
 #include "ir_pass.h"
 #include "schedule_pass.h"
 #include "codegen/pass_mgr.h"
-#include "composite/util.h"
+#include "composite/utils/util.h"
 
 namespace akg {
 AttrMap g_attrs;

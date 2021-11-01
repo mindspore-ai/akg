@@ -15,6 +15,7 @@
  */
 #include "util.h"
 #include <fstream>
+#include <map>
 #include "pass/utils.h"
 
 namespace akg {
@@ -38,6 +39,15 @@ bool IsThreadIdxX(const std::string &name) { return name == THREAD_IDX_X; }
 bool IsThreadIdxY(const std::string &name) { return name == THREAD_IDX_Y; }
 bool IsThreadIdxZ(const std::string &name) { return name == THREAD_IDX_Z; }
 
+std::string GetRealTarget(const std::string &target) {
+  static std::map<std::string, std::string> target_map = {{"aicore", "cce"}, {"cpu", "llvm"}};
+
+  if (target_map.find(target) != target_map.end()) {
+    return target_map[target];
+  }
+  return target;
+}
+
 std::string GetProcess(const picojson::value &input_json) {
   const picojson::value::object &input_obj = input_json.get<picojson::object>();
   std::string target;
@@ -47,13 +57,7 @@ std::string GetProcess(const picojson::value &input_json) {
     target = iter->second.get<std::string>();
   }
 
-  if (target == "aicore") {
-    target = "cce";
-  } else if (target == "cpu") {
-    target = "llvm";
-  }
-
-  return target;
+  return GetRealTarget(target);
 }
 
 picojson::value String2Json(const std::string &json_str) {
@@ -128,11 +132,12 @@ std::string CreateDataFormatKey(const std::string &tensor_name) {
   std::string key = tensor_name + "_format";
   return key;
 }
-bool GetBoolValueFromAttr(const Map<std::string, NodeRef> &attrs, const std::string &key) {
-  CHECK(attrs.defined());
-  CHECK(attrs.find(key) != attrs.end());
-  CHECK(attrs[key].as<ExprNode>());
-  auto value = ir::GetInt32Const(Downcast<Expr>(attrs[key]));
+
+bool GetBoolValueFromMap(const Map<std::string, NodeRef> &node_ref_map, const std::string &key) {
+  CHECK(node_ref_map.defined());
+  CHECK(node_ref_map.find(key) != node_ref_map.end());
+  CHECK(node_ref_map[key].as<ExprNode>());
+  auto value = ir::GetInt32Const(Downcast<Expr>(node_ref_map[key]));
   return static_cast<bool>(value);
 }
 
@@ -423,5 +428,50 @@ akg::BuildConfig GetConfig() {
   CHECK(config.defined());
   config->dump_pass_ir = getenv(GetDumpIRFlag().c_str()) != nullptr;
   return config;
+}
+
+std::vector<std::string> GetNames(const Array<NodeRef> &io) {
+  std::vector<std::string> names;
+  for (const auto &arg : io) {
+    CHECK(arg.as<StringImm>());
+    auto arg_name = arg.as<StringImm>()->value;
+    names.emplace_back(arg_name);
+  }
+  return names;
+}
+
+Stmt ElimDuplicateInputs::Run(Stmt &stmt) {
+  is_mutate_ = false;
+  static_cast<void>(Mutate(stmt));
+  is_mutate_ = true;
+  return Mutate(stmt);
+}
+
+Expr ElimDuplicateInputs::Mutate_(const Load *op, const Expr &e) {
+  Var var = op->buffer_var;
+  auto name = var->name_hint;
+  if (std::find(names_.begin(), names_.end(), name) != names_.end()) {
+    auto it = vars_.find(name);
+    if (it != vars_.end()) {
+      if (is_mutate_) return Load::make(op->type, it->second, this->Mutate(op->index), op->predicate);
+    } else {
+      vars_[name] = var;
+    }
+  }
+  return IRMutator::Mutate_(op, e);
+}
+
+Stmt ElimDuplicateInputs::Mutate_(const Store *op, const Stmt &s) {
+  Var var = op->buffer_var;
+  auto name = var->name_hint;
+  if (std::find(names_.begin(), names_.end(), name) != names_.end()) {
+    auto it = vars_.find(name);
+    if (it != vars_.end()) {
+      if (is_mutate_) return Store::make(it->second, this->Mutate(op->value), this->Mutate(op->index), op->predicate);
+    } else {
+      vars_[name] = var;
+    }
+  }
+  return IRMutator::Mutate_(op, s);
 }
 }  // namespace akg

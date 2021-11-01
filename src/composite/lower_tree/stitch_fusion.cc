@@ -13,9 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "composite/stitch_fusion.h"
-#include "composite/util.h"
-#include "composite/dump.h"
+#include "composite/lower_tree/stitch_fusion.h"
+#include "composite/utils/util.h"
+#include "composite/utils/dump.h"
 #include "dmlc/logging.h"
 #include <ir_pass.h>
 #include <fstream>

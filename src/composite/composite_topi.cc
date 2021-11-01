@@ -17,7 +17,7 @@
 #include "topi/reduction.h"
 #include "topi/broadcast.h"
 #include "pass/utils.h"
-#include "composite/util.h"
+#include "composite/utils/util.h"
 
 namespace akg {
 #define TOPI_TWO_INPUTS_CALL(ins, rv, fn)                                             \
@@ -969,7 +969,8 @@ void AicoreCubeMatMul(const TVMArgs &args, TVMRetValue *rv) {
   auto name = "T_batchmatmul_" + left_matrix->op->name + "_" + right_matrix->op->name;
 
   // set compute attrs
-  auto set_compute_attrs_zN = [&left_matrix, &right_matrix, &inputs, &output_shape, &dst_type, &k, transpose_a, transpose_b, attrs]() {
+  auto set_compute_attrs_zN = [&left_matrix, &right_matrix, &inputs, &output_shape, &dst_type, &k, transpose_a,
+                               transpose_b, attrs]() {
     Map<std::string, NodeRef> com_attrs;
 
     com_attrs.Set("pragma_gemm_output_shape", output_shape);
@@ -1186,15 +1187,15 @@ TVM_REGISTER_GLOBAL("Gather").set_body([](TVMArgs args, TVMRetValue *rv) {
   auto y_shape = input1->shape;
   CHECK(y_shape.size() == 1);
   Map<std::string, NodeRef> com_attrs;
-  com_attrs.Set("no_inline", Expr(-1)); // out tensor is not inlined
+  com_attrs.Set("no_inline", Expr(-1));  // out tensor is not inlined
   // used for replace_tot, out = gather(par, index)
-  com_attrs.Set("tensor_of_tensor_pos", Expr(0)); // to mark tensor_not_promote
-  com_attrs.Set("first_index_pos", Expr(1)); // to mark inner_tensor
+  com_attrs.Set("tensor_of_tensor_pos", Expr(0));  // to mark tensor_not_promote
+  com_attrs.Set("first_index_pos", Expr(1));       // to mark inner_tensor
   // used for recover_tot, out = tot_op(par, index)
-  com_attrs.Set("is_fakeout", Expr(0)); // to remove fakeout
-  com_attrs.Set("realout_pos", Expr(-1)); // -1 means provide func
-  com_attrs.Set("first_dst_pos", Expr((int)axis)); // which axis in dst_tenosr
-  com_attrs.Set("outbound_return_zero", Expr(1)); // need else stmt
+  com_attrs.Set("is_fakeout", Expr(0));             // to remove fakeout
+  com_attrs.Set("realout_pos", Expr(-1));           // -1 means provide func
+  com_attrs.Set("first_dst_pos", Expr((int)axis));  // which axis in dst_tenosr
+  com_attrs.Set("outbound_return_zero", Expr(1));   // need else stmt
   com_attrs.Set("is_atomic_add", Expr(0));
   Array<Expr> output_shape;
   for (size_t i = 0; i < x_shape.size(); ++i) {
@@ -1251,15 +1252,15 @@ TVM_REGISTER_GLOBAL("TensorScatterAdd").set_body([](TVMArgs args, TVMRetValue *r
     output_shape.Set(i - par_batch, update_shape[i]);
   }
   Map<std::string, NodeRef> com_attrs;
-  com_attrs.Set("no_inline", Expr(1)); // up is not inlined
+  com_attrs.Set("no_inline", Expr(1));  // up is not inlined
   // used for replace_tot, fakeout = tsa(par, up, index)
-  com_attrs.Set("tensor_of_tensor_pos", Expr(0)); // to mark tensor_not_promote
-  com_attrs.Set("first_index_pos", Expr(2)); // to mark inner_tensor
+  com_attrs.Set("tensor_of_tensor_pos", Expr(0));  // to mark tensor_not_promote
+  com_attrs.Set("first_index_pos", Expr(2));       // to mark inner_tensor
   // used for recover_tot, fakeout = tot_op(par, up, index)
-  com_attrs.Set("is_fakeout", Expr(1)); // to remove fakeout
+  com_attrs.Set("is_fakeout", Expr(1));  // to remove fakeout
   com_attrs.Set("realout_pos", Expr(0));
-  com_attrs.Set("first_dst_pos", Expr(0)); // which axis in tensor_of_tensor
-  com_attrs.Set("outbound_return_zero", Expr(0)); // no else stmt
+  com_attrs.Set("first_dst_pos", Expr(0));         // which axis in tensor_of_tensor
+  com_attrs.Set("outbound_return_zero", Expr(0));  // no else stmt
   com_attrs.Set("is_atomic_add", Expr(1));
 
   auto fcompute = [&index_rank, &depth, &par_batch, &input0, &input1, &input2](const Array<Var> &indices) {
