@@ -27,6 +27,7 @@
 
 /*
  * 2019.12.30 - Add new function of StmtUseVar.
+ * 2021.11.01 - Change the 'name' parameter of 'MakeAPI' to a constant reference when passed in.
  */
 
 #ifndef TVM_IR_PASS_H_
@@ -441,7 +442,7 @@ Stmt HoistIfThenElse(Stmt stmt);
  *  There is no thread_axis in generated function.
  */
 LoweredFunc MakeAPI(Stmt body,
-                    std::string name,
+                    const std::string &name,
                     Array<NodeRef> api_args,
                     int num_unpacked_args,
                     bool is_restricted);

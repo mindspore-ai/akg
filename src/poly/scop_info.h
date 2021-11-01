@@ -38,6 +38,8 @@ constexpr auto kWriteSuffix = "write";
 constexpr auto kIterNamePrefix = "cc";
 constexpr auto kGemmIterNamePrefix = "ee";
 
+using VarNames = std::vector<std::string>;
+
 struct ParamInfo {
   std::string type_key;
   Expr key;
@@ -882,8 +884,6 @@ class AnalysisResult {
   AnalysisResult() = default;
   ~AnalysisResult() = default;
 
-  using VarNames = std::vector<std::string>;
-
   // represent a tensor
   // e.g. for(cc0,0,8){input_red(cc0)=0;}
   // => Tensor{name:input_red,loops:[cc0]}
@@ -904,6 +904,17 @@ class AnalysisResult {
     size_t band_index{0};
     const Provide *op{nullptr};
     const IfThenElse *cond{nullptr};
+  };
+
+  enum BandScope { OUTER, INNER };
+  // represent a band in tree
+  struct BandNode {
+    BandNode(const isl::schedule_node_band &n, BandScope s, int i) : node(n), scope(s), index(i) {}
+    isl::schedule_node_band node;
+    BandScope scope;
+    size_t index;
+    BandNode *parent{nullptr};
+    std::vector<std::unique_ptr<BandNode>> children{};
   };
 
   void RecordWrites(const isl::union_map &writes) { writes_ = writes; }
@@ -1098,7 +1109,14 @@ class AnalysisResult {
   Template GetOpTemplate() { return op_template_; }
   std::string ShowOpTemplate(Template op_template) { return template_map_[op_template]; }
 
+  void RecordBandNode(std::unique_ptr<BandNode> &band) {
+    band_nodes_.emplace_back(std::move(band));
+  }
+  std::vector<std::unique_ptr<BandNode>> &GetBandNodes() { return band_nodes_; }
+
+
  public:
+  std::vector<std::unique_ptr<BandNode>> band_nodes_;
   std::vector<std::pair<std::string, STMT_OP_TYPE>> stmt_type_;
   std::vector<std::pair<isl::union_set, BufferedFootPrintInfo>> active_buffer_footprints_;
   std::vector<BufferDefInfo> buffer_def_infos_;
@@ -1174,6 +1192,11 @@ class AnalysisResult {
   bool is_tensor_of_tensor_{false};
   bool is_csr_{false};
 };
+
+using TensorEntry = AnalysisResult::TensorEntry;
+using ProvideEntry = AnalysisResult::ProvideEntry;
+using BandNode = AnalysisResult::BandNode;
+using BandScope = AnalysisResult::BandScope;
 
 class CubeInfo {
  public:

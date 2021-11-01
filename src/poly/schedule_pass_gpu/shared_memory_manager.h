@@ -33,9 +33,6 @@ class SharedMemoryManager : public SchedulePass {
  public:
   explicit SharedMemoryManager(ScopInfo &scop_info) : scop_info_(scop_info) {
     pass_name_ = __FUNCTION__;
-    if (!scop_info.user_config_.GetSharedTensors().empty()) {
-      configed_tensors_ = Split(scop_info.user_config_.GetSharedTensors(), " ");
-    }
   };
   ~SharedMemoryManager() {}
 

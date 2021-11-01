@@ -37,6 +37,7 @@
 #include "poly/schedule_pass/compute_transfer_copyin.h"
 #include "poly/schedule_pass/compute_inner_band_dependency.h"
 #include "poly/schedule_pass/mark_outer_most.h"
+#include "poly/schedule_pass/analyze_schedule.h"
 
 namespace akg {
 namespace ir {
@@ -72,6 +73,7 @@ void DsaMgrStrategy::RegisterPasses() {
   if (!scop_info_.mmu_info_.IsSpecGemm() && (scop_info_.mmu_info_.IsConv() || scop_info_.mmu_info_.IsGemm())) {
     RegisterPass(std::make_shared<ComputeTransferCopyin>(scop_info_, pass_info_));
   }
+  RegisterPass(std::make_shared<AnalyzeSchedule>(scop_info_));
   RegisterTilingPasses();
   if (scop_info_.user_config_.GetIsTuning()) {
     return;

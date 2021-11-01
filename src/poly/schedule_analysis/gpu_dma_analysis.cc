@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,8 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-#include "poly/schedule_tree_util.h"
 #include "gpu_dma_analysis.h"
 #include "poly/scop.h"
 
@@ -22,18 +20,16 @@ namespace akg {
 namespace ir {
 namespace poly {
 
-isl::schedule GpuDmaAnalysis::Run(isl::schedule sch) {
+void GpuDmaAnalysis::Run() {
   auto original_setting = scop_info_.user_config_.GetPragmaSpeedUpTiling();
   scop_info_.user_config_.SetPragmaSpeedUpTiling(true);
   scop_info_.analysis_result_.SetIsGpuDmaAnalysed(true);
 
-  schedule_ = sch;
   Analysis();
-  RemoveInjectiveTensorFromMemFlows(sch);
+  RemoveInjectiveTensorFromMemFlows(sch_);
 
   scop_info_.user_config_.SetPragmaSpeedUpTiling(original_setting);
   scop_info_.analysis_result_.SetIsGpuDmaAnalysed(false);
-  return schedule_;
 }
 
 void GpuDmaAnalysis::RemoveInjectiveTensorFromMemFlows(isl::schedule schedule) {

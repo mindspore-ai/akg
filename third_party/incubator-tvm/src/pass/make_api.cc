@@ -23,6 +23,7 @@
 
 /*
  * 2019.12.30 - Define new function to push buffer node from api_args to args_real.
+ * 2021.11.01 - Remove redundant asserter.
  */
 
 #include <tvm/ir_pass.h>
@@ -59,7 +60,7 @@ Array<Var> Param (const Array<NodeRef> &api_args, Array<Var> args_real) {
 }
 
 LoweredFunc MakeAPI(Stmt body,
-                    std::string name,
+                    const std::string &name,
                     Array<NodeRef> api_args,
                     int num_unpacked_args,
                     bool is_restricted) {
@@ -213,7 +214,7 @@ LoweredFunc MakeAPI(Stmt body,
     body = Block::make(set_device, body);
   }
   n->body = MergeNest(
-      {seq_init, binder.init_nest(), seq_check, binder.asserts()}, body);
+      {seq_init, binder.init_nest(), seq_check}, body);
   LoweredFunc f(n);
   Array<Var> undefined = UndefinedVars(f->body, f->args);
   if (undefined.size() != 0) {

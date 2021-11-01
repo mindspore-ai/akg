@@ -146,7 +146,8 @@ def get_result(desc, poly, attrs=None, profiling=True, need_compare=True):
     compare_tolerance = get_compare_tolerance(desc, output_indexes)
     compare_res = list(map(_compare_func, output, expect, compare_tolerance))
     if not all(compare_res):
-        logging.debug(mod.imported_modules[0].get_source())
+        source = (mod.imported_modules[0] if backend == "cuda" else mod).get_source()
+        logging.debug(source)
         _dump_info(desc, attrs, poly, input_for_mod, output, expect)
         logging.warning("Compare results: %s", str(compare_res))
         return False

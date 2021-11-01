@@ -13,31 +13,36 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "poly/cpu_mgr_strategy.h"
-#include "poly/schedule_pass/tile_outer_band.h"
-#include "poly/schedule_pass/analyze_schedule.h"
+#ifndef POLY_ANALYZE_SCHEDULE_H_
+#define POLY_ANALYZE_SCHEDULE_H_
+
+#include "poly/schedule_pass.h"
 
 namespace akg {
 namespace ir {
 namespace poly {
 
-void CPUMgrStrategy::RegisterTilingPasses() { RegisterPass(std::make_shared<TileOuterBand>(pass_info_, scop_info_)); }
-
-void CPUMgrStrategy::RegisterMemPromPasses() {}
-
-void CPUMgrStrategy::RegisterPasses() {
-  passes_.clear();
-  RegisterNormalizationPasses();
-  RegisterConstrainedScheduling();
-  RegisterSchedulingPasses();
-  RegisterPass(std::make_shared<AnalyzeSchedule>(scop_info_));
-  RegisterTilingPasses();
-  if (scop_info_.user_config_.GetIsTuning()) {
-    return;
+class AnalyzeSchedule : public SchedulePass {
+ public:
+  AnalyzeSchedule(ScopInfo &scop_info) : scop_info_(scop_info) {
+    pass_name_ = __FUNCTION__;
+    target_ = scop_info.user_config_.GetTarget();
   }
-  RegisterMemPromPasses();
-}
+  ~AnalyzeSchedule() {}
+
+  virtual isl::schedule Run(isl::schedule sch);
+
+ private:
+  void ConstructBandNode();
+
+  std::string target_;
+  Stmt stmt_;
+  isl::schedule sch_;
+  ScopInfo &scop_info_;
+};
 
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg
+
+#endif  // POLY_ANALYZE_SCHEDULE_H_

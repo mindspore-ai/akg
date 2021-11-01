@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2021 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 #ifndef GPU_DMA_ANALYSIS_H
 #define GPU_DMA_ANALYSIS_H
 
@@ -25,17 +24,16 @@ namespace poly {
 
 using TensorSets = std::unordered_set<isl::id, isl::IslIdIslHash>;
 
-class GpuDmaAnalysis : public SchedulePass {
+class GpuDmaAnalysis {
  public:
-  explicit GpuDmaAnalysis(ScopInfo &scop_info) : scop_info_(scop_info) {
-    pass_name_ = __FUNCTION__;
+  explicit GpuDmaAnalysis(const isl::schedule &sch, ScopInfo &scop_info) : sch_(sch), scop_info_(scop_info) {
     if (!scop_info.user_config_.GetSharedTensors().empty()) {
       configed_share_tensors_ = Split(scop_info.user_config_.GetSharedTensors(), " ");
     }
   };
 
   ~GpuDmaAnalysis() {}
-  virtual isl::schedule Run(isl::schedule sch);
+  void Run();
 
   void Analysis();
   std::vector<isl::id> SharedTensorAnalysis();
@@ -48,8 +46,8 @@ class GpuDmaAnalysis : public SchedulePass {
   isl::schedule_node GetTiledNode(isl::schedule schedule, isl::schedule_node node);
 
  private:
+  const isl::schedule &sch_;
   ScopInfo &scop_info_;
-  isl::schedule schedule_;
   std::vector<std::string> configed_share_tensors_;
   const int MAX_STRIDE = 65535;
 };

@@ -23,6 +23,7 @@
 
 #include "poly/tiling/custom_tiling.h"
 #include "poly/tiling/tiling_analyzer.h"
+#include "poly/schedule_analysis/operator_type_analysis.h"
 
 namespace akg {
 namespace ir {
