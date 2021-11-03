@@ -15,11 +15,11 @@
  */
 #include "poly/gpu_mgr_strategy.h"
 
+#include "schedule_pass/analyze_schedule.h"
+#include "schedule_pass/tile_outer_band.h"
 #include "schedule_pass_gpu/mapping_outer_band.h"
-#include "schedule_pass_gpu/gpu_dma_analysis.h"
 #include "schedule_pass_gpu/shared_memory_manager.h"
 #include "schedule_pass_gpu/register_memory_manager.h"
-#include "schedule_pass/tile_outer_band.h"
 #include "schedule_pass_gpu/realize_manager.h"
 
 namespace akg {
@@ -38,7 +38,7 @@ void GPUMgrStrategy::RegisterPasses() {
   RegisterNormalizationPasses();
   RegisterConstrainedScheduling();
   RegisterSchedulingPasses();
-  RegisterPass(std::make_shared<GpuDmaAnalysis>(scop_info_));
+  RegisterPass(std::make_shared<AnalyzeSchedule>(scop_info_));
   RegisterTilingPasses();
   if (scop_info_.user_config_.GetIsTuning()) {
     return;

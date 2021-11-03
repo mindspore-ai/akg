@@ -97,9 +97,9 @@ bool ScheduleTreeAnalyzer::AnalyzeScheduleTree() {
   if (!has_loop) return false;
 
   // Step 2: Construct tree nodes from each outer band.
-  ConstructBandNode();
+  auto &band_nodes = analyzer_->scop_info_.analysis_result_.GetBandNodes();
   std::stringstream ss;
-  for (auto &band_node : band_nodes_) {
+  for (auto &band_node : band_nodes) {
     auto *bn = band_node.get();
     isl::multi_union_pw_aff prefix_schedule = bn->node.get_partial_schedule();
     if (prefix_schedule.is_null()) {
@@ -156,82 +156,6 @@ bool ScheduleTreeAnalyzer::AnalyzeScheduleTree() {
     ConstructTreePattern(static_cast<int>(bn->index));
   }
   return true;
-}
-
-void ScheduleTreeAnalyzer::ConstructBandNode() {
-  // Step 1. Construct outer band.
-  isl::schedule_node root_node = GetOuterBand(sch_.get_root());
-  auto append_outer_band = [this](const isl::schedule_node_band &outer_band) {
-    auto prefix_schedule = outer_band.get_partial_schedule();
-    if (prefix_schedule.is_null()) {
-      return;
-    }
-    std::unique_ptr<BandNode> out(new (std::nothrow) BandNode(outer_band, OUTER, band_nodes_.size()));
-    CHECK(out) << "memory alloc fail";
-    band_nodes_.emplace_back(std::move(out));
-  };
-  if (root_node.isa<isl::schedule_node_band>()) {  // single outer band
-    append_outer_band(root_node.as<isl::schedule_node_band>());
-  } else if (root_node.isa<isl::schedule_node_set>() ||
-             root_node.isa<isl::schedule_node_sequence>()) {  // multiple outer bands
-    for (unsigned int i = 0; i < root_node.n_children(); ++i) {
-      isl::schedule_node node = root_node.get_child(i);
-      if (node.isa<isl::schedule_node_filter>()) {
-        auto filter = node.as<isl::schedule_node_filter>();
-        if (filter.get_filter().is_empty()) {
-          continue;
-        }
-        if (filter.has_children() && filter.get_child(0).isa<isl::schedule_node_band>()) {
-          append_outer_band(filter.get_child(0).as<isl::schedule_node_band>());
-        }
-      }
-    }
-  }
-
-  // Step 2. Construct inner band for each outer band.
-  std::vector<BandNode *> stack;
-  for (auto &band_node : band_nodes_) {
-    auto node = band_node.get();
-    stack.emplace_back(node);
-    size_t seq = 0;
-    while (!stack.empty()) {
-      auto *bn = stack.back();
-      seq += bn->children.size();
-      auto prefix_schedule = bn->node.get_partial_schedule();
-      auto upa_list = prefix_schedule.get_union_pw_aff_list();
-      stack.pop_back();
-      auto AppendInnerBand = [&stack, &seq, &bn](const isl::schedule_node_band &inner_band, const size_t upa_size) {
-        if (inner_band.get_partial_schedule().is_null()) {
-          return;
-        }
-        seq += upa_size;
-        std::unique_ptr<BandNode> in(new (std::nothrow) BandNode(inner_band, INNER, seq));
-        CHECK(in) << "memory alloc fail";
-        in->parent = bn;
-        bn->children.emplace_back(std::move(in));
-        stack.emplace_back(bn->children.back().get());
-      };
-      for (int i = 0; i < static_cast<int>(bn->node.n_children()); ++i) {
-        if (bn->node.get_child(i).as<isl::schedule_node_band>()) {  // single inner band
-          AppendInnerBand(bn->node.get_child(i).as<isl::schedule_node_band>(), upa_list.size());
-        } else if (bn->node.get_child(i).isa<isl::schedule_node_set>() ||
-                   bn->node.get_child(i).isa<isl::schedule_node_sequence>()) {  // multiple inner bands
-          int n = bn->node.get_child(i).n_children();
-          for (int j = 0; j < n; ++j) {
-            if (bn->node.get_child(i).get_child(j).isa<isl::schedule_node_filter>()) {
-              auto filter = bn->node.get_child(i).get_child(j).as<isl::schedule_node_filter>();
-              if (filter.get_filter().is_empty()) {
-                continue;
-              }
-              if (filter.has_children() && filter.get_child(0).isa<isl::schedule_node_band>()) {
-                AppendInnerBand(filter.get_child(0).as<isl::schedule_node_band>(), upa_list.size());
-              }
-            }
-          }
-        }
-      }
-    }
-  }
 }
 
 void ScheduleTreeAnalyzer::GetCandidatesInSequence(size_t seq, const isl::pw_aff_list &pa_list, bool is_outer,

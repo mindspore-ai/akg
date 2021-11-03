@@ -38,7 +38,6 @@ class ScheduleTreeAnalyzer {
  public:
   ScheduleTreeAnalyzer(TilingAnalyzer *a, const isl::schedule &s);
   ~ScheduleTreeAnalyzer() = default;
-  enum BandScope { OUTER, INNER };
 
   std::unique_ptr<TileAxis> root_{nullptr};
 
@@ -48,16 +47,7 @@ class ScheduleTreeAnalyzer {
  private:
   TilingAnalyzer *analyzer_{nullptr};
   isl::schedule sch_;
-  // represent a band in tree
-  struct BandNode {
-    BandNode(const isl::schedule_node_band &n, BandScope s, int i) : node(n), scope(s), index(i) {}
-    isl::schedule_node_band node;
-    BandScope scope;
-    size_t index;
-    BandNode *parent{nullptr};
-    std::vector<std::unique_ptr<BandNode>> children{};
-  };
-  // represent a tile position in node
+
   struct TilePos {
     bool is_outer;
     size_t var_pos;
@@ -102,7 +92,6 @@ class ScheduleTreeAnalyzer {
 
   bool AnalyzeScheduleTree();
   void GetDimRangeFromTree(const isl::schedule &sch);
-  void ConstructBandNode();
   void GetCandidatesInSequence(size_t seq, const isl::pw_aff_list &pa_list, bool is_outer = true, bool mc_sup = false);
   bool GetPosShiftedTileRange(const std::string &vname, const std::string &actual_name,
                               std::pair<int, int> &old_ranges);

@@ -808,6 +808,13 @@ isl::schedule RegisterMemoryManager::RunElementWise(isl::schedule_node root) {
 }
 
 isl::schedule RegisterMemoryManager::Run(isl::schedule sch) {
+  if (!scop_info_.user_config_.GetLocalTensors().empty()) {
+    configed_tensors_ = Split(scop_info_.user_config_.GetLocalTensors(), " ");
+  }
+  if (scop_info_.user_config_.GetEnableMatmul()) {
+    local_tensor_c_ = GetMatmulTensorsName(scop_info_)[MATRIX_C];
+  }
+
   sch = InsertContextNode(sch, scop_info_);
 
   if (!scop_info_.user_config_.UseRegisterMemory()) {

@@ -36,12 +36,6 @@ class RegisterMemoryManager : public SchedulePass {
   explicit RegisterMemoryManager(PassInfo &pass_info, ScopInfo &scop_info)
       : pass_info_(pass_info), scop_info_(scop_info) {
     pass_name_ = __FUNCTION__;
-    if (!scop_info.user_config_.GetLocalTensors().empty()) {
-      configed_tensors_ = Split(scop_info.user_config_.GetLocalTensors(), " ");
-    }
-    if (scop_info_.user_config_.GetEnableMatmul()) {
-      local_tensor_c_ = GetMatmulTensorsName(scop_info)[MATRIX_C];
-    }
     remain_memory_ = MAX_REGISTER_PER_THREAD_BLOCK * REGISTER_ALLOC_RATIO;
   };
   ~RegisterMemoryManager() {}

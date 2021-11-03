@@ -244,6 +244,7 @@ file(
   ${AKG_SOURCE_DIR}/src/poly/*.cc
   ${AKG_SOURCE_DIR}/src/poly/schedule_pass/*.cc
   ${AKG_SOURCE_DIR}/src/poly/schedule_pass_gpu/*.cc
+  ${AKG_SOURCE_DIR}/src/poly/schedule_analysis/*.cc
   ${AKG_SOURCE_DIR}/src/poly/tiling/*.cc
   ${AKG_SOURCE_DIR}/src/poly/gpu_emit/*.cc
   ${AKG_SOURCE_DIR}/src/api/*.cc

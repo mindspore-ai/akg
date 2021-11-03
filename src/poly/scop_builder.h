@@ -29,17 +29,6 @@ namespace ir {
 namespace poly {
 static const char kStatementLabel[] = "S_";
 
-
-using VarNames = std::vector<std::string>;
-using TensorEntry = AnalysisResult::TensorEntry;
-using ProvideEntry = AnalysisResult::ProvideEntry;
-
-struct ToTTensor {
-  std::string name;
-  std::set<std::string> loop_vars;
-  std::vector<int64_t> indices;
-};
-
 isl::space CreateParamsSpace(const isl::ctx &ctx);
 
 isl::space CreateParamsSpace(const isl::ctx &ctx, const std::unordered_map<std::string, air::Var> &params);
@@ -66,48 +55,6 @@ void ParseStmtOps(const isl::id &id, const Evaluate *stmt, AnalysisResult &resul
 
 void ParseStmtOps(const isl::id &id, const Provide *stmt, AnalysisResult &result, const isl::union_map &new_reads,
                   const isl::union_map &new_writes);
-
-class OpTypeCollector : public IRVisitor {
- public:
-  OpTypeCollector(ScopInfo &scop_info, const Stmt &stmt) : scop_info_(scop_info), stmt_(stmt) {}
-  ~OpTypeCollector() override = default;
-
-  void Collect();
-  void AnalyzeOpTemplate();
-  void WriteToScopInfo();
-  void Dump();
-
-  void Visit_(const AttrStmt *op) final;
-
-  void Visit_(const Realize *op) final;
-
-  void Visit_(const Provide *op) final;
-
-  void Visit_(const For *op) final;
-
-  void Visit_(const IfThenElse *op) final;
-
-  // Provides stmt after analysis.
-  std::unordered_map<const For *, std::vector<ProvideEntry>> provides_ana_;
-
- private:
-  ScopInfo &scop_info_;
-  const Stmt &stmt_;
-  const For *cur_loop_{nullptr};
-  const AttrStmt *cur_attr_{nullptr};
-  const IfThenElse *cur_if_{nullptr};
-  std::vector<const air::ir::For *> cur_band_;
-  int loop_count_ = 0;
-  size_t band_count_ = 0;
-  std::unordered_set<std::string> local_buf_;
-  air::arith::Analyzer arith_ana_;
-
-  void AnalyzeProvide(const Provide *op);
-  void AnalyzeGemmAxes(const ProvideEntry &pe);
-  TensorEntry MatchLoopByName(TensorEntry tensor);
-  std::string GetBasicOpType(const TensorEntry dst, const std::vector<TensorEntry> &srcs);
-  TensorEntry MakeTensorEntry(const ToTTensor &tot);
-};
 
 VarNames VisitVarNames(const air::Expr &arg, VarNames var_names, bool add_num = true);
 

@@ -806,7 +806,7 @@ if __name__ == '__main__':
 
     def cpu_filter(item):
         op_filter = ["standard_normal", "conv", "fused_gather_mul_scatter_add",  "fused_gather_gather_add_mul_max_exp_scatter_add",
-                     "csr_reduce_sum", "csr_mul"]
+                     "csr_reduce_sum", "csr_mul", "csrmv"]
         return item[0] not in op_filter
     op_map["all"] = list((dict(filter(cpu_filter, op_map.items())) if default_attrs['target'] == "llvm" else op_map).values())
     if len(sys.argv) == 1:

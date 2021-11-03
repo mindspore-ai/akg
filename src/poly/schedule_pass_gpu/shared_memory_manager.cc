@@ -28,6 +28,9 @@ namespace ir {
 namespace poly {
 
 isl::schedule SharedMemoryManager::Run(isl::schedule sch) {
+  if (!scop_info_.user_config_.GetSharedTensors().empty()) {
+    configed_tensors_ = Split(scop_info_.user_config_.GetSharedTensors(), " ");
+  }
   if (!scop_info_.user_config_.UseSharedMemory()) {
     return sch;
   }
