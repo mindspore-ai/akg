@@ -19,7 +19,6 @@
 #include <tvm/expr.h>
 #include <string>
 
-#include "tune_space.h"
 #include "pass/utils.h"
 #include "poly/isl.h"
 #include "poly/poly_util.h"
