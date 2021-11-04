@@ -477,12 +477,16 @@ bool NPUIslEmitter::InjectMulticore(const std::string &iter) {
       };
       CHECK(IsNumber(iter.substr(2)));
       size_t coincident_member = std::strtol(iter.substr(2).c_str(), nullptr, radix);
+      if (multicore_info.coincident_map_depth.count(coincident_member)) {
+        multicore_info.multicore_depth = multicore_info.coincident_map_depth.at(coincident_member);
+        return true;
+      }
       bool is_loop_in_multicore_band = (coincident_member < multicore_info.coincidence.size());
       if (is_loop_in_multicore_band) {
         should_insert_multi_core = multicore_info.coincidence[coincident_member];
         if (should_insert_multi_core) {
           ++multicore_info.multicore_depth;
-          --multicore_info.coincidence[coincident_member];
+          multicore_info.coincident_map_depth[coincident_member] = multicore_info.multicore_depth;
         }
       }
     } else {
@@ -522,7 +526,15 @@ Stmt NPUIslEmitter::EmitFor(const isl::ast_node_for &node) {
   Stmt body_stmt = EmitAst(node.get_body());
   Stmt stmt;
   if (body_stmt.defined()) {
-    stmt = For::make(iter_expr, init_expr, cond_expr, ForType::Serial, DeviceAPI::None, body_stmt);
+    // For the multi-core loop, keep the for whose extent is 1 to facilitate the processing of subsequent
+    // the multi-core loop merging.
+    if (!should_insert_multi_core && Equal(cond_expr, Expr(1))) {
+      Map<Var, Expr> replace_var;
+      replace_var.Set(iter_expr, init_expr);
+      stmt = air::ir::Substitute(body_stmt, replace_var);
+    } else {
+      stmt = For::make(iter_expr, init_expr, cond_expr, ForType::Serial, DeviceAPI::None, body_stmt);
+    }
     if (info_.user_config_.GetOptimizeForNPU()) {
       const int NPUC0SIZE = 16;
       // need to find the last axis
@@ -537,8 +549,8 @@ Stmt NPUIslEmitter::EmitFor(const isl::ast_node_for &node) {
   PopIter(iter_expr.get());
 
   if (should_insert_multi_core) {
-    CHECK_EQ(multicore_info.multicore_depth, original_multicore_info.multicore_depth + 1);
-    stmt = AttrStmt::make(make_zero(Int(32)), "pragma_multi_core_depth", Expr(multicore_info.multicore_depth), stmt);
+    stmt = AttrStmt::make(Expr(multicore_info.id), "pragma_multi_core_depth",
+                          Expr(multicore_info.multicore_depth), stmt);
     --multicore_info.multicore_depth;
   }
 
@@ -892,7 +904,7 @@ AtomicType GetAtomicWrite(const isl::id &id, const StatementMap &statements) {
   return AtomicType::Equ;
 }
 
-AtomicType GetAtomicWrite(const isl::id &id, const std::unordered_set<std::string> tensors) {
+AtomicType GetAtomicWrite(const isl::id &id, const std::unordered_set<std::string> &tensors) {
   return tensors.count(id.get_name()) > 0 ? AtomicType::Add : AtomicType::Equ;
 }
 
@@ -1917,6 +1929,7 @@ Stmt NPUIslEmitter::EmitMark(const isl::ast_node_mark &node) {
     CHECK_GE(mark.size(), coinLen);
     std::string coincidence_str = mark.substr(coinLen);
     multicore_info.coincidence = SplitString(coincidence_str, "_");
+    multicore_info.id = ++multicore_info_count_;
     CHECK_GT(multicore_info.coincidence.size(), 0) << "invalid multicore mark: " << mark;
   }
 
