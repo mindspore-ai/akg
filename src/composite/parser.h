@@ -20,7 +20,7 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
-#include "composite/util.h"
+#include "composite/utils/util.h"
 
 namespace akg {
 std::tuple<std::string, std::string, picojson::array, picojson::array, picojson::array> ParseInputJson(

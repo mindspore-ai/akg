@@ -21,9 +21,9 @@
 #include <utility>
 #include <vector>
 
-#include "composite/block_fusion.h"
-#include "composite/util.h"
-#include "composite/sync_process.h"
+#include "composite/lower_tree/block_fusion.h"
+#include "composite/utils/util.h"
+#include "composite/lower_tree/sync_process.h"
 
 namespace akg {
 namespace ir {
@@ -103,6 +103,11 @@ class ArrangedSharedMemoryInfo : public IRVisitor {
 
 class DimCollector : public IRVisitor {
  public:
+  void Visit(const NodeRef &node) override {
+    IRVisitor::Visit(node);
+    SortedByNames();
+  }
+
   void Visit_(const AttrStmt *op) override {
     if (op->attr_key == air::ir::attr::thread_extent) {
       const IterVarNode *iv = op->node.as<IterVarNode>();
@@ -136,6 +141,32 @@ class DimCollector : public IRVisitor {
   friend class DimCompressor;
 
  private:
+  void SortedByNames() {
+    std::vector<std::string> block_names = {BLOCK_IDX_Z, BLOCK_IDX_Y, BLOCK_IDX_X};
+    std::vector<std::string> thread_names = {THREAD_IDX_Z, THREAD_IDX_Y, THREAD_IDX_X};
+
+    std::vector<std::pair<Var, Expr>> block_idxs_new;
+    for (auto block_id : block_names) {
+      for (auto elem : block_idxs_) {
+        if (elem.first->name_hint == block_id) {
+          block_idxs_new.push_back(elem);
+        }
+      }
+    }
+
+    std::vector<std::pair<Var, Expr>> thread_idxs_new;
+    for (auto thread_id : thread_names) {
+      for (auto elem : thread_idxs_) {
+        if (elem.first->name_hint == thread_id) {
+          thread_idxs_new.push_back(elem);
+        }
+      }
+    }
+
+    block_idxs_ = block_idxs_new;
+    thread_idxs_ = thread_idxs_new;
+  }
+
   std::vector<std::pair<Var, Expr>> block_idxs_;
   std::vector<std::pair<Var, Expr>> thread_idxs_;
 };

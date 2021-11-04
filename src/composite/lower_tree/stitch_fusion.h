@@ -15,7 +15,7 @@
  */
 #ifndef STITCH_FUSION_H_
 #define STITCH_FUSION_H_
-#include "composite/util.h"
+#include "composite/utils/util.h"
 
 namespace akg {
 enum class StorageType { Shared, Global, Unknown };

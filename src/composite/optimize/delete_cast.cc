@@ -122,9 +122,8 @@ class DeleteCastMutator : public IRMutator {
     for (const auto &arg : op->args) {
       if (auto tensor = arg.as<Call>()) {
         if (cast_map_.find(tensor->name) != cast_map_.end()) {
-          args.push_back(Call::make(
-              cast_dtype_.at(cast_map_.at(tensor->name)), cast_map_.at(tensor->name), tensor->args,
-              tensor->call_type, cast_func_map_.at(tensor->name)));
+          args.push_back(Call::make(cast_dtype_.at(cast_map_.at(tensor->name)), cast_map_.at(tensor->name),
+                                    tensor->args, tensor->call_type, cast_func_map_.at(tensor->name)));
         } else {
           args.push_back(arg);
         }
@@ -133,8 +132,8 @@ class DeleteCastMutator : public IRMutator {
       }
     }
     if (cast_map_.find(op->name) != cast_map_.end()) {
-      return Call::make(cast_dtype_.at(cast_map_.at(op->name)), cast_map_.at(op->name),
-          args, op->call_type, cast_func_map_.at(op->name), op->value_index);
+      return Call::make(cast_dtype_.at(cast_map_.at(op->name)), cast_map_.at(op->name), args, op->call_type,
+                        cast_func_map_.at(op->name), op->value_index);
     }
     return Call::make(op->type, op->name, args, op->call_type, op->func);
   }

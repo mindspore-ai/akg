@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #ifndef COMPOSITE_OPTIMIZE_COMPLEX_EXPANDER_H_
-#define COMPOSITE_OPTIMIZE_COMPLEX_EXPANDER_H_ 
+#define COMPOSITE_OPTIMIZE_COMPLEX_EXPANDER_H_
 #include "composite/optimize/optimize.h"
 
 namespace akg {

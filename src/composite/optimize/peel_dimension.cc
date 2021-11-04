@@ -15,9 +15,9 @@
  */
 
 #include "composite/optimize/peel_dimension.h"
-#include "composite/dimension_peeling.h"
-#include "composite/dump.h"
-#include "composite/dump_to_json.h"
+#include "composite/utils/dimension_peeling.h"
+#include "composite/utils/dump.h"
+#include "composite/utils/dump_to_json.h"
 
 namespace akg {
 void DumpPeeledJson(const Stmt &peeled_stmt, const BuildInfo &info) {
@@ -35,7 +35,7 @@ void DumpPeeledJson(const Stmt &peeled_stmt, const BuildInfo &info) {
   build_info.Set("input_names", input_names_arr);
   build_info.Set("output_names", output_names_arr);
   auto json = DumpToJson(peeled_stmt, build_info);
-  DumpStr2File("stitch_info/" + info.kernel_name + "_peel_" + std::to_string(info.opt.stitch_ir_idx_) + ".json", json);
+  DumpStr2File("stitch_info/" + info.kernel_name + "_peel_" + std::to_string(info.opt.stitch_ir_idx) + ".json", json);
 }
 
 Stmt PeelDimension::Run(const Stmt &stmt) {
@@ -49,7 +49,7 @@ Stmt PeelDimension::Run(const Stmt &stmt) {
   Stmt peeled_stmt;
   if (info_.opt.peel_info.GetPeelTensors().empty()) {
     info_.opt.peel_info.SetPeelTensors(peeler.GetPeelTensors(parsed_peeling));
-    peeled_stmt= peeler.GetPeelBody(parsed_peeling);
+    peeled_stmt = peeler.GetPeelBody(parsed_peeling);
   } else {
     peeled_stmt = peeler.GetPeelBody(info_.opt.peel_info.GetPeelTensors());
   }

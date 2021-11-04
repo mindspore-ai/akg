@@ -13,16 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef COMPOSITE_OPTIMIZE_AXIS_ATTR_NORMALIZE_H_
-#define COMPOSITE_OPTIMIZE_AXIS_ATTR_NORMALIZE_H_
-#include "composite/optimize/optimize.h"
+#ifndef COMPOSITE_UTILS_DUMP_TO_JSON_H_
+#define COMPOSITE_UTILS_DUMP_TO_JSON_H_
+
+#include <string>
+#include "tvm.h"
 
 namespace akg {
-class AxisAttrNormalize : public CompositeOptPass {
- public:
-  AxisAttrNormalize() { pass_name_ = __FUNCTION__; }
-  ~AxisAttrNormalize() = default;
-  Stmt Run(const Stmt &s) override;
-};
+std::string DumpToJson(const Stmt &stmt, const Map<std::string, NodeRef> &info);
 }  // namespace akg
-#endif  // COMPOSITE_OPTIMIZE_AXIS_ATTR_NORMALIZE_H_
+
+#endif  // COMPOSITE_UTILS_DUMP_TO_JSON_H_

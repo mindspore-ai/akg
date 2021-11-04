@@ -13,14 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef COMPOSITE_DUMP_H_
-#define COMPOSITE_DUMP_H_
+#ifndef COMPOSITE_UTILS_DUMP_H_
+#define COMPOSITE_UTILS_DUMP_H_
 #include <iomanip>
 #include <fstream>
 #include "tvm.h"
 #include <codegen/util.h>
-#include "composite/util.h"
-#include "stitch_fusion.h"
+#include "composite/utils/util.h"
+#include "composite/lower_tree/stitch_fusion.h"
 #include "build_module.h"
 
 namespace akg {
@@ -92,4 +92,4 @@ void DumpHeader(std::ofstream &of, const std::string &str);
 void DumpBuildInfo(const BuildInfo &info);
 }  // namespace akg
 
-#endif  // COMPOSITE_DUMP_H_
+#endif  // COMPOSITE_UTILS_DUMP_H_

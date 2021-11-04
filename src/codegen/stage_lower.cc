@@ -87,6 +87,20 @@ Stage StageManager::GetStageByType(const std::string &target, StageType type) {
   return Stage();
 }
 
+StageType StageManager::PreStageType(const std::string &target, StageType type) {
+  CHECK(stages_.find(target) != stages_.end()) << GetErrorHint(target);
+  auto iter =
+    std::find_if(stages_[target].cbegin(), stages_[target].cend(), [&type](const Stage &s) { return s.type == type; });
+  CHECK(iter != stages_[target].cend());
+  StageType res = iter->type;
+  if (iter != stages_[target].cbegin()) {
+    --iter;
+    res = iter->type;
+  }
+
+  return res;
+}
+
 StageType StageManager::NextStageType(const std::string &target, StageType type) {
   CHECK(stages_.find(target) != stages_.end()) << GetErrorHint(target);
   auto iter =

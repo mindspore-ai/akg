@@ -104,15 +104,18 @@ class LowerImpl {
   std::unordered_map<std::string, std::function<NodeRef(const LowerData &, bool)>> impls_;
 };
 
+#define REG_LOWER_BASE(class_type, args...) REG_LOWER_BASE_IMPL(class_type, args)
+#define REG_LOWER_BASE_IMPL(class_type, args...) REG_LOWER_BASE_IMPL_MID(__COUNTER__, class_type, args)
+#define REG_LOWER_BASE_IMPL_MID(ctr, class_type, args...) REG_LOWER_BASE_IMPL_UNIQ(ctr, class_type, args)
+#define REG_LOWER_BASE_IMPL_UNIQ(ctr, class_type, args...) \
+  static class_type g_lower_register_##ctr __attribute__((unused)) = class_type(args)
+
 struct LowerImplRegister {
   LowerImplRegister(const std::string &target, std::function<NodeRef(const LowerData &, bool)> impl) {
     LowerImpl::Instance().Register(target, impl);
   }
 };
-#define REG_IMPL_LOWER(target, impl) REG_IMPL_LOWER_MID(__COUNTER__, target, impl)
-#define REG_IMPL_LOWER_MID(ctr, target, impl) REG_IMPL_LOWER_UNIQ(ctr, target, impl)
-#define REG_IMPL_LOWER_UNIQ(ctr, target, impl) \
-  static LowerImplRegister g_lower_impl_register_##ctr __attribute__((unused)) = LowerImplRegister((target), (impl))
+#define REG_IMPL_LOWER(target, impl) REG_LOWER_BASE(LowerImplRegister, target, impl)
 
 void ConfigDumpIr(const std::string &name, const BuildConfig &config, bool lower_list);
 Stmt LowerInitWithSchedule(LowerData &data);

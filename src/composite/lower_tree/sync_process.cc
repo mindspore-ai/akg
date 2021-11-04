@@ -19,7 +19,7 @@
 #include <utility>
 #include <vector>
 
-#include "composite/sync_process.h"
+#include "composite/lower_tree/sync_process.h"
 #include "tvm.h"
 
 namespace akg {

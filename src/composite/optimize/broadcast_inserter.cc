@@ -25,14 +25,14 @@ class BroadcastInserterMutator : public IRMutator {
       CHECK(provide);
       auto call = provide->value.as<Call>();
       CHECK(call);
-      //for unary input op
+      // for unary input op
       if (call->args.size() == 1 && call->name != "BroadcastTo") {
         Expr arg = call->args[0];
         if (arg.as<IntImm>() || arg.as<UIntImm>() || arg.as<FloatImm>()) {
           return DoInsert(arg, 0, provide, call, op);
         }
       }
-      //for op with multiple inputs
+      // for op with multiple inputs
       auto it = broadcast_ops_.find(call->name);
       if (it != broadcast_ops_.end()) {
         for (size_t i = 0; i < call->args.size(); ++i) {

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "composite/dimension_peeling.h"
+#include "composite/utils/dimension_peeling.h"
 
 #define PEEL_DUMP 0
 

@@ -253,6 +253,8 @@ file(
   ${AKG_SOURCE_DIR}/src/schedule/*.cc
   ${AKG_SOURCE_DIR}/src/codegen/*.cc
   ${AKG_SOURCE_DIR}/src/composite/*.cc
+  ${AKG_SOURCE_DIR}/src/composite/lower_tree/*.cc
+  ${AKG_SOURCE_DIR}/src/composite/utils/*.cc
   ${AKG_SOURCE_DIR}/src/composite/optimize/*.cc
   ${AKG_SOURCE_DIR}/src/common/*.cc
   ${AKG_SOURCE_DIR}/src/runtime/stub/*.cc)

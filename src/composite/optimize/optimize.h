@@ -17,8 +17,8 @@
 #define COMPOSITE_OPTIMIZE_H_
 #include <string>
 #include <vector>
-#include "composite/util.h"
-#include "composite/dump.h"
+#include "composite/utils/util.h"
+#include "composite/utils/dump.h"
 
 namespace akg {
 class CompositeOptPass {
@@ -42,7 +42,7 @@ class CompositeOptPassMgr {
   Stmt Run(const Stmt &s) {
     auto file_name = !info_.opt.stitch
                        ? info_.kernel_name + "_composite"
-                       : "stitch_info/" + info_.kernel_name + "_stitch_" + std::to_string(info_.opt.stitch_ir_idx_);
+                       : "stitch_info/" + info_.kernel_name + "_stitch_" + std::to_string(info_.opt.stitch_ir_idx);
     auto enable_dump = info_.opt.enable_dump && getenv(GetDumpIRFlag().c_str()) != nullptr;
     auto dump_mng = DumpManager(file_name, enable_dump);
     auto stmt = s;

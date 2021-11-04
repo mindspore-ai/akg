@@ -13,13 +13,29 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#ifndef AKG_SRC_COMPOSITE_LOWER_TREE_MODULE_NODE_H_
+#define AKG_SRC_COMPOSITE_LOWER_TREE_MODULE_NODE_H_
+#include <pass/utils.h>
+#include "composite/utils/util.h"
+#include "composite/lower_tree/base_node.h"
 
-#ifndef COMPOSITE_COMPOSITE_H_
-#define COMPOSITE_COMPOSITE_H_
-#include "picojson.h"
-#include "composite/util.h"
 namespace akg {
-void ExtractBuildInfo(const picojson::value &input_json, BuildInfo &info);
-Schedule GetScheduleWithBuildInfo(const BuildInfo &info);
+namespace lower {
+constexpr auto kModule = "Module";
+class ModuleLowerNode : public BaseLowerNode {
+ public:
+  ModuleLowerNode() {
+    entrance_stage_ = StageType::End;
+    name_ = __FUNCTION__;
+  }
+  ~ModuleLowerNode() override = default;
+
+  void Process();
+  Module GetModule() { return module_; }
+
+ private:
+  Module module_;
+};
+}  // namespace lower
 }  // namespace akg
-#endif  // COMPOSITE_COMPOSITE_H_
+#endif  // AKG_SRC_COMPOSITE_LOWER_TREE_MODULE_NODE_H_

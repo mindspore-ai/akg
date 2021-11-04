@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#ifndef COMPOSITE_UTILS_DIMENSION_PEELING_H_
+#define COMPOSITE_UTILS_DIMENSION_PEELING_H_
 #include <memory>
 #include <set>
 #include <unordered_map>
@@ -113,98 +115,5 @@ class DimensionPeeler {
 
 DimensionPeeler::Peeling Str2Peeling(const std::string &peeling);
 Expr Peeling2Str(const DimensionPeeler::Peeling &peeling);
-
-///////////////////////////////////////////////////////////////////////////////
-// TODO: The following is test code. should remove later
-///////////////////////////////////////////////////////////////////////////////
-class DumpPeelDims : public IRVisitor {
- public:
-  DumpPeelDims(DimensionPeeler &peeler, DimensionPeeler::Peeling &peeling) : peeler_(peeler), peeling_(peeling) {}
-  void Visit(const NodeRef &node) override {
-    const Provide *op = node.as<Provide>();
-    if (op != nullptr) {
-      std::cout << "//AxisIdx-DimIdx: ";
-      PrintPeeling(op->func);
-      std::cout << "=(";
-      auto prim = op->value.as<Call>();
-      for (size_t i = 0; i < prim->args.size(); ++i) {
-        auto t = prim->args[i].as<Call>();
-        if (t != nullptr) {
-          PrintPeeling(t->func);
-        } else {
-          std::cout << prim->args[i];
-        }
-        if (i < prim->args.size() - 1) std::cout << ",";
-      }
-      std::cout << ")" << std::endl;
-      std::cout << node;
-    }
-    IRVisitor::Visit(node);
-  }
-  void PrintPeeling(FunctionRef ref) {
-    auto dims = peeler_.GetPeelDims(ref->func_name(), peeling_);
-    std::cout << "[";
-    for (size_t i = 0; i < dims.size(); ++i) {
-      std::cout << dims[i].first << "|" << dims[i].second;
-      if (i < dims.size() - 1) {
-        std::cout << ",";
-      }
-    }
-    std::cout << "]";
-  }
-  DimensionPeeler &peeler_;
-  DimensionPeeler::Peeling &peeling_;
-};
-
-class PeelDimensionTester : public CompositeOptPass {
- public:
-  PeelDimensionTester() { pass_name_ = __FUNCTION__; }
-  ~PeelDimensionTester() = default;
-  Stmt Run(const Stmt &s) {
-    const char *test_idx = getenv("PEEL_IDX");
-    if (test_idx == nullptr) {
-      return s;
-    }
-    auto PrintPeeling = [](const DimensionPeeler::Peeling &peeling) {
-      std::cout << "{";
-      for (size_t i = 0; i < peeling.size(); ++i) {
-        std::cout << peeling[i].first << ":" << peeling[i].second;
-        if (i < peeling.size() - 1) {
-          std::cout << ", ";
-        }
-      }
-      std::cout << "}";
-    };
-    DimensionPeeler peeler;
-    peeler.Analyze(s);
-    auto axis_space = peeler.GetAxisSpace();
-    std::cout << "axis_space : [";
-    for (auto v : axis_space) {
-      std::cout << v << ", ";
-    }
-    std::cout << "]\n";
-    auto peeling_space = peeler.GetPeelSpace();
-    std::cout << "peeling_space size = " << peeling_space.size() << std::endl;
-    for (size_t i = 0; i < peeling_space.size(); ++i) {
-      std::cout << i << ": ";
-      PrintPeeling(peeling_space[i]);
-      std::cout << std::endl;
-    }
-    int idx = std::stoi(std::string(test_idx));
-    Stmt body = peeler.GetPeelBody(peeling_space[idx]);
-    std::cout << "*********** input stmt *************\n";
-    std::cout << s;
-    std::cout << "*********** peel dim: ";
-    PrintPeeling(peeling_space[idx]);
-    std::cout << " *************\n";
-    DumpPeelDims(peeler, peeling_space[idx]).Visit(s);
-    std::cout << "*********** peel body: ";
-    PrintPeeling(peeling_space[idx]);
-    std::cout << " ***********" << std::endl;
-    std::cout << body;
-    exit(0);
-    return s;
-  }
-};
-
 }  // namespace akg
+#endif  // COMPOSITE_UTILS_DIMENSION_PEELING_H_

@@ -19,30 +19,12 @@ import os
 import json
 import akg
 from akg import tvm
-import topi
 from akg.utils.kernel_exec import ReturnType
-from .split_block import parallel_json_split
-from .split_stitch import stitch_json_split, split_stitch_attr, combine_stitch_attr
+from .split_stitch import split_stitch_attr
+from .construct_args import get_construct_args, get_tune_construct_args, \
+    should_enable_atomic_add, get_stmt_for_tune, add_attrs_in_segment_infos
+from .construct_args import ConstructType, ConstructKey
 
-
-def _should_enable_atomic_add(kernel_info):
-    for op in kernel_info["op_desc"]:
-        if not op["attr"]:
-            continue
-        for attr in op["attr"]:
-            if attr["name"] == "enable_atomic_add" and attr["value"]:
-                return True
-    return False
-
-
-def _reducemax_pattern(kernel_info):
-    for op in kernel_info['op_desc']:
-        if op['name'] == 'ReduceMax':
-            input_shape = op['input_desc'][0][0]['shape']
-            batch_size = input_shape[0]
-            reduce_size = batch_size * input_shape[1] * input_shape[2]
-            return True, reduce_size
-    return False, 0
 
 def generate_trait(desc):
     """ generate trait of kernel description """
@@ -123,29 +105,35 @@ def _set_compute_attrs(desc_d_in, attr):
     return desc_d, desc_s
 
 
-def _get_feature(desc_s, attr):
-    composite_lower = tvm.get_global_func("composite_lower")
-    stmt, args = composite_lower(desc_s, attr)
+def _get_feature(target, segment_tree, segment_infos):
+    tune_composite = tvm.get_global_func("tune_composite")
+    stmt, args = tune_composite(target, True, segment_tree, segment_infos)
     from akg.tvm import build_module
     binds, _ = build_module.get_binds(args)
-    desc_d = json.loads(desc_s)
-    target = desc_d.get("process")
     from akg.utils.auto_tuning import get_features_from_stmts
     feature = get_features_from_stmts(target=target, stmts=[stmt], binds=[binds], n_skip_cache=0)[0]
     return feature
 
 
-def _build_for_tuning(desc_s, attrs, func):
+def _build_for_tuning(attrs, func, target, segment_tree, segment_infos):
+    def _setup_for_feature(segment_infos):
+        feature_segment_infos = segment_infos.copy()
+        if attrs.get("ret_mode") != ReturnType.FEAT:
+            feature_segment_infos = add_attrs_in_segment_infos(feature_segment_infos, "ret_mode", ReturnType.FEAT)
+        feature_segment_infos = get_stmt_for_tune(feature_segment_infos)
+        return feature_segment_infos
+
     if attrs.get("ret_mode") == ReturnType.FEAT:
-        return _get_feature(desc_s, attrs)
+        segment_infos = _setup_for_feature(segment_infos)
+        return _get_feature(target, segment_tree, segment_infos)
     elif attrs.get("ret_mode") in [ReturnType.DEFAULT, ReturnType.MOD]:
-        return func(desc_s, attrs, True)
+        return func(target, True, segment_tree, segment_infos)
     elif attrs.get("ret_mode") == ReturnType.MOD_AND_FEAT:
         # get both module and feature
-        attrs["ret_mode"] = ReturnType.FEAT
-        feature = _get_feature(desc_s, attrs)
-        attrs["ret_mode"] = ReturnType.MOD
-        mod = func(desc_s, attrs, True)
+        feature_segment_infos = _setup_for_feature(segment_infos)
+        feature = _get_feature(target, segment_tree, feature_segment_infos)
+        segment_infos = add_attrs_in_segment_infos(segment_infos, "ret_mode", ReturnType.MOD)
+        mod = func(target, True, segment_tree, segment_infos)
         return mod, feature
     else:
         raise ValueError("ret_mode gets a wrong value: {}, should be in DEFAULT, FEAT, MOD, MOD_AND_FEAT".
@@ -180,26 +168,13 @@ def _set_tiling_attrs(out_shape, attrs):
     return attrs
 
 
-def _set_reducemax_attrs(desc_d, attrs):
-    backend = desc_d['process']
-    if backend == 'cuda' and _reducemax_pattern(desc_d)[0]:
-        attrs['enable_tile_c0'] = True
-        elem_per_thread = 4
-        blockdim_x = 64
-        blockdim_y = 16
-        griddim_x = 1
-        griddim_y = _reducemax_pattern(desc_d)[1] / (blockdim_y * elem_per_thread)
-        attrs['dim'] = ' 0 0 128 64 b1 t1 0 1 128 128 b0 t0'
-        attrs['bind_block'] = str(griddim_x) + ' ' + str(griddim_y)
-        attrs['bind_thread'] = str(blockdim_x) + ' ' + str(blockdim_y)
-    return attrs
-
 def _set_atomic_add_attrs(desc_d, attrs, poly):
     if "enable_atomic_add" not in attrs.keys():
-        attrs["enable_atomic_add"] = _should_enable_atomic_add(desc_d)
+        attrs["enable_atomic_add"] = should_enable_atomic_add(desc_d)
         if not poly:
             attrs["enable_atomic_add"] = False
     return attrs
+
 
 def _get_online_tune_attr(desc_s, attrs, repo_path, use_new_space=True):
     try:
@@ -287,54 +262,6 @@ def _get_repo_attr(desc_d, compute, shape, dtype, repo, batchmatmul):
     return repo_attr
 
 
-def _json_need_split(desc_d, attrs, poly, target):
-    block_jsons = []
-    stitch_origin_jsons = []
-    input_tensor_name = []
-    output_tensor_name = []
-    attrs_list = []
-    alloc_map_list = []
-    reuse_map_list = []
-    clean_op_map_list = []
-
-    if 'parallel_fusion' in desc_d:
-        block_jsons, input_tensor_name, output_tensor_name = parallel_json_split(desc_d)
-        stitch_origin_jsons = block_jsons
-        if desc_d["parallel_fusion"]["fusion_type"] == "block_pipeline_fusion":
-            attrs["pipeline_groups"] = desc_d["parallel_fusion"]['type_info']
-        for i, _ in enumerate(block_jsons):
-            if 'buffer_stitch' in block_jsons[i]:
-                stitch_jsons, _, _, alloc_map, reuse_map, clean_op_map = stitch_json_split(block_jsons[i])
-                block_jsons[i] = stitch_jsons
-                cur_attrs = _set_reducemax_attrs(json.loads(stitch_jsons), attrs.copy())
-                cur_attrs["enable_stitch_fusion"] = True
-            else:
-                alloc_map, reuse_map, clean_op_map = dict(), dict(), dict()
-                cur_attrs = attrs.copy()
-
-            cur_attrs["enable_atomic_add"] = _should_enable_atomic_add(json.loads(block_jsons[i]))
-            if target == "cuda":
-                all_ops = set([op['name'] for op in json.loads(block_jsons[i])['op_desc']])
-                cur_attrs = _update_attrs_gpu(all_ops, cur_attrs, poly)
-            attrs_list.append(cur_attrs)
-            alloc_map_list.append(alloc_map)
-            reuse_map_list.append(reuse_map)
-            clean_op_map_list.append(clean_op_map)
-    elif 'buffer_stitch' in desc_d:
-        stitch_origin_jsons.append(json.dumps(desc_d))
-        stitch_jsons, input_tensor_name, output_tensor_name, alloc_map, reuse_map, clean_op_map \
-            = stitch_json_split(desc_d)
-        block_jsons.append(stitch_jsons)
-        attrs = _set_reducemax_attrs(desc_d, attrs)
-        attrs["enable_stitch_fusion"] = True
-        attrs_list.append(attrs)
-        alloc_map_list.append(alloc_map)
-        reuse_map_list.append(reuse_map)
-        clean_op_map_list.append(clean_op_map)
-    return block_jsons, stitch_origin_jsons, input_tensor_name, output_tensor_name, attrs_list, \
-        alloc_map_list, reuse_map_list, clean_op_map_list
-
-
 def _update_attrs_gpu(all_ops, attrs, poly):
     if poly:
         if any([i in all_ops for i in ['Argmax', 'Argmin']]):
@@ -365,7 +292,8 @@ def _update_attrs_ascend(all_ops, attr):
     attr["enable_auto_inline"] = any([i in all_ops for i in ["BatchMatMul", "MatMul"]])
     return attr
 
-def _build_to_module(desc_s, desc_d, attrs=None, poly=False):
+
+def _build_to_module(desc_s, desc_d, attrs=None, poly=True):
     """
     build kernel with compute description in json format
     Args:
@@ -376,55 +304,61 @@ def _build_to_module(desc_s, desc_d, attrs=None, poly=False):
     Returns:
        Module.
     """
+    def _update_attr_by_repo(desc_s, attrs):
+        desc_d = json.loads(desc_s)
+        process = desc_d["process"]
+        file_name = "repository_" + process + ".json"
+        repository = _get_repository(file_name, desc_d)
+        all_ops = set([op["name"] for op in desc_d["op_desc"]])
 
-    process = desc_d['process']
-    file_name = "repository_" + process + ".json"
-    repository = _get_repository(file_name, desc_d)
-    all_ops = set([op['name'] for op in desc_d['op_desc']])
-
-    def update_attr(desc_d, attrs):
         if attrs is None:
-            attrs = {'dim': ''}
+            attrs = {"dim": ""}
         compute, shape, dtype = generate_trait(desc_d)
         batchmatmul = "BatchMatMul" in all_ops
         if batchmatmul:
             shape = "any_shape"
         repo_attr = _get_repo_attr(desc_d, compute, shape, dtype, repository, batchmatmul)
         attrs = merge_attrs(attrs, repo_attr)
-        attr_list = ['dim']
-        if process == 'cuda':
-            attr_list.extend(['bind_block', 'bind_thread'])
+        attr_list = ["dim", "bind_block", "bind_thread"] if process == "cuda" else ["dim"]
         for item in attr_list:
-            if attrs.get(item) in (None, ''):
+            if attrs.get(item) in (None, ""):
                 value = get_attr_from_dict([compute, shape, dtype, item], repository)
                 if value:
                     attrs[item] = value
-        if attrs.get('dim') in (None, '') and 'online_tuning' in attrs:
+        if attrs.get("dim") in (None, "") and "online_tuning" in attrs:
             attrs = _get_online_tune_attr(desc_s, attrs, get_repository_file_path(file_name))
         return desc_d, attrs
 
-    if 'parallel_fusion' in desc_d or 'buffer_stitch' in desc_d:
-        block_jsons, stitch_origin_jsons, input_tensor_name, output_tensor_name, attrs_list, \
-            alloc_map_list, reuse_map_list, clean_op_map_list = _json_need_split(desc_d, attrs, poly, process)
-        if 'parallel_fusion' in desc_d:
-            for i, [cur_json, cur_attr] in enumerate(zip(block_jsons, attrs_list)):
-                cur_desc_d, attrs_list[i] = update_attr(json.loads(cur_json), cur_attr)
-                block_jsons[i] = json.dumps(cur_desc_d)
-        else:
-            desc_d, attrs = update_attr(desc_d, attrs)
-        func = tvm.get_global_func("composite_with_json_list")
-        return func(block_jsons, stitch_origin_jsons, input_tensor_name, output_tensor_name,
-                    alloc_map_list, reuse_map_list, clean_op_map_list, attrs_list, poly, process)
+    def _post_update_attr(desc_s, attrs, poly):
+        desc_d, attrs = _update_attr_by_repo(desc_s, attrs)
+        all_ops = set([op["name"] for op in desc_d["op_desc"]])
+        attrs = _update_attrs_gpu(all_ops, attrs, poly)
+        return attrs
 
-    desc_d, attrs = update_attr(desc_d, attrs)
-    attrs = _update_attrs_gpu(all_ops, attrs, poly)
-    if "has_tot_ops" in attrs.keys() and attrs["has_tot_ops"]:
-        func = tvm.get_global_func("composite_with_json_tot")
-        return func(desc_s, attrs, poly)
-    func = tvm.get_global_func("composite_with_json")
-    if "ret_mode" in attrs:
-        return _build_for_tuning(desc_s, attrs, func)
-    return func(desc_s, attrs, poly)
+    def _common_postprocess(_, json_str_list, attrs_list, poly):
+        for i, (cur_json_str, cur_attr) in enumerate(zip(json_str_list, attrs_list)):
+            attrs_list[i] = _post_update_attr(cur_json_str, cur_attr, poly)
+        return json_str_list, attrs_list
+
+    def _stitch_postprocess(desc_d, json_str_list, attrs_list, poly):
+        for i, cur_attr in enumerate(attrs_list):
+            attrs_list[i] = _post_update_attr(json.dumps(desc_d), cur_attr, poly)
+        return json_str_list, attrs_list
+
+    post_funcs = {
+        ConstructType.PARALLEL: _common_postprocess,
+        ConstructType.STITCH: _stitch_postprocess,
+        ConstructType.NORMAL: _common_postprocess,
+        ConstructType.TOT: _common_postprocess
+    }
+    segment_tree, segment_infos = get_construct_args(desc_s, attrs, post_funcs)
+    process = desc_d["process"]
+
+    func = tvm.get_global_func("lower_composite_to_module")
+    if "ret_mode" in attrs and poly:
+        return _build_for_tuning(attrs, func, process, segment_tree, segment_infos)
+    return func(process, poly, segment_tree, segment_infos)
+
 
 def _build_to_module_ascend(desc_s_in, desc_d_in, attr=None, use_repo=True):
     """
@@ -440,13 +374,12 @@ def _build_to_module_ascend(desc_s_in, desc_d_in, attr=None, use_repo=True):
 
     repository = _get_repository("repository.json", desc_d_in)
 
-    def _auto_set_single_block(desc_d, attr):
-        if not attr.get("enable_multicore", None) and desc_d.get("extra", None):
-            if desc_d["extra"].get("BlockMode", "") == "single_block":
-                attr["enable_multicore"] = 0
-        return attr
-
-    def update_attr(desc_s, desc_d, attr, given_attrs=None, support_online_tuning=True):
+    def _update_attr_by_repo(desc_s, desc_d, attr, given_attrs=None, support_online_tuning=True):
+        def _auto_set_single_block(desc_d, attr):
+            if not attr.get("enable_multicore", None) and desc_d.get("extra", None):
+                if desc_d["extra"].get("BlockMode", "") == "single_block":
+                    attr["enable_multicore"] = 0
+            return attr
         if attr is None:
             attr = {'dim': ''}
         all_ops = set([op['name'] for op in desc_d['op_desc']])
@@ -465,60 +398,90 @@ def _build_to_module_ascend(desc_s_in, desc_d_in, attr=None, use_repo=True):
                 if tiling:
                     attr['dim'] = tiling
                 elif support_online_tuning and 'online_tuning' in attr:
-                    attr = _get_online_tune_attr(desc_s_in, attr, get_repository_file_path("repository.json"))
-        _, desc_s = _set_compute_attrs(desc_d, attr)
+                    attr = _get_online_tune_attr(desc_s, attr, get_repository_file_path("repository.json"))
+            _, desc_s = _set_compute_attrs(desc_d, attr)
         return desc_s, attr
 
-    def get_parallel_repo(desc_d):
+    def _get_parallel_repo(desc_d):
         compute, shape, dtype = generate_trait(desc_d)
         repo_attr = get_attr_from_dict([compute, shape, dtype, 'BlockPlan'], repository, {})
         return repo_attr
 
-    def get_stitch_repo(desc_d):
+    def _get_stitch_repo(desc_d):
         compute, shape, dtype = generate_trait(desc_d)
         repo_attr = get_attr_from_dict([compute, shape, dtype], repository, {})
         return repo_attr
 
-    if 'parallel_fusion' in desc_d_in or 'buffer_stitch' in desc_d_in:
-        block_jsons, stitch_origin_jsons, input_tensor_name, output_tensor_name, attrs_list, \
-            alloc_map_list, reuse_map_list, clean_op_map_list = _json_need_split(desc_d_in, attr, True, "cce")
-        if 'parallel_fusion' in desc_d_in:
-            parallel_repo = get_parallel_repo(desc_d_in)
-            if parallel_repo:
-                # "BlockPlan" should be: [{"block_plan": x1, attr1: x2, attr2: x3}, ...]
-                for i, [cur_json, cur_attr, cur_plan] in enumerate(zip(block_jsons, attrs_list, parallel_repo)):
-                    # When BlockPlan is active, the body should be run as single block
-                    cur_attr["enable_multicore"] = 0
-                    block_jsons[i], attrs_list[i] = update_attr(cur_json, json.loads(cur_json), cur_attr,
-                                                                cur_plan["attrs"], False)
-            else:
-                for i, [cur_json, cur_attr] in enumerate(zip(block_jsons, attrs_list)):
-                    block_jsons[i], attrs_list[i] = update_attr(cur_json, json.loads(cur_json), cur_attr, None, False)
+    def _parallel_postprocess(desc_d, json_str_list, attrs_list, _):
+        parallel_repo = _get_parallel_repo(desc_d)
+        if parallel_repo:
+            # "BlockPlan" should be: [{"block_plan": x1, attr1: x2, attr2: x3}, ...]
+            for i, [cur_json, cur_attr, cur_plan] in enumerate(zip(json_str_list, attrs_list, parallel_repo)):
+                # When BlockPlan is active, the body should be run as single block
+                cur_attr["enable_multicore"] = 0
+                json_str_list[i], attrs_list[i] = _update_attr_by_repo(cur_json, json.loads(cur_json), cur_attr,
+                                                                       cur_plan[ConstructKey.ATTRS], False)
         else:
-            if attrs_list[0].get("peeling") is None:
-                # Read buffer stitch attr from repo
-                stitch_repo = get_stitch_repo(desc_d_in)
-                if stitch_repo.get("peeling") is not None:
-                    attrs_list[0].update(stitch_repo)
-                elif "online_tuning" in attr:
-                    # If buffer stitch attr not in repo, use online tuning
-                    tuning_attr = _get_online_tune_attr(desc_s_in, attrs_list[0],
-                                                        get_repository_file_path("repository.json"))
-                    attrs_list[0].update(tuning_attr)
-            # Update sub json attr
-            common_attr, sub_attr = split_stitch_attr(attrs_list[0], len(block_jsons[0]))
-            for i, cur_json in enumerate(block_jsons[0]):
-                block_jsons[0][i], sub_attr[i] = update_attr(cur_json, json.loads(cur_json), sub_attr[i], {})
-            attrs_list[0] = combine_stitch_attr(common_attr, sub_attr)
-        func = tvm.get_global_func("composite_with_json_list")
-        return func(block_jsons, stitch_origin_jsons, input_tensor_name, output_tensor_name,
-                    alloc_map_list, reuse_map_list, clean_op_map_list, attrs_list, True, "cce")
+            for i, [cur_json, cur_attr] in enumerate(zip(json_str_list, attrs_list)):
+                json_str_list[i], attrs_list[i] = _update_attr_by_repo(
+                    cur_json, json.loads(cur_json), cur_attr, None, False)
 
-    desc_s, attr = update_attr(desc_s_in, desc_d_in, attr)
-    func = tvm.get_global_func("composite_with_json")
+        return json_str_list, attrs_list
+
+    def _stitch_postprocess(desc_d, stitch_jsons, attrs_list, _):
+        def _stitch_combine_attrs(common_attr, sub_attrs):
+            combine_attrs = []
+            for i, a in enumerate(sub_attrs):
+                new_sub_attrs = {}
+                for k, v in common_attr.items():
+                    new_sub_attrs[k] = v
+                if a:
+                    key = "sub_attr_" + str(i + 1)
+                    new_sub_attrs[key] = {}
+                    for k, v in a.items():
+                        new_sub_attrs[key][k] = v
+                combine_attrs.append(new_sub_attrs)
+            return combine_attrs
+
+        origin_stitch_attrs = attrs_list[0]
+        if origin_stitch_attrs.get("peeling") is None:
+            # Read buffer stitch attr from repo
+            stitch_repo = _get_stitch_repo(desc_d)
+            if stitch_repo.get("peeling") is not None:
+                origin_stitch_attrs.update(stitch_repo)
+            elif "online_tuning" in attr:
+                # If buffer stitch attr not in repo, use online tuning
+                tuning_attr = _get_online_tune_attr(json.dumps(desc_d), origin_stitch_attrs,
+                                                    get_repository_file_path("repository.json"))
+                origin_stitch_attrs.update(tuning_attr)
+        # Update sub json attr
+        common_attr, stitch_sub_attrs = split_stitch_attr(origin_stitch_attrs, len(stitch_jsons))
+        for i, cur_json_str in enumerate(stitch_jsons):
+            stitch_jsons[i], stitch_sub_attrs[i] = _update_attr_by_repo(
+                cur_json_str, json.loads(cur_json_str), stitch_sub_attrs[i], {})
+        stitch_attrs = _stitch_combine_attrs(common_attr, stitch_sub_attrs)
+
+        return stitch_jsons, stitch_attrs
+
+    def _normal_postprocess(desc_d, json_str_list, attrs_list, poly):
+        _ = (desc_d, poly)  # For unused warning...
+        for i, (cur_json_str, cur_attr) in enumerate(zip(json_str_list, attrs_list)):
+            json_str_list[i], attrs_list[i] = _update_attr_by_repo(
+                cur_json_str, json.loads(cur_json_str), cur_attr)
+        return json_str_list, attrs_list
+
+    post_funcs = {
+        ConstructType.PARALLEL: _parallel_postprocess,
+        ConstructType.STITCH: _stitch_postprocess,
+        ConstructType.NORMAL: _normal_postprocess,
+    }
+    segment_tree, segment_infos = get_construct_args(desc_s_in, attr, post_funcs)
+    process = desc_d_in["process"]
+
+    func = tvm.get_global_func("lower_composite_to_module")
     if "ret_mode" in attr:
-        return _build_for_tuning(desc_s, attr, func)
-    return func(desc_s, attr, True)
+        return _build_for_tuning(attr, func, process, segment_tree, segment_infos)
+    return func(process, True, segment_tree, segment_infos)
 
 
 def build(kernel_desc, attrs=None, poly=True, use_repo=True):
@@ -547,7 +510,7 @@ def build(kernel_desc, attrs=None, poly=True, use_repo=True):
     if backend == 'aicore':
         return _build_to_module_ascend(desc_s, desc_d, attrs, use_repo)
     else:
-        return _build_to_module(desc_s, desc_d, attrs, use_repo)
+        return _build_to_module(desc_s, desc_d, attrs, poly)
 
 
 def get_tiling_space(kernel_desc, level=1, attr=None):
@@ -572,8 +535,10 @@ def get_tiling_space(kernel_desc, level=1, attr=None):
         attr = _update_attrs_gpu(all_ops, attr, True)
     else:
         attr = _update_attrs_ascend(all_ops, attr)
-    func = tvm.get_global_func('composite_lower')
-    ret = func(kernel_desc, attr)
+
+    segment_tree, segment_infos = get_tune_construct_args(kernel_desc, attr)
+    tune_composite = tvm.get_global_func("tune_composite")
+    ret = tune_composite(backend, True, segment_tree, segment_infos)
     spaces = {}
     if attr.get("use_new_space", False):
         spaces['tune_space'] = ret

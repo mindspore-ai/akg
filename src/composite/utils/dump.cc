@@ -109,7 +109,7 @@ void DumpBuildInfo(const BuildInfo &info) {
   if (getenv(GetDumpIRFlag().c_str()) == nullptr) return;
   auto dir_name = !info.opt.stitch
                     ? info.kernel_name + "_composite"
-                    : "stitch_info/" + info.kernel_name + "_stitch_" + std::to_string(info.opt.stitch_ir_idx_);
+                    : "stitch_info/" + info.kernel_name + "_stitch_" + std::to_string(info.opt.stitch_ir_idx);
   std::ofstream of(dir_name + "/composite.log", std::ios::app);
   DumpHeader(of, "BuildInfo");
   of << info;

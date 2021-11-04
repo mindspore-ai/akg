@@ -18,7 +18,7 @@
 
 namespace akg {
 
-class ComplexExpandMutator: public IRMutator {
+class ComplexExpandMutator : public IRMutator {
  public:
   Stmt Mutate_(const Provide *op, const Stmt &s) {
     auto prim_op = op->value.as<Call>();
@@ -29,10 +29,8 @@ class ComplexExpandMutator: public IRMutator {
       Array<Expr> args;
       auto shape = ExpandShape(c_tensor->args);
       air::DataType type(c_tensor->type.code(), c_tensor->type.bits(), 1);
-      args.push_back(Call::make(type, c_tensor->name,
-                     shape, c_tensor->call_type, c_tensor->func));
-      auto prim_expr = Call::make(prim_op->type, prim_op->name, args,
-                                  prim_op->call_type, prim_op->func);
+      args.push_back(Call::make(type, c_tensor->name, shape, c_tensor->call_type, c_tensor->func));
+      auto prim_expr = Call::make(prim_op->type, prim_op->name, args, prim_op->call_type, prim_op->func);
       return Provide::make(op->func, op->value_index, prim_expr, op->args);
     }
     if (prim_op->name == "Complex") {
@@ -50,7 +48,5 @@ class ComplexExpandMutator: public IRMutator {
   }
 };
 
-Stmt ComplexExpander::Run(const Stmt &s) {
-  return ComplexExpandMutator().Mutate(s);
-}
+Stmt ComplexExpander::Run(const Stmt &s) { return ComplexExpandMutator().Mutate(s); }
 }  // namespace akg

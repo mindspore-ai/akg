@@ -85,6 +85,7 @@ class StageManager {
   std::vector<Stage> GetStages(const LowerData &data, StageType begin, StageType end);
   size_t GetIndexOfStageType(const std::string &target, StageType stage);
   Stage GetStageByType(const std::string &target, StageType type);
+  StageType PreStageType(const std::string &target, StageType type);
   StageType NextStageType(const std::string &target, StageType type);
 
  private:
@@ -110,20 +111,14 @@ class StageLower {
 
   // Run stage [cur_stage_, to].
   StageLower &RunTo(StageType to = StageType::End);
-  StageLower &ApplyMutator(std::function<void(NodeRef &node_ref)> func) {
-    func(node_ref_);
+  StageLower &ApplyMutator(std::function<NodeRef(NodeRef &, LowerData &)> func) {
+    node_ref_ = func(node_ref_, data_);
     return *this;
   };
-  StageLower &ApplyMutator(std::function<void(LowerData &data)> func) {
-    func(data_);
-    return *this;
-  };
-  StageLower &ApplyMutator(std::function<void(NodeRef &node_ref, LowerData &data)> func) {
-    func(node_ref_, data_);
-    return *this;
-  };
+  void SetNode(const NodeRef &node_ref) { node_ref_ = node_ref; }
   NodeRef Node() { return node_ref_; }
   LowerData Data() { return data_; }
+  StageType GetCurStage() { return cur_stage_; }
 
  private:
   StageType cur_stage_{StageType::Begin};  // Next run will begin with.
@@ -132,17 +127,30 @@ class StageLower {
   bool done_{false};
 };
 
+inline bool StageTypeLT(const std::string &target, StageType a, StageType b) {
+  return StageManager::Instance().GetIndexOfStageType(target, a) <
+         StageManager::Instance().GetIndexOfStageType(target, b);
+}
+inline bool StageTypeLE(const std::string &target, StageType a, StageType b) {
+  return StageManager::Instance().GetIndexOfStageType(target, a) <=
+         StageManager::Instance().GetIndexOfStageType(target, b);
+}
+inline bool StageTypeGT(const std::string &target, StageType a, StageType b) {
+  return StageManager::Instance().GetIndexOfStageType(target, a) >
+         StageManager::Instance().GetIndexOfStageType(target, b);
+}
+inline bool StageTypeGE(const std::string &target, StageType a, StageType b) {
+  return StageManager::Instance().GetIndexOfStageType(target, a) >=
+         StageManager::Instance().GetIndexOfStageType(target, b);
+}
+
 struct StageRegister {
   StageRegister(const std::string &target, StageType stage_type, const std::string &name,
                 std::function<StageResult(Stmt &, LowerData &)> func) {
     StageManager::Instance().RegisterStage(target, stage_type, name, func);
   }
 };
-#define REG_STAGE_LOWER(target, type, name, func) REG_STAGE_LOWER_MID(__COUNTER__, target, type, name, func)
-#define REG_STAGE_LOWER_MID(ctr, target, type, name, func) REG_STAGE_LOWER_UNIQ(ctr, target, type, name, func)
-#define REG_STAGE_LOWER_UNIQ(ctr, target, type, name, func)                   \
-  static StageRegister g_stage_lower_register_##ctr __attribute__((unused)) = \
-    StageRegister((target), (type), (name), (func))
+#define REG_STAGE_LOWER(target, type, name, func) REG_LOWER_BASE(StageRegister, target, type, name, func)
 
 struct FilterRegister {
   FilterRegister(
@@ -151,10 +159,7 @@ struct FilterRegister {
     StageManager::Instance().RegisterFilter(target, func);
   }
 };
-#define REG_FILTER_LOWER(target, func) REG_FILTER_LOWER_MID(__COUNTER__, target, func)
-#define REG_FILTER_LOWER_MID(ctr, target, func) REG_FILTER_LOWER_UNIQ(ctr, target, func)
-#define REG_FILTER_LOWER_UNIQ(ctr, target, func) \
-  static FilterRegister g_stage_lower_register_##ctr __attribute__((unused)) = FilterRegister((target), (func))
+#define REG_FILTER_LOWER(target, func) REG_LOWER_BASE(FilterRegister, target, func)
 
 }  // namespace lower
 }  // namespace akg

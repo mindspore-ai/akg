@@ -30,7 +30,7 @@
 #include "ir_pass.h"
 #include "codegen/lower.h"
 #include "codegen/stage_lower.h"
-#include "composite/util.h"
+#include "composite/utils/util.h"
 
 namespace akg {
 StageResult LLVMLowerBegin(Stmt &, LowerData &data) {
@@ -57,13 +57,9 @@ StageResult LLVMLowerBegin(Stmt &, LowerData &data) {
   return {stmt, false};
 }
 
-StageResult LLVMLowerStageTuning(Stmt &stmt, LowerData &data) {
-  return LowerStageTuning(stmt, data);
-}
+StageResult LLVMLowerStageTuning(Stmt &stmt, LowerData &data) { return LowerStageTuning(stmt, data); }
 
-StageResult LLVMLowerPoly(Stmt &stmt, LowerData &data) {
-  return LowerPoly(stmt, data);
-}
+StageResult LLVMLowerPoly(Stmt &stmt, LowerData &data) { return LowerPoly(stmt, data); }
 
 StageResult LLVMLowerBeforeFlattern(Stmt &stmt, LowerData &data) {
   if (data->polyhedral) {
@@ -73,9 +69,7 @@ StageResult LLVMLowerBeforeFlattern(Stmt &stmt, LowerData &data) {
   return {stmt, false};
 }
 
-StageResult LLVMLowerFlattern(Stmt &stmt, LowerData &data) {
-  return LowerFlattern(stmt, data);
-}
+StageResult LLVMLowerFlattern(Stmt &stmt, LowerData &data) { return LowerFlattern(stmt, data); }
 
 StageResult LLVMBeforeLowerFunc(Stmt &stmt, LowerData &data) {
   stmt = NEXT_PASS_IF(!data->simple_mode, LoopPartition, stmt, data->config->partition_const_loop);
@@ -86,9 +80,7 @@ StageResult LLVMBeforeLowerFunc(Stmt &stmt, LowerData &data) {
   return {stmt, false};
 }
 
-StageResult LLVMLowerDone(Stmt &stmt, LowerData &data) {
-  return LowerDone(stmt, data);
-}
+StageResult LLVMLowerDone(Stmt &stmt, LowerData &data) { return LowerDone(stmt, data); }
 
 namespace lower {
 // The order of following register will affect the stage order, please make sure it is right.
@@ -100,9 +92,7 @@ REG_STAGE_LOWER("llvm", StageType::Flattern, "FLATTERN", LLVMLowerFlattern);
 REG_STAGE_LOWER("llvm", StageType::BeforeLowerFunc, "BeforeLowerFunc", LLVMBeforeLowerFunc);
 REG_STAGE_LOWER("llvm", StageType::End, "END", LLVMLowerDone);
 
-NodeRef LLVMLowerImpl(const LowerData &data, bool get_stmt) {
-  return StageLower(data).RunTo().Node();
-}
+NodeRef LLVMLowerImpl(const LowerData &data, bool get_stmt) { return StageLower(data).RunTo().Node(); }
 REG_IMPL_LOWER("llvm", LLVMLowerImpl);
 }  // namespace lower
 }  // namespace akg

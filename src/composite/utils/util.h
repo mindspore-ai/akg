@@ -13,8 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef COMPOSITE_UTIL_H_
-#define COMPOSITE_UTIL_H_
+#ifndef COMPOSITE_UTILS_UTIL_H_
+#define COMPOSITE_UTILS_UTIL_H_
 #include <map>
 #include <utility>
 #include "tvm.h"
@@ -46,6 +46,7 @@ static std::unordered_map<std::string, air::Type> type_mapping = {
 
 std::string type2string(const air::Type &type);
 
+std::string GetRealTarget(const std::string &target);
 std::string GetProcess(const picojson::value &json);
 bool IsBlockIdx(const std::string &name);
 bool IsBlockIdxX(const std::string &name);
@@ -68,7 +69,7 @@ bool ShapeSizeIsOne(const Array<Expr> &shape);
 bool ShapeCanBroadcast(const Array<Expr> &shape1, const Array<Expr> &shape2);
 std::string GetOpName(const Provide *p);
 std::string CreateDataFormatKey(const std::string &tensor_name);
-bool GetBoolValueFromAttr(const Map<std::string, NodeRef> &attrs, const std::string &key);
+bool GetBoolValueFromMap(const Map<std::string, NodeRef> &attrs, const std::string &key);
 
 using FuncRefList = std::vector<FunctionRef>;
 using FuncRefMap = std::unordered_map<FunctionRef, FunctionRef, NodeHash, NodeEqual>;
@@ -140,12 +141,12 @@ struct BuildOpt {
   FuncRefSet fakeout;            // the tensors which are not output
   std::vector<Tensor> sch_only;  // the tensors which should only used in sch, not output
   FuncTensorMap tensor_map;
-  Array<Tensor> noinline_candidate; // eg, Gather's output and TensorScatterAdd's update
-  Array<Tensor> noinline_indeed; // the tensor make noinline by fake into args, noinline_candidate excludes args
+  Array<Tensor> noinline_candidate;  // eg, Gather's output and TensorScatterAdd's update
+  Array<Tensor> noinline_indeed;     // the tensor make noinline by fake into args, noinline_candidate excludes args
   std::string target;
   bool stitch{false};
   bool tuning{false};
-  size_t stitch_ir_idx_{0};
+  size_t stitch_ir_idx{0};
   PeelInfo peel_info;
   bool fold_dim{true};
   std::unordered_map<FunctionRef, std::vector<int>, NodeHash, NodeEqual> fold_dims_;
@@ -612,6 +613,23 @@ class VarSubstitute : public IRMutator {
  private:
   Buffer buffer_;
 };
+
+std::vector<std::string> GetNames(const Array<NodeRef> &io);
+
+class ElimDuplicateInputs : public IRMutator {
+ public:
+  explicit ElimDuplicateInputs(const Array<NodeRef> &inputs) : names_(GetNames(inputs)) {}
+  Stmt Run(Stmt &stmt);
+
+ private:
+  Expr Mutate_(const Load *op, const Expr &e) final;
+  Stmt Mutate_(const Store *op, const Stmt &s) final;
+
+ private:
+  bool is_mutate_{false};
+  std::unordered_map<std::string, Var> vars_;
+  std::vector<std::string> names_;
+};
 }  // namespace akg
 
-#endif  // COMPOSITE_UTIL_H_
+#endif  // COMPOSITE_UTILS_UTIL_H_

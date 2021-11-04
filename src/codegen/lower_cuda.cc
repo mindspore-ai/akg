@@ -39,7 +39,7 @@
 #include "ir_pass.h"
 #include "codegen/lower.h"
 #include "codegen/stage_lower.h"
-#include "composite/util.h"
+#include "composite/utils/util.h"
 
 namespace akg {
 StageResult CudaLowerBegin(Stmt &, LowerData &data) {
@@ -146,9 +146,7 @@ StageResult CudaLowerBeforeLowerFunc(Stmt &stmt, LowerData &data) {
   return {stmt, false};
 }
 
-StageResult CudaLowerDone(Stmt &stmt, LowerData &data) {
-  return LowerDone(stmt, data);
-}
+StageResult CudaLowerDone(Stmt &stmt, LowerData &data) { return LowerDone(stmt, data); }
 
 namespace lower {
 // The order of following register will affect the stage order, please make sure it is right.
