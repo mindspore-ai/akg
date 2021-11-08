@@ -96,7 +96,7 @@ void ScopInfoAdapter(TuneInfo *tune_info, ScopInfo *scop_info) {
   tune_info->analysis.Set("tensor_of_tensor", make_const(Int(32), scop_info->analysis_result_.GetTensorOfTensor()));
   tune_info->analysis.Set("enable_reduce_lib", make_const(Int(32), scop_info->user_config_.GetEnableAkgReduceLib()));
   tune_info->analysis.Set("enable_atomic_add", make_const(Int(32), scop_info->user_config_.GetEnableAtomicAdd()));
-  tune_info->analysis.Set("reduce_direction", StringImm::make(scop_info->analysis_result_.GetReduceDirection()));
+  tune_info->analysis.Set("reduce_direction", StringImm::make(scop_info->analysis_result_.ShowReduceDirectionOfBand()));
 }
 
 std::unique_ptr<TuneInfo> AdaptTuneInfo(const TilingAnalyzer &analyzer, ScopInfo *scop_info,
@@ -104,13 +104,17 @@ std::unique_ptr<TuneInfo> AdaptTuneInfo(const TilingAnalyzer &analyzer, ScopInfo
   TuneInfo *tune_info = new TuneInfo();
   tune_info->analysis.Set("memory_constraints", memory_constraints);
 
-  auto CollectTileAxis = [&tune_info, &analyzer, &dims](TileAxis *a) {
+  auto CollectTileAxis = [&tune_info, &analyzer, &scop_info, &dims](TileAxis *a) {
     if (a == analyzer.RootAxis()) {
-      auto t = a->GetAttrValue(AT_TEMPLATE);
-      if (t.size() != 1u) {
-        return;
+      if (scop_info->user_config_.GetTarget() == TARGET_CPU) {
+        tune_info->analysis.Set("op_template", StringImm::make("CPU"));
+      } else {
+        auto t = a->GetAttrValue(AT_TEMPLATE);
+        if (t.size() != 1u) {
+          return;
+        }
+        tune_info->analysis.Set("op_template", StringImm::make(t[0]));
       }
-      tune_info->analysis.Set("op_template", StringImm::make(t[0]));
       auto axis_info = make_node<AxisInfoNode>();
       for (const auto attr : a->attrs) {
         if (axis_info->attrs.find(attr.attr_key) != axis_info->attrs.end()) {

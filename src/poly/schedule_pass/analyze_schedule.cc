@@ -18,6 +18,7 @@
 #include "poly/scop_builder.h"
 #include "poly/schedule_analysis/gpu_dma_analysis.h"
 #include "poly/schedule_analysis/operator_type_analysis.h"
+#include "poly/schedule_analysis/band_node_analysis.h"
 
 namespace akg {
 namespace ir {
@@ -103,11 +104,13 @@ void AnalyzeSchedule::ConstructBandNode() {
 
 isl::schedule AnalyzeSchedule::Run(isl::schedule sch) {
   sch_ = sch;
-  stmt_ = GenHalide(scop_info_, sch, true);
   ConstructBandNode();
 
   OpTypeCollector op_type_collector(scop_info_, stmt_);
   op_type_collector.Run();
+
+  AnalyzeBandNode analyzer(sch, scop_info_);
+  analyzer.Run();
 
   if (target_ == TARGET_CUDA) {
     GpuDmaAnalysis dma_analysis(sch, scop_info_);

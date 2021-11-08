@@ -139,10 +139,10 @@ class ReduceInfoCollect : public IRVisitor {
     CHECK(block_cfg) << "thread config is null.";
     int tx = thread_cfg->GetX().second;
     int ty = thread_cfg->GetY().second;
-    std::string direction = scop_info_.analysis_result_.GetReduceDirection();
-    CHECK(!direction.empty()) << "direction should not be empty!";
+    ReduceDirection direction = scop_info_.analysis_result_.GetReduceDirectionOfBand();
+    CHECK(direction != ReduceDirection::UNKNOWN) << "reduce direction unknown !";
     std::string direction_size = "";
-    if (direction == Y_DIRECTION) {
+    if (direction == ReduceDirection::Y) {
       direction_size = std::to_string(ty);
     } else {
       direction_size = std::to_string(tx);
@@ -175,9 +175,9 @@ class ReduceInfoCollect : public IRVisitor {
     ret += ", ";
     ret += std::to_string(ty);
     std::string reduce_type = "";
-    if (direction == ALL_DIRECTION) {
+    if (direction == ReduceDirection::ALL) {
       reduce_type = AKG_ALL_REDUCE;
-    } else if (direction == X_DIRECTION) {
+    } else if (direction == ReduceDirection::X) {
       reduce_type = AKG_X_REDUCE;
     } else {
       reduce_type = AKG_Y_REDUCE;

@@ -136,8 +136,8 @@ class LLVMModuleNode final : public runtime::ModuleNode {
       llvm::ValueToValueMapTy Vmap;
       auto module_id = mptr_->getModuleIdentifier();
       auto filter = [module_id](const llvm::GlobalValue *GV) {
-        if (GV->getGlobalIdentifier() == module_id + "_lambda" ||
-            GV->getGlobalIdentifier() == module_id + "_kernel") {
+        if (GV->getGlobalIdentifier().find(module_id + "_lambda") != std::string::npos ||
+            GV->getGlobalIdentifier().find(module_id + "_kernel") != std::string::npos) {
           return true;
         }
         return false;

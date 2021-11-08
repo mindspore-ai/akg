@@ -13,37 +13,41 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef POLY_ANALYZE_SCHEDULE_H_
-#define POLY_ANALYZE_SCHEDULE_H_
+#ifndef BAND_NODE_ANALYSIS_H
+#define BAND_NODE_ANALYSIS_H
 
-#include "poly/schedule_pass.h"
+#include "poly/scop_info.h"
 
 namespace akg {
 namespace ir {
 namespace poly {
 
-class AnalyzeSchedule : public SchedulePass {
+class AnalyzeBandNode {
  public:
-  AnalyzeSchedule(ScopInfo &scop_info) : scop_info_(scop_info) {
-    pass_name_ = __FUNCTION__;
+  AnalyzeBandNode(const isl::schedule &sch, ScopInfo &scop_info) : sch_(sch), scop_info_(scop_info) {
     target_ = scop_info.user_config_.GetTarget();
-    stmt_ = scop_info.user_config_.GetBody();
   }
-  ~AnalyzeSchedule() {}
+  ~AnalyzeBandNode() = default;
 
-  virtual isl::schedule Run(isl::schedule sch);
+  void Run();
 
  private:
-  void ConstructBandNode();
+  void CollectStmtInfo();
+  void AnalyzeOuterBandTemplate();
+  void ShowBandInfo();
+  void AnalyzeLastAxis();
+  void DetermineTemplateOfBand(BandNode *bn);
+  void SetTensorLastAxis(const isl::schedule_node &node, int index);
+  int GetCoalescedAccess(const isl::schedule_node &node);
 
   std::string target_;
-  Stmt stmt_;
-  isl::schedule sch_;
+  const isl::schedule &sch_;
   ScopInfo &scop_info_;
+  std::unordered_map<isl::id, std::pair<std::string, ReduceDirection>, isl::IslIdIslHash> stmt_info_;
+
 };
 
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg
-
-#endif  // POLY_ANALYZE_SCHEDULE_H_
+#endif  // BAND_NODE_ANALYSIS_H

@@ -73,7 +73,6 @@ class ScheduleTreeAnalyzer {
   std::vector<TileNode> tile_nodes_;
   std::unordered_map<size_t, size_t> tile_size_in_band_;
 
-  std::vector<std::unique_ptr<BandNode>> band_nodes_;
   std::vector<isl::schedule_node_band> outer_bands_;
   std::unordered_map<std::string, std::vector<std::pair<int64_t, Expr>>> dim_range_;
   std::vector<Band> band_list_;

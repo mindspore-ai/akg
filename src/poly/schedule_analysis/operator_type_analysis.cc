@@ -211,7 +211,7 @@ void OpTypeCollector::WriteToScopInfo() {
 
 void OpTypeCollector::Dump() {
   LOG(INFO) << "OP TEMPLATE = "
-            << scop_info_.analysis_result_.ShowOpTemplate(scop_info_.analysis_result_.GetOpTemplate());
+            << scop_info_.analysis_result_.ShowOpTemplate();
   for (auto it : provides_ana_) {
     auto loop = it.first;
     auto provs = it.second;
@@ -661,7 +661,7 @@ class OperatorInfoCollector {
       bool is_all_reduce = vars_not_reduce.size() == 0;
       scop_info_.user_config_.SetTileCheckCoincident(!is_all_reduce);
       if (is_all_reduce) {
-        scop_info_.analysis_result_.SetOpTemplate(Template::ALL_REDUCTION);
+        scop_info_.analysis_result_.RecordReduceDirection(red_id, ReduceDirection::ALL);
       }
       isl::ctx ctx = op_domain.tuple.ctx();
 
@@ -693,12 +693,12 @@ class OperatorInfoCollector {
         SetReduceWriteDataType(reduce_tensor_info);
         scop_info_.analysis_result_.UpdateReduceTensorInfoMap(red_id, reduce_tensor_info);
 
-        std::string reduce_direction;
+        ReduceDirection reduce_direction = ReduceDirection::UNKNOWN;
         if (scop_info_.analysis_result_.GetCsr()) {
-          reduce_direction = X_DIRECTION;
+          reduce_direction = ReduceDirection::X;
         } else {
           PostOrderVisit(op->value, [&reduce_direction, &reduce_attrs, op](const NodeRef &node) -> void {
-            if (reduce_direction == Y_DIRECTION) {
+            if (reduce_direction == ReduceDirection::Y) {
               return;
             }
             auto call = node.as<Call>();
@@ -734,21 +734,21 @@ class OperatorInfoCollector {
             }
 
             if (is_all_reduce) {
-              reduce_direction = ALL_DIRECTION;
+              reduce_direction = ReduceDirection::ALL;
               return;
             }
 
             if (reduce_position == call_size - non_variable_count - 1) {
-              reduce_direction = X_DIRECTION;
+              reduce_direction = ReduceDirection::X;
             } else {
-              reduce_direction = Y_DIRECTION;
+              reduce_direction = ReduceDirection::Y;
             }
           });
         }
-        if (reduce_direction.empty()) {
+        if (reduce_direction == ReduceDirection::UNKNOWN) {
           LOG(WARNING) << "Cannot identify reduce direction for stmt " << red_id;
         }
-        scop_info_.analysis_result_.RecordReduceDirection(reduce_direction);
+        scop_info_.analysis_result_.RecordReduceDirection(red_id, reduce_direction);
         if (scop_info_.user_config_.GetEnableAkgReduceLib()) {
           scop_info_.analysis_result_.SetUseGpuReduceLib(true);
         }

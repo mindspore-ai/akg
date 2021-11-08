@@ -867,16 +867,27 @@ enum Template {
   PURE_ELEM,
   BROADCAST_OP,
   REDUCTION,
-  ALL_REDUCTION,
   BITWISE_REDUCTION,
   MATMUL,
   TRANSPOSE_OP,
   PAD_OP,
   CUSTOM_CONFIG,
   CONV,
-  CPU,
   EXTERN_CALL,
   TEMPLATE_BULK
+};
+
+enum ReduceDirection {
+  UNKNOWN = 0,
+  X,
+  Y,
+  ALL,
+};
+
+struct OperatorInfo {
+  Template type{Template::DEFAULT};
+  // used only for reduce operators, represents the direction of reduce operation.
+  ReduceDirection direction{ReduceDirection::UNKNOWN};
 };
 
 class AnalysisResult {
@@ -912,7 +923,10 @@ class AnalysisResult {
     BandNode(const isl::schedule_node_band &n, BandScope s, int i) : node(n), scope(s), index(i) {}
     isl::schedule_node_band node;
     BandScope scope;
-    size_t index;
+    size_t index{0};
+    OperatorInfo info;
+    int last_axis{-1};
+    std::unordered_set<isl::id, isl::IslIdIslHash> stmts;
     BandNode *parent{nullptr};
     std::vector<std::unique_ptr<BandNode>> children{};
   };
@@ -1032,9 +1046,18 @@ class AnalysisResult {
   bool GetCsr() const { return is_csr_; }
   void SetCsr(const bool &is_csr) { is_csr_ = is_csr; }
 
-  int GetLastAxisInScheduleTree() const { return last_axis_in_schedule_tree_; }
-  void SetLastAxisInScheduleTree(const int last_axis_in_schedule_tree) {
-    last_axis_in_schedule_tree_ = last_axis_in_schedule_tree;
+  void SetLastAxisOfBand(int axis, int band_index = 0) {
+    if (band_index < 0 || band_index > static_cast<int>(band_nodes_.size()) - 1) {
+      return;
+    }
+    band_nodes_[band_index]->last_axis = axis;
+  }
+
+  int GetLastAxisOfBand(int band_index = 0) const {
+    if (band_index < 0 || band_index > static_cast<int>(band_nodes_.size()) - 1) {
+      return -1;
+    }
+    return band_nodes_[band_index]->last_axis;
   }
 
   std::unordered_set<std::string> GetTensorsNotPromote() const { return tensors_not_promote_; }
@@ -1074,8 +1097,68 @@ class AnalysisResult {
   void RecordBatchAxisNumForMatmul(const unsigned int &batch_axis_num) { batch_axis_num_ = std::move(batch_axis_num); }
   unsigned int GetBatchAxisNumForMatmul() const { return batch_axis_num_; }
 
-  void RecordReduceDirection(const std::string reduce_direction) { reduce_direction_ = reduce_direction; }
-  std::string GetReduceDirection() const { return reduce_direction_; }
+  void RecordReduceDirection(isl::id id, ReduceDirection d) { reduce_direction_map_[id] = d; }
+  std::unordered_map<isl::id, ReduceDirection, isl::IslIdIslHash> GetReduceDirectionMap() const {
+    return reduce_direction_map_;
+  }
+
+  int GetOuterBandNumber() {
+    return static_cast<int>(band_nodes_.size());
+  }
+
+  // template in the whole schedule tree
+  void SetOpTemplate(Template op_template) { op_info_.type = op_template; }
+  Template GetOpTemplate() { return op_info_.type; }
+  std::string ShowOpTemplate() { return template_map_[op_info_.type]; }
+  std::string ShowOpTemplate(Template t) { return template_map_[t]; }
+
+  // reduce direction in every schedule band node
+  void SetReduceDirectionOfBand(ReduceDirection d, int band_index = 0){
+    if (band_index < 0 || band_index > static_cast<int>(band_nodes_.size()) - 1) {
+      return;
+    }
+    band_nodes_[band_index]->info.direction = d;
+  }
+  ReduceDirection GetReduceDirectionOfBand(int band_index = 0) {
+    if (band_index < 0 || band_index > static_cast<int>(band_nodes_.size()) - 1) {
+      return ReduceDirection::UNKNOWN;
+    }
+    return band_nodes_[band_index]->info.direction;
+  }
+  std::string ShowReduceDirectionOfBand(int band_index = 0) {
+    if (band_index < 0 || band_index > static_cast<int>(band_nodes_.size()) - 1) {
+      return direction_map_[ReduceDirection::UNKNOWN];
+    }
+    return direction_map_[band_nodes_[band_index]->info.direction];
+  }
+
+  // operator type in every schedule band node
+  void SetOpTemplateOfBand(Template t, int band_index = 0){
+    if (band_index < 0 || band_index > static_cast<int>(band_nodes_.size()) - 1) {
+      return;
+    }
+    band_nodes_[band_index]->info.type = t;
+  }
+  Template GetOpTemplateOfBand(int band_index = 0) {
+    if (band_index < 0 || band_index > static_cast<int>(band_nodes_.size()) - 1) {
+      return Template::DEFAULT;
+    }
+    return band_nodes_[band_index]->info.type;
+  }
+  std::string ShowOpTemplateOfBand(int band_index = 0) {
+    if (band_index < 0 || band_index > static_cast<int>(band_nodes_.size()) - 1) {
+      return template_map_[Template::DEFAULT];
+    }
+    return template_map_[band_nodes_[band_index]->info.type];
+  }
+
+  OperatorInfo GetOpInfoOfBand(int band_index = 0) {
+    if (band_index < 0 || band_index > static_cast<int>(band_nodes_.size()) - 1) {
+      OperatorInfo op;
+      return op;
+    }
+    return band_nodes_[band_index]->info;
+  }
 
   void RecordReduceInitIds(isl::id reduce_init_id) { reduce_init_ids_.push_back(reduce_init_id); }
   std::vector<isl::id> GetReduceInitIds() const { return reduce_init_ids_; }
@@ -1105,9 +1188,6 @@ class AnalysisResult {
   bool IsFakeCopyin(const isl::id &tensor_id);
   void RecordProvideAnalysis(const For *op, ProvideEntry prov) { provides_ana_[op].emplace_back(prov); }
   std::unordered_map<const For *, std::vector<ProvideEntry>> GetProvideAnalysis() { return provides_ana_; }
-  void SetOpTemplate(Template op_template) { op_template_ = op_template; }
-  Template GetOpTemplate() { return op_template_; }
-  std::string ShowOpTemplate(Template op_template) { return template_map_[op_template]; }
 
   void RecordBandNode(std::unique_ptr<BandNode> &band) {
     band_nodes_.emplace_back(std::move(band));
@@ -1116,23 +1196,27 @@ class AnalysisResult {
 
 
  public:
-  std::vector<std::unique_ptr<BandNode>> band_nodes_;
   std::vector<std::pair<std::string, STMT_OP_TYPE>> stmt_type_;
   std::vector<std::pair<isl::union_set, BufferedFootPrintInfo>> active_buffer_footprints_;
   std::vector<BufferDefInfo> buffer_def_infos_;
   BufferDefInfo default_buffer_def_info_;
   std::unordered_map<const For *, std::vector<ProvideEntry>> provides_ana_;
   std::unordered_map<int, std::string> template_map_ = {
-    {0, "DEFAULT"},       {1, "PURE_ELEM"},         {2, "BROADCAST_OP"}, {3, "REDUCTION"},
-    {4, "ALL_REDUCTION"}, {5, "BITWISE_REDUCTION"}, {6, "MATMUL"},       {7, "TRANSPOSE_OP"},
-    {8, "PAD_OP"},        {9, "CUSTOM_CONFIG"},     {10, "CONV"},        {11, "EXTERN_CALL"}};
+    {0, "DEFAULT"},           {1, "PURE_ELEM"},    {2, "BROADCAST_OP"},   {3, "REDUCTION"},
+    {4, "BITWISE_REDUCTION"}, {5, "MATMUL"},       {6, "TRANSPOSE_OP"},   {7, "PAD_OP"},
+    {8, "CUSTOM_CONFIG"},     {9, "CONV"},         {10, "EXTERN_CALL"}};
+  std::unordered_map<int, std::string> direction_map_ = {
+    {0, "UNKNOWN"},       {1, "X_DIRECTION"},      {2, "Y_DIRECTION"},    {3, "ALL_DIRECTION"}};
 
  private:
-  Template op_template_{Template::DEFAULT};
+  // represents the operator information of the whole schedule tree
+  OperatorInfo op_info_;
+  // stores all the outermost schedule_band_node in schedule tree, including operator-related information
+  std::vector<std::unique_ptr<BandNode>> band_nodes_;
   bool use_gpu_reduce_lib_{false};
   ReduceMap reduces_;
   ReduceTensorInfoMap reduce_tensor_info_;
-  std::string reduce_direction_;
+  std::unordered_map<isl::id, ReduceDirection, isl::IslIdIslHash> reduce_direction_map_;
   std::vector<isl::id> reduce_init_ids_;
   std::unordered_set<std::string> reduce_attrs_;
   std::unordered_set<std::string> not_reduce_attrs_;
@@ -1188,7 +1272,6 @@ class AnalysisResult {
   std::map<std::string, std::string> tensor_of_tensor_stmt_;
   std::unordered_set<std::string> tensors_not_promote_;
   std::unordered_set<std::string> inner_tensor_;
-  int last_axis_in_schedule_tree_{-1};
   bool is_tensor_of_tensor_{false};
   bool is_csr_{false};
 };
