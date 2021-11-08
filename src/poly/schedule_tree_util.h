@@ -132,7 +132,7 @@ isl::schedule_node CollectMarkNodeOnPromotion(const isl::schedule_node &root, co
 std::unordered_map<std::string, std::string> GetMatmulTensorsName(ScopInfo &scop_info);
 
 bool IsTensorAB(const std::string &item, ScopInfo &scop_info);
-isl::schedule_node SinkFixedPositionAxis(const isl::schedule_node &orig_node, const int sink_pos);
+isl::schedule_node AdjustAxisPosition(const isl::schedule_node &orig_node, const int orig_pos, const int new_pos);
 
 }  // namespace poly
 }  // namespace ir

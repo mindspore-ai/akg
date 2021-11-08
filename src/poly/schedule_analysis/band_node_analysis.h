@@ -35,16 +35,15 @@ class AnalyzeBandNode {
   void CollectStmtInfo();
   void AnalyzeOuterBandTemplate();
   void ShowBandInfo();
-  void AnalyzeLastAxis();
+  void AnalyzeAxisPosition();
   void DetermineTemplateOfBand(BandNode *bn);
-  void SetTensorLastAxis(const isl::schedule_node &node, int index);
-  int GetCoalescedAccess(const isl::schedule_node &node);
+  void SetVectorizationAxis(const isl::schedule_node &orig_node, const int index);
+  int GetElemVectorizationAxisPos(const isl::schedule_node &orig_node);
 
   std::string target_;
   const isl::schedule &sch_;
   ScopInfo &scop_info_;
   std::unordered_map<isl::id, std::pair<std::string, ReduceDirection>, isl::IslIdIslHash> stmt_info_;
-
 };
 
 }  // namespace poly
