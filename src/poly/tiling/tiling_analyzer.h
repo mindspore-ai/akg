@@ -159,6 +159,7 @@ class TileAxis {
     int64_t map_min_{MIN_TILE};
     int64_t map_extent_{0};           // 0 means it is not determined yet
     int64_t item_process_{MIN_TILE};  // for thread only, equals to tile / thread_num
+    std::vector<int64_t> map_cand_{};
   };
   TileAxis *parent{nullptr};
   int index{0};
@@ -283,8 +284,8 @@ class TilingAnalyzer {
   inline Stmt Halide() const { return body_; }
 
   std::vector<TileAxis *> GetAxesContainsAttr(const std::string &attr_key) const;
-  std::vector<TileAxis *> GetAxesOfAttr(const std::string &attr_key) const;
-  std::vector<TileAxis *> GetAxesOfAttr(const AttrInfo &attr_info) const;
+  std::vector<TileAxis *> GetAxesOfAttr(const std::string &attr_key, int band_index = -1) const;
+  std::vector<TileAxis *> GetAxesOfAttr(const AttrInfo &attr_info, int band_index = -1) const;
 
   TileAxis *Axis(const For *loop) const {
     auto it = tile_axis_.find(loop);
@@ -405,6 +406,9 @@ class TileCandidate {
 
   int64_t CalActualTile(const CalAlignInfo *align_info);
   void SortByPriority() {
+    if (analyzer_->scop_info_.user_config_.GetTarget() != TARGET_CCE) {
+      return;
+    }
     auto priority_cmp = [](TileAxis *a, const TileAxis *b) {
       if (b->priority <= -1) return false;
       if (a->priority == -1) return true;

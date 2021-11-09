@@ -16,6 +16,9 @@
  */
 
 #include "poly/tiling/tiling_solver.h"
+
+#include <cmath>
+
 #include "build_module.h"
 namespace akg {
 namespace ir {
@@ -130,6 +133,311 @@ void TilingSolver::CollectTileAxisTopDown() {
   this->cand_.SortByPriority();
 }
 
+TileCandidate *GpuSolver::Solve() {
+  CollectMemoryLimit();
+  auto tile_band_size = static_cast<int>(analyzer_.RootAxis()->children.size());
+  for (auto band = 0; band < tile_band_size; ++band) {
+    tiling_band_ = band;
+
+    CollectTileAxisTopDown();
+    auto tile_axes = cand_.GetTileAxis();
+    for (auto i = static_cast<int>(tile_axes.size()) - 1; i >= 0; --i) {
+      TileAxis *axis = tile_axes[i];
+      DetermineTileFactor(axis, CACHE1);
+      DetermineTileFactor(axis, CACHE0);
+    }
+    if (!analyzer_.scop_info_.analysis_result_.GetIsGpuDmaAnalysed()) {
+      InnerThreadOuterBlock();
+    }
+  }
+
+  if (analyzer_.scop_info_.analysis_result_.GetIsGpuDmaAnalysed()) {
+    return &cand_;
+  }
+
+  SolveMapping();
+  return &cand_;
+}
+
+void GpuSolver::SolveMapping() {
+  std::stringstream ss;
+
+  auto DoAlloc = [this, &ss](MapResourceCenter center, const std::string &center_type) {
+    std::unordered_map<int64_t, std::string> max_axis_pos;
+    std::unordered_set<TileAxis *> successed;
+    MappingCfg *map_cfg;
+
+    if (center_type == THREAD_STR) {
+      max_axis_pos = {{0, T0}, {1, T1}, {2, T2}};
+      map_cfg = analyzer_.scop_info_.user_config_.GetThreadConfig();
+    } else {
+      max_axis_pos = {{0, B0}, {1, B1}, {2, B2}};
+      map_cfg = analyzer_.scop_info_.user_config_.GetBlockConfig();
+    }
+
+    if (map_cfg != nullptr) {
+      std::string custom_str = "";
+      for (size_t i = 0; i < center.resource_limit.size(); ++i) {
+        custom_str += (std::to_string(map_cfg->GetAt(i).second) + " ");
+      }
+      center.Init(custom_str);
+    }
+
+    for (size_t i = 0; i < center.waiting_list.size(); ++i) {
+      auto appl = center.waiting_list[i];
+      auto axis = appl.applicant;
+      ss << "WaitingListNo.[" << i << "] ("
+         << "Axis " << axis->index << "_" << axis->dim_axis << "): ";
+      if (successed.find(axis) != successed.end()) {
+        ss << "Already success, continue.\n";
+        continue;
+      }
+
+      bool is_hw = analyzer_.scop_info_.analysis_result_.GetOpTemplateOfBand(axis->index) == Template::CONV &&
+                   (axis->HasAttr(AttrInfo{AT_CONV, "hi"}) || axis->HasAttr(AttrInfo{AT_CONV, "wi"}));
+      bool is_reuse_same_band = center_type == BLOCK_STR && is_hw;
+      auto alloc_idx = center.Alloc(i, center_type, is_reuse_same_band);
+      ss << "Alloc idx = " << alloc_idx;
+      appl = center.waiting_list[i];  // update waiting list
+      if (alloc_idx < 0 || alloc_idx >= static_cast<int>(appl.size.size())) {
+        ss << " --> invalid, not mapping.\n";
+      } else {
+        auto alloc_size = appl.size[alloc_idx];
+        auto alloc_pos = appl.pos[alloc_idx];
+        ss << " --> success, alloc " << alloc_size << " " << center_type << " on position " << alloc_pos << ".\n";
+
+        std::string attr_value = max_axis_pos[alloc_pos] + "_" + std::to_string(alloc_size);
+        if (center_type == THREAD_STR) {
+          analyzer_.scop_info_.user_config_.RecordInnerMappingStrategy(axis->dim_axis, max_axis_pos[alloc_pos],
+                                                                       axis->index);
+          axis->MarkWithAttr(AttrInfo{AT_THREAD_CFG, attr_value});
+        } else {
+          analyzer_.scop_info_.user_config_.RecordOuterMappingStrategy(axis->dim_axis, max_axis_pos[alloc_pos],
+                                                                       axis->index);
+          axis->MarkWithAttr(AttrInfo{AT_BLOCK_CFG, attr_value});
+        }
+        successed.insert(axis);
+        center.alloced_record[appl.applicant] = alloc_pos;
+      }
+    }
+    ss << "Finish Alloc All, Result:\n";
+    for (auto it : center.alloced_record) {
+      ss << "Axis " << it.first->index << "_" << it.first->dim_axis << " pos = " << it.second << "\n";
+    }
+
+    if (map_cfg != nullptr && map_cfg->bound > 0) {
+      return;
+    }
+    std::string map_str = "";
+    ss << center_type << " str: ";
+    for (auto s : center.alloced_slot) {
+      map_str += (std::to_string(std::max<int>(s, 1)) + " ");
+      ss << s << ",";
+    }
+    ss << "\n";
+    ss << "Set MAP STR: " << map_str << "\n";
+    if (center_type == THREAD_STR) {
+      analyzer_.scop_info_.user_config_.SetThreadConfig(map_str);
+    } else {
+      analyzer_.scop_info_.user_config_.SetBlockConfig(map_str);
+    }
+  };
+
+  thread_center_.resource_limit = {max_x_y_dim_thread_, max_x_y_dim_thread_, max_z_dim_thread_};
+  ss << "------ SolveMapping: THREAD -----\n";
+  ss << thread_center_.Show() << "\n";
+  DoAlloc(thread_center_, THREAD_STR);
+
+  block_center_.resource_limit = {max_x_dim_block_, max_y_z_dim_block_, max_y_z_dim_block_};
+  ss << "------ SolveMapping: BLOCK -----\n";
+  ss << block_center_.Show() << "\n";
+  DoAlloc(block_center_, BLOCK_STR);
+
+  analyzer_.GetTileLogger().AppendLog(GPU_MAPPING, ss);
+
+  return;
+}
+
+AllocPos GpuSolver::GetThreadAllocPos(TileAxis *axis) {
+  std::stringstream ss;
+
+  auto template_type = analyzer_.scop_info_.analysis_result_.GetOpTemplateOfBand(tiling_band_);
+  ReduceDirection direct = analyzer_.scop_info_.analysis_result_.GetReduceDirectionOfBand(tiling_band_);
+  ss << "GetThreadAllocPos: Template: " << analyzer_.scop_info_.analysis_result_.ShowOpTemplate(template_type)
+     << " axis : " << axis->index << "_" << axis->dim_axis;
+  analyzer_.GetTileLogger().AppendLog(GPU_MAPPING, ss);
+  auto use_reduce_lib =
+    template_type == Template::REDUCTION && analyzer_.scop_info_.analysis_result_.GetUseGpuReduceLib();
+  if (use_reduce_lib && direct == ReduceDirection::ALL) {
+    return AllocPos::X_POS;
+  } else if (use_reduce_lib && direct == ReduceDirection::X) {
+    // reduce X
+    if (!axis->mc_sup) {
+      // reduce axis
+      return AllocPos::X_POS;
+    } else {
+      return AllocPos::Y_POS;
+    }
+  } else if (use_reduce_lib && direct == ReduceDirection::Y) {
+    // reduce Y
+    if (!axis->mc_sup) {
+      // reduce axis
+      return AllocPos::Y_POS;
+    } else {
+      return AllocPos::X_POS;
+    }
+  } else if (template_type == Template::CONV) {
+    if (axis->HasAttr(AttrInfo{AT_CONV, "mi"})) {
+      return AllocPos::X_POS;
+    } else if (axis->HasAttr(AttrInfo{AT_CONV, "oc"})) {
+      return AllocPos::Y_POS;
+    } else {
+      return AllocPos::NULL_POS;
+    }
+  } else if (template_type == Template::MATMUL) {
+    if (axis->HasAttr(AttrInfo{AT_GEMM, "mi"})) {
+      return AllocPos::X_POS;
+    } else if (axis->HasAttr(AttrInfo{AT_GEMM, "ni"})) {
+      return AllocPos::Y_POS;
+    } else {
+      return AllocPos::NULL_POS;
+    }
+  }
+  return AllocPos::ANY_POS;
+}
+
+AllocPos GpuSolver::GetBlockAllocPos(TileAxis *axis) {
+  std::stringstream ss;
+
+  auto template_type = analyzer_.scop_info_.analysis_result_.GetOpTemplateOfBand(tiling_band_);
+  ReduceDirection direct = analyzer_.scop_info_.analysis_result_.GetReduceDirectionOfBand(tiling_band_);
+  ss << "GetBlockAllocPos: Template: " << analyzer_.scop_info_.analysis_result_.ShowOpTemplate(template_type)
+     << " axis : " << axis->index << "_" << axis->dim_axis;
+  analyzer_.GetTileLogger().AppendLog(GPU_MAPPING, ss);
+  auto use_reduce_lib =
+    template_type == Template::REDUCTION && analyzer_.scop_info_.analysis_result_.GetUseGpuReduceLib();
+  if (use_reduce_lib && direct == ReduceDirection::ALL) {
+    return AllocPos::X_POS;
+  } else if (use_reduce_lib) {
+    if (!axis->mc_sup) {
+      // reduce axis
+      return AllocPos::X_POS;
+    } else {
+      return AllocPos::Y_POS;
+    }
+  } else if (template_type == Template::CONV) {
+    if (axis->HasAttr(AttrInfo{AT_CONV, "hi"}) || axis->HasAttr(AttrInfo{AT_CONV, "wi"})) {
+      return AllocPos::Y_POS;
+    } else if (axis->HasAttr(AttrInfo{AT_CONV, "mi"})) {
+      return AllocPos::Z_POS;
+    } else if (axis->HasAttr(AttrInfo{AT_CONV, "oc"})) {
+      return AllocPos::X_POS;
+    } else {
+      return AllocPos::NULL_POS;
+    }
+  } else if (template_type == Template::MATMUL) {
+    if (axis->HasAttr(AttrInfo{AT_GEMM, "ni"})) {
+      return AllocPos::X_POS;
+    } else if (axis->HasAttr(AttrInfo{AT_GEMM, "mi"})) {
+      return AllocPos::Y_POS;
+    } else if (axis->HasAttr(AttrInfo{AT_GEMM, "bi"})) {
+      return AllocPos::Z_POS;
+    }
+  }
+  return AllocPos::ANY_POS;
+}
+
+void GpuSolver::InnerThreadOuterBlock() {
+  auto tile_axes = cand_.GetTileAxis();
+
+  std::stringstream ss;
+  ss << "==========InnerThreadOuterBlock===========\n";
+  for (auto i = static_cast<int>(tile_axes.size()) - 1; i >= 0; --i) {
+    TileAxis *axis = tile_axes[i];
+    ss << "----------Band " << tiling_band_ << "----------------\n";
+    ss << "Axis " << axis->index << "_" << axis->dim_axis << "-> \n";
+    analyzer_.GetTileLogger().AppendLog(GPU_MAPPING, ss);
+
+    Application thread_app(axis);
+    for (auto cand : axis->thread_constraints.map_cand_) {
+      AllocPos alloc_pos = GetThreadAllocPos(axis);
+      if (cand == 1 && (alloc_pos == AllocPos::ANY_POS || alloc_pos == AllocPos::NULL_POS)) {
+        continue;
+      }
+      thread_app.Append(cand, static_cast<int>(alloc_pos));
+    }
+    thread_center_.Receive(thread_app);
+    ss << "  Thread Applicant: ";
+    for (size_t j = 0; j < thread_app.size.size(); ++j) {
+      ss << "(" << thread_app.size[j] << ", " << thread_app.pos[j] << ")";
+    }
+    analyzer_.GetTileLogger().AppendLog(GPU_MAPPING, ss);
+
+    Application block_app(axis);
+
+    for (auto cand : axis->block_constraints.map_cand_) {
+      AllocPos alloc_pos = GetBlockAllocPos(axis);
+      if (cand == 1 && (alloc_pos == AllocPos::ANY_POS || alloc_pos == AllocPos::NULL_POS)) {
+        continue;
+      }
+      block_app.Append(cand, static_cast<int>(alloc_pos));
+    }
+    block_center_.Receive(block_app);
+    ss << "  Block Applicant: ";
+    for (size_t j = 0; j < block_app.size.size(); ++j) {
+      ss << "(" << block_app.size[j] << ", " << block_app.pos[j] << ")";
+    }
+    analyzer_.GetTileLogger().AppendLog(GPU_MAPPING, ss);
+  }
+}
+
+void GpuSolver::DetermineTileFactor(TileAxis *axis, TileLevel level) {
+  TileAxis::Constraint cons = level == CACHE1 ? axis->c1_constraints : axis->c0_constraints;
+  if (level == CACHE1) {
+    cand_.UpdateC1Tile(axis, cons.tile_extent_);
+  } else {
+    cand_.UpdateC0Tile(axis, cons.tile_extent_);
+  }
+}
+
+TileCandidate *InequalitySolver::Solve() {
+  CollectMemoryLimit();
+
+  auto tile_band_size = static_cast<int>(analyzer_.RootAxis()->children.size());
+  for (auto band = 0; band < tile_band_size; ++band) {
+    tiling_band_ = band;
+
+    CollectTileAxisTopDown();
+
+    InitTileAxis(CACHE1);
+
+    if (analyzer_.op_type_ != VECTOR_OP) {
+      InitTileAxis(CACHE0);
+    }
+
+    if (analyzer_.scop_info_.user_config_.GetPragmaAnalyzeReuseBuffer()) {
+      UpdateMemInfoWithBufReuse();
+    } else {
+      UpdateMemInfo();
+    }
+
+    CollectMemoryConstraints();
+
+    auto tile_axes = cand_.GetTileAxis();
+    for (auto i = static_cast<int>(tile_axes.size()) - 1; i >= 0; --i) {
+      TileAxis *axis = tile_axes[i];
+      DetermineTileFactor(axis, CACHE1, memory_constraints_);
+    }
+    if (analyzer_.op_type_ != VECTOR_OP) {
+      for (auto i = static_cast<int>(tile_axes.size()) - 1; i >= 0; --i) {
+        TileAxis *axis = tile_axes[i];
+        DetermineTileFactor(axis, CACHE0, memory_constraints_);
+      }
+    }
+  }
+  return &cand_;
+}
+
 void InequalitySolver::InitTileAxis(TileLevel level) {
   tiling_mem_info_ = std::unique_ptr<TilingMemInfo>(new (std::nothrow) TilingMemInfo());
   CHECK(tiling_mem_info_) << "memory alloc fail";
@@ -172,44 +480,6 @@ void InequalitySolver::InitTileAxis(TileLevel level) {
       UpdateLevelTile(axis, CastInt64ToExpr(cons.cand_factor[0].as<IntImm>()->value));
     }
   }
-}
-
-TileCandidate *InequalitySolver::Solve() {
-  CollectMemoryLimit();
-
-  auto tile_band_size = static_cast<int>(analyzer_.RootAxis()->children.size());
-  for (auto band = 0; band < tile_band_size; ++band) {
-    tiling_band_ = band;
-
-    CollectTileAxisTopDown();
-
-    InitTileAxis(CACHE1);
-
-    if (analyzer_.op_type_ != VECTOR_OP) {
-      InitTileAxis(CACHE0);
-    }
-
-    if (analyzer_.scop_info_.user_config_.GetPragmaAnalyzeReuseBuffer()) {
-      UpdateMemInfoWithBufReuse();
-    } else {
-      UpdateMemInfo();
-    }
-
-    CollectMemoryConstraints();
-
-    auto tile_axes = cand_.GetTileAxis();
-    for (auto i = static_cast<int>(tile_axes.size()) - 1; i >= 0; --i) {
-      TileAxis *axis = tile_axes[i];
-      DetermineTileFactor(axis, CACHE1, memory_constraints_);
-    }
-    if (analyzer_.op_type_ != VECTOR_OP) {
-      for (auto i = static_cast<int>(tile_axes.size()) - 1; i >= 0; --i) {
-        TileAxis *axis = tile_axes[i];
-        DetermineTileFactor(axis, CACHE0, memory_constraints_);
-      }
-    }
-  }
-  return &cand_;
 }
 
 Expr InequalitySolver::GetSubstitutedExpr(const NodeRef &op) {
@@ -371,7 +641,8 @@ void InequalitySolver::DetermineTileFactor(TileAxis *axis, TileLevel level, cons
       shape_range = l1_expr;
       tile_min = axis->c0_constraints.tile_min_;
       if (shape_range.type() != axis->c0_constraints.tile_extent_.type()) {
-        tile_range = CanonicalSimplify(Min::make(Cast::make(shape_range.type(), axis->c0_constraints.tile_extent_), shape_range));
+        tile_range =
+          CanonicalSimplify(Min::make(Cast::make(shape_range.type(), axis->c0_constraints.tile_extent_), shape_range));
       } else {
         tile_range = CanonicalSimplify(Min::make(axis->c0_constraints.tile_extent_, shape_range));
       }
@@ -617,7 +888,8 @@ void InequalitySolver::CalculateMemoryInBuffer(const TilingAnalyzer::BufferEntry
       if (analyzer_.arith_ana_.CanProve(tile_var > axis->range_extent)) tile_var = axis->range_extent;
 
       // Make tile var align to 32 Bytes.
-      if (analyzer_.scop_info_.user_config_.GetTarget() == TARGET_CCE && !analyzer_.scop_info_.user_config_.GetIsTuning()) {
+      if (analyzer_.scop_info_.user_config_.GetTarget() == TARGET_CCE &&
+          !analyzer_.scop_info_.user_config_.GetIsTuning()) {
         tile_var = EstimateAlignment(buf, axis, tile_var);
       }
 

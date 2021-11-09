@@ -277,7 +277,10 @@ Stmt GpuIslEmitter::Emit(const isl::ast_node &node) {
     auto thread_cfg = info_.user_config_.GetThreadConfig();
     CHECK(thread_cfg) << "thread config is null.";
     int tx = thread_cfg->GetX().second;
-    stmt = AttrStmt::make(Expr(""), ORIGIN_THREAD_DIM_X, Expr(tx), stmt);
+    int ty = thread_cfg->GetY().second;
+    int tz = thread_cfg->GetZ().second;
+    int warp_number = (tx * ty * tz) / 32;
+    stmt = AttrStmt::make(Expr(""), ORIGIN_THREAD_DIM_X, Expr(warp_number), stmt);
   }
 
   if (info_.user_config_.GetMindTrickWasUsed() && info_.user_config_.GetMindTrickGpuHasSwizzle()) {
@@ -397,7 +400,7 @@ Stmt GpuIslEmitter::InsertRealize(Stmt stmt, const isl::id &var) {
   auto buf = info_.user_config_.GetBind().at(t);
 
   auto tt = placeholder(t->shape, t->dtype, t->op->name);
-  
+
   stmt = SubstituteTensorStmt(stmt, t, tt);
   t = tt;
   if (info_.analysis_result_.CountBufferDefInfo(var)) {
@@ -578,7 +581,7 @@ Stmt AtomicReturnStmtEmit::Mutate_(const Provide *op, const Stmt &s) {
         CHECK(false) << "no support atomic return type";
       }
     }
-    if (!atomic_data_.atomic_rhs.defined()){
+    if (!atomic_data_.atomic_rhs.defined()) {
       CHECK(ContainsHalideCall(op->args)) << "atomic_data_.atomic_rhs_ is not defined";
       atomic_data_.atomic_rhs = value;
     }

@@ -39,10 +39,10 @@ void GPUMgrStrategy::RegisterPasses() {
   RegisterConstrainedScheduling();
   RegisterSchedulingPasses();
   RegisterPass(std::make_shared<AnalyzeSchedule>(scop_info_));
-  RegisterTilingPasses();
   if (scop_info_.user_config_.GetIsTuning()) {
     return;
   }
+  RegisterTilingPasses();
   RegisterPass(std::make_shared<MappingOuterBand>(pass_info_, scop_info_));
   RegisterMemPromPasses();
   RegisterPass(std::make_shared<RealizeManager>(pass_info_, scop_info_));

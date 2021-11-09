@@ -1271,11 +1271,11 @@ std::vector<TileAxis *> TilingAnalyzer::GetAxesContainsAttr(const std::string &a
   return axes;
 }
 
-std::vector<TileAxis *> TilingAnalyzer::GetAxesOfAttr(const std::string &attr_key) const {
+std::vector<TileAxis *> TilingAnalyzer::GetAxesOfAttr(const std::string &attr_key, int band_index) const {
   std::vector<TileAxis *> axes;
-  auto AddAxisWithAttr = [&attr_key, &axes](TileAxis *a) {
+  auto AddAxisWithAttr = [&attr_key, &axes, &band_index](TileAxis *a) {
     for (const auto &attr : a->attrs) {
-      if (attr.attr_key == attr_key) {
+      if (attr.attr_key == attr_key && (band_index == -1 || a->index == band_index)) {
         axes.emplace_back(a);
         break;
       }
@@ -1285,11 +1285,12 @@ std::vector<TileAxis *> TilingAnalyzer::GetAxesOfAttr(const std::string &attr_ke
   return axes;
 }
 
-std::vector<TileAxis *> TilingAnalyzer::GetAxesOfAttr(const AttrInfo &attr_info) const {
+std::vector<TileAxis *> TilingAnalyzer::GetAxesOfAttr(const AttrInfo &attr_info, int band_index) const {
   std::vector<TileAxis *> axes;
-  auto AddAxisWithAttr = [&attr_info, &axes](TileAxis *a) {
+  auto AddAxisWithAttr = [&attr_info, &axes, &band_index](TileAxis *a) {
     for (const auto &attr : a->attrs) {
-      if (attr.attr_key == attr_info.attr_key && attr.attr_value == attr_info.attr_value) {
+      if (attr.attr_key == attr_info.attr_key && attr.attr_value == attr_info.attr_value &&
+          (band_index == -1 || a->index == band_index)) {
         axes.emplace_back(a);
         break;
       }

@@ -638,12 +638,9 @@ bool ReduceMappingStrategy::NeedAtomicAdd(const isl::schedule_node_band &band, s
     return false;
   }
 
-  while (non_coin_start_idx < mapping_cfg_->bound) {
-    auto idx = mapping_cfg_->bound - non_coin_start_idx - 1;
-    if (mapping_cfg_->GetAt(idx).second > 1) {
-      return true;
-    }
-    ++non_coin_start_idx;
+  // In order to facilitate the gpu_emit, it is required that the reduce axis must be mapped to block x.
+  if (mapping_cfg_->GetAt(0).second > 1) {
+    return true;
   }
   return false;
 }

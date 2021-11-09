@@ -42,6 +42,205 @@ class TilingSolver {
   bool is_retry_ = false;
 };
 
+enum AllocPos { ANY_POS = -1, X_POS, Y_POS, Z_POS, NULL_POS };
+
+class GpuSolver : TilingSolver {
+ public:
+  explicit GpuSolver(TilingAnalyzer &analyzer) : TilingSolver(analyzer) {}
+  ~GpuSolver() {}
+
+  struct Application {
+    Application(TileAxis *appl) { applicant = appl; }
+    Application(TileAxis *appl, std::vector<int64_t> s, std::vector<int> p) {
+      applicant = appl;
+      size = s;
+      pos = p;
+    }
+    void Append(int64_t s, int p) {
+      size.emplace_back(s);
+      pos.emplace_back(p);
+    }
+    TileAxis *applicant;
+    std::vector<int64_t> size;
+    std::vector<int> pos;
+  };
+
+  struct MapResourceCenter {
+    std::vector<int64_t> resource_limit;
+    std::vector<int64_t> alloced_slot;
+    std::vector<Application> waiting_list;
+    std::unordered_map<TileAxis *, size_t> query;
+    std::unordered_map<TileAxis *, size_t> alloced_record;
+    const int64_t max_total_thread = 1024;
+
+    void Receive(Application appl) {
+      if (query.find(appl.applicant) == query.end()) {
+        query[appl.applicant] = waiting_list.size();
+        waiting_list.push_back(appl);
+      } else {
+        waiting_list[query[appl.applicant]].size = appl.size;
+        waiting_list[query[appl.applicant]].pos = appl.pos;
+      }
+    }
+
+    void Init(const std::string &custom_map = "") {
+      if (!custom_map.empty()) {
+        auto res = akg::common::Split(custom_map, " ");
+        for (auto s : res) {
+          if (s.empty()) {
+            continue;
+          }
+          alloced_slot.emplace_back(static_cast<int>(std::strtol(s.c_str(), nullptr, 10)));
+        }
+      }
+      for (size_t i = alloced_slot.size(); i < resource_limit.size(); ++i) {
+        alloced_slot.emplace_back(-1);
+      }
+    }
+
+    bool CheckExceedLimit(const int64_t alloc_pos, const int64_t alloc_size, const std::string &alloc_type) {
+      if (alloc_pos >= static_cast<int>(alloced_slot.size()) || alloc_pos >= static_cast<int>(resource_limit.size()) ||
+          alloc_size > resource_limit[alloc_pos]) {
+        return true;
+      }
+
+      if (alloc_type == BLOCK_STR) {
+        return false;
+      }
+
+      int64_t total_alloc_size = 1;
+      for (int i = 0; i < static_cast<int>(alloced_slot.size()); ++i) {
+        if (alloc_pos == i) {
+          total_alloc_size *= alloc_size;
+          continue;
+        }
+
+        if (alloced_slot[i] == -1) {
+          continue;
+        }
+
+        total_alloc_size *= alloced_slot[i];
+      }
+
+      if (total_alloc_size > max_total_thread) {
+        return true;
+      }
+      return false;
+    }
+
+    int Alloc(size_t index, const std::string &alloc_type, const bool is_reuse_same_band) {
+      // check invalid
+      if (index >= waiting_list.size()) {
+        return -1;
+      }
+
+      if (alloced_slot.size() < resource_limit.size()) {
+        Init();
+      }
+
+      auto appl = waiting_list[index];
+      for (int i = 0; i < static_cast<int>(appl.size.size()); ++i) {
+        auto alloc_size = appl.size[i];
+        auto alloc_pos = appl.pos[i];
+        if (alloc_pos == -1 && (i == static_cast<int>(appl.size.size()) - 1)) {
+          for (size_t slot_idx = 0; slot_idx < alloced_slot.size(); ++slot_idx) {
+            bool is_same_band = false;
+            for (auto it : alloced_record) {
+              if (it.second != slot_idx) {
+                continue;
+              }
+              // we can reuse slots between different bands
+              is_same_band |= (it.first->index == appl.applicant->index);
+            }
+            if (alloced_slot[slot_idx] == alloc_size && !is_same_band) {
+              waiting_list[index].pos[i] = slot_idx;
+              return i;
+            }
+          }
+          // if it is the last hope for axis, try any pos
+          while (alloc_pos < static_cast<int>(AllocPos::Z_POS)) {
+            alloc_pos++;
+            waiting_list[index].pos[i] = alloc_pos;
+            if (Alloc(index, alloc_type, is_reuse_same_band) != -1) {
+              return i;
+            }
+          }
+          return -1;
+        }
+        if (CheckExceedLimit(alloc_pos, alloc_size, alloc_type)) {
+          continue;
+        }
+
+        if (alloced_slot[alloc_pos] == -1) {
+          // not alloced yet
+          alloced_slot[alloc_pos] = alloc_size;
+          return i;
+        }
+        bool is_same_band = false;
+        for (auto it : alloced_record) {
+          if (static_cast<int>(it.second) == alloc_pos) {
+            // we can reuse slots between different bands
+            is_same_band |= (it.first->index == appl.applicant->index);
+          }
+        }
+        if (is_same_band) {
+          if (!is_reuse_same_band) {
+            return -1;
+          }
+
+          auto reuse_alloc_size = alloced_slot[alloc_pos] * alloc_size;
+          if (CheckExceedLimit(alloc_pos, reuse_alloc_size, alloc_type)) {
+            continue;
+          }
+          alloced_slot[alloc_pos] = reuse_alloc_size;
+          return i;
+        }
+
+        // Determine whether different bands are reused.
+        if (alloced_slot[alloc_pos] >= alloc_size) {
+          // e.g original alloc 32, current alloc 8, do not update.
+          return i;
+        } else {
+          // update to larger size
+          // e.g original alloc 8, current alloc 32, update to 32
+          alloced_slot[alloc_pos] = alloc_size;
+          return i;
+        }
+      }
+      return -1;
+    }
+
+    std::string Show() {
+      std::stringstream ss;
+      for (auto &it : waiting_list) {
+        ss << "Applicant " << it.applicant->index << "_" << it.applicant->dim_axis << "\n";
+        ss << "  Size:[";
+        for (size_t i = 0; i < it.size.size(); ++i) {
+          ss << "(" << it.size[i] << "," << it.pos[i] << ")";
+        }
+        ss << "]\n";
+      }
+      return ss.str();
+    }
+  };
+
+  TileCandidate *Solve();
+  void SolveMapping();
+
+ private:
+  void DetermineTileFactor(TileAxis *axis, TileLevel level);
+  void InnerThreadOuterBlock();
+  AllocPos GetThreadAllocPos(TileAxis *axis);
+  AllocPos GetBlockAllocPos(TileAxis *axis);
+  MapResourceCenter thread_center_;
+  MapResourceCenter block_center_;
+
+  int64_t max_x_dim_block_ = pow(2, 31) - 1;
+  int64_t max_y_z_dim_block_ = 65535;
+  int64_t max_x_y_dim_thread_ = 1024;
+  int64_t max_z_dim_thread_ = 64;
+};
+
 class InequalitySolver : TilingSolver {
  public:
   explicit InequalitySolver(TilingAnalyzer &analyzer) : TilingSolver(analyzer) {}
@@ -128,6 +327,7 @@ class TraverseSolver : TilingSolver {
   TileAxis *GeneratePragmaAxes(const Expr &size, const std::string &type, bool is_pragma);
   std::vector<TileAxis *> spec_tile_axis_;
 };
+
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg
