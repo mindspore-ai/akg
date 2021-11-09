@@ -74,18 +74,18 @@ void CpuStrategy::SetUnrollTileValue(TileAxis *axis, const int64_t axis_size, in
 
 void CpuStrategy::SetParallelTileValue(TileAxis *axis, const int64_t axis_size, const int64_t data_size,
                                        bool is_unroll_axis, int64_t tile_left) {
-  int tile_size = axis_size;
-  int parallel_num = best_parallel_num_;
-  int c0_tile_value = 1;
+  int64_t tile_size = axis_size;
+  int64_t parallel_num = best_parallel_num_;
+  int64_t c0_tile_value = 1;
 
   if (is_unroll_axis) {
     CHECK(axis->c0_constraints.tile_extent_.as<IntImm>());
     c0_tile_value = axis->c0_constraints.tile_extent_.as<IntImm>()->value;
     tile_size = tile_left;
   }
-  int evaluate_num = data_size / min_exec_num_per_thread_;
+  int64_t evaluate_num = data_size / min_exec_num_per_thread_;
   if (evaluate_num >= best_parallel_num_) {
-    parallel_num = best_parallel_num_;
+    parallel_num = std::min(axis_size, static_cast<int64_t>(best_parallel_num_));
   } else if (evaluate_num > 1) {
     while (parallel_num > 0 && tile_size % parallel_num != 0) {
       if (parallel_num < evaluate_num) {
@@ -99,7 +99,12 @@ void CpuStrategy::SetParallelTileValue(TileAxis *axis, const int64_t axis_size, 
   if (parallel_num <= 0) {
     parallel_num = evaluate_num;
   }
-  int tile_value = std::max(tile_size * c0_tile_value / parallel_num, c0_tile_value);
+  int64_t tile_value = axis_size / parallel_num;
+  if (tile_value < min_unroll_num_) {
+    tile_value = std::min(axis_size, static_cast<int64_t>(min_unroll_num_));
+    c0_tile_value = tile_value;
+  }
+  tile_value = std::max(tile_value, c0_tile_value);
   axis->TileRestrainToSingleValue(Expr(tile_value), TileLevel::CACHE1);
   axis->TileRestrainToSingleValue(Expr(c0_tile_value), TileLevel::CACHE0);
 }

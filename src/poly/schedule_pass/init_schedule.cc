@@ -138,9 +138,6 @@ isl::schedule InitSchedule::Run(isl::schedule sch) {
       ForceDepBetweenLiveouts(sinks);
       pass_info_.dependences_ = pass_info_.dependences_.unite(pass_info_.force_dependences_);
     }
-  }
-  if (scop_info_.user_config_.GetTarget() == TARGET_CUDA ||
-      scop_info_.user_config_.GetTarget() == TARGET_CPU) {
     auto tot_stmt = scop_info_.analysis_result_.GetTensorOfTensorStmt();
     if (!tot_stmt.empty()) {
       pass_info_.dependences_ = RemoveSelfDependence(pass_info_, tot_stmt);
