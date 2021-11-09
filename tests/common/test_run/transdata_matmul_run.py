@@ -68,8 +68,6 @@ def transdata_matmul_compile(shape_x, shape_y, bias, left_format, right_format, 
     return utils.op_build_test(transdata_matmul, input_shapes, input_types, op_attrs, kernel_name, attrs=attrs, tuning=tuning)
 
 def transdata_matmul_execute(shape_x, shape_y, bias, left_format, right_format, out_format, adj_x, adj_y, dtype, bias_dtype, out_dtype, kernel_name, attrs={}):
-    if not("pragma_reschedule" in attrs):
-        attrs["pragma_reschedule"] = 1
     batch_tuple, m, k, n = extract_dim(shape_x, shape_y, adj_x, adj_y)
     m = (m + 15) // 16 * 16
     n = (n + 15) // 16 * 16

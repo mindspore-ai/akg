@@ -174,13 +174,15 @@ isl::schedule_node OperatorMappingStrategy::CheckMapSizeAndApplyTile(const isl::
     if (is_config) {
       auto mapping_i = required_mapping_strategy_[static_cast<int>(i)].mapping_idx;
       map_size = mapping_cfg_->GetAt(mapping_i).second - required_mapping_strategy_[static_cast<int>(i)].offset;
+      mapping_sizes.emplace_back(map_size);
+    } else {
+      mapping_sizes.emplace_back(1);
     }
     if (is_thread_mapping_) {
       need_tile = need_tile || extent > map_size;
     } else {
       need_tile = need_tile || (extent > map_size && extent % map_size != 0);
     }
-    mapping_sizes.emplace_back(map_size);
   }
 
   if (!need_tile) {
@@ -270,7 +272,8 @@ void OperatorMappingStrategy::SetRequiredMappingCfg(const isl::schedule_node &no
   start_pos = std::max(0, start_pos);
   end_pos = std::min(static_cast<int>(band_node.n_member()) - 1, end_pos);
 
-  int last_axis = scop_info_.analysis_result_.GetLastAxisOfBand();
+  // There is no need to consider the last axis of the calculation phase in the promotion phase.
+  int last_axis = is_promotion_mapping_ ? -1 : current_outer_bn_->last_axis;
   int current_mapping_pos = 0;
   if (last_axis >= start_pos && last_axis <= end_pos) {
     required_mapping_strategy_[last_axis].mapping_idx = mapping_cfg_->GetAt(current_mapping_pos).first;
@@ -281,6 +284,10 @@ void OperatorMappingStrategy::SetRequiredMappingCfg(const isl::schedule_node &no
     int current_axis_pos = i;
     if (is_need_reverse_) {
       current_axis_pos = end_pos - current_axis_pos;
+    }
+
+    if (!is_promotion_mapping_ && band_node.member_get_coincident(current_axis_pos) == 0) {
+      continue;
     }
 
     if (current_mapping_pos >= static_cast<int>(mapping_cfg_->bound) || current_axis_pos == last_axis) {
@@ -468,15 +475,14 @@ size_t OperatorMappingStrategy::MapThreadHelper(isl::schedule_node &thread_root)
 }
 
 isl::schedule_node OperatorMappingStrategy::MapBlockHelper(const isl::schedule_node &orig_node) {
-  auto node = orig_node;
-  auto band_node = node.as<isl::schedule_node_band>();
+  auto band_node = orig_node.as<isl::schedule_node_band>();
   if (!band_node || !band_node.permutable()) {
     LOG(WARNING) << "No permutable outer band node to map block.";
-    return node;
+    return orig_node;
   }
 
-  int start_node_depth = node.get_tree_depth();
-  node = MapThreadBlockHelper(node);
+  int start_node_depth = orig_node.get_tree_depth();
+  auto node = MapThreadBlockHelper(orig_node);
   node = GetMarkerName(node, BLOCK_MARKER).empty() ? node.child(0) : node;
   scop_info_.upa_node_mapping_.emplace_back(std::make_pair(node, mapping_sch_info_map_));
 
@@ -599,12 +605,12 @@ isl::schedule_node ReduceMappingStrategy::InsertReduceExtension(const isl::sched
   std::string reduce_marker_name = "";
   if (!GetMarkerName(parent_node, REDUCE_MARKER).empty()) {
     reduce_marker_name = GetMarkerName(parent_node, REDUCE_MARKER);
-    insert_node = parent_node.del();
+    insert_node = parent_node.child(0);
   }
 
   if (!GetMarkerName(ancestor_node, REDUCE_MARKER).empty()) {
     reduce_marker_name = GetMarkerName(ancestor_node, REDUCE_MARKER);
-    insert_node = ancestor_node.del();
+    insert_node = ancestor_node.child(0);
   }
 
   if (reduce_marker_name.empty()) {
@@ -619,6 +625,10 @@ isl::schedule_node ReduceMappingStrategy::InsertReduceExtension(const isl::sched
   insert_node = InsertExtensionNodeBeforeOrAfter(insert_node, sync_id, false).parent();
   insert_node = insert_node.parent().insert_mark(REDUCE_AREA_FLAG);
 
+  if (!GetMarkerName(insert_node.ancestor(2), REDUCE_MARKER).empty()) {
+    insert_node = insert_node.ancestor(2).del();
+  }
+
   return insert_node;
 }
 
@@ -628,8 +638,8 @@ bool ReduceMappingStrategy::NeedAtomicAdd(const isl::schedule_node_band &band, s
   }
 
   auto non_coin_start_idx = CountConsecutiveCoincident(band);
-  bool is_reduce_x = scop_info_.analysis_result_.GetReduceDirectionOfBand() == ReduceDirection::X ||
-                     scop_info_.analysis_result_.GetReduceDirectionOfBand() == ReduceDirection::ALL;
+  bool is_reduce_x = current_outer_bn_->reduce_direction == ReduceDirection::X ||
+                     current_outer_bn_->reduce_direction == ReduceDirection::ALL;
   bool is_all_reduce = band.n_member() == 1 && is_reduce_x && non_coin_start_idx == 1;
   if (is_all_reduce) {
     non_coin_start_idx = 0;  // Compare block size of position 0 to enable atomic add for all reduce ops

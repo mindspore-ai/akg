@@ -97,7 +97,7 @@ bool ScheduleTreeAnalyzer::AnalyzeScheduleTree() {
   if (!has_loop) return false;
 
   // Step 2: Construct tree nodes from each outer band.
-  auto &band_nodes = analyzer_->scop_info_.analysis_result_.GetBandNodes();
+  auto &band_nodes = analyzer_->scop_info_.analysis_result_.GetAllOuterBandNode();
   std::stringstream ss;
   for (auto &band_node : band_nodes) {
     auto *bn = band_node.get();
@@ -122,7 +122,7 @@ bool ScheduleTreeAnalyzer::AnalyzeScheduleTree() {
       GetCandidatesInSequence(i, pa_list, true, bn->node.member_get_coincident(static_cast<int>(i)));
     }
 
-    std::vector<BandNode *> stack;
+    std::vector<OuterBandNode *> stack;
     for (auto &ci : bn->children) {
       stack.emplace_back(ci.get());
     }

@@ -28,6 +28,24 @@ namespace akg {
 namespace ir {
 namespace poly {
 
+isl::schedule_node MappingOuterBand::DoFilterSynchronization(const isl::schedule_node &orig_node) {
+  if (!orig_node.isa<isl::schedule_node_sequence>()) {
+    return orig_node;
+  }
+
+  auto node = orig_node;
+  int number = static_cast<int>(node.n_children());
+  for (int i = 0; i < number; ++i) {
+    auto start_depth = node.get_tree_depth();
+    auto sync_node = node.child(i).child(0);
+    if (sync_node.isa<isl::schedule_node_leaf>()) continue;
+    auto sync_id = scop_info_.sync_manager_.MakeUniqueId(SyncLevel::BLOCK);
+    sync_node = InsertExtensionNodeBeforeOrAfter(sync_node, sync_id, false);
+    node = sync_node.ancestor(sync_node.get_tree_depth() - start_depth);
+  }
+  return node;
+}
+
 isl::schedule_node MappingOuterBand::DoThreadSynchronization(const isl::schedule_node &node,
                                                              const std::vector<MappingCfg *> &other_mapping_cfg) {
   auto sync_node = node;
@@ -63,8 +81,11 @@ isl::schedule_node MappingOuterBand::DoThreadSynchronization(const isl::schedule
 
   // Step 4. Insert sync node (extension and filter) in the sequence node
   for (const auto &sync : all_syncs) {
+    auto start_depth = sync_node.get_tree_depth();
     auto target = sync_node.child(sync.pos).child(0);
-    sync_node = sync_manager.InsertExtensionNode(target, sync.level, true).parent().parent();
+    auto sync_id = sync_manager.MakeUniqueId(sync.level);
+    sync_node = InsertExtensionNodeBeforeOrAfter(target, sync_id, false);
+    sync_node = sync_node.ancestor(sync_node.get_tree_depth() - start_depth);
   }
 
   auto next = head->next.release();
@@ -83,20 +104,12 @@ std::vector<Synchronization> MappingOuterBand::DetermineOptSyncPos(SyncCandidate
     }
     auto cur = start_node;
     while (cur) {
-      auto opt = cur->GetOptimalSyncPos(level);
-      cur = opt.first;
-      bool exit = opt.second == 0;
-      auto new_sync = Synchronization(level, cur->idx);
-      for (const auto &old_sync : all_syncs) {
-        if (new_sync.IsEqual(old_sync)) {
-          exit = true;
-          break;
-        }
-      }
-      if (exit) {
+      auto opt = cur->GetOptimalSyncPos(level, all_syncs);
+      if (opt.first == nullptr || opt.second == 0) {
         break;
       }
-      all_syncs.emplace_back(new_sync);
+      cur = opt.first;
+      all_syncs.emplace_back(Synchronization(level, cur->idx));
     }
   };
   SplitList(SyncLevel::BLOCK);
@@ -231,7 +244,7 @@ isl::schedule_node MappingOuterBand::FillRemainingThreads(const isl::schedule_no
   CHECK(orig_node.isa<isl::schedule_node_filter>()) << "The child of set or sequence must be a filter!";
   auto node = orig_node.child(0);
 
-  OperatorMappingStrategy others_op(scop_info_, thread_cfg, true, true);
+  OperatorMappingStrategy others_op(scop_info_, thread_cfg, 0, true, true);
   others_op.SetRequiredMappingCfg(node);
   auto after_map_node = others_op.MapDimToThreadsBlocks(node);
   auto tile_node = GetMarkerName(after_map_node, THREAD_MARKER).empty() ? after_map_node.child(0) : after_map_node;
@@ -319,9 +332,7 @@ isl::schedule_node MappingOuterBand::MapSequenceNode(const isl::schedule_node &o
   return node;
 }
 
-isl::schedule MappingOuterBand::DoThreadMapping(const isl::schedule &sch) {
-  auto final_schedule = sch;
-
+isl::schedule_node MappingOuterBand::DoThreadMapping(const isl::schedule_node &orig_node) {
   // Step 1. Find inner-most permutable band to map threads.
   RoadMap thread_record;
   bool is_reduce_stmt = false;
@@ -358,20 +369,20 @@ isl::schedule MappingOuterBand::DoThreadMapping(const isl::schedule &sch) {
           !GetMarkerName(node.parent(), REDUCE_MARKER).empty()) {
         // reduce operator
         is_reduce_stmt = true;
-        ReduceMappingStrategy reduce_op(scop_info_, mapping_cfg);
-        reduce_op.required_mapping_strategy_ = scop_info_.user_config_.GetInnerMappingStrategy();
+        ReduceMappingStrategy reduce_op(scop_info_, mapping_cfg, band_index_);
+        reduce_op.required_mapping_strategy_ = scop_info_.user_config_.GetInnerMappingStrategy(band_index_);
         mapped_threads = reduce_op.MapThreadHelper(node);
       } else if (is_bmm_stmt) {
         // batch matmul operator
         mapping_cfg = scop_info_.user_config_.GetReplaceConfig()[WARP_COMPUTE];
         CHECK(mapping_cfg != nullptr) << "warp config is null";
-        BatchMatmulMappingStrategy bmm_op(scop_info_, mapping_cfg);
-        bmm_op.required_mapping_strategy_ = scop_info_.user_config_.GetInnerMappingStrategy();
+        BatchMatmulMappingStrategy bmm_op(scop_info_, mapping_cfg, band_index_);
+        bmm_op.required_mapping_strategy_ = scop_info_.user_config_.GetInnerMappingStrategy(band_index_);
         mapped_threads = bmm_op.MapThreadHelper(node);
       } else {
         // others operator
-        OperatorMappingStrategy others_op(scop_info_, mapping_cfg);
-        others_op.required_mapping_strategy_ = scop_info_.user_config_.GetInnerMappingStrategy();
+        OperatorMappingStrategy others_op(scop_info_, mapping_cfg, band_index_);
+        others_op.required_mapping_strategy_ = scop_info_.user_config_.GetInnerMappingStrategy(band_index_);
         mapped_threads = others_op.MapThreadHelper(node);
       }
 
@@ -404,8 +415,7 @@ isl::schedule MappingOuterBand::DoThreadMapping(const isl::schedule &sch) {
 
     return node;
   };
-  final_schedule = sch.get_root().map_descendant_bottom_up(MapFromInner).get_schedule();
-  return final_schedule;
+  return orig_node.map_descendant_bottom_up(MapFromInner);
 }
 
 void MappingOuterBand::AdjustBlockConfig(MappingCfg *block_cfg, unsigned long n_block_map) {
@@ -428,13 +438,11 @@ void MappingOuterBand::AdjustBlockConfig(MappingCfg *block_cfg, unsigned long n_
   }
 }
 
-isl::schedule MappingOuterBand::DoBlockMapping(const isl::schedule &sch) {
-  isl::schedule_node root = sch.get_root();
-  isl::schedule_node node = GetOuterBand(root);
-  auto band_node = node.as<isl::schedule_node_band>();
+isl::schedule_node MappingOuterBand::DoBlockMapping(const isl::schedule_node &orig_node) {
+  auto band_node = orig_node.as<isl::schedule_node_band>();
   if (!band_node || !band_node.permutable()) {
     LOG(WARNING) << "No permutable outer band node to map block.";
-    return sch;
+    return orig_node;
   }
 
   // Step 1. Determine max num dimension of blocks that can be mapped.
@@ -446,7 +454,7 @@ isl::schedule MappingOuterBand::DoBlockMapping(const isl::schedule &sch) {
   n_block_map = std::min(mapping_cfg->MaxDim(), n_block_map);
   n_block_map = std::min(mapping_cfg->bound, n_block_map);
   if (n_block_map < 1) {
-    return sch;
+    return orig_node;
   }
 
   AdjustBlockConfig(mapping_cfg, n_block_map);
@@ -457,43 +465,82 @@ isl::schedule MappingOuterBand::DoBlockMapping(const isl::schedule &sch) {
     mapping_cfg = scop_info_.user_config_.GetThreadConfig();
     is_set_config_zero = true;
   }
+
+  auto node = orig_node;
   // Step 2. Map outer-most band for c1 tile as usual (and do not check extent when c0 tile is applied manually).
   if (scop_info_.analysis_result_.GetUseGpuReduceLib()) {
     // reduce operator
-    ReduceMappingStrategy reduce_op(scop_info_, mapping_cfg, is_thread_mapping);
-    reduce_op.required_mapping_strategy_ = scop_info_.user_config_.GetOuterMappingStrategy();
+    ReduceMappingStrategy reduce_op(scop_info_, mapping_cfg, band_index_, is_thread_mapping);
+    reduce_op.required_mapping_strategy_ = scop_info_.user_config_.GetOuterMappingStrategy(band_index_);
     if (scop_info_.user_config_.GetEnableAtomicAdd() && reduce_op.NeedAtomicAdd(band_node, n_block_map)) {
       reduce_op.MarkAtomicAddTensor(band_node);
     }
     node = reduce_op.MapBlockHelper(node);
   } else {
     // others operator
-    OperatorMappingStrategy others_op(scop_info_, mapping_cfg, is_thread_mapping);
-    others_op.required_mapping_strategy_ = scop_info_.user_config_.GetOuterMappingStrategy();
+    OperatorMappingStrategy others_op(scop_info_, mapping_cfg, band_index_, is_thread_mapping);
+    others_op.required_mapping_strategy_ = scop_info_.user_config_.GetOuterMappingStrategy(band_index_);
     others_op.is_set_config_zero_ = is_set_config_zero;
     node = others_op.MapBlockHelper(node);
   }
+  return node;
+}
 
-  auto final_schedule = node.get_schedule();
-  return final_schedule;
+isl::schedule MappingOuterBand::DoMapping(const isl::schedule &sch,
+                                          const std::function<isl::schedule_node(isl::schedule_node)> &f,
+                                          const bool is_block_mapping) {
+  auto MappingCoreFunc = [this, f](isl::schedule_node &orig_node) -> isl::schedule_node {
+    auto node = orig_node;
+    if (scop_info_.analysis_result_.GetUseGpuReduceLib()) {
+      ReduceManager reduce_manager(pass_info_, scop_info_);
+      node = reduce_manager.DetectAndMarkReduce(node, band_index_);
+    }
+    return f(node);
+  };
+
+  isl::schedule_node root = sch.get_root();
+  isl::schedule_node node = GetOuterBand(root);
+
+  if (node.isa<isl::schedule_node_band>()) {
+    // outer node is band
+    return MappingCoreFunc(node).get_schedule();
+  } else {
+    // outer node is sequence or set
+    if (node.isa<isl::schedule_node_sequence>() && is_block_mapping) {
+      return node.get_schedule();
+    }
+
+    int number = static_cast<int>(node.n_children());
+    for (int i = 0, current_band_index = 0; i < number; ++i) {
+      auto mapping_node = node.child(i).child(0);
+      if (mapping_node.isa<isl::schedule_node_leaf>()) continue;
+
+      band_index_ = current_band_index;
+      node = MappingCoreFunc(mapping_node).parent().parent();
+      ++current_band_index;
+    }
+
+    if (node.isa<isl::schedule_node_sequence>()) {
+      node = DoFilterSynchronization(node);
+    }
+  }
+
+  return node.get_schedule();
 }
 
 isl::schedule MappingOuterBand::Run(isl::schedule sch) {
   sch = InsertContextNode(sch, scop_info_);
 
-  if (scop_info_.analysis_result_.GetUseGpuReduceLib()) {
-    ReduceManager reduce_manager(pass_info_, scop_info_);
-    sch = reduce_manager.DetectAndMarkReduce(sch);
-  }
+  using std::placeholders::_1;
+  sch = DoMapping(sch, std::bind(&MappingOuterBand::DoThreadMapping, this, _1), false);
 
-  sch = DoThreadMapping(sch);
-
-  sch = DoBlockMapping(sch);
+  sch = DoMapping(sch, std::bind(&MappingOuterBand::DoBlockMapping, this, _1));
 
   if (scop_info_.user_config_.GetEnableConvTensorCore()) {
     ConvMappingStrategy conv_op(scop_info_);
     sch = conv_op.MoveKernelHWBand(sch);
   }
+
   return sch;
 }
 

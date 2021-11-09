@@ -24,6 +24,9 @@ namespace akg {
 namespace ir {
 namespace poly {
 
+constexpr auto BLOCK_TAG = "block";
+constexpr auto THREAD_TAG = "thread";
+
 class TilingSolver {
  public:
   explicit TilingSolver(TilingAnalyzer &analyzer) : analyzer_(analyzer), cand_(&analyzer) {}
@@ -104,7 +107,7 @@ class GpuSolver : TilingSolver {
         return true;
       }
 
-      if (alloc_type == BLOCK_STR) {
+      if (alloc_type == BLOCK_TAG) {
         return false;
       }
 

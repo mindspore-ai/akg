@@ -129,20 +129,6 @@ bool TileOuterBand::IsPermutable(const isl::schedule_node &node, bool checkCoinc
   return !(checkCoincident && !node.as<isl::schedule_node_band>().member_get_coincident(0));
 }
 
-isl::schedule_node TileOuterBand::InsertEmptyPermutableBand(isl::schedule_node node) {
-  isl::space space;
-  isl::multi_union_pw_aff mupa;
-
-  space = node.get_schedule().get_domain().get_space();
-
-  space = space.set_from_params();
-  mupa = isl::multi_union_pw_aff::zero(space);
-  node = node.insert_partial_schedule(mupa);
-  node = node.as<isl::schedule_node_band>().set_permutable(1);
-
-  return node;
-}
-
 isl::schedule_node TileOuterBand::ReverseTraverseChild(isl::schedule_node node,
                                                        const std::function<isl::schedule_node(isl::schedule_node)> &f) {
   if (node.isa<isl::schedule_node_band>()) {
@@ -151,6 +137,9 @@ isl::schedule_node TileOuterBand::ReverseTraverseChild(isl::schedule_node node,
   } else {
     // multiple outer bands, use same filter strategy as in auto tiling
     for (auto i = 0; i < static_cast<int>(node.n_children()); ++i) {
+      if (node.child(i).child(0).isa<isl::schedule_node_leaf>() && scop_info_.user_config_.GetTarget() != TARGET_CCE) {
+        continue;
+      }
       tile_sizes_ = cur_band_index_ < tiles_.size() ? tiles_[cur_band_index_].dim_infos : tiles_[0].dim_infos;
       node = node.child(i).map_descendant_bottom_up(f);
       node = node.parent();
@@ -202,10 +191,11 @@ void TileOuterBand::InitDimensionInfo(const isl::schedule &sch_init) {
   }
 
   int dim_info_entry_size = DIM_SIZE;
+  bool is_custom_mapping = false;
   const std::vector<std::string> thread_block_list = {T0, T1, T2, B0, B1, B2};
   for (auto i : thread_block_list) {
     if (dim.find(i) != std::string::npos) {
-      scop_info_.analysis_result_.SetIsCustomMapping(true);
+      is_custom_mapping = true;
       dim_info_entry_size = CUSTOM_DIM_SIZE;
       break;
     }
@@ -243,26 +233,26 @@ void TileOuterBand::InitDimensionInfo(const isl::schedule &sch_init) {
     sequence++;
     scop_info_.analysis_result_.InsertDimensionInfo(dim_info);
 
-    if (scop_info_.analysis_result_.GetIsCustomMapping()) {
-      CHECK(str.size() >= CUSTOM_DIM_SIZE)
-        << "The configuration length of custom mapping must not be less than " << CUSTOM_DIM_SIZE << "!";
-      int axis_number = static_cast<int>(WrappedStrtol(str[i + 1]));
-      std::string outer_mapping = str[i + 4];
-      if (outer_mapping != "-") {
-        scop_info_.user_config_.RecordOuterMappingStrategy(axis_number, outer_mapping);
-      }
+    if (!is_custom_mapping) continue;
 
-      std::string inner_mapping = str[i + 5];
-      if (inner_mapping != "-") {
-        scop_info_.user_config_.RecordInnerMappingStrategy(axis_number, inner_mapping);
-      }
+    CHECK(str.size() >= CUSTOM_DIM_SIZE) << "The configuration length of custom mapping must not be less than "
+                                         << CUSTOM_DIM_SIZE << "!";
+    int filter_number = static_cast<int>(WrappedStrtol(str[i]));
+    int axis_number = static_cast<int>(WrappedStrtol(str[i + 1]));
+    std::string outer_mapping = str[i + 4];
+    if (outer_mapping != "-") {
+      scop_info_.user_config_.RecordOuterMappingStrategy(axis_number, outer_mapping, filter_number);
+    }
+
+    std::string inner_mapping = str[i + 5];
+    if (inner_mapping != "-") {
+      scop_info_.user_config_.RecordInnerMappingStrategy(axis_number, inner_mapping, filter_number);
     }
   }
 
-  if (scop_info_.analysis_result_.GetIsCustomMapping()) {
-    CheckCustomMapping(scop_info_.user_config_.GetInnerMappingStrategy());
-    CheckCustomMapping(scop_info_.user_config_.GetOuterMappingStrategy());
-  }
+  if (!is_custom_mapping) return;
+  CheckCustomMapping(scop_info_.user_config_.GetInnerMappingStrategy());
+  CheckCustomMapping(scop_info_.user_config_.GetOuterMappingStrategy());
 }
 
 void TileOuterBand::MergeTilingInfo() {
@@ -409,29 +399,34 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableNpu(isl::schedule_node node
   return node;
 }
 
-void TileOuterBand::CheckCustomMapping(const MappingStrategyMap &custom_mapping_map) {
+void TileOuterBand::CheckCustomMapping(const MappingStrategyFilterMap &custom_mapping_map) {
   const std::unordered_set<std::string> thread_set = {T0, T1, T2};
   const std::unordered_set<std::string> block_set = {B0, B1, B2};
 
-  size_t thread_prefix = 0;
-  size_t block_prefix = 0;
-  for (auto custom_mapping : custom_mapping_map) {
-    if (thread_set.find(custom_mapping.second.mapping_idx) != thread_set.end()) {
-      ++thread_prefix;
-    } else if (block_set.find(custom_mapping.second.mapping_idx) != block_set.end()) {
-      ++block_prefix;
-    } else {
-      LOG(FATAL) << "The custom configuration must be t0, t1, t2, b0, b1 and b2.";
+  size_t thread_prefix;
+  size_t block_prefix;
+  for (auto filter_custom_mapping : custom_mapping_map) {
+    thread_prefix = 0;
+    block_prefix = 0;
+    for (auto axis_custom_mapping : filter_custom_mapping.second) {
+      if (thread_set.find(axis_custom_mapping.second.mapping_idx) != thread_set.end()) {
+        ++thread_prefix;
+      } else if (block_set.find(axis_custom_mapping.second.mapping_idx) != block_set.end()) {
+        ++block_prefix;
+      } else {
+        LOG(FATAL) << "The custom configuration must be t0, t1, t2, b0, b1 and b2.";
+      }
     }
-  }
-  if (thread_prefix != custom_mapping_map.size() && block_prefix != custom_mapping_map.size()) {
-    LOG(FATAL) << "All of the inner configuration or the outer configuration must be threads or blocks.";
-  }
 
-  if (thread_prefix == custom_mapping_map.size()) {
-    scop_info_.analysis_result_.SetIsOuterBlockMapping(false);
-  } else {
-    scop_info_.analysis_result_.SetIsOuterBlockMapping(true);
+    if (thread_prefix != filter_custom_mapping.second.size() && block_prefix != filter_custom_mapping.second.size()) {
+      LOG(FATAL) << "All of the inner configuration or the outer configuration must be threads or blocks.";
+    }
+
+    if (thread_prefix == filter_custom_mapping.second.size()) {
+      scop_info_.analysis_result_.SetIsOuterBlockMapping(false);
+    } else {
+      scop_info_.analysis_result_.SetIsOuterBlockMapping(true);
+    }
   }
 }
 
@@ -1068,25 +1063,45 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCuda(isl::schedule_node nod
                                                scop_info_.user_config_.GetTileCheckCoincident())) {
     node = InsertEmptyPermutableBand(node);
   }
-
   // get tile size
   node = SetTileSizeAndTile(node, TILE_WITH_C1);
 
-  // vectorize for elementwise OP
-  if (scop_info_.user_config_.GetEnableVectorization()) {
-    node = SetTileSizeAndTile(node.child(0), TILE_WITH_C0);
-    node = node.child(0).insert_mark(SKIP_MARKER);
-    node = node.parent().parent();
-  }
-
   // tile matmul operator
   if (scop_info_.user_config_.GetEnableMatmul()) {
-    node = MatmulTile(node);
+    return TileMatmulOperator(node);
   }
+
+  node = node.child(0).insert_mark(PROMOTE_GLOBAL_TO_SHARED);
+  node = node.parent();
+
+  // vectorize for elementwise operator
+  if (scop_info_.analysis_result_.GetOuterBandNode(cur_band_index_)->enable_vectorization) {
+    node = SetTileSizeAndTile(node.child(0).child(0), TILE_WITH_C0);
+    node = node.child(0).insert_mark(SKIP_MARKER);
+    node = node.ancestor(VECTORIZATION_NODE_DEPTH);
+  }
+
   return node;
 }
 
-isl::schedule_node TileOuterBand::MatmulTile(const isl::schedule_node &node) {
+isl::schedule_node TileOuterBand::TileDynamicCsrOpeator(const isl::schedule_node &node) {
+  if (node.isa<isl::schedule_node_band>()) {
+    return node;
+  }
+  // skip loop with csr dynamic extent
+  size_t start_depth = node.get_tree_depth();
+
+  auto tile_node = node;
+  tile_node = tile_node.as<isl::schedule_node_band>().split(1);
+  tile_node = SetTileSizeAndTile(tile_node, TILE_WITH_C1);
+  tile_node = tile_node.child(0).insert_mark(PROMOTE_GLOBAL_TO_SHARED);
+  tile_node = tile_node.child(0).child(0).insert_mark(SKIP_MARKER);
+
+  tile_node = tile_node.ancestor(tile_node.get_tree_depth() - start_depth);
+  return tile_node;
+}
+
+isl::schedule_node TileOuterBand::TileMatmulOperator(const isl::schedule_node &node) {
   auto tile_node = node;
   size_t start_depth = tile_node.get_tree_depth();
 
@@ -1227,12 +1242,13 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCpu(isl::schedule_node node
     node = InsertEmptyPermutableBand(node);
   }
 
-  vectorization_axis_pos_ = scop_info_.analysis_result_.GetLastAxisOfBand(cur_band_index_);
+  OuterBandNode *current_outer_bn = scop_info_.analysis_result_.GetOuterBandNode(cur_band_index_);
+  vectorization_axis_pos_ = current_outer_bn->last_axis;
   if (vectorization_axis_pos_ == -1) {
     return node;
   }
 
-  if (scop_info_.analysis_result_.GetReduceDirectionOfBand(cur_band_index_) == ReduceDirection::X) {
+  if (current_outer_bn->reduce_direction == ReduceDirection::X) {
     return TileReduceX(node);
   }
 
@@ -1242,7 +1258,8 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCpu(isl::schedule_node node
 isl::schedule_node TileOuterBand::TileOtherOperators(const isl::schedule_node &orig_node) {
   auto node = orig_node;
   size_t start_depth = node.get_tree_depth();
-  bool is_all_reduce = scop_info_.analysis_result_.GetReduceDirectionOfBand(cur_band_index_) == ReduceDirection::ALL;
+  bool is_all_reduce =
+    scop_info_.analysis_result_.GetOuterBandNode(cur_band_index_)->reduce_direction == ReduceDirection::ALL;
   node = is_all_reduce ? SplitReduceStatements(node).child(0) : node;
 
   // first tiling: parallel
@@ -1264,14 +1281,11 @@ isl::schedule_node TileOuterBand::TileOtherOperators(const isl::schedule_node &o
 }
 
 isl::schedule_node TileOuterBand::TileReduceX(const isl::schedule_node &orig_node) {
-  if (scop_info_.analysis_result_.GetReduceDirectionOfBand(cur_band_index_) != ReduceDirection::X) {
-    return orig_node;
-  }
+  if (!orig_node.isa<isl::schedule_node_band>()) return orig_node;
 
   // split reduce axis
-  auto node = orig_node;
-  auto band_node = node.as<isl::schedule_node_band>();
-  node = band_node.split(band_node.n_member() - 1);
+  auto band_node = orig_node.as<isl::schedule_node_band>();
+  isl::schedule_node node = band_node.split(band_node.n_member() - 1);
 
   // tile non_reduce axis
   node = IsolateTilesCpu(node, TILE_WITH_C1);
@@ -1301,14 +1315,14 @@ isl::schedule_node TileOuterBand::TileReduceX(const isl::schedule_node &orig_nod
 }
 
 isl::schedule_node TileOuterBand::IsolateTilesCpu(const isl::schedule_node &orig_node, const std::string &tile_level) {
-  auto node = orig_node;
-  const int n_member = node.as<isl::schedule_node_band>().n_member();
+  const int n_member = orig_node.as<isl::schedule_node_band>().n_member();
   const int tile_number = static_cast<int>(tile_sizes_.size());
   CHECK(start_pos_ < tile_number) << "The starting position cannot be greater than or equal to the tiling size.";
   int dim_num = std::min(n_member, tile_number);
 
   isl::multi_val current_tile_sizes;
   std::vector<int> full_tile_max(n_member, MAX_STRIDE);
+  auto node = orig_node;
   if (tile_level.empty()) {
     // Get the size of the vectorized tiling.
     current_tile_sizes = GetVectorizationTileSize(node);

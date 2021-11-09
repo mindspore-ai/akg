@@ -277,9 +277,13 @@ Stmt GpuIslEmitter::Emit(const isl::ast_node &node) {
     auto thread_cfg = info_.user_config_.GetThreadConfig();
     CHECK(thread_cfg) << "thread config is null.";
     int tx = thread_cfg->GetX().second;
-    int ty = thread_cfg->GetY().second;
-    int tz = thread_cfg->GetZ().second;
-    int warp_number = (tx * ty * tz) / 32;
+    int warp_number = tx;
+
+    if (info_.user_config_.GetReplaceConfig().count(WARP_COMPUTE) != 0) {
+      int ty = thread_cfg->GetY().second;
+      int tz = thread_cfg->GetZ().second;
+      warp_number = (tx * ty * tz) / 32;
+    }
     stmt = AttrStmt::make(Expr(""), ORIGIN_THREAD_DIM_X, Expr(warp_number), stmt);
   }
 

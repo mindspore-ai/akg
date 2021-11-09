@@ -139,7 +139,7 @@ class ReduceInfoCollect : public IRVisitor {
     CHECK(block_cfg) << "thread config is null.";
     int tx = thread_cfg->GetX().second;
     int ty = thread_cfg->GetY().second;
-    ReduceDirection direction = scop_info_.analysis_result_.GetReduceDirectionOfBand();
+    ReduceDirection direction = scop_info_.analysis_result_.GetReduceDirection();
     CHECK(direction != ReduceDirection::UNKNOWN) << "reduce direction unknown !";
     std::string direction_size = "";
     if (direction == ReduceDirection::Y) {

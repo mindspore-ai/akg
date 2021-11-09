@@ -16,6 +16,7 @@
 
 #include "realize_manager.h"
 #include "poly/poly_util.h"
+#include "poly/schedule_tree_util.h"
 
 #include <set>
 #include <queue>
@@ -24,27 +25,9 @@ namespace akg {
 namespace ir {
 namespace poly {
 
-isl::id RealizeManager::GetRealizeId(const isl::schedule_node &node, std::string tensor_name) const {
+isl::id RealizeManager::GetRealizeId(const isl::schedule_node &node, const std::string &tensor_name) {
   auto realize_id = std::string(REALIZE_PREFIX) + tensor_name;
   return isl::id(node.ctx(), realize_id);
-}
-
-isl::schedule_node RealizeManager::InsertExtensionNodeBefore(const isl::schedule_node &node,
-                                                             const std::string tensor_name) {
-  auto space = GetExtensionSpace(node, tensor_name);
-  isl::schedule_node graft = isl::schedule_node::from_extension(space);
-  auto extension_node = node;
-  extension_node = extension_node.graft_before(graft);
-  return extension_node;
-}
-
-isl::map RealizeManager::GetExtensionSpace(const isl::schedule_node &node, const std::string tensor_name) {
-  auto realize_id = GetRealizeId(node, tensor_name);
-  auto prefix = ShortScheduleMupa(node.root(), node.parent());
-  auto schedule_space = prefix.get_space();
-  auto space = schedule_space.params().add_named_tuple_id_ui(realize_id, 0);
-  auto extension_space = isl::map::universe(schedule_space.map_from_domain_and_range(space));
-  return extension_space;
 }
 
 isl::schedule_node RealizeManager::BreadthFirstTopDown(const isl::schedule_node &root, bool &end) {
@@ -78,7 +61,9 @@ isl::schedule_node RealizeManager::BreadthFirstTopDown(const isl::schedule_node 
     }
     // Insert realize node for read node
     if (promotion_read_set.find(filter_name) != promotion_read_set.end()) {
-      top = InsertExtensionNodeBefore(top.child(0), tensor_name).parent();
+      auto child_node = top.child(0);
+      auto realize_id = GetRealizeId(child_node, tensor_name);
+      top = InsertExtensionNodeBeforeOrAfter(child_node, realize_id, true).parent();
       names_set_.insert(tensor_name);
       break;
     }
@@ -93,7 +78,9 @@ isl::schedule_node RealizeManager::BreadthFirstTopDown(const isl::schedule_node 
           break;
         }
       }
-      top = InsertExtensionNodeBefore(top_parent.child(i).child(0), tensor_name).parent();
+      auto child_node = top_parent.child(i).child(0);
+      auto realize_id = GetRealizeId(child_node, tensor_name);
+      top = InsertExtensionNodeBeforeOrAfter(child_node, realize_id, true).parent();
       names_set_.insert(tensor_name);
       break;
     }

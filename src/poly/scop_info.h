@@ -202,7 +202,8 @@ struct MappingStrategy {
   int offset{0};
 };
 
-using MappingStrategyMap = std::map<int, MappingStrategy>;
+using MappingStrategyAxisMap = std::map<int, MappingStrategy>;
+using MappingStrategyFilterMap = std::map<int, MappingStrategyAxisMap>;
 using Binds = Map<Tensor, Buffer>;
 using TimeRecords = std::vector<std::string>;
 
@@ -256,7 +257,6 @@ class UserConfig {
 
     ParseBoolAttr(attrs, "pragma_rmselfdep", &remove_self_dependence_);
     ParseBoolAttr(attrs, "pragma_force_rmselfdep", &force_remove_self_dependence_);
-    ParseBoolAttr(attrs, "pragma_reschedule", &compute_reschedule_);
     ParseBoolAttr(attrs, "pragma_disable_whole_component", &disable_whole_component_);
     ParseBoolAttr(attrs, "pragma_remove_invariant_dependence", &remove_invariant_dependence_);
     ParseBoolAttr(attrs, "pragma_disable_schedule_shift", &disable_schedule_shift_);
@@ -307,8 +307,6 @@ class UserConfig {
       ParseBoolAttr(attrs, "shared_inversed_thread_map", &shared_inversed_thread_map_);
       ParseBoolAttr(attrs, "enable_stitch_fusion", &enable_stitch_fusion_);
       ParseIntAttr(attrs, "shared_vector_align", &shared_vector_align_);
-      ParseIntAttr(attrs, "register_memory_depth", &register_depth_);
-      ParseIntAttr(attrs, "shared_memory_depth", &shared_depth_);
       ParseIntAttr(attrs, "csr_thread_num", &csr_thread_num_);
       ParseIntAttr(attrs, "csr_avg_row", &csr_avg_row_);
       ParseStringAttr(attrs, "shared_memory_tensors", &shared_tensors_);
@@ -402,7 +400,6 @@ class UserConfig {
   bool GetRemoveSelfDependence() const { return remove_self_dependence_; }
   bool GetForceRemoveSelfDependence() const { return force_remove_self_dependence_; }
   bool GetRemoveInvariantDependence() const { return remove_invariant_dependence_; }
-  bool GetComputeReschedule() const { return compute_reschedule_; }
   bool GetDisableWholeComponent() const { return disable_whole_component_; }
   bool GetDisableScheduleShift() const { return disable_schedule_shift_; }
   bool GetEnableScheduleMaxConstant() const { return enable_schedule_max_constant_; }
@@ -515,31 +512,29 @@ class UserConfig {
   bool GetEnableOneDimThread() { return enable_one_dim_thread_; }
   void SetEnableOneDimThread(bool enable_one_dim_thread) { enable_one_dim_thread_ = enable_one_dim_thread; }
 
-  MappingStrategyMap GetInnerMappingStrategy() { return inner_mapping_strategy_; }
-  void RecordInnerMappingStrategy(const int axis_dim, const std::string inner_mapping_idx, const int offset = 0) {
-    MappingStrategy mapping_strategy;
-    mapping_strategy.mapping_idx = inner_mapping_idx;
-    mapping_strategy.offset = offset;
-    inner_mapping_strategy_[axis_dim] = mapping_strategy;
+  void RecordMappingStrategy(MappingStrategyFilterMap &mapping_strategy_map, const int axis_pos,
+                             const std::string &mapping_idx, const int filter_pos = 0, const int offset = 0);
+  MappingStrategyFilterMap GetInnerMappingStrategy() { return inner_mapping_strategy_; }
+  MappingStrategyAxisMap GetInnerMappingStrategy(const int filter_pos) { return inner_mapping_strategy_[filter_pos]; }
+  void RecordInnerMappingStrategy(const int axis_pos, const std::string inner_mapping_idx, const int filter_pos = 0,
+                                  const int offset = 0) {
+    RecordMappingStrategy(inner_mapping_strategy_, axis_pos, inner_mapping_idx, filter_pos, offset);
   }
 
-  MappingStrategyMap GetOuterMappingStrategy() { return outer_mapping_strategy_; }
-  void RecordOuterMappingStrategy(const int axis_dim, const std::string outer_mapping_idx, const int offset = 0) {
-    MappingStrategy mapping_strategy;
-    mapping_strategy.mapping_idx = outer_mapping_idx;
-    mapping_strategy.offset = offset;
-    outer_mapping_strategy_[axis_dim] = mapping_strategy;
+  MappingStrategyFilterMap GetOuterMappingStrategy() { return outer_mapping_strategy_; }
+  MappingStrategyAxisMap GetOuterMappingStrategy(const int filter_pos) { return outer_mapping_strategy_[filter_pos]; }
+  void RecordOuterMappingStrategy(const int axis_pos, const std::string outer_mapping_idx, const int filter_pos = 0,
+                                  const int offset = 0) {
+    RecordMappingStrategy(outer_mapping_strategy_, axis_pos, outer_mapping_idx, filter_pos, offset);
   }
 
   bool GetEnableVectorization() { return enable_vectorization_; }
   void SetEnableVectorization(bool enable_vectorization) { enable_vectorization_ = enable_vectorization; }
 
-  bool UseRegisterMemory() { return use_register_memory_; }
-  bool UseSharedMemory() { return use_shared_memory_; }
-  void SetUseSharedMemory(bool use_shared_memory) { use_shared_memory_ = use_shared_memory; }
-  void SetUseRegisterMemory(bool use_register_memory) { use_register_memory_ = use_register_memory; }
-  int GetRegisterDepth() { return register_depth_; }
-  int GetSharedDepth() { return shared_depth_; }
+  bool GetUseRegisterMemory() const { return use_register_memory_; }
+  bool GetUseSharedMemory() const { return use_shared_memory_; }
+  void SetGetUseSharedMemory(bool use_shared_memory) { use_shared_memory_ = use_shared_memory; }
+  void SetGetUseRegisterMemory(bool use_register_memory) { use_register_memory_ = use_register_memory; }
   void SetSharedTensors(std::string shared_tensors) { shared_tensors_ = shared_tensors; }
   std::string GetSharedTensors() { return shared_tensors_; }
   std::string GetReduceLibType() { return reduce_lib_type_; }
@@ -555,8 +550,6 @@ class UserConfig {
   bool EnableStitchFusion() { return enable_stitch_fusion_; }
   void SetSharedVectorAlign(int shared_vector_align) { shared_vector_align_ = shared_vector_align; }
   int GetSharedVectorAlign() { return shared_vector_align_; }
-  void SetTransposeOp(bool has_transpose) { has_transpose_ = has_transpose; }
-  bool HasTranspose() { return has_transpose_; }
   void SetCsrThreadNum(int csr_thread_num) { csr_thread_num_ = csr_thread_num; }
   int GetCsrThreadNum() { return csr_thread_num_; }
   int GetCsrAvgRow() { return csr_avg_row_; }
@@ -702,9 +695,6 @@ class UserConfig {
   // memory config
   bool use_register_memory_{true};
   bool use_shared_memory_{true};
-  // shared memory position in schedule tree
-  int register_depth_{-1};
-  int shared_depth_{-1};
   // shared memory tensor list
   std::string shared_tensors_;
   // reduce lib type, for now, there are two selection
@@ -756,7 +746,6 @@ class UserConfig {
   bool remove_self_dependence_{true};
   bool force_remove_self_dependence_{false};
   bool remove_invariant_dependence_{true};
-  bool compute_reschedule_{false};
   bool disable_whole_component_{true};
   bool disable_schedule_shift_{false};
   bool enable_schedule_max_constant_{false};
@@ -789,8 +778,8 @@ class UserConfig {
   bool dynamic_shape_conv_full_parametric_{false};
 
   // custom mapping config
-  MappingStrategyMap inner_mapping_strategy_;
-  MappingStrategyMap outer_mapping_strategy_;
+  MappingStrategyFilterMap inner_mapping_strategy_;
+  MappingStrategyFilterMap outer_mapping_strategy_;
 
   // dump config
   int dump_tuning_level_{0};
@@ -799,7 +788,6 @@ class UserConfig {
 
   Schedule origin_sch_;
 
-  bool has_transpose_{false};
   int csr_thread_num_{128};
   int csr_avg_row_{0};
 };
@@ -871,23 +859,17 @@ constexpr auto AT_CALL = "CALL";
 
 enum Template {
   DEFAULT = 0,
-  PURE_ELEM,
-  BROADCAST_OP,
+  CONV,
+  MATMUL,
   REDUCTION,
   BITWISE_REDUCTION,
-  MATMUL,
+  BROADCAST_OP,
   TRANSPOSE_OP,
   PAD_OP,
+  PURE_ELEM,
   CUSTOM_CONFIG,
-  CONV,
   EXTERN_CALL,
   TEMPLATE_BULK
-};
-
-struct OperatorInfo {
-  Template type{Template::DEFAULT};
-  // used only for reduce operators, represents the direction of reduce operation.
-  ReduceDirection direction{ReduceDirection::UNKNOWN};
 };
 
 class AnalysisResult {
@@ -919,16 +901,21 @@ class AnalysisResult {
 
   enum BandScope { OUTER, INNER };
   // represent a band in tree
-  struct BandNode {
-    BandNode(const isl::schedule_node_band &n, BandScope s, int i) : node(n), scope(s), index(i) {}
+  struct OuterBandNode {
+    OuterBandNode(const isl::schedule_node_band &n, BandScope s, int i) : node(n), scope(s), index(i) {}
     isl::schedule_node_band node;
     BandScope scope;
     size_t index{0};
-    OperatorInfo info;
-    int last_axis{-1};
     std::unordered_set<isl::id, isl::IslIdIslHash> stmts;
-    BandNode *parent{nullptr};
-    std::vector<std::unique_ptr<BandNode>> children{};
+    OuterBandNode *parent{nullptr};
+    std::vector<std::unique_ptr<OuterBandNode>> children{};
+
+    int last_axis{-1};
+    Template template_type{Template::DEFAULT};
+    ReduceDirection reduce_direction{ReduceDirection::UNKNOWN};
+    bool use_shared_memory{true};
+    bool use_register_memory{true};
+    bool enable_vectorization{false};
   };
 
   void RecordWrites(const isl::union_map &writes) { writes_ = writes; }
@@ -1009,8 +996,6 @@ class AnalysisResult {
   void InsertConditionalWriteBufferFootprints(const std::string &s) { conditional_write_buffer_footprints_.insert(s); }
   bool GetIsTiled() const { return is_tiled_; }
   void SetIsTiled(bool is_tiled) { is_tiled_ = is_tiled; }
-  bool GetIsCustomMapping() const { return is_custom_mapping_; }
-  void SetIsCustomMapping(bool is_custom_mapping) { is_custom_mapping_ = is_custom_mapping; }
   bool GetIsOuterBlockMapping() const { return is_outer_block_mapping_; }
   void SetIsOuterBlockMapping(bool is_outer_block_mapping) { is_outer_block_mapping_ = is_outer_block_mapping; }
   bool GetIsGpuDmaAnalysed() const { return is_gpu_dma_analysed_; }
@@ -1046,7 +1031,7 @@ class AnalysisResult {
   bool GetCsr() const { return is_csr_; }
   void SetCsr(const bool &is_csr) { is_csr_ = is_csr; }
   bool IsCsrDynamicExtent(const Variable *op) {
-    for (const auto &it: g_csr) {
+    for (const auto &it : g_csr) {
       auto var = it.first.as<Variable>();
       if (var != nullptr && var->name_hint == op->name_hint) {
         return true;
@@ -1104,56 +1089,16 @@ class AnalysisResult {
     return reduce_direction_map_;
   }
 
-  int GetOuterBandNumber() { return static_cast<int>(band_nodes_.size()); }
+  // the whole operator information
+  void SetOpTemplate(Template op_template) { op_template_ = op_template; }
+  Template GetOpTemplate() { return op_template_; }
+  std::string ShowOpTemplate() { return template_map_[op_template_]; }
+  std::string ShowOpTemplate(Template op_template_) { return template_map_[op_template_]; }
 
-  // template in the whole schedule tree
-  void SetOpTemplate(Template op_template) { op_info_.type = op_template; }
-  Template GetOpTemplate() { return op_info_.type; }
-  std::string ShowOpTemplate() { return template_map_[op_info_.type]; }
-  std::string ShowOpTemplate(Template t) { return template_map_[t]; }
-
-  void SetLastAxisOfBand(const int axis, const int band_index = 0) {
-    CheckBandIndex(band_index, __FUNCTION__);
-    band_nodes_[band_index]->last_axis = axis;
-  }
-
-  int GetLastAxisOfBand(const int band_index = 0) const {
-    CheckBandIndex(band_index, __FUNCTION__);
-    return band_nodes_[band_index]->last_axis;
-  }
-
-  // reduce direction in every schedule band node
-  void SetReduceDirectionOfBand(ReduceDirection d, int band_index = 0) {
-    CheckBandIndex(band_index, __FUNCTION__);
-    band_nodes_[band_index]->info.direction = d;
-  }
-  ReduceDirection GetReduceDirectionOfBand(int band_index = 0) {
-    CheckBandIndex(band_index, __FUNCTION__);
-    return band_nodes_[band_index]->info.direction;
-  }
-  std::string ShowReduceDirectionOfBand(int band_index = 0) {
-    CheckBandIndex(band_index, __FUNCTION__);
-    return direction_map_[band_nodes_[band_index]->info.direction];
-  }
-
-  // operator type in every schedule band node
-  void SetOpTemplateOfBand(Template t, int band_index = 0) {
-    CheckBandIndex(band_index, __FUNCTION__);
-    band_nodes_[band_index]->info.type = t;
-  }
-  Template GetOpTemplateOfBand(int band_index = 0) {
-    CheckBandIndex(band_index, __FUNCTION__);
-    return band_nodes_[band_index]->info.type;
-  }
-  std::string ShowOpTemplateOfBand(int band_index = 0) {
-    CheckBandIndex(band_index, __FUNCTION__);
-    return template_map_[band_nodes_[band_index]->info.type];
-  }
-
-  OperatorInfo GetOpInfoOfBand(int band_index = 0) {
-    CheckBandIndex(band_index, __FUNCTION__);
-    return band_nodes_[band_index]->info;
-  }
+  void SetReduceDirection(ReduceDirection op_direction) { op_direction_ = op_direction; }
+  ReduceDirection GetReduceDirection() { return op_direction_; }
+  std::string ShowReduceDirection() { return direction_map_[op_direction_]; }
+  std::string ShowReduceDirection(ReduceDirection op_direction) { return direction_map_[op_direction]; }
 
   void RecordReduceInitIds(isl::id reduce_init_id) { reduce_init_ids_.push_back(reduce_init_id); }
   std::vector<isl::id> GetReduceInitIds() const { return reduce_init_ids_; }
@@ -1184,13 +1129,24 @@ class AnalysisResult {
   void RecordProvideAnalysis(const For *op, ProvideEntry prov) { provides_ana_[op].emplace_back(prov); }
   std::unordered_map<const For *, std::vector<ProvideEntry>> GetProvideAnalysis() { return provides_ana_; }
 
-  void RecordBandNode(std::unique_ptr<BandNode> &band) { band_nodes_.emplace_back(std::move(band)); }
-  std::vector<std::unique_ptr<BandNode>> &GetBandNodes() { return band_nodes_; }
+  int GetOuterBandNumber() { return static_cast<int>(outer_band_nodes_.size()); }
+  void RecordOuterBandNode(std::unique_ptr<OuterBandNode> &band_node) {
+    outer_band_nodes_.emplace_back(std::move(band_node));
+  }
+  void UpdateOuterBandNode(std::unique_ptr<OuterBandNode> &band_node) {
+    outer_band_nodes_[band_node->index] = std::move(band_node);
+  }
+
+  std::vector<std::unique_ptr<OuterBandNode>> &GetAllOuterBandNode() { return outer_band_nodes_; }
+  OuterBandNode *GetOuterBandNode(const int band_index = 0) {
+    CheckBandIndex(band_index, __FUNCTION__);
+    return outer_band_nodes_[band_index].get();
+  }
 
   void CheckBandIndex(const int band_index, const std::string func_name) const {
-    CHECK(band_index >= 0 && band_index < static_cast<int>(band_nodes_.size()))
+    CHECK(band_index >= 0 && band_index < static_cast<int>(outer_band_nodes_.size()))
       << "In " << func_name << ",the index of the current band (" << band_index << ") is not in the legal range (0 ~ "
-      << std::to_string(band_nodes_.size()) << ").";
+      << std::to_string(outer_band_nodes_.size()) << ").";
   }
 
  public:
@@ -1200,17 +1156,19 @@ class AnalysisResult {
   BufferDefInfo default_buffer_def_info_;
   std::unordered_map<const For *, std::vector<ProvideEntry>> provides_ana_;
   std::unordered_map<int, std::string> template_map_ = {
-    {0, "DEFAULT"},           {1, "PURE_ELEM"}, {2, "BROADCAST_OP"}, {3, "REDUCTION"},
-    {4, "BITWISE_REDUCTION"}, {5, "MATMUL"},    {6, "TRANSPOSE_OP"}, {7, "PAD_OP"},
-    {8, "CUSTOM_CONFIG"},     {9, "CONV"},      {10, "EXTERN_CALL"}};
+    {0, "DEFAULT"},           {1, "CONV"},          {2, "MATMUL"},       {3, "REDUCTION"},
+    {4, "BITWISE_REDUCTION"}, {5, "BROADCAST_OP"},  {6, "TRANSPOSE_OP"}, {7, "PAD_OP"},
+    {8, "PURE_ELEM"},         {9, "CUSTOM_CONFIG"}, {10, "EXTERN_CALL"}};
   std::unordered_map<int, std::string> direction_map_ = {
     {0, "UNKNOWN"}, {1, "X_DIRECTION"}, {2, "Y_DIRECTION"}, {3, "ALL_DIRECTION"}};
 
  private:
-  // represents the operator information of the whole schedule tree
-  OperatorInfo op_info_;
+  // the whole operator information
+  Template op_template_{Template::DEFAULT};
+  ReduceDirection op_direction_{ReduceDirection::UNKNOWN};
+
   // stores all the outermost schedule_band_node in schedule tree, including operator-related information
-  std::vector<std::unique_ptr<BandNode>> band_nodes_;
+  std::vector<std::unique_ptr<OuterBandNode>> outer_band_nodes_;
   bool use_gpu_reduce_lib_{false};
   ReduceMap reduces_;
   ReduceTensorInfoMap reduce_tensor_info_;
@@ -1261,7 +1219,6 @@ class AnalysisResult {
   Mma mma_;
 
   // custom mapping
-  bool is_custom_mapping_{false};
   bool is_outer_block_mapping_{true};
 
   // All axis of each tensor
@@ -1276,7 +1233,7 @@ class AnalysisResult {
 
 using TensorEntry = AnalysisResult::TensorEntry;
 using ProvideEntry = AnalysisResult::ProvideEntry;
-using BandNode = AnalysisResult::BandNode;
+using OuterBandNode = AnalysisResult::OuterBandNode;
 using BandScope = AnalysisResult::BandScope;
 
 class CubeInfo {

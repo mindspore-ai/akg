@@ -123,16 +123,18 @@ isl::union_set GetMappingFilterInfo(const isl::schedule_node node, MappingCfg *m
                                     const std::unordered_set<std::string> &non_repeated_idx = {});
 isl::union_set GatherMappingsTo(const isl::schedule_node &root, MappingCfg *mapping_cfg,
                                 const std::unordered_set<std::string> &non_repeated_idx = {});
-std::unordered_set<std::string> GetNonRepeatedIdx(const MappingStrategyMap &mapping_strategy);
+std::unordered_set<std::string> GetNonRepeatedIdx(const MappingStrategyAxisMap &mapping_strategy);
 
 bool ReuseTensorCluster(const TensorFootprintCluster &cluster, const isl::multi_union_pw_aff &outer_pw_aff);
 
-isl::schedule_node CollectMarkNodeOnPromotion(const isl::schedule_node &root, const std::string &mark);
+std::vector<isl::schedule_node> CollectMarkNode(const isl::schedule_node &tree, const std::string &mark_tag);
 
 std::unordered_map<std::string, std::string> GetMatmulTensorsName(ScopInfo &scop_info);
 
 bool IsTensorAB(const std::string &item, ScopInfo &scop_info);
 isl::schedule_node AdjustAxisPosition(const isl::schedule_node &orig_node, const int orig_pos, const int new_pos);
+
+isl::schedule_node InsertEmptyPermutableBand(const isl::schedule_node &orig_node);
 
 }  // namespace poly
 }  // namespace ir

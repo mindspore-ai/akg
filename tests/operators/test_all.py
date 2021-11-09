@@ -151,13 +151,13 @@ def bmm(poly_sch, fuzz_shape, attrs):
                 add_bias=False, tensor_core=False, poly_sch=poly_sch, attrs=attrs)
 
     # test_ms_bmm((32, 12, 128, 128), (32, 12, 128, 64), 'float16', 'float16', layout1='NHDT', layout2='NHTD', layout_out='NHDT',
-    #             shape_bias=(1, ), add_bias=False, tensor_core=False, poly_sch=poly_sch, attrs=attrs)
+    #             shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch, attrs=attrs)
     # test_ms_bmm((256, 128), (64, 128), 'float16', 'float16', layout1='NHDT', layout2='NHDT', layout_out='NHDT',
-    #             shape_bias=(1, ), add_bias=False, tensor_core=False, poly_sch=poly_sch, attrs=attrs)
+    #             shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch, attrs=attrs)
     # test_ms_bmm((128, 32), (128, 512), 'float16', 'float16', layout1='NHTD', layout2='NHTD', layout_out='NHDT',
-    #             shape_bias=(1, ), add_bias=False, tensor_core=False, poly_sch=poly_sch, attrs=attrs)
+    #             shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch, attrs=attrs)
     # test_ms_bmm((128, 64), (64, 32), 'float16', 'float16', layout1='NHDT', layout2='NHTD', layout_out='NHDT',
-    #             shape_bias=(1, ), add_bias=False, tensor_core=False, poly_sch=poly_sch, attrs=attrs)
+    #             shape_bias=(1, ), add_bias=False, tensor_core=True, poly_sch=poly_sch, attrs=attrs)
 
 def abs_op(poly_sch, fuzz_shape, attrs):
     if fuzz_shape:
@@ -275,14 +275,13 @@ def fused_gather_gather_add_mul_max_exp_scatter_add(poly_sch, fuzz_shape, attrs)
                                                 'float32', 'int32', 0, poly_sch=poly_sch, attrs=attrs)
 
 def fused_gather_mul_scatter_add(poly_sch, fuzz_shape, attrs):
-    attrs2 = attrs
     if fuzz_shape:
         input_shape = fuzz_shape
         test_fused_gather_mul_scatter_add(input_shape, (108365, ), (108365, 8, 8), (108365, 1), 'float32', 'int32', 0, poly_sch=poly_sch,
-                    attrs=attrs2)
+                    attrs=attrs)
         return
     test_fused_gather_mul_scatter_add((19717, 8, 8), (108365, ), (108365, 8, 8), (108365, 1), 'float32', 'int32', 0, poly_sch=poly_sch,
-        attrs=attrs2)
+        attrs=attrs)
 
 def fused_gather_nd_reduce_sum_mul_unsorted_segment_sum(poly_sch, fuzz_shape, attrs):
     if fuzz_shape:

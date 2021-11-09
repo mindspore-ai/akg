@@ -92,7 +92,6 @@ def set_dim_func(data):
 def get_attrs():
     """get attrs."""
     attrs = {
-        "pragma_reschedule": 1,
         "pragma_modshift": 1,
         "disable_cse": 1,
         "enable_bisect_optimize": 1,

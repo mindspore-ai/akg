@@ -41,8 +41,7 @@ def avgpool_ad_set_dim_func(head, data, kernel, stride, pad):
 @ct_util.reg_set_dim_func(avgpool_ad_set_dim_func)
 def avgpool_ad(head, data, kernel, stride, pad):
     """Compute gradient of avgpool operator using automatic differentiate."""
-    attrs = {"enable_post_poly_loop_partition": False, "enable_pre_poly_loop_partition": False,
-             "pragma_reschedule": 1}
+    attrs = {"enable_post_poly_loop_partition": False, "enable_pre_poly_loop_partition": False}
     avgpool_fwd, _ = avgpool.avgpool(data, kernel, stride, pad)
     [dl_ddata] = akg.differentiate(avgpool_fwd, [data], head)
     return dl_ddata, attrs

@@ -27,15 +27,15 @@ namespace poly {
 void AnalyzeSchedule::ConstructBandNode() {
   // Step 1. Construct outer band.
   isl::schedule_node root_node = GetOuterBand(sch_.get_root());
-  int cnt = 0;  
+  int cnt = 0;
   auto append_outer_band = [this, &cnt](const isl::schedule_node_band &outer_band) {
     auto prefix_schedule = outer_band.get_partial_schedule();
     if (prefix_schedule.is_null()) {
       return;
     }
-    std::unique_ptr<BandNode> out(new (std::nothrow) BandNode(outer_band, BandScope::OUTER, cnt++));
+    std::unique_ptr<OuterBandNode> out(new (std::nothrow) OuterBandNode(outer_band, BandScope::OUTER, cnt++));
     CHECK(out) << "memory alloc fail";
-    scop_info_.analysis_result_.RecordBandNode(out);
+    scop_info_.analysis_result_.RecordOuterBandNode(out);
   };
   if (root_node.isa<isl::schedule_node_band>()) {  // single outer band
     append_outer_band(root_node.as<isl::schedule_node_band>());
@@ -56,8 +56,8 @@ void AnalyzeSchedule::ConstructBandNode() {
   }
 
   // Step 2. Construct inner band for each outer band.
-  auto &band_nodes = scop_info_.analysis_result_.GetBandNodes();
-  std::vector<BandNode *> stack;
+  auto &band_nodes = scop_info_.analysis_result_.GetAllOuterBandNode();
+  std::vector<OuterBandNode *> stack;
   for (auto &band_node : band_nodes) {
     auto node = band_node.get();
     stack.emplace_back(node);
@@ -73,7 +73,7 @@ void AnalyzeSchedule::ConstructBandNode() {
           return;
         }
         seq += upa_size;
-        std::unique_ptr<BandNode> in(new (std::nothrow) BandNode(inner_band, BandScope::INNER, seq));
+        std::unique_ptr<OuterBandNode> in(new (std::nothrow) OuterBandNode(inner_band, BandScope::INNER, seq));
         CHECK(in) << "memory alloc fail";
         in->parent = bn;
         bn->children.emplace_back(std::move(in));

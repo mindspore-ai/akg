@@ -189,7 +189,6 @@ def add_b_conv(fmap_shape, filter_shape, pad_, stride_, dilation_,
     print(conv, a_value, b_value, bias_value)
 
     attrs = {}
-    attrs["pragma_reschedule"] = True
     attrs["pragma_rmselfdep"] = False
     attrs['dim'] = dim_info
     with akg.build_config(add_lower_pass=utils.debug_mode(0), dump_pass_ir=True):

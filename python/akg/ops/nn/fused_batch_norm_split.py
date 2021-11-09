@@ -381,26 +381,19 @@ DIM_MAP_BN3 = {
 
 ATTR_MAP_BN3 = {
     str(((32, 4, 112, 112, 16))): (
-        ("eleminate_outmost_for_cond", True), ("pragma_reschedule", 1),
-        ("pragma_modshift", 1)),
+        ("eleminate_outmost_for_cond", True), ("pragma_modshift", 1)),
     str(((32, 4, 56, 56, 16))): (
-        ("eleminate_outmost_for_cond", True), ("pragma_reschedule", 1),
-        ("pragma_modshift", 1)),
+        ("eleminate_outmost_for_cond", True), ("pragma_modshift", 1)),
     str(((32, 16, 56, 56, 16))): (
-        ("eleminate_outmost_for_cond", True), ("pragma_reschedule", 1),
-        ("pragma_modshift", 1)),
+        ("eleminate_outmost_for_cond", True), ("pragma_modshift", 1)),
     str(((32, 8, 28, 28, 16))): (
-        ("eleminate_outmost_for_cond", True), ("pragma_reschedule", 1),
-        ("pragma_modshift", 1)),
+        ("eleminate_outmost_for_cond", True), ("pragma_modshift", 1)),
     str(((32, 16, 14, 14, 16))): (
-        ("eleminate_outmost_for_cond", True), ("pragma_reschedule", 1),
-        ("pragma_modshift", 1)),
+        ("eleminate_outmost_for_cond", True), ("pragma_modshift", 1)),
     str(((32, 8, 56, 56, 16))): (
-        ("eleminate_outmost_for_cond", True), ("pragma_reschedule", 1),
-        ("pragma_modshift", 1)),
+        ("eleminate_outmost_for_cond", True), ("pragma_modshift", 1)),
     str(((32, 16, 28, 28, 16))): (
-        ("eleminate_outmost_for_cond", True), ("pragma_reschedule", 1),
-        ("pragma_modshift", 1)),
+        ("eleminate_outmost_for_cond", True), ("pragma_modshift", 1)),
 }
 
 DEFAULT_ATTR_MAP_BN3 = {

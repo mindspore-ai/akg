@@ -56,8 +56,6 @@ class TryMarkScalarStmt : public SchedulePass {
   PassInfo &pass_info_;
 
   bool SubtreeHasPermutableBands(const isl::schedule_node &node) const;
-
-  isl::schedule_node InsertEmptyPermutableBand(isl::schedule_node node);
 };
 
 }  // namespace poly

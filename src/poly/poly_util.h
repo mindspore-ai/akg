@@ -441,6 +441,7 @@ constexpr auto PROMOTE_SHARED_TO_REGISTER_AB = "promote_shared_to_register_ab";
 constexpr auto PROMOTE_SHARED_TO_REGISTER_C = "promote_shared_to_register_c";
 constexpr auto PROMOTE_GLOBAL_TO_REGISTER_C = "promote_global_to_register_c";
 // promote marker for thread group
+constexpr auto PROMOTE_GLOBAL_TO_SHARED = "promote_global_to_shared";
 constexpr auto PROMOTE_REGISTER_TO_GLOBAL = "promote_register_to_global";
 constexpr auto PROMOTE_REGISTER_TO_SHARED = "promote_register_to_shared";
 constexpr auto PROMOTE_SHARED_TO_GLOBAL = "promote_shared_to_global";
@@ -481,12 +482,13 @@ constexpr auto MATRIX_ELSE = "matrix_else";
 constexpr auto FRAGMENT = "fragment_";
 constexpr auto LOCAL_SUFFIX = "_local";
 constexpr auto SHARE_SUFFIX = "_shared";
+constexpr auto PROMOTION_INFIX = "_promotion_";
 
 const std::unordered_set<std::string> AkgSupportedReduceOp = {AKG_REDUCE_SUM, AKG_REDUCE_MIN, AKG_REDUCE_MAX,
                                                               AKG_REDUCE_AND, AKG_REDUCE_OR,  AKG_REDUCE_PROD};
 
-const std::unordered_set<std::string> AkgSupportedTotOp = {AKG_ATOMIC_TOT, AKG_TENSOR_OF_TENSOR,
-                                                           AKG_TENSOR_NOT_PROMOTE, AKG_INNER_TENSOR};
+const std::unordered_set<std::string> AkgSupportedTotOp = {AKG_ATOMIC_TOT, AKG_TENSOR_OF_TENSOR, AKG_TENSOR_NOT_PROMOTE,
+                                                           AKG_INNER_TENSOR};
 
 const std::vector<std::string> ConvATTRList = {ATTR_CONV_FEATURE_W,  ATTR_CONV_KERNEL_H,   ATTR_CONV_KERNEL_W,
                                                ATTR_CONV_STRIDE_H,   ATTR_CONV_STRIDE_W,   ATTR_CONV_DILATION_H,

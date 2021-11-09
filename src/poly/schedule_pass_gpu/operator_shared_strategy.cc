@@ -62,8 +62,9 @@ std::set<std::string> OperatorSharedStrategy::GetInitPromotedTensor() {
   return id_sets;
 }
 
-void OperatorSharedStrategy::RecordPromotedTensorInfo(const isl::schedule_node &node, const isl::union_map &outer_sch,
-                                                      const std::set<std::string> &id_sets) {
+void OperatorSharedStrategy::RecordPromotedTensorInfo(const isl::schedule_node &orig_node,
+                                                      const std::set<std::string> &id_sets,
+                                                      const std::string &mark_name) {
   std::vector<isl::id> tensor_list;
   for (auto item : id_sets) {
     tensor_list.push_back(isl::id(scop_info_.ctx_, item));
@@ -73,29 +74,52 @@ void OperatorSharedStrategy::RecordPromotedTensorInfo(const isl::schedule_node &
   isl::union_map copyin = scop_info_.analysis_result_.GetCopyin();
   isl::union_map fake_copyin = scop_info_.analysis_result_.GetFakeCopyin();
 
-  for (const auto &item : tensor_list) {
-    isl::id dst_tensor_id = GpuDstId(GpuMemType::SHARED, item);
-    std::vector<size_t> buffer_sizes;
-    std::vector<std::pair<isl::id, MemType>> data_stream;
-    data_stream.push_back(std::make_pair(item, MemType::DDR));
-    data_stream.push_back(std::make_pair(item, MemType::SHARED_));
-    BufferDefInfo promoted_info = BufferDefInfo{item,
-                                                dst_tensor_id,
-                                                item,
-                                                MemType::DDR,
-                                                "",
-                                                false,
-                                                false,
-                                                data_stream,
-                                                Tensor(),
-                                                Handle(),
-                                                buffer_sizes,
-                                                nullptr,
-                                                isl::union_map::empty(isl::space(scop_info_.ctx_, 0))};
-    promoted_info.footprints_cluster =
-      TensorFootprintCluster::HoistBufferFootprintCluster(outer_sch, item, reads, copyin, writes, fake_copyin);
-    if (promoted_info.footprints_cluster != nullptr) {
-      promoted_info.footprint_cluster_map.emplace_back(std::make_pair(node, promoted_info.footprints_cluster));
+  std::vector<isl::schedule_node> nodes = CollectMarkNode(orig_node, mark_name);
+
+  // Collect block config.
+  auto block_cfg = scop_info_.user_config_.GetBlockConfig();
+  CHECK(block_cfg != nullptr) << "block config is null";
+  auto replace_cfg = scop_info_.user_config_.GetReplaceConfig();
+  MappingStrategyAxisMap mapping_strategy = scop_info_.user_config_.GetOuterMappingStrategy(band_index_);
+  std::unordered_set<std::string> non_repeated_idx = GetNonRepeatedIdx(mapping_strategy);
+  auto mapping_filter_info = GetMappingFilterInfo(orig_node.root(), block_cfg, replace_cfg, non_repeated_idx);
+
+  for (const auto &node : nodes) {
+    auto tree = node.parent();
+    CHECK(!IsAncestorMapToThread(tree)) << "shared memory promotion cannot below thread_marker.";
+    auto partial_sched = LocalSchedule(tree);
+    if (!mapping_filter_info.is_empty()) {
+      partial_sched = partial_sched.intersect_domain(mapping_filter_info);
+    }
+
+    for (const auto &item : tensor_list) {
+      isl::id dst_tensor_id = GetGpuIndexDstId(GpuMemType::SHARED, item);
+      if (scop_info_.IsCopyinTensor(item.get_name()) && band_index_ != 0) {
+        dst_tensor_id = GetGpuIndexDstId(GpuMemType::SHARED, item, band_index_);
+      }
+      std::vector<size_t> buffer_sizes;
+      std::vector<std::pair<isl::id, MemType>> data_stream;
+      data_stream.push_back(std::make_pair(item, MemType::DDR));
+      data_stream.push_back(std::make_pair(item, MemType::SHARED_));
+      BufferDefInfo promoted_info = BufferDefInfo{item,
+                                                  dst_tensor_id,
+                                                  item,
+                                                  MemType::DDR,
+                                                  mark_name,
+                                                  false,
+                                                  false,
+                                                  data_stream,
+                                                  Tensor(),
+                                                  Handle(),
+                                                  buffer_sizes,
+                                                  nullptr,
+                                                  isl::union_map::empty(isl::space(scop_info_.ctx_, 0))};
+      promoted_info.footprints_cluster =
+        TensorFootprintCluster::HoistBufferFootprintCluster(partial_sched, item, reads, copyin, writes, fake_copyin);
+      if (promoted_info.footprints_cluster == nullptr) {
+        continue;
+      }
+      promoted_info.footprint_cluster_map.emplace_back(std::make_pair(tree, promoted_info.footprints_cluster));
       scop_info_.analysis_result_.buffer_def_infos_.push_back(promoted_info);
     }
   }
@@ -125,17 +149,21 @@ void OperatorSharedStrategy::DeleteNotPromotedTensors(std::set<std::string> &id_
   }
 }
 
-void OperatorSharedStrategy::CreateClusterList(const isl::schedule_node &node, const isl::union_map &outer_sch) {
+void OperatorSharedStrategy::CreateClusterList(const isl::schedule_node &node) {
   std::set<std::string> id_sets = GetInitPromotedTensor();
   RecordCustomPromotedTensors(id_sets);
   DeleteNotPromotedTensors(id_sets);
-  RecordPromotedTensorInfo(node, outer_sch, id_sets);
+  for (auto mark_name : mark_names_) {
+    RecordPromotedTensorInfo(node, id_sets, mark_name);
+  }
 }
 
-void ReduceSharedStrategy::CreateClusterList(const isl::schedule_node &node, const isl::union_map &outer_sch) {
+void ReduceSharedStrategy::CreateClusterList(const isl::schedule_node &node) {
   std::set<std::string> id_sets = AnalysisReduceTensors();
   RecordCustomPromotedTensors(id_sets);
-  RecordPromotedTensorInfo(node, outer_sch, id_sets);
+  for (auto mark_name : mark_names_) {
+    RecordPromotedTensorInfo(node, id_sets, mark_name);
+  }
 }
 
 std::set<std::string> ReduceSharedStrategy::AnalysisReduceTensors() {
@@ -169,8 +197,7 @@ std::set<std::string> ReduceSharedStrategy::AnalysisReduceTensors() {
   return id_sets;
 }
 
-void BatchMatmulSharedStrategy::CreateClusterList(const isl::schedule_node &node, const isl::union_map &outer_sch,
-                                                  const bool hoist_tensor_c) {
+void BatchMatmulSharedStrategy::CreateClusterList(const isl::schedule_node &node) {
   std::set<std::string> id_sets = GetInitPromotedTensor();
   RecordCustomPromotedTensors(id_sets);
 
@@ -182,23 +209,32 @@ void BatchMatmulSharedStrategy::CreateClusterList(const isl::schedule_node &node
     id_sets.emplace(tensors[MATRIX_B]);
   }
 
-  auto it = id_sets.begin();
-  while (it != id_sets.end()) {
-    if (!hoist_tensor_c) {
-      if (!IsTensorAB(*it, scop_info_)) {
-        it = id_sets.erase(it);
-        continue;
+  auto DeleteTensorSets = [this](const std::set<std::string> &id_sets,
+                                 const bool hoist_tensor_c) -> std::set<std::string> {
+    std::set<std::string> final_id_sets = id_sets;
+    auto it = final_id_sets.begin();
+    while (it != final_id_sets.end()) {
+      if (!hoist_tensor_c) {
+        if (!IsTensorAB(*it, scop_info_)) {
+          it = final_id_sets.erase(it);
+          continue;
+        }
+      } else {
+        if (IsTensorAB(*it, scop_info_)) {
+          it = final_id_sets.erase(it);
+          continue;
+        }
       }
-    } else {
-      if (IsTensorAB(*it, scop_info_)) {
-        it = id_sets.erase(it);
-        continue;
-      }
+      ++it;
     }
-    ++it;
-  }
+    return final_id_sets;
+  };
 
-  RecordPromotedTensorInfo(node, outer_sch, id_sets);
+  for (auto mark_name : mark_names_) {
+    bool hoist_tensor_c = mark_name == PROMOTE_GLOBAL_TO_SHARED_C;
+    auto final_id_sets = DeleteTensorSets(id_sets, hoist_tensor_c);
+    RecordPromotedTensorInfo(node, final_id_sets, mark_name);
+  }
 }
 
 }  // namespace poly

@@ -340,7 +340,7 @@ def conv_backprop_filter_compute(data, input_shape, filter_shape, output_shape, 
                                           (wo * s_w + w - p_left), ni]).astype("float32"),
                                 axis=[no, ho, wo]), name=output_name, attrs=conv_filter_attr)
 
-    return res_c, {"dim": info, "pragma_reschedule": 1, "pragma_conv_special_dma": 1,
+    return res_c, {"dim": info, "pragma_conv_special_dma": 1,
                    utils.BINDS: {data_a: a_buf, a_fractal: a_buf}}
 
 @vc_util.check_input_type((list, tuple), (list, tuple), (list, tuple), (list, tuple), (list, tuple), (list, tuple),

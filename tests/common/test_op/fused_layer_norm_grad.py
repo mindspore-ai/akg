@@ -91,10 +91,10 @@ fused_layer_norm_grad_set_dim_map = {
 }
 
 fused_layer_norm_grad_set_attr_map = {
-    str(([2, 128], 1, 1, "float32")): (["pragma_reschedule", "disable_cse"]),
-    str(([2, 128, 768], 2, 2, "float32")): (["pragma_reschedule", "disable_cse"]),
-    str(([2, 128, 1024], 2, 2, "float32")): (["pragma_reschedule", "disable_cse"]),
-    str(([8192, 1024], 1, 1, "float16")): (["pragam_reschedule"]),
+    str(([2, 128], 1, 1, "float32")): (["pragma_disable_whole_component", "disable_cse"]),
+    str(([2, 128, 768], 2, 2, "float32")): (["pragma_disable_whole_component", "disable_cse"]),
+    str(([2, 128, 1024], 2, 2, "float32")): (["pragma_disable_whole_component", "disable_cse"]),
+    str(([8192, 1024], 1, 1, "float16")): (["pragma_disable_whole_component"]),
 }
 
 prob_shape = {

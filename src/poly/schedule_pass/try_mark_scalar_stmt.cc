@@ -16,6 +16,7 @@
 
 #include "try_mark_scalar_stmt.h"
 #include "poly/schedule_pass.h"
+#include "poly/schedule_tree_util.h"
 
 namespace akg {
 namespace ir {
@@ -33,20 +34,6 @@ bool TryMarkScalarStmt::SubtreeHasPermutableBands(const isl::schedule_node &node
     return !(IsPermutable(node, pass_info_.tile_check_coincident_));
   });
   return !all_non_permutable;
-}
-
-isl::schedule_node TryMarkScalarStmt::InsertEmptyPermutableBand(isl::schedule_node node) {
-  isl::space space;
-  isl::multi_union_pw_aff mupa;
-
-  space = node.get_schedule().get_domain().get_space();
-
-  space = space.set_from_params();
-  mupa = isl::multi_union_pw_aff::zero(space);
-  node = node.insert_partial_schedule(mupa);
-  node = node.as<isl::schedule_node_band>().set_permutable(1);
-
-  return node;
 }
 
 isl::schedule TryMarkScalarStmt::Run(isl::schedule curr_schedule) {

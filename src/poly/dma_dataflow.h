@@ -39,7 +39,8 @@ class StmtDataFlowInfo;
 enum DataStreamIndex { DS_ZERO = 0, DS_FIRST, DS_SECOND, DS_THIRD };
 enum GpuMemType { SHARED = 0, LOCAL };
 
-isl::id GpuDstId(GpuMemType type, isl::id tensor_id);
+isl::id GetNpuIndexDstId(const isl::ctx &ctx, const isl::id &id, const int index = 0);
+isl::id GetGpuIndexDstId(const GpuMemType &type, const isl::id &id, const int index = 0);
 
 struct BufferDefInfo {
   isl::id tensor_id;
@@ -57,6 +58,7 @@ struct BufferDefInfo {
 
   std::shared_ptr<TensorFootprintCluster> footprints_cluster;
   isl::union_map outer_schedule;
+
   // solve same mark tag problem
   // temp solution
   // better solution need init schedule tree has different mark tag
@@ -68,7 +70,6 @@ struct BufferDefInfo {
   std::shared_ptr<TensorFootprintCluster> GetFootPrintClusterGPU(const isl::schedule_node &node);
   bool CompareScheduleMarkNode(const isl::schedule_node_mark &mark1, const isl::schedule_node_mark &mark2);
   void AddSize(const isl::schedule_node &node, const std::vector<size_t> &sizes);
-  isl::id GetIndexDstId(const isl::ctx &ctx, const isl::id &id, const int index);
   std::vector<std::pair<isl::id, MemType>> MakeDataStream(const isl::id new_dst_id);
   std::vector<std::pair<isl::id, MemType>> PartialDataStream(size_t start_idx);
   std::vector<size_t> TensorSize(const isl::schedule_node &node);
@@ -113,7 +114,6 @@ inline std::ostream &operator<<(std::ostream &os, const BufferDefInfo &def_info)
 
   return os;
 }
-
 
 enum STMT_OP_TYPE { MMU_CONV = 1, MMU_GEMM, INST, IM2COL_BUF, MMU_SPEC_GEMM };
 

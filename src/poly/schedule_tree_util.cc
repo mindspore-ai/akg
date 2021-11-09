@@ -613,7 +613,7 @@ isl::schedule_node UnrollByMarkOptions(isl::schedule_node &node, uint64_t unroll
 }
 
 isl::map GetExtensionSpace(const isl::schedule_node &node, const isl::id &id) {
-  auto prefix = ShortScheduleMupaImpl(node.root(), node.root(), node.parent());
+  auto prefix = ShortScheduleMupa(node.root(), node.parent());
   auto schedule_space = prefix.get_space();
   auto space = schedule_space.params().add_named_tuple_id_ui(id, 0);
   auto extension_space = isl::map::universe(schedule_space.map_from_domain_and_range(space));
@@ -632,7 +632,7 @@ isl::schedule_node InsertExtensionNodeBeforeOrAfter(const isl::schedule_node &no
   return extension_node;
 }
 
-std::unordered_set<std::string> GetNonRepeatedIdx(const MappingStrategyMap &mapping_strategy) {
+std::unordered_set<std::string> GetNonRepeatedIdx(const MappingStrategyAxisMap &mapping_strategy) {
   std::unordered_set<std::string> non_repeated_idx;
   for (auto strategy : mapping_strategy) {
     auto mapping_idx = strategy.second.mapping_idx;
@@ -731,19 +731,19 @@ bool ReuseTensorCluster(const TensorFootprintCluster &cluster, const isl::multi_
   return !state_schedule_mapping.is_injective();
 }
 
-isl::schedule_node CollectMarkNodeOnPromotion(const isl::schedule_node &root, const std::string &mark) {
-  isl::schedule_node hoist_node;
-  root.foreach_descendant_top_down([&hoist_node, &mark](const isl::schedule_node &node) -> bool {
+std::vector<isl::schedule_node> CollectMarkNode(const isl::schedule_node &tree, const std::string &mark_tag) {
+  std::vector<isl::schedule_node> mark_nodes;
+  tree.foreach_descendant_top_down([&mark_nodes, &mark_tag](const isl::schedule_node &node) -> bool {
     if (auto mark_node = node.as<isl::schedule_node_mark>()) {
       // ignore nested mark nodes
-      if (mark_node.get_id().get_name() == mark) {
-        hoist_node = mark_node;
+      if (mark_node.get_id().get_name() == mark_tag) {
+        mark_nodes.push_back(node);
         return false;
       }
     }
     return true;
   });
-  return hoist_node;
+  return mark_nodes;
 }
 
 std::unordered_map<std::string, std::string> GetMatmulTensorsName(ScopInfo &scop_info) {
@@ -836,6 +836,21 @@ isl::schedule_node AdjustAxisPosition(const isl::schedule_node &orig_node, const
   for (int i = 0; i < band_node_member; ++i) {
     node = node.as<isl::schedule_node_band>().member_set_coincident(i, coincident[i]);
   }
+  return node;
+}
+
+isl::schedule_node InsertEmptyPermutableBand(const isl::schedule_node &orig_node) {
+  auto node = orig_node;
+  isl::space space;
+  isl::multi_union_pw_aff mupa;
+
+  space = node.get_schedule().get_domain().get_space();
+
+  space = space.set_from_params();
+  mupa = isl::multi_union_pw_aff::zero(space);
+  node = node.insert_partial_schedule(mupa);
+  node = node.as<isl::schedule_node_band>().set_permutable(1);
+
   return node;
 }
 

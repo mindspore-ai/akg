@@ -393,6 +393,10 @@ std::string GetPromotionTensorName(const isl::schedule_node &node, const std::ve
           (pos = node_tensor_name.find(SHARE_SUFFIX)) != std::string::npos) {
         node_tensor_name = node_tensor_name.erase(pos, node_tensor_name.size() - pos);
       }
+
+      if ((pos = node_tensor_name.find(PROMOTION_INFIX)) != std::string::npos) {
+        node_tensor_name = node_tensor_name.erase(pos, node_tensor_name.size() - pos);
+      }
       id_name = (node_tensor_name == tensor_id.get_name()) ? node_tensor_name : id_name;
     });
 
