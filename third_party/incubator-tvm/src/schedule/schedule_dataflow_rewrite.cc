@@ -25,11 +25,13 @@
  * 2019.12.30 - Add new conditions for compute op.
  * 2020.10.27 - For the body of the factor_op in rfactor, perform the additional
  *              processing when the reduce axis is empty.
+ * 2021.10.28 - Add NormalizeBody step and Inline Inject logic for hybrid and extern op
  */
 
 #include <tvm/schedule.h>
 #include <tvm/operation.h>
 #include <tvm/ir_mutator.h>
+#include <tvm/ir_visitor.h>
 #include <tvm/ir_pass.h>
 #include <unordered_set>
 #include "message_passing.h"
@@ -37,6 +39,11 @@
 #include "../arithmetic/compute_expr.h"
 
 namespace air {
+using namespace ir;
+
+struct ExprLess {
+  bool operator()(const Expr& l, const Expr& r) const { return Compare(l, r) < 0; }
+};
 
 // find first occurance location in leaf
 template<typename T>
@@ -546,20 +553,335 @@ void RebaseNonZeroMinLoop(const Schedule& sch) {
   }
 }
 
+class BufferAccess2Tensor : public IRMutator {
+ public:
+  BufferAccess2Tensor(Array<Tensor> inputs, Tensor output, Array<Buffer> input_placeholders,
+                      Buffer output_placeholder) {
+    CHECK_EQ(inputs.size(), input_placeholders.size());
+    for (size_t i = 0; i < inputs.size(); ++i) {
+      tensors_.emplace(input_placeholders[i]->data.get(), inputs[i]);
+    }
+    tensors_.emplace(output_placeholder->data.get(), output);
+  };
+
+ private:
+  Stmt Mutate_(const AttrStmt* op, const Stmt& s) override {
+    if (op->attr_key == "buffer_bind_scope") {
+      Array<NodeRef> bind_spec = Downcast<Array<NodeRef>>(op->node);
+      Buffer buffer = Downcast<Buffer>(bind_spec[0]);
+      Tensor tensor = Downcast<Tensor>(bind_spec[1]);
+      tensors_.emplace(buffer->data.get(), tensor);
+    }
+    return IRMutator::Mutate_(op, s);
+  }
+
+  Expr Mutate_(const Call* op, const Expr& e) override {
+    Expr expr = IRMutator::Mutate_(op, e);
+    op = expr.as<Call>();
+    if (op != nullptr && op->name == "tensor_load") {
+      auto it = tensors_.find(op->args[0].as<Variable>());
+      CHECK(it != tensors_.end());
+      Tensor t = it->second;
+      Array<Expr> args;
+      for (size_t i = 1; i < op->args.size(); ++i) {
+        args.push_back(op->args[i]);
+      }
+      return Call::make(t->dtype, t->op->name, args, Call::CallType::Halide, t->op, t->value_index);
+    }
+    return expr;
+  }
+
+  Stmt Mutate_(const Evaluate* op, const Stmt& s) override {
+    const Call* call = op->value.as<Call>();
+    if (call != nullptr && call->name == "tensor_store") {
+      Expr expr = IRMutator::Mutate(op->value);
+      call = expr.as<Call>();
+      auto it = tensors_.find(call->args[0].as<Variable>());
+      CHECK(it != tensors_.end());
+      Expr value = call->args[1];
+      Array<Expr> args;
+      for (size_t i = 2; i < call->args.size(); ++i) {
+        args.push_back(call->args[i]);
+      }
+      return Provide::make(it->second->op, 0, value, args);
+    }
+    return IRMutator::Mutate_(op, s);
+  }
+
+  std::unordered_map<const Variable*, Tensor> tensors_;
+};
+
+class ProvideBody : public IRVisitor {
+ public:
+  explicit ProvideBody(FunctionRef output_tensors) : output_tensors_(std::move(output_tensors)) {}
+
+  void Visit(const NodeRef& e) final {
+    if (!can_inline_) return;
+    IRVisitor::Visit(e);
+  }
+
+  void Visit_(const Block* op) final {
+    can_inline_ = false;
+    return;
+  }
+
+  void Visit_(const IfThenElse* op) final {
+    can_inline_ = false;
+    return;
+  }
+
+  void Visit_(const LetStmt* op) final {
+    can_inline_ = false;
+    return;
+  }
+
+  void Visit_(const For* op) final {
+    iter_var_set_.emplace(op->loop_var);
+    IRVisitor::Visit(op->body);
+  }
+
+  void Visit_(const Load* op) final {
+    can_inline_ = false;
+    return;
+  }
+
+  void Visit_(const Store* op) final {
+    can_inline_ = false;
+    return;
+  }
+
+  void Visit_(const Let* op) final {
+    can_inline_ = false;
+    return;
+  }
+
+  void Visit_(const Provide* op) override {
+    if (multi_provide_ || op->func != output_tensors_) {
+      can_inline_ = false;
+      return;
+    }
+
+    if (op->value.type().is_int() || op->value.type().is_uint()) {
+      // it is better not to inline computation for index
+      // so here we prevent to inline any int type body expr
+      can_inline_ = false;
+      return;
+    }
+
+    if (op->args.size() != iter_var_set_.size()) {
+      can_inline_ = false;
+      return;
+    }
+
+    for (auto arg : op->args) {
+      if (iter_var_set_.count(arg) == 0) {
+        can_inline_ = false;
+        return;
+      }
+    }
+
+    multi_provide_ = true;
+
+    body_ = op->value;
+    args_ = op->args;
+
+    IRVisitor::Visit_(op);
+  }
+
+  void Visit_(const Call* op) override {
+    if (op->func == output_tensors_) {
+      can_inline_ = false;
+      return;
+    }
+
+    IRVisitor::Visit_(op);
+  }
+
+  const Expr body() { return body_; }
+  const Array<Expr> args() { return args_; }
+  const bool can_inline() { return can_inline_; }
+
+ private:
+  FunctionRef output_tensors_;
+  Expr body_;
+  Array<Expr> args_;
+  bool can_inline_{true};
+  bool multi_provide_{false};
+  std::set<Expr, ExprLess> iter_var_set_;
+};
+
+class LetVarReplace : public IRMutator {
+ public:
+  Stmt Mutate_(const LetStmt* op, const Stmt& s) final {
+    if (!HasSideEffect(op->value)) {
+      var_value_[op->var.get()] = Mutate(op->value);
+      return this->Mutate(op->body);
+    } else {
+      return IRMutator::Mutate_(op, s);
+    }
+  }
+
+  Stmt Mutate_(const AttrStmt* op, const Stmt& s) final {
+    if (op->attr_key == attr::loop_scope || op->attr_key == attr::scan_init_scope) {
+      return this->Mutate(op->body);
+    } else if (op->attr_key == attr::scan_update_scope) {
+      const ScanOpNode* scan = op->node.as<ScanOpNode>();
+      CHECK(scan);
+      var_value_[scan->scan_axis->var.get()] = op->value;
+      return this->Mutate(op->body);
+    }
+    return IRMutator::Mutate_(op, s);
+  }
+
+  Expr Mutate_(const Variable* op, const Expr& e) final {
+    auto it = var_value_.find(op);
+    if (it != var_value_.end()) {
+      return it->second;
+    } else {
+      return e;
+    }
+  }
+
+ private:
+  // The scan value
+  std::unordered_map<const Variable*, Expr> var_value_;
+};
+
+class IfThenElseReplace : public IRMutator {
+ public:
+  Stmt Mutate_(const IfThenElse* op, const Stmt& s) final {
+    Stmt then_branch = IRMutator::Mutate(op->then_case);
+    Stmt else_branch;
+    if (op->else_case.defined()) {
+      else_branch = IRMutator::Mutate(op->else_case);
+      auto then_provide = then_branch.as<Provide>();
+      auto else_provide = else_branch.as<Provide>();
+
+      if (CheckProvide(then_provide, else_provide)) {
+        Expr select_body = Select::make(op->condition, then_provide->value, else_provide->value);
+        return Provide::make(then_provide->func, then_provide->value_index, select_body,
+                             then_provide->args);
+      }
+    }
+
+    return IfThenElse::make(op->condition, then_branch, else_branch);
+  }
+
+ private:
+  bool CheckProvide(const Provide* then_provide, const Provide* else_provide) {
+    if ((then_provide == nullptr) || (else_provide == nullptr)) return false;
+
+    if (!then_provide->func.same_as(else_provide->func)) return false;
+
+    if (then_provide->value_index != else_provide->value_index) return false;
+
+    if (then_provide->args.size() != else_provide->args.size()) return false;
+
+    for (size_t i = 0; i < then_provide->args.size(); i++) {
+      if (!then_provide->args[i].same_as(else_provide->args[i])) return false;
+    }
+
+    return true;
+  }
+};
+
+void UpdateInlineInputs(std::set<Tensor>& new_inputs, const Array<Tensor>& inputs,
+                        const std::unordered_map<Tensor, Operation>& inline_tensor_inputs) {
+  for (auto input : inputs) {
+    if (inline_tensor_inputs.count(input)) {
+      UpdateInlineInputs(new_inputs, inline_tensor_inputs.at(input)->InputTensors(),
+                         inline_tensor_inputs);
+    } else {
+      new_inputs.emplace(input);
+    }
+  }
+}
+
+void NormalizeBody(ScheduleNode* sch) {
+  // in this function, we will normalize the body of hybrid and extern ops
+  // 1. eliminate let stmt
+  // 2. rewrite some IfThenElse stmt as Select stmt
+  // 3. for extern op, rewrite buffer access in tensor load/store as Tensor call
+  std::unordered_map<Tensor, Tensor> repl;
+  for (size_t i = 0; i < sch->stages.size(); ++i) {
+    Stage s = sch->stages[i];
+    Operation op = s->op;
+
+    // Will skip all PlaceholderOpNode as they have neither body nor inputs
+    if (s->op->IsInstance<PlaceholderOpNode>()) continue;
+
+    const ExternOpNode* extern_op = s->op.as<ExternOpNode>();
+    const HybridOpNode* hybird_op = s->op.as<HybridOpNode>();
+
+    // Deal with the body of extern op and hybrid op respectively
+    // create new op if the body is changed
+    if (extern_op) {
+      Stmt op_body = extern_op->body;
+      auto buffer_mutator =
+          BufferAccess2Tensor(extern_op->inputs, s->op.output(0), extern_op->input_placeholders,
+                              extern_op->output_placeholders[0]);
+      op_body = buffer_mutator.Mutate(op_body);
+      op_body = LetVarReplace().Mutate(op_body);
+      op_body = IfThenElseReplace().Mutate(op_body);
+
+      if (!extern_op->body.same_as(op_body)) {
+        op = ExternOpNode::make(extern_op->name, extern_op->tag, extern_op->attrs,
+                                extern_op->inputs, extern_op->input_placeholders,
+                                extern_op->output_placeholders, op_body);
+      }
+    } else if (hybird_op) {
+      Stmt op_body = hybird_op->body;
+      op_body = LetVarReplace().Mutate(op_body);
+      op_body = IfThenElseReplace().Mutate(op_body);
+      if (!hybird_op->body.same_as(op_body)) {
+        op = HybridOpNode::make(hybird_op->name, hybird_op->tag, hybird_op->attrs,
+                                hybird_op->inputs, hybird_op->outputs, hybird_op->input_buffers_,
+                                hybird_op->output_buffers_, hybird_op->input_regions_,
+                                hybird_op->output_regions_, op_body);
+      }
+    }
+
+    op = op->ReplaceInputs(op, repl);
+    if (!op.same_as(s->op)) {
+      // update the stage op if new op is created
+      // old op is stored in stage->origin_op
+      for (int idx = 0; idx < s->op->num_outputs(); ++idx) {
+        repl[s->op.output(idx)] = op.output(idx);
+      }
+      s->op = op;
+      // update stage axis
+      s->all_iter_vars = op->root_iter_vars();
+      Array<IterVar> clean;
+      for (IterVar iv : s->all_iter_vars) {
+        if (iv->iter_type != kOpaque) clean.push_back(iv);
+      }
+      s->leaf_iter_vars = clean;
+    }
+  }
+}
+
 void InjectInline(ScheduleNode* sch) {
   sch->InvalidateCache();
 
-  std::vector<Array<Expr> > new_body(sch->stages.size());
+  std::vector<Array<Expr>> new_body(sch->stages.size());
   std::vector<bool> changed(sch->stages.size(), false);
   std::vector<Stmt> new_hybrid_body(sch->stages.size());
   std::vector<bool> hybrid_changed(sch->stages.size(), false);
+  std::vector<Stmt> new_extern_body(sch->stages.size());
+  std::vector<bool> extern_changed(sch->stages.size(), false);
+  std::unordered_map<Tensor, Operation> inline_tensor_inputs;
   // inline all the ops
   for (size_t i = sch->stages.size(); i != 0; --i) {
     Stage stage = sch->stages[i - 1];
+
+    if (stage->is_output || stage->no_inline_inject) continue;
+
+    Array<Var> args;
+    Expr body;
+
     if (stage->attach_type == kInline) {
+
       stage->attach_type = kInlinedAlready;
-      Array<Var> args;
-      Expr body;
       {
         // setup args
         const ComputeOpNode* compute = stage->op.as<ComputeOpNode>();
@@ -571,11 +893,54 @@ void InjectInline(ScheduleNode* sch) {
         CHECK_EQ(compute->body.size(), 1U)
             << "can only inline compute op with 1 output";
         body = compute->body[0];
+        inline_tensor_inputs.emplace(stage->op.output(0), stage->op);
       }
+    } else {
+      // can only inline compute op with 1 output
+      if (stage->op->num_outputs() > 1) continue;
+
+      const ExternOpNode* extern_op = stage->op.as<ExternOpNode>();
+      const HybridOpNode* hybird_op = stage->op.as<HybridOpNode>();
+
+      Stmt op_body;
+      Operation output_op;
+
+      if (extern_op) {
+        if (extern_op->attrs.count("disable_inline"))
+          continue;
+
+        op_body = extern_op->body;
+        output_op = stage->origin_op;
+      } else if (hybird_op) {
+        if (hybird_op->attrs.count("disable_inline"))
+          continue;
+
+        op_body = hybird_op->body;
+        output_op = hybird_op->outputs[0]->op;
+      } else {
+        continue;
+      }
+
+      auto find_body = ProvideBody(output_op);
+      find_body.Visit(op_body);
+
+      if (!find_body.can_inline()) continue;
+
+      stage->attach_type = kInlinedAlready;
+      body = find_body.body();
+
+      for (auto arg : find_body.args()) {
+        args.push_back(Downcast<Var>(arg));
+      }
+      inline_tensor_inputs.emplace(stage->op.output(0), stage->op);
+    }
+
+    if (body.defined()) {
       for (size_t j = i; j < sch->stages.size(); ++j) {
         Stage s = sch->stages[j];
         const ComputeOpNode* compute = s->op.as<ComputeOpNode>();
         const HybridOpNode* hybrid = s->op.as<HybridOpNode>();
+        const ExternOpNode* extern_op = s->op.as<ExternOpNode>();
         if (compute) {
           if (!new_body[j].size()) {
             new_body[j] = compute->body;
@@ -595,8 +960,8 @@ void InjectInline(ScheduleNode* sch) {
             if (!new_value.same_as(new_body[j][0])) {
               changed[j] = true;
               const ir::Reduce* r = new_value.as<ir::Reduce>();
-              CHECK_EQ(new_body[j].size(), r->source.size());
               CHECK(r != nullptr);
+              CHECK_EQ(new_body[j].size(), r->source.size());
               for (size_t k = 0; k < new_body[j].size(); ++k) {
                 auto n = make_node<ir::Reduce>(*r);
                 n->value_index = static_cast<int>(k);
@@ -623,6 +988,16 @@ void InjectInline(ScheduleNode* sch) {
             new_hybrid_body[j] = new_stmt;
             hybrid_changed[j] = true;
           }
+        } else if (extern_op) {
+          if (!new_extern_body[j].defined()) {
+            new_extern_body[j] = extern_op->body;
+          }
+
+          Stmt new_stmt = ir::Inline(new_extern_body[j], stage->op, args, body);
+          if (!new_stmt.same_as(new_extern_body[j])) {
+            new_extern_body[j] = new_stmt;
+            extern_changed[j] = true;
+          }
         }
       }
     }
@@ -632,37 +1007,13 @@ void InjectInline(ScheduleNode* sch) {
   for (size_t i = 0; i < sch->stages.size(); ++i) {
     Stage s = sch->stages[i];
     if (s->attach_type == kInlinedAlready) continue;
-    Operation op = s->op;
-    if(new_hybrid_body[i].defined() || new_body[i].size()) {
-      // hybrid
-      if (new_hybrid_body[i].defined()) {
-        const HybridOpNode* hybrid = sch->stages[i]->op.as<HybridOpNode>();
-        CHECK(hybrid);
-        if (changed[i]) {
-          op = HybridOpNode::make(
-              hybrid->name, hybrid->tag, hybrid->attrs,
-              hybrid->inputs, hybrid->outputs,
-              hybrid->input_buffers_, hybrid->output_buffers_,
-              hybrid->input_regions_, hybrid->output_regions_, new_hybrid_body[i]);
-          // update stage axis
-          s->all_iter_vars = op->root_iter_vars();
-          Array<IterVar> clean;
-          for (IterVar iv : s->all_iter_vars) {
-            if (iv->iter_type != kOpaque) clean.push_back(iv);
-          }
-          s->leaf_iter_vars = clean;
-        }
-      }
-      // compute op
-      if(new_body[i].size()) {
-        // Logics from ReplaceDataFlow
-        const ComputeOpNode* compute = sch->stages[i]->op.as<ComputeOpNode>();
-        CHECK(compute);
-        if (changed[i]) {
-          op = ComputeOpNode::make(
-              compute->name, compute->tag, compute->attrs,
-              compute->axis, new_body[i]);
-        }
+    if (new_body[i].size()) {
+      // Logics from ReplaceDataFlow
+      const ComputeOpNode* compute = sch->stages[i]->op.as<ComputeOpNode>();
+      Operation op = s->op;
+      if (changed[i]) {
+        op = ComputeOpNode::make(compute->name, compute->tag, compute->attrs, compute->axis,
+                                 new_body[i]);
       }
       op = op->ReplaceInputs(op, repl);
       if (!op.same_as(s->op)) {
@@ -673,17 +1024,80 @@ void InjectInline(ScheduleNode* sch) {
       }
     } else if (hybrid_changed[i]) {
       const HybridOpNode* hybrid = sch->stages[i]->op.as<HybridOpNode>();
-      CHECK(hybrid);
-      Operation op = HybridOpNode::make(
-              hybrid->name, hybrid->tag, hybrid->attrs, hybrid->inputs,
-              hybrid->outputs, hybrid->input_buffers_, hybrid->output_buffers_,
-              hybrid->input_regions_, hybrid->output_regions_,
-              new_hybrid_body[i]);
+      Array<Tensor> new_inputs;
+      std::set<Tensor> new_inputs_set;
+      // we use a set here to avoid duplicated inputs
+      UpdateInlineInputs(new_inputs_set, hybrid->inputs, inline_tensor_inputs);
+      for (auto new_input : new_inputs_set) {
+        new_inputs.push_back(new_input);
+      }
+
+      Operation op =
+          HybridOpNode::make(hybrid->name, hybrid->tag, hybrid->attrs, new_inputs, hybrid->outputs,
+                             hybrid->input_buffers_, hybrid->output_buffers_,
+                             hybrid->input_regions_, hybrid->output_regions_, new_hybrid_body[i]);
       op = op->ReplaceInputs(op, repl);
       for (int idx = 0; idx < s->op->num_outputs(); ++idx) {
         repl[s->op.output(idx)] = op.output(idx);
       }
       s->op = op;
+      // update stage axis
+      s->all_iter_vars = op->root_iter_vars();
+      Array<IterVar> clean;
+      for (IterVar iv : s->all_iter_vars) {
+        if (iv->iter_type != kOpaque) clean.push_back(iv);
+      }
+      s->leaf_iter_vars = clean;
+    } else if (extern_changed[i]) {
+      const ExternOpNode* extern_op = sch->stages[i]->op.as<ExternOpNode>();
+
+      Array<Tensor> new_inputs;
+      std::set<Tensor> new_inputs_set;
+      Map<Tensor, Buffer> tensor_binds;
+      for (size_t i = 0; i < extern_op->inputs.size(); i++){
+        tensor_binds.Set(extern_op->inputs[i], extern_op->input_placeholders[i]);
+      }
+
+      // we use a set here to avoid duplicated inputs
+      UpdateInlineInputs(new_inputs_set, extern_op->inputs, inline_tensor_inputs);
+      for (auto new_input : new_inputs_set) {
+        new_inputs.push_back(new_input);
+      }
+
+      Array<Buffer> new_input_placeholders;
+      for (auto input : new_inputs) {
+        if (tensor_binds.count(input)){
+          new_input_placeholders.push_back(tensor_binds.at(input));
+        } else {
+          // after inline, some new inputs might be introduced to the body
+          // An extern op needs a buffer for each inptut
+          // here the input introduced by inlined is in a form a tensor, not a buffer
+          // so we create a fake buffer for the input only for the legality of an extern op
+          std::string name = input->op->name;
+          Array<Expr> shape = input->shape;
+          Type dtype = input->dtype;
+          Array<Expr> strides;
+
+          auto data = Variable::make(Handle(), name);
+          auto fake_buffer = BufferNode::make(data, dtype, shape, strides, Expr(), name, "", 0, 0,
+                                              BufferType::kDefault);
+          new_input_placeholders.push_back(fake_buffer);
+        }
+      }
+      Operation op = ExternOpNode::make(extern_op->name, extern_op->tag, extern_op->attrs,
+                                        new_inputs, new_input_placeholders, extern_op->output_placeholders, new_extern_body[i]);
+      op = op->ReplaceInputs(op, repl);
+      for (int idx = 0; idx < s->op->num_outputs(); ++idx) {
+        repl[s->op.output(idx)] = op.output(idx);
+      }
+      s->op = op;
+      // update stage axis
+      s->all_iter_vars = op->root_iter_vars();
+      Array<IterVar> clean;
+      for (IterVar iv : s->all_iter_vars) {
+        if (iv->iter_type != kOpaque) clean.push_back(iv);
+      }
+      s->leaf_iter_vars = clean;
     } else {
       Operation op = s->op->ReplaceInputs(s->op, repl);
       if (!op.same_as(s->op)) {
@@ -698,6 +1112,7 @@ void InjectInline(ScheduleNode* sch) {
 
 Schedule Schedule::normalize() {
   Schedule sn = copy();
+  NormalizeBody(sn.operator->());
   InjectInline(sn.operator->());
   RebaseNonZeroMinLoop(sn);
   return sn;

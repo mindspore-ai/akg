@@ -29,6 +29,7 @@ import importlib.util
 
 @tvm.register_func("ElemAny")
 def elem_any(inputs, attrs):
+    del attrs
     def kernel_ir(dst, data):
         ib = tvm.ir_builder.create()
         with ib.for_range_n(data.shape, "ax") as i:
@@ -45,6 +46,7 @@ def elem_any(inputs, attrs):
 
 @tvm.register_func("ElemAll")
 def elem_all(inputs, attrs):
+    del attrs
     def kernel_ir(dst, data):
         ib = tvm.ir_builder.create()
         with ib.for_range_n(data.shape, "ax") as i:
@@ -112,6 +114,7 @@ def unpad(inputs, attrs):
 
 @tvm.register_func("CReal")
 def creal(inputs, attrs):
+    del attrs
     in_tensor = inputs[0]
     out_shape = in_tensor.shape[:-1]
 
@@ -125,6 +128,7 @@ def creal(inputs, attrs):
 
 @tvm.register_func("CImag")
 def cimag(inputs, attrs):
+    del attrs
     in_tensor = inputs[0]
     out_shape = in_tensor.shape[:-1]
 
@@ -137,7 +141,8 @@ def cimag(inputs, attrs):
 
 
 @tvm.register_func("Complex")
-def complex(inputs, attrs):
+def complex_number(inputs, attrs):
+    del attrs
     def mix_func(dst, real, imag):
         ib = tvm.ir_builder.create()
         with ib.for_range_n(real.shape, "i") as i:
@@ -229,13 +234,17 @@ def StridedSlice(inputs, attrs):
         old_indices = list(indices)
         old_indices.insert(idx, begin[idx])
         return old_indices
+    
+    def compute_func(in_tensor_, new_shape_, shrink_axis_):
+        return tvm.compute(
+            new_shape_, lambda *indices: in_tensor_(*get_old_indices(indices, shrink_axis_)))
 
     for shrink_axis in reversed(shrink_axes):
         new_shape = list(in_tensor.shape)
         new_shape.pop(shrink_axis)
         if not new_shape:
             return tvm.compute([1], lambda *i: in_tensor(*[b + idx * s for b, s, idx in zip(begin, strides, i)]))
-        in_tensor = tvm.compute(new_shape, lambda *indices: in_tensor(*get_old_indices(indices, shrink_axis)))
+        in_tensor = compute_func(in_tensor, new_shape, shrink_axis)
         begin.pop(shrink_axis)
         strides.pop(shrink_axis)
     return tvm.compute(out_shape, lambda *i: in_tensor(*[b + idx * s for b, s, idx in zip(begin, strides, i)]))
@@ -521,6 +530,7 @@ def custom(inputs, attrs):
 
 @tvm.register_func("GatherNd")
 def gather_nd(inputs, attrs):
+    del attrs
     if len(inputs) != 2:
         raise ValueError(f"2 inputs expected, but got {len(inputs)}")
     data, indices = inputs
@@ -572,6 +582,7 @@ def tensor_scatter_add(inputs, attrs):
     right_shape = data_shape[int(indices_shape[-1]):]
 
     def gen_ir(data, indices, updates, out):
+        del data
         ib = tvm.ir_builder.create()
         with ib.for_range_n(left_shape, "i") as i:
             with ib.for_range_n(right_shape, "j") as j:
@@ -598,9 +609,9 @@ def tensor_scatter_add(inputs, attrs):
 
     output_name = "T_tsa_" + data.op.name + "_" + indices.op.name + "_" + updates.op.name
     out_buf = tvm.decl_buffer(data.shape, data.dtype, output_name)
+    attrs = {"disable_inline_inject": True}
     return tvm.extern([data.shape], [data, indices, updates], lambda ins, outs: gen_ir(ins[0], ins[1], ins[2], outs[0]),
-                      dtype=data.dtype, out_buffers=[out_buf], name=output_name)
-
+                      dtype=data.dtype, out_buffers=[out_buf], name=output_name, attrs=attrs)
 
 @tvm.register_func("UnsortedSegmentSum")
 def tensor_unsorted_segment_sum(inputs, attrs):
@@ -638,9 +649,9 @@ def tensor_unsorted_segment_sum(inputs, attrs):
 
     output_name = "T_uss_" + data.op.name + "_" + indices.op.name
     out_buf = tvm.decl_buffer(output_shape, data.dtype, output_name)
+    attrs = {"disable_inline_inject": True}
     return tvm.extern([data.shape], [data, indices], lambda ins, outs: gen_ir(ins[0], ins[1], outs[0]),
-                      dtype=data.dtype, out_buffers=[out_buf], name=output_name)
-
+                      dtype=data.dtype, out_buffers=[out_buf], name=output_name, attrs=attrs)
 
 @tvm.register_func("Gather")
 def gather(inputs, attrs):
@@ -675,6 +686,7 @@ def gather(inputs, attrs):
 
 @tvm.register_func("StandardNormal")
 def standard_normal(inputs, attrs):
+    del inputs
     attrs = {k: v for k, v in attrs.items()}
     seed = attrs["seed"]
     shape = attrs["shape"]

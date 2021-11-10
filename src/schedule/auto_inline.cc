@@ -13,6 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+/*
+ * 2021.10.28 - Add auto inline logic for hybrid and extern op
+ */
 #include <tvm/ir_visitor.h>
 #include <tvm/operation.h>
 #include <tvm/schedule_pass.h>
@@ -236,17 +239,34 @@ class GetCubeMatmulInput : public IRVisitor {
 };
 
 void AutoInline(Schedule sch, const Target &target, bool enable_cse) {
-  // Note: do not support inline of hybrid ops and extern ops
   std::unordered_set<Operation, NodeHash, NodeEqual> uninlinable;
+  std::unordered_set<Operation, NodeHash, NodeEqual> no_inject_inline;
   for (const Stage &s : sch->stages) {
     if (const auto op = s->op.as<air::HybridOpNode>()) {
-      for (Tensor t : op->inputs) {
-        uninlinable.insert(t->op);
+      // disable inline the inputs of an op in the following two cases:
+      // 1. if the op has the attr disable_inline_inject,
+      //    that is the op refusing any inline injecting from inputs
+      // 2. if the target is cce, as any inline inputs will be recreated
+      //    by the tothreeaddress pass
+      if (op->attrs.count("disable_inline_inject")) {
+        for (Tensor t : op->inputs) {
+          if (!t->op->IsInstance<PlaceholderOpNode>()) no_inject_inline.insert(t->op);
+        }
+      } else if (target->device_type == kDLCce) {
+        for (Tensor t : op->inputs) {
+          uninlinable.insert(t->op);
+        }
       }
     }
     if (const auto op = s->op.as<air::ExternOpNode>()) {
-      for (Tensor t : op->inputs) {
-        uninlinable.insert(t->op);
+      if (op->attrs.count("disable_inline_inject")) {
+        for (Tensor t : op->inputs) {
+          if (!t->op->IsInstance<PlaceholderOpNode>()) no_inject_inline.insert(t->op);
+        }
+      } else if (target->device_type == kDLCce) {
+        for (Tensor t : op->inputs) {
+          uninlinable.insert(t->op);
+        }
       }
     }
   }
@@ -273,6 +293,10 @@ void AutoInline(Schedule sch, const Target &target, bool enable_cse) {
   }
 
   for (Stage s : sch->stages) {
+    if (no_inject_inline.count(s->op)) {
+      s->no_inline_inject = true;
+      continue;
+    }
     if (!s.is_scheduled() && (IsInjective(s->op) || air::schedule::IsElemWise(s->op)) && !CantInline(s->op, target) &&
         !s->is_output && uninlinable.count(s->op) == 0 && !(has_conv && !IsConvInline(s->op, conv_inputs)) &&
         (s->op->attrs.count("no_inline") == 0 && common_subexpr.count(s->op) == 0)) {
