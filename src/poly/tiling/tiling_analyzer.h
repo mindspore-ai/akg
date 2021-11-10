@@ -53,7 +53,7 @@ constexpr auto MIN_EXEC_NUM_PER_THREAD = 4096;
 constexpr auto BEST_PARALLEL_NUM = 192;
 constexpr auto PARALLEL_DECREASE_VALUE = 8;
 constexpr auto BEST_UNROLL_NUM = 256;
-constexpr auto MIN_UNROLL_NUM = 64;
+constexpr auto MIN_UNROLL_NUM = 8;
 
 // Controlled by custom tiling.
 constexpr auto ALLOCATION_PERCENTAGE = 0.5;  // reserved for double buffer in default

@@ -53,6 +53,7 @@ StageResult LLVMLowerBegin(Stmt &, LowerData &data) {
     data->binds_0 = binds_tmp;
   }
   PassMgr::SetArgs(data->arg_list_0);
+  stmt = NEXT_PASS(AddAttrForLayoutOp, stmt);
   stmt = NEXT_PASS(RewriteTensorIndex, stmt);
   return {stmt, false};
 }
