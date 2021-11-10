@@ -43,17 +43,15 @@ void CpuStrategy::BuildAxesQueue() {
 void CpuStrategy::RecordTileValue() {
   std::stringstream ss;
   for (auto i = 0; i < static_cast<int>(pending_axes_.size()); ++i) {
-    ss << "Band No." << i << " use template " <<
-      analyzer_->scop_info_.analysis_result_.ShowOpTemplateOfBand(i);
+    ss << "Band No." << i << " use template " << analyzer_->scop_info_.analysis_result_.ShowOpTemplateOfBand(i);
     if (analyzer_->scop_info_.analysis_result_.GetOpTemplateOfBand(i) == Template::REDUCTION ||
         analyzer_->scop_info_.analysis_result_.GetOpTemplateOfBand(i) == Template::BITWISE_REDUCTION) {
       ss << "(" << analyzer_->scop_info_.analysis_result_.ShowReduceDirectionOfBand(i) << ")";
     }
     analyzer_->GetTileLogger().AppendLog(CPU_TILING, ss);
     ss << "Tile = {";
-    for (auto &axes: pending_axes_[i]) {
-      ss << "(" << axes.first->c1_constraints.tile_extent_ << ", " <<
-        axes.first->c0_constraints.tile_extent_ << "), ";
+    for (auto &axes : pending_axes_[i]) {
+      ss << "(" << axes.first->c1_constraints.tile_extent_ << ", " << axes.first->c0_constraints.tile_extent_ << "), ";
     }
     ss << "}.";
     analyzer_->GetTileLogger().AppendLog(CPU_TILING, ss);

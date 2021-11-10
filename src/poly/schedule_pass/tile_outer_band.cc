@@ -1235,8 +1235,8 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCpu(isl::schedule_node node
     node = InsertEmptyPermutableBand(node);
   }
 
-  last_axis_pos_ = scop_info_.analysis_result_.GetLastAxisOfBand(cur_band_index_);
-  if (last_axis_pos_ == -1) {
+  vectorization_axis_pos_ = scop_info_.analysis_result_.GetLastAxisOfBand(cur_band_index_);
+  if (vectorization_axis_pos_ == -1) {
     return node;
   }
 
@@ -1250,7 +1250,7 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCpu(isl::schedule_node node
 isl::schedule_node TileOuterBand::TileOtherOperators(const isl::schedule_node &orig_node) {
   auto node = orig_node;
   size_t start_depth = node.get_tree_depth();
-  bool is_all_reduce = (scop_info_.analysis_result_.GetReduceDirectionOfBand(cur_band_index_) == ReduceDirection::ALL);
+  bool is_all_reduce = scop_info_.analysis_result_.GetReduceDirectionOfBand(cur_band_index_) == ReduceDirection::ALL;
   node = is_all_reduce ? SplitReduceStatements(node).child(0) : node;
 
   // first tiling: parallel
@@ -1260,13 +1260,13 @@ isl::schedule_node TileOuterBand::TileOtherOperators(const isl::schedule_node &o
   node = IsolateTilesCpu(node, TILE_WITH_C0);
 
   // sink last axis
-  node = SinkFixedPositionAxis(node, last_axis_pos_);
+  int n_member = static_cast<int>(node.as<isl::schedule_node_band>().n_member());
+  node = AdjustAxisPosition(node, vectorization_axis_pos_, n_member - 1);
   auto band_node = node.as<isl::schedule_node_band>();
   node = band_node.split(band_node.n_member() - 1).child(0);
 
   // last tiling: vectorized
   node = IsolateTilesCpu(node);
-
   node = InsertAllMarker(node, is_all_reduce);
   return node.ancestor(node.get_tree_depth() - start_depth);
 }
@@ -1331,7 +1331,7 @@ isl::schedule_node TileOuterBand::IsolateTilesCpu(const isl::schedule_node &orig
     if (i >= dim_num || j >= tile_number) {
       continue;
     }
-    int tiling_size = tile_level.empty() ? static_cast<int>(tile_sizes_[last_axis_pos_].c0_tiling_size)
+    int tiling_size = tile_level.empty() ? static_cast<int>(tile_sizes_[vectorization_axis_pos_].c0_tiling_size)
                                          : static_cast<int>(tile_sizes_[j].c1_tiling_size);
     int current_tiling_size = current_tile_sizes.val(i).get_num_si();
     if (MAX_STRIDE == tiling_size) continue;
@@ -1389,7 +1389,7 @@ isl::schedule_node TileOuterBand::InsertMarkerForLoop(const isl::schedule_node &
   auto partial_schedule = band_node.get_partial_schedule().intersect_domain(orig_node.get_domain());
   auto upa_list = partial_schedule.get_union_pw_aff_list();
   auto extent = upa_list.get_at(insert_pos).floor().max_val().get_num_si();
-  if (extent <= 1) {
+  if (extent < 1) {
     return orig_node;
   }
 

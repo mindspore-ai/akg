@@ -18,6 +18,10 @@
  */
 
 /*!
+ * 2021.11.09 - Support vectorization of non-last axis.
+ */
+
+/*!
  * \file vectorize_loop.cc
  */
 // Loop vectorizer as in Halide pipeline.
@@ -220,7 +224,7 @@ class Vectorizer : public IRMutator {
       int lanes = std::max(std::max(
           cond.type().lanes(),
           t.type().lanes()), f.type().lanes());
-      return Select::make(cond, BroadcastTo(t, lanes), BroadcastTo(f, lanes));
+      return Select::make(BroadcastTo(cond, lanes), BroadcastTo(t, lanes), BroadcastTo(f, lanes));
     }
   }
   Expr Mutate_(const Cast *op, const Expr& e) final {

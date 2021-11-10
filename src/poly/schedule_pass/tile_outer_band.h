@@ -106,7 +106,6 @@ class TileOuterBand : public SchedulePass {
 
   // cpu related functions
   isl::schedule RunCpu(isl::schedule sch);
-
   isl::schedule_node MarkOuterPermutableCpu(isl::schedule_node node);
 
   isl::schedule_node TileReduceX(const isl::schedule_node &orig_node);
@@ -127,7 +126,9 @@ class TileOuterBand : public SchedulePass {
   TileSizes tile_sizes_all_;
   size_t cur_band_index_{0};
   std::vector<std::vector<int>> partition_info_;
-  int last_axis_pos_{-1};
+
+  // cpu related parameters
+  int vectorization_axis_pos_{-1};
   int start_pos_{0};
 };
 

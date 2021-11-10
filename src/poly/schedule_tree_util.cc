@@ -779,13 +779,14 @@ bool IsTensorAB(const std::string &item, ScopInfo &scop_info) {
   return true;
 }
 
-isl::schedule_node SinkFixedPositionAxis(const isl::schedule_node &orig_node, const int sink_pos) {
+isl::schedule_node AdjustAxisPosition(const isl::schedule_node &orig_node, const int orig_pos, const int new_pos) {
   if (!orig_node.isa<isl::schedule_node_band>()) {
     return orig_node;
   }
   auto band_node = orig_node.as<isl::schedule_node_band>();
   int band_node_member = static_cast<int>(band_node.n_member());
-  if (sink_pos >= band_node_member - 1 || sink_pos < 0) {
+  if (orig_pos >= band_node_member || orig_pos < 0 || new_pos >= band_node_member || new_pos < 0 ||
+      orig_pos == new_pos) {
     return orig_node;
   }
 
@@ -796,32 +797,32 @@ isl::schedule_node SinkFixedPositionAxis(const isl::schedule_node &orig_node, co
 
   auto partial_schedule = band_node.get_partial_schedule();
   isl::union_pw_aff_list new_upa = isl::union_pw_aff_list();
-  // make new union pw aff list
-  for (int i = 0; i < static_cast<int>(partial_schedule.size()); ++i) {
-    if (sink_pos == i) {
-      continue;
-    }
-    isl::union_pw_aff upa = partial_schedule.get_union_pw_aff(i);
-    if (new_upa.is_null()) {
-      new_upa = isl::union_pw_aff_list(upa);
-    } else {
-      new_upa = new_upa.add(upa);
-    }
-  }
-  if (new_upa.is_null()) {
-    new_upa = isl::union_pw_aff_list(partial_schedule.get_union_pw_aff(sink_pos));
-  } else {
-    new_upa = new_upa.add(partial_schedule.get_union_pw_aff(sink_pos));
-  }
-
+  isl::union_pw_aff orig_upa = partial_schedule.get_union_pw_aff(orig_pos);
+  bool orig_coincident = band_node.member_get_coincident(orig_pos);
   std::vector<bool> coincident;
+  int counter = 0;
+  // make new union pw aff list
   for (int i = 0; i < band_node_member; ++i) {
-    if (i == sink_pos) {
+    if (orig_pos == i) {
       continue;
     }
+
+    if (counter == new_pos) {
+      new_upa = new_upa.is_null() ? isl::union_pw_aff_list(orig_upa) : new_upa.add(orig_upa);
+      coincident.push_back(orig_coincident);
+      ++counter;
+    }
+
+    isl::union_pw_aff upa = partial_schedule.get_union_pw_aff(i);
+    new_upa = new_upa.is_null() ? isl::union_pw_aff_list(upa) : new_upa.add(upa);
     coincident.push_back(band_node.member_get_coincident(i));
+    ++counter;
   }
-  coincident.push_back(band_node.member_get_coincident(sink_pos));
+  if (counter != band_node_member) {
+    isl::union_pw_aff upa = partial_schedule.get_union_pw_aff(orig_pos);
+    new_upa = new_upa.add(upa);
+    coincident.push_back(band_node.member_get_coincident(orig_pos));
+  }
 
   // make multi_union_pw_aff
   isl::multi_union_pw_aff mupa = isl::multi_union_pw_aff(partial_schedule.get_space(), new_upa);

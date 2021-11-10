@@ -633,7 +633,7 @@ class UserConfig {
   }
 
   static void ParseVectorLengthAttr(const Map<std::string, NodeRef> &attrs, const std::string &attr_name,
-                                      int *attr_to_set, bool is_cuda = true) {
+                                    int *attr_to_set, bool is_cuda = true) {
     if (is_cuda) {
       std::string str_cfg = "";
       ParseStringAttr(attrs, attr_name, &str_cfg);
@@ -1046,20 +1046,6 @@ class AnalysisResult {
   bool GetCsr() const { return is_csr_; }
   void SetCsr(const bool &is_csr) { is_csr_ = is_csr; }
 
-  void SetLastAxisOfBand(int axis, int band_index = 0) {
-    if (band_index < 0 || band_index > static_cast<int>(band_nodes_.size()) - 1) {
-      return;
-    }
-    band_nodes_[band_index]->last_axis = axis;
-  }
-
-  int GetLastAxisOfBand(int band_index = 0) const {
-    if (band_index < 0 || band_index > static_cast<int>(band_nodes_.size()) - 1) {
-      return -1;
-    }
-    return band_nodes_[band_index]->last_axis;
-  }
-
   std::unordered_set<std::string> GetTensorsNotPromote() const { return tensors_not_promote_; }
   void RecordTensorsNotPromote(const std::string &tensor_name) { tensors_not_promote_.insert(tensor_name); }
 
@@ -1102,9 +1088,7 @@ class AnalysisResult {
     return reduce_direction_map_;
   }
 
-  int GetOuterBandNumber() {
-    return static_cast<int>(band_nodes_.size());
-  }
+  int GetOuterBandNumber() { return static_cast<int>(band_nodes_.size()); }
 
   // template in the whole schedule tree
   void SetOpTemplate(Template op_template) { op_info_.type = op_template; }
@@ -1112,51 +1096,46 @@ class AnalysisResult {
   std::string ShowOpTemplate() { return template_map_[op_info_.type]; }
   std::string ShowOpTemplate(Template t) { return template_map_[t]; }
 
+  void SetLastAxisOfBand(const int axis, const int band_index = 0) {
+    CheckBandIndex(band_index, __FUNCTION__);
+    band_nodes_[band_index]->last_axis = axis;
+  }
+
+  int GetLastAxisOfBand(const int band_index = 0) const {
+    CheckBandIndex(band_index, __FUNCTION__);
+    return band_nodes_[band_index]->last_axis;
+  }
+
   // reduce direction in every schedule band node
-  void SetReduceDirectionOfBand(ReduceDirection d, int band_index = 0){
-    if (band_index < 0 || band_index > static_cast<int>(band_nodes_.size()) - 1) {
-      return;
-    }
+  void SetReduceDirectionOfBand(ReduceDirection d, int band_index = 0) {
+    CheckBandIndex(band_index, __FUNCTION__);
     band_nodes_[band_index]->info.direction = d;
   }
   ReduceDirection GetReduceDirectionOfBand(int band_index = 0) {
-    if (band_index < 0 || band_index > static_cast<int>(band_nodes_.size()) - 1) {
-      return ReduceDirection::UNKNOWN;
-    }
+    CheckBandIndex(band_index, __FUNCTION__);
     return band_nodes_[band_index]->info.direction;
   }
   std::string ShowReduceDirectionOfBand(int band_index = 0) {
-    if (band_index < 0 || band_index > static_cast<int>(band_nodes_.size()) - 1) {
-      return direction_map_[ReduceDirection::UNKNOWN];
-    }
+    CheckBandIndex(band_index, __FUNCTION__);
     return direction_map_[band_nodes_[band_index]->info.direction];
   }
 
   // operator type in every schedule band node
-  void SetOpTemplateOfBand(Template t, int band_index = 0){
-    if (band_index < 0 || band_index > static_cast<int>(band_nodes_.size()) - 1) {
-      return;
-    }
+  void SetOpTemplateOfBand(Template t, int band_index = 0) {
+    CheckBandIndex(band_index, __FUNCTION__);
     band_nodes_[band_index]->info.type = t;
   }
   Template GetOpTemplateOfBand(int band_index = 0) {
-    if (band_index < 0 || band_index > static_cast<int>(band_nodes_.size()) - 1) {
-      return Template::DEFAULT;
-    }
+    CheckBandIndex(band_index, __FUNCTION__);
     return band_nodes_[band_index]->info.type;
   }
   std::string ShowOpTemplateOfBand(int band_index = 0) {
-    if (band_index < 0 || band_index > static_cast<int>(band_nodes_.size()) - 1) {
-      return template_map_[Template::DEFAULT];
-    }
+    CheckBandIndex(band_index, __FUNCTION__);
     return template_map_[band_nodes_[band_index]->info.type];
   }
 
   OperatorInfo GetOpInfoOfBand(int band_index = 0) {
-    if (band_index < 0 || band_index > static_cast<int>(band_nodes_.size()) - 1) {
-      OperatorInfo op;
-      return op;
-    }
+    CheckBandIndex(band_index, __FUNCTION__);
     return band_nodes_[band_index]->info;
   }
 
@@ -1189,11 +1168,14 @@ class AnalysisResult {
   void RecordProvideAnalysis(const For *op, ProvideEntry prov) { provides_ana_[op].emplace_back(prov); }
   std::unordered_map<const For *, std::vector<ProvideEntry>> GetProvideAnalysis() { return provides_ana_; }
 
-  void RecordBandNode(std::unique_ptr<BandNode> &band) {
-    band_nodes_.emplace_back(std::move(band));
-  }
+  void RecordBandNode(std::unique_ptr<BandNode> &band) { band_nodes_.emplace_back(std::move(band)); }
   std::vector<std::unique_ptr<BandNode>> &GetBandNodes() { return band_nodes_; }
 
+  void CheckBandIndex(const int band_index, const std::string func_name) const {
+    CHECK(band_index >= 0 && band_index < static_cast<int>(band_nodes_.size()))
+      << "In " << func_name << ",the index of the current band (" << band_index << ") is not in the legal range (0 ~ "
+      << std::to_string(band_nodes_.size()) << ").";
+  }
 
  public:
   std::vector<std::pair<std::string, STMT_OP_TYPE>> stmt_type_;
@@ -1202,11 +1184,11 @@ class AnalysisResult {
   BufferDefInfo default_buffer_def_info_;
   std::unordered_map<const For *, std::vector<ProvideEntry>> provides_ana_;
   std::unordered_map<int, std::string> template_map_ = {
-    {0, "DEFAULT"},           {1, "PURE_ELEM"},    {2, "BROADCAST_OP"},   {3, "REDUCTION"},
-    {4, "BITWISE_REDUCTION"}, {5, "MATMUL"},       {6, "TRANSPOSE_OP"},   {7, "PAD_OP"},
-    {8, "CUSTOM_CONFIG"},     {9, "CONV"},         {10, "EXTERN_CALL"}};
+    {0, "DEFAULT"},           {1, "PURE_ELEM"}, {2, "BROADCAST_OP"}, {3, "REDUCTION"},
+    {4, "BITWISE_REDUCTION"}, {5, "MATMUL"},    {6, "TRANSPOSE_OP"}, {7, "PAD_OP"},
+    {8, "CUSTOM_CONFIG"},     {9, "CONV"},      {10, "EXTERN_CALL"}};
   std::unordered_map<int, std::string> direction_map_ = {
-    {0, "UNKNOWN"},       {1, "X_DIRECTION"},      {2, "Y_DIRECTION"},    {3, "ALL_DIRECTION"}};
+    {0, "UNKNOWN"}, {1, "X_DIRECTION"}, {2, "Y_DIRECTION"}, {3, "ALL_DIRECTION"}};
 
  private:
   // represents the operator information of the whole schedule tree

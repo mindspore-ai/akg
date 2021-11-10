@@ -28,47 +28,47 @@ void AnalyzeBandNode::Run() {
   CollectStmtInfo();
   AnalyzeOuterBandTemplate();
   if (target_ == TARGET_CPU) {
-    AnalyzeLastAxis();
+    AnalyzeAxisPosition();
   }
   ShowBandInfo();
 }
 
-void AnalyzeBandNode::AnalyzeLastAxis() {
+void AnalyzeBandNode::AnalyzeAxisPosition() {
   auto &bands = scop_info_.analysis_result_.GetBandNodes();
-  for (auto &band_node: bands) {
+  for (auto &band_node : bands) {
     auto *bn = band_node.get();
     if (!bn->node.isa<isl::schedule_node_band>()) {
       continue;
     }
-    SetTensorLastAxis(bn->node, bn->index);
+    SetVectorizationAxis(bn->node, bn->index);
   }
 }
 
-void AnalyzeBandNode::SetTensorLastAxis(const isl::schedule_node &orig_node, int index) {
+void AnalyzeBandNode::SetVectorizationAxis(const isl::schedule_node &orig_node, const int index) {
   if (!orig_node.isa<isl::schedule_node_band>()) {
     return;
   }
 
   auto op_template = scop_info_.analysis_result_.GetOpTemplateOfBand(index);
   auto n_member = static_cast<int>(orig_node.as<isl::schedule_node_band>().n_member());
-  bool is_reduce_op = (op_template == Template::REDUCTION ||
-                       op_template == Template::BITWISE_REDUCTION);
-  int last_axis = -1;
+  bool is_reduce_op = (op_template == Template::REDUCTION || op_template == Template::BITWISE_REDUCTION);
+
+  int vectorization_axis = -1;
   if (is_reduce_op) {
-    if (scop_info_.analysis_result_.GetReduceDirectionOfBand() == ReduceDirection::Y) {
-      last_axis = 0;
+    if (scop_info_.analysis_result_.GetReduceDirectionOfBand(index) == ReduceDirection::Y) {
+      vectorization_axis = 0;
     } else {
-      last_axis = n_member - 1;
+      vectorization_axis = n_member - 1;
     }
   } else if (op_template == Template::BROADCAST_OP) {
-    last_axis = n_member - 1;
+    vectorization_axis = n_member - 1;
   } else {
-    last_axis = GetCoalescedAccess(orig_node);
+    vectorization_axis = GetElemVectorizationAxisPos(orig_node);
   }
-  scop_info_.analysis_result_.SetLastAxisOfBand(last_axis, index);
+  scop_info_.analysis_result_.SetLastAxisOfBand(vectorization_axis, index);
 }
 
-int AnalyzeBandNode::GetCoalescedAccess(const isl::schedule_node &orig_node) {
+int AnalyzeBandNode::GetElemVectorizationAxisPos(const isl::schedule_node &orig_node) {
   if (!orig_node.isa<isl::schedule_node_band>()) {
     return -1;
   }
@@ -101,18 +101,18 @@ void AnalyzeBandNode::CollectStmtInfo() {
     return;
   }
   std::vector<ProvideEntry> entries;
-  for (auto &provs: prov_entry) {
-    for (auto &p: provs.second) {
+  for (auto &provs : prov_entry) {
+    for (auto &p : provs.second) {
       entries.emplace_back(p);
     }
   }
   auto direct_map = scop_info_.analysis_result_.GetReduceDirectionMap();
-  for (auto &pro: provides) {
+  for (auto &pro : provides) {
     if (!pro.second->IsInstance<Provide>()) {
       continue;
     }
     auto stmt = pro.first;
-    for (auto &entry: entries) {
+    for (auto &entry : entries) {
       if (entry.op != pro.second) {
         continue;
       }
@@ -133,7 +133,7 @@ void AnalyzeBandNode::DetermineTemplateOfBand(BandNode *bn) {
   std::string concated_op_type;
   ReduceDirection direct{ReduceDirection::UNKNOWN};
   isl::id red_stmt;
-  for (auto &st: bn->stmts) {
+  for (auto &st : bn->stmts) {
     if (stmt_info_.find(st) == stmt_info_.end()) {
       continue;
     }
@@ -156,7 +156,7 @@ void AnalyzeBandNode::DetermineTemplateOfBand(BandNode *bn) {
   } else if (concated_op_type.find(AT_PAD) != std::string::npos) {
     bn->info.type = Template::PAD_OP;
   } else if (concated_op_type.find(AT_BROADCAST) != std::string::npos ||
-            concated_op_type.find(AT_TRANSFORM) != std::string::npos) {
+             concated_op_type.find(AT_TRANSFORM) != std::string::npos) {
     bn->info.type = Template::BROADCAST_OP;
   } else if (concated_op_type.find(AT_CALL) != std::string::npos) {
     bn->info.type = Template::EXTERN_CALL;
@@ -167,7 +167,7 @@ void AnalyzeBandNode::DetermineTemplateOfBand(BandNode *bn) {
 
 void AnalyzeBandNode::AnalyzeOuterBandTemplate() {
   auto &bands = scop_info_.analysis_result_.GetBandNodes();
-  for (auto &band_node: bands) {
+  for (auto &band_node : bands) {
     auto *bn = band_node.get();
     if (!bn->node || bn->node.get_partial_schedule().is_null()) {
       continue;
