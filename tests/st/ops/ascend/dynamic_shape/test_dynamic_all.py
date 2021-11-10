@@ -1,8 +1,8 @@
 import sys
 from collections.abc import Iterable
 from tests.common import boot
-from tests.common.test_run.batchmatmul_run import batchmatmul_execute
-
+from tests.common.test_run.ascend.batchmatmul_run import batchmatmul_execute
+from tests.common.test_run import reduce_sum_run
 
 def run_case(*args, **kwargs):
     if len(sys.argv) >= 3:
@@ -36,7 +36,7 @@ def test_dynamic_manual():
 
     run_case("softmax_01", "softmax_run", ((16, 1024), "float16", -1, "cce_softmax_fp16"),"dynamic")
     run_case("bias_add_fp16_002", "bias_add_run", ([32, 1001], "DefaultFormat", "float16"), [(1, 1), (1, 1)],"dynamic")
-    run_case("001_sum", "sum_run", ((2, 3, 5), (0, 1), False, "float32"),"dynamic")
+    run_case("001_sum", reduce_sum_run, ((2, 3, 5), (0, 1), False, "float32"),"dynamic")
     run_case("mean_01", "mean_run", ((8,), "float16", (0,), False, "cce_mean_1_64_fp16"),"dynamic")
     run_case("five2four_009", "five2four_run", ([32, 2048, 1, 1], "float16", 'NCHW', "float16"),"dynamic")
     run_case("four2five_016", "four2five_run", ([1, 1024, 14, 14], "float16", 'NCHW', 'float16'),"dynamic")
@@ -54,7 +54,7 @@ def test_dynamic_auto():
 
     run_case("softmax_01", "softmax_run", ((16, 1024), "float16", -1, "cce_softmax_fp16"),"dynamic")
     run_case("bias_add_fp16_002", "bias_add_run", ([32, 1001], "DefaultFormat", "float16"),"dynamic")
-    run_case("001_sum", "sum_run", ((2, 3, 5), (0, 1), False, "float32"),"dynamic")
+    run_case("001_sum", reduce_sum_run, ((2, 3, 5), (0, 1), False, "float32"),"dynamic")
     run_case("mean_01", "mean_run", ((8,), "float16", (0,), False, "cce_mean_1_64_fp16"),"dynamic")
     run_case("five2four_009", "five2four_run", ([32, 2048, 1, 1], "float16", 'NCHW', "float16"),"dynamic")
     run_case("four2five_016", "four2five_run", ([1, 1024, 14, 14], "float16", 'NCHW', 'float16'),"dynamic")
@@ -71,7 +71,7 @@ def test_static_shape():
     run_case("001_equal_count", "equal_count_run", (((32,), (32,)), "int32", "equal_count"))
     run_case("softmax_01", "softmax_run", ((16, 1024), "float16", -1, "cce_softmax_fp16"))
     run_case("bias_add_fp16_002", "bias_add_run", ([32, 1001], "DefaultFormat", "float16"))
-    run_case("001_sum", "sum_run", ((2, 3, 5), (0, 1), False, "float32"))
+    run_case("001_sum", reduce_sum_run, ((2, 3, 5), (0, 1), False, "float32"))
     run_case("mean_01", "mean_run", ((8,), "float16", (0,), False, "cce_mean_1_64_fp16"))
     run_case("five2four_009", "five2four_run", ([32, 2048, 1, 1], "float16", 'NCHW', "float16"))
     run_case("four2five_016", "four2five_run", ([1, 1024, 14, 14], "float16", 'NCHW', 'float16'))
@@ -206,7 +206,7 @@ def mini_ci():
     run_case("001_equal_count", "equal_count_run", (((32,), (32,)), "int32", "equal_count"))
     run_case("softmax_01", "softmax_run", ((16, 1024), "float16", -1, "cce_softmax_fp16"))
     run_case("bias_add_fp16_002", "bias_add_run", ([32, 1001], "DefaultFormat", "float16"))
-    # run_case("001_sum", "sum_run", ((2, 3, 5), (0, 1), False, "float32"))  # output nan
+    # run_case("001_sum", reduce_sum_run, ((2, 3, 5), (0, 1), False, "float32"))  # output nan
     run_case("mean_01", "mean_run", ((8,), "float16", (0,), False, "cce_mean_1_64_fp16"))
     run_case("five2four_009", "five2four_run", ([32, 2048, 1, 1], "float16", 'NCHW', "float16"))
 

@@ -25,7 +25,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.prod_force_se_a_run import prod_force_se_a_run
+from tests.common.test_run.ascend.prod_force_se_a_run import prod_force_se_a_run
 
 
 ############################################################
@@ -44,10 +44,6 @@ class TestCase(TestBase):
             ("prod_force_se_a_01", prod_force_se_a_run, ([[1, 192, 138*4], [1, 192, 138*4, 3], [1, 192, 138]], ["float32", "float32", "int32"]), ["level0"]),
             ("prod_force_se_a_02", prod_force_se_a_run, ([[8, 192, 144*4], [8, 192, 144*4, 3], [8, 192, 144]], ["float32", "float32", "int32"]), ["level0"])
         ]
-
-        if not super(TestCase, self).setup():
-            return False
-        self._log.info("TestCase:{0} Setup case".format(self.casename))
         return True
 
     @pytest.mark.level0

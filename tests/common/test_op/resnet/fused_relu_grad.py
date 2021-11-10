@@ -18,8 +18,9 @@ ResNet50 fused_computation.251 in XLA patterns
 """
 from __future__ import absolute_import
 import akg.topi as topi
+import akg.utils as utils
 
-def fused_relu_grad(input1, input2, input3, c1):
+def fused_relu_grad(input1, input2, input3, c1, target=utils.CUDA):
     """
     fused_relu_grad.
 

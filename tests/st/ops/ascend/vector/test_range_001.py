@@ -24,7 +24,7 @@ Testcase_ExpectedResult:
 """
 import os
 from tests.common.base import TestBase
-from tests.common.test_run.range_run import range_run
+from tests.common.test_run.ascend.range_run import range_run
 
 
 ############################################################

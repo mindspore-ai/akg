@@ -18,7 +18,7 @@ matmul mul fusion
 import os
 import pytest
 from tests.common.base import TestBase, get_splitted_cases
-from tests.common.test_run.matmul_mul_run import matmul_mul_execute
+from tests.common.test_run.ascend.matmul_mul_run import matmul_mul_execute
 
 
 class TestCase(TestBase):
@@ -54,24 +54,12 @@ class TestCase(TestBase):
     @pytest.mark.platform_x86_ascend_training
     @pytest.mark.env_onecard
     def test_run(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg)
 
     def test_rpc_cloud(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg_rpc_cloud)
 
     def test_run_level1(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg_level1)
 
     def test(self, split_nums, split_idx):

@@ -27,7 +27,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 
 from base_all_run import BaseCaseRun
-
+from tests.common.test_run import reduce_sum_run
 
 class TestSsd001(BaseCaseRun):
     def setup(self):
@@ -143,7 +143,7 @@ class TestSsd001(BaseCaseRun):
              ["level0", "rpc", "rpc_cloud"]),
             ("test_ssd_reshape_8_600_6_002", "reshape_run", ((8, 600, 6), (8, 10, 10, 36), "float32"),
              ["level0", "rpc", "rpc_cloud"]),
-            ("test_ssd_sum_8_8732_002", "sum_run", ((8, 8732), (1,), False, "float32"), ["level0", "rpc", "rpc_cloud"]),
+            ("test_ssd_sum_8_8732_002", reduce_sum_run, ((8, 8732), (1,), False, "float32"), ["level0", "rpc", "rpc_cloud"]),
             ("test_ssd_reduce_mean_8_002", "mean_run", ((8,), "float32", (0,), True, "cce_mean_1_8_fp32"),
              ["level0", "rpc", "rpc_cloud"]),
             ("test_ssd_tile_1_002", "tile_run", ((1,), "float32", (64,)), ["level0", "rpc", "rpc_cloud"]),

@@ -52,7 +52,7 @@ class TestCase(TestBase):
         """
         import get dsl function
         """
-        op_fromlist = ["akg.ops.array.", "akg.ops.nn.", "akg.ops.math.", "akg.ops.optimizers.", "akg.ops.state."]
+        op_fromlist = ["akg.ops.array.ascend.", "akg.ops.nn.ascend.", "akg.ops.math.ascend.", "akg.ops.optimizers.ascend.", "akg.ops.state.ascend."]
         func_name = func_name.split(".")
         for op_from_path in op_fromlist:
             try:

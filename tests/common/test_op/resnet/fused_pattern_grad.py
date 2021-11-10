@@ -16,9 +16,10 @@
 from __future__ import absolute_import
 import akg.tvm as tvm
 import akg.topi as topi
+import akg.utils as utils
 from topi import tag
 
-def relu_grad(head, in_data):
+def relu_grad(head, in_data, target=utils.CUDA):
     shape = head.shape
     dtype = head.dtype
 
@@ -26,7 +27,7 @@ def relu_grad(head, in_data):
     relugrad = tvm.compute(shape, lambda *i: tvm.if_then_else(in_data(*i) >= zero, head(*i), zero), tag=tag.INJECTIVE)
     return relugrad
 
-def bn_beta_grad(head, layout='NHWC'):
+def bn_beta_grad(head, layout='NHWC', target=utils.CUDA):
     if layout == "NCHW":
         head = topi.tranpose(head, (0, 2, 3, 1))
     
@@ -38,7 +39,7 @@ def bn_beta_grad(head, layout='NHWC'):
     bn_beta_grad = topi.sum(head, axis=(0, 1, 2))
     return bn_beta_grad
 
-def bn_gamma_grad(head, in_data, data_sum, layout="NHWC"):
+def bn_gamma_grad(head, in_data, data_sum, layout="NHWC", target=utils.CUDA):
     if layout == "NCHW":
         head = topi.tranpose(head, (0, 2, 3, 1))
     

@@ -27,6 +27,7 @@ import os
 import inspect
 from pathlib import Path
 import importlib.util
+import akg.utils as utils
 
 
 @tvm.register_func("ElemAny")

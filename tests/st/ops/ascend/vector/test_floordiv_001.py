@@ -27,7 +27,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.floordiv_run import floordiv_run
+from tests.common.test_run.ascend.floordiv_run import floordiv_run
 
 
 class TestCase(TestBase):

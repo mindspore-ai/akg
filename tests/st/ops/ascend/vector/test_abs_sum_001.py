@@ -15,7 +15,7 @@
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.abs_sum_run import abs_sum_run
+from tests.common.test_run.ascend.abs_sum_run import abs_sum_run
 
 
 ############################################################

@@ -19,7 +19,7 @@ assign_add test cases
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.assign_add_run import assign_add_run
+from tests.common.test_run.ascend.assign_add_run import assign_add_run
 
 
 class TestAssignAdd(TestBase):
@@ -73,10 +73,6 @@ class TestAssignAdd(TestBase):
     @pytest.mark.platform_x86_ascend_training
     @pytest.mark.env_onecard
     def test_run(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg)
 
     @pytest.mark.level1
@@ -84,10 +80,6 @@ class TestAssignAdd(TestBase):
     @pytest.mark.platform_x86_ascend_training
     @pytest.mark.env_onecard
     def test_run_level1(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg_level1)
 
     def teardown(self):

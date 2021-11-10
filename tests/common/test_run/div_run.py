@@ -1,4 +1,4 @@
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2019-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,15 +11,16 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 import numpy as np
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
-from akg.ops.math import div
+from akg.ops.math import Divide
 from tests.common.base import get_rtol_atol
 from tests.common.gen_random import random_gaussian
+from akg.utils.result_analysis import target_profiling
+from akg.utils.format_transform import to_tvm_nd_array
 
-def div_execute(shape1, shape2, dtype, attrs=None):
+def div_run(shape1, shape2, dtype, attrs={}):
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
@@ -34,8 +35,12 @@ def div_execute(shape1, shape2, dtype, attrs=None):
         expect, input1, input2, output = gen_data(dtype, shape1, shape2)
         output = utils.mod_launch(mod, (input1, input2, output), expect=expect)
         rtol, atol = get_rtol_atol("div", dtype)
+        if attrs.get("profiling", False):
+            import akg
+            target_name = attrs["target"].split()[0]
+            args_list = to_tvm_nd_array([input1, input2, output], akg.tvm.context(target_name, 0))
+            target_profiling(mod, *args_list, target=target_name, repeat_time=attrs["repeat_times"])
         return (input1, input2), output, expect, compare_tensor(output, expect, rtol=rtol, atol=atol, equal_nan=True)
-
 
 def gen_data(dtype, shape1, shape2):
     input1 = random_gaussian(shape1, miu=10, sigma=1).astype(dtype)
@@ -49,4 +54,4 @@ def gen_data(dtype, shape1, shape2):
 
 
 def div_compile(shape1, shape2, dtype, attrs, kernel_name='div', tuning=False):
-    return utils.op_build_test(div.div, [shape1, shape2], [dtype, dtype], kernel_name=kernel_name, attrs=attrs, tuning=tuning)
+    return utils.op_build_test(Divide, [shape1, shape2], [dtype, dtype], kernel_name=kernel_name, attrs=attrs, tuning=tuning)

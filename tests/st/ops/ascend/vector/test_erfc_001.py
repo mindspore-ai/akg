@@ -17,7 +17,7 @@
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.erfc_run import erfc_run
+from tests.common.test_run.ascend.erfc_run import erfc_run
 
 
 class TestErfc(TestBase):

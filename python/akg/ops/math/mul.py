@@ -1,6 +1,4 @@
-#!/usr/bin/env python3
-# coding: utf-8
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,14 +13,11 @@
 # limitations under the License.
 
 """operator dsl function: mul"""
-
-
 import akg.topi
-from akg.utils import validation_check as vc_util
+import akg.utils as utils
 
-
-@vc_util.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor)
-def mul(l_input, r_input):
+@utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (str, type(None)))
+def Mul(l_input, r_input, target=utils.CCE):
     """
     Calculate x * y element-wise.
 
@@ -35,15 +30,19 @@ def mul(l_input, r_input):
 
     Returns:
         tvm.tensor.Tensor, has the same type as l_input and r_input.
+    
+    Supported Platforms:
+        'Ascend', 'GPU', 'CPU'
     """
-    vc_util.ops_dtype_check([l_input.dtype, r_input.dtype], vc_util.DtypeForDavinci.ALL_FLOAT)
+    utils.check_supported_target(target)
+    utils.ops_dtype_check([l_input.dtype, r_input.dtype], utils.DtypeForDavinci.ALL_FLOAT)
 
     shape1 = [x.value for x in l_input.shape]
     shape2 = [x.value for x in r_input.shape]
-    vc_util.check_shape(shape1)
-    vc_util.check_shape(shape2)
-    vc_util.auto_broadcast_check(shape1, shape2)
-    vc_util.elemwise_dtype_check(l_input.dtype, r_input.dtype)
+    utils.check_shape(shape1)
+    utils.check_shape(shape2)
+    utils.auto_broadcast_check(shape1, shape2)
+    utils.elemwise_dtype_check(l_input.dtype, r_input.dtype)
     output = akg.topi.multiply(l_input, r_input)
 
     return output

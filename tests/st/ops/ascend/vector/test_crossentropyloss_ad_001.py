@@ -15,7 +15,7 @@
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.crossentropyloss_ad_run import crossentropyloss_ad_run
+from tests.common.test_run.ascend.crossentropyloss_ad_run import crossentropyloss_ad_run
 
 
 class TestCase(TestBase):

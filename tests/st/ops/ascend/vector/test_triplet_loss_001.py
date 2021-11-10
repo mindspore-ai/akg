@@ -26,8 +26,8 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.triplet_loss_run import triplet_loss_run
-from tests.common.test_run.triplet_loss_ad_run import triplet_loss_grad_run, triplet_loss_ad_run
+from tests.common.test_run.ascend.triplet_loss_run import triplet_loss_run
+from tests.common.test_run.ascend.triplet_loss_ad_run import triplet_loss_grad_run, triplet_loss_ad_run
 
 ############################################################
 # TestCase= class: put to tests/*/

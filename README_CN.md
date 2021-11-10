@@ -37,21 +37,21 @@ AKG由三个基本的优化模块组成：规范化、自动调度和后端优�
   ```
   git clone https://gitee.com/mindspore/akg.git
   cd akg
-  bash build.sh -e ascend
+  bash build.sh -e ascend -j8
   ```
 
 - 构建GPU版本
   ```
   git clone https://gitee.com/mindspore/akg.git
   cd akg
-  bash build.sh -e gpu
+  bash build.sh -e gpu -j8
   ```
 
 - 构建CPU版本
   ```
   git clone https://gitee.com/mindspore/akg.git
   cd akg
-  bash build.sh -e cpu
+  bash build.sh -e cpu -j8
   ```
 
 ## 运行
@@ -76,23 +76,30 @@ AKG由三个基本的优化模块组成：规范化、自动调度和后端优�
   ```
 
 2. 运行测试用例
+- 使用测试脚本：
+```
+cd tests/st
+python run.py -e gpu -o add -l level0  # 执行GPU Add算子的level0用例
+```
+  使用说明可以`python run.py -h`查看．
+- 使用测试文件：
+  
+  - Ascend910
+  ```
+  cd tests/st/ops/
+  pytest -s test_abs.py -m "level0 and platform_x86_ascend_training" # 运行Ascend level0测试用例
+  ```
 
-- Ascend910
+  - NVIDIA V100/A100
   ```
-  cd tests/st/ops/ascend/vector
-  pytest -s test_abs_001.py -m "level0" # 运行level0测试用例
-  ```
-
-- NVIDIA V100/A100
-  ```
-  cd tests/operators
-  python3 test_all.py -t gpu "op_name" # 运行op_name算子测试用例
+  cd tests/st/ops/
+  pytest -s test_abs.py -m "level0 and platform_x86_gpu_training" # 运行GPU level0测试用例
   ```
 
-- CPU
+  - CPU
   ```
-  cd tests/operators
-  python3 test_all.py -t cpu "op_name" # 运行op_name算子测试用例
+  cd tests/st/ops/
+  pytest -s test_abs.py -m "level0 and platform_x86_cpu" # 运行CPU level0测试用例
   ```
 
 ## 使用AKG生成高性能算子

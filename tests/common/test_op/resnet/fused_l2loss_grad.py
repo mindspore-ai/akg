@@ -16,8 +16,9 @@
          ResNet50 fused_computation. 83 in XLA patterns  """
 from __future__ import absolute_import
 import akg.topi as topi
+import akg.utils as utils
 
-def fused_l2loss_grad(data_f16, data_f32, layout='NHWC', fill_data=4e-05):
+def fused_l2loss_grad(data_f16, data_f32, layout='NHWC', fill_data=4e-05, target=utils.CUDA):
     """
     fused_l2loss_grad.
 

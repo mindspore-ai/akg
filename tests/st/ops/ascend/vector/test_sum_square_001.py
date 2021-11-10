@@ -15,7 +15,7 @@
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.sum_square_run import sum_square_run
+from tests.common.test_run.ascend.sum_square_run import sum_square_run
 
 
 ############################################################

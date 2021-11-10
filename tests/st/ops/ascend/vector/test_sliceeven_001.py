@@ -25,7 +25,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.sliceeven_run import sliceeven_run
+from tests.common.test_run.ascend.sliceeven_run import sliceeven_run
 
 ############################################################
 # TestCase= class: put to tests/*/

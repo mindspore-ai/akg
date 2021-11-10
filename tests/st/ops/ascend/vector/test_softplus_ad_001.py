@@ -16,7 +16,7 @@
 
 import os
 from tests.common.base import TestBase
-from tests.common.test_run.softplus_ad_run import softplus_ad_run
+from tests.common.test_run.ascend.softplus_ad_run import softplus_ad_run
 
 
 class Testsoftplus_ad(TestBase):
@@ -40,10 +40,6 @@ class Testsoftplus_ad(TestBase):
         return
 
     def test_run(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg)
 
     def teardown(self):

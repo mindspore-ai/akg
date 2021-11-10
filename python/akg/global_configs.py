@@ -22,8 +22,8 @@ def get_kernel_meta_path():
 
 @akg.tvm.register_func
 def get_dump_ir_flag():
-    return 'MS_AKG_DUMP_IR'
+    return 'MS_DEV_DUMP_IR'
 
 @akg.tvm.register_func
 def get_dump_code_flag():
-    return 'MS_AKG_DUMP_CODE'
+    return 'MS_DEV_DUMP_CODE'

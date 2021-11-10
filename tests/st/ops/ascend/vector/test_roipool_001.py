@@ -24,7 +24,7 @@ Testcase_ExpectedResult:
 """
 import os
 from tests.common.base import TestBase
-from tests.common.test_run.roipool_run import roipool_run
+from tests.common.test_run.ascend.roipool_run import roipool_run
 
 ############################################################
 # TestCase= class: put to tests/*/

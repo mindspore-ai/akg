@@ -1,4 +1,4 @@
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -10,235 +10,112 @@
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
-# limitations under the License.
-
-import os
-import sys
-import math
+# limitations under the License
 import numpy as np
-from akg import tvm
-from akg.utils import kernel_exec as utils
-from akg.ops.nn import conv
-from tests.common.tensorio import compare_tensor
-from tests.common.base import get_rtol_atol
+import akg
+from akg.ops.nn.gpu import Conv
+from akg.ops.nn.gpu import TensorcoreConv
 from tests.common.gen_random import random_gaussian
-from tests.common.test_run.conv_utils import conv_param_prepare, conv_shape_4d, conv_forward_naive, conv_tensor_4d_to_5d
-from akg.utils import validation_check as vc_util
-from akg.utils.kernel_exec import gen_kernel_name
-from tests.common.test_utils import compute_blockdim
+from akg.utils import kernel_exec as utils
+from akg.utils.result_analysis import target_profiling
+from akg.utils.format_transform import to_tvm_nd_array
 
+support_list = {"float16": np.float16, "float32": np.float32}
 
-def conv_run(fmap_shape, filter_shape, pad, stride, dilation, use_bias=False, attrs=None, dump_data=False):
-    conv_dtype = 'float16'
+def has_pad(padding):
+    p_l, p_r, p_t, p_b = padding
+    return not(p_l == 0 and p_r == 0 and p_t == 0 and p_b == 0)
 
-    vc_util.convolution_format_check(fmap_shape, filter_shape, pad, stride, dilation)
+def gen_data(shape_data, shape_weight, layout, stride, padding, dilation, dtype, out_dtype):
+    data = random_gaussian(shape_data, miu=1, sigma=0.1).astype(
+        support_list[dtype])
+    weight = random_gaussian(
+        shape_weight, miu=1, sigma=0.1).astype(support_list[dtype])
+    expect = compute_np_conv2d(
+        data, weight, layout, stride, padding, dilation, dtype, out_dtype)
+    output = np.full(expect.shape, np.nan, out_dtype)
+    return data, weight, output, expect
 
-    conv_param = {'stride': stride, 'pad': pad, 'dilation': dilation}
-    stride, pad, dilation = conv_param_prepare(conv_param)
-    fm_shape, w_shape, out_shape = conv_shape_4d(fmap_shape, filter_shape, pad, stride, dilation)
-    IN, IC, IH, IW = fm_shape
-    WN, WC, WH, WW = w_shape
-    C0 = 16
-
-    if use_bias:
-        input_shape = [(IN, IC // C0, IH, IW, C0), (WC // C0 * WH * WW, WN // 16, 16, C0), (1, WN // 16, 1, 1, 16)]
+def compute_np_conv2d(data, weight, layout, stride, padding, dilation, dtype, out_dtype):
+    if layout == "NHWC":
+        data = np.transpose(data, (0, 3, 1, 2))
+        weight = np.transpose(weight, (0, 3, 1, 2))
+    n, c, h, w = data.shape
+    out_c, c, kh, kw = weight.shape
+    s_h, s_w = stride
+    d_h, d_w = dilation
+    p_t, p_b, p_l, p_r = padding
+    """
+    initialize data with padding
+    """
+    shape_data_pad = (n, c, h + p_t + p_b, w + p_l + p_r)
+    data_pad = np.zeros(shape_data_pad).astype(support_list[dtype])
+    if has_pad(padding):
+        data_pad[:, :, p_t:p_t+h, p_l:p_l+w] = data
     else:
-        input_shape = [(IN, IC // C0, IH, IW, C0), (WC // C0 * WH * WW, WN // 16, 16, C0)]
+        data_pad = data
+    """
+    compute expect
+    """
+    whd = (kh - 1) * d_h + 1
+    wwd = (kw - 1) * d_w + 1
+    out_h = (h + p_t + p_b - whd) // s_h + 1
+    out_w = (w + p_l + p_r - wwd) // s_w + 1
+    out_shape = (n, out_c, out_h, out_w)
+    expect = np.zeros(out_shape).astype(support_list[out_dtype])
+    for f in range(out_c):
+        for i in range(out_h):
+            for j in range(out_w):
+                expect[:, f, i, j] = np.sum(
+                    data_pad[:, :, i*s_h: i*s_h +whd: d_h, j*s_w: j*s_w+wwd: d_w]
+                    * weight[f, :, :, :],
+                    axis=(1, 2, 3))
+    if layout == "NHWC":
+        expect = np.transpose(expect, (0, 2, 3, 1))
+    print("expect shape is ", np.shape(expect))
+    return expect
 
-    input_file = os.environ.get("RANDOM_DATA_DISK_PATH", "")
-    expect_file = input_file + "/" + gen_kernel_name([input_shape], [conv_dtype], op_attrs=[fmap_shape, filter_shape, pad, stride, dilation, use_bias, attrs],
-                                                     kernel_name='conv', attrs=attrs) + ".bin"
+def conv_run(shape_data, shape_weight, stride=(1,1), padding=(0,0,0,0), dilation=(1,1), dtype="float16",
+        out_dtype="float16", layout="NHWC", tensor_core=True, poly_sch=True, attrs=None):
+    if layout != "NHWC" and layout != "NCHW":
+        raise ValueError("Layout NHWC and NCHW supported")
+    use_tensor_core = False
+    if tensor_core and layout == "NHWC" and dtype == "float16":
+        use_tensor_core = True
+    op_attrs = [stride, padding, dilation]
+    default_attrs = {"target": "cuda", "enable_auto_fuse": False}
+    if attrs:
+        default_attrs.update(attrs)
+    if use_tensor_core:
+        op_attrs += [out_dtype]
+        default_attrs.update({"pragma_enable_matmul": True, "pragma_enable_conv_tensor_core": True})
+        if poly_sch:
+            mod = utils.op_build_test(
+                TensorcoreConv, (shape_data, shape_weight), (dtype, dtype),
+                op_attrs=op_attrs, attrs=default_attrs, kernel_name="tensorcore_conv_auto")
+    elif poly_sch:
+        mod = utils.op_build_test(Conv, (shape_data, shape_weight), (dtype, dtype),
+                                    op_attrs=op_attrs, attrs=default_attrs, kernel_name="conv_auto")
 
-    all_dynamic = 0      # kh kw pad stride
-    partial_dynamic = 0  # fn fc1 fh fw wN wC
-    if attrs.get("dynamic"):
-        all_dynamic = 1
-        print("=================all dynamic==================")
-    if attrs.get("partial_dynamic"):
-        partial_dynamic = 1
-        print("=================partial dynamic==================")
-    dynamic = partial_dynamic or all_dynamic
+    data, weight, output, expect = gen_data(
+        shape_data, shape_weight, layout, stride, padding, dilation, dtype, out_dtype)
+    args = (data, weight, output)
+    output = utils.mod_launch(mod, args, expect=expect)
+    rtol = 1e-3 if dtype == "float16" else 1e-4
+    atol = 1e-3 if dtype == "float16" else 1e-4
+    res = np.allclose(output, expect, rtol=rtol, atol=atol)
+    print("Test {}".format("Pass" if res else "Fail"))
+    target_name = attrs["target"].split()[0]
+    if not res:
+        mod_source = mod
+        if target_name != "llvm":
+            mod_source = mod.imported_modules[0]
+        print("Error {}:========================".format(target_name))
+        print(mod_source.get_source())
+        raise AssertionError("Test fail")
 
-    if not dynamic:
-        print("=================static shape==================")
-    if dynamic:
-        fmap_shape_real = fmap_shape
-        filter_shape_real = filter_shape
-        pad_real = pad
-        stride_real = stride
-        dilation_real = dilation
-
-        if partial_dynamic or all_dynamic:
-            N = tvm.var("N")
-            C = tvm.var("CI")
-            CI1 = tvm.var("CI1")
-            H = tvm.var("H")
-            W = tvm.var("W")
-
-            COUT = tvm.var("CO")
-            CO1 = tvm.var("CO1")
-            _, _, KH, KW = filter_shape
-            SH, SW = stride
-            PT, PB, PL, PR = pad
-
-        params = ()
-        if all_dynamic:
-            PARAM_KH = tvm.var("KH")
-            PARAM_KW = tvm.var("KW") 
-            PARAM_PT = tvm.var("PT")
-            PARAM_PB = tvm.var("PB")
-            PARAM_PL = tvm.var("PL")
-            PARAM_PR = tvm.var("PR")
-            PARAM_SH = tvm.var("SH")
-            PARAM_SW = tvm.var("SW")
-
-            PARAM_T1_0_H = tvm.var("T1_0_H")
-            PARAM_T1_0_W = tvm.var("T1_0_W")
-            PARAM_T1_0_C1 = tvm.var("T1_0_C1")
-            PARAM_T0_0_MO = tvm.var("T0_0_MO") 
-            PARAM_T0_0_NO = tvm.var("T0_0_NO")
-            PARAM_T0_0_KO = tvm.var("T0_0_KO")
-
-            params = (PARAM_KH, PARAM_KW, PARAM_PT, PARAM_PB, PARAM_PL, PARAM_PR, PARAM_SH, PARAM_SW,
-                      PARAM_T1_0_H, PARAM_T1_0_W, PARAM_T1_0_C1, PARAM_T0_0_MO, PARAM_T0_0_NO, PARAM_T0_0_KO)
-
-        DEBUG = 1
-        if dynamic:
-            KH_FAKE = 11
-            KW_FAKE = 31
-            fmap_shape = (N, C, H, W)
-            filter_shape = (COUT, C, KH, KW)
-            if not DEBUG:
-                CO1 = (COUT + 15) // 16
-                CI1 = (C + 15) // 16
-            if use_bias:
-                # input_shape = [(IN, IC // C0, IH, IW, C0), (WC // C0 * WH * WW, WN // 16, 16, C0), (1, WN // 16, 1, 1, 16)]
-                if all_dynamic:
-                    input_shape = [(N, CI1, H, W, 16), (CI1 * KH_FAKE * KW_FAKE, CO1, 16, 16), (1, CO1, 1, 1, 16)]
-                else:
-                    input_shape = [(N, CI1, H, W, 16), (CI1 * KH * KW, CO1, 16, 16), (1, CO1, 1, 1, 16)]
-            else:
-                # input_shape = [(IN, IC // C0, IH, IW, C0), (WC // C0 * WH * WW, WN // 16, 16, C0)]
-                if all_dynamic:
-                    input_shape = [(N, CI1, H, W, 16), (CI1 * KH_FAKE * KW_FAKE, CO1, 16, 16)]
-                else:
-                    input_shape = [(N, CI1, H, W, 16), (CI1 * KH * KW, CO1, 16, 16)]
-
-        mod = utils.op_build_test(conv.conv, [input_shape], [conv_dtype],
-                                  op_attrs=[fmap_shape, filter_shape, pad, stride, dilation, use_bias, attrs, params],
-                                  kernel_name='conv', attrs=attrs)
-        fmap_data, filter_data, bias_data, expect = gen_data(fmap_shape_real, filter_shape_real, pad_real, stride_real, dilation_real, use_bias, expect_file)
-    else:
-        mod = utils.op_build_test(conv.conv, [input_shape], [conv_dtype],
-                                  op_attrs=[fmap_shape, filter_shape, pad, stride, dilation, use_bias, attrs],
-                                  kernel_name='conv', attrs=attrs)
-        fmap_data, filter_data, bias_data, expect = gen_data(fmap_shape, filter_shape, pad, stride, dilation, use_bias, expect_file)
-
-    if dump_data:
-        with open('input.bin', 'wb') as fo:
-            fo.write(fmap_data.astype(np.float16, copy=False))
-        with open('filter.bin', 'wb') as fo:
-            fo.write(filter_data.astype(np.float16, copy=False))
-        with open('bias.bin', 'wb') as fo:
-            fo.write(bias_data.astype(np.float16, copy=False))
-        with open('output.bin', 'wb') as fo:
-            fo.write(expect.astype(np.float16, copy=False))
-
-    out_data = np.full(expect.shape, np.nan, 'float16')
-
-    if use_bias:
-        input = [fmap_data, filter_data, bias_data]
-    else:
-        input = [fmap_data, filter_data]
-
-    flag_w = os.environ.get("WRITE_TO_DISK", "No")
-    if flag_w == "Yes":
-        return input, out_data, expect, True
-
-    if not dynamic:
-        args = input
-        args.append(out_data)
-        args = tuple(args)
-        out_data = utils.mod_launch(mod, args, expect=expect)
-    else:
-        args = []
-        args.append(fmap_data)
-        args.append(filter_data)
-        args.append(out_data)
-        if partial_dynamic or all_dynamic:
-            args.append(IN)
-            args.append(IC)
-            args.append(IH)
-            args.append(IW)
-            args.append(WN)
-        if all_dynamic:
-            args.append(KH)
-            args.append(KW)
-            args.append(PT)
-            args.append(PB)
-            args.append(PL)
-            args.append(PR)
-            args.append(SH)
-            args.append(SW)
-            if attrs.get("conv_tile") and len(attrs["conv_tile"]) == 7:
-                T1_0_H = attrs["conv_tile"][0]
-                T1_0_C1 = attrs["conv_tile"][1]
-                T0_0_MO = attrs["conv_tile"][2]
-                T0_0_KO = attrs["conv_tile"][3]
-                T0_0_NO = attrs["conv_tile"][4]
-                T1_0_W = attrs["conv_tile"][5]
-                if T1_0_H == IH:
-                    T1_0_H += PT + PB
-                T1_0_H_cut = (T1_0_H - KH) // SH + 1
-                if T1_0_W == IW:
-                    T1_0_W += PL + PR
-                T1_0_W_cut = (T1_0_W - KW) // SW + 1
-                args.append(T1_0_H_cut)
-                args.append(T1_0_W_cut)
-                args.append((T1_0_C1+15)//16)
-                args.append((T0_0_MO+15)//16)
-                args.append((T0_0_NO+15)//16)
-                args.append((T0_0_KO+15)//16)
-        if DEBUG:
-            args.append(IC//16)
-            args.append(WN//16)
-        block_dim = min(32, IN)
-        args.append(block_dim)
-        out_data = utils.mod_launch(mod, args, outputs=(2,), expect=expect)
-
-    rtol, atol = get_rtol_atol("conv", conv_dtype)
-    return input, out_data, expect, compare_tensor(out_data, expect, rtol=rtol, atol=atol, equal_nan=True)
-
-
-def gen_data(fm_shape, w_shape, pad, stride, dilation, bias, expect_file):
-
-    conv_param = {'stride': stride, 'pad': pad, 'dilation': dilation}
-    stride, pad, dilation = conv_param_prepare(conv_param)
-    fm_shape, w_shape, out_shape = conv_shape_4d(fm_shape, w_shape, pad, stride, dilation)
-    IN, IC, IH, IW = fm_shape
-    WN, WC, WH, WW = w_shape
-
-    x = random_gaussian((IN, IC, IH, IW), miu=1, sigma=0.1).astype(np.float16)
-    w = random_gaussian((WN, WC, WH, WW), miu=0.5, sigma=0.01).astype(np.float16)
-
-    if bias:
-        b = random_gaussian((WN,), miu=1, sigma=0.1).astype(np.float16)
-    else:
-        b = (np.array(np.zeros(WN))).astype(np.float16, copy=False)
-
-    flag_w = os.environ.get("WRITE_TO_DISK", "No")
-    if (flag_w == "No") and (os.path.exists(expect_file)==True):
-        #read expect from file
-        out = np.fromfile(expect_file, np.float16).reshape(out_shape)
-    else:
-        #compute expect data:
-        out = conv_forward_naive(x.astype(np.float32), w.astype(np.float32), b.astype(np.float32), conv_param)
-        out = out.astype(np.float16)
-
-    if flag_w == "Yes":
-        # write expect to file
-        with open(expect_file, "w+") as file:
-            out.tofile(file)
-            file.close()
-
-    return conv_tensor_4d_to_5d(x, w, b, out)
+    if attrs["profiling"]:
+        data, weight, output = to_tvm_nd_array(
+            [data, weight, output], akg.tvm.context(target_name, 0))
+        target_profiling(mod, data, weight, output, target=target_name, repeat_time=attrs["repeat_times"])
+    return (data, weight), output, expect, res

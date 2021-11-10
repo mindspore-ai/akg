@@ -17,7 +17,7 @@
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.pooling_run import pooling_run
+from tests.common.test_run.ascend.pooling_run import pooling_run
 
 
 class TestPooling(TestBase):

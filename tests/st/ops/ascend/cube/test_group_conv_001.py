@@ -18,7 +18,7 @@ unsortedsegmentsum test cast
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.group_conv_run import group_conv_run
+from tests.common.test_run.ascend.group_conv_run import group_conv_run
 
 
 class TestCase(TestBase):

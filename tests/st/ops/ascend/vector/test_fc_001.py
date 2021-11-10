@@ -24,7 +24,7 @@ Testcase_ExpectedResult:
 """
 import os
 from tests.common.base import TestBase
-from tests.common.test_run.fc_run import fc_run
+from tests.common.test_run.ascend.fc_run import fc_run
 
 ############################################################
 # TestCase= class: put to tests/*/

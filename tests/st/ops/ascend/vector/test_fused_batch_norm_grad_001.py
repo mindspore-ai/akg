@@ -17,11 +17,11 @@ fused_batch_norm_grad
 """
 import os
 import pytest
-from tests.common.test_run.fused_batch_norm_grad_run import fused_batch_norm_grad_run
-from tests.common.test_run.fused_batch_norm_grad_run import fused_bn_grad_5D_all_run
-from tests.common.test_run.fused_batch_norm_grad_run import fused_bn_grad_5D_run_1
-from tests.common.test_run.fused_batch_norm_grad_run import fused_bn_grad_5D_run_2
-from tests.common.test_run.fused_batch_norm_grad_run import fused_bn_grad_5D_run_3
+from tests.common.test_run.ascend.fused_batch_norm_grad_run import fused_batch_norm_grad_run
+from tests.common.test_run.ascend.fused_batch_norm_grad_run import fused_bn_grad_5D_all_run
+from tests.common.test_run.ascend.fused_batch_norm_grad_run import fused_bn_grad_5D_run_1
+from tests.common.test_run.ascend.fused_batch_norm_grad_run import fused_bn_grad_5D_run_2
+from tests.common.test_run.ascend.fused_batch_norm_grad_run import fused_bn_grad_5D_run_3
 from tests.common.base import TestBase
 
 
@@ -153,31 +153,15 @@ class TestCase(TestBase):
     @pytest.mark.platform_x86_ascend_training
     @pytest.mark.env_onecard
     def test_run(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg)
 
     def test_run_aic(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg_aic_cloud)
 
     def test_run_cloud(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg_cloud)
 
     def test_run_cloud_divided(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.test_5D_split)
 
     def teardown(self):

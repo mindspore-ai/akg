@@ -15,7 +15,7 @@
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.log_ad_run import log_ad_run
+from tests.common.test_run.ascend.log_ad_run import log_ad_run
 
 
 class TestCase(TestBase):

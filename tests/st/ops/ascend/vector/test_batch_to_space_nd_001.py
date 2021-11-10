@@ -18,7 +18,7 @@ batch_to_space_nd
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.batch_to_space_nd_run import batch_to_space_nd_run
+from tests.common.test_run.ascend.batch_to_space_nd_run import batch_to_space_nd_run
 
 
 class TestCase(TestBase):
@@ -71,10 +71,6 @@ class TestCase(TestBase):
     @pytest.mark.platform_x86_ascend_training
     @pytest.mark.env_onecard
     def test_run_ci(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.test_level0)
 
     @pytest.mark.level1
@@ -82,10 +78,6 @@ class TestCase(TestBase):
     @pytest.mark.platform_x86_ascend_training
     @pytest.mark.env_onecard
     def test_run_daily_ci(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.test_level1)
 
     def teardown(self):

@@ -25,7 +25,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.less_run import less_run
+from tests.common.test_run.ascend.less_run import less_run
 
 
 ############################################################

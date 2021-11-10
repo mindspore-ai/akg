@@ -19,29 +19,46 @@ import json.decoder as jd
 import logging
 import traceback
 import os
-from pathlib import Path
-
 import akg.tvm
-from akg.utils import kernel_exec as utils
-from akg.utils import validation_check as vc_util
+import akg.utils as utils
+from pathlib import Path
 from akg import composite
-from . import cce
-from . import gpu
-from . import op_build
+from akg.utils import kernel_exec as kernel_exec
+from akg.utils.dsl_create import TensorUtils
 from akg.global_configs import get_dump_ir_flag
 from akg.global_configs import get_dump_code_flag
+from . import op_build, ops_ascend, ops_gpu, ops_general
 
-
-@vc_util.check_input_type(dict, dict)
+@utils.check_input_type(dict, dict)
 def _compilewithjson_to_module(kernel_info, attrs):
     """compile with json."""
-    supported_processors = ['cuda', 'aicore', 'cpu']
-    processor = 'cuda'
-    if 'process' in kernel_info:
-        processor = kernel_info['process']
-    if processor not in supported_processors:
-        logging.error("supported processors: %s, current processor: %s", supported_processors, processor)
-        return False
+    def _get_ops(op_name, processor):
+        if not op_name:
+            return None
+        op_func = getattr(ops_general, op_name, None)
+        if op_func is not None:
+            return op_func
+        special_ops = None
+        if processor == utils.CCE:
+            special_ops = ops_ascend
+        elif processor == utils.CUDA:
+            special_ops = ops_gpu
+        return getattr(special_ops, op_name, None) if special_ops is not None else None
+
+    def _get_target_from_processor(processor):
+        if processor is None:
+            return None
+        elif processor == "aicore":
+            return utils.CCE
+        elif processor == "cuda":
+            return utils.CUDA
+        elif processor == "cpu":
+            return utils.LLVM
+        else:
+            return None
+
+    processor = kernel_info['process'] if 'process' in kernel_info else utils.CUDA
+    attrs["target"] = _get_target_from_processor(processor)
 
     if processor == 'cuda' and 'compute_capability' in kernel_info:
         attrs['compute_capability'] = kernel_info['compute_capability']
@@ -69,30 +86,26 @@ def _compilewithjson_to_module(kernel_info, attrs):
 
     # get built-in ops.
     if op_func is None:
-        if processor == 'cuda':
-            op_func = getattr(gpu, op_name, None)
-            if op_func is not None:
-                input_shapes = []
-                input_types = []
-                for input_desc in kernel_info['input_desc']:
-                    input_shapes.append(input_desc[0]['shape'])
-                    input_types.append(input_desc[0]['data_type'])
-                op_attrs = []
-                if kernel_info['attr']:
-                    for ext_arg in kernel_info['attr']:
-                        op_attrs.append(ext_arg['value'])
-                dump_ir = os.getenv(get_dump_ir_flag()) == "on"
-                dump_code = os.getenv(get_dump_code_flag()) == "on"
-                utils.op_build(op_func, input_shapes, input_types, op_attrs, kernel_info['op'], dump_ir=dump_ir,
-                               dump_code=dump_code)
-                return True
-        else:
-            op_func = getattr(cce, op_name, None)
-
-    if op_func is None:
-        logging.error(
-            "this op not support by akg, please check op name %s", str(op_name))
-        return False
+        op_func = _get_ops(op_name, processor)
+        if op_func is None:
+            logging.error(
+                "this op not support by akg, please check op name %s", str(op_name))
+            return False
+    if processor == 'cuda':
+        input_shapes = []
+        input_types = []
+        for input_desc in kernel_info['input_desc']:
+            input_shapes.append(input_desc[0]['shape'])
+            input_types.append(input_desc[0]['data_type'])
+        op_attrs = []
+        if kernel_info['attr']:
+            for ext_arg in kernel_info['attr']:
+                op_attrs.append(ext_arg['value'])
+        dump_ir = os.getenv(get_dump_ir_flag()) == "on"
+        dump_code = os.getenv(get_dump_code_flag()) == "on"
+        kernel_exec.op_build(op_func, input_shapes, input_types, op_attrs, kernel_info['op'], attrs=attrs,
+                            dump_ir=dump_ir, dump_code=dump_code)
+        return True
 
     args = {}
     tsr = []
@@ -100,7 +113,7 @@ def _compilewithjson_to_module(kernel_info, attrs):
         if len(input_desc) == 1:
             tensor_shape = input_desc[0]['shape']
             tensor_shape = (1,) if not tensor_shape else tensor_shape
-            vc_util.shape_dtype_max_size_check(
+            utils.shape_dtype_max_size_check(
                 tensor_shape, input_desc[0]['data_type'])
             args[input_desc[0]['name']] = akg.tvm.placeholder(
                 shape=tensor_shape, name=input_desc[0]['tensor_name'], dtype=input_desc[0]['data_type'])
@@ -110,7 +123,7 @@ def _compilewithjson_to_module(kernel_info, attrs):
             for tmp_desc in input_desc:
                 tensor_shape = tmp_desc['shape']
                 tensor_shape = (1,) if not tensor_shape else tensor_shape
-                vc_util.shape_dtype_max_size_check(
+                utils.shape_dtype_max_size_check(
                     tensor_shape, tmp_desc['data_type'])
                 tmp_input.append(akg.tvm.placeholder(
                     shape=tensor_shape, name=tmp_desc['tensor_name'], dtype=tmp_desc['data_type']))
@@ -121,7 +134,7 @@ def _compilewithjson_to_module(kernel_info, attrs):
         for ext_arg in kernel_info['attr']:
             args[ext_arg['name']] = ext_arg['value']
 
-    output = op_func(**args)
+    output = op_func(**args, target=attrs["target"])
     schedule_func = None
     if isinstance(output, (list, tuple)):
         from inspect import isfunction
@@ -140,7 +153,7 @@ def _compilewithjson_to_module(kernel_info, attrs):
     else:
         output = [output]
 
-    tsr = tsr + [i for i in output if utils.TensorUtils.is_output_value(i)]
+    tsr = tsr + [i for i in output if TensorUtils.is_output_value(i)]
     build_res = op_build([op_name], output, tsr, schedule_func, processor, kernel_info['op'], attrs)
     if not build_res:
         return False

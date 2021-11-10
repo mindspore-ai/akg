@@ -16,7 +16,7 @@
 
 import os
 from tests.common.base import TestBase
-from tests.common.test_run.concat_run import concat_run
+from tests.common.test_run.ascend.concat_run import concat_run
 
 
 class TestCase(TestBase):

@@ -19,7 +19,7 @@ zeros_like test case
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.zeros_like_run import zeros_like_run
+from tests.common.test_run.ascend.zeros_like_run import zeros_like_run
 
 
 class TestZerosLike(TestBase):
@@ -48,10 +48,6 @@ class TestZerosLike(TestBase):
     @pytest.mark.platform_x86_ascend_training
     @pytest.mark.env_onecard
     def test_run(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg)
 
     def teardown(self):

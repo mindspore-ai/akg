@@ -25,7 +25,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase, get_splitted_cases
-from tests.common.test_run.maxpool_ad_run import maxpool_ad_run
+from tests.common.test_run.ascend.maxpool_ad_run import maxpool_ad_run
 
 
 ############################################################

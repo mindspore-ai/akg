@@ -19,7 +19,7 @@ batch_norm_ad
 import os
 import pytest
 from tests.common.base import TestBase, get_splitted_cases
-from tests.common.test_run.batch_norm_ad_run import batch_norm_ad_run
+from tests.common.test_run.ascend.batch_norm_ad_run import batch_norm_ad_run
 
 
 class TestCase(TestBase):
@@ -89,17 +89,9 @@ class TestCase(TestBase):
         return
 
     def test_run(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg)
 
     def test_run_cloud(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg_cloud)
 
     def test(self, split_nums, split_idx):

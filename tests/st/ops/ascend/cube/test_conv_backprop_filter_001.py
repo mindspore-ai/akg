@@ -17,7 +17,7 @@
 import os
 import pytest
 from tests.common.base import TestBase, get_splitted_cases
-from tests.common.test_run.conv_backprop_filter_run import conv_backprop_filter_run
+from tests.common.test_run.ascend.conv_backprop_filter_run import conv_backprop_filter_run
 
 
 class TestCase(TestBase):
@@ -61,10 +61,6 @@ class TestCase(TestBase):
         return
 
     def test_run(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg, is_conv=True)
 
     def test(self, split_nums, split_idx):

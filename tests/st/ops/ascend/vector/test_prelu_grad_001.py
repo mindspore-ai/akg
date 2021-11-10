@@ -30,7 +30,7 @@ Testcase_ExpectedResult:
 """
 import os
 from tests.common.base import TestBase
-from tests.common.test_run.prelu_grad_run import prelu_grad_run
+from tests.common.test_run.ascend.prelu_grad_run import prelu_grad_run
 
 
 class TestCase(TestBase):
@@ -200,10 +200,6 @@ class TestCase(TestBase):
         return
 
     def test_run_rpc_cloud(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg_rpc_cloud)
 
     def teardown(self):

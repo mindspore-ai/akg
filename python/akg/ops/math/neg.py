@@ -1,6 +1,4 @@
-#!/usr/bin/env python3
-# coding: utf-8
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,15 +13,11 @@
 # limitations under the License.
 
 """operator dsl function: neg"""
-
-import akg.topi
-import akg.tvm
 import akg
-from akg.utils import validation_check as vc_util
+import akg.utils as utils
 
-
-@vc_util.check_input_type(akg.tvm.tensor.Tensor)
-def neg(data):
+@utils.check_input_type(akg.tvm.tensor.Tensor, (str, type(None)))
+def Neg(data, target=utils.CCE):
     """
     Computes negative value of input tensor.
 
@@ -32,15 +26,21 @@ def neg(data):
 
     Returns:
         tvm.tensor.Tensor of same type and shape as input tensor data.
+    
+    Supported Platforms:
+        'Ascend', 'GPU', 'CPU'
     """
-    vc_util.check_shape(data.shape)
+    utils.check_supported_target(target)
+    utils.check_shape(data.shape)
 
-    data_type = data.dtype
-    vc_util.ops_dtype_check(data_type, [vc_util.DtypeForDavinci.ALL_FLOAT, vc_util.DtypeForDavinci.INT32])
-
-    pone = akg.tvm.const(-1.0, dtype=data_type)
-    res = akg.lang.cce.vmuls(data, pone)
-    if data_type == "int32":
-        res = akg.topi.cast(res, "int32")
+    if target == utils.CCE:
+        data_type = data.dtype
+        utils.ops_dtype_check(data_type, [utils.DtypeForDavinci.ALL_FLOAT, utils.DtypeForDavinci.INT32])
+        pone = akg.tvm.const(-1.0, dtype=data_type)
+        res = akg.lang.ascend.vmuls(data, pone)
+        if data_type == "int32":
+            res = akg.topi.cast(res, "int32")
+    else:
+        res = akg.topi.negative(data)
 
     return res

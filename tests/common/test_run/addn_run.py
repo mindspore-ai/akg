@@ -1,4 +1,4 @@
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2019-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,15 +11,17 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+import akg
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.math import addn
+from akg.ops.math import Addn
 from tests.common.tensorio import compare_tensor
 from tests.common.base import get_rtol_atol
 from tests.common.gen_random import random_gaussian
+from akg.utils.result_analysis import target_profiling
+from akg.utils.format_transform import to_tvm_nd_array
 
-def addn_execute(shape, dtype, n, attrs={}):
+def addn_run(shape, dtype, n, attrs={}):
     # for i in range(len(shapes)):
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
@@ -38,12 +40,16 @@ def addn_execute(shape, dtype, n, attrs={}):
         # compare result
         rtol, atol = get_rtol_atol("addn", dtype)
         TestCase_Result = compare_tensor(acu_output, exp_output, rtol=rtol, atol=atol, equal_nan=True)
+        if attrs.get("profiling", False):
+            target_name = attrs["target"].split()[0]
+            args_list = to_tvm_nd_array(args, akg.tvm.context(target_name, 0))
+            target_profiling(mod, *args_list, target=target_name, repeat_time=attrs["repeat_times"])
         return inputs, acu_output, exp_output, TestCase_Result
 
 
 def gen_data(dtype, n, shape, shapes):
     inputs = []
-    for i in range(n):
+    for _ in range(n):
         input = random_gaussian(shape, miu=1, sigma=0.1).astype(dtype)
         inputs.append(input)
         shapes.append(shape)
@@ -57,6 +63,6 @@ def gen_data(dtype, n, shape, shapes):
 
 def addn_compile(shape, dtype, n, attrs, kernel_name="addn", tuning=False):
     shapes = []
-    for i in range(n):
+    for _ in range(n):
         shapes.append(shape)
-    return utils.op_build_test(addn.addn, [shapes], [dtype], kernel_name=kernel_name, attrs=attrs, tuning=tuning), shapes
+    return utils.op_build_test(Addn, [shapes], [dtype], kernel_name=kernel_name, attrs=attrs, tuning=tuning), shapes

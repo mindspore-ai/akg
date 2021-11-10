@@ -25,7 +25,7 @@ Testcase_ExpectedResult:
 
 import os
 from tests.common.base import TestBase
-from tests.common.test_run.proposal_sort_run import proposal_sort_run
+from tests.common.test_run.ascend.proposal_sort_run import proposal_sort_run
 
 
 ############################################################
@@ -60,24 +60,12 @@ class TestCase(TestBase):
         return
 
     def test_run(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg)
 
     def test_rpc_cloud(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg_rpc_cloud)
 
     def test_run_level1(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg_level1)
 
     def teardown(self):

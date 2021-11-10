@@ -16,8 +16,10 @@
          ResNet50 fused_computation. 215 in XLA patterns  """
 from __future__ import absolute_import
 import akg.topi as topi
+import akg.utils as utils
 
-def fused_relu_grad_bn_reduce_grad(data_1, data_2, data_3, data_4, data_5, data_6, data_7, data_8, data_9, layout='NHWC'):
+def fused_relu_grad_bn_reduce_grad(data_1, data_2, data_3, data_4, data_5, data_6, data_7, data_8, data_9,
+                                    layout='NHWC', target=utils.CUDA):
     """
     fused_relu_grad_bn_reduce_grad.
 

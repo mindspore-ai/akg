@@ -1,6 +1,6 @@
 import pytest
 from tests.common import boot
-from tests.common.test_run.batchmatmul_run import batchmatmul_execute
+from tests.common.test_run.ascend.batchmatmul_run import batchmatmul_execute
 
 
 @pytest.mark.level0

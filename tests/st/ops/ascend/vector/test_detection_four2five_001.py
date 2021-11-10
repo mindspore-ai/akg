@@ -26,7 +26,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.detection_four2five_run import detection_four2five_run
+from tests.common.test_run.ascend.detection_four2five_run import detection_four2five_run
 
 ############################################################
 # TestCase= class: put to tests/*/

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # coding: utf-8
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2019-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,10 +16,11 @@
 
 """operator dsl function: reciprocal"""
 import akg.tvm
-from akg.utils import validation_check as vc_util, kernel_exec as utils
+import akg.utils as utils
+from akg.utils.kernel_exec import product_is_mini
 
-@vc_util.check_input_type(akg.tvm.tensor.Tensor, (bool, type(None)))
-def reciprocal(data, high_precision=True):
+@utils.check_input_type(akg.tvm.tensor.Tensor, (bool, type(None)), (str, type(None)))
+def Reciprocal(data, high_precision=True, target=utils.CCE):
     """
     Computes the reciprocal of data element-wise.
 
@@ -29,16 +30,18 @@ def reciprocal(data, high_precision=True):
 
     Returns:
         tvm.tensor.Tensor of same type and shape as data.
+    
+    Supported Platforms:
+        'Ascend', 'GPU'
     """
-
-    vc_util.ops_dtype_check(data.dtype, vc_util.DtypeForDavinci.ALL_FLOAT)
+    utils.ops_dtype_check(data.dtype, utils.DtypeForDavinci.ALL_FLOAT)
     shape = [x.value for x in data.shape]
-    vc_util.check_shape(shape)
+    utils.check_shape(shape)
 
     res = akg.tvm.compute(shape, lambda *indice: akg.tvm.const(1, data.dtype) / (data(*indice)), name="res")
 
     # When product is mini, using Newtom iteration method to achieve higher precision.
-    if utils.product_is_mini() and high_precision:
+    if product_is_mini() and high_precision:
         steps = 1
         for _ in range(steps):
             temp1 = data * res

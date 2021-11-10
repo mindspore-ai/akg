@@ -679,7 +679,7 @@ air::runtime::Module BuildToModule(const NodeRef &ref, const std::string &target
     mhost.Import(mdev);
   }
 
-  const char *akg_dump_code = getenv("MS_AKG_DUMP_CODE");
+  const char *akg_dump_code = getenv("MS_DEV_DUMP_CODE");
   if (akg_dump_code != nullptr) {
     auto mods = mhost->imports();
     auto mod = mods.empty() ? mhost : mods[0];

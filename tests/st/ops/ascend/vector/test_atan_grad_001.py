@@ -17,7 +17,7 @@
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.atan_grad_run import atan_grad_run
+from tests.common.test_run.ascend.atan_grad_run import atan_grad_run
 
 
 class TestAtanGrad(TestBase):

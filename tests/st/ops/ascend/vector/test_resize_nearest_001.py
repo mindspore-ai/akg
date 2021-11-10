@@ -25,7 +25,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.resize_nearest_run import resize_nearest_run
+from tests.common.test_run.ascend.resize_nearest_run import resize_nearest_run
 
 ############################################################
 # TestCase= class: put to tests/*/

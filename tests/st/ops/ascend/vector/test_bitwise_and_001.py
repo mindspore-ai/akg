@@ -16,7 +16,7 @@
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.bitwise_and_run import bitwise_and_run
+from tests.common.test_run.ascend.bitwise_and_run import bitwise_and_run
 
 
 class TestCase(TestBase):

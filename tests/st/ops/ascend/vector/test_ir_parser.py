@@ -16,8 +16,8 @@ import numpy as np
 import akg
 import akg.tvm
 from akg.utils import kernel_exec as utils
-from tests.common.test_run.proposal_sort_run import np_proposal_sort
-from tests.common.test_op import proposal_sort
+from tests.common.test_run.ascend.proposal_sort_run import np_proposal_sort
+from tests.common.test_op.ascend import proposal_sort
 from tests.common.tensorio import compare_tensor
 
 

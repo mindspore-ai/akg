@@ -26,7 +26,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.ceil_run import ceil_run
+from tests.common.test_run.ascend.ceil_run import ceil_run
 
 
 class TestCase(TestBase):

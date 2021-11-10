@@ -17,7 +17,7 @@
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.truncate_div_run import truncate_div_run
+from tests.common.test_run.ascend.truncate_div_run import truncate_div_run
 
 
 class TestTD(TestBase):

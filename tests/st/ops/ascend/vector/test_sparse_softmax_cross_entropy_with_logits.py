@@ -26,7 +26,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.sparse_softmax_cross_entropy_with_logits_run import sparse_softmax_cross_entropy_with_logits_run
+from tests.common.test_run.ascend.sparse_softmax_cross_entropy_with_logits_run import sparse_softmax_cross_entropy_with_logits_run
 
 
 ############################################################
@@ -67,24 +67,12 @@ class TestCase(TestBase):
     @pytest.mark.platform_x86_ascend_training
     @pytest.mark.env_onecard
     def test_run(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg)
 
     def test_run_cloud(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg_cloud)
 
     def test_rpc_cloud(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg_rpc_cloud)
 
     def teardown(self):

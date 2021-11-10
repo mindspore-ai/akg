@@ -23,7 +23,7 @@ from tests.st.networks.comm_functions import compare_base_line
 @pytest.mark.skip
 def test_network(backend, network, level, split_nums=1, split_idx=0, check_performance=False):
     pwd = os.path.dirname(os.path.abspath(__file__))
-    script_file = os.path.join(pwd, "test_composite_json.py")
+    script_file = os.path.join(pwd, "run_composite_json.py")
 
     def prepare_script(pwd, script_file):
         if os.path.isfile(script_file):
@@ -49,8 +49,8 @@ def test_network(backend, network, level, split_nums=1, split_idx=0, check_perfo
             file_result = os.path.join(output, file_name + ".csv")
             if os.path.isfile(file_result):
                 os.remove(file_result)
-            if subprocess.call("nvprof --csv --log-file %s python3 test_composite_json.py -f %s" %
-                               (file_result, file_path), shell=True):
+            if subprocess.call("nvprof --csv --log-file %s python3 %s -f %s" %
+                               (file_result, script_file, file_path), shell=True):
                 raise ValueError("Test %s failed" % file_path)
             if not compare_base_line(pwd, file_result, network, level, file_name):
                 raise ValueError("Performance degradation of %s!" % file_path)

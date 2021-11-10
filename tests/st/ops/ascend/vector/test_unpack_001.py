@@ -17,7 +17,7 @@
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.unpack_run import unpack_run
+from tests.common.test_run.ascend.unpack_run import unpack_run
 
 
 class TestUnpack(TestBase):

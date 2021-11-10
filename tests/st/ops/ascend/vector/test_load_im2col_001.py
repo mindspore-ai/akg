@@ -25,7 +25,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.load_im2col_run import load_im2col_run
+from tests.common.test_run.ascend.load_im2col_run import load_im2col_run
 
 
 ############################################################
@@ -100,24 +100,12 @@ class TestCase(TestBase):
     @pytest.mark.platform_x86_ascend_training
     @pytest.mark.env_onecard
     def test_run(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg)
 
     def test_rpc_cloud(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run([self.testarg_rpc_cloud[0]])
 
     def test_run_level1(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg_level1)
 
     def teardown(self):

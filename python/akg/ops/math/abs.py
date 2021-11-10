@@ -1,6 +1,4 @@
-#!/usr/bin/env python3
-# coding: utf-8
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,37 +13,39 @@
 # limitations under the License.
 
 """operator dsl function: abs"""
-
+import akg.topi
 import akg.tvm
-from akg.utils.validation_check import ops_dtype_check, check_shape, DtypeForDavinci, check_input_type
+import akg.utils as utils
 
-
-@check_input_type(akg.tvm.tensor.Tensor)
-def abs_value(in_data):
+@utils.check_input_type(akg.tvm.tensor.Tensor, (str, type(None)))
+def Abs(in_data, target=utils.CCE):
     """
     Compute absolute value of a tensor.
 
     Args:
-        in_data (tvm.tensor.Tensor): Tensor of type float16, float32, int8, uint8, int32.
+        data (tvm.tensor.Tensor): Tensor of type float16, float32, int8, unit8, int32.
 
     Returns:
-        tvm.tensor.Tensor of same type and shape as in_data.
+        tvm.tensor.Tensor of same type and shape as data.
+    
+    Supported Platforms:
+        'Ascend', 'GPU', 'CPU'
     """
-    # check type
-    dtype = in_data.dtype
-    ops_dtype_check(dtype, DtypeForDavinci.ALL_TYPES)
-
-    # check shape
-    check_shape(in_data.shape)
-
-    need_cast_dtype = ["int8", "int32", "uint8"]
-
-    if dtype in need_cast_dtype:
-        in_data = akg.tvm.compute(in_data.shape, lambda *indice: in_data(*indice).astype("float16"), name='type_cast')
-
-    output = akg.tvm.compute(in_data.shape, lambda *index: akg.tvm.abs(in_data(*index)), name='abs_value')
-
-    if dtype in need_cast_dtype:
-        output = akg.tvm.compute(in_data.shape, lambda *indice: output(*indice).astype(dtype), name='res')
-
+    utils.check_supported_target(target)
+    utils.check_shape(in_data.shape)
+    in_type = in_data.dtype
+    if target == utils.CCE:
+        utils.ops_dtype_check(in_type, utils.DtypeForDavinci.ALL_TYPES)
+        need_cast_dtype = ["int8", "int32", "uint8"]
+        if in_type in need_cast_dtype:
+            in_data = akg.tvm.compute(in_data.shape, lambda *indice: in_data(*indice).astype("float16"), name='type_cast')
+        output = akg.tvm.compute(in_data.shape, lambda *index: akg.tvm.abs(in_data(*index)), name='abs_value')
+        if in_type in need_cast_dtype:
+            output = akg.tvm.compute(in_data.shape, lambda *indice: output(*indice).astype(in_type), name='res')
+    else:
+        if in_type == 'float16':
+            in_data = akg.topi.cast(in_data, 'float32')
+        output = akg.topi.abs(in_data)
+        if in_type == 'float16':
+            output = akg.topi.cast(output, 'float16')
     return output

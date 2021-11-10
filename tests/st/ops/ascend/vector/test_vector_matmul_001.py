@@ -35,7 +35,7 @@ transpose      3       True     |  True          fail by no intrinic
 """
 import os
 from tests.common.base import TestBase
-from tests.common.test_run.vector_matmul_run import vector_matmul_run
+from tests.common.test_run.ascend.vector_matmul_run import vector_matmul_run
 
 
 class TestCase(TestBase):
@@ -140,24 +140,12 @@ class TestCase(TestBase):
         return
 
     def test_run(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg)
 
     def test_runi_night(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg_1)
 
     def test_rpc_cloud(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg_rpc_cloud)
 
     def teardown(self):

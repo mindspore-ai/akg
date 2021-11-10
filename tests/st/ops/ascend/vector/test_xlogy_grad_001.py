@@ -17,7 +17,7 @@
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.xlogy_grad_run import xlogy_grad_run
+from tests.common.test_run.ascend.xlogy_grad_run import xlogy_grad_run
 
 
 class TestCos(TestBase):

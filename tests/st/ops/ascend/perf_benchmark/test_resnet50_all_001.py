@@ -25,33 +25,33 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase, get_splitted_cases
-from tests.common.test_run.conv_run import conv_run
-from tests.common.test_run.conv_input_ad_run import conv_input_ad_run
-from tests.common.test_run.conv_filter_ad_run import conv_filter_ad_run
-from tests.common.test_run.batchmatmul_run import batchmatmul_execute
-from tests.common.test_run.mean_run import mean_execute
-from tests.common.test_run.mean_ad_run import mean_ad_run
-from tests.common.test_run.relu_run import relu_run
-from tests.common.test_run.relu_ad_run import relu_ad_run
-from tests.common.test_run.add_run import add_run
-from tests.common.test_run.addn_run import addn_execute
-from tests.common.test_run.sparse_softmax_cross_entropy_with_logits_run import \
+from tests.common.test_run.ascend.conv_run import conv_run
+from tests.common.test_run.ascend.conv_input_ad_run import conv_input_ad_run
+from tests.common.test_run.ascend.conv_filter_ad_run import conv_filter_ad_run
+from tests.common.test_run.ascend.batchmatmul_run import batchmatmul_execute
+from tests.common.test_run.ascend.mean_run import mean_execute
+from tests.common.test_run.ascend.mean_ad_run import mean_ad_run
+from tests.common.test_run.ascend.relu_run import relu_run
+from tests.common.test_run.ascend.relu_ad_run import relu_ad_run
+from tests.common.test_run import add_run
+from tests.common.test_run import addn_run
+from tests.common.test_run.ascend.sparse_softmax_cross_entropy_with_logits_run import \
     sparse_softmax_cross_entropy_with_logits_run
-from tests.common.test_run.sparse_softmax_cross_entropy_with_logits_ad_run import \
+from tests.common.test_run.ascend.sparse_softmax_cross_entropy_with_logits_ad_run import \
     sparse_softmax_cross_entropy_with_logits_ad_run
-from tests.common.test_run.bias_add_ad_run import bias_add_ad_run
-from tests.common.test_run.bias_add_run import bias_add_run
-from tests.common.test_run.reshape_run import reshape_execute
-from tests.common.test_run.apply_momentum_run import apply_momentum_run
-from tests.common.test_run.bn_split_run import bn_split_run
-from tests.common.test_run.fused_batch_norm_grad_run import fused_bn_grad_5D_all_run
-from tests.common.test_run.conv_bn1_run import conv_bn1_run
-from tests.common.test_run.softmax_run import softmax_execute
-from tests.common.test_run.argmax_run import argmax_run
-from tests.common.test_run.equal_count_run import equal_count_run
-from tests.common.test_run.clear_zero_run import clear_zero_run
-from tests.common.test_run.maxpool_with_argmax_run import maxpool_with_argmax_run
-from tests.common.test_run.maxpool_grad_with_argmax_run import maxpool_grad_with_argmax_run
+from tests.common.test_run.ascend.bias_add_ad_run import bias_add_ad_run
+from tests.common.test_run.ascend.bias_add_run import bias_add_run
+from tests.common.test_run import reshape_run
+from tests.common.test_run.ascend.apply_momentum_run import apply_momentum_run
+from tests.common.test_run.ascend.bn_split_run import bn_split_run
+from tests.common.test_run.ascend.fused_batch_norm_grad_run import fused_bn_grad_5D_all_run
+from tests.common.test_run.ascend.conv_bn1_run import conv_bn1_run
+from tests.common.test_run.ascend.softmax_run import softmax_execute
+from tests.common.test_run.ascend.argmax_run import argmax_run
+from tests.common.test_run.ascend.equal_count_run import equal_count_run
+from tests.common.test_run.ascend.clear_zero_run import clear_zero_run
+from tests.common.test_run.ascend.maxpool_with_argmax_run import maxpool_with_argmax_run
+from tests.common.test_run.ascend.maxpool_grad_with_argmax_run import maxpool_grad_with_argmax_run
 
 
 class TestResnet50_001(TestBase):
@@ -191,25 +191,25 @@ class TestResnet50_001(TestBase):
              ([32, 64, 14, 14, 16], [32, 64, 14, 14, 16], "float16", "cce_add_fp16"), ["level0", "rpc", "rpc_cloud"]),
 
             # AddN
-            ("test_resnet50_addn_000", addn_execute, ((32, 128, 7, 7, 16), "float16", 2),
+            ("test_resnet50_addn_000", addn_run, ((32, 128, 7, 7, 16), "float16", 2),
              ["level0", "rpc", "rpc_cloud"]),
-            ("test_resnet50_addn_001", addn_execute, ((32, 16, 56, 56, 16), "float16", 2),
+            ("test_resnet50_addn_001", addn_run, ((32, 16, 56, 56, 16), "float16", 2),
              ["level0", "rpc", "rpc_cloud"]),
-            ("test_resnet50_addn_002", addn_execute, ((32, 32, 28, 28, 16), "float16", 2),
+            ("test_resnet50_addn_002", addn_run, ((32, 32, 28, 28, 16), "float16", 2),
              ["level0", "rpc", "rpc_cloud"]),
-            ("test_resnet50_addn_003", addn_execute, ((32, 4, 56, 56, 16), "float16", 2),
+            ("test_resnet50_addn_003", addn_run, ((32, 4, 56, 56, 16), "float16", 2),
              ["level0", "rpc", "rpc_cloud"]),
-            ("test_resnet50_addn_004", addn_execute, ((32, 64, 14, 14, 16), "float16", 2),
+            ("test_resnet50_addn_004", addn_run, ((32, 64, 14, 14, 16), "float16", 2),
              ["level0", "rpc", "rpc_cloud"]),
-            ("test_resnet50_addn_005", addn_execute, ((32, 128, 7, 7, 16), "float32", 2),
+            ("test_resnet50_addn_005", addn_run, ((32, 128, 7, 7, 16), "float32", 2),
              ["level0", "rpc", "rpc_cloud"]),
-            ("test_resnet50_addn_006", addn_execute, ((32, 16, 56, 56, 16), "float32", 2),
+            ("test_resnet50_addn_006", addn_run, ((32, 16, 56, 56, 16), "float32", 2),
              ["level0", "rpc", "rpc_cloud"]),
-            ("test_resnet50_addn_007", addn_execute, ((32, 32, 28, 28, 16), "float32", 2),
+            ("test_resnet50_addn_007", addn_run, ((32, 32, 28, 28, 16), "float32", 2),
              ["level0", "rpc", "rpc_cloud"]),
-            ("test_resnet50_addn_008", addn_execute, ((32, 64, 14, 14, 16), "float32", 2),
+            ("test_resnet50_addn_008", addn_run, ((32, 64, 14, 14, 16), "float32", 2),
              ["level0", "rpc", "rpc_cloud"]),
-            ("test_resnet50_addn_009", addn_execute, ((32, 4, 56, 56, 16), "float32", 2),
+            ("test_resnet50_addn_009", addn_run, ((32, 4, 56, 56, 16), "float32", 2),
              ["level0", "rpc", "rpc_cloud"]),
 
             # sparse_softmax_cross_entropy_with_logits
@@ -232,7 +232,7 @@ class TestResnet50_001(TestBase):
              [(32,), "int32", (32, 1001), "float32", "mean", "sparse_softmax_cross_entropy_with_logits_fp32"],
              ["level0", "rpc", "rpc_cloud"]),
 
-            # apply_momentum
+            # 
             ("test_resnet50_apply_momentum_000", apply_momentum_run, ((10, 2048), "float32", False),
              ["level0", "rpc", "rpc_cloud"]),
             ("test_resnet50_apply_momentum_001", apply_momentum_run, ((10,), "float32", False),
@@ -315,13 +315,13 @@ class TestResnet50_001(TestBase):
              ["level1", "rpc", "rpc_cloud", "Unavailable"]),
 
             # reshape
-            ("test_resnet50_reshape_000", reshape_execute, [(32, 2048, 1, 1), (32, 2048), "float32"],
+            ("test_resnet50_reshape_000", reshape_run, [(32, 2048, 1, 1), (32, 2048), "float32"],
              ["level0", "rpc", "rpc_cloud"]),
-            ("test_resnet50_reshape_001", reshape_execute, [(32, 2048), (32, 2048, 1, 1), "float32"],
+            ("test_resnet50_reshape_001", reshape_run, [(32, 2048), (32, 2048, 1, 1), "float32"],
              ["level0", "rpc", "rpc_cloud"]),
-            ("test_resnet50_reshape_002", reshape_execute, [(32, 2048, 1, 1), (32, 2048), "float16"],
+            ("test_resnet50_reshape_002", reshape_run, [(32, 2048, 1, 1), (32, 2048), "float16"],
              ["level0", "rpc", "rpc_cloud"]),
-            ("test_resnet50_reshape_003", reshape_execute, [(32, 2048), (32, 2048, 1, 1), "float16"],
+            ("test_resnet50_reshape_003", reshape_run, [(32, 2048), (32, 2048, 1, 1), "float16"],
              ["level0", "rpc", "rpc_cloud"]),
 
             # four2five

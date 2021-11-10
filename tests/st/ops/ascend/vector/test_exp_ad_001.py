@@ -19,7 +19,7 @@ exp test cast
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.exp_ad_run import exp_ad_run
+from tests.common.test_run.ascend.exp_ad_run import exp_ad_run
 
 
 class TestExp(TestBase):

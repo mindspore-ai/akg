@@ -1,4 +1,4 @@
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2019-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@ from tests.common.tensorio import compare_tensor
 
 import numpy as np
 from akg.utils import kernel_exec as utils
-from tests.common.test_op import reduce_all
+from tests.common.test_op.ascend import reduce_all
 
 def reduce_all_run(shape, para_axis, keepdims=False, dtype="bool", kernel_name="reduce_all", attrs=None):
     input = np.full(shape, True, dtype=dtype)

@@ -15,7 +15,7 @@
 import os
 import pytest
 from tests.common.base import TestBase, get_splitted_cases
-from tests.common.test_run.maxpool_grad_run import maxpool_grad_run
+from tests.common.test_run.ascend.maxpool_grad_run import maxpool_grad_run
 
 
 ############################################################

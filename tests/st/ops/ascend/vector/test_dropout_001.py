@@ -71,10 +71,6 @@ class Testdropout(TestBase):
         return
 
     def test_run(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg)
 
     def test_run_rpc_cloud(self):

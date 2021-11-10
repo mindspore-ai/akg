@@ -26,7 +26,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.concat_ad_run import concat_ad_run
+from tests.common.test_run.ascend.concat_ad_run import concat_ad_run
 
 
 ############################################################
@@ -88,10 +88,6 @@ class TestCase(TestBase):
     @pytest.mark.platform_x86_ascend_training
     @pytest.mark.env_onecard
     def test_run(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg)
 
     def test_run_level2(self):

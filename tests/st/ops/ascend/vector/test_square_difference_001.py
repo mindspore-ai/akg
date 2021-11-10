@@ -25,7 +25,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.square_difference_run import square_difference_run
+from tests.common.test_run.ascend.square_difference_run import square_difference_run
 
 ############################################################
 # TestCase= class: put to tests/*/

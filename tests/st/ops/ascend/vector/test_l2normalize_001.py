@@ -25,7 +25,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.l2normalize_run import l2normalize_run
+from tests.common.test_run.ascend.l2normalize_run import l2normalize_run
 
 
 ############################################################

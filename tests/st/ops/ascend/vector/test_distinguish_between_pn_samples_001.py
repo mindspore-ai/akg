@@ -25,7 +25,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.distinguish_between_pn_samples_run import distinguish_between_pn_samples_run
+from tests.common.test_run.ascend.distinguish_between_pn_samples_run import distinguish_between_pn_samples_run
 #from print_debug import print_debug
 
 ############################################################

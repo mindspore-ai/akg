@@ -18,8 +18,9 @@ ResNet50 fused_computation. 494 in XLA patterns
 """
 from __future__ import absolute_import
 import akg.topi as topi
+import akg.utils as utils
 
-def fused_bn_follow(data0, data1, data2, data3, data4):
+def fused_bn_follow(data0, data1, data2, data3, data4, target=utils.CUDA):
     """
     input:
     data: length is 5
@@ -53,7 +54,7 @@ def fused_bn_follow(data0, data1, data2, data3, data4):
 
     return add0
 
-def fused_bn_follow_relu(data0, data1, data2, data3, data4, layout='NHWC', out_dtype='float16'):
+def fused_bn_follow_relu(data0, data1, data2, data3, data4, layout='NHWC', out_dtype='float16', target=utils.CUDA):
     """
     input:
     data0-4: bn parameters for conv2d tensor, length is 5

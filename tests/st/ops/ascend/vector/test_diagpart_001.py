@@ -25,7 +25,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.diagpart_run import diagpart_run
+from tests.common.test_run.ascend.diagpart_run import diagpart_run
 
 
 ############################################################

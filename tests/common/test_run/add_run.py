@@ -1,4 +1,4 @@
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2019-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,29 +11,31 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+import akg
 import numpy as np
 from akg import tvm
+from akg.ops.math import Add
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
-from akg.ops.math import add
 from tests.common.base import get_rtol_atol
 from tests.common.gen_random import random_gaussian
 from tests.common.test_utils import compute_blockdim
+from akg.utils.result_analysis import target_profiling
+from akg.utils.format_transform import to_tvm_nd_array
 
-def add_run(shape1, shape2, dtype, kernel_name="add", scale=1.0, attrs={}, polyhedral=True):
+def add_run(shape1, shape2, dtype, kernel_name="add", scale=1.0, attrs_op={}, polyhedral=True, attrs={}):
     if type(scale) is not float or not int:
-        if type(attrs) is not bool:
-            scale, attrs = 1.0, scale
+        if type(attrs_op) is not bool:
+            scale, attrs_op = 1.0, scale
         else:
-            scale, attrs, polyhedral = 1.0, scale, attrs
+            scale, attrs_op, polyhedral = 1.0, scale, attrs_op
 
     op_attrs = [scale]
     if not polyhedral:
-        op_attrs = op_attrs + [polyhedral, attrs]
+        op_attrs = op_attrs + [polyhedral, attrs_op]
 
-    if attrs.get("dynamic"):
-        attrs["enable_double_buffer"] = False
+    if attrs_op.get("dynamic"):
+        attrs_op["enable_double_buffer"] = False
         if shape1 != shape2:
             raise TypeError("Input tensors have different shape. broadcast is't support for dynamic")
         var_shape = []
@@ -45,10 +47,11 @@ def add_run(shape1, shape2, dtype, kernel_name="add", scale=1.0, attrs={}, polyh
         build_shape1 = shape1
         build_shape2 = shape2
 
+    attrs.update(attrs_op)
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(add.add, [build_shape1, build_shape2], [dtype, dtype], op_attrs,
+        mod = utils.op_build_test(Add, [build_shape1, build_shape2], [dtype, dtype], op_attrs,
                                   kernel_name=kernel_name, attrs=attrs, polyhedral=polyhedral,
                                   tuning=t)
         if t:
@@ -58,7 +61,7 @@ def add_run(shape1, shape2, dtype, kernel_name="add", scale=1.0, attrs={}, polyh
             return mod
     else:
         args, expect, input1, input2 = gen_data(shape1, shape2, dtype, scale)
-        mod = utils.op_build_test(add.add, [build_shape1, build_shape2], [dtype, dtype], op_attrs,
+        mod = utils.op_build_test(Add, [build_shape1, build_shape2], [dtype, dtype], op_attrs,
                                   kernel_name=kernel_name, attrs=attrs, polyhedral=polyhedral)
         if attrs.get("dynamic"):
             for i in range(len(shape1)):
@@ -66,6 +69,12 @@ def add_run(shape1, shape2, dtype, kernel_name="add", scale=1.0, attrs={}, polyh
             block_dim = compute_blockdim(shape1)
             args.append(block_dim)
         output = utils.mod_launch(mod, args, outputs=(2,), expect=expect)
+
+        if attrs.get("profiling", False):
+            target_name = attrs["target"].split()[0]
+            data = to_tvm_nd_array(args, akg.tvm.context(target_name, 0))
+            target_profiling(mod, *data, target=target_name, repeat_time=attrs["repeat_times"])
+
         rtol, atol = get_rtol_atol("add", dtype)
         return (input1, input2), output, expect, compare_tensor(output, expect, rtol=rtol, atol=atol, equal_nan=True)
 

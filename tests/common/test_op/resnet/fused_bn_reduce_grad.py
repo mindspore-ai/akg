@@ -18,8 +18,10 @@ ResNet50 fused computation. 245 in XLA patterns
 """
 from __future__ import absolute_import
 import akg.topi as topi
+import akg.utils as utils
 
-def fused_bn_reduce_grad(data0, data1, data2, data3, data4, data5, data6, data7, layout='NHWC', out_dtype='float16'):
+def fused_bn_reduce_grad(data0, data1, data2, data3, data4, data5, data6, data7, layout='NHWC',
+                        out_dtype='float16', target=utils.CUDA):
     
     if layout == 'NCHW':
         data3 = topi.transpose(data3, (0, 2, 3, 1))

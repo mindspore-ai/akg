@@ -16,30 +16,30 @@ import os
 import sys
 sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 from base_all_run import BaseCaseRun
-from tests.common.test_run.conv_run import conv_run
-from tests.common.test_run.conv_backprop_input_run import conv_backprop_input_run
-from tests.common.test_run.conv_backprop_filter_run import conv_backprop_filter_run
-from tests.common.test_run.fused_batch_norm_run import fused_batch_norm_run
-from tests.common.test_run.fused_batch_norm_grad_run import fused_batch_norm_grad_run
-from tests.common.test_run.batch_norm_ad_run import batch_norm_ad_run
-from tests.common.test_run.batchmatmul_run import batchmatmul_execute
-from tests.common.test_run.maxpool_with_argmax_run import maxpool_with_argmax_run
-from tests.common.test_run.mean_run import mean_execute
-from tests.common.test_run.mean_ad_run import mean_ad_run
-from tests.common.test_run.relu_run import relu_run
-from tests.common.test_run.relu_grad_run import relu_grad_run
-from tests.common.test_run.relu_ad_run import relu_ad_run
-from tests.common.test_run.add_run import add_run
-from tests.common.test_run.addn_run import addn_execute
-from tests.common.test_run.sparse_softmax_cross_entropy_with_logits_run import sparse_softmax_cross_entropy_with_logits_run
-from tests.common.test_run.sparse_softmax_cross_entropy_with_logits_ad_run import sparse_softmax_cross_entropy_with_logits_ad_run
-from tests.common.test_run.bias_add_ad_run import bias_add_ad_run
-from tests.common.test_run.reshape_run import reshape_execute
-from tests.common.test_run.apply_momentum_run import apply_momentum_run
-from tests.common.test_run.cast_run import cast_run
-from tests.common.test_run.conv_bn1_run import conv_bn1_run
-from tests.common.test_run.conv_input_ad_run import conv_input_ad_run
-from tests.common.test_run.conv_filter_ad_run import conv_filter_ad_run
+from tests.common.test_run.ascend.conv_run import conv_run
+from tests.common.test_run.ascend.conv_backprop_input_run import conv_backprop_input_run
+from tests.common.test_run.ascend.conv_backprop_filter_run import conv_backprop_filter_run
+from tests.common.test_run.ascend.fused_batch_norm_run import fused_batch_norm_run
+from tests.common.test_run.ascend.fused_batch_norm_grad_run import fused_batch_norm_grad_run
+from tests.common.test_run.ascend.batch_norm_ad_run import batch_norm_ad_run
+from tests.common.test_run.ascend.batchmatmul_run import batchmatmul_execute
+from tests.common.test_run.ascend.maxpool_with_argmax_run import maxpool_with_argmax_run
+from tests.common.test_run.ascend.mean_run import mean_execute
+from tests.common.test_run.ascend.mean_ad_run import mean_ad_run
+from tests.common.test_run.ascend.relu_run import relu_run
+from tests.common.test_run.ascend.relu_grad_run import relu_grad_run
+from tests.common.test_run.ascend.relu_ad_run import relu_ad_run
+from tests.common.test_run import add_run
+from tests.common.test_run import addn_run
+from tests.common.test_run.ascend.sparse_softmax_cross_entropy_with_logits_run import sparse_softmax_cross_entropy_with_logits_run
+from tests.common.test_run.ascend.sparse_softmax_cross_entropy_with_logits_ad_run import sparse_softmax_cross_entropy_with_logits_ad_run
+from tests.common.test_run.ascend.bias_add_ad_run import bias_add_ad_run
+from tests.common.test_run import reshape_run
+from tests.common.test_run.ascend.apply_momentum_run import apply_momentum_run
+from tests.common.test_run import cast_run
+from tests.common.test_run.ascend.conv_bn1_run import conv_bn1_run
+from tests.common.test_run.ascend.conv_input_ad_run import conv_input_ad_run
+from tests.common.test_run.ascend.conv_filter_ad_run import conv_filter_ad_run
 
 
 class TestAlexnet(BaseCaseRun):
@@ -317,13 +317,13 @@ class TestAlexnet(BaseCaseRun):
              ["level1", "rpc", "rpc_cloud", "Unavailable"]),
 
             # Reshape
-            ("reshape_001", reshape_execute, [(32, 256, 6, 6), (32, -1), "float16"],
+            ("reshape_001", reshape_run, [(32, 256, 6, 6), (32, -1), "float16"],
              ["level0", "rpc", "rpc_cloud"]),
-            ("reshape_002", reshape_execute, [(32, 9216), (32, 256, 6, 6), "float32"],
+            ("reshape_002", reshape_run, [(32, 9216), (32, 256, 6, 6), "float32"],
              ["level0", "rpc", "rpc_cloud"]),
-            ("test_alexnet_reshape_003", reshape_execute, [(32, 256, 6, 6), (32, -1), "float32"],
+            ("test_alexnet_reshape_003", reshape_run, [(32, 256, 6, 6), (32, -1), "float32"],
              ["level0", "rpc", "rpc_cloud", "Unavailable"]),
-            ("test_alexnet_reshape_004", reshape_execute, [(32, 9216), (32, 256, 6, 6), "float16"],
+            ("test_alexnet_reshape_004", reshape_run, [(32, 9216), (32, 256, 6, 6), "float16"],
              ["level0", "rpc", "rpc_cloud", "Unavailable"]),
 
             # Conv

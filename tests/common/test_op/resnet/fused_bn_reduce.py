@@ -18,8 +18,9 @@ ResNet50 fused_computation. 492 in XLA patterns
 """
 from __future__ import absolute_import
 import akg.topi as topi
+import akg.utils as utils
 
-def fused_bn_reduce(data, layout, out_dtype):
+def fused_bn_reduce(data, layout, out_dtype, target=utils.CUDA):
     """
     input:
     data:  4-D Tensor

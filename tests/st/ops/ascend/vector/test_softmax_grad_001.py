@@ -26,7 +26,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.softmax_grad_run import softmax_grad_run
+from tests.common.test_run.ascend.softmax_grad_run import softmax_grad_run
 
 ############################################################
 # TestCase= class: put to tests/*/

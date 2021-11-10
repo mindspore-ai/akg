@@ -17,7 +17,7 @@
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.cross_run import cross_run
+from tests.common.test_run.ascend.cross_run import cross_run
 
 
 class TestCross(TestBase):

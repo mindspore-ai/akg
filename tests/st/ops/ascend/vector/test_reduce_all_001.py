@@ -25,12 +25,11 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.reduce_all_run import reduce_all_run
+from tests.common.test_run import reduce_all_run
 
 ############################################################
 # TestCase= class: put to tests/*/
 ############################################################
-
 
 class TestCase(TestBase):
     def setup(self):

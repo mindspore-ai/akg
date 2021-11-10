@@ -37,21 +37,21 @@ Refer to [MindSpore Installation](https://www.mindspore.cn/install/en) for more 
   ```
   git clone https://gitee.com/mindspore/akg.git
   cd akg
-  bash build.sh -e ascend
+  bash build.sh -e ascend -j8
   ```
 
 - Build on GPU
   ```
   git clone https://gitee.com/mindspore/akg.git
   cd akg
-  bash build.sh -e gpu
+  bash build.sh -e gpu -j8
   ```
 
 - Build on CPU
   ```
   git clone https://gitee.com/mindspore/akg.git
   cd akg
-  bash build.sh -e cpu
+  bash build.sh -e cpu -j8
   ```
 
 ## Run Standalone
@@ -77,22 +77,30 @@ Refer to [MindSpore Installation](https://www.mindspore.cn/install/en) for more 
 
 2. Run test
 
-- Ascend910
+- Use script:
+```
+cd tests/st
+python run.py -e gpu -o add -l level0  # run add operator on GPU
+```
+  Detailed instructions see:`python run.py -h`
+- Use specific case:
+
+  - Ascend910
   ```
-  cd tests/st/ops/ascend/vector
-  pytest -s test_abs_001.py -m "level0" # run level0 testcases
+  cd tests/st/ops/
+  pytest -s test_abs.py -m "level0 and platform_x86_ascend_training" # run level0 testcases on Ascend
   ```
 
-- GPU V100/A100
+  - NVIDIA V100/A100
   ```
-  cd tests/operators
-  python3 test_all.py -t gpu "op_name" # replace op_name with the operator name which you want to test
+  cd tests/st/ops/
+  pytest -s test_abs.py -m "level0 and platform_x86_gpu_training" # run level0 testcases on GPU
   ```
 
-- CPU
+  - CPU
   ```
-  cd tests/operators
-  python3 test_all.py -t cpu "op_name" # replace op_name with the operator name which you want to test
+  cd tests/st/ops/
+  pytest -s test_abs.py -m "level0 and platform_x86_cpu" # run level0 testcases on CPU
   ```
 
 ## Using AKG to generate high performance kernels

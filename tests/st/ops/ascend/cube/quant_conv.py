@@ -20,10 +20,10 @@ from collections import namedtuple
 import numpy as np
 import akg
 import akg.tvm
-import akg.lang.cce
+import akg.lang.ascend
 from akg import dim
 from akg.utils import kernel_exec as utils
-from tests.common.test_run.conv_utils import conv_forward_naive
+from tests.common.test_run.ascend.conv_utils import conv_forward_naive
 
 secretsGenerator = secrets.SystemRandom()
 
@@ -385,9 +385,9 @@ def test_CCE_Conv(fmap_shape, filter_shape, pad_, stride_,
         negative_slope = 0.0
         slope_tmp = akg.tvm.const(negative_slope, dtype=conv_dtype)
         # negative_slope*x
-        out = akg.lang.cce.vmuls(cube, slope_tmp)
+        out = akg.lang.ascend.vmuls(cube, slope_tmp)
         # max(x,negative_slope*x)
-        out = akg.lang.cce.vmax(out, cube)
+        out = akg.lang.ascend.vmax(out, cube)
     else:
         out = cube
 

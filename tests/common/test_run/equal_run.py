@@ -1,4 +1,4 @@
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2019-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,28 +11,33 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.math import equal
+from akg.ops.math import Equal
 from tests.common.gen_random import random_gaussian
+from akg.utils.result_analysis import target_profiling
+from akg.utils.format_transform import to_tvm_nd_array
 
-
-def equal_run(shapes, dtype, kernel_name, attrs, cce_path="./"):
+def equal_run(shapes, dtype, kernel_name="equal", attrs_op={}, cce_path="./", attrs={}):
+    attrs.update(attrs_op)
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(equal.equal, shapes, [dtype, dtype], kernel_name=kernel_name, attrs=attrs, tuning=t)
+        mod = utils.op_build_test(Equal, shapes, [dtype, dtype], kernel_name=kernel_name, attrs=attrs, tuning=t)
         if t:
             benchMark1, inputs1, output1 = gen_data(dtype, shapes)
             return mod, benchMark1, inputs1 + [output1]
         else:
             return mod
     else:
-        mod = utils.op_build_test(equal.equal, shapes, [dtype, dtype], kernel_name=kernel_name, attrs=attrs)
+        mod = utils.op_build_test(Equal, shapes, [dtype, dtype], kernel_name=kernel_name, attrs=attrs)
         benchMark1, inputs1, output1 = gen_data(dtype, shapes)
         output1 = utils.mod_launch(mod, inputs1 + [output1], expect=benchMark1)
-
+        if attrs.get("profiling", False):
+            import akg
+            target_name = attrs["target"].split()[0]
+            args_list = to_tvm_nd_array([inputs1, output1], akg.tvm.context(target_name, 0))
+            target_profiling(mod, *args_list, target=target_name, repeat_time=attrs["repeat_times"])
         # Also test the case where the inputs are equal
         if shapes[0] == shapes[1]:
             inputs2 = []

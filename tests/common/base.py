@@ -1,4 +1,4 @@
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2019-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ import time
 import datetime
 import collections
 import numpy as np
+import akg.utils as utils
 from akg import dim
 from akg.utils.result_analysis import count_unequal_element
 from tests.common import tensorio
@@ -29,6 +30,14 @@ PERFORMANCE_TEST = "PERFORMANCE_TEST"
 
 class TestBase(object):
     pandora_logger_ = None
+    def set_target(self, target=utils.CCE):
+        self.target = target
+
+    def set_profiling(self, enable):
+        self.enable_profiling = enable
+    
+    def set_repeat_times(self, repeat_times):
+        self.repeat_times = repeat_times    
 
     def params_init(self, case_name, case_path, max_retry=3):
         self.casename = case_name
@@ -42,6 +51,9 @@ class TestBase(object):
         self.test_args = []
         self.caseresult = True
         self._exception = None
+        self.target = utils.CCE
+        self.enable_profiling = False
+        self.repeat_times = 1000
 
     def setup(self):
         self._log.info("TestBase:{0} Setup case".format(self.casename))
@@ -51,10 +63,16 @@ class TestBase(object):
         self._log.info("TestBase:{0} Teardown".format(self.casename))
         return
 
-    def run_test_arg_func(self, test_args=[], attr=None):
+    def run_cases(self, cases, target, level="level0", profiling=False, repeat_times=1000):
+        return self.run_test_arg_func(cases, level, target=target, profiling=profiling, repeat_times=repeat_times)
+
+    def run_test_arg_func(self, test_args=[], attr=None, target=utils.CCE, profiling=False, repeat_times=1000):
         if not attr:
             self._log.info("attr is None")
             return False
+        self.set_target(target)
+        self.set_profiling(profiling)
+        self.set_repeat_times(repeat_times)
         run_mode = self.get_env_var("RUNTIME_MODE")
         if run_mode in ["compile_cloud", "compile_mini"]:
             mode = "compile"
@@ -63,7 +81,7 @@ class TestBase(object):
         for arg in test_args:
             self._log.info(arg)
             if attr in arg[-1]:
-                case_result, exception = self.common_run([arg[0:-1]], mode=mode)
+                case_result, _ = self.common_run([arg[0:-1]], mode=mode)
                 if not case_result:
                     self._log.info("{0} run failed".format(arg))
                     return False
@@ -76,18 +94,24 @@ class TestBase(object):
     def ana_args(self, arg, is_conv=False):
         caseflag, func, args = arg[0:3]
         kwargs = {}
-        attrs = self.get_dim_info(arg, is_conv)
-        if self.get_env_var(PERFORMANCE_TEST):
-            attrs["record_core"] = True
-        if attrs is not None:
-            if len(arg) == 5 and not arg[-1]:
-                args = list(args)
-                args.append(attrs)
-                args.append(arg[-1])
-                kwargs = {}
-            else:
-                args = list(args)
-                kwargs = {"attrs": attrs}
+        if self.target == utils.CCE:
+            attrs = self.get_dim_info(arg, is_conv)
+            if self.get_env_var(PERFORMANCE_TEST):
+                attrs["record_core"] = True
+            if attrs is not None:
+                if len(arg) == 5 and not arg[-1]:
+                    args = list(args)
+                    args.append(attrs)
+                    args.append(arg[-1])
+                    kwargs = {}
+                else:
+                    args = list(args)
+                    kwargs = {"attrs": attrs}
+        if "attrs" not in kwargs:
+            kwargs["attrs"] = {}
+        kwargs["attrs"]["profiling"] = self.enable_profiling
+        kwargs["attrs"]["repeat_times"] = self.repeat_times
+        kwargs["attrs"]["target"] = self.target
         return caseflag, func, args, kwargs
 
     def get_dim_info(self, arg, is_conv=False):
@@ -98,14 +122,11 @@ class TestBase(object):
         dynamic = False
         partial_dynamic = False
         bypass_l1 = False
+        if isinstance(arg, tuple):
+            arg = list(arg)
         if "dynamic" in arg:
             dynamic = True
-            if isinstance(arg, tuple):
-                arg = list(arg)
-                arg.remove("dynamic")
-                arg = tuple(arg)
-            else:
-                arg.remove("dynamic")
+            arg.remove("dynamic")
         if "partial_dynamic" in arg:
             partial_dynamic = True
             arg.remove("partial_dynamic")
@@ -200,7 +221,7 @@ class TestBase(object):
         :param mode: case mode
         :return:
         """
-        func_fromlist = "tests.common.test_run." + func
+        func_fromlist = "tests.common.test_run.ascend." + func
         try:
             new_func = func
             func_py = __import__(func_fromlist, fromlist=func)
@@ -211,7 +232,7 @@ class TestBase(object):
             run_func = getattr(func_py, new_func)
         return run_func
 
-    def common_run(self, args, dtype_list=None, mode="execute", is_conv=False, raise_exception=True):
+    def common_run(self, args_list, dtype_list=None, mode="execute", is_conv=False, raise_exception=True):
         """
         :param dtype_list:operator program data type
         :param mode: operator run mode: such as rpc_cloud/aicmodel
@@ -219,7 +240,7 @@ class TestBase(object):
                                 the assert is used to interrupt the program.
         :return:
         """
-        for arg in args:
+        for arg in args_list:
             starttime = datetime.datetime.now()
             caseflag, func, args, kwargs = self.ana_args(arg, is_conv)
 

@@ -25,7 +25,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.equal_count_run import equal_count_run
+from tests.common.test_run.ascend.equal_count_run import equal_count_run
 
 ############################################################
 # TestCase= class: put to tests/*/

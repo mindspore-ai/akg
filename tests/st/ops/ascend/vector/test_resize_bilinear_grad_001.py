@@ -25,7 +25,7 @@ Testcase_ExpectedResult:
 
 import os
 from tests.common.base import TestBase
-from tests.common.test_run.resize_bilinear_grad_run import resize_bilinear_grad_run
+from tests.common.test_run.ascend.resize_bilinear_grad_run import resize_bilinear_grad_run
 
 
 class TestCase(TestBase):

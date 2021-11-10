@@ -25,8 +25,8 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.bc_run import bc_run
-
+from tests.common.test_run.ascend.bc_run import bc_run
+from tests.common.test_run import addn_run
 
 ############################################################
 # TestCase= class: put to tests/*/
@@ -49,7 +49,7 @@ class TestCase(TestBase):
             # test 002 can be used to verify the functionality of ilp_reuse_inplace=True. When ilp_reuse_inplace=False, the
             # StorageRewriteILP pass fails (lp_solve returns no solution), because the buffers won't fit in ubuf
             # unless inplace reuse is exploited.
-            ("002_bc_addn_input_1280_1024_2_dim_2", "addn_run", ((128, 1024), "float16", 3), ((32, 32), (1024, 1024)))
+            ("002_bc_addn_input_1280_1024_2_dim_2", addn_run, ((128, 1024), "float16", 3), ((32, 32), (1024, 1024)))
         ]
         return
 

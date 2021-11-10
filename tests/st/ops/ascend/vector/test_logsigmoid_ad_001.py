@@ -24,7 +24,7 @@ Testcase_ExpectedResult:
 """
 import os
 from tests.common.base import TestBase
-from tests.common.test_run.logsigmoid_ad_run import logsigmoid_ad_run
+from tests.common.test_run.ascend.logsigmoid_ad_run import logsigmoid_ad_run
 
 
 

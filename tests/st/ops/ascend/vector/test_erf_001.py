@@ -27,7 +27,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.erf_run import erf_run
+from tests.common.test_run.ascend.erf_run import erf_run
 
 
 class TestCase(TestBase):

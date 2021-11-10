@@ -24,7 +24,7 @@ Testcase_ExpectedResult:
 """
 import os
 from tests.common.base import TestBase
-from tests.common.test_run.upsampling_run import upsampling_run
+from tests.common.test_run.ascend.upsampling_run import upsampling_run
 
 ############################################################
 # TestCase= class: put to tests/*/

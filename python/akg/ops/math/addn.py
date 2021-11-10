@@ -1,6 +1,4 @@
-#!/usr/bin/env python3
-# coding: utf-8
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,12 +13,12 @@
 # limitations under the License.
 
 """operator dsl function: addn"""
+import akg
 import akg.topi
-from akg.utils import validation_check as vc_util
+import akg.utils as utils
 
-
-@vc_util.check_input_type(((list, tuple), akg.tvm.tensor.Tensor))
-def addn(data):
+@utils.check_input_type(((list, tuple), akg.tvm.tensor.Tensor), (str, type(None)))
+def Addn(data, target=utils.CCE):
     """
     Compute sum of all elements in tensor.
 
@@ -29,15 +27,20 @@ def addn(data):
 
     Returns:
         tvm.tensor.Tensor, compute result, get all elements' sum.
+    
+    Supported Platforms:
+        'Ascend', 'GPU', 'CPU'
     """
+    utils.check_supported_target(target)
     # check types
     dtype = data[0].dtype
-    vc_util.ops_dtype_check(dtype, vc_util.DtypeForDavinci.ALL_FLOAT)
+    if target == utils.CCE:
+        utils.ops_dtype_check(dtype, utils.DtypeForDavinci.ALL_FLOAT)
 
     res = data[0]
     for i in range(1, len(data)):
-        vc_util.elemwise_dtype_check(res.dtype, data[i].dtype)
-        vc_util.elemwise_shape_check(res.shape, data[i].shape)
+        utils.elemwise_dtype_check(res.dtype, data[i].dtype)
+        utils.elemwise_shape_check(res.shape, data[i].shape)
     res = akg.topi.elemwise_sum(data)
 
     return res

@@ -17,7 +17,7 @@ unsortedsegmentsum test cast
 """
 import os
 from tests.common.base import TestBase
-from tests.common.test_run.fused_cast_conv_run import fused_cast_conv_run
+from tests.common.test_run.ascend.fused_cast_conv_run import fused_cast_conv_run
 
 
 class TestCase(TestBase):
@@ -57,17 +57,9 @@ class TestCase(TestBase):
         return
 
     def test_run(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg, is_conv=True)
 
     def test_run_level1(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg_level1, is_conv=True)
 
     def teardown(self):

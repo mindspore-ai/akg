@@ -19,9 +19,9 @@ unsortedsegmentsum test cast
 import os
 import pytest
 from tests.common.base import TestBase, get_splitted_cases
-from tests.common.test_run.conv_ad_v2_run import conv_ad_v2_run as conv_ad_01_run
-from tests.common.test_run.conv_filter_ad_run import conv_filter_ad_run
-from tests.common.test_run.conv_input_ad_run import conv_input_ad_run
+from tests.common.test_run.ascend.conv_ad_v2_run import conv_ad_v2_run as conv_ad_01_run
+from tests.common.test_run.ascend.conv_filter_ad_run import conv_filter_ad_run
+from tests.common.test_run.ascend.conv_input_ad_run import conv_input_ad_run
 
 
 class TestCase(TestBase):
@@ -43,8 +43,6 @@ class TestCase(TestBase):
             ("conv_ad_01_004", conv_ad_01_run, (4, (32, 64, 56, 56), (64, 64, 3, 3), (1, 1, 1, 1), (1, 1), (1, 1))),
             # testflag, opfuncname, fmap_shape               , filter_shape          , pad_                              , stride_   , dilation_
             # (testflag, opfuncname, ((in_n, in_c, in_h, in_w), (cout, in_c, w_h, w_w), (p_left, p_right, p_top, p_bottom), (s_h, s_w), (d_h, d_w)))
-            # ("conv_ad_01_005",  conv_input_ad_reuse_forward_run, ((32, 16, 34, 34), (64, 16, 3, 3), (0, 0, 0, 0), (1, 1), (1, 1), [128, 128, 64, 128, 64])),
-            # ("conv_ad_01_006",  conv_input_ad_reuse_forward_run, ((32, 16, 33, 33), (64, 16, 3, 3), (0, 0, 0, 0), (2, 2), (1, 1), [128, 128, 64, 128, 64])),
             # testflag, opfuncname, fmap_shape               , filter_shape          , pad_                              , stride_   , dilation_ 
             # (testflag, opfuncname, ((in_n, in_c, in_h, in_w), (cout, in_c, w_h, w_w), (p_left, p_right, p_top, p_bottom), (s_h, s_w), (d_h, d_w)))
             ("conv_ad_01_007", conv_input_ad_run, ((1, 128, 28, 28), (128, 128, 3, 3), (1, 1, 1, 1), (1, 1), (1, 1))),
@@ -178,24 +176,12 @@ class TestCase(TestBase):
         return
 
     def test_run(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg)
 
     def test_run_level1(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg_level1)
 
     def test_run_level0(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg_level0)
 
     def test(self, split_nums, split_idx):

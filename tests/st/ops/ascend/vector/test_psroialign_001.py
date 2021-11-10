@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import akg
-import akg.lang.cce
+import akg.lang.ascend
 from akg.utils import kernel_exec as utils
 
 
@@ -154,17 +154,17 @@ def psroialign_compute(fm_shape, roi_shape, class_num, group_size, sample_h, sam
     # step 4: compute the low and high coordinates of samples for bilinear
     # ==============================================================
     # samples_x_coors_low = akg.tvm.compute(sample_w_bias_shape, lambda *indices: \
-    #     akg.lang.cce.floor(samples_x_coors(*indices)), name = 'samples_x_coors_low')
+    #     akg.lang.ascend.floor(samples_x_coors(*indices)), name = 'samples_x_coors_low')
     # samples_x_coors_high = akg.tvm.compute(sample_w_bias_shape, lambda *indices: \
-    #     akg.lang.cce.ceil(samples_x_coors(*indices)), name = 'samples_x_coors_high')
+    #     akg.lang.ascend.ceil(samples_x_coors(*indices)), name = 'samples_x_coors_high')
     # samples_y_coors_low = akg.tvm.compute(sample_h_bias_shape, lambda *indices: \
-    #     akg.lang.cce.floor(samples_y_coors(*indices)), name = 'samples_y_coors_low')
+    #     akg.lang.ascend.floor(samples_y_coors(*indices)), name = 'samples_y_coors_low')
     # samples_y_coors_high = akg.tvm.compute(sample_h_bias_shape, lambda *indices: \
-    #     akg.lang.cce.ceil(samples_y_coors(*indices)), name = 'samples_y_coors_high')
-    samples_x_coors_low = akg.lang.cce.floor(samples_x_coors)
-    samples_x_coors_high = akg.lang.cce.ceil(samples_x_coors)
-    samples_y_coors_low = akg.lang.cce.floor(samples_y_coors)
-    samples_y_coors_high = akg.lang.cce.ceil(samples_y_coors)
+    #     akg.lang.ascend.ceil(samples_y_coors(*indices)), name = 'samples_y_coors_high')
+    samples_x_coors_low = akg.lang.ascend.floor(samples_x_coors)
+    samples_x_coors_high = akg.lang.ascend.ceil(samples_x_coors)
+    samples_y_coors_low = akg.lang.ascend.floor(samples_y_coors)
+    samples_y_coors_high = akg.lang.ascend.ceil(samples_y_coors)
 
     # samples_x_coors_low = akg.tvm.compute(sample_w_bias_shape, lambda *indices: \
     #     akg.topi.cast(samples_x_coors(*indices), 'int32'), name = 'samples_x_coors_low')

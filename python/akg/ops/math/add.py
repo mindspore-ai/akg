@@ -1,6 +1,4 @@
-#!/usr/bin/env python3
-# coding: utf-8
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,19 +13,28 @@
 # limitations under the License.
 
 """operator dsl function: add"""
-
 import akg.topi
 import akg.tvm
-from akg.lang.cce import vadd, vmuls
-from akg.utils import validation_check as vc_util
+from akg.lang.ascend import vadd, vmuls
+import akg.utils as utils
 from akg.utils.dsl_create import produce_shapes
 from akg.utils.format_transform import get_shape
 from akg.utils.dynamic_shape import shape_is_dynamic
 
+@utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor)
+def _add(data1, data2):
+    utils.elemwise_dtype_check(data1.dtype, data2.dtype)
+    utils.check_shape(data1.shape)
+    utils.check_shape(data2.shape)
+    utils.auto_broadcast_check(data1.shape, data2.shape)
 
-@vc_util.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor,
+    res = akg.topi.add(data1, data2)
+
+    return res
+
+@utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor,
                           (int, float, type(None)), (bool, type(None)), (dict, type(None)))
-def add(first_input, second_input, scale=1.0, polyhedral=True, attrs=None):
+def _add_ascend(first_input, second_input, scale=1.0, polyhedral=True, attrs=None):
     """
     Computes first_input + second_input * scale elementwise.
 
@@ -42,9 +49,8 @@ def add(first_input, second_input, scale=1.0, polyhedral=True, attrs=None):
     Returns:
         tvm.tensor.Tensor of same type as input tensor with shape the broadcast shape of input tensors.
     """
-    vc_util.check_shape(first_input.shape)
-    vc_util.check_shape(second_input.shape)
-    attr_map = {}
+    utils.check_shape(first_input.shape)
+    utils.check_shape(second_input.shape)
 
     first_input_shape = get_shape(first_input)
     second_input_shape = get_shape(second_input)
@@ -66,13 +72,13 @@ def add(first_input, second_input, scale=1.0, polyhedral=True, attrs=None):
     second_input_type = second_input.dtype
     if first_input_type != second_input_type:
         raise TypeError("Input tensors have different data types.")
-    vc_util.ops_dtype_check(first_input_type, vc_util.DtypeForDavinci.ALL_TYPES)
+    utils.ops_dtype_check(first_input_type, utils.DtypeForDavinci.ALL_TYPES)
 
     temp = vmuls(second_broadcast, scale)
     res = vadd(first_broadcast, temp)
     res_cast = res.astype(first_input_type)
     if polyhedral:
-        return res_cast, attr_map
+        return res_cast
 
     def comp_func(s):
         first_ub = s.cache_read(first_input, "local.UB", [first_broadcast])
@@ -110,4 +116,25 @@ def add(first_input, second_input, scale=1.0, polyhedral=True, attrs=None):
             s[first_broadcast].compute_inline()
             s[second_broadcast].compute_inline()
 
-    return res_cast, comp_func, attr_map
+    return res_cast, comp_func
+
+def Add(data1, data2, scale=1.0, polyhedral=True, attrs={}, target=utils.CCE):
+    """
+    Computes data1 + data2 elementwise, broadcast is supported.
+
+    Args:
+        data1 (tvm.tensor.Tensor): Tensor.
+        data2 (tvm.tensor.Tensor): Tensor of same type as data1, if shape(data2) != shape(data1), broadcast will happen.
+
+    Returns:
+        tvm.tensor.Tensor, add result, with same type as input tensors and broadcasted shape of data1 and data2.
+    
+    Supported Platforms:
+        'Ascend', 'GPU', 'CPU'
+    """
+    utils.check_supported_target(target)
+    if target == utils.CCE:
+        return _add_ascend(data1, data2, scale, polyhedral, attrs)
+    else:
+        return _add(data1, data2)
+
