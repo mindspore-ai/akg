@@ -53,10 +53,8 @@ class EqualCastInserterMutator : public IRMutator {
     if (EqualCast(op)) {
       auto provide = op->body.as<Provide>();
       auto call = provide->value.as<Call>();
-      auto input1_call = call->args[0].as<Call>();
-      auto input2_call = call->args[1].as<Call>();
-      Tensor input_a = placeholder(input1_call->args, input1_call->type, input1_call->func->func_name());
-      Tensor input_b = placeholder(input2_call->args, input2_call->type, input2_call->func->func_name());
+      Tensor input_a = Downcast<Operation>(call->args[0].as<Call>()->func).output(0);
+      Tensor input_b = Downcast<Operation>(call->args[1].as<Call>()->func).output(0);
       Tensor cast_output_a = placeholder(input_a->shape, Float(32), "cmp_input1");
       Tensor cast_output_b = placeholder(input_b->shape, Float(32), "cmp_input2");
       Stmt cast_a = CastStmtMaker(input_a, cast_output_a, "float32");
@@ -98,9 +96,9 @@ class BoolCastInserterMutator : public IRMutator {
       auto provide = op->body.as<Provide>();
       auto cast_call = provide->value.as<Call>();
       auto input_call = cast_call->args[0].as<Call>();
-      Tensor input_tensor = placeholder(input_call->args, input_call->type, input_call->func->func_name());
+      Tensor input_tensor = Downcast<Operation>(input_call->func).output(0);
       Tensor cast_tmp_tensor = placeholder(input_call->args, Float(16), "fp16_input1");
-      Tensor output_tensor = placeholder(provide->args, cast_call->type, provide->func->func_name());
+      Tensor output_tensor = Downcast<Operation>(provide->func).output(0);
       Stmt cast_float = CastStmtMaker(input_tensor, cast_tmp_tensor, "float16");
       Stmt cast_int = CastStmtMaker(cast_tmp_tensor, output_tensor, bool_cast_type);
       return Block::make(cast_float, cast_int);
