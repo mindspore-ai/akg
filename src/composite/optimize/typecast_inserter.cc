@@ -33,14 +33,11 @@
  */
 namespace akg {
 
-Expr TensorToCall(const Tensor &tensor) {
-  return Call::make(tensor->dtype, tensor->op->name, tensor->shape, Call::CallType::Halide, tensor->op);
-}
-
-Stmt CastStmtMaker(const Tensor &input_tensor, const Tensor &output_tensor, std::string cast_type) {
-  auto input_call = TensorToCall(input_tensor);
-  auto cast_call = Call::make(output_tensor->dtype, "Cast", {input_call}, Call::CallType::Intrinsic);
-  auto provide = Provide::make(output_tensor->op, 0, cast_call, output_tensor->shape);
+Stmt CastStmtMaker(const Expr &input_tensor, const Expr &output_tensor, std::string cast_type) {
+  auto cast_call = Call::make(output_tensor.type(), "Cast", {input_tensor}, Call::CallType::Intrinsic);
+  auto output_call = output_tensor.as<Call>();
+  CHECK(output_call);
+  auto provide = Provide::make(output_call->func, 0, cast_call, output_call->args);
   Map<std::string, NodeRef> attr_node;
   attr_node.Set("dst_type", StringImm::make(cast_type));
   auto attr_pack = AttrStmt::make(attr_node, "attrs", Expr(1), provide);
@@ -53,15 +50,18 @@ class EqualCastInserterMutator : public IRMutator {
     if (EqualCast(op)) {
       auto provide = op->body.as<Provide>();
       auto call = provide->value.as<Call>();
-      Tensor input_a = Downcast<Operation>(call->args[0].as<Call>()->func).output(0);
-      Tensor input_b = Downcast<Operation>(call->args[1].as<Call>()->func).output(0);
-      Tensor cast_output_a = placeholder(input_a->shape, Float(32), "cmp_input1");
-      Tensor cast_output_b = placeholder(input_b->shape, Float(32), "cmp_input2");
+      auto shape = provide->args;
+      Expr input_a = call->args[0];
+      Expr input_b = call->args[1];
+      
+      Tensor cast_output_a_node = placeholder(shape, Float(32), "cmp_input1");
+      Tensor cast_output_b_node = placeholder(shape, Float(32), "cmp_input2");
+      Expr cast_output_a = Call::make(cast_output_a_node->dtype, cast_output_a_node->op->func_name(), shape, Call::CallType::Halide, cast_output_a_node->op);
+      Expr cast_output_b = Call::make(cast_output_b_node->dtype, cast_output_b_node->op->func_name(), shape, Call::CallType::Halide, cast_output_b_node->op);
       Stmt cast_a = CastStmtMaker(input_a, cast_output_a, "float32");
       Stmt cast_b = CastStmtMaker(input_b, cast_output_b, "float32");
-      auto cmp_call = Call::make(call->type, call->name, {TensorToCall(cast_output_a), TensorToCall(cast_output_b)},
-                                 Call::CallType::Intrinsic);
-      auto cmp_provide = Provide::make(provide->func, 0, cmp_call, provide->args);
+      auto cmp_call = Call::make(call->type, call->name, {cast_output_a, cast_output_b}, Call::CallType::Intrinsic);
+      auto cmp_provide = Provide::make(provide->func, 0, cmp_call, shape);
       Stmt cmp_stmt = AttrStmt::make(op->node, op->attr_key, op->value, cmp_provide);
       return air::ir::MergeSeq({cast_a, cast_b, cmp_stmt});
     }
@@ -93,12 +93,14 @@ class BoolCastInserterMutator : public IRMutator {
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) override {
     auto bool_cast_type = BoolCastType(op);
     if (!bool_cast_type.empty()) {
+      auto dst_type = ((bool_cast_type == "float32") ? Float(32) : Int(32));
       auto provide = op->body.as<Provide>();
       auto cast_call = provide->value.as<Call>();
-      auto input_call = cast_call->args[0].as<Call>();
-      Tensor input_tensor = Downcast<Operation>(input_call->func).output(0);
-      Tensor cast_tmp_tensor = placeholder(input_call->args, Float(16), "fp16_input1");
-      Tensor output_tensor = Downcast<Operation>(provide->func).output(0);
+      auto shape = provide->args;
+      Expr input_tensor = cast_call->args[0];
+      Tensor cast_tmp_tensor_node = placeholder(shape, Float(16), "fp16_input1");
+      Expr cast_tmp_tensor = Call::make(cast_tmp_tensor_node->dtype, cast_tmp_tensor_node->op->func_name(), shape, Call::CallType::Halide, cast_tmp_tensor_node->op);
+      Expr output_tensor = Call::make(dst_type, provide->func->func_name(), shape, Call::CallType::Halide, provide->func);
       Stmt cast_float = CastStmtMaker(input_tensor, cast_tmp_tensor, "float16");
       Stmt cast_int = CastStmtMaker(cast_tmp_tensor, output_tensor, bool_cast_type);
       return Block::make(cast_float, cast_int);
@@ -125,9 +127,63 @@ class BoolCastInserterMutator : public IRMutator {
   }
 };
 
+/**
+ * output(1024) = 1000 - input(1024)
+ *
+ * ->
+ * tmp(1024) = cast_fp32(input(1024))
+ * output_tmp(1024) = 1000 - tmp(1024)
+ * output(1024) = cast_int32(output_tmp(1024))
+ *
+ *
+ * to avoid int32 vmuls in ascend backend
+ **/
+
+class ScalarSubCastInserterMutator : public IRMutator {
+ public:
+  Stmt Mutate_(const AttrStmt *op, const Stmt &s) override {
+    if (ScalarSub(op)) {
+      auto provide = op->body.as<Provide>();
+      auto sub_call = provide->value.as<Call>();
+      auto input_1 = sub_call->args[1].as<Call>();
+      auto shape = provide->args;
+      Expr input_1_tensor = sub_call->args[1];
+      Tensor cast_tmp_op = placeholder(shape, Float(32), "fp32_" + input_1->func->func_name());
+      Expr cast_tmp_tensor = Call::make(cast_tmp_op->dtype, cast_tmp_op->op->func_name(), shape, Call::CallType::Halide, cast_tmp_op->op);
+      Stmt cast_float = CastStmtMaker(input_1_tensor, cast_tmp_tensor, "float32");
+      auto new_sub_call =
+        Call::make(Float(32), sub_call->name, {sub_call->args[0], cast_tmp_tensor}, Call::CallType::Intrinsic);
+      Tensor new_sub_op = placeholder(shape, Float(32), "sub_cast_" + provide->func->func_name());
+      Expr new_sub = Call::make(new_sub_op->dtype, new_sub_op->op->func_name(), shape, Call::CallType::Halide, new_sub_op->op);
+      auto sub_provide = Provide::make(new_sub_op->op, 0, new_sub_call, shape);
+      Stmt sub_stmt = AttrStmt::make(op->node, op->attr_key, op->value, sub_provide);
+      Expr output_tensor = Call::make(Int(32), provide->func->func_name(), shape, Call::CallType::Halide, provide->func);
+      Stmt cast_int = CastStmtMaker(new_sub, output_tensor, "int32");
+      return air::ir::MergeSeq({cast_float, sub_stmt, cast_int});
+    }
+    return s;
+  }
+
+ private:
+  bool ScalarSub(const AttrStmt *op) {
+    auto provide = op->body.as<Provide>();
+    if (op->attr_key == "attrs" && provide) {
+      auto call = provide->value.as<Call>();
+      if (call && call->name == "Sub" && call->args.size() > 1) {
+        auto arg1 = call->args[1].as<Call>();
+        if ((call->args[0].as<IntImm>() || call->args[0].as<FloatImm>()) && arg1->type == Int(32)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+};
+
 Stmt TypeCastInserter::Run(const Stmt &s) {
   Stmt stmt = EqualCastInserterMutator().Mutate(s);
   stmt = BoolCastInserterMutator().Mutate(stmt);
+  stmt = ScalarSubCastInserterMutator().Mutate(stmt);
   return stmt;
 }
 }  // namespace akg
