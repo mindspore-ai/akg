@@ -138,7 +138,7 @@ void AnalyzeBandNode::DetermineTemplateOfBand(BandNode *bn) {
       continue;
     }
     concated_op_type += stmt_info_[st].first + ",";
-    if (stmt_info_[st].second != ReduceDirection::UNKNOWN) {
+    if (stmt_info_[st].first.find(AT_REDUCE) != std::string::npos) {
       direct = stmt_info_[st].second;
       red_stmt = st;
     }
