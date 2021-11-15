@@ -18,7 +18,7 @@
 
 #include "ir_pass.h"
 #include "gpu_isl_emitter.h"
-#include "auto_tune/tune_info.h"
+#include "poly/poly_util.h"
 
 namespace akg {
 namespace ir {

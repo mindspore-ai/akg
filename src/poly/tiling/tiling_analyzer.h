@@ -31,7 +31,7 @@
 #include "pass/utils.h"
 #include "poly/scop_info.h"
 #include "poly/tiling/tiling_utils.h"
-#include "auto_tune/tune_info.h"
+#include "poly/poly_util.h"
 
 namespace akg {
 namespace ir {

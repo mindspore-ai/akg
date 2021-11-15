@@ -29,30 +29,10 @@ namespace akg {
 namespace ir {
 namespace poly {
 
-constexpr auto MMA_UNIT = 16;
-constexpr auto MIN_TILE = 1;
-constexpr auto AT_TEMPLATE = "TEMPLATE";
-constexpr auto AT_THREAD_CFG = "THREAD_CONFIG";
-constexpr auto AT_BLOCK_CFG = "BLOCK_CONFIG";
-
-/*!
- * IslEmitter for GPU
- */
-constexpr auto AKG_ALL_REDUCE = "akg_reduce::ALL_REDUCE";
-constexpr auto AKG_X_REDUCE = "akg_reduce::REDUCE2D_X";
-constexpr auto AKG_Y_REDUCE = "akg_reduce::REDUCE2D_Y";
-constexpr auto SCALAR_TENSOR_PREFIX = "acc_";
-constexpr auto SCALAR_KHT_PREFIX = "kahan_t";
-constexpr auto SCALAR_KHY_PREFIX = "kahan_y";
-constexpr auto SCALAR_KHC_PREFIX = "kahan_c";
-constexpr auto SHARED_TENSOR_PREFIX = "red_buf";
-
-enum TileLevel { CACHE0 = 0, CACHE1 };
-
 /*
  * This is an light-weight implementation of TileAxis in tvm node way.
  */
-class AxisInfoNode : public Node {
+class TuneAxisInfoNode : public Node {
   struct Constraint {
     Expr tile_mod_{1};
     Expr tile_min_{1};
@@ -90,20 +70,20 @@ class AxisInfoNode : public Node {
     v->Visit("mc_sup", &mc_sup);
   }
 
-  static constexpr const char *_type_key = "AxisInfoNode";
-  TVM_DECLARE_NODE_TYPE_INFO(AxisInfoNode, Node);
+  static constexpr const char *_type_key = "TuneAxisInfoNode";
+  TVM_DECLARE_NODE_TYPE_INFO(TuneAxisInfoNode, Node);
 };
 
-class AxisInfo : public NodeRef {
+class TuneAxisInfo : public NodeRef {
  public:
-  AxisInfo() {}
-  explicit AxisInfo(const ObjectPtr<Object> &n) : NodeRef(n) {}
-  ~AxisInfo() {}
+  TuneAxisInfo() {}
+  explicit TuneAxisInfo(const ObjectPtr<Object> &n) : NodeRef(n) {}
+  ~TuneAxisInfo() {}
 
-  inline AxisInfoNode *operator->() const { return static_cast<AxisInfoNode *>(data_.get()); }
+  inline TuneAxisInfoNode *operator->() const { return static_cast<TuneAxisInfoNode *>(data_.get()); }
 };
 
-TVM_REGISTER_NODE_TYPE(AxisInfoNode);
+TVM_REGISTER_NODE_TYPE(TuneAxisInfoNode);
 
 class TuneInfo {
  public:

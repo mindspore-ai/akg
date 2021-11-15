@@ -877,13 +877,6 @@ enum Template {
   TEMPLATE_BULK
 };
 
-enum ReduceDirection {
-  UNKNOWN = 0,
-  X,
-  Y,
-  ALL,
-};
-
 struct OperatorInfo {
   Template type{Template::DEFAULT};
   // used only for reduce operators, represents the direction of reduce operation.

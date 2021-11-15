@@ -271,6 +271,33 @@ class FindInnerRealize : public air::ir::IRMutator {
   std::string name_;
 };
 
+constexpr auto MMA_UNIT = 16;
+constexpr auto MIN_TILE = 1;
+constexpr auto AT_TEMPLATE = "TEMPLATE";
+constexpr auto AT_THREAD_CFG = "THREAD_CONFIG";
+constexpr auto AT_BLOCK_CFG = "BLOCK_CONFIG";
+
+/*!
+ * IslEmitter for GPU
+ */
+constexpr auto AKG_ALL_REDUCE = "akg_reduce::ALL_REDUCE";
+constexpr auto AKG_X_REDUCE = "akg_reduce::REDUCE2D_X";
+constexpr auto AKG_Y_REDUCE = "akg_reduce::REDUCE2D_Y";
+constexpr auto SCALAR_TENSOR_PREFIX = "acc_";
+constexpr auto SCALAR_KHT_PREFIX = "kahan_t";
+constexpr auto SCALAR_KHY_PREFIX = "kahan_y";
+constexpr auto SCALAR_KHC_PREFIX = "kahan_c";
+constexpr auto SHARED_TENSOR_PREFIX = "red_buf";
+
+enum TileLevel { CACHE0 = 0, CACHE1 };
+
+enum ReduceDirection {
+  UNKNOWN = 0,
+  X,
+  Y,
+  ALL,
+};
+
 }  // namespace poly
 constexpr auto TARGET_CCE = "cce";
 constexpr auto TARGET_CUDA = "cuda";
