@@ -27,6 +27,7 @@ struct PointBandInfo {
   size_t n_member{0};
   bool permutable{false};
   std::vector<bool> coincident;
+  std::unordered_map<unsigned int, std::unordered_map<std::string, isl::pw_aff>> pa_list_map;
 };
 
 // data structure for recording tile band data

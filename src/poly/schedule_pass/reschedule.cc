@@ -330,6 +330,18 @@ PointBandInfo Reschedule::SavePointBand(const isl::schedule_node &node) {
   for (int k = 0; k < static_cast<int>(point_band_info.n_member); ++k) {
     point_band_info.coincident.push_back(band.member_get_coincident(k));
   }
+  isl::union_pw_aff_list upa_list = point_band_info.mupa.get_union_pw_aff_list();
+  for (unsigned int i = 0; i < upa_list.size(); ++i) {
+    isl::union_pw_aff upa = upa_list.get_at(i);
+    isl::pw_aff_list pa_list = upa.get_pw_aff_list();
+    std::unordered_map<std::string, isl::pw_aff> pa_map;
+    for (unsigned int j = 0; j < pa_list.size(); ++j) {
+      isl::pw_aff pa = pa_list.get_at(j);
+      std::string pa_name = pa.domain().get_tuple_name();
+      pa_map.insert(std::make_pair(pa_name, pa));
+    }
+    point_band_info.pa_list_map[i] = pa_map;
+  }
   return point_band_info;
 }
 
@@ -337,8 +349,40 @@ PointBandInfo Reschedule::SavePointBand(const isl::schedule_node &node) {
  * Input must be a band node.
  */
 isl::schedule_node Reschedule::SetPointBandInfo(isl::schedule_node node, const PointBandInfo &point_band_info) {
+  isl::multi_union_pw_aff mupa_origin = node.as<isl::schedule_node_band>().get_partial_schedule();
+  isl::union_pw_aff_list upa_list_origin = mupa_origin.get_union_pw_aff_list();
+  isl::pw_aff_list pa_list_origin = upa_list_origin.get_at(static_cast<int>(0)).get_pw_aff_list();
+  std::vector<std::string> pa_name_vector;
+  for (size_t i = 0; i < pa_list_origin.size(); ++i) {
+    std::string pa_name = pa_list_origin.get_at(i).domain().get_tuple_name();
+    pa_name_vector.emplace_back(pa_name);
+  }
+  isl::union_pw_aff_list upa_list_old = point_band_info.mupa.get_union_pw_aff_list();
+  isl::union_pw_aff_list upa_list_new = isl::union_pw_aff_list();
+  for (unsigned int i = 0; i < upa_list_old.size(); ++i) {
+    auto pa_map = point_band_info.pa_list_map.at(i);
+    isl::union_pw_aff upa = isl::union_pw_aff();
+    for (size_t j = 0; j < pa_name_vector.size(); ++j) {
+      auto it = pa_map.find(pa_name_vector.at(j));
+      if (it != pa_map.end()) {
+        isl::union_pw_aff upa_temp = isl::union_pw_aff(it->second);
+        if (upa.is_null()) {
+          upa = isl::union_pw_aff(upa_temp);
+        } else {
+          upa = upa.union_add(upa_temp);
+        }
+      }
+    }
+    if (upa_list_new.is_null()) {
+      upa_list_new = isl::union_pw_aff_list(upa);
+    } else {
+      upa_list_new = upa_list_new.add(upa);
+    }
+  }
+  isl::space space_old = point_band_info.mupa.get_space();
+  isl::multi_union_pw_aff mupa_new = isl::multi_union_pw_aff(space_old, upa_list_new);
   node = node.del();
-  node = node.insert_partial_schedule(point_band_info.mupa);
+  node = node.insert_partial_schedule(mupa_new);
   auto n = node.as<isl::schedule_node_band>().n_member();
   node = node.as<isl::schedule_node_band>().set_permutable(static_cast<int>(point_band_info.permutable));
   for (unsigned int j = 0; j < point_band_info.n_member && j < n; ++j) {
