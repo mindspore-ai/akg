@@ -25,8 +25,8 @@ Var GetAxisDescId(TileAxis *a) {
   return Var(var_name);
 }
 
-AxisInfo AxisInfoAdapter(TileAxis *a, TileSizes dims) {
-  auto axis_info = make_node<AxisInfoNode>();
+TuneAxisInfo AxisInfoAdapter(TileAxis *a, TileSizes dims) {
+  auto axis_info = make_node<TuneAxisInfoNode>();
   axis_info->index = a->index;
   if (a->axis_type_.empty()) {
     axis_info->dim_axis = std::to_string(a->dim_axis);
@@ -63,7 +63,7 @@ AxisInfo AxisInfoAdapter(TileAxis *a, TileSizes dims) {
     }
   }
   axis_info->var_names = a->var_names;
-  return AxisInfo(axis_info);
+  return TuneAxisInfo(axis_info);
 }
 
 void ScopInfoAdapter(TuneInfo *tune_info, ScopInfo *scop_info) {
@@ -96,7 +96,9 @@ void ScopInfoAdapter(TuneInfo *tune_info, ScopInfo *scop_info) {
   tune_info->analysis.Set("tensor_of_tensor", make_const(Int(32), scop_info->analysis_result_.GetTensorOfTensor()));
   tune_info->analysis.Set("enable_reduce_lib", make_const(Int(32), scop_info->user_config_.GetEnableAkgReduceLib()));
   tune_info->analysis.Set("enable_atomic_add", make_const(Int(32), scop_info->user_config_.GetEnableAtomicAdd()));
-  tune_info->analysis.Set("reduce_direction", StringImm::make(scop_info->analysis_result_.ShowReduceDirectionOfBand()));
+  for (int i = 0; i < scop_info->analysis_result_.GetOuterBandNumber(); ++i) {
+    tune_info->analysis.Set("reduce_direction_" + std::to_string(i), StringImm::make(scop_info->analysis_result_.ShowReduceDirectionOfBand(i)));
+  }
 }
 
 std::unique_ptr<TuneInfo> AdaptTuneInfo(const TilingAnalyzer &analyzer, ScopInfo *scop_info,
@@ -115,7 +117,7 @@ std::unique_ptr<TuneInfo> AdaptTuneInfo(const TilingAnalyzer &analyzer, ScopInfo
         }
         tune_info->analysis.Set("op_template", StringImm::make(t[0]));
       }
-      auto axis_info = make_node<AxisInfoNode>();
+      auto axis_info = make_node<TuneAxisInfoNode>();
       for (const auto attr : a->attrs) {
         if (axis_info->attrs.find(attr.attr_key) != axis_info->attrs.end()) {
           axis_info->attrs[attr.attr_key].push_back(attr.attr_value);
@@ -123,13 +125,13 @@ std::unique_ptr<TuneInfo> AdaptTuneInfo(const TilingAnalyzer &analyzer, ScopInfo
           axis_info->attrs[attr.attr_key] = {attr.attr_value};
         }
       }
-      tune_info->analysis.Set("root", AxisInfo(axis_info));
+      tune_info->analysis.Set("root", TuneAxisInfo(axis_info));
       return;
     }
 
     std::string name = GetAxisDescId(a)->name_hint;
     auto axis_info = AxisInfoAdapter(a, dims);
-    tune_info->analysis.Set(name, AxisInfo(axis_info));
+    tune_info->analysis.Set(name, TuneAxisInfo(axis_info));
     tune_info->axes_names.push_back(name);
   };
 
