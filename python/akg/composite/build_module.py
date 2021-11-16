@@ -191,7 +191,8 @@ def _get_online_tune_attr(desc_s, attrs, repo_path, use_new_space=True):
                                              use_new_space=use_new_space,
                                              attrs=attrs,
                                              generate_trait=generate_trait,
-                                             mode="online")
+                                             mode="online",
+                                             enable_transfer=True)
         best_config = auto_tune.tune_composite_v2(desc_s,
                                                   task_options=task_options)
     else:
