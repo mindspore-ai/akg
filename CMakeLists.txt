@@ -30,16 +30,6 @@ if(NOT CMAKE_SYSTEM_NAME MATCHES "Windows" AND NOT USE_KC_AIR AND NOT USE_LLVM)
   add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=0)
 endif()
 
-# Find gmp
-find_path(GMP_INCLUDE_DIR NAME gmp.h HINTS /usr /usr/local PATH_SUFFIXES include include/x86_64-linux-gnu)
-find_library(GMP_LIBRARY NAMES gmp HINTS /usr /usr/local PATH_SUFFIXES lib lib64 lib/x86_64-linux-gnu)
-if(NOT GMP_INCLUDE_DIR)
-  message(FATAL_ERROR "Please export CMAKE_INCLUDE_PATH to directory where gmp.h locates at.")
-endif()
-if(NOT GMP_LIBRARY)
-  message(FATAL_ERROR "Please export CMAKE_LIBRARY_PATH to directory where libgmp.so locates at.")
-endif()
-
 include(cmake/RT.cmake)
 include(cmake/utils.cmake)
 include(cmake/external_libs/isl.cmake)
@@ -368,9 +358,9 @@ add_library(akg SHARED ${COMPILER_SRCS} ${RUNTIME_SRCS} ${TOPI_SRCS} ${AKG_EXTEN
 add_dependencies(akg akg::isl_fixed)
 
 if (EXISTS ${AUTO_TUNE_LIB})
-  target_link_libraries(akg ${TVM_LINKER_LIBS} ${TVM_RUNTIME_LINKER_LIBS} akg::isl_fixed ${GMP_LIBRARY} pthread ${AUTO_TUNE_LIB})
+  target_link_libraries(akg ${TVM_LINKER_LIBS} ${TVM_RUNTIME_LINKER_LIBS} akg::isl_fixed pthread ${AUTO_TUNE_LIB})
 else()
-  target_link_libraries(akg ${TVM_LINKER_LIBS} ${TVM_RUNTIME_LINKER_LIBS} akg::isl_fixed ${GMP_LIBRARY} pthread)
+  target_link_libraries(akg ${TVM_LINKER_LIBS} ${TVM_RUNTIME_LINKER_LIBS} akg::isl_fixed pthread)
 endif()
 
 if(USE_CCE_PROFILING)

@@ -1,13 +1,12 @@
 set(ISL_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 
 message("ISL_DIR: ${ISL_DIR}")
-message("GMP_INCLUDE_DIR: ${GMP_INCLUDE_DIR}")
-message("GMP_LIBRARY: ${GMP_LIBRARY}")
 message("ISL_WRAP_DIR: ${ISL_WRAP_DIR}")
 
 include_directories("${ISL_WRAP_DIR}/include")
 include_directories("${ISL_DIR}/include")
 include_directories("${ISL_DIR}")
+include_directories("${ISL_DIR}/imath_wrap")
 
 set(ISL_SOURCES
     ${ISL_DIR}/basis_reduction_tab.c
@@ -86,8 +85,10 @@ set(ISL_SOURCES
     ${ISL_DIR}/isl_version.c
     ${ISL_DIR}/isl_vertices.c
     ${ISL_DIR}/print.c
-    ${ISL_DIR}/isl_gmp.c
-    ${ISL_DIR}/isl_val_gmp.c
+    ${ISL_DIR}/isl_imath.c
+    ${ISL_DIR}/imath_wrap/imath.c
+    ${ISL_DIR}/imath_wrap/imrat.c
+    ${ISL_DIR}/imath_wrap/gmp_compat.c
 )
 
 # The isl library is included in the (shared)  library.
@@ -105,7 +106,7 @@ target_include_directories(
   ${CMAKE_CURRENT_BINARY_DIR}
   ${GMP_INCLUDE_DIR}
 )
-target_link_libraries(isl_fixed ${GMP_LIBRARY})
+target_link_libraries(isl_fixed)
 
 # In order to print path as relative path in log, redefine macro __FILE__ as relative path
 function(file_macro_to_relative_path target_name)

@@ -1,7 +1,5 @@
 set(isl_USE_STATIC_LIBS ON)
 set(isl_CONFIG_FILE_DIR "-DISL_WRAP_DIR=${AKG_SOURCE_DIR}/third_party/isl_wrap")
-set(isl_DEPEND_INCLUDE_DIR "-DGMP_INCLUDE_DIR=${GMP_INCLUDE_DIR}")
-set(isl_DEPEND_LIB_DIR "-DGMP_LIBRARY=${GMP_LIBRARY}")
 
 akg_add_pkg(isl
         VER 0.22
