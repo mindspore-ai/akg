@@ -96,73 +96,163 @@
             }
         }
     },
+
+    "9.Gather47.Gather47.Add12.Mul1.GreaterEqual12.Cast1.Maximum34.Exp1.GatherNd1317.Add117.Mul13.Mul16.Mul1.Sub23.Add12.UnsortedSegmentSum121.UnsortedSegmentSum223.InplaceAssign1119.InplaceAssign1319.27": {
+        "metadata": {
+            "attrs": {
+                "enable_one_dim_thread": true
+            }
+        },
+        "198020_8_1.84120742_8_1.84120742-.84120742_1.198020_8_1----": {
+            "float32-.int32--.float32----": {
+                "dim": "0 0 8 1 - t0 0 1 128 1 b0 t1",
+                "bind_thread": "8 128",
+                "bind_block": "657193"
+            }
+        },
+        "232965_8_1.114848857_8_1.114848857-.114848857_1.232965_8_1----": {
+            "float32-.int32--.float32----": {
+                "dim": "0 0 8 1 - t0 0 1 128 1 b0 t1",
+                "bind_thread": "8 128",
+                "bind_block": "897257"
+            }
+        }
+    },
     "8.Gather36.Gather35.Add12.Mul1.Maximum12.Exp1.Gather1011.RealDiv12.GatherNd1516.Mul12.UnsortedSegmentSum116.InplaceAssign1112.19": {
+        "metadata": {
+            "attrs": {
+                "enable_one_dim_thread": true
+            }
+        },
         "232965_1_41.114848857_1.114848857.232965_1_1.114848857.232965_1_1-.232965_1_41-": {
             "float32.int32-.float32.int32.float32---": {
-                "dim": "0 0 128 1 0 1 41 1",
-                "bind_thread": "128",
-                "bind_block": "897257"
+                "dim": "0 0 14756 1 b0 t1 0 1 41 1 - t0",
+                "bind_block": "7784",
+                "bind_thread": "32 9"
             }
         },
         "232965_8_8.114848857_1.114848857.232965_8_1.114848857.232965_8_1-.232965_8_8-": {
             "float32.int32-.float32.int32.float32---": {
-                "dim": "0 0 128 1 0 1 8 1 0 2 8 1",
+                "dim": "0 0 128 1 b0 t1 0 1 8 1 - t0 0 2 8 1 - -",
                 "bind_thread": "8 128",
-                "bind_block": "1 65535"
+                "bind_block": "897257"
             }
         },
         "198020_1_41.84120742_1.84120742.198020_1_1.84120742.198020_1_1-.198020_1_41-" : {
            "float32.int32-.float32.int32.float32---": {
-                "dim": "0 0 128 1 0 1 41 1",
-                "bind_thread": "128",
-                "bind_block": "657193"
+                "dim": "0 0 14756 1 b0 t1 0 1 41 1 - t0",
+                "bind_block": "5701",
+                "bind_thread": "32 9"
            }
         },
         "198020_8_8.84120742_1.84120742.198020_8_1.84120742.198020_8_1-.198020_8_8-": {
             "float32.int32-.float32.int32.float32---": {
-                "dim": "0 0 128 1 b0 t1 0 1 8 1 - t0 0 2 8 1 - -",
-                "bind_thread": "8 128",
-                "bind_block": "657193"
+                "dim": "0 0 16 1 b0 t2 0 1 8 1 - t1 0 2 8 1 - t0",
+                "bind_thread": "8 8 16",
+                "bind_block": "5257547"
             }
         }
     },
-    "8.Gather34.Gather23.Add12.Mul1.Maximum12.Exp1.RealDiv114.Gather1114.Mul12.TensorScatterAdd11415.InplaceAssign1116.18": {
-        "114848857_1_1.232965_1_41-.114848857_1.114848857.232965_1_1-.114848857.232965_1_41": {
-            "float32--.int32-.float32-.int32.float32": {
-                "dim": "0 0 128 1 0 1 41 1",
-                "bind_thread": "128",
-                "bind_block": "897257"
+    "5.Gather15.Mul15.TensorScatterAdd145.InplaceAssign116.8": {
+        "metadata": {
+            "attrs": {
+                "enable_one_dim_thread": true
             }
         },
-        "84120742_1_1.198020_1_41-.84120742_1.84120742.198020_1_1-.84120742.198020_1_41": {
-            "float32--.int32-.float32-.int32.float32": {
-                "dim": "0 0 128 1 0 1 41 1",
-                "bind_thread": "128",
-                "bind_block": "657193"
+        "198020_1_41.84120742_1_1.198020_1_41.84120742_1.84120742.198020_1_41": {
+            "float32--.int32-.float32": {
+                "dim": "0 0 14756 1 b0 t1 0 1 41 1 - t0",
+                "bind_block": "5701",
+                "bind_thread": "32 9"
+            }
+        },
+        "232965_1_41.114848857_1_1.232965_1_41.114848857_1.114848857.232965_1_41": {
+            "float32--.int32-.float32": {
+                "dim": "0 0 14756 1 b0 t1 0 1 41 1 - t0",
+                "bind_block": "7784",
+                "bind_thread": "32 9"
             }
         }
     },
     "4.Gather34.GatherNd23.Mul12.ReduceSum1.7": {
         "metadata": {
             "attrs": {
-                "enable_akg_reduce_lib": false
+                "enable_one_dim_thread": true
             }
         },
         "198020_1_41.84120742.198020_1_41.84120742_1.84120742":{
             "float32.int32.float32.int32.float32":{
-                "dim": "0 0 24 1 0 1 41 1",
-                "bind_block":"82150",
-                "bind_thread":"41 24"
+                "dim": "0 0 128 1 b0 t0 0 1 41 1 - -",
+                "bind_block":"657194",
+                "bind_thread":"128"
             }
         },
         "198020_8_8.84120742.198020_8_8.84120742_1.84120742_8": {
             "float32.int32.float32.int32.float32": {
                 "dim": "0 0 128 1 b0 t1 0 1 8 1 - t0 0 2 8 1 - -",
                 "bind_thread": "8 128",
-                "bind_block": "657193"
+                "bind_block": "657194"
+            }
+        },
+        "232965_1_41.114848857.232965_1_41.114848857_1.114848857":{
+            "float32.int32.float32.int32.float32":{
+                "dim": "0 0 128 1 b0 t0 0 1 41 1 - -",
+                "bind_block":"897257",
+                "bind_thread":"128"
+            }
+        },
+        "232965_8_8.114848857.232965_8_8.114848857_1.114848857_8": {
+            "float32.int32.float32.int32.float32": {
+                "dim": "0 0 128 1 b0 t1 0 1 8 1 - t0 0 2 8 1 - -",
+                "bind_thread": "8 128",
+                "bind_block": "897257"
             }
         }
     },
+    "5.Reshape2.Gather26.Gather46.Add12.Mul1.Maximum12.Exp1.TensorScatterAdd1710.InplaceAssign1211.13": {
+        "metadata": {
+            "attrs": {
+                "enable_one_dim_thread": true
+            }
+        },
+        "198020_8_1--.84120742-.84120742_8_1": {
+            "float32--.int32-.float32": {
+                "dim": "0 0 8 1 - t0 0 1 128 1 b0 t1",
+                "bind_thread": "8 128",
+                "bind_block": "657193"
+            }
+        },
+        "232965_8_1--.114848857-.114848857_8_1": {
+            "float32--.int32-.float32": {
+                "dim": "0 0 8 1 - t0 0 1 128 1 b0 t1",
+                "bind_thread": "8 128",
+                "bind_block": "897257"
+            }
+        }
+    },
+    "5.Reshape1.Gather36.Mul16.TensorScatterAdd136.InplaceAssign117.9": {
+        "metadata": {
+            "attrs": {
+                "enable_one_dim_thread": false
+            }
+        },
+        "198020_8_8.84120742_8_1.198020_8_8.84120742-.198020_8_8": {
+            "float32--.int32-.float32": {
+                "dim": "0 0 16 1 b0 t2 0 1 8 1 - t1 0 2 8 1 - t0",
+                "bind_thread": "8 8 16",
+                "bind_block": "5257547"
+            }
+        },
+        "232965_8_8.114848857_8_1.232965_8_8.114848857-.232965_8_8": {
+            "float32--.int32-.float32": {
+                "dim": "0 0 16 1 b0 t2 0 1 8 1 - t1 0 2 8 1 - t0",
+                "bind_thread": "8 8 16",
+                "bind_block": "7178054"
+            }
+        }
+    },
+
+
     "4.Reshape2.Gather25.TensorScatterAdd125.InplaceAssign116.7": {
         "metadata": {
             "attrs": {
@@ -205,6 +295,29 @@
             }
         }
     },
+
+
+    "4.Gather12.TensorScatterAdd145.InplaceAssign116.6": {
+        "metadata": {
+            "attrs": {
+                "enable_one_dim_thread": true
+            }
+        },
+        "198020_41.84120742_1.198020_41.84120742.198020_41": {
+            "float32.int32.float32.int32.float32": {
+                "dim": "0 0 14756 1 b0 t1 0 1 41 1 - t0",
+                "bind_block": "5701",
+                "bind_thread": "32 9"
+            }
+        },
+        "232965_41.114848857_1.232965_41.114848857.232965_41": {
+            "float32.int32.float32.int32.float32": {
+                "dim": "0 0 14756 1 b0 t1 0 1 41 1 - t0",
+                "bind_block": "7784",
+                "bind_thread": "32 9"
+            }
+        }
+    },
     "5.Mul23.Mul1.Mul16.ReduceSum1.Mul29.InplaceAssign126.10" : {
         "metadata": {
             "attrs": {
@@ -212,22 +325,44 @@
             }
         }
     },
-    "9.Gather47.Gather47.Add12.Mul1.GreaterEqual12.Cast1.Maximum34.Exp1.GatherNd1317.Add117.Mul13.Mul16.Mul1.Sub23.Add12.UnsortedSegmentSum121.UnsortedSegmentSum223.InplaceAssign1119.InplaceAssign1319.27": {
-        "198020_8_1.84120742_8_1.84120742-.84120742_1.198020_8_1----": {
-            "float32-.int32--.float32----": {
-                "dim": "0 0 1 1 0 1 1024 1",
-                "bind_block": "82150",
-                "bind_thread": "1024"
+    "4.GatherNd24.UnsortedSegmentSum14.InplaceAssign113.6": {
+        "metadata": {
+            "attrs": {
+                "enable_one_dim_thread": true
+            }
+        },
+        "232965_41.114848857_1.114848857.232965_41-": {
+            "float32.int32-.float32-": {
+                "dim": "0 0 14756 1 b0 t1 0 1 41 1 - t0",
+                "bind_block": "7784",
+                "bind_thread": "32 9"
+            }
+        },
+        "198020_41.84120742.84120742_1.198020_41-": {
+            "float32.int32-.float32-": {
+                "dim": "0 0 14756 1 b0 t1 0 1 41 1 - t0",
+                "bind_block": "5701",
+                "bind_thread": "32 9"
             }
         }
     },
-    "4.Gather12.TensorScatterAdd145.InplaceAssign116.6": {
-        "198020_41.84120742_1.198020_41.84120742.198020_41": {
-            "float32.int32.float32.int32.float32": {
+
+
+    "8.Gather34.Gather23.Add12.Mul1.Maximum12.Exp1.RealDiv114.Gather1114.Mul12.TensorScatterAdd11415.InplaceAssign1116.18": {
+        "114848857_1_1.232965_1_41-.114848857_1.114848857.232965_1_1-.114848857.232965_1_41": {
+            "float32--.int32-.float32-.int32.float32": {
+                "dim": "0 0 128 1 0 1 41 1",
+                "bind_thread": "128",
+                "bind_block": "897257"
+            }
+        },
+        "84120742_1_1.198020_1_41-.84120742_1.84120742.198020_1_1-.84120742.198020_1_41": {
+            "float32--.int32-.float32-.int32.float32": {
                 "dim": "0 0 128 1 0 1 41 1",
                 "bind_thread": "128",
                 "bind_block": "657193"
             }
         }
     }
+
 }
