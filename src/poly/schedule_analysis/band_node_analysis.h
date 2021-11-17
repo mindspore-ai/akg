@@ -33,16 +33,20 @@ class AnalyzeBandNode {
 
  private:
   void CollectStmtInfo();
+  void AnalyzeGemmAxes(const ProvideEntry &pe);
+  void AnalyzeScheduleTreeTemplate();
   void AnalyzeOuterBandTemplate();
   void ShowBandInfo();
   void AnalyzeAxisPosition();
   void DetermineTemplateOfBand(BandNode *bn);
   void SetVectorizationAxis(const isl::schedule_node &orig_node, const int index);
+  bool IsGemmTempleteInBand(BandNode *bn);
   int GetElemVectorizationAxisPos(const isl::schedule_node &orig_node);
 
   std::string target_;
   const isl::schedule &sch_;
   ScopInfo &scop_info_;
+  std::vector<const Provide *> gemm_provides_;
   std::unordered_map<isl::id, std::pair<std::string, ReduceDirection>, isl::IslIdIslHash> stmt_info_;
 };
 

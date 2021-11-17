@@ -13,8 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef OPERATOR_TYPE_ANALYSIS_H
-#define OPERATOR_TYPE_ANALYSIS_H
+#ifndef OPERATOR_INFO_COLLECTOR_H
+#define OPERATOR_INFO_COLLECTOR_H
 
 #include "poly/scop_info.h"
 
@@ -42,7 +42,6 @@ class OpTypeCollector : public IRVisitor {
   std::unordered_map<const For *, std::vector<ProvideEntry>> provides_ana_;
 
  private:
-  void AnalyzeOpTemplate();
   void WriteToScopInfo();
   void Dump();
 
@@ -53,7 +52,6 @@ class OpTypeCollector : public IRVisitor {
   void Visit_(const IfThenElse *op) final;
 
   void AnalyzeProvide(const Provide *op);
-  void AnalyzeGemmAxes(const ProvideEntry &pe);
   TensorEntry MatchLoopByName(TensorEntry tensor);
   std::string GetBasicOpType(const TensorEntry dst, const std::vector<TensorEntry> &srcs);
   TensorEntry MakeTensorEntry(const ToTTensor &tot);
@@ -74,4 +72,4 @@ class OpTypeCollector : public IRVisitor {
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg
-#endif  // OPERATOR_TYPE_ANALYSIS_H
+#endif  // OPERATOR_INFO_COLLECTOR_H
