@@ -17,7 +17,7 @@
 #include "poly/scop.h"
 #include "poly/scop_builder.h"
 #include "poly/schedule_analysis/gpu_dma_analysis.h"
-#include "poly/schedule_analysis/operator_type_analysis.h"
+#include "poly/schedule_analysis/operator_info_collector.h"
 #include "poly/schedule_analysis/band_node_analysis.h"
 
 namespace akg {
