@@ -272,7 +272,11 @@ void TilingGenerator::ConvertVarTilesToDims() {
       dimInfo.c1_tiling_size = c1->value;
     } else {
       int64_t l1_base = analyzer_.op_type_ == CONV_OP ? 1 : dimInfo.c0_tiling_size;
-      dimInfo.c1_tiling_size = CalL1VarTiling(l1_base, axis);
+      if (analyzer_.scop_info_.analysis_result_.IsCsrDynamicExtent(axis->range_extent)) {
+        dimInfo.c1_tiling_size = analyzer_.scop_info_.user_config_.GetCsrThreadNum();
+      } else {
+        dimInfo.c1_tiling_size = CalL1VarTiling(l1_base, axis);
+      }
       prev_tiling_.emplace_back(dimInfo.c1_tiling_size);
       dimInfo.c1_var = c1_val;
       if (c1_val.as<Variable>()) {
@@ -392,7 +396,7 @@ std::pair<TileSizes, std::deque<ParamInfo>> GenerateTiling(const isl::schedule &
     return std::make_pair(dims, param_info);
   }
   TilingGenerator generator(analyzer);
-  if (analyzer.scop_info_.user_config_.GetIsDynamic()) {
+  if (analyzer.scop_info_.user_config_.GetIsDynamic() || analyzer.scop_info_.analysis_result_.GetCsr()) {
     std::tie(dims, param_info) = generator.GenerateDynamic();
   } else if ((scop_info.user_config_.GetPragmaSpeedUpTiling() && analyzer.op_type_ == VECTOR_OP) ||
              !g_attrs.GetStr(kErrorInfo, "").empty() || analyzer.scop_info_.user_config_.GetTarget() == TARGET_CUDA ||

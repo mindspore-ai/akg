@@ -368,11 +368,7 @@ std::string OpTypeCollector::GetBasicOpType(const TensorEntry dst, const std::ve
     if (dst_vars_size < src_vars_size) {
       if (d.loops.size() < s.loops.size() && d.name != s.name) {
         // A[i,0] = B[i,j]
-        if (g_csr.empty()) {
-          return type + AT_REDUCE;
-        } else {
-          return type + AT_BROADCAST;
-        }
+        return type + AT_REDUCE;
       } else {
         return type + "UNKNOWN";
       }

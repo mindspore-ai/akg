@@ -167,6 +167,7 @@ class TileAxis {
   std::unordered_map<std::string, std::vector<int>> data_size;
   int64_t range_min;
   Expr range_extent;
+  int64_t extent_val;
   Constraint c1_constraints;
   Constraint c0_constraints;
   MappingConstraint block_constraints;

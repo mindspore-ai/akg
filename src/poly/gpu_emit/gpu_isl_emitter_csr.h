@@ -18,21 +18,32 @@
 
 #include "ir_pass.h"
 #include "gpu_isl_emitter.h"
+#include "gpu_isl_emitter_reduce.h"
 
 namespace akg {
 namespace ir {
 namespace poly {
 
-class GpuIslEmitterCsr : public GpuIslEmitter {
+class GpuIslEmitterCsr : virtual public GpuIslEmitter {
  public:
   GpuIslEmitterCsr(ScopInfo &info, const NodeInfoRepo &n, const isl::id_list &i) : GpuIslEmitter(info, n, i) {}
   ~GpuIslEmitterCsr() override = default;
-  
+
+ private:
   Stmt EmitAccessNodeCall(const Node *node, const VarMap &var_map_tmp, BufferedFootPrintInfo &buffer_fp_info) final;
   Stmt EmitAccessNodeFromPromoteAcsCall(isl::id var, const Node *node, Array<Expr> &args) final;
-  Stmt EmitIf(const isl::ast_node_if &node) final;
+  Stmt EmitFor(const isl::ast_node_for &node) final;
   Stmt SubstituteTensorStmt(const Stmt &s, Tensor origin, Tensor replaced) final;
   Stmt EmitTensorOfTensorStmt(const Stmt &s) final;
+
+  bool csr_dynamic_scope_{false};
+};
+
+class GpuIslEmitterCsrReduce : public GpuIslEmitterCsr, public GpuIslEmitterReduce {
+ public:
+  GpuIslEmitterCsrReduce(ScopInfo &info, const NodeInfoRepo &n, const isl::id_list &i) :
+    GpuIslEmitter(info, n, i), GpuIslEmitterCsr(info, n, i), GpuIslEmitterReduce(info, n, i) {}
+  ~GpuIslEmitterCsrReduce() override = default;
 };
 
 }  // namespace poly

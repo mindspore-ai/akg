@@ -65,6 +65,11 @@
  *   Add need_random_lib_.
  */
 
+/*
+ * 2021.11.17
+ *   Add csr_loop_stride for csr.
+ */
+
 #ifndef TVM_CODEGEN_CODEGEN_CUDA_H_
 #define TVM_CODEGEN_CODEGEN_CUDA_H_
 
@@ -174,6 +179,8 @@ class CodeGenCUDA final : public CodeGenC {
   // do not set value to next LetStmt if true
   bool no_init_value{false};
   // ignore next allocate stmt if true (trick to bypass some tests)
+  int csr_loop_stride{1};
+  // custom loop stride
 //  bool ignore_next_allocate{false};
 
   // add for TensorCore

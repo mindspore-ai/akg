@@ -15,6 +15,8 @@
  */
 #include "./tiling_strategy_manager.h"
 
+#include <algorithm>
+#include <cmath>
 #include <numeric>
 #include <build_module.h>
 #include "../../src/include/build_module.h"
@@ -308,6 +310,8 @@ void ReduceStrategy::AddGpuConstraint() {
     }
     if (auto ext = axis->range_extent.as<IntImm>()) {
       reduce_length *= ext->value;
+    } else if (analyzer_->scop_info_.analysis_result_.IsCsrDynamicExtent(axis->range_extent)) {
+      reduce_length = analyzer_->scop_info_.user_config_.GetCsrThreadNum();
     }
     if (std::count(reduce_axes_.begin(), reduce_axes_.end(), axis)) {
       return;
@@ -385,10 +389,9 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu() {
   int64_t reduce_threads = 1;
 
   for (auto axis : reduce_axes_) {
-    CHECK(axis->range_extent.as<IntImm>());
-    total_reduce_size *= axis->range_extent.as<IntImm>()->value;
+    total_reduce_size *= axis->extent_val;
     if (axis->block_constraints.map_extent_ == 0) {
-      possible_reduce_blocks *= axis->range_extent.as<IntImm>()->value;
+      possible_reduce_blocks *= axis->extent_val;
     } else {
       possible_reduce_blocks *= axis->block_constraints.map_extent_;
     }
@@ -403,10 +406,9 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu() {
   int64_t injective_threads = 1;
 
   for (auto axis : injective_axes_) {
-    CHECK(axis->range_extent.as<IntImm>());
-    total_injective_size *= axis->range_extent.as<IntImm>()->value;
+    total_injective_size *= axis->extent_val;
     if (axis->block_constraints.map_extent_ == 0) {
-      possible_injective_blocks *= axis->range_extent.as<IntImm>()->value;
+      possible_injective_blocks *= axis->extent_val;
     } else {
       possible_injective_blocks *= axis->block_constraints.map_extent_;
     }
@@ -1160,34 +1162,25 @@ void GpuStrategy::BuildAxesQueue() {
       return;
     }
     const auto r = axis->range_extent.as<IntImm>();
+    int extent = axis->extent_val;
     // For Conv, kh and kw are invalid for pending_axes
-    if (r && r->value > 0 && !axis->is_inner) {
-      this->pending_axes_.push_front(std::make_pair(axis, r->value));
+    if (!axis->is_inner && extent > 0) {
+      this->pending_axes_.push_front(std::make_pair(axis, extent));
     }
-
-    if (axis->range_extent.as<Variable>() != nullptr && !g_csr.empty()) {
+    
+    // init map extent to shape if they are not modified by other constraints
+    axis->block_constraints.map_extent_ =
+      axis->block_constraints.map_extent_ == 0 ? r->value : axis->block_constraints.map_extent_;
+    axis->thread_constraints.map_extent_ =
+      axis->thread_constraints.map_extent_ == 0 ? r->value : axis->thread_constraints.map_extent_;
+    if (!axis->mc_sup && !analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib()) {
       axis->block_constraints.map_extent_ = 1;
       axis->thread_constraints.map_extent_ = 1;
       std::stringstream ss;
-      ss << "Axis " << axis->index << "_" << axis->dim_axis
-         << " has a dynamic extent, disable block/thread mapping.";
-      analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
-      axis->c1_constraints.tile_extent_ = 1;
-    } else {
-      // init map extent to shape if they are not modified by other constraints
-      axis->block_constraints.map_extent_ =
-        axis->block_constraints.map_extent_ == 0 ? r->value : axis->block_constraints.map_extent_;
-      axis->thread_constraints.map_extent_ =
-        axis->thread_constraints.map_extent_ == 0 ? r->value : axis->thread_constraints.map_extent_;
-      if (!axis->mc_sup && !analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib()) {
-        axis->block_constraints.map_extent_ = 1;
-        axis->thread_constraints.map_extent_ = 1;
-        std::stringstream ss;
-        ss << "Axis " << axis->index << "_" << axis->dim_axis 
-           << " Coincidence = 0 and Akg-reduce-lib not enabled, disable block/thread mapping.";
-        analyzer_->GetTileLogger().AppendLog(GPU_MAPPING,  ss);
-      }
-    } 
+      ss << "Axis " << axis->index << "_" << axis->dim_axis 
+          << " Coincidence = 0 and Akg-reduce-lib not enabled, disable block/thread mapping.";
+      analyzer_->GetTileLogger().AppendLog(GPU_MAPPING,  ss);
+    }
   });
 }
 
@@ -1291,7 +1284,12 @@ void GpuStrategy::InnerThreadOuterBlock() {
     auto item = elem_per_thread_[inner_dim] == SpItemPerThread::AUTO ? axis->thread_constraints.item_process_
                                                                      : elem_per_thread_[inner_dim];
     item = std::min(item, max_elem_per_thread_);
-    auto use = GetThreadSize(rest_threads, inner_dim, shape, item);
+    int64_t use;
+    if (analyzer_->scop_info_.analysis_result_.IsCsrDynamicExtent(axis->range_extent)) {
+      use = analyzer_->scop_info_.user_config_.GetCsrThreadNum();
+    } else {
+      use = GetThreadSize(rest_threads, inner_dim, shape, item);
+    }
     if (axis->forbid_iso && shape % use != 0) {
       auto aligned_use = analyzer_->FindDivisibleTilingFactor(use, shape);
       bool efficient =
@@ -1397,8 +1395,7 @@ void GpuStrategy::InnerThreadOuterBlock() {
       axis->MarkWithAttr(AttrInfo{AT_BLOCK_CFG, attr_value});
     }
 
-    CHECK(axis->range_extent.as<IntImm>());
-    auto extent = axis->range_extent.as<IntImm>()->value;
+    auto extent = axis->extent_val;
     auto thread_size = axis->thread_constraints.map_extent_;
     auto upper = std::max<int64_t>(ceil(static_cast<float>(extent) / use), 1);
     bool partial_block_and_thread = (axis->c1_constraints.tile_min_.as<IntImm>()->value > upper) && (use > thread_size);
@@ -1512,9 +1509,6 @@ void GpuStrategy::SetBlockMappingConfig() {
     int axis_pos = cfg_map.first->dim_axis;
     int mapping_pos = is_conv ? cfg_map.second : cfg_map.second - difference;
     int real_pos = (is_conv && mapping_pos >= mapping_size) ? mapping_pos - 1 : mapping_pos;
-    if (!g_csr.empty() && real_pos >= block_count_) {
-      continue;
-    }
     analyzer_->scop_info_.user_config_.RecordOuterMappingStrategy(axis_pos, mapping_axis_pos[real_pos]);
     ss << "Map axis " << cfg_map.first->index << "_" << axis_pos << " to " << BLOCK_STR + mapping_idx_pos_[real_pos]
        << "; ";
@@ -1566,7 +1560,7 @@ int64_t GpuStrategy::GetThreadSize(const int64_t rest_threads, size_t inner_dim,
 
 int64_t GpuStrategy::TileAfterThreadMapping(TileAxis *axis, size_t inner_dim, int64_t thread_size, const int64_t item) {
   std::stringstream ss;
-  auto shape = axis->range_extent.as<IntImm>()->value;
+  auto shape = axis->extent_val;
   auto tile_min = axis->c1_constraints.tile_min_.as<IntImm>()->value;
   auto tile_mod = axis->c1_constraints.tile_mod_.as<IntImm>()->value;
   auto tile_extent = axis->c1_constraints.tile_extent_.as<IntImm>()->value;
@@ -1689,7 +1683,7 @@ void GpuStrategy::InjectiveSpeedup() {
       return;
     }
     injective_axes.emplace_back(axis);
-    problem_size *= axis->range_extent.as<IntImm>()->value;
+    problem_size *= axis->extent_val;
   });
 
   auto WriteConfigBack = [this, &injective_axes, &ss]() {
@@ -1699,7 +1693,9 @@ void GpuStrategy::InjectiveSpeedup() {
          << injective_axes[i]->thread_constraints.map_extent_;
       analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
       block_cfg_[i] = injective_axes[i]->block_constraints.map_extent_;
-      thread_cfg_[injective_axes.size() - 1 - i] = injective_axes[i]->thread_constraints.map_extent_;
+      if (g_csr.empty()) {
+        thread_cfg_[injective_axes.size() - 1 - i] = injective_axes[i]->thread_constraints.map_extent_;
+      }
     }
   };
 
@@ -1707,7 +1703,7 @@ void GpuStrategy::InjectiveSpeedup() {
   auto total_threads = std::accumulate(thread_cfg_.begin(), thread_cfg_.end(), 1, std::multiplies<int>());
   for (size_t i = 0; i < injective_axes.size(); ++i) {
     auto axis = injective_axes[i];
-    auto shape = axis->range_extent.as<IntImm>()->value;
+    auto shape = axis->extent_val;
     auto tile_size = axis->c1_constraints.tile_extent_.as<IntImm>()->value;
     auto thread_size = axis->thread_constraints.map_extent_;
     if (shape % thread_size == 0) {
@@ -1871,7 +1867,7 @@ void GpuStrategy::PadSpeedup() {
     if (axis == analyzer_->RootAxis() || axis->range_extent.as<IntImm>() == nullptr) {
       return;
     }
-    problem_size *= axis->range_extent.as<IntImm>()->value;
+    problem_size *= axis->extent_val;
     axes.emplace_back(axis);
   });
   auto coef = std::max<int64_t>(1, static_cast<int64_t>((problem_size / warp_sizes_) / (num_sm_ * 5)));
@@ -1880,7 +1876,7 @@ void GpuStrategy::PadSpeedup() {
   for (int i = axes.size() - 1; i > 0; --i) {
     auto axis = axes[i];
     axis->thread_constraints.item_process_ = std::max<int64_t>(
-      min_elem_for_io_bound_, analyzer_->FindDivisibleTilingFactor(coef, axis->range_extent.as<IntImm>()->value));
+      min_elem_for_io_bound_, analyzer_->FindDivisibleTilingFactor(coef, axis->extent_val));
     coef = std::max<int64_t>(1, coef / axis->thread_constraints.item_process_);
     ss << "axis " << axis->index << "_" << axis->dim_axis
        << " set for-loop size = " << axis->thread_constraints.item_process_ << ", update coef = " << coef;
@@ -1899,7 +1895,7 @@ void GpuStrategy::BroadcastSpeedup() {
       return;
     }
     ++depth;
-    fused_size_ = axis->range_extent.as<IntImm>()->value;
+    fused_size_ = axis->extent_val;
   });
   // Only deal with broadcast + elemwise cases that all axes are fused into one.
   auto mod_axes = analyzer_->GetAxesContainsAttr(AT_MOD);
@@ -2354,6 +2350,36 @@ void ShiftAxisStrategy::AddGpuConstraint() {
     axis->block_constraints.map_extent_ = 1;
     axis->thread_constraints.map_extent_ = 1;
   }
+}
+
+void CsrStrategy::AddGpuConstraint() {
+  analyzer_ ->ForEachAxisTopDown([this](TileAxis *axis) {
+    if (axis == this->analyzer_->RootAxis()) {
+      return;
+    }
+    if (analyzer_->scop_info_.analysis_result_.IsCsrDynamicExtent(axis->range_extent)) {
+      int csr_thread_num;
+      int csr_avg_row = analyzer_->scop_info_.user_config_.GetCsrAvgRow();
+      if (csr_avg_row <= 0) {
+        csr_thread_num = analyzer_->scop_info_.user_config_.GetCsrThreadNum();
+      } else {
+        float warp_base_raw = std::log2(static_cast<float>(csr_avg_row) / WARP_SIZE);
+        int warp_base;
+        if (analyzer_->scop_info_.analysis_result_.GetOpTemplate() == Template::REDUCTION) {
+          warp_base = std::clamp(static_cast<int>(std::floor(warp_base_raw)), 0, 2);
+        } else {
+          warp_base = std::clamp(static_cast<int>(std::ceil(warp_base_raw)), 0, 5);
+        }
+        csr_thread_num = static_cast<int>(std::exp2(warp_base)) * WARP_SIZE;
+        analyzer_->scop_info_.user_config_.SetCsrThreadNum(csr_thread_num);
+      }
+      axis->block_constraints.map_extent_ = 1;
+      axis->thread_constraints.map_extent_ = csr_thread_num;
+      axis->c1_constraints.tile_extent_ = csr_thread_num;
+    } else {
+      axis->thread_constraints.map_extent_ = 1;
+    }
+  });
 }
 
 // No constraint found in cuda

@@ -79,6 +79,7 @@ from tests.operators.test_op.test_ms_reduce_prod import test_ms_reduce_prod
 from tests.operators.test_op.test_ms_csrmv import test_ms_csrmv
 from tests.operators.test_op.test_csr_reduce_sum import test_csr_reduce_sum
 from tests.operators.test_op.test_csr_mul import test_csr_mul
+from tests.operators.test_op.test_csr_div import test_csr_div
 
 def add(poly_sch, fuzz_shape, attrs):
     if fuzz_shape:
@@ -714,6 +715,16 @@ def csr_mul(poly_sch, fuzz_shape, attrs):
     test_csr_mul((1, 800), (1987, 800), 'float32', 'int32', poly_sch=poly_sch, attrs=attrs)
     test_csr_mul((1987, 800), (1987, 800), 'float32', 'int32', poly_sch=poly_sch, attrs=attrs)
 
+def csr_div(poly_sch, fuzz_shape, attrs):
+    if fuzz_shape:
+        input_shape = fuzz_shape
+        test_csr_div(input_shape, fuzz_shape, 'float32', 'int32', poly_sch=poly_sch, attrs=attrs)
+        return
+    test_csr_div((800,), (1987, 800), 'float32', 'int32', poly_sch=poly_sch, attrs=attrs)
+    test_csr_div((1987, 1), (1987, 800), 'float32', 'int32', poly_sch=poly_sch, attrs=attrs)
+    test_csr_div((1, 800), (1987, 800), 'float32', 'int32', poly_sch=poly_sch, attrs=attrs)
+    test_csr_div((1987, 800), (1987, 800), 'float32', 'int32', poly_sch=poly_sch, attrs=attrs)
+
 
 class Logger(object):
     def __init__(self, filename, stream):
@@ -770,7 +781,8 @@ if __name__ == '__main__':
               "reduce_or": reduce_or, "reshape": reshape, "round": round_op, "rsqrt": rsqrt, "select": select,
               "sub": sub, "tensor_scatter_add": tensor_scatter_add, "tile": tile, "trans_data": trans_data,
               "unsorted_segment_sum": unsorted_segment_sum, "standard_normal": standard_normal,
-              "reduce_prod": reduce_prod, "csrmv": csrmv, "csr_reduce_sum": csr_reduce_sum, "csr_mul": csr_mul,
+              "reduce_prod": reduce_prod, 
+              "csrmv": csrmv, "csr_reduce_sum": csr_reduce_sum, "csr_mul": csr_mul, "csr_div": csr_div,
               }
     options, args = getopt.getopt(
         sys.argv[1:], "f:t:r:p", ["fuzz=", "target=", "mind-trick-string=", "mind-trick-file=",

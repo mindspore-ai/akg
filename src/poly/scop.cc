@@ -286,7 +286,9 @@ Stmt GenHalide(ScopInfo &info, const isl::schedule &sch, bool used_for_tile_out_
     if (info.user_config_.GetTarget() == TARGET_CCE) {
       stmt = NPUIslEmitter(info, node_info_repo, iters).Emit(ast_node);
     } else if (info.user_config_.GetTarget() == TARGET_CUDA) {
-      if (info.analysis_result_.GetUseGpuReduceLib()) {
+      if (info.analysis_result_.GetUseGpuReduceLib() && info.analysis_result_.GetCsr()) {
+        stmt = GpuIslEmitterCsrReduce(info, node_info_repo, iters).Emit(ast_node);
+      } else if (info.analysis_result_.GetUseGpuReduceLib()) {
         stmt = GpuIslEmitterReduce(info, node_info_repo, iters).Emit(ast_node);
       } else if (info.user_config_.GetEnableTensorCore()) {
         stmt = GpuIslEmitterTensorCore(info, node_info_repo, iters).Emit(ast_node);

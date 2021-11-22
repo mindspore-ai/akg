@@ -18,7 +18,8 @@
 import akg.topi as topi
 from akg import tvm
 from akg.tvm.hybrid import script
-from akg.utils.format_transform import get_const
+from akg.utils.format_transform import get_const, get_shape
+from akg.utils.dsl_create import get_broadcast_shape
 from akg.utils import validation_check as vc_util
 
 import logging
@@ -707,3 +708,50 @@ def standard_normal(inputs, attrs):
                       dtype=dtype,
                       out_buffers=[out_buf],
                       name=output_name)
+
+@tvm.register_func("CSRDiv")
+def csr_div(inputs, attrs):
+    row_idx, col_idx, sparse_data, dense = inputs
+    shape = tuple(attrs["dense_shape"])
+    assert len(shape) == 2, "only supports 2-dim sparse tensor"
+    assert len(dense.shape) <= 2
+    assert dense.dtype == sparse_data.dtype, "data and weight must have the same dtype"
+
+    num_rows = row_idx.shape[0] - 1
+    dense_shape = get_shape(dense.shape)
+    sparse_shape = get_shape(shape)
+    broadcast_shape = get_broadcast_shape(dense_shape, sparse_shape)
+    need_expand = tvm.const(len(dense_shape) < len(broadcast_shape))
+    need_broadcast_first_dim = tvm.const(
+        len(dense_shape) == len(broadcast_shape) and dense_shape[0] < broadcast_shape[0])
+    need_broadcast_last_dim = tvm.const(
+        len(dense_shape) == len(broadcast_shape) and dense_shape[1] < broadcast_shape[1])
+
+    def gen_ir(dense, sparse_data, col_idx, row_idx, output):
+        ib = tvm.ir_builder.create()
+        with ib.for_range(0, num_rows, name='i') as i:
+            start = ib.load(row_idx, i)
+            end = ib.load(row_idx, i + 1)
+            with ib.for_range(0, end - start, name='j') as j:
+                pos = start + j
+                with ib.if_scope(pos < end):
+                    val = ib.load(sparse_data, pos)
+                    col = ib.load(col_idx, pos)
+                    with ib.if_scope(need_expand):
+                        ib.store(output, pos, val / ib.load(dense, [col]))
+                    with ib.else_scope():
+                        with ib.if_scope(need_broadcast_first_dim):
+                            ib.store(output, pos, val / ib.load(dense, [0, col]))
+                        with ib.else_scope():
+                            with ib.if_scope(need_broadcast_last_dim):
+                                ib.store(output, pos, val / ib.load(dense, [i, 0]))
+                            with ib.else_scope():
+                                ib.store(output, pos, val / ib.load(dense, [i, col]))
+        return ib.get()
+
+    output_name = "T_csr_div_" + dense.op.name + "_" + sparse_data.op.name
+    out_buf = tvm.decl_buffer(sparse_data.shape, sparse_data.dtype, output_name)
+    return tvm.extern([shape],
+                      [dense, sparse_data, col_idx, row_idx],
+                      lambda ins, outs: gen_ir(ins[0], ins[1], ins[2], ins[3], outs[0]),
+                      dtype=sparse_data.dtype, out_buffers=[out_buf], name=output_name)
