@@ -361,7 +361,7 @@ class OperatorInfoCollector {
     reduce_tensor_info.init_value = init_value;
   }
 
-  bool GetRowColInfo(const Provide *op) {
+  bool SetMatmulRowColInfo(const Provide *op) {
     auto axis = scop_info_.analysis_result_.GetNotReduceAxisForMatmul();
     auto reduce_axis = scop_info_.analysis_result_.GetReduceAxisForMatmul();
     auto batch_num_axis = scop_info_.analysis_result_.GetBatchAxisNumForMatmul();
@@ -392,11 +392,6 @@ class OperatorInfoCollector {
     auto right = op->value;
     auto add_op = right.as<Add>();
     CHECK(add_op);
-    auto tensor_c = add_op->a.as<Call>();
-    if (tensor_c == nullptr) return false;
-
-    Type tensor_c_type;
-    if (!IsExistTensor(tensor_c->name, tensor_c_type)) return false;
 
     collect_info_of_body.Visit(add_op->b);
 
@@ -445,32 +440,42 @@ class OperatorInfoCollector {
     return false;
   }
 
-  std::string GetTensorName(Expr tensor_data, bool &enable_tensor_core) {
-    std::string tensor_name = "";
+  bool GetTensorNameAndType(Expr tensor_data, std::string &tensor_name, Type &tensor_type) {
     if (tensor_data.as<Call>()) {
-      auto tensor_data_p = tensor_data.as<Call>();
-      Type tensor_type;
-      if (!IsExistTensor(tensor_data_p->name, tensor_type)) {
-        return tensor_name;
+      auto tensor_data_call = tensor_data.as<Call>();
+      tensor_name = tensor_data_call->name;
+      if (!IsExistTensor(tensor_name, tensor_type)) {
+        return false;
       }
-      if ((tensor_type != Float(16)) && (tensor_type != Int(8))) {
-        enable_tensor_core = false;
-      }
-      tensor_name = tensor_data_p->name;
-    } else if (tensor_data.as<Cast>() &&
-               ((tensor_data.as<Cast>()->type == Float(16)) || (tensor_data.as<Cast>()->type == Int(8)))) {
-      auto tensor_data_p = tensor_data.as<Cast>();
-      auto value = tensor_data_p->value;
+      return true;
+    } else if (tensor_data.as<Cast>()) {
+      auto tensor_data_cast = tensor_data.as<Cast>();
+      auto value = tensor_data_cast->value;
       tensor_name = value.as<Call>()->name;
+      tensor_type = tensor_data_cast->type;
       scop_info_.analysis_result_.RecordCastTensors(tensor_name);
+      return true;
     }
-    return tensor_name;
+    return false;
+  }
+
+  bool IfEnableTensorCore(const Type type_a, const Type type_b, const Type type_c) {
+    if (type_c != Float(16) && type_c != Float(32) && type_c != Int(32)) {
+      return false;
+    }
+    if ((type_a != Float(16)) && (type_a != Int(8)) &&
+        (type_b != Float(16)) && (type_b != Int(8))) {
+      return false;
+    }
+    return true;
   }
 
   bool CheckMatmul(const Provide *op) {
     if (!scop_info_.user_config_.GetEnableMatmul()) {
       return false;
     }
+    Type tensor_c_type, tensor_a_type, tensor_b_type;
+    std::string tensor_c_name, tensor_a_name, tensor_b_name;
 
     // C + A * B
     auto add_op = op->value.as<Add>();
@@ -478,18 +483,11 @@ class OperatorInfoCollector {
       return false;
     }
 
-    auto tensor_c = add_op->a.as<Call>();
-    if (tensor_c == nullptr) {
-      return false;
-    }
-    Type tensor_c_type;
-    if (!IsExistTensor(tensor_c->name, tensor_c_type)) {
-      return false;
-    }
-    if (tensor_c_type != Float(16) && tensor_c_type != Float(32) && tensor_c_type != Int(32)) {
-      return false;
-    }
+    if (add_op->a.as<Call>() == nullptr) return false;
 
+    if (!GetTensorNameAndType(add_op->a, tensor_c_name, tensor_c_type)) {
+      return false;
+    }
     auto mul_op = akg::common::SplitCast(add_op->b, tensor_c_type).as<Mul>();
     if (mul_op == nullptr) {
       return false;
@@ -497,22 +495,20 @@ class OperatorInfoCollector {
 
     auto tensor_a = akg::common::SplitCast(mul_op->a, tensor_c_type);
     auto tensor_b = akg::common::SplitCast(mul_op->b, tensor_c_type);
-    bool enable_tensor_core = true;
-    std::string tensor_a_name = GetTensorName(tensor_a, enable_tensor_core);
-    std::string tensor_b_name = GetTensorName(tensor_b, enable_tensor_core);
-    if (!enable_tensor_core) {
+
+    if (!GetTensorNameAndType(tensor_a, tensor_a_name, tensor_a_type) ||
+        !GetTensorNameAndType(tensor_b, tensor_b_name, tensor_b_type)) {
       return false;
     }
-
-    if (tensor_a_name.empty() || tensor_b_name.empty()) {
+    if (!IfEnableTensorCore(tensor_a_type, tensor_b_type, tensor_c_type)) {
       return false;
     }
 
     scop_info_.analysis_result_.RecordMatrixMatmulMap(tensor_a_name, MATRIX_A);
     scop_info_.analysis_result_.RecordMatrixMatmulMap(tensor_b_name, MATRIX_B);
-    scop_info_.analysis_result_.RecordMatrixMatmulMap(tensor_c->name, MATRIX_C);
+    scop_info_.analysis_result_.RecordMatrixMatmulMap(tensor_c_name, MATRIX_C);
 
-    bool ret = GetRowColInfo(op);
+    bool ret = SetMatmulRowColInfo(op);
     if (!ret) {
       return false;
     }
@@ -520,7 +516,7 @@ class OperatorInfoCollector {
     SetMmaModeForTensor(tensor_a_name, tensor_b_name);
 
     if (tensor_c_type == Float(16)) {
-      std::string shared_tensors = tensor_a_name + " " + tensor_b_name + " " + tensor_c->name;
+      std::string shared_tensors = tensor_a_name + " " + tensor_b_name + " " + tensor_c_name;
       scop_info_.user_config_.SetSharedTensors(shared_tensors);
     }
 
@@ -764,7 +760,13 @@ void AnalyzeBandNode::AnalyzeOuterBandTemplate() {
   }
 }
 
-void AnalyzeBandNode::AnalyzeGemmAxes(const ProvideEntry &pe) {
+void AnalyzeBandNode::AnalyzeConvAndMatmulOp(const ProvideEntry &pe) {
+  if (scop_info_.user_config_.GetTarget() != TARGET_CUDA ||
+      pe.basic_op_type.find(AT_TRANSPOSE) == std::string::npos ||
+      pe.basic_op_type.find(AT_ELEMWISE) == std::string::npos) {
+    return;
+  }
+
   VarNames mx_c, mx_a, mx_b;
   int index_a = -1;
   int index_b = -1;
@@ -831,11 +833,7 @@ void AnalyzeBandNode::AnalyzeScheduleTreeTemplate() {
     std::vector<ProvideEntry> pes = it.second;
     for (auto pe : pes) {
       concated_op_type += pe.basic_op_type + ",";
-      if (scop_info_.user_config_.GetTarget() == TARGET_CUDA &&
-          pe.basic_op_type.find(AT_TRANSPOSE) != std::string::npos &&
-          pe.basic_op_type.find(AT_ELEMWISE) != std::string::npos) {
-        AnalyzeGemmAxes(pe);
-      }
+      AnalyzeConvAndMatmulOp(pe);
     }
   }
   if (scop_info_.analysis_result_.GetOpTemplate() != Template::DEFAULT) {
