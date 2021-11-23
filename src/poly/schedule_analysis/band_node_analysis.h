@@ -33,7 +33,7 @@ class AnalyzeBandNode {
 
  private:
   void CollectStmtInfo();
-  void AnalyzeGemmAxes(const ProvideEntry &pe);
+  void AnalyzeConvAndMatmulOp(const ProvideEntry &pe);
   void AnalyzeScheduleTreeTemplate();
   void AnalyzeOuterBandTemplate();
   void ShowBandInfo();
