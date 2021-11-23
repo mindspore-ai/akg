@@ -230,6 +230,39 @@ void GetFlattenedBinds(const Array<NodeRef> &args, const Map<Tensor, Buffer> &bi
   }
 }
 
+void UpdateMultiValueFuncBinds(Map<Tensor, Buffer> &binds, Array<NodeRef> &tensor_args_list,
+                               Map<Tensor, Tensor> &tensor_replace) {
+  Map<Tensor, Buffer> out_binds;
+  for (const auto &x : binds) {
+    Tensor tensor = x.first;
+    Buffer buffer = x.second;
+    if (tensor->op->num_outputs() == 1) {
+      out_binds.Set(tensor, buffer);
+      continue;
+    }
+    std::string new_name = tensor->op->func_name() + "_v" + std::to_string(tensor->value_index);
+    auto new_tensor = PlaceholderOpNode::make(new_name, tensor->shape, tensor->dtype).output(0);
+    out_binds.Set(new_tensor, buffer);
+    tensor_replace.Set(tensor, new_tensor);
+  }
+  binds = out_binds;
+
+  Array<NodeRef> new_tensor_args_list;
+  for (const auto &x : tensor_args_list) {
+    if (x->IsInstance<TensorNode>()) {
+      Tensor tensor_node = GetRef<Tensor>(x.as<TensorNode>());
+      if (tensor_replace.count(tensor_node) != 0) {
+        new_tensor_args_list.push_back(tensor_replace[tensor_node]);
+      } else {
+        new_tensor_args_list.push_back(tensor_node);
+      }
+    } else {
+      new_tensor_args_list.push_back(x);
+    }
+  }
+  tensor_args_list = new_tensor_args_list;
+}
+
 void RenameBinds(Map<Tensor, Buffer> &binds, const BuildConfig &config, Array<NodeRef> &tensor_args_list,
                  Array<NodeRef> &buffer_args_list, Map<Tensor, Tensor> &tensor_replace) {
   std::unordered_map<std::string, int> tensor_name_count;
@@ -256,9 +289,21 @@ void RenameBinds(Map<Tensor, Buffer> &binds, const BuildConfig &config, Array<No
       } while (tensor_name.count(new_name + extend) != 0);
       new_name.append(extend);
       tensor_name.insert(new_name);
-      auto cop = old_tensor->op.as<air::ComputeOpNode>();
-      CHECK(cop != nullptr);
-      Tensor new_tensor = air::ComputeOpNode::make(new_name, cop->tag, cop->attrs, cop->axis, cop->body).output(0);
+      Tensor new_tensor;
+      if (auto cop = old_tensor->op.as<air::ComputeOpNode>()) {
+        new_tensor = air::ComputeOpNode::make(new_name, cop->tag, cop->attrs, cop->axis, cop->body).output(0);
+      } else if (auto hop = old_tensor->op.as<air::HybridOpNode>()) {
+        new_tensor =
+          air::HybridOpNode::make(new_name, hop->tag, hop->attrs, hop->inputs, hop->outputs, hop->input_buffers_,
+                                  hop->output_buffers_, hop->input_regions_, hop->output_regions_, hop->body)
+            .output(0);
+      } else if (auto pop = old_tensor->op.as<air::PlaceholderOpNode>()) {
+        new_tensor = air::PlaceholderOpNode::make(new_name, pop->shape, pop->dtype).output(0);
+      } else {
+        LOG(FATAL) << "The tensor op [" << old_tensor
+                   << "] is not in the supported list: ComputeOpNode, HybridOpNode or PlaceholderOpNode.";
+      }
+
       tensor_replace.Set(old_tensor, new_tensor);
       if (buffer_replace.count(old_buffer) == 0) {
         auto new_buffer = DeclBuffer(new_tensor, config->data_alignment, config->offset_factor, new_name);

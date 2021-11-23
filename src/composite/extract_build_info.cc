@@ -44,6 +44,25 @@ class Emitter : public IRVisitor {
     auto call = op->value.as<Call>();
     auto op_name = call->name;
     auto inputs = call->args;
+
+    if (op_name == "tuple_getitem") {
+      // tuple_getitem is called when getting items from multi result array
+      CHECK(inputs[0].as<Call>());
+      // the first input of tuple_getitem is the placeholder node of the array result
+      // get the real array result from array_result_ map
+      auto result_tuple_call = inputs[0].as<Call>()->func;
+      CHECK(array_result_.count(result_tuple_call));
+      Array<Tensor> tuple_result = array_result_[result_tuple_call];
+      // the second input of tuple_getitem is the index
+      // get the i'th result from the array result
+      Expr index = inputs[1];
+      CHECK(index->IsInstance<UIntImm>());
+      auto value_index = index.as<UIntImm>()->value;
+      Tensor t = tuple_result[value_index];
+      opt_.tensor_map[op->func] = t;
+      return;
+    }
+
     Array<NodeRef> real_input;
     for (const auto &input : inputs) {
       if (auto c = input.as<Call>()) {
@@ -69,12 +88,24 @@ class Emitter : public IRVisitor {
     if (op_name == "Reshape") {  // reshape's attr may have shape [-1], it will cause error.
       op_attrs_.Set("shape", op->args);
     }
-    Tensor t = (*topi_f)(real_input, op_attrs_);
-    if (op_name == "Assign") {
-      EmitAssign(t, inputs[0]);
+
+    if (auto placeholder = op->func.as<air::PlaceholderOpNode>()) {
+      if (placeholder->dtype.code() == kArrayHandle) {
+        // in this case, the output is an array of tensor
+        // store the result in array_result_ map
+        array_result_[op->func] = (*topi_f)(real_input, op_attrs_);
+        return;
+      } else {
+        Tensor t = (*topi_f)(real_input, op_attrs_);
+        if (op_name == "Assign") {
+          EmitAssign(t, inputs[0]);
+        }
+        CollectNoinlineCandidate(real_input, t, op_name);
+        opt_.tensor_map[op->func] = t;
+      }
+    } else {
+      LOG(FATAL) << "Unexpected op func type: " << op->func;
     }
-    CollectNoinlineCandidate(real_input, t, op_name);
-    opt_.tensor_map[op->func] = t;
   }
 
   void EmitAssign(Tensor &t, const Expr &input) {
@@ -112,6 +143,7 @@ class Emitter : public IRVisitor {
  private:
   BuildOpt &opt_;
   Map<std::string, NodeRef> op_attrs_;
+  std::map<FunctionRef, Array<Tensor>> array_result_;
   int assign_count_{0};
 };
 

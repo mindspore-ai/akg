@@ -17,6 +17,7 @@
 """Intrinsics of TVM-Python Hybrid Script for Python compilation time
 semantic support."""
 
+# 2021.10.21 - Support reverse order loop range.
 # 2019.12.30 - Support more math intrin.
 
 from .. import api as _api
@@ -43,16 +44,20 @@ LOOP_INTRIN = {
 def _range(annotation, args):
     """Handling TVM loop types"""
     n = args.__len__()
+    step = _api.const(1, dtype='int32')
     if n == 1:
         low, ext = _api.const(0, dtype='int32'), args[0]
-    else:
-        _internal_assert(n == 2, "A loop intrinsic should only have 1 or 2 arguments!")
+    elif n == 2:
         low, ext = args[0], args[1]
+    else:
+        _internal_assert(
+            n == 3, "A loop intrinsic should only have at most 3 arguments!")
+        low, ext, step = args[0], args[1], args[2]
     if not ir_pass.Equal(low, _api.const(0, dtype='int32')):
         ext = ext - low
     for_type = LOOP_INTRIN[annotation]
     iter_var = None
-    return iter_var, low, ext, for_type
+    return iter_var, low, ext, for_type, step
 
 
 range = unroll = vectorize = parallel = const_range = _range #pylint: disable=invalid-name

@@ -121,10 +121,49 @@ Stmt MakeStmt(const std::vector<OpDesc> &op_descs) {
       }
     }
 
-    Tensor output = Downcast<Tensor>(op_desc.output_descs[0]);
+    Stmt stmt;  // stmt for the compute body
     auto op_name = op_desc.op_name;
-    auto stmt = Provide::make(output->op, 0, Call::make(output->dtype, op_name, input, Call::CallType::PureIntrinsic),
-                              output->shape);
+
+    if (op_desc.output_descs.size() == 1) {
+      // single output
+      Tensor output = Downcast<Tensor>(op_desc.output_descs[0]);
+      stmt = Provide::make(output->op, 0, Call::make(output->dtype, op_name, input, Call::CallType::PureIntrinsic),
+                           output->shape);
+    } else {
+      // multi output
+      Array<Tensor> outputs;
+      std::vector<Stmt> body_stmts;
+      std::string output_name = "Array";
+      for (auto output_desc : op_desc.output_descs) {
+        Tensor output_tensor = Downcast<Tensor>(output_desc);
+        outputs.push_back(output_tensor);
+        output_name = output_name + ":" + output_tensor->op->name;
+      }
+
+      // for multi output, create the placeholder node with type kArrayHandle
+      // this placeholder stores results from topi func
+      auto array_placeholder = placeholder({static_cast<int>(op_desc.output_descs.size())},
+                                           air::DataType(kArrayHandle, 1, op_desc.output_descs.size()), output_name);
+      Stmt multi_output_op_call = Provide::make(
+        array_placeholder->op, 0, Call::make(array_placeholder->dtype, op_name, input, Call::CallType::PureIntrinsic),
+        array_placeholder->shape);
+      body_stmts.push_back(multi_output_op_call);
+      Expr multi_output_op_result = Call::make(array_placeholder->dtype, array_placeholder->op->name,
+                                               array_placeholder->shape, Call::CallType::Halide, array_placeholder->op);
+
+      for (size_t i = 0; i < op_desc.output_descs.size(); i++) {
+        Tensor output_tensor = Downcast<Tensor>(op_desc.output_descs[i]);
+        // for each single output, call tuple_getitem to get each single item from kArrayHandle placeholder
+        Stmt body_stmt = Provide::make(
+          output_tensor->op, 0,
+          Call::make(output_tensor->dtype, "tuple_getitem", {multi_output_op_result, i}, Call::CallType::PureIntrinsic),
+          output_tensor->shape);
+        body_stmts.push_back(body_stmt);
+      }
+
+      stmt = Block::make(body_stmts);
+    }
+
     if (!op_desc.attrs.empty()) {
       stmt = AttrStmt::make(op_desc.attrs, "attrs", Expr(1), stmt);
     }
