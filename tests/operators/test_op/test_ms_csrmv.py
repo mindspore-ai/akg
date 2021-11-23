@@ -65,6 +65,7 @@ def test_ms_csrmv(shape1, dtype1, shape2, dtype2, poly_sch=False, attrs=None):
         attrs["enable_akg_reduce_lib"] = True
         attrs["enable_atomic_add"] = True
     data, indices, indptr, weight, expect = gen_data(shape1, dtype1, shape2, dtype2)
+    attrs["csr_avg_row"] = data.shape[0] // shape1[0]
 
     mod = utils.op_build_test(csrmv, [data.shape, indices.shape, indptr.shape, weight.shape],
                               ["float32", "int32", "int32", "float32"], polyhedral=poly_sch,

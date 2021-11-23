@@ -76,6 +76,13 @@
  *   Add function for random ops if need_random_lib_ is true.
  */
 
+/*
+ * 2021.11.17
+ *   Modify the functions to generate non-unit strides for csr dynamic loops:
+ *     VisitStmt_(const AttrStmt* op)
+ *     VisitStmt_(const For* op)
+ */
+
 #include "codegen_cuda.h"
 
 #include <tvm/base.h>
@@ -217,6 +224,22 @@ void CodeGenCUDA::VisitStmt_(const ir::For* op) {
     PrintStmt(op->body);
     replace_cce = false;
     unroll = false;
+    return;
+  } else if (csr_loop_stride != 1) {
+    std::string min = PrintExpr(op->min);
+    std::string extent = is_zero(op->min) ? PrintExpr(op->extent) : PrintExpr(op->min + op->extent);
+    PrintIndent();
+    std::string vid = AllocVarID(op->loop_var.get());
+    stream << "for (";
+    PrintType(op->loop_var.type(), stream);
+    stream << ' ' << vid << " = " << min << "; " << vid << " < " << extent << "; "
+           << vid << " += " << csr_loop_stride << ") {\n";
+    int for_scope = BeginScope();
+    PrintStmt(op->body);
+    this->EndScope(for_scope);
+    PrintIndent();
+    stream << "}\n";
+    csr_loop_stride = 1;
     return;
   }
   CodeGenC::VisitStmt_(op);
@@ -827,6 +850,10 @@ void CodeGenCUDA::VisitStmt_(const AttrStmt* op) {
     // mark loop for unrolling with special swizzle vars
     loop_extent = op->value;
     unroll = true;
+  } else if (op->attr_key == "csr_dynamic_loop") {
+    auto stride = op->value.as<IntImm>();
+    CHECK(stride);
+    csr_loop_stride = stride->value;
   }
   CodeGenC::VisitStmt_(op);
 }

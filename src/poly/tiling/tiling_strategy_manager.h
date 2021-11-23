@@ -21,6 +21,7 @@
 #include <deque>
 
 #include "poly/tiling/tiling_analyzer.h"
+#include "tiling_analyzer.h"
 
 namespace akg {
 namespace ir {
@@ -482,6 +483,14 @@ class CpuStrategy : public TilingStrategy {
   int parallel_decrease_value_{PARALLEL_DECREASE_VALUE};
   int best_unroll_num_{BEST_UNROLL_NUM};
   int min_unroll_num_{MIN_UNROLL_NUM};
+};
+
+class CsrStrategy : public TilingStrategy {
+ public:
+  explicit CsrStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {}
+  ~CsrStrategy() {}
+  void AddNpuConstraint() {}
+  void AddGpuConstraint();
 };
 
 class MulticoreStrategy {

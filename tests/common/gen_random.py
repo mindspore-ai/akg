@@ -15,6 +15,7 @@
 """generate gaussian random array"""
 
 import numpy as np
+import scipy.sparse
 import os
 import random
 import logging
@@ -183,3 +184,18 @@ def gen_indices(indices_argument):
         return gen_indices_unsorted_segment_sum(data_shape, indices_shape, indices_dtype, attrs)
     assert op_name == "TensorScatterAdd", "Input OP Name Not Known!"
     return gen_indices_tensor_scatter_add(data_shape, indices_shape, indices_dtype)
+
+def gen_csr_indices(indices_argument):
+    data_shape = indices_argument.data_shape
+    indices_shape = indices_argument.indices_shape
+    indices_dtype = indices_argument.indices_dtype
+    indptr_choice = np.arange(1, indices_shape[0], dtype=indices_dtype)
+    indptr = np.sort(np.random.choice(indptr_choice, data_shape[0], replace=True))
+    indptr = np.concatenate((np.array([0], dtype=indices_dtype), indptr))
+    indices_choice = np.arange(data_shape[1], dtype=indices_dtype)
+    indices = np.zeros(indices_shape, dtype=indices_dtype)
+    for i in range(0, data_shape[0]):
+        row_start = indptr[i]
+        row_end = indptr[i + 1]
+        indices[row_start : row_end] = np.sort(np.random.choice(indices_choice, row_end - row_start, replace=False))
+    return indptr, indices

@@ -309,6 +309,8 @@ class UserConfig {
       ParseIntAttr(attrs, "shared_vector_align", &shared_vector_align_);
       ParseIntAttr(attrs, "register_memory_depth", &register_depth_);
       ParseIntAttr(attrs, "shared_memory_depth", &shared_depth_);
+      ParseIntAttr(attrs, "csr_thread_num", &csr_thread_num_);
+      ParseIntAttr(attrs, "csr_avg_row", &csr_avg_row_);
       ParseStringAttr(attrs, "shared_memory_tensors", &shared_tensors_);
       ParseStringAttr(attrs, "reduce_lib_type", &reduce_lib_type_);
       ParseStringAttr(attrs, "local_memory_tensors", &local_tensors_);
@@ -555,6 +557,9 @@ class UserConfig {
   int GetSharedVectorAlign() { return shared_vector_align_; }
   void SetTransposeOp(bool has_transpose) { has_transpose_ = has_transpose; }
   bool HasTranspose() { return has_transpose_; }
+  void SetCsrThreadNum(int csr_thread_num) { csr_thread_num_ = csr_thread_num; }
+  int GetCsrThreadNum() { return csr_thread_num_; }
+  int GetCsrAvgRow() { return csr_avg_row_; }
 
  private:
   // tools for parsing user config
@@ -795,6 +800,8 @@ class UserConfig {
   Schedule origin_sch_;
 
   bool has_transpose_{false};
+  int csr_thread_num_{128};
+  int csr_avg_row_{0};
 };
 
 struct OperatorDomainSpace {
@@ -1038,6 +1045,22 @@ class AnalysisResult {
 
   bool GetCsr() const { return is_csr_; }
   void SetCsr(const bool &is_csr) { is_csr_ = is_csr; }
+  bool IsCsrDynamicExtent(const Variable *op) {
+    for (const auto &it: g_csr) {
+      auto var = it.first.as<Variable>();
+      if (var != nullptr && var->name_hint == op->name_hint) {
+        return true;
+      }
+    }
+    return false;
+  }
+  bool IsCsrDynamicExtent(const Expr &e) {
+    auto op = e.as<Variable>();
+    if (op != nullptr) {
+      return IsCsrDynamicExtent(op);
+    }
+    return false;
+  }
 
   std::unordered_set<std::string> GetTensorsNotPromote() const { return tensors_not_promote_; }
   void RecordTensorsNotPromote(const std::string &tensor_name) { tensors_not_promote_.insert(tensor_name); }

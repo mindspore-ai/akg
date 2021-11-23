@@ -23,8 +23,9 @@ from collections import namedtuple
 import numpy as np
 import scipy as sp
 from akg.global_configs import get_kernel_meta_path
-from tests.common.gen_random import random_gaussian, gen_indices
-from tests.common.test_utils import precheck, tensor_scatter_add_np, gather_np
+from tests.common.gen_random import random_gaussian, gen_indices, gen_csr_indices
+from tests.common.test_utils import precheck, tensor_scatter_add_np, gather_np, \
+    csrmv_np, csr_reduce_sum_np, csr_mul_np, csr_div_np
 
 
 def get_attr(attr_desc, attr_type):
@@ -475,7 +476,19 @@ op_dsl = {
     "Gather": lambda inputs, output, attr: "%s = gather_np(%s, %s, %s)" %
         (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]), get_attr(attr, "axis")),
     "StandardNormal": lambda inputs, output, attr: "%s = np.random.standard_normal(%s)" %
-        (output[0]['tensor_name'], get_attr(attr, "shape"))
+        (output[0]['tensor_name'], get_attr(attr, "shape")),
+    "CSRMV": lambda inputs, output, attr: "%s = csrmv_np(%s, %s, %s, %s, %s)" %
+        (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]), get_input(inputs[2][0]),
+        get_input(inputs[3][0]), get_attr(attr, "dense_shape")),
+    "CSRReduceSum": lambda inputs, output, attr: "%s = csr_reduce_sum_np(%s, %s, %s, %s, %s)" %
+        (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]), get_input(inputs[2][0]),
+        get_attr(attr, "dense_shape"), get_attr(attr, "axis")),
+    "CSRMul": lambda inputs, output, attr: "%s = csr_reduce_sum_np(%s, %s, %s, %s, %s)" %
+        (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]), get_input(inputs[2][0]),
+        get_input(inputs[3][0]), get_attr(attr, "dense_shape")),
+    "CSRDiv": lambda inputs, output, attr: "%s = csr_reduce_sum_np(%s, %s, %s, %s, %s)" %
+        (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]), get_input(inputs[2][0]),
+        get_input(inputs[3][0]), get_attr(attr, "dense_shape")),
 }
 
 def conv_2d_str(inputs, output, attr):
@@ -584,6 +597,9 @@ def gen_json_data(op_desc, with_compute=True):
     # Collect input which should be processed by atomic clean / or should be indices.
     clean_input = []
     indices_input = {}
+    csr_indptr = {}
+    csr_indices = {}
+    csr_idx_pair = {}
     MakeIndices = namedtuple("MakeIndices", "name data_shape indices_shape indices_dtype attrs")
     sum_out = []
     for op in desc["op_desc"]:
@@ -619,6 +635,19 @@ def gen_json_data(op_desc, with_compute=True):
                                 indices_shape=op["input_desc"][1][0]["shape"],
                                 indices_dtype=op["input_desc"][1][0]["data_type"],
                                 attrs=op["attr"][0]["value"])
+        elif op["name"].startswith("CSR"):
+            assert op["input_desc"][1][0]["shape"] == op["input_desc"][2][0]["shape"], \
+                "indices and data should have the same shape"
+            csr_indptr[op["input_desc"][0][0]["tensor_name"]] = \
+                MakeIndices(name=op["input_desc"][1][0]["tensor_name"], data_shape=op["attr"][1]["value"],
+                            indices_shape=op["input_desc"][1][0]["shape"],
+                            indices_dtype=op["input_desc"][0][0]["data_type"],
+                            attrs=None)
+            csr_indices[op["input_desc"][1][0]["tensor_name"]] = \
+                MakeIndices(name=op["input_desc"][0][0]["tensor_name"], data_shape=op["attr"][1]["value"],
+                            indices_shape=op["input_desc"][1][0]["shape"],
+                            indices_dtype=op["input_desc"][1][0]["data_type"],
+                            attrs=None)
 
     input_mean_value = precheck(desc)
     for input_desc in desc["input_desc"] if desc["input_desc"] is not None else []:
@@ -629,6 +658,20 @@ def gen_json_data(op_desc, with_compute=True):
             item = np.zeros(shape).astype(dtype)
         elif tensor_name in indices_input.keys():
             item = gen_indices(indices_input[tensor_name])
+        elif tensor_name in csr_indptr:
+            if tensor_name in csr_idx_pair:
+                item = csr_idx_pair[tensor_name]
+            else:
+                indptr, indices = gen_csr_indices(csr_indptr[tensor_name])
+                item = indptr
+                csr_idx_pair[csr_indptr[tensor_name].name] = indices
+        elif tensor_name in csr_indices:
+            if tensor_name in csr_idx_pair:
+                item = csr_idx_pair[tensor_name]
+            else:
+                indptr, indices = gen_csr_indices(csr_indices[tensor_name])
+                item = indices
+                csr_idx_pair[csr_indices[tensor_name].name] = indptr
         else:
             item = random_gaussian(shape, miu=input_mean_value, sigma=0.1).astype(dtype)
         input_for_mod.append(item)

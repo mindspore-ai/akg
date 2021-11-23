@@ -329,13 +329,13 @@ def broadcast_gradient_args(x, y):
 
     return rx, ry
 
-def get_broadcast_shape(*shapes):
+def get_broadcast_shape(shape1, shape2):
     shape_out = collections.deque()
-    reversed_shapes = map(reversed, shapes)
+    reversed_shapes = map(reversed, (shape1, shape2))
     for items in itertools.zip_longest(*reversed_shapes, fillvalue=1):
-        max_size = 0 if 0 in items else max(items)
-        if any(item not in (1, max_size) for item in items):
-            raise ValueError(f'operands could not be broadcast together with shapes {*shapes,}')
+        max_size = int(items[0] if items[1] == 1 else items[1])
+        if any(int(item) not in (1, max_size) for item in items):
+            raise ValueError(f'operands could not be broadcast together with {shape1}, {shape2}')
         shape_out.appendleft(max_size)
     return list(shape_out)
 

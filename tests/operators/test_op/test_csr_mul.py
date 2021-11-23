@@ -69,6 +69,7 @@ def test_csr_mul(shape1, shape2, dtype1, dtype2, poly_sch=False, attrs=None):
     op_attrs = [shape2]
     dense, sparse_data, col_idx, row_idx, expect = gen_data(shape1, shape2, dtype1, dtype2)
     output_shape = expect.shape
+    attrs["csr_avg_row"] = sparse_data.shape[0] // shape1[0]
 
     mod = utils.op_build_test(csr_mul, [shape1, sparse_data.shape, col_idx.shape, row_idx.shape], 
                               [dtype1, dtype1, dtype2, dtype2], op_attrs=op_attrs, polyhedral=poly_sch,

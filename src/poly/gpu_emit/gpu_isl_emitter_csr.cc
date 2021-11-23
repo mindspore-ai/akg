@@ -53,73 +53,51 @@ void ReplaceCsrCall(const Node *node, const Stmt &s) {
 Stmt GpuIslEmitterCsr::EmitAccessNodeCall(
   const Node *node, const VarMap &var_map_tmp, BufferedFootPrintInfo &buffer_fp_info) {
   auto stmt = GpuIslEmitter::EmitAccessNodeCall(node, var_map_tmp, buffer_fp_info);
-  ReplaceCsrCall(node, stmt);
+  if (csr_dynamic_scope_) {
+    ReplaceCsrCall(node, stmt);
+  }
   return stmt;
 }
 
 Stmt GpuIslEmitterCsr::EmitAccessNodeFromPromoteAcsCall(isl::id var, const Node *node, Array<Expr> &args) {
   auto stmt = GpuIslEmitter::EmitAccessNodeFromPromoteAcsCall(var, node, args);
-  ReplaceCsrCall(node, stmt);
+  if (csr_dynamic_scope_) {
+    ReplaceCsrCall(node, stmt);
+  }
   return stmt;
 }
 
-class RemoveCsrCond : public IRMutator {
-  Expr Mutate_(const Variable *op, const Expr &e) final {
-    for (const auto &pair: g_csr) {
-      auto csr_var = pair.first.as<Variable>();
-      if (csr_var != nullptr && op->name_hint == csr_var->name_hint) {
-        return Expr();
-      }
+class CheckCsrCond : public IRVisitor {
+ public:
+  explicit CheckCsrCond(ScopInfo &info) : info_(info) {}
+
+  bool has_csr_cond_{false};
+
+ private:
+  void Visit_(const Variable *op) {
+    if (info_.analysis_result_.IsCsrDynamicExtent(op)) {
+      has_csr_cond_ = true;
     }
-    return e;
   }
 
-  Expr Mutate_(const And *op, const Expr &e) final { return MutateLogicOp(op, e); }
-  Expr Mutate_(const Or *op, const Expr &e) final { return MutateLogicOp(op, e); }
-  Expr Mutate_(const EQ *op, const Expr &e) final { return MutateCmpOp(op, e); }
-  Expr Mutate_(const NE *op, const Expr &e) final { return MutateCmpOp(op, e); }
-  Expr Mutate_(const GE *op, const Expr &e) final { return MutateCmpOp(op, e); }
-  Expr Mutate_(const GT *op, const Expr &e) final { return MutateCmpOp(op, e); }
-  Expr Mutate_(const LE *op, const Expr &e) final { return MutateCmpOp(op, e); }
-  Expr Mutate_(const LT *op, const Expr &e) final { return MutateCmpOp(op, e); }
-
-  template<typename T>
-  Expr MutateLogicOp(const T *op, const Expr &e) {
-    auto a = IRMutator::Mutate(op->a);
-    auto b = IRMutator::Mutate(op->b);
-    if (!a.defined()) return b;
-    if (!b.defined()) return a;
-    if (!a.same_as(op->a) || !b.same_as(op->b)) {
-      return T::make(a, b);
-    }
-    return e;
-  }
-
-  template<typename T>
-  Expr MutateCmpOp(const T *op, const Expr &e) {
-    auto a = IRMutator::Mutate(op->a);
-    auto b = IRMutator::Mutate(op->b);
-    if (!a.defined() || !b.defined()) {
-      return Expr();
-    }
-    return e;
-  }
+  ScopInfo &info_;
 };
 
-Stmt GpuIslEmitterCsr::EmitIf(const isl::ast_node_if &node) {
-  Expr cond_expr = Interpret(node.get_cond());
-  Expr new_cond_expr = RemoveCsrCond().Mutate(cond_expr);
-  if (cond_expr.defined() && !new_cond_expr.defined()) {
-    return EmitAst(node.get_then_node());
+Stmt GpuIslEmitterCsr::EmitFor(const isl::ast_node_for &node) {
+  auto isl_cond = node.get_cond().as<isl::ast_expr_op>();
+  CHECK(isl_cond.as<isl::ast_expr_op_lt>() || isl_cond.as<isl::ast_expr_op_le>());
+  auto cond_lhs = isl_cond.get_arg(0).as<isl::ast_expr_id>();
+  CHECK(cond_lhs);
+  Expr cond_expr = Interpret(isl_cond.get_arg(1));
+  auto check_csr_cond = CheckCsrCond(info_);
+  check_csr_cond.Visit(cond_expr);
+  bool tmp_csr_dynamic_scope = csr_dynamic_scope_;
+  if (check_csr_cond.has_csr_cond_) {
+    csr_dynamic_scope_ = true;
   }
-  Stmt s = GpuIslEmitter::EmitIf(node);
-  if (new_cond_expr.defined() && !new_cond_expr.same_as(cond_expr)) {
-    auto if_stmt = s.as<IfThenElse>();
-    if (if_stmt != nullptr) {
-      return IfThenElse::make(new_cond_expr, if_stmt->then_case, if_stmt->else_case);
-    }
-  }
-  return s;
+  auto stmt = GpuIslEmitter::EmitFor(node);
+  csr_dynamic_scope_ = tmp_csr_dynamic_scope;
+  return stmt;
 }
 
 Stmt GpuIslEmitterCsr::SubstituteTensorStmt(const Stmt &s, Tensor origin, Tensor replaced) {

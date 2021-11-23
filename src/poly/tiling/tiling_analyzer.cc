@@ -39,6 +39,7 @@ TileAxis::TileAxis(TileAxis *p, int i, int da, bool mc, const std::pair<std::str
       mc_sup(mc),
       range_min(0),
       range_extent(MIN_TILE),
+      extent_val(MIN_TILE),
       forbid_iso(false),
       is_inner(inner),
       analyzer_(ta) {
@@ -59,6 +60,7 @@ TileAxis::TileAxis(const Expr &l1_size, const Expr &l0_size, const std::string &
   is_pragma = true;
   range_min = MIN_TILE;
   range_extent = l1_size;
+  extent_val = MIN_TILE;
 
   c1_constraints.tile_min_ = CastIntToExpr(MIN_TILE);
   c0_constraints.tile_min_ = CastIntToExpr(MIN_TILE);
@@ -69,6 +71,18 @@ TileAxis::TileAxis(const Expr &l1_size, const Expr &l0_size, const std::string &
     this->TileRestrainEntire(CACHE0);
   }
 }
+
+int64_t GetExtentVal(Expr &range_extent, TilingAnalyzer *analyzer) {
+  if (analyzer->scop_info_.analysis_result_.IsCsrDynamicExtent(range_extent)) {
+    return analyzer->scop_info_.user_config_.GetCsrThreadNum();
+  }
+  auto extent = range_extent.as<IntImm>();
+  if (extent != nullptr) {
+    return extent->value;
+  }
+  return MIN_TILE;
+}
+
 void TileAxis::LinkToLoop(const For *loop) {
   CHECK(loop) << "Link to nullptr, please check";
   const auto offset = loop->min.as<IntImm>();
@@ -77,6 +91,7 @@ void TileAxis::LinkToLoop(const For *loop) {
   if (this->loops.empty()) {
     this->range_min = offset_int;
     this->range_extent = loop->extent.as<IntImm>() ? CanonicalSimplify(loop->min + loop->extent) : loop->extent;
+    this->extent_val = GetExtentVal(this->range_extent, analyzer_);
   } else if (std::count(this->loops.begin(), this->loops.end(), loop) == 0) {
     if (this->range_extent.as<IntImm>()) {
       if (analyzer_->arith_ana_.CanProve(this->range_extent != loop->extent)) {
@@ -85,6 +100,7 @@ void TileAxis::LinkToLoop(const For *loop) {
         }
         if (analyzer_->arith_ana_.CanProve(this->range_extent < (loop->min + loop->extent))) {
           this->range_extent = CanonicalSimplify(loop->min + loop->extent);
+          this->extent_val = GetExtentVal(this->range_extent, analyzer_);
         }
       }
     }
@@ -1360,6 +1376,7 @@ void TilingAnalyzer::AddPostTilingConstraints() {
     ConvStrategy conv_strategy(this);
     GpuDmaAnalysisStrategy dma_analysis_strategy(this);
     CustomTilingStrategy custom_strategy(this);
+    CsrStrategy csr_strategy(this);
     GpuStrategy gpu_strategy(this);
     if (scop_info_.analysis_result_.GetIsGpuDmaAnalysed()) {
       actived_strategies.push_back(&dma_analysis_strategy);
@@ -1372,6 +1389,9 @@ void TilingAnalyzer::AddPostTilingConstraints() {
       actived_strategies.push_back(&shift_strategy);
       actived_strategies.push_back(&gemm_strategy);
       actived_strategies.push_back(&conv_strategy);
+      if (scop_info_.analysis_result_.GetCsr()) {
+        actived_strategies.push_back(&csr_strategy);
+      }
       actived_strategies.push_back(&gpu_strategy);
     }
     strategy_manager->SetStrategies(actived_strategies);

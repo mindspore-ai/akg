@@ -19,6 +19,7 @@ import random
 import logging
 from copy import deepcopy
 import numpy as np
+import scipy.sparse
 import akg.tvm
 from akg.utils.validation_check import MAX_DATA_SIZE
 from akg.utils.format_transform import get_bytes
@@ -276,3 +277,23 @@ def gather_np(data, indices, axis):
                 if 0 <= indices[j] < data.shape[axis]:
                     expect[i + j + k] = data[i + (indices[j],) + k]
     return expect
+
+def csrmv_np(indptr, indices, data, weight, shape):
+    sparse_data = scipy.sparse.csr_matrix((data, indices, indptr), shape)
+    expect = sparse_data * weight
+    return np.asarray(expect)
+
+def csr_reduce_sum_np(indptr, indices, data, shape, axis):
+    sparse_data = scipy.sparse.csr_matrix((data, indices, indptr), shape)
+    expect = sparse_data.sum(axis)
+    return np.asarray(expect)
+
+def csr_mul_np(indptr, indices, sparse_data, dense, shape):
+    sparse_data = scipy.sparse.csr_matrix((sparse_data, indices, indptr), shape)
+    expect = sparse_data.multiply(np.broadcast_to(dense, shape))
+    return np.asarray(expect)
+
+def csr_div_np(indptr, indices, sparse_data, dense, shape):
+    sparse_data = scipy.sparse.csr_matrix((sparse_data, indices, indptr), shape)
+    expect = sparse_data.multiply(np.divide(1, np.broadcast_to(dense, shape)))
+    return np.asarray(expect)

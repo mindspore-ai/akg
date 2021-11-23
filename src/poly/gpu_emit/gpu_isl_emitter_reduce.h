@@ -42,7 +42,7 @@ constexpr auto SHARED_MEMORY_PREFIX = "__shared__";
 constexpr auto MEM_TYPE_SHARED = "shared";
 constexpr auto MEM_TYPE_LOCAL = "local";
 
-class GpuIslEmitterReduce : public GpuIslEmitter {
+class GpuIslEmitterReduce : virtual public GpuIslEmitter {
  public:
   GpuIslEmitterReduce(ScopInfo &info, const NodeInfoRepo &n, const isl::id_list &i) : GpuIslEmitter(info, n, i) {}
   ~GpuIslEmitterReduce() override = default;
