@@ -22,35 +22,8 @@ from akg.utils import kernel_exec as utils
 from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
 from tests.common.tensorio import compare_tensor
+from akg.ops.array_gpu.csr_mv import csrmv
 
-def csrmv(data, indices, indptr, weight):
-    assert len(data.shape) == 1 and len(weight.shape) == 2, "only support 2-dim csrmv"
-    assert data.dtype == weight.dtype, ("data and weight must have same dtype.")
-    
-    num_rows = indptr.shape[0] - 1
-
-    def csrmv_ir(data, indices, indptr, weight, out):
-        ib = tvm.ir_builder.create()
-        with ib.for_range(0, num_rows, name="row") as row:
-            ib.store(out, [row, 0], tvm.const(0, data.dtype))
-            row_start = ib.load(indptr, row)
-            row_end = ib.load(indptr, row + 1)
-            row_elems = row_end - row_start
-            with ib.for_range(0, row_elems, name="idx") as idx:
-                elem = row_start + idx
-                val = tvm.expr.Select(elem < row_end,
-                                      ib.load(data, elem) * ib.load(weight, [ib.load(indices, elem), 0]),
-                                      tvm.const(0, data.dtype))
-                ib.scope_attr([tvm.api._IterVar((0, weight.shape[0]), "idx", 2)], "reduce_update", "")
-                temp = val + ib.load(out, [row, 0])
-                ib.store(out, [row, 0], temp)
-        return ib.get()
-    output_shape = [num_rows, 1]
-    output_name = "T_csrmv_"
-    out_buf = tvm.decl_buffer(output_shape, data.dtype, output_name)
-    return tvm.extern([output_shape], [data, indices, indptr, weight],
-                        lambda ins, outs: csrmv_ir(ins[0], ins[1], ins[2], ins[3], outs[0]),
-                        dtype=data.dtype, out_buffers=[out_buf], name=output_name)
 
 def gen_data(shape1, dtype1, shape2, dtype2):
     csr_matrix = sp.sparse.rand(shape1[0], shape1[1], density=0.2, format='csr', dtype=dtype1)

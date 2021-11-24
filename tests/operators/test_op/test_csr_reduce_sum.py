@@ -8,38 +8,8 @@ from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
 from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
+from akg.ops.array_gpu.csr_reduce_sum import csr_reduce_sum
 
-def csr_reduce_sum(data, col_idx, row_idx, axis, shape):
-    assert len(shape) == 2, "only supports 2-dim sparse tensor"
-    if axis < 0:
-        axis += len(shape)
-    reduce_first_axis = tvm.const(axis == 0)
-
-    num_rows = row_idx.shape[0] - 1
-    def gen_ir(data, col_idx, row_idx, output):
-        ib = tvm.ir_builder.create()
-        with ib.for_range(0, num_rows, name='i') as i:
-            ib.store(output, i, tvm.const(0, data.dtype))
-            start = ib.load(row_idx, i)
-            end = ib.load(row_idx, i + 1)
-            with ib.for_range(0, end - start, name='j') as j:
-                pos = start + j
-                val = tvm.expr.Select(pos < end, ib.load(data, pos), tvm.const(0, data.dtype))
-                with ib.if_scope(reduce_first_axis):
-                    col = ib.load(col_idx, pos)
-                    ib.store(output, col, val + ib.load(output, col))
-                with ib.else_scope():
-                    ib.scope_attr([tvm.api._IterVar((0, shape[1]), "j", 2)], "reduce_update", "")
-                    ib.store(output, i, val + ib.load(output, i))
-        return ib.get()
-
-    output_shape = [shape[1 - axis]]
-    output_name = "T_csr_reduce_sum_" + data.op.name + "_" + str(axis)
-    out_buf = tvm.decl_buffer(output_shape, data.dtype, output_name)
-    return tvm.extern([output_shape],
-                      [data, col_idx, row_idx],
-                      lambda ins, outs: gen_ir(ins[0], ins[1], ins[2], outs[0]),
-                      dtype=data.dtype, out_buffers=[out_buf], name=output_name)
     
 def gen_data(shape, dtype1, dtype2, axis):
     data = scipy.sparse.rand(shape[0], shape[1], density=0.2, format='csr', dtype=dtype1)
