@@ -93,6 +93,10 @@ NodeRef LowerFunc(Stmt &stmt, const std::string &name, const BuildConfig &config
 
 Buffer DeclBuffer(const NodeRef &arg, const int data_alignment, const int offset_factor,
                   const std::string &pre_name = "");
+
+void UpdateMultiValueFuncBinds(Map<Tensor, Buffer> &binds, Array<NodeRef> &tensor_args_list,
+                               Map<Tensor, Tensor> &tensor_replace);
+
 void GetBinds(const Array<NodeRef> &args, const Map<Tensor, Buffer> &binds, const BuildConfig &config,
               Array<NodeRef> *out_args, Map<Tensor, Buffer> *out_binds);
 void RenameBinds(Map<Tensor, Buffer> &binds, const BuildConfig &config, Array<NodeRef> &tensor_args_list,

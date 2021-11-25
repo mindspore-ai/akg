@@ -53,12 +53,20 @@ TVM_REGISTER_API("ir_pass.ToThreeAddress").set_body([](const TVMArgs args, TVMRe
   }
 });
 
+TVM_REGISTER_API("ir_pass.RewriteMultiValueFunc").set_body([](const TVMArgs args, TVMRetValue *ret) {
+  if (args.size() == 1) {
+    *ret = RewriteMultiValueFunc(args[0]);
+  } else {
+    CHECK_EQ(args.size(), 2);
+    *ret = RewriteMultiValueFunc(args[0], args[1]);
+  }
+});
+
 #define REGISTER_PASS(PassName) TVM_REGISTER_API("ir_pass." #PassName).set_body_typed(PassName);
 
 REGISTER_PASS(AutoPoly);
 REGISTER_PASS(GenTuningSpace);
 REGISTER_PASS(ReplaceSeparator);
-REGISTER_PASS(RewriteMultiValueFunc);
 REGISTER_PASS(RenameRealize);
 REGISTER_PASS(ElementwiseFlatten);
 REGISTER_PASS(FuseAxis);

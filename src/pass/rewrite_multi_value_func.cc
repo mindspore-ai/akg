@@ -35,9 +35,32 @@ using ValueIndexMapping = std::unordered_map<ValueIndex, FunctionRef>;
 using TensorMapping = std::unordered_map<TensorName, ValueIndexMapping>;
 
 class RewriteMultiValueFuncMutator : public IRMutator {
+ public:
+  explicit RewriteMultiValueFuncMutator(const Map<Tensor, Tensor> &multi_output_mapping) {
+    for (auto item : multi_output_mapping) {
+      Tensor old_tensor = item.first;
+      Tensor new_tensor = item.second;
+      func_ref_mapping[old_tensor->op->func_name()][old_tensor->value_index] = new_tensor->op;
+    }
+  }
+
  private:
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) override {
     // we only process AttrStmt of realize_scope because we don't know the data structure of other AttrStmts
+    if (op->attr_key == air::ir::attr::buffer_bind_scope) {
+      Stmt body = this->Mutate(op->body);
+      Array<NodeRef> tuple = Downcast<Array<NodeRef>>(op->node);
+      Tensor tensor = Downcast<Tensor>(tuple[1]);
+      auto buffer = Downcast<Buffer>(tuple[0]);
+      if (func_ref_mapping.count(tensor->op->func_name())) {
+        Tensor new_tensor =
+          Downcast<Operation>(get_function_ref(tensor->op->func_name(), tensor->value_index)).output(0);
+        return AttrStmt::make(Array<NodeRef>{tuple[0], new_tensor}, op->attr_key, op->value, body);
+      } else {
+        return AttrStmt::make(tuple, op->attr_key, op->value, body);
+      }
+    }
+
     if (op->attr_key != air::ir::attr::realize_scope) {
       return IRMutator::Mutate_(op, s);
     }
@@ -125,13 +148,24 @@ class RewriteMultiValueFuncMutator : public IRMutator {
     return Call::make(op->type, new_funcref->func_name(), op->args, op->call_type, new_funcref, 0);
   }
 
+  Stmt Mutate_(const ProducerConsumer *op, const Stmt &s) final {
+    if (op->func.defined() && func_ref_mapping.count(op->func->func_name())) {
+      auto body = this->Mutate(op->body);
+      for (auto sub_values : func_ref_mapping[op->func->func_name()]) {
+        body = ProducerConsumer::make(sub_values.second, op->is_producer, body);
+      }
+      return body;
+    }
+    return IRMutator::Mutate_(op, s);
+  }
+
   TensorMapping func_ref_mapping;
   std::unordered_set<TensorName> rewrite_names;
   std::unordered_map<TensorName, std::vector<const AttrStmt *>> attr_stmt_to_add;
 };
 
-Stmt RewriteMultiValueFunc(Stmt stmt) {
-  stmt = RewriteMultiValueFuncMutator().Mutate(stmt);
+Stmt RewriteMultiValueFunc(Stmt stmt, const Map<Tensor, Tensor> &multi_output_mapping) {
+  stmt = RewriteMultiValueFuncMutator(multi_output_mapping).Mutate(stmt);
   return stmt;
 }
 }  // namespace ir

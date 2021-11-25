@@ -54,7 +54,7 @@ Stmt ReplaceSeparator(Stmt stmt);
  * \param stmt The stmt to be transformed
  * \return Transformed stmt.
  */
-Stmt RewriteMultiValueFunc(Stmt stmt);
+Stmt RewriteMultiValueFunc(Stmt stmt, const Map<Tensor, Tensor> &multi_output_mapping = {});
 
 /*!
  * \brief Rename the attr in LocalUB.

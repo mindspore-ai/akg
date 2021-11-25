@@ -16,6 +16,7 @@
 # under the License.
 """Hybrid Script Parser"""
 
+# 2021.10.21 - Support reverse order loop range.
 # 2019.12.30 - Modify parser.py, add TensorIntrinSubscriptParser, generate_one_assign, visit_Assign,
 #              and some visit_ function, modify _floordiv.
 
@@ -245,6 +246,8 @@ class HybridParser(ast.NodeVisitor):
         self.side_effect = set() # Tensors with side effects
         self.parsed_body = None # The parsed HalideIR body
         self.returned = False # If this function has a valid return
+        self.slice_mapping = dict()
+        self.dim_idx = 0
 
 
     def add_symbol(self, key, ty, val): #pylint: disable=invalid-name
@@ -396,6 +399,26 @@ class HybridParser(ast.NodeVisitor):
 
         return _make.Provide(buf.op, 0, value, args)
 
+    def slice_collection(self, lhs):
+        order = 0
+        if isinstance(lhs, ast.Subscript):
+            args = self.visit(lhs.slice)
+
+            if not isinstance(args, Iterable):
+                args = [args]
+
+            for arg in args:
+                if isinstance(arg, _expr.Call) and arg.name == "Slice":
+                    arg_name = arg.__str__()
+                    iter_var = _api.var("slice_" + str(self.dim_idx))
+                    self.dim_idx += 1
+                    if arg_name in self.slice_mapping:
+                        var_list = self.slice_mapping[arg_name]
+                        self.slice_mapping[arg_name] = var_list + \
+                            [[iter_var, order], ]
+                    else:
+                        self.slice_mapping[arg_name] = [[iter_var, order]]
+                    order += 1
 
     def generate_one_assign(self, lhs, rhs):
         if isinstance(rhs, _expr.Expr):
@@ -467,39 +490,50 @@ class HybridParser(ast.NodeVisitor):
 
         # List of tuple (iter_var, lower, upper, step).
         expand_args = []
-        # Number of expand_args element.
-        dim_idx = 0
+        ellipsis_dim_idx = 0
 
         def _const(num):
             return _api.const(num, 'int32')
 
+        slice_count = {}
         for arg in args:
-            if arg.name == "Ellipsis":
+            if isinstance(arg,
+                          _expr.Call) and arg.name == "Ellipsis":
                 ellipsis_cross_dims = len(lhs.shape) - len(args) + 1
                 for _ in range(ellipsis_cross_dims):
-                    lower, upper, step = _const(0), lhs.shape[dim_idx], _const(1)
+                    lower, upper, step = _const(
+                        0), lhs.shape[ellipsis_dim_idx], _const(1)
                     expand_args.append(
-                        (_api.var("i" + str(dim_idx)), lower, upper, step))
-                    dim_idx += 1
-            elif arg.name == "Slice":
+                        (_api.var("ellipsi_" + str(ellipsis_dim_idx)), lower, upper, step))
+                    ellipsis_dim_idx += 1
+            elif isinstance(arg,
+                            _expr.Call) and arg.name == "Slice":
                 lower, upper, step = arg.args
+                arg_name = arg.__str__()
+                if arg_name not in slice_count:
+                    slice_count[arg_name] = 0
+                iter_var, _ = self.slice_mapping[arg_name][slice_count[arg_name]]
+                slice_count[arg_name] += 1
                 expand_args.append(
-                    (_api.var("i" + str(dim_idx)), lower, upper, step))
-                dim_idx += 1
+                    (iter_var, lower, upper, step))
+            else:
+                expand_args.append([arg])
         res = _make.Provide(lhs.op, lhs.value_index, rhs,
                             [arg[0] for arg in expand_args])
         for idx in range(len(expand_args), 0, -1):
             arg = expand_args[idx - 1]
-            iter_var, lower, upper = arg[:3]
-            res = _make.For(iter_var, lower, upper, _stmt.For.Parallel, 0, res)
+            if len(arg) == 4:
+                iter_var, lower, upper = arg[:3]
+                res = _make.For(iter_var, lower, upper,
+                                _stmt.For.Parallel, 0, res)
         return res
 
     def visit_Assign(self, node):
-        rhs = self.visit(node.value)
-
         _internal_assert(len(node.targets) == 1, "Internal Error")
 
         lhs = node.targets[0]
+        self.slice_collection(lhs)
+        rhs = self.visit(node.value)
 
         if isinstance(rhs, Operation):
             rmap = {}
@@ -529,12 +563,13 @@ class HybridParser(ast.NodeVisitor):
             ]
             return concat_list_to_block(assign_list)
         else:
-            return self.generate_one_assign(lhs, rhs)
+            assign_stmt = self.generate_one_assign(lhs, rhs)
+            self.slice_mapping.clear()
+
+            return assign_stmt
 
     def visit_Index(self, node):
-        if isinstance(node.value, ast.Tuple):
-            return self.visit(node.value)
-        return [self.visit(node.value)]
+        return self.visit(node.value)
 
 
     def visit_Attribute(self, node):
@@ -548,7 +583,10 @@ class HybridParser(ast.NodeVisitor):
     def visit_Slice(self, node):
         lower = self.visit(node.lower)
         upper = self.visit(node.upper)
-        step = self.visit(node.step)
+        if node.step:
+            step = self.visit(node.step)
+        else:
+            step = _api.const(1, 'int32')
         return call_pure_intrin("handle", "Slice", lower, upper, step)
 
     def visit_ExtSlice(self, node):
@@ -579,9 +617,29 @@ class HybridParser(ast.NodeVisitor):
                         buf = buf[i.value]
 
                 return buf
-
+            expand_args = []
+            slice_count = {}
+            current_order = -1
+            for arg in args:
+                if isinstance(arg,
+                              _expr.Call) and arg.name == "Slice":
+                    arg_name = arg.__str__()
+                    _internal_assert(arg_name in self.slice_mapping,
+                                     "Can't deal with {}: slice in tuple assignment or not appeared in LHS".format(arg_name))
+                    if arg_name not in slice_count:
+                        slice_count[arg_name] = 0
+                    _internal_assert(len(self.slice_mapping[arg_name]) > slice_count[arg_name],
+                                     "Can't deal with {}: more slice on RHS then that on LHS".format(arg_name))
+                    iter_var, order = self.slice_mapping[arg_name][slice_count[arg_name]]
+                    _internal_assert(order > current_order,
+                                     "The order of slices on LHS and that on RHS doesn't match: {}".format(arg_name))
+                    slice_count[arg_name] += 1
+                    current_order = order
+                    expand_args.append(iter_var)
+                else:
+                    expand_args.append(arg)
             if isinstance(node.ctx, ast.Load):
-                return _make.Call(buf.dtype, buf.name, args, _expr.Call.Halide,
+                return _make.Call(buf.dtype, buf.name, expand_args, _expr.Call.Halide,
                                   buf.op, buf.value_index)
             return buf, args
 
@@ -719,7 +777,7 @@ class HybridParser(ast.NodeVisitor):
 
 
     def visit_For(self, node):
-        iter_var, low, ext, for_type = self.visit(node.iter)
+        iter_var, low, ext, for_type, step = self.visit(node.iter)
         _internal_assert(isinstance(node.target, ast.Name), \
                          "The loop iterator should be a variable!")
 
@@ -729,17 +787,18 @@ class HybridParser(ast.NodeVisitor):
             low = _ir_pass.Simplify(low)
             ext = _ir_pass.Simplify(ext)
             _internal_assert(isinstance(low, _expr.ConstExpr) and
-                             isinstance(ext, _expr.ConstExpr), \
+                             isinstance(ext, _expr.ConstExpr) and
+                             isinstance(step, _expr.ConstExpr),
                              "Const range should start from a const " + \
                              "and iterate const times")
 
-            low, ext = low.value, ext.value
+            low, ext, step = low.value, ext.value, step.value
             if ext > 114514:
                 logging.log(logging.CRITICAL, \
                             '[Warning] Are you sure to unroll a large loop in Python?')
 
             bodies = []
-            for i in range(low, low + ext):
+            for i in range(low, low + ext, step):
                 self.add_symbol(_name, Symbol.ConstLoopVar, i)
                 body = visit_list_to_block(self.visit, node.body)
                 body = self.wrap_up_realize(node, body)
@@ -748,14 +807,23 @@ class HybridParser(ast.NodeVisitor):
             return concat_list_to_block(bodies)
 
         if iter_var is None:
-            _internal_assert(for_type is not None, "The loop iterating function parse error!")
+            _internal_assert(_ir_pass.Equal(step, _api.const(1, dtype='int32')) or
+                             _ir_pass.Equal(
+                                 step, _api.const(-1, dtype='int32')),
+                             "The loop step should be +/-1!")
+            _internal_assert(for_type is not None,
+                             "The loop iterating function parse error!")
             offset = iter_var = _api.var(_name)
-            if not _ir_pass.Equal(low, _api.const(0, 'int32')):
+            if _ir_pass.Equal(step, _api.const(-1, 'int32')):
+                ext = ext * step
+                offset = low - iter_var
+            elif not _ir_pass.Equal(low, _api.const(0, 'int32')):
                 offset = iter_var + low
             self.add_symbol(_name, Symbol.LoopVar, offset)
             _body = visit_list_to_block(self.visit, node.body)
         else:
-            _internal_assert(for_type is None, "The loop bind function parse error!")
+            _internal_assert(for_type is None,
+                             "The loop bind function parse error!")
             self.add_symbol(_name, Symbol.ThreadBind, iter_var)
             self.device += 1
             _body = visit_list_to_block(self.visit, node.body)

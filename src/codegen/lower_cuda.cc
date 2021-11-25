@@ -50,7 +50,10 @@ StageResult CudaLowerBegin(Stmt &, LowerData &data) {
     return {stmt, false};
   }
   stmt = NEXT_PASS(ReplaceSeparator, stmt);
-  stmt = NEXT_PASS(RewriteMultiValueFunc, stmt);
+
+  Map<Tensor, Tensor> multi_output_mapping;
+  UpdateMultiValueFuncBinds(data->binds_0, data->args, multi_output_mapping);
+  stmt = NEXT_PASS(RewriteMultiValueFunc, stmt, multi_output_mapping);
 
   Map<Tensor, Tensor> replace;
   RenameBinds(data->binds_0, data->config, data->args, data->arg_list_0, replace);

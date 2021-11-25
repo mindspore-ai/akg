@@ -55,8 +55,9 @@ def generate_trait(desc):
                         transpose_b = str(int(attr['value']))
                 op_trait += '_' + transpose_a + '_' + transpose_b
             traits.append(op_trait)
-            tensor_idx[op['output_desc'][0]['tensor_name']] = counter
-            counter += 1
+            for op_out_desc in op['output_desc'] if op['output_desc'] is not None else []:
+                tensor_idx[op_out_desc['tensor_name']] = counter
+                counter += 1
         output_idx = []
         for out_desc in desc['output_desc'] if desc['output_desc'] is not None else []:
             output_idx.append(tensor_idx[out_desc['tensor_name']])
