@@ -33,7 +33,6 @@ void GpuDmaAnalysisStrategy::AddGpuConstraint() {
 }
 
 void CastStrategy::AddGpuConstraint() { MarkDataSize(); }
-
 void CastStrategy::AddCpuConstraint() { MarkDataSize(); }
 
 void GemmStrategy::AddGpuConstraint() {
@@ -275,77 +274,84 @@ std::pair<int64_t, int64_t> GemmStrategy::GetDivisibleFactorForMN(int64_t shape_
 }
 
 void ReduceStrategy::AddGpuConstraint() {
-  reduce_axes_ = analyzer_->GetAxesOfAttr(AT_REDUCE_AXIS);
-  if (reduce_axes_.empty()) {
-    return;
-  }
-  if (analyzer_->scop_info_.user_config_.GetThreadConfig() != nullptr &&
-      analyzer_->scop_info_.user_config_.GetBlockConfig() != nullptr &&
-      analyzer_->scop_info_.user_config_.GetThreadConfig()->bound > 0 &&
-      analyzer_->scop_info_.user_config_.GetBlockConfig()->bound > 0) {
-    return;
-  }
-  size_t depth = 0;
-  auto HasTranspose = [this](const AttrInfo &info) {
-    std::string key = info.attr_key;
-    return key.find(AT_TRANSPOSE) != std::string::npos;
-  };
-  int64_t reduce_length = 1;
-  int64_t nonreduce_length = 1;
-  analyzer_->ForEachAxisTopDown([this, &depth, &reduce_length, &nonreduce_length, &HasTranspose](TileAxis *axis) {
-    if (!has_transpose_) {
-      has_transpose_ = std::any_of(axis->attrs.begin(), axis->attrs.end(), HasTranspose);
+  for (int band_index = 0; band_index < static_cast<int>(analyzer_->RootAxis()->children.size()); ++band_index) {
+    reduce_axes_ = analyzer_->GetAxesOfAttr(AT_REDUCE_AXIS, band_index);
+    if (reduce_axes_.empty()) {
+      continue;
     }
+    if (analyzer_->scop_info_.user_config_.GetThreadConfig() != nullptr &&
+        analyzer_->scop_info_.user_config_.GetBlockConfig() != nullptr &&
+        analyzer_->scop_info_.user_config_.GetThreadConfig()->bound > 0 &&
+        analyzer_->scop_info_.user_config_.GetBlockConfig()->bound > 0) {
+      continue;
+    }
+    size_t depth = 0;
+    auto HasTranspose = [this](const AttrInfo &info) {
+      std::string key = info.attr_key;
+      return key.find(AT_TRANSPOSE) != std::string::npos;
+    };
+    int64_t reduce_length = 1;
+    int64_t nonreduce_length = 1;
+    analyzer_->ForEachAxisTopDown(
+      [this, &depth, &band_index, &reduce_length, &nonreduce_length, &HasTranspose](TileAxis *axis) {
+        if (axis->index != band_index && axis != analyzer_->RootAxis()) {
+          return;
+        }
+        if (!has_transpose_) {
+          has_transpose_ = std::any_of(axis->attrs.begin(), axis->attrs.end(), HasTranspose);
+        }
 
-    if (axis == analyzer_->RootAxis() || axis->is_inner) {
-      return;
-    }
-    ++depth;
-    if (axis->mc_sup) {
-      injective_axes_.emplace_back(axis);
-      if (auto ext = axis->range_extent.as<IntImm>()) {
-        nonreduce_length *= ext->value;
+        if (axis == analyzer_->RootAxis() || axis->is_inner) {
+          return;
+        }
+        ++depth;
+        if (axis->mc_sup) {
+          injective_axes_.emplace_back(axis);
+          if (auto ext = axis->range_extent.as<IntImm>()) {
+            nonreduce_length *= ext->value;
+          }
+          return;
+        }
+        if (auto ext = axis->range_extent.as<IntImm>()) {
+          reduce_length *= ext->value;
+        } else if (analyzer_->scop_info_.analysis_result_.IsCsrDynamicExtent(axis->range_extent)) {
+          reduce_length = analyzer_->scop_info_.user_config_.GetCsrThreadNum();
+        }
+        if (std::count(reduce_axes_.begin(), reduce_axes_.end(), axis)) {
+          return;
+        }
+        reduce_axes_.emplace_back(axis);
+      });
+    all_reduce_ = reduce_axes_.size() == depth;
+    auto direction = analyzer_->scop_info_.analysis_result_.GetReduceDirectionOfBand(band_index);
+
+    if (!analyzer_->scop_info_.user_config_.EnableStitchFusion()) {
+      if (reduce_length <= reduce_length_limit) {
+        analyzer_->scop_info_.user_config_.SetEnableOneDimThread(true);
+        analyzer_->GetTileLogger().AppendLine(GPU_MAPPING, "ReduceLength <= 32, enable onedim thread.");
       }
-      return;
+      if ((direction == ReduceDirection::Y && reduce_length <= reduce_length_limit) ||
+          ((direction == ReduceDirection::X || direction == ReduceDirection::ALL) &&
+           reduce_length < reduce_length_limit)) {
+        analyzer_->scop_info_.analysis_result_.SetUseGpuReduceLib(false);
+        analyzer_->GetTileLogger().AppendLine(GPU_MAPPING, "Small Reduction (Y<=32, X<32), disable akg reduce lib.");
+      }
+      if (direction == ReduceDirection::X && reduce_length < 2 * reduce_length_limit &&
+          nonreduce_length > max_y_z_dim_block_ * max_x_y_dim_thread_) {
+        analyzer_->scop_info_.analysis_result_.SetUseGpuReduceLib(false);
+        analyzer_->GetTileLogger().AppendLine(GPU_MAPPING,
+                                              "Small Reduction (X<64) and large nonreduction axis (exceeding block and "
+                                              "thread limit) , disable akg reduce lib.");
+      }
     }
-    if (auto ext = axis->range_extent.as<IntImm>()) {
-      reduce_length *= ext->value;
-    } else if (analyzer_->scop_info_.analysis_result_.IsCsrDynamicExtent(axis->range_extent)) {
-      reduce_length = analyzer_->scop_info_.user_config_.GetCsrThreadNum();
+    if (!analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib()) {
+      DisableReduceMapping();
+      if (direction == ReduceDirection::X) {
+        AkgReduceLibStrategyOnGpu(band_index);
+      }
+    } else {
+      AkgReduceLibStrategyOnGpu(band_index);
     }
-    if (std::count(reduce_axes_.begin(), reduce_axes_.end(), axis)) {
-      return;
-    }
-    reduce_axes_.emplace_back(axis);
-  });
-  all_reduce_ = reduce_axes_.size() == depth;
-  auto direction = analyzer_->scop_info_.analysis_result_.GetReduceDirectionOfBand();
-  if (!analyzer_->scop_info_.user_config_.EnableStitchFusion()) {
-    if (reduce_length <= reduce_length_limit) {
-      analyzer_->scop_info_.user_config_.SetEnableOneDimThread(true);
-      analyzer_->GetTileLogger().AppendLine(GPU_MAPPING, "ReduceLength <= 32, enable onedim thread.");
-    }
-    if ((direction == ReduceDirection::Y && reduce_length <= reduce_length_limit) ||
-        (direction == ReduceDirection::X && reduce_length < reduce_length_limit)) {
-      analyzer_->scop_info_.analysis_result_.SetUseGpuReduceLib(false);
-      analyzer_->GetTileLogger().AppendLine(GPU_MAPPING, "Small Reduction (Y<=32, X<32), disable akg reduce lib.");
-    }
-    if (direction == ReduceDirection::X && reduce_length < 2 * reduce_length_limit &&
-        nonreduce_length > max_y_z_dim_block_ * max_x_y_dim_thread_) {
-      analyzer_->scop_info_.analysis_result_.SetUseGpuReduceLib(false);
-      analyzer_->GetTileLogger().AppendLine(GPU_MAPPING,
-                                            "Small Reduction (X<64) and large nonreduction axis (exceeding block and "
-                                            "thread limit) , disable akg reduce lib.");
-    }
-  }
-
-  if (!analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib()) {
-    DisableReduceMapping();
-    if (direction == ReduceDirection::X) {
-      AkgReduceLibStrategyOnGpu();
-    }
-  } else {
-    AkgReduceLibStrategyOnGpu();
   }
 }
 
@@ -360,10 +366,11 @@ void ReduceStrategy::DisableReduceMapping() {
   }
 }
 
-void ReduceStrategy::AkgReduceLibStrategyOnGpu() {
+void ReduceStrategy::AkgReduceLibStrategyOnGpu(int band_index) {
   // disable atomic-add for bitwise-reduction
-  bool disable_atomic = !analyzer_->scop_info_.user_config_.GetEnableAtomicAdd() ||
-                        analyzer_->scop_info_.analysis_result_.GetOpTemplate() == Template::BITWISE_REDUCTION;
+  bool disable_atomic =
+    !analyzer_->scop_info_.user_config_.GetEnableAtomicAdd() ||
+    analyzer_->scop_info_.analysis_result_.GetOpTemplateOfBand(band_index) == Template::BITWISE_REDUCTION;
   if (disable_atomic) {
     for (auto axis : reduce_axes_) {
       axis->block_constraints.map_extent_ = MIN_TILE;
@@ -421,9 +428,8 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu() {
   if (is_special_4d) {
     return;
   }
-  auto direction = analyzer_->scop_info_.analysis_result_.GetReduceDirectionOfBand();
-  bool square_thread = direction == ReduceDirection::Y &&
-                       analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib();
+  auto direction = analyzer_->scop_info_.analysis_result_.GetReduceDirectionOfBand(band_index);
+  bool square_thread = direction == ReduceDirection::Y && analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib();
   bool use_local = UseRegisterMem();
   int64_t min_blocks = square_thread ? 32 : 512;
   int64_t min_elem_per_thread = use_local ? 2 : 8;
@@ -495,8 +501,6 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu() {
       }
     }
   }
-
-  // Check mod and try to make number of thread align to mod.
   for (auto axis : reduce_axes_) {
     for (const auto &attr : axis->attrs) {
       if (attr.attr_key != AT_MOD) {
@@ -853,55 +857,93 @@ void GpuStrategy::SetCoalescedAccess() {
   }
 }
 
+std::vector<int> GpuStrategy::SortBands() {
+  std::vector<int> sorted_bands;
+  std::unordered_map<Template, std::vector<int>> templates_map;
+  for (int i = 0; i < static_cast<int>(analyzer_->RootAxis()->children.size()); ++i) {
+    bool is_reduce = false;
+    analyzer_->ForEachAxisTopDown([this, &is_reduce, &i](TileAxis *axis) {
+      if (axis == analyzer_->RootAxis() || axis->index != i) {
+        return;
+      }
+      if (!axis->mc_sup) {
+        is_reduce = true;
+      }
+    });
+    if (is_reduce) {
+      templates_map[Template::REDUCTION].emplace_back(i);
+    } else {
+      templates_map[Template::PURE_ELEM].emplace_back(i);
+    }
+  }
+  auto InsertIndexOfBand = [&sorted_bands, &templates_map](Template templates) {
+    auto it = templates_map.find(templates);
+    if (it != templates_map.end()) {
+      for (auto i : it->second) {
+        sorted_bands.emplace_back(i);
+      }
+    }
+  };
+  InsertIndexOfBand(Template::REDUCTION);
+  InsertIndexOfBand(Template::PURE_ELEM);
+  return sorted_bands;
+}
+
 void GpuStrategy::AddGpuConstraint() {
   ShowOptions();
-  InitMappingLimit();
-  if (!analyzer_->scop_info_.user_config_.GetIsTuning()) {
-    if (template_ == Template::BROADCAST_OP || template_ == Template::CUSTOM_CONFIG) {
-      BroadcastSpeedup();
-    } else if (template_ == Template::PAD_OP) {
-      PadSpeedup();
-    } else if (template_ == Template::TRANSPOSE_OP) {
-      TransposeSpeedup();
-    }
-  }
-  BuildAxesQueue();
-  if (analyzer_->scop_info_.user_config_.GetIsTuning()) {
-    ApplyCustomConstraint();
-    for (size_t i = 0; i < max_dim_; ++i) {
-      TileAxis::MappingConstraint pad;
-      if (i >= thread_binding_spaces_.size()) {
-        thread_binding_spaces_.emplace_back(pad);
-      }
-      if (i >= block_binding_spaces_.size()) {
-        block_binding_spaces_.emplace_back(pad);
+  bool is_first = true;
+  for (auto sorted_idx : SortBands()) {
+    band_index_ = sorted_idx;
+    InitMappingLimit();
+    if (!analyzer_->scop_info_.user_config_.GetIsTuning()) {
+      if (template_ == Template::BROADCAST_OP || template_ == Template::CUSTOM_CONFIG) {
+        BroadcastSpeedup();
+      } else if (template_ == Template::PAD_OP) {
+        PadSpeedup();
+      } else if (template_ == Template::TRANSPOSE_OP) {
+        TransposeSpeedup();
       }
     }
-    return;
-  }
-  // tensor of tensor
-  bool need_injective_speed_up = true;
-  if ((template_ == Template::PURE_ELEM || template_ == Template::BROADCAST_OP || template_ == Template::EXTERN_CALL ||
-       (template_ == Template::REDUCTION && !analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib())) &&
-      analyzer_->scop_info_.analysis_result_.GetTensorOfTensor()) {
-    SetCoalescedAccess();
-    need_injective_speed_up = !NeedModifyOrderOfAxis();
+    BuildAxesQueue();
+    if (analyzer_->scop_info_.user_config_.GetIsTuning()) {
+      ApplyCustomConstraint();
+      for (size_t i = 0; i < max_dim_; ++i) {
+        TileAxis::MappingConstraint pad;
+        if (i >= thread_binding_spaces_.size()) {
+          thread_binding_spaces_.emplace_back(pad);
+        }
+        if (i >= block_binding_spaces_.size()) {
+          block_binding_spaces_.emplace_back(pad);
+        }
+      }
+      return;
+    }
+    // tensor of tensor
+    bool need_injective_speed_up = true;
+    if ((template_ == Template::PURE_ELEM || template_ == Template::BROADCAST_OP ||
+         template_ == Template::EXTERN_CALL ||
+         (template_ == Template::REDUCTION && !analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib())) &&
+        analyzer_->scop_info_.analysis_result_.GetTensorOfTensor()) {
+      SetCoalescedAccess();
+      need_injective_speed_up = !NeedModifyOrderOfAxis();
+    }
+    need_injective_speed_up &= is_first;
+    block_count_ = 0;
+    InnerThreadOuterBlock(is_first);
+    if ((template_ == Template::PURE_ELEM || template_ == Template::EXTERN_CALL) && need_injective_speed_up) {
+      InjectiveSpeedup();
+    }
+
+    // Vectorization for Elementwise Op
+    if (template_ == Template::PURE_ELEM || template_ == Template::BROADCAST_OP || template_ == Template::PAD_OP) {
+      CheckVectorizationForElemwiseOp(analyzer_->sch_);
+    }
+    if (analyzer_->scop_info_.user_config_.GetEnableVectorization() && is_first) {
+      VectorizationSpeedup();
+    }
+    is_first = false;
   }
 
-  InnerThreadOuterBlock();
-  if ((template_ == Template::PURE_ELEM || template_ == Template::EXTERN_CALL) && need_injective_speed_up) {
-    InjectiveSpeedup();
-  }
-
-  // Vectorization for Elementwise Op
-  if (template_ == Template::PURE_ELEM || template_ == Template::BROADCAST_OP || template_ == Template::PAD_OP) {
-    CheckVectorizationForElemwiseOp(analyzer_->sch_);
-  }
-  if (analyzer_->scop_info_.user_config_.GetEnableVectorization()) {
-    VectorizationSpeedup();
-  }
-
-  SetMappingConfig();
   if (!((template_ == Template::MATMUL || template_ == Template::CONV) &&
         analyzer_->scop_info_.user_config_.GetEnableTensorCore())) {
     analyzer_->ForEachAxisTopDown([this](TileAxis *axis) {
@@ -913,18 +955,13 @@ void GpuStrategy::AddGpuConstraint() {
       }
     });
   }
-  auto template_str = analyzer_->scop_info_.analysis_result_.ShowOpTemplate(template_);
-  analyzer_->RootAxis()->MarkWithAttr(AttrInfo{AT_TEMPLATE, template_str});
-  if (analyzer_->scop_info_.user_config_.GetEnableConvTensorCore()) {
-    MarkMappingInRootAxis();
-  }
 }
 
 void GpuStrategy::VectorizationSpeedup() {
   std::stringstream ss;
   std::vector<TileAxis *> vectorization_axes;
   analyzer_->ForEachAxisTopDown([this, &vectorization_axes](TileAxis *axis) {
-    if (axis == analyzer_->RootAxis() || axis->range_extent.as<IntImm>() == nullptr) {
+    if (axis == analyzer_->RootAxis() || axis->range_extent.as<IntImm>() == nullptr || axis->index != band_index_) {
       return;
     }
     vectorization_axes.emplace_back(axis);
@@ -932,12 +969,12 @@ void GpuStrategy::VectorizationSpeedup() {
 
   auto WriteConfigBack = [this, &vectorization_axes, &ss]() {
     for (size_t i = 0; i < vectorization_axes.size(); ++i) {
-      ss << "replace block " << block_cfg_[i] << " with " << vectorization_axes[i]->block_constraints.map_extent_
-         << " replace thread " << thread_cfg_[vectorization_axes.size() - 1 - i] << " with "
+      ss << " replace thread " << thread_cfg_[vectorization_axes.size() - 1 - i] << " with "
          << vectorization_axes[i]->thread_constraints.map_extent_;
       analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
-      block_cfg_[i] = vectorization_axes[i]->block_constraints.map_extent_;
       thread_cfg_[vectorization_axes.size() - 1 - i] = vectorization_axes[i]->thread_constraints.map_extent_;
+      vectorization_axes[i]->thread_constraints.map_cand_.clear();
+      vectorization_axes[i]->thread_constraints.map_cand_.push_back(thread_cfg_[vectorization_axes.size() - 1 - i]);
     }
   };
 
@@ -1015,13 +1052,16 @@ void GpuStrategy::CheckVectorizationForElemwiseOp(isl::schedule sch) {
 
   auto root = sch.get_root();
   isl::schedule_node node = GetOuterBand(root);
-  if (!node.as<isl::schedule_node_band>().get_permutable()) {
+  if (!node.isa<isl::schedule_node_band>() && static_cast<int>(node.n_children()) > band_index_) {
+    node = node.get_child(band_index_).child(0);
+  }
+  if (!node.isa<isl::schedule_node_band>() || !node.as<isl::schedule_node_band>().get_permutable()) {
     return;
   }
 
   std::vector<int> axes;
   analyzer_->ForEachAxisTopDown([this, &axes](TileAxis *axis) {
-    if (axis == analyzer_->RootAxis()) {
+    if (axis == analyzer_->RootAxis() || axis->index != band_index_) {
       return;
     }
     axes.emplace_back(axis->c1_constraints.tile_extent_.as<IntImm>()->value);
@@ -1041,44 +1081,13 @@ void GpuStrategy::CheckVectorizationForElemwiseOp(isl::schedule sch) {
   analyzer_->scop_info_.user_config_.SetEnableVectorization(true);
 }
 
-void GpuStrategy::MarkMappingInRootAxis() {
-  auto thread_cfg = analyzer_->scop_info_.user_config_.GetThreadConfig();
-  CHECK(thread_cfg);
-  for (auto it : mapping_idx_pos_) {
-    if (it.first >= int(thread_cfg->bound)) {
-      continue;
-    }
-    auto map_value = std::to_string(thread_cfg->GetAt(it.first).second);
-    std::string attr_value = it.second + "_" + map_value;
-    analyzer_->RootAxis()->MarkWithAttr(AttrInfo{AT_THREAD_CFG, attr_value});
-  }
-  auto block_cfg = analyzer_->scop_info_.user_config_.GetBlockConfig();
-  CHECK(block_cfg);
-  for (auto it : mapping_idx_pos_) {
-    if (it.first >= int(block_cfg->bound)) {
-      continue;
-    }
-    std::string attr_key = AT_BLOCK_CFG;
-    if (it.first == 0) {
-      attr_key += "_mi";
-    } else if (it.first == 1) {
-      attr_key += "_hi";
-    } else if (it.first == 2) {
-      attr_key += "_oc";
-    }
-    auto map_value = std::to_string(block_cfg->GetAt(it.first).second);
-    std::string attr_value = it.second + "_" + map_value;
-    analyzer_->RootAxis()->MarkWithAttr(AttrInfo{attr_key, attr_value});
-  }
-}
-
 void GpuStrategy::InitMappingLimit() {
   max_x_y_dim_thread_ = analyzer_->scop_info_.user_config_.GetMaxElemPerThread();
 
   // Determine op template
   size_t depth = 0;
   analyzer_->ForEachAxisTopDown([this, &depth](TileAxis *axis) {
-    if (axis == analyzer_->RootAxis()) {
+    if (axis == analyzer_->RootAxis() || axis->index != band_index_) {
       return;
     }
     ++depth;
@@ -1090,13 +1099,14 @@ void GpuStrategy::InitMappingLimit() {
       analyzer_->scop_info_.user_config_.GetBlockConfig()->bound > 0) {
     template_ = Template::CUSTOM_CONFIG;
   } else {
-    template_ = analyzer_->scop_info_.analysis_result_.GetOpTemplate();
+    template_ = analyzer_->scop_info_.analysis_result_.GetOpTemplateOfBand(band_index_);
   }
-  ReduceDirection direct = analyzer_->scop_info_.analysis_result_.GetReduceDirectionOfBand();
+  ReduceDirection direct = analyzer_->scop_info_.analysis_result_.GetReduceDirectionOfBand(band_index_);
   bool use_lib = analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib();
   reverse_binding_ = use_lib && direct == ReduceDirection::Y;
 
   // Thread configuration
+  thread_limit_.clear();
   if (template_ == Template::CUSTOM_CONFIG) {
     auto thread_config = analyzer_->scop_info_.user_config_.GetThreadConfig();
     for (size_t i = 0; i < thread_config->bound; ++i) {
@@ -1132,6 +1142,7 @@ void GpuStrategy::InitMappingLimit() {
   }
 
   // Block configuration
+  block_limit_.clear();
   if (template_ == Template::CUSTOM_CONFIG) {
     auto block_config = analyzer_->scop_info_.user_config_.GetBlockConfig();
     for (int i = 0; i < static_cast<int>(block_config->bound) - 1; ++i) {
@@ -1157,8 +1168,9 @@ void GpuStrategy::InitMappingLimit() {
 }
 
 void GpuStrategy::BuildAxesQueue() {
+  this->pending_axes_.clear();
   analyzer_->ForEachAxisTopDown([this](TileAxis *axis) {
-    if (axis == this->analyzer_->RootAxis()) {
+    if (axis == this->analyzer_->RootAxis() || axis->index != band_index_) {
       return;
     }
     const auto r = axis->range_extent.as<IntImm>();
@@ -1167,7 +1179,7 @@ void GpuStrategy::BuildAxesQueue() {
     if (!axis->is_inner && extent > 0) {
       this->pending_axes_.push_front(std::make_pair(axis, extent));
     }
-    
+
     // init map extent to shape if they are not modified by other constraints
     axis->block_constraints.map_extent_ =
       axis->block_constraints.map_extent_ == 0 ? r->value : axis->block_constraints.map_extent_;
@@ -1177,14 +1189,14 @@ void GpuStrategy::BuildAxesQueue() {
       axis->block_constraints.map_extent_ = 1;
       axis->thread_constraints.map_extent_ = 1;
       std::stringstream ss;
-      ss << "Axis " << axis->index << "_" << axis->dim_axis 
-          << " Coincidence = 0 and Akg-reduce-lib not enabled, disable block/thread mapping.";
-      analyzer_->GetTileLogger().AppendLog(GPU_MAPPING,  ss);
+      ss << "Axis " << axis->index << "_" << axis->dim_axis
+         << " Coincidence = 0 and Akg-reduce-lib not enabled, disable block/thread mapping.";
+      analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
     }
   });
 }
 
-void GpuStrategy::InnerThreadOuterBlock() {
+void GpuStrategy::InnerThreadOuterBlock(bool write_cfg) {
   if (pending_axes_.empty()) {
     return;
   }
@@ -1216,8 +1228,12 @@ void GpuStrategy::InnerThreadOuterBlock() {
     int64_t rest_threads = std::min(total_available_thread_ / activated_threads, thread_limit_[thread_cfg_.size()]);
     ss << "axis " << axis->index << "_" << axis->dim_axis << " shape = " << shape
        << ", rest_threads = " << rest_threads;
+    ss << "\n--------> Tile: " << axis->c1_constraints.tile_min_ << "," << axis->c1_constraints.tile_extent_;
+    ss << "\n--------> Thread: " << axis->thread_constraints.map_min_ << "," << axis->thread_constraints.map_extent_;
+    ss << "\n--------> Block: " << axis->block_constraints.map_min_ << "," << axis->block_constraints.map_extent_;
     auto SkipMapping = [this, &axis, &shape, &ss, &inner_dim, &thread_dim]() {
       axis->thread_constraints.map_extent_ = 1;
+      axis->thread_constraints.map_cand_.emplace_back(1);
       auto tile = inner_dim < thread_dim ? elem_per_thread_[inner_dim] : 1;
       tile = tile == SpItemPerThread::AUTO   ? std::min(axis->thread_constraints.item_process_, max_elem_per_thread_)
              : tile == SpItemPerThread::FULL ? std::min(shape, max_elem_per_thread_)
@@ -1247,10 +1263,6 @@ void GpuStrategy::InnerThreadOuterBlock() {
           pending_axes_.push_back(std::make_pair(axis, std::max<int64_t>(ceil(static_cast<float>(shape) / tile), 1)));
           ss << ", map to block.";
         }
-        std::string attr_value =
-          reverse_binding_ ? reduce_y_idx_pos_[inner_dim] + "_1" : mapping_idx_pos_[inner_dim] + "_1";
-        axis->MarkWithAttr(AttrInfo{AT_THREAD_CFG, attr_value});
-        ss << ", mark with attr " << AT_THREAD_CFG << ": " << attr_value;
       }
       analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
     };
@@ -1259,7 +1271,7 @@ void GpuStrategy::InnerThreadOuterBlock() {
       rest_threads = std::min(rest_threads, axis->thread_constraints.map_extent_);
     }
 
-    if (thread_cfg_.size() >= thread_dim || inner_dim >= max_dim_) {
+    if ((thread_cfg_.size() >= thread_dim && write_cfg) || inner_dim >= max_dim_) {
       ss << ", no thread/dim rests";
       SkipMapping();
       continue;
@@ -1274,8 +1286,11 @@ void GpuStrategy::InnerThreadOuterBlock() {
     if (rest_threads <= 1) {
       if (axis->mc_sup ||
           (template_ == Template::REDUCTION && analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib())) {
-        thread_cfg_.emplace_back(1);
-        thread_cfg_map_[axis] = thread_cfg_.size() - 1;
+        if (write_cfg) {
+          thread_cfg_.emplace_back(1);
+        }
+        axis->thread_constraints.map_cand_.emplace_back(1);
+        thread_cfg_map_[axis] = i;
       }
       SkipMapping();
       continue;
@@ -1289,7 +1304,11 @@ void GpuStrategy::InnerThreadOuterBlock() {
       use = analyzer_->scop_info_.user_config_.GetCsrThreadNum();
     } else {
       use = GetThreadSize(rest_threads, inner_dim, shape, item);
+      if (!write_cfg && thread_cfg_.size() > i) {
+        use = thread_cfg_[i];
+      }
     }
+
     if (axis->forbid_iso && shape % use != 0) {
       auto aligned_use = analyzer_->FindDivisibleTilingFactor(use, shape);
       bool efficient =
@@ -1302,12 +1321,12 @@ void GpuStrategy::InnerThreadOuterBlock() {
     }
     activated_threads *= use;
     ss << ", use = " << use << ", activated threads = " << activated_threads;
-    thread_cfg_.emplace_back(use);
-    std::string attr_value = reverse_binding_ ? reduce_y_idx_pos_[inner_dim] : mapping_idx_pos_[inner_dim];
-    attr_value = attr_value + "_" + std::to_string(use);
-    axis->MarkWithAttr(AttrInfo{AT_THREAD_CFG, attr_value});
-    ss << ", mark with attr " << AT_THREAD_CFG << ": " << attr_value;
-    thread_cfg_map_[axis] = thread_cfg_.size() - 1;
+    if (write_cfg) {
+      thread_cfg_.emplace_back(use);
+    }
+    axis->thread_constraints.map_cand_.emplace_back(use);
+
+    thread_cfg_map_[axis] = i;
     axis->thread_constraints.map_extent_ = use;
     auto tile = TileAfterThreadMapping(axis, inner_dim, use, item);
     pending_axes_.push_back(std::make_pair(axis, std::max<int64_t>(ceil(static_cast<float>(shape) / tile), 1)));
@@ -1316,8 +1335,10 @@ void GpuStrategy::InnerThreadOuterBlock() {
   }
 
   std::vector<size_t> indexing;
-  for (size_t i = 0; i < block_dim; ++i) {
-    block_cfg_.emplace_back(1);
+  if (write_cfg) {
+    for (size_t i = 0; i < block_dim; ++i) {
+      block_cfg_.emplace_back(1);
+    }
   }
   // If all axes for block mapping are element-wise, we can map them in any order
   // so we need a greedy algorithm to map the most blocks;
@@ -1375,6 +1396,9 @@ void GpuStrategy::InnerThreadOuterBlock() {
     auto rest_blocks = idx < block_limit_.size() ? std::min(block_limit_[idx], axis->block_constraints.map_extent_) : 1;
     ss << "axis " << axis->index << "_" << axis->dim_axis << " shape = " << shape << ", block_idx = " << idx
        << ", rest blocks = " << rest_blocks;
+    ss << "\n--------> Tile: " << axis->c1_constraints.tile_min_ << "," << axis->c1_constraints.tile_extent_;
+    ss << "\n--------> Thread: " << axis->thread_constraints.map_min_ << "," << axis->thread_constraints.map_extent_;
+    ss << "\n--------> Block: " << axis->block_constraints.map_min_ << "," << axis->block_constraints.map_extent_;
     if (block_count_ >= static_cast<int>(block_dim)) {
       ss << "-> No mapping.";
       analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
@@ -1384,15 +1408,21 @@ void GpuStrategy::InnerThreadOuterBlock() {
                                                    ? TilingAnalyzer::FindDivisibleTilingFactor(rest_blocks, shape)
                                                    : rest_blocks)
                                               : 1;
+    if (!write_cfg) {
+      use = block_cfg_[pending_axes_.size() - 1 - i];
+    }
     activated_blocks *= use;
     ss << ", use = " << use << ", activated blocks = " << activated_blocks;
-    block_cfg_[pending_axes_.size() - 1 - i] = use;
-    block_cfg_map_[axis] = idx;
+    if (write_cfg) {
+      block_cfg_[pending_axes_.size() - 1 - i] = use;
+    }
+    axis->block_constraints.map_cand_.emplace_back(use);
+
+    block_cfg_map_[axis] = pending_axes_.size() - 1 - i;
+
     axis->block_constraints.map_extent_ = use;
     if (analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib() || axis->mc_sup) {
       ++block_count_;
-      std::string attr_value = mapping_idx_pos_[block_count_ - 1] + "_" + std::to_string(use);
-      axis->MarkWithAttr(AttrInfo{AT_BLOCK_CFG, attr_value});
     }
 
     auto extent = axis->extent_val;
@@ -1407,143 +1437,6 @@ void GpuStrategy::InnerThreadOuterBlock() {
     ss << ", tile range = [" << axis->c1_constraints.tile_min_ << ", " << axis->c1_constraints.tile_extent_ << "]";
     analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
   }
-}
-
-void GpuStrategy::SetThreadMappingConfig() {
-  // we need bind one axis at least
-  if (thread_cfg_.empty()) {
-    thread_cfg_.emplace_back(1);
-  }
-
-  std::string thread_str = "";
-  if (reverse_binding_) {
-    // pad binding to at least two dim to bind reduce axis at thread y
-    for (size_t i = thread_cfg_.size(); i < 2; ++i) {
-      thread_cfg_.emplace_back(1);
-    }
-
-    for (int i = thread_cfg_.size() - 1; i >= 0; --i) {
-      thread_str += (std::to_string(thread_cfg_[i]) + " ");
-    }
-  } else {
-    for (const auto &size : thread_cfg_) {
-      thread_str += (std::to_string(size) + " ");
-    }
-  }
-
-  std::stringstream ss;
-  ss << "Thread config = " << thread_str;
-  analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
-  ss << "Thread mapping strategy: ";
-
-  int64_t mapping_size = static_cast<int64_t>(thread_cfg_.size()) - 1;
-  std::unordered_map<int64_t, std::string> mapping_axis_pos = {{0, T0}, {1, T1}, {2, T2}};
-  for (auto cfg_map : thread_cfg_map_) {
-    int axis_pos = cfg_map.first->dim_axis;
-    int mapping_pos = cfg_map.second;
-    bool is_tensor_core = analyzer_->scop_info_.user_config_.GetEnableTensorCore();
-    int real_pos = (reverse_binding_ || is_tensor_core) ? mapping_size - mapping_pos : mapping_pos;
-    analyzer_->scop_info_.user_config_.RecordInnerMappingStrategy(axis_pos, mapping_axis_pos[real_pos]);
-    std::string mapping_str = is_tensor_core ? WARP_STR : THREAD_STR;
-    ss << "Map axis " << cfg_map.first->index << "_" << axis_pos << " to " << mapping_str + mapping_idx_pos_[real_pos]
-       << "; ";
-  }
-  analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
-  if (template_ == Template::CUSTOM_CONFIG) {
-    return;
-  }
-  analyzer_->scop_info_.user_config_.SetThreadConfig(thread_str);
-}
-
-void GpuStrategy::SetBlockMappingConfig() {
-  // we need bind one axis at least
-  if (block_cfg_.empty()) {
-    block_cfg_.emplace_back(1);
-  }
-  if (block_count_ == 0) {
-    block_count_ = 1;
-  }
-
-  std::string block_str = "";
-  std::unordered_map<int64_t, std::string> mapping_axis_block;
-  bool is_conv = analyzer_->scop_info_.user_config_.GetEnableConvTensorCore();
-  if (is_conv) {
-    // For Conv, the H and W axis should mul to map
-    // The axis sequence is M H W OC
-    constexpr auto h_axis_index = 2;
-    constexpr auto w_axis_index = 1;
-    for (int i = block_cfg_.size() - 1; i >= 0; --i) {
-      if (i >= block_count_) {
-        continue;
-      }
-      if (i == h_axis_index) {
-        block_str += (std::to_string(block_cfg_[h_axis_index] * block_cfg_[w_axis_index]) + " ");
-        i = w_axis_index;
-      } else {
-        block_str += (std::to_string(block_cfg_[i]) + " ");
-      }
-    }
-  } else {
-    for (int i = block_cfg_.size() - 1; i >= 0; --i) {
-      if (i >= block_count_) {
-        continue;
-      }
-      block_str += (std::to_string(block_cfg_[i]) + " ");
-    }
-  }
-
-  std::stringstream ss;
-  ss << "Block config = " << block_str;
-  analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
-  ss << "Block mapping strategy: ";
-
-  int64_t difference = -1;
-  const int64_t max_block_cfg = 3;
-  int64_t mapping_size = std::min(static_cast<int64_t>(block_cfg_.size()), max_block_cfg) - 1;
-  for (auto cfg_map : block_cfg_map_) {
-    auto max_tmp = cfg_map.second > mapping_size ? cfg_map.second - mapping_size : 0;
-    difference = std::max(difference, max_tmp);
-  }
-  std::unordered_map<int64_t, std::string> mapping_axis_pos = {{0, B0}, {1, B1}, {2, B2}};
-  for (auto cfg_map : block_cfg_map_) {
-    int axis_pos = cfg_map.first->dim_axis;
-    int mapping_pos = is_conv ? cfg_map.second : cfg_map.second - difference;
-    int real_pos = (is_conv && mapping_pos >= mapping_size) ? mapping_pos - 1 : mapping_pos;
-    analyzer_->scop_info_.user_config_.RecordOuterMappingStrategy(axis_pos, mapping_axis_pos[real_pos]);
-    ss << "Map axis " << cfg_map.first->index << "_" << axis_pos << " to " << BLOCK_STR + mapping_idx_pos_[real_pos]
-       << "; ";
-  }
-  analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
-  if (template_ == Template::CUSTOM_CONFIG) {
-    return;
-  }
-  analyzer_->scop_info_.user_config_.SetBlockConfig(block_str);
-}
-
-void GpuStrategy::SetMappingConfig() {
-  std::stringstream ss;
-
-  ss << "Use template " << analyzer_->scop_info_.analysis_result_.ShowOpTemplate(template_);
-  if (template_ == Template::REDUCTION) {
-    ss << "(" << analyzer_->scop_info_.analysis_result_.ShowReduceDirectionOfBand() << ")";
-  }
-  analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
-
-  SetThreadMappingConfig();
-  SetBlockMappingConfig();
-
-  ss << "Tile = ";
-  analyzer_->ForEachAxisTopDown([this, &ss](TileAxis *axis) {
-    if (axis == analyzer_->RootAxis()) {
-      return;
-    }
-    // For Conv, kh and kw are invalid for Tile
-    if (axis->is_inner) {
-      return;
-    }
-    ss << axis->c1_constraints.tile_extent_ << ",";
-  });
-  analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
 }
 
 int64_t GpuStrategy::GetThreadSize(const int64_t rest_threads, size_t inner_dim, const int64_t shape,
@@ -1679,7 +1572,8 @@ void GpuStrategy::InjectiveSpeedup() {
   std::vector<TileAxis *> injective_axes;
   auto problem_size = 1;
   analyzer_->ForEachAxisTopDown([this, &injective_axes, &problem_size](TileAxis *axis) {
-    if (axis == analyzer_->RootAxis() || axis->range_extent.as<IntImm>() == nullptr || axis->is_inner) {
+    if (axis == analyzer_->RootAxis() || axis->range_extent.as<IntImm>() == nullptr || axis->is_inner ||
+        axis->index != band_index_) {
       return;
     }
     injective_axes.emplace_back(axis);
@@ -1693,8 +1587,13 @@ void GpuStrategy::InjectiveSpeedup() {
          << injective_axes[i]->thread_constraints.map_extent_;
       analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
       block_cfg_[i] = injective_axes[i]->block_constraints.map_extent_;
+      injective_axes[i]->block_constraints.map_cand_.clear();
+      injective_axes[i]->block_constraints.map_cand_.push_back(block_cfg_[i]);
+
       if (g_csr.empty()) {
         thread_cfg_[injective_axes.size() - 1 - i] = injective_axes[i]->thread_constraints.map_extent_;
+        injective_axes[i]->thread_constraints.map_cand_.clear();
+        injective_axes[i]->thread_constraints.map_cand_.push_back(thread_cfg_[injective_axes.size() - 1 - i]);
       }
     }
   };
@@ -1841,7 +1740,7 @@ void GpuStrategy::TransposeSpeedup() {
   } else {
     std::vector<TileAxis *> axes;
     analyzer_->ForEachAxisTopDown([this, &axes](TileAxis *axis) {
-      if (axis == analyzer_->RootAxis() || axis->range_extent.as<IntImm>() == nullptr) {
+      if (axis == analyzer_->RootAxis() || axis->range_extent.as<IntImm>() == nullptr || axis->index != band_index_) {
         return;
       }
       axes.emplace_back(axis);
@@ -1864,7 +1763,7 @@ void GpuStrategy::PadSpeedup() {
   int64_t problem_size = 1;
   std::vector<TileAxis *> axes;
   analyzer_->ForEachAxisTopDown([this, &problem_size, &axes](TileAxis *axis) {
-    if (axis == analyzer_->RootAxis() || axis->range_extent.as<IntImm>() == nullptr) {
+    if (axis == analyzer_->RootAxis() || axis->range_extent.as<IntImm>() == nullptr || axis->index != band_index_) {
       return;
     }
     problem_size *= axis->extent_val;
@@ -1875,8 +1774,8 @@ void GpuStrategy::PadSpeedup() {
   analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
   for (int i = axes.size() - 1; i > 0; --i) {
     auto axis = axes[i];
-    axis->thread_constraints.item_process_ = std::max<int64_t>(
-      min_elem_for_io_bound_, analyzer_->FindDivisibleTilingFactor(coef, axis->extent_val));
+    axis->thread_constraints.item_process_ =
+      std::max<int64_t>(min_elem_for_io_bound_, analyzer_->FindDivisibleTilingFactor(coef, axis->extent_val));
     coef = std::max<int64_t>(1, coef / axis->thread_constraints.item_process_);
     ss << "axis " << axis->index << "_" << axis->dim_axis
        << " set for-loop size = " << axis->thread_constraints.item_process_ << ", update coef = " << coef;
@@ -1891,7 +1790,7 @@ void GpuStrategy::BroadcastSpeedup() {
   }
   size_t depth = 0;
   analyzer_->ForEachAxisTopDown([this, &depth](TileAxis *axis) {
-    if (axis == analyzer_->RootAxis() || axis->range_extent.as<IntImm>() == nullptr) {
+    if (axis == analyzer_->RootAxis() || axis->range_extent.as<IntImm>() == nullptr || axis->index != band_index_) {
       return;
     }
     ++depth;
@@ -2353,7 +2252,7 @@ void ShiftAxisStrategy::AddGpuConstraint() {
 }
 
 void CsrStrategy::AddGpuConstraint() {
-  analyzer_ ->ForEachAxisTopDown([this](TileAxis *axis) {
+  analyzer_->ForEachAxisTopDown([this](TileAxis *axis) {
     if (axis == this->analyzer_->RootAxis()) {
       return;
     }

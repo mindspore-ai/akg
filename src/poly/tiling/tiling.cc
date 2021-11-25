@@ -27,11 +27,17 @@ TileSizes TilingGenerator::Generate() {
 }
 
 TileSizes TilingGenerator::GenerateQuickly() {
-  InequalitySolver solver(analyzer_);
-  this->cand_ = solver.Solve();
-  this->memory_constraints_ = solver.GetMemoryConstraints();
-  ConvertVarTilesToDims();
-  return dims_;
+  if (analyzer_.scop_info_.user_config_.GetTarget() == TARGET_CUDA) {
+    GpuSolver solver(analyzer_);
+    this->cand_ = solver.Solve();
+    return ConvertToDims();
+  } else {
+    InequalitySolver solver(analyzer_);
+    this->cand_ = solver.Solve();
+    this->memory_constraints_ = solver.GetMemoryConstraints();
+    ConvertVarTilesToDims();
+    return dims_;
+  }
 }
 
 std::pair<TileSizes, std::deque<ParamInfo>> TilingGenerator::GenerateDynamic() {
@@ -80,12 +86,16 @@ TileSizes TilingGenerator::ConvertToDims() {
     std::tie(c1_val, c0_val) = this->cand_->GetTileVal(axis);
     c1_val = CanonicalSimplify(c1_val);
     c0_val = CanonicalSimplify(c0_val);
-    const auto c1 = c1_val.as<IntImm>();
-    const auto c0 = c0_val.as<IntImm>();
-    CHECK(c1 && c0);
-    // Make sure tile size is positive.
-    auto c1_pos_tile_size = c1->value <= 0 ? MIN_TILE : c1->value;
-    auto c0_pos_tile_size = c0->value <= 0 ? c1_pos_tile_size : c0->value;
+    int64_t c1_pos_tile_size = 1;
+    int64_t c0_pos_tile_size = 1;
+    if (!analyzer_.scop_info_.analysis_result_.GetTensorOfTensor()) {
+      const auto c1 = c1_val.as<IntImm>();
+      const auto c0 = c0_val.as<IntImm>();
+      CHECK(c1 && c0);
+      // Make sure tile size is positive.
+      c1_pos_tile_size = c1->value <= 0 ? MIN_TILE : c1->value;
+      c0_pos_tile_size = c0->value <= 0 ? c1_pos_tile_size : c0->value;
+    }
     dimInfo.c1_tiling_size = c1_pos_tile_size;
     dimInfo.c0_tiling_size = c0_pos_tile_size;
     dimInfo.dim_seq = axis->seq_index;

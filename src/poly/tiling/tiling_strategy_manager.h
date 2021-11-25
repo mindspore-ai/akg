@@ -96,7 +96,6 @@ class TilingStrategyManager {
       strategy->AddGpuConstraint();
     }
   }
-
   void ExecuteCpu() {
     for (auto strategy : this->strategies_) {
       strategy->AddCpuConstraint();
@@ -190,7 +189,7 @@ class ReduceStrategy : public TilingStrategy {
   void DisableReduceMapping();
 
   // Used by setting scop_info.enable_akg_reduce_lib.
-  void AkgReduceLibStrategyOnGpu();
+  void AkgReduceLibStrategyOnGpu(int band_index);
 
   bool UseRegisterMem();
   bool IsHalfReduce();
@@ -387,6 +386,8 @@ class GpuStrategy : public TilingStrategy {
  private:
   void ShowOptions();
 
+  std::vector<int> SortBands();
+
   void AdjustThreadMappingLimit();
 
   void TransposeSpeedup();
@@ -422,17 +423,10 @@ class GpuStrategy : public TilingStrategy {
    *   band after tile:  [2, 32, 256, 1, 1] -> child [1, 1, 1, 32, 32]
    *   mapping: [2(b0), 32(b1), 4(b2), 1, 1] -> child [1, 1, 1, 32(t1), 32(t0)]
    */
-  void InnerThreadOuterBlock();
+  void InnerThreadOuterBlock(bool write_cfg);
 
   int64_t GetThreadSize(const int64_t rest_threads, size_t inner_dim, const int64_t shape, const int64_t item);
   int64_t TileAfterThreadMapping(TileAxis *axis, size_t inner_dim, int64_t thread_size, const int64_t item);
-
-  // Step 3. Transform list of integer into string mapping config.
-  void SetMappingConfig();
-  void SetThreadMappingConfig();
-  void SetBlockMappingConfig();
-
-  void MarkMappingInRootAxis();
 
   int GetLocalAllocBufCount();
   bool NeedModifyOrderOfAxis();
@@ -457,6 +451,7 @@ class GpuStrategy : public TilingStrategy {
   std::unordered_map<int, std::string> mapping_idx_pos_ = {{0, "x"}, {1, "y"}, {2, "z"}};
   std::unordered_map<int, std::string> reduce_y_idx_pos_ = {{0, "y"}, {1, "x"}};
   int vectorized_bytes_{1};
+  int band_index_{0};
 };
 
 class CpuStrategy : public TilingStrategy {
