@@ -25,6 +25,8 @@
  * 2021.11.01
  *   Adapt LLVM 12 interface support
  *   Add some intrinsics.
+ * 2021.12.08
+ *   Add sgemm kernel intrinsics
  */
 
 #ifdef TVM_LLVM_VERSION
@@ -42,6 +44,12 @@
 
 namespace air {
 namespace codegen {
+
+extern const std::string SGEMM_KERNEL_AVX_N12;
+extern const std::string SGEMM_KERNEL_AVX_N8;
+extern const std::string SGEMM_KERNEL_AVX_N4;
+extern const std::string SGEMM_KERNEL_AVX_N2;
+extern const std::string SGEMM_KERNEL_AVX_N1;
 
 std::unique_ptr<CodeGenLLVM> CodeGenLLVM::Create(llvm::TargetMachine *tm) {
   std::string target = tm->getTarget().getName();
@@ -73,8 +81,11 @@ void CodeGenLLVM::Init(const std::string& module_name,
   t_int8_ = llvm::Type::getInt8Ty(*ctx_);
   t_int16_ = llvm::Type::getInt16Ty(*ctx_);
   t_int32_ = llvm::Type::getInt32Ty(*ctx_);
+  t_float32_ = llvm::Type::getFloatTy(*ctx_);
   t_int64_ = llvm::Type::getInt64Ty(*ctx_);
   t_float64_ = llvm::Type::getDoubleTy(*ctx_);
+  t_int64_p_ = t_int64_->getPointerTo();
+  t_float32_p_ = t_float32_->getPointerTo();
   // meta data
   md_very_likely_branch_ = md_builder_->createBranchWeights(1<<20, 1);
   md_tbaa_root_ = md_builder_->createTBAARoot("tvm-tbaa");
@@ -845,6 +856,8 @@ llvm::Value* CodeGenLLVM::CreateIntrinsic(const Call* op) {
       }
     }
     return builder_->CreateShuffleVector(v0, v0, indices);
+  } else if (op->is_intrinsic("SgemmKernelAvx")) {
+    return EmitSgemmKernel(op);
   } else if (op->is_intrinsic("exp")) {
     auto x_type = op->args[0].type();
     auto float_type = DataType(kDLFloat, x_type.bits(), x_type.lanes());
@@ -1360,6 +1373,184 @@ void CodeGenLLVM::VisitStmt_(const Evaluate* op) {
 void CodeGenLLVM::VisitStmt_(const ProducerConsumer* op) {
   this->VisitStmt(op->body);
 }
+
+void CodeGenLLVM::EmitSgemmKernelForBody(std::string inline_asm, const int n_dim, llvm::Value *end,
+                                         llvm::Value *m_value, llvm::Value *k_pointer, llvm::Value *ldc_value,
+                                         llvm::Value *m_pointer, llvm::Value *n_pointer, llvm::Value *k_count_pointer,
+                                         llvm::Value *ldc_pointer, llvm::Value *a_pointer, llvm::Value *b_pointer,
+                                         llvm::Value *c_pointer, llvm::Value *c_store_pointer,
+                                         llvm::Value *b_pref_pointer, llvm::Value *alpha_pointer,
+                                         llvm::Function *sgemm_kernel) {
+  llvm::Value *k_value = builder_->CreateLoad(t_int64_, k_pointer);
+  std::vector<llvm::Type *> ret_types = {t_float32_p_, t_float32_p_, t_float32_p_, t_float32_p_, t_float32_p_,
+                                         t_int64_,   t_int64_};
+  std::vector<llvm::Type *> arg_types = {t_float32_p_, t_int64_p_,   t_int64_p_,   t_float32_p_, t_float32_p_,
+                                         t_float32_p_, t_float32_p_, t_float32_p_, t_int64_,     t_int64_};
+  llvm::FunctionType *ftype = llvm::FunctionType::get(llvm::StructType::create(*ctx_, ret_types), arg_types, false);
+  llvm::Value *zero = builder_->getInt64(0);
+  llvm::Value *stride = builder_->getInt64(1);
+
+  llvm::BasicBlock *pre_block = builder_->GetInsertBlock();
+  llvm::BasicBlock *for_begin = llvm::BasicBlock::Create(*ctx_, "for_begin_" + std::to_string(n_dim), sgemm_kernel);
+  llvm::BasicBlock *for_body = llvm::BasicBlock::Create(*ctx_, "for_body_" + std::to_string(n_dim), sgemm_kernel);
+  llvm::BasicBlock *for_end = llvm::BasicBlock::Create(*ctx_, "for_end_" + std::to_string(n_dim), sgemm_kernel);
+  builder_->CreateBr(for_begin);
+  builder_->SetInsertPoint(for_begin);
+  llvm::PHINode *loop_value = builder_->CreatePHI(t_int64_, 2);
+  loop_value->addIncoming(zero, pre_block);
+  llvm::Value *cond = builder_->CreateICmpSLT(loop_value, end);
+  builder_->CreateCondBr(cond, for_body, for_end);
+  builder_->SetInsertPoint(for_body);
+
+  llvm::Value *a = builder_->CreateLoad(t_float32_p_, a_pointer);
+  llvm::Value *b = builder_->CreateLoad(t_float32_p_, b_pointer);
+  llvm::Value *c = builder_->CreateLoad(t_float32_p_, c_pointer);
+  llvm::Value *b_pref = builder_->CreateLoad(t_float32_p_, b_pref_pointer);
+  llvm::Value *c_store = builder_->CreateLoad(t_float32_p_, c_store_pointer);
+  llvm::Value *k = builder_->CreateLoad(t_int64_, k_count_pointer);
+  llvm::Value *ldc = builder_->CreateLoad(t_int64_, ldc_pointer);
+
+  llvm::Value *b_tmp_offset = builder_->CreateMul(builder_->getInt64(n_dim), k_value);
+  b_pref = builder_->CreateGEP(b, b_tmp_offset);
+  builder_->CreateStore(b_pref, b_pref_pointer);
+
+  std::string constraints_str =
+    "=r,=r,=r,=r,=r,=r,=r,*m,*m,*m,0,1,2,3,4,5,6,~{r10},~{r11},~{r12},~{r13},~{r14},~{r15},~{xmm0},~{xmm1},~{xmm2},~{"
+    "xmm3},~{xmm4},~{xmm5},~{xmm6},~{xmm7},~{xmm8},~{xmm9},~{xmm10},~{xmm11},~{xmm12},~{xmm13},~{xmm14},~{xmm15},~{cc},"
+    "~{memory},~{dirflag},~{fpsr},~{flags}";
+  bool side_effects = true;
+  llvm::InlineAsm *asm_fun = llvm::InlineAsm::get(ftype, inline_asm, constraints_str, side_effects);
+
+  std::vector<llvm::Value *> args = {alpha_pointer, m_pointer, k_pointer, a, b, c, b_pref, c_store, ldc, k};
+  llvm::CallInst *asm_call = builder_->CreateCall(asm_fun, args);
+  asm_call->addAttribute(llvm::AttributeList::FunctionIndex, llvm::Attribute::NoUnwind);
+
+  llvm::Value *arg0 = builder_->CreateExtractValue(asm_call, 0);
+  llvm::Value *arg1 = builder_->CreateExtractValue(asm_call, 1);
+  llvm::Value *arg2 = builder_->CreateExtractValue(asm_call, 2);
+  llvm::Value *arg3 = builder_->CreateExtractValue(asm_call, 3);
+  llvm::Value *arg4 = builder_->CreateExtractValue(asm_call, 4);
+  llvm::Value *arg5 = builder_->CreateExtractValue(asm_call, 5);
+  llvm::Value *arg6 = builder_->CreateExtractValue(asm_call, 6);
+  builder_->CreateStore(arg0, a_pointer);
+  builder_->CreateStore(arg1, b_pointer);
+  builder_->CreateStore(arg2, c_pointer);
+  builder_->CreateStore(arg3, b_pref_pointer);
+  builder_->CreateStore(arg4, c_store_pointer);
+  builder_->CreateStore(arg5, ldc_pointer);
+  builder_->CreateStore(arg6, k_count_pointer);
+
+  llvm::Value *a_tmp = builder_->CreateLoad(t_float32_p_, a_pointer);
+  llvm::Value *a_offset = builder_->CreateSub(builder_->getInt64(0), builder_->CreateMul(m_value, k_value));
+  a_tmp = builder_->CreateGEP(a_tmp, a_offset);
+  builder_->CreateStore(a_tmp, a_pointer);
+
+  llvm::Value *b_tmp = builder_->CreateLoad(t_float32_p_, b_pointer);
+  llvm::Value *b_offset = builder_->CreateMul(builder_->getInt64(n_dim), k_value);
+  b_tmp = builder_->CreateGEP(b_tmp, b_offset);
+  builder_->CreateStore(b_tmp, b_pointer);
+
+  llvm::Value *c_tmp = builder_->CreateLoad(t_float32_p_, c_pointer);
+  llvm::Value *c_offset = builder_->CreateMul(builder_->getInt64(n_dim), ldc_value);
+  c_offset = builder_->CreateSub(c_offset, builder_->CreateLoad(t_int64_, m_pointer));
+  c_tmp = builder_->CreateGEP(c_tmp, c_offset);
+  builder_->CreateStore(c_tmp, c_pointer);
+
+  llvm::Value *loop_next = builder_->CreateAdd(loop_value, stride);
+  loop_value->addIncoming(loop_next, builder_->GetInsertBlock());
+  builder_->CreateBr(for_begin);
+  builder_->SetInsertPoint(for_end);
+}
+
+// This implementation refers to OpenBlas(http://www.openblas.net/).
+llvm::Value* CodeGenLLVM::EmitSgemmKernel(const Call* op) {
+  llvm::Value *a = builder_->CreatePointerCast(MakeValue(op->args[0]), t_float32_p_);
+  llvm::Value *b = builder_->CreatePointerCast(MakeValue(op->args[1]), t_float32_p_);
+  llvm::Value *c = builder_->CreatePointerCast(MakeValue(op->args[2]), t_float32_p_);
+  llvm::Value *m = MakeValue(op->args[3]);
+  llvm::Value *n = MakeValue(op->args[4]);
+  llvm::Value *k = MakeValue(op->args[5]);
+  llvm::Value *ldc = MakeValue(op->args[6]);
+  llvm::Value *alpha = MakeValue(op->args[7]);
+
+  std::vector<llvm::Type *> sgemm_args = {t_float32_p_, t_float32_p_, t_float32_p_,  t_int64_,
+                                          t_int64_,     t_int64_,     t_int64_,      t_float32_};
+
+  llvm::Function *sgemm_kernel =
+    llvm::Function::Create(llvm::FunctionType::get(t_int32_, sgemm_args, false), llvm::Function::ExternalLinkage,
+                           "akg_sgemm_kernel", module_.get());
+  llvm::CallInst *sgemm_ret = builder_->CreateCall(sgemm_kernel, {a, b, c, m, n, k, ldc, alpha});
+  llvm::BasicBlock *pre_block = builder_->GetInsertBlock();
+
+  llvm::BasicBlock *sgemm_entry = llvm::BasicBlock::Create(*ctx_, "EntryBlock", sgemm_kernel);
+  builder_->SetInsertPoint(sgemm_entry);
+
+  auto it = sgemm_kernel->arg_begin();
+  llvm::Argument *a_value = &(*it++);
+  llvm::Argument *b_value = &(*it++);
+  llvm::Argument *c_value = &(*it++);
+  llvm::Argument *m_value = &(*it++);
+  llvm::Argument *n_value = &(*it++);
+  llvm::Argument *k_value = &(*it++);
+  llvm::Argument *ldc_value = &(*it++);
+  llvm::Argument *alpha_value = &(*it++);
+
+  llvm::Value *m_pointer = builder_->CreateAlloca(t_int64_);
+  llvm::Value *n_pointer = builder_->CreateAlloca(t_int64_);
+  llvm::Value *k_pointer = builder_->CreateAlloca(t_int64_);
+  llvm::Value *k_count_pointer = builder_->CreateAlloca(t_int64_);
+  llvm::Value *ldc_pointer = builder_->CreateAlloca(t_int64_);
+  llvm::Value *a_pointer = builder_->CreateAlloca(t_float32_p_);
+  llvm::Value *b_pointer = builder_->CreateAlloca(t_float32_p_);
+  llvm::Value *c_pointer = builder_->CreateAlloca(t_float32_p_);
+  llvm::Value *b_pref_pointer = builder_->CreateAlloca(t_float32_p_);
+  llvm::Value *c_store_pointer = builder_->CreateAlloca(t_float32_p_);
+  llvm::Value *alpha_pointer = builder_->CreateAlloca(t_float32_);
+
+  llvm::Value *ldc_in_bytes = builder_->CreateMul(ldc_value, builder_->getInt64(4));
+
+  builder_->CreateStore(m_value, m_pointer);
+  builder_->CreateStore(n_value, n_pointer);
+  builder_->CreateStore(k_value, k_pointer);
+  builder_->CreateStore(builder_->getInt64(0), k_count_pointer);
+  builder_->CreateStore(alpha_value, alpha_pointer);
+  builder_->CreateStore(ldc_in_bytes, ldc_pointer);
+  builder_->CreateStore(a_value, a_pointer);
+  builder_->CreateStore(b_value, b_pointer);
+  builder_->CreateStore(c_value, c_pointer);
+  builder_->CreateStore(b_value, b_pref_pointer);
+  builder_->CreateStore(c_value, c_store_pointer);
+
+  llvm::Value *end_12 = builder_->CreateSDiv(n_value, builder_->getInt64(12));
+  llvm::Value *n_rem = builder_->CreateSRem(n_value, builder_->getInt64(12));
+  llvm::Value *end_8 = builder_->CreateSDiv(n_rem, builder_->getInt64(8));
+  n_rem = builder_->CreateSRem(n_rem, builder_->getInt64(8));
+  llvm::Value *end_4 = builder_->CreateSDiv(n_rem, builder_->getInt64(4));
+  n_rem = builder_->CreateSRem(n_rem, builder_->getInt64(4));
+  llvm::Value *end_2 = builder_->CreateSDiv(n_rem, builder_->getInt64(2));
+  llvm::Value *end_1 = builder_->CreateSRem(n_rem, builder_->getInt64(2));
+
+  EmitSgemmKernelForBody(SGEMM_KERNEL_AVX_N12, 12, end_12, m_value, k_pointer, ldc_value, m_pointer, n_pointer,
+                         k_count_pointer, ldc_pointer, a_pointer, b_pointer, c_pointer, c_store_pointer,
+                         b_pref_pointer, alpha_pointer, sgemm_kernel);
+  EmitSgemmKernelForBody(SGEMM_KERNEL_AVX_N8, 8, end_8, m_value, k_pointer, ldc_value, m_pointer, n_pointer,
+                         k_count_pointer, ldc_pointer, a_pointer, b_pointer, c_pointer, c_store_pointer,
+                         b_pref_pointer, alpha_pointer, sgemm_kernel);
+  EmitSgemmKernelForBody(SGEMM_KERNEL_AVX_N4, 4, end_4, m_value, k_pointer, ldc_value, m_pointer, n_pointer,
+                         k_count_pointer, ldc_pointer, a_pointer, b_pointer, c_pointer, c_store_pointer,
+                         b_pref_pointer, alpha_pointer, sgemm_kernel);
+  EmitSgemmKernelForBody(SGEMM_KERNEL_AVX_N2, 2, end_2, m_value, k_pointer, ldc_value, m_pointer, n_pointer,
+                         k_count_pointer, ldc_pointer, a_pointer, b_pointer, c_pointer, c_store_pointer,
+                         b_pref_pointer, alpha_pointer, sgemm_kernel);
+  EmitSgemmKernelForBody(SGEMM_KERNEL_AVX_N1, 1, end_1, m_value, k_pointer, ldc_value, m_pointer, n_pointer,
+                         k_count_pointer, ldc_pointer, a_pointer, b_pointer, c_pointer, c_store_pointer,
+                         b_pref_pointer, alpha_pointer, sgemm_kernel);
+  builder_->CreateRet(ConstInt32(0));
+
+  builder_->SetInsertPoint(pre_block);
+  return sgemm_ret;
+}
+
 }  // namespace codegen
 }  // namespace air
 #endif  // TVM_LLVM_VERSION
