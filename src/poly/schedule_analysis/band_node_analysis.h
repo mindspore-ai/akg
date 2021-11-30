@@ -38,10 +38,12 @@ class AnalyzeBandNode {
   void AnalyzeOuterBandTemplate();
   void ShowBandInfo();
   void AnalyzeAxisPosition();
-  void DetermineTemplateOfBand(BandNode *bn);
-  void SetVectorizationAxis(const isl::schedule_node &orig_node, const int index);
-  bool IsGemmTempleteInBand(BandNode *bn);
-  int GetElemVectorizationAxisPos(const isl::schedule_node &orig_node);
+
+  void DetermineTemplateOfBand(std::unique_ptr<OuterBandNode> &bn);
+  bool IsGemmTempleteInBand(std::unique_ptr<OuterBandNode> &bn);
+  int GetVectorizationAxisForCpu(std::unique_ptr<OuterBandNode> &bn);
+  int GetCoalescedAccessAxisForCuda(const isl::schedule_node &orig_node);
+  int GetLastAxisPos(const isl::schedule_node &orig_node, std::unordered_set<std::string> skip_tensors = {});
 
   std::string target_;
   const isl::schedule &sch_;

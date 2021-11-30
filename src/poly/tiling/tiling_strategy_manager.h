@@ -397,7 +397,7 @@ class GpuStrategy : public TilingStrategy {
   void InjectiveSpeedup();
 
   void VectorizationSpeedup();
-  void CheckVectorizationForElemwiseOp(isl::schedule sch);
+  void CheckVectorizationForElemwiseOp();
   bool IsVectorized();
 
   void BroadcastSpeedup();
@@ -430,7 +430,6 @@ class GpuStrategy : public TilingStrategy {
 
   int GetLocalAllocBufCount();
   bool NeedModifyOrderOfAxis();
-  void SetCoalescedAccess();
   Template template_{Template::DEFAULT};
   bool is_reduce_op_[TEMPLATE_BULK] = {false, false, true, true, true, false};
 
@@ -452,6 +451,7 @@ class GpuStrategy : public TilingStrategy {
   std::unordered_map<int, std::string> reduce_y_idx_pos_ = {{0, "y"}, {1, "x"}};
   int vectorized_bytes_{1};
   int band_index_{0};
+  OuterBandNode *current_outer_bn_;
 };
 
 class CpuStrategy : public TilingStrategy {

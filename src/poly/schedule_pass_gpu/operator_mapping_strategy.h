@@ -26,12 +26,14 @@ namespace poly {
 class OperatorMappingStrategy {
  public:
   explicit OperatorMappingStrategy(ScopInfo &scop_info) : scop_info_(scop_info) {}
-  explicit OperatorMappingStrategy(ScopInfo &scop_info, MappingCfg *mapping_cfg, bool is_thread_mapping = true,
-                                   bool is_promotion_mapping = false)
+  explicit OperatorMappingStrategy(ScopInfo &scop_info, MappingCfg *mapping_cfg, int filter_pos = 0,
+                                   bool is_thread_mapping = true, bool is_promotion_mapping = false)
       : scop_info_(scop_info),
         mapping_cfg_(mapping_cfg),
+        band_index_(filter_pos),
         is_thread_mapping_(is_thread_mapping),
         is_promotion_mapping_(is_promotion_mapping) {
+    current_outer_bn_ = scop_info_.analysis_result_.GetOuterBandNode(band_index_);
     CHECK(mapping_cfg != nullptr) << "mapping config is null";
   }
   ~OperatorMappingStrategy() {}
@@ -62,7 +64,7 @@ class OperatorMappingStrategy {
                                         const std::string &mapping_str = "");
 
   // The mapping strategy for each axis.
-  MappingStrategyMap required_mapping_strategy_;
+  MappingStrategyAxisMap required_mapping_strategy_;
   // Store the information of the corresponding filter after mapping.
   MappingScheduleInfoMap mapping_sch_info_map_;
 
@@ -74,19 +76,21 @@ class OperatorMappingStrategy {
   bool is_insert_filter_{true};    // Whether to insert the filter node generated after the mapping.
   bool is_need_reverse_{true};     // Whether to start mapping from the inner axis.
   bool is_set_config_zero_{true};  // Whether to set the redundant configuration to 0 when mapping.
+  OuterBandNode *current_outer_bn_;
 
  protected:
   ScopInfo &scop_info_;
   MappingCfg *mapping_cfg_{nullptr};
+  int band_index_;
   bool is_thread_mapping_;
   bool is_promotion_mapping_;
 };
 
 class ReduceMappingStrategy : public OperatorMappingStrategy {
  public:
-  explicit ReduceMappingStrategy(ScopInfo &scop_info, MappingCfg *mapping_cfg, bool is_thread_mapping = true,
-                                 bool is_promotion_mapping = false)
-      : OperatorMappingStrategy(scop_info, mapping_cfg, is_thread_mapping, is_promotion_mapping) {}
+  explicit ReduceMappingStrategy(ScopInfo &scop_info, MappingCfg *mapping_cfg, int filter_pos = 0,
+                                 bool is_thread_mapping = true, bool is_promotion_mapping = false)
+      : OperatorMappingStrategy(scop_info, mapping_cfg, filter_pos, is_thread_mapping, is_promotion_mapping) {}
   ~ReduceMappingStrategy() {}
 
   size_t MapThreadHelper(isl::schedule_node &thread_root);
@@ -102,9 +106,9 @@ class ReduceMappingStrategy : public OperatorMappingStrategy {
 
 class BatchMatmulMappingStrategy : public OperatorMappingStrategy {
  public:
-  explicit BatchMatmulMappingStrategy(ScopInfo &scop_info, MappingCfg *mapping_cfg, bool is_thread_mapping = true,
-                                      bool is_promotion_mapping = false)
-      : OperatorMappingStrategy(scop_info, mapping_cfg, is_thread_mapping, is_promotion_mapping) {}
+  explicit BatchMatmulMappingStrategy(ScopInfo &scop_info, MappingCfg *mapping_cfg, int filter_pos = 0,
+                                      bool is_thread_mapping = true, bool is_promotion_mapping = false)
+      : OperatorMappingStrategy(scop_info, mapping_cfg, filter_pos, is_thread_mapping, is_promotion_mapping) {}
   ~BatchMatmulMappingStrategy() {}
 
   size_t MapThreadHelper(isl::schedule_node &thread_root);

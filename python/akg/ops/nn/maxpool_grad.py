@@ -28,7 +28,6 @@ def get_attrs():
     """get attrs config"""
     attr_map = {
         "disable_cse": 1,
-        "pragma_reschedule": 1,
         "pragma_disable_schedule_shift": 1,
         "pragma_opt_for_dsa": 1,
         "loop_partition_unroll": False,
@@ -39,7 +38,7 @@ def get_attrs():
 
 set_attr_map_ = {
     str(((2, 16, 40, 24, 16), (1, 1), (2, 2), (0, 0, 0, 0))): (
-        ("pragma_reschedule", 0),),
+        ("pragma_disable_whole_component", 0),),
 }
 
 maxpool_grad_dim_map = {

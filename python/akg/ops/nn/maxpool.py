@@ -71,7 +71,6 @@ def maxpool_set_dim_func(data, kernel, stride, pad):
 
     global attr_map
     default_attr_map = {
-        "pragma_reschedule": 1,
         "pragma_reorder_schedule": True,
         "pragma_opt_for_dsa": 1,
         "loop_partition_unroll": False,
@@ -644,7 +643,6 @@ def maxpool_with_argmax_custom_tiling_strategy(data):
 def get_attrs():
     """Get default attrs for maxpool."""
     default_attr_map = {
-        "pragma_reschedule": 1,
         "pragma_opt_for_dsa": 1,
         "pragma_reorder_schedule": True,
         "enable_pre_poly_loop_partition": False,
@@ -658,7 +656,6 @@ def get_attrs():
 def get_dynamic_attrs():
     """Get default attrs for maxpool."""
     default_attr_map = {
-        "pragma_reschedule": 1,
         "pragma_opt_for_dsa": 1,
         "pragma_reorder_schedule": True,
         "enable_pre_poly_loop_partition": False,

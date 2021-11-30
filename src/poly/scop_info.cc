@@ -759,6 +759,22 @@ void UserConfig::SetThreadConfig(const std::string &thread_cfg) {
   this->thread_cfg_.BindFromStr(thread_cfg);
 }
 
+void UserConfig::RecordMappingStrategy(MappingStrategyFilterMap &mapping_strategy_map, const int axis_pos,
+                                       const std::string &mapping_idx, const int filter_pos, const int offset) {
+  CHECK(!mapping_idx.empty());
+  MappingStrategy mapping_strategy;
+  mapping_strategy.mapping_idx = mapping_idx;
+  mapping_strategy.offset = offset;
+  MappingStrategyAxisMap axis_map;
+  if (mapping_strategy_map.count(filter_pos) == 0) {
+    axis_map[axis_pos] = mapping_strategy;
+  } else {
+    axis_map = mapping_strategy_map[filter_pos];
+    axis_map[axis_pos] = mapping_strategy;
+  }
+  mapping_strategy_map[filter_pos] = axis_map;
+}
+
 void CubeInfo::CreateConvModel() {
   if (model_) return;
   if (!attr_info_.empty()) {
@@ -1431,7 +1447,7 @@ std::string AnalysisResult::GetReduceOpType(isl::id reduce_stmt) {
   }
   if (provide->value.as<Mul>()) {
     return AKG_REDUCE_PROD;
-  }  
+  }
   if (const auto add = provide->value.as<Add>()) {
     return GetCsr() || IsPureReduceSum(add, provide->func->func_name()) ? AKG_REDUCE_SUM : AKG_REDUCE_UNSUPPORTED;
   }

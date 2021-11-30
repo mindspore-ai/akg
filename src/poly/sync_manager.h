@@ -46,11 +46,9 @@ struct Synchronization {
 
   SyncLevel level;
   int pos{0};
-
-  bool IsEqual(const Synchronization &sync) { return (this->pos == sync.pos && this->level == sync.level); }
 };
 
-using SyncBetween = std::pair<SyncCandidate*, Synchronization>;
+using SyncBetween = std::pair<SyncCandidate *, Synchronization>;
 
 struct SyncCandidate {
   SyncCandidate(int i, int len) : idx(i), length(len){};
@@ -104,7 +102,8 @@ struct SyncCandidate {
     return res;
   }
 
-  std::pair<SyncCandidate *, int> GetOptimalSyncPos(SyncLevel level) {
+  std::pair<SyncCandidate *, int> GetOptimalSyncPos(const SyncLevel &level,
+                                                    const std::vector<Synchronization> &all_syncs) {
     std::pair<SyncCandidate *, int> opt = std::make_pair(nullptr, -1);
     if (level == SyncLevel::EMPTY) {
       return std::make_pair(this, 0);
@@ -114,6 +113,19 @@ struct SyncCandidate {
       if (s.first == this) {
         continue;
       }
+
+      // Skip the position where the synchronization has been inserted.
+      bool exit = false;
+      for (auto &sync : all_syncs) {
+        if (s.first->idx == sync.pos) {
+          exit = true;
+          break;
+        }
+      }
+      if (exit) {
+        continue;
+      }
+
       if (opt.second == -1 || s.second < opt.second || (s.second == opt.second && s.first->idx < opt.first->idx)) {
         opt = s;
       }
@@ -148,20 +160,18 @@ class SyncManager {
   explicit SyncManager(isl::ctx ctx) : ctx_(ctx) {}
   ~SyncManager() {}
 
-  isl::schedule_node InsertExtensionNode(const isl::schedule_node &node, SyncLevel level, bool after);
   isl::schedule InsertPromotionSync(const isl::schedule &sch);
+  isl::id MakeUniqueId(SyncLevel level);
 
  private:
   isl::ctx ctx_;
-  int extension_distance_from_original_pos_ = 3;
 
-  isl::id MakeUniqueId(SyncLevel level);
   isl::id GetSyncId() const;
   isl::id GetWarpSyncId() const;
 
-  isl::map GetExtensionSpace(const isl::schedule_node &node, SyncLevel level);
-
   bool IsRepeatSync(const isl::schedule_node orig_node);
+
+  std::string GetCurrentFilterName(const isl::schedule_node orig_node);
 };
 }  // namespace poly
 }  // namespace ir

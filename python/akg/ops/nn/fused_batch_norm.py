@@ -31,7 +31,6 @@ def get_attrs(tensor):
     """get attrs config"""
     attrs_map = {
         "pragma_checkcoincident": 0,
-        "pragma_reschedule": 1,
         "pragma_modshift": 1,
         "disable_cse": 1,
         "enable_bisect_optimize": 0,

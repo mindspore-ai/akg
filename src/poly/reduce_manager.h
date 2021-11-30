@@ -38,8 +38,8 @@ class ReduceManager {
   isl::union_set GetCurrentNodeReduceStatements(const isl::schedule_node node, ReduceTensorInfoMap &all_reduce_map,
                                                 const bool need_delete_reduce = true);
   // Check whether the reduce operator is included, and split the reduce statement into a separate filter.
-  isl::schedule DetectAndMarkReduce(const isl::schedule &sch);
-  isl::schedule InsertReduceMarker(const isl::schedule &sch);
+  isl::schedule_node DetectAndMarkReduce(const isl::schedule_node &orig_node, const int band_index = 0);
+  isl::schedule_node InsertReduceMarker(const isl::schedule_node &orig_node);
 
  private:
   void SplitInitStatements(isl::union_set &reduction_indenpendent_stmt);
@@ -50,8 +50,11 @@ class ReduceManager {
                                isl::union_map dependences);
   // After splitting the reduce fusion operator, reschedule all the filters, mainly because the reduce statement affects
   // other statements after the fusion.
-  isl::schedule RescheduleForReduce(const isl::schedule &sch);
+  isl::schedule_node RescheduleForReduce(const isl::schedule_node &orig_node);
   size_t GetReduceId() const;
+  ReduceTensorInfoMap GetCurrentReduceMap(const int band_index = 0);
+  bool IsContainCoincidentZero(const isl::schedule_node &orig_node);
+  isl::schedule_node SetAllCoincident(const isl::schedule_node &orig_node);
 
   PassInfo &pass_info_;
   ScopInfo &scop_info_;

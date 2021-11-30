@@ -71,5 +71,5 @@ def logsoftmax_grad(Y, dY, axis):
     dy_sum_broadcast = akg.lang.cce.broadcast(dy_sum, shape)
     mul_result = akg.lang.cce.vmul(softmax, dy_sum_broadcast)
     res = akg.lang.cce.vsub(dY, mul_result)
-    attrs = {"pragma_reschedule": 1, "pragma_modshift": 1}
+    attrs = {"pragma_modshift": 1}
     return res, attrs

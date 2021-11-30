@@ -17,6 +17,7 @@
 #include "sync_manager.h"
 #include "poly_util.h"
 #include "scop_info.h"
+#include "poly/schedule_tree_util.h"
 
 namespace akg {
 namespace ir {
@@ -44,27 +45,6 @@ isl::id SyncManager::GetWarpSyncId() const {
   return isl::id(ctx_, sync_id);
 }
 
-isl::schedule_node SyncManager::InsertExtensionNode(const isl::schedule_node &node, SyncLevel level, bool after) {
-  auto space = GetExtensionSpace(node, level);
-  isl::schedule_node graft = isl::schedule_node::from_extension(space);
-  auto extension_node = node;
-  if (after) {
-    extension_node = extension_node.graft_after(graft);
-  } else {
-    extension_node = extension_node.graft_before(graft);
-  }
-  return extension_node.ancestor(extension_distance_from_original_pos_);
-}
-
-isl::map SyncManager::GetExtensionSpace(const isl::schedule_node &node, SyncLevel level) {
-  auto sync_id = MakeUniqueId(level);
-  auto prefix = ShortScheduleMupa(node.root(), node.parent());
-  auto schedule_space = prefix.get_space();
-  auto space = schedule_space.params().add_named_tuple_id_ui(sync_id, 0);
-  auto extension_space = isl::map::universe(schedule_space.map_from_domain_and_range(space));
-  return extension_space;
-}
-
 bool SyncManager::IsRepeatSync(const isl::schedule_node orig_node) {
   // Determine whether there are repeated sync.
   auto node = orig_node;
@@ -85,6 +65,28 @@ bool SyncManager::IsRepeatSync(const isl::schedule_node orig_node) {
   return is_repeat_sync;
 }
 
+std::string SyncManager::GetCurrentFilterName(const isl::schedule_node orig_node) {
+  if (!orig_node.isa<isl::schedule_node_filter>()) {
+    return "";
+  }
+
+  auto filter_node = orig_node.as<isl::schedule_node_filter>();
+  CHECK(filter_node) << "Expected filters below sequence";
+
+  // Transform isl::union_set to a vector of isl::set
+  isl::union_set uset = filter_node.get_filter();
+  std::vector<isl::set> vset;
+  uset.foreach_set([&vset](isl::set s) { vset.push_back(s); });
+
+  // Get current filter name
+  std::string cur_filter_name = "";
+  if (!vset.empty()) {
+    cur_filter_name = vset[0].get_tuple_name();
+  }
+
+  return cur_filter_name;
+}
+
 isl::schedule SyncManager::InsertPromotionSync(const isl::schedule &sch) {
   auto InsertSyncForSequence = [this](isl::schedule_node node) -> isl::schedule_node {
     if (!node.isa<isl::schedule_node_sequence>()) {
@@ -98,21 +100,6 @@ isl::schedule SyncManager::InsertPromotionSync(const isl::schedule &sch) {
     if (node.n_children() <= 1) {
       return node;
     }
-
-    auto GetCurrentFilterName = [this](isl::schedule_node node) -> std::string {
-      auto filter_node = node.as<isl::schedule_node_filter>();
-      CHECK(filter_node) << "Expected filters below sequence";
-      // Transform isl::union_set to a vector of isl::set
-      isl::union_set uset = filter_node.get_filter();
-      std::vector<isl::set> vset;
-      uset.foreach_set([&vset](isl::set s) { vset.push_back(s); });
-      // Get current filter name
-      std::string cur_filter_name = "";
-      if (!vset.empty()) {
-        cur_filter_name = vset[0].get_tuple_name();
-      }
-      return cur_filter_name;
-    };
 
     std::unordered_set<std::string> shared_promotion_set = {READ_ID_NAME, WRITE_ID_NAME};
     bool find_read_or_write = false;
@@ -171,7 +158,10 @@ isl::schedule SyncManager::InsertPromotionSync(const isl::schedule &sch) {
       }
 
       // Insert sync after the filter node
-      node = InsertExtensionNode(filter_node.child(0), SyncLevel::BLOCK, true).child(0);
+      auto band_node = filter_node.child(0);
+      auto sync_id = MakeUniqueId(SyncLevel::BLOCK);
+      node = InsertExtensionNodeBeforeOrAfter(band_node, sync_id, false);
+      node = node.ancestor(2);
     }
     return node;
   };

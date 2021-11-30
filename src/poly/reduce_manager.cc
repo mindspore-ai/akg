@@ -23,12 +23,25 @@ namespace akg {
 namespace ir {
 namespace poly {
 
-isl::schedule ReduceManager::DetectAndMarkReduce(const isl::schedule &sch) {
-  auto final_schedule = sch;
-
+ReduceTensorInfoMap ReduceManager::GetCurrentReduceMap(const int band_index) {
+  auto current_outer_bn = scop_info_.analysis_result_.GetOuterBandNode(band_index);
+  auto current_stmt = current_outer_bn->stmts;
   auto all_reduce_map = scop_info_.analysis_result_.GetReduceTensorInfoMap();
+  ReduceTensorInfoMap current_reduce_map;
+
+  for (auto it = all_reduce_map.begin(); it != all_reduce_map.end(); ++it) {
+    if (current_stmt.find(it->first) != current_stmt.end()) {
+      current_reduce_map.emplace(it->first, it->second);
+    }
+  }
+  return current_reduce_map;
+}
+
+isl::schedule_node ReduceManager::DetectAndMarkReduce(const isl::schedule_node &orig_node, const int band_index) {
+  auto all_reduce_map = GetCurrentReduceMap(band_index);
   bool done_separate = false;
-  auto GetInnerMostBand = [&done_separate, &all_reduce_map, this](isl::schedule_node node) -> isl::schedule_node {
+  auto GetInnerMostBand = [&done_separate, &all_reduce_map, band_index,
+                           this](isl::schedule_node node) -> isl::schedule_node {
     if (done_separate) {
       return node;
     }
@@ -47,23 +60,34 @@ isl::schedule ReduceManager::DetectAndMarkReduce(const isl::schedule &sch) {
       dependences = dependences.subtract(pass_info_.force_dependences_);
     }
 
+    auto current_outer_bn = scop_info_.analysis_result_.GetOuterBandNode(band_index);
+    auto current_stmt = current_outer_bn->stmts;
+    auto new_dependences = isl::union_map();
+    dependences.wrap().foreach_set([&new_dependences, current_stmt, this](const isl::set &set) -> void {
+      auto domain_id = set.unwrap().domain().get_tuple_id();
+      auto range_id = set.unwrap().range().get_tuple_id();
+      if (current_stmt.find(domain_id) != current_stmt.end() && current_stmt.find(range_id) != current_stmt.end()) {
+        auto cur_map = set.unwrap();
+        new_dependences = new_dependences.is_null() ? isl::union_map(cur_map) : new_dependences.add_map(cur_map);
+      }
+    });
+
     auto node_bak = node;
-    if (!SplitReduceStatements(node, reduce_statements, dependences)) {
+    if (!SplitReduceStatements(node, reduce_statements, new_dependences)) {
       return node_bak;
     }
     done_separate = all_reduce_map.empty();
     return node;
   };
-  final_schedule = sch.get_root().map_descendant_bottom_up(GetInnerMostBand).get_schedule();
+  auto node = orig_node.map_descendant_bottom_up(GetInnerMostBand);
   if (done_separate) {
-    final_schedule = InsertReduceMarker(final_schedule);
-    final_schedule = RescheduleForReduce(final_schedule);
+    node = InsertReduceMarker(node);
+    node = RescheduleForReduce(node);
   }
-  return final_schedule;
+  return node;
 }
 
-isl::schedule ReduceManager::InsertReduceMarker(const isl::schedule &sch) {
-  isl::schedule final_schedule = sch;
+isl::schedule_node ReduceManager::InsertReduceMarker(const isl::schedule_node &orig_node) {
   auto all_reduce_map = scop_info_.analysis_result_.GetReduceTensorInfoMap();
   auto InsertMarker = [&all_reduce_map, this](isl::schedule_node node) -> isl::schedule_node {
     auto band_node = node.as<isl::schedule_node_band>();
@@ -92,51 +116,44 @@ isl::schedule ReduceManager::InsertReduceMarker(const isl::schedule &sch) {
     }
     return band_node;
   };
-  final_schedule = final_schedule.get_root().map_descendant_bottom_up(InsertMarker).get_schedule();
-  return final_schedule;
+  return orig_node.map_descendant_bottom_up(InsertMarker);
 }
 
-isl::schedule ReduceManager::RescheduleForReduce(const isl::schedule &sch) {
-  auto IsContainCoincidentZero = [](const isl::schedule_node node) -> bool {
-    if (!node.isa<isl::schedule_node_band>()) {
-      return true;
-    }
+bool ReduceManager::IsContainCoincidentZero(const isl::schedule_node &orig_node) {
+  if (!orig_node.isa<isl::schedule_node_band>()) return true;
 
-    auto band_node = node.as<isl::schedule_node_band>();
-    for (int i = 0; i < static_cast<int>(band_node.n_member()); ++i) {
-      if (band_node.member_get_coincident(i) == 0) {
-        return true;
-      }
-    }
-    return false;
-  };
+  auto band_node = orig_node.as<isl::schedule_node_band>();
+  for (int i = 0; i < static_cast<int>(band_node.n_member()); ++i) {
+    if (band_node.member_get_coincident(i) == 0) return true;
+  }
+  return false;
+}
 
-  auto SetAllCoincident = [](const isl::schedule_node node) -> isl::schedule_node {
-    if (!node.isa<isl::schedule_node_band>()) {
-      return node;
-    }
+isl::schedule_node ReduceManager::SetAllCoincident(const isl::schedule_node &orig_node) {
+  if (!orig_node.isa<isl::schedule_node_band>()) return orig_node;
 
-    auto band_node = node.as<isl::schedule_node_band>();
-    for (int i = 0; i < static_cast<int>(band_node.n_member()); ++i) {
-      if (band_node.member_get_coincident(i) == 0) {
-        band_node = band_node.member_set_coincident(i, 1);
-      }
+  auto band_node = orig_node.as<isl::schedule_node_band>();
+  for (int i = 0; i < static_cast<int>(band_node.n_member()); ++i) {
+    if (band_node.member_get_coincident(i) == 0) {
+      band_node = band_node.member_set_coincident(i, 1);
     }
-    return band_node;
-  };
+  }
+  return band_node;
+}
 
-  auto root = sch.get_root();
-  auto node = root;
-  root.foreach_descendant_top_down([&node](const isl::schedule_node &orig_node) -> bool {
-    if (!GetMarkerName(orig_node, REDUCE_MARKER).empty() && orig_node.tree_depth() >= 2 &&
-        orig_node.ancestor(2).isa<isl::schedule_node_sequence>()) {
-      node = orig_node.ancestor(2);
+isl::schedule_node ReduceManager::RescheduleForReduce(const isl::schedule_node &orig_node) {
+  auto node = orig_node;
+  size_t start_depth = node.get_tree_depth();
+  orig_node.foreach_descendant_top_down([&node](const isl::schedule_node &mark_node) -> bool {
+    if (!GetMarkerName(mark_node, REDUCE_MARKER).empty() && mark_node.tree_depth() >= 2 &&
+        mark_node.ancestor(2).isa<isl::schedule_node_sequence>()) {
+      node = mark_node.ancestor(2);
       return false;
     }
     return true;
   });
-  if (node.is_equal(root)) {
-    return sch;
+  if (node.is_equal(orig_node)) {
+    return orig_node;
   }
 
   int child_number = static_cast<int>(node.n_children());
@@ -180,7 +197,8 @@ isl::schedule ReduceManager::RescheduleForReduce(const isl::schedule &sch) {
       node = (j != reschedule_child_number) ? node : SetAllCoincident(child_node.child(0)).ancestor(2);
     }
   }
-  return node.get_schedule();
+  node = node.ancestor(node.get_tree_depth() - start_depth);
+  return node;
 }
 
 size_t ReduceManager::GetReduceId() const {
@@ -289,6 +307,7 @@ isl::schedule_node ReduceManager::ReorderStatements(const isl::schedule_node &no
   }
   order_node = order_node.insert_sequence(filter_list);
   order_node = order_node.insert_mark(INSERT_SYNC);
+  // Locate the filter where the reduce statement is located.
   order_node = order_node.child(0).child(depth);
 
   return order_node;

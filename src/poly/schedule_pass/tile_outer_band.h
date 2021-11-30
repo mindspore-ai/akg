@@ -26,6 +26,7 @@ namespace poly {
 constexpr auto KH_KW_DEPTH = 2;
 constexpr auto DIM_SIZE = 4;
 constexpr auto CUSTOM_DIM_SIZE = 6;
+constexpr auto VECTORIZATION_NODE_DEPTH = 3;
 
 /*
  * Tile the outer band accoding to TilingInfo. In this pass, we get the out-most band,
@@ -61,7 +62,6 @@ class TileOuterBand : public SchedulePass {
   int IsOuterTilable(const isl::schedule_node &node);
   int IsCandidate(const isl::schedule_node &node);
   bool IsPermutable(const isl::schedule_node &node, bool checkCoincident);
-  isl::schedule_node InsertEmptyPermutableBand(isl::schedule_node node);
   bool SubtreeHasPermutableBands(const isl::schedule_node &node);
   isl::multi_val ComputeBandTilesSizes(const isl::schedule_node &node, const int *tile_size);
   bool BoolNot(bool b) { return !b; }
@@ -100,8 +100,9 @@ class TileOuterBand : public SchedulePass {
                                         const int count_coincident = -1);
   isl::schedule_node InsertPromoteMarker(const isl::schedule_node node);
   void ResetWarpMappingConfig();
-  isl::schedule_node MatmulTile(const isl::schedule_node &node);
-  void CheckCustomMapping(const MappingStrategyMap &custom_mapping_map);
+  isl::schedule_node TileDynamicCsrOpeator(const isl::schedule_node &node);
+  isl::schedule_node TileMatmulOperator(const isl::schedule_node &node);
+  void CheckCustomMapping(const MappingStrategyFilterMap &custom_mapping_map);
   bool IsMatrixCPromoteToShared();
 
   // cpu related functions

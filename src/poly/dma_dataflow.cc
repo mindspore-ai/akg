@@ -21,9 +21,26 @@ namespace akg {
 namespace ir {
 namespace poly {
 
-isl::id GpuDstId(GpuMemType type, isl::id tensor_id) {
-  std::string pos_fix = (type == GpuMemType::SHARED ? "_shared" : "_local");
-  return isl::id(tensor_id.ctx(), tensor_id.get_name() + pos_fix);
+isl::id GetNpuIndexDstId(const isl::ctx &ctx, const isl::id &id, const int index) {
+  CHECK_GE(index, 0);
+  if (index == 0) return id;
+  std::string id_name = id.get_name();
+  size_t pos = id_name.find("_local_");
+  std::string new_id_name = id_name;
+  if (pos != std::string::npos) {
+    std::stringstream ss;
+    ss << id_name.substr(0, pos) << PROMOTION_INFIX << index << id_name.substr(pos, id_name.size() - pos);
+    new_id_name = ss.str();
+  }
+  return isl::id(ctx, new_id_name);
+}
+
+isl::id GetGpuIndexDstId(const GpuMemType &type, const isl::id &id, const int index) {
+  std::string pos_fix = (type == GpuMemType::SHARED ? SHARE_SUFFIX : LOCAL_SUFFIX);
+  if (index == 0) {
+    return isl::id(id.ctx(), id.get_name() + pos_fix);
+  }
+  return isl::id(id.ctx(), id.get_name() + PROMOTION_INFIX + std::to_string(index) + pos_fix);
 }
 
 bool BufferDefInfo::CompareScheduleMarkNode(const isl::schedule_node_mark &mark1,
@@ -82,19 +99,6 @@ std::vector<size_t> BufferDefInfo::TensorSize(const isl::schedule_node &mark_nod
     }
   }
   return res;
-}
-isl::id BufferDefInfo::GetIndexDstId(const isl::ctx &ctx, const isl::id &id, const int index) {
-  CHECK_GE(index, 0);
-  if (index == 0) return id;
-  std::string id_name = id.get_name();
-  size_t pos = id_name.find("_local_");
-  std::string new_id_name = id_name;
-  if (pos != std::string::npos) {
-    std::stringstream ss;
-    ss << id_name.substr(0, pos) << "_promotion_" << index << id_name.substr(pos, id_name.size() - pos);
-    new_id_name = ss.str();
-  }
-  return isl::id(ctx, new_id_name);
 }
 
 std::vector<std::pair<isl::id, MemType>> BufferDefInfo::MakeDataStream(const isl::id new_dst_id) {

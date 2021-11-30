@@ -323,7 +323,8 @@ void ReduceStrategy::AddGpuConstraint() {
         reduce_axes_.emplace_back(axis);
       });
     all_reduce_ = reduce_axes_.size() == depth;
-    auto direction = analyzer_->scop_info_.analysis_result_.GetReduceDirectionOfBand(band_index);
+    OuterBandNode *current_outer_bn = analyzer_->scop_info_.analysis_result_.GetOuterBandNode(band_index);
+    auto direction = current_outer_bn->reduce_direction;
 
     if (!analyzer_->scop_info_.user_config_.EnableStitchFusion()) {
       if (reduce_length <= reduce_length_limit) {
@@ -368,9 +369,9 @@ void ReduceStrategy::DisableReduceMapping() {
 
 void ReduceStrategy::AkgReduceLibStrategyOnGpu(int band_index) {
   // disable atomic-add for bitwise-reduction
-  bool disable_atomic =
-    !analyzer_->scop_info_.user_config_.GetEnableAtomicAdd() ||
-    analyzer_->scop_info_.analysis_result_.GetOpTemplateOfBand(band_index) == Template::BITWISE_REDUCTION;
+  OuterBandNode *current_outer_bn = analyzer_->scop_info_.analysis_result_.GetOuterBandNode(band_index);
+  bool disable_atomic = !analyzer_->scop_info_.user_config_.GetEnableAtomicAdd() ||
+                        current_outer_bn->template_type == Template::BITWISE_REDUCTION;
   if (disable_atomic) {
     for (auto axis : reduce_axes_) {
       axis->block_constraints.map_extent_ = MIN_TILE;
@@ -428,7 +429,7 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu(int band_index) {
   if (is_special_4d) {
     return;
   }
-  auto direction = analyzer_->scop_info_.analysis_result_.GetReduceDirectionOfBand(band_index);
+  auto direction = current_outer_bn->reduce_direction;
   bool square_thread = direction == ReduceDirection::Y && analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib();
   bool use_local = UseRegisterMem();
   int64_t min_blocks = square_thread ? 32 : 512;
@@ -527,8 +528,7 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu(int band_index) {
   int proposal = use_local ? 8 : 32;
   auto default_elem_per_thread = possible_reduce_blocks > 1
                                    ? std::max(std::min<int>(proposal, (possible_blocks / min_blocks + 1) / 2 * 2), 1)
-                                 : IsHalfReduce() ? 64
-                                                  : SpItemPerThread::FULL;
+                                   : IsHalfReduce() ? 64 : SpItemPerThread::FULL;
   if (analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib()) {
     auto original_ept = default_elem_per_thread;
     // try to increase thread loop (no more than twice as original)
@@ -802,7 +802,7 @@ void GpuStrategy::ShowOptions() {
 }
 
 bool GpuStrategy::NeedModifyOrderOfAxis() {
-  int last_axis = analyzer_->scop_info_.analysis_result_.GetLastAxisOfBand();
+  int last_axis = analyzer_->scop_info_.analysis_result_.GetOuterBandNode()->last_axis;
   if (last_axis < 0 || last_axis >= static_cast<int>(pending_axes_.size())) {
     return false;
   }
@@ -820,72 +820,24 @@ bool GpuStrategy::NeedModifyOrderOfAxis() {
   return true;
 }
 
-// For the tensor of tensor operator, confirm whether coalesced access is required in the calculation phase.
-void GpuStrategy::SetCoalescedAccess() {
-  isl::schedule_node root = analyzer_->sch_.get_root();
-  isl::schedule_node node = GetOuterBand(root);
-  if (!node.isa<isl::schedule_node_band>()) {
-    return;
-  }
-
-  if (analyzer_->scop_info_.user_config_.GetEnableMatmul()) {
-    return;
-  }
-
-  auto band_node = node.as<isl::schedule_node_band>();
-  auto n_parallel_axis = CountConsecutiveCoincident(band_node);
-  node = band_node.split(n_parallel_axis);
-
-  std::unordered_set<std::string> skip_tensors = analyzer_->scop_info_.analysis_result_.GetTensorsNotPromote();
-  for (auto inner_tensor : analyzer_->scop_info_.analysis_result_.GetInnerTensor()) {
-    skip_tensors.emplace(inner_tensor);
-  }
-
-  // Get read and write tensor information.
-  auto reads_access = analyzer_->scop_info_.analysis_result_.GetReads().domain_factor_domain();
-  int last_axis = GetLastAxis(node, reads_access, skip_tensors);
-  if (last_axis != -1) {
-    analyzer_->scop_info_.analysis_result_.SetLastAxisOfBand(last_axis);
-    return;
-  }
-
-  auto write_access = analyzer_->scop_info_.analysis_result_.GetWrites().domain_factor_domain();
-  last_axis = GetLastAxis(node, write_access, skip_tensors);
-  if (last_axis != -1) {
-    analyzer_->scop_info_.analysis_result_.SetLastAxisOfBand(last_axis);
-    return;
-  }
-}
-
 std::vector<int> GpuStrategy::SortBands() {
   std::vector<int> sorted_bands;
   std::unordered_map<Template, std::vector<int>> templates_map;
   for (int i = 0; i < static_cast<int>(analyzer_->RootAxis()->children.size()); ++i) {
-    bool is_reduce = false;
-    analyzer_->ForEachAxisTopDown([this, &is_reduce, &i](TileAxis *axis) {
-      if (axis == analyzer_->RootAxis() || axis->index != i) {
-        return;
-      }
-      if (!axis->mc_sup) {
-        is_reduce = true;
-      }
-    });
-    if (is_reduce) {
-      templates_map[Template::REDUCTION].emplace_back(i);
-    } else {
-      templates_map[Template::PURE_ELEM].emplace_back(i);
-    }
+    OuterBandNode *current_outer_bn = analyzer_->scop_info_.analysis_result_.GetOuterBandNode(i);
+    auto template_type = current_outer_bn->template_type;
+    templates_map[template_type].emplace_back(i);
   }
-  auto InsertIndexOfBand = [&sorted_bands, &templates_map](Template templates) {
-    auto it = templates_map.find(templates);
-    if (it != templates_map.end()) {
+  auto InsertIndexOfBand = [&sorted_bands, &templates_map]() {
+    for (int templates = Template::DEFAULT; templates <= Template::TEMPLATE_BULK; ++templates) {
+      auto it = templates_map.find(Template(templates));
+      if (it == templates_map.end()) continue;
       for (auto i : it->second) {
         sorted_bands.emplace_back(i);
       }
     }
   };
-  InsertIndexOfBand(Template::REDUCTION);
-  InsertIndexOfBand(Template::PURE_ELEM);
+  InsertIndexOfBand();
   return sorted_bands;
 }
 
@@ -894,6 +846,7 @@ void GpuStrategy::AddGpuConstraint() {
   bool is_first = true;
   for (auto sorted_idx : SortBands()) {
     band_index_ = sorted_idx;
+    current_outer_bn_ = analyzer_->scop_info_.analysis_result_.GetOuterBandNode(band_index_);
     InitMappingLimit();
     if (!analyzer_->scop_info_.user_config_.GetIsTuning()) {
       if (template_ == Template::BROADCAST_OP || template_ == Template::CUSTOM_CONFIG) {
@@ -924,23 +877,29 @@ void GpuStrategy::AddGpuConstraint() {
          template_ == Template::EXTERN_CALL ||
          (template_ == Template::REDUCTION && !analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib())) &&
         analyzer_->scop_info_.analysis_result_.GetTensorOfTensor()) {
-      SetCoalescedAccess();
       need_injective_speed_up = !NeedModifyOrderOfAxis();
     }
-    need_injective_speed_up &= is_first;
     block_count_ = 0;
     InnerThreadOuterBlock(is_first);
+
+    // For the outer band is multiple filters, set the thread/block configuration according to the operator with the
+    // highest priority, and other operators cannot change it.
+    if (!is_first) {
+      continue;
+    }
+
     if ((template_ == Template::PURE_ELEM || template_ == Template::EXTERN_CALL) && need_injective_speed_up) {
       InjectiveSpeedup();
     }
 
     // Vectorization for Elementwise Op
     if (template_ == Template::PURE_ELEM || template_ == Template::BROADCAST_OP || template_ == Template::PAD_OP) {
-      CheckVectorizationForElemwiseOp(analyzer_->sch_);
+      CheckVectorizationForElemwiseOp();
     }
-    if (analyzer_->scop_info_.user_config_.GetEnableVectorization() && is_first) {
+    if (current_outer_bn_->enable_vectorization) {
       VectorizationSpeedup();
     }
+
     is_first = false;
   }
 
@@ -950,7 +909,7 @@ void GpuStrategy::AddGpuConstraint() {
       if (axis == analyzer_->RootAxis()) {
         return;
       }
-      if (!analyzer_->scop_info_.user_config_.GetEnableVectorization()) {
+      if (!current_outer_bn_->enable_vectorization) {
         axis->TileRestrainToSingleValue(axis->c1_constraints.tile_min_, TileLevel::CACHE0);
       }
     });
@@ -1045,17 +1004,12 @@ bool GpuStrategy::IsVectorized() {
   return true;
 }
 
-void GpuStrategy::CheckVectorizationForElemwiseOp(isl::schedule sch) {
+void GpuStrategy::CheckVectorizationForElemwiseOp() {
   if (!IsVectorized()) {
     return;
   }
 
-  auto root = sch.get_root();
-  isl::schedule_node node = GetOuterBand(root);
-  if (!node.isa<isl::schedule_node_band>() && static_cast<int>(node.n_children()) > band_index_) {
-    node = node.get_child(band_index_).child(0);
-  }
-  if (!node.isa<isl::schedule_node_band>() || !node.as<isl::schedule_node_band>().get_permutable()) {
+  if (!current_outer_bn_->node.get_permutable()) {
     return;
   }
 
@@ -1078,6 +1032,7 @@ void GpuStrategy::CheckVectorizationForElemwiseOp(isl::schedule sch) {
   if (analyzer_->scop_info_.user_config_.GetVectorLength() == 0) {
     analyzer_->scop_info_.user_config_.SetVectorLength(128);  // Default vectorization mode fp32 =128bits
   }
+  current_outer_bn_->enable_vectorization = true;
   analyzer_->scop_info_.user_config_.SetEnableVectorization(true);
 }
 
@@ -1099,9 +1054,9 @@ void GpuStrategy::InitMappingLimit() {
       analyzer_->scop_info_.user_config_.GetBlockConfig()->bound > 0) {
     template_ = Template::CUSTOM_CONFIG;
   } else {
-    template_ = analyzer_->scop_info_.analysis_result_.GetOpTemplateOfBand(band_index_);
+    template_ = current_outer_bn_->template_type;
   }
-  ReduceDirection direct = analyzer_->scop_info_.analysis_result_.GetReduceDirectionOfBand(band_index_);
+  ReduceDirection direct = current_outer_bn_->reduce_direction;
   bool use_lib = analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib();
   reverse_binding_ = use_lib && direct == ReduceDirection::Y;
 
@@ -1235,9 +1190,8 @@ void GpuStrategy::InnerThreadOuterBlock(bool write_cfg) {
       axis->thread_constraints.map_extent_ = 1;
       axis->thread_constraints.map_cand_.emplace_back(1);
       auto tile = inner_dim < thread_dim ? elem_per_thread_[inner_dim] : 1;
-      tile = tile == SpItemPerThread::AUTO   ? std::min(axis->thread_constraints.item_process_, max_elem_per_thread_)
-             : tile == SpItemPerThread::FULL ? std::min(shape, max_elem_per_thread_)
-                                             : 1;
+      tile = tile == SpItemPerThread::AUTO ? std::min(axis->thread_constraints.item_process_, max_elem_per_thread_)
+                                           : tile == SpItemPerThread::FULL ? std::min(shape, max_elem_per_thread_) : 1;
       auto tile_min = axis->c1_constraints.tile_min_.as<IntImm>()->value;
       auto tile_extent = axis->c1_constraints.tile_extent_.as<IntImm>()->value;
       if (tile_min == tile_extent && tile_extent != MIN_TILE) {
@@ -1657,9 +1611,8 @@ void GpuStrategy::InjectiveSpeedup() {
   auto parallel_size = GetProposalParallelSize();
   auto proposal_blocks = parallel_size.first;
   auto proposal_threads = parallel_size.second;
-  auto proposal_elem_per_thread = coaleasced_size < warp_sizes_        ? 1
-                                  : total_blocks < proposal_blocks * 8 ? min_elem_for_io_bound_
-                                                                       : 8;
+  auto proposal_elem_per_thread =
+    coaleasced_size < warp_sizes_ ? 1 : total_blocks < proposal_blocks * 8 ? min_elem_for_io_bound_ : 8;
 
   auto shrinked_threads = std::min<int64_t>(total_threads / proposal_threads, proposal_blocks / total_blocks);
   auto shrinked_blocks = total_blocks / proposal_blocks;
@@ -1731,8 +1684,7 @@ void GpuStrategy::TransposeSpeedup() {
   if (!analyzer_->scop_info_.user_config_.EnableStitchFusion()) {
     analyzer_->scop_info_.user_config_.SetEnableOneDimThread(true);
   }
-  analyzer_->scop_info_.user_config_.SetTransposeOp(true);
-  analyzer_->scop_info_.user_config_.SetUseSharedMemory(true);
+  current_outer_bn_->use_shared_memory = true;
   auto inner_axes = analyzer_->GetAxesOfAttr(AT_TRANSPOSE_INNERMOST_AXIS);
   if (inner_axes.size() == 1) {
     inner_axes[0]->TileRestrainLower(tranpose_tiling_constraints_, TileLevel::CACHE1);
@@ -1853,13 +1805,13 @@ void GpuStrategy::GpuScalarBroadcastStrategy() {
   if (broadcast_axes.empty()) {
     return;
   }
-  analyzer_->scop_info_.user_config_.SetUseSharedMemory(false);
+  current_outer_bn_->use_shared_memory = false;
 }
 
 void GpuStrategy::GpuVectorBroadcastStrategy() {
   // Disable share and local promotion since isl cannot perfectly handle fusion cases.
-  analyzer_->scop_info_.user_config_.SetUseSharedMemory(false);
-  analyzer_->scop_info_.user_config_.SetUseRegisterMemory(false);
+  current_outer_bn_->use_shared_memory = false;
+  current_outer_bn_->use_register_memory = false;
   auto interested_info = GetInterestedInfo(AT_MOD);
   for (auto it : interested_info) {
     TileAxis *axis = it.first;

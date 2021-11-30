@@ -24,21 +24,6 @@ namespace akg {
 namespace ir {
 namespace poly {
 
-std::vector<isl::schedule_node> CollectMarkNode(const isl::schedule_node &tree, const std::string &mark_tag) {
-  std::vector<isl::schedule_node> mark_nodes;
-  tree.foreach_descendant_top_down([&mark_nodes, &mark_tag](const isl::schedule_node &node) -> bool {
-    if (auto mark_node = node.as<isl::schedule_node_mark>()) {
-      // ignore nested mark nodes
-      if (mark_node.get_id().get_name() == mark_tag) {
-        mark_nodes.push_back(node);
-        return false;
-      }
-    }
-    return true;
-  });
-  return mark_nodes;
-}
-
 isl::schedule MemoryManager::Run(isl::schedule sch) {
   schedule_ = sch;
 
@@ -305,14 +290,14 @@ void MemoryManager::GatherBufferFootprintDefInfo(const isl::schedule_node &tree,
 void MemoryManager::CollectBufferFootprintDefInfo(BufferDefInfo &tensor_info, const isl::union_map &schedule_prom,
                                                   const isl::schedule_node &node) {
   auto writes = scop_info_.analysis_result_.GetWrites();
-  if (scop_info_.IsInBinds(tensor_info.tensor_id) && scop_info_.IsFunctionalCopyin(tensor_info.tensor_id.name(), scop_info_.StmtBindCopyinMap()) &&
-    tensor_info.IsBindCopyinDataFlow()) {
+  if (scop_info_.IsInBinds(tensor_info.tensor_id) &&
+      scop_info_.IsFunctionalCopyin(tensor_info.tensor_id.name(), scop_info_.StmtBindCopyinMap()) &&
+      tensor_info.IsBindCopyinDataFlow()) {
     writes = writes.unite(scop_info_.analysis_result_.GetBindCopyin());
   }
   tensor_info.footprints_cluster = TensorFootprintCluster::HoistBufferFootprintCluster(
     schedule_prom, tensor_info.ancester_tensor_id, scop_info_.analysis_result_.GetReads(),
-    scop_info_.analysis_result_.GetCopyin(), writes,
-    scop_info_.analysis_result_.GetFakeCopyin());
+    scop_info_.analysis_result_.GetCopyin(), writes, scop_info_.analysis_result_.GetFakeCopyin());
   if (tensor_info.footprints_cluster != nullptr) {
     tensor_info.footprint_cluster_map.emplace_back(std::make_pair(node, tensor_info.footprints_cluster));
     GatherBufferFootprintDefInfo(node, tensor_info);
@@ -415,7 +400,7 @@ void MemoryManager::MakeMultiBufferFootprint(const isl::union_map &schedule, con
     if (index == 0) {
       CollectBufferFootprintDefInfo(tensor_info, schedule, node);
     } else {
-      isl::id new_dst_id = tensor_info.GetIndexDstId(scop_info_.ctx_, tensor_info.dst_tensor_id, index);
+      isl::id new_dst_id = GetNpuIndexDstId(scop_info_.ctx_, tensor_info.dst_tensor_id, index);
       BufferDefInfo new_footprint_info = BufferDefInfo{tensor_info.tensor_id,
                                                        new_dst_id,
                                                        tensor_info.ancester_tensor_id,
@@ -556,7 +541,8 @@ void MemoryManager::AddOneBufferDefInfo(const isl::id &ancestor_id,
   scop_info_.analysis_result_.buffer_def_infos_.push_back(promoted_info);
 }
 
-void MemoryManager::AddTensorDataFlow(const std::vector<MemType> &memflow, const std::vector<std::string> &nameflow, std::string mark_tag_specific) {
+void MemoryManager::AddTensorDataFlow(const std::vector<MemType> &memflow, const std::vector<std::string> &nameflow,
+                                      std::string mark_tag_specific) {
   CHECK(memflow.size() == nameflow.size());
   uint64_t i = 0;
   /*********************************************

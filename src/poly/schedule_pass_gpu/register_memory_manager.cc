@@ -40,21 +40,27 @@ isl::schedule RegisterMemoryManager::HoistRegisterMemoryOnDepth(isl::schedule_no
   auto block_cfg = scop_info_.user_config_.GetBlockConfig();
   CHECK(block_cfg != nullptr) << "block config is null";
   auto replace_cfg = scop_info_.user_config_.GetReplaceConfig();
-  MappingStrategyMap mapping_strategy = scop_info_.user_config_.GetOuterMappingStrategy();
+  MappingStrategyAxisMap mapping_strategy = scop_info_.user_config_.GetOuterMappingStrategy(0);
   std::unordered_set<std::string> non_repeated_idx = GetNonRepeatedIdx(mapping_strategy);
   auto block_mapping = GetMappingFilterInfo(root_node, block_cfg, replace_cfg, non_repeated_idx);
 
   auto thread_cfg = scop_info_.user_config_.GetThreadConfig();
   CHECK(thread_cfg != nullptr) << "thread config is null";
   auto thread_mapping = isl::union_set::empty(block_mapping.ctx());
-  mapping_strategy = scop_info_.user_config_.GetInnerMappingStrategy();
+  mapping_strategy = scop_info_.user_config_.GetInnerMappingStrategy(0);
   non_repeated_idx = GetNonRepeatedIdx(mapping_strategy);
   thread_mapping = GetMappingFilterInfo(root_node, thread_cfg, replace_cfg, non_repeated_idx);
 
-  auto mapping = block_mapping.intersect(thread_mapping);
-
   auto partial_sched = LocalSchedule(node);
-  partial_sched = partial_sched.intersect_domain(mapping);
+  if (!thread_mapping.is_empty() && !block_mapping.is_empty()) {
+    auto mapping = block_mapping.intersect(thread_mapping);
+    partial_sched = partial_sched.intersect_domain(mapping);
+  } else if (!thread_mapping.is_empty()) {
+    partial_sched = partial_sched.intersect_domain(thread_mapping);
+  } else if (!block_mapping.is_empty()) {
+    partial_sched = partial_sched.intersect_domain(block_mapping);
+  }
+
   CreateTensorCluster(node, partial_sched);
 
   isl::schedule sch = schedule_;
@@ -254,7 +260,7 @@ void RegisterMemoryManager::CreateTensorCluster(const isl::schedule_node &node, 
       }
     }
 
-    isl::id dst_tensor_id = GpuDstId(GpuMemType::LOCAL, item);
+    isl::id dst_tensor_id = GetGpuIndexDstId(GpuMemType::LOCAL, item);
     std::vector<size_t> buffer_sizes;
     std::vector<std::pair<isl::id, MemType>> data_stream;
     MemType memtype;
@@ -529,7 +535,7 @@ isl::schedule RegisterMemoryManager::HoistRegisterMemoryOnMark(isl::schedule_nod
     c_mark = PROMOTE_SHARED_TO_REGISTER_C;
   }
 
-  auto mark_node = CollectMarkNodeOnPromotion(root, c_mark);
+  auto mark_node = CollectMarkNode(root, c_mark).at(0);
   auto tmp_hoist_node = mark_node.parent();
 
   while (!tmp_hoist_node.isa<isl::schedule_node_band>()) {
@@ -554,7 +560,7 @@ isl::schedule RegisterMemoryManager::HoistRegisterMemoryOnMark(isl::schedule_nod
 
   auto hoist_ab_root = sch.get_root();
   auto ab_mark = PROMOTE_SHARED_TO_REGISTER_AB;
-  auto mark_ab_node = CollectMarkNodeOnPromotion(hoist_ab_root, ab_mark);
+  auto mark_ab_node = CollectMarkNode(hoist_ab_root, ab_mark).at(0);
   auto hoist_ab_node = mark_ab_node.del().parent();
   auto hoist_ab_depth = hoist_ab_node.schedule_depth();
   hoist_compute_local_tensor_ = false;
@@ -727,9 +733,6 @@ isl::schedule RegisterMemoryManager::RunReduce(isl::schedule_node root) {
   auto res_node = GetRegisterPromotedNode(root);
   if (res_node.isa<isl::schedule_node_band>()) {
     auto depth = UpdateDepth(res_node);
-    if (scop_info_.user_config_.GetRegisterDepth() >= 0) {
-      depth = scop_info_.user_config_.GetRegisterDepth();
-    }
     sch = HoistRegisterMemory(root, depth);
   }
   return sch;
@@ -792,9 +795,6 @@ isl::schedule RegisterMemoryManager::RunElementWise(isl::schedule_node root) {
 
   if (res_node.isa<isl::schedule_node_band>()) {
     auto depth = UpdateDepth(res_node);
-    if (scop_info_.user_config_.GetRegisterDepth() >= 0) {
-      depth = scop_info_.user_config_.GetRegisterDepth();
-    }
 
     sch = HoistRegisterMemory(root, depth);
 
@@ -817,7 +817,7 @@ isl::schedule RegisterMemoryManager::Run(isl::schedule sch) {
 
   sch = InsertContextNode(sch, scop_info_);
 
-  if (!scop_info_.user_config_.UseRegisterMemory()) {
+  if (!scop_info_.user_config_.GetUseRegisterMemory()) {
     return sch;
   }
 

@@ -457,7 +457,6 @@ std::string OpTypeCollector::GetBasicOpType(const TensorEntry dst, const std::ve
 void OpTypeCollector::Run() {
   Collect();
   WriteToScopInfo();
-  Dump();
 }
 
 }  // namespace poly

@@ -349,7 +349,7 @@ def conv_backprop_input_compute(data, output_shape, filter_shape, input_shape, p
 
     res_c = cast.cast(res_c, "float16")
 
-    return res_c, {"dim": info, "pragma_reschedule": 1, "pragma_rmselfdep": 0}
+    return res_c, {"dim": info, "pragma_rmselfdep": 0}
 
 @vc_util.check_input_type((list, tuple), (list, tuple), (list, tuple), (list, tuple), (list, tuple), (list, tuple),
                           (dict, type(None)))

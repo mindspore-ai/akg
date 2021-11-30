@@ -167,7 +167,7 @@ void GpuSolver::SolveMapping() {
     std::unordered_set<TileAxis *> successed;
     MappingCfg *map_cfg;
 
-    if (center_type == THREAD_STR) {
+    if (center_type == THREAD_TAG) {
       max_axis_pos = {{0, T0}, {1, T1}, {2, T2}};
       map_cfg = analyzer_.scop_info_.user_config_.GetThreadConfig();
     } else {
@@ -192,11 +192,12 @@ void GpuSolver::SolveMapping() {
         ss << "Already success, continue.\n";
         continue;
       }
-
-      bool is_hw = analyzer_.scop_info_.analysis_result_.GetOpTemplateOfBand(axis->index) == Template::CONV &&
+      OuterBandNode *current_outer_bn = analyzer_.scop_info_.analysis_result_.GetOuterBandNode(axis->index);
+      bool is_hw = current_outer_bn->template_type == Template::CONV &&
                    (axis->HasAttr(AttrInfo{AT_CONV, "hi"}) || axis->HasAttr(AttrInfo{AT_CONV, "wi"}));
-      bool is_reuse_same_band = center_type == BLOCK_STR && is_hw;
+      bool is_reuse_same_band = center_type == BLOCK_TAG && is_hw;
       auto alloc_idx = center.Alloc(i, center_type, is_reuse_same_band);
+
       ss << "Alloc idx = " << alloc_idx;
       appl = center.waiting_list[i];  // update waiting list
       if (alloc_idx < 0 || alloc_idx >= static_cast<int>(appl.size.size())) {
@@ -207,7 +208,7 @@ void GpuSolver::SolveMapping() {
         ss << " --> success, alloc " << alloc_size << " " << center_type << " on position " << alloc_pos << ".\n";
 
         std::string attr_value = max_axis_pos[alloc_pos] + "_" + std::to_string(alloc_size);
-        if (center_type == THREAD_STR) {
+        if (center_type == THREAD_TAG) {
           analyzer_.scop_info_.user_config_.RecordInnerMappingStrategy(axis->dim_axis, max_axis_pos[alloc_pos],
                                                                        axis->index);
           axis->MarkWithAttr(AttrInfo{AT_THREAD_CFG, attr_value});
@@ -236,7 +237,7 @@ void GpuSolver::SolveMapping() {
     }
     ss << "\n";
     ss << "Set MAP STR: " << map_str << "\n";
-    if (center_type == THREAD_STR) {
+    if (center_type == THREAD_TAG) {
       analyzer_.scop_info_.user_config_.SetThreadConfig(map_str);
     } else {
       analyzer_.scop_info_.user_config_.SetBlockConfig(map_str);
@@ -246,12 +247,12 @@ void GpuSolver::SolveMapping() {
   thread_center_.resource_limit = {max_x_y_dim_thread_, max_x_y_dim_thread_, max_z_dim_thread_};
   ss << "------ SolveMapping: THREAD -----\n";
   ss << thread_center_.Show() << "\n";
-  DoAlloc(thread_center_, THREAD_STR);
+  DoAlloc(thread_center_, THREAD_TAG);
 
   block_center_.resource_limit = {max_x_dim_block_, max_y_z_dim_block_, max_y_z_dim_block_};
   ss << "------ SolveMapping: BLOCK -----\n";
   ss << block_center_.Show() << "\n";
-  DoAlloc(block_center_, BLOCK_STR);
+  DoAlloc(block_center_, BLOCK_TAG);
 
   analyzer_.GetTileLogger().AppendLog(GPU_MAPPING, ss);
 
@@ -261,8 +262,9 @@ void GpuSolver::SolveMapping() {
 AllocPos GpuSolver::GetThreadAllocPos(TileAxis *axis) {
   std::stringstream ss;
 
-  auto template_type = analyzer_.scop_info_.analysis_result_.GetOpTemplateOfBand(tiling_band_);
-  ReduceDirection direct = analyzer_.scop_info_.analysis_result_.GetReduceDirectionOfBand(tiling_band_);
+  OuterBandNode *current_outer_bn = analyzer_.scop_info_.analysis_result_.GetOuterBandNode(tiling_band_);
+  auto template_type = current_outer_bn->template_type;
+  ReduceDirection direct = current_outer_bn->reduce_direction;
   ss << "GetThreadAllocPos: Template: " << analyzer_.scop_info_.analysis_result_.ShowOpTemplate(template_type)
      << " axis : " << axis->index << "_" << axis->dim_axis;
   analyzer_.GetTileLogger().AppendLog(GPU_MAPPING, ss);
@@ -309,8 +311,9 @@ AllocPos GpuSolver::GetThreadAllocPos(TileAxis *axis) {
 AllocPos GpuSolver::GetBlockAllocPos(TileAxis *axis) {
   std::stringstream ss;
 
-  auto template_type = analyzer_.scop_info_.analysis_result_.GetOpTemplateOfBand(tiling_band_);
-  ReduceDirection direct = analyzer_.scop_info_.analysis_result_.GetReduceDirectionOfBand(tiling_band_);
+  OuterBandNode *current_outer_bn = analyzer_.scop_info_.analysis_result_.GetOuterBandNode(tiling_band_);
+  auto template_type = current_outer_bn->template_type;
+  ReduceDirection direct = current_outer_bn->reduce_direction;
   ss << "GetBlockAllocPos: Template: " << analyzer_.scop_info_.analysis_result_.ShowOpTemplate(template_type)
      << " axis : " << axis->index << "_" << axis->dim_axis;
   analyzer_.GetTileLogger().AppendLog(GPU_MAPPING, ss);

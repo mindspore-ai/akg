@@ -97,8 +97,9 @@ void ScopInfoAdapter(TuneInfo *tune_info, ScopInfo *scop_info) {
   tune_info->analysis.Set("enable_reduce_lib", make_const(Int(32), scop_info->user_config_.GetEnableAkgReduceLib()));
   tune_info->analysis.Set("enable_atomic_add", make_const(Int(32), scop_info->user_config_.GetEnableAtomicAdd()));
   for (int i = 0; i < scop_info->analysis_result_.GetOuterBandNumber(); ++i) {
+    auto reduce_direction = scop_info->analysis_result_.GetOuterBandNode(i)->reduce_direction;
     tune_info->analysis.Set("reduce_direction_" + std::to_string(i),
-                            StringImm::make(scop_info->analysis_result_.ShowReduceDirectionOfBand(i)));
+                            StringImm::make(scop_info->analysis_result_.ShowReduceDirection(reduce_direction)));
   }
 }
 

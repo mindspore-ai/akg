@@ -253,7 +253,7 @@ def conv_bn1(data, fmap_shape, filter_shape, pad, stride, dilation, use_bias=Fal
 
     # need pragma_force_rmselfdep to enable multicore using atomic add
     # because default pragma_rmselfdep=1 will disable multicore of reduce axes
-    attrs = {"dim": dim_info, "pragma_reschedule": 1, "enable_bisect_optimize": 0,
+    attrs = {"dim": dim_info, "enable_bisect_optimize": 0,
              "pragma_rmselfdep": 0, "pragma_force_rmselfdep": 1}
 
     return conv_res_16, var_part, mean, attrs

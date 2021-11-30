@@ -215,7 +215,7 @@ def cast_conv(data, fmap_shape, filter_shape, pad_, stride_, dilation_, use_bias
         conv_data = [a, b]
     # mmad fp32 failed in post_fusing
     res, _ = conv.conv_core(conv_data, fmap_shape, filter_shape, pad_, stride_, dilation_, use_bias, block_size, attrs)
-    attr_map = {"pragma_reschedule": 1}
+    attr_map = {}
     return res, attr_map
 
 

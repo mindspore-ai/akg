@@ -164,7 +164,6 @@ def get_attrs():
     """get attrs config"""
     attrs = {
         "pragma_checkcoincident": 0,
-        "pragma_reschedule": 1,
         "pragma_modshift": 1,
         "enable_bisect_optimize": 0,
     }

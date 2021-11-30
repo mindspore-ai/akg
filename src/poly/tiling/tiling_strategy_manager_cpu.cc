@@ -43,10 +43,13 @@ void CpuStrategy::BuildAxesQueue() {
 void CpuStrategy::RecordTileValue() {
   std::stringstream ss;
   for (auto i = 0; i < static_cast<int>(pending_axes_.size()); ++i) {
-    ss << "Band No." << i << " use template " << analyzer_->scop_info_.analysis_result_.ShowOpTemplateOfBand(i);
-    if (analyzer_->scop_info_.analysis_result_.GetOpTemplateOfBand(i) == Template::REDUCTION ||
-        analyzer_->scop_info_.analysis_result_.GetOpTemplateOfBand(i) == Template::BITWISE_REDUCTION) {
-      ss << "(" << analyzer_->scop_info_.analysis_result_.ShowReduceDirectionOfBand(i) << ")";
+    auto current_outer_bn = analyzer_->scop_info_.analysis_result_.GetOuterBandNode(i);
+    ss << "Band No." << i << " use template "
+       << analyzer_->scop_info_.analysis_result_.ShowOpTemplate(current_outer_bn->template_type);
+    if (current_outer_bn->template_type == Template::REDUCTION ||
+        current_outer_bn->template_type == Template::BITWISE_REDUCTION) {
+      ss << "(" << analyzer_->scop_info_.analysis_result_.ShowReduceDirection(current_outer_bn->reduce_direction)
+         << ")";
     }
     analyzer_->GetTileLogger().AppendLog(CPU_TILING, ss);
     ss << "Tile = {";
@@ -117,8 +120,8 @@ void CpuStrategy::SetMultiLevelTileValue() {
       std::tie(axis, shape) = pending_axes_[idx][i];
       data_size *= shape;
       int64_t tile_outer_left = 1;
-      int vectorize_axis = analyzer_->scop_info_.analysis_result_.GetLastAxisOfBand(idx);
 
+      int vectorize_axis = analyzer_->scop_info_.analysis_result_.GetOuterBandNode(idx)->last_axis;
       if (vectorize_axis == i) {
         SetUnrollTileValue(axis, shape, tile_outer_left);
       }

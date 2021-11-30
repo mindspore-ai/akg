@@ -108,5 +108,5 @@ def softmax_ad_optimized(head, data, axis=-1):
     # For softmax's dl w.r.t. data (note: l_up is not a direct dependency of data), use the custom_softmax_fdiff.
     # In this case, l_up is the same as l_up, and data same as data, but this needs not be the case.
     [dl_ddata] = akg.differentiate(l_up, [data], head, None, None, override={l_up: ([data], custom_softmax_fdiff)})
-    attrs = {"pragma_reschedule": 1}
+    attrs = {}
     return dl_ddata, attrs

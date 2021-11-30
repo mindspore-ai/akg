@@ -287,7 +287,6 @@ def _update_attrs_gpu(all_ops, attrs, poly):
 
 
 def _update_attrs_ascend(all_ops, attr):
-    attr["pragma_reschedule"] = 1
     attr["pragma_rmselfdep"] = all([i not in all_ops for i in ["BatchMatMul", "MatMul"]])
     # For the MatMul/BatchMatMul with bias, the inline is necessary
     # For the Ascend, turn 'enable_auto_inline' off for composite op by default.

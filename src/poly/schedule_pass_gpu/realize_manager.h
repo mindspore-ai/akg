@@ -39,11 +39,7 @@ class RealizeManager : public SchedulePass {
   ScopInfo &scop_info_;
   std::set<std::string> names_set_{};
 
-  isl::id GetRealizeId(const isl::schedule_node &node, std::string tensor_name) const;
-
-  isl::map GetExtensionSpace(const isl::schedule_node &node, const std::string tensor_name);
-
-  isl::schedule_node InsertExtensionNodeBefore(const isl::schedule_node &node, const std::string tensor_name);
+  isl::id GetRealizeId(const isl::schedule_node &node, const std::string &tensor_name);
 
   std::string GetFilterName(const isl::schedule_node_filter &filter_node);
 

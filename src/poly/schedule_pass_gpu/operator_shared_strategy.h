@@ -25,35 +25,40 @@ namespace poly {
 
 class OperatorSharedStrategy {
  public:
-  explicit OperatorSharedStrategy(ScopInfo &scop_info) : scop_info_(scop_info) {}
+  explicit OperatorSharedStrategy(ScopInfo &scop_info, std::unordered_set<std::string> &mark_names, int filter_pos)
+      : scop_info_(scop_info), mark_names_(mark_names), band_index_(filter_pos) {}
   ~OperatorSharedStrategy() {}
 
   std::set<std::string> GetInitPromotedTensor();
-  void RecordPromotedTensorInfo(const isl::schedule_node &node, const isl::union_map &outer_sch,
-                                const std::set<std::string> &id_sets);
-  void CreateClusterList(const isl::schedule_node &node, const isl::union_map &outer_sch);
+  void RecordPromotedTensorInfo(const isl::schedule_node &orig_node, const std::set<std::string> &id_sets,
+                                const std::string &mark_names);
+  void CreateClusterList(const isl::schedule_node &node);
   void RecordCustomPromotedTensors(std::set<std::string> &id_sets);
   void DeleteNotPromotedTensors(std::set<std::string> &id_sets);
 
  protected:
   ScopInfo &scop_info_;
+  std::unordered_set<std::string> mark_names_;
+  int band_index_;
 };
 
 class ReduceSharedStrategy : public OperatorSharedStrategy {
  public:
-  explicit ReduceSharedStrategy(ScopInfo &scop_info) : OperatorSharedStrategy(scop_info) {}
+  explicit ReduceSharedStrategy(ScopInfo &scop_info, std::unordered_set<std::string> &mark_names, int filter_pos)
+      : OperatorSharedStrategy(scop_info, mark_names, filter_pos) {}
   ~ReduceSharedStrategy() {}
 
-  void CreateClusterList(const isl::schedule_node &node, const isl::union_map &outer_sch);
+  void CreateClusterList(const isl::schedule_node &node);
   std::set<std::string> AnalysisReduceTensors();
 };
 
 class BatchMatmulSharedStrategy : public OperatorSharedStrategy {
  public:
-  explicit BatchMatmulSharedStrategy(ScopInfo &scop_info) : OperatorSharedStrategy(scop_info) {}
+  explicit BatchMatmulSharedStrategy(ScopInfo &scop_info, std::unordered_set<std::string> &mark_names, int filter_pos)
+      : OperatorSharedStrategy(scop_info, mark_names, filter_pos) {}
   ~BatchMatmulSharedStrategy() {}
 
-  void CreateClusterList(const isl::schedule_node &node, const isl::union_map &outer_sch, const bool hoist_tensor_c);
+  void CreateClusterList(const isl::schedule_node &node);
 };
 
 }  // namespace poly

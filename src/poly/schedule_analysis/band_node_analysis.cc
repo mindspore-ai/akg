@@ -463,8 +463,7 @@ class OperatorInfoCollector {
     if (type_c != Float(16) && type_c != Float(32) && type_c != Int(32)) {
       return false;
     }
-    if ((type_a != Float(16)) && (type_a != Int(8)) &&
-        (type_b != Float(16)) && (type_b != Int(8))) {
+    if ((type_a != Float(16)) && (type_a != Int(8)) && (type_b != Float(16)) && (type_b != Int(8))) {
       return false;
     }
     return true;
@@ -526,17 +525,23 @@ class OperatorInfoCollector {
   void SetMmaModeForTensor(const std::string &tensor_a_name, const std::string &tensor_b_name) {
     std::string custom_dim = scop_info_.user_config_.GetBDim();
     if (!custom_dim.empty() && !scop_info_.user_config_.GetEnableConvTensorCore()) {
-      const int each_axis_size = 4;
+      const int each_axis_size_with_mapping = 6;
+      const int each_axis_size_without_mapping = 4;
       const int m_axis_pos = 1;
       const int n_axis_pos = 2;
       const int k_axis_pos = 3;
+      const int interval_len = 3;
+      int each_axis_size = each_axis_size_without_mapping;
+      if (custom_dim.find(T0) != std::string::npos) {
+        each_axis_size = each_axis_size_with_mapping;
+      }
 
       Mma mma;
       std::vector<std::string> dim_str = Split(custom_dim, " ");
       int batch_number = static_cast<int>(scop_info_.analysis_result_.GetBatchAxisNumForMatmul()) > 0 ? 1 : 0;
-      int real_m_axis_pos = (m_axis_pos + batch_number) * each_axis_size - 1;
-      int real_n_axis_pos = (n_axis_pos + batch_number) * each_axis_size - 1;
-      int real_k_axis_pos = (k_axis_pos + batch_number) * each_axis_size - 1;
+      int real_m_axis_pos = (m_axis_pos + batch_number - 1) * each_axis_size + interval_len;
+      int real_n_axis_pos = (n_axis_pos + batch_number - 1) * each_axis_size + interval_len;
+      int real_k_axis_pos = (k_axis_pos + batch_number - 1) * each_axis_size + interval_len;
       mma.m = static_cast<int>(WrappedStrtol(dim_str[real_m_axis_pos]));
       mma.n = static_cast<int>(WrappedStrtol(dim_str[real_n_axis_pos]));
       mma.k = static_cast<int>(WrappedStrtol(dim_str[real_k_axis_pos]));
@@ -572,48 +577,62 @@ void AnalyzeBandNode::Run() {
   }
   CollectStmtInfo();
   AnalyzeOuterBandTemplate();
-  if (target_ == TARGET_CPU) {
+  if (target_ == TARGET_CPU || target_ == TARGET_CUDA) {
     AnalyzeAxisPosition();
   }
   ShowBandInfo();
 }
 
 void AnalyzeBandNode::AnalyzeAxisPosition() {
-  auto &bands = scop_info_.analysis_result_.GetBandNodes();
-  for (auto &band_node : bands) {
-    auto *bn = band_node.get();
+  auto &bands = scop_info_.analysis_result_.GetAllOuterBandNode();
+  for (auto &bn : bands) {
     if (!bn->node.isa<isl::schedule_node_band>()) {
       continue;
     }
-    SetVectorizationAxis(bn->node, bn->index);
+
+    int last_axis = -1;
+    if (target_ == TARGET_CPU) {
+      last_axis = GetVectorizationAxisForCpu(bn);
+    } else {
+      last_axis = GetCoalescedAccessAxisForCuda(bn->node);
+    }
+    bn->last_axis = last_axis;
   }
 }
 
-void AnalyzeBandNode::SetVectorizationAxis(const isl::schedule_node &orig_node, const int index) {
-  if (!orig_node.isa<isl::schedule_node_band>()) {
-    return;
-  }
+int AnalyzeBandNode::GetVectorizationAxisForCpu(std::unique_ptr<OuterBandNode> &bn) {
+  auto bn_schedule_node = bn->node;
 
-  auto op_template = scop_info_.analysis_result_.GetOpTemplateOfBand(index);
-  auto n_member = static_cast<int>(orig_node.as<isl::schedule_node_band>().n_member());
-  bool is_reduce_op = (op_template == Template::REDUCTION || op_template == Template::BITWISE_REDUCTION);
+  auto n_member = static_cast<int>(bn_schedule_node.n_member());
+  bool is_reduce_op = (bn->template_type == Template::REDUCTION || bn->template_type == Template::BITWISE_REDUCTION);
 
   int vectorization_axis = -1;
   if (is_reduce_op) {
-    if (scop_info_.analysis_result_.GetReduceDirectionOfBand(index) == ReduceDirection::Y) {
+    if (bn->reduce_direction == ReduceDirection::Y) {
       vectorization_axis = 0;
     } else {
       vectorization_axis = n_member - 1;
     }
-  } else if (op_template == Template::BROADCAST_OP) {
+  } else if (bn->template_type == Template::BROADCAST_OP) {
     vectorization_axis = n_member - 1;
   } else {
-    vectorization_axis = GetElemVectorizationAxisPos(orig_node);
+    vectorization_axis = GetLastAxisPos(bn_schedule_node);
   }
-  scop_info_.analysis_result_.SetLastAxisOfBand(vectorization_axis, index);
+  return vectorization_axis;
 }
 
-int AnalyzeBandNode::GetElemVectorizationAxisPos(const isl::schedule_node &orig_node) {
+// For the tensor of tensor operator, confirm whether coalesced access is required in the calculation phase.
+int AnalyzeBandNode::GetCoalescedAccessAxisForCuda(const isl::schedule_node &orig_node) {
+  int coalesced_access_axis = -1;
+  if (scop_info_.user_config_.GetEnableMatmul()) {
+    return coalesced_access_axis;
+  }
+  std::unordered_set<std::string> skip_tensors = scop_info_.analysis_result_.GetTensorsNotPromote();
+  coalesced_access_axis = GetLastAxisPos(orig_node, skip_tensors);
+  return coalesced_access_axis;
+}
+
+int AnalyzeBandNode::GetLastAxisPos(const isl::schedule_node &orig_node, std::unordered_set<std::string> skip_tensors) {
   if (!orig_node.isa<isl::schedule_node_band>()) {
     return -1;
   }
@@ -623,7 +642,6 @@ int AnalyzeBandNode::GetElemVectorizationAxisPos(const isl::schedule_node &orig_
   auto n_parallel_axis = CountConsecutiveCoincident(band_node);
   node = band_node.split(n_parallel_axis);
 
-  std::unordered_set<std::string> skip_tensors;
   // Get read and write tensor information.
   auto reads_access = scop_info_.analysis_result_.GetReads().domain_factor_domain();
   int last_axis = GetLastAxis(node, reads_access, skip_tensors);
@@ -671,20 +689,24 @@ void AnalyzeBandNode::CollectStmtInfo() {
   }
 }
 
-bool AnalyzeBandNode::IsGemmTempleteInBand(BandNode *bn) {
-  if (!bn || bn->stmts.empty()) { return false; }
+bool AnalyzeBandNode::IsGemmTempleteInBand(std::unique_ptr<OuterBandNode> &bn) {
+  if (!bn || bn->stmts.empty()) {
+    return false;
+  }
   auto stmts = scop_info_.analysis_result_.GetStatementMap();
   isl::id gemm_stmt;
-  for (auto &p: gemm_provides_) {
-    for (auto &s: stmts) {
+  for (auto &p : gemm_provides_) {
+    for (auto &s : stmts) {
       if (s.second == p) {
         gemm_stmt = s.first;
         break;
       }
     }
   }
-  if (gemm_stmt.is_null()) { return false; }
-  for (auto &item: bn->stmts) {
+  if (gemm_stmt.is_null()) {
+    return false;
+  }
+  for (auto &item : bn->stmts) {
     if (item.get_name() == gemm_stmt.get_name()) {
       return true;
     }
@@ -692,7 +714,7 @@ bool AnalyzeBandNode::IsGemmTempleteInBand(BandNode *bn) {
   return false;
 }
 
-void AnalyzeBandNode::DetermineTemplateOfBand(BandNode *bn) {
+void AnalyzeBandNode::DetermineTemplateOfBand(std::unique_ptr<OuterBandNode> &bn) {
   if (!bn || bn->stmts.empty()) {
     return;
   }
@@ -702,7 +724,7 @@ void AnalyzeBandNode::DetermineTemplateOfBand(BandNode *bn) {
   auto schedule_tree_op = scop_info_.analysis_result_.GetOpTemplate();
   if (schedule_tree_op == Template::CONV || schedule_tree_op == Template::MATMUL) {
     if (IsGemmTempleteInBand(bn)) {
-      bn->info.type = schedule_tree_op;
+      bn->template_type = schedule_tree_op;
       return;
     }
   }
@@ -719,29 +741,29 @@ void AnalyzeBandNode::DetermineTemplateOfBand(BandNode *bn) {
   if (concated_op_type.find(AT_REDUCE) != std::string::npos) {
     auto type = scop_info_.analysis_result_.GetReduceOpType(red_stmt);
     if (type == AKG_REDUCE_AND || type == AKG_REDUCE_OR) {
-      bn->info.type = Template::BITWISE_REDUCTION;
+      bn->template_type = Template::BITWISE_REDUCTION;
     } else {
-      bn->info.type = Template::REDUCTION;
+      bn->template_type = Template::REDUCTION;
     }
-    bn->info.direction = direct;
+    bn->reduce_direction = direct;
+    scop_info_.analysis_result_.SetReduceDirection(direct);
   } else if (concated_op_type.find(AT_TRANSPOSE) != std::string::npos) {
-    bn->info.type = Template::TRANSPOSE_OP;
+    bn->template_type = Template::TRANSPOSE_OP;
   } else if (concated_op_type.find(AT_PAD) != std::string::npos) {
-    bn->info.type = Template::PAD_OP;
+    bn->template_type = Template::PAD_OP;
   } else if (concated_op_type.find(AT_BROADCAST) != std::string::npos ||
              concated_op_type.find(AT_TRANSFORM) != std::string::npos) {
-    bn->info.type = Template::BROADCAST_OP;
+    bn->template_type = Template::BROADCAST_OP;
   } else if (concated_op_type.find(AT_CALL) != std::string::npos) {
-    bn->info.type = Template::EXTERN_CALL;
+    bn->template_type = Template::EXTERN_CALL;
   } else {
-    bn->info.type = Template::PURE_ELEM;
+    bn->template_type = Template::PURE_ELEM;
   }
 }
 
 void AnalyzeBandNode::AnalyzeOuterBandTemplate() {
-  auto &bands = scop_info_.analysis_result_.GetBandNodes();
-  for (auto &band_node : bands) {
-    auto *bn = band_node.get();
+  auto &bands = scop_info_.analysis_result_.GetAllOuterBandNode();
+  for (auto &bn : bands) {
     if (!bn->node || bn->node.get_partial_schedule().is_null()) {
       continue;
     }
@@ -761,8 +783,7 @@ void AnalyzeBandNode::AnalyzeOuterBandTemplate() {
 }
 
 void AnalyzeBandNode::AnalyzeConvAndMatmulOp(const ProvideEntry &pe) {
-  if (scop_info_.user_config_.GetTarget() != TARGET_CUDA ||
-      pe.basic_op_type.find(AT_TRANSPOSE) == std::string::npos ||
+  if (scop_info_.user_config_.GetTarget() != TARGET_CUDA || pe.basic_op_type.find(AT_TRANSPOSE) == std::string::npos ||
       pe.basic_op_type.find(AT_ELEMWISE) == std::string::npos) {
     return;
   }
@@ -857,12 +878,12 @@ void AnalyzeBandNode::AnalyzeScheduleTreeTemplate() {
 }
 
 void AnalyzeBandNode::ShowBandInfo() {
-  auto &bands = scop_info_.analysis_result_.GetBandNodes();
+  auto &bands = scop_info_.analysis_result_.GetAllOuterBandNode();
   std::stringstream s;
   s << "Outer bands template: {";
   for (size_t i = 0; i < bands.size(); ++i) {
     auto *bn = bands[i].get();
-    s << scop_info_.analysis_result_.ShowOpTemplateOfBand(bn->index) << ", ";
+    s << scop_info_.analysis_result_.ShowOpTemplate(bn->template_type) << ", ";
   }
   s << "}";
   LOG(INFO) << s.str();

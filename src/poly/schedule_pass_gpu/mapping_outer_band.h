@@ -37,9 +37,12 @@ class MappingOuterBand : public SchedulePass {
 
   virtual isl::schedule Run(isl::schedule sch);
 
-  isl::schedule DoThreadMapping(const isl::schedule &sch);
+  isl::schedule_node DoThreadMapping(const isl::schedule_node &orig_node);
 
-  isl::schedule DoBlockMapping(const isl::schedule &sch);
+  isl::schedule_node DoBlockMapping(const isl::schedule_node &orig_node);
+
+  isl::schedule DoMapping(const isl::schedule &sch, const std::function<isl::schedule_node(isl::schedule_node)> &f,
+                          const bool is_block_mapping = true);
 
   size_t NumMappedDescendant(const RoadMap &thread_roadmap, const isl::schedule_node &parent);
 
@@ -54,6 +57,7 @@ class MappingOuterBand : public SchedulePass {
    */
   isl::schedule_node DoThreadSynchronization(const isl::schedule_node &node,
                                              const std::vector<MappingCfg *> &other_mapping_cfg = {});
+  isl::schedule_node DoFilterSynchronization(const isl::schedule_node &orig_node);
 
   // preparation for synchronization
   isl::multi_union_pw_aff MapDomainToWarp(const isl::schedule_node &node, MappingCfg *mapping_cfg,
@@ -71,6 +75,7 @@ class MappingOuterBand : public SchedulePass {
  private:
   PassInfo &pass_info_;
   ScopInfo &scop_info_;
+  int band_index_{0};
 };
 
 }  // namespace poly

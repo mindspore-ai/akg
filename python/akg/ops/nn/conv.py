@@ -843,10 +843,9 @@ def conv(data, fmap_shape, filter_shape, pad, stride, dilation, use_bias=False, 
     dynamic_tiling = 1 if attrs.get("dynamic") else 0
 
     if not dynamic:
-        attrs = {"dim": dim_info, "pragma_reschedule": 1, "pragma_rmselfdep": 0}
+        attrs = {"dim": dim_info, "pragma_rmselfdep": 0}
     else:
         attrs = {"dim": dim_info,
-                 "pragma_reschedule": 1,
                  "pragma_rmselfdep": 0,
                  "enable_fix_loop_extent": 0,
                  "enable_post_poly_loop_partition": 0,

@@ -394,7 +394,6 @@ def test_CCE_Conv(fmap_shape, filter_shape, pad_, stride_,
     # schedule
     s = akg.tvm.create_schedule(out.op)
     attrs = {}
-    attrs["pragma_reschedule"] = 1
     with akg.build_config(add_lower_pass=utils.debug_mode(0), dump_pass_ir=True):
         if fusion:
             if use_bias:
