@@ -55,13 +55,13 @@ def _reducemax_pattern(kernel_info):
     return False, 0
 
 
-def should_enable_atomic_add(kernel_info):
-    """Check whether enable atomic add for this kernel or not."""
+def should_enable_attr(kernel_info, key):
+    """Check whether enable the attribute denoted by key for this kernel or not."""
     for op in kernel_info["op_desc"]:
         if not op["attr"]:
             continue
         for attr in op["attr"]:
-            if attr["name"] == "enable_atomic_add" and attr["value"]:
+            if attr["name"] == key and attr["value"]:
                 return True
     return False
 
@@ -276,12 +276,10 @@ class ParallelNodeAnalyze(BaseNodeAnalyze):
     @staticmethod
     def extract_infos(desc_d, attrs):
         """Extract PARALLEL's children information, including jsons, attributes and segment infos."""
-        def _update_bool(key, new_bool, target_dict):
+        def _update_bool(key, kernel_info, target_dict):
+            new_bool = should_enable_attr(kernel_info, key)
             target_bool = target_dict.get(key, None)
-            if not target_bool:
-                target_dict[key] = new_bool
-            else:
-                target_dict[key] = target_bool | new_bool
+            target_dict[key] = target_bool | new_bool
 
         block_jsons, input_tensor_name, output_tensor_name = parallel_json_split(desc_d)
         if desc_d["parallel_fusion"]["fusion_type"] == "block_pipeline_fusion":
@@ -289,7 +287,8 @@ class ParallelNodeAnalyze(BaseNodeAnalyze):
         attrs_list = []
         for i, _ in enumerate(block_jsons):
             cur_attrs = attrs.copy()
-            _update_bool("enable_atomic_add", should_enable_atomic_add(json.loads(block_jsons[i])), cur_attrs)
+            _update_bool("enable_atomic_add", json.loads(block_jsons[i]), cur_attrs)
+            _update_bool("is_csr", json.loads(block_jsons[i]), cur_attrs)
             attrs_list.append(cur_attrs)
         total_jsons = block_jsons
         total_attrs = attrs_list

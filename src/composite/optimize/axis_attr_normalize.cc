@@ -26,7 +26,7 @@ class AxisAttrNormalizer : public IRMutator {
     Stmt stmt = s;
     if (op->attr_key == "attrs") {
       auto attrs = Downcast<Map<std::string, NodeRef>>(op->node);
-      if (attrs.find("IsCSR") != attrs.end()) {
+      if (attrs.find("is_csr") != attrs.end()) {
         is_csr_ = true;
       }
       if (attrs.find("axis") != attrs.end()) {

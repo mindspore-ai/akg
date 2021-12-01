@@ -22,7 +22,7 @@ from akg import tvm
 from akg.utils.kernel_exec import ReturnType
 from .split_stitch import split_stitch_attr
 from .construct_args import get_construct_args, get_tune_construct_args, \
-    should_enable_atomic_add, get_stmt_for_tune, add_attrs_in_segment_infos
+    should_enable_attr, get_stmt_for_tune, add_attrs_in_segment_infos
 from .construct_args import ConstructType, ConstructKey
 
 
@@ -169,11 +169,13 @@ def _set_tiling_attrs(out_shape, attrs):
     return attrs
 
 
-def _set_atomic_add_attrs(desc_d, attrs, poly):
+def _set_attrs(desc_d, attrs, poly):
     if "enable_atomic_add" not in attrs.keys():
-        attrs["enable_atomic_add"] = should_enable_atomic_add(desc_d)
+        attrs["enable_atomic_add"] = should_enable_attr(desc_d, "enable_atomic_add")
         if not poly:
             attrs["enable_atomic_add"] = False
+    if "is_csr" not in attrs.keys():
+        attrs["is_csr"] = should_enable_attr(desc_d, "is_csr")
     return attrs
 
 
@@ -505,7 +507,7 @@ def build(kernel_desc, attrs=None, poly=True, use_repo=True):
     if attrs is None:
         attrs = dict()
     backend = desc_d['process']
-    attrs = _set_atomic_add_attrs(desc_d, attrs, poly)
+    attrs = _set_attrs(desc_d, attrs, poly)
     if "enable_elementwise_flatten" not in attrs.keys():
         attrs["enable_elementwise_flatten"] = False
     if backend == 'aicore':

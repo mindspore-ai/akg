@@ -352,13 +352,21 @@ class SwapCsrLoopWithInner : public IRMutator {
 };
 
 class CsrLoopStride : public IRMutator {
+ public:
+  explicit CsrLoopStride(FunctionRef csr_sum_op) : csr_sum_op_(csr_sum_op) {}
+
+ private:
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) {
     if (op->node->IsInstance<IterVarNode>()) {
       auto iter_var = air::Downcast<IterVar>(op->node);
-      if (iter_var->iter_type == air::kThreadIndex && iter_var->thread_tag == "threadIdx.x") {
-        if (auto thread_num = op->value.as<IntImm>()) {
-          stride_ = thread_num->value;
-          thread_var_ = iter_var->var;
+      if (iter_var->iter_type == air::kThreadIndex) {
+        if (iter_var->thread_tag == "threadIdx.x") {
+          if (auto thread_num = op->value.as<IntImm>()) {
+            stride_ = thread_num->value;
+            thread_var_ = iter_var->var;
+          }
+        } else if (iter_var->thread_tag == "blockIdx.y") {
+          block_var_ = iter_var->var;
         }
       }
     }
@@ -376,7 +384,17 @@ class CsrLoopStride : public IRMutator {
       } else {
         for_stmt = s;
       }
-      return AttrStmt::make(csr_loop_var_, "csr_dynamic_loop", Expr(stride_), for_stmt);
+      auto stmt = AttrStmt::make(Expr("INFO"), "csr_dynamic_loop", Expr(stride_), for_stmt);
+      if (csr_sum_op_.defined()) {
+        CHECK(thread_var_.defined() && block_var_.defined());
+        auto cond = EQ::make(thread_var_, Expr(0));
+        auto provide = Provide::make(csr_sum_op_, 0, FloatImm::make(Float(32), 0.0), {block_var_});
+        auto if_stmt = IfThenElse::make(cond, provide, Stmt());
+        stmt = Block::make(if_stmt, stmt);
+      }
+      return stmt;
+    } else {
+      csr_sum_op_ = FunctionRef();
     }
     return IRMutator::Mutate_(op, s);
   }
@@ -396,9 +414,11 @@ class CsrLoopStride : public IRMutator {
   int stride_{1};
   Expr csr_loop_var_;
   Expr thread_var_;
+  Expr block_var_;
+  FunctionRef csr_sum_op_;
 };
 
-Stmt RestoreCsrLoop(Stmt stmt) {
+Stmt RestoreCsrLoop(Stmt stmt, Map<Tensor, Buffer> extern_buffer) {
   stmt = RemoveCsrBranch().Mutate(stmt);
   stmt = CombineCsrBlock().Mutate(stmt);
   stmt = RestoreMaxVar().Mutate(stmt);
@@ -411,7 +431,15 @@ Stmt RestoreCsrLoop(Stmt stmt) {
     stmt = SwapCsrLoopWithInner(air::Downcast<Var>(csr_inner_loop.csr_loop_var_), csr_inner_loop.csr_extent_,
                                 air::Downcast<Var>(csr_inner_loop.inner_loop_var_), csr_inner_loop.inner_extent_).Mutate(stmt);
   }
-  stmt = CsrLoopStride().Mutate(stmt);
+  FunctionRef csr_sum_op;
+  for (auto pair: extern_buffer) {
+    auto extern_op = pair.first->op.as<air::ExternOpNode>();
+    if (extern_op != nullptr && extern_op->func_name().find("csr_reduce_sum") != std::string::npos) {
+      csr_sum_op = pair.first->op;
+      break;
+    }
+  }
+  stmt = CsrLoopStride(csr_sum_op).Mutate(stmt);
   return stmt;
 }
 

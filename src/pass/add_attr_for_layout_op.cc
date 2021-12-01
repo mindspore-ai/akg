@@ -39,9 +39,6 @@ class AttrForLayoutOp : public IRMutator {
         stmt = AddAttrForAtomicToT(stmt.as<Provide>(), op, stmt);
       }
     }
-    if (op->func.defined() && ContainsCSR(op->func->func_name())) {
-      is_csr_ = true;
-    }
     return stmt;
   }
 
@@ -96,7 +93,6 @@ class AttrForLayoutOp : public IRMutator {
   std::unordered_set<std::string> tensors_not_promote_;
   std::unordered_set<std::string> inner_tensors_;
   bool is_tensor_of_tensor_{false};
-  bool is_csr_{false};
 };
 
 Stmt AddAttrForLayoutOp(const Stmt stmt) {
@@ -116,10 +112,6 @@ Stmt AddAttrForLayoutOp(const Stmt stmt) {
 
   if (mutator.is_tensor_of_tensor_) {
     new_stmt = AttrStmt::make(Expr("INFO"), AKG_TENSOR_OF_TENSOR, Expr(AKG_TENSOR_OF_TENSOR), new_stmt);
-  }
-
-  if (mutator.is_csr_) {
-    new_stmt = AttrStmt::make(Expr("INFO"), AKG_CSR, Expr(AKG_CSR), new_stmt);
   }
 
   return new_stmt;
