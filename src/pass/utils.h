@@ -447,7 +447,6 @@ constexpr auto AKG_TENSOR_NOT_PROMOTE = "TENSOR_NOT_PROMOTE";
 constexpr auto AKG_INNER_TENSOR = "INNER_TENSOR";
 constexpr auto AKG_TENSOR_OF_TENSOR = "TENSOR_OF_TENSOR";
 constexpr auto AKG_ATOMIC_TOT = "atomic_tot";
-constexpr auto AKG_CSR = "CSR";
 
 static constexpr auto ATTR_PREFETCH_MODE = "prefetch_mode";
 enum class PrefetchMode {

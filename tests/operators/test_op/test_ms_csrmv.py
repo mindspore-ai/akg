@@ -28,7 +28,7 @@ from akg.ops.array_gpu.csr_mv import csrmv
 def gen_data(shape1, dtype1, shape2, dtype2):
     csr_matrix = sp.sparse.rand(shape1[0], shape1[1], density=0.2, format='csr', dtype=dtype1)
     weight = np.random.random(shape2).astype(dtype2)
-    expect = csr_matrix * weight
+    expect = np.array(csr_matrix * weight)
     return csr_matrix.data, csr_matrix.indices, csr_matrix.indptr, weight, expect
 
 def test_ms_csrmv(shape1, dtype1, shape2, dtype2, poly_sch=False, attrs=None):
@@ -39,6 +39,7 @@ def test_ms_csrmv(shape1, dtype1, shape2, dtype2, poly_sch=False, attrs=None):
         attrs["enable_atomic_add"] = True
     data, indices, indptr, weight, expect = gen_data(shape1, dtype1, shape2, dtype2)
     attrs["csr_avg_row"] = data.shape[0] // shape1[0]
+    attrs["is_csr"] = True
 
     mod = utils.op_build_test(csrmv, [data.shape, indices.shape, indptr.shape, weight.shape],
                               ["float32", "int32", "int32", "float32"], polyhedral=poly_sch,

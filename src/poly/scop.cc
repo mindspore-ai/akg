@@ -56,6 +56,9 @@ void Scop::ParseUserConfig(std::string target, const Map<Tensor, Buffer> &extern
   info_.user_config_.SetIsTuning(is_tuning);
   info_.user_config_.SetDynamic(is_dynamic);
   info_.user_config_.SetScheduleInfo(sch);
+  if (g_attrs.GetBool("is_csr", false)) {
+    info_.analysis_result_.SetCsr(true);
+  }
 }
 
 isl::set CreateParamsSet(ScopInfo &info) {

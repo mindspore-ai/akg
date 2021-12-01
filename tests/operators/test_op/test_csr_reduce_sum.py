@@ -13,7 +13,7 @@ from akg.ops.array_gpu.csr_reduce_sum import csr_reduce_sum
     
 def gen_data(shape, dtype1, dtype2, axis):
     data = scipy.sparse.rand(shape[0], shape[1], density=0.2, format='csr', dtype=dtype1)
-    expect = data.sum(axis)
+    expect = np.array(data.sum(axis))
     return data.data, data.indices.astype(dtype2), data.indptr.astype(dtype2), expect
 
 def test_csr_reduce_sum(shape, dtype1, dtype2, axis, poly_sch=False, attrs=None):
@@ -28,6 +28,7 @@ def test_csr_reduce_sum(shape, dtype1, dtype2, axis, poly_sch=False, attrs=None)
     data, col_idx, row_idx, expect = gen_data(shape, dtype1, dtype2, axis)
     output_shape = expect.shape
     attrs["csr_avg_row"] = data.shape[0] // shape[0]
+    attrs["is_csr"] = True
 
     mod = utils.op_build_test(csr_reduce_sum, [data.shape, col_idx.shape, row_idx.shape], 
                               [dtype1, dtype2, dtype2], op_attrs=op_attrs, polyhedral=poly_sch,

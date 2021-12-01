@@ -452,8 +452,6 @@ class ScopMakeScheduleTree final : protected IRVisitor {
   void Visit_(const AttrStmt *op) final {
     if (AkgSupportedTotOp.count(op->attr_key) != 0) {
       SetTensorOfTensorInfo(op);
-    } else if (op->attr_key == AKG_CSR) {
-      scop_info_.analysis_result_.SetCsr(true);
     } else if (op->attr_key == air::ir::attr::reduce_update) {
       Array<IterVar> red = Downcast<Array<IterVar>>(op->node);
       const auto pro = op->body.as<Provide>();
