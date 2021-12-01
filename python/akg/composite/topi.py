@@ -16,7 +16,7 @@
 
 """composite topi"""
 import akg.topi as topi
-from akg import tvm
+from akg import tvm, autodiff
 from akg.tvm.hybrid import script
 from akg.utils.format_transform import get_const, get_shape
 from akg.utils.dsl_create import get_broadcast_shape
@@ -24,6 +24,7 @@ from akg.utils import validation_check as vc_util
 
 import logging
 import os
+import inspect
 from pathlib import Path
 import importlib.util
 
@@ -31,6 +32,7 @@ import importlib.util
 @tvm.register_func("ElemAny")
 def elem_any(inputs, attrs):
     del attrs
+
     def kernel_ir(dst, data):
         ib = tvm.ir_builder.create()
         with ib.for_range_n(data.shape, "ax") as i:
@@ -48,6 +50,7 @@ def elem_any(inputs, attrs):
 @tvm.register_func("ElemAll")
 def elem_all(inputs, attrs):
     del attrs
+
     def kernel_ir(dst, data):
         ib = tvm.ir_builder.create()
         with ib.for_range_n(data.shape, "ax") as i:
@@ -144,6 +147,7 @@ def cimag(inputs, attrs):
 @tvm.register_func("Complex")
 def complex_number(inputs, attrs):
     del attrs
+
     def mix_func(dst, real, imag):
         ib = tvm.ir_builder.create()
         with ib.for_range_n(real.shape, "i") as i:
@@ -235,7 +239,7 @@ def StridedSlice(inputs, attrs):
         old_indices = list(indices)
         old_indices.insert(idx, begin[idx])
         return old_indices
-    
+
     def compute_func(in_tensor_, new_shape_, shrink_axis_):
         return tvm.compute(
             new_shape_, lambda *indices: in_tensor_(*get_old_indices(indices, shrink_axis_)))
@@ -519,7 +523,26 @@ def custom(inputs, attrs):
     if func_type == "hybrid":
         hybrid_func = script(func_kernel, capture=capture)
         inputs = list(inputs)
-        output = hybrid_func(*inputs, **op_attrs)
+        # attr "autodiff" is for automatically generating backward op for a forward custom hybrid op;
+        # currently only support autodiff for op(hybrid function) with sinlgle output;
+        # inputs for a backward op is like [input_1,input_2,...input_k, out, dout], in which "input_i" refers to its
+        # corresponding forward op's inputs, "out" refers to forward op's output and "dout" refers to forward op's dout;
+        if "autodiff" in attrs and bool(int(attrs["autodiff"])):
+            # get the number of real inputs from hybrid function's signature;
+            # inputs[:real_inputs_num] is equal to [input_1,input_2,...input_k], the real inputs of the forward op;
+            real_inputs_num = len(inspect.signature(func_kernel).parameters)
+            if len(inputs) != real_inputs_num + 2:
+                raise ValueError(f"Length of hybrid function's signature is {real_inputs_num}. Num of backward custom \
+                    hybrid op's input should be {real_inputs_num + 2}(signature length plus out and dout), but got {len(inputs)}.")
+            # compute forward output through forward hybrid function
+            forward_ouput = hybrid_func(*inputs[:real_inputs_num], **op_attrs)
+            # dout is the last element of inputs([input_1,input_2,...input_k, out, dout])
+            dout = inputs[-1]
+            # differentiate the forward hybrid function
+            outputs = autodiff.Differentiate(forward_ouput, inputs[:real_inputs_num], dout).result
+            output = outputs if len(outputs) != 1 else outputs[0]
+        else:
+            output = hybrid_func(*inputs, **op_attrs)
     elif func_type == "ir_builder":
         output = func_kernel(inputs, ir_builder_attrs)
     else:
@@ -614,6 +637,7 @@ def tensor_scatter_add(inputs, attrs):
     return tvm.extern([data.shape], [data, indices, updates], lambda ins, outs: gen_ir(ins[0], ins[1], ins[2], outs[0]),
                       dtype=data.dtype, out_buffers=[out_buf], name=output_name, attrs=attrs)
 
+
 @tvm.register_func("UnsortedSegmentSum")
 def tensor_unsorted_segment_sum(inputs, attrs):
     attrs = {k: v for k, v in attrs.items()}
@@ -653,6 +677,7 @@ def tensor_unsorted_segment_sum(inputs, attrs):
     attrs = {"disable_inline_inject": True}
     return tvm.extern([data.shape], [data, indices], lambda ins, outs: gen_ir(ins[0], ins[1], outs[0]),
                       dtype=data.dtype, out_buffers=[out_buf], name=output_name, attrs=attrs)
+
 
 @tvm.register_func("Gather")
 def gather(inputs, attrs):
@@ -708,6 +733,7 @@ def standard_normal(inputs, attrs):
                       dtype=dtype,
                       out_buffers=[out_buf],
                       name=output_name)
+
 
 @tvm.register_func("CSRDiv")
 def csr_div(inputs, attrs):
