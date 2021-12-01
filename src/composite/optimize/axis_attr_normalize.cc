@@ -23,8 +23,12 @@ namespace akg {
 class AxisAttrNormalizer : public IRMutator {
  public:
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) {
+    Stmt stmt = s;
     if (op->attr_key == "attrs") {
       auto attrs = Downcast<Map<std::string, NodeRef>>(op->node);
+      if (attrs.find("IsCSR") != attrs.end()) {
+        is_csr_ = true;
+      }
       if (attrs.find("axis") != attrs.end()) {
         rank_ = 0;
         is_allreduce_ = false;
@@ -57,10 +61,11 @@ class AxisAttrNormalizer : public IRMutator {
           }
           attrs.Set("axis", new_axis);
         }
-        return AttrStmt::make(attrs, op->attr_key, op->value, body);
+        stmt = AttrStmt::make(attrs, op->attr_key, op->value, body);
       }
     }
-    return s;
+    is_csr_ = false;
+    return stmt;
   }
 
   Stmt Mutate_(const Provide *op, const Stmt &s) {
@@ -75,6 +80,9 @@ class AxisAttrNormalizer : public IRMutator {
       if (GetOpName(op) == "ExpandDims") {
         // the valid axis of ExpandDims is in [-1-rank, rank]
         rank_++;
+      }
+      if (is_csr_) {
+        rank_ = kCSRRank;
       }
     }
     if (IsReduce(GetOpName(op)) && ShapeIsOne(op->args)) {
@@ -96,6 +104,8 @@ class AxisAttrNormalizer : public IRMutator {
  private:
   int64_t rank_{0};
   bool is_allreduce_{false};
+  bool is_csr_{false};
+  static constexpr int kCSRRank = 2;
 };
 
 Stmt AxisAttrNormalize::Run(const Stmt &stmt) { return AxisAttrNormalizer().Mutate(stmt); }

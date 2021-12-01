@@ -639,12 +639,12 @@ def gen_json_data(op_desc, with_compute=True):
             assert op["input_desc"][1][0]["shape"] == op["input_desc"][2][0]["shape"], \
                 "indices and data should have the same shape"
             csr_indptr[op["input_desc"][0][0]["tensor_name"]] = \
-                MakeIndices(name=op["input_desc"][1][0]["tensor_name"], data_shape=op["attr"][1]["value"],
+                MakeIndices(name=op["input_desc"][1][0]["tensor_name"], data_shape=get_attr(op["attr"], "dense_shape"),
                             indices_shape=op["input_desc"][1][0]["shape"],
                             indices_dtype=op["input_desc"][0][0]["data_type"],
                             attrs=None)
             csr_indices[op["input_desc"][1][0]["tensor_name"]] = \
-                MakeIndices(name=op["input_desc"][0][0]["tensor_name"], data_shape=op["attr"][1]["value"],
+                MakeIndices(name=op["input_desc"][0][0]["tensor_name"], data_shape=get_attr(op["attr"], "dense_shape"),
                             indices_shape=op["input_desc"][1][0]["shape"],
                             indices_dtype=op["input_desc"][1][0]["data_type"],
                             attrs=None)
