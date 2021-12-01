@@ -126,7 +126,7 @@ struct StmtDataFlow {
   TensorDfMap write;
 };
 struct CmpByStmtOrder {
-  bool operator()(const std::string &a, const std::string &b) {
+  bool operator()(const std::string &a, const std::string &b) const {
     return a.length() < b.length() || (a.length() == b.length() && a < b);
   }
 };
