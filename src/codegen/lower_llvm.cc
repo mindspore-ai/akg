@@ -65,6 +65,7 @@ StageResult LLVMLowerPoly(Stmt &stmt, LowerData &data) { return LowerPoly(stmt, 
 StageResult LLVMLowerBeforeFlattern(Stmt &stmt, LowerData &data) {
   if (data->polyhedral) {
     stmt = NEXT_PASS(LowerWith, stmt);
+    stmt = NEXT_PASS(ReconstructLayout, stmt);
     stmt = NEXT_PASS(ReductionFactor, stmt, data->binds_0);
   }
   return {stmt, false};
