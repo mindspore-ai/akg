@@ -17,6 +17,7 @@
 """Intrinsics of TVM-Python Hybrid Script for Python compilation time
 semantic support."""
 
+# 2021.12.02 - Support more math intrin.
 # 2021.10.21 - Support reverse order loop range.
 # 2019.12.30 - Support more math intrin.
 
@@ -80,7 +81,7 @@ def _math_intrin(func_id, args):
     return getattr(intrin, func_id)(*args)
 
 sqrt = rsqrt = log = exp = tanh = sigmoid = power = popcount = floor = ceil = trunc = abs = round = _math_intrin #pylint: disable=invalid-name
-
+sign = sin = cos = isnan = isinf = isfinite = erf = atan = atan2 = expm1 = _math_intrin
 
 def _min_max(func_id, args):
     _internal_assert(args.__len__() == 2, "Max/Min function should have 2 elements")

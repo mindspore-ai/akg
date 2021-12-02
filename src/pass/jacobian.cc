@@ -23,6 +23,8 @@
 namespace akg {
 namespace ir {
 
+constexpr double pi() { return std::atan(1) * 4; }
+
 class TmpTensorChecker : public IRVisitor {
  public:
   explicit TmpTensorChecker(const std::map<FunctionRef, bool> &tmpTensorMap) : tmpTensorMap_(tmpTensorMap) {}
@@ -133,20 +135,32 @@ class JacobianMutator : public IRMutator {
       static std::unordered_set<std::string> piecewise_const = {"floor", "ceil", "trunc", "round"};
       if (op->name == "exp") {
         return Mul::make(Mutate(op->args[0]), e);
+      } else if (op->name == "expm1") {
+        return Mul::make(Mutate(op->args[0]), Add::make(FloatImm::make(e.type(), 1.0), e));
       } else if (op->name == "mad") {
         Expr a = Mutate(op->args[0]);
         Expr b = Mutate(op->args[1]);
         if (is_const_ad(a) && is_const_ad(b)) return a + b;
         return Call::make(e.type(), "mad", {Mutate(op->args[0]), Mutate(op->args[1])}, Call::PureIntrinsic);
+      } else if (op->name == "sin") {
+        return Mul::make(Mutate(op->args[0]), Call::make(e.type(), "cos", op->args, Call::PureIntrinsic));
       } else if (op->name == "cos") {
         return Mul::make(FloatImm::make(e.type(), -1.000),
                          Mul::make(Mutate(op->args[0]), Call::make(e.type(), "sin", op->args, Call::PureIntrinsic)));
+      } else if (op->name == "erf") {
+        // the derivative of erf function is 2/sqrt(pi) * exp(-z^2)
+        Expr neg_square = Mul::make(FloatImm::make(e.type(), -1.000), op->args[0] * op->args[0]);
+        return Mul::make(
+          FloatImm::make(e.type(), 2.0 / std::sqrt(pi())),
+          Mul::make(Mutate(op->args[0]), Call::make(e.type(), "exp", {neg_square}, Call::PureIntrinsic)));
       } else if (op->name == "log") {
         return Div::make(Mutate(op->args[0]), op->args[0]);
       } else if (op->name == "sigmoid") {
         return Mul::make(Mutate(op->args[0]), Mul::make(e, Sub::make(FloatImm::make(e.type(), 1.0), e)));
       } else if (op->name == "sqrt") {
         return Div::make(Mutate(op->args[0]), Mul::make(e, FloatImm::make(e.type(), 2.0)));
+      } else if (op->name == "atan") {
+        return Div::make(Mutate(op->args[0]), Add::make(FloatImm::make(e.type(), 1.0), Mul::make(e, e)));
       } else if (op->name == "tanh") {
         return Mul::make(Mutate(op->args[0]), Sub::make(FloatImm::make(e.type(), 1.0), Mul::make(e, e)));
       } else if (op->name == "pow") {
@@ -187,6 +201,24 @@ class JacobianMutator : public IRMutator {
     } else {
       return Div::make(Sub::make(Mul::make(Mutate(op->a), op->b), Mul::make(op->a, Mutate(op->b))),
                        Mul::make(op->b, op->b));
+    }
+  }
+
+  // For floordiv and floormod, we use the formalu as those in mindspore
+  // which is consistent with the property that x = (x // y) * y + x % y
+  // d(floordiv(x, y))/dx = 0
+  // d(floordiv(x, y))/dy = 0
+  // d(floormod(x, y))/dx = 1
+  // d(floormod(x, y))/dy = -floordiv(x, y)
+
+  Expr Mutate_(const FloorDiv *op, const Expr &e) override { return make_zero(op->type); }
+
+  Expr Mutate_(const FloorMod *op, const Expr &e) override {
+    if (op->b.as<IntImm>() || op->b.as<UIntImm>() || op->b.as<FloatImm>()) {
+      // When the divisor is a const, Simplify_cce this case to avoid b*b
+      return Mutate(op->a);
+    } else {
+      return Sub::make(Mutate(op->a), Mul::make(FloorDiv::make(op->a, op->b), Mutate(op->b)));
     }
   }
 
