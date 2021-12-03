@@ -16,6 +16,7 @@
 # under the License.
 """Expression Intrinsics and math functions in TVM."""
 # pylint: disable=redefined-builtin
+# 2021.12.02 - Support more math intrin.
 # 2020.08.10 - Add new operators.
 from __future__ import absolute_import as _abs
 
@@ -320,6 +321,38 @@ def atan(x):
     """
     return call_pure_intrin(x.dtype, "atan", x)
 
+
+def atan2(x):
+    """Take atan of input x.
+
+    Parameters
+    ----------
+    x : Expr
+        Input argument.
+
+    Returns
+    -------
+    y : Expr
+        The result.
+    """
+    return call_pure_intrin(x.dtype, "atan2", x)
+
+
+def expm1(x):
+    """Take atan of input x.
+
+    Parameters
+    ----------
+    x : Expr
+        Input argument.
+
+    Returns
+    -------
+    y : Expr
+        The result.
+    """
+    return call_pure_intrin(x.dtype, "expm1", x)
+
 def sqrt(x):
     """Take square root of input x.
 
@@ -584,6 +617,22 @@ def if_then_else(cond, t, f):
     if some lanes in the vector have different conditions.
     """
     return _make._OpIfThenElse(convert(cond), convert(t), convert(f))
+
+
+def sign(x):
+    """Take reciprocal of square root of input x.
+
+    Parameters
+    ----------
+    x : Expr
+        Input argument.
+
+    Returns
+    -------
+    y : Expr
+        The result.
+    """
+    return _make._OpIfThenElse(x > 0, const(1, dtype=x.dtype), _make._OpIfThenElse(x < 0, const(-1, dtype=x.dtype), const(0, dtype=x.dtype)))
 
 
 # Intrinsic rule related code
