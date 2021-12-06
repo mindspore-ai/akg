@@ -27,7 +27,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 
 from base_all_run import BaseCaseRun
-
+from tests.common.test_run import reduce_sum_run, addn_run
 
 class TestBert001(BaseCaseRun):
     def setup(self):
@@ -232,47 +232,47 @@ class TestBert001(BaseCaseRun):
             ("less_equal_003", "less_equal_run", (((1,), (1,)), "int32", "less_equal_run")),
 
             # addn op
-            # ("20_addn_input_1280_1024_2_dim_2_01", "addn_run", ((1280, 1024), "float16", 2)),
+            # ("20_addn_input_1280_1024_2_dim_2_01", addn_run, ((1280, 1024), "float16", 2)),
             # float - float:[1280, 1024] - [1280, 1024] = float:[1280, 1024]
-            ("addn_001_input_fp32", "addn_run", ((1280, 1024), "float32", 2)),
+            ("addn_001_input_fp32", addn_run, ((1280, 1024), "float32", 2)),
             # float - float:[64, 128, 1024] - [64, 128, 1024] = float:[64, 128, 1024]
-            ("addn_002_input_fp32", "addn_run", ((64, 128, 1024), "float32", 2)),
+            ("addn_002_input_fp32", addn_run, ((64, 128, 1024), "float32", 2)),
             # float - float:[8, 128, 1024] - [8, 128, 1024] = float:[8, 128, 1024]
-            ("addn_003_input_fp32", "addn_run", ((8, 128, 1024), "float32", 2)),
+            ("addn_003_input_fp32", addn_run, ((8, 128, 1024), "float32", 2)),
             # float - float - float:[8192, 1024] - [8192, 1024] - [8192, 1024] = float:[8192, 1024]
-            ("addn_004_input_fp32", "addn_run", ((8192, 1024), "float32", 3)),
+            ("addn_004_input_fp32", addn_run, ((8192, 1024), "float32", 3)),
             # float - float:[8192, 1024] - [8192, 1024] = float:[8192, 1024]
-            ("addn_005_input_fp32", "addn_run", ((8192, 1024), "float32", 2)),
+            ("addn_005_input_fp32", addn_run, ((8192, 1024), "float32", 2)),
             # float - float - float - float:[8192, 1024] - [8192, 1024] - [8192, 1024] - [8192, 1024] = float:[8192, 1024]
-            ("addn_006_input_fp32", "addn_run", ((8192, 1024), "float32", 4)),
+            ("addn_006_input_fp32", addn_run, ((8192, 1024), "float32", 4)),
             # float - float - float:[64, 128, 1024] - [64, 128, 1024] - [64, 128, 1024] = float:[64, 128, 1024]
-            ("addn_007_input_fp32", "addn_run", ((64, 128, 1024), "float32", 3)),
+            ("addn_007_input_fp32", addn_run, ((64, 128, 1024), "float32", 3)),
             # float - float - float:[8192, 4096] - [8192, 4096] - [8192, 4096] = float:[8192, 4096]
-            ("addn_008_input_fp32", "addn_run", ((8192, 4096), "float32", 3)),
+            ("addn_008_input_fp32", addn_run, ((8192, 4096), "float32", 3)),
             # float - float - float:[1280, 1024] - [1280, 1024] - [1280, 1024] = float:[1280, 1024]
-            ("addn_009_input_fp32", "addn_run", ((1280, 1024), "float32", 3)),
+            ("addn_009_input_fp32", addn_run, ((1280, 1024), "float32", 3)),
             # half - half - half - half:[8192, 768] - [8192, 768] - [8192, 768] - [8192, 768] = half:[8192, 768]
-            ("addn_010_input_fp32", "addn_run", ((8192, 768), "float16", 4)),
+            ("addn_010_input_fp32", addn_run, ((8192, 768), "float16", 4)),
             # half - half:[8192, 768] - [8192, 768] = half:[8192, 768]
-            ("addn_011_input_fp32", "addn_run", ((8192, 768), "float16", 2)),
+            ("addn_011_input_fp32", addn_run, ((8192, 768), "float16", 2)),
             # float - float:[64, 128, 768] - [64, 128, 768] = float:[64, 128, 768]
-            ("addn_012_input_fp32", "addn_run", ((8192, 768), "float32", 2)),
+            ("addn_012_input_fp32", addn_run, ((8192, 768), "float32", 2)),
             # float - float:[21128, 768] - [21128, 768] = float:[21128, 768]
-            ("addn_013_input_fp32", "addn_run", ((21128, 768), "float32", 2)),
+            ("addn_013_input_fp32", addn_run, ((21128, 768), "float32", 2)),
             # half - half - half:[8192, 3072] - [8192, 3072] - [8192, 3072] = half:[8192, 3072]
-            ("addn_014_input_fp32", "addn_run", ((8192, 3072), "float16", 3)),
+            ("addn_014_input_fp32", addn_run, ((8192, 3072), "float16", 3)),
             # half - half:[64, 12, 128, 64] - [64, 12, 128, 64] = half:[64, 12, 128, 64]
-            ("addn_015_input_fp32", "addn_run", ((64, 12, 128, 64), "float16", 2)),
+            ("addn_015_input_fp32", addn_run, ((64, 12, 128, 64), "float16", 2)),
             # float - float:[1280, 768] - [1280, 768] = float:[1280, 768]
-            ("addn_016_input_fp32", "addn_run", ((1280, 768), "float32", 2)),
+            ("addn_016_input_fp32", addn_run, ((1280, 768), "float32", 2)),
             # float - float:[8192, 768] - [8192, 768] = float:[8192, 768]
-            ("addn_017_input_fp32", "addn_run", ((8192, 768), "float32", 2)),
+            ("addn_017_input_fp32", addn_run, ((8192, 768), "float32", 2)),
             # float - float - float:[64, 128, 768] - [64, 128, 768] - [64, 128, 768] = float:[64, 128, 768]
-            ("addn_018_input_fp32", "addn_run", ((64, 128, 768), "float32", 3)),
+            ("addn_018_input_fp32", addn_run, ((64, 128, 768), "float32", 3)),
             # half - half:[64, 12, 128, 128] - [64, 12, 128, 128] = half:[64, 12, 128, 128]
-            ("addn_019_input_fp32", "addn_run", ((8192, 768), "float16", 2)),
+            ("addn_019_input_fp32", addn_run, ((8192, 768), "float16", 2)),
             # float - float - float:[1280, 768] - [1280, 768] - [1280, 768] = float:[1280, 768]
-            ("addn_020_input_fp32", "addn_run", ((1280, 768), "float32", 3)),
+            ("addn_020_input_fp32", addn_run, ((1280, 768), "float32", 3)),
 
             # BactchMatmul OP ###
             # float - float:[64, 16, 128, 64] - [64, 16, 128, 64] = float:[64, 16, 128, 128]
@@ -744,115 +744,115 @@ class TestBert001(BaseCaseRun):
 
             # sum OP
             # float - int32:[64, 128, 1024] - [2] = float:[1024]:ok
-            ("001_sum", "sum_run", ((64, 128, 1024), (0, 1), False, "float32")),
+            ("001_sum", reduce_sum_run, ((64, 128, 1024), (0, 1), False, "float32")),
             # float - int32:[8] - [1] = float:[]:
-            ("002_sum", "sum_run", ((8,), (0,), False, "float32")),
+            ("002_sum", reduce_sum_run, ((8,), (0,), False, "float32")),
             # float - int32:[64, 128, 1024] - [1] = float:[64, 128]
-            ("003_sum", "sum_run", ((64, 128, 1024), (2,), False, "float32")),
+            ("003_sum", reduce_sum_run, ((64, 128, 1024), (2,), False, "float32")),
             # float - int32:[1280, 30522] - [1] = float:[1280]
-            ("004_sum", "sum_run", ((1280, 30522), (1,), False, "float32")),
+            ("004_sum", reduce_sum_run, ((1280, 30522), (1,), False, "float32")),
             # float - int32:[64, 2] - [] = float:[64, 1]
-            ("005_sum", "sum_run", ((64, 2), (1,), True, "float32")),
+            ("005_sum", reduce_sum_run, ((64, 2), (1,), True, "float32")),
             # float - int32:[1280] - [1] = float:[]
-            ("006_sum", "sum_run", ((1280,), (0,), False, "float32")),
+            ("006_sum", reduce_sum_run, ((1280,), (0,), False, "float32")),
             # float - int32:[64, 128, 1] - [1] = float:[64, 128]
-            ("007_sum", "sum_run", ((64, 128, 1), (2,), False, "float32")),
+            ("007_sum", reduce_sum_run, ((64, 128, 1), (2,), False, "float32")),
             # float - int32:[8192, 1024] - [1] = float:[8192]:ok
-            ("008_sum", "sum_run", ((8192, 1024), (1,), False, "float32")),
+            ("008_sum", reduce_sum_run, ((8192, 1024), (1,), False, "float32")),
             # float - int32:[1280, 30522] - [] = float:[1280, 1]:ok
-            ("009_sum", "sum_run", ((1280, 30522), (1,), True, "float32")),
+            ("009_sum", reduce_sum_run, ((1280, 30522), (1,), True, "float32")),
             # float - int32:[398] - [1] = float:[]
-            ("010_sum", "sum_run", ((398,), (0,), True, "float32")),
+            ("010_sum", reduce_sum_run, ((398,), (0,), True, "float32")),
             # float - int32:[1280, 1] - [1] = float:[1280]:ok
-            ("011_sum", "sum_run", ((1280, 1), (1,), False, "float32")),
+            ("011_sum", reduce_sum_run, ((1280, 1), (1,), False, "float32")),
             # float - int32:[160, 30522] - [1] = float:[160]:ok
-            ("012_sum", "sum_run", ((160, 30522), (1,), False, "float32")),
+            ("012_sum", reduce_sum_run, ((160, 30522), (1,), False, "float32")),
             # float - int32:[1280, 1024] - [1] = float:[1280]:ok
-            ("013_sum", "sum_run", ((1280, 1024), (1,), False, "float32")),
+            ("013_sum", reduce_sum_run, ((1280, 1024), (1,), False, "float32")),
             # float - int32:[64, 2] - [] = float:[64]:ok
-            ("014_sum", "sum_run", ((64, 2), (1,), False, "float32")),
+            ("014_sum", reduce_sum_run, ((64, 2), (1,), False, "float32")),
             # float - int32:[64, 128, 1024] - [1] = float:[128, 1024]:
-            ("015_sum", "sum_run", ((64, 128, 1024), (0,), False, "float32")),
+            ("015_sum", reduce_sum_run, ((64, 128, 1024), (0,), False, "float32")),
             # float - int32:[64, 16, 128, 128] - [] = float:[64, 16, 128, 1]:ok
-            ("016_sum", "sum_run", ((64, 16, 128, 128), (3,), True, "float32")),
+            ("016_sum", reduce_sum_run, ((64, 16, 128, 128), (3,), True, "float32")),
             # float - int32:[160] - [1] = float:[]
-            ("017_sum", "sum_run", ((160,), (0,), True, "float32")),
+            ("017_sum", reduce_sum_run, ((160,), (0,), True, "float32")),
             # float - int32:[8, 2] - [] = float:[8]
-            ("018_sum", "sum_run", ((8, 2), (1,), True, "float32")),
+            ("018_sum", reduce_sum_run, ((8, 2), (1,), True, "float32")),
             # float - int32:[8192, 1024] - [1] = float:[1024]:ok
-            ("019_sum", "sum_run", ((8192, 1024), (0,), False, "float32")),
+            ("019_sum", reduce_sum_run, ((8192, 1024), (0,), False, "float32")),
             # float - int32:[8192, 1] - [1] = float:[8192]:ok
-            ("020_sum", "sum_run", ((8192, 1), (1,), False, "float32")),
+            ("020_sum", reduce_sum_run, ((8192, 1), (1,), False, "float32")),
             # float - int32:[1280, 1024] - [1] = float:[1024]:ok
-            ("021_sum", "sum_run", ((1280, 1024), (0,), False, "float32")),
+            ("021_sum", reduce_sum_run, ((1280, 1024), (0,), False, "float32")),
             # float - int32:[3072] - [1] = float:[1]
-            ("022_sum", "sum_run", ((3072,), (0,), True, "float32")),
+            ("022_sum", reduce_sum_run, ((3072,), (0,), True, "float32")),
             # float - int32:[64, 128, 768] - [2] = float:[768]
-            ("023_sum", "sum_run", ((64, 128, 768), (0, 1), False, "float32")),
+            ("023_sum", reduce_sum_run, ((64, 128, 768), (0, 1), False, "float32")),
             # half - int32:[8192, 1] - [1] = half:[8192]
-            ("024_sum", "sum_run", ((8092, 1), (1,), False, "float16")),
+            ("024_sum", reduce_sum_run, ((8092, 1), (1,), False, "float16")),
             # float - int32:[1280, 768] - [1] = float:[1280]
-            ("025_sum", "sum_run", ((1280, 768), (1,), False, "float32")),
+            ("025_sum", reduce_sum_run, ((1280, 768), (1,), False, "float32")),
             # float - int32:[3072, 768] - [2] = float:[1, 1]
-            ("026_sum", "sum_run", ((3072, 768), (0, 1), True, "float32")),
+            ("026_sum", reduce_sum_run, ((3072, 768), (0, 1), True, "float32")),
             # float - int32:[768, 3072] - [2] = float:[1, 1]
-            ("027_sum", "sum_run", ((768, 3072), (0, 1), True, "float32")),
+            ("027_sum", reduce_sum_run, ((768, 3072), (0, 1), True, "float32")),
             # float - int32:[1280, 768] - [1] = float:[768]
-            ("028_sum", "sum_run", ((1280, 768), (0,), False, "float32")),
+            ("028_sum", reduce_sum_run, ((1280, 768), (0,), False, "float32")),
             # float - int32:[1280] - [1] = float:[]
-            ("029_sum", "sum_run", ((1280,), (0,), True, "float32")),
+            ("029_sum", reduce_sum_run, ((1280,), (0,), True, "float32")),
             # float - int32:[21128] - [1] = float:[1]
-            ("030_sum", "sum_run", ((21128,), (0,), True, "float32")),
+            ("030_sum", reduce_sum_run, ((21128,), (0,), True, "float32")),
             # float - int32:[21128, 768] - [2] = float:[1, 1]
-            ("031_sum", "sum_run", ((21128, 768), (0, 1), True, "float32")),
+            ("031_sum", reduce_sum_run, ((21128, 768), (0, 1), True, "float32")),
             # float - int32:[1280, 21128] - [1] = float:[1280]
-            ("032_sum", "sum_run", ((21128, 768), (1,), True, "float32")),
+            ("032_sum", reduce_sum_run, ((21128, 768), (1,), True, "float32")),
             # half - int32:[64, 12, 128, 128] - [] = half:[64, 12, 128, 1]
-            ("033_sum", "sum_run", ((64, 12, 128, 128), (3,), True, "float16")),
+            ("033_sum", reduce_sum_run, ((64, 12, 128, 128), (3,), True, "float16")),
             # half - int32:[8192, 768] - [1] = half:[768]
-            ("034_sum", "sum_run", ((8192, 768), (0,), False, "float16")),
+            ("034_sum", reduce_sum_run, ((8192, 768), (0,), False, "float16")),
             # float - int32:[64, 2] - [] = float:[64]
-            ("035_sum", "sum_run", ((64, 2), (1,), False, "float32")),
+            ("035_sum", reduce_sum_run, ((64, 2), (1,), False, "float32")),
             # float - int32:[768, 768] - [2] = float:[1, 1]
-            ("036_sum", "sum_run", ((768, 768), (0, 1), False, "float32")),
+            ("036_sum", reduce_sum_run, ((768, 768), (0, 1), False, "float32")),
             # half - int32:[8192, 768] - [1] = half:[8192]
-            ("037_sum", "sum_run", ((8192, 768), (1,), False, "float16")),
+            ("037_sum", reduce_sum_run, ((8192, 768), (1,), False, "float16")),
             # float - int32:[2] - [1] = float:[1]
-            ("038_sum", "sum_run", ((2, 1), (0,), False, "float32")),
+            ("038_sum", reduce_sum_run, ((2, 1), (0,), False, "float32")),
             # float - int32:[1280, 1] - [1] = float:[1280]
-            ("039_sum", "sum_run", ((1280, 1), (1,), False, "float32")),
+            ("039_sum", reduce_sum_run, ((1280, 1), (1,), False, "float32")),
             # float - int32:[33, 64] - [2] = float:[1, 1]
-            ("040_sum", "sum_run", ((33, 64), (0, 1), True, "float32")),
+            ("040_sum", reduce_sum_run, ((33, 64), (0, 1), True, "float32")),
             # float - int32:[2, 768] - [2] = float:[1, 1]
-            ("041_sum", "sum_run", ((2, 768), (0, 1), True, "float32")),
+            ("041_sum", reduce_sum_run, ((2, 768), (0, 1), True, "float32")),
             # float - int32:[768] - [1] = float:[1]
-            ("042_sum", "sum_run", ((768, 1), (0,), False, "float32")),
+            ("042_sum", reduce_sum_run, ((768, 1), (0,), False, "float32")),
             # float - int32:[64, 128, 1] - [1] = float:[64, 128]
-            ("043_sum", "sum_run", ((64, 128, 1), (2,), False, "float32")),
+            ("043_sum", reduce_sum_run, ((64, 128, 1), (2,), False, "float32")),
             # float - int32:[64, 128, 768] - [1] = float:[64, 128]
-            ("044_sum", "sum_run", ((64, 128, 768), (2,), False, "float32")),
+            ("044_sum", reduce_sum_run, ((64, 128, 768), (2,), False, "float32")),
             # float - int32:[64, 2] - [] = float:[64, 1]
-            ("045_sum", "sum_run", ((64, 2), (1,), True, "float32")),
+            ("045_sum", reduce_sum_run, ((64, 2), (1,), True, "float32")),
             # float - int32:[1280, 21128] - [] = float:[1280, 1]
-            ("046_sum", "sum_run", ((1280, 21128), (1,), False, "float32")),
+            ("046_sum", reduce_sum_run, ((1280, 21128), (1,), False, "float32")),
             # float - int32:[20, 2] - [0] = float:[2]
-            ("047_sum", "sum_run", ((20, 2), (1,), False, "float32")),
+            ("047_sum", reduce_sum_run, ((20, 2), (1,), False, "float32")),
             # float - int32:[2, 768] - [1] = float:[2]
-            ("048_sum", "sum_run", ((2, 768), (1,), False, "float32")),
+            ("048_sum", reduce_sum_run, ((2, 768), (1,), False, "float32")),
             # float - int32:[768, 768] - [1] = float:[768]
-            ("049_sum", "sum_run", ((768, 768), (0,), False, "float32")),
+            ("049_sum", reduce_sum_run, ((768, 768), (0,), False, "float32")),
             # float - int32:[32000] - [1] = float:[1]
-            ("050_sum", "sum_run", ((32000,), (0,), False, "float32")),
+            ("050_sum", reduce_sum_run, ((32000,), (0,), False, "float32")),
             # float - int32:[768, 3072] - [1] = float:[768]
-            ("051_sum", "sum_run", ((768, 3072), (1,), False, "float32")),
+            ("051_sum", reduce_sum_run, ((768, 3072), (1,), False, "float32")),
             # float - int32:[3072, 768] - [1] = float:[3072]
-            ("052_sum", "sum_run", ((768, 3072), (1,), False, "float32")),
+            ("052_sum", reduce_sum_run, ((768, 3072), (1,), False, "float32")),
             # float - int32:[33, 64] - [1] = float:[33]
-            ("053_sum", "sum_run", ((33, 64), (1,), False, "float32")),
+            ("053_sum", reduce_sum_run, ((33, 64), (1,), False, "float32")),
             # float - int32:[16, 768] - [1] = float:[16]
-            ("054_sum", "sum_run", ((16, 768), (1,), False, "float32")),
+            ("054_sum", reduce_sum_run, ((16, 768), (1,), False, "float32")),
             # float - int32:[32000, 768] - [1] = float:[32000]
-            ("055_sum", "sum_run", ((32000, 768), (1,), False, "float32")),
+            ("055_sum", reduce_sum_run, ((32000, 768), (1,), False, "float32")),
 
             # StridedSlice OP
             # int32 - int32 - int32 - int32:[1] - [1] - [1] - [1] = int32:[0]
@@ -1821,119 +1821,119 @@ class TestBert001(BaseCaseRun):
 
             # addn OP
             # float-float:[1024, 12, 128, 128]-[1024, 12, 128, 128]=float:[1024, 12, 128, 128]
-            ("addn_001", "addn_run", ((1024, 12, 128, 128), "float32", 2)),
+            ("addn_001", addn_run, ((1024, 12, 128, 128), "float32", 2)),
             # float-float:[1024, 12, 128, 64]-[1024, 12, 128, 64]=float:[1024, 12, 128, 64]
-            ("addn_002", "addn_run", ((1024, 12, 128, 64), "float32", 2)),
+            ("addn_002", addn_run, ((1024, 12, 128, 64), "float32", 2)),
             # float-float:[1024, 128, 768]-[1024, 128, 768]=float:[1024, 128, 768]
-            ("addn_003", "addn_run", ((1024, 128, 768), "float32", 2)),
+            ("addn_003", addn_run, ((1024, 128, 768), "float32", 2)),
             # float-float:[1024, 768]-[1024, 768]=float:[1024, 768]
-            ("addn_004", "addn_run", ((1024, 768), "float32", 2)),
+            ("addn_004", addn_run, ((1024, 768), "float32", 2)),
             # float-float:[1, 12, 128, 128]-[1, 12, 128, 128]=float:[1, 12, 128, 128]
-            ("addn_005", "addn_run", ((1, 12, 128, 128), "float32", 2)),
+            ("addn_005", addn_run, ((1, 12, 128, 128), "float32", 2)),
             # float-float:[1, 12, 128, 64]-[1, 12, 128, 64]=float:[1, 12, 128, 64]
-            ("addn_006", "addn_run", ((1, 12, 128, 64), "float32", 2)),
+            ("addn_006", addn_run, ((1, 12, 128, 64), "float32", 2)),
             # float-float:[1, 128, 768]-[1, 128, 768]=float:[1, 128, 768]
-            ("addn_007", "addn_run", ((1, 128, 768), "float32", 2)),
+            ("addn_007", addn_run, ((1, 128, 768), "float32", 2)),
             # float-float:[128, 12, 128, 128]-[128, 12, 128, 128]=float:[128, 12, 128, 128]
-            ("addn_008", "addn_run", ((128, 12, 128, 128), "float32", 2)),
+            ("addn_008", addn_run, ((128, 12, 128, 128), "float32", 2)),
             # float-float:[128, 12, 128, 64]-[128, 12, 128, 64]=float:[128, 12, 128, 64]
-            ("addn_009", "addn_run", ((128, 12, 128, 64), "float32", 2)),
+            ("addn_009", addn_run, ((128, 12, 128, 64), "float32", 2)),
             # float-float:[128, 128, 768]-[128, 128, 768]=float:[128, 128, 768]
-            ("addn_010", "addn_run", ((128, 128, 768), "float32", 2)),
+            ("addn_010", addn_run, ((128, 128, 768), "float32", 2)),
             # float-float:[128, 768]-[128, 768]=float:[128, 768]
-            ("addn_011", "addn_run", ((128, 768), "float32", 2)),
+            ("addn_011", addn_run, ((128, 768), "float32", 2)),
             # float-float:[131072, 768]-[131072, 768]=float:[131072, 768]
-            ("addn_012", "addn_run", ((131072, 768), "float32", 2)),
+            ("addn_012", addn_run, ((131072, 768), "float32", 2)),
             # float-float:[16, 12, 128, 128]-[16, 12, 128, 128]=float:[16, 12, 128, 128]
-            ("addn_013", "addn_run", ((16, 12, 128, 128), "float32", 2)),
+            ("addn_013", addn_run, ((16, 12, 128, 128), "float32", 2)),
             # float-float:[16, 12, 128, 64]-[16, 12, 128, 64]=float:[16, 12, 128, 64]
-            ("addn_014", "addn_run", ((16, 12, 128, 64), "float32", 2)),
+            ("addn_014", addn_run, ((16, 12, 128, 64), "float32", 2)),
             # float-float:[16, 128, 768]-[16, 128, 768]=float:[16, 128, 768]
-            ("addn_015", "addn_run", ((16, 128, 768), "float32", 2)),
+            ("addn_015", addn_run, ((16, 128, 768), "float32", 2)),
             # float-float:[16384, 768]-[16384, 768]=float:[16384, 768]
-            ("addn_016", "addn_run", ((16384, 768), "float32", 2)),
+            ("addn_016", addn_run, ((16384, 768), "float32", 2)),
             # float-float:[2048, 768]-[2048, 768]=float:[2048, 768]
-            ("addn_017", "addn_run", ((2048, 768), "float32", 2)),
+            ("addn_017", addn_run, ((2048, 768), "float32", 2)),
             # float-float:[21128, 768]-[21128, 768]=float:[21128, 768]
-            ("addn_018", "addn_run", ((21128, 768), "float32", 2)),
+            ("addn_018", addn_run, ((21128, 768), "float32", 2)),
             # float-float:[2, 12, 128, 128]-[2, 12, 128, 128]=float:[2, 12, 128, 128]
-            ("addn_019", "addn_run", ((2, 12, 128, 128), "float32", 2)),
+            ("addn_019", addn_run, ((2, 12, 128, 128), "float32", 2)),
             # float-float:[2, 12, 128, 64]-[2, 12, 128, 64]=float:[2, 12, 128, 64]
-            ("addn_020", "addn_run", ((2, 12, 128, 64), "float32", 2)),
+            ("addn_020", addn_run, ((2, 12, 128, 64), "float32", 2)),
             # float-float:[2, 128, 768]-[2, 128, 768]=float:[2, 128, 768]
-            ("addn_021", "addn_run", ((2, 128, 768), "float32", 2)),
+            ("addn_021", addn_run, ((2, 128, 768), "float32", 2)),
             # float-float:[256, 12, 128, 128]-[256, 12, 128, 128]=float:[256, 12, 128, 128]
-            ("addn_022", "addn_run", ((256, 12, 128, 128), "float32", 2)),
+            ("addn_022", addn_run, ((256, 12, 128, 128), "float32", 2)),
             # float-float:[256, 12, 128, 64]-[256, 12, 128, 64]=float:[256, 12, 128, 64]
-            ("addn_023", "addn_run", ((256, 12, 128, 64), "float32", 2)),
+            ("addn_023", addn_run, ((256, 12, 128, 64), "float32", 2)),
             # float-float:[256, 128, 768]-[256, 128, 768]=float:[256, 128, 768]
-            ("addn_024", "addn_run", ((256, 128, 768), "float32", 2)),
+            ("addn_024", addn_run, ((256, 128, 768), "float32", 2)),
             # float-float:[256, 768]-[256, 768]=float:[256, 768]
-            ("addn_025", "addn_run", ((256, 768), "float32", 2)),
+            ("addn_025", addn_run, ((256, 768), "float32", 2)),
             # float-float:[32, 12, 128, 128]-[32, 12, 128, 128]=float:[32, 12, 128, 128]
-            ("addn_026", "addn_run", ((32, 12, 128, 128), "float32", 2)),
+            ("addn_026", addn_run, ((32, 12, 128, 128), "float32", 2)),
             # float-float:[32, 12, 128, 64]-[32, 12, 128, 64]=float:[32, 12, 128, 64]
-            ("addn_027", "addn_run", ((32, 12, 128, 64), "float32", 2)),
+            ("addn_027", addn_run, ((32, 12, 128, 64), "float32", 2)),
             # float-float:[32, 128, 768]-[32, 128, 768]=float:[32, 128, 768]
-            ("addn_028", "addn_run", ((32, 128, 768), "float32", 2)),
+            ("addn_028", addn_run, ((32, 128, 768), "float32", 2)),
             # float-float:[32768, 768]-[32768, 768]=float:[32768, 768]
-            ("addn_029", "addn_run", ((32768, 768), "float32", 2)),
+            ("addn_029", addn_run, ((32768, 768), "float32", 2)),
             # float-float:[33, 64]-[33, 64]=float:[33, 64]
-            ("addn_030", "addn_run", ((33, 64), "float32", 2)),
+            ("addn_030", addn_run, ((33, 64), "float32", 2)),
             # float-float:[4096, 768]-[4096, 768]=float:[4096, 768]
-            ("addn_031", "addn_run", ((4096, 768), "float32", 2)),
+            ("addn_031", addn_run, ((4096, 768), "float32", 2)),
             # float-float:[4, 12, 128, 128]-[4, 12, 128, 128]=float:[4, 12, 128, 128]
-            ("addn_032", "addn_run", ((4, 12, 128, 128), "float32", 2)),
+            ("addn_032", addn_run, ((4, 12, 128, 128), "float32", 2)),
             # float-float:[4, 12, 128, 64]-[4, 12, 128, 64]=float:[4, 12, 128, 64]
-            ("addn_033", "addn_run", ((4, 12, 128, 64), "float32", 2)),
+            ("addn_033", addn_run, ((4, 12, 128, 64), "float32", 2)),
             # float-float:[4, 128, 768]-[4, 128, 768]=float:[4, 128, 768]
-            ("addn_034", "addn_run", ((4, 128, 768), "float32", 2)),
+            ("addn_034", addn_run, ((4, 128, 768), "float32", 2)),
             # float-float:[512, 12, 128, 128]-[512, 12, 128, 128]=float:[512, 12, 128, 128]
-            ("addn_035", "addn_run", ((512, 12, 128, 128), "float32", 2)),
+            ("addn_035", addn_run, ((512, 12, 128, 128), "float32", 2)),
             # float-float:[512, 12, 128, 64]-[512, 12, 128, 64]=float:[512, 12, 128, 64]
-            ("addn_036", "addn_run", ((512, 12, 128, 64), "float32", 2)),
+            ("addn_036", addn_run, ((512, 12, 128, 64), "float32", 2)),
             # float-float:[512, 128, 768]-[512, 128, 768]=float:[512, 128, 768]
-            ("addn_037", "addn_run", ((512, 128, 768), "float32", 2)),
+            ("addn_037", addn_run, ((512, 128, 768), "float32", 2)),
             # float-float:[512, 768]-[512, 768]=float:[512, 768]
-            ("addn_038", "addn_run", ((512, 768), "float32", 2)),
+            ("addn_038", addn_run, ((512, 768), "float32", 2)),
             # float-float:[64, 12, 128, 128]-[64, 12, 128, 128]=float:[64, 12, 128, 128]
-            ("addn_039", "addn_run", ((64, 12, 128, 128), "float32", 2)),
+            ("addn_039", addn_run, ((64, 12, 128, 128), "float32", 2)),
             # float-float:[64, 12, 128, 64]-[64, 12, 128, 64]=float:[64, 12, 128, 64]
-            ("addn_040", "addn_run", ((64, 12, 128, 64), "float32", 2)),
+            ("addn_040", addn_run, ((64, 12, 128, 64), "float32", 2)),
             # float-float:[64, 128, 768]-[64, 128, 768]=float:[64, 128, 768]
-            ("addn_041", "addn_run", ((64, 128, 768), "float32", 2)),
+            ("addn_041", addn_run, ((64, 128, 768), "float32", 2)),
             # float-float:[65536, 768]-[65536, 768]=float:[65536, 768]
-            ("addn_042", "addn_run", ((65536, 768), "float32", 2)),
+            ("addn_042", addn_run, ((65536, 768), "float32", 2)),
             # float-float:[8, 12, 128, 128]-[8, 12, 128, 128]=float:[8, 12, 128, 128]
-            ("addn_043", "addn_run", ((8, 12, 128, 128), "float32", 2)),
+            ("addn_043", addn_run, ((8, 12, 128, 128), "float32", 2)),
             # float-float:[8, 12, 128, 64]-[8, 12, 128, 64]=float:[8, 12, 128, 64]
-            ("addn_044", "addn_run", ((8, 12, 128, 64), "float32", 2)),
+            ("addn_044", addn_run, ((8, 12, 128, 64), "float32", 2)),
             # float-float:[8, 128, 768]-[8, 128, 768]=float:[8, 128, 768]
-            ("addn_045", "addn_run", ((8, 128, 768), "float32", 2)),
+            ("addn_045", addn_run, ((8, 128, 768), "float32", 2)),
             # float-float:[8192, 768]-[8192, 768]=float:[8192, 768]
-            ("addn_046", "addn_run", ((8192, 768), "float32", 2)),
+            ("addn_046", addn_run, ((8192, 768), "float32", 2)),
             # float-float-float:[1024, 768]-[1024, 768]-[1024, 768]=float:[1024, 768]
-            ("addn_047", "addn_run", ((1024, 768), "float32", 3)),
+            ("addn_047", addn_run, ((1024, 768), "float32", 3)),
             # float-float-float:[128, 768]-[128, 768]-[128, 768]=float:[128, 768]
-            ("addn_048", "addn_run", ((128, 768), "float32", 3)),
+            ("addn_048", addn_run, ((128, 768), "float32", 3)),
             # float-float-float:[131072, 768]-[131072, 768]-[131072, 768]=float:[131072, 768]
-            ("addn_049", "addn_run", ((131072, 768), "float32", 3)),
+            ("addn_049", addn_run, ((131072, 768), "float32", 3)),
             # float-float-float:[16384, 768]-[16384, 768]-[16384, 768]=float:[16384, 768]
-            ("addn_050", "addn_run", ((16384, 768), "float32", 3)),
+            ("addn_050", addn_run, ((16384, 768), "float32", 3)),
             # float-float-float:[2048, 768]-[2048, 768]-[2048, 768]=float:[2048, 768]
-            ("addn_051", "addn_run", ((2048, 768), "float32", 3)),
+            ("addn_051", addn_run, ((2048, 768), "float32", 3)),
             # float-float-float:[256, 768]-[256, 768]-[256, 768]=float:[256, 768]
-            ("addn_052", "addn_run", ((256, 768), "float32", 3)),
+            ("addn_052", addn_run, ((256, 768), "float32", 3)),
             # float-float-float:[32768, 768]-[32768, 768]-[32768, 768]=float:[32768, 768]
-            ("addn_053", "addn_run", ((32768, 768), "float32", 3)),
+            ("addn_053", addn_run, ((32768, 768), "float32", 3)),
             # float-float-float:[4096, 768]-[4096, 768]-[4096, 768]=float:[4096, 768]
-            ("addn_054", "addn_run", ((4096, 768), "float32", 3)),
+            ("addn_054", addn_run, ((4096, 768), "float32", 3)),
             # float-float-float:[512, 768]-[512, 768]-[512, 768]=float:[512, 768]
-            ("addn_055", "addn_run", ((512, 768), "float32", 3)),
+            ("addn_055", addn_run, ((512, 768), "float32", 3)),
             # float-float-float:[65536, 768]-[65536, 768]-[65536, 768]=float:[65536, 768]
-            ("addn_056", "addn_run", ((65536, 768), "float32", 3)),
+            ("addn_056", addn_run, ((65536, 768), "float32", 3)),
             # float-float-float:[8192, 768]-[8192, 768]-[8192, 768]=float:[8192, 768]
-            ("addn_057", "addn_run", ((8192, 768), "float32", 3)),
+            ("addn_057", addn_run, ((8192, 768), "float32", 3)),
 
             # LogSoftMax OP
             # float:[128, 2]=float:[128, 2]
@@ -2567,91 +2567,91 @@ class TestBert001(BaseCaseRun):
 
             # sub OP
             # float - int32:[1, 12, 128, 128] - [-1] = float:[1, 12, 128, 1]
-            ("sum_001", "sum_run", ((1, 12, 128, 128), (-1,), False, "float32")),
+            ("sum_001", reduce_sum_run, ((1, 12, 128, 128), (-1,), False, "float32")),
             # float - int32:[128, 12, 128, 128] - [-1] = float:[128, 12, 128, 1]
-            ("sum_002", "sum_run", ((128, 12, 128, 128), (-1,), False, "float32")),
+            ("sum_002", reduce_sum_run, ((128, 12, 128, 128), (-1,), False, "float32")),
             # float - int32:[16, 12, 128, 128] - [-1] = float:[16, 12, 128, 1]
-            ("sum_003", "sum_run", ((16, 12, 128, 128), (-1,), False, "float32")),
+            ("sum_003", reduce_sum_run, ((16, 12, 128, 128), (-1,), False, "float32")),
             # float - int32:[1280] - [-1] = float:[1]
-            ("sum_004", "sum_run", ((1280,), (-1,), False, "float32")),
+            ("sum_004", reduce_sum_run, ((1280,), (-1,), False, "float32")),
             # float - int32:[160] - [-1] = float:[1]
-            ("sum_005", "sum_run", ((160,), (-1,), False, "float32")),
+            ("sum_005", reduce_sum_run, ((160,), (-1,), False, "float32")),
             # float - int32:[20] - [-1] = float:[1]
-            ("sum_006", "sum_run", ((20,), (-1,), False, "float32")),
+            ("sum_006", reduce_sum_run, ((20,), (-1,), False, "float32")),
             # float - int32:[21128] - [-1] = float:[1]
-            ("sum_007", "sum_run", ((21128,), (-1,), False, "float32")),
+            ("sum_007", reduce_sum_run, ((21128,), (-1,), False, "float32")),
             # float - int32:[2560] - [-1] = float:[1]
-            ("sum_008", "sum_run", ((2560,), (-1,), False, "float32")),
+            ("sum_008", reduce_sum_run, ((2560,), (-1,), False, "float32")),
             # float - int32:[2] - [-1] = float:[1]
-            ("sum_009", "sum_run", ((2,), (-1,), False, "float32")),
+            ("sum_009", reduce_sum_run, ((2,), (-1,), False, "float32")),
             # float - int32:[3072] - [-1] = float:[1]
-            ("sum_010", "sum_run", ((3072,), (-1,), False, "float32")),
+            ("sum_010", reduce_sum_run, ((3072,), (-1,), False, "float32")),
             # float - int32:[320] - [-1] = float:[1]
-            ("sum_011", "sum_run", ((320,), (-1,), False, "float32")),
+            ("sum_011", reduce_sum_run, ((320,), (-1,), False, "float32")),
             # float - int32:[40] - [-1] = float:[1]
-            ("sum_012", "sum_run", ((40,), (-1,), False, "float32")),
+            ("sum_012", reduce_sum_run, ((40,), (-1,), False, "float32")),
             # float - int32:[640] - [-1] = float:[1]
-            ("sum_013", "sum_run", ((640,), (-1,), False, "float32")),
+            ("sum_013", reduce_sum_run, ((640,), (-1,), False, "float32")),
             # float - int32:[768] - [-1] = float:[1]
-            ("sum_014", "sum_run", ((768,), (-1,), False, "float32")),
+            ("sum_014", reduce_sum_run, ((768,), (-1,), False, "float32")),
             # float - int32:[80] - [-1] = float:[1]
-            ("sum_015", "sum_run", ((80,), (-1,), False, "float32")),
+            ("sum_015", reduce_sum_run, ((80,), (-1,), False, "float32")),
             # float - int32:[21128, 768] - [-1] = float:[21128]
-            ("sum_016", "sum_run", ((21128,), (-1,), False, "float32")),
+            ("sum_016", reduce_sum_run, ((21128,), (-1,), False, "float32")),
             # float - int32:[2, 12, 128, 128] - [-1] = float:[2, 12, 128, 1]
-            ("sum_017", "sum_run", ((2, 12, 128, 128,), (-1,), False, "float32")),
+            ("sum_017", reduce_sum_run, ((2, 12, 128, 128,), (-1,), False, "float32")),
             # float - int32:[2, 768] - [-1] = float:[2]
-            ("sum_018", "sum_run", ((2, 768), (-1,), False, "float32")),
+            ("sum_018", reduce_sum_run, ((2, 768), (-1,), False, "float32")),
             # float - int32:[3072, 768] - [-1] = float:[3072]
-            ("sum_019", "sum_run", ((3072, 768), (-1,), False, "float32")),
+            ("sum_019", reduce_sum_run, ((3072, 768), (-1,), False, "float32")),
             # float - int32:[32, 12, 128, 128] - [-1] = float:[32, 12, 128, 1]
-            ("sum_020", "sum_run", ((32, 12, 128, 128), (-1,), False, "float32")),
+            ("sum_020", reduce_sum_run, ((32, 12, 128, 128), (-1,), False, "float32")),
             # float - int32:[33, 64] - [-1] = float:[33]
-            ("sum_021", "sum_run", ((33, 64), (-1,), False, "float32")),
+            ("sum_021", reduce_sum_run, ((33, 64), (-1,), False, "float32")),
             # float - int32:[4, 12, 128, 128] - [-1] = float:[4, 12, 128, 1]
-            ("sum_022", "sum_run", ((4, 12, 128, 128), (-1,), False, "float32")),
+            ("sum_022", reduce_sum_run, ((4, 12, 128, 128), (-1,), False, "float32")),
             # float - int32:[64, 12, 128, 128] - [-1] = float:[64, 12, 128, 1]
-            ("sum_023", "sum_run", ((64, 12, 128, 128), (-1,), False, "float32")),
+            ("sum_023", reduce_sum_run, ((64, 12, 128, 128), (-1,), False, "float32")),
             # float - int32:[768, 3072] - [-1] = float:[768]
-            ("sum_024", "sum_run", ((768, 3072), (-1,), False, "float32")),
+            ("sum_024", reduce_sum_run, ((768, 3072), (-1,), False, "float32")),
             # float - int32:[768, 768] - [-1] = float:[768]
-            ("sum_025", "sum_run", ((768, 768), (-1,), False, "float32")),
+            ("sum_025", reduce_sum_run, ((768, 768), (-1,), False, "float32")),
             # float - int32:[8, 12, 128, 128] - [-1] = float:[8, 12, 128, 1]
-            ("sum_026", "sum_run", ((8, 12, 128, 128), (-1,), False, "float32")),
+            ("sum_026", reduce_sum_run, ((8, 12, 128, 128), (-1,), False, "float32")),
             # float-int32:[80, 21128]-[-1]=float:[21128]
-            ("sum_027", "sum_run", ((80, 21128), (0,), False, "float32")),
+            ("sum_027", reduce_sum_run, ((80, 21128), (0,), False, "float32")),
             # float-int32:[640, 21128]-[-1]=float:[21128]
-            ("sum_028", "sum_run", ((640, 21128), (0,), False, "float32")),
+            ("sum_028", reduce_sum_run, ((640, 21128), (0,), False, "float32")),
             # float-int32:[5120]-[-1]=float:[1]
-            ("sum_029", "sum_run", ((5120,), (0,), False, "float32")),
+            ("sum_029", reduce_sum_run, ((5120,), (0,), False, "float32")),
             # float-int32:[5120, 21128]-[-1]=float:[21128]
-            ("sum_030", "sum_run", ((5120, 21128), (0,), False, "float32")),
+            ("sum_030", reduce_sum_run, ((5120, 21128), (0,), False, "float32")),
             # float-int32:[512, 12, 128, 128]-[-1]=float:[512, 12, 128, 1]
-            ("sum_031", "sum_run", ((512, 12, 128, 128), (-1,), False, "float32")),
+            ("sum_031", reduce_sum_run, ((512, 12, 128, 128), (-1,), False, "float32")),
             # float-int32:[40, 21128]-[-1]=float:[21128]
-            ("sum_032", "sum_run", ((40, 21128), (0,), False, "float32")),
+            ("sum_032", reduce_sum_run, ((40, 21128), (0,), False, "float32")),
             # float-int32:[320, 21128]-[-1]=float:[21128]
-            ("sum_033", "sum_run", ((320, 21128), (0,), False, "float32")),
+            ("sum_033", reduce_sum_run, ((320, 21128), (0,), False, "float32")),
             # float-int32:[2560, 21128]-[-1]=float:[21128]
-            ("sum_034", "sum_run", ((2560, 21128), (0,), False, "float32")),
+            ("sum_034", reduce_sum_run, ((2560, 21128), (0,), False, "float32")),
             # float-int32:[256, 12, 128, 128]-[-1]=float:[256, 12, 128, 1]
-            ("sum_035", "sum_run", ((256, 12, 128, 128), (-1,), False, "float32")),
+            ("sum_035", reduce_sum_run, ((256, 12, 128, 128), (-1,), False, "float32")),
             # float-int32:[20, 21128]-[-1]=float:[21128]
-            ("sum_036", "sum_run", ((20, 21128), (0,), False, "float32")),
+            ("sum_036", reduce_sum_run, ((20, 21128), (0,), False, "float32")),
             # float-int32:[20480]-[-1]=float:[1]
-            ("sum_037", "sum_run", ((20480,), (0,), False, "float32")),
+            ("sum_037", reduce_sum_run, ((20480,), (0,), False, "float32")),
             # float-int32:[20480, 21128]-[-1]=float:[21128]
-            ("sum_038", "sum_run", ((20480, 21128), (0,), False, "float32")),
+            ("sum_038", reduce_sum_run, ((20480, 21128), (0,), False, "float32")),
             # float-int32:[160, 21128]-[-1]=float:[21128]
-            ("sum_039", "sum_run", ((160, 21128), (0,), False, "float32")),
+            ("sum_039", reduce_sum_run, ((160, 21128), (0,), False, "float32")),
             # float-int32:[1280, 21128]-[-1]=float:[21128]
-            ("sum_040", "sum_run", ((1280, 21128), (0,), False, "float32")),
+            ("sum_040", reduce_sum_run, ((1280, 21128), (0,), False, "float32")),
             # float-int32:[10240]-[-1]=float:[1]
-            ("sum_041", "sum_run", ((10240,), (0,), False, "float32")),
+            ("sum_041", reduce_sum_run, ((10240,), (0,), False, "float32")),
             # float-int32:[10240, 21128]-[-1]=float:[21128]
-            ("sum_042", "sum_run", ((10240, 21128), (0,), False, "float32")),
+            ("sum_042", reduce_sum_run, ((10240, 21128), (0,), False, "float32")),
             # float-int32:[1024, 12, 128, 128]-[-1]=float:[1024, 12, 128, 1]
-            ("sum_043", "sum_run", ((1024, 12, 128, 128), (-1,), False, "float32")),
+            ("sum_043", reduce_sum_run, ((1024, 12, 128, 128), (-1,), False, "float32")),
 
             # StridedSlice OP
             # float - int32 - int32 - int32 - int32:[1, 128, 768] - [3] - [3] - [3] - [3] = float:[1, 1, 768]
@@ -3894,109 +3894,109 @@ class TestBert001(BaseCaseRun):
 
             # addn OP
             # float-float:[1024, 1024]-[1024, 1024]=float:[1024, 1024]
-            ("addn_001", "addn_run", ((1024, 1024), "float32", 2)),
+            ("addn_001", addn_run, ((1024, 1024), "float32", 2)),
             # float-float:[1024, 128, 1024]-[1024, 128, 1024]=float:[1024, 128, 1024]
-            ("addn_002", "addn_run", ((1024, 128, 1024), "float32", 2)),
+            ("addn_002", addn_run, ((1024, 128, 1024), "float32", 2)),
             # float-float:[1024, 16, 128, 128]-[1024, 16, 128, 128]=float:[1024, 16, 128, 128]
-            ("addn_003", "addn_run", ((1024, 16, 128, 128), "float32", 2)),
+            ("addn_003", addn_run, ((1024, 16, 128, 128), "float32", 2)),
             # float-float:[1024, 16, 128, 64]-[1024, 16, 128, 64]=float:[1024, 16, 128, 64]
-            ("addn_004", "addn_run", ((1024, 16, 128, 64), "float32", 2)),
+            ("addn_004", addn_run, ((1024, 16, 128, 64), "float32", 2)),
             # float-float:[1, 128, 1024]-[1, 128, 1024]=float:[1, 128, 1024]
-            ("addn_005", "addn_run", ((1, 128, 1024), "float32", 2)),
+            ("addn_005", addn_run, ((1, 128, 1024), "float32", 2)),
             # float-float:[1, 16, 128, 128]-[1, 16, 128, 128]=float:[1, 16, 128, 128]
-            ("addn_006", "addn_run", ((1, 16, 128, 128), "float32", 2)),
+            ("addn_006", addn_run, ((1, 16, 128, 128), "float32", 2)),
             # float-float:[1, 16, 128, 64]-[1, 16, 128, 64]=float:[1, 16, 128, 64]
-            ("addn_007", "addn_run", ((1, 16, 128, 64), "float32", 2)),
+            ("addn_007", addn_run, ((1, 16, 128, 64), "float32", 2)),
             # float-float:[128, 1024]-[128, 1024]=float:[128, 1024]
-            ("addn_008", "addn_run", ((128, 1024), "float32", 2)),
+            ("addn_008", addn_run, ((128, 1024), "float32", 2)),
             # float-float:[128, 128, 1024]-[128, 128, 1024]=float:[128, 128, 1024]
-            ("addn_009", "addn_run", ((128, 128, 1024), "float32", 2)),
+            ("addn_009", addn_run, ((128, 128, 1024), "float32", 2)),
             # float-float:[128, 16, 128, 128]-[128, 16, 128, 128]=float:[128, 16, 128, 128]
-            ("addn_010", "addn_run", ((128, 16, 128, 128), "float32", 2)),
+            ("addn_010", addn_run, ((128, 16, 128, 128), "float32", 2)),
             # float-float:[128, 16, 128, 64]-[128, 16, 128, 64]=float:[128, 16, 128, 64]
-            ("addn_011", "addn_run", ((128, 16, 128, 64), "float32", 2)),
+            ("addn_011", addn_run, ((128, 16, 128, 64), "float32", 2)),
             # float-float:[131072, 1024]-[131072, 1024]=float:[131072, 1024]
-            ("addn_012", "addn_run", ((131072, 1024), "float32", 2)),
+            ("addn_012", addn_run, ((131072, 1024), "float32", 2)),
             # float-float:[16, 128, 1024]-[16, 128, 1024]=float:[16, 128, 1024]
-            ("addn_013", "addn_run", ((16, 128, 1024), "float32", 2)),
+            ("addn_013", addn_run, ((16, 128, 1024), "float32", 2)),
             # float-float:[16, 16, 128, 128]-[16, 16, 128, 128]=float:[16, 16, 128, 128]
-            ("addn_014", "addn_run", ((16, 16, 128, 128), "float32", 2)),
+            ("addn_014", addn_run, ((16, 16, 128, 128), "float32", 2)),
             # float-float:[16, 16, 128, 64]-[16, 16, 128, 64]=float:[16, 16, 128, 64]
-            ("addn_015", "addn_run", ((16, 16, 128, 64), "float32", 2)),
+            ("addn_015", addn_run, ((16, 16, 128, 64), "float32", 2)),
             # float-float:[16384, 1024]-[16384, 1024]=float:[16384, 1024]
-            ("addn_016", "addn_run", ((16384, 1024), "float32", 2)),
+            ("addn_016", addn_run, ((16384, 1024), "float32", 2)),
             # float-float:[2048, 1024]-[2048, 1024]=float:[2048, 1024]
-            ("addn_017", "addn_run", ((2048, 1024), "float32", 2)),
+            ("addn_017", addn_run, ((2048, 1024), "float32", 2)),
             # float-float:[21128, 1024]-[21128, 1024]=float:[21128, 1024]
-            ("addn_018", "addn_run", ((21128, 1024), "float32", 2)),
+            ("addn_018", addn_run, ((21128, 1024), "float32", 2)),
             # float-float:[2, 128, 1024]-[2, 128, 1024]=float:[2, 128, 1024]
-            ("addn_019", "addn_run", ((2, 128, 1024), "float32", 2)),
+            ("addn_019", addn_run, ((2, 128, 1024), "float32", 2)),
             # float-float:[2, 16, 128, 128]-[2, 16, 128, 128]=float:[2, 16, 128, 128]
-            ("addn_020", "addn_run", ((2, 16, 128, 128), "float32", 2)),
+            ("addn_020", addn_run, ((2, 16, 128, 128), "float32", 2)),
             # float-float:[2, 16, 128, 64]-[2, 16, 128, 64]=float:[2, 16, 128, 64]
-            ("addn_021", "addn_run", ((2, 16, 128, 64), "float32", 2)),
+            ("addn_021", addn_run, ((2, 16, 128, 64), "float32", 2)),
             # float-float:[256, 1024]-[256, 1024]=float:[256, 1024]
-            ("addn_022", "addn_run", ((256, 1024), "float32", 2)),
+            ("addn_022", addn_run, ((256, 1024), "float32", 2)),
             # float-float:[256, 128, 1024]-[256, 128, 1024]=float:[256, 128, 1024]
-            ("addn_023", "addn_run", ((256, 128, 1024), "float32", 2)),
+            ("addn_023", addn_run, ((256, 128, 1024), "float32", 2)),
             # float-float:[256, 16, 128, 128]-[256, 16, 128, 128]=float:[256, 16, 128, 128]
-            ("addn_024", "addn_run", ((256, 16, 128, 128), "float32", 2)),
+            ("addn_024", addn_run, ((256, 16, 128, 128), "float32", 2)),
             # float-float:[256, 16, 128, 64]-[256, 16, 128, 64]=float:[256, 16, 128, 64]
-            ("addn_025", "addn_run", ((256, 16, 128, 64), "float32", 2)),
+            ("addn_025", addn_run, ((256, 16, 128, 64), "float32", 2)),
             # float-float:[32, 128, 1024]-[32, 128, 1024]=float:[32, 128, 1024]
-            ("addn_026", "addn_run", ((32, 128, 1024), "float32", 2)),
+            ("addn_026", addn_run, ((32, 128, 1024), "float32", 2)),
             # float-float:[32, 16, 128, 128]-[32, 16, 128, 128]=float:[32, 16, 128, 128]
-            ("addn_027", "addn_run", ((32, 16, 128, 128), "float32", 2)),
+            ("addn_027", addn_run, ((32, 16, 128, 128), "float32", 2)),
             # float-float:[32, 16, 128, 64]-[32, 16, 128, 64]=float:[32, 16, 128, 64]
-            ("addn_028", "addn_run", ((32, 16, 128, 64), "float32", 2)),
+            ("addn_028", addn_run, ((32, 16, 128, 64), "float32", 2)),
             # float-float:[32768, 1024]-[32768, 1024]=float:[32768, 1024]
-            ("addn_029", "addn_run", ((32768, 1024), "float32", 2)),
+            ("addn_029", addn_run, ((32768, 1024), "float32", 2)),
             # float-float:[33, 64]-[33, 64]=float:[33, 64]
-            ("addn_030", "addn_run", ((33, 64), "float32", 2)),
+            ("addn_030", addn_run, ((33, 64), "float32", 2)),
             # float-float:[4096, 1024]-[4096, 1024]=float:[4096, 1024]
-            ("addn_031", "addn_run", ((4096, 1024), "float32", 2)),
+            ("addn_031", addn_run, ((4096, 1024), "float32", 2)),
             # float-float:[4, 128, 1024]-[4, 128, 1024]=float:[4, 128, 1024]
-            ("addn_032", "addn_run", ((4, 128, 1024), "float32", 2)),
+            ("addn_032", addn_run, ((4, 128, 1024), "float32", 2)),
             # float-float:[4, 16, 128, 128]-[4, 16, 128, 128]=float:[4, 16, 128, 128]
-            ("addn_033", "addn_run", ((4, 16, 128, 128), "float32", 2)),
+            ("addn_033", addn_run, ((4, 16, 128, 128), "float32", 2)),
             # float-float:[4, 16, 128, 64]-[4, 16, 128, 64]=float:[4, 16, 128, 64]
-            ("addn_034", "addn_run", ((4, 16, 128, 64), "float32", 2)),
+            ("addn_034", addn_run, ((4, 16, 128, 64), "float32", 2)),
             # float-float:[512, 1024]-[512, 1024]=float:[512, 1024]
-            ("addn_035", "addn_run", ((512, 1024), "float32", 2)),
+            ("addn_035", addn_run, ((512, 1024), "float32", 2)),
             # float-float:[512, 128, 1024]-[512, 128, 1024]=float:[512, 128, 1024]
-            ("addn_036", "addn_run", ((512, 128, 1024), "float32", 2)),
+            ("addn_036", addn_run, ((512, 128, 1024), "float32", 2)),
             # float-float:[512, 16, 128, 128]-[512, 16, 128, 128]=float:[512, 16, 128, 128]
-            ("addn_037", "addn_run", ((512, 16, 128, 128), "float32", 2)),
+            ("addn_037", addn_run, ((512, 16, 128, 128), "float32", 2)),
             # float-float:[512, 16, 128, 64]-[512, 16, 128, 64]=float:[512, 16, 128, 64]
-            ("addn_038", "addn_run", ((512, 16, 128, 64), "float32", 2)),
+            ("addn_038", addn_run, ((512, 16, 128, 64), "float32", 2)),
             # float-float:[65536, 1024]-[65536, 1024]=float:[65536, 1024]
-            ("addn_039", "addn_run", ((65536, 1024), "float32", 2)),
+            ("addn_039", addn_run, ((65536, 1024), "float32", 2)),
             # float-float:[8, 128, 1024]-[8, 128, 1024]=float:[8, 128, 1024]
-            ("addn_040", "addn_run", ((8, 128, 1024), "float32", 2)),
+            ("addn_040", addn_run, ((8, 128, 1024), "float32", 2)),
             # float-float:[8, 16, 128, 128]-[8, 16, 128, 128]=float:[8, 16, 128, 128]
-            ("addn_041", "addn_run", ((8, 16, 128, 128), "float32", 2)),
+            ("addn_041", addn_run, ((8, 16, 128, 128), "float32", 2)),
             # float-float:[8, 16, 128, 64]-[8, 16, 128, 64]=float:[8, 16, 128, 64]
-            ("addn_042", "addn_run", ((8, 16, 128, 64), "float32", 2)),
+            ("addn_042", addn_run, ((8, 16, 128, 64), "float32", 2)),
             # float-float-float:[1024, 1024]-[1024, 1024]-[1024, 1024]=float:[1024, 1024]
-            ("addn_043", "addn_run", ((1024, 1024), "float32", 3)),
+            ("addn_043", addn_run, ((1024, 1024), "float32", 3)),
             # float-float-float:[128, 1024]-[128, 1024]-[128, 1024]=float:[128, 1024]
-            ("addn_044", "addn_run", ((128, 1024), "float32", 3)),
+            ("addn_044", addn_run, ((128, 1024), "float32", 3)),
             # float-float-float:[131072, 1024]-[131072, 1024]-[131072, 1024]=float:[131072, 1024]
-            ("addn_045", "addn_run", ((131072, 1024), "float32", 3)),
+            ("addn_045", addn_run, ((131072, 1024), "float32", 3)),
             # float-float-float:[16384, 1024]-[16384, 1024]-[16384, 1024]=float:[16384, 1024]
-            ("addn_046", "addn_run", ((16384, 1024), "float32", 3)),
+            ("addn_046", addn_run, ((16384, 1024), "float32", 3)),
             # float-float-float:[2048, 1024]-[2048, 1024]-[2048, 1024]=float:[2048, 1024]
-            ("addn_047", "addn_run", ((2048, 1024), "float32", 3)),
+            ("addn_047", addn_run, ((2048, 1024), "float32", 3)),
             # float-float-float:[256, 1024]-[256, 1024]-[256, 1024]=float:[256, 1024]
-            ("addn_048", "addn_run", ((256, 1024), "float32", 3)),
+            ("addn_048", addn_run, ((256, 1024), "float32", 3)),
             # float-float-float:[32768, 1024]-[32768, 1024]-[32768, 1024]=float:[32768, 1024]
-            ("addn_049", "addn_run", ((32768, 1024), "float32", 3)),
+            ("addn_049", addn_run, ((32768, 1024), "float32", 3)),
             # float-float-float:[4096, 1024]-[4096, 1024]-[4096, 1024]=float:[4096, 1024]
-            ("addn_050", "addn_run", ((4096, 1024), "float32", 3)),
+            ("addn_050", addn_run, ((4096, 1024), "float32", 3)),
             # float-float-float:[512, 1024]-[512, 1024]-[512, 1024]=float:[512, 1024]
-            ("addn_051", "addn_run", ((512, 1024), "float32", 3)),
+            ("addn_051", addn_run, ((512, 1024), "float32", 3)),
             # float-float-float:[65536, 1024]-[65536, 1024]-[65536, 1024]=float:[65536, 1024]
-            ("addn_052", "addn_run", ((65536, 1024), "float32", 3)),
+            ("addn_052", addn_run, ((65536, 1024), "float32", 3)),
 
             # LogSoftMax OP
             # float:[10240, 21128]=float:[10240, 21128]
@@ -4669,85 +4669,85 @@ class TestBert001(BaseCaseRun):
 
             # sum OP
             # float-int32:[10240]-[-1]=float:[1]
-            ("sum_001", "sum_run", ((10240,), (-1,), False, "float32")),
+            ("sum_001", reduce_sum_run, ((10240,), (-1,), False, "float32")),
             # float-int32:[10240, 21128]-[-1]=float:[21128]
-            ("sum_002", "sum_run", ((10240, 21128), (-1,), False, "float32")),
+            ("sum_002", reduce_sum_run, ((10240, 21128), (-1,), False, "float32")),
             # float-int32:[1024, 1024]-[-1]=float:[1024]
-            ("sum_003", "sum_run", ((1024, 1024), (-1,), False, "float32")),
+            ("sum_003", reduce_sum_run, ((1024, 1024), (-1,), False, "float32")),
             # float-int32:[1024, 16, 128, 128]-[-1]=float:[1024, 16, 128, 1]
-            ("sum_004", "sum_run", ((1024, 16, 128, 128), (-1,), False, "float32")),
+            ("sum_004", reduce_sum_run, ((1024, 16, 128, 128), (-1,), False, "float32")),
             # float-int32:[1024]-[-1]=float:[1]
-            ("sum_005", "sum_run", ((1024,), (-1,), False, "float32")),
+            ("sum_005", reduce_sum_run, ((1024,), (-1,), False, "float32")),
             # float-int32:[1024, 4096]-[-1]=float:[1024]
-            ("sum_006", "sum_run", ((1024, 4096), (-1,), False, "float32")),
+            ("sum_006", reduce_sum_run, ((1024, 4096), (-1,), False, "float32")),
             # float-int32:[1, 16, 128, 128]-[-1]=float:[1, 16, 128, 1]
-            ("sum_007", "sum_run", ((1, 16, 128, 128), (-1,), False, "float32")),
+            ("sum_007", reduce_sum_run, ((1, 16, 128, 128), (-1,), False, "float32")),
             # float-int32:[128, 16, 128, 128]-[-1]=float:[128, 16, 128, 1]
-            ("sum_008", "sum_run", ((128, 16, 128, 128), (-1,), False, "float32")),
+            ("sum_008", reduce_sum_run, ((128, 16, 128, 128), (-1,), False, "float32")),
             # float-int32:[160]-[-1]=float:[1]
-            ("sum_009", "sum_run", ((160,), (-1,), False, "float32")),
+            ("sum_009", reduce_sum_run, ((160,), (-1,), False, "float32")),
             # float-int32:[160, 21128]-[-1]=float:[21128]
-            ("sum_0010", "sum_run", ((160, 21128), (-1,), False, "float32")),
+            ("sum_0010", reduce_sum_run, ((160, 21128), (-1,), False, "float32")),
             # float-int32:[16, 16, 128, 128]-[-1]=float:[16, 16, 128, 1]
-            ("sum_0011", "sum_run", ((16, 16, 128, 128), (-1,), False, "float32")),
+            ("sum_0011", reduce_sum_run, ((16, 16, 128, 128), (-1,), False, "float32")),
             # float-int32:[20]-[-1]=float:[1]
-            ("sum_0012", "sum_run", ((20,), (-1,), False, "float32")),
+            ("sum_0012", reduce_sum_run, ((20,), (-1,), False, "float32")),
             # float-int32:[20, 21128]-[-1]=float:[21128]
-            ("sum_0013", "sum_run", ((20, 21128), (-1,), False, "float32")),
+            ("sum_0013", reduce_sum_run, ((20, 21128), (-1,), False, "float32")),
             # float-int32:[20480]-[-1]=float:[1]
-            ("sum_0014", "sum_run", ((20480,), (-1,), False, "float32")),
+            ("sum_0014", reduce_sum_run, ((20480,), (-1,), False, "float32")),
             # float-int32:[20480, 21128]-[-1]=float:[21128]
-            ("sum_0015", "sum_run", ((20480, 21128), (-1,), False, "float32")),
+            ("sum_0015", reduce_sum_run, ((20480, 21128), (-1,), False, "float32")),
             # float-int32:[2, 1024]-[-1]=float:[2]
-            ("sum_0016", "sum_run", ((2, 1024), (-1,), False, "float32")),
+            ("sum_0016", reduce_sum_run, ((2, 1024), (-1,), False, "float32")),
             # float-int32:[21128, 1024]-[-1]=float:[21128]
-            ("sum_0017", "sum_run", ((21128, 1024), (-1,), False, "float32")),
+            ("sum_0017", reduce_sum_run, ((21128, 1024), (-1,), False, "float32")),
             # float-int32:[21128]-[-1]=float:[1]
-            ("sum_0018", "sum_run", ((21128,), (-1,), False, "float32")),
+            ("sum_0018", reduce_sum_run, ((21128,), (-1,), False, "float32")),
             # float-int32:[2, 16, 128, 128]-[-1]=float:[2, 16, 128, 1]
-            ("sum_0019", "sum_run", ((2, 16, 128, 128), (-1,), False, "float32")),
+            ("sum_0019", reduce_sum_run, ((2, 16, 128, 128), (-1,), False, "float32")),
             # float-int32:[2]-[-1]=float:[1]
-            ("sum_0020", "sum_run", ((2,), (-1,), False, "float32")),
+            ("sum_0020", reduce_sum_run, ((2,), (-1,), False, "float32")),
             # float-int32:[2560]-[-1]=float:[1]
-            ("sum_0021", "sum_run", ((2560,), (-1,), False, "float32")),
+            ("sum_0021", reduce_sum_run, ((2560,), (-1,), False, "float32")),
             # float-int32:[2560, 21128]-[-1]=float:[21128]
-            ("sum_0022", "sum_run", ((2560, 21128), (-1,), False, "float32")),
+            ("sum_0022", reduce_sum_run, ((2560, 21128), (-1,), False, "float32")),
             # float-int32:[256, 16, 128, 128]-[-1]=float:[256, 16, 128, 1]
-            ("sum_0023", "sum_run", ((256, 16, 128, 128), (-1,), False, "float32")),
+            ("sum_0023", reduce_sum_run, ((256, 16, 128, 128), (-1,), False, "float32")),
             # float-int32:[320]-[-1]=float:[1]
-            ("sum_0024", "sum_run", ((320,), (-1,), False, "float32")),
+            ("sum_0024", reduce_sum_run, ((320,), (-1,), False, "float32")),
             # float-int32:[320, 21128]-[-1]=float:[21128]
-            ("sum_0025", "sum_run", ((320, 21128), (-1,), False, "float32")),
+            ("sum_0025", reduce_sum_run, ((320, 21128), (-1,), False, "float32")),
             # float-int32:[32, 16, 128, 128]-[-1]=float:[32, 16, 128, 1]
-            ("sum_0026", "sum_run", ((32, 16, 128, 128), (-1,), False, "float32")),
+            ("sum_0026", reduce_sum_run, ((32, 16, 128, 128), (-1,), False, "float32")),
             # float-int32:[33, 64]-[-1]=float:[33]
-            ("sum_0027", "sum_run", ((33, 64), (-1,), False, "float32")),
+            ("sum_0027", reduce_sum_run, ((33, 64), (-1,), False, "float32")),
             # float-int32:[40]-[-1]=float:[1]
-            ("sum_0028", "sum_run", ((40,), (-1,), False, "float32")),
+            ("sum_0028", reduce_sum_run, ((40,), (-1,), False, "float32")),
             # float-int32:[40, 21128]-[-1]=float:[21128]
-            ("sum_0029", "sum_run", ((40, 21128), (-1,), False, "float32")),
+            ("sum_0029", reduce_sum_run, ((40, 21128), (-1,), False, "float32")),
             # float-int32:[4096, 1024]-[-1]=float:[4096]
-            ("sum_0030", "sum_run", ((4096, 1024), (-1,), False, "float32")),
+            ("sum_0030", reduce_sum_run, ((4096, 1024), (-1,), False, "float32")),
             # float-int32:[4096]-[-1]=float:[1
-            ("sum_0031", "sum_run", ((4096,), (-1,), False, "float32")),
+            ("sum_0031", reduce_sum_run, ((4096,), (-1,), False, "float32")),
             # float-int32:[4, 16, 128, 128]-[-1]=float:[4, 16, 128, 1]
-            ("sum_0032", "sum_run", ((4, 16, 128, 128), (-1,), False, "float32")),
+            ("sum_0032", reduce_sum_run, ((4, 16, 128, 128), (-1,), False, "float32")),
             # float-int32:[5120]-[-1]=float:[1]
-            ("sum_0033", "sum_run", ((5120,), (-1,), False, "float32")),
+            ("sum_0033", reduce_sum_run, ((5120,), (-1,), False, "float32")),
             # float-int32:[5120, 21128]-[-1]=float:[21128]
-            ("sum_0034", "sum_run", ((5120, 21128), (-1,), False, "float32")),
+            ("sum_0034", reduce_sum_run, ((5120, 21128), (-1,), False, "float32")),
             # float-int32:[512, 16, 128, 128]-[-1]=float:[512, 16, 128, 1]
-            ("sum_0035", "sum_run", ((512, 16, 128, 128), (-1,), False, "float32")),
+            ("sum_0035", reduce_sum_run, ((512, 16, 128, 128), (-1,), False, "float32")),
             # float-int32:[640]-[-1]=float:[1]
-            ("sum_0036", "sum_run", ((640,), (-1,), False, "float32")),
+            ("sum_0036", reduce_sum_run, ((640,), (-1,), False, "float32")),
             # float-int32:[640, 21128]-[-1]=float:[21128]
-            ("sum_0037", "sum_run", ((640, 21128), (-1,), False, "float32")),
+            ("sum_0037", reduce_sum_run, ((640, 21128), (-1,), False, "float32")),
             # float-int32:[80]-[-1]=float:[1]
-            ("sum_0038", "sum_run", ((80,), (-1,), False, "float32")),
+            ("sum_0038", reduce_sum_run, ((80,), (-1,), False, "float32")),
             # float-int32:[80, 21128]-[-1]=float:[21128]
-            ("sum_0039", "sum_run", ((80, 21128), (-1,), False, "float32")),
+            ("sum_0039", reduce_sum_run, ((80, 21128), (-1,), False, "float32")),
             # float-int32:[8, 16, 128, 128]-[-1]=float:[8, 16, 128, 1]
-            ("sum_0040", "sum_run", ((8, 16, 128, 128), (-1,), False, "float32")),
+            ("sum_0040", reduce_sum_run, ((8, 16, 128, 128), (-1,), False, "float32")),
 
             # StridedSlice OP
             # float-int32-int32-int32:[1024, 128, 1024]-[3]-[3]-[3]=float:[1024, 1, 1024]
@@ -5337,15 +5337,15 @@ class TestBert001(BaseCaseRun):
 
             # addn OP
             # float-float:[64, 128, 1024]-[64, 128, 1024]=float:[64, 128, 1024]
-            ("test_bert_addn_003_053", "addn_run", ((64, 128, 1024), "float32", 2)),
+            ("test_bert_addn_003_053", addn_run, ((64, 128, 1024), "float32", 2)),
             # float-float:[64, 16, 128, 128]-[64, 16, 128, 128]=float:[64, 16, 128, 128]
-            ("test_bert_addn_003_054", "addn_run", ((64, 16, 128, 128), "float32", 2)),
+            ("test_bert_addn_003_054", addn_run, ((64, 16, 128, 128), "float32", 2)),
             # float-float:[64, 16, 128, 64]-[64, 16, 128, 64]=float:[64, 16, 128, 64]
-            ("test_bert_addn_003_055", "addn_run", ((64, 16, 128, 64), "float32", 2)),
+            ("test_bert_addn_003_055", addn_run, ((64, 16, 128, 64), "float32", 2)),
             # float-float:[8192, 1024]-[8192, 1024]=float:[8192, 1024]
-            ("test_bert_addn_003_056", "addn_run", ((8192, 1024), "float32", 2)),
+            ("test_bert_addn_003_056", addn_run, ((8192, 1024), "float32", 2)),
             # float-float-float:[8192, 1024]-[8192, 1024]-[8192, 1024]=float:[8192, 1024]
-            ("test_bert_addn_003_057", "addn_run", ((8192, 1024), "float32", 3)),
+            ("test_bert_addn_003_057", addn_run, ((8192, 1024), "float32", 3)),
 
             # dropout OP
             # float:[64, 128, 1024]=float:[64, 128, 1024]
@@ -5696,51 +5696,51 @@ class TestBert001(BaseCaseRun):
 
             # Sum OP
             # float-int32:[10240, 21128]-[-1]=float:[10240]
-            ("test_bert_sum_003_0041", "sum_run", ((10240, 21128), (-1,), False, "float32")),
+            ("test_bert_sum_003_0041", reduce_sum_run, ((10240, 21128), (-1,), False, "float32")),
             # float-int32:[1024, 2]-[-1]=float:[1024]
-            ("test_bert_sum_003_0042", "sum_run", ((1024, 2), (-1,), False, "float32")),
+            ("test_bert_sum_003_0042", reduce_sum_run, ((1024, 2), (-1,), False, "float32")),
             # float-int32:[1, 2]-[-1]=float:[1]
-            ("test_bert_sum_003_0043", "sum_run", ((1, 2), (-1,), False, "float32")),
+            ("test_bert_sum_003_0043", reduce_sum_run, ((1, 2), (-1,), False, "float32")),
             # float-int32:[1280, 21128]-[-1]=float:[1280]
-            ("test_bert_sum_003_0044", "sum_run", ((1280, 21128), (-1,), False, "float32")),
+            ("test_bert_sum_003_0044", reduce_sum_run, ((1280, 21128), (-1,), False, "float32")),
             # float-int32:[128, 2]-[-1]=float:[128]
-            ("test_bert_sum_003_0045", "sum_run", ((128, 2), (-1,), False, "float32")),
+            ("test_bert_sum_003_0045", reduce_sum_run, ((128, 2), (-1,), False, "float32")),
             # float-int32:[160, 21128]-[-1]=float:[160]
-            ("test_bert_sum_003_0046", "sum_run", ((160, 21128), (-1,), False, "float32")),
+            ("test_bert_sum_003_0046", reduce_sum_run, ((160, 21128), (-1,), False, "float32")),
             # float-int32:[16, 2]-[-1]=float:[16]
-            ("test_bert_sum_003_0047", "sum_run", ((16, 2), (-1,), False, "float32")),
+            ("test_bert_sum_003_0047", reduce_sum_run, ((16, 2), (-1,), False, "float32")),
             # float-int32:[20, 21128]-[-1]=float:[20]
-            ("test_bert_sum_003_0048", "sum_run", ((20, 21128), (-1,), False, "float32")),
+            ("test_bert_sum_003_0048", reduce_sum_run, ((20, 21128), (-1,), False, "float32")),
             # float-int32:[20480, 21128]-[-1]=float:[20480]
-            ("test_bert_sum_003_0049", "sum_run", ((20480, 21128), (-1,), False, "float32")),
+            ("test_bert_sum_003_0049", reduce_sum_run, ((20480, 21128), (-1,), False, "float32")),
             # float-int32:[2, 2]-[-1]=float:[2]
-            ("test_bert_sum_003_0050", "sum_run", ((2, 2), (-1,), False, "float32")),
+            ("test_bert_sum_003_0050", reduce_sum_run, ((2, 2), (-1,), False, "float32")),
             # float-int32:[2560, 21128]-[-1]=float:[2560]
-            ("test_bert_sum_003_0051", "sum_run", ((2560, 21128), (-1,), False, "float32")),
+            ("test_bert_sum_003_0051", reduce_sum_run, ((2560, 21128), (-1,), False, "float32")),
             # float-int32:[256, 2]-[-1]=float:[256]
-            ("test_bert_sum_003_0052", "sum_run", ((256, 2), (-1,), False, "float32")),
+            ("test_bert_sum_003_0052", reduce_sum_run, ((256, 2), (-1,), False, "float32")),
             # float-int32:[320, 21128]-[-1]=float:[320]
-            ("test_bert_sum_003_0053", "sum_run", ((320, 21128), (-1,), False, "float32")),
+            ("test_bert_sum_003_0053", reduce_sum_run, ((320, 21128), (-1,), False, "float32")),
             # float-int32:[32, 2]-[-1]=float:[32]
-            ("test_bert_sum_003_0054", "sum_run", ((32, 2), (-1,), False, "float32")),
+            ("test_bert_sum_003_0054", reduce_sum_run, ((32, 2), (-1,), False, "float32")),
             # float-int32:[40, 21128]-[-1]=float:[40]
-            ("test_bert_sum_003_0055", "sum_run", ((40, 21128), (-1,), False, "float32")),
+            ("test_bert_sum_003_0055", reduce_sum_run, ((40, 21128), (-1,), False, "float32")),
             # float-int32:[4, 2]-[-1]=float:[4]
-            ("test_bert_sum_003_0056", "sum_run", ((4, 2), (-1,), False, "float32")),
+            ("test_bert_sum_003_0056", reduce_sum_run, ((4, 2), (-1,), False, "float32")),
             # float-int32:[5120, 21128]-[-1]=float:[5120]
-            ("test_bert_sum_003_0057", "sum_run", ((5120, 21128), (-1,), False, "float32")),
+            ("test_bert_sum_003_0057", reduce_sum_run, ((5120, 21128), (-1,), False, "float32")),
             # float-int32:[512, 2]-[-1]=float:[512]
-            ("test_bert_sum_003_0058", "sum_run", ((512, 2), (-1,), False, "float32")),
+            ("test_bert_sum_003_0058", reduce_sum_run, ((512, 2), (-1,), False, "float32")),
             # float-int32:[640, 21128]-[-1]=float:[640]
-            ("test_bert_sum_003_0059", "sum_run", ((640, 21128), (-1,), False, "float32")),
+            ("test_bert_sum_003_0059", reduce_sum_run, ((640, 21128), (-1,), False, "float32")),
             # float-int32:[64, 16, 128, 128]-[-1]=float:[64, 16, 128, 1]
-            ("test_bert_sum_003_0060", "sum_run", ((64, 16, 128, 128), (-1,), False, "float32")),
+            ("test_bert_sum_003_0060", reduce_sum_run, ((64, 16, 128, 128), (-1,), False, "float32")),
             # float-int32:[64, 2]-[-1]=float:[64]
-            ("test_bert_sum_003_0061", "sum_run", ((64, 2), (-1,), False, "float32")),
+            ("test_bert_sum_003_0061", reduce_sum_run, ((64, 2), (-1,), False, "float32")),
             # float-int32:[80, 21128]-[-1]=float:[80]
-            ("test_bert_sum_003_0062", "sum_run", ((80, 21128), (-1,), False, "float32")),
+            ("test_bert_sum_003_0062", reduce_sum_run, ((80, 21128), (-1,), False, "float32")),
             # float-int32:[8, 2]-[-1]=float:[8]
-            ("test_bert_sum_003_0063", "sum_run", ((8, 2), (-1,), False, "float32")),
+            ("test_bert_sum_003_0063", reduce_sum_run, ((8, 2), (-1,), False, "float32")),
 
             # TanhGrad	OP
             # f#loat:[64, 1024]=float:[64, 1024]

@@ -19,8 +19,9 @@ ResNet50 fused_computation.485 in XLA patterns
 from __future__ import absolute_import
 import akg.tvm as tvm
 import akg.topi as topi
+import akg.utils as utils
 
-def fused_bn_update(input1, input2, input3, input4, dtype, c1, c2, c3, c4):
+def fused_bn_update(input1, input2, input3, input4, dtype, c1, c2, c3, c4, target=utils.CUDA):
     """
     fused operator.
 

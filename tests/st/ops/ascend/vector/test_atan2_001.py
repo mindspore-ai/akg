@@ -17,7 +17,7 @@
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.atan2_run import atan2_run
+from tests.common.test_run.ascend.atan2_run import atan2_run
 
 
 class TestAtan2(TestBase):

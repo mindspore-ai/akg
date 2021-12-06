@@ -26,7 +26,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase, get_splitted_cases
-from tests.common.test_run.slice_run import slice_run
+from tests.common.test_run.ascend.slice_run import slice_run
 
 
 ############################################################
@@ -141,24 +141,12 @@ class TestSlice(TestBase):
     @pytest.mark.platform_x86_ascend_training
     @pytest.mark.env_onecard
     def test_run(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg)
 
     def test_run_cloud(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg_cloud)
 
     def test_run_level1(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg_level1)
 
     def test_level1(self, split_nums, split_idx):

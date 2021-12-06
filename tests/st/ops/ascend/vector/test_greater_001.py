@@ -25,7 +25,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.greater_run import greater_run
+from tests.common.test_run.ascend.greater_run import greater_run
 
 ############################################################
 # TestCase= class: put to tests/*/

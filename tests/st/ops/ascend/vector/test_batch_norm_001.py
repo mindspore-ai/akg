@@ -19,7 +19,7 @@ batch_norm
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.batch_norm_run import batch_norm_run
+from tests.common.test_run.ascend.batch_norm_run import batch_norm_run
 
 
 class TestCase(TestBase):

@@ -17,7 +17,7 @@
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.asin_grad_run import asin_grad_run
+from tests.common.test_run.ascend.asin_grad_run import asin_grad_run
 
 
 class TestCase(TestBase):

@@ -24,7 +24,7 @@ Testcase_ExpectedResult:
 """
 import os
 from tests.common.base import TestBase
-from tests.common.test_run.globalavgpool_run import globalavgpool_run
+from tests.common.test_run.ascend.globalavgpool_run import globalavgpool_run
 
 ############################################################
 # TestCase= class: put to tests/*/

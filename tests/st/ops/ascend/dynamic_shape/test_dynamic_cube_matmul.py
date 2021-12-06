@@ -19,8 +19,8 @@ import numpy as np
 import akg
 import akg.tvm
 from akg.utils import kernel_exec as utils
-from tests.common.test_run.matmul_run import extract_dim, get_converted_shapes
-from tests.common.test_run.matmul_run import matmul_data
+from tests.common.test_run.ascend.matmul_run import extract_dim, get_converted_shapes
+from tests.common.test_run.ascend.matmul_run import matmul_data
 from tests.common.base import get_rtol_atol
 from tests.common.tensorio import compare_tensor
 
@@ -130,7 +130,7 @@ def matmul4D_compute(x, y, bias_value, out_dtype, left_format, right_format, out
                 y_indices = indices[:(N - 4)] + (ko, ) + indices[(N - 4):(N - 3)] + (ki,) + indices[(N - 1):]
                 if adj_y:
                     y_indices = indices[:(N - 4)] + indices[(N - 4):(N - 3)] + (ko,) + indices[(N - 1):] + (ki,)
-        return akg.lang.cce.mmad((x(*x_indices) * y(*y_indices)).astype(out_dtype), axis=[ko, ki])
+        return akg.lang.ascend.mmad((x(*x_indices) * y(*y_indices)).astype(out_dtype), axis=[ko, ki])
 
     if left_format == "zZ":
         data_trans = "N"

@@ -23,6 +23,7 @@ from numpy.core import double
 import akg
 from akg import dim
 from akg.utils.validation_check import check_input_type
+from akg.utils.util import parse_kwargs
 
 set_dim_func_map = {}
 gen_key_func_map = {}
@@ -368,6 +369,7 @@ def reg_set_dim_func(set_dim_func):
     def decorate(func_):
         @wraps(func_)
         def wrapper(*args, **kwargs):
+            kwargs = parse_kwargs(func_, **kwargs)
             set_dim_func_map[func_.__name__] = set_dim_func
             return func_(*args, **kwargs)
 

@@ -24,7 +24,7 @@ Testcase_ExpectedResult:
 """
 import os
 from tests.common.base import TestBase
-from tests.common.test_run.winograd_ad_run import winograd_ad_run
+from tests.common.test_run.ascend.winograd_ad_run import winograd_ad_run
 
 ############################################################
 # TestCase= class: put to tests/*/

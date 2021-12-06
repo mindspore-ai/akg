@@ -24,7 +24,7 @@ Testcase_ExpectedResult:
 """
 import os
 from tests.common.base import TestBase
-from tests.common.test_run.scatter_nd_ad_run import scatter_nd_ad_run
+from tests.common.test_run.ascend.scatter_nd_ad_run import scatter_nd_ad_run
 
 
 ############################################################

@@ -25,7 +25,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.bitwise_not_run import bitwise_not_run
+from tests.common.test_run.ascend.bitwise_not_run import bitwise_not_run
 
 
 ############################################################

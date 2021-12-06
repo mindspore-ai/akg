@@ -26,7 +26,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.reduce_min_ad_run import reduce_min_ad_run
+from tests.common.test_run.ascend.reduce_min_ad_run import reduce_min_ad_run
 
 ############################################################
 # TestCase= class: put to tests/*/

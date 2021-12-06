@@ -25,7 +25,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.distr_normal_diag_KLdiv_run import KLdiv_run
+from tests.common.test_run.ascend.distr_normal_diag_KLdiv_run import KLdiv_run
 
 ############################################################
 # TestCase= class: put to tests/*/

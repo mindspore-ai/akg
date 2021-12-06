@@ -17,7 +17,7 @@
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.quantized_avg_pool_run import quantized_avg_pool_run
+from tests.common.test_run.ascend.quantized_avg_pool_run import quantized_avg_pool_run
 
 
 class TestQuantizedAvgPool(TestBase):

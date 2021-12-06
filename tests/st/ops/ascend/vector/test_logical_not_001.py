@@ -17,7 +17,7 @@
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.logical_not_run import logical_not_run
+from tests.common.test_run.ascend.logical_not_run import logical_not_run
 
 
 class TestCase(TestBase):

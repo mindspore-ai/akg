@@ -25,7 +25,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.focal_loss_run import focal_loss_run
+from tests.common.test_run.ascend.focal_loss_run import focal_loss_run
 
 ############################################################
 # TestCase= class: put to tests/*/

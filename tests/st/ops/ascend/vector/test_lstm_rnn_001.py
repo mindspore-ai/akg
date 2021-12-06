@@ -26,12 +26,12 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.lstm_rnn_run import lstmcell_run
-from tests.common.test_run.lstm_rnn_run import rnn_tanh_cell_run
-from tests.common.test_run.lstm_rnn_run import rnn_relu_cell_run
-from tests.common.test_run.lstm_rnn_ad_run import lstmcell_grad_c_run, lstmcell_grad_h_run
-from tests.common.test_run.lstm_rnn_ad_run import rnn_tanh_cell_grad_run, rnn_relu_cell_grad_run, rnn_tanh_cell_ad_run, rnn_relu_cell_ad_run
-from tests.common.test_run.lstm_rnn_ad_run import lstmcell_h_ad_run, lstmcell_c_ad_run
+from tests.common.test_run.ascend.lstm_rnn_run import lstmcell_run
+from tests.common.test_run.ascend.lstm_rnn_run import rnn_tanh_cell_run
+from tests.common.test_run.ascend.lstm_rnn_run import rnn_relu_cell_run
+from tests.common.test_run.ascend.lstm_rnn_ad_run import lstmcell_grad_c_run, lstmcell_grad_h_run
+from tests.common.test_run.ascend.lstm_rnn_ad_run import rnn_tanh_cell_grad_run, rnn_relu_cell_grad_run, rnn_tanh_cell_ad_run, rnn_relu_cell_ad_run
+from tests.common.test_run.ascend.lstm_rnn_ad_run import lstmcell_h_ad_run, lstmcell_c_ad_run
 
 ############################################################
 # TestCase= class: put to tests/*/

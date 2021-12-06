@@ -17,7 +17,7 @@
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.pack_run import pack_run
+from tests.common.test_run.ascend.pack_run import pack_run
 
 
 class TestCase(TestBase):

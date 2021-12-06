@@ -19,6 +19,7 @@ from functools import wraps, reduce
 from enum import Enum
 import akg.tvm
 import akg.topi
+from akg.utils.util import parse_kwargs
 from akg.utils.format_transform import get_bytes, get_shape
 
 MAX_DATA_SIZE = 2 ** 31
@@ -47,6 +48,25 @@ supported_bits = {
     "8": 1, "16": 2, "32": 4, "64": 8, "bool": 1
 }
 
+CCE = "cce"
+CUDA = "cuda"
+LLVM = "llvm"
+CPU = "cpu"
+BINDS = "binds"
+
+def check_supported_target(target):
+    supported_target = [CCE, CUDA, LLVM]
+    if target not in supported_target:
+        raise RuntimeError("the target %s is not supported!" % get_backend(target))
+
+def get_backend(target):
+    if target == CCE:
+        return "Ascend"
+    elif target == CUDA:
+        return "GPU"
+    elif target == LLVM:
+        return "CPU"
+    return "UNKNOWN"
 
 def check_input_type_dict(input_dict, input_key, input_name):
     """
@@ -132,6 +152,7 @@ def check_input_type(*type_args, **_type_kwargs):
                                                "%s, while type of input is %s"
                                                "" % (i, j[1], type(kwargs[i])))
                         break
+            kwargs = parse_kwargs(func, **kwargs)
             return func(*args, **kwargs)
 
         return in_wrapper

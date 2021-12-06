@@ -26,7 +26,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.squeeze_run import squeeze_run
+from tests.common.test_run.ascend.squeeze_run import squeeze_run
 
 
 class TestCase(TestBase):

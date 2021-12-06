@@ -10,7 +10,7 @@ Testcase_ExpectedResult:
 """
 import os
 from tests.common.base import TestBase
-from tests.common.test_run.col2im_run import col2im_run
+from tests.common.test_run.ascend.col2im_run import col2im_run
 
 ############################################################
 # TestCase= class: put to tests/*/

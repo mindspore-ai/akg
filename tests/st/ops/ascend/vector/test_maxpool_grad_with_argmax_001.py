@@ -24,7 +24,7 @@ Testcase_ExpectedResult:
 """
 import os
 from tests.common.base import TestBase
-from tests.common.test_run.maxpool_grad_with_argmax_run import maxpool_grad_with_argmax_run
+from tests.common.test_run.ascend.maxpool_grad_with_argmax_run import maxpool_grad_with_argmax_run
 
 ############################################################
 # TestCase= class: put to tests/*/

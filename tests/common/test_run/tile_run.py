@@ -1,4 +1,4 @@
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2019-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,12 +14,14 @@
 
 from akg.utils import kernel_exec as utils
 import numpy as np
-from akg.ops.array import tile
+from akg.ops.array import Tile
 from tests.common.tensorio import compare_tensor
 from tests.common.base import get_rtol_atol
 from tests.common.gen_random import random_gaussian
+from akg.utils.result_analysis import target_profiling
+from akg.utils.format_transform import to_tvm_nd_array
 
-def tile_execute(shape, dtype, multiples, attrs):
+def tile_run(shape, dtype, multiples, attrs):
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
@@ -33,6 +35,11 @@ def tile_execute(shape, dtype, multiples, attrs):
         mod = tile_compile(shape, dtype, multiples, attrs)
         exp_output, inputs, output = gen_data(dtype, multiples, shape)
         acu_output = utils.mod_launch(mod, [inputs, output], expect=exp_output)
+        if attrs.get("profiling", False):
+            import akg
+            target_name = attrs["target"].split()[0]
+            args_list = to_tvm_nd_array([inputs, output], akg.tvm.context(target_name, 0))
+            target_profiling(mod, *args_list, target=target_name, repeat_time=attrs["repeat_times"])
         rtol, atol = get_rtol_atol("tile", dtype)
         return inputs, acu_output, exp_output, compare_tensor(acu_output, exp_output, rtol=rtol, atol=atol, equal_nan=True)
 
@@ -45,4 +52,4 @@ def gen_data(dtype, multiples, shape):
 
 
 def tile_compile(shape, dtype, multiples, attrs, kernel_name="tile", tuning=False):
-    return utils.op_build_test(tile.tile, [shape], [dtype], [multiples], kernel_name=kernel_name, attrs=attrs, tuning=tuning)
+    return utils.op_build_test(Tile, [shape], [dtype], [multiples], kernel_name=kernel_name, attrs=attrs, tuning=tuning)

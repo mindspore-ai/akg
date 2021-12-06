@@ -19,8 +19,7 @@ mul test cast
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.mul_run import mul_run
-
+from tests.common.test_run import mul_run
 
 class TestMul(TestBase):
 

@@ -14,7 +14,7 @@
 
 import os
 from tests.common.base import TestBase
-from tests.common.test_run.apply_ftrl_run import apply_ftrl_run
+from tests.common.test_run.ascend.apply_ftrl_run import apply_ftrl_run
 
 
 class TestCase(TestBase):
@@ -34,10 +34,6 @@ class TestCase(TestBase):
         return
 
     def test_rpc_cloud(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg_rpc_cloud)
 
     def teardown(self):

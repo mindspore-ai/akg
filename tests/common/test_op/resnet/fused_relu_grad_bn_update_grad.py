@@ -18,9 +18,11 @@ ResNet50 fused computation. 216 in XLA patterns
 """
 from __future__ import absolute_import
 import akg.topi as topi
+import akg.utils as utils
 from tests.common.test_op.resnet.fused_pattern_grad import relu_grad, bn_gamma_grad, bn_beta_grad
 
-def fused_relu_grad_bn_update_grad(data_sum, in_bn, head_active, in_active, layout='NHWC', out_dtype="float32"):
+def fused_relu_grad_bn_update_grad(data_sum, in_bn, head_active, in_active, layout='NHWC',
+                                    out_dtype="float32", target=utils.CUDA):
 
     if layout != 'NHWC' and layout!= "NCHW":
         raise NotImplementedError(

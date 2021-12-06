@@ -15,7 +15,7 @@
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.maxpool_run import maxpool_run
+from tests.common.test_run.ascend.maxpool_run import maxpool_run
 
 ############################################################
 # TestCase= class: put to tests/*/

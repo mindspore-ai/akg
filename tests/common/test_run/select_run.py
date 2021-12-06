@@ -1,4 +1,4 @@
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,25 +11,29 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-"""select_run"""
 import numpy as np
-
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
-from tests.common.test_op import select
+from akg.ops.math import Select
 from tests.common.base import get_rtol_atol
 from tests.common.gen_random import random_gaussian
+from akg.utils.result_analysis import target_profiling
+from akg.utils.format_transform import to_tvm_nd_array
 
 def select_run(shape_cond, shape_x, dtype_cond, dtype_x, attrs=None):
     """select_run implementation"""
     if attrs is None:
         attrs = {}
 
-    mod = utils.op_build_test(select.select, [shape_cond, shape_x, shape_x], [dtype_cond, dtype_x, dtype_x],
+    mod = utils.op_build_test(Select, [shape_cond, shape_x, shape_x], [dtype_cond, dtype_x, dtype_x],
                               kernel_name='select', op_attrs=[], attrs=attrs)
     args, exp_output, cond, x1, x2 = gen_data(shape_cond, shape_x, dtype_cond, dtype_x)
     acu_output = utils.mod_launch(mod, args, expect=exp_output)
+    if attrs.get("profiling", False):
+            import akg
+            target_name = attrs["target"].split()[0]
+            args_list = to_tvm_nd_array(args, akg.tvm.context(target_name, 0))
+            target_profiling(mod, *args_list, target=target_name, repeat_time=attrs["repeat_times"])
     # compare result
     rtol, atol = get_rtol_atol("select", dtype_x)
     testcase_result = compare_tensor(acu_output, exp_output, rtol=rtol, atol=atol, equal_nan=True)

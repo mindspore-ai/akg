@@ -1,4 +1,4 @@
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2019-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -41,7 +41,7 @@ class TestCase(TestBase):
         self.params_init(case_name, case_path)
 
         if isinstance(func, str):
-            lib = "tests.common.test_run." + func
+            lib = "tests.common.test_run.ascend." + func
             exec("import " + lib)
             mod = sys.modules[lib]
             self._build_only = build_only and hasattr(mod, func.split('_run')[0] + "_compile")

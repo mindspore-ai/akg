@@ -25,7 +25,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.argmax_run import argmax_run
+from tests.common.test_run.ascend.argmax_run import argmax_run
 
 ############################################################
 # TestCase= class: put to tests/*/

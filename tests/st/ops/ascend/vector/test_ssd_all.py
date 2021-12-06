@@ -24,11 +24,11 @@ Testcase_ExpectedResult:
 """
 import os
 from tests.common.base import TestBase
-from tests.common.test_run.focal_loss_run import focal_loss_run
-from tests.common.test_run.focalloss_ad_run import focalloss_grad_run
-from tests.common.test_run.smooth_l1_loss_run import smooth_l1_loss_run
-from tests.common.test_run.smooth_l1_loss_grad_run import smooth_l1_loss_grad_run
-
+from tests.common.test_run.ascend.focal_loss_run import focal_loss_run
+from tests.common.test_run.ascend.focalloss_ad_run import focalloss_grad_run
+from tests.common.test_run.ascend.smooth_l1_loss_run import smooth_l1_loss_run
+from tests.common.test_run.ascend.smooth_l1_loss_grad_run import smooth_l1_loss_grad_run
+from tests.common.test_run import reduce_sum_run
 
 ############################################################
 # TestCase= class: put to tests/*/
@@ -48,7 +48,7 @@ class TestFocalLoss(TestBase):
         self.testarg_cloud = [
             ("test_ssd_001_one_hot_001", "one_hot_run", ((32, 8732), 6, "float16", 1, 0, -1)),
             ("test_ssd_002_one_hot_002", "one_hot_run", ((32, 8732), 6, "float32", 1, 0, -1)),
-            ("test_ssd_003_sum_001", "sum_run", ((32, 8732), (-1,), False, "float16")),
+            ("test_ssd_003_sum_001", reduce_sum_run, ((32, 8732), (-1,), False, "float16")),
             ("test_ssd_004_mean_001", "mean_run", ((32,), "float16", (0,), False, "reduce_mean")),
             #  ("test_ssd_004_mean_001", "mean_run", ((32,), "float16", (0,), True, "reduce_mean")),
             ("test_ssd_005_focal_loss_001", focal_loss_run, ((32, 8732, 6), "float16", "float16", 2.0, "focal_loss")),

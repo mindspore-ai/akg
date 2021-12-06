@@ -18,8 +18,9 @@ ResNet50 fused computation. 212 in XLA patterns
 """
 from __future__ import absolute_import
 import akg.topi as topi
+import akg.utils as utils
 
-def fused_mul_div_rsqrt_mul_isfinite_red(input1, input2, out_dtype="float32"):
+def fused_mul_div_rsqrt_mul_isfinite_red(input1, input2, out_dtype="float32", target=utils.CUDA):
     """
     fused operator.
 

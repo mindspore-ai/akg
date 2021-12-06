@@ -24,7 +24,7 @@ Testcase_ExpectedResult:
 """
 import os
 from tests.common.base import TestBase
-from tests.common.test_run.confusion_matrix_run import confusion_matrix_run
+from tests.common.test_run.ascend.confusion_matrix_run import confusion_matrix_run
 
 
 ############################################################

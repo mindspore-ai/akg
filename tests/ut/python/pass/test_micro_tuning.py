@@ -14,7 +14,7 @@
 
 """unittest for micro-tuning"""
 from akg.utils import kernel_exec
-from akg.ops.array import four2five
+from akg.ops.array.ascend import four2five
 
 
 def test_four2five_without_custom_tiling(build_shape, dtype, op_attrs):

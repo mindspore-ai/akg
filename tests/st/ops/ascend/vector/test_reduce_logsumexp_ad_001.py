@@ -25,7 +25,7 @@ Testcase_ExpectedResult:
 
 import os
 from tests.common.base import TestBase
-from tests.common.test_run.reduce_logsumexp_ad_run import reduce_logsumexp_ad_run
+from tests.common.test_run.ascend.reduce_logsumexp_ad_run import reduce_logsumexp_ad_run
 
 ############################################################
 # TestCase= class: put to tests/*/

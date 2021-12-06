@@ -25,7 +25,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.blas_axby_ad_run import blas_axby_ad_run
+from tests.common.test_run.ascend.blas_axby_ad_run import blas_axby_ad_run
 
 
 ############################################################

@@ -26,7 +26,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.fill_run import fill_run
+from tests.common.test_run.ascend.fill_run import fill_run
 
 
 class TestCase(TestBase):

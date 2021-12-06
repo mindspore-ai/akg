@@ -16,8 +16,8 @@
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.bn_split_run import bn_split_run
-from tests.common.test_run.bn_split_run import bn_1_run, bn_2_run, bn_3_run
+from tests.common.test_run.ascend.bn_split_run import bn_split_run
+from tests.common.test_run.ascend.bn_split_run import bn_1_run, bn_2_run, bn_3_run
 
 
 class TestCase(TestBase):

@@ -15,7 +15,7 @@
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.apply_rms_prop_mixed_precision_run import apply_rms_prop_mixed_precision_run as run_func
+from tests.common.test_run.ascend.apply_rms_prop_mixed_precision_run import apply_rms_prop_mixed_precision_run as run_func
 
 
 class TestCase(TestBase):

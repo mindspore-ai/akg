@@ -18,7 +18,7 @@ unsortedsegmentsum test cast
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.group_conv_ad_run import group_conv_ad_run
+from tests.common.test_run.ascend.group_conv_ad_run import group_conv_ad_run
 
 
 class TestCase(TestBase):
@@ -45,7 +45,7 @@ class TestCase(TestBase):
 
         return
 
-    @pytest.mark.level2
+    @pytest.mark.skip
     @pytest.mark.platform_arm_ascend_training
     @pytest.mark.platform_x86_ascend_training
     @pytest.mark.env_onecard
@@ -56,7 +56,7 @@ class TestCase(TestBase):
         """
         self.common_run(self.testarg)
 
-    @pytest.mark.level3
+    @pytest.mark.skip
     @pytest.mark.platform_arm_ascend_training
     @pytest.mark.platform_x86_ascend_training
     @pytest.mark.env_onecard

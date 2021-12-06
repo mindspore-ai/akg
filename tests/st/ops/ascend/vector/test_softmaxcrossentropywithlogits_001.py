@@ -24,7 +24,7 @@ Testcase_ExpectedResult:
 """
 import os
 from tests.common.base import TestBase
-from tests.common.test_run.softmaxcrossentropywithlogits_run import softmaxcrossentropywithlogits_run
+from tests.common.test_run.ascend.softmaxcrossentropywithlogits_run import softmaxcrossentropywithlogits_run
 
 
 ############################################################

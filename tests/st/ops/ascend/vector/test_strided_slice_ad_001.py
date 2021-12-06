@@ -25,7 +25,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.strided_slice_ad_run import strided_slice_ad_run
+from tests.common.test_run.ascend.strided_slice_ad_run import strided_slice_ad_run
 
 ############################################################
 # TestCase= class: put to tests/*/

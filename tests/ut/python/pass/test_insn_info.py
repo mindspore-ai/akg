@@ -14,7 +14,7 @@
 
 import akg.tvm
 from akg.tvm._ffi.node import NodeBase, register_node
-import akg.backend as cce
+import akg.backend as ascend
 
 
 @register_node
@@ -94,13 +94,13 @@ def testEliminateVarInExpr():
 
 
 def testGetBufScope():
-    test_suite = {'input_1_local_UB': cce.scope_ubuf,
-                  'input_1_local_L1': cce.scope_cbuf,
-                  'input_1_local_L0A': cce.scope_ca,
-                  'input_1_local_L0B': cce.scope_cb,
-                  'input_1_local_L0C': cce.scope_cc,
-                  'input_1_local_UB_dst_tmp': cce.scope_ubuf,
-                  'input_1': cce.dma_copy_global}
+    test_suite = {'input_1_local_UB': ascend.scope_ubuf,
+                  'input_1_local_L1': ascend.scope_cbuf,
+                  'input_1_local_L0A': ascend.scope_ca,
+                  'input_1_local_L0B': ascend.scope_cb,
+                  'input_1_local_L0C': ascend.scope_cc,
+                  'input_1_local_UB_dst_tmp': ascend.scope_ubuf,
+                  'input_1': ascend.dma_copy_global}
     idx = 0
     f = akg.tvm.get_global_func("cce_util.GetBufScope")
     for key, value in test_suite.items():

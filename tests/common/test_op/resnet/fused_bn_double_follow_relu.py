@@ -18,10 +18,11 @@ ResNet50 fused computation. 539 in XLA patterns
 """
 from __future__ import absolute_import
 import akg.topi as topi
+import akg.utils as utils
 from tests.common.test_op.resnet.fused_bn_follow_relu import fused_bn_follow
 
 def fused_bn_double_follow_relu(data0, data1, data2, data3, data4,
-                         data5, data6, data7, data8, data9, layout='NHWC', out_dtype='float16'):
+                         data5, data6, data7, data8, data9, layout='NHWC', out_dtype='float16', target=utils.CUDA):
     """
     input:
     data: length is 5

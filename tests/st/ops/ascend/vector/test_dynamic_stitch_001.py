@@ -24,7 +24,7 @@ Testcase_ExpectedResult:
 """
 import os
 from tests.common.base import TestBase
-from tests.common.test_run.dynamic_stitch_run import dynamic_stitch_run
+from tests.common.test_run.ascend.dynamic_stitch_run import dynamic_stitch_run
 
 
 ############################################################

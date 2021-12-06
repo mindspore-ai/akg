@@ -27,6 +27,8 @@ import random
 import subprocess
 import re
 import tvm
+import types
+from akg.utils.util import parse_kwargs
 from timeit import default_timer as timer
 from threading import Thread
 from functools import reduce
@@ -1088,8 +1090,8 @@ def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
 
     # backup inputs because the tensor names may be updated inside op_func
     inputs_backup = recursive_copy(inputs)
-
-    output = op_func(*args)
+    target = attrs.get("target") if attrs and attrs.get("target", None) else CCE
+    output = op_func(*args, target=target)
 
     # restore inputs to make sure that tensor names are not changed by op_func
     inputs = inputs_backup
@@ -1125,8 +1127,6 @@ def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
     if compute_func is not None:
         compute_func(s)
         polyhedral = False
-
-    target = attrs.get("target") if attrs and attrs.get("target", None) else CCE
 
     level = attrs.get("help_tiling") if attrs and "help_tiling" in attrs else None
     if tuning or (level is not None and level > help_tiling_level['None']):

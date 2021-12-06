@@ -25,7 +25,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.mul_ad_run import mul_ad_run
+from tests.common.test_run.ascend.mul_ad_run import mul_ad_run
 
 
 ############################################################

@@ -18,7 +18,7 @@ unsortedsegmentsum test cast
 import os
 import pytest
 from tests.common.base import TestBase, get_splitted_cases
-from tests.common.test_run.depthwise_run import depthwise_run
+from tests.common.test_run.ascend.depthwise_run import depthwise_run
 
 
 class TestCase(TestBase):
@@ -81,17 +81,9 @@ class TestCase(TestBase):
         return
 
     def test_run(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg)
 
     def test_run_1(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg_1)
 
     def test(self, split_nums, split_idx):

@@ -17,7 +17,7 @@
 import os
 import pytest
 from tests.common.base import TestBase, get_splitted_cases
-from tests.common.test_run.conv_run import conv_run
+from tests.common.test_run.ascend.conv_run import conv_run
 
 
 class TestCase(TestBase):
@@ -185,24 +185,12 @@ class TestCase(TestBase):
         return
 
     def test_run(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg, is_conv=True)
 
     def test_run_level1(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg_level1, is_conv=True)
 
     def test_run_rpc_cloud(self):
-        """
-        run case.#
-        :return:
-        """
         # self.common_run(self.testarg_rpc_cloud)
         self.common_run(self.testlenet_rpc_cloud)
 

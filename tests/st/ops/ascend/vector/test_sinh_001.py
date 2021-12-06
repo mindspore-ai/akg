@@ -17,7 +17,7 @@
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.sinh_run import sinh_run
+from tests.common.test_run.ascend.sinh_run import sinh_run
 
 
 class TestCase(TestBase):

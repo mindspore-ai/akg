@@ -232,9 +232,9 @@ def update_by_moving_average(hat_z, z, momentum):
     Returns:
         tvm.tensor.Tensor, updated value.
     """
-    run = akg.lang.cce.vmuls(hat_z, momentum)
-    now = akg.lang.cce.vmuls(z, (1 - momentum))
-    return akg.lang.cce.vadd(run, now)
+    run = akg.lang.ascend.vmuls(hat_z, momentum)
+    now = akg.lang.ascend.vmuls(z, (1 - momentum))
+    return akg.lang.ascend.vadd(run, now)
 
 def cal_pad_shapes_by_strategy(shape, kernel, stride, strategy):
     """

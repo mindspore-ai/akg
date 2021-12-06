@@ -16,7 +16,7 @@
 
 import os
 from tests.common.base import TestBase
-from tests.common.test_run.asin_run import asin_run
+from tests.common.test_run.ascend.asin_run import asin_run
 
 
 class TestCase(TestBase):

@@ -15,8 +15,9 @@
 """ fused operator dsl function: fused_pad ResNet50 fused_computation. 957 in XLA patterns  """
 from __future__ import absolute_import
 import akg.topi as topi
+import akg.utils as utils
 
-def fused_pad(input, pad_before, pad_after, layout='NHWC', pad_value=0.0):
+def fused_pad(input, pad_before, pad_after, layout='NHWC', pad_value=0.0, target=utils.CUDA):
     """
     fused_pad.
  

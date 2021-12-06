@@ -25,7 +25,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.im2col_run import im2col_run
+from tests.common.test_run.ascend.im2col_run import im2col_run
 
 ############################################################
 # TestCase= class: put to tests/*/

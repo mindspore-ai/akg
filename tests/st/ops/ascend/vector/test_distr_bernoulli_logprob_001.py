@@ -25,7 +25,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.distr_bernoulli_logprob_run import log_prob_run
+from tests.common.test_run.ascend.distr_bernoulli_logprob_run import log_prob_run
 
 ############################################################
 # TestCase= class: put to tests/*/

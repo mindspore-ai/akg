@@ -17,7 +17,7 @@
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.sign_run import sign_run
+from tests.common.test_run.ascend.sign_run import sign_run
 
 
 class TestCase(TestBase):

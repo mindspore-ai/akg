@@ -21,7 +21,7 @@ LEVEL3_SUCC = "Help tiling level 3 exit successfully"
 
 
 def build_five2four(shape_5d, dtype, op_attrs, attrs, kernel_name='five2four', tuning=False):
-    from akg.ops.array import five2four
+    from akg.ops.array.ascend import five2four
     utils.op_build_test(five2four.five2four, [shape_5d], [dtype], op_attrs, kernel_name=kernel_name, attrs=attrs, tuning=tuning)
 
 

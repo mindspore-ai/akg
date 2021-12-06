@@ -19,7 +19,7 @@ bias add test cast
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.bias_add_run import bias_add_run
+from tests.common.test_run.ascend.bias_add_run import bias_add_run
 
 
 class TestBiasAdd(TestBase):

@@ -17,7 +17,7 @@
 import os
 import pytest
 from tests.common.base import TestBase, get_splitted_cases
-from tests.common.test_run.conv_backprop_input_run import conv_backprop_input_run
+from tests.common.test_run.ascend.conv_backprop_input_run import conv_backprop_input_run
 
 
 class TestCase(TestBase):
@@ -68,10 +68,6 @@ class TestCase(TestBase):
         return
 
     def test_run(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg, is_conv=True)
 
     def test(self, split_nums, split_idx):
@@ -97,7 +93,7 @@ def test0():
     a.teardown()
 
 
-@pytest.mark.level2
+@pytest.mark.skip
 @pytest.mark.platform_arm_ascend_training
 @pytest.mark.platform_x86_ascend_training
 @pytest.mark.env_onecard

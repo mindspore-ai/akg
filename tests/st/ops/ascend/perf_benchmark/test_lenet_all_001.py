@@ -17,31 +17,31 @@ import sys
 sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 
 from base_all_run import BaseCaseRun
-from tests.common.test_run.conv_run import conv_run
-from tests.common.test_run.conv_backprop_input_run import conv_backprop_input_run
-from tests.common.test_run.conv_backprop_filter_run import conv_backprop_filter_run
-from tests.common.test_run.fused_batch_norm_run import fused_batch_norm_run
-from tests.common.test_run.fused_batch_norm_grad_run import fused_batch_norm_grad_run
-from tests.common.test_run.batch_norm_ad_run import batch_norm_ad_run
-from tests.common.test_run.batchmatmul_run import batchmatmul_execute
-from tests.common.test_run.maxpool_with_argmax_run import maxpool_with_argmax_run
-from tests.common.test_run.mean_run import mean_execute
-from tests.common.test_run.mean_ad_run import mean_ad_run
-from tests.common.test_run.relu_run import relu_run
-from tests.common.test_run.relu_grad_run import relu_grad_run
-from tests.common.test_run.relu_ad_run import relu_ad_run
-from tests.common.test_run.add_run import add_run
-from tests.common.test_run.addn_run import addn_execute
-from tests.common.test_run.sparse_softmax_cross_entropy_with_logits_run import sparse_softmax_cross_entropy_with_logits_run
-from tests.common.test_run.sparse_softmax_cross_entropy_with_logits_ad_run import sparse_softmax_cross_entropy_with_logits_ad_run
-from tests.common.test_run.bias_add_ad_run import bias_add_ad_run
-from tests.common.test_run.reshape_run import reshape_execute
-from tests.common.test_run.apply_momentum_run import apply_momentum_run
-from tests.common.test_run.cast_run import cast_run
-from tests.common.test_run.conv_bn1_run import conv_bn1_run
-from tests.common.test_run.relu_ad_run import relu_ad_run
-from tests.common.test_run.conv_input_ad_run import conv_input_ad_run
-from tests.common.test_run.conv_filter_ad_run import conv_filter_ad_run
+from tests.common.test_run.ascend.conv_run import conv_run
+from tests.common.test_run.ascend.conv_backprop_input_run import conv_backprop_input_run
+from tests.common.test_run.ascend.conv_backprop_filter_run import conv_backprop_filter_run
+from tests.common.test_run.ascend.fused_batch_norm_run import fused_batch_norm_run
+from tests.common.test_run.ascend.fused_batch_norm_grad_run import fused_batch_norm_grad_run
+from tests.common.test_run.ascend.batch_norm_ad_run import batch_norm_ad_run
+from tests.common.test_run.ascend.batchmatmul_run import batchmatmul_execute
+from tests.common.test_run.ascend.maxpool_with_argmax_run import maxpool_with_argmax_run
+from tests.common.test_run.ascend.mean_run import mean_execute
+from tests.common.test_run.ascend.mean_ad_run import mean_ad_run
+from tests.common.test_run.ascend.relu_run import relu_run
+from tests.common.test_run.ascend.relu_grad_run import relu_grad_run
+from tests.common.test_run.ascend.relu_ad_run import relu_ad_run
+from tests.common.test_run import add_run
+from tests.common.test_run import addn_run
+from tests.common.test_run.ascend.sparse_softmax_cross_entropy_with_logits_run import sparse_softmax_cross_entropy_with_logits_run
+from tests.common.test_run.ascend.sparse_softmax_cross_entropy_with_logits_ad_run import sparse_softmax_cross_entropy_with_logits_ad_run
+from tests.common.test_run.ascend.bias_add_ad_run import bias_add_ad_run
+from tests.common.test_run import reshape_run
+from tests.common.test_run.ascend.apply_momentum_run import apply_momentum_run
+from tests.common.test_run import cast_run
+from tests.common.test_run.ascend.conv_bn1_run import conv_bn1_run
+from tests.common.test_run.ascend.relu_ad_run import relu_ad_run
+from tests.common.test_run.ascend.conv_input_ad_run import conv_input_ad_run
+from tests.common.test_run.ascend.conv_filter_ad_run import conv_filter_ad_run
 
 
 class TestLenet(BaseCaseRun):
@@ -238,11 +238,11 @@ class TestLenet(BaseCaseRun):
             ("relu_004", relu_run, ((32, 1, 28, 28, 16), "float32", 1e-5),
              ["level1", "rpc", "rpc_cloud", "Unavailable"]),
 
-            ("reshape_001", reshape_execute, [(32, 16, 5, 5), (32, -1), "float32"], ["level0", "rpc", "rpc_cloud"]),
-            ("reshape_002", reshape_execute, [(32, 400), (32, 16, 5, 5), "float32"], ["level0", "rpc", "rpc_cloud"]),
-            ("reshape_003", reshape_execute, [(32, 16, 5, 5), (32, -1), "float16"],
+            ("reshape_001", reshape_run, [(32, 16, 5, 5), (32, -1), "float32"], ["level0", "rpc", "rpc_cloud"]),
+            ("reshape_002", reshape_run, [(32, 400), (32, 16, 5, 5), "float32"], ["level0", "rpc", "rpc_cloud"]),
+            ("reshape_003", reshape_run, [(32, 16, 5, 5), (32, -1), "float16"],
              ["level1", "rpc", "rpc_cloud", "Unavailable"]),
-            ("reshape_004", reshape_execute, [(32, 400), (32, 16, 5, 5), "float16"],
+            ("reshape_004", reshape_run, [(32, 400), (32, 16, 5, 5), "float16"],
              ["level1", "rpc", "rpc_cloud", "Unavailable"]),
 
             # maxpool_grad_with_argmax
@@ -394,13 +394,13 @@ class TestLenet(BaseCaseRun):
             ("relu_grad_004", relu_ad_run, ((1, 1, 28, 28, 16), "float32"),
              ["level0", "rpc", "rpc_cloud", "Unavailable"]),
 
-            ("reshape_001", reshape_execute, [(1, 16, 5, 5), (1, -1), "float32"],
+            ("reshape_001", reshape_run, [(1, 16, 5, 5), (1, -1), "float32"],
              ["level0", "rpc", "rpc_cloud", "Unavailable"]),
-            ("reshape_002", reshape_execute, [(1, 400), (1, 16, 5, 5), "float32"],
+            ("reshape_002", reshape_run, [(1, 400), (1, 16, 5, 5), "float32"],
              ["level0", "rpc", "rpc_cloud", "Unavailable"]),
-            ("reshape_003", reshape_execute, [(1, 16, 5, 5), (1, -1), "float16"],
+            ("reshape_003", reshape_run, [(1, 16, 5, 5), (1, -1), "float16"],
              ["level0", "rpc", "rpc_cloud", "Unavailable"]),
-            ("reshape_004", reshape_execute, [(1, 400), (1, 16, 5, 5), "float16"],
+            ("reshape_004", reshape_run, [(1, 400), (1, 16, 5, 5), "float16"],
              ["level0", "rpc", "rpc_cloud", "Unavailable"]),
 
             ("lenet_Conv2D_32_1_14_14_16", conv_run,

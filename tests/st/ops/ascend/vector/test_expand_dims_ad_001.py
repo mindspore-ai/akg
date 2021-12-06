@@ -20,7 +20,7 @@ test_concat
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.expand_dims_ad_run import expand_dims_ad_run
+from tests.common.test_run.ascend.expand_dims_ad_run import expand_dims_ad_run
 
 
 class TestCase(TestBase):
@@ -54,17 +54,9 @@ class TestCase(TestBase):
     @pytest.mark.platform_x86_ascend_training
     @pytest.mark.env_onecard
     def test_run(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg)
 
     def test_run_cloud(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg_cloud)
 
     def teardown(self):

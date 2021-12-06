@@ -17,7 +17,7 @@
 import os
 import pytest
 from tests.common.base import TestBase, get_splitted_cases
-from tests.common.test_run.add_a_conv_run import add_a_conv_run
+from tests.common.test_run.ascend.add_a_conv_run import add_a_conv_run
 
 
 class TestCase(TestBase):

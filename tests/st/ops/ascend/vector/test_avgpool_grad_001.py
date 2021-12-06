@@ -19,7 +19,7 @@ avgpool_grad test cast
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.avgpool_grad_run import avgpool_grad_run
+from tests.common.test_run.ascend.avgpool_grad_run import avgpool_grad_run
 
 
 class TestAvgPoolGrad(TestBase):
@@ -57,7 +57,7 @@ class TestAvgPoolGrad(TestBase):
         ]
         return
 
-    @pytest.mark.level3
+    @pytest.mark.skip
     def test_run_ci(self):
         self.common_run(self.testarg_ci)
 

@@ -72,7 +72,7 @@ isl::schedule InitSchedule::Run(isl::schedule sch) {
   pass_info_.dependences_ =
     ComputeAllDependences(sch, scop_info_.analysis_result_.GetReads(), scop_info_.analysis_result_.GetWrites());
 
-  if (scop_info_.user_config_.GetTarget() == TARGET_CUDA || scop_info_.user_config_.GetTarget() == TARGET_CPU) {
+  if (scop_info_.user_config_.GetTarget() == TARGET_CUDA) {
     auto tot_stmt = scop_info_.analysis_result_.GetTensorOfTensorStmt();
     if (!tot_stmt.empty()) {
       pass_info_.dependences_ = RemoveSelfDependence(pass_info_, tot_stmt);

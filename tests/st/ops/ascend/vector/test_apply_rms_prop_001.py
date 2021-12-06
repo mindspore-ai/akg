@@ -26,7 +26,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.apply_rms_prop_run import apply_rms_prop_run
+from tests.common.test_run.ascend.apply_rms_prop_run import apply_rms_prop_run
 
 ############################################################
 # TestCase= class: put to tests/*/

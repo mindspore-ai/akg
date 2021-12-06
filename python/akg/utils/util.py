@@ -17,6 +17,7 @@
 """utility"""
 import os
 import json
+import types
 import akg.tvm
 
 
@@ -45,9 +46,19 @@ def parse_workspace(workspace):
     }
     return workspace_dict
 
+def parse_kwargs(func, **kwargs):
+    if 'target' not in kwargs:
+        return kwargs
+    if not func or not isinstance(func, types.FunctionType):
+        return kwargs
+    args_name = func.__code__.co_varnames
+    if 'target' not in args_name:
+        kwargs.pop('target')
+    return kwargs
 
 def write_code(js_dict, fname):
     if os.path.exists(fname):
         os.remove(fname)
     with os.fdopen(os.open(fname, os.O_WRONLY | os.O_CREAT, 0o400), 'w') as f:
         json.dump(js_dict, f, sort_keys=True, indent=4, separators=(',', ':'))
+

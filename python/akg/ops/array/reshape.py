@@ -1,6 +1,4 @@
-#!/usr/bin/env python3
-# coding: utf-8
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,16 +14,15 @@
 
 """operator dsl function: reshape"""
 
-from functools import reduce
 import akg
 import akg.topi
-from akg.utils.validation_check import ops_dtype_check, check_shape, DtypeForDavinci, check_input_type
+import akg.utils as  utils
 from akg.utils.format_transform import get_shape
+from functools import reduce
 from akg.utils import dynamic_shape as ds
 
-
-@check_input_type(akg.tvm.tensor.Tensor, (list, tuple))
-def reshape(data, out_shape):
+@utils.check_input_type(akg.tvm.tensor.Tensor, (list, tuple), (str, type(None)))
+def Reshape(data, out_shape, target=utils.CUDA):
     """
     Rearranges input tensor data to new shape out_shape.
 
@@ -36,11 +33,54 @@ def reshape(data, out_shape):
 
     Returns:
         The reshaped akg.tvm.tensor of same type as input tensor data.
+    
+    Supported Platforms:
+        'Ascend', 'GPU'
     """
-    ops_dtype_check(data.dtype, DtypeForDavinci.INT32.value + DtypeForDavinci.ALL_FLOAT.value)
+    if target == utils.CCE:
+        return _reshape_ascend(data, out_shape)
+    data_shape = data.shape
+    utils.check_shape(data_shape)
+
+    in_shape = get_shape(data)
+    out_shape = list(out_shape)
+
+    if -1 in out_shape:
+        access_size = 1
+        for i, o_shape in enumerate(out_shape):
+            if -1 != o_shape:
+                access_size *= o_shape
+            else:
+                hit_idx = i
+        ori_size = reduce(lambda x, y: x * y, in_shape)
+        if ori_size % access_size != 0:
+            raise ValueError(("Invalid out_shape ({})".format(out_shape)))
+
+        out_shape[hit_idx] = int(ori_size / access_size)
+
+    res = akg.topi.reshape(data, out_shape)
+    return res
+
+@utils.check_input_type(akg.tvm.tensor.Tensor, (list, tuple), (str, type(None)))
+def _reshape_ascend(data, out_shape):
+    """
+    Rearranges input tensor data to new shape out_shape.
+
+    Args:
+        data (tvm.tensor.Tensor): The tensor to be reshaped.
+        out_shape (list, tuple): The new shape applied on the input tensor data,
+                                should be compatible with the original shape of data.
+
+    Returns:
+        The reshaped akg.tvm.tensor of same type as input tensor data.
+    
+    Supported Platforms:
+        'Ascend'
+    """
+    utils.ops_dtype_check(data.dtype, utils.DtypeForDavinci.INT32.value + utils.DtypeForDavinci.ALL_FLOAT.value)
 
     data_shape = data.shape
-    check_shape(data_shape)
+    utils.check_shape(data_shape)
 
     in_shape = get_shape(data)
     out_shape = list(out_shape)
@@ -66,5 +106,4 @@ def reshape(data, out_shape):
     inputs = akg.tvm.compute(in_shape, lambda *indice: data(*indice), name="inputs")
     res = akg.topi.reshape(inputs, out_shape)
     output = akg.tvm.compute(out_shape, lambda *indice: res(*indice), name="reshape")
-    attr_map = {}
-    return output, attr_map
+    return output

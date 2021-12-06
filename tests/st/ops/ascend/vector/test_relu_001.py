@@ -31,7 +31,7 @@ Testcase_ExpectedResult:
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.relu_run import relu_run
+from tests.common.test_run.ascend.relu_run import relu_run
 
 
 class TestCase(TestBase):

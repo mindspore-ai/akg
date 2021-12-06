@@ -24,7 +24,7 @@ Testcase_ExpectedResult:
 """
 import os
 from tests.common.base import TestBase
-from tests.common.test_run.logsoftmax_ad_run import logsoftmax_ad_run
+from tests.common.test_run.ascend.logsoftmax_ad_run import logsoftmax_ad_run
 
 ############################################################
 # TestCase= class: put to tests/*/

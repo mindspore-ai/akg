@@ -15,7 +15,7 @@
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.clear_zero_run import clear_zero_run
+from tests.common.test_run.ascend.clear_zero_run import clear_zero_run
 
 
 ############################################################
@@ -33,9 +33,6 @@ class TestCase(TestBase):
             # testflag,opfuncname,testRunArgs, setdimArgs
             ("clear_zero_0", clear_zero_run, ((32, 4, 112, 112, 16), "float32")),
         ]
-        if not super(TestCase, self).setup():
-            return False
-        self._log.info("TestCase:{0} Setup case".format(self.casename))
         return True
 
     @pytest.mark.level0

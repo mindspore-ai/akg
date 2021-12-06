@@ -17,7 +17,7 @@
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.softsign_run import softsign_run
+from tests.common.test_run.ascend.softsign_run import softsign_run
 
 
 class TestCos(TestBase):
@@ -42,10 +42,6 @@ class TestCos(TestBase):
     @pytest.mark.platform_x86_ascend_training
     @pytest.mark.env_onecard
     def test_run(self):
-        """
-        run case.#
-        :return:
-        """
         self.common_run(self.testarg)
 
     def teardown(self):

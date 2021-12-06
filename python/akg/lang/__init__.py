@@ -15,4 +15,4 @@
 # limitations under the License.
 
 """__init__"""
-from . import cce
+from . import ascend

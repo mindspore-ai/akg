@@ -20,10 +20,12 @@ ResNet50 fused computation. 227 in XLA patterns
 from __future__ import absolute_import
 import akg.tvm as tvm
 import akg.topi as topi
+import akg.utils as utils
 from topi import tag
 
 def fused_relu_grad_bn_double_reduce_grad(data0, data1, data2, data3, data4, data5, data6, data7, data8,
-                           data9, data10, data11, data12, data13, data14, data15, layout="NHWC", out_dtype="float16"):
+                           data9, data10, data11, data12, data13, data14, data15, layout="NHWC",
+                           out_dtype="float16", target=utils.CUDA):
     
     if layout == 'NCHW':
         data5 = topi.transpose(data5, (0, 2, 3, 1))

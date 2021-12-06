@@ -16,8 +16,9 @@
          ResNet50 fused_computation. 82 in XLA patterns  """
 from __future__ import absolute_import
 import akg.topi as topi
+import akg.utils as utils
 
-def fused_is_finite(data, layout='NHWC'):
+def fused_is_finite(data, layout='NHWC', target=utils.CUDA):
     """
     fused_is_finite.
 

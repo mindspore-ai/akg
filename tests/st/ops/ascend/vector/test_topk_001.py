@@ -24,7 +24,7 @@ Testcase_ExpectedResult:
 """
 import os
 from tests.common.base import TestBase
-from tests.common.test_run.topk_run import topk_run
+from tests.common.test_run.ascend.topk_run import topk_run
 
 
 class TestCase(TestBase):

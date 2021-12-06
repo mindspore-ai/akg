@@ -15,7 +15,7 @@
 import os
 import pytest
 from tests.common.base import TestBase
-from tests.common.test_run.mean_square_run import mean_square_run
+from tests.common.test_run.ascend.mean_square_run import mean_square_run
 
 
 ############################################################

@@ -1,6 +1,4 @@
-#!/usr/bin/env python3
-# coding: utf-8
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2020-2021 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,13 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""operator dsl function:tile"""
+"""operator dsl function: tile"""
+import akg.tvm
 import akg.topi
-from akg.utils import validation_check as vc_util
+import akg.utils as utils
 
-
-@vc_util.check_input_type(akg.tvm.tensor.Tensor, (list, tuple))
-def tile(data, multiples):
+@utils.check_input_type(akg.tvm.tensor.Tensor, (list, tuple), (str, type(None)))
+def Tile(data, multiples, target=utils.CCE):
     """
     Repeats the data in the specified dimensions according to the multiples.
 
@@ -30,11 +28,15 @@ def tile(data, multiples):
 
     Returns:
         tvm.tensor.Tensor, has the same dtype as data.
+    
+    Supported Platforms:
+        'Ascend', 'GPU', 'CPU'
     """
+    utils.check_supported_target(target)
     shape = [x.value for x in data.shape]
     dtype = data.dtype
-    vc_util.check_shape(shape)
-    vc_util.ops_dtype_check(dtype, vc_util.DtypeForDavinci.ALL_TYPES)
-    vc_util.check_int_list(multiples, "multiples")
+    utils.check_shape(shape)
+    utils.ops_dtype_check(dtype, utils.DtypeForDavinci.ALL_TYPES)
+    utils.check_int_list(multiples, "multiples")
     output = akg.topi.tile(data, multiples)
     return output
