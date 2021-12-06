@@ -293,6 +293,8 @@ class TilingAnalyzer {
   }
   int GetNumOfAxisInBand(int band_idx) const;
 
+  std::vector<int> GetSortedBands() const;
+
   void DumpLinearSeq();
   void DumpBufferInfo();
   void DumpBufferUsageTimeable();

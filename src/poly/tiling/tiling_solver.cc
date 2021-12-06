@@ -135,9 +135,8 @@ void TilingSolver::CollectTileAxisTopDown() {
 
 TileCandidate *GpuSolver::Solve() {
   CollectMemoryLimit();
-  auto tile_band_size = static_cast<int>(analyzer_.RootAxis()->children.size());
-  for (auto band = 0; band < tile_band_size; ++band) {
-    tiling_band_ = band;
+  for (auto sorted_idx : analyzer_.GetSortedBands()) {
+    tiling_band_ = sorted_idx;
 
     CollectTileAxisTopDown();
     auto tile_axes = cand_.GetTileAxis();
@@ -192,7 +191,7 @@ void GpuSolver::SolveMapping() {
         ss << "Already success, continue.\n";
         continue;
       }
-      OuterBandNode *current_outer_bn = analyzer_.scop_info_.analysis_result_.GetOuterBandNode(axis->index);
+      auto current_outer_bn = analyzer_.scop_info_.analysis_result_.GetOuterBandNode(axis->index);
       bool is_hw = current_outer_bn->template_type == Template::CONV &&
                    (axis->HasAttr(AttrInfo{AT_CONV, "hi"}) || axis->HasAttr(AttrInfo{AT_CONV, "wi"}));
       bool is_reuse_same_band = center_type == BLOCK_TAG && is_hw;
@@ -262,7 +261,7 @@ void GpuSolver::SolveMapping() {
 AllocPos GpuSolver::GetThreadAllocPos(TileAxis *axis) {
   std::stringstream ss;
 
-  OuterBandNode *current_outer_bn = analyzer_.scop_info_.analysis_result_.GetOuterBandNode(tiling_band_);
+  auto current_outer_bn = analyzer_.scop_info_.analysis_result_.GetOuterBandNode(tiling_band_);
   auto template_type = current_outer_bn->template_type;
   ReduceDirection direct = current_outer_bn->reduce_direction;
   ss << "GetThreadAllocPos: Template: " << analyzer_.scop_info_.analysis_result_.ShowOpTemplate(template_type)
@@ -311,7 +310,7 @@ AllocPos GpuSolver::GetThreadAllocPos(TileAxis *axis) {
 AllocPos GpuSolver::GetBlockAllocPos(TileAxis *axis) {
   std::stringstream ss;
 
-  OuterBandNode *current_outer_bn = analyzer_.scop_info_.analysis_result_.GetOuterBandNode(tiling_band_);
+  auto current_outer_bn = analyzer_.scop_info_.analysis_result_.GetOuterBandNode(tiling_band_);
   auto template_type = current_outer_bn->template_type;
   ReduceDirection direct = current_outer_bn->reduce_direction;
   ss << "GetBlockAllocPos: Template: " << analyzer_.scop_info_.analysis_result_.ShowOpTemplate(template_type)

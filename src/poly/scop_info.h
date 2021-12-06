@@ -1147,6 +1147,8 @@ class AnalysisResult {
     CHECK(band_index >= 0 && band_index < static_cast<int>(outer_band_nodes_.size()))
       << "In " << func_name << ",the index of the current band (" << band_index << ") is not in the legal range (0 ~ "
       << std::to_string(outer_band_nodes_.size()) << ").";
+
+    CHECK(outer_band_nodes_[band_index] != nullptr) << "current band_node is null";
   }
 
  public:

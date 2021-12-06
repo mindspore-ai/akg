@@ -1084,23 +1084,6 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCuda(isl::schedule_node nod
   return node;
 }
 
-isl::schedule_node TileOuterBand::TileDynamicCsrOpeator(const isl::schedule_node &node) {
-  if (node.isa<isl::schedule_node_band>()) {
-    return node;
-  }
-  // skip loop with csr dynamic extent
-  size_t start_depth = node.get_tree_depth();
-
-  auto tile_node = node;
-  tile_node = tile_node.as<isl::schedule_node_band>().split(1);
-  tile_node = SetTileSizeAndTile(tile_node, TILE_WITH_C1);
-  tile_node = tile_node.child(0).insert_mark(PROMOTE_GLOBAL_TO_SHARED);
-  tile_node = tile_node.child(0).child(0).insert_mark(SKIP_MARKER);
-
-  tile_node = tile_node.ancestor(tile_node.get_tree_depth() - start_depth);
-  return tile_node;
-}
-
 isl::schedule_node TileOuterBand::TileMatmulOperator(const isl::schedule_node &node) {
   auto tile_node = node;
   size_t start_depth = tile_node.get_tree_depth();
@@ -1242,7 +1225,7 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCpu(isl::schedule_node node
     node = InsertEmptyPermutableBand(node);
   }
 
-  OuterBandNode *current_outer_bn = scop_info_.analysis_result_.GetOuterBandNode(cur_band_index_);
+  auto current_outer_bn = scop_info_.analysis_result_.GetOuterBandNode(cur_band_index_);
   vectorization_axis_pos_ = current_outer_bn->last_axis;
   if (vectorization_axis_pos_ == -1) {
     return node;

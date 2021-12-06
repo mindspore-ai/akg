@@ -81,7 +81,7 @@ class SharedMemoryManager : public SchedulePass {
   bool unroll_shared_{false};
   size_t remain_memory_{common::SHARED_MEMORY_SIZE};
   int band_index_{0};
-  OuterBandNode *current_outer_bn_;
+  OuterBandNode *current_outer_bn_{nullptr};
   std::unordered_set<std::string> mark_names_;
 };
 

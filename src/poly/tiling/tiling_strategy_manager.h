@@ -386,8 +386,6 @@ class GpuStrategy : public TilingStrategy {
  private:
   void ShowOptions();
 
-  std::vector<int> SortBands();
-
   void AdjustThreadMappingLimit();
 
   void TransposeSpeedup();
@@ -451,7 +449,7 @@ class GpuStrategy : public TilingStrategy {
   std::unordered_map<int, std::string> reduce_y_idx_pos_ = {{0, "y"}, {1, "x"}};
   int vectorized_bytes_{1};
   int band_index_{0};
-  OuterBandNode *current_outer_bn_;
+  OuterBandNode *current_outer_bn_{nullptr};
 };
 
 class CpuStrategy : public TilingStrategy {

@@ -273,7 +273,7 @@ void OperatorMappingStrategy::SetRequiredMappingCfg(const isl::schedule_node &no
   end_pos = std::min(static_cast<int>(band_node.n_member()) - 1, end_pos);
 
   // There is no need to consider the last axis of the calculation phase in the promotion phase.
-  int last_axis = is_promotion_mapping_ ? -1 : current_outer_bn_->last_axis;
+  int last_axis = is_promotion_mapping_ ? -1 : scop_info_.analysis_result_.GetOuterBandNode(band_index_)->last_axis;
   int current_mapping_pos = 0;
   if (last_axis >= start_pos && last_axis <= end_pos) {
     required_mapping_strategy_[last_axis].mapping_idx = mapping_cfg_->GetAt(current_mapping_pos).first;
@@ -638,8 +638,8 @@ bool ReduceMappingStrategy::NeedAtomicAdd(const isl::schedule_node_band &band, s
   }
 
   auto non_coin_start_idx = CountConsecutiveCoincident(band);
-  bool is_reduce_x = current_outer_bn_->reduce_direction == ReduceDirection::X ||
-                     current_outer_bn_->reduce_direction == ReduceDirection::ALL;
+  auto reduce_direction = scop_info_.analysis_result_.GetOuterBandNode(band_index_)->reduce_direction;
+  bool is_reduce_x = reduce_direction == ReduceDirection::X || reduce_direction == ReduceDirection::ALL;
   bool is_all_reduce = band.n_member() == 1 && is_reduce_x && non_coin_start_idx == 1;
   if (is_all_reduce) {
     non_coin_start_idx = 0;  // Compare block size of position 0 to enable atomic add for all reduce ops
