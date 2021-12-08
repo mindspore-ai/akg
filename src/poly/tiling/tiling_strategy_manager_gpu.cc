@@ -323,7 +323,7 @@ void ReduceStrategy::AddGpuConstraint() {
         reduce_axes_.emplace_back(axis);
       });
     all_reduce_ = reduce_axes_.size() == depth;
-    OuterBandNode *current_outer_bn = analyzer_->scop_info_.analysis_result_.GetOuterBandNode(band_index);
+    auto current_outer_bn = analyzer_->scop_info_.analysis_result_.GetOuterBandNode(band_index);
     auto direction = current_outer_bn->reduce_direction;
 
     if (!analyzer_->scop_info_.user_config_.EnableStitchFusion()) {
@@ -369,7 +369,7 @@ void ReduceStrategy::DisableReduceMapping() {
 
 void ReduceStrategy::AkgReduceLibStrategyOnGpu(int band_index) {
   // disable atomic-add for bitwise-reduction
-  OuterBandNode *current_outer_bn = analyzer_->scop_info_.analysis_result_.GetOuterBandNode(band_index);
+  auto current_outer_bn = analyzer_->scop_info_.analysis_result_.GetOuterBandNode(band_index);
   bool disable_atomic = !analyzer_->scop_info_.user_config_.GetEnableAtomicAdd() ||
                         current_outer_bn->template_type == Template::BITWISE_REDUCTION;
   if (disable_atomic) {
@@ -802,7 +802,7 @@ void GpuStrategy::ShowOptions() {
 }
 
 bool GpuStrategy::NeedModifyOrderOfAxis() {
-  int last_axis = analyzer_->scop_info_.analysis_result_.GetOuterBandNode()->last_axis;
+  int last_axis = current_outer_bn_->last_axis;
   if (last_axis < 0 || last_axis >= static_cast<int>(pending_axes_.size())) {
     return false;
   }
@@ -820,31 +820,10 @@ bool GpuStrategy::NeedModifyOrderOfAxis() {
   return true;
 }
 
-std::vector<int> GpuStrategy::SortBands() {
-  std::vector<int> sorted_bands;
-  std::unordered_map<Template, std::vector<int>> templates_map;
-  for (int i = 0; i < static_cast<int>(analyzer_->RootAxis()->children.size()); ++i) {
-    OuterBandNode *current_outer_bn = analyzer_->scop_info_.analysis_result_.GetOuterBandNode(i);
-    auto template_type = current_outer_bn->template_type;
-    templates_map[template_type].emplace_back(i);
-  }
-  auto InsertIndexOfBand = [&sorted_bands, &templates_map]() {
-    for (int templates = Template::DEFAULT; templates <= Template::TEMPLATE_BULK; ++templates) {
-      auto it = templates_map.find(Template(templates));
-      if (it == templates_map.end()) continue;
-      for (auto i : it->second) {
-        sorted_bands.emplace_back(i);
-      }
-    }
-  };
-  InsertIndexOfBand();
-  return sorted_bands;
-}
-
 void GpuStrategy::AddGpuConstraint() {
   ShowOptions();
   bool is_first = true;
-  for (auto sorted_idx : SortBands()) {
+  for (auto sorted_idx : analyzer_->GetSortedBands()) {
     band_index_ = sorted_idx;
     current_outer_bn_ = analyzer_->scop_info_.analysis_result_.GetOuterBandNode(band_index_);
     InitMappingLimit();

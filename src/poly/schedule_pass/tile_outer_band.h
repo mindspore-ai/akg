@@ -100,7 +100,6 @@ class TileOuterBand : public SchedulePass {
                                         const int count_coincident = -1);
   isl::schedule_node InsertPromoteMarker(const isl::schedule_node node);
   void ResetWarpMappingConfig();
-  isl::schedule_node TileDynamicCsrOpeator(const isl::schedule_node &node);
   isl::schedule_node TileMatmulOperator(const isl::schedule_node &node);
   void CheckCustomMapping(const MappingStrategyFilterMap &custom_mapping_map);
   bool IsMatrixCPromoteToShared();

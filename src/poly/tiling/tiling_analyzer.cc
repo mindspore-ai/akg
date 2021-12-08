@@ -1676,6 +1676,28 @@ int64_t TilingAnalyzer::FindDivisibleTilingFactor(int64_t limit, int64_t range) 
   }
   return 1;
 }
+
+std::vector<int> TilingAnalyzer::GetSortedBands() const {
+  std::vector<int> sorted_bands;
+  std::unordered_map<Template, std::vector<int>> templates_map;
+  for (int i = 0; i < static_cast<int>(root_axis_->children.size()); ++i) {
+    auto current_outer_bn = scop_info_.analysis_result_.GetOuterBandNode(i);
+    auto template_type = current_outer_bn->template_type;
+    templates_map[template_type].emplace_back(i);
+  }
+  auto InsertIndexOfBand = [&sorted_bands, &templates_map]() {
+    for (int templates = Template::DEFAULT; templates <= Template::TEMPLATE_BULK; ++templates) {
+      auto it = templates_map.find(Template(templates));
+      if (it == templates_map.end()) continue;
+      for (auto i : it->second) {
+        sorted_bands.emplace_back(i);
+      }
+    }
+  };
+  InsertIndexOfBand();
+  return sorted_bands;
+}
+
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

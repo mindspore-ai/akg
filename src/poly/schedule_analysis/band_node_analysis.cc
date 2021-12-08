@@ -628,6 +628,9 @@ int AnalyzeBandNode::GetCoalescedAccessAxisForCuda(const isl::schedule_node &ori
     return coalesced_access_axis;
   }
   std::unordered_set<std::string> skip_tensors = scop_info_.analysis_result_.GetTensorsNotPromote();
+  for (auto inner_tensor : scop_info_.analysis_result_.GetInnerTensor()) {
+    skip_tensors.emplace(inner_tensor);
+  }
   coalesced_access_axis = GetLastAxisPos(orig_node, skip_tensors);
   return coalesced_access_axis;
 }
