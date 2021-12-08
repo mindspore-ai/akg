@@ -525,22 +525,24 @@ def custom(inputs, attrs):
         hybrid_func = script(func_kernel, capture=capture)
         inputs = list(inputs)
         # attr "autodiff" is for automatically generating backward op for a forward custom hybrid op;
-        # currently only support autodiff for op(hybrid function) with sinlgle output;
-        # inputs for a backward op is like [input_1,input_2,...input_k, out, dout], in which "input_i" refers to its
-        # corresponding forward op's inputs, "out" refers to forward op's output and "dout" refers to forward op's dout;
+        # inputs for a backward op is like [input_1,input_2,...input_k, out_1,...out_m, dout_1,...dout_m], in which "input_i"
+        # refers to forward op's input, "out_i" refers to forward op's output and "dout_i" refers to forward op's dout;
         if "autodiff" in attrs and bool(int(attrs["autodiff"])):
             # get the number of real inputs from hybrid function's signature;
             # inputs[:real_inputs_num] is equal to [input_1,input_2,...input_k], the real inputs of the forward op;
             real_inputs_num = len(inspect.signature(func_kernel).parameters)
-            if len(inputs) != real_inputs_num + 2:
-                raise ValueError(f"Length of hybrid function's signature is {real_inputs_num}. Num of backward custom \
-                    hybrid op's input should be {real_inputs_num + 2}(signature length plus out and dout), but got {len(inputs)}.")
             # compute forward output through forward hybrid function
-            forward_ouput = hybrid_func(*inputs[:real_inputs_num], **op_attrs)
-            # dout is the last element of inputs([input_1,input_2,...input_k, out, dout])
-            dout = inputs[-1]
-            # differentiate the forward hybrid function
-            outputs = autodiff.Differentiate(forward_ouput, inputs[:real_inputs_num], dout).result
+            res = hybrid_func(*inputs[:real_inputs_num], **op_attrs)
+            forward_ouput = res if isinstance(res, list) else [res]
+            # douts and outs should have the same length, so the num of douts is (len(inputs)-real_inputs_num)/2
+            if int(len(inputs)-real_inputs_num) <= 0:
+                logging.error(
+                    "Cannot coumpute autodiff for function with no outputs/douts")
+            if int(len(inputs)-real_inputs_num) % 2 != 0:
+                logging.error(
+                    "douts and douts should have the same length.")
+            dout = inputs[int((len(inputs)+real_inputs_num)/2):]
+            outputs = autodiff.SingleHybridOpDifferentiate(forward_ouput, inputs[:real_inputs_num], dout)
             output = outputs if len(outputs) != 1 else outputs[0]
         else:
             output = hybrid_func(*inputs, **op_attrs)
@@ -783,6 +785,7 @@ def csr_div(inputs, attrs):
                       lambda ins, outs: gen_ir(ins[0], ins[1], ins[2], ins[3], outs[0]),
                       dtype=sparse_data.dtype, out_buffers=[out_buf], name=output_name)
 
+
 @tvm.register_func("CSRReduceSum")
 def csr_reduce_sum(inputs, attrs):
     row_idx, col_idx, data = inputs
@@ -795,6 +798,7 @@ def csr_reduce_sum(inputs, attrs):
     reduce_first_axis = tvm.const(axis == 0)
 
     num_rows = row_idx.shape[0] - 1
+
     def gen_ir(data, col_idx, row_idx, output):
         ib = tvm.ir_builder.create()
         with ib.for_range(0, num_rows, name='i') as i:
@@ -819,6 +823,7 @@ def csr_reduce_sum(inputs, attrs):
                       [data, col_idx, row_idx],
                       lambda ins, outs: gen_ir(ins[0], ins[1], ins[2], outs[0]),
                       dtype=data.dtype, out_buffers=[out_buf], name=output_name)
+
 
 @tvm.register_func("CSRMV")
 def csrmv(inputs, attrs):
@@ -848,8 +853,9 @@ def csrmv(inputs, attrs):
     output_name = "T_csrmv_" + weight.op.name + "_" + data.op.name
     out_buf = tvm.decl_buffer(output_shape, data.dtype, output_name)
     return tvm.extern([output_shape], [data, indices, indptr, weight],
-                        lambda ins, outs: csrmv_ir(ins[0], ins[1], ins[2], ins[3], outs[0]),
-                        dtype=data.dtype, out_buffers=[out_buf], name=output_name)
+                      lambda ins, outs: csrmv_ir(ins[0], ins[1], ins[2], ins[3], outs[0]),
+                      dtype=data.dtype, out_buffers=[out_buf], name=output_name)
+
 
 @tvm.register_func("CSRMul")
 def csr_mul(inputs, attrs):
@@ -899,4 +905,3 @@ def csr_mul(inputs, attrs):
                       dtype=sparse_data.dtype,
                       out_buffers=[out_buf],
                       name=output_name)
-
