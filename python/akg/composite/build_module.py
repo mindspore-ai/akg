@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # coding: utf-8
-# Copyright 2020-2021 Huawei Technologies Co., Ltd
+# Copyright 2020-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,7 +22,8 @@ from akg import tvm
 from akg.utils.kernel_exec import ReturnType
 from .split_stitch import split_stitch_attr
 from .construct_args import get_construct_args, get_tune_construct_args, \
-    should_enable_attr, get_stmt_for_tune, add_attrs_in_segment_infos
+    should_enable_attr, get_stmt_for_tune, add_attrs_in_segment_infos, \
+    update_attrs
 from .construct_args import ConstructType, ConstructKey
 
 
@@ -192,8 +193,8 @@ def _set_attrs(desc_d, attrs, poly):
     if "is_csr" not in attrs.keys():
         attrs["is_csr"] = should_enable_attr(desc_d, "is_csr")
     if "csr_avg_row" not in attrs.keys():
-        attrs["csr_avg_row"] = should_enable_attr(desc_d, "csr_avg_row")
-    return _update_compile_attr(desc_d, attrs)
+        update_attrs(desc_d, "csr_avg_row", attrs)
+    return attrs
 
 
 def _get_online_tune_attr(desc_s, attrs, repo_path, use_new_space=True):

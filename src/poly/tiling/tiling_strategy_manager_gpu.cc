@@ -1,5 +1,5 @@
 /**
- * Copyright 2020-2021 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -992,9 +992,7 @@ bool GpuStrategy::IsVectorized() {
     Tensor tensor = analyzer_->scop_info_.FindTensor(id);
     (void)tensors_shape.emplace_back(tensor->shape);
     Type type = analyzer_->scop_info_.GetDtypeOf(id);
-    int bytes = type.bytes();
-    // Default vectorization mode fp32 = 4Bytes
-    auto tmp_bytes = (4 / SafeDivisor(bytes)) * 4;
+    int tmp_bytes = total_vectorized_bytes_ / SafeDivisor(type.bytes());
     vectorized_bytes_ = std::max(tmp_bytes, vectorized_bytes_);
     if (tensor_types.empty()) {
       (void)tensor_types.emplace_back(type);
@@ -2332,6 +2330,25 @@ void CsrStrategy::AddGpuConstraint() {
       axis->c1_constraints.tile_extent_ = csr_thread_num;
     } else {
       axis->thread_constraints.map_extent_ = 1;
+    }
+  });
+}
+
+void CountStrategy::AddGpuConstraint() {
+  std::unordered_set<TileAxis *> count_axes;
+  for (int band_index = 0; band_index < static_cast<int>(analyzer_->RootAxis()->children.size()); ++band_index) {
+    auto count_axes_vec = analyzer_->GetAxesOfAttr(AT_COUNT_AXIS, band_index);
+    count_axes.insert(count_axes_vec.begin(), count_axes_vec.end());
+  }
+  analyzer_->ForEachAxisTopDown([this, count_axes](TileAxis *axis) {
+    if (axis == this->analyzer_->RootAxis()) {
+      return;
+    }
+    if (count_axes.count(axis)) {
+      axis->thread_constraints.map_extent_ = 1;
+      axis->block_constraints.map_extent_ = axis->extent_val;
+    } else {
+      axis->block_constraints.map_extent_ = 1;
     }
   });
 }

@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2021 Huawei Technologies Co., Ltd
+ * Copyright 2019-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -74,7 +74,7 @@ class RewriteTensorIdx : public IRMutator {
       bool is_max_binary = IsBinaryOp(new_op->extent);
       if (!is_min_binary && is_max_binary) {
         auto extent = new_op->extent.as<Sub>();
-        if (extent != nullptr && extent->a.as<Call>() != nullptr && extent->b.as<Call>() != nullptr) {
+        if (extent != nullptr && (extent->a.as<Call>() != nullptr || extent->b.as<Call>() != nullptr)) {
           Var max_var = Variable::make(new_op->loop_var.type(), "MAX_VAR");
           auto new_stmt = For::make(new_op->loop_var, new_op->min, max_var,
                                     new_op->for_type, new_op->device_api, new_op->body);

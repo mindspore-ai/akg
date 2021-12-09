@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2021 Huawei Technologies Co., Ltd
+ * Copyright 2019-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,12 +27,54 @@ namespace ir {
 Add attributes for layout operators.
 */
 
+class CheckCountOp : public IRVisitor {
+  void Visit_(const Provide *op) {
+    func_ = op->func;
+    args_ = op->args;
+    IRVisitor::Visit(op->value);
+    count_op_ = call_match_ && contains_const_;
+  }
+
+  void Visit_(const Call *op) {
+    CHECK(func_.defined());
+    if (func_.same_as(op->func) && args_.size() == op->args.size()) {
+      for (int i = 0; i < static_cast<int>(args_.size()); ++i) {
+        if (!args_[i].same_as(op->args[i])) {
+          return;
+        }
+      }
+      call_match_ = true;
+    }
+  }
+
+  void Visit_(const Select *op) final {
+    IRVisitor::Visit(op->true_value);
+    IRVisitor::Visit(op->false_value);
+  }
+
+  void Visit_(const IntImm *op) final {
+    contains_const_ = true;
+  }
+
+  FunctionRef func_;
+  Array<Expr> args_;
+  bool call_match_{false};
+  bool contains_const_{false};
+
+ public:
+  bool count_op_{false};
+};
+
 class AttrForLayoutOp : public IRMutator {
  public:
   Stmt Mutate_(const Provide *op, const Stmt &s) final {
     Stmt stmt = IRMutator::Mutate_(op, s);
     CHECK(op);
-    if (ContainsHalideCall(op->args)) {
+    auto check_count_op = CheckCountOp();
+    check_count_op.Visit(stmt);
+    if (check_count_op.count_op_) {
+      stmt = AddAttrForAtomicToT(stmt.as<Provide>(), op, stmt);
+    } else if (ContainsHalideCall(op->args)) {
       is_tensor_of_tensor_ = true;
       tensors_not_promote_.insert(op->func->func_name());
       if (CheckBinaryCall(op)) {

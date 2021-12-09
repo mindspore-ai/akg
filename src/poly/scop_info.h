@@ -876,6 +876,7 @@ constexpr auto AT_BROADCAST = "BROADCAST";
 constexpr auto AT_REDUCE = "REDUCE";
 constexpr auto AT_ELEMWISE = "ELEMWISE";
 constexpr auto AT_CALL = "CALL";
+constexpr auto AT_COUNT = "COUNT";
 
 enum Template {
   DEFAULT = 0,
@@ -889,6 +890,7 @@ enum Template {
   PURE_ELEM,
   CUSTOM_CONFIG,
   EXTERN_CALL,
+  COUNT_OP,
   TEMPLATE_BULK
 };
 
@@ -1180,7 +1182,7 @@ class AnalysisResult {
   std::unordered_map<int, std::string> template_map_ = {
     {0, "DEFAULT"},           {1, "CONV"},          {2, "MATMUL"},       {3, "REDUCTION"},
     {4, "BITWISE_REDUCTION"}, {5, "BROADCAST_OP"},  {6, "TRANSPOSE_OP"}, {7, "PAD_OP"},
-    {8, "PURE_ELEM"},         {9, "CUSTOM_CONFIG"}, {10, "EXTERN_CALL"}};
+    {8, "PURE_ELEM"},         {9, "CUSTOM_CONFIG"}, {10, "EXTERN_CALL"}, {11, "COUNT_OP"}};
   std::unordered_map<int, std::string> direction_map_ = {
     {0, "UNKNOWN"}, {1, "X_DIRECTION"}, {2, "Y_DIRECTION"}, {3, "ALL_DIRECTION"}};
 

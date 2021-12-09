@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -43,6 +43,7 @@ class SpaceAnalyzer {
   TilingAnalyzer *analyzer_{nullptr};
   // Provides stmt after analysis.
   std::unordered_map<const For *, std::vector<ProvideEntry>> provides_ana_;
+  TensorEntry count_op_tensor_;
 
   // generalized cases
   void IdentifyInsnType();
@@ -53,6 +54,7 @@ class SpaceAnalyzer {
   void IdentifyReduceAxes();
   void IdentifyCastAxes();
   void IdentifyModAxes();
+  void IdentifyCountAxes();
   void IdentifyPostFusionReduceTensors();
 
   // customized cases

@@ -53,7 +53,8 @@ std::set<std::string> OperatorSharedStrategy::GetInitPromotedTensor() {
   std::set_difference(read_sets.begin(), read_sets.end(), write_sets.begin(), write_sets.end(),
                       std::inserter(id_sets, id_sets.begin()));
 
-  if (scop_info_.analysis_result_.GetTensorOfTensor()) {
+  if (scop_info_.analysis_result_.GetTensorOfTensor() ||
+      scop_info_.analysis_result_.GetOpTemplate() == Template::COUNT_OP) {
     id_sets.clear();
     std::set_union(read_sets.begin(), read_sets.end(), write_sets.begin(), write_sets.end(),
                    std::inserter(id_sets, id_sets.begin()));
