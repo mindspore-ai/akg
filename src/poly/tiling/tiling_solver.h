@@ -170,6 +170,9 @@ class GpuSolver : TilingSolver {
           }
           return -1;
         }
+        if (alloc_type == BLOCK_TAG && alloc_size > resource_limit[alloc_pos]) {
+          alloc_size = resource_limit[alloc_pos];
+        }
         if (CheckExceedLimit(alloc_pos, alloc_size, alloc_type)) {
           continue;
         }

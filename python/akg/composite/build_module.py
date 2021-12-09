@@ -176,6 +176,8 @@ def _set_attrs(desc_d, attrs, poly):
             attrs["enable_atomic_add"] = False
     if "is_csr" not in attrs.keys():
         attrs["is_csr"] = should_enable_attr(desc_d, "is_csr")
+    if "csr_avg_row" not in attrs.keys():
+        attrs["csr_avg_row"] = should_enable_attr(desc_d, "csr_avg_row")
     return attrs
 
 
