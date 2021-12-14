@@ -67,7 +67,7 @@ def op_build_to_func(opnames, computes, args, custom_schedule, device, kernel_na
 @utils.check_input_type(list, (list, tuple), (list, tuple), (types.FunctionType, type(None)), str, str, dict)
 def op_build(opnames, computes, args, custom_schedule, device, kernel_name, attrs):
     """op_build"""
-    if device in ("aicore", "cpu"):
+    if device in ("aicore", "aicpu"):
         tmp_rst = op_build_to_func(opnames, computes, args, custom_schedule, device, kernel_name, attrs)
         if tmp_rst is not None:
             try:

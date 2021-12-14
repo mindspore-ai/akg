@@ -19,7 +19,6 @@ from functools import wraps, reduce
 from enum import Enum
 import akg.tvm
 import akg.topi
-from akg.utils.util import parse_kwargs
 from akg.utils.format_transform import get_bytes, get_shape
 
 MAX_DATA_SIZE = 2 ** 31
@@ -152,7 +151,6 @@ def check_input_type(*type_args, **_type_kwargs):
                                                "%s, while type of input is %s"
                                                "" % (i, j[1], type(kwargs[i])))
                         break
-            kwargs = parse_kwargs(func, **kwargs)
             return func(*args, **kwargs)
 
         return in_wrapper
