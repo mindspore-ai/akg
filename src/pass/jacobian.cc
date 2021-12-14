@@ -319,6 +319,10 @@ class JacobianMutator : public IRMutator {
   }
 
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) {
+    if (op->attr_key != "realize_scope") {
+      return IRMutator::Mutate_(op, s);
+    }
+
     FunctionRef func = Downcast<FunctionRef>(op->node);
     attr_node_[func] = op;
 
@@ -505,14 +509,6 @@ Tensor JacobianComputeOp(const Tensor &output, const Tensor &input, bool &used_h
 Array<Tensor> JacobianHybrid(const air::HybridOpNode *&op, const Tensor &input) {
   size_t num_outputs = op->num_outputs();
 
-  // We have to clone the iteration axes because otherwise the original expression
-  // cannot be used together with the derivative (it will lead to errors during lowering)
-  std::unordered_map<const Variable *, Expr> vmap;
-  for (IterVar iv : op->axis) {
-    IterVar new_v = IterVarNode::make(iv->dom, iv->var.copy_with_suffix(""), iv->iter_type, iv->thread_tag);
-    vmap[iv->var.operator->()] = new_v;
-  }
-
   // Generate new itervars for the input
   Array<Expr> input_itervars;
   Array<IterVar> jac_itervars;
@@ -524,8 +520,6 @@ Array<Tensor> JacobianHybrid(const air::HybridOpNode *&op, const Tensor &input) 
     jac_itervars.push_back(new_v);
     ++i;
   }
-  auto new_body = air::ir::Substitute(op->body, vmap);
-
   Array<Tensor> jacs;
   std::map<FunctionRef, Tensor> tensor_mapping;
 
@@ -540,7 +534,7 @@ Array<Tensor> JacobianHybrid(const air::HybridOpNode *&op, const Tensor &input) 
     tensor_mapping.insert({op->outputs[index]->op, output_jac});
   }
 
-  new_body = Jacobian(new_body, input, input_itervars, jac_itervars, tensor_mapping, op->outputs);
+  auto new_body = Jacobian(op->body, input, input_itervars, jac_itervars, tensor_mapping, op->outputs);
 
   Array<Tensor> results;
   auto operation = air::HybridOpNode::make(op->name + "_" + input->op->name + "_jac", op->tag, op->attrs, op->inputs,
@@ -554,13 +548,14 @@ Array<Tensor> JacobianHybrid(const air::HybridOpNode *&op, const Tensor &input) 
 
 Tensor Jacobian(const Tensor &output, const Tensor &input, bool &used_head, bool optimize, bool keep_dims,
                 const Tensor &head) {
-  if (output->op.as<ComputeOpNode>()) {
-    return JacobianComputeOp(output, input, used_head, optimize, keep_dims, head);
-  } else if (auto hybrid_op = output->op.as<air::HybridOpNode>()) {
+  Tensor output_tensor = HybridOp2ComputeOp(output);
+  if (output_tensor->op.as<ComputeOpNode>()) {
+    return JacobianComputeOp(output_tensor, input, used_head, optimize, keep_dims, head);
+  } else if (auto hybrid_op = output_tensor->op.as<air::HybridOpNode>()) {
     if (head->op->func_name() == "identity") used_head = true;
     return JacobianHybrid(hybrid_op, input)[0];
   } else {
-    LOG(FATAL) << "Unsupported output op type: " << output->op;
+    LOG(FATAL) << "Unsupported output op type: " << output_tensor->op;
     return Tensor();
   }
 }

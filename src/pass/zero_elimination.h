@@ -404,6 +404,26 @@ Tensor TransformBody(const Tensor &tensor, const std::function<Expr(const Expr &
 Tensor TransformBody(const Tensor &tensor, const std::function<Expr(const Expr &)> &func);
 
 Map<Var, Range> IterVarsToMap(const Array<IterVar> &itervars);
+
+/*!
+ * \brief Transform a hybrid tensor to a compute tensor if the computation is either elementwise or a reduction,
+ * otherwise return it unchanged. Note that only the hybrid tensor with a single output will be transformed.
+ *
+ * \param hybrid The tensor to transform.
+ * \return The transformed tensor.
+ */
+Tensor HybridOp2ComputeOp(const Tensor &hybrid);
+
+/*!
+ * \brief Split a hybrid tensor according to the block_realize attr int he body.
+ *  Stmt starting with the block_realize attr will be seperated from body, and be used to create a new hybrid tensor as
+ * the input of the old tensor.
+ *
+ * \param tensor The tensor to transform.
+ * \return The transformed tensor.
+ */
+Tensor SplitTensor(const Tensor &hybrid);
+
 }  // namespace ir
 }  // namespace akg
 
