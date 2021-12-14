@@ -269,8 +269,11 @@ class CodeGenLLVM :
   llvm::Type* t_int8_{nullptr};
   llvm::Type* t_int16_{nullptr};
   llvm::Type* t_int32_{nullptr};
+  llvm::Type* t_float32_{nullptr};
   llvm::Type* t_int64_{nullptr};
   llvm::Type* t_float64_{nullptr};
+  llvm::Type* t_float32_p_{nullptr};
+  llvm::Type* t_int64_p_{nullptr};
   // meta data
   llvm::MDNode* md_very_likely_branch_{nullptr};
   llvm::MDNode* md_tbaa_root_{nullptr};
@@ -304,6 +307,15 @@ class CodeGenLLVM :
    *  initializes file and compilation_unit_ to TVM defaults.
    */
   static std::unique_ptr<DebugInfo> CreateDebugInfo(llvm::Module* module);
+ private:
+  void EmitSgemmKernelForBody(std::string inline_asm, const int n_dim, llvm::Value *end,
+                              llvm::Value *m_value, llvm::Value *k_pointer, llvm::Value *ldc_value,
+                              llvm::Value *m_pointer, llvm::Value *n_pointer, llvm::Value *k_count_pointer,
+                              llvm::Value *ldc_pointer, llvm::Value *a_pointer, llvm::Value *b_pointer,
+                              llvm::Value *c_pointer, llvm::Value *c_store_pointer,
+                              llvm::Value *b_pref_pointer, llvm::Value *alpha_pointer,
+                              llvm::Function *sgemm_kernel);
+  llvm::Value* EmitSgemmKernel(const Call* op);
 };
 }  // namespace codegen
 }  // namespace air
