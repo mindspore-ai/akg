@@ -1091,7 +1091,10 @@ def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
     # backup inputs because the tensor names may be updated inside op_func
     inputs_backup = recursive_copy(inputs)
     target = attrs.get("target") if attrs and attrs.get("target", None) else CCE
-    output = op_func(*args, target=target)
+    kwargs = {"target": target}
+    kwargs = parse_kwargs(op_func, **kwargs)
+
+    output = op_func(*args, **kwargs)
 
     # restore inputs to make sure that tensor names are not changed by op_func
     inputs = inputs_backup
