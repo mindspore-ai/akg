@@ -1,5 +1,5 @@
 /**
- * Copyright 2020-2021 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,9 +27,7 @@ using TensorSets = std::unordered_set<isl::id, isl::IslIdIslHash>;
 class GpuDmaAnalysis {
  public:
   explicit GpuDmaAnalysis(const isl::schedule &sch, ScopInfo &scop_info) : sch_(sch), scop_info_(scop_info) {
-    if (!scop_info.user_config_.GetSharedTensors().empty()) {
-      configed_share_tensors_ = Split(scop_info.user_config_.GetSharedTensors(), " ");
-    }
+    configed_share_tensors_ = scop_info.user_config_.GetSharedTensors();
   };
 
   ~GpuDmaAnalysis() {}
@@ -48,7 +46,7 @@ class GpuDmaAnalysis {
  private:
   const isl::schedule &sch_;
   ScopInfo &scop_info_;
-  std::vector<std::string> configed_share_tensors_;
+  std::unordered_set<std::string> configed_share_tensors_;
   const int MAX_STRIDE = 65535;
 };
 

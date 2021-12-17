@@ -256,7 +256,6 @@ Stmt GpuIslEmitter::EmitTensorOfTensorStmt(const Stmt &s) {
 }
 
 void GpuIslEmitter::UpdateGpuIndexDtype() {
-
   auto read_map = info_.StmtReadMap();
   auto write_map = info_.StmtWriteMap();
   std::set<std::string> id_sets;
@@ -289,12 +288,9 @@ void GpuIslEmitter::UpdateGpuIndexDtype() {
   }
 
   if (use_int64_idx_gpu) {
-    iter_name_map_ = {{B0, VarExpr(BLOCK_IDX_X, Int(64))},  
-                      {B1, VarExpr(BLOCK_IDX_Y, Int(64))},
-                      {B2, VarExpr(BLOCK_IDX_Z, Int(64))},  
-                      {T0, VarExpr(THREAD_IDX_X, Int(64))},
-                      {T1, VarExpr(THREAD_IDX_Y, Int(64))}, 
-                      {T2, VarExpr(THREAD_IDX_Z, Int(64))}};
+    iter_name_map_ = {{B0, VarExpr(BLOCK_IDX_X, Int(64))},  {B1, VarExpr(BLOCK_IDX_Y, Int(64))},
+                      {B2, VarExpr(BLOCK_IDX_Z, Int(64))},  {T0, VarExpr(THREAD_IDX_X, Int(64))},
+                      {T1, VarExpr(THREAD_IDX_Y, Int(64))}, {T2, VarExpr(THREAD_IDX_Z, Int(64))}};
   }
 }
 
@@ -321,7 +317,6 @@ class InitStmtInsertSync : public IRMutator {
 };
 
 Stmt GpuIslEmitter::Emit(const isl::ast_node &node) {
-
   UpdateGpuIndexDtype();
 
   Stmt stmt = EmitAst(node);
@@ -404,20 +399,11 @@ Stmt GpuIslEmitter::EmitRealizeForGlobalTensor(Stmt stmt) {
 Stmt GpuIslEmitter::EmitMark(const isl::ast_node_mark &node) {
   std::string mark = node.get_id().get_name();
 
-  // add for prefetch pass
-  if (mark == PROMOTE_GLOBAL_TO_SHARED_AB) {
-    Stmt stmt = EmitAst(node.get_node());
-    if (!stmt.defined()) {
-      return Stmt();
-    }
-    return AttrStmt::make(Expr("INFO"), SHARED_MEM_PROMOTED_COMPLETE, StringImm::make(SHARED_MEM_PROMOTED_COMPLETE),
-                          stmt);
-  }
-
   Stmt stmt;
 
   if ((mark == PROMOTE_VECTORIZATION) || (mark == PROMOTE_REGISTER_TO_GLOBAL) || (mark == PROMOTE_REGISTER_TO_SHARED) ||
-      (mark == PROMOTE_SHARED_TO_GLOBAL) || IsStartsWith(mark, REDUCE_ATOMIC_FLAG)) {
+      (mark == PROMOTE_SHARED_TO_GLOBAL) || (mark == SHARED_MEM_PROMOTED_COMPLETE) ||
+      IsStartsWith(mark, REDUCE_ATOMIC_FLAG)) {
     stmt = EmitAst(node.get_node());
     if (!stmt.defined()) {
       return Stmt();

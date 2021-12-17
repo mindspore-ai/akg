@@ -1,5 +1,5 @@
 /**
- * Copyright 2020-2021 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,6 +36,7 @@ class SharedMemoryManager : public SchedulePass {
 
   virtual isl::schedule Run(isl::schedule sch);
 
+ private:
   void PrepareInfoForPromotion();
 
   // create cluster
@@ -43,16 +44,15 @@ class SharedMemoryManager : public SchedulePass {
 
   // promotion core function
   isl::schedule HoistSharedMemory();
+  isl::schedule_node HoistSharedMemoryOnMark(const isl::schedule_node &orig_node);
   void GatherBufferFootprintDefInfo(const isl::schedule_node &node, BufferDefInfo &tensor_info);
   isl::schedule_node HoistClusters(const isl::schedule_node &node);
 
-  void SharedPromotion(std::vector<BufferDefInfo> &bd, isl::schedule_node &res_node, const isl::schedule_node &node,
-                       const isl::multi_union_pw_aff &partial_sched_mupa);
   isl::schedule_node HoistToBlockThreadMemory(isl::schedule_node &tree, GpuMemType type, const isl::id &tensor_id,
                                               const isl::id &dst_tensor_id, TensorFootprintCluster &cluster,
                                               bool force_last_extension_odd);
   size_t Bytes(const isl::id tensor_id);
-  bool CoalescingAccessWay(const isl::schedule_node &node, const TensorFootprintCluster &cluster);
+  isl::schedule_node InsertMarkerForRegisterPromotion(const isl::schedule_node &orig_node);
 
   // Other optimization
   void OptimizeSharedDimension(std::vector<size_t> &sizes, Type type);
@@ -69,10 +69,9 @@ class SharedMemoryManager : public SchedulePass {
   bool InReduceTensors(const std::string &name);
   std::string AtomicMarker(const std::string &type);
 
- private:
   ScopInfo &scop_info_;
   isl::schedule schedule_;
-  std::vector<std::string> configed_tensors_;
+  std::unordered_set<std::string> configed_tensors_;
   bool bank_conflict_{false};
   bool shared_inversed_thread_map_{false};
   int shared_vector_align_{0};

@@ -924,10 +924,12 @@ void GpuStrategy::AddGpuConstraint() {
     }
 
     is_first = false;
-  }
 
-  if (!((template_ == Template::MATMUL || template_ == Template::CONV) &&
-        analyzer_->scop_info_.user_config_.GetEnableTensorCore())) {
+    if ((template_ == Template::MATMUL || template_ == Template::CONV) &&
+        analyzer_->scop_info_.user_config_.GetEnableTensorCore()) {
+      continue;
+    }
+
     analyzer_->ForEachAxisTopDown([this](TileAxis *axis) {
       if (axis == analyzer_->RootAxis()) {
         return;
@@ -980,6 +982,9 @@ void GpuStrategy::VectorizationSpeedup() {
 }
 
 bool GpuStrategy::IsVectorized() {
+  if (!analyzer_->scop_info_.user_config_.GetEnableVectorization()) {
+    return false;
+  }
   auto reads_access = analyzer_->scop_info_.analysis_result_.GetReads().domain_factor_domain();
   auto write_access = analyzer_->scop_info_.analysis_result_.GetWrites().domain_factor_domain();
   auto original_access = reads_access.unite(write_access);
@@ -1058,7 +1063,6 @@ void GpuStrategy::CheckVectorizationForElemwiseOp() {
     analyzer_->scop_info_.user_config_.SetVectorLength(quadruple_warp_size_);
   }
   current_outer_bn_->enable_vectorization = true;
-  analyzer_->scop_info_.user_config_.SetEnableVectorization(true);
 }
 
 void GpuStrategy::ThreadConfiguration(ReduceDirection direct, bool use_lib) {

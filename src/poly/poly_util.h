@@ -468,6 +468,7 @@ constexpr auto FOR_VECTORIZED = "for_vectorized";
 constexpr auto FOR_UNROLLED = "for_unrolled";
 constexpr auto FOR_SWIZZLED = "for_swizzled";
 
+constexpr auto SHARED_MEM_PROMOTED_COMPLETE = "shared_mem_promoted_complete";
 constexpr auto PROMOTE_VECTORIZATION = "promote_vectorization";
 constexpr auto PROMOTE_VECTORIZATION_BIT = 128;
 constexpr auto THREAD_MARKER = "thread_marker";

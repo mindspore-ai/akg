@@ -104,7 +104,9 @@ def _shared_memory_optimization(desc_d, req_map, outputs):
             # rule1: one buffer start larger equal to the reused buffer end.
             if sort_req_liveness[sort_req_buf[i]].start >= sort_req_liveness[sort_req_buf[j]].end:
                 # rule2: sizes are compatible.
-                if req_map[sort_req_buf[i]][0] <= req_map[sort_req_buf[j]][0] and sort_req_buf[j] not in outputs:
+                if sort_req_buf[i] in outputs or sort_req_buf[j] in outputs:
+                    continue
+                if req_map[sort_req_buf[i]][0] <= req_map[sort_req_buf[j]][0]:
                     # rule3: make sure the candidate reused buffer is not using by other conflict variable.
                     for item in reverse_reuse_map.get(sort_req_buf[j], []):
                         if (sort_req_liveness[item].end >= sort_req_liveness[sort_req_buf[i]].end) \

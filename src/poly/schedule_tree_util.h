@@ -1,5 +1,5 @@
 /**
- * Copyright 2020-2021 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -103,7 +103,7 @@ isl::multi_union_pw_aff MapDomainAllWithType(const isl::schedule_node &node, Map
 isl::map CreateMapIncreaseDim(isl::space space, unsigned dim);
 bool IsSubsetForIncreaseDim(const isl::map access, size_t tensor_dim, size_t node_dim);
 int GetLastAxis(const isl::schedule_node node, isl::union_map original_access,
-                std::unordered_set<std::string> skip_tensors);
+                std::unordered_set<std::string> skip_tensors = {});
 
 std::vector<isl::schedule_node> CollectFnNode(const std::function<bool(const isl::schedule_node &)> &fn,
                                               const isl::schedule_node &root);
@@ -114,8 +114,8 @@ isl::schedule_node UnrollByMarkOptions(isl::schedule_node &node, uint64_t unroll
 isl::map GetExtensionSpace(const isl::schedule_node &node, const isl::id &id);
 isl::schedule_node InsertExtensionNodeBeforeOrAfter(const isl::schedule_node &node, const isl::id &id, bool before);
 
-isl::schedule InsertMarkerForThreadGroup(const isl::schedule &sch, const std::string &write_name,
-                                         const std::string &marker_name);
+isl::schedule_node InsertMarkerForThreadGroup(const isl::schedule_node &orig_node, const std::string &filter_name,
+                                              const std::string &marker_name);
 std::string GetMarkerName(const isl::schedule_node &node, std::string find_name);
 
 isl::union_set GetMappingFilterInfo(const isl::schedule_node node, MappingCfg *mapping_cfg,
@@ -142,6 +142,11 @@ isl::schedule_node CheckMapSizeAndApplyTile(const isl::schedule_node &mapping_ro
                                             const std::vector<int> &additional_tile_size = {});
 isl::multi_union_pw_aff GetMappingPartialSchedule(const isl::schedule_node_band &node, const bool is_promotion = false);
 isl::schedule_node GetMarkerNode(const isl::schedule_node &orig_node, const std::string &marker_name);
+isl::schedule_node DeleUselessMarker(const isl::schedule_node &orig_node,
+                                     const std::unordered_set<std::string> &mark_names);
+
+isl::schedule_node ReplaceMarker(const isl::schedule_node &orig_node, const std::string &orig_name,
+                                 const std::string &replaced_name);
 
 }  // namespace poly
 }  // namespace ir

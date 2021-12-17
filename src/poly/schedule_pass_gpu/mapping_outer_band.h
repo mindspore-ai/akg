@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -47,10 +47,14 @@ class MappingOuterBand : public SchedulePass {
   size_t NumMappedDescendant(const RoadMap &thread_roadmap, const isl::schedule_node &parent);
   bool CanBeMappedToThread(const isl::schedule_node &node, const RoadMap &thread_record,
                            const std::string &marker_name);
-  isl::schedule_node FillRemainingThreads(const isl::schedule_node &orig_node, size_t begin);
-  isl::schedule_node MapSequenceNode(const isl::schedule_node &orig_node, const RoadMap &thread_record);
   bool IsEnableReduceLib(const isl::schedule_node &orig_node);
   void AdjustBlockConfig(MappingCfg *block_cfg, unsigned long n_block_map);
+
+  // Sequence node mapping
+  isl::schedule_node DoSequenceNodeMapping(const isl::schedule_node &orig_node, const RoadMap &thread_record,
+                                           const bool is_reduce_stmt);
+  isl::schedule_node MapSequenceNode(const isl::schedule_node &orig_node, const RoadMap &thread_record);
+  isl::schedule_node FillRemainingThreads(const isl::schedule_node &orig_node, size_t begin);
 
   // Functions related to synchronization.
   isl::schedule_node DoThreadSynchronization(const isl::schedule_node &node,

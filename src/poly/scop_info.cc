@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2021 Huawei Technologies Co., Ltd
+ * Copyright 2019-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,6 +23,8 @@ namespace akg {
 namespace ir {
 namespace poly {
 constexpr int kInvalidIntAttr = -1;
+constexpr int CONV_INPUT_DIM = 5;
+constexpr int INT_BITS = 32;
 Expr kInvalidExprAttr;
 
 CubeInfo::~CubeInfo() {
@@ -162,12 +164,13 @@ bool ScopInfo::IsElewiseVMStmt(const isl::id &id) const {
 bool ScopInfo::MayWriteAfterRead(const std::string &name) const {
   std::map<int, isl::id> def;
   std::map<int, isl::id> use;
+  const int idstr_size = 2;
   for (auto a : analysis_result_.GetWrites().get_map_list()) {
     isl::id id = a.domain().unwrap().domain().get_tuple_id();
     std::string idstr = id.get_name();
     if (a.get_tuple_id(isl_dim_out).get_name() != name) continue;
-    CHECK_GE(idstr.size(), 2);
-    idstr = idstr.substr(2, idstr.size());
+    CHECK_GE(idstr.size(), idstr_size);
+    idstr = idstr.substr(idstr_size, idstr.size());
     int ref = static_cast<int>(WrappedStrtol(idstr));
     def[ref] = id;
   }
@@ -175,8 +178,8 @@ bool ScopInfo::MayWriteAfterRead(const std::string &name) const {
     isl::id id = a.domain().unwrap().domain().get_tuple_id();
     std::string idstr = id.get_name();
     if (a.get_tuple_id(isl_dim_out).get_name() != name) continue;
-    CHECK_GE(idstr.size(), 2);
-    idstr = idstr.substr(2, idstr.size());
+    CHECK_GE(idstr.size(), idstr_size);
+    idstr = idstr.substr(idstr_size, idstr.size());
     int ref = static_cast<int>(WrappedStrtol(idstr));
     use[ref] = id;
   }
@@ -408,7 +411,7 @@ Type ScopInfo::GetDtypeOf(const std::string &tensor_name) const {
     }
   }
   CHECK(false) << " no such tensor in binds: " << tensor_name;
-  return Int(32);
+  return Int(INT_BITS);
 }
 
 Type ScopInfo::GetDtypeOf(const isl::ast_expr &e) const {
@@ -416,7 +419,7 @@ Type ScopInfo::GetDtypeOf(const isl::ast_expr &e) const {
     isl::id var = op.get_arg(0).as<isl::ast_expr_id>().get_id();
     return GetDtypeOf(var);
   }
-  return Int(32);
+  return Int(INT_BITS);
 }
 
 std::vector<int> ScopInfo::GetShapeOf(const std::string &tensor_name) const {
@@ -625,8 +628,8 @@ void CubeInfo::SetConvMNKInfo() {
   auto conv_mnk_dims = GetConvMNKDims();
   if (user_config_.GetIsDynamic()) {
     for (const auto &dim : conv_mnk_dims) {
-      fractal_int_info_[dim.axis] = IntImm::make(Int(32), dim.c1_tiling_size);
-      attr_info_.Set(dim.axis, IntImm::make(Int(32), dim.c1_tiling_size));
+      fractal_int_info_[dim.axis] = IntImm::make(Int(INT_BITS), dim.c1_tiling_size);
+      attr_info_.Set(dim.axis, IntImm::make(Int(INT_BITS), dim.c1_tiling_size));
     }
   } else {
     const int c0_size = 16;
@@ -651,7 +654,8 @@ void UserConfig::CollectParams() {
         if (imm->value == 1) {
           if (const auto fd = add->a.as<air::ir::FloorDiv>()) {
             if (const auto denominator = fd->b.as<IntImm>()) {
-              if (denominator->value == 2) {
+              const int denominator_num = 2;
+              if (denominator->value == denominator_num) {
                 return CanonicalSimplify(air::ir::Div::make((fd->a + fd->b), fd->b));
               }
             }
@@ -743,6 +747,11 @@ void UserConfig::RegisterParam(const Expr &expr) {
   params_rev_map_.emplace(name, expr);
 }
 
+std::unordered_set<std::string> UserConfig::GetSplitTensors(const std::string &tensor_name) {
+  auto split_tensors = Split(tensor_name, SPACE_PATTERN);
+  return std::unordered_set<std::string>(split_tensors.begin(), split_tensors.end());
+}
+
 MappingCfg *UserConfig::GetThreadConfig() {
   bool enable_replace_cfg = (this->enable_one_dim_thread_ || this->enable_tensor_core_use_poly_);
   if (!enable_replace_cfg) {
@@ -831,7 +840,7 @@ void CubeInfo::UpdateFractalIntFirstInfo(bool is_conv_backprop_filter,
 
 void CubeInfo::UpdateFractalIntLastInfo(std::vector<size_t> filter_fp_cluster_size) {
   if (IsConvBackpropInput()) {
-    CHECK_EQ(filter_fp_cluster_size.size(), 4);
+    CHECK_EQ(filter_fp_cluster_size.size(), CONV_INPUT_DIM - 1);
     // conv_backprop_input filter: [ko, no, ni, ki]
     int64_t kh = ExtractIntFromAttrs(ATTR_CONV_KERNEL_H);
     int64_t kw = ExtractIntFromAttrs(ATTR_CONV_KERNEL_W);
@@ -840,13 +849,13 @@ void CubeInfo::UpdateFractalIntLastInfo(std::vector<size_t> filter_fp_cluster_si
 
     fractal_int_info_[ATTR_CONV_N_INNER] = (int64_t)filter_fp_cluster_size[2];
   } else if (IsConvBackpropFilter()) {
-    CHECK_EQ(filter_fp_cluster_size.size(), 5);
+    CHECK_EQ(filter_fp_cluster_size.size(), CONV_INPUT_DIM);
     // conv_backprop_filter filter: [batch, no, mo, ni, mi]
     fractal_int_info_[ATTR_CONV_TILE_M] = (int64_t)filter_fp_cluster_size[1];
     fractal_int_info_[ATTR_CONV_M_INNER] = (int64_t)filter_fp_cluster_size[3];
     fractal_int_info_[ATTR_CONV_GMM_M] = (int64_t)filter_fp_cluster_size[1] * filter_fp_cluster_size[3];
   } else {
-    CHECK_EQ(filter_fp_cluster_size.size(), 4);
+    CHECK_EQ(filter_fp_cluster_size.size(), CONV_INPUT_DIM - 1);
     // conv_forward filter: [ko, no, ni, ki]
     fractal_int_info_[ATTR_CONV_TILE_CO] = (int64_t)filter_fp_cluster_size[1];
     fractal_int_info_[ATTR_CONV_TILE_N] = (int64_t)filter_fp_cluster_size[1];
@@ -887,25 +896,26 @@ void CubeInfo::UpdateFractalIntFirstInfoConvBackpropFilter(std::vector<size_t> i
 
   fractal_int_info_[ATTR_CONV_TILE_CO] = (int64_t)fractal_fp_cluster_size[conv_tile_co];
 
-  CHECK_EQ(im2col_fp_cluster_size.size(), 6);
+  CHECK_EQ(im2col_fp_cluster_size.size(), CONV_INPUT_DIM + 1);
   fractal_int_info_[ATTR_CONV_GMM_K] = (int64_t)im2col_fp_cluster_size[conv_gmm_k];
 }
 
 void CubeInfo::UpdateFractalIntFirstInfoConvForward(std::vector<size_t> im2col_fp_cluster_size,
                                                     std::vector<size_t> fractal_fp_cluster_size) {
-  CHECK_EQ(fractal_fp_cluster_size.size(), 5);
+  CHECK_EQ(fractal_fp_cluster_size.size(), CONV_INPUT_DIM);
   fractal_int_info_[ATTR_CONV_BATCH] = (int64_t)fractal_fp_cluster_size[0];
   fractal_int_info_[ATTR_CONV_TILE_M] = (int64_t)fractal_fp_cluster_size[1];
   fractal_int_info_[ATTR_CONV_TILE_K] = (int64_t)fractal_fp_cluster_size[2];
   fractal_int_info_[ATTR_CONV_M_INNER] = (int64_t)fractal_fp_cluster_size[3];
   fractal_int_info_[ATTR_CONV_K_INNER] = (int64_t)fractal_fp_cluster_size[4];
 
-  CHECK_EQ(im2col_fp_cluster_size.size(), 6);
+  CHECK_EQ(im2col_fp_cluster_size.size(), CONV_INPUT_DIM + 1);
   fractal_int_info_[ATTR_CONV_GMM_M] = (int64_t)im2col_fp_cluster_size[1];
 }
 
 void CubeInfo::UpdateFractalIntInfoConvForward(int isolate_idx) {
-  auto C0_SIZE = IntImm::make(Int(32), 16);
+  const int c0_size = 16;
+  auto C0_SIZE = IntImm::make(Int(INT_BITS), c0_size);
   fractal_int_info_[ATTR_CONV_TILE_N] = floordiv(model_->get_co_isolate_info(isolate_idx).inner, C0_SIZE);
 
   Expr m = model_->get_h_win_isolate_info(isolate_idx).inner * model_->get_w_win_isolate_info(isolate_idx).inner;
@@ -922,16 +932,16 @@ void CubeInfo::UpdateFractalIntInfoConvForward(int isolate_idx) {
     }
   } else {
     auto tile_h = ExtractExprFromAttrs(ATTR_CONV_TILE_H);
-    tile_h = tile_h.get() ? tile_h : IntImm::make(Int(32), ExtractIntFromAttrs(ATTR_CONV_TILE_H));
+    tile_h = tile_h.get() ? tile_h : IntImm::make(Int(INT_BITS), ExtractIntFromAttrs(ATTR_CONV_TILE_H));
     if (!Equal(tile_h, -1)) fractal_int_info_[ATTR_CONV_TILE_H] = tile_h;
     auto tile_w = ExtractExprFromAttrs(ATTR_CONV_TILE_W);
-    tile_w = tile_w.get() ? tile_w : IntImm::make(Int(32), ExtractIntFromAttrs(ATTR_CONV_TILE_W));
+    tile_w = tile_w.get() ? tile_w : IntImm::make(Int(INT_BITS), ExtractIntFromAttrs(ATTR_CONV_TILE_W));
     if (!Equal(tile_w, -1)) fractal_int_info_[ATTR_CONV_TILE_W] = tile_w;
 
-    fractal_int_info_[ATTR_CONV_KERNEL_H] = IntImm::make(Int(32), ExtractIntFromAttrs(ATTR_CONV_KERNEL_H));
-    fractal_int_info_[ATTR_CONV_STRIDE_H] = IntImm::make(Int(32), ExtractIntFromAttrs(ATTR_CONV_STRIDE_H));
-    fractal_int_info_[ATTR_CONV_KERNEL_W] = IntImm::make(Int(32), ExtractIntFromAttrs(ATTR_CONV_KERNEL_W));
-    fractal_int_info_[ATTR_CONV_STRIDE_W] = IntImm::make(Int(32), ExtractIntFromAttrs(ATTR_CONV_STRIDE_W));
+    fractal_int_info_[ATTR_CONV_KERNEL_H] = IntImm::make(Int(INT_BITS), ExtractIntFromAttrs(ATTR_CONV_KERNEL_H));
+    fractal_int_info_[ATTR_CONV_STRIDE_H] = IntImm::make(Int(INT_BITS), ExtractIntFromAttrs(ATTR_CONV_STRIDE_H));
+    fractal_int_info_[ATTR_CONV_KERNEL_W] = IntImm::make(Int(INT_BITS), ExtractIntFromAttrs(ATTR_CONV_KERNEL_W));
+    fractal_int_info_[ATTR_CONV_STRIDE_W] = IntImm::make(Int(INT_BITS), ExtractIntFromAttrs(ATTR_CONV_STRIDE_W));
   }
 }
 
@@ -1597,16 +1607,17 @@ std::string TensorMarkTag(MemType mem_type, MemFlow mem_flow) {
    *  Now REALIZE_C1/REALIZE_C0/REALIZE_BUF mark_tag is equal to its MemType.
    *  For mem_type is DDR, mark_tag is empty string "".
    * */
+  const int mem_flow_size = 3;
   switch (mem_type) {
     case MemType::C1_:
-      if (mem_flow.size() == 3 && mem_flow[0] == MemType::DDR && mem_flow[1] == MemType::C1_ &&
-          mem_flow[2] == MemType::BUF_C1_)
+      if (mem_flow.size() == mem_flow_size && mem_flow[0] == MemType::DDR && mem_flow[1] == MemType::C1_ &&
+          mem_flow[mem_flow_size - 1] == MemType::BUF_C1_)
         return REALIZE_C1BUFC1;
       return REALIZE_C1;
     case MemType::BUF_:
       // ordinary conv condition no fusion
-      if (mem_flow.size() == 3 && mem_flow[0] == MemType::DDR && mem_flow[1] == mem_type &&
-          mem_flow[2] == MemType::C0C_)
+      if (mem_flow.size() == mem_flow_size && mem_flow[0] == MemType::DDR && mem_flow[1] == mem_type &&
+          mem_flow[mem_flow_size - 1] == MemType::C0C_)
         return REALIZE_C0;
       return REALIZE_BUF;
     case MemType::C0A_:
@@ -1618,7 +1629,8 @@ std::string TensorMarkTag(MemType mem_type, MemFlow mem_flow) {
     case MemType::BUF_C0_:
       return REALIZE_BUFC0;
     case MemType::BUF_C1_:
-      if (mem_flow.size() == 2 && mem_flow[0] == MemType::DDR && mem_flow[1] == MemType::BUF_C1_) return REALIZE_C1;
+      if (mem_flow.size() == (mem_flow_size - 1) && mem_flow[0] == MemType::DDR && mem_flow[1] == MemType::BUF_C1_)
+        return REALIZE_C1;
       return REALIZE_BUFC1;
     case MemType::DDR:
       return "";

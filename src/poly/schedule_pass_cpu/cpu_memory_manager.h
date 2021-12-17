@@ -43,8 +43,6 @@ class CpuMemoryManager : public SchedulePass {
                                  const isl::id &dst_tensor_id, TensorFootprintCluster &cluster,
                                  bool force_last_extension_odd);
 
-  bool CoalescingAccessWay(const isl::schedule_node &node, const TensorFootprintCluster &cluster);
-
   isl::schedule InsertVectorizedMarker(const isl::schedule &sch);
 
   isl::schedule HoistCpuMemory();

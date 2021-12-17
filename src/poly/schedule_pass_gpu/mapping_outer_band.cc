@@ -1,5 +1,5 @@
 /**
- * Copyright 2020-2021 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -401,29 +401,33 @@ isl::schedule_node MappingOuterBand::DoThreadMapping(const isl::schedule_node &o
       thread_record.emplace_back(std::make_pair(node, mapped_threads));
       return node;
     }
-
-    if (node.n_children() <= 1 || NumMappedDescendant(thread_record, node) <= 0) {
-      return node;
-    }
-    node = MapSequenceNode(node, thread_record);
-
-    auto need_sync = node.isa<isl::schedule_node_sequence>();
-    if (need_sync) {
-      if (is_reduce_stmt && node.has_parent() && !GetMarkerName(node.parent(), INSERT_SYNC).empty()) {
-        node = node.parent().del();
-        node = DoThreadSynchronization(node);
-      } else if (!is_reduce_stmt && scop_info_.user_config_.GetEnableTensorCoreUsePoly()) {
-        std::vector<MappingCfg *> other_mapping_cfg;
-        other_mapping_cfg.push_back(scop_info_.user_config_.GetReplaceConfig()[WARP_COMPUTE]);
-        node = DoThreadSynchronization(node, other_mapping_cfg);
-      } else if (!is_reduce_stmt) {
-        node = DoThreadSynchronization(node);
-      }
-    }
-
+    node = DoSequenceNodeMapping(node, thread_record, is_reduce_stmt);
     return node;
   };
   return orig_node.map_descendant_bottom_up(MapFromInner);
+}
+
+isl::schedule_node MappingOuterBand::DoSequenceNodeMapping(const isl::schedule_node &orig_node,
+                                                           const RoadMap &thread_record, const bool is_reduce_stmt) {
+  if (orig_node.n_children() <= 1 || NumMappedDescendant(thread_record, orig_node) <= 0) {
+    return orig_node;
+  }
+  isl::schedule_node node = MapSequenceNode(orig_node, thread_record);
+
+  auto need_sync = node.isa<isl::schedule_node_sequence>();
+  if (need_sync) {
+    if (is_reduce_stmt && node.has_parent() && !GetMarkerName(node.parent(), INSERT_SYNC).empty()) {
+      node = node.parent().del();
+      node = DoThreadSynchronization(node);
+    } else if (!is_reduce_stmt && scop_info_.user_config_.GetEnableTensorCoreUsePoly()) {
+      std::vector<MappingCfg *> other_mapping_cfg;
+      other_mapping_cfg.push_back(scop_info_.user_config_.GetReplaceConfig()[WARP_COMPUTE]);
+      node = DoThreadSynchronization(node, other_mapping_cfg);
+    } else if (!is_reduce_stmt) {
+      node = DoThreadSynchronization(node);
+    }
+  }
+  return node;
 }
 
 void MappingOuterBand::AdjustBlockConfig(MappingCfg *block_cfg, unsigned long n_block_map) {

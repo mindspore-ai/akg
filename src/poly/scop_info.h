@@ -312,8 +312,8 @@ class UserConfig {
       ParseIntAttr(attrs, "csr_thread_num", &csr_thread_num_);
       ParseIntAttr(attrs, "csr_avg_row", &csr_avg_row_);
       ParseStringAttr(attrs, "shared_memory_tensors", &shared_tensors_);
+      ParseStringAttr(attrs, "register_memory_tensors", &register_tensors_);
       ParseStringAttr(attrs, "reduce_lib_type", &reduce_lib_type_);
-      ParseStringAttr(attrs, "local_memory_tensors", &local_tensors_);
       ParseVectorLengthAttr(attrs, "vector_length", &vector_length_);
     } else if (GetTarget() == TARGET_CPU) {
       ParseVectorLengthAttr(attrs, "vector_length", &vector_length_, false);
@@ -542,10 +542,13 @@ class UserConfig {
   bool GetUseSharedMemory() const { return use_shared_memory_; }
   void SetGetUseSharedMemory(bool use_shared_memory) { use_shared_memory_ = use_shared_memory; }
   void SetGetUseRegisterMemory(bool use_register_memory) { use_register_memory_ = use_register_memory; }
-  void SetSharedTensors(std::string shared_tensors) { shared_tensors_ = shared_tensors; }
-  std::string GetSharedTensors() { return shared_tensors_; }
+
+  std::unordered_set<std::string> GetSplitTensors(const std::string &tensor_name);
+  void RecordSharedTensors(const std::string &tensor_name) { shared_tensors_ += (SPACE_PATTERN + tensor_name); }
+  std::unordered_set<std::string> GetSharedTensors() { return GetSplitTensors(shared_tensors_); }
+  std::unordered_set<std::string> GetRegisterTensors() { return GetSplitTensors(register_tensors_); }
+
   std::string GetReduceLibType() { return reduce_lib_type_; }
-  std::string GetLocalTensors() { return local_tensors_; }
   void SetEnableBankConflict(bool enable_bank_conflict) { enable_bank_conflict_ = enable_bank_conflict; }
   bool GetEnableBankConflict() { return enable_bank_conflict_; }
   int GetVectorLength() { return vector_length_; }
@@ -709,16 +712,16 @@ class UserConfig {
   bool use_shared_memory_{true};
   // shared memory tensor list
   std::string shared_tensors_;
+  // local memory tensor list
+  std::string register_tensors_;
   // reduce lib type, for now, there are two selection
   // one is named "origin"
   // one is named "paris"
   std::string reduce_lib_type_{"origin"};
-  // local memory tensor list
-  std::string local_tensors_;
   // vectorization
   int vector_length_{0};
   bool enable_one_dim_thread_{false};
-  bool enable_vectorization_{false};
+  bool enable_vectorization_{true};
 
   // tiling config
   std::string b_dim_;
@@ -938,6 +941,7 @@ class AnalysisResult {
     bool enable_vectorization{false};
     bool is_thread_tile{false};
     bool is_block_tile{false};
+    std::set<std::string> coalesced_access_tensors;
   };
 
   void RecordWrites(const isl::union_map &writes) { writes_ = writes; }
