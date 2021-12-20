@@ -741,7 +741,7 @@ TVM_REGISTER_GLOBAL("BroadcastTo").set_body([](TVMArgs args, TVMRetValue *rv) {
   }
 });
 
-TVM_REGISTER_GLOBAL("CudaBatchMatMul").set_body([](TVMArgs args, TVMRetValue *rv) {
+void BatchMatMul(const TVMArgs &args, TVMRetValue *rv) {
   CHECK_GE(args.size(), 2);
   auto inputs = args[0].operator Array<NodeRef>();
   auto attrs = args[1].operator OpAttr();
@@ -759,12 +759,6 @@ TVM_REGISTER_GLOBAL("CudaBatchMatMul").set_body([](TVMArgs args, TVMRetValue *rv
   auto left_shape = left_matrix->shape;
   auto right_shape = right_matrix->shape;
   CHECK_EQ(left_shape.size(), right_shape.size());
-
-  auto type_checker = [](const Tensor &input_data, const std::string name) {
-    if (input_data->dtype != Float(16)) {
-      LOG(FATAL) << "dtype of input tensor " << name << " should be float16";
-    }
-  };
 
   Expr k;
   auto compute_out = [&k](const Array<Expr> &left_shape, const Array<Expr> &right_shape, bool transpose_a,
@@ -832,13 +826,36 @@ TVM_REGISTER_GLOBAL("CudaBatchMatMul").set_body([](TVMArgs args, TVMRetValue *rv
     return res;
   };
 
-  type_checker(left_matrix, "left_matrix");
-  type_checker(right_matrix, "right_matrix");
   batch_dim = left_shape.size() - 2;
   Array<Expr> output_shape = compute_out(left_shape, right_shape, transpose_a, transpose_b, batch_dim);
   reduce_k = air::reduce_axis(Range(0, k), "reduce_axis");
   auto name = "T_batch_matmul_" + left_matrix->op->name + "_" + right_matrix->op->name;
   *rv = compute(output_shape, fcompute, name, "matmul");
+}
+
+TVM_REGISTER_GLOBAL("CpuBatchMatMul").set_body([](TVMArgs args, TVMRetValue *rv) {
+  BatchMatMul(args, rv);
+});
+
+TVM_REGISTER_GLOBAL("CudaBatchMatMul").set_body([](TVMArgs args, TVMRetValue *rv) {
+  CHECK_GE(args.size(), 2);
+  auto inputs = args[0].operator Array<NodeRef>();
+  auto attrs = args[1].operator OpAttr();
+  CHECK_GE(inputs.size(), 2);
+  CHECK(inputs[0]->IsInstance<TensorNode>());
+  CHECK(inputs[1]->IsInstance<TensorNode>());
+  auto left_matrix = Downcast<Tensor>(inputs[0]);
+  auto right_matrix = Downcast<Tensor>(inputs[1]);
+
+  auto type_checker = [](const Tensor &input_data, const std::string name) {
+    if (input_data->dtype != Float(16)) {
+      LOG(FATAL) << "dtype of input tensor " << name << " should be float16";
+    }
+  };
+  type_checker(left_matrix, "left_matrix");
+  type_checker(right_matrix, "right_matrix");
+
+  BatchMatMul(args, rv);
 });
 
 // only support fractal_zN: [ko mo mi ki] * [no ko ki ni] = [no mo mi ni]
