@@ -19,6 +19,9 @@
 
 /*!
  * \file intrin_rule_llvm.cc
+ *
+ * 2021.12.21
+ *   Fixed prefetch intrinsic
  */
 #ifdef TVM_LLVM_VERSION
 
@@ -29,7 +32,7 @@ namespace codegen {
 namespace llvm {
 
 TVM_REGISTER_GLOBAL("tvm.intrin.rule.llvm.prefetch")
-.set_body(DispatchLLVMIntrin<::llvm::Intrinsic::prefetch, 0>);
+.set_body(DispatchLLVMIntrin<::llvm::Intrinsic::prefetch, 4>);
 
 TVM_REGISTER_GLOBAL("tvm.intrin.rule.llvm.fma")
 .set_body(DispatchLLVMPureIntrin<::llvm::Intrinsic::fmuladd, 1>);

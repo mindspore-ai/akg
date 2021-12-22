@@ -27,6 +27,8 @@
  *   Add some intrinsics.
  * 2021.12.08
  *   Add sgemm kernel intrinsics
+ * 2021.12.21
+ *   Fixed prefetch intrinsic
  */
 
 #ifdef TVM_LLVM_VERSION
@@ -731,6 +733,16 @@ llvm::Value* CodeGenLLVM::CreateIntrinsic(const Call* op) {
       if (i - 2 < *num_signature) {
         sig_type.push_back(arg_value.back()->getType());
       }
+    }
+    if (id == llvm::Intrinsic::prefetch) {
+      auto* fn_ty = llvm::FunctionType::get(t_void_, sig_type, false);
+      llvm::SmallVector<llvm::Intrinsic::IITDescriptor, 4> infos;
+      llvm::Intrinsic::getIntrinsicInfoTableEntries(id, infos);
+      llvm::SmallVector<llvm::Type*, 4> overload_types;
+      llvm::ArrayRef<llvm::Intrinsic::IITDescriptor> ref(infos);
+      llvm::Intrinsic::matchIntrinsicSignature(fn_ty, ref, overload_types);
+      llvm::Function* f = llvm::Intrinsic::getDeclaration(module_.get(), id, overload_types);
+      return builder_->CreateCall(f, arg_value);
     }
     llvm::Type *return_type = LLVMType(op->type);
     if (sig_type.size() > 0 && return_type != sig_type[0]) {
