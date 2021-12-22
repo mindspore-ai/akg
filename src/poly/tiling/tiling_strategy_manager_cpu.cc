@@ -110,8 +110,27 @@ void CpuStrategy::SetParallelTileValue(TileAxis *axis, const int64_t axis_size, 
   axis->TileRestrainToSingleValue(Expr(c0_tile_value), TileLevel::CACHE0);
 }
 
+void CpuStrategy::SetMatMulTileValue(int index) {
+  for (int i = 0; i < static_cast<int>(pending_axes_[index].size()); ++i) {
+    TileAxis *axis;
+    int64_t shape;
+    std::tie(axis, shape) = pending_axes_[index][i];
+    int64_t value = shape;
+    if ((i != axis_m_) && (shape % best_factor_for_matmul_ == 0)) {
+      value = best_factor_for_matmul_;
+    }
+    axis->TileRestrainToSingleValue(Expr(value), TileLevel::CACHE1);
+    axis->TileRestrainToSingleValue(Expr(value), TileLevel::CACHE0);
+  }
+}
+
 void CpuStrategy::SetMultiLevelTileValue() {
   for (auto idx = 0; idx < static_cast<int>(pending_axes_.size()); ++idx) {
+    auto op_type = analyzer_->scop_info_.analysis_result_.GetOuterBandNode()->template_type;
+    if (op_type == Template::MATMUL) {
+      SetMatMulTileValue(idx);
+      continue;
+    }
     size_t ori_size = pending_axes_[idx].size();
     int64_t data_size = 1;
     for (int i = static_cast<int>(ori_size - 1); i >= 0; i--) {

@@ -85,7 +85,10 @@ def batch_matmul_run(shape1, shape2, dtype, out_dtype="float32", layout1="NHDT",
     if default_attrs["target"] == "cuda" and tensor_core:
         default_attrs.update({"pragma_enable_matmul": True, "enable_auto_inline": False})
     elif default_attrs["target"] == "llvm":
-        default_attrs.update({"pragma_enable_matmul": True})
+        if "pragma_enable_matmul" not in default_attrs.keys():
+            default_attrs["pragma_enable_matmul"] = True
+        if "feature" not in default_attrs.keys():
+            default_attrs["feature"] = "avx"
 
     mod = utils.op_build_test(BatchMatMul, (shape1, shape2, shape_bias), (dtype, dtype, out_dtype),
                             op_attrs=op_attrs, attrs=default_attrs, polyhedral=poly_sch, kernel_name="batch_matmul")
