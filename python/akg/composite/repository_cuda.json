@@ -360,5 +360,68 @@
                 "bind_thread": "32 9"
             }
         }
+    },
+    "2.Cast1.Mul13.Mul11.ReduceSum1.Mul33.56": {
+        "metadata": {
+            "attrs": {
+                "enable_akg_reduce_lib": false
+            }
+        },
+        "3.115623_800_3.115623_800.115623_800_3": {
+            "float32.int32.float32-": {
+                "dim": "0 0 64 64 b0 t0 0 1 3 3 - - 1 0 64 64 b0 t0 1 1 3 3 - -",
+                "bind_block": "1445288 1 1",
+                "bind_thread": "64 1 1"
+            }
+        }
+    },
+    "8.Cast3.Mul16.Mul11.Abs1.ReduceSum1.Pow1.Less1.Reshape9.Less112.LogicalAnd13.Reshape18.Neg1.RealDiv7.Mul11.Mul11.Mul12.Mul15.Reshape24.Add12.Mul55.Mul12.Mul16.Mul17.Neg1.Mul12.Exp1.Mul15.Erf5.Sub1.Add13.Mul1718.Mul12.BroadcastTo33.Reshape39.Mul12.Mul14.Sub116.91744": {
+        "metadata": {
+            "attrs": {
+                "enable_akg_reduce_lib": false
+            }
+        },
+        "92498400--.3.115623_800.115623_800_3.115623.115623_1.115623_800-.115623_800_3": {
+            "float32---.int32--.float32.bool.float32-": {
+                "dim": "0 0 64 64 b0 t0 0 1 3 3 - - 1 0 64 64 b0 t0 1 1 3 3 - -",
+                "bind_block": "1445288 1 1",
+                "bind_thread": "64 1 1"
+            }
+        }
+    },
+    "7.Pow7.Less1.Reshape4.Less16.LogicalAnd13.Neg11.RealDiv6.Mul11.Mul11.Mul12.Mul15.Add116.Mul44.Mul12.Mul14.Mul15.Neg1.Mul12.Exp1.Mul15.Erf5.Sub1.Add13.Mul1617.Mul12.BroadcastTo26.Mul130.Mul13.Sub115.1135": {
+        "metadata": {
+            "attrs": {
+                "enable_common_subexpr_elim": true
+            }
+        }
+    },
+    "6.Reshape3.GreaterEqual13.Select136.Reshape1.TensorScatterAdd1910.InplaceAssign1110.11": {
+        "metadata": {
+            "attrs": {
+                "enable_atomic_add": true
+            }
+        },
+        "115623_800_3.115623_3.115623_800.115623.115623_800-.115623_3": {
+            "float32-.int32---.float32": {
+                "dim": "0 0 1 1 b0 t1 0 1 800 800 b1 t0 1 0 3 3 - -",
+                "bind_block": "115623 1",
+                "bind_thread": "800 1"
+            }
+        }
+    },
+    "6.Reshape3.GreaterEqual12.Select146.Reshape1.TensorScatterAdd1910.InplaceAssign1110.11": {
+        "metadata": {
+            "attrs": {
+                "enable_atomic_add": true
+            }
+        },
+        "115623_800_3.115623_3.115623_800.115623.115623_800-.115623_3": {
+            "float32-.int32---.float32": {
+                "dim": "0 0 1 1 b0 t1 0 1 800 800 b1 t0 1 0 3 3 - -",
+                "bind_block": "115623 1",
+                "bind_thread": "800 1"
+            }
+        }
     }
 }
