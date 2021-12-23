@@ -36,6 +36,7 @@ class CpuIslEmitter : public IslEmitter {
   Stmt InsertRealize(const Stmt &stmt, const isl::id &var);
   Stmt EmitReduce(const std::vector<std::string> &args);
   Stmt EmitMatrixTranspose(const std::vector<std::string> &names);
+  Stmt EmitInfo(const Stmt &stmt);
 };
 
 }  // namespace poly
