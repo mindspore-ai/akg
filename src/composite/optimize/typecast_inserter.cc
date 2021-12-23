@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "composite/optimize/typecast_inserter.h"
+#include "composite/optimize/pass.h"
 #include "src/pass/ir_util.h"
 /**
  * input0 = xxx : Int32
@@ -180,7 +180,7 @@ class ScalarSubCastInserterMutator : public IRMutator {
   }
 };
 
-Stmt TypeCastInserter::Run(const Stmt &s) {
+Stmt TypeCastInserter(const Stmt &s, BuildInfo*) {
   Stmt stmt = EqualCastInserterMutator().Mutate(s);
   stmt = BoolCastInserterMutator().Mutate(stmt);
   stmt = ScalarSubCastInserterMutator().Mutate(stmt);

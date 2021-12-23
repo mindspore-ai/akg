@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "composite/optimize/broadcast_inserter.h"
+#include "composite/optimize/pass.h"
 
 namespace akg {
 class BroadcastInserterMutator : public IRMutator {
@@ -70,5 +70,5 @@ class BroadcastInserterMutator : public IRMutator {
   std::unordered_map<std::string, unsigned> broadcast_ops_ = {{"Equal", -1}, {"Select", -1}};
 };
 
-Stmt BroadcastInserter::Run(const Stmt &s) { return BroadcastInserterMutator().Mutate(s); }
+Stmt BroadcastInserter(const Stmt &s, BuildInfo*) { return BroadcastInserterMutator().Mutate(s); }
 }  // namespace akg
