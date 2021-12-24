@@ -8,25 +8,39 @@ namespace poly {
 static constexpr auto REDUCE_FUNCTION = "Reduce";
 static constexpr auto MATRIX_TRANSPOSE_FUNCTION = "MatrixTranspose";
 static constexpr auto LOCAL_MEMORY = "local";
-static std::unordered_map <std::string, std::function<Expr(Expr, Expr)>> maker_map = {
-	{"SumOp", Add::make},
-	{"AddOp", Add::make},
-	{"SubOp", Sub::make},
-	{"MulOp", Mul::make},
-	{"DivOp", Div::make},
-	{"MinOp", Min::make},
-	{"MaxOp", Max::make},
-	{"AndOp", And::make},
-	{"OrOp", Or::make}};
+static std::unordered_map<std::string, std::function<Expr(Expr, Expr)>> maker_map = {
+  {"SumOp", Add::make}, {"AddOp", Add::make}, {"SubOp", Sub::make}, {"MulOp", Mul::make}, {"DivOp", Div::make},
+  {"MinOp", Min::make}, {"MaxOp", Max::make}, {"AndOp", And::make}, {"OrOp", Or::make}};
+
+static std::unordered_set<std::string> arm_instruction_set = {"avx", "sse", "avx512"};
+static constexpr auto X86_INSTRUCTION_SET = "neon";
 
 Stmt CpuIslEmitter::Emit(const isl::ast_node &node) {
   Stmt stmt = EmitAst(node);
   stmt = EmitRealizeForGlobalTensor(stmt);
+  stmt = EmitInfo(stmt);
+  return stmt;
+}
+
+Stmt CpuIslEmitter::EmitInfo(const Stmt &stmt) {
+  Stmt result = stmt;
   auto len = info_.user_config_.GetVectorLength();
   if (len != 0) {
-    stmt = AttrStmt::make(Expr("INFO"), "VECTOR_LENGTH", Expr(len), stmt);
+    result = AttrStmt::make(Expr("INFO"), "VECTOR_LENGTH", Expr(len), result);
   }
-  return stmt;
+
+  std::string feature = info_.user_config_.GetFeature();
+  if (feature.empty()) {
+    return result;
+  }
+
+  if (arm_instruction_set.find(feature) != arm_instruction_set.end()) {
+    result = AttrStmt::make(Expr("INFO"), "PACKA", Expr(8), result);
+  } else if (feature == X86_INSTRUCTION_SET) {
+    result = AttrStmt::make(Expr("INFO"), "PACKA", Expr(16), result);
+  }
+  result = AttrStmt::make(Expr("INFO"), "PACKB", Expr(4), result);
+  return result;
 }
 
 Stmt CpuIslEmitter::EmitBlock(const isl::ast_node_block &block_node) {
@@ -121,9 +135,13 @@ Stmt CpuIslEmitter::EmitRealizeForGlobalTensor(const Stmt &from) {
   auto origin_binds = info_.user_config_.GetOriginBind();
   Stmt stmt = from;
   for (auto bind : binds) {
-    if (!bind.first.defined()) {continue;}
+    if (!bind.first.defined()) {
+      continue;
+    }
     // input and output tensor, no need to emit realize
-    if (origin_binds.find(bind.first) != origin_binds.end()) {continue;}
+    if (origin_binds.find(bind.first) != origin_binds.end()) {
+      continue;
+    }
     // promoted tensor, the realize info already emitted before
     std::string name = bind.first->op->name;
     if (IsEndsWith(name, LOCAL_MEMORY)) {
@@ -153,7 +171,9 @@ Stmt CpuIslEmitter::InsertRealize(const Stmt &from, const isl::id &var) {
   t = tt;
   stmt = TensorStringSubstitute(stmt, t->op->func_name(), t->op, t->value_index);
   stmt = Realize::make(t->op, t->value_index, t->dtype, bounds, const_true(1), stmt);
-  stmt = AttrStmt::make(t->op, air::ir::attr::realize_scope, Expr(LOCAL_MEMORY), stmt);
+  std::string realize_name = LOCAL_MEMORY;
+
+  stmt = AttrStmt::make(t->op, air::ir::attr::realize_scope, Expr(realize_name), stmt);
   return stmt;
 }
 
@@ -164,7 +184,7 @@ Stmt CpuIslEmitter::EmitCall(const isl::ast_node_user &node) {
   auto id_name = usr_expr.get_arg(0).as<isl::ast_expr_id>().get_id().get_name();
   std::regex delimiters("__");
   std::vector<std::string> args(std::sregex_token_iterator(id_name.begin(), id_name.end(), delimiters, -1),
-		                std::sregex_token_iterator());
+                                std::sregex_token_iterator());
   CHECK_GT(args.size(), 2) << "Emit call must have function name";
   if (args[1] == MATRIX_TRANSPOSE_FUNCTION) {
     return EmitMatrixTranspose(args);
