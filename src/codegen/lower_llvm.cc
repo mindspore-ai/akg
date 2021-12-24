@@ -43,6 +43,10 @@ StageResult LLVMLowerBegin(Stmt &, LowerData &data) {
   stmt = NEXT_PASS(ReplaceSeparator, stmt);
   stmt = NEXT_PASS(RewriteMultiValueFunc, stmt);
 
+  Map<Tensor, Tensor> replace;
+  RenameBinds(data->binds_0, data->config, data->args, data->arg_list_0, replace);
+  stmt = NEXT_PASS(RenameRealize, stmt, data->binds_0, replace);
+
   Array<NodeRef> arg_list_tmp;
   Map<Tensor, Buffer> binds_tmp;
   GetFlattenedBinds(data->args, data->binds_0, data->config, arg_list_tmp, binds_tmp, false);
