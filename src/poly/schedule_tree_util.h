@@ -131,7 +131,7 @@ std::vector<isl::schedule_node> CollectMarkNode(const isl::schedule_node &tree, 
 
 std::unordered_map<std::string, std::string> GetMatmulTensorsName(ScopInfo &scop_info);
 
-bool IsTensorAB(const std::string &item, ScopInfo &scop_info);
+std::string GetTensorMark(const std::string &item, ScopInfo &scop_info);
 isl::schedule_node AdjustAxisPosition(const isl::schedule_node &orig_node, const int orig_pos, const int new_pos);
 
 isl::schedule_node InsertEmptyPermutableBand(const isl::schedule_node &orig_node);

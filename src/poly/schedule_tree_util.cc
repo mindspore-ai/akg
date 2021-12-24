@@ -765,7 +765,7 @@ std::unordered_map<std::string, std::string> GetMatmulTensorsName(ScopInfo &scop
   return tensors;
 }
 
-bool IsTensorAB(const std::string &item, ScopInfo &scop_info) {
+std::string GetTensorMark(const std::string &item, ScopInfo &scop_info) {
   auto tensors = GetMatmulTensorsName(scop_info);
   size_t pos = 0;
   std::string item_tensor_name = item;
@@ -773,10 +773,13 @@ bool IsTensorAB(const std::string &item, ScopInfo &scop_info) {
       (pos = item_tensor_name.find(SHARE_SUFFIX)) != std::string::npos) {
     item_tensor_name = item_tensor_name.erase(pos, item_tensor_name.size() - pos);
   }
-  if (item_tensor_name != tensors[MATRIX_A] && item_tensor_name != tensors[MATRIX_B]) {
-    return false;
+  if (item_tensor_name == tensors[MATRIX_A]) {
+    return TENSOR_A;
+  } else if (item_tensor_name == tensors[MATRIX_B]) {
+    return TENSOR_B;
+  } else {
+    return TENSOR_C;
   }
-  return true;
 }
 
 isl::schedule_node AdjustAxisPosition(const isl::schedule_node &orig_node, const int orig_pos, const int new_pos) {

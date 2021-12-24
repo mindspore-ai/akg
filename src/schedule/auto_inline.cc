@@ -64,7 +64,7 @@ class InlineFilter : public IRVisitor {
 
 // op can not be inlined
 bool CantInline(const Operation &op, const Target &target) {
-  if (target->device_type == kDLGPU) {
+  if (target->device_type != kDLCce) {
     return false;
   }
   if (const auto compute = op.as<ComputeOpNode>()) {
@@ -269,7 +269,7 @@ void AutoInline(Schedule sch, const Target &target, bool enable_cse) {
   }
 
   std::unordered_set<Operation> common_subexpr;
-  if (target->device_type == kDLGPU && enable_cse) {
+  if (target->device_type != kDLCce && enable_cse) {
     common_subexpr = CSE().FindCommonSubexpr(sch);
   }
 
