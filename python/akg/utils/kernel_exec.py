@@ -1225,7 +1225,7 @@ def get_device_id():
 def get_cycles(mod, *mod_args, target="cuda", device_id=0, repeat_time=400):
     """get profiling cycles."""
     from akg.utils.result_analysis import target_profiling
-    tcost = target_profiling(mod, *mod_args, target=target, repeat_time=repeat_time, device_id=device_id)
+    tcost = target_profiling(mod, *mod_args, target=target, repeat_time=repeat_time, device_id=device_id, need_warm_up=False)
     return tcost
 
 
