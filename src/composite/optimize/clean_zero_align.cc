@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "composite/optimize/clean_zero_align.h"
+#include "composite/optimize/pass.h"
 #include "pass/utils.h"
 
 namespace akg {
@@ -113,5 +113,5 @@ class CleanZeroAlign : public IRMutator {
   BuildInfo info_;
 };
 
-Stmt CleanZeroAligner::Run(const Stmt &stmt) { return CleanZeroAlign(info_).Align(stmt); }
+Stmt CleanZeroAligner(const Stmt &stmt, BuildInfo *info) { return CleanZeroAlign(*info).Align(stmt); }
 }  // namespace akg

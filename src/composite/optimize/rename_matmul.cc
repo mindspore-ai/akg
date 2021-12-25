@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "composite/optimize/rename_matmul.h"
+#include "composite/optimize/pass.h"
 
 namespace akg {
 // rename MatMul to BatchMatMul
@@ -32,5 +32,5 @@ class RenameMatmulMutator : public IRMutator {
   }
 };
 
-Stmt RenameMatmul::Run(const Stmt &s) { return RenameMatmulMutator().Mutate(s); }
+Stmt RenameMatmul(const Stmt &s, BuildInfo*) { return RenameMatmulMutator().Mutate(s); }
 }  // namespace akg

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "composite/optimize/axis_attr_normalize.h"
+#include "composite/optimize/pass.h"
 
 #include <algorithm>
 #include <vector>
@@ -108,5 +108,5 @@ class AxisAttrNormalizer : public IRMutator {
   static constexpr int kCSRRank = 2;
 };
 
-Stmt AxisAttrNormalize::Run(const Stmt &stmt) { return AxisAttrNormalizer().Mutate(stmt); }
+Stmt AxisAttrNormalize(const Stmt &stmt, BuildInfo*) { return AxisAttrNormalizer().Mutate(stmt); }
 }  // namespace akg

@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include "composite/optimize/pass.h"
 #include "composite/optimize/elim_reshape.h"
 
 namespace akg {
@@ -380,7 +381,7 @@ class TSA : public IRMutator {
   std::vector<const Provide *> p_;
 };
 
-Stmt ElimReshapeBackward::Run(const Stmt &stmt) {
+Stmt ElimReshapeBackward(const Stmt &stmt, BuildInfo *info) {
   auto s = stmt;
   AnalysisResult as;
   s = TSA(as).Mutate(s);
@@ -392,10 +393,10 @@ Stmt ElimReshapeBackward::Run(const Stmt &stmt) {
   auto count = 0;
   auto max_try_count = 10;
   while (count++ < max_try_count) {
-    auto f = StmtToGraph(info_.opt.input_funcs, info_.opt.output_funcs);
+    auto f = StmtToGraph(info->opt.input_funcs, info->opt.output_funcs);
     f.Visit(s);
     AnalysisResult result;
-    auto analysis = ElimReshapeAnalysis(f.g_, info_.opt, result, false);
+    auto analysis = ElimReshapeAnalysis(f.g_, info->opt, result, false);
     bool elim_valid = analysis.Run();
     if (!elim_valid) {
       return s;
@@ -406,7 +407,7 @@ Stmt ElimReshapeBackward::Run(const Stmt &stmt) {
   return s;
 }
 
-Stmt ElimReshapeForward::Run(const Stmt &stmt) {
+Stmt ElimReshapeForward(const Stmt &stmt, BuildInfo *info) {
   auto s = stmt;
   auto checker = ElimReshapeOpChecker();
   checker.Visit(s);
@@ -414,10 +415,10 @@ Stmt ElimReshapeForward::Run(const Stmt &stmt) {
   auto count = 0;
   auto max_try_count = 10;
   while (count++ < max_try_count) {
-    auto f = StmtToGraph(info_.opt.input_funcs, info_.opt.output_funcs);
+    auto f = StmtToGraph(info->opt.input_funcs, info->opt.output_funcs);
     f.Visit(s);
     AnalysisResult result;
-    auto analysis = ElimReshapeAnalysis(f.g_, info_.opt, result, true);
+    auto analysis = ElimReshapeAnalysis(f.g_, info->opt, result, true);
     bool elim_valid = analysis.Run();
     if (!elim_valid) {
       return s;
