@@ -479,6 +479,9 @@ class CpuStrategy : public TilingStrategy {
   int axis_m_{MATMUL_AXIS_M};
   int axis_n_{MATMUL_AXIS_N};
   int axis_k_{MATMUL_AXIS_K};
+  std::unordered_map<int, std::string> axes_name_ = {
+    {0, "gemm_m"}, {1, "gemm_n"}, {2, "gemm_k"}
+  };
 };
 
 class CsrStrategy : public TilingStrategy {

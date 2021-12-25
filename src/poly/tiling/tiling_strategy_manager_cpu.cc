@@ -35,6 +35,9 @@ void CpuStrategy::BuildAxesQueue() {
     }
     const auto r = axis->range_extent.as<IntImm>();
     if (r && r->value > 0 && !axis->is_inner) {
+      if (this->analyzer_->scop_info_.analysis_result_.GetOuterBandNode(axis->index)->template_type == Template::MATMUL) {
+        axis->MarkWithAttr(AttrInfo{"axis_token", this->axes_name_[axis->dim_axis]});
+      }
       this->pending_axes_[axis->index].emplace_back(std::make_pair(axis, r->value));
     }
   });
