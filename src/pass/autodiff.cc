@@ -45,6 +45,7 @@ DifferentiationResult Differentiate(const Tensor &output, const Array<Tensor> &i
     return DifferentiationResult();
   }
 
+  Tensor output_split = SplitTensor(output);
   Tensor head = head_or_null;
 
   // If the head is a null pointer, create an identity tensor
@@ -74,9 +75,10 @@ DifferentiationResult Differentiate(const Tensor &output, const Array<Tensor> &i
   }
 
   // Collect reverse dependencies
-  std::vector<Tensor> stack({output});
+  std::vector<Tensor> stack({output_split});
   while (!stack.empty()) {
     Tensor tensor = stack.back();
+    tensor = SplitTensor(tensor);
     stack.pop_back();
 
     auto it = override_deps_map.find(tensor);
@@ -96,7 +98,7 @@ DifferentiationResult Differentiate(const Tensor &output, const Array<Tensor> &i
   // This map maps tensors to the corresponding adjoints (dLoss/dTensor)
   std::unordered_map<Tensor, Tensor> adjoints;
   // head is the adjoint of output by definition
-  adjoints[output] = head;
+  adjoints[output_split] = head;
 
   // This is a recursive function that does all the work. It computes the adjoint for a given
   // tensor, adds it to the map, and returns it
@@ -267,6 +269,11 @@ Array<Tensor> SingleHybridOpDifferentiate(const Array<Tensor> &outputs, const Ar
     LOG(FATAL) << "Check Failed! All outputs must come from the same Hybrid Op.";
   }
 
+  if (outputs.size() == 1) {
+    // when there is only one output, go back to Differentiate to enjoy all existing opt for autodiff
+    return Differentiate(outputs[0], inputs, heads[0])->result;
+  }
+
   auto DiffHybridOp = [&op, &heads](const Tensor &input) {
     Tensor input_grad;
     Array<Tensor> jacs = JacobianHybrid(op, input);
@@ -280,11 +287,15 @@ Array<Tensor> SingleHybridOpDifferentiate(const Array<Tensor> &outputs, const Ar
         head_cast, jac_output_input, static_cast<int>(output->shape.size()),
         output->op->name + "_" + std::to_string(output->value_index) + "_" + input->op->name + "_grad", false);
       if (input_grad.get()) {
+        // when input_grad is defined, cast it to the dtype of newly computed part and add this part to it
         if (input_grad->dtype != part->dtype) {
           input_grad = topi::cast(input_grad, part->dtype);
         }
+        input_grad = topi::add(input_grad, part);
+      } else {
+        // when input_grad is undefined, assign newly computed part to it
+        input_grad = part;
       }
-      input_grad = input_grad.get() ? topi::add(input_grad, part) : part;
     }
 
     return input_grad;

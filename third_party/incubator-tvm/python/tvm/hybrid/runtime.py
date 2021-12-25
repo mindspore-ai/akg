@@ -16,6 +16,7 @@
 # under the License.
 """Intrinsics of TVM-Python Hybrid Script for Python emulation runtime"""
 
+# 2021.12.15 - Support block_realize intrin; update the def of WithStub in runtime.
 # 2021.12.02 - Support more math intrin.
 # 2019.12.30 - Add class WithStub and support more functions in HYBRID_GLOBALS.
 
@@ -148,13 +149,16 @@ class WithStub:
         pass
 
     def __enter__(self):
-        pass
+        return self
 
-    def __exit__(self, type, value, traceback):
-        pass
+    def __exit__(self, exc_type, exc_value, exc_traceback):
+        return self
 
     def __del__(self):
-        pass
+        return self
+
+    def __call__(self, *arg, **kwargs):
+        return self
 
 HYBRID_GLOBALS = {
     'unroll'         : range,
@@ -201,6 +205,7 @@ HYBRID_GLOBALS = {
     'float64'        : numpy.float64,
     'ceil_div'       : lambda a, b: (a + b - 1) // b,
     'attr'           : WithStub(),
+    'block_realize'  : WithStub(),
     'max_num_threads': max_num_threads,
     'sub_relu': lambda a, b: a
 }
