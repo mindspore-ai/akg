@@ -77,8 +77,8 @@ class AxisAttrNormalizer : public IRMutator {
       if (rank_ == 0) {
         rank_ = 1;
       }
-      if (GetOpName(op) == "ExpandDims") {
-        // the valid axis of ExpandDims is in [-1-rank, rank]
+      if (GetOpName(op) == "ExpandDims" || GetOpName(op) == "OneHot") {
+        // the valid axis of ExpandDims/OneHot is in [-1-rank, rank]
         rank_++;
       }
       if (is_csr_) {
