@@ -84,7 +84,7 @@ bool IsOtherOp(const std::string &op_name) {
     "MatMul",      "BatchMatMul", "Conv",         "Transpose",   "Tile",     "Assign",           "InplaceAssign",
     "EquivFormat", "TransData",   "AddMinValue",  "BroadcastTo", "PadAkg",   "UnPadAkg",         "Conv2D",
     "CumSum",      "CumProd",     "StridedSlice", "Custom",      "GatherNd", "TensorScatterAdd", "UnsortedSegmentSum",
-    "Gather",      "Custom",      "tuple_getitem"};
+    "Gather",      "OneHot",      "tuple_getitem"};
   return elems.find(op_name) != elems.end();
 }
 bool IsElemwise(const std::string &op_name) {

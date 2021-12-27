@@ -20,7 +20,7 @@
 
 namespace akg {
 
-// insert broadcast 
+// insert broadcast
 Stmt BroadcastInserter(const Stmt &s, BuildInfo *info);
 
 // normalize axis attr
@@ -68,6 +68,8 @@ Stmt TransDataRewriter(const Stmt &s, BuildInfo *info);
 // expand complex op
 Stmt ComplexExpander(const Stmt &s, BuildInfo *info);
 
-} // namespace akg
-#endif // COMPOSITE_PASS_H_
+// add attrs for op
+Stmt AddAttrsForOp(const Stmt &s, BuildInfo *info);
 
+}  // namespace akg
+#endif  // COMPOSITE_PASS_H_

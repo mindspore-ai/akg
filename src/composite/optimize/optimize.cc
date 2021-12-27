@@ -55,6 +55,7 @@ Stmt Optimize(Stmt &s, BuildInfo &info) {
   if (info.opt.target == "aicore") {
     ADD_PASS(pm, CleanZeroAligner);
   }
+  ADD_PASS(pm, AddAttrsForOp);
   return pm.Run(s);
 }
 
