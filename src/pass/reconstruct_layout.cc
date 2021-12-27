@@ -257,8 +257,11 @@ class SharedReconstruction : public IRMutator {
   Stmt Mutate_(const Realize *op, const Stmt &s) final {
     Stmt stmt = IRMutator::Mutate_(op, s);
     op = stmt.as<Realize>();
+    if (!op) {
+      return stmt;
+    }
     auto it_matrix = wmma_matrix_.find(akg::common::GetGlobalName(op->func->func_name()));
-    if (op != nullptr && it_matrix != wmma_matrix_.end() && op->func->func_name().find("shared") != std::string::npos) {
+    if (it_matrix != wmma_matrix_.end() && op->func->func_name().find("shared") != std::string::npos) {
       auto it_layout = wmma_layout_.find(it_matrix->second);
       auto pair_name = std::pair<std::string, std::string>(it_layout->first, it_layout->second);
       auto offset = shared_offset_.find(akg::common::GetGlobalName(op->func->func_name()));
@@ -339,7 +342,9 @@ class PackedReconstruction : public IRMutator {
       b_block_size_ = value;
     } else {
       auto value_ptr = op->value.as<StringImm>();
-      if (!value_ptr) return IRMutator::Mutate_(op, s);
+      if (!value_ptr) {
+        return IRMutator::Mutate_(op, s);
+      }
       auto value = value_ptr->value;
       if (value == "col_major_matrix_b") {
         b_col_major_ = true;
@@ -364,11 +369,15 @@ class PackedReconstruction : public IRMutator {
 
   Stmt Mutate_(const Realize *op, const Stmt &s) final {
     auto block_ptr = op->body.as<Block>();
-    if (!block_ptr) return IRMutator::Mutate_(op, s);
+    if (!block_ptr) {
+      return IRMutator::Mutate_(op, s);
+    }
     auto attr_ptr = block_ptr->first.as<AttrStmt>();
-    if (!attr_ptr) return IRMutator::Mutate_(op, s);
+    if (!attr_ptr) {
+      return IRMutator::Mutate_(op, s);
+    }
     auto attr_key = attr_ptr->attr_key;
-    auto matrix_name = attr_key.substr(attr_key.size() - 8);
+    auto matrix_name = attr_key.size() >= 8 ? attr_key.substr(attr_key.size() - 8) : "";
     auto local_name = op->func->func_name();
     if (matrix_name == "matrix_a") {
       a_local_name_ = local_name;
@@ -422,9 +431,9 @@ class PackedReconstruction : public IRMutator {
     Expr b = cast(int_type, m_rest == 0 || in_last_block == 0) * block_size;
     int small_block = block_size / 2;
     while (small_block > 0) {
-      auto has_small_block = in_last_block && (m_rest & small_block) > 0 && b == 0;
-      b = b + cast(int_type, has_small_block && mm >= a && mm < a + small_block) * small_block;
-      a = a + cast(int_type, has_small_block) * small_block;
+      auto has_small_block = in_last_block && (m_rest & small_block) > 0;
+      b = b + cast(int_type, has_small_block && mm >= a && mm < a + small_block && b == 0) * small_block;
+      a = a + cast(int_type, has_small_block && b == 0) * small_block;
       small_block /= 2;
     }
     auto new_idx = (block_idx * block_size + a) * k_len + mm - a + b * k;
@@ -432,7 +441,7 @@ class PackedReconstruction : public IRMutator {
   }
 
   std::string a_local_name_ = "";
-  bool a_col_major_;
+  bool a_col_major_ = false;
   int a_block_size_ = 8;
   Type a_dtype_;
   Expr a_k_len_;
@@ -441,7 +450,7 @@ class PackedReconstruction : public IRMutator {
   Expr a_extent1_;
 
   std::string b_local_name_ = "";
-  bool b_col_major_;
+  bool b_col_major_ = false;
   int b_block_size_ = 4;
   Type b_dtype_;
   Expr b_k_len_;
