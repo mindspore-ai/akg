@@ -134,16 +134,16 @@ class CSE {
     for (const Stage &s : sch->stages) {
       op_list.insert(s->op);
     }
-    for (const auto op : sch->outputs) {
+    for (const auto& op : sch->outputs) {
       count_used_number(op);
     }
-    for (const auto op : counter) {
+    for (const auto& op : counter) {
       if (op.second > 1) {
         RemoveShortCommonExpr(op.first, op.first);
       }
     }
     std::unordered_set<Operation> common_op;
-    for (const auto op : counter) {
+    for (const auto& op : counter) {
       int input_num = 0;
       input_num = count_input_number(op.first, input_num);
       if (op.first.as<ComputeOpNode>() != nullptr && op.second > 1 && input_num > 2) {
@@ -156,7 +156,7 @@ class CSE {
  private:
   void count_used_number(const Operation &op) {
     if (const auto compute = op.as<ComputeOpNode>()) {
-      for (const auto parent : op->InputTensors()) {
+      for (const auto& parent : op->InputTensors()) {
         if (op_list.count(parent->op) == 0) continue;
         if (counter.count(parent->op) == 0) counter[parent->op] = 0;
         counter[parent->op]++;
@@ -168,7 +168,7 @@ class CSE {
   int count_input_number(const Operation op, int input_num) {
     if (op.as<PlaceholderOpNode>() != nullptr) return (input_num + 1);
     if (const auto compute = op.as<ComputeOpNode>()) {
-      for (const auto parent : op->InputTensors()) {
+      for (const auto& parent : op->InputTensors()) {
         input_num = count_input_number(parent->op, input_num);
       }
     }
@@ -177,7 +177,7 @@ class CSE {
 
   void RemoveShortCommonExpr(const Operation op, const Operation root) {
     if (const auto cur_op = op.as<ComputeOpNode>()) {
-      for (const auto parent : cur_op->InputTensors()) {
+      for (const auto& parent : cur_op->InputTensors()) {
         if (counter.count(parent->op) && counter[parent->op] > 0) {
           counter[parent->op] -= counter[root];
         }

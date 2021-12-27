@@ -117,7 +117,7 @@ class OpDetector : public IRVisitor {
         type_ = OP_TYPE::T_TENSOR_OF_TENSOR;
         std::vector<const Variable *> vars;
         vars = checkTOfTensor(equation->b, mem_buffer_tab_) ? GetExprSpecVar(equation->a) : GetExprSpecVar(equation->b);
-        for (const auto var : vars) {
+        for (const auto& var : vars) {
           if (tab_.count(var) > 0) {
             tab_[var].push_back(op);
           }
@@ -552,7 +552,7 @@ class GatherTransform : public IRMutator {
 
   bool tableFind(const Variable *key1, const IfThenElse *key2) {
     if (tab_.count(key1) > 0) {
-      for (const auto item : tab_[key1]) {
+      for (const auto& item : tab_[key1]) {
         if (item == key2) {
           return true;
         }

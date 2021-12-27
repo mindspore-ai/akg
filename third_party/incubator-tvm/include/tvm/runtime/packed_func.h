@@ -543,7 +543,7 @@ class TVMPODValue_ {
  protected:
   friend class TVMArgsSetter;
   friend class TVMRetValue;
-  TVMPODValue_() : type_code_(kNull) {}
+  TVMPODValue_() : type_code_(kNull){value_.v_handle = nullptr;}
   TVMPODValue_(TVMValue value, int type_code)
       : value_(value), type_code_(type_code) {}
 
