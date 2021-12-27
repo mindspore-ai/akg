@@ -432,7 +432,7 @@ def profiling_analyse(device_id, time_before_launch):
         public_path = validate_and_normalize_path(public_path)
         cmd_list = [
             ["find", public_path, "-iname", "*.log.%d" % device_id, "-printf", "'%T+\t%p\n'"],
-            ["grep", "JOB"],
+            ["grep", "PROF"],
             ["sort", "-r"],
             ["head", "-n10"],
             ["awk", "{print $2}"],
@@ -445,17 +445,19 @@ def profiling_analyse(device_id, time_before_launch):
             else:
                 break
         try:
-            job_file = p[0].decode('utf8').strip().split('/')[-2]
+            tmp_path =  p[0].decode('utf8').strip().split('/')
+            device_file = tmp_path[-2]
+            prof_file = tmp_path[-3]
         except BaseException:
             logging.warning("failed to decode profiling result")
             return None
-        logging.debug("job file is: %s", job_file)
+        logging.debug("prof file is: %s", prof_file)
 
-        file_abs_path = public_path + "/" + job_file
+        file_abs_path = public_path + "/" + prof_file + "/" + device_file
         file_create_time = os.path.getctime(file_abs_path)
 
         if file_create_time < time_before_launch:
-            raise RuntimeError("The JOB file is too old")
+            raise RuntimeError("The PROF file is too old")
 
         count = 0
         while count < 5:
@@ -1091,7 +1093,10 @@ def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
     # backup inputs because the tensor names may be updated inside op_func
     inputs_backup = recursive_copy(inputs)
     target = attrs.get("target") if attrs and attrs.get("target", None) else CCE
-    output = op_func(*args, target=target)
+    kwargs = {"target": target}
+    kwargs = parse_kwargs(op_func, **kwargs)
+
+    output = op_func(*args, **kwargs)
 
     # restore inputs to make sure that tensor names are not changed by op_func
     inputs = inputs_backup

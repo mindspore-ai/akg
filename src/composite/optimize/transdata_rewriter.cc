@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "composite/optimize/transdata_rewriter.h"
+#include "composite/optimize/pass.h"
 #include "pass/utils.h"
 
 namespace akg {
@@ -120,7 +120,7 @@ class TransDataRewrite : public IRMutator {
     return false;
   }
 
-  Array<Expr> GetReshapeShape(Array<Expr> shape, std::string dst_format) {
+  Array<Expr> GetReshapeShape(Array<Expr> shape, const std::string &dst_format) {
     Array<Expr> NewShape;
     if (dst_format == "FRACTAL_NZ") {
       CHECK_GE(shape.size(), 2);
@@ -166,7 +166,7 @@ class TransDataRewrite : public IRMutator {
     return AttrStmt::make(attrs, "attrs", Expr(1), provide);
   }
 
-  std::vector<int> GetTransposePerm(int axes_num, std::string dst_format) {
+  std::vector<int> GetTransposePerm(int axes_num, const std::string &dst_format) {
     std::vector<int> tranpose_perm;
     CHECK_GE(axes_num, 4);
     int i = 0;
@@ -215,5 +215,5 @@ class TransDataRewrite : public IRMutator {
   int fractal_size = 16;
 };
 
-Stmt TransDataRewriter::Run(const Stmt &stmt) { return TransDataRewrite().Mutate(stmt); }
+Stmt TransDataRewriter(const Stmt &stmt, BuildInfo*) { return TransDataRewrite().Mutate(stmt); }
 }  // namespace akg

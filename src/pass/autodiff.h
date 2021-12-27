@@ -153,6 +153,38 @@ Differentiate(const Tensor &output, const Array<Tensor> &inputs = Array<Tensor>(
               const Map<std::string, NodeRef> &attrs = {}, const Array<Tensor> &new_pld_array = Array<Tensor>(),
               const FDiffBuildingBlock &fdiff = DiffBuildingBlock,
               const Map<Tensor, Array<Tensor>> &override_deps = Map<Tensor, Array<Tensor>>());
+
+/*!
+ * \brief Get the tensor representing the Jacobian of the output with respect to the input for hybrid op.
+ *
+ * \param op The hybrid op to differentiate.
+ * \param input The input tensor, which \p op should directly use.
+ * \return Array of tensor representing the Jacobian with shape `output.shape + input.shape` for every output.
+ */
+
+TVM_DLL Array<Tensor> JacobianHybrid(const air::HybridOpNode *&op, const Tensor &input);
+
+/*!
+ * \brief Perform differentiation for a single hybrid op/function.
+ *
+ *  Note that this function is only used for a single hybrid op's differentiation. This function could
+ *  autodiff for a hybrid op with multioutputs. And if you need to autodiff for a sequence of ops from a certain
+ *  graph, please refer to API "DifferentiationResult Differentiate(*args)";
+ *
+ *  Each item of the result is an adjoint for the corresponding item of
+ *  \p inputs, i.e. \p head multiplied by the Jacobian of \p output with respect to the
+ *  corresponding item of \p input.
+ *
+ * \param outpust Array of tensor to differentiate. Cannot be empty. Element cannot be null pointer.
+ * \param inputs Array of input tensors. Cannot be empty. Element cannot be null pointer.
+ * \param heads Array of the adjoints of the outputs. Should have the same length as the outputs.
+ *              Element cannot be null pointer.
+ * \return An array of adjoints corresponding to \p inputs.
+ */
+
+TVM_DLL Array<Tensor> SingleHybridOpDifferentiate(const Array<Tensor> &outputs, const Array<Tensor> &inputs,
+                                                  const Array<Tensor> &heads);
+
 }  // namespace ir
 }  // namespace akg
 #endif  // PASS_AUTODIFF_H_

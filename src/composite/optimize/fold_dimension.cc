@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "composite/optimize/fold_dimension.h"
+#include "composite/optimize/pass.h"
 
 #define FOLD_DIM_DUMP 0
 
@@ -597,6 +597,6 @@ class DimensionFolder : public IRMutator {
   BuildInfo &info_;
 };
 
-Stmt FoldDimension::Run(const Stmt &stmt) { return DimensionFolder(info_).Fold(stmt); }
+Stmt FoldDimension(const Stmt &stmt, BuildInfo *info) { return DimensionFolder(*info).Fold(stmt); }
 
 }  // namespace akg

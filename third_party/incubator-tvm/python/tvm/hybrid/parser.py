@@ -16,6 +16,7 @@
 # under the License.
 """Hybrid Script Parser"""
 
+# 2021.12.15 - Support block_realize intrin in with scope.
 # 2021.10.21 - Support reverse order loop range.
 # 2019.12.30 - Modify parser.py, add TensorIntrinSubscriptParser, generate_one_assign, visit_Assign,
 #              and some visit_ function, modify _floordiv.
@@ -661,11 +662,23 @@ class HybridParser(ast.NodeVisitor):
             context = node.items[0].context_expr
             # option = node.items[0].optional_vars
         _internal_assert(isinstance(context, ast.Call), "The object must be a Python func call!")
-        _internal_assert(context.func.id == "attr", "Only allow with attr()!")
-        args = [self.visit(i) for i in context.args]
         block = visit_list_to_block(self.visit, node.body)
-        return _make.AttrStmt(_api._IterVar(None, block.loop_var.name, 0), args[0],
-                              _api.convert(args[1]), block)
+        if context.func.id == "attr":
+            args = [self.visit(i) for i in context.args]
+            return _make.AttrStmt(_api._IterVar(None, block.loop_var.name, 0), args[0],
+                                  _api.convert(args[1]), block)
+        elif context.func.id == "allocate":
+            lhs = node.items[0].optional_vars
+            rhs = self.visit(context)
+            _ = self.generate_one_assign(lhs, rhs)
+            return _make.AttrStmt(rhs, "type",
+                                  _api.convert("inline"), block)
+        elif context.func.id == "block_realize":
+            args = [self.visit(i) for i in context.args]
+            return _make.AttrStmt(args[0].op, "block_realize",
+                                  _api.convert(True), block)
+        else:
+            raise ValueError("unsupported function in With scope")
 
 
     def visit_If(self, node):
@@ -755,8 +768,7 @@ class HybridParser(ast.NodeVisitor):
                 all_tensors.append(tensor)
                 all_regions.append(region)
             return getattr(calls,
-                           func_id)(*all_tensors,
-                                    *all_regions,
+                           func_id)(*(all_tensors+all_regions),
                                     input_buffer_map=self.arg_buffers,
                                     output_buffer_map=self.output_buffers,
                                     input_region_map=self.arg_regions,

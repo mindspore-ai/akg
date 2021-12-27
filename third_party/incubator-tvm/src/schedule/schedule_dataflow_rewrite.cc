@@ -26,6 +26,7 @@
  * 2020.10.27 - For the body of the factor_op in rfactor, perform the additional
  *              processing when the reduce axis is empty.
  * 2021.10.28 - Add NormalizeBody step and Inline Inject logic for hybrid and extern op
+ * 2021.12.15 - Add TmpVarInline logic in NormalizeBody for hybrid op
  */
 
 #include <tvm/schedule.h>
@@ -785,6 +786,115 @@ class IfThenElseReplace : public IRMutator {
   }
 };
 
+
+/*
+This pass is to inline tmp var defined in "block_realize" scope inside a hybrid op.
+The example:
+realize cube<float32>([0, 4], [0, 4]) {
+  produce cube {
+    // attr [[buffer(buffer, 0x55c34266f3a0), Tensor(shape=[4, 4], op.name=input_0)]]
+      buffer_bind_scope = tvm_tuple(0, 4, 0, 4):handle:I
+    // attr [[buffer(buffer, 0x55c34266f400), Tensor(shape=[4, 4], op.name=cube)]] buffer_bind_scope
+      = tvm_tuple(0, 4, 0, 4):handle:I
+    // attr [0] extern_scope = 0
+    // attr [placeholder(b, 0x55c34273aaf0)] realize_scope = "local"
+    realize b<float32>([0, 4], [0, 4]) {
+      // attr [placeholder(b, 0x55c34273aaf0)] block_realize = (bool)1
+      for (i0, 0, 4) {
+        for (i1, 0, 4) {
+          b(i0, i1) = (input_0(i0, i1)*input_0(i0, i1))
+        }
+      }
+      for (i0, 0, 4) {
+        for (i1, 0, 4) {
+          cube(i0, i1) = (b(i0, i1)*input_0(i0, i1))
+        }
+      }
+    }
+  }
+}
+.....................
+============>
+realize cube<float32>([0, 4], [0, 4]) {
+  produce cube {
+    // attr [[buffer(buffer, 0x55f7634071f0), Tensor(shape=[4, 4], op.name=input_0)]]
+      buffer_bind_scope = tvm_tuple(0, 4, 0, 4):handle:I
+    // attr [[buffer(buffer, 0x55f7633b2940), Tensor(shape=[4, 4], op.name=cube)]] buffer_bind_scope
+      = tvm_tuple(0, 4, 0, 4):handle:I
+    // attr [0] extern_scope = 0
+    for (i0, 0, 4) {
+      for (i1, 0, 4) {
+        cube(i0, i1) = ((input_0(i0, i1)*input_0(i0, i1))*input_0(i0, i1))
+      }
+    }
+  }
+}
+*/
+class TmpVarInline : public IRMutator {
+ public:
+  Stmt Mutate_(const Block* op, const Stmt& s) final {
+    Stmt first = Mutate(op->first);
+    Stmt rest = Mutate(op->rest);
+    if (const auto attr = first.as<AttrStmt>()) {
+      if (attr->attr_key == "block_realize") {
+        auto func = Downcast<FunctionRef>(attr->node);
+        auto find_body = ProvideBody(func);
+        find_body.Visit(attr->body);
+
+        if (find_body.can_inline()) {
+          bool is_lvalue = false;
+
+          PostOrderVisit(rest, [&is_lvalue, &func](const NodeRef& n) {
+            if (auto provide = n.as<Provide>()) {
+              if (provide->func == func) {
+                is_lvalue = true;
+              }
+            }
+          });
+
+          if (!is_lvalue) {
+            Array<Var> args;
+            auto body = find_body.body();
+            for (auto arg : find_body.args()) {
+              args.push_back(Downcast<Var>(arg));
+            }
+            inlined_[func] = true;
+            return ir::Inline(rest, func, args, body);
+          }
+        }
+        inlined_[func] = false;
+      }
+    }
+    return Block::make(first, rest);
+  }
+
+  Stmt Mutate_(const AttrStmt* op, const Stmt& s) {
+    Stmt body = this->Mutate(op->body);
+    FunctionRef func = Downcast<FunctionRef>(op->node);
+    if (op->attr_key == "realize_scope"){
+      if (auto attr_value = op->value.as<StringImm>()) {
+        if (attr_value->value == "local" && inlined_.count(func) > 0 && inlined_[func]) {
+          return body;
+        }
+      }
+    }
+    return AttrStmt::make(op->node, op->attr_key, op->value, body);
+  }
+
+  Stmt Mutate_(const Realize* op, const Stmt& s) {
+    FunctionRef func = op->func;
+    Stmt body = Mutate(op->body);
+    if (inlined_.count(func) > 0 && inlined_[func]) {
+      return body;
+    } else {
+      return Realize::make(op->func, op->value_index, op->type, op->bounds, op->condition, body);
+    }
+  }
+
+ private:
+  std::unordered_map<FunctionRef, bool, NodeHash, NodeEqual> inlined_;
+};
+
 void UpdateInlineInputs(std::set<Tensor>& new_inputs, const Array<Tensor>& inputs,
                         const std::unordered_map<Tensor, Operation>& inline_tensor_inputs) {
   for (auto input : inputs) {
@@ -833,6 +943,7 @@ void NormalizeBody(ScheduleNode* sch) {
       Stmt op_body = hybird_op->body;
       op_body = LetVarReplace().Mutate(op_body);
       op_body = IfThenElseReplace().Mutate(op_body);
+      op_body = TmpVarInline().Mutate(op_body);
       if (!hybird_op->body.same_as(op_body)) {
         op = HybridOpNode::make(hybird_op->name, hybird_op->tag, hybird_op->attrs,
                                 hybird_op->inputs, hybird_op->outputs, hybird_op->input_buffers_,

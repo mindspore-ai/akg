@@ -39,73 +39,82 @@ class Emitter : public IRVisitor {
       IRVisitor::Visit_(op);
     }
   }
+
   void Visit_(const Provide *op) override {
     CHECK(op->value.as<Call>());
     auto call = op->value.as<Call>();
-    auto op_name = call->name;
-    auto inputs = call->args;
-
-    if (op_name == "tuple_getitem") {
-      // tuple_getitem is called when getting items from multi result array
-      CHECK(inputs[0].as<Call>());
-      // the first input of tuple_getitem is the placeholder node of the array result
-      // get the real array result from array_result_ map
-      auto result_tuple_call = inputs[0].as<Call>()->func;
-      CHECK(array_result_.count(result_tuple_call));
-      Array<Tensor> tuple_result = array_result_[result_tuple_call];
-      // the second input of tuple_getitem is the index
-      // get the i'th result from the array result
-      Expr index = inputs[1];
-      CHECK(index->IsInstance<UIntImm>());
-      auto value_index = index.as<UIntImm>()->value;
-      Tensor t = tuple_result[value_index];
-      opt_.tensor_map[op->func] = t;
+    op_name_ = call->name;
+    auto real_inputs = GetRealInputs(call->args);
+    if (op_name_ == "tuple_getitem") {
+      ProcessTupleGetItem(op, real_inputs);
       return;
     }
+    EmitTopi(op, real_inputs);
+  }
 
-    Array<NodeRef> real_input;
+  void ProcessTupleGetItem(const Provide *op, const Array<NodeRef> &inputs) {
+    // tuple_getitem is called when getting items from multi result array
+    CHECK(inputs[0].as<Call>());
+    // the first input of tuple_getitem is the placeholder node of the array result
+    // get the real array result from array_result_ map
+    auto result_tuple_call = inputs[0].as<Call>()->func;
+    CHECK(array_result_.count(result_tuple_call));
+    Array<Tensor> tuple_result = array_result_[result_tuple_call];
+    // the second input of tuple_getitem is the index
+    // get the i'th result from the array result
+    NodeRef index = inputs[1];
+    CHECK(index->IsInstance<UIntImm>());
+    auto value_index = index.as<UIntImm>()->value;
+    Tensor t = tuple_result[value_index];
+    opt_.tensor_map[op->func] = t;
+  }
+
+  Array<NodeRef> GetRealInputs(const Array<Expr> &inputs) {
+    Array<NodeRef> real_inputs;
     for (const auto &input : inputs) {
       if (auto c = input.as<Call>()) {
         if (opt_.tensor_map.count(c->func) == 0) {
           Tensor t = placeholder(c->args, c->type, c->name);
           opt_.tensor_map[c->func] = t;
         }
-        real_input.push_back(opt_.tensor_map[c->func]);
+        real_inputs.push_back(opt_.tensor_map[c->func]);
       } else {
-        real_input.push_back(input);
+        real_inputs.push_back(input);
       }
     }
-    if (op_name == "MatMul") {
-      op_name = "BatchMatMul";
-    }
-    const auto *topi_f = air::runtime::Registry::Get(op_name);
-    if (topi_f == nullptr && !opt_.target.empty()) {
-      std::string target = opt_.target;
-      target[0] = std::toupper(target[0]);
-      topi_f = air::runtime::Registry::Get(target + op_name);
-    }
-    CHECK(topi_f) << "Akg topi has no op: " << op_name;
-    if (op_name == "Reshape") {  // reshape's attr may have shape [-1], it will cause error.
-      op_attrs_.Set("shape", op->args);
-    }
+    return real_inputs;
+  }
 
+  void EmitTopi(const Provide *op, const Array<NodeRef> &real_inputs) {
+    const auto *topi_f = GetTopiFunc();
     if (auto placeholder = op->func.as<air::PlaceholderOpNode>()) {
       if (placeholder->dtype.code() == kArrayHandle) {
         // in this case, the output is an array of tensor
         // store the result in array_result_ map
-        array_result_[op->func] = (*topi_f)(real_input, op_attrs_);
+        array_result_[op->func] = (*topi_f)(real_inputs, op_attrs_);
         return;
       } else {
-        Tensor t = (*topi_f)(real_input, op_attrs_);
-        if (op_name == "Assign") {
-          EmitAssign(t, inputs[0]);
+        Tensor t = (*topi_f)(real_inputs, op_attrs_);
+        if (op_name_ == "Assign") {
+          EmitAssign(t, Downcast<Expr>(real_inputs[0]));
         }
-        CollectNoinlineCandidate(real_input, t, op_name);
+        CollectNoinlineCandidate(real_inputs, t);
         opt_.tensor_map[op->func] = t;
       }
     } else {
       LOG(FATAL) << "Unexpected op func type: " << op->func;
     }
+  }
+
+  const PackedFunc *GetTopiFunc() {
+    const auto *topi_f = air::runtime::Registry::Get(op_name_);
+    if (topi_f == nullptr && !opt_.target.empty()) {
+      std::string target = opt_.target;
+      target[0] = std::toupper(target[0]);
+      topi_f = air::runtime::Registry::Get(target + op_name_);
+    }
+    CHECK(topi_f) << "Akg topi has no op: " << op_name_;
+    return topi_f;
   }
 
   void EmitAssign(Tensor &t, const Expr &input) {
@@ -120,7 +129,7 @@ class Emitter : public IRVisitor {
     assign_count_++;
   }
 
-  void CollectNoinlineCandidate(const Array<NodeRef> &real_input, const Tensor &t, const std::string &op_name) {
+  void CollectNoinlineCandidate(const Array<NodeRef> &real_inputs, const Tensor &t) {
 #ifdef ENABLE_GENERAL_TOT
     if (t->op->tag != "tot") {
       return;
@@ -129,7 +138,7 @@ class Emitter : public IRVisitor {
     auto no_inline = ir::GetInt32Const(Downcast<Expr>(attrs["no_inline"]));
     NodeRef arg(t);
     if (no_inline != -1) {
-      arg = real_input[no_inline];
+      arg = real_inputs[no_inline];
     }
     auto iter = std::find_if(opt_.noinline_candidate.begin(), opt_.noinline_candidate.end(),
                              [&arg](const Tensor &cand) { return Downcast<Tensor>(arg)->op->name == cand->op->name; });
@@ -142,6 +151,7 @@ class Emitter : public IRVisitor {
 
  private:
   BuildOpt &opt_;
+  std::string op_name_;
   Map<std::string, NodeRef> op_attrs_;
   std::map<FunctionRef, Array<Tensor>> array_result_;
   int assign_count_{0};

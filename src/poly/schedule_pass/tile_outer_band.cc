@@ -1068,7 +1068,7 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCuda(isl::schedule_node nod
 
   // tile matmul operator
   if (scop_info_.user_config_.GetEnableMatmul()) {
-    return TileMatmulOperator(node);
+    return TileMatmulOperatorForCuda(node);
   }
 
   node = node.child(0).insert_mark(PROMOTE_GLOBAL_TO_SHARED);
@@ -1084,7 +1084,7 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCuda(isl::schedule_node nod
   return node;
 }
 
-isl::schedule_node TileOuterBand::TileMatmulOperator(const isl::schedule_node &node) {
+isl::schedule_node TileOuterBand::TileMatmulOperatorForCuda(const isl::schedule_node &node) {
   auto tile_node = node;
   size_t start_depth = tile_node.get_tree_depth();
 
@@ -1231,19 +1231,115 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCpu(isl::schedule_node node
     return node;
   }
 
-  if (current_outer_bn->reduce_direction == ReduceDirection::X) {
-    return TileReduceX(node);
+  if (current_outer_bn->template_type == Template::MATMUL && scop_info_.user_config_.GetEnableMatmul()) {
+    return TileGemmOperatorForCpu(node);
   }
 
-  return TileOtherOperators(node);
+  if (current_outer_bn->reduce_direction == ReduceDirection::X) {
+    return TileReduceXForCpu(node);
+  }
+
+  if (current_outer_bn->reduce_direction == ReduceDirection::ALL) {
+    return TileAllReduceForCpu(node);
+  }
+
+  return TileElementWiseForCpu(node);
 }
 
-isl::schedule_node TileOuterBand::TileOtherOperators(const isl::schedule_node &orig_node) {
+bool TileOuterBand::IsContainReduceStatement(const isl::schedule_node &orig_node) {
+  if (!orig_node.isa<isl::schedule_node_filter>()) {
+    return false;
+  }
+
+  auto filter = orig_node.as<isl::schedule_node_filter>().get_filter();
+  return !filter.intersect(reduce_statements_).is_empty();
+}
+
+isl::schedule_node TileOuterBand::TileGemmOperatorForCpu(const isl::schedule_node &orig_node) {
   auto node = orig_node;
   size_t start_depth = node.get_tree_depth();
-  bool is_all_reduce =
-    scop_info_.analysis_result_.GetOuterBandNode(cur_band_index_)->reduce_direction == ReduceDirection::ALL;
-  node = is_all_reduce ? SplitReduceStatements(node).child(0) : node;
+
+  auto seq_node = SplitReduceStatements(node).parent();
+  if (!seq_node.isa<isl::schedule_node_sequence>()) {
+    return orig_node;
+  }
+
+  for (size_t i = 0; i < seq_node.n_children(); ++i) {
+    node = seq_node.child(i);
+    if (!node.isa<isl::schedule_node_filter>()) {
+      continue;
+    }
+    bool is_gemm = IsContainReduceStatement(node);
+    node = node.child(0);
+
+    if (is_gemm) {
+      node = TileGemmBandNodeForCpu(node);
+    } else {
+      node = TileElementWiseForCpu(node);
+    }
+    seq_node = node.parent().parent();
+  }
+
+  return node.ancestor(node.get_tree_depth() - start_depth);
+}
+
+isl::schedule_node TileOuterBand::TileGemmBandNodeForCpu(const isl::schedule_node &orig_node) {
+  if (!orig_node.isa<isl::schedule_node_band>()) {
+    return orig_node;
+  }
+
+  auto node = orig_node;
+  size_t start_depth = node.get_tree_depth();
+
+  node = IsolateTilesCpu(node, TILE_WITH_C1);
+
+  auto band_node = node.parent().as<isl::schedule_node_band>();
+  node = band_node.split(band_node.n_member() - 1);
+  // Parallel the m-axis of Tensor A (that is, the n-axis of the transpose of B).
+  node = InsertMarkerForLoop(node, FOR_PARALLEL, 1);
+  bool is_insert_mark = !GetMarkerName(node, FOR_PARALLEL).empty();
+  node = is_insert_mark ? node.child(0) : node;
+
+  node = node.child(0).child(0);
+  node = node.insert_mark(PROMOTE_GLOBAL_TO_REGISTER_A);
+  node = node.child(0);
+
+  node = IsolateTilesCpu(node, TILE_WITH_C0);
+  node = node.insert_mark(PROMOTE_GLOBAL_TO_REGISTER_B);
+
+  return node.ancestor(node.get_tree_depth() - start_depth);
+}
+
+isl::schedule_node TileOuterBand::TileAllReduceForCpu(const isl::schedule_node &orig_node) {
+  auto node = orig_node;
+  size_t start_depth = node.get_tree_depth();
+
+  auto seq_node = SplitReduceStatements(node).parent();
+  if (!seq_node.isa<isl::schedule_node_sequence>()) {
+    return orig_node;
+  }
+
+  for (size_t i = 0; i < seq_node.n_children(); ++i) {
+    node = seq_node.child(i);
+    if (!node.isa<isl::schedule_node_filter>()) {
+      continue;
+    }
+    bool is_reduce = IsContainReduceStatement(node);
+    node = node.child(0);
+    node = TileElementWiseForCpu(node, is_reduce);
+    seq_node = node.parent().parent();
+  }
+
+  return node.ancestor(node.get_tree_depth() - start_depth);
+}
+
+isl::schedule_node TileOuterBand::TileElementWiseForCpu(const isl::schedule_node &orig_node, const bool is_all_reduce) {
+  if (!orig_node.isa<isl::schedule_node_band>()) {
+    return orig_node;
+  }
+
+  auto node = orig_node;
+  size_t start_depth = node.get_tree_depth();
 
   // first tiling: parallel
   node = IsolateTilesCpu(node, TILE_WITH_C1);
@@ -1263,7 +1359,7 @@ isl::schedule_node TileOuterBand::TileOtherOperators(const isl::schedule_node &o
   return node.ancestor(node.get_tree_depth() - start_depth);
 }
 
-isl::schedule_node TileOuterBand::TileReduceX(const isl::schedule_node &orig_node) {
+isl::schedule_node TileOuterBand::TileReduceXForCpu(const isl::schedule_node &orig_node) {
   if (!orig_node.isa<isl::schedule_node_band>()) return orig_node;
 
   // split reduce axis
@@ -1298,6 +1394,10 @@ isl::schedule_node TileOuterBand::TileReduceX(const isl::schedule_node &orig_nod
 }
 
 isl::schedule_node TileOuterBand::IsolateTilesCpu(const isl::schedule_node &orig_node, const std::string &tile_level) {
+  if (!orig_node.isa<isl::schedule_node_band>()) {
+    return orig_node;
+  }
+
   const int n_member = orig_node.as<isl::schedule_node_band>().n_member();
   const int tile_number = static_cast<int>(tile_sizes_.size());
   CHECK(start_pos_ < tile_number) << "The starting position cannot be greater than or equal to the tiling size.";
@@ -1393,9 +1493,9 @@ isl::schedule_node TileOuterBand::SplitReduceStatements(const isl::schedule_node
   isl::schedule_node tile_node = orig_node;
   auto all_reduce_map = scop_info_.analysis_result_.GetReduceTensorInfoMap();
   ReduceManager reduce_manager(pass_info_, scop_info_);
-  isl::union_set reduce_statements = reduce_manager.GetCurrentNodeReduceStatements(tile_node, all_reduce_map, false);
+  reduce_statements_ = reduce_manager.GetCurrentNodeReduceStatements(tile_node, all_reduce_map, false);
 
-  if (!reduce_manager.SplitReduceStatements(tile_node, reduce_statements, pass_info_.dependences_)) {
+  if (!reduce_manager.SplitReduceStatements(tile_node, reduce_statements_, pass_info_.dependences_)) {
     return orig_node;
   }
   return tile_node;

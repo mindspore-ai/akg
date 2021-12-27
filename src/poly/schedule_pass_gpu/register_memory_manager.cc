@@ -92,11 +92,11 @@ isl::schedule RegisterMemoryManager::HoistRegisterMemoryOnDepth(isl::schedule_no
 
     if (scop_info_.user_config_.GetEnableMatmul() && !hoist_tensor_all_) {
       if (!hoist_compute_local_tensor_) {
-        if (!IsTensorAB(buffer_info.dst_tensor_id.get_name(), scop_info_)) {
+        if (GetTensorMark(buffer_info.dst_tensor_id.get_name(), scop_info_) == TENSOR_C) {
           continue;
         }
       } else {
-        if (IsTensorAB(buffer_info.dst_tensor_id.get_name(), scop_info_)) {
+        if (GetTensorMark(buffer_info.dst_tensor_id.get_name(), scop_info_) != TENSOR_C) {
           continue;
         }
       }
@@ -250,11 +250,11 @@ void RegisterMemoryManager::CreateTensorCluster(const isl::schedule_node &node, 
   for (const auto &item : tensor_list) {
     if (scop_info_.user_config_.GetEnableMatmul() && !hoist_tensor_all_) {
       if (!hoist_compute_local_tensor_) {
-        if (!IsTensorAB(item.get_name(), scop_info_)) {
+        if (GetTensorMark(item.get_name(), scop_info_) == TENSOR_C) {
           continue;
         }
       } else {
-        if (IsTensorAB(item.get_name(), scop_info_)) {
+        if (GetTensorMark(item.get_name(), scop_info_) != TENSOR_C) {
           continue;
         }
       }

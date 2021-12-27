@@ -23,7 +23,7 @@ from tests.common.test_utils import compute_blockdim
 from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
 
-def add_run(shape1, shape2, dtype, kernel_name="add", scale=1.0, attrs_op={}, polyhedral=True, attrs={}):
+def add_run(shape1, shape2, dtype, kernel_name="add", scale=1.0, attrs_op=None, polyhedral=True, attrs=None):
     if type(scale) is not float or not int:
         if type(attrs_op) is not bool:
             scale, attrs_op = 1.0, scale
@@ -34,8 +34,11 @@ def add_run(shape1, shape2, dtype, kernel_name="add", scale=1.0, attrs_op={}, po
     if not polyhedral:
         op_attrs = op_attrs + [polyhedral, attrs_op]
 
-    if attrs_op.get("dynamic"):
-        attrs_op["enable_double_buffer"] = False
+    attrs = {} if attrs is None else attrs
+    if isinstance(attrs_op, dict):
+        attrs.update(attrs_op)
+    if attrs.get("dynamic"):
+        attrs["enable_double_buffer"] = False
         if shape1 != shape2:
             raise TypeError("Input tensors have different shape. broadcast is't support for dynamic")
         var_shape = []
@@ -47,7 +50,6 @@ def add_run(shape1, shape2, dtype, kernel_name="add", scale=1.0, attrs_op={}, po
         build_shape1 = shape1
         build_shape2 = shape2
 
-    attrs.update(attrs_op)
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)

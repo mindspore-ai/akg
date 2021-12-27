@@ -25,7 +25,7 @@ import scipy as sp
 from akg.global_configs import get_kernel_meta_path
 from tests.common.gen_random import random_gaussian, gen_indices, gen_csr_indices
 from tests.common.test_utils import precheck, tensor_scatter_add_np, gather_np, \
-    csrmv_np, csr_reduce_sum_np, csr_mul_np, csr_div_np
+    csrmv_np, csr_reduce_sum_np, csr_mul_np, csr_div_np, one_hot_np
 
 
 def get_attr(attr_desc, attr_type):
@@ -391,9 +391,9 @@ op_dsl = {
     "Cast": lambda inputs, output, attr: cast_str(inputs, output, attr),
     "Reshape": lambda inputs, output, attr: "%s = np.reshape(%s, %s)" %
         (output[0]['tensor_name'], get_input(inputs[0][0]), output[0]['shape']),
-    "OneHot": lambda inputs, output, attr: "%s = np.one_hot(%s, %s, %s, %s, %s, %s)" %
-        (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]), get_input(inputs[2][0]),
-        attr[0]['value'], attr[1]['value'], inputs[0][0]['data_type']),
+    "OneHot": lambda inputs, output, attr: "%s = one_hot_np(%s, %s, %s, %s, %s, np.%s)" %
+        (output[0]['tensor_name'], get_input(inputs[0][0]), attr[1]['value'], get_input(inputs[1][0]), 
+        get_input(inputs[2][0]), attr[0]['value'], output[0]['data_type']),
     "ZerosLike": lambda inputs, output, attr: "%s = np.zeros_like(%s)" %
         (output[0]['tensor_name'], get_input(inputs[0][0])),
     "AddN": lambda inputs, output, attr: "%s = %s" %

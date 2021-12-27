@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "composite/optimize/intrin_rewriter.h"
+#include "composite/optimize/pass.h"
 #include "pass/utils.h"
 
 namespace akg {
@@ -166,5 +166,5 @@ class BroadcastRewriterMutator : public IRMutator {
   Tensor rewrite_out_tensor_;
 };
 
-Stmt IntrinRewriter::Run(const Stmt &stmt) { return BroadcastRewriterMutator().Mutate(stmt); }
+Stmt IntrinRewriter(const Stmt &stmt, BuildInfo*) { return BroadcastRewriterMutator().Mutate(stmt); }
 }  // namespace akg

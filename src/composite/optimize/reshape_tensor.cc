@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "composite/optimize/reshape_tensor.h"
+#include "composite/optimize/pass.h"
 #include <stack>
 
 namespace akg {
@@ -525,7 +525,7 @@ class ReshapeMatmul : public ReshapeTensorMutator {
   }
 };
 
-Stmt ReshapeTensor::Run(const Stmt &s) {
+Stmt ReshapeTensor(const Stmt &s, BuildInfo*) {
   auto stmt = ReshapeTensorMutator().Mutate(s);
   return ReshapeMatmul().Mutate(stmt);
 }

@@ -142,6 +142,7 @@ REGISTER_PASS(StrideKernelOp);
 REGISTER_PASS(UnifyLoopVars);
 REGISTER_PASS(TileCoverCorrect);
 REGISTER_PASS(ReconstructLayout);
+REGISTER_PASS(GemmFactor);
 REGISTER_PASS(ReductionFactor);
 }  // namespace ir
 }  // namespace akg

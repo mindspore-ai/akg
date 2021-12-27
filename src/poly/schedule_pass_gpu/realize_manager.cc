@@ -132,8 +132,74 @@ isl::schedule_node RealizeManager::InsertRealize(const isl::schedule_node &root)
   return res_root;
 }
 
+std::string RealizeManager::GetCurrentFilterTenaosrName(const isl::schedule_node &node) {
+  auto filter_node = node.as<isl::schedule_node_filter>();
+  CHECK(filter_node) << "Expected filters below sequence";
+  // Transform isl::union_set to a vector of isl::set
+  isl::union_set uset = filter_node.get_filter();
+  std::string cur_filter_name = "";
+  uset.foreach_set([this, &cur_filter_name](const isl::set &s) -> void {
+    std::string node_tensor_name = s.to_str();
+    size_t pos = 0;
+    if ((pos = node_tensor_name.find(LOCAL_SUFFIX)) != std::string::npos) {
+      node_tensor_name = node_tensor_name.erase(pos, node_tensor_name.size() - pos);
+      if ((pos = node_tensor_name.find_last_of(" ")) != std::string::npos) {
+        node_tensor_name = node_tensor_name.erase(0, pos + 1);
+      }
+    }
+    cur_filter_name = node_tensor_name;
+  });
+  return cur_filter_name;
+}
+
+isl::schedule RealizeManager::InsertPromotionMajor(const isl::schedule &sch) {
+  if (!scop_info_.user_config_.GetEnableMatmul()) {
+    return sch;
+  }
+
+  auto InsertMajorForSequence = [this](isl::schedule_node node) -> isl::schedule_node {
+    if (!node.isa<isl::schedule_node_sequence>()) {
+      return node;
+    }
+
+    if (!node.has_parent() || !node.parent().isa<isl::schedule_node_extension>()) {
+      return node;
+    }
+
+    if (node.n_children() < 1) {
+      return node;
+    }
+
+    for (size_t i = 0; i < node.n_children(); ++i) {
+      auto filter_node = node.child(i).as<isl::schedule_node_filter>();
+      std::string cur_filter_name = GetCurrentFilterTenaosrName(filter_node);
+
+      std::unordered_map<std::string, std::string> matmul_map = scop_info_.analysis_result_.GetMatrixMatmulMap();
+      std::unordered_map<std::string, std::string> matmul_major = scop_info_.analysis_result_.GetMatrixMatmulMajor();
+      if (matmul_map.find(cur_filter_name) == matmul_map.end() ||
+          matmul_major.find(cur_filter_name) == matmul_major.end()) {
+        continue;
+      }
+
+      auto matrix_matmul_map = matmul_map[cur_filter_name];
+      auto matrix_matmul_major = matmul_major[cur_filter_name];
+
+      auto insert_node = filter_node.child(0);
+      insert_node = insert_node.insert_mark(matrix_matmul_major + "_" + matrix_matmul_map);
+      node = insert_node.ancestor(2);
+    }
+    return node;
+  };
+  auto final_sch = sch.get_root().map_descendant_bottom_up(InsertMajorForSequence).get_schedule();
+  return final_sch;
+}
+
 isl::schedule RealizeManager::Run(isl::schedule sch) {
-  sch = scop_info_.sync_manager_.InsertPromotionSync(sch);
+  if (scop_info_.user_config_.GetTarget() == TARGET_CUDA) {
+    sch = scop_info_.sync_manager_.InsertPromotionSync(sch);
+  } else if (scop_info_.user_config_.GetTarget() == TARGET_CPU) {
+    sch = InsertPromotionMajor(sch);
+  }
   auto root = sch.get_root();
   auto res_root = InsertRealize(root);
   names_set_.clear();

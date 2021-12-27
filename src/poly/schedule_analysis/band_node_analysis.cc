@@ -97,6 +97,9 @@ class OperatorInfoCollector {
     if (op_type == Template::REDUCTION) {
       RecordReduceInfo();
     } else if (op_type == Template::MATMUL || op_type == Template::CONV) {
+      if (scop_info_.user_config_.GetTarget() == TARGET_CPU) {
+        RecordReduceInfo();
+      }
       RecordMatmulInfo();
     }
   }
@@ -155,13 +158,13 @@ class OperatorInfoCollector {
       reduce_tensor_info.stmt_node = op;
       reduce_tensor_info.stmt_map = upa;
       scop_info_.analysis_result_.RecordReduceTensorInfoMap(red_id, reduce_tensor_info);
+      SetReduceInitValue(reduce_tensor_info);
       auto type = scop_info_.analysis_result_.GetReduceOpType(red_id);
       if (type == AKG_REDUCE_AND || type == AKG_REDUCE_OR) {
         scop_info_.analysis_result_.SetOpTemplate(Template::BITWISE_REDUCTION);
       }
       if (AkgSupportedReduceOp.count(type) != 0) {
         reduce_tensor_info.write_tensor_name = op->func->func_name();
-        SetReduceInitValue(reduce_tensor_info);
         SetReduceWriteDataType(reduce_tensor_info);
         scop_info_.analysis_result_.UpdateReduceTensorInfoMap(red_id, reduce_tensor_info);
 
@@ -280,18 +283,21 @@ class OperatorInfoCollector {
       isl::space space = op_domain_space.params().add_named_tuple_id_ui(red_id, aff_list.size());
       space = op_domain_space.product(space).unwrap();
       isl::union_map upa = isl::union_map(isl::map(isl::multi_aff(space, aff_list)));
-      bool use_tensor_core = false;
-      if (CheckMatmul(op)) {
+      bool enable_tensor_core = false;
+      bool enable_matmul = CheckMatmul(op, enable_tensor_core);
+      enable_tensor_core &= enable_matmul;
+      if (enable_matmul) {
+        RecordMatrixInfoForFuse(op);
+      }
+      if (enable_tensor_core) {
         // Default vectorization access mode (128 bits).
         if (scop_info_.user_config_.GetVectorLength() == 0 && scop_info_.user_config_.GetTarget() != TARGET_CPU) {
           scop_info_.user_config_.SetVectorLength(PROMOTE_VECTORIZATION_BIT);
         }
-        RecordMatrixInfoForFuse(op);
-        use_tensor_core = true;
       }
-      scop_info_.user_config_.SetEnableMatmul(use_tensor_core);
-      scop_info_.user_config_.SetEnableTensorCore(use_tensor_core);
-      scop_info_.user_config_.SetEnableTensorCoreUsePoly(use_tensor_core);
+      scop_info_.user_config_.SetEnableMatmul(enable_matmul);
+      scop_info_.user_config_.SetEnableTensorCore(enable_tensor_core);
+      scop_info_.user_config_.SetEnableTensorCoreUsePoly(enable_tensor_core);
     }
   }
 
@@ -469,7 +475,7 @@ class OperatorInfoCollector {
     return true;
   }
 
-  bool CheckMatmul(const Provide *op) {
+  bool CheckMatmul(const Provide *op, bool &enable_tensor_core) {
     if (!scop_info_.user_config_.GetEnableMatmul()) {
       return false;
     }
@@ -499,9 +505,8 @@ class OperatorInfoCollector {
         !GetTensorNameAndType(tensor_b, tensor_b_name, tensor_b_type)) {
       return false;
     }
-    if (!IfEnableTensorCore(tensor_a_type, tensor_b_type, tensor_c_type)) {
-      return false;
-    }
+
+    enable_tensor_core = IfEnableTensorCore(tensor_a_type, tensor_b_type, tensor_c_type);
 
     scop_info_.analysis_result_.RecordMatrixMatmulMap(tensor_a_name, MATRIX_A);
     scop_info_.analysis_result_.RecordMatrixMatmulMap(tensor_b_name, MATRIX_B);
@@ -514,7 +519,7 @@ class OperatorInfoCollector {
 
     SetMmaModeForTensor(tensor_a_name, tensor_b_name);
 
-    if (tensor_c_type == Float(16)) {
+    if (tensor_c_type == Float(16) && enable_tensor_core) {
       std::string shared_tensors = tensor_a_name + " " + tensor_b_name + " " + tensor_c_name;
       scop_info_.user_config_.SetSharedTensors(shared_tensors);
     }
@@ -786,7 +791,7 @@ void AnalyzeBandNode::AnalyzeOuterBandTemplate() {
 }
 
 void AnalyzeBandNode::AnalyzeConvAndMatmulOp(const ProvideEntry &pe) {
-  if (scop_info_.user_config_.GetTarget() != TARGET_CUDA || pe.basic_op_type.find(AT_TRANSPOSE) == std::string::npos ||
+  if (pe.basic_op_type.find(AT_TRANSPOSE) == std::string::npos ||
       pe.basic_op_type.find(AT_ELEMWISE) == std::string::npos) {
     return;
   }

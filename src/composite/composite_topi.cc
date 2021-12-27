@@ -71,6 +71,17 @@ std::string GetString(const NodeRef &arg) {
   return val->value;
 }
 
+Type GetDstTypeFromAttrs(OpAttr attrs) {
+  CHECK(attrs.count("dst_type"));
+  auto attr = attrs["dst_type"];
+  CHECK(attr->IsInstance<StringImm>());
+  std::string dtype_str = attr.as<StringImm>()->value;
+  if (type_mapping.find(dtype_str) == type_mapping.end()) {
+    LOG(FATAL) << "Not support dtype: " << dtype_str;
+  }
+  return type_mapping[dtype_str];
+}
+
 void CommonSelect(NodeRef a, NodeRef b, NodeRef c, NodeRef d, TVMRetValue *rv, bool ge) {
   bool a_is_expr = a->IsInstance<ExprNode>();
   bool a_is_tensor = a->IsInstance<TensorNode>();
@@ -362,18 +373,6 @@ TVM_REGISTER_GLOBAL("Transpose").set_body([](TVMArgs args, TVMRetValue *rv) {
 });
 
 TVM_REGISTER_GLOBAL("Cast").set_body([](TVMArgs args, TVMRetValue *rv) {
-  auto type_mapping_copy = type_mapping;
-  auto ref = [&type_mapping_copy](OpAttr attrs) -> Type {
-    CHECK(attrs.count("dst_type"));
-    auto attr = attrs["dst_type"];
-    CHECK(attr->IsInstance<StringImm>());
-    std::string dtype_str = attr.as<StringImm>()->value;
-    if (type_mapping_copy.find(dtype_str) == type_mapping_copy.end()) {
-      LOG(FATAL) << "Not support dtype: " << dtype_str;
-    }
-    return type_mapping_copy[dtype_str];
-  };
-
   auto call = [](const Tensor &tensor, Type type) {
     std::string name = "T_cast_" + tensor->op->name;
     if (tensor->dtype == air::Float(32) && type == air::Bool()) {
@@ -391,7 +390,7 @@ TVM_REGISTER_GLOBAL("Cast").set_body([](TVMArgs args, TVMRetValue *rv) {
 
     return topi::cast(tensor, type, name);
   };
-  TOPI_ONE_INPUT_ONE_ATTR_CALL(args, rv, call, ref);
+  TOPI_ONE_INPUT_ONE_ATTR_CALL(args, rv, call, GetDstTypeFromAttrs);
 });
 
 TVM_REGISTER_GLOBAL("Tile").set_body([](TVMArgs args, TVMRetValue *rv) {
@@ -518,12 +517,14 @@ TVM_REGISTER_GLOBAL("OneHot").set_body([](TVMArgs args, TVMRetValue *rv) {
   auto attrs = args[1].operator OpAttr();
   CHECK(attrs.count("depth"));
   CHECK(attrs.count("axis"));
-  CHECK(attrs["depth"]->IsInstance<ExprNode>());
-  CHECK(attrs["axis"]->IsInstance<ExprNode>());
-  auto depth = ir::GetInt32Const(Downcast<Expr>(attrs["depth"]));
-  auto axis = ir::GetInt32Const(Downcast<Expr>(attrs["axis"]));
+  CHECK(attrs["depth"]->IsInstance<IntImm>());
+  air::Array<air::Integer> axis_array = ArrayOrInt(attrs["axis"]);
+  CHECK(!axis_array.empty());
+  auto depth = attrs["depth"].as<IntImm>()->value;
+  auto axis = Downcast<Array<Integer>>(attrs["axis"])[0]->value;
+  auto dtype = GetDstTypeFromAttrs(attrs);
 
-  *rv = topi::one_hot(indices, on_value, off_value, depth, axis, indices->dtype);
+  *rv = topi::one_hot(indices, on_value, off_value, depth, axis, dtype);
 });
 
 TVM_REGISTER_GLOBAL("Reciprocal").set_body([](TVMArgs args, TVMRetValue *rv) {
@@ -741,7 +742,7 @@ TVM_REGISTER_GLOBAL("BroadcastTo").set_body([](TVMArgs args, TVMRetValue *rv) {
   }
 });
 
-TVM_REGISTER_GLOBAL("CudaBatchMatMul").set_body([](TVMArgs args, TVMRetValue *rv) {
+void BatchMatMul(const TVMArgs &args, TVMRetValue *rv) {
   CHECK_GE(args.size(), 2);
   auto inputs = args[0].operator Array<NodeRef>();
   auto attrs = args[1].operator OpAttr();
@@ -759,12 +760,6 @@ TVM_REGISTER_GLOBAL("CudaBatchMatMul").set_body([](TVMArgs args, TVMRetValue *rv
   auto left_shape = left_matrix->shape;
   auto right_shape = right_matrix->shape;
   CHECK_EQ(left_shape.size(), right_shape.size());
-
-  auto type_checker = [](const Tensor &input_data, const std::string name) {
-    if (input_data->dtype != Float(16)) {
-      LOG(FATAL) << "dtype of input tensor " << name << " should be float16";
-    }
-  };
 
   Expr k;
   auto compute_out = [&k](const Array<Expr> &left_shape, const Array<Expr> &right_shape, bool transpose_a,
@@ -832,13 +827,34 @@ TVM_REGISTER_GLOBAL("CudaBatchMatMul").set_body([](TVMArgs args, TVMRetValue *rv
     return res;
   };
 
-  type_checker(left_matrix, "left_matrix");
-  type_checker(right_matrix, "right_matrix");
   batch_dim = left_shape.size() - 2;
   Array<Expr> output_shape = compute_out(left_shape, right_shape, transpose_a, transpose_b, batch_dim);
   reduce_k = air::reduce_axis(Range(0, k), "reduce_axis");
   auto name = "T_batch_matmul_" + left_matrix->op->name + "_" + right_matrix->op->name;
   *rv = compute(output_shape, fcompute, name, "matmul");
+}
+
+TVM_REGISTER_GLOBAL("CpuBatchMatMul").set_body([](TVMArgs args, TVMRetValue *rv) { BatchMatMul(args, rv); });
+
+TVM_REGISTER_GLOBAL("CudaBatchMatMul").set_body([](TVMArgs args, TVMRetValue *rv) {
+  CHECK_GE(args.size(), 2);
+  auto inputs = args[0].operator Array<NodeRef>();
+  auto attrs = args[1].operator OpAttr();
+  CHECK_GE(inputs.size(), 2);
+  CHECK(inputs[0]->IsInstance<TensorNode>());
+  CHECK(inputs[1]->IsInstance<TensorNode>());
+  auto left_matrix = Downcast<Tensor>(inputs[0]);
+  auto right_matrix = Downcast<Tensor>(inputs[1]);
+
+  auto type_checker = [](const Tensor &input_data, const std::string name) {
+    if (input_data->dtype != Float(16)) {
+      LOG(FATAL) << "dtype of input tensor " << name << " should be float16";
+    }
+  };
+  type_checker(left_matrix, "left_matrix");
+  type_checker(right_matrix, "right_matrix");
+
+  BatchMatMul(args, rv);
 });
 
 // only support fractal_zN: [ko mo mi ki] * [no ko ki ni] = [no mo mi ni]
