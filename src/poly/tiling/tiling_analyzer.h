@@ -379,6 +379,33 @@ class TileCandidate {
     bool is_elem;
     bool is_bcast;
   };
+
+  struct BufferUsage {
+    void Build(std::unordered_map<TilingAnalyzer::BufferEntry *, std::pair<int, int>> time_table) {
+      max_time = static_cast<int>(time_table.size() - 1);
+      for (auto cur_time = 0; cur_time <= max_time; ++cur_time) {
+        for (auto it : time_table) {
+          auto alloc_time = it.second.first;
+          if (buf_alloc_time.find(alloc_time) == buf_alloc_time.end()) {
+            buf_alloc_time[alloc_time] = {it.first};
+          } else {
+            buf_alloc_time[alloc_time].insert(it.first);
+          }
+          auto release_time = it.second.second + 1;
+          if (buf_release_time.find(release_time) == buf_release_time.end()) {
+            buf_release_time[release_time] = {it.first};
+          } else {
+            buf_release_time[release_time].insert(it.first);
+          }
+        }
+      }
+    }
+    int max_time;
+    std::unordered_map<int, std::unordered_set<TilingAnalyzer::BufferEntry *>> buf_alloc_time;
+    std::unordered_map<int, std::unordered_set<TilingAnalyzer::BufferEntry *>> buf_release_time;
+  };
+
+  std::unique_ptr<BufferUsage> buffer_usage_{nullptr};
   std::unique_ptr<DynamicMemInfo> dynamic_mem_info_{nullptr};
   std::unordered_map<const TileAxis *, TileVal> tile_val_;
 
@@ -388,9 +415,13 @@ class TileCandidate {
   void UpdateFixTileAxis(TileLevel level);
 
   std::vector<TileAxis *> GetTileAxis() { return this->tile_axis_; }
-  void ResetTileAxis() { this->tile_axis_.clear(); }
-  void ResetTileVal() { this->tile_val_.clear(); }
-  void UpdateConstTile(const TileAxis *a, int64_t c1_val, const int64_t c0_val = -1);
+  void ResetTileAxis() { 
+    this->tile_axis_.clear(); 
+  }
+  void ResetTileVal() { 
+    this->tile_val_.clear(); 
+  }
+  void UpdateConstTile(const TileAxis *a, int64_t c1_val, int64_t c0_val = -1);
   void UpdateC1Tile(const TileAxis *a, const Expr &c1_val);
   void UpdateC0Tile(const TileAxis *a, const Expr &c0_val);
   void UpdateTile(const TileAxis *a, const Expr &c1_val, const Expr &c0_val = Expr());
@@ -424,7 +455,7 @@ class TileCandidate {
   }
   int GetMinFactorToEnableMulticore(TileAxis *axis);
   int GetMaximalPendingBlocks(TileAxis *excluded_axis);
-  int GetDmaCopySizeWithinAxis(TileAxis *axis);
+  int GetDmaCopySizeWithinAxis(TileAxis *target_axis);
   int GetMinFactorForMinDataGranularity(TileAxis *axis);
 
  private:

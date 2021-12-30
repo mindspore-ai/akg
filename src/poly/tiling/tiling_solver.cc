@@ -1146,16 +1146,25 @@ TileCandidate *TraverseSolver::Solve() {
       std::vector<TileAxis *> ko_axes = this->analyzer_.GetAxesOfAttr(AttrInfo{AT_GEMM, "ko"});
       std::vector<TileAxis *> mo_axes = this->analyzer_.GetAxesOfAttr(AttrInfo{AT_GEMM, "mo"});
       std::vector<TileAxis *> no_axes = this->analyzer_.GetAxesOfAttr(AttrInfo{AT_GEMM, "no"});
-
-      auto MakeC1C0Consistency = [this](const std::vector<TileAxis *> &axes) {
+      std::stringstream ss;
+      auto MakeC1C0Consistency = [this, &ss](const std::vector<TileAxis *> &axes) {
         if (axes.size() == 1U) {
+          ss << "MakeC1C0Consistency: axis " << axes[0]->axis_type_ << this->cand_.GetConstTileVal(axes[0]).first
+             << " -> " << this->cand_.GetConstTileVal(axes[0]).second << "\n";
           cand_.UpdateConstTile(axes[0], this->cand_.GetConstTileVal(axes[0]).second);
         }
       };
-
-      MakeC1C0Consistency(ko_axes);
-      MakeC1C0Consistency(mo_axes);
-      MakeC1C0Consistency(no_axes);
+      if (!ko_axes.empty()) {
+        CHECK_EQ(ko_axes.size(), 1);
+        auto k_axis = ko_axes[0];
+        CHECK(k_axis->range_extent.as<IntImm>());
+        if (analyzer_.arith_ana_.CanProve(k_axis->range_extent > this->cand_.GetTileVal(k_axis).first)) {
+          ss << "KO TILE --> Cannot tile MO and NO.\n";
+          MakeC1C0Consistency(mo_axes);
+          MakeC1C0Consistency(no_axes);
+        }
+      }
+      analyzer_.GetTileLogger().AppendLog(DO_TILING, ss);
     }
   }
 
@@ -1192,7 +1201,6 @@ bool TraverseSolver::IsTilable(TileInfo *info) {
     } else {
       min_tile = cons.tile_mod_.as<IntImm>()->value;
     }
-
     if (axis->range_min > min_tile) {
       min_tile = axis->range_min;
     }
@@ -1282,11 +1290,18 @@ bool TraverseSolver::DoTiling(const TileInfo *info) {
   int64_t deviation = info->deviation;
   int64_t best_val = TileVarId::UNDEFINE;
   int64_t best_no_iso_val = TileVarId::UNDEFINE;
+  auto UpdateTile = [this, &info, &axis](int64_t tile_size) {
+    if (info->level == CACHE1) {
+      cand_.UpdateConstTile(axis, tile_size);
+    } else {
+      cand_.UpdateConstTile(axis, cand_.GetConstTileVal(axis).first, tile_size);
+    }
+  };
 
   if (cand_.SpaceVerify(axis, info->level, info->band)) {
     best_val = info->min_tile;
     best_no_iso_val = info->min_tile;
-    cand_.UpdateConstTile(axis, info->min_tile);
+    UpdateTile(info->min_tile);
   }
 
   int64_t best_devs = deviation;
@@ -1312,14 +1327,6 @@ bool TraverseSolver::DoTiling(const TileInfo *info) {
     best_no_iso_val = init;
     best_val = init;
   }
-
-  auto UpdateTile = [this, &info, &axis](int64_t tile_size) {
-    if (info->level == CACHE1) {
-      cand_.UpdateConstTile(axis, tile_size);
-    } else {
-      cand_.UpdateConstTile(axis, cand_.GetConstTileVal(axis).first, tile_size);
-    }
-  };
 
   auto UpdateChosenValue = [this, &best_no_iso_devs, &best_devs, &best_no_iso_val, &best_val, &axis](
                              int64_t tail, int64_t deviation, int64_t tile_size) {
@@ -1405,11 +1412,7 @@ bool TraverseSolver::DoTiling(const TileInfo *info) {
   }
   int64_t final_factor = (axis->forbid_iso || best_no_iso_val * balance_factor > best_val) ? best_no_iso_val : best_val;
   final_factor = PostprocessFinalFactor(final_factor, axis);
-  if (info->level == CACHE1) {
-    cand_.UpdateConstTile(axis, final_factor);
-  } else {
-    cand_.UpdateConstTile(axis, cand_.GetConstTileVal(axis).first, final_factor);
-  }
+  UpdateTile(final_factor);
   return success;
 }
 
