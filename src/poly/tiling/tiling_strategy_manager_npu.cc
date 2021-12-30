@@ -223,7 +223,7 @@ void DmaAlignStrategy::AddNpuConstraint() {
   }
 
   for (auto axis : analyzer_->GetAxesOfAttr(AT_BROADCAST_INNERMOST_AXIS)) {
-    for (const auto attr : axis->attrs) {
+    for (const auto &attr : axis->attrs) {
       if (attr.attr_key != AT_BROADCAST_INNERMOST_AXIS) {
         continue;
       }

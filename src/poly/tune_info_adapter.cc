@@ -55,7 +55,7 @@ TuneAxisInfo AxisInfoAdapter(TileAxis *a, TileSizes dims) {
   if (axis_info->dims.empty()) {
     axis_info->dims.push_back(MIN_TILE);
   }
-  for (const auto attr : a->attrs) {
+  for (const auto &attr : a->attrs) {
     if (axis_info->attrs.find(attr.attr_key) != axis_info->attrs.end()) {
       axis_info->attrs[attr.attr_key].push_back(attr.attr_value);
     } else {
@@ -120,7 +120,7 @@ std::unique_ptr<TuneInfo> AdaptTuneInfo(const TilingAnalyzer &analyzer, ScopInfo
         tune_info->analysis.Set("op_template", StringImm::make(t[0]));
       }
       auto axis_info = make_node<TuneAxisInfoNode>();
-      for (const auto attr : a->attrs) {
+      for (const auto &attr : a->attrs) {
         if (axis_info->attrs.find(attr.attr_key) != axis_info->attrs.end()) {
           axis_info->attrs[attr.attr_key].push_back(attr.attr_value);
         } else {

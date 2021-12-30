@@ -137,13 +137,13 @@ class CSE {
     for (const auto op : sch->outputs) {
       count_used_number(op);
     }
-    for (const auto op : counter) {
+    for (const auto &op : counter) {
       if (op.second > 1) {
         RemoveShortCommonExpr(op.first, op.first);
       }
     }
     std::unordered_set<Operation> common_op;
-    for (const auto op : counter) {
+    for (const auto &op : counter) {
       int input_num = 0;
       input_num = count_input_number(op.first, input_num);
       if (op.first.as<ComputeOpNode>() != nullptr && op.second > 1 && input_num > 2) {
