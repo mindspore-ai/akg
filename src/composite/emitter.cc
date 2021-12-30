@@ -80,7 +80,15 @@ void Emitter::EmitTopi(const Provide *op, const Array<NodeRef> &real_inputs) {
       array_result_[op->func] = (*topi_f)(real_inputs, op_attrs_);
       return;
     } else {
-      Tensor t = (*topi_f)(real_inputs, op_attrs_);
+      NodeRef res = (*topi_f)(real_inputs, op_attrs_);
+      Tensor t;
+      if (res->IsInstance<TensorNode>()) {
+        t = Downcast<Tensor>(res);
+      } else {
+        auto val = Downcast<Expr>(res);
+        auto fcompute = [&val](const Array<Var> &indices) { return val; };
+        t = compute(Array<Expr>{1}, fcompute, "broadcast");
+      }
       if (op_name_ == "Assign") {
         EmitAssign(t, Downcast<Expr>(real_inputs[0]));
       }
