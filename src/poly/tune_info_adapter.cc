@@ -110,12 +110,8 @@ std::unique_ptr<TuneInfo> AdaptTuneInfo(const TilingAnalyzer &analyzer, ScopInfo
 
   auto CollectTileAxis = [&tune_info, &analyzer, &scop_info, &dims](TileAxis *a) {
     if (a == analyzer.RootAxis()) {
-      if (scop_info->user_config_.GetTarget() == TARGET_CPU) {
-        tune_info->analysis.Set("op_template", StringImm::make("CPU"));
-      } else {
-        auto t = scop_info->analysis_result_.ShowOpTemplate();
-        tune_info->analysis.Set("op_template", StringImm::make(t));
-      }
+      auto t = scop_info->analysis_result_.ShowOpTemplate();
+      tune_info->analysis.Set("op_template", StringImm::make(t));
       auto axis_info = make_node<TuneAxisInfoNode>();
       for (const auto attr : a->attrs) {
         if (axis_info->attrs.find(attr.attr_key) != axis_info->attrs.end()) {
