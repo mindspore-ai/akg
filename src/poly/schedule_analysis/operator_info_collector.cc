@@ -119,8 +119,9 @@ class CollectToTTensor : public IRVisitor {
     if (auto idx = e.as<IntImm>()) {
       if (lhs_idx_.count(idx->value) > 0) {
         int erase_idx = lhs_idx_[idx->value];
-        CHECK(static_cast<int>(lhs.indices.size()) > erase_idx);
-        lhs.indices.erase(lhs.indices.begin() + erase_idx);
+        if (static_cast<int>(lhs.indices.size()) > erase_idx) {
+          lhs.indices.erase(lhs.indices.begin() + erase_idx);
+        }
       }
     }
   }

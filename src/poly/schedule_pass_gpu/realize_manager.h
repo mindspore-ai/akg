@@ -46,6 +46,9 @@ class RealizeManager : public SchedulePass {
   std::string GetTensorName(const isl::schedule_node_filter &filter_node);
 
   isl::schedule_node BreadthFirstTopDown(const isl::schedule_node &node, bool &end);
+
+  std::string GetCurrentFilterTenaosrName(const isl::schedule_node &node);
+  isl::schedule InsertPromotionMajor(const isl::schedule &sch);
 };
 
 }  // namespace poly

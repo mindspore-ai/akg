@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "composite/optimize/delete_cast.h"
+#include "composite/optimize/pass.h"
 
 namespace akg {
 class DeleteCastMatcher : public IRVisitor {
@@ -145,7 +145,7 @@ class DeleteCastMutator : public IRMutator {
   std::string matmul_output_;
 };
 
-Stmt DeleteCast::Run(const Stmt &s) {
+Stmt DeleteCast(const Stmt &s, BuildInfo*) {
   DeleteCastMatcher deletecast_matcher;
   deletecast_matcher.Visit(s);
   if (!deletecast_matcher.Matched()) {

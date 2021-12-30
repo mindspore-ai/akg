@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "composite/optimize/axis_attr_normalize.h"
+#include "composite/optimize/pass.h"
 
 #include <algorithm>
 #include <vector>
@@ -77,8 +77,8 @@ class AxisAttrNormalizer : public IRMutator {
       if (rank_ == 0) {
         rank_ = 1;
       }
-      if (GetOpName(op) == "ExpandDims") {
-        // the valid axis of ExpandDims is in [-1-rank, rank]
+      if (GetOpName(op) == "ExpandDims" || GetOpName(op) == "OneHot") {
+        // the valid axis of ExpandDims/OneHot is in [-1-rank, rank]
         rank_++;
       }
       if (is_csr_) {
@@ -108,5 +108,5 @@ class AxisAttrNormalizer : public IRMutator {
   static constexpr int kCSRRank = 2;
 };
 
-Stmt AxisAttrNormalize::Run(const Stmt &stmt) { return AxisAttrNormalizer().Mutate(stmt); }
+Stmt AxisAttrNormalize(const Stmt &stmt, BuildInfo*) { return AxisAttrNormalizer().Mutate(stmt); }
 }  // namespace akg

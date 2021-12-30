@@ -221,14 +221,21 @@ class TestBase(object):
         :param mode: case mode
         :return:
         """
-        func_fromlist = "tests.common.test_run.ascend." + func
+        run_mod = "tests.common.test_run"
+        func_py = None
         try:
-            new_func = func
-            func_py = __import__(func_fromlist, fromlist=func)
-            run_func = getattr(func_py, new_func)
-        except (ImportError, AttributeError) as e:
+            backend_mod = run_mod + "." + utils.get_backend(self.target).lower()
+            func_mod = backend_mod + "." + func
+            func_py = __import__(func_mod, fromlist=func)
+        except ModuleNotFoundError:
+            func_mod = run_mod + "." + func
+            func_py = __import__(func_mod, fromlist=func)
+        if func_py is None:
+            raise ImportError("import %s fail, please check!" % func_mod)
+        try:
+            run_func = getattr(func_py, func)
+        except (ImportError, AttributeError):
             new_func = func.split("_run")[0] + "_" + mode
-            func_py = __import__(func_fromlist, fromlist=new_func)
             run_func = getattr(func_py, new_func)
         return run_func
 

@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "composite/optimize/complex_expander.h"
+#include "composite/optimize/pass.h"
 
 namespace akg {
 
@@ -48,5 +48,5 @@ class ComplexExpandMutator : public IRMutator {
   }
 };
 
-Stmt ComplexExpander::Run(const Stmt &s) { return ComplexExpandMutator().Mutate(s); }
+Stmt ComplexExpander(const Stmt &s, BuildInfo*) { return ComplexExpandMutator().Mutate(s); }
 }  // namespace akg

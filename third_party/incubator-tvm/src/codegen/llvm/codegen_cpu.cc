@@ -24,6 +24,8 @@
 /*
  * 2021.11.01
  *   Adapt LLVM 12 interface support
+ * 2021.12.15
+ *   Change buffer manager interface as argument
  */
 
 #ifdef TVM_LLVM_VERSION
@@ -501,26 +503,28 @@ void CodeGenCPU::CreateComputeScope(const AttrStmt* op) {
   UnpackClosureData(cdata, vargs, &new_vmap);
   links_data = builder_->CreatePointerCast(new_vmap[extern_links_.get()], links_data->getType());
   UnpackClosureData(links_data, link_vars, &new_vmap);
-  extern_func_map_[parallel_launch_->name_hint] =
+  std::unordered_map<std::string, std::tuple<llvm::Value*, llvm::Type*, llvm::FunctionType*>> new_extern_fmap;
+  new_extern_fmap[parallel_launch_->name_hint] =
       std::make_tuple(new_vmap[parallel_launch_.get()], f_tvm_parallel_launch_->getType(),
                     ftype_tvm_parallel_launch_);
-  extern_func_map_[alloc_launch_->name_hint] =
+  new_extern_fmap[alloc_launch_->name_hint] =
       std::make_tuple(new_vmap[alloc_launch_.get()], f_tvm_alloc_launch_->getType(),
                     ftype_alloc_launch_);
-  extern_func_map_[free_launch_->name_hint] =
+  new_extern_fmap[free_launch_->name_hint] =
       std::make_tuple(new_vmap[free_launch_.get()], f_tvm_free_launch_->getType(),
                     ftype_free_launch_);
 
   // swap new variable map with current var context.
   std::swap(function_, fcompute);
   std::swap(new_vmap, var_map_);
+  std::swap(extern_func_map_, new_extern_fmap);
   this->VisitStmt(op->body);
   builder_->CreateRet(ConstInt32(0));
   // swap the var map back, now we are back on track.
+  std::swap(extern_func_map_, new_extern_fmap);
   std::swap(new_vmap, var_map_);
   std::swap(function_, fcompute);
   builder_->SetInsertPoint(compute_call_end);
-  extern_func_map_.clear();
 }
 
 llvm::Value* CodeGenCPU::PackClosureData(const Array<Var>& vfields, uint64_t* num_bytes) {
@@ -567,6 +571,11 @@ void CodeGenCPU::CreateParallelLaunch(const Stmt& body, int num_task) {
   // allocate and setup the closure, call the closure.
   Array<Var> vfields = ir::UndefinedVars(body, {});
   uint64_t nbytes;
+  Var buffer_links("buffer_links");
+  Array<Var> buffer_link_vars = {alloc_launch_, free_launch_};
+  llvm::Value *links_data = PackClosureData(buffer_link_vars, &nbytes);
+  var_map_[buffer_links.get()] = builder_->CreatePointerCast(links_data, t_void_p_);
+  vfields.push_back(buffer_links);
   llvm::Value* cdata = PackClosureData(vfields, &nbytes);
   auto parallel_launch_func =
       builder_->CreatePointerCast(std::get<0>(extern_func_map_[parallel_launch_->name_hint]),
@@ -591,6 +600,16 @@ void CodeGenCPU::CreateParallelLaunch(const Stmt& body, int num_task) {
   // setup new variable map, swap it with current var context.
   std::unordered_map<const Variable*, llvm::Value*> new_vmap;
   UnpackClosureData(cdata, vfields, &new_vmap);
+  links_data = builder_->CreatePointerCast(new_vmap[buffer_links.get()], links_data->getType());
+  UnpackClosureData(links_data, buffer_link_vars, &new_vmap);
+
+  std::unordered_map<std::string, std::tuple<llvm::Value*, llvm::Type*, llvm::FunctionType*>> new_extern_fmap;
+  new_extern_fmap[alloc_launch_->name_hint] =
+      std::make_tuple(new_vmap[alloc_launch_.get()], f_tvm_alloc_launch_->getType(),
+                    ftype_alloc_launch_);
+  new_extern_fmap[free_launch_->name_hint] =
+      std::make_tuple(new_vmap[free_launch_.get()], f_tvm_free_launch_->getType(),
+                    ftype_free_launch_);
   // setup parallel env
   ParallelEnv par_env;
   par_env.task_id = Var("task_id", Int(32));
@@ -601,9 +620,11 @@ void CodeGenCPU::CreateParallelLaunch(const Stmt& body, int num_task) {
   std::swap(function_, f);
   std::swap(parallel_env_, par_env);
   std::swap(var_map_, new_vmap);
+  std::swap(extern_func_map_, new_extern_fmap);
   this->VisitStmt(body);
   builder_->CreateRet(ConstInt32(0));
   // swap the var map back, now we are back on track.
+  std::swap(extern_func_map_, new_extern_fmap);
   std::swap(var_map_, new_vmap);
   std::swap(parallel_env_, par_env);
   std::swap(function_, f);

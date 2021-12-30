@@ -54,6 +54,10 @@ constexpr auto BEST_PARALLEL_NUM = 192;
 constexpr auto PARALLEL_DECREASE_VALUE = 8;
 constexpr auto BEST_UNROLL_NUM = 256;
 constexpr auto MIN_UNROLL_NUM = 8;
+constexpr auto MATMUL_BEST_FACTOR = 128;
+constexpr auto MATMUL_AXIS_M = 0;
+constexpr auto MATMUL_AXIS_N = 1;
+constexpr auto MATMUL_AXIS_K = 2;
 
 // Controlled by custom tiling.
 constexpr auto ALLOCATION_PERCENTAGE = 0.5;  // reserved for double buffer in default

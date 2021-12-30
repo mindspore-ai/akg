@@ -93,14 +93,21 @@ void OperatorSharedStrategy::RecordPromotedTensorInfo(const isl::schedule_node &
     }
 
     for (const auto &item : tensor_list) {
-      isl::id dst_tensor_id = GetGpuIndexDstId(GpuMemType::SHARED, item);
+      GpuMemType gpu_mem_type = GpuMemType::SHARED;
+      MemType mem_type = MemType::SHARED_;
+      if (is_local_) {
+        gpu_mem_type = GpuMemType::LOCAL;
+        mem_type = MemType::LOCAL_;
+      }
+
+      isl::id dst_tensor_id = GetGpuIndexDstId(gpu_mem_type, item);
       if (scop_info_.IsCopyinTensor(item.get_name()) && band_index_ != 0) {
-        dst_tensor_id = GetGpuIndexDstId(GpuMemType::SHARED, item, band_index_);
+        dst_tensor_id = GetGpuIndexDstId(gpu_mem_type, item, band_index_);
       }
       std::vector<size_t> buffer_sizes;
       std::vector<std::pair<isl::id, MemType>> data_stream;
       data_stream.push_back(std::make_pair(item, MemType::DDR));
-      data_stream.push_back(std::make_pair(item, MemType::SHARED_));
+      data_stream.push_back(std::make_pair(item, mem_type));
       BufferDefInfo promoted_info = BufferDefInfo{item,
                                                   dst_tensor_id,
                                                   item,
@@ -215,12 +222,12 @@ void BatchMatmulSharedStrategy::CreateClusterList(const isl::schedule_node &node
     auto it = final_id_sets.begin();
     while (it != final_id_sets.end()) {
       if (!hoist_tensor_c) {
-        if (!IsTensorAB(*it, scop_info_)) {
+        if (GetTensorMark(*it, scop_info_) == TENSOR_C) {
           it = final_id_sets.erase(it);
           continue;
         }
       } else {
-        if (IsTensorAB(*it, scop_info_)) {
+        if (GetTensorMark(*it, scop_info_) != TENSOR_C) {
           it = final_id_sets.erase(it);
           continue;
         }
@@ -233,6 +240,70 @@ void BatchMatmulSharedStrategy::CreateClusterList(const isl::schedule_node &node
   for (auto mark_name : mark_names_) {
     bool hoist_tensor_c = mark_name == PROMOTE_GLOBAL_TO_SHARED_C;
     auto final_id_sets = DeleteTensorSets(id_sets, hoist_tensor_c);
+    RecordPromotedTensorInfo(node, final_id_sets, mark_name);
+  }
+}
+
+std::set<std::string> CpuMemoryStrategy::GetInitPromotedTensor() {
+  auto read_map = scop_info_.StmtReadMap();
+  auto write_map = scop_info_.StmtWriteMap();
+  std::set<std::string> id_sets;
+  for (auto item : read_map) {
+    for (auto item_id : item.second) {
+      if (id_sets.count(item_id.get_name()) == 0) {
+        id_sets.insert(item_id.get_name());
+      }
+    }
+  }
+
+  for (auto item : write_map) {
+    for (auto item_id : item.second) {
+      if (id_sets.count(item_id.get_name()) == 0) {
+        id_sets.insert(item_id.get_name());
+      }
+    }
+  }
+
+  return id_sets;
+}
+
+void CpuMemoryStrategy::CreateClusterList(const isl::schedule_node &node) {
+  std::set<std::string> id_sets = GetInitPromotedTensor();
+  RecordCustomPromotedTensors(id_sets);
+  DeleteNotPromotedTensors(id_sets);
+  auto it = id_sets.begin();
+  while (it != id_sets.end()) {
+    if (GetTensorMark(*it, scop_info_) == TENSOR_C) {
+      it = id_sets.erase(it);
+      continue;
+    }
+    ++it;
+  }
+
+  auto DeleteTensorSets = [this](const std::set<std::string> &id_sets,
+                                 const bool hoist_tensor_a) -> std::set<std::string> {
+    std::set<std::string> final_id_sets = id_sets;
+    auto it = final_id_sets.begin();
+    while (it != final_id_sets.end()) {
+      if (!hoist_tensor_a) {
+        if (GetTensorMark(*it, scop_info_) != TENSOR_B) {
+          it = final_id_sets.erase(it);
+          continue;
+        }
+      } else {
+        if (GetTensorMark(*it, scop_info_) != TENSOR_A) {
+          it = final_id_sets.erase(it);
+          continue;
+        }
+      }
+      ++it;
+    }
+    return final_id_sets;
+  };
+
+  for (auto mark_name : mark_names_) {
+    bool hoist_tensor_a = mark_name == PROMOTE_GLOBAL_TO_REGISTER_A;
+    auto final_id_sets = DeleteTensorSets(id_sets, hoist_tensor_a);
     RecordPromotedTensorInfo(node, final_id_sets, mark_name);
   }
 }

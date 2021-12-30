@@ -34,6 +34,10 @@
  * 2021.05.27 - Add intrinsic var for GEMM op fusion on TensorCore.
  */
 
+/*
+ * 2021.12.23 - Add intrinsic var for GEMM op on Cpu.
+ */
+
 #ifndef TVM_IR_H_
 #define TVM_IR_H_
 
@@ -1660,6 +1664,7 @@ constexpr const char* akg_fragment_elem = "akg_fragment_elem";
 
 constexpr const char* tvm_cce_string_print = "tvm_cce_string_print";
 
+constexpr const char* sgemm_kernel_avx = "SgemmKernelAvx";
 }   // namespace intrinsic
 
 /*!

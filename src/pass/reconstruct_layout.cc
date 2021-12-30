@@ -257,8 +257,11 @@ class SharedReconstruction : public IRMutator {
   Stmt Mutate_(const Realize *op, const Stmt &s) final {
     Stmt stmt = IRMutator::Mutate_(op, s);
     op = stmt.as<Realize>();
+    if (!op) {
+      return stmt;
+    }
     auto it_matrix = wmma_matrix_.find(akg::common::GetGlobalName(op->func->func_name()));
-    if (op != nullptr && it_matrix != wmma_matrix_.end() && op->func->func_name().find("shared") != std::string::npos) {
+    if (it_matrix != wmma_matrix_.end() && op->func->func_name().find("shared") != std::string::npos) {
       auto it_layout = wmma_layout_.find(it_matrix->second);
       auto pair_name = std::pair<std::string, std::string>(it_layout->first, it_layout->second);
       auto offset = shared_offset_.find(akg::common::GetGlobalName(op->func->func_name()));
@@ -310,13 +313,169 @@ class SharedReconstruction : public IRMutator {
   Expr offset_expr_;
 };
 
-Stmt ReconstructLayout(const Stmt &stmt) {
-  TensorCoreMatcher tensorcore_matcher;
-  tensorcore_matcher.Visit(stmt);
-  if (!tensorcore_matcher.Matched()) {
-    return stmt;
+class PackedMatcher : public IRVisitor {
+ public:
+  explicit PackedMatcher() {}
+
+  void Visit_(const AttrStmt *op) final {
+    if (op->attr_key == "PACKA" || op->attr_key == "PACKB") {
+      is_matched_ = true;
+    }
+    IRVisitor::Visit_(op);
   }
-  return SharedReconstruction(tensorcore_matcher).Mutate(stmt);
+
+  inline bool Matched() { return is_matched_; }
+ private:
+  bool is_matched_ = false;
+};
+
+class PackedReconstruction : public IRMutator {
+ public:
+  explicit PackedReconstruction() {}
+
+  Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
+    if (op->attr_key == "PACKA") {
+      int value = op->value.as<IntImm>()->value;
+      a_block_size_ = value;
+    } else if (op->attr_key == "PACKB") {
+      int value = op->value.as<IntImm>()->value;
+      b_block_size_ = value;
+    } else {
+      auto value_ptr = op->value.as<StringImm>();
+      if (!value_ptr) {
+        return IRMutator::Mutate_(op, s);
+      }
+      auto value = value_ptr->value;
+      if (value == "col_major_matrix_b") {
+        b_col_major_ = true;
+        b_n_len_ = b_extent0_;
+        b_k_len_ = b_extent1_;
+      } else if(value == "row_major_matrix_b") {
+        b_col_major_ = false;
+        b_k_len_ = b_extent0_;
+        b_n_len_ = b_extent1_;
+      } else if(value == "col_major_matrix_a") {
+        a_col_major_ = true;
+        a_k_len_ = a_extent0_;
+        a_m_len_ = a_extent1_;
+      } else if(value == "row_major_matrix_a") {
+        a_col_major_ = false;
+        a_m_len_ = a_extent0_;
+        a_k_len_ = a_extent1_;
+      }
+    }
+    return IRMutator::Mutate_(op, s);
+  }
+
+  Stmt Mutate_(const Realize *op, const Stmt &s) final {
+    auto block_ptr = op->body.as<Block>();
+    if (!block_ptr) {
+      return IRMutator::Mutate_(op, s);
+    }
+    auto attr_ptr = block_ptr->first.as<AttrStmt>();
+    if (!attr_ptr) {
+      return IRMutator::Mutate_(op, s);
+    }
+    auto attr_key = attr_ptr->attr_key;
+    auto matrix_name = attr_key.size() >= 8 ? attr_key.substr(attr_key.size() - 8) : "";
+    auto local_name = op->func->func_name();
+    if (matrix_name == "matrix_a") {
+      a_local_name_ = local_name;
+      a_dtype_ = op->type;
+      a_extent0_ = op->bounds[0]->extent;
+      a_extent1_ = op->bounds[1]->extent;
+    }
+    if (matrix_name == "matrix_b") {
+      b_local_name_ = local_name;
+      b_dtype_ = op->type;
+      b_extent0_ = op->bounds[0]->extent;
+      b_extent1_ = op->bounds[1]->extent;
+    }
+    return IRMutator::Mutate_(op, s);
+  }
+
+  Stmt Mutate_(const Provide *op, const Stmt &s) final {
+    auto name = op->func->func_name();
+    if (name == a_local_name_) {
+      auto r = op->args[0];
+      auto c = op->args[1];
+      int block_size = b_block_size_;
+      Expr new_ld = a_col_major_ ? a_m_len_ : a_k_len_;
+      Expr new_idx = get_new_idx(a_col_major_, block_size, r, c, a_k_len_, a_m_len_);
+      return Provide::make(op->func, op->value_index, op->value,
+        {floordiv(new_idx, new_ld), indexmod(new_idx, new_ld)});
+    }
+    if (name == b_local_name_) {
+      auto r = op->args[0];
+      auto c = op->args[1];
+      int block_size = a_block_size_;
+      Expr new_ld = b_col_major_ ? b_k_len_ : b_n_len_;
+      Expr new_idx = get_new_idx(!b_col_major_, block_size, r, c, b_k_len_, b_n_len_);
+      return Provide::make(op->func, op->value_index, op->value,
+        {floordiv(new_idx, new_ld), indexmod(new_idx, new_ld)});
+    }
+    return s;
+  }
+
+ private:
+  Expr get_new_idx(bool km, int block_size, Expr r, Expr c, Expr k_len, Expr m_len) {
+    auto block_num = ceil(div(m_len, block_size * 1.0));
+    auto m_rest = indexmod(m_len, block_size);
+    Expr k = km ? r : c;
+    Expr m = km ? c : r;
+    auto block_idx = floordiv(m, block_size);
+    auto mm = indexmod(m, block_size);
+    Type int_type = Int(32);
+    auto in_last_block = block_idx == block_num - 1;
+    Expr a = 0;
+    Expr b = cast(int_type, m_rest == 0 || in_last_block == 0) * block_size;
+    int small_block = block_size / 2;
+    while (small_block > 0) {
+      auto has_small_block = in_last_block && (m_rest & small_block) > 0;
+      b = b + cast(int_type, has_small_block && mm >= a && mm < a + small_block && b == 0) * small_block;
+      a = a + cast(int_type, has_small_block && b == 0) * small_block;
+      small_block /= 2;
+    }
+    auto new_idx = (block_idx * block_size + a) * k_len + mm - a + b * k;
+    return new_idx;
+  }
+
+  std::string a_local_name_ = "";
+  bool a_col_major_ = false;
+  int a_block_size_ = 8;
+  Type a_dtype_;
+  Expr a_k_len_;
+  Expr a_m_len_;
+  Expr a_extent0_;
+  Expr a_extent1_;
+
+  std::string b_local_name_ = "";
+  bool b_col_major_ = false;
+  int b_block_size_ = 4;
+  Type b_dtype_;
+  Expr b_k_len_;
+  Expr b_n_len_;
+  Expr b_extent0_;
+  Expr b_extent1_;
+};
+
+Stmt ReconstructLayout(const Stmt &stmt) {
+  PackedMatcher packed_matcher;
+  packed_matcher.Visit(stmt);
+  Stmt stmt_out;
+  if (packed_matcher.Matched()) {
+    PackedReconstruction packed_reconstruction;
+    stmt_out = packed_reconstruction.Mutate(stmt);
+  } else {
+    stmt_out = stmt;
+  }
+  
+  TensorCoreMatcher tensorcore_matcher;
+  tensorcore_matcher.Visit(stmt_out);
+  if (!tensorcore_matcher.Matched()) {
+    return stmt_out;
+  }
+  return SharedReconstruction(tensorcore_matcher).Mutate(stmt_out);
 }
 
 } // namespace ir

@@ -17,45 +17,41 @@
 #define COMPOSITE_OPTIMIZE_H_
 #include <string>
 #include <vector>
+#include <functional>
 #include "composite/utils/util.h"
 #include "composite/utils/dump.h"
 
 namespace akg {
-class CompositeOptPass {
- public:
-  CompositeOptPass() = default;
-  ~CompositeOptPass() = default;
-  virtual Stmt Run(const Stmt &s) = 0;
-  std::string GetPassName() const { return pass_name_; }
-  std::string pass_name_;
-};
 
-class CompositeOptPassMgr {
+class TranslatePassMgr {
  public:
-  explicit CompositeOptPassMgr(BuildInfo &info) : info_(info) {}
-  ~CompositeOptPassMgr() = default;
+  using PassFunc = std::function<Stmt(const Stmt&, BuildInfo*)>;
 
-  void RegisterPass(const std::shared_ptr<CompositeOptPass> &pass) {
-    CHECK(pass);
-    passes_.push_back(pass);
+  explicit TranslatePassMgr(BuildInfo *info) : info_(info) {}
+  ~TranslatePassMgr() = default;
+
+  void Register(const std::string &name, PassFunc pass) {
+    passes_.emplace_back(std::make_pair(name, pass));
   }
+
   Stmt Run(const Stmt &s) {
-    auto file_name = !info_.opt.stitch
-                       ? info_.kernel_name + "_composite"
-                       : "stitch_info/" + info_.kernel_name + "_stitch_" + std::to_string(info_.opt.stitch_ir_idx);
-    auto enable_dump = info_.opt.enable_dump && getenv(GetDumpIRFlag().c_str()) != nullptr;
+    auto file_name = !info_->opt.stitch
+                       ? info_->kernel_name + "_composite"
+                       : "stitch_info/" + info_->kernel_name + "_stitch_" + std::to_string(info_->opt.stitch_ir_idx);
+    auto enable_dump = info_->opt.enable_dump && getenv(GetDumpIRFlag().c_str()) != nullptr;
     auto dump_mng = DumpManager(file_name, enable_dump);
     auto stmt = s;
     dump_mng.DumpStmt("Origin", stmt);
     for (auto &pass : passes_) {
-      stmt = pass->Run(stmt);
-      dump_mng.DumpStmt(pass->GetPassName(), stmt);
+      stmt = pass.second(stmt, info_);
+      dump_mng.DumpStmt(pass.first, stmt);
     }
     return stmt;
   }
 
-  BuildInfo &info_;
-  std::vector<std::shared_ptr<CompositeOptPass>> passes_;
+ private:
+  BuildInfo *info_;
+  std::vector<std::pair<std::string, PassFunc>> passes_;
 };
 
 Stmt Optimize(Stmt &s, BuildInfo &info);

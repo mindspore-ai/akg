@@ -43,6 +43,10 @@ StageResult LLVMLowerBegin(Stmt &, LowerData &data) {
   stmt = NEXT_PASS(ReplaceSeparator, stmt);
   stmt = NEXT_PASS(RewriteMultiValueFunc, stmt);
 
+  Map<Tensor, Tensor> replace;
+  RenameBinds(data->binds_0, data->config, data->args, data->arg_list_0, replace);
+  stmt = NEXT_PASS(RenameRealize, stmt, data->binds_0, replace);
+
   Array<NodeRef> arg_list_tmp;
   Map<Tensor, Buffer> binds_tmp;
   GetFlattenedBinds(data->args, data->binds_0, data->config, arg_list_tmp, binds_tmp, false);
@@ -65,6 +69,9 @@ StageResult LLVMLowerPoly(Stmt &stmt, LowerData &data) { return LowerPoly(stmt, 
 StageResult LLVMLowerBeforeFlattern(Stmt &stmt, LowerData &data) {
   if (data->polyhedral) {
     stmt = NEXT_PASS(LowerWith, stmt);
+    stmt = NEXT_PASS(RealizeCompress, stmt);
+    stmt = NEXT_PASS(ReconstructLayout, stmt);
+    stmt = NEXT_PASS(GemmFactor, stmt);
     stmt = NEXT_PASS(ReductionFactor, stmt, data->binds_0);
   }
   return {stmt, false};

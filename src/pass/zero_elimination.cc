@@ -2194,8 +2194,8 @@ std::pair<Expr, Expr> LiftConditionsThroughReduction(const Expr &cond, const Arr
 class ExtractReductionsMutator : public IRMutator {
  public:
   ExtractReductionsMutator(const Array<Var> &outer_axis, Map<Var, Range> vranges,
-                           std::string name = "extracted_reduction")
-      : outer_axis_(outer_axis), vranges_(std::move(vranges)), name_(std::move(name)) {}
+                           const std::string &name = "extracted_reduction")
+      : outer_axis_(outer_axis), vranges_(std::move(vranges)), name_(name) {}
   ~ExtractReductionsMutator() override = default;
 
   Expr Mutate_(const Reduce *op, const Expr &e) override {
@@ -2361,6 +2361,408 @@ Domain DomainNode::make(Array<Var> variables, Array<Expr> conditions, Map<Var, R
   n->ranges = std::move(ranges);
 
   return Domain(n);
+}
+
+class ElemwiseChecker : public IRVisitor {
+ public:
+  explicit ElemwiseChecker(FunctionRef output_tensors) : output_tensors_(std::move(output_tensors)) {}
+
+  // Quit the checker when the computation is not elementwise
+  void Visit(const NodeRef &e) final {
+    if (!element_wise_) return;
+    IRVisitor::Visit(e);
+  }
+
+  // The computation is not elementwise (or we will not treat it as elementwise) when the ir includes:
+  // * Block
+  // * IfThenElse
+  // * LetStmt
+  // * Load
+  // * Store
+  // * Let
+  void Visit_(const Block *op) final {
+    element_wise_ = false;
+    return;
+  }
+
+  void Visit_(const IfThenElse *op) final {
+    element_wise_ = false;
+    return;
+  }
+
+  void Visit_(const LetStmt *op) final {
+    element_wise_ = false;
+    return;
+  }
+
+  void Visit_(const Load *op) final {
+    element_wise_ = false;
+    return;
+  }
+
+  void Visit_(const Store *op) final {
+    element_wise_ = false;
+    return;
+  }
+
+  void Visit_(const Let *op) final {
+    element_wise_ = false;
+    return;
+  }
+
+  // collect all the itervar in for loop
+  // later we will compare them with the arg of elementwise computation
+  void Visit_(const For *op) final {
+    iter_var_set_.emplace(op->loop_var);
+    IRVisitor::Visit(op->body);
+  }
+
+  // for the provide node, we determine that it is a elementwise computation if
+  // * there is one provide node
+  // * the func is the output tensor
+  // * the arg is the same set collected from the outer for loop
+  void Visit_(const Provide *op) override {
+    if (multi_provide_ || op->func != output_tensors_) {
+      element_wise_ = false;
+      return;
+    }
+
+    if (op->args.size() != iter_var_set_.size()) {
+      element_wise_ = false;
+      return;
+    }
+
+    for (auto arg : op->args) {
+      if (iter_var_set_.count(arg) == 0) {
+        element_wise_ = false;
+        return;
+      }
+    }
+
+    multi_provide_ = true;
+
+    body_ = op->value;
+
+    IRVisitor::Visit_(op);
+  }
+
+  // no call from output tensor is allowed in the elementwise computation
+  void Visit_(const Call *op) override {
+    if (op->func == output_tensors_) {
+      element_wise_ = false;
+      return;
+    }
+
+    IRVisitor::Visit_(op);
+  }
+
+  const Expr body() { return body_; }
+  const bool elementwise() { return element_wise_; }
+
+ private:
+  FunctionRef output_tensors_;
+  Expr body_;
+  bool element_wise_{true};
+  bool multi_provide_{false};
+  std::set<Expr, ExprLess> iter_var_set_;
+};
+
+class ReductionChecker : public IRVisitor {
+ public:
+  explicit ReductionChecker(FunctionRef output_tensors) : output_tensors_(std::move(output_tensors)) {}
+
+  void Visit(const NodeRef &e) final {
+    if (!reduction_) return;
+    IRVisitor::Visit(e);
+  }
+
+  void Visit_(const Block *op) final {
+    // for the body as a reduction, there should be only one block,
+    // and for this block, the first part is a provide stmt for init
+    // and the second part should be for loops with reduction incremental
+    if (reduction_block_ || !op->first->IsInstance<Provide>()) {
+      reduction_ = false;
+      return;
+    }
+
+    // visit the first provide stmt to get init
+    reduction_block_ = true;
+    collect_init_ = true;
+    IRVisitor::Visit(op->first);
+
+    if (reduction_) {
+      // visit the rest stmt to get reduction incremental
+      collect_init_ = false;
+      collect_reducer_ = true;
+      IRVisitor::Visit(op->rest);
+    }
+    return;
+  }
+
+  // The computation is not a reduction (or we will not treat it as a reduction) when the ir includes:
+  // * IfThenElse
+  // * LetStmt
+  // * Load
+  // * Store
+  // * Let
+  void Visit_(const IfThenElse *op) final {
+    reduction_ = false;
+    return;
+  }
+
+  void Visit_(const LetStmt *op) final {
+    reduction_ = false;
+    return;
+  }
+
+  void Visit_(const Load *op) final {
+    reduction_ = false;
+    return;
+  }
+
+  void Visit_(const Store *op) final {
+    reduction_ = false;
+    return;
+  }
+
+  void Visit_(const Let *op) final {
+    reduction_ = false;
+    return;
+  }
+
+  void Visit_(const For *op) final {
+    Var loop_var(op->loop_var);
+    Range dom = Range::make_by_min_extent(op->min, op->extent);
+    if (collect_reducer_) {
+      // when collect_reducer_ is true, we are in the inner reduction loops
+      // collect all the iter vars to create the reduce node
+      // so the IterVarType of IterVarNode is kCommReduce
+      reduce_axis_.push_back(IterVarNode::make(dom, loop_var, air::IterVarType::kCommReduce));
+    } else {
+      iter_axis_.push_back(IterVarNode::make(dom, loop_var, air::op::ForTypeToIterVarType(op->for_type)));
+      iter_var_set_.emplace(op->loop_var);
+    }
+    IRVisitor::Visit(op->body);
+  }
+
+  void Visit_(const Provide *op) override {
+    // The reduction have two provide: init and reduce incremental.
+    // Both of them have the func as output_tensors_ and args which are the same as
+    // outer loop vars.
+    if (op->func != output_tensors_ || op->args.size() != iter_var_set_.size()) {
+      reduction_ = false;
+      return;
+    }
+
+    for (auto arg : op->args) {
+      if (iter_var_set_.count(arg) == 0) {
+        reduction_ = false;
+        return;
+      }
+    }
+
+    if (collect_init_) {
+      // for the provide stmt for init, set its value to be identity_element_
+      IRVisitor::Visit(op->value);
+      if (reduction_) {
+        identity_element_ = op->value;
+      }
+      return;
+    }
+
+    if (collect_reducer_) {
+      // the provide stmt for reduce incremental should have the form y = f(x, y)
+      // currently we only support the case that f is one of basic math functions
+      Array<Expr> children;
+      Expr result;
+
+      Var x = Variable::make(op->value.type(), "x");
+      Var y = Variable::make(op->value.type(), "y");
+      if (auto add = op->value.as<Add>()) {
+        children.push_back(add->a);
+        children.push_back(add->b);
+        result = Add::make(x, y);
+      } else if (auto sub = op->value.as<Sub>()) {
+        children.push_back(sub->a);
+        children.push_back(sub->b);
+        result = Sub::make(x, y);
+      } else if (auto mul = op->value.as<Mul>()) {
+        children.push_back(mul->a);
+        children.push_back(mul->b);
+        result = Mul::make(x, y);
+      } else if (auto div = op->value.as<Div>()) {
+        children.push_back(div->a);
+        children.push_back(div->b);
+        result = Div::make(x, y);
+      } else {
+        reduction_ = false;
+        return;
+      }
+
+      // one of the operands the binop is output tensor,
+      // and the other is the reduction incremental
+      auto func_name = op->func->func_name();
+      auto call_a = children[0].as<Call>();
+      auto call_b = children[1].as<Call>();
+      Expr source;
+      if (call_a && call_a->name == func_name) {
+        source = children[1];
+      } else if (call_b && call_b->name == func_name) {
+        source = children[0];
+      } else {
+        reduction_ = false;
+        return;
+      }
+
+      IRVisitor::Visit(source);
+      if (reduction_) {
+        CommReducer combiner = CommReducerNode::make({x}, {y}, {result}, {identity_element_});
+        body_ = Reduce::make(combiner, {source}, reduce_axis_, air::const_true(), 0);
+      }
+      return;
+    }
+
+    reduction_ = false;
+    return;
+  }
+
+  void Visit_(const Call *op) override {
+    // the call expr in identity_element_ and result should not include calling output_tensors_
+    if (op->func == output_tensors_) {
+      reduction_ = false;
+      return;
+    }
+
+    IRVisitor::Visit_(op);
+  }
+
+  const bool reduction() { return reduction_; }
+  const Expr body() { return body_; }
+  const Array<IterVar> axis() { return iter_axis_; }
+
+ private:
+  FunctionRef output_tensors_;
+  Expr identity_element_;
+  Expr body_;
+  bool reduction_{true};
+
+  bool reduction_block_{false};
+  bool collect_init_{false};
+  bool collect_reducer_{false};
+
+  std::set<Expr, ExprLess> iter_var_set_;
+  Array<IterVar> reduce_axis_;
+  Array<IterVar> iter_axis_;
+};
+
+Tensor HybridOp2ComputeOp(const Tensor &tensor) {
+  auto hybrid_op = tensor->op.as<air::HybridOpNode>();
+  if (hybrid_op != nullptr && hybrid_op->num_outputs() == 1) {
+    auto body = hybrid_op->body;
+    auto elementwise_checker = ElemwiseChecker(hybrid_op->outputs[0]->op);
+    elementwise_checker.Visit(body);
+
+    // check whether the hybrid node is elementwise
+    if (elementwise_checker.elementwise()) {
+      return ComputeOpNode::make(hybrid_op->name + "_compute", "", hybrid_op->attrs, hybrid_op->axis,
+                                 {elementwise_checker.body()})
+        .output(0);
+    }
+    auto reduce_checker = ReductionChecker(hybrid_op->outputs[0]->op);
+    reduce_checker.Visit(body);
+
+    // check whether the hybrid node is a reduction
+    if (reduce_checker.reduction()) {
+      return ComputeOpNode::make(hybrid_op->name + "_compute", "", hybrid_op->attrs, reduce_checker.axis(),
+                                 {reduce_checker.body()})
+        .output(0);
+    }
+  }
+
+  return tensor;
+}
+
+class TmpVarSplitter : public IRMutator {
+ public:
+  Stmt Mutate_(const Block *op, const Stmt &s) final {
+    Stmt first = Mutate(op->first);
+    Stmt rest = Mutate(op->rest);
+    if (const auto attr = first.as<AttrStmt>()) {
+      if (attr->attr_key == "block_realize") {
+        FunctionRef func = Downcast<FunctionRef>(attr->node);
+        sub_body[func] = attr->body;
+        return rest;
+      }
+    }
+    return Block::make(first, rest);
+  }
+
+  Stmt Mutate_(const AttrStmt *op, const Stmt &s) {
+    FunctionRef func = Downcast<FunctionRef>(op->node);
+    Stmt body = Mutate(op->body);
+
+    if (sub_body.count(func) > 0) {
+      return body;
+    } else {
+      return AttrStmt::make(op->node, op->attr_key, op->value, body);
+    }
+  }
+
+  Stmt Mutate_(const Realize *op, const Stmt &s) {
+    FunctionRef func = op->func;
+    Stmt body = Mutate(op->body);
+    if (sub_body.count(func) > 0) {
+      return body;
+    } else {
+      return Realize::make(op->func, op->value_index, op->type, op->bounds, op->condition, body);
+    }
+  }
+
+  std::unordered_map<FunctionRef, Stmt, air::NodeHash, air::NodeEqual> sub_body;
+};
+
+Array<Tensor> CollectInputTensors(Stmt body) {
+  Array<Tensor> ret;
+  std::unordered_set<Tensor> visited;
+  air::ir::PostOrderVisit(body, [&ret, &visited](const NodeRef &n) {
+    auto *call = n.as<air::ir::Call>();
+    if (call != nullptr && call->func.defined()) {
+      Tensor t = Downcast<Operation>(call->func).output(call->value_index);
+      if (!visited.count(t)) {
+        ret.push_back(t);
+        visited.insert(t);
+      }
+    }
+  });
+  return ret;
+}
+
+Tensor SplitTensor(const Tensor &tensor) {
+  auto hybrid_op = tensor->op.as<air::HybridOpNode>();
+  if (hybrid_op != nullptr && hybrid_op->num_outputs() == 1) {
+    auto splitter = TmpVarSplitter();
+    Stmt body = splitter.Mutate(hybrid_op->body);
+    if (!splitter.sub_body.empty()) {
+      std::unordered_map<Tensor, Tensor> rmap;
+      for (auto pair : splitter.sub_body) {
+        // for each stmt seperated from body, create a new hybrid node to compute the tmp tensor
+        Tensor old_tmp = Downcast<Operation>(pair.first).output(0);
+        Array<Tensor> tmp_inputs = CollectInputTensors(pair.second);
+        Tensor new_tmp = air::HybridOpNode::make(pair.first->func_name() + "_new", "", {}, tmp_inputs, {old_tmp}, {},
+                                                 {}, {}, {}, pair.second)
+                           .output(0);
+        rmap[old_tmp] = new_tmp;
+      }
+      // all occurrence of tmp tensors(placeholder) are replaced by the newly created hybrid tensors
+      Stmt new_body = air::op::ReplaceTensor(body, rmap);
+      Array<Tensor> new_inputs = CollectInputTensors(new_body);
+      return air::HybridOpNode::make(hybrid_op->name, hybrid_op->tag, hybrid_op->attrs, new_inputs, hybrid_op->outputs,
+                                     hybrid_op->input_buffers_, hybrid_op->output_buffers_, hybrid_op->input_regions_,
+                                     hybrid_op->output_regions_, new_body)
+        .output(0);
+    }
+  }
+  return tensor;
 }
 
 TVM_STATIC_IR_FUNCTOR(IRPrinter, vtable).set_dispatch<DomainNode>([](const ObjectRef &node, IRPrinter *p) {

@@ -64,7 +64,7 @@ class InlineFilter : public IRVisitor {
 
 // op can not be inlined
 bool CantInline(const Operation &op, const Target &target) {
-  if (target->device_type == kDLGPU) {
+  if (target->device_type != kDLCce) {
     return false;
   }
   if (const auto compute = op.as<ComputeOpNode>()) {
@@ -143,10 +143,8 @@ class CSE {
       }
     }
     std::unordered_set<Operation> common_op;
-    for (const auto &op : counter) {
-      int input_num = 0;
-      input_num = count_input_number(op.first, input_num);
-      if (op.first.as<ComputeOpNode>() != nullptr && op.second > 1 && input_num > 2) {
+    for (const auto op : counter) {
+      if (op.first.as<ComputeOpNode>() != nullptr && op.second > 1) {
         common_op.insert(op.first);
       }
     }
@@ -165,20 +163,10 @@ class CSE {
     }
   }
 
-  int count_input_number(const Operation op, int input_num) {
-    if (op.as<PlaceholderOpNode>() != nullptr) return (input_num + 1);
-    if (const auto compute = op.as<ComputeOpNode>()) {
-      for (const auto parent : op->InputTensors()) {
-        input_num = count_input_number(parent->op, input_num);
-      }
-    }
-    return input_num;
-  }
-
   void RemoveShortCommonExpr(const Operation op, const Operation root) {
     if (const auto cur_op = op.as<ComputeOpNode>()) {
       for (const auto parent : cur_op->InputTensors()) {
-        if (counter.count(parent->op) && counter[parent->op] > 0) {
+        if (counter.count(parent->op) && counter[root] > 3) {
           counter[parent->op] -= counter[root];
         }
         RemoveShortCommonExpr(parent->op, root);
@@ -281,7 +269,7 @@ void AutoInline(Schedule sch, const Target &target, bool enable_cse) {
   }
 
   std::unordered_set<Operation> common_subexpr;
-  if (target->device_type == kDLGPU && enable_cse) {
+  if (target->device_type != kDLCce && enable_cse) {
     common_subexpr = CSE().FindCommonSubexpr(sch);
   }
 

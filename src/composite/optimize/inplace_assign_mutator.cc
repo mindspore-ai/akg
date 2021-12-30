@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "composite/optimize/inplace_assign_mutator.h"
+#include "composite/optimize/pass.h"
 
 namespace akg {
 class InplaceAssignMutator : public IRMutator {
@@ -59,5 +59,5 @@ class InplaceAssignMutator : public IRMutator {
   Map<std::string, NodeRef> op_attrs_;
 };
 
-Stmt InplaceAssignOpt::Run(const Stmt &s) { return InplaceAssignMutator(info_.opt).Mutate(s); }
+Stmt InplaceAssignOpt(const Stmt &s, BuildInfo *info) { return InplaceAssignMutator(info->opt).Mutate(s); }
 }  // namespace akg

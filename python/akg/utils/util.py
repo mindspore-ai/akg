@@ -51,7 +51,8 @@ def parse_kwargs(func, **kwargs):
         return kwargs
     if not func or not isinstance(func, types.FunctionType):
         return kwargs
-    args_name = func.__code__.co_varnames
+    op_func = func.__dict__["__wrapped__"] if "__wrapped__" in func.__dict__ else func
+    args_name = op_func.__code__.co_varnames
     if 'target' not in args_name:
         kwargs.pop('target')
     return kwargs

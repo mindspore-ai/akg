@@ -15,74 +15,48 @@
  */
 #include "composite/optimize/optimize.h"
 #include <memory>
-#include "composite/optimize/rename_matmul.h"
-#include "composite/optimize/reshape_tensor.h"
-#include "composite/optimize/elim_reshape.h"
-#include "composite/optimize/inplace_assign_mutator.h"
-#include "composite/optimize/broadcast_inserter.h"
-#include "composite/optimize/axis_attr_normalize.h"
-#include "composite/optimize/fold_dimension.h"
-#include "composite/optimize/typecast_inserter.h"
-#include "composite/optimize/ops_combine.h"
-#include "composite/optimize/intrin_rewriter.h"
-#include "composite/optimize/peel_dimension.h"
-#include "composite/optimize/complex_expander.h"
-#include "composite/optimize/delete_cast.h"
-#include "composite/optimize/transdata_rewriter.h"
-#include "composite/optimize/clean_zero_align.h"
+#include "composite/optimize/pass.h"
 
 namespace akg {
+
+#define ADD_PASS(pm, pass) (pm).Register(#pass, pass)
+
 Stmt Optimize(Stmt &s, BuildInfo &info) {
-  auto pm = CompositeOptPassMgr(info);
-  // insert broadcast
-  pm.RegisterPass(std::make_shared<BroadcastInserter>());
-  // reshape optimize
+  auto pm = TranslatePassMgr(&info);
+  ADD_PASS(pm, BroadcastInserter);
   if (info.opt.target == "aicore") {
-    pm.RegisterPass(std::make_shared<ReshapeTensor>());
+    ADD_PASS(pm, ReshapeTensor);
   }
-  // rewrite the TransData op
   if (info.opt.target == "aicore") {
-    pm.RegisterPass(std::make_shared<TransDataRewriter>());
+    ADD_PASS(pm, TransDataRewriter);
   }
-  // ops combine
   if (info.opt.target == "aicore") {
-    pm.RegisterPass(std::make_shared<OpsCombine>(pm.info_));
+    ADD_PASS(pm, OpsCombine);
   }
-  // normalize axis attr
-  pm.RegisterPass(std::make_shared<AxisAttrNormalize>());
-  // elim reshape backward
-  pm.RegisterPass(std::make_shared<ElimReshapeBackward>(pm.info_));
-  // elim reshape forward
-  pm.RegisterPass(std::make_shared<ElimReshapeForward>(pm.info_));
-  // fold dimension for multi-dim shape
+  ADD_PASS(pm, AxisAttrNormalize);
+  ADD_PASS(pm, ElimReshapeBackward);
+  ADD_PASS(pm, ElimReshapeForward);
   if (info.opt.fold_dim) {
-    pm.RegisterPass(std::make_shared<FoldDimension>(pm.info_));
+    ADD_PASS(pm, FoldDimension);
   }
-  // inplace_assign
-  pm.RegisterPass(std::make_shared<InplaceAssignOpt>(pm.info_));
-  // insert cast for equal(int32) in ascend
+  ADD_PASS(pm, InplaceAssignOpt);
   if (info.opt.target == "aicore") {
-    pm.RegisterPass(std::make_shared<TypeCastInserter>());
+    ADD_PASS(pm, TypeCastInserter);
   }
-  // rename MatMul to BatchMatMul
-  pm.RegisterPass(std::make_shared<RenameMatmul>());
-  // delete cast for MatMul fusion
+  ADD_PASS(pm, RenameMatmul);
   if (info.opt.target == "cuda") {
-    pm.RegisterPass(std::make_shared<DeleteCast>());
+    ADD_PASS(pm, DeleteCast);
   }
   if (info.opt.target == "aicore") {
-    // intrin rewrite
-    pm.RegisterPass(std::make_shared<IntrinRewriter>());
-    // peel dimension on given axes
-    pm.RegisterPass(std::make_shared<PeelDimension>(pm.info_));
+    ADD_PASS(pm, IntrinRewriter);
+    ADD_PASS(pm, PeelDimension);
   }
-  // expand complex op
-  pm.RegisterPass(std::make_shared<ComplexExpander>());
+  ADD_PASS(pm, ComplexExpander);
   if (info.opt.target == "aicore") {
-    pm.RegisterPass(std::make_shared<CleanZeroAligner>(pm.info_));
+    ADD_PASS(pm, CleanZeroAligner);
   }
-  s = pm.Run(s);
-  return s;
+  ADD_PASS(pm, AddAttrsForOp);
+  return pm.Run(s);
 }
 
 }  // namespace akg

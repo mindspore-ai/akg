@@ -316,6 +316,7 @@ class UserConfig {
     } else if (GetTarget() == TARGET_CPU) {
       ParseVectorLengthAttr(attrs, "vector_length", &vector_length_, false);
       ParseBoolAttr(attrs, "pragma_enable_matmul", &enable_matmul_);
+      ParseStringAttr(attrs, "feature", &feature_);
     }
 
     if (force_remove_self_dependence_) {
@@ -554,6 +555,10 @@ class UserConfig {
   int GetCsrThreadNum() { return csr_thread_num_; }
   int GetCsrAvgRow() { return csr_avg_row_; }
 
+  // cpu type
+  std::string GetFeature() { return feature_; }
+  void SetFeature(std::string feature) { feature_ = feature; }
+
  private:
   // tools for parsing user config
   static void ParseIntAttr(const Map<std::string, NodeRef> &attrs, const std::string &attr_name, int *attr_to_set) {
@@ -788,6 +793,10 @@ class UserConfig {
 
   Schedule origin_sch_;
 
+  // cpu type
+  std::string feature_;
+
+  // csr config
   int csr_thread_num_{128};
   int csr_avg_row_{0};
 };

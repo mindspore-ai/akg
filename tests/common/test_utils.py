@@ -17,6 +17,7 @@
 import math
 import random
 import logging
+import itertools
 from copy import deepcopy
 import numpy as np
 import scipy.sparse
@@ -297,3 +298,27 @@ def csr_div_np(indptr, indices, sparse_data, dense, shape):
     sparse_data = scipy.sparse.csr_matrix((sparse_data, indices, indptr), shape)
     expect = sparse_data.multiply(np.divide(1, np.broadcast_to(dense, shape)))
     return np.asarray(expect)
+
+def one_hot_np(input, axis, on_value, off_value, depth, dtype):
+    shape = input.shape
+    if axis < 0:
+        axis = axis + len(shape) + 1
+    outShape = [i for i in shape]
+    outShape.insert(axis, depth)
+    expect = np.full(outShape, off_value)
+    dims = []
+    for dim in shape:
+        dims.append(list(range(dim)))
+    indexs = [x for x in itertools.product(*tuple(dims))]
+    indexs = [list(x) for x in indexs]
+    temp = 0
+    flatinput = input.flatten()
+    for value in flatinput:
+        indexs[temp].insert(axis, value)
+        temp = temp + 1
+    indexs = [tuple(x) for x in indexs]
+    for loc in indexs:
+        if loc[axis] >= 0:
+            expect[loc] = on_value
+    expect = expect.astype(dtype)
+    return expect

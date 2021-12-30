@@ -55,21 +55,5 @@ class ElimReshapeOpChecker : public IRVisitor {
   bool can_elim{false};
 };
 
-class ElimReshapeForward : public CompositeOptPass {
- public:
-  explicit ElimReshapeForward(BuildInfo &info) : info_(info) { pass_name_ = __FUNCTION__; }
-  ~ElimReshapeForward() = default;
-  Stmt Run(const Stmt &s) override;
-
-  BuildInfo &info_;
-};
-class ElimReshapeBackward : public CompositeOptPass {
- public:
-  explicit ElimReshapeBackward(BuildInfo &info) : info_(info) { pass_name_ = __FUNCTION__; }
-  ~ElimReshapeBackward() = default;
-  Stmt Run(const Stmt &s) override;
-
-  BuildInfo &info_;
-};
 }  // namespace akg
 #endif  // COMPOSITE_OPTIMIZE_ELIM_RESHAPE_H_

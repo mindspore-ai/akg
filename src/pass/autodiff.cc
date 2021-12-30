@@ -45,6 +45,7 @@ DifferentiationResult Differentiate(const Tensor &output, const Array<Tensor> &i
     return DifferentiationResult();
   }
 
+  Tensor output_split = SplitTensor(output);
   Tensor head = head_or_null;
 
   // If the head is a null pointer, create an identity tensor
@@ -74,9 +75,10 @@ DifferentiationResult Differentiate(const Tensor &output, const Array<Tensor> &i
   }
 
   // Collect reverse dependencies
-  std::vector<Tensor> stack({output});
+  std::vector<Tensor> stack({output_split});
   while (!stack.empty()) {
     Tensor tensor = stack.back();
+    tensor = SplitTensor(tensor);
     stack.pop_back();
 
     auto it = override_deps_map.find(tensor);
@@ -96,7 +98,7 @@ DifferentiationResult Differentiate(const Tensor &output, const Array<Tensor> &i
   // This map maps tensors to the corresponding adjoints (dLoss/dTensor)
   std::unordered_map<Tensor, Tensor> adjoints;
   // head is the adjoint of output by definition
-  adjoints[output] = head;
+  adjoints[output_split] = head;
 
   // This is a recursive function that does all the work. It computes the adjoint for a given
   // tensor, adds it to the map, and returns it
@@ -214,6 +216,100 @@ Tensor DiffBuildingBlock(const Tensor &output, const Tensor &input, const Tensor
   return result;
 }
 
+bool OutputsFromSameHybridOp(const Array<Tensor> &outputs, const air::HybridOpNode *&op) {
+  if (static_cast<size_t>(op->num_outputs()) != outputs.size()) {
+    return false;
+  }
+
+  for (size_t i = 0; i < outputs.size(); i++) {
+    if (outputs[i]->op.as<air::HybridOpNode>() != op) {
+      return false;
+    }
+    if (static_cast<size_t>(outputs[i]->value_index) != i) {
+      return false;
+    }
+  }
+  return true;
+}
+
+Array<Tensor> SingleHybridOpDifferentiate(const Array<Tensor> &outputs, const Array<Tensor> &inputs,
+                                          const Array<Tensor> &heads) {
+  if (inputs.empty()) {
+    LOG(FATAL) << "op with no input cannot be differentiated.";
+  }
+
+  for (size_t i = 0; i < inputs.size(); i++) {
+    if (!inputs[i].get()) {
+      LOG(FATAL) << "inputs[" << std::to_string(i) << "] is a null pointer.";
+    }
+  }
+
+  if (outputs.empty()) {
+    LOG(FATAL) << "op with no output cannot be differentiated.";
+  }
+
+  for (size_t i = 0; i < outputs.size(); i++) {
+    if (!outputs[i].get()) {
+      LOG(FATAL) << "outputs[" << std::to_string(i) << "] is a null pointer.";
+    }
+  }
+
+  if (heads.size() != outputs.size()) {
+    LOG(FATAL) << "outputs' num is inconsistent with heads.";
+  }
+
+  for (size_t i = 0; i < heads.size(); i++) {
+    if (!heads[i].get()) {
+      LOG(FATAL) << "heads[" << std::to_string(i) << "] is a null pointer.";
+    }
+  }
+
+  const air::HybridOpNode *op = outputs[0]->op.as<air::HybridOpNode>();
+  if (!op || !OutputsFromSameHybridOp(outputs, op)) {
+    LOG(FATAL) << "Check Failed! All outputs must come from the same Hybrid Op.";
+  }
+
+  if (outputs.size() == 1) {
+    // when there is only one output, go back to Differentiate to enjoy all existing opt for autodiff
+    return Differentiate(outputs[0], inputs, heads[0])->result;
+  }
+
+  auto DiffHybridOp = [&op, &heads](const Tensor &input) {
+    Tensor input_grad;
+    Array<Tensor> jacs = JacobianHybrid(op, input);
+
+    for (size_t i = 0; i < jacs.size(); i++) {
+      Tensor output = op->outputs[i];
+      Tensor jac_output_input = jacs[i];
+      Tensor head_cast =
+        heads[i]->dtype == jac_output_input->dtype ? heads[i] : topi::cast(heads[i], jac_output_input->dtype);
+      Tensor part = TensorDot(
+        head_cast, jac_output_input, static_cast<int>(output->shape.size()),
+        output->op->name + "_" + std::to_string(output->value_index) + "_" + input->op->name + "_grad", false);
+      if (input_grad.get()) {
+        // when input_grad is defined, cast it to the dtype of newly computed part and add this part to it
+        if (input_grad->dtype != part->dtype) {
+          input_grad = topi::cast(input_grad, part->dtype);
+        }
+        input_grad = topi::add(input_grad, part);
+      } else {
+        // when input_grad is undefined, assign newly computed part to it
+        input_grad = part;
+      }
+    }
+
+    return input_grad;
+  };
+
+  // Adjoints corresponding to inputs
+  Array<Tensor> result;
+
+  // Compute an adjoint for each input
+  std::transform(inputs.begin(), inputs.end(), std::back_inserter(result.CopyOnWrite()->data), DiffHybridOp);
+
+  return result;
+}
+
 TVM_REGISTER_API("akg.autodiff.Jacobian").set_body([](const TVMArgs args, TVMRetValue *ret) {
   bool used_head = false;
   if (args.size() >= 4) {
@@ -257,6 +353,14 @@ TVM_REGISTER_API("akg.autodiff.Differentiate").set_body([](const TVMArgs args, T
     } else {
       *ret = Differentiate(args[0], args[1], args[2], args[3], args[4], fdiff);
     }
+  }
+});
+
+TVM_REGISTER_API("akg.autodiff.SingleHybridOpDifferentiate").set_body([](const TVMArgs args, TVMRetValue *ret) {
+  if (args.size() == 3) {
+    *ret = SingleHybridOpDifferentiate(args[0], args[1], args[2]);
+  } else {
+    LOG(FATAL) << "arg num must be 3, but given " << args.size();
   }
 });
 }  // namespace ir

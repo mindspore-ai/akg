@@ -16,12 +16,16 @@
 #include "poly/cpu_mgr_strategy.h"
 #include "poly/schedule_pass/tile_outer_band.h"
 #include "poly/schedule_pass/analyze_schedule.h"
+#include "schedule_pass_cpu/cpu_memory_manager.h"
+#include "schedule_pass_gpu/realize_manager.h"
 
 namespace akg {
 namespace ir {
 namespace poly {
 
 void CPUMgrStrategy::RegisterTilingPasses() { RegisterPass(std::make_shared<TileOuterBand>(pass_info_, scop_info_)); }
+
+void CPUMgrStrategy::RegisterMemPromPasses() { RegisterPass(std::make_shared<CpuMemoryManager>(scop_info_)); }
 
 void CPUMgrStrategy::RegisterPasses() {
   passes_.clear();
@@ -30,6 +34,11 @@ void CPUMgrStrategy::RegisterPasses() {
   RegisterSchedulingPasses();
   RegisterPass(std::make_shared<AnalyzeSchedule>(scop_info_));
   RegisterTilingPasses();
+  if (scop_info_.user_config_.GetIsTuning()) {
+    return;
+  }
+  RegisterMemPromPasses();
+  RegisterPass(std::make_shared<RealizeManager>(pass_info_, scop_info_));
 }
 
 }  // namespace poly

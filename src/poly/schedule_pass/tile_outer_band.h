@@ -100,7 +100,7 @@ class TileOuterBand : public SchedulePass {
                                         const int count_coincident = -1);
   isl::schedule_node InsertPromoteMarker(const isl::schedule_node node);
   void ResetWarpMappingConfig();
-  isl::schedule_node TileMatmulOperator(const isl::schedule_node &node);
+  isl::schedule_node TileMatmulOperatorForCuda(const isl::schedule_node &node);
   void CheckCustomMapping(const MappingStrategyFilterMap &custom_mapping_map);
   bool IsMatrixCPromoteToShared();
 
@@ -108,9 +108,13 @@ class TileOuterBand : public SchedulePass {
   isl::schedule RunCpu(isl::schedule sch);
   isl::schedule_node MarkOuterPermutableCpu(isl::schedule_node node);
 
-  isl::schedule_node TileReduceX(const isl::schedule_node &orig_node);
-  isl::schedule_node TileOtherOperators(const isl::schedule_node &orig_node);
+  isl::schedule_node TileReduceXForCpu(const isl::schedule_node &orig_node);
+  isl::schedule_node TileAllReduceForCpu(const isl::schedule_node &orig_node);
+  isl::schedule_node TileGemmOperatorForCpu(const isl::schedule_node &orig_node);
+  isl::schedule_node TileGemmBandNodeForCpu(const isl::schedule_node &orig_node);
+  isl::schedule_node TileElementWiseForCpu(const isl::schedule_node &orig_node, const bool is_all_reduce = false);
 
+  bool IsContainReduceStatement(const isl::schedule_node &orig_node);
   isl::multi_val GetVectorizationTileSize(const isl::schedule_node &orig_node);
   isl::schedule_node SplitReduceStatements(const isl::schedule_node &orig_node);
   isl::schedule_node IsolateTilesCpu(const isl::schedule_node &orig_node, const std::string &tile_level = "");
@@ -130,6 +134,7 @@ class TileOuterBand : public SchedulePass {
   // cpu related parameters
   int vectorization_axis_pos_{-1};
   int start_pos_{0};
+  isl::union_set reduce_statements_;
 };
 
 }  // namespace poly

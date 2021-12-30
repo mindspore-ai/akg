@@ -176,6 +176,8 @@ def _set_attrs(desc_d, attrs, poly):
             attrs["enable_atomic_add"] = False
     if "is_csr" not in attrs.keys():
         attrs["is_csr"] = should_enable_attr(desc_d, "is_csr")
+    if "csr_avg_row" not in attrs.keys():
+        attrs["csr_avg_row"] = should_enable_attr(desc_d, "csr_avg_row")
     return attrs
 
 
@@ -287,6 +289,14 @@ def _update_attrs_gpu(all_ops, attrs, poly):
             attrs["has_tot_ops"] = enable_general_tot
     return attrs
 
+def _update_attrs_cpu(all_ops, attrs, poly):
+    if not poly:
+        return attrs
+    if "pragma_enable_matmul" not in attrs.keys() and any([i in all_ops for i in ["BatchMatMul", "MatMul"]]):
+        attrs['pragma_enable_matmul'] = True
+    if "feature" not in attrs.keys() and any([i in all_ops for i in ["BatchMatMul", "MatMul"]]):
+        attrs["feature"] = "avx"
+    return attrs
 
 def _update_attrs_ascend(all_ops, attr):
     attr["pragma_rmselfdep"] = all([i not in all_ops for i in ["BatchMatMul", "MatMul"]])
@@ -335,7 +345,10 @@ def _build_to_module(desc_s, desc_d, attrs=None, poly=True):
     def _post_update_attr(desc_s, attrs, poly):
         desc_d, attrs = _update_attr_by_repo(desc_s, attrs)
         all_ops = set([op["name"] for op in desc_d["op_desc"]])
-        attrs = _update_attrs_gpu(all_ops, attrs, poly)
+        if desc_d["process"] == "cuda":
+            attrs = _update_attrs_gpu(all_ops, attrs, poly)
+        elif desc_d["process"] == "cpu":
+            attrs = _update_attrs_cpu(all_ops, attrs, poly)
         return attrs
 
     def _common_postprocess(_, json_str_list, attrs_list, poly):
@@ -536,6 +549,8 @@ def get_tiling_space(kernel_desc, level=1, attr=None):
     all_ops = set([op['name'] for op in desc_d['op_desc']])
     if backend == "cuda":
         attr = _update_attrs_gpu(all_ops, attr, True)
+    elif backend == "cpu":
+        attr = _update_attrs_cpu(all_ops, attr, True)
     else:
         attr = _update_attrs_ascend(all_ops, attr)
 

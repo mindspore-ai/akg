@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "composite/optimize/ops_combine.h"
+#include "composite/optimize/pass.h"
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -146,5 +146,5 @@ class SelectFusion {
   const std::vector<std::string> &output_tensors_;
 };
 
-Stmt OpsCombine::Run(const Stmt &s) { return SelectFusion(info_.output_names).DoFusion(s); }
+Stmt OpsCombine(const Stmt &s, BuildInfo *info) { return SelectFusion(info->output_names).DoFusion(s); }
 }  // namespace akg

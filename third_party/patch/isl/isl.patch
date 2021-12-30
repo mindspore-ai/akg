@@ -1530,20 +1530,25 @@ diff -Npur isl-0.22/isl_ast_build_private.h isl/isl_ast_build_private.h
  __isl_give isl_ast_build *isl_ast_build_clear_local_info(
 diff -Npur isl-0.22/isl_ast_codegen.c isl/isl_ast_codegen.c
 --- isl-0.22/isl_ast_codegen.c	2019-11-02 02:05:27.000000000 +0800
-+++ isl/isl_ast_codegen.c	2021-10-08 14:40:05.228984442 +0800
-@@ -1518,7 +1518,10 @@ static __isl_give isl_ast_graft *create_
++++ isl/isl_ast_codegen.c	2021-12-16 15:30:29.000000000 +0800
+@@ -1517,8 +1517,14 @@ static __isl_give isl_ast_graft *create_
+ 	bounds = isl_ast_build_specialize_basic_set(sub_build, bounds);
  	sub_build = isl_ast_build_set_loop_bounds(sub_build,
  						isl_basic_set_copy(bounds));
- 	degenerate = isl_ast_build_has_value(sub_build);
+-	degenerate = isl_ast_build_has_value(sub_build);
 -	eliminated = isl_ast_build_has_affine_value(sub_build, depth);
-+	if (sub_build->enable_eliminate_for)
++	if (sub_build->enable_eliminate_for) {
++		degenerate = isl_ast_build_has_value(sub_build);
 +		eliminated = isl_ast_build_has_affine_value(sub_build, depth);
-+	else
++	}
++	else {
++		degenerate = isl_bool_false;
 +		eliminated = isl_bool_false;
++	}
  	if (degenerate < 0 || eliminated < 0)
  		executed = isl_union_map_free(executed);
  	if (!degenerate)
-@@ -3644,8 +3647,20 @@ static __isl_give isl_ast_graft_list *ge
+@@ -3644,8 +3650,20 @@ static __isl_give isl_ast_graft_list *ge
  	domain = isl_set_from_union_set(schedule_domain);
  
  	isolated = isl_ast_build_get_isolated(build);
