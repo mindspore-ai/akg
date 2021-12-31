@@ -121,6 +121,8 @@ class TileOuterBand : public SchedulePass {
   isl::schedule_node InsertAllMarker(const isl::schedule_node &orig_node, const bool is_all_reduce);
   isl::schedule_node InsertMarkerForLoop(const isl::schedule_node &orig_node, const std::string &marker_name,
                                          const int insert_pos = 0);
+  isl::schedule_node InsertMultiMarker(const isl::schedule_node &orig_node, const std::string &marker_name,
+                                       std::vector<int64_t> insert_pos_list);
 
  private:
   PassInfo &pass_info_;
@@ -135,6 +137,7 @@ class TileOuterBand : public SchedulePass {
   int vectorization_axis_pos_{-1};
   int start_pos_{0};
   isl::union_set reduce_statements_;
+  Template template_type_{Template::DEFAULT};
 };
 
 }  // namespace poly

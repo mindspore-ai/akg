@@ -201,8 +201,7 @@ void TileOuterBand::InitDimensionInfo(const isl::schedule &sch_init) {
     }
   }
 
-  const std::string pattern = " ";
-  std::vector<std::string> str = Split(dim, pattern);
+  std::vector<std::string> str = Split(dim, SPACE_PATTERN);
   CHECK(!str.empty() && !(str.size() % dim_info_entry_size)) << "Error: You need to set dim !";
   int sequence = 0;
   for (size_t i = 0; i < str.size(); i += dim_info_entry_size) {
@@ -811,6 +810,7 @@ void TileOuterBand::PaddingIsolate(int &h_head, int &h_tail, int &w_head, int &w
   int d_kh = (kh - 1) * dilation_h + 1;
   CHECK_NE(stride_h, 0);
   int win_h = (h + pad_top + pad_bottom - d_kh) / stride_h + 1;
+  CHECK_NE(stride_h, 0);
   int win_cut_h = (h_cut - d_kh) / stride_h + 1;
   if (win_cut_h > win_h) {
     if (!scop_info_.user_config_.GetIsDynamic() || win_h > 0) win_cut_h = win_h;
@@ -826,6 +826,7 @@ void TileOuterBand::PaddingIsolate(int &h_head, int &h_tail, int &w_head, int &w
   int d_kw = (kw - 1) * dilation_w + 1;
   CHECK_NE(stride_w, 0);
   int win_w = (w + pad_left + pad_right - d_kw) / stride_w + 1;
+  CHECK_NE(stride_w, 0);
   int win_cut_w = (w_cut - d_kw) / stride_w + 1;
   if (win_cut_w > win_w) {
     win_cut_w = win_w;
@@ -1059,9 +1060,11 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCuda(isl::schedule_node nod
   if (IsOuterTilable(node) <= 0) return node;
 
   // make sure the node is a band node and has multiple members, insert empty band if not
+  bool is_empty_band = false;
   if (!node.isa<isl::schedule_node_band>() || (!node.as<isl::schedule_node_band>().member_get_coincident(0) &&
                                                scop_info_.user_config_.GetTileCheckCoincident())) {
     node = InsertEmptyPermutableBand(node);
+    is_empty_band = true;
   }
   // get tile size
   node = SetTileSizeAndTile(node, TILE_WITH_C1);
@@ -1071,8 +1074,10 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCuda(isl::schedule_node nod
     return TileMatmulOperatorForCuda(node);
   }
 
-  node = node.child(0).insert_mark(PROMOTE_GLOBAL_TO_SHARED);
-  node = node.parent();
+  if (!is_empty_band) {
+    node = node.child(0).insert_mark(PROMOTE_GLOBAL_TO_SHARED);
+    node = node.parent();
+  }
 
   // vectorize for elementwise operator
   if (scop_info_.analysis_result_.GetOuterBandNode(cur_band_index_)->enable_vectorization) {
@@ -1231,16 +1236,19 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCpu(isl::schedule_node node
     return node;
   }
 
-  if (current_outer_bn->template_type == Template::MATMUL && scop_info_.user_config_.GetEnableMatmul()) {
+  template_type_ = current_outer_bn->template_type;
+  if (template_type_ == Template::MATMUL && scop_info_.user_config_.GetEnableMatmul()) {
     return TileGemmOperatorForCpu(node);
   }
 
-  if (current_outer_bn->reduce_direction == ReduceDirection::X) {
-    return TileReduceXForCpu(node);
-  }
+  if (template_type_ == Template::REDUCTION) {
+    if (current_outer_bn->reduce_direction == ReduceDirection::X) {
+      return TileReduceXForCpu(node);
+    }
 
-  if (current_outer_bn->reduce_direction == ReduceDirection::ALL) {
-    return TileAllReduceForCpu(node);
+    if (current_outer_bn->reduce_direction == ReduceDirection::ALL) {
+      return TileAllReduceForCpu(node);
+    }
   }
 
   return TileElementWiseForCpu(node);
@@ -1259,6 +1267,7 @@ isl::schedule_node TileOuterBand::TileGemmOperatorForCpu(const isl::schedule_nod
   auto node = orig_node;
   size_t start_depth = node.get_tree_depth();
 
+  node = InsertEmptyPermutableBand(node).child(0);
   auto seq_node = SplitReduceStatements(node).parent();
   if (!seq_node.isa<isl::schedule_node_sequence>()) {
     return orig_node;
@@ -1294,11 +1303,14 @@ isl::schedule_node TileOuterBand::TileGemmBandNodeForCpu(const isl::schedule_nod
   node = IsolateTilesCpu(node, TILE_WITH_C1);
 
   auto band_node = node.parent().as<isl::schedule_node_band>();
-  node = band_node.split(band_node.n_member() - 1);
-  // Parallel the m-axis of Tensor A (that is, the n-axis of the transpose of B).
-  node = InsertMarkerForLoop(node, FOR_PARALLEL, 1);
-  bool is_insert_mark = !GetMarkerName(node, FOR_PARALLEL).empty();
-  node = is_insert_mark ? node.child(0) : node;
+  int band_n_member = static_cast<int>(band_node.n_member());
+  node = band_node.split(band_n_member - 1);
+  // Parallel the m-axis and the n-axis.
+  std::vector<int64_t> insert_pos_list;
+  for (int i = 0; i < band_n_member - 1; ++i) {
+    insert_pos_list.push_back(i);
+  }
+  node = InsertMultiMarker(node, FOR_PARALLEL, insert_pos_list);
 
   node = node.child(0).child(0);
   node = node.insert_mark(PROMOTE_GLOBAL_TO_REGISTER_A);
@@ -1314,6 +1326,7 @@ isl::schedule_node TileOuterBand::TileAllReduceForCpu(const isl::schedule_node &
   auto node = orig_node;
   size_t start_depth = node.get_tree_depth();
 
+  node = InsertEmptyPermutableBand(node).child(0);
   auto seq_node = SplitReduceStatements(node).parent();
   if (!seq_node.isa<isl::schedule_node_sequence>()) {
     return orig_node;
@@ -1458,11 +1471,22 @@ isl::schedule_node TileOuterBand::InsertAllMarker(const isl::schedule_node &orig
 
   node = node.parent();
   // Insert the parallel marker on the axis corresponding.
-  node = InsertMarkerForLoop(node, FOR_PARALLEL);
   if (is_all_reduce) {
-    is_insert_mark = false;
+    node = InsertMarkerForLoop(node, FOR_PARALLEL);
     is_insert_mark = !GetMarkerName(node, FOR_PARALLEL).empty();
     node = is_insert_mark ? node.insert_mark(REDUCE_AREA_FLAG) : node;
+  } else if (template_type_ == Template::MATMUL && scop_info_.user_config_.GetEnableMatmul()) {
+    if (!node.as<isl::schedule_node_band>()) {
+      return node;
+    }
+    int band_n_member = static_cast<int>(node.as<isl::schedule_node_band>().n_member());
+    std::vector<int64_t> insert_pos_list;
+    for (int i = 0; i < band_n_member - 1; ++i) {
+      insert_pos_list.push_back(i);
+    }
+    node = InsertMultiMarker(node, FOR_PARALLEL, insert_pos_list);
+  } else {
+    node = InsertMarkerForLoop(node, FOR_PARALLEL);
   }
 
   return node;
@@ -1475,6 +1499,8 @@ isl::schedule_node TileOuterBand::InsertMarkerForLoop(const isl::schedule_node &
   }
 
   auto band_node = orig_node.as<isl::schedule_node_band>();
+  int band_member = static_cast<int>(band_node.n_member());
+  CHECK(insert_pos < band_member) << "The split position cannot be greater than the number of axis.";
   auto partial_schedule = band_node.get_partial_schedule().intersect_domain(orig_node.get_domain());
   auto upa_list = partial_schedule.get_union_pw_aff_list();
   auto extent = upa_list.get_at(insert_pos).floor().max_val().get_num_si();
@@ -1487,6 +1513,19 @@ isl::schedule_node TileOuterBand::InsertMarkerForLoop(const isl::schedule_node &
     node = band_node.split(insert_pos).child(0);
   }
   return node.insert_mark(marker_name);
+}
+
+isl::schedule_node TileOuterBand::InsertMultiMarker(const isl::schedule_node &orig_node, const std::string &marker_name,
+                                                    std::vector<int64_t> insert_pos_list) {
+  auto node = orig_node;
+  std::sort(insert_pos_list.begin(), insert_pos_list.end());
+  for (size_t i = 0; i < insert_pos_list.size(); ++i) {
+    int insert_pos = i == 0 ? insert_pos_list[i] : insert_pos_list[i] - insert_pos_list[i - 1];
+    node = InsertMarkerForLoop(node, marker_name, insert_pos);
+    bool is_insert_mark = !GetMarkerName(node, marker_name).empty();
+    node = is_insert_mark ? node.child(0) : node;
+  }
+  return node;
 }
 
 isl::schedule_node TileOuterBand::SplitReduceStatements(const isl::schedule_node &orig_node) {
@@ -1512,8 +1551,8 @@ isl::multi_val TileOuterBand::GetVectorizationTileSize(const isl::schedule_node 
       auto id = a.get_tuple_id(isl_dim_out).to_str();
       Tensor tensor = scop_info_.FindTensor(id);
       Type type = scop_info_.GetDtypeOf(id);
-      int bytes = type.bytes();
-      auto tmp_bytes = (4 / bytes) * 4;  // Default vectorization mode fp32 = 4Bytes
+      CHECK_NE(type.bytes(), 0);
+      auto tmp_bytes = TOTAL_VECTORIZATION_BYTES / type.bytes();
       vectorized_length = std::max(tmp_bytes, vectorized_length);
     }
   }

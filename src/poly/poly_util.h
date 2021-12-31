@@ -421,6 +421,8 @@ constexpr auto REDUCE_AREA_FLAG = "reduce_area";
 /******************************************************
  * Following const is the mark tags for schedule tree
  ******************************************************/
+constexpr auto TOTAL_VECTORIZATION_BYTES = 16;
+constexpr auto SPACE_PATTERN = " ";
 constexpr auto REALIZE = "realize";
 constexpr auto CONV_GEMM = "conv_gemm";
 constexpr auto CONV_KHKW_OUTER = "conv_khkw_outer";
@@ -440,7 +442,6 @@ constexpr auto PROMOTE_GLOBAL_TO_SHARED_C = "promote_global_to_shared_c";
 constexpr auto PROMOTE_SHARED_TO_REGISTER_AB = "promote_shared_to_register_ab";
 constexpr auto PROMOTE_SHARED_TO_REGISTER_C = "promote_shared_to_register_c";
 constexpr auto PROMOTE_GLOBAL_TO_REGISTER_C = "promote_global_to_register_c";
-constexpr auto PROMOTE_GLOBAL_TO_REGISTER_AB = "promote_global_to_register_ab";
 constexpr auto PROMOTE_GLOBAL_TO_REGISTER_A = "promote_global_to_register_a";
 constexpr auto PROMOTE_GLOBAL_TO_REGISTER_B = "promote_global_to_register_b";
 
@@ -461,12 +462,6 @@ constexpr auto FOR_PARALLEL = "for_parallel";
 constexpr auto FOR_VECTORIZED = "for_vectorized";
 constexpr auto FOR_UNROLLED = "for_unrolled";
 constexpr auto FOR_SWIZZLED = "for_swizzled";
-
-// call node added in filter
-constexpr auto CALL_SPLIT_STR = "__";
-constexpr auto CALL_FLAG = "Call";
-constexpr auto MATRIX_TRANSPOSE = "MatrixTranspose";
-constexpr auto REDUCE_PREFIX = "Reduce";
 
 constexpr auto PROMOTE_VECTORIZATION = "promote_vectorization";
 constexpr auto PROMOTE_VECTORIZATION_BIT = 128;
