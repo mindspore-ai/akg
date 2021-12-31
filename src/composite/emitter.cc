@@ -30,15 +30,14 @@ void Emitter::Visit_(const Provide *op) {
   CHECK(op->value.as<Call>());
   auto call = op->value.as<Call>();
   op_name_ = call->name;
-  auto real_inputs = GetRealInputs(call->args);
   if (op_name_ == "tuple_getitem") {
-    ProcessTupleGetItem(op, real_inputs);
+    ProcessTupleGetItem(op, call->args);
     return;
   }
-  EmitTopi(op, real_inputs);
+  EmitTopi(op, GetRealInputs(call->args));
 }
 
-void Emitter::ProcessTupleGetItem(const Provide *op, const Array<NodeRef> &inputs) {
+void Emitter::ProcessTupleGetItem(const Provide *op, const Array<Expr> &inputs) {
   // tuple_getitem is called when getting items from multi result array
   CHECK(inputs[0].as<Call>());
   // the first input of tuple_getitem is the placeholder node of the array result
