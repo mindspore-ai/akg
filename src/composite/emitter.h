@@ -26,7 +26,7 @@ class Emitter : public IRVisitor {
  private:
   void Visit_(const AttrStmt *op) override;
   void Visit_(const Provide *op) override;
-  void ProcessTupleGetItem(const Provide *op, const Array<NodeRef> &inputs);
+  void ProcessTupleGetItem(const Provide *op, const Array<Expr> &inputs);
   Array<NodeRef> GetRealInputs(const Array<Expr> &inputs);
   void EmitTopi(const Provide *op, const Array<NodeRef> &real_inputs);
   const PackedFunc *GetTopiFunc();
