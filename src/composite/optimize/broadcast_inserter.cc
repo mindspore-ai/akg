@@ -25,13 +25,7 @@ class BroadcastInserterMutator : public IRMutator {
       CHECK(provide);
       auto call = provide->value.as<Call>();
       CHECK(call);
-      // for unary input op
-      if (call->args.size() == 1 && call->name != "BroadcastTo") {
-        Expr arg = call->args[0];
-        if (arg.as<IntImm>() || arg.as<UIntImm>() || arg.as<FloatImm>()) {
-          return DoInsert(arg, 0, provide, call, op);
-        }
-      }
+
       // for op with multiple inputs
       auto it = broadcast_ops_.find(call->name);
       if (it != broadcast_ops_.end()) {
@@ -44,6 +38,12 @@ class BroadcastInserterMutator : public IRMutator {
             return DoInsert(e, i, provide, call, op);
           }
         }
+      }
+
+      // check whether call's inputs are all imm.
+      // if inputs are all imm need to insert Broadcast for every input
+      if (!CheckHasTensor(call) && !change_ones_) {
+        return BroadcastForInputs(provide, call, op, s);
       }
     }
     return IRMutator::Mutate_(op, s);
@@ -66,9 +66,35 @@ class BroadcastInserterMutator : public IRMutator {
     return Block::make(first, second);
   }
 
+  bool CheckHasTensor(const Call *call) {
+    bool has_tensor = false;
+    if (call->name != "BroadcastTo") {
+      for (size_t i = 0; i < call->args.size(); ++i) {
+        Expr arg = call->args[i];
+        if (arg.as<Call>()) {
+          has_tensor = true;
+          break;
+        }
+      }
+    }
+    return has_tensor;
+  }
+
+  Stmt BroadcastForInputs(const Provide *provide, const Call *call, const AttrStmt *op, const Stmt &s) {
+    Stmt result;
+    for (size_t i = 0; i < call->args.size(); ++i) {
+      Expr arg = call->args[i];
+      result = DoInsert(arg, i, provide, call, op);
+      change_ones_ = true;
+      result = this->Mutate(result);
+      change_ones_ = false;
+    }
+    return result;
+  }
+  bool change_ones_ = false;
   int name_idx_ = 0;
   std::unordered_map<std::string, unsigned> broadcast_ops_ = {{"Equal", -1}, {"Select", -1}};
 };
 
-Stmt BroadcastInserter(const Stmt &s, BuildInfo*) { return BroadcastInserterMutator().Mutate(s); }
+Stmt BroadcastInserter(const Stmt &s, BuildInfo *) { return BroadcastInserterMutator().Mutate(s); }
 }  // namespace akg
