@@ -115,13 +115,13 @@ void TileAxis::LinkToLoop(const For *loop) {
   this->c0_constraints.tile_extent_ = this->c1_constraints.tile_extent_;
 }
 
-void TileAxis::MarkWithAttr(const AttrInfo &new_attr) {
+void TileAxis::MarkWithAttr(const AttrInfo &attr) {
   for (const auto &old_attr : this->attrs) {
-    if (old_attr.attr_key == new_attr.attr_key && old_attr.attr_value == new_attr.attr_value) {
+    if (old_attr.attr_key == attr.attr_key && old_attr.attr_value == attr.attr_value) {
       return;
     }
   }
-  this->attrs.emplace_back(new_attr);
+  this->attrs.emplace_back(attr);
 }
 
 std::vector<std::string> TileAxis::GetAttrValue(const std::string &attr_key) const {
@@ -388,29 +388,31 @@ std::pair<int64_t, int64_t> TileCandidate::MemInfer(TilingMemScope scope, int ba
   return std::make_pair(mem_infer_[scope], align_mem_infer_[scope]);
 }
 
-void TileCandidate::UpdateConstTile(const TileAxis *a, const int64_t l1_val, const int64_t l0_val) {
+void TileCandidate::UpdateConstTile(const TileAxis *a, int64_t c1_val, int64_t c0_val) {
   TileVal &val = this->tile_val_[a];
-  val.tile_c1 = l1_val;
-  val.tile_c0 = l0_val == -1 ? l1_val : l0_val;
+  val.tile_c1 = c1_val;
+  val.tile_c0 = c0_val == -1 ? c1_val : c0_val;
   is_update_ = false;
 }
 
-void TileCandidate::UpdateC1Tile(const TileAxis *a, const Expr &l1_val) {
+void TileCandidate::UpdateC1Tile(const TileAxis *a, const Expr &c1_val) {
   TileVal &val = this->tile_val_[a];
-  val.tile_c1 = l1_val;
+  val.tile_c1 = c1_val;
   is_update_ = false;
 }
 
-void TileCandidate::UpdateC0Tile(const TileAxis *a, const Expr &l0_val) {
+void TileCandidate::UpdateC0Tile(const TileAxis *a, const Expr &c0_val) {
   TileVal &val = this->tile_val_[a];
-  val.tile_c0 = l0_val;
+  val.tile_c0 = c0_val;
   is_update_ = false;
 }
 
-void TileCandidate::UpdateTile(const TileAxis *a, const Expr &l1_val, const Expr &l0_val) {
+void TileCandidate::UpdateTile(const TileAxis *a, const Expr &c1_val, const Expr &c0_val) {
   TileVal &val = this->tile_val_[a];
-  val.tile_c1 = l1_val;
-  if (l0_val.defined()) val.tile_c0 = l0_val;
+  val.tile_c1 = c1_val;
+  if (c0_val.defined()) {
+    val.tile_c0 = c0_val;
+  }
   is_update_ = false;
 }
 
@@ -630,22 +632,29 @@ void TileCandidate::GetElemwiseActualBufSize(const BufferEntry *buf, BufSizeInfo
 }
 
 void TileCandidate::DoMemInfer() {
+  if (buffer_usage_ == nullptr) {
+    buffer_usage_ = std::make_unique<BufferUsage>(BufferUsage());
+    buffer_usage_->Build(analyzer_->buffer_usage_timetable_);
+  }
   std::unique_ptr<MemInferInfo> mem_infer_info(new (std::nothrow) MemInferInfo());
   CHECK(mem_infer_info) << "memory alloc fail";
 
-  for (auto cur_time = 0; cur_time <= static_cast<int>(analyzer_->buffer_usage_timetable_.size() - 1); ++cur_time) {
-    for (auto it : analyzer_->buffer_usage_timetable_) {
-      auto alloc_time = it.second.first;
-      auto last_use_time = it.second.second;
-      if (last_use_time < cur_time) {
-        mem_infer_info->live_size[it.first->scope] -= mem_infer_info->live_buf[it.first];
-        mem_infer_info->live_buf.erase(it.first);
+  for (auto cur_time = 0; cur_time <= buffer_usage_->max_time; ++cur_time) {
+    auto releases = buffer_usage_->buf_release_time.find(cur_time);
+    if (releases != buffer_usage_->buf_release_time.end()) {
+      for (auto buf : releases->second) {
+        mem_infer_info->live_size[buf->scope] -= mem_infer_info->live_buf[buf];
+        mem_infer_info->live_buf.erase(buf);
       }
-      // Do not update memory for buffer that already exist or not used currently.
-      if (mem_infer_info->live_buf.count(it.first) != 0 || alloc_time != cur_time) {
-        continue;
+    }
+    auto allocates = buffer_usage_->buf_alloc_time.find(cur_time);
+    if (allocates != buffer_usage_->buf_alloc_time.end()) {
+      for (auto buf : allocates->second) {
+        if (mem_infer_info->live_buf.count(buf) != 0) {
+          continue;
+        }
+        UpdateMemoryAfterBuffer(buf, mem_infer_info.get());
       }
-      UpdateMemoryAfterBuffer(it.first, mem_infer_info.get());
     }
   }
 
@@ -705,13 +714,13 @@ int TileCandidate::GetDmaCopySizeWithinAxis(TileAxis *target_axis) {
       if (before_this_axis) {
         continue;
       }
-      int64_t l1_val = MIN_TILE;
-      std::tie(l1_val, std::ignore) = GetConstTileVal(gm_axis);
-      if (l1_val == TileVarId::VAR) {
+      int64_t c1_val = MIN_TILE;
+      std::tie(c1_val, std::ignore) = GetConstTileVal(gm_axis);
+      if (c1_val == TileVarId::VAR) {
         need_record = false;
         break;
       }
-      CHECK_NE(l1_val, 0) << "Inner axis " << gm_axis->dim_axis << " should be tile before axis "
+      CHECK_NE(c1_val, 0) << "Inner axis " << gm_axis->dim_axis << " should be tile before axis "
                           << target_axis->dim_axis;
       if (gm_axis->HasAnyAttr({AT_REDUCE_AXIS, AT_TRANSPOSE, AT_TRANSFORM})) {
         ss << "axis " << gm_axis->index << "_" << gm_axis->dim_axis << " cannot be flatten. clear data each core.";
@@ -720,8 +729,8 @@ int TileCandidate::GetDmaCopySizeWithinAxis(TileAxis *target_axis) {
         data_bytes = 1;
         continue;
       }
-      ss << "axis " << gm_axis->index << "_" << gm_axis->dim_axis << " contains " << l1_val;
-      data_each_core *= l1_val;
+      ss << "axis " << gm_axis->index << "_" << gm_axis->dim_axis << " contains " << c1_val;
+      data_each_core *= c1_val;
       auto min_bytes = static_cast<int>(ALIGN_BYTES / GetMaxAlignBytes(gm_axis->data_size));
       data_bytes = (data_bytes == -1 || min_bytes < data_bytes) ? min_bytes : data_bytes;
     }
@@ -758,11 +767,11 @@ int TileCandidate::GetMinFactorForMinDataGranularity(TileAxis *axis) {
     if (!a->range_extent.as<IntImm>()) {
       continue;
     }
-    int64_t l1_val = this->GetConstTileVal(a).first;
-    if (l1_val == TileVarId::UNDEFINE || l1_val == TileVarId::VAR) {
+    int64_t c1_val = this->GetConstTileVal(a).first;
+    if (c1_val == TileVarId::UNDEFINE || c1_val == TileVarId::VAR) {
       continue;
     }
-    granularity *= l1_val;
+    granularity *= c1_val;
   }
   return std::max(static_cast<int>(MIN_CORE_GRANULARITY / granularity), 1);
 }
@@ -779,8 +788,8 @@ int TileCandidate::GetMaximalPendingBlocks(TileAxis *excluded_axis) {
     if (!axis->range_extent.as<IntImm>()) {
       continue;
     }
-    int64_t l1_val = this->GetConstTileVal(axis).first;
-    if (l1_val == TileVarId::UNDEFINE || l1_val == TileVarId::VAR) {
+    int64_t c1_val = this->GetConstTileVal(axis).first;
+    if (c1_val == TileVarId::UNDEFINE || c1_val == TileVarId::VAR) {
       blocks *= axis->range_extent.as<IntImm>()->value;
     }
   }
@@ -797,6 +806,9 @@ class LinearAccessPatternBuilder : public IRVisitor {
 
   void Build(const Stmt &stmt) {
     CHECK(analyzer_ != nullptr);
+    if (!analyzer_->scop_info_.user_config_.GetIsDynamic()) {
+      CollectGlobalWritesBuf();
+    }
     CollectAlignedBuf();
     CollectReduceBuf();
     CollectExpandedBuf();
@@ -862,7 +874,8 @@ class LinearAccessPatternBuilder : public IRVisitor {
   }
 
   void Visit_(const Realize *op) final {
-    local_buf_.insert(op->func->func_name());
+    auto buf_name = op->func->func_name();
+    local_buf_.insert(buf_name);
     IRVisitor::Visit_(op);
   }
 
@@ -933,6 +946,12 @@ class LinearAccessPatternBuilder : public IRVisitor {
     for (const std::string &ref : cur_ref_) {
       MemFlow &mem_flow = tensor_mem_flows[ref];
       CHECK(!mem_flow.empty());
+      if (global_writes_buf_.find(GetBuffer(ref, mem_flow[0])->name) != global_writes_buf_.end()) {
+        // In tensor mem flow, the output tensor will have a reverse mem flow:
+        // e.g. DDR -> UB for vector or DDR -> UB -> L0C for cube;
+        // Therefore, we need to reverse mem flow to get the correct memory usage.
+        std::reverse(mem_flow.begin(), mem_flow.end());
+      }
       if (local_buf_.count(ref) && mem_flow.size() == 2U) {
         // If it is a buffer from gm to certain location, directly use destination as buffer's scope
         // in conv_backprop, multiple bands are merged and local buffer can have gm->buf->c1->c0 memflow.
@@ -1032,6 +1051,13 @@ class LinearAccessPatternBuilder : public IRVisitor {
       seq_.back().ref.insert(ref);
       LivenessExtent(ref);
     }
+  }
+
+  void CollectGlobalWritesBuf() {
+    analyzer_->scop_info_.analysis_result_.GetWrites().foreach_map([this](const isl::map &access) -> void {
+      const isl::id &tensor_id = access.get_tuple_id(isl_dim_out);
+      global_writes_buf_.insert(tensor_id.name());
+    });
   }
 
   void CollectAlignedBuf() {
@@ -1248,6 +1274,7 @@ class LinearAccessPatternBuilder : public IRVisitor {
   std::unordered_set<std::string> aligned_buf_;
   std::unordered_set<std::string> reduce_src_buf_;
   std::unordered_set<std::string> reduce_dst_buf_;
+  std::unordered_set<std::string> global_writes_buf_;
   std::unordered_map<std::string, int> expanded_buf_;
   std::unordered_map<std::string, int64_t> casted_buf_;
 
@@ -1666,13 +1693,17 @@ void TilingAnalyzer::DumpBufferUsageTimeable() {
 
 int64_t TilingAnalyzer::FindDivisibleTilingFactor(int64_t limit, int64_t range) {
   CHECK(range > 0 && limit > 0) << "Need positive range and limit.";
-  if (range <= limit) return range;
+  if (range <= limit) {
+    return range;
+  }
   int64_t exp = (range - 1 + limit) / limit;
   int64_t init = exp > 2 ? exp : 2;
   int64_t end = static_cast<int>(sqrt(range));
   end = end <= init ? range : end;
   for (auto div = init; div < end; ++div) {
-    if (range % div == 0) return (range / div);
+    if (range % div == 0) {
+      return (range / div);
+    }
   }
   return 1;
 }
