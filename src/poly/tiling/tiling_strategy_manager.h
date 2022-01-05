@@ -29,7 +29,7 @@ namespace poly {
 class TilingStrategy {
  public:
   explicit TilingStrategy(const TilingAnalyzer *a) : analyzer_(a), target_(a->scop_info_.user_config_.GetTarget()) {}
-  ~TilingStrategy() {}
+  virtual ~TilingStrategy() { analyzer_ = nullptr; }
   virtual void AddNpuConstraint(){};
   virtual void AddGpuConstraint(){};
   virtual void AddCpuConstraint(){};
@@ -40,7 +40,7 @@ class TilingStrategy {
   const TilingAnalyzer *analyzer_;
   std::string target_;
   std::unordered_map<TileAxis *, std::vector<AttrInfo>> GetInterestedInfo(const std::string &attr_key,
-                                                                          bool match_whole_word = true) {
+                                                                          bool match_whole_word = true) const {
     std::unordered_map<TileAxis *, std::vector<AttrInfo>> result;
     std::vector<TileAxis *> axes =
       match_whole_word ? analyzer_->GetAxesOfAttr(attr_key) : analyzer_->GetAxesContainsAttr(attr_key);
@@ -62,18 +62,23 @@ class TilingStrategy {
   int64_t warp_sizes_ = 32;
   int64_t total_available_thread_ = 1024;
   int64_t num_sm_ = 80;
-  int64_t max_x_dim_block_ = pow(2, 31) - 1;
+  int64_t max_x_dim_block_ = 2147483647;
   int64_t max_y_z_dim_block_ = 65535;
   int64_t max_x_y_dim_thread_ = 1024;
   int64_t max_z_dim_thread_ = 64;
   size_t max_dim_ = 3;
   int64_t max_elem_per_thread_ = 1024;
   size_t tranpose_tiling_constraints_ = 32;
-  int64_t reduce_length_limit = 32;
+  int64_t reduce_length_limit_ = 32;
 
   // cpu config
   int64_t thread_num_ = 8;
   int64_t vector_size_ = 4;
+
+  const static int binary_factor_{2};
+  const static int decimal_factor_{10};
+  const static int double_warp_size_{64};
+  const static int quadruple_warp_size_{128};
 };
 
 class TilingStrategyManager {
@@ -109,47 +114,39 @@ class TilingStrategyManager {
 class GpuDmaAnalysisStrategy : public TilingStrategy {
  public:
   explicit GpuDmaAnalysisStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {}
-  ~GpuDmaAnalysisStrategy() {}
-  void AddNpuConstraint();
-  void AddGpuConstraint();
+  void AddNpuConstraint() override;
+  void AddGpuConstraint() override;
 };
 
 class CustomTilingStrategy : public TilingStrategy {
  public:
-  explicit CustomTilingStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {}
-  ~CustomTilingStrategy() {}
-  void AddNpuConstraint();
-  void AddGpuConstraint();
-
-  std::string interested_attr_key = "CUSTOM";
+  explicit CustomTilingStrategy(const TilingAnalyzer *a) : TilingStrategy(a) { interested_attr_key = "CUSTOM"; }
+  void AddNpuConstraint() override;
+  void AddGpuConstraint() override;
+  void ApplyCustomConstraints(TileAxis *axis, std::string con, TileLevel lv);
 };
 
 class ConflictTreeRangeStrategy : public TilingStrategy {
  public:
   explicit ConflictTreeRangeStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {}
-  ~ConflictTreeRangeStrategy() {}
-  void AddNpuConstraint();
-  void AddGpuConstraint();
+  void AddNpuConstraint() override;
+  void AddGpuConstraint() override;
 };
 
 class ModStrategy : public TilingStrategy {
  public:
-  explicit ModStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {}
-  ~ModStrategy() {}
-  void AddNpuConstraint();
-  void AddGpuConstraint();
-
-  std::string interested_attr_key = AT_MOD;
+  explicit ModStrategy(const TilingAnalyzer *a) : TilingStrategy(a) { interested_attr_key = AT_MOD; }
+  void AddNpuConstraint() override;
+  void AddGpuConstraint() override;
 };
 
 // These strategies aim to deal with special insn in Npu core.
 class CastStrategy : public TilingStrategy {
  public:
-  explicit CastStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {}
-  ~CastStrategy() {}
-  void AddNpuConstraint();
-  void AddGpuConstraint();
-  void AddCpuConstraint();
+  explicit CastStrategy(const TilingAnalyzer *a) : TilingStrategy(a) { interested_attr_key = AT_CAST; }
+  void AddNpuConstraint() override;
+  void AddGpuConstraint() override;
+  void AddCpuConstraint() override;
   void MarkDataSize() {
     auto interested_info = GetInterestedInfo(interested_attr_key);
     for (auto it : interested_info) {
@@ -164,26 +161,29 @@ class CastStrategy : public TilingStrategy {
           std::vector<std::string> src_info = akg::common::Split(src, ":");
           CHECK_EQ(src_info.size(), 2U);
           CHECK_NE(src_info[1], "");
-          axis->data_size[src_info[0]].emplace_back(static_cast<int>(std::strtol(src_info[1].c_str(), nullptr, 10)));
+          axis->data_size[src_info[0]].emplace_back(
+            static_cast<int>(std::strtol(src_info[1].c_str(), nullptr, decimal_factor_)));
         }
 
         std::vector<std::string> dst_info = akg::common::Split(src_dst[1], ":");
         CHECK_EQ(dst_info.size(), 2U);
         CHECK_NE(dst_info[1], "");
-        axis->data_size[dst_info[0]].emplace_back(static_cast<int>(std::strtol(dst_info[1].c_str(), nullptr, 10)));
+        axis->data_size[dst_info[0]].emplace_back(
+          static_cast<int>(std::strtol(dst_info[1].c_str(), nullptr, decimal_factor_)));
       }
     }
   }
-
-  std::string interested_attr_key = AT_CAST;
 };
 
 class ReduceStrategy : public TilingStrategy {
  public:
   explicit ReduceStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {}
-  ~ReduceStrategy() {}
-  void AddNpuConstraint();
-  void AddGpuConstraint();
+  void AddNpuConstraint() override;
+  void AddGpuConstraint() override;
+  void UpdateReduceThreads(bool square_thread, int64_t min_blocks, bool use_local);
+  void UpdateThreadRange(bool square_thread);
+  void UpdateAxes(int possible_blocks, int default_elem_per_thread);
+  void AnalyzeReduceConfig(ReduceDirection direction, int band_index);
   void DealWith4DFusedReduce(const std::vector<akg::ir::poly::TileAxis *> &reduce_axes);
 
   void DisableReduceMapping();
@@ -191,11 +191,11 @@ class ReduceStrategy : public TilingStrategy {
   // Used by setting scop_info.enable_akg_reduce_lib.
   void AkgReduceLibStrategyOnGpu(int band_index);
 
-  bool UseRegisterMem();
+  const bool UseRegisterMem();
   bool IsHalfReduce();
 
   // For this special case, we have tiling constraint on axis to calculate correct isl_footprint_box.
-  void DealWith4DFusedReduce();
+  const void DealWith4DFusedReduce();
 
   // For post reduce case, we should identify and disable atomic add for reduce axes.
   void DealWithPostReduceTensors();
@@ -204,58 +204,63 @@ class ReduceStrategy : public TilingStrategy {
   std::vector<TileAxis *> injective_axes_;
   bool all_reduce_{false};
   bool has_transpose_{false};
+  int64_t reduce_length_;
+  int64_t nonreduce_length_;
+  int64_t min_ty_;
+  int64_t min_ty_init_{8};
+  int64_t max_coef_;
+  int64_t reduce_threads_;
+  int64_t injective_threads_;
+  std::pair<int64_t, int64_t> tx_range_;
+  std::pair<int64_t, int64_t> ty_range_;
+  int64_t total_injective_size_;
+  int64_t total_reduce_size_;
+  int64_t possible_injective_blocks_;
+  int64_t possible_reduce_blocks_;
 };
 
 class VectorizedStrategy : public TilingStrategy {
  public:
   explicit VectorizedStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {}
-  ~VectorizedStrategy() {}
-  void AddNpuConstraint();
-  void AddGpuConstraint();
+  void AddNpuConstraint() override;
+  void AddGpuConstraint() override;
 };
 
 class DmaAlignStrategy : public TilingStrategy {
  public:
-  explicit DmaAlignStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {}
-  ~DmaAlignStrategy() {}
-  void AddNpuConstraint();
-  void AddGpuConstraint();
-
-  std::string interested_attr_key = AT_ALIGN;
+  explicit DmaAlignStrategy(const TilingAnalyzer *a) : TilingStrategy(a) { interested_attr_key = AT_ALIGN; }
+  void AddNpuConstraint() override;
+  void AddGpuConstraint() override;
 };
 
 class TensorOfTensorStrategy : public TilingStrategy {
  public:
   explicit TensorOfTensorStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {}
-  ~TensorOfTensorStrategy() {}
-  void AddNpuConstraint();
-  void AddGpuConstraint();
+  void AddNpuConstraint() override;
+  void AddGpuConstraint() override;
 };
 
 class PassDownAttrStrategy : public TilingStrategy {
  public:
   explicit PassDownAttrStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {}
-  ~PassDownAttrStrategy() {}
-  void AddNpuConstraint();
-  void AddGpuConstraint();
+  void AddNpuConstraint() override;
+  void AddGpuConstraint() override;
 };
 
 class DynamicShapeLimitStrategy : public TilingStrategy {
  public:
-  explicit DynamicShapeLimitStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {}
-  ~DynamicShapeLimitStrategy() {}
-  void AddNpuConstraint();
-  void AddGpuConstraint();
-
-  std::string interested_attr_key = "DYN_SHAPE_LIMIT";
+  explicit DynamicShapeLimitStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {
+    interested_attr_key = "DYN_SHAPE_LIMIT";
+  }
+  void AddNpuConstraint() override;
+  void AddGpuConstraint() override;
 };
 
 class ShiftAxisStrategy : public TilingStrategy {
  public:
-  explicit ShiftAxisStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {}
-  ~ShiftAxisStrategy() {}
-  void AddNpuConstraint();
-  void AddGpuConstraint();
+  explicit ShiftAxisStrategy(const TilingAnalyzer *a) : TilingStrategy(a) { interested_attr_key = AT_SHIFT; }
+  void AddNpuConstraint() override;
+  void AddGpuConstraint() override;
 
   void TileEntirely() {
     auto interested_info = GetInterestedInfo(interested_attr_key);
@@ -268,45 +273,35 @@ class ShiftAxisStrategy : public TilingStrategy {
       shifted_axes_.insert(axis);
       for (const auto &attr : it.second) {
         CHECK_NE(attr.attr_value, "");
-        auto share_time = static_cast<int>(std::strtol(attr.attr_value.c_str(), nullptr, 10));
+        auto share_time = static_cast<int>(std::strtol(attr.attr_value.c_str(), nullptr, decimal_factor_));
         axis->TileRestrainToSingleValue(const_extent * (share_time + 1), CACHE1);
         break;
       }
     }
   }
 
-  std::string interested_attr_key = AT_SHIFT;
   std::unordered_set<TileAxis *> shifted_axes_;
 };  // namespace poly
 
 class ModShiftAxisStrategy : public TilingStrategy {
  public:
-  explicit ModShiftAxisStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {}
-  ~ModShiftAxisStrategy() {}
-  void AddNpuConstraint();
-  void AddGpuConstraint();
-
-  std::string interested_attr_key = AT_MODSHIFT;
+  explicit ModShiftAxisStrategy(const TilingAnalyzer *a) : TilingStrategy(a) { interested_attr_key = AT_MODSHIFT; }
+  void AddNpuConstraint() override;
+  void AddGpuConstraint() override;
 };
 
 class DynamicBoundStrategy : public TilingStrategy {
  public:
-  explicit DynamicBoundStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {}
-  ~DynamicBoundStrategy() {}
-  void AddNpuConstraint();
-  void AddGpuConstraint();
-
-  std::string interested_attr_key = AT_DYNAMIC_BOUND;
+  explicit DynamicBoundStrategy(const TilingAnalyzer *a) : TilingStrategy(a) { interested_attr_key = AT_DYNAMIC_BOUND; }
+  void AddNpuConstraint() override;
+  void AddGpuConstraint() override;
 };
 
 class ConvStrategy : public TilingStrategy {
  public:
-  explicit ConvStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {}
-  ~ConvStrategy() {}
-  void AddNpuConstraint();
-  void AddGpuConstraint();
-
-  std::string interested_attr_key = AT_CONV;
+  explicit ConvStrategy(const TilingAnalyzer *a) : TilingStrategy(a) { interested_attr_key = AT_CONV; }
+  void AddNpuConstraint() override;
+  void AddGpuConstraint() override;
 
   std::unordered_map<std::string, Expr> conv_info_{};
   air::arith::Analyzer arith_ana_;
@@ -315,13 +310,14 @@ class ConvStrategy : public TilingStrategy {
   void RestrainW(TileAxis *axis);
 
   // gpu tensor core strategy steps
-  std::unique_ptr<MmaConv> InitGemmShape(Mma mma);
-  std::pair<int64_t, int64_t> CalculateNumOfWarps(Mma mma);
-  void CalculateMacroMma(MmaConv shape, Mma mma);
-  void SetFinalConfig(MmaConv macro_mma, Mma mma);
+  std::unique_ptr<MmaConv> InitGemmShape(const Mma &mma);
+  std::pair<int64_t, int64_t> CalculateNumOfWarps(const Mma &mma);
+  void CalculateMacroMma(const MmaConv &shape, const Mma &mma);
+  void SetFinalConfig(const MmaConv &macro_mma, const Mma &mma);
 
   // Return a combination of total factor that can be divisible by shape_m and shape_n.
-  std::pair<int64_t, int64_t> GetDivisibleFactorForMN(int64_t shape_m, int64_t shape_n, int64_t total_factor, Mma mma);
+  const std::pair<int64_t, int64_t> GetDivisibleFactorForMN(
+    int64_t shape_m, int64_t shape_n, int64_t total_factor, const Mma &mma);
 
   int w0_for_m_{1};
   int w1_for_n_{1};
@@ -332,33 +328,42 @@ class ConvStrategy : public TilingStrategy {
   TileAxis *k_axis_{nullptr};
   int sm_bytes_{1};
   int reg_bytes_{1};
-  int64_t num_sm_{80};
   int64_t min_blocks_{400};
   int64_t real_blocks_{0};
   int64_t default_num_warps_{1};
   MmaConv macro_mma_{128, 1, 1, 128, 32};
+  int num_warps_low_{2};
+  int num_warps_mid_{4};
+  int num_warps_high_{8};
+  int binary_factor_{2};
+  int tensor_core_per_warp_{4};
+  int use_local_group_high_{8};
 };
 
 class GemmStrategy : public TilingStrategy {
  public:
-  explicit GemmStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {}
-  ~GemmStrategy() {}
-  void AddNpuConstraint();
-  void AddGpuConstraint();
+  explicit GemmStrategy(const TilingAnalyzer *a) : TilingStrategy(a) { interested_attr_key = AT_GEMM; }
+  ~GemmStrategy() final {
+    m_axis_ = nullptr;
+    n_axis_ = nullptr;
+    k_axis_ = nullptr;
+  }
+  void AddNpuConstraint() override;
+  void AddGpuConstraint() override;
 
   // gpu tensor core strategy steps
-  std::unique_ptr<Mma> InitGemmShape(Mma mma);
-  std::pair<int64_t, int64_t> CalculateNumOfWarps(Mma mma);
-  void CalculateMacroMma(Mma shape, Mma mma);
-  void SetFinalConfig(Mma macro_mma, Mma mma);
+  std::unique_ptr<Mma> InitGemmShape(const Mma &mma);
+  std::pair<int64_t, int64_t> CalculateNumOfWarps(const Mma &mma);
+  void CalculateMacroMma(const Mma &shape, const Mma &mma);
+  void SetFinalConfig(const Mma &macro_mma, const Mma &mma);
 
   // common utils
-  int EstimateSharedSize(Mma alloc, int dtype);
-  int EstimateRegisterSize(Mma alloc, int dtype);
+  int EstimateSharedSize(const Mma &alloc, int dtype);
+  int EstimateRegisterSize(const Mma &alloc, int dtype);
   // Return a combination of total factor that can be divisible by shape_m and shape_n.
-  std::pair<int64_t, int64_t> GetDivisibleFactorForMN(int64_t shape_m, int64_t shape_n, int64_t total_factor, Mma mma);
+  const std::pair<int64_t, int64_t> GetDivisibleFactorForMN(
+    int64_t shape_m, int64_t shape_n, int64_t total_factor, const Mma &mma);
 
-  std::string interested_attr_key = AT_GEMM;
   int w0_for_m_{1};
   int w1_for_n_{1};
   TileAxis *m_axis_{nullptr};
@@ -366,29 +371,33 @@ class GemmStrategy : public TilingStrategy {
   TileAxis *k_axis_{nullptr};
   int sm_bytes_{1};
   int reg_bytes_{1};
-  int64_t num_sm_{80};
   int64_t min_blocks_{2048};
   int64_t default_num_warps_{1};
   int64_t tile_stride_{32};
   Mma macro_mma_{128, 128, 32};
+  int sm_bytes_div_factor_{3};
+  int sm_bytes_mul_factor_{4};
+  int use_local_group_high_{8};
+  int default_num_warps_high_{4};
+  int default_num_warps_low_{2};
+  int int_bit_count_{32};
 };
 
 class GpuStrategy : public TilingStrategy {
  public:
   explicit GpuStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {}
-  ~GpuStrategy() {}
 
-  void AddNpuConstraint();
-  void AddGpuConstraint();
+  void AddNpuConstraint() override;
+  void AddGpuConstraint() override;
   std::vector<TileAxis::MappingConstraint> thread_binding_spaces_;  // [thread.x, thread.y, thread.z]
   std::vector<TileAxis::MappingConstraint> block_binding_spaces_;   // [block.x, block.y, block.z]
 
  private:
-  void ShowOptions();
+  const void ShowOptions();
 
   void AdjustThreadMappingLimit();
 
-  void TransposeSpeedup();
+  const void TransposeSpeedup();
 
   void PadSpeedup();
 
@@ -423,11 +432,22 @@ class GpuStrategy : public TilingStrategy {
    */
   void InnerThreadOuterBlock(bool write_cfg);
 
-  int64_t GetThreadSize(const int64_t rest_threads, size_t inner_dim, const int64_t shape, const int64_t item);
+  const int64_t GetThreadSize(const int64_t rest_threads, size_t inner_dim, const int64_t shape, const int64_t item);
   int64_t TileAfterThreadMapping(TileAxis *axis, size_t inner_dim, int64_t thread_size, const int64_t item);
+  void ThreadConfiguration(ReduceDirection direct, bool use_lib);
+  void SkipMapping(TileAxis *axis, int64_t shape, std::stringstream &ss, size_t inner_dim, size_t thread_dim);
+  void GreedyMapBlocks(size_t ori_size, size_t block_dim);
+  void MapPendingAxes(size_t ori_size, std::stringstream &ss, size_t thread_dim, bool write_cfg);
+  int64_t ApplyCustomTile(TileAxis *axis, size_t inner_dim, int64_t thread_size, int64_t tile, int64_t shape);
+  void WriteConfigBackInjective();
+  std::pair<int64_t, int64_t> GetProposalParallelSize(int problem_size);
+  int64_t AlignThreadToShape();
+  void MapBroadcastElem(TileAxis *axis, std::vector<int> original_shape);
+  void ApplyConstraintsToBindingSpace();
 
   int GetLocalAllocBufCount();
   bool NeedModifyOrderOfAxis();
+  void InitMapping();
   Template template_{Template::DEFAULT};
   bool is_reduce_op_[TEMPLATE_BULK] = {false, false, true, true, true, false};
 
@@ -439,7 +459,7 @@ class GpuStrategy : public TilingStrategy {
   std::unordered_map<TileAxis *, int64_t> thread_cfg_map_;
   std::unordered_map<TileAxis *, int64_t> block_cfg_map_;
   int block_count_{0};  // number of mapped blocks
-  int64_t elem_per_thread_[3]{SpItemPerThread::AUTO};
+  int64_t elem_per_thread_[3]{static_cast<int64_t>(SpItemPerThread::AUTO)};
   int64_t min_elem_for_io_bound_ = 2;
   size_t depth_{0};
   bool need_reverse_{false};
@@ -450,15 +470,21 @@ class GpuStrategy : public TilingStrategy {
   int vectorized_bytes_{1};
   int band_index_{0};
   OuterBandNode *current_outer_bn_{nullptr};
+  int64_t activated_threads_;
+  std::pair<int64_t, int64_t> thread_coef_;
+  std::pair<int64_t, int64_t> thread_coef_init_{8, 16};
+  std::pair<int64_t, int64_t> active_blocks_per_sm_{5, 6};
+  std::vector<size_t> indexing_;
+  std::vector<TileAxis *> injective_axes_;
+  int possible_threads_;
+  int coalesced_size_;
+  int total_injective_size_;
 };
 
 class CpuStrategy : public TilingStrategy {
  public:
   explicit CpuStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {}
-  ~CpuStrategy() {}
-  void AddNpuConstraint() {}
-  void AddGpuConstraint() {}
-  void AddCpuConstraint();
+  void AddCpuConstraint() override;
 
  private:
   void BuildAxesQueue();
@@ -479,17 +505,16 @@ class CpuStrategy : public TilingStrategy {
   int axis_m_{MATMUL_AXIS_M};
   int axis_n_{MATMUL_AXIS_N};
   int axis_k_{MATMUL_AXIS_K};
-  std::unordered_map<int, std::string> axes_name_ = {
-    {0, "gemm_m"}, {1, "gemm_n"}, {2, "gemm_k"}
-  };
+  std::unordered_map<int, std::string> axes_name_ = {{0, "gemm_m"}, {1, "gemm_n"}, {2, "gemm_k"}};
 };
 
 class CsrStrategy : public TilingStrategy {
  public:
   explicit CsrStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {}
-  ~CsrStrategy() {}
-  void AddNpuConstraint() {}
-  void AddGpuConstraint();
+  void AddGpuConstraint() override;
+
+  int warp_factor_reduction_{2};
+  int warp_factor_elemwise_{5};
 };
 
 class MulticoreStrategy {
@@ -507,7 +532,7 @@ class MulticoreStrategy {
 
 class TilingPriorityScorer {
  public:
-  TilingPriorityScorer(TilingAnalyzer &analyzer) : analyzer_(analyzer), logger_(analyzer.GetTileLogger()) {}
+  explicit TilingPriorityScorer(TilingAnalyzer &analyzer) : analyzer_(analyzer), logger_(analyzer.GetTileLogger()) {}
   ~TilingPriorityScorer() {}
 
   /*
@@ -533,7 +558,7 @@ class TilingPriorityScorer {
     int parallelism{1};  // get lowest weight because coincident may not always trustable
     int tile_dependency{2};
     int vectorization{3};
-    int Sum() { return parallelism + vectorization + tile_dependency; }
+    int Sum() const { return parallelism + vectorization + tile_dependency; }
   } weight_;
 
   /*
@@ -569,7 +594,7 @@ class TilingPriorityScorer {
     if (max - min == 0) {
       return scaled_data;
     }
-    for (int i = 0; i < static_cast<int>(data.size()); ++i) {
+    for (size_t i = 0; i < data.size(); ++i) {
       auto old_d = data[i];
       ss << "Orginal data: " << old_d;
       auto new_d = (old_d - min) / (max - min);
@@ -581,7 +606,7 @@ class TilingPriorityScorer {
     return scaled_data;
   }
 
-  std::vector<TileAxis *> GetBandTileAxes(int band_idx) {
+  std::vector<TileAxis *> GetBandTileAxes(int band_idx) const {
     std::vector<TileAxis *> tile_axes;
     auto Collect = [&tile_axes, band_idx](TileAxis *axis) {
       if (axis->index == band_idx) {
