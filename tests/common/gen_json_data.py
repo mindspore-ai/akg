@@ -252,12 +252,56 @@ def strided_slice_str(inputs, output, attr):
     begin = get_attr(attr, "begin")
     end = get_attr(attr, "end")
     strides = get_attr(attr, "strides")
+    shape = inputs[0][0]["shape"]
+    begin_pos = bin(get_attr(attr, "begin_mask"))[-1:1:-1]
+    end_pos = bin(get_attr(attr, "end_mask"))[-1:1:-1]
+    ellipsis_pos = bin(get_attr(attr, "ellipsis_mask"))[-1:1:-1]
+    new_axis_pos = bin(get_attr(attr, "new_axis_mask"))[-1:1:-1]
+    shrink_axis_pos = bin(get_attr(attr, "shrink_axis_mask"))[-1:1:-1]
+    new_axis = -1
+    shrink_axis = -1
     slice_str = ""
     for i in range(len(begin)):
-        slice_str += str(begin[i]) + ':' + str(end[i]) + ':' + str(strides[i])
+        if i < len(begin_pos) and begin_pos[i] == '1':
+            # use the largest range
+            start_num = 0 if strides[i] >= 0 else -1
+        else:
+            start_num = begin[i]
+        if i < len(end_pos) and end_pos[i] == '1':
+            # use the largest range
+            end_num = shape[i] if strides[i] >= 0 else -shape[i] - 1
+        else:
+            end_num = end[i]
+        if i < len(ellipsis_pos) and ellipsis_pos[i] == '1':
+            # do not change on this axis
+            start_num = 0
+            end_num = shape[i]
+            strides_num = 1
+        else:
+            strides_num = strides[i]
+        if i < len(new_axis_pos) and new_axis_pos[i] == '1':
+            # insert a new axis and ignore slice
+            start_num = 0
+            end_num = shape[i]
+            strides_num = 1
+            new_axis = i
+        else:
+            strides_num = strides[i]
+        if i < len(shrink_axis_pos) and shrink_axis_pos[i] == '1':
+            # delete an axis
+            end_num = start_num + 1
+            strides_num = 1
+            shrink_axis = i
+        else:
+            strides_num = strides[i]
+        slice_str += str(start_num) + ':' + str(end_num) + ':' + str(strides_num)
         if not i == len(begin) - 1:
             slice_str += ","
     res = "%s = %s[%s]" % (output[0]['tensor_name'], get_input(inputs[0][0]), slice_str)
+    if new_axis != -1:
+        res += "\n%s = np.expand_dims(%s, axis=%s)" % (output[0]['tensor_name'], output[0]['tensor_name'], str(new_axis))
+    if shrink_axis != -1:
+        res += "\n%s = np.squeeze(%s, axis=%s)" % (output[0]['tensor_name'], output[0]['tensor_name'], str(shrink_axis))
     return res
 
 def matmul_str(inputs, output, attr):
