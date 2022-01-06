@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -263,43 +263,6 @@ class GemmCheck : public IRVisitor {
   bool is_gemm_{false};
 };
 
-class FuseParallelLoop : public IRMutator {
- private:
-  Stmt Mutate_(const For *op, const Stmt &s) final {
-    if (op->for_type == ForType::Parallel) {
-      if (has_parallel_) {
-        var_extents_.Set(op->loop_var, op->extent);
-        return IRMutator::Mutate(op->body);
-      } else {
-        has_parallel_ = true;
-        Map<Var, Expr> new_vmap;
-        std::swap(new_vmap, var_extents_);
-        Stmt body = IRMutator::Mutate(op->body);
-
-        Map<Var, Expr> vmap;
-        Expr new_extent = 1;
-        for (auto item : var_extents_) {
-          new_extent = Mul::make(new_extent, item.second);
-          vmap.Set(item.first, Mod::make(op->loop_var, item.second));
-        }
-
-        vmap.Set(op->loop_var, Div::make(op->loop_var, new_extent));
-
-        Stmt new_body = Substitute(body, vmap);
-        std::swap(new_vmap, var_extents_);
-        has_parallel_ = false;
-        return For::make(op->loop_var, op->min, Mul::make(new_extent, op->extent), op->for_type, op->device_api,
-                         new_body);
-      }
-    }
-    return IRMutator::Mutate_(op, s);
-  }
-
-  Var loop_var_;
-  Map<Var, Expr> var_extents_;
-  bool has_parallel_{false};
-};
-
 Stmt GemmFactor(const Stmt &stmt) {
   GemmCheck checker;
   checker.Visit(stmt);
@@ -311,10 +274,7 @@ Stmt GemmFactor(const Stmt &stmt) {
   Stmt s = modify.Mutate(stmt);
 
   GemmCompute gemm_compute;
-  s = gemm_compute.Mutate(s);
-
-  FuseParallelLoop parallel_loop;
-  return parallel_loop.Mutate(s);
+  return gemm_compute.Mutate(s);
 }
 
 }  // namespace ir

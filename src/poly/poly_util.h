@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2021 Huawei Technologies Co., Ltd
+ * Copyright 2019-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -422,7 +422,6 @@ constexpr auto REDUCE_AREA_FLAG = "reduce_area";
  * Following const is the mark tags for schedule tree
  ******************************************************/
 constexpr auto TOTAL_VECTORIZATION_BYTES = 16;
-constexpr auto SPACE_PATTERN = " ";
 constexpr auto REALIZE = "realize";
 constexpr auto CONV_GEMM = "conv_gemm";
 constexpr auto CONV_KHKW_OUTER = "conv_khkw_outer";
@@ -434,6 +433,10 @@ constexpr auto ALLOC_REALIZE_OUT = "alloc_out";
 
 constexpr auto CALL_IM2COL_UB = "cce_img2col_ub";
 constexpr auto ATTR_IM2COL_KEY = "im2colKey";
+
+// delimiter pattern
+constexpr auto SPACE_PATTERN = " ";
+constexpr auto UNDERSCORE_PATTERN = "_";
 
 constexpr auto MAPPING_INVALID_WARP = INT_MAX;
 // promote marker for poly
