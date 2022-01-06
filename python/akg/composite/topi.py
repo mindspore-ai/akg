@@ -192,10 +192,6 @@ def StridedSlice(inputs, attrs):
             i += 1
             j += 1
             continue
-        if i < len(begin_pos) and begin_pos[i] == '1':
-            begin[i] = -1 if int(strides[i]) < 0 else 0
-        if i < len(end_pos) and end_pos[i] == '1':
-            end[i] = -1 if int(strides[i]) < 0 else shape[j]
         if i < len(ellipsis_pos) and ellipsis_pos[i] == '1':
             out_shape.append(shape[j])
             begin[i] = 0
@@ -229,6 +225,10 @@ def StridedSlice(inputs, attrs):
             end[i] = -1
         elif int(end[i]) >= int(shape[j]):
             end[i] = shape[j]
+        if i < len(begin_pos) and begin_pos[i] == '1':
+            begin[i] = shape[j] - 1 if int(strides[i]) < 0 else 0
+        if i < len(end_pos) and end_pos[i] == '1':
+            end[i] = -1 if int(strides[i]) < 0 else shape[j]
         out_idx = (end[i] - begin[i]) // strides[i]
         if not int(out_idx * strides[i]) == int(end[i] - begin[i]):
             out_idx += 1
