@@ -1,5 +1,5 @@
 /**
- * Copyright 2020-2021 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -261,6 +261,7 @@ class UserConfig {
     ParseBoolAttr(attrs, "pragma_remove_invariant_dependence", &remove_invariant_dependence_);
     ParseBoolAttr(attrs, "pragma_disable_schedule_shift", &disable_schedule_shift_);
     ParseBoolAttr(attrs, "pragma_enable_schedule_max_constant", &enable_schedule_max_constant_);
+    ParseBoolAttr(attrs, "pragma_enable_schedule_outer_coincidence", &enable_schedule_outer_coincidence_);
     ParseBoolAttr(attrs, "pragma_disable_loop_reversal", &disable_loop_reversal_);
     ParseBoolAttr(attrs, "pragma_disable_loop_fusion", &disable_loop_fusion_);
     ParseBoolAttr(attrs, "pragma_reorder_schedule", &reorder_schedule_);
@@ -404,6 +405,7 @@ class UserConfig {
   bool GetDisableWholeComponent() const { return disable_whole_component_; }
   bool GetDisableScheduleShift() const { return disable_schedule_shift_; }
   bool GetEnableScheduleMaxConstant() const { return enable_schedule_max_constant_; }
+  bool GetEnableScheduleOuterCoincidence() const { return enable_schedule_outer_coincidence_; }
   bool GetDisableLoopReversal() const { return disable_loop_reversal_; }
   bool GetDisableLoopFusion() const { return disable_loop_fusion_; }
   bool GetReorderSchedule() const { return reorder_schedule_; }
@@ -754,6 +756,7 @@ class UserConfig {
   bool disable_whole_component_{true};
   bool disable_schedule_shift_{false};
   bool enable_schedule_max_constant_{false};
+  bool enable_schedule_outer_coincidence_{false};
   bool disable_loop_reversal_{true};
   bool disable_loop_fusion_{false};
   bool reorder_schedule_{false};

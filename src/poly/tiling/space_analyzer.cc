@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -165,9 +165,10 @@ void SpaceAnalyzer::MarkGemmAxes(const ProvideEntry &pe) {
       auto index = loop->loop_var.get()->name_hint;
       if (loop_indices_map.find(index) != loop_indices_map.end()) {
         TileAxis *axis = analyzer_->Axis(loop);
-        CHECK(axis) << "cannot find axis for " << loop->loop_var.get()->name_hint;
-        std::string loop_type = loop_indices_map[index];
-        axis->MarkWithAttr(AttrInfo{attr_key, loop_type});
+        if (axis) {
+          std::string loop_type = loop_indices_map[index];
+          axis->MarkWithAttr(AttrInfo{attr_key, loop_type});
+        }
       }
     }
   };

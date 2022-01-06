@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -52,11 +52,6 @@ Map<std::string, NodeRef> SetSharedMemoryTensors(const Map<std::string, NodeRef>
                                                  const Map<std::string, Array<NodeRef>> &alloc_map) {
   Map<std::string, NodeRef> new_attrs = attrs;
   std::string shared_name;
-  for (auto &input : info.input_names) {
-    if (alloc_map.count(input)) {
-      shared_name += input + " ";
-    }
-  }
   for (auto &output : info.output_names) {
     if (alloc_map.count(output)) {
       auto iter = std::find_if(

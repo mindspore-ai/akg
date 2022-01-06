@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -42,6 +42,11 @@ void ComputeSchedule::SetIslOptions() {
   CHECK(status == isl_stat_ok);
   status = isl_options_set_schedule_treat_coalescing(ctx, 0);
   CHECK(status == isl_stat_ok);
+
+  if (scop_info_.user_config_.GetEnableScheduleOuterCoincidence()) {
+    status = isl_options_set_schedule_outer_coincidence(ctx, 1);
+    CHECK(status == isl_stat_ok);
+  }
 
   if (scop_info_.user_config_.GetDisableWholeComponent()) {
     status = isl_options_set_schedule_whole_component(ctx, 0);
