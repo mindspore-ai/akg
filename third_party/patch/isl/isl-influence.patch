@@ -1,4 +1,4 @@
-diff -Npur isl-0.22/include/isl/options.h isl/include/isl/options.h
+unchanged:
 --- isl-0.22/include/isl/options.h	2021-10-08 14:34:24.500105000 +0800
 +++ isl/include/isl/options.h	2021-10-08 23:20:41.245515766 +0800
 @@ -49,6 +49,13 @@ int isl_options_get_coalesce_bounded_wra
@@ -15,9 +15,9 @@ diff -Npur isl-0.22/include/isl/options.h isl/include/isl/options.h
  #if defined(__cplusplus)
  }
  #endif
-diff -Npur isl-0.22/include/isl/schedule.h isl/include/isl/schedule.h
---- isl-0.22/include/isl/schedule.h	2021-10-08 14:40:05.224984000 +0800
-+++ isl/include/isl/schedule.h	2021-10-08 23:20:41.249515618 +0800
+diff -u isl/include/isl/schedule.h isl/include/isl/schedule.h
+--- isl/include/isl/schedule.h	2021-10-08 23:20:41.249515618 +0800
++++ isl/include/isl/schedule.h	2021-12-28 09:51:36.316000000 +0800
 @@ -9,7 +9,7 @@
  #include <isl/set_type.h>
  #include <isl/list.h>
@@ -27,7 +27,7 @@ diff -Npur isl-0.22/include/isl/schedule.h isl/include/isl/schedule.h
  #if defined(__cplusplus)
  extern "C" {
  #endif
-@@ -209,6 +209,123 @@ __isl_give isl_printer *isl_printer_prin
+@@ -209,6 +209,122 @@
  void isl_schedule_dump(__isl_keep isl_schedule *schedule);
  __isl_give char *isl_schedule_to_str(__isl_keep isl_schedule *schedule);
  
@@ -136,7 +136,6 @@ diff -Npur isl-0.22/include/isl/schedule.h isl/include/isl/schedule.h
 +isl_basic_set *isl_influence_set_coef(isl_ctx *ctx, struct isl_sched_graph *graph, isl_basic_set *bset);
 +isl_basic_set *isl_influence_set_equal(isl_ctx *ctx, struct isl_sched_graph *graph, isl_basic_set *bset);
 +int isl_influence_maxvar(struct isl_sched_graph *graph);
-+int isl_influence_check_coincident(struct isl_sched_graph *graph, isl_vec *sol);
 +struct isl_sched_graph *isl_influence_sol_add_elem(isl_vec *sol, struct isl_sched_graph *graph);
 +int isl_influence_sol_get_elem(int sched, int pos, struct isl_sched_graph *graph);
 +struct isl_sched_graph *isl_influence_sol_list_free(struct isl_sched_graph *graph);
@@ -151,7 +150,7 @@ diff -Npur isl-0.22/include/isl/schedule.h isl/include/isl/schedule.h
  #if defined(__cplusplus)
  }
  #endif
-diff -Npur isl-0.22/isl_options.c isl/isl_options.c
+unchanged:
 --- isl-0.22/isl_options.c	2021-10-08 14:48:47.000000000 +0800
 +++ isl/isl_options.c	2021-10-08 23:20:41.249515618 +0800
 @@ -228,6 +228,12 @@ ISL_ARG_BOOL(struct isl_options, print_s
@@ -182,7 +181,7 @@ diff -Npur isl-0.22/isl_options.c isl/isl_options.c
 +ISL_CTX_GET_BOOL_DEF(isl_options, struct isl_options, isl_options_args,
 +	akg_influence_scheduler)
 +/* ======================= AKG influence patch -- end ======================= */
-diff -Npur isl-0.22/isl_options_private.h isl/isl_options_private.h
+unchanged:
 --- isl-0.22/isl_options_private.h	2021-10-08 14:40:05.232984000 +0800
 +++ isl/isl_options_private.h	2021-10-08 23:20:41.249515618 +0800
 @@ -71,6 +71,10 @@ struct isl_options {
@@ -196,9 +195,9 @@ diff -Npur isl-0.22/isl_options_private.h isl/isl_options_private.h
  };
  
  #endif
-diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
---- isl-0.22/isl_scheduler.c	2021-10-08 14:53:44.000000000 +0800
-+++ isl/isl_scheduler.c	2021-10-09 10:14:06.401347938 +0800
+diff -u isl/isl_scheduler.c isl/isl_scheduler.c
+--- isl/isl_scheduler.c	2021-10-09 10:14:06.401347938 +0800
++++ isl/isl_scheduler.c	2021-12-28 09:51:17.288000000 +0800
 @@ -50,6 +50,15 @@
   */
  
@@ -215,7 +214,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  /* Internal information about a node that is used during the construction
   * of a schedule.
   * space represents the original space in which the domain lives;
-@@ -303,6 +312,12 @@ static int is_multi_edge_type(struct isl
+@@ -303,6 +312,12 @@
  	return is_condition(edge) || is_conditional_validity(edge);
  }
  
@@ -228,7 +227,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  /* Internal information about the dependence graph used during
   * the construction of the schedule.
   *
-@@ -395,6 +410,11 @@ struct isl_sched_graph {
+@@ -395,6 +410,11 @@
  	int weak;
  
  	int max_weight;
@@ -240,7 +239,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  };
  
  /* Initialize node_table based on the list of nodes.
-@@ -757,6 +777,8 @@ static void graph_free(isl_ctx *ctx, str
+@@ -757,6 +777,8 @@
  		isl_hash_table_free(ctx, graph->edge_table[i]);
  	isl_hash_table_free(ctx, graph->node_table);
  	isl_basic_set_free(graph->lp);
@@ -249,7 +248,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  }
  
  /* For each "set" on which this function is called, increment
-@@ -3233,6 +3255,7 @@ static __isl_give isl_mat *construct_tri
+@@ -3233,6 +3255,7 @@
   * In particular, the non-triviality region enforces that at least
   * one of the linear combinations in the rows of node->indep is non-zero.
   */
@@ -257,7 +256,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  static __isl_give isl_vec *solve_lp(isl_ctx *ctx, struct isl_sched_graph *graph)
  {
  	int i;
-@@ -3251,8 +3274,49 @@ static __isl_give isl_vec *solve_lp(isl_
+@@ -3251,8 +3274,49 @@
  		graph->region[i].trivial = trivial;
  	}
  	lp = isl_basic_set_copy(graph->lp);
@@ -307,7 +306,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  	for (i = 0; i < graph->n; ++i)
  		isl_mat_free(graph->region[i].trivial);
  	return sol;
-@@ -3315,10 +3379,15 @@ static int update_schedule(struct isl_sc
+@@ -3315,10 +3379,15 @@
  	if (sol->size == 0)
  		isl_die(sol->ctx, isl_error_internal,
  			"no solution found", goto error);
@@ -325,7 +324,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  	for (i = 0; i < graph->n; ++i) {
  		struct isl_sched_node *node = &graph->node[i];
  		int pos;
-@@ -3351,6 +3420,13 @@ static int update_schedule(struct isl_sc
+@@ -3351,6 +3420,13 @@
  
  	graph->n_row++;
  	graph->n_total_row++;
@@ -339,7 +338,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  
  	return 0;
  error:
-@@ -3979,6 +4055,10 @@ static isl_stat extract_sub_graph(isl_ct
+@@ -3979,6 +4055,10 @@
  	sub->max_row = graph->max_row;
  	sub->n_total_row = graph->n_total_row;
  	sub->band_start = graph->band_start;
@@ -350,7 +349,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  
  	return isl_stat_ok;
  }
-@@ -4008,6 +4088,11 @@ static __isl_give isl_schedule_node *com
+@@ -4008,6 +4088,11 @@
  {
  	struct isl_sched_graph split = { 0 };
  
@@ -362,7 +361,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  	if (extract_sub_graph(ctx, graph, node_pred, edge_pred, data,
  				&split) < 0)
  		goto error;
-@@ -5407,6 +5492,25 @@ static __isl_give isl_vec *compute_carry
+@@ -5407,6 +5492,25 @@
  		return NULL;
  
  	lp = isl_basic_set_copy(graph->lp);
@@ -388,7 +387,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  	return non_neg_lexmin(graph, lp, n_edge, want_integral);
  }
  
-@@ -6002,6 +6106,11 @@ static isl_stat compute_schedule_wcc_ban
+@@ -6002,6 +6106,11 @@
  	int use_coincidence;
  	int force_coincidence = 0;
  	int check_conditional;
@@ -400,7 +399,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  
  	if (sort_sccs(graph) < 0)
  		return isl_stat_error;
-@@ -6013,6 +6122,13 @@ static isl_stat compute_schedule_wcc_ban
+@@ -6013,6 +6122,13 @@
  	if (ctx->opt->schedule_outer_coincidence)
  		force_coincidence = 1;
  
@@ -414,7 +413,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  	use_coincidence = has_coincidence;
  	while (graph->n_row < graph->maxvar) {
  		isl_vec *sol;
-@@ -6025,19 +6141,32 @@ static isl_stat compute_schedule_wcc_ban
+@@ -6025,19 +6141,28 @@
  		if (setup_lp(ctx, graph, use_coincidence) < 0)
  			return isl_stat_error;
  		sol = solve_lp(ctx, graph);
@@ -440,14 +439,10 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  		}
  		coincident = !has_coincidence || use_coincidence;
 +
-+		if (akg_influence && graph->n > 1) {
-+			coincident=isl_influence_check_coincident(graph,sol);
-+		}
-+
  		if (update_schedule(graph, sol, coincident) < 0)
  			return isl_stat_error;
  
-@@ -7699,6 +7828,10 @@ static __isl_give isl_schedule_node *com
+@@ -7699,6 +7824,10 @@
  
  	if (graph->scc <= 1 || isl_options_get_schedule_whole_component(ctx))
  		return compute_schedule_wcc_whole(node, graph);
@@ -458,7 +453,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  	else
  		return compute_schedule_wcc_clustering(node, graph);
  }
-@@ -7786,7 +7919,10 @@ static __isl_give isl_schedule_node *com
+@@ -7786,7 +7915,10 @@
  			return isl_schedule_node_free(node);
  	}
  
@@ -470,10 +465,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  		return compute_component_schedule(node, graph, 1);
  
  	return compute_schedule_wcc(node, graph);
-@@ -7861,3 +7997,783 @@ __isl_give isl_schedule *isl_union_set_c
- 
- 	return isl_schedule_constraints_compute_schedule(sc);
- }
+@@ -7863,0 +7996,693 @@
 +
 +/* ====================== AKG influence patch -- start ====================== */
 +
@@ -1165,92 +1157,5 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
 +	isl_influence_log("isl_influence_maxvar: %d (previous maxvar: %d)\n", maxvar, previous);
 +	isl_influence_log("Leaving isl_influence_maxvar\n");
 +	return maxvar;
-+}
-+
-+int isl_influence_check_coincident(struct isl_sched_graph *graph, isl_vec *sol) {
-+	int coincident = graph->n > 1 ? 1 : 0;
-+	int pos = 0;
-+
-+	isl_influence_log(
-+	    "Entering isl_influence_check_coincidence for dimension %d, number of nodes (statements): %d\n",
-+	    graph->n_row, graph->n);
-+	int *vec = (int *)calloc(graph->n * 3, sizeof(int));
-+
-+	for (int i = 0; i < graph->n; ++i) {
-+		isl_sched_node *node = isl_sched_graph_get_node(graph, i);
-+		int cst_offset = isl_sched_node_cst_coef_offset(node);
-+		int nparam = isl_sched_node_get_nparam(node);
-+		int nvar = isl_sched_node_get_nvar(node);
-+
-+		isl_influence_log("graph node:\t %d\n", i);
-+		isl_influence_log("cst_offset:\t %d\n", cst_offset);
-+		isl_influence_log("nparam:\t\t %d\n", nparam);
-+		isl_influence_log("var:\t\t %d\n", nvar);
-+
-+		vec[pos++] = cst_offset;
-+		vec[pos++] = nparam;
-+		vec[pos++] = nvar;
-+	}
-+
-+	int is_equal;
-+	for (int i = 0; i < graph->n; ++i) {
-+		for (int j = i; j < graph->n; ++j) {
-+			if (j == i) continue;
-+			isl_influence_log("calculating coincidence for statement %d and %d\n", i, j);
-+			int cst_offset_S0 = vec[i * 3];
-+			int cst_offset_S1 = vec[j * 3];
-+			is_equal = isl_influence_int_eq(sol, 1 + cst_offset_S0, 1 + cst_offset_S1);
-+			isl_influence_log(
-+				"S_%d_i%d, S_%d_i%d, cst coefficient equal: %d\n",
-+				i, cst_offset_S0, j, cst_offset_S1, is_equal);
-+			if (is_equal == 0) {
-+				coincident = 0;
-+				break;
-+			}
-+			isl_influence_log("param coefficient(s) equal:\n");
-+
-+			int nparam_S0 = vec[i * 3 + 1];
-+			int nparam_S1 = vec[j * 3 + 1];
-+
-+			if (nparam_S0 != 0 && nparam_S1 != 0 && nparam_S0 == nparam_S1) {
-+				int nparam_pos_0 = cst_offset_S0 - nparam_S0;
-+				int nparam_pos_1 = cst_offset_S1 - nparam_S1;
-+
-+				for (int k = nparam_pos_0, l = nparam_pos_1; k < nparam_pos_0 + nparam_S0; k++, l++) {
-+					is_equal = isl_influence_int_eq(sol, 1 + k, 1 + l);
-+					isl_influence_log("S_%d_i%d, S_%d_i%d equal: %d\n", i, k, j, l, is_equal);
-+					if (is_equal == 0) {
-+						coincident = 0;
-+						break;
-+					}
-+				}
-+			} else {
-+				isl_influence_log("no parameters found or number of paramters distinct for each statement\n");
-+			}
-+
-+			isl_influence_log("variable coefficients equal:\n");
-+			int nvar_S0 = vec[i * 3 + 2];
-+			int nvar_S1 = vec[j * 3 + 2];
-+			if (nvar_S0 != nvar_S1) {
-+				coincident = 0;
-+				break;
-+			}
-+
-+			int nvar_pos_0 = cst_offset_S0 - nparam_S0 - 2 * nvar_S0;
-+			int nvar_pos_1 = cst_offset_S1 - nparam_S1 - 2 * nvar_S1;
-+
-+			for (int k = nvar_pos_0, l = nvar_pos_1; k < nvar_pos_0 + 2 * nvar_S0; k++, l++) {
-+				is_equal = isl_influence_int_eq(sol, 1 + k, 1 + l);
-+				isl_influence_log("S_%d_i%d, S_%d_i%d equal: %d\n", i, k, j, l, is_equal);
-+				if (is_equal == 0) {
-+					coincident = 0;
-+					break;
-+				}
-+			}
-+		}
-+	}
-+	free(vec);
-+	isl_influence_log("Leaving isl_check_coincident result: %d\n", coincident);
-+	return coincident;
 +}
 +/* ======================= AKG influence patch -- end ======================= */
