@@ -1,4 +1,4 @@
-# Copyright 2020-2021 Huawei Technologies Co., Ltd
+# Copyright 2020-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -314,7 +314,15 @@ def func_pack(func_name, func_body, params, ret):
     new_body = '\n'.join(body_lines) + '\n\treturn '+ ret + '\n'
     return func_header + new_body
 
+def custom_str(inputs, output, attr):
+    func_name = get_attr(attr, "func_name")
+    func = get_attr(attr, "func_source_str").replace("output_tensor", "np.zeros")
+    params = [get_input(i[0]) for i in inputs]
+    output_name = output[0]['tensor_name']
+    return func + "%s = %s(%s)\n" % (output_name, func_name, ','.join(params))
+
 op_dsl = {
+    "Custom": lambda inputs, output, attr: custom_str(inputs, output, attr),
     "ReduceSum": lambda inputs, output, attr: reduce_str(inputs, output, attr, "sum"),
     "ReduceMax": lambda inputs, output, attr: reduce_str(inputs, output, attr, "max"),
     "ReduceMin": lambda inputs, output, attr: reduce_str(inputs, output, attr, "min"),

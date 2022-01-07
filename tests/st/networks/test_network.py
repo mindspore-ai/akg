@@ -276,6 +276,20 @@ def test_efficientnet_gpu_level1_test1():
 @pytest.mark.level0
 @pytest.mark.platform_x86_gpu_training
 @pytest.mark.env_onecard
+def test_gpt_gpu_level0():
+    test_network("gpu", "gpt", "level0")
+
+
+@pytest.mark.level0
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
+def test_custom_gpu_level0():
+    test_network("gpu", "custom", "level0")
+
+
+@pytest.mark.level0
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
 def test_googlenet_gpu_level0():
     test_network("gpu", "googlenet", "level0")
 
