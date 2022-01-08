@@ -63,10 +63,12 @@ constexpr auto MATMUL_AXIS_K = 2;
 constexpr auto ALLOCATION_PERCENTAGE = 0.5;  // reserved for double buffer in default
 
 inline int64_t GetAlignBytes(const int64_t dtype) {
-  CHECK_GE(dtype, 0) << "Data type should be positive.";
-  if (dtype == 0) return ALIGN_BYTES;
-  CHECK_LE(dtype, ALIGN_BYTES);
-  return (ALIGN_BYTES + dtype - 1) / dtype;
+  if (dtype > 0) {
+    CHECK_LE(dtype, ALIGN_BYTES);
+    return (ALIGN_BYTES + dtype - 1) / dtype;
+  } else {
+    return ALIGN_BYTES;
+  }
 }
 
 inline int64_t GetMinBytes(std::unordered_map<std::string, std::vector<int>> dtypes) {
