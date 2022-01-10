@@ -1,5 +1,5 @@
 /**
- * Copyright 2020-2021 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -1302,19 +1302,12 @@ isl::schedule_node TileOuterBand::TileGemmBandNodeForCpu(const isl::schedule_nod
 
   node = IsolateTilesCpu(node, TILE_WITH_C1);
 
-  auto band_node = node.parent().as<isl::schedule_node_band>();
-  int band_n_member = static_cast<int>(band_node.n_member());
-  node = band_node.split(band_n_member - 1);
-  // Parallel the m-axis and the n-axis.
-  std::vector<int64_t> insert_pos_list;
-  for (int i = 0; i < band_n_member - 1; ++i) {
-    insert_pos_list.push_back(i);
-  }
-  node = InsertMultiMarker(node, FOR_PARALLEL, insert_pos_list);
+  node = InsertParallelMarkerForGemm(node.parent(), FOR_PARALLEL);
+  bool is_insert_mark = !GetMarkerName(node, FOR_PARALLEL).empty();
 
-  node = node.child(0).child(0);
-  node = node.insert_mark(PROMOTE_GLOBAL_TO_REGISTER_A);
   node = node.child(0);
+  node = is_insert_mark ? node.child(0) : node;
+  node = node.insert_mark(PROMOTE_GLOBAL_TO_REGISTER_A).child(0);
 
   node = IsolateTilesCpu(node, TILE_WITH_C0);
   node = node.insert_mark(PROMOTE_GLOBAL_TO_REGISTER_B);
@@ -1476,15 +1469,7 @@ isl::schedule_node TileOuterBand::InsertAllMarker(const isl::schedule_node &orig
     is_insert_mark = !GetMarkerName(node, FOR_PARALLEL).empty();
     node = is_insert_mark ? node.insert_mark(REDUCE_AREA_FLAG) : node;
   } else if (template_type_ == Template::MATMUL && scop_info_.user_config_.GetEnableMatmul()) {
-    if (!node.as<isl::schedule_node_band>()) {
-      return node;
-    }
-    int band_n_member = static_cast<int>(node.as<isl::schedule_node_band>().n_member());
-    std::vector<int64_t> insert_pos_list;
-    for (int i = 0; i < band_n_member - 1; ++i) {
-      insert_pos_list.push_back(i);
-    }
-    node = InsertMultiMarker(node, FOR_PARALLEL, insert_pos_list);
+    node = InsertParallelMarkerForGemm(node, FOR_PARALLEL);
   } else {
     node = InsertMarkerForLoop(node, FOR_PARALLEL);
   }
@@ -1515,15 +1500,29 @@ isl::schedule_node TileOuterBand::InsertMarkerForLoop(const isl::schedule_node &
   return node.insert_mark(marker_name);
 }
 
-isl::schedule_node TileOuterBand::InsertMultiMarker(const isl::schedule_node &orig_node, const std::string &marker_name,
-                                                    std::vector<int64_t> insert_pos_list) {
-  auto node = orig_node;
-  std::sort(insert_pos_list.begin(), insert_pos_list.end());
-  for (size_t i = 0; i < insert_pos_list.size(); ++i) {
-    int insert_pos = i == 0 ? insert_pos_list[i] : insert_pos_list[i] - insert_pos_list[i - 1];
-    node = InsertMarkerForLoop(node, marker_name, insert_pos);
-    bool is_insert_mark = !GetMarkerName(node, marker_name).empty();
-    node = is_insert_mark ? node.child(0) : node;
+isl::schedule_node TileOuterBand::InsertParallelMarkerForGemm(const isl::schedule_node &orig_node,
+                                                              const std::string &marker_name) {
+  if (!orig_node.isa<isl::schedule_node_band>()) {
+    return orig_node;
+  }
+
+  auto node = orig_node.as<isl::schedule_node_band>();
+  int band_member = static_cast<int>(node.n_member());
+  auto partial_schedule = node.get_partial_schedule().intersect_domain(orig_node.get_domain());
+  auto upa_list = partial_schedule.get_union_pw_aff_list();
+  int parallel_num = 0;
+  for (int i = 0; i < band_member - 1; ++i) {
+    auto extent = upa_list.get_at(i).floor().max_val().get_num_si();
+    if (extent < 1) {
+      continue;
+    }
+    ++parallel_num;
+  }
+  if (parallel_num == 1) {
+    return node.insert_mark(marker_name);
+  } else if (parallel_num > 1) {
+    std::string new_marker_name = marker_name + UNDERSCORE_PATTERN + std::to_string(parallel_num);
+    return node.insert_mark(new_marker_name);
   }
   return node;
 }

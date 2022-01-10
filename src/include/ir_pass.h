@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2021 Huawei Technologies Co., Ltd
+ * Copyright 2019-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -93,6 +93,8 @@ Stmt InjectTransferBufferScope(Stmt stmt);
 Stmt ReconstructLayout(const Stmt &stmt);
 
 Stmt GemmFactor(const Stmt &stmt);
+
+Stmt AdjustParallelLoop(const Stmt &stmt);
 
 Stmt ReductionFactor(const Stmt &stmt, const Map<Tensor, Buffer> &extern_buffer);
 

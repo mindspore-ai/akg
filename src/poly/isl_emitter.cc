@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -177,8 +177,6 @@ Expr IslEmitter::Interpret(const isl::ast_expr &e) {
 }
 
 Stmt IslEmitter::EmitFor(const isl::ast_node_for &node) {
-  ForType for_type = for_type_;
-  for_type_ = ForType::Serial;
   isl::id isl_iter_id = node.get_iterator().as<isl::ast_expr_id>().get_id();
   VarExpr iter_expr(isl_iter_id.to_str());
   PushIter(iter_expr.get());
@@ -200,14 +198,7 @@ Stmt IslEmitter::EmitFor(const isl::ast_node_for &node) {
 
   Stmt body_stmt = EmitAst(node.get_body());
   PopIter(iter_expr.get());
-  if (auto imm = cond_expr.as<IntImm>()) {
-    if (imm->value == 1) {
-      Map<Var, Expr> replace_var;
-      replace_var.Set(iter_expr, init_expr);
-      return air::ir::Substitute(body_stmt, replace_var);
-    }
-  }
-  return For::make(iter_expr, init_expr, cond_expr, for_type, DeviceAPI::None, body_stmt);
+  return For::make(iter_expr, init_expr, cond_expr, ForType::Serial, DeviceAPI::None, body_stmt);
 }
 
 Stmt IslEmitter::EmitIf(const isl::ast_node_if &node) {
@@ -222,19 +213,7 @@ Stmt IslEmitter::EmitIf(const isl::ast_node_if &node) {
   return IfThenElse::make(cond_expr, then_case, else_case);
 }
 
-Stmt IslEmitter::EmitMark(const isl::ast_node_mark &node) {
-  std::string mark = node.get_id().get_name();
-  auto it = AkgSupportedForType.find(mark);
-  if (it != AkgSupportedForType.end()) {
-    for_type_ = it->second;
-    Stmt stmt = EmitAst(node.get_node());
-    for_type_ = ForType::Serial;
-    return stmt;
-  } else {
-    Stmt stmt = EmitAst(node.get_node());
-    return AttrStmt::make(Expr("INFO"), mark, StringImm::make(mark), stmt);
-  }
-}
+Stmt IslEmitter::EmitMark(const isl::ast_node_mark &node) { return EmitAst(node.get_node()); }
 
 Stmt IslEmitter::EmitBlock(const isl::ast_node_block &node) {
   std::vector<Stmt> children_stmt;
@@ -333,9 +312,7 @@ Stmt IslEmitter::EmitWrite(const isl::ast_node_user &node) {
   return Stmt();
 }
 
-Stmt IslEmitter::EmitCall(const isl::ast_node_user &node) {
-  return Evaluate::make(Expr("todo EmitCall"));
-}
+Stmt IslEmitter::EmitCall(const isl::ast_node_user &node) { return Evaluate::make(Expr("todo EmitCall")); }
 
 isl::space IslEmitter::GetDomainSpace(const isl::id &node_id) {
   auto dom = isl::union_set(info_.analysis_result_.Domain());
@@ -576,7 +553,8 @@ Stmt IslEmitter::EmitAccessNode(const std::string &name, const Node *node, const
   auto memory_hoist = buffer_footprint_info.cluster->ComputeBufferedFootprints();
   // the second dataflow of copyin tensor, the stride caculation flow should be same with normal
   // should not use the special process of copyin_from_another_band
-  bool is_second_dataflow_copyin = info_.mmu_info_.IsGemm() && (buf_def.DstMemType() == MemType::C0A_ || buf_def.DstMemType() == MemType::C0B_);
+  bool is_second_dataflow_copyin =
+    info_.mmu_info_.IsGemm() && (buf_def.DstMemType() == MemType::C0A_ || buf_def.DstMemType() == MemType::C0B_);
   if (is_copyin_from_another_band && !is_second_dataflow_copyin) {
     memory_hoist = buffer_footprint_info.cluster->IdentityBufferFootprint();
   }

@@ -1,3 +1,18 @@
+/**
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 #include "poly/cpu_isl_emitter.h"
 #include <regex>
 
@@ -41,6 +56,69 @@ Stmt CpuIslEmitter::EmitInfo(const Stmt &stmt) {
   }
   result = AttrStmt::make(Expr("INFO"), "PACKB", Expr(4), result);
   return result;
+}
+
+Stmt CpuIslEmitter::EmitMark(const isl::ast_node_mark &node) {
+  const int radix = 10;
+  std::string mark = node.get_id().get_name();
+  std::string for_paralle = FOR_PARALLEL;
+  size_t parallel_size = for_paralle.size();
+  if (mark.size() > parallel_size && mark.find(for_paralle) != std::string::npos) {
+    std::string new_mark = mark.substr(parallel_size + 1, mark.size() - parallel_size - 1);
+    if (new_mark.size() > 0) {
+      mark = mark.substr(0, for_paralle.size());
+      parallel_for_num_ = std::strtol(new_mark.c_str(), nullptr, radix);
+    }
+  }
+  auto it = AkgSupportedForType.find(mark);
+  if (it != AkgSupportedForType.end()) {
+    for_type_ = it->second;
+    Stmt stmt = EmitAst(node.get_node());
+    for_type_ = ForType::Serial;
+    return stmt;
+  } else {
+    Stmt stmt = EmitAst(node.get_node());
+    return AttrStmt::make(Expr("INFO"), mark, StringImm::make(mark), stmt);
+  }
+}
+
+Stmt CpuIslEmitter::EmitFor(const isl::ast_node_for &node) {
+  ForType for_type = for_type_;
+  --parallel_for_num_;
+  if (parallel_for_num_ <= 0) {
+    for_type_ = ForType::Serial;
+  }
+
+  isl::id isl_iter_id = node.get_iterator().as<isl::ast_expr_id>().get_id();
+  VarExpr iter_expr(isl_iter_id.to_str());
+  PushIter(iter_expr.get());
+
+  Expr init_expr = Interpret(node.get_init());
+
+  auto isl_cond = node.get_cond().as<isl::ast_expr_op>();
+  CHECK(isl_cond.as<isl::ast_expr_op_lt>() || isl_cond.as<isl::ast_expr_op_le>());
+  auto cond_lhs = isl_cond.get_arg(0).as<isl::ast_expr_id>();
+  CHECK(cond_lhs);
+  CHECK_EQ(cond_lhs.get_id(), isl_iter_id);
+  Expr cond_expr = Interpret(isl_cond.get_arg(1)) - init_expr;
+  if (isl_cond.as<isl::ast_expr_op_le>()) {
+    cond_expr = Simplify_cce(cond_expr + 1);
+  }
+
+  int64_t inc = static_cast<int64_t>(WrappedStrtol(node.get_inc().to_C_str()));
+  CHECK_EQ(inc, 1) << "We guarantee stride=1 by making scale=false in poly.";
+
+  Stmt body_stmt = EmitAst(node.get_body());
+  ++parallel_for_num_;
+  PopIter(iter_expr.get());
+  if (auto imm = cond_expr.as<IntImm>()) {
+    if (imm->value == 1) {
+      Map<Var, Expr> replace_var;
+      replace_var.Set(iter_expr, init_expr);
+      return air::ir::Substitute(body_stmt, replace_var);
+    }
+  }
+  return For::make(iter_expr, init_expr, cond_expr, for_type, DeviceAPI::None, body_stmt);
 }
 
 Stmt CpuIslEmitter::EmitBlock(const isl::ast_node_block &block_node) {

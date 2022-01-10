@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -72,6 +72,7 @@ StageResult LLVMLowerBeforeFlattern(Stmt &stmt, LowerData &data) {
     stmt = NEXT_PASS(RealizeCompress, stmt);
     stmt = NEXT_PASS(ReconstructLayout, stmt);
     stmt = NEXT_PASS(GemmFactor, stmt);
+    stmt = NEXT_PASS(AdjustParallelLoop, stmt);
     stmt = NEXT_PASS(ReductionFactor, stmt, data->binds_0);
   }
   return {stmt, false};

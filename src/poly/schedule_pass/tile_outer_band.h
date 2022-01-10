@@ -1,5 +1,5 @@
 /**
- * Copyright 2020-2021 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -121,8 +121,7 @@ class TileOuterBand : public SchedulePass {
   isl::schedule_node InsertAllMarker(const isl::schedule_node &orig_node, const bool is_all_reduce);
   isl::schedule_node InsertMarkerForLoop(const isl::schedule_node &orig_node, const std::string &marker_name,
                                          const int insert_pos = 0);
-  isl::schedule_node InsertMultiMarker(const isl::schedule_node &orig_node, const std::string &marker_name,
-                                       std::vector<int64_t> insert_pos_list);
+  isl::schedule_node InsertParallelMarkerForGemm(const isl::schedule_node &orig_node, const std::string &marker_name);
 
  private:
   PassInfo &pass_info_;

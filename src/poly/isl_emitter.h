@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -137,9 +137,6 @@ class IslEmitter {
   // emit in if
   std::vector<const Node *> cur_if_list_;
   std::unordered_map<isl::id, std::vector<const Node *>, isl::IslIdIslHash> if_map_;
-
-  // emit for ast_node_for
-  ForType for_type_ = ForType::Serial;
 };
 
 class ExtractIterfromExpr : public air::ir::IRVisitor {
