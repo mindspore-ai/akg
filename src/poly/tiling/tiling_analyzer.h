@@ -58,6 +58,8 @@ constexpr auto MATMUL_BEST_FACTOR = 128;
 constexpr auto MATMUL_AXIS_M = 0;
 constexpr auto MATMUL_AXIS_N = 1;
 constexpr auto MATMUL_AXIS_K = 2;
+constexpr auto TOT_BEST_NUM_PER_BLOCK = 1024;
+constexpr auto OUTERMOST_AXIS = 0;
 
 // Controlled by custom tiling.
 constexpr auto ALLOCATION_PERCENTAGE = 0.5;  // reserved for double buffer in default
@@ -102,7 +104,7 @@ inline Expr CastInt64ToExpr(const int64_t value) { return air::ir::IntImm::make(
 
 inline Expr CastIntToExpr(const int value) { return air::ir::IntImm::make(Int(32), value); }
 
-enum TileOpType { VECTOR_OP, CONV_OP, GEMM_OP };
+enum class TileOpType { VECTOR_OP, CONV_OP, GEMM_OP };
 
 enum TileVarId { UNDEFINE = -1, VAR };
 
@@ -249,11 +251,11 @@ class TilingAnalyzer {
         scop_info_(scop_info),
         is_retry_(!g_attrs.GetStr(kErrorInfo, "").empty()) {
     if (scop_info.mmu_info_.IsGemm()) {
-      op_type_ = GEMM_OP;
+      op_type_ = TileOpType::GEMM_OP;
     } else if (scop_info.mmu_info_.IsConv()) {
-      op_type_ = CONV_OP;
+      op_type_ = TileOpType::CONV_OP;
     } else {
-      op_type_ = VECTOR_OP;
+      op_type_ = TileOpType::VECTOR_OP;
     }
   }
 

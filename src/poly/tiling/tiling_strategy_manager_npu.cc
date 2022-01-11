@@ -180,7 +180,7 @@ void ReduceStrategy::AddNpuConstraint() {
 }
 
 void VectorizedStrategy::AddNpuConstraint() {
-  if (analyzer_->op_type_ != VECTOR_OP) {
+  if (analyzer_->op_type_ != TileOpType::VECTOR_OP) {
     return;
   }
   for (auto axis : analyzer_->GetAxesOfAttr(AT_VECTORIZED)) {

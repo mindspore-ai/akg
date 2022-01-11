@@ -335,7 +335,8 @@ bool RegisterMemoryManager::CheckRAW(std::string &name) {
 
   writes_filter = writes.intersect_range(writes_uset);
   isl::union_map rawmap = ComputeRAW(scop_info_.origin_schedule_, reads_filter, writes_filter);
-  if (rawmap.is_empty()) {
+  // Input/output tensor has lower priority then temp tensor
+  if (rawmap.is_empty() || scop_info_.IsInBinds(name)) {
     return false;
   } else {
     return true;

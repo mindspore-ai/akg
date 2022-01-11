@@ -457,7 +457,8 @@ int64_t TileCandidate::CalActualTile(const CalAlignInfo *align_info) {
     }
     return align_type;
   };
-  if (this->analyzer_->scop_info_.user_config_.GetTarget() != TARGET_CCE || this->analyzer_->op_type_ != VECTOR_OP) {
+  if (this->analyzer_->scop_info_.user_config_.GetTarget() != TARGET_CCE ||
+      this->analyzer_->op_type_ != TileOpType::VECTOR_OP) {
     return actual_tile;
   }
   std::string align_type = GetAlignType();
@@ -1535,7 +1536,7 @@ bool TilingAnalyzer::Prepare() {
     }
   };
   this->ForEachAxisTopDown(BuildAxisMap);
-  if (op_type_ != VECTOR_OP) {
+  if (op_type_ != TileOpType::VECTOR_OP) {
     sch_ana.AnalyzeCubeInfo();
   }
 

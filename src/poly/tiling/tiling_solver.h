@@ -245,6 +245,8 @@ class GpuSolver : TilingSolver {
   int64_t max_y_z_dim_block_ = 65535;
   int64_t max_x_y_dim_thread_ = 1024;
   int64_t max_z_dim_thread_ = 64;
+  void TotSpeedup();
+  int CalculateBoxSize(const std::string &name);
 };
 
 class InequalitySolver : TilingSolver {

@@ -824,9 +824,9 @@ void ScheduleTreeAnalyzer::AnalyzeCubeInfo() {
     };
     std::sort(op_list.begin(), op_list.end(), SortMatrixInCBAOrder);
     if (op_list.size() != 3U) continue;
-    if (analyzer_->op_type_ == GEMM_OP) {
+    if (analyzer_->op_type_ == TileOpType::GEMM_OP) {
       MatchGemmVarNames(op_list);
-    } else if (analyzer_->op_type_ == CONV_OP) {
+    } else if (analyzer_->op_type_ == TileOpType::CONV_OP) {
       for (auto call : op_list) {
         if (analyzer_->scop_info_.mmu_info_.IsConvBackpropFilter()) {
           MatchConvFilterVarNames(call);
@@ -843,7 +843,7 @@ void ScheduleTreeAnalyzer::AnalyzeCubeInfo() {
         if (l->loop_var.get()->name_hint != lname) continue;
         TileAxis *axis = analyzer_->Axis(l);
         CHECK(axis) << "cannot find axis for " << l->loop_var.get()->name_hint;
-        std::string key = analyzer_->op_type_ == CONV_OP ? AT_CONV : AT_GEMM;
+        std::string key = analyzer_->op_type_ == TileOpType::CONV_OP ? AT_CONV : AT_GEMM;
         axis->attrs.emplace_back(AttrInfo{key, type});
         break;
       }
