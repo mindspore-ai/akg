@@ -61,9 +61,13 @@ class GpuIslEmitter : public IslEmitter {
   Stmt EmitFor(const isl::ast_node_for &node) override;
   virtual Stmt SubstituteTensorStmt(const Stmt &s, Tensor origin, Tensor replaced);
   virtual Stmt EmitTensorOfTensorStmt(const Stmt &s);
-  std::map<std::string, VarExpr> iter_name_map_{{B0, VarExpr(BLOCK_IDX_X)},  {B1, VarExpr(BLOCK_IDX_Y)},
-                                                {B2, VarExpr(BLOCK_IDX_Z)},  {T0, VarExpr(THREAD_IDX_X)},
-                                                {T1, VarExpr(THREAD_IDX_Y)}, {T2, VarExpr(THREAD_IDX_Z)}};
+  void UpdateGpuIndexDtype();
+  std::map<std::string, VarExpr> iter_name_map_{{B0, VarExpr(BLOCK_IDX_X, Int(32))},  
+                                                {B1, VarExpr(BLOCK_IDX_Y, Int(32))},
+                                                {B2, VarExpr(BLOCK_IDX_Z, Int(32))},  
+                                                {T0, VarExpr(THREAD_IDX_X, Int(32))},
+                                                {T1, VarExpr(THREAD_IDX_Y, Int(32))}, 
+                                                {T2, VarExpr(THREAD_IDX_Z, Int(32))}};
 
  private:
   // override emitters for GPU

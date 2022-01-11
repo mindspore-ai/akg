@@ -419,6 +419,22 @@ Type ScopInfo::GetDtypeOf(const isl::ast_expr &e) const {
   return Int(32);
 }
 
+std::vector<int> ScopInfo::GetShapeOf(const std::string &tensor_name) const {
+  std::vector<int> shape;
+  auto binds = user_config_.GetBind();
+  for (auto i : binds) {
+    if (!i.first.defined()) continue;
+    if (i.first->op->name == tensor_name) {
+      for (auto dim : i.first->shape) {
+        if (dim.as<IntImm>()) {
+          shape.emplace_back(dim.as<IntImm>()->value);
+        }
+      }
+    }
+  }
+  return shape;
+}
+
 bool ScopInfo::IsInBinds(const std::string &name) const {
   auto binds_orig = user_config_.GetOriginBind();
   for (auto i : binds_orig) {
@@ -856,16 +872,23 @@ void CubeInfo::UpdateSpecGemmFractalInfo(const BufferDefInfo &tensor_info) {
 void CubeInfo::UpdateFractalIntFirstInfoConvBackpropFilter(std::vector<size_t> im2col_fp_cluster_size,
                                                            std::vector<size_t> fractal_fp_cluster_size) {
   CHECK_EQ(fractal_fp_cluster_size.size(), 5);
-  fractal_int_info_[ATTR_CONV_BATCH] = (int64_t)fractal_fp_cluster_size[0];
-  fractal_int_info_[ATTR_CONV_TILE_K] = (int64_t)fractal_fp_cluster_size[1];
-  fractal_int_info_[ATTR_CONV_TILE_N] = (int64_t)fractal_fp_cluster_size[2];
-  fractal_int_info_[ATTR_CONV_N_INNER] = (int64_t)fractal_fp_cluster_size[3];
-  fractal_int_info_[ATTR_CONV_K_INNER] = (int64_t)fractal_fp_cluster_size[4];
+  const int conv_batch = 0;
+  const int conv_tile_k = 1;
+  const int conv_tile_n = 2;
+  const int conv_n_inner = 3;
+  const int conv_k_inner = 4;
+  const int conv_tile_co = 2;
+  const int conv_gmm_k = 1;
+  fractal_int_info_[ATTR_CONV_BATCH] = (int64_t)fractal_fp_cluster_size[conv_batch];
+  fractal_int_info_[ATTR_CONV_TILE_K] = (int64_t)fractal_fp_cluster_size[conv_tile_k];
+  fractal_int_info_[ATTR_CONV_TILE_N] = (int64_t)fractal_fp_cluster_size[conv_tile_n];
+  fractal_int_info_[ATTR_CONV_N_INNER] = (int64_t)fractal_fp_cluster_size[conv_n_inner];
+  fractal_int_info_[ATTR_CONV_K_INNER] = (int64_t)fractal_fp_cluster_size[conv_k_inner];
 
-  fractal_int_info_[ATTR_CONV_TILE_CO] = (int64_t)fractal_fp_cluster_size[2];
+  fractal_int_info_[ATTR_CONV_TILE_CO] = (int64_t)fractal_fp_cluster_size[conv_tile_co];
 
   CHECK_EQ(im2col_fp_cluster_size.size(), 6);
-  fractal_int_info_[ATTR_CONV_GMM_K] = (int64_t)im2col_fp_cluster_size[1];
+  fractal_int_info_[ATTR_CONV_GMM_K] = (int64_t)im2col_fp_cluster_size[conv_gmm_k];
 }
 
 void CubeInfo::UpdateFractalIntFirstInfoConvForward(std::vector<size_t> im2col_fp_cluster_size,
