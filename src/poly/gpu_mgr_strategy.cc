@@ -1,5 +1,5 @@
 /**
- * Copyright 2020-2021 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@
 #include "schedule_pass_gpu/mapping_outer_band.h"
 #include "schedule_pass_gpu/shared_memory_manager.h"
 #include "schedule_pass_gpu/register_memory_manager.h"
-#include "schedule_pass_gpu/realize_manager.h"
+#include "schedule_pass/realize_manager.h"
 
 namespace akg {
 namespace ir {

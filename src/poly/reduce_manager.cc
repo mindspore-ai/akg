@@ -1,5 +1,5 @@
 /**
- * Copyright 2020-2021 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -350,9 +350,8 @@ bool ReduceManager::SplitReduceStatements(isl::schedule_node &node, isl::union_s
     return false;
   }
 
-  if (scop_info_.user_config_.GetTarget() == TARGET_CPU) {
+  if (!need_split_reduce_) {
     SplitInitStatements(reduction_indenpendent_stmt);
-    need_split_reduce_ = false;
   }
 
   // Reorder statements in "reduction-independent-stmt -> reduction-stmt -> reduction-dependent-stmt" order
