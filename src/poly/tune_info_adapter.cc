@@ -78,7 +78,7 @@ void ScopInfoAdapter(TuneInfo *tune_info, ScopInfo *scop_info) {
     tune_info->analysis.Set("max_core_num", make_const(Int(64), GetCoreNumConf()));
   }
   std::string op_template = tune_info->analysis.GetStr("op_template", "");
-  if (op_template.empty()) {
+  if (scop_info->user_config_.GetTarget() == TARGET_CCE || op_template.empty()) {
     if (scop_info->mmu_info_.HasCube()) {
       op_template = "CUBE";
       tune_info->analysis.Set("mma_m", make_const(Int(64), MMA_UNIT));
