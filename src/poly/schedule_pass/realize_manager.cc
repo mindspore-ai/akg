@@ -1,5 +1,5 @@
 /**
- * Copyright 2020-2021 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,7 +24,6 @@
 namespace akg {
 namespace ir {
 namespace poly {
-
 isl::id RealizeManager::GetRealizeId(const isl::schedule_node &node, const std::string &tensor_name) {
   auto realize_id = std::string(REALIZE_PREFIX) + tensor_name;
   return isl::id(node.ctx(), realize_id);
@@ -141,7 +140,8 @@ std::string RealizeManager::GetCurrentFilterTenaosrName(const isl::schedule_node
   uset.foreach_set([this, &cur_filter_name](const isl::set &s) -> void {
     std::string node_tensor_name = s.to_str();
     size_t pos = 0;
-    if ((pos = node_tensor_name.find(LOCAL_SUFFIX)) != std::string::npos) {
+    if ((pos = node_tensor_name.find(PROMOTION_INFIX)) != std::string::npos ||
+        (pos = node_tensor_name.find(LOCAL_SUFFIX)) != std::string::npos) {
       node_tensor_name = node_tensor_name.erase(pos, node_tensor_name.size() - pos);
       if ((pos = node_tensor_name.find_last_of(" ")) != std::string::npos) {
         node_tensor_name = node_tensor_name.erase(0, pos + 1);
@@ -205,7 +205,6 @@ isl::schedule RealizeManager::Run(isl::schedule sch) {
   names_set_.clear();
   return res_root.get_schedule();
 }
-
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

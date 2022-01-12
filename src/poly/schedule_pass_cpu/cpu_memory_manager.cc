@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,13 +27,10 @@ namespace ir {
 namespace poly {
 
 isl::schedule CpuMemoryManager::Run(isl::schedule sch) {
-  if (!scop_info_.user_config_.GetUseSharedMemory()) {
+  if (!scop_info_.user_config_.GetUseSharedMemory() || !scop_info_.user_config_.GetEnableMatmul()) {
     return sch;
   }
 
-  if (!scop_info_.user_config_.GetEnableMatmul()) {
-    return sch;
-  }
   schedule_ = sch;
   return HoistCpuMemory();
 }
@@ -84,9 +81,6 @@ isl::schedule CpuMemoryManager::HoistCpuMemory() {
   } else {
     int number = static_cast<int>(node.n_children());
     for (int i = 0, current_band_index = 0; i < number; ++i) {
-      if (IsInitFilter(node.child(i))) {
-        continue;
-      }
       auto promotion_node = node.child(i).child(0);
       if (promotion_node.isa<isl::schedule_node_leaf>()) {
         continue;
@@ -131,9 +125,6 @@ isl::schedule_node CpuMemoryManager::HoistClusters(const isl::schedule_node &nod
       continue;
     }
 
-    if (GetTensorMark(buffer_info.dst_tensor_id.get_name(), scop_info_) == TENSOR_C) {
-      continue;
-    }
     auto id = buffer_info.tensor_id;
 
     auto box_sizes = fp_cluster->GetFixedBoxSizes();

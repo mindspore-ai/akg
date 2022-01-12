@@ -1,5 +1,5 @@
 /**
- * Copyright 2020-2021 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,7 +31,8 @@ namespace poly {
 
 class ReduceManager {
  public:
-  ReduceManager(PassInfo &pass_info, ScopInfo &scop_info) : pass_info_(pass_info), scop_info_(scop_info) {}
+  ReduceManager(PassInfo &pass_info, ScopInfo &scop_info, bool need_split_reduce = true)
+      : pass_info_(pass_info), scop_info_(scop_info), need_split_reduce_(need_split_reduce) {}
   ~ReduceManager() {}
 
   bool SplitReduceStatements(isl::schedule_node &node, isl::union_set reduce_statements, isl::union_map dependences);

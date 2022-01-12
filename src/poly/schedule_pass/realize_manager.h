@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,7 +22,6 @@
 namespace akg {
 namespace ir {
 namespace poly {
-
 class RealizeManager : public SchedulePass {
  public:
   explicit RealizeManager(PassInfo &pass_info, ScopInfo &scop_info) : pass_info_(pass_info), scop_info_(scop_info) {
@@ -50,7 +49,6 @@ class RealizeManager : public SchedulePass {
   std::string GetCurrentFilterTenaosrName(const isl::schedule_node &node);
   isl::schedule InsertPromotionMajor(const isl::schedule &sch);
 };
-
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

@@ -1530,7 +1530,8 @@ isl::schedule_node TileOuterBand::InsertParallelMarkerForGemm(const isl::schedul
 isl::schedule_node TileOuterBand::SplitReduceStatements(const isl::schedule_node &orig_node) {
   isl::schedule_node tile_node = orig_node;
   auto all_reduce_map = scop_info_.analysis_result_.GetReduceTensorInfoMap();
-  ReduceManager reduce_manager(pass_info_, scop_info_);
+  bool need_split_reduce = template_type_ == Template::MATMUL;
+  ReduceManager reduce_manager(pass_info_, scop_info_, need_split_reduce);
   reduce_statements_ = reduce_manager.GetCurrentNodeReduceStatements(tile_node, all_reduce_map, false);
 
   if (!reduce_manager.SplitReduceStatements(tile_node, reduce_statements_, pass_info_.dependences_)) {

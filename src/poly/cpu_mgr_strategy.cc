@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 #include "poly/cpu_mgr_strategy.h"
-#include "poly/schedule_pass/tile_outer_band.h"
-#include "poly/schedule_pass/analyze_schedule.h"
+#include "schedule_pass/tile_outer_band.h"
+#include "schedule_pass/analyze_schedule.h"
 #include "schedule_pass_cpu/cpu_memory_manager.h"
-#include "schedule_pass_gpu/realize_manager.h"
+#include "schedule_pass/realize_manager.h"
 
 namespace akg {
 namespace ir {
