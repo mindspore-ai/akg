@@ -32,6 +32,7 @@ class TestCase(TestBase):
             # testflag,opfuncname,testRunArgs, setdimArgs
             ("000_case", csr_reduce_sum_run, ((1987, 800), 'float32', 'int32', -1), ["level0"]),
             ("001_case", csr_reduce_sum_run, ((10000, 10000), 'float32', 'int32', -1), ["level0"]),
+            ("002_case", csr_reduce_sum_run, ((2708, 2708, 8), 'float32', 'int32', 1, 1433), ["level0"]),
         ]
         return True
 

@@ -243,12 +243,12 @@ void CodeGenCUDA::VisitStmt_(const ir::For* op) {
     PrintType(op->loop_var.type(), stream);
     stream << ' ' << vid << " = " << min << "; " << vid << " < " << extent << "; "
            << vid << " += " << csr_loop_stride << ") {\n";
+    csr_loop_stride = 1;
     int for_scope = BeginScope();
     PrintStmt(op->body);
     this->EndScope(for_scope);
     PrintIndent();
     stream << "}\n";
-    csr_loop_stride = 1;
     return;
   }
   CodeGenC::VisitStmt_(op);

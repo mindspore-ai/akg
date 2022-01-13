@@ -34,6 +34,9 @@ class TestCase(TestBase):
             ("001_case", csr_mul_run, ((1987, 1), (1987, 800), 'float32', 'int32'), ["level0"]),
             ("002_case", csr_mul_run, ((1, 800), (1987, 800), 'float32', 'int32'), ["level0"]),
             ("003_case", csr_mul_run, ((1987, 800), (1987, 800), 'float32', 'int32'), ["level0"]),
+            ("004_case", csr_mul_run, ((2708, 1, 8), (2708, 2708, 8), 'float32', 'int32', 1433), ["level0"]),
+            ("005_case", csr_mul_run, ((2708, 8), (2708, 2708, 8), 'float32', 'int32', 1433), ["level0"]),
+            ("006_case", csr_mul_run, ((2708, 2708, 8, 8), (2708, 2708, 8, 8), 'float32', 'int32', 1433), ["level0"]),
         ]
         return True
 
