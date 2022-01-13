@@ -1,3 +1,27 @@
+## Release 1.6.0
+### Major Features and Improvements
+
+* [STABLE] CPU backend support: AKG now supports automatic generation of high-performance code for CPUs with different architectures. [!413](https://gitee.com/mindspore/akg/pulls/413) (CPU)
+* [STABLE] CSR operators support: Develops csr operators(csrmv/csr mul/csr reduce_sum)，and provides optimizing strategy to handle csr operators with dynamic upper bound. [!407](https://gitee.com/mindspore/akg/pulls/407) (GPU)
+* [STABLE] Scheduler Optimizing: Outermost band node now will be treated as multiple filter nodes if there is no dependency relationship between multiple statements. [!460](https://gitee.com/mindspore/akg/pulls/460) (GPU)
+* [STABLE] Replace gmp with imath on isl.[!455](https://gitee.com/mindspore/akg/pulls/455) (ALL)
+* [STABLE] Apply Autodiff in Custom Op. [!464](https://gitee.com/mindspore/akg/pulls/464) (ALL)
+
+### Bug fixes
+
+* fix bugs in cpu tuning process:add "need_warm_up" attrs to avoid too many warm-up on cpu profiling.[!495](https://gitee.com/mindspore/akg/pulls/495) (CPU)
+* fix auto-tiling output mem-flow bug:modify the GEMM's auto-tiling strategy to match the actual target constraint.[!504](https://gitee.com/mindspore/akg/pulls/504) (ASCEND)
+* fix muilt output bug in emitter: when emit multi-output, should not convert real inputs.[!506](https://gitee.com/mindspore/akg/pulls/332) (ALL)
+
+### Contributors
+
+Thanks goes to these wonderful people:
+
+yangsijia, polyhedral, zhangrenwei, yiyanzhi, hujiahui8, zhengzuohe, zhangzhaochuang, xuhui, liuchao, xiaruijie, DeshiChen, nelson.lossing, zhenzhang, chenlei_autodiff, lingyunli63, wYann, hanhuifeng, gaoxiong, zichun_ye, chengbin, wangrao124, huangmengxi, harenome, lear, huoxinyou, yanglinfeng, Etienne, Trump
+
+Contributions of any kind are welcome!
+
+
 ## Release 1.5.0
 ### Major Features and Improvements
   * [STABLE] New operators developing: Tensor of Tensor operators(Gather/GatherNd/TensorScatterAdd/UnsortedSegmentSum), which can be used to support GNN networks.[!323](https://gitee.com/mindspore/akg/pulls/323)(GPU)
