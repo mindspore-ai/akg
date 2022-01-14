@@ -15,7 +15,7 @@
 import os
 from setuptools import setup
 
-version = '1.3.0'
+VERSION = '1.6.0'
 
 package_data = {
     'akg': [
@@ -60,7 +60,7 @@ def find_files(where=['.']):
 
 setup(
     name='akg',
-    version=version,
+    version=VERSION,
     author='The MindSpore Authors',
     author_email='contact@mindspore.cn',
     url='https://www.mindspore.cn/',
