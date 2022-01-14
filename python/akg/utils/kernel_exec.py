@@ -417,9 +417,10 @@ def profiling_analyse(device_id, time_before_launch):
             else:
                 p = subprocess.Popen(cmd, stdin=ps[-1].stdout, stdout=subprocess.PIPE)
             ps.append(p)
-        for p in ps:
-            p.wait()
-        return ps[-1].communicate()
+
+        # Popen.communicate() will 1. read data and wait for process to terminate
+        #                          2. returns a tuple(stdout, stderr)
+        return ps[-1].communicate()[0]
 
     if not isinstance(device_id, int):
         raise TypeError("device_id must be an integer.")
@@ -439,13 +440,13 @@ def profiling_analyse(device_id, time_before_launch):
             ["head", "-n1"],
         ]
         for _ in range(200):
-            p = exec_cmds_with_pipe(cmd_list)
-            if p[0].decode('utf8').strip() == '':
+            stdout_data = exec_cmds_with_pipe(cmd_list)
+            if not isinstance(stdout_data, bytes) or stdout_data.decode('utf8').strip() == '':
                 time.sleep(1)
             else:
                 break
         try:
-            tmp_path =  p[0].decode('utf8').strip().split('/')
+            tmp_path =  stdout_data.decode('utf8').strip().split('/')
             device_file = tmp_path[-2]
             prof_file = tmp_path[-3]
         except BaseException:
