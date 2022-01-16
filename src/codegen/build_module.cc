@@ -245,6 +245,12 @@ void UpdateMultiValueFuncBinds(Map<Tensor, Buffer> &binds, Array<NodeRef> &tenso
     out_binds.Set(new_tensor, buffer);
     tensor_replace.Set(tensor, new_tensor);
   }
+
+  if (tensor_replace.empty()) {
+    // in this case, we don't have multi value tensor outputs
+    // thus we will not overwrite the binds by out_binds
+    return;
+  }
   binds = out_binds;
 
   Array<NodeRef> new_tensor_args_list;
