@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,9 +22,9 @@
 
 namespace akg {
 namespace lower {
-void NormalLowerNode::ExcuteImpl(StageType stage) {
+void NormalLowerNode::Lower(StageType stage) {
   CHECK(children_.size() == 1);
-  Excute(children_[0]);
+  children_[0]->Run(this);
   StageLower stage_lower(children_[0]->Data());
   stage_lower.RunTo(stage);
   node_ref_ = stage_lower.Node();

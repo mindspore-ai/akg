@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -82,18 +82,30 @@ void ModifyBackwardTot(Map<std::string, NodeRef> &forward_infos, Map<std::string
   Array<Tensor> noinline_indeed = info.opt.noinline_indeed;
   backward_infos->Set(kNoInlineIndeed, noinline_indeed);
 }
+
+void AttachTotDecorator(BaseLowerNode *child, Map<std::string, NodeRef> &forward_infos,
+                        Map<std::string, NodeRef> *backward_infos) {
+  auto func = [&forward_infos, backward_infos](BaseLowerNode *node, LowerRunner *next, StageType s) {
+    JsonLowerLeaf *leaf = static_cast<JsonLowerLeaf*>(node);
+    next->Lower(s);
+    ModifyBackwardTot(forward_infos, leaf->Attrs(), leaf->info_, backward_infos);
+  };
+  child->VisitLeaf([&func](JsonLowerLeaf *node) { node->Decorate(func); });
+}
 }  // namespace
 
-void TotLowerNode::ExcuteImpl(StageType stage) {
+void TotLowerNode::Lower(StageType stage) {
   CHECK(children_.size() == 1);
 
   Map<std::string, NodeRef> forward_infos;
+  Map<std::string, NodeRef> backward_infos;
   forward_infos.Set(kTot, Expr(true));
-  Excute(children_[0], forward_infos);
+  AttachTotDecorator(children_[0].get(),forward_infos, &backward_infos);
+  children_[0]->Run(this);
 
   auto data = children_[0]->Data();
   auto dump_mng = DumpManager(data->name + "_" + kTot, data->config->dump_pass_ir);
-  auto noinline_indeed = Downcast<Array<Tensor>>(children_[0]->BackwardInfos()[kNoInlineIndeed]);
+  auto noinline_indeed = Downcast<Array<Tensor>>(backward_infos[kNoInlineIndeed]);
   Map<std::string, Map<std::string, NodeRef>> tot_attr;
   auto TotReplaceBind = [&dump_mng, &tot_attr, &noinline_indeed](NodeRef &node_ref, LowerData &data) -> NodeRef {
     Stmt stmt = Downcast<Stmt>(node_ref);
@@ -117,8 +129,6 @@ void TotLowerNode::ExcuteImpl(StageType stage) {
   data_ = stage_lower.Data();
   current_stage_ = stage;
 }
-
-REG_BACKWARD_FUNC(kCuda, "Tot", ModifyBackwardTot);
 
 BaseLowerNodePtr CreateTotLowerNode(const std::string &target, bool, const Map<std::string, NodeRef> &) {
   return std::make_shared<TotLowerNode>(target);

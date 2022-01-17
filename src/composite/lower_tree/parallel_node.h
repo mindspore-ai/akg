@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -44,7 +44,7 @@ class CudaParallelLowerNode : public MultiChildLowerNode {
     name_ = __FUNCTION__;
   }
   ~CudaParallelLowerNode() override = default;
-  void ExcuteImpl(StageType to) override;
+  void Lower(StageType to) override;
 
  private:
   void PostUpdateDataAndNodeRef(LowerData &data, NodeRef &) override;
@@ -61,7 +61,7 @@ class AscendParallelLowerNode : public MultiChildLowerNode {
     name_ = __FUNCTION__;
   }
   ~AscendParallelLowerNode() override = default;
-  void ExcuteImpl(StageType to) override;
+  void Lower(StageType to) override;
 
  private:
   Stmt AddPeelInfoAndBlockAttr(Stmt &s, LowerData &data, PeelInfo &peel_info,

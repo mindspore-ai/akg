@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,6 +27,7 @@
 #include "composite/utils/dump.h"
 #include "composite/utils/util.h"
 #include "composite/lower_tree/base_node.h"
+#include "composite/lower_tree/json_leaf.h"
 
 namespace akg {
 namespace lower {
@@ -126,7 +127,15 @@ class MultiChildLowerNode : public BaseLowerNode {
   void AddPeelInfoForData(LowerData &data, PeelInfo &peel_info);
   void ReplaceBufferForALLArgsAndOutputs2args(Map<Buffer, Buffer> &buffer_replace);
   PeelInfo GetPeelInfoFromAttrs(const Map<std::string, NodeRef> &attrs);
-  void PassNamesOut();
+
+  void AttachMultiChildDecorator(BaseLowerNode *child, Map<std::string, NodeRef> &forward_infos,
+                                 Map<std::string, NodeRef> *backward_infos);
+
+  void UpdateMergeInfos(const Map<std::string, NodeRef> &infos) {
+    for (auto iter : infos) {
+      merge_infos_.Set(iter.first, iter.second);
+    }
+  }
 
   Array<NodeRef> inputs_;
   Array<NodeRef> outputs_;
@@ -134,6 +143,7 @@ class MultiChildLowerNode : public BaseLowerNode {
   std::unordered_map<std::string, NodeRef> outputs2args_;
   std::unordered_map<std::string, NodeRef> real_outputs_;
   Array<NodeRef> workspace_args_;
+  Map<std::string, NodeRef> merge_infos_;  // Child node -> parent node
 };
 }  // namespace lower
 }  // namespace akg

@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -50,7 +50,7 @@ class CudaStitchLowerNode : public MultiChildLowerNode {
     name_ = __FUNCTION__;
   }
   ~CudaStitchLowerNode() override = default;
-  void ExcuteImpl(StageType to) override;
+  void Lower(StageType to) override;
 
  private:
   Map<std::string, NodeRef> GetStitchForwardInfo(Expr child_json, const Map<std::string, NodeRef> &child_attrs,
@@ -80,7 +80,7 @@ class AscendStitchLowerNode : public MultiChildLowerNode {
     name_ = __FUNCTION__;
   }
   ~AscendStitchLowerNode() override = default;
-  void ExcuteImpl(StageType to) override;
+  void Lower(StageType to) override;
 
  private:
   Map<std::string, NodeRef> GetStitchForwardInfo(const Map<std::string, NodeRef> &child_attrs, size_t i, bool fold_dim);
