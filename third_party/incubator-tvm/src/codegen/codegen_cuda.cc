@@ -22,6 +22,13 @@
  */
 
 /*
+ * 2022.1.12
+ *   Modify the functions:
+ *     Finish()
+ *     Add typedef transformation: int64->long
+ */
+
+/*
  * 2020.10.26
  *   Modify the functions:
  *     Finish()
@@ -137,6 +144,8 @@ std::string CodeGenCUDA::Finish() {
     decl_stream << "#endif\n";
   }
 #endif
+
+  decl_stream << "\n"<<"typedef long int64;\n";
 
   if (need_reduce_lib_) {
     if (reduce_lib_type_ == ORIGIN_REDUCE_LIB) {

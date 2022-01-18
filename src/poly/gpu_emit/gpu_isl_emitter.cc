@@ -255,7 +255,53 @@ Stmt GpuIslEmitter::EmitTensorOfTensorStmt(const Stmt &s) {
   return stmt;
 }
 
+void GpuIslEmitter::UpdateGpuIndexDtype() {
+
+  auto read_map = info_.StmtReadMap();
+  auto write_map = info_.StmtWriteMap();
+  std::set<std::string> id_sets;
+  for (auto item : read_map) {
+    for (auto item_id : item.second) {
+      if (id_sets.count(item_id.get_name()) == 0) {
+        id_sets.insert(item_id.get_name());
+      }
+    }
+  }
+  for (auto item : write_map) {
+    for (auto item_id : item.second) {
+      if (id_sets.count(item_id.get_name()) == 0) {
+        id_sets.insert(item_id.get_name());
+      }
+    }
+  }
+
+  bool use_int64_idx_gpu = false;
+  for (auto tensor_name : id_sets) {
+    auto tensor_shape = info_.GetShapeOf(tensor_name);
+    int64_t tensor_size = 1;
+    for (int v : tensor_shape) {
+      tensor_size *= (int64_t)v;
+    }
+    if (tensor_size >= INT_MAX) {
+      use_int64_idx_gpu = true;
+      break;
+    }
+  }
+
+  if (use_int64_idx_gpu) {
+    iter_name_map_ = {{B0, VarExpr(BLOCK_IDX_X, Int(64))},  
+                      {B1, VarExpr(BLOCK_IDX_Y, Int(64))},
+                      {B2, VarExpr(BLOCK_IDX_Z, Int(64))},  
+                      {T0, VarExpr(THREAD_IDX_X, Int(64))},
+                      {T1, VarExpr(THREAD_IDX_Y, Int(64))}, 
+                      {T2, VarExpr(THREAD_IDX_Z, Int(64))}};
+  }
+}
+
 Stmt GpuIslEmitter::Emit(const isl::ast_node &node) {
+
+  UpdateGpuIndexDtype();
+
   Stmt stmt = EmitAst(node);
 
   // emit realize for temporary tensor

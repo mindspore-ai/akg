@@ -1395,6 +1395,7 @@ class ScopInfo {
   Type GetDtypeOf(const std::string &tensor_name) const;
   Type GetDtypeOf(const isl::id &var) const { return GetDtypeOf(var.get_name()); }
   Type GetDtypeOf(const isl::ast_expr &e) const;
+  std::vector<int> GetShapeOf(const std::string &tensor_name) const;
   bool IsInBinds(const std::string &name) const;
   inline bool IsInBinds(const isl::id &id) const { return IsInBinds(id.get_name()); }
   Tensor FindTensorWithLargestShape(const isl::id &var);

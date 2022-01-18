@@ -26,7 +26,7 @@ namespace akg_random {
           standard deviation 1.0. This result can be scaled and shifted to produce normally
           distributed values with any mean and standard deviation.
  */
-__inline__ __device__ float StandardNormal(long long seed, int id)
+__inline__ __device__ float StandardNormal(unsigned long long seed, unsigned long long id)
 {
    if (seed == 0) seed = clock64();
    curandState s;

@@ -55,6 +55,9 @@ namespace ir {
 using IntImm = air::IntImm;
 using Variable = air::Variable;
 
+constexpr auto DTYPE_INT_32 = 32;
+constexpr auto DTYPE_INT_64 = 64;
+
 /*! \brief constant unsigned integer. */
 class UIntImm : public ExprNode {
  public:
@@ -147,7 +150,9 @@ class BinaryOpNode : public ExprNode {
   static Expr make(Expr a, Expr b) {
     CHECK(a.defined()) << "ValueError: a is undefined\n";
     CHECK(b.defined()) << "ValueError: b is undefined\n";
-    CHECK(a.type() == b.type()) << "TypeError: mismatched types\n";
+    CHECK(a.type() == b.type() || 
+          (a.type() == Int(DTYPE_INT_64) && b.type() == Int(DTYPE_INT_32)) ||
+          (a.type() == Int(DTYPE_INT_32) && b.type() == Int(DTYPE_INT_64))) << "TypeError: mismatched types\n";
     NodePtr<T> node = make_node<T>();
     node->type = a.type();
     node->a = std::move(a);
@@ -239,7 +244,9 @@ class CmpOpNode : public ExprNode {
   static Expr make(Expr a, Expr b) {
     CHECK(a.defined()) << "ValueError: a is undefined\n";
     CHECK(b.defined()) << "ValueError: b is undefined\n";
-    CHECK(a.type() == b.type()) << "TypeError: mismatched types\n";
+    CHECK(a.type() == b.type() || 
+          (a.type() == Int(DTYPE_INT_64) && b.type() == Int(DTYPE_INT_32)) ||
+          (a.type() == Int(DTYPE_INT_32) && b.type() == Int(DTYPE_INT_64))) << "TypeError: mismatched types\n";
     NodePtr<T> node = make_node<T>();
     node->type = Bool(a.type().lanes());
     node->a = std::move(a);
