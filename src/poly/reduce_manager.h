@@ -36,6 +36,7 @@ class ReduceManager {
   ~ReduceManager() {}
 
   bool SplitReduceStatements(isl::schedule_node &node, isl::union_set reduce_statements, isl::union_map dependences);
+  isl::union_map GetCurrentDependence(const isl::schedule_node &orig_node, const int band_index);
   isl::union_set GetCurrentNodeReduceStatements(const isl::schedule_node node, ReduceTensorInfoMap &all_reduce_map,
                                                 const bool need_delete_reduce = true);
   // Check whether the reduce operator is included, and split the reduce statement into a separate filter.
@@ -49,8 +50,8 @@ class ReduceManager {
   isl::schedule_node ReorderStatements(const isl::schedule_node &node, isl::union_set before, isl::union_set after);
   bool AreSequentialStatements(isl::union_set first_statements, isl::union_set second_statements,
                                isl::union_map dependences);
-  // After splitting the reduce fusion operator, reschedule all the filters, mainly because the reduce statement affects
-  // other statements after the fusion.
+  // After splitting the reduce fusion operator, reschedule all the filters, mainly because the reduce statement
+  // affects other statements after the fusion.
   isl::schedule_node RescheduleForReduce(const isl::schedule_node &orig_node);
   size_t GetReduceId() const;
   ReduceTensorInfoMap GetCurrentReduceMap(const int band_index = 0);

@@ -37,6 +37,27 @@ ReduceTensorInfoMap ReduceManager::GetCurrentReduceMap(const int band_index) {
   return current_reduce_map;
 }
 
+isl::union_map ReduceManager::GetCurrentDependence(const isl::schedule_node &orig_node, const int band_index) {
+  isl::union_map dependences = pass_info_.dependences_;
+  if (!pass_info_.force_dependences_.is_null()) {
+    dependences = dependences.subtract(pass_info_.force_dependences_);
+  }
+
+  auto current_outer_bn = scop_info_.analysis_result_.GetOuterBandNode(band_index);
+  auto current_stmt = current_outer_bn->stmts;
+  auto new_dependences = isl::union_map();
+  dependences.wrap().foreach_set([&new_dependences, current_stmt, this](const isl::set &set) -> void {
+    auto domain_id = set.unwrap().domain().get_tuple_id();
+    auto range_id = set.unwrap().range().get_tuple_id();
+    if (current_stmt.find(domain_id) != current_stmt.end() && current_stmt.find(range_id) != current_stmt.end()) {
+      auto cur_map = set.unwrap();
+      new_dependences = new_dependences.is_null() ? isl::union_map(cur_map) : new_dependences.add_map(cur_map);
+    }
+  });
+
+  return new_dependences;
+}
+
 isl::schedule_node ReduceManager::DetectAndMarkReduce(const isl::schedule_node &orig_node, const int band_index) {
   auto all_reduce_map = GetCurrentReduceMap(band_index);
   bool done_separate = false;
@@ -55,23 +76,7 @@ isl::schedule_node ReduceManager::DetectAndMarkReduce(const isl::schedule_node &
       return node;
     }
 
-    isl::union_map dependences = pass_info_.dependences_;
-    if (!pass_info_.force_dependences_.is_null()) {
-      dependences = dependences.subtract(pass_info_.force_dependences_);
-    }
-
-    auto current_outer_bn = scop_info_.analysis_result_.GetOuterBandNode(band_index);
-    auto current_stmt = current_outer_bn->stmts;
-    auto new_dependences = isl::union_map();
-    dependences.wrap().foreach_set([&new_dependences, current_stmt, this](const isl::set &set) -> void {
-      auto domain_id = set.unwrap().domain().get_tuple_id();
-      auto range_id = set.unwrap().range().get_tuple_id();
-      if (current_stmt.find(domain_id) != current_stmt.end() && current_stmt.find(range_id) != current_stmt.end()) {
-        auto cur_map = set.unwrap();
-        new_dependences = new_dependences.is_null() ? isl::union_map(cur_map) : new_dependences.add_map(cur_map);
-      }
-    });
-
+    isl::union_map new_dependences = GetCurrentDependence(node, band_index);
     auto node_bak = node;
     if (!SplitReduceStatements(node, reduce_statements, new_dependences)) {
       return node_bak;

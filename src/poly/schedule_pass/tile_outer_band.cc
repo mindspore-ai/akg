@@ -1264,10 +1264,9 @@ bool TileOuterBand::IsContainReduceStatement(const isl::schedule_node &orig_node
 }
 
 isl::schedule_node TileOuterBand::TileGemmOperatorForCpu(const isl::schedule_node &orig_node) {
-  auto node = orig_node;
-  size_t start_depth = node.get_tree_depth();
+  size_t start_depth = orig_node.get_tree_depth();
 
-  node = InsertEmptyPermutableBand(node).child(0);
+  isl::schedule_node node = TileGemmBandNodeForCpu(orig_node);
   auto seq_node = SplitReduceStatements(node).parent();
   if (!seq_node.isa<isl::schedule_node_sequence>()) {
     return orig_node;
@@ -1282,7 +1281,7 @@ isl::schedule_node TileOuterBand::TileGemmOperatorForCpu(const isl::schedule_nod
     node = node.child(0);
 
     if (is_gemm) {
-      node = TileGemmBandNodeForCpu(node);
+      node = node.insert_mark(TENSOR_C);
     } else {
       node = TileElementWiseForCpu(node);
     }
@@ -1298,8 +1297,6 @@ isl::schedule_node TileOuterBand::TileGemmBandNodeForCpu(const isl::schedule_nod
   }
 
   auto node = orig_node;
-  size_t start_depth = node.get_tree_depth();
-
   node = IsolateTilesCpu(node, TILE_WITH_C1);
 
   node = InsertParallelMarkerForGemm(node.parent(), FOR_PARALLEL);
@@ -1307,12 +1304,9 @@ isl::schedule_node TileOuterBand::TileGemmBandNodeForCpu(const isl::schedule_nod
 
   node = node.child(0);
   node = is_insert_mark ? node.child(0) : node;
-  node = node.insert_mark(PROMOTE_GLOBAL_TO_REGISTER_A).child(0);
+  node = node.insert_mark(PROMOTE_GLOBAL_TO_REGISTER).child(0);
 
-  node = IsolateTilesCpu(node, TILE_WITH_C0);
-  node = node.insert_mark(PROMOTE_GLOBAL_TO_REGISTER_B);
-
-  return node.ancestor(node.get_tree_depth() - start_depth);
+  return node;
 }
 
 isl::schedule_node TileOuterBand::TileAllReduceForCpu(const isl::schedule_node &orig_node) {
@@ -1533,8 +1527,9 @@ isl::schedule_node TileOuterBand::SplitReduceStatements(const isl::schedule_node
   bool need_split_reduce = template_type_ == Template::MATMUL;
   ReduceManager reduce_manager(pass_info_, scop_info_, need_split_reduce);
   reduce_statements_ = reduce_manager.GetCurrentNodeReduceStatements(tile_node, all_reduce_map, false);
+  isl::union_map new_dependences = reduce_manager.GetCurrentDependence(orig_node, cur_band_index_);
 
-  if (!reduce_manager.SplitReduceStatements(tile_node, reduce_statements_, pass_info_.dependences_)) {
+  if (!reduce_manager.SplitReduceStatements(tile_node, reduce_statements_, new_dependences)) {
     return orig_node;
   }
   return tile_node;

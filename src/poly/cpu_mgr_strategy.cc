@@ -18,6 +18,7 @@
 #include "schedule_pass/analyze_schedule.h"
 #include "schedule_pass_cpu/cpu_memory_manager.h"
 #include "schedule_pass/realize_manager.h"
+#include "schedule_pass/compute_transfer_copyin.h"
 
 namespace akg {
 namespace ir {
@@ -32,6 +33,9 @@ void CPUMgrStrategy::RegisterPasses() {
   RegisterNormalizationPasses();
   RegisterConstrainedScheduling();
   RegisterSchedulingPasses();
+  if (scop_info_.user_config_.GetEnableMatmul()) {
+    RegisterPass(std::make_shared<ComputeTransferCopyin>(scop_info_, pass_info_));
+  }
   RegisterPass(std::make_shared<AnalyzeSchedule>(scop_info_));
   RegisterTilingPasses();
   if (scop_info_.user_config_.GetIsTuning()) {
