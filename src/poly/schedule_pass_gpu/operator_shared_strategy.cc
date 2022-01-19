@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -280,31 +280,8 @@ void CpuMemoryStrategy::CreateClusterList(const isl::schedule_node &node) {
     ++it;
   }
 
-  auto DeleteTensorSets = [this](const std::set<std::string> &id_sets,
-                                 const bool hoist_tensor_a) -> std::set<std::string> {
-    std::set<std::string> final_id_sets = id_sets;
-    auto it = final_id_sets.begin();
-    while (it != final_id_sets.end()) {
-      if (!hoist_tensor_a) {
-        if (GetTensorMark(*it, scop_info_) != TENSOR_B) {
-          it = final_id_sets.erase(it);
-          continue;
-        }
-      } else {
-        if (GetTensorMark(*it, scop_info_) != TENSOR_A) {
-          it = final_id_sets.erase(it);
-          continue;
-        }
-      }
-      ++it;
-    }
-    return final_id_sets;
-  };
-
   for (auto mark_name : mark_names_) {
-    bool hoist_tensor_a = mark_name == PROMOTE_GLOBAL_TO_REGISTER_A;
-    auto final_id_sets = DeleteTensorSets(id_sets, hoist_tensor_a);
-    RecordPromotedTensorInfo(node, final_id_sets, mark_name);
+    RecordPromotedTensorInfo(node, id_sets, mark_name);
   }
 }
 

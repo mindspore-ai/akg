@@ -262,6 +262,7 @@ class UserConfig {
     ParseBoolAttr(attrs, "pragma_disable_schedule_shift", &disable_schedule_shift_);
     ParseBoolAttr(attrs, "pragma_enable_schedule_max_constant", &enable_schedule_max_constant_);
     ParseBoolAttr(attrs, "pragma_enable_schedule_outer_coincidence", &enable_schedule_outer_coincidence_);
+    ParseBoolAttr(attrs, "pragma_enable_schedule_maximize_coincidence", &enable_schedule_maximize_coincidence_);
     ParseBoolAttr(attrs, "pragma_disable_loop_reversal", &disable_loop_reversal_);
     ParseBoolAttr(attrs, "pragma_disable_loop_fusion", &disable_loop_fusion_);
     ParseBoolAttr(attrs, "pragma_reorder_schedule", &reorder_schedule_);
@@ -406,6 +407,7 @@ class UserConfig {
   bool GetDisableScheduleShift() const { return disable_schedule_shift_; }
   bool GetEnableScheduleMaxConstant() const { return enable_schedule_max_constant_; }
   bool GetEnableScheduleOuterCoincidence() const { return enable_schedule_outer_coincidence_; }
+  bool GetEnableScheduleMaximizeCoincidence() const { return enable_schedule_maximize_coincidence_; }
   bool GetDisableLoopReversal() const { return disable_loop_reversal_; }
   bool GetDisableLoopFusion() const { return disable_loop_fusion_; }
   bool GetReorderSchedule() const { return reorder_schedule_; }
@@ -757,6 +759,7 @@ class UserConfig {
   bool disable_schedule_shift_{false};
   bool enable_schedule_max_constant_{false};
   bool enable_schedule_outer_coincidence_{false};
+  bool enable_schedule_maximize_coincidence_{false};
   bool disable_loop_reversal_{true};
   bool disable_loop_fusion_{false};
   bool reorder_schedule_{false};

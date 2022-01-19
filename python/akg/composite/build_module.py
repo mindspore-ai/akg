@@ -294,6 +294,8 @@ def _update_attrs_cpu(all_ops, attrs, poly):
         return attrs
     if "pragma_enable_matmul" not in attrs.keys() and any([i in all_ops for i in ["BatchMatMul", "MatMul"]]):
         attrs['pragma_enable_matmul'] = True
+        attrs['enable_auto_inline'] = False
+        attrs['pragma_enable_schedule_maximize_coincidence'] = True
     if "feature" not in attrs.keys() and any([i in all_ops for i in ["BatchMatMul", "MatMul"]]):
         attrs["feature"] = "avx"
     return attrs

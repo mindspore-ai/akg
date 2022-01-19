@@ -38,7 +38,7 @@ namespace ir {
 
 constexpr auto REDUCE_PROVIDE = "REDUCE_PROVIDE";
 constexpr auto PACKA = "PACKA";
-constexpr auto TENSOR_C = "TENSOR_C";
+constexpr auto TENSOR_C = "tensor_c";
 constexpr auto MAJOR_MATRIX = "major_matrix";
 constexpr auto MATRIX_A = "matrix_a";
 constexpr auto MATRIX_B = "matrix_b";

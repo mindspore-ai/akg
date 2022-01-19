@@ -77,6 +77,11 @@ void ComputeSchedule::SetIslOptions() {
     status = isl_options_set_schedule_serialize_sccs(ctx, 1);
     CHECK(status == isl_stat_ok);
   }
+
+  if (scop_info_.user_config_.GetEnableScheduleMaximizeCoincidence()) {
+    status = isl_options_set_schedule_maximize_coincidence(ctx, 1);
+    CHECK(status == isl_stat_ok);
+  }
 }
 
 long ComputeSchedule::CollectReductionExtent(const isl::union_pw_aff &aff) {

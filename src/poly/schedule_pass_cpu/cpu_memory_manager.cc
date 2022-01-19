@@ -47,13 +47,7 @@ isl::schedule CpuMemoryManager::HoistCpuMemory() {
       return node;
     }
 
-    // auto mark_node = node;
-    node = node.del();
-    if (tmp_mark_name == PROMOTE_GLOBAL_TO_REGISTER_B) {
-      node = node.insert_mark("TENSOR_C");
-    }
-    node = node.parent();
-
+    node = node.del().parent();
     return HoistClusters(node).child(0);
   };
 
@@ -64,7 +58,7 @@ isl::schedule CpuMemoryManager::HoistCpuMemory() {
       return orig_node;
     }
 
-    mark_names_ = {PROMOTE_GLOBAL_TO_REGISTER_A, PROMOTE_GLOBAL_TO_REGISTER_B};
+    mark_names_ = {PROMOTE_GLOBAL_TO_REGISTER};
     CpuMemoryStrategy other_op(scop_info_, mark_names_, band_index_);
     other_op.CreateClusterList(orig_node);
     auto node = orig_node;
@@ -132,16 +126,6 @@ isl::schedule_node CpuMemoryManager::HoistClusters(const isl::schedule_node &nod
       LOG(FATAL) << "Can not manage a scalar tensor";
     }
 
-    bool use_reuse_filter = true;
-    if (current_outer_bn_->template_type == Template::TRANSPOSE_OP) {
-      use_reuse_filter = false;
-    }
-    bool is_injective = !ReuseTensorCluster(*fp_cluster, partial_sched_mupa);
-
-    bool need_shared_memory = !use_reuse_filter || !is_injective || CoalescingAccessWay(res_node, *fp_cluster);
-    if (!need_shared_memory) {
-      continue;
-    }
     GatherBufferFootprintDefInfo(res_node, buffer_info);
     auto dst_id = buffer_info.dst_tensor_id;
     res_node = HoistMemory(res_node, GpuMemType::LOCAL, id, dst_id, *(fp_cluster), true);

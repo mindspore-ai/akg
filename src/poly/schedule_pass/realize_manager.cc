@@ -172,6 +172,9 @@ isl::schedule RealizeManager::InsertPromotionMajor(const isl::schedule &sch) {
 
     for (size_t i = 0; i < node.n_children(); ++i) {
       auto filter_node = node.child(i).as<isl::schedule_node_filter>();
+      if (!IsReadOrWriteTensor(filter_node, READ_ID_NAME, READ_ID_NAME)) {
+        continue;
+      }
       std::string cur_filter_name = GetCurrentFilterTenaosrName(filter_node);
 
       std::unordered_map<std::string, std::string> matmul_map = scop_info_.analysis_result_.GetMatrixMatmulMap();
