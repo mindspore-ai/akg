@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@ namespace akg {
 namespace lower {
 void ModuleLowerNode::Process() {
   CHECK(children_.size() == 1);
-  Excute(children_[0]);
+  children_[0]->Run(this);
   auto build_rst = BuildRstNode::make(children_[0]->Node(), children_[0]->Data()->name);
   CHECK(build_rst.defined());
   module_ = BuildToModule(build_rst, children_[0]->Data()->target);

@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
-#include "composite/lower_tree/base_node.h"
 #include <algorithm>
 #include <set>
 #include <vector>
 #include <utility>
+#include "composite/lower_tree/base_node.h"
+#include "composite/lower_tree/json_leaf.h"
 
 namespace akg {
 namespace lower {
@@ -28,60 +29,39 @@ Schedule GetScheduleWithBuildInfo(const BuildInfo &info) {
   return create_schedule(ops);
 }
 
-Map<std::string, NodeRef> AddNamePosfix(const std::string &name, const Map<std::string, NodeRef> &cur_forward_info,
-                                        size_t idx, bool is_child, Map<std::string, NodeRef> forward_infos) {
-  std::string posfix;
-  if (cur_forward_info.find(kKernelNamePosfix) != cur_forward_info.end()) {
-    posfix = cur_forward_info[kKernelNamePosfix].as<StringImm>()->value + "_";
+class LowerNodeDecorator : public LowerRunner {
+ public:
+  LowerNodeDecorator(BaseLowerNode *lower, const std::function<void(BaseLowerNode*, LowerRunner*, StageType)> &fn,
+                     LowerRunner *next)
+   : fn_(fn), next_(next), lower_(lower) {}
+  ~LowerNodeDecorator() = default;
+  void Lower(StageType s) override {
+    fn_(lower_, next_, s);
   }
-  posfix += name + "_";
-  if (is_child) {
-    posfix += std::to_string(idx);
-  }
-  forward_infos.Set(kKernelNamePosfix, Expr(posfix));
-  return forward_infos;
+ protected:
+  std::function<void(BaseLowerNode*, LowerRunner*, StageType)> fn_;
+  LowerRunner *next_;
+  BaseLowerNode *lower_;
+};
+
+void BaseLowerNode::Decorate(const std::function<void(BaseLowerNode*, LowerRunner*, StageType)> &fn) {
+  std::unique_ptr<LowerRunner> dec = std::make_unique<LowerNodeDecorator>(this, fn, runner_);
+  runner_ = dec.get();
+  decorators_.emplace_back(std::move(dec));
 }
 
-void BaseLowerNode::Excute(BaseLowerNodePtr child, const Map<std::string, NodeRef> &forward_infos, bool is_clean,
-                           bool pass_out_backward_info) {
-  if (child->current_stage_ == StageType::Unknown ||
-      (data_ && StageTypeLT(target_, child->current_stage_, entrance_stage_))) {
-    auto pass_forward_info = is_clean ? Map<std::string, NodeRef>{} : forward_infos_;
-    for (auto iter : forward_infos) {
-      pass_forward_info.Set(iter.first, iter.second);
+void BaseLowerNode::VisitLeaf(const std::function<void(JsonLowerLeaf *)> &fn) {
+  std::vector<BaseLowerNode *> stack;
+  stack.push_back(this);
+  while (!stack.empty()) {
+    BaseLowerNode *a = stack.back();
+    stack.pop_back();
+    if (a->name_ == "JsonLowerLeaf") {
+      fn(static_cast<JsonLowerLeaf*>(a));
     }
-
-    child->ReceiveForwardInfos(pass_forward_info);
-    child->CleanBackwardInfos();
-    child->Run(entrance_stage_);
-
-    if (pass_out_backward_info) {
-      UpdateBackwardInfos(child->BackwardInfos());
+    for (auto &child : a->children_) {
+      stack.push_back(child.get());
     }
-  }
-}
-
-bool BaseLowerNode::IsSkipped() {
-  if (forward_infos_.find(kCatch) != forward_infos_.end()) {
-    std::set<std::string> catch_run;
-    if (forward_infos_[kCatch]->IsInstance<Array<Expr>::ContainerType>()) {
-      auto pass_nodes = Downcast<Array<Expr>>(forward_infos_[kCatch]);
-      for (auto p : pass_nodes) {
-        CHECK(p->IsInstance<StringImm>());
-        catch_run.insert(p.as<StringImm>()->value);
-      }
-    } else {
-      CHECK(forward_infos_[kCatch]->IsInstance<StringImm>());
-      catch_run.insert(forward_infos_[kCatch].as<StringImm>()->value);
-    }
-    return catch_run.count(name_) == 0;
-  }
-  return false;
-}
-
-void BaseLowerNode::UpdateBackwardInfos(const Map<std::string, NodeRef> &backward_infos) {
-  for (auto iter : backward_infos) {
-    backward_infos_.Set(iter.first, iter.second);
   }
 }
 

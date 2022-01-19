@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,11 +22,22 @@
 #include "composite/utils/dimension_peeling.h"
 #include "composite/lower_tree/block_fusion.h"
 #include "composite/lower_tree/sync_process.h"
+#include "composite/lower_tree/json_leaf.h"
 
 namespace akg {
 namespace lower {
 constexpr auto kBlockPlan = "block_plan";
-void CudaParallelLowerNode::ExcuteImpl(StageType to) {
+
+void AttachParallelDecorator(BaseLowerNode *child, size_t index) {
+  auto func = [index](BaseLowerNode *node, LowerRunner *next, StageType s) {
+    JsonLowerLeaf *leaf = static_cast<JsonLowerLeaf*>(node);
+    next->Lower(s);
+    leaf->Data()->name += std::string("_Parallel_")  + std::to_string(index);
+  };
+  child->VisitLeaf([&func](JsonLowerLeaf *node) { node->Decorate(func); });
+}
+
+void CudaParallelLowerNode::Lower(StageType to) {
   CHECK(children_.size() > 1);
   std::vector<LowerData> datas;
   std::vector<Stmt> block_irs;
@@ -34,16 +45,18 @@ void CudaParallelLowerNode::ExcuteImpl(StageType to) {
   for (size_t i = 0; i < children_.size(); ++i) {
     auto &child = children_[i];
     auto forward_infos = GetCommonForwardInfo();
-    forward_infos = AddNamePosfix(kParallel, forward_infos_, i, true, forward_infos);
-
-    Excute(child, forward_infos);
+    Map<std::string, NodeRef> backward_infos;
+    AttachMultiChildDecorator(child.get(), forward_infos, &backward_infos);
+    AttachParallelDecorator(child.get(), i);
+    child->Run(this);
     auto data = child->Data();
-    CollectOutputMap(data, backward_infos_, outputs2args_);
+    CollectOutputMap(data, backward_infos, outputs2args_);
     for (const auto &x : data->arg_list_0) {
       all_args_.push_back(x);
     }
     datas.push_back(data);
     block_irs.push_back(Downcast<Stmt>(child->Node()));
+    UpdateMergeInfos(backward_infos);
   }
 
   // 2. Merge datas and block irs.
@@ -70,7 +83,7 @@ Stmt CudaParallelLowerNode::MergeStmts(const LowerData &data, std::vector<Stmt> 
   return merged_ir;
 }
 
-void AscendParallelLowerNode::ExcuteImpl(StageType to) {
+void AscendParallelLowerNode::Lower(StageType to) {
   CHECK(children_.size() > 1);
   std::vector<LowerData> datas;
   std::vector<Stmt> block_irs;
@@ -79,29 +92,28 @@ void AscendParallelLowerNode::ExcuteImpl(StageType to) {
     auto &child = children_[i];
 
     // Catch child's attrs.
-    Map<std::string, NodeRef> catch_forward_info;
-    catch_forward_info.Set(kCatch, Expr("JsonLowerLeaf"));
-    Excute(child, catch_forward_info, true, false);
-    auto child_attrs = Downcast<Map<std::string, NodeRef>>(child->BackwardInfos()[kBlockAttrs]);
+    Map<std::string, NodeRef> child_attrs;
+    child->VisitLeaf([&child_attrs](JsonLowerLeaf *node) { child_attrs = node->Attrs(); });
 
     LowerData block_data;
     NodeRef block_ir;
     Map<std::string, NodeRef> backward_infos;
     auto forward_infos = GetCommonForwardInfo();
-    forward_infos = AddNamePosfix(kParallel, forward_infos_, i, true, forward_infos);
+    AttachMultiChildDecorator(child.get(), forward_infos, &backward_infos);
+    AttachParallelDecorator(child.get(), i);
     if (child_attrs.find(kBlockPlan) != child_attrs.end()) {
       auto old_entrance_stage = entrance_stage_;
       entrance_stage_ = StageType::BeforeFlattern;
-
-      Excute(child, forward_infos);
+      child->Run(this);
       auto data = child->Data();
 
       std::unordered_map<std::string, NodeRef> tmp_outputs2args;
-      CollectOutputMap(data, backward_infos_, tmp_outputs2args);
+      CollectOutputMap(data, backward_infos, tmp_outputs2args);
 
       auto block_plan = child_attrs[kBlockPlan].as<IntImm>();
       CHECK(block_plan);
       int block = block_plan->value;
+      UpdateMergeInfos(backward_infos);
       PeelInfo peel_info = GetPeelInfoFromAttrs(child_attrs);
 
       StageLower stage_lower(data, child->Node(),
@@ -118,12 +130,13 @@ void AscendParallelLowerNode::ExcuteImpl(StageType to) {
       block_data = stage_lower.Data();
       entrance_stage_ = old_entrance_stage;
     } else {
-      Excute(child, forward_infos);
+      child->Run(this);
       block_ir = child->Node();
       block_data = child->Data();
+      UpdateMergeInfos(backward_infos);
     }
 
-    CollectOutputMap(block_data, backward_infos_, outputs2args_);
+    CollectOutputMap(block_data, backward_infos, outputs2args_);
     for (const auto &x : block_data->arg_list_0) {
       all_args_.push_back(x);
     }

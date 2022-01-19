@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -70,18 +70,31 @@ void ModifyTuneData(Map<std::string, NodeRef> &forward_infos, LowerData &data) {
     data->tuning = data->attrs.find(kTuning) != data->attrs.end();
   }
 }
+
+void AttachTuneDecorator(BaseLowerNode *child, Map<std::string, NodeRef> &forward_infos,
+                         Map<std::string, NodeRef> *backward_infos) {
+  auto func = [&forward_infos, backward_infos](BaseLowerNode *node, LowerRunner *next, StageType s) {
+    JsonLowerLeaf *leaf = static_cast<JsonLowerLeaf*>(node);
+    ModifyTuneInfo(leaf->Attrs(), forward_infos, &leaf->info_);
+    next->Lower(s);
+    ModifyTuneBackwardArgs(forward_infos, leaf->Attrs(), leaf->info_, backward_infos);
+    LowerData data = leaf->Data();
+    ModifyTuneData(forward_infos, data);
+  };
+  child->VisitLeaf([&func](JsonLowerLeaf *node) { node->Decorate(func); });
+}
 }  // namespace
 
-void TuneLowerNode::ExcuteImpl(StageType stage) {
+void TuneLowerNode::Lower(StageType stage) {
   CHECK(children_.size() == 1);  // Only support 1 child now.
   auto &child = children_[0];
 
   Map<std::string, NodeRef> forward_infos;
+  Map<std::string, NodeRef> backward_infos;
   forward_infos.Set(kEnableTune, Expr(1));
+  AttachTuneDecorator(child.get(), forward_infos, &backward_infos);
+  child->Run(this);
 
-  Excute(child, forward_infos);
-
-  auto backward_infos = child->BackwardInfos();
   if (backward_infos.find(kRetMode) != backward_infos.end()) {
     CHECK(backward_infos.find(kArgs) != backward_infos.end());
     node_ref_ = Array<NodeRef>({child->Node(), backward_infos[kArgs]});
@@ -89,15 +102,6 @@ void TuneLowerNode::ExcuteImpl(StageType stage) {
     node_ref_ = child->Node();
   }
 }
-
-#define REG_TUNE_FUNC(target)                                         \
-  REG_INFO_FUNC_BEFORE(target, "TuneLowerNode", ModifyTuneInfo);      \
-  REG_BACKWARD_FUNC(target, "TuneLowerNode", ModifyTuneBackwardArgs); \
-  REG_DATA_FUNC(target, "TuneLowerNode", ModifyTuneData)
-
-REG_TUNE_FUNC(kCuda);
-REG_TUNE_FUNC(kCce);
-REG_TUNE_FUNC(kLlvm);
 
 BaseLowerNodePtr CreateTuneLowerNode(const std::string &target, bool,
                                      const Map<std::string, NodeRef> &construct_infos) {

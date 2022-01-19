@@ -87,6 +87,28 @@ void ModifyStitchAttrs(Map<std::string, NodeRef> &forward_infos, BuildInfo &info
   auto alloc_map = Downcast<Map<std::string, Array<NodeRef>>>(forward_infos[kAllocMap]);
   *attrs = SetSharedMemoryTensors(*attrs, info, alloc_map);
 }
+
+void AttachStitchDecorator(const std::string &target, BaseLowerNode *child, size_t index,
+               Map<std::string, NodeRef> &forward_infos, Map<std::string, NodeRef> *backward_infos) {
+  auto func = [&target, index, &forward_infos, backward_infos](BaseLowerNode *node, LowerRunner *next, StageType s) {
+    JsonLowerLeaf *leaf = static_cast<JsonLowerLeaf*>(node);
+    auto &attrs = leaf->Attrs();
+    ModifyStitchInfo(attrs, forward_infos, &leaf->info_);
+    if (forward_infos.find(kExtraAttrs) != forward_infos.end()) {
+      auto extra_attrs = Downcast<Map<std::string, NodeRef>>(forward_infos[kExtraAttrs]);
+      for (auto attr : extra_attrs) {
+        attrs.Set(attr.first, attr.second);
+      }
+    }
+    next->Lower(s);
+    leaf->Data()->name += std::string("_Stitch_")  + std::to_string(index);
+    if (target == "cuda") {
+      LowerDataNode *data = leaf->Data().operator->();
+      ModifyStitchAttrs(forward_infos, leaf->info_, &data->attrs);
+    }
+  };
+  child->VisitLeaf([&func](JsonLowerLeaf *node) { node->Decorate(func); });
+}
 }  // namespace
 
 bool CheckFoldDim(const NodeRef &block_json) {
@@ -111,7 +133,7 @@ bool CheckFoldDim(const NodeRef &block_json) {
   return true;
 }
 
-void CudaStitchLowerNode::ExcuteImpl(StageType to) {
+void CudaStitchLowerNode::Lower(StageType to) {
   CHECK(children_.size() > 1);
   // 0. check.
   // Catch all children's jsons.
@@ -137,11 +159,14 @@ void CudaStitchLowerNode::ExcuteImpl(StageType to) {
     auto &child = children_[i];
     auto forward_infos =
       GetStitchForwardInfo(block_jsons[i], block_attrs[i], i, fold_dim, dim_array, ir_type_array_, split_index);
-
+    Map<std::string, NodeRef> backward_infos;
+    AttachMultiChildDecorator(child.get(), forward_infos, &backward_infos);
+    AttachStitchDecorator(target_, child.get(), i, forward_infos, &backward_infos);
     // Excute child.
-    Excute(child, forward_infos, true, true);
+    child->Run(this);
+    UpdateMergeInfos(backward_infos);
     auto data = child->Data();
-    CollectOutputMap(data, backward_infos_, outputs2args_);
+    CollectOutputMap(data, backward_infos, outputs2args_);
     for (const auto &x : data->arg_list_0) {
       all_args_.push_back(x);
     }
@@ -164,7 +189,6 @@ Map<std::string, NodeRef> CudaStitchLowerNode::GetStitchForwardInfo(
   forward_infos.Set(kAllocMap, alloc_map_);
   forward_infos.Set(kIdx, Expr(i));
   forward_infos.Set(kFoldDim, Expr(fold_dim));
-  forward_infos = AddNamePosfix(kStitch, forward_infos_, i, true, forward_infos);
 
   // New attrs.
   std::vector<OpDesc> op_v = ParseOpDesc(child_json.as<StringImm>()->value);
@@ -219,7 +243,7 @@ void CudaStitchLowerNode::PostUpdateDataAndNodeRef(LowerData &data, NodeRef &) {
   data->arg_list_0 = ReorderArgs(inputs_, outputs_, all_args_, outputs2args_, workspace_args_);
 }
 
-void AscendStitchLowerNode::ExcuteImpl(StageType to) {
+void AscendStitchLowerNode::Lower(StageType to) {
   CHECK(children_.size() > 1);
 
   // 0. check.
@@ -245,11 +269,14 @@ void AscendStitchLowerNode::ExcuteImpl(StageType to) {
   for (size_t i = 0; i < children_.size(); ++i) {
     auto &child = children_[i];
     auto forward_infos = GetStitchForwardInfo(block_attrs[i], i, fold_dim);
-
+    Map<std::string, NodeRef> backward_infos;
+    AttachMultiChildDecorator(child.get(), forward_infos, &backward_infos);
+    AttachStitchDecorator(target_, child.get(), i, forward_infos, &backward_infos);
     // Excute child.
-    Excute(child, forward_infos, true);
+    child->Run(this);
+    UpdateMergeInfos(backward_infos);
     auto data = child->Data();
-    CollectOutputMap(data, backward_infos_, outputs2args_);
+    CollectOutputMap(data, backward_infos, outputs2args_);
     for (const auto &x : data->arg_list_0) {
       all_args_.push_back(x);
     }
@@ -276,7 +303,6 @@ Map<std::string, NodeRef> AscendStitchLowerNode::GetStitchForwardInfo(const Map<
 
   auto peeled_tensors = GetOriginPeelInfo(stitch_origin_json_, child_attrs, fold_dim);
   forward_infos.Set(kPeeledTensors, PeelingToNodeRef(peeled_tensors));
-  forward_infos = AddNamePosfix(kStitch, forward_infos_, i, true, forward_infos);
 
   // Set compile attr for current split json
   Map<std::string, NodeRef> new_attrs;
@@ -392,10 +418,6 @@ BaseLowerNodePtr CreateAscendStitchLowerNode(const std::string &target, bool,
     construct_infos[kStitchOriginJson].as<StringImm>()->value,
     Downcast<Map<std::string, Array<NodeRef>>>(construct_infos[kAllocMap]));
 }
-
-REG_INFO_FUNC_BEFORE(kCuda, "CudaStitchLowerNode", ModifyStitchInfo);
-REG_INFO_FUNC_BEFORE(kCce, "AscendStitchLowerNode", ModifyStitchInfo);
-REG_ATTR_FUNC(kCuda, "CudaStitchLowerNode", ModifyStitchAttrs);
 
 REG_NODE_CREATOR(kCuda, kStitch, CreateCudaStitchLowerNode);
 REG_NODE_CREATOR(kCce, kStitch, CreateAscendStitchLowerNode);

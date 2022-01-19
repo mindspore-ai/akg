@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -200,8 +200,6 @@ std::unordered_map<std::string, Peeling> NodeRefToPeeling(const Map<std::string,
 void MultiChildLowerNode::Merge(const std::vector<LowerData> &datas, std::vector<Stmt> &block_irs) {
   data_ = MergeDatas(datas);
   node_ref_ = MergeStmts(data_, block_irs);
-  // Pass inputs' name and outputs' name as sub lower names.
-  PassNamesOut();
   PostUpdateDataAndNodeRef(data_, node_ref_);
 }
 
@@ -238,9 +236,6 @@ LowerData MultiChildLowerNode::MergeDatas(const std::vector<LowerData> &datas, c
   if (merge_data->attrs.find(kOriginKernelName) != merge_data->attrs.end()) {
     CHECK(merge_data->attrs[kOriginKernelName]->IsInstance<StringImm>());
     std::string kernel_name = merge_data->attrs[kOriginKernelName].as<StringImm>()->value;
-    if (forward_infos_.find(kKernelNamePosfix) != forward_infos_.end()) {
-      kernel_name += "_" + forward_infos_[kKernelNamePosfix].as<StringImm>()->value;
-    }
     merge_data->name = kernel_name;
   }
 
@@ -347,14 +342,12 @@ void MultiChildLowerNode::GetRealOutputs() {
 std::pair<Array<Expr>, std::vector<Map<std::string, NodeRef>>> MultiChildLowerNode::CatchChild() {
   Array<Expr> block_jsons;
   std::vector<Map<std::string, NodeRef>> block_attrs;
-  for (auto child : children_) {
-    Map<std::string, NodeRef> forward_infos;
-    forward_infos.Set(kCatch, Expr("JsonLowerLeaf"));
-    Excute(child, forward_infos, true, false);
-    block_jsons.push_back(Downcast<Expr>(child->BackwardInfos()[kBlockJsons]));
-    block_attrs.push_back(Downcast<Map<std::string, NodeRef>>(child->BackwardInfos()[kBlockAttrs]));
+  for (auto child :  children_) {
+    child->VisitLeaf([&block_jsons, &block_attrs](JsonLowerLeaf *leaf) {
+        block_jsons.push_back(Expr(leaf->JsonDesc()));
+        block_attrs.push_back(leaf->Attrs());
+      });
   }
-
   return {block_jsons, block_attrs};
 }
 
@@ -423,16 +416,11 @@ PeelInfo MultiChildLowerNode::GetPeelInfoFromAttrs(const Map<std::string, NodeRe
     auto parsed_peeling = Str2Peeling(peeling->value);
     CHECK(!parsed_peeling.empty());
     peel_info.SetPeels(parsed_peeling);
-    CHECK(backward_infos_.find(kPeeledTensors) != backward_infos_.end());
-    auto peeled_tensors = NodeRefToPeeling(Downcast<Map<std::string, Array<NodeRef>>>(backward_infos_[kPeeledTensors]));
+    CHECK(merge_infos_.find(kPeeledTensors) != merge_infos_.end());
+    auto peeled_tensors = NodeRefToPeeling(Downcast<Map<std::string, Array<NodeRef>>>(merge_infos_[kPeeledTensors]));
     peel_info.SetPeelTensors(peeled_tensors);
   }
   return peel_info;
-}
-
-void MultiChildLowerNode::PassNamesOut() {
-  backward_infos_.Set(kInputNames, inputs_);
-  backward_infos_.Set(kOutputNames, outputs_);
 }
 
 Map<std::string, NodeRef> MultiChildLowerNode::GetCommonForwardInfo() {
@@ -441,9 +429,20 @@ Map<std::string, NodeRef> MultiChildLowerNode::GetCommonForwardInfo() {
   return forward_infos;
 }
 
-REG_INFO_FUNC_BEFORE(kCce, "MultiChildLowerNode", ModifyInfoPeeling);
-REG_BACKWARD_FUNC(kCuda, "MultiChildLowerNode", ModifyBackwardNames);
-REG_BACKWARD_FUNC(kCce, "MultiChildLowerNode", ModifyBackwardNames);
-REG_BACKWARD_FUNC(kCce, "MultiChildLowerNode", ModifyBackwardPeeling);
+void MultiChildLowerNode::AttachMultiChildDecorator(BaseLowerNode *child, Map<std::string, NodeRef> &forward_infos,
+                                                    Map<std::string, NodeRef> *backward_infos) {
+  auto func = [this, &forward_infos, backward_infos](BaseLowerNode *node, LowerRunner *next, StageType s) {
+    JsonLowerLeaf *leaf = static_cast<JsonLowerLeaf*>(node);
+    if (this->target_ == "cce") {
+      ModifyInfoPeeling(leaf->Attrs(), forward_infos, &leaf->info_);
+    }
+    next->Lower(s);
+    ModifyBackwardNames(forward_infos, leaf->Attrs(), leaf->info_, backward_infos);
+    if (this->target_ == "cce") {
+      ModifyBackwardPeeling(forward_infos, leaf->Attrs(), leaf->info_, backward_infos);
+    }
+  };
+  child->VisitLeaf([&func](JsonLowerLeaf *leaf) { leaf->Decorate(func); });
+}
 }  // namespace lower
 }  // namespace akg

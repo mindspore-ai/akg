@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -47,61 +47,60 @@ constexpr auto kKernelOutputs = "kernel_outputs";
 constexpr auto kKernelNamePosfix = "kernel_name_postfix";
 constexpr auto kOriginKernelName = "origin_kernel_name";
 
-constexpr auto kBlockAttrs = "block_attrs";
-constexpr auto kBlockJsons = "block_json";
 constexpr auto kExtraAttrs = "extra_attrs";
 
-constexpr auto kCatch = "catch_child_infos";
 constexpr auto kFoldDim = "fold_dim";
 
 Schedule GetScheduleWithBuildInfo(const BuildInfo &info);
 
-Map<std::string, NodeRef> AddNamePosfix(const std::string &name, const Map<std::string, NodeRef> &cur_forward_info,
-                                        size_t idx = 0, bool is_child = false,
-                                        Map<std::string, NodeRef> forward_infos = {});
-
 class BaseLowerNode;
+class JsonLowerLeaf;
 using BaseLowerNodePtr = std::shared_ptr<BaseLowerNode>;
-class BaseLowerNode {
+
+class LowerRunner {
+ public:
+  LowerRunner() = default;
+  virtual ~LowerRunner() = default;
+  virtual void Lower(StageType s) = 0;
+};
+
+class BaseLowerNode : public LowerRunner {
  public:
   BaseLowerNode() = default;
   explicit BaseLowerNode(const std::string &target) : target_(target) { name_ = __FUNCTION__; }
   virtual ~BaseLowerNode() = default;
 
-  void Excute(BaseLowerNodePtr child, const Map<std::string, NodeRef> &forward_infos = {}, bool is_clean = false,
-              bool pass_out_backward_info = true);
-  virtual void ExcuteImpl(StageType s) {}
   void Run(StageType s = StageType::Unknown) {
-    if (IsSkipped()) {
-      for (auto child : children_) {
-        Excute(child);
-      }
-      return;
-    }
-    ExcuteImpl(s);
+    runner_->Lower(s);
   }
 
-  NodeRef Node() { return node_ref_; }
-  LowerData Data() { return data_; }
+  void Run(const BaseLowerNode *parent) {
+    if (current_stage_ == StageType::Unknown ||
+        (parent->Data() && StageTypeLT(target_, current_stage_, parent->entrance_stage_))) {
+      Run(parent->entrance_stage_);
+    }
+  }
+
+  void Lower(StageType s) override {}
+
+  void Decorate(const std::function<void(BaseLowerNode*, LowerRunner*, StageType)> &fn);
+  void VisitLeaf(const std::function<void(JsonLowerLeaf *)> &fn);
+
+  NodeRef Node() const { return node_ref_; }
+  LowerData Data() const { return data_; }
   void AddChild(BaseLowerNodePtr child) { children_.push_back(child); }
-  Map<std::string, NodeRef> BackwardInfos() { return backward_infos_; }
 
   StageType entrance_stage_{StageType::Begin};
   StageType current_stage_{StageType::Unknown};
 
  protected:
-  bool IsSkipped();
-  void UpdateBackwardInfos(const Map<std::string, NodeRef> &backward_infos);
-  void ReceiveForwardInfos(const Map<std::string, NodeRef> &forward_infos) { forward_infos_ = forward_infos; }
-  void CleanBackwardInfos() { backward_infos_ = Map<std::string, NodeRef>{}; }
-
   std::string target_;
   std::string name_;
   std::vector<BaseLowerNodePtr> children_;
   NodeRef node_ref_;
   LowerData data_;
-  Map<std::string, NodeRef> forward_infos_;   // Parent node -> child node, affect child node's lower procession .
-  Map<std::string, NodeRef> backward_infos_;  // Child node -> parent node, recieved by parent node for forther use.
+  LowerRunner *runner_{this};
+  std::vector<std::unique_ptr<LowerRunner>> decorators_;
 };
 
 using LowerNodeCreateFunc =
