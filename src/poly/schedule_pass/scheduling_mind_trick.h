@@ -130,7 +130,7 @@ class SchedulingMindTrick {
   void Load(const std::string &filename);
 
   // Parse JSON representation
-  void Parse(const picojson::value &json);
+  void Parse(const picojson::value &root);
   void Parse(const std::string &serialized_json);
   std::istream &Parse(std::istream &streamed_json);
 
@@ -285,7 +285,8 @@ class SchedulingMindTrick {
   // Soft constraints
   ///////////////////////////////////////////////////////////////////////////
 
-  static std::string AutoGenSoftConstraints(ScopInfo &scop_info, const isl::schedule &sch);
+  static std::tuple<std::string, std::string> AutoGenSoftConstraints(ScopInfo &scop_info, const isl::schedule &sch);
+  static std::tuple<std::string, std::string> AutoGenGPUSoftConstraints(ScopInfo &scop_info, const isl::schedule &sch);
 
   void CollectSoftConstraintsData(std::string stmt_name, unsigned int dim, unsigned int nb_vars, unsigned int nb_params,
                                   std::string expr);
@@ -377,8 +378,11 @@ class SchedulingMindTrick {
   // clang-format on
 };
 
+
+std::tuple<std::string, std::string> AutoGenAscend910SoftConstraints(const ScopInfo &scop_info,
+                                                                     const isl::schedule &sch);
+
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg
-
 #endif  // POLY_SCHEDULING_MIND_TRICK_H_

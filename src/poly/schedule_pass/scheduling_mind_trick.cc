@@ -752,27 +752,27 @@ void SchedulingMindTrick::Load(const std::string &filename) {
   }
 }
 
-std::istream &SchedulingMindTrick::Parse(std::istream &stream) {
+std::istream &SchedulingMindTrick::Parse(std::istream &streamed_json) {
   picojson::value json;
 
-  const std::string error = picojson::parse(json, stream);
+  const std::string error = picojson::parse(json, streamed_json);
   if (!error.empty()) {
     Error(error);
     correctly_parsed_ = false;
-    return stream;
+    return streamed_json;
   }
 
   // Parse the json representation
   correctly_parsed_ = true;
   Parse(json);
 
-  return stream;
+  return streamed_json;
 }
 
-void SchedulingMindTrick::Parse(const std::string &serialized) {
+void SchedulingMindTrick::Parse(const std::string &serialized_json) {
   // Parse the serialized string representation
   picojson::value json;
-  const std::string error = picojson::parse(json, serialized);
+  const std::string error = picojson::parse(json, serialized_json);
 
   if (!error.empty()) {
     Error(error);
@@ -2194,15 +2194,34 @@ std::string SchedulingMindTrick::TemplateString(ScopInfo &scop_info, const isl::
   contents["pattern"] = picojson::value(sch_str);
 
   std::string auto_constraints = "";
+  std::string auto_attrs = "";
   if (type == MindTrickType::autogen) {
-    auto_constraints = AutoGenSoftConstraints(scop_info, schedule);
+    std::tie(auto_constraints, auto_attrs) = AutoGenSoftConstraints(scop_info, schedule);
   }
   if (auto_constraints != "") {
     picojson::value constraints;
     const std::string &error = picojson::parse(constraints, auto_constraints);
     if (error.empty()) {
       contents["soft constraints"] = constraints;
+    } else {
+      LOG(WARNING) << "auto_tricks json error: " << error;
     }
+  }
+  if (auto_attrs != "") {
+    picojson::value attrs;
+    const std::string &error = picojson::parse(attrs, auto_attrs);
+    if (error.empty()) {
+      contents["attrs"] = attrs;
+    } else {
+      LOG(WARNING) << "auto_attrs json error: " << error;
+    }
+  }
+  const std::string &target = scop_info.user_config_.GetTarget();
+  if (target == TARGET_CCE) {
+    picojson::array disable_pass;
+    disable_pass.push_back(picojson::value("GroupStatements"));
+    disable_pass.push_back(picojson::value("UnGroupStatements"));
+    contents["disable"] = picojson::value(disable_pass);
   }
 
   const picojson::value &trick = picojson::value(contents);
@@ -2212,7 +2231,21 @@ std::string SchedulingMindTrick::TemplateString(ScopInfo &scop_info, const isl::
   return result;
 }
 
-std::string SchedulingMindTrick::AutoGenSoftConstraints(ScopInfo &scop_info, const isl::schedule &sch) {
+std::tuple<std::string, std::string> SchedulingMindTrick::AutoGenSoftConstraints(ScopInfo &scop_info,
+                                                                                 const isl::schedule &sch) {
+  const std::string &target = scop_info.user_config_.GetTarget();
+  if (target == TARGET_CUDA) {
+    return AutoGenGPUSoftConstraints(scop_info, sch);
+  } else if (target == TARGET_CCE) {
+    // AutoGenAscend910SoftConstraints in scheduling_mind_trick_ascend.cc
+    return AutoGenAscend910SoftConstraints(scop_info, sch);
+  }
+  log::Warn("This case never happens");
+  return std::make_tuple("", "");
+}
+
+std::tuple<std::string, std::string> SchedulingMindTrick::AutoGenGPUSoftConstraints(ScopInfo &scop_info,
+                                                                                    const isl::schedule &sch) {
   const DimensionAnalysis &analysis = DimensionAnalysis(scop_info, sch);
 
   std::string constraints{""};
@@ -2235,11 +2268,11 @@ std::string SchedulingMindTrick::AutoGenSoftConstraints(ScopInfo &scop_info, con
   if (constraints != "") {
     result += "[\n";
     // Add the final \n for legibility
-    result += constraints + "\n";
-    result += indent(1) + "]\n";
+    result += indent(1) + constraints + "\n";
+    result += "]\n";
   }
 
-  return result;
+  return std::make_tuple(result, "");
 }
 
 ////////////////////////////////////////////////////////////////////////////////

@@ -225,7 +225,7 @@ bool ConstrainSchedule::ShouldAutogenMindTrick(const isl::schedule &sch) const {
   }
 
   const std::string &target = scop_info_.user_config_.GetTarget();
-  if (target != TARGET_CUDA) {
+  if (target != TARGET_CUDA && target != TARGET_CCE) {
     return false;
   }
 
