@@ -15,14 +15,14 @@ import os
 import pytest
 import akg.utils as utils
 from tests.common.base import TestBase
-from tests.common.test_run.gpu import csr_div_run
+from tests.common.test_run import csrmv_run
 
 ############################################################
 # TestCase= class: put to tests/*/
 ############################################################
 class TestCase(TestBase):
     def setup(self):
-        case_name = "test_abs_001"
+        case_name = "test_csrmv"
         case_path = os.getcwd()
 
         # params init
@@ -30,13 +30,7 @@ class TestCase(TestBase):
 
         self.test_args = [
             # testflag,opfuncname,testRunArgs, setdimArgs
-            ("000_case", csr_div_run, ((800,), (1987, 800), 'float32', 'int32'), ["level0"]),
-            ("001_case", csr_div_run, ((1987, 1), (1987, 800), 'float32', 'int32'), ["level0"]),
-            ("002_case", csr_div_run, ((1, 800), (1987, 800), 'float32', 'int32'), ["level0"]),
-            ("003_case", csr_div_run, ((1987, 800), (1987, 800), 'float32', 'int32'), ["level0"]),
-            ("004_case", csr_div_run, ((2708, 1, 8), (2708, 2708, 8), 'float32', 'int32', 1433), ["level0"]),
-            ("005_case", csr_div_run, ((2708, 8), (2708, 2708, 8), 'float32', 'int32', 1433), ["level0"]),
-            ("006_case", csr_div_run, ((2708, 2708, 8, 8), (2708, 2708, 8, 8), 'float32', 'int32', 1433), ["level0"]),
+            ("000_case", csrmv_run, ((100, 100), 'float32', (100, 1), 'float32'), ["level0"]),
         ]
         return True
 
@@ -50,3 +44,9 @@ class TestCase(TestBase):
     @pytest.mark.env_onecard
     def test_gpu_level0(self):
         return self.run_cases(self.test_args, utils.CUDA, "level0")
+
+    @pytest.mark.level0
+    @pytest.mark.platform_x86_cpu
+    @pytest.mark.env_onecard
+    def test_cpu_level0(self):
+        return self.run_cases(self.test_args, utils.LLVM, "level0")

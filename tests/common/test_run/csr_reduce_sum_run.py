@@ -5,6 +5,7 @@ import numpy as np
 
 import akg
 from akg import tvm
+from akg import composite
 from akg.utils import CUDA
 from tests.common.base import get_rtol_atol
 from tests.common.gen_random import random_gaussian
@@ -12,8 +13,11 @@ from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
 from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
-from akg.ops.array.gpu import CSRReduceSum
-    
+
+def csr_reduce_sum(data, col_idx, row_idx, axis, shape):
+    attrs = {"axis": [axis], "dense_shape": shape}
+    return composite.csr_reduce_sum((row_idx, col_idx, data), attrs)
+
 def gen_data(shape, dtype1, dtype2, axis, nnz=-1):
     axis = axis % len(shape)
     if nnz > 0:
@@ -56,7 +60,7 @@ def csr_reduce_sum_run(shape, dtype1, dtype2, axis, nnz=-1, poly_sch=True, attrs
     attrs["csr_avg_row"] = data.shape[0] // shape[0]
     attrs["is_csr"] = True
 
-    mod = utils.op_build_test(CSRReduceSum, [data.shape, col_idx.shape, row_idx.shape], 
+    mod = utils.op_build_test(csr_reduce_sum, [data.shape, col_idx.shape, row_idx.shape], 
                               [dtype1, dtype2, dtype2], op_attrs=op_attrs, polyhedral=poly_sch,
                               attrs=attrs, kernel_name="csr_reduce_sum")
 
@@ -77,6 +81,6 @@ def csr_reduce_sum_run(shape, dtype1, dtype2, axis, nnz=-1, poly_sch=True, attrs
         raise AssertionError("Test fail")
     if attrs["profiling"]:
         args_list = to_tvm_nd_array(
-            [data, col_idx, row_idx, output, expect], akg.tvm.context(target_name, 0))
+            [data, col_idx, row_idx, output], akg.tvm.context(target_name, 0))
         target_profiling(mod, *args_list, target=target_name,  repeat_time=attrs["repeat_times"])
     return (data, col_idx, row_idx), output, expect, res

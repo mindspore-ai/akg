@@ -19,10 +19,10 @@
 
 #include "poly/scop_builder.h"
 #include "poly/poly_util.h"
+#include "poly/isl_emitter_csr.h"
 #include "poly/cpu_isl_emitter.h"
 #include "poly/npu_isl_emitter.h"
 #include "poly/gpu_emit/gpu_isl_emitter.h"
-#include "poly/gpu_emit/gpu_isl_emitter_csr.h"
 #include "poly/gpu_emit/gpu_isl_emitter_reduce.h"
 #include "poly/gpu_emit/gpu_isl_emitter_tensor_core.h"
 #include "poly/dsa_mgr_strategy.h"
@@ -301,7 +301,11 @@ Stmt GenHalide(ScopInfo &info, const isl::schedule &sch, bool used_for_tile_out_
         stmt = GpuIslEmitter(info, node_info_repo, iters).Emit(ast_node);
       }
     } else if (info.user_config_.GetTarget() == TARGET_CPU) {
-      stmt = CpuIslEmitter(info, node_info_repo, iters).Emit(ast_node);
+      if (info.analysis_result_.GetCsr()) {
+        stmt = CpuIslEmitterCsr(info, node_info_repo, iters).Emit(ast_node);
+      } else {
+        stmt = CpuIslEmitter(info, node_info_repo, iters).Emit(ast_node);
+      }
     }
   }
 

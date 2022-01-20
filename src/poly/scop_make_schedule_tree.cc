@@ -446,6 +446,8 @@ class ScopMakeScheduleTree final : protected IRVisitor {
     } else if (op->attr_key == AKG_INNER_TENSOR) {
       CHECK(op->value.as<StringImm>());
       scop_info_.analysis_result_.RecordInnerTensor(op->value.as<StringImm>()->value);
+    } else if (op->attr_key == AKG_REMOVE_SELF_DEPENDENCE) {
+      scop_info_.analysis_result_.SetRemoveSelfDependence(true);
     }
   }
 

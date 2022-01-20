@@ -61,7 +61,7 @@ void InitSchedule::ComputeCopyIn(const isl::schedule &schedule) {
   uai = uai.set_may_source(writes);
   uai = uai.set_schedule(schedule);
   auto flow = uai.compute_flow();
-  auto mayNoSource = flow.get_may_no_source();
+auto mayNoSource = flow.get_may_no_source();
   scop_info_.analysis_result_.RecordCopyin(scop_info_.analysis_result_.GetReads().intersect_range(mayNoSource.range()));
 }
 
@@ -71,10 +71,10 @@ isl::schedule InitSchedule::Run(isl::schedule sch) {
 
   pass_info_.dependences_ =
     ComputeAllDependences(sch, scop_info_.analysis_result_.GetReads(), scop_info_.analysis_result_.GetWrites());
-
-  if (scop_info_.user_config_.GetTarget() == TARGET_CUDA) {
-    auto tot_stmt = scop_info_.analysis_result_.GetTensorOfTensorStmt();
-    if (!tot_stmt.empty()) {
+  auto tot_stmt = scop_info_.analysis_result_.GetTensorOfTensorStmt();
+  if (!tot_stmt.empty()) {
+    if (scop_info_.user_config_.GetTarget() == TARGET_CUDA ||
+        (scop_info_.user_config_.GetTarget() == TARGET_CPU && scop_info_.analysis_result_.GetRemoveSelfDependence())) {
       pass_info_.dependences_ = RemoveSelfDependence(pass_info_, tot_stmt);
     }
   }

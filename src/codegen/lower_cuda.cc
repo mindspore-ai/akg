@@ -79,7 +79,7 @@ StageResult CudaLowerBegin(Stmt &, LowerData &data) {
     data->binds_0 = air::Downcast<Map<Tensor, Buffer>>(fuse_axis_res[2]);
   }
   PassMgr::SetArgs(data->arg_list_0);
-  stmt = NEXT_PASS(AddAttrForLayoutOp, stmt);
+  stmt = NEXT_PASS(AddAttrForLayoutOp, stmt, data->sch);
   stmt = NEXT_PASS(RewriteTensorIndex, stmt);
   return {stmt, false};
 }
@@ -98,7 +98,7 @@ StageResult CudaLowerBeforeFlattern(Stmt &stmt, LowerData &data) {
   if (data->polyhedral) {
     stmt = NEXT_PASS(LowerWith, stmt);
     if (!g_csr.empty()) {
-      stmt = NEXT_PASS(RestoreCsrLoop, stmt);
+      stmt = NEXT_PASS(RestoreCsrLoop, stmt, data->binds_0, true);
     }
   }
   stmt = NEXT_PASS(ReconstructLayout, stmt);

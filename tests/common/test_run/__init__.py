@@ -19,6 +19,10 @@ from .batch_matmul_run import batch_matmul_run
 from .cast_run import cast_run
 from .conv_fusion_run import conv_fusion_run
 from .conv_run import conv_run
+from .csrmv_run import csrmv_run
+from .csr_div_run import csr_div_run
+from .csr_mul_run import csr_mul_run
+from .csr_reduce_sum_run import csr_reduce_sum_run
 from .cumprod_run import cumprod_run
 from .cumsum_run import cumsum_run
 from .div_run import div_run

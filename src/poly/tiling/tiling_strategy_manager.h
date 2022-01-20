@@ -496,7 +496,7 @@ class CpuStrategy : public TilingStrategy {
   void SetUnrollTileValue(TileAxis *axis, const int64_t axis_size, int64_t &tile_left);
   void SetParallelTileValue(TileAxis *axis, const int64_t axis_size, const int64_t data_size,
                             bool is_unroll_axis = false, int64_t tile_left = 1);
-
+  void SetCsrTileValue();
   std::vector<std::vector<std::pair<TileAxis *, int64_t>>> pending_axes_;
   int min_exec_num_per_thread_{MIN_EXEC_NUM_PER_THREAD};
   int best_parallel_num_{BEST_PARALLEL_NUM};

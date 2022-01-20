@@ -6,7 +6,6 @@ import numpy as np
 import akg
 from akg import tvm
 from akg import composite
-from akg.utils import CUDA
 from tests.common.base import get_rtol_atol
 from tests.common.gen_random import random_gaussian
 from tests.common.tensorio import compare_tensor
@@ -14,8 +13,7 @@ from akg.utils import kernel_exec as utils
 from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
 
-def csr_div(dense, sparse_data, col_idx, row_idx, shape, target=CUDA):
-    assert target == CUDA, "only supports GPU"
+def csr_div(dense, sparse_data, col_idx, row_idx, shape):
     return composite.csr_div((row_idx, col_idx, sparse_data, dense), {"dense_shape": shape})
 
 def gen_data(shape1, shape2, dtype1, dtype2, nnz=-1):

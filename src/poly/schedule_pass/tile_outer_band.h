@@ -107,7 +107,8 @@ class TileOuterBand : public SchedulePass {
   // cpu related functions
   isl::schedule RunCpu(isl::schedule sch);
   isl::schedule_node MarkOuterPermutableCpu(isl::schedule_node node);
-
+  
+  isl::schedule_node TileCsrForCpu(const isl::schedule_node &orig_node);
   isl::schedule_node TileReduceXForCpu(const isl::schedule_node &orig_node);
   isl::schedule_node TileAllReduceForCpu(const isl::schedule_node &orig_node);
   isl::schedule_node TileGemmOperatorForCpu(const isl::schedule_node &orig_node);
