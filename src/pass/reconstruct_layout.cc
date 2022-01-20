@@ -318,7 +318,7 @@ class PackedMatcher : public IRVisitor {
   explicit PackedMatcher() {}
 
   void Visit_(const AttrStmt *op) final {
-    if (op->attr_key == "PACKA" || op->attr_key == "PACKB") {
+    if (op->attr_key == "pack_a" || op->attr_key == "pack_b") {
       is_matched_ = true;
     }
     IRVisitor::Visit_(op);
@@ -334,10 +334,10 @@ class PackedReconstruction : public IRMutator {
   explicit PackedReconstruction() {}
 
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
-    if (op->attr_key == "PACKA") {
+    if (op->attr_key == "pack_a") {
       int value = op->value.as<IntImm>()->value;
       a_block_size_ = value;
-    } else if (op->attr_key == "PACKB") {
+    } else if (op->attr_key == "pack_b") {
       int value = op->value.as<IntImm>()->value;
       b_block_size_ = value;
     } else {

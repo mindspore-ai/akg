@@ -417,6 +417,8 @@ constexpr auto SYNC_SCOP_GLOBAL = "global";
 constexpr auto ROW_MAJOR = "row_major";
 constexpr auto COL_MAJOR = "col_major";
 constexpr auto REDUCE_AREA_FLAG = "reduce_area";
+constexpr int REDUCE_Y_LEAST_BLOCK_SIZE = 8192;
+constexpr auto REDUCE_Y_FLAG = "reduce_y";
 
 /******************************************************
  * Following const is the mark tags for schedule tree

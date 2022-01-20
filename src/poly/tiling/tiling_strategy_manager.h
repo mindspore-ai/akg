@@ -490,6 +490,7 @@ class CpuStrategy : public TilingStrategy {
   void BuildAxesQueue();
   void RecordTileValue();
   void SetMatMulTileValue(int index);
+  bool SetReduceYTileValue(int index);
   void SetMultiLevelTileValue();
   void SetUnrollTileValue(TileAxis *axis, const int64_t axis_size, int64_t &tile_left);
   void SetParallelTileValue(TileAxis *axis, const int64_t axis_size, const int64_t data_size,

@@ -122,6 +122,7 @@ class TileOuterBand : public SchedulePass {
   isl::schedule_node InsertMarkerForLoop(const isl::schedule_node &orig_node, const std::string &marker_name,
                                          const int insert_pos = 0);
   isl::schedule_node InsertParallelMarkerForGemm(const isl::schedule_node &orig_node, const std::string &marker_name);
+  isl::schedule_node InsertMarkerForReduceY(const isl::schedule_node &orig_node, size_t start_depth);
 
  private:
   PassInfo &pass_info_;

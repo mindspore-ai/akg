@@ -20,6 +20,9 @@ namespace akg {
 namespace ir {
 namespace poly {
 
+constexpr auto BLOCK_SIZE_4 = 4;
+constexpr auto BLOCK_SIZE_8 = 8;
+constexpr auto BLOCK_SIZE_16 = 16;
 static constexpr auto REDUCE_FUNCTION = "Reduce";
 static constexpr auto MATRIX_TRANSPOSE_FUNCTION = "MatrixTranspose";
 static constexpr auto LOCAL_MEMORY = "local";
@@ -41,7 +44,7 @@ Stmt CpuIslEmitter::EmitInfo(const Stmt &stmt) {
   Stmt result = stmt;
   auto len = info_.user_config_.GetVectorLength();
   if (len != 0) {
-    result = AttrStmt::make(Expr("INFO"), "VECTOR_LENGTH", Expr(len), result);
+    result = AttrStmt::make(Expr("INFO"), "vector_length", Expr(len), result);
   }
 
   std::string feature = info_.user_config_.GetFeature();
@@ -50,11 +53,11 @@ Stmt CpuIslEmitter::EmitInfo(const Stmt &stmt) {
   }
 
   if (arm_instruction_set.find(feature) != arm_instruction_set.end()) {
-    result = AttrStmt::make(Expr("INFO"), "PACKA", Expr(8), result);
+    result = AttrStmt::make(Expr("INFO"), "pack_a", Expr(BLOCK_SIZE_8), result);
   } else if (feature == X86_INSTRUCTION_SET) {
-    result = AttrStmt::make(Expr("INFO"), "PACKA", Expr(16), result);
+    result = AttrStmt::make(Expr("INFO"), "pack_a", Expr(BLOCK_SIZE_16), result);
   }
-  result = AttrStmt::make(Expr("INFO"), "PACKB", Expr(4), result);
+  result = AttrStmt::make(Expr("INFO"), "pack_b", Expr(BLOCK_SIZE_4), result);
   return result;
 }
 
@@ -202,7 +205,7 @@ Stmt CpuIslEmitter::EmitUserStmt(const isl::ast_node_user &node) {
   if (stmt_node->IsInstance<Provide>()) {
     const auto op = static_cast<const Provide *>(stmt_node);
     if (info_.analysis_result_.GetReduceMap().count(op) != 0) {
-      return AttrStmt::make(Expr("INFO"), "REDUCE_PROVIDE", Expr("REDUCE_PROVIDE"), stmt);
+      return AttrStmt::make(Expr("INFO"), "reduce_provide", Expr("reduce_provide"), stmt);
     }
   }
   return stmt;
