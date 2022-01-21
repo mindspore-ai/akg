@@ -76,8 +76,8 @@ isl::schedule_node OperatorMappingStrategy::InsertMapFilter(const isl::schedule_
 isl::schedule_node OperatorMappingStrategy::AnalysisNodeAndInsertMapFilter(const isl::schedule_node &node,
                                                                            const isl::union_pw_aff_list &upa_list) {
   isl::union_set domain = node.get_schedule().get_domain();
-  if (node.ancestor(2) && node.ancestor(2).isa<isl::schedule_node_filter>()) {
-    domain = node.ancestor(2).as<isl::schedule_node_filter>().get_filter();
+  if (node.has_parent() && node.parent().has_parent() && node.parent().parent().isa<isl::schedule_node_filter>()) {
+    domain = node.parent().parent().as<isl::schedule_node_filter>().get_filter();
   }
 
   std::unordered_set<std::string> current_mapping_cfg;
@@ -134,8 +134,9 @@ isl::schedule_node OperatorMappingStrategy::MapDimToThreadsBlocks(const isl::sch
   bool is_tiled = false;
   auto node = orig_node;
   if (is_promotion_mapping_ || scop_info_.user_config_.GetMindTrickWasUsed()) {
-    node = CheckMapSizeAndApplyTile(node, upa_list, required_mapping_strategy_, mapping_cfg_);
-    is_tiled = !node.is_equal(orig_node);
+    auto mapped_tile_size = CheckAndGetMapSize(node, upa_list, required_mapping_strategy_, mapping_cfg_);
+    is_tiled = mapped_tile_size.size() > 0 && !mapped_tile_size.at(0).is_zero();
+    node = is_tiled ? TileBand(node, mapped_tile_size).child(0) : node;
     // insert node with specific marker
     if (is_insert_marker) {
       std::string marker_name = is_thread_mapping_ ? THREAD_MARKER : BLOCK_MARKER;
@@ -466,7 +467,6 @@ size_t ReduceMappingStrategy::MapThreadHelper(isl::schedule_node &thread_root) {
   }
 
   thread_root = thread_root.insert_mark(reduce_marker_name);
-  thread_root = thread_root.child(0);
   // Add the filter that initializes and calls the akg_reduce library for the reduce statement.
   // Return the location of the extension node.
   thread_root = InsertReduceExtension(thread_root);
@@ -569,43 +569,21 @@ size_t ReduceMappingStrategy::GetFinalMappingThreadNumber(isl::schedule_node &no
 }
 
 isl::schedule_node ReduceMappingStrategy::InsertReduceExtension(const isl::schedule_node &node) {
-  isl::schedule_node insert_node = node;
-  isl::schedule_node parent_node = node;
-  isl::schedule_node ancestor_node = node;
-  if (insert_node.has_parent()) {
-    parent_node = parent_node.parent();
-    if (parent_node.has_parent()) {
-      ancestor_node = parent_node.parent();
-    }
-  }
-
-  std::string reduce_marker_name = "";
-  if (!GetMarkerName(parent_node, REDUCE_MARKER).empty()) {
-    reduce_marker_name = GetMarkerName(parent_node, REDUCE_MARKER);
-    insert_node = parent_node.child(0);
-  }
-
-  if (!GetMarkerName(ancestor_node, REDUCE_MARKER).empty()) {
-    reduce_marker_name = GetMarkerName(ancestor_node, REDUCE_MARKER);
-    insert_node = ancestor_node.child(0);
-  }
-
+  std::string reduce_marker_name = GetMarkerName(node, REDUCE_MARKER);
   if (reduce_marker_name.empty()) {
     return node;
   }
 
+  auto insert_node = node.child(0);
   reduce_marker_name.erase(0, strlen(REDUCE_MARKER));
   isl::id sync_id = isl::id(insert_node.ctx(), REDUCE_UPDATE + reduce_marker_name);
   isl::id reduction_id = isl::id(insert_node.ctx(), REDUCE_INIT + reduce_marker_name);
 
   insert_node = InsertExtensionNodeBeforeOrAfter(insert_node, reduction_id, true);
-  insert_node = InsertExtensionNodeBeforeOrAfter(insert_node, sync_id, false).parent();
-  insert_node = insert_node.parent().insert_mark(REDUCE_AREA_FLAG);
-
-  auto tmp_node = insert_node.parent().parent();
-  if (!GetMarkerName(tmp_node, REDUCE_MARKER).empty()) {
-    insert_node = tmp_node.del();
-  }
+  insert_node = InsertExtensionNodeBeforeOrAfter(insert_node, sync_id, false);
+  insert_node = insert_node.parent().parent();
+  insert_node = insert_node.insert_mark(REDUCE_AREA_FLAG);
+  insert_node = insert_node.parent().parent().del();
 
   return insert_node;
 }

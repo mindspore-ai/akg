@@ -136,10 +136,11 @@ isl::schedule_node AdjustAxisPosition(const isl::schedule_node &orig_node, const
 
 isl::schedule_node InsertEmptyPermutableBand(const isl::schedule_node &orig_node);
 
-isl::schedule_node CheckMapSizeAndApplyTile(const isl::schedule_node &mapping_root,
-                                            const isl::union_pw_aff_list &aff_list,
-                                            MappingStrategyAxisMap &required_mapping_strategy, MappingCfg *mapping_cfg,
-                                            const std::vector<int> &additional_tile_size = {});
+int GetVectorizationTileSize(ScopInfo &scop_info);
+
+isl::multi_val CheckAndGetMapSize(const isl::schedule_node &mapping_root, const isl::union_pw_aff_list &aff_list,
+                                  MappingStrategyAxisMap &required_mapping_strategy, MappingCfg *mapping_cfg,
+                                  const std::vector<int> &additional_tile_size = {});
 isl::multi_union_pw_aff GetMappingPartialSchedule(const isl::schedule_node_band &node, const bool is_promotion = false);
 isl::schedule_node GetMarkerNode(const isl::schedule_node &orig_node, const std::string &marker_name);
 isl::schedule_node DeleUselessMarker(const isl::schedule_node &orig_node,

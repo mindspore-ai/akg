@@ -64,6 +64,9 @@ class TileOuterBand : public SchedulePass {
   bool SubtreeHasPermutableBands(const isl::schedule_node &node);
   isl::multi_val ComputeBandTilesSizes(const isl::schedule_node &node, const int *tile_size);
   bool BoolNot(bool b) { return !b; }
+  isl::schedule_node IsolateTiles(const isl::schedule_node &original_node, isl::schedule_node tiled_node,
+                                  TileType tile_type, const int *full_tile_min, const int *full_tile_max,
+                                  bool isolation);
 
   // npu related functions
   isl::schedule RunNpu(isl::schedule sch);
@@ -75,9 +78,6 @@ class TileOuterBand : public SchedulePass {
   isl::multi_val MultiValFromIntList(const isl::space &space, int dim, const int *list);
   void TileTypeC0(isl::schedule_node &node, int *full_tile_min, int *full_tile_max, TileType &tile_type, bool &isolate,
                   isl::multi_val &sizes);
-  isl::schedule_node IsolateTiles(const isl::schedule_node &original_node, isl::schedule_node tiled_node,
-                                  TileType tile_type, const int *full_tile_min, const int *full_tile_max,
-                                  bool isolation);
   std::pair<isl::set, isl::set> ComputeFullTile(const isl::schedule_node &original_node,
                                                 const isl::schedule_node &tiled_node);
   isl::map ComputeTileMap(const isl::schedule_node &original_node, const isl::schedule_node &tiled_node);
@@ -92,23 +92,33 @@ class TileOuterBand : public SchedulePass {
   void ComputeWInfo(int &w_base, bool &head, bool &tail, int &w_head, int &w_tail, int &win_w, int &win_cut_w);
   bool NeedIsolate();
 
+  // cuda and cpu general function
+  std::vector<int> GetFullTileMax(const isl::schedule_node &orig_node, const isl::multi_val &mapped_tile_size);
+  isl::schedule_node IsolateTilesForCudaAndCpu(const isl::schedule_node &orig_node,
+                                               const isl::multi_val &mapped_tile_size);
+
   // cuda related functions
   isl::schedule RunCuda(isl::schedule sch);
   isl::schedule_node MarkOuterPermutableCuda(isl::schedule_node node);
-  isl::schedule_node SetTileSizeAndTile(const isl::schedule_node &node, const std::string &tile_level,
-                                        const int count_coincident = -1);
+
+  isl::schedule_node TileMatmulOperatorForCuda(const isl::schedule_node &node);
+  isl::schedule_node TileElementWiseForCuda(const isl::schedule_node &node);
+
   isl::schedule_node InsertPromoteMarker(const isl::schedule_node node);
   void ResetWarpMappingConfig();
-  isl::schedule_node TileMatmulOperatorForCuda(const isl::schedule_node &node);
   void CheckCustomMapping(const MappingStrategyFilterMap &custom_mapping_map);
   bool IsMatrixCPromoteToShared();
-  isl::schedule_node TileMappingConfig(const isl::schedule_node &orig_node, MappingCfg *mapping_cfg,
-                                       const std::vector<int> &vectorization_tile_size = {});
-  isl::schedule_node TileThreadAndBlockConfig(const isl::schedule_node &orig_node);
+
+  isl::multi_val GetLevelTileSize(const isl::schedule_node &node, const std::string &tile_level,
+                                  const int count_coincident = -1);
+  isl::multi_val GetMappedTileSize(const isl::schedule_node &orig_node, MappingCfg *mapping_cfg,
+                                   const std::vector<int> &vectorization_tile_size = {});
+  isl::schedule_node TileThreadAndBlockConfig(const isl::schedule_node &orig_node, const bool is_block_mapping = false);
 
   // cpu related functions
   isl::schedule RunCpu(isl::schedule sch);
   isl::schedule_node MarkOuterPermutableCpu(isl::schedule_node node);
+  isl::schedule_node IsolateTilesForCpu(const isl::schedule_node &orig_node, const std::string &tile_level = "");
 
   isl::schedule_node TileCsrForCpu(const isl::schedule_node &orig_node);
   isl::schedule_node TileReduceXForCpu(const isl::schedule_node &orig_node);
@@ -118,9 +128,7 @@ class TileOuterBand : public SchedulePass {
   isl::schedule_node TileElementWiseForCpu(const isl::schedule_node &orig_node, const bool is_all_reduce = false);
 
   bool IsContainReduceStatement(const isl::schedule_node &orig_node);
-  isl::multi_val GetVectorizationTileSize(const isl::schedule_node &orig_node);
   isl::schedule_node SplitReduceStatements(const isl::schedule_node &orig_node);
-  isl::schedule_node IsolateTilesCpu(const isl::schedule_node &orig_node, const std::string &tile_level = "");
   isl::schedule_node InsertAllMarker(const isl::schedule_node &orig_node, const bool is_all_reduce);
   isl::schedule_node InsertMarkerForLoop(const isl::schedule_node &orig_node, const std::string &marker_name,
                                          const int insert_pos = 0);
@@ -141,7 +149,6 @@ class TileOuterBand : public SchedulePass {
   int vectorization_axis_pos_{-1};
   int start_pos_{0};
   isl::union_set reduce_statements_;
-  Template template_type_{Template::DEFAULT};
 };
 
 }  // namespace poly

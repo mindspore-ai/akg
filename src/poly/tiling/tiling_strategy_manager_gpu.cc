@@ -26,7 +26,7 @@
 namespace akg {
 namespace ir {
 namespace poly {
-template<typename T>
+template <typename T>
 T SafeDivisor(T x) {
   CHECK(x != 0);
   return std::max<T>(x, 1);
@@ -249,8 +249,8 @@ void GemmStrategy::SetFinalConfig(const Mma &macro_mma, const Mma &mma) {
   analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
 }
 
-const std::pair<int64_t, int64_t> GemmStrategy::GetDivisibleFactorForMN(
-  int64_t shape_m, int64_t shape_n, int64_t total_factor, const Mma &mma) {
+const std::pair<int64_t, int64_t> GemmStrategy::GetDivisibleFactorForMN(int64_t shape_m, int64_t shape_n,
+                                                                        int64_t total_factor, const Mma &mma) {
   auto SwapWarp = [&shape_m, &shape_n, &mma](int64_t w0, int64_t w1) -> std::pair<int64_t, int64_t> {
     int64_t max_w0 = shape_m / SafeDivisor(mma.m);
     int64_t max_w1 = shape_n / SafeDivisor(mma.n);
@@ -281,7 +281,6 @@ const std::pair<int64_t, int64_t> GemmStrategy::GetDivisibleFactorForMN(
   return std::make_pair(1, 1);
 }
 
-
 void ReduceStrategy::AnalyzeReduceConfig(ReduceDirection direction, int band_index) {
   if (!analyzer_->scop_info_.user_config_.EnableStitchFusion()) {
     if (reduce_length_ <= reduce_length_limit_) {
@@ -290,7 +289,7 @@ void ReduceStrategy::AnalyzeReduceConfig(ReduceDirection direction, int band_ind
     }
     if ((direction == ReduceDirection::Y && reduce_length_ <= reduce_length_limit_) ||
         ((direction == ReduceDirection::X || direction == ReduceDirection::ALL) &&
-          reduce_length_ < reduce_length_limit_)) {
+         reduce_length_ < reduce_length_limit_)) {
       analyzer_->scop_info_.analysis_result_.SetUseGpuReduceLib(false);
       analyzer_->GetTileLogger().AppendLine(GPU_MAPPING, "Small Reduction (Y<=32, X<32), disable akg reduce lib.");
     }
@@ -331,36 +330,35 @@ void ReduceStrategy::AddGpuConstraint() {
     };
     reduce_length_ = 1;
     nonreduce_length_ = 1;
-    analyzer_->ForEachAxisTopDown(
-      [this, &depth, &band_index, &HasTranspose](TileAxis *axis) {
-        if (axis->index != band_index && axis != analyzer_->RootAxis()) {
-          return;
-        }
-        if (!has_transpose_) {
-          has_transpose_ = std::any_of(axis->attrs.begin(), axis->attrs.end(), HasTranspose);
-        }
+    analyzer_->ForEachAxisTopDown([this, &depth, &band_index, &HasTranspose](TileAxis *axis) {
+      if (axis->index != band_index && axis != analyzer_->RootAxis()) {
+        return;
+      }
+      if (!has_transpose_) {
+        has_transpose_ = std::any_of(axis->attrs.begin(), axis->attrs.end(), HasTranspose);
+      }
 
-        if (axis == analyzer_->RootAxis() || axis->is_inner) {
-          return;
-        }
-        ++depth;
-        if (axis->mc_sup) {
-          (void)injective_axes_.emplace_back(axis);
-          if (auto ext = axis->range_extent.as<IntImm>()) {
-            nonreduce_length_ *= ext->value;
-          }
-          return;
-        }
+      if (axis == analyzer_->RootAxis() || axis->is_inner) {
+        return;
+      }
+      ++depth;
+      if (axis->mc_sup) {
+        (void)injective_axes_.emplace_back(axis);
         if (auto ext = axis->range_extent.as<IntImm>()) {
-          reduce_length_ *= ext->value;
-        } else if (analyzer_->scop_info_.analysis_result_.IsCsrDynamicExtent(axis->range_extent)) {
-          reduce_length_ = analyzer_->scop_info_.user_config_.GetCsrThreadNum();
+          nonreduce_length_ *= ext->value;
         }
-        if (std::count(reduce_axes_.begin(), reduce_axes_.end(), axis)) {
-          return;
-        }
-        (void)reduce_axes_.emplace_back(axis);
-      });
+        return;
+      }
+      if (auto ext = axis->range_extent.as<IntImm>()) {
+        reduce_length_ *= ext->value;
+      } else if (analyzer_->scop_info_.analysis_result_.IsCsrDynamicExtent(axis->range_extent)) {
+        reduce_length_ = analyzer_->scop_info_.user_config_.GetCsrThreadNum();
+      }
+      if (std::count(reduce_axes_.begin(), reduce_axes_.end(), axis)) {
+        return;
+      }
+      (void)reduce_axes_.emplace_back(axis);
+    });
     all_reduce_ = reduce_axes_.size() == depth;
     auto current_outer_bn = analyzer_->scop_info_.analysis_result_.GetOuterBandNode(band_index);
     auto direction = current_outer_bn->reduce_direction;
@@ -389,10 +387,9 @@ void ReduceStrategy::UpdateThreadRange(bool square_thread) {
   if (square_thread) {
     tx_range_.first = AlignToPowerOfTwo(std::min(warp_sizes_, total_injective_size_));
     ty_range_.first = AlignToPowerOfTwo(std::min<int64_t>(min_ty_, total_reduce_size_));
-    tx_range_.second = 
-      AlignToPowerOfTwo(std::min(tx_range_.second, 
-                        static_cast<int64_t>(ceil(
-                        static_cast<float>(tx_range_.second) / SafeDivisor(ty_range_.first)))));
+    tx_range_.second = AlignToPowerOfTwo(
+      std::min(tx_range_.second,
+               static_cast<int64_t>(ceil(static_cast<float>(tx_range_.second) / SafeDivisor(ty_range_.first)))));
     tx_range_.second = AlignToPowerOfTwo(std::min(tx_range_.second, total_injective_size_));
   } else {
     if (analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib()) {
@@ -402,12 +399,12 @@ void ReduceStrategy::UpdateThreadRange(bool square_thread) {
     }
     ty_range_.first = AlignToPowerOfTwo(std::min<int64_t>(min_ty_, total_injective_size_));
     tx_range_.second = AlignToPowerOfTwo(
-      std::min(tx_range_.second, static_cast<int64_t>(ceil(
-      static_cast<float>(tx_range_.second) / SafeDivisor(ty_range_.first)))));
+      std::min(tx_range_.second,
+               static_cast<int64_t>(ceil(static_cast<float>(tx_range_.second) / SafeDivisor(ty_range_.first)))));
     tx_range_.second = AlignToPowerOfTwo(std::min(tx_range_.second, total_reduce_size_));
   }
-  ty_range_.second = std::min(ty_range_.second, static_cast<int64_t>(ceil(
-    static_cast<float>(ty_range_.second) / SafeDivisor(tx_range_.first))));
+  ty_range_.second = std::min(
+    ty_range_.second, static_cast<int64_t>(ceil(static_cast<float>(ty_range_.second) / SafeDivisor(tx_range_.first))));
 }
 
 void ReduceStrategy::UpdateReduceThreads(bool square_thread, int64_t min_blocks, bool use_local) {
@@ -416,7 +413,7 @@ void ReduceStrategy::UpdateReduceThreads(bool square_thread, int64_t min_blocks,
     while (coef < max_coef_) {
       if (total_reduce_size_ % SafeDivisor(ty_range_.first * coef) == 0 ||
           (coef < max_coef_ / binary_factor_ &&
-          total_reduce_size_ % SafeDivisor(ty_range_.first * coef * binary_factor_) != 0)) {
+           total_reduce_size_ % SafeDivisor(ty_range_.first * coef * binary_factor_) != 0)) {
         break;
       }
       coef *= binary_factor_;
@@ -428,7 +425,7 @@ void ReduceStrategy::UpdateReduceThreads(bool square_thread, int64_t min_blocks,
     while (coef < max_coef_) {
       if (total_reduce_size_ % SafeDivisor(tx_range_.second / SafeDivisor(coef)) == 0 ||
           (coef < max_coef_ / binary_factor_ &&
-          total_reduce_size_ % SafeDivisor((tx_range_.second / SafeDivisor(coef)) / binary_factor_) != 0)) {
+           total_reduce_size_ % SafeDivisor((tx_range_.second / SafeDivisor(coef)) / binary_factor_) != 0)) {
         break;
       }
       coef *= binary_factor_;
@@ -452,8 +449,7 @@ void ReduceStrategy::UpdateReduceThreads(bool square_thread, int64_t min_blocks,
         continue;
       }
       CHECK_NE(attr.attr_value, "");
-      auto mod_value = static_cast<int>(
-        std::strtol(attr.attr_value.c_str(), nullptr, decimal_factor_));
+      auto mod_value = static_cast<int>(std::strtol(attr.attr_value.c_str(), nullptr, decimal_factor_));
       axis->TileRestrainMod(CastInt64ToExpr(mod_value), TileLevel::CACHE1);
     }
     if (use_local) {
@@ -504,8 +500,8 @@ void ReduceStrategy::UpdateAxes(int possible_blocks, int default_elem_per_thread
      << " possible_reduce_blocks " << possible_reduce_blocks_ << " default_elem_per_thread " << default_elem_per_thread;
   analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
 
-  ss << "tx:[" << tx_range_.first << ", " << tx_range_.second << "]; ty:["
-     << ty_range_.first << ", " << ty_range_.second << "]";
+  ss << "tx:[" << tx_range_.first << ", " << tx_range_.second << "]; ty:[" << ty_range_.first << ", "
+     << ty_range_.second << "]";
   analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
 
   auto inject_len = injective_axes_.size();
@@ -607,18 +603,20 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu(int band_index) {
   ty_range_ = {1, max_x_y_dim_thread_};
   UpdateThreadRange(square_thread);
 
-  max_coef_ = std::max(ty_range_.second / SafeDivisor(ty_range_.first), 
-                       tx_range_.second / SafeDivisor(tx_range_.first));
+  max_coef_ =
+    std::max(ty_range_.second / SafeDivisor(ty_range_.first), tx_range_.second / SafeDivisor(tx_range_.first));
   UpdateReduceThreads(square_thread, min_blocks, use_local);
 
-  int possible_blocks = static_cast<int>(ceil(static_cast<float>(
-    ((possible_injective_blocks_ * possible_reduce_blocks_) /
-    SafeDivisor(injective_threads_)) / SafeDivisor(reduce_threads_))));
+  int possible_blocks = static_cast<int>(
+    ceil(static_cast<float>(((possible_injective_blocks_ * possible_reduce_blocks_) / SafeDivisor(injective_threads_)) /
+                            SafeDivisor(reduce_threads_))));
   int proposal = use_local ? 8 : warp_sizes_;
-  auto default_elem_per_thread = possible_reduce_blocks_ > 1? 
-    std::max(std::min<int>(proposal,
-    ((possible_blocks / SafeDivisor(min_blocks) + 1) / binary_factor_) * binary_factor_), 1) 
-    :IsHalfReduce() ? double_warp_size_ : static_cast<int>(SpItemPerThread::FULL);
+  auto default_elem_per_thread =
+    possible_reduce_blocks_ > 1
+      ? std::max(
+          std::min<int>(proposal, ((possible_blocks / SafeDivisor(min_blocks) + 1) / binary_factor_) * binary_factor_),
+          1)
+      : IsHalfReduce() ? double_warp_size_ : static_cast<int>(SpItemPerThread::FULL);
   UpdateAxes(possible_blocks, default_elem_per_thread);
 }
 
@@ -662,8 +660,7 @@ const void ReduceStrategy::DealWith4DFusedReduce() {
         continue;
       }
       CHECK_NE(attr.attr_value, "");
-      last_mod_value = static_cast<int>(
-        std::strtol(attr.attr_value.c_str(), nullptr, decimal_factor_));
+      last_mod_value = static_cast<int>(std::strtol(attr.attr_value.c_str(), nullptr, decimal_factor_));
       ++num_mod_axis;
     }
     if (num_mod_axis < 1) {
@@ -728,8 +725,7 @@ void GpuStrategy::ApplyConstraintsToBindingSpace() {
         break;
       }
       CHECK(!val.empty());
-      (void)ret.emplace_back(
-        static_cast<int>(std::strtol(val.c_str(), nullptr, decimal_factor_)));
+      (void)ret.emplace_back(static_cast<int>(std::strtol(val.c_str(), nullptr, decimal_factor_)));
     }
     return ret;
   };
@@ -1149,8 +1145,7 @@ void GpuStrategy::InitMappingLimit() {
   std::vector<std::string> elem_cfg = common::Split(analyzer_->scop_info_.user_config_.GetElemPerThread(), " ");
   for (size_t i = 0; i < max_dim_; ++i) {
     if (i < elem_cfg.size() && !elem_cfg[i].empty()) {
-      elem_per_thread_[i] = static_cast<int64_t>(
-        std::strtol(elem_cfg[i].c_str(), nullptr, decimal_factor_));
+      elem_per_thread_[i] = static_cast<int64_t>(std::strtol(elem_cfg[i].c_str(), nullptr, decimal_factor_));
     }
   }
 }
@@ -1183,14 +1178,14 @@ void GpuStrategy::BuildAxesQueue() {
   });
 }
 
-void GpuStrategy::SkipMapping(
-  TileAxis *axis, int64_t shape, std::stringstream &ss, size_t inner_dim, size_t thread_dim) {
+void GpuStrategy::SkipMapping(TileAxis *axis, int64_t shape, std::stringstream &ss, size_t inner_dim,
+                              size_t thread_dim) {
   axis->thread_constraints.map_extent_ = 1;
   (void)axis->thread_constraints.map_cand_.emplace_back(1);
   auto tile = inner_dim < thread_dim ? elem_per_thread_[inner_dim] : 1;
-  tile = tile == static_cast<int64_t>(SpItemPerThread::AUTO) ?
-    std::min(axis->thread_constraints.item_process_, max_elem_per_thread_)
-    : tile == static_cast<int64_t>(SpItemPerThread::FULL) ? std::min(shape, max_elem_per_thread_) : 1;
+  tile = tile == static_cast<int64_t>(SpItemPerThread::AUTO)
+           ? std::min(axis->thread_constraints.item_process_, max_elem_per_thread_)
+           : tile == static_cast<int64_t>(SpItemPerThread::FULL) ? std::min(shape, max_elem_per_thread_) : 1;
   CHECK(axis->c1_constraints.tile_min_.as<IntImm>() && axis->c1_constraints.tile_extent_.as<IntImm>());
   auto tile_min = axis->c1_constraints.tile_min_.as<IntImm>()->value;
   auto tile_extent = axis->c1_constraints.tile_extent_.as<IntImm>()->value;
@@ -1201,8 +1196,10 @@ void GpuStrategy::SkipMapping(
   } else {
     if (axis->block_constraints.map_extent_ > 1) {
       // block.min <= shape / tile <= block.max
-      tile = std::max(tile, std::max<int64_t>(static_cast<int64_t>(
-        ceil(static_cast<float>(shape) / SafeDivisor(axis->block_constraints.map_extent_))), 1));
+      tile = std::max(
+        tile,
+        std::max<int64_t>(
+          static_cast<int64_t>(ceil(static_cast<float>(shape) / SafeDivisor(axis->block_constraints.map_extent_))), 1));
     } else {
       tile = std::min(tile, shape);
     }
@@ -1215,9 +1212,8 @@ void GpuStrategy::SkipMapping(
   if (axis->mc_sup || analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib()) {
     if (axis->block_constraints.map_extent_ > 1) {
       CHECK(tile);
-      pending_axes_.push_back(
-        std::make_pair(axis, std::max<int64_t>(static_cast<int64_t>(
-        ceil(static_cast<float>(shape) / SafeDivisor(tile))), 1)));
+      pending_axes_.push_back(std::make_pair(
+        axis, std::max<int64_t>(static_cast<int64_t>(ceil(static_cast<float>(shape) / SafeDivisor(tile))), 1)));
       ss << ", map to block.";
     }
   }
@@ -1225,9 +1221,9 @@ void GpuStrategy::SkipMapping(
 }
 
 void GpuStrategy::GreedyMapBlocks(size_t ori_size, size_t block_dim) {
-// If all axes for block mapping are element-wise, we can map them in any order
-// so we need a greedy algorithm to map the most blocks;
-// otherwise, we can simply map from outer to inner in sequence.
+  // If all axes for block mapping are element-wise, we can map them in any order
+  // so we need a greedy algorithm to map the most blocks;
+  // otherwise, we can simply map from outer to inner in sequence.
   std::stringstream ss;
   if (template_ == Template::PURE_ELEM || template_ == Template::EXTERN_CALL) {
     std::map<int64_t, std::vector<size_t>, std::greater<int64_t>> sorted_by_gcd;
@@ -1274,8 +1270,8 @@ void GpuStrategy::MapPendingAxes(size_t ori_size, std::stringstream &ss, size_t 
     TileAxis *axis;
     int64_t shape;
     std::tie(axis, shape) = pending_axes_[i];
-    int64_t rest_threads = std::min(
-      total_available_thread_ / SafeDivisor(activated_threads_), thread_limit_[thread_cfg_.size()]);
+    int64_t rest_threads =
+      std::min(total_available_thread_ / SafeDivisor(activated_threads_), thread_limit_[thread_cfg_.size()]);
     ss << "axis " << axis->index << "_" << axis->dim_axis << " shape = " << shape
        << ", rest_threads = " << rest_threads;
     ss << "\n--------> Tile: " << axis->c1_constraints.tile_min_ << "," << axis->c1_constraints.tile_extent_;
@@ -1311,8 +1307,9 @@ void GpuStrategy::MapPendingAxes(size_t ori_size, std::stringstream &ss, size_t 
       continue;
     }
 
-    auto item = elem_per_thread_[inner_dim] == static_cast<int64_t>(SpItemPerThread::AUTO)?
-      axis->thread_constraints.item_process_  : elem_per_thread_[inner_dim];
+    auto item = elem_per_thread_[inner_dim] == static_cast<int64_t>(SpItemPerThread::AUTO)
+                  ? axis->thread_constraints.item_process_
+                  : elem_per_thread_[inner_dim];
     item = std::min(item, max_elem_per_thread_);
     int64_t use;
     if (analyzer_->scop_info_.analysis_result_.IsCsrDynamicExtent(axis->range_extent)) {
@@ -1346,9 +1343,8 @@ void GpuStrategy::MapPendingAxes(size_t ori_size, std::stringstream &ss, size_t 
     axis->thread_constraints.map_extent_ = use;
     auto tile = TileAfterThreadMapping(axis, inner_dim, use, item);
     CHECK(tile);
-    pending_axes_.push_back(
-      std::make_pair(axis, std::max<int64_t>(static_cast<int64_t>(ceil(
-        static_cast<float>(shape) / SafeDivisor(tile))), 1)));
+    pending_axes_.push_back(std::make_pair(
+      axis, std::max<int64_t>(static_cast<int64_t>(ceil(static_cast<float>(shape) / SafeDivisor(tile))), 1)));
     analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
     ++inner_dim;
   }
@@ -1435,8 +1431,7 @@ void GpuStrategy::InnerThreadOuterBlock(bool write_cfg) {
 
     auto extent = axis->extent_val;
     auto thread_size = axis->thread_constraints.map_extent_;
-    auto upper = std::max<int64_t>(static_cast<int64_t>(
-      ceil(static_cast<float>(extent) / SafeDivisor(use))), 1);
+    auto upper = std::max<int64_t>(static_cast<int64_t>(ceil(static_cast<float>(extent) / SafeDivisor(use))), 1);
     CHECK(axis->c1_constraints.tile_min_.as<IntImm>());
     bool partial_block_and_thread = (axis->c1_constraints.tile_min_.as<IntImm>()->value > upper) && (use > thread_size);
     if (partial_block_and_thread) {
@@ -1453,8 +1448,9 @@ const int64_t GpuStrategy::GetThreadSize(const int64_t rest_threads, size_t inne
                                          const int64_t item) {
   // Current experience is that let mapped threads divisible by warp_size to increase performance.
   CHECK(item);
-  int64_t thread_extent = item == SpItemPerThread::FULL ?
-    rest_threads : static_cast<int64_t>(ceil(static_cast<float>(shape) / SafeDivisor(item)));
+  int64_t thread_extent = item == SpItemPerThread::FULL
+                            ? rest_threads
+                            : static_cast<int64_t>(ceil(static_cast<float>(shape) / SafeDivisor(item)));
   thread_extent = std::min(thread_extent, shape);
   if (thread_extent > rest_threads || template_ == Template::CUSTOM_CONFIG) {
     return rest_threads;
@@ -1463,8 +1459,8 @@ const int64_t GpuStrategy::GetThreadSize(const int64_t rest_threads, size_t inne
   return std::min(rest_threads, proposal);
 }
 
-int64_t GpuStrategy::ApplyCustomTile(
-  TileAxis *axis, size_t inner_dim, int64_t thread_size, int64_t tile, int64_t shape) {
+int64_t GpuStrategy::ApplyCustomTile(TileAxis *axis, size_t inner_dim, int64_t thread_size, int64_t tile,
+                                     int64_t shape) {
   std::stringstream ss;
   if (template_ == Template::CUSTOM_CONFIG) {
     if (!analyzer_->scop_info_.user_config_.GetEnableAtomicAdd() &&
@@ -1475,8 +1471,8 @@ int64_t GpuStrategy::ApplyCustomTile(
       tile = thread_size;
       ss << "tile = thread size, ";
     } else {
-      int64_t block_dim = reverse_binding_ ?
-        static_cast<int64_t>((block_limit_.size() - 1) - inner_dim) : static_cast<int64_t>(inner_dim);
+      int64_t block_dim = reverse_binding_ ? static_cast<int64_t>((block_limit_.size() - 1) - inner_dim)
+                                           : static_cast<int64_t>(inner_dim);
       int64_t least_blocks;
       if (block_dim >= 0 && block_dim < static_cast<int64_t>(block_limit_.size())) {
         least_blocks = block_limit_[block_dim];
@@ -1501,8 +1497,7 @@ int64_t GpuStrategy::ApplyCustomTile(
 int64_t GpuStrategy::TileAfterThreadMapping(TileAxis *axis, size_t inner_dim, int64_t thread_size, const int64_t item) {
   std::stringstream ss;
   auto shape = axis->extent_val;
-  CHECK(axis->c1_constraints.tile_min_.as<IntImm>() &&
-        axis->c1_constraints.tile_mod_.as<IntImm>() &&
+  CHECK(axis->c1_constraints.tile_min_.as<IntImm>() && axis->c1_constraints.tile_mod_.as<IntImm>() &&
         axis->c1_constraints.tile_extent_.as<IntImm>());
   auto tile_min = axis->c1_constraints.tile_min_.as<IntImm>()->value;
   auto tile_mod = axis->c1_constraints.tile_mod_.as<IntImm>()->value;
@@ -1513,9 +1508,9 @@ int64_t GpuStrategy::TileAfterThreadMapping(TileAxis *axis, size_t inner_dim, in
     return tile_extent;
   }
 
-  auto tile = item == static_cast<int64_t>(SpItemPerThread::FULL) ?
-    std::min(tile_extent, thread_size * max_elem_per_thread_)
-    : std::min(tile_extent, thread_size * item);
+  auto tile = item == static_cast<int64_t>(SpItemPerThread::FULL)
+                ? std::min(tile_extent, thread_size * max_elem_per_thread_)
+                : std::min(tile_extent, thread_size * item);
   tile = std::max<int64_t>(tile, tile_min);
   if (analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib()) {
     if (tile < tile_mod) {
@@ -1577,8 +1572,7 @@ void GpuStrategy::AdjustThreadMappingLimit() {
       if (j == i) {
         continue;
       }
-      int64_t res = static_cast<int64_t>(floor(
-        static_cast<float>(thread_limit_[j]) / SafeDivisor(map_mins[i])));
+      int64_t res = static_cast<int64_t>(floor(static_cast<float>(thread_limit_[j]) / SafeDivisor(map_mins[i])));
       thread_limit_[j] = res;
     }
   }
@@ -1593,8 +1587,8 @@ void GpuStrategy::WriteConfigBackInjective() {
   std::stringstream ss;
   for (size_t i = 0; i < injective_axes_.size(); ++i) {
     ss << "replace block " << block_cfg_[i] << " with " << injective_axes_[i]->block_constraints.map_extent_
-        << " replace thread " << thread_cfg_[(injective_axes_.size() - 1) - i] << " with "
-        << injective_axes_[i]->thread_constraints.map_extent_;
+       << " replace thread " << thread_cfg_[(injective_axes_.size() - 1) - i] << " with "
+       << injective_axes_[i]->thread_constraints.map_extent_;
     analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
     block_cfg_[i] = injective_axes_[i]->block_constraints.map_extent_;
     injective_axes_[i]->block_constraints.map_cand_.clear();
@@ -1648,7 +1642,7 @@ int64_t GpuStrategy::AlignThreadToShape() {
       --lower;
     }
     bool is_efficient = lower * binary_factor_ > thread_size ||
-      ((total_threads / SafeDivisor(thread_size)) * lower) * binary_factor_ >= max_x_y_dim_thread_;
+                        ((total_threads / SafeDivisor(thread_size)) * lower) * binary_factor_ >= max_x_y_dim_thread_;
     if (is_efficient) {
       ss << "align thread from " << thread_size << " to " << lower << " according to shape " << shape;
       analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
@@ -1659,8 +1653,8 @@ int64_t GpuStrategy::AlignThreadToShape() {
       tile_size = std::min(shape, thread_loop * lower);
       axis->TileRestrainToSingleValue(tile_size, TileLevel::CACHE1);
       CHECK(tile_size);
-      axis->block_constraints.map_extent_ = static_cast<int64_t>(ceil(
-        static_cast<float>(shape) / SafeDivisor(tile_size)));
+      axis->block_constraints.map_extent_ =
+        static_cast<int64_t>(ceil(static_cast<float>(shape) / SafeDivisor(tile_size)));
     }
   }
   analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
@@ -1695,12 +1689,12 @@ void GpuStrategy::InjectiveSpeedup() {
   auto parallel_size = GetProposalParallelSize(problem_size);
   auto proposal_blocks = parallel_size.first;
   auto proposal_threads = parallel_size.second;
-  auto proposal_elem_per_thread =
+  auto proposal_elem_per_thread = 
     coaleasced_size < warp_sizes_ ? 1 : total_blocks < proposal_blocks * 8 ? min_elem_for_io_bound_ : 8;
 
   CHECK(proposal_threads != 0 && total_blocks != 0);
-  auto shrinked_threads = std::min<int64_t>(
-    total_threads / SafeDivisor(proposal_threads), proposal_blocks / SafeDivisor(total_blocks));
+  auto shrinked_threads =
+    std::min<int64_t>(total_threads / SafeDivisor(proposal_threads), proposal_blocks / SafeDivisor(total_blocks));
   auto shrinked_blocks = total_blocks / SafeDivisor(proposal_blocks);
 
   auto thread_to_block = shrinked_threads > 0 && total_blocks < proposal_blocks;
@@ -1743,9 +1737,8 @@ void GpuStrategy::InjectiveSpeedup() {
       CHECK(axis->c1_constraints.tile_extent_.as<IntImm>());
       auto tile_size = axis->c1_constraints.tile_extent_.as<IntImm>()->value;
       auto before_shrink = block_to_elem ? axis->block_constraints.map_extent_ : axis->thread_constraints.map_extent_;
-      auto coef = 
-        std::min<int64_t>(proposal_elem_per_thread, 
-                          TilingAnalyzer::FindDivisibleTilingFactor(shrink_limit, before_shrink));
+      auto coef = std::min<int64_t>(proposal_elem_per_thread,
+                                    TilingAnalyzer::FindDivisibleTilingFactor(shrink_limit, before_shrink));
       CHECK(coef);
       int64_t aligned_coef = coef;
       while (shrink_limit % SafeDivisor(aligned_coef) != 0) {
@@ -1811,17 +1804,15 @@ void GpuStrategy::PadSpeedup() {
     problem_size *= axis->extent_val;
     (void)axes.emplace_back(axis);
   });
-  auto coef = std::max<int64_t>(1, static_cast<int64_t>(
-    (problem_size / warp_sizes_) / SafeDivisor(num_sm_ * 5)));
+  auto coef = std::max<int64_t>(1, static_cast<int64_t>((problem_size / warp_sizes_) / SafeDivisor(num_sm_ * 5)));
   ss << "Total reduce coef = " << coef;
   analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
   for (size_t i = axes.size() - 1; i > 0; --i) {
     auto axis = axes[i];
     axis->thread_constraints.item_process_ =
       std::max<int64_t>(min_elem_for_io_bound_, TilingAnalyzer::FindDivisibleTilingFactor(coef, axis->extent_val));
-      CHECK(axis->thread_constraints.item_process_ != 0);
-    coef = std::max<int64_t>(
-      1, coef / SafeDivisor(axis->thread_constraints.item_process_));
+    CHECK(axis->thread_constraints.item_process_ != 0);
+    coef = std::max<int64_t>(1, coef / SafeDivisor(axis->thread_constraints.item_process_));
     ss << "axis " << axis->index << "_" << axis->dim_axis
        << " set for-loop size = " << axis->thread_constraints.item_process_ << ", update coef = " << coef;
     analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
@@ -1877,8 +1868,7 @@ void GpuStrategy::AnalyzeBroadcastIdx() {
       auto info = common::Split(type, "|");
       if (info.size() == 2U) {
         CHECK(!info[1].empty());
-        (void)broadcast_idx_.insert(
-          static_cast<int>(std::strtol(info[1].c_str(), nullptr, decimal_factor_)));
+        (void)broadcast_idx_.insert(static_cast<int>(std::strtol(info[1].c_str(), nullptr, decimal_factor_)));
       }
     }
   }
@@ -1903,7 +1893,7 @@ void GpuStrategy::GpuScalarBroadcastStrategy() {
 }
 
 void GpuStrategy::MapBroadcastElem(TileAxis *axis, std::vector<int> original_shape) {
-// Mapping strategy specialized for broadcast + elementwise case
+  // Mapping strategy specialized for broadcast + elementwise case
   auto broadcast_innermost = broadcast_idx_.find(original_shape.size() - 1) != broadcast_idx_.end();
   for (size_t i = 0; i < original_shape.size(); ++i) {
     if (original_shape[i] * possible_threads_ <= max_x_y_dim_thread_) {
@@ -1943,8 +1933,7 @@ void GpuStrategy::GpuVectorBroadcastStrategy() {
     std::vector<int> mod_values;
     for (const auto &attr : it.second) {
       CHECK(!attr.attr_value.empty());
-      (void)mod_values.emplace_back(
-        static_cast<int>(std::strtol(attr.attr_value.c_str(), nullptr, decimal_factor_)));
+      (void)mod_values.emplace_back(static_cast<int>(std::strtol(attr.attr_value.c_str(), nullptr, decimal_factor_)));
     }
     std::sort(mod_values.begin(), mod_values.end());
 
@@ -1970,18 +1959,19 @@ void GpuStrategy::GpuVectorBroadcastStrategy() {
     int min_block = coalesced_size_ < warp_sizes_ ? 1024 : 512;
     if (coalesced_size_ >= warp_sizes_) {
       int elem_per_thread = 8;
-      axis->thread_constraints.item_process_ = std::min(elem_per_thread, std::max<int>(
-        (((fused_size_ / SafeDivisor(possible_threads_)) /
-        SafeDivisor(min_block) + 1) / binary_factor_) * binary_factor_, 1));
+      axis->thread_constraints.item_process_ = std::min(
+        elem_per_thread,
+        std::max<int>((((fused_size_ / SafeDivisor(possible_threads_)) / SafeDivisor(min_block) + 1) / binary_factor_) *
+                        binary_factor_,
+                      1));
       ss << "thread for-loop speedup = " << axis->thread_constraints.item_process_;
     } else if (total_injective_size_ > min_block) {
       while (possible_threads_ % warp_sizes_ != 0 && possible_threads_ < max_x_y_dim_thread_) {
         ++possible_threads_;
       }
-      int elem_per_block = std::max<int>(
-        16 / SafeDivisor(max_x_y_dim_thread_ / SafeDivisor(possible_threads_)), 1);
-      auto proposal_blocks = std::max(min_block, std::max<int>(
-        (fused_size_ / SafeDivisor(possible_threads_)) / SafeDivisor(elem_per_block), 1));
+      int elem_per_block = std::max<int>(16 / SafeDivisor(max_x_y_dim_thread_ / SafeDivisor(possible_threads_)), 1);
+      auto proposal_blocks = std::max(
+        min_block, std::max<int>((fused_size_ / SafeDivisor(possible_threads_)) / SafeDivisor(elem_per_block), 1));
       axis->block_constraints.map_extent_ = proposal_blocks;
       axis->thread_constraints.map_extent_ = possible_threads_;
       ss << "block for-loop speedup = " << elem_per_block;
@@ -2080,8 +2070,8 @@ void ConvStrategy::AddGpuConstraint() {
     return;
   }
 
-  MmaConv middle_band = {shape->m / SafeDivisor(mma.m), shape->h, shape->w,
-                         shape->n / SafeDivisor(mma.n), shape->k / SafeDivisor(mma.k)};
+  MmaConv middle_band = {shape->m / SafeDivisor(mma.m), shape->h, shape->w, shape->n / SafeDivisor(mma.n),
+                         shape->k / SafeDivisor(mma.k)};
   std::stringstream ss;
   ss << "[Conv] M = " << shape->m << " H = " << shape->h << " W = " << shape->w << " N = " << shape->n
      << " K = " << shape->k << ", middle band = [" << middle_band.m << ", " << middle_band.h << ", " << middle_band.w
@@ -2108,8 +2098,7 @@ std::pair<int64_t, int64_t> ConvStrategy::CalculateNumOfWarps(const Mma &mma) {
   int w0 = 1;
   int w1 = 1;
   // H and W do not participate in the calculation of the warp level
-  int use_local_group = static_cast<int>(
-    (macro_mma_.m / SafeDivisor(mma.m)) * (macro_mma_.n / SafeDivisor(mma.n)));
+  int use_local_group = static_cast<int>((macro_mma_.m / SafeDivisor(mma.m)) * (macro_mma_.n / SafeDivisor(mma.n)));
   CHECK_GE(use_local_group, 1);
   if (use_local_group >= use_local_group_high_) {
     default_num_warps_ = num_warps_mid_;
@@ -2205,9 +2194,9 @@ void ConvStrategy::CalculateMacroMma(const MmaConv &shape, const Mma &mma) {
   }
 
   while ((shape.m / SafeDivisor(macro_mma_.m)) * (shape.h / SafeDivisor(macro_mma_.h)) *
-         (shape.w / SafeDivisor(macro_mma_.w)) * (shape.n / SafeDivisor(macro_mma_.n)) <
-         (min_blocks_ - warp_sizes_) && (macro_mma_.m / SafeDivisor(macro_mma_.n)) *
-         macro_mma_.h * macro_mma_.w > tensor_core_per_warp_) {
+             (shape.w / SafeDivisor(macro_mma_.w)) * (shape.n / SafeDivisor(macro_mma_.n)) <
+           (min_blocks_ - warp_sizes_) &&
+         (macro_mma_.m / SafeDivisor(macro_mma_.n)) * macro_mma_.h * macro_mma_.w > tensor_core_per_warp_) {
     // decrease h and increase the use of block
     if (macro_mma_.h % binary_factor_ == 0) {
       macro_mma_.h /= binary_factor_;
@@ -2226,7 +2215,7 @@ void ConvStrategy::CalculateMacroMma(const MmaConv &shape, const Mma &mma) {
   }
 
   real_blocks_ = (shape.m / SafeDivisor(macro_mma_.m)) * (shape.h / SafeDivisor(macro_mma_.h)) *
-    (shape.w / SafeDivisor(macro_mma_.w)) * (shape.n / SafeDivisor(macro_mma_.n));
+                 (shape.w / SafeDivisor(macro_mma_.w)) * (shape.n / SafeDivisor(macro_mma_.n));
   if ((real_blocks_ > (min_blocks_ - warp_sizes_)) && (shape.k % SafeDivisor(macro_mma_.k * binary_factor_) == 0)) {
     macro_mma_.k *= binary_factor_;
   }
@@ -2268,8 +2257,8 @@ void ConvStrategy::SetFinalConfig(const MmaConv &macro_mma, const Mma &mma) {
   analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
 }
 
-const std::pair<int64_t, int64_t> ConvStrategy::GetDivisibleFactorForMN(
-  int64_t shape_m, int64_t shape_n, int64_t total_factor, const Mma &mma) {
+const std::pair<int64_t, int64_t> ConvStrategy::GetDivisibleFactorForMN(int64_t shape_m, int64_t shape_n,
+                                                                        int64_t total_factor, const Mma &mma) {
   auto SwapWarp = [&shape_m, &shape_n, &mma](int64_t w0, int64_t w1) -> std::pair<int64_t, int64_t> {
     int64_t max_w0 = shape_m / SafeDivisor(mma.m);
     int64_t max_w1 = shape_n / SafeDivisor(mma.n);
