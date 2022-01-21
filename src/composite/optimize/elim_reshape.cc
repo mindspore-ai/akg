@@ -121,6 +121,9 @@ void ElimReshapeAnalysis::AnalysisForward() {
 void ElimReshapeAnalysis::AnalysisBackkward() {
   for (const auto &output : g_.output_funcs) {
     AnalysisInner(output);
+    if (opt_.sames.count(output)) {
+      AnalysisInner(opt_.sames[output]);
+    }
   }
 }
 void ElimReshapeAnalysis::AnalysisTransform(const FunctionRef &output) {
