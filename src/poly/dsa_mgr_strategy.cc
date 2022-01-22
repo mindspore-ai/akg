@@ -83,7 +83,8 @@ void DsaMgrStrategy::RegisterPasses() {
   if (scop_info_.user_config_.GetPragmaSetAllCoincident()) {
     RegisterPass(std::make_shared<SetAllCoincidence>());
   }
-  if (!scop_info_.user_config_.GetIsDynamic() || !scop_info_.mmu_info_.IsConv()) {
+  if (scop_info_.user_config_.GetEnableReschedule() &&
+      (!scop_info_.user_config_.GetIsDynamic() || !scop_info_.mmu_info_.IsConv())) {
     RegisterPass(std::make_shared<Reschedule>(scop_info_, pass_info_));
   }
   RegisterPass(std::make_shared<ReorderInnerBand>(scop_info_.analysis_result_.GetCondVarsMap()));

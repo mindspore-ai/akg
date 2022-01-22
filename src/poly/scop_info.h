@@ -272,6 +272,7 @@ class UserConfig {
     ParseBoolAttr(attrs, "pragma_disable_group", &disable_group_);
     ParseBoolAttr(attrs, "pragma_tile_inner_band", &tile_inner_band_);
     ParseBoolAttr(attrs, "pragma_set_all_coincident", &pragma_set_all_coincident_);
+    ParseBoolAttr(attrs, "pragma_enable_reschedule", &enable_reschedule_);
 
     ParseBoolAttr(attrs, "pragma_opt_for_dsa", &optimize_for_dsa_);
     ParseBoolAttr(attrs, "enable_feature_library", &enable_feature_library_);
@@ -419,6 +420,8 @@ class UserConfig {
   bool GetPragmaSetAllCoincident() const { return pragma_set_all_coincident_; }
   bool GetConsiderCoincidence() const { return consider_conincidence_; }
   void SetConsiderCoincidence(bool consider_conincidence) { consider_conincidence_ = consider_conincidence; }
+  bool GetEnableReschedule() const { return enable_reschedule_; }
+  void SetEnableReschedule(bool enable_reschedule) { enable_reschedule_ = enable_reschedule; }
   void SetIsTuning(bool is_tuning) { is_tuning_ = is_tuning; }
   bool GetIsTuning() { return is_tuning_; }
 
@@ -650,7 +653,8 @@ class UserConfig {
         return;
       }
       int type_num = std::stoi(str_cfg.substr(support_type.size()));
-      if (type_num < 1 || type_num > 4) {
+      const int max_vec_length = 4;
+      if (type_num < 1 || type_num > max_vec_length) {
         return;
       }
       *attr_to_set = type_num * (Float(32).bits());
@@ -770,6 +774,7 @@ class UserConfig {
   bool tile_inner_band_{false};
   bool pragma_set_all_coincident_{false};
   bool consider_conincidence_{true};
+  bool enable_reschedule_{true};
   bool is_tuning_{false};
 
   // specialized optimization
