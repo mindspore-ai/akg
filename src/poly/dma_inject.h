@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,6 +27,7 @@ namespace ir {
 namespace poly {
 enum class ReferenceType : int16_t { Read, Write };
 constexpr auto SYNC_NUMBER_BEFORE_GMWRITE = 3;
+constexpr auto INNER_OUTER_FOOTPRINT_SIZE = 2;
 
 struct ScopedFootprint {
   size_t GetBoxDim() const { return box.get_size().size(); }
@@ -214,6 +215,11 @@ isl::schedule_node PlaceIm2colBelow(ScopInfo &scop_info, const isl::schedule_nod
                                     const TensorFootprintCluster &cluster,
                                     const TensorFootprintCluster &outer_scope_cluster, const isl::id &cluster_id,
                                     const isl::id &outer_scope_cluster_id);
+
+isl::schedule_node PlaceGemmTranspose(ScopInfo &scop_info, const isl::schedule_node &tree,
+                                      const TensorFootprintCluster &cluster,
+                                      const TensorFootprintCluster &outer_scope_cluster, const isl::id &cluster_id,
+                                      const isl::id &outer_scope_cluster_id);
 
 enum AffineTensor { LEFT_TENSOR = 0, RIGHT_TENSOR, OUT_TENSOR };
 

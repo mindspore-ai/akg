@@ -44,7 +44,8 @@ class MemoryManager : public SchedulePass {
   void SetFindBuffer(const isl::id &tensor_id, bool find_buffer);
 
   void AddStateTensorsDataFlow();
-  void AddTensorDataFlow(const std::vector<MemType> &mem_flow, const std::vector<std::string> &name_flow, std::string mark_tag_specific = "");
+  void AddTensorDataFlow(const std::vector<MemType> &mem_flow, const std::vector<std::string> &name_flow,
+                         std::string mark_tag_specific = "");
 
   // record buffer footprint
   void AddOneBufferDefInfo(const isl::id &ancestorId, const std::vector<std::pair<isl::id, MemType>> &data_stream);
