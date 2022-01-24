@@ -522,7 +522,7 @@ class MulticoreStrategy {
  public:
   MulticoreStrategy(TileCandidate &cand, TileLogger &logger) : cand_(cand), logger_(logger) {}
   ~MulticoreStrategy() {}
-  int64_t AdjustTilingAccordingToMulticoreConstraint(TileAxis *axis, int64_t tiling_factor);
+  int64_t AdjustTilingAccordingToMulticoreConstraint(TileAxis *multicore_axis, int64_t tiling_factor);
 
  private:
   TileCandidate &cand_;

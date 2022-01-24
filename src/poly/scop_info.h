@@ -1417,6 +1417,8 @@ class ScopInfo {
   void AddPartitionInfoToData(const std::vector<std::vector<int>> &partition_info);
   std::string GetIslReadName(const isl::id &cluster_id);
   std::string GetIslWriteName(const isl::id &cluster_id);
+  std::set<std::string> GetInitPromotedTensor();
+  std::set<std::string> GetTempPromotedTensor();
   static bool IsRead(const isl::id &id) { return IsEndsWith(id.get_name(), kReadSuffix); }
   static bool IsWrite(const isl::id &id) { return IsEndsWith(id.get_name(), kWriteSuffix); }
   static bool IsGMLWrite(const isl::id &id) { return id.get_name() == std::string("GMLwrite"); }

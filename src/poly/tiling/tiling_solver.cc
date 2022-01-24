@@ -133,6 +133,77 @@ void TilingSolver::CollectTileAxisTopDown() {
   this->cand_.SortByPriority();
 }
 
+int GpuSolver::CalculateBoxSize(const std::string &name) {
+  auto tile_axes = cand_.GetTileAxis();
+  auto tensor_shape = analyzer_.scop_info_.GetShapeOf(name);
+  int box_size = 1;
+  if (tensor_shape.size() < 1) {
+    LOG(WARNING) << "Middle Tensor is a scalar";
+    return -1;
+  }
+  if (tile_axes.size() < 1) {
+    LOG(WARNING) << "No axis to tile";
+    return -1;
+  }
+  if (tile_axes[OUTERMOST_AXIS]->extent_val != tensor_shape[OUTERMOST_AXIS]) {
+    LOG(WARNING) << "Tensor is not mapped to the outermost axis";
+    return -1;
+  }
+  auto buf_info = analyzer_.buf_info_[name];
+  CHECK(buf_info);
+  auto mapped_axis = *(buf_info->tile_axis);
+  for (auto axis : mapped_axis) {
+    auto axis_size = axis->c1_constraints.tile_extent_.as<IntImm>()->value;
+    box_size *= axis_size;
+  }
+  return box_size;
+}
+
+void GpuSolver::TotSpeedup() {
+  auto tile_axes = cand_.GetTileAxis();
+  auto middle_tensors = analyzer_.scop_info_.GetTempPromotedTensor();
+  if (middle_tensors.size() <= 0 || !analyzer_.scop_info_.analysis_result_.GetTensorOfTensor() ||
+      analyzer_.scop_info_.analysis_result_.GetIsGpuDmaAnalysed())
+    return;
+  auto shared_memory_limit = mem_limit_[MEM_SCOPE_SHARED];
+  analyzer_.GetTileLogger().AppendLine(GPU_MAPPING, "Tensor of Tensor Speedup");
+  std::stringstream ss;
+  unsigned int total_middle_tensor_size = 0;
+  for (auto name : middle_tensors) {
+    auto box_size = CalculateBoxSize(name);
+    if (box_size == -1) return;
+    total_middle_tensor_size += (box_size * analyzer_.scop_info_.user_config_.GetDataBytes(name));
+  }
+  // If all middle tensor can be stored in shared memory, no need to adjust tiling.
+  if (total_middle_tensor_size < shared_memory_limit) return;
+  // If all middle tensor cannot be stored in shared memory even if each block only
+  // handles one data point, no need to adjust tiling.
+  auto outermost_tile = tile_axes[OUTERMOST_AXIS]->c1_constraints.tile_extent_.as<IntImm>()->value;
+  CHECK_GT(outermost_tile, 0);
+  if (shared_memory_limit < total_middle_tensor_size / outermost_tile) return;
+  ss << "total middle tensor size: " << total_middle_tensor_size
+     << ", exceeds shared_memory_limit: " << shared_memory_limit;
+  
+  auto current_elem_num = 1;
+  for (unsigned int i = 0; i < tile_axes.size(); ++i) {
+    if (i != OUTERMOST_AXIS) {
+      auto extent_ptr = tile_axes[i]->c1_constraints.tile_extent_.as<IntImm>();
+      CHECK(extent_ptr);
+      CHECK_GT(extent_ptr->value, 0);
+      current_elem_num *= extent_ptr->value;
+    }
+  }
+  outermost_tile = std::max(1, TOT_BEST_NUM_PER_BLOCK / current_elem_num);
+  auto axis_range = tile_axes[OUTERMOST_AXIS]->extent_val;
+  auto use = axis_range / outermost_tile;
+  use = axis_range % outermost_tile == 0 ? use : use + 1;
+  tile_axes[OUTERMOST_AXIS]->c1_constraints.tile_extent_ = Expr(outermost_tile);
+  tile_axes[OUTERMOST_AXIS]->block_constraints.map_cand_.clear();
+  tile_axes[OUTERMOST_AXIS]->block_constraints.map_cand_.emplace_back(use);
+  ss << " Adjust block usage on axis 0 to: " << use << " to satisfy shared memory limit.";
+  analyzer_.GetTileLogger().AppendLog(GPU_MAPPING, ss);
+}
+
 TileCandidate *GpuSolver::Solve() {
   CollectMemoryLimit();
   for (auto sorted_idx : analyzer_.GetSortedBands()) {
@@ -140,6 +211,7 @@ TileCandidate *GpuSolver::Solve() {
 
     CollectTileAxisTopDown();
     auto tile_axes = cand_.GetTileAxis();
+    TotSpeedup();
     for (auto i = static_cast<int>(tile_axes.size()) - 1; i >= 0; --i) {
       TileAxis *axis = tile_axes[i];
       DetermineTileFactor(axis, CACHE1);
@@ -413,7 +485,7 @@ TileCandidate *InequalitySolver::Solve() {
 
     InitTileAxis(CACHE1);
 
-    if (analyzer_.op_type_ != VECTOR_OP) {
+    if (analyzer_.op_type_ != TileOpType::VECTOR_OP) {
       InitTileAxis(CACHE0);
     }
 
@@ -430,7 +502,7 @@ TileCandidate *InequalitySolver::Solve() {
       TileAxis *axis = tile_axes[i];
       DetermineTileFactor(axis, CACHE1, memory_constraints_);
     }
-    if (analyzer_.op_type_ != VECTOR_OP) {
+    if (analyzer_.op_type_ != TileOpType::VECTOR_OP) {
       for (auto i = static_cast<int>(tile_axes.size()) - 1; i >= 0; --i) {
         TileAxis *axis = tile_axes[i];
         DetermineTileFactor(axis, CACHE0, memory_constraints_);
@@ -711,7 +783,7 @@ Expr InequalitySolver::DetermineTileForDynamic(TileAxis *axis, const Expr &mem_c
   bool infer_bound_fail =
     new_mem_constraint.as<Variable>() && new_mem_constraint.as<Variable>()->name_hint == tile->name_hint;
 
-  if (analyzer_.op_type_ != CONV_OP && infer_bound_fail) {
+  if (analyzer_.op_type_ != TileOpType::CONV_OP && infer_bound_fail) {
     LOG(WARNING) << "Result of infer max bound for var " << to_tile << " fail, apply minimal tile " << cons.tile_min_;
     final_factor = cons.tile_min_;
   } else {
@@ -858,7 +930,7 @@ int64_t InequalitySolver::DetermineTileForStatic(TileAxis *axis, const Expr &mem
     }
 
     if (analyzer_.scop_info_.user_config_.GetPragmaAnalyzeMulticore() &&
-        !analyzer_.scop_info_.user_config_.GetIsDynamic() && analyzer_.op_type_ == VECTOR_OP &&
+        !analyzer_.scop_info_.user_config_.GetIsDynamic() && analyzer_.op_type_ == TileOpType::VECTOR_OP &&
         analyzer_.scop_info_.user_config_.GetTarget() != TARGET_CUDA) {
       MulticoreStrategy mc_strategy_ = MulticoreStrategy(cand_, analyzer_.GetTileLogger());
       final_factor = mc_strategy_.AdjustTilingAccordingToMulticoreConstraint(axis, final_factor);
@@ -872,7 +944,7 @@ void InequalitySolver::CalculateMemoryInBuffer(const TilingAnalyzer::BufferEntry
   bool this_band_buf = (buf->scope == MEM_SCOPE_GM);
   Expr buf_shape = CastInt64ToExpr(buf->size * buf->expand_size);
   bool is_l0_buf = buf->scope > MEM_SCOPE_CACHE1 && buf->scope <= MEM_SCOPE_CACHE0_C;
-  if (analyzer_.op_type_ != VECTOR_OP) {
+  if (analyzer_.op_type_ != TileOpType::VECTOR_OP) {
     is_l0_buf = is_l0_buf || buf->scope == MEM_SCOPE_BUFFER;
   }
   if (buf->scope != MEM_SCOPE_GM) {
@@ -935,7 +1007,7 @@ void InequalitySolver::CalculateMemoryInBuffer(const TilingAnalyzer::BufferEntry
 }
 
 Expr InequalitySolver::EstimateAlignment(const TilingAnalyzer::BufferEntry *buf, TileAxis *axis, Expr tile) const {
-  if (analyzer_.op_type_ != VECTOR_OP) {
+  if (analyzer_.op_type_ != TileOpType::VECTOR_OP) {
     return tile;
   }
 
@@ -1075,7 +1147,7 @@ TileCandidate *DynamicShapeSolver::Solve() {
   for (auto band = 0; band < tile_band_size; ++band) {
     tiling_band_ = band;
     AppendTileConstraintInIR(result, TileLevel::CACHE1);
-    if (analyzer_.op_type_ == GEMM_OP) {
+    if (analyzer_.op_type_ == TileOpType::GEMM_OP) {
       AppendTileConstraintInIR(result, TileLevel::CACHE0);
     }
   }
@@ -1130,7 +1202,7 @@ TileCandidate *TraverseSolver::Solve() {
       }
     }
 
-    if (analyzer_.op_type_ == GEMM_OP || analyzer_.scop_info_.user_config_.GetTarget() == TARGET_CUDA) {
+    if (analyzer_.op_type_ == TileOpType::GEMM_OP || analyzer_.scop_info_.user_config_.GetTarget() == TARGET_CUDA) {
       for (TileAxis *axis : cand_.GetTileAxis()) {
         std::unique_ptr<TileInfo> info(new (std::nothrow) TileInfo(axis, CACHE0, band));
         CHECK(info) << "memory alloc fail";
@@ -1142,7 +1214,7 @@ TileCandidate *TraverseSolver::Solve() {
       }
     }
 
-    if (analyzer_.op_type_ == GEMM_OP) {
+    if (analyzer_.op_type_ == TileOpType::GEMM_OP) {
       std::vector<TileAxis *> ko_axes = this->analyzer_.GetAxesOfAttr(AttrInfo{AT_GEMM, "ko"});
       std::vector<TileAxis *> mo_axes = this->analyzer_.GetAxesOfAttr(AttrInfo{AT_GEMM, "mo"});
       std::vector<TileAxis *> no_axes = this->analyzer_.GetAxesOfAttr(AttrInfo{AT_GEMM, "no"});
@@ -1168,7 +1240,7 @@ TileCandidate *TraverseSolver::Solve() {
     }
   }
 
-  if (analyzer_.op_type_ == CONV_OP) {
+  if (analyzer_.op_type_ == TileOpType::CONV_OP) {
     if (analyzer_.scop_info_.mmu_info_.IsConvBackpropFilter()) {
       AppendConvBackpropPragma();
     } else {
@@ -1277,7 +1349,7 @@ bool TraverseSolver::MemoryVerify(TileLevel level, int band, int64_t *deviation)
                   (h_axes.size() == 1U && h_axes[0]->GetConstExtent() > 1) ||
                   (w_axes.size() == 1U && w_axes[0]->GetConstExtent() > 1));
   }
-  if ((!cut_reduce && level == CACHE1 && (!C1_valid || (!BUF_valid && analyzer_.op_type_ == VECTOR_OP))) ||
+  if ((!cut_reduce && level == CACHE1 && (!C1_valid || (!BUF_valid && analyzer_.op_type_ == TileOpType::VECTOR_OP))) ||
       ((cut_reduce || level == CACHE0) && !C0_valid)) {
     return false;
   }
@@ -1423,7 +1495,7 @@ int64_t TraverseSolver::PostprocessFinalFactor(int64_t final_factor, TileAxis *a
   }
 
   if (analyzer_.scop_info_.user_config_.GetPragmaAnalyzeMulticore() &&
-      !analyzer_.scop_info_.user_config_.GetIsDynamic() && analyzer_.op_type_ == VECTOR_OP &&
+      !analyzer_.scop_info_.user_config_.GetIsDynamic() && analyzer_.op_type_ == TileOpType::VECTOR_OP &&
       analyzer_.scop_info_.user_config_.GetTarget() != TARGET_CUDA) {
     MulticoreStrategy mc_strategy_ = MulticoreStrategy(cand_, analyzer_.GetTileLogger());
     processed = mc_strategy_.AdjustTilingAccordingToMulticoreConstraint(axis, processed);

@@ -1162,6 +1162,40 @@ bool ScopInfo::IsFunctionalCopyin(const std::string &tensor_name, const StmtIdHa
   return false;
 }
 
+std::set<std::string> ScopInfo::GetInitPromotedTensor() {
+  std::set<std::string> init_tensors;
+  auto RecordPromotedTensor = [&init_tensors, this](StmtIdHashMap tensor_map) -> void {
+    for (const auto &item : tensor_map) {
+      for (const auto &item_id : item.second) {
+        init_tensors.emplace(item_id.get_name());
+      }
+    }
+  };
+
+  auto read_map = StmtReadMap();
+  auto write_map = StmtWriteMap();
+  RecordPromotedTensor(read_map);
+  RecordPromotedTensor(write_map);
+  return init_tensors;
+}
+
+std::set<std::string> ScopInfo::GetTempPromotedTensor() {
+  std::set<std::string> init_tensors = GetInitPromotedTensor();
+
+  auto origin_binds = user_config_.GetOriginBind();
+  std::set<std::string> orig_tensors;
+
+  for (const auto &item : origin_binds) {
+    if (!item.first.defined()) continue;
+    auto id = isl::id(ctx_, item.first->op->name);
+    orig_tensors.insert(id.get_name());
+  }
+  std::set<std::string> temp_tensors;
+  std::set_difference(init_tensors.begin(), init_tensors.end(), orig_tensors.begin(), orig_tensors.end(),
+                      std::inserter(temp_tensors, temp_tensors.begin()));
+  return temp_tensors;
+}
+
 bool CubeInfo::IsConvHeadTail(const isl::id &stmtId, const StmtOpInfo &op_info, const StmtIdHashMap &op_write_map) {
   if (!IsConv()) return false;
 

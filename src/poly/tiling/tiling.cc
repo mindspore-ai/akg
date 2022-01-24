@@ -183,7 +183,7 @@ TilingGenerator::ParamReplacement TilingGenerator::CreateVarTileReplaceMap() {
 
 int64_t TilingGenerator::CalL1VarTiling(int64_t l0_tiling, TileAxis *axis) {
   auto GetCand = [this, l0_tiling]() -> int64_t {
-    if (analyzer_.op_type_ == VECTOR_OP) {
+    if (analyzer_.op_type_ == TileOpType::VECTOR_OP) {
       if (param_replacement_.l0_tile.empty())
         analyzer_.GetTileLogger().LogFatalAndSaveLog("Axis index exceed maximal var replace limit (" +
                                                      std::to_string(GEN_PRIME_NUM) + ")");
@@ -201,7 +201,7 @@ int64_t TilingGenerator::CalL1VarTiling(int64_t l0_tiling, TileAxis *axis) {
     }
   };
   int64_t cand = GetCand();
-  if (analyzer_.op_type_ == GEMM_OP || analyzer_.op_type_ == CONV_OP) {
+  if (analyzer_.op_type_ == TileOpType::GEMM_OP || analyzer_.op_type_ == TileOpType::CONV_OP) {
     bool found = false;
     while (!found && !param_replacement_.mul_tile.empty() && !param_replacement_.mod_tile.empty()) {
       found = true;
@@ -257,7 +257,7 @@ void TilingGenerator::ConvertVarTilesToDims() {
                                                      std::to_string(axis->dim_axis) + " has not been tiled.");
       dimInfo.c0_tiling_size = c0->value;
     } else {
-      if (analyzer_.op_type_ == GEMM_OP) {
+      if (analyzer_.op_type_ == TileOpType::GEMM_OP) {
         if (param_replacement_.l0_tile.empty())
           analyzer_.GetTileLogger().LogFatalAndSaveLog("Axis index exceed maximal var replace limit (" +
                                                        std::to_string(GEN_PRIME_NUM) + ")");
@@ -269,7 +269,7 @@ void TilingGenerator::ConvertVarTilesToDims() {
           auto v = air::Downcast<Var>(c0_val);
           var_to_prime_record.Set(v, make_const(v->type, dimInfo.c0_tiling_size));
         }
-      } else if (analyzer_.op_type_ == CONV_OP) {
+      } else if (analyzer_.op_type_ == TileOpType::CONV_OP) {
         dimInfo.c0_tiling_size = 65535;
       } else {
         dimInfo.c0_tiling_size = 1;
@@ -281,7 +281,7 @@ void TilingGenerator::ConvertVarTilesToDims() {
                                                      std::to_string(axis->dim_axis) + " has not been tiled.");
       dimInfo.c1_tiling_size = c1->value;
     } else {
-      int64_t l1_base = analyzer_.op_type_ == CONV_OP ? 1 : dimInfo.c0_tiling_size;
+      int64_t l1_base = analyzer_.op_type_ == TileOpType::CONV_OP ? 1 : dimInfo.c0_tiling_size;
       if (analyzer_.scop_info_.analysis_result_.IsCsrDynamicExtent(axis->range_extent)) {
         dimInfo.c1_tiling_size = analyzer_.scop_info_.user_config_.GetCsrThreadNum();
       } else {
@@ -297,7 +297,7 @@ void TilingGenerator::ConvertVarTilesToDims() {
     this->dims_.push_back(dimInfo);
   };
   analyzer_.ForEachAxisTopDown(Convert);
-  if (analyzer_.op_type_ == CONV_OP) ConvertPragmaToDims(var_to_prime_record);
+  if (analyzer_.op_type_ == TileOpType::CONV_OP) ConvertPragmaToDims(var_to_prime_record);
   ConvertShiftBoundToDims();
 }
 
@@ -408,7 +408,7 @@ std::pair<TileSizes, std::deque<ParamInfo>> GenerateTiling(const isl::schedule &
   TilingGenerator generator(analyzer);
   if (analyzer.scop_info_.user_config_.GetIsDynamic()) {
     std::tie(dims, param_info) = generator.GenerateDynamic();
-  } else if ((scop_info.user_config_.GetPragmaSpeedUpTiling() && analyzer.op_type_ == VECTOR_OP) ||
+  } else if ((scop_info.user_config_.GetPragmaSpeedUpTiling() && analyzer.op_type_ == TileOpType::VECTOR_OP) ||
              !g_attrs.GetStr(kErrorInfo, "").empty() || analyzer.scop_info_.user_config_.GetTarget() == TARGET_CUDA ||
              analyzer.scop_info_.user_config_.GetTarget() == TARGET_CPU) {
     dims = generator.GenerateQuickly();
