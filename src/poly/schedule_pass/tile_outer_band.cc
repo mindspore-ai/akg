@@ -625,7 +625,7 @@ isl::schedule_node TileOuterBand::IsolateTiles(const isl::schedule_node &origina
 
   // compute a set "tiles" for all full tiles
   std::tie(tiles, all) = ComputeFullTile(original_node, tiled_node);
-  if (nullptr != full_tile_min) {
+  if (full_tile_min != nullptr) {
     unsigned int n_dim = tiles.n_dim();
     for (int i = 0; i < dim; ++i) {
       if (0 == full_tile_min[i]) continue;
@@ -633,7 +633,7 @@ isl::schedule_node TileOuterBand::IsolateTiles(const isl::schedule_node &origina
         isl_set_lower_bound_si(tiles.copy(), isl_dim_set, (n_dim - (unsigned int)(dim - i)), full_tile_min[i]));
     }
   }
-  if (nullptr != full_tile_max) {
+  if (full_tile_max != nullptr) {
     unsigned int n_dim = tiles.n_dim();
     for (int i = 0; i < dim; ++i) {
       if (MAX_STRIDE == full_tile_max[i]) continue;
@@ -808,7 +808,9 @@ void TileOuterBand::PaddingIsolate(int &h_head, int &h_tail, int &w_head, int &w
   int h_cut = scop_info_.mmu_info_.GetAttrValue(ATTR_CONV_TILE_H);
   int w_cut = scop_info_.mmu_info_.GetAttrValue(ATTR_CONV_TILE_W);
   int d_kh = (kh - 1) * dilation_h + 1;
-  CHECK_NE(stride_h, 0);
+  if (stride_h == 0) {
+    CHECK_NE(stride_h, 0);
+  }
   int win_h = (h + pad_top + pad_bottom - d_kh) / stride_h + 1;
   CHECK_NE(stride_h, 0);
   int win_cut_h = (h_cut - d_kh) / stride_h + 1;
@@ -824,7 +826,9 @@ void TileOuterBand::PaddingIsolate(int &h_head, int &h_tail, int &w_head, int &w
   ComputeHInfo(h_base, head, tail, h_head, h_tail, win_h, win_cut_h);
 
   int d_kw = (kw - 1) * dilation_w + 1;
-  CHECK_NE(stride_w, 0);
+  if (stride_w == 0) {
+    CHECK_NE(stride_w, 0);
+  }
   int win_w = (w + pad_left + pad_right - d_kw) / stride_w + 1;
   CHECK_NE(stride_w, 0);
   int win_cut_w = (w_cut - d_kw) / stride_w + 1;
@@ -858,6 +862,9 @@ void TileOuterBand::ComputeWInfo(int &w_base, bool &head, bool &tail, int &w_hea
       if (tail) {
         w_tail = w_base - DIVIDED_PIECES_TWO;
       } else {
+        if (win_cut_w == 0) {
+          CHECK_NE(win_cut_w, 0);
+        }
         w_tail = win_w / win_cut_w - 1;
       }
     }
@@ -893,6 +900,9 @@ void TileOuterBand::ComputeHInfo(int &h_base, bool &head, bool &tail, int &h_hea
       if (tail) {
         h_tail = h_base - DIVIDED_PIECES_TWO;
       } else {
+        if (win_cut_h == 0) {
+          CHECK_NE(win_cut_h, 0);
+        }
         h_tail = win_h / win_cut_h - 1;
       }
     }
@@ -1333,6 +1343,28 @@ isl::schedule_node TileOuterBand::TileAllReduceForCpu(const isl::schedule_node &
   return node.ancestor(node.get_tree_depth() - start_depth);
 }
 
+isl::schedule_node TileOuterBand::InsertMarkerForReduceY(const isl::schedule_node &orig_node, size_t start_depth) {
+  auto node = orig_node;
+  if (scop_info_.analysis_result_.GetOuterBandNode(cur_band_index_)->reduce_direction == ReduceDirection::Y) {
+    if (node.as<isl::schedule_node_mark>()) {
+      node = node.child(0);
+    }
+    auto band_node = node.as<isl::schedule_node_band>();
+    node = band_node.split(band_node.n_member() - 1);
+    node = node.child(0);
+    node = InsertMarkerForLoop(node, FOR_PARALLEL);
+    bool is_parallel = !GetMarkerName(node, FOR_PARALLEL).empty();
+    if (is_parallel) {
+      node = node.child(0).child(0).child(0).child(0);
+      node = node.insert_mark(REDUCE_AREA_FLAG);
+      node = node.ancestor(node.get_tree_depth() - start_depth);
+      node = node.insert_mark(REDUCE_AREA_FLAG);
+      node = node.insert_mark(REDUCE_Y_FLAG);
+    }
+  }
+  return node;
+}
+
 isl::schedule_node TileOuterBand::TileElementWiseForCpu(const isl::schedule_node &orig_node, const bool is_all_reduce) {
   if (!orig_node.isa<isl::schedule_node_band>()) {
     return orig_node;
@@ -1356,7 +1388,10 @@ isl::schedule_node TileOuterBand::TileElementWiseForCpu(const isl::schedule_node
   // last tiling: vectorized
   node = IsolateTilesCpu(node);
   node = InsertAllMarker(node, is_all_reduce);
-  return node.ancestor(node.get_tree_depth() - start_depth);
+
+  node = InsertMarkerForReduceY(node, start_depth);
+  node = node.ancestor(node.get_tree_depth() - start_depth);
+  return node;
 }
 
 isl::schedule_node TileOuterBand::TileReduceXForCpu(const isl::schedule_node &orig_node) {

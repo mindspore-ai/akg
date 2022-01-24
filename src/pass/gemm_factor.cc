@@ -36,8 +36,8 @@
 namespace akg {
 namespace ir {
 
-constexpr auto REDUCE_PROVIDE = "REDUCE_PROVIDE";
-constexpr auto PACKA = "PACKA";
+constexpr auto REDUCE_PROVIDE = "reduce_provide";
+constexpr auto PACKA = "pack_a";
 constexpr auto TENSOR_C = "tensor_c";
 constexpr auto MAJOR_MATRIX = "major_matrix";
 constexpr auto MATRIX_A = "matrix_a";

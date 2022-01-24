@@ -20,6 +20,11 @@ namespace akg {
 namespace ir {
 namespace poly {
 
+constexpr size_t REDUCE_Y_LEAST_AXES_NUM = 2;
+constexpr int REDUCE_Y_TILE_SIZE = 2048;
+constexpr int REDUCE_Y_LEAST_BLOCK_SIZE = 8192;
+constexpr int REDUCE_Y_LEAST_X_SIZE = 8;
+
 void CpuStrategy::AddCpuConstraint() {
   BuildAxesQueue();
   SetMultiLevelTileValue();
@@ -127,12 +132,40 @@ void CpuStrategy::SetMatMulTileValue(int index) {
   }
 }
 
+bool CpuStrategy::SetReduceYTileValue(int index) {
+  auto axes_num = pending_axes_[index].size();
+  CHECK(axes_num >= REDUCE_Y_LEAST_AXES_NUM) << "axes_num is less than 2";
+  bool is_tiled = false;
+  TileAxis *axis1, *axis0;
+  int64_t shape1, shape0;
+  std::tie(axis0, shape0) = pending_axes_[index][0];
+  std::tie(axis1, shape1) = pending_axes_[index][1];
+  int64_t value1 = shape1;
+  if (shape1 >= REDUCE_Y_LEAST_BLOCK_SIZE && shape0 <= REDUCE_Y_LEAST_X_SIZE) {
+    int64_t value0 = shape0;
+    axis0->TileRestrainToSingleValue(Expr(value0), TileLevel::CACHE1);
+    axis0->TileRestrainToSingleValue(Expr(value0), TileLevel::CACHE0);
+    value1 = REDUCE_Y_TILE_SIZE;
+    is_tiled = true;
+  }
+  axis1->TileRestrainToSingleValue(Expr(value1), TileLevel::CACHE1);
+  axis1->TileRestrainToSingleValue(Expr(value1), TileLevel::CACHE0);
+  return is_tiled;
+}
+
 void CpuStrategy::SetMultiLevelTileValue() {
   for (auto idx = 0; idx < static_cast<int>(pending_axes_.size()); ++idx) {
     auto op_type = analyzer_->scop_info_.analysis_result_.GetOuterBandNode()->template_type;
     if (op_type == Template::MATMUL) {
       SetMatMulTileValue(idx);
       continue;
+    }
+    auto reduce_direction = analyzer_->scop_info_.analysis_result_.GetReduceDirection();
+    if (reduce_direction == ReduceDirection::Y) {
+      bool is_tiled = SetReduceYTileValue(idx);
+      if (is_tiled) {
+        continue;
+      }
     }
     size_t ori_size = pending_axes_[idx].size();
     int64_t data_size = 1;
