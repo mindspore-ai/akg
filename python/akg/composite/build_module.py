@@ -169,6 +169,21 @@ def _set_tiling_attrs(out_shape, attrs):
     return attrs
 
 
+def _update_compile_attr(desc_d, attr):
+    # For user defined akg compile attr
+    if desc_d['op_desc'] is None:
+        return attr
+    for op in desc_d['op_desc']:
+        if "compile_attr" in op and op["compile_attr"] is not None:
+            for i in op["compile_attr"]:
+                if isinstance(i["compile_flag"], str):
+                    attr.update({i["compile_flag"]: i['value']})
+                else:
+                    raise ValueError("Currently all compile attrs' name for AKG should be type of str. But got \
+                        an attr name: {}, which type is: {}.".format(i["compile_flag"], type(i["compile_flag"])))
+    return attr
+
+
 def _set_attrs(desc_d, attrs, poly):
     if "enable_atomic_add" not in attrs.keys():
         attrs["enable_atomic_add"] = should_enable_attr(desc_d, "enable_atomic_add")
@@ -178,7 +193,7 @@ def _set_attrs(desc_d, attrs, poly):
         attrs["is_csr"] = should_enable_attr(desc_d, "is_csr")
     if "csr_avg_row" not in attrs.keys():
         attrs["csr_avg_row"] = should_enable_attr(desc_d, "csr_avg_row")
-    return attrs
+    return _update_compile_attr(desc_d, attrs)
 
 
 def _get_online_tune_attr(desc_s, attrs, repo_path, use_new_space=True):
@@ -289,6 +304,7 @@ def _update_attrs_gpu(all_ops, attrs, poly):
             attrs["has_tot_ops"] = enable_general_tot
     return attrs
 
+
 def _update_attrs_cpu(all_ops, attrs, poly):
     if not poly:
         return attrs
@@ -299,6 +315,7 @@ def _update_attrs_cpu(all_ops, attrs, poly):
     if "feature" not in attrs.keys() and any([i in all_ops for i in ["BatchMatMul", "MatMul"]]):
         attrs["feature"] = "avx"
     return attrs
+
 
 def _update_attrs_ascend(all_ops, attr):
     attr["pragma_rmselfdep"] = all([i not in all_ops for i in ["BatchMatMul", "MatMul"]])

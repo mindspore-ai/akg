@@ -23,6 +23,7 @@
  */
 
 /*
+ * 2022.01.19 - Avoid output tensor replacement when it's a input.
  * 2019.12.30 - Add new implements for build provide.
  */
 
@@ -224,7 +225,9 @@ Stmt HybridOpNode::BuildProvide(
 
   std::unordered_map<Tensor, Tensor> rmap;
   for (int i = 0; i < this->num_outputs(); ++i) {
-    rmap[outputs[i]] = stage->op.output(i);
+    if (std::find(inputs.begin(), inputs.end(), outputs[i]) == inputs.end()) {
+      rmap[outputs[i]] = stage->op.output(i);
+    }
   }
   auto n = make_node<HybridOpNode>(*this);
   /* This is a story little bit complicated.
