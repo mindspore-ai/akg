@@ -27,6 +27,8 @@
 namespace akg {
 namespace ir {
 namespace poly {
+constexpr int INT_32 = 32;
+constexpr int BINARY_FACTOR = 2;
 constexpr int EIGHT_BYTES = 8;
 constexpr int ONE_ARGS = 1;
 constexpr int TWO_ARGS = 2;

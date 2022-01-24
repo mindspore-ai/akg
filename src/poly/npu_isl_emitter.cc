@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2021 Huawei Technologies Co., Ltd
+ * Copyright 2019-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -549,8 +549,8 @@ Stmt NPUIslEmitter::EmitFor(const isl::ast_node_for &node) {
   PopIter(iter_expr.get());
 
   if (should_insert_multi_core) {
-    stmt = AttrStmt::make(Expr(multicore_info.id), "pragma_multi_core_depth",
-                          Expr(multicore_info.multicore_depth), stmt);
+    stmt =
+      AttrStmt::make(Expr(multicore_info.id), "pragma_multi_core_depth", Expr(multicore_info.multicore_depth), stmt);
     --multicore_info.multicore_depth;
   }
 
@@ -1066,11 +1066,11 @@ Stmt NPUIslEmitter::EmitGemmRangeInfoBackPropFilter(const Stmt &stmt) {
   if (KO * KI < tile_k) {
     tile_k = KO * KI;
   }
-  int ko_min = k_isolate ? ((c0_range_idx / k_base % 2) ? (KO * KI / tile_k) : (0)) : (0);
-  int ko_ext = k_isolate ? ((c0_range_idx / k_base % 2) ? (1) : (KO * KI / tile_k)) : (KO * KI / tile_k);
+  int ko_min = k_isolate ? ((c0_range_idx / k_base % BINARY_FACTOR) ? (KO * KI / tile_k) : (0)) : (0);
+  int ko_ext = k_isolate ? ((c0_range_idx / k_base % BINARY_FACTOR) ? (1) : (KO * KI / tile_k)) : (KO * KI / tile_k);
   range_map.Set("ko_", Range(Expr(ko_min), Expr(ko_ext)));
   if (k_isolate) {
-    if (c0_range_idx / k_base % 2) {
+    if (c0_range_idx / k_base % BINARY_FACTOR) {
       range_map.Set("k_size", Range(Expr(0), Expr(K - KO * KI / tile_k * tile_k)));
     } else {
       range_map.Set("k_size", Range(Expr(0), Expr(tile_k)));
@@ -1089,15 +1089,15 @@ Stmt NPUIslEmitter::EmitGemmRangeInfoBackPropFilter(const Stmt &stmt) {
   if (NO * NI < tile_n) {
     tile_n = NO * NI;
   }
-  int no_min = n_isolate ? ((c0_range_idx / n_base % 2) ? (NO * NI / tile_n) : (0)) : (0);
-  int no_ext = n_isolate ? ((c0_range_idx / n_base % 2) ? (1) : (NO * NI / tile_n)) : (NO * NI / tile_n);
+  int no_min = n_isolate ? ((c0_range_idx / n_base % BINARY_FACTOR) ? (NO * NI / tile_n) : (0)) : (0);
+  int no_ext = n_isolate ? ((c0_range_idx / n_base % BINARY_FACTOR) ? (1) : (NO * NI / tile_n)) : (NO * NI / tile_n);
   range_map.Set("no_", Range(Expr(no_min), Expr(no_ext)));
 
   if (MO * MI < tile_m) {
     tile_m = MO * MI;
   }
-  int mo_min = m_isolate ? ((c0_range_idx / m_base % 2) ? (MO * MI / tile_m) : (0)) : (0);
-  int mo_ext = m_isolate ? ((c0_range_idx / m_base % 2) ? (1) : (MO * MI / tile_m)) : (MO * MI / tile_m);
+  int mo_min = m_isolate ? ((c0_range_idx / m_base % BINARY_FACTOR) ? (MO * MI / tile_m) : (0)) : (0);
+  int mo_ext = m_isolate ? ((c0_range_idx / m_base % BINARY_FACTOR) ? (1) : (MO * MI / tile_m)) : (MO * MI / tile_m);
   range_map.Set("mo_", Range(Expr(mo_min), Expr(mo_ext)));
 
   return AttrStmt::make(range_map, PRAGMA_GEMM_C0, Expr(c0_range_idx), stmt);
@@ -1452,6 +1452,9 @@ Stmt HoistC0write(ScopInfo &info, const Stmt &body, std::vector<Stmt> &c0write) 
       f.mutate_ = true;
       stmt = f.Mutate(body);
       if (!f.found_) stmt = Block::make(body, c0write.back());
+      // each time we use the first stmt in c0write to construct <c0_write, c1_write> block,
+      // so we need to clean vector to emit correct block for tail part.
+      c0write.clear();
     } else if (info.mmu_info_.IsSpecGemm()) {
       stmt = Block::make(body, c0write.back());
     }
@@ -1554,22 +1557,22 @@ void NPUIslEmitter::EmitReadAttrAtC0(std::vector<Stmt> &stmts, int i, Tensor &t)
   }
 
   if (is_im2col) {
-    stmts[i] = AttrStmt::make(make_zero(Int(32)), "pragma_im2col", Expr(1), stmts[i]);
+    stmts[i] = AttrStmt::make(make_zero(Int(INT_32)), "pragma_im2col", Expr(1), stmts[i]);
   } else if (is_gemm_data_trans) {
     stmts[i] =
-      AttrStmt::make(make_zero(Int(32)), "pragma_load2d_transpose_data", Expr(gemm_transpose_index_), stmts[i]);
+      AttrStmt::make(make_zero(Int(INT_32)), "pragma_load2d_transpose_data", Expr(gemm_transpose_index_), stmts[i]);
     gemm_transpose_index_++;
-    gemm_transpose_index_ = gemm_transpose_index_ % 2;
+    gemm_transpose_index_ = gemm_transpose_index_ % BINARY_FACTOR;
   } else if (is_gemm_weight_trans) {
     stmts[i] =
-      AttrStmt::make(make_zero(Int(32)), "pragma_load2d_transpose_weight", Expr(gemm_transpose_index_), stmts[i]);
+      AttrStmt::make(make_zero(Int(INT_32)), "pragma_load2d_transpose_weight", Expr(gemm_transpose_index_), stmts[i]);
     gemm_transpose_index_++;
-    gemm_transpose_index_ = gemm_transpose_index_ % 2;
+    gemm_transpose_index_ = gemm_transpose_index_ % BINARY_FACTOR;
   }
   stmts[i] = ProducerConsumer::make(t->op, true, stmts[i]);
   if (bypathC1_ > 0) {
     if (is_filter_c0) {
-      stmts[i] = AttrStmt::make(make_zero(Int(32)), PRAGMA_BYPATH_FILTER_C0, Expr(0), stmts[i]);
+      stmts[i] = AttrStmt::make(make_zero(Int(INT_32)), PRAGMA_BYPATH_FILTER_C0, Expr(0), stmts[i]);
     }
   }
 }
@@ -2492,7 +2495,6 @@ class SpecialLoopDistribution : public IRMutator {
 
   std::vector<const For *> to_distribued_loops_;
 };
-
 
 Stmt NPUIslEmitter::Emit(const isl::ast_node &node) {
   Stmt stmt = EmitAst(node);
