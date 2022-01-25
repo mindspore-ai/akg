@@ -256,19 +256,22 @@ class IdentifyReduceChance : public IRVisitor {
           cur_reduce_data_->init_value = init_value;
           cur_reduce_data_->vectorize_size = vectorize_size_;
 
-          Array<Expr> output_args = op->args;
-          Expr input_expr = GetTheInputExpr(op);
-          auto call_ptr = input_expr.as<Call>();
-          Array<Expr> input_args = call_ptr->args;
-          while(call_ptr) {
-            input_expr = input_args[0];
-            call_ptr = input_expr.as<Call>();
-            if (call_ptr) {
-              input_args = call_ptr->args;
+          if (is_reduce_y_) {
+            Array<Expr> output_args = op->args;
+            Expr input_expr = GetTheInputExpr(op);
+            auto call_ptr = input_expr.as<Call>();
+            CHECK(call_ptr) << "call_ptr is nullptr";
+            Array<Expr> input_args = call_ptr->args;
+            while(call_ptr) {
+              input_expr = input_args[0];
+              call_ptr = input_expr.as<Call>();
+              if (call_ptr) {
+                input_args = call_ptr->args;
+              }
             }
-          }
-          if (input_args.size() > output_args.size()) {
-            cur_reduce_data_->reduce_axis_hidden = true;
+            if (input_args.size() > output_args.size()) {
+              cur_reduce_data_->reduce_axis_hidden = true;
+            }
           }
         }
       } else {
