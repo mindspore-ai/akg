@@ -30,9 +30,9 @@ def gen_data(shape, dtype):
     for i in range(num):
         lower_matrix[i, i] = 1.0
     input1 = np.dot(lower_matrix, upper_matrix)
-
     expect = upper_matrix + lower_matrix - np.eye(num)
-    return input1, expect
+    output = np.full(expect.shape, np.nan, expect.dtype)
+    return input1, output, expect
 
 
 def hpl_lu_run(shape, dtype, poly_sch=True, attrs=None):
@@ -45,8 +45,8 @@ def hpl_lu_run(shape, dtype, poly_sch=True, attrs=None):
 
     mod = utils.op_build_test(hpl_lu, [shape, ], [dtype, ], kernel_name="hpl_lu",
                               polyhedral=poly_sch, attrs=attrs)
-    input1, expect = gen_data(shape, dtype)
-    output = utils.mod_launch(mod, (input1, input1), expect=expect)
+    input1, output, expect = gen_data(shape, dtype)
+    output = utils.mod_launch(mod, (input1, output), expect=expect, outputs=(0,))
     rtol = atol = 1e-04
     res = compare_tensor(output, expect, rtol=rtol, atol=atol)
     print("Test {}".format("Pass" if res else "Failed"))
