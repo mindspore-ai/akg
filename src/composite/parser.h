@@ -94,6 +94,8 @@ class OpDescsParser {
       input_output.push_back(make_const(type, tensor_value.get<double>()));
     } else if (tensor_value.is<int64_t>()) {
       input_output.push_back(make_const(type, tensor_value.get<int64_t>()));
+    } else if (tensor_value.is<bool>()) {
+      input_output.push_back(make_const(type, tensor_value.get<bool>()));
     } else {
       CHECK(0) << "Unknown value type of tensor: " << tensor_name;
     }
