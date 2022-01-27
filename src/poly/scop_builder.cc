@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2021 Huawei Technologies Co., Ltd
+ * Copyright 2019-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -500,34 +500,40 @@ void ParseStmtOps(const isl::id &id, const Provide *stmt, AnalysisResult &result
   ParseStmtOps(id, stmt->value, result, stmt->func);
 }
 
-VarNames VisitVarNames(const air::Expr &arg, VarNames var_names, bool add_num) {
+VarNames VisitVarNames(const air::Expr &arg, VarNames var_names, bool add_num, bool visit_tot) {
   if (const auto var = arg.as<air::ir::Variable>()) {
     var_names.emplace_back(var->name_hint);
   } else if (const auto sub = arg.as<air::ir::Sub>()) {
-    var_names = VisitVarNames(sub->a, var_names, add_num);
-    var_names = VisitVarNames(sub->b, var_names, add_num);
+    var_names = VisitVarNames(sub->a, var_names, add_num, visit_tot);
+    var_names = VisitVarNames(sub->b, var_names, add_num, visit_tot);
   } else if (const auto add = arg.as<air::ir::Add>()) {
-    var_names = VisitVarNames(add->a, var_names, add_num);
-    var_names = VisitVarNames(add->b, var_names, add_num);
+    var_names = VisitVarNames(add->a, var_names, add_num, visit_tot);
+    var_names = VisitVarNames(add->b, var_names, add_num, visit_tot);
   } else if (const auto mul = arg.as<air::ir::Mul>()) {
-    var_names = VisitVarNames(mul->a, var_names, add_num);
-    var_names = VisitVarNames(mul->b, var_names, add_num);
+    var_names = VisitVarNames(mul->a, var_names, add_num, visit_tot);
+    var_names = VisitVarNames(mul->b, var_names, add_num, visit_tot);
   } else if (const auto div = arg.as<air::ir::Div>()) {
-    var_names = VisitVarNames(div->a, var_names, add_num);
-    var_names = VisitVarNames(div->b, var_names, add_num);
+    var_names = VisitVarNames(div->a, var_names, add_num, visit_tot);
+    var_names = VisitVarNames(div->b, var_names, add_num, visit_tot);
   } else if (const auto mod = arg.as<air::ir::Mod>()) {
-    var_names = VisitVarNames(mod->a, var_names, add_num);
-    var_names = VisitVarNames(mod->b, var_names, add_num);
+    var_names = VisitVarNames(mod->a, var_names, add_num, visit_tot);
+    var_names = VisitVarNames(mod->b, var_names, add_num, visit_tot);
   } else if (const auto int_imm = arg.as<air::ir::IntImm>()) {
     if (add_num) {
       var_names.emplace_back(std::to_string(int_imm->value));
     }
   } else if (const auto f_mod = arg.as<air::ir::FloorMod>()) {
-    var_names = VisitVarNames(f_mod->a, var_names, add_num);
-    var_names = VisitVarNames(f_mod->b, var_names, add_num);
+    var_names = VisitVarNames(f_mod->a, var_names, add_num, visit_tot);
+    var_names = VisitVarNames(f_mod->b, var_names, add_num, visit_tot);
   } else if (const auto f_div = arg.as<air::ir::FloorDiv>()) {
-    var_names = VisitVarNames(f_div->a, var_names, add_num);
-    var_names = VisitVarNames(f_div->b, var_names, add_num);
+    var_names = VisitVarNames(f_div->a, var_names, add_num, visit_tot);
+    var_names = VisitVarNames(f_div->b, var_names, add_num, visit_tot);
+  } else if (const auto call = arg.as<air::ir::Call>()) {
+    if (visit_tot) {
+      for (auto call_arg: call->args) {
+        var_names = VisitVarNames(call_arg, var_names, add_num, visit_tot);
+      }
+    }
   }
   return var_names;
 }

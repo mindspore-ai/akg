@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -679,12 +679,23 @@ void AnalyzeBandNode::CollectStmtInfo() {
   }
   auto direct_map = scop_info_.analysis_result_.GetReduceDirectionMap();
   for (auto &pro : provides) {
-    if (!pro.second->IsInstance<Provide>()) {
+    const Node *op;
+    if (pro.second->IsInstance<IfThenElse>()) {
+      const IfThenElse *if_stmt = static_cast<const IfThenElse *>(pro.second);
+      auto body = if_stmt->then_case;
+      while (auto attr_stmt = body.as<AttrStmt>()) {
+        body = attr_stmt->body;
+      }
+      op = body.as<Provide>();
+    } else {
+      op = pro.second;
+    }
+    if (op != nullptr && !op->IsInstance<Provide>()) {
       continue;
     }
     auto stmt = pro.first;
     for (auto &entry : entries) {
-      if (entry.op != pro.second) {
+      if (entry.op != op) {
         continue;
       }
       std::string s_type = entry.basic_op_type;
@@ -764,6 +775,8 @@ void AnalyzeBandNode::DetermineTemplateOfBand(std::unique_ptr<OuterBandNode> &bn
     bn->template_type = Template::BROADCAST_OP;
   } else if (concated_op_type.find(AT_CALL) != std::string::npos) {
     bn->template_type = Template::EXTERN_CALL;
+  } else if (concated_op_type.find(AT_COUNT) != std::string::npos) {
+    bn->template_type = Template::COUNT_OP;
   } else {
     bn->template_type = Template::PURE_ELEM;
   }
@@ -880,6 +893,8 @@ void AnalyzeBandNode::AnalyzeScheduleTreeTemplate() {
     scop_info_.analysis_result_.SetOpTemplate(Template::BROADCAST_OP);
   } else if (concated_op_type.find(AT_CALL) != std::string::npos) {
     scop_info_.analysis_result_.SetOpTemplate(Template::EXTERN_CALL);
+  } else if (concated_op_type.find(AT_COUNT) != std::string::npos) {
+    scop_info_.analysis_result_.SetOpTemplate(Template::COUNT_OP);
   } else {
     scop_info_.analysis_result_.SetOpTemplate(Template::PURE_ELEM);
   }

@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -40,6 +40,7 @@ class OpTypeCollector : public IRVisitor {
 
   // Provides stmt after analysis.
   std::unordered_map<const For *, std::vector<ProvideEntry>> provides_ana_;
+  TensorEntry count_op_tensor_;
 
  private:
   void WriteToScopInfo();
@@ -50,6 +51,7 @@ class OpTypeCollector : public IRVisitor {
   void Visit_(const Provide *op) final;
   void Visit_(const For *op) final;
   void Visit_(const IfThenElse *op) final;
+  void Visit_(const Evaluate *op) final;
 
   void AnalyzeProvide(const Provide *op);
   TensorEntry MatchLoopByName(TensorEntry tensor);

@@ -1,5 +1,5 @@
 /**
- * Copyright 2020-2021 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -298,6 +298,28 @@ void GpuIslEmitter::UpdateGpuIndexDtype() {
   }
 }
 
+class InitStmtInsertSync : public IRMutator {
+  Stmt Mutate_(const Provide *op, const Stmt &s) final {
+    if (op->value.as<IntImm>() != nullptr) {
+      scop_init_ = true;
+    }
+    return s;
+  }
+
+  Stmt Mutate_(const IfThenElse *op, const Stmt &s) {
+    auto stmt = IRMutator::Mutate_(op, s);
+    if (scop_init_) {
+      scop_init_ = false;
+      return Block::make(stmt, Evaluate::make(
+        Call::make(Int(int_bit_count_), "tvm_storage_sync", {StringImm::make("shared")}, Call::Intrinsic)));
+    }
+    return stmt;
+  }
+
+  bool scop_init_{false};
+  static constexpr int int_bit_count_{32};
+};
+
 Stmt GpuIslEmitter::Emit(const isl::ast_node &node) {
 
   UpdateGpuIndexDtype();
@@ -309,6 +331,10 @@ Stmt GpuIslEmitter::Emit(const isl::ast_node &node) {
 
   if (!info_.analysis_result_.GetTensorOfTensorStmt().empty()) {
     stmt = EmitTensorOfTensorStmt(stmt);
+  }
+
+  if (info_.analysis_result_.GetOpTemplate() == Template::COUNT_OP) {
+    stmt = InitStmtInsertSync().Mutate(stmt);
   }
 
   // iter var node attr emit

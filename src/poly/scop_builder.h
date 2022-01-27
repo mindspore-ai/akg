@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -56,7 +56,7 @@ void ParseStmtOps(const isl::id &id, const Evaluate *stmt, AnalysisResult &resul
 void ParseStmtOps(const isl::id &id, const Provide *stmt, AnalysisResult &result, const isl::union_map &new_reads,
                   const isl::union_map &new_writes);
 
-VarNames VisitVarNames(const air::Expr &arg, VarNames var_names, bool add_num = true);
+VarNames VisitVarNames(const air::Expr &arg, VarNames var_names, bool add_num = true, bool visit_tot = false);
 
 bool IsNum(const std::string &name);
 

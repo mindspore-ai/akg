@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2021 Huawei Technologies Co., Ltd
+ * Copyright 2019-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -1398,6 +1398,7 @@ void TilingAnalyzer::AddPostTilingConstraints() {
   std::vector<TilingStrategy *> actived_strategies;
 
   if (scop_info_.user_config_.GetTarget() == TARGET_CUDA) {
+    CountStrategy count_strategy(this);
     ReduceStrategy reduce_strategy(this);
     ModStrategy mod_strategy(this);
     ShiftAxisStrategy shift_strategy(this);
@@ -1410,6 +1411,9 @@ void TilingAnalyzer::AddPostTilingConstraints() {
     if (scop_info_.analysis_result_.GetIsGpuDmaAnalysed()) {
       actived_strategies.push_back(&dma_analysis_strategy);
     } else {
+      if (scop_info_.analysis_result_.GetOpTemplate() == Template::COUNT_OP) {
+        actived_strategies.push_back(&count_strategy);
+      }
       if (scop_info_.user_config_.GetIsTuning()) {
         actived_strategies.push_back(&custom_strategy);
       }

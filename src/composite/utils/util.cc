@@ -1,5 +1,5 @@
 /**
- * Copyright 2020-2021 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -84,7 +84,8 @@ bool IsOtherOp(const std::string &op_name) {
     "MatMul",      "BatchMatMul", "Conv",         "Transpose",   "Tile",     "Assign",           "InplaceAssign",
     "EquivFormat", "TransData",   "AddMinValue",  "BroadcastTo", "PadAkg",   "UnPadAkg",         "Conv2D",
     "CumSum",      "CumProd",     "StridedSlice", "Custom",      "GatherNd", "TensorScatterAdd", "UnsortedSegmentSum",
-    "Gather",      "OneHot",      "tuple_getitem"};
+    "Gather",      "OneHot",      "tuple_getitem", "CSRMV", "CSRReduceSum", "CSRMul", "CSRDiv",
+    "CSRGather",   "CSR2COO",     "COO2CSR"};
   return elems.find(op_name) != elems.end();
 }
 bool IsElemwise(const std::string &op_name) {

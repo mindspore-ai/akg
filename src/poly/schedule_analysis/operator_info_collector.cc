@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -165,6 +165,24 @@ class CollectToTTensor : public IRVisitor {
   std::unordered_set<int> rhs_idx_;
 };
 
+class CheckContainsConst : public IRVisitor {
+  void Visit_(const Call *op) final {
+    return;
+  }
+
+  void Visit_(const Select *op) final {
+    IRVisitor::Visit(op->true_value);
+    IRVisitor::Visit(op->false_value);
+  }
+
+  void Visit_(const IntImm *op) final {
+    contains_const_ = true;
+  }
+
+ public:
+  bool contains_const_{false};
+};
+
 void OpTypeCollector::Collect() { this->Visit(stmt_); }
 
 void OpTypeCollector::WriteToScopInfo() {
@@ -241,6 +259,39 @@ TensorEntry OpTypeCollector::MakeTensorEntry(const ToTTensor &tot) {
   return tensor;
 }
 
+const Call *GetAtomicRhs(const Array<Expr> &args) {
+  for (auto e: args) {
+    auto ref_call = e.as<Call>();
+    if (ref_call != nullptr && ref_call->name == "&" && static_cast<int>(ref_call->args.size()) == 1) {
+      auto atomic_rhs = ref_call->args[0].as<Call>();
+      if (atomic_rhs != nullptr && atomic_rhs->call_type == Call::CallType::Halide) {
+        return atomic_rhs;
+      }
+    }
+  }
+  return nullptr;
+}
+
+void OpTypeCollector::Visit_(const Evaluate *op) {
+  if (scop_info_.analysis_result_.GetOpTemplate() != Template::COUNT_OP) return;
+  if (auto call = op->value.as<Call>()) {
+    if (call->name.find(AKG_REDUCE_RETURN_NAME) != std::string::npos) {
+      auto atomic_rhs = GetAtomicRhs(call->args);
+      CHECK(atomic_rhs);
+      count_op_tensor_.name = call->name;
+      for (auto arg: atomic_rhs->args) {
+        VarNames vname;
+        vname = VisitVarNames(arg, vname);
+        count_op_tensor_.var_names.emplace_back(vname);
+      }
+      count_op_tensor_ = MatchLoopByName(count_op_tensor_);
+      count_op_tensor_.args = call->args;
+      count_op_tensor_.band_index = band_count_;
+      count_op_tensor_.type_byte = call->type.bytes();
+    }
+  }
+}
+
 void OpTypeCollector::AnalyzeProvide(const Provide *op) {
   if (cur_loop_ == nullptr) return;
   ProvideEntry prov;
@@ -311,6 +362,14 @@ void OpTypeCollector::AnalyzeProvide(const Provide *op) {
   }
 
   prov.basic_op_type = basic_op_type.empty() ? GetBasicOpType(dst_tensor, src_tensor) : basic_op_type;
+
+  auto check_contains_const = CheckContainsConst();
+  check_contains_const.Visit(op->value);
+  if (prov.basic_op_type.find(AT_ELEMWISE) != std::string::npos && check_contains_const.contains_const_ &&
+      dst_tensor.loops.size() > 0) {
+    prov.basic_op_type += AT_COUNT;
+  }
+
   prov.band_index = band_count_;
   prov.src = src_tensor;
   prov.dst = dst_tensor;

@@ -35,6 +35,7 @@ void SpaceAnalyzer::AnalyzeSpecialAxes() {
   OpTypeCollector op_type_collector(analyzer_->scop_info_, analyzer_->body_);
   op_type_collector.Collect();
   provides_ana_ = std::move(op_type_collector.provides_ana_);
+  count_op_tensor_ = op_type_collector.count_op_tensor_;
 
   // Step 2: Use analyzed info to identify tiling space for special axis.
   IdentifyInsnType();
@@ -42,6 +43,7 @@ void SpaceAnalyzer::AnalyzeSpecialAxes() {
   IdentifyDmaUnderCondition();
   IdentifyAlignAxes();
   IdentifyReduceAxes();
+  IdentifyCountAxes();
   IdentifyPostFusionReduceTensors();
   IdentifySharedAxes();
   IdentifyCastAxes();
@@ -453,6 +455,18 @@ void SpaceAnalyzer::IdentifyReduceAxes() {
         for (auto l : src_axes) {
           MarkAttr(l, AT_REDUCE_AXIS, pe.dst.name);
         }
+      }
+    }
+  }
+}
+
+void SpaceAnalyzer::IdentifyCountAxes() {
+  if (count_op_tensor_.loops.empty()) return;
+  for (auto loop_entry: count_op_tensor_.loops) {
+    for (auto loop: loop_entry.second) {
+      auto axis = analyzer_->Axis(loop);
+      if (axis != nullptr) {
+        axis->MarkWithAttr(AttrInfo{AT_COUNT_AXIS, count_op_tensor_.name});
       }
     }
   }

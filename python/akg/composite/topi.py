@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # coding: utf-8
-# Copyright 2020 Huawei Technologies Co., Ltd
+# Copyright 2020-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -903,5 +903,91 @@ def csr_mul(inputs, attrs):
                       [dense, sparse_data, col_idx, row_idx],
                       lambda ins, outs: gen_ir(ins[0], ins[1], ins[2], ins[3], outs[0]),
                       dtype=sparse_data.dtype,
+                      out_buffers=[out_buf],
+                      name=output_name)
+
+@tvm.register_func("CSRGather")
+def csr_gather(inputs, attrs):
+    row_idx, col_idx, dense = inputs
+
+    num_rows = row_idx.shape[0] - 1
+    shape = get_shape(attrs['dense_shape'])
+
+    def gen_ir(dense, col_idx, row_idx, output):
+        ib = tvm.ir_builder.create()
+        with ib.for_range(0, num_rows, name='i') as i:
+            start = ib.load(row_idx, i)
+            end = ib.load(row_idx, i + 1)
+            with ib.for_range(0, end - start, name='j') as j:
+                pos = start + j
+                with ib.if_scope(pos < end):
+                    col = ib.load(col_idx, pos)
+                    ib.store(output, pos, ib.load(dense, [i, col]))
+        return ib.get()
+
+    output_name = "T_csr_gather_" + dense.op.name
+
+    out_buf = tvm.decl_buffer(col_idx.shape, dense.dtype, "output_data")
+
+    return tvm.extern([col_idx.shape],
+                      [dense, col_idx, row_idx],
+                      lambda ins, outs: gen_ir(ins[0], ins[1], ins[2], outs[0]),
+                      dtype=dense.dtype,
+                      out_buffers=[out_buf],
+                      name=output_name)
+
+@tvm.register_func("CSR2COO")
+def csr2coo(inputs, attrs):
+    indptr = inputs[0]
+    num_rows = indptr.shape[0] - 1
+    nnz = int(attrs["nnz"])
+
+    def gen_ir(indptr, output):
+        ib = tvm.ir_builder.create()
+        with ib.for_range(0, num_rows, name='i') as i:
+            start = ib.load(indptr, i)
+            end = ib.load(indptr, i + 1)
+            with ib.for_range(0, end - start, name='j') as j:
+                pos = start + j
+                with ib.if_scope(pos < end):
+                    ib.store(output, pos, tvm.expr.Cast(indptr.dtype, i))
+        return ib.get()
+
+    output_name = "T_csr2coo_" + indptr.op.name
+
+    out_buf = tvm.decl_buffer(nnz, indptr.dtype, "output_data")
+
+    return tvm.extern([nnz],
+                      [indptr],
+                      lambda ins, outs: gen_ir(ins[0], outs[0]),
+                      dtype=indptr.dtype,
+                      out_buffers=[out_buf],
+                      name=output_name)
+
+@tvm.register_func("COO2CSR")
+def coo2csr(inputs, attrs):
+    row_indices = inputs[0]
+    height = int(attrs['height'])
+    nnz = row_indices.shape[0]
+
+    def gen_ir(row_indices, output):
+        ib = tvm.ir_builder.create()
+        with ib.for_range(0, height + 1, name='i') as i:
+            ib.store(output, i, tvm.const(0, row_indices.dtype))
+            with ib.for_range(0, nnz, name='j') as j:
+                row = ib.load(row_indices, j)
+                with ib.if_scope(i > row):
+                    ptr = ib.load(output, i)
+                    ib.store(output, i, ptr + 1)
+        return ib.get()
+
+    output_name = "T_coo2csr_" + row_indices.op.name
+
+    out_buf = tvm.decl_buffer(height + 1, row_indices.dtype, "output_data")
+
+    return tvm.extern([height + 1],
+                      [row_indices],
+                      lambda ins, outs: gen_ir(ins[0], outs[0]),
+                      dtype=row_indices.dtype,
                       out_buffers=[out_buf],
                       name=output_name)

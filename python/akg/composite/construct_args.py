@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # coding: utf-8
-# Copyright 2020-2021 Huawei Technologies Co., Ltd
+# Copyright 2020-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -65,6 +65,15 @@ def should_enable_attr(kernel_info, key):
                 return True
     return False
 
+def update_attrs(kernel_info, key, attrs):
+    for op in kernel_info["op_desc"]:
+        if not op["attr"]:
+            continue
+        for attr in op["attr"]:
+            if attr["name"] == key:
+                attrs[key] = attr["value"]
+                return
+    return
 
 def _set_reducemax_attrs(desc_d, attrs):
     """Add addition attributes for ReduceMax."""
@@ -289,7 +298,7 @@ class ParallelNodeAnalyze(BaseNodeAnalyze):
             cur_attrs = attrs.copy()
             _update_bool("enable_atomic_add", json.loads(block_jsons[i]), cur_attrs)
             _update_bool("is_csr", json.loads(block_jsons[i]), cur_attrs)
-            _update_bool("csr_avg_row", json.loads(block_jsons[i]), cur_attrs)
+            update_attrs(json.loads(block_jsons[i]), "csr_avg_row", cur_attrs)
             attrs_list.append(cur_attrs)
         total_jsons = block_jsons
         total_attrs = attrs_list

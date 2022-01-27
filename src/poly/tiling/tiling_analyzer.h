@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2021 Huawei Technologies Co., Ltd
+ * Copyright 2019-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -131,6 +131,7 @@ constexpr auto AT_TRANSPOSE_INNERMOST_AXIS = "TRANSPOSE_INNERMOST_AXIS";
 constexpr auto AT_BROADCAST_INNERMOST_AXIS = "BROADCAST_INNERMOST_AXIS";
 constexpr auto AT_REDUCE_FLOW = "REDUCE_FLOW";
 constexpr auto AT_REDUCE_AXIS = "REDUCE_AXIS";
+constexpr auto AT_COUNT_AXIS = "COUNT_AXIS";
 constexpr auto AT_POST_FUSION_REDUCE_TENSOR = "POST_FUSION_REDUCE_TENSOR";
 constexpr auto AT_CONV = "CONV";
 constexpr auto AT_GEMM = "GEMM";
@@ -451,8 +452,12 @@ class TileCandidate {
       return;
     }
     auto priority_cmp = [](TileAxis *a, const TileAxis *b) {
-      if (b->priority <= -1) return false;
-      if (a->priority == -1) return true;
+      if (b->priority <= -1) {
+        return false;
+      }
+      if (a->priority == -1) {
+        return true;
+      }
       return a->priority > b->priority;
     };
     std::sort(this->tile_axis_.begin(), this->tile_axis_.end(), priority_cmp);

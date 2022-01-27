@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -479,6 +479,7 @@ class GpuStrategy : public TilingStrategy {
   int possible_threads_;
   int coalesced_size_;
   int total_injective_size_;
+  int64_t total_vectorized_bytes_ = 16; // The default total number of bytes for vectorization is 16.
 };
 
 class CpuStrategy : public TilingStrategy {
@@ -516,6 +517,12 @@ class CsrStrategy : public TilingStrategy {
 
   int warp_factor_reduction_{2};
   int warp_factor_elemwise_{5};
+};
+
+class CountStrategy : public TilingStrategy {
+ public:
+  explicit CountStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {}
+  void AddGpuConstraint() override;
 };
 
 class MulticoreStrategy {

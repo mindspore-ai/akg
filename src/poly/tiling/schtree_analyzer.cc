@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -506,7 +506,7 @@ void ScheduleTreeAnalyzer::AddLoopDataSize() {
         }
       };
       for (auto arg : p->args) {
-        related_name = VisitVarNames(arg, related_name);
+        related_name = VisitVarNames(arg, related_name, true, analyzer_->scop_info_.analysis_result_.GetCsr());
       }
       air::ir::PostOrderVisit(p->value, ExtractName);
       Band pre_loops = GetPreviousLoops(it.first);
