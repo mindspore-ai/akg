@@ -15,18 +15,21 @@
 # limitations under the License.
 
 """composite topi"""
-import akg.topi as topi
+import functools
+import inspect
+import itertools
+import operator
+import os
+import logging
+import importlib.util
+
 from akg import tvm, autodiff
 from akg.tvm.hybrid import script
 from akg.utils.format_transform import get_const, get_shape
 from akg.utils.dsl_create import get_broadcast_shape
 from akg.utils import validation_check as vc_util
 
-import logging
-import os
-import inspect
-from pathlib import Path
-import importlib.util
+import akg.topi as topi
 import akg.utils as utils
 
 
@@ -742,8 +745,7 @@ def standard_normal(inputs, attrs):
 def csr_div(inputs, attrs):
     row_idx, col_idx, sparse_data, dense = inputs
     shape = tuple(attrs["dense_shape"])
-    assert len(shape) == 2, "only supports 2-dim sparse tensor"
-    assert len(dense.shape) <= 2
+    feature_shape = get_shape(sparse_data.shape)[1:]
     assert dense.dtype == sparse_data.dtype, "data and weight must have the same dtype"
 
     num_rows = row_idx.shape[0] - 1
@@ -764,23 +766,25 @@ def csr_div(inputs, attrs):
             with ib.for_range(0, end - start, name='j') as j:
                 pos = start + j
                 with ib.if_scope(pos < end):
-                    val = ib.load(sparse_data, pos)
                     col = ib.load(col_idx, pos)
-                    with ib.if_scope(need_expand):
-                        ib.store(output, pos, val / ib.load(dense, [col]))
-                    with ib.else_scope():
-                        with ib.if_scope(need_broadcast_first_dim):
-                            ib.store(output, pos, val / ib.load(dense, [0, col]))
+                    with ib.for_range_n(feature_shape, 'k') as k:
+                        store_loc = [pos] + k
+                        val = ib.load(sparse_data, store_loc)
+                        with ib.if_scope(need_expand):
+                            ib.store(output, store_loc, val / ib.load(dense, [col] + k))
                         with ib.else_scope():
-                            with ib.if_scope(need_broadcast_last_dim):
-                                ib.store(output, pos, val / ib.load(dense, [i, 0]))
+                            with ib.if_scope(need_broadcast_first_dim):
+                                ib.store(output, store_loc, val / ib.load(dense, [0, col] + k))
                             with ib.else_scope():
-                                ib.store(output, pos, val / ib.load(dense, [i, col]))
+                                with ib.if_scope(need_broadcast_last_dim):
+                                    ib.store(output, store_loc, val / ib.load(dense, [i, 0] + k))
+                                with ib.else_scope():
+                                    ib.store(output, store_loc, val / ib.load(dense, [i, col] + k))
         return ib.get()
 
     output_name = "T_csr_div_" + dense.op.name + "_" + sparse_data.op.name
     out_buf = tvm.decl_buffer(sparse_data.shape, sparse_data.dtype, output_name)
-    return tvm.extern([shape],
+    return tvm.extern([sparse_data.shape],
                       [dense, sparse_data, col_idx, row_idx],
                       lambda ins, outs: gen_ir(ins[0], ins[1], ins[2], ins[3], outs[0]),
                       dtype=sparse_data.dtype, out_buffers=[out_buf], name=output_name)
@@ -788,45 +792,47 @@ def csr_div(inputs, attrs):
 
 @tvm.register_func("CSRReduceSum")
 def csr_reduce_sum(inputs, attrs):
-    row_idx, col_idx, data = inputs
+    row_idx, _, data = inputs
     # Currently, just support integer axis
     axis = int(attrs['axis'][0])
     shape = tuple(attrs['dense_shape'])
-    assert len(shape) == 2, "only supports 2-dim sparse tensor"
     if axis < 0:
         axis += len(shape)
-    reduce_first_axis = tvm.const(axis == 0)
+    assert axis == 1, "only supports reduction of CSR axis 1"
+    fused_shape = (shape[0],) + shape[2:]
+    fused_axis = functools.reduce(operator.mul, fused_shape)
+    cum_shape = list(itertools.accumulate(reversed(fused_shape), operator.mul))[::-1] + [1]
 
-    num_rows = row_idx.shape[0] - 1
-
-    def gen_ir(data, col_idx, row_idx, output):
+    def gen_ir(data, row_idx, output):
         ib = tvm.ir_builder.create()
-        with ib.for_range(0, num_rows, name='i') as i:
-            ib.store(output, i, tvm.const(0, data.dtype))
+        def split_index(fused_idx):
+            i = fused_idx // cum_shape[1]
+            iter_idx = list(zip((fused_idx % x for x in cum_shape[1: -1]), cum_shape[2:]))
+            k = [x // y for x, y in iter_idx]
+            return i, k
+        with ib.for_range(0, fused_axis, name='idx') as idx:
+            i, k = split_index(idx)
+            ib.store(output, [i] + k, tvm.const(0, data.dtype))
             start = ib.load(row_idx, i)
             end = ib.load(row_idx, i + 1)
             with ib.for_range(0, end - start, name='j') as j:
                 pos = start + j
-                val = tvm.expr.Select(pos < end, ib.load(data, pos), tvm.const(0, data.dtype))
-                with ib.if_scope(reduce_first_axis):
-                    col = ib.load(col_idx, pos)
-                    ib.store(output, col, val + ib.load(output, col))
-                with ib.else_scope():
-                    ib.scope_attr([tvm.api._IterVar((0, shape[1]), "j", 2)], "reduce_update", "")
-                    ib.store(output, i, val + ib.load(output, i))
+                val = tvm.expr.Select(pos < end, ib.load(data, [pos] + k), tvm.const(0, data.dtype))
+                ib.scope_attr([tvm.api._IterVar((0, shape[1]), "j", 2)], "reduce_update", "")
+                ib.store(output, [i] + k, val + ib.load(output, [i] + k))
         return ib.get()
 
-    output_shape = [shape[1 - axis]]
+    output_shape = fused_shape
     output_name = "T_csr_reduce_sum_" + data.op.name + "_" + str(axis)
     out_buf = tvm.decl_buffer(output_shape, data.dtype, output_name)
     return tvm.extern([output_shape],
-                      [data, col_idx, row_idx],
-                      lambda ins, outs: gen_ir(ins[0], ins[1], ins[2], outs[0]),
+                      [data, row_idx],
+                      lambda ins, outs: gen_ir(ins[0], ins[1], outs[0]),
                       dtype=data.dtype, out_buffers=[out_buf], name=output_name)
 
 
 @tvm.register_func("CSRMV")
-def csrmv(inputs, attrs):
+def csrmv(inputs, _):
     indptr, indices, data, weight = inputs
     assert len(data.shape) == 1 and len(weight.shape) == 2, "only supports 2-dim sparse tensor"
     assert data.dtype == weight.dtype, "data and weight must have same dtype."
@@ -860,13 +866,14 @@ def csrmv(inputs, attrs):
 @tvm.register_func("CSRMul")
 def csr_mul(inputs, attrs):
     row_idx, col_idx, sparse_data, dense = inputs
+    shape = tuple(attrs["dense_shape"])
+    feature_shape = get_shape(sparse_data.shape)[1:]
     assert dense.dtype == sparse_data.dtype, "data and weight must have the same dtype"
 
     num_rows = row_idx.shape[0] - 1
     dense_shape = get_shape(dense.shape)
-    sparse_shape = get_shape(attrs['dense_shape'])
+    sparse_shape = get_shape(shape)
     broadcast_shape = get_broadcast_shape(dense_shape, sparse_shape)
-
     need_expand = tvm.const(len(dense_shape) < len(broadcast_shape))
     need_broadcast_first_dim = tvm.const(
         len(dense_shape) == len(broadcast_shape) and dense_shape[0] < broadcast_shape[0])
@@ -881,24 +888,24 @@ def csr_mul(inputs, attrs):
             with ib.for_range(0, end - start, name='j') as j:
                 pos = start + j
                 with ib.if_scope(pos < end):
-                    val = ib.load(sparse_data, pos)
                     col = ib.load(col_idx, pos)
-                    with ib.if_scope(need_expand):
-                        ib.store(output, pos, val * ib.load(dense, [col]))
-                    with ib.else_scope():
-                        with ib.if_scope(need_broadcast_first_dim):
-                            ib.store(output, pos, val * ib.load(dense, [0, col]))
+                    with ib.for_range_n(feature_shape, 'k') as k:
+                        store_loc = [pos] + k
+                        val = ib.load(sparse_data, store_loc)
+                        with ib.if_scope(need_expand):
+                            ib.store(output, store_loc, val * ib.load(dense, [col] + k))
                         with ib.else_scope():
-                            with ib.if_scope(need_broadcast_last_dim):
-                                ib.store(output, pos, val * ib.load(dense, [i, 0]))
+                            with ib.if_scope(need_broadcast_first_dim):
+                                ib.store(output, store_loc, val * ib.load(dense, [0, col] + k))
                             with ib.else_scope():
-                                ib.store(output, pos, val * ib.load(dense, [i, col]))
+                                with ib.if_scope(need_broadcast_last_dim):
+                                    ib.store(output, store_loc, val * ib.load(dense, [i, 0] + k))
+                                with ib.else_scope():
+                                    ib.store(output, store_loc, val * ib.load(dense, [i, col] + k))
         return ib.get()
 
     output_name = "T_csr_mul_" + dense.op.name + "_" + sparse_data.op.name
-
-    out_buf = tvm.decl_buffer(sparse_data.shape, sparse_data.dtype, "output_data")
-
+    out_buf = tvm.decl_buffer(sparse_data.shape, sparse_data.dtype, output_name)
     return tvm.extern([sparse_data.shape],
                       [dense, sparse_data, col_idx, row_idx],
                       lambda ins, outs: gen_ir(ins[0], ins[1], ins[2], ins[3], outs[0]),
@@ -911,7 +918,7 @@ def csr_gather(inputs, attrs):
     row_idx, col_idx, dense = inputs
 
     num_rows = row_idx.shape[0] - 1
-    shape = get_shape(attrs['dense_shape'])
+    feature_shape = get_shape(dense.shape[2:])
 
     def gen_ir(dense, col_idx, row_idx, output):
         ib = tvm.ir_builder.create()
@@ -922,14 +929,15 @@ def csr_gather(inputs, attrs):
                 pos = start + j
                 with ib.if_scope(pos < end):
                     col = ib.load(col_idx, pos)
-                    ib.store(output, pos, ib.load(dense, [i, col]))
+                    with ib.for_range_n(feature_shape, 'k') as k:
+                        ib.store(output, [pos] + k, ib.load(dense, [i, col] + k))
         return ib.get()
 
     output_name = "T_csr_gather_" + dense.op.name
+    output_shape = get_shape(col_idx.shape) + feature_shape
+    out_buf = tvm.decl_buffer(output_shape, dense.dtype, "output_data")
 
-    out_buf = tvm.decl_buffer(col_idx.shape, dense.dtype, "output_data")
-
-    return tvm.extern([col_idx.shape],
+    return tvm.extern([output_shape],
                       [dense, col_idx, row_idx],
                       lambda ins, outs: gen_ir(ins[0], ins[1], ins[2], outs[0]),
                       dtype=dense.dtype,

@@ -29,20 +29,37 @@ def csr_gather(dense, col_idx, row_idx, shape, target=CUDA):
     assert target == CUDA, "only supports GPU"
     return composite.csr_gather((row_idx, col_idx, dense), {"dense_shape": shape})
 
-def gen_data(shape, dtype1, dtype2):
+def gen_data(shape, dtype1, dtype2, nnz=-1):
+    if nnz > 0:
+        indptr_choice = np.arange(0, nnz, dtype=dtype2)
+        indptr = np.sort(np.random.choice(indptr_choice, shape[0] - 1, replace=True))
+        indptr = np.concatenate(
+            (np.array([0], dtype=dtype2), indptr, np.array([nnz], dtype=dtype2)))
+        indices_choice = np.arange(shape[1], dtype=dtype2)
+        indices = np.zeros(nnz, dtype=dtype2)
+        for i in range(0, shape[0]):
+            row_start = indptr[i]
+            row_end = indptr[i + 1]
+            indices[row_start : row_end] = np.sort(np.random.choice(indices_choice, row_end - row_start, replace=False))
+        dense = random_gaussian(shape).astype(dtype1)
+        sparse_data = scipy.sparse.csr_matrix((random_gaussian((nnz,)), indices, indptr), shape=shape[:2])
+        coo = sparse_data.tocoo()
+        coo_idx = np.stack((coo.row, coo.col))
+        expect = dense[coo_idx.tolist()]
+        return dense, indices.astype(dtype2), indptr.astype(dtype2), expect
     dense = random_gaussian(shape).astype(dtype1)
     sparse_data = scipy.sparse.rand(shape[0], shape[1], density=0.2, format='csr', dtype=dtype1)
     coo = sparse_data.tocoo()
     coo_idx = np.stack((coo.row, coo.col))
     expect = dense[coo_idx.tolist()]
-    return dense, sparse_data.indices.astype(dtype2), sparse_data.indptr.astype(dtype2), np.asarray(expect)
+    return dense, sparse_data.indices.astype(dtype2), sparse_data.indptr.astype(dtype2), expect
 
-def csr_gather_run(shape, dtype1, dtype2, poly_sch=True, attrs=None):
+def csr_gather_run(shape, dtype1, dtype2, nnz=-1, poly_sch=True, attrs=None):
     if not attrs:
         attrs = {"target": "cuda"}
     # gen data
     op_attrs = [shape]
-    dense, col_idx, row_idx, expect = gen_data(shape, dtype1, dtype2)
+    dense, col_idx, row_idx, expect = gen_data(shape, dtype1, dtype2, nnz=nnz)
     output_shape = expect.shape
     attrs["csr_avg_row"] = col_idx.shape[0] // shape[0]
     attrs["is_csr"] = True

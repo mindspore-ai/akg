@@ -1,5 +1,7 @@
-import numpy as np
+import functools
+import operator
 import scipy.sparse
+import numpy as np
 
 import akg
 from akg import tvm
@@ -16,18 +18,43 @@ def csr_div(dense, sparse_data, col_idx, row_idx, shape, target=CUDA):
     assert target == CUDA, "only supports GPU"
     return composite.csr_div((row_idx, col_idx, sparse_data, dense), {"dense_shape": shape})
 
-def gen_data(shape1, shape2, dtype1, dtype2):
+def gen_data(shape1, shape2, dtype1, dtype2, nnz=-1):
+    if nnz > 0:
+        indptr_choice = np.arange(0, nnz, dtype=dtype2)
+        indptr = np.sort(np.random.choice(indptr_choice, shape2[0] - 1, replace=True))
+        indptr = np.concatenate(
+            (np.array([0], dtype=dtype2), indptr, np.array([nnz], dtype=dtype2)))
+        indices_choice = np.arange(shape2[1], dtype=dtype2)
+        indices = np.zeros(nnz, dtype=dtype2)
+        for i in range(0, shape2[0]):
+            row_start = indptr[i]
+            row_end = indptr[i + 1]
+            indices[row_start : row_end] = np.sort(np.random.choice(indices_choice, row_end - row_start, replace=False))
+        sparse_data = random_gaussian((nnz,) + shape2[2:]).astype(dtype1)
+        x = sparse_data.reshape(nnz, -1)
+        dense = random_gaussian(shape1).astype(dtype1)
+        y = np.broadcast_to(dense, shape2).reshape(shape2[0], shape2[1], -1)
+        for i in range(functools.reduce(operator.mul, shape2[2:], 1)):
+            sparse = scipy.sparse.csr_matrix((x[..., i], indices, indptr), shape=shape2[:2])
+            out = sparse.multiply(np.divide(1, y[..., i]))
+            if i == 0:
+                expect = [out.data]
+            else:
+                expect.append(out.data)
+        expect = np.moveaxis(np.stack(expect, 0).reshape(shape2[2:] + (nnz,)), -1, 0)
+        return dense, sparse_data, indices.astype(dtype2), indptr.astype(dtype2), expect
+    assert len(shape2) == 2
     dense = random_gaussian(shape1).astype(dtype1)
     sparse_data = scipy.sparse.rand(shape2[0], shape2[1], density=0.2, format='csr', dtype=dtype1)
     expect = sparse_data.multiply(np.divide(1, np.broadcast_to(dense, shape2)))
     return dense, sparse_data.data, sparse_data.indices.astype(dtype2), sparse_data.indptr.astype(dtype2), expect.data
     
-def csr_div_run(shape1, shape2, dtype1, dtype2, poly_sch=True, attrs=None):
+def csr_div_run(shape1, shape2, dtype1, dtype2, nnz=-1, poly_sch=True, attrs=None):
     if not attrs:
         attrs = {"target": "cuda"}
     # gen data
     op_attrs = [shape2]
-    dense, sparse_data, col_idx, row_idx, expect = gen_data(shape1, shape2, dtype1, dtype2)
+    dense, sparse_data, col_idx, row_idx, expect = gen_data(shape1, shape2, dtype1, dtype2, nnz=nnz)
     output_shape = expect.shape
     attrs["csr_avg_row"] = sparse_data.shape[0] // shape1[0]
     attrs["is_csr"] = True

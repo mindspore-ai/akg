@@ -31,6 +31,8 @@ class TestCase(TestBase):
         self.test_args = [
             # testflag,opfuncname,testRunArgs, setdimArgs
             ("000_case", csr_gather_run, ((10000, 10000), 'float32', 'int32'), ["level0"]),
+            ("001_case", csr_gather_run, ((2708, 2708, 8), 'float32', 'int32', 1433), ["level0"]),
+            ("002_case", csr_gather_run, ((2708, 2708, 8, 8), 'float32', 'int32', 1433), ["level0"]),
         ]
         return True
 

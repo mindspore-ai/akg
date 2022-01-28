@@ -143,7 +143,7 @@ def gen_indices_gather(shape1, shape2, dtype2, axis):
     indices += offset
     return indices
 
-def gen_indices_unsorted_segment_sum(shape1, shape2, dtype2, num):
+def gen_indices_unsorted_segment_sum(_, shape2, dtype2, num):
     # currently only support 1D
     assert dtype2 == "int32", "Currently only support int32 indices"
     return np.random.randint(low=0, high=num, size=shape2).astype(dtype2)
@@ -189,9 +189,10 @@ def gen_csr_indices(indices_argument):
     data_shape = indices_argument.data_shape
     indices_shape = indices_argument.indices_shape
     indices_dtype = indices_argument.indices_dtype
-    indptr_choice = np.arange(1, indices_shape[0], dtype=indices_dtype)
-    indptr = np.sort(np.random.choice(indptr_choice, data_shape[0], replace=True))
-    indptr = np.concatenate((np.array([0], dtype=indices_dtype), indptr))
+    indptr_choice = np.arange(0, indices_shape[0], dtype=indices_dtype)
+    indptr = np.sort(np.random.choice(indptr_choice, data_shape[0] - 1, replace=True))
+    indptr = np.concatenate(
+        (np.array([0], dtype=indices_dtype), indptr, np.array([indices_shape[0]], dtype=indices_dtype)))
     indices_choice = np.arange(data_shape[1], dtype=indices_dtype)
     indices = np.zeros(indices_shape, dtype=indices_dtype)
     for i in range(0, data_shape[0]):
