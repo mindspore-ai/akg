@@ -14,10 +14,10 @@
 
 from akg.tvm.hybrid import script
 
-
 @script(capture=locals())
 def hpl_cholesky(a):
     w = a.shape[0]
+    out = output_tensor(a.shape, a.dtype)
     tmp = allocate((a.shape[0],), a.dtype, "local")
     tmp_0 = allocate((a.shape[0],), a.dtype, "local")
     tmp_1 = allocate((a.shape[0],), a.dtype, "local")
@@ -25,18 +25,18 @@ def hpl_cholesky(a):
     out_1 = allocate(a.shape, a.dtype, "local")
     for i in range(w):
         for j in range(w):
-            tmp_0[j] = a[i, i]
+            tmp_0[j] = out[i, i]
             tmp_1[j] = sqrt(tmp_0[j])
-            tmp[j] = a[i, j] / tmp_1[j]
+            tmp[j] = out[i, j] / tmp_1[j]
         for j in range(w):
             if j >= i:
-                a[i, j] = tmp[j]
+                out[i, j] = tmp[j]
             else:
-                a[i, j] = float16(0.0)
+                out[i, j] = float16(0.0)
         for k in range(a.shape[0]):
             for l in range(a.shape[1]):
                 if k > i and l > i:
-                    out_0[k, l] = a[i, k]
-                    out_1[k, l] = out_0[k, l] * a[i, l]
-                    a[k, l] = a[k, l] - out_1[k, l]
-    return a
+                    out_0[k, l] = out[i, k]
+                    out_1[k, l] = out_0[k, l] * out[i, l]
+                    out[k, l] = out[k, l] - out_1[k, l]
+    return out
