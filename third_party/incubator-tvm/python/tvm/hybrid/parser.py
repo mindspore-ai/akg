@@ -16,7 +16,6 @@
 # under the License.
 """Hybrid Script Parser"""
 
-# 2022.01.19 - Support negative extent for range.
 # 2021.12.15 - Support block_realize intrin in with scope.
 # 2021.10.21 - Support reverse order loop range.
 # 2019.12.30 - Modify parser.py, add TensorIntrinSubscriptParser, generate_one_assign, visit_Assign,
@@ -793,14 +792,12 @@ class HybridParser(ast.NodeVisitor):
         iter_var, low, ext, for_type, step = self.visit(node.iter)
         _internal_assert(isinstance(node.target, ast.Name), \
                          "The loop iterator should be a variable!")
-        ext = _ir_pass.Simplify(ext)
-        if isinstance(ext, _expr.ConstExpr) and ext.value <= 0:
-            return util.make_nop()
 
         _name = node.target.id
 
         if isinstance(for_type, tuple):
             low = _ir_pass.Simplify(low)
+            ext = _ir_pass.Simplify(ext)
             _internal_assert(isinstance(low, _expr.ConstExpr) and
                              isinstance(ext, _expr.ConstExpr) and
                              isinstance(step, _expr.ConstExpr),
