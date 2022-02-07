@@ -15,6 +15,6 @@ def hpl_trsm(a, b):
                 for k in range(16):
                     inverse_0[i, l*16+k] = a[i, j] * out[j, l*16+k]
                     out[i, l*16+k] = out[i, l*16+k] - inverse_0[i, l*16+k]
-            for k in range(col):
+            for k in range(16):
                 out[i, l*16+k] = out[i, l*16+k] / a[i, i]
     return out

@@ -29,6 +29,7 @@ class TestCase(TestBase):
         self.args = [
             # testflag, opfuncname, testRunArgs
             ("001_hpl_trsm", "hpl_trsm_run", ([16, 16], "float16")),
+            ("001_hpl_trsm", "hpl_trsm_run", ([32, 32], "float16")),
             ("001_hpl_trsm", "hpl_trsm_run", ([16, 16], "float32")),
         ]
         return
