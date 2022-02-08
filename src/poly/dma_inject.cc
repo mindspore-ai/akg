@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2021 Huawei Technologies Co., Ltd
+ * Copyright 2019-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -1400,6 +1400,31 @@ isl::schedule_node PlaceIm2colBelowImpl(ScopInfo &scop_info, isl::schedule_node 
   return tree;
 }
 
+isl::schedule_node PlaceGemmTransposeImpl(ScopInfo &scop_info, isl::schedule_node tree,
+                                          const TensorFootprintCluster &cluster, const isl::map &footprint,
+                                          const isl::set &original_elements, const isl::map &exact_reads) {
+  bool reads = (!cluster.RichReadRelations().is_empty() && cluster.ReadNeedDma());
+  if (reads) {
+    auto cluster_id = footprint.get_tuple_id(isl_dim_out);
+
+    isl::set read_set = exact_reads.intersect_range(original_elements).wrap();
+    isl::set buffered_footprint = cluster.BufferedFootprint().set_tuple_id(cluster_id);
+    read_set = read_set.product(buffered_footprint);
+
+    auto fp_space_identity = isl::multi_aff::identity(footprint.get_space().range().map_from_set());
+    auto buffer_def = scop_info.analysis_result_.GetBufferDefInfo(cluster_id);
+    fp_space_identity = RemoveDimensionOfSizeOne(fp_space_identity, buffer_def.TensorSize(tree.parent()));
+    auto extension_map = footprint.wrap().identity().domain_factor_domain().domain_factor_domain();
+
+    isl::id read_id = isl::id(tree.ctx(), scop_info.GetIslReadName(cluster_id));
+    auto read_extension = extension_map.intersect_range(read_set).set_tuple_id(isl_dim_out, read_id);
+    auto read_mupa = isl::multi_union_pw_aff(fp_space_identity.pullback(
+      isl::multi_aff::wrapped_range_map(footprint.get_space().wrap().set_set_tuple_id(read_id))));
+    tree = InsertExtensionBeforeOrAfter(scop_info, tree.get_child(0), read_extension, read_mupa, isl_bool_true);
+  }
+  return tree;
+}
+
 /*
  * Update sizes of a specific tensor in order to support realize shape expansion in UB -> L1 strided copy
  * param new_sizes: new shape of the tensor
@@ -1735,57 +1760,14 @@ isl::schedule_node PlaceDataCopyBelowImpl(ScopInfo &scop_info, isl::schedule_nod
   return tree;
 }
 
-isl::schedule_node PlaceInnerDataCopyBelow(ScopInfo &scop_info, const isl::schedule_node &tree,
-                                           const TensorFootprintCluster &cluster,
-                                           const TensorFootprintCluster &outer_scope_cluster, const isl::id &tensor_id,
-                                           const isl::id &cluster_id, const isl::id &outer_scope_cluster_id,
-                                           const isl::union_map &sch) {
+std::vector<isl::map> GetInnerAndOuterFootprint(const isl::map &inner_footprint_map,
+                                                const isl::map &outer_footprint_map, const isl::id &inner_cluster_id,
+                                                const isl::id &outer_cluster_id) {
   // map :: [S -> O] -> P_inner
-  isl::map inner_scope_footprint = isl::map(cluster.ComputeBufferedFootprints()).set_tuple_id(isl_dim_out, cluster_id);
+  isl::map inner_scope_footprint = inner_footprint_map.set_tuple_id(isl_dim_out, inner_cluster_id);
 
   // map :: [S -> O] -> P_outer
-  isl::map outer_scope_footprint =
-    isl::map(outer_scope_cluster.ComputeBufferedFootprints()).set_tuple_id(isl_dim_out, outer_scope_cluster_id);
-
-  isl::set outerScopeGroupFootprint = outer_scope_cluster.BufferedFootprint().set_tuple_id(outer_scope_cluster_id);
-
-  // space :: S -> [O -> P]
-  isl::space outerSpace = outer_scope_footprint.get_space().curry();
-  isl::space innerSpace = inner_scope_footprint.get_space().curry();
-  auto outer_scope_in_dims = isl_space_dim(outerSpace.get(), isl_dim_in);
-  auto inner_scope_in_dims = isl_space_dim(innerSpace.get(), isl_dim_in);
-  CHECK_GE(inner_scope_in_dims, outer_scope_in_dims);
-
-  if (inner_scope_in_dims > outer_scope_in_dims) {
-    outer_scope_footprint = outer_scope_footprint.curry();
-    outer_scope_footprint = isl::manage(
-      isl_map_add_dims(outer_scope_footprint.copy(), isl_dim_in, inner_scope_in_dims - outer_scope_in_dims));
-    outer_scope_footprint = outer_scope_footprint.uncurry();
-  }
-
-  // map :: [S -> O] -> S
-  auto domain_access_to_domain_map =
-    isl::map(isl::multi_aff::domain_map(inner_scope_footprint.get_space().domain().unwrap()));
-
-  // map :: [S -> O] -> [S -> P_outer]
-  outer_scope_footprint = domain_access_to_domain_map.range_product(outer_scope_footprint);
-
-  inner_scope_footprint = inner_scope_footprint.apply_domain(outer_scope_footprint);
-
-  return PlaceDataCopyBelowImpl(scop_info, tree, cluster, inner_scope_footprint, tensor_id, outerScopeGroupFootprint,
-                                cluster.RichReadRelations().wrap().apply(outer_scope_footprint).unwrap(),
-                                cluster.RichWriteRelations().wrap().apply(outer_scope_footprint).unwrap(), sch);
-}
-
-isl::schedule_node PlaceIm2colBelow(ScopInfo &scop_info, const isl::schedule_node &tree,
-                                    const TensorFootprintCluster &cluster,
-                                    const TensorFootprintCluster &outer_scope_cluster, const isl::id &cluster_id,
-                                    const isl::id &outer_scope_cluster_id) {
-  // map :: [S -> O] -> P_inner
-  isl::map inner_scope_footprint = cluster.footprint_map_.set_tuple_id(isl_dim_out, cluster_id);
-
-  // map :: [S -> O] -> P_outer
-  isl::map outer_scope_footprint = outer_scope_cluster.footprint_map_.set_tuple_id(isl_dim_out, outer_scope_cluster_id);
+  isl::map outer_scope_footprint = outer_footprint_map.set_tuple_id(isl_dim_out, outer_cluster_id);
 
   // space :: S -> [O -> P_outer]
   isl::space outerSpace = outer_scope_footprint.get_space().curry();
@@ -1810,9 +1792,64 @@ isl::schedule_node PlaceIm2colBelow(ScopInfo &scop_info, const isl::schedule_nod
 
   // map :: [S -> P_outer] -> P_inner
   inner_scope_footprint = inner_scope_footprint.apply_domain(outer_scope_footprint);
+
+  std::vector<isl::map> inner_outer_footprint;
+  inner_outer_footprint.push_back(inner_scope_footprint);
+  inner_outer_footprint.push_back(outer_scope_footprint);
+  return inner_outer_footprint;
+}
+
+isl::schedule_node PlaceInnerDataCopyBelow(ScopInfo &scop_info, const isl::schedule_node &tree,
+                                           const TensorFootprintCluster &cluster,
+                                           const TensorFootprintCluster &outer_scope_cluster, const isl::id &tensor_id,
+                                           const isl::id &cluster_id, const isl::id &outer_scope_cluster_id,
+                                           const isl::union_map &sch) {
+  isl::map inner_footprint_map = isl::map(cluster.ComputeBufferedFootprints());
+  isl::map outer_footprint_map = isl::map(outer_scope_cluster.ComputeBufferedFootprints());
+  std::vector<isl::map> inner_outer_footprint =
+    GetInnerAndOuterFootprint(inner_footprint_map, outer_footprint_map, cluster_id, outer_scope_cluster_id);
+  CHECK(inner_outer_footprint.size() >= INNER_OUTER_FOOTPRINT_SIZE);
+
+  isl::map inner_scope_footprint = inner_outer_footprint[0];
+  isl::map outer_scope_footprint = inner_outer_footprint[1];
+
+  isl::set outerScopeGroupFootprint = outer_scope_cluster.BufferedFootprint().set_tuple_id(outer_scope_cluster_id);
+
+  return PlaceDataCopyBelowImpl(scop_info, tree, cluster, inner_scope_footprint, tensor_id, outerScopeGroupFootprint,
+                                cluster.RichReadRelations().wrap().apply(outer_scope_footprint).unwrap(),
+                                cluster.RichWriteRelations().wrap().apply(outer_scope_footprint).unwrap(), sch);
+}
+
+isl::schedule_node PlaceIm2colBelow(ScopInfo &scop_info, const isl::schedule_node &tree,
+                                    const TensorFootprintCluster &cluster,
+                                    const TensorFootprintCluster &outer_scope_cluster, const isl::id &cluster_id,
+                                    const isl::id &outer_scope_cluster_id) {
+  std::vector<isl::map> inner_outer_footprint = GetInnerAndOuterFootprint(
+    cluster.footprint_map_, outer_scope_cluster.footprint_map_, cluster_id, outer_scope_cluster_id);
+  CHECK(inner_outer_footprint.size() >= INNER_OUTER_FOOTPRINT_SIZE);
+
+  isl::map inner_scope_footprint = inner_outer_footprint[0];
   return PlaceIm2colBelowImpl(scop_info, tree, cluster, inner_scope_footprint,
                               outer_scope_cluster.BufferedFootprint().set_tuple_id(outer_scope_cluster_id),
                               outer_scope_cluster.BufferedFootprint().set_tuple_id(outer_scope_cluster_id));
+}
+
+isl::schedule_node PlaceGemmTranspose(ScopInfo &scop_info, const isl::schedule_node &tree,
+                                      const TensorFootprintCluster &cluster,
+                                      const TensorFootprintCluster &outer_scope_cluster, const isl::id &cluster_id,
+                                      const isl::id &outer_scope_cluster_id) {
+  std::vector<isl::map> inner_outer_footprint = GetInnerAndOuterFootprint(
+    cluster.footprint_map_, outer_scope_cluster.footprint_map_, cluster_id, outer_scope_cluster_id);
+  CHECK(inner_outer_footprint.size() >= INNER_OUTER_FOOTPRINT_SIZE);
+  isl::map inner_scope_footprint = inner_outer_footprint[0];
+
+  inner_outer_footprint = GetInnerAndOuterFootprint(
+    outer_scope_cluster.footprint_map_, outer_scope_cluster.footprint_map_, cluster_id, outer_scope_cluster_id);
+  CHECK(inner_outer_footprint.size() >= INNER_OUTER_FOOTPRINT_SIZE);
+  isl::map outer_scope_footprint = inner_outer_footprint[1];
+  return PlaceGemmTransposeImpl(scop_info, tree, cluster, inner_scope_footprint,
+                                outer_scope_cluster.BufferedFootprint().set_tuple_id(outer_scope_cluster_id),
+                                outer_scope_cluster.RichReadRelations().wrap().apply(outer_scope_footprint).unwrap());
 }
 
 isl::schedule_node PlaceOuterDataCopyBelow(ScopInfo &scop_info, const isl::schedule_node &tree,

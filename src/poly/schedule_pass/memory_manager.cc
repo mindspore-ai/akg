@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2021 Huawei Technologies Co., Ltd
+ * Copyright 2019-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -149,7 +149,7 @@ isl::schedule_node MemoryManager::HoistTensorClusterFootprint(isl::schedule_node
     if (scop_info_.mmu_info_.IsGemmDataTranspose()) {
       const isl::id &trans_id = dst_tensor_id;
       const isl::id &cluster_id = dst_tensor_id;
-      tree = PlaceIm2colBelow(scop_info_, tree, *gemm_a_transpose_fp_cluster_, *fp_cluster, trans_id, cluster_id);
+      tree = PlaceGemmTranspose(scop_info_, tree, *gemm_a_transpose_fp_cluster_, *fp_cluster, trans_id, cluster_id);
       scop_info_.analysis_result_.active_buffer_footprints_.emplace_back(
         std::make_pair(active_domains, BufferedFootPrintInfo{gemm_a_transpose_fp_cluster_, schedule, cluster_id}));
     }
@@ -159,7 +159,7 @@ isl::schedule_node MemoryManager::HoistTensorClusterFootprint(isl::schedule_node
     if (scop_info_.mmu_info_.IsGemmWeightTranspose()) {
       const isl::id &trans_id = dst_tensor_id;
       const isl::id &cluster_id = dst_tensor_id;
-      tree = PlaceIm2colBelow(scop_info_, tree, *gemm_b_transpose_fp_cluster_, *fp_cluster, trans_id, cluster_id);
+      tree = PlaceGemmTranspose(scop_info_, tree, *gemm_b_transpose_fp_cluster_, *fp_cluster, trans_id, cluster_id);
       scop_info_.analysis_result_.active_buffer_footprints_.emplace_back(
         std::make_pair(active_domains, BufferedFootPrintInfo{gemm_b_transpose_fp_cluster_, schedule, cluster_id}));
     }
@@ -333,6 +333,7 @@ void MemoryManager::HoistIm2colBufferFootprintCluster(const isl::union_map &sche
     int64_t t_ho = 1;
     int64_t t_wo = 1;
     int64_t c_in = 0;
+    int64_t block_size = 16;
     LOG(INFO) << "im2col or fractal foot_print_ box is invalid.";
 
     Map<std::string, NodeRef> attr_info = scop_info_.mmu_info_.GetConvAttrInfo();
@@ -367,21 +368,22 @@ void MemoryManager::HoistIm2colBufferFootprintCluster(const isl::union_map &sche
       }
     }
     if (!replace_ci) {
-      t_ci = (int64_t)(c_in + 15) / 16;
+      t_ci = (int64_t)(c_in + block_size - 1) / block_size;
     }
 
     std::vector<size_t> sizes;
-    sizes.push_back(1);                                                     // 1
-    sizes.push_back((size_t)((t_ho * t_wo + 15) / 16));                     // 109
-    sizes.push_back((size_t)(t_ci * k_h * k_w));                            // 43648
-    sizes.push_back(16);                                                    // 16
-    sizes.push_back(16);                                                    // 16
-    scop_info_.mmu_info_.fractal_int_info_[ATTR_CONV_GMM_M] = t_ho * t_wo;  // 1739
-    scop_info_.mmu_info_.fractal_int_info_[ATTR_CONV_BATCH] = (int64_t)sizes[0];
-    scop_info_.mmu_info_.fractal_int_info_[ATTR_CONV_TILE_M] = (int64_t)sizes[1];
-    scop_info_.mmu_info_.fractal_int_info_[ATTR_CONV_TILE_K] = (int64_t)sizes[2];
-    scop_info_.mmu_info_.fractal_int_info_[ATTR_CONV_M_INNER] = (int64_t)sizes[3];
-    scop_info_.mmu_info_.fractal_int_info_[ATTR_CONV_K_INNER] = (int64_t)sizes[4];
+    sizes.push_back(1);                                                      // 1
+    sizes.push_back((size_t)((t_ho * t_wo + block_size - 1) / block_size));  // 109
+    sizes.push_back((size_t)(t_ci * k_h * k_w));                             // 43648
+    sizes.push_back(block_size);                                             // BLOCK_SIZE
+    sizes.push_back(block_size);                                             // BLOCK_SIZE
+    scop_info_.mmu_info_.fractal_int_info_[ATTR_CONV_GMM_M] = t_ho * t_wo;   // 1739
+    int tmp_size = 0;
+    scop_info_.mmu_info_.fractal_int_info_[ATTR_CONV_BATCH] = (int64_t)sizes[tmp_size++];
+    scop_info_.mmu_info_.fractal_int_info_[ATTR_CONV_TILE_M] = (int64_t)sizes[tmp_size++];
+    scop_info_.mmu_info_.fractal_int_info_[ATTR_CONV_TILE_K] = (int64_t)sizes[tmp_size++];
+    scop_info_.mmu_info_.fractal_int_info_[ATTR_CONV_M_INNER] = (int64_t)sizes[tmp_size++];
+    scop_info_.mmu_info_.fractal_int_info_[ATTR_CONV_K_INNER] = (int64_t)sizes[tmp_size];
     GatherFractalDefInfo(node, tensor_info, sizes);
   }
   scop_info_.mmu_info_.fractal_int_info_[ATTR_CONV_FEATURE_W] =
@@ -449,33 +451,38 @@ void MemoryManager::AddStateTensorsDataFlow() {
     if (it != tensor_mem_flows[name].end() && it2 != tensor_mem_flows[name].end()) {
       std::vector<std::string> name_flow1, name_flow2, name_flow3;
       MemFlow mem_flow1, mem_flow2, mem_flow3;
+      int64_t zeroth_pos = 0;
+      int64_t first_pos = 1;
+      int64_t second_pos = 2;
+      int64_t third_pos = 3;
+      int64_t fourth_pos = 4;
       if (scop_info_.mmu_info_.IsConv() || scop_info_.mmu_info_.IsGemm()) {
-        name_flow1.push_back(tensor_name_flows[name][0]);
-        mem_flow1.push_back(tensor_mem_flows[name][0]);
-        name_flow1.push_back(tensor_name_flows[name][2]);
-        mem_flow1.push_back(tensor_mem_flows[name][2]);
-        name_flow1.push_back(tensor_name_flows[name][1]);
-        mem_flow1.push_back(tensor_mem_flows[name][1]);
+        name_flow1.push_back(tensor_name_flows[name][zeroth_pos]);
+        mem_flow1.push_back(tensor_mem_flows[name][zeroth_pos]);
+        name_flow1.push_back(tensor_name_flows[name][second_pos]);
+        mem_flow1.push_back(tensor_mem_flows[name][second_pos]);
+        name_flow1.push_back(tensor_name_flows[name][first_pos]);
+        mem_flow1.push_back(tensor_mem_flows[name][first_pos]);
 
-        name_flow2.push_back(tensor_name_flows[name][0]);
-        mem_flow2.push_back(tensor_mem_flows[name][0]);
-        name_flow2.push_back(tensor_name_flows[name][2]);
-        mem_flow2.push_back(tensor_mem_flows[name][2]);
-        name_flow2.push_back(tensor_name_flows[name][3]);
-        mem_flow2.push_back(tensor_mem_flows[name][3]);
+        name_flow2.push_back(tensor_name_flows[name][zeroth_pos]);
+        mem_flow2.push_back(tensor_mem_flows[name][zeroth_pos]);
+        name_flow2.push_back(tensor_name_flows[name][second_pos]);
+        mem_flow2.push_back(tensor_mem_flows[name][second_pos]);
+        name_flow2.push_back(tensor_name_flows[name][third_pos]);
+        mem_flow2.push_back(tensor_mem_flows[name][third_pos]);
       }
 
       if (scop_info_.mmu_info_.IsConv() && scop_info_.mmu_info_.IsA(name)) {
-        name_flow2.push_back(tensor_name_flows[name][4]);
-        mem_flow2.push_back(tensor_mem_flows[name][4]);
+        name_flow2.push_back(tensor_name_flows[name][fourth_pos]);
+        mem_flow2.push_back(tensor_mem_flows[name][fourth_pos]);
       }
 
       if (scop_info_.IsInBinds(name)) {
         // add copyin tensor, gm write dataflow
-        name_flow3.push_back(tensor_name_flows[name][0]);
-        mem_flow3.push_back(tensor_mem_flows[name][0]);
-        name_flow3.push_back(tensor_name_flows[name][1]);
-        mem_flow3.push_back(tensor_mem_flows[name][1]);
+        name_flow3.push_back(tensor_name_flows[name][zeroth_pos]);
+        mem_flow3.push_back(tensor_mem_flows[name][zeroth_pos]);
+        name_flow3.push_back(tensor_name_flows[name][first_pos]);
+        mem_flow3.push_back(tensor_mem_flows[name][first_pos]);
         AddTensorDataFlow(mem_flow3, name_flow3, REALIZE_C1);
       }
 
