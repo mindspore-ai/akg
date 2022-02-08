@@ -166,7 +166,16 @@ class CollectToTTensor : public IRVisitor {
 };
 
 class CheckContainsConst : public IRVisitor {
+ public:
+  explicit CheckContainsConst(const FunctionRef &func) : func_(func) {}
+  bool call_match_{false};
+  bool contains_const_{false};
+
+ private:
   void Visit_(const Call *op) final {
+    if (func_.same_as(op->func)) {
+      call_match_ = true;
+    }
     return;
   }
 
@@ -179,8 +188,7 @@ class CheckContainsConst : public IRVisitor {
     contains_const_ = true;
   }
 
- public:
-  bool contains_const_{false};
+  const FunctionRef &func_;
 };
 
 void OpTypeCollector::Collect() { this->Visit(stmt_); }
@@ -363,10 +371,9 @@ void OpTypeCollector::AnalyzeProvide(const Provide *op) {
 
   prov.basic_op_type = basic_op_type.empty() ? GetBasicOpType(dst_tensor, src_tensor) : basic_op_type;
 
-  auto check_contains_const = CheckContainsConst();
+  auto check_contains_const = CheckContainsConst(op->func);
   check_contains_const.Visit(op->value);
-  if (prov.basic_op_type.find(AT_ELEMWISE) != std::string::npos && check_contains_const.contains_const_ &&
-      dst_tensor.loops.size() > 0) {
+  if (check_contains_const.contains_const_ && check_contains_const.call_match_ && dst_tensor.loops.size() > 0) {
     prov.basic_op_type += AT_COUNT;
   }
 
