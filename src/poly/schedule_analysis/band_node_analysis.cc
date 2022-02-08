@@ -66,19 +66,25 @@ class GetBatchNum final : public IRVisitor {
   void Visit_(const Call *op) final {
     if (visited_axis_.size() == 0) {
       batch_axis_num_ = op->args.size();
+      batch_axis_var_num_ = batch_axis_num_;
       for (size_t i = 0; i < op->args.size(); i++) {
         visited_axis_.push_back(op->args[i]);
       }
     } else {
       unsigned int same_axis_num = 0;
+      unsigned int same_axis_var_num = 0;
       for (size_t i = 0; (i < op->args.size()) && (i < visited_axis_.size()); i++) {
         if (Equal(op->args[i], visited_axis_[i])) {
+          if (op->args[i].as<IntImm>() == nullptr) {
+            same_axis_var_num++;
+          }
           same_axis_num++;
         } else {
           break;
         }
       }
-      if (batch_axis_num_ > same_axis_num) batch_axis_num_ = same_axis_num;
+      batch_axis_num_ = batch_axis_num_ > same_axis_num ? same_axis_num : batch_axis_num_;
+      batch_axis_var_num_ = batch_axis_var_num_ > same_axis_var_num ? same_axis_var_num : batch_axis_var_num_;
     }
     IRVisitor::Visit_(op);
   }
@@ -86,11 +92,12 @@ class GetBatchNum final : public IRVisitor {
  public:
   std::vector<Expr> visited_axis_;
   unsigned int batch_axis_num_{0};
+  unsigned int batch_axis_var_num_{0};
 };
 
 class OperatorInfoCollector {
  public:
-  OperatorInfoCollector(ScopInfo &scop_info) : scop_info_(scop_info) {}
+  explicit OperatorInfoCollector(ScopInfo &scop_info) : scop_info_(scop_info), const_batch_axis_num_(0) {}
   ~OperatorInfoCollector() = default;
   void Run() {
     auto op_type = scop_info_.analysis_result_.GetOpTemplate();
@@ -267,6 +274,7 @@ class OperatorInfoCollector {
       scop_info_.analysis_result_.RecordNotReduceAxisForMatmul(vars_not_reduce);
       scop_info_.analysis_result_.RecordReduceAxisForMatmul(vars_reduce);
       scop_info_.analysis_result_.RecordBatchAxisNumForMatmul(get_batch_num.batch_axis_num_);
+      const_batch_axis_num_ = get_batch_num.batch_axis_num_ - get_batch_num.batch_axis_var_num_;
 
       isl::ctx ctx = op_domain.tuple.ctx();
 
@@ -371,11 +379,15 @@ class OperatorInfoCollector {
     auto axis = scop_info_.analysis_result_.GetNotReduceAxisForMatmul();
     auto reduce_axis = scop_info_.analysis_result_.GetReduceAxisForMatmul();
     auto batch_num_axis = scop_info_.analysis_result_.GetBatchAxisNumForMatmul();
-    if (axis.size() < 2 || reduce_axis.size() < 1 || axis.size() <= batch_num_axis) return false;
+    auto nonzero_batch_axis_num = batch_num_axis - const_batch_axis_num_;
+    const unsigned int not_reduce_axis_num = 2;
+    if (axis.size() < not_reduce_axis_num || reduce_axis.size() < 1 || axis.size() <= nonzero_batch_axis_num) {
+      return false;
+    }
 
-    const Variable *axis_var[2];
+    const Variable *axis_var[not_reduce_axis_num];
     const Variable *reduce_axis_var;
-    axis_var[0] = axis[batch_num_axis];
+    axis_var[0] = axis[nonzero_batch_axis_num];
     axis_var[1] = axis.back();
     reduce_axis_var = reduce_axis.back();
 
@@ -530,23 +542,21 @@ class OperatorInfoCollector {
   void SetMmaModeForTensor(const std::string &tensor_a_name, const std::string &tensor_b_name) {
     std::string custom_dim = scop_info_.user_config_.GetBDim();
     if (!custom_dim.empty() && !scop_info_.user_config_.GetEnableConvTensorCore()) {
-      const int each_axis_size_with_mapping = 6;
-      const int each_axis_size_without_mapping = 4;
-      const int m_axis_pos = 1;
-      const int n_axis_pos = 2;
-      const int k_axis_pos = 3;
-      const int interval_len = 3;
-      int each_axis_size = each_axis_size_without_mapping;
-      if (custom_dim.find(T0) != std::string::npos) {
-        each_axis_size = each_axis_size_with_mapping;
-      }
+      const unsigned int each_axis_size_with_mapping = 6;
+      const unsigned int each_axis_size_without_mapping = 4;
+      const unsigned int m_axis_pos = 1;
+      const unsigned int n_axis_pos = 2;
+      const unsigned int k_axis_pos = 3;
+      const unsigned int interval_len = 3;
+      auto each_axis_size =
+        custom_dim.find(T0) != std::string::npos ? each_axis_size_with_mapping : each_axis_size_without_mapping;
 
       Mma mma;
       std::vector<std::string> dim_str = Split(custom_dim, " ");
-      int batch_number = static_cast<int>(scop_info_.analysis_result_.GetBatchAxisNumForMatmul()) > 0 ? 1 : 0;
-      int real_m_axis_pos = (m_axis_pos + batch_number - 1) * each_axis_size + interval_len;
-      int real_n_axis_pos = (n_axis_pos + batch_number - 1) * each_axis_size + interval_len;
-      int real_k_axis_pos = (k_axis_pos + batch_number - 1) * each_axis_size + interval_len;
+      auto batch_number = (scop_info_.analysis_result_.GetBatchAxisNumForMatmul() - const_batch_axis_num_) > 0 ? 1 : 0;
+      auto real_m_axis_pos = (m_axis_pos + batch_number - 1) * each_axis_size + interval_len;
+      auto real_n_axis_pos = (n_axis_pos + batch_number - 1) * each_axis_size + interval_len;
+      auto real_k_axis_pos = (k_axis_pos + batch_number - 1) * each_axis_size + interval_len;
       mma.m = static_cast<int>(WrappedStrtol(dim_str[real_m_axis_pos]));
       mma.n = static_cast<int>(WrappedStrtol(dim_str[real_n_axis_pos]));
       mma.k = static_cast<int>(WrappedStrtol(dim_str[real_k_axis_pos]));
@@ -568,6 +578,7 @@ class OperatorInfoCollector {
 
  private:
   ScopInfo &scop_info_;
+  unsigned int const_batch_axis_num_;
 };
 
 void AnalyzeBandNode::Run() {
