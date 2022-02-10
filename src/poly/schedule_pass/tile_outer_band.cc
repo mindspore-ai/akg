@@ -21,6 +21,7 @@
 #include "poly/schedule_tree_util.h"
 #include "poly/schedule_pass/transfer_stmt.h"
 #include "poly/schedule_pass/try_mark_scalar_stmt.h"
+#include "poly/schedule_pass_gpu/operator_mapping_strategy.h"
 #include "poly/schedule_tree_util.h"
 #include "poly/reduce_manager.h"
 
@@ -135,6 +136,7 @@ isl::schedule_node TileOuterBand::ReverseTraverseChild(isl::schedule_node node,
     tile_sizes_ = tiles_[0].dim_infos;
     node = node.map_descendant_bottom_up(f);
   } else {
+    is_sequence_node_ = node.isa<isl::schedule_node_sequence>();
     // multiple outer bands, use same filter strategy as in auto tiling
     for (auto i = 0; i < static_cast<int>(node.n_children()); ++i) {
       if (node.child(i).child(0).isa<isl::schedule_node_leaf>() && scop_info_.user_config_.GetTarget() != TARGET_CCE) {
@@ -1014,8 +1016,8 @@ isl::schedule_node TileOuterBand::TileBandAndCollectMark(isl::schedule_node node
 isl::schedule_node TileOuterBand::SetTileSizeAndTile(const isl::schedule_node &node, const std::string &tile_level,
                                                      const int count_coincident) {
   const unsigned int n_member = node.as<isl::schedule_node_band>().n_member();
-  auto title_size = static_cast<unsigned int>(tile_sizes_.size());
-  unsigned int dim_num = (n_member <= title_size) ? n_member : title_size;
+  auto tile_member = static_cast<unsigned int>(tile_sizes_.size());
+  unsigned int dim_num = (n_member <= tile_member) ? n_member : tile_member;
   std::vector<int> tile_size;
   auto replace_cfg_map = scop_info_.user_config_.GetReplaceConfig();
   if (tile_level == TILE_WITH_WARP_C1) {
@@ -1070,12 +1072,12 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCuda(isl::schedule_node nod
   if (IsOuterTilable(node) <= 0) return node;
 
   // make sure the node is a band node and has multiple members, insert empty band if not
-  bool is_empty_band = false;
   if (!node.isa<isl::schedule_node_band>() || (!node.as<isl::schedule_node_band>().member_get_coincident(0) &&
                                                scop_info_.user_config_.GetTileCheckCoincident())) {
     node = InsertEmptyPermutableBand(node);
-    is_empty_band = true;
   }
+
+  size_t start_depth = node.get_tree_depth();
   // get tile size
   node = SetTileSizeAndTile(node, TILE_WITH_C1);
 
@@ -1084,18 +1086,99 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCuda(isl::schedule_node nod
     return TileMatmulOperatorForCuda(node);
   }
 
-  if (!is_empty_band) {
-    node = node.child(0).insert_mark(PROMOTE_GLOBAL_TO_SHARED);
-    node = node.parent();
-  }
+  // tile thread/block config
+  node = TileThreadAndBlockConfig(node);
 
   // vectorize for elementwise operator
   if (scop_info_.analysis_result_.GetOuterBandNode(cur_band_index_)->enable_vectorization) {
-    node = SetTileSizeAndTile(node.child(0).child(0), TILE_WITH_C0);
-    node = node.child(0).insert_mark(SKIP_MARKER);
-    node = node.ancestor(VECTORIZATION_NODE_DEPTH);
+    node = SetTileSizeAndTile(node, TILE_WITH_C0);
+  }
+  node = node.ancestor(node.get_tree_depth() - start_depth);
+
+  return node;
+}
+
+isl::schedule_node TileOuterBand::TileThreadAndBlockConfig(const isl::schedule_node &orig_node) {
+  // block tile
+  auto node = orig_node;
+  if (!is_sequence_node_) {
+    auto block_cfg = scop_info_.user_config_.GetBlockConfig();
+    node = TileMappingConfig(node, block_cfg);
+    node = node.insert_mark(BLOCK_MARKER).child(0);
   }
 
+  node = node.child(0).insert_mark(PROMOTE_GLOBAL_TO_SHARED);
+  node = node.child(0);
+
+  // vectorized tile
+  std::vector<int> vectorization_tile_size;
+  if (scop_info_.analysis_result_.GetOuterBandNode(cur_band_index_)->enable_vectorization) {
+    const unsigned int n_member = orig_node.as<isl::schedule_node_band>().n_member();
+    auto tile_member = static_cast<unsigned int>(tile_sizes_.size());
+    unsigned int dim_num = (n_member <= tile_member) ? n_member : tile_member;
+    vectorization_tile_size = GetTileSizeOfLevel(n_member, dim_num, TILE_WITH_C0, tile_sizes_);
+  }
+
+  // thread tile
+  auto thread_cfg = scop_info_.user_config_.GetThreadConfig();
+  node = TileMappingConfig(node, thread_cfg, vectorization_tile_size);
+  node = node.insert_mark(THREAD_MARKER).child(0);
+
+  return node;
+}
+
+isl::schedule_node TileOuterBand::TileMappingConfig(const isl::schedule_node &orig_node, MappingCfg *mapping_cfg,
+                                                    const std::vector<int> &vectorization_tile_size) {
+  CHECK(mapping_cfg) << "mapping config is null.";
+  if (!orig_node.isa<isl::schedule_node_band>()) {
+    return orig_node;
+  }
+  MappingStrategyAxisMap required_mapping_strategy;
+  bool is_thread_config =
+    mapping_cfg->type == MappingType::THREADS || mapping_cfg->type == MappingType::REPLACE_THREADS;
+  if (is_thread_config) {
+    required_mapping_strategy = scop_info_.user_config_.GetInnerMappingStrategy(cur_band_index_);
+  } else {
+    required_mapping_strategy = scop_info_.user_config_.GetOuterMappingStrategy(cur_band_index_);
+  }
+
+  if (required_mapping_strategy.empty()) {
+    OperatorMappingStrategy mapping_strategy(scop_info_, mapping_cfg, cur_band_index_, is_thread_config, false);
+    mapping_strategy.SetRequiredMappingCfg(orig_node);
+    required_mapping_strategy = mapping_strategy.required_mapping_strategy_;
+  }
+
+  bool is_replace_config =
+    mapping_cfg->type == MappingType::REPLACE_THREADS || mapping_cfg->type == MappingType::REPLACE_BLOCKS;
+  std::string replace_name = REPLACE;
+  replace_name += COMPUTE;
+  if (is_replace_config) {
+    for (auto &mapping_strategy : required_mapping_strategy) {
+      auto mapping_second = mapping_strategy.second;
+      if (mapping_second.mapping_idx.find(replace_name) != std::string::npos) {
+        continue;
+      }
+      mapping_second.mapping_idx = replace_name + UNDERSCORE_PATTERN + mapping_second.mapping_idx;
+      mapping_strategy.second = mapping_second;
+    }
+  }
+
+  auto mapping_partial_schedule = GetMappingPartialSchedule(orig_node.as<isl::schedule_node_band>());
+  mapping_partial_schedule = mapping_partial_schedule.intersect_domain(orig_node.domain());
+  auto upa_list = mapping_partial_schedule.get_union_pw_aff_list();
+  auto node =
+    CheckMapSizeAndApplyTile(orig_node, upa_list, required_mapping_strategy, mapping_cfg, vectorization_tile_size);
+
+  if (node.is_equal(orig_node)) {
+    return node;
+  }
+
+  auto current_outer_bn = scop_info_.analysis_result_.GetOuterBandNode(cur_band_index_);
+  if (is_thread_config) {
+    current_outer_bn->is_thread_tile = true;
+  } else {
+    current_outer_bn->is_block_tile = true;
+  }
   return node;
 }
 
@@ -1114,6 +1197,9 @@ isl::schedule_node TileOuterBand::TileMatmulOperatorForCuda(const isl::schedule_
 
   // split the k axis
   tile_node = band_node.split(count_coincident);
+  auto block_cfg = scop_info_.user_config_.GetBlockConfig();
+  tile_node = TileMappingConfig(tile_node, block_cfg);
+  tile_node = tile_node.insert_mark(BLOCK_MARKER).child(0);
   tile_node = InsertPromoteMarker(tile_node);
 
   if (scop_info_.user_config_.GetEnableTensorCoreUsePoly()) {
@@ -1132,12 +1218,11 @@ isl::schedule_node TileOuterBand::TileMatmulOperatorForCuda(const isl::schedule_
   }
   tile_node = tile_node.insert_mark(isl::id(tile_node.ctx(), PROMOTE_SHARED_TO_REGISTER_AB));
   // Locate the band to be mapped.
-  tile_node = tile_node.child(0).insert_mark(MAP_TO_WARP).child(0);
-  tile_node = tile_node.child(0).insert_mark(SKIP_MARKER).child(0);
+  tile_node = tile_node.child(0).insert_mark(WARP_MARKER);
+  tile_node = tile_node.child(0).child(0);
 
   // The last tiling of tensor_core is to calculate the size of fragment.
   tile_node = SetTileSizeAndTile(tile_node, TILE_WITH_C0);
-  tile_node = tile_node.child(0).insert_mark(SKIP_MARKER);
 
   if (scop_info_.user_config_.GetEnableConvTensorCore()) {
     int child_depth = KH_KW_DEPTH;
@@ -1577,9 +1662,9 @@ isl::schedule_node TileOuterBand::SplitReduceStatements(const isl::schedule_node
   isl::schedule_node tile_node = orig_node;
   auto all_reduce_map = scop_info_.analysis_result_.GetReduceTensorInfoMap();
   bool need_split_reduce = template_type_ == Template::MATMUL;
-  ReduceManager reduce_manager(pass_info_, scop_info_, need_split_reduce);
+  ReduceManager reduce_manager(pass_info_, scop_info_, cur_band_index_, need_split_reduce);
   reduce_statements_ = reduce_manager.GetCurrentNodeReduceStatements(tile_node, all_reduce_map, false);
-  isl::union_map new_dependences = reduce_manager.GetCurrentDependence(orig_node, cur_band_index_);
+  isl::union_map new_dependences = reduce_manager.GetCurrentDependence();
 
   if (!reduce_manager.SplitReduceStatements(tile_node, reduce_statements_, new_dependences)) {
     return orig_node;

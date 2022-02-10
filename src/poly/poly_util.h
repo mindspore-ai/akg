@@ -470,8 +470,6 @@ constexpr auto FOR_SWIZZLED = "for_swizzled";
 
 constexpr auto PROMOTE_VECTORIZATION = "promote_vectorization";
 constexpr auto PROMOTE_VECTORIZATION_BIT = 128;
-constexpr auto SKIP_MARKER = "skip";
-constexpr auto MAP_TO_WARP = "map_to_warp";
 constexpr auto THREAD_MARKER = "thread_marker";
 constexpr auto BLOCK_MARKER = "block_marker";
 constexpr auto WARP_MARKER = "warp_marker";

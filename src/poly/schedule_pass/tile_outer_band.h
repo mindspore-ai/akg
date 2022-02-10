@@ -26,7 +26,6 @@ namespace poly {
 constexpr auto KH_KW_DEPTH = 2;
 constexpr auto DIM_SIZE = 4;
 constexpr auto CUSTOM_DIM_SIZE = 6;
-constexpr auto VECTORIZATION_NODE_DEPTH = 3;
 
 /*
  * Tile the outer band accoding to TilingInfo. In this pass, we get the out-most band,
@@ -103,11 +102,14 @@ class TileOuterBand : public SchedulePass {
   isl::schedule_node TileMatmulOperatorForCuda(const isl::schedule_node &node);
   void CheckCustomMapping(const MappingStrategyFilterMap &custom_mapping_map);
   bool IsMatrixCPromoteToShared();
+  isl::schedule_node TileMappingConfig(const isl::schedule_node &orig_node, MappingCfg *mapping_cfg,
+                                       const std::vector<int> &vectorization_tile_size = {});
+  isl::schedule_node TileThreadAndBlockConfig(const isl::schedule_node &orig_node);
 
   // cpu related functions
   isl::schedule RunCpu(isl::schedule sch);
   isl::schedule_node MarkOuterPermutableCpu(isl::schedule_node node);
-  
+
   isl::schedule_node TileCsrForCpu(const isl::schedule_node &orig_node);
   isl::schedule_node TileReduceXForCpu(const isl::schedule_node &orig_node);
   isl::schedule_node TileAllReduceForCpu(const isl::schedule_node &orig_node);
@@ -131,6 +133,7 @@ class TileOuterBand : public SchedulePass {
   Tiles tiles_;
   TileSizes tile_sizes_;
   TileSizes tile_sizes_all_;
+  bool is_sequence_node_{false};
   size_t cur_band_index_{0};
   std::vector<std::vector<int>> partition_info_;
 

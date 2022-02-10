@@ -48,6 +48,7 @@ isl::schedule_node TileBand(isl::schedule_node node, const isl::multi_val &sizes
 
   return node;
 }
+
 /* Reorder filters of a sequence/set node.
  * node: must be a sequence or set node.
  * old_to_new_map: map from original child position to new child position.

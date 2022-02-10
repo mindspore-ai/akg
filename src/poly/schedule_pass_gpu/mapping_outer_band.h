@@ -33,28 +33,26 @@ class MappingOuterBand : public SchedulePass {
   };
   ~MappingOuterBand() {}
 
-  using RoadMap = std::vector<std::pair<isl::schedule_node, size_t>>;
-
   virtual isl::schedule Run(isl::schedule sch);
 
-  isl::schedule_node DoThreadMapping(const isl::schedule_node &orig_node);
-
-  isl::schedule_node DoBlockMapping(const isl::schedule_node &orig_node);
-
+ private:
+  using RoadMap = std::vector<std::pair<isl::schedule_node, size_t>>;
+  // thread and block mapping interface
   isl::schedule DoMapping(const isl::schedule &sch, const std::function<isl::schedule_node(isl::schedule_node)> &f,
                           const bool is_block_mapping = true);
+  isl::schedule_node DoThreadMapping(const isl::schedule_node &orig_node);
+  isl::schedule_node DoBlockMapping(const isl::schedule_node &orig_node);
 
+  // Confirm mappable band nodes.
   size_t NumMappedDescendant(const RoadMap &thread_roadmap, const isl::schedule_node &parent);
-
-  bool CanBeMappedToThread(const isl::schedule_node &node, const RoadMap &thread_record);
-
+  bool CanBeMappedToThread(const isl::schedule_node &node, const RoadMap &thread_record,
+                           const std::string &marker_name);
   isl::schedule_node FillRemainingThreads(const isl::schedule_node &orig_node, size_t begin);
-
   isl::schedule_node MapSequenceNode(const isl::schedule_node &orig_node, const RoadMap &thread_record);
+  bool IsEnableReduceLib(const isl::schedule_node &orig_node);
+  void AdjustBlockConfig(MappingCfg *block_cfg, unsigned long n_block_map);
 
-  /*
-   * Functions related to synchronization.
-   */
+  // Functions related to synchronization.
   isl::schedule_node DoThreadSynchronization(const isl::schedule_node &node,
                                              const std::vector<MappingCfg *> &other_mapping_cfg = {});
   isl::schedule_node DoFilterSynchronization(const isl::schedule_node &orig_node);
@@ -70,9 +68,7 @@ class MappingOuterBand : public SchedulePass {
                                     const isl::multi_union_pw_aff &domain_to_warp);
   SyncCandidate *CountSyncNumberAmongLoop(SyncCandidate *head);
   int GetBestSyncStartPoint(bool is_outer);
-  void AdjustBlockConfig(MappingCfg *block_cfg, unsigned long n_block_map);
 
- private:
   PassInfo &pass_info_;
   ScopInfo &scop_info_;
   int band_index_{0};

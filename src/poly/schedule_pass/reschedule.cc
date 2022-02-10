@@ -64,7 +64,6 @@ isl::schedule_node Reschedule::RecomputeScheduleTree(const isl::schedule_node &n
  * Return the node of the schedule after rescheduling.
  */
 isl::schedule_node Reschedule::RescheduleSchTree(const isl::schedule_node &root) {
-
   auto fn = [&](isl::schedule_node node) -> isl::schedule_node {
     if (node.isa<isl::schedule_node_mark>()) {
       auto tag = node.as<isl::schedule_node_mark>().get_id().get_name();
@@ -72,9 +71,9 @@ isl::schedule_node Reschedule::RescheduleSchTree(const isl::schedule_node &root)
         auto node_m = node.insert_mark(RESCHEDULE);
         node_m = node_m.get_child(0).get_child(0);
         if (node_m.isa<isl::schedule_node_band>()) {
-          if ((node.parent().isa<isl::schedule_node_band>())
-            && (node.parent().parent().isa<isl::schedule_node_mark>())
-            && (node.parent().parent().as<isl::schedule_node_mark>().get_id().get_name() == "realize_L1")) {
+          if ((node.parent().isa<isl::schedule_node_band>()) &&
+              (node.parent().parent().isa<isl::schedule_node_mark>()) &&
+              (node.parent().parent().as<isl::schedule_node_mark>().get_id().get_name() == "realize_L1")) {
             node_m = RecomputeScheduleTree(node_m);
           } else {
             node_m = node_m.get_child(0);
@@ -87,13 +86,7 @@ isl::schedule_node Reschedule::RescheduleSchTree(const isl::schedule_node &root)
     }
     return node;
   };
-  auto node = root.map_descendant_bottom_up(fn);
-  if (ValidateSchedule(node.get_schedule())) {
-    LOG(INFO) << "Schedule tree is valid, ^_^";
-  } else {
-    LOG(WARNING) << "Schedule tree is invalid, pls check the correctness！";
-  }
-  return node;
+  return root.map_descendant_bottom_up(fn);
 }
 
 isl::schedule Reschedule::Run(isl::schedule sch) {
