@@ -137,7 +137,7 @@ class AttrForLayoutOp : public IRMutator {
   bool is_tensor_of_tensor_{false};
 };
 
-Stmt AddAttrForLayoutOp(const Stmt stmt) {
+Stmt AddAttrForLayoutOp(const Stmt stmt, Schedule sch) {
   auto mutator = AttrForLayoutOp();
   auto new_stmt = mutator.Mutate(stmt);
   if (!mutator.tensors_not_promote_.empty()) {
@@ -155,7 +155,10 @@ Stmt AddAttrForLayoutOp(const Stmt stmt) {
   if (mutator.is_tensor_of_tensor_) {
     new_stmt = AttrStmt::make(Expr("INFO"), AKG_TENSOR_OF_TENSOR, Expr(AKG_TENSOR_OF_TENSOR), new_stmt);
   }
-
+  
+  if (AttrExists(sch, "remove_self_dependence")) {
+    new_stmt = AttrStmt::make(Expr("INFO"), AKG_REMOVE_SELF_DEPENDENCE, Expr(AKG_REMOVE_SELF_DEPENDENCE), new_stmt);
+  }
   return new_stmt;
 }
 }  // namespace ir

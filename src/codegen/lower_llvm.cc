@@ -27,6 +27,7 @@
 #include <utility>
 #include <vector>
 
+#include "build_module.h"
 #include "ir_pass.h"
 #include "codegen/lower.h"
 #include "codegen/stage_lower.h"
@@ -57,7 +58,7 @@ StageResult LLVMLowerBegin(Stmt &, LowerData &data) {
     data->binds_0 = binds_tmp;
   }
   PassMgr::SetArgs(data->arg_list_0);
-  stmt = NEXT_PASS(AddAttrForLayoutOp, stmt);
+  stmt = NEXT_PASS(AddAttrForLayoutOp, stmt, data->sch);
   stmt = NEXT_PASS(RewriteTensorIndex, stmt);
   return {stmt, false};
 }
@@ -69,6 +70,9 @@ StageResult LLVMLowerPoly(Stmt &stmt, LowerData &data) { return LowerPoly(stmt, 
 StageResult LLVMLowerBeforeFlattern(Stmt &stmt, LowerData &data) {
   if (data->polyhedral) {
     stmt = NEXT_PASS(LowerWith, stmt);
+    if (!g_csr.empty()) {
+      stmt = NEXT_PASS(RestoreCsrLoop, stmt, data->binds_0, false);
+    }
     stmt = NEXT_PASS(RealizeCompress, stmt);
     stmt = NEXT_PASS(ReconstructLayout, stmt);
     stmt = NEXT_PASS(GemmFactor, stmt);

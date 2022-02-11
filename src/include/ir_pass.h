@@ -168,7 +168,7 @@ Stmt HalfReduceSumRewrite(Stmt stmt, const Map<Tensor, Buffer> &extern_buffer);
 
 Stmt ScalarComputeRewrite(const Stmt &stmt);
 
-Stmt AddAttrForLayoutOp(Stmt stmt);
+Stmt AddAttrForLayoutOp(Stmt stmt, Schedule sch);
 
 Stmt RewriteTensorIndex(Stmt stmt);
 
@@ -249,7 +249,7 @@ Stmt ModDivEliminate(Stmt stmt);
 
 Stmt RealizeCompress(Stmt stmt);
 
-Stmt RestoreCsrLoop(Stmt stmt);
+Stmt RestoreCsrLoop(Stmt stmt, Map<Tensor, Buffer> extern_buffer, bool target_cuda);
 
 Stmt ReduceFusionOpt(Stmt stmt, const Map<Tensor, Buffer> &extern_buffer);
 

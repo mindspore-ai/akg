@@ -447,6 +447,7 @@ constexpr auto AKG_TENSOR_NOT_PROMOTE = "TENSOR_NOT_PROMOTE";
 constexpr auto AKG_INNER_TENSOR = "INNER_TENSOR";
 constexpr auto AKG_TENSOR_OF_TENSOR = "TENSOR_OF_TENSOR";
 constexpr auto AKG_ATOMIC_TOT = "atomic_tot";
+constexpr auto AKG_REMOVE_SELF_DEPENDENCE = "REMOVE_SELF_DEPENDENCE";
 
 static constexpr auto ATTR_PREFETCH_MODE = "prefetch_mode";
 enum class PrefetchMode {
@@ -478,6 +479,7 @@ Stmt MakeAtomicStmt(const AtomicReturnData &atomic_data);
 }  // namespace ir
 
 std::string GetBufScope(const std::string &name);
+bool AttrExists(air::Schedule sch, std::string attr_name);
 }  // namespace akg
 
 #endif  // PASS_UTILS_H_

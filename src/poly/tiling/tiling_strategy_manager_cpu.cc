@@ -153,7 +153,30 @@ bool CpuStrategy::SetReduceYTileValue(int index) {
   return is_tiled;
 }
 
+void CpuStrategy::SetCsrTileValue() {
+  TileAxis *axis;
+  int64_t row_length;
+  if (pending_axes_.size() <= 0) {
+    LOG(WARNING) << "[Tiling CSR OP]:No axis to tile.";
+    return;
+  }
+  if (pending_axes_[OUTERMOST_AXIS].size() <= 0) {
+    LOG(WARNING) << "[Tiling CSR OP]:No outermost axis to tile.";
+    return;
+  }
+  std::tie(axis, row_length) = pending_axes_[OUTERMOST_AXIS][OUTERMOST_AXIS];
+  int64_t csr_tensor_size = row_length * analyzer_->scop_info_.user_config_.GetCsrAvgRow();
+  if (csr_tensor_size > CPU_CSR_PARALLEL_CUTOFF) {
+    axis->TileRestrainToSingleValue(Expr(CPU_CSR_TILING_FACTOR), TileLevel::CACHE1);
+    axis->TileRestrainToSingleValue(Expr(CPU_CSR_TILING_FACTOR), TileLevel::CACHE0);
+  }
+}
+
 void CpuStrategy::SetMultiLevelTileValue() {
+  if (analyzer_->scop_info_.analysis_result_.GetCsr()) {
+    SetCsrTileValue();
+    return;
+  }
   for (auto idx = 0; idx < static_cast<int>(pending_axes_.size()); ++idx) {
     auto op_type = analyzer_->scop_info_.analysis_result_.GetOuterBandNode()->template_type;
     if (op_type == Template::MATMUL) {

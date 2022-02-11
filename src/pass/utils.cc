@@ -3040,4 +3040,20 @@ Stmt MakeAtomicStmt(const AtomicReturnData &atomic_data) {
 #ifdef USE_AKG_COMPILE_STUB
 std::string GetBufScope(const std::string &name) { return "buffer"; }
 #endif
+bool AttrExists(air::Schedule sch, std::string attr_name) {
+  CHECK(sch.defined());
+  for (const air::Stage &s : sch->stages) {
+    if (const auto op = s->op.as<air::ExternOpNode>()) {
+      if (op->attrs.count(attr_name)) {
+        return true;
+      }
+    }
+    else if (const auto op = s->op.as<air::HybridOpNode>()) {
+      if (op->attrs.count(attr_name)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
 }  // namespace akg

@@ -60,6 +60,8 @@ constexpr auto MATMUL_AXIS_N = 1;
 constexpr auto MATMUL_AXIS_K = 2;
 constexpr auto TOT_BEST_NUM_PER_BLOCK = 1024;
 constexpr auto OUTERMOST_AXIS = 0;
+constexpr auto CPU_CSR_TILING_FACTOR = 1;
+constexpr auto CPU_CSR_PARALLEL_CUTOFF = 4096;
 
 // Controlled by custom tiling.
 constexpr auto ALLOCATION_PERCENTAGE = 0.5;  // reserved for double buffer in default

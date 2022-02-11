@@ -17,13 +17,16 @@ import scipy as sp
 
 import akg
 from akg import tvm
-from akg.utils import CUDA
+from akg import composite
+from tests.common.base import get_rtol_atol
 from tests.common.gen_random import random_gaussian
+from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
 from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
-from tests.common.tensorio import compare_tensor
-from akg.ops.array.gpu import CSRMV
+
+def csr_mv(data, indices, indptr, weight):
+    return composite.csrmv((indptr, indices, data, weight), {})
 
 def gen_data(shape1, dtype1, shape2, dtype2):
     csr_matrix = sp.sparse.rand(shape1[0], shape1[1], density=0.2, format='csr', dtype=dtype1)
@@ -41,7 +44,7 @@ def csrmv_run(shape1, dtype1, shape2, dtype2, poly_sch=True, attrs=None):
     attrs["csr_avg_row"] = data.shape[0] // shape1[0]
     attrs["is_csr"] = True
 
-    mod = utils.op_build_test(CSRMV, [data.shape, indices.shape, indptr.shape, weight.shape],
+    mod = utils.op_build_test(csr_mv, [data.shape, indices.shape, indptr.shape, weight.shape],
                               ["float32", "int32", "int32", "float32"], polyhedral=poly_sch,
                               attrs=attrs, kernel_name='csrmv')
     
@@ -59,6 +62,6 @@ def csrmv_run(shape1, dtype1, shape2, dtype2, poly_sch=True, attrs=None):
         print(mod_source.get_source())
         raise AssertionError("Test fail")
     if attrs["profiling"]:
-        args_list = to_tvm_nd_array([data, indices, indptr, weight, output, expect], akg.tvm.context(target_name, 0))
+        args_list = to_tvm_nd_array([data, indices, indptr, weight, output], akg.tvm.context(target_name, 0))
         target_profiling(mod, *args_list, target=target_name,  repeat_time=attrs["repeat_times"])
     return (data, indices, indptr, weight), output, expect, res

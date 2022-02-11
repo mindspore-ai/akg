@@ -785,10 +785,12 @@ def csr_div(inputs, attrs):
 
     output_name = "T_csr_div_" + dense.op.name + "_" + sparse_data.op.name
     out_buf = tvm.decl_buffer(sparse_data.shape, sparse_data.dtype, output_name)
+    attrs = {"remove_self_dependence": True}
     return tvm.extern([sparse_data.shape],
                       [dense, sparse_data, col_idx, row_idx],
                       lambda ins, outs: gen_ir(ins[0], ins[1], ins[2], ins[3], outs[0]),
-                      dtype=sparse_data.dtype, out_buffers=[out_buf], name=output_name)
+                      dtype=sparse_data.dtype, out_buffers=[out_buf], name=output_name,
+                      attrs=attrs)
 
 
 @tvm.register_func("CSRReduceSum")
@@ -907,12 +909,14 @@ def csr_mul(inputs, attrs):
 
     output_name = "T_csr_mul_" + dense.op.name + "_" + sparse_data.op.name
     out_buf = tvm.decl_buffer(sparse_data.shape, sparse_data.dtype, output_name)
+    attrs = {"remove_self_dependence": True}
     return tvm.extern([sparse_data.shape],
                       [dense, sparse_data, col_idx, row_idx],
                       lambda ins, outs: gen_ir(ins[0], ins[1], ins[2], ins[3], outs[0]),
                       dtype=sparse_data.dtype,
                       out_buffers=[out_buf],
-                      name=output_name)
+                      name=output_name,
+                      attrs=attrs)
 
 @tvm.register_func("CSRGather")
 def csr_gather(inputs, attrs):

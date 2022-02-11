@@ -22,23 +22,23 @@ namespace akg {
 namespace ir {
 namespace poly {
 
-class CpuIslEmitter : public IslEmitter {
+class CpuIslEmitter : virtual public IslEmitter {
  public:
   CpuIslEmitter(ScopInfo &info, const NodeInfoRepo &n, const isl::id_list &i) : IslEmitter(info, n, i) {}
   ~CpuIslEmitter() override = default;
-  Stmt Emit(const isl::ast_node &node);
+  Stmt Emit(const isl::ast_node &node) override;
+  Stmt EmitFor(const isl::ast_node_for &node) override;
+  virtual Stmt EmitInfo(const Stmt &stmt);
 
  private:
   Stmt EmitBlock(const isl::ast_node_block &block_node) override;
   Stmt EmitUserStmt(const isl::ast_node_user &node) override;
   Stmt EmitCall(const isl::ast_node_user &node) override;
   Stmt EmitMark(const isl::ast_node_mark &node) override;
-  Stmt EmitFor(const isl::ast_node_for &node) override;
   Stmt EmitRealizeForGlobalTensor(const Stmt &stmt);
   Stmt InsertRealize(const Stmt &stmt, const isl::id &var);
   Stmt EmitReduce(const std::vector<std::string> &args);
   Stmt EmitMatrixTranspose(const std::vector<std::string> &names);
-  Stmt EmitInfo(const Stmt &stmt);
   Stmt EmitForParallel(const Stmt &stmt);
 
   // emit for ast_node_for

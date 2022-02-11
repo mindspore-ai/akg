@@ -242,7 +242,14 @@ class CombineCsrBlock : public IRMutator {
 class RestoreMaxVar : public IRMutator {
   Expr Mutate_(const Call *op, const Expr &e) final {
     if (g_csr.count(e) > 0) {
-      auto new_expr = g_csr.at(e);
+      auto replace_arr = Downcast<Array<Expr>>(g_csr.at(e));
+      int replace_size = static_cast<int>(replace_arr.size());
+      if (replace_size == 0) {
+        return e;
+      }
+      max_var_id_ = std::max(max_var_id_, 0);
+      CHECK_LT(max_var_id_, replace_size);
+      auto new_expr = replace_arr[max_var_id_];
       if (auto new_call = new_expr.as<Call>()) {
         Array<Expr> args;
         for (auto orig_arg: new_call->args) {
@@ -262,6 +269,29 @@ class RestoreMaxVar : public IRMutator {
     }
     return e;
   }
+
+  Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
+    if (op->attr_key == "max_var_id") {
+      auto count = op->value.as<IntImm>();
+      CHECK(count);
+      max_var_id_ = count->value;
+      return IRMutator::Mutate(op->body);
+    }
+    return IRMutator::Mutate_(op, s);
+  }
+
+  Stmt Mutate_(const Block *op, const Stmt &s) final {
+    int tmp_max_var_id = max_var_id_;
+    auto first = IRMutator::Mutate(op->first);
+    max_var_id_ = tmp_max_var_id;
+    auto rest = IRMutator::Mutate(op->rest);
+    if (!first.same_as(op->first) || !rest.same_as(op->rest)) {
+      return Block::make(first, rest);
+    }
+    return s;
+  }
+
+ int max_var_id_{-1};
 };
 
 class CsrInnerLoopVar : public IRVisitor {
@@ -403,7 +433,12 @@ class CsrLoopStride : public IRMutator {
   Expr block_var_;
 };
 
-Stmt RestoreCsrLoop(Stmt stmt) {
+Stmt RestoreCsrLoop(Stmt stmt, Map<Tensor, Buffer> extern_buffer, bool target_cuda) {
+  if (!target_cuda) {
+    stmt = RestoreMaxVar().Mutate(stmt);
+    g_csr.Clear();
+    return stmt;
+  }
   stmt = RemoveCsrBranch().Mutate(stmt);
   stmt = CombineCsrBlock().Mutate(stmt);
   stmt = RestoreMaxVar().Mutate(stmt);

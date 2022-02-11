@@ -1239,6 +1239,10 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCpu(isl::schedule_node node
                                                scop_info_.user_config_.GetTileCheckCoincident())) {
     node = InsertEmptyPermutableBand(node);
   }
+  // If Current op is CSR, skip vectorization process to prevent early return.
+  if (scop_info_.analysis_result_.GetCsr()) {
+    return TileCsrForCpu(node);
+  }
 
   auto current_outer_bn = scop_info_.analysis_result_.GetOuterBandNode(cur_band_index_);
   vectorization_axis_pos_ = current_outer_bn->last_axis;
@@ -1271,6 +1275,21 @@ bool TileOuterBand::IsContainReduceStatement(const isl::schedule_node &orig_node
 
   auto filter = orig_node.as<isl::schedule_node_filter>().get_filter();
   return !filter.intersect(reduce_statements_).is_empty();
+}
+
+isl::schedule_node TileOuterBand::TileCsrForCpu(const isl::schedule_node &orig_node) {
+  if (!orig_node.isa<isl::schedule_node_band>()) {
+    return orig_node;
+  }
+  auto node = orig_node;
+  size_t start_depth = node.get_tree_depth();
+
+  // Tile outermost axis for parallel
+  auto band_node = node.as<isl::schedule_node_band>();
+  node = band_node.split(band_node.n_member() - 1);
+  node = IsolateTilesCpu(node, TILE_WITH_C1);
+  node = InsertMarkerForLoop(node.parent(), FOR_PARALLEL);
+  return node.ancestor(node.get_tree_depth() - start_depth);
 }
 
 isl::schedule_node TileOuterBand::TileGemmOperatorForCpu(const isl::schedule_node &orig_node) {

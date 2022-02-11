@@ -75,12 +75,14 @@ class RewriteTensorIdx : public IRMutator {
       if (!is_min_binary && is_max_binary) {
         auto extent = new_op->extent.as<Sub>();
         if (extent != nullptr && (extent->a.as<Call>() != nullptr || extent->b.as<Call>() != nullptr)) {
-          Var max_var = Variable::make(new_op->loop_var.type(), "MAX_VAR");
+          auto extent_call = extent->a.as<Call>();
+          CHECK(extent_call);
+          Var max_var = Variable::make(extent_call->type, "MAX_VAR");
           auto new_stmt = For::make(new_op->loop_var, new_op->min, max_var,
                                     new_op->for_type, new_op->device_api, new_op->body);
           g_csr.Set(max_var, new_op->extent);
-          g_csr.Set(extent->a, extent->a);
-          g_csr.Set(extent->b, extent->b);
+          g_csr.Set(extent->a, Array<Expr>());
+          g_csr.Set(extent->b, Array<Expr>());
           return new_stmt;
         }
       } else if (is_min_binary) {

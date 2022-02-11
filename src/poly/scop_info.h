@@ -320,6 +320,7 @@ class UserConfig {
       ParseVectorLengthAttr(attrs, "vector_length", &vector_length_, false);
       ParseBoolAttr(attrs, "pragma_enable_matmul", &enable_matmul_);
       ParseStringAttr(attrs, "feature", &feature_);
+      ParseIntAttr(attrs, "csr_avg_row", &csr_avg_row_);
     }
 
     if (force_remove_self_dependence_) {
@@ -1052,6 +1053,10 @@ class AnalysisResult {
 
   bool GetCsr() const { return is_csr_; }
   void SetCsr(const bool &is_csr) { is_csr_ = is_csr; }
+
+  bool GetRemoveSelfDependence() const { return remove_self_dependence_; }
+  void SetRemoveSelfDependence(const bool &remove_self_dependence) { remove_self_dependence_ = remove_self_dependence; }
+
   bool IsCsrDynamicExtent(const Variable *op) {
     for (const auto &it : g_csr) {
       auto var = it.first.as<Variable>();
@@ -1253,6 +1258,7 @@ class AnalysisResult {
   std::unordered_set<std::string> inner_tensor_;
   bool is_tensor_of_tensor_{false};
   bool is_csr_{false};
+  bool remove_self_dependence_{false};
 };
 
 using TensorEntry = AnalysisResult::TensorEntry;
