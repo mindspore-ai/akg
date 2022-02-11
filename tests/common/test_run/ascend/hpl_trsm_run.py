@@ -31,8 +31,8 @@ def gen_data(shape, dtype):
         for j in range(num):
             expect[i, j] = min(min(i, j), 6) + 1
     input2 = np.dot(input1, expect)
-
-    return input1, input2, expect
+    output = np.full(expect.shape, np.nan, expect.dtype)
+    return input1, input2, output, expect
 
 
 def hpl_trsm_run(shape, dtype, poly_sch=True, attrs=None):
@@ -41,14 +41,12 @@ def hpl_trsm_run(shape, dtype, poly_sch=True, attrs=None):
              "enable_pre_poly_loop_partition": False,
              "enable_post_poly_loop_partition": False,
              "enable_to_three_address": False,
-             "disable_align_dilation": True,
-             "pragma_disable_schedule_shift": True,
              }
 
     mod = utils.op_build_test(hpl_trsm, [shape, shape], [dtype, dtype], kernel_name="hpl_trsm",
                               polyhedral=poly_sch, attrs=attrs)
-    input1, input2, expect = gen_data(shape, dtype)
-    output = utils.mod_launch(mod, (input1, input2, input2), expect=expect)
+    input1, input2, output, expect = gen_data(shape, dtype)
+    output = utils.mod_launch(mod, (input1, input2, output), expect=expect, outputs=(1,))
     rtol = atol = 1e-04
     res = compare_tensor(output, expect, rtol=rtol, atol=atol)
     print("Test {}".format("Pass" if res else "Failed"))

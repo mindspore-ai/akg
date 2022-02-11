@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 #ifndef COMPOSITE_EMITTER_H_
 #define COMPOSITE_EMITTER_H_
 
+#include <vector>
 #include "composite/utils/util.h"
 
 namespace akg {
@@ -30,7 +31,7 @@ class Emitter : public IRVisitor {
   Array<NodeRef> GetRealInputs(const Array<Expr> &inputs);
   void EmitTopi(const Provide *op, const Array<NodeRef> &real_inputs);
   const PackedFunc *GetTopiFunc();
-  void EmitAssign(Tensor &t, const Expr &input);
+  void EmitAssign(Tensor &t, const NodeRef &input);
   void CollectNoinlineCandidate(const Array<NodeRef> &real_inputs, const Tensor &t);
 
  private:
@@ -38,7 +39,9 @@ class Emitter : public IRVisitor {
   std::string op_name_;
   Map<std::string, NodeRef> op_attrs_;
   std::map<FunctionRef, Array<Tensor>> array_result_;
+  std::unordered_map<int, NodeRef> array_inplace_;  // array result's inplace relation
   int assign_count_{0};
+  std::vector<std::vector<int>> inplace_relation_;  // particular used for recording custom hybrid's inplace attr
 };
 
 }  // namespace akg
