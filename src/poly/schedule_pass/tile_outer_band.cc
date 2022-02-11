@@ -1355,8 +1355,6 @@ isl::schedule_node TileOuterBand::InsertMarkerForReduceY(const isl::schedule_nod
     node = InsertMarkerForLoop(node, FOR_PARALLEL);
     bool is_parallel = !GetMarkerName(node, FOR_PARALLEL).empty();
     if (is_parallel) {
-      node = node.child(0).child(0).child(0).child(0);
-      node = node.insert_mark(REDUCE_AREA_FLAG);
       node = node.ancestor(node.get_tree_depth() - start_depth);
       node = node.insert_mark(REDUCE_AREA_FLAG);
       node = node.insert_mark(REDUCE_Y_FLAG);
