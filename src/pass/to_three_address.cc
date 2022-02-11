@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2021 Huawei Technologies Co., Ltd
+ * Copyright 2019-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -359,17 +359,54 @@ class ThreeAddressExprMutator : public IRMutator {
     bool broadcast_l = !IsReductionOp_ && !is_constant(l) && CountVars(args) > CountVars(l);
     bool broadcast_r = !IsReductionOp_ && !is_constant(r) && CountVars(args) > CountVars(r);
 
+    // We must split broadcast tensors that has "V-B" axes pattern
+    // in which "V" is vectorized loop and "B" is broadcasted loop.
+    auto IsBlockingVectorization = [this](const Expr &node) -> bool {
+      if (auto call = node.as<Call>()) {
+        // e.g.1 Dst[cc0][cc1] = Src0[cc0][0] * Src1[cc0][cc1]
+        // e.g.2 Dst[cc0][cc1][cc2] = Src0[cc0][0][cc2] * Src1[cc0][cc1][cc2]
+        bool explicit_blocking = false;
+        for (int i = 0; i < static_cast<int>(call->args.size()) - 1; ++i) {
+          auto cur = call->args[i];
+          auto next = call->args[i + 1];
+          if (!is_constant(cur) && is_constant(next)) {
+            // "V-B" pattern
+            explicit_blocking = true;
+            break;
+          }
+        }
+
+        // e.g. Dst[cc0][cc1] = Src0[cc0] * Src1[cc0][cc1]
+        bool implicit_blocking = false;
+        if (!explicit_blocking && out_args_.size() > 0 && call->args.size() > 0) {
+          auto dst_index = out_args_[out_args_.size() - 1];
+          auto src_index = call->args[call->args.size() - 1];
+          implicit_blocking = (dst_index.as<Variable>() && src_index.as<Variable>() &&
+                               dst_index.as<Variable>()->name_hint != src_index.as<Variable>()->name_hint);
+        }
+        return explicit_blocking || implicit_blocking;
+      }
+      return false;
+    };
+
     if (op->template IsInstance<Add>() || op->template IsInstance<Mul>()) {
       if (broadcast_l && (broadcast_r || is_constant(r))) {
         l = AllocateTmp(l, args);
-      } else if ((broadcast_r && is_constant(l))) {
+      } else if (broadcast_r && is_constant(l)) {
         r = AllocateTmp(r, args);
       }
       if (CountVars(args) > CountVars(r) && ExprArgsFetcher(out_args_).MustBroadcast(r)) {
         r = AllocateTmp(r, args);
       }
-    }
 
+      // do split afterall
+      if (broadcast_l && IsBlockingVectorization(l)) {
+        l = AllocateTmp(l, args);
+      }
+      if (broadcast_r && IsBlockingVectorization(r)) {
+        r = AllocateTmp(r, args);
+      }
+    }
     return AllocateTmp(T::make(Mutate(l), Mutate(r)), args);
   }
 
@@ -423,7 +460,7 @@ class ThreeAddressExprMutator : public IRMutator {
   Expr Mutate_(const Call *op, const Expr &e) final {
     if (op->call_type == Call::CallType::Halide) {
       // broadcast for a[i, j] = cast(a[j]) -> t[i, j] = a[j]; a[i, j] = cast(t[i, j])
-      if (expr_stack.size() >= 2 && expr_stack[expr_stack.size() - 2]->IsInstance<Cast>() &&
+      if (expr_stack.size() >= binary_size_ && expr_stack[expr_stack.size() - binary_size_]->IsInstance<Cast>() &&
           CountVars(args_) > CountVars(e)) {
         return AllocateTmp(e);
       }
@@ -445,9 +482,9 @@ class ThreeAddressExprMutator : public IRMutator {
       if (args_.size() >= 1 && args_[args_.size() - 1]->IsInstance<Variable>() &&
           op->args[op->args.size() - 1]->IsInstance<Variable>()) {
         const Var innermost = Downcast<Var>(args_[args_.size() - 1]);
-        if ((IsReductionOp_ && expr_stack.size() >= 3) ||
-            (!IsReductionOp_ && expr_stack.size() >= 2 && op->args.size() > 1)) {
-          Expr x = expr_stack[expr_stack.size() - 2];
+        if ((IsReductionOp_ && expr_stack.size() >= triple_size_) ||
+            (!IsReductionOp_ && expr_stack.size() >= binary_size_ && op->args.size() > 1)) {
+          Expr x = expr_stack[expr_stack.size() - binary_size_];
           const Call *call = x.as<Call>();
           if (!(call && (call->name == "proposal_sort" || call->name == "topk_sort" || call->name == "iou" ||
                          call->name == "nms" || call->name == "four2five_nchw" || call->name == "vmadd" ||
@@ -462,8 +499,8 @@ class ThreeAddressExprMutator : public IRMutator {
       }
 
       bool broadcast = true;
-      if (expr_stack.size() >= 2) {
-        Expr x = expr_stack[expr_stack.size() - 2];
+      if (expr_stack.size() >= binary_size_) {
+        Expr x = expr_stack[expr_stack.size() - binary_size_];
         if (x->IsInstance<Add>() || x->IsInstance<Mul>()) {
           broadcast = false;
         }
@@ -476,8 +513,8 @@ class ThreeAddressExprMutator : public IRMutator {
 
       // broadcast when need
       if (broadcast_.count(op) && broadcast) {
-        if (expr_stack.size() >= 2 && expr_stack[expr_stack.size() - 2]->IsInstance<Div>()) {
-          Array<Expr> args = ExprArgsFetcher(args_).GetArgs(expr_stack[expr_stack.size() - 2]);
+        if (expr_stack.size() >= binary_size_ && expr_stack[expr_stack.size() - binary_size_]->IsInstance<Div>()) {
+          Array<Expr> args = ExprArgsFetcher(args_).GetArgs(expr_stack[expr_stack.size() - binary_size_]);
           if (CountVars(e) < CountVars(args)) {
             return AllocateTmp(e, args);
           }
@@ -632,6 +669,8 @@ class ThreeAddressExprMutator : public IRMutator {
   bool cross_simplify_;
   ExprHasher hasher_;
   bool is_simple_;
+  size_t binary_size_{2};
+  size_t triple_size_{3};
 };
 
 Expr ThreeAddressExprMutator::Mutate(Expr expr) {
