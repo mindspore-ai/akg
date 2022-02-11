@@ -941,13 +941,14 @@ def csr_gather(inputs, attrs):
     output_name = "T_csr_gather_" + dense.op.name
     output_shape = get_shape(col_idx.shape) + feature_shape
     out_buf = tvm.decl_buffer(output_shape, dense.dtype, "output_data")
-
+    attrs = {"remove_self_dependence": True}
     return tvm.extern([output_shape],
                       [dense, col_idx, row_idx],
                       lambda ins, outs: gen_ir(ins[0], ins[1], ins[2], outs[0]),
                       dtype=dense.dtype,
                       out_buffers=[out_buf],
-                      name=output_name)
+                      name=output_name,
+                      attrs=attrs)
 
 @tvm.register_func("CSR2COO")
 def csr2coo(inputs, attrs):

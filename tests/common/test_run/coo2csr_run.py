@@ -25,7 +25,6 @@ from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
 
 def coo2csr(row_indices, height, target=CUDA):
-    assert target == CUDA, "only supports GPU"
     return composite.coo2csr((row_indices,), {"height": height})
 
 def gen_data(nnz, height, dtype):

@@ -15,14 +15,14 @@ import os
 import pytest
 import akg.utils as utils
 from tests.common.base import TestBase
-from tests.common.test_run.gpu import csr2coo_run
+from tests.common.test_run import csr2coo_run
 
 ############################################################
 # TestCase= class: put to tests/*/
 ############################################################
 class TestCase(TestBase):
     def setup(self):
-        case_name = "test_abs_001"
+        case_name = "test_csr2coo_001"
         case_path = os.getcwd()
 
         # params init
@@ -44,3 +44,9 @@ class TestCase(TestBase):
     @pytest.mark.env_onecard
     def test_gpu_level0(self):
         return self.run_cases(self.test_args, utils.CUDA, "level0")
+    
+    @pytest.mark.level0
+    @pytest.mark.platform_x86_cpu
+    @pytest.mark.env_onecard
+    def test_cpu_level0(self):
+        return self.run_cases(self.test_args, utils.LLVM, "level0")

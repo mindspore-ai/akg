@@ -149,7 +149,6 @@ Stmt CpuIslEmitterCsr::EmitFor(const isl::ast_node_for &node) {
   depth_ += inc;
   Stmt stmt = CpuIslEmitter::EmitFor(node);
   depth_ -= inc;
-  CHECK_LE(max_var_id_ - tmp_max_var_id, 1) << "nested dynamic csr loop detected.";
   if (inc > 0 && max_var_id_ > tmp_max_var_id) {
     stmt = AttrStmt::make(Expr("INFO"), "max_var_id", max_var_id_, stmt);
   }

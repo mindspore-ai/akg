@@ -1319,10 +1319,6 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCpu(isl::schedule_node node
                                                scop_info_.user_config_.GetTileCheckCoincident())) {
     node = InsertEmptyPermutableBand(node);
   }
-  // If Current op is CSR, skip vectorization process to prevent early return.
-  if (scop_info_.analysis_result_.GetCsr()) {
-    return TileCsrForCpu(node);
-  }
 
   auto current_outer_bn = scop_info_.analysis_result_.GetOuterBandNode(cur_band_index_);
   vectorization_axis_pos_ = current_outer_bn->last_axis;
@@ -1331,6 +1327,11 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCpu(isl::schedule_node node
   }
 
   template_type_ = current_outer_bn->template_type;
+
+  if (scop_info_.analysis_result_.GetCsr()) {
+    return TileCsrForCpu(node);
+  }
+
   if (template_type_ == Template::MATMUL && scop_info_.user_config_.GetEnableMatmul()) {
     return TileGemmOperatorForCpu(node);
   }
@@ -1368,7 +1369,16 @@ isl::schedule_node TileOuterBand::TileCsrForCpu(const isl::schedule_node &orig_n
   auto band_node = node.as<isl::schedule_node_band>();
   node = band_node.split(band_node.n_member() - 1);
   node = IsolateTilesCpu(node, TILE_WITH_C1);
-  node = InsertMarkerForLoop(node.parent(), FOR_PARALLEL);
+  node = InsertMarkerForLoop(node, FOR_PARALLEL);
+  if (template_type_ == Template::REDUCTION) {
+    node = SplitReduceStatements(node.child(0));
+    while (node.has_children()) {
+      node = node.child(0);
+    }
+    node = IsolateTilesCpu(node.parent()).child(0);
+    node = node.insert_mark(FOR_VECTORIZED);
+    node = node.parent().insert_mark(REDUCE_AREA_FLAG);
+  }
   return node.ancestor(node.get_tree_depth() - start_depth);
 }
 
@@ -1547,24 +1557,24 @@ isl::schedule_node TileOuterBand::IsolateTilesCpu(const isl::schedule_node &orig
     tile_size = GetTileSizeOfLevel(n_member, dim_num, tile_level, tile_sizes_);
     current_tile_sizes = ComputeBandTilesSizes(node, &tile_size[0]);
   }
-
-  for (int i = 0, j = start_pos_; i < n_member; ++i, ++j) {
-    if (i >= dim_num || j >= tile_number) {
-      continue;
-    }
-    int tiling_size = tile_level.empty() ? static_cast<int>(tile_sizes_[vectorization_axis_pos_].c0_tiling_size)
-                                         : static_cast<int>(tile_sizes_[j].c1_tiling_size);
-    int current_tiling_size = current_tile_sizes.val(i).get_num_si();
-    if (MAX_STRIDE == tiling_size) continue;
-    if (tiling_size > current_tiling_size) {
-      full_tile_max[i] = tiling_size / current_tiling_size - 1;
-    }
-  }
-
   isl::schedule_node before_tile_node = node;
   isl::schedule_node after_tile_node = TileBand(node, current_tile_sizes);
-  after_tile_node =
-    IsolateTiles(before_tile_node, after_tile_node, TileType::BUF, nullptr, &full_tile_max[0], true).child(0);
+  if(!scop_info_.analysis_result_.GetCsr()){
+    for (int i = 0, j = start_pos_; i < n_member; ++i, ++j) {
+      if (i >= dim_num || j >= tile_number) {
+        continue;
+      }
+      int tiling_size = tile_level.empty() ? static_cast<int>(tile_sizes_[vectorization_axis_pos_].c0_tiling_size)
+                                          : static_cast<int>(tile_sizes_[j].c1_tiling_size);
+      int current_tiling_size = current_tile_sizes.val(i).get_num_si();
+      if (MAX_STRIDE == tiling_size) continue;
+      if (tiling_size > current_tiling_size) {
+        full_tile_max[i] = tiling_size / current_tiling_size - 1;
+      }
+    }
+    after_tile_node =
+      IsolateTiles(before_tile_node, after_tile_node, TileType::BUF, nullptr, &full_tile_max[0], true).child(0);
+  }
   return after_tile_node;
 }
 
@@ -1683,7 +1693,7 @@ isl::multi_val TileOuterBand::GetVectorizationTileSize(const isl::schedule_node 
       vectorized_length = std::max(tmp_bytes, vectorized_length);
     }
   }
-
+  scop_info_.user_config_.SetVectorLength(vectorized_length);
   int tile_size = static_cast<int>(orig_node.as<isl::schedule_node_band>().n_member());
   std::vector<int> vectorization_tile_size(tile_size, vectorized_length);
 

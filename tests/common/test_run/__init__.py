@@ -19,6 +19,9 @@ from .batch_matmul_run import batch_matmul_run
 from .cast_run import cast_run
 from .conv_fusion_run import conv_fusion_run
 from .conv_run import conv_run
+from .coo2csr_run import coo2csr_run
+from .csr_gather_run import csr_gather_run
+from .csr2coo_run import csr2coo_run
 from .csrmv_run import csrmv_run
 from .csr_div_run import csr_div_run
 from .csr_mul_run import csr_mul_run

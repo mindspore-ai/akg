@@ -27,6 +27,8 @@ extern AttrMap g_attrs;
 extern Array<NodeRef> g_external_call_name;
 extern CsrMap g_csr;
 
+const Variable *GetVariableFromCSR();
+
 /*
  * Custom exception used when memory allocation fails and triggers micro-tuning to try to recover from failure.
  */
