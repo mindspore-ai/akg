@@ -428,6 +428,7 @@ constexpr auto REALIZE = "realize";
 constexpr auto CONV_GEMM = "conv_gemm";
 constexpr auto CONV_KHKW_OUTER = "conv_khkw_outer";
 constexpr auto FUSE_VECTOR = "fuse_vector";
+constexpr auto RESCHEDULE = "reschedule";
 constexpr auto MULTICORE_COINCIDENT = "multicore_coincident_";
 
 constexpr auto ALLOC_C = "alloc_C";

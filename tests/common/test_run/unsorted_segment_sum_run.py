@@ -1,4 +1,4 @@
-# Copyright 2020-2021 Huawei Technologies Co., Ltd
+# Copyright 2020-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -40,6 +40,7 @@ def unsorted_segment_sum_run(shape, ids_shape, num_segments, dtype, attrs):
         else:
             return mod
     else:
+        attrs["multicore_loop_switch_hoist"] = False
         mod = unsortedsegmentsum_compile(shape, ids_shape, num_segments, dtype, attrs)
         expect, input, output, segment_ids = gen_data_ascend(dtype, ids_shape, num_segments, shape)
         output = utils.mod_launch(mod, (input, segment_ids, output), expect=expect)

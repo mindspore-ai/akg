@@ -146,6 +146,19 @@ isl::schedule_node ReduceManager::SetAllCoincident(const isl::schedule_node &ori
   return band_node;
 }
 
+// Loop distribution by serializing sccs
+isl::schedule ReduceManager::RescheduleSerializeSccs(const isl::union_set &active_domain, const bool need_dist) const {
+  auto ctx = pass_info_.constraints_.ctx();
+  auto wasSerializingSccs = isl_options_get_schedule_serialize_sccs(ctx.get());
+  isl_stat status = isl_options_set_schedule_serialize_sccs(ctx.get(), static_cast<int>(need_dist));
+  CHECK(status == isl_stat_ok);
+  auto constraints = pass_info_.constraints_.intersect_domain(active_domain);
+  auto new_schedule = constraints.compute_schedule();
+  status = isl_options_set_schedule_serialize_sccs(ctx.get(), wasSerializingSccs);
+  CHECK(status == isl_stat_ok);
+  return new_schedule;
+}
+
 isl::schedule_node ReduceManager::RescheduleForReduce(const isl::schedule_node &orig_node) {
   auto node = orig_node;
   size_t start_depth = node.get_tree_depth();
@@ -162,7 +175,6 @@ isl::schedule_node ReduceManager::RescheduleForReduce(const isl::schedule_node &
   }
 
   int child_number = static_cast<int>(node.n_children());
-  Reschedule reschedule(scop_info_, pass_info_);
   for (int i = 0; i < child_number; ++i) {
     auto child_node = node.child(i);
     if (!child_node.isa<isl::schedule_node_filter>() || !child_node.has_children()) {
@@ -180,7 +192,7 @@ isl::schedule_node ReduceManager::RescheduleForReduce(const isl::schedule_node &
     }
 
     auto active_domain = child_node.as<isl::schedule_node_filter>().get_filter();
-    auto after_reschedule_node = reschedule.RescheduleSerializeSccs(active_domain, false).get_root();
+    auto after_reschedule_node = RescheduleSerializeSccs(active_domain, false).get_root();
     after_reschedule_node =
       after_reschedule_node.has_children() ? after_reschedule_node.child(0) : after_reschedule_node;
 

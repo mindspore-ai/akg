@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -84,6 +84,9 @@ bool MarkOuterMost::SingleMulticoreBand(isl::schedule_node &outer_band) {
         auto filter = node.as<isl::schedule_node_filter>();
         if (filter.has_children()) {
           auto node0 = filter.get_child(0);
+          while (node0.isa<isl::schedule_node_mark>()) {
+            node0 = node0.get_child(0);
+          }
           if (node0.isa<isl::schedule_node_band>() && node0.as<isl::schedule_node_band>().n_member() >= 1) {
             multi_core_band++;
           }
@@ -106,12 +109,17 @@ bool MarkOuterMost::InjectMulticoreToSchedule(isl::schedule_node &outer_band) {
         isl::schedule_node node = outer_band.get_child(i);
         if (node.isa<isl::schedule_node_filter>()) {
           auto filter = node.as<isl::schedule_node_filter>();
-          if (filter.has_children() && filter.get_child(0).isa<isl::schedule_node_band>() &&
-              filter.get_child(0).as<isl::schedule_node_band>().n_member() >= 1) {
-            isl::schedule_node tmp = filter.get_child(0);
-            bool injected = InjectMulticoreToBand(tmp);
-            outer_band = ObtainSequenceOrSetNodeAncestor(tmp);
-            return injected;
+          if (filter.has_children()) {
+            auto node0 = filter.get_child(0);
+            while (node0.isa<isl::schedule_node_mark>()) {
+              node0 = node0.get_child(0);
+            }
+            if (node0.isa<isl::schedule_node_band>() &&
+              node0.as<isl::schedule_node_band>().n_member() >= 1) {
+              bool injected = InjectMulticoreToBand(node0);
+              outer_band = ObtainSequenceOrSetNodeAncestor(node0);
+              return injected;
+            }
           }
         }
       }

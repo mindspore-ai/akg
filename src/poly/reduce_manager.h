@@ -50,6 +50,7 @@ class ReduceManager {
   isl::schedule_node ReorderStatements(const isl::schedule_node &node, isl::union_set before, isl::union_set after);
   bool AreSequentialStatements(isl::union_set first_statements, isl::union_set second_statements,
                                isl::union_map dependences);
+  isl::schedule RescheduleSerializeSccs(const isl::union_set &active_domain, const bool need_dist) const;
   // After splitting the reduce fusion operator, reschedule all the filters, mainly because the reduce statement
   // affects other statements after the fusion.
   isl::schedule_node RescheduleForReduce(const isl::schedule_node &orig_node);

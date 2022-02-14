@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -52,6 +52,7 @@ class NPUIslEmitter : public IslEmitter {
   // emit mark node
   Stmt EmitMarkMulticore(const isl::ast_node_mark &node);
   Stmt EmitMarkFuseInst(const isl::ast_node_mark &node);
+  Stmt EmitMarkReschedule(const isl::ast_node_mark &node);
   Stmt EmitMarkAllocRealizeOut(const isl::ast_node_mark &node);
   Stmt EmitMarkAllocC(const isl::ast_node_mark &node);
   Stmt EmitMarkSpecGemm(const isl::ast_node_mark &node);

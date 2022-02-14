@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,9 +27,8 @@ isl::schedule LabelRealizeOutPosition::Run(isl::schedule sch_label) {
       if (REALIZE_BUF == node.as<isl::schedule_node_mark>().get_id().get_name() &&
           node.child(0).isa<isl::schedule_node_band>()) {
         auto band = node.child(0).as<isl::schedule_node_band>();
-
         unsigned pos = UINT_MAX;
-        auto updatePos_ = [&pos](isl::schedule_node node) -> isl::schedule_node {
+        auto UpdatePos = [&pos](isl::schedule_node node) -> isl::schedule_node {
           if (node.isa<isl::schedule_node_filter>()) {
             node = node.get_child(0);
             if (node.isa<isl::schedule_node_band>()) {
@@ -47,7 +46,9 @@ isl::schedule LabelRealizeOutPosition::Run(isl::schedule sch_label) {
           return node;
         };
 
-        static_cast<void>(band.map_descendant_bottom_up(updatePos_));
+        if (!node.parent().isa<isl::schedule_node_mark>()) {
+          static_cast<void>(band.map_descendant_bottom_up(UpdatePos));
+        }
 
         for (unsigned i = 0; i < band.n_member(); ++i) {
           if (!band.member_get_coincident(i)) {

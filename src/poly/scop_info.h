@@ -270,7 +270,6 @@ class UserConfig {
     ParseBoolAttr(attrs, "pragma_keep_outer_band_order", &keep_outer_band_order_);
     ParseBoolAttr(attrs, "pragma_modshift", &mod_schedule_shift_);
     ParseBoolAttr(attrs, "pragma_disable_group", &disable_group_);
-    ParseBoolAttr(attrs, "pragma_tile_inner_band", &tile_inner_band_);
     ParseBoolAttr(attrs, "pragma_set_all_coincident", &pragma_set_all_coincident_);
     ParseBoolAttr(attrs, "pragma_enable_reschedule", &enable_reschedule_);
 
@@ -417,7 +416,6 @@ class UserConfig {
   bool GetKeepOuterBandOrder() const { return keep_outer_band_order_; }
   bool GetModScheduleShift() const { return mod_schedule_shift_; }
   bool GetDisableGroup() const { return disable_group_; }
-  bool GetTileInnerBand() const { return tile_inner_band_; }
   bool GetPragmaSetAllCoincident() const { return pragma_set_all_coincident_; }
   bool GetConsiderCoincidence() const { return consider_conincidence_; }
   void SetConsiderCoincidence(bool consider_conincidence) { consider_conincidence_ = consider_conincidence; }
@@ -772,7 +770,6 @@ class UserConfig {
   bool keep_outer_band_order_{false};
   bool mod_schedule_shift_{false};
   bool disable_group_{false};
-  bool tile_inner_band_{false};
   bool pragma_set_all_coincident_{false};
   bool consider_conincidence_{true};
   bool enable_reschedule_{true};
