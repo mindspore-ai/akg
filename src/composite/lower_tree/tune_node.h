@@ -37,7 +37,7 @@ class TuneLowerNode : public BaseLowerNode {
  public:
   TuneLowerNode(const std::string &target, bool get_stmt) : BaseLowerNode(target) {
     if (target == "cuda" || target == "llvm") {
-      entrance_stage_ = get_stmt ? StageType::BeforeLowerFunc : StageType::End;
+      entrance_stage_ = get_stmt ? StageType::Flattern : StageType::End;
     } else if (target == "cce") {
       entrance_stage_ = get_stmt ? StageType::MultiCore : StageType::End;
     } else {
