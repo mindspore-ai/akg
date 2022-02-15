@@ -1887,6 +1887,11 @@ Stmt NPUIslEmitter::EmitMarkFuseInst(const isl::ast_node_mark &node) {
   return stmt;
 }
 
+Stmt NPUIslEmitter::EmitMarkReschedule(const isl::ast_node_mark &node) {
+  auto stmt = AttrStmt::make(make_zero(Int(32)), "pragma_reschedule", Expr(1), EmitAst(node.get_node()));
+  return stmt;
+}
+
 Stmt NPUIslEmitter::EmitMarkAllocRealizeOut(const isl::ast_node_mark &node) {
   Stmt body = EmitAst(node.get_node());
   for (const auto &i : realize_out_) {
@@ -1990,6 +1995,7 @@ void NPUIslEmitter::RealizeOut() {
 Stmt NPUIslEmitter::EmitMarkMulticore(const isl::ast_node_mark &node) {
   auto mark_name = node.get_id().get_name();
   if (mark_name == FUSE_VECTOR) return EmitMarkFuseInst(node);
+  if (mark_name == RESCHEDULE) return EmitMarkReschedule(node);
   if (mark_name == ALLOC_REALIZE_OUT) return EmitMarkAllocRealizeOut(node);
   if (mark_name == ALLOC_C) return EmitMarkAllocC(node);
 #if SPEC_GEMM

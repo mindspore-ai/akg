@@ -1,4 +1,4 @@
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -354,6 +354,7 @@ def get_attrs():
     attr_map["enable_double_buffer"] = False
     attr_map["pragma_sink_last_axis"] = False
     attr_map["enable_hoist_insn"] = False
+    attr_map["pragma_enable_reschedule"] = False
     return attr_map
 
 
@@ -405,10 +406,10 @@ def LoadIm2col(tensor_fmap, kernel, stride, pad, target=utils.CCE):
     load_im2col_dsl_output = load_im2col_dsl(load_im2col_dsl_input, fmap_shape_NC1HWCO, kernel, pad, stride)
 
     # calculate the tiling factor.
-    Ho = (fmap_h + pad[0] + pad[1] - filter_h) // (stride[0]) + 1
-    Wo = (fmap_w + pad[2] + pad[3] - filter_w) // (stride[1]) + 1
+    ho = (fmap_h + pad[0] + pad[1] - filter_h) // (stride[0]) + 1
+    wo = (fmap_w + pad[2] + pad[3] - filter_w) // (stride[1]) + 1
 
-    if not large_tensor(tensor_fmap) and ((Ho.value * Wo.value) % block_size > 0 or has_pad(pad)):
+    if not large_tensor(tensor_fmap) and ((ho.value * wo.value) % block_size > 0 or has_pad(pad)):
         load_im2col_dsl_output = load_im2col_dsl_no_padding(load_im2col_dsl_input, fmap_shape_NC1HWCO, kernel, pad,
                                                             stride)
     attrs = get_attrs()

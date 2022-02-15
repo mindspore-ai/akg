@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -461,7 +461,6 @@ void UserConfig::DumpScopDataScheduleAttrs(std::ofstream &of) {
   of << "pragma_sink_last_axis : " << GetSinkLastAxis() << std::endl;
   of << "pragma_keep_outer_band_order : " << GetKeepOuterBandOrder() << std::endl;
   of << "pragma_disable_group : " << GetDisableGroup() << std::endl;
-  of << "pragma_tile_inner_band : " << GetTileInnerBand() << std::endl;
   of << "isolated_idx : " << GetIsolatedIdx() << std::endl;
   of << "pragma_outerband_need_split : " << GetOuterBandNeedSplit() << std::endl;
 

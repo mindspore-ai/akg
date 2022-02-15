@@ -1,6 +1,6 @@
 diff -Npur isl-0.22/include/isl/aff.h isl/include/isl/aff.h
 --- isl-0.22/include/isl/aff.h	2019-11-02 02:05:27.000000000 +0800
-+++ isl/include/isl/aff.h	2021-10-08 14:40:05.220984506 +0800
++++ isl/include/isl/aff.h	2022-01-27 20:56:35.683289369 +0800
 @@ -17,14 +17,19 @@
  extern "C" {
  #endif
@@ -320,7 +320,7 @@ diff -Npur isl-0.22/include/isl/aff.h isl/include/isl/aff.h
  __isl_overload
 diff -Npur isl-0.22/include/isl/aff_type.h isl/include/isl/aff_type.h
 --- isl-0.22/include/isl/aff_type.h	2019-11-02 02:05:27.000000000 +0800
-+++ isl/include/isl/aff_type.h	2021-10-08 14:40:05.220984506 +0800
++++ isl/include/isl/aff_type.h	2022-01-27 20:56:35.679289311 +0800
 @@ -10,13 +10,13 @@ extern "C" {
  struct __isl_subclass(isl_multi_aff) __isl_subclass(isl_pw_aff) isl_aff;
  typedef struct isl_aff isl_aff;
@@ -339,7 +339,7 @@ diff -Npur isl-0.22/include/isl/aff_type.h isl/include/isl/aff_type.h
  	__isl_subclass(isl_union_pw_multi_aff) isl_union_pw_aff;
 diff -Npur isl-0.22/include/isl/ast_build.h isl/include/isl/ast_build.h
 --- isl-0.22/include/isl/ast_build.h	2019-11-02 02:05:27.000000000 +0800
-+++ isl/include/isl/ast_build.h	2021-10-08 14:40:05.224984474 +0800
++++ isl/include/isl/ast_build.h	2022-01-27 20:56:35.679289311 +0800
 @@ -67,10 +67,14 @@ __isl_null isl_ast_build *isl_ast_build_
  __isl_give isl_ast_build *isl_ast_build_set_options(
  	__isl_take isl_ast_build *build,
@@ -357,7 +357,7 @@ diff -Npur isl-0.22/include/isl/ast_build.h isl/include/isl/ast_build.h
  	__isl_give isl_ast_node *(*fn)(__isl_take isl_ast_node *node,
 diff -Npur isl-0.22/include/isl/ast.h isl/include/isl/ast.h
 --- isl-0.22/include/isl/ast.h	2019-10-01 05:34:48.000000000 +0800
-+++ isl/include/isl/ast.h	2021-10-08 14:40:05.224984474 +0800
++++ isl/include/isl/ast.h	2022-01-27 20:56:35.683289369 +0800
 @@ -84,9 +84,11 @@ __isl_give isl_ast_expr *isl_ast_expr_op
  	int pos);
  __isl_give isl_ast_expr *isl_ast_expr_get_op_arg(__isl_keep isl_ast_expr *expr,
@@ -391,7 +391,7 @@ diff -Npur isl-0.22/include/isl/ast.h isl/include/isl/ast.h
  __isl_export
 diff -Npur isl-0.22/include/isl/constraint.h isl/include/isl/constraint.h
 --- isl-0.22/include/isl/constraint.h	2019-09-25 00:10:51.000000000 +0800
-+++ isl/include/isl/constraint.h	2021-10-08 14:40:05.224984474 +0800
++++ isl/include/isl/constraint.h	2022-01-27 20:56:35.679289311 +0800
 @@ -37,6 +37,7 @@ __isl_give isl_constraint *isl_equality_
  __isl_give isl_constraint *isl_inequality_alloc(__isl_take isl_local_space *ls);
  
@@ -446,7 +446,7 @@ diff -Npur isl-0.22/include/isl/constraint.h isl/include/isl/constraint.h
  #if defined(__cplusplus)
 diff -Npur isl-0.22/include/isl/id.h isl/include/isl/id.h
 --- isl-0.22/include/isl/id.h	2019-11-02 02:05:27.000000000 +0800
-+++ isl/include/isl/id.h	2021-10-08 14:40:05.224984474 +0800
++++ isl/include/isl/id.h	2022-01-27 20:56:35.679289311 +0800
 @@ -17,6 +17,7 @@ ISL_DECLARE_EXPORTED_LIST_FN(id)
  ISL_DECLARE_MULTI(id)
  
@@ -457,7 +457,7 @@ diff -Npur isl-0.22/include/isl/id.h isl/include/isl/id.h
  __isl_give isl_id *isl_id_alloc(isl_ctx *ctx,
 diff -Npur isl-0.22/include/isl/ilp.h isl/include/isl/ilp.h
 --- isl-0.22/include/isl/ilp.h	2019-09-25 00:10:51.000000000 +0800
-+++ isl/include/isl/ilp.h	2021-10-08 14:40:05.224984474 +0800
++++ isl/include/isl/ilp.h	2022-01-27 20:56:35.679289311 +0800
 @@ -31,11 +31,15 @@ __isl_give isl_val *isl_set_max_val(__is
  __isl_give isl_multi_val *isl_union_set_min_multi_union_pw_aff(
  	__isl_keep isl_union_set *uset, __isl_keep isl_multi_union_pw_aff *obj);
@@ -476,7 +476,7 @@ diff -Npur isl-0.22/include/isl/ilp.h isl/include/isl/ilp.h
  
 diff -Npur isl-0.22/include/isl/list.h isl/include/isl/list.h
 --- isl-0.22/include/isl/list.h	2019-11-02 02:05:27.000000000 +0800
-+++ isl/include/isl/list.h	2021-10-08 14:40:05.224984474 +0800
++++ isl/include/isl/list.h	2022-01-27 20:56:35.679289311 +0800
 @@ -43,6 +43,7 @@ __isl_give isl_##EL##_list *isl_##EL##_l
  __isl_give isl_##EL##_list *isl_##EL##_list_insert(			\
  	__isl_take isl_##EL##_list *list, unsigned pos,			\
@@ -495,7 +495,7 @@ diff -Npur isl-0.22/include/isl/list.h isl/include/isl/list.h
  EXPORT									\
 diff -Npur isl-0.22/include/isl/local_space.h isl/include/isl/local_space.h
 --- isl-0.22/include/isl/local_space.h	2019-09-25 00:10:51.000000000 +0800
-+++ isl/include/isl/local_space.h	2021-10-08 14:40:05.224984474 +0800
++++ isl/include/isl/local_space.h	2022-01-27 20:56:35.679289311 +0800
 @@ -10,11 +10,12 @@
  extern "C" {
  #endif
@@ -520,7 +520,7 @@ diff -Npur isl-0.22/include/isl/local_space.h isl/include/isl/local_space.h
  
 diff -Npur isl-0.22/include/isl/map.h isl/include/isl/map.h
 --- isl-0.22/include/isl/map.h	2019-11-02 02:05:27.000000000 +0800
-+++ isl/include/isl/map.h	2021-10-08 14:40:05.224984474 +0800
++++ isl/include/isl/map.h	2022-01-27 20:56:35.679289311 +0800
 @@ -34,6 +34,7 @@ isl_size isl_basic_map_total_dim(__isl_k
  isl_size isl_basic_map_dim(__isl_keep isl_basic_map *bmap,
  				enum isl_dim_type type);
@@ -675,7 +675,7 @@ diff -Npur isl-0.22/include/isl/map.h isl/include/isl/map.h
  }
 diff -Npur isl-0.22/include/isl/map_type.h isl/include/isl/map_type.h
 --- isl-0.22/include/isl/map_type.h	2019-10-01 05:34:48.000000000 +0800
-+++ isl/include/isl/map_type.h	2021-10-08 14:40:05.224984474 +0800
++++ isl/include/isl/map_type.h	2022-01-27 20:56:35.679289311 +0800
 @@ -13,7 +13,7 @@ typedef struct isl_basic_map isl_basic_m
  ISL_DECLARE_LIST_TYPE(basic_map)
  struct __isl_subclass(isl_union_map) isl_map;
@@ -701,7 +701,7 @@ diff -Npur isl-0.22/include/isl/map_type.h isl/include/isl/map_type.h
  }
 diff -Npur isl-0.22/include/isl/multi.h isl/include/isl/multi.h
 --- isl-0.22/include/isl/multi.h	2019-11-02 02:05:27.000000000 +0800
-+++ isl/include/isl/multi.h	2021-10-08 14:40:05.224984474 +0800
++++ isl/include/isl/multi.h	2022-01-27 20:56:35.679289311 +0800
 @@ -36,12 +36,17 @@ isl_size isl_multi_##BASE##_size(__isl_k
  __isl_export								\
  __isl_give isl_##BASE *isl_multi_##BASE##_get_at(			\
@@ -744,7 +744,7 @@ diff -Npur isl-0.22/include/isl/multi.h isl/include/isl/multi.h
  	enum isl_dim_type type, __isl_take isl_id *id);			\
 diff -Npur isl-0.22/include/isl/schedule.h isl/include/isl/schedule.h
 --- isl-0.22/include/isl/schedule.h	2019-11-02 02:05:27.000000000 +0800
-+++ isl/include/isl/schedule.h	2021-10-08 14:40:05.224984474 +0800
++++ isl/include/isl/schedule.h	2022-01-27 20:56:35.683289369 +0800
 @@ -17,9 +17,16 @@ extern "C" {
  struct __isl_export isl_schedule_constraints;
  typedef struct isl_schedule_constraints isl_schedule_constraints;
@@ -762,9 +762,24 @@ diff -Npur isl-0.22/include/isl/schedule.h isl/include/isl/schedule.h
  isl_stat isl_options_set_schedule_max_constant_term(isl_ctx *ctx, int val);
  int isl_options_get_schedule_max_constant_term(isl_ctx *ctx);
  
-@@ -104,6 +111,10 @@ __isl_give isl_union_map *
+@@ -79,6 +86,10 @@ isl_schedule_constraints_set_conditional
+ __isl_null isl_schedule_constraints *isl_schedule_constraints_free(
+ 	__isl_take isl_schedule_constraints *sc);
+ 
++__isl_export
++__isl_give isl_schedule_constraints *isl_schedule_constraints_set_prefix(
++	__isl_take isl_schedule_constraints *sc,
++	__isl_take isl_multi_union_pw_aff *prefix);
+ isl_ctx *isl_schedule_constraints_get_ctx(
+ 	__isl_keep isl_schedule_constraints *sc);
+ __isl_export
+@@ -103,7 +114,14 @@ __isl_export
+ __isl_give isl_union_map *
  isl_schedule_constraints_get_conditional_validity_condition(
  	__isl_keep isl_schedule_constraints *sc);
++__isl_export
++__isl_give isl_multi_union_pw_aff *isl_schedule_constraints_get_prefix(
++	__isl_keep isl_schedule_constraints *sc);
  
 +__isl_export
 +__isl_give isl_schedule_constraints *isl_schedule_constraints_intersect_domain(
@@ -773,7 +788,17 @@ diff -Npur isl-0.22/include/isl/schedule.h isl/include/isl/schedule.h
  __isl_give isl_schedule_constraints *isl_schedule_constraints_apply(
  	__isl_take isl_schedule_constraints *sc,
  	__isl_take isl_union_map *umap);
-@@ -138,12 +149,14 @@ __isl_export
+@@ -119,6 +137,9 @@ void isl_schedule_constraints_dump(__isl
+ __isl_give char *isl_schedule_constraints_to_str(
+ 	__isl_keep isl_schedule_constraints *sc);
+ 
++__isl_give isl_schedule_node *isl_schedule_node_schedule(
++	__isl_take isl_schedule_node *node,
++	__isl_take isl_schedule_constraints *sc);
+ __isl_export
+ __isl_give isl_schedule *isl_schedule_constraints_compute_schedule(
+ 	__isl_take isl_schedule_constraints *sc);
+@@ -138,12 +159,14 @@ __isl_export
  __isl_give isl_union_map *isl_schedule_get_map(__isl_keep isl_schedule *sched);
  
  isl_ctx *isl_schedule_get_ctx(__isl_keep isl_schedule *sched);
@@ -788,7 +813,7 @@ diff -Npur isl-0.22/include/isl/schedule.h isl/include/isl/schedule.h
  __isl_give isl_union_set *isl_schedule_get_domain(
  	__isl_keep isl_schedule *schedule);
  
-@@ -158,13 +171,16 @@ __isl_give isl_schedule *isl_schedule_ma
+@@ -158,13 +181,16 @@ __isl_give isl_schedule *isl_schedule_ma
  
  __isl_give isl_schedule *isl_schedule_insert_context(
  	__isl_take isl_schedule *schedule, __isl_take isl_set *context);
@@ -807,7 +832,7 @@ diff -Npur isl-0.22/include/isl/schedule.h isl/include/isl/schedule.h
  __isl_give isl_schedule *isl_schedule_intersect_domain(
 diff -Npur isl-0.22/include/isl/schedule_node.h isl/include/isl/schedule_node.h
 --- isl-0.22/include/isl/schedule_node.h	2019-11-02 02:05:27.000000000 +0800
-+++ isl/include/isl/schedule_node.h	2021-10-08 14:40:05.224984474 +0800
++++ isl/include/isl/schedule_node.h	2022-01-27 20:56:35.683289369 +0800
 @@ -78,6 +78,7 @@ __isl_export
  isl_size isl_schedule_node_get_ancestor_child_position(
  	__isl_keep isl_schedule_node *node,
@@ -935,7 +960,7 @@ diff -Npur isl-0.22/include/isl/schedule_node.h isl/include/isl/schedule_node.h
  #endif
 diff -Npur isl-0.22/include/isl/set.h isl/include/isl/set.h
 --- isl-0.22/include/isl/set.h	2019-11-02 02:05:27.000000000 +0800
-+++ isl/include/isl/set.h	2021-10-08 14:40:05.224984474 +0800
++++ isl/include/isl/set.h	2022-01-27 20:56:35.683289369 +0800
 @@ -31,6 +31,7 @@ isl_size isl_basic_set_total_dim(__isl_k
  isl_size isl_basic_set_dim(__isl_keep isl_basic_set *bset,
  				enum isl_dim_type type);
@@ -1055,7 +1080,7 @@ diff -Npur isl-0.22/include/isl/set.h isl/include/isl/set.h
  __isl_give char *isl_basic_set_to_str(__isl_keep isl_basic_set *bset);
 diff -Npur isl-0.22/include/isl/space.h isl/include/isl/space.h
 --- isl-0.22/include/isl/space.h	2019-11-02 02:05:27.000000000 +0800
-+++ isl/include/isl/space.h	2021-10-08 14:40:05.224984474 +0800
++++ isl/include/isl/space.h	2022-01-27 20:56:35.679289311 +0800
 @@ -26,6 +26,7 @@ __isl_give isl_space *isl_space_alloc(is
  			unsigned nparam, unsigned n_in, unsigned n_out);
  __isl_give isl_space *isl_space_set_alloc(isl_ctx *ctx,
@@ -1166,9 +1191,21 @@ diff -Npur isl-0.22/include/isl/space.h isl/include/isl/space.h
  isl_size isl_space_dim(__isl_keep isl_space *space, enum isl_dim_type type);
  
  __isl_export
+diff -Npur isl-0.22/include/isl/stream.h isl/include/isl/stream.h
+--- isl-0.22/include/isl/stream.h	2019-09-25 00:10:51.000000000 +0800
++++ isl/include/isl/stream.h	2022-01-27 20:56:35.679289311 +0800
+@@ -76,6 +76,8 @@ enum isl_token_type isl_stream_register_
+ struct isl_obj isl_stream_read_obj(__isl_keep isl_stream *s);
+ __isl_give isl_val *isl_stream_read_val(__isl_keep isl_stream *s);
+ __isl_give isl_multi_aff *isl_stream_read_multi_aff(__isl_keep isl_stream *s);
++__isl_give isl_multi_union_pw_aff *isl_stream_read_multi_union_pw_aff(
++	__isl_keep isl_stream *s);
+ __isl_give isl_map *isl_stream_read_map(__isl_keep isl_stream *s);
+ __isl_give isl_set *isl_stream_read_set(__isl_keep isl_stream *s);
+ __isl_give isl_pw_qpolynomial *isl_stream_read_pw_qpolynomial(
 diff -Npur isl-0.22/include/isl/stride_info.h isl/include/isl/stride_info.h
 --- isl-0.22/include/isl/stride_info.h	2019-09-25 00:10:51.000000000 +0800
-+++ isl/include/isl/stride_info.h	2021-10-08 14:40:05.228984442 +0800
++++ isl/include/isl/stride_info.h	2022-01-27 20:56:35.679289311 +0800
 @@ -12,11 +12,13 @@
  extern "C" {
  #endif
@@ -1186,7 +1223,7 @@ diff -Npur isl-0.22/include/isl/stride_info.h isl/include/isl/stride_info.h
  	__isl_take isl_stride_info *si);
 diff -Npur isl-0.22/include/isl/union_map.h isl/include/isl/union_map.h
 --- isl-0.22/include/isl/union_map.h	2019-11-02 02:05:27.000000000 +0800
-+++ isl/include/isl/union_map.h	2021-10-08 14:40:05.228984442 +0800
++++ isl/include/isl/union_map.h	2022-01-27 20:56:35.679289311 +0800
 @@ -29,6 +29,7 @@ __isl_overload
  __isl_give isl_union_map *isl_union_map_empty_ctx(isl_ctx *ctx);
  __isl_give isl_union_map *isl_union_map_empty_space(
@@ -1246,7 +1283,7 @@ diff -Npur isl-0.22/include/isl/union_map.h isl/include/isl/union_map.h
  	__isl_take isl_multi_union_pw_aff *mupa);
 diff -Npur isl-0.22/include/isl/union_set.h isl/include/isl/union_set.h
 --- isl-0.22/include/isl/union_set.h	2019-11-02 02:05:27.000000000 +0800
-+++ isl/include/isl/union_set.h	2021-10-08 14:40:05.228984442 +0800
++++ isl/include/isl/union_set.h	2022-01-27 20:56:35.679289311 +0800
 @@ -20,6 +20,7 @@ __isl_overload
  __isl_give isl_union_set *isl_union_set_empty_ctx(isl_ctx *ctx);
  __isl_give isl_union_set *isl_union_set_empty_space(
@@ -1290,7 +1327,7 @@ diff -Npur isl-0.22/include/isl/union_set.h isl/include/isl/union_set.h
  isl_stat isl_union_set_foreach_point(__isl_keep isl_union_set *uset,
 diff -Npur isl-0.22/interface/cpp.cc isl/interface/cpp.cc
 --- isl-0.22/interface/cpp.cc	2019-11-02 02:05:27.000000000 +0800
-+++ isl/interface/cpp.cc	2021-10-08 14:40:05.228984442 +0800
++++ isl/interface/cpp.cc	2022-01-27 20:56:35.683289369 +0800
 @@ -253,6 +253,7 @@ void cpp_generator::print_class(ostream
  	print_ptr_decl(os, clazz);
  	print_downcast_decl(os, clazz);
@@ -1401,7 +1438,7 @@ diff -Npur isl-0.22/interface/cpp.cc isl/interface/cpp.cc
  /* Rename method "name" in case the method name in the C++ bindings should not
 diff -Npur isl-0.22/interface/cpp.h isl/interface/cpp.h
 --- isl-0.22/interface/cpp.h	2019-11-02 02:05:27.000000000 +0800
-+++ isl/interface/cpp.h	2021-10-08 14:40:05.228984442 +0800
++++ isl/interface/cpp.h	2022-01-27 20:56:35.683289369 +0800
 @@ -50,6 +50,7 @@ private:
  		const isl_class &super);
  	void print_downcast_decl(ostream &os, const isl_class &clazz);
@@ -1420,7 +1457,7 @@ diff -Npur isl-0.22/interface/cpp.h isl/interface/cpp.h
  	void print_methods_impl(ostream &os, const isl_class &clazz);
 diff -Npur isl-0.22/isl_aff.c isl/isl_aff.c
 --- isl-0.22/isl_aff.c	2019-11-02 02:05:27.000000000 +0800
-+++ isl/isl_aff.c	2021-10-08 14:40:05.228984442 +0800
++++ isl/isl_aff.c	2022-01-27 20:56:35.663289083 +0800
 @@ -57,6 +57,21 @@
  
  #include <isl_list_templ.c>
@@ -1480,7 +1517,7 @@ diff -Npur isl-0.22/isl_aff.c isl/isl_aff.c
  
 diff -Npur isl-0.22/isl_ast_build.c isl/isl_ast_build.c
 --- isl-0.22/isl_ast_build.c	2019-09-25 00:10:51.000000000 +0800
-+++ isl/isl_ast_build.c	2021-10-14 13:21:00.908090659 +0800
++++ isl/isl_ast_build.c	2022-01-27 20:56:35.663289083 +0800
 @@ -142,6 +142,7 @@ __isl_give isl_ast_build *isl_ast_build_
  	build->options = isl_union_map_empty(isl_space_params_alloc(ctx, 0));
  	build->depth = n;
@@ -1519,7 +1556,7 @@ diff -Npur isl-0.22/isl_ast_build.c isl/isl_ast_build.c
   * and that is (probably) not meaningful to any nested code generation.
 diff -Npur isl-0.22/isl_ast_build_private.h isl/isl_ast_build_private.h
 --- isl-0.22/isl_ast_build_private.h	2019-09-25 00:10:51.000000000 +0800
-+++ isl/isl_ast_build_private.h	2021-10-14 13:21:00.908090659 +0800
++++ isl/isl_ast_build_private.h	2022-01-27 20:56:35.655288968 +0800
 @@ -197,6 +197,7 @@ struct isl_ast_build {
  	int n;
  	enum isl_ast_loop_type *loop_type;
@@ -1530,7 +1567,7 @@ diff -Npur isl-0.22/isl_ast_build_private.h isl/isl_ast_build_private.h
  __isl_give isl_ast_build *isl_ast_build_clear_local_info(
 diff -Npur isl-0.22/isl_ast_codegen.c isl/isl_ast_codegen.c
 --- isl-0.22/isl_ast_codegen.c	2019-11-02 02:05:27.000000000 +0800
-+++ isl/isl_ast_codegen.c	2021-12-16 15:30:29.000000000 +0800
++++ isl/isl_ast_codegen.c	2022-01-27 20:56:35.663289083 +0800
 @@ -1517,8 +1517,14 @@ static __isl_give isl_ast_graft *create_
  	bounds = isl_ast_build_specialize_basic_set(sub_build, bounds);
  	sub_build = isl_ast_build_set_loop_bounds(sub_build,
@@ -1571,7 +1608,7 @@ diff -Npur isl-0.22/isl_ast_codegen.c isl/isl_ast_codegen.c
  	if (empty < 0)
 diff -Npur isl-0.22/isl_box.c isl/isl_box.c
 --- isl-0.22/isl_box.c	2019-11-02 02:05:27.000000000 +0800
-+++ isl/isl_box.c	2021-10-08 14:40:05.228984442 +0800
++++ isl/isl_box.c	2022-01-27 20:56:35.659289025 +0800
 @@ -302,6 +302,13 @@ static isl_stat compute_size_in_directio
   * Initialize the size with infinity and if no better size is found
   * then invalidate the box.  Otherwise, set the offset and size
@@ -1618,7 +1655,7 @@ diff -Npur isl-0.22/isl_box.c isl/isl_box.c
  		box = isl_fixed_box_free(box);
 diff -Npur isl-0.22/isl_factorization.c isl/isl_factorization.c
 --- isl-0.22/isl_factorization.c	2019-09-25 00:10:51.000000000 +0800
-+++ isl/isl_factorization.c	2021-10-08 14:40:05.228984442 +0800
++++ isl/isl_factorization.c	2022-01-27 20:56:35.655288968 +0800
 @@ -18,8 +18,18 @@
  #include <isl_space_private.h>
  #include <isl_mat_private.h>
@@ -1738,7 +1775,7 @@ diff -Npur isl-0.22/isl_factorization.c isl/isl_factorization.c
 +}
 diff -Npur isl-0.22/isl_factorization.h isl/isl_factorization.h
 --- isl-0.22/isl_factorization.h	2019-09-25 00:10:51.000000000 +0800
-+++ isl/isl_factorization.h	2021-10-08 14:40:05.228984442 +0800
++++ isl/isl_factorization.h	2022-01-27 20:56:35.663289083 +0800
 @@ -8,13 +8,14 @@
  extern "C" {
  #endif
@@ -1775,7 +1812,7 @@ diff -Npur isl-0.22/isl_factorization.h isl/isl_factorization.h
  #endif
 diff -Npur isl-0.22/isl_farkas.c isl/isl_farkas.c
 --- isl-0.22/isl_farkas.c	2019-11-02 02:05:27.000000000 +0800
-+++ isl/isl_farkas.c	2021-10-08 14:40:05.228984442 +0800
++++ isl/isl_farkas.c	2022-01-27 20:56:35.659289025 +0800
 @@ -12,6 +12,9 @@
  #include <isl/set.h>
  #include <isl_space_private.h>
@@ -2380,7 +2417,7 @@ diff -Npur isl-0.22/isl_farkas.c isl/isl_farkas.c
  	return NULL;
 diff -Npur isl-0.22/isl_map.c isl/isl_map.c
 --- isl-0.22/isl_map.c	2019-11-02 02:05:27.000000000 +0800
-+++ isl/isl_map.c	2021-10-08 14:40:05.232984408 +0800
++++ isl/isl_map.c	2022-01-27 20:56:35.659289025 +0800
 @@ -3162,6 +3162,133 @@ __isl_give isl_set *isl_set_drop_constra
  	return isl_map_drop_constraints_not_involving_dims(set, type, first, n);
  }
@@ -2582,9 +2619,40 @@ diff -Npur isl-0.22/isl_map.c isl/isl_map.c
  /* If "bmap" obviously lies on a hyperplane where the given dimension
   * has a fixed value, then return that value.
   * Otherwise return NaN.
+diff -Npur isl-0.22/isl_mat.c isl/isl_mat.c
+--- isl-0.22/isl_mat.c	2019-09-25 00:10:51.000000000 +0800
++++ isl/isl_mat.c	2022-01-27 20:56:35.683289369 +0800
+@@ -884,6 +884,18 @@ error:
+ 	return NULL;
+ }
+ 
++/* Return a basis for the orthogonal complement of the space spanned
++ * by the rows of "M".
++ * That is, each of the rows of the result is orthogonal to each
++ * of the rows of "M".
++ *
++ * The complement is derived as the transpose of the right kernel.
++ */
++__isl_give isl_mat *isl_mat_row_complement(__isl_take isl_mat *mat)
++{
++	return isl_mat_transpose(isl_mat_right_kernel(mat));
++}
++
+ __isl_give isl_mat *isl_mat_lin_to_aff(__isl_take isl_mat *mat)
+ {
+ 	int i;
+diff -Npur isl-0.22/isl_mat_private.h isl/isl_mat_private.h
+--- isl-0.22/isl_mat_private.h	2019-11-02 02:05:27.000000000 +0800
++++ isl/isl_mat_private.h	2022-01-27 20:56:35.663289083 +0800
+@@ -66,4 +66,5 @@ int isl_mat_get_element(__isl_keep isl_m
+ __isl_give isl_mat *isl_mat_set_element(__isl_take isl_mat *mat,
+ 	int row, int col, isl_int v);
+ 
++__isl_give isl_mat *isl_mat_row_complement(__isl_take isl_mat *mat);
+ #endif
 diff -Npur isl-0.22/isl_multi_templ.c isl/isl_multi_templ.c
 --- isl-0.22/isl_multi_templ.c	2019-11-02 02:05:27.000000000 +0800
-+++ isl/isl_multi_templ.c	2021-10-08 14:40:05.232984408 +0800
++++ isl/isl_multi_templ.c	2022-01-27 20:56:35.659289025 +0800
 @@ -258,6 +258,25 @@ __isl_give MULTI(BASE) *FN(FN(MULTI(BASE
  	return FN(MULTI(BASE),set_at)(multi, pos, el);
  }
@@ -2613,7 +2681,7 @@ diff -Npur isl-0.22/isl_multi_templ.c isl/isl_multi_templ.c
   * directly or through its domain.  It therefore passes along both,
 diff -Npur isl-0.22/isl_options.c isl/isl_options.c
 --- isl-0.22/isl_options.c	2019-09-25 00:10:51.000000000 +0800
-+++ isl/isl_options.c	2021-10-08 14:48:47.000000000 +0800
++++ isl/isl_options.c	2022-01-27 20:56:35.663289083 +0800
 @@ -137,10 +137,19 @@ ISL_ARG_BOOL(struct isl_options, coalesc
  ISL_ARG_BOOL(struct isl_options, coalesce_preserve_locals, 0,
  	"coalesce-preserve-locals", 0,
@@ -2666,7 +2734,7 @@ diff -Npur isl-0.22/isl_options.c isl/isl_options.c
  ISL_CTX_GET_INT_DEF(isl_options, struct isl_options, isl_options_args,
 diff -Npur isl-0.22/isl_options_private.h isl/isl_options_private.h
 --- isl-0.22/isl_options_private.h	2019-09-25 00:10:51.000000000 +0800
-+++ isl/isl_options_private.h	2021-10-08 14:40:05.232984408 +0800
++++ isl/isl_options_private.h	2022-01-27 20:56:35.659289025 +0800
 @@ -34,9 +34,11 @@ struct isl_options {
  	int			convex;
  
@@ -2681,7 +2749,7 @@ diff -Npur isl-0.22/isl_options_private.h isl/isl_options_private.h
  	int			schedule_outer_coincidence;
 diff -Npur isl-0.22/isl_polynomial.c isl/isl_polynomial.c
 --- isl-0.22/isl_polynomial.c	2019-11-02 02:05:27.000000000 +0800
-+++ isl/isl_polynomial.c	2021-10-08 14:40:05.232984408 +0800
++++ isl/isl_polynomial.c	2022-01-27 20:56:35.659289025 +0800
 @@ -4756,6 +4756,32 @@ static __isl_give isl_pw_qpolynomial *co
  	return isl_pw_qpolynomial_alloc(isl_set_from_basic_set(bset), qp);
  }
@@ -2783,8 +2851,66 @@ diff -Npur isl-0.22/isl_polynomial.c isl/isl_polynomial.c
  	return NULL;
 diff -Npur isl-0.22/isl_schedule_constraints.c isl/isl_schedule_constraints.c
 --- isl-0.22/isl_schedule_constraints.c	2019-11-02 02:05:27.000000000 +0800
-+++ isl/isl_schedule_constraints.c	2021-10-08 14:40:05.232984408 +0800
-@@ -157,6 +157,19 @@ error:
++++ isl/isl_schedule_constraints.c	2022-01-27 20:56:35.663289083 +0800
+@@ -11,6 +11,7 @@
+ #include <isl_schedule_constraints.h>
+ #include <isl/schedule.h>
+ #include <isl/space.h>
++#include <isl/aff.h>
+ #include <isl/set.h>
+ #include <isl/map.h>
+ #include <isl/union_set.h>
+@@ -21,6 +22,10 @@
+  *
+  * "context" specifies extra constraints on the parameters.
+  *
++ * "prefix" specifies an outer schedule within which the schedule
++ * should be computed.  A zero-dimensional "prefix" means that
++ * there is no such outer schedule.
++ *
+  * "validity" constraints map domain elements i to domain elements
+  * that should be scheduled after i.  (Hard constraint)
+  * "proximity" constraints map domain elements i to domains elements
+@@ -42,6 +47,7 @@ struct isl_schedule_constraints {
+ 	isl_union_set *domain;
+ 	isl_set *context;
+ 
++	isl_multi_union_pw_aff *prefix;
+ 	isl_union_map *constraint[isl_edge_last + 1];
+ };
+ 
+@@ -59,7 +65,8 @@ __isl_give isl_schedule_constraints *isl
+ 
+ 	sc_copy->domain = isl_union_set_copy(sc->domain);
+ 	sc_copy->context = isl_set_copy(sc->context);
+-	if (!sc_copy->domain || !sc_copy->context)
++	sc_copy->prefix = isl_multi_union_pw_aff_copy(sc->prefix);
++	if (!sc_copy->domain || !sc_copy->context || !sc_copy->prefix)
+ 		return isl_schedule_constraints_free(sc_copy);
+ 
+ 	for (i = isl_edge_first; i <= isl_edge_last; ++i) {
+@@ -98,6 +105,11 @@ static __isl_give isl_schedule_constrain
+ 	space = isl_union_set_get_space(sc->domain);
+ 	if (!sc->context)
+ 		sc->context = isl_set_universe(isl_space_copy(space));
++	if (!sc->prefix) {
++		isl_space *space_prefix;
++		space_prefix = isl_space_set_from_params(isl_space_copy(space));
++		sc->prefix = isl_multi_union_pw_aff_zero(space_prefix);
++	}
+ 	empty = isl_union_map_empty(space);
+ 	for (i = isl_edge_first; i <= isl_edge_last; ++i) {
+ 		if (sc->constraint[i])
+@@ -108,7 +120,7 @@ static __isl_give isl_schedule_constrain
+ 	}
+ 	isl_union_map_free(empty);
+ 
+-	if (!sc->domain || !sc->context)
++	if (!sc->domain || !sc->context || !sc->prefix)
+ 		return isl_schedule_constraints_free(sc);
+ 
+ 	return sc;
+@@ -157,6 +169,19 @@ error:
  	return NULL;
  }
  
@@ -2804,10 +2930,363 @@ diff -Npur isl-0.22/isl_schedule_constraints.c isl/isl_schedule_constraints.c
  /* Replace the context of "sc" by "context".
   */
  __isl_give isl_schedule_constraints *isl_schedule_constraints_set_context(
+@@ -237,6 +262,25 @@ isl_schedule_constraints_set_conditional
+ 	return sc;
+ }
+ 
++/* Replace the schedule prefix of "sc" by "prefix".
++ */
++__isl_give isl_schedule_constraints *isl_schedule_constraints_set_prefix(
++	__isl_take isl_schedule_constraints *sc,
++	__isl_take isl_multi_union_pw_aff *prefix)
++{
++	if (!sc || !prefix)
++		goto error;
++
++	isl_multi_union_pw_aff_free(sc->prefix);
++	sc->prefix = prefix;
++
++	return sc;
++error:
++	isl_schedule_constraints_free(sc);
++	isl_multi_union_pw_aff_free(prefix);
++	return NULL;
++}
++
+ __isl_null isl_schedule_constraints *isl_schedule_constraints_free(
+ 	__isl_take isl_schedule_constraints *sc)
+ {
+@@ -247,6 +291,7 @@ __isl_null isl_schedule_constraints *isl
+ 
+ 	isl_union_set_free(sc->domain);
+ 	isl_set_free(sc->context);
++	isl_multi_union_pw_aff_free(sc->prefix);
+ 	for (i = isl_edge_first; i <= isl_edge_last; ++i)
+ 		isl_union_map_free(sc->constraint[i]);
+ 
+@@ -335,6 +380,17 @@ isl_schedule_constraints_get_conditional
+ 	return isl_schedule_constraints_get(sc, isl_edge_condition);
+ }
+ 
++/* Return the schedule prefix of "sc".
++ */
++__isl_give isl_multi_union_pw_aff *isl_schedule_constraints_get_prefix(
++	__isl_keep isl_schedule_constraints *sc)
++{
++	if (!sc)
++		return NULL;
++
++	return isl_multi_union_pw_aff_copy(sc->prefix);
++}
++
+ /* Add "c" to the constraints of type "type" in "sc".
+  */
+ __isl_give isl_schedule_constraints *isl_schedule_constraints_add(
+@@ -426,6 +482,7 @@ __isl_give isl_schedule_constraints *isl
+ 	__isl_take isl_schedule_constraints *sc,
+ 	__isl_take isl_union_map *umap)
+ {
++	int n;
+ 	enum isl_edge_type i;
+ 
+ 	if (!sc || !umap)
+@@ -439,7 +496,10 @@ __isl_give isl_schedule_constraints *isl
+ 			goto error;
+ 	}
+ 	sc->domain = isl_union_set_apply(sc->domain, umap);
+-	if (!sc->domain)
++	n = isl_multi_union_pw_aff_dim(sc->prefix, isl_dim_set);
++	sc->prefix = isl_multi_union_pw_aff_drop_dims(sc->prefix,
++							isl_dim_set, 0, n);
++	if (!sc->domain || !sc->prefix)
+ 		return isl_schedule_constraints_free(sc);
+ 
+ 	return sc;
+@@ -463,6 +523,7 @@ enum isl_sc_key {
+ 	isl_sc_key_proximity = isl_edge_proximity,
+ 	isl_sc_key_domain,
+ 	isl_sc_key_context,
++	isl_sc_key_prefix,
+ 	isl_sc_key_end
+ };
+ 
+@@ -477,6 +538,7 @@ static char *key_str[] = {
+ 	[isl_sc_key_proximity] = "proximity",
+ 	[isl_sc_key_domain] = "domain",
+ 	[isl_sc_key_context] = "context",
++	[isl_sc_key_prefix] = "prefix",
+ };
+ 
+ #undef BASE
+@@ -512,6 +574,25 @@ static __isl_give isl_printer *print_con
+ 	return p;
+ }
+ 
++/* Print a key, value pair for the schedule prefix.
++ *
++ * If the schedule prefix is zero-dimensional, then
++ * it is not printed since a zero-dimensional prefix is the default.
++ */
++static __isl_give isl_printer *print_prefix(__isl_take isl_printer *p,
++	__isl_keep isl_schedule_constraints *sc)
++{
++	if (isl_multi_union_pw_aff_dim(sc->prefix, isl_dim_set) == 0)
++		return p;
++
++	p = isl_printer_print_str(p, key_str[isl_sc_key_prefix]);
++	p = isl_printer_yaml_next(p);
++	p = isl_printer_print_multi_union_pw_aff(p, sc->prefix);
++	p = isl_printer_yaml_next(p);
++
++	return p;
++}
++
+ /* Print "sc" to "p"
+  *
+  * In particular, print the isl_schedule_constraints object as a YAML document.
+@@ -540,6 +621,7 @@ __isl_give isl_printer *isl_printer_prin
+ 	p = print_constraint(p, sc, isl_edge_coincidence);
+ 	p = print_constraint(p, sc, isl_edge_condition);
+ 	p = print_constraint(p, sc, isl_edge_conditional_validity);
++	p = print_prefix(p, sc);
+ 	p = isl_printer_yaml_end_mapping(p);
+ 
+ 	return p;
+@@ -569,6 +651,10 @@ __isl_give isl_printer *isl_printer_prin
+ #define BASE union_map
+ #include "read_in_string_templ.c"
+ 
++#undef BASE
++#define BASE multi_union_pw_aff
++#include "read_in_string_templ.c"
++
+ /* Read an isl_schedule_constraints object from "s".
+  *
+  * Start off with an empty (invalid) isl_schedule_constraints object and
+@@ -595,6 +681,7 @@ __isl_give isl_schedule_constraints *isl
+ 		isl_set *context;
+ 		isl_union_set *domain;
+ 		isl_union_map *constraints;
++		isl_multi_union_pw_aff *prefix;
+ 
+ 		key = get_key(s);
+ 		if (isl_stream_yaml_next(s) < 0)
+@@ -616,6 +703,12 @@ __isl_give isl_schedule_constraints *isl
+ 			if (!sc)
+ 				return NULL;
+ 			break;
++		case isl_sc_key_prefix:
++			prefix = read_multi_union_pw_aff(s);
++			sc = isl_schedule_constraints_set_prefix(sc, prefix);
++			if (!sc)
++				return NULL;
++			break;
+ 		case isl_sc_key_validity:
+ 		case isl_sc_key_coincidence:
+ 		case isl_sc_key_condition:
+@@ -695,15 +788,20 @@ isl_schedule_constraints_align_params(__
+ 		space = isl_space_align_params(space,
+ 				    isl_union_map_get_space(sc->constraint[i]));
+ 
++	space = isl_space_align_params(space,
++				isl_multi_union_pw_aff_get_space(sc->prefix));
++
+ 	for (i = isl_edge_first; i <= isl_edge_last; ++i) {
+ 		sc->constraint[i] = isl_union_map_align_params(
+ 				    sc->constraint[i], isl_space_copy(space));
+ 		if (!sc->constraint[i])
+ 			space = isl_space_free(space);
+ 	}
++	sc->prefix = isl_multi_union_pw_aff_align_params(sc->prefix,
++							isl_space_copy(space));
+ 	sc->context = isl_set_align_params(sc->context, isl_space_copy(space));
+ 	sc->domain = isl_union_set_align_params(sc->domain, space);
+-	if (!sc->context || !sc->domain)
++	if (!sc->context || !sc->domain || !sc->prefix)
+ 		return isl_schedule_constraints_free(sc);
+ 
+ 	return sc;
+diff -Npur isl-0.22/isl_schedule_node.c isl/isl_schedule_node.c
+--- isl-0.22/isl_schedule_node.c	2019-09-25 00:10:51.000000000 +0800
++++ isl/isl_schedule_node.c	2022-01-27 20:56:35.663289083 +0800
+@@ -18,6 +18,7 @@
+ #include <isl_schedule_band.h>
+ #include <isl_schedule_private.h>
+ #include <isl_schedule_node_private.h>
++#include <isl_schedule_constraints.h>
+ 
+ /* Create a new schedule node in the given schedule, point at the given
+  * tree with given ancestors and child positions.
+@@ -2792,6 +2793,27 @@ __isl_give isl_schedule_node *isl_schedu
+ 	return node;
+ }
+ 
++/* Replace the subtree that "pos" points to by the one that "node" points to.
++ */
++__isl_give isl_schedule_node *isl_schedule_node_graft(
++	__isl_take isl_schedule_node *pos, __isl_take isl_schedule_node *node)
++{
++	isl_schedule_tree *tree;
++
++	if (!pos || !node)
++		goto error;
++
++	tree = isl_schedule_tree_copy(node->tree);
++	pos = isl_schedule_node_graft_tree(pos, tree);
++	isl_schedule_node_free(node);
++
++	return pos;
++error:
++	isl_schedule_node_free(pos);
++	isl_schedule_node_free(node);
++	return NULL;
++}
++
+ /* Internal data structure for the group_ancestor callback.
+  *
+  * If "finished" is set, then we no longer need to modify
+@@ -4852,6 +4874,85 @@ __isl_give isl_schedule_node *isl_schedu
+ 	return isl_schedule_node_ancestor(node1, n1 - i);
+ }
+ 
++/* Reschedule the subtree that "node" points to using
++ * the schedule constraints "sc" in the case where "node"
++ * points to the root of the schedule tree.
++ *
++ * In this case, "node" does not contain any useful information and
++ * a schedule is constructed directly from "sc".
++ */
++static __isl_give isl_schedule_node *complete_schedule(
++	__isl_take isl_schedule_node *node,
++	__isl_take isl_schedule_constraints *sc)
++{
++	isl_schedule *schedule;
++
++	isl_schedule_node_free(node);
++
++	schedule = isl_schedule_constraints_compute_schedule(sc);
++	node = isl_schedule_get_root(schedule);
++	isl_schedule_free(schedule);
++
++	return node;
++}
++
++/* Restrict the domain of "sc" to the domain elements reaching "node".
++ * The original domain is required to include all those elements.
++ */
++static __isl_give isl_schedule_constraints *restrict_domain(
++	__isl_take isl_schedule_constraints *sc,
++	__isl_keep isl_schedule_node *node)
++{
++	isl_bool valid;
++	isl_union_set *node_domain, *sc_domain;
++
++	node_domain = isl_schedule_node_get_domain(node);
++	sc_domain = isl_schedule_constraints_get_domain(sc);
++	valid = isl_union_set_is_subset(node_domain, sc_domain);
++	sc = isl_schedule_constraints_intersect_domain(sc, node_domain);
++	isl_union_set_free(sc_domain);
++
++	if (valid < 0)
++		return isl_schedule_constraints_free(sc);
++	if (!valid)
++		isl_die(isl_schedule_node_get_ctx(node), isl_error_invalid,
++			"invalid schedule constraints domain",
++			return isl_schedule_constraints_free(sc));
++	return sc;
++}
++
++/* Reschedule the subtree that "node" points to using
++ * the schedule constraints "sc".
++ *
++ * Restrict the domain of "sc" to the domain elements at "node",
++ * compute a schedule taking into account the prefix schedule at "node" and
++ * replace the subtree by the result.
++ *
++ * If "node" points to the root of a schedule tree, then no part
++ * of the schedule tree survives and a fresh schedule is computed instead.
++ */
++__isl_give isl_schedule_node *isl_schedule_node_schedule(
++	__isl_take isl_schedule_node *node,
++	__isl_take isl_schedule_constraints *sc)
++{
++	isl_multi_union_pw_aff *prefix;
++	isl_schedule *schedule;
++	isl_schedule_node *root;
++
++	if (isl_schedule_node_get_type(node) == isl_schedule_node_domain)
++		return complete_schedule(node, sc);
++
++	sc = restrict_domain(sc, node);
++
++	prefix = isl_schedule_node_get_prefix_schedule_multi_union_pw_aff(node);
++	sc = isl_schedule_constraints_set_prefix(sc, prefix);
++	schedule = isl_schedule_constraints_compute_schedule(sc);
++	root = isl_schedule_get_root(schedule);
++	isl_schedule_free(schedule);
++
++	return isl_schedule_node_graft(node, isl_schedule_node_child(root, 0));
++}
++
+ /* Print "node" to "p".
+  */
+ __isl_give isl_printer *isl_printer_print_schedule_node(
+diff -Npur isl-0.22/isl_schedule_node_private.h isl/isl_schedule_node_private.h
+--- isl-0.22/isl_schedule_node_private.h	2019-09-25 00:10:51.000000000 +0800
++++ isl/isl_schedule_node_private.h	2022-01-27 20:56:35.655288968 +0800
+@@ -33,6 +33,8 @@ struct isl_schedule_node {
+ __isl_give isl_schedule_node *isl_schedule_node_alloc(
+ 	__isl_take isl_schedule *schedule, __isl_take isl_schedule_tree *tree,
+ 	__isl_take isl_schedule_tree_list *ancestors, int *child_pos);
++__isl_give isl_schedule_node *isl_schedule_node_graft(
++	__isl_take isl_schedule_node *pos, __isl_take isl_schedule_node *node);
+ __isl_give isl_schedule_node *isl_schedule_node_graft_tree(
+ 	__isl_take isl_schedule_node *pos, __isl_take isl_schedule_tree *tree);
+ 
 diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
 --- isl-0.22/isl_scheduler.c	2019-11-02 02:05:27.000000000 +0800
-+++ isl/isl_scheduler.c	2021-10-08 14:53:44.000000000 +0800
-@@ -73,6 +73,7 @@
++++ isl/isl_scheduler.c	2022-01-27 20:56:35.659289025 +0800
+@@ -50,6 +50,39 @@
+  */
+ 
+ 
++/* Extract the linear part, i.e., the coefficients of the input variables
++ * and the local variables (if any), from the affine expression "ma".
++ */
++static __isl_give isl_mat *extract_linear(__isl_take isl_multi_aff *ma)
++{
++	int i, n, n_param, n_var, n_div;
++	isl_ctx *ctx;
++	isl_mat *rows;
++
++	ma = isl_multi_aff_align_divs(ma);
++	if (!ma)
++		return NULL;
++
++	ctx = isl_multi_aff_get_ctx(ma);
++	n = isl_multi_aff_dim(ma, isl_dim_out);
++	n_param = isl_multi_aff_dim(ma, isl_dim_param);
++	n_var = isl_multi_aff_dim(ma, isl_dim_in);
++	n_div = 0;
++	if (n > 0)
++		n_div = isl_aff_dim(ma->u.p[0], isl_dim_div);
++	rows = isl_mat_alloc(ctx, n, n_var + n_div);
++	if (!rows)
++		goto error;
++	for (i = 0; i < n; ++i)
++		isl_seq_cpy(rows->row[i],
++			    ma->u.p[i]->v->el + 1 + 1 + n_param, n_var + n_div);
++	isl_multi_aff_free(ma);
++	return rows;
++error:
++	isl_multi_aff_free(ma);
++	return NULL;
++}
++
+ /* Internal information about a node that is used during the construction
+  * of a schedule.
+  * space represents the original space in which the domain lives;
+@@ -73,6 +106,7 @@
   * nvar is the dimension of the (compressed) domain
   * nparam is the number of parameters or 0 if we are not constructing
   *	a parametric schedule
@@ -2815,7 +3294,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
   *
   * If compressed is set, then hull represents the constraints
   * that were used to derive the compression, while compress and
-@@ -115,6 +116,7 @@ struct isl_sched_node {
+@@ -115,6 +149,7 @@ struct isl_sched_node {
  	int	 start;
  	int	 nvar;
  	int	 nparam;
@@ -2823,7 +3302,345 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  
  	int	 scc;
  	int	 cluster;
-@@ -1928,30 +1930,53 @@ static isl_size coef_var_offset(__isl_ke
+@@ -316,6 +351,10 @@ static int is_multi_edge_type(struct isl
+  * is the original, uncompressed dependence relation, while
+  * the value is the dual of the compressed dependence relation.
+  *
++ * prefix is the schedule prefix specified by the user.
++ * This field may be NULL if no (non-trivial) schedule prefix
++ * was specified.
++ * 
+  * n is the number of nodes
+  * node is the list of nodes
+  * maxvar is the maximal number of variables over all nodes
+@@ -363,6 +402,8 @@ struct isl_sched_graph {
+ 	isl_map_to_basic_set *intra_hmap_param;
+ 	isl_map_to_basic_set *inter_hmap;
+ 
++	isl_multi_union_pw_aff *prefix;
++
+ 	struct isl_sched_node *node;
+ 	int n;
+ 	int maxvar;
+@@ -755,6 +796,7 @@ static void graph_free(isl_ctx *ctx, str
+ 		isl_hash_table_free(ctx, graph->edge_table[i]);
+ 	isl_hash_table_free(ctx, graph->node_table);
+ 	isl_basic_set_free(graph->lp);
++	isl_multi_union_pw_aff_free(graph->prefix);
+ }
+ 
+ /* For each "set" on which this function is called, increment
+@@ -781,13 +823,17 @@ static isl_stat init_n_maxvar(__isl_take
+  * for each basic map in the dependences.
+  * Note that it is practically impossible to exhaust both
+  * the number of dependences and the number of variables.
++ * If any prefix schedule was specified, then the initial rows
++ * are initialized from this prefix.  Since the prefix may be
++ * completely trivial, it needs to be taken into account separately.
+  */
+ static isl_stat compute_max_row(struct isl_sched_graph *graph,
+ 	__isl_keep isl_schedule_constraints *sc)
+ {
+-	int n_edge;
++	int n_prefix, n_edge;
+ 	isl_stat r;
+ 	isl_union_set *domain;
++	isl_multi_union_pw_aff *prefix;
+ 
+ 	graph->n = 0;
+ 	graph->maxvar = 0;
+@@ -796,10 +842,15 @@ static isl_stat compute_max_row(struct i
+ 	isl_union_set_free(domain);
+ 	if (r < 0)
+ 		return isl_stat_error;
++	prefix = isl_schedule_constraints_get_prefix(sc);
++	n_prefix = isl_multi_union_pw_aff_dim(prefix, isl_dim_set);
++	isl_multi_union_pw_aff_free(prefix);
++	if (!prefix)
++		return isl_stat_error;
+ 	n_edge = isl_schedule_constraints_n_basic_map(sc);
+ 	if (n_edge < 0)
+ 		return isl_stat_error;
+-	graph->max_row = n_edge + graph->maxvar;
++	graph->max_row = n_prefix + n_edge + graph->maxvar;
+ 
+ 	return isl_stat_ok;
+ }
+@@ -1241,6 +1292,30 @@ error:
+ 	return isl_stat_error;
+ }
+ 
++/* Return a map in the same space as that of "map" that relates
++ * the elements with equal schedule prefix.
++ * Use the original schedule prefix specified by the user and
++ * not the linear information extracted from it for the purpose
++ * of avoiding redundant rows in the generated schedule.
++ */
++static __isl_give isl_map *extract_equal_prefix(struct isl_sched_graph *graph,
++	__isl_keep isl_map *map)
++{
++	isl_space *space;
++	isl_union_map *umap;
++	isl_multi_union_pw_aff *prefix;
++
++	space = isl_map_get_space(map);
++	map = isl_map_universe(isl_space_copy(space));
++	umap = isl_union_map_from_map(map);
++	prefix = isl_multi_union_pw_aff_copy(graph->prefix);
++	umap = isl_union_map_eq_at_multi_union_pw_aff(umap, prefix);
++	map = isl_union_map_extract_map(umap, space);
++	isl_union_map_free(umap);
++
++	return map;
++}
++
+ /* Add a new node to the graph representing the given set.
+  *
+  * If any of the set variables is defined by an equality, then
+@@ -1475,6 +1550,11 @@ static isl_stat skip_edge(__isl_take isl
+  * This ensures that there are no schedule constraints defined
+  * outside of these domains, while the scheduler no longer has
+  * any control over those outside parts.
++ *
++ * If a (non-trivial) prefix schedule was specified by the user,
++ * then only retain dependences between instances with equal
++ * prefix values.  If the specified prefix schedule was incomplete,
++ * then this may result in the removal of all dependences.
+  */
+ static isl_stat extract_edge(__isl_take isl_map *map, void *user)
+ {
+@@ -1496,6 +1576,14 @@ static isl_stat extract_edge(__isl_take
+ 		}
+ 	}
+ 
++	if (graph->prefix) {
++		isl_map *equal_prefix;
++		equal_prefix = extract_equal_prefix(graph, map);
++		if (tagged)
++			tagged = map_intersect_domains(tagged, equal_prefix);
++		map = isl_map_intersect(map, equal_prefix);
++	}
++
+ 	src = find_domain_node(ctx, graph, map);
+ 	dst = find_range_node(ctx, graph, map);
+ 
+@@ -1551,6 +1639,206 @@ error:
+ 	return isl_stat_error;
+ }
+ 
++/* Extract (a basis for) the purely linear part of "ma",
++ * i.e., the coefficients of the input variables but not the local variables.
++ *
++ * There may be linear combinations of the elements of "ma"
++ * that do not involve local variables, while the elements themselves
++ * do involve local variables.
++ * Perform Gaussian elimination to remove local variables from
++ * as many rows as possible and subsequently remove the remaining rows
++ * involving local variables as well as the columns corresponding
++ * to the local variables.
++ */
++static __isl_give isl_mat *extract_pure_linear(__isl_take isl_multi_aff *ma)
++{
++	int i, n, n_var, n_div;
++	isl_mat *rows;
++
++	if (!ma)
++		return NULL;
++
++	n_var = isl_multi_aff_dim(ma, isl_dim_in);
++
++	rows = extract_linear(ma);
++	rows = isl_mat_reverse_gauss(rows);
++
++	if (!rows)
++		return NULL;
++
++	n = isl_mat_rows(rows);
++	n_div = isl_mat_cols(rows) - n_var;
++	for (i = n - 1; i >= 0; --i)
++		if (isl_seq_first_non_zero(rows->row[i] + n_var, n_div) == -1)
++			break;
++	rows = isl_mat_drop_rows(rows, i + 1, n - (i + 1));
++	rows = isl_mat_drop_cols(rows, n_var, n_div);
++
++	return rows;
++}
++
++/* Extend "complement" with the complement of the purely linear part of "ma".
++ */
++static isl_stat extend_prefix_complement(__isl_take isl_set *dom,
++	__isl_take isl_multi_aff *ma, void *user)
++{
++	isl_mat *complement_ma;
++	isl_mat **complement = user;
++
++	isl_set_free(dom);
++
++	complement_ma = isl_mat_row_complement(extract_pure_linear(ma));
++
++	*complement = isl_mat_concat(*complement, complement_ma);
++
++	return *complement ? isl_stat_ok : isl_stat_error;
++}
++
++/* Extract a linear prefix schedule from "pma" that is valid
++ * for all pieces.
++ * In particular, if there are multiple pieces, then the result
++ * contains linear combinations that have a fixed value in all pieces.
++ * That is, if there is a direction that is not fixed in one or more pieces,
++ * then it is also not fixed by the entire piecewise expression.
++ * A direction that is not fixed needs to have a component along
++ * the orthogonal complement of the fixed directions.
++ * Collect these orthogonal complements over all pieces and
++ * compute the complement of the result to obtain the desired directions.
++ *
++ * If "pma" is empty (which indicates a missing, and therefore invalid,
++ * prefix schedule), then the result will contain a basis for all directions,
++ * being the complement of an empty complement.
++ */
++static __isl_give isl_mat *extract_prefix_pw_multi_aff(
++	__isl_keep isl_pw_multi_aff *pma)
++{
++	int nvar;
++	isl_ctx *ctx;
++	isl_mat *complement;
++
++	if (!pma)
++		return NULL;
++
++	ctx = isl_pw_multi_aff_get_ctx(pma);
++	nvar = isl_pw_multi_aff_dim(pma, isl_dim_in);
++	complement = isl_mat_alloc(ctx, 0, nvar);
++
++	if (isl_pw_multi_aff_foreach_piece(pma, &extend_prefix_complement,
++						&complement) < 0)
++		complement = isl_mat_free(complement);
++
++	return isl_mat_row_complement(complement);
++}
++
++/* Extract a prefix schedule for "node" from "mupa" and add
++ * it to node->sched.
++ *
++ * "mupa" is formulated in terms of the original (uncompressed) spaces,
++ * while node->sched is formulated in terms of the potentially compressed
++ * space.  If "node" is compressed, then the expression corresponding
++ * to "node" therefore needs to be transformed first.
++ *
++ * The prefix stored in node->sched is only used to avoid linearly
++ * dependent schedule rows from being generated.  Only the linear
++ * part of the prefix is therefore relevant.  Use zero for
++ * the coefficients of the constant term and the parameters.
++ * The extracted linear part may have fewer rows than "mupa",
++ * either because of linear dependences or because some element
++ * of "mupa" involve local variables.
++ * Extend the number of rows of the linear part to the number
++ * of elements in "mupa" to ensure that all nodes have the same
++ * number of rows.
++ *
++ * If "mupa" does not contain a prefix schedule for "node",
++ * then it is invalid.  In the current implementation, this will
++ * cause the scheduler to not construct any further schedule rows
++ * for "node".
++ */
++static isl_stat extract_prefix(struct isl_sched_node *node,
++	__isl_keep isl_multi_union_pw_aff *mupa)
++{
++	isl_space *space;
++	isl_multi_pw_aff *mpa;
++	isl_pw_multi_aff *pma;
++	isl_mat *prefix;
++	int n, n_prefix;
++
++	if (!mupa)
++		return isl_stat_error;
++
++	space = isl_space_copy(node->space);
++	mpa = isl_multi_union_pw_aff_extract_multi_pw_aff(mupa, space);
++
++	if (node->compress)
++		mpa = isl_multi_pw_aff_pullback_pw_multi_aff(mpa,
++				    isl_pw_multi_aff_copy(node->decompress));
++
++	pma = isl_pw_multi_aff_from_multi_pw_aff(mpa);
++
++	prefix = extract_prefix_pw_multi_aff(pma);
++
++	prefix = isl_mat_insert_zero_cols(prefix, 0, 1 + node->nparam);
++	n_prefix = isl_multi_union_pw_aff_dim(mupa, isl_dim_set);
++	n = isl_mat_rows(prefix);
++	prefix = isl_mat_add_zero_rows(prefix, n_prefix - n);
++	node->sched = isl_mat_concat(node->sched, prefix);
++
++	isl_pw_multi_aff_free(pma);
++
++	if (!node->sched)
++		return isl_stat_error;
++
++	return isl_stat_ok;
++}
++
++/* Check if any (non-trivial) prefix schedule was specified in "sc".
++ * If so, store a copy in "graph" for later simplification
++ * of dependence relations and extract the linear parts
++ * in the respective nodes.
++ * These linear parts are considered as an initial outer band.
++ * Their only effect is to try and prevent rows in the generated schedule
++ * from being linear combinations of the prefix.
++ *
++ * Since the prefix schedule cannot be assumed to be linearly
++ * independent on all nodes, graph->n_row is not incremented.
++ * Note that the ranks of the nodes will get updated regardless and
++ * graph->maxvar is computed based on these ranks.  The test for
++ * whether more schedule rows are required in compute_schedule_wcc
++ * therefore does take the prefix into account.
++ *
++ * The prefix schedule specified by the user is required to
++ * be complete on the domain.  An invalid prefix will result
++ * in nodes being essentially removed from consideration.
++ */
++static isl_stat handle_prefix(struct isl_sched_graph *graph,
++	__isl_keep isl_schedule_constraints *sc)
++{
++	int i;
++	int n;
++	isl_multi_union_pw_aff *mupa;
++
++	mupa = isl_schedule_constraints_get_prefix(sc);
++	if (!mupa)
++		return isl_stat_error;
++	n = isl_multi_union_pw_aff_dim(mupa, isl_dim_set);
++	if (n == 0) {
++		isl_multi_union_pw_aff_free(mupa);
++		return isl_stat_ok;
++	}
++
++	graph->prefix = mupa;
++
++	for (i = 0; i < graph->n; ++i) {
++		if (extract_prefix(&graph->node[i], mupa) < 0)
++			return isl_stat_error;
++	}
++
++	graph->n_total_row = n;
++	graph->band_start = graph->n_total_row;
++
++	return isl_stat_ok;
++}
++
+ /* Initialize the schedule graph "graph" from the schedule constraints "sc".
+  *
+  * The context is included in the domain before the nodes of
+@@ -1598,6 +1886,8 @@ static isl_stat graph_init(struct isl_sc
+ 		return isl_stat_error;
+ 	if (graph_init_table(ctx, graph) < 0)
+ 		return isl_stat_error;
++	if (handle_prefix(graph, sc) < 0)
++		return isl_stat_error;
+ 	for (i = isl_edge_first; i <= isl_edge_last; ++i) {
+ 		isl_size n;
+ 
+@@ -1928,30 +2218,53 @@ static isl_size coef_var_offset(__isl_ke
  	return offset;
  }
  
@@ -2881,7 +3698,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  }
  
  /* Return the offset of the coefficients of the variables of "node"
-@@ -1968,14 +1993,57 @@ static int node_var_coef_offset(struct i
+@@ -1968,14 +2281,57 @@ static int node_var_coef_offset(struct i
  }
  
  /* Return the position of the pair of variables encoding
@@ -2941,7 +3758,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  }
  
  /* Construct an isl_dim_map for mapping constraints on coefficients
-@@ -1991,9 +2059,6 @@ static int node_var_coef_pos(struct isl_
+@@ -1991,9 +2347,6 @@ static int node_var_coef_pos(struct isl_
   * (0, -c_i_x^+ + c_i_x^-) if s = -1 or
   * (0, 0, c_i_x^+ - c_i_x^-) if s = 1 and
   * (0, 0, -c_i_x^+ + c_i_x^-) if s = -1.
@@ -2951,7 +3768,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
   *
   * The caller can extend the mapping to also map the other coefficients
   * (and therefore not plug in 0).
-@@ -2002,7 +2067,6 @@ static __isl_give isl_dim_map *intra_dim
+@@ -2002,7 +2355,6 @@ static __isl_give isl_dim_map *intra_dim
  	struct isl_sched_graph *graph, struct isl_sched_node *node,
  	int offset, int s)
  {
@@ -2959,7 +3776,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  	isl_size total;
  	isl_dim_map *dim_map;
  
-@@ -2010,10 +2074,8 @@ static __isl_give isl_dim_map *intra_dim
+@@ -2010,10 +2362,8 @@ static __isl_give isl_dim_map *intra_dim
  	if (!node || total < 0)
  		return NULL;
  
@@ -2971,7 +3788,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  
  	return dim_map;
  }
-@@ -2032,9 +2094,6 @@ static __isl_give isl_dim_map *intra_dim
+@@ -2032,9 +2382,6 @@ static __isl_give isl_dim_map *intra_dim
   *  -(c_i_x^+ - c_i_x^-), c_j_x^+ - c_j_x^-) if s = 1 and
   * (-c_j_0 + c_i_0, -c_j_n + c_i_n,
   *  c_i_x^+ - c_i_x^-, -(c_j_x^+ - c_j_x^-)) if s = -1.
@@ -2981,7 +3798,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
   *
   * The caller can further extend the mapping.
   */
-@@ -2056,19 +2115,13 @@ static __isl_give isl_dim_map *inter_dim
+@@ -2056,19 +2403,13 @@ static __isl_give isl_dim_map *inter_dim
  	isl_dim_map_range(dim_map, pos, 0, 0, 0, 1, s);
  	pos = node_par_coef_offset(dst);
  	isl_dim_map_range(dim_map, pos, 1, 1, 1, dst->nparam, s);
@@ -3003,7 +3820,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  
  	return dim_map;
  }
-@@ -2717,7 +2770,7 @@ static int count_bound_coefficient_const
+@@ -2717,7 +3058,7 @@ static int count_bound_coefficient_const
  		return 0;
  
  	for (i = 0; i < graph->n; ++i)
@@ -3012,7 +3829,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  
  	return 0;
  }
-@@ -2788,6 +2841,17 @@ static isl_stat node_add_coefficient_con
+@@ -2788,6 +3129,17 @@ static isl_stat node_add_coefficient_con
  		if (isl_int_is_neg(node->max->el[i]))
  			continue;
  
@@ -3030,7 +3847,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  		isl_int_set_si(ineq->el[pos], 1);
  		isl_int_set_si(ineq->el[pos + 1], -1);
  		isl_int_set(ineq->el[0], node->max->el[i]);
-@@ -2842,6 +2906,63 @@ static isl_stat add_bound_coefficient_co
+@@ -2842,6 +3194,63 @@ static isl_stat add_bound_coefficient_co
  	return isl_stat_ok;
  }
  
@@ -3094,7 +3911,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  /* Add a constraint to graph->lp that equates the value at position
   * "sum_pos" to the sum of the "n" values starting at "first".
   */
-@@ -2916,7 +3037,7 @@ static isl_stat add_var_sum_constraint(s
+@@ -2916,7 +3325,7 @@ static isl_stat add_var_sum_constraint(s
  		struct isl_sched_node *node = &graph->node[i];
  		int pos = 1 + node_var_coef_offset(node);
  
@@ -3103,7 +3920,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  			isl_int_set_si(graph->lp->eq[k][pos + j], 1);
  	}
  
-@@ -2975,7 +3096,7 @@ static isl_stat setup_lp(isl_ctx *ctx, s
+@@ -2975,7 +3384,7 @@ static isl_stat setup_lp(isl_ctx *ctx, s
  		if (node_update_vmap(node) < 0)
  			return isl_stat_error;
  		node->start = total;
@@ -3112,7 +3929,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  	}
  
  	if (count_constraints(graph, &n_eq, &n_ineq, use_coincidence) < 0)
-@@ -2984,6 +3105,9 @@ static isl_stat setup_lp(isl_ctx *ctx, s
+@@ -2984,6 +3393,9 @@ static isl_stat setup_lp(isl_ctx *ctx, s
  		return isl_stat_error;
  	if (count_bound_coefficient_constraints(ctx, graph, &n_eq, &n_ineq) < 0)
  		return isl_stat_error;
@@ -3122,7 +3939,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  
  	space = isl_space_set_alloc(ctx, 0, total);
  	isl_basic_set_free(graph->lp);
-@@ -3001,6 +3125,8 @@ static isl_stat setup_lp(isl_ctx *ctx, s
+@@ -3001,6 +3413,8 @@ static isl_stat setup_lp(isl_ctx *ctx, s
  		return isl_stat_error;
  	if (add_bound_coefficient_constraints(ctx, graph) < 0)
  		return isl_stat_error;
@@ -3131,7 +3948,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  	if (add_all_validity_constraints(graph, use_coincidence) < 0)
  		return isl_stat_error;
  	if (add_all_proximity_constraints(graph, use_coincidence) < 0)
-@@ -3059,14 +3185,16 @@ static int needs_row(struct isl_sched_gr
+@@ -3059,14 +3473,16 @@ static int needs_row(struct isl_sched_gr
  
  /* Construct a non-triviality region with triviality directions
   * corresponding to the rows of "indep".
@@ -3153,7 +3970,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  {
  	isl_ctx *ctx;
  	isl_mat *mat;
-@@ -3079,14 +3207,19 @@ static __isl_give isl_mat *construct_tri
+@@ -3079,14 +3495,19 @@ static __isl_give isl_mat *construct_tri
  		return NULL;
  
  	ctx = isl_mat_get_ctx(indep);
@@ -3177,7 +3994,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  		}
  	}
  
-@@ -3112,7 +3245,7 @@ static __isl_give isl_vec *solve_lp(isl_
+@@ -3112,7 +3533,7 @@ static __isl_give isl_vec *solve_lp(isl_
  
  		graph->region[i].pos = node_var_coef_offset(node);
  		if (needs_row(graph, node))
@@ -3186,7 +4003,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  		else
  			trivial = isl_mat_zero(ctx, 0, 0);
  		graph->region[i].trivial = trivial;
-@@ -3130,8 +3263,9 @@ static __isl_give isl_vec *solve_lp(isl_
+@@ -3130,8 +3551,9 @@ static __isl_give isl_vec *solve_lp(isl_
   * Each schedule coefficient c_i_x is represented as the difference
   * between two non-negative variables c_i_x^+ - c_i_x^-.
   * The c_i_x^- appear before their c_i_x^+ counterpart.
@@ -3198,7 +4015,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
   *
   * Return c_i_x = c_i_x^+ - c_i_x^-
   */
-@@ -3148,10 +3282,14 @@ static __isl_give isl_vec *extract_var_c
+@@ -3148,10 +3570,14 @@ static __isl_give isl_vec *extract_var_c
  	if (!csol)
  		return NULL;
  
@@ -3217,7 +4034,110 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  
  	return csol;
  }
-@@ -4412,7 +4550,7 @@ static isl_stat setup_carry_lp(isl_ctx *
+@@ -3306,14 +3732,17 @@ static __isl_give isl_multi_aff *node_ex
+  * The result is defined over the uncompressed node domain.
+  */
+ static __isl_give isl_multi_aff *node_extract_schedule_multi_aff(
+-	struct isl_sched_node *node)
++	struct isl_sched_graph *graph, struct isl_sched_node *node)
+ {
+ 	isl_size nrow;
++	int start;
+ 
+ 	nrow = isl_mat_rows(node->sched);
+ 	if (nrow < 0)
+ 		return NULL;
+-	return node_extract_partial_schedule_multi_aff(node, 0, nrow);
++	start = graph->band_start;
++	nrow -= start;
++	return node_extract_partial_schedule_multi_aff(node, start, nrow);
+ }
+ 
+ /* Convert node->sched into a map and return this map.
+@@ -3322,12 +3751,13 @@ static __isl_give isl_multi_aff *node_ex
+  * whenever node->sched is updated.
+  * It is defined over the uncompressed node domain.
+  */
+-static __isl_give isl_map *node_extract_schedule(struct isl_sched_node *node)
++static __isl_give isl_map *node_extract_schedule(
++	struct isl_sched_graph *graph, struct isl_sched_node *node)
+ {
+ 	if (!node->sched_map) {
+ 		isl_multi_aff *ma;
+ 
+-		ma = node_extract_schedule_multi_aff(node);
++		ma = node_extract_schedule_multi_aff(graph, node);
+ 		node->sched_map = isl_map_from_multi_aff(ma);
+ 	}
+ 
+@@ -3342,13 +3772,13 @@ static __isl_give isl_map *node_extract_
+  * This is not the most efficient way, but this shouldn't be a critical
+  * operation.
+  */
+-static __isl_give isl_map *specializer(struct isl_sched_node *src,
+-	struct isl_sched_node *dst)
++static __isl_give isl_map *specializer(struct isl_sched_graph *graph,
++	struct isl_sched_node *src, struct isl_sched_node *dst)
+ {
+ 	isl_map *src_sched, *dst_sched;
+ 
+-	src_sched = node_extract_schedule(src);
+-	dst_sched = node_extract_schedule(dst);
++	src_sched = node_extract_schedule(graph, src);
++	dst_sched = node_extract_schedule(graph, dst);
+ 	return isl_map_apply_range(src_sched, isl_map_reverse(dst_sched));
+ }
+ 
+@@ -3386,7 +3816,7 @@ static isl_stat update_edge(isl_ctx *ctx
+ 	int empty;
+ 	isl_map *id;
+ 
+-	id = specializer(edge->src, edge->dst);
++	id = specializer(graph, edge->src, edge->dst);
+ 	edge->map = isl_map_intersect(edge->map, isl_map_copy(id));
+ 	if (!edge->map)
+ 		goto error;
+@@ -3460,7 +3890,8 @@ static int range_intersects(__isl_keep i
+  *
+  * In other words, is the condition false?
+  */
+-static int is_condition_false(struct isl_sched_edge *edge)
++static int is_condition_false(struct isl_sched_graph *graph,
++	struct isl_sched_edge *edge)
+ {
+ 	isl_union_map *umap;
+ 	isl_map *map, *sched, *test;
+@@ -3475,9 +3906,9 @@ static int is_condition_false(struct isl
+ 	umap = isl_union_set_unwrap(isl_union_map_domain(umap));
+ 	map = isl_map_from_union_map(umap);
+ 
+-	sched = node_extract_schedule(edge->src);
++	sched = node_extract_schedule(graph, edge->src);
+ 	map = isl_map_apply_domain(map, sched);
+-	sched = node_extract_schedule(edge->dst);
++	sched = node_extract_schedule(graph, edge->dst);
+ 	map = isl_map_apply_range(map, sched);
+ 
+ 	test = isl_map_identity(isl_map_get_space(map));
+@@ -3561,7 +3992,7 @@ static int update_edges(isl_ctx *ctx, st
+ 			continue;
+ 		if (is_local(&graph->edge[i]))
+ 			continue;
+-		local = is_condition_false(&graph->edge[i]);
++		local = is_condition_false(graph, &graph->edge[i]);
+ 		if (local < 0)
+ 			goto error;
+ 		if (local)
+@@ -3699,7 +4130,7 @@ static isl_stat copy_nodes(struct isl_sc
+ 		dst->node[j].nvar = src->node[i].nvar;
+ 		dst->node[j].nparam = src->node[i].nparam;
+ 		dst->node[j].sched = isl_mat_copy(src->node[i].sched);
+-		dst->node[j].sched_map = isl_map_copy(src->node[i].sched_map);
++		dst->node[j].sched_map = NULL;
+ 		dst->node[j].coincident = src->node[i].coincident;
+ 		dst->node[j].sizes = isl_multi_val_copy(src->node[i].sizes);
+ 		dst->node[j].bounds = isl_basic_set_copy(src->node[i].bounds);
+@@ -4412,7 +4843,7 @@ static isl_stat setup_carry_lp(isl_ctx *
  	for (i = 0; i < graph->n; ++i) {
  		struct isl_sched_node *node = &graph->node[graph->sorted[i]];
  		node->start = total;
@@ -3226,7 +4146,16 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  	}
  
  	if (count_all_constraints(intra, inter, &n_eq, &n_ineq) < 0)
-@@ -5806,6 +5944,17 @@ static __isl_give isl_schedule_node *com
+@@ -5676,7 +6107,7 @@ static int has_adjacent_true_conditions(
+ 
+ 		set_local(&graph->edge[i]);
+ 
+-		local = is_condition_false(&graph->edge[i]);
++		local = is_condition_false(graph, &graph->edge[i]);
+ 		if (local < 0)
+ 			return -1;
+ 		if (!local)
+@@ -5806,6 +6237,17 @@ static __isl_give isl_schedule_node *com
  			return isl_schedule_node_free(node);
  		if (isl_options_get_schedule_outer_coincidence(ctx))
  			return carry_coincidence(node, graph);
@@ -3244,7 +4173,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  		return carry_dependences(node, graph);
  	}
  
-@@ -5846,7 +5995,7 @@ static __isl_give isl_schedule_node *com
+@@ -5846,7 +6288,7 @@ static __isl_give isl_schedule_node *com
   * Since there are only a finite number of dependences,
   * there will only be a finite number of iterations.
   */
@@ -3253,7 +4182,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
  	struct isl_sched_graph *graph)
  {
  	int has_coincidence;
-@@ -5907,6 +6056,67 @@ static isl_stat compute_schedule_wcc_ban
+@@ -5907,6 +6349,67 @@ static isl_stat compute_schedule_wcc_ban
  	return isl_stat_ok;
  }
  
@@ -3323,7 +4252,7 @@ diff -Npur isl-0.22/isl_scheduler.c isl/isl_scheduler.c
   *
 diff -Npur isl-0.22/isl_space.c isl/isl_space.c
 --- isl-0.22/isl_space.c	2019-11-02 02:05:27.000000000 +0800
-+++ isl/isl_space.c	2021-10-08 14:40:05.232984408 +0800
++++ isl/isl_space.c	2022-01-27 20:56:35.663289083 +0800
 @@ -599,6 +599,20 @@ error:
  	return NULL;
  }

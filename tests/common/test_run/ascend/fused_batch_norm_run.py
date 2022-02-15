@@ -1,4 +1,4 @@
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -100,6 +100,7 @@ def fused_batch_norm_run(shape, dtype, momentum, eps, is_training, data_format,
         expects, outputs = gen_data(dtype, eps, is_training, mean, mean_new,
                                     np_beta, np_data, np_gamma, support_list,
                                     var, var_new)
+        attrs["enable_double_buffer"] = False
         mod = utils.op_build_test(FusedBatchNorm,
                                   build_shape, [dtype, dtype, dtype, dtype, dtype],
                                   op_attrs=[momentum, eps, is_training,

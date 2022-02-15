@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -160,8 +160,8 @@ isl::schedule ReorderInnerBand::Run(isl::schedule curr_schedule) {
   isl::schedule_node root = curr_schedule.get_root();
   auto cond_vars = cond_vars_;
   root = root.map_descendant_bottom_up([&cond_vars](const isl::schedule_node &node) -> isl::schedule_node {
-    bool is_leaf_band =
-      node.as<isl::schedule_node_band>() && node.n_children() == 1 && node.first_child().as<isl::schedule_node_leaf>();
+    bool is_leaf_band = (node.as<isl::schedule_node_band>() && (node.n_children() == 1)
+      && !node.is_subtree_anchored() && node.first_child().as<isl::schedule_node_leaf>());
     if (!is_leaf_band) return node;
 
     auto band = node.as<isl::schedule_node_band>();

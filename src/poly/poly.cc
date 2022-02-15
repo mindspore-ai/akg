@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2021 Huawei Technologies Co., Ltd
+ * Copyright 2019-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,6 +19,47 @@
 
 namespace akg {
 namespace ir {
+class LoopMinFixer : public IRMutator {
+ public:
+  LoopMinFixer() {}
+  ~LoopMinFixer() override = default;
+
+  Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
+    if (op->attr_key == "pragma_reschedule") {
+      in_reschedule_ = true;
+      auto stmt = IRMutator::Mutate(op->body);
+      in_reschedule_ = false;
+      return stmt;
+    }
+    return IRMutator::Mutate_(op, s);
+  }
+
+  Stmt Mutate_(const For *op, const Stmt &s) final {
+    Stmt stmt;
+    if (!in_reschedule_) {
+      return IRMutator::Mutate_(op, s);
+    }
+    if (op->min.as<IntImm>() && op->min.as<IntImm>()->value == 0) {
+      stmt = IRMutator::Mutate_(op, s);
+    } else {
+      Expr extent = Substitute(op->extent, {{op->loop_var, Simplify(op->loop_var + op->min)}});
+      Stmt body = Substitute(op->body, {{op->loop_var, Simplify(op->loop_var + op->min)}});
+      body = CanonicalSimplify(body);
+      body = Mutate(body);
+      stmt = For::make(op->loop_var, 0, extent, op->for_type, op->device_api, body);
+    }
+    return stmt;
+  }
+
+ private:
+  bool in_reschedule_{false};
+};
+
+Stmt FixLoopMin(Stmt stmt) {
+  stmt = LoopMinFixer().Mutate(stmt);
+  return stmt;
+}
+
 /*!
  * \brief Poly entry
  */
@@ -57,6 +98,9 @@ class Poly {
     TIMER_START;
     stmt_ = scop_->GenHalide(sched);
     TIMER_SHOW("GenHalide", std::string(is_spec_gemm ? "_specgemm" : ""));
+    if (scop_->info_.user_config_.GetTarget() == TARGET_CCE) {
+      stmt_ = FixLoopMin(stmt_);
+    }
 
     if (is_dynamic) stmt_ = RestoreCombinedParams(stmt_, scop_->info_);
 
