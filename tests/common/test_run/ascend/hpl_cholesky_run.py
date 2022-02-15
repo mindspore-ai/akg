@@ -28,9 +28,9 @@ def gen_data(shape, dtype):
     upper_matrix = np.triu(one_tensor).astype(support_list[dtype])
     lower_matrix = np.tril(one_tensor).astype(support_list[dtype])
     input1 = np.dot(lower_matrix, upper_matrix)
-
     expect = upper_matrix
-    return input1, expect
+    output = np.full(expect.shape, np.nan, expect.dtype)
+    return input1, output, expect
 
 
 def hpl_cholesky_run(shape, dtype, poly_sch=True, attrs=None):
@@ -47,8 +47,8 @@ def hpl_cholesky_run(shape, dtype, poly_sch=True, attrs=None):
 
     mod = utils.op_build_test(hpl_cholesky, [shape, ], [dtype, ], kernel_name="hpl_cholesky",
                               polyhedral=poly_sch, attrs=attrs)
-    input1, expect = gen_data(shape, dtype)
-    output = utils.mod_launch(mod, (input1, input1), expect=expect)
+    input1, output, expect = gen_data(shape, dtype)
+    output = utils.mod_launch(mod, (input1, output), expect=expect, outputs=(0,))
     rtol = atol = 1e-04
     res = compare_tensor(output, expect, rtol=rtol, atol=atol)
     print("Test {}".format("Pass" if res else "Failed"))

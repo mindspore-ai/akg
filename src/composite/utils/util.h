@@ -1,5 +1,5 @@
 /**
- * Copyright 2020-2021 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -79,6 +79,7 @@ using FuncTensorMap = std::unordered_map<FunctionRef, Tensor, NodeHash, NodeEqua
 using FuncStmtMap = std::unordered_map<FunctionRef, const Provide *, NodeHash, NodeEqual>;
 using FuncShape = std::unordered_map<FunctionRef, Array<Expr>, NodeHash, NodeEqual>;
 using FuncExprMap = std::unordered_map<FunctionRef, Expr, NodeHash, NodeEqual>;
+using FuncNodeMap = std::unordered_map<FunctionRef, NodeRef, NodeHash, NodeEqual>;
 using NodeMap = std::unordered_map<NodeRef, NodeRef, NodeHash, NodeEqual>;
 
 using Peeling = std::vector<std::pair<int, int64_t>>;  // dim, split_val
@@ -136,7 +137,7 @@ struct PeelInfo {
   std::unordered_map<NodeRef, Peeling, NodeHash, NodeEqual> real_peeled_tensors;
 };
 struct BuildOpt {
-  FuncExprMap inplaces;          // the tensors which should be in bind
+  FuncNodeMap inplaces;          // the tensors which should be in bind
   FuncRefMap sames;              // the tensors which are same
   FuncRefSet fakeout;            // the tensors which are not output
   std::vector<Tensor> sch_only;  // the tensors which should only used in sch, not output

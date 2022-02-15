@@ -13,17 +13,29 @@
 # limitations under the License.
 
 from akg.tvm.hybrid import script
-import numpy as np
+import akg.utils as utils
+from akg.utils.dsl_create import TensorUtils
 
 
-@script(capture=locals())
 def hpl_lu(a):
-    for i in range(a.shape[0]):
-        for j in range(a.shape[1]):
-            if j > i:
-                a[j, i] = a[j, i] / a[i, i]
-        for k in range(a.shape[0]):
-            for l in range(a.shape[1]):
-                if k > i and l > i:
-                    a[k, l] = a[k, l] - a[k, i] * a[i, l]
-    return a
+    attrs = {"RewriteVarTensorIdx": True}
+
+    @script
+    def func(a):
+        out_0 = allocate(a.shape, a.dtype, "local")
+        out_1 = allocate(a.shape, a.dtype, "local")
+        for i in range(a.shape[0]):
+            for j in range(a.shape[1]):
+                if j > i:
+                    a[j, i] = a[j, i] / a[i, i]
+            for k in range(a.shape[0]):
+                for l in range(a.shape[1]):
+                    if k > i and l > i:
+                        out_0[k, l] = a[k, i]
+                        out_1[k, l] = out_0[k, l] * a[i, l]
+                        a[k, l] = a[k, l] - out_1[k, l]
+        return a
+    out = func(a)
+    out, binds_info = TensorUtils.inplace_set(a, out)
+    attrs[utils.BINDS] = binds_info
+    return out, attrs

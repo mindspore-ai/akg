@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,10 +29,14 @@ namespace {
 void CollectBinds(BuildInfo &info) {
   for (const auto &kv : info.opt.inplaces) {
     CHECK(info.opt.tensor_map.count(kv.first)) << kv.first->func_name() << " not in tensor map";
-    CHECK(info.opt.tensor_map.count(kv.second.as<Call>()->func))
-      << kv.second.as<Call>()->func->func_name() << " not in tensor map";
-    auto first = info.opt.tensor_map[kv.first];
-    auto second = info.opt.tensor_map[kv.second.as<Call>()->func];
+    Tensor first = info.opt.tensor_map[kv.first];
+    Tensor second;
+    if (auto c = kv.second.as<Call>()) {
+      CHECK(info.opt.tensor_map.count(c->func)) << c->func->func_name() << " not in tensor map";
+      second = info.opt.tensor_map[c->func];
+    } else {
+      second = Downcast<Tensor>(kv.second);
+    }
     auto buf = decl_buffer(second->shape, second->dtype, second->op->name);
     info.in_binds.Set(first, buf);
     info.in_binds.Set(second, buf);
@@ -128,9 +132,10 @@ void CollectIsolatedInplaceTensor(BuildOpt &opt) {
   // tensors which have never be used before is isolated and not be created,
   // so we should create them after emit.
   for (const auto &kv : opt.inplaces) {
-    auto c = kv.second.as<Call>();
-    if (opt.tensor_map.find(c->func) == opt.tensor_map.end()) {
-      opt.tensor_map[c->func] = placeholder(c->args, c->type, c->name);
+    if (auto c = kv.second.as<Call>()) {
+      if (opt.tensor_map.find(c->func) == opt.tensor_map.end()) {
+        opt.tensor_map[c->func] = placeholder(c->args, c->type, c->name);
+      }
     }
   }
 }
