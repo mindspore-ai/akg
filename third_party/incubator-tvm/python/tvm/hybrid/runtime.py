@@ -16,13 +16,14 @@
 # under the License.
 """Intrinsics of TVM-Python Hybrid Script for Python emulation runtime"""
 
+# 2022.02.15 - Support grid as new loop mode.
 # 2021.12.15 - Support block_realize intrin; update the def of WithStub in runtime.
 # 2021.12.02 - Support more math intrin.
 # 2019.12.30 - Add class WithStub and support more functions in HYBRID_GLOBALS.
 
+from itertools import product
 import numpy
 from .. import target
-
 
 class bind(object): #pylint: disable=invalid-name
     """GPU bind software emulataion runtime."""
@@ -143,6 +144,14 @@ def max_num_threads(allow_none=True):
     """Get max number of threads for GPU targets."""
     return target.current_target(allow_none).max_num_threads
 
+
+def grid(extents):
+    extents_list = []
+    for ext in extents:
+        extents_list.append(range(ext))
+    return product(*extents_list)
+
+
 class WithStub:
 
     def __init__(self):
@@ -168,6 +177,7 @@ HYBRID_GLOBALS = {
     'bind'           : bind,
     'allocate'       : allocate,
     'output_tensor'  : allocate,
+    'grid'           : grid,
     'sqrt'           : numpy.sqrt,
     'rsqrt'          : rsqrt,
     'sign'           : numpy.sign,
