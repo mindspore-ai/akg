@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -47,7 +47,12 @@ void InitSchedule::ModDependencesBeforeGroup(const isl::schedule &schedule) {
       pass_info_.dependences_ = RemoveSelfDependence(pass_info_);
     }
   }
-
+  if (scop_info_.user_config_.GetEnableAtomicAdd()) {
+    auto atomic_info = scop_info_.analysis_result_.GetReduceOutStmtIdToTensor();
+    if (!atomic_info.empty()) {
+      pass_info_.dependences_ = RemoveSelfDependence(pass_info_, atomic_info);
+    }
+  }
   if (scop_info_.user_config_.GetRemoveInvariantDependence()) {
     pass_info_.dependences_ = RemoveInvariantDependence(schedule, pass_info_, scop_info_);
   }
@@ -61,7 +66,7 @@ void InitSchedule::ComputeCopyIn(const isl::schedule &schedule) {
   uai = uai.set_may_source(writes);
   uai = uai.set_schedule(schedule);
   auto flow = uai.compute_flow();
-auto mayNoSource = flow.get_may_no_source();
+  auto mayNoSource = flow.get_may_no_source();
   scop_info_.analysis_result_.RecordCopyin(scop_info_.analysis_result_.GetReads().intersect_range(mayNoSource.range()));
 }
 

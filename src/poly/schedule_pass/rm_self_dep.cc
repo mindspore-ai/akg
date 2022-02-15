@@ -1,5 +1,5 @@
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -694,6 +694,7 @@ isl::union_map RemoveReduceOpSelfDependence(ScopInfo &scop_info, PassInfo &pass_
           if (is_tuple_reduce_op[tuple_id_key] >= 1 && scop_info.user_config_.GetEnableAtomicAdd() &&
               !res.second.empty()) {
             scop_info.analysis_result_.RecordReduceOutTensors(res.second);
+            scop_info.analysis_result_.RecordReduceOutStmtIdToTensor(tuple_id_key, res.second);
           }
         }
 
