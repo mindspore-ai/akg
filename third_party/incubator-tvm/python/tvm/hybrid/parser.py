@@ -16,6 +16,7 @@
 # under the License.
 """Hybrid Script Parser"""
 
+# 2022.02.15 - Support grid as new loop mode.
 # 2022.01.19 - Support negative extent for range.
 # 2021.12.15 - Support block_realize intrin in with scope.
 # 2021.10.21 - Support reverse order loop range.
@@ -99,6 +100,7 @@ class Symbol(Enum):
     LetBindVar = 11
     UbBuffer = 12
     RegBuffer = 13
+    LoopVarTuple = 14
 
 
 class TensorIntrinSubscriptParser(ast.NodeVisitor):
@@ -353,7 +355,7 @@ class HybridParser(ast.NodeVisitor):
 
         ty, entry = self.symbols[name]
         _internal_assert(name in self.symbols, "Unknown symbol %s!" % name)
-        if ty in [Symbol.LoopVar, Symbol.Input, Symbol.ConstLoopVar]:
+        if ty in [Symbol.LoopVar, Symbol.Input, Symbol.ConstLoopVar, Symbol.LoopVarTuple]:
             return entry
         if ty is Symbol.ThreadBind:
             return entry.var
@@ -598,9 +600,49 @@ class HybridParser(ast.NodeVisitor):
         return dims
 
     def visit_Subscript(self, node):
-        args = self.visit(node.slice)
-        if not isinstance(args, Iterable):
-            args = [args]
+        if isinstance(node.value, ast.Name) and node.value.id in self.symbols.keys() and \
+                self.symbols[node.value.id][0] == Symbol.LoopVarTuple:
+            # when the name is a loop var tuple
+            # deal with subscripts to get the index of the tensor
+            loop_var_tuple = self.symbols[node.value.id][1]
+
+            def ast_num_to_index(node):
+                if isinstance(node, ast.Num):
+                    index = node.n
+                    _internal_assert(
+                        isinstance(index, numbers.Integral),
+                        "All indices are supposed to be an integer")
+                    return index
+                else:
+                    _internal_assert(
+                        isinstance(node, ast.UnaryOp),
+                        "All indices are supposed to be an integer")
+                    _internal_assert(
+                        isinstance(node.op, ast.USub),
+                        "All indices are supposed to be an integer")
+                    return -ast_num_to_index(node.operand)
+
+            if isinstance(node.slice, ast.Index):
+                # when the slice is an index, get the number of the index
+                index = ast_num_to_index(node.slice.value)
+                return loop_var_tuple[index]
+            elif isinstance(node.slice, ast.Slice):
+                # when the slice is a slice, get the lower and upper bound of the index
+                lower = 0 if node.slice.lower is None else ast_num_to_index(node.slice.lower)
+                upper = loop_var_tuple.__len__() if node.slice.upper is None else ast_num_to_index(node.slice.upper)
+
+                return loop_var_tuple[lower:upper]
+
+        args_list = self.visit(node.slice)
+        if not isinstance(args_list, Iterable):
+            args_list = [args_list]
+        args = []
+        for arg in args_list:
+            if isinstance(arg, list):
+                args = args + arg
+            else:
+                args.append(arg)
+
         if isinstance(node.value, ast.Name):
             if node.value.id in self.closure_vars:
                 args = ast.literal_eval(str(args))
@@ -742,6 +784,17 @@ class HybridParser(ast.NodeVisitor):
     def visit_BinOp(self, node):
         lhs = self.visit(node.left)
         rhs = self.visit(node.right)
+
+        if isinstance(node.op, ast.Add) and isinstance(lhs, (Iterable, Array)) and isinstance(rhs, (Iterable, Array)):
+            # deal with add in the index to connect two parts of the index list
+            arg_list = []
+            for arg in lhs:
+                arg_list.append(arg)
+            for arg in rhs:
+                arg_list.append(arg)
+
+            return arg_list
+
         if rhs.dtype != lhs.dtype:
             if (isinstance(rhs, _expr.ConstExpr)):
                 rhs = _api.const(rhs.value, dtype=lhs.dtype)
@@ -793,7 +846,8 @@ class HybridParser(ast.NodeVisitor):
         iter_var, low, ext, for_type, step = self.visit(node.iter)
         _internal_assert(isinstance(node.target, ast.Name), \
                          "The loop iterator should be a variable!")
-        ext = _ir_pass.Simplify(ext)
+        if isinstance(ext, _expr.Expr):
+            ext = _ir_pass.Simplify(ext)
         if isinstance(ext, _expr.ConstExpr) and ext.value <= 0:
             return util.make_nop()
 
@@ -821,7 +875,16 @@ class HybridParser(ast.NodeVisitor):
                 self.symbols.pop(_name)
             return concat_list_to_block(bodies)
 
-        if iter_var is None:
+        if isinstance(low, list):
+            # if the lower bound is a list, we are in nested loops for grid
+            # for each dim of the grid, generate a loop iter var
+            loop_level = low.__len__()
+            iter_var = []
+            for i in range(loop_level):
+                iter_var.append(_api.var(_name + "_" + str(i)))
+            self.add_symbol(_name, Symbol.LoopVarTuple, iter_var)
+            _body = visit_list_to_block(self.visit, node.body)
+        elif iter_var is None:
             _internal_assert(_ir_pass.Equal(step, _api.const(1, dtype='int32')) or
                              _ir_pass.Equal(
                                  step, _api.const(-1, dtype='int32')),
@@ -847,6 +910,11 @@ class HybridParser(ast.NodeVisitor):
         _body = self.wrap_up_realize(node, _body)
 
         if for_type is None:
+            res = _body
+        elif isinstance(low, list):
+            # generate one loop for each dim of the grid
+            for i in range(low.__len__()-1, -1, -1):
+                _body = _make.For(iter_var[i], _api.const(0, 'int32'), ext[i], for_type, 0, _body)
             res = _body
         else:
             _internal_assert(not isinstance(for_type, tuple), \

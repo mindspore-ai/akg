@@ -17,6 +17,7 @@
 """Intrinsics of TVM-Python Hybrid Script for Python compilation time
 semantic support."""
 
+# 2022.02.15 - Support grid as new loop mode.
 # 2021.12.02 - Support more math intrin.
 # 2021.10.21 - Support reverse order loop range.
 # 2019.12.30 - Support more math intrin.
@@ -61,7 +62,19 @@ def _range(annotation, args):
     return iter_var, low, ext, for_type, step
 
 
+def _grid(annotation, args):
+    """Handling grid loop types"""
+    del annotation
+    ext = args[0]
+    low = [0] * ext.__len__()
+    step = [1] * ext.__len__()
+
+    for_type = For.Serial
+    iter_var = None
+    return iter_var, low, ext, for_type, step
+
 range = unroll = vectorize = parallel = const_range = _range #pylint: disable=invalid-name
+grid = _grid
 
 
 def bind(func_id, args):
