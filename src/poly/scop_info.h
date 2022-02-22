@@ -936,6 +936,8 @@ class AnalysisResult {
     bool use_shared_memory{true};
     bool use_register_memory{true};
     bool enable_vectorization{false};
+    bool is_thread_tile{false};
+    bool is_block_tile{false};
   };
 
   void RecordWrites(const isl::union_map &writes) { writes_ = writes; }

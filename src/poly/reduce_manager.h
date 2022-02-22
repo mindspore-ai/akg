@@ -31,17 +31,16 @@ namespace poly {
 
 class ReduceManager {
  public:
-  ReduceManager(PassInfo &pass_info, ScopInfo &scop_info, bool need_split_reduce = true)
-      : pass_info_(pass_info), scop_info_(scop_info), need_split_reduce_(need_split_reduce) {}
+  ReduceManager(PassInfo &pass_info, ScopInfo &scop_info, int band_index = 0, bool need_split_reduce = true)
+      : pass_info_(pass_info), scop_info_(scop_info), band_index_(band_index), need_split_reduce_(need_split_reduce) {}
   ~ReduceManager() {}
 
   bool SplitReduceStatements(isl::schedule_node &node, isl::union_set reduce_statements, isl::union_map dependences);
-  isl::union_map GetCurrentDependence(const isl::schedule_node &orig_node, const int band_index);
+  isl::union_map GetCurrentDependence();
   isl::union_set GetCurrentNodeReduceStatements(const isl::schedule_node node, ReduceTensorInfoMap &all_reduce_map,
                                                 const bool need_delete_reduce = true);
   // Check whether the reduce operator is included, and split the reduce statement into a separate filter.
-  isl::schedule_node DetectAndMarkReduce(const isl::schedule_node &orig_node, const int band_index = 0);
-  isl::schedule_node InsertReduceMarker(const isl::schedule_node &orig_node);
+  isl::schedule_node DetectAndMarkReduce(const isl::schedule_node &orig_node);
 
  private:
   void SplitInitStatements(isl::union_set &reduction_indenpendent_stmt);
@@ -55,12 +54,15 @@ class ReduceManager {
   // affects other statements after the fusion.
   isl::schedule_node RescheduleForReduce(const isl::schedule_node &orig_node);
   size_t GetReduceId() const;
-  ReduceTensorInfoMap GetCurrentReduceMap(const int band_index = 0);
+  ReduceTensorInfoMap GetCurrentReduceMap();
   bool IsContainCoincidentZero(const isl::schedule_node &orig_node);
   isl::schedule_node SetAllCoincident(const isl::schedule_node &orig_node);
+  isl::schedule_node GetReduceBandAndSplit(const isl::schedule_node &orig_node);
+  isl::schedule_node InsertReduceMarker(const isl::schedule_node &orig_node);
 
   PassInfo &pass_info_;
   ScopInfo &scop_info_;
+  int band_index_{0};
   bool need_split_reduce_{true};
 };
 
