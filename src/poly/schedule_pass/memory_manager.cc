@@ -135,8 +135,16 @@ isl::schedule_node MemoryManager::HoistTensorClusterFootprint(isl::schedule_node
     isl::id cluster_id = tensor_info.NextTensorDstId();
     auto l0_fp_cluster = GetFootPrintsCluster(dst_tensor_id);
     CHECK(l0_fp_cluster != nullptr);
-    tree = PlaceIm2colBelow(scop_info_, tree, *l0_fp_cluster, *fp_cluster, cluster_id, dst_tensor_id);
-    // If the new buffer_footprint is not a strict subset of any other parent
+    /*-------------------------------------------------------------------------------
+     * The dma of input_a_fractal_L1 --> input_a_local_L1_local_L0A actually use the
+     * dma of "spec gemm", so we don't have to insert extension here.
+     * If we want to refer to the DMA of origin, we can call the function
+     * placeim2colbelow, like this:
+     * tree = PlaceIm2colBelow(scop_info_, tree, *l0_fp_cluster, *fp_cluster,
+     *                         cluster_id, dst_tensor_id);
+     * However, this function will cause NodeFrom execute very slowly,
+     * so it cannot be integrated into the main line and just for debugging.
+     */
     auto cluster = std::shared_ptr<TensorFootprintCluster>(std::move(l0_fp_cluster));
     scop_info_.analysis_result_.active_buffer_footprints_.emplace_back(
       std::make_pair(active_domains, BufferedFootPrintInfo{cluster, schedule, dst_tensor_id}));
