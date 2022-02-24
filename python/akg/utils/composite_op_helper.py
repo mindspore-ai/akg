@@ -1,4 +1,4 @@
-# Copyright 2021 Huawei Technologies Co., Ltd
+# Copyright 2021-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""common utils for operation test"""
+"""common utils for composite operation test"""
 import os
 import tempfile
 import json
@@ -25,10 +25,12 @@ import functools
 import math
 import traceback
 import string
-import numpy as np
+import subprocess
 from logging.handlers import TimedRotatingFileHandler
 from multiprocessing import Pool
 from itertools import repeat
+
+import numpy as np
 
 from akg.utils.kernel_exec import func_time_required
 from akg.utils.kernel_exec import get_profiling_mode
@@ -406,8 +408,8 @@ def trans_data_two2fractal(input_, src_format, dst_format):
         m, n = shape[-2], shape[-1]
         m1, n1 = m // 16, n // 16
         m0, n0 = 16, 16
-        needPad = m % 16 != 0 or n % 16 != 0
-        if needPad:
+        need_pad = m % 16 != 0 or n % 16 != 0
+        if need_pad:
             pad_m, pad_n = (m + 15) // 16 * 16, (n + 15) // 16 * 16
             pad_shape = [x for x in shape]
             pad_shape[-1] = pad_n
@@ -585,8 +587,8 @@ def matmul_str(inputs, output, attr):
         res = res + output_trans_str + "\n"
     func_name = "matmul_func"
     params = [get_input(i[0]) for i in inputs]
-    func = func_pack(func_name, res, params, output_name)
-    return func + "%s = %s(%s)\n" % (output_name, func_name, ','.join(params))
+    local_func = func_pack(func_name, res, params, output_name)
+    return local_func + "%s = %s(%s)\n" % (output_name, func_name, ','.join(params))
 
 
 def func_pack(func_name, func_body, params, ret):
@@ -763,7 +765,6 @@ def gen_json_data(op_desc, with_compute=True, input_for_mod=None):
     if len(op_name.split("_")) > 0:
         op_hash = op_name.split("_")[-1]
     else:
-        import time
         op_hash = str(time.time())
 
     uni_file_name_suffix = ".json_data_" + op_hash + ".py"
@@ -848,8 +849,8 @@ def gen_json_data(op_desc, with_compute=True, input_for_mod=None):
                     shape_new.append(shape_default[i])
                 for i in range(len(shape_default), 2):
                     shape_tmp.append(1)
-                for i in range(len(shape_default)):
-                    shape_tmp.append(shape_default[i])
+                for _, sh in enumerate(shape_default):
+                    shape_tmp.append(sh)
                 if shape_tmp[-2] == 1 and shape_tmp[-1] == 1:
                     shape_new.extend([1, 1, 1, 1])
                 elif shape_tmp[-2] == 1 and shape_tmp[-1] == shape_default[-1]:
@@ -910,7 +911,7 @@ def gen_json_data(op_desc, with_compute=True, input_for_mod=None):
     if with_compute:
         with open(uni_file_name, 'r') as f:
             sent = f.read()
-        exec(sent)
+        subprocess.getoutput(sent)
         os.remove(uni_file_name)
         return input_for_mod, expect, output_indexes
     else:
