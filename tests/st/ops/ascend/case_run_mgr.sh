@@ -21,7 +21,7 @@ cd $(dirname $0)
 export RANDOM_DATA_DISK_PATH=$(pwd)
 TVM_CASE_ROOT_HOME="${RANDOM_DATA_DISK_PATH}"
 export WRITE_TO_DISK=No
-python -c  "from akg.utils.op_test import random_data_to_disk; random_data_to_disk(size=10485760, miu=[1, 0.5, 0.1], sigma=[0.1, 0.05, 0.01])"
+python -c  "from akg.utils.composite_op_helper import random_data_to_disk; random_data_to_disk(size=10485760, miu=[1, 0.5, 0.1], sigma=[0.1, 0.05, 0.01])"
 log_ftp_path="./"
 pipe_line_type=""
 pipe_line_index=0

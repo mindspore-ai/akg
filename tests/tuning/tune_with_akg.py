@@ -9,7 +9,7 @@ import akg
 import auto_tune
 from akg.utils.kernel_exec import ReturnType
 from akg.composite.build_module import _update_attrs_gpu, _update_attrs_ascend
-from akg.utils.op_test import random_data_to_disk
+from akg.utils.composite_op_helper import random_data_to_disk
 
 def set_environment(backend_str="", device_id=-1, device_total_num=-1):
     # how many multi-processing to build
@@ -214,7 +214,7 @@ if __name__ == "__main__":
         task_options.enable_transfer = args.enable_transfer
 
     progress_record = auto_tune.ProcessRecord(len(all_files), "ALL-INFO-TUNING")
-    stat = {"Score": [], "Op": [], "Speedup": []}
+    op_score_stats = {"Score": [], "Op": [], "Speedup": []}
     transfer_info = {}
     if os.path.exists("transfer_info.txt"):
         with open("transfer_info.txt", "r") as f:
