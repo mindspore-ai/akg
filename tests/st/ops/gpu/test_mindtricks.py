@@ -62,9 +62,10 @@ composite_targets = {
         "Fused_AddN_fusion_9584919353229493170",
         "Fused_Cast_BiasAdd_Gelu_fusion_7719078727474100806",
         "Fused_Cast_BiasAdd_GkDropout_tuple_getitem_TensorAdd_fusion_13282325956852925231",
-        "Fused_Cast_RealDiv_Reshape_FusedAdamWeightDecay_fusion_1039082044534023692",
-        "Fused_Cast_RealDiv_Reshape_FusedAdamWeightDecay_fusion_1545859458890067484",
-        "Fused_Cast_RealDiv_Reshape_FusedAdamWeightDecay_fusion_1976850843332086880",
+        # Note: swizzle pass requires constant tensor must be promoted.
+        # "Fused_Cast_RealDiv_Reshape_FusedAdamWeightDecay_fusion_1039082044534023692",
+        # "Fused_Cast_RealDiv_Reshape_FusedAdamWeightDecay_fusion_1545859458890067484",
+        # "Fused_Cast_RealDiv_Reshape_FusedAdamWeightDecay_fusion_1976850843332086880",
         "Fused_GkDropout_2353362030752466006",
         "Fused_Transpose_split_18185609042134105765",
     ],

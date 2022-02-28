@@ -533,7 +533,7 @@ class OperatorInfoCollector {
 
     if (tensor_c_type == Float(16) && enable_tensor_core) {
       std::string shared_tensors = tensor_a_name + " " + tensor_b_name + " " + tensor_c_name;
-      scop_info_.user_config_.SetSharedTensors(shared_tensors);
+      scop_info_.user_config_.RecordSharedTensors(shared_tensors);
     }
 
     return true;
@@ -610,7 +610,7 @@ void AnalyzeBandNode::AnalyzeAxisPosition() {
     if (target_ == TARGET_CPU) {
       last_axis = GetVectorizationAxisForCpu(bn);
     } else {
-      last_axis = GetCoalescedAccessAxisForCuda(bn->node);
+      last_axis = GetCoalescedAccessAxisForCuda(bn);
     }
     bn->last_axis = last_axis;
   }
@@ -638,7 +638,7 @@ int AnalyzeBandNode::GetVectorizationAxisForCpu(std::unique_ptr<OuterBandNode> &
 }
 
 // For the tensor of tensor operator, confirm whether coalesced access is required in the calculation phase.
-int AnalyzeBandNode::GetCoalescedAccessAxisForCuda(const isl::schedule_node &orig_node) {
+int AnalyzeBandNode::GetCoalescedAccessAxisForCuda(std::unique_ptr<OuterBandNode> &bn) {
   int coalesced_access_axis = -1;
   if (scop_info_.user_config_.GetEnableMatmul()) {
     return coalesced_access_axis;
@@ -647,7 +647,8 @@ int AnalyzeBandNode::GetCoalescedAccessAxisForCuda(const isl::schedule_node &ori
   for (auto inner_tensor : scop_info_.analysis_result_.GetInnerTensor()) {
     skip_tensors.emplace(inner_tensor);
   }
-  coalesced_access_axis = GetLastAxisPos(orig_node, skip_tensors);
+  coalesced_access_axis = GetLastAxisPos(bn->node, skip_tensors);
+  RecordAllCoalescedAccessTensors(bn, skip_tensors);
   return coalesced_access_axis;
 }
 
@@ -674,6 +675,26 @@ int AnalyzeBandNode::GetLastAxisPos(const isl::schedule_node &orig_node, std::un
     return last_axis;
   }
   return -1;
+}
+
+void AnalyzeBandNode::RecordAllCoalescedAccessTensors(std::unique_ptr<OuterBandNode> &bn,
+                                                      std::unordered_set<std::string> skip_tensors) {
+  if (!bn->node.isa<isl::schedule_node_band>()) {
+    return;
+  }
+
+  // Get read and write tensor information.
+  auto reads_access = scop_info_.analysis_result_.GetReads().domain_factor_domain();
+  reads_access.foreach_map([this, &bn, skip_tensors](const isl::map &map) -> void {
+    auto node = bn->node;
+    int band_number = static_cast<int>(node.as<isl::schedule_node_band>().n_member());
+    std::string id_name = map.range().get_tuple_name();
+    auto access = isl::union_map(map);
+    int last_axis = GetLastAxis(node, access, skip_tensors);
+    if (last_axis != -1 && last_axis < band_number - 1) {
+      bn->coalesced_access_tensors.emplace(id_name);
+    }
+  });
 }
 
 void AnalyzeBandNode::CollectStmtInfo() {

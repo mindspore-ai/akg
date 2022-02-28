@@ -1,5 +1,5 @@
 /**
- * Copyright 2020-2021 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -222,27 +222,26 @@ std::vector<isl::schedule_node> BandsSplitAfterDepth(const std::vector<isl::sche
   return MapWithFunc(split_at_depth, bands);
 }
 
-isl::schedule InsertMarkerForThreadGroup(const isl::schedule &sch, const std::string &write_name,
-                                         const std::string &marker_name) {
-  auto GetPromotedWriteFilter = [write_name, marker_name](isl::schedule_node node) -> isl::schedule_node {
+isl::schedule_node InsertMarkerForThreadGroup(const isl::schedule_node &orig_node, const std::string &filter_name,
+                                              const std::string &marker_name) {
+  auto GetPromotedWriteFilter = [filter_name, marker_name](isl::schedule_node node) -> isl::schedule_node {
     if (!node.isa<isl::schedule_node_filter>()) {
       return node;
     }
     isl::union_set uset = node.as<isl::schedule_node_filter>().get_filter();
-    bool is_gm_write = false;
-    uset.foreach_set([&is_gm_write, write_name](isl::set s) {
-      if (s.get_tuple_name() == write_name) {
-        is_gm_write = true;
+    bool is_gm_filter = false;
+    uset.foreach_set([&is_gm_filter, filter_name](isl::set s) {
+      if (s.get_tuple_name() == filter_name) {
+        is_gm_filter = true;
       }
     });
-    if (is_gm_write && node.has_parent() && node.parent().isa<isl::schedule_node_sequence>()) {
+    if (is_gm_filter && node.has_parent() && node.parent().isa<isl::schedule_node_sequence>()) {
       node = node.child(0).insert_mark(marker_name);
       node = node.parent();
     }
     return node;
   };
-  auto final_sch = sch.get_root().map_descendant_bottom_up(GetPromotedWriteFilter).schedule();
-  return final_sch;
+  return orig_node.map_descendant_bottom_up(GetPromotedWriteFilter);
 }
 
 std::string GetMarkerName(const isl::schedule_node &node, std::string find_name) {
@@ -959,6 +958,43 @@ isl::schedule_node GetMarkerNode(const isl::schedule_node &orig_node, const std:
     return true;
   });
   return node;
+}
+
+isl::schedule_node DeleUselessMarker(const isl::schedule_node &orig_node,
+                                     const std::unordered_set<std::string> &mark_names) {
+  auto DeleteMarker = [mark_names](isl::schedule_node node) -> isl::schedule_node {
+    if (!node.isa<isl::schedule_node_mark>()) {
+      return node;
+    }
+
+    auto marker_node = node.as<isl::schedule_node_mark>();
+    std::string marker_str = marker_node.get_id().get_name();
+    if (mark_names.find(marker_str) != mark_names.end()) {
+      return node.del();
+    }
+
+    return node;
+  };
+  return orig_node.map_descendant_bottom_up(DeleteMarker);
+}
+
+isl::schedule_node ReplaceMarker(const isl::schedule_node &orig_node, const std::string &orig_name,
+                                 const std::string &replaced_name) {
+  auto DeleteMarker = [orig_name, replaced_name](isl::schedule_node node) -> isl::schedule_node {
+    if (!node.isa<isl::schedule_node_mark>()) {
+      return node;
+    }
+
+    auto marker_node = node.as<isl::schedule_node_mark>();
+    std::string marker_str = marker_node.get_id().get_name();
+    if (marker_str == orig_name) {
+      node = node.del();
+      return node.insert_mark(replaced_name);
+    }
+
+    return node;
+  };
+  return orig_node.map_descendant_bottom_up(DeleteMarker);
 }
 
 }  // namespace poly

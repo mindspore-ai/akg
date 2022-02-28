@@ -1092,6 +1092,7 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCuda(isl::schedule_node nod
   // vectorize for elementwise operator
   if (scop_info_.analysis_result_.GetOuterBandNode(cur_band_index_)->enable_vectorization) {
     node = SetTileSizeAndTile(node, TILE_WITH_C0);
+    node = node.child(0).insert_mark(PROMOTE_GLOBAL_TO_REGISTER);
   }
   node = node.ancestor(node.get_tree_depth() - start_depth);
 
@@ -1261,7 +1262,6 @@ isl::schedule_node TileOuterBand::InsertPromoteMarker(const isl::schedule_node n
   // Add different promotion marks in different positions.
   if (is_matrixc_promote_shared) {
     tile_node = tile_node.insert_mark(isl::id(tile_node.ctx(), PROMOTE_GLOBAL_TO_SHARED_C)).child(0);
-    tile_node = tile_node.insert_mark(isl::id(tile_node.ctx(), PROMOTE_SHARED_TO_REGISTER_C)).child(0);
   } else {
     tile_node = tile_node.insert_mark(isl::id(tile_node.ctx(), PROMOTE_GLOBAL_TO_REGISTER_C)).child(0);
   }
@@ -1271,21 +1271,16 @@ isl::schedule_node TileOuterBand::InsertPromoteMarker(const isl::schedule_node n
 }
 
 bool TileOuterBand::IsMatrixCPromoteToShared() {
-  std::string shared_tensors = scop_info_.user_config_.GetSharedTensors();
+  std::unordered_set<std::string> shared_tensors = scop_info_.user_config_.GetSharedTensors();
   if (shared_tensors.empty()) {
     return false;
   }
 
-  shared_tensors += " ";
-  auto pos = shared_tensors.find(" ");
-  while (pos != std::string::npos) {
-    std::string tensor = shared_tensors.substr(0, pos);
+  for (const auto &tensor : shared_tensors) {
     auto matmul_map = scop_info_.analysis_result_.GetMatrixMatmulMap();
     if (matmul_map.count(tensor) && (matmul_map[tensor] == MATRIX_C || matmul_map[tensor] == MATRIX_ELSE)) {
       return true;
     }
-    shared_tensors = shared_tensors.substr(pos + 1, shared_tensors.size());
-    pos = shared_tensors.find(" ");
   }
   return false;
 }

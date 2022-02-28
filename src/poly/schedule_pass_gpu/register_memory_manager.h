@@ -1,5 +1,5 @@
 /**
- * Copyright 2020-2021 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,62 +36,40 @@ class RegisterMemoryManager : public SchedulePass {
   explicit RegisterMemoryManager(PassInfo &pass_info, ScopInfo &scop_info)
       : pass_info_(pass_info), scop_info_(scop_info) {
     pass_name_ = __FUNCTION__;
-    remain_memory_ = MAX_REGISTER_PER_THREAD_BLOCK * REGISTER_ALLOC_RATIO;
   };
   ~RegisterMemoryManager() {}
 
   virtual isl::schedule Run(isl::schedule sch);
 
-  isl::schedule HoistRegisterMemoryOnDepth(isl::schedule_node &node, size_t depth);
+ private:
+  isl::schedule HoistRegisterMemory();
+  isl::schedule_node HoistRegisterMemoryOnMark(const isl::schedule_node &orig_node);
+  isl::union_map GetPartialSchedule(const isl::schedule_node &node);
+  isl::schedule_node HoistClusters(const isl::schedule_node &node);
 
-  void CreateTensorCluster(const isl::schedule_node &node, const isl::union_map &outer_sch);
+  void CreateClusterForOperator(const isl::schedule_node &node);
 
   void GatherBufferFootprintDefInfo(const isl::schedule_node &node, BufferDefInfo &tensor_info);
 
-  bool IsPromote(const TensorFootprintCluster &fp_cluster, const isl::multi_union_pw_aff &partial_sched_mupa,
-                 const isl::multi_union_pw_aff &thread_schedule);
-
   bool UnrolledLoop(const TensorFootprintCluster &fp_cluster);
 
-  isl::schedule HoistRegisterMemory(isl::schedule_node root, size_t depth);
-
-  size_t UpdateDepth(const isl::schedule_node &root);
-
   isl::schedule_node GetRegisterPromotedNode(isl::schedule_node &root);
-  isl::schedule HoistRegisterMemoryOnMark(isl::schedule_node root);
 
   isl::schedule_node AdjustConvScheduleTreeStructure(const isl::schedule_node &orig_node);
-  isl::schedule_node TileTensorAccordingInterfaceValue(isl::schedule_node &root);
+  isl::schedule_node TileTensorAccordingInterfaceValue(const isl::schedule_node &orig_node);
   isl::multi_val GetRealTileSizeVal(const isl::schedule_node &node, const std::string &matrix_name,
                                     const std::string &matrix_major);
-  std::string GetPromotedWriteName();
+  void SetPromotedWriteNameForGemm(std::string &local_tensor_c);
+  isl::schedule_node InsertMarkerForEmit(const isl::schedule_node &orig_node);
 
-  void GetActualPromotedSharedTensors();
-
-  bool IsReadOrWriteBand(isl::schedule_node node);
-
-  isl::schedule_node GetVectorizationPromotedNode(isl::schedule_node &root);
-
-  isl::schedule_node PromotedNodeUnderSequence(isl::schedule_node_sequence &node);
-
-  isl::schedule RunMatmul(isl::schedule_node root);
-
-  isl::schedule RunReduce(isl::schedule_node root);
-
-  isl::schedule RunElementWise(isl::schedule_node root);
-
-  bool CheckRAW(std::string &name);
-
- private:
   PassInfo &pass_info_;
   ScopInfo &scop_info_;
   isl::schedule schedule_;
-  std::vector<std::string> configed_tensors_;
-  bool hoist_compute_local_tensor_{true};
-  bool hoist_tensor_all_{false};
-  std::string local_tensor_c_;
-  std::string shared_tensors_;
-  size_t remain_memory_{0};
+  std::string write_name_;
+
+  int band_index_{0};
+  OuterBandNode *current_outer_bn_{nullptr};
+  std::unordered_set<std::string> mark_names_;
 };
 
 }  // namespace poly

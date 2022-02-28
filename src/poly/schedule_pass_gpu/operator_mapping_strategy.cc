@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -136,8 +136,10 @@ isl::schedule_node OperatorMappingStrategy::MapDimToThreadsBlocks(const isl::sch
   if (is_promotion_mapping_ || scop_info_.user_config_.GetMindTrickWasUsed()) {
     node = CheckMapSizeAndApplyTile(node, upa_list, required_mapping_strategy_, mapping_cfg_);
     is_tiled = !node.is_equal(orig_node);
+    // insert node with specific marker
     if (is_insert_marker) {
       std::string marker_name = is_thread_mapping_ ? THREAD_MARKER : BLOCK_MARKER;
+      marker_name = is_promotion_mapping_ ? marker_name + SHARE_SUFFIX : marker_name;
       node = node.insert_mark(isl::id(node.ctx(), marker_name)).child(0);
     }
 
@@ -600,8 +602,9 @@ isl::schedule_node ReduceMappingStrategy::InsertReduceExtension(const isl::sched
   insert_node = InsertExtensionNodeBeforeOrAfter(insert_node, sync_id, false).parent();
   insert_node = insert_node.parent().insert_mark(REDUCE_AREA_FLAG);
 
-  if (!GetMarkerName(insert_node.ancestor(2), REDUCE_MARKER).empty()) {
-    insert_node = insert_node.ancestor(2).del();
+  auto tmp_node = insert_node.parent().parent();
+  if (!GetMarkerName(tmp_node, REDUCE_MARKER).empty()) {
+    insert_node = tmp_node.del();
   }
 
   return insert_node;

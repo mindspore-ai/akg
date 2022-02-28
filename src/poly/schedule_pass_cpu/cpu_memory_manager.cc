@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "poly/schedule_pass_gpu/operator_shared_strategy.h"
+#include "poly/create_cluster.h"
 #include "cpu_memory_manager.h"
 #include "poly/schedule_tree_util.h"
 #include "poly/scop.h"
@@ -59,8 +59,8 @@ isl::schedule CpuMemoryManager::HoistCpuMemory() {
     }
 
     mark_names_ = {PROMOTE_GLOBAL_TO_REGISTER};
-    CpuMemoryStrategy other_op(scop_info_, mark_names_, band_index_);
-    other_op.CreateClusterList(orig_node);
+    CpuCreateCluster create_cluster(scop_info_, band_index_);
+    create_cluster.CreateClusterListForGemm(orig_node, mark_names_);
     auto node = orig_node;
     for (auto name : mark_names_) {
       mark_name = name;
@@ -186,42 +186,6 @@ isl::schedule_node CpuMemoryManager::HoistMemory(isl::schedule_node &tree, GpuMe
   auto res_node = PlaceOuterDataCopyBelow(scop_info_, tree, cluster, tensor_id, dst_tensor_id, out_schedule,
                                           tree.get_schedule().get_domain().get_space());
   return res_node;
-}
-
-bool CpuMemoryManager::CoalescingAccessWay(const isl::schedule_node &node, const TensorFootprintCluster &cluster) {
-  isl::union_map original = cluster.OrigianlAccessRelations();
-  size_t tensor_dim = cluster.foot_print_.GetBoxDim();
-  std::vector<isl::schedule_node> thread_marker = CollectFnNode(IsThreadMappedMark, schedule_.root());
-  for (auto item : thread_marker) {
-    if (!(item.isa<isl::schedule_node_mark>()) && !(item.has_children()) &&
-        !(item.child(0).isa<isl::schedule_node_filter>())) {
-      continue;
-    }
-    isl::schedule_node thread_filter = item.child(0);
-    if (!thread_filter.has_children()) {
-      continue;
-    }
-    isl::schedule_node thread_band = thread_filter.child(0);
-    if (!thread_band.has_children()) {
-      continue;
-    }
-    isl::schedule_node inner_band = thread_band.child(0);
-    size_t num_mapped_thread = inner_band.schedule_depth() - thread_band.schedule_depth();
-    if (num_mapped_thread == 0) {
-      continue;
-    }
-    size_t inner_depth = inner_band.schedule_depth();
-    auto active_domains = CollectDomain(thread_band);
-    auto local_access = original.intersect_domain(active_domains);
-    auto schedule = ShortSchedule(inner_band);
-    auto schedule_access = local_access.apply_domain(schedule);
-    for (auto access : schedule_access.get_map_list()) {
-      if (!IsSubsetForIncreaseDim(access, tensor_dim - 1, inner_depth - 1)) {
-        return true;
-      }
-    }
-  }
-  return false;
 }
 
 isl::schedule CpuMemoryManager::InsertVectorizedMarker(const isl::schedule &sch) {

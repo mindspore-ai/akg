@@ -1,5 +1,5 @@
 /**
- * Copyright 2020-2021 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,7 +29,6 @@ constexpr auto MIND_TRICKS_SWIZZLE_PRAGMA = "pragma_swizzle_kernel";
 
 // add for one dimension mapping
 constexpr auto ORIGIN_THREAD_DIM_X = "bind_thread_x";
-constexpr auto SHARED_MEM_PROMOTED_COMPLETE = "shared_mem_promoted_complete";
 
 // example:
 // atomic_SumOp
@@ -62,12 +61,9 @@ class GpuIslEmitter : public IslEmitter {
   virtual Stmt SubstituteTensorStmt(const Stmt &s, Tensor origin, Tensor replaced);
   virtual Stmt EmitTensorOfTensorStmt(const Stmt &s);
   void UpdateGpuIndexDtype();
-  std::map<std::string, VarExpr> iter_name_map_{{B0, VarExpr(BLOCK_IDX_X, Int(32))},  
-                                                {B1, VarExpr(BLOCK_IDX_Y, Int(32))},
-                                                {B2, VarExpr(BLOCK_IDX_Z, Int(32))},  
-                                                {T0, VarExpr(THREAD_IDX_X, Int(32))},
-                                                {T1, VarExpr(THREAD_IDX_Y, Int(32))}, 
-                                                {T2, VarExpr(THREAD_IDX_Z, Int(32))}};
+  std::map<std::string, VarExpr> iter_name_map_{
+    {B0, VarExpr(BLOCK_IDX_X, Int(32))},  {B1, VarExpr(BLOCK_IDX_Y, Int(32))},  {B2, VarExpr(BLOCK_IDX_Z, Int(32))},
+    {T0, VarExpr(THREAD_IDX_X, Int(32))}, {T1, VarExpr(THREAD_IDX_Y, Int(32))}, {T2, VarExpr(THREAD_IDX_Z, Int(32))}};
 
  private:
   // override emitters for GPU
