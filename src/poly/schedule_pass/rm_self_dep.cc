@@ -693,8 +693,17 @@ isl::union_map RemoveReduceOpSelfDependence(ScopInfo &scop_info, PassInfo &pass_
            ****************************************************/
           if (is_tuple_reduce_op[tuple_id_key] >= 1 && scop_info.user_config_.GetEnableAtomicAdd() &&
               !res.second.empty()) {
-            scop_info.analysis_result_.RecordReduceOutTensors(res.second);
-            scop_info.analysis_result_.RecordReduceOutStmtIdToTensor(tuple_id_key, res.second);
+            bool is_global = false;
+            for (auto it : scop_info.user_config_.GetOriginBind()) {
+              if (it.second->data->name_hint == res.second) {
+                is_global = true;
+                break;
+              }
+            }
+            if (is_global) {
+              scop_info.analysis_result_.RecordReduceOutTensors(res.second);
+              scop_info.analysis_result_.RecordReduceOutStmtIdToTensor(tuple_id_key, res.second);
+            }
           }
         }
 
