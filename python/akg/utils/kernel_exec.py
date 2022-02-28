@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # coding: utf-8
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -26,15 +26,12 @@ import time
 import random
 import subprocess
 import re
-import tvm
-import types
-from akg.utils.util import parse_kwargs
+import ctypes
 from timeit import default_timer as timer
 from threading import Thread
 from functools import reduce
-import numpy as np
 from enum import IntEnum
-import ctypes
+import numpy as np
 
 import akg
 import akg.tvm
@@ -47,6 +44,7 @@ from akg.utils import format_transform as ft_util
 from akg.utils import custom_tiling as ct_util
 from akg.utils import validation_check as vc_util
 from akg.utils.dsl_create import TensorUtils
+from akg.utils.util import parse_kwargs
 from akg.backend.parsing_profiling_data import HWTSLogParser
 from akg.backend.parsing_profiling_data import validate_and_normalize_path
 from akg.backend import aic_model
@@ -127,14 +125,12 @@ def create_code(kernel_name, code_path=None, code=None, code_type=CCE):
         code: code.
         code_type: code type.
     """
-    if code_type == CCE:
-        postfix = ".cce"
-    elif code_type == CUDA:
-        postfix = ".cu"
-    elif code_type == LLVM:
-        postfix = ".ll"
-    else:
+    postfix_dict = {CCE: ".cce",
+                    CUDA: ".cu",
+                    LLVM: ".ll"}
+    if code_type not in postfix_dict:
         logging.info("the target code type %s is not supported.", code_type)
+    postfix = postfix_dict.get(code_type, "")
 
     if not code_path:
         code_path = "./"
@@ -300,6 +296,22 @@ def mod_launch_rpc_thread(mode, mod, args, outputs, results, need_retry, retry, 
         logging.error("rpc retry error: %d %s", retry, sys.exc_info())
 
 
+def _get_rpc_result(poll_count, threads, thread_index, poll_interval, need_retry, results, retried):
+    """Get rpc run result."""
+    while poll_count > 0:
+        poll_count -= 1
+        # wait for the newly created thread, because it is most likely to complete first
+        threads[thread_index].join(poll_interval)
+        for poll_index in range(thread_index + 1):
+            if not threads[poll_index].is_alive() and not need_retry[poll_index]:
+                return True, results[poll_index]
+            if need_retry[poll_index] and not retried[poll_index]:
+                logging.error("Thread %d exit with error, spawn a new thread immediately", poll_index)
+                poll_count = 0
+                retried[poll_index] = True
+    return False, None
+
+
 def mod_launch_rpc(mode, mod, args, outputs, tuning=False):
     """
     launch rpc or rpc_cloud module with retry.
@@ -343,17 +355,9 @@ def mod_launch_rpc(mode, mod, args, outputs, tuning=False):
         threads[thread_index].daemon = True
         threads[thread_index].start()
         poll_count = timeout_before_spawning_new_thread // poll_interval
-        while poll_count > 0:
-            poll_count -= 1
-            # wait for the newly created thread, because it is most likely to complete first
-            threads[thread_index].join(poll_interval)
-            for poll_index in range(thread_index + 1):
-                if not threads[poll_index].is_alive() and not need_retry[poll_index]:
-                    return results[poll_index]
-                if need_retry[poll_index] and not retried[poll_index]:
-                    logging.error("Thread %d exit with error, spawn a new thread immediately", poll_index)
-                    poll_count = 0
-                    retried[poll_index] = True
+        has_res, res = _get_rpc_result(poll_count, threads, thread_index, poll_interval, need_retry, results, retried)
+        if has_res:
+            return res
 
     logging.error("All %d threads are created, poll the threads until the first one exits normally, \
                   or all threads exit abnormally or timeout", max_num_threads)
@@ -385,10 +389,10 @@ def profiling_mode_run(kernel_name, args, outputs, tuning, device_id):
         tuning: tuning model.
         device_id: device_id on device.
     """
-    tvm.get_global_func("ascend_start_profiling")(device_id)
+    akg.tvm.get_global_func("ascend_start_profiling")(device_id)
     time_before_launch = time.time()
     output_data = ascend_run(kernel_name, args, outputs, device_id)
-    tvm.get_global_func("ascend_stop_profiling")()
+    akg.tvm.get_global_func("ascend_stop_profiling")()
 
     cycle = profiling_analyse(device_id, time_before_launch)
     logging.info('=====parsing cycles==============================')
@@ -446,7 +450,7 @@ def profiling_analyse(device_id, time_before_launch):
             else:
                 break
         try:
-            tmp_path =  stdout_data.decode('utf8').strip().split('/')
+            tmp_path = stdout_data.decode('utf8').strip().split('/')
             device_file = tmp_path[-2]
             prof_file = tmp_path[-3]
         except BaseException:
@@ -499,7 +503,6 @@ def get_launch_args(arg_list, outputs):
 
 def mod_launch_air(mod, args, outputs, device_id):
     """launch mod on kc_air."""
-
     ctx = akg.tvm.ndarray.cce(device_id)
     arg_list = []
     for a in args:
@@ -507,10 +510,8 @@ def mod_launch_air(mod, args, outputs, device_id):
             arg_list.append(akg.tvm.nd.array(a, ctx))
         elif isinstance(a, (list, tuple)):
             for aa in a:
-                if isinstance(aa, np.ndarray):
-                    arg_list.append(akg.tvm.nd.array(aa, ctx))
-                else:
-                    arg_list.append(aa)
+                value = akg.tvm.nd.array(aa, ctx) if isinstance(aa, np.ndarray) else aa
+                arg_list.append(value)
         else:
             arg_list.append(a)
     for retry in range(3):
@@ -519,11 +520,12 @@ def mod_launch_air(mod, args, outputs, device_id):
             mod(*arg_list)
             ctx.sync()
             out_list = []
-            if not need_retry:
-                for i in outputs:
-                    out = arg_list[len(arg_list) + i if i < 0 else i].asnumpy()
-                    out_list.append(out)
-                return out_list[0] if len(out_list) == 1 else tuple(out_list)
+            if need_retry:
+                continue
+            for i in outputs:
+                out = arg_list[len(arg_list) + i if i < 0 else i].asnumpy()
+                out_list.append(out)
+            return out_list[0] if len(out_list) == 1 else tuple(out_list)
         except RuntimeError:
             need_retry = True
             logging.error("kc_air retry error: %d %s", retry, sys.exc_info())
@@ -540,15 +542,13 @@ def ascend_run(kernel_name, args, outputs, device_id):
             arg_list.append(array_as_continue(a))
         elif isinstance(a, (list, tuple)):
             for aa in a:
-                if isinstance(aa, np.ndarray):
-                    arg_list.append(array_as_continue(a))
-                else:
-                    arg_list.append(aa)
+                value = array_as_continue(a) if isinstance(aa, np.ndarray) else aa
+                arg_list.append(value)
         else:
             arg_list.append(a)
     outputs = [len(arg_list) + i if i < 0 else i for i in outputs]
     launch_args_list = get_launch_args(arg_list, outputs)
-    tvm.get_global_func("ascend_run")(kernel_name, device_id, *launch_args_list)
+    akg.tvm.get_global_func("ascend_run")(kernel_name, device_id, *launch_args_list)
     out_list = []
     for i in outputs:
         out = arg_list[i]
@@ -566,12 +566,14 @@ def get_kernel_name_from_mod(mod):
         raise ValueError("fail to get kernel_name")
     return kernel_name
 
+
 def mod_launch_ascend_profiling(mod, args, outputs=(-1,), tuning=False, device_id=-1):
     gc.collect()
     if device_id == -1:
         device_id = int(os.environ.get("DEVICE_ID", 0))
     kernel_name = get_kernel_name_from_mod(mod)
     return profiling_mode_run(kernel_name, args, outputs, tuning, device_id)
+
 
 def mod_launch_default(mod, args, outputs=(-1,), target=CUDA, tuning=False, device_id=-1, repeat_time=400):
     if device_id == -1:
@@ -585,6 +587,7 @@ def mod_launch_default(mod, args, outputs=(-1,), target=CUDA, tuning=False, devi
     else:
         cycles = get_cycles(mod, *mod_args, target=target, device_id=device_id, repeat_time=repeat_time)
         return out_list[0] if len(out_list) == 1 else tuple(out_list), {'run_time': cycles}
+
 
 @func_time_required
 def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=-1, expect=None, repeat_time=400):
@@ -650,10 +653,8 @@ def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=-1, expect=None
     raise ValueError("mode must be aic, rpc, aic_cloud, ca, compile_cloud, compile_mini, cpu, csim, ccesim or cdiff")
 
 
-def gen_kernel_name(input_shapes, input_types, op_attrs=None, kernel_name="", attrs=None):
-    """generate kernel name."""
-    dir_max_length = 250
-    shape_info = ''
+def _append_shape_dtype(input_shapes, input_types, shape_info):
+    """Add shape and dtype to shape_info."""
     for _, (shape, dtype) in enumerate(zip(input_shapes, input_types)):
         if isinstance(shape, (list, tuple)) and shape and isinstance(shape[0], (list, tuple)):
             for _, tmp_shape in enumerate(shape):
@@ -663,10 +664,7 @@ def gen_kernel_name(input_shapes, input_types, op_attrs=None, kernel_name="", at
                 shape_info = "%s_%s_%s" % (shape_info, dtype, '_'.join(str_tmp_shape))
         elif isinstance(shape, akg.tvm.tensor.Tensor):
             for tmp_shape in shape.shape:
-                if isinstance(tmp_shape, akg.tvm.expr.Var):
-                    str_shape = tmp_shape.name
-                else:
-                    str_shape = str(tmp_shape)
+                str_shape = tmp_shape.name if isinstance(tmp_shape, akg.tvm.expr.Var) else str(tmp_shape)
                 shape_info = "%s_%s_%s" % (shape_info, dtype, '_'.join(str_shape))
         else:
             vc_util.check_shape(shape)
@@ -675,28 +673,39 @@ def gen_kernel_name(input_shapes, input_types, op_attrs=None, kernel_name="", at
             shape = list(shape)
             str_shape = [str(i) for i in shape]
             shape_info = "%s_%s_%s" % (shape_info, dtype, '_'.join(str_shape))
+    return shape_info
 
+
+def _append_op_attrs(op_attrs, shape_info):
+    """Add op attrs to shape_info."""
+    def _to_str(item):
+        if isinstance(item, (list, tuple)):
+            str_tmp = [str(i) for i in item]
+            return '_'.join(str_tmp)
+        return str(item)
+
+    for tmp in op_attrs:
+        if isinstance(tmp, (list, tuple)):
+            for ele in tmp:
+                shape_info = shape_info + '_' + _to_str(ele)
+        elif isinstance(tmp, (int, float)):
+            shape_info = shape_info + '_' + str(tmp)
+        elif isinstance(tmp, str):
+            shape_info = shape_info + '_' + tmp
+        elif isinstance(tmp, np.ndarray):
+            shape = list(tmp.shape)
+            str_shape = [str(i) for i in shape]
+            shape_info = shape_info + '_' + '_'.join(str_shape)
+    return shape_info
+
+
+def gen_kernel_name(input_shapes, input_types, op_attrs=None, kernel_name="", attrs=None):
+    """generate kernel name."""
+    dir_max_length = 250
+    shape_info = ''
+    shape_info = _append_shape_dtype(input_shapes, input_types, shape_info)
     if op_attrs is not None:
-        for tmp in op_attrs:
-            if isinstance(tmp, (list, tuple)):
-                for ele in tmp:
-                    if isinstance(ele, (list, tuple)):
-
-                        str_tmp = [str(i) for i in ele]
-                        shape_info = shape_info + '_' + '_'.join(str_tmp)
-                    else:
-                        shape_info = shape_info + '_' + str(ele)
-
-            elif isinstance(tmp, (int, float)):
-                shape_info = shape_info + '_' + str(tmp)
-
-            elif isinstance(tmp, (str)):
-                shape_info = shape_info + '_' + tmp
-
-            elif isinstance(tmp, (np.ndarray)):
-                shape = list(tmp.shape)
-                str_shape = [str(i) for i in shape]
-                shape_info = shape_info + '_' + '_'.join(str_shape)
+        shape_info = _append_op_attrs(op_attrs, shape_info)
 
     kernel_name = kernel_name + shape_info
     kernel_name = re.sub(r'[^0-9a-zA-Z]+', '_', kernel_name)
@@ -784,20 +793,22 @@ def gen_inputs_and_shape_params(input_shapes, input_types, inputs, shape_params)
         shape_params (list): None by default.
 
     """
+
+    def _update_shape_params(shape_list):
+        for tmp in shape_list:
+            if isinstance(tmp, akg.tvm.expr.Var):
+                shape_params.append(tmp)
+
     for i, (shape, dtype) in enumerate(zip(input_shapes, input_types)):
         if isinstance(shape, (list, tuple)) and shape and isinstance(shape[0], (list, tuple)):
             tmp_input = []
             for j, tmp_shape in enumerate(shape):
                 tmp_input.append(akg.tvm.placeholder(tmp_shape, dtype, "input_%d_%d" % (i + 1, j + 1)))
-                for tmp in tmp_shape:
-                    if isinstance(tmp, akg.tvm.expr.Var):
-                        shape_params.append(tmp)
+                _update_shape_params(tmp_shape)
             inputs.append(tmp_input)
         elif isinstance(shape, (list, tuple)) and shape and isinstance(shape[0], akg.tvm.expr.Var):
             inputs.append(akg.tvm.placeholder(shape, dtype, "input_%d" % (i + 1)))
-            for tmp_shape in shape:
-                if isinstance(tmp_shape, akg.tvm.expr.Var):
-                    shape_params.append(tmp_shape)
+            _update_shape_params(shape)
         elif isinstance(shape, akg.tvm.tensor.Tensor):
             inputs.append(shape)
             for tmp_shape in shape.shape:
@@ -815,13 +826,17 @@ def gen_attrs_params(op_attrs, attrs_params):
         attrs_params (list): None by default.
 
     """
+
+    def _update_attrs_params(item):
+        if isinstance(item, akg.tvm.expr.Var):
+            attrs_params.append(item)
+
     for tmp_attr in op_attrs:
         if isinstance(tmp_attr, (list, tuple)) and tmp_attr and isinstance(tmp_attr[0], akg.tvm.expr.Var):
             for attr_param in tmp_attr:
-                if isinstance(attr_param, akg.tvm.expr.Var):
-                    attrs_params.append(attr_param)
-        elif isinstance(tmp_attr, akg.tvm.expr.Var):
-            attrs_params.append(tmp_attr)
+                _update_attrs_params(attr_param)
+        else:
+            _update_attrs_params(tmp_attr)
 
 
 def get_dim_from_func_map(attrs, op_func, args, input_shapes, input_types, op_attrs):
@@ -836,6 +851,19 @@ def get_dim_from_func_map(attrs, op_func, args, input_shapes, input_types, op_at
         input_types (iterable of iterable of str): the dtypes for each input.
         op_attrs (list or tuple): extra attributes for the op.
     """
+
+    def _get_dim_info(func):
+        if inspect.isfunction(func):
+            return func(*args)
+        elif isinstance(func, dict):
+            key = [ft_util.convert_to_list(input_shapes), ft_util.convert_to_list(input_types)]
+            if op_attrs is not None:
+                key.append(op_attrs)
+            key = str(tuple(key))
+            if key in func.keys():
+                return ct_util.set_dims(func[key])
+        raise RuntimeError("Registered set_dim_map is invalid. Must be a function or a dict!")
+
     if attrs is None or 'dim' not in attrs or not attrs['dim']:
         dim_info = ""
         if attrs is None:
@@ -843,20 +871,7 @@ def get_dim_from_func_map(attrs, op_func, args, input_shapes, input_types, op_at
 
         if op_func.__name__ in ct_util.set_dim_func_map.keys():
             value = ct_util.set_dim_func_map[op_func.__name__]
-            if inspect.isfunction(value):
-                dim_info = value(*args)
-            elif isinstance(value, dict):
-                key = []
-                key.append(ft_util.convert_to_list(input_shapes))
-                key.append(ft_util.convert_to_list(input_types))
-                if op_attrs is not None:
-                    key.append(op_attrs)
-                key = str(tuple(key))
-
-                if key in value.keys():
-                    dim_info = ct_util.set_dims(value[key])
-            else:
-                raise RuntimeError("Registered set_dim_map is invalid. Must be a function or a dict!")
+            dim_info = _get_dim_info(value)
         if isinstance(dim_info, (list, tuple)):
             dim_info = dim_info[0]
 
@@ -875,6 +890,12 @@ def parsing_output(output, attrs, compute_func, sch_tmpl, gpu_binds):
         sch_tmpl (dict): None by default.
         gpu_binds (dict): None by default.
     """
+
+    def _update_attrs(data):
+        for key, value in data.items():
+            if key not in attrs or not attrs[key]:
+                attrs[key] = value
+
     if isinstance(output, (list, tuple)):
         from inspect import isfunction
         new_outputs = []
@@ -882,9 +903,7 @@ def parsing_output(output, attrs, compute_func, sch_tmpl, gpu_binds):
             if isfunction(elem):
                 compute_func = elem
             elif isinstance(elem, dict):
-                for key, value in elem.items():
-                    if key not in attrs or not attrs[key]:
-                        attrs[key] = value
+                _update_attrs(elem)
             elif isinstance(elem, (list, tuple)):
                 new_outputs += elem
             else:
@@ -973,6 +992,51 @@ def gen_spaces_dim_key(op_func, args, s, op_var, kernel_name, attrs, polyhedral,
         return spaces, set_dim_key
 
 
+def _create_gpu_mod(s, op_var, target, shape_var, kernel_name, attrs, polyhedral, binds, dump_ir):
+    """Create module on gpu."""
+    with akg.build_config(dump_pass_ir=dump_ir):
+        mod = akg.build(s, op_var, target, shape_var, name=kernel_name, attrs=attrs, polyhedral=polyhedral, binds=binds)
+    return mod
+
+
+def _create_gpu_tuning_mod(sch_tmpl, shape_var, kernel_name, attrs, binds):
+    """Create tuning module on gpu."""
+    @autotvm.template
+    def _autotune_template():
+        s = sch_tmpl['schedule'](sch_tmpl['output'])
+        return s, op_var
+
+    # create autotune task
+    task = autotvm.task.create(_autotune_template, args=list(), target='cuda')
+    print("task config: ", task.config_space)
+
+    # set measure_option
+    measure_option = autotvm.measure_option(
+        builder=autotvm.LocalBuilder(),
+        runner=autotvm.LocalRunner(repeat=5, min_repeat_ms=150, timeout=4)
+    )
+
+    # Begin tuning, log records to file `kernel_name.log`
+    tuner = autotvm.tuner.RandomTuner(task)
+    if not os.path.exists(kernel_name + '.log'):
+        tuner.tune(n_trial=len(task.config_space),
+                   measure_option=measure_option,
+                   callbacks=[autotvm.callback.log_to_file(kernel_name + '.log')])
+
+    # query best config
+    dispatch_context = autotvm.apply_history_best(kernel_name + '.log')
+    best_config = dispatch_context.query(task.target, task.workload)
+    print("\nBest config is:")
+    print(best_config)
+
+    # apply best config
+    with autotvm.apply_history_best(kernel_name + '.log'):
+        s, op_var = _autotune_template()
+        mod = akg.build(s, op_var, "cuda", shape_var, name=kernel_name, attrs=attrs,
+                        polyhedral=False, binds=binds)
+    return mod
+
+
 def create_gpu_mod(sch_tmpl, s, op_func, op_var, shape_var, kernel_name, attrs, polyhedral, binds, dump_ir, dump_code,
                    tuning):
     """
@@ -1005,57 +1069,50 @@ def create_gpu_mod(sch_tmpl, s, op_func, op_var, shape_var, kernel_name, attrs, 
     if sch_tmpl is not None:
         if sch_tmpl['target'] != CUDA:
             raise ValueError("Only support cuda as target when using schedule template.")
-        with akg.tvm.target.cuda() as target:
+        with akg.tvm.target.cuda() as _:
             if not tuning:
                 s = sch_tmpl['schedule'](sch_tmpl['output'])
-                with akg.tvm.build_config(dump_pass_ir=dump_ir):
-                    mod = akg.build(s, op_var, "cuda", shape_var, name=kernel_name, attrs=attrs,
-                                    polyhedral=False, binds=binds)
+                mod = _create_gpu_mod(s, op_var, "cuda", shape_var, kernel_name, attrs, False, binds, dump_ir)
             else:
-                @autotvm.template
-                def _autotune_template():
-                    s = sch_tmpl['schedule'](sch_tmpl['output'])
-                    return (s, op_var)
-
-                # create autotune task
-                task = autotvm.task.create(_autotune_template,
-                                           args=list(),
-                                           target='cuda')
-
-                print("task config: ", task.config_space)
-
-                # set measure_option
-                measure_option = autotvm.measure_option(
-                    builder=autotvm.LocalBuilder(),
-                    runner=autotvm.LocalRunner(repeat=5, min_repeat_ms=150, timeout=4)
-                )
-
-                # Begin tuning, log records to file `kernel_name.log`
-                tuner = autotvm.tuner.RandomTuner(task)
-                if not os.path.exists(kernel_name + '.log'):
-                    tuner.tune(n_trial=len(task.config_space),
-                               measure_option=measure_option,
-                               callbacks=[autotvm.callback.log_to_file(kernel_name + '.log')])
-
-                # query best config
-                dispatch_context = autotvm.apply_history_best(kernel_name + '.log')
-                best_config = dispatch_context.query(task.target, task.workload)
-                print("\nBest config is:")
-                print(best_config)
-
-                # apply best config
-                with autotvm.apply_history_best(kernel_name + '.log'):
-                    s, op_var = _autotune_template()
-                    mod = akg.build(s, op_var, "cuda", shape_var, name=kernel_name, attrs=attrs,
-                                    polyhedral=False, binds=binds)
+                mod = _create_gpu_tuning_mod(sch_tmpl, shape_var, kernel_name, attrs, binds)
     else:
-        with akg.build_config(dump_pass_ir=dump_ir):
-            mod = akg.build(s, op_var, target, shape_var, name=kernel_name, attrs=attrs, polyhedral=polyhedral,
-                            binds=binds)
+        mod = _create_gpu_mod(s, op_var, target, shape_var, kernel_name, attrs, polyhedral, binds, dump_ir)
     if dump_code:
         source_code = mod.imported_modules[0].get_source()
         create_code(kernel_name, "./", source_code, CUDA)
     return mod
+
+
+def _create_schedule(output):
+    """Create schedule from output."""
+    if isinstance(output, (list, tuple)):
+        tmp = []
+        for x in list(output):
+            if isinstance(x, tuple):
+                tmp.append(x[0].op)
+            else:
+                tmp.append(x.op)
+        s = akg.tvm.create_schedule(tmp)
+    else:
+        s = akg.tvm.create_schedule(output.op)
+    return s
+
+
+def _feat_mode(ret_mode, s, op_var, shape_params, kernel_name, attrs, target, binds):
+    """Processes for feat mode."""
+    if binds is None:
+        from akg.tvm import build_module
+        binds, _ = build_module.get_binds(op_var)
+    cfg = _api_internal._GetCurrentBuildConfig()
+    stmt, args = _api_internal._Lower(s, op_var, shape_params, kernel_name,
+                                      binds, attrs, False, True, False, target,
+                                      cfg, True)
+    from akg.utils.auto_tuning import get_features_from_stmts
+    feature = get_features_from_stmts(stmts=[stmt], binds=[binds], n_skip_cache=0)[0]
+    if ret_mode == ReturnType.FEAT:
+        return feature
+    mod = _api_internal._BuildStmtToModule(stmt, kernel_name, cfg, args, target)
+    return mod, feature
 
 
 def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
@@ -1076,6 +1133,7 @@ def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
         dump_code (bool): False by default.
         polyhedral (bool): True by default.
         tuning (bool): False by default.
+        ret_mode (ReturnType): ReturnType.MOD by default.
 
     Return:
         module.
@@ -1119,17 +1177,7 @@ def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
         return create_gpu_mod(sch_tmpl, None, op_func, op_var, shape_var, kernel_name, attrs, polyhedral, gpu_binds,
                               dump_ir, dump_code, tuning)
 
-    if isinstance(output, (list, tuple)):
-        tmp = []
-        for x in list(output):
-            if isinstance(x, tuple):
-                tmp.append(x[0].op)
-            else:
-                tmp.append(x.op)
-        s = akg.tvm.create_schedule(tmp)
-    else:
-        s = akg.tvm.create_schedule(output.op)
-
+    s = _create_schedule(output)
     if compute_func is not None:
         compute_func(s)
         polyhedral = False
@@ -1141,19 +1189,7 @@ def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
     binds = None if not attrs else attrs.pop(BINDS, None)
     target_name = target.split()[0]
     if ret_mode in [ReturnType.FEAT, ReturnType.MOD_AND_FEAT]:
-        if binds is None:
-            from akg.tvm import build_module
-            binds, _ = build_module.get_binds(op_var)
-        cfg = _api_internal._GetCurrentBuildConfig()
-        stmt, args = _api_internal._Lower(s, op_var, shape_params, kernel_name,
-                                          binds, attrs, False, True, False, target,
-                                          cfg, True)
-        from akg.utils.auto_tuning import get_features_from_stmts
-        feature = get_features_from_stmts(stmts=[stmt], binds=[binds], n_skip_cache=0)[0]
-        if ret_mode == ReturnType.FEAT:
-            return feature
-        mod = _api_internal._BuildStmtToModule(stmt, kernel_name, cfg, args, target)
-        return mod, feature
+        return _feat_mode(ret_mode, s, op_var, shape_params, kernel_name, attrs, target, binds)
 
     if target_name == CUDA:
         return create_gpu_mod(None, s, op_func, op_var, shape_var, kernel_name, attrs, polyhedral, binds, dump_ir,
@@ -1226,7 +1262,8 @@ def get_device_id():
 def get_cycles(mod, *mod_args, target="cuda", device_id=0, repeat_time=400):
     """get profiling cycles."""
     from akg.utils.result_analysis import target_profiling
-    tcost = target_profiling(mod, *mod_args, target=target, repeat_time=repeat_time, device_id=device_id, need_warm_up=False)
+    tcost = target_profiling(mod, *mod_args, target=target, repeat_time=repeat_time, device_id=device_id,
+                             need_warm_up=False)
     return tcost
 
 

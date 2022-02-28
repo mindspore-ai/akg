@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # coding: utf-8
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -78,11 +78,27 @@ class TileConstraint(Enum):
     BLOCK_MOD = "BLOCK_MOD"
 
 
+def _check_constraint(constraint):
+    """Check validity of constraint."""
+    if constraint not in TileConstraint:
+        raise ValueError("Tile constraint must be chosen from {}".format(TileConstraint))
+
+
+def _check_tensor_type(tensor):
+    """Check the type of tensor."""
+    hints = "Tensor should be tvm.tensor.Tensor or a list/tuple of tvm.tensor.Tensor."
+    if isinstance(tensor, (list, tuple)):
+        for t in tensor:
+            if not isinstance(t, akg.tvm.tensor.Tensor):
+                raise TypeError(hints)
+    elif not isinstance(tensor, akg.tvm.tensor.Tensor):
+        raise TypeError(hints)
+
+
 @check_input_type((double, float, int, list), TileConstraint, TileLevel)
 def modify_common_constraints(value, constraint, level=TileLevel.C1):
     """api for dsl to modify some default constraint used in auto tiling."""
-    if constraint not in TileConstraint:
-        raise ValueError("Tile constraints must be chosen from {0}".format(TileConstraint))
+    _check_constraint(constraint)
     if constraint == TileConstraint.SET_MEM_RATIO:
         return create_custom_tiling_node(TileMode.COMMON, tile_level=level, mem_ratio=double(value))
     if constraint == TileConstraint.THREAD_MIN:
@@ -104,8 +120,7 @@ def modify_common_constraints(value, constraint, level=TileLevel.C1):
 @check_input_type((str, int), TileConstraint, int, (int, list, tuple, type(None)), TileLevel)
 def create_constraint_on_axis(values, constraints, band=0, axis=None, level=TileLevel.C1):
     """api for dsl to create tiling constraints on certain axis."""
-    if constraints not in TileConstraint:
-        raise ValueError("Tile constraints must be chosen from {0}".format(TileConstraint))
+    _check_constraint(constraints)
 
     res = []
     if axis is None:
@@ -159,12 +174,8 @@ def create_constraint_on_axis(values, constraints, band=0, axis=None, level=Tile
                   (int, list, tuple, type(None)), TileLevel)
 def create_constraint_on_tensor(tensor, values, constraints, tensor_pos=None, level=TileLevel.C1):
     """api for dsl to create tiling constraints on certain tensor."""
-    if constraints not in TileConstraint:
-        raise ValueError("Tile constraint must be chosen from {0}".format(TileConstraint))
-    if isinstance(tensor, (list, tuple)):
-        for t in tensor:
-            if not isinstance(t, akg.tvm.tensor.Tensor):
-                raise TypeError("Tensor should be tvm.tensor.Tensor or a list/tuple of tvm.tensor.Tensor.")
+    _check_constraint(constraints)
+    _check_tensor_type(tensor)
 
     tensor_name = [tensor.op.name] if isinstance(tensor, akg.tvm.tensor.Tensor) else [t.op.name for t in tensor]
     values = [values] if isinstance(values, (str, int)) else values
@@ -365,6 +376,7 @@ def set_dims_by_key(key, map_):
 
 def reg_set_dim_func(set_dim_func):
     """register setdim function."""
+
     def decorate(func_):
         @wraps(func_)
         def wrapper(*args, **kwargs):
@@ -383,6 +395,7 @@ def reg_set_dim_func_by_func(func_, set_dim_func):
 
 def reg_gen_key_func(gen_key_func):
     """register generated key by function."""
+
     def decorate(func_):
         @wraps(func_)
         def wrapper(*args, **kwargs):

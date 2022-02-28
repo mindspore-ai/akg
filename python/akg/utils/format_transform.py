@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # coding: utf-8
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 
 """format transform function"""
 import akg
+
 supported_bits = {
     "8": 1, "16": 2, "32": 4, "64": 8, "bool": 1
 }
@@ -72,7 +73,6 @@ def refine_shape(shape, reduce_axis=None):
         shape : shape of data
         reduce_axis : list, tuple or int
             axis want to reduce
-        keepdims: if keepdims = True, we should not refine the shape
 
     Returns:
         shape (list): refined shape.
@@ -86,8 +86,12 @@ def refine_shape(shape, reduce_axis=None):
             refined = [1]
         return refined
 
-    if reduce_axis is not None:
+    def _update_res_reduce_axis(res_reduce_axis_list, cnt):
+        for j, axs in enumerate(res_reduce_axis_list):
+            if axs > cnt:
+                res_reduce_axis_list[j] -= 1
 
+    if reduce_axis is not None:
         res_reduce_axis = sorted(refine_reduce_axis(shape, reduce_axis))
         if not res_reduce_axis:
             return _refine_shape_no_reduce(), []
@@ -99,9 +103,7 @@ def refine_shape(shape, reduce_axis=None):
                 refined_shape.append(i)
                 count += 1
             else:
-                for j, axs in enumerate(res_reduce_axis):
-                    if axs > count:
-                        res_reduce_axis[j] -= 1
+                _update_res_reduce_axis(res_reduce_axis, count)
 
         return refined_shape, res_reduce_axis
     return _refine_shape_no_reduce()
@@ -197,6 +199,7 @@ def convert_to_list(something, convert_all=True):
         else:
             out = something
     return out
+
 
 def to_tvm_nd_array(data, ctx=None):
     """convert other types to tvm nd array with specified context"""
