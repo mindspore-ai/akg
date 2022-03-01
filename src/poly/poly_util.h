@@ -474,7 +474,6 @@ constexpr auto THREAD_MARKER = "thread_marker";
 constexpr auto BLOCK_MARKER = "block_marker";
 constexpr auto WARP_MARKER = "warp_marker";
 constexpr auto KH_KW_MARKER = "kh_kw_marker";
-constexpr auto VECTORIZATION_MARKER = "vectorization_marker";
 constexpr auto REDUCE_MARKER = "reduce_marker_";
 constexpr auto ATOMIC_MARKER = "atomic";
 constexpr auto REDUCE_INIT = "red_init_";

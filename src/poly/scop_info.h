@@ -697,7 +697,7 @@ class UserConfig {
   std::unordered_map<std::string, Var> params_;
   std::unordered_map<std::string, Expr> params_rev_map_;
   std::map<int64_t, Expr> param_tiling_map_;
-  bool enable_restart_{false};
+  bool enable_restart_{true};
   bool is_spec_gemm_{false};
 
   // dynamic shape config
@@ -892,6 +892,7 @@ struct MmaConv {
 constexpr auto AT_TRANSFORM = "TRANSFORM";
 constexpr auto AT_TRANSPOSE = "TRANSPOSE";
 constexpr auto AT_PAD = "PAD";
+constexpr auto AT_UNPAD = "UNPAD";
 constexpr auto AT_BROADCAST = "BROADCAST";
 constexpr auto AT_REDUCE = "REDUCE";
 constexpr auto AT_ELEMWISE = "ELEMWISE";
@@ -915,6 +916,18 @@ enum Template {
   COUNT_OP,
   PARTIAL_ELEM,
   TEMPLATE_BULK
+};
+
+enum RestartPassName {
+  NOT_RESTART = -1,
+  EXIT,
+  INIT_SCHEDULE,
+  COMPUTE_SCHEDULE,
+  ANALYZE_SCHEDULE,
+  TILE_OUTER_BAND,
+  MAPPING_OUTER_BAND,
+  SHARED_MEMORY_MANAGER,
+  REGISTER_MEMORY_MANAGER
 };
 
 class AnalysisResult {
@@ -954,16 +967,17 @@ class AnalysisResult {
     std::unordered_set<isl::id, isl::IslIdIslHash> stmts;
     OuterBandNode *parent{nullptr};
     std::vector<std::unique_ptr<OuterBandNode>> children{};
-
+    // analysis result
     int last_axis{-1};
     Template template_type{Template::DEFAULT};
     ReduceDirection reduce_direction{ReduceDirection::UNKNOWN};
-    bool use_shared_memory{true};
-    bool use_register_memory{true};
-    bool enable_vectorization{false};
     bool is_thread_tile{false};
     bool is_block_tile{false};
     std::set<std::string> coalesced_access_tensors;
+    // user config
+    bool use_shared_memory{true};
+    bool use_register_memory{true};
+    bool enable_vectorization{false};
   };
 
   void RecordWrites(const isl::union_map &writes) { writes_ = writes; }
@@ -1161,6 +1175,15 @@ class AnalysisResult {
   std::string ShowReduceDirection() { return direction_map_[op_direction_]; }
   std::string ShowReduceDirection(ReduceDirection op_direction) { return direction_map_[op_direction]; }
 
+  RestartPassName GetRestartPassName() const { return restart_pass_name_; }
+  void SetRestartPassName(const RestartPassName &restart_pass_name) { restart_pass_name_ = restart_pass_name; }
+  std::string ShowPassName() { return pass_name_map_[restart_pass_name_]; }
+
+  void RecordPassScheduleMap(const std::string &pass_name, const isl::schedule &pass_sch) {
+    pass_schedule_map_[pass_name] = pass_sch;
+  }
+  isl::schedule GetPassScheduleMap(const std::string &pass_name) { return pass_schedule_map_[pass_name]; }
+
   void RecordReduceInitIds(isl::id reduce_init_id) { reduce_init_ids_.push_back(reduce_init_id); }
   std::vector<isl::id> GetReduceInitIds() const { return reduce_init_ids_; }
 
@@ -1214,6 +1237,10 @@ class AnalysisResult {
 
   void SetCsrAvgRow(int csr_avg_row) { csr_avg_row_ = csr_avg_row; }
   int GetCsrAvgRow() { return csr_avg_row_; }
+
+  void ResetOuterBandNode() { outer_band_nodes_.clear(); }
+  void ResetActivateBufferFootprints() { active_buffer_footprints_.clear(); }
+  void ResetBufferDefInfos() { buffer_def_infos_.clear(); }
 
  public:
   std::vector<std::pair<std::string, STMT_OP_TYPE>> stmt_type_;
@@ -1291,8 +1318,6 @@ class AnalysisResult {
   // custom mapping
   bool is_outer_block_mapping_{true};
 
-  // All axis of each tensor
-  std::unordered_map<std::string, std::vector<std::string>> tensor_all_axis_;
   // tensor_of_tensor
   std::map<std::string, std::string> tensor_of_tensor_stmt_;
   std::unordered_set<std::string> tensors_not_promote_;
@@ -1301,6 +1326,13 @@ class AnalysisResult {
   bool is_csr_{false};
   bool remove_self_dependence_{false};
   int csr_avg_row_{0};
+
+  RestartPassName restart_pass_name_{RestartPassName::NOT_RESTART};
+  std::unordered_map<std::string, isl::schedule> pass_schedule_map_;
+  std::unordered_map<int, std::string> pass_name_map_ = {
+    {-1, "NotRestart"},          {0, "Exit"},          {1, "InitSchedule"},     {2, "ComputeSchedule"},
+    {3, "AnalyzeSchedule"},      {4, "TileOuterBand"}, {5, "MappingOuterBand"}, {6, "SharedMemoryManager"},
+    {7, "RegisterMemoryManager"}};
 };
 
 using TensorEntry = AnalysisResult::TensorEntry;

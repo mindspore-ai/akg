@@ -38,9 +38,6 @@ void Scop::ParseUserConfig(std::string target, const Map<Tensor, Buffer> &extern
                            const Map<std::string, NodeRef> &spec_gemm_attrs, bool is_tuning, bool is_dynamic,
                            const Schedule &sch) {
   info_.user_config_.SetTarget(target);
-  if (info_.user_config_.GetTarget() == TARGET_CCE) {
-    info_.user_config_.SetEnableRestart(true);
-  }
   if (spec_gemm_attrs.empty()) {
     info_.user_config_.SetAttrs(g_attrs);
     info_.mmu_info_.SetAttrs(g_attrs);
@@ -50,7 +47,7 @@ void Scop::ParseUserConfig(std::string target, const Map<Tensor, Buffer> &extern
     info_.mmu_info_.SetSpecGemm(true);
     info_.mmu_info_.SetConvAttrInfo(spec_gemm_attrs);
   }
-  
+
   info_.user_config_.SetBind(extern_buffer);
   info_.user_config_.SetOriginBind(extern_buffer);
   info_.user_config_.SetIsTuning(is_tuning);
@@ -64,12 +61,12 @@ void Scop::ParseUserConfig(std::string target, const Map<Tensor, Buffer> &extern
 isl::set CreateParamsSet(ScopInfo &info) {
   auto params = info.user_config_.GetParams();
   if (!g_csr.empty()) {
-    const Variable* var = GetVariableFromCSR();
+    const Variable *var = GetVariableFromCSR();
     CHECK(var);
     params.emplace(var->name_hint, Variable::make(var->type, var->name_hint));
   }
   auto space = CreateParamsSpace(info.GetCtx(), params);
-  
+
   auto context = isl::set::universe(space);
   auto dynamic_shape = info.user_config_.GetDynamicShape();
   for (const auto &param : params) {
@@ -124,7 +121,7 @@ isl::schedule Scop::GenIsl() {
     }
     info_.user_config_.SetBind(new_binds);
   } else if (!g_csr.empty()) {
-    for (const auto& it: g_csr) {
+    for (const auto &it : g_csr) {
       if (auto var = it.first.as<Variable>()) {
         params.emplace(var->name_hint, air::Downcast<Var>(it.first));
       }
@@ -144,6 +141,29 @@ isl::schedule Scop::GenIsl() {
   return schedule_tmp;
 }
 
+void Scop::ResetConfig() {
+  if (info_.user_config_.GetTarget() == TARGET_CCE) {
+    info_.user_config_.SetConsiderCoincidence(false);
+    return;
+  }
+  RestartPassName restart_pass_name = info_.analysis_result_.GetRestartPassName();
+  info_.analysis_result_.ResetActivateBufferFootprints();
+  info_.analysis_result_.ResetBufferDefInfos();
+  if (restart_pass_name <= RestartPassName::ANALYZE_SCHEDULE) {
+    info_.analysis_result_.ResetOuterBandNode();
+    if (info_.analysis_result_.GetEnabledAutoTiling()) {
+      auto block_cfg = info_.user_config_.GetBlockConfig();
+      if (block_cfg) {
+        block_cfg->Reset();
+      }
+      auto thread_cfg = info_.user_config_.GetThreadConfig();
+      if (thread_cfg) {
+        thread_cfg->Reset();
+      }
+    }
+  }
+}
+
 isl::schedule Scop::Transform(const isl::schedule &input_schedule) {
   auto final_schedule = input_schedule;
   SchedulePassMgr mgr(info_);
@@ -160,33 +180,28 @@ isl::schedule Scop::Transform(const isl::schedule &input_schedule) {
   final_schedule = mgr.Run(input_schedule, pass_stra);
   info_.DumpTransform("dsa_transfrom.log", pass_stra->pass_info_);
 
-  // We offer a restart mechanism for scalar stmt that cannot tile: do not consider coincidence
-  // and re-compute/re-tile to generate final schedule.
-  if (mgr.need_restart_ && info_.user_config_.GetEnableRestart()) {
-    info_.user_config_.SetConsiderCoincidence(false);
-    if (info_.user_config_.GetTarget() == TARGET_CCE) {
-      pass_stra.reset(new DsaMgrStrategy(info_));
-    } else if (info_.user_config_.GetTarget() == TARGET_CUDA) {
-      pass_stra.reset(new GPUMgrStrategy(info_));
-    } else if (info_.user_config_.GetTarget() == TARGET_CPU) {
-      pass_stra.reset(new CPUMgrStrategy(info_));
-    }
-    if ((info_.user_config_.GetTarget() == TARGET_CUDA) && (info_.analysis_result_.GetEnabledAutoTiling())) {
-      auto block_cfg = info_.user_config_.GetBlockConfig();
-      if (block_cfg) {
-        block_cfg->Reset();
-      }
-      auto thread_cfg = info_.user_config_.GetThreadConfig();
-      if (thread_cfg) {
-        thread_cfg->Reset();
-      }
-    }
-    final_schedule = mgr.Run(input_schedule, pass_stra);
-    info_.DumpTransform("scalar_transform.log", pass_stra->pass_info_);
+  RestartPassName restart_pass = info_.analysis_result_.GetRestartPassName();
+  if (restart_pass == RestartPassName::NOT_RESTART || restart_pass == RestartPassName::EXIT ||
+      !info_.user_config_.GetEnableRestart()) {
+    return final_schedule;
   }
 
+  // We offer a restart mechanism for scalar stmt that cannot tile: do not consider coincidence
+  // and re-compute/re-tile to generate final schedule.
+  ResetConfig();
+  if (info_.user_config_.GetTarget() == TARGET_CCE) {
+    pass_stra.reset(new DsaMgrStrategy(info_));
+  } else if (info_.user_config_.GetTarget() == TARGET_CUDA) {
+    pass_stra.reset(new GPUMgrStrategy(info_));
+  } else if (info_.user_config_.GetTarget() == TARGET_CPU) {
+    pass_stra.reset(new CPUMgrStrategy(info_));
+  }
+
+  final_schedule = mgr.Run(input_schedule, pass_stra);
+  info_.DumpTransform("scalar_transform.log", pass_stra->pass_info_);
+
   return final_schedule;
-}  // namespace poly
+}
 
 isl::id_list CreateIteratorList(const isl::schedule &schedule_iter, const std::string &prefix) {
   int depth = 0;

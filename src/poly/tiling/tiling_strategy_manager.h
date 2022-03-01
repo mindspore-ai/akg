@@ -482,9 +482,6 @@ class GpuStrategy : public TilingStrategy {
   void HandleShrinkThreadToBlock(int64_t &shrinked_threads, bool thread_to_block, std::stringstream &ss);
   void InjectiveSpeedup();
 
-  void CheckVectorizationForElemwiseOp();
-  bool IsVectorized();
-
   void BroadcastSpeedup();
   std::unordered_set<int> broadcast_idx_;
 
@@ -528,7 +525,7 @@ class GpuStrategy : public TilingStrategy {
   void CountGlobalBufferSize();
   int GetLocalAllocBufCount();
   bool NeedModifyOrderOfAxis();
-  void InitMapping();
+  void SetInitTiledConfig();
   Template template_{Template::DEFAULT};
   bool is_reduce_op_[TEMPLATE_BULK] = {false, false, true, true, true, false};
 
@@ -547,7 +544,6 @@ class GpuStrategy : public TilingStrategy {
   int64_t fused_size_{1};
   std::unordered_map<int, std::string> mapping_idx_pos_ = {{0, "x"}, {1, "y"}, {2, "z"}};
   std::unordered_map<int, std::string> reduce_y_idx_pos_ = {{0, "y"}, {1, "x"}};
-  int vectorized_bytes_{1};
   int band_index_{0};
   OuterBandNode *current_outer_bn_{nullptr};
   int64_t activated_threads_;

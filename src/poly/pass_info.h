@@ -82,8 +82,6 @@ class PassInfo {
   isl::union_set transfer_stmt_;
   std::map<std::string, int> invariant_state_;
   bool has_invariant_dependence_{false};
-
-  bool restart_{false};
 };
 
 }  // namespace poly

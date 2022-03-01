@@ -38,6 +38,7 @@ class Scop {
   ScopInfo info_;
 
  private:
+  void ResetConfig();
   Stmt body_;
   isl::ctx ctx_;
 };

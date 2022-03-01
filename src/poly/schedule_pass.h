@@ -39,7 +39,6 @@ class SchedulePass {
 
   std::string GetPassName() { return pass_name_; }
   std::string pass_name_;
-  bool restart_{false};  // triggers restart during runtime
 
   std::set<std::string> disabled_passes_;
 };

@@ -26,17 +26,19 @@ namespace poly {
 
 class SchedulePassMgr {
  public:
-  SchedulePassMgr(ScopInfo &scop_info) : scop_info_(scop_info){}
+  SchedulePassMgr(ScopInfo &scop_info) : scop_info_(scop_info) {}
   const std::vector<std::shared_ptr<SchedulePass>> &GetSchedulePasses() const;
-  void RegisterPass(std::shared_ptr<SchedulePass>pass);
+  void RegisterPass(std::shared_ptr<SchedulePass> pass);
   isl::schedule Run(const isl::schedule &sch);
   isl::schedule Run(const isl::schedule &sch, const std::vector<std::shared_ptr<SchedulePass>> &passes);
   isl::schedule Run(const isl::schedule &sch, std::shared_ptr<PassMgrStrategy> strategy);
   ~SchedulePassMgr() {}
 
-  bool need_restart_{false};
   ScopInfo &scop_info_;
+
  private:
+  isl::schedule GetNewScheduleAfterRestart(const isl::schedule &sch,
+                                           std::vector<std::shared_ptr<SchedulePass>> &passes);
   std::vector<std::shared_ptr<SchedulePass>> schedule_passes_;
 };
 }  // namespace poly
