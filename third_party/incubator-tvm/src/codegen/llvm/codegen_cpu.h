@@ -25,6 +25,8 @@
 /*
  * 2021.11.01
  *   Adapt LLVM 12 interface support
+ * 2022.3.1
+ *   Add a extern data argument for kernel
  */
 
 #ifndef TVM_CODEGEN_LLVM_CODEGEN_CPU_H_
@@ -161,6 +163,7 @@ class CodeGenCPU : public CodeGenLLVM {
   void AddDebugInformation(llvm::Function* function);
 
   Array<Var> args_real_;
+  Var extern_arg_{"extern_arg"};
   Var extern_links_{"extern_links"};
   Var parallel_launch_{"AKGBackendParallelLaunch"};
   Var alloc_launch_{"TVMBackendAllocWorkspace"};
