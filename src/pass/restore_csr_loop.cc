@@ -23,7 +23,7 @@ namespace ir {
 
 class MaxVarVisitor : public IRVisitor {
   void Visit_(const Variable *op) final {
-    for (const auto &it: g_csr) {
+    for (const auto &it : g_csr) {
       auto var = it.first.as<Variable>();
       if (var != nullptr && var->name_hint == op->name_hint) {
         csr_dynamic_extent_ = air::Downcast<Expr>(it.second);
@@ -81,8 +81,7 @@ class RecordInitStmt : public IRVisitor {
 
 class InsertInitStmt : public IRMutator {
  public:
-  explicit InsertInitStmt(Stmt init_stmt, FunctionRef init_tensor) :
-    init_stmt_(init_stmt), init_tensor_(init_tensor) {}
+  explicit InsertInitStmt(Stmt init_stmt, FunctionRef init_tensor) : init_stmt_(init_stmt), init_tensor_(init_tensor) {}
 
  private:
   Stmt Mutate_(const Realize *op, const Stmt &s) final {
@@ -163,8 +162,8 @@ class RemoveCsrBranch : public IRMutator {
           if (call->is_intrinsic(air::ir::intrinsic::tvm_storage_sync)) {
             CHECK(csr_loop_ != nullptr && csr_extent_.defined());
             auto body = IRMutator::Mutate(op->rest);
-            auto for_stmt = For::make(
-              csr_loop_->loop_var, Expr(0), csr_extent_, csr_loop_->for_type, csr_loop_->device_api, body);
+            auto for_stmt =
+              For::make(csr_loop_->loop_var, Expr(0), csr_extent_, csr_loop_->for_type, csr_loop_->device_api, body);
             return Block::make(op->first, for_stmt);
           }
         }
@@ -184,6 +183,45 @@ class RemoveCsrBranch : public IRMutator {
   Expr csr_extent_;
   bool has_gm_read_{false};
   bool check_extent_{false};
+};
+
+class VectorizedForLoop : public IRMutator {
+  Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
+    if (op->attr_key == "vector_length") {
+      vectorization_size_ = op->value;
+    }
+    return IRMutator::Mutate_(op, s);
+  }
+
+  Stmt Mutate_(const For *op, const Stmt &s) final {
+    if (auto for_stmt = op->body.as<For>()) {
+      if (for_stmt->for_type != ForType::Vectorized) {
+        return IRMutator::Mutate_(op, s);
+      }
+      inner_loop_var_ = op->loop_var;
+      const Variable *var = GetVariableFromCSR();
+      max_var_ = Variable::make(var->type, var->name_hint);
+      auto body = Mutate(op->body);
+      Expr vec_loop_extent = Div::make(max_var_, vectorization_size_);
+      return For::make(op->loop_var, Expr(0), vec_loop_extent + 1, op->for_type, op->device_api, body);
+    } else if (op->for_type == ForType::Vectorized) {
+      Expr vec_loop_extent = Div::make(max_var_, vectorization_size_);
+      Stmt vectorized_for =
+        For::make(op->loop_var, Expr(0), vectorization_size_, op->for_type, op->device_api, op->body);
+      Stmt serial_for = For::make(op->loop_var, 0, max_var_ - inner_loop_var_ * vectorization_size_, ForType::Serial,
+                                  op->device_api, op->body);
+      Expr condition = (inner_loop_var_ != vec_loop_extent);
+      Stmt body_with_tail = IfThenElse::make(condition, vectorized_for, serial_for);
+      return body_with_tail;
+    }
+    return IRMutator::Mutate_(op, s);
+  }
+
+  Stmt Mutate_(const IfThenElse *op, const Stmt &s) final { return Mutate(op->then_case); }
+
+  Expr vectorization_size_{};
+  Var inner_loop_var_{};
+  Var max_var_{};
 };
 
 class CombineCsrBlock : public IRMutator {
@@ -252,11 +290,11 @@ class RestoreMaxVar : public IRMutator {
       auto new_expr = replace_arr[max_var_id_];
       if (auto new_call = new_expr.as<Call>()) {
         Array<Expr> args;
-        for (auto orig_arg: new_call->args) {
+        for (auto orig_arg : new_call->args) {
           args.push_back(IRMutator::Mutate(orig_arg));
         }
-        return Call::make(
-          new_call->type, new_call->name, args, new_call->call_type, new_call->func, new_call->value_index);
+        return Call::make(new_call->type, new_call->name, args, new_call->call_type, new_call->func,
+                          new_call->value_index);
       }
     }
     return e;
@@ -291,7 +329,7 @@ class RestoreMaxVar : public IRMutator {
     return s;
   }
 
- int max_var_id_{-1};
+  int max_var_id_{-1};
 };
 
 class CsrInnerLoopVar : public IRVisitor {
@@ -327,7 +365,7 @@ class CsrInnerLoopVar : public IRVisitor {
       IRVisitor::Visit(op->body);
       in_csr_loop_ = false;
       return;
-    } else if (in_csr_loop_){
+    } else if (in_csr_loop_) {
       if (inner_loop_var_.defined() && inner_loop_var_.same_as(op->loop_var)) {
         inner_extent_ = op->extent;
         need_swap_ = true;
@@ -341,11 +379,22 @@ class CsrInnerLoopVar : public IRVisitor {
   bool in_csr_extent_{false};
 };
 
+class VectorizationChecker : public IRVisitor {
+ public:
+  bool is_vectorized_{false};
+  void Visit_(const For *op) final {
+    is_vectorized_ |= (op->for_type == ForType::Vectorized);
+    IRVisitor::Visit_(op);
+  }
+};
+
 class SwapCsrLoopWithInner : public IRMutator {
  public:
-  explicit SwapCsrLoopWithInner(Var csr_loop_var, Expr csr_extent, Var outer_loop_var, Expr outer_extent) :
-    csr_loop_var_(outer_loop_var), csr_extent_(csr_extent),
-    outer_loop_var_(csr_loop_var), outer_extent_(outer_extent) {}
+  explicit SwapCsrLoopWithInner(Var csr_loop_var, Expr csr_extent, Var outer_loop_var, Expr outer_extent)
+      : csr_loop_var_(outer_loop_var),
+        csr_extent_(csr_extent),
+        outer_loop_var_(csr_loop_var),
+        outer_extent_(outer_extent) {}
 
  private:
   Stmt Mutate_(const For *op, const Stmt &s) final {
@@ -434,7 +483,12 @@ class CsrLoopStride : public IRMutator {
 };
 
 Stmt RestoreCsrLoop(Stmt stmt, Map<Tensor, Buffer> extern_buffer, bool target_cuda) {
+  auto v_checker = VectorizationChecker();
+  v_checker.Visit(stmt);
   if (!target_cuda) {
+    if (v_checker.is_vectorized_) {
+      stmt = VectorizedForLoop().Mutate(stmt);
+    }
     stmt = RestoreMaxVar().Mutate(stmt);
     g_csr.Clear();
     return stmt;
@@ -449,7 +503,8 @@ Stmt RestoreCsrLoop(Stmt stmt, Map<Tensor, Buffer> extern_buffer, bool target_cu
     CHECK(csr_inner_loop.csr_loop_var_.defined() && csr_inner_loop.csr_extent_.defined() &&
           csr_inner_loop.inner_loop_var_.defined() && csr_inner_loop.inner_extent_.defined());
     stmt = SwapCsrLoopWithInner(air::Downcast<Var>(csr_inner_loop.csr_loop_var_), csr_inner_loop.csr_extent_,
-                                air::Downcast<Var>(csr_inner_loop.inner_loop_var_), csr_inner_loop.inner_extent_).Mutate(stmt);
+                                air::Downcast<Var>(csr_inner_loop.inner_loop_var_),
+                                csr_inner_loop.inner_extent_).Mutate(stmt);
   }
   stmt = CsrLoopStride().Mutate(stmt);
   return stmt;

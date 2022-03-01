@@ -62,10 +62,16 @@ void Scop::ParseUserConfig(std::string target, const Map<Tensor, Buffer> &extern
 }
 
 isl::set CreateParamsSet(ScopInfo &info) {
-  auto space = CreateParamsSpace(info.GetCtx(), info.user_config_.GetParams());
+  auto params = info.user_config_.GetParams();
+  if (!g_csr.empty()) {
+    const Variable* var = GetVariableFromCSR();
+    CHECK(var);
+    params.emplace(var->name_hint, Variable::make(var->type, var->name_hint));
+  }
+  auto space = CreateParamsSpace(info.GetCtx(), params);
+  
   auto context = isl::set::universe(space);
   auto dynamic_shape = info.user_config_.GetDynamicShape();
-  auto params = info.user_config_.GetParams();
   for (const auto &param : params) {
     isl::aff aff(isl::aff::param_on_domain(space, isl::id(info.GetCtx(), param.second->name_hint)));
     context = context & (aff > 0);

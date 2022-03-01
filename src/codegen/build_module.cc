@@ -37,6 +37,15 @@ namespace akg {
 AttrMap g_attrs;
 Array<NodeRef> g_external_call_name;
 CsrMap g_csr;
+const Variable *GetVariableFromCSR() {
+  for (const auto &it : g_csr) {
+    auto var = it.first.as<Variable>();
+    if (var != nullptr) {
+      return var;
+    }
+  }
+  return nullptr;
+}
 
 Tensor CreatePlaceholder(const NodeRef &arg) {
   auto n = air::make_node<PlaceholderOpNode>();
@@ -383,6 +392,7 @@ void RenameBinds(Map<Tensor, Buffer> &binds, const BuildConfig &config, Array<No
 
 void FixParametricBinds(const Map<Tensor, Buffer> &binds, const Array<NodeRef> &in_args, const BuildConfig &config,
                         Map<Tensor, Buffer> *out_binds, Array<NodeRef> *out_args) {
+  constexpr size_t SHAPE_SIZE = 5;
   Expr H = 0;
   Expr W = 0;
   Expr PT = 0;
@@ -443,14 +453,14 @@ void FixParametricBinds(const Map<Tensor, Buffer> &binds, const Array<NodeRef> &
   for (const auto &x : binds) {
     Array<Expr> shape;
     if (x.second->name.find(output) != std::string::npos) {
-      CHECK_EQ(x.second->shape.size(), 5);
+      CHECK_EQ(x.second->shape.size(), SHAPE_SIZE);
       shape.push_back(x.second->shape[0]);
       shape.push_back(x.second->shape[1]);
       auto h = air::floordiv(H + PT + PB - KH, SH) + 1;
       auto w = air::floordiv(W + PL + PR - KW, SW) + 1;
       shape.push_back(h);
       shape.push_back(w);
-      shape.push_back(x.second->shape[4]);
+      shape.push_back(x.second->shape[SHAPE_SIZE - 1]);
       Tensor tt = air::placeholder(shape, x.second->dtype, x.second->name);
       output_buffer = DeclBuffer(tt, config->data_alignment, config->offset_factor, x.second->name);
       out_binds->Set(tt, output_buffer);

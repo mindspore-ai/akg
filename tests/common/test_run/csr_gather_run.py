@@ -26,7 +26,6 @@ from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
 
 def csr_gather(dense, col_idx, row_idx, shape, target=CUDA):
-    assert target == CUDA, "only supports GPU"
     return composite.csr_gather((row_idx, col_idx, dense), {"dense_shape": shape})
 
 def gen_data(shape, dtype1, dtype2, nnz=-1):
