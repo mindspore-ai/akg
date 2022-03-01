@@ -313,6 +313,22 @@ bool MappingOuterBand::CanBeMappedToThread(const isl::schedule_node &node, const
   return true;
 }
 
+bool MappingOuterBand::IsEmptyBand(const isl::schedule_node &orig_node) {
+  if (!orig_node.isa<isl::schedule_node_band>()) {
+    return false;
+  }
+
+  auto band_node = orig_node.as<isl::schedule_node_band>();
+  auto current_mupa = band_node.get_partial_schedule();
+
+  // construct empty band
+  isl::union_set empty_domain = orig_node.get_schedule().get_domain();
+  isl::space empty_space = empty_domain.get_space().set_from_params();
+  isl::multi_union_pw_aff empty_mupa = isl::multi_union_pw_aff::zero(empty_space);
+
+  return current_mupa.plain_is_equal(empty_mupa);
+}
+
 isl::schedule_node MappingOuterBand::MapSequenceNode(const isl::schedule_node &orig_node,
                                                      const RoadMap &thread_record) {
   // deal with band that has children mapped to threads
@@ -329,8 +345,10 @@ isl::schedule_node MappingOuterBand::MapSequenceNode(const isl::schedule_node &o
       auto child_node = record.first;
       auto thread_size = record.second;
 
-      bool is_child = IsEqualNode(node_child, child_node);
-      if (is_child) {
+      bool is_equal = IsEqualNode(node_child, child_node);
+      bool is_empty_band = IsEmptyBand(node_child);
+      if (is_equal || is_empty_band) {
+        thread_size = is_empty_band ? 0 : thread_size;
         node_child = FillRemainingThreads(node_child, thread_size);
         node = node_child.ancestor(node_child.get_tree_depth() - start_node_depth);
         break;
@@ -409,7 +427,7 @@ isl::schedule_node MappingOuterBand::DoThreadMapping(const isl::schedule_node &o
 
 isl::schedule_node MappingOuterBand::DoSequenceNodeMapping(const isl::schedule_node &orig_node,
                                                            const RoadMap &thread_record, const bool is_reduce_stmt) {
-  if (orig_node.n_children() <= 1 || NumMappedDescendant(thread_record, orig_node) <= 0) {
+  if (IsAllLeaf(orig_node) || orig_node.n_children() <= 1 || NumMappedDescendant(thread_record, orig_node) <= 0) {
     return orig_node;
   }
   isl::schedule_node node = MapSequenceNode(orig_node, thread_record);
@@ -428,6 +446,21 @@ isl::schedule_node MappingOuterBand::DoSequenceNodeMapping(const isl::schedule_n
     }
   }
   return node;
+}
+
+bool MappingOuterBand::IsAllLeaf(const isl::schedule_node &orig_node) {
+  if (!orig_node.isa<isl::schedule_node_sequence>()) {
+    return true;
+  }
+
+  auto node = orig_node.as<isl::schedule_node_sequence>();
+  for (size_t i = 0; i < node.n_children(); ++i) {
+    auto child_node = node.child(i);
+    if (!child_node.child(0).isa<isl::schedule_node_leaf>()) {
+      return false;
+    }
+  }
+  return true;
 }
 
 void MappingOuterBand::AdjustBlockConfig(MappingCfg *block_cfg, unsigned long n_block_map) {

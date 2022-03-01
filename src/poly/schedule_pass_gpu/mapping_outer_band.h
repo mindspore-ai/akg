@@ -55,6 +55,8 @@ class MappingOuterBand : public SchedulePass {
                                            const bool is_reduce_stmt);
   isl::schedule_node MapSequenceNode(const isl::schedule_node &orig_node, const RoadMap &thread_record);
   isl::schedule_node FillRemainingThreads(const isl::schedule_node &orig_node, size_t begin);
+  bool IsEmptyBand(const isl::schedule_node &orig_node);
+  bool IsAllLeaf(const isl::schedule_node &orig_node);
 
   // Functions related to synchronization.
   isl::schedule_node DoThreadSynchronization(const isl::schedule_node &node,
