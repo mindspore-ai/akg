@@ -74,7 +74,6 @@ class AffinityAnalyzer : public IRVisitor {
   void AddReduceRelation(Tensor *input, Tensor *output);
   void AddTransposeRelation(Tensor *input, Tensor *output);
 
-  std::vector<int64_t> ExtractIntVector(Array<Expr> &vec);
   Tensor *NewTensor(FunctionRef ref, std::string op, Array<Expr> shape);
 };
 

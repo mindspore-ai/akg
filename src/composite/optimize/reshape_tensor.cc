@@ -1,5 +1,5 @@
 /**
- * Copyright 2020-2021 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,10 @@
 #include <stack>
 
 namespace akg {
+constexpr int OFFSET1 = 1;
+constexpr int OFFSET2 = 2;
+constexpr int OFFSET3 = 3;
+constexpr int OFFSET4 = 4;
 
 /* Use reshape to deal with FRACTAL_NZ and DefaultFormat in element-wise and broadcast supported operators. e.g.
  *
@@ -36,10 +40,7 @@ class ReshapeTensorMutator : public IRMutator {
     attr_level_++;
     Map<std::string, NodeRef> attr_map;
     // 1. Gather attribute map
-    if (op->node.as<StrMapNode>() != nullptr) {
-      attr_map = Downcast<Map<std::string, NodeRef>>(op->node);
-      GatherAttrs(attr_map);
-    }
+    GatherAttrs(op, attr_map);
 
     // 2. Traverse current AttrStmt
     auto stmt = this->Mutate(op->body);
@@ -51,17 +52,27 @@ class ReshapeTensorMutator : public IRMutator {
     return AddReshape(stmt);
   }
 
-  Stmt Mutate_(const Provide *op, const Stmt &s) {
+  virtual bool CheckList(const std::string &name) {
     static std::unordered_set<std::string> check_list = {"TensorAdd", "Add",     "RealDiv", "Mul",
                                                          "Minimum",   "Maximum", "Sub"};
+    return check_list.find(name) != check_list.end();
+  }
+
+  virtual bool CheckArgs(const Array<Expr> &args) {
+    CHECK_EQ(args.size(), 2);
+    return false;
+  }
+
+  Stmt Mutate_(const Provide *op, const Stmt &s) {
     auto call = op->value.as<Call>();
-    if (call == nullptr || check_list.find(call->name) == check_list.end()) {
+    if (call == nullptr || !CheckList(call->name)) {
       return IRMutator::Mutate_(op, s);
     }
 
-    auto op_name = call->name;
     auto args = call->args;
-    CHECK_EQ(args.size(), 2);
+    if (CheckArgs(args)) {
+      return IRMutator::Mutate_(op, s);
+    }
 
     Array<Expr> shape_fractal;
     Array<Expr> shape_default;
@@ -75,6 +86,7 @@ class ReshapeTensorMutator : public IRMutator {
     Array<Expr> shape_out;
     auto orig_shape = InferShapeFromFractalNz(shape_fractal);
     std::tie(shape0, shape1, shape_out) = ProduceShapes(orig_shape, shape_default);
+    auto op_name = call->name;
     auto shape_new = InferShapeToFractalNz(shape0, shape1, shape_out, shape_fractal, op_name, shape_default);
 
     // Rewrite current provide stmt's input shape
@@ -87,12 +99,8 @@ class ReshapeTensorMutator : public IRMutator {
     return IRMutator::Mutate_(op, s);
   }
 
-  virtual bool GetShapes(const Call *call, Array<Expr> &shape_fractal, Array<Expr> &shape_default, bool &need_swap) {
-    auto args = call->args;
-    auto op_name = call->name;
-
-    Tensor tensor0 = RecoverTensor(args[0]);
-    Tensor tensor1 = RecoverTensor(args[1]);
+  bool GetFormats(const std::string &op_name, const Tensor &tensor0, const Tensor &tensor1, std::string &format0,
+                  std::string &format1) {
     if (!tensor0.defined() || !tensor1.defined()) {
       LOG(INFO) << "[" << op_name << "] not all inputs are tensors";
       return false;
@@ -104,13 +112,27 @@ class ReshapeTensorMutator : public IRMutator {
       return false;
     }
 
-    std::string format0 = GetDataFormat(tensor0->op->name);
-    std::string format1 = GetDataFormat(tensor1->op->name);
+    format0 = GetDataFormat(tensor0->op->name);
+    format1 = GetDataFormat(tensor1->op->name);
     LOG(INFO) << "[" << op_name << "] input formats: " << format0 << ", " << format1;
     if (format0 == format1) {
       return false;
     }
+    return true;
+  }
 
+  virtual bool GetShapes(const Call *call, Array<Expr> &shape_fractal, Array<Expr> &shape_default, bool &need_swap) {
+    auto args = call->args;
+    auto op_name = call->name;
+
+    Tensor tensor0 = RecoverTensor(args[0]);
+    Tensor tensor1 = RecoverTensor(args[1]);
+
+    std::string format0;
+    std::string format1;
+    if (!GetFormats(op_name, tensor0, tensor1, format0, format1)) {
+      return false;
+    }
     if (format0 == "FRACTAL_NZ" && format1 == "DefaultFormat") {
       shape_fractal = tensor0->shape;
       shape_default = tensor1->shape;
@@ -148,7 +170,7 @@ class ReshapeTensorMutator : public IRMutator {
                                             const Array<Expr> &shape_out, const Array<Expr> &shape_fractal,
                                             const std::string &op_name, const Array<Expr> &shape_default) {
     auto dims = shape_out.size();
-    auto batch = dims - 2;
+    auto batch = dims - OFFSET2;
     Array<Expr> shape_new;
     CHECK(dims >= 2);
 
@@ -158,23 +180,23 @@ class ReshapeTensorMutator : public IRMutator {
     for (size_t i = 0; i < batch; ++i) {
       shape_new.push_back(shape1[i]);
     }
-    if (is_one(shape1[dims - 2]) && is_one(shape1[dims - 1])) {
+    if (is_one(shape1[dims - OFFSET2]) && is_one(shape1[dims - OFFSET1])) {
       // (bs, 1, 1) --> (bs, 1, 1, 1, 1)
       shape_new.push_back(Expr(1));
       shape_new.push_back(Expr(1));
       shape_new.push_back(Expr(1));
       shape_new.push_back(Expr(1));
-    } else if (is_one(shape1[dims - 2]) && GetDim(shape1, dims - 1) == GetDim(shape0, dims - 1)) {
+    } else if (is_one(shape1[dims - OFFSET2]) && GetDim(shape1, dims - OFFSET1) == GetDim(shape0, dims - OFFSET1)) {
       // (bs, 1, n) --> (bs, n1, 1, 1, n0), where n = n1 * n0
-      shape_new.push_back(shape_fractal[shape_fractal.size() - 4]);
+      shape_new.push_back(shape_fractal[shape_fractal.size() - OFFSET4]);
       shape_new.push_back(Expr(1));
       shape_new.push_back(Expr(1));
-      shape_new.push_back(shape_fractal[shape_fractal.size() - 1]);
-    } else if (GetDim(shape1, dims - 2) == GetDim(shape0, dims - 2) && is_one(shape1[dims - 1])) {
+      shape_new.push_back(shape_fractal[shape_fractal.size() - OFFSET1]);
+    } else if (GetDim(shape1, dims - OFFSET2) == GetDim(shape0, dims - OFFSET2) && is_one(shape1[dims - OFFSET1])) {
       // (bs, m, 1) --> (bs, 1, m1, m0, 1), where m = m1 * m0
       shape_new.push_back(Expr(1));
-      shape_new.push_back(shape_fractal[shape_fractal.size() - 3]);
-      shape_new.push_back(shape_fractal[shape_fractal.size() - 2]);
+      shape_new.push_back(shape_fractal[shape_fractal.size() - OFFSET3]);
+      shape_new.push_back(shape_fractal[shape_fractal.size() - OFFSET2]);
       shape_new.push_back(Expr(1));
     } else {
       // (bs, m, n), in this case, data format transformation is needed
@@ -189,12 +211,12 @@ class ReshapeTensorMutator : public IRMutator {
 
     Array<Expr> shape;
     size_t dims = fractal.size();
-    size_t batch = dims - 4;
+    size_t batch = dims - OFFSET4;
     for (size_t i = 0; i < batch; ++i) {
       shape.push_back(fractal[i]);
     }
-    int64_t m = GetDim(fractal, dims - 3) * GetDim(fractal, dims - 2);
-    int64_t n = GetDim(fractal, dims - 4) * GetDim(fractal, dims - 1);
+    int64_t m = GetDim(fractal, dims - OFFSET3) * GetDim(fractal, dims - OFFSET2);
+    int64_t n = GetDim(fractal, dims - OFFSET4) * GetDim(fractal, dims - OFFSET1);
     shape.push_back(Expr(m));
     shape.push_back(Expr(n));
 
@@ -271,7 +293,11 @@ class ReshapeTensorMutator : public IRMutator {
     return stmt;
   }
 
-  void GatherAttrs(const Map<std::string, NodeRef> &attr_map) {
+  void GatherAttrs(const AttrStmt *op, Map<std::string, NodeRef> &attr_map) {
+    if (!op->node.as<StrMapNode>()) {
+      return;
+    }
+    attr_map = Downcast<Map<std::string, NodeRef>>(op->node);
     for (const auto &it : attr_map) {
       if (op_attrs_.find(it.first) != op_attrs_.end()) {
         LOG(WARNING) << it.first << " already exist in attribute map, original value: " << op_attrs_[it.first]
@@ -361,92 +387,48 @@ class ReshapeTensorMutator : public IRMutator {
 // input_2_reshape(1,1,1,16) = Reshape(input_2(2)):float16:PI
 class ReshapeMatmul : public ReshapeTensorMutator {
  public:
-  explicit ReshapeMatmul() {}
+  explicit ReshapeMatmul() = default;
   ~ReshapeMatmul() override = default;
 
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) {
     attr_level_++;
     Map<std::string, NodeRef> attr_map;
-    if (op->node.as<StrMapNode>() != nullptr) {
-      attr_map = Downcast<Map<std::string, NodeRef>>(op->node);
-      GatherAttrs(attr_map);
-    }
+    GatherAttrs(op, attr_map);
     if (attr_map.count("transpose_b")) {
-      transpose_b.push(attr_map["transpose_b"].as<IntImm>()->value);
+      transpose_b_.push(attr_map["transpose_b"].as<IntImm>()->value);
     }
     auto stmt = this->Mutate(op->body);
     if (attr_map.count("transpose_b")) {
-      transpose_b.pop();
+      transpose_b_.pop();
     }
     stmt = ModifyAttrMap(op, stmt, attr_map);
     return AddReshape(stmt);
   }
 
-  Stmt Mutate_(const Provide *op, const Stmt &s) {
+  bool CheckList(const std::string &name) override {
     static std::unordered_set<std::string> check_list = {"MatMul", "BatchMatMul"};
-    auto call = op->value.as<Call>();
-    if (call == nullptr || check_list.find(call->name) == check_list.end()) {
-      return IRMutator::Mutate_(op, s);
-    }
+    return check_list.find(name) != check_list.end();
+  }
 
-    auto op_name = call->name;
-    auto args = call->args;
-
+  bool CheckArgs(const Array<Expr> &args) override {
     // Check matmul has bias
-    if (args.size() < 3) {
-      return IRMutator::Mutate_(op, s);
-    }
-
-    Array<Expr> shape_fractal;
-    Array<Expr> shape_default;
-    bool need_swap = false;
-    if (!GetShapes(call, shape_fractal, shape_default, need_swap)) {
-      return IRMutator::Mutate_(op, s);
-    }
-
-    Array<Expr> shape0;
-    Array<Expr> shape1;
-    Array<Expr> shape_out;
-    auto orig_shape = InferShapeFromFractalNz(shape_fractal);
-    std::tie(shape0, shape1, shape_out) = ProduceShapes(orig_shape, shape_default);
-    auto shape_new = InferShapeToFractalNz(shape0, shape1, shape_out, shape_fractal, op_name, shape_default);
-
-    if (!EqualShape(shape_default, shape_new)) {
-      LOG(INFO) << "[" << op_name << "] " << shape_default << " will be reshaped to " << shape_new;
-      auto input_tensors = CollectInputTensors(need_swap, args, shape_new);
-      return ModifyProvideInput(input_tensors, op);
-    }
-
-    return IRMutator::Mutate_(op, s);
+    return args.size() < 3;
   }
 
   bool GetShapes(const Call *call, Array<Expr> &shape_fractal, Array<Expr> &shape_default, bool &need_swap) override {
     auto args = call->args;
     auto op_name = call->name;
 
-    Tensor tensor0 = RecoverTensor(args[1]);
-    Tensor tensor1 = RecoverTensor(args[2]);
-    if (!tensor0.defined() || !tensor1.defined()) {
-      LOG(INFO) << "[" << op_name << "] not all inputs are tensors";
+    Tensor tensor1 = RecoverTensor(args[1]);
+    Tensor tensor2 = RecoverTensor(args[2]);
+    std::string format1;
+    std::string format2;
+    if (!GetFormats(op_name, tensor1, tensor2, format1, format2)) {
       return false;
     }
-    LOG(INFO) << "[" << op_name << "] input shapes: " << tensor0->shape << ", " << tensor1->shape;
-
-    if (!tensor0->op.defined() || !tensor1->op.defined()) {
-      LOG(INFO) << "[" << op_name << "] not all input tensors have operation";
-      return false;
-    }
-
-    std::string format0 = GetDataFormat(tensor0->op->name);
-    std::string format1 = GetDataFormat(tensor1->op->name);
-    LOG(INFO) << "[" << op_name << "] input formats: " << format0 << ", " << format1;
-    if (format0 == format1) {
-      return false;
-    }
-
-    if (format0 == "FRACTAL_NZ" && format1 == "DefaultFormat") {
-      shape_fractal = tensor0->shape;
-      shape_default = tensor1->shape;
+    if (format1 == "FRACTAL_NZ" && format2 == "DefaultFormat") {
+      shape_fractal = tensor1->shape;
+      shape_default = tensor2->shape;
       PadBias(shape_default);
       need_swap = false;
     } else {
@@ -459,7 +441,7 @@ class ReshapeMatmul : public ReshapeTensorMutator {
 
   Array<Expr> InferShapeFromFractalNz(const Array<Expr> &fractal) override {
     auto orig_shape = ReshapeTensorMutator::InferShapeFromFractalNz(fractal);
-    if (!transpose_b.empty() && transpose_b.top()) {
+    if (!transpose_b_.empty() && transpose_b_.top()) {
       Expr k = orig_shape[orig_shape.size() - 1];
       Expr n = orig_shape[orig_shape.size() - 2];
       orig_shape.Set(orig_shape.size() - 1, n);
@@ -478,17 +460,17 @@ class ReshapeMatmul : public ReshapeTensorMutator {
     for (size_t i = 0; i < batch; ++i) {
       shape_new.push_back(shape_out[i]);
     }
-    if (is_one(shape1[dims - 2]) && GetDim(shape1, dims - 1) == GetDim(shape0, dims - 1)) {
-      if (!transpose_b.empty() && transpose_b.top()) {
-        shape_new.push_back(shape_fractal[shape_fractal.size() - 3]);
+    if (is_one(shape1[dims - OFFSET2]) && GetDim(shape1, dims - OFFSET1) == GetDim(shape0, dims - OFFSET1)) {
+      if (!transpose_b_.empty() && transpose_b_.top()) {
+        shape_new.push_back(shape_fractal[shape_fractal.size() - OFFSET3]);
         shape_new.push_back(Expr(1));
         shape_new.push_back(Expr(1));
-        shape_new.push_back(shape_fractal[shape_fractal.size() - 2]);
+        shape_new.push_back(shape_fractal[shape_fractal.size() - OFFSET2]);
       } else {
-        shape_new.push_back(shape_fractal[shape_fractal.size() - 4]);
+        shape_new.push_back(shape_fractal[shape_fractal.size() - OFFSET4]);
         shape_new.push_back(Expr(1));
         shape_new.push_back(Expr(1));
-        shape_new.push_back(shape_fractal[shape_fractal.size() - 1]);
+        shape_new.push_back(shape_fractal[shape_fractal.size() - OFFSET1]);
       }
     } else {
       LOG(FATAL) << "[" << op_name << "] " << shape_fractal << " (FRACTAL_NZ) and " << shape_default
@@ -509,7 +491,7 @@ class ReshapeMatmul : public ReshapeTensorMutator {
   }
 
  private:
-  std::stack<bool> transpose_b;
+  std::stack<bool> transpose_b_;
 
   void PadBias(Array<Expr> &shape_default) {
     if (shape_default.size() != 1) {
@@ -525,7 +507,7 @@ class ReshapeMatmul : public ReshapeTensorMutator {
   }
 };
 
-Stmt ReshapeTensor(const Stmt &s, BuildInfo*) {
+Stmt ReshapeTensor(const Stmt &s, BuildInfo *) {
   auto stmt = ReshapeTensorMutator().Mutate(s);
   return ReshapeMatmul().Mutate(stmt);
 }

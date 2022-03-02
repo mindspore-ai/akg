@@ -291,22 +291,6 @@ class DimensionFolderPlan : public IRVisitor {
     }
   }
 
-  std::vector<int64_t> ExtractIntVector(Array<Expr> &vec) {
-    std::vector<int64_t> res;
-    for (Expr s : vec) {
-      int64_t val = -1;
-      if (s.as<IntImm>()) {
-        val = s.as<IntImm>()->value;
-      } else if (s.as<UIntImm>()) {
-        val = s.as<UIntImm>()->value;
-      } else {
-        CHECK(0);
-      }
-      res.push_back(val);
-    }
-    return res;
-  }
-
   FoldTensor *GetTensor(FunctionRef func, Array<Expr> shape, bool is_input) {
     auto it = tensors_.find(func);
     if (it != tensors_.end()) {

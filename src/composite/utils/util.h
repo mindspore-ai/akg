@@ -44,6 +44,7 @@ static std::unordered_map<std::string, air::Type> type_mapping = {
   {"complex128", air::Float(64, 2)}, {"complex64", air::Float(32, 2)},
 };
 
+std::vector<int64_t> ExtractIntVector(Array<Expr> &vec);
 std::string type2string(const air::Type &type);
 
 std::string GetRealTarget(const std::string &target);
@@ -631,6 +632,8 @@ class ElimDuplicateInputs : public IRMutator {
   std::unordered_map<std::string, Var> vars_;
   std::vector<std::string> names_;
 };
+
+Map<std::string, NodeRef> SetBuildInfo(const BuildInfo &info);
 }  // namespace akg
 
 #endif  // COMPOSITE_UTILS_UTIL_H_

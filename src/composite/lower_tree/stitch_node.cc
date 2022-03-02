@@ -162,15 +162,9 @@ void CudaStitchLowerNode::Lower(StageType to) {
     Map<std::string, NodeRef> backward_infos;
     AttachMultiChildDecorator(child.get(), forward_infos, &backward_infos);
     AttachStitchDecorator(target_, child.get(), i, forward_infos, &backward_infos);
-    // Excute child.
     child->Run(this);
-    UpdateMergeInfos(backward_infos);
-    auto data = child->Data();
-    CollectOutputMap(data, backward_infos, outputs2args_);
-    for (const auto &x : data->arg_list_0) {
-      all_args_.push_back(x);
-    }
-    datas.push_back(data);
+    ChildPostProcess(child->Data(), backward_infos);
+    datas.push_back(child->Data());
     auto stitch_ir = Downcast<Stmt>(child->Node());
     stitch_irs.push_back(InsertSync(stitch_ir));
   }
@@ -272,16 +266,9 @@ void AscendStitchLowerNode::Lower(StageType to) {
     Map<std::string, NodeRef> backward_infos;
     AttachMultiChildDecorator(child.get(), forward_infos, &backward_infos);
     AttachStitchDecorator(target_, child.get(), i, forward_infos, &backward_infos);
-    // Excute child.
     child->Run(this);
-    UpdateMergeInfos(backward_infos);
-    auto data = child->Data();
-    CollectOutputMap(data, backward_infos, outputs2args_);
-    for (const auto &x : data->arg_list_0) {
-      all_args_.push_back(x);
-    }
-    datas.push_back(data);
-
+    ChildPostProcess(child->Data(), backward_infos);
+    datas.push_back(child->Data());
     auto stitch_ir = Downcast<Stmt>(child->Node());
     stitch_irs.push_back(std::move(stitch_ir));
     auto split = Evaluate::make(Expr("===========split=========="));

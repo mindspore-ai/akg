@@ -19,6 +19,22 @@
 #include "pass/utils.h"
 
 namespace akg {
+std::vector<int64_t> ExtractIntVector(Array<Expr> &vec) {
+  std::vector<int64_t> res;
+  for (Expr s : vec) {
+    int64_t val = -1;
+    if (s.as<IntImm>()) {
+      val = s.as<IntImm>()->value;
+    } else if (s.as<UIntImm>()) {
+      val = s.as<UIntImm>()->value;
+    } else {
+      CHECK(0);
+    }
+    res.push_back(val);
+  }
+  return res;
+}
+
 std::string type2string(const air::Type &type) {
   std::string type_str;
   for (const auto &it : type_mapping) {
@@ -80,12 +96,37 @@ bool IsInplaceAssign(const std::string &op_name) { return op_name == "InplaceAss
 bool IsAssign(const std::string &op_name) { return op_name == "Assign"; }
 bool IsOtherOp(const std::string &op_name) {
   // if topi support more, add to this list
-  std::unordered_set<std::string> elems = {
-    "MatMul",      "BatchMatMul", "Conv",         "Transpose",   "Tile",     "Assign",           "InplaceAssign",
-    "EquivFormat", "TransData",   "AddMinValue",  "BroadcastTo", "PadAkg",   "UnPadAkg",         "Conv2D",
-    "CumSum",      "CumProd",     "StridedSlice", "Custom",      "GatherNd", "TensorScatterAdd", "UnsortedSegmentSum",
-    "Gather",      "OneHot",      "tuple_getitem", "CSRMV", "CSRReduceSum", "CSRMul", "CSRDiv",
-    "CSRGather",   "CSR2COO",     "COO2CSR"};
+  std::unordered_set<std::string> elems = {"MatMul",
+                                           "BatchMatMul",
+                                           "Conv",
+                                           "Transpose",
+                                           "Tile",
+                                           "Assign",
+                                           "InplaceAssign",
+                                           "EquivFormat",
+                                           "TransData",
+                                           "AddMinValue",
+                                           "BroadcastTo",
+                                           "PadAkg",
+                                           "UnPadAkg",
+                                           "Conv2D",
+                                           "CumSum",
+                                           "CumProd",
+                                           "StridedSlice",
+                                           "Custom",
+                                           "GatherNd",
+                                           "TensorScatterAdd",
+                                           "UnsortedSegmentSum",
+                                           "Gather",
+                                           "OneHot",
+                                           "tuple_getitem",
+                                           "CSRMV",
+                                           "CSRReduceSum",
+                                           "CSRMul",
+                                           "CSRDiv",
+                                           "CSRGather",
+                                           "CSR2COO",
+                                           "COO2CSR"};
   return elems.find(op_name) != elems.end();
 }
 bool IsElemwise(const std::string &op_name) {
@@ -217,6 +258,33 @@ std::vector<IndexGroup> GetIndexGroup(const Array<Expr> &shape, const std::vecto
   return index_groups;
 }
 
+bool HasFoundReshape(size_t j, const Array<Expr> &shape_change, const Expr &ori_size) {
+  bool has_found_reshape = false;
+  auto change_size = Expr(1);
+  for (; j < shape_change.size(); ++j) {
+    change_size = Simplify(change_size * shape_change[j]);
+    // For the ‘1’ in the shape_change, it may correspond to the current group or the next group.
+    // It is difficult to determine the specific group of ‘1’, and some strategies may need to be added later.
+    // The ‘1’ is currently correspond to the the next group.
+    if (is_zero(Simplify(change_size - ori_size))) {
+      has_found_reshape = true;
+      ++j;
+      break;
+    }
+  }
+  return has_found_reshape;
+}
+
+bool CheckInputBroadcast(const std::string &type, const std::vector<IndexGroup> &index_groups, size_t i,
+                           const Array<Expr> &shape_ori) {
+  auto index_group = index_groups[i];
+  auto indexs = index_groups[i].indexs;
+  auto index_group_start = indexs[0];
+  auto index_group_end = index_group_start + indexs.size();
+  return type == "input" && index_groups[i].is_broadcast && i < index_groups.size() - 1 &&
+         !is_const_int(shape_ori[index_group_end], 1);
+}
+
 std::vector<ReshapeRelation> GetReshapeRelation(const Array<Expr> &shape_ori, const std::vector<bool> &is_broadcast_vec,
                                                 const Array<Expr> &shape_change, const std::string &type) {
   // If the ReshapeRelations cannot be obtained, for example,
@@ -235,7 +303,6 @@ std::vector<ReshapeRelation> GetReshapeRelation(const Array<Expr> &shape_ori, co
       ori_size = ori_size * shape_ori[ii];
     }
     ori_size = Simplify(ori_size);
-    auto change_size = Expr(1);
     auto j_start = j;
     // The ending 1 is eliminated by reshape, for example, (x) = reshape((x, 1, 1))：
     if (j_start == shape_change.size() && i == index_groups.size() - 1 && is_const_int(ori_size, 1) &&
@@ -243,26 +310,14 @@ std::vector<ReshapeRelation> GetReshapeRelation(const Array<Expr> &shape_ori, co
       return reshape_relations;
     }
 
-    bool has_found_reshape = false;
-    for (; j < shape_change.size(); ++j) {
-      change_size = Simplify(change_size * shape_change[j]);
-      // For the ‘1’ in the shape_change, it may correspond to the current group or the next group.
-      // It is difficult to determine the specific group of ‘1’, and some strategies may need to be added later.
-      // The ‘1’ is currently correspond to the the next group.
-      if (is_zero(Simplify(change_size - ori_size))) {
-        has_found_reshape = true;
-        ++j;
-        break;
-      }
-    }
-    if (!has_found_reshape) {
-      return std::vector<ReshapeRelation>();
+    if (!HasFoundReshape(j, shape_change, ori_size)) {
+      return {};
     }
     if (i == index_groups.size() - 1 && j < shape_change.size()) {
       // The shape after reshape has extra 1 at the end，for example, (x， 1， 1) = reshape((x))：
       while (j < shape_change.size()) {
         if (!is_const_int(Simplify(shape_change[j]), 1)) {
-          return std::vector<ReshapeRelation>();
+          return {};
         }
         ++j;
       }
@@ -271,8 +326,7 @@ std::vector<ReshapeRelation> GetReshapeRelation(const Array<Expr> &shape_ori, co
 
     CHECK(type == "input" || type == "output");
     // Let some the ‘1’ correspond to the current group.
-    if (type == "input" && index_group.is_broadcast && i < index_groups.size() - 1 &&
-        !is_const_int(shape_ori[index_group_end], 1)) {
+    if (CheckInputBroadcast(type, index_groups, i, shape_ori)) {
       while (shape_reshape.size() < indexs.size() && j < shape_change.size() &&
              is_const_int(Simplify(shape_change[j]), 1)) {
         shape_reshape.push_back(shape_change[j]);
@@ -474,5 +528,22 @@ Stmt ElimDuplicateInputs::Mutate_(const Store *op, const Stmt &s) {
     }
   }
   return IRMutator::Mutate_(op, s);
+}
+
+Map<std::string, NodeRef> SetBuildInfo(const BuildInfo &info) {
+  Array<Expr> input_names_arr;
+  for (const auto &name : info.input_names) {
+    input_names_arr.push_back(Expr(name));
+  }
+  Array<Expr> output_names_arr;
+  for (const auto &name : info.output_names) {
+    output_names_arr.push_back(Expr(name));
+  }
+  Map<std::string, NodeRef> build_info;
+  build_info.Set("op", Expr(info.kernel_name));
+  build_info.Set("process", Expr(info.opt.target));
+  build_info.Set("input_names", input_names_arr);
+  build_info.Set("output_names", output_names_arr);
+  return build_info;
 }
 }  // namespace akg
