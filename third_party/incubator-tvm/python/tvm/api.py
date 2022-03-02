@@ -638,6 +638,7 @@ def decl_buffer(shape,
         data, dtype, shape, strides, elem_offset, name, scope,
         data_alignment, offset_factor, buffer_type)
 
+
 def layout(layout_str):
     """Create a layout node from a string.
 
@@ -658,6 +659,7 @@ def layout(layout_str):
         The created layout
     """
     return _api_internal._Layout(layout_str)
+
 
 def bijective_layout(src_layout, dst_layout):
     """Create a bijective layout mapping.
@@ -680,6 +682,7 @@ def bijective_layout(src_layout, dst_layout):
     if isinstance(dst_layout, str):
         dst_layout = layout(dst_layout)
     return _api_internal._BijectiveLayout(src_layout, dst_layout)
+
 
 def _IterVar(dom, name, iter_type, thread_tag=''):
     """Internal function to create IterVar
@@ -714,6 +717,10 @@ def _IterVar(dom, name, iter_type, thread_tag=''):
     name = name if name else 'iter'
     v = var(name)
     return _api_internal._IterVar(dom, v, iter_type, thread_tag)
+
+
+def iter_var_api(dom, name, iter_type, thread_tag=''):
+    return _IterVar(dom, name, iter_type, thread_tag)
 
 
 def thread_axis(dom=None, tag='', name=''):
@@ -891,6 +898,7 @@ def comm_reducer(fcombine, fidentity, name="reduce"):
     reducer.__doc__ = doc_str.format(name)
     return reducer
 
+
 def div(a, b):
     """Compute a / b as in C/C++ semantics.
 
@@ -1049,7 +1057,7 @@ def floormod(a, b):
 
 _init_api("tvm.api")
 
-#pylint: disable=unnecessary-lambda
+# pylint: disable=unnecessary-lambda
 sum = comm_reducer(lambda x, y: x+y, lambda t: const(0, dtype=t), name="sum")
 min = comm_reducer(lambda x, y: _make._OpMin(x, y), max_value, name='min')
 max = comm_reducer(lambda x, y: _make._OpMax(x, y), min_value, name='max')

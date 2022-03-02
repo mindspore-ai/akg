@@ -22,25 +22,6 @@ from akg.utils.format_transform import get_shape
 
 _init_api("akg.autodiff")
 
-def collect_subtensors_by_name(tensor, name, result):
-    """
-    find all the subtensors with names matched the pattern `name`.
-
-    Args:
-        tensor: An input tensor.
-        name: the `name` pattern to be matched.
-        result: list of all subtensors found with name matched.
-
-    Returns:
-        list of all subtensors found with name matched.
-    """
-    for child in tensor.op.input_tensors:
-        child_result = collect_by_name(child, name, result)
-        result.extend(child_result)
-    if tensor.op.name.find(name) != -1:
-        result.append([tensor])
-    return result
-
 
 @akg.tvm.register_func("akg.autodiff.export_to_DOT")
 def export_to_dot(tensors, filename="test.dot"):
@@ -75,7 +56,8 @@ def export_to_dot(tensors, filename="test.dot"):
         # If name is duplicated, a postfix '-r' + number is add to the end
         for child in tensor.op.input_tensors:
             if child not in exported_op_nodes:
-                exported_op_nodes, repeat_name = recursive_collect_nodes(child, exported_op_nodes, repeat_name)
+                exported_op_nodes, repeat_name = recursive_collect_nodes(
+                    child, exported_op_nodes, repeat_name)
         return exported_op_nodes, repeat_name
 
     def export_node_name(tensor):
@@ -109,21 +91,21 @@ def export_to_dot(tensors, filename="test.dot"):
         for child in tensor.op.input_tensors:
             recursive_export_nodes_name(child, f, exported_op_nodes)
 
-        if isinstance(tensor.op, akg.tvm.tensor.ComputeOp):
-            if isinstance(tensor.op.body[0], (akg.tvm.expr.Mul, akg.tvm.expr.Add, akg.tvm.expr.Sub, akg.tvm.expr.Div)):
-                if len(tensor.op.input_tensors) < 2:
-                    if isinstance(tensor.op.body[0].a, akg.tvm.expr.FloatImm):
-                        tensor_node_name = '    "Const_a_' + exported_op_nodes[tensor] +\
-                                           '" [label = "' + str(tensor.op.body[0].a.value) + '\\n' +\
-                                           tensor.op.body[0].a.dtype +\
-                                           '"; shape = box; style = filled; color = lightseagreen];'
-                        f.write(tensor_node_name + "\n")
-                    if isinstance(tensor.op.body[0].b, akg.tvm.expr.FloatImm):
-                        tensor_node_name = '    "Const_b_' + exported_op_nodes[tensor] +\
-                                           '" [label = "' + str(tensor.op.body[0].b.value) + '\\n' +\
-                                           tensor.op.body[0].b.dtype +\
-                                           '"; shape = box; style = filled; color = lightseagreen];'
-                        f.write(tensor_node_name + "\n")
+        if isinstance(tensor.op, akg.tvm.tensor.ComputeOp) and \
+                isinstance(tensor.op.body[0], (akg.tvm.expr.Mul, akg.tvm.expr.Add, akg.tvm.expr.Sub, akg.tvm.expr.Div)) and \
+                len(tensor.op.input_tensors) < 2:
+            if isinstance(tensor.op.body[0].a, akg.tvm.expr.FloatImm):
+                tensor_node_name = '    "Const_a_' + exported_op_nodes[tensor] +\
+                                   '" [label = "' + str(tensor.op.body[0].a.value) + '\\n' +\
+                                   tensor.op.body[0].a.dtype +\
+                                   '"; shape = box; style = filled; color = lightseagreen];'
+                f.write(tensor_node_name + "\n")
+            if isinstance(tensor.op.body[0].b, akg.tvm.expr.FloatImm):
+                tensor_node_name = '    "Const_b_' + exported_op_nodes[tensor] +\
+                                   '" [label = "' + str(tensor.op.body[0].b.value) + '\\n' +\
+                                   tensor.op.body[0].b.dtype +\
+                                   '"; shape = box; style = filled; color = lightseagreen];'
+                f.write(tensor_node_name + "\n")
         f.write(export_node_name(tensor) + "\n")
 
     def recursive_export_edges(tensor, f, exported_op_nodes, exported_edges):
@@ -135,19 +117,19 @@ def export_to_dot(tensors, filename="test.dot"):
                 exported_edges.add((from_name, to_name))
                 f.write('    ' + from_name + " -> " + to_name
                         + '   [label = "' + export_tensor_shape(child.shape) + '"];\n')
-        if isinstance(tensor.op, akg.tvm.tensor.ComputeOp):
-            if isinstance(tensor.op.body[0], (akg.tvm.expr.Mul, akg.tvm.expr.Add, akg.tvm.expr.Sub, akg.tvm.expr.Div)):
-                if len(tensor.op.input_tensors) < 2:
-                    if isinstance(tensor.op.body[0].a, akg.tvm.expr.FloatImm):
-                        from_name = '"Const_a_' + exported_op_nodes[tensor] + '"'
-                        if (from_name, to_name) not in exported_edges:
-                            exported_edges.add((from_name, to_name))
-                            f.write('    ' + from_name + " -> " + to_name + '   [label = "(const)"];\n')
-                    if isinstance(tensor.op.body[0].b, akg.tvm.expr.FloatImm):
-                        from_name = '"Const_b_' + exported_op_nodes[tensor] + '"'
-                        if (from_name, to_name) not in exported_edges:
-                            exported_edges.add((from_name, to_name))
-                            f.write('    ' + from_name + " -> " + to_name + '   [label = "(const)"];\n')
+        if isinstance(tensor.op, akg.tvm.tensor.ComputeOp) and \
+                isinstance(tensor.op.body[0], (akg.tvm.expr.Mul, akg.tvm.expr.Add, akg.tvm.expr.Sub, akg.tvm.expr.Div)) and \
+                len(tensor.op.input_tensors) < 2:
+            if isinstance(tensor.op.body[0].a, akg.tvm.expr.FloatImm):
+                from_name = '"Const_a_' + exported_op_nodes[tensor] + '"'
+                if (from_name, to_name) not in exported_edges:
+                    exported_edges.add((from_name, to_name))
+                    f.write('    ' + from_name + " -> " + to_name + '   [label = "(const)"];\n')
+            if isinstance(tensor.op.body[0].b, akg.tvm.expr.FloatImm):
+                from_name = '"Const_b_' + exported_op_nodes[tensor] + '"'
+                if (from_name, to_name) not in exported_edges:
+                    exported_edges.add((from_name, to_name))
+                    f.write('    ' + from_name + " -> " + to_name + '   [label = "(const)"];\n')
         return exported_edges
 
     with open(filename, "w+") as f_out:
@@ -176,11 +158,11 @@ def export_to_dot(tensors, filename="test.dot"):
 variable_map = {}
 
 
-def register_variables(name, input, output):
+def register_variables(name, input_var, output_var):
     """register variables as a dictionary."""
     if not isinstance(name, str):
         raise ValueError("key {} is not str.".format(name))
-    variable_map[name] = [output, input]
+    variable_map[name] = [output_var, input_var]
 
 
 def get_variables(name):
@@ -345,7 +327,7 @@ def differentiate(output, inputs=None, head=None, ad_attrs=None, new_pld_array=N
         override_deps = []
 
     if fdiff is None:
-        fdiff = DiffBuildingBlock
+        fdiff = akg.autodiff.DiffBuildingBlock
 
     if override is not None:
         def modified_fdiff(out, inp, head, ad_attrs, new_pld_array, override=override, old_fdiff=fdiff, cache=None):
@@ -353,7 +335,8 @@ def differentiate(output, inputs=None, head=None, ad_attrs=None, new_pld_array=N
                 cache = {}
             if out in override:
                 if (out, head) not in cache:
-                    cache[(out, head)] = override[out][1](out, override[out][0], head, ad_attrs, new_pld_array)
+                    cache[(out, head)] = override[out][1](
+                        out, override[out][0], head, ad_attrs, new_pld_array)
                 idx = override[out][0].index(inp)
                 return cache[(out, head)][idx]
             return old_fdiff(out, inp, head, ad_attrs, new_pld_array)

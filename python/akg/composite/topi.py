@@ -16,11 +16,9 @@
 
 """composite topi"""
 import functools
-import inspect
 import itertools
 import operator
 import os
-import logging
 import importlib.util
 from pathlib import Path
 
@@ -337,7 +335,8 @@ def trans_data(inputs, attrs):
                 input_indices.append(output_indices[i])
             input_indices.append(m_indice)
             input_indices.append(n_indice)
-            res = tvm.if_then_else(tvm.any(m_indice >= m, n_indice >= n), tvm.const(0, dtype), data(*input_indices))
+            res = tvm.if_then_else(tvm.any(m_indice >= m, n_indice >= n),
+                                   tvm.const(0, dtype), data(*input_indices))
             return res
 
         output = tvm.compute(output_shape, fcompute, name=output_name)
@@ -421,7 +420,8 @@ def cumsum(inputs, attrs):
                 with ib.for_range(1, shape[axis], name="cum_idx") as m:
                     idx_pre = i0 + [m - 1] + i1 if not reverse else i0 + [shape[axis] - m] + i1
                     idx_cur = i0 + [m] + i1 if not reverse else i0 + [shape[axis] - 1 - m] + i1
-                    ib.store(dst, idx_cur, ib.load(dst, idx_pre) + ib.load(data, idx_cur if not exclusive else idx_pre))
+                    ib.store(dst, idx_cur, ib.load(dst, idx_pre) +
+                             ib.load(data, idx_cur if not exclusive else idx_pre))
         return ib.get()
 
     return tvm.extern(shape, [in_tensor], lambda ins, outs: kernel_ir(ins[0], outs[0]), name=output_name,
@@ -452,111 +452,107 @@ def cumprod(inputs, attrs):
                 with ib.for_range(1, shape[axis], name="cum_idx") as m:
                     idx_pre = i0 + [m - 1] + i1 if not reverse else i0 + [shape[axis] - m] + i1
                     idx_cur = i0 + [m] + i1 if not reverse else i0 + [shape[axis] - 1 - m] + i1
-                    ib.store(dst, idx_cur, ib.load(dst, idx_pre) * ib.load(data, idx_pre if exclusive else idx_cur))
+                    ib.store(dst, idx_cur, ib.load(dst, idx_pre) *
+                             ib.load(data, idx_pre if exclusive else idx_cur))
         return ib.get()
 
     return tvm.extern(shape, [in_tensor], lambda ins, outs: kernel_ir(ins[0], outs[0]), name=output_name,
                       dtype=in_tensor.dtype)
 
 
+def _dummy_func(*arg):
+    del arg
+    pass
+
+
+def _launch_kernel_from_source(inputs, op_attrs, source_str, real_inputs_num, is_backward):
+    hybrid_func = script(_dummy_func, capture={"source_str": source_str})
+    inputs = list(inputs)
+    # attr "autodiff" is for automatically generating backward op for a forward custom hybrid op;
+    # inputs for a backward op is like [input_1,input_2,...input_k, out_1,...out_m, dout_1,...dout_m],
+    # in which "input_i" refers to forward op's input, "out_i" refers to forward op's output
+    # and "dout_i" refers to forward op's dout;
+    if is_backward:
+        # get the number of real inputs from hybrid function's signature;
+        # inputs[:real_inputs_num] is equal to [input_1,input_2,...input_k], the real inputs of the forward op;
+        # compute forward output through forward hybrid function
+        res = hybrid_func(*inputs[:real_inputs_num], *op_attrs.values())
+        forward_ouput = res if isinstance(res, list) else [res]
+        # douts and outs should have the same length, so the num of douts is (len(inputs)-real_inputs_num)/2
+        if int(len(inputs)-real_inputs_num) <= 0:
+            raise ValueError(
+                "Cannot compute autodiff for function with no outputs/douts")
+        if int(len(inputs)-real_inputs_num) % 2 != 0:
+            raise ValueError(
+                "douts and douts should have the same length.")
+        dout = inputs[int((len(inputs)+real_inputs_num)/2):]
+        outputs = autodiff.SingleHybridOpDifferentiate(forward_ouput, inputs[:real_inputs_num], dout)
+        output = outputs if len(outputs) != 1 else outputs[0]
+    else:
+        output = hybrid_func(*inputs, *op_attrs.values())
+
+    return output
+
+
+def _launch_kernel_from_path(inputs, op_attrs, func_type, op_imply_path, func_name):
+    if not os.path.isfile(op_imply_path):
+        raise ValueError("Can't find file under path: {}".format(str(op_imply_path)))
+
+    custom_mod_name = Path(op_imply_path).resolve().stem
+    mod_spec = importlib.util.spec_from_file_location(
+        custom_mod_name, op_imply_path)
+    custom_mod = importlib.util.module_from_spec(mod_spec)
+    mod_spec.loader.exec_module(custom_mod)
+    func_kernel = getattr(custom_mod, func_name, None)
+
+    if func_kernel is None:
+        raise ValueError("Can't find the following function under module {}: {}".format(
+            custom_mod_name, func_name))
+
+    if "__wrapped__" in func_kernel.__dict__:
+        func_kernel = func_kernel.__dict__["__wrapped__"]
+    func_kernel.__globals__["tvm"] = globals()["tvm"]
+
+    if func_type == "ir_builder":
+        return func_kernel(inputs, op_attrs)
+    else:
+        inputs = list(inputs)
+        return func_kernel(*inputs, **op_attrs)
+
+
 @tvm.register_func("Custom")
 def custom(inputs, attrs):
-    op_desc_attr = []
-    source_str = ""
-    op_imply_path = ""
-    func_name = ""
-    func_type = ""
+    func_name = attrs["func_name"].value if "func_name" in attrs else ""
+    func_type = attrs["func_type"].value if "func_type" in attrs else ""
+    attr_names = attrs["attr_names"] if "attr_names" in attrs else []
+    op_attrs = {}
 
-    attr_names = []
-    for ext_arg in attrs.items():
-        attr_name = ext_arg[0]
-        if attr_name == "func_source_str":
-            source_str = ext_arg[1].value
-        elif attr_name == "op_imply_path":
-            op_imply_path = ext_arg[1].value
-        elif attr_name == "func_name":
-            func_name = ext_arg[1].value
-        elif attr_name == "func_type":
-            func_type = ext_arg[1].value
-        elif attr_name == "attr_names":
-            attr_names = ext_arg[1]
-        elif not (attr_name == "akg" or "_format" in attr_name):
-            # store the rest of op attr for op build
-            op_desc_attr.append(ext_arg)
+    if not func_type in ['hybrid', 'ir_builder', 'tvm_compute']:
+        raise ValueError("The func_type shall be one of ['hybrid', 'ir_builder', 'tvm_compute'], "
+                         "but get {}".format(func_type))
 
     if not isinstance(attr_names, (tvm.container.Array, tuple, list)):
         attr_names = [attr_names]
 
-    op_attrs = {}
-    ir_builder_attrs = {}
-    for ext_arg in op_desc_attr:
-        if func_type == "ir_builder":
-            # ir_builder functions take attrs as a dict/tvm.Map
-            ir_builder_attrs[ext_arg[0]] = ext_arg[1]
-        if ext_arg[0] in attr_names:
+    for ext_arg in attrs.items():
+        attr_name = ext_arg[0]
+        if attr_name in attr_names:
             op_attrs[ext_arg[0]] = ext_arg[1]
 
-    func_kernel = None
-    if len(source_str) > 0:
-        capture = locals()
-        capture["source_str"] = source_str
-
-        func_mod = compile(source_str, "", "exec")
-        exec(func_mod)
-        func_kernel = locals()[func_name]
-
-    elif len(op_imply_path) > 0:
-        if os.path.isfile(op_imply_path):
-            custom_mod_name = Path(op_imply_path).resolve().stem
-            mod_spec = importlib.util.spec_from_file_location(
-                custom_mod_name, op_imply_path)
-            custom_mod = importlib.util.module_from_spec(mod_spec)
-            mod_spec.loader.exec_module(custom_mod)
-            func_kernel = getattr(custom_mod, func_name, None)
-        else:
-            logging.error("Can't find file under path: %s",
-                          str(op_imply_path))
-    else:
-        logging.error(
-            "Neither source_str nor op_imply_path is provided in the json file")
-
-    if func_kernel is None:
-        logging.error(
-            "Failed in compiling op function from userdefine op")
-
-    output = None
     if func_type == "hybrid":
-        hybrid_func = script(func_kernel, capture=capture)
-        inputs = list(inputs)
-        # attr "autodiff" is for automatically generating backward op for a forward custom hybrid op;
-        # inputs for a backward op is like [input_1,input_2,...input_k, out_1,...out_m, dout_1,...dout_m], in which "input_i"
-        # refers to forward op's input, "out_i" refers to forward op's output and "dout_i" refers to forward op's dout;
-        if "autodiff" in attrs and bool(int(attrs["autodiff"])):
-            # get the number of real inputs from hybrid function's signature;
-            # inputs[:real_inputs_num] is equal to [input_1,input_2,...input_k], the real inputs of the forward op;
-            real_inputs_num = len(inspect.signature(func_kernel).parameters)
-            # compute forward output through forward hybrid function
-            res = hybrid_func(*inputs[:real_inputs_num], **op_attrs)
-            forward_ouput = res if isinstance(res, list) else [res]
-            # douts and outs should have the same length, so the num of douts is (len(inputs)-real_inputs_num)/2
-            if int(len(inputs)-real_inputs_num) <= 0:
-                logging.error(
-                    "Cannot coumpute autodiff for function with no outputs/douts")
-            if int(len(inputs)-real_inputs_num) % 2 != 0:
-                logging.error(
-                    "douts and douts should have the same length.")
-            dout = inputs[int((len(inputs)+real_inputs_num)/2):]
-            outputs = autodiff.SingleHybridOpDifferentiate(forward_ouput, inputs[:real_inputs_num], dout)
-            output = outputs if len(outputs) != 1 else outputs[0]
-        else:
-            output = hybrid_func(*inputs, **op_attrs)
-    elif func_type == "ir_builder":
-        output = func_kernel(inputs, ir_builder_attrs)
-    else:
-        inputs = list(inputs)
-        output = func_kernel(*inputs, **op_attrs)
+        if not "func_source_str" in attrs:
+            raise ValueError("Can't find the source str for the function: {}".format(func_name))
 
-    return output
+        source_str = attrs["func_source_str"].value
+
+        return _launch_kernel_from_source(inputs, op_attrs, source_str,
+                                          attrs["inputs_num"].value if "inputs_num" in attrs else len(inputs),
+                                          attrs["autodiff"].value if "autodiff" in attrs else False)
+
+    else:
+        return _launch_kernel_from_path(inputs, op_attrs, func_type,
+                                        attrs["imply_path"].value if "imply_path" in attrs else "",
+                                        func_name)
 
 
 @tvm.register_func("GatherNd")
@@ -808,6 +804,7 @@ def csr_reduce_sum(inputs, attrs):
 
     def gen_ir(data, row_idx, output):
         ib = tvm.ir_builder.create()
+
         def split_index(fused_idx):
             i = fused_idx // cum_shape[1]
             iter_idx = list(zip((fused_idx % x for x in cum_shape[1: -1]), cum_shape[2:]))
@@ -821,7 +818,7 @@ def csr_reduce_sum(inputs, attrs):
             with ib.for_range(0, end - start, name='j') as j:
                 pos = start + j
                 val = tvm.expr.Select(pos < end, ib.load(data, [pos] + k), tvm.const(0, data.dtype))
-                ib.scope_attr([tvm.api._IterVar((0, shape[1]), "j", 2)], "reduce_update", "")
+                ib.scope_attr([tvm.api.iter_var_api((0, shape[1]), "j", 2)], "reduce_update", "")
                 ib.store(output, [i] + k, val + ib.load(output, [i] + k))
         return ib.get()
 
@@ -854,7 +851,7 @@ def csrmv(inputs, _):
                 val = tvm.expr.Select(elem < row_end,
                                       ib.load(data, elem) * ib.load(weight, [ib.load(indices, elem), 0]),
                                       tvm.const(0, data.dtype))
-                ib.scope_attr([tvm.api._IterVar((0, weight.shape[0]), "idx", 2)], "reduce_update", "")
+                ib.scope_attr([tvm.api.iter_var_api((0, weight.shape[0]), "idx", 2)], "reduce_update", "")
                 temp = val + ib.load(out, [row, 0])
                 ib.store(out, [row, 0], temp)
         return ib.get()
@@ -918,6 +915,7 @@ def csr_mul(inputs, attrs):
                       name=output_name,
                       attrs=attrs)
 
+
 @tvm.register_func("CSRGather")
 def csr_gather(inputs, attrs):
     row_idx, col_idx, dense = inputs
@@ -950,6 +948,7 @@ def csr_gather(inputs, attrs):
                       name=output_name,
                       attrs=attrs)
 
+
 @tvm.register_func("CSR2COO")
 def csr2coo(inputs, attrs):
     indptr = inputs[0]
@@ -977,6 +976,7 @@ def csr2coo(inputs, attrs):
                       dtype=indptr.dtype,
                       out_buffers=[out_buf],
                       name=output_name)
+
 
 @tvm.register_func("COO2CSR")
 def coo2csr(inputs, attrs):
