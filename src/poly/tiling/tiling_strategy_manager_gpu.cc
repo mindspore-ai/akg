@@ -1021,7 +1021,14 @@ bool GpuStrategy::IsVectorized() {
 
   for (auto i : tensors_shape) {
     CHECK(i[i.size() - 1].as<IntImm>());
-    if (i[i.size() - 1].as<IntImm>()->value % SafeDivisor(vectorized_bytes_) != 0) {
+    auto i_value = i[i.size() - 1].as<IntImm>()->value;
+    if (i_value % SafeDivisor(vectorized_bytes_) != 0) {
+      return false;
+    }
+
+    auto first_tensor = tensors_shape[0];
+    auto first_value = first_tensor[first_tensor.size() - 1].as<IntImm>()->value;
+    if(template_ == Template::PAD_OP && i_value != first_value){
       return false;
     }
   }
