@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -42,6 +42,7 @@ class ScheduleTreeAnalyzer {
   std::unique_ptr<TileAxis> root_{nullptr};
 
   std::unique_ptr<TileAxis> Build(const Stmt &stmt);
+
   void AnalyzeCubeInfo();
 
  private:
@@ -92,6 +93,9 @@ class ScheduleTreeAnalyzer {
   bool AnalyzeScheduleTree();
   void GetDimRangeFromTree(const isl::schedule &sch);
   void GetCandidatesInSequence(size_t seq, const isl::pw_aff_list &pa_list, bool is_outer = true, bool mc_sup = false);
+  void UpdateCandidates(std::vector<std::string> all_var_names, const std::string &var, const std::string &pa_name,
+                        size_t seq, bool is_outer, bool mc_sup);
+
   bool GetPosShiftedTileRange(const std::string &vname, const std::string &actual_name,
                               std::pair<int, int> &old_ranges);
   bool GetNegShiftedTileRange(const std::string &vname, const std::string &actual_name,
@@ -101,19 +105,41 @@ class ScheduleTreeAnalyzer {
   void AnalyzeHalide(const Stmt &stmt);
   void AddLoopRangeFromBand();
   void AddLoopRangeFromIfs();
+  std::vector<Expr> SeparateAndInCondition(const Expr &condition);
+  void AddLoopRangeInConditions(std::vector<Expr> if_expr, const For *loop);
+  void DecodeGreaterEqual(const GE *ge, const For *loop);
+  void DecodeLessEqual(const LE *le, const For *loop);
+
   void AddLoopDataSize();
   bool MatchNodeWithLoop(std::unordered_set<const For *> &matched, TileNode &node, const For *loop);
+  void UpdateMatchedNode(std::unordered_set<const For *> &matched, TileNode &node, const For *loop);
+
   bool MatchNodeWithDynamicLoop(std::unordered_set<const For *> &matched, TileNode &node, const For *loop);
   static int GetLayerIndex(const std::string &var_name);
 
+  void TryMatchTileNodes();
+  void TrySortTileNodes();
+
   void CreateTileAxes();
-  void CreateAxisForUndefinedLoop(TileAxis *);
+
+  const For *GetSameNameLoop(const For *loop);
+  TileAxis *CreateStaticUndefinedLoop(const For *loop, TileAxis *last_axis);
+  TileAxis *CreateDynamicUndefinedLoop(const For *loop, TileAxis *last_axis);
+
+  void CreateAxisForUndefinedLoop(TileAxis *last_axis);
+
   void RecordTreeRanges(TileAxis *axis, const For *loop);
 
+  VarNames GetConvVarInArg(Expr arg, bool add_num);
   void MatchConvFilterVarNames(const Call *call);
   void MatchConvVarNames(const Call *call);
   void MatchGemmVarNames(std::vector<const Call *> op_list);
   Band GetPreviousLoops(const For *loop);
+
+  std::vector<const Call *> GetCallListInProvides(std::vector<const Provide *> pros, const std::string &target_name);
+  void SortMatrixInCBAOrder(std::vector<const Call *> &op_list);
+  void MatchCubeVarNames(std::vector<const Call *> op_list);
+  void AnalyzeAxisType(const For *loop);
 };
 }  // namespace poly
 }  // namespace ir

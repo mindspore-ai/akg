@@ -181,7 +181,9 @@ void ScheduleTreeAnalyzer::GetCandidatesInSequence(size_t seq, const isl::pw_aff
     pa.foreach_piece([&](const isl::set &s, const isl::aff &a) -> void {
       has_var = has_var || pa.nonneg_set().max_val(a).is_infty();
     });
-    if (!has_var) continue;
+    if (!has_var) {
+      continue;
+    }
 
     std::vector<std::string> sp_var = akg::common::Split(pa.to_str(), "->");
     CHECK_GE(sp_var.size(), 2U) << "error, missing -> in schedule tree analyze";
@@ -189,57 +191,65 @@ void ScheduleTreeAnalyzer::GetCandidatesInSequence(size_t seq, const isl::pw_aff
     std::string var = sp_var.back();
     FormatName(var);
 
-    for (size_t pos = 0; pos < all_var_names.size(); ++pos) {
-      std::string n = all_var_names[pos];
-      if (var.find(n) == std::string::npos) continue;
-      auto dr = dim_range_.find(pa_name);
-      CHECK(dr != dim_range_.end()) << "Cannot find " << pa_name << "'s dim range";
-      std::vector<std::pair<int64_t, Expr>> ranges = dr->second;
-      CHECK(!ranges.empty() && pos <= ranges.size() - 1) << "Cannot map " << pa_name << " 's range";
-      if (const auto var_name = ranges[pos].second.as<StringImm>()) {
-        if (var != n) continue;
-        auto cit = candidates_.find(seq);
-        if (cit == candidates_.end()) {
-          candidates_[seq] = {
-            TilePos{is_outer, pos, pa_name, var, n, ranges[pos].first, Expr(var_name->value), mc_sup}};
-        } else {
-          candidates_[seq].emplace_back(
-            TilePos{is_outer, pos, pa_name, var, n, ranges[pos].first, Expr(var_name->value), mc_sup});
-        }
-      } else if (const auto mr_imm = ranges[pos].second.as<IntImm>()) {
-        int mr = mr_imm->value;
-        std::pair<int, int> trange(0, mr);
-        if (var != n) {
-          std::pair<int, int> new_range = trange;
-          // substring of name matched, continue
-          if (!GetPosShiftedTileRange(var, n, new_range) && !GetNegShiftedTileRange(var, n, new_range)) {
-            continue;
-          }
-          trange = new_range;
-        }
-        auto cit = candidates_.find(seq);
-        if (cit == candidates_.end()) {
-          candidates_[seq] = {TilePos{is_outer, pos, pa_name, var, n, trange.first, Expr(trange.second), mc_sup}};
-        } else {
-          bool is_same = false;
-          for (auto &tp : cit->second) {
-            const auto tm = tp.max_range.as<IntImm>();
-            if ((tp.min_range == trange.first && (tm && tm->value == trange.second)) ||
-                (tp.var_name == var && tp.var_pos == pos)) {
-              is_same = true;
-              break;
-            }
-          }
-          if (!is_same) {
-            candidates_[seq].emplace_back(
-              TilePos{is_outer, pos, pa_name, var, n, trange.first, Expr(trange.second), mc_sup});
-          }
-        }
-      } else {
-        LOG(FATAL) << "Unknown type " << ranges[pos].second;
-      }
-      break;
+    UpdateCandidates(all_var_names, var, pa_name, seq, is_outer, mc_sup);
+  }
+}
+
+void ScheduleTreeAnalyzer::UpdateCandidates(std::vector<std::string> all_var_names, const std::string &var,
+                                            const std::string &pa_name, size_t seq, bool is_outer, bool mc_sup) {
+  for (size_t pos = 0; pos < all_var_names.size(); ++pos) {
+    std::string n = all_var_names[pos];
+    if (var.find(n) == std::string::npos) {
+      continue;
     }
+    auto dr = dim_range_.find(pa_name);
+    CHECK(dr != dim_range_.end()) << "Cannot find " << pa_name << "'s dim range";
+    std::vector<std::pair<int64_t, Expr>> ranges = dr->second;
+    CHECK(!ranges.empty() && pos <= ranges.size() - 1) << "Cannot map " << pa_name << " 's range";
+    if (const auto var_name = ranges[pos].second.as<StringImm>()) {
+      if (var != n) {
+        continue;
+      }
+      auto cit = candidates_.find(seq);
+      if (cit == candidates_.end()) {
+        candidates_[seq] = {TilePos{is_outer, pos, pa_name, var, n, ranges[pos].first, Expr(var_name->value), mc_sup}};
+      } else {
+        candidates_[seq].emplace_back(
+          TilePos{is_outer, pos, pa_name, var, n, ranges[pos].first, Expr(var_name->value), mc_sup});
+      }
+    } else if (const auto mr_imm = ranges[pos].second.as<IntImm>()) {
+      int mr = mr_imm->value;
+      std::pair<int, int> trange(0, mr);
+      if (var != n) {
+        std::pair<int, int> new_range = trange;
+        // substring of name matched, continue
+        if (!GetPosShiftedTileRange(var, n, new_range) && !GetNegShiftedTileRange(var, n, new_range)) {
+          continue;
+        }
+        trange = new_range;
+      }
+      auto cit = candidates_.find(seq);
+      if (cit == candidates_.end()) {
+        candidates_[seq] = {TilePos{is_outer, pos, pa_name, var, n, trange.first, Expr(trange.second), mc_sup}};
+      } else {
+        bool is_same = false;
+        for (auto &tp : cit->second) {
+          const auto tm = tp.max_range.as<IntImm>();
+          if ((tp.min_range == trange.first && (tm && tm->value == trange.second)) ||
+              (tp.var_name == var && tp.var_pos == pos)) {
+            is_same = true;
+            break;
+          }
+        }
+        if (!is_same) {
+          candidates_[seq].emplace_back(
+            TilePos{is_outer, pos, pa_name, var, n, trange.first, Expr(trange.second), mc_sup});
+        }
+      }
+    } else {
+      LOG(FATAL) << "Unknown type " << ranges[pos].second;
+    }
+    break;
   }
 }
 
@@ -432,68 +442,92 @@ void ScheduleTreeAnalyzer::AddLoopRangeFromBand() {
   }
 }
 
+std::vector<Expr> ScheduleTreeAnalyzer::SeparateAndInCondition(const Expr &condition) {
+  std::vector<Expr> if_expr;
+  auto Analyze = [&if_expr](const NodeRef &op) {
+    if (const And *and_op = op.as<And>()) {
+      if_expr.emplace_back(and_op->a);
+      if_expr.emplace_back(and_op->b);
+    }
+  };
+  air::ir::PostOrderVisit(condition, Analyze);
+  if (if_expr.empty()) {
+    if_expr.emplace_back(condition);
+  }
+  return if_expr;
+}
+
+void ScheduleTreeAnalyzer::DecodeGreaterEqual(const GE *ge, const For *loop) {
+  const auto var = ge->a.as<Variable>();
+  const auto rshift = ge->b.as<IntImm>();
+  if (var == nullptr || rshift == nullptr) {
+    return;
+  }
+  Band preloops = GetPreviousLoops(loop);
+  while (!preloops.empty()) {
+    const For *l = preloops.back();
+    CHECK(l);
+    preloops.pop_back();
+    if (l->loop_var->name_hint == var->name_hint) {
+      std::vector<std::pair<int64_t, int64_t>> new_ranges;
+      for (auto r : loop_range_map_[l]) {
+        new_ranges.emplace_back(std::make_pair(rshift->value, r.second));
+      }
+      loop_range_map_[l].insert(loop_range_map_[l].begin(), new_ranges.begin(), new_ranges.end());
+      break;
+    }
+  }
+}
+
+void ScheduleTreeAnalyzer::DecodeLessEqual(const LE *le, const For *loop) {
+  const auto var = le->a.as<Variable>();
+  const auto lshift = le->b.as<IntImm>();
+  if (var == nullptr || lshift == nullptr) {
+    return;
+  }
+  Band preloops = GetPreviousLoops(loop);
+  while (!preloops.empty()) {
+    const For *l = preloops.back();
+    CHECK(l);
+    preloops.pop_back();
+    if (l->loop_var->name_hint != var->name_hint) {
+      continue;
+    }
+    std::vector<std::pair<int64_t, int64_t>> new_ranges;
+    for (auto r : loop_range_map_[l]) {
+      new_ranges.emplace_back(std::make_pair(r.first, lshift->value + 1));
+    }
+    loop_range_map_[l].insert(loop_range_map_[l].begin(), new_ranges.begin(), new_ranges.end());
+    break;
+  }
+}
+
+void ScheduleTreeAnalyzer::AddLoopRangeInConditions(std::vector<Expr> if_expr, const For *loop) {
+  for (const auto &e : if_expr) {
+    if (const auto ge = e.as<GE>()) {
+      DecodeGreaterEqual(ge, loop);
+    } else if (const auto le = e.as<LE>()) {
+      DecodeLessEqual(le, loop);
+    }
+  }
+}
+
 void ScheduleTreeAnalyzer::AddLoopRangeFromIfs() {
   for (auto &it : ifs_map_) {
+    const For *loop = it.first;
     std::vector<const IfThenElse *> ifs = it.second;
     for (auto cond : ifs) {
-      std::deque<Expr> if_expr;
-      auto Analyze = [&if_expr](const NodeRef &op) {
-        if (const And *and_op = op.as<And>()) {
-          if_expr.emplace_back(and_op->a);
-          if_expr.emplace_back(and_op->b);
-        }
-      };
-      air::ir::PostOrderVisit(cond->condition, Analyze);
-      if (if_expr.empty()) if_expr.emplace_back(cond->condition);
-
-      for (const auto &e : if_expr) {
-        if (const auto ge = e.as<GE>()) {
-          const auto var = ge->a.as<Variable>();
-          const auto rshift = ge->b.as<IntImm>();
-          if (var == nullptr || rshift == nullptr) {
-            continue;
-          }
-          Band preloops = GetPreviousLoops(it.first);
-          while (!preloops.empty()) {
-            const For *l = preloops.back();
-            preloops.pop_back();
-            if (l->loop_var->name_hint == var->name_hint) {
-              std::vector<std::pair<int64_t, int64_t>> new_ranges;
-              for (auto r : loop_range_map_[l]) {
-                new_ranges.emplace_back(std::make_pair(rshift->value, r.second));
-              }
-              loop_range_map_[l].insert(loop_range_map_[l].begin(), new_ranges.begin(), new_ranges.end());
-              break;
-            }
-          }
-        } else if (const auto le = e.as<LE>()) {
-          const auto var = le->a.as<Variable>();
-          const auto lshift = le->b.as<IntImm>();
-          if (var && lshift) {
-            Band preloops = GetPreviousLoops(it.first);
-            while (!preloops.empty()) {
-              const For *l = preloops.back();
-              preloops.pop_back();
-              if (l->loop_var->name_hint != var->name_hint) {
-                continue;
-              }
-              std::vector<std::pair<int64_t, int64_t>> new_ranges;
-              for (auto r : loop_range_map_[l]) {
-                new_ranges.emplace_back(std::make_pair(r.first, lshift->value + 1));
-              }
-              loop_range_map_[l].insert(loop_range_map_[l].begin(), new_ranges.begin(), new_ranges.end());
-              break;
-            }
-          }
-        }
-      }
+      std::vector<Expr> if_expr = SeparateAndInCondition(cond->condition);
+      AddLoopRangeInConditions(if_expr, loop);
     }
   }
 }
 
 void ScheduleTreeAnalyzer::AddLoopDataSize() {
   for (const auto &it : provides_map_) {
-    if (it.first == nullptr) continue;
+    if (it.first == nullptr) {
+      continue;
+    }
     std::vector<const Provide *> pros = it.second;
     for (const Provide *p : pros) {
       int data_size = analyzer_->scop_info_.user_config_.GetDataBytes(p->func->func_name());
@@ -512,7 +546,9 @@ void ScheduleTreeAnalyzer::AddLoopDataSize() {
       Band pre_loops = GetPreviousLoops(it.first);
       for (auto loop : pre_loops) {
         for (const auto &name : related_name) {
-          if (name != loop->loop_var.get()->name_hint) continue;
+          if (name != loop->loop_var.get()->name_hint) {
+            continue;
+          }
           loop_data_size_map_[loop] = std::make_pair(p->func->func_name(), data_size);
           break;
         }
@@ -564,46 +600,69 @@ bool ScheduleTreeAnalyzer::MatchNodeWithDynamicLoop(std::unordered_set<const For
 
 bool ScheduleTreeAnalyzer::MatchNodeWithLoop(std::unordered_set<const For *> &matched, TileNode &node,
                                              const For *loop) {
-  if (matched.find(loop) != matched.end()) return false;
+  if (matched.find(loop) != matched.end()) {
+    return false;
+  }
   auto it = loop_range_map_.find(loop);
-  if (it == loop_range_map_.end()) return false;
+  if (it == loop_range_map_.end()) {
+    return false;
+  }
   std::vector<std::pair<int64_t, int64_t>> ranges = it->second;
   CHECK(loop);
   std::string var_name = loop->loop_var.get()->name_hint;
   int layer_index = GetLayerIndex(var_name);
-  if (layer_index == -1) return false;
-  if (node.is_outer && static_cast<int>(node.axis) != layer_index) return false;
+  if (layer_index == -1) {
+    return false;
+  }
+  if (node.is_outer && static_cast<int>(node.axis) != layer_index) {
+    return false;
+  }
   for (auto r : ranges) {
     const auto nm = node.range_max.as<IntImm>();
-    if (nm == nullptr) continue;
-    if ((node.range_min == r.first) && (nm->value == r.second)) {
-      // strict match
-      node.loop = loop;
-      auto it1 = this->loop_data_size_map_.find(loop);
-      if (it1 == this->loop_data_size_map_.end()) continue;
-      node.data_size = it1->second;
-      matched.insert(loop);
-      if (!node.is_outer) node.axis = layer_index;
-      return true;
-    } else if ((node.range_min == r.second) || (nm->value == r.first) || (nm->value - 1 == r.first) ||
-               ((node.range_min != 0 || r.first != 0) && ((node.range_min == r.first) || (nm->value == r.second)))) {
+    if (nm == nullptr) {
+      continue;
+    }
+    bool left_contain = (node.range_min == r.first);
+    bool right_contain = (nm->value == r.second);
+    bool has_shift = (node.range_min != 0 || r.first != 0);
+
+    bool strict_match = left_contain && right_contain;
+    bool is_concat = (node.range_min == r.second) || (nm->value == r.first) || (nm->value - 1 == r.first);
+    bool is_contain = (has_shift && (left_contain || right_contain));
+    if (strict_match || is_concat || is_contain) {
       // shift match has two cases:
       // 1) concat (A.max == B.min or A.min == B.max) e.g. A = [0, 37] B = [37, 2331]
       // 2) contain ((A.min != 0 or B.min != 0) and (A.max == B.max (Left contain) or A.min == B.min (Right contain)))
       // e.g. A = [0, 2331] B = [37, 2331]
-      node.loop = loop;
-      auto it2 = this->loop_data_size_map_.find(loop);
-      if (it2 == this->loop_data_size_map_.end()) continue;
-      node.data_size = it2->second;
-      matched.insert(loop);
-      if (!node.is_outer) node.axis = layer_index;
+      UpdateMatchedNode(matched, node, loop);
       return true;
     }
   }
   return false;
 }
 
-void ScheduleTreeAnalyzer::CreateTileAxes() {
+void ScheduleTreeAnalyzer::UpdateMatchedNode(std::unordered_set<const For *> &matched, TileNode &node,
+                                             const For *loop) {
+  node.loop = loop;
+  auto it = this->loop_data_size_map_.find(loop);
+  if (it == this->loop_data_size_map_.end()) {
+    return;
+  }
+  node.data_size = it->second;
+  matched.insert(loop);
+
+  if (!node.is_outer) {
+    CHECK(loop);
+    std::string var_name = loop->loop_var.get()->name_hint;
+    int layer_index = GetLayerIndex(var_name);
+    if (layer_index == -1) {
+      return;
+    }
+    node.axis = layer_index;
+  }
+}
+
+void ScheduleTreeAnalyzer::TryMatchTileNodes() {
   std::unordered_set<const For *> matched;
   std::vector<int> unmatched_pos;
   for (size_t i = 0; i < tile_nodes_.size(); ++i) {
@@ -613,9 +672,13 @@ void ScheduleTreeAnalyzer::CreateTileAxes() {
     for (auto loop : band) {
       match =
         MatchNodeWithLoop(matched, tile_nodes_[i], loop) || MatchNodeWithDynamicLoop(matched, tile_nodes_[i], loop);
-      if (match) break;
+      if (match) {
+        break;
+      }
     }
-    if (!match) unmatched_pos.emplace_back(i);
+    if (!match) {
+      unmatched_pos.emplace_back(i);
+    }
   }
 
   for (int unmatched_po : unmatched_pos) {
@@ -624,35 +687,44 @@ void ScheduleTreeAnalyzer::CreateTileAxes() {
       for (auto loop : band) {
         match = MatchNodeWithLoop(matched, tile_nodes_[unmatched_po], loop) ||
                 MatchNodeWithDynamicLoop(matched, tile_nodes_[unmatched_po], loop);
-        if (match) break;
+        if (match) {
+          break;
+        }
       }
       if (match) break;
     }
   }
+}
 
-  TileAxis *last_axis = root_.get();
-  auto SortNodes = [&](const TileNode &n1, const TileNode &n2) {
+void ScheduleTreeAnalyzer::TrySortTileNodes() {
+  auto SortNodes = [this](const TileNode &n1, const TileNode &n2) {
     if (n1.index != n2.index) {
       return n1.index < n2.index;
     } else {
       if (n1.axis != n2.axis) {
         return n1.axis < n2.axis;
-      } else {
-        if (n1.loop != nullptr && n2.loop != nullptr) {
-          if (analyzer_->arith_ana_.CanProve(n1.loop->min == n2.loop->min)) {
-            return !analyzer_->arith_ana_.CanProve(n1.loop->extent >= n2.loop->extent);
-          } else if (analyzer_->arith_ana_.CanProve(n1.loop->extent == n2.loop->extent)) {
-            return !analyzer_->arith_ana_.CanProve(n2.loop->min < n1.loop->min);
-          } else {
-            return true;
-          }
+      } else if (n1.loop != nullptr && n2.loop != nullptr) {
+        if (analyzer_->arith_ana_.CanProve(n1.loop->min == n2.loop->min)) {
+          return !analyzer_->arith_ana_.CanProve(n1.loop->extent >= n2.loop->extent);
+        } else if (analyzer_->arith_ana_.CanProve(n1.loop->extent == n2.loop->extent)) {
+          return !analyzer_->arith_ana_.CanProve(n2.loop->min < n1.loop->min);
+        } else {
+          return true;
         }
+      } else {
         return n1.loop != nullptr;
       }
     }
   };
 
   std::sort(tile_nodes_.begin(), tile_nodes_.end(), SortNodes);
+}
+
+void ScheduleTreeAnalyzer::CreateTileAxes() {
+  TryMatchTileNodes();
+
+  TrySortTileNodes();
+
   auto InsertDefinedLoop = [this](const TileNode &n) {
     if (n.range_max.as<IntImm>()) {
       defined_static_loop_.emplace_back(n.loop);
@@ -660,9 +732,15 @@ void ScheduleTreeAnalyzer::CreateTileAxes() {
       defined_dynamic_loop_.emplace_back(n.loop);
     }
   };
+
+  TileAxis *last_axis = root_.get();
   for (const auto &node : tile_nodes_) {
-    if (node.loop == nullptr) continue;
-    if (node.index == last_axis->index + 1) last_axis = root_.get();
+    if (node.loop == nullptr) {
+      continue;
+    }
+    if (node.index == last_axis->index + 1) {
+      last_axis = root_.get();
+    }
     if (static_cast<int>(node.axis) > last_axis->dim_axis) {
       std::unique_ptr<TileAxis> cur_axis(new (std::nothrow) TileAxis(
         last_axis, node.index, static_cast<int>(node.axis), node.mc_sup, node.data_size, !node.is_outer, analyzer_));
@@ -685,87 +763,111 @@ void ScheduleTreeAnalyzer::CreateTileAxes() {
   CreateAxisForUndefinedLoop(last_axis);
 }
 
-void ScheduleTreeAnalyzer::CreateAxisForUndefinedLoop(TileAxis *last_axis) {
-  auto GetSameNameLoop = [this](const For *l) -> const For * {
-    CHECK(l);
-    for (auto dl : defined_static_loop_) {
-      if (dl->loop_var.get()->name_hint == l->loop_var.get()->name_hint) return dl;
-    }
-    return nullptr;
-  };
-  std::stringstream ss;
-  for (auto loop : loop_seq_) {
-    if (loop_range_map_.find(loop) != loop_range_map_.end() &&
-        std::find(defined_static_loop_.begin(), defined_static_loop_.end(), loop) == defined_static_loop_.end()) {
-      auto snl = GetSameNameLoop(loop);
-      bool matched = false;
-      if (snl != nullptr) {
-        ss << "Same name loop " << loop << " with range " << loop->min << "," << loop->extent;
-        std::vector<TileAxis *> stack;
-        stack.emplace_back(last_axis);
-        while (!matched && !stack.empty()) {
-          TileAxis *cur = stack.back();
-          stack.pop_back();
-          for (auto i = 0u; i < cur->loops.size(); ++i) {
-            if (cur->loops[i] == snl) {
-              cur->LinkToLoop(loop);
-              RecordTreeRanges(cur, loop);
-              matched = true;
-              break;
-            }
-          }
-          if (cur->parent != nullptr) {
-            if (cur->parent->index == last_axis->index) {
-              stack.emplace_back(cur->parent);
-              for (size_t i = 0; i < cur->parent->children.size(); ++i) {
-                if (cur->parent->children[i].get() != cur && cur->parent->children[i].get()->index == last_axis->index)
-                  stack.emplace_back(cur->parent->children[i].get());
-              }
-            }
-          }
-        }
-      }
-      if (!matched) {
-        ss << "Undefined loop " << loop;
-        std::unique_ptr<TileAxis> inner(new (std::nothrow) TileAxis(
-          last_axis, last_axis->index, last_axis->dim_axis + 1, false, {}, true, analyzer_));
-        CHECK(inner) << "memory alloc fail";
-        inner->LinkToLoop(loop);
-        RecordTreeRanges(last_axis, loop);
-        last_axis->children.emplace_back(std::move(inner));
-        last_axis = last_axis->children.back().get();
-      }
-
-      analyzer_->GetTileLogger().AppendLog(ANA_SCHETREE, ss);
-    } else if (loop_dynamic_range_map_.find(loop) != loop_dynamic_range_map_.end() &&
-               std::find(defined_dynamic_loop_.begin(), defined_dynamic_loop_.end(), loop) ==
-                 defined_dynamic_loop_.end()) {
-      ss << "Undefined loop " << loop;
-      auto p = last_axis;
-      bool found = false;
-      while (p != nullptr && !found) {
-        for (auto i = 0u; i < p->loops.size(); ++i) {
-          if (p->loops[i] == nullptr) continue;
-          if (p->loops[i]->loop_var.get()->name_hint == loop->loop_var.get()->name_hint) {
-            p->LinkToLoop(loop);
-            RecordTreeRanges(p, loop);
-            found = true;
-          }
-        }
-        p = p->parent;
-      }
-      if (found) continue;
-      std::unique_ptr<TileAxis> inner(
-        new (std::nothrow) TileAxis(last_axis, last_axis->index, last_axis->dim_axis + 1, false, {}, true, analyzer_));
-      CHECK(inner) << "memory alloc fail";
-      inner->LinkToLoop(loop);
-      RecordTreeRanges(last_axis, loop);
-      last_axis->children.emplace_back(std::move(inner));
-      last_axis = last_axis->children.back().get();
-      analyzer_->GetTileLogger().AppendLog(ANA_SCHETREE, ss);
+const For *ScheduleTreeAnalyzer::GetSameNameLoop(const For *loop) {
+  CHECK(loop);
+  for (auto dl : defined_static_loop_) {
+    if (dl->loop_var.get()->name_hint == loop->loop_var.get()->name_hint) {
+      return dl;
     }
   }
+  return nullptr;
 }
+
+TileAxis *ScheduleTreeAnalyzer::CreateStaticUndefinedLoop(const For *loop, TileAxis *last_axis) {
+  auto snl = GetSameNameLoop(loop);
+  bool matched = false;
+  if (snl == nullptr) {
+    return last_axis;
+  }
+  std::stringstream ss;
+  ss << "Same name loop " << loop << " with range " << loop->min << "," << loop->extent;
+  std::vector<TileAxis *> stack;
+  stack.emplace_back(last_axis);
+  while (!matched && !stack.empty()) {
+    TileAxis *cur = stack.back();
+    stack.pop_back();
+    for (auto i = 0u; i < cur->loops.size(); ++i) {
+      if (cur->loops[i] == snl) {
+        cur->LinkToLoop(loop);
+        RecordTreeRanges(cur, loop);
+        matched = true;
+        break;
+      }
+    }
+    if (cur->parent == nullptr || cur->parent->index != last_axis->index) {
+      continue;
+    }
+    stack.emplace_back(cur->parent);
+    for (size_t i = 0; i < cur->parent->children.size(); ++i) {
+      if (cur->parent->children[i].get() != cur && cur->parent->children[i].get()->index == last_axis->index) {
+        stack.emplace_back(cur->parent->children[i].get());
+      }
+    }
+  }
+  if (!matched) {
+    ss << "Undefined loop " << loop;
+    std::unique_ptr<TileAxis> inner(
+      new (std::nothrow) TileAxis(last_axis, last_axis->index, last_axis->dim_axis + 1, false, {}, true, analyzer_));
+    CHECK(inner) << "memory alloc fail";
+    inner->LinkToLoop(loop);
+    RecordTreeRanges(last_axis, loop);
+    last_axis->children.emplace_back(std::move(inner));
+    last_axis = last_axis->children.back().get();
+  }
+  analyzer_->GetTileLogger().AppendLog(ANA_SCHETREE, ss);
+  return last_axis;
+}
+
+void ScheduleTreeAnalyzer::CreateAxisForUndefinedLoop(TileAxis *last_axis) {
+  std::stringstream ss;
+  for (auto loop : loop_seq_) {
+    bool is_static_loop =
+      (loop_range_map_.find(loop) != loop_range_map_.end() &&
+       std::find(defined_static_loop_.begin(), defined_static_loop_.end(), loop) == defined_static_loop_.end());
+    bool is_dynamic_loop =
+      (loop_dynamic_range_map_.find(loop) != loop_dynamic_range_map_.end() &&
+       std::find(defined_dynamic_loop_.begin(), defined_dynamic_loop_.end(), loop) == defined_dynamic_loop_.end());
+
+    if (is_static_loop) {
+      ss << "Undefined static loop " << loop;
+      last_axis = CreateStaticUndefinedLoop(loop, last_axis);
+    } else if (is_dynamic_loop) {
+      ss << "Undefined dynamic loop " << loop;
+      last_axis = CreateDynamicUndefinedLoop(loop, last_axis);
+    } else {
+      ss << "Undefined loop " << loop;
+    }
+    analyzer_->GetTileLogger().AppendLog(ANA_SCHETREE, ss);
+  }
+}
+
+TileAxis *ScheduleTreeAnalyzer::CreateDynamicUndefinedLoop(const For *loop, TileAxis *last_axis) {
+  auto p = last_axis;
+  bool found = false;
+  while (p != nullptr && !found) {
+    for (auto i = 0u; i < p->loops.size(); ++i) {
+      if (p->loops[i] == nullptr || p->loops[i]->loop_var.get()->name_hint != loop->loop_var.get()->name_hint) {
+        continue;
+      }
+      p->LinkToLoop(loop);
+      RecordTreeRanges(p, loop);
+      found = true;
+    }
+    p = p->parent;
+  }
+  if (found) {
+    return last_axis;
+  }
+  std::unique_ptr<TileAxis> inner(
+    new (std::nothrow) TileAxis(last_axis, last_axis->index, last_axis->dim_axis + 1, false, {}, true, analyzer_));
+  CHECK(inner) << "memory alloc fail";
+  inner->LinkToLoop(loop);
+  RecordTreeRanges(last_axis, loop);
+  last_axis->children.emplace_back(std::move(inner));
+  last_axis = last_axis->children.back().get();
+  return last_axis;
+}
+
 void ScheduleTreeAnalyzer::RecordTreeRanges(TileAxis *axis, const For *loop) {
   std::vector<std::pair<int64_t, Expr>> ranges;
   if (loop_range_map_.find(loop) != loop_range_map_.end()) {
@@ -787,128 +889,167 @@ void ScheduleTreeAnalyzer::RecordTreeRanges(TileAxis *axis, const For *loop) {
   for (const auto &r : ranges) axis->tree_ranges.emplace_back(r);
 }
 
+std::vector<const Call *> ScheduleTreeAnalyzer::GetCallListInProvides(std::vector<const Provide *> pros,
+                                                                      const std::string &target_name) {
+  std::vector<const Call *> op_list;
+  auto GetDeepestCall = [this, &op_list](const NodeRef &op) {
+    if (const Call *call = op.as<Call>()) {
+      for (auto arg : call->args) {
+        // call has inner call
+        if (arg.as<Call>()) {
+          return;
+        }
+      }
+      if (call->name != analyzer_->scop_info_.mmu_info_.GetAName() &&
+          call->name != analyzer_->scop_info_.mmu_info_.GetBName() &&
+          call->name != analyzer_->scop_info_.mmu_info_.GetCName()) {
+        return;
+      }
+      op_list.emplace_back(call);
+    }
+  };
+  for (auto op : pros) {
+    if (op->func->func_name() != target_name) {
+      continue;
+    }
+    if (op->value.as<Call>()) {
+      air::ir::PostOrderVisit(op->value, GetDeepestCall);
+    }
+  }
+  return op_list;
+}
+
+void ScheduleTreeAnalyzer::SortMatrixInCBAOrder(std::vector<const Call *> &op_list) {
+  auto Sort = [this](const Call *c1, const Call *c2) {
+    if (c1->name == this->analyzer_->scop_info_.mmu_info_.GetCName() ||
+        c2->name == this->analyzer_->scop_info_.mmu_info_.GetCName()) {
+      return (c1->name == this->analyzer_->scop_info_.mmu_info_.GetCName());
+    } else if (c1->name == this->analyzer_->scop_info_.mmu_info_.GetBName() ||
+               c2->name == this->analyzer_->scop_info_.mmu_info_.GetBName()) {
+      return (c2->name == this->analyzer_->scop_info_.mmu_info_.GetBName());
+    }
+    return true;
+  };
+  std::sort(op_list.begin(), op_list.end(), Sort);
+}
+
+void ScheduleTreeAnalyzer::MatchCubeVarNames(std::vector<const Call *> op_list) {
+  if (analyzer_->op_type_ == TileOpType::GEMM_OP) {
+    MatchGemmVarNames(op_list);
+  } else if (analyzer_->op_type_ == TileOpType::CONV_OP) {
+    for (auto call : op_list) {
+      if (analyzer_->scop_info_.mmu_info_.IsConvBackpropFilter()) {
+        MatchConvFilterVarNames(call);
+      } else {
+        MatchConvVarNames(call);
+      }
+    }
+  }
+}
+
+void ScheduleTreeAnalyzer::AnalyzeAxisType(const For *loop) {
+  Band pre_loops = GetPreviousLoops(loop);
+  for (auto l : pre_loops) {
+    for (const auto &it2 : mmu_var_map_) {
+      std::string lname = it2.first;
+      std::string type = it2.second;
+      if (l->loop_var.get()->name_hint != lname) {
+        continue;
+      }
+      TileAxis *axis = analyzer_->Axis(l);
+      CHECK(axis) << "cannot find axis for " << l->loop_var.get()->name_hint;
+      std::string key = analyzer_->op_type_ == TileOpType::CONV_OP ? AT_CONV : AT_GEMM;
+      axis->attrs.emplace_back(AttrInfo{key, type});
+      break;
+    }
+  }
+}
+
 void ScheduleTreeAnalyzer::AnalyzeCubeInfo() {
   std::string res = analyzer_->scop_info_.mmu_info_.GetCName();
   for (const auto &it : provides_map_) {
     std::vector<const Provide *> pros = it.second;
-    std::vector<const Call *> op_list;
-    auto GetDeepestCall = [this, &op_list](const NodeRef &op) {
-      if (const Call *call = op.as<Call>()) {
-        for (auto arg : call->args) {
-          // call has inner call
-          if (arg.as<Call>()) return;
-        }
-        if (call->name != analyzer_->scop_info_.mmu_info_.GetAName() &&
-            call->name != analyzer_->scop_info_.mmu_info_.GetBName() &&
-            call->name != analyzer_->scop_info_.mmu_info_.GetCName()) {
-          return;
-        }
-        op_list.emplace_back(call);
-      }
-    };
-    for (auto op : pros) {
-      if (op->func->func_name() != res) continue;
-      if (op->value.as<Call>()) {
-        air::ir::PostOrderVisit(op->value, GetDeepestCall);
-      }
+    std::vector<const Call *> op_list = GetCallListInProvides(pros, res);
+    SortMatrixInCBAOrder(op_list);
+    if (op_list.size() != 3U) {
+      continue;
     }
-    auto SortMatrixInCBAOrder = [this](const Call *c1, const Call *c2) {
-      if (c1->name == this->analyzer_->scop_info_.mmu_info_.GetCName() ||
-          c2->name == this->analyzer_->scop_info_.mmu_info_.GetCName()) {
-        return (c1->name == this->analyzer_->scop_info_.mmu_info_.GetCName());
-      } else if (c1->name == this->analyzer_->scop_info_.mmu_info_.GetBName() ||
-                 c2->name == this->analyzer_->scop_info_.mmu_info_.GetBName()) {
-        return (c2->name == this->analyzer_->scop_info_.mmu_info_.GetBName());
-      }
-      return true;
-    };
-    std::sort(op_list.begin(), op_list.end(), SortMatrixInCBAOrder);
-    if (op_list.size() != 3U) continue;
-    if (analyzer_->op_type_ == TileOpType::GEMM_OP) {
-      MatchGemmVarNames(op_list);
-    } else if (analyzer_->op_type_ == TileOpType::CONV_OP) {
-      for (auto call : op_list) {
-        if (analyzer_->scop_info_.mmu_info_.IsConvBackpropFilter()) {
-          MatchConvFilterVarNames(call);
-        } else {
-          MatchConvVarNames(call);
-        }
-      }
-    }
-    Band pre_loops = GetPreviousLoops(it.first);
-    for (auto l : pre_loops) {
-      for (const auto &it2 : mmu_var_map_) {
-        std::string lname = it2.first;
-        std::string type = it2.second;
-        if (l->loop_var.get()->name_hint != lname) continue;
-        TileAxis *axis = analyzer_->Axis(l);
-        CHECK(axis) << "cannot find axis for " << l->loop_var.get()->name_hint;
-        std::string key = analyzer_->op_type_ == TileOpType::CONV_OP ? AT_CONV : AT_GEMM;
-        axis->attrs.emplace_back(AttrInfo{key, type});
-        break;
-      }
-    }
+    MatchCubeVarNames(op_list);
+    AnalyzeAxisType(it.first);
     mmu_var_map_.clear();
   }
 }
 
+VarNames ScheduleTreeAnalyzer::GetConvVarInArg(Expr arg, bool add_num) {
+  VarNames var_names;
+  var_names = VisitVarNames(arg, var_names, add_num);
+  if (var_names.size() == 1U) {
+    std::string name = var_names[0];
+    if (name == "0") {
+      var_names.clear();
+    }
+  }
+  return var_names;
+}
+
 // Match in C -> A -> B sequence
 void ScheduleTreeAnalyzer::MatchConvVarNames(const Call *call) {
-  int count = -1;
-  for (auto arg : call->args) {
-    count += 1;
-    VarNames var_names;
-    var_names = VisitVarNames(arg, var_names, call->name == analyzer_->scop_info_.mmu_info_.GetCName());
-    if (var_names.empty()) continue;
+  for (int count = 0; count < static_cast<int>(call->args.size()); ++count) {
+    auto arg = call->args[count];
+    bool is_matrix_c = call->name == analyzer_->scop_info_.mmu_info_.GetCName();
+    bool is_matrix_a = call->name == analyzer_->scop_info_.mmu_info_.GetAName();
+    bool is_matrix_b = call->name == analyzer_->scop_info_.mmu_info_.GetBName();
+    VarNames var_names = GetConvVarInArg(arg, is_matrix_c);
+    if (var_names.empty()) {
+      continue;
+    }
+    auto var_type = ForwardFeaturemap[count];
+
     if (var_names.size() == 1U) {
       std::string name = var_names[0];
-      if (name == "0") {
-        continue;
-      } else {
-        if (call->name == analyzer_->scop_info_.mmu_info_.GetCName()) {
-          mmu_var_map_[name] = DsaNC1HWC0[count];
-        } else if (call->name == analyzer_->scop_info_.mmu_info_.GetAName()) {
-          if (ForwardFeaturemap[count] == "N") {
-            CHECK(mmu_var_map_.find(name) != mmu_var_map_.end());
-            CHECK_EQ(mmu_var_map_[name], "N");
-          } else if (ForwardFeaturemap[count] == "H_in") {
-            if (mmu_var_map_.find(name) == mmu_var_map_.end()) {  // H is 1
-              mmu_var_map_[name] = "kh";
-            }  // else kh is 1
-          } else if (ForwardFeaturemap[count] == "W_in") {
-            if (mmu_var_map_.find(name) == mmu_var_map_.end()) {  // W is 1
-              mmu_var_map_[name] = "kw";
-            }  // else kw is 1
-          } else if (ForwardFeaturemap[count] == "C1_in") {
-            if (mmu_var_map_.find(name) == mmu_var_map_.end()) {  // normal conv
-              mmu_var_map_[name] = ForwardFeaturemap[count];
-            } else {  // depthwise
-              mmu_var_map_[name] = "C1_in_out";
-            }
-          } else {
-            if (mmu_var_map_.find(name) == mmu_var_map_.end()) {
-              mmu_var_map_[name] = ForwardFeaturemap[count];
-            } else {
-              CHECK(ForwardFeaturemap[count].find(mmu_var_map_[name]) != std::string::npos);
-            }
+      if (is_matrix_c) {
+        mmu_var_map_[name] = DsaNC1HWC0[count];
+      } else if (is_matrix_a) {
+        auto StoreVarType = [&name, this](const std::string &type, const std::string &replace_type = "") {
+          if (mmu_var_map_.find(name) == mmu_var_map_.end()) {
+            mmu_var_map_[name] = type;
+          } else if (!replace_type.empty()) {
+            mmu_var_map_[name] = replace_type;
           }
+        };
+        if (var_type == kDsaN) {
+          CHECK(mmu_var_map_.find(name) != mmu_var_map_.end());
+          CHECK_EQ(mmu_var_map_[name], kDsaN);
+        } else if (var_type == kDsaHIn) {
+          StoreVarType(kDsakh);
+        } else if (var_type == kDsaWIn) {
+          StoreVarType(kDsakw);
+        } else if (var_type == kDsaC1In) {
+          // replace when depthwise
+          StoreVarType(var_type, kDsaC1InOut);
+        } else if (mmu_var_map_.find(name) == mmu_var_map_.end()) {
+          mmu_var_map_[name] = var_type;
+        } else {
+          CHECK(var_type.find(mmu_var_map_[name]) != std::string::npos);
         }
       }
     } else {  // only H_in, W_in in FM and C1_in in FT
-      CHECK(call->name != analyzer_->scop_info_.mmu_info_.GetCName());
-      if (call->name == analyzer_->scop_info_.mmu_info_.GetAName()) {
-        CHECK(ForwardFeaturemap[count] == "H_in" || ForwardFeaturemap[count] == "W_in");
+      CHECK(!is_matrix_c);
+      if (is_matrix_a) {
+        CHECK(var_type == kDsaHIn || var_type == kDsaWIn);
         for (const auto &name : var_names) {
-          if (mmu_var_map_.find(name) == mmu_var_map_.end()) {  // kh or kw
-            if (ForwardFeaturemap[count] == "H_in") {
-              mmu_var_map_[name] = "kh";
-            } else if (ForwardFeaturemap[count] == "W_in") {
-              mmu_var_map_[name] = "kw";
-            }
+          if (mmu_var_map_.find(name) != mmu_var_map_.end()) {
+            continue;
+          }
+          // kh or kw
+          if (var_type == kDsaHIn) {
+            mmu_var_map_[name] = kDsakh;
+          } else if (var_type == kDsaWIn) {
+            mmu_var_map_[name] = kDsakw;
           }
         }
-      } else if (call->name == analyzer_->scop_info_.mmu_info_.GetBName()) {
-        CHECK(ForwardFilter[count] == "C1_in" || BackpropFilter[count] == "C1_out");
+      } else if (is_matrix_b) {
+        CHECK(var_type == kDsaC1In || BackpropFilter[count] == kDsaC1Out);
         for (const auto &name : var_names) {
           CHECK(mmu_var_map_.find(name) != mmu_var_map_.end());
         }
@@ -919,24 +1060,21 @@ void ScheduleTreeAnalyzer::MatchConvVarNames(const Call *call) {
 
 void ScheduleTreeAnalyzer::MatchConvFilterVarNames(const Call *call) {
   if (call->name != analyzer_->scop_info_.mmu_info_.GetAName() &&
-      call->name != analyzer_->scop_info_.mmu_info_.GetCName())
+      call->name != analyzer_->scop_info_.mmu_info_.GetCName()) {
     return;
-  int count = -1;
-  for (auto arg : call->args) {
-    count += 1;
-    VarNames var_names;
-    var_names = VisitVarNames(arg, var_names, call->name == analyzer_->scop_info_.mmu_info_.GetCName());
-    if (var_names.empty()) continue;
+  }
+  for (int count = 0; count < static_cast<int>(call->args.size()); ++count) {
+    auto arg = call->args[count];
+    VarNames var_names = GetConvVarInArg(arg, call->name == analyzer_->scop_info_.mmu_info_.GetCName());
+    if (var_names.empty()) {
+      continue;
+    }
     if (var_names.size() == 1U) {
       std::string name = var_names[0];
-      if (name == "0") {
-        continue;
+      if (call->name == analyzer_->scop_info_.mmu_info_.GetCName()) {
+        mmu_var_map_[name] = FilterOutput[count];
       } else {
-        if (call->name == analyzer_->scop_info_.mmu_info_.GetCName()) {
-          mmu_var_map_[name] = FilterOutput[count];
-        } else {
-          mmu_var_map_[name] = FilterInput[count];
-        }
+        mmu_var_map_[name] = FilterInput[count];
       }
     } else {
       CHECK(call->name == analyzer_->scop_info_.mmu_info_.GetAName());

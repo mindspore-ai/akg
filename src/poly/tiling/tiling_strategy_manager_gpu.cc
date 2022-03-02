@@ -71,8 +71,8 @@ void GemmStrategy::AddGpuConstraint() {
   sm_bytes_ = (sm_bytes_ / sm_bytes_div_factor_) * sm_bytes_mul_factor_;
   reg_bytes_ = static_cast<int>(MAX_REGISTER_PER_THREAD_BLOCK * REGISTER_ALLOC_RATIO);
 
-  auto b_axes = analyzer_->GetAxesOfAttr(AttrInfo{AT_GEMM, "bi"});
-  auto bo_axes = analyzer_->GetAxesOfAttr(AttrInfo{AT_GEMM, "bo"});
+  auto b_axes = analyzer_->GetAxesOfAttr(AttrInfo{AT_GEMM, kDsabi});
+  auto bo_axes = analyzer_->GetAxesOfAttr(AttrInfo{AT_GEMM, kDsabo});
   (void)std::copy(bo_axes.begin(), bo_axes.end(), std::back_inserter(b_axes));
   for (auto b_axis : b_axes) {
     CHECK(b_axis->range_extent.as<IntImm>()) << "Dynamic shape is not supported in tensor core for now.";
@@ -120,9 +120,9 @@ std::pair<int64_t, int64_t> GemmStrategy::CalculateNumOfWarps(const Mma &mma) {
 }
 
 std::unique_ptr<Mma> GemmStrategy::InitGemmShape(const Mma &mma) {
-  auto m_axes = analyzer_->GetAxesOfAttr(AttrInfo{AT_GEMM, "mi"});
-  auto n_axes = analyzer_->GetAxesOfAttr(AttrInfo{AT_GEMM, "ni"});
-  auto k_axes = analyzer_->GetAxesOfAttr(AttrInfo{AT_GEMM, "ki"});
+  auto m_axes = analyzer_->GetAxesOfAttr(AttrInfo{AT_GEMM, kDsami});
+  auto n_axes = analyzer_->GetAxesOfAttr(AttrInfo{AT_GEMM, kDsani});
+  auto k_axes = analyzer_->GetAxesOfAttr(AttrInfo{AT_GEMM, kDsaki});
   if (m_axes.size() != 1U || n_axes.size() != 1U || k_axes.size() != 1U) {
     return nullptr;
   }
@@ -1296,7 +1296,7 @@ void GpuStrategy::MapPendingAxes(size_t ori_size, std::stringstream &ss, size_t 
     }
 
     // For Conv, hi and wi are invalid for thread mapping
-    if (axis->HasAttr(AttrInfo{AT_CONV, "hi"}) || axis->HasAttr(AttrInfo{AT_CONV, "wi"})) {
+    if (axis->HasAttr(AttrInfo{AT_CONV, kDsahi}) || axis->HasAttr(AttrInfo{AT_CONV, kDsawi})) {
       SkipMapping(axis, shape, ss, inner_dim, thread_dim);
       continue;
     }
@@ -2052,8 +2052,8 @@ void CustomTilingStrategy::AddGpuConstraint() {
       CHECK_GE(constraints.size(), 1U);
       std::vector<std::string> level = akg::common::Split(constraints[0], ":");
       CHECK(level.size() == 2U && level[0] == "LEVEL");
-      CHECK(level[1] == "C1" || level[1] == "C0");
-      TileLevel lv = level[1] == "C1" ? CACHE1 : CACHE0;
+      CHECK(level[1] == kDsaC1 || level[1] == kDsaC0);
+      TileLevel lv = level[1] == kDsaC1 ? CACHE1 : CACHE0;
       (void)constraints.erase(constraints.cbegin());
       for (const auto &con : constraints) {
         ApplyCustomConstraints(axis, con, lv);
@@ -2129,11 +2129,11 @@ std::pair<int64_t, int64_t> ConvStrategy::CalculateNumOfWarps(const Mma &mma) {
 }
 
 std::unique_ptr<MmaConv> ConvStrategy::InitGemmShape(const Mma &mma) {
-  auto m_axes = analyzer_->GetAxesOfAttr(AttrInfo{AT_CONV, "mi"});
-  auto h_axes = analyzer_->GetAxesOfAttr(AttrInfo{AT_CONV, "hi"});
-  auto w_axes = analyzer_->GetAxesOfAttr(AttrInfo{AT_CONV, "wi"});
-  auto n_axes = analyzer_->GetAxesOfAttr(AttrInfo{AT_CONV, "oc"});
-  auto k_axes = analyzer_->GetAxesOfAttr(AttrInfo{AT_CONV, "ic"});
+  auto m_axes = analyzer_->GetAxesOfAttr(AttrInfo{AT_CONV, kDsami});
+  auto h_axes = analyzer_->GetAxesOfAttr(AttrInfo{AT_CONV, kDsahi});
+  auto w_axes = analyzer_->GetAxesOfAttr(AttrInfo{AT_CONV, kDsawi});
+  auto n_axes = analyzer_->GetAxesOfAttr(AttrInfo{AT_CONV, kDsaoc});
+  auto k_axes = analyzer_->GetAxesOfAttr(AttrInfo{AT_CONV, kDsaic});
   if (m_axes.size() != 1U || h_axes.size() != 1U || w_axes.size() != 1U || n_axes.size() != 1U || k_axes.size() != 1U) {
     return nullptr;
   }

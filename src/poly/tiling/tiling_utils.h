@@ -158,25 +158,55 @@ std::unordered_map<std::string, std::string> ExtractLoopIndicesFromMatrices(std:
 std::unordered_map<std::string, std::string> ExtractLoopIndicesFromMatricesConv(std::vector<VarNames> var_names_list);
 
 /* Data format definition */
-const VarNames DsaNCHW = {"N", "C", "H", "W", "C0"};
-const VarNames DsaNHWCC0 = {"N", "H", "W", "C", "C0"};
-const VarNames DsaNC1HWC0 = {"N", "C1", "H", "W", "C0"};
+constexpr auto kDsaN = "N";
+constexpr auto kDsaC = "C";
+constexpr auto kDsaH = "H";
+constexpr auto kDsaW = "W";
+constexpr auto kDsaC1 = "C1";
+constexpr auto kDsaC0 = "C0";
+constexpr auto kDsaC1In = "C1_in";
+constexpr auto kDsaC1Out = "C1_out";
+constexpr auto kDsaC0In = "C0_in";
+constexpr auto kDsaC0Out = "C0_out";
+constexpr auto kDsaC1InOut = "C1_in_out";
+constexpr auto kDsaHIn = "H_in";
+constexpr auto kDsaWIn = "WIn";
 
-const VarNames ForwardFilter = {"C1_in", "C1_out", "C0_out", "C0_in"};          //  nZ, Cin = [kc1,kh,kw]
-const VarNames BackpropFilter = {"C1_out", "C1_in", "C0_in", "C0_out"};         //  backprop_input, Cout = [kc1,kh,kw]
-const VarNames ForwardFeaturemap = {"N", "C1_in", "H_in", "W_in", "C0_in"};     // zZ, H_in = [H, Kh], W_in = [W, kw]
-const VarNames BackpropFeaturemap = {"N", "C1_out", "H_in", "W_in", "C0_out"};  // zZ, H_in = [H, Kh], W_in = [W, kw]
-const VarNames FilterOutput = {"C1_out", "kh", "kw", "C1_in", "C0_in", "C0_out"};
-const VarNames FilterInput = {"N", "C1_out", "H", "W", "C0_out"};
+constexpr auto kDsami = "mi";
+constexpr auto kDsamo = "mo";
+constexpr auto kDsani = "ni";
+constexpr auto kDsano = "no";
+constexpr auto kDsaki = "ki";
+constexpr auto kDsako = "ko";
+constexpr auto kDsabi = "bi";
+constexpr auto kDsabo = "bo";
+constexpr auto kDsawi = "wi";
+constexpr auto kDsahi = "hi";
+constexpr auto kDsaoc = "oc";
+constexpr auto kDsaic = "ic";
+constexpr auto kDsakh = "kh";
+constexpr auto kDsakw = "kw";
 
-const VarNames FormatM = {"mi", "mo"};
-const VarNames FormatN = {"ni", "no"};
-const VarNames FormatK = {"ki", "ko"};
-const VarNames FormatB = {"bi", "bo"};
+const VarNames DsaNCHW = {kDsaN, kDsaC, kDsaH, kDsaW, kDsaC0};
+const VarNames DsaNHWCC0 = {kDsaN, kDsaH, kDsaW, kDsaC, kDsaC0};
+const VarNames DsaNC1HWC0 = {kDsaN, kDsaC1, kDsaH, kDsaW, kDsaC0};
 
-const VarNames ConvFormatM = {"wi", "hi", "mi"};
-const VarNames ConvFormatN = {"oc"};
-const VarNames ConvFormatK = {"ic", "kw", "kh"};
+const VarNames ForwardFilter = {kDsaC1In, kDsaC1Out, kDsaC0Out, kDsaC0In};   //  nZ, Cin = [kc1,kh,kw]
+const VarNames BackpropFilter = {kDsaC1Out, kDsaC1In, kDsaC0In, kDsaC0Out};  //  backprop_input, Cout = [kc1,kh,kw]
+const VarNames ForwardFeaturemap = {kDsaN, kDsaC1In, kDsaHIn, kDsaWIn, kDsaC0In};  // zZ, H_in = [H, Kh], W_in = [W, kw]
+const VarNames BackpropFeaturemap = {kDsaN, kDsaC1Out, kDsaHIn, kDsaWIn,
+                                     kDsaC0Out};  // zZ, H_in = [H, Kh], W_in = [W, kw]
+const VarNames FilterOutput = {kDsaC1Out, kDsakh, kDsakw, kDsaC1In, kDsaC0In, kDsaC0Out};
+const VarNames FilterInput = {kDsaN, kDsaC1Out, kDsaH, kDsaW, kDsaC0Out};
+
+const VarNames FormatM = {kDsami, kDsamo};
+const VarNames FormatN = {kDsani, kDsano};
+const VarNames FormatK = {kDsaki, kDsako};
+const VarNames FormatB = {kDsabi, kDsabo};
+
+const VarNames ConvFormatM = {kDsawi, kDsahi, kDsami};
+const VarNames ConvFormatN = {kDsaoc};
+const VarNames ConvFormatK = {kDsaic, kDsakw, kDsakh};
 
 constexpr auto NO_PRUNE = 0;
 constexpr auto PRUNE_MEM_EXCEED = 1;

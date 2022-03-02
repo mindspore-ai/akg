@@ -265,7 +265,7 @@ void GpuSolver::SolveMapping() {
       }
       auto current_outer_bn = analyzer_.scop_info_.analysis_result_.GetOuterBandNode(axis->index);
       bool is_hw = current_outer_bn->template_type == Template::CONV &&
-                   (axis->HasAttr(AttrInfo{AT_CONV, "hi"}) || axis->HasAttr(AttrInfo{AT_CONV, "wi"}));
+                   (axis->HasAttr(AttrInfo{AT_CONV, kDsahi}) || axis->HasAttr(AttrInfo{AT_CONV, kDsawi}));
       bool is_reuse_same_band = center_type == BLOCK_TAG && is_hw;
       auto alloc_idx = center.Alloc(i, center_type, is_reuse_same_band);
 
@@ -360,17 +360,17 @@ AllocPos GpuSolver::GetThreadAllocPos(TileAxis *axis) {
       return AllocPos::X_POS;
     }
   } else if (template_type == Template::CONV) {
-    if (axis->HasAttr(AttrInfo{AT_CONV, "mi"})) {
+    if (axis->HasAttr(AttrInfo{AT_CONV, kDsami})) {
       return AllocPos::X_POS;
-    } else if (axis->HasAttr(AttrInfo{AT_CONV, "oc"})) {
+    } else if (axis->HasAttr(AttrInfo{AT_CONV, kDsaoc})) {
       return AllocPos::Y_POS;
     } else {
       return AllocPos::NULL_POS;
     }
   } else if (template_type == Template::MATMUL) {
-    if (axis->HasAttr(AttrInfo{AT_GEMM, "mi"})) {
+    if (axis->HasAttr(AttrInfo{AT_GEMM, kDsami})) {
       return AllocPos::X_POS;
-    } else if (axis->HasAttr(AttrInfo{AT_GEMM, "ni"})) {
+    } else if (axis->HasAttr(AttrInfo{AT_GEMM, kDsani})) {
       return AllocPos::Y_POS;
     } else {
       return AllocPos::NULL_POS;
@@ -400,21 +400,21 @@ AllocPos GpuSolver::GetBlockAllocPos(TileAxis *axis) {
       return AllocPos::Y_POS;
     }
   } else if (template_type == Template::CONV) {
-    if (axis->HasAttr(AttrInfo{AT_CONV, "hi"}) || axis->HasAttr(AttrInfo{AT_CONV, "wi"})) {
+    if (axis->HasAttr(AttrInfo{AT_CONV, kDsahi}) || axis->HasAttr(AttrInfo{AT_CONV, kDsawi})) {
       return AllocPos::Y_POS;
-    } else if (axis->HasAttr(AttrInfo{AT_CONV, "mi"})) {
+    } else if (axis->HasAttr(AttrInfo{AT_CONV, kDsami})) {
       return AllocPos::Z_POS;
-    } else if (axis->HasAttr(AttrInfo{AT_CONV, "oc"})) {
+    } else if (axis->HasAttr(AttrInfo{AT_CONV, kDsaoc})) {
       return AllocPos::X_POS;
     } else {
       return AllocPos::NULL_POS;
     }
   } else if (template_type == Template::MATMUL) {
-    if (axis->HasAttr(AttrInfo{AT_GEMM, "ni"})) {
+    if (axis->HasAttr(AttrInfo{AT_GEMM, kDsani})) {
       return AllocPos::X_POS;
-    } else if (axis->HasAttr(AttrInfo{AT_GEMM, "mi"})) {
+    } else if (axis->HasAttr(AttrInfo{AT_GEMM, kDsami})) {
       return AllocPos::Y_POS;
-    } else if (axis->HasAttr(AttrInfo{AT_GEMM, "bi"})) {
+    } else if (axis->HasAttr(AttrInfo{AT_GEMM, kDsabi})) {
       return AllocPos::Z_POS;
     }
   }
@@ -1215,9 +1215,9 @@ TileCandidate *TraverseSolver::Solve() {
     }
 
     if (analyzer_.op_type_ == TileOpType::GEMM_OP) {
-      std::vector<TileAxis *> ko_axes = this->analyzer_.GetAxesOfAttr(AttrInfo{AT_GEMM, "ko"});
-      std::vector<TileAxis *> mo_axes = this->analyzer_.GetAxesOfAttr(AttrInfo{AT_GEMM, "mo"});
-      std::vector<TileAxis *> no_axes = this->analyzer_.GetAxesOfAttr(AttrInfo{AT_GEMM, "no"});
+      std::vector<TileAxis *> ko_axes = this->analyzer_.GetAxesOfAttr(AttrInfo{AT_GEMM, kDsako});
+      std::vector<TileAxis *> mo_axes = this->analyzer_.GetAxesOfAttr(AttrInfo{AT_GEMM, kDsamo});
+      std::vector<TileAxis *> no_axes = this->analyzer_.GetAxesOfAttr(AttrInfo{AT_GEMM, kDsano});
       std::stringstream ss;
       auto MakeC1C0Consistency = [this, &ss](const std::vector<TileAxis *> &axes) {
         if (axes.size() == 1U) {
@@ -1340,9 +1340,9 @@ bool TraverseSolver::MemoryVerify(TileLevel level, int band, int64_t *deviation)
                   (expanded_size[MEM_SCOPE_CACHE0_C] <= mem_limit_[MEM_SCOPE_CACHE0_C]);
   bool cut_reduce = analyzer_.scop_info_.mmu_info_.IsConvBackpropFilter();
 
-  std::vector<TileAxis *> batch_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, "N"});
-  std::vector<TileAxis *> h_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, "H"});
-  std::vector<TileAxis *> w_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, "W"});
+  std::vector<TileAxis *> batch_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, kDsaN});
+  std::vector<TileAxis *> h_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, kDsaH});
+  std::vector<TileAxis *> w_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, kDsaW});
 
   if (cut_reduce) {
     cut_reduce = ((batch_axes.size() == 1U && batch_axes[0]->GetConstExtent() > 1) ||
@@ -1513,12 +1513,12 @@ void TraverseSolver::AppendConvPragma() {
   Expr c_cut = CastIntToExpr(16);
   Expr kh_cut = CastIntToExpr(1);
   Expr kw_cut = CastIntToExpr(1);
-  std::vector<TileAxis *> c_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, "C1"});
+  std::vector<TileAxis *> c_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, kDsaC1});
   if (c_axes.size() == 1U) {
     c_cut *= cand_.GetTileVal(c_axes[0]).first;
     no *= cand_.GetTileVal(c_axes[0]).first;
   } else {
-    c_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, "C1_in_out"});
+    c_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, kDsaC1InOut});
     if (c_axes.size() == 1U) {
       c_cut *= cand_.GetTileVal(c_axes[0]).first;
       no *= cand_.GetTileVal(c_axes[0]).first;
@@ -1526,27 +1526,27 @@ void TraverseSolver::AppendConvPragma() {
     }
   }
   Expr tile_out_h = 1;
-  std::vector<TileAxis *> h_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, "H"});
+  std::vector<TileAxis *> h_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, kDsaH});
   if (h_axes.size() == 1U) {
     tile_out_h *= cand_.GetTileVal(h_axes[0]).first;
     M *= cand_.GetTileVal(h_axes[0]).first;
   }
   Expr tile_out_w = 1;
-  std::vector<TileAxis *> w_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, "W"});
+  std::vector<TileAxis *> w_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, kDsaW});
   if (w_axes.size() == 1U) {
     tile_out_w *= cand_.GetTileVal(w_axes[0]).first;
     M *= cand_.GetTileVal(w_axes[0]).first;
   }
-  std::vector<TileAxis *> kc_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, "C1_in"});
+  std::vector<TileAxis *> kc_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, kDsaC1In});
   if (kc_axes.size() == 1U) {
     ko *= cand_.GetTileVal(kc_axes[0]).first;
   }
-  std::vector<TileAxis *> kh_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, "kh"});
+  std::vector<TileAxis *> kh_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, kDsakh});
   if (kh_axes.size() == 1U) {
     ko *= cand_.GetTileVal(kh_axes[0]).first;
     kh_cut *= cand_.GetTileVal(kh_axes[0]).first;
   }
-  std::vector<TileAxis *> kw_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, "kw"});
+  std::vector<TileAxis *> kw_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, kDsakw});
   if (kw_axes.size() == 1U) {
     ko *= cand_.GetTileVal(kw_axes[0]).first;
     kw_cut *= cand_.GetTileVal(kw_axes[0]).first;
@@ -1583,44 +1583,44 @@ void TraverseSolver::AppendConvBackpropPragma() {
   Expr kw_cut = 1;
   bool cut_reduce = false;
   air::arith::Analyzer arith_ana;
-  std::vector<TileAxis *> batch_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, "N"});
+  std::vector<TileAxis *> batch_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, kDsaN});
   if (batch_axes.size() == 1U) {
     batch_cut *= cand_.GetTileVal(batch_axes[0]).first;
     cut_reduce = cut_reduce || arith_ana.CanProve(batch_cut < batch_axes[0]->range_extent);
     ko *= cand_.GetTileVal(batch_axes[0]).first;
   }
   Expr tile_out_h = 1;
-  std::vector<TileAxis *> h_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, "H"});
+  std::vector<TileAxis *> h_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, kDsaH});
   if (h_axes.size() == 1U) {
     tile_out_h *= cand_.GetTileVal(h_axes[0]).first;
     cut_reduce = cut_reduce || arith_ana.CanProve(tile_out_h < h_axes[0]->range_extent);
     ko *= cand_.GetTileVal(h_axes[0]).first;
   }
   Expr tile_out_w = 1;
-  std::vector<TileAxis *> w_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, "W"});
+  std::vector<TileAxis *> w_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, kDsaW});
   if (w_axes.size() == 1U) {
     tile_out_w *= cand_.GetTileVal(w_axes[0]).first;
     cut_reduce = cut_reduce || arith_ana.CanProve(tile_out_w < h_axes[0]->range_extent);
     ko *= cand_.GetTileVal(w_axes[0]).first;
   }
-  std::vector<TileAxis *> kc_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, "C1_in"});
+  std::vector<TileAxis *> kc_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, kDsaC1In});
   if (kc_axes.size() == 1U) {
     co_cut *= cand_.GetTileVal(kc_axes[0]).first;
     mo *= cand_.GetTileVal(kc_axes[0]).first;
   }
-  std::vector<TileAxis *> kh_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, "kh"});
+  std::vector<TileAxis *> kh_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, kDsakh});
   if (kh_axes.size() == 1U) {
     ko *= cand_.GetTileVal(kh_axes[0]).first;
     no *= cand_.GetTileVal(kh_axes[0]).first;
     kh_cut *= cand_.GetTileVal(kh_axes[0]).first;
   }
-  std::vector<TileAxis *> kw_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, "kw"});
+  std::vector<TileAxis *> kw_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, kDsakw});
   if (kw_axes.size() == 1U) {
     ko *= cand_.GetTileVal(kw_axes[0]).first;
     no *= cand_.GetTileVal(kw_axes[0]).first;
     kw_cut *= cand_.GetTileVal(kw_axes[0]).first;
   }
-  std::vector<TileAxis *> co_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, "C1_out"});
+  std::vector<TileAxis *> co_axes = analyzer_.GetAxesOfAttr(AttrInfo{AT_CONV, kDsaC1Out});
   if (co_axes.size() == 1U) {
     cin_cut *= cand_.GetTileVal(co_axes[0]).first;
     no *= cand_.GetTileVal(co_axes[0]).first;
