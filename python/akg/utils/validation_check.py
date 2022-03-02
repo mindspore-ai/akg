@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # coding: utf-8
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -53,10 +53,12 @@ LLVM = "llvm"
 CPU = "cpu"
 BINDS = "binds"
 
+
 def check_supported_target(target):
     supported_target = [CCE, CUDA, LLVM]
     if target not in supported_target:
         raise RuntimeError("the target %s is not supported!" % get_backend(target))
+
 
 def get_backend(target):
     if target == CCE:
@@ -66,6 +68,7 @@ def get_backend(target):
     elif target == LLVM:
         return "CPU"
     return "UNKNOWN"
+
 
 def check_input_type_dict(input_dict, input_key, input_name):
     """
@@ -84,6 +87,7 @@ def check_input_type_dict(input_dict, input_key, input_name):
     Returns:
         None
     """
+
     def _check_input_type(input_key, input_type):
         if not isinstance(input_dict[input_key], input_type):
             raise RuntimeError(
@@ -116,8 +120,10 @@ def check_input_type_list_tuple(inputs, expect):
                                "type of input is %s" % (
                                    expect[0], expect[1][1], type(inp)))
 
+
 def check_input_type(*type_args, **_type_kwargs):
     """check input parameter type."""
+
     def out_wrapper(func):
         """outer wrapper function."""
         formal_parameter = func.__code__.co_varnames
@@ -259,6 +265,7 @@ def reduce_axis_check(reduce_shape, reduce_axis):
     elif reduce_axis is not None:
         raise RuntimeError("axis should be a list, tuple or int.")
 
+
 def elemwise_shape_check(shape_a, shape_b):
     """check validation of tensor's shape for element-wise op."""
     check_shape(shape_a)
@@ -337,24 +344,23 @@ def gemm_format_check(lhs_input, rhs_input, lhs_trans=False, rhs_trans=False):
                                "or 4d shape (batch_o, batch_i, height, weight) "
                                " while shape length is %d!" % (len(tensor)))
 
+    def value_same_check(loc, lhs, rhs):
+        if lhs != rhs:
+            raise RuntimeError("%s size is not compatible, lhs input: %d and rhs input: %d" % (loc, lhs, rhs))
+
     def value_check(loc):
         if loc == "B":
             if len(lhs_input) > 2:
                 for pos in b_pos:
                     value = int(lhs_input[pos])
                     cmp_value = int(rhs_input[pos])
-                    if value != cmp_value:
-                        raise RuntimeError("%s size is not compatible, lhs "
-                                           "input: %d and rhs input: %d" %
-                                           (loc, value, cmp_value))
+                    value_same_check(loc, value, cmp_value)
         if loc == "K":
             if isinstance(lhs_input[lhs_k_pos], akg.tvm.expr.Var) or isinstance(rhs_input[rhs_k_pos], akg.tvm.expr.Var):
                 return
             value = int(lhs_input[lhs_k_pos])
             cmp_value = int(rhs_input[rhs_k_pos])
-            if cmp_value != value:
-                raise RuntimeError("%s size is not compatible, lhs :%d, "
-                                   "rhs input: %d " % (loc, value, cmp_value))
+            value_same_check(loc, value, cmp_value)
 
     for data in [lhs_input, rhs_input]:
         length_check(data)
@@ -364,6 +370,7 @@ def gemm_format_check(lhs_input, rhs_input, lhs_trans=False, rhs_trans=False):
 
 def convolution_format_check(x_shape, w_shape, pad, stride, dilation):
     """check convolution format."""
+
     def conv_shape_check(shape):
         if (not isinstance(shape, (tuple, list))) or (len(shape) != 4):
             raise RuntimeError("conv tensor shape should be 4d list or tuple")
@@ -486,8 +493,7 @@ def is_valid_reduce_axis(tensor, reduce_axis):
         True or False.
     """
     # if the reduce axis correspond to shape[axis] is 1, we can not refine the
-    # shape,or the reduce axis will be wrong
-    # need_shape_refine = True
+    # shape, or the reduce axis will be wrong
     shape = get_shape(tensor)
     if hasattr(reduce_axis, 'index'):
         for id_ite in reduce_axis:
@@ -502,6 +508,7 @@ def is_valid_reduce_axis(tensor, reduce_axis):
 
 def axis_check(shape_len, axis):
     """Check the value of axis and return the sorted axis."""
+
     def _axis_value_type_check(value):
         if not isinstance(value, int):
             raise RuntimeError("type of axis value should be int")
@@ -512,6 +519,7 @@ def axis_check(shape_len, axis):
         if value < 0:
             value = shape_len + value
         return value
+
     if not hasattr(axis, 'index'):
         axis = _axis_value_type_check(axis)
         return axis
@@ -538,6 +546,7 @@ def check_value_on_integer(arg_name, arg_value, low=None, high=None):
 
 def check_typename(arg_name, arg_type, valid_types):
     """Does it contain the _name_ attribute."""
+
     def get_typename(t):
         return t.__name__ if hasattr(t, '__name__') else str(t)
 
@@ -551,13 +560,13 @@ def check_typename(arg_name, arg_type, valid_types):
         arg_name, type_names, get_typename(arg_type)))
 
 
-def check_equal(arg_name1, arg_name2, arg1, arg2,):
+def check_equal(arg_name1, arg_name2, arg1, arg2):
     """Check equal."""
     if arg1 != arg2:
         raise ValueError('{} should be equal to {}'.format(arg_name1, arg_name2))
 
 
-def check_greater(arg_name1, arg_name2, arg1, arg2,):
+def check_greater(arg_name1, arg_name2, arg1, arg2):
     """Check greater."""
     if arg1 <= arg2:
         raise ValueError('{} should be greater than {}'.format(arg_name1, arg_name2))
@@ -579,28 +588,18 @@ def check_shape_length_equal(tensor_name, tensor_shape, shape_length):
     """Shape length equal judgment."""
     if isinstance(shape_length, (tuple, list)):
         if not len(tensor_shape) in shape_length:
-            raise ValueError("The shape length of {tensor_name} should be one of "
-                             "{shape_length}, but get {tensor_shape_len}"
-                             "".format(
-                                 tensor_name=tensor_name,
-                                 shape_length=shape_length,
-                                 tensor_shape_len=len(tensor_shape)))
+            raise ValueError("The shape length of {} should be one of {}, but get {}"
+                             .format(tensor_name, shape_length, len(tensor_shape)))
     elif len(tensor_shape) != shape_length:
-        raise ValueError("The shape length of {tensor_name} should be "
-                         "{shape_length}, but get {tensor_shape_len}"
-                         "".format(
-                             tensor_name=tensor_name,
-                             shape_length=shape_length,
-                             tensor_shape_len=len(tensor_shape)))
+        raise ValueError("The shape length of {} should be {}, but get {}"
+                         .format(tensor_name, shape_length, len(tensor_shape)))
 
 
 def check_shape_length_greater(tensor_name, tensor_shape, shape_length):
     """Shape length greater judgment."""
     if len(tensor_shape) <= shape_length:
-        raise ValueError("The shape length of {tensor_name} should be greater "
-                         "than {shape_length}, but get {tensor_shape_len}".format(
-                             tensor_name=tensor_name, shape_length=shape_length,
-                             tensor_shape_len=len(tensor_shape)))
+        raise ValueError("The shape length of {} should be greater than {}, but get {}"
+                         .format(tensor_name, shape_length, len(tensor_shape)))
 
 
 def judge_var(num):
@@ -633,6 +632,7 @@ def check_pad(arg_name, pad, length=None):
         if length != len(pad):
             raise ValueError("The length of {} should be {}".format(
                 arg_name, length))
+
 
 def check_int_list(array, array_name):
     """check whether all the elements are integers."""

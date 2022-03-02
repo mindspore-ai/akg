@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # coding: utf-8
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ import json
 import numpy as np
 import akg.tvm as tvm
 
+
 def result_compare(actual, bench_mark, r_tol=5e-3):
     """function for compare result."""
     error = 0
@@ -38,32 +39,28 @@ def result_compare(actual, bench_mark, r_tol=5e-3):
     if len_a != len_b:
         return False
 
+    def _update_error():
+        nonlocal error
+        nonlocal last_err
+        nonlocal count
+        nonlocal continue_err
+        nonlocal max_continue
+        nonlocal max_end
+        error += 1
+        if last_err + 1 == count:
+            continue_err += 1
+        else:
+            if continue_err > max_continue:
+                max_continue = continue_err
+                max_end = last_err
+            continue_err = 1
+        last_err = count
+
     for i in range(len_a):
         a = actual[i]
         b = bench_mark[i]
-        if abs(a - b) > abs(b) * r_tol:
-            error += 1
-
-            if last_err + 1 == count:
-                continue_err += 1
-            else:
-                if continue_err > max_continue:
-                    max_continue = continue_err
-                    max_end = last_err
-                continue_err = 1
-            last_err = count
-
-        elif np.isnan(a):
-            error += 1
-
-            if last_err + 1 == count:
-                continue_err += 1
-            else:
-                if continue_err > max_continue:
-                    max_continue = continue_err
-                    max_end = last_err
-                continue_err = 1
-            last_err = count
+        if abs(a - b) > abs(b) * r_tol or np.isnan(a):
+            _update_error()
         count += 1
     if continue_err > max_continue:
         max_continue = continue_err
@@ -118,12 +115,106 @@ def np_bisect_sum_fp16(inputs, axis=None, keepdims=True):
     return expect
 
 
+def _bisect_sum_axis0(data, reduce_num, tail_num):
+    """Bisect sum on axis 0."""
+    s = data
+    s[0:tail_num, :] = data[0:tail_num, :] + data[reduce_num:reduce_num + tail_num, :]
+    while reduce_num != 1:
+        s = s[0:reduce_num // 2, :] + s[reduce_num // 2:reduce_num, :]
+        reduce_num = reduce_num // 2
+    return s
+
+
+def _bisect_sum_axis1(data, reduce_num, tail_num):
+    """Bisect sum on axis 1."""
+    s = data
+    s[:, 0:tail_num, :] = data[:, 0:tail_num, :] + data[:, reduce_num:reduce_num + tail_num, :]
+    while reduce_num != 1:
+        s = s[:, 0:reduce_num // 2, :] + s[:, reduce_num // 2:reduce_num, :]
+        reduce_num = reduce_num // 2
+    return s
+
+
+def _bisect_sum_axis2(data, reduce_num, tail_num):
+    """Bisect sum on axis 2."""
+    s = data
+    s[:, :, 0:tail_num, :] = data[:, :, 0:tail_num, :] + data[:, :, reduce_num:reduce_num + tail_num, :]
+    while reduce_num != 1:
+        s = s[:, :, 0:reduce_num // 2, :] + s[:, :, reduce_num // 2:reduce_num, :]
+        reduce_num = reduce_num // 2
+    return s
+
+
+def _bisect_sum_axis3(data, reduce_num, tail_num):
+    """Bisect sum on axis 3."""
+    s = data
+    s[:, :, :, 0:tail_num, :] = data[:, :, :, 0:tail_num, :] + data[:, :, :, reduce_num:reduce_num + tail_num, :]
+    while reduce_num != 1:
+        s = s[:, :, :, 0:reduce_num // 2, :] + s[:, :, :, reduce_num // 2:reduce_num, :]
+        reduce_num = reduce_num // 2
+    return s
+
+
+def _bisect_sum_axis4(data, reduce_num, tail_num):
+    """Bisect sum on axis 4."""
+    s = data
+    s[:, :, :, :, 0:tail_num, :] = data[:, :, :, :, 0:tail_num, :] + \
+                                   data[:, :, :, :, reduce_num:reduce_num + tail_num, :]
+    while reduce_num != 1:
+        s = s[:, :, :, :, 0:reduce_num // 2, :] + s[:, :, :, :, reduce_num // 2:reduce_num, :]
+        reduce_num = reduce_num // 2
+    return s
+
+
+def _bisect_sum_axis5(data, reduce_num, tail_num):
+    """Bisect sum on axis 5."""
+    s = data
+    s[:, :, :, :, :, 0:tail_num, :] = data[:, :, :, :, :, 0:tail_num, :] + \
+                                      data[:, :, :, :, :, reduce_num:reduce_num + tail_num, :]
+    while reduce_num != 1:
+        s = s[:, :, :, :, :, 0:reduce_num // 2, :] + s[:, :, :, :, :, reduce_num // 2:reduce_num, :]
+        reduce_num = reduce_num // 2
+    return s
+
+
+def _bisect_sum_axis6(data, reduce_num, tail_num):
+    """Bisect sum on axis 6."""
+    s = data
+    s[:, :, :, :, :, :, 0:tail_num, :] = data[:, :, :, :, :, :, 0:tail_num, :] + \
+                                         data[:, :, :, :, :, :, reduce_num:reduce_num + tail_num, :]
+    while reduce_num != 1:
+        s = s[:, :, :, :, :, :, 0:reduce_num // 2, :] + s[:, :, :, :, :, :, reduce_num // 2:reduce_num, :]
+        reduce_num = reduce_num // 2
+    return s
+
+
+def _bisect_sum_axis7(data, reduce_num, tail_num):
+    """Bisect sum on axis 7."""
+    s = data
+    s[:, :, :, :, :, :, :, 0:tail_num, :] = data[:, :, :, :, :, :, :, 0:tail_num, :] + \
+                                            data[:, :, :, :, :, :, :, reduce_num:reduce_num + tail_num, :]
+    while reduce_num != 1:
+        s = s[:, :, :, :, :, :, :, 0:reduce_num // 2, :] + s[:, :, :, :, :, :, :, reduce_num // 2:reduce_num, :]
+        reduce_num = reduce_num // 2
+    return s
+
+
+def _bisect_sum_axis_last(data, reduce_num, tail_num):
+    """Bisect sum on last axis."""
+    s = data
+    s[..., 0:tail_num] = data[..., 0:tail_num] + data[..., reduce_num:reduce_num + tail_num]
+    while reduce_num != 1:
+        s = s[..., 0:reduce_num // 2] + s[..., reduce_num // 2:reduce_num]
+        reduce_num = reduce_num // 2
+    return s
+
+
 def bisect_sum(a, axis=0, keepdims=True):
     """Axis transformations for bisect sum operation."""
     import math
     shape = a.shape
     if not len(shape) <= 8:
-        raise AssertionError("the dimension of input cannot be larger than 6!")
+        raise AssertionError("the dimension of input cannot be larger than 8!")
     if axis < 0:
         axis = len(shape) + axis
     dimlen = shape[axis]
@@ -131,57 +222,26 @@ def bisect_sum(a, axis=0, keepdims=True):
     tail_num = dimlen - reduce_num
 
     s1 = np.array(a)
-    s = s1
-
     if axis == len(shape) - 1:
-        s[..., 0:tail_num] = s1[..., 0:tail_num] + s1[..., reduce_num:reduce_num + tail_num]
-        while reduce_num != 1:
-            s = s[..., 0:reduce_num // 2] + s[..., reduce_num // 2:reduce_num]
-            reduce_num = reduce_num // 2
+        s = _bisect_sum_axis_last(s1, reduce_num, tail_num)
     elif axis == 0:
-        s[0:tail_num, :] = s1[0:tail_num, :] + s1[reduce_num:reduce_num + tail_num, :]
-        while reduce_num != 1:
-            s = s[0:reduce_num // 2, :] + s[reduce_num // 2:reduce_num, :]
-            reduce_num = reduce_num // 2
+        s = _bisect_sum_axis0(s1, reduce_num, tail_num)
     elif axis == 1:
-        s[:, 0:tail_num, :] = s1[:, 0:tail_num, :] + s1[:, reduce_num:reduce_num + tail_num, :]
-        while reduce_num != 1:
-            s = s[:, 0:reduce_num // 2, :] + s[:, reduce_num // 2:reduce_num, :]
-            reduce_num = reduce_num // 2
+        s = _bisect_sum_axis1(s1, reduce_num, tail_num)
     elif axis == 2:
-        s[:, :, 0:tail_num, :] = s1[:, :, 0:tail_num, :] + s1[:, :, reduce_num:reduce_num + tail_num, :]
-        while reduce_num != 1:
-            s = s[:, :, 0:reduce_num // 2, :] + s[:, :, reduce_num // 2:reduce_num, :]
-            reduce_num = reduce_num // 2
+        s = _bisect_sum_axis2(s1, reduce_num, tail_num)
     elif axis == 3:
-        s[:, :, :, 0:tail_num, :] = s1[:, :, :, 0:tail_num, :] + s1[:, :, :, reduce_num:reduce_num + tail_num, :]
-        while reduce_num != 1:
-            s = s[:, :, :, 0:reduce_num // 2, :] + s[:, :, :, reduce_num // 2:reduce_num, :]
-            reduce_num = reduce_num // 2
+        s = _bisect_sum_axis3(s1, reduce_num, tail_num)
     elif axis == 4:
-        s[:, :, :, :, 0:tail_num, :] = s1[:, :, :, :, 0:tail_num, :] + \
-            s1[:, :, :, :, reduce_num:reduce_num + tail_num, :]
-        while reduce_num != 1:
-            s = s[:, :, :, :, 0:reduce_num // 2, :] + s[:, :, :, :, reduce_num // 2:reduce_num, :]
-            reduce_num = reduce_num // 2
+        s = _bisect_sum_axis4(s1, reduce_num, tail_num)
     elif axis == 5:
-        s[:, :, :, :, :, 0:tail_num, :] = s1[:, :, :, :, :, 0:tail_num, :] +\
-            s1[:, :, :, :, :, reduce_num:reduce_num + tail_num, :]
-        while reduce_num != 1:
-            s = s[:, :, :, :, :, 0:reduce_num // 2, :] + s[:, :, :, :, :, reduce_num // 2:reduce_num, :]
-            reduce_num = reduce_num // 2
+        s = _bisect_sum_axis5(s1, reduce_num, tail_num)
     elif axis == 6:
-        s[:, :, :, :, :, :, 0:tail_num, :] = s1[:, :, :, :, :, :, 0:tail_num, :] + \
-            s1[:, :, :, :, :, :, reduce_num:reduce_num + tail_num, :]
-        while reduce_num != 1:
-            s = s[:, :, :, :, :, :, 0:reduce_num // 2, :] + s[:, :, :, :, :, :, reduce_num // 2:reduce_num, :]
-            reduce_num = reduce_num // 2
+        s = _bisect_sum_axis6(s1, reduce_num, tail_num)
     elif axis == 7:
-        s[:, :, :, :, :, :, :, 0:tail_num, :] = s1[:, :, :, :, :, :, :, 0:tail_num, :] + \
-            s1[:, :, :, :, :, :, :, reduce_num:reduce_num + tail_num, :]
-        while reduce_num != 1:
-            s = s[:, :, :, :, :, :, :, 0:reduce_num // 2, :] + s[:, :, :, :, :, :, :, reduce_num // 2:reduce_num, :]
-            reduce_num = reduce_num // 2
+        s = _bisect_sum_axis7(s1, reduce_num, tail_num)
+    else:
+        raise ValueError("axis should be {} or in range[0, 7], but got {}".format(len(shape) - 1, axis))
     if not keepdims:
         s = np.squeeze(s, axis)
     return s
@@ -208,6 +268,7 @@ def flattened_index_to_real_index(idx, shape):
 
     index.reverse()
     return index
+
 
 def count_unequal_element(data_expected, data_actual, rtol, atol):
     """Function for asserting unequal elements in data_actual and data_expected."""
@@ -259,6 +320,7 @@ def allclose_nparray(data_expected, data_actual, rtol, atol=1e-08):
     if not np.allclose(data_expected, data_actual, rtol, atol):
         count_unequal_element(data_expected, data_actual, rtol, atol)
 
+
 class IOInfo(object):
     def __init__(self, name, dtype):
         self.name = name
@@ -279,13 +341,29 @@ class IOInfo(object):
         return self.name == other.name and self.dtype == other.dtype
 
 
+def _collect_inputs(input_desc):
+    """Collect inputs from input_desc."""
+    inputs = []
+    if not isinstance(input_desc, list):
+        return inputs
+    for desc in input_desc:
+        inputs.append(IOInfo(desc[0]["tensor_name"], desc[0]["data_type"]))
+    return inputs
+
+
+def _get_op_attr(op_name, attrs, attr_name):
+    """Get op attr value."""
+    for attr in attrs:
+        if attr["name"] == attr_name:
+            return attr["value"]
+    raise ValueError("Can not find attr '{}' in op {}".format(attr_name, op_name))
+
+
 def precision_analyze(desc: dict, tensors):
     exclude_op_list = ["Minimum", "Maximum", "Reshape", "ZerosLike", "Tile", "Select", "InplaceAssign", "Greater",
                        "SelectGT", "SelectLT", "LessEqual", "Less", "EquivFormat", "ExpandDims", "Transpose",
                        "TransData", "BroadcastTo", "Assign"]
-    input_tensors = []
-    for input_desc in desc["input_desc"] if desc["input_desc"] is not None else []:
-        input_tensors.append(IOInfo(input_desc[0]["tensor_name"], input_desc[0]["data_type"]))
+    input_tensors = _collect_inputs(desc["input_desc"])
 
     # Construct graph of current json
     graph = {}
@@ -296,10 +374,7 @@ def precision_analyze(desc: dict, tensors):
             inputs = IOInfo(op["input_desc"][1][0]["tensor_name"], op["input_desc"][1][0]["data_type"])
             graph[output] = [inputs]
             ops[output] = op["name"]
-            fake_output = False
-            for attr in op["attr"]:
-                if attr["name"] == "fake_output":
-                    fake_output = attr["value"]
+            fake_output = _get_op_attr(op["name"], op["attr"], "fake_output")
             if not fake_output:
                 output = IOInfo(op["output_desc"][0]["tensor_name"], op["output_desc"][0]["data_type"])
                 inputs = IOInfo(op["input_desc"][2][0]["tensor_name"], op["input_desc"][2][0]["data_type"])
@@ -307,11 +382,7 @@ def precision_analyze(desc: dict, tensors):
                 ops[output] = op["name"]
         else:
             output = IOInfo(op["output_desc"][0]["tensor_name"], op["output_desc"][0]["data_type"])
-            inputs = []
-            if op["input_desc"]:
-                for input_desc in op["input_desc"]:
-                    inputs.append(IOInfo(input_desc[0]["tensor_name"], input_desc[0]["data_type"]))
-            graph[output] = inputs
+            graph[output] = _collect_inputs(op["input_desc"])
             ops[output] = op["name"]
 
     def _precision_reduce(x: IOInfo):
@@ -322,6 +393,12 @@ def precision_analyze(desc: dict, tensors):
             logging.debug("Skip {}, because it comes from [{}] that will not reduce precision".format(x, ops[x]))
             return False
         return True
+
+    def _update_stack(node, visited_list, todo_list):
+        visited_list.append(node)
+        for t in graph.get(node, []):
+            if t not in visited_list:
+                todo_list.append(t)
 
     # DFS search for each tensor in tensors to check if they are casted from fp16
     tensors = tensors if isinstance(tensors, (list, tuple)) else [tensors]
@@ -339,12 +416,7 @@ def precision_analyze(desc: dict, tensors):
                 logging.info("{} --> {}".format(tensor, cur_tensor))
                 cast_from_fp16[i] = True
                 break
-            if cur_tensor not in visited:
-                visited.append(cur_tensor)
-                if cur_tensor not in graph:
-                    continue
-                for t in graph[cur_tensor]:
-                    stack.append(t)
+            _update_stack(cur_tensor, visited, stack)
     return cast_from_fp16
 
 
@@ -390,7 +462,7 @@ def target_profiling(mod, *args, target="cuda", repeat_time=1, device_id=0, need
     ctx = tvm.context(target, device_id)
     if target == "llvm":
         ftimer = mod.time_evaluator(mod.entry_name, ctx, number=repeat_time,
-            repeat=3, min_repeat_ms=1000)
+                                    repeat=3, min_repeat_ms=1000)
         if need_warm_up:
             mod.time_evaluator(mod.entry_name, ctx, number=1000)(*args)
     else:

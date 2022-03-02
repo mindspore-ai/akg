@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # coding: utf-8
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import math
 import akg
 from akg.utils import format_transform as ft_util
 from akg.utils import validation_check as vc_util
+
 
 class TensorUtils:
     """Class for creating tensor."""
@@ -207,6 +208,7 @@ def mul_axis_sum(data, axes, keepdims, name=None, attrs=None):
             new_i = list(i)
             new_i[axes[-1]] = k
             return akg.tvm.sum(data(*tuple(new_i)), axis=k)
+
         if name is None:
             data = akg.tvm.compute(res_shape, sumfunc, attrs=attrs)
         elif attrs is None:
@@ -236,6 +238,50 @@ def update_by_moving_average(hat_z, z, momentum):
     now = akg.lang.ascend.vmuls(z, (1 - momentum))
     return akg.lang.ascend.vadd(run, now)
 
+
+def _cal_pad_strategy_valid(out_shape, pad_sizes, pool_shapes, kernel, stride):
+    """For strategy 'VALID'."""
+    for i in range(2):
+        out_shape.append(math.ceil((pool_shapes[i] - (kernel[i] - 1)) / stride[i]))
+        if out_shape[i] <= 0:
+            raise ValueError("With pad mode 'VALID', the value of the kernel (or window) size should be less than or "
+                             "equal to that of the corresponding input shape!")
+    pad_sizes += [0, 0]  # for h
+    pad_sizes += [0, 0]  # for w
+
+
+def _cal_pad_strategy_same(out_shape, pad_sizes, pool_shapes, kernel, stride):
+    """For strategy 'SAME'."""
+    for i in range(2):
+        out_shape.append(math.ceil(pool_shapes[i] / stride[i]))
+        diff_shape = ((out_shape[i] - 1) * stride[i] + kernel[i]) - pool_shapes[i]
+        diff_shape = diff_shape if diff_shape > 0 else 0
+        pad_shape = [math.floor(diff_shape / 2), math.ceil(diff_shape / 2)]
+        pad_sizes += pad_shape
+
+
+def _cal_pad_strategy_constants(strategy, out_shape, pad_sizes, pool_shapes, kernel, stride, contrain_var):
+    """For strategy 'CONSTANTS'."""
+    if len(strategy) != 4:
+        raise RuntimeError("When with strategy 'CONSTANTS', strategy should be list or tuple of 4 int numbers, but "
+                           "get {}".format(strategy))
+    vc_util.check_pad('pad', strategy, 4)
+    for i in range(2):
+        pad_shape = [strategy[i * 2], strategy[i * 2 + 1]]
+        if contrain_var:
+            out_shape.append(akg.tvm.floordiv((pool_shapes[i] +
+                                               (pad_shape[0] + pad_shape[1]) - kernel[i]), (stride[i])) + 1)
+        else:
+            out_shape.append(math.floor((pool_shapes[i] +
+                                         (pad_shape[0] + pad_shape[1]) - kernel[i]) / float(stride[i])) + 1)
+
+        pad_sizes += pad_shape
+    height, width = out_shape
+    if (isinstance(height, int) and height <= 0) or (isinstance(width, int) and width <= 0):
+        raise ValueError("The height and width of calculated output shape [{}, {}] are invalid. Please check the "
+                         "input parameters!".format(height, width))
+
+
 def cal_pad_shapes_by_strategy(shape, kernel, stride, strategy):
     """
     Calculate the pad size and output shape by padding strategy.
@@ -261,51 +307,17 @@ def cal_pad_shapes_by_strategy(shape, kernel, stride, strategy):
             if not isinstance(s, (int, akg.tvm.expr.IntImm)):
                 contrain_var = True
     if isinstance(strategy, str) and strategy.upper() == "VALID":
-        for i in range(2):
-            out_shape.append(math.ceil((pool_shapes[i] - (kernel[i] - 1)) / stride[i]))
-            if out_shape[i] <= 0:
-                raise ValueError("With pad mode {0}, the value of the kernel "
-                                 "(or window) size should be less than or "
-                                 "equal to that of the corresponding input "
-                                 "shape!".format(strategy))
-
-        pad_sizes += [0, 0]  # for h
-        pad_sizes += [0, 0]  # for w
-
+        _cal_pad_strategy_valid(out_shape, pad_sizes, pool_shapes, kernel, stride)
     elif isinstance(strategy, str) and strategy.upper() == "SAME":
-        for i in range(2):
-            out_shape.append(math.ceil(pool_shapes[i] / stride[i]))
-            diff_shape = ((out_shape[i] - 1) * stride[i] + kernel[i]) - pool_shapes[i]
-            diff_shape = diff_shape if diff_shape > 0 else 0
-            pad_shape = [math.floor(diff_shape / 2), math.ceil(diff_shape / 2)]
-            pad_sizes += pad_shape
-
+        _cal_pad_strategy_same(out_shape, pad_sizes, pool_shapes, kernel, stride)
     elif isinstance(strategy, (list, tuple)):
-        if len(strategy) != 4:
-            raise RuntimeError(
-                "When with strateg 'CONSTANTS', strategy should be list or tuple of 4 int numbers but get {}".
-                format(strategy))
-        vc_util.check_pad('pad', strategy, 4)
-        for i in range(2):
-            pad_shape = [strategy[i * 2], strategy[i * 2 + 1]]
-            if contrain_var:
-                out_shape.append(akg.tvm.floordiv((pool_shapes[i] +
-                                                   (pad_shape[0] + pad_shape[1]) - kernel[i]), (stride[i])) + 1)
-            else:
-                out_shape.append(math.floor((pool_shapes[i] +
-                                             (pad_shape[0] + pad_shape[1]) - kernel[i]) / float(stride[i])) + 1)
-
-            pad_sizes += pad_shape
-        height, width = out_shape
-        if (isinstance(height, int) and height <= 0) or (isinstance(width, int) and width <= 0):
-            raise ValueError("The height and witdth of calculated output"
-                             " shape [{}, {}] are invalid. Please check the "
-                             "input parameters!".format(height, width))
+        _cal_pad_strategy_constants(strategy, out_shape, pad_sizes, pool_shapes, kernel, stride, contrain_var)
     else:
-        raise RuntimeError("Padding strategies only support 'VALID', 'CONSTANTS' or 'SAME', but get {}".
-                           format(strategy))
+        raise RuntimeError("Padding strategies only support 'VALID', 'CONSTANTS' or 'SAME', but get {}"
+                           .format(strategy))
 
     return pad_sizes, out_shape
+
 
 def broadcast_gradient_args(x, y):
     """
@@ -329,6 +341,7 @@ def broadcast_gradient_args(x, y):
 
     return rx, ry
 
+
 def get_broadcast_shape(shape1, shape2):
     shape_out = collections.deque()
     reversed_shapes = map(reversed, (shape1, shape2))
@@ -339,20 +352,26 @@ def get_broadcast_shape(shape1, shape2):
         shape_out.appendleft(max_size)
     return list(shape_out)
 
+
 def zero_const(dtype):
     return akg.tvm.const(0, dtype)
+
 
 def one_const(dtype):
     return akg.tvm.const(1, dtype)
 
+
 def neg_one_const(dtype):
     return akg.tvm.const(-1, dtype)
+
 
 def half_const(dtype):
     return akg.tvm.const(0.5, dtype)
 
+
 def pi_const(dtype):
     return akg.tvm.const(3.1415926535897932384626433832795, dtype)
+
 
 def get_value(val, type):
     if isinstance(val, type) and type in [akg.tvm.expr.IntImm, akg.tvm.expr.FloatImm]:

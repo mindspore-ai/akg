@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # coding: utf-8
-# Copyright 2021 Huawei Technologies Co., Ltd
+# Copyright 2021-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -29,6 +29,7 @@ DEFAULT_FEATURE_VEC_LEN = 164
 # The size of int and float in bytes
 SIZE_OF_INT32 = 4
 SIZE_OF_FLOAT32 = 4
+
 
 def unpack_feature(byte_arr: bytearray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Unpack the flatten feature (in byte array format) from c++
@@ -85,13 +86,11 @@ def unpack_feature(byte_arr: bytearray) -> Tuple[np.ndarray, np.ndarray, np.ndar
         row = []
 
         # Now, we need to unpack the feature for multiple statements.
-        # The format is:
-        # {
-        #   int   n_stage;                        // The number of stages
-        #   float feature_vecs[n_stage][vec_len]  // The feature vector for each stage
-        # }
-        # where vec_len can be calculated by `(size - 1) / n_stmts`
-
+        # The format is: {int n_stage; float feature_vecs[n_stage][vec_len]}
+        # where,
+        # 1. n_stage is the number of stages
+        # 2. feature_vecs is the feature vector for each stage
+        # 3. vec_len can be calculated by `(size - 1) / n_stmts`
         if size == 0:
             # failed during lowering
             features.append(np.zeros((1, vec_len)))
@@ -107,13 +106,6 @@ def unpack_feature(byte_arr: bytearray) -> Tuple[np.ndarray, np.ndarray, np.ndar
             offset += SIZE_OF_FLOAT32
             if tmp_vec_len != vec_len:
                 vec_len = tmp_vec_len
-
-            # assert (
-            #     tmp_vec_len == vec_len
-            # ), "The length of feature vector is wrong. Expected %d but got %d." % (
-            #     vec_len,
-            #     tmp_vec_len,
-            # )
 
             assert tmp_vec_len * n_stmts == size - 1
             for _ in range(n_stmts):
@@ -134,7 +126,8 @@ def unpack_feature(byte_arr: bytearray) -> Tuple[np.ndarray, np.ndarray, np.ndar
     task_ids = 0
     return np.array(features, dtype=object), np.array(normalized_throughputs), np.array(task_ids)
 
+
 def get_features_from_stmts(target, stmts, binds, n_skip_cache=0, max_n_buf=5, store_path="./"):
     func = akg.tvm.get_global_func("get_features_from_stmts")
-    byte_arr  = func(target, stmts, binds, n_skip_cache, max_n_buf, store_path)
+    byte_arr = func(target, stmts, binds, n_skip_cache, max_n_buf, store_path)
     return unpack_feature(byte_arr)[0]

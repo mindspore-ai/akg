@@ -1,4 +1,4 @@
-# Copyright 2021 Huawei Technologies Co., Ltd
+# Copyright 2021-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -31,30 +31,37 @@ package_data = {
 }
 
 
-def find_files(where=['.']):
+def collect_dirs(cur_dir, dirs):
+    """Collect all sub dirs in current dir."""
+    for root, all_dirs, files in os.walk(cur_dir, followlinks=True):
+        for d in all_dirs:
+            if '.' in d:
+                continue
+            full_path = os.path.join(root, d)
+            package = full_path.replace(os.path.sep, '.')
+            dirs.append(package)
+
+
+def find_files(where=None):
     """
     Return a package list
 
     'where' is the root directory list
     """
+    if where is None:
+        where = ['.']
     dirs = [path.replace(os.path.sep, '.') for path in where]
     for selected_root in where:
-        for root, all_dirs, files in os.walk(selected_root, followlinks=True):
-            for dir in all_dirs:
-                full_path = os.path.join(root, dir)
-                package = full_path.replace(os.path.sep, '.')
-                if '.' in dir:
-                    continue
-                dirs.append(package)
+        collect_dirs(selected_root, dirs)
 
     packages = []
-    for dir in dirs:
-        if dir.endswith("__pycache__"):
+    for d in dirs:
+        if d.endswith("__pycache__"):
             continue
-        elif dir.startswith("build."):
-            packages.append(dir[6:])
+        elif d.startswith("build."):
+            packages.append(d[6:])
         else:
-            packages.append(dir)
+            packages.append(d)
     return packages
 
 
