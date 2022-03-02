@@ -239,12 +239,6 @@ class UserConfig {
     ParseStringAttr(attrs, "mind_trick", &mind_trick_json_);
     ParseBoolAttr(attrs, "mind_trick_autogen_gpu_automap", &mind_trick_gpu_autogen_automap_);
 
-    ParseStringAttr(attrs, "dim", &b_dim_);
-    ParseStringAttr(attrs, "bind_elem_per_thread", &elem_per_thread_);
-    ParseMappingCfgAttr(attrs, "bind_block", &block_cfg_);
-    ParseMappingCfgAttr(attrs, "bind_thread", &thread_cfg_);
-    ParseIntAttr(attrs, "max_elem_per_thread", &max_elem_per_thread_);
-
     ParseCustomTilingAttr(attrs, "custom_tiling", &custom_tiling_);
     ParseBoolAttr(attrs, "pragma_analyze_reuse_buffer", &pragma_analyze_reuse_buffer_);
     ParseBoolAttr(attrs, "pragma_speedup_tiling", &pragma_speedup_tiling_);
@@ -294,11 +288,19 @@ class UserConfig {
     ParseBoolAttr(attrs, "enable_atomic_add", &enable_atomic_add_);
     ParseBoolAttr(attrs, "use_new_space", &use_new_space_);
 
+    // cuda and cpu common attr
+    ParseStringAttr(attrs, "dim", &b_dim_);
+    ParseBoolAttr(attrs, "enable_vectorization", &enable_vectorization_);
+    ParseBoolAttr(attrs, "pragma_enable_matmul", &enable_matmul_);
+
     if (GetTarget() == TARGET_CUDA) {
+      ParseStringAttr(attrs, "bind_elem_per_thread", &elem_per_thread_);
+      ParseMappingCfgAttr(attrs, "bind_block", &block_cfg_);
+      ParseMappingCfgAttr(attrs, "bind_thread", &thread_cfg_);
+      ParseIntAttr(attrs, "max_elem_per_thread", &max_elem_per_thread_);
       ParseBoolAttr(attrs, "pragma_enable_tensor_core", &enable_tensor_core_);
       ParseBoolAttr(attrs, "pragma_enable_emit_core", &pragma_enable_emit_core_);
       ParseBoolAttr(attrs, "pragma_enable_conv_tensor_core", &enable_conv_tensor_core_);
-      ParseBoolAttr(attrs, "pragma_enable_matmul", &enable_matmul_);
       ParseBoolAttr(attrs, "enable_tensor_core_use_poly", &enable_tensor_core_use_poly_);
       ParseBoolAttr(attrs, "enable_akg_reduce_lib", &enable_akg_reduce_lib_);
       ParseBoolAttr(attrs, "has_tot_ops", &has_tot_ops_);
@@ -317,7 +319,6 @@ class UserConfig {
       ParseVectorLengthAttr(attrs, "vector_length", &vector_length_);
     } else if (GetTarget() == TARGET_CPU) {
       ParseVectorLengthAttr(attrs, "vector_length", &vector_length_, false);
-      ParseBoolAttr(attrs, "pragma_enable_matmul", &enable_matmul_);
       ParseStringAttr(attrs, "feature", &feature_);
       ParseIntAttr(attrs, "csr_avg_row", &csr_avg_row_);
     }
