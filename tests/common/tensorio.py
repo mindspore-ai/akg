@@ -1,4 +1,4 @@
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,10 +15,8 @@
 """
 Data dump load operation
 """
-import os
 import struct
 import numpy as np
-from tests.common.log import Log
 
 
 def dump_tensor(tensor, file_path):
@@ -48,19 +46,5 @@ def load_tensor(file_path, dtype=None):
 
 
 def compare_tensor(acu_output, exp_output, rtol=1.e-5, atol=1.e-8, equal_nan=False):
-    """
-    Output and expected result comparison method
-    :param acu_output: array_like Input arrays to compare.
-    :param exp_output: array_like Input arrays to compare.
-    :param rtol: float The relative tolerance parameter (see Notes).
-    :param atol: float The absolute tolerance parameter (see Notes).
-    :param equal_nan: bool
-            Whether to compare NaN's as equal.  If True, NaN's in `a` will be
-            considered equal to NaN's in `b` in the output array.
-    :return: True / False
-    """
-    res = np.allclose(acu_output, exp_output, rtol, atol, equal_nan)
-    if not res:
-        pandora_logger_ = Log(case_name=os.path.dirname(__file__), case_path=os.getcwd())
-        pandora_logger_.log.error("This shape precision is not up to standard, compare failed.")
-    return res
+    from akg.utils import composite_op_helper as helper
+    return helper.compare_tensor(acu_output, exp_output, rtol, atol, equal_nan)

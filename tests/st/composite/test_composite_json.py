@@ -1,4 +1,4 @@
-# Copyright 2020-2021 Huawei Technologies Co., Ltd
+# Copyright 2020-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,11 +20,10 @@ import pytest
 import logging
 import akg.tvm as tvm
 from akg import composite
-from akg.utils import custom_tiling
 from akg.utils import kernel_exec as utils
 from akg.utils.result_analysis import target_profiling, get_compare_tolerance
 from akg.utils.format_transform import to_tvm_nd_array
-from tests.common.gen_json_data import gen_json_data
+from akg.utils.composite_op_helper import gen_json_data
 from tests.common.base import get_rtol_atol
 from tests.common.tensorio import compare_tensor, dump_tensor
 

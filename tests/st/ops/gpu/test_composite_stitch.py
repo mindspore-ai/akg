@@ -1,4 +1,4 @@
-# Copyright 2021 Huawei Technologies Co., Ltd
+# Copyright 2021-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,8 +16,7 @@ import os
 import logging
 from akg import composite
 from akg.utils import kernel_exec as utils
-from tests.common.gen_json_data import gen_json_data
-from tests.common.base import get_rtol_atol
+from akg.utils.composite_op_helper import gen_json_data
 from tests.common.tensorio import compare_tensor
 
 @pytest.mark.level0

@@ -14,7 +14,6 @@
 
 import numpy as np
 import akg
-from copy import deepcopy
 from tests.common.base import get_rtol_atol
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
@@ -22,7 +21,7 @@ from akg.utils import CCE
 from akg.ops.array import UnsortedSegmentSum
 from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
-from tests.common.gen_random import random_gaussian, gen_indices_unsorted_segment_sum
+from akg.utils.gen_random import random_gaussian, gen_indices_unsorted_segment_sum
 
 def unsorted_segment_sum_run(shape, ids_shape, num_segments, dtype, attrs):
     if not attrs:
