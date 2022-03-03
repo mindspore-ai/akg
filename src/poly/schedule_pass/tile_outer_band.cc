@@ -1246,6 +1246,8 @@ isl::schedule_node TileOuterBand::TileThreadAndBlockConfig(const isl::schedule_n
 isl::schedule_node TileOuterBand::TileMatmulOperatorForCuda(const isl::schedule_node &node) {
   auto tile_node = node;
   size_t start_depth = tile_node.get_tree_depth();
+
+  tile_node = TileThreadAndBlockConfig(tile_node, true);
   tile_node = TileBand(tile_node, GetLevelTileSize(tile_node, TILE_WITH_C1));
 
   isl::schedule_node_band band_node = tile_node.as<isl::schedule_node_band>();
@@ -1259,7 +1261,6 @@ isl::schedule_node TileOuterBand::TileMatmulOperatorForCuda(const isl::schedule_
 
   // split the k axis
   tile_node = band_node.split(count_coincident);
-  tile_node = TileThreadAndBlockConfig(tile_node, true);
   tile_node = InsertPromoteMarker(tile_node);
 
   if (scop_info_.user_config_.GetEnableTensorCoreUsePoly()) {

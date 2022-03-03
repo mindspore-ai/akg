@@ -906,26 +906,31 @@ isl::multi_val CheckAndGetMapSize(const isl::schedule_node &mapping_root, const 
   int aff_size = static_cast<int>(aff_list.size());
   for (int i = aff_size - 1; i >= 0; --i) {
     auto aff = aff_list.get_at(i).floor();
-    auto extent = aff.max_val().get_num_si() + 1;
-    auto map_size = extent;
+    int extent = static_cast<int>(aff.max_val().get_num_si()) + 1;
+    int map_size = extent;
 
     if (required_mapping_strategy.count(static_cast<int>(i)) != 0) {
       std::string mapping_idx = required_mapping_strategy[static_cast<int>(i)].mapping_idx;
+      if (static_cast<int>(additional_tile_size.size()) > i) {
+        mapping_cfg_map[mapping_idx] *= additional_tile_size[i];
+      }
+      auto current_mapping_size = mapping_cfg_map[mapping_idx] - required_mapping_strategy[static_cast<int>(i)].offset;
       if (non_repeated_idx.find(mapping_idx) != non_repeated_idx.end()) {
-        map_size = mapping_cfg_map[mapping_idx] - required_mapping_strategy[static_cast<int>(i)].offset;
+        map_size = current_mapping_size;
       } else {
-        map_size = mapping_cfg_map[mapping_idx] - required_mapping_strategy[static_cast<int>(i)].offset;
+        map_size = std::min(map_size, current_mapping_size);
+        CHECK(map_size != 0);
         mapping_cfg_map[mapping_idx] = mapping_cfg_map[mapping_idx] / map_size;
       }
-
+    } else {
+      map_size = 1;
       if (static_cast<int>(additional_tile_size.size()) > i) {
         map_size *= additional_tile_size[i];
       }
-      CHECK(map_size != 0);
-      mapping_sizes.emplace_back(map_size);
-    } else {
-      mapping_sizes.emplace_back(1);
     }
+
+    CHECK(map_size != 0);
+    mapping_sizes.emplace_back(map_size);
 
     if (mapping_cfg->type == MappingType::THREADS || mapping_cfg->type == MappingType::REPLACE_THREADS) {
       need_tile = need_tile || extent > map_size;
