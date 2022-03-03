@@ -359,8 +359,9 @@ class ScopMakeScheduleTree final : protected IRVisitor {
 
     auto outer_add = outer.add(loop_var_id);
     auto outer_list = macro_stmt >= 0 ? outer : outer_add;
+    scop_info_.analysis_result_.for_type_.push_back(op->for_type);
     auto body_schedule = MakeScheduleTreeHelper(op->body, scop_info_, set, outer_list, macro_stmt);
-
+    scop_info_.analysis_result_.for_type_.pop_back();
     auto multi_union_pw_aff_func = isl::multi_union_pw_aff(
       GetUnionPwAffAtDomain(isl::aff::param_on_domain(space, loop_var_id), body_schedule.get_domain(),
                             scop_info_.analysis_result_.GetOperatorDomainMap()));

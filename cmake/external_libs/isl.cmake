@@ -6,7 +6,7 @@ akg_add_pkg(isl
         DIR ${AKG_SOURCE_DIR}/third_party/isl-0.22.tar.gz
         LIBS isl_fixed
         CUSTOM_CMAKE ${AKG_SOURCE_DIR}/third_party/isl_wrap
-        PATCHES ${AKG_SOURCE_DIR}/third_party/patch/isl/isl.patch ${AKG_SOURCE_DIR}/third_party/patch/isl/isl-influence.patch
+        PATCHES ${AKG_SOURCE_DIR}/third_party/patch/isl/isl.patch
         CMAKE_OPTION " ")
 include_directories("${AKG_SOURCE_DIR}/third_party/isl_wrap/include")
 include_directories("${isl_INC}/include")

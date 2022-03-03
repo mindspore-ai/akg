@@ -22,6 +22,10 @@
 #include "poly/scop_info.h"
 #include "poly/pass_info.h"
 
+#ifdef AKG_USE_MLS
+#include "poly/mls.h"
+#endif
+
 namespace akg {
 namespace ir {
 namespace poly {
@@ -108,6 +112,23 @@ std::string GetPromotionTensorName(const isl::schedule_node &node, const std::ve
 bool IsReadOrWriteTensor(const isl::schedule_node &node, const std::string &read_name, const std::string &write_name);
 
 isl::schedule_node GetCanMappingNode(const isl::schedule_node &node);
+
+#ifdef AKG_USE_MLS
+/// \brief Determine whether the MLSched scheduler should be used
+/// \param[in] scop_info ScopInfo to maybe inspect
+/// \return A boolean value that indicates whether MLSched should be used
+/// \retval true if MLSched should be used
+/// \retval false otherwise
+bool MLSchedShouldBeUsed(akg::ir::poly::ScopInfo &scop_info);
+
+/// \brief Initialize runtime options for MLSched
+/// \param[in] scop_info ScopInfo to maybe inspect
+/// \result Options for MLSched
+///
+/// The method initializes and returns runtime options for the MLSched scheduler.
+/// The options may be decided arbitrarily, from the environment or from \a scop_info.
+mls::bin::Options MLSchedOptionsInit(akg::ir::poly::ScopInfo &scop_info);
+#endif
 
 }  // namespace poly
 }  // namespace ir

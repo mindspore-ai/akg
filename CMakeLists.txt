@@ -28,6 +28,7 @@ set(TVM_DIR "${AKG_SOURCE_DIR}/third_party/incubator-tvm")
 
 if(NOT CMAKE_SYSTEM_NAME MATCHES "Windows" AND NOT USE_KC_AIR AND NOT USE_LLVM)
   add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=0)
+  set(AKG_GLIBCXX_USE_CXX11_ABI OFF)
 endif()
 
 include(cmake/RT.cmake)
@@ -360,6 +361,7 @@ endif(USE_CUDA)
 add_library(akg SHARED ${COMPILER_SRCS} ${RUNTIME_SRCS} ${TOPI_SRCS} ${AKG_EXTEND})
 
 add_dependencies(akg akg::isl_fixed)
+include(cmake/mls.cmake)
 
 if (EXISTS ${AUTO_TUNE_LIB})
   target_link_libraries(akg ${TVM_LINKER_LIBS} ${TVM_RUNTIME_LINKER_LIBS} akg::isl_fixed pthread ${AUTO_TUNE_LIB})

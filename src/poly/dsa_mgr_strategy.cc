@@ -58,7 +58,8 @@ void DsaMgrStrategy::RegisterMemPromPasses() {
 }
 
 void DsaMgrStrategy::RegisterSchedulePasses() {
-  if (!scop_info_.user_config_.GetDisableGroup()) {
+  const bool enable_mlsched = MLSchedShouldBeUsed(scop_info_);
+  if (!enable_mlsched && !scop_info_.user_config_.GetDisableGroup()) {
     RegisterPass(std::make_shared<GroupStatements>(pass_info_));
   }
   RegisterPass(std::make_shared<ComputeSchedule>(pass_info_, scop_info_));
@@ -71,7 +72,9 @@ void DsaMgrStrategy::RegisterSchedulePasses() {
   if (scop_info_.user_config_.GetKeepOuterBandOrder()) {
     RegisterPass(std::make_shared<KeepOuterBandOrder>(scop_info_));
   }
-  RegisterPass(std::make_shared<UnGroupStatements>(pass_info_));
+  if (!enable_mlsched) {
+    RegisterPass(std::make_shared<UnGroupStatements>(pass_info_));
+  }
 }
 
 void DsaMgrStrategy::RegisterPasses() {

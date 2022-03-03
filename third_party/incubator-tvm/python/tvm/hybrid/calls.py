@@ -39,6 +39,7 @@ LOOP_INTRIN = {
     'unroll'      : For.Unrolled,
     'parallel'    : For.Parallel,
     'vectorize'   : For.Vectorized,
+    'serial'      : For.Invariant,
     'const_range' : (For.Unrolled, ),
 }
 
@@ -73,7 +74,7 @@ def _grid(annotation, args):
     iter_var = None
     return iter_var, low, ext, for_type, step
 
-range = unroll = vectorize = parallel = const_range = _range #pylint: disable=invalid-name
+range = unroll = vectorize = parallel = const_range = serial = _range # pylint: disable=invalid-name
 grid = _grid
 
 
@@ -150,9 +151,9 @@ def _cast(func_id, args):
                      "Only one expression can be cast")
     return _make.Cast(func_id, args[0])
 
-float16 = float32 = float64 = _cast #pylint: disable=invalid-name
-int8 = int16 = int32 = int64 = _cast #pylint: disable=invalid-name
-uint8 = uint16 = uint32 = uint64 = _cast #pylint: disable=invalid-name
+float16 = float32 = float64 = _cast # pylint: disable=invalid-name
+int8 = int16 = int32 = int64 = _cast # pylint: disable=invalid-name
+uint8 = uint16 = uint32 = uint64 = _cast # pylint: disable=invalid-name
 
 
 def ceil_div(func_id, args):

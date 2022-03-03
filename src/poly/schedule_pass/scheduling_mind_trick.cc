@@ -34,6 +34,11 @@
 namespace akg {
 namespace ir {
 namespace poly {
+///////////////////////////////////////////////////////////////////////////
+// Supported environment variables
+///////////////////////////////////////////////////////////////////////////
+
+static constexpr const char *const kEnvStringMindTricksAutogenSwizzle = "MS_AKG_MIND_TRICKS_AUTOGEN_SWIZZLE";
 
 ////////////////////////////////////////////////////////////////////////////////
 // Local "implementation-detail" variables
@@ -196,7 +201,7 @@ static bool ShouldAutogenSwizzleDimension(ScopInfo &scop_info) {
     result = true;
   }
 
-  const char *const env_autogen_swizzle = std::getenv(env_string_mind_tricks_autogen_swizzle_);
+  const char *const env_autogen_swizzle = std::getenv(kEnvStringMindTricksAutogenSwizzle);
   if (env_autogen_swizzle && std::string(env_autogen_swizzle) == "false") {
     result = false;
   }
@@ -326,28 +331,32 @@ void AccessInfo::Log(const std::string &prefix) const {
 }
 
 int AccessInfo::AccessSwizzleSize(const isl::map &access) {
+  constexpr int none = -1;
   const isl::set &range = access.range();
   if (range.n_dim() == 0) {
-    return -1;
+    return none;
   }
 
   const unsigned int innermost = range.n_dim() - 1;
   const isl::pw_aff &maxbound = range.dim_max(innermost);
   if (!isl_pw_aff_is_cst(maxbound.get()) || !maxbound.isa_aff()) {
-    return -1;
+    return none;
   }
 
   const isl::aff &maxbound_aff = maxbound.as_aff();
   const isl::val &maxbound_val = maxbound_aff.constant_val().add(1);
+
   if (!maxbound_val.ge(2)) {
-    return -1;
+    return none;
   } else if (!maxbound_val.ge(4) && maxbound_val.mod(2).eq(0)) {
-    return 2;
+    constexpr int two_elements_swizzle = 2;
+    return two_elements_swizzle;
   } else if (maxbound_val.mod(4).ne(0)) {
-    return -1;
+    return none;
   }
 
-  return 4;
+  constexpr int four_elements_swizzle = 4;
+  return four_elements_swizzle;
 }
 
 bool AccessInfo::DimensionIsContiguous(const isl::map &access, const unsigned int dimension) {
@@ -730,16 +739,7 @@ SchedulingMindTrick::SchedulingMindTrick(PassInfo &pass_info, ScopInfo &scop_inf
   }
 }
 
-SchedulingMindTrick::~SchedulingMindTrick() {
-  if (influence_list_) {
-    isl_influence_list_free(influence_list_);
-    influence_list_ = nullptr;
-  }
-  if (influence_equal_list_) {
-    isl_influence_equal_list_free(influence_equal_list_);
-    influence_equal_list_ = nullptr;
-  }
-}
+SchedulingMindTrick::~SchedulingMindTrick() {}
 
 void SchedulingMindTrick::Load(const std::string &filename) {
   // Set filename as the mind_trick's default name.
@@ -884,7 +884,9 @@ void SchedulingMindTrick::Parse(const picojson::value &root) {
   ParseCheckSchedule(maybe(root, "check schedule"));
   ParseAttrs(maybe(root, "attrs"));
   ParseVerbosity(maybe(root, "verbosity"));
-  ParseSoftConstraints(maybe(root, "soft constraints"));
+#ifdef AKG_USE_MLS
+  hints_ = mls::bin::Hints(root);
+#endif
 }
 
 void SchedulingMindTrick::ParseName(const picojson::value &node) {
@@ -1062,374 +1064,6 @@ void SchedulingMindTrick::ParseVerbosity(const picojson::value &node) {
   }
 }
 
-void SchedulingMindTrick::IslInfluenceToggle(bool toggle) {
-  isl_ctx *const ctx = scop_info_.ctx_.get();
-  if (toggle) {
-    isl_options_set_akg_print_debug(ctx, 1);
-    isl_options_set_akg_influence_scheduler(ctx, 1);
-    isl_influence_enabled = 1;
-  } else {
-    isl_options_set_akg_print_debug(ctx, 0);
-    isl_options_set_akg_influence_scheduler(ctx, 0);
-    isl_influence_enabled = 0;
-  }
-}
-
-SoftToken SchedulingMindTrick::GetSoftToken(const char &token) const {
-  if (token == '[')
-    return SoftToken::OPEN_BRACKET;
-  else if (token == ']')
-    return SoftToken::CLOSE_BRACKET;
-  else if (token == '(')
-    return SoftToken::OPEN_PARENTHESIS;
-  else if (token == ')')
-    return SoftToken::CLOSE_PARENTHESIS;
-  else if (token == ',')
-    return SoftToken::COMMA;
-  else if (token == '?')
-    return SoftToken::QUESTION_MARK;
-  else if (token == '-')
-    return SoftToken::MINUS;
-  else if (token == '/')
-    return SoftToken::DIVISION;
-  else if (token == '%')
-    return SoftToken::MODULO;
-  else if (std::isdigit(token))
-    return SoftToken::DIGIT;
-  else
-    return SoftToken::INVALID_TOKEN;
-}
-
-bool SchedulingMindTrick::HasValidNextToken(const char &token1, const char &token2) const {
-  const SoftToken tok1 = GetSoftToken(token1);
-  const SoftToken tok2 = GetSoftToken(token2);
-
-  const bool open_bracket_cond =
-    (tok1 == SoftToken::OPEN_BRACKET) &&
-    (tok2 == SoftToken::QUESTION_MARK || tok2 == SoftToken::DIGIT || tok2 == SoftToken::MINUS);
-
-  const bool close_bracket_cond = (tok1 == SoftToken::CLOSE_BRACKET) && (tok2 == SoftToken::OPEN_PARENTHESIS);
-
-  const bool open_parenthesis_cond =
-    (tok1 == SoftToken::OPEN_PARENTHESIS) && (tok2 == SoftToken::DIVISION || tok2 == SoftToken::MODULO);
-
-  const bool comma_cond = (tok1 == SoftToken::COMMA) &&
-                          (tok2 == SoftToken::QUESTION_MARK || tok2 == SoftToken::DIGIT || tok2 == SoftToken::MINUS ||
-                           tok2 == SoftToken::DIVISION || tok2 == SoftToken::MODULO);
-
-  const bool question_mark_cond =
-    (tok1 == SoftToken::QUESTION_MARK) &&
-    (tok2 == SoftToken::COMMA || tok2 == SoftToken::DIGIT || tok2 == SoftToken::CLOSE_BRACKET);
-
-  const bool minus_cond = (tok1 == SoftToken::MINUS) && (tok2 == SoftToken::DIGIT);
-
-  const bool div_cond = (tok1 == SoftToken::DIVISION) && (tok2 == SoftToken::DIGIT);
-
-  const bool modulo_cond = (tok1 == SoftToken::MODULO) && (tok2 == SoftToken::DIGIT);
-
-  const bool digit_cond =
-    (tok1 == SoftToken::DIGIT) && (tok2 == SoftToken::DIGIT || tok2 == SoftToken::COMMA ||
-                                   tok2 == SoftToken::CLOSE_BRACKET || tok2 == SoftToken::CLOSE_PARENTHESIS);
-
-  // Check over CLOSE_PARENTHESIS is not included
-  // as it can only be the last token of an expression
-  const bool is_valid_or_not = open_bracket_cond || close_bracket_cond || open_parenthesis_cond || comma_cond ||
-                               question_mark_cond || minus_cond || div_cond || modulo_cond || digit_cond;
-
-  return is_valid_or_not;
-}
-
-void SchedulingMindTrick::FlushSoftData() {
-  singles_.clear();
-  linked_.clear();
-  modulos_divisions_.clear();
-}
-
-bool SchedulingMindTrick::CheckSoftExpression(const std::string &expr) {
-  Info(log::Verbosity::high, "parsing expression " + expr);
-
-  if (GetSoftToken(expr.front()) != SoftToken::OPEN_BRACKET) {
-    Error("invalid first character (can only be \'[\')");
-    FlushSoftData();
-    return false;
-  }
-
-  if (GetSoftToken(expr.back()) != SoftToken::CLOSE_BRACKET &&
-      GetSoftToken(expr.back()) != SoftToken::CLOSE_PARENTHESIS) {
-    Error("invalid last character (can only be \']\' or \')\')");
-    FlushSoftData();
-    return false;
-  }
-
-  for (unsigned int i = 0; i < expr.size() - 1; ++i) {
-    auto token_ = expr[i];
-    auto next_ = expr[i + 1];
-
-    if (!HasValidNextToken(token_, next_)) {
-      Error("invalid succession of characters");
-      FlushSoftData();
-      return false;
-    }
-  }
-
-  return true;
-}
-
-std::pair<int, isl_influence_coeff_type> SchedulingMindTrick::DetermineCoeffType(unsigned int incr,
-                                                                                 unsigned int nb_vars,
-                                                                                 unsigned int nb_params) const {
-  if (incr <= nb_vars)
-    return std::make_pair(incr - 1, isl_var);
-  else if ((nb_vars < incr) && (incr <= (nb_vars + nb_params)))
-    return std::make_pair(incr - 1 - nb_vars, isl_param);
-  else  // if (incr > (nb_vars + nb_params))
-    return std::make_pair(-1, isl_cst);
-}
-
-void SchedulingMindTrick::CollectSoftConstraintsData(std::string stmt_name, unsigned int dim, unsigned int nb_vars,
-                                                     unsigned int nb_params, std::string expr) {
-  std::string value_{""};
-  SoftToken value_category = SoftToken::INVALID_TOKEN;
-
-  unsigned int incr = 0;
-
-  for (unsigned i = 1; i < expr.size() - 1; ++i) {
-    auto token_ = GetSoftToken(expr[i]);
-    auto next_ = GetSoftToken(expr[i + 1]);
-    auto prev_ = GetSoftToken(expr[i - 1]);
-
-    if ((next_ == SoftToken::COMMA) || (next_ == SoftToken::CLOSE_BRACKET) || (next_ == SoftToken::CLOSE_PARENTHESIS))
-      incr++;
-
-    if ((token_ == SoftToken::DIGIT) || (token_ == SoftToken::MINUS)) {
-      if (value_.empty()) value_category = prev_;
-
-      value_.push_back(expr[i]);
-
-      if (next_ == SoftToken::DIGIT) continue;
-
-      auto coeff_infos = DetermineCoeffType(incr, nb_vars, nb_params);
-
-      switch (value_category) {
-        case SoftToken::OPEN_BRACKET:
-          singles_.push_back(std::make_tuple(stmt_name, dim, coeff_infos.first, coeff_infos.second, std::stoi(value_)));
-          break;
-        case SoftToken::COMMA:
-          singles_.push_back(std::make_tuple(stmt_name, dim, coeff_infos.first, coeff_infos.second, std::stoi(value_)));
-          break;
-        case SoftToken::QUESTION_MARK:
-          linked_[value_].push_back(std::make_tuple(stmt_name, dim, coeff_infos.first, coeff_infos.second, 0));
-          break;
-        case SoftToken::MODULO:
-          modulos_divisions_.push_back(
-            std::make_tuple(stmt_name, dim, std::make_pair(SoftToken::MODULO, std::stoi(value_))));
-          break;
-        case SoftToken::DIVISION:
-          modulos_divisions_.push_back(
-            std::make_tuple(stmt_name, dim, std::make_pair(SoftToken::DIVISION, std::stoi(value_))));
-          break;
-        default:
-          break;
-      }
-      // Reset value string
-      value_ = "";
-    }
-
-    if ((token_ == SoftToken::QUESTION_MARK) && (next_ != SoftToken::DIGIT))
-      Warn(log::Verbosity::medium, "ignoring free coefficient");
-  }
-
-  return;
-}
-
-void SchedulingMindTrick::ParseSoftConstraints(const picojson::value &node) {
-  if (!node.is<picojson::array>()) {
-    return;
-  }
-
-  unsigned int nb_stmt = node.get<picojson::array>().size();
-
-  for (unsigned int stmt_num = 0; stmt_num < nb_stmt; ++stmt_num) {
-    auto stmt = node.get<picojson::array>()[stmt_num];
-
-    const picojson::value &statement = maybe(stmt, "statement");
-    const picojson::value &meta = maybe(stmt, "meta");
-    const picojson::value &coefficients = maybe(stmt, "coefficients");
-
-    if (!statement.is<std::string>() || !meta.is<picojson::array>() || !coefficients.is<picojson::array>()) {
-      return;
-    }
-
-    std::vector<std::string> coefficients_ = to_string_vector(coefficients);
-
-    std::vector<int> meta_ = to_int_vector(meta);
-    unsigned int nb_vars = meta_[0];
-    unsigned int nb_params = meta_[1];
-    unsigned int nb_dims = coefficients_.size();
-    std::string stmt_name = statement.get<std::string>();
-
-    for (unsigned int dim = 0; dim < nb_dims; ++dim) {
-      // Remove whitespaces
-      std::string full_expr_ = std::regex_replace(coefficients_[dim], std::regex("[\\s]+"), "");
-
-      // We first check full expression before parsing anything
-      if (!CheckSoftExpression(full_expr_)) return;
-
-      CollectSoftConstraintsData(stmt_name, dim, nb_vars, nb_params, full_expr_);
-    }
-  }
-
-  return;
-}
-
-void SchedulingMindTrick::BuildInfluenceList(std::vector<single_data> singles) {
-  isl_ctx *const ctx = scop_info_.GetCtx().get();
-  influence_list_ = isl_calloc_type(ctx, struct isl_influence_list);
-
-  if (influence_list_ == NULL) {
-    return;
-  }
-
-  influence_list_->data = isl_calloc_array(ctx, struct isl_influence, singles.size());
-  if (influence_list_->data == NULL) {
-    return;
-  }
-
-  influence_list_->size = singles.size();
-  influence_list_->mem = singles.size();
-
-  for (unsigned i = 0; i < singles.size(); ++i) {
-    isl_influence *pinf = &influence_list_->data[i];
-    single_data data = singles[i];
-
-    pinf->statement_name = strdup(std::get<0>(data).c_str());
-    pinf->sched_dim = std::get<1>(data);
-    pinf->coef_dim = std::get<2>(data);
-    pinf->type = std::get<3>(data);
-    pinf->val = std::get<4>(data);
-
-    parse_soft_constraints_log_str_ +=
-      "S [" + std::string(pinf->statement_name) + "] : dim=" + std::to_string(pinf->sched_dim);
-    parse_soft_constraints_log_str_ +=
-      ", coeff val " + std::to_string(pinf->val) + ", coeff type " + std::to_string(pinf->type);
-    if (pinf->coef_dim >= 0) {
-      parse_soft_constraints_log_str_ += ", coeff dim " + std::to_string(pinf->coef_dim) + "\n";
-    } else {
-      parse_soft_constraints_log_str_ += " (no coeff dim because coeff type is isl_cst)\n";
-    }
-  }
-}
-
-void SchedulingMindTrick::BuildInfluenceEqualList(std::map<std::string, std::vector<single_data>> linked) {
-  isl_ctx *const ctx = scop_info_.GetCtx().get();
-
-  struct isl_influence_equal_list *const list = isl_calloc_type(ctx, struct isl_influence_equal_list);
-  if (!list) {
-    return;
-  }
-
-  std::size_t list_size = 0;
-  for (auto l : linked) {
-    list_size += l.second.size() - 1;
-  }
-
-  struct isl_influence_equal *const data = isl_calloc_array(ctx, struct isl_influence_equal, list_size);
-  if (!data) {
-    free(list);
-    return;
-  }
-
-  influence_equal_list_ = list;
-  list->mem = list_size;
-  list->size = list_size;
-  list->data = data;
-
-  int counter = 0;
-  for (auto l : linked) {
-    const std::vector<single_data> &links = l.second;
-    const unsigned count = links.size() - 1;
-    for (unsigned i = 0; i < count; ++i) {
-      const single_data this_ = links[i];
-      const single_data next_ = links[i + 1];
-      char *const statement_1 = strdup(std::get<0>(this_).c_str());
-      char *const statement_2 = strdup(std::get<0>(next_).c_str());
-      const int sched_dim1 = std::get<1>(this_);
-      const int sched_dim2 = std::get<1>(next_);
-      const int coef_dim1 = std::get<2>(this_);
-      const int coef_dim2 = std::get<2>(next_);
-      const isl_influence_coeff_type type = std::get<3>(this_);
-
-      isl_influence_equal *const current = data + counter;
-      current->statement1 = statement_1;
-      current->statement2 = statement_2;
-      current->sched_dim1 = sched_dim1;
-      current->coef_dim1 = coef_dim1;
-      current->sched_dim2 = sched_dim2;
-      current->coef_dim2 = coef_dim2;
-      current->type = type;
-
-      parse_soft_constraints_log_str_ += "L [" + std::string(statement_1) + "] : dim1 " + std::to_string(sched_dim1);
-      parse_soft_constraints_log_str_ += ", ceoff type " + std::to_string(type);
-      if (coef_dim1 >= 0 && coef_dim2 >= 0) {
-        parse_soft_constraints_log_str_ += ", coeff dim1 " + std::to_string(coef_dim1);
-      } else {
-        parse_soft_constraints_log_str_ += " (no coeff dim because coeff type is isl_cst)";
-      }
-
-      parse_soft_constraints_log_str_ += "; [" + std::string(statement_2) + "] : dim2 " + std::to_string(sched_dim2);
-      parse_soft_constraints_log_str_ += ", coeff type " + std::to_string(type);
-      if (coef_dim1 >= 0 && coef_dim2 >= 0) {
-        parse_soft_constraints_log_str_ += ", coeff dim2 " + std::to_string(coef_dim2) + "\n";
-      } else {
-        parse_soft_constraints_log_str_ += " (no coeff dim because coeff type is isl_cst)\n";
-      }
-
-      counter++;
-    }
-  }
-}
-
-void SchedulingMindTrick::BuildSoftConstraints(void) {
-  BuildInfluenceList(singles_);
-  BuildInfluenceEqualList(linked_);
-
-  Info(log::Verbosity::high,
-       text_blue "Memo: S=Single constraint, L=Linked constraint, type 0=isl_cst, type 1=isl_param, type 2=isl_var");
-  Info(log::Verbosity::high, text_blue "Constraints\n" + parse_soft_constraints_log_str_);
-}
-
-isl::schedule SchedulingMindTrick::AdjustSchedule(const isl::schedule &schedule,
-                                                  const std::vector<div_mod_data> &modulos_divisions) {
-  // We assume the root's child is a schedule_node_band that contains all target dimensions.
-  isl::schedule_node root = schedule.root();
-  isl::schedule_node_band band = root.child(0).as<isl::schedule_node_band>();
-
-  for (auto adjustment : modulos_divisions) {
-    const std::string &statement = std::get<0>(adjustment);
-    const unsigned int dimension = static_cast<unsigned int>(std::get<1>(adjustment));
-    const SoftToken token_type = std::get<2>(adjustment).first;
-    const int value = std::get<2>(adjustment).second;
-
-    switch (token_type) {
-      case SoftToken::MODULO:
-        Info(log::Verbosity::high,
-             "[" + statement + "]: applying %" + std::to_string(value) + " at dim " + std::to_string(dimension));
-        band = isl_schedule_node_band_fine_mod(band, statement, dimension, value);
-        break;
-      case SoftToken::DIVISION:
-        band = isl_schedule_node_band_fine_scale_down(band, statement, dimension, value);
-        Info(log::Verbosity::high,
-             "[" + statement + "]: applying /" + std::to_string(value) + " at dim " + std::to_string(dimension));
-        break;
-      default:
-        break;
-    }
-  }
-
-  const isl::schedule &result = band.schedule();
-  return result;
-}
-
 static std::vector<int> FindPrimeFactors(const int value) {
   std::vector<int> factors;
 
@@ -1471,7 +1105,7 @@ static std::vector<int> FindDivisors(const int value, std::function<bool(const i
   return divisors;
 }
 
-int SchedulingMindTrick::FindStripmineFactor(const int size, const int limit, const bool greedy) const {
+int SchedulingMindTrick::FindStripmineFactor(int size, int limit, bool greedy) const {
   const int warp_size = 32;
   auto warp_filter = [&limit](const int value) { return value <= limit && !(value % warp_size); };
   std::vector<int> divisors = FindDivisors(size, warp_filter);
@@ -1509,13 +1143,16 @@ isl::schedule_node_band SchedulingMindTrick::DetectAndSplitSwizzleDim(const isl:
   const long size = isl_set_plain_get_num_si(lexmax, innermost) + 1;
   log::Info(log::Verbosity::medium, "innermost = " + std::to_string(innermost) + ", size = " + std::to_string(size));
   if (size == 2 || size == 4) {
-    const std::vector<div_mod_data> &modulos = modulos_divisions_;
+    const std::vector<mls::bin::InfluenceOperation> operations = hints_.GetInfluence().GetOperations();
 
     bool is_swizzle_dim = false;
-    for (auto adjustment : modulos) {
-      if (std::get<2>(adjustment).first == SoftToken::DIVISION) continue;
+    for (auto operation : operations) {
+      const mls::bin::InfluenceOperation::Type type = operation.GetType();
+      if (type != mls::bin::InfluenceOperation::kModulo) {
+        continue;
+      }
 
-      const int target = std::get<1>(adjustment);
+      const int target = operation.GetDimension();
       if (target == innermost) {
         is_swizzle_dim = true;
       }
@@ -1533,10 +1170,11 @@ isl::schedule_node_band SchedulingMindTrick::DetectAndSplitSwizzleDim(const isl:
 int SchedulingMindTrick::FindInnermostCoincidentDimension(const isl::schedule_node_band &band) {
   const unsigned int dims = band.n_member();
   int innermost = static_cast<int>(dims);
-  for (; innermost-- > 0;)
+  for (; innermost-- > 0;) {
     if (band.member_get_coincident(innermost)) {
       break;
     }
+  }
 
   Info(log::Verbosity::medium, "initial innermost: " + std::to_string(innermost));
   return innermost;
@@ -1666,7 +1304,8 @@ isl::schedule_node_band SchedulingMindTrick::GpuAutomapThreads(const isl::schedu
 
   // We deliberately stopped mapping threads before dimension 0 to preserve it.
   // Other dimensions can be directly mapped if they fit whereas dim 0 must absolutely be stripmined.
-  if (innermost == 0 && config.thread_dimensions_.size() <= 3 && free_threads > 1) {
+  constexpr size_t thread_count_ub = 3;
+  if (innermost == 0 && config.thread_dimensions_.size() <= thread_count_ub && free_threads > 1) {
     const isl::set &lexmax = isl_schedule_node_band_lexmax(result);
     const long size = isl_set_plain_get_num_si(lexmax, 0) + 1;
     log::Info(log::Verbosity::medium,
@@ -1679,7 +1318,7 @@ isl::schedule_node_band SchedulingMindTrick::GpuAutomapThreads(const isl::schedu
                 "last: stripmine=" + std::to_string(stripmine) + ", size=" + std::to_string(size));
       if (stripmine > 1 && stripmine < size && stripmine <= free_threads) {
         result = isl_schedule_node_band_stripmine(result, 0, stripmine);
-        if (config.thread_dimensions_.size() < 3) {
+        if (config.thread_dimensions_.size() < thread_count_ub) {
           // Shift previously mapped dimensions because we added a new dimension!
           config.OffsetThreadDimensions(1);
           // In this special case, innermost is still 0 and the new thread dimension is 1
@@ -1768,26 +1407,42 @@ isl::schedule SchedulingMindTrick::GpuAutomap(const isl::schedule &schedule, Gpu
   }
 }
 
-void SchedulingMindTrick::BuildInfluencedSchedule(void) {
-  if (!influence_list_ || !influence_equal_list_) return;
-
-  IslInfluenceToggle(true);
-  isl_schedule_constraints *const constraints = pass_info_.constraints_.copy();
-  isl_schedule *internal =
-    akg_isl_schedule_constraints_compute_schedule_influence(constraints, influence_list_, influence_equal_list_);
-  IslInfluenceToggle(false);
-  if (!internal) {
-    Warn("Could not influence schedule!");
-    return;
+bool SchedulingMindTrick::BuildInfluencedSchedule(const isl::schedule &schedule) {
+#ifdef AKG_USE_MLS
+  if (hints_.Empty()) {
+    return false;
   }
 
-  isl::schedule result = isl::manage(internal);
-  DebugSchedule(result, "Influenced");
-  result = AdjustSchedule(result, modulos_divisions_);
+  isl_union_map *const dependences = pass_info_.dependences_.get();
+  isl_schedule *const initial_schedule = schedule.get();
+
+  const mls::bin::Options options = MLSchedOptionsInit(scop_info_);
+  if (options.ShouldLogInternalDebugging()) {
+    LOG(INFO) << "MLSched v." << mls::bin::VersionString();
+    LOG(INFO) << options.String();
+  }
+
+  const std::string &kernel_name = scop_info_.user_config_.GetKernelName();
+  mls::bin::Scop scop(initial_schedule, dependences, hints_, options, kernel_name);
+  const bool success = scop.ComputeSchedule();
+
+  if (options.ShouldLogInternalDebugging()) {
+    LOG(INFO) << scop.String(options) << std::endl;
+  }
+  if (!success) {
+    return false;
+  }
+
+  isl::schedule result = isl::manage(scop.ToIslSchedule(schedule.ctx().get()));
+
   DebugSchedule(result, "Adjusted");
   result = GpuPostProcessSchedule(result, gpu_info_);
 
   influenced_schedule_ = result;
+  return true;
+#else
+  return false;
+#endif
 }
 
 void SchedulingMindTrick::BuildSuggestedSchedule(const isl::schedule &initial) {
@@ -1979,6 +1634,47 @@ isl::schedule SchedulingMindTrick::GpuPostProcessSchedule(const isl::schedule &s
   return result;
 }
 
+///////////////////////////////////////////////////////////////////////////
+// Directives utils
+///////////////////////////////////////////////////////////////////////////
+
+#ifdef AKG_USE_MLS
+void SchedulingMindTrick::ExtractDirectivesFromAKG(void) {
+  ForTypeMap directives = scop_info_.analysis_result_.GetForTypeMap();
+  std::map<std::string, std::vector<int>> serials_dir;
+  std::map<std::string, std::vector<int>> vectorials_dir;
+  std::map<std::string, std::vector<int>> parallels_dir;
+  for (const auto &[stmt, vloop_directive] : directives) {
+    std::string stmt_string = stmt.get_name();
+    for (uint i = 0; i < vloop_directive.size(); ++i) {
+      switch (vloop_directive[i]) {
+        case ForType::Serial:
+          break;
+        case ForType::Invariant:
+          LOG(INFO) << "invariant_for";
+          serials_dir[stmt_string].push_back(i);
+          break;
+        case ForType::Parallel:
+          LOG(INFO) << "parallel";
+          parallels_dir[stmt_string].push_back(i);
+          break;
+        case ForType::Vectorized:
+        case ForType::Swizzled:  // treat "Swizzled" like "Vectorized" for the moment
+          LOG(INFO) << "vectorized";
+          vectorials_dir[stmt_string].push_back(i);
+          break;
+        case ForType::Unrolled:
+          LOG(WARNING) << "Do not treat ForType::Unrolled as a directives";
+          break;
+      }
+    }
+  }
+
+  hints_.SetSerials(serials_dir);
+  hints_.SetVectorials(vectorials_dir);
+}
+#endif
+
 ////////////////////////////////////////////////////////////////////////////////
 // MindTrick use
 ////////////////////////////////////////////////////////////////////////////////
@@ -1989,12 +1685,8 @@ isl::schedule SchedulingMindTrick::Apply(const isl::schedule &sch) {
   // 3. See if there is an explicit tree.
 
   // Attempt to influence a schedule
-  if (singles_.empty() && linked_.empty()) {
-    Warn(log::Verbosity::medium, "no soft constraints");
-  } else {
-    Info(log::Verbosity::medium, "Building soft constraints");
-    BuildSoftConstraints();
-    BuildInfluencedSchedule();
+  if (!hints_.Empty()) {
+    BuildInfluencedSchedule(sch);
   }
   // Only attempt to build the full suggestion if the influence failed.
   if (!influenced_schedule_) {
@@ -2065,8 +1757,7 @@ static inline std::string escape(const char *input, char c) {
 }
 
 static inline std::string escape(const std::string &input, char c) {
-  const char *str = input.c_str();
-  return escape(str, c);
+  return escape(input.c_str(), c);
 }
 
 static inline std::string quote(const std::string &input) { return "\"" + input + "\""; }

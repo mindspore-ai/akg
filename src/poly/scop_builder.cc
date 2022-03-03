@@ -650,6 +650,7 @@ isl::schedule MakeScheduleTree(const isl::space &param_space, isl::set param_set
   set = set.intersect_params(param_set);
   isl::id_list outer(param_space.ctx(), 0);
   ssize_t macro_stmt = -1;
+  scop_info.analysis_result_.for_type_.clear();
   auto schedule = MakeScheduleTreeHelper(stmt, scop_info, set, outer, macro_stmt);
   return schedule;
 }
