@@ -26,6 +26,8 @@
  *   Adapt LLVM 12 interface support
  * 2021.12.15
  *   Change buffer manager interface as argument
+ * 2022.3.1
+ *   Add a extern data argument for kernel
  */
 
 #ifdef TVM_LLVM_VERSION
@@ -460,7 +462,22 @@ void CodeGenCPU::CreateComputeScope(const AttrStmt* op) {
   //   This is easier than set the alias scope manually.
   using llvm::BasicBlock;
   std::unordered_map<const Variable*, llvm::Value*> new_vmap;
-  Array<Var> vargs = args_real_;
+
+  Array<Var> link_vars = {parallel_launch_, alloc_launch_, free_launch_, extern_arg_};
+  var_map_[parallel_launch_.get()] = builder_->CreatePointerCast(f_tvm_parallel_launch_, t_void_p_);
+  var_map_[alloc_launch_.get()] = builder_->CreatePointerCast(f_tvm_alloc_launch_, t_void_p_);
+  var_map_[free_launch_.get()] = builder_->CreatePointerCast(f_tvm_free_launch_, t_void_p_);
+  var_map_[extern_arg_.get()] = builder_->CreateAlloca(t_void_p_);
+
+  uint64_t nbytes;
+  llvm::Value *links_data = PackClosureData(link_vars, &nbytes);
+  var_map_[extern_links_.get()] = builder_->CreatePointerCast(links_data, t_void_p_);
+  Array<Var> vargs;
+  vargs.push_back(extern_links_);
+  for (auto var : args_real_) {
+    vargs.push_back(var);
+  }
+
   Array<Var> undef_vargs = ir::UndefinedVars(op->body, {});
   for (const auto var : undef_vargs) {
     auto it = find_if(vargs.begin(), vargs.end(), [var](const Var &rhs)->bool { return var.get() == rhs.get(); });
@@ -473,15 +490,6 @@ void CodeGenCPU::CreateComputeScope(const AttrStmt* op) {
     }
   }
 
-  Array<Var> link_vars = {parallel_launch_, alloc_launch_, free_launch_};
-  var_map_[parallel_launch_.get()] = builder_->CreatePointerCast(f_tvm_parallel_launch_, t_void_p_);
-  var_map_[alloc_launch_.get()] = builder_->CreatePointerCast(f_tvm_alloc_launch_, t_void_p_);
-  var_map_[free_launch_.get()] = builder_->CreatePointerCast(f_tvm_free_launch_, t_void_p_);
-
-  uint64_t nbytes;
-  llvm::Value *links_data = PackClosureData(link_vars, &nbytes);
-  var_map_[extern_links_.get()] = builder_->CreatePointerCast(links_data, t_void_p_);
-  vargs.push_back(extern_links_);
 
   llvm::Value* cdata = PackClosureData(vargs, &nbytes);
   llvm::FunctionType* ftype =
@@ -569,13 +577,17 @@ void CodeGenCPU::CreateParallelLaunch(const Stmt& body, int num_task) {
       llvm::Function::ExternalLinkage,
       module_.get()->getModuleIdentifier() + "_lambda", module_.get());
   // allocate and setup the closure, call the closure.
-  Array<Var> vfields = ir::UndefinedVars(body, {});
+  Array<Var> undef_vargs = ir::UndefinedVars(body, {});
   uint64_t nbytes;
   Var buffer_links("buffer_links");
-  Array<Var> buffer_link_vars = {alloc_launch_, free_launch_};
+  Array<Var> buffer_link_vars = {alloc_launch_, free_launch_, extern_arg_};
   llvm::Value *links_data = PackClosureData(buffer_link_vars, &nbytes);
   var_map_[buffer_links.get()] = builder_->CreatePointerCast(links_data, t_void_p_);
+  Array<Var> vfields;
   vfields.push_back(buffer_links);
+  for (auto var : undef_vargs) {
+    vfields.push_back(var);
+  }
   llvm::Value* cdata = PackClosureData(vfields, &nbytes);
   auto parallel_launch_func =
       builder_->CreatePointerCast(std::get<0>(extern_func_map_[parallel_launch_->name_hint]),
