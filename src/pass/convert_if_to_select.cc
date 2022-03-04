@@ -77,6 +77,85 @@ class ConvertIfToSelectMutator : public IRMutator {
       return Stmt();
     }
   }
+  void HandleLTCond(const Expr &cond, std::unordered_map<const Variable *, std::vector<Expr>> &upper_bounds,
+                    std::unordered_map<const Variable *, std::vector<Expr>> &lower_bounds,
+                    std::unordered_map<const Variable *, Expr> &var_expr_map, std::vector<Expr> &irregular_conds) {
+    auto lt_cond = cond.as<LT>();
+    CHECK(lt_cond);
+    if (auto var = lt_cond->a.as<Variable>()) {
+      if (last_axis_iterators.count(var) > 0) {
+        upper_bounds[var].push_back(lt_cond->b);
+        var_expr_map[var] = lt_cond->a;
+      }
+    }
+    if (auto var = lt_cond->b.as<Variable>()) {
+      if (last_axis_iterators.count(var) > 0) {
+        lower_bounds[var].push_back(lt_cond->a + 1);
+        var_expr_map[var] = lt_cond->b;
+      }
+    }
+    irregular_conds.push_back(cond);
+  }
+
+  void HandleGTCond(const Expr &cond, std::unordered_map<const Variable *, std::vector<Expr>> &upper_bounds,
+                    std::unordered_map<const Variable *, std::vector<Expr>> &lower_bounds,
+                    std::unordered_map<const Variable *, Expr> &var_expr_map, std::vector<Expr> &irregular_conds) {
+    auto gt_cond = cond.as<GT>();
+    CHECK(gt_cond);
+    if (auto var = gt_cond->a.as<Variable>()) {
+      if (last_axis_iterators.count(var) > 0) {
+        lower_bounds[var].push_back(gt_cond->b + 1);
+        var_expr_map[var] = gt_cond->a;
+      }
+    }
+    if (auto var = gt_cond->b.as<Variable>()) {
+      if (last_axis_iterators.count(var) > 0) {
+        upper_bounds[var].push_back(gt_cond->a);
+        var_expr_map[var] = gt_cond->b;
+      }
+    }
+    irregular_conds.push_back(cond);
+  }
+
+  void HandleLECond(const Expr &cond, std::unordered_map<const Variable *, std::vector<Expr>> &upper_bounds,
+                    std::unordered_map<const Variable *, std::vector<Expr>> &lower_bounds,
+                    std::unordered_map<const Variable *, Expr> &var_expr_map, std::vector<Expr> &irregular_conds) {
+    auto le_cond = cond.as<LE>();
+    CHECK(le_cond);
+    if (auto var = le_cond->a.as<Variable>()) {
+      if (last_axis_iterators.count(var) > 0) {
+        upper_bounds[var].push_back(le_cond->b + 1);
+        var_expr_map[var] = le_cond->a;
+      }
+    }
+    if (auto var = le_cond->b.as<Variable>()) {
+      if (last_axis_iterators.count(var) > 0) {
+        lower_bounds[var].push_back(le_cond->a);
+        var_expr_map[var] = le_cond->b;
+      }
+    }
+    irregular_conds.push_back(cond);
+  }
+
+  void HandleGECond(const Expr &cond, std::unordered_map<const Variable *, std::vector<Expr>> &upper_bounds,
+                    std::unordered_map<const Variable *, std::vector<Expr>> &lower_bounds,
+                    std::unordered_map<const Variable *, Expr> &var_expr_map, std::vector<Expr> &irregular_conds) {
+    auto ge_cond = cond.as<GE>();
+    CHECK(ge_cond);
+    if (auto var = ge_cond->a.as<Variable>()) {
+      if (last_axis_iterators.count(var) > 0) {
+        lower_bounds[var].push_back(ge_cond->b);
+        var_expr_map[var] = ge_cond->a;
+      }
+    }
+    if (auto var = ge_cond->b.as<Variable>()) {
+      if (last_axis_iterators.count(var) > 0) {
+        upper_bounds[var].push_back(ge_cond->a + 1);
+        var_expr_map[var] = ge_cond->b;
+      }
+    }
+    irregular_conds.push_back(cond);
+  }
 
   Array<Expr> MergeIfConditions(std::vector<Expr> if_conds, bool &found_irregular_conds) {
     std::unordered_map<const Variable *, std::vector<Expr>> upper_bounds;  // exclusive, cc1 < upper_bound
@@ -90,69 +169,17 @@ class ConvertIfToSelectMutator : public IRMutator {
         if_conds.push_back(and_cond->a);
         if_conds.push_back(and_cond->b);
       } else {
-        if (auto lt_cond = cond.as<LT>()) {
-          if (auto var = lt_cond->a.as<Variable>()) {
-            if (last_axis_iterators.count(var) > 0) {
-              upper_bounds[var].push_back(lt_cond->b);
-              var_expr_map[var] = lt_cond->a;
-              continue;
-            }
-          }
-          if (auto var = lt_cond->b.as<Variable>()) {
-            if (last_axis_iterators.count(var) > 0) {
-              lower_bounds[var].push_back(lt_cond->a + 1);
-              var_expr_map[var] = lt_cond->b;
-              continue;
-            }
-          }
-        } else if (auto gt_cond = cond.as<GT>()) {
-          if (auto var = gt_cond->a.as<Variable>()) {
-            if (last_axis_iterators.count(var) > 0) {
-              lower_bounds[var].push_back(gt_cond->b + 1);
-              var_expr_map[var] = gt_cond->a;
-              continue;
-            }
-          }
-          if (auto var = gt_cond->b.as<Variable>()) {
-            if (last_axis_iterators.count(var) > 0) {
-              upper_bounds[var].push_back(gt_cond->a);
-              var_expr_map[var] = gt_cond->b;
-              continue;
-            }
-          }
-        } else if (auto le_cond = cond.as<LE>()) {
-          if (auto var = le_cond->a.as<Variable>()) {
-            if (last_axis_iterators.count(var) > 0) {
-              upper_bounds[var].push_back(le_cond->b + 1);
-              var_expr_map[var] = le_cond->a;
-              continue;
-            }
-          }
-          if (auto var = le_cond->b.as<Variable>()) {
-            if (last_axis_iterators.count(var) > 0) {
-              lower_bounds[var].push_back(le_cond->a);
-              var_expr_map[var] = le_cond->b;
-              continue;
-            }
-          }
-        } else if (auto ge_cond = cond.as<GE>()) {
-          if (auto var = ge_cond->a.as<Variable>()) {
-            if (last_axis_iterators.count(var) > 0) {
-              lower_bounds[var].push_back(ge_cond->b);
-              var_expr_map[var] = ge_cond->a;
-              continue;
-            }
-          }
-          if (auto var = ge_cond->b.as<Variable>()) {
-            if (last_axis_iterators.count(var) > 0) {
-              upper_bounds[var].push_back(ge_cond->a + 1);
-              var_expr_map[var] = ge_cond->b;
-              continue;
-            }
-          }
+        if (cond.as<LT>()) {
+          HandleLTCond(cond, upper_bounds, lower_bounds, var_expr_map, irregular_conds);
+        } else if (cond.as<GT>()) {
+          HandleGTCond(cond, upper_bounds, lower_bounds, var_expr_map, irregular_conds);
+        } else if (cond.as<LE>()) {
+          HandleLECond(cond, upper_bounds, lower_bounds, var_expr_map, irregular_conds);
+        } else if (cond.as<GE>()) {
+          HandleLECond(cond, upper_bounds, lower_bounds, var_expr_map, irregular_conds);
+        } else {
+          irregular_conds.push_back(cond);
         }
-
-        irregular_conds.push_back(cond);
       }
     }
 
@@ -184,7 +211,6 @@ class ConvertIfToSelectMutator : public IRMutator {
 
     found_irregular_conds = !irregular_conds.empty();
     std::copy(irregular_conds.begin(), irregular_conds.end(), std::back_inserter(joined_conds.CopyOnWrite()->data));
-
     return joined_conds;
   }
 
