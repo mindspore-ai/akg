@@ -107,19 +107,13 @@ Stmt GpuIslEmitter::EmitBlock(const isl::ast_node_block &block_node) {
         isl::id new_stmt_id = isl::id(stmt_id.ctx(), stmt_id.name().substr(REALIZE_PREFIX_LEN));
         int stmt_num = stmts.size();
         CHECK_NE(stmt_num, 0) << "when stmt_num is zero, no realize should be emitted!.";
-        if (stmt_num == 1) {
-          stmts[0] = InsertRealize(stmts[0], new_stmt_id);
-        } else {
-          if (stmt_num - last_num == 1) {
-            stmts[0] = InsertRealize(stmts[0], new_stmt_id);
-          } else {
-            for (int index = stmt_num - 2 - last_num; index >= 0; --index) {
-              auto p_index = static_cast<unsigned int>(index);
-              stmts[p_index] = Block::make(stmts[p_index], stmts[p_index + 1]);
-            }
-            stmts[0] = InsertRealize(stmts[0], new_stmt_id);
+        if ((stmt_num != 1) && (stmt_num - last_num != 1)) {
+          for (int index = stmt_num - 2 - last_num; index >= 0; --index) {
+            auto p_index = static_cast<unsigned int>(index);
+            stmts[p_index] = Block::make(stmts[p_index], stmts[p_index + 1]);
           }
         }
+        stmts[0] = InsertRealize(stmts[0], new_stmt_id);
         last_num = stmt_num - 1;
         continue;
       }
@@ -136,15 +130,13 @@ Stmt GpuIslEmitter::EmitBlock(const isl::ast_node_block &block_node) {
     return Stmt();
   }
 
-  if (last_num == len - 1) {
-    return stmts[0];
-  } else {
+  if (last_num != len - 1) {
     for (int index = len - 2 - last_num; index >= 0; --index) {
       auto p_index = static_cast<unsigned int>(index);
       stmts[p_index] = Block::make(stmts[p_index], stmts[p_index + 1]);
     }
-    return stmts[0];
   }
+  return stmts[0];
 }
 
 Stmt GpuIslEmitter::EmitFor(const isl::ast_node_for &node) {

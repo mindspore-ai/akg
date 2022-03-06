@@ -143,19 +143,13 @@ Stmt CpuIslEmitter::EmitBlock(const isl::ast_node_block &block_node) {
         isl::id new_stmt_id = isl::id(stmt_id.ctx(), stmt_id.name().substr(REALIZE_PREFIX_LEN));
         int stmt_num = stmts.size();
         CHECK_NE(stmt_num, 0) << "when stmt_num is zero, no realize should be emitted!.";
-        if (stmt_num == 1) {
-          stmts[0] = InsertRealize(stmts[0], new_stmt_id);
-        } else {
-          if (stmt_num - last_num == 1) {
-            stmts[0] = InsertRealize(stmts[0], new_stmt_id);
-          } else {
-            for (int index = stmt_num - 2 - last_num; index >= 0; --index) {
-              auto p_index = static_cast<unsigned int>(index);
-              stmts[p_index] = Block::make(stmts[p_index], stmts[p_index + 1]);
-            }
-            stmts[0] = InsertRealize(stmts[0], new_stmt_id);
+        if ((stmt_num != 1) && (stmt_num - last_num != 1)) {
+          for (int index = stmt_num - 2 - last_num; index >= 0; --index) {
+            auto p_index = static_cast<unsigned int>(index);
+            stmts[p_index] = Block::make(stmts[p_index], stmts[p_index + 1]);
           }
         }
+        stmts[0] = InsertRealize(stmts[0], new_stmt_id);
         last_num = stmt_num - 1;
         continue;
       }
@@ -170,15 +164,13 @@ Stmt CpuIslEmitter::EmitBlock(const isl::ast_node_block &block_node) {
   if (len == 0) {
     return Stmt();
   }
-  if (last_num == len - 1) {
-    return stmts[0];
-  } else {
+  if (last_num != len - 1) {
     for (int index = len - 2 - last_num; index >= 0; --index) {
       auto p_index = static_cast<unsigned int>(index);
       stmts[p_index] = Block::make(stmts[p_index], stmts[p_index + 1]);
     }
-    return stmts[0];
   }
+  return stmts[0];
 }
 
 Stmt CpuIslEmitter::EmitUserStmt(const isl::ast_node_user &node) {
@@ -189,14 +181,14 @@ Stmt CpuIslEmitter::EmitUserStmt(const isl::ast_node_user &node) {
   const Node *stmt_node = info_.analysis_result_.GetStatementMap().at(stmt_id_);
   CHECK(stmt_node);
   // compute VarMap to replace old iterators
-  auto build = node_info_map_.at(node_id_).build;
-  auto tuple = info_.analysis_result_.GetOperatorDomainMap().at(stmt_id_).tuple;
-  auto iterator_map = node_info_map_.at(node_id_).iterator_map;
+  auto cpu_build = node_info_map_.at(node_id_).build;
+  auto cpu_tuple = info_.analysis_result_.GetOperatorDomainMap().at(stmt_id_).tuple;
+  auto cpu_iterator_map = node_info_map_.at(node_id_).iterator_map;
 
   var_map_.clear();
-  for (unsigned int i = 0; i < tuple.size(); i++) {
-    isl::id isl_old_iter = tuple.get_id(i);
-    auto isl_expr = build.expr_from(iterator_map.get_pw_aff(i));
+  for (unsigned int i = 0; i < cpu_tuple.size(); i++) {
+    isl::id isl_old_iter = cpu_tuple.get_id(i);
+    auto isl_expr = cpu_build.expr_from(cpu_iterator_map.get_pw_aff(i));
     Expr halide_new_iter = Interpret(isl_expr);
     var_map_.emplace(isl_old_iter, halide_new_iter);
   }
@@ -279,9 +271,9 @@ Stmt CpuIslEmitter::EmitMatrixTranspose(const std::vector<std::string> &names) {
   Tensor t = info_.FindTensor(names[3]);
   Array<Expr> indices;
   Array<Expr> args;
-  args.push_back(make_zero(Int(32)));
+  args.push_back(make_zero(Int(INT_32)));
   for (size_t i = 0; i < t.ndim(); i++) {
-    indices.push_back(make_zero(Int(32)));
+    indices.push_back(make_zero(Int(INT_32)));
     args.push_back(t->shape[i]);
   }
   Expr addr = Call::make(Handle(), air::ir::intrinsic::tvm_address_of, {t(indices)}, Call::PureIntrinsic);
@@ -295,15 +287,15 @@ Stmt CpuIslEmitter::EmitReduce(const std::vector<std::string> &names) {
   Array<Var> vars;
   Array<Expr> indices;
   for (size_t i = 0; i < t.ndim(); i++) {
-    auto loop_var = Variable::make(Int(32), "loop" + std::to_string(i));
+    auto loop_var = Variable::make(Int(INT_32), "loop" + std::to_string(i));
     vars.push_back(loop_var);
     indices.push_back(loop_var);
   }
-  indices.Set(t.ndim() - 1, make_zero(Int(32)));
+  indices.Set(t.ndim() - 1, make_zero(Int(INT_32)));
   Expr value = maker_map[names[2]](t(indices), t(vars));
   Stmt body = Provide::make(t->op, t->value_index, value, indices);
   for (int i = t.ndim() - 1; i >= 0; i--) {
-    body = For::make(vars[i], make_zero(Int(32)), t->shape[i], air::ir::ForType::Serial, DeviceAPI::None, body);
+    body = For::make(vars[i], make_zero(Int(INT_32)), t->shape[i], air::ir::ForType::Serial, DeviceAPI::None, body);
   }
   return body;
 }

@@ -49,6 +49,9 @@ constexpr auto DATA_COMPUTE_FOR_DEPTH = 3;
 constexpr auto CONV_OUTPUT_DIMENSION = 4;
 constexpr auto CONV_MATRIXA_DIMENSION = 4;
 
+const std::vector<std::vector<int>> AKG_TILE_SIZE{{16, 16, 4}, {16, 16, 8}, {32, 32, 4}};
+const std::vector<std::vector<int>> NVCUDA_TILE_SIZE{{16, 16, 16}, {8, 32, 16}, {32, 8, 16}};
+
 struct Tile {
   int m{-1};
   int n{-1};

@@ -67,7 +67,7 @@ class MadMarker : public IRMutator {
         }
       }
       if (i->second == "mad") {
-        stmt = AttrStmt::make(make_zero(Int(32)), "pragma_emit_insn", Expr(i->second), stmt);
+        stmt = AttrStmt::make(make_zero(Int(INT_32)), "pragma_emit_insn", Expr(i->second), stmt);
       }
     }
 
@@ -539,7 +539,7 @@ Stmt NPUIslEmitter::EmitFor(const isl::ast_node_for &node) {
       const int NPUC0SIZE = 16;
       // need to find the last axis
       if (Equal(cond_expr, Expr(NPUC0SIZE)) && ForShouldPassDown(this, node, isl_iter_id)) {
-        stmt = AttrStmt::make(make_zero(Int(32)), "pass_down", NPUC0SIZE, stmt);
+        stmt = AttrStmt::make(make_zero(Int(INT_32)), "pass_down", NPUC0SIZE, stmt);
       }
     }
   } else {
@@ -734,8 +734,8 @@ Stmt NPUIslEmitter::EmitRead(const isl::ast_node_user &node) {
         local_args.push_back(Interpret(op.get_arg(i)));
       }
 
-      Tensor t = info_.FindTensor(var);
-      CHECK(t.defined());
+      Tensor t_r = info_.FindTensor(var);
+      CHECK(t_r.defined());
       if (info_.analysis_result_.CountBufferDefInfo(var)) {
         realize_may_def_.insert(var);
         if_map_.emplace(var, cur_if_list_);
@@ -747,7 +747,7 @@ Stmt NPUIslEmitter::EmitRead(const isl::ast_node_user &node) {
       if (info_.mmu_info_.IsIm2col() && !info_.analysis_result_.GetUpdateTensor().empty()) {
         return Provide::make(info_.analysis_result_.GetUpdateTensor()[0]->op, 0, value, local_args);
       }
-      return Provide::make(t->op, 0, value, local_args);
+      return Provide::make(t_r->op, 0, value, local_args);
     }
   }
   return Stmt();
@@ -800,8 +800,8 @@ Stmt NPUIslEmitter::EmitWrite(const isl::ast_node_user &node, AtomicType atomic)
         local_args.push_back(Interpret(op.get_arg(static_cast<int>(i))));
       }
 
-      Tensor t = info_.FindTensor(var);
-      CHECK(t.defined());
+      Tensor t_w = info_.FindTensor(var);
+      CHECK(t_w.defined());
       if (info_.analysis_result_.CountBufferDefInfo(var)) {
         realize_may_def_.insert(var);
         if_map_.emplace(var, cur_if_list_);
@@ -812,15 +812,16 @@ Stmt NPUIslEmitter::EmitWrite(const isl::ast_node_user &node, AtomicType atomic)
       hoisted_write_.insert(var);
 
       if (doatomic) {
-        auto call = Call::make(type, t->op->name, local_args, Call::CallType::Halide, t->op, t->value_index);
+        auto call = Call::make(type, t_w->op->name, local_args, Call::CallType::Halide, t_w->op, t_w->value_index);
         value = Add::make(call, value);
-        return AttrStmt::make(make_zero(Int(32)), ATTR_ATOMIC_ADD, Expr(1), Provide::make(t->op, 0, value, local_args));
+        return AttrStmt::make(
+            make_zero(Int(INT_32)), ATTR_ATOMIC_ADD, Expr(1), Provide::make(t_w->op, 0, value, local_args));
       }
 
       // remove original copy out promotion statement because it is sinked into if stmt of computation
-      if (info_.analysis_result_.GetConditionalWriteBufferFootprints().count(t->op->name)) return Evaluate::make(0);
+      if (info_.analysis_result_.GetConditionalWriteBufferFootprints().count(t_w->op->name)) return Evaluate::make(0);
 
-      return Provide::make(t->op, 0, value, local_args);
+      return Provide::make(t_w->op, 0, value, local_args);
     }
   }
   return Stmt();
@@ -832,20 +833,20 @@ Stmt NPUIslEmitter::EmitUserStmt(const isl::ast_node_user &node) {
     return Evaluate::make(Expr(0));
   } else {
     CHECK(node.get_expr().isa<isl::ast_expr_op>());
-    isl::ast_expr_op usr_expr = node.get_expr().as<isl::ast_expr_op>();
-    stmt_id_ = usr_expr.get_arg(0).as<isl::ast_expr_id>().get_id();
+    isl::ast_expr_op npu_usr_expr = node.get_expr().as<isl::ast_expr_op>();
+    stmt_id_ = npu_usr_expr.get_arg(0).as<isl::ast_expr_id>().get_id();
     node_id_ = node.get_annotation();
     const Node *stmt_node = info_.analysis_result_.GetStatementMap().at(stmt_id_);
     CHECK(stmt_node);
     // compute VarMap to replace old iterators
-    auto build = node_info_map_.at(node_id_).build;
-    auto tuple = info_.analysis_result_.GetOperatorDomainMap().at(stmt_id_).tuple;
-    auto iterator_map = node_info_map_.at(node_id_).iterator_map;
+    auto npu_build = node_info_map_.at(node_id_).build;
+    auto npu_tuple = info_.analysis_result_.GetOperatorDomainMap().at(stmt_id_).tuple;
+    auto npu_iterator_map = node_info_map_.at(node_id_).iterator_map;
 
     var_map_.clear();
-    for (unsigned int i = 0; i < tuple.size(); ++i) {
-      isl::id isl_old_iter = tuple.get_id(i);
-      auto isl_expr = build.expr_from(iterator_map.get_pw_aff(i));
+    for (unsigned int i = 0; i < npu_tuple.size(); ++i) {
+      isl::id isl_old_iter = npu_tuple.get_id(i);
+      auto isl_expr = npu_build.expr_from(npu_iterator_map.get_pw_aff(i));
       Expr halide_new_iter = Interpret(isl_expr);
       var_map_.emplace(isl_old_iter, halide_new_iter);
       std::string replace_id = isl_old_iter.get_name() + "_";
@@ -880,7 +881,7 @@ Stmt NPUIslEmitter::EmitUserStmt(const isl::ast_node_user &node) {
       }
     }
     if (add_attr) {
-      user_stmt = AttrStmt::make(make_zero(Int(32)), "pragma_fix_ifcondition", Expr(1), user_stmt);
+      user_stmt = AttrStmt::make(make_zero(Int(INT_32)), "pragma_fix_ifcondition", Expr(1), user_stmt);
     }
     return user_stmt;
   }
@@ -889,17 +890,15 @@ Stmt NPUIslEmitter::EmitUserStmt(const isl::ast_node_user &node) {
 AtomicType GetAtomicWrite(const isl::id &id, const StatementMap &statements) {
   for (const auto &i : statements) {
     const Node *stmt_node = i.second;
-    if (stmt_node->IsInstance<Provide>()) {
-      auto provide = static_cast<const Provide *>(stmt_node);
-      if (const auto cop = provide->func.as<ComputeOpNode>()) {
-        if (cop->attrs.count(ATTR_ATOMIC_ADD) != 0) {
-          if (auto str_op = cop->attrs.at(ATTR_ATOMIC_ADD).as<StringImm>()) {
-            auto str = str_op->value;
-            if (str == id.get_name()) return AtomicType::Add;
-          }
-        }
-      }
-    }
+    if (!stmt_node->IsInstance<Provide>()) continue;
+    auto provide = static_cast<const Provide *>(stmt_node);
+    const auto cop = provide->func.as<ComputeOpNode>();
+    if (cop == nullptr) continue;
+    if (cop->attrs.count(ATTR_ATOMIC_ADD) == 0) continue;
+    auto str_op = cop->attrs.at(ATTR_ATOMIC_ADD).as<StringImm>();
+    if (str_op == nullptr) continue;
+    auto str = str_op->value;
+    if (str == id.get_name()) return AtomicType::Add;
   }
   return AtomicType::Equ;
 }
@@ -1040,24 +1039,10 @@ Stmt NPUIslEmitter::EmitGemmRangeInfoBackPropFilter(const Stmt &stmt) {
   int k_isolate = KO * KI % tile_k;
   int n_isolate = NO * NI % tile_n;
 
-  int range_idx_max = 1;
   int k_base = 1;
-
-  int m_base = k_base;
-  if (k_isolate) {
-    m_base *= 2;
-    range_idx_max *= 2;
-  }
-
-  int n_base = m_base;
-  if (m_isolate) {
-    n_base *= 2;
-    range_idx_max *= 2;
-  }
-
-  if (n_isolate) {
-    range_idx_max *= 2;
-  }
+  int m_base = k_base + k_base * k_isolate;
+  int n_base = m_base + m_base * m_isolate;
+  int range_idx_max = 2^(k_isolate + m_isolate + n_isolate);
 
   CHECK(c0_range_idx < range_idx_max) << c0_range_idx << ":" << range_idx_max;
 
@@ -1069,21 +1054,18 @@ Stmt NPUIslEmitter::EmitGemmRangeInfoBackPropFilter(const Stmt &stmt) {
   int ko_min = k_isolate ? ((c0_range_idx / k_base % BINARY_FACTOR) ? (KO * KI / tile_k) : (0)) : (0);
   int ko_ext = k_isolate ? ((c0_range_idx / k_base % BINARY_FACTOR) ? (1) : (KO * KI / tile_k)) : (KO * KI / tile_k);
   range_map.Set("ko_", Range(Expr(ko_min), Expr(ko_ext)));
-  if (k_isolate) {
-    if (c0_range_idx / k_base % BINARY_FACTOR) {
-      range_map.Set("k_size", Range(Expr(0), Expr(K - KO * KI / tile_k * tile_k)));
-    } else {
-      range_map.Set("k_size", Range(Expr(0), Expr(tile_k)));
-    }
-  } else {
-    if (KO * KI == K) {
-      range_map.Set("k_size", Range(Expr(0), Expr(tile_k)));
-    } else {
-      range_map.Set("k_tail_size", Range(Expr(0), Expr(K - (KO * KI / tile_k - 1) * tile_k)));
-      range_map.Set("k_tail", Range(Expr(0), Expr(KO * KI / tile_k - 1)));
-      range_map.Set("k_size", Range(Expr(0), Expr(tile_k)));
-    }
+  
+  auto range_extent = Expr(tile_k);
+  if (k_isolate && (c0_range_idx / k_base % BINARY_FACTOR)) {
+    range_extent = Expr(K - KO * KI / tile_k * tile_k);
   }
+  range_map.Set("k_size", Range(Expr(0), range_extent));
+  
+  if (KO * KI != K) {
+    range_map.Set("k_tail_size", Range(Expr(0), Expr(K - (KO * KI / tile_k - 1) * tile_k)));
+    range_map.Set("k_tail", Range(Expr(0), Expr(KO * KI / tile_k - 1)));
+  }
+
   range_map.Set(K_C1, Range(Expr(0), Expr(K)));
 
   if (NO * NI < tile_n) {
@@ -1421,7 +1403,7 @@ Stmt NPUIslEmitter::InsertRealize(Stmt stmt, const isl::id &var, bool is_C0) {
       realized_.insert(t);
       stmt = AttrStmt::make(t->op, air::ir::attr::realize_scope, FindRealizeScope(var), stmt);
 
-      return AttrStmt::make(make_zero(Int(32)), "pragma_fuse_vector", Expr(1), stmt);
+      return AttrStmt::make(make_zero(Int(INT_32)), "pragma_fuse_vector", Expr(1), stmt);
     }
   }
 
@@ -1491,7 +1473,7 @@ void NPUIslEmitter::EmitAttrStmtAfterRealize(bool is_C1, bool is_C0, std::vector
       } else if (const auto cop = provide->func.as<ComputeOpNode>()) {
         stmts[0] = AttrStmt::make(cop->attrs, "pragma_attrs", Expr(1), stmts[0]);
       }
-      stmts[0] = AttrStmt::make(make_zero(Int(32)), "isolated_idx", Expr(tile_idx_++), stmts[0]);
+      stmts[0] = AttrStmt::make(make_zero(Int(INT_32)), "isolated_idx", Expr(tile_idx_++), stmts[0]);
       break;
     }
   }
@@ -1525,55 +1507,36 @@ void NPUIslEmitter::EmitReadAttrAtC0(std::vector<Stmt> &stmts, int i, Tensor &t)
   bool is_gemm_weight_trans = false;
   if (info_.mmu_info_.IsSpecGemm()) {
     // this case is conv gemm
-    if (t->op->name.find(FRACTAL_C1_LOCAL_C0A) != std::string::npos ||
-        t->op->name.find(FRACTAL_C1_LOCAL_C0B) != std::string::npos) {
-      is_im2col = true;
-    }
-
-    if (t->op->name.find(LOCAL_C1_LOCAL_C0B) != std::string::npos ||
-        t->op->name.find(LOCAL_C1_LOCAL_C0A) != std::string::npos) {
-      is_filter_c0 = true;
-    }
+    is_im2col = (t->op->name.find(FRACTAL_C1_LOCAL_C0A) != std::string::npos ||
+        t->op->name.find(FRACTAL_C1_LOCAL_C0B) != std::string::npos);
+    is_filter_c0 = (t->op->name.find(LOCAL_C1_LOCAL_C0B) != std::string::npos ||
+        t->op->name.find(LOCAL_C1_LOCAL_C0A) != std::string::npos);
   } else {
     // this case is ordinary gemm
     std::string data_trans = info_.mmu_info_.ExtractStringFromAttrsAndInfo(ATTR_GEMM_DATA_TRANSPOSE);
     std::string weight_trans = info_.mmu_info_.ExtractStringFromAttrsAndInfo(ATTR_GEMM_WEIGHT_TRANSPOSE);
     size_t pos1 = t->op->name.find(C1_LOCAL_C0A);
     size_t pos2 = t->op->name.find(C1_LOCAL_C0B);
-    if (data_trans == "Y" && pos1 != std::string::npos) {
-      is_gemm_data_trans = true;
-    }
-    if (weight_trans == "Y" && pos2 != std::string::npos) {
-      is_gemm_weight_trans = true;
-    }
-
-    if (bypathC1_ == 2) {
-      //  left matrix by pass C1
-      if (pos1 != std::string::npos) is_filter_c0 = true;
-    } else if (bypathC1_ == 1) {
-      // right matrix by pass C1
-      if (pos2 != std::string::npos) is_filter_c0 = true;
-    }
+    is_gemm_data_trans = (data_trans == "Y" && pos1 != std::string::npos);
+    is_gemm_weight_trans = (weight_trans == "Y" && pos2 != std::string::npos);
+    //  left matrix or right matrix by pass C1
+    constexpr auto bypathC1_pos1 = 1;
+    constexpr auto bypathC1_pos2 = 2;
+    is_filter_c0 = ((bypathC1_ == bypathC1_pos2 && pos1 != std::string::npos) ||
+        (bypathC1_ == bypathC1_pos1 && pos2 != std::string::npos));
   }
 
   if (is_im2col) {
     stmts[i] = AttrStmt::make(make_zero(Int(INT_32)), "pragma_im2col", Expr(1), stmts[i]);
-  } else if (is_gemm_data_trans) {
-    stmts[i] =
-      AttrStmt::make(make_zero(Int(INT_32)), "pragma_load2d_transpose_data", Expr(gemm_transpose_index_), stmts[i]);
-    gemm_transpose_index_++;
-    gemm_transpose_index_ = gemm_transpose_index_ % BINARY_FACTOR;
-  } else if (is_gemm_weight_trans) {
-    stmts[i] =
-      AttrStmt::make(make_zero(Int(INT_32)), "pragma_load2d_transpose_weight", Expr(gemm_transpose_index_), stmts[i]);
+  } else if (is_gemm_data_trans || is_gemm_weight_trans) {
+    auto attr_mark = is_gemm_data_trans ? "pragma_load2d_transpose_data" : "pragma_load2d_transpose_weight";
+    stmts[i] = AttrStmt::make(make_zero(Int(INT_32)), attr_mark, Expr(gemm_transpose_index_), stmts[i]);
     gemm_transpose_index_++;
     gemm_transpose_index_ = gemm_transpose_index_ % BINARY_FACTOR;
   }
   stmts[i] = ProducerConsumer::make(t->op, true, stmts[i]);
-  if (bypathC1_ > 0) {
-    if (is_filter_c0) {
-      stmts[i] = AttrStmt::make(make_zero(Int(INT_32)), PRAGMA_BYPATH_FILTER_C0, Expr(0), stmts[i]);
-    }
+  if (bypathC1_ > 0 && is_filter_c0) {
+    stmts[i] = AttrStmt::make(make_zero(Int(INT_32)), PRAGMA_BYPATH_FILTER_C0, Expr(0), stmts[i]);
   }
 }
 
@@ -1598,12 +1561,12 @@ void NPUIslEmitter::EmitReadAttrAtC1(std::vector<Stmt> &stmts, int i, Tensor &t)
   }
 
   if (is_fractal) {
-    stmts[i] = AttrStmt::make(make_zero(Int(32)), "pragma_fractal", Expr(1), stmts[i]);
+    stmts[i] = AttrStmt::make(make_zero(Int(INT_32)), "pragma_fractal", Expr(1), stmts[i]);
   }
   stmts[i] = ProducerConsumer::make(t->op, true, stmts[i]);
   if (bypathC1_ > 0) {
     if (is_filter_c1) {
-      stmts[i] = AttrStmt::make(make_zero(Int(32)), PRAGMA_BYPATH_FILTER_C1, Expr(0), stmts[i]);
+      stmts[i] = AttrStmt::make(make_zero(Int(INT_32)), PRAGMA_BYPATH_FILTER_C1, Expr(0), stmts[i]);
     }
   }
 }
@@ -1626,21 +1589,21 @@ void NPUIslEmitter::EmitWriteAttr(const std::vector<IslIdSet> &write, std::vecto
   for (const auto &id : write[i]) {
     if (is_C1 && info_.mmu_info_.IsCUB(id.get_name())) continue;
     if (is_old_gemm_c1write_ && info_.mmu_info_.IsC(id.get_name())) {
-      stmts[i] = AttrStmt::make(make_zero(Int(32)), PRAGMA_MMU_C1WRITE, Expr(1), stmts[i]);
+      stmts[i] = AttrStmt::make(make_zero(Int(INT_32)), PRAGMA_MMU_C1WRITE, Expr(1), stmts[i]);
       info_.mmu_info_.OldC1WriteInsert(stmts[i]);
     }
     if (info_.mmu_info_.IsSpecGemm() && info_.mmu_info_.IsC(id.get_name())) {
-      stmts[i] = AttrStmt::make(make_zero(Int(32)), PRAGMA_MMU_C0WRITE, Expr(1), stmts[i]);
+      stmts[i] = AttrStmt::make(make_zero(Int(INT_32)), PRAGMA_MMU_C0WRITE, Expr(1), stmts[i]);
       mmu_c0write_.emplace_back(stmts[i]);
       stmts[i] = Evaluate::make(0);
     }
     if (info_.mmu_info_.IsGemm() && !info_.mmu_info_.IsSpecGemm() && info_.mmu_info_.IsCUB(id.get_name())) {
-      stmts[i] = AttrStmt::make(make_zero(Int(32)), PRAGMA_MMU_C0WRITE, Expr(1), stmts[i]);
+      stmts[i] = AttrStmt::make(make_zero(Int(INT_32)), PRAGMA_MMU_C0WRITE, Expr(1), stmts[i]);
       mmu_c0write_.emplace_back(stmts[i]);
       stmts[i] = Evaluate::make(0);
     }
     if (info_.mmu_info_.IsGemm() && !info_.mmu_info_.IsSpecGemm() && info_.mmu_info_.IsC(id.get_name())) {
-      stmts[i] = AttrStmt::make(make_zero(Int(32)), PRAGMA_MMU_C1WRITE, Expr(1), stmts[i]);
+      stmts[i] = AttrStmt::make(make_zero(Int(INT_32)), PRAGMA_MMU_C1WRITE, Expr(1), stmts[i]);
       if (!mmu_c0write_.empty()) {
         mmu_c0write_.emplace_back(Block::make(mmu_c0write_[0], stmts[i]));
         stmts[i] = Evaluate::make(0);
@@ -1824,62 +1787,62 @@ Stmt NPUIslEmitter::EmitBlock(const isl::ast_node_block &block_node) {
 }
 
 void NPUIslEmitter::ConvBackPropFilterFixMadInit(const isl::ast_node_mark &node, Expr &mad_init_cond) {
-  if (info_.mmu_info_.IsConvBackpropFilter()) {
-    /// find reduce k;
-    /// correct axles' name
-    FindStmt fs = FindStmt();
-    fs.FindAst(node.get_node());
+  if (!info_.mmu_info_.IsConvBackpropFilter()) {
+    return;
+  }
+  /// find reduce k;
+  /// correct axles' name
+  FindStmt fs = FindStmt();
+  fs.FindAst(node.get_node());
 
-    for (const auto &i : fs.usernodes) {
-      CHECK(i.get_expr().isa<isl::ast_expr_op>());
-      isl::ast_expr_op usr_expr = i.get_expr().as<isl::ast_expr_op>();
-      CHECK(usr_expr.get_arg(0).isa<isl::ast_expr_id>());
-      isl::id curstmtid = usr_expr.get_arg(0).as<isl::ast_expr_id>().get_id();
-      isl::id curnodeid = i.get_annotation();
-      const Node *stmt_node = info_.analysis_result_.GetStatementMap().at(curstmtid);
-      CHECK(stmt_node != nullptr);
+  for (const auto &i : fs.usernodes) {
+    CHECK(i.get_expr().isa<isl::ast_expr_op>());
+    isl::ast_expr_op usr_expr = i.get_expr().as<isl::ast_expr_op>();
+    CHECK(usr_expr.get_arg(0).isa<isl::ast_expr_id>());
+    isl::id curstmtid = usr_expr.get_arg(0).as<isl::ast_expr_id>().get_id();
+    isl::id curnodeid = i.get_annotation();
+    const Node *stmt_node = info_.analysis_result_.GetStatementMap().at(curstmtid);
+    CHECK(stmt_node != nullptr);
+    // stmt_node should not have if stmt
+    if (!stmt_node->IsInstance<Provide>()) {
+      LOG(WARNING) << "stmt_node has if stmt";
+    }
 
-      // stmt_node should not have if stmt
-      if (stmt_node->IsInstance<Provide>()) {
-        auto build = node_info_map_.at(curnodeid).build;
-        auto tuple = info_.analysis_result_.GetOperatorDomainMap().at(curstmtid).tuple;
-        auto iterator_map = node_info_map_.at(curnodeid).iterator_map;
-
-        for (unsigned int n = 0; n < tuple.size(); n++) {
-          isl::id isl_old_iter = tuple.get_id(n);
-          bool is_red = false;
-          for (const auto &reds : info_.analysis_result_.GetReduceMap()) {
-            for (auto j : reds.second) {
-              // when support atomic add, "no" should not init in each core
-              if (isl_old_iter.get_name() == j->var->name_hint && isl_old_iter.get_name() != "no") {
-                is_red = true;
-                break;
-              }
-            }
-          }
-          if (!is_red) continue;
-          auto isl_expr = build.expr_from(iterator_map.get_pw_aff(n));
-          Expr halide_new_iter = Interpret(isl_expr);
-          std::vector<const Variable *> vv = ExtractIterfromExpr().Run(halide_new_iter);
-
-          for (auto v : vv) {
-            if (std::find(iters_.begin(), iters_.end(), v) == iters_.end()) continue;
-            if (mad_init_cond.defined()) {
-              mad_init_cond = And::make(mad_init_cond, EQ::make(Expr(GetObjPtr(v)), Expr(0)));
-            } else {
-              mad_init_cond = EQ::make(Expr(GetObjPtr(v)), Expr(0));
-            }
+    auto build = node_info_map_.at(curnodeid).build;
+    auto tuple = info_.analysis_result_.GetOperatorDomainMap().at(curstmtid).tuple;
+    auto iterator_map = node_info_map_.at(curnodeid).iterator_map;
+    for (unsigned int n = 0; n < tuple.size(); n++) {
+      isl::id isl_old_iter = tuple.get_id(n);
+      bool is_red = false;
+      for (const auto &reds : info_.analysis_result_.GetReduceMap()) {
+        for (auto j : reds.second) {
+          // when support atomic add, "no" should not init in each core
+          if (isl_old_iter.get_name() == j->var->name_hint && isl_old_iter.get_name() != "no") {
+            is_red = true;
+            break;
           }
         }
-      } else {
-        LOG(WARNING) << "stmt_node has if stmt";
+      }
+      if (!is_red) continue;
+      auto isl_expr = build.expr_from(iterator_map.get_pw_aff(n));
+      Expr halide_new_iter = Interpret(isl_expr);
+      std::vector<const Variable *> vv = ExtractIterfromExpr().Run(halide_new_iter);
+
+      for (auto v : vv) {
+        if (std::find(iters_.begin(), iters_.end(), v) == iters_.end()) continue;
+        if (mad_init_cond.defined()) {
+          mad_init_cond = And::make(mad_init_cond, EQ::make(Expr(GetObjPtr(v)), Expr(0)));
+        } else {
+          mad_init_cond = EQ::make(Expr(GetObjPtr(v)), Expr(0));
+        }
       }
     }
+
   }
 }
 
 Stmt NPUIslEmitter::EmitMarkFuseInst(const isl::ast_node_mark &node) {
-  auto stmt = AttrStmt::make(make_zero(Int(32)), "pragma_fuse_vector", Expr(1), EmitAst(node.get_node()));
+  auto stmt = AttrStmt::make(make_zero(Int(INT_32)), "pragma_fuse_vector", Expr(1), EmitAst(node.get_node()));
   if (info_.mmu_info_.IsGemm() && !info_.mmu_info_.IsSpecGemm() && !mmu_c0write_.empty()) {
     mmu_c0write_.emplace_back(Block::make(mmu_c0write_[0], stmt));
     stmt = Evaluate::make(0);
@@ -1888,7 +1851,7 @@ Stmt NPUIslEmitter::EmitMarkFuseInst(const isl::ast_node_mark &node) {
 }
 
 Stmt NPUIslEmitter::EmitMarkReschedule(const isl::ast_node_mark &node) {
-  auto stmt = AttrStmt::make(make_zero(Int(32)), "pragma_reschedule", Expr(1), EmitAst(node.get_node()));
+  auto stmt = AttrStmt::make(make_zero(Int(INT_32)), "pragma_reschedule", Expr(1), EmitAst(node.get_node()));
   return stmt;
 }
 
@@ -1898,7 +1861,7 @@ Stmt NPUIslEmitter::EmitMarkAllocRealizeOut(const isl::ast_node_mark &node) {
     body = InsertRealize(body, i, false);
   }
   realize_out_.clear();
-  body = AttrStmt::make(make_zero(Int(32)), ALLOC_REALIZE_OUT, Expr(1), body);
+  body = AttrStmt::make(make_zero(Int(INT_32)), ALLOC_REALIZE_OUT, Expr(1), body);
   return body;
 }
 
@@ -1911,7 +1874,7 @@ Stmt NPUIslEmitter::EmitMarkAllocC(const isl::ast_node_mark &node) {
   auto c_c0c = c_buf + LOCAL_C0C;
   body = InsertRealize(body, isl::id(info_.GetCtx(), c_c0c), false);
   body = InsertRealize(body, isl::id(info_.GetCtx(), c_buf), false);
-  body = AttrStmt::make(make_zero(Int(32)), ALLOC_C, Expr(1), body);
+  body = AttrStmt::make(make_zero(Int(INT_32)), ALLOC_C, Expr(1), body);
   return body;
 }
 

@@ -20,6 +20,7 @@
 
 #include "emit_pass.h"
 #include <stack>
+#include <algorithm>
 
 namespace akg {
 namespace ir {
@@ -49,28 +50,28 @@ Array<Expr> GetTileSize(TensorCoreInfo &tensor_core_info, const std::string &nam
   auto it2 = tensor_core_info.matrix_major_.find(name);
   CHECK(it != tensor_core_info.matrix_abc_.end() && it2 != tensor_core_info.matrix_major_.end())
     << "Cannot find matrix info for " << name;
-  Expr size0 = make_const(Int(32), 16);
-  Expr size1 = make_const(Int(32), 16);
+  Expr size0 = make_const(Int(INT_32), 16);
+  Expr size1 = make_const(Int(INT_32), 16);
   if (it->second == MMA_A && it2->second == COL_MAJOR) {
-    size0 = make_const(Int(32), tensor_core_info.warp_tile_.k);
-    size1 = make_const(Int(32), tensor_core_info.warp_tile_.m);
+    size0 = make_const(Int(INT_32), tensor_core_info.warp_tile_.k);
+    size1 = make_const(Int(INT_32), tensor_core_info.warp_tile_.m);
   }
   if (it->second == MMA_A && it2->second == ROW_MAJOR) {
-    size0 = make_const(Int(32), tensor_core_info.warp_tile_.m);
-    size1 = make_const(Int(32), tensor_core_info.warp_tile_.k);
+    size0 = make_const(Int(INT_32), tensor_core_info.warp_tile_.m);
+    size1 = make_const(Int(INT_32), tensor_core_info.warp_tile_.k);
   }
   if (it->second == MMA_B && it2->second == ROW_MAJOR) {
-    size0 = make_const(Int(32), tensor_core_info.warp_tile_.k);
-    size1 = make_const(Int(32), tensor_core_info.warp_tile_.n);
+    size0 = make_const(Int(INT_32), tensor_core_info.warp_tile_.k);
+    size1 = make_const(Int(INT_32), tensor_core_info.warp_tile_.n);
   }
   if (it->second == MMA_B && it2->second == COL_MAJOR) {
-    size0 = make_const(Int(32), tensor_core_info.warp_tile_.n);
-    size1 = make_const(Int(32), tensor_core_info.warp_tile_.k);
+    size0 = make_const(Int(INT_32), tensor_core_info.warp_tile_.n);
+    size1 = make_const(Int(INT_32), tensor_core_info.warp_tile_.k);
   }
 
   if (it->second == MATRIX_C || it->second == MATRIX_ELSE) {
-    size0 = make_const(Int(32), tensor_core_info.warp_tile_.m);
-    size1 = make_const(Int(32), tensor_core_info.warp_tile_.n);
+    size0 = make_const(Int(INT_32), tensor_core_info.warp_tile_.m);
+    size1 = make_const(Int(INT_32), tensor_core_info.warp_tile_.n);
   }
   Array<Expr> tile_size = {size0, size1};
   return tile_size;
@@ -143,7 +144,7 @@ class DeleteUselessFor : public air::ir::IRMutator {
     }
 
     if (be_zero) {
-      return make_const(Int(32), 0);
+      return make_const(Int(INT_32), 0);
     }
 
     return e;
@@ -255,14 +256,14 @@ class EmitTensorCoreHelper {
   Expr tuple_;
   TensorCoreInfo &tensor_core_info_;
 
-  DataForLoad data_for_load_;
-  DataForStore data_for_store_;
-  DataForFill data_for_fill_;
-  DataForSync data_for_sync_;
-  DataForElem data_for_elemwise_;
+  DataForLoad data_for_load_={};
+  DataForStore data_for_store_={};
+  DataForFill data_for_fill_={};
+  DataForSync data_for_sync_={};
+  DataForElem data_for_elemwise_={};
 
   air::ir::TensorKey key_;
-  const Call *call_;
+  const Call *call_={nullptr};
   NodePtr<BufferNode> buffer_node_;
   Type data_type_;
   ScopInfo &scop_info_;
@@ -327,17 +328,17 @@ void EmitTensorCoreHelper::PrepareDataCore() {
 
   Array<Expr> strides;
   for (size_t i = 1; i < shape.size(); ++i) {
-    Expr stride = IntImm::make(Int(32), 1);
+    Expr stride = IntImm::make(Int(INT_32), 1);
     for (size_t j = shape.size() - 1; j >= i; --j) {
       stride = Mul::make(stride, shape[j]);
     }
     strides.push_back(stride);
   }
-  strides.push_back(make_const(Int(32), 1));
+  strides.push_back(make_const(Int(INT_32), 1));
 
   // compute the local offset for fragment
   // example: (cc1, cc2)
-  Expr fragment_elem_offset = IntImm::make(Int(32), 0);
+  Expr fragment_elem_offset = IntImm::make(Int(INT_32), 0);
   CHECK_EQ(call_->args.size(), min_bound.size());
   for (size_t i = 0; i < min_bound.size(); i++) {
     auto arg = call_->args[i];
@@ -352,7 +353,7 @@ void EmitTensorCoreHelper::PrepareDataCore() {
     fragment_elem_offset = Add::make(fragment_elem_offset, Mul::make(stride_val, Sub::make(arg, min_bound[i])));
   }
 
-  Expr elem_offset = IntImm::make(Int(32), 0);
+  Expr elem_offset = IntImm::make(Int(INT_32), 0);
   CHECK_EQ(call_->args.size(), min_bound.size());
   for (size_t i = 0; i < min_bound.size(); i++) {
     auto arg = call_->args[i];
@@ -545,6 +546,21 @@ Stmt EmitTensorCoreHelper::MakeFragmentElemTransform(Expr op_name) {
   auto tuple_a = tuple_;
   auto node_a = node_;
 
+  auto call_c = data_for_elemwise_.c.as<Call>();
+  CHECK(call_c);
+  key_ = air::ir::TensorKey{call_c->func, call_c->value_index};
+  call_ = call_c;
+  buffer_node_ = data_for_elemwise_.node_c;
+  data_type_ = call_->type;
+
+  PrepareDataCore();
+
+  auto tuple_c = tuple_;
+  auto node_c = node_;
+
+  Buffer buffer_a(data_for_elemwise_.node_a);
+  Buffer buffer = Downcast<Buffer>(node_c[0]);
+
   auto call_b = data_for_elemwise_.b.as<Call>();
   if (call_b) {
     key_ = air::ir::TensorKey{call_b->func, call_b->value_index};
@@ -556,23 +572,7 @@ Stmt EmitTensorCoreHelper::MakeFragmentElemTransform(Expr op_name) {
 
     auto tuple_b = tuple_;
     auto node_b = node_;
-
-    auto call_c = data_for_elemwise_.c.as<Call>();
-    CHECK(call_c);
-    key_ = air::ir::TensorKey{call_c->func, call_c->value_index};
-    call_ = call_c;
-    buffer_node_ = data_for_elemwise_.node_c;
-    data_type_ = call_->type;
-
-    PrepareDataCore();
-
-    auto tuple_c = tuple_;
-    auto node_c = node_;
-
-    Buffer buffer_a(data_for_elemwise_.node_a);
     Buffer buffer_b(data_for_elemwise_.node_b);
-    Buffer buffer = Downcast<Buffer>(node_c[0]);
-
     Stmt stmt = Evaluate::make(
         Call::make(Handle(), air::ir::intrinsic::akg_fragment_elem,
                   {buffer->data, fragment_offset_[buffer->elem_offset], buffer_a->data,
@@ -584,21 +584,6 @@ Stmt EmitTensorCoreHelper::MakeFragmentElemTransform(Expr op_name) {
     stmt = AttrStmt::make(node_a, "buffer_bind_scope", tuple_a, stmt);
     return stmt;
   } else {
-    auto call_c = data_for_elemwise_.c.as<Call>();
-    CHECK(call_c);
-    key_ = air::ir::TensorKey{call_c->func, call_c->value_index};
-    call_ = call_c;
-    buffer_node_ = data_for_elemwise_.node_c;
-    data_type_ = call_->type;
-
-    PrepareDataCore();
-
-    auto tuple_c = tuple_;
-    auto node_c = node_;
-
-    Buffer buffer_a(data_for_elemwise_.node_a);
-    Buffer buffer = Downcast<Buffer>(node_c[0]);
-
     Stmt stmt = Evaluate::make(
         Call::make(Handle(), air::ir::intrinsic::akg_fragment_elem,
                   {buffer->data, fragment_offset_[buffer->elem_offset], buffer_a->data,
@@ -613,7 +598,7 @@ Stmt EmitTensorCoreHelper::MakeFragmentElemTransform(Expr op_name) {
 
 class AddMmaAttrFlag : public air::ir::IRMutator {
  public:
-  explicit AddMmaAttrFlag(TensorCoreInfo t) : tt(t) {}
+  explicit AddMmaAttrFlag(TensorCoreInfo &t) : tt(t) {}
   ~AddMmaAttrFlag() override = default;
 
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) override {
@@ -809,12 +794,27 @@ class ModifyTheLocalOffset : public IRMutator {
     return GetFragmentIndex(call);
   }
 
+  Expr GetCurrentIndex(const int outer_size, const std::vector<const Variable *> &used_vars) {
+    Expr e = make_const(Int(INT_32), 0);
+    int size = used_vars.size();
+    for (int i = 0; i < outer_size; i++) {
+      auto u = used_vars[i];
+      Expr temp = Expr(GetObjPtr(u));
+      for (int j = i + 1; j < size - 1; j++) {
+        // The last var is used for wmma interface.
+        // So in this place, the extent of last var is not used.
+        temp = Mul::make(temp, FindExtentOfForVar(used_vars[j]));
+      }
+      e = Add::make(e, temp);
+    }
+    return e;
+  }
+
   Array<Expr> GetFragmentIndex(const Call *call) {
     auto args = call->args;
     Array<Expr> new_index;
-    for (auto &i : args) {
-      auto used_vars = ExprUsedVarsVisitor().Run(i);
-      Expr e = make_const(Int(32), 0);
+    for (auto &arg : args) {
+      auto used_vars = ExprUsedVarsVisitor().Run(arg);
       int size = used_vars.size();
       // The last var is used for wmma interface.
       // So in this place, delete the related var infor.
@@ -822,16 +822,7 @@ class ModifyTheLocalOffset : public IRMutator {
       // cc1 is the var after warping
       // This index will be converted to cc1
       // If the index is without cc1, this will be converted to 0
-      for (int i = 0; i < size - 1; i++) {
-        auto u = used_vars[i];
-        Expr temp = Expr(GetObjPtr(u));
-        for (int j = i + 1; j < size - 1; j++) {
-          // The last var is used for wmma interface.
-          // So in this place, the extent of last var is not used.
-          temp = Mul::make(temp, FindExtentOfForVar(used_vars[j]));
-        }
-        e = Add::make(e, temp);
-      }
+      Expr e = GetCurrentIndex(size - 1, used_vars);
       new_index.push_back(e);
     }
     return new_index;
@@ -845,9 +836,10 @@ class ModifyTheLocalOffset : public IRMutator {
     auto args = call->args;
     Array<Expr> new_index;
     int len = args.size();
+    constexpr auto H_DIMENSION_INDEX = 1;
+    constexpr auto W_DIMENSION_INDEX = 2;
     for (int i = 0; i < len; i++) {
       auto used_vars = ExprUsedVarsVisitor().Run(args[i]);
-      Expr e = make_const(Int(32), 0);
       int size = used_vars.size();
       // The last var is used for wmma interface.
       // So in this place, delete the related var infor.
@@ -857,22 +849,11 @@ class ModifyTheLocalOffset : public IRMutator {
       // If the index is without cc1, this will be converted to 0
       // The H&W dimensions are not used for warp mapping and wmma interface.
       // So, for H and W dimension, this logic should be disabled.
-      constexpr auto H_DIMENSION_INDEX = 1;
-      constexpr auto W_DIMENSION_INDEX = 2;
       int outer_size = size;
       if (i != H_DIMENSION_INDEX && i != W_DIMENSION_INDEX) {
         outer_size -= 1;
       }
-      for (int i = 0; i < outer_size; i++) {
-        auto u = used_vars[i];
-        Expr temp = Expr(GetObjPtr(u));
-        for (int j = i + 1; j < size - 1; j++) {
-          // The last var is used for wmma interface.
-          // So in this place, the extent of last var is not used.
-          temp = Mul::make(temp, FindExtentOfForVar(used_vars[j]));
-        }
-        e = Add::make(e, temp);
-      }
+      Expr e = GetCurrentIndex(outer_size, used_vars);
       new_index.push_back(e);
     }
     return new_index;
@@ -1404,27 +1385,14 @@ Stmt EmitForTensorCoreDesignOne(Stmt stmt, TensorCoreInfo &info) {
 }
 
 bool CheckTileValid(Tile tile, TensorCoreInfo &info) {
-  if (tile.m == 16 && tile.n == 16 && tile.k == 4) {
+  std::vector<int> tile_size{tile.m, tile.n, tile.k};
+  auto it = find(AKG_TILE_SIZE.begin(), AKG_TILE_SIZE.end(), tile_size);
+  if (it != AKG_TILE_SIZE.end()) {
     info.wmma_scope_ = "akg";
     return true;
   }
-  if (tile.m == 16 && tile.n == 16 && tile.k == 8) {
-    info.wmma_scope_ = "akg";
-    return true;
-  }
-  if (tile.m == 32 && tile.n == 32 && tile.k == 4) {
-    info.wmma_scope_ = "akg";
-    return true;
-  }
-  if (tile.m == 16 && tile.n == 16 && tile.k == 16) {
-    info.wmma_scope_ = "nvcuda";
-    return true;
-  }
-  if (tile.m == 8 && tile.n == 32 && tile.k == 16) {
-    info.wmma_scope_ = "nvcuda";
-    return true;
-  }
-  if (tile.m == 32 && tile.n == 8 && tile.k == 16) {
+  it = find(NVCUDA_TILE_SIZE.begin(), NVCUDA_TILE_SIZE.end(), tile_size);
+  if (it != NVCUDA_TILE_SIZE.end()) {
     info.wmma_scope_ = "nvcuda";
     return true;
   }
@@ -1466,13 +1434,13 @@ void PrepareDataForTensorCore(TensorCoreInfo &info, ScopInfo &scop_info) {
 
     Array<Expr> strides;
     for (size_t i = 1; i < b->shape.size(); ++i) {
-      Expr stride = IntImm::make(Int(32), 1);
+      Expr stride = IntImm::make(Int(INT_32), 1);
       for (size_t j = b->shape.size() - 1; j >= i; --j) {
         stride = Mul::make(stride, b->shape[j]);
       }
       strides.push_back(stride);
     }
-    strides.push_back(make_const(Int(32), 1));
+    strides.push_back(make_const(Int(INT_32), 1));
     info.strides_[name] = strides;
   }
 
@@ -1515,7 +1483,7 @@ Stmt EmitForTensorCore(Stmt stmt, TensorCoreInfo &info, ScopInfo &scop_info) {
 
   if (scop_info.analysis_result_.GetBatchAxisNumForMatmul()) {
     auto batch_axis_num = scop_info.analysis_result_.GetBatchAxisNumForMatmul();
-    stmt = AttrStmt::make(Expr(""), "batch_axis_num", make_const(Int(32), batch_axis_num), stmt);
+    stmt = AttrStmt::make(Expr(""), "batch_axis_num", make_const(Int(INT_32), batch_axis_num), stmt);
   }
 
   // add tensor core plan two attr

@@ -106,21 +106,11 @@ Stmt IslEmitterCsr::EmitAccessNodeFromPromoteAcsCall(isl::id var, const Node *no
 
 Expr CpuIslEmitterCsr::Interpret(const isl::ast_expr &e) {
   if (auto int_expr = e.as<isl::ast_expr_int>()) {
-    if (dtype_ == Int(64)) return Expr(IslExprToSInt64(int_expr));
-    return Expr(IslExprToSInt(int_expr));
-  } else if (auto id_expr = e.as<isl::ast_expr_id>()) {
-    // If this variable is defined by loop index, we need sharing it.
-    const Variable *var = GetIterByName(id_expr.get_id().get_name());
-    if (var)
-      return VarExpr(GetObjPtr(var));
-    else
-      return VarExpr(id_expr.get_id().to_str());
-  } else if (auto op_expr = e.as<isl::ast_expr_op>()) {
-    return InterpretOp(op_expr);
-  } else {
-    LOG(FATAL) << "NYI " << e;
-    return 0;
+    if (dtype_ == Int(64)) {
+      return Expr(IslExprToSInt64(int_expr));
+    }
   }
+  return IslEmitter::Interpret(e);
 }
 
 Stmt CpuIslEmitterCsr::EmitFor(const isl::ast_node_for &node) {
