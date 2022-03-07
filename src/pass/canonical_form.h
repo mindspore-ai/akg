@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2021 Huawei Technologies Co., Ltd
+ * Copyright 2019-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,6 +31,7 @@ using std::string;
 using std::tuple;
 using std::unordered_map;
 using std::vector;
+static constexpr int INT32 = 32;
 
 struct VarCompare {
   bool operator()(const Var &a, const Var &b) const { return a->name_hint.compare(b->name_hint) < 0; }
@@ -63,7 +64,7 @@ class Monomial {
 
   Monomial Divisible(const Monomial &monomial) const;
 
-  Expr ToExpr(air::DataType type = Int(32), bool is_negative = false) const;
+  Expr ToExpr(const air::DataType data_type = Int(INT32), const bool is_negative = false) const;
 
   bool operator<(const Monomial &monomial) const;
   bool operator==(const Monomial &monomial) const;
@@ -71,7 +72,7 @@ class Monomial {
 
 class CanonicalForm : public air::ir::ExprFunctor<set<Monomial>(const air::Expr &n, const air::Expr &e)> {
  public:
-  CanonicalForm(air::DataType data_type = Int(32)) : data_type_(data_type) {}
+  explicit CanonicalForm(air::DataType data_type = Int(INT32)) : data_type_(data_type) {}
 
   ~CanonicalForm() override = default;
 
@@ -114,7 +115,7 @@ class CanonicalForm : public air::ir::ExprFunctor<set<Monomial>(const air::Expr 
 
   set<Monomial> VisitExpr_(const UIntImm *op, const air::Expr &e) final;
 
-  air::DataType data_type_ = Int(32);
+  air::DataType data_type_ = Int(INT32);
 };
 }  // namespace ir
 }  // namespace akg

@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright 2019-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,21 +22,21 @@ namespace ir {
 using std::get;
 using std::to_string;
 
-Expr CreateMonomialsExpr_(air::DataType data_type, const set<Monomial> &monomials, int &sign) {
+Expr CreateMonomialsExpr_(const air::DataType data_type, const set<Monomial> &monomials, int &sign) {
   if (monomials.empty()) {
     sign = 0;
     return make_const(data_type, 0);
   }
 
   Expr sumexpr;
-  auto begin = monomials.begin();
+  auto begin = monomials.cbegin();
   sign = begin->GetSign();
-  for (const auto &item : monomials) {
+  for (auto &item : std::as_const(monomials)) {
     int is_negative = item.GetSign();
     sign = ((sign == is_negative) ? sign : 1);
 
     if (sumexpr.defined()) {
-      if (is_negative) {
+      if (is_negative != 0) {
         sumexpr = Sub::make(sumexpr, item.ToExpr(data_type, true));
       } else {
         sumexpr = Add::make(sumexpr, item.ToExpr(data_type, false));
@@ -55,18 +55,11 @@ Monomial Monomial::Add(const Monomial &monomial) const {
   auto d = monomial.denominator_;
 
   numerator_ = a * d + b * c;
-  auto gcd1 = air::ir::gcd(numerator_, b);
-  CHECK_NE(gcd1, 0);
-  numerator_ = numerator_ / gcd1;
-  denominator_ = b / gcd1;
-
-  auto gcd2 = air::ir::gcd(numerator_, d);
-  CHECK_NE(gcd2, 0);
-  numerator_ = numerator_ / gcd2;
-  denominator_ = d / gcd2 * denominator_;
-
+  denominator_ = b * d;
   auto gcd = air::ir::gcd(numerator_, denominator_);
-  CHECK_NE(gcd, 0);
+  if (gcd == 0) {
+    LOG(FATAL) << "Divisor gcd is zero.";
+  }
   numerator_ = numerator_ / gcd;
   denominator_ = denominator_ / gcd;
 
@@ -74,54 +67,42 @@ Monomial Monomial::Add(const Monomial &monomial) const {
 }
 
 Monomial Monomial::Sub(const Monomial &monomial) const {
-  auto a = numerator_;
-  auto b = denominator_;
-  auto c = monomial.numerator_;
-  auto d = monomial.denominator_;
-
-  if (d < 0) {
-    d *= -1;
+  auto sub = monomial;
+  if (sub.denominator_ < 0) {
+    sub.denominator_ *= -1;
   } else {
-    c *= -1;
+    sub.numerator_ *= -1;
   }
-
-  numerator_ = a * d + b * c;
-  auto gcd1 = air::ir::gcd(numerator_, b);
-  CHECK_NE(gcd1, 0);
-  numerator_ = numerator_ / gcd1;
-  denominator_ = b / gcd1;
-
-  auto gcd2 = air::ir::gcd(numerator_, d);
-  CHECK_NE(gcd2, 0);
-  numerator_ = numerator_ / gcd2;
-  denominator_ = d / gcd2 * denominator_;
-
-  auto gcd = air::ir::gcd(numerator_, denominator_);
-  CHECK_NE(gcd, 0);
-  numerator_ = numerator_ / gcd;
-  denominator_ = denominator_ / gcd;
-
-  return *this;
+  return Add(sub);
 }
 
 Monomial &Monomial::Mul(const Monomial &monomial) {
   auto gcd1 = air::ir::gcd(numerator_, monomial.denominator_);
   auto gcd2 = air::ir::gcd(denominator_, monomial.numerator_);
-  CHECK_NE(gcd1, 0);
-  CHECK_NE(gcd2, 0);
+  if (gcd1 == 0) {
+    LOG(FATAL) << "Divisor gcd1 is zero.";
+    return *this;
+  }
+  if (gcd2 == 0) {
+    LOG(FATAL) << "Divisor gcd2 is zero.";
+    return *this;
+  }
   numerator_ = (monomial.numerator_ / gcd2) * (numerator_ / gcd1);
   denominator_ = (monomial.denominator_ / gcd1) * (denominator_ / gcd2);
 
   auto gcd = air::ir::gcd(numerator_, denominator_);
-  CHECK_NE(gcd, 0);
+  if (gcd == 0) {
+    LOG(FATAL) << "Divisor gcd is zero.";
+    return *this;
+  }
   numerator_ /= gcd;
   denominator_ /= gcd;
 
-  for (const auto &item : monomial.degree_) {
-    if (degree_.count(item.first)) {
+  for (auto &item : std::as_const(monomial.degree_)) {
+    if (degree_.count(item.first) > 0) {
       degree_[item.first] += item.second;
     } else {
-      degree_.emplace(item);
+      static_cast<void>(degree_.emplace(item));
     }
   }
 
@@ -131,24 +112,33 @@ Monomial &Monomial::Mul(const Monomial &monomial) {
 Monomial &Monomial::Divide(const Monomial &monomial) {
   auto gcd1 = air::ir::gcd(numerator_, monomial.numerator_);
   auto gcd2 = air::ir::gcd(denominator_, monomial.denominator_);
-  CHECK_NE(gcd1, 0);
-  CHECK_NE(gcd2, 0);
+  if (gcd1 == 0) {
+    LOG(FATAL) << "Divisor gcd1 is zero.";
+    return *this;
+  }
+  if (gcd2 == 0) {
+    LOG(FATAL) << "Divisor gcd2 is zero.";
+    return *this;
+  }
   numerator_ = (monomial.denominator_ / gcd2) * (numerator_ / gcd1);
   denominator_ = (monomial.numerator_ / gcd1) * (denominator_ / gcd2);
 
   auto gcd = air::ir::gcd(numerator_, denominator_);
-  CHECK_NE(gcd, 0);
+  if (gcd == 0) {
+    LOG(FATAL) << "Divisor gcd is zero.";
+    return *this;
+  }
   numerator_ /= gcd;
   denominator_ /= gcd;
 
-  for (const auto &item : monomial.degree_) {
-    if (degree_.count(item.first)) {
+  for (auto &item : std::as_const(monomial.degree_)) {
+    if (degree_.count(item.first) > 0) {
       degree_[item.first] -= item.second;
       if (degree_[item.first] == 0) {
-        degree_.erase(item.first);
+        static_cast<void>(degree_.erase(item.first));
       }
     } else {
-      degree_.emplace(item.first, -1 * item.second);
+      static_cast<void>(degree_.emplace(item.first, -1 * item.second));
     }
   }
 
@@ -159,9 +149,15 @@ Monomial Monomial::Divisible(const Monomial &monomial) const {
   Monomial div;
   div.numerator_ = 0;
   if (degree_.empty() && monomial.degree_.empty()) {
-    CHECK_NE(monomial.numerator_, 0) << "cannot divide by zero!";
+    if (monomial.numerator_ == 0) {
+      LOG(FATAL) << "Divisor monomial.numerator_ is zero.";
+    }
     div.numerator_ = numerator_ / monomial.numerator_;
     CHECK_NE(denominator_, 0);
+    if (denominator_ == 0) {
+      LOG(FATAL) << "Divisor denominator_ is zero.";
+      return div;
+    }
     div.denominator_ = monomial.denominator_ / denominator_;
 
     return div;
@@ -171,7 +167,7 @@ Monomial Monomial::Divisible(const Monomial &monomial) const {
     return div;
   }
 
-  for (const auto &item : monomial.degree_) {
+  for (auto &item : std::as_const(monomial.degree_)) {
     auto it = degree_.find(item.first);
     if (it == degree_.end()) {
       return div;
@@ -184,7 +180,7 @@ Monomial Monomial::Divisible(const Monomial &monomial) const {
   return div.Divide(monomial);
 }
 
-Expr Monomial::ToExpr(air::DataType data_type, bool is_negative) const {
+Expr Monomial::ToExpr(const air::DataType data_type, const bool is_negative) const {
   if (numerator_ == 0) {
     return make_const(data_type, 0);
   }
@@ -199,13 +195,14 @@ Expr Monomial::ToExpr(air::DataType data_type, bool is_negative) const {
   int64_t a = numerator_;
   int64_t b = denominator_;
   if (is_negative) {
-    if (denominator_ < 0)
+    if (denominator_ < 0) {
       b *= -1;
-    else
+    } else {
       a *= -1;
+    }
   }
 
-  for (const auto &item : degree_) {
+  for (auto &item : std::as_const(degree_)) {
     Expr item_expr = item.first;
 
     if (std::abs(item.second) == 0) {
@@ -249,8 +246,8 @@ bool Monomial::operator==(const Monomial &monomial) const {
     return false;
   }
 
-  auto it_a = degree_.begin();
-  auto it_b = monomial.degree_.begin();
+  auto it_a = degree_.cbegin();
+  auto it_b = monomial.degree_.cbegin();
   while (it_a != degree_.end()) {
     if (it_a->first.get() != it_b->first.get()) {
       return false;
@@ -270,10 +267,10 @@ bool Monomial::operator<(const Monomial &monomial) const {
     return true;
   }
 
-  auto it_a = degree_.begin();
-  auto a_end = degree_.end();
-  auto it_b = monomial.degree_.begin();
-  auto b_end = monomial.degree_.end();
+  auto it_a = degree_.cbegin();
+  auto a_end = degree_.cend();
+  auto it_b = monomial.degree_.cbegin();
+  auto b_end = monomial.degree_.cend();
   while ((it_a != a_end) && (it_b != b_end)) {
     int cmp = it_a->first->name_hint.compare(it_b->first->name_hint);
     if (cmp == 0) {
@@ -312,8 +309,8 @@ pair<set<Monomial>, set<Monomial>> CanonicalForm::ComputeQuotientAndRemainder(co
 
   set<Monomial> q;
   set<Monomial> r = a;
-  auto b_first = *b.begin();
-  auto div = r.begin()->Divisible(b_first);
+  auto b_first = *b.cbegin();
+  auto div = r.cbegin()->Divisible(b_first);
   while (div.numerator_ != 0) {
     q.emplace(div);
     auto mul = Multiply(b, set<Monomial>{div});
@@ -361,29 +358,29 @@ set<Monomial> CanonicalForm::DivAndModFilter(set<Monomial> &monomials, vector<pa
     set<Monomial> div_coeff;
     set<Monomial> mod_coeff;
     set<Monomial> offset;
-    for (auto item : monomials) {
+    for (auto item : std::as_const(monomials)) {
       if (item.degree_.count(pair.first)) {
         auto coeff = item;
         if (item.degree_[pair.first] == 1) {
-          coeff.degree_.erase(pair.first);
+          static_cast<void>(coeff.degree_.erase(pair.first));
         } else if (item.degree_[pair.first] > 0) {
           item.degree_[pair.first] -= 1;
         } else {
           continue;
         }
-        div_coeff.emplace(coeff);
+        static_cast<void>(div_coeff.emplace(coeff));
       } else if (item.degree_.count(pair.second)) {
         auto coeff = item;
         if (item.degree_[pair.second] == 1) {
-          coeff.degree_.erase(pair.second);
+          static_cast<void>(coeff.degree_.erase(pair.second));
         } else if (item.degree_[pair.second] > 0) {
           item.degree_[pair.second] -= 1;
         } else {
           continue;
         }
-        mod_coeff.emplace(coeff);
+        static_cast<void>(mod_coeff.emplace(coeff));
       } else {
-        offset.emplace(item);
+        static_cast<void>(offset.emplace(item));
       }
     }
 
@@ -391,7 +388,7 @@ set<Monomial> CanonicalForm::DivAndModFilter(set<Monomial> &monomials, vector<pa
     // do not surpport "cancel match A/(B + C) * B + A%(B + C)"
     if (q_r.first == mod_coeff) {
       Monomial var;
-      var.degree_.emplace(pair.first, 1);
+      static_cast<void>(var.degree_.emplace(pair.first, 1));
       auto r = Multiply(q_r.second, set<Monomial>{var});
       auto new_items = Multiply(q_r.first, get<0>(var_child[pair.first]));
       monomials = Addition(r, new_items);
@@ -414,10 +411,10 @@ set<Monomial> CanonicalForm::Addition(const set<Monomial> &a, const set<Monomial
     if (it != ret.end()) {
       static_cast<void>(it->Add(term_b));
       if (it->numerator_ == 0) {
-        ret.erase(it);
+        static_cast<void>(ret.erase(it));
       }
     } else {
-      ret.emplace(term_b);
+      static_cast<void>(ret.emplace(term_b));
     }
   }
 
@@ -431,11 +428,11 @@ set<Monomial> CanonicalForm::Subtract(const set<Monomial> &a, const set<Monomial
     if (it != ret.end()) {
       static_cast<void>(it->Sub(term_b));
       if (it->numerator_ == 0) {
-        ret.erase(it);
+        static_cast<void>(ret.erase(it));
       }
     } else {
       term_b.numerator_ *= -1;
-      ret.emplace(term_b);
+      static_cast<void>(ret.emplace(term_b));
     }
   }
 
@@ -444,17 +441,17 @@ set<Monomial> CanonicalForm::Subtract(const set<Monomial> &a, const set<Monomial
 
 set<Monomial> CanonicalForm::Multiply(const set<Monomial> &a, const set<Monomial> &b) {
   set<Monomial> ret;
-  for (const auto &item_a : a) {
+  for (auto &item_a : std::as_const(a)) {
     for (auto item_b : b) {
       static_cast<void>(item_b.Mul(item_a));
       auto it = ret.find(item_b);
       if (it != ret.end()) {
         static_cast<void>(it->Add(item_b));
         if (it->numerator_ == 0) {
-          ret.erase(it);
+          static_cast<void>(ret.erase(it));
         }
       } else {
-        ret.emplace(item_b);
+        static_cast<void>(ret.emplace(item_b));
       }
     }
   }
@@ -464,10 +461,10 @@ set<Monomial> CanonicalForm::Multiply(const set<Monomial> &a, const set<Monomial
 
 set<Monomial> CanonicalForm::Divide(const set<Monomial> &a, const set<Monomial> &b) {
   set<Monomial> ret;
-  for (const auto &item_b : b) {
+  for (auto &item_b : std::as_const(b)) {
     for (auto item_a : a) {
       static_cast<void>(item_a.Divide(item_b));
-      ret.emplace(item_a);
+      static_cast<void>(ret.emplace(item_a));
     }
   }
 
@@ -505,10 +502,10 @@ set<Monomial> CanonicalForm::VisitExpr_(const Add *op, const air::Expr &e) {
     if (it != ret_a.end()) {
       static_cast<void>(it->Add(term_b));
       if (it->numerator_ == 0) {
-        ret_a.erase(it);
+        static_cast<void>(ret_a.erase(it));
       }
     } else {
-      ret_a.emplace(term_b);
+      static_cast<void>(ret_a.emplace(term_b));
     }
   }
 
@@ -524,11 +521,11 @@ set<Monomial> CanonicalForm::VisitExpr_(const Sub *op, const air::Expr &e) {
     if (it != ret_a.end()) {
       static_cast<void>(it->Sub(term_b));
       if (it->numerator_ == 0) {
-        ret_a.erase(it);
+        static_cast<void>(ret_a.erase(it));
       }
     } else {
       term_b.numerator_ *= -1;
-      ret_a.emplace(term_b);
+      static_cast<void>(ret_a.emplace(term_b));
     }
   }
 
@@ -557,7 +554,7 @@ set<Monomial> CanonicalForm::VisitExpr_(const FloorDiv *op, const air::Expr &e) 
 
 set<Monomial> CanonicalForm::VisitExpr_(const Variable *op, const air::Expr &e) {
   Monomial term;
-  term.degree_.emplace(Downcast<Var>(e), 1);
+  static_cast<void>(term.degree_.emplace(Downcast<Var>(e), 1));
 
   return set<Monomial>{term};
 }
@@ -579,7 +576,7 @@ set<Monomial> CanonicalForm::VisitExpr_(const UIntImm *op, const air::Expr &e) {
   }
 
   Monomial term;
-  term.numerator_ = op->value;
+  term.numerator_ = static_cast<int64_t>(op->value);
 
   return set<Monomial>{term};
 }
