@@ -34,7 +34,9 @@ class AnalyzeSchedule : public SchedulePass {
   virtual isl::schedule Run(isl::schedule sch);
 
  private:
-  void ConstructBandNode();
+  void ConstructOuterBandNode();
+  void ConstructInnerBandNode();
+  void AppendBandNode(const isl::schedule_node &node, const std::function<void(const isl::schedule_node_band)> &f);
 
   std::string target_;
   Stmt stmt_;

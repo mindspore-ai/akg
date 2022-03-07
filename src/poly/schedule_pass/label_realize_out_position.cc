@@ -23,49 +23,46 @@ namespace poly {
 
 isl::schedule LabelRealizeOutPosition::Run(isl::schedule sch_label) {
   auto fn_ = [](isl::schedule_node node) -> isl::schedule_node {
-    if (node.isa<isl::schedule_node_mark>()) {
-      if (REALIZE_BUF == node.as<isl::schedule_node_mark>().get_id().get_name() &&
-          node.child(0).isa<isl::schedule_node_band>()) {
-        auto band = node.child(0).as<isl::schedule_node_band>();
-        unsigned pos = UINT_MAX;
-        auto UpdatePos = [&pos](isl::schedule_node node) -> isl::schedule_node {
-          if (node.isa<isl::schedule_node_filter>()) {
-            node = node.get_child(0);
-            if (node.isa<isl::schedule_node_band>()) {
-              auto band = node.as<isl::schedule_node_band>();
-              CHECK_LT(band.n_member(), UINT_MAX);
-              for (unsigned i = 0; i < band.n_member(); ++i) {
-                if (!band.member_get_coincident(i)) {
-                  if (i < pos) pos = i;
-                  break;
-                }
-              }
-            }
-            node = node.parent();
-          }
-          return node;
-        };
+    if (!node.isa<isl::schedule_node_mark>() || node.as<isl::schedule_node_mark>().get_id().get_name() != REALIZE_BUF ||
+        !node.child(0).isa<isl::schedule_node_band>()) {
+      return node;
+    }
 
-        if (!node.parent().isa<isl::schedule_node_mark>()) {
-          static_cast<void>(band.map_descendant_bottom_up(UpdatePos));
-        }
-
-        for (unsigned i = 0; i < band.n_member(); ++i) {
-          if (!band.member_get_coincident(i)) {
-            if (i < pos) pos = i;
-            break;
-          }
-        }
-
-        if (pos < band.n_member()) {
-          node = node.del();
-          node = node.as<isl::schedule_node_band>().split(pos);
-          node = node.child(0);
-          node = node.insert_mark(isl::id(node.ctx(), REALIZE_BUF));
-          node = node.insert_mark(isl::id(node.ctx(), ALLOC_REALIZE_OUT));
-          node = node.parent();
+    auto band = node.child(0).as<isl::schedule_node_band>();
+    unsigned pos = UINT_MAX;
+    auto UpdatePos = [&pos](isl::schedule_node node) -> isl::schedule_node {
+      if (!node.isa<isl::schedule_node_filter>() || !node.child(0).isa<isl::schedule_node_band>()) {
+        return node;
+      }
+      auto band = node.child(0).as<isl::schedule_node_band>();
+      CHECK_LT(band.n_member(), UINT_MAX);
+      for (unsigned i = 0; i < band.n_member(); ++i) {
+        if (!band.member_get_coincident(i)) {
+          pos = (i < pos) ? i : pos;
+          break;
         }
       }
+      return node;
+    };
+
+    if (!node.parent().isa<isl::schedule_node_mark>()) {
+      static_cast<void>(band.map_descendant_bottom_up(UpdatePos));
+    }
+
+    for (unsigned i = 0; i < band.n_member(); ++i) {
+      if (!band.member_get_coincident(i)) {
+        pos = (i < pos) ? i : pos;
+        break;
+      }
+    }
+
+    if (pos < band.n_member()) {
+      node = node.del();
+      node = node.as<isl::schedule_node_band>().split(pos);
+      node = node.child(0);
+      node = node.insert_mark(isl::id(node.ctx(), REALIZE_BUF));
+      node = node.insert_mark(isl::id(node.ctx(), ALLOC_REALIZE_OUT));
+      node = node.parent();
     }
     return node;
   };

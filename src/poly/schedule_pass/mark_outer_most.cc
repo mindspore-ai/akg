@@ -107,20 +107,21 @@ bool MarkOuterMost::InjectMulticoreToSchedule(isl::schedule_node &outer_band) {
     if (SingleMulticoreBand(outer_band)) {
       for (unsigned int i = 0; i < outer_band.n_children(); ++i) {
         isl::schedule_node node = outer_band.get_child(i);
-        if (node.isa<isl::schedule_node_filter>()) {
-          auto filter = node.as<isl::schedule_node_filter>();
-          if (filter.has_children()) {
-            auto node0 = filter.get_child(0);
-            while (node0.isa<isl::schedule_node_mark>()) {
-              node0 = node0.get_child(0);
-            }
-            if (node0.isa<isl::schedule_node_band>() &&
-              node0.as<isl::schedule_node_band>().n_member() >= 1) {
-              bool injected = InjectMulticoreToBand(node0);
-              outer_band = ObtainSequenceOrSetNodeAncestor(node0);
-              return injected;
-            }
-          }
+        if (!node.isa<isl::schedule_node_filter>()) {
+          continue;
+        }
+        auto filter = node.as<isl::schedule_node_filter>();
+        if (!filter.has_children()) {
+          continue;
+        }
+        auto node0 = filter.get_child(0);
+        while (node0.isa<isl::schedule_node_mark>()) {
+          node0 = node0.get_child(0);
+        }
+        if (node0.isa<isl::schedule_node_band>() && node0.as<isl::schedule_node_band>().n_member() >= 1) {
+          bool injected = InjectMulticoreToBand(node0);
+          outer_band = ObtainSequenceOrSetNodeAncestor(node0);
+          return injected;
         }
       }
     }
