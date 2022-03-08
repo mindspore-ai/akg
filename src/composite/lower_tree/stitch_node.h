@@ -16,16 +16,6 @@
 
 #ifndef AKG_SRC_COMPOSITE_LOWER_TREE_STITCH_NODE_H_
 #define AKG_SRC_COMPOSITE_LOWER_TREE_STITCH_NODE_H_
-#include <sstream>
-#include <vector>
-#include <pass/utils.h>
-#include "build_module.h"
-#include "codegen/lower.h"
-#include "codegen/pass_mgr.h"
-#include "codegen/stage_lower.h"
-#include "composite/utils/dimension_peeling.h"
-#include "composite/utils/dump.h"
-#include "composite/utils/util.h"
 #include "composite/lower_tree/base_node.h"
 #include "composite/lower_tree/multichild_node.h"
 

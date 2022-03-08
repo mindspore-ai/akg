@@ -51,23 +51,9 @@ Map<std::string, NodeRef> CompositePeelAnalyze(const std::string &json_str, cons
     parsed_peeling_space.push_back(Peeling2Str(it));
   }
 
-  Array<Expr> input_names_arr;
-  for (const auto &name : info.input_names) {
-    input_names_arr.push_back(Expr(name));
-  }
-  Array<Expr> output_names_arr;
-  for (const auto &name : info.output_names) {
-    output_names_arr.push_back(Expr(name));
-  }
-  Map<std::string, NodeRef> build_info;
-  build_info.Set("op", Expr(info.kernel_name));
-  build_info.Set("process", Expr(info.opt.target));
-  build_info.Set("input_names", input_names_arr);
-  build_info.Set("output_names", output_names_arr);
-
   Map<std::string, NodeRef> ret;
   ret.Set("stmt", info.opt.peel_info.stmt);
-  ret.Set("build_info", build_info);
+  ret.Set("build_info", SetBuildInfo(info));
   ret.Set("peeling_space", parsed_peeling_space);
   return ret;
 }

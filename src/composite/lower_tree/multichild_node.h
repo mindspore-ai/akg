@@ -16,16 +16,7 @@
 
 #ifndef AKG_SRC_COMPOSITE_LOWER_TREE_MULTICHILD_NODE_H_
 #define AKG_SRC_COMPOSITE_LOWER_TREE_MULTICHILD_NODE_H_
-#include <sstream>
-#include <vector>
-#include <pass/utils.h>
-#include "build_module.h"
-#include "codegen/lower.h"
-#include "codegen/pass_mgr.h"
-#include "codegen/stage_lower.h"
 #include "composite/utils/dimension_peeling.h"
-#include "composite/utils/dump.h"
-#include "composite/utils/util.h"
 #include "composite/lower_tree/base_node.h"
 #include "composite/lower_tree/json_leaf.h"
 
@@ -134,6 +125,13 @@ class MultiChildLowerNode : public BaseLowerNode {
   void UpdateMergeInfos(const Map<std::string, NodeRef> &infos) {
     for (auto iter : infos) {
       merge_infos_.Set(iter.first, iter.second);
+    }
+  }
+  void ChildPostProcess(const LowerData &data, const Map<std::string, NodeRef> &backward_infos) {
+    UpdateMergeInfos(backward_infos);
+    CollectOutputMap(data, backward_infos, outputs2args_);
+    for (const auto &x : data->arg_list_0) {
+      all_args_.push_back(x);
     }
   }
 

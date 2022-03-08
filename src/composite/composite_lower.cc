@@ -14,23 +14,9 @@
  * limitations under the License.
  */
 
-#include <sstream>
 #include <stack>
-#include <vector>
-#include <pass/utils.h>
 #include "build_module.h"
-#include "codegen/lower.h"
-#include "codegen/pass_mgr.h"
-#include "codegen/stage_lower.h"
-#include "composite/utils/dimension_peeling.h"
-#include "composite/utils/dump.h"
-#include "composite/utils/util.h"
-#include "composite/lower_tree/base_node.h"
 #include "composite/lower_tree/json_leaf.h"
-#include "composite/lower_tree/normal_node.h"
-#include "composite/lower_tree/tot_node.h"
-#include "composite/lower_tree/stitch_node.h"
-#include "composite/lower_tree/parallel_node.h"
 #include "composite/lower_tree/tune_node.h"
 #include "composite/lower_tree/module_node.h"
 

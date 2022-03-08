@@ -1,5 +1,5 @@
 /**
- * Copyright 2020-2021 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,10 +20,18 @@
 #include "composite/utils/util.h"
 
 namespace akg {
+namespace {
+constexpr int ONE = 1;
+constexpr int TWO = 2;
+constexpr int THREE = 3;
+constexpr int FOUR = 4;
+constexpr int BIT16 = 16;
+constexpr int BIT32 = 32;
+}  // namespace
 #define TOPI_TWO_INPUTS_CALL(ins, rv, fn)                                             \
   do {                                                                                \
     auto inputs = ins[0].operator Array<NodeRef>();                                   \
-    CHECK_EQ(inputs.size(), 2);                                                       \
+    CHECK_EQ(inputs.size(), TWO);                                                     \
     if (inputs[0]->IsInstance<TensorNode>() && inputs[1]->IsInstance<TensorNode>()) { \
       *rv = fn(Downcast<Tensor>(inputs[0]), Downcast<Tensor>(inputs[1]));             \
     } else if (inputs[0]->IsInstance<TensorNode>()) {                                 \
@@ -38,7 +46,7 @@ namespace akg {
 #define TOPI_ONE_INPUT_CALL(ins, rv, fn)            \
   do {                                              \
     auto inputs = ins[0].operator Array<NodeRef>(); \
-    CHECK_EQ(inputs.size(), 1);                     \
+    CHECK_EQ(inputs.size(), ONE);                   \
     CHECK(inputs[0]->IsInstance<TensorNode>());     \
     *rv = fn(Downcast<Tensor>(inputs[0]));          \
   } while (0);
@@ -48,7 +56,7 @@ using OpAttr = Map<std::string, NodeRef>;
 #define TOPI_ONE_INPUT_ONE_ATTR_CALL(ins, rv, fn, get_attr) \
   do {                                                      \
     auto inputs = ins[0].operator Array<NodeRef>();         \
-    CHECK_EQ(inputs.size(), 1);                             \
+    CHECK_EQ(inputs.size(), ONE);                           \
     CHECK(inputs[0]->IsInstance<TensorNode>());             \
     auto attrs = ins[1].operator OpAttr();                  \
     CHECK(!attrs.empty());                                  \
@@ -125,24 +133,24 @@ void CommonSelect(NodeRef a, NodeRef b, NodeRef c, NodeRef d, TVMRetValue *rv, b
     b_tensor = topi::broadcast_to(Downcast<Tensor>(b), shape);
   }
 
-  if (orig_dtype == Float(16)) {
-    a_tensor = topi::cast(a_tensor, Float(32));
-    b_tensor = topi::cast(b_tensor, Float(32));
-    c_tensor = topi::cast(c_tensor, Float(32));
+  if (orig_dtype == Float(BIT16)) {
+    a_tensor = topi::cast(a_tensor, Float(BIT32));
+    b_tensor = topi::cast(b_tensor, Float(BIT32));
+    c_tensor = topi::cast(c_tensor, Float(BIT32));
     if (d_tensor.defined()) {
-      d_tensor = topi::cast(d_tensor, Float(32));
+      d_tensor = topi::cast(d_tensor, Float(BIT32));
     }
-    dtype = Float(32);
+    dtype = Float(BIT32);
   }
 
   Tensor cmp_value;
   auto sub_ab = ge ? topi::subtract(a_tensor, b_tensor) : topi::subtract(b_tensor, a_tensor);
-  if (dtype == Int(32)) {
+  if (dtype == Int(BIT32)) {
     auto add_min = topi::add(sub_ab, make_const(dtype, 1));
     auto vmax_zero = topi::maximum(add_min, make_const(dtype, 0));
     cmp_value = topi::minimum(vmax_zero, make_const(dtype, 1));
   } else {
-    CHECK_EQ(dtype, Float(32));
+    CHECK_EQ(dtype, Float(BIT32));
     auto min_value = make_const(dtype, pow(2, -126));
     auto max_value = make_const(dtype, pow(2, 62));
     auto mid_value = make_const(dtype, pow(2, 2));
@@ -166,19 +174,19 @@ void CommonSelect(NodeRef a, NodeRef b, NodeRef c, NodeRef d, TVMRetValue *rv, b
     res = topi::multiply(c_tensor, cmp_value);
   }
 
-  if (orig_dtype == Float(16)) {
-    res = topi::cast(res, Float(16));
+  if (orig_dtype == Float(BIT16)) {
+    res = topi::cast(res, Float(BIT16));
   }
 
   *rv = res;
 }
 
 void CommonMaximumGrad(TVMArgs args, TVMRetValue *rv, bool ge) {
-  CHECK_GE(args.size(), 1);
+  CHECK_GE(args.size(), ONE);
   auto inputs = args[0].operator Array<NodeRef>();
-  CHECK_GE(inputs.size(), 3);
-  CHECK(inputs[2]->IsInstance<TensorNode>());
-  CommonSelect(inputs[0], inputs[1], inputs[2], make_const(Int(32), 0), rv, ge);
+  CHECK_GE(inputs.size(), THREE);
+  CHECK(inputs[TWO]->IsInstance<TensorNode>());
+  CommonSelect(inputs[0], inputs[ONE], inputs[TWO], make_const(Int(BIT32), 0), rv, ge);
 }
 
 TVM_REGISTER_GLOBAL("Abs").set_body([](TVMArgs args, TVMRetValue *rv) { TOPI_ONE_INPUT_CALL(args, rv, topi::abs); });
@@ -211,7 +219,7 @@ TVM_REGISTER_GLOBAL("Round").set_body([](TVMArgs args, TVMRetValue *rv) {
   auto call = [](const air::Tensor &tensor) {
     std::string name = "T_round_" + tensor->op->name;
     return compute(
-      tensor->shape, [&](const Array<Var> &i) { return air::cast(air::Int(32), air::round(tensor(i))); }, name,
+      tensor->shape, [&](const Array<Var> &i) { return air::cast(air::Int(BIT32), air::round(tensor(i))); }, name,
       topi::kElementWise);
   };
   TOPI_ONE_INPUT_CALL(args, rv, call);
@@ -304,7 +312,7 @@ TVM_REGISTER_GLOBAL("ACos").set_body([](TVMArgs args, TVMRetValue *rv) { TOPI_ON
 TVM_REGISTER_GLOBAL("Sign").set_body([](TVMArgs args, TVMRetValue *rv) { TOPI_ONE_INPUT_CALL(args, rv, topi::sign); });
 
 TVM_REGISTER_GLOBAL("ReduceSum").set_body([](TVMArgs args, TVMRetValue *rv) {
-  CHECK_GE(args.size(), 2);
+  CHECK_GE(args.size(), TWO);
   auto attrs = args[1].operator OpAttr();
   CHECK(attrs.count("axis"));
   CHECK(attrs.count("keep_dims"));
@@ -315,7 +323,7 @@ TVM_REGISTER_GLOBAL("ReduceSum").set_body([](TVMArgs args, TVMRetValue *rv) {
 });
 
 TVM_REGISTER_GLOBAL("ReduceProd").set_body([](TVMArgs args, TVMRetValue *rv) {
-  CHECK_GE(args.size(), 2);
+  CHECK_GE(args.size(), TWO);
   auto attrs = args[1].operator OpAttr();
   CHECK(attrs.count("axis"));
   CHECK(attrs.count("keep_dims"));
@@ -347,19 +355,19 @@ TVM_REGISTER_GLOBAL("ExpandDims").set_body([](TVMArgs args, TVMRetValue *rv) {
   TOPI_ONE_INPUT_ONE_ATTR_CALL(args, rv, topi::expand_dims, ref);
 });
 
-TVM_REGISTER_GLOBAL("Reshape").set_body([](TVMArgs args, TVMRetValue *rv) {
-  auto ref = [](OpAttr attrs) -> Array<Expr> {
-    CHECK(attrs.count("shape"));
-    auto shape = Downcast<Array<Integer>>(attrs["shape"]);
-    CHECK(!shape.empty());
-    Array<Expr> newshape;
-    for (auto s : shape) {
-      newshape.push_back(s);
-    }
-    return newshape;
-  };
+Array<Expr> GetShapeByAttr(OpAttr attrs) {
+  CHECK(attrs.count("shape"));
+  auto shape = Downcast<Array<Integer>>(attrs["shape"]);
+  CHECK(!shape.empty());
+  Array<Expr> newshape;
+  for (auto s : shape) {
+    newshape.push_back(s);
+  }
+  return newshape;
+}
 
-  TOPI_ONE_INPUT_ONE_ATTR_CALL(args, rv, topi::reshape, ref);
+TVM_REGISTER_GLOBAL("Reshape").set_body([](TVMArgs args, TVMRetValue *rv) {
+  TOPI_ONE_INPUT_ONE_ATTR_CALL(args, rv, topi::reshape, GetShapeByAttr);
 });
 
 TVM_REGISTER_GLOBAL("Transpose").set_body([](TVMArgs args, TVMRetValue *rv) {
@@ -375,14 +383,14 @@ TVM_REGISTER_GLOBAL("Transpose").set_body([](TVMArgs args, TVMRetValue *rv) {
 TVM_REGISTER_GLOBAL("Cast").set_body([](TVMArgs args, TVMRetValue *rv) {
   auto call = [](const Tensor &tensor, Type type) {
     std::string name = "T_cast_" + tensor->op->name;
-    if (tensor->dtype == air::Float(32) && type == air::Bool()) {
+    if (tensor->dtype == air::Float(BIT32) && type == air::Bool()) {
       const char *runtime_mode = std::getenv("RUNTIME_MODE");
       if (runtime_mode == nullptr || (runtime_mode != nullptr && std::strstr(runtime_mode, "cloud") != nullptr)) {
         auto zero = make_zero(tensor->dtype);
         return topi::not_equal(tensor, zero);
       } else {
-        auto tmp = topi::cast(tensor, air::Float(16), name + "tmp");
-        auto zero = make_zero(air::Float(16));
+        auto tmp = topi::cast(tensor, air::Float(BIT16), name + "tmp");
+        auto zero = make_zero(air::Float(BIT16));
         auto res = topi::not_equal(tmp, zero);
         return topi::cast(res, type, name);
       }
@@ -409,14 +417,14 @@ TVM_REGISTER_GLOBAL("Tile").set_body([](TVMArgs args, TVMRetValue *rv) {
 });
 
 TVM_REGISTER_GLOBAL("AddN").set_body([](TVMArgs args, TVMRetValue *rv) {
-  CHECK_GE(args.size(), 1);
+  CHECK_GE(args.size(), ONE);
   auto arr_t = args[0].operator Array<Tensor>();
   CHECK(!arr_t.empty());
   *rv = topi::elemwise_sum(arr_t);
 });
 
 TVM_REGISTER_GLOBAL("ReduceMax").set_body([](TVMArgs args, TVMRetValue *rv) {
-  CHECK_GE(args.size(), 2);
+  CHECK_GE(args.size(), TWO);
   auto attrs = args[1].operator OpAttr();
   CHECK(attrs.count("axis"));
   CHECK(attrs.count("keep_dims"));
@@ -429,7 +437,7 @@ TVM_REGISTER_GLOBAL("ReduceMax").set_body([](TVMArgs args, TVMRetValue *rv) {
 });
 
 TVM_REGISTER_GLOBAL("ReduceMin").set_body([](TVMArgs args, TVMRetValue *rv) {
-  CHECK_GE(args.size(), 2);
+  CHECK_GE(args.size(), TWO);
   auto attrs = args[1].operator OpAttr();
   CHECK(attrs.count("axis"));
   CHECK(attrs.count("keep_dims"));
@@ -441,15 +449,13 @@ TVM_REGISTER_GLOBAL("ReduceMin").set_body([](TVMArgs args, TVMRetValue *rv) {
   TOPI_ONE_INPUT_CALL(args, rv, call);
 });
 
-TVM_REGISTER_GLOBAL("Argmax").set_body([](TVMArgs args, TVMRetValue *rv) {
-  CHECK_GE(args.size(), 2);
+void ArgmaxOrArgmin(TVMArgs args, TVMRetValue *rv, bool argmax) {
+  CHECK_GE(args.size(), TWO);
   auto attrs = args[1].operator OpAttr();
   CHECK(attrs.count("axis"));
   auto axis = ArrayOrInt(attrs["axis"]);
-
   auto inputs = args[0].operator Array<NodeRef>();
   auto data = Downcast<Tensor>(inputs[0]);
-
   bool reduce_on_single_element = false;
   if (axis.size() == 1 && data->shape.size() >= 1) {
     auto axis_size = (int64_t)Downcast<Integer>(data->shape[axis[0]]);
@@ -467,46 +473,24 @@ TVM_REGISTER_GLOBAL("Argmax").set_body([](TVMArgs args, TVMRetValue *rv) {
       reduce_shape, [&](const Array<Var> &indices) { return make_const(data->dtype, 0); }, data->op->name + "_red",
       topi::kBroadcast);
   } else {
-    auto call = [&axis](const Tensor &tensor) { return topi::argmax(tensor, axis, false); };
-    TOPI_ONE_INPUT_CALL(args, rv, call);
-  }
-});
-
-TVM_REGISTER_GLOBAL("Argmin").set_body([](TVMArgs args, TVMRetValue *rv) {
-  CHECK_GE(args.size(), 2);
-  auto attrs = args[1].operator OpAttr();
-  CHECK(attrs.count("axis"));
-  auto axis = ArrayOrInt(attrs["axis"]);
-
-  auto inputs = args[0].operator Array<NodeRef>();
-  auto data = Downcast<Tensor>(inputs[0]);
-
-  bool reduce_on_single_element = false;
-  if (axis.size() == 1 && data->shape.size() >= 1) {
-    auto axis_size = (int64_t)Downcast<Integer>(data->shape[axis[0]]);
-    if (axis_size == 1) {
-      reduce_on_single_element = true;
+    if (argmax) {
+      auto call = [&axis](const Tensor &tensor) { return topi::argmax(tensor, axis, false); };
+      TOPI_ONE_INPUT_CALL(args, rv, call);
+    } else {
+      auto call = [&axis](const Tensor &tensor) { return topi::argmin(tensor, axis, false); };
+      TOPI_ONE_INPUT_CALL(args, rv, call);
     }
   }
-  if (reduce_on_single_element) {
-    size_t reduce_axis = (int64_t)axis[0];
-    Array<Expr> reduce_shape;
-    for (size_t i = 0; i < data->shape.size(); i++) {
-      if (i != reduce_axis) reduce_shape.push_back(data->shape[i]);
-    }
-    *rv = compute(
-      reduce_shape, [&](const Array<Var> &indices) { return make_const(data->dtype, 0); }, data->op->name + "_red",
-      topi::kBroadcast);
-  } else {
-    auto call = [&axis](const Tensor &tensor) { return topi::argmin(tensor, axis, false); };
-    TOPI_ONE_INPUT_CALL(args, rv, call);
-  }
-});
+}
+
+TVM_REGISTER_GLOBAL("Argmax").set_body([](TVMArgs args, TVMRetValue *rv) { ArgmaxOrArgmin(args, rv, true); });
+
+TVM_REGISTER_GLOBAL("Argmin").set_body([](TVMArgs args, TVMRetValue *rv) { ArgmaxOrArgmin(args, rv, false); });
 
 TVM_REGISTER_GLOBAL("OneHot").set_body([](TVMArgs args, TVMRetValue *rv) {
-  CHECK_GE(args.size(), 2);
+  CHECK_GE(args.size(), TWO);
   auto inputs = args[0].operator Array<NodeRef>();
-  CHECK_GE(inputs.size(), 3);
+  CHECK_GE(inputs.size(), THREE);
   CHECK(inputs[0]->IsInstance<TensorNode>());
   CHECK(inputs[1]->IsInstance<ExprNode>());
   CHECK(inputs[2]->IsInstance<ExprNode>());
@@ -533,7 +517,7 @@ TVM_REGISTER_GLOBAL("Reciprocal").set_body([](TVMArgs args, TVMRetValue *rv) {
 });
 
 TVM_REGISTER_GLOBAL("ZerosLike").set_body([](TVMArgs args, TVMRetValue *rv) {
-  CHECK_GE(args.size(), 1);
+  CHECK_GE(args.size(), ONE);
   auto inputs = args[0].operator Array<NodeRef>();
   CHECK(inputs[0]->IsInstance<TensorNode>());
   auto data = Downcast<Tensor>(inputs[0]);
@@ -544,7 +528,7 @@ TVM_REGISTER_GLOBAL("ZerosLike").set_body([](TVMArgs args, TVMRetValue *rv) {
 });
 
 TVM_REGISTER_GLOBAL("Select").set_body([](TVMArgs args, TVMRetValue *rv) {
-  CHECK_GE(args.size(), 1);
+  CHECK_GE(args.size(), ONE);
   auto inputs = args[0].operator Array<NodeRef>();
   CHECK(inputs[0]->IsInstance<TensorNode>());
   auto condition = Downcast<Tensor>(inputs[0]);
@@ -585,9 +569,9 @@ TVM_REGISTER_GLOBAL("LessEqual").set_body([](TVMArgs args, TVMRetValue *rv) {
 });
 
 TVM_REGISTER_GLOBAL("SelectGE").set_body([](TVMArgs args, TVMRetValue *rv) {
-  CHECK_GE(args.size(), 1);
+  CHECK_GE(args.size(), ONE);
   auto inputs = args[0].operator Array<NodeRef>();
-  CHECK_EQ(inputs.size(), 4);
+  CHECK_EQ(inputs.size(), FOUR);
 
   if ((inputs[1]->IsInstance<ExprNode>() && akg::ir::IsZero(Downcast<Expr>(inputs[1]))) &&
       (inputs[3]->IsInstance<ExprNode>() && akg::ir::IsZero(Downcast<Expr>(inputs[3]))) &&
@@ -600,11 +584,11 @@ TVM_REGISTER_GLOBAL("SelectGE").set_body([](TVMArgs args, TVMRetValue *rv) {
     Expr help_min = 1;
     Expr help_rec_one = 1;
     Expr help_rec_sec = 1;
-    if (x_tensor->dtype == Float(32)) {
+    if (x_tensor->dtype == Float(BIT32)) {
       help_min = make_const(x_tensor->dtype, pow(2, -126));
       help_rec_one = make_const(x_tensor->dtype, pow(2, 38));
       help_rec_sec = make_const(x_tensor->dtype, pow(2, 44));
-    } else if (x_tensor->dtype == Float(16)) {
+    } else if (x_tensor->dtype == Float(BIT16)) {
       help_min = make_const(x_tensor->dtype, pow(2, -24));
       help_rec_one = make_const(x_tensor->dtype, pow(2, 12));
       help_rec_sec = make_const(x_tensor->dtype, pow(2, 12));
@@ -613,7 +597,7 @@ TVM_REGISTER_GLOBAL("SelectGE").set_body([](TVMArgs args, TVMRetValue *rv) {
     auto res = topi::minimum(x_tensor, help_min);
     res = topi::maximum(res, make_zero(x_tensor->dtype));
     res = topi::multiply(res, help_rec_one);
-    if (x_tensor->dtype == Float(32)) {
+    if (x_tensor->dtype == Float(BIT32)) {
       res = topi::multiply(res, help_rec_sec);
     }
     res = topi::multiply(res, help_rec_sec);
@@ -629,9 +613,9 @@ TVM_REGISTER_GLOBAL("SelectGE").set_body([](TVMArgs args, TVMRetValue *rv) {
 });
 
 TVM_REGISTER_GLOBAL("SelectLE").set_body([](TVMArgs args, TVMRetValue *rv) {
-  CHECK_GE(args.size(), 1);
+  CHECK_GE(args.size(), ONE);
   auto inputs = args[0].operator Array<NodeRef>();
-  CHECK_EQ(inputs.size(), 4);
+  CHECK_EQ(inputs.size(), FOUR);
   if (inputs[3]->IsInstance<ExprNode>() && akg::ir::IsZero(Downcast<Expr>(inputs[3]))) {
     CommonMaximumGrad(args, rv, false);
   } else {
@@ -640,23 +624,23 @@ TVM_REGISTER_GLOBAL("SelectLE").set_body([](TVMArgs args, TVMRetValue *rv) {
 });
 
 TVM_REGISTER_GLOBAL("SelectGT").set_body([](TVMArgs args, TVMRetValue *rv) {
-  CHECK_GE(args.size(), 1);
+  CHECK_GE(args.size(), ONE);
   auto inputs = args[0].operator Array<NodeRef>();
-  CHECK_EQ(inputs.size(), 4);
+  CHECK_EQ(inputs.size(), FOUR);
   CommonSelect(inputs[0], inputs[1], inputs[3], inputs[2], rv, false);
 });
 
 TVM_REGISTER_GLOBAL("SelectLT").set_body([](TVMArgs args, TVMRetValue *rv) {
-  CHECK_GE(args.size(), 1);
+  CHECK_GE(args.size(), ONE);
   auto inputs = args[0].operator Array<NodeRef>();
-  CHECK_EQ(inputs.size(), 4);
+  CHECK_EQ(inputs.size(), FOUR);
   CommonSelect(inputs[0], inputs[1], inputs[3], inputs[2], rv, true);
 });
 
 TVM_REGISTER_GLOBAL("InplaceAssign").set_body([](TVMArgs args, TVMRetValue *rv) {
-  CHECK_GE(args.size(), 1);
+  CHECK_GE(args.size(), ONE);
   auto inputs = args[0].operator Array<NodeRef>();
-  CHECK_GE(inputs.size(), 2);
+  CHECK_GE(inputs.size(), TWO);
   bool in2_is_expr = inputs[1]->IsInstance<ExprNode>();
   bool in2_is_tensor = inputs[1]->IsInstance<TensorNode>();
   CHECK(inputs[0]->IsInstance<TensorNode>()) << "Input1 should be of type Tensor";
@@ -669,9 +653,9 @@ TVM_REGISTER_GLOBAL("InplaceAssign").set_body([](TVMArgs args, TVMRetValue *rv) 
 });
 
 TVM_REGISTER_GLOBAL("Assign").set_body([](TVMArgs args, TVMRetValue *rv) {
-  CHECK_GE(args.size(), 1);
+  CHECK_GE(args.size(), ONE);
   auto inputs = args[0].operator Array<NodeRef>();
-  CHECK_GE(inputs.size(), 2);
+  CHECK_GE(inputs.size(), TWO);
   bool in2_is_expr = inputs[1]->IsInstance<ExprNode>();
   bool in2_is_tensor = inputs[1]->IsInstance<TensorNode>();
   CHECK(inputs[0]->IsInstance<TensorNode>()) << "Input1 should be of type Tensor";
@@ -684,21 +668,10 @@ TVM_REGISTER_GLOBAL("Assign").set_body([](TVMArgs args, TVMRetValue *rv) {
 });
 
 TVM_REGISTER_GLOBAL("EquivFormat").set_body([](TVMArgs args, TVMRetValue *rv) {
-  CHECK_GE(args.size(), 1);
+  CHECK_GE(args.size(), ONE);
   auto inputs = args[0].operator Array<NodeRef>();
   if (inputs[0]->IsInstance<TensorNode>()) {
-    auto ref = [](OpAttr attrs) -> Array<Expr> {
-      CHECK(attrs.count("shape"));
-      auto shape = Downcast<Array<Integer>>(attrs["shape"]);
-      CHECK(!shape.empty());
-      Array<Expr> newshape;
-      for (auto s : shape) {
-        newshape.push_back(s);
-      }
-      return newshape;
-    };
-
-    TOPI_ONE_INPUT_ONE_ATTR_CALL(args, rv, topi::reshape, ref);
+    TOPI_ONE_INPUT_ONE_ATTR_CALL(args, rv, topi::reshape, GetShapeByAttr);
   } else {
     Array<Expr> shape = {Expr(1)};
     *rv = compute(shape, [&](const Array<Var> &indices) { return Downcast<Expr>(inputs[0]); });
@@ -706,16 +679,16 @@ TVM_REGISTER_GLOBAL("EquivFormat").set_body([](TVMArgs args, TVMRetValue *rv) {
 });
 
 TVM_REGISTER_GLOBAL("AddMinValue").set_body([](TVMArgs args, TVMRetValue *rv) {
-  CHECK_GE(args.size(), 1);
+  CHECK_GE(args.size(), ONE);
   auto inputs = args[0].operator Array<NodeRef>();
   CHECK(inputs[0]->IsInstance<TensorNode>());
   auto tensor = Downcast<Tensor>(inputs[0]);
   Expr min_value = 0;
-  if (tensor->dtype == Float(32)) {
-    min_value = make_const(Float(32), pow(2, -126));
+  if (tensor->dtype == Float(BIT32)) {
+    min_value = make_const(Float(BIT32), pow(2, -126));
     *rv = topi::add(tensor, min_value);
-  } else if (tensor->dtype == Float(16)) {
-    min_value = make_const(Float(16), pow(2, -24));
+  } else if (tensor->dtype == Float(BIT16)) {
+    min_value = make_const(Float(BIT16), pow(2, -24));
     *rv = topi::add(tensor, min_value);
   } else {
     *rv = tensor;
@@ -723,9 +696,9 @@ TVM_REGISTER_GLOBAL("AddMinValue").set_body([](TVMArgs args, TVMRetValue *rv) {
 });
 
 TVM_REGISTER_GLOBAL("BroadcastTo").set_body([](TVMArgs args, TVMRetValue *rv) {
-  CHECK_EQ(args.size(), 2);
+  CHECK_EQ(args.size(), TWO);
   auto inputs = args[0].operator Array<NodeRef>();
-  CHECK_EQ(inputs.size(), 1);
+  CHECK_EQ(inputs.size(), ONE);
   auto attrs = args[1].operator OpAttr();
   auto shape_v = Downcast<Array<Integer>>(attrs["shape"]);
   Array<Expr> shape;
@@ -743,10 +716,10 @@ TVM_REGISTER_GLOBAL("BroadcastTo").set_body([](TVMArgs args, TVMRetValue *rv) {
 });
 
 void BatchMatMul(const TVMArgs &args, TVMRetValue *rv) {
-  CHECK_GE(args.size(), 2);
+  CHECK_GE(args.size(), TWO);
   auto inputs = args[0].operator Array<NodeRef>();
   auto attrs = args[1].operator OpAttr();
-  CHECK_GE(inputs.size(), 2);
+  CHECK_GE(inputs.size(), TWO);
   CHECK(inputs[0]->IsInstance<TensorNode>());
   CHECK(inputs[1]->IsInstance<TensorNode>());
   auto left_matrix = Downcast<Tensor>(inputs[0]);
@@ -816,8 +789,8 @@ void BatchMatMul(const TVMArgs &args, TVMRetValue *rv) {
                                    right_matrix->op, right_matrix->value_index);
 
     if (dst_type == "float32") {
-      left_buffer = Cast::make(Float(32), left_buffer);
-      right_buffer = Cast::make(Float(32), right_buffer);
+      left_buffer = Cast::make(Float(BIT32), left_buffer);
+      right_buffer = Cast::make(Float(BIT32), right_buffer);
     }
 
     auto matrix_mul = Mul::make(left_buffer, right_buffer);
@@ -827,7 +800,7 @@ void BatchMatMul(const TVMArgs &args, TVMRetValue *rv) {
     return res;
   };
 
-  batch_dim = left_shape.size() - 2;
+  batch_dim = left_shape.size() - TWO;
   Array<Expr> output_shape = compute_out(left_shape, right_shape, transpose_a, transpose_b, batch_dim);
   reduce_k = air::reduce_axis(Range(0, k), "reduce_axis");
   auto name = "T_batch_matmul_" + left_matrix->op->name + "_" + right_matrix->op->name;
@@ -837,17 +810,17 @@ void BatchMatMul(const TVMArgs &args, TVMRetValue *rv) {
 TVM_REGISTER_GLOBAL("CpuBatchMatMul").set_body([](TVMArgs args, TVMRetValue *rv) { BatchMatMul(args, rv); });
 
 TVM_REGISTER_GLOBAL("CudaBatchMatMul").set_body([](TVMArgs args, TVMRetValue *rv) {
-  CHECK_GE(args.size(), 2);
+  CHECK_GE(args.size(), TWO);
   auto inputs = args[0].operator Array<NodeRef>();
   auto attrs = args[1].operator OpAttr();
-  CHECK_GE(inputs.size(), 2);
+  CHECK_GE(inputs.size(), TWO);
   CHECK(inputs[0]->IsInstance<TensorNode>());
   CHECK(inputs[1]->IsInstance<TensorNode>());
   auto left_matrix = Downcast<Tensor>(inputs[0]);
   auto right_matrix = Downcast<Tensor>(inputs[1]);
 
-  auto type_checker = [](const Tensor &input_data, const std::string name) {
-    if (input_data->dtype != Float(16)) {
+  auto type_checker = [](const Tensor &input_data, const std::string &name) {
+    if (input_data->dtype != Float(BIT16)) {
       LOG(FATAL) << "dtype of input tensor " << name << " should be float16";
     }
   };
@@ -857,203 +830,225 @@ TVM_REGISTER_GLOBAL("CudaBatchMatMul").set_body([](TVMArgs args, TVMRetValue *rv
   BatchMatMul(args, rv);
 });
 
+void TypeChecker(const Tensor &input_data, const std::string &name, const air::DataType &type) {
+  if (input_data->dtype != type) {
+    LOG(FATAL) << "dtype of " << name << " is not supported";
+  }
+}
+
+void ComputeMNK(const Tensor &left_matrix, const Tensor &right_matrix, bool transpose_a, bool transpose_b,
+                Array<Expr> &output_shape, Array<Expr> &k) {
+  auto left_shape = left_matrix->shape;
+  auto right_shape = right_matrix->shape;
+  CHECK_EQ(left_shape.size(), right_shape.size());
+  CHECK_GE(left_shape.size(), FOUR);
+  size_t dim = left_shape.size();
+  Expr mo, mi, no, ni, ko, ki;
+  if (transpose_a) {
+    mo = left_shape[dim - FOUR];
+    ko = left_shape[dim - THREE];
+    ki = left_shape[dim - TWO];
+    mi = left_shape[dim - ONE];
+  } else {
+    ko = left_shape[dim - FOUR];
+    mo = left_shape[dim - THREE];
+    mi = left_shape[dim - TWO];
+    ki = left_shape[dim - ONE];
+  }
+  if (transpose_b) {
+    no = right_shape[dim - THREE];
+    ni = right_shape[dim - TWO];
+  } else {
+    no = right_shape[dim - FOUR];
+    ni = right_shape[dim - ONE];
+  }
+  for (size_t i = 0; i < dim - FOUR; ++i) {
+    output_shape.push_back(left_shape[i]);
+  }
+  output_shape.push_back(no);
+  output_shape.push_back(mo);
+  output_shape.push_back(mi);
+  output_shape.push_back(ni);
+  k = {ko, ki};
+}
+
+void CheckFormat(const OpAttr &attrs) {
+  auto left_format = GetString(attrs["left_format"]);
+  auto right_format = GetString(attrs["right_format"]);
+  if (right_format != "FRACTAL_NZ" || left_format != "FRACTAL_NZ") {
+    LOG(FATAL) << "format of " << left_format << "*" << right_format << " is not supported";
+  }
+}
+
+OpAttr SetComputeAttrszN(const Tensor &left_matrix, const Tensor &right_matrix, bool transpose_a, bool transpose_b,
+                         Array<Expr> &output_shape, Array<Expr> &k, Array<NodeRef> &inputs, OpAttr attrs) {
+  Map<std::string, NodeRef> com_attrs;
+
+  com_attrs.Set("pragma_gemm_output_shape", output_shape);
+  com_attrs.Set("pragma_gemm_k", k);
+  com_attrs.Set("pragma_gemm_data", Expr(left_matrix->op->name));
+  com_attrs.Set("pragma_gemm_weight", Expr(right_matrix->op->name));
+  com_attrs.Set("pragma_conv_bypass_l1", Expr(0));
+  if (attrs.count("bypass")) {
+    com_attrs.Set("pragma_conv_bypass_l1", Downcast<Expr>(attrs["bypass"]));
+  }
+
+  std::string data_trans("Y");
+  std::string data_trans_block("Y");
+  std::string data_trans_block_in("N");
+  if (transpose_a) {
+    data_trans = "Y";
+    data_trans_block = "N";
+    data_trans_block_in = "Y";
+  }
+  com_attrs.Set("pragma_data_transpose", Expr(data_trans));
+  com_attrs.Set("pragma_data_transpose_block", Expr(data_trans_block));
+  com_attrs.Set("pragma_data_transpose_block_inner", Expr(data_trans_block_in));
+
+  std::string weight_trans("Y");
+  std::string weight_trans_block("N");
+  std::string weight_trans_block_in("N");
+  if (transpose_b) {
+    weight_trans = "N";
+    weight_trans_block = "N";
+    weight_trans_block_in = "N";
+  }
+  com_attrs.Set("pragma_weight_transpose", Expr(weight_trans));
+  com_attrs.Set("pragma_weight_transpose_block", Expr(weight_trans_block));
+  com_attrs.Set("pragma_weight_transpose_block_inner", Expr(weight_trans_block_in));
+
+  com_attrs.Set("bias", Expr(""));
+  if (inputs.size() > TWO) {
+    CHECK(inputs[TWO]->IsInstance<TensorNode>());
+    auto bias = Downcast<Tensor>(inputs[2]);
+    com_attrs.Set("bias", Expr(bias->op->name));
+  }
+
+  return com_attrs;
+};
+
+Expr Mmad(const Expr &source, const Array<IterVar> &rdom) {
+  Var x("x", source.type()), y("y", source.type());
+  Expr result = Call::make(source.type(), "mad", {x, y}, Call::PureIntrinsic);
+  Expr identity_element = make_zero(source.type());
+  CommReducer combiner = CommReducerNode::make({x}, {y}, {result}, {identity_element});
+  return Reduce::make(combiner, {source}, rdom, make_const(Bool(1), true), 0);
+}
+
+void GetLeftRightIndices(const Array<Var> &indices, const Array<IterVar> &reduces, bool transpose_a, bool transpose_b,
+                         Array<Expr> &left_indice, Array<Expr> &right_indice) {
+  size_t dim = indices.size();
+  for (size_t i = 0; i < dim - FOUR; ++i) {
+    left_indice.push_back(indices[i]);
+  }
+  if (transpose_a) {
+    left_indice.push_back(indices[dim - THREE]);
+    left_indice.push_back(reduces[0]);
+    left_indice.push_back(reduces[1]);
+    left_indice.push_back(indices[dim - TWO]);
+  } else {
+    left_indice.push_back(reduces[0]);
+    left_indice.push_back(indices[dim - THREE]);
+    left_indice.push_back(indices[dim - TWO]);
+    left_indice.push_back(reduces[1]);
+  }
+
+  for (size_t i = 0; i < dim - FOUR; ++i) {
+    right_indice.push_back(indices[i]);
+  }
+  if (transpose_b) {
+    right_indice.push_back(reduces[0]);
+    right_indice.push_back(indices[dim - FOUR]);
+    right_indice.push_back(indices[dim - ONE]);
+    right_indice.push_back(reduces[1]);
+  } else {
+    right_indice.push_back(indices[dim - FOUR]);
+    right_indice.push_back(reduces[0]);
+    right_indice.push_back(reduces[1]);
+    right_indice.push_back(indices[dim - ONE]);
+  }
+}
+
 // only support fractal_zN: [ko mo mi ki] * [no ko ki ni] = [no mo mi ni]
 void AicoreCubeMatMul(const TVMArgs &args, TVMRetValue *rv) {
-  CHECK_GE(args.size(), 2);
+  CHECK_GE(args.size(), TWO);
   auto attrs = args[1].operator OpAttr();
   CHECK(attrs.count("transpose_a"));
   CHECK(attrs.count("transpose_b"));
   CHECK(attrs.count("dst_type"));
   CHECK(attrs.count("left_format"));
   CHECK(attrs.count("right_format"));
-  bool transpose_a = static_cast<bool>(ir::GetInt32Const(Downcast<Expr>(attrs["transpose_a"])));
-  bool transpose_b = static_cast<bool>(ir::GetInt32Const(Downcast<Expr>(attrs["transpose_b"])));
-  auto dst_type = GetString(attrs["dst_type"]);
-  auto left_format = GetString(attrs["left_format"]);
-  auto right_format = GetString(attrs["right_format"]);
-  if (right_format != "FRACTAL_NZ" || left_format != "FRACTAL_NZ") {
-    LOG(FATAL) << "format of " << left_format << "*" << right_format << " is not supported";
-  }
-
+  CheckFormat(attrs);
   auto inputs = args[0].operator Array<NodeRef>();
   CHECK(inputs[0]->IsInstance<TensorNode>());
   CHECK(inputs[1]->IsInstance<TensorNode>());
   auto left_matrix = Downcast<Tensor>(inputs[0]);
   auto right_matrix = Downcast<Tensor>(inputs[1]);
-  auto left_shape = left_matrix->shape;
-  auto right_shape = right_matrix->shape;
-  CHECK_EQ(left_shape.size(), right_shape.size());
-  CHECK_GE(left_shape.size(), 4);
-
-  auto type_checker = [](const Tensor &input_data, const std::string name, const air::DataType type) {
-    if (input_data->dtype != type) {
-      LOG(FATAL) << "dtype of " << name << " is not supported";
-    }
-  };
-  type_checker(left_matrix, "left_matrix", Float(16));
-  type_checker(right_matrix, "right_matrix", Float(16));
-
-  // compute m n k
+  TypeChecker(left_matrix, "left_matrix", Float(BIT16));
+  TypeChecker(right_matrix, "right_matrix", Float(BIT16));
+  bool transpose_a = static_cast<bool>(ir::GetInt32Const(Downcast<Expr>(attrs["transpose_a"])));
+  bool transpose_b = static_cast<bool>(ir::GetInt32Const(Downcast<Expr>(attrs["transpose_b"])));
   Array<Expr> output_shape;
   Array<Expr> k;
-  auto compute_mnk = [&output_shape, &k, &left_shape, &right_shape, transpose_a, transpose_b]() {
-    size_t dim = left_shape.size();
-    Expr mo, mi, no, ni, ko, ki;
-    if (transpose_a) {
-      mo = left_shape[dim - 4];
-      ko = left_shape[dim - 3];
-      ki = left_shape[dim - 2];
-      mi = left_shape[dim - 1];
-    } else {
-      ko = left_shape[dim - 4];
-      mo = left_shape[dim - 3];
-      mi = left_shape[dim - 2];
-      ki = left_shape[dim - 1];
-    }
-    if (transpose_b) {
-      no = right_shape[dim - 3];
-      ni = right_shape[dim - 2];
-    } else {
-      no = right_shape[dim - 4];
-      ni = right_shape[dim - 1];
-    }
-    for (size_t i = 0; i < dim - 4; ++i) {
-      output_shape.push_back(left_shape[i]);
-    }
-    output_shape.push_back(no);
-    output_shape.push_back(mo);
-    output_shape.push_back(mi);
-    output_shape.push_back(ni);
-    k = {ko, ki};
-  };
+  ComputeMNK(left_matrix, right_matrix, transpose_a, transpose_b, output_shape, k);
 
-  compute_mnk();
-
-  // define fcompute
-  auto Mmad = [](Expr source, const Array<IterVar> &rdom) {
-    Var x("x", source.type()), y("y", source.type());
-    Expr result = Call::make(source.type(), "mad", {x, y}, Call::PureIntrinsic);
-    Expr identity_element = make_zero(source.type());
-    CommReducer combiner = CommReducerNode::make({x}, {y}, {result}, {identity_element});
-    return Reduce::make(combiner, {source}, rdom, make_const(Bool(1), true), 0);
-  };
-
-  IterVar reduce_ko = air::reduce_axis(Range(0, k[0]), "ko");
-  IterVar reduce_ki = air::reduce_axis(Range(0, k[1]), "ki");
-  Array<IterVar> reduces = {reduce_ko, reduce_ki};
-
-  auto fcompute = [&left_matrix, &right_matrix, &transpose_a, &transpose_b, &reduces,
-                   &Mmad](const Array<Var> &indices) {
-    size_t dim = indices.size();
+  auto fcompute = [&left_matrix, &right_matrix, &transpose_a, &transpose_b, &k](const Array<Var> &indices) {
+    Array<IterVar> reduces = {air::reduce_axis(Range(0, k[0]), "ko"), air::reduce_axis(Range(0, k[1]), "ki")};
     Array<Expr> left_indice;
-    for (size_t i = 0; i < dim - 4; ++i) {
-      left_indice.push_back(indices[i]);
-    }
-    if (transpose_a) {
-      left_indice.push_back(indices[dim - 3]);
-      left_indice.push_back(reduces[0]);
-      left_indice.push_back(reduces[1]);
-      left_indice.push_back(indices[dim - 2]);
-    } else {
-      left_indice.push_back(reduces[0]);
-      left_indice.push_back(indices[dim - 3]);
-      left_indice.push_back(indices[dim - 2]);
-      left_indice.push_back(reduces[1]);
-    }
-
     Array<Expr> right_indice;
-    for (size_t i = 0; i < dim - 4; ++i) {
-      right_indice.push_back(indices[i]);
-    }
-    if (transpose_b) {
-      right_indice.push_back(reduces[0]);
-      right_indice.push_back(indices[dim - 4]);
-      right_indice.push_back(indices[dim - 1]);
-      right_indice.push_back(reduces[1]);
-    } else {
-      right_indice.push_back(indices[dim - 4]);
-      right_indice.push_back(reduces[0]);
-      right_indice.push_back(reduces[1]);
-      right_indice.push_back(indices[dim - 1]);
-    }
-
-    Expr res = Mmad(Cast::make(Float(32), left_matrix(left_indice) * right_matrix(right_indice)), reduces);
+    GetLeftRightIndices(indices, reduces, transpose_a, transpose_b, left_indice, right_indice);
+    Expr res = Mmad(Cast::make(Float(BIT32), left_matrix(left_indice) * right_matrix(right_indice)), reduces);
     return res;
   };
 
-  // set output name
-  auto name = "T_batchmatmul_" + left_matrix->op->name + "_" + right_matrix->op->name;
-
-  // set compute attrs
-  auto set_compute_attrs_zN = [&left_matrix, &right_matrix, &inputs, &output_shape, &dst_type, &k, transpose_a,
-                               transpose_b, attrs]() {
-    Map<std::string, NodeRef> com_attrs;
-
-    com_attrs.Set("pragma_gemm_output_shape", output_shape);
-    com_attrs.Set("pragma_gemm_k", k);
-    com_attrs.Set("pragma_gemm_data", Expr(left_matrix->op->name));
-    com_attrs.Set("pragma_gemm_weight", Expr(right_matrix->op->name));
-    com_attrs.Set("pragma_conv_bypass_l1", Expr(0));
-    if (attrs.count("bypass")) {
-      com_attrs.Set("pragma_conv_bypass_l1", Downcast<Expr>(attrs["bypass"]));
-    }
-
-    std::string data_trans("Y");
-    std::string data_trans_block("Y");
-    std::string data_trans_block_in("N");
-    if (transpose_a) {
-      data_trans = "Y";
-      data_trans_block = "N";
-      data_trans_block_in = "Y";
-    }
-    com_attrs.Set("pragma_data_transpose", Expr(data_trans));
-    com_attrs.Set("pragma_data_transpose_block", Expr(data_trans_block));
-    com_attrs.Set("pragma_data_transpose_block_inner", Expr(data_trans_block_in));
-
-    std::string weight_trans("Y");
-    std::string weight_trans_block("N");
-    std::string weight_trans_block_in("N");
-    if (transpose_b) {
-      weight_trans = "N";
-      weight_trans_block = "N";
-      weight_trans_block_in = "N";
-    }
-    com_attrs.Set("pragma_weight_transpose", Expr(weight_trans));
-    com_attrs.Set("pragma_weight_transpose_block", Expr(weight_trans_block));
-    com_attrs.Set("pragma_weight_transpose_block_inner", Expr(weight_trans_block_in));
-
-    com_attrs.Set("bias", Expr(""));
-    if (inputs.size() > 2) {
-      CHECK(inputs[2]->IsInstance<TensorNode>());
-      auto bias = Downcast<Tensor>(inputs[2]);
-      com_attrs.Set("bias", Expr(bias->op->name));
-    }
-
-    return com_attrs;
-  };
-
-  auto com_attrs = set_compute_attrs_zN();
-
+  auto output_name = "T_batchmatmul_" + left_matrix->op->name + "_" + right_matrix->op->name;
+  auto com_attrs =
+    SetComputeAttrszN(left_matrix, right_matrix, transpose_a, transpose_b, output_shape, k, inputs, attrs);
   // compute matmul(a,b)
-  auto c_tensor = compute(output_shape, fcompute, name, "matmul", com_attrs);
-
-  if (inputs.size() > 2) {
+  auto c_tensor = compute(output_shape, fcompute, output_name, "matmul", com_attrs);
+  if (inputs.size() > TWO) {
     auto bias = Downcast<Tensor>(inputs[2]);
-    if (bias->dtype == Float(16)) {
-      bias = topi::cast(bias, Float(32));
+    if (bias->dtype == Float(BIT16)) {
+      bias = topi::cast(bias, Float(BIT32));
     } else {
-      type_checker(bias, "bias", Float(32));
+      TypeChecker(bias, "bias", Float(BIT32));
     }
     c_tensor = topi::add(c_tensor, bias);
   }
-
+  auto dst_type = GetString(attrs["dst_type"]);
   if (dst_type == "float16") {
-    c_tensor = topi::cast(c_tensor, Float(16));
+    c_tensor = topi::cast(c_tensor, Float(BIT16));
   } else {
-    type_checker(c_tensor, "dst_type", Float(32));
+    TypeChecker(c_tensor, "dst_type", Float(BIT32));
   }
-
   *rv = c_tensor;
+}
+
+void ComputeMNKVectorMatMul(const Tensor &left_matrix, const Tensor &right_matrix, bool transpose_a, bool transpose_b,
+                            Array<Expr> &output_shape, Expr &k) {
+  auto left_shape = left_matrix->shape;
+  auto right_shape = right_matrix->shape;
+  CHECK_EQ(left_shape.size(), right_shape.size());
+  CHECK_GE(left_shape.size(), TWO);
+  size_t dim = left_shape.size();
+  Expr m, n;
+  if (transpose_a) {
+    k = left_shape[dim - TWO];
+    m = left_shape[dim - ONE];
+  } else {
+    m = left_shape[dim - TWO];
+    k = left_shape[dim - ONE];
+  }
+  if (transpose_b) {
+    n = right_shape[dim - TWO];
+  } else {
+    n = right_shape[dim - ONE];
+  }
+  for (size_t i = 0; i < dim - TWO; ++i) {
+    output_shape.push_back(left_shape[i]);
+  }
+  output_shape.push_back(m);
+  output_shape.push_back(n);
 }
 
 void AicoreVectorMatMul(const TVMArgs &args, TVMRetValue *rv) {
@@ -1063,50 +1058,23 @@ void AicoreVectorMatMul(const TVMArgs &args, TVMRetValue *rv) {
   bool transpose_a = static_cast<bool>(ir::GetInt32Const(Downcast<Expr>(attrs["transpose_a"])));
   bool transpose_b = static_cast<bool>(ir::GetInt32Const(Downcast<Expr>(attrs["transpose_b"])));
   auto inputs = args[0].operator Array<NodeRef>();
-  CHECK_GE(inputs.size(), 2);
+  CHECK_GE(inputs.size(), TWO);
   CHECK(inputs[0]->IsInstance<TensorNode>());
   CHECK(inputs[1]->IsInstance<TensorNode>());
   auto left_matrix = Downcast<Tensor>(inputs[0]);
   auto right_matrix = Downcast<Tensor>(inputs[1]);
-  auto left_shape = left_matrix->shape;
-  auto right_shape = right_matrix->shape;
-  CHECK_EQ(left_shape.size(), right_shape.size());
-  CHECK_GE(left_shape.size(), 2);
 
   // For the matmul, if use fp16 to accumulate, there will be some precision problems.
   // Therefore, for the VectorMatMul, the input needs to be casted to fp32.
   auto dtype = left_matrix->dtype;
-  if (dtype == Float(16)) {
-    left_matrix = topi::cast(left_matrix, Float(32));
-    right_matrix = topi::cast(right_matrix, Float(32));
+  if (dtype == Float(BIT16)) {
+    left_matrix = topi::cast(left_matrix, Float(BIT32));
+    right_matrix = topi::cast(right_matrix, Float(BIT32));
   }
 
-  // compute m n k
   Array<Expr> output_shape;
   Expr k;
-  auto compute_mnk = [&output_shape, &k, &left_shape, &right_shape, transpose_a, transpose_b]() {
-    size_t dim = left_shape.size();
-    Expr m, n;
-    if (transpose_a) {
-      k = left_shape[dim - 2];
-      m = left_shape[dim - 1];
-    } else {
-      m = left_shape[dim - 2];
-      k = left_shape[dim - 1];
-    }
-    if (transpose_b) {
-      n = right_shape[dim - 2];
-    } else {
-      n = right_shape[dim - 1];
-    }
-    for (size_t i = 0; i < dim - 2; ++i) {
-      output_shape.push_back(left_shape[i]);
-    }
-    output_shape.push_back(m);
-    output_shape.push_back(n);
-  };
-
-  compute_mnk();
+  ComputeMNKVectorMatMul(left_matrix, right_matrix, transpose_a, transpose_b, output_shape, k);
 
   // define fcompute
   IterVar reduce_k = air::reduce_axis(Range(0, k), "k");
@@ -1114,19 +1082,19 @@ void AicoreVectorMatMul(const TVMArgs &args, TVMRetValue *rv) {
   auto fcompute = [&left_matrix, &right_matrix, &transpose_a, &transpose_b, &reduce_k](const Array<Var> &indices) {
     size_t dim = indices.size();
     Array<Expr> left_indice;
-    for (size_t i = 0; i < dim - 2; ++i) {
+    for (size_t i = 0; i < dim - TWO; ++i) {
       left_indice.push_back(indices[i]);
     }
     if (transpose_a) {
       left_indice.push_back(reduce_k);
-      left_indice.push_back(indices[dim - 2]);
+      left_indice.push_back(indices[dim - TWO]);
     } else {
-      left_indice.push_back(indices[dim - 2]);
+      left_indice.push_back(indices[dim - TWO]);
       left_indice.push_back(reduce_k);
     }
 
     Array<Expr> right_indice;
-    for (size_t i = 0; i < dim - 2; ++i) {
+    for (size_t i = 0; i < dim - TWO; ++i) {
       right_indice.push_back(indices[i]);
     }
     if (transpose_b) {
@@ -1141,32 +1109,27 @@ void AicoreVectorMatMul(const TVMArgs &args, TVMRetValue *rv) {
     return res;
   };
 
-  // set output name
-  auto name = "T_batchmatmul_" + left_matrix->op->name + "_" + right_matrix->op->name;
-
+  auto output_name = "T_batchmatmul_" + left_matrix->op->name + "_" + right_matrix->op->name;
   // compute matmul(a,b)
-  auto c_tensor = compute(output_shape, fcompute, name, "matmul");
-
+  auto c_tensor = compute(output_shape, fcompute, output_name, "matmul");
   CHECK(attrs.count("dst_type"));
   auto dst_type = GetString(attrs["dst_type"]);
   if (dst_type == "float16") {
-    c_tensor = topi::cast(c_tensor, Float(16));
+    c_tensor = topi::cast(c_tensor, Float(BIT16));
   }
-
   // bias add
-  if (inputs.size() > 2) {
+  if (inputs.size() > TWO) {
     auto bias = Downcast<Tensor>(inputs[2]);
     if (bias->dtype != c_tensor->dtype) {
       bias = topi::cast(bias, c_tensor->dtype);
     }
     c_tensor = topi::add(c_tensor, bias);
   }
-
   *rv = c_tensor;
 }
 
 TVM_REGISTER_GLOBAL("AicoreBatchMatMul").set_body([](TVMArgs args, TVMRetValue *rv) {
-  CHECK_GE(args.size(), 2);
+  CHECK_GE(args.size(), TWO);
   auto attrs = args[1].operator OpAttr();
   CHECK(attrs.count("left_format"));
   CHECK(attrs.count("right_format"));
@@ -1325,7 +1288,7 @@ TVM_REGISTER_GLOBAL("Atan").set_body([](TVMArgs args, TVMRetValue *rv) { TOPI_ON
 
 TVM_REGISTER_GLOBAL("Atan2").set_body([](TVMArgs args, TVMRetValue *rv) {
   auto inputs = args[0].operator Array<NodeRef>();
-  CHECK_EQ(inputs.size(), 2);
+  CHECK_EQ(inputs.size(), TWO);
   Tensor x_tensor = Downcast<Tensor>(inputs[0]);
   Tensor y_tensor = Downcast<Tensor>(inputs[1]);
   *rv = topi::atan2(x_tensor, y_tensor);

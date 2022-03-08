@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@
 #define PEEL_DUMP 0
 
 namespace akg {
+constexpr int BIT32 = 32;
 
 void AffinityAnalyzer::Analyze(Stmt stmt) { IRVisitor::Visit(stmt); }
 
@@ -167,22 +168,6 @@ void AffinityAnalyzer::AddTransposeRelation(Tensor *input, Tensor *output) {
   auto perm = ExtractIntVector(axis);
 }
 
-std::vector<int64_t> AffinityAnalyzer::ExtractIntVector(Array<Expr> &vec) {
-  std::vector<int64_t> res;
-  for (Expr s : vec) {
-    int64_t val = -1;
-    if (s.as<IntImm>()) {
-      val = s.as<IntImm>()->value;
-    } else if (s.as<UIntImm>()) {
-      val = s.as<UIntImm>()->value;
-    } else {
-      CHECK(0);
-    }
-    res.push_back(val);
-  }
-  return res;
-}
-
 AffinityAnalyzer::Tensor *AffinityAnalyzer::NewTensor(FunctionRef ref, std::string op, Array<Expr> shape) {
   std::unique_ptr<Tensor> t(new Tensor());
   auto dims = ExtractIntVector(shape);
@@ -306,6 +291,25 @@ std::unordered_map<std::string, Peeling> DimensionPeeler::GetPeelTensors(const P
   return peel_tensors;
 }
 
+void UpdateNewShape(int dim_idx, int64_t split_var, Array<Expr> &new_shape) {
+  if (dim_idx == -1) {
+    return;
+  }
+  int64_t dim_val = 0;
+  if (auto op = new_shape[dim_idx].as<IntImm>()) {
+    dim_val = op->value;
+  } else if (auto op = new_shape[dim_idx].as<UIntImm>()) {
+    dim_val = op->value;
+  } else {
+    CHECK(0);
+  }
+  if (dim_val != 1) {
+    CHECK(split_var != 0);
+    CHECK(dim_val % split_var == 0);
+    new_shape.Set(dim_idx, make_const(Int(BIT32), dim_val / split_var));
+  }
+}
+
 Stmt DimensionPeeler::GetPeelBody(const Peeling &peeling) {
   auto PeelFunc = [&peeling, this](const FunctionRef &tensor, Array<Expr> shape) -> Array<Expr> {
     auto it = this->dim_map_.find(tensor->func_name());
@@ -315,22 +319,7 @@ Stmt DimensionPeeler::GetPeelBody(const Peeling &peeling) {
     auto &dim_map = it->second;
     Array<Expr> new_shape = shape;
     for (auto &p : peeling) {
-      auto dim_idx = dim_map[p.first];
-      if (dim_idx == -1) {
-        continue;
-      }
-      int64_t dim_val = 0;
-      if (auto op = new_shape[dim_idx].as<IntImm>()) {
-        dim_val = op->value;
-      } else if (auto op = new_shape[dim_idx].as<UIntImm>()) {
-        dim_val = op->value;
-      } else {
-        CHECK(0);
-      }
-      if (dim_val != 1) {
-        CHECK(dim_val % p.second == 0);
-        new_shape.Set(dim_idx, make_const(Int(32), dim_val / p.second));
-      }
+      UpdateNewShape(dim_map[p.first], p.second, new_shape);
     }
     return new_shape;
   };
@@ -345,22 +334,7 @@ Stmt DimensionPeeler::GetPeelBody(std::unordered_map<std::string, Peeling> confi
     auto &dim_map = config[tensor->func_name()];
     Array<Expr> new_shape = shape;
     for (auto &kv : dim_map) {
-      auto dim_idx = kv.first;
-      if (dim_idx == -1) {
-        continue;
-      }
-      int64_t dim_val = 0;
-      if (auto op = new_shape[dim_idx].as<IntImm>()) {
-        dim_val = op->value;
-      } else if (auto op = new_shape[dim_idx].as<UIntImm>()) {
-        dim_val = op->value;
-      } else {
-        CHECK(0);
-      }
-      if (dim_val != 1) {
-        CHECK(dim_val % kv.second == 0);
-        new_shape.Set(dim_idx, make_const(Int(32), dim_val / kv.second));
-      }
+      UpdateNewShape(kv.first, kv.second, new_shape);
     }
     return new_shape;
   };

@@ -64,7 +64,7 @@ class StitchBufAlloc : public IRVisitor {
         outputs2args_(outputs2args){};
   ~StitchBufAlloc() override = default;
 
-  void BufferAllocReuse() {
+  void GetTotalBlock() {
     for (const auto &ir : stitch_irs_) {
       ir_idx_ += 1;
       if (total_block_) {
@@ -79,7 +79,9 @@ class StitchBufAlloc : public IRVisitor {
         if (total_block_ != block_extent_) LOG(INFO) << "GridDim between splitted irs should be the same.";
       }
     }
+  }
 
+  void ProcessGlobalStitch() {
     for (const auto &it : global_stitch_) {
       std::string name = it.first;
       if (name == "EMPTY") {
@@ -95,7 +97,9 @@ class StitchBufAlloc : public IRVisitor {
       info.alloc_size = alloc_size;
       stitch_buffer_map[ir_var] = info;
     }
+  }
 
+  void ProcessAllocMap() {
     for (const auto &it : alloc_map_) {
       std::string name = it.first;
       auto dtype = it.second[0].as<StringImm>()->value;
@@ -122,7 +126,9 @@ class StitchBufAlloc : public IRVisitor {
       stitch_buffer_map[ir_var] = info;
       buf_alloc_op_[ir_var] = info;
     }
+  }
 
+  void ProcessReuseMap() {
     for (const auto &it : reuse_map_) {
       std::string name = it.first;
       if (name == "EMPTY") {
@@ -167,7 +173,9 @@ class StitchBufAlloc : public IRVisitor {
       stitch_buffer_map[ir_var] = info;
       buf_alloc_op_.erase(ir_var_reuse);
     }
+  }
 
+  void ProccessSharedMemOverflow() {
     if (allocated_share_size_ >= MEM_LIMIT) {
       std::vector<std::pair<std::string, StitchBufferInfo>> reuse_free_map(buf_alloc_op_.begin(), buf_alloc_op_.end());
       std::sort(reuse_free_map.begin(), reuse_free_map.end(),
@@ -185,7 +193,6 @@ class StitchBufAlloc : public IRVisitor {
           break;
         }
       }
-
       if (cover_overflow_size) {
         auto moveout_info = stitch_buffer_map[moveout_var];
         moveout_info.type = StorageType::Global;
@@ -208,6 +215,14 @@ class StitchBufAlloc : public IRVisitor {
         }
       }
     }
+  }
+
+  void BufferAllocReuse() {
+    GetTotalBlock();
+    ProcessGlobalStitch();
+    ProcessAllocMap();
+    ProcessReuseMap();
+    ProccessSharedMemOverflow();
   }
 
   void Dump() {
@@ -334,6 +349,7 @@ class BufferStitchAttr : public GridBlockDimsAttr {
           if (!input.has_value_) {
             if (!EqualShape(input.shape_, out_shape)) {
               auto input_size = GetShapeSize(input.shape_);
+              CHECK(!Equal(input_size, 0));
               broadcast_size = out_size / input_size;
               SetStitchType(StitchOpType::Broadcast);
               break;

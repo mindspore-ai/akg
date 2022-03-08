@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,17 +30,16 @@ namespace ir {
 namespace {
 constexpr auto kPipelineTotalSMem = "pipeline_total_shared_memory";
 constexpr auto kTotalSMem = "total_shared_memory";
+constexpr int BIT32 = 32;
 }  // namespace
 
 struct FuncInfo {
   Stmt stmt;
   Stmt origin_stmt;
   Var block;
-  std::string origin_block_name;
-  Expr block_ext = make_const(Int(32), 1);
+  Expr block_ext = make_const(Int(BIT32), 1);
   Var thread;
-  std::string origin_thread_name;
-  Expr thread_ext = make_const(Int(32), 1);
+  Expr thread_ext = make_const(Int(BIT32), 1);
 };
 
 bool IsVarDefault(const Var &var) { return var->name_hint == "v"; }
@@ -65,7 +64,7 @@ class SharedMemoryManager : public IRMutator {
     const Variable *buffer = op->buffer_var.get();
     if (shared_memory_set_.count(buffer) != 0) {
       // Add attribute to shared memory offset.
-      Expr offset_expr = IntImm::make(Int(32), total_sm_size_);
+      Expr offset_expr = IntImm::make(Int(BIT32), total_sm_size_);
       total_sm_size_ += op->type.bytes() * op->constant_allocation_size();
       total_sm_size_ = RegularizeOffset(total_sm_size_);
       return AttrStmt::make(op->buffer_var, "shared_memory_offset", offset_expr, stmt);
@@ -237,12 +236,15 @@ class DimCompressor : public IRMutator {
     if (idx_len == 1) {
       return idx[0].second;
     } else if (idx_len == 2) {
+      CHECK(!Equal(dx, 0));
       replace_.emplace(idx[0].first.get(), x / dx);
       replace_.emplace(idx[1].first.get(), truncmod(x, dx));
       return Simplify(idx[0].second * dx);
     } else {
       CHECK_EQ(idx_len, 3);
       Expr dxy = Simplify(idx[1].second * idx[2].second);
+      CHECK(!Equal(dxy, 0));
+      CHECK(!Equal(dx, 0));
       replace_.emplace(idx[0].first.get(), x / dxy);
       replace_.emplace(idx[1].first.get(), truncmod(x, dxy) / dx);
       replace_.emplace(idx[2].first.get(), truncmod(x, dx));
@@ -514,10 +516,10 @@ class LowerPipelineFusionGpu : public LowerPipelineFusion {
     }
 
     if (IsVarDefault(block_var_)) {
-      block_var_ = Variable::make(Int(32), BLOCK_IDX_X);
+      block_var_ = Variable::make(Int(BIT32), BLOCK_IDX_X);
     }
     if (IsVarDefault(thread_var_)) {
-      thread_var_ = Variable::make(Int(32), THREAD_IDX_X);
+      thread_var_ = Variable::make(Int(BIT32), THREAD_IDX_X);
     }
   }
 
@@ -585,15 +587,16 @@ class LowerPipelineFusionGpu : public LowerPipelineFusion {
   }
 
   void AddNewDimAttrs(Stmt &stmt) {
-    Expr fusion_bx_ext = make_const(Int(32), max_block_num_);   // update it by fusion block extent
-    Expr fusion_tx_ext = make_const(Int(32), max_thread_num_);  // update it by fusion thread extent
+    Expr fusion_bx_ext = make_const(Int(BIT32), max_block_num_);   // update it by fusion block extent
+    Expr fusion_tx_ext = make_const(Int(BIT32), max_thread_num_);  // update it by fusion thread extent
 
-    IterVar thread_iv = IterVarNode::make(Range(make_const(Int(32), 0), fusion_tx_ext), thread_var_,
+    IterVar thread_iv = IterVarNode::make(Range(make_const(Int(BIT32), 0), fusion_tx_ext), thread_var_,
                                           air::IterVarType::kThreadIndex, THREAD_IDX_X);
-    IterVar block_iv = IterVarNode::make(Range(make_const(Int(32), 0), fusion_bx_ext), block_var_,
+    IterVar block_iv = IterVarNode::make(Range(make_const(Int(BIT32), 0), fusion_bx_ext), block_var_,
                                          air::IterVarType::kThreadIndex, BLOCK_IDX_X);
     if (total_shared_memory_ > 0) {
-      stmt = AttrStmt::make(make_zero(Int(32)), kPipelineTotalSMem, IntImm::make(Int(32), total_shared_memory_), stmt);
+      stmt =
+        AttrStmt::make(make_zero(Int(BIT32)), kPipelineTotalSMem, IntImm::make(Int(BIT32), total_shared_memory_), stmt);
     }
     stmt = AttrStmt::make(thread_iv, air::ir::attr::thread_extent, fusion_tx_ext, stmt);
     stmt = AttrStmt::make(block_iv, air::ir::attr::thread_extent, fusion_bx_ext, stmt);
@@ -646,7 +649,7 @@ class LowerPipelineFusionAscend : public LowerPipelineFusion {
     }
 
     if (IsVarDefault(block_var_)) {
-      block_var_ = Variable::make(Int(32), BLOCK_IDX_X);
+      block_var_ = Variable::make(Int(BIT32), BLOCK_IDX_X);
     }
   }
 
@@ -669,8 +672,8 @@ class LowerPipelineFusionAscend : public LowerPipelineFusion {
   }
 
   void AddNewDimAttrs(Stmt &stmt) {
-    Expr fusion_bx_ext = make_const(Int(32), max_block_num_);  // update it by fusion block extent
-    IterVar block_iv = IterVarNode::make(Range(make_const(Int(32), 0), fusion_bx_ext), block_var_,
+    Expr fusion_bx_ext = make_const(Int(BIT32), max_block_num_);  // update it by fusion block extent
+    IterVar block_iv = IterVarNode::make(Range(make_const(Int(BIT32), 0), fusion_bx_ext), block_var_,
                                          air::IterVarType::kThreadIndex, BLOCK_IDX_X);
     stmt = AttrStmt::make(block_iv, air::ir::attr::thread_extent, fusion_bx_ext, stmt);
   }
@@ -678,6 +681,30 @@ class LowerPipelineFusionAscend : public LowerPipelineFusion {
   Var block_var_;
   size_t max_block_num_;
 };
+
+namespace {
+void ProcessBlockInner(std::vector<FuncInfo> &funcs, std::vector<size_t> &max_block_info, size_t &max_block_num) {
+  // Update offset of blockIdx.x and caculate maximum.
+  max_block_info.clear();
+  max_block_num = 0;
+  std::vector<size_t> block_info;
+  for (auto &func : funcs) {
+    block_info.emplace_back(func.block_ext.as<IntImm>()->value);
+  }
+
+  for (auto it : block_info) {
+    max_block_num += it;
+    max_block_info.emplace_back(max_block_num);
+  }
+
+  size_t cur_block_num = 0;
+  for (size_t i = 0; i < max_block_info.size(); ++i) {
+    int offset = static_cast<int>(cur_block_num);
+    funcs[i].stmt = BlockIndexRewrite(offset).Mutate(funcs[i].stmt);
+    cur_block_num = max_block_info[i];
+  }
+}
+}  // namespace
 
 class LowerBlockFusionGpu : public LowerStmtsFusion {
  public:
@@ -730,33 +757,17 @@ class LowerBlockFusionGpu : public LowerStmtsFusion {
   }
 
   void ProcessBlockAndThread(std::vector<FuncInfo> &funcs) {
-    // Update offset of blockIdx.x and caculate maximum.
-    max_block_info_.clear();
+    ProcessBlockInner(funcs, max_block_info_, max_block_num_);
+    if (IsVarDefault(block_var_)) {
+      block_var_ = Variable::make(Int(BIT32), BLOCK_IDX_X);
+    }
+
     max_thread_num_ = 0;
-    max_block_num_ = 0;
-    std::vector<size_t> block_info;
     for (auto &func : funcs) {
-      block_info.emplace_back(func.block_ext.as<IntImm>()->value);
       max_thread_num_ = std::max(max_thread_num_, static_cast<size_t>(func.thread_ext.as<IntImm>()->value));
     }
-
-    for (auto it : block_info) {
-      max_block_num_ += it;
-      max_block_info_.emplace_back(max_block_num_);
-    }
-
-    size_t cur_block_num = 0;
-    for (size_t i = 0; i < max_block_info_.size(); ++i) {
-      int offset = static_cast<int>(cur_block_num);
-      funcs[i].stmt = BlockIndexRewrite(offset).Mutate(funcs[i].stmt);
-      cur_block_num = max_block_info_[i];
-    }
-
-    if (IsVarDefault(block_var_)) {
-      block_var_ = Variable::make(Int(32), BLOCK_IDX_X);
-    }
     if (IsVarDefault(thread_var_)) {
-      thread_var_ = Variable::make(Int(32), THREAD_IDX_X);
+      thread_var_ = Variable::make(Int(BIT32), THREAD_IDX_X);
     }
   }
 
@@ -779,15 +790,15 @@ class LowerBlockFusionGpu : public LowerStmtsFusion {
   }
 
   void AddNewDimAttrs(Stmt &stmt) {
-    Expr fusion_bx_ext = make_const(Int(32), max_block_num_);   // update it by fusion block extent
-    Expr fusion_tx_ext = make_const(Int(32), max_thread_num_);  // update it by fusion thread extent
+    Expr fusion_bx_ext = make_const(Int(BIT32), max_block_num_);   // update it by fusion block extent
+    Expr fusion_tx_ext = make_const(Int(BIT32), max_thread_num_);  // update it by fusion thread extent
 
-    IterVar thread_iv = IterVarNode::make(Range(make_const(Int(32), 0), fusion_tx_ext), thread_var_,
+    IterVar thread_iv = IterVarNode::make(Range(make_const(Int(BIT32), 0), fusion_tx_ext), thread_var_,
                                           air::IterVarType::kThreadIndex, THREAD_IDX_X);
-    IterVar block_iv = IterVarNode::make(Range(make_const(Int(32), 0), fusion_bx_ext), block_var_,
+    IterVar block_iv = IterVarNode::make(Range(make_const(Int(BIT32), 0), fusion_bx_ext), block_var_,
                                          air::IterVarType::kThreadIndex, BLOCK_IDX_X);
     if (total_shared_memory_ > 0) {
-      stmt = AttrStmt::make(make_zero(Int(32)), kTotalSMem, IntImm::make(Int(32), total_shared_memory_), stmt);
+      stmt = AttrStmt::make(make_zero(Int(BIT32)), kTotalSMem, IntImm::make(Int(BIT32), total_shared_memory_), stmt);
     }
     stmt = AttrStmt::make(thread_iv, air::ir::attr::thread_extent, fusion_tx_ext, stmt);
     stmt = AttrStmt::make(block_iv, air::ir::attr::thread_extent, fusion_bx_ext, stmt);
@@ -832,28 +843,9 @@ class LowerBlockFusionAscend : public LowerStmtsFusion {
   void ProcessDim(std::vector<FuncInfo> &funcs) { akg::ir::ProcessDim(funcs, block_var_); }
 
   void ProcessBlock(std::vector<FuncInfo> &funcs) {
-    // Update offset of blockIdx.x and caculate maximum.
-    max_block_info_.clear();
-    max_block_num_ = 0;
-    std::vector<size_t> block_info;
-    for (auto &func : funcs) {
-      block_info.emplace_back(func.block_ext.as<IntImm>()->value);
-    }
-
-    for (auto it : block_info) {
-      max_block_num_ += it;
-      max_block_info_.emplace_back(max_block_num_);
-    }
-
-    size_t cur_block_num = 0;
-    for (size_t i = 0; i < max_block_info_.size(); ++i) {
-      int offset = static_cast<int>(cur_block_num);
-      funcs[i].stmt = BlockIndexRewrite(offset).Mutate(funcs[i].stmt);
-      cur_block_num = max_block_info_[i];
-    }
-
+    ProcessBlockInner(funcs, max_block_info_, max_block_num_);
     if (IsVarDefault(block_var_)) {
-      block_var_ = Variable::make(Int(32), BLOCK_IDX_X);
+      block_var_ = Variable::make(Int(BIT32), BLOCK_IDX_X);
     }
   }
 
@@ -868,8 +860,8 @@ class LowerBlockFusionAscend : public LowerStmtsFusion {
   }
 
   void AddNewDimAttrs(Stmt &stmt) {
-    Expr fusion_bx_ext = make_const(Int(32), max_block_num_);  // update it by fusion block extent
-    IterVar block_iv = IterVarNode::make(Range(make_const(Int(32), 0), fusion_bx_ext), block_var_,
+    Expr fusion_bx_ext = make_const(Int(BIT32), max_block_num_);  // update it by fusion block extent
+    IterVar block_iv = IterVarNode::make(Range(make_const(Int(BIT32), 0), fusion_bx_ext), block_var_,
                                          air::IterVarType::kThreadIndex, BLOCK_IDX_X);
     stmt = AttrStmt::make(block_iv, air::ir::attr::thread_extent, fusion_bx_ext, stmt);
   }
