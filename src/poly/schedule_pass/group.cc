@@ -157,11 +157,9 @@ void UnGroupStatements::DfsTopsort(std::vector<std::vector<int>> &graph, std::ve
   }
 }
 
-isl::union_set_list UnGroupStatements::DependenciesTopsort(const isl::union_set_list &filterlist) {
-  if (pass_info_.dependency_list_.empty()) return filterlist;
-  if (filterlist.size() == 0) return filterlist;
-
-  // 1. build graph from dependency_list_ and filterlist
+void UnGroupStatements::BuildGraph(const isl::union_set_list &filterlist, std::vector<std::vector<int>> &graph,
+                                   std::vector<int> &indegree) {
+  // build graph from dependency_list_ and filterlist
   int graph_size = filterlist.size();
   std::unordered_map<isl::id, int, isl::IslIdIslHash> filter_map;
   for (int i = 0; i < graph_size; ++i) {
@@ -170,35 +168,47 @@ isl::union_set_list UnGroupStatements::DependenciesTopsort(const isl::union_set_
     filter_map.insert(std::pair<isl::id, int>(temp.get_set_list().get_at(0).get_tuple_id(), i));
   }
 
-  std::vector<std::vector<int>> graph(graph_size, std::vector<int>(graph_size, 0));
-  std::vector<int> indegree(graph_size, 0);
   for (auto &i : pass_info_.dependency_list_) {
     isl::id from = i.GetStartNode();
     isl::id to = i.GetEndNode();
-    if (filter_map.find(from) != filter_map.end() && filter_map.find(to) != filter_map.end()) {
-      int x = filter_map.find(from)->second;
-      int y = filter_map.find(to)->second;
-      // we only use similar dependency once
-      if (graph[x][y] == 0) {
-        graph[x][y] = 1;
-        indegree[y]++;
-      }
-      int64_t value;
-      if (cost_map_.find(x) == cost_map_.end()) {
-        value = i.GetEdgeWeight();
-      } else {
-        value = cost_map_.find(x)->second + i.GetEdgeWeight();
-      }
-      cost_map_.insert(std::pair<int, int64_t>(x, value));
-
-      if (cost_map_.find(y) == cost_map_.end()) {
-        value = -i.GetEdgeWeight();
-      } else {
-        value = cost_map_.find(y)->second - i.GetEdgeWeight();
-      }
-      cost_map_.insert(std::pair<int, int64_t>(y, value));
+    if (filter_map.find(from) == filter_map.end() || filter_map.find(to) == filter_map.end()) {
+      continue;
     }
+    int x = filter_map.find(from)->second;
+    int y = filter_map.find(to)->second;
+    // we only use similar dependency once
+    if (graph[x][y] == 0) {
+      graph[x][y] = 1;
+      indegree[y]++;
+    }
+    int64_t value;
+    if (cost_map_.find(x) == cost_map_.end()) {
+      value = i.GetEdgeWeight();
+    } else {
+      value = cost_map_.find(x)->second + i.GetEdgeWeight();
+    }
+    cost_map_.insert(std::pair<int, int64_t>(x, value));
+
+    if (cost_map_.find(y) == cost_map_.end()) {
+      value = -i.GetEdgeWeight();
+    } else {
+      value = cost_map_.find(y)->second - i.GetEdgeWeight();
+    }
+    cost_map_.insert(std::pair<int, int64_t>(y, value));
   }
+}
+
+isl::union_set_list UnGroupStatements::DependenciesTopsort(const isl::union_set_list &filterlist) {
+  if (pass_info_.dependency_list_.empty() || filterlist.size() == 0) {
+    return filterlist;
+  }
+
+  // 1. build graph from dependency_list_ and filterlist
+  int graph_size = filterlist.size();
+  std::vector<std::vector<int>> graph(graph_size, std::vector<int>(graph_size, 0));
+  std::vector<int> indegree(graph_size, 0);
+  BuildGraph(filterlist, graph, indegree);
+
   // 2. judge if graph has a circle by using dfs
   std::vector<int> vis(graph_size, 0);
   is_circle_ = false;

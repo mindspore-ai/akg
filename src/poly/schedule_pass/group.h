@@ -50,15 +50,17 @@ class UnGroupStatements : public SchedulePass {
 
   virtual isl::schedule Run(isl::schedule sch);
 
+ private:
   void IsContainsCircle(const std::vector<std::vector<int>> &graph, std::vector<int> &vis, int node, int size);
 
   void DfsTopsort(std::vector<std::vector<int>> &graph, std::vector<int> &indegree, std::set<int> &zeros, int cnt,
                   int size, int64_t current_value, int64_t current_max);
   isl::union_set_list DependenciesTopsort(const isl::union_set_list &filterlist);
+  void BuildGraph(const isl::union_set_list &filterlist, std::vector<std::vector<int>> &graph,
+                  std::vector<int> &indegree);
 
   isl::schedule_node InsertMarknode(isl::schedule_node node, const isl::id &gid);
 
- private:
   PassInfo &pass_info_;
   bool is_circle_ = false;
 

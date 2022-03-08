@@ -750,22 +750,7 @@ static bool HasAllReduce(std::unordered_map<isl::id, size_t, isl::IslIdIslHash> 
   return false;
 }
 
-bool NeedRemoveInvariantDependence(ScopInfo &scop_info) {
-  std::unordered_map<const Node *, isl::id> state_node_map;
-  for (const auto &i : scop_info.analysis_result_.GetStatementMap()) {
-    if (i.second != nullptr && state_node_map.count(i.second) == 0) {
-      state_node_map.emplace(i.second, i.first);
-    }
-  }
-  // key is the isl id of reduce statment
-  // value is the reduce axis number of reduce statment
-  std::unordered_map<isl::id, size_t, isl::IslIdIslHash> reduce_repo;
-  // reduce statement
-  for (const auto &item : scop_info.analysis_result_.GetReduceMap()) {
-    if (item.first != nullptr && state_node_map.count(item.first) > 0) {
-      reduce_repo.emplace(state_node_map[item.first], item.second.size());
-    }
-  }
+bool CheckByOpeartorType(ScopInfo &scop_info, std::unordered_map<isl::id, size_t, isl::IslIdIslHash> &reduce_repo) {
   // disable this feature for dynamic shape
   if (scop_info.user_config_.GetIsDynamic()) {
     return false;
@@ -783,8 +768,10 @@ bool NeedRemoveInvariantDependence(ScopInfo &scop_info) {
   if (HasAllReduce(reduce_repo, scop_info.analysis_result_.GetOperatorDomainMap())) {
     return false;
   }
+  return true;
+}
 
-  auto domain = scop_info.analysis_result_.GetOperatorDomainMap();
+bool CheckByParallelAxis(ScopInfo &scop_info, std::unordered_map<isl::id, size_t, isl::IslIdIslHash> &reduce_repo) {
   // key is the dim size of domain space of each statement
   // the reduce operator will delete the reduce axis
   // the value is the related statement id
@@ -809,6 +796,34 @@ bool NeedRemoveInvariantDependence(ScopInfo &scop_info) {
     return false;
   }
 
+  return true;
+}
+
+bool NeedRemoveInvariantDependence(ScopInfo &scop_info) {
+  std::unordered_map<const Node *, isl::id> state_node_map;
+  for (const auto &i : scop_info.analysis_result_.GetStatementMap()) {
+    if (i.second != nullptr && state_node_map.count(i.second) == 0) {
+      state_node_map.emplace(i.second, i.first);
+    }
+  }
+  // key is the isl id of reduce statment
+  // value is the reduce axis number of reduce statment
+  std::unordered_map<isl::id, size_t, isl::IslIdIslHash> reduce_repo;
+  // reduce statement
+  for (const auto &item : scop_info.analysis_result_.GetReduceMap()) {
+    if (item.first != nullptr && state_node_map.count(item.first) > 0) {
+      reduce_repo.emplace(state_node_map[item.first], item.second.size());
+    }
+  }
+
+  if (!CheckByOpeartorType(scop_info, reduce_repo)) {
+    return false;
+  }
+
+  if (!CheckByParallelAxis(scop_info, reduce_repo)) {
+    return false;
+  }
+
   // enable this feature for scalar and same parallel computation fusion scenes in Ascend
   return true;
 }
@@ -824,16 +839,15 @@ isl::union_map RemoveInvariantDependence(const isl::schedule &schedule, PassInfo
       isl::schedule_node node = outer_band.get_child(i);
       auto filter = node.as<isl::schedule_node_filter>();
       isl::union_set sets = filter.filter();
-      if (sets.n_set() == 1) {
-        sets.foreach_set([&pass_info](const isl::set &s) -> void {
-          if (s.n_dim() == 0) {
-            // scalar single filter
-            if (pass_info.invariant_state_.count(s.get_tuple_name()) == 0) {
-              pass_info.invariant_state_.emplace(s.get_tuple_name(), 1);
-            }
-          }
-        });
+      if (sets.n_set() != 1) {
+        continue;
       }
+      sets.foreach_set([&pass_info](const isl::set &s) -> void {
+        // scalar single filter
+        if (s.n_dim() == 0 && pass_info.invariant_state_.count(s.get_tuple_name()) == 0) {
+          pass_info.invariant_state_.emplace(s.get_tuple_name(), 1);
+        }
+      });
     }
   }
 
