@@ -102,8 +102,6 @@ def _transpose_ascend(data, axes):
     utils.check_shape(shape)
 
     assert len(shape) == len(axes), "length of shape and axes should be same"
-    # if axes[-1] == len(shape) - 2:
-    #     assert shape[-1] % 16 == 0, "transpose last axis only support 16xN number"
 
     output = akg.topi.transpose(data, axes)
     return output

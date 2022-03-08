@@ -52,7 +52,7 @@ def _asin_grad_compute(x, dy):
         x = topi.cast(x, "float32")
         dy = topi.cast(dy, "float32")
 
-    # step 1: calculate num_to_vrsqrt = 1 - x^2
+    """step 1: calculate num_to_vrsqrt = 1 - x^2"""
     data = topi.multiply(x, x)
     data = topi.multiply(data, tvm.const(-1, "float32"))
     num_to_vrsqrt = topi.add(data, tvm.const(1, "float32"))

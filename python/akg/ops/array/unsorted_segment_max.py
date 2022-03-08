@@ -63,25 +63,28 @@ def gen_ids(segment_ids):
     index.append(segment_ids[-1])
     return res, index
 
+def get_data_from_data_list(idx, data_list, i):
+    data = []
+    for (tmp, tmp_data) in zip(idx, data_list):
+        if tmp == i:
+            data.append(tmp_data)
+    return data
+
+
 
 def split_new(data, new_segment_ids, idx, num_segments):
 
     data_list = Split(data, new_segment_ids)
     if not isinstance(data_list, (list, tuple)):
         data_list = [data_list]
-    data = dict()
     new_idx = []
     out = []
     for i in range(0, num_segments):
 
         if i in idx:
-            data[str(i)] = []
             new_idx.append(i)
-            for (tmp, tmp_data) in zip(idx, data_list):
-                if tmp == i:
-                    data[str(i)].append(tmp_data)
-
-            out.append(Concat(data[str(i)], 0))
+            temp_data = get_data_from_data_list(idx, data_list, i)
+            out.append(Concat(temp_data, 0))
 
     return out, new_idx
 

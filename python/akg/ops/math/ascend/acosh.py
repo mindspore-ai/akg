@@ -25,7 +25,7 @@ def _sqrt_mini_vsqrt_newton_iter(x):
     def vsqrt_newton_iter(data):
         """compute vsqrt with newton_iter"""
         data_rsqrt = akg.topi.rsqrt(data)
-        # vrsqrt newton_iter: x(n+1) = x(n)*(3-a*x(n)^2)/2
+        """vrsqrt newton_iter: x(n+1) = x(n)*(3-a*x(n)^2)/2"""
         steps = 3
         half = akg.tvm.const(0.5, x.dtype)
         shape = data.shape
@@ -68,7 +68,7 @@ def Acosh(x, target=utils.CCE):
         # To avoid overflow and higher accuracy, x is casted to float32
         x = akg.topi.cast(x, "float32")
 
-    # acosh(x) = log(x + sqrt(x*x-1))
+    """acosh(x) = log(x + sqrt(x*x-1))"""
     x_square = akg.topi.multiply(x, x)
     x_square_sub = akg.topi.subtract(x_square, 1)
 
