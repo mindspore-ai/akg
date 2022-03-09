@@ -246,6 +246,7 @@ class ReduceStrategy : public TilingStrategy {
   explicit ReduceStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {}
   void AddNpuConstraint() override;
   void AddGpuConstraint() override;
+  void ComputeProperReduceThreads(bool use_local);
   void UpdateReduceThreads(bool square_thread, int64_t min_blocks, bool use_local);
   void UpdateThreadRange(bool square_thread);
   void UpdateAxes(int possible_blocks, int default_elem_per_thread);
@@ -253,6 +254,9 @@ class ReduceStrategy : public TilingStrategy {
   void DealWith4DFusedReduce(const std::vector<akg::ir::poly::TileAxis *> &reduce_axes);
 
   void DisableReduceMapping();
+
+  void CollectReduceAxesInfo();
+  void CollectInjectiveAxesInfo();
 
   // Used by setting scop_info.enable_akg_reduce_lib.
   void AkgReduceLibStrategyOnGpu(int band_index);
@@ -453,6 +457,7 @@ class GpuStrategy : public TilingStrategy {
  public:
   explicit GpuStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {}
 
+  bool CheckNeedInjectiveSpeedUp();
   void AddNpuConstraint() override;
   void AddGpuConstraint() override;
   std::vector<TileAxis::MappingConstraint> thread_binding_spaces_;  // [thread.x, thread.y, thread.z]
@@ -467,6 +472,7 @@ class GpuStrategy : public TilingStrategy {
 
   void PadSpeedup();
 
+  void HandleShrinkThreadToBlock(int64_t &shrinked_threads, bool thread_to_block, std::stringstream &ss);
   void InjectiveSpeedup();
 
   void VectorizationSpeedup();
@@ -480,6 +486,7 @@ class GpuStrategy : public TilingStrategy {
   void GpuScalarBroadcastStrategy();
   void GpuVectorBroadcastStrategy();
 
+  void UpdateBlockConfig(ReduceDirection direct, bool use_lib);
   // Step 0. Init mapping limit according to operation type.
   void InitMappingLimit();
 
@@ -503,6 +510,7 @@ class GpuStrategy : public TilingStrategy {
   void ThreadConfiguration(ReduceDirection direct, bool use_lib);
   void SkipMapping(TileAxis *axis, int64_t shape, std::stringstream &ss, size_t inner_dim, size_t thread_dim);
   void GreedyMapBlocks(size_t ori_size, size_t block_dim);
+  void CheckAlignedUse(int64_t &use, int64_t shape, TileAxis *axis, std::stringstream &ss);
   void MapPendingAxes(size_t ori_size, std::stringstream &ss, size_t thread_dim, bool write_cfg);
   int64_t ApplyCustomTile(TileAxis *axis, size_t inner_dim, int64_t thread_size, int64_t tile, int64_t shape);
   void WriteConfigBackInjective();
