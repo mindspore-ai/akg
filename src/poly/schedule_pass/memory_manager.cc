@@ -63,119 +63,45 @@ isl::schedule MemoryManager::HoistBufferFootprintAtMarkNode(const isl::schedule_
   return MapDescendantTopDown(root, fn).get_schedule();
 }
 
-isl::schedule_node MemoryManager::HoistBufferFootprintAtMarkNode(const isl::schedule_node &tree, size_t index) {
-  auto schedule = LocalSchedule(tree);
-
-  // hoist cluster and add extension to schedule tree
-  return HoistTensorClusterFootprint(tree, index, schedule);
-}
-
-isl::schedule_node MemoryManager::HoistTensorClusterFootprint(isl::schedule_node tree, size_t buffered_fp_idx,
-                                                              const isl::union_map &schedule) {
-  BufferDefInfo &tensor_info = scop_info_.analysis_result_.buffer_def_infos_[buffered_fp_idx];
-  isl::union_map sch_map = scop_info_.analysis_result_.GetScheduleMapBeforeTile();
-
-  isl::schedule_node mark_node = tree;
-  if (tree.has_parent()) {
-    mark_node = tree.parent();
+// hoist cluster and add extension to schedule tree
+isl::schedule_node MemoryManager::HoistBufferFootprintAtMarkNode(const isl::schedule_node &orig_node,
+                                                                 size_t buffered_fp_idx) {
+  isl::schedule_node mark_node = orig_node;
+  if (orig_node.has_parent()) {
+    mark_node = orig_node.parent();
   }
 
+  auto active_domains = CollectDomain(orig_node);
+  auto schedule = LocalSchedule(orig_node);
+  BufferDefInfo &tensor_info = scop_info_.analysis_result_.buffer_def_infos_[buffered_fp_idx];
   isl::id src_tensor_id = tensor_info.tensor_id;
   isl::id dst_tensor_id = tensor_info.dst_tensor_id;
-  bool is_bind_tensor = tensor_info.is_bind_tensor;
 
-  auto fp_cluster = tensor_info.GetFootPrintCluster(mark_node);
-  if ((fp_cluster == nullptr) || (!fp_cluster->foot_print_.box.is_valid())) {
-    LOG(INFO) << "FootprintsClusters: fp_cluster is null or box is invalid! src: " << src_tensor_id
+  current_fp_cluster_ = tensor_info.GetFootPrintCluster(mark_node);
+  if ((current_fp_cluster_ == nullptr) || (!current_fp_cluster_->foot_print_.box.is_valid())) {
+    LOG(INFO) << "FootprintsClusters: current_fp_cluster_ is null or box is invalid! src: " << src_tensor_id
               << ", dst: " << dst_tensor_id;
-    return tree;
+    return orig_node;
   }
 
-  auto active_domains = CollectDomain(tree);
-  auto active_buf_fp = CollectBufferedFootprints(active_domains, src_tensor_id);
-  auto foot_prints = isl::set::empty(fp_cluster->GetSingleAccessRange().get_space());
-  auto all_read_only = fp_cluster->UnWriteable();
-  for (const auto &buf_fp : active_buf_fp) {
-    foot_prints = foot_prints.unite(buf_fp.second.cluster->GetSingleAccessRange());
-    all_read_only = all_read_only && buf_fp.second.cluster->UnWriteable();
-  }
-
-  if (is_bind_tensor && tensor_info.mem_type != MemType::BUF_C0_) {
-    if (!(scop_info_.mmu_info_.IsGemm() && tensor_info.IsMmuCC1Write())) {
-      bool insert_buf_to_c1 = false;
-      if (!scop_info_.analysis_result_.GetFakeCopyin().is_empty()) {
-        scop_info_.analysis_result_.GetFakeCopyin().foreach_map(
-          [&insert_buf_to_c1, &src_tensor_id, &dst_tensor_id](const isl::map &m) -> void {
-            if ((m.get_tuple_id(isl_dim_out).get_name() == src_tensor_id.get_name()) &&
-                (src_tensor_id.get_name() + LOCAL_C1 == dst_tensor_id.get_name())) {
-              insert_buf_to_c1 = true;
-            }
-          });
-      }
-      if (insert_buf_to_c1) {
-        isl::id outer_tensorId = isl::id(src_tensor_id.ctx(), src_tensor_id.get_name() + LOCAL_BUF);
-        tree = PlaceInnerDataCopyBelow(scop_info_, tree, *fp_cluster, *fp_cluster, src_tensor_id, dst_tensor_id,
-                                       outer_tensorId, sch_map);
-      } else {
-        tree = PlaceOuterDataCopyBelow(scop_info_, tree, *fp_cluster, src_tensor_id, dst_tensor_id, sch_map,
-                                       schedule_.get_domain().get_space());
-      }
-    } else {
-      buffer_footprint_queue_.push(src_tensor_id);
-    }
-    // If the new buffer_footprint is not a strict subset of any other parent
-    auto cluster = std::shared_ptr<TensorFootprintCluster>(std::move(fp_cluster));
-    scop_info_.analysis_result_.active_buffer_footprints_.emplace_back(
-      std::make_pair(active_domains, BufferedFootPrintInfo{cluster, schedule, dst_tensor_id}));
-    tensor_info.find_buffer = true;
-    return tree;
+  if (tensor_info.is_bind_tensor && tensor_info.mem_type != MemType::BUF_C0_) {
+    return HoistBufferToLocalC1(orig_node, tensor_info, active_domains, schedule);
   }
 
   if (tensor_info.IsIm2col()) {
-    isl::id cluster_id = tensor_info.NextTensorDstId();
-    auto l0_fp_cluster = GetFootPrintsCluster(dst_tensor_id);
-    CHECK(l0_fp_cluster != nullptr);
-    /*-------------------------------------------------------------------------------
-     * The dma of input_a_fractal_L1 --> input_a_local_L1_local_L0A actually use the
-     * dma of "spec gemm", so we don't have to insert extension here.
-     * If we want to refer to the DMA of origin, we can call the function
-     * placeim2colbelow, like this:
-     * tree = PlaceIm2colBelow(scop_info_, tree, *l0_fp_cluster, *fp_cluster,
-     *                         cluster_id, dst_tensor_id);
-     * However, this function will cause NodeFrom execute very slowly,
-     * so it cannot be integrated into the main line and just for debugging.
-     */
-    auto cluster = std::shared_ptr<TensorFootprintCluster>(std::move(l0_fp_cluster));
-    scop_info_.analysis_result_.active_buffer_footprints_.emplace_back(
-      std::make_pair(active_domains, BufferedFootPrintInfo{cluster, schedule, dst_tensor_id}));
-    tensor_info.find_buffer = true;
-    SetFindBuffer(dst_tensor_id, true);
-    return tree;
+    HoistIm2col(orig_node, tensor_info, active_domains, schedule);
+    return orig_node;
   }
 
-  if (tensor_info.IsGemmDataC12C0()) {
-    if (scop_info_.mmu_info_.IsGemmDataTranspose()) {
-      const isl::id &trans_id = dst_tensor_id;
-      const isl::id &cluster_id = dst_tensor_id;
-      tree = PlaceGemmTranspose(scop_info_, tree, *gemm_a_transpose_fp_cluster_, *fp_cluster, trans_id, cluster_id);
-      scop_info_.analysis_result_.active_buffer_footprints_.emplace_back(
-        std::make_pair(active_domains, BufferedFootPrintInfo{gemm_a_transpose_fp_cluster_, schedule, cluster_id}));
+  auto tree = orig_node;
+  auto scop_cluster = current_fp_cluster_;
+  if (tensor_info.IsGemmDataC12C0() || tensor_info.IsGemmWeightC12C0()) {
+    tree = HoistGemmDataAndWeightTranspose(tree, tensor_info, active_domains, schedule);
+    if (scop_info_.mmu_info_.IsGemm()) {
+      scop_cluster = scop_info_.analysis_result_.GetBufferDefInfo(tensor_info.tensor_id).footprints_cluster;
     }
   }
 
-  if (tensor_info.IsGemmWeightC12C0()) {
-    if (scop_info_.mmu_info_.IsGemmWeightTranspose()) {
-      const isl::id &trans_id = dst_tensor_id;
-      const isl::id &cluster_id = dst_tensor_id;
-      tree = PlaceGemmTranspose(scop_info_, tree, *gemm_b_transpose_fp_cluster_, *fp_cluster, trans_id, cluster_id);
-      scop_info_.analysis_result_.active_buffer_footprints_.emplace_back(
-        std::make_pair(active_domains, BufferedFootPrintInfo{gemm_b_transpose_fp_cluster_, schedule, cluster_id}));
-    }
-  }
-  auto scop_cluster = fp_cluster;
-  if (scop_info_.mmu_info_.IsGemm() && (tensor_info.IsGemmDataC12C0() || tensor_info.IsGemmWeightC12C0())) {
-    scop_cluster = scop_info_.analysis_result_.GetBufferDefInfo(tensor_info.tensor_id).footprints_cluster;
-  }
   if (tensor_info.IsPreMmuTile2Write()) {
     auto info = scop_info_.analysis_result_.GetBufferDefInfo(tensor_info.tensor_id);
     auto new_scop_group = info.GetFootPrintCluster(mark_node);
@@ -183,21 +109,107 @@ isl::schedule_node MemoryManager::HoistTensorClusterFootprint(isl::schedule_node
       scop_cluster = new_scop_group;
     }
   }
-  tree = PlaceInnerDataCopyBelow(scop_info_, tree, *fp_cluster, *scop_cluster, src_tensor_id, dst_tensor_id,
+
+  isl::union_map sch_map = scop_info_.analysis_result_.GetScheduleMapBeforeTile();
+  tree = PlaceInnerDataCopyBelow(scop_info_, tree, *current_fp_cluster_, *scop_cluster, src_tensor_id, dst_tensor_id,
                                  src_tensor_id, sch_map);
   if (scop_info_.mmu_info_.IsGemm() && !buffer_footprint_queue_.empty() &&
       buffer_footprint_queue_.front().get_name() == tensor_info.ancester_tensor_id.get_name()) {
-    tree = PlaceOuterDataCopyBelow(scop_info_, tree, *fp_cluster, tensor_info.ancester_tensor_id, src_tensor_id,
-                                   sch_map, schedule_.get_domain().get_space());
+    tree = PlaceOuterDataCopyBelow(scop_info_, tree, *current_fp_cluster_, tensor_info.ancester_tensor_id,
+                                   src_tensor_id, sch_map, schedule_.get_domain().get_space());
     buffer_footprint_queue_.pop();
   }
 
   // If the new buffer_footprint is not a strict subset of any other parent
-  auto group = std::shared_ptr<TensorFootprintCluster>(std::move(fp_cluster));
-
+  auto group = std::shared_ptr<TensorFootprintCluster>(std::move(current_fp_cluster_));
   scop_info_.analysis_result_.active_buffer_footprints_.emplace_back(
     std::make_pair(active_domains, BufferedFootPrintInfo{group, schedule, dst_tensor_id}));
   tensor_info.find_buffer = true;
+  return tree;
+}
+
+isl::schedule_node MemoryManager::HoistBufferToLocalC1(const isl::schedule_node &orig_node, BufferDefInfo &tensor_info,
+                                                       const isl::union_set &active_domains,
+                                                       const isl::union_map &schedule) {
+  isl::id src_tensor_id = tensor_info.tensor_id;
+  isl::id dst_tensor_id = tensor_info.dst_tensor_id;
+  auto tree = orig_node;
+  if (!(scop_info_.mmu_info_.IsGemm() && tensor_info.IsMmuCC1Write())) {
+    bool insert_buf_to_c1 = false;
+    if (!scop_info_.analysis_result_.GetFakeCopyin().is_empty()) {
+      scop_info_.analysis_result_.GetFakeCopyin().foreach_map(
+        [&insert_buf_to_c1, &src_tensor_id, &dst_tensor_id](const isl::map &m) -> void {
+          if ((m.get_tuple_id(isl_dim_out).get_name() == src_tensor_id.get_name()) &&
+              (src_tensor_id.get_name() + LOCAL_C1 == dst_tensor_id.get_name())) {
+            insert_buf_to_c1 = true;
+          }
+        });
+    }
+
+    isl::union_map sch_map = scop_info_.analysis_result_.GetScheduleMapBeforeTile();
+    if (insert_buf_to_c1) {
+      isl::id outer_tensorId = isl::id(src_tensor_id.ctx(), src_tensor_id.get_name() + LOCAL_BUF);
+      tree = PlaceInnerDataCopyBelow(scop_info_, orig_node, *current_fp_cluster_, *current_fp_cluster_, src_tensor_id,
+                                     dst_tensor_id, outer_tensorId, sch_map);
+    } else {
+      tree = PlaceOuterDataCopyBelow(scop_info_, orig_node, *current_fp_cluster_, src_tensor_id, dst_tensor_id, sch_map,
+                                     schedule_.get_domain().get_space());
+    }
+  } else {
+    buffer_footprint_queue_.push(src_tensor_id);
+  }
+  // If the new buffer_footprint is not a strict subset of any other parent
+  auto cluster = std::shared_ptr<TensorFootprintCluster>(std::move(current_fp_cluster_));
+  scop_info_.analysis_result_.active_buffer_footprints_.emplace_back(
+    std::make_pair(active_domains, BufferedFootPrintInfo{cluster, schedule, dst_tensor_id}));
+  tensor_info.find_buffer = true;
+  return tree;
+}
+
+void MemoryManager::HoistIm2col(const isl::schedule_node &orig_node, BufferDefInfo &tensor_info,
+                                const isl::union_set &active_domains, const isl::union_map &schedule) {
+  isl::id dst_tensor_id = tensor_info.dst_tensor_id;
+  isl::id cluster_id = tensor_info.NextTensorDstId();
+  auto l0_fp_cluster = GetFootPrintsCluster(dst_tensor_id);
+  CHECK(l0_fp_cluster != nullptr);
+  /*-------------------------------------------------------------------------------
+   * The dma of input_a_fractal_L1 --> input_a_local_L1_local_L0A actually use the
+   * dma of "spec gemm", so we don't have to insert extension here.
+   * If we want to refer to the DMA of origin, we can call the function
+   * placeim2colbelow, like this:
+   * tree = PlaceIm2colBelow(scop_info_, tree, *l0_fp_cluster, *current_fp_cluster_,
+   *                         cluster_id, dst_tensor_id);
+   * However, this function will cause NodeFrom execute very slowly,
+   * so it cannot be integrated into the main line and just for debugging.
+   */
+  auto cluster = std::shared_ptr<TensorFootprintCluster>(std::move(l0_fp_cluster));
+  scop_info_.analysis_result_.active_buffer_footprints_.emplace_back(
+    std::make_pair(active_domains, BufferedFootPrintInfo{cluster, schedule, dst_tensor_id}));
+  tensor_info.find_buffer = true;
+  SetFindBuffer(dst_tensor_id, true);
+}
+
+isl::schedule_node MemoryManager::HoistGemmDataAndWeightTranspose(const isl::schedule_node &orig_node,
+                                                                  BufferDefInfo &tensor_info,
+                                                                  const isl::union_set &active_domains,
+                                                                  const isl::union_map &schedule) {
+  isl::id dst_tensor_id = tensor_info.dst_tensor_id;
+
+  auto tree = orig_node;
+  if (tensor_info.IsGemmDataC12C0() && scop_info_.mmu_info_.IsGemmDataTranspose()) {
+    tree = PlaceGemmTranspose(scop_info_, tree, *gemm_a_transpose_fp_cluster_, *current_fp_cluster_, dst_tensor_id,
+                              dst_tensor_id);
+    scop_info_.analysis_result_.active_buffer_footprints_.emplace_back(
+      std::make_pair(active_domains, BufferedFootPrintInfo{gemm_a_transpose_fp_cluster_, schedule, dst_tensor_id}));
+  }
+
+  if (tensor_info.IsGemmWeightC12C0() && scop_info_.mmu_info_.IsGemmWeightTranspose()) {
+    tree = PlaceGemmTranspose(scop_info_, tree, *gemm_b_transpose_fp_cluster_, *current_fp_cluster_, dst_tensor_id,
+                              dst_tensor_id);
+    scop_info_.analysis_result_.active_buffer_footprints_.emplace_back(
+      std::make_pair(active_domains, BufferedFootPrintInfo{gemm_b_transpose_fp_cluster_, schedule, dst_tensor_id}));
+  }
+
   return tree;
 }
 
@@ -274,25 +286,7 @@ void MemoryManager::GatherBufferFootprintDefInfo(const isl::schedule_node &tree,
     return;
   }
   sizes = fp_cluster->GetFixedBoxSizes();
-
-  isl::id tensor_id = tensor_info.tensor_id;
-  isl::id cluster_id = tensor_info.dst_tensor_id;
-
-  // build a Halide Node for cluster_id
-  Array<Expr> shapes;
-  for (auto i : sizes) {
-    shapes.push_back(Expr(static_cast<int>(i)));
-  }
-
-  Type type = scop_info_.GetDtypeOf(tensor_id);
-  Tensor tensor = placeholder(shapes, type, cluster_id.get_name());
-  const Buffer buffer = decl_buffer(shapes, scop_info_.GetDtypeOf(tensor_id), cluster_id.get_name());
-  scop_info_.user_config_.SetBind(tensor, buffer);
-
-  tensor_info.sizes = sizes;
-  tensor_info.tensor = tensor;
-  tensor_info.data_type = type;
-  tensor_info.AddSize(tree, sizes);
+  GatherFractalDefInfo(tree, tensor_info, sizes);
 }
 
 void MemoryManager::CollectBufferFootprintDefInfo(BufferDefInfo &tensor_info, const isl::union_map &schedule_prom,
@@ -314,8 +308,9 @@ void MemoryManager::CollectBufferFootprintDefInfo(BufferDefInfo &tensor_info, co
 
 void MemoryManager::HoistIm2colBufferFootprintCluster(const isl::union_map &schedule, const isl::schedule_node &node,
                                                       const int index, BufferDefInfo &tensor_info) {
-  im2col_fp_cluster = ConstructAffineFpCluster(scop_info_, scop_info_.analysis_result_.GetReads(), schedule.domain(),
-                                               schedule, ReferenceType::Read, AffineType::AFFINE_IM2COL);
+  std::shared_ptr<TensorFootprintCluster> im2col_fp_cluster =
+    ConstructAffineFpCluster(scop_info_, scop_info_.analysis_result_.GetReads(), schedule.domain(), schedule,
+                             ReferenceType::Read, AffineType::AFFINE_IM2COL);
   tensor_info.footprints_cluster =
     ConstructAffineFpCluster(scop_info_, scop_info_.analysis_result_.GetReads(), schedule.domain(), schedule,
                              ReferenceType::Read, AffineType::AFFINE_FRACTAL);
@@ -345,20 +340,20 @@ void MemoryManager::HoistIm2colBufferFootprintCluster(const isl::union_map &sche
     LOG(INFO) << "im2col or fractal foot_print_ box is invalid.";
 
     Map<std::string, NodeRef> attr_info = scop_info_.mmu_info_.GetConvAttrInfo();
-    auto it = attr_info.find(ATTR_CONV_KERNEL_H);
-    if ((it != attr_info.end()) && (*it).second.as<IntImm>()) k_h = (*it).second.as<IntImm>()->value;
-    it = attr_info.find(ATTR_CONV_KERNEL_W);
-    if ((it != attr_info.end()) && (*it).second.as<IntImm>()) k_w = (*it).second.as<IntImm>()->value;
-    it = attr_info.find(ATTR_CONV_STRIDE_H);
-    if ((it != attr_info.end()) && (*it).second.as<IntImm>()) s_h = (*it).second.as<IntImm>()->value;
-    it = attr_info.find(ATTR_CONV_STRIDE_W);
-    if ((it != attr_info.end()) && (*it).second.as<IntImm>()) s_w = (*it).second.as<IntImm>()->value;
-    it = attr_info.find(ATTR_CONV_TILE_H);
-    if ((it != attr_info.end()) && (*it).second.as<IntImm>()) t_h = (*it).second.as<IntImm>()->value;
-    it = attr_info.find(ATTR_CONV_TILE_W);
-    if ((it != attr_info.end()) && (*it).second.as<IntImm>()) t_w = (*it).second.as<IntImm>()->value;
-    it = attr_info.find(ATTR_CONV_FEATURE_C);
-    if ((it != attr_info.end()) && (*it).second.as<IntImm>()) c_in = (*it).second.as<IntImm>()->value;
+    auto UpdateAttrConv = [attr_info](const std::string &attr_name, int64_t &update_vale) -> void {
+      auto it = attr_info.find(attr_name);
+      if ((it != attr_info.end()) && (*it).second.as<IntImm>()) {
+        update_vale = (*it).second.as<IntImm>()->value;
+      }
+    };
+
+    UpdateAttrConv(ATTR_CONV_KERNEL_H, k_h);
+    UpdateAttrConv(ATTR_CONV_KERNEL_W, k_w);
+    UpdateAttrConv(ATTR_CONV_STRIDE_H, s_h);
+    UpdateAttrConv(ATTR_CONV_STRIDE_W, s_w);
+    UpdateAttrConv(ATTR_CONV_TILE_H, t_h);
+    UpdateAttrConv(ATTR_CONV_TILE_W, t_w);
+    UpdateAttrConv(ATTR_CONV_FEATURE_C, c_in);
 
     t_ho = (t_h - k_h) / s_h + 1;
     t_wo = (t_w - k_w) / s_w + 1;
@@ -367,11 +362,10 @@ void MemoryManager::HoistIm2colBufferFootprintCluster(const isl::union_map &sche
     auto dynamic_shape = scop_info_.user_config_.GetDynamicShape();
     if (!dynamic_shape.empty()) {
       for (const auto &ds : dynamic_shape) {
-        if (auto dsn = ds.as<air::DynamicShapeNode>()) {
-          if (dsn->tensor_name == "CI1") {
-            t_ci = (int64_t)(dsn->poly_upper_bound - 1);
-            replace_ci = true;
-          }
+        constexpr auto CI1 = "CI1";
+        if (ds.as<air::DynamicShapeNode>() && ds.as<air::DynamicShapeNode>()->tensor_name == CI1) {
+          t_ci = (int64_t)(ds.as<air::DynamicShapeNode>()->poly_upper_bound - 1);
+          replace_ci = true;
         }
       }
     }
@@ -705,6 +699,7 @@ void MemoryManager::GatherFractalDefInfo(const isl::schedule_node &tree, BufferD
   isl::id tensor_id = tensor_info.tensor_id;
   isl::id cluster_id = tensor_info.dst_tensor_id;
 
+  // build a Halide Node for cluster_id
   Array<Expr> shapes;
   for (auto i : sizes) {
     shapes.push_back(Expr(static_cast<int>(i)));

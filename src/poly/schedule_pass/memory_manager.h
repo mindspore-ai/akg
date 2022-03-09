@@ -34,8 +34,7 @@ class MemoryManager : public SchedulePass {
  private:
   isl::schedule HoistBufferFootprintAtMarkNode(const isl::schedule_node &root, const std::string &markTag,
                                                size_t index);
-  isl::schedule_node HoistBufferFootprintAtMarkNode(const isl::schedule_node &tree, size_t index);
-  isl::schedule_node HoistTensorClusterFootprint(isl::schedule_node tree, size_t index, const isl::union_map &schedule);
+  isl::schedule_node HoistBufferFootprintAtMarkNode(const isl::schedule_node &tree, size_t buffered_fp_idx);
   std::vector<std::pair<isl::union_set, BufferedFootPrintInfo>> CollectBufferedFootprints(
     const isl::union_set &active_points, const isl::id &tensor_id) const;
   std::vector<size_t> CollectBufferedFootprintsIndexes(const isl::union_set &active_points,
@@ -62,6 +61,14 @@ class MemoryManager : public SchedulePass {
 
   void AddGemmTransposeFpCluster(const isl::union_map &schedule);
 
+  isl::schedule_node HoistBufferToLocalC1(const isl::schedule_node &orig_node, BufferDefInfo &tensor_info,
+                                          const isl::union_set &active_domains, const isl::union_map &schedule);
+  void HoistIm2col(const isl::schedule_node &orig_node, BufferDefInfo &tensor_info,
+                   const isl::union_set &active_domains, const isl::union_map &schedule);
+  isl::schedule_node HoistGemmDataAndWeightTranspose(const isl::schedule_node &orig_node, BufferDefInfo &tensor_info,
+                                                     const isl::union_set &active_domains,
+                                                     const isl::union_map &schedule);
+
  private:
   // PassInfo &pass_info_;
   ScopInfo &scop_info_;
@@ -69,7 +76,7 @@ class MemoryManager : public SchedulePass {
 
   std::shared_ptr<TensorFootprintCluster> gemm_a_transpose_fp_cluster_;
   std::shared_ptr<TensorFootprintCluster> gemm_b_transpose_fp_cluster_;
-  std::shared_ptr<TensorFootprintCluster> im2col_fp_cluster;
+  std::shared_ptr<TensorFootprintCluster> current_fp_cluster_;
 
   isl::schedule schedule_;
 };
