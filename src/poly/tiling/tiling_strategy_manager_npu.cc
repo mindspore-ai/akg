@@ -41,8 +41,8 @@ void CustomTilingStrategy::AddNpuConstraint() {
       CHECK_GE(constraints.size(), 1U);
       std::vector<std::string> level = akg::common::Split(constraints[0], ":");
       CHECK(level.size() == 2U && level[0] == "LEVEL");
-      CHECK(level[1] == "C1" || level[1] == "C0");
-      TileLevel lv = level[1] == "C1" ? CACHE1 : CACHE0;
+      CHECK(level[1] == kDsaC1 || level[1] == kDsaC0);
+      TileLevel lv = level[1] == kDsaC1 ? CACHE1 : CACHE0;
       constraints.erase(constraints.begin());
       for (const auto &con : constraints) {
         std::vector<std::string> items = akg::common::Split(con, ":");
@@ -314,21 +314,21 @@ void ConvStrategy::AddNpuConstraint() {
     TileAxis *axis = it.first;
     for (const auto &attr : it.second) {
       axis->axis_type_ = attr.attr_value;
-      if (attr.attr_value == "N" || attr.attr_value == "C1_in_out") {
+      if (attr.attr_value == kDsaN || attr.attr_value == kDsaC1InOut) {
         axis->TileRestrainToSingleValue(CastIntToExpr(MIN_TILE), CACHE1);
         axis->TileRestrainToSingleValue(CastIntToExpr(MIN_TILE), CACHE0);
-      } else if (attr.attr_value == "H") {
+      } else if (attr.attr_value == kDsaH) {
         RestrainH(axis);
-      } else if (attr.attr_value == "W") {
+      } else if (attr.attr_value == kDsaW) {
         if (analyzer_->scop_info_.mmu_info_.IsConvBackpropFilter()) {
           axis->TileRestrainEntire(CACHE1);
         } else {
           RestrainW(axis);
         }
-      } else if (attr.attr_value.find("C0") != std::string::npos || attr.attr_value == "kh" ||
-                 attr.attr_value == "kw") {
+      } else if (attr.attr_value.find(kDsaC0) != std::string::npos || attr.attr_value == kDsakh ||
+                 attr.attr_value == kDsakw) {
         axis->TileRestrainEntire(CACHE1);
-      } else if (attr.attr_value == "C1_in" && analyzer_->scop_info_.user_config_.GetIsDynamic()) {
+      } else if (attr.attr_value == kDsaC1In && analyzer_->scop_info_.user_config_.GetIsDynamic()) {
         // dynamic case
         axis->TileRestrainEntire(CACHE1);
       }
@@ -392,15 +392,15 @@ void GemmStrategy::AddNpuConstraint() {
     TileAxis *axis = it.first;
     for (const auto &attr : it.second) {
       axis->axis_type_ = attr.attr_value;
-      if (attr.attr_value == "mi" || attr.attr_value == "ni" || attr.attr_value == "ki") {
+      if (attr.attr_value == kDsami || attr.attr_value == kDsani || attr.attr_value == kDsaki) {
         axis->TileRestrainMod(CastIntToExpr(MMA_UNIT), CACHE1);
         axis->TileRestrainMod(CastIntToExpr(MMA_UNIT), CACHE0);
         axis->TileRestrainToSingleValue(CastIntToExpr(MMA_UNIT), CACHE1);
         axis->TileRestrainToSingleValue(CastIntToExpr(MMA_UNIT), CACHE0);
-      } else if (attr.attr_value == "bo" || attr.attr_value == "bi") {
+      } else if (attr.attr_value == kDsabo || attr.attr_value == kDsabi) {
         axis->TileRestrainToSingleValue(CastIntToExpr(MIN_TILE), CACHE1);
         axis->TileRestrainToSingleValue(CastIntToExpr(MIN_TILE), CACHE0);
-      } else if (attr.attr_value == "mo" || attr.attr_value == "no") {
+      } else if (attr.attr_value == kDsamo || attr.attr_value == kDsano) {
         axis->forbid_iso = true;
       }
     }
