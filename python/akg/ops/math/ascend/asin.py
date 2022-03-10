@@ -40,7 +40,7 @@ TAYLOR_COUNT = 7
 
 def _newton_iter(data, init_x):
     """Do element-wise Newton compute."""
-    # Newton begin:x(n+1) = x(n)*(3-a*x(n)^2)/2
+    """Newton begin:x(n+1) = x(n)*(3-a*x(n)^2)/2"""
     init_square = topi.multiply(init_x, init_x)
     newton_res = topi.multiply(init_square, data)
     newton_res = topi.multiply(newton_res, neg_one_const("float32"))
@@ -70,7 +70,7 @@ def _taylor_compute(data_x, x_square=None):
     else:
         x_square = x_square
 
-    # asin(x) = x + 1/6*x^3 + 3/40*x^5 + 5/112*x^7 + ... + 13!!/(14!!*15)*x^15
+    """asin(x) = x + 1/6*x^3 + 3/40*x^5 + 5/112*x^7 + ... + 13!!/(14!!*15)*x^15"""
     res = topi.multiply(x_square, tvm.const(COEF[TAYLOR_COUNT], "float32"))
     for temp in reversed(range(TAYLOR_COUNT)):
         res = topi.add(res, tvm.const(COEF[temp], "float32"))

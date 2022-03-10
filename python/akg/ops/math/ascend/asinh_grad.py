@@ -54,7 +54,6 @@ def AsinhGrad(y, dy, target=utils.CCE):
         y = topi.cast(y, "float32")
         dy = topi.cast(dy, "float32")
 
-    # dx = dy/cosh(y)
     dx = topi.divide(dy, cosh(y))
 
     if dx.dtype != dtype:

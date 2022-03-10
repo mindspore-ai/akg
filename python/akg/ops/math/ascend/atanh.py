@@ -40,7 +40,7 @@ def _compute_taylor(data_input):
     return topi.multiply(data_input, result)
 
 def _compute_log(data_input, target=utils.CCE):
-    """Atanh(x) = 0.5*log((1+x)/(1-x))"""
+    """Atanh(x) value is 0.5*log((1+x)/(1-x))"""
 
     data_1_sum_x = topi.add(data_input, dc.one_const(data_input.dtype))
     data_sub_x = topi.multiply(data_input, dc.neg_one_const(data_input.dtype))
@@ -69,7 +69,7 @@ def _compute_mini(data_input, shape):
                                                            result_ln(*i)),
                            name="le")
 
-    # arctanh(-abs(x)) = -arctanh(abs(x))
+    """arctanh has the feature: arctanh(-abs(x)) = -arctanh(abs(x))"""
     data_res_neg = topi.multiply(data_res, dc.neg_one_const("float16"))
     data_res = tvm.compute(shape,
                            lambda *i : akg.tvm.expr.Select(data_input(*i) < dc.zero_const("float16"),

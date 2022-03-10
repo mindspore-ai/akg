@@ -21,6 +21,20 @@ from akg.utils.format_transform import get_shape
 from functools import reduce
 from akg.utils import dynamic_shape as ds
 
+def get_out_shape(in_shape, out_shape):
+    access_size = 1
+    for i, o_shape in enumerate(out_shape):
+        if -1 != o_shape:
+            access_size *= o_shape
+        else:
+            hit_idx = i
+    ori_size = reduce(lambda x, y: x * y, in_shape)
+    if ori_size % access_size != 0:
+        raise ValueError(("Invalid out_shape ({})".format(out_shape)))
+
+    out_shape[hit_idx] = int(ori_size / access_size)
+    return out_shape
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, (list, tuple), (str, type(None)))
 def Reshape(data, out_shape, target=utils.CUDA):
     """
@@ -46,17 +60,7 @@ def Reshape(data, out_shape, target=utils.CUDA):
     out_shape = list(out_shape)
 
     if -1 in out_shape:
-        access_size = 1
-        for i, o_shape in enumerate(out_shape):
-            if -1 != o_shape:
-                access_size *= o_shape
-            else:
-                hit_idx = i
-        ori_size = reduce(lambda x, y: x * y, in_shape)
-        if ori_size % access_size != 0:
-            raise ValueError(("Invalid out_shape ({})".format(out_shape)))
-
-        out_shape[hit_idx] = int(ori_size / access_size)
+        out_shape = get_out_shape(in_shape, out_shape)
 
     res = akg.topi.reshape(data, out_shape)
     return res
@@ -87,17 +91,7 @@ def _reshape_ascend(data, out_shape):
     is_dynamic = ds.shape_is_dynamic(data)
 
     if -1 in out_shape:
-        access_size = 1
-        for i, o_shape in enumerate(out_shape):
-            if -1 != o_shape:
-                access_size *= o_shape
-            else:
-                hit_idx = i
-        ori_size = reduce(lambda x, y: x * y, in_shape)
-        if ori_size % access_size != 0:
-            raise ValueError(("Invalid out_shape ({})".format(out_shape)))
-
-        out_shape[hit_idx] = int(ori_size / access_size)
+        out_shape = get_out_shape(in_shape, out_shape)
     else:
         if not is_dynamic:
             if reduce(lambda x, y: x * y, in_shape) != reduce(lambda x, y: x * y, out_shape):

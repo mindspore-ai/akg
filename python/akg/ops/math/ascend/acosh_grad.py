@@ -26,7 +26,7 @@ def _sinh_taylor(x):
     sinh_2x_times = 3
     dtype = x.dtype
     def _sinh_taylor_compute(x):
-        # sinh(x) = x * (1 + x^2( 1/3! + x^2(1/5! + x^2/7!)))
+        """sinh(x) value is x * (1 + x^2( 1/3! + x^2(1/5! + x^2/7!)))"""
         taylor_params = [tvm.const(0.1666666666666666666666666666666666, dtype),
                          tvm.const(0.0083333333333333333333333333333333, dtype),
                          tvm.const(0.0001984126984126984126984126984126, dtype)]
@@ -38,7 +38,7 @@ def _sinh_taylor(x):
         return sinh_taylor
 
     def _sinh_2x(sinh_x):
-        # sinh(2x) = 2*sinh(x)*sqrt(sinh(x)^2+1)
+        """sinh(2x) = 2*sinh(x)*sqrt(sinh(x)^2+1)"""
         sinh_x_square = topi.multiply(sinh_x, sinh_x)
         sinh_x_square_add_one = topi.add(sinh_x_square, 1)
         sqrt_value = topi.sqrt(sinh_x_square_add_one)

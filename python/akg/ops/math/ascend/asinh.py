@@ -29,7 +29,7 @@ def sqrt_mini_newton_iter_impl(x):
     x_rsqrt = topi.rsqrt(x)
     x_sqrt = topi.divide(1, x_rsqrt)
 
-    # newton_iter: x(n+1) = 1/2 *(x(n) + a/x(n))
+    """newton_iter: x(n+1) = 1/2 *(x(n) + a/x(n))"""
     steps = 3
     half = tvm.const(0.5, x.dtype)
     shape = x.shape
@@ -42,6 +42,7 @@ def sqrt_mini_newton_iter_impl(x):
 def log_compute_mini_impl(x, target=utils.CCE):
     """log compute on mini for x >= 1"""
 
+    """
     # compute method:
     # As vlog instruction has some precision problems when x in interval [1,2), the taylor method be used to
     # calculate log value of x.
@@ -55,6 +56,7 @@ def log_compute_mini_impl(x, target=utils.CCE):
     # As vlog instruction has overflow problems when x greater or equal to 32768, calculate log value of x
     # by the following formulas:
     # [32768, ) -> log(x/2.5) + log(2.5).
+    """
     thresholds = [4/3, 5/3, 2, 32768]
     thresholds_rec = [3/4, 3/5]
     log_thresholds = [0.28768207245178085, 0.5108256237659907]
@@ -62,7 +64,7 @@ def log_compute_mini_impl(x, target=utils.CCE):
     log_overflow_div_coffient = 0.916290731874155
 
     def _log_taylor(data):
-        """algrithm: log(1+x) = ((((0.2x - 0.25)x + 0.33333)x - 0.5)x + 1)x"""
+        """log algrithm is log(1+x) = ((((0.2x - 0.25)x + 0.33333)x - 0.5)x + 1)x"""
         data = topi.subtract(data, 1)
         taylor_params = [0.2, -0.25, 1/3, -0.5, 1]
         taylor_five = topi.multiply(data, taylor_params[0])
@@ -143,10 +145,12 @@ def Asinh(x, target=utils.CCE):
     utils.ops_dtype_check(x.dtype, utils.DtypeForDavinci.ALL_FLOAT)
     dtype = x.dtype
 
-    # asinh(x) = log(x + sqrt(x*x+1))
-    # If x is a large negative number, (x + sqrt(x*x+1)) will be close to zero.
-    # asinh(-x) = -asinh(x)
-    # So, asinh(x) = sign(x) * log(|x| + sqrt(|x|*|x| + 1))
+    """
+    asinh(x) = log(x + sqrt(x*x+1))
+    If x is a large negative number, (x + sqrt(x*x+1)) will be close to zero.
+    asinh(-x) = -asinh(x)
+    So, asinh(x) = sign(x) * log(|x| + sqrt(|x|*|x| + 1))
+    """
     compute_dtype = dtype
     if dtype == "float16":
         # To avoid overflow and higher accuracy, x is casted to float32
@@ -156,7 +160,7 @@ def Asinh(x, target=utils.CCE):
     x_abs = topi.abs(x)
 
     if product_is_mini():
-        # sqrt(|x|*|x| + 1) = |x| * sqrt(1 + 1/(|x|*|x|))
+        """sqrt(|x|*|x| + 1) = |x| * sqrt(1 + 1/(|x|*|x|))"""
         vsquare_add_one = topi.add(1, topi.divide(1, topi.multiply(x_abs, x_abs)))
         sqrt_compute_value = sqrt_mini_newton_iter_impl(vsquare_add_one)
         sqrt_value = topi.multiply(x_abs, sqrt_compute_value)

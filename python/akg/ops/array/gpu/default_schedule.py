@@ -19,6 +19,17 @@ import akg.tvm as tvm
 
 DEFAULT_GPU_THREAD = 1024
 
+def get_op_list(outs_list):
+    outputs_tensor = Queue()
+    outputs_tensor.put(outs_list[0])
+    op_list = []
+    while not outputs_tensor.empty():
+        out = outputs_tensor.get()
+        if out.op not in op_list and isinstance(out.op, tvm.tensor.ComputeOp):
+            op_list.append(out.op)
+            for input_tensor in out.op.input_tensors:
+                outputs_tensor.put(input_tensor)
+    return op_list
 
 def default_schedule(outs):
     """
@@ -39,15 +50,7 @@ def default_schedule(outs):
     outs_list = [outs] if isinstance(outs, tvm.tensor.Tensor) else outs
     with tvm.target.create(device):
         sch = tvm.create_schedule(outs_list[0].op)
-        outputs_tensor = Queue()
-        outputs_tensor.put(outs_list[0])
-        op_list = []
-        while not outputs_tensor.empty():
-            out = outputs_tensor.get()
-            if out.op not in op_list and isinstance(out.op, tvm.tensor.ComputeOp):
-                op_list.append(out.op)
-                for input_tensor in out.op.input_tensors:
-                    outputs_tensor.put(input_tensor)
+        op_list = get_op_list(outs_list)
         for op in op_list:
             stage = sch[op.output(0)]
             bx, tx = stage.split(op.axis[0], factor=DEFAULT_GPU_THREAD)
