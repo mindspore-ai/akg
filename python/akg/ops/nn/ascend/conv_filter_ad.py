@@ -18,7 +18,7 @@
 import akg
 import akg.tvm
 import akg.utils as utils
-from akg.ops.nn.ascend.conv_backprop_filter import ConvBackpropFilter
+from akg.ops.nn.ascend.conv_backprop_filter import conv_backprop_filter
 from akg.ops.nn.ascend.conv import Conv
 from akg.utils.format_transform import tvm_array_to_list
 
@@ -37,13 +37,13 @@ def conv_filter_ad_tensor(data, fmap_shape, filter_shape, pad_, stride_, dilatio
     pad_ = expr_to_int(pad_)
     stride_ = expr_to_int(stride_)
     dilation_ = expr_to_int(dilation_)
-    c, _ = ConvBackpropFilter(data_list, fmap_shape, filter_shape, pad_, stride_, dilation_, attrs=attrs)
+    c, _ = conv_backprop_filter(data_list, fmap_shape, filter_shape, pad_, stride_, dilation_, attrs=attrs)
     return c
 
 
 def conv_filter_ad_config(data, fmap_shape, filter_shape, pad_, stride_, dilation_, attrs=None):
     """Configuration of convolution filter gradient."""
-    _, configs = ConvBackpropFilter(data, fmap_shape, filter_shape, pad_, stride_, dilation_, attrs=attrs)
+    _, configs = conv_backprop_filter(data, fmap_shape, filter_shape, pad_, stride_, dilation_, attrs=attrs)
     return configs
 
 @utils.check_input_type((list, tuple), (list, tuple), (list, tuple),

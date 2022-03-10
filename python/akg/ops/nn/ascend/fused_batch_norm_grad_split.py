@@ -21,6 +21,7 @@ from akg.utils.dsl_create import mul_axis_sum
 from akg.utils.format_transform import get_shape
 from akg.utils.kernel_exec import product_is_mini
 from akg.utils import custom_tiling as ct_util
+from akg.utils.validation_check import is_all_1_but_axis_equal
 
 
 NUM_CORE = 32
@@ -93,9 +94,6 @@ def bng3_tiling_strategy(tensor):
 def check_inputs(op_id, *args):
     """check inputs"""
     def check_shape(tensor_format, tensor, shape_nc1hwc0, name):
-        def is_all_1_but_axis_equal(shape1, shape2, axis):
-            return len(shape1) == len(shape2) and \
-                all([shape1[i] == shape2[i] if i in axis else shape1[i] == 1 for i in range(len(shape2))])
         shape = get_shape(tensor)
         if tensor_format == "C1C0":
             if not is_all_1_but_axis_equal(shape, shape_nc1hwc0, (1, 4)):

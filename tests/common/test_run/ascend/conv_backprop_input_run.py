@@ -16,7 +16,7 @@ import os
 import numpy as np
 from akg.utils import kernel_exec as utils
 from akg.utils import validation_check as vc_util
-from akg.ops.nn.ascend import ConvBackpropInput
+from akg.ops.nn.ascend import conv_backprop_input
 from tests.common.gen_random import random_gaussian
 from tests.common.tensorio import compare_tensor
 from akg.utils.kernel_exec import gen_kernel_name
@@ -67,7 +67,7 @@ def conv_backprop_input_run(fmap_shape, filter_shape, pad_, stride_, dilation_, 
     if flag_w == "Yes":
         return input, out_data, expect, True
 
-    mod = utils.op_build_test(ConvBackpropInput, [input_shape], [conv_dtype],
+    mod = utils.op_build_test(conv_backprop_input, [input_shape], [conv_dtype],
                               op_attrs=[fmap_shape, filter_shape, pad_, stride_, dilation_, attrs],
                               kernel_name='conv_backprop_input', attrs=attrs)
 

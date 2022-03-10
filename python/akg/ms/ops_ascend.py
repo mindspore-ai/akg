@@ -282,7 +282,7 @@ def Conv2DBackpropInput(out_backprop, input_sizes, filter, filter_shape, pad_lis
     stride_ = [stride, stride]
     dilation_ = [dilation, dilation]
 
-    return nn.ConvBackpropInput(data, fmap_shape, filter_shape, pad_, stride_, dilation_, target=target)
+    return nn.conv_backprop_input(data, fmap_shape, filter_shape, pad_, stride_, dilation_, target=target)
 
 def Conv2DBackpropFilter(out_backprop, input, input_shape, filter_sizes, pad_list, stride=1, dilation=1, target=utils.CCE):
     """back propagation of 2d convolution on filter"""
@@ -297,4 +297,4 @@ def Conv2DBackpropFilter(out_backprop, input, input_shape, filter_sizes, pad_lis
     stride_ = [stride, stride]
     dilation_ = [dilation, dilation]
 
-    return nn.ConvBackpropFilter(data, fmap_shape, filter_shape, pad_, stride_, dilation_, target=target)
+    return nn.conv_backprop_filter(data, fmap_shape, filter_shape, pad_, stride_, dilation_, target=target)

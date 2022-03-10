@@ -15,7 +15,7 @@
 import os
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.nn.ascend import ConvBackpropFilter
+from akg.ops.nn.ascend import conv_backprop_filter
 from tests.common.gen_random import random_gaussian
 from tests.common.tensorio import compare_tensor
 from akg.utils.kernel_exec import gen_kernel_name
@@ -143,7 +143,7 @@ def conv_backprop_filter_run(fmap_shape, filter_shape, pad_, stride_, dilation_,
     if flag_w == "Yes":
         return input, out_data, expect, True
 
-    mod = utils.op_build_test(ConvBackpropFilter, [input_shape], [conv_dtype],
+    mod = utils.op_build_test(conv_backprop_filter, [input_shape], [conv_dtype],
                               op_attrs=[fmap_shape, filter_shape, pad_, stride_, dilation_],
                               kernel_name='conv_backprop_filter', attrs=attrs)
     args = (dy_data, dx_data, out_data)

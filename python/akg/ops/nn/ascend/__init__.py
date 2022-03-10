@@ -19,8 +19,8 @@ from .bias_add import BiasAdd
 from .bias_add_ad import BiasAddAd
 from .bias_add_ad_v2 import BiasAddAdV2
 from .conv import Conv
-from .conv_backprop_filter import ConvBackpropFilter
-from .conv_backprop_input import ConvBackpropInput
+from .conv_backprop_filter import conv_backprop_filter
+from .conv_backprop_input import conv_backprop_input
 from .conv_bn1 import ConvBn1
 from .conv_filter_ad import ConvFilterAd
 from .conv_input_ad import ConvInputAd

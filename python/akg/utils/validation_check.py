@@ -121,7 +121,7 @@ def check_input_type_list_tuple(inputs, expect):
                                    expect[0], expect[1][1], type(inp)))
 
 
-def check_input_type(*type_args, **_type_kwargs):
+def check_input_type(*type_args):
     """check input parameter type."""
 
     def out_wrapper(func):
@@ -639,3 +639,103 @@ def check_int_list(array, array_name):
     for num in array:
         if not isinstance(num, int):
             raise RuntimeError("Type of value in %s should be int, but got type %s" % (array_name, type(num)))
+
+
+def comp_conv_backprop_out_shape(fmap_shape, filter_shape, pad_, stride_, dilation_):
+    """Computes output shape of  "conv backprop"."""
+    convolution_format_check(fmap_shape, filter_shape, pad_, stride_, dilation_)
+
+    block_size = 16
+    in_n, in_c, in_h, in_w = fmap_shape
+    cout, _, w_h, w_w = filter_shape
+
+    in_c = (in_c + block_size - 1) // block_size * block_size
+    cout = (cout + block_size - 1) // block_size * block_size
+
+    pad_top, pad_bottom, pad_left, pad_right = pad_
+    stride_h, stride_w = stride_
+
+    dilation_h, dilation_w = dilation_
+    if dilation_h != 1 or dilation_w != 1:
+        raise ValueError("The value of elements in dilation_ must be 1.")
+
+    out_n = in_n
+    out_c = cout
+    out_h = (in_h + pad_top + pad_bottom - w_h) // stride_h + 1
+    out_w = (in_w + pad_left + pad_right - w_w) // stride_w + 1
+
+    dy_shape = (out_n, out_c, out_h, out_w)
+    dx_shape = (in_n, in_c, in_h, in_w)
+    dw_shape = (cout, in_c, w_h, w_w)
+    return dy_shape, dx_shape, dw_shape
+
+def comp_output_params(is_special5d, shape, in_rank, axis):
+    if is_special5d:
+        axes = [3, 2, 0]
+        mid_shape = [1, shape[1], 1, 1, shape[4]]
+    else:
+        axes = [i for i in range(in_rank - 1, -1, -1) if i != axis]
+        mid_shape = [1] * in_rank
+        mid_shape[axis] = shape[axis]
+
+    out_params = {
+        "is_special5d": is_special5d,
+        "axis": axis,
+        "axes": tuple(axes),
+        "mid_shape": mid_shape
+    }
+    return out_params
+
+def check_inputs_in_rank(data, axis, in_rank, data_format):
+    """check in_rank of  inputs availability for fused_batch_norm and get axis"""
+    if in_rank <= 1:
+        raise AssertionError("Do not support 1D data.")
+    if data_format == "DefaultFormat":
+        if not isinstance(axis, int):
+            raise RuntimeError("axis should be instance of int but {}"
+                               "".format(axis))
+        if axis not in range(-in_rank, in_rank):
+            raise AssertionError("axis must be in range [%d, %d)"
+                                 "" % (-in_rank, in_rank))
+        if axis < 0:
+            axis = in_rank + axis
+    elif data_format == "NHWC":
+        if in_rank != 4:
+            raise AssertionError("Data shape {} mismatch data_format \"NHWC\"."
+                                 "".format(data.shape))
+        axis = 3
+    elif data_format == "NCHW":
+        if in_rank != 4:
+            raise AssertionError("Data shape {} mismatch data_format \"NCHW\"."
+                                 "".format(data.shape))
+        axis = 1
+    else:
+        axis = 1
+    return axis
+
+def is_all_1_but_axis_equal(shape1, shape2, axis):
+    if not isinstance(axis, (list, tuple)):
+        axis = (axis,)
+
+    for i, _ in enumerate(shape2):
+        if i not in axis:
+            if isinstance(shape1[i], akg.tvm.expr.Var) or int(shape1[i]) != 1:
+                return False
+        else:
+            if isinstance(shape1[i], akg.tvm.expr.Var):
+                if shape1[i] != shape2[i]:
+                    return False
+            else:
+                if int(shape1[i]) != int(shape2[i]):
+                    return False
+    return True
+
+def check_input_shape_equal_5(data, shape, *input_agrs):
+    if len(data.shape) != 5:
+        raise AssertionError("data shape {} mismatch data_format "
+                                "\"NC1HWC0\".".format(data.shape))
+    for i, element in enumerate(input_agrs):
+        if len(element.shape) != 5 \
+                or not is_all_1_but_axis_equal(element.shape, shape, (1, 4)):
+            raise AssertionError("the {} parameter mismatch NC1HWC0 data (while shape "
+                                    "is {}, input shape is {})!!!".format(i, element.shape, data.shape))
