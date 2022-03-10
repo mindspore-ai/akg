@@ -63,65 +63,15 @@ inline bool IsXDigit(char c) { return std::isdigit(c) || (c >= 'a' && c <= 'f');
 inline bool IsIdBody(char c) { return IsIdStart(c) || std::isdigit(c) || c == '.'; }
 
 Token ParseDoubleChar(char c0, char c1) {
-  switch (c0) {
-    case '=':
-      switch (c1) {
-        case '=':
-          return Token::kEQEQUAL;
-        default:
-          break;
-      }
-      break;
-    case '!':
-      switch (c1) {
-        case '=':
-          return Token::kNOTEQUAL;
-        default:
-          break;
-      }
-      break;
-    case '&':
-      switch (c1) {
-        case '&':
-          return Token::kAND;
-        default:
-          break;
-      }
-      break;
-    case '|':
-      switch (c1) {
-        case '|':
-          return Token::kOR;
-        default:
-          break;
-      }
-      break;
-    case '<':
-      switch (c1) {
-        case '=':
-          return Token::kLESSEQUAL;
-        default:
-          break;
-      }
-      break;
-    case '>':
-      switch (c1) {
-        case '=':
-          return Token::kGREATEREQUAL;
-        default:
-          break;
-      }
-      break;
-    case '/':
-      switch (c1) {
-        case '/':
-          return Token::kDOUBLESLASH;
-        default:
-          break;
-      }
-      break;
-    default:
-      break;
+  std::string s;
+  s.push_back(c0);
+  s.push_back(c1);
+  std::map<std::string, Token> token_map = {
+    {"==", Token::kEQEQUAL},   {"!=", Token::kNOTEQUAL},     {"&&", Token::kAND},        {"||", Token::kOR},
+    {"<=", Token::kLESSEQUAL}, {">=", Token::kGREATEREQUAL}, {"//", Token::kDOUBLESLASH}};
+  auto token_iter = token_map.find(s);
+  if (token_iter != token_map.end()) {
+    return token_iter->second;
   }
   return Token::kOPSET;
 }

@@ -55,18 +55,16 @@ class MakeFuseStmt : public IRMutator {
         Stmt stmt = new_provide;
         for (auto it = l0write_for_.rbegin(); it < l0write_for_.rend(); ++it) {
           const For *fs = *it;
-          if (auto bias = p->value.as<Call>()) {
-            if (bias_ == bias->name) {
-              if (!(fs->loop_var.get() == c_ub_l0idx_[C1].get() || fs->loop_var.get() == c_ub_l0idx_[C0].get())) {
-                continue;
-              }
-            }
+          auto bias = p->value.as<Call>();
+          if (bias && bias_ == bias->name &&
+              !(fs->loop_var.get() == c_ub_l0idx_[C1].get() || fs->loop_var.get() == c_ub_l0idx_[C0].get())) {
+            continue;
           }
-          if (is_reduce_ && !is_reduce_body_) {
-            if (!std::any_of(reduce_args_.begin(), reduce_args_.end(),
-                             [=](const Expr &e) { return e.same_as(fs->loop_var); })) {
-              continue;
-            }
+
+          if (is_reduce_ && !is_reduce_body_ &&
+              !std::any_of(reduce_args_.begin(), reduce_args_.end(),
+                           [=](const Expr &e) { return e.same_as(fs->loop_var); })) {
+            continue;
           }
           stmt = For::make(fs->loop_var, fs->min, fs->extent, fs->for_type, fs->device_api, stmt);
         }
@@ -122,53 +120,61 @@ class MakeFuseStmt : public IRMutator {
     return IfThenElse::make(op->condition, stmt, op->else_case);
   }
 
+  void ReducePreProcess(const Provide *op) {
+    // for now, when have reduce tensor, will fix provide to reduce axis.
+    find_reduce_tensor_ = false;
+    static_cast<void>(this->Mutate(op->value));
+    if (find_reduce_tensor_) {
+      is_reduce_ = true;
+      reduce_tensor_set_.insert(op);
+      if (IsInBinds(op->func->func_name(), binds_)) {
+        is_reduce_out_ = true;
+      }
+    } else {
+      is_reduce_ = false;
+    }
+    find_reduce_tensor_ = false;
+
+    if (op->func->func_name().find("red_local") != std::string::npos) {
+      if (isImm(op->value)) {
+        is_reduce_init_ = true;
+      } else {
+        is_reduce_body_ = true;
+      }
+      is_reduce_ = true;
+      reduce_args_ = op->args;
+      reduce_tensor_set_.insert(op);
+    } else {
+      if (is_reduce_) {
+        is_op_after_reduce_ = true;
+      }
+    }
+  }
+
+  Array<Expr> ComputeOffset(const Provide *op) {
+    Array<Expr> offset;
+    auto bias = op->value.as<Call>();
+    if (IsInBinds(op->func->func_name(), binds_) || (bias && bias_ == bias->name)) {
+      /// compute offset
+      Array<Expr> left_args = op->args;
+      Array<Expr> right_args;
+      if (auto right = op->value.as<Call>()) {
+        if (right->call_type == Call::Halide) {
+          right_args = right->args;
+        }
+      }
+      CHECK(right_args.size() == left_args.size()) << "Wrong args: left " << left_args << " right " << right_args;
+      for (unsigned int i = 0; i < left_args.size(); ++i) {
+        offset.push_back(Simplify_cce(left_args[i] - right_args[i]));
+      }
+    }
+    return offset;
+  }
+
   Stmt Mutate_(const Provide *op, const Stmt &s) final {
+    ReducePreProcess(op);
     if (!is_l0write_) {
-      // for now, when have reduce tensor, will fix provide to reduce axis.
-      find_reduce_tensor_ = false;
-      static_cast<void>(this->Mutate(op->value));
-      if (find_reduce_tensor_) {
-        is_reduce_ = true;
-        reduce_tensor_set_.insert(op);
-        if (IsInBinds(op->func->func_name(), binds_)) {
-          is_reduce_out_ = true;
-        }
-      } else {
-        is_reduce_ = false;
-      }
-      find_reduce_tensor_ = false;
-
-      if (op->func->func_name().find("red_local") != std::string::npos) {
-        if (isImm(op->value)) {
-          is_reduce_init_ = true;
-        } else {
-          is_reduce_body_ = true;
-        }
-        is_reduce_ = true;
-        reduce_args_ = op->args;
-        reduce_tensor_set_.insert(op);
-      } else {
-        if (is_reduce_) {
-          is_op_after_reduce_ = true;
-        }
-      }
-      Array<Expr> offset;
-      auto bias = op->value.as<Call>();
-      if (IsInBinds(op->func->func_name(), binds_) || (bias && bias_ == bias->name)) {
-        /// compute offset
-        Array<Expr> left_args = op->args;
-        Array<Expr> right_args;
-        if (auto right = op->value.as<Call>()) {
-          if (right->call_type == Call::Halide) {
-            right_args = right->args;
-          }
-        }
-        CHECK(right_args.size() == left_args.size()) << "Wrong args: left " << left_args << " right " << right_args;
-        for (unsigned int i = 0; i < left_args.size(); ++i) {
-          offset.push_back(Simplify_cce(left_args[i] - right_args[i]));
-        }
-      }
-
+      Array<Expr> offset = ComputeOffset(op);
       CHECK_GE(c_ub_l0idx_.size(), 4);
       Array<Expr> args;
       args.push_back(c_ub_l0idx_[NN]);
@@ -224,30 +230,28 @@ class MakeFuseStmt : public IRMutator {
           Provide::make(stmt.as<Provide>()->func, stmt.as<Provide>()->value_index, stmt.as<Provide>()->value, args_);
       }
       CHECK(stmt.as<Provide>());
-      if (auto bias2 = stmt.as<Provide>()->value.as<Call>()) {
-        if (bias_ == bias2->name) {
-          Array<Expr> args_;
-          args_.push_back(bias2->args[NN]);
-          args_.push_back(bias2->args[C1] + new_c1_l0out_);
-          args_.push_back(bias2->args[HH]);
-          args_.push_back(bias2->args[WW]);
-          args_.push_back(bias2->args[C0]);
-          auto new_value =
-            Call::make(bias2->type, bias2->name, args_, Call::CallType::Halide, bias2->func, bias2->value_index);
-          stmt = Provide::make(stmt.as<Provide>()->func, stmt.as<Provide>()->value_index, new_value,
-                               stmt.as<Provide>()->args);
-        }
+      auto bias2 = stmt.as<Provide>()->value.as<Call>();
+      if (bias2 && bias_ == bias2->name) {
+        Array<Expr> args_;
+        args_.push_back(bias2->args[NN]);
+        args_.push_back(bias2->args[C1] + new_c1_l0out_);
+        args_.push_back(bias2->args[HH]);
+        args_.push_back(bias2->args[WW]);
+        args_.push_back(bias2->args[C0]);
+        auto new_value =
+          Call::make(bias2->type, bias2->name, args_, Call::CallType::Halide, bias2->func, bias2->value_index);
+        stmt =
+          Provide::make(stmt.as<Provide>()->func, stmt.as<Provide>()->value_index, new_value, stmt.as<Provide>()->args);
       }
-      if (is_reduce_out_) {
-        auto call = op->value.as<Call>();
-        auto provide = stmt.as<Provide>();
-        if ((call != nullptr) && (provide != nullptr)) {
-          auto value = Add::make(Call::make(call->type, provide->func->func_name(), provide->args, call->call_type,
-                                            provide->func, provide->value_index),
-                                 provide->value);
-          stmt = Provide::make(provide->func, provide->value_index, value, provide->args);
-        }
+      auto call = op->value.as<Call>();
+      auto provide = stmt.as<Provide>();
+      if (is_reduce_out_ && (call != nullptr) && (provide != nullptr)) {
+        auto value = Add::make(Call::make(call->type, provide->func->func_name(), provide->args, call->call_type,
+                                          provide->func, provide->value_index),
+                               provide->value);
+        stmt = Provide::make(provide->func, provide->value_index, value, provide->args);
       }
+
       if (is_reduce_body_) {
         stmt = AttrStmt::make(make_zero(Int(32)), "pragma_reduce_provide", Expr(1), stmt);
       }
@@ -410,7 +414,98 @@ class PostFusionAct : public IRMutator {
     }
     return IRMutator::Mutate_(op, s);
   }
+  void HandleFuseVector(const Stmt &s) {
+    auto f = FindOutC1HW(binds_);
+    f.Visit(s);
+    OutHExpr_.emplace_back(f.OutHExpr_);
+    OutWExpr_.emplace_back(f.OutWExpr_);
+    if (f.OutH_ != nullptr) {
+      OutH_.insert(f.OutH_);
+      cutH_ = true;
+    }
+    if (f.OutW_ != nullptr) {
+      cutW_ = true;
+    }
+    if (f.OutC1_ != nullptr) {
+      OutC1_.insert(f.OutC1_);
+    }
+    if (is_conv_backprop_filter_) {
+      while (static_cast<int>(fuse_vector_.size()) <= l1Write_idx_) {
+        RegionExtract extract(output_ + LOCAL_BUF);
+        extract.Visit(s);
 
+        Array<Expr> shape;
+        for (auto range : extract.bounds_) {
+          CHECK(is_zero(range->min));
+          shape.push_back(range->extent);
+        }
+
+        InnerRealize innerRealize;
+        innerRealize.Visit(s);
+        auto t = placeholder(shape, innerRealize.realize_op_->type, innerRealize.realize_op_->func->func_name());
+
+        Stmt stmt = TensorSubstitute(s, innerRealize.realize_op_->func, t->op, t->value_index);
+        fuse_vector_.emplace_back(stmt);
+      }
+    } else {
+      fuse_vector_.emplace_back(s);
+    }
+  }
+
+  void HandleCubeL1Write(const AttrStmt *op, const Stmt &s) {
+    auto f = FindOutC1HW(binds_);
+    f.Visit(s);
+    OutHExpr_.emplace_back(f.OutHExpr_);
+    OutWExpr_.emplace_back(f.OutWExpr_);
+    if (f.OutH_) {
+      OutH_.insert(f.OutH_);
+      cutH_ = true;
+    }
+    if (f.OutW_) {
+      cutW_ = true;
+    }
+    if (f.OutC1_) {
+      OutC1_.insert(f.OutC1_);
+    }
+    old_stmt_l1writes_.emplace_back(op->body);
+  }
+
+  Stmt HandleCubeL0Write(const AttrStmt *op, const Stmt &s, const Stmt &stmt_l0write) {
+    Stmt fused_stmt;
+    if (is_conv_backprop_filter_) {
+      Stmt fusing_stmt_filter =
+        !old_stmt_l1writes_.empty() ? old_stmt_l1writes_[outermost_part_ - 1] : fuse_vector_[l1Write_idx_];
+
+      InnerAxisCollect innerAxis;
+      innerAxis.Visit(s);
+      for (auto kv : innerAxis.loopvar_map_) {
+        loopvar_map_.emplace(std::pair<std::string, const For *>(kv.first, kv.second));
+      }
+      if (!is_dynamic_)
+        fused_stmt = makeFusedStmtBackprop(stmt_l0write, fusing_stmt_filter);
+      else
+        fused_stmt = fusing_stmt_filter;
+      fused_stmt = Block::make(stmt_l0write, fused_stmt);
+
+      for (const auto &kv : innerAxis.loopvar_map_) {
+        loopvar_map_.erase(kv.first);
+      }
+    } else {
+      auto fusing_stmt =
+        !old_stmt_l1writes_.empty() ? old_stmt_l1writes_[outermost_part_ - 1] : fuse_vector_[outermost_part_ - 1];
+      fusing_stmt = RealizeNewFunc().Mutate(fusing_stmt);
+      // each group has four exprs
+      CHECK(count_ * 4 < exprs_.size()) << "count:" << count_ << " , exprs' size:" << exprs_.size();
+      fused_stmt = Block::make(stmt_l0write, fusing_stmt);
+      auto new_c1 = exprs_[count_ * 4];
+      auto new_h = exprs_[count_ * 4 + 1];
+      auto new_w = exprs_[count_ * 4 + 2];
+      fused_stmt = MakeFuseStmt(binds_, bias_, is_conv_backprop_filter_, new_c1, new_h, new_w).Mutate(fused_stmt);
+      fused_stmt = updateNewL1Write(fused_stmt, new_h, new_w);
+      ++count_;
+    }
+    return fused_stmt;
+  }
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
     if (op->attr_key == "pragma_attrs") {
       if (mutate_) {
@@ -419,41 +514,7 @@ class PostFusionAct : public IRMutator {
     }
     if (op->attr_key == "pragma_fuse_vector") {
       if (!mutate_) {
-        auto f = FindOutC1HW(binds_);
-        f.Visit(s);
-        OutHExpr_.emplace_back(f.OutHExpr_);
-        OutWExpr_.emplace_back(f.OutWExpr_);
-        if (f.OutH_ != nullptr) {
-          OutH_.insert(f.OutH_);
-          cutH_ = true;
-        }
-        if (f.OutW_ != nullptr) {
-          cutW_ = true;
-        }
-        if (f.OutC1_ != nullptr) {
-          OutC1_.insert(f.OutC1_);
-        }
-        if (is_conv_backprop_filter_) {
-          while (static_cast<int>(fuse_vector_.size()) <= l1Write_idx_) {
-            RegionExtract extract(output_ + LOCAL_BUF);
-            extract.Visit(s);
-
-            Array<Expr> shape;
-            for (auto range : extract.bounds_) {
-              CHECK(is_zero(range->min));
-              shape.push_back(range->extent);
-            }
-
-            InnerRealize innerRealize;
-            innerRealize.Visit(s);
-            auto t = placeholder(shape, innerRealize.realize_op_->type, innerRealize.realize_op_->func->func_name());
-
-            Stmt stmt = TensorSubstitute(s, innerRealize.realize_op_->func, t->op, t->value_index);
-            fuse_vector_.emplace_back(stmt);
-          }
-        } else {
-          fuse_vector_.emplace_back(s);
-        }
+        HandleFuseVector(s);
         return Evaluate::make(0);
       }
     }
@@ -464,62 +525,13 @@ class PostFusionAct : public IRMutator {
       }
       if (mutate_ && (!is_conv_backprop_filter_ || op->value.as<IntImm>()->value >= 0)) {
         if (!old_stmt_l1writes_.empty() || !fuse_vector_.empty()) {
-          if (is_conv_backprop_filter_) {
-            Stmt fusing_stmt_filter =
-              !old_stmt_l1writes_.empty() ? old_stmt_l1writes_[outermost_part_ - 1] : fuse_vector_[l1Write_idx_];
-
-            InnerAxisCollect innerAxis;
-            innerAxis.Visit(s);
-            for (auto kv : innerAxis.loopvar_map_) {
-              loopvar_map_.emplace(std::pair<std::string, const For *>(kv.first, kv.second));
-            }
-            Stmt fused_stmt;
-            if (!is_dynamic_)
-              fused_stmt = makeFusedStmtBackprop(stmt_l0write, fusing_stmt_filter);
-            else
-              fused_stmt = fusing_stmt_filter;
-            fused_stmt = Block::make(stmt_l0write, fused_stmt);
-
-            for (const auto &kv : innerAxis.loopvar_map_) {
-              loopvar_map_.erase(kv.first);
-            }
-
-            return fused_stmt;
-          } else {
-            Stmt fusing_stmt =
-              !old_stmt_l1writes_.empty() ? old_stmt_l1writes_[outermost_part_ - 1] : fuse_vector_[outermost_part_ - 1];
-            fusing_stmt = RealizeNewFunc().Mutate(fusing_stmt);
-            // each group has four exprs
-            CHECK(count_ * 4 < exprs_.size()) << "count:" << count_ << " , exprs' size:" << exprs_.size();
-            Stmt fused_stmt = Block::make(stmt_l0write, fusing_stmt);
-            auto new_c1 = exprs_[count_ * 4];
-            auto new_h = exprs_[count_ * 4 + 1];
-            auto new_w = exprs_[count_ * 4 + 2];
-            fused_stmt = MakeFuseStmt(binds_, bias_, is_conv_backprop_filter_, new_c1, new_h, new_w).Mutate(fused_stmt);
-            fused_stmt = updateNewL1Write(fused_stmt, new_h, new_w);
-            ++count_;
-            return fused_stmt;
-          }
+          return HandleCubeL0Write(op, s, stmt_l0write);
         }
       }
     }
     if (op->attr_key == "pragma_cube_l1write") {
       if (!mutate_) {
-        auto f = FindOutC1HW(binds_);
-        f.Visit(s);
-        OutHExpr_.emplace_back(f.OutHExpr_);
-        OutWExpr_.emplace_back(f.OutWExpr_);
-        if (f.OutH_) {
-          OutH_.insert(f.OutH_);
-          cutH_ = true;
-        }
-        if (f.OutW_) {
-          cutW_ = true;
-        }
-        if (f.OutC1_) {
-          OutC1_.insert(f.OutC1_);
-        }
-        old_stmt_l1writes_.emplace_back(op->body);
+        HandleCubeL1Write(op, s);
         return Evaluate::make(0);
       }
     }
@@ -1025,7 +1037,6 @@ class AlignedMAdapt : public IRMutator {
   Stmt Mutate_(const For *op, const Stmt &s) final {
     VarExpr var = op->loop_var;
     std::string name = var->name_hint;
-
     Expr extent = op->extent;
     if (!is_const(extent)) {
       lv_map_.insert(std::pair<std::string, Expr>(name, k_l1_));
@@ -1046,11 +1057,8 @@ class AlignedMAdapt : public IRMutator {
 
       if (name == ko_name_) {
         ko_name_ = "";
-        if (is_const(op->min)) {
-          return For::make(op->loop_var, op->min, Expr(mo), op->for_type, op->device_api, body);
-        } else {
-          return For::make(op->loop_var, Expr(0), Expr(mo), op->for_type, op->device_api, body);
-        }
+        return For::make(op->loop_var, is_const(op->min) ? op->min : Expr(0), Expr(mo), op->for_type, op->device_api,
+                         body);
       }
       CHECK(conv_.get_co_isolate_info(isolate_idx_).inner.as<IntImm>());
       int co_cut = conv_.get_co_isolate_info(isolate_idx_).inner.as<IntImm>()->value;
