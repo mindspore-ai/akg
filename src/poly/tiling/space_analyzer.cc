@@ -342,7 +342,7 @@ void SpaceAnalyzer::MarkDmaAlign(const TensorEntry &dst_tensor, std::vector<Tens
     // B((cc0 + 126794), (cc1 + 12), (cc2 + 1), 0) = input_1(cc0, cc1, cc2, 0)
     // Or B((cc0 + 126794), (cc1 + 12), (cc2 + 1), 7) = input_1(cc0, cc1, cc2, 0)
     VarNames last_names = dst_tensor.var_names.back();
-    if (last_names.size() == 1U && !last_names[0].empty() && StrToInt64(last_names[0]) < ALIGN_BYTES) {
+    if (last_names.size() == 1U && !last_names[0].empty() && StrToDecimalInt64(last_names[0]) < ALIGN_BYTES) {
       analyzer_->RootAxis()->MarkWithAttr(AttrInfo{AT_TRANSFORM, dst_tensor.name});
     }
   }

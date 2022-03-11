@@ -28,63 +28,10 @@ void CustomTilingStrategy::AddNpuConstraint() {
   for (auto it : interested_info) {
     TileAxis *axis = it.first;
     for (auto attr : it.second) {
-      std::vector<std::string> modes = akg::common::Split(attr.attr_key, ":");
-      CHECK_EQ(modes.size(), 2U);
-      std::string constraint_str = attr.attr_value;
-      std::string related_buf;
-      if (constraint_str.find("->") != std::string::npos) {
-        std::vector<std::string> res = akg::common::Split(constraint_str, "->");
-        related_buf = res[0];
-        constraint_str = res[1];
-      }
-      std::vector<std::string> constraints = akg::common::Split(constraint_str, "_");
-      CHECK_GE(constraints.size(), 1U);
-      std::vector<std::string> level = akg::common::Split(constraints[0], ":");
-      CHECK(level.size() == 2U && level[0] == "LEVEL");
-      CHECK(level[1] == kDsaC1 || level[1] == kDsaC0);
-      TileLevel lv = level[1] == kDsaC1 ? CACHE1 : CACHE0;
-      constraints.erase(constraints.begin());
-      for (const auto &con : constraints) {
-        std::vector<std::string> items = akg::common::Split(con, ":");
-        CHECK_EQ(items.size(), 2U);
-        CHECK_NE(items[0], "");
-        CHECK_NE(items[1], "");
-        if (items[0] == "MIN") {
-          if (items[1] == "MIN") {
-            if (lv == CACHE1) {
-              axis->TileRestrainUpper(axis->c1_constraints.tile_min_, lv);
-            } else if (lv == CACHE0) {
-              axis->TileRestrainUpper(axis->c0_constraints.tile_min_, lv);
-            }
-          } else {
-            axis->TileRestrainLower(CastToExpr(items[1]), lv);
-          }
-        } else if (items[0] == "FACTOR") {
-          axis->TileRestrainToSingleValue(CastToExpr(items[1]), lv);
-        } else if (items[0] == "CANDIDATE") {
-          if (lv == CACHE1) {
-            axis->InsertC1CandFactor(CastToExpr(items[1]));
-          } else {
-            axis->InsertC0CandFactor(CastToExpr(items[1]));
-          }
-        } else if (items[0] == "MAX") {
-          if (items[1] == "FULL") {
-            axis->TileRestrainEntire(lv);
-          } else {
-            axis->TileRestrainUpper(CastToExpr(items[1]), lv);
-          }
-        } else if (items[0] == AT_MOD) {
-          axis->TileRestrainMod(CastToExpr(items[1]), lv);
-        } else if (items[0] == "FORBIDISO") {
-          axis->forbid_iso = true;
-        } else if (items[0] == "PRIORITY") {
-          axis->priority = static_cast<int>(std::strtol(items[1].c_str(), nullptr, 10));
-        } else if (items[0] == "EXPANSION") {
-          std::string info = related_buf + "->" + items[1];
-          analyzer_->RootAxis()->MarkWithAttr(AttrInfo{"EXPANSION", info});
-        } else if (items[0] == "AXISINFO") {
-          axis->axis_type_ = items[1];
-        }
+      ParseConstraintStr(attr.attr_key, attr.attr_value);
+      ParseLevel();
+      for (const auto &con : constraints_) {
+        ApplyEachCustomConstraint(axis, con);
       }
     }
   }
@@ -157,7 +104,7 @@ void ModStrategy::AddNpuConstraint() {
     TileAxis *axis = it.first;
     for (const auto &attr : it.second) {
       CHECK_NE(attr.attr_value, "");
-      auto mod_value = static_cast<int>(std::strtol(attr.attr_value.c_str(), nullptr, 10));
+      auto mod_value = StrToDecimalInt(attr.attr_value);
       axis->TileRestrainMod(mod_value, CACHE1);
     }
   }
@@ -263,7 +210,7 @@ void DynamicShapeLimitStrategy::AddNpuConstraint() {
     TileAxis *axis = it.first;
     for (const auto &attr : it.second) {
       CHECK_NE(attr.attr_value, "");
-      axis->dyn_shape_limit = static_cast<int>(std::strtol(attr.attr_value.c_str(), nullptr, 10));
+      axis->dyn_shape_limit = StrToDecimalInt(attr.attr_value);
     }
   }
 }
@@ -274,7 +221,7 @@ void DynamicBoundStrategy::AddNpuConstraint() {
     TileAxis *axis = it.first;
     for (const auto &attr : it.second) {
       CHECK_NE(attr.attr_value, "");
-      auto bound = static_cast<int>(std::strtol(attr.attr_value.c_str(), nullptr, 10));
+      auto bound = StrToDecimalInt(attr.attr_value);
       axis->TileRestrainMod(bound, CACHE1);
       axis->forbid_iso = true;
     }
@@ -296,7 +243,7 @@ void ModShiftAxisStrategy::AddNpuConstraint() {
       auto imm_min = axis->GetConstConstraint(CACHE1).tile_min_.as<IntImm>()->value;
       if (imm_min > const_extent) {
         CHECK_NE(attr.attr_value, "");
-        auto share_time = static_cast<int>(std::strtol(attr.attr_value.c_str(), nullptr, 10));
+        auto share_time = StrToDecimalInt(attr.attr_value);
         axis->TileRestrainToSingleValue(const_extent * (share_time + 1), CACHE1);
       } else {
         auto ForbidOthersIso = [](TileAxis *a) { a->forbid_iso = true; };

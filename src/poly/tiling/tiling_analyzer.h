@@ -99,7 +99,7 @@ inline Expr CastToExpr(const std::string &value) {
       return Expr(Var(value));
     }
   }
-  return Expr(static_cast<int>(std::strtol(value.c_str(), nullptr, 10)));
+  return Expr(StrToDecimalInt(value));
 }
 
 inline Expr CastInt64ToExpr(const int64_t value) { return air::ir::IntImm::make(Int(32), value); }
@@ -422,12 +422,8 @@ class TileCandidate {
   void UpdateFixTileAxis(TileLevel level);
 
   std::vector<TileAxis *> GetTileAxis() { return this->tile_axis_; }
-  void ResetTileAxis() { 
-    this->tile_axis_.clear(); 
-  }
-  void ResetTileVal() { 
-    this->tile_val_.clear(); 
-  }
+  void ResetTileAxis() { this->tile_axis_.clear(); }
+  void ResetTileVal() { this->tile_val_.clear(); }
   void UpdateConstTile(const TileAxis *a, int64_t c1_val, int64_t c0_val = -1);
   void UpdateC1Tile(const TileAxis *a, const Expr &c1_val);
   void UpdateC0Tile(const TileAxis *a, const Expr &c0_val);
