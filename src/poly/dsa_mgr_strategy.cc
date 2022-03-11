@@ -1,5 +1,5 @@
 /**
- * Copyright 2020-2021 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -45,17 +45,23 @@ namespace poly {
 
 void DsaMgrStrategy::RegisterTilingPasses() { RegisterPass(std::make_shared<TileOuterBand>(pass_info_, scop_info_)); }
 
-void DsaMgrStrategy::RegisterMemPromPasses() { RegisterPass(std::make_shared<MemoryManager>(scop_info_)); }
+void DsaMgrStrategy::RegisterMemPromPasses() {
+  RegisterPass(std::make_shared<LabelRealizeOutPosition>());
+  if (scop_info_.mmu_info_.IsSpecGemm() || scop_info_.mmu_info_.IsGemm() ||
+      scop_info_.mmu_info_.IsConvBackpropFilter()) {
+    RegisterPass(std::make_shared<InsertNodeForAllocC>());
+  }
+  RegisterPass(std::make_shared<MemoryManager>(scop_info_));
+  if (!scop_info_.mmu_info_.IsSpecGemm()) {
+    RegisterPass(std::make_shared<TransferStmt>(scop_info_, pass_info_));
+  }
+}
 
-void DsaMgrStrategy::RegisterPasses() {
-  passes_.clear();
-  RegisterNormalizationPasses();
-  RegisterConstrainedScheduling();
+void DsaMgrStrategy::RegisterSchedulePasses() {
   if (!scop_info_.user_config_.GetDisableGroup()) {
     RegisterPass(std::make_shared<GroupStatements>(pass_info_));
   }
-  RegisterSchedulingPasses();
-  RegisterPass(std::make_shared<ReorderInvariantSetSchedule>(pass_info_));
+  RegisterPass(std::make_shared<ComputeSchedule>(pass_info_, scop_info_));
   if (scop_info_.user_config_.GetReorderSchedule()) {
     RegisterPass(std::make_shared<SinkC0>());
   }
@@ -66,6 +72,16 @@ void DsaMgrStrategy::RegisterPasses() {
     RegisterPass(std::make_shared<KeepOuterBandOrder>(scop_info_));
   }
   RegisterPass(std::make_shared<UnGroupStatements>(pass_info_));
+}
+
+void DsaMgrStrategy::RegisterPasses() {
+  passes_.clear();
+  RegisterNormalizationPasses();
+  RegisterConstrainedScheduling();
+
+  RegisterSchedulePasses();
+  RegisterPass(std::make_shared<ReorderInvariantSetSchedule>(pass_info_));
+
   if (scop_info_.user_config_.GetOuterBandNeedSplit() && !scop_info_.mmu_info_.IsSpecGemm()) {
     RegisterPass(std::make_shared<SplitOuterBand>());
   }
@@ -89,15 +105,7 @@ void DsaMgrStrategy::RegisterPasses() {
   }
   RegisterPass(std::make_shared<ReorderInnerBand>(scop_info_.analysis_result_.GetCondVarsMap()));
   RegisterPass(std::make_shared<ChangeMarkNodePosition>(scop_info_.analysis_result_.ExtractWithStmtId()));
-  RegisterPass(std::make_shared<LabelRealizeOutPosition>());
-  if (scop_info_.mmu_info_.IsSpecGemm() || scop_info_.mmu_info_.IsGemm() ||
-      scop_info_.mmu_info_.IsConvBackpropFilter()) {
-    RegisterPass(std::make_shared<InsertNodeForAllocC>());
-  }
   RegisterMemPromPasses();
-  if (!scop_info_.mmu_info_.IsSpecGemm()) {
-    RegisterPass(std::make_shared<TransferStmt>(scop_info_, pass_info_));
-  }
   RegisterPass(std::make_shared<ReorderMarkNodes>());
   RegisterPass(std::make_shared<MarkFuseOp>(scop_info_));
   // if coincidence constraints are disabled (due to reschedule), we cannot determine multicore axis reliably

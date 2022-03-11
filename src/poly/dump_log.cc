@@ -248,14 +248,16 @@ void DumpNode(std::ofstream &of, const air::Node *node) {
 }
 
 void CreateDirIfNotExist(const std::string &file_name) {
-  char *file_name_ = strdup(file_name.c_str());
-  CHECK(file_name_ != nullptr);
+  const int kMaxPathLen = 1024;
+  char file_name_[kMaxPathLen] = {0};
+  CHECK(file_name.size() < kMaxPathLen);
+  memcpy(file_name_, file_name.c_str(), file_name.size());
+
   // dirname() updates "filename" in place, so "dir" is a substring of "filename".
   // Do not free "dir", and "filename" should be freed after both "dir" and "filename" are no longer used.
   char *dir = dirname(file_name_);
   if (strcmp(dir, file_name.c_str()) == 0) {
     LOG(WARNING) << "Cannot create root directory " << file_name;
-    free(file_name_);
     return;
   }
   struct stat info;
@@ -263,22 +265,19 @@ void CreateDirIfNotExist(const std::string &file_name) {
     if (!(info.st_mode & S_IFDIR)) {
       LOG(WARNING) << "Directory " << std::string(dir) << " already exists but it is not a directory";
     }
-    free(file_name_);
     return;
   }
   const int dir_mode = S_IRUSR | S_IWUSR | S_IXUSR;
   if (mkdir(dir, dir_mode) != 0) {
-    char *dir_copy = strdup(dir);
-    CHECK(dir_copy != nullptr);
+    char dir_copy[kMaxPathLen] = {0};
+    memcpy(dir_copy, dir, strlen(dir));
     char *parent_dir = dirname(dir_copy);
     CHECK(parent_dir != nullptr);
     CreateDirIfNotExist(parent_dir);
-    free(dir_copy);
     if (mkdir(dir, dir_mode) != 0) {
       LOG(WARNING) << "Failed to create directory " << std::string(dir);
     }
   }
-  free(file_name_);
 }
 
 void AnalysisResult::DumpScopDataBasics(std::ofstream &of) {
