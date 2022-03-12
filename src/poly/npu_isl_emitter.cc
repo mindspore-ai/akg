@@ -1040,9 +1040,9 @@ Stmt NPUIslEmitter::EmitGemmRangeInfoBackPropFilter(const Stmt &stmt) {
   int n_isolate = NO * NI % tile_n;
 
   int k_base = 1;
-  int m_base = k_base + k_base * k_isolate;
-  int n_base = m_base + m_base * m_isolate;
-  int range_idx_max = 2^(k_isolate + m_isolate + n_isolate);
+  int m_base = k_base * (k_isolate + 1);
+  int n_base = m_base * (m_isolate + 1);
+  int range_idx_max = std::pow(2, k_isolate + m_isolate + n_isolate);
 
   CHECK(c0_range_idx < range_idx_max) << c0_range_idx << ":" << range_idx_max;
 
@@ -1055,13 +1055,13 @@ Stmt NPUIslEmitter::EmitGemmRangeInfoBackPropFilter(const Stmt &stmt) {
   int ko_ext = k_isolate ? ((c0_range_idx / k_base % BINARY_FACTOR) ? (1) : (KO * KI / tile_k)) : (KO * KI / tile_k);
   range_map.Set("ko_", Range(Expr(ko_min), Expr(ko_ext)));
   
-  auto range_extent = Expr(tile_k);
   if (k_isolate && (c0_range_idx / k_base % BINARY_FACTOR)) {
-    range_extent = Expr(K - KO * KI / tile_k * tile_k);
+    range_map.Set("k_size", Range(Expr(0), Expr(K - KO * KI / tile_k * tile_k)));
+  } else {
+    range_map.Set("k_size", Range(Expr(0), Expr(tile_k)));
   }
-  range_map.Set("k_size", Range(Expr(0), range_extent));
   
-  if (KO * KI != K) {
+  if ((!k_isolate) && (KO * KI != K)) {
     range_map.Set("k_tail_size", Range(Expr(0), Expr(K - (KO * KI / tile_k - 1) * tile_k)));
     range_map.Set("k_tail", Range(Expr(0), Expr(KO * KI / tile_k - 1)));
   }
