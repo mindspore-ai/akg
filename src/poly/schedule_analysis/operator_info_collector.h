@@ -55,8 +55,15 @@ class OpTypeCollector : public IRVisitor {
 
   void AnalyzeProvide(const Provide *op);
   TensorEntry MatchLoopByName(TensorEntry tensor);
-  std::string GetBasicOpType(const TensorEntry dst, const std::vector<TensorEntry> &srcs);
+  std::string GetSingleOpType(const TensorEntry &dst, const TensorEntry &srcs);
+  std::string GetBasicOpType(const TensorEntry &dst, const std::vector<TensorEntry> &srcs);
   TensorEntry MakeTensorEntry(const ToTTensor &tot);
+  size_t CountUniqueLoopName(std::vector<VarNames> &var_names);
+  bool IsTranspose(std::vector<VarNames> &dst_vars, std::vector<VarNames> &src_vars);
+  std::string GetFusedCaseType(const TensorEntry &d, const TensorEntry &s);
+  TensorEntry GetDstTensor(const Provide *op);
+  std::vector<TensorEntry> GetSourceTensors(const Provide *op);
+  std::string InitBasicOpType(const Provide *op);
 
   std::string target_;
   ScopInfo &scop_info_;
