@@ -520,6 +520,15 @@ const std::unordered_map<std::string, air::ir::ForType> AkgSupportedForType = {
   {FOR_VECTORIZED, air::ir::ForType::Vectorized},
   {FOR_UNROLLED, air::ir::ForType::Unrolled},
   {FOR_SWIZZLED, air::ir::ForType::Swizzled}};
+
+constexpr auto DEC = 10;
+
+inline int StrToDecimalInt(const std::string &str) {
+  CHECK(!str.empty()) << "Cast string to Int fail, string empty";
+  return static_cast<int>(std::strtol(str.c_str(), nullptr, DEC));
+}
+
+inline int64_t StrToDecimalInt64(const std::string &str) { return static_cast<int64_t>(StrToDecimalInt(str)); }
 }  // namespace ir
 }  // namespace akg
 #endif  // POLY_UTIL_H_

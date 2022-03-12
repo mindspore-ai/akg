@@ -13,24 +13,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
+#include <cmath>
+#include <iostream>
 #include "tile_outer_band.h"
-
 #include "build_module.h"
 #include "poly/scop.h"
 #include "poly/schedule_tree_util.h"
 #include "poly/schedule_pass/transfer_stmt.h"
 #include "poly/schedule_pass/try_mark_scalar_stmt.h"
 #include "poly/schedule_pass_gpu/operator_mapping_strategy.h"
-#include "poly/schedule_tree_util.h"
 #include "poly/reduce_manager.h"
-
-#include <cmath>
-#include <iostream>
 
 namespace akg {
 namespace ir {
 namespace poly {
+
+constexpr int64_t DEFAULT_TILE_SIZE = 65535;
 
 class DimInfoMatcher : public IRVisitor {
  public:
@@ -57,13 +55,37 @@ class DimInfoMatcher : public IRVisitor {
 };
 
 isl::schedule TileOuterBand::Run(isl::schedule sch) {
-  if (scop_info_.user_config_.GetTarget() == TARGET_CUDA) {
-    return RunCuda(sch);
-  } else if (scop_info_.user_config_.GetTarget() == TARGET_CPU) {
-    return RunCpu(sch);
+  scop_info_.analysis_result_.InitScheduleMapBeforeTile(scop_info_.GetCtx());
+  if (scop_info_.user_config_.GetTarget() == TARGET_CCE) {
+    if (!scop_info_.mmu_info_.IsSpecGemm() && (scop_info_.mmu_info_.IsConv() || scop_info_.mmu_info_.IsGemm())) {
+      scop_info_.analysis_result_.SetScheduleMapBeforeTile(sch.get_map());
+    }
   } else {
-    return RunNpu(sch);
+    scop_info_.analysis_result_.SetScheduleMapBeforeTile(sch.get_map());
   }
+
+  auto final_schedule = TileOuterBandHelper(sch, 
+                        std::bind(&TileOuterBand::MarkOuterPermutable, this, std::placeholders::_1));
+
+  if (scop_info_.user_config_.GetTarget() == TARGET_CCE) {
+    scop_info_.AddPartitionInfoToData(AddTileInfo(partition_info_));
+    scop_info_.analysis_result_.SetIsTiled(true);
+    if (sch.plain_is_equal(final_schedule)) {
+      pass_info_.tile_check_coincident_ = scop_info_.user_config_.GetTileCheckCoincident();
+      final_schedule = TryMarkScalarStmt(pass_info_).Run(final_schedule);
+    }
+  }
+
+  auto map_before_tile = sch.get_map();
+  if (final_schedule.get_map().is_equal(map_before_tile) &&
+    (pass_info_.coincident_ || scop_info_.user_config_.GetConsiderCoincidence())) {
+    restart_ = true;
+  }
+  if (scop_info_.user_config_.GetIsTuning()) {
+    // restore schedule before tiling as input of GenerateTilingSpace
+    final_schedule = sch;
+  }
+  return final_schedule;
 }
 
 isl::schedule TileOuterBand::TileOuterBandHelper(const isl::schedule sch,
@@ -91,30 +113,31 @@ bool TileOuterBand::SubtreeHasPermutableBands(const isl::schedule_node &node) {
 }
 
 int TileOuterBand::IsCandidate(const isl::schedule_node &node) {
-  int permutable;
+  if (node.isa<isl::schedule_node_leaf>()) { return 1; }
 
-  if (node.isa<isl::schedule_node_leaf>()) return 1;
-  permutable = static_cast<int>(IsPermutable(node, scop_info_.user_config_.GetTileCheckCoincident()));
-  if (permutable) return permutable;
-  if (node.isa<isl::schedule_node_filter>()) return 0;
+  int permutable = static_cast<int>(IsPermutable(node, scop_info_.user_config_.GetTileCheckCoincident()));
+  if (permutable) { return permutable; }
+  if (node.isa<isl::schedule_node_filter>()) { return 0; }
+
   permutable = static_cast<int>(SubtreeHasPermutableBands(node));
-  if (permutable < 0) return -1;
+  if (permutable < 0) { return -1; }
   return static_cast<int>(!permutable);
 }
 
 int TileOuterBand::IsOuterTilable(const isl::schedule_node &node) {
-  int tilable;
+  int tilable = IsCandidate(node);
   isl::schedule_node ancestor;
 
-  tilable = IsCandidate(node);
-  if (tilable < 0) return -1;
-  if (!tilable) return 0;
+  if (tilable < 0) {
+    return -1;
+  } else if (tilable == 0) {
+    return 0;
+  }
 
   tilable = 0;
   ancestor = node;
   while (ancestor.has_parent()) {
     ancestor = ancestor.parent();
-
     tilable = IsCandidate(ancestor);
     if (tilable) break;
   }
@@ -173,25 +196,7 @@ std::string TileOuterBand::GetcDim() {
   return matcher.dim();
 }
 
-// Init set_dim info
-void TileOuterBand::InitDimensionInfo(const isl::schedule &sch_init) {
-  // get compute dim
-  std::string dim = GetcDim();
-  // get build dim
-  if (dim.empty()) {
-    dim = GetbDim();
-  }
-
-  // apply default tiling
-  if (dim.empty()) {
-    scop_info_.analysis_result_.SetEnableAutoTiling(true);
-    auto tiling_res = GenerateTiling(sch_init, scop_info_, GenHalide(scop_info_, sch_init, true));
-    scop_info_.analysis_result_.SetTileSizes(tiling_res.first);
-    scop_info_.analysis_result_.SetTileConstraints(tiling_res.second);
-    if (scop_info_.mmu_info_.IsConv()) scop_info_.mmu_info_.SetConvMNKInfo();
-    return;
-  }
-
+void TileOuterBand::InitCustomDimensionInfo(std::string dim) {
   int dim_info_entry_size = DIM_SIZE;
   bool is_custom_mapping = false;
   const std::vector<std::string> thread_block_list = {T0, T1, T2, B0, B1, B2};
@@ -208,28 +213,26 @@ void TileOuterBand::InitDimensionInfo(const isl::schedule &sch_init) {
   int sequence = 0;
   for (size_t i = 0; i < str.size(); i += dim_info_entry_size) {
     DimensionInfo dim_info;
-    char *endptr = nullptr;
-    const int radix = 10;
-    dim_info.index = strtol(str[i].c_str(), &endptr, radix);
-    if (endptr == nullptr || *endptr != '\0') LOG(FATAL) << "failed to convert string " << str[i] << " to number";
+    dim_info.c1_tiling_size = DEFAULT_TILE_SIZE;
+    dim_info.c0_tiling_size = DEFAULT_TILE_SIZE;
+    auto index = StrToDecimalInt64(str[i].c_str());
+    CHECK(index >= 0) << "failed to convert string " << str[i] << " to number";
+    dim_info.index = index;
     const int max_dim_index = 16;
     CHECK(dim_info.index < max_dim_index) << "set_dim index must be less than " << max_dim_index << "!";
+
     dim_info.axis = str[i + 1];
-    const int default_tiling_size = 65535;
-    endptr = nullptr;
-    int64_t str_2_number = strtol(str[i + 2].c_str(), &endptr, radix);
-    if (endptr == nullptr || *endptr != '\0' || str_2_number <= 0) {
-      dim_info.c1_tiling_size = default_tiling_size;
-    } else {
+
+    int64_t str_2_number = StrToDecimalInt64(str[i + 2].c_str());
+    if (str_2_number > 0) {
       dim_info.c1_tiling_size = str_2_number;
     }
-    endptr = nullptr;
-    int64_t str_3_number = strtol(str[i + 3].c_str(), &endptr, radix);
-    if (endptr == nullptr || *endptr != '\0' || str_3_number <= 0) {
-      dim_info.c0_tiling_size = default_tiling_size;
-    } else {
+
+    int64_t str_3_number = StrToDecimalInt64(str[i + 3].c_str());
+    if (str_3_number > 0) {
       dim_info.c0_tiling_size = str_3_number;
     }
+
     dim_info.dim_seq = sequence;
     sequence++;
     scop_info_.analysis_result_.InsertDimensionInfo(dim_info);
@@ -251,16 +254,36 @@ void TileOuterBand::InitDimensionInfo(const isl::schedule &sch_init) {
     }
   }
 
-  if (!is_custom_mapping) return;
+  if (!is_custom_mapping) { return; }
   CheckCustomMapping(scop_info_.user_config_.GetInnerMappingStrategy());
   CheckCustomMapping(scop_info_.user_config_.GetOuterMappingStrategy());
+}
+
+// Init set_dim info
+void TileOuterBand::InitDimensionInfo(const isl::schedule &sch_init) {
+  // get compute dim
+  std::string dim = GetcDim();
+  // get build dim
+  if (dim.empty()) {
+    dim = GetbDim();
+  }
+  if (!dim.empty()) {
+    InitCustomDimensionInfo(dim);
+    return;
+  }
+
+  // apply auto tiling
+  scop_info_.analysis_result_.SetEnableAutoTiling(true);
+  auto tiling_res = GenerateTiling(sch_init, scop_info_, GenHalide(scop_info_, sch_init, true));
+  scop_info_.analysis_result_.SetTileSizes(tiling_res.first);
+  scop_info_.analysis_result_.SetTileConstraints(tiling_res.second);
+  if (scop_info_.mmu_info_.IsConv()) { scop_info_.mmu_info_.SetConvMNKInfo(); }
 }
 
 void TileOuterBand::MergeTilingInfo() {
   int64_t tiles_num = 0;
   auto tile_sizes = scop_info_.analysis_result_.GetTileSizes();
   for (unsigned i = 0; i < tile_sizes.size(); ++i) {
-    tile_sizes_all_.emplace_back(tile_sizes[i]);
     if (tiles_num <= tile_sizes[i].index) {
       tiles_num = tile_sizes[i].index + 1;
     }
@@ -279,36 +302,60 @@ isl::multi_val TileOuterBand::ComputeBandTilesSizes(const isl::schedule_node &no
   return MultiValFromIntList(space, dim, tile_size);
 }
 
-isl::schedule TileOuterBand::RunNpu(const isl::schedule sch) {
-  // TransferStmt pass
-  isl::schedule tiling_schedule = sch;
-  if (!scop_info_.mmu_info_.IsSpecGemm()) {
-    tiling_schedule = TransferStmt(scop_info_, pass_info_).Run(tiling_schedule);
+isl::schedule_node TileOuterBand::MarkOuterPermutable(isl::schedule_node node) {
+  if (scop_info_.user_config_.GetTarget() == TARGET_CUDA) {
+    return MarkOuterPermutableCuda(node);
+  } else if (scop_info_.user_config_.GetTarget() == TARGET_CPU) {
+    return MarkOuterPermutableCpu(node);
+  } else {
+    return MarkOuterPermutableNpu(node);
   }
-  scop_info_.analysis_result_.InitScheduleMapBeforeTile(scop_info_.GetCtx());
-  if (!scop_info_.mmu_info_.IsSpecGemm() && (scop_info_.mmu_info_.IsConv() || scop_info_.mmu_info_.IsGemm())) {
-    scop_info_.analysis_result_.SetScheduleMapBeforeTile(sch.get_map());
+}
+
+TileType TileOuterBand::JudgeTileType(isl::schedule_node &node) {
+  unsigned int i = 0;
+  for (; i < scop_info_.analysis_result_.stmt_type_.size() - 1; ++i) {
+    if (scop_info_.analysis_result_.stmt_type_[i].second == STMT_OP_TYPE::MMU_CONV) {
+      break;
+    }
   }
 
-  using std::placeholders::_1;
-  auto final_schedule = TileOuterBandHelper(sch, std::bind(&TileOuterBand::MarkOuterPermutableNpu, this, _1));
-
-  scop_info_.AddPartitionInfoToData(AddTileInfo(partition_info_));
-  scop_info_.analysis_result_.SetIsTiled(true);
-
-  auto map_before_tile = sch.get_map();
-  if (final_schedule.get_map().is_equal(map_before_tile) &&
-      (pass_info_.coincident_ || scop_info_.user_config_.GetConsiderCoincidence())) {
-    restart_ = true;
-  } else if (sch.plain_is_equal(final_schedule)) {
-    pass_info_.tile_check_coincident_ = scop_info_.user_config_.GetTileCheckCoincident();
-    final_schedule = TryMarkScalarStmt(pass_info_).Run(final_schedule);
+  bool is_mmu = scop_info_.mmu_info_.HasCube();
+  bool is_before_mmu = false;
+  bool is_in_mmu = false;
+  bool is_in_load_im2col = scop_info_.user_config_.GetIsDynamic() ? false : scop_info_.mmu_info_.IsLoadIm2colC1BUF();
+  isl::set_list domain_list = node.get_domain().get_set_list();
+  for (unsigned int set_index = 0; set_index < domain_list.size(); ++set_index) {
+    isl::set set_i = domain_list.get_at(set_index);
+    std::string name = set_i.get_tuple_name();
+    if (name.find('_') == std::string::npos) {
+      LOG(FATAL) << "Cannot find _ symbol";
+    }
+    unsigned int index = WrappedStrtol(name.substr(name.find('_') + 1));
+    is_before_mmu = false;
+    if ((index + 1 < i) && !scop_info_.mmu_info_.IsSpecGemm()) {
+      is_before_mmu = true;
+    }
+    if (index + 1 == i) {
+      is_in_mmu = true;
+    }
+    if (scop_info_.user_config_.GetIsDynamic()) {
+      if (scop_info_.mmu_info_.IsLoadIm2colC1BUFStmt(set_i.get_tuple_name())) {
+        is_in_load_im2col = true;
+      }
+    }
   }
-  if (scop_info_.user_config_.GetIsTuning()) {
-    // restore schedule before tiling as input of GenerateTilingSpace
-    return sch;
+
+  TileType ret;
+  if (is_mmu && is_before_mmu && !is_in_mmu) {
+    ret = TileType::C1BUFC1;
+  } else if (is_mmu || is_in_load_im2col) {
+    ret = TileType::C1;
+  } else {
+    ret = TileType::BUF;
   }
-  return final_schedule;
+
+  return ret;
 }
 
 /***************************************************************************
@@ -321,7 +368,7 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableNpu(isl::schedule_node node
   if (IsOuterTilable(node) <= 0) return node;
   // make sure the node is a band node and has multiple members, insert empty band if not
   if (!node.isa<isl::schedule_node_band>() || (!node.as<isl::schedule_node_band>().member_get_coincident(0) &&
-                                               scop_info_.user_config_.GetTileCheckCoincident())) {
+      scop_info_.user_config_.GetTileCheckCoincident())) {
     node = InsertEmptyPermutableBand(node);
   }
 
@@ -350,54 +397,8 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableNpu(isl::schedule_node node
     if (j < dim_num) tile_size[j] = static_cast<int>(tile_sizes_[j].c1_tiling_size);
   }
 
-  bool is_mmu = false;
-  for (auto &info : scop_info_.analysis_result_.GetStmtOpInfoMap()) {
-    if (info.second.isMMU) {
-      is_mmu = true;
-      break;
-    }
-  }
-
-  bool is_before_mmu = false;
-  bool is_in_mmu = false;
-  unsigned int i = 0;
-  for (; i < scop_info_.analysis_result_.stmt_type_.size() - 1; ++i) {
-    if (scop_info_.analysis_result_.stmt_type_[i].second == STMT_OP_TYPE::MMU_CONV) {
-      break;
-    }
-  }
-  bool is_in_load_im2col = scop_info_.user_config_.GetIsDynamic() ? false : scop_info_.mmu_info_.IsLoadIm2colC1BUF();
-  isl::set_list domain_list = node.get_domain().get_set_list();
-  for (unsigned int set_index = 0; set_index < domain_list.size(); ++set_index) {
-    isl::set set_i = domain_list.get_at(set_index);
-    std::string name = set_i.get_tuple_name();
-    if (name.find('_') == std::string::npos) {
-      LOG(FATAL) << "Cannot find _ symbol";
-    }
-    unsigned int index = WrappedStrtol(name.substr(name.find('_') + 1));
-    is_before_mmu = false;
-    if ((index + 1 < i) && !scop_info_.mmu_info_.IsSpecGemm()) {
-      is_before_mmu = true;
-    }
-    if (index + 1 == i) {
-      is_in_mmu = true;
-    }
-    if (scop_info_.user_config_.GetIsDynamic()) {
-      if (scop_info_.mmu_info_.IsLoadIm2colC1BUFStmt(set_i.get_tuple_name())) {
-        is_in_load_im2col = true;
-      }
-    }
-  }
-
-  if (is_mmu && is_before_mmu && !is_in_mmu) {
-    node = TileBandAndCollectMark(node, &tile_size[0], nullptr, nullptr, TileType::C1BUFC1, true);
-  } else if (is_mmu || is_in_load_im2col) {
-    node = TileBandAndCollectMark(node, &tile_size[0], nullptr, nullptr, TileType::C1, true);
-  } else {
-    node = TileBandAndCollectMark(node, &tile_size[0], nullptr, nullptr, TileType::BUF, true);
-  }
-
-  return node;
+  auto tile_type = JudgeTileType(node);
+  return TileBandAndCollectMark(node, &tile_size[0], nullptr, nullptr, tile_type, true);
 }
 
 void TileOuterBand::CheckCustomMapping(const MappingStrategyFilterMap &custom_mapping_map) {
@@ -579,20 +580,19 @@ void TileOuterBand::IsolateLevelInfo(TileType &tile_type, isl::set &tiles, isl::
 isl::schedule_node TileOuterBand::SetIsolateLoopType(isl::schedule_node node) {
   int i, n;
 
-  if (!node.isa<isl::schedule_node_band>()) return node;
+  if (!node.isa<isl::schedule_node_band>()) { return node; }
 
   n = static_cast<int>(node.as<isl::schedule_node_band>().n_member());
   for (i = 0; i < n; ++i) {
-    enum isl_ast_loop_type type;
-
-    type = isl_schedule_node_band_member_get_ast_loop_type(node.get(), i);
+    auto type = isl_schedule_node_band_member_get_ast_loop_type(node.get(), i);
     if (type == isl_ast_loop_default) node = node.as<isl::schedule_node_band>().member_set_isolate_ast_loop_default(i);
     if (type == isl_ast_loop_atomic) node = node.as<isl::schedule_node_band>().member_set_isolate_ast_loop_atomic(i);
     if (type == isl_ast_loop_unroll) node = node.as<isl::schedule_node_band>().member_set_isolate_ast_loop_unroll(i);
-    if (type == isl_ast_loop_separate)
+    if (type == isl_ast_loop_separate) {
       node = node.as<isl::schedule_node_band>().member_set_isolate_ast_loop_separate(i);
-    else
+    } else {
       return node;
+    }
   }
 
   return node;
@@ -620,7 +620,7 @@ isl::schedule_node TileOuterBand::IsolateTiles(const isl::schedule_node &origina
   isl::multi_aff ma1, ma2;
 
   // If not tiled, return
-  if (original_node.is_equal(tiled_node)) return tiled_node;
+  if (original_node.is_equal(tiled_node)) { return tiled_node; }
 
   depth = tiled_node.get_schedule_depth();
   dim = static_cast<int>(tiled_node.as<isl::schedule_node_band>().n_member());
@@ -630,7 +630,7 @@ isl::schedule_node TileOuterBand::IsolateTiles(const isl::schedule_node &origina
   if (full_tile_min != nullptr) {
     unsigned int n_dim = tiles.n_dim();
     for (int i = 0; i < dim; ++i) {
-      if (0 == full_tile_min[i]) continue;
+      if (full_tile_min[i] == 0) { continue; }
       tiles = isl::manage(
         isl_set_lower_bound_si(tiles.copy(), isl_dim_set, (n_dim - (unsigned int)(dim - i)), full_tile_min[i]));
     }
@@ -638,7 +638,7 @@ isl::schedule_node TileOuterBand::IsolateTiles(const isl::schedule_node &origina
   if (full_tile_max != nullptr) {
     unsigned int n_dim = tiles.n_dim();
     for (int i = 0; i < dim; ++i) {
-      if (MAX_STRIDE == full_tile_max[i]) continue;
+      if (MAX_STRIDE == full_tile_max[i]) { continue; }
       tiles = isl::manage(
         isl_set_upper_bound_si(tiles.copy(), isl_dim_set, (n_dim - (unsigned int)(dim - i)), full_tile_max[i]));
     }
@@ -675,12 +675,7 @@ isl::schedule_node TileOuterBand::IsolateTiles(const isl::schedule_node &origina
   return tiled_node;
 }
 
-void TileOuterBand::TileTypeC0(isl::schedule_node &node, int *full_tile_min, int *full_tile_max, TileType &tile_type,
-                               bool &isolate, isl::multi_val &sizes) {
-  isl::set_list domain_list = node.get_domain().get_set_list();
-  isl::union_set filter_mmu = isl::union_set();
-  isl::union_set filter_after_mmu = isl::union_set();
-
+unsigned int TileOuterBand::GetMmuIndex() {
   unsigned int mmu_index = 0;
   for (; mmu_index < scop_info_.analysis_result_.stmt_type_.size() - 1; ++mmu_index) {
     if (scop_info_.analysis_result_.stmt_type_[mmu_index].second == STMT_OP_TYPE::MMU_CONV ||
@@ -689,9 +684,20 @@ void TileOuterBand::TileTypeC0(isl::schedule_node &node, int *full_tile_min, int
       break;
     }
   }
+  return mmu_index;
+}
+
+void TileOuterBand::TileTypeC0(isl::schedule_node &node, int *full_tile_min, int *full_tile_max, TileType &tile_type,
+                               bool &isolate, isl::multi_val &sizes) {
+  isl::set_list domain_list = node.get_domain().get_set_list();
+  isl::union_set filter_mmu = isl::union_set();
+  isl::union_set filter_after_mmu = isl::union_set();
   std::vector<isl::union_set> filter_before_mmu;
   std::vector<TileType> tile_type_before_mmu;
+  isl::union_set_list filters = isl::union_set_list(
+                                node.ctx(), static_cast<int>(scop_info_.analysis_result_.stmt_type_.size() - 1));
 
+  auto mmu_index = GetMmuIndex();
   for (unsigned int set_index = 0; set_index < domain_list.size(); ++set_index) {
     isl::set set_i = domain_list.get_at(set_index);
     std::string name = set_i.get_tuple_name();
@@ -700,7 +706,9 @@ void TileOuterBand::TileTypeC0(isl::schedule_node &node, int *full_tile_min, int
     set_i = isl::manage(isl_set_eliminate_dims(set_i.copy(), 0, isl_set_n_dim(set_i.get())));
     if (index + 1 < mmu_index) {
       filter_before_mmu.resize(mmu_index - 1);
-      filter_before_mmu[index] = isl::union_set(set_i);
+      auto uset = isl::union_set(set_i);
+      filter_before_mmu[index] = uset;
+      filters = uset.is_null() ? filters : filters.add(uset);
       tile_type_before_mmu.resize(mmu_index - 1);
       if (!scop_info_.analysis_result_.GetFakeCopyin().is_empty()) {
         tile_type_before_mmu[index] = TileType::BUFC1;
@@ -715,23 +723,18 @@ void TileOuterBand::TileTypeC0(isl::schedule_node &node, int *full_tile_min, int
       filter_after_mmu = filter_after_mmu.is_null() ? isl::union_set(set_i) : filter_after_mmu.add_set(set_i);
     }
   }
-  CHECK_EQ(filter_before_mmu.size(), tile_type_before_mmu.size());
 
-  isl::union_set_list filters =
-    isl::union_set_list(node.ctx(), static_cast<int>(scop_info_.analysis_result_.stmt_type_.size() - 1));
-  for (const auto &a : filter_before_mmu) {
-    filters = a.is_null() ? filters : filters.add(a);
-  }
   filters = filter_mmu.is_null() ? filters : filters.add(filter_mmu);
   filters = filter_after_mmu.is_null() ? filters : filters.add(filter_after_mmu);
 
   isl::schedule_node before_tile_node = node;
 
+  bool condition = (!filter_before_mmu.empty() || !filter_after_mmu.is_null()) && !filter_mmu.is_null();
   if (scop_info_.mmu_info_.IsLoadIm2colC1BUF()) {
     node = TileBand(node, sizes);
     node = IsolateTiles(before_tile_node, node, TileType::BUF, full_tile_min, full_tile_max, isolate);
     node = MarkTileBand(node, TileType::BUF);
-  } else if ((!filter_before_mmu.empty() || !filter_after_mmu.is_null()) && !filter_mmu.is_null()) {
+  } else if (condition) {
     auto pos = 0;
     node = node.insert_sequence(filters);
     for (size_t index = 0; index < tile_type_before_mmu.size(); ++index) {
@@ -741,13 +744,13 @@ void TileOuterBand::TileTypeC0(isl::schedule_node &node, int *full_tile_min, int
       node = node.parent().parent();
       ++pos;
     }
-    if (!filter_mmu.is_null()) {
-      node = TileBand(node.child(pos).child(0), sizes);
-      node = IsolateTiles(before_tile_node, node, tile_type, full_tile_min, full_tile_max, isolate);
-      node = MarkTileBand(node, TileType::C0);
-      node = node.parent().parent();
-      ++pos;
-    }
+
+    node = TileBand(node.child(pos).child(0), sizes);
+    node = IsolateTiles(before_tile_node, node, tile_type, full_tile_min, full_tile_max, isolate);
+    node = MarkTileBand(node, TileType::C0);
+    node = node.parent().parent();
+    ++pos;
+
     if (!filter_after_mmu.is_null()) {
       node = TileBand(node.child(pos).child(0), sizes);
       node = IsolateTiles(before_tile_node, node, tile_type, full_tile_min, full_tile_max, isolate);
@@ -1054,25 +1057,6 @@ isl::schedule_node TileOuterBand::IsolateTilesForCudaAndCpu(const isl::schedule_
   return after_tile_node;
 }
 
-isl::schedule TileOuterBand::RunCuda(const isl::schedule sch) {
-  scop_info_.analysis_result_.SetScheduleMapBeforeTile(sch.get_map());
-
-  using std::placeholders::_1;
-  auto final_schedule = TileOuterBandHelper(sch, std::bind(&TileOuterBand::MarkOuterPermutableCuda, this, _1));
-  auto map_before_tile = sch.get_map();
-  if (final_schedule.get_map().is_equal(map_before_tile) &&
-      (pass_info_.coincident_ || scop_info_.user_config_.GetConsiderCoincidence())) {
-    restart_ = true;
-  }
-
-  if (scop_info_.user_config_.GetIsTuning()) {
-    // restore schedule before tiling as input of GenerateTilingSpace
-    return sch;
-  }
-  pass_info_.tile_sizes_ = tile_sizes_all_;
-
-  return final_schedule;
-}
 
 /***************************************************************************
  * steps:
@@ -1347,25 +1331,6 @@ bool TileOuterBand::IsMatrixCPromoteToShared() {
   return false;
 }
 
-isl::schedule TileOuterBand::RunCpu(const isl::schedule sch) {
-  scop_info_.analysis_result_.SetScheduleMapBeforeTile(sch.get_map());
-
-  using std::placeholders::_1;
-  auto final_schedule = TileOuterBandHelper(sch, std::bind(&TileOuterBand::MarkOuterPermutableCpu, this, _1));
-  auto map_before_tile = sch.get_map();
-  if (final_schedule.get_map().is_equal(map_before_tile) &&
-      (pass_info_.coincident_ || scop_info_.user_config_.GetConsiderCoincidence())) {
-    restart_ = true;
-  }
-
-  if (scop_info_.user_config_.GetIsTuning()) {
-    // restore schedule before tiling as input of GenerateTilingSpace
-    return sch;
-  }
-  pass_info_.tile_sizes_ = tile_sizes_all_;
-
-  return final_schedule;
-}
 
 /***************************************************************************
  * steps:
