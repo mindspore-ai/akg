@@ -22,6 +22,7 @@
 #include "composite/utils/dimension_peeling.h"
 #include "composite/lower_tree/block_fusion.h"
 #include "composite/lower_tree/sync_process.h"
+#include "composite/lower_tree/promote_datatype.h"
 #include "composite/lower_tree/json_leaf.h"
 
 namespace akg {
@@ -30,9 +31,9 @@ constexpr auto kBlockPlan = "block_plan";
 
 void AttachParallelDecorator(BaseLowerNode *child, size_t index) {
   auto func = [index](BaseLowerNode *node, LowerRunner *next, StageType s) {
-    JsonLowerLeaf *leaf = static_cast<JsonLowerLeaf*>(node);
+    JsonLowerLeaf *leaf = static_cast<JsonLowerLeaf *>(node);
     next->Lower(s);
-    leaf->Data()->name += std::string("_Parallel_")  + std::to_string(index);
+    leaf->Data()->name += std::string("_Parallel_") + std::to_string(index);
   };
   child->VisitLeaf([&func](JsonLowerLeaf *node) { node->Decorate(func); });
 }
@@ -80,6 +81,7 @@ Stmt CudaParallelLowerNode::MergeStmts(const LowerData &data, std::vector<Stmt> 
   TRANSFORM_AND_TRY_DUMP(dump_mng, merged_ir, ir::ProcessSyncInnerThread, merged_ir);
   auto ElimDupInputs = [](Stmt stmt, const Array<NodeRef> &inputs) { return ElimDuplicateInputs(inputs).Run(stmt); };
   TRANSFORM_AND_TRY_DUMP(dump_mng, merged_ir, ElimDupInputs, merged_ir, inputs_);
+  TRANSFORM_AND_TRY_DUMP(dump_mng, merged_ir, ir::PromoteIndexDataType, merged_ir);
   return merged_ir;
 }
 
