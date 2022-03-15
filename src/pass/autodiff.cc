@@ -37,45 +37,37 @@ TVM_STATIC_IR_FUNCTOR(IRPrinter, vtable)
 
 TVM_REGISTER_NODE_TYPE(DifferentiationResultNode);
 
-DifferentiationResult Differentiate(const Tensor &output, const Array<Tensor> &inputs, const Tensor &head_or_null,
-                                    const Map<std::string, NodeRef> &attrs, const Array<Tensor> &new_pld_array,
-                                    const FDiffBuildingBlock &fdiff, const Map<Tensor, Array<Tensor>> &override_deps) {
-  if (!output.get()) {
-    LOG(FATAL) << "output is a null pointer.";
-    return DifferentiationResult();
+Tensor HeadGenerator(const Tensor &output, const Tensor &head_or_null) {
+  if (head_or_null.get()) {
+    return head_or_null;
   }
-
-  Tensor output_split = SplitTensor(output);
-  Tensor head = head_or_null;
 
   // If the head is a null pointer, create an identity tensor
-  if (!head.get()) {
-    Array<Expr> shape = output->shape;
-    std::copy(output->shape.begin(), output->shape.end(), std::back_inserter(shape.CopyOnWrite()->data));
-    auto func = [&output](const Array<air::Var> &input_indices) {
-      Expr res = const_true();
-      for (size_t i = 0; i < output->shape.size(); ++i) {
-        res = res && (Expr(input_indices[i]) == Expr(input_indices[output->shape.size() + i]));
-      }
+  Array<Expr> shape = output->shape;
+  std::copy(output->shape.begin(), output->shape.end(), std::back_inserter(shape.CopyOnWrite()->data));
+  auto func = [&output](const Array<air::Var> &input_indices) {
+    Expr res = const_true();
+    for (size_t i = 0; i < output->shape.size(); ++i) {
+      res = res && (Expr(input_indices[i]) == Expr(input_indices[output->shape.size() + i]));
+    }
 
-      Expr res_cast = Select::make(res, make_const(output->dtype, 1), make_const(output->dtype, 0));
-      return res_cast;
-    };
-    head = air::compute(shape, func, "identity");
-  }
+    Expr res_cast = Select::make(res, make_const(output->dtype, 1), make_const(output->dtype, 0));
+    return res_cast;
+  };
+  return air::compute(shape, func, "identity");
+}
 
-  // This map maps a tensor to the list of tensors immediately depending on it (using it in their
-  // bodies)
-  std::unordered_map<Tensor, std::vector<Tensor>> reverse_dependencies;
-
+std::unordered_map<Tensor, std::vector<Tensor>> ReverseDependenciesGenerator(
+  const Tensor &output, const Map<Tensor, Array<Tensor>> &override_deps) {
   // Map doesn't work correctly for Tensors, so convert it to std::unordered_map
   std::unordered_map<Tensor, Array<Tensor>> override_deps_map;
+  std::unordered_map<Tensor, std::vector<Tensor>> reverse_dependencies;
   for (auto pair : override_deps) {
     override_deps_map.insert(pair);
   }
 
   // Collect reverse dependencies
-  std::vector<Tensor> stack({output_split});
+  std::vector<Tensor> stack({output});
   while (!stack.empty()) {
     Tensor tensor = stack.back();
     tensor = SplitTensor(tensor);
@@ -91,6 +83,24 @@ DifferentiationResult Differentiate(const Tensor &output, const Array<Tensor> &i
       reverse_dependencies[child].push_back(tensor);
     }
   }
+  return reverse_dependencies;
+}
+
+DifferentiationResult Differentiate(const Tensor &output, const Array<Tensor> &inputs, const Tensor &head_or_null,
+                                    const Map<std::string, NodeRef> &attrs, const Array<Tensor> &new_pld_array,
+                                    const FDiffBuildingBlock &fdiff, const Map<Tensor, Array<Tensor>> &override_deps) {
+  if (!output.get()) {
+    LOG(FATAL) << "output is a null pointer.";
+    return DifferentiationResult();
+  }
+
+  Tensor output_split = SplitTensor(output);
+  Tensor head = HeadGenerator(output, head_or_null);
+
+  // This map maps a tensor to the list of tensors immediately depending on it (using it in their
+  // bodies)
+  std::unordered_map<Tensor, std::vector<Tensor>> reverse_dependencies =
+    ReverseDependenciesGenerator(output_split, override_deps);
 
   // Individual summands of the adjoints
   std::unordered_map<Tensor, Map<Tensor, Tensor>> summands;
@@ -122,10 +132,8 @@ DifferentiationResult Differentiate(const Tensor &output, const Array<Tensor> &i
         // and the multiplication is done in the function fdiff (DiffBuildingBlock by default).
         for (const Tensor &dep : deps) {
           Tensor part = fdiff(dep, tensor, compute_adjoint(dep), attrs, new_pld_array);
-          if (res_adjoint.get()) {
-            if (res_adjoint->dtype != part->dtype) {
-              res_adjoint = topi::cast(res_adjoint, part->dtype);
-            }
+          if (res_adjoint.get() && res_adjoint->dtype != part->dtype) {
+            res_adjoint = topi::cast(res_adjoint, part->dtype);
           }
           res_adjoint = res_adjoint.get() ? topi::add(res_adjoint, part) : part;
 
