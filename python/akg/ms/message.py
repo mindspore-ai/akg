@@ -29,10 +29,12 @@ from akg.global_configs import get_dump_ir_flag
 from akg.global_configs import get_dump_code_flag
 from . import op_build, ops_ascend, ops_gpu, ops_general
 
+
 @utils.check_input_type(dict, dict)
-def _compilewithjson_to_module(kernel_info, attrs):
-    """compile with json."""
-    def _get_ops(op_name, processor):
+def _compilewithjson_to_module_op(kernel_info, attrs, processor):
+    """compile with json for single op."""
+
+    def _get_ops(op_name):
         if not op_name:
             return None
         op_func = getattr(ops_general, op_name, None)
@@ -45,53 +47,25 @@ def _compilewithjson_to_module(kernel_info, attrs):
             special_ops = ops_gpu
         return getattr(special_ops, op_name, None) if special_ops is not None else None
 
-    def _get_target_from_processor(processor):
-        if processor is None:
-            return None
-        elif processor == "aicore":
-            return utils.CCE
-        elif processor == "cuda":
-            return utils.CUDA
-        elif processor == "cpu":
-            return utils.LLVM
-        else:
-            return None
+    def _get_op_func(op_name):
+        op_func = None
+        # get custom ops implementation first.
+        if 'impl_path' in kernel_info and kernel_info['impl_path'] is not None:
+            impl_path = os.path.realpath(kernel_info['impl_path'])
+            if os.path.isfile(impl_path):
+                custom_mod_name = Path(impl_path).resolve().stem
+                mod_spec = importlib.util.spec_from_file_location(
+                    custom_mod_name, impl_path)
+                custom_mod = importlib.util.module_from_spec(mod_spec)
+                mod_spec.loader.exec_module(custom_mod)
+                op_func = getattr(custom_mod, op_name, None)
 
-    processor = kernel_info['process'] if 'process' in kernel_info else utils.CUDA
-    attrs["target"] = _get_target_from_processor(processor)
-
-    if processor == 'cuda' and 'compute_capability' in kernel_info:
-        attrs['compute_capability'] = kernel_info['compute_capability']
-
-    if 'composite' in kernel_info and kernel_info['composite'] is True:
-        try:
-            composite.build(kernel_info, attrs)
-            return True
-        except Exception:
-            logging.error(traceback.format_exc())
-            return False
-
-    op_name = kernel_info['name']
-    op_func = None
-    # get custom ops implementation first.
-    if 'impl_path' in kernel_info and kernel_info['impl_path'] is not None:
-        impl_path = os.path.realpath(kernel_info['impl_path'])
-        if os.path.isfile(impl_path):
-            custom_mod_name = Path(impl_path).resolve().stem
-            mod_spec = importlib.util.spec_from_file_location(
-                custom_mod_name, impl_path)
-            custom_mod = importlib.util.module_from_spec(mod_spec)
-            mod_spec.loader.exec_module(custom_mod)
-            op_func = getattr(custom_mod, op_name, None)
-
-    # get built-in ops.
-    if op_func is None:
-        op_func = _get_ops(op_name, processor)
+        # get built-in ops.
         if op_func is None:
-            logging.error(
-                "this op not support by akg, please check op name %s", str(op_name))
-            return False
-    if processor == 'cuda':
+            op_func = _get_ops(op_name)
+        return op_func
+
+    def _compilewithjson_cuda(op_func):
         input_shapes = []
         input_types = []
         for input_desc in kernel_info['input_desc']:
@@ -104,8 +78,39 @@ def _compilewithjson_to_module(kernel_info, attrs):
         dump_ir = os.getenv(get_dump_ir_flag()) == "on"
         dump_code = os.getenv(get_dump_code_flag()) == "on"
         kernel_exec.op_build(op_func, input_shapes, input_types, op_attrs, kernel_info['op'], attrs=attrs,
-                            dump_ir=dump_ir, dump_code=dump_code)
+                             dump_ir=dump_ir, dump_code=dump_code)
         return True
+
+    def _update_attrs(elem):
+        for key, value in elem.items():
+            if key not in attrs or not attrs[key]:
+                attrs[key] = value
+
+    def _parse_output(output):
+        schedule_func = None
+        if isinstance(output, (list, tuple)):
+            from inspect import isfunction
+            tmp_outputs = []
+            for elem in output:
+                if isfunction(elem):
+                    schedule_func = elem
+                elif isinstance(elem, dict):
+                    _update_attrs(elem)
+                else:
+                    tmp_outputs.append(elem)
+            output = tmp_outputs
+        else:
+            output = [output]
+        return schedule_func, output
+
+    op_name = kernel_info['name']
+    op_func = _get_op_func(op_name)
+    if op_func is None:
+        logging.error(
+            "this op not support by akg, please check op name %s", str(op_name))
+        return False
+    if processor == 'cuda':
+        return _compilewithjson_cuda(op_func)
 
     args = {}
     tsr = []
@@ -135,29 +140,45 @@ def _compilewithjson_to_module(kernel_info, attrs):
             args[ext_arg['name']] = ext_arg['value']
 
     output = op_func(**args, target=attrs["target"])
-    schedule_func = None
-    if isinstance(output, (list, tuple)):
-        from inspect import isfunction
-        tmp_outputs = []
-        for elem in output:
-            if isfunction(elem):
-                schedule_func = elem
-            elif isinstance(elem, dict):
-                for key, value in elem.items():
-                    if key not in attrs or not attrs[key]:
-                        attrs[key] = value
-            else:
-                tmp_outputs.append(elem)
-
-        output = tmp_outputs
-    else:
-        output = [output]
+    schedule_func, output = _parse_output(output)
 
     tsr = tsr + [i for i in output if TensorUtils.is_output_value(i)]
     build_res = op_build([op_name], output, tsr, schedule_func, processor, kernel_info['op'], attrs)
     if not build_res:
         return False
     return True
+
+
+@utils.check_input_type(dict, dict)
+def _compilewithjson_to_module(kernel_info, attrs):
+    """compile with json."""
+    def _get_target_from_processor(processor):
+        if processor is None:
+            return None
+        elif processor == "aicore":
+            return utils.CCE
+        elif processor == "cuda":
+            return utils.CUDA
+        elif processor == "cpu":
+            return utils.LLVM
+        else:
+            return None
+
+    processor = kernel_info['process'] if 'process' in kernel_info else utils.CUDA
+    attrs["target"] = _get_target_from_processor(processor)
+
+    if processor == 'cuda' and 'compute_capability' in kernel_info:
+        attrs['compute_capability'] = kernel_info['compute_capability']
+
+    if 'composite' in kernel_info and kernel_info['composite'] is True:
+        try:
+            composite.build(kernel_info, attrs)
+            return True
+        except Exception:
+            logging.error(traceback.format_exc())
+            return False
+    else:
+        return _compilewithjson_to_module_op(kernel_info, attrs, processor)
 
 
 def compilewithjson(json_str, attrs=None):
@@ -172,6 +193,7 @@ def compilewithjson(json_str, attrs=None):
         return False
 
     return _compilewithjson_to_module(kernel_info, attrs)
+
 
 def compilewithjsonname(json_file, attrs=None):
     with open(json_file, 'r') as f:
