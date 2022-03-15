@@ -501,7 +501,7 @@ isl::map GetScopedAccess(const isl::union_map &schedule, const isl::map &access)
   return scoped_access.uncurry();
 }
 
-isl::map GemmInnerTransposeAffine::ConstructAffine(const isl::map original_map) {
+isl::map GetOut2OutMap(const isl::map original_map) {
   // space:: S -> O
   isl::space original_space = original_map.get_space();
 
@@ -512,16 +512,20 @@ isl::map GemmInnerTransposeAffine::ConstructAffine(const isl::map original_map) 
 
   // map:: O -> O
   footprint = footprint.curry().range().unwrap();
+  return footprint;
+}
+
+isl::local_space GetLocalSpace(isl::map &footprint) {
+  auto footprint_space = footprint.get_space();
+  auto p_s = footprint_space.wrap();
+  return isl::local_space(p_s);
+}
+
+void InitAffineVector(isl::map &footprint,
+  std::vector<isl::aff> &v_aff_x, std::vector<isl::aff> &v_aff_y) {
+  auto ls = GetLocalSpace(footprint);
 
   int n_in = footprint.dim(isl_dim_in);
-  int n_out = footprint.dim(isl_dim_out);
-
-  auto footprint_space = footprint.get_space();
-
-  auto p_s = footprint_space.wrap();
-  auto ls = isl::local_space(p_s);
-
-  std::vector<isl::aff> v_aff_x;
   CHECK_GE(n_in, 0);
   for (int i = 0; i < n_in; ++i) {
     isl::aff aff_i;
@@ -529,20 +533,45 @@ isl::map GemmInnerTransposeAffine::ConstructAffine(const isl::map original_map) 
     v_aff_x.push_back(aff_i);
   }
 
-  std::vector<isl::aff> v_aff_y;
+  int n_out = footprint.dim(isl_dim_out);
   CHECK_GE(n_out, 0);
   for (int i = 0; i < n_out; ++i) {
     isl::aff aff_i;
     aff_i = aff_i.var_on_domain(ls, isl_dim_out, n_in + i);
     v_aff_y.push_back(aff_i);
   }
+}
 
-  // construct affine map
-  // B no ko ki ni ---> B no ko ni ki
+isl_map *UpdateDimsName(isl_map *p_map,	int type) {
+  auto dim_type = static_cast<enum isl_dim_type>(type);
+  int dims = isl_map_dim(p_map, dim_type);
+  CHECK_GE(dims, 0);
+  auto dim0 = std::string(isl_map_get_dim_name(p_map, dim_type, 0));
+  for (int i = 0; i < dims; ++i) {
+    std::string arg = "arg" + std::to_string(i) + dim0.substr(dim0.find("arg0"));
+    p_map = isl_map_set_dim_name(p_map, dim_type, i, arg.c_str());
+  }
+  return p_map;
+}
+
+isl::map FootPrintAddDims(isl::map &footprint, int type, unsigned n) {
+  auto dim_type = static_cast<enum isl_dim_type>(type);
+  isl_map *p_footprint = footprint.copy();
+  p_footprint = isl_map_add_dims(p_footprint, dim_type, n);
+  p_footprint = UpdateDimsName(p_footprint, dim_type);
+  return isl::manage(p_footprint);
+}
+
+isl::map GemmInnerTransposeAffine::ConstructAffine(const isl::map original_map) {
+  std::vector<isl::aff> v_aff_x, v_aff_y;
+  auto footprint = GetOut2OutMap(original_map);
+  InitAffineVector(footprint, v_aff_x, v_aff_y);
   CHECK(v_aff_x.size() == v_aff_y.size());
   size_t len = v_aff_x.size();
   CHECK_GE(len, 4);
 
+  // construct affine map
+  // B no ko ki ni ---> B no ko ni ki
   isl::set set_1 = v_aff_x[len - 4].eq_set(v_aff_y[len - 4]);
   isl::set set_2 = v_aff_x[len - 3].eq_set(v_aff_y[len - 3]);
   isl::set set_3 = v_aff_x[len - 2].eq_set(v_aff_y[len - 1]);
@@ -559,47 +588,15 @@ isl::map GemmInnerTransposeAffine::ConstructAffine(const isl::map original_map) 
 }
 
 isl::map GemmTransposeAffine::ConstructAffine(const isl::map original_map) {
-  // space:: S -> O
-  isl::space original_space = original_map.get_space();
-
-  // MA:: [S -> O] -> O
-  auto original_space_inserter = isl::multi_aff::range_map(original_space);
-
-  isl::map footprint = isl::map(original_space_inserter);
-
-  // map:: O -> O
-  footprint = footprint.curry().range().unwrap();
-
-  int n_in = footprint.dim(isl_dim_in);
-  int n_out = footprint.dim(isl_dim_out);
-
-  auto footprint_space = footprint.get_space();
-
-  auto p_s = footprint_space.wrap();
-  auto ls = isl::local_space(p_s);
-
-  std::vector<isl::aff> v_aff_x;
-  CHECK_GE(n_in, 0);
-  for (int i = 0; i < n_in; ++i) {
-    isl::aff aff_i;
-    aff_i = aff_i.var_on_domain(ls, isl_dim_out, i);
-    v_aff_x.push_back(aff_i);
-  }
-
-  std::vector<isl::aff> v_aff_y;
-  CHECK_GE(n_out, 0);
-  for (int i = 0; i < n_out; ++i) {
-    isl::aff aff_i;
-    aff_i = aff_i.var_on_domain(ls, isl_dim_out, n_in + i);
-    v_aff_y.push_back(aff_i);
-  }
-
-  // construct affine map
-  // B no ko ki ni ---> B ko no ni ki
+  std::vector<isl::aff> v_aff_x, v_aff_y;
+  auto footprint = GetOut2OutMap(original_map);
+  InitAffineVector(footprint, v_aff_x, v_aff_y);
   CHECK(v_aff_x.size() == v_aff_y.size());
   size_t len = v_aff_x.size();
   CHECK_GE(len, 4);
 
+  // construct affine map
+  // B no ko ki ni ---> B ko no ni ki
   isl::set set_1 = v_aff_x[len - 4].eq_set(v_aff_y[len - 3]);
   isl::set set_2 = v_aff_x[len - 3].eq_set(v_aff_y[len - 4]);
   isl::set set_3 = v_aff_x[len - 2].eq_set(v_aff_y[len - 1]);
@@ -616,49 +613,16 @@ isl::map GemmTransposeAffine::ConstructAffine(const isl::map original_map) {
 }
 
 isl::map GemmTransposeBlockAffine::ConstructAffine(const isl::map original_map) {
-  // space:: S -> O
-  isl::space original_space = original_map.get_space();
-
-  // MA:: [S -> O] -> O
-  auto original_space_inserter = isl::multi_aff::range_map(original_space);
-
-  isl::map footprint = isl::map(original_space_inserter);
-
-  // map:: O -> O
-  footprint = footprint.curry().range().unwrap();
-
-  int n_in = footprint.dim(isl_dim_in);
-  int n_out = footprint.dim(isl_dim_out);
-
-  auto footprint_space = footprint.get_space();
-
-  auto p_s = footprint_space.wrap();
-  auto ls = isl::local_space(p_s);
-
-  std::vector<isl::aff> v_aff_x;
-  CHECK_GE(n_in, 0);
-  for (int i = 0; i < n_in; ++i) {
-    isl::aff aff_i;
-    aff_i = aff_i.var_on_domain(ls, isl_dim_out, i);
-    v_aff_x.push_back(aff_i);
-  }
-
-  std::vector<isl::aff> v_aff_y;
-  CHECK_GE(n_out, 0);
-  for (int i = 0; i < n_out; ++i) {
-    isl::aff aff_i;
-    aff_i = aff_i.var_on_domain(ls, isl_dim_out, n_in + i);
-    v_aff_y.push_back(aff_i);
-  }
-
-  /*B no ko ki ni ---> B ko no ni ki
-   *
-   * construct affine map
-   * */
+  std::vector<isl::aff> v_aff_x, v_aff_y;
+  auto footprint = GetOut2OutMap(original_map);
+  InitAffineVector(footprint, v_aff_x, v_aff_y);
   CHECK(v_aff_x.size() == v_aff_y.size());
   size_t len = v_aff_x.size();
   CHECK_GE(len, 4);
 
+  /* construct affine map
+   * B no ko ki ni ---> B ko no ni ki
+   */
   isl::set set_1 = v_aff_x[len - 4].eq_set(v_aff_y[len - 3]);
   isl::set set_2 = v_aff_x[len - 3].eq_set(v_aff_y[len - 4]);
   isl::set set_3 = v_aff_x[len - 2].eq_set(v_aff_y[len - 2]);
@@ -674,61 +638,20 @@ isl::map GemmTransposeBlockAffine::ConstructAffine(const isl::map original_map) 
 }
 
 isl::map Im2colAffine::ConstructAffine(const isl::map original_map) {
-  // space:: S -> O
-  isl::space original_space = original_map.get_space();
+  std::vector<isl::aff> v_aff_x, v_aff_y;
 
-  // MA:: [S -> O] -> O
-  auto original_space_inserter = isl::multi_aff::range_map(original_space);
-
-  isl::map footprint = isl::map(original_space_inserter);
-
-  // map:: O -> O
-  footprint = footprint.curry().range().unwrap();
-
-  isl_map *p_footprint = footprint.copy();
-  p_footprint = isl_map_add_dims(p_footprint, isl_dim_out, 1);
-
-  int n_in = isl_map_dim(p_footprint, isl_dim_in);
-  int n_out = isl_map_dim(p_footprint, isl_dim_out);
-
-  CHECK_GE(n_out, 0);
-  for (int i = 0; i < n_out; ++i) {
-    std::string arg = "arg" + std::to_string(i) + "'";
-    p_footprint = isl_map_set_dim_name(p_footprint, isl_dim_out, i, arg.c_str());
-  }
-
-  footprint = isl::manage(p_footprint);
-
-  auto footprint_space = footprint.get_space();
-
-  auto p_s = footprint_space.wrap();
-  auto ls = isl::local_space(p_s);
-
-  std::vector<isl::aff> v_aff_x;
-  CHECK_GE(n_in, 0);
-  for (int i = 0; i < n_in; ++i) {
-    isl::aff aff_i;
-    aff_i = aff_i.var_on_domain(ls, isl_dim_out, i);
-    v_aff_x.push_back(aff_i);
-  }
-
-  std::vector<isl::aff> v_aff_y;
-  CHECK_GE(n_out, 0);
-  for (int i = 0; i < n_out; ++i) {
-    isl::aff aff_i;
-    aff_i = aff_i.var_on_domain(ls, isl_dim_out, n_in + i);
-    v_aff_y.push_back(aff_i);
-  }
+  auto footprint = GetOut2OutMap(original_map);
+  footprint = FootPrintAddDims(footprint, isl_dim_out, 1);
+  InitAffineVector(footprint, v_aff_x, v_aff_y);
   CHECK_GE(v_aff_x.size(), 5);
   CHECK_GE(v_aff_y.size(), 6);
 
-  ConstructAffineMap(footprint, v_aff_x, v_aff_y, original_map, ls);
+  ConstructAffineMap(footprint, v_aff_x, v_aff_y, original_map);
   return footprint;
 }
 
 void Im2colAffine::ConstructAffineMap(isl::map &footprint, std::vector<isl::aff> &v_aff_x,
-                                      std::vector<isl::aff> &v_aff_y, const isl::map &original_map,
-                                      isl::local_space &ls) {
+                                      std::vector<isl::aff> &v_aff_y, const isl::map &original_map) {
   int64_t stride_h = 1;
   int64_t stride_w = 1;
   int64_t kernel_h = 0;
@@ -782,6 +705,7 @@ void Im2colAffine::ConstructAffineMap(isl::map &footprint, std::vector<isl::aff>
   isl::val v_k_w = isl::val(footprint.ctx(), (kernel_w - 1));
   isl::val v_hw = isl::val(footprint.ctx(), (ho * wo - 1));
 
+  auto ls = GetLocalSpace(footprint);
   isl::aff aff_v_0 = isl::aff(ls, v_0);
   isl::aff aff_k_h = isl::aff(ls, v_k_h);
   isl::aff aff_k_w = isl::aff(ls, v_k_w);
@@ -812,47 +736,13 @@ void Im2colAffine::ConstructAffineMap(isl::map &footprint, std::vector<isl::aff>
 }
 
 isl::map WeightAffine::ConstructAffine(const isl::map original_map) {
-  // space:: S -> O
-  isl::space original_space = original_map.get_space();
+  std::vector<isl::aff> v_aff_x, v_aff_y;
 
-  // MA:: [S -> O] -> O
-  auto original_space_inserter = isl::multi_aff::range_map(original_space);
-
-  isl::map footprint = isl::map(original_space_inserter);
-
-  // map:: O -> O
-  footprint = footprint.curry().range().unwrap();
-
-  isl_map *p_footprint = footprint.copy();
-
-  int n_in = isl_map_dim(p_footprint, isl_dim_in);
-  int n_out = isl_map_dim(p_footprint, isl_dim_out);
-
-  footprint = isl::manage(p_footprint);
-
-  auto footprint_space = footprint.get_space();
-
-  auto p_s = footprint_space.wrap();
-  auto ls = isl::local_space(p_s);
-
-  std::vector<isl::aff> v_aff_x;
-  CHECK_GE(n_in, 0);
-  for (int i = 0; i < n_in; ++i) {
-    isl::aff aff_i;
-    aff_i = aff_i.var_on_domain(ls, isl_dim_out, i);
-    v_aff_x.push_back(aff_i);
-  }
-
-  std::vector<isl::aff> v_aff_y;
-  CHECK_GE(n_out, 0);
-  for (int i = 0; i < n_out; ++i) {
-    isl::aff aff_i;
-    aff_i = aff_i.var_on_domain(ls, isl_dim_out, n_in + i);
-    v_aff_y.push_back(aff_i);
-  }
-
+  auto footprint = GetOut2OutMap(original_map);
+  InitAffineVector(footprint, v_aff_x, v_aff_y);
   CHECK(v_aff_x.size() == v_aff_y.size());
   CHECK_GE(v_aff_x.size(), 4);
+
   int64_t kh = 0;
   int64_t kw = 0;
   auto it = attrInfo_.find(ATTR_CONV_KERNEL_H);
@@ -872,69 +762,31 @@ isl::map WeightAffine::ConstructAffine(const isl::map original_map) {
 }
 
 isl::map FractalAffine::ConstructAffine(const isl::map original_map) {
-  // space:: S -> O
-  isl::space original_space = original_map.get_space();
+  std::vector<isl::aff> v_aff_x, v_aff_y;
 
-  // MA:: [S -> O] -> O
-  auto original_space_inserter = isl::multi_aff::range_map(original_space);
-
-  isl::map footprint = isl::map(original_space_inserter);
-
-  // map:: O -> O
-  footprint = footprint.curry().range().unwrap();
+  auto footprint = GetOut2OutMap(original_map);
+  footprint = FootPrintAddDims(footprint, isl_dim_in, 1);
 
   isl_map *p_footprint = footprint.copy();
-  p_footprint = isl_map_add_dims(p_footprint, isl_dim_in, 1);
-
-  int n_in = isl_map_dim(p_footprint, isl_dim_in);
-  int n_out = isl_map_dim(p_footprint, isl_dim_out);
-
-  CHECK_GE(n_in, 0);
-  for (int i = 0; i < n_in; ++i) {
-    std::string arg = "arg" + std::to_string(i) + "'";
-    p_footprint = isl_map_set_dim_name(p_footprint, isl_dim_in, i, arg.c_str());
-  }
-  CHECK(attrInfo_[ATTR_CONV_FEATURE_NAME].as<StringImm>());
-  p_footprint =
-    isl_map_set_tuple_name(p_footprint, isl_dim_in, attrInfo_[ATTR_CONV_FEATURE_NAME].as<StringImm>()->value.c_str());
-  CHECK_GE(n_out, 0);
-  for (int i = 0; i < n_out; ++i) {
-    std::string arg = "arg" + std::to_string(i) + "''";
-    p_footprint = isl_map_set_dim_name(p_footprint, isl_dim_out, i, arg.c_str());
-  }
+  auto name = attrInfo_[ATTR_CONV_FEATURE_NAME].as<StringImm>();
+  CHECK(name);
+  p_footprint = isl_map_set_tuple_name(p_footprint, isl_dim_in, name->value.c_str());
+  p_footprint = UpdateDimsName(p_footprint, isl_dim_out);
   footprint = isl::manage(p_footprint);
 
-  auto footprint_space = footprint.get_space();
-
-  auto p_s = footprint_space.wrap();
-  auto ls = isl::local_space(p_s);
-
-  std::vector<isl::aff> v_aff_x;
-  for (int i = 0; i < n_in; ++i) {
-    isl::aff aff_i;
-    aff_i = aff_i.var_on_domain(ls, isl_dim_out, i);
-    v_aff_x.push_back(aff_i);
-  }
-
-  std::vector<isl::aff> v_aff_y;
-  for (int i = 0; i < n_out; ++i) {
-    isl::aff aff_i;
-    aff_i = aff_i.var_on_domain(ls, isl_dim_out, n_in + i);
-    v_aff_y.push_back(aff_i);
-  }
-
+  InitAffineVector(footprint, v_aff_x, v_aff_y);
   CHECK_GE(v_aff_x.size(), 6);
   CHECK_GE(v_aff_y.size(), 5);
 
-  ConstructAffineMap(footprint, v_aff_x, v_aff_y, original_map, ls);
+  ConstructAffineMap(footprint, v_aff_x, v_aff_y, original_map);
   return footprint;
 }
 
 void FractalAffine::ConstructAffineMap(isl::map &footprint, std::vector<isl::aff> &v_aff_x,
-                                       std::vector<isl::aff> &v_aff_y, const isl::map &original_map,
-                                       isl::local_space &ls) {
+                                       std::vector<isl::aff> &v_aff_y, const isl::map &original_map) {
   /* construct affine map */
   int64_t block_size = 16;
+  auto ls = GetLocalSpace(footprint);
   isl::val v_b_s = isl::val(footprint.ctx(), block_size);
 
   isl::set set_0 = v_aff_y[0].eq_set(v_aff_x[0]);
@@ -1274,6 +1126,39 @@ isl::schedule_node DefaultInsertExtension(isl::schedule_node tree, const isl::sc
   return tree;
 }
 
+isl::schedule_node ProcParentIsFilter(isl::schedule_node &tree,
+  const isl::multi_union_pw_aff &schedule, isl_bool before) {
+  int children_number = tree.ancestor(2).n_children();
+  CHECK(children_number > 0) << "sequence node must have children";
+  if (isl_bool_true == before) {
+    tree = tree.ancestor(2).child(0).child(0);
+  } else {
+    auto domain = schedule.domain();
+    bool is_promoted_shared = false;
+    domain.foreach_set([&is_promoted_shared](const isl::set &set) -> void {
+      if (set.get_tuple_name() == SHARED_WRITE_ID_NAME) {
+        is_promoted_shared = true;
+      }
+    });
+    int size = children_number - 1;
+    if (is_promoted_shared) {
+      for (int i = size; i >= 0; --i) {
+        auto filter_node = tree.ancestor(2).child(i).as<isl::schedule_node_filter>();
+        isl::union_set uset = filter_node.get_filter();
+        std::vector<isl::set> vset;
+        uset.foreach_set([&vset](isl::set s) { vset.push_back(s); });
+        if (vset.empty() || vset[0].get_tuple_name() != WRITE_ID_NAME) {
+          continue;
+        }
+        size = (i == 0) ? 0 : i - 1;
+        break;
+      }
+    }
+    tree = tree.ancestor(2).child(size).child(0);
+  }
+  return tree;
+}
+
 /*
  * Construct an extension node from "extension" and "schedule", and insert it into the specified position
  * in schedule tree. "before" param indicates before or after the specified position.
@@ -1331,34 +1216,7 @@ isl::schedule_node InsertExtensionBeforeOrAfter(ScopInfo &scop_info, isl::schedu
   int index = tree.parent().get_ancestor_child_position(tree.ancestor(2));
 
   if (tree.parent().isa<isl::schedule_node_filter>()) {
-    int children_number = tree.ancestor(2).n_children();
-    CHECK(children_number > 0) << "sequence node must have children";
-    if (isl_bool_true == before) {
-      tree = tree.ancestor(2).child(0).child(0);
-    } else {
-      auto domain = schedule.domain();
-      bool is_promoted_shared = false;
-      domain.foreach_set([&is_promoted_shared](const isl::set &set) -> void {
-        if (set.get_tuple_name() == SHARED_WRITE_ID_NAME) {
-          is_promoted_shared = true;
-        }
-      });
-      int size = children_number - 1;
-      if (is_promoted_shared) {
-        for (int i = size; i >= 0; --i) {
-          auto filter_node = tree.ancestor(2).child(i).as<isl::schedule_node_filter>();
-          isl::union_set uset = filter_node.get_filter();
-          std::vector<isl::set> vset;
-          uset.foreach_set([&vset](isl::set s) { vset.push_back(s); });
-          if (vset.empty() || vset[0].get_tuple_name() != WRITE_ID_NAME) {
-            continue;
-          }
-          size = (i == 0) ? 0 : i - 1;
-          break;
-        }
-      }
-      tree = tree.ancestor(2).child(size).child(0);
-    }
+    tree = ProcParentIsFilter(tree, schedule, before);
   }
 
   if (scop_info.user_config_.GetTarget() == TARGET_CUDA && USE_SIMPLE_EXTENSION) {
@@ -1689,16 +1547,7 @@ isl::schedule_node FindChildExtension(const isl::schedule_node &node) {
   return res;
 }
 
-isl::schedule_node PlaceDataCopyBelowImpl(ScopInfo &scop_info, isl::schedule_node tree,
-                                          const TensorFootprintCluster &cluster, const isl::map &footprint,
-                                          const isl::id &tensor_id, const isl::set &original_elements,
-                                          const isl::map &exact_reads, const isl::map &exact_writes,
-                                          const isl::union_map &sch) {
-  auto cluster_id = footprint.get_tuple_id(isl_dim_out);
-
-  if (!scop_info.mmu_info_.IsConv()) CheckOutOfBoundAccess(exact_reads, original_elements, "read");
-
-  bool special_dma = false;
+bool IsSpecialDma(ScopInfo &scop_info, isl::id &cluster_id) {
   if (scop_info.user_config_.GetConvSpecialDma() ||
       (scop_info.mmu_info_.GetConvAttrInfo().count(ATTR_CONV_SPECIAL_DMA) > 0)) {
     if (scop_info.mmu_info_.GetConvAttrInfo().count(ATTR_CONV_BACKPROP_FILTER) > 0 &&
@@ -1710,10 +1559,23 @@ isl::schedule_node PlaceDataCopyBelowImpl(ScopInfo &scop_info, isl::schedule_nod
       int kw = scop_info.mmu_info_.ExtractIntFromAttrs(ATTR_CONV_KERNEL_W);
       int ci = scop_info.mmu_info_.ExtractIntFromAttrs(ATTR_CONV_FEATURE_C);
       if (featureName == cluster_id.get_name() && kh == 7 && kw == 7 && ci == 16) {
-        special_dma = true;
+        return true;
       }
     }
   }
+  return false;
+}
+
+isl::schedule_node PlaceDataCopyBelowImpl(ScopInfo &scop_info, isl::schedule_node tree,
+                                          const TensorFootprintCluster &cluster, const isl::map &footprint,
+                                          const isl::id &tensor_id, const isl::set &original_elements,
+                                          const isl::map &exact_reads, const isl::map &exact_writes,
+                                          const isl::union_map &sch) {
+  auto cluster_id = footprint.get_tuple_id(isl_dim_out);
+
+  if (!scop_info.mmu_info_.IsConv()) CheckOutOfBoundAccess(exact_reads, original_elements, "read");
+
+  auto special_dma = IsSpecialDma(scop_info, cluster_id);
 
   isl::set read_set;
   if (special_dma) {
