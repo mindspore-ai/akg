@@ -17,8 +17,9 @@
 #ifndef POLY_DMA_INJECT_H_
 #define POLY_DMA_INJECT_H_
 
-#include <isl/constraint.h>
 #include <memory>
+#include "isl/constraint.h"
+#include "isl/cpp.h"
 #include "poly/isl.h"
 #include "poly/scop_info.h"
 
@@ -317,7 +318,7 @@ class Im2colAffine : public AffineBase {
   isl::map ConstructAffine(isl::map original_map) final;
 
   void ConstructAffineMap(isl::map &footprint, std::vector<isl::aff> &v_aff_x, std::vector<isl::aff> &v_aff_y,
-                          const isl::map &original_map, isl::local_space &ls);
+                          const isl::map &original_map);
 
   bool NotNeedConstruct(std::string name, ScopInfo &scop_info) override {
     if (!scop_info.mmu_info_.IsA(name)) {
@@ -354,7 +355,7 @@ class FractalAffine : public AffineBase {
   isl::map ConstructAffine(isl::map original_map) final;
 
   void ConstructAffineMap(isl::map &footprint, std::vector<isl::aff> &v_aff_x, std::vector<isl::aff> &v_aff_y,
-                          const isl::map &original_map, isl::local_space &ls);
+                          const isl::map &original_map);
 
   bool NotNeedConstruct(std::string name, ScopInfo &scop_info) override {
     if (!scop_info.mmu_info_.IsA(name)) {
