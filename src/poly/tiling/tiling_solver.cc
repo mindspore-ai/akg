@@ -465,7 +465,7 @@ void GpuSolver::InnerThreadOuterBlock() {
   }
 }
 
-void GpuSolver::DetermineTileFactor(TileAxis *axis, TileLevel level) {
+void GpuSolver::DetermineTileFactor(TileAxis *axis, const TileLevel &level) {
   TileAxis::Constraint cons = level == CACHE1 ? axis->c1_constraints : axis->c0_constraints;
   if (level == CACHE1) {
     cand_.UpdateC1Tile(axis, cons.tile_extent_);
@@ -512,7 +512,7 @@ TileCandidate *InequalitySolver::Solve() {
   return &cand_;
 }
 
-void InequalitySolver::InitTileAxis(TileLevel level) {
+void InequalitySolver::InitTileAxis(const TileLevel &level) {
   tiling_mem_info_ = std::unique_ptr<TilingMemInfo>(new (std::nothrow) TilingMemInfo());
   CHECK(tiling_mem_info_) << "memory alloc fail";
 
@@ -673,7 +673,57 @@ Expr InequalitySolver::SolveByInferBound(const Array<Expr> &cons_on_var, const V
 
 std::deque<ParamInfo> DynamicShapeSolver::GetParamInfo() { return this->solver_.param_info_; }
 
-void InequalitySolver::DetermineTileFactor(TileAxis *axis, TileLevel level, const Array<Expr> &memory_constraints) {
+Expr InequalitySolver::SolveTileResult(const Expr &to_tile, const Array<Expr> &memory_constraints,
+                                       const TileAxis::Constraint &cons) {
+  std::stringstream ss;
+  Expr res = SolveMemoryConstraint(memory_constraints, air::Downcast<Var>(to_tile));
+  if (!res.defined()) {
+    ss << "No memory constraint on " << to_tile << " for now, use maximal tile " << cons.tile_extent_;
+    analyzer_.GetTileLogger().AppendLog(DO_TILING, ss);
+    auto size = is_retry_ ? MIN_TILE : cons.tile_extent_;
+    res = (to_tile <= size);
+  }
+  res = RemoveCast(Substitute(res, defined_vars_));
+  ss << "Result after substitute defined vars: " << res;
+  analyzer_.GetTileLogger().AppendLog(DO_TILING, ss);
+  return res;
+}
+
+void InequalitySolver::SolveTileRanges(Expr &shape_range, Expr &tile_min, Expr &tile_range, const TileLevel &level,
+                                       const TileAxis *axis, const Expr &l1_expr) {
+  if (level == CACHE1) {
+    shape_range = axis->range_extent;
+    tile_min = axis->c1_constraints.tile_min_;
+    tile_range = CanonicalSimplify(Min::make(axis->c1_constraints.tile_extent_, shape_range));
+  } else {
+    shape_range = l1_expr;
+    tile_min = axis->c0_constraints.tile_min_;
+    if (shape_range.type() != axis->c0_constraints.tile_extent_.type()) {
+      tile_range =
+        CanonicalSimplify(Min::make(Cast::make(shape_range.type(), axis->c0_constraints.tile_extent_), shape_range));
+    } else {
+      tile_range = CanonicalSimplify(Min::make(axis->c0_constraints.tile_extent_, shape_range));
+    }
+  }
+}
+
+void InequalitySolver::GoToStaticFactor(Expr &final_factor_expr, const Expr &mem_constraint, const Expr &tile_range,
+                                        const TileLevel &level, TileAxis *axis) {
+  std::stringstream ss;
+  if (mem_constraint.as<IntImm>() == nullptr) {
+    tile_success_ = false;
+    analyzer_.GetTileLogger().AppendLine(
+      DO_TILING, "[Warning] Static shape's memory limit is not const, use static tiling instead.");
+    return;
+  }
+  int64_t final_factor = DetermineTileForStatic(axis, mem_constraint, tile_range, level);
+  ss << "[Static shape final factor]: -> " << final_factor;
+  analyzer_.GetTileLogger().AppendLog(DO_TILING, ss);
+  final_factor_expr = CastInt64ToExpr(final_factor);
+}
+
+void InequalitySolver::DetermineTileFactor(TileAxis *axis, const TileLevel &level,
+                                           const Array<Expr> &memory_constraints) {
   if (axis->is_pragma && level == CACHE1) {
     return;
   }
@@ -689,17 +739,7 @@ void InequalitySolver::DetermineTileFactor(TileAxis *axis, TileLevel level, cons
   }
 
   if (to_tile.as<Variable>()) {
-    Expr res = SolveMemoryConstraint(memory_constraints, air::Downcast<Var>(to_tile));
-    if (!res.defined()) {
-      ss << "No memory constraint on " << to_tile << " for now, use maximal tile " << cons.tile_extent_;
-      analyzer_.GetTileLogger().AppendLog(DO_TILING, ss);
-      auto size = is_retry_ ? MIN_TILE : cons.tile_extent_;
-      res = (to_tile <= size);
-    }
-    res = RemoveCast(Substitute(res, defined_vars_));
-    ss << "Result after substitute defined vars: " << res;
-    analyzer_.GetTileLogger().AppendLog(DO_TILING, ss);
-
+    Expr res = SolveTileResult(to_tile, memory_constraints, cons);
     const auto le = res.as<LE>();
     CHECK(le) << "Cannot define tile range for axis " << axis->index << "_" << axis->dim_axis;
 
@@ -707,20 +747,7 @@ void InequalitySolver::DetermineTileFactor(TileAxis *axis, TileLevel level, cons
     Expr tile_min;
     Expr tile_range;
     Expr shape_range;
-    if (level == CACHE1) {
-      shape_range = axis->range_extent;
-      tile_min = axis->c1_constraints.tile_min_;
-      tile_range = CanonicalSimplify(Min::make(axis->c1_constraints.tile_extent_, shape_range));
-    } else {
-      shape_range = l1_expr;
-      tile_min = axis->c0_constraints.tile_min_;
-      if (shape_range.type() != axis->c0_constraints.tile_extent_.type()) {
-        tile_range =
-          CanonicalSimplify(Min::make(Cast::make(shape_range.type(), axis->c0_constraints.tile_extent_), shape_range));
-      } else {
-        tile_range = CanonicalSimplify(Min::make(axis->c0_constraints.tile_extent_, shape_range));
-      }
-    }
+    SolveTileRanges(shape_range, tile_min, tile_range, level, axis, l1_expr);
 
     if (analyzer_.arith_ana_.CanProve(mem_constraint <= 0)) {
       ss << "Memory limit should be positive, but get " << mem_constraint << ", use minimal tile " << tile_min;
@@ -731,16 +758,8 @@ void InequalitySolver::DetermineTileFactor(TileAxis *axis, TileLevel level, cons
     Expr final_factor_expr;
     bool is_static_shape = tile_range.as<IntImm>() != nullptr;
     if (is_static_shape) {
-      if (mem_constraint.as<IntImm>() == nullptr) {
-        tile_success_ = false;
-        analyzer_.GetTileLogger().AppendLine(
-          DO_TILING, "[Warning] Static shape's memory limit is not const, use static tiling instead.");
-        return;
-      }
-      int64_t final_factor = DetermineTileForStatic(axis, mem_constraint, tile_range, level);
-      ss << "[Static shape final factor]: " << to_tile << " -> " << final_factor;
-      analyzer_.GetTileLogger().AppendLog(DO_TILING, ss);
-      final_factor_expr = CastInt64ToExpr(final_factor);
+      GoToStaticFactor(final_factor_expr, mem_constraint, tile_range, level, axis);
+
     } else {
       if (analyzer_.arith_ana_.CanProve(tile_min == tile_range)) {
         param_info_.push_front(ParamInfo{"LetStmt", Expr(to_tile), tile_range});
@@ -772,8 +791,9 @@ void InequalitySolver::DetermineTileFactor(TileAxis *axis, TileLevel level, cons
   }
 }
 
-Expr InequalitySolver::DetermineTileForDynamic(TileAxis *axis, const Expr &mem_constraint, const Expr &to_tile,
-                                               const Expr &shape_range, const Expr &tile_range, TileLevel level) {
+Expr InequalitySolver::DetermineTileForDynamic(const TileAxis *axis, const Expr &mem_constraint, const Expr &to_tile,
+                                               const Expr &shape_range, const Expr &tile_range,
+                                               const TileLevel &level) {
   Expr final_factor;
   std::stringstream ss;
   auto tile = air::Downcast<Var>(to_tile);
@@ -848,7 +868,7 @@ Expr InequalitySolver::DetermineTileForDynamic(TileAxis *axis, const Expr &mem_c
   return final_factor;
 }
 
-void InequalitySolver::AppendShapeLimitConstraint(TileAxis *axis, Expr to_tile) {
+void InequalitySolver::AppendShapeLimitConstraint(const TileAxis *axis, const Expr &to_tile) {
   if (axis->dyn_shape_limit == -1) {
     LOG(WARNING) << "It is better to set dynamic shape limit for full tile axis " << axis->range_extent;
   } else {
@@ -857,84 +877,102 @@ void InequalitySolver::AppendShapeLimitConstraint(TileAxis *axis, Expr to_tile) 
   }
 }
 
-int64_t InequalitySolver::DetermineTileForStatic(TileAxis *axis, const Expr &mem_constraint, const Expr &tile_range,
-                                                 TileLevel level) {
+void InequalitySolver::GoWithCandidates(int64_t &final_factor, int64_t static_mem_constraint,
+                                        const TileAxis::Constraint &cons) {
   std::stringstream ss;
-  auto final_factor = MIN_TILE;
+  for (auto max_cand : cons.cand_factor) {
+    if (max_cand.as<IntImm>() == nullptr) {
+      ss << "Static shape should have const candidate factor, while got " << max_cand;
+      analyzer_.GetTileLogger().LogFatalAndSaveLog(ss.str());
+    }
+
+    if (max_cand.as<IntImm>()->value <= static_mem_constraint) {
+      final_factor = max_cand.as<IntImm>()->value;
+      ss << "--> Candidate factor " << final_factor;
+      break;
+    } else if (max_cand.as<IntImm>()->value * exceed_ratio_ * percentage_ < static_mem_constraint) {
+      final_factor = max_cand.as<IntImm>()->value;
+      exceed_ratio_ = exceed_ratio_ * (static_cast<double>(final_factor) / static_cast<double>(static_mem_constraint));
+      ss << "--> Candidate factor " << final_factor << " (exceed ratio update to " << exceed_ratio_ << ")";
+      break;
+    }
+  }
+}
+
+void InequalitySolver::GoWithConstraints(int64_t &final_factor, int64_t static_mem_constraint, int64_t static_shape,
+                                         const TileAxis::Constraint &cons, const TileAxis *axis,
+                                         const TileLevel &level) {
+  std::stringstream ss;
+  if (cons.tile_min_.as<IntImm>() == nullptr) {
+    ss << "Static shape should have const tile min, while got " << cons.tile_min_;
+    analyzer_.GetTileLogger().LogFatalAndSaveLog(ss.str());
+  }
+
+  final_factor = std::max(cons.tile_min_.as<IntImm>()->value, static_mem_constraint);
+  ss << "--> Init factor " << final_factor;
+
+  auto mod_value = cons.tile_mod_.as<IntImm>() ? cons.tile_mod_.as<IntImm>()->value : 1;
+  bool is_unaligned = (static_shape >= mod_value && final_factor % mod_value != 0);
+  bool need_to_align = (final_factor > mod_value || !axis->HasAttr(AT_VECTORIZED));
+  if (is_unaligned && need_to_align) {
+    final_factor = std::max(static_cast<int>(final_factor / mod_value * mod_value), 1);
+    ss << "--> Mod value " << mod_value << " --> Align to mod " << final_factor;
+  }
+
+  auto tail = static_shape - (static_shape / final_factor) * final_factor;
+  ss << "--> Tail " << tail;
+
+  // When tiling factor generating tail, we need to check whether it is valid (only for vector op).
+  if (level == CACHE1 && tail > 0) {
+    if (axis->forbid_iso) {
+      // We use conservative strategy here to choose final factor, i.e. use divisible factor that is smaller
+      // than memory limit; In the future, we may consider to choose from larger-divisible factor and
+      // smaller-divisible factor;
+      while (final_factor > 0 && static_shape % final_factor != 0) {
+        --final_factor;
+      }
+      ss << "--> Forbid isolate " << final_factor;
+    } else if (final_factor % GetMaxAlignBytes(axis->data_size) != 0) {
+      if (final_factor < GetMaxAlignBytes(axis->data_size)) {
+        final_factor =
+          GetMaxAlignBytes(axis->data_size) > static_mem_constraint ? MIN_TILE : GetMaxAlignBytes(axis->data_size);
+      } else {
+        while (final_factor % GetMaxAlignBytes(axis->data_size) != 0) {
+          --final_factor;
+        }
+      }
+      ss << "--> Align to (" << GetMaxAlignBytes(axis->data_size) << ") bytes " << final_factor;
+    }
+  }
+}
+
+int64_t InequalitySolver::DetermineTileForStatic(TileAxis *axis, const Expr &mem_constraint, const Expr &tile_range,
+                                                 const TileLevel &level) {
+  std::stringstream ss;
+  int64_t final_factor = MIN_TILE;
   auto static_shape = tile_range.as<IntImm>()->value;
   auto static_mem_constraint = mem_constraint.as<IntImm>()->value;
   TileAxis::Constraint cons = level == CACHE1 ? axis->c1_constraints : axis->c0_constraints;
 
   if (!cons.cand_factor.empty()) {
-    for (auto max_cand : cons.cand_factor) {
-      if (max_cand.as<IntImm>() == nullptr) {
-        ss << "Static shape should have const candidate factor, while got " << max_cand;
-        analyzer_.GetTileLogger().LogFatalAndSaveLog(ss.str());
-      }
-
-      if (max_cand.as<IntImm>()->value <= static_mem_constraint) {
-        final_factor = max_cand.as<IntImm>()->value;
-        ss << "--> Candidate factor " << final_factor;
-        break;
-      } else if (max_cand.as<IntImm>()->value * exceed_ratio_ * percentage_ < static_mem_constraint) {
-        final_factor = max_cand.as<IntImm>()->value;
-        exceed_ratio_ =
-          exceed_ratio_ * (static_cast<double>(final_factor) / static_cast<double>(static_mem_constraint));
-        ss << "--> Candidate factor " << final_factor << " (exceed ratio update to " << exceed_ratio_ << ")";
-        break;
-      }
-    }
+    GoWithCandidates(final_factor, static_mem_constraint, cons);
   } else {
     if (static_mem_constraint >= static_shape) {
       final_factor = static_shape;
     } else {
-      if (cons.tile_min_.as<IntImm>() == nullptr) {
-        ss << "Static shape should have const tile min, while got " << cons.tile_min_;
-        analyzer_.GetTileLogger().LogFatalAndSaveLog(ss.str());
-      }
-
-      final_factor = std::max(cons.tile_min_.as<IntImm>()->value, static_mem_constraint);
-      ss << "--> Init factor " << final_factor;
-
-      auto mod_value = cons.tile_mod_.as<IntImm>() ? cons.tile_mod_.as<IntImm>()->value : 1;
-      bool is_unaligned = (static_shape >= mod_value && final_factor % mod_value != 0);
-      bool need_to_align = (final_factor > mod_value || !axis->HasAttr(AT_VECTORIZED));
-      if (is_unaligned && need_to_align) {
-        final_factor = std::max(static_cast<int>(final_factor / mod_value * mod_value), 1);
-        ss << "--> Mod value " << mod_value << " --> Align to mod " << final_factor;
-      }
-
-      auto tail = static_shape - (static_shape / final_factor) * final_factor;
-      ss << "--> Tail " << tail;
-
-      // When tiling factor generating tail, we need to check whether it is valid (only for vector op).
-      if (level == CACHE1 && tail > 0) {
-        if (axis->forbid_iso) {
-          // We use conservative strategy here to choose final factor, i.e. use divisible factor that is smaller
-          // than memory limit; In the future, we may consider to choose from larger-divisible factor and
-          // smaller-divisible factor;
-          while (static_shape % final_factor != 0) --final_factor;
-          ss << "--> Forbid isolate " << final_factor;
-        } else if (final_factor % GetMaxAlignBytes(axis->data_size) != 0) {
-          if (final_factor < GetMaxAlignBytes(axis->data_size)) {
-            final_factor =
-              GetMaxAlignBytes(axis->data_size) > static_mem_constraint ? MIN_TILE : GetMaxAlignBytes(axis->data_size);
-          } else {
-            while (final_factor % GetMaxAlignBytes(axis->data_size) != 0) {
-              --final_factor;
-            }
-          }
-          ss << "--> Align to (" << GetMaxAlignBytes(axis->data_size) << ") bytes " << final_factor;
-        }
-      }
+      GoWithConstraints(final_factor, static_mem_constraint, static_shape, cons, axis, level);
     }
+    final_factor = PostprocessFinalFactor(final_factor, axis);
+  }
+  return final_factor;
+}
 
-    if (analyzer_.scop_info_.user_config_.GetPragmaAnalyzeMulticore() &&
-        !analyzer_.scop_info_.user_config_.GetIsDynamic() && analyzer_.op_type_ == TileOpType::VECTOR_OP &&
-        analyzer_.scop_info_.user_config_.GetTarget() != TARGET_CUDA) {
-      MulticoreStrategy mc_strategy_ = MulticoreStrategy(cand_, analyzer_.GetTileLogger());
-      final_factor = mc_strategy_.AdjustTilingAccordingToMulticoreConstraint(axis, final_factor);
-    }
+int64_t InequalitySolver::PostprocessFinalFactor(int64_t final_factor, TileAxis *axis) {
+  if (analyzer_.scop_info_.user_config_.GetPragmaAnalyzeMulticore() &&
+      !analyzer_.scop_info_.user_config_.GetIsDynamic() && analyzer_.op_type_ == TileOpType::VECTOR_OP &&
+      analyzer_.scop_info_.user_config_.GetTarget() != TARGET_CUDA) {
+    MulticoreStrategy mc_strategy_ = MulticoreStrategy(cand_, analyzer_.GetTileLogger());
+    final_factor = mc_strategy_.AdjustTilingAccordingToMulticoreConstraint(axis, final_factor);
   }
   return final_factor;
 }
@@ -1006,7 +1044,8 @@ void InequalitySolver::CalculateMemoryInBuffer(const TilingAnalyzer::BufferEntry
   }
 }
 
-Expr InequalitySolver::EstimateAlignment(const TilingAnalyzer::BufferEntry *buf, TileAxis *axis, Expr tile) const {
+Expr InequalitySolver::EstimateAlignment(const TilingAnalyzer::BufferEntry *buf, const TileAxis *axis,
+                                         const Expr &tile) const {
   if (analyzer_.op_type_ != TileOpType::VECTOR_OP) {
     return tile;
   }
@@ -1356,28 +1395,87 @@ bool TraverseSolver::MemoryVerify(TileLevel level, int band, int64_t *deviation)
   return true;
 }
 
+void TraverseSolver::UpdateChosenValue(int64_t tail, int64_t deviation, int64_t tile_size, TileAxis *axis) {
+  std::stringstream ss;
+  if (tail == 0) {
+    if (deviation > cur_no_iso_info_->dev) {
+      return;
+    }
+    ss << "factor " << tile_size << " has " << deviation << " deviation, update to no isolate factor";
+    cur_no_iso_info_->val = tile_size;
+    cur_no_iso_info_->dev = deviation;
+  } else {
+    if (deviation > cur_iso_info_->dev) {
+      return;
+    }
+    if (analyzer_.scop_info_.user_config_.GetPragmaAllowTailTiling() && tail < GetMaxAlignBytes(axis->data_size)) {
+      ss << "factor " << tile_size << " has " << tail << " tail that may disable multicore, skip.";
+      return;
+    }
+    ss << "factor " << tile_size << " has " << deviation << " deviation, update to isolate factor";
+    cur_iso_info_->val = tile_size;
+    cur_iso_info_->dev = deviation;
+  }
+  analyzer_.GetTileLogger().AppendLog(DO_TILING, ss);
+}
+
+bool TraverseSolver::GoWithCandidates(const TileInfo *info, const TileAxis::Constraint &cons, TileAxis *axis,
+                                      int64_t deviation, int dst) {
+  std::stringstream ss;
+  bool success = false;
+  for (int i = static_cast<int>(cons.cand_factor.size()) - 1; i >= 0; --i) {
+    int64_t t = cons.cand_factor[i].as<IntImm>()->value;
+    UpdateTile(info, axis, t);
+    bool mem_ok = MemoryVerify(info->level, info->band, &deviation);
+    if (deviation < 0) {
+      ss << "factor " << t << " exceed memory, exit";
+      analyzer_.GetTileLogger().AppendLog(DO_TILING, ss);
+      break;
+    }
+
+    if (!mem_ok) {
+      continue;
+    }
+    success = true;
+    auto tail = dst % t;
+    UpdateChosenValue(tail, deviation, t, axis);
+  }
+  if (cur_iso_info_->val == -1 && cur_no_iso_info_->val == -1) {
+    cur_iso_info_->val = cons.cand_factor.back().as<IntImm>()->value;
+    cur_no_iso_info_->val = cons.cand_factor.back().as<IntImm>()->value;
+  }
+  return success;
+}
+
+void TraverseSolver::InitMemoryInferInfo() {
+  cur_iso_info_ = std::make_unique<MemoryInferInfo>(MemoryInferInfo());
+  cur_iso_info_->val = TileVarId::UNDEFINE;
+  cur_no_iso_info_ = std::make_unique<MemoryInferInfo>(MemoryInferInfo());
+  cur_no_iso_info_->val = TileVarId::UNDEFINE;
+}
+
+void TraverseSolver::UpdateTile(const TileInfo *info, TileAxis *axis, int64_t tile_size) {
+  if (info->level == CACHE1) {
+    cand_.UpdateConstTile(axis, tile_size);
+  } else {
+    cand_.UpdateConstTile(axis, cand_.GetConstTileVal(axis).first, tile_size);
+  }
+}
+
 bool TraverseSolver::DoTiling(const TileInfo *info) {
   bool success = false;
   TileAxis *axis = info->axis;
   int64_t deviation = info->deviation;
-  int64_t best_val = TileVarId::UNDEFINE;
-  int64_t best_no_iso_val = TileVarId::UNDEFINE;
-  auto UpdateTile = [this, &info, &axis](int64_t tile_size) {
-    if (info->level == CACHE1) {
-      cand_.UpdateConstTile(axis, tile_size);
-    } else {
-      cand_.UpdateConstTile(axis, cand_.GetConstTileVal(axis).first, tile_size);
-    }
-  };
+  InitMemoryInferInfo();
 
   if (cand_.SpaceVerify(axis, info->level, info->band)) {
-    best_val = info->min_tile;
-    best_no_iso_val = info->min_tile;
-    UpdateTile(info->min_tile);
+    cur_iso_info_->val = info->min_tile;
+    cur_no_iso_info_->val = info->min_tile;
+    UpdateTile(info, axis, info->min_tile);
   }
 
-  int64_t best_devs = deviation;
-  int64_t best_no_iso_devs = deviation;
+  cur_iso_info_->dev = deviation;
+  cur_no_iso_info_->dev = deviation;
   int64_t balance_factor =
     analyzer_.scop_info_.user_config_.GetPragmaAllowTailTiling() ? 1 : GetMaxAlignBytes(axis->data_size);
 
@@ -1390,57 +1488,20 @@ bool TraverseSolver::DoTiling(const TileInfo *info) {
 
   int64_t mod = cons.tile_mod_.as<IntImm>()->value;
   bool check_mod = dst >= mod;
-  if (axis->forbid_iso) check_mod = (dst % mod == 0);
+  if (axis->forbid_iso) {
+    check_mod = (dst % mod == 0);
+  }
 
   std::stringstream ss;
   ss << "start to tile from " << init << " to " << dst;
   analyzer_.GetTileLogger().AppendLog(DO_TILING, ss);
   if (init == dst && !is_retry_) {
-    best_no_iso_val = init;
-    best_val = init;
+    cur_no_iso_info_->val = init;
+    cur_iso_info_->val = init;
   }
 
-  auto UpdateChosenValue = [this, &best_no_iso_devs, &best_devs, &best_no_iso_val, &best_val, &axis](
-                             int64_t tail, int64_t deviation, int64_t tile_size) {
-    std::stringstream ss;
-    if (tail == 0) {
-      if (deviation > best_no_iso_devs) return;
-      ss << "factor " << tile_size << " has " << deviation << " deviation, update to no isolate factor";
-      best_no_iso_val = tile_size;
-      best_no_iso_devs = deviation;
-    } else {
-      if (deviation > best_devs) return;
-      if (analyzer_.scop_info_.user_config_.GetPragmaAllowTailTiling() && tail < GetMaxAlignBytes(axis->data_size)) {
-        ss << "factor " << tile_size << " has " << tail << " tail that may disable multicore, skip.";
-        return;
-      }
-      ss << "factor " << tile_size << " has " << deviation << " deviation, update to isolate factor";
-      best_val = tile_size;
-      best_devs = deviation;
-    }
-    analyzer_.GetTileLogger().AppendLog(DO_TILING, ss);
-  };
-
   if (!is_retry_ && !cons.cand_factor.empty()) {
-    for (int i = static_cast<int>(cons.cand_factor.size()) - 1; i >= 0; --i) {
-      int64_t t = cons.cand_factor[i].as<IntImm>()->value;
-      UpdateTile(t);
-      bool mem_ok = MemoryVerify(info->level, info->band, &deviation);
-      if (deviation < 0) {
-        ss << "factor " << t << " exceed memory, exit";
-        analyzer_.GetTileLogger().AppendLog(DO_TILING, ss);
-        break;
-      }
-
-      if (!mem_ok) continue;
-      success = true;
-      auto tail = dst % t;
-      UpdateChosenValue(tail, deviation, t);
-    }
-    if (best_val == -1 && best_no_iso_val == -1) {
-      best_val = cons.cand_factor.back().as<IntImm>()->value;
-      best_no_iso_val = cons.cand_factor.back().as<IntImm>()->value;
-    }
+    success = GoWithCandidates(info, cons, axis, deviation, dst);
   } else {
     int64_t t = init;
     int64_t inc = 1;
@@ -1449,7 +1510,7 @@ bool TraverseSolver::DoTiling(const TileInfo *info) {
         t += inc;
         continue;
       }
-      UpdateTile(t);
+      UpdateTile(info, axis, t);
 
       if (!cand_.SpaceVerify(axis, info->level, info->band)) {
         t += inc;
@@ -1478,13 +1539,15 @@ bool TraverseSolver::DoTiling(const TileInfo *info) {
       }
       success = true;
       auto tail = dst % t;
-      UpdateChosenValue(tail, deviation, t);
+      UpdateChosenValue(tail, deviation, t, axis);
       t += inc;
     }
   }
-  int64_t final_factor = (axis->forbid_iso || best_no_iso_val * balance_factor > best_val) ? best_no_iso_val : best_val;
+  int64_t final_factor = (axis->forbid_iso || cur_no_iso_info_->val * balance_factor > cur_iso_info_->val)
+                           ? cur_no_iso_info_->val
+                           : cur_iso_info_->val;
   final_factor = PostprocessFinalFactor(final_factor, axis);
-  UpdateTile(final_factor);
+  UpdateTile(info, axis, final_factor);
   return success;
 }
 
@@ -1555,18 +1618,7 @@ void TraverseSolver::AppendConvPragma() {
   M = CanonicalSimplify((floordiv((M - 1 + MMA_UNIT), MMA_UNIT)) * MMA_UNIT);
   Expr mo = CanonicalSimplify(floordiv(M, MMA_UNIT));
   CreateSpecgemmTileAxis(mo, no, ko, false);
-  this->cand_.SetBatchAxis(spec_tile_axis_);
-  if (analyzer_.scop_info_.user_config_.GetIsDynamic()) {
-    cand_.InitTileAxis(CACHE0);
-  } else {
-    for (TileAxis *axis : this->cand_.GetTileAxis()) {
-      std::unique_ptr<TileInfo> info(new (std::nothrow) TileInfo(axis, CACHE0, 0));
-      CHECK(info) << "memory alloc fail";
-      if (IsTilable(info.get())) {
-        static_cast<void>(DoTiling(info.get()));
-      }
-    }
-  }
+  SolveConvCache0();
   Expr cin_cut;
   Expr batch_cut;
   CreateConvPragma(c_cut, tile_out_h, tile_out_w, kh_cut, kw_cut, cin_cut, batch_cut);
@@ -1627,6 +1679,11 @@ void TraverseSolver::AppendConvBackpropPragma() {
   }
 
   CreateSpecgemmTileAxis(mo, no, ko, cut_reduce);
+  SolveConvCache0();
+  CreateConvPragma(co_cut, tile_out_h, tile_out_w, kh_cut, kw_cut, cin_cut, batch_cut);
+}
+
+void TraverseSolver::SolveConvCache0() {
   this->cand_.SetBatchAxis(spec_tile_axis_);
   if (analyzer_.scop_info_.user_config_.GetIsDynamic()) {
     cand_.InitTileAxis(CACHE0);
@@ -1639,7 +1696,6 @@ void TraverseSolver::AppendConvBackpropPragma() {
       }
     }
   }
-  CreateConvPragma(co_cut, tile_out_h, tile_out_w, kh_cut, kw_cut, cin_cut, batch_cut);
 }
 
 void TraverseSolver::RestrainConvBackInputTileK(TileAxis *k_axis) const {
