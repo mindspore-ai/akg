@@ -30,6 +30,24 @@ from .construct_args import ConstructType, ConstructKey
 def generate_trait(desc):
     """ generate trait of kernel description """
 
+    def get_op_trait(op, counter, tensor_idx):
+        input_idx = []
+        if op['input_desc']:
+            for input_desc in op['input_desc']:
+                if input_desc[0].get('value', None) is None:
+                    input_idx.append(counter - tensor_idx[input_desc[0]['tensor_name']])
+        input_idx.sort()
+        input_idx_str = ''.join([str(i) for i in input_idx])
+        op_trait = op['name'] + input_idx_str
+        if op['name'] == "MatMul":
+            for attr in op['attr']:
+                if attr['name'] == "transpose_a":
+                    transpose_a = str(int(attr['value']))
+                if attr['name'] == "transpose_b":
+                    transpose_b = str(int(attr['value']))
+            op_trait += '_' + transpose_a + '_' + transpose_b
+        return op_trait
+
     def generate_compute_trait():
         tensor_idx = {}
         counter = 0
@@ -40,21 +58,7 @@ def generate_trait(desc):
                 counter += 1
             traits = [str(len(desc['input_desc']))]
         for op in desc['op_desc'] if desc['op_desc'] is not None else []:
-            input_idx = []
-            if op['input_desc']:
-                for input_desc in op['input_desc']:
-                    if input_desc[0].get('value', None) is None:
-                        input_idx.append(counter - tensor_idx[input_desc[0]['tensor_name']])
-            input_idx.sort()
-            input_idx_str = ''.join([str(i) for i in input_idx])
-            op_trait = op['name'] + input_idx_str
-            if op['name'] == "MatMul":
-                for attr in op['attr']:
-                    if attr['name'] == "transpose_a":
-                        transpose_a = str(int(attr['value']))
-                    if attr['name'] == "transpose_b":
-                        transpose_b = str(int(attr['value']))
-                op_trait += '_' + transpose_a + '_' + transpose_b
+            op_trait = get_op_trait(op, counter, tensor_idx)
             traits.append(op_trait)
             for op_out_desc in op['output_desc'] if op['output_desc'] is not None else []:
                 tensor_idx[op_out_desc['tensor_name']] = counter
@@ -175,13 +179,14 @@ def _update_compile_attr(desc_d, attr):
     if desc_d['op_desc'] is None:
         return attr
     for op in desc_d['op_desc']:
-        if "compile_attr" in op and op["compile_attr"] is not None:
-            for i in op["compile_attr"]:
-                if isinstance(i, str):
-                    attr.update({i: op["compile_attr"][i]})
-                else:
-                    raise ValueError("Currently all compile attrs' name for AKG should be type of str. But got \
-                        an attr name: {}, which type is: {}.".format(i, type(i)))
+        if "compile_attr" not in op or op["compile_attr"] is None:
+            continue
+        for i in op["compile_attr"]:
+            if isinstance(i, str):
+                attr.update({i: op["compile_attr"][i]})
+            else:
+                raise ValueError("Currently all compile attrs' name for AKG should be type of str. But got \
+                    an attr name: {}, which type is: {}.".format(i, type(i)))
     return attr
 
 
@@ -229,7 +234,11 @@ def _get_online_tune_attr(desc_s, attrs, repo_path, use_new_space=True):
 
 
 def get_attr_from_dict(keys, repo, default=None):
-    # repo={key1:{key2:{key3:attr}}} , keys=[key1,key3,key3] return attr
+    """
+    :param keys: [key1,key3,key3]
+    :param repo: {key1:{key2:{key3:attr}}}
+    :return: attr
+    """
     for key in keys:
         repo = repo.get(key)
         if not repo:
@@ -293,7 +302,8 @@ def _update_attrs_gpu(all_ops, attrs, poly):
         elif "enable_akg_reduce_lib" not in attrs.keys():
             attrs["enable_akg_reduce_lib"] = True
 
-        if "pragma_enable_matmul" not in attrs.keys() and any([i in all_ops for i in ["BatchMatMul", "MatMul", "Conv2D"]]):
+        if "pragma_enable_matmul" not in attrs.keys() and any(
+                [i in all_ops for i in ["BatchMatMul", "MatMul", "Conv2D"]]):
             attrs['pragma_enable_matmul'] = True
             attrs['enable_auto_inline'] = False
         if "pragma_enable_conv_tensor_core" not in attrs.keys() and "Conv2D" in all_ops:
@@ -337,6 +347,7 @@ def _build_to_module(desc_s, desc_d, attrs=None, poly=True):
     Returns:
        Module.
     """
+
     def _update_attr_by_repo(desc_s, attrs):
         desc_d = json.loads(desc_s)
         process = desc_d["process"]
@@ -416,6 +427,7 @@ def _build_to_module_ascend(desc_s_in, desc_d_in, attr=None, use_repo=True):
                 if desc_d["extra"].get("BlockMode", "") == "single_block":
                     attr["enable_multicore"] = 0
             return attr
+
         if attr is None:
             attr = {'dim': ''}
         all_ops = set([op['name'] for op in desc_d['op_desc']])
