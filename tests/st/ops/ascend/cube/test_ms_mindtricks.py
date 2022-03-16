@@ -19,7 +19,6 @@
 
 # Basic libraries
 import os
-import sys
 import json
 import logging
 import pytest
@@ -29,7 +28,7 @@ from akg import composite
 from akg.utils import kernel_exec as utils
 from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
-from tests.common.gen_json_data import gen_json_data
+from akg.utils.composite_op_helper import gen_json_data
 from tests.common.base import get_rtol_atol
 from tests.common.tensorio import compare_tensor
 

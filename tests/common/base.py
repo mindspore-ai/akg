@@ -21,9 +21,9 @@ import numpy as np
 import akg.utils as utils
 from akg import dim
 from akg.utils.result_analysis import count_unequal_element
+from akg.utils.composite_op_helper import Log
 from tests.common import tensorio
 from tests.common.ftp_handel import ftpHandle
-from tests.common.log import Log
 
 PERFORMANCE_TEST = "PERFORMANCE_TEST"
 
@@ -507,13 +507,8 @@ class TestBase(object):
 
 
 def get_rtol_atol(op_name, dtype, rtol=5e-03, atol=5e-03):
-    run_mode = os.environ.get('RUNTIME_MODE')
-    if run_mode in ("rpc_cloud", "air_cloud"):
-        if dtype == "float16":
-            rtol = atol = 1e-03
-        else:
-            rtol = atol = 1e-04
-    return rtol, atol
+    from akg.utils import composite_op_helper as helper
+    return helper.get_rtol_atol(op_name, dtype, rtol, atol)
 
 
 def get_splitted_cases(cases, split_nums, split_idx):

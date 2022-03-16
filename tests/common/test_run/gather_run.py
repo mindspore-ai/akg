@@ -1,4 +1,4 @@
-# Copyright 2020-2021 Huawei Technologies Co., Ltd
+# Copyright 2020-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,8 +18,8 @@ from akg.utils import kernel_exec as utils
 from akg.ops.array.gpu import Gather
 from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
-from tests.common.gen_random import random_gaussian, gen_indices_gather
-from tests.common.test_utils import gather_np
+from akg.utils.op_dsl import gather_np
+from akg.utils.gen_random import random_gaussian, gen_indices_gather
 import numpy as np
 import akg
 
