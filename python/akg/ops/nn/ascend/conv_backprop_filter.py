@@ -19,6 +19,7 @@ import akg.tvm
 import akg
 from akg import dim
 import akg.utils as utils
+from akg.utils.validation_check import comp_conv_backprop_out_shape
 
 conv_backprop_filter_tiling_args = {
     str(((6, 14, 14), (16, 6, 5, 5), (0, 0, 0, 0), (1, 1), (1, 1))):
@@ -343,8 +344,7 @@ def conv_backprop_filter_compute(data, input_shape, filter_shape, output_shape, 
 
 @utils.check_input_type((list, tuple), (list, tuple), (list, tuple), (list, tuple), (list, tuple), (list, tuple),
                           (dict, type(None)), (str, type(None)))
-def ConvBackpropFilter(data, fmap_shape, filter_shape, pad_, stride_, dilation_, attrs=None,
-                        target=utils.CCE):
+def conv_backprop_filter(data, fmap_shape, filter_shape, pad_, stride_, dilation_, attrs=None):
     """
     Computes dw according "conv forward".
 
@@ -373,28 +373,7 @@ def ConvBackpropFilter(data, fmap_shape, filter_shape, pad_, stride_, dilation_,
     utils.convolution_format_check(fmap_shape, filter_shape, pad_, stride_, dilation_)
 
     block_size = 16
-
-    in_n, in_c, in_h, in_w = fmap_shape
-    cout, _, w_h, w_w = filter_shape
-
-    in_c = (in_c + block_size - 1) // block_size * block_size
-    cout = (cout + block_size - 1) // block_size * block_size
-
-    pad_top, pad_bottom, pad_left, pad_right = pad_
-    stride_h, stride_w = stride_
-
-    dilation_h, dilation_w = dilation_
-    if dilation_h != 1 or dilation_w != 1:
-        raise ValueError("The value of elements in dilation must be 1")
-
-    out_n = in_n
-    out_c = cout
-    out_h = (in_h + pad_top + pad_bottom - w_h) // stride_h + 1
-    out_w = (in_w + pad_left + pad_right - w_w) // stride_w + 1
-
-    dy_shape = (out_n, out_c, out_h, out_w)
-    dx_shape = (in_n, in_c, in_h, in_w)
-    dw_shape = (cout, in_c, w_h, w_w)
+    dy_shape, dx_shape, dw_shape = comp_conv_backprop_out_shape(fmap_shape, filter_shape, pad_, stride_, dilation_)
 
     key = gen_key(fmap_shape, filter_shape, pad_, stride_, dilation_)
     res_c, configs = conv_backprop_filter_compute(data, dx_shape, dw_shape, dy_shape, pad_, stride_, dilation_,

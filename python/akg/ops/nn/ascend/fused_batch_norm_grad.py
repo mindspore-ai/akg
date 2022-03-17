@@ -26,6 +26,8 @@ from akg.ops.math.add import Add
 from akg.utils import custom_tiling as ct_util
 from akg.utils.kernel_exec import product_is_mini
 from akg.utils.format_transform import get_shape
+from akg.utils.validation_check import comp_output_params, check_inputs_in_rank, check_input_shape_equal_5
+
 
 def check_inputs(dy, data, mean, var, gamma, data_format, axis):
     """check inputs"""
@@ -47,55 +49,12 @@ def check_inputs(dy, data, mean, var, gamma, data_format, axis):
     in_rank = len(shape)
     is_special5d = (data_format == "NC1HWC0")
 
-    if in_rank <= 1:
-        raise RuntimeError("do not support 1D data.")
-    if data_format == "DefaultFormat":
-        if not isinstance(axis, int):
-            raise RuntimeError('axis should be instance of int')
-        if axis not in range(-in_rank, in_rank):
-            raise RuntimeError(
-                'axis must be in range [%d, %d)' % (-in_rank, in_rank))
-        if axis < 0:
-            axis = in_rank + axis
-    elif data_format == "NHWC":
-        if in_rank != 4:
-            raise RuntimeError("data shape {} mismatch data_format \"NHWC\"."
-                               "".format(data.shape))
-        axis = 3
-    elif data_format == "NCHW":
-        if in_rank != 4:
-            raise RuntimeError("data shape {} mismatch data_format \"NCHW\"."
-                               "".format(data.shape))
-        axis = 1
-    else:
-        axis = 1
+    axis = check_inputs_in_rank(data, axis, in_rank, data_format)
 
     if any([x.value != y.value for x, y in zip(data.shape, dy.shape)]):
         raise RuntimeError("the shape of data and dy must be equal.")
     if is_special5d:
-        def is_all_1_but_axis_equal(shape1, shape2, axis):
-            if not isinstance(axis, (list, tuple)):
-                axis = (axis,)
-            return all([int(shape1[i]) == 1 if i not in axis else
-                        int(shape1[i]) == int(shape2[i]) for i in range(len(shape2))])
-        if len(data.shape) != 5:
-            raise RuntimeError("data shape {} mismatch data_format \"NC1HWC0\"."
-                               "".format(data.shape))
-        if len(gamma.shape) != 5 \
-                or not is_all_1_but_axis_equal(gamma.shape, shape, (1, 4)):
-            raise RuntimeError("gamma mismatch NC1HWC0 data (while gamma shape "
-                               "is {}, inputs shape is {})!".format(
-                                   gamma.shape, data.shape))
-        if len(mean.shape) != 5 \
-                or not is_all_1_but_axis_equal(mean.shape, shape, (1, 4)):
-            raise RuntimeError("mean mismatch NC1HWC0 data (while mean shape "
-                               "is {}, inputs shape is {})!".format(
-                                   mean.shape, data.shape))
-        if len(var.shape) != 5 \
-                or not is_all_1_but_axis_equal(var.shape, shape, (1, 4)):
-            raise RuntimeError("var mismatch NC1HWC0 data (while var shape is "
-                               "{}, inputs shape is {})!".format(
-                                   var.shape, data.shape))
+        check_input_shape_equal_5(data, shape, mean, var, gamma)
     else:
         if len(gamma.shape) != 1 or (gamma.shape[0].value != shape[axis]):
             raise RuntimeError("gamma mismatch the channel axis(while gamma "
@@ -113,21 +72,7 @@ def check_inputs(dy, data, mean, var, gamma, data_format, axis):
                                "".format(
                                    var.shape, data.shape, axis))
 
-    if is_special5d:
-        axes = [3, 2, 0]
-        mid_shape = [1, shape[1], 1, 1, shape[4]]
-    else:
-        axes = [i for i in range(in_rank - 1, -1, -1) if i != axis]
-        mid_shape = [1] * in_rank
-        mid_shape[axis] = shape[axis]
-
-    out_params = {
-        "is_special5d": is_special5d,
-        "axis": axis,
-        "axes": tuple(axes),
-        "mid_shape": mid_shape
-    }
-
+    out_params = comp_output_params(is_special5d, shape, in_rank, axis)
     return out_params
 
 
@@ -197,7 +142,7 @@ def sum_data(data, axes, keepdims):
                           (float, type(None)), (str, type(None)),
                           (int, list, tuple, type(None)), (str, type(None)))
 def FusedBatchNormGrad(dy, data, mean, var, gamma, eps=1e-3, data_format="DefaultFormat",
-                          axis=1, target=utils.CCE):
+                          axis=1):
     r"""
     Gradient for fused_batch_norm.
 

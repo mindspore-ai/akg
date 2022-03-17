@@ -24,6 +24,7 @@ from akg.utils.dsl_create import mul_axis_sum, update_by_moving_average
 from akg.utils.format_transform import get_shape
 from akg.ops.math.rsqrt import Rsqrt
 from akg.utils.dynamic_shape import shape_is_dynamic
+from akg.utils.validation_check import comp_output_params, check_inputs_in_rank, check_input_shape_equal_5
 
 
 def get_attrs(tensor):
@@ -141,71 +142,10 @@ def check_inputs(data, gamma, beta, moving_mean, moving_variance, data_format,
     in_rank = len(shape)
     is_special5d = (data_format == "NC1HWC0")
 
-    if in_rank <= 1:
-        raise AssertionError("Do not support 1D data.")
-    if data_format == "DefaultFormat":
-        if not isinstance(axis, int):
-            raise RuntimeError("axis should be instance of int but {}"
-                               "".format(axis))
-        if axis not in range(-in_rank, in_rank):
-            raise AssertionError("axis must be in range [%d, %d)"
-                                 "" % (-in_rank, in_rank))
-        if axis < 0:
-            axis = in_rank + axis
-    elif data_format == "NHWC":
-        if in_rank != 4:
-            raise AssertionError("Data shape {} mismatch data_format \"NHWC\"."
-                                 "".format(data.shape))
-        axis = 3
-    elif data_format == "NCHW":
-        if in_rank != 4:
-            raise AssertionError("Data shape {} mismatch data_format \"NCHW\"."
-                                 "".format(data.shape))
-        axis = 1
-    else:
-        axis = 1
+    axis = check_inputs_in_rank(data, axis, in_rank, data_format)
 
     if is_special5d:
-        def is_all_1_but_axis_equal(shape1, shape2, axis):
-            if not isinstance(axis, (list, tuple)):
-                axis = (axis,)
-
-            for i, _ in enumerate(shape2):
-                if i not in axis:
-                    if isinstance(shape1[i], akg.tvm.expr.Var) or int(shape1[i]) != 1:
-                        return False
-                else:
-                    if isinstance(shape1[i], akg.tvm.expr.Var):
-                        if shape1[i] != shape2[i]:
-                            return False
-                    else:
-                        if int(shape1[i]) != int(shape2[i]):
-                            return False
-            return True
-
-        if len(data.shape) != 5:
-            raise AssertionError("data shape {} mismatch data_format "
-                                 "\"NC1HWC0\".".format(data.shape))
-        if len(gamma.shape) != 5 \
-                or not is_all_1_but_axis_equal(gamma.shape, shape, (1, 4)):
-            raise AssertionError("gamma mismatch NC1HWC0 data (while gamma shape "
-                                 "is {}, input shape is {})!!!".format(
-                                     gamma.shape, data.shape))
-        if len(beta.shape) != 5 \
-                or not is_all_1_but_axis_equal(beta.shape, shape, (1, 4)):
-            raise AssertionError("beta mismatch NC1HWC0 data (while beta shape "
-                                 "is {}, input shape is {})!!!".format(
-                                     beta.shape, data.shape))
-        if len(moving_mean.shape) != 5 \
-                or not is_all_1_but_axis_equal(moving_mean.shape, shape, (1, 4)):
-            raise AssertionError("moving_mean mismatch NC1HWC0 data (while "
-                                 "moving_mean shape is {}, input shape is "
-                                 "{})!!!".format(beta.shape, data.shape))
-        if len(moving_variance.shape) != 5 \
-                or not is_all_1_but_axis_equal(moving_variance.shape, shape, (1, 4)):
-            raise AssertionError("moving_variance mismatch NC1HWC0 data (while "
-                                 "moving_variance shape is {}, input shape is "
-                                 "{})!!!".format(beta.shape, data.shape))
+        check_input_shape_equal_5(data, shape,  gamma, beta, moving_mean, moving_variance)
     else:
         if len(gamma.shape) != 1 or (gamma.shape[0].value != shape[axis]):
             raise AssertionError("gamma mismatch the channel axis(while gamma "
@@ -227,20 +167,7 @@ def check_inputs(data, gamma, beta, moving_mean, moving_variance, data_format,
                                  " moving_variance shape is {}, input shape is "
                                  "{}, and axis is {})!!!".format(moving_variance.shape, data.shape, axis))
 
-    if is_special5d:
-        axes = [3, 2, 0]
-        mid_shape = [1, shape[1], 1, 1, shape[4]]
-    else:
-        axes = [i for i in range(in_rank - 1, -1, -1) if i != axis]
-        mid_shape = [1] * in_rank
-        mid_shape[axis] = shape[axis]
-
-    out_params = {
-        "is_special5d": is_special5d,
-        "axis": axis,
-        "axes": tuple(axes),
-        "mid_shape": mid_shape
-    }
+    out_params = comp_output_params(is_special5d, shape, in_rank, axis)
     return out_params
 
 
@@ -260,7 +187,7 @@ def sum_data(data, axes, keepdims, single_sum=False):
                           (int, list, tuple, type(None)), (bool, type(None)),
                           (str, type(None)))
 def FusedBatchNorm(data, gamma, beta, moving_mean, moving_variance, momentum=0.99, eps=1e-3,
-                   is_training=True, data_format="DefaultFormat", axis=1, single_sum=False, target=utils.CCE):
+                   is_training=True, data_format="DefaultFormat", axis=1, single_sum=False):
     r"""
     Batch normalization.
 

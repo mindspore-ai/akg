@@ -21,6 +21,7 @@ import akg.tvm
 import akg.utils as utils
 from akg import dim
 from akg.ops.math.cast import Cast
+from akg.utils.validation_check import comp_conv_backprop_out_shape
 
 conv_backprop_input_tiling_args = {
     str(((1, 1024, 14, 14), (2048, 1024, 1, 1), (0, 0, 0, 0), (2, 2), (1, 1))): [2, 32, 64, 96, 128],
@@ -352,7 +353,7 @@ def conv_backprop_input_compute(data, output_shape, filter_shape, input_shape, p
 
 @utils.check_input_type((list, tuple), (list, tuple), (list, tuple), (list, tuple), (list, tuple), (list, tuple),
                           (dict, type(None)), (str, type(None)))
-def ConvBackpropInput(data, fmap_shape, filter_shape, pad_, stride_, dilation_, attrs=None, target=utils.CCE):
+def conv_backprop_input(data, fmap_shape, filter_shape, pad_, stride_, dilation_, attrs=None):
     """
     Computes dx according "conv forward".
 
@@ -378,29 +379,8 @@ def ConvBackpropInput(data, fmap_shape, filter_shape, pad_, stride_, dilation_, 
     if len(data) != 2:
         raise IndexError("data contains output tensor and filter tensor")
 
-    utils.convolution_format_check(fmap_shape, filter_shape, pad_, stride_, dilation_)
-
     block_size = 16
-    in_n, in_c, in_h, in_w = fmap_shape
-    cout, _, w_h, w_w = filter_shape
-
-    in_c = (in_c + block_size - 1) // block_size * block_size
-    cout = (cout + block_size - 1) // block_size * block_size
-
-    pad_top, pad_bottom, pad_left, pad_right = pad_
-    stride_h, stride_w = stride_
-
-    dilation_h, dilation_w = dilation_
-    if dilation_h != 1 or dilation_w != 1:
-        raise ValueError("The value od elements in dilation_ must be 1.")
-
-    out_n = in_n
-    out_c = cout
-    out_h = (in_h + pad_top + pad_bottom - w_h) // stride_h + 1
-    out_w = (in_w + pad_left + pad_right - w_w) // stride_w + 1
-
-    x_shape = (out_n, out_c, out_h, out_w)
-    w_shape = (cout, in_c, w_h, w_w)
+    x_shape, _, w_shape = comp_conv_backprop_out_shape(fmap_shape, filter_shape, pad_, stride_, dilation_)
 
     key = gen_key(fmap_shape, filter_shape, pad_, stride_, dilation_)
     res_c, configs = conv_backprop_input_compute(data, x_shape, w_shape, fmap_shape, pad_, stride_,
