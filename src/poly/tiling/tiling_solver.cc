@@ -183,7 +183,7 @@ void GpuSolver::TotSpeedup() {
   if (shared_memory_limit < total_middle_tensor_size / outermost_tile) return;
   ss << "total middle tensor size: " << total_middle_tensor_size
      << ", exceeds shared_memory_limit: " << shared_memory_limit;
-  
+
   auto current_elem_num = 1;
   for (unsigned int i = 0; i < tile_axes.size(); ++i) {
     if (i != OUTERMOST_AXIS) {
@@ -661,7 +661,7 @@ Expr InequalitySolver::SolveByInferBound(const Array<Expr> &cons_on_var, const V
     if (axis->HasAttr("DYN_SHAPE_LIMIT")) {
       auto res = axis->GetAttrValue("DYN_SHAPE_LIMIT");
       CHECK_EQ(res.size(), 1U);
-      auto range_limit = static_cast<int>(std::strtol(res[0].c_str(), nullptr, 10));
+      auto range_limit = StrToDecimalInt(res[0]);
       new_constraints.push_back(axis->range_extent <= CastIntToExpr(range_limit));
     }
   });
@@ -833,7 +833,7 @@ Expr InequalitySolver::DetermineTileForDynamic(TileAxis *axis, const Expr &mem_c
     if (axis->HasAttr("DYN_SHAPE_LIMIT")) {
       auto shape_limit = axis->GetAttrValue("DYN_SHAPE_LIMIT");
       CHECK_EQ(shape_limit.size(), 1U);
-      auto range_limit = static_cast<int>(std::strtol(shape_limit[0].c_str(), nullptr, 10));
+      auto range_limit = StrToDecimalInt(shape_limit[0]);
       if (analyzer_.arith_ana_.CanProve(range_limit <= GetConstIntUpBound(max_final_factor))) {
         final_factor = axis->range_extent;
       } else {

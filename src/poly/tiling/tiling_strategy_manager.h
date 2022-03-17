@@ -76,7 +76,6 @@ class TilingStrategy {
   int64_t vector_size_ = 4;
 
   const static int binary_factor_{2};
-  const static int decimal_factor_{10};
   const static int double_warp_size_{64};
   const static int quadruple_warp_size_{128};
 };
@@ -123,7 +122,76 @@ class CustomTilingStrategy : public TilingStrategy {
   explicit CustomTilingStrategy(const TilingAnalyzer *a) : TilingStrategy(a) { interested_attr_key = "CUSTOM"; }
   void AddNpuConstraint() override;
   void AddGpuConstraint() override;
-  void ApplyCustomConstraints(TileAxis *axis, std::string con, TileLevel lv);
+
+ private:
+  void ParseConstraintStr(const std::string &attr_key, const std::string &attr_value) {
+    std::vector<std::string> modes = akg::common::Split(attr_key, ":");
+    CHECK_EQ(modes.size(), 2U);
+    constraint_str_ = attr_value;
+    if (constraint_str_.find("->") != std::string::npos) {
+      std::vector<std::string> res = akg::common::Split(constraint_str_, "->");
+      related_buf_ = res[0];
+      constraint_str_ = res[1];
+    }
+  }
+
+  void ParseLevel() {
+    constraints_ = akg::common::Split(constraint_str_, "_");
+    CHECK_GE(constraints_.size(), 1U);
+    std::vector<std::string> level = akg::common::Split(constraints_[0], ":");
+    CHECK(level.size() == 2U && level[0] == "LEVEL");
+    CHECK(level[1] == kDsaC1 || level[1] == kDsaC0);
+    lv_ = level[1] == kDsaC1 ? CACHE1 : CACHE0;
+    void(constraints_.erase(constraints_.cbegin()));
+  }
+
+  void ApplyEachCustomConstraint(TileAxis *axis, const std::string &con) {
+    std::vector<std::string> items = akg::common::Split(con, ":");
+    CHECK_EQ(items.size(), 2U);
+    CHECK_NE(items[0], "");
+    CHECK_NE(items[1], "");
+    if (items[0] == "MIN") {
+      if (items[1] == "MIN") {
+        if (lv_ == CACHE1) {
+          axis->TileRestrainUpper(axis->c1_constraints.tile_min_, lv_);
+        } else if (lv_ == CACHE0) {
+          axis->TileRestrainUpper(axis->c0_constraints.tile_min_, lv_);
+        }
+      } else {
+        axis->TileRestrainLower(CastToExpr(items[1]), lv_);
+      }
+    } else if (items[0] == "FACTOR") {
+      axis->TileRestrainToSingleValue(CastToExpr(items[1]), lv_);
+    } else if (items[0] == "CANDIDATE") {
+      if (lv_ == CACHE1) {
+        axis->InsertC1CandFactor(CastToExpr(items[1]));
+      } else {
+        axis->InsertC0CandFactor(CastToExpr(items[1]));
+      }
+    } else if (items[0] == "MAX") {
+      if (items[1] == "FULL") {
+        axis->TileRestrainEntire(lv_);
+      } else {
+        axis->TileRestrainUpper(CastToExpr(items[1]), lv_);
+      }
+    } else if (items[0] == AT_MOD) {
+      axis->TileRestrainMod(CastToExpr(items[1]), lv_);
+    } else if (items[0] == "FORBIDISO") {
+      axis->forbid_iso = true;
+    } else if (items[0] == "PRIORITY") {
+      axis->priority = StrToDecimalInt(items[1]);
+    } else if (items[0] == "EXPANSION") {
+      std::string info = related_buf_ + "->" + items[1];
+      analyzer_->RootAxis()->MarkWithAttr(AttrInfo{"EXPANSION", info});
+    } else if (items[0] == "AXISINFO") {
+      axis->axis_type_ = items[1];
+    }
+  }
+
+  std::string constraint_str_;
+  std::string related_buf_;
+  TileLevel lv_{TileLevel::CACHE1};
+  std::vector<std::string> constraints_;
 };
 
 class ConflictTreeRangeStrategy : public TilingStrategy {
@@ -161,15 +229,13 @@ class CastStrategy : public TilingStrategy {
           std::vector<std::string> src_info = akg::common::Split(src, ":");
           CHECK_EQ(src_info.size(), 2U);
           CHECK_NE(src_info[1], "");
-          axis->data_size[src_info[0]].emplace_back(
-            static_cast<int>(std::strtol(src_info[1].c_str(), nullptr, decimal_factor_)));
+          axis->data_size[src_info[0]].emplace_back(StrToDecimalInt(src_info[1]));
         }
 
         std::vector<std::string> dst_info = akg::common::Split(src_dst[1], ":");
         CHECK_EQ(dst_info.size(), 2U);
         CHECK_NE(dst_info[1], "");
-        axis->data_size[dst_info[0]].emplace_back(
-          static_cast<int>(std::strtol(dst_info[1].c_str(), nullptr, decimal_factor_)));
+        axis->data_size[dst_info[0]].emplace_back(StrToDecimalInt(dst_info[1]));
       }
     }
   }
@@ -273,7 +339,7 @@ class ShiftAxisStrategy : public TilingStrategy {
       shifted_axes_.insert(axis);
       for (const auto &attr : it.second) {
         CHECK_NE(attr.attr_value, "");
-        auto share_time = static_cast<int>(std::strtol(attr.attr_value.c_str(), nullptr, decimal_factor_));
+        auto share_time = StrToDecimalInt(attr.attr_value);
         axis->TileRestrainToSingleValue(const_extent * (share_time + 1), CACHE1);
         break;
       }
@@ -316,8 +382,8 @@ class ConvStrategy : public TilingStrategy {
   void SetFinalConfig(const MmaConv &macro_mma, const Mma &mma);
 
   // Return a combination of total factor that can be divisible by shape_m and shape_n.
-  const std::pair<int64_t, int64_t> GetDivisibleFactorForMN(
-    int64_t shape_m, int64_t shape_n, int64_t total_factor, const Mma &mma);
+  const std::pair<int64_t, int64_t> GetDivisibleFactorForMN(int64_t shape_m, int64_t shape_n, int64_t total_factor,
+                                                            const Mma &mma);
 
   int w0_for_m_{1};
   int w1_for_n_{1};
@@ -361,8 +427,8 @@ class GemmStrategy : public TilingStrategy {
   int EstimateSharedSize(const Mma &alloc, int dtype);
   int EstimateRegisterSize(const Mma &alloc, int dtype);
   // Return a combination of total factor that can be divisible by shape_m and shape_n.
-  const std::pair<int64_t, int64_t> GetDivisibleFactorForMN(
-    int64_t shape_m, int64_t shape_n, int64_t total_factor, const Mma &mma);
+  const std::pair<int64_t, int64_t> GetDivisibleFactorForMN(int64_t shape_m, int64_t shape_n, int64_t total_factor,
+                                                            const Mma &mma);
 
   int w0_for_m_{1};
   int w1_for_n_{1};
@@ -479,7 +545,7 @@ class GpuStrategy : public TilingStrategy {
   int possible_threads_;
   int coalesced_size_;
   int total_injective_size_;
-  int64_t total_vectorized_bytes_ = 16; // The default total number of bytes for vectorization is 16.
+  int64_t total_vectorized_bytes_ = 16;  // The default total number of bytes for vectorization is 16.
 };
 
 class CpuStrategy : public TilingStrategy {

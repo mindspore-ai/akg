@@ -213,12 +213,12 @@ constexpr auto PRUNE_MEM_EXCEED = 1;
 constexpr auto PRUNE_ALIGNED_MEM_EXCEED = 2;
 constexpr auto DEC = 10;
 
-inline int StrToInt(const std::string &str) {
+inline int StrToDecimalInt(const std::string &str) {
   CHECK(!str.empty()) << "Cast string to Int fail, string empty";
   return static_cast<int>(std::strtol(str.c_str(), nullptr, DEC));
 }
 
-inline int64_t StrToInt64(const std::string &str) { return static_cast<int64_t>(StrToInt(str)); }
+inline int64_t StrToDecimalInt64(const std::string &str) { return static_cast<int64_t>(StrToDecimalInt(str)); }
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

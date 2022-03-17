@@ -93,7 +93,7 @@ class GpuSolver : TilingSolver {
           if (s.empty()) {
             continue;
           }
-          alloced_slot.emplace_back(static_cast<int>(std::strtol(s.c_str(), nullptr, 10)));
+          alloced_slot.emplace_back(StrToDecimalInt64(s));
         }
       }
       for (size_t i = alloced_slot.size(); i < resource_limit.size(); ++i) {

@@ -262,13 +262,13 @@ bool ScheduleTreeAnalyzer::GetPosShiftedTileRange(const std::string &vname, cons
   std::string post = sp_add[1];
   if (pre.empty() || post.empty()) return false;
   if (pre == actual_name && post != actual_name) {
-    auto add_range = static_cast<int>(std::strtol(post.c_str(), nullptr, 10));
+    auto add_range = StrToDecimalInt(post);
     ranges.first += add_range;
     ranges.second += add_range;
     old_ranges = ranges;
     return true;
   } else if (post == actual_name && pre != actual_name) {
-    auto add_range = static_cast<int>(std::strtol(pre.c_str(), nullptr, 10));
+    auto add_range = StrToDecimalInt(pre);
     ranges.first += add_range;
     ranges.second += add_range;
     old_ranges = ranges;
@@ -286,13 +286,13 @@ bool ScheduleTreeAnalyzer::GetNegShiftedTileRange(const std::string &vname, cons
   std::string post = sp_sub[1];
   if (pre.empty() || post.empty()) return false;
   if (pre == actual_name && post != actual_name) {
-    auto sub_range = static_cast<int>(std::strtol(post.c_str(), nullptr, 10));
+    auto sub_range = StrToDecimalInt(post);
     ranges.first -= sub_range;
     ranges.second -= sub_range;
     old_ranges = ranges;
     return true;
   } else if (post == actual_name && pre != actual_name) {
-    auto sub_range = static_cast<int>(std::strtol(pre.c_str(), nullptr, 10));
+    auto sub_range = StrToDecimalInt(pre);
     std::pair<int, int> res;
     res.second = sub_range - ranges.first;
     res.first = sub_range - ranges.second;
@@ -564,7 +564,7 @@ int ScheduleTreeAnalyzer::GetLayerIndex(const std::string &var_name) {
       layer_s += i;
     }
   }
-  return layer_s.empty() ? -1 : static_cast<int>(std::strtol(layer_s.c_str(), nullptr, 10));
+  return layer_s.empty() ? -1 : StrToDecimalInt(layer_s);
 }
 
 bool ScheduleTreeAnalyzer::MatchNodeWithDynamicLoop(std::unordered_set<const For *> &matched, TileNode &node,

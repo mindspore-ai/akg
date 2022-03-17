@@ -312,19 +312,21 @@ void TilingGenerator::ConvertShiftBoundToDims() {
     if (!bound_value.empty()) {
       CHECK_EQ(bound_value.size(), 1U);
       CHECK_NE(bound_value[0], "");
-      auto bound = static_cast<int>(std::strtol(bound_value[0].c_str(), nullptr, 10));
+      auto bound = StrToDecimalInt(bound_value[0]);
       DimensionInfo bound_info = ConvertDefaultInfo(axis);
       bound_info.c1_tiling_size = bound;
       bound_info.c1_var = axis->range_extent;
       for (const auto &d : this->dims_) {
-        if (d.dim_seq != bound_info.dim_seq) continue;
+        if (d.dim_seq != bound_info.dim_seq) {
+          continue;
+        }
         bound_info.c0_tiling_size = d.c1_tiling_size;
         bound_info.c0_var = d.c1_var;
       }
       std::vector<std::string> shift_value = axis->GetAttrValue(AT_DYNAMIC_SHIFT);
       CHECK_EQ(shift_value.size(), 1U) << "Empty shift_time for dynamic bound " << bound;
       CHECK_NE(shift_value[0], "");
-      auto shift = static_cast<int>(std::strtol(shift_value[0].c_str(), nullptr, 10));
+      auto shift = StrToDecimalInt(shift_value[0]);
       bound_info.pragma = shift;
       CHECK_NE(bound_info.c0_tiling_size, -1);
       this->dims_.push_back(bound_info);

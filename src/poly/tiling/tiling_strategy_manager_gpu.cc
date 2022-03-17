@@ -449,7 +449,7 @@ void ReduceStrategy::UpdateReduceThreads(bool square_thread, int64_t min_blocks,
         continue;
       }
       CHECK_NE(attr.attr_value, "");
-      auto mod_value = static_cast<int>(std::strtol(attr.attr_value.c_str(), nullptr, decimal_factor_));
+      auto mod_value = StrToDecimalInt64(attr.attr_value);
       axis->TileRestrainMod(CastInt64ToExpr(mod_value), TileLevel::CACHE1);
     }
     if (use_local) {
@@ -616,7 +616,8 @@ void ReduceStrategy::AkgReduceLibStrategyOnGpu(int band_index) {
       ? std::max(
           std::min<int>(proposal, ((possible_blocks / SafeDivisor(min_blocks) + 1) / binary_factor_) * binary_factor_),
           1)
-      : IsHalfReduce() ? double_warp_size_ : static_cast<int>(SpItemPerThread::FULL);
+    : IsHalfReduce() ? double_warp_size_
+                     : static_cast<int>(SpItemPerThread::FULL);
   UpdateAxes(possible_blocks, default_elem_per_thread);
 }
 
@@ -660,7 +661,7 @@ const void ReduceStrategy::DealWith4DFusedReduce() {
         continue;
       }
       CHECK_NE(attr.attr_value, "");
-      last_mod_value = static_cast<int>(std::strtol(attr.attr_value.c_str(), nullptr, decimal_factor_));
+      last_mod_value = StrToDecimalInt(attr.attr_value);
       ++num_mod_axis;
     }
     if (num_mod_axis < 1) {
@@ -725,7 +726,7 @@ void GpuStrategy::ApplyConstraintsToBindingSpace() {
         break;
       }
       CHECK(!val.empty());
-      (void)ret.emplace_back(static_cast<int>(std::strtol(val.c_str(), nullptr, decimal_factor_)));
+      (void)ret.emplace_back(StrToDecimalInt64(val));
     }
     return ret;
   };
@@ -1027,7 +1028,7 @@ bool GpuStrategy::IsVectorized() {
 
     auto first_tensor = tensors_shape[0];
     auto first_value = first_tensor[first_tensor.size() - 1].as<IntImm>()->value;
-    if(template_ == Template::PAD_OP && i_value != first_value) {
+    if (template_ == Template::PAD_OP && i_value != first_value) {
       return false;
     }
   }
@@ -1152,7 +1153,7 @@ void GpuStrategy::InitMappingLimit() {
   std::vector<std::string> elem_cfg = common::Split(analyzer_->scop_info_.user_config_.GetElemPerThread(), " ");
   for (size_t i = 0; i < max_dim_; ++i) {
     if (i < elem_cfg.size() && !elem_cfg[i].empty()) {
-      elem_per_thread_[i] = static_cast<int64_t>(std::strtol(elem_cfg[i].c_str(), nullptr, decimal_factor_));
+      elem_per_thread_[i] = StrToDecimalInt64(elem_cfg[i]);
     }
   }
 }
@@ -1192,7 +1193,8 @@ void GpuStrategy::SkipMapping(TileAxis *axis, int64_t shape, std::stringstream &
   auto tile = inner_dim < thread_dim ? elem_per_thread_[inner_dim] : 1;
   tile = tile == static_cast<int64_t>(SpItemPerThread::AUTO)
            ? std::min(axis->thread_constraints.item_process_, max_elem_per_thread_)
-           : tile == static_cast<int64_t>(SpItemPerThread::FULL) ? std::min(shape, max_elem_per_thread_) : 1;
+         : tile == static_cast<int64_t>(SpItemPerThread::FULL) ? std::min(shape, max_elem_per_thread_)
+                                                               : 1;
   CHECK(axis->c1_constraints.tile_min_.as<IntImm>() && axis->c1_constraints.tile_extent_.as<IntImm>());
   auto tile_min = axis->c1_constraints.tile_min_.as<IntImm>()->value;
   auto tile_extent = axis->c1_constraints.tile_extent_.as<IntImm>()->value;
@@ -1696,8 +1698,9 @@ void GpuStrategy::InjectiveSpeedup() {
   auto parallel_size = GetProposalParallelSize(problem_size);
   auto proposal_blocks = parallel_size.first;
   auto proposal_threads = parallel_size.second;
-  auto proposal_elem_per_thread = 
-    coaleasced_size < warp_sizes_ ? 1 : total_blocks < proposal_blocks * 8 ? min_elem_for_io_bound_ : 8;
+  auto proposal_elem_per_thread = coaleasced_size < warp_sizes_        ? 1
+                                  : total_blocks < proposal_blocks * 8 ? min_elem_for_io_bound_
+                                                                       : 8;
 
   CHECK(proposal_threads != 0 && total_blocks != 0);
   auto shrinked_threads =
@@ -1875,7 +1878,7 @@ void GpuStrategy::AnalyzeBroadcastIdx() {
       auto info = common::Split(type, "|");
       if (info.size() == 2U) {
         CHECK(!info[1].empty());
-        (void)broadcast_idx_.insert(static_cast<int>(std::strtol(info[1].c_str(), nullptr, decimal_factor_)));
+        (void)broadcast_idx_.insert(StrToDecimalInt(info[1]));
       }
     }
   }
@@ -1940,7 +1943,7 @@ void GpuStrategy::GpuVectorBroadcastStrategy() {
     std::vector<int> mod_values;
     for (const auto &attr : it.second) {
       CHECK(!attr.attr_value.empty());
-      (void)mod_values.emplace_back(static_cast<int>(std::strtol(attr.attr_value.c_str(), nullptr, decimal_factor_)));
+      (void)mod_values.emplace_back(StrToDecimalInt(attr.attr_value));
     }
     std::sort(mod_values.begin(), mod_values.end());
 
@@ -1992,71 +1995,15 @@ void GpuStrategy::GpuVectorBroadcastStrategy() {
   }
 }
 
-void CustomTilingStrategy::ApplyCustomConstraints(TileAxis *axis, std::string con, TileLevel lv) {
-  std::vector<std::string> items = akg::common::Split(con, ":");
-  CHECK_EQ(items.size(), 2U);
-  CHECK_NE(items[0], "");
-  CHECK_NE(items[1], "");
-  if (items[0] == "MIN") {
-    if (items[1] == "MIN") {
-      if (lv == CACHE1) {
-        axis->c1_constraints.tile_extent_ = axis->c1_constraints.tile_min_;
-      } else if (lv == CACHE0) {
-        axis->c0_constraints.tile_extent_ = axis->c0_constraints.tile_min_;
-      }
-    } else {
-      if (lv == CACHE1) {
-        axis->c1_constraints.tile_min_ = CastToExpr(items[1]);
-      } else if (lv == CACHE0) {
-        axis->c0_constraints.tile_min_ = CastToExpr(items[1]);
-      }
-    }
-  } else if (items[0] == "FACTOR") {
-    axis->TileRestrainToSingleValue(CastToExpr(items[1]), lv);
-  } else if (items[0] == "CANDIDATE") {
-    if (lv == CACHE1) {
-      axis->InsertC1CandFactor(CastToExpr(items[1]));
-    } else {
-      axis->InsertC0CandFactor(CastToExpr(items[1]));
-    }
-  } else if (items[0] == "FORBIDISO") {
-    axis->forbid_iso = true;
-  } else if (items[0] == "MAX") {
-    if (items[1] == "FULL") {
-      axis->TileRestrainEntire(lv);
-    } else {
-      if (lv == CACHE1) {
-        axis->c1_constraints.tile_extent_ = CastToExpr(items[1]);
-      } else if (lv == CACHE0) {
-        axis->c0_constraints.tile_extent_ = CastToExpr(items[1]);
-      }
-    }
-  } else if (items[0] == AT_MOD) {
-    axis->TileRestrainMod(CastToExpr(items[1]), lv);
-  }
-}
-
 void CustomTilingStrategy::AddGpuConstraint() {
   auto interested_info = GetInterestedInfo(interested_attr_key, false);
   for (auto it : interested_info) {
     TileAxis *axis = it.first;
     for (auto attr : it.second) {
-      std::vector<std::string> modes = akg::common::Split(attr.attr_key, ":");
-      CHECK_EQ(modes.size(), 2U);
-      std::string constraint_str = attr.attr_value;
-      if (constraint_str.find("->") != std::string::npos) {
-        std::vector<std::string> res = akg::common::Split(constraint_str, "->");
-        constraint_str = res[1];
-      }
-      std::vector<std::string> constraints = akg::common::Split(constraint_str, "_");
-      CHECK_GE(constraints.size(), 1U);
-      std::vector<std::string> level = akg::common::Split(constraints[0], ":");
-      CHECK(level.size() == 2U && level[0] == "LEVEL");
-      CHECK(level[1] == kDsaC1 || level[1] == kDsaC0);
-      TileLevel lv = level[1] == kDsaC1 ? CACHE1 : CACHE0;
-      (void)constraints.erase(constraints.cbegin());
-      for (const auto &con : constraints) {
-        ApplyCustomConstraints(axis, con, lv);
+      ParseConstraintStr(attr.attr_key, attr.attr_value);
+      ParseLevel();
+      for (const auto &con : constraints_) {
+        ApplyEachCustomConstraint(axis, con);
       }
     }
   }

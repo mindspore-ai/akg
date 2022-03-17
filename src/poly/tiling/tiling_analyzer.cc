@@ -1084,7 +1084,7 @@ class LinearAccessPatternBuilder : public IRVisitor {
       std::vector<std::string> info = akg::common::Split(attr.attr_value, "->");
       CHECK_EQ(info.size(), 2U);
       std::string buffer = info[0];
-      auto times = static_cast<int>(std::strtol(info[1].c_str(), nullptr, 10));
+      auto times = StrToDecimalInt(info[1]);
       expanded_buf_[buffer] = times;
     }
   }
