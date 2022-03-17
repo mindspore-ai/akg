@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2021 Huawei Technologies Co., Ltd
+ * Copyright 2019-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -102,21 +102,60 @@ class OpDetector : public IRVisitor {
     return res;
   }
 
+  bool TableContainExpr(const Expr &e, const std::unordered_map<std::string, int> &table) {
+    if (isType<Call>(e) && table.count(e.as<Call>()->name) > 0) {
+      return true;
+    }
+    return false;
+  };
+
+  bool ProcIfThenElseAnd(const IfThenElse *op) {
+    auto and_op = op->condition.as<And>();
+    if (isType<EQ>(and_op->a) && isType<EQ>(and_op->b)) {
+      auto eq_first = and_op->a.as<EQ>();
+      auto eq_second = and_op->b.as<EQ>();
+      if ((TableContainExpr(eq_first->a, mem_buffer_tab_) || TableContainExpr(eq_first->b, mem_buffer_tab_)) &&
+          (TableContainExpr(eq_second->a, mem_buffer_tab_) || TableContainExpr(eq_second->b, mem_buffer_tab_))) {
+        type_ = T_TENSOR_OF_TENSOR_ACCUM;
+        elim_if_ = op;
+        if (TableContainExpr(eq_first->a, mem_buffer_tab_)) {
+          tensor_map_[eq_first->b.as<Variable>()] = eq_first->a;
+        } else {
+          tensor_map_[eq_first->a.as<Variable>()] = eq_first->b;
+        }
+        if (TableContainExpr(eq_second->a, mem_buffer_tab_)) {
+          tensor_map_[eq_second->b.as<Variable>()] = eq_second->a;
+        } else {
+          tensor_map_[eq_second->a.as<Variable>()] = eq_second->b;
+        }
+        int count = tensor_map_.size();
+        auto tmp_for_stk = for_stk;
+        while (count > 0) {
+          auto current_for = tmp_for_stk.top();
+          if (tensor_map_.count(current_for->loop_var.get()) > 0 && elim_for_set_.count(current_for) == 0) {
+            elim_for_set_.insert(current_for);
+            count--;
+          }
+          tmp_for_stk.pop();
+        }
+        return true;
+      }
+    }
+    return false;
+  }
+
   void Visit_(const IfThenElse *op) final {
     CHECK(op);
     auto empty_case = op->else_case;
-    auto checkTOfTensor = [](const Expr &e, const std::unordered_map<std::string, int> &table) {
-      if (isType<Call>(e) && table.count(e.as<Call>()->name) > 0) {
-        return true;
-      }
-      return false;
-    };
+    
     if (empty_case == Stmt() && isType<EQ>(op->condition)) {
       const auto equation = op->condition.as<EQ>();
-      if (checkTOfTensor(equation->a, mem_buffer_tab_) || checkTOfTensor(equation->b, mem_buffer_tab_)) {
+      if (TableContainExpr(equation->a, mem_buffer_tab_)
+        || TableContainExpr(equation->b, mem_buffer_tab_)) {
         type_ = OP_TYPE::T_TENSOR_OF_TENSOR;
         std::vector<const Variable *> vars;
-        vars = checkTOfTensor(equation->b, mem_buffer_tab_) ? GetExprSpecVar(equation->a) : GetExprSpecVar(equation->b);
+        vars = TableContainExpr(equation->b, mem_buffer_tab_) ?
+          GetExprSpecVar(equation->a) : GetExprSpecVar(equation->b);
         for (const auto var : vars) {
           if (tab_.count(var) > 0) {
             tab_[var].push_back(op);
@@ -125,37 +164,7 @@ class OpDetector : public IRVisitor {
         return;
       }
     } else if (empty_case == Stmt() && isType<And>(op->condition)) {
-      auto and_op = op->condition.as<And>();
-      if (isType<EQ>(and_op->a) && isType<EQ>(and_op->b)) {
-        auto eq_first = and_op->a.as<EQ>();
-        auto eq_second = and_op->b.as<EQ>();
-        if ((checkTOfTensor(eq_first->a, mem_buffer_tab_) || checkTOfTensor(eq_first->b, mem_buffer_tab_)) &&
-            (checkTOfTensor(eq_second->a, mem_buffer_tab_) || checkTOfTensor(eq_second->b, mem_buffer_tab_))) {
-          type_ = T_TENSOR_OF_TENSOR_ACCUM;
-          elim_if_ = op;
-          if (checkTOfTensor(eq_first->a, mem_buffer_tab_)) {
-            tensor_map_[eq_first->b.as<Variable>()] = eq_first->a;
-          } else {
-            tensor_map_[eq_first->a.as<Variable>()] = eq_first->b;
-          }
-          if (checkTOfTensor(eq_second->a, mem_buffer_tab_)) {
-            tensor_map_[eq_second->b.as<Variable>()] = eq_second->a;
-          } else {
-            tensor_map_[eq_second->a.as<Variable>()] = eq_second->b;
-          }
-          int count = tensor_map_.size();
-          auto tmp_for_stk = for_stk;
-          while (count > 0) {
-            auto current_for = tmp_for_stk.top();
-            if (tensor_map_.count(current_for->loop_var.get()) > 0 && elim_for_set_.count(current_for) == 0) {
-              elim_for_set_.insert(current_for);
-              count--;
-            }
-            tmp_for_stk.pop();
-          }
-          return;
-        }
-      }
+      if (ProcIfThenElseAnd(op)) return;
     }
     return IRVisitor::Visit_(op);
   }
@@ -164,7 +173,7 @@ class OpDetector : public IRVisitor {
   TensorVarTab tab_;
   std::unordered_set<const For *> elim_for_set_;
   std::unordered_map<const Variable *, Expr> tensor_map_;
-  const IfThenElse *elim_if_;
+  const IfThenElse *elim_if_{nullptr};
 
  private:
   bool in_realize_{false};
