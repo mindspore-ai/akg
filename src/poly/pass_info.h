@@ -73,8 +73,6 @@ class PassInfo {
 
   isl::schedule_constraints constraints_;
 
-  TileSizes tile_sizes_;
-
   bool coincident_{true};
 
   isl::union_map dependences_;

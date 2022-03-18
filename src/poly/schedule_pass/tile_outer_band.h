@@ -52,6 +52,7 @@ class TileOuterBand : public SchedulePass {
   isl::schedule TileOuterBandHelper(const isl::schedule sch,
                                     const std::function<isl::schedule_node(isl::schedule_node)> &f);
   void InitDimensionInfo(const isl::schedule &);
+  void InitCustomDimensionInfo(std::string dim);
   void MergeTilingInfo();
   void ShowDimInfo();
   std::string GetbDim() const { return scop_info_.user_config_.GetBDim(); }
@@ -67,9 +68,10 @@ class TileOuterBand : public SchedulePass {
   isl::schedule_node IsolateTiles(const isl::schedule_node &original_node, isl::schedule_node tiled_node,
                                   TileType tile_type, const int *full_tile_min, const int *full_tile_max,
                                   bool isolation);
+  isl::schedule_node MarkOuterPermutable(isl::schedule_node node);
 
   // npu related functions
-  isl::schedule RunNpu(isl::schedule sch);
+  TileType JudgeTileType(isl::schedule_node &node);
   isl::schedule_node MarkOuterPermutableNpu(isl::schedule_node node);
   std::vector<std::vector<int>> AddTileInfo(const std::vector<std::vector<int>> &partition_info);
   isl::schedule_node MarkTileBand(isl::schedule_node node, TileType tile_type);
@@ -91,6 +93,7 @@ class TileOuterBand : public SchedulePass {
   void ComputeHInfo(int &h_base, bool &head, bool &tail, int &h_head, int &h_tail, int &win_h, int &win_cut_h);
   void ComputeWInfo(int &w_base, bool &head, bool &tail, int &w_head, int &w_tail, int &win_w, int &win_cut_w);
   bool NeedIsolate();
+  unsigned int GetMmuIndex();
 
   // cuda and cpu general function
   std::vector<int> GetFullTileMax(const isl::schedule_node &orig_node, const isl::multi_val &mapped_tile_size);
@@ -98,7 +101,6 @@ class TileOuterBand : public SchedulePass {
                                                const isl::multi_val &mapped_tile_size);
 
   // cuda related functions
-  isl::schedule RunCuda(isl::schedule sch);
   isl::schedule_node MarkOuterPermutableCuda(isl::schedule_node node);
 
   isl::schedule_node TileMatmulOperatorForCuda(const isl::schedule_node &node);
@@ -116,7 +118,6 @@ class TileOuterBand : public SchedulePass {
   isl::schedule_node TileThreadAndBlockConfig(const isl::schedule_node &orig_node, const bool is_block_mapping = false);
 
   // cpu related functions
-  isl::schedule RunCpu(isl::schedule sch);
   isl::schedule_node MarkOuterPermutableCpu(isl::schedule_node node);
   isl::schedule_node IsolateTilesForCpu(const isl::schedule_node &orig_node, const std::string &tile_level = "");
 
@@ -140,7 +141,6 @@ class TileOuterBand : public SchedulePass {
   ScopInfo &scop_info_;
   Tiles tiles_;
   TileSizes tile_sizes_;
-  TileSizes tile_sizes_all_;
   bool is_sequence_node_{false};
   size_t cur_band_index_{0};
   std::vector<std::vector<int>> partition_info_;
@@ -150,6 +150,8 @@ class TileOuterBand : public SchedulePass {
   int start_pos_{0};
   isl::union_set reduce_statements_;
 };
+
+using TileType = TileOuterBand::TileType;
 
 }  // namespace poly
 }  // namespace ir
