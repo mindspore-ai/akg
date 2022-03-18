@@ -463,6 +463,8 @@ constexpr auto PARIS_REDUCE_LIB_SPACE = "paris_reduce";
 constexpr auto PARIS_REDUCE_LIB_NAME = "ParisReduce";
 constexpr auto AKG_REDUCE_RETURN_NAME = "AkgAtomicReturn";
 constexpr auto PARIS_REDUCE_RETURN_NAME = "ParisReturn";
+constexpr auto BINARY_OPERATOR_LIFT_OPERAND_NAME = "lhs";
+constexpr auto BINARY_OPERATOR_RIGHT_OPERAND_NAME = "rhs";
 
 struct AtomicReturnData {
   std::string reduce_op;
@@ -480,6 +482,9 @@ Stmt MakeAtomicStmt(const AtomicReturnData &atomic_data);
 
 std::string GetBufScope(const std::string &name);
 bool AttrExists(air::Schedule sch, std::string attr_name);
+
+constexpr auto PURE_INTRINSIC_WITH = "with";
+constexpr auto PURE_INTRINSIC_ORIG = "orig";
 }  // namespace akg
 
 #endif  // PASS_UTILS_H_

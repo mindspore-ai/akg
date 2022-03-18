@@ -35,52 +35,7 @@ class CollectToTTensor : public IRVisitor {
 
   void Visit_(const Call *op) final {
     if (op->call_type == Call::PureIntrinsic) {
-      if (op->name == "with") {
-        int size = static_cast<int>(op->args.size());
-        CHECK(size);
-        if (auto sub_op = op->args[0].as<Call>()) {
-          if (sub_op->name == "lhs" && !scope_collect_) {
-            CHECK(sub_op->args.size() == 3);
-            RemoveRewriteIdx_(sub_op->args[1]);
-            CollectLHS_(sub_op->args);
-            for (int ii = 1; ii < size; ++ii) {
-              IRVisitor::Visit(op->args[ii]);
-            }
-            return;
-          } else if (sub_op->name == "rhs") {
-            CHECK(sub_op->args.size() == 3);
-            if (auto idx = sub_op->args[1].as<IntImm>()) {
-              rhs_idx_.insert(idx->value);
-            }
-            if (!scope_collect_) {
-              Array<Expr> arr;
-              // orig call containing tensor name is visited first
-              arr.push_back(op->args[size - 1]);
-              for (int ii = 0; ii < size - 1; ++ii) {
-                arr.push_back(op->args[ii]);
-              }
-              CollectRHS_(arr, "");
-              return;
-            }
-          }
-        }
-      } else if (op->name == "orig") {
-        CHECK(static_cast<int>(op->args.size()));
-        auto sub_op = op->args[0].as<Call>();
-        if (sub_op != nullptr && sub_op->call_type == Call::Halide && scope_collect_ && scope_rhs_) {
-          if (tensor_name_.empty()) {
-            tensor_name_ = sub_op->func->func_name();
-          }
-          scope_halide_ = true;
-          for (int ii = 0; ii < static_cast<int>(sub_op->args.size()); ++ii) {
-            if (rhs_idx_.count(ii) == 0) {
-              IRVisitor::Visit(sub_op->args[ii]);
-            }
-          }
-          scope_halide_ = false;
-          return;
-        }
-      }
+      if(IsVisitPureIntrinsicEnd(op)) { return; }
     } else if (op->call_type == Call::Halide) {
       scope_halide_ = true;
       if (!scope_collect_) {
@@ -115,6 +70,56 @@ class CollectToTTensor : public IRVisitor {
   std::vector<ToTTensor> rhs;
 
  private:
+  bool IsVisitPureIntrinsicEnd(const Call *op) {
+    if (op->name == PURE_INTRINSIC_WITH) {
+      int size = static_cast<int>(op->args.size());
+      CHECK(size);
+      if (auto sub_op = op->args[0].as<Call>()) {
+        if (sub_op->name == BINARY_OPERATOR_LIFT_OPERAND_NAME && !scope_collect_) {
+          CHECK(sub_op->args.size() == 3);
+          RemoveRewriteIdx_(sub_op->args[1]);
+          CollectLHS_(sub_op->args);
+          for (int ii = 1; ii < size; ++ii) {
+            IRVisitor::Visit(op->args[ii]);
+          }
+          return true;
+        } else if (sub_op->name == BINARY_OPERATOR_RIGHT_OPERAND_NAME) {
+          CHECK(sub_op->args.size() == 3);
+          if (auto idx = sub_op->args[1].as<IntImm>()) {
+            rhs_idx_.insert(idx->value);
+          }
+          if (!scope_collect_) {
+            Array<Expr> arr;
+            // orig call containing tensor name is visited first
+            arr.push_back(op->args[size - 1]);
+            for (int ii = 0; ii < size - 1; ++ii) {
+              arr.push_back(op->args[ii]);
+            }
+            CollectRHS_(arr, "");
+            return true;
+          }
+        }
+      }
+    } else if (op->name == PURE_INTRINSIC_ORIG) {
+      CHECK(static_cast<int>(op->args.size()));
+      auto sub_op = op->args[0].as<Call>();
+      if (sub_op != nullptr && sub_op->call_type == Call::Halide && scope_collect_ && scope_rhs_) {
+        if (tensor_name_.empty()) {
+          tensor_name_ = sub_op->func->func_name();
+        }
+        scope_halide_ = true;
+        for (int ii = 0; ii < static_cast<int>(sub_op->args.size()); ++ii) {
+          if (rhs_idx_.count(ii) == 0) {
+            IRVisitor::Visit(sub_op->args[ii]);
+          }
+        }
+        scope_halide_ = false;
+        return true;
+      }
+    }
+    return false;
+  }
+
   void RemoveRewriteIdx_(const Expr &e) {
     if (auto idx = e.as<IntImm>()) {
       if (lhs_idx_.count(idx->value) > 0) {
@@ -300,26 +305,33 @@ void OpTypeCollector::Visit_(const Evaluate *op) {
   }
 }
 
-void OpTypeCollector::AnalyzeProvide(const Provide *op) {
-  if (cur_loop_ == nullptr) return;
-  ProvideEntry prov;
-  std::string basic_op_type = "";
-  std::vector<TensorEntry> src_tensor;
+TensorEntry OpTypeCollector::GetDstTensor(const Provide *op) {
   TensorEntry dst_tensor;
+  dst_tensor.name = op->func->func_name();
+  for (auto arg : op->args) {
+    VarNames vname;
+    vname = VisitVarNames(arg, vname);
+    dst_tensor.var_names.emplace_back(vname);
+  }
+  dst_tensor = MatchLoopByName(dst_tensor);
+  dst_tensor.args = op->args;
+  dst_tensor.band_index = band_count_;
+  dst_tensor.type_byte = scop_info_.user_config_.GetDataBytes(dst_tensor.name);
+
+  return dst_tensor;
+}
+
+std::vector<TensorEntry> OpTypeCollector::GetSourceTensors(const Provide *op) {
+  std::vector<TensorEntry> src_tensor;
   std::vector<const Call *> src_call;
   auto GetSrc = [&, this](const NodeRef &op) {
     if (const auto call = op.as<Call>()) {
-      if (call->call_type == Call::Extern && scop_info_.user_config_.GetTarget() == TARGET_CUDA) {
-        basic_op_type = AT_CALL;
-      } else {
+      if (call->call_type != Call::Extern || scop_info_.user_config_.GetTarget() != TARGET_CUDA) {
         src_call.emplace_back(call);
       }
-    } else if (op.as<Select>() && scop_info_.user_config_.GetTarget() == TARGET_CCE) {
-      basic_op_type = AT_CALL;
     }
   };
   air::ir::PostOrderVisit(op->value, GetSrc);
-
   for (auto call : src_call) {
     TensorEntry tensor;
     tensor.name = call->name;
@@ -335,6 +347,34 @@ void OpTypeCollector::AnalyzeProvide(const Provide *op) {
     tensor.type_byte = call->type.bytes();
     src_tensor.emplace_back(tensor);
   }
+  return src_tensor;
+}
+
+std::string OpTypeCollector::InitBasicOpType(const Provide *op) {
+  std::string basic_op_type = "";
+  auto GetType = [&, this](const NodeRef &op) {
+    if (scop_info_.user_config_.GetTarget() == TARGET_CUDA) {
+      auto call = op.as<Call>();
+      if (call && call->call_type == Call::Extern) {
+        basic_op_type = AT_CALL;
+        return;
+      }
+    }
+    if (scop_info_.user_config_.GetTarget() == TARGET_CCE && op.as<Select>()) {
+      basic_op_type = AT_CALL;
+      return;
+    }
+  };
+  air::ir::PostOrderVisit(op->value, GetType);
+  return basic_op_type;
+}
+
+void OpTypeCollector::AnalyzeProvide(const Provide *op) {
+  if (cur_loop_ == nullptr) return;
+  ProvideEntry prov;
+  std::string basic_op_type = InitBasicOpType(op);
+  std::vector<TensorEntry> src_tensor = GetSourceTensors(op);
+  TensorEntry dst_tensor = GetDstTensor(op);
 
   auto src_length = static_cast<int>(src_tensor.size());
   for (auto st : src_tensor) {
@@ -347,19 +387,9 @@ void OpTypeCollector::AnalyzeProvide(const Provide *op) {
     LOG(WARNING) << "Detect provide has " << src_tensor.size() << " source tensors.";
     LOG(WARNING) << "After ToThreeAddress pass, number of ops in src should be less than 2.";
   }
-  dst_tensor.name = op->func->func_name();
-  for (auto arg : op->args) {
-    VarNames vname;
-    vname = VisitVarNames(arg, vname);
-    dst_tensor.var_names.emplace_back(vname);
-  }
-  dst_tensor = MatchLoopByName(dst_tensor);
-  dst_tensor.args = op->args;
-  dst_tensor.band_index = band_count_;
-  dst_tensor.type_byte = scop_info_.user_config_.GetDataBytes(dst_tensor.name);
 
   if (scop_info_.analysis_result_.GetTensorOfTensor()) {
-    auto tot_tensors = CollectToTTensor();
+    CollectToTTensor tot_tensors;
     tot_tensors.Visit_(op);
     TensorEntry lhs = MakeTensorEntry(tot_tensors.lhs);
     std::vector<TensorEntry> rhs;
@@ -405,102 +435,113 @@ TensorEntry OpTypeCollector::MatchLoopByName(TensorEntry tensor) {
   return tensor;
 }
 
-std::string OpTypeCollector::GetBasicOpType(const TensorEntry dst, const std::vector<TensorEntry> &srcs) {
-  auto CountUniqueLoopName = [](std::vector<VarNames> var_names) -> size_t {
-    std::unordered_set<std::string> uni_name;
-    for (auto names : var_names) {
-      for (auto n : names) {
-        if (IsNum(n)) {
-          continue;
-        }
-        uni_name.insert(n);
+size_t OpTypeCollector::CountUniqueLoopName(std::vector<VarNames> &var_names) {
+  std::unordered_set<std::string> uni_name;
+  for (auto names : var_names) {
+    for (auto n : names) {
+      if (IsNum(n)) {
+        continue;
       }
+      uni_name.insert(n);
     }
-    return uni_name.size();
-  };
+  }
+  return uni_name.size();
+}
 
-  auto GetSingleOpType = [&CountUniqueLoopName, this](const TensorEntry d, const TensorEntry s) -> std::string {
-    auto dst_vars = d.var_names;
-    auto src_vars = s.var_names;
-    auto dst_vars_size = CountUniqueLoopName(dst_vars);
-    auto src_vars_size = CountUniqueLoopName(src_vars);
-    std::string type = "";
-    if (scop_info_.user_config_.GetTarget() == TARGET_CCE) {
-      if (this->local_buf_.find(s.name) == this->local_buf_.end()) type += "DMA2_";
-      if (this->local_buf_.find(d.name) == this->local_buf_.end()) type += "DMA3_";
-    }
-    if (src_vars_size == 0 && scop_info_.user_config_.GetTarget() != TARGET_CUDA) {
-      return type + "SP_CALL";
-    }
-    if (dst_vars_size < src_vars_size) {
-      if (d.loops.size() < s.loops.size() && d.name != s.name) {
-        // A[i,0] = B[i,j]
-        return type + AT_REDUCE;
-      } else {
-        return type + "UNKNOWN";
+bool OpTypeCollector::IsTranspose(std::vector<VarNames> &dst_vars, std::vector<VarNames> &src_vars) {
+  if (dst_vars.empty() || src_vars.empty()) { return false; }
+  while (!dst_vars.empty() && !src_vars.empty()) {
+    VarNames dst_name = dst_vars.back();
+    VarNames src_name = src_vars.back();
+    dst_vars.pop_back();
+    src_vars.pop_back();
+    VarNames dst_pure_name;
+    VarNames src_pure_name;
+    for (auto n : dst_name) {
+      if (!IsNum(n)) {
+        dst_pure_name.emplace_back(n);
       }
-    } else if (dst_vars_size > src_vars_size) {
-      // A[i,j] = B[i,0]
-      return type + AT_BROADCAST;
+    }
+    for (auto n : src_name) {
+      if (!IsNum(n)) {
+        src_pure_name.emplace_back(n);
+      }
+    }
+    if (dst_pure_name.size() == src_pure_name.size()) {
+      for (size_t j = 0; j < dst_pure_name.size(); ++j) {
+        if (dst_pure_name[j] != src_pure_name[j]) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+std::string OpTypeCollector::GetFusedCaseType(const TensorEntry &d, const TensorEntry &s) {
+  if (scop_info_.user_config_.GetTarget() != TARGET_CUDA || d.args.size() != s.args.size()) {
+    // A[0,i] = B[i,i]
+    return AT_TRANSFORM;
+  }
+  std::string type = "";
+  for (size_t i = 0; i < d.args.size(); ++i) {
+    if (Equal(d.args[i], s.args[i])) {
+      continue;
+    }
+    if (arith_ana_.CanProve(s.args[i] == 0)) {
+      // A[floordiv(i, 128), floormod(i, 128)] = B[0, floormod(i, 128)]
+      type += AT_BROADCAST;
+    } else if (arith_ana_.CanProve(d.args[i] == 0)) {
+      // A[0, floormod(i, 128)] = B[floordiv(i, 128), floormod(i, 128)]
+      type += AT_REDUCE;
     } else {
-      // Index size is the same.
-      while (!dst_vars.empty() && !src_vars.empty()) {
-        // detect transpose first
-        VarNames dst_name = dst_vars.back();
-        VarNames src_name = src_vars.back();
-        dst_vars.pop_back();
-        src_vars.pop_back();
-        VarNames dst_pure_name;
-        VarNames src_pure_name;
-        for (auto n : dst_name) {
-          if (!IsNum(n)) {
-            dst_pure_name.emplace_back(n);
-          }
-        }
-        for (auto n : src_name) {
-          if (!IsNum(n)) {
-            src_pure_name.emplace_back(n);
-          }
-        }
-        if (dst_pure_name.size() == src_pure_name.size()) {
-          for (size_t j = 0; j < dst_pure_name.size(); ++j) {
-            if (dst_pure_name[j] != src_pure_name[j]) {
-              return type + AT_TRANSPOSE;
-            }
-          }
-        }
-      }
-      if (d.loops.size() == s.loops.size()) {
-        // A[i,j] = B[i,j]
-        return type + AT_ELEMWISE;
-      } else {
-        // AutoFused case in cuda
-        if (scop_info_.user_config_.GetTarget() == TARGET_CUDA && d.args.size() == s.args.size()) {
-          for (size_t i = 0; i < d.args.size(); ++i) {
-            if (Equal(d.args[i], s.args[i])) {
-              continue;
-            }
-            if (arith_ana_.CanProve(s.args[i] == 0)) {
-              // A[floordiv(i, 128), floormod(i, 128)] = B[0, floormod(i, 128)]
-              type += AT_BROADCAST;
-            } else if (arith_ana_.CanProve(d.args[i] == 0)) {
-              // A[0, floormod(i, 128)] = B[floordiv(i, 128), floormod(i, 128)]
-              type += AT_REDUCE;
-            } else {
-              type += AT_TRANSFORM;
-            }
-            type += ("|" + std::to_string(i) + "_");
-          }
-        } else {
-          // A[0,i] = B[i,i]
-          type += AT_TRANSFORM;
-        }
-        return type;
-      }
+      type += AT_TRANSFORM;
     }
-    return type;
-  };
+    type += ("|" + std::to_string(i) + "_");
+  }
+  return type;
+}
 
+std::string OpTypeCollector::GetSingleOpType(const TensorEntry &d, const TensorEntry &s) {
+  auto dst_vars = d.var_names;
+  auto src_vars = s.var_names;
+  auto dst_vars_size = CountUniqueLoopName(dst_vars);
+  auto src_vars_size = CountUniqueLoopName(src_vars);
+  std::string type = "";
+
+  if (scop_info_.user_config_.GetTarget() == TARGET_CCE) {
+    if (this->local_buf_.find(s.name) == this->local_buf_.end()) type += "DMA2_";
+    if (this->local_buf_.find(d.name) == this->local_buf_.end()) type += "DMA3_";
+  }
+  if (src_vars_size == 0 && scop_info_.user_config_.GetTarget() != TARGET_CUDA) {
+    return type + "SP_CALL";
+  }
+  if (dst_vars_size < src_vars_size) {
+    if (d.loops.size() < s.loops.size() && d.name != s.name) {
+      // A[i,0] = B[i,j]
+      return type + AT_REDUCE;
+    } else {
+      return type + "UNKNOWN";
+    }
+  } else if (dst_vars_size > src_vars_size) {
+    // A[i,j] = B[i,0]
+    return type + AT_BROADCAST;
+  } else {
+    // Index size is the same.
+    if (IsTranspose(dst_vars, src_vars)) {
+      return type + AT_TRANSPOSE;
+    }
+    if (d.loops.size() == s.loops.size()) {
+      // A[i,j] = B[i,j]
+      return type + AT_ELEMWISE;
+    } else {
+      // AutoFused case in cuda
+      return type + GetFusedCaseType(d, s);
+    }
+  }
+}
+
+std::string OpTypeCollector::GetBasicOpType(const TensorEntry &dst, const std::vector<TensorEntry> &srcs) {
   std::string basic_op_type = "";
   bool is_unpad = (dst.name.find("unpad") != std::string::npos) || (dst.name.find("Unpad") != std::string::npos);
   bool is_pad = (dst.name.find("pad") != std::string::npos || dst.name.find("Pad") != std::string::npos);
