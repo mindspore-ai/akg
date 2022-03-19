@@ -17,6 +17,7 @@
 """build module"""
 import os
 import json
+from collections import Iterable
 import akg
 from akg import tvm
 from akg.utils.kernel_exec import ReturnType
@@ -181,14 +182,16 @@ def _update_compile_attr(desc_d, attr):
     if desc_d['op_desc'] is None:
         return attr
     for op in desc_d['op_desc']:
-        if "compile_attr" not in op or op["compile_attr"] is None:
+        op_attrs = op.get("attr", {})
+        if not isinstance(op_attrs, Iterable):
             continue
-        for i in op["compile_attr"]:
-            if isinstance(i, str):
-                attr.update({i: op["compile_attr"][i]})
-            else:
-                raise ValueError("Currently all compile attrs' name for AKG should be type of str. But got \
-                    an attr name: {}, which type is: {}.".format(i, type(i)))
+        compile_attrs = list(item.get("value", "") for item in op_attrs if isinstance(
+            item, dict) and item.get("name", "") == "func_compile_attrs")
+        if compile_attrs:
+            attrs_dict = json.loads(compile_attrs[0])
+            for key in attrs_dict:
+                attr.update({key: attrs_dict[key]})
+
     return attr
 
 

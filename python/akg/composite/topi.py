@@ -19,6 +19,7 @@ import functools
 import itertools
 import operator
 import os
+import sys
 import importlib.util
 from pathlib import Path
 
@@ -28,7 +29,7 @@ from akg.utils.format_transform import get_const, get_shape
 from akg.utils.dsl_create import get_broadcast_shape
 from akg.utils import validation_check as vc_util
 
-import akg.topi as topi
+import akg.topi as akg_topi
 import akg.utils as utils
 
 
@@ -84,7 +85,7 @@ def pad(inputs, attrs):
         raise ValueError(
             "Input dimensions and pad dimensions dismatch: %d vs %d vs %d" % (n, len(pad_before), len(pad_after)))
     output_name = "T_pad_" + in_tensor.op.name
-    return topi.nn.pad(in_tensor, pad_before, pad_after, pad_value, name=output_name)
+    return akg_topi.nn.pad(in_tensor, pad_before, pad_after, pad_value, name=output_name)
 
 
 @tvm.register_func("UnPadAkg")
@@ -210,7 +211,7 @@ def StridedSlice(inputs, attrs):
             begin[i] = 1
             end[i] = 1
             strides[i] = 1
-            in_tensor = topi.expand_dims(in_tensor, i, 1)
+            in_tensor = akg_topi.expand_dims(in_tensor, i, 1)
             i += 1
             continue
         if i < len(shrink_axis_pos) and shrink_axis_pos[i] == '1':
@@ -500,6 +501,17 @@ def _launch_kernel_from_source(inputs, op_attrs, source_str, real_inputs_num, is
 def _launch_kernel_from_path(inputs, op_attrs, func_type, op_imply_path, func_name):
     if not os.path.isfile(op_imply_path):
         raise ValueError("Can't find file under path: {}".format(str(op_imply_path)))
+    # here we need to drop some sys module with name tvm, akg and topi
+    # as they will lead to conflict with TBE on ascend when exec module
+    akg_key_list = []
+    for key in sys.modules.keys():
+        if "tvm" in key or "akg" in key or "topi" in key:
+            akg_key_list.append(key)
+    for key in akg_key_list:
+        sys.modules.pop(key)
+    # del akg related path in the sys.path
+    # these two paths are added when akg kernel compiler is launched
+    sys.path = sys.path[2:]
 
     custom_mod_name = Path(op_imply_path).resolve().stem
     mod_spec = importlib.util.spec_from_file_location(
