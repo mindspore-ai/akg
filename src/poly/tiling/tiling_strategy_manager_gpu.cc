@@ -1003,7 +1003,7 @@ void GpuStrategy::VectorizationSpeedup() {
 }
 
 bool GpuStrategy::IsVectorized() {
-  if (!analyzer_->scop_info_.user_config_.GetEnableVectorization()) {
+  if (!analyzer_->scop_info_.user_config_.GetEnableVectorization() || analyzer_->scop_info_.analysis_result_.GetCsr()) {
     return false;
   }
   auto reads_access = analyzer_->scop_info_.analysis_result_.GetReads().domain_factor_domain();
