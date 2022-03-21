@@ -29,10 +29,12 @@ from akg.ms.utils import BINDS
 from akg.global_configs import get_kernel_meta_path
 from akg.global_configs import get_dump_ir_flag
 
+
 def _get_target(device):
     if device == "aicore":
         return "cce"
     return device
+
 
 @utils.check_input_type(list, (list, tuple), (list, tuple), (types.FunctionType, type(None)), str, str, dict)
 def op_build_to_func(opnames, computes, args, custom_schedule, device, kernel_name, attrs):
@@ -40,6 +42,7 @@ def op_build_to_func(opnames, computes, args, custom_schedule, device, kernel_na
     if device not in ("aicore", "aicpu"):
         logging.error("Device %s is not in [aicore, aicpu].", device)
         return None
+    logging.debug("op_build_to_func for ", opnames)
 
     polyhedral = True
     dump_ir = os.getenv(get_dump_ir_flag()) == "on"
@@ -64,54 +67,63 @@ def op_build_to_func(opnames, computes, args, custom_schedule, device, kernel_na
         return None
     return rst
 
+
+def _op_build_ascend(opnames, computes, args, custom_schedule, device, kernel_name, attrs):
+    tmp_rst = op_build_to_func(opnames, computes, args, custom_schedule, device, kernel_name, attrs)
+    if tmp_rst is not None:
+        try:
+            _api_internal._BuildToModule(tmp_rst, _get_target(device))
+        except Exception:
+            logging.error(traceback.format_exc())
+            return None
+    return True
+
+
+def _op_build_cuda(opnames, computes, args, device, kernel_name):
+    kernel_meta_path = get_kernel_meta_path()
+    cuda_path = os.path.realpath(kernel_meta_path)
+    if not os.path.isdir(cuda_path):
+        os.makedirs(cuda_path, exist_ok=True)
+    if not opnames:
+        logging.error("no opname given.")
+        return None
+
+    schedule_name = 'gpu_schedule_' + opnames[0]
+    schedule_func = getattr(akg.ops.array.gpu, schedule_name)
+    if not isinstance(schedule_func, (types.FunctionType, typing.Callable)):
+        logging.error("no schedule func found %s", str(schedule_name))
+        return None
+
+    ptx_file = os.path.realpath(kernel_meta_path + kernel_name + ".ptx")
+    if os.path.exists(ptx_file):
+        os.remove(ptx_file)
+    try:
+        with open(ptx_file, 'at') as file:
+            fcntl.flock(file.fileno(), fcntl.LOCK_EX)
+            file.seek(0, 2)
+            if file.tell() == 0:
+                s = schedule_func(computes)
+                foo = akg.tvm.build(s, args, device, name=kernel_name)
+                ptx_code = foo.imported_modules[0].get_source("ptx")
+                file.write(ptx_code)
+                json_file = os.path.realpath(kernel_meta_path + kernel_name + ".json")
+                kernel_info = (ptx_code, json_file, kernel_name)
+                gpu_utils.save_gpu_params(s, args, kernel_info)
+        os.chmod(ptx_file, 0o400)
+    except Exception:
+        logging.error(traceback.format_exc())
+        return None
+    return True
+
+
 @utils.check_input_type(list, (list, tuple), (list, tuple), (types.FunctionType, type(None)), str, str, dict)
 def op_build(opnames, computes, args, custom_schedule, device, kernel_name, attrs):
     """op_build"""
     if device in ("aicore", "aicpu"):
-        tmp_rst = op_build_to_func(opnames, computes, args, custom_schedule, device, kernel_name, attrs)
-        if tmp_rst is not None:
-            try:
-                _api_internal._BuildToModule(tmp_rst, _get_target(device))
-            except Exception:
-                logging.error(traceback.format_exc())
-                return None
-        return True
+        return _op_build_ascend(opnames, computes, args, custom_schedule, device, kernel_name, attrs)
 
     if device == "cuda":
-        kernel_meta_path = get_kernel_meta_path()
-        cuda_path = os.path.realpath(kernel_meta_path)
-        if not os.path.isdir(cuda_path):
-            os.makedirs(cuda_path, exist_ok=True)
-        if not opnames:
-            logging.error("no opname given.")
-            return None
-
-        schedule_name = 'gpu_schedule_' + opnames[0]
-        schedule_func = getattr(akg.ops.array.gpu, schedule_name)
-        if not isinstance(schedule_func, (types.FunctionType, typing.Callable)):
-            logging.error("no schedule func found %s", str(schedule_name))
-            return None
-
-        ptx_file = os.path.realpath(kernel_meta_path + kernel_name + ".ptx")
-        if os.path.exists(ptx_file):
-            os.remove(ptx_file)
-        try:
-            with open(ptx_file, 'at') as file:
-                fcntl.flock(file.fileno(), fcntl.LOCK_EX)
-                file.seek(0, 2)
-                if file.tell() == 0:
-                    s = schedule_func(computes)
-                    foo = akg.tvm.build(s, args, device, name=kernel_name)
-                    ptx_code = foo.imported_modules[0].get_source("ptx")
-                    file.write(ptx_code)
-                    json_file = os.path.realpath(kernel_meta_path + kernel_name + ".json")
-                    kernel_info = (ptx_code, json_file, kernel_name)
-                    gpu_utils.save_gpu_params(s, args, kernel_info)
-            os.chmod(ptx_file, 0o400)
-        except Exception:
-            logging.error(traceback.format_exc())
-            return None
-        return True
+        return _op_build_cuda(opnames, computes, args, device, kernel_name)
 
     logging.error("Not support device %s.", device)
     return None

@@ -34,6 +34,19 @@ def launch(kernel, args, output=(-1,)):
     Returns:
         output numpy array, or tuple of numpy array if multi-output.
     """
+
+    def _check_exists(value, error_msg):
+        if not value:
+            raise RuntimeError(error_msg)
+
+    def _mkdir(path):
+        if not os.path.exists(path):
+            os.mkdir(path)
+
+    def _rmdir(path):
+        if os.path.exists(path):
+            os.remove(path)
+
     if isinstance(kernel, akg.tvm.module.Module):
         code = kernel.imported_modules[0].get_source()
         kernel_name = code.split("_kernel")[0].split(" ")[-1]
@@ -42,23 +55,18 @@ def launch(kernel, args, output=(-1,)):
     hbm_addr = 0x4000000
     hbm_unit = 0x1000000
     aic_model_path = os.getenv('AIC_MODEL_PATH')
-    if not aic_model_path:
-        msg = "AIC_MODEL_PATH environment variable is not set. Please set it to the dir of model_exe"
-        raise RuntimeError(msg)
+    _check_exists(aic_model_path,
+                  "AIC_MODEL_PATH environment variable is not set. Please set it to the dir of model_exe")
     aic_model_path = os.path.realpath(aic_model_path)
     # spec : target chip specification.
     spec_name = os.getenv('AIC_MODEL_SPEC_NAME')
-    if not spec_name:
-        msg = "AIC_MODEL_SPEC_NAME environment variable is not set. Please set it to the name of spec(" \
-              "It should be xxx.spec and the xxx.spec file is under the AIC_MODEL_PATH directory)"
-        raise RuntimeError(msg)
-
+    _check_exists(spec_name,
+                  "AIC_MODEL_SPEC_NAME environment variable is not set. Please set it to the name of spec("
+                  "It should be xxx.spec and the xxx.spec file is under the AIC_MODEL_PATH directory)")
     aic_out_path = os.path.realpath("aic_out")
-    if not os.path.exists(aic_out_path):
-        os.mkdir(aic_out_path)
+    _mkdir(aic_out_path)
     calog_path = aic_out_path + "/calog"
-    if not os.path.exists(calog_path):
-        os.mkdir(calog_path)
+    _mkdir(calog_path)
 
     model_path = aic_out_path + "/model"
     if not os.path.exists(model_path):
@@ -66,19 +74,19 @@ def launch(kernel, args, output=(-1,)):
 
     kernel_meta_path = get_kernel_meta_path()
     kernel_meta_realpath = os.path.realpath(kernel_meta_path)
-    if not os.path.exists(kernel_meta_realpath):
-        msg = "The parameter kernel_meta_realpath  can not be found, please check"
-        raise RuntimeError(msg)
+    _check_exists(kernel_meta_realpath,
+                  "The parameter kernel_meta_realpath  can not be found, please check")
 
     o_name = kernel_meta_realpath + "/" + kernel_name + ".o"
     bin_name = aic_out_path + "/kernel.bin"
-    subprocess.call(["aicore-elf-objcopy", "-O", "binary", "-j", ".text", o_name, bin_name])
+    subprocess.call(["aicore-elf-objcopy", "-O", "binary",
+                    "-j", ".text", o_name, bin_name])
 
     load_dict = {}
     with open("%s/%s.json" % (kernel_meta_realpath, kernel_name), "r") as f:
         load_dict = json.load(f)
 
-    arg_info = []  # [{"bin": "xx.bin", "out" : False, "size":100, "addr": 200},]
+    arg_info = []
     desc = {"args": arg_info,
             "para_addr": hbm_addr,
             "bin_addr": hbm_addr + 0x100000,
@@ -104,8 +112,7 @@ def launch(kernel, args, output=(-1,)):
         arg_info[len(arg_info) + i if i < 0 else i]['out'] = True
 
     config_path = aic_out_path + "/config.toml"
-    if os.path.exists(config_path):
-        os.remove(config_path)
+    _rmdir(config_path)
     with os.fdopen(os.open(config_path, os.O_WRONLY | os.O_CREAT, 0o400), 'w') as f:
         f.write('title="Sim Config"\n')
         f.write('log_open_value=0xffffffff\n')
@@ -118,7 +125,8 @@ def launch(kernel, args, output=(-1,)):
         f.write('name="%s"\n' % (desc['bin']))
         f.write('addr=0x%x\n' % (desc['bin_addr']))
         for arg in arg_info:
-            f.write('[[output_para_array]]\n' if arg['out'] else '[[input_para_array]]\n')
+            f.write('[[output_para_array]]\n' if arg['out']
+                    else '[[input_para_array]]\n')
             f.write('name="%s"\n' % (arg['bin']))
             f.write('addr=0x%x\n' % (arg['addr']))
             f.write('valid=1\n')
@@ -126,18 +134,20 @@ def launch(kernel, args, output=(-1,)):
                 f.write('size=0x%x\n' % (arg['size']))
 
     run_path = aic_out_path + "/run.sh"
-    if os.path.exists(run_path):
-        os.remove(run_path)
+    _rmdir(run_path)
     with os.fdopen(os.open(run_path, os.O_WRONLY | os.O_CREAT, 0o500), 'w') as f:
         f.write("cd " + aic_out_path + "\n")
         f.write("export DVCSPEC_DIR=" + aic_model_path + "\n")
-        f.write(aic_model_path + "/v100_ca_tag_master --gtest_filter=test_st_case.test_st_ca\n")
+        f.write(aic_model_path +
+                "/v100_ca_tag_master --gtest_filter=test_st_case.test_st_ca\n")
     subprocess.call(["sh", aic_out_path + "/run.sh"])
     out_list = []
     for i, arg_ in enumerate(args):
         if arg_info[i]['out']:
-            out_data = np.fromfile(os.path.join(aic_out_path, arg_info[i]['bin']), arg_.dtype)
-            if out_data.size > args[i].size:  # strip unneeded data copied back by aic model
+            out_data = np.fromfile(os.path.join(
+                aic_out_path, arg_info[i]['bin']), arg_.dtype)
+            # strip unneeded data copied back by aic model
+            if out_data.size > args[i].size:
                 out_data = out_data[0:arg_.size]
             out_arg = out_data.reshape(arg_.shape)
             out_list.append(out_arg)

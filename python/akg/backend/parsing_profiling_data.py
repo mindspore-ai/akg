@@ -16,18 +16,22 @@
 
 """parsing_profiling_data"""
 import os
-import subprocess
 import struct
 import re
+import logging
+import itertools
 from akg import tvm
 
 OUTPUT_FORMAT_DATA = "./output_format_data_hwts.txt"
 max_time_consume = 9999999999
+
+
 def get_log_slice_id(file_name):
     pattern = re.compile(r'(?<=slice_)\d+')
     slice_ = pattern.findall(file_name)
     index = re.findall(r'\d+', slice_[0])
     return int(index[0])
+
 
 def get_file_join_name(input_path=None, file_name=None):
     """Function for getting join name from input path."""
@@ -69,6 +73,7 @@ def fwrite_format(output_data_path=OUTPUT_FORMAT_DATA, data_source=None, is_star
         else:
             f.write(data_source)
             f.write("\n")
+
 
 def validate_and_normalize_path(
         path,
@@ -113,6 +118,7 @@ def validate_and_normalize_path(
 
     return normalized_path
 
+
 class HWTSLogParser:
     """
     The Parser for hwts log files.
@@ -135,20 +141,34 @@ class HWTSLogParser:
 
     def _get_source_file(self):
         """Get hwts log file name, which was created by ada service."""
+        input_paths = [self._input_path, os.path.join(self._input_path, "data")]
+        file_targets = [self._source_file_target, self._source_file_target_old]
+        for path, target in itertools.product(input_paths, file_targets):
+            file_name = get_file_join_name(path, target)
+            if file_name:
+                return file_name
+        msg = "Fail to find hwts log file, under profiling directory"
+        raise RuntimeError(msg)
 
-        file_name = get_file_join_name(self._input_path, self._source_file_target)
-        if not file_name:
-            file_name = get_file_join_name(self._input_path, self._source_file_target_old)
-            if not file_name:
-                data_path = os.path.join(self._input_path, "data")
-                file_name = get_file_join_name(data_path, self._source_file_target)
-                if not file_name:
-                    file_name = get_file_join_name(data_path, self._source_file_target_old)
-                    if not file_name:
-                        msg = "Fail to find hwts log file, under profiling directory"
-                        raise RuntimeError(msg)
-
-        return file_name
+    @staticmethod
+    def _parse_struct(ms_type, line, is_warn_res0_ov):
+        content_format = ['QIIIIIIIIIIII', 'QIIQIIIIIIII', 'IIIIQIIIIIIII']
+        stream_id = None
+        syscnt = None
+        if ms_type in ['000', '001', '010']:  # log type 0,1,2
+            result = struct.unpack(content_format[0], line[8:])
+            syscnt = result[0]
+            stream_id = result[1]
+        elif ms_type == '011':  # log type 3
+            result = struct.unpack(content_format[1], line[8:])
+            syscnt = result[0]
+            stream_id = result[1]
+        elif ms_type == '100':  # log type 4
+            result = struct.unpack(content_format[2], line[8:])
+            stream_id = result[2]
+            if is_warn_res0_ov == '0':
+                syscnt = result[4]
+        return stream_id, syscnt
 
     def execute(self):
         """
@@ -158,7 +178,6 @@ class HWTSLogParser:
             bool, whether succeed to analyse hwts log.
         """
 
-        content_format = ['QIIIIIIIIIIII', 'QIIQIIIIIIII', 'IIIIQIIIIIIII']
         log_type = ['Start of task', 'End of task', 'Start of block', 'End of block', 'Block PMU']
 
         result_data = ""
@@ -186,37 +205,21 @@ class HWTSLogParser:
                 cnt = int(byte_first[0:4], 2)
                 core_id = byte_first_four[1]
                 blk_id, task_id = byte_first_four[3], byte_first_four[4]
-                if ms_type in ['000', '001', '010']:  # log type 0,1,2
-                    result = struct.unpack(content_format[0], line[8:])
-                    syscnt = result[0]
-                    stream_id = result[1]
-                elif ms_type == '011':  # log type 3
-                    result = struct.unpack(content_format[1], line[8:])
-                    syscnt = result[0]
-                    stream_id = result[1]
-                elif ms_type == '100':  # log type 4
-                    result = struct.unpack(content_format[2], line[8:])
-                    stream_id = result[2]
-                    if is_warn_res0_ov == '0':
-                        syscnt = result[4]
-                    else:
-                        syscnt = None
-                else:
-                    logger.info("Profiling: invalid hwts log record type %s", ms_type)
+                stream_id, syscnt = self._parse_struct(ms_type, line, is_warn_res0_ov)
+                if stream_id is None:
+                    logging.info("Profiling: invalid hwts log record type %s", ms_type)
                     continue
-
                 if int(task_id) < 25000:
                     task_id = str(task_id)
-
-                if kernel_label == (str(stream_id) + '_' +str(task_id)):
+                if kernel_label == (str(stream_id) + '_' + str(task_id)):
                     if log_type[int(ms_type, 2)] == "Start of task":
                         last_syscnt = syscnt
                     elif log_type[int(ms_type, 2)] == "End of task":
                         cycles += syscnt - last_syscnt
 
                 if self._is_print:
-                    result_data += ("%-14s %-4s %-8s %-9s %-8s %-15s %s\n" %(log_type[int(ms_type, 2)], cnt, core_id,
-                                                                         blk_id, task_id, syscnt, stream_id))
+                    result_data += ("%-14s %-4s %-8s %-9s %-8s %-15s %s\n" % (log_type[int(ms_type, 2)], cnt, core_id,
+                                                                              blk_id, task_id, syscnt, stream_id))
 
         if self._is_print:
             fwrite_format(self._output_filename, data_source=self._dst_file_title, is_start=True)

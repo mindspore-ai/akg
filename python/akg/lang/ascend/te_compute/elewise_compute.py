@@ -33,6 +33,122 @@ def set_is_need_save_dtype():
 name_index = [0]
 
 
+def _auto_cast_of_elewise_one(func, arg, supported_types):
+    temp_tensor = arg
+    dtype = temp_tensor.dtype
+    if dtype not in supported_types:
+        if "float32" in supported_types and is_cast_support(dtype, "float32"):
+            temp_tensor = cast(temp_tensor, "float32")
+        else:
+            temp_tensor = cast(temp_tensor, "float16")
+    return func(temp_tensor)
+
+
+def _auto_cast_of_elewise_two(func, args, supported_types):
+    if isinstance(args[1], akg.tvm.tensor.Tensor):
+        lhs = args[0]
+        rhs = args[1]
+        # get tensor from tuple(tensor, attrs)
+        if isinstance(lhs, tuple):
+            lhs = list(lhs)[0]
+        dtype_l = lhs.dtype
+        dtype_r = rhs.dtype
+
+        lhs_t = lhs
+        rhs_t = rhs
+        if dtype_l not in supported_types or dtype_r not in supported_types or dtype_l != dtype_r:
+            if "float32" in supported_types and is_cast_support(dtype_l, "float32")\
+                    and is_cast_support(dtype_r, "float32"):
+                lhs_t = cast(lhs, "float32")
+                rhs_t = cast(rhs, "float32")
+            else:
+                lhs_t = cast(lhs, "float16")
+                rhs_t = cast(rhs, "float16")
+
+        return func(lhs_t, rhs_t)
+
+    temp_tensor = args[0]
+    if isinstance(temp_tensor, tuple):
+        temp_tensor = list(temp_tensor)[0]
+    scalar = args[1]
+    dtype = temp_tensor.dtype
+    if dtype not in supported_types:
+        if "float32" in supported_types and is_cast_support(dtype, "float32"):
+            temp_tensor = cast(temp_tensor, "float32")
+            dtype = "float32"
+        else:
+            temp_tensor = cast(temp_tensor, "float16")
+            dtype = "float16"
+
+    tmp_arg = scalar
+    scalar_type = judge_var(scalar)
+    if scalar_type == "tvm_const" and scalar.dtype != dtype:
+        tmp_arg = akg.tvm.const(scalar.value, dtype=dtype)
+
+    if scalar_type == "python_const":
+        tmp_arg = akg.tvm.const(scalar, dtype=dtype)
+    return func(temp_tensor, tmp_arg)
+
+
+def _auto_cast_of_elewise_three(func, args, supported_types):
+    if isinstance(args[2], akg.tvm.tensor.Tensor):
+        x = args[0]
+        y = args[1]
+        z = args[2]
+
+        dtype_x = x.dtype
+        dtype_y = y.dtype
+        dtype_z = z.dtype
+
+        x_t = x
+        y_t = y
+        z_t = z
+
+        if dtype_x != dtype_y or dtype_x != dtype_z or dtype_z != dtype_y:
+            raise RuntimeError("Input tensors must has same dtype!")
+
+        if dtype_x not in supported_types:
+            if "float32" in supported_types and is_cast_support(dtype_x, "float32"):
+                x_t = cast(x, "float32")
+                y_t = cast(y, "float32")
+                z_t = cast(z, "float32")
+            else:
+                x_t = cast(x, "float16")
+                y_t = cast(y, "float16")
+                z_t = cast(z, "float16")
+
+        return func(x_t, y_t, z_t)
+
+    lhs = args[0]
+    rhs = args[1]
+    scalar = args[2]
+
+    dtype_l = lhs.dtype
+    dtype_r = rhs.dtype
+
+    lhs_t = lhs
+    rhs_t = rhs
+    if dtype_l not in supported_types or dtype_r not in supported_types or dtype_l != dtype_r:
+        if "float32" in supported_types and is_cast_support(dtype_l, "float32")\
+                and is_cast_support(dtype_r, "float32"):
+            lhs_t = cast(lhs, "float32")
+            rhs_t = cast(rhs, "float32")
+            dtype_l = "float32"
+        else:
+            lhs_t = cast(lhs, "float16")
+            rhs_t = cast(rhs, "float16")
+            dtype_l = "float16"
+
+    tmp_arg = scalar
+    scalar_type = judge_var(scalar)
+    if scalar_type == "tvm_const" and scalar.dtype != dtype_l:
+        tmp_arg = akg.tvm.const(scalar.value, dtype=dtype_l)
+
+    if scalar_type == "python_const":
+        tmp_arg = akg.tvm.const(scalar, dtype=dtype_l)
+    return func(lhs_t, rhs_t, tmp_arg)
+
+
 @decorator
 def auto_cast_of_elewise(func, *args, **kwargs):
     """
@@ -54,115 +170,11 @@ def auto_cast_of_elewise(func, *args, **kwargs):
     supported_types = get_intr_types("Intrinsic_" + intr)
 
     if len(args) == 1:
-        temp_tensor = args[0]
-        dtype = temp_tensor.dtype
-        if dtype not in supported_types:
-            if "float32" in supported_types and is_cast_support(dtype, "float32"):
-                temp_tensor = cast(temp_tensor, "float32")
-            else:
-                temp_tensor = cast(temp_tensor, "float16")
-        return func(temp_tensor)
+        return _auto_cast_of_elewise_one(func, args[0], supported_types)
     if len(args) == 2:
-        if isinstance(args[1], akg.tvm.tensor.Tensor):
-            lhs = args[0]
-            rhs = args[1]
-            # get tensor from tuple(tensor, attrs)
-            if isinstance(lhs, tuple):
-                lhs = list(lhs)[0]
-            dtype_l = lhs.dtype
-            dtype_r = rhs.dtype
-
-            lhs_t = lhs
-            rhs_t = rhs
-            if dtype_l not in supported_types or dtype_r not in supported_types or dtype_l != dtype_r:
-                if "float32" in supported_types and is_cast_support(dtype_l, "float32")\
-                        and is_cast_support(dtype_r, "float32"):
-                    lhs_t = cast(lhs, "float32")
-                    rhs_t = cast(rhs, "float32")
-                else:
-                    lhs_t = cast(lhs, "float16")
-                    rhs_t = cast(rhs, "float16")
-
-            return func(lhs_t, rhs_t)
-
-        temp_tensor = args[0]
-        if isinstance(temp_tensor, tuple):
-            temp_tensor = list(temp_tensor)[0]
-        scalar = args[1]
-        dtype = temp_tensor.dtype
-        if dtype not in supported_types:
-            if "float32" in supported_types and is_cast_support(dtype, "float32"):
-                temp_tensor = cast(temp_tensor, "float32")
-                dtype = "float32"
-            else:
-                temp_tensor = cast(temp_tensor, "float16")
-                dtype = "float16"
-
-        tmp_arg = scalar
-        scalar_type = judge_var(scalar)
-        if scalar_type == "tvm_const" and scalar.dtype != dtype:
-            tmp_arg = akg.tvm.const(scalar.value, dtype=dtype)
-
-        if scalar_type == "python_const":
-            tmp_arg = akg.tvm.const(scalar, dtype=dtype)
-        return func(temp_tensor, tmp_arg)
+        return _auto_cast_of_elewise_two(func, args, supported_types)
     if len(args) == 3:
-        if isinstance(args[2], akg.tvm.tensor.Tensor):
-            x = args[0]
-            y = args[1]
-            z = args[2]
-
-            dtype_x = x.dtype
-            dtype_y = y.dtype
-            dtype_z = z.dtype
-
-            x_t = x
-            y_t = y
-            z_t = z
-
-            if dtype_x != dtype_y or dtype_x != dtype_z or dtype_z != dtype_y:
-                raise RuntimeError("Input tensors must has same dtype!")
-
-            if dtype_x not in supported_types:
-                if "float32" in supported_types and is_cast_support(dtype_x, "float32"):
-                    x_t = cast(x, "float32")
-                    y_t = cast(y, "float32")
-                    z_t = cast(z, "float32")
-                else:
-                    x_t = cast(x, "float16")
-                    y_t = cast(y, "float16")
-                    z_t = cast(z, "float16")
-
-            return func(x_t, y_t, z_t)
-
-        lhs = args[0]
-        rhs = args[1]
-        scalar = args[2]
-
-        dtype_l = lhs.dtype
-        dtype_r = rhs.dtype
-
-        lhs_t = lhs
-        rhs_t = rhs
-        if dtype_l not in supported_types or dtype_r not in supported_types or dtype_l != dtype_r:
-            if "float32" in supported_types and is_cast_support(dtype_l, "float32")\
-                    and is_cast_support(dtype_r, "float32"):
-                lhs_t = cast(lhs, "float32")
-                rhs_t = cast(rhs, "float32")
-                dtype_l = "float32"
-            else:
-                lhs_t = cast(lhs, "float16")
-                rhs_t = cast(rhs, "float16")
-                dtype_l = "float16"
-
-        tmp_arg = scalar
-        scalar_type = judge_var(scalar)
-        if scalar_type == "tvm_const" and scalar.dtype != dtype_l:
-            tmp_arg = akg.tvm.const(scalar.value, dtype=dtype_l)
-
-        if scalar_type == "python_const":
-            tmp_arg = akg.tvm.const(scalar, dtype=dtype_l)
-        return func(lhs_t, rhs_t, tmp_arg)
+        return _auto_cast_of_elewise_three(func, args, supported_types)
     return func(*args, **kwargs)
 
 
