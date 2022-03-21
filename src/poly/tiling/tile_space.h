@@ -20,6 +20,17 @@
 #include <tvm/expr.h>
 
 namespace air {
+
+const std::string kSpaceIndex = "index";
+const std::string kSpaceC1Range = "C1_range";
+const std::string kSpaceC0Range = "C0_range";
+const std::string kSpaceC1Mod = "C1_mod";
+const std::string kSpaceC0Mod = "C0_mod";
+const std::string kSpaceGpuThreadRange = "gpu_thread_range";
+const std::string kSpaceGpuBlockRange = "gpu_block_range";
+const std::string kSpaceGpuThreadMod = "gpu_thread_mod";
+const std::string kSpaceGpuBlockMod = "gpu_block_mod";
+
 class TileSpaceNode : public Node {
  public:
   air::runtime::NDArray index_table;
@@ -33,7 +44,6 @@ class TileSpaceNode : public Node {
   air::runtime::NDArray gpu_thread_mod_table;
   air::runtime::NDArray gpu_block_mod_table;
 
-
   void VisitAttrs(AttrVisitor *v) {
     v->Visit("index_table", &index_table);
     v->Visit("c1_tile_range_table", &c1_tile_range_table);
@@ -45,7 +55,6 @@ class TileSpaceNode : public Node {
     v->Visit("gpu_block_range_table", &gpu_block_range_table);
     v->Visit("gpu_thread_mod_table", &gpu_thread_mod_table);
     v->Visit("gpu_block_mod_table", &gpu_block_mod_table);
-
   }
   static constexpr const char *_type_key = "TileSpace";
   TVM_DECLARE_NODE_TYPE_INFO(TileSpaceNode, Node);

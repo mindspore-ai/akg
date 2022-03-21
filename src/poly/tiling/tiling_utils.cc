@@ -218,7 +218,7 @@ std::unordered_map<std::string, std::string> ExtractLoopIndicesFromMatricesConv(
   VarNames mx_a = var_names_list[1];
   VarNames mx_b = var_names_list[2];
 
-  VarNames gemm_m, gemm_n, gemm_k;
+  VarNames conv_m, conv_n, conv_k;
   std::unordered_set<std::string> stack;
 
   for (const auto &var : mx_a) {
@@ -230,33 +230,33 @@ std::unordered_map<std::string, std::string> ExtractLoopIndicesFromMatricesConv(
   for (const auto &var : mx_b) {
     auto it = stack.find(var);
     if (it != stack.end()) {
-      gemm_k.emplace_back(var);
+      conv_k.emplace_back(var);
       stack.erase(it);
     } else {
-      gemm_n.emplace_back(var);
+      conv_n.emplace_back(var);
     }
   }
 
   // 2. M = A_vars - B - K
   for (const auto &var : mx_a) {
     if (stack.find(var) != stack.end()) {
-      gemm_m.emplace_back(var);
+      conv_m.emplace_back(var);
     }
   }
 
-  CHECK_LE(gemm_m.size(), ConvFormatM.size());
-  CHECK_LE(gemm_n.size(), ConvFormatN.size());
-  CHECK_LE(gemm_k.size(), ConvFormatK.size());
+  CHECK_LE(conv_m.size(), ConvFormatM.size());
+  CHECK_LE(conv_n.size(), ConvFormatN.size());
+  CHECK_LE(conv_k.size(), ConvFormatK.size());
 
   std::unordered_map<std::string, std::string> cube_var_map;
-  for (auto i = static_cast<int>(gemm_m.size()) - 1; i >= 0; --i) {
-    cube_var_map[gemm_m[i]] = ConvFormatM[static_cast<int>(gemm_m.size()) - 1 - i];
+  for (auto i = static_cast<int>(conv_m.size()) - 1; i >= 0; --i) {
+    cube_var_map[conv_m[i]] = ConvFormatM[static_cast<int>(conv_m.size()) - 1 - i];
   }
-  for (auto i = static_cast<int>(gemm_n.size()) - 1; i >= 0; --i) {
-    cube_var_map[gemm_n[i]] = ConvFormatN[static_cast<int>(gemm_n.size()) - 1 - i];
+  for (auto i = static_cast<int>(conv_n.size()) - 1; i >= 0; --i) {
+    cube_var_map[conv_n[i]] = ConvFormatN[static_cast<int>(conv_n.size()) - 1 - i];
   }
-  for (auto i = static_cast<int>(gemm_k.size()) - 1; i >= 0; --i) {
-    cube_var_map[gemm_k[i]] = ConvFormatK[static_cast<int>(gemm_k.size()) - 1 - i];
+  for (auto i = static_cast<int>(conv_k.size()) - 1; i >= 0; --i) {
+    cube_var_map[conv_k[i]] = ConvFormatK[static_cast<int>(conv_k.size()) - 1 - i];
   }
   return cube_var_map;
 }
