@@ -234,7 +234,7 @@ class GpuSolver : TilingSolver {
   void SolveMapping();
 
  private:
-  void DetermineTileFactor(TileAxis *axis, TileLevel level);
+  void DetermineTileFactor(TileAxis *axis, const TileLevel &level);
   void InnerThreadOuterBlock();
   AllocPos GetThreadAllocPos(TileAxis *axis);
   AllocPos GetBlockAllocPos(TileAxis *axis);
@@ -265,20 +265,32 @@ class InequalitySolver : TilingSolver {
     std::unordered_map<std::string, Var> tile_var_map{};
   };
 
-  void InitTileAxis(TileLevel level);
+  void InitTileAxis(const TileLevel &level);
   Expr SolveMemoryConstraint(const Array<Expr> &memory_constraints, const Var var);
-  void DetermineTileFactor(TileAxis *axis, TileLevel level, const Array<Expr> &memory_constraints);
+  void DetermineTileFactor(TileAxis *axis, const TileLevel &level, const Array<Expr> &memory_constraints);
+  Expr SolveTileResult(const Expr &to_tile, const Array<Expr> &memory_constraints, const TileAxis::Constraint &cons);
+  void SolveTileRanges(Expr &shape_range, Expr &tile_min, Expr &tile_range, const TileLevel &level,
+                       const TileAxis *axis, const Expr &l1_expr);
+  void GoToStaticFactor(Expr &final_factor_expr, const Expr &mem_constraint, const Expr &tile_range,
+                        const TileLevel &level, TileAxis *axis);
+
   Expr SolveByInferBound(const Array<Expr> &cons_on_var, const Var tiling_var);
-  int64_t DetermineTileForStatic(TileAxis *axis, const Expr &mem_limit, const Expr &tile_range, TileLevel level);
-  Expr DetermineTileForDynamic(TileAxis *axis, const Expr &mem_constraint, const Expr &to_tile, const Expr &shape_range,
-                               const Expr &tile_range, TileLevel level);
-  void AppendShapeLimitConstraint(TileAxis *axis, Expr to_tile);
+  int64_t DetermineTileForStatic(TileAxis *axis, const Expr &mem_limit, const Expr &tile_range, const TileLevel &level);
+  void GoWithCandidates(int64_t &final_factor, int64_t static_mem_constraint, const TileAxis::Constraint &cons);
+  void GoWithConstraints(int64_t &final_factor, int64_t static_mem_constraint, int64_t static_shape,
+                         const TileAxis::Constraint &cons, const TileAxis *axis, const TileLevel &level);
+
+  int64_t PostprocessFinalFactor(int64_t final_factor, TileAxis *axis);
+
+  Expr DetermineTileForDynamic(const TileAxis *axis, const Expr &mem_constraint, const Expr &to_tile,
+                               const Expr &shape_range, const Expr &tile_range, const TileLevel &level);
+  void AppendShapeLimitConstraint(const TileAxis *axis, const Expr &to_tile);
 
   void UpdateMemInfo();
   void UpdateMemInfoWithBufReuse();
 
   void CalculateMemoryInBuffer(const TilingAnalyzer::BufferEntry *buf, TilingMemInfo *mem_info);
-  Expr EstimateAlignment(const TilingAnalyzer::BufferEntry *buf, TileAxis *axis, Expr tile) const;
+  Expr EstimateAlignment(const TilingAnalyzer::BufferEntry *buf, const TileAxis *axis, const Expr &tile) const;
 
   void CollectMemoryConstraints();
 
@@ -322,12 +334,26 @@ class TraverseSolver : TilingSolver {
     int64_t min_tile = 0;
     int64_t deviation = 0;
   };
+  struct MemoryInferInfo {
+    int64_t dev;
+    int64_t val;
+  };
+  std::unique_ptr<MemoryInferInfo> cur_iso_info_;
+  std::unique_ptr<MemoryInferInfo> cur_no_iso_info_;
   bool IsTilable(TileInfo *info);
   bool MemoryVerify(TileLevel level, int band, int64_t *deviation = nullptr);
   bool DoTiling(const TileInfo *info);
+  bool GoWithCandidates(const TileInfo *info, const TileAxis::Constraint &cons, TileAxis *axis, int64_t deviation,
+                        int dst);
+
+  void InitMemoryInferInfo();
+  void UpdateChosenValue(int64_t tail, int64_t deviation, int64_t tile_size, TileAxis *axis);
+  void UpdateTile(const TileInfo *info, TileAxis *axis, int64_t tile_size);
+
   int64_t PostprocessFinalFactor(int64_t final_factor, TileAxis *axis);
   void AppendConvPragma();
   void AppendConvBackpropPragma();
+  void SolveConvCache0();
   void RestrainConvBackInputTileK(TileAxis *k_axis) const;
   void CreateSpecgemmTileAxis(Expr mo, Expr no, Expr ko, bool cut_reduce);
   void CreateConvPragma(const Expr &co_cut, Expr tile_out_h, Expr tile_out_w, Expr kh_cut, Expr kw_cut, Expr ci_cut,
