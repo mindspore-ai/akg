@@ -69,12 +69,25 @@ class ArithExprSimplifier {
   ~ArithExprSimplifier() = default;
 
  private:
+  Expr CreateNewInequality(const Expr &e, Expr &lhs, Expr &rhs) const;
+  std::pair<int, Expr> GetLinearFormWithOutOffset(const Expr &a, const Expr &b) const;
+  std::pair<int, Expr> GetLinearFormWithOffset(const Expr &a, const Expr &b, const Var &reduce_var) const;
+  Expr ReduceLE(const Expr &a, const Expr &b, const Expr &e, const Var &reduce_var);
+  Expr ReduceGE(const Expr &a, const Expr &b, const Expr &e, const Var &reduce_var);
+  Expr ReduceLT(const Expr &a, const Expr &b, const Expr &e, const Var &reduce_var);
+  Expr ReduceGT(const Expr &a, const Expr &b, const Expr &e, const Var &reduce_var);
+
+  template <typename R>
+  Expr SwitchInequalitySign(const Expr &lhs_expr, const Expr &rhs_expr) const;
+
   template <typename R>
   Expr ReducedInequality(const Expr &e, const Var &reduce_var);
 
-  Expr MoveToOneside(const Expr &e);
+  Expr MoveToOneside(const Expr &e) const;
 
-  bool CollectCoeffandOffsets(const set<Monomial> &norm_form, map<int, set<Monomial>> &coeffs, const Var &reduce_var);
+  bool CollectCoeffandOffsets(const set<Monomial> &norm_form,
+                              map<int, set<Monomial>> &coeffs,
+                              const Var &reduce_var) const;
 
   template <typename R>
   inline Expr CorrectFloorDiv(const Expr &coeff, int sign) const;

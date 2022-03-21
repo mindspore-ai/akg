@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright 2019-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@
 
 namespace akg {
 namespace ir {
+static constexpr int INT_TWO = 2;
 using std::get;
 
 bool ArithExprSimplifier::Equals(const Expr &e1, const Expr &e2) {
@@ -40,8 +41,8 @@ bool ArithExprSimplifier::IsDivisible(const Expr &e, const Expr &divisor) {
   CanonicalForm form(data_type_);
   set<Monomial> norm_form = form.ExprNormalForm(e);
   const int64_t value = divisor.as<IntImm>()->value;
-  for (const auto &item : norm_form) {
-    if (item.numerator_ % value || item.denominator_ != 1) {
+  for (auto &item : std::as_const(norm_form)) {
+    if ((item.numerator_ % value) != 0 || item.denominator_ != 1) {
       return false;
     }
   }
@@ -49,21 +50,21 @@ bool ArithExprSimplifier::IsDivisible(const Expr &e, const Expr &divisor) {
 }
 
 bool ArithExprSimplifier::CollectCoeffandOffsets(const set<Monomial> &norm_form, map<int, set<Monomial>> &coeffs,
-                                                 const Var &reduce_var) {
-  for (auto item : norm_form) {
+                                                 const Var &reduce_var) const {
+  for (auto item : std::as_const(norm_form)) {
     int degree = 0;
     auto it = item.degree_.find(reduce_var);
     if (it != item.degree_.end()) {
       degree = it->second;
-      item.degree_.erase(it);
+      static_cast<void>(item.degree_.erase(it));
     }
     if (degree == 0) {
       item.numerator_ *= -1;
     }
     if (coeffs.count(degree)) {
-      coeffs[degree].emplace(item);
+      static_cast<void>(coeffs[degree].emplace(item));
     } else {
-      coeffs.emplace(degree, set<Monomial>{item});
+      static_cast<void>(coeffs.emplace(degree, set<Monomial>{item}));
     }
   }
   return true;
@@ -71,7 +72,7 @@ bool ArithExprSimplifier::CollectCoeffandOffsets(const set<Monomial> &norm_form,
 
 template <typename R>
 inline Expr ArithExprSimplifier::CorrectFloorDiv(const Expr &coeff, const int sign) const {
-  if (std::is_same<R, LT>::value || std::is_same<R, GE>::value) {
+  if constexpr (std::is_same<R, LT>::value || std::is_same<R, GE>::value) {
     if (sign == -1) {
       return Sub::make(make_const(data_type_, -1), coeff);
     } else {
@@ -91,7 +92,7 @@ inline int ArithExprSimplifier::GetExprSign(const Expr &expr) const {
     return 1;
   }
   int sign = norm_form.begin()->GetSign();
-  for (const auto &it : norm_form) {
+  for (auto &it : std::as_const(norm_form)) {
     int is_negative = it.GetSign();
     sign = (sign == is_negative) ? sign : 1;
   }
@@ -117,25 +118,18 @@ Expr ArithExprSimplifier::ScaleSubstitute(const Expr &e,
   set<Monomial> norm_form = form.ExprNormalForm(expr);
   Expr sumexpr;
   std::unordered_map<const Variable *, Expr> substitute_tbl;
-  for (const auto &item : norm_form) {
-    bool is_neg = item.GetSign();
+  for (auto &item : std::as_const(norm_form)) {
+    bool is_neg = item.GetSign() != static_cast<int>(Sign::ZERO);
     auto item_expr = sumexpr.defined() ? item.ToExpr(data_type_, is_neg) : item.ToExpr(data_type_, false);
     substitute_tbl.clear();
-    for (auto v : substitute_map) {
-      if (IsVarInExpr(v.first, item_expr)) {
-        if (!is_neg) {
-          if (is_larger == is_less) {
-            substitute_tbl.emplace(v.first.get(), v.second[0]);
-          } else {
-            substitute_tbl.emplace(v.first.get(), v.second[1]);
-          }
-        } else {
-          if (is_larger == is_less) {
-            substitute_tbl.emplace(v.first.get(), v.second[1]);
-          } else {
-            substitute_tbl.emplace(v.first.get(), v.second[0]);
-          }
-        }
+    for (auto &v : std::as_const(substitute_map)) {
+      if (!IsVarInExpr(v.first, item_expr)) {
+        continue;
+      }
+      if (is_neg ^ (is_larger == is_less)) {
+        static_cast<void>(substitute_tbl.emplace(v.first.get(), v.second[0]));
+      } else {
+        static_cast<void>(substitute_tbl.emplace(v.first.get(), v.second[1]));
       }
     }
     item_expr = Substitute(item_expr, substitute_tbl);
@@ -152,6 +146,19 @@ Expr ArithExprSimplifier::ScaleSubstitute(const Expr &e,
 }
 
 template <typename R>
+Expr ArithExprSimplifier::SwitchInequalitySign(const Expr &lhs_expr, const Expr &rhs_expr) const {
+  if constexpr (std::is_same<R, GE>::value) {
+    return LE::make(lhs_expr, rhs_expr);
+  } else if constexpr (std::is_same<R, LE>::value) {
+    return GE::make(lhs_expr, rhs_expr);
+  } else if constexpr (std::is_same<R, GT>::value) {
+    return LT::make(lhs_expr, rhs_expr);
+  } else if constexpr (std::is_same<R, LT>::value) {
+    return GT::make(lhs_expr, rhs_expr);
+  }
+}
+
+template <typename R>
 Expr ArithExprSimplifier::ReducedInequality(const Expr &e, const Var &reduce_var) {
   if (e.as<Variable>()) {
     return R::make(e, 0);
@@ -159,9 +166,7 @@ Expr ArithExprSimplifier::ReducedInequality(const Expr &e, const Var &reduce_var
   map<int, set<Monomial>> reduce_coeff;
   CanonicalForm form(data_type_);
   set<Monomial> norm_form = form.ExprNormalForm(e);
-  if (!CollectCoeffandOffsets(norm_form, reduce_coeff, reduce_var)) {
-    return e;
-  }
+  CollectCoeffandOffsets(norm_form, reduce_coeff, reduce_var);
 
   Expr lhs_expr;
   Expr rhs_expr;
@@ -169,13 +174,13 @@ Expr ArithExprSimplifier::ReducedInequality(const Expr &e, const Var &reduce_var
 
   Expr reduce_offset;
   CHECK(!reduce_coeff.empty());
-  auto it = reduce_coeff.begin();
+  auto it = reduce_coeff.cbegin();
   if (it->first == 0) {
     rhs_expr = form.CreateMonomialsExpr(it->second);
     it++;
   }
 
-  if (distance(it, reduce_coeff.end()) == 1) {
+  if (distance(it, reduce_coeff.cend()) == 1) {
     Expr expr = reduce_var;
     for (int i = 1; i < it->first; i++) {
       expr = Mul::make(expr, reduce_var);
@@ -194,7 +199,7 @@ Expr ArithExprSimplifier::ReducedInequality(const Expr &e, const Var &reduce_var
       is_negative = sign == -1;
     }
   } else {
-    for (; it != reduce_coeff.end(); it++) {
+    for (; it != reduce_coeff.cend(); it++) {
       Expr expr = reduce_var;
       for (int i = 1; i < it->first; i++) {
         expr = Mul::make(expr, reduce_var);
@@ -214,115 +219,141 @@ Expr ArithExprSimplifier::ReducedInequality(const Expr &e, const Var &reduce_var
     rhs_expr = make_const(data_type_, 0);
   }
   if (is_negative) {
-    if (std::is_same<R, GE>::value) {
-      return LE::make(lhs_expr, rhs_expr);
-    } else if (std::is_same<R, LE>::value) {
-      return GE::make(lhs_expr, rhs_expr);
-    } else if (std::is_same<R, GT>::value) {
-      return LT::make(lhs_expr, rhs_expr);
-    } else if (std::is_same<R, LT>::value) {
-      return GT::make(lhs_expr, rhs_expr);
-    }
+    return SwitchInequalitySign<R>(lhs_expr, rhs_expr);
   }
   return R::make(lhs_expr, rhs_expr);
 }
 
-Expr ArithExprSimplifier::ReduceInequality(const Expr &e, const Var &reduce_var) {
+std::pair<int, Expr> ArithExprSimplifier::GetLinearFormWithOutOffset(const Expr &a, const Expr &b) const {
   Expr lhs, rhs;
   int sign = 0;
-  if (auto le = e.as<LE>()) {
-    if (auto div = le->a.as<Div>()) {
-      bool varInB = IsVarInExpr(reduce_var, div->b);
-      sign = GetExprSign(div->b);
-      Expr offset = varInB ? Expr(make_const(data_type_, 0)) : div->b + make_const(data_type_, (sign == -1 ? 1 : -1));
-      lhs = div->a;
-      rhs = le->b * div->b + offset;
-    } else if (auto floordiv = le->a.as<FloorDiv>()) {
-      bool varInB = IsVarInExpr(reduce_var, floordiv->b);
-      sign = GetExprSign(floordiv->b);
-      Expr offset =
-        varInB ? Expr(make_const(data_type_, 0)) : floordiv->b + make_const(data_type_, (sign == -1 ? 1 : -1));
-      lhs = floordiv->a;
-      rhs = le->b * floordiv->b + offset;
-    }
-    Expr linear_form = (lhs.defined() && rhs.defined()) ? lhs - rhs : le->a - le->b;
-    if (sign == -1) {
-      return ReducedInequality<GE>(linear_form, reduce_var);
-    } else if (sign == 1) {
-      return e;
-    }
-    return ReducedInequality<LE>(linear_form, reduce_var);
-  } else if (auto lt = e.as<LT>()) {
-    if (auto div = lt->a.as<Div>()) {
-      sign = GetExprSign(div->b);
-      lhs = div->a;
-      rhs = lt->b * div->b;
-    } else if (auto floordiv = lt->a.as<FloorDiv>()) {
-      sign = GetExprSign(floordiv->b);
-      lhs = floordiv->a;
-      rhs = lt->b * floordiv->b;
-    }
-    Expr linear_form = (lhs.defined() && rhs.defined()) ? lhs - rhs : lt->a - lt->b;
-    if (sign == -1) {
-      return ReducedInequality<GT>(linear_form, reduce_var);
-    } else if (sign == 1) {
-      return e;
-    }
-    return ReducedInequality<LT>(linear_form, reduce_var);
-  } else if (auto gt = e.as<GT>()) {
-    if (auto div = gt->a.as<Div>()) {
-      bool varInB = IsVarInExpr(reduce_var, div->b);
-      sign = GetExprSign(div->b);
-      Expr offset = varInB ? Expr(make_const(data_type_, 0)) : div->b + make_const(data_type_, (sign == -1 ? 1 : -1));
-      lhs = div->a;
-      rhs = gt->b * div->b + offset;
-    } else if (auto floordiv = gt->a.as<FloorDiv>()) {
-      bool varInB = IsVarInExpr(reduce_var, floordiv->b);
-      sign = GetExprSign(floordiv->b);
-      Expr offset =
-        varInB ? Expr(make_const(data_type_, 0)) : floordiv->b + make_const(data_type_, (sign == -1 ? 1 : -1));
-      lhs = floordiv->a;
-      rhs = gt->b * floordiv->b + offset;
-    }
-    Expr linear_form = (lhs.defined() && rhs.defined()) ? lhs - rhs : gt->a - gt->b;
-    if (sign == -1) {
-      return ReducedInequality<LT>(linear_form, reduce_var);
-    } else if (sign == 1) {
-      return e;
-    }
-    return ReducedInequality<GT>(linear_form, reduce_var);
-  } else if (auto ge = e.as<GE>()) {
-    if (auto div = ge->a.as<Div>()) {
-      sign = GetExprSign(div->b);
-      lhs = div->a;
-      rhs = ge->b * div->b;
-    } else if (auto floordiv = ge->a.as<FloorDiv>()) {
-      sign = GetExprSign(floordiv->b);
-      lhs = floordiv->a;
-      rhs = ge->b * floordiv->b;
-    }
-    Expr linear_form = (lhs.defined() && rhs.defined()) ? lhs - rhs : ge->a - ge->b;
-    if (sign == -1) {
-      return ReducedInequality<LE>(linear_form, reduce_var);
-    } else if (sign == 1) {
-      return e;
-    }
+  if (auto div = a.as<Div>()) {
+    sign = GetExprSign(div->b);
+    lhs = div->a;
+    rhs = b * div->b;
+  } else if (auto floordiv = a.as<FloorDiv>()) {
+    sign = GetExprSign(floordiv->b);
+    lhs = floordiv->a;
+    rhs = b * floordiv->b;
+  }
+  return std::make_pair(sign, (lhs.defined() && rhs.defined()) ? lhs - rhs : a - b);
+}
+
+std::pair<int, Expr> ArithExprSimplifier::GetLinearFormWithOffset(const Expr &a, const Expr &b,
+                                                                  const Var &reduce_var) const {
+  Expr lhs, rhs;
+  int sign = 0;
+  if (auto div = a.as<Div>()) {
+    bool varInB = IsVarInExpr(reduce_var, div->b);
+    sign = GetExprSign(div->b);
+    Expr offset = varInB ? Expr(make_const(data_type_, 0)) : div->b + make_const(data_type_, (sign == -1 ? 1 : -1));
+    lhs = div->a;
+    rhs = b * div->b + offset;
+  } else if (auto floordiv = a.as<FloorDiv>()) {
+    bool varInB = IsVarInExpr(reduce_var, floordiv->b);
+    sign = GetExprSign(floordiv->b);
+    Expr offset =
+      varInB ? Expr(make_const(data_type_, 0)) : floordiv->b + make_const(data_type_, (sign == -1 ? 1 : -1));
+    lhs = floordiv->a;
+    rhs = b * floordiv->b + offset;
+  }
+  return std::make_pair(sign, (lhs.defined() && rhs.defined()) ? lhs - rhs : a - b);
+}
+
+Expr ArithExprSimplifier::ReduceLE(const Expr &a, const Expr &b, const Expr &e, const Var &reduce_var) {
+  auto pair = GetLinearFormWithOffset(a, b, reduce_var);
+  int sign = pair.first;
+  auto &linear_form = pair.second;
+  if (sign == -1) {
     return ReducedInequality<GE>(linear_form, reduce_var);
+  } else if (sign == 1) {
+    return e;
+  }
+  return ReducedInequality<LE>(linear_form, reduce_var);
+}
+
+Expr ArithExprSimplifier::ReduceLT(const Expr &a, const Expr &b, const Expr &e, const Var &reduce_var) {
+  auto pair = GetLinearFormWithOutOffset(a, b);
+  int sign = pair.first;
+  auto &linear_form = pair.second;
+  if (sign == -1) {
+    return ReducedInequality<GT>(linear_form, reduce_var);
+  } else if (sign == 1) {
+    return e;
+  }
+  return ReducedInequality<LT>(linear_form, reduce_var);
+}
+
+Expr ArithExprSimplifier::ReduceGT(const Expr &a, const Expr &b, const Expr &e, const Var &reduce_var) {
+  auto pair = GetLinearFormWithOffset(a, b, reduce_var);
+  int sign = pair.first;
+  auto &linear_form = pair.second;
+  if (sign == -1) {
+    return ReducedInequality<LT>(linear_form, reduce_var);
+  } else if (sign == 1) {
+    return e;
+  }
+  return ReducedInequality<GT>(linear_form, reduce_var);
+}
+
+Expr ArithExprSimplifier::ReduceGE(const Expr &a, const Expr &b, const Expr &e, const Var &reduce_var) {
+  auto pair = GetLinearFormWithOutOffset(a, b);
+  int sign = pair.first;
+  auto &linear_form = pair.second;
+  if (sign == -1) {
+    return ReducedInequality<LE>(linear_form, reduce_var);
+  } else if (sign == 1) {
+    return e;
+  }
+  return ReducedInequality<GE>(linear_form, reduce_var);
+}
+
+Expr ArithExprSimplifier::ReduceInequality(const Expr &e, const Var &reduce_var) {
+  if (auto le = e.as<LE>()) {
+    return ReduceLE(le->a, le->b, e, reduce_var);
+  } else if (auto lt = e.as<LT>()) {
+    return ReduceLT(lt->a, lt->b, e, reduce_var);
+  } else if (auto gt = e.as<GT>()) {
+    return ReduceGT(gt->a, gt->b, e, reduce_var);
+  } else if (auto ge = e.as<GE>()) {
+    return ReduceGE(ge->a, ge->b, e, reduce_var);
   } else {
     LOG(FATAL) << "Only support to reduce LE, LT, GE, GT inequality. " << e;
     return Expr();
   }
 }
 
-Expr ArithExprSimplifier::MoveToOneside(const Expr &e) {
+Expr ArithExprSimplifier::MoveToOneside(const Expr &e) const {
+  if (auto le = e.as<LE>()) {
+    return le->a - le->b;
+  } else if (auto ge = e.as<GE>()) {
+    return ge->a - ge->b;
+  } else if (auto lt = e.as<LT>()) {
+    return lt->a - lt->b;
+  } else if (auto gt = e.as<GT>()) {
+    return gt->a - gt->b;
+  } else {
+    LOG(FATAL) << "Only support to reduce LE, LT, GE, GT inequality. " << e;
+    return Expr();
+  }
+}
+
+Expr ArithExprSimplifier::CreateNewInequality(const Expr &e, Expr &lhs, Expr &rhs) const {
+  if (!lhs.defined()) {
+    lhs = make_const(data_type_, 0);
+  }
+  if (!rhs.defined()) {
+    rhs = make_const(data_type_, 0);
+  }
+
   if (e.as<LE>()) {
-    return e.as<LE>()->a - e.as<LE>()->b;
+    return LE::make(lhs, rhs);
   } else if (e.as<GE>()) {
-    return e.as<GE>()->a - e.as<GE>()->b;
+    return GE::make(lhs, rhs);
   } else if (e.as<LT>()) {
-    return e.as<LT>()->a - e.as<LT>()->b;
+    return LT::make(lhs, rhs);
   } else if (e.as<GT>()) {
-    return e.as<GT>()->a - e.as<GT>()->b;
+    return GT::make(lhs, rhs);
   } else {
     LOG(FATAL) << "Only support to reduce LE, LT, GE, GT inequality. " << e;
     return Expr();
@@ -339,7 +370,7 @@ Expr ArithExprSimplifier::ReduceInequality(const Expr &e, const vector<Var> &red
   set<Monomial> norm_form = form.ExprNormalForm(expr);
   Expr lhs;
   Expr rhs;
-  for (auto &item : norm_form) {
+  for (auto &item : std::as_const(norm_form)) {
     bool vars_in_item = false;
     for (auto &var : reduce_vars) {
       if (item.degree_.count(var)) {
@@ -363,26 +394,14 @@ Expr ArithExprSimplifier::ReduceInequality(const Expr &e, const vector<Var> &red
       }
     }
   }
-  if (!lhs.defined()) {
-    lhs = make_const(data_type_, 0);
-  }
-  if (!rhs.defined()) {
-    rhs = make_const(data_type_, 0);
-  }
-
-  if (e.as<LE>()) {
-    return LE::make(lhs, rhs);
-  } else if (e.as<GE>()) {
-    return GE::make(lhs, rhs);
-  } else if (e.as<LT>()) {
-    return LT::make(lhs, rhs);
-  } else if (e.as<GT>()) {
-    return GT::make(lhs, rhs);
-  }
-  return Expr();
+  return CreateNewInequality(e, lhs, rhs);
 }
 
 Expr ArithExprSimplifier::ReduceInequality(const Expr &e, const Var &reduce_var, int lcm) {
+  if (lcm == 0) {
+    LOG(FATAL) << "lcm cannot be zero.";
+    return e;
+  }
   Expr expr;
   expr = MoveToOneside(e);
   Expr reduced_expr = Mul::make(expr, lcm);
@@ -394,7 +413,7 @@ Expr ArithExprSimplifier::ReduceInequality(const Expr &e, const Var &reduce_var,
       CHECK_NE(item.denominator_, 0);
       int scale = lcm / item.denominator_;
       item.denominator_ = 1;
-      item.numerator_ = item.numerator_ / lcm * scale;
+      item.numerator_ = (item.numerator_ / lcm) * scale;
     }
     bool is_negative = (item.numerator_ * item.denominator_) < 0;
     Expr item_expr = item.ToExpr(data_type_, is_negative);
@@ -426,7 +445,7 @@ bool ArithExprSimplifier::IsMonotonic(const Expr &e, const Var &var) {
     if (item.degree_.empty()) {
       continue;
     }
-    bool is_negative = item.GetSign();
+    bool is_negative = item.GetSign() != static_cast<int>(Sign::ZERO);
     auto it = item.degree_.find(var);
     item.numerator_ = item.numerator_ * it->second;
     it->second = it->second - 1;
@@ -455,7 +474,7 @@ int64_t ArithExprSimplifier::GetSup(const Expr &e) {
   int64_t highest_coef = 1;
   float cst = 0;
 
-  for (auto &item : norm_form) {
+  for (auto &item : std::as_const(norm_form)) {
     if (item.degree_.empty()) {
       cst = static_cast<float>(item.numerator_ * -1);
     }
@@ -478,10 +497,10 @@ bool ArithExprSimplifier::IsZeroExpr(const Expr &e) {
 }
 
 Expr ArithExprSimplifier::Gcd(const Expr &e1, const Expr &e2) {
-  if (e1.as<IntImm>() && e1.as<IntImm>()->value == 0) return e2;
-  if (e2.as<IntImm>() && e2.as<IntImm>()->value == 0) return e1;
-  if (e1.as<IntImm>() && e1.as<IntImm>()->value == 1) return e1;
-  if (e2.as<IntImm>() && e2.as<IntImm>()->value == 1) return e2;
+  if (e1.as<IntImm>() && e1.as<IntImm>()->value == 0) { return e2; }
+  if (e2.as<IntImm>() && e2.as<IntImm>()->value == 0) { return e1; }
+  if (e1.as<IntImm>() && e1.as<IntImm>()->value == 1) { return e1; }
+  if (e2.as<IntImm>() && e2.as<IntImm>()->value == 1) { return e2; }
   if (e1.as<IntImm>() && e2.as<IntImm>()) {
     auto gcd = air::ir::gcd(e1.as<IntImm>()->value, e2.as<IntImm>()->value);
     return Expr(gcd);
@@ -501,7 +520,7 @@ Expr ArithExprSimplifier::ModSimplify(Expr &a, Expr &b) {
 
   if (b.as<IntImm>() && b.as<IntImm>()->value != 0) {
     // for case like (4*m + n)%2 = n
-    for (auto it = normal_form1.begin(); it != normal_form1.end();) {
+    for (auto it = normal_form1.cbegin(); it != normal_form1.cend();) {
       if (it->numerator_ % b.as<IntImm>()->value == 0) {
         normal_form1.erase(it++);
       } else {
@@ -551,16 +570,16 @@ vector<tuple<int, int, int>> ArithExprSimplifier::CountSort(vector<int> &v) {
   vector<int> ori_v = v;
   std::sort(v.begin(), v.end());
   vector<tuple<int, int, int>> sort_pair;
-  std::unordered_set<int> v_set(v.begin(), v.end());
-  int size = static_cast<int>(v.size());
+  std::unordered_set<int> v_set(v.cbegin(), v.cend());
+  auto size = v.size();
   int cur_v = v[0];
   int count = 1;
-  sort_pair.emplace_back(count, v[0], 0);
-  for (int i = 1; i < size; i++) {
+  static_cast<void>(sort_pair.emplace_back(count, v[0], 0));
+  for (size_t i = 1; i < size; i++) {
     if (v[i] != cur_v) {
-      auto it = std::find(ori_v.begin(), ori_v.end(), v[i]);
-      int index = std::distance(ori_v.begin(), it);
-      sort_pair.emplace_back(count, v[i], index);
+      auto it = std::find(ori_v.cbegin(), ori_v.cend(), v[i]);
+      int index = static_cast<int>(std::distance(ori_v.cbegin(), it));
+      static_cast<void>(sort_pair.emplace_back(count, v[i], index));
       count = 1;
       cur_v = v[i];
     } else {
@@ -599,7 +618,7 @@ Array<Expr> ArithExprSimplifier::GetPolynomial(const Expr &e1, const Expr &e2) {
     const2 = rbegin2->ToExpr(data_type_);
     normal_form2.erase(*rbegin2);
   }
-  for (const auto &item : normal_form1) {
+  for (auto &item : std::as_const(normal_form1)) {
     auto it = normal_form2.find(item);
     if (it == normal_form2.end() || item.denominator_ != 1 || it->denominator_ != 1) {
       exprs.push_back(e1);
@@ -612,7 +631,7 @@ Array<Expr> ArithExprSimplifier::GetPolynomial(const Expr &e1, const Expr &e2) {
 
   vector<tuple<int, int, int>> sort_vec1 = CountSort(numerator_vec1);
   vector<tuple<int, int, int>> sort_vec2 = CountSort(numerator_vec2);
-  if (sort_vec1.size() == 1 && sort_vec2.size() == 2) {
+  if (sort_vec1.size() == 1 && sort_vec2.size() == INT_TWO) {
     auto it = normal_form2.begin();
     advance(it, get<2>(sort_vec2[0]));
     Monomial extraterm = *it;
@@ -621,10 +640,10 @@ Array<Expr> ArithExprSimplifier::GetPolynomial(const Expr &e1, const Expr &e2) {
     set<Monomial> sub_normal_form2;
     set<Monomial> sub_normalForm3;
 
-    set_intersection(normal_form1.begin(), normal_form1.begin(), normal_form2.begin(), normal_form2.begin(),
-                     inserter(sub_normal_form2, sub_normal_form2.begin()));
-    set_difference(normal_form1.begin(), normal_form1.begin(), normal_form2.begin(), normal_form2.begin(),
-                   inserter(sub_normalForm3, sub_normalForm3.begin()));
+    static_cast<void>(set_intersection(normal_form1.begin(), normal_form1.begin(), normal_form2.begin(),
+                                       normal_form2.begin(), inserter(sub_normal_form2, sub_normal_form2.begin())));
+    static_cast<void>(set_difference(normal_form1.begin(), normal_form1.begin(), normal_form2.begin(),
+                                     normal_form2.begin(), inserter(sub_normalForm3, sub_normalForm3.begin())));
 
     sub_normalForm3.emplace(extraterm);
     Expr expr1 = form.CreateMonomialsExpr(normal_form1);
@@ -692,10 +711,10 @@ Expr ArithExprSimplifier::Simplify(const Expr &e, const vector<pair<Var, Var>> &
   if (e.as<GE>() || e.as<GT>() || e.as<LE>() || e.as<LT>()) return e;
   CanonicalForm form(data_type_);
   VarReplaceMap var_replace;
-  for (const auto &pair : div_mod_pair) {
+  for (auto &pair : std::as_const(div_mod_pair)) {
     auto it = div_child.find(pair.first);
     if (it != div_child.end()) {
-      CHECK_GE(it->second.size(), 2);
+      CHECK_GE(it->second.size(), INT_TWO);
       auto a = form.ExprNormalForm(it->second[0]);
       auto b = form.ExprNormalForm(it->second[1]);
       var_replace[pair.first] =
@@ -705,7 +724,7 @@ Expr ArithExprSimplifier::Simplify(const Expr &e, const vector<pair<Var, Var>> &
     } else {
       it = floordiv_child.find(pair.first);
       if (it != floordiv_child.end()) {
-        CHECK_GE(it->second.size(), 2);
+        CHECK_GE(it->second.size(), INT_TWO);
         auto a = form.ExprNormalForm(it->second[0]);
         auto b = form.ExprNormalForm(it->second[1]);
         var_replace[pair.first] =
