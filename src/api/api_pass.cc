@@ -69,7 +69,7 @@ REGISTER_PASS(GenTuningSpace);
 REGISTER_PASS(ReplaceSeparator);
 REGISTER_PASS(RenameRealize);
 REGISTER_PASS(ElementwiseFlatten);
-REGISTER_PASS(FuseAxis);
+REGISTER_PASS(FuseAxisExternOp);
 REGISTER_PASS(TestInferBoundWithCond);
 REGISTER_PASS(TestReduceInequality);
 REGISTER_PASS(TestSimplify);

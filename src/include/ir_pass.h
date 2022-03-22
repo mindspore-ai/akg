@@ -101,7 +101,7 @@ Stmt ReductionFactor(const Stmt &stmt, const Map<Tensor, Buffer> &extern_buffer)
 Stmt ElementwiseFlatten(Stmt stmt, const Map<Tensor, Buffer> &extern_buffer,
                         const Map<Tensor, Buffer> &new_extern_buffer);
 
-Array<NodeRef> FuseAxis(Stmt stmt, const Array<NodeRef> &arg_list, const Map<Tensor, Buffer> &extern_buffer);
+Stmt FuseAxisExternOp(Stmt stmt, Schedule sch);
 
 Expr CastNormalize(const Expr &expr, const air::DataType cast_type);
 

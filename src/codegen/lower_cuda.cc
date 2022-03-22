@@ -40,6 +40,7 @@
 #include "codegen/lower.h"
 #include "codegen/stage_lower.h"
 #include "composite/utils/util.h"
+#include "pass/utils.h"
 
 namespace akg {
 StageResult CudaLowerBegin(Stmt &, LowerData &data) {
@@ -71,12 +72,8 @@ StageResult CudaLowerBegin(Stmt &, LowerData &data) {
     }
   }
 
-  if (g_attrs.GetBool(kEnableFuseAxis, false)) {
-    Array<NodeRef> fuse_axis_res = NEXT_PASS(FuseAxis, stmt, data->arg_list_0, data->binds_0);
-    CHECK_EQ(fuse_axis_res.size(), 3);
-    stmt = air::Downcast<Stmt>(fuse_axis_res[0]);
-    data->arg_list_0 = air::Downcast<Array<NodeRef>>(fuse_axis_res[1]);
-    data->binds_0 = air::Downcast<Map<Tensor, Buffer>>(fuse_axis_res[2]);
+  if (AttrExists(data->sch, "fuse_axis_extern")) {
+    stmt = NEXT_PASS(FuseAxisExternOp, stmt, data->sch);
   }
   PassMgr::SetArgs(data->arg_list_0);
   stmt = NEXT_PASS(AddAttrForLayoutOp, stmt, data->sch, true);

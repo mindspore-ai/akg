@@ -821,7 +821,7 @@ def csr_reduce_sum(inputs, attrs):
     output_shape = fused_shape
     output_name = "T_csr_reduce_sum_" + data.op.name + "_" + str(axis)
     out_buf = tvm.decl_buffer(output_shape, data.dtype, output_name)
-    attrs = {"csr_op": True}
+    attrs = {"csr_op": True, "fuse_axis_extern": True}
     return tvm.extern([output_shape],
                       [data, row_idx],
                       lambda ins, outs: gen_ir(ins[0], ins[1], outs[0]),
