@@ -258,17 +258,17 @@ std::vector<IndexGroup> GetIndexGroup(const Array<Expr> &shape, const std::vecto
   return index_groups;
 }
 
-bool HasFoundReshape(size_t j, const Array<Expr> &shape_change, const Expr &ori_size) {
+bool HasFoundReshape(const Array<Expr> &shape_change, const Expr &ori_size, size_t *j) {
   bool has_found_reshape = false;
   auto change_size = Expr(1);
-  for (; j < shape_change.size(); ++j) {
-    change_size = Simplify(change_size * shape_change[j]);
+  for (; *j < shape_change.size(); ++(*j)) {
+    change_size = Simplify(change_size * shape_change[*j]);
     // For the ‘1’ in the shape_change, it may correspond to the current group or the next group.
     // It is difficult to determine the specific group of ‘1’, and some strategies may need to be added later.
     // The ‘1’ is currently correspond to the the next group.
     if (is_zero(Simplify(change_size - ori_size))) {
       has_found_reshape = true;
-      ++j;
+      ++(*j);
       break;
     }
   }
@@ -310,7 +310,7 @@ std::vector<ReshapeRelation> GetReshapeRelation(const Array<Expr> &shape_ori, co
       return reshape_relations;
     }
 
-    if (!HasFoundReshape(j, shape_change, ori_size)) {
+    if (!HasFoundReshape(shape_change, ori_size, &j)) {
       return {};
     }
     if (i == index_groups.size() - 1 && j < shape_change.size()) {
