@@ -35,6 +35,8 @@ class ElimReshapeAnalysis {
   void AnalysisInplaceAssign(const FunctionRef &output);
   void AnalysisInner(const FunctionRef &output);
   bool AnalysisElimValid();
+  int ElimForwardEasier();
+  bool ForwardHasOtherOp(const FuncRefList &funcs, FuncBoolMap &cache_res);
 
  private:
   Graph &g_;

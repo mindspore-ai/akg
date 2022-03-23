@@ -82,6 +82,7 @@ using FuncShape = std::unordered_map<FunctionRef, Array<Expr>, NodeHash, NodeEqu
 using FuncExprMap = std::unordered_map<FunctionRef, Expr, NodeHash, NodeEqual>;
 using FuncNodeMap = std::unordered_map<FunctionRef, NodeRef, NodeHash, NodeEqual>;
 using NodeMap = std::unordered_map<NodeRef, NodeRef, NodeHash, NodeEqual>;
+using FuncBoolMap = std::unordered_map<FunctionRef, bool, NodeHash, NodeEqual>;
 
 using Peeling = std::vector<std::pair<int, int64_t>>;  // dim, split_val
 struct PeelInfo {

@@ -135,7 +135,7 @@ class BroadcastInserterMutator : public IRMutator {
   }
 
   int name_idx_ = 0;
-  std::unordered_map<std::string, unsigned> broadcast_ops_ = {{"Equal", -1}, {"Select", -1}};
+  std::unordered_map<std::string, unsigned> broadcast_ops_ = {{"Equal", -1}, {"Select", -1}, {"NotEqual", -1}};
 };
 
 Stmt BroadcastInserter(const Stmt &s, BuildInfo *) { return BroadcastInserterMutator().Mutate(s); }

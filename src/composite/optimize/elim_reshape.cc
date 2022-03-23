@@ -13,8 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#include <unordered_map>
 #include "composite/optimize/pass.h"
 #include "composite/optimize/elim_reshape.h"
+#include "tvm.h"
 
 namespace akg {
 bool ElimReshapeAnalysis::Run() {
@@ -61,6 +63,52 @@ FunctionRef GetFuncFromPos(const Provide *provide, const size_t &pos, const Func
   return provide->func;
 }
 
+bool ElimReshapeAnalysis::ForwardHasOtherOp(const FuncRefList &funcs, FuncBoolMap &cache_res) {
+  for (auto func : funcs) {
+    if (cache_res.count(func)) {
+      return cache_res.at(func);
+    }
+    cache_res[func] = false;
+    CHECK(g_.func_stmts.count(func));
+    auto provide = g_.func_stmts[func];
+    auto op_name = GetOpName(provide);
+    if (!(IsTransform(op_name) || IsElemwise(op_name) || IsInplaceAssign(op_name))) {
+      cache_res[func] = true;
+      return true;
+    }
+    if (!g_.post_graph.count(func)) continue;
+    auto outputs = g_.post_graph[func];
+    if (ForwardHasOtherOp(outputs, cache_res)) {
+      cache_res[func] = true;
+      return true;
+    }
+  }
+  return false;
+}
+
+int ElimReshapeAnalysis::ElimForwardEasier() {
+  auto &elim_reshapes = result_.to_be_removed;
+  FuncRefList elim_funcs;
+  for (auto provide : elim_reshapes) {
+    elim_funcs.push_back(provide->func);
+  }
+  FuncRefList insert_funcs;
+  auto &insert_reshapes = result_.need_reshape_map;
+  for (const auto &kv : insert_reshapes) {
+    auto provide = kv.first;
+    insert_funcs.push_back(provide->func);
+  }
+  FuncBoolMap cache_res;
+  bool elim_has_other_op = ForwardHasOtherOp(elim_funcs, cache_res);
+  bool insert_has_other_op = ForwardHasOtherOp(insert_funcs, cache_res);
+  if (elim_has_other_op && !insert_has_other_op) {
+    return 1;
+  } else if (!elim_has_other_op && insert_has_other_op) {
+    return -1;
+  }
+  return 0;
+}
+
 bool ElimReshapeAnalysis::AnalysisElimValid() {
   auto &elim_reshapes = result_.to_be_removed;
   auto &insert_reshapes = result_.need_reshape_map;
@@ -74,6 +122,16 @@ bool ElimReshapeAnalysis::AnalysisElimValid() {
     return true;
   } else if (insert_op_count > elim_op_count) {
     return false;
+  }
+
+  // After the ElimReshapeBackward, the easier it is to the ElimReshapeForward, the better
+  if (!forward_) {
+    int elim_forward_easier = ElimForwardEasier();
+    if (elim_forward_easier > 0) {
+      return true;
+    } else if (elim_forward_easier < 0) {
+      return false;
+    }
   }
 
   // The less dimensionality increased by reshape operators, the better
