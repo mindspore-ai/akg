@@ -1,3 +1,25 @@
+## Release 1.7.0
+### Major Features and Improvements
+
+* Support a new loop intrinsic for MindSpore Hybrid DSL. [!560](https://gitee.com/mindspore/akg/pulls/560) (ALL)
+* Update the shared and local promotion strategy on GPU backend. [!556](https://gitee.com/mindspore/akg/pulls/556) (GPU)
+* Refactoring the reschedule pass after pluto scheduling pass on Ascend backend.[!512](https://gitee.com/mindspore/akg/pulls/512) (Ascend)
+
+### Bug fixes
+
+* Fix the bug of gemm operator due to repeated tiling. Especially for the conv operator, the h and w axes need to be mapped to BlockIdx.y. [!582](https://gitee.com/mindspore/akg/pulls/582) (GPU)
+* Fix the bug of paralleize axis y in reduce of Y_DIRECTION with small x. [!559](https://gitee.com/mindspore/akg/pulls/559) (CPU)
+
+### Contributors
+
+Thanks goes to these wonderful people:
+
+yangsijia, polyhedral, zhangrenwei, yiyanzhi, hujiahui8, zhengzuohe, zhangzhaochuang, xuhui, liuchao, xiaruijie, DeshiChen, nelson.lossing, zhenzhang,
+
+chenlei_autodiff, lingyunli63, wYann, hanhuifeng, gaoxiong, zichun_ye, chengbin, wangrao124, huangmengxi, harenome, lear, huoxinyou, yanglinfeng, Etienne, Trump
+
+Contributions of any kind are welcome!
+
 ## Release 1.6.0
 ### Major Features and Improvements
 
