@@ -18,6 +18,7 @@ import akg.topi
 import akg.utils as utils
 from akg.utils.dsl_create import produce_shapes
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor)
 def _not_equal(data1, data2):
     shape1 = [x.value for x in data1.shape]
@@ -30,17 +31,20 @@ def _not_equal(data1, data2):
     utils.elemwise_dtype_check(data1.dtype, data2.dtype)
     dtype = data1.dtype
 
-    # get notequal compute
-    t_value = akg.tvm.compute(shape, lambda *indice: akg.tvm.const(1, dtype), "T")
-    f_value = akg.tvm.compute(shape, lambda *indice: akg.tvm.const(0, dtype), "F")
+    t_value = akg.tvm.compute(
+        shape, lambda *indice: akg.tvm.const(1, dtype), "T")
+    f_value = akg.tvm.compute(
+        shape, lambda *indice: akg.tvm.const(0, dtype), "F")
 
     input1_bro = akg.topi.broadcast_to(data1, shape)
     input2_bro = akg.topi.broadcast_to(data2, shape)
     c_out = akg.tvm.compute(shape, lambda *indice: akg.tvm.expr.Select(input1_bro[indice] != input2_bro[indice],
-                                                                         t_value[indice], f_value[indice]), name="C")
-    res = akg.tvm.compute(shape, lambda *indice: c_out(*indice).astype("bool"), name="res")
+                                                                       t_value[indice], f_value[indice]), name="C")
+    res = akg.tvm.compute(
+        shape, lambda *indice: c_out(*indice).astype("bool"), name="res")
 
     return res
+
 
 def _not_equal_ascend(data1, data2):
     # check shapes
@@ -50,12 +54,15 @@ def _not_equal_ascend(data1, data2):
     # check types
     check_list = ["float16"]
     if not (data1.dtype.lower() in check_list):
-        raise RuntimeError("not_equal only support %s while dtype is %s" % (",".join(check_list), data1.dtype))
+        raise RuntimeError("not_equal only support %s while dtype is %s" % (
+            ",".join(check_list), data1.dtype))
     if not (data2.dtype.lower() in check_list):
-        raise RuntimeError("not_equal only support %s while dtype is %s" % (",".join(check_list), data2.dtype))
+        raise RuntimeError("not_equal only support %s while dtype is %s" % (
+            ",".join(check_list), data2.dtype))
 
     res = akg.topi.not_equal(data1, data2)
     return res
+
 
 def NotEqual(data1, data2, target=utils.CCE):
     """
@@ -67,7 +74,7 @@ def NotEqual(data1, data2, target=utils.CCE):
 
     Returns:
         tvm.tensor.Tensor. If data1 notequal to data2 return True, else return False.
-    
+
     Supported Platforms:
         'Ascend', 'GPU', 'CPU'
     """

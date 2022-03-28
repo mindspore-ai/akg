@@ -19,27 +19,30 @@ import akg.tvm
 import akg.topi
 import akg
 import akg.utils as utils
-from akg.ops.nn.ascend.maxpool import MaxPool, OldMaxPool
+from akg.ops.nn.ascend.maxpool import maxpool, old_maxpool
 from akg.utils.format_transform import get_shape
 from akg.utils.dsl_create import cal_pad_shapes_by_strategy
 from akg.utils.kernel_exec import debug_mode, create_code
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (list, tuple), (list, tuple),
-                          (str, list, tuple))
+                        (str, list, tuple))
 def maxpool_ad_no_custom_diff_poly_all_max(head, data, kernel, stride, pad):
     """automatic differentiate of maxpool with polyhedral"""
-    attrs = {"enable_post_poly_loop_partition": False, "enable_pre_poly_loop_partition": False}
-    maxpool_fwd = OldMaxPool(data, kernel, stride, pad)
+    attrs = {"enable_post_poly_loop_partition": False,
+             "enable_pre_poly_loop_partition": False}
+    maxpool_fwd = old_maxpool(data, kernel, stride, pad)
     [dl_ddata] = akg.differentiate(maxpool_fwd, [data], head, None, None)
     return dl_ddata, attrs
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor,
-                          (list, tuple), (list, tuple), (str, list, tuple))
+                        (list, tuple), (list, tuple), (str, list, tuple))
 def maxpool_ad_no_custom_diff_manual_schedule_all_max(head, data, kernel, stride, pad):
     """automatic differentiate of maxpool with manual schedule."""
-    attrs = {"enable_post_poly_loop_partition": False, "enable_pre_poly_loop_partition": False}
-    maxpool_fwd = OldMaxPool(data, kernel, stride, pad)
+    attrs = {"enable_post_poly_loop_partition": False,
+             "enable_pre_poly_loop_partition": False}
+    maxpool_fwd = old_maxpool(data, kernel, stride, pad)
     [dl_ddata] = akg.differentiate(maxpool_fwd, [data], head, None, None)
     # schedule for differetiation operation
     s = akg.tvm.create_schedule([dl_ddata.op])
@@ -74,11 +77,11 @@ def maxpool_ad_no_custom_diff_manual_schedule_all_max(head, data, kernel, stride
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor,
-                          akg.tvm.tensor.Tensor, (list, tuple), (list, tuple), (str, list, tuple), (str, type(None)))
+                        akg.tvm.tensor.Tensor, (list, tuple), (list, tuple), (str, list, tuple), (str, type(None)))
 def MaxpoolAd(head, data, forward, mask, kernel, stride, pad, target=utils.CCE):
     """
     automatic differentiate of maxpool with manual schedule.
-    
+
     Supported Platforms:
         'Ascend'
     """
@@ -176,8 +179,10 @@ def MaxpoolAd(head, data, forward, mask, kernel, stride, pad, target=utils.CCE):
         d_data = akg.tvm.compute((batch_size, input_c1, tile_h_out, tile_w_out,
                                   tile_output_h, tile_output_w, kernel_h, kernel_w, input_c0),
                                  lambda b, c1, h_out, w_out, oh, ow, kh, kw, c0:
-                                 mask_reshaped(b, c1, h_out, w_out, oh, ow, kh, kw, c0)
-                                 * head_reshaped(b, c1, h_out, w_out, oh, ow, c0),
+                                 mask_reshaped(b, c1, h_out, w_out,
+                                               oh, ow, kh, kw, c0)
+                                 * head_reshaped(b, c1, h_out,
+                                                 w_out, oh, ow, c0),
                                  name="d_data")
 
         data_reorg = akg.tvm.compute((batch_size, input_c1, tile_h_out, tile_w_out,
@@ -199,7 +204,8 @@ def MaxpoolAd(head, data, forward, mask, kernel, stride, pad, target=utils.CCE):
 
         result = akg.tvm.compute(shape,
                                  lambda b, c1, h, w, c0:
-                                 result_tile(b, c1, h // tile_h, w // tile_w, h % tile_h, w % tile_w, c0),
+                                 result_tile(b, c1, h // tile_h, w //
+                                             tile_w, h % tile_h, w % tile_w, c0),
                                  name="result")
         return [result]
 
@@ -257,14 +263,15 @@ def MaxpoolAd(head, data, forward, mask, kernel, stride, pad, target=utils.CCE):
 
 
 @utils.check_input_type((list, tuple), (list, tuple), (list, tuple), (str, list, tuple),
-                          str, (bool, type(None)), (dict, type(None)))
+                        str, (bool, type(None)), (dict, type(None)))
 def maxpool_ad_manual_schedule_all_max(shape, kernel, stride, pad, dtype, polyhedral=True, attrs=None):
     """automatic differentiate of maxpool with manual schedule for all maximum."""
     kernel_h, kernel_w = kernel
     stride_h, stride_w = stride
     pad_h, pad_w, _, _ = pad
     batch_size, input_c1, input_h, input_w, input_c0 = shape
-    pad_shape = (batch_size, input_c1, input_h + 2 * pad_h, input_w + 2 * pad_w, input_c0)
+    pad_shape = (batch_size, input_c1, input_h + 2 *
+                 pad_h, input_w + 2 * pad_w, input_c0)
     out_size_h = (input_h + 2 * pad_h - kernel_h) // stride_h + 1
     out_size_w = (input_w + 2 * pad_w - kernel_w) // stride_w + 1
     out_shape = (batch_size, input_c1, out_size_h, out_size_w, input_c0)
@@ -272,7 +279,8 @@ def maxpool_ad_manual_schedule_all_max(shape, kernel, stride, pad, dtype, polyhe
     def custom_maxpool_fdiff(out, inputs, head_, ad_attrs, new_pld_array):
         in_data = inputs[0]
 
-        data_separated_by_windows = (kernel_h, kernel_w, batch_size, input_c1, out_size_h, out_size_w, input_c0)
+        data_separated_by_windows = (
+            kernel_h, kernel_w, batch_size, input_c1, out_size_h, out_size_w, input_c0)
 
         pad_data = akg.tvm.compute(pad_shape,
                                    lambda b, c1, h, w, c0:
@@ -281,13 +289,15 @@ def maxpool_ad_manual_schedule_all_max(shape, kernel, stride, pad, dtype, polyhe
                                                    h < input_h + pad_h,
                                                    w >= pad_w,
                                                    w < input_w + pad_w),
-                                       in_data(b, c1, h - pad_h, w - pad_w, c0),
+                                       in_data(b, c1, h - pad_h,
+                                               w - pad_w, c0),
                                        akg.tvm.const(0.0, dtype=dtype)),
                                    name="pad_data")
 
         data_reshaped = akg.tvm.compute(data_separated_by_windows,
                                         lambda wh, ww, b, c1, oh, ow, c0:
-                                        pad_data(b, c1, oh * stride_h + wh, ow * stride_w + ww, c0),
+                                        pad_data(b, c1, oh * stride_h +
+                                                 wh, ow * stride_w + ww, c0),
                                         name="data_reshaped")
 
         max_broadcast = akg.tvm.compute(data_separated_by_windows,
@@ -400,31 +410,37 @@ def maxpool_ad_manual_schedule_no_overlap_all_max(shape, kernel, stride, pad, dt
     stride_h, stride_w = stride
     pad_h, pad_w, _, _ = pad
     batch_size, input_c1, input_h, input_w, input_c0 = shape
-    pad_shape = (batch_size, input_c1, input_h + 2 * pad_h, input_w + 2 * pad_w, input_c0)
+    pad_shape = (batch_size, input_c1, input_h + 2 *
+                 pad_h, input_w + 2 * pad_w, input_c0)
 
     def custom_maxpool_fdiff(out, inputs, head_, ad_attrs, new_pld_array):
         in_data = inputs[0]
 
         if stride_w != kernel_w:
-            raise RuntimeError("Only supports kernels with same dimensions as stride size!")
+            raise RuntimeError(
+                "Only supports kernels with same dimensions as stride size!")
         if stride_h != kernel_h:
-            raise RuntimeError("Only supports kernels with same dimensions as stride size!")
+            raise RuntimeError(
+                "Only supports kernels with same dimensions as stride size!")
 
         out_broadcast = akg.tvm.compute(pad_shape,
                                         lambda b, c1, h, w, c0:
-                                        out(b, c1, akg.tvm.floordiv(h, stride_h), akg.tvm.floordiv(w, stride_w), c0),
+                                        out(b, c1, akg.tvm.floordiv(
+                                            h, stride_h), akg.tvm.floordiv(w, stride_w), c0),
                                         name="out_broadcast")
 
         # copy output to the shape of the padded input, copying the same value for the entire kernel size
         out_broadcast = akg.tvm.compute(pad_shape,
                                         lambda b, c1, h, w, c0:
-                                        out(b, c1, akg.tvm.floordiv(h, stride_h), akg.tvm.floordiv(w, stride_w), c0),
+                                        out(b, c1, akg.tvm.floordiv(
+                                            h, stride_h), akg.tvm.floordiv(w, stride_w), c0),
                                         name="out_broadcast")
 
         # copy head to the shape of the padded input, copying the same value for the entire kernel size
         head_broadcast = akg.tvm.compute(pad_shape,
                                          lambda b, c1, h, w, c0:
-                                         head_(b, c1, akg.tvm.floordiv(h, stride_h), akg.tvm.floordiv(w, stride_w), c0),
+                                         head_(b, c1, akg.tvm.floordiv(
+                                             h, stride_h), akg.tvm.floordiv(w, stride_w), c0),
                                          name="head_broadcast")
 
         # check if value was a maximum and assign head of that position if it was
@@ -432,8 +448,10 @@ def maxpool_ad_manual_schedule_no_overlap_all_max(shape, kernel, stride, pad, dt
         result = akg.tvm.compute(in_data.shape,
                                  lambda b, c1, h, w, c0:
                                  akg.tvm.expr.Select(
-                                     in_data(b, c1, h, w, c0) == out_broadcast(b, c1, h + pad_h, w + pad_w, c0),
-                                     head_broadcast(b, c1, h + pad_h, w + pad_w, c0),
+                                     in_data(b, c1, h, w, c0) == out_broadcast(
+                                         b, c1, h + pad_h, w + pad_w, c0),
+                                     head_broadcast(
+                                         b, c1, h + pad_h, w + pad_w, c0),
                                      akg.tvm.const(0, dtype=in_data.dtype)),
                                  name="result")
         return [result]
@@ -474,7 +492,8 @@ def maxpool_ad_manual_schedule_no_overlap_all_max(shape, kernel, stride, pad, dt
     s[forward_broadcast].set_scope("local.UB")
 
     s[head_ub].compute_at(s[head_broadcast], head_broadcast.op.axis[0])
-    s[forward_ub].compute_at(s[forward_broadcast], forward_broadcast.op.axis[0])
+    s[forward_ub].compute_at(s[forward_broadcast],
+                             forward_broadcast.op.axis[0])
     s[data_ub].compute_at(s[result_ub], result_ub.op.axis[0])
     s[forward_broadcast].compute_at(s[result_ub], result_ub.op.axis[0])
     s[head_broadcast].compute_at(s[result_ub], result_ub.op.axis[0])

@@ -94,11 +94,13 @@ def maxpool_param_check(kernel, stride, pad):
     if len(stride) != 2:
         raise ValueError("Only support 2-dim stride!")
     if len(pad) != 2 and (len(pad) != 4 or pad[0] != pad[1] or pad[2] != pad[3]):
-        raise ValueError("Only support 2-dim pad, or 4-dim with 2 equal values!")
+        raise ValueError(
+            "Only support 2-dim pad, or 4-dim with 2 equal values!")
+
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, (list, tuple),
-                          (list, tuple), (list, tuple))
-def OldMaxPool(data, kernel, stride, pad):
+                        (list, tuple), (list, tuple))
+def old_maxpool(data, kernel, stride, pad):
     """
     Old implement for maxpool.
 
@@ -138,7 +140,8 @@ def OldMaxPool(data, kernel, stride, pad):
                            / float(stride_w)) + 1)
 
     if pad[0] != 0 or pad[1] != 0:
-        pad_shape = (in_n, in_c1, in_h + 2 * pad_height, in_w + 2 * pad_width, in_c0)
+        pad_shape = (in_n, in_c1, in_h + 2 * pad_height,
+                     in_w + 2 * pad_width, in_c0)
 
         pad2d = akg.tvm.compute(pad_shape,
                                 lambda n, c1, h, w, c0:
@@ -155,7 +158,8 @@ def OldMaxPool(data, kernel, stride, pad):
                                         w > in_w + pad_width - 1
                                     ),
                                     pad2d[n, c1, h, w, c0],
-                                    data[n, c1, h - pad_height, w - pad_width, c0],
+                                    data[n, c1, h - pad_height,
+                                         w - pad_width, c0],
                                 ),
                                 name="pad2d"
                                 )
@@ -200,7 +204,8 @@ def maxpool_manual_schedule(shape, kernel, stride, padding, dtype, attrs=None, p
 
     # padding operation
     if pad_h != 0 or pad_w != 0:
-        pad_shape = (batch_size, in_c1, input_h + 2 * pad_h, input_w + 2 * pad_w, in_c0)
+        pad_shape = (batch_size, in_c1, input_h + 2 *
+                     pad_h, input_w + 2 * pad_w, in_c0)
 
         padded_input = akg.tvm.compute(pad_shape,
                                        lambda n, c1, h, w, c0:
@@ -212,22 +217,26 @@ def maxpool_manual_schedule(shape, kernel, stride, padding, dtype, attrs=None, p
                                                w < pad_w,
                                            ),
                                            akg.tvm.const(0.0, dtype=dtype),
-                                           data[n, c1, h - pad_h, w - pad_w, c0],
+                                           data[n, c1, h - pad_h,
+                                                w - pad_w, c0],
                                        ),
                                        name="padded_input")
     else:
         padded_input = data
 
     # reduce iterators
-    it_kernel_h = akg.tvm.reduce_axis((0, kernel_h), name="iterator_reduction_height")
-    it_kernel_w = akg.tvm.reduce_axis((0, kernel_w), name="iterator_reduction_width")
+    it_kernel_h = akg.tvm.reduce_axis(
+        (0, kernel_h), name="iterator_reduction_height")
+    it_kernel_w = akg.tvm.reduce_axis(
+        (0, kernel_w), name="iterator_reduction_width")
 
     out_shape = (batch_size, in_c1, out_size_h, out_size_w, in_c0)
 
     res = akg.tvm.compute(out_shape,
                           lambda n, c1, h, w, c0:
                           akg.tvm.max(
-                              padded_input[n, c1, (h * stride_h + it_kernel_h), (w * stride_w + it_kernel_w), c0],
+                              padded_input[n, c1, (h * stride_h + it_kernel_h),
+                                           (w * stride_w + it_kernel_w), c0],
                               axis=[it_kernel_h, it_kernel_w]
                           ),
                           name="maxpool_not_hybrid")
@@ -287,20 +296,23 @@ def maxpool_manual_schedule(shape, kernel, stride, padding, dtype, attrs=None, p
                       iterator_c0_outer, iterator_c0_inner)
 
     with akg.build_config(add_lower_pass=k_utils.debug_mode(0), dump_pass_ir=True):
-        mod = akg.build(s, [data, res], "cce", name="maxpool_manual_schedule", attrs=attrs, polyhedral=polyhedral)
+        mod = akg.build(s, [data, res], "cce", name="maxpool_manual_schedule",
+                        attrs=attrs, polyhedral=polyhedral)
         source_code = mod.imported_modules[0].get_source()
         kernel_name = "maxpool_ad_manual_schedule"
         k_utils.create_code(kernel_name, './', source_code)
     return mod
+
 
 def pad_strategy_check(strategy):
     if not isinstance(strategy, str) \
             and not (isinstance(strategy, (list, tuple)) and len(strategy) == 4):
         raise ValueError("Only support string or list/tuple of 4 int numbers!")
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, (list, tuple), (list, tuple),
-                          (list, tuple, str), (str, type(None)))
-def MaxPool(data, kernel, stride, strategy, target=utils.CCE):
+                        (list, tuple, str), (str, type(None)))
+def maxpool(data, kernel, stride, strategy):
     """
     Performs the max pooling on the input data.
 
@@ -317,7 +329,7 @@ def MaxPool(data, kernel, stride, strategy, target=utils.CCE):
 
     Returns:
         tvm.tensor.Tensor, as result for max pooling.
-    
+
     Supported Platforms:
         'Ascend'
     """
@@ -345,7 +357,7 @@ def MaxPool(data, kernel, stride, strategy, target=utils.CCE):
         out_w = akg.tvm.var("OUT_W")
 
     @script(capture=locals())
-    def dynamic_max_pool_hybrid_0(zero_, one_, min_value_, x_, in_n, in_c1, in_h, in_w, in_c0, out_h, out_w):
+    def dynamic_max_pool_hybrid_0(min_value_, x_, in_n, in_c1, in_h, in_w, in_c0, out_h, out_w):
         output = output_tensor((in_n, in_c1, out_h, out_w, in_c0), x_.dtype)
 
         for n in range(in_n):
@@ -383,7 +395,7 @@ def MaxPool(data, kernel, stride, strategy, target=utils.CCE):
 
     # static shape's hybrid
     @script(capture=locals())
-    def static_max_pool_hybrid_0(zero_, one_, min_value_, x_):
+    def static_max_pool_hybrid_0(min_value_, x_):
         output = output_tensor((in_n, in_c1, out_h, out_w, in_c0), x_.dtype)
 
         for n in range(in_n):
@@ -419,24 +431,24 @@ def MaxPool(data, kernel, stride, strategy, target=utils.CCE):
 
         return output
 
-    zero = akg.tvm.const(0.0, dtype=dtype)
-    one = akg.tvm.const(1.0, dtype=dtype)
     min_value = akg.tvm.const(-65504.0 if dtype == 'float16'
                               else -340282346638528859811704183484516925440.0, dtype=dtype)
     if attrs.get("dynamic") is True:
-        output = dynamic_max_pool_hybrid_0(zero, one, min_value, data,
+        output = dynamic_max_pool_hybrid_0(min_value, data,
                                            in_n, in_c1, in_h, in_w, in_c0, out_h, out_w)
     else:
-        output = static_max_pool_hybrid_0(zero, one, min_value, data)
+        output = static_max_pool_hybrid_0(min_value, data)
 
     return output, attrs
 
 
 maxpool_with_argmax_set_dim_map = {
     str(((32, 4, 112, 112, 16), (3, 3), (2, 2), 'SAME', "float16")):
-        ((0, 0, 1, 1), (0, 1, 1, 1), (0, "H", 3, 1), (0, 3, 56, 1), (0, 4, 5, 1), (0, 5, 16, 1)),
+        ((0, 0, 1, 1), (0, 1, 1, 1), (0, "H", 3, 1),
+         (0, 3, 56, 1), (0, 4, 5, 1), (0, 5, 16, 1)),
     str(((32, 4, 112, 112, 16), (3, 3), (2, 2), (1, 1, 1, 1), "float16")):
-        ((0, 0, 1, 1), (0, 1, 1, 1), (0, "H", 3, 1), (0, 3, 56, 1), (0, 4, 5, 1), (0, 5, 16, 1)),
+        ((0, 0, 1, 1), (0, 1, 1, 1), (0, "H", 3, 1),
+         (0, 3, 56, 1), (0, 4, 5, 1), (0, 5, 16, 1)),
     str(((1, 1, 28, 28, 16), (2, 2), (2, 2), 'VALID', "float16")):
         ((0, 0, 14, 1), (0, 1, 14, 1), (0, 4, 3, 1), (0, 5, 16, 1)),
     # str('((I0, I1, I2, I3, 16), (3, 3), (2, 2), (1, 1, 1, 1), \'float16\')'):
@@ -486,6 +498,7 @@ def maxpool_with_argmax_tiling_strategy(data, kernel, stride, pad):
                                                       constraints=ct_util.TileConstraint.FACTOR,
                                                       axis=dim_ind + 3)
     return strategy
+
 
 def maxpool_with_argmax_dynamic_tensor_strategy(data, im2col, mask):
     """Custom tiling for maxpool with argmax version."""
@@ -550,6 +563,7 @@ def maxpool_with_argmax_dynamic_tensor_strategy(data, im2col, mask):
                                                         constraints=ct_util.TileConstraint.MAX,
                                                         tensor_pos=6)
     return strategy
+
 
 def maxpool_with_argmax_custom_tiling_strategy(data):
     """Custom tiling for maxpool with argmax version."""
@@ -656,6 +670,7 @@ def get_attrs():
     }
     return default_attr_map
 
+
 def get_dynamic_attrs():
     """Get default attrs for maxpool."""
     default_attr_map = {
@@ -673,6 +688,7 @@ def get_dynamic_attrs():
         "enable_sink_allocate": True,
     }
     return default_attr_map
+
 
 def maxpool_with_argmax_set_dim_func(data, kernel, stride, pad):
     """set dim info for attr"""
@@ -701,11 +717,13 @@ def maxpool_with_argmax_set_dim_func(data, kernel, stride, pad):
         return ct_util.set_dims(maxpool_with_argmax_set_dim_map[hash_key]), hash_key
     return "", hash_key
 
+
 def maxpool_value(index):
     print(type(index))
     if isinstance(index, akg.tvm.expr.IntImm):
         return index.value
     return index
+
 
 def img2col(input_img, col_shape, filter_h, filter_w, pad, stride, min_value, tag=None):
     """implement ima2col"""
@@ -747,7 +765,8 @@ def img2col(input_img, col_shape, filter_h, filter_w, pad, stride, min_value, ta
         tag = 'im2col_row_major'
     return akg.tvm.compute(
         col_shape,
-        lambda *indices: img2col_compute(input_img, indices, filter_w, pad, stride),
+        lambda *indices: img2col_compute(input_img,
+                                         indices, filter_w, pad, stride),
         name='im2col_row_major',
         tag=tag,
         attrs={
@@ -767,9 +786,10 @@ def img2col(input_img, col_shape, filter_h, filter_w, pad, stride, min_value, ta
             'pragma_conv_w_cut': input_img.shape[3]
         })
 
+
 @ct_util.reg_set_dim_func(maxpool_with_argmax_set_dim_func)
 @utils.check_input_type(akg.tvm.tensor.Tensor, (list, tuple), (list, tuple), (list, tuple, str))
-def MaxpoolWithArgmaxDynamic(data, kernel, stride, strategy):
+def maxpool_with_argmax_dynamic(data, kernel, stride, strategy):
     """
     Performs the max pooling on the input datas.
 
@@ -788,12 +808,12 @@ def MaxpoolWithArgmaxDynamic(data, kernel, stride, strategy):
         tvm.tensor.Tensor, result for gradient of maxpooling.
     """
     attrs = get_dynamic_attrs()
-    dim_info = maxpool_with_argmax_set_dim_func(data, kernel, stride, strategy)[0]
+    dim_info = maxpool_with_argmax_set_dim_func(
+        data, kernel, stride, strategy)[0]
     for k, v in attr_map_v2.items():
         attrs[k] = v
     if dim_info != "":
         attrs['dim'] = dim_info
-    # attrs["custom_tiling"] = maxpool_with_argmax_custom_tiling_strategy(data)
     attrs["enable_feature_library"] = True
     shape = get_shape(data)
     dtype = data.dtype
@@ -817,7 +837,8 @@ def MaxpoolWithArgmaxDynamic(data, kernel, stride, strategy):
                               else -340282346638528859811704183484516925440.0, dtype=dtype)
 
     # fmap img2col l1 -> ub in zZ format by fractal
-    fmap_img2col_shape_ub = (in_n, in_c1, kernel_h, kernel_w, out_h, out_w, in_c0)
+    fmap_img2col_shape_ub = (in_n, in_c1, kernel_h,
+                             kernel_w, out_h, out_w, in_c0)
 
     fmap_img2col_ub = img2col(data, fmap_img2col_shape_ub, kernel_h, kernel_w,
                               pad, stride, min_value, tag='')
@@ -834,18 +855,21 @@ def MaxpoolWithArgmaxDynamic(data, kernel, stride, strategy):
                              name="pooling_max")
 
     zero = akg.tvm.const(0.0, dtype=dtype)
-    mask_first_max_shape = (in_n, in_c1, kernel_h, kernel_w, out_h, out_w, in_c0)
-    mask_first_max = akg.tvm.compute(mask_first_max_shape, lambda *indice: zero, name="mask_first_max")
+    mask_first_max_shape = (in_n, in_c1, kernel_h,
+                            kernel_w, out_h, out_w, in_c0)
+    mask_first_max = akg.tvm.compute(
+        mask_first_max_shape, lambda *indice: zero, name="mask_first_max")
 
     attrs["custom_tiling"] = maxpool_with_argmax_dynamic_tensor_strategy(
         data, fmap_img2col_ub, mask_first_max)
-    attrs["dynamic_shape"] = ds.set_dynamic_shape_limit_for_tensor(output, [64, 64], [2, 3])
+    attrs["dynamic_shape"] = ds.set_dynamic_shape_limit_for_tensor(output, [
+                                                                   64, 64], [2, 3])
     return output, mask_first_max, attrs
 
 
 @ct_util.reg_set_dim_func(maxpool_with_argmax_set_dim_func)
 @utils.check_input_type(akg.tvm.tensor.Tensor, (list, tuple), (list, tuple), (list, tuple, str), (str, type(None)))
-def MaxPoolWithArgmax(data, kernel, stride, strategy, target=utils.CCE):
+def maxpool_with_argmax(data, kernel, stride, strategy):
     """
     Performs the max pooling on the input datas.
 
@@ -864,12 +888,14 @@ def MaxPoolWithArgmax(data, kernel, stride, strategy, target=utils.CCE):
         tvm.tensor.Tensor, result for gradient of maxpooling.
     """
     attrs = get_attrs()
-    dim_info = maxpool_with_argmax_set_dim_func(data, kernel, stride, strategy)[0]
+    dim_info = maxpool_with_argmax_set_dim_func(
+        data, kernel, stride, strategy)[0]
     for k, v in attr_map_v2.items():
         attrs[k] = v
     if dim_info != "":
         attrs['dim'] = dim_info
-    attrs["custom_tiling"] = maxpool_with_argmax_tiling_strategy(data, kernel, stride, strategy)
+    attrs["custom_tiling"] = maxpool_with_argmax_tiling_strategy(
+        data, kernel, stride, strategy)
     shape = get_shape(data)
     dtype = data.dtype
 
@@ -893,7 +919,8 @@ def MaxPoolWithArgmax(data, kernel, stride, strategy, target=utils.CCE):
                               else -340282346638528859811704183484516925440.0, dtype=dtype)
 
     # fmap img2col l1 -> ub in zZ format by fractal
-    fmap_img2col_shape_ub = (in_n, in_c1, kernel_h, kernel_w, out_h, out_w, in_c0)
+    fmap_img2col_shape_ub = (in_n, in_c1, kernel_h,
+                             kernel_w, out_h, out_w, in_c0)
 
     fmap_img2col_ub = img2col(data, fmap_img2col_shape_ub, kernel_h, kernel_w,
                               pad, stride, min_value, tag='')
@@ -912,7 +939,8 @@ def MaxPoolWithArgmax(data, kernel, stride, strategy, target=utils.CCE):
     pooling_mask = akg.tvm.compute(fmap_img2col_shape_ub,
                                    lambda n, c1, kh, kw, oh, ow, c0:
                                    akg.tvm.if_then_else(
-                                       fmap_img2col_ub[n, c1, kh, kw, oh, ow, c0]
+                                       fmap_img2col_ub[n, c1,
+                                                       kh, kw, oh, ow, c0]
                                        < output[n, c1, oh, ow, c0], zero, one),
                                    name="pooling_mask")
 
@@ -928,14 +956,16 @@ def MaxPoolWithArgmax(data, kernel, stride, strategy, target=utils.CCE):
 
     # spec 2
     @script(capture=locals())
-    def hybrid_first_max(mask_, flag_, flag2_, zero_, one_):
-        output_ = allocate((in_n, in_c1, kernel_h, kernel_w, out_h, out_w, in_c0), mask_.dtype, 'local')
+    def hybrid_first_max(mask_, flag_, flag2_, zero_):
+        output_ = allocate((in_n, in_c1, kernel_h, kernel_w,
+                           out_h, out_w, in_c0), mask_.dtype, 'local')
         for n_i in range(in_n):
             for c1_i in range(in_c1):
                 for oh_i in range(out_h):
                     for ow_i in range(out_w):
                         for c0_i in range(in_c0):
-                            output_[n_i, c1_i, 0, 0, oh_i, ow_i, c0_i] = flag2_[n_i, c1_i, oh_i, ow_i, c0_i]
+                            output_[n_i, c1_i, 0, 0, oh_i, ow_i, c0_i] = flag2_[
+                                n_i, c1_i, oh_i, ow_i, c0_i]
                 for kh_i in range(kernel_h):
                     for kw_i in range(kernel_w):
                         for oh_i in range(out_h):
@@ -945,11 +975,14 @@ def MaxPoolWithArgmax(data, kernel, stride, strategy, target=utils.CCE):
                                         mask_[n_i, c1_i, kh_i, kw_i, oh_i, ow_i, c0_i] -\
                                         flag_[n_i, c1_i, oh_i, ow_i, c0_i]
                                     output_[n_i, c1_i, kh_i, kw_i, oh_i, ow_i, c0_i] = \
-                                        max(output_[n_i, c1_i, kh_i, kw_i, oh_i, ow_i, c0_i], zero_)
+                                        max(output_[
+                                            n_i, c1_i, kh_i, kw_i, oh_i, ow_i, c0_i], zero_)
                                     flag_[n_i, c1_i, oh_i, ow_i, c0_i] =\
                                         flag_[n_i, c1_i, oh_i, ow_i, c0_i] +\
-                                        output_[n_i, c1_i, kh_i, kw_i, oh_i, ow_i, c0_i]
+                                        output_[n_i, c1_i, kh_i,
+                                                kw_i, oh_i, ow_i, c0_i]
         return output_
 
-    mask_first_max = hybrid_first_max(pooling_mask, mask_flag, mask_init, zero, one)
+    mask_first_max = hybrid_first_max(
+        pooling_mask, mask_flag, mask_init, zero)
     return output, mask_first_max, attrs

@@ -16,7 +16,9 @@
 import numpy as np
 import akg.topi as topi
 import akg.tvm as tvm
-import akg.utils as  utils
+import akg.utils as utils
+from .matmul_utils import auto_out_transpose
+
 
 def batch_matmul(data1, data2, bias=None, layout1="NHDT", layout2="NHDT", layout_out="NHDT"):
     if len(data1.shape) == 4:
@@ -27,24 +29,15 @@ def batch_matmul(data1, data2, bias=None, layout1="NHDT", layout2="NHDT", layout
         res = batch_matmul_3D(data1, data2, bias, layout1, layout2, layout_out)
     return res
 
+
 def auto_in_transpose(data, layout="NHDT"):
-    layout_int = layout.replace('N', '0').replace('H', '1').replace('D', '2').replace('T', '3')
+    layout_int = layout.replace('N', '0').replace(
+        'H', '1').replace('D', '2').replace('T', '3')
     layout_list = list(layout_int)
     layout_axis = np.argsort(layout_list)
     data = topi.transpose(data, axes=tuple(layout_axis))
     return data
 
-def auto_out_transpose(expect, layout_out="NHDT"):
-    if len(expect.shape) == 3:
-        layout_out = layout_out[1:]
-    if len(expect.shape) == 2:
-        layout_out = layout_out[2:]
-    layout_out_int = layout_out.replace('N', '0').replace('H', '1').replace('D', '2').replace('T', '3')
-    layout_out_list = list(layout_out_int)
-    layout_out_axis = np.argsort(layout_out_list)
-    expect = topi.transpose(expect, axes=tuple(layout_out_axis))
-
-    return expect
 
 def batch_matmul_3D(data1, data2, bias, layout1="NHDT", layout2="NHDT", layout_out="NHDT"):
     if layout1 != "NHDT":
@@ -61,6 +54,7 @@ def batch_matmul_3D(data1, data2, bias, layout1="NHDT", layout2="NHDT", layout_o
         res = auto_out_transpose(res, layout_out)
     return res
 
+
 def batch_matmul_4D(data1, data2, bias, layout1="NHDT", layout2="NHDT", layout_out="NHDT"):
     if layout1 != "NHDT":
         data1 = auto_in_transpose(data1, layout1)
@@ -70,14 +64,16 @@ def batch_matmul_4D(data1, data2, bias, layout1="NHDT", layout2="NHDT", layout_o
     b1, b2, m, k = data1.shape
     b1, b2, n, k = data2.shape
     reduce_axis = tvm.reduce_axis((0, k), name='reduce_axis')
-    res = tvm.compute((b1, b2, m, n), lambda i_b1, i_b2, i_m, i_n: tvm.sum(data1[i_b1, i_b2, i_m, reduce_axis] * 
-                                                                                                                                                        data2[i_b1, i_b2, i_n, reduce_axis],
-                                                                                                                                                        axis=reduce_axis), name='matmul_compute')
+    res = tvm.compute((b1, b2, m, n), lambda i_b1, i_b2, i_m, i_n: tvm.sum(data1[i_b1, i_b2, i_m, reduce_axis] *
+                                                                           data2[i_b1, i_b2,
+                                                                                 i_n, reduce_axis],
+                                                                           axis=reduce_axis), name='matmul_compute')
     if bias is not None:
         res = topi.add(res, bias)
     if layout_out != "NHDT":
         res = auto_out_transpose(res, layout_out)
     return res
+
 
 def batch_matmul_2D(data1, data2, bias, layout1="NHDT", layout2="NHDT", layout_out="NHDT"):
     if layout1 != "NHDT":
@@ -86,16 +82,15 @@ def batch_matmul_2D(data1, data2, bias, layout1="NHDT", layout2="NHDT", layout_o
     if layout2 != "NHDT":
         layout2 = layout2[2:]
         data2 = auto_in_transpose(data2, layout2)
-    
+
     m, k = data1.shape
     n, k = data2.shape
     reduce_axis = tvm.reduce_axis((0, k), name='reduce_axis')
-    res = tvm.compute((m, n), lambda i_m, i_n: tvm.sum(data1[i_m, reduce_axis] * 
-                                                                                                                  data2[i_n, reduce_axis],
-                                                                                                                  axis=reduce_axis), name='matmul_compute')
+    res = tvm.compute((m, n), lambda i_m, i_n: tvm.sum(data1[i_m, reduce_axis] *
+                                                       data2[i_n, reduce_axis],
+                                                       axis=reduce_axis), name='matmul_compute')
     if bias is not None:
         res = topi.add(res, bias)
     if layout_out != "NHDT":
         res = auto_out_transpose(res, layout_out)
     return res
-

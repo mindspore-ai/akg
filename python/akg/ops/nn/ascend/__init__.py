@@ -25,7 +25,7 @@ from .conv_bn1 import ConvBn1
 from .conv_filter_ad import ConvFilterAd
 from .conv_input_ad import ConvInputAd
 from .load_im2col import LoadIm2col
-from .maxpool import MaxPool, OldMaxPool, MaxPoolWithArgmax, MaxpoolWithArgmaxDynamic
+from .maxpool import maxpool, old_maxpool, maxpool_with_argmax, maxpool_with_argmax_dynamic
 from .maxpool_ad import MaxpoolAd
 from .maxpool_grad import MaxpoolGrad
 from .maxpool_grad_with_argmax import MaxpoolGradWithArgmax

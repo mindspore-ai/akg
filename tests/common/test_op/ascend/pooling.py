@@ -16,7 +16,8 @@
 import akg
 import akg.utils as utils
 from akg.utils.format_transform import get_shape
-from akg.ops.nn.ascend import MaxPool, Avgpool
+from akg.ops.nn.ascend import maxpool, Avgpool
+
 
 def _pooling_compute(x, window, stride,
                      mode=0, pad_mode=5, pad=(0, 0, 0, 0)):
@@ -34,7 +35,8 @@ def _pooling_compute(x, window, stride,
     elif pad_mode == 6:
         pad_mode = "SAME"
     else:
-        raise RuntimeError("Invalid pad_mode parameters, pad_mode must set 5 or 6.")
+        raise RuntimeError(
+            "Invalid pad_mode parameters, pad_mode must set 5 or 6.")
 
     # check pad
     if pad not in ((0, 0, 0, 0), [0, 0, 0, 0]):
@@ -52,7 +54,7 @@ def _pooling_compute(x, window, stride,
         stride = [1, 1]
 
     if mode == "MAX":
-        res = MaxPool(x, window, stride, pad_mode)
+        res = maxpool(x, window, stride, pad_mode)
     else:
         # AVG
         res = Avgpool(x, window, stride, pad_mode)
@@ -61,9 +63,9 @@ def _pooling_compute(x, window, stride,
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor,
-                          (list, tuple), (list, tuple), (int, type(None)),
-                          (int, type(None)), (list, tuple, type(None)),
-                          (bool, type(None)), (int, type(None)))
+                        (list, tuple), (list, tuple), (int, type(None)),
+                        (int, type(None)), (list, tuple, type(None)),
+                        (bool, type(None)), (int, type(None)))
 def pooling(x, window, stride,
             mode=0, pad_mode=5, pad=(0, 0, 0, 0),
             global_pooling=False, ceil_mode=0):
