@@ -20,6 +20,7 @@
 /*
  * 2019.12.30 - Add a class for get name_hint of loop_var and some methods for
  *              Op base compute such as compute realize bounds, build realize.
+ * 2022.3.28 - Add a parameter to support inline of CSR tensors.
  */
 
 /*!
@@ -587,10 +588,18 @@ size_t ComputeOpNode::num_schedulable_dims() const {
 void MakeReduction(const ComputeOpNode* op,
                    const Array<Tensor>& tensors,
                    Stmt* init,
-                   Stmt* provide) {
+                   Stmt* provide,
+                   Expr csr_access) {
   Array<Expr>  args;
-  for (IterVar iv : op->axis) {
-    args.push_back(iv->var);
+  if (csr_access.defined()) {
+    args.push_back(csr_access);
+    for (size_t i = 2; i < op->axis.size(); ++i) {
+      args.push_back(op->axis[i]->var);
+    }
+  } else {
+    for (IterVar iv : op->axis) {
+      args.push_back(iv->var);
+    }
   }
   std::vector<Stmt> inits, provides;
 
@@ -649,9 +658,19 @@ Stmt MakeComputeStmt(const ComputeOpNode* self,
     Stmt init, provide;
     Array<Tensor> source;
     for (size_t i = 0; i < self->body.size(); ++i) {
-      source.push_back(stage->op.output(i));
+      if (stage->csr_access.defined()) {
+        auto node = make_node<TensorNode>();
+        node->op = stage->op;
+        node->value_index = i;
+        node->dtype = stage->op->output_dtype(i);
+        CHECK_LT(i, stage->csr_output_shape.size());
+        node->shape = stage->csr_output_shape[i];
+        source.push_back(Tensor(node));
+      } else {
+        source.push_back(stage->op.output(i));
+      }
     }
-    MakeReduction(self, source, &init, &provide);
+    MakeReduction(self, source, &init, &provide, stage->csr_access);
     init = MergeNest(n.init_nest, init);
     init = op::Substitute(init, n.init_vmap);
     // common nest
@@ -660,7 +679,8 @@ Stmt MakeComputeStmt(const ComputeOpNode* self,
     std::vector<std::vector<Stmt> > reduce(
         n.main_nest.begin() + n.num_common_loop + 1, n.main_nest.end());
     provide = MergeNest(reduce, provide);
-    if (debug_keep_trivial_loop) {
+    if (debug_keep_trivial_loop || stage->csr_access.defined()) {
+      // for reduce stmt inlined with csr tensors, init is handled by inplace assign.
       provide = MergeNest(common, provide);
     } else {
       provide = MergeNest(common, Block::make(init, provide));

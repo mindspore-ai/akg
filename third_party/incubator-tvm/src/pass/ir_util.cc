@@ -24,9 +24,11 @@
 
 /*
  * 2019.12.30 - Add utility functions.
+ * 2022.3.28 - Add function VarsFromArgs.
  */
 
 #include "ir_util.h"
+#include <tvm/ir_visitor.h>
 
 namespace air {
 namespace ir {
@@ -112,6 +114,24 @@ Stmt MergeSeq(const std::vector<Stmt>& seq) {
     body = Block::make(body, seq[i]);
   }
   return body;
+}
+
+Array<Expr> VarsFromArgs(const Array<Expr> args) {
+  Array<Expr> vars;
+  size_t vars_size = vars.size();
+  for (auto e: args) {
+    PostOrderVisit(e, [&vars](const NodeRef &n) {
+      if (n.as<Variable>() != nullptr) {
+        vars.push_back(Downcast<Expr>(n));
+      }
+    });
+    if (vars.size() <= vars_size) {
+      // If no variable is found in the arg, then the arg itself is used as a variable (i.e. in broadcast where e = 0)
+      vars.push_back(e);
+    }
+    vars_size = vars.size();
+  }
+  return vars;
 }
 
 }  // namespace ir

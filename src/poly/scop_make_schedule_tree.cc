@@ -479,6 +479,10 @@ class ScopMakeScheduleTree final : protected IRVisitor {
       Op_buffer_bind_scope(op);
     } else if (op->attr_key == ATTR_IM2COL_KEY) {
       scop_info_.analysis_result_.RecordAttrStmt(op);
+    } else if (op->attr_key == CSR_AVG_ROW) {
+      auto csr_avg_row = op->value.as<IntImm>();
+      CHECK(csr_avg_row);
+      scop_info_.analysis_result_.SetCsrAvgRow(csr_avg_row->value);
     }
 
     sch = MakeScheduleTreeHelper(op->body, scop_info_, set, outer, macro_stmt);

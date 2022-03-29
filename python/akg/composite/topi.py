@@ -757,6 +757,7 @@ def csr_div(inputs, attrs):
 
     def gen_ir(dense, sparse_data, col_idx, row_idx, output):
         ib = tvm.ir_builder.create()
+        ib.scope_attr("INFO", "csr_avg_row", int(sparse_data.shape[0]) // max(int(num_rows), 1))
         with ib.for_range(0, num_rows, name='i') as i:
             start = ib.load(row_idx, i)
             end = ib.load(row_idx, i + 1)
@@ -781,7 +782,7 @@ def csr_div(inputs, attrs):
 
     output_name = "T_csr_div_" + dense.op.name + "_" + sparse_data.op.name
     out_buf = tvm.decl_buffer(sparse_data.shape, sparse_data.dtype, output_name)
-    attrs = {"remove_self_dependence": True}
+    attrs = {"remove_self_dependence": True, "csr_op": True}
     return tvm.extern([sparse_data.shape],
                       [dense, sparse_data, col_idx, row_idx],
                       lambda ins, outs: gen_ir(ins[0], ins[1], ins[2], ins[3], outs[0]),
@@ -795,40 +796,36 @@ def csr_reduce_sum(inputs, attrs):
     # Currently, just support integer axis
     axis = int(attrs['axis'][0])
     shape = tuple(attrs['dense_shape'])
+    num_rows = row_idx.shape[0] - 1
     if axis < 0:
         axis += len(shape)
     assert axis == 1, "only supports reduction of CSR axis 1"
-    fused_shape = (shape[0],) + shape[2:]
-    fused_axis = functools.reduce(operator.mul, fused_shape)
-    cum_shape = list(itertools.accumulate(reversed(fused_shape), operator.mul))[::-1] + [1]
+    feature_shape = get_shape(data.shape)[1:]
+    fused_shape = (shape[0], 1) + shape[2:]
 
     def gen_ir(data, row_idx, output):
         ib = tvm.ir_builder.create()
-
-        def split_index(fused_idx):
-            i = fused_idx // cum_shape[1]
-            iter_idx = list(zip((fused_idx % x for x in cum_shape[1: -1]), cum_shape[2:]))
-            k = [x // y for x, y in iter_idx]
-            return i, k
-        with ib.for_range(0, fused_axis, name='idx') as idx:
-            i, k = split_index(idx)
-            ib.store(output, [i] + k, tvm.const(0, data.dtype))
+        ib.scope_attr("INFO", "csr_avg_row", int(data.shape[0]) // max(int(num_rows), 1))
+        with ib.for_range(0, num_rows, name="i") as i:
             start = ib.load(row_idx, i)
             end = ib.load(row_idx, i + 1)
-            with ib.for_range(0, end - start, name='j') as j:
-                pos = start + j
-                val = tvm.expr.Select(pos < end, ib.load(data, [pos] + k), tvm.const(0, data.dtype))
-                ib.scope_attr([tvm.api.iter_var_api((0, shape[1]), "j", 2)], "reduce_update", "")
-                ib.store(output, [i] + k, val + ib.load(output, [i] + k))
+            with ib.for_range_n(feature_shape, "k") as k:
+                ib.store(output, [i, 0] + k, tvm.const(0, data.dtype))
+                with ib.for_range(0, end - start, name="j") as j:
+                    ib.scope_attr([tvm.api.iter_var_api((0, shape[1]), "j", 2)], "reduce_update", "")
+                    pos = start + j
+                    val = tvm.expr.Select(pos < end, ib.load(data, [pos] + k), tvm.const(0, data.dtype))
+                    ib.store(output, [i, 0] + k, val + ib.load(output, [i, 0] + k))
         return ib.get()
 
     output_shape = fused_shape
     output_name = "T_csr_reduce_sum_" + data.op.name + "_" + str(axis)
     out_buf = tvm.decl_buffer(output_shape, data.dtype, output_name)
+    attrs = {"csr_op": True}
     return tvm.extern([output_shape],
                       [data, row_idx],
                       lambda ins, outs: gen_ir(ins[0], ins[1], outs[0]),
-                      dtype=data.dtype, out_buffers=[out_buf], name=output_name)
+                      dtype=data.dtype, out_buffers=[out_buf], name=output_name, attrs=attrs)
 
 
 @tvm.register_func("CSRMV")
@@ -841,6 +838,7 @@ def csrmv(inputs, _):
 
     def csrmv_ir(data, indices, indptr, weight, out):
         ib = tvm.ir_builder.create()
+        ib.scope_attr("INFO", "csr_avg_row", int(data.shape[0]) // max(int(num_rows), 1))
         with ib.for_range(0, num_rows, name="row") as row:
             ib.store(out, [row, 0], tvm.const(0, data.dtype))
             row_start = ib.load(indptr, row)
@@ -858,9 +856,10 @@ def csrmv(inputs, _):
     output_shape = [num_rows, 1]
     output_name = "T_csrmv_" + weight.op.name + "_" + data.op.name
     out_buf = tvm.decl_buffer(output_shape, data.dtype, output_name)
+    attrs = {"csr_op": True}
     return tvm.extern([output_shape], [data, indices, indptr, weight],
                       lambda ins, outs: csrmv_ir(ins[0], ins[1], ins[2], ins[3], outs[0]),
-                      dtype=data.dtype, out_buffers=[out_buf], name=output_name)
+                      dtype=data.dtype, out_buffers=[out_buf], name=output_name, attrs=attrs)
 
 
 @tvm.register_func("CSRMul")
@@ -882,6 +881,7 @@ def csr_mul(inputs, attrs):
 
     def gen_ir(dense, sparse_data, col_idx, row_idx, output):
         ib = tvm.ir_builder.create()
+        ib.scope_attr("INFO", "csr_avg_row", int(sparse_data.shape[0]) // max(int(num_rows), 1))
         with ib.for_range(0, num_rows, name='i') as i:
             start = ib.load(row_idx, i)
             end = ib.load(row_idx, i + 1)
@@ -906,7 +906,7 @@ def csr_mul(inputs, attrs):
 
     output_name = "T_csr_mul_" + dense.op.name + "_" + sparse_data.op.name
     out_buf = tvm.decl_buffer(sparse_data.shape, sparse_data.dtype, output_name)
-    attrs = {"remove_self_dependence": True}
+    attrs = {"remove_self_dependence": True, "csr_op": True}
     return tvm.extern([sparse_data.shape],
                       [dense, sparse_data, col_idx, row_idx],
                       lambda ins, outs: gen_ir(ins[0], ins[1], ins[2], ins[3], outs[0]),
@@ -925,21 +925,22 @@ def csr_gather(inputs, attrs):
 
     def gen_ir(dense, col_idx, row_idx, output):
         ib = tvm.ir_builder.create()
+        ib.scope_attr("INFO", "csr_avg_row", int(col_idx.shape[0]) // max(int(num_rows), 1))
         with ib.for_range(0, num_rows, name='i') as i:
             start = ib.load(row_idx, i)
             end = ib.load(row_idx, i + 1)
             with ib.for_range(0, end - start, name='j') as j:
                 pos = start + j
-                with ib.if_scope(pos < end):
-                    col = ib.load(col_idx, pos)
-                    with ib.for_range_n(feature_shape, 'k') as k:
+                with ib.for_range_n(feature_shape, 'k') as k:
+                    with ib.if_scope(pos < end):
+                        col = ib.load(col_idx, pos)
                         ib.store(output, [pos] + k, ib.load(dense, [i, col] + k))
         return ib.get()
 
     output_name = "T_csr_gather_" + dense.op.name
     output_shape = get_shape(col_idx.shape) + feature_shape
     out_buf = tvm.decl_buffer(output_shape, dense.dtype, "output_data")
-    attrs = {"remove_self_dependence": True}
+    attrs = {"remove_self_dependence": True, "csr_op": True}
     return tvm.extern([output_shape],
                       [dense, col_idx, row_idx],
                       lambda ins, outs: gen_ir(ins[0], ins[1], ins[2], outs[0]),
@@ -957,6 +958,7 @@ def csr2coo(inputs, attrs):
 
     def gen_ir(indptr, output):
         ib = tvm.ir_builder.create()
+        ib.scope_attr("INFO", "csr_avg_row", nnz // max(int(num_rows), 1))
         with ib.for_range(0, num_rows, name='i') as i:
             start = ib.load(indptr, i)
             end = ib.load(indptr, i + 1)
@@ -969,13 +971,15 @@ def csr2coo(inputs, attrs):
     output_name = "T_csr2coo_" + indptr.op.name
 
     out_buf = tvm.decl_buffer(nnz, indptr.dtype, "output_data")
+    attrs = {"csr_op": True}
 
     return tvm.extern([nnz],
                       [indptr],
                       lambda ins, outs: gen_ir(ins[0], outs[0]),
                       dtype=indptr.dtype,
                       out_buffers=[out_buf],
-                      name=output_name)
+                      name=output_name,
+                      attrs=attrs)
 
 
 @tvm.register_func("COO2CSR")

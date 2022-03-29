@@ -27,6 +27,7 @@
  *              processing when the reduce axis is empty.
  * 2021.10.28 - Add NormalizeBody step and Inline Inject logic for hybrid and extern op
  * 2021.12.15 - Add TmpVarInline logic in NormalizeBody for hybrid op
+ * 2022.3.28 - Support inline for CSR operations.
  */
 
 #include <tvm/schedule.h>
@@ -34,10 +35,12 @@
 #include <tvm/ir_mutator.h>
 #include <tvm/ir_visitor.h>
 #include <tvm/ir_pass.h>
+#include <unordered_map>
 #include <unordered_set>
 #include "message_passing.h"
 #include "../pass/ir_util.h"
 #include "../arithmetic/compute_expr.h"
+#include "tvm/expr.h"
 
 namespace air {
 using namespace ir;
@@ -614,7 +617,8 @@ class BufferAccess2Tensor : public IRMutator {
 
 class ProvideBody : public IRVisitor {
  public:
-  explicit ProvideBody(FunctionRef output_tensors) : output_tensors_(std::move(output_tensors)) {}
+  explicit ProvideBody(FunctionRef output_tensors, bool csr_op = false) :
+    output_tensors_(std::move(output_tensors)), csr_op_(csr_op) {}
 
   void Visit(const NodeRef& e) final {
     if (!can_inline_) return;
@@ -627,6 +631,9 @@ class ProvideBody : public IRVisitor {
   }
 
   void Visit_(const IfThenElse* op) final {
+    if (csr_op_) {
+      return IRVisitor::Visit_(op);
+    }
     can_inline_ = false;
     return;
   }
@@ -669,12 +676,19 @@ class ProvideBody : public IRVisitor {
       return;
     }
 
-    if (op->args.size() != iter_var_set_.size()) {
+    Array<Expr> op_args;
+    if (csr_op_) {
+      op_args = VarsFromArgs(op->args);
+    } else {
+      op_args = op->args;
+    }
+
+    if (op_args.size() != iter_var_set_.size()) {
       can_inline_ = false;
       return;
     }
 
-    for (auto arg : op->args) {
+    for (auto arg : op_args) {
       if (iter_var_set_.count(arg) == 0) {
         can_inline_ = false;
         return;
@@ -709,6 +723,7 @@ class ProvideBody : public IRVisitor {
   bool can_inline_{true};
   bool multi_provide_{false};
   std::set<Expr, ExprLess> iter_var_set_;
+  bool csr_op_;
 };
 
 class LetVarReplace : public IRMutator {
@@ -907,6 +922,22 @@ void UpdateInlineInputs(std::set<Tensor>& new_inputs, const Array<Tensor>& input
   }
 }
 
+class ResolveConditional : public IRMutator {
+  Stmt Mutate_(const IfThenElse *op, const Stmt &s) final {
+    Stmt stmt = s;
+    auto cond = Simplify(op->condition);
+    if (auto uint_cond = cond.as<UIntImm>()) {
+      if (uint_cond->value) {
+        return IRMutator::Mutate(op->then_case);
+      }
+      if (op->else_case.defined()) {
+        return IRMutator::Mutate(op->else_case);
+      }
+    }
+    return IRMutator::Mutate_(op, s);
+  }
+};
+
 void NormalizeBody(ScheduleNode* sch) {
   // in this function, we will normalize the body of hybrid and extern ops
   // 1. eliminate let stmt
@@ -933,6 +964,7 @@ void NormalizeBody(ScheduleNode* sch) {
       op_body = buffer_mutator.Mutate(op_body);
       op_body = LetVarReplace().Mutate(op_body);
       op_body = IfThenElseReplace().Mutate(op_body);
+      op_body = ResolveConditional().Mutate(op_body);
 
       if (!extern_op->body.same_as(op_body)) {
         op = ExternOpNode::make(extern_op->name, extern_op->tag, extern_op->attrs,
@@ -971,6 +1003,178 @@ void NormalizeBody(ScheduleNode* sch) {
   }
 }
 
+Array<Expr> GetFuncArgs(const Stmt &s, const FunctionRef &f) {
+  Array<Expr> args;
+  PostOrderVisit(s, [&f, &args] (const NodeRef &e) {
+    if (auto pro = e.as<Provide>()) {
+      if (pro->func.defined() && pro->func->func_name() == f->func_name()) {
+        args = pro->args;
+      }
+    }
+  });
+  return args;
+}
+
+class MapCsrArgs : public IRVisitor {
+ public:
+  explicit MapCsrArgs(Array<Expr> csr_args, const FunctionRef &f) : csr_args_(csr_args), f_(f) {}
+
+  void Visit_(const Call *op) final {
+    if (op->func.same_as(f_)) {
+      CHECK(op->args.size() == csr_args_.size());
+      vmap_.Set(Downcast<Var>(op->args[0]), csr_args_[0]);
+    } else {
+      IRVisitor::Visit_(op);
+    }
+  }
+
+  Array<Expr> csr_args_;
+  const FunctionRef &f_;
+  Map<Var, Expr> vmap_;
+};
+
+class ReplaceCsrSchedule : public IRMutator {
+ public:
+  explicit ReplaceCsrSchedule(Stmt &output_provide) : output_provide_(output_provide) {}
+
+ private:
+  Stmt Mutate_(const For *op, const Stmt &s) final {
+    auto extent_sub = op->extent.as<Sub>();
+    if (extent_sub != nullptr && extent_sub->a.as<Call>() != nullptr && extent_sub->b.as<Call>() != nullptr) {
+      csr_idx_ = Add::make(extent_sub->b, op->loop_var);
+    } else if (csr_idx_.defined()) {
+      feature_var_.push_back(op->loop_var);
+    }
+    return IRMutator::Mutate_(op, s);
+  }
+
+  Stmt Mutate_(const Provide *op, const Stmt &s) final {
+    size_t var_idx = 0;
+    auto output_op = output_provide_.as<Provide>();
+    CHECK(output_op != nullptr);
+    for (auto e: output_op->args) {
+      Array<Var> vars;
+      PostOrderVisit(e, [&vars](const NodeRef &n) {
+        if (n.as<Variable>() != nullptr) {
+          vars.push_back(Downcast<Var>(n));
+        }
+      });
+      if (vars.empty()) continue;
+      CHECK(vars.size() == 1);
+      if (var_idx == 0) {
+        CHECK(csr_idx_.defined());
+        vmap_.Set(vars[0], csr_idx_);
+      } else {
+        CHECK(var_idx - 1 < feature_var_.size());
+        vmap_.Set(vars[0], feature_var_[var_idx - 1]);
+      }
+      ++var_idx;
+    }
+    return Substitute(output_provide_, vmap_);
+  }
+
+  Stmt output_provide_;
+  Expr csr_idx_;
+  Map<Var, Expr> vmap_;
+  Array<Var> feature_var_;
+};
+
+class CollectAxes : public IRVisitor {
+  void Visit_(const For *op) final {
+    auto range = Range::make_by_min_extent(op->min, op->extent);
+    auto axis = IterVarNode::make(range, op->loop_var, kDataPar);
+    axes_.push_back(axis);
+    IRVisitor::Visit_(op);
+  }
+
+ public:
+  Array<IterVar> axes_;
+};
+
+void InlineReduce(size_t j, const Expr &new_value, std::vector<Array<Expr>> &new_body, std::vector<bool> &changed) {
+  if (!new_value.same_as(new_body[j][0])) {
+    changed[j] = true;
+    const ir::Reduce* r = new_value.as<ir::Reduce>();
+    CHECK(r != nullptr);
+    CHECK_EQ(new_body[j].size(), r->source.size());
+    for (size_t k = 0; k < new_body[j].size(); ++k) {
+      auto n = make_node<ir::Reduce>(*r);
+      n->value_index = static_cast<int>(k);
+      n->type = r->source[k].type();
+      new_body[j].Set(k, Expr(n));
+    }
+  }
+}
+
+void UpdateReduceInlineStage(const Reduce *reduce, const ComputeOpNode *compute, const Array<IterVar> &inline_axes,
+                             const Array<Expr> &new_body, Stage &s) {
+  Array<IterVar> injective_axes;
+  for (auto axis: inline_axes) {
+    bool is_injective = true;
+    for (auto reduce_axis: reduce->axis) {
+      if (axis.same_as(reduce_axis)) {
+        is_injective = false;
+        break;
+      }
+    }
+    if (is_injective) {
+      injective_axes.push_back(axis);
+    }
+  }
+  s->op = ComputeOpNode::make(compute->name, compute->tag, compute->attrs, injective_axes,
+                              new_body);
+  s->all_iter_vars = inline_axes;
+  s->leaf_iter_vars = inline_axes;
+}
+
+bool InlineCsrWithCompute(size_t j, const Array<Expr> &csr_args, const FunctionRef &func,
+                          std::vector<Array<Expr>> &new_body) {
+  bool map_csr = false;
+  Array<Expr> new_csr_body;
+  for (size_t k = 0; k < new_body[j].size(); ++k) {
+    auto body = new_body[j][k];
+    auto map_csr_args = MapCsrArgs(csr_args, func);
+    map_csr_args.Visit(body);
+    auto compute_body = Substitute(body, map_csr_args.vmap_);
+    if (!body.same_as(compute_body)) {
+      map_csr = true;
+      new_body[j].Set(k, compute_body);
+    }
+  }
+  return map_csr;
+}
+
+void UpdateComputeInlineStage(const ComputeOpNode *compute, const Array<IterVar> &inline_axes,
+                              const Array<Expr> &new_body, Stage &s) {
+  constexpr int csr_arg_size = 2;
+  Array<IterVar> injective_axes;
+  Array<IterVar> new_axes;
+  CHECK(inline_axes.size() >= compute->root_iter_vars().size());
+  for (size_t i = 0; i < inline_axes.size(); ++i) {
+    bool is_injective = true;
+    IterVar axis;
+    if (i < csr_arg_size) {
+      axis = inline_axes[i];
+    } else {
+      axis = compute->root_iter_vars()[i - (inline_axes.size() - compute->root_iter_vars().size())];
+    }
+    new_axes.push_back(axis);
+    for (auto reduce_axis: compute->reduce_axis) {
+      if (reduce_axis.same_as(axis)) {
+        is_injective = false;
+        break;
+      }
+    }
+    if (is_injective) {
+      injective_axes.push_back(axis);
+    }
+  }
+  s->op = ComputeOpNode::make(compute->name, compute->tag, compute->attrs, injective_axes,
+                              new_body);
+  s->all_iter_vars = new_axes;
+  s->leaf_iter_vars = new_axes;
+}
+
 void InjectInline(ScheduleNode* sch) {
   sch->InvalidateCache();
 
@@ -981,14 +1185,23 @@ void InjectInline(ScheduleNode* sch) {
   std::vector<Stmt> new_extern_body(sch->stages.size());
   std::vector<bool> extern_changed(sch->stages.size(), false);
   std::unordered_map<Tensor, Operation> inline_tensor_inputs;
+  std::unordered_set<size_t> map_csr_stage;
   // inline all the ops
   for (size_t i = sch->stages.size(); i != 0; --i) {
     Stage stage = sch->stages[i - 1];
+    if (auto extern_op = stage->op.as<ExternOpNode>()) {
+      if (extern_op->attrs.count("csr_op")) {
+        map_csr_stage.insert(i - 1);
+      }
+    }
 
     if (stage->is_output || stage->no_inline_inject) continue;
 
     Array<Var> args;
     Expr body;
+    Array<Expr> csr_args;
+    Stmt csr_body;
+    Array<IterVar> inline_axes;
 
     if (stage->attach_type == kInline) {
 
@@ -1001,6 +1214,7 @@ void InjectInline(ScheduleNode* sch) {
         for (auto iv : compute->axis) {
           args.push_back(iv->var);
         }
+        inline_axes = compute->axis;
         CHECK_EQ(compute->body.size(), 1U)
             << "can only inline compute op with 1 output";
         body = compute->body[0];
@@ -1032,7 +1246,7 @@ void InjectInline(ScheduleNode* sch) {
         continue;
       }
 
-      auto find_body = ProvideBody(output_op);
+      auto find_body = ProvideBody(output_op, map_csr_stage.count(i - 1) > 0);
       find_body.Visit(op_body);
 
       if (!find_body.can_inline()) continue;
@@ -1040,7 +1254,18 @@ void InjectInline(ScheduleNode* sch) {
       stage->attach_type = kInlinedAlready;
       body = find_body.body();
 
-      for (auto arg : find_body.args()) {
+      Array<Expr> tmp_args;
+      if (extern_op != nullptr && extern_op->attrs.count("csr_op")) {
+        csr_args = find_body.args();
+        tmp_args = VarsFromArgs(csr_args);
+        csr_body = op_body;
+        auto collect_axes = CollectAxes();
+        collect_axes.Visit(csr_body);
+        inline_axes = collect_axes.axes_;
+      } else {
+        tmp_args = find_body.args();
+      }
+      for (auto arg : tmp_args) {
         args.push_back(Downcast<Var>(arg));
       }
       inline_tensor_inputs.emplace(stage->op.output(0), stage->op);
@@ -1056,6 +1281,30 @@ void InjectInline(ScheduleNode* sch) {
           if (!new_body[j].size()) {
             new_body[j] = compute->body;
           }
+          if (body->IsInstance<ir::Reduce>()) {
+            auto reduce = body.as<ir::Reduce>();
+            Array<Expr> new_source;
+            for (size_t k = 0; k < reduce->source.size(); ++k) {
+              auto new_source_value = ir::Inline(ir::Evaluate::make(new_body[j][k]),
+                                                 stage->op, args, reduce->source[k]).as<ir::Evaluate>()->value;
+              new_source.push_back(new_source_value);
+            }
+            auto new_value = Reduce::make(
+              reduce->combiner, new_source, reduce->axis, reduce->condition, reduce->value_index);
+            InlineReduce(j, new_value, new_body, changed);
+            UpdateReduceInlineStage(reduce, compute, inline_axes, new_body[j], s);
+          }
+          if (csr_body.defined() && !map_csr_stage.count(j) && InlineCsrWithCompute(j, csr_args, stage->op, new_body)) {
+            map_csr_stage.insert(j);
+            Array<Array<Expr>> csr_output_shape;
+            for (size_t k = 0; k < static_cast<size_t>(s->op->num_outputs()); ++k) {
+              csr_output_shape.push_back(s->op->output_shape(k));
+            }
+            s->csr_output_shape = csr_output_shape;
+            CHECK(!csr_args.empty());
+            s->csr_access = csr_args[0];
+            UpdateComputeInlineStage(compute, inline_axes, new_body[j], s);
+          }
           if (new_body[j][0]->IsInstance<ir::Reduce>()) {
             // specially handle reduction inline for multiplre reductions.
             const ir::Reduce* reduce = new_body[j][0].as<ir::Reduce>();
@@ -1067,7 +1316,7 @@ void InjectInline(ScheduleNode* sch) {
                   << "have the same attribute except value_index";
             }
             Expr new_value = ir::Inline(ir::Evaluate::make(new_body[j][0]),
-                                        stage->op, args, body).as<ir::Evaluate>()->value;
+                                        stage->op, args, body, csr_body.defined()).as<ir::Evaluate>()->value;
             if (!new_value.same_as(new_body[j][0])) {
               changed[j] = true;
               const ir::Reduce* r = new_value.as<ir::Reduce>();
@@ -1083,7 +1332,7 @@ void InjectInline(ScheduleNode* sch) {
           } else {
             for (size_t k = 0; k < new_body[j].size(); ++k) {
               Expr new_value = ir::Inline(ir::Evaluate::make(new_body[j][k]),
-                                          stage->op, args, body).as<ir::Evaluate>()->value;
+                                          stage->op, args, body, csr_body.defined()).as<ir::Evaluate>()->value;
               if (!new_value.same_as(new_body[j][k])) {
                 new_body[j].Set(k, new_value);
                 changed[j] = true;
@@ -1094,7 +1343,7 @@ void InjectInline(ScheduleNode* sch) {
           if (!new_hybrid_body[j].defined()) {
             new_hybrid_body[j] = hybrid->body;
           }
-          Stmt new_stmt = ir::Inline(new_hybrid_body[j], stage->op, args, body);
+          Stmt new_stmt = ir::Inline(new_hybrid_body[j], stage->op, args, body, csr_body.defined());
           if (!new_stmt.same_as(new_hybrid_body[j])) {
             new_hybrid_body[j] = new_stmt;
             hybrid_changed[j] = true;
@@ -1104,7 +1353,19 @@ void InjectInline(ScheduleNode* sch) {
             new_extern_body[j] = extern_op->body;
           }
 
-          Stmt new_stmt = ir::Inline(new_extern_body[j], stage->op, args, body);
+          if (csr_body.defined() && !map_csr_stage.count(j)) {
+            Stmt provide;
+            PostOrderVisit(new_extern_body[j], [&provide](const NodeRef &n) {
+              if (n.as<Provide>() != nullptr) {
+                provide = Downcast<Stmt>(n);
+              }
+            });
+            auto replace_csr_schedule = ReplaceCsrSchedule(provide);
+            auto output_body = replace_csr_schedule.Mutate(csr_body);
+            new_extern_body[j] = output_body;
+            map_csr_stage.insert(j);
+          }
+          Stmt new_stmt = ir::Inline(new_extern_body[j], stage->op, args, body, csr_body.defined());
           if (!new_stmt.same_as(new_extern_body[j])) {
             new_extern_body[j] = new_stmt;
             extern_changed[j] = true;

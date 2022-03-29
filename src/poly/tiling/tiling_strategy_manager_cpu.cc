@@ -165,10 +165,21 @@ void CpuStrategy::SetCsrTileValue() {
     return;
   }
   std::tie(axis, row_length) = pending_axes_[OUTERMOST_AXIS][OUTERMOST_AXIS];
-  int64_t csr_tensor_size = row_length * analyzer_->scop_info_.user_config_.GetCsrAvgRow();
+  int64_t csr_tensor_size = row_length * analyzer_->scop_info_.analysis_result_.GetCsrAvgRow();
   if (csr_tensor_size > CPU_CSR_PARALLEL_CUTOFF) {
     axis->TileRestrainToSingleValue(Expr(CPU_CSR_TILING_FACTOR), TileLevel::CACHE1);
     axis->TileRestrainToSingleValue(Expr(CPU_CSR_TILING_FACTOR), TileLevel::CACHE0);
+  }
+  if (analyzer_->scop_info_.analysis_result_.GetOpTemplate() != Template::REDUCTION) {
+    analyzer_->ForEachAxisTopDown([this](TileAxis *a){
+      if (a == this->analyzer_->RootAxis()) {
+        return;
+      }
+      if (this->analyzer_->scop_info_.analysis_result_.IsCsrDynamicExtent(a->range_extent)) {
+        a->TileRestrainToSingleValue(Expr(CPU_CSR_TILING_FACTOR), TileLevel::CACHE1);
+        a->TileRestrainToSingleValue(Expr(CPU_CSR_TILING_FACTOR), TileLevel::CACHE0);
+      }
+    });
   }
 }
 

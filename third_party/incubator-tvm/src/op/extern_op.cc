@@ -21,9 +21,15 @@
  * \brief External computation rule.
  * \file extern_op.cc
  */
+
+/*
+ * 2022.3.28 - Remove trivial loops for extern ops.
+ */
 #include <tvm/operation.h>
 #include <tvm/arithmetic.h>
 #include <tvm/ir.h>
+#include <tvm/ir_mutator.h>
+#include <tvm/ir_pass.h>
 #include <unordered_set>
 #include "op_util.h"
 
@@ -154,6 +160,20 @@ Stmt ExternOpNode::BuildRealize(
   return realize_body;
 }
 
+class RemoveTrivialLoop : public IRMutator {
+  Stmt Mutate_(const For *op, const Stmt &s) final {
+    auto min = op->min.as<IntImm>();
+    auto extent = op->extent.as<IntImm>();
+    if (min != nullptr && extent != nullptr && extent->value - min->value == 1) {
+      Map<Var, Expr> vmap;
+      vmap.Set(op->loop_var, op->min);
+      auto body = IRMutator::Mutate(op->body);
+      return ir::Substitute(body, vmap);
+    }
+    return IRMutator::Mutate_(op, s);
+  }
+};
+
 Stmt ExternOpNode::BuildProvide(
     const Stage& stage,
     const std::unordered_map<IterVar, Range>& dom_map,
@@ -178,6 +198,9 @@ Stmt ExternOpNode::BuildProvide(
   }
   for (size_t i = inputs.size(); i != 0; --i) {
     f_push_bind(input_placeholders[i - 1], inputs[i - 1]);
+  }
+  if (!debug_keep_trivial_loop) {
+    ret = RemoveTrivialLoop().Mutate(ret);
   }
   return ret;
 }

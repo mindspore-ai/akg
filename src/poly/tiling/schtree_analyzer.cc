@@ -572,6 +572,8 @@ bool ScheduleTreeAnalyzer::MatchNodeWithDynamicLoop(std::unordered_set<const For
   if (matched.find(loop) != matched.end()) return false;
   auto it = loop_dynamic_range_map_.find(loop);
   if (it == loop_dynamic_range_map_.end()) return false;
+  if (analyzer_->scop_info_.analysis_result_.GetCsr() && node.range_max.as<IntImm>() != nullptr &&
+      loop->extent.as<IntImm>() == nullptr) return false;
   CHECK(loop);
   std::vector<std::pair<int64_t, std::string>> ranges = it->second;
   std::string var_name = loop->loop_var.get()->name_hint;

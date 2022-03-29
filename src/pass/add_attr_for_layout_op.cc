@@ -137,7 +137,17 @@ class AttrForLayoutOp : public IRMutator {
   bool is_tensor_of_tensor_{false};
 };
 
-Stmt AddAttrForLayoutOp(const Stmt stmt, Schedule sch) {
+class RemoveLikely : public IRMutator {
+  Expr Mutate_(const Call *op, const Expr &e) final {
+    if (op->is_intrinsic(Call::likely)) {
+      CHECK(op->args.size() > 0);
+      return IRMutator::Mutate(op->args[0]);
+    }
+    return IRMutator::Mutate_(op, e);
+  }
+};
+
+Stmt AddAttrForLayoutOp(const Stmt stmt, Schedule sch, bool need_remove_likely) {
   auto mutator = AttrForLayoutOp();
   auto new_stmt = mutator.Mutate(stmt);
   if (!mutator.tensors_not_promote_.empty()) {
@@ -158,6 +168,10 @@ Stmt AddAttrForLayoutOp(const Stmt stmt, Schedule sch) {
   
   if (AttrExists(sch, "remove_self_dependence")) {
     new_stmt = AttrStmt::make(Expr("INFO"), AKG_REMOVE_SELF_DEPENDENCE, Expr(AKG_REMOVE_SELF_DEPENDENCE), new_stmt);
+  }
+
+  if (need_remove_likely) {
+    new_stmt = RemoveLikely().Mutate(new_stmt);
   }
   return new_stmt;
 }

@@ -28,6 +28,7 @@
 /*
  * 2019.12.30 - Add new function of StmtUseVar.
  * 2021.11.01 - Change the 'name' parameter of 'MakeAPI' to a constant reference when passed in.
+ * 2022.3.28 - Add a parameter to support inline of CSR tensors.
  */
 
 #ifndef TVM_IR_PASS_H_
@@ -44,7 +45,6 @@
 
 namespace air {
 namespace ir {
-
 /*!
  * \brief Simplify the expression.
  * \param expr The expression to be simplifed.
@@ -199,7 +199,8 @@ Expr Substitute(Expr expr, const Map<Var, Expr>& value_map);
 Stmt Inline(Stmt stmt,
             FunctionRef f,
             Array<Var> args,
-            Expr body);
+            Expr body,
+            bool is_csr = false);
 
 /*!
  * \brief Flatten the multi-dimensional read/write
@@ -621,8 +622,6 @@ bool VerifyMemory(LoweredFunc func, int device_type);
  */
 bool VerifyGPUCode(Stmt stmt,
                    Map<std::string, Expr> constraints);
-
-
 }  // namespace ir
 }  // namespace air
 

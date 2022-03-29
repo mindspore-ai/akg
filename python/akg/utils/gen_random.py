@@ -138,8 +138,6 @@ def gen_indices_gather(shape1, shape2, dtype2, axis):
     """Generate indices for gather."""
     assert dtype2 == "int32", "Currently only support int32 indices"
     indices = np.random.randint(low=0, high=shape1[axis], size=shape2).astype(dtype2)
-    offset = np.random.choice((0, 0, 10, -10), shape2).astype(dtype2)
-    indices += offset
     return indices
 
 
@@ -201,9 +199,13 @@ def gen_csr_indices(indices_argument):
     indptr = np.concatenate(
         (np.array([0], dtype=indices_dtype), indptr, np.array([indices_shape[0]], dtype=indices_dtype)))
     indices_choice = np.arange(data_shape[1], dtype=indices_dtype)
-    indices = np.zeros(indices_shape, dtype=indices_dtype)
-    for i in range(0, data_shape[0]):
-        row_start = indptr[i]
-        row_end = indptr[i + 1]
-        indices[row_start: row_end] = np.sort(np.random.choice(indices_choice, row_end - row_start, replace=False))
+    idx_range = indices_choice.copy()
+    idx_bound = np.diff(indptr).reshape(-1, 1)
+    max_count = idx_bound.max().tolist()
+    np.random.shuffle(indices_choice)
+    indices_choice = indices_choice[: max_count]
+    indices_choice.sort()
+    indices = np.where(idx_range[: max_count] < idx_bound, indices_choice, data_shape[1])
+    mask = np.less(indices, data_shape[1]).nonzero()
+    indices = indices[mask]
     return indptr, indices

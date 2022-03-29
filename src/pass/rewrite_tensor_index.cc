@@ -77,12 +77,12 @@ class RewriteTensorIdx : public IRMutator {
         if (extent != nullptr && (extent->a.as<Call>() != nullptr || extent->b.as<Call>() != nullptr)) {
           auto extent_call = extent->a.as<Call>();
           CHECK(extent_call);
-          Var max_var = Variable::make(extent_call->type, "MAX_VAR");
+          Var max_var = Variable::make(extent_call->type, "MAX_VAR_" + std::to_string(++max_var_count_));
           auto new_stmt = For::make(new_op->loop_var, new_op->min, max_var,
                                     new_op->for_type, new_op->device_api, new_op->body);
-          g_csr.Set(max_var, new_op->extent);
-          g_csr.Set(extent->a, Array<Expr>());
-          g_csr.Set(extent->b, Array<Expr>());
+          Array<Expr> replaced;
+          replaced.push_back(new_op->extent);
+          g_csr.Set(max_var, replaced);
           return new_stmt;
         }
       } else if (is_min_binary) {
@@ -241,6 +241,7 @@ class RewriteTensorIdx : public IRMutator {
   int i_{0};
   // for inner tensor index
   std::map<const Node *, int> cache_idx_;
+  size_t max_var_count_{0};
 
  public:
   bool has_invalid_tensor_expr_{false};
