@@ -56,6 +56,7 @@ Stmt Optimize(Stmt &s, BuildInfo &info) {
     ADD_PASS(pm, CleanZeroAligner);
   }
   ADD_PASS(pm, AddAttrsForOp);
+  ADD_PASS(pm, BroadcastForSSA);
   return pm.Run(s);
 }
 

@@ -71,5 +71,8 @@ Stmt ComplexExpander(const Stmt &s, BuildInfo *info);
 // add attrs for op
 Stmt AddAttrsForOp(const Stmt &s, BuildInfo *info);
 
+// add broadct for ssa problem
+Stmt BroadcastForSSA(const Stmt &s, BuildInfo *info);
+
 }  // namespace akg
 #endif  // COMPOSITE_PASS_H_
