@@ -25,7 +25,6 @@
 /*!
  * 2021.01.11
  *     Modify the pass to enable loop unroll for TensorCore in AKG.
- *     Modify the pass to enable data access vectorization.
  */
 
 // Unrolls the loop as in Halide pipeline.
@@ -59,9 +58,6 @@ class LoopUnroller : public IRMutator {
       auto_max_extent_ = 16;
       explicit_unroll_ = false;
       return IRMutator::Mutate_(op, stmt);
-    } else if (op->attr_key == attr::promote_vectorization) {
-      enable_vectorize_ = true;
-      return IRMutator::Mutate_(op, stmt);
     } else if (op->attr_key == "no_unroll") {
       no_unroll_ = true;
       return IRMutator::Mutate_(op, stmt);
@@ -86,11 +82,8 @@ class LoopUnroller : public IRMutator {
   }
 
   Stmt Mutate_(const For* op, const Stmt& s) {
-    if (enable_vectorize_ == true) {
-      enable_vectorize_ = false;
-      Stmt stmt = IRMutator::Mutate_(op, s);
-      op = stmt.as<For>();
-      return For::make(op->loop_var, op->min, op->extent, ForType::Vectorized, op->device_api, op->body);
+    if (op && op->for_type == ForType::Vectorized) {
+      return IRMutator::Mutate_(op, s);
     }
 
     if (no_unroll_) {
@@ -222,8 +215,6 @@ class LoopUnroller : public IRMutator {
   int unroll_depth_{0};
   // Number of total steps unrolled
   int step_count_{0};
-  // Flag for enable vectorization
-  bool enable_vectorize_{false};
   bool no_unroll_{false};
 };
 

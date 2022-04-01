@@ -34,6 +34,8 @@ constexpr int REGISTER_FILE_SIZE_PER_SM = 256 * 1024;
 constexpr int TOTAL_THREAD_NUM_PER_BLOCK = 1024;
 constexpr int MIN_OUTER_LOOP = 2;
 constexpr int MAX_OUTER_LOOP = 64;
+constexpr int BIT32 = 32;
+constexpr int BIT64 = 64;
 
 class IfTensorCore : public IRVisitor {
  public:
@@ -96,13 +98,6 @@ class PrefetchScopeInjector : public IRMutator {
       if_shared_promoted_ = true;
     } else if (op->attr_key == "promote_register_to_global" || op->attr_key == "promote_register_to_shared") {
       if_shared_finished_ = true;
-    } else if (op->attr_key == "promote_vectorization") {
-      if (IsPrefetchBlock(s)) {
-        prefetch_outer_loop_ = (loop_nest_.back()->extent).as<IntImm>()->value;
-        if_prefetch_injected_ = true;
-        return AttrStmt::make(prefetch_var_, PREFETCH_SCOPE, 1, s);
-      }
-      return s;
     }
     return IRMutator::Mutate_(op, s);
   }
@@ -170,7 +165,6 @@ class PrefetchScopeInjector : public IRMutator {
   VarExpr prefetch_var_;
   std::vector<const For *> loop_nest_;
   bool need_prefetch_{false};
-  bool is_vectorize_{false};
   bool if_prefetch_injected_{false};
   bool if_shared_promoted_{false};
   bool if_shared_finished_{false};
@@ -197,13 +191,7 @@ class IfResouceIsEnough : public IRVisitor {
       return IRVisitor::Visit_(op);
     } else if (op->attr_key == air::ir::attr::storage_scope) {
       if (auto alloc = op->body.as<Allocate>()) {
-        if (!promote_local_usage_.defined()) {
-          promote_local_usage_ = make_const(alloc->extents[0].type(), 0);
-        }
         if (op->value.as<StringImm>()->value == "shared") {
-          if (!shared_usage_.defined()) {
-            shared_usage_ = make_const(alloc->extents[0].type(), 0);
-          }
           shared_usage_ +=
             air::arith::ComputeReduce<Mul>(alloc->extents, Expr()) * alloc->type.lanes() * alloc->type.bytes();
         } else if (op->value.as<StringImm>()->value == "local") {
@@ -222,15 +210,20 @@ class IfResouceIsEnough : public IRVisitor {
     } else if (op->attr_key == PREFETCH_SCOPE) {
       in_prefetch_buffer_scope_ = true;
       Visit(op->body);
-      if (!prefetch_local_usage_.defined()) {
-        prefetch_local_usage_ = make_const(transfer_loop_nest_[0]->extent.type(), 0);
+      if (transfer_loop_nest_.empty()) {
+        auto store = op->body.as<Store>();
+        if (store && store->index.as<Ramp>()) {
+          prefetch_local_usage_ += (make_const(Int(BIT64), store->index.as<Ramp>()->lanes) *
+                                    prefetch_data_type_.bytes());
+        }
+      } else {
+        Expr current_local_usage = make_const(transfer_loop_nest_[0]->extent.type(), 1);
+        for (unsigned i = 0; i < transfer_loop_nest_.size(); i++) {
+          current_local_usage *= transfer_loop_nest_[i]->extent - transfer_loop_nest_[i]->min;
+        }
+        prefetch_local_usage_ += current_local_usage * prefetch_data_type_.bytes();
+        transfer_loop_nest_.clear();
       }
-      Expr current_local_usage = make_const(transfer_loop_nest_[0]->extent.type(), 1);
-      for (unsigned i = 0; i < transfer_loop_nest_.size(); i++) {
-        current_local_usage *= transfer_loop_nest_[i]->extent - transfer_loop_nest_[i]->min;
-      }
-      prefetch_local_usage_ += current_local_usage * prefetch_data_type_.bytes();
-      transfer_loop_nest_.clear();
       in_prefetch_buffer_scope_ = false;
     } else {
       return IRVisitor::Visit_(op);
@@ -274,7 +267,9 @@ class IfResouceIsEnough : public IRVisitor {
   bool in_prefetch_buffer_scope_{false};
   Var thread_x_var_, thread_y_var_;
   Expr thread_x_value_, thread_y_value_;
-  Expr shared_usage_, promote_local_usage_, prefetch_local_usage_;
+  Expr shared_usage_{make_const(Int(BIT64), 0)};
+  Expr promote_local_usage_{make_const(Int(BIT64), 0)};
+  Expr prefetch_local_usage_{make_const(Int(BIT64), 0)};
   std::vector<const For *> transfer_loop_nest_;
   air::DataType prefetch_data_type_;
 };
@@ -353,7 +348,7 @@ Stmt InjectTransferBufferScope(Stmt stmt) {
     if ((prefetch_outer_loop > MIN_OUTER_LOOP) && (local_mem_rate < 1) &&
         ((bind_thread_num < max_bind_thread_num / 2) || (prefetch_outer_loop < MAX_OUTER_LOOP))) {
       enable_transfer_buffer = true;
-      g_attrs.Set(kEnableTransferBuffer, air::make_const(Int(32), true));
+      g_attrs.Set(kEnableTransferBuffer, air::make_const(Int(BIT32), true));
       if ((local_mem_rate < (1.0 / float(thread_group) / 2.0)) && (bind_thread_num < max_bind_thread_num)) {
         enable_thread_group = true;
       }

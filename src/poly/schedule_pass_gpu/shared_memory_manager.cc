@@ -316,7 +316,7 @@ MappingCfg *SharedMemoryManager::GetCurrentConfig(isl::schedule_node &node) {
     tile_size = tile_size.set_val(n_member - 1, isl::val(ctx, vectorization_loop));
 
     node = TileBand(node, tile_size).child(0);
-    node = node.insert_mark(PROMOTE_VECTORIZATION).parent();
+    node = node.insert_mark(FOR_VECTORIZED).parent();
   }
 
   auto replace_cfg_map = scop_info_.user_config_.GetReplaceConfig();

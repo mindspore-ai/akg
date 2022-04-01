@@ -239,6 +239,7 @@ std::string CodeGenC::GetBufferRef(
     os << ' ';
     PrintType(t, os);
     os << "*)(";
+    bool need_change_type = false;
     if (!HandleTypeMatch(buffer, t.element_of())) {
       os << '(';
       if (!scope.empty() && IsScopePartOfType()) {
@@ -246,10 +247,14 @@ std::string CodeGenC::GetBufferRef(
       }
       os << ' ';
       PrintType(t.element_of(), os);
-      os << "*)";
+      os << "*)(";
+      need_change_type = true;
     }
     os << vid << " + ";
     PrintExpr(index, os);
+    if (need_change_type) {
+      os << ")";
+    }
     os << "))[0]";
   }
   return os.str();

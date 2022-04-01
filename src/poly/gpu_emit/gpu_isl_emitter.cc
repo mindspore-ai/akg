@@ -140,6 +140,7 @@ Stmt GpuIslEmitter::EmitBlock(const isl::ast_node_block &block_node) {
 }
 
 Stmt GpuIslEmitter::EmitFor(const isl::ast_node_for &node) {
+  ForType for_type = for_type_;
   isl::id isl_iter_id = node.get_iterator().as<isl::ast_expr_id>().get_id();
   VarExpr iter_expr(isl_iter_id.to_str());
   PushIter(iter_expr.get());
@@ -183,7 +184,7 @@ Stmt GpuIslEmitter::EmitFor(const isl::ast_node_for &node) {
     stride_modify_iter_map_.erase(iter_expr.get());
   }
   PopIter(iter_expr.get());
-  Stmt stmt = For::make(iter_expr, init_expr, cond_expr, ForType::Serial, DeviceAPI::None, body_stmt);
+  Stmt stmt = For::make(iter_expr, init_expr, cond_expr, for_type, DeviceAPI::None, body_stmt);
   return stmt;
 }
 
@@ -393,14 +394,21 @@ Stmt GpuIslEmitter::EmitMark(const isl::ast_node_mark &node) {
 
   Stmt stmt;
 
-  if ((mark == PROMOTE_VECTORIZATION) || (mark == PROMOTE_REGISTER_TO_GLOBAL) || (mark == PROMOTE_REGISTER_TO_SHARED) ||
+  if ((mark == FOR_VECTORIZED) || (mark == PROMOTE_REGISTER_TO_GLOBAL) || (mark == PROMOTE_REGISTER_TO_SHARED) ||
       (mark == PROMOTE_SHARED_TO_GLOBAL) || (mark == SHARED_MEM_PROMOTED_COMPLETE) ||
       IsStartsWith(mark, REDUCE_ATOMIC_FLAG)) {
+    bool is_specific_for = (AkgSupportedForType.find(mark) != AkgSupportedForType.end());
+    if (is_specific_for) {
+      for_type_ = AkgSupportedForType.at(mark);
+    }
     stmt = EmitAst(node.get_node());
+    for_type_ = ForType::Serial;
     if (!stmt.defined()) {
       return Stmt();
     }
-    stmt = AttrStmt::make(Expr("INFO"), mark, StringImm::make(mark), stmt);
+    if (!is_specific_for) {
+      stmt = AttrStmt::make(Expr("INFO"), mark, StringImm::make(mark), stmt);
+    }
   } else {
     stmt = EmitAst(node.get_node());
   }
