@@ -1,5 +1,5 @@
 /**
- * Copyright 2020-2021 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -85,8 +85,8 @@ class NpuInfo {
 class GpuInfo {
  public:
   ~GpuInfo() {}
-  static GpuInfo &GetInstance() {
-    static GpuInfo hardware_info;
+  static GpuInfo &GetInstance(const std::string &device_type) {
+    static GpuInfo hardware_info(device_type);
     return hardware_info;
   }
 
@@ -95,19 +95,39 @@ class GpuInfo {
     return gpu_mem_limit_[scope_idx];
   }
 
- private:
-  GpuInfo() { InitGpuMemoryLimit(); }
-  int64_t gpu_mem_limit_[MEM_SCOPE_BULK]{0};
+  int GetNumSm() { return num_sm_; }
 
-  void InitGpuMemoryLimit() {
-    auto CollectLimit = [this](const std::string &scope, TilingMemScope mem) {
-      air::GpuMemoryInfo info = air::GetGpuMemoryInfo(scope);
+  int GetActiveBlocksPerSm() { return active_blocks_per_sm_; }
+
+  int GetMinElemForIoBound() { return min_elem_for_io_bound_; }
+
+ private:
+  explicit GpuInfo(const std::string &device_type) {
+    InitGpuMemoryLimit(device_type);
+    InitGpuComputeCapability(device_type);
+  }
+  int64_t gpu_mem_limit_[MEM_SCOPE_BULK]{0};
+  int num_sm_{80};
+  int active_blocks_per_sm_{5};
+  int min_elem_for_io_bound_{2};
+
+  void InitGpuMemoryLimit(const std::string &device_type) {
+    auto CollectLimit = [this, &device_type](const std::string &scope, TilingMemScope mem) {
+      air::GpuMemoryInfo info = air::GetGpuMemoryInfo(scope, device_type);
       CHECK(info.defined());
       gpu_mem_limit_[mem] = info->max_bytes_per_block;
     };
     CollectLimit("shared", MEM_SCOPE_SHARED);
     CollectLimit("reg", MEM_SCOPE_LOCAL);
     gpu_mem_limit_[MEM_SCOPE_GM] = 0;
+  }
+
+  void InitGpuComputeCapability(const std::string &device_type) {
+    std::string scope = "instance";
+    air::GpuComputeInfo info = air::GetGpuComputeInfo(scope, device_type);
+    num_sm_ = info->num_sm;
+    active_blocks_per_sm_ = info->active_blocks_per_sm;
+    min_elem_for_io_bound_ = info->min_elem_for_io_bound;
   }
 };
 

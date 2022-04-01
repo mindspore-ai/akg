@@ -809,6 +809,8 @@ void AnalyzeBandNode::DetermineTemplateOfBand(std::unique_ptr<OuterBandNode> &bn
     bn->template_type = Template::EXTERN_CALL;
   } else if (concated_op_type.find(AT_COUNT) != std::string::npos) {
     bn->template_type = Template::COUNT_OP;
+  } else if (concated_op_type.find(AT_PARTIAL_ELEM) != std::string::npos) {
+    bn->template_type = Template::PARTIAL_ELEM;
   } else {
     bn->template_type = Template::PURE_ELEM;
   }

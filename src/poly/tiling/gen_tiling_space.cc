@@ -1,6 +1,6 @@
 
 /**
- * Copyright 2020 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -374,7 +374,7 @@ class TileSpaceCollector {
         this->mem_limit_[i] = d_info.GetMemoryLimitInScope(i);
       }
     } else {
-      GpuInfo &gpu_info = GpuInfo::GetInstance();
+      GpuInfo &gpu_info = GpuInfo::GetInstance(analyzer_.scop_info_.user_config_.GetDeviceType());
       for (auto i = 0; i < MEM_SCOPE_BULK; ++i) {
         this->mem_limit_[i] = gpu_info.GetMemoryLimitInScope(i);
       }

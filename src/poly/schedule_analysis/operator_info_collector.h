@@ -58,7 +58,7 @@ class OpTypeCollector : public IRVisitor {
   std::string GetSingleOpType(const TensorEntry &dst, const TensorEntry &srcs);
   std::string GetBasicOpType(const TensorEntry &dst, const std::vector<TensorEntry> &srcs);
   TensorEntry MakeTensorEntry(const ToTTensor &tot);
-  size_t CountUniqueLoopName(std::vector<VarNames> &var_names);
+  size_t CountUniqueLoopName(std::vector<VarNames> &var_names, bool count_num = false);
   bool IsTranspose(std::vector<VarNames> &dst_vars, std::vector<VarNames> &src_vars);
   std::string GetFusedCaseType(const TensorEntry &d, const TensorEntry &s);
   TensorEntry GetDstTensor(const Provide *op);

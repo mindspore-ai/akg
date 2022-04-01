@@ -294,7 +294,7 @@ class UserConfig {
     ParseBoolAttr(attrs, "pragma_enable_matmul", &enable_matmul_);
 
     if (GetTarget() == TARGET_CUDA) {
-      ParseStringAttr(attrs, "bind_elem_per_thread", &elem_per_thread_);
+      ParseStringAttr(attrs, "device_type", &device_type_);
       ParseMappingCfgAttr(attrs, "bind_block", &block_cfg_);
       ParseMappingCfgAttr(attrs, "bind_thread", &thread_cfg_);
       ParseIntAttr(attrs, "max_elem_per_thread", &max_elem_per_thread_);
@@ -366,7 +366,7 @@ class UserConfig {
   std::vector<int> GetC0BlockSize() { return c0_block_size_; }
   std::vector<NodeRef> GetCustomTiling() { return custom_tiling_; }
   std::string GetBDim() const { return b_dim_; }
-  std::string GetElemPerThread() const { return elem_per_thread_; }
+  std::string GetDeviceType() const { return device_type_; }
   void SetDefaultDim(std::string b_dim) { b_dim_ = b_dim; }
   void SetPragmaSpeedUpTiling(bool pragma_speedup_tiling) { pragma_speedup_tiling_ = pragma_speedup_tiling; }
   bool GetPragmaSpeedUpTiling() const { return pragma_speedup_tiling_; }
@@ -730,8 +730,8 @@ class UserConfig {
   MappingCfg thread_cfg_;
   std::unordered_map<std::string, MappingCfg *> replace_cfg_;
   std::vector<int> c0_block_size_;
+  std::string device_type_;
   int max_elem_per_thread_{1024};
-  std::string elem_per_thread_;
   std::vector<NodeRef> custom_tiling_;
   bool pragma_analyze_reuse_buffer_{true};
   bool pragma_speedup_tiling_{false};
@@ -879,6 +879,7 @@ constexpr auto AT_REDUCE = "REDUCE";
 constexpr auto AT_ELEMWISE = "ELEMWISE";
 constexpr auto AT_CALL = "CALL";
 constexpr auto AT_COUNT = "COUNT";
+constexpr auto AT_PARTIAL_ELEM = "PARTIAL_ELEM";
 
 enum Template {
   DEFAULT = 0,
@@ -893,6 +894,7 @@ enum Template {
   CUSTOM_CONFIG,
   EXTERN_CALL,
   COUNT_OP,
+  PARTIAL_ELEM,
   TEMPLATE_BULK
 };
 
@@ -1193,9 +1195,9 @@ class AnalysisResult {
   BufferDefInfo default_buffer_def_info_;
   std::unordered_map<const For *, std::vector<ProvideEntry>> provides_ana_;
   std::unordered_map<int, std::string> template_map_ = {
-    {0, "DEFAULT"},           {1, "CONV"},          {2, "MATMUL"},       {3, "REDUCTION"},
-    {4, "BITWISE_REDUCTION"}, {5, "BROADCAST_OP"},  {6, "TRANSPOSE_OP"}, {7, "PAD_OP"},
-    {8, "PURE_ELEM"},         {9, "CUSTOM_CONFIG"}, {10, "EXTERN_CALL"}, {11, "COUNT_OP"}};
+    {0, "DEFAULT"},      {1, "CONV"},         {2, "MATMUL"},       {3, "REDUCTION"}, {4, "BITWISE_REDUCTION"},
+    {5, "BROADCAST_OP"}, {6, "TRANSPOSE_OP"}, {7, "PAD_OP"},       {8, "PURE_ELEM"}, {9, "CUSTOM_CONFIG"},
+    {10, "EXTERN_CALL"}, {11, "COUNT_OP"},    {12, "PARTIAL_ELEM"}};
   std::unordered_map<int, std::string> direction_map_ = {
     {0, "UNKNOWN"}, {1, "X_DIRECTION"}, {2, "Y_DIRECTION"}, {3, "ALL_DIRECTION"}};
 
