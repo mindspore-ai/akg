@@ -310,9 +310,6 @@ void ReduceStrategy::AnalyzeReduceConfig(ReduceDirection direction, int band_ind
   }
   if (!analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib()) {
     DisableReduceMapping();
-    if (direction == ReduceDirection::X) {
-      AkgReduceLibStrategyOnGpu(band_index);
-    }
   } else {
     AkgReduceLibStrategyOnGpu(band_index);
   }
