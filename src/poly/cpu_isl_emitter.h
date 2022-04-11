@@ -41,8 +41,6 @@ class CpuIslEmitter : virtual public IslEmitter {
   Stmt EmitMatrixTranspose(const std::vector<std::string> &names);
   Stmt EmitForParallel(const Stmt &stmt);
 
-  // emit for ast_node_for
-  ForType for_type_{ForType::Serial};
   int parallel_for_num_{0};
 };
 

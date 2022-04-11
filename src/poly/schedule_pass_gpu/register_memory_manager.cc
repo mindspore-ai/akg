@@ -135,8 +135,8 @@ isl::schedule_node RegisterMemoryManager::InsertMarkerForEmit(const isl::schedul
     }
     node = InsertMarkerForThreadGroup(node, write_name_, marker_name);
   } else if (current_outer_bn_->enable_vectorization) {
-    node = InsertMarkerForThreadGroup(node, GML_READ_ID_NAME, PROMOTE_VECTORIZATION);
-    node = InsertMarkerForThreadGroup(node, GML_WRITE_ID_NAME, PROMOTE_VECTORIZATION);
+    node = InsertMarkerForThreadGroup(node, GML_READ_ID_NAME, FOR_VECTORIZED);
+    node = InsertMarkerForThreadGroup(node, GML_WRITE_ID_NAME, FOR_VECTORIZED);
   }
   return node;
 }

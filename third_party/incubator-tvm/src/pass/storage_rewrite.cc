@@ -322,6 +322,9 @@ class SharedMemRewriter : public IRMutator {
       auto itoffset = shared_offset_.find(it->first);
       CHECK(itoffset != shared_offset_.end());
       Expr new_index = op->index + itoffset->second;
+      if (auto ramp = op->index.as<Ramp>()) {
+        new_index = Ramp::make(ramp->base + itoffset->second, ramp->stride, ramp->lanes);
+      }
       auto itvar = trans_var_.find(op->buffer_var->name_hint);
       CHECK(itvar != trans_var_.end());
       return Store::make(itvar->second, op->value, new_index, op->predicate);
@@ -337,9 +340,13 @@ class SharedMemRewriter : public IRMutator {
       auto itoffset = shared_offset_.find(it->first);
       CHECK(itoffset != shared_offset_.end());
       Expr new_index = op->index + itoffset->second;
+      if (auto ramp = op->index.as<Ramp>()) {
+        new_index = Ramp::make(ramp->base + itoffset->second, ramp->stride, ramp->lanes);
+      }
       auto itvar = trans_var_.find(op->buffer_var->name_hint);
       CHECK(itvar != trans_var_.end());
-      return Load::make(op->type, itvar->second, new_index, op->predicate);
+      int lanes = std::max(new_index.type().lanes(), op->predicate.type().lanes());
+      return Load::make(op->type.with_lanes(lanes), itvar->second, new_index, op->predicate);
     }
     return expr;
   }

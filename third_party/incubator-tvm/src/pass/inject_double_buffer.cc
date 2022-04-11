@@ -46,6 +46,19 @@ namespace ir {
 constexpr auto TRANSFER_WRITE_INDEX = "transfer_write_index";
 constexpr auto USE_THREAD_GROUP = "use_thread_group";
 
+inline Expr BroadcastTo(Expr e, int lanes) {
+  if (e.type().lanes() == lanes) return e;
+  if (const Broadcast* op = e.as<Broadcast>()) {
+    if (lanes % op->lanes == 0) {
+      return Broadcast::make(op->value, lanes);
+    }
+  }
+  CHECK_EQ(e.type().lanes(), 1)
+      << "Cannot broadcast lane=" << e.type().lanes()
+      << " to " << lanes;
+  return Broadcast::make(e, lanes);
+}
+
 // Detect double buffer variables.
 class DoubleBufferDetector : public IRVisitor {
  public:
@@ -394,8 +407,14 @@ class DoubleBufferInjector : public IRMutator {
         if (e.type != transfer_type) {
           e.type = transfer_type;
         }
+        int lanes = std::max(store->value.type().lanes(), transfer_index.type().lanes());
+        auto val = store->value.as<Load>()->index.as<Ramp>();
+        if (val) {
+          transfer_index = Ramp::make(transfer_index, val->stride, val->lanes);
+        }
         Stmt transfer_store =
-            Store::make(e.transfer_buffer, store->value, transfer_index, store->predicate);
+            Store::make(e.transfer_buffer, BroadcastTo(store->value, lanes),
+                        BroadcastTo(transfer_index, lanes), BroadcastTo(store->predicate, lanes));
         if (use_double_buffer_) {
           CHECK(e.stride.defined());
           transfer_store =

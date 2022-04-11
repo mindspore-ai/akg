@@ -19,6 +19,8 @@
 
 /*!
  * 2021.11.09 - Support vectorization of non-last axis.
+ *
+ * 2022.02.20 - Support vectorization when the extent of loop is odd.
  */
 
 /*!
@@ -120,10 +122,10 @@ class Vectorizer : public IRMutator {
 
 
   Expr Mutate_(const Add* op, const Expr &e) final {
-    return AddSubVec(op, e);
+    return BinaryVecCompute(op, e);
   }
   Expr Mutate_(const Sub* op, const Expr &e) final {
-    return AddSubVec(op, e);
+    return BinaryVecCompute(op, e);
   }
   Expr Mutate_(const Mul* op, const Expr &e) final {
     Expr a = this->Mutate(op->a);
@@ -137,23 +139,30 @@ class Vectorizer : public IRMutator {
         const Ramp* b_ramp = b.as<Ramp>();
         const Ramp* a_ramp = a.as<Ramp>();
         if (a_ramp && b.type().lanes() == 1 && analyzer_.CanProve(b > 0)) {
+          auto new_stride = a_ramp->stride;
+          if (a_ramp->base.as<IntImm>() && a_ramp->base.as<IntImm>()->value == 0) {
+            new_stride *= b;
+          }
           return Ramp::make(
-              a_ramp->base * b, a_ramp->stride * b, a_ramp->lanes);
+              a_ramp->base * b, new_stride, a_ramp->lanes);
         }
         if (b_ramp && a.type().lanes() == 1 && analyzer_.CanProve(a > 0)) {
+          auto new_stride = b_ramp->stride;
+          if (b_ramp->base.as<IntImm>() && b_ramp->base.as<IntImm>()->value == 0) {
+            new_stride *= a;
+          }
           return Ramp::make(
-              b_ramp->base * a, b_ramp->stride * a, b_ramp->lanes);
+              b_ramp->base * a, new_stride, b_ramp->lanes);
         }
       }
       return Mul::make(BroadcastTo(a, lanes), BroadcastTo(b, lanes));
     }
-    return BinaryVec(op, e);
   }
   Expr Mutate_(const Div* op, const Expr &e) final {
-    return BinaryVec(op, e);
+    return BinaryVecCompute(op, e);
   }
   Expr Mutate_(const Mod* op, const Expr &e) final {
-    return BinaryVec(op, e);
+    return BinaryVecCompute(op, e);
   }
   Expr Mutate_(const FloorDiv* op, const Expr &e) final {
     return BinaryVec(op, e);
@@ -485,6 +494,7 @@ class Vectorizer : public IRMutator {
     if (!changed) return arr;
     return Array<Expr>(new_arr);
   }
+
   template<typename T>
   Expr BinaryVec(const T* op, const Expr& e) {
     Expr a = this->Mutate(op->a);
@@ -497,8 +507,9 @@ class Vectorizer : public IRMutator {
       return T::make(BroadcastTo(a, lanes), BroadcastTo(b, lanes));
     }
   }
+
   template<typename T>
-  Expr AddSubVec(const T* op, const Expr& e) {
+  Expr BinaryVecCompute(const T* op, const Expr& e) {
     Expr a = this->Mutate(op->a);
     Expr b = this->Mutate(op->b);
     if (a.same_as(op->a) &&
@@ -512,17 +523,42 @@ class Vectorizer : public IRMutator {
         if (a.type().lanes() == 1 && b_ramp) {
           return Ramp::make(
               arith::Compute<T>(a, b_ramp->base),
-              arith::Compute<T>(make_zero(b_ramp->stride.type()), b_ramp->stride),
+              b_ramp->stride,
               b_ramp->lanes);
         }
         if (b.type().lanes() == 1 && a_ramp) {
           return Ramp::make(
               arith::Compute<T>(a_ramp->base, b), a_ramp->stride, a_ramp->lanes);
         }
+        bool is_ramp = (a_ramp && b_ramp && Equal(a_ramp->stride, b_ramp->stride) &&
+                       (a_ramp->lanes == b_ramp->lanes));
+        if (is_ramp) {
+          return Ramp::make(
+              arith::Compute<T>(a_ramp->base, b_ramp->base),
+              b_ramp->stride,
+              b_ramp->lanes);
+        }
       }
       return T::make(BroadcastTo(a, lanes), BroadcastTo(b, lanes));
     }
   }
+};
+
+class MakeOneTailStmt : public IRMutator {
+ public:
+  MakeOneTailStmt(Expr var, int32_t base) : var_(var), base_(base) {}
+
+  Expr Mutate_(const Variable* v, const Expr& e) final {
+    if (v == var_.get()) {
+      return Expr(base_);
+    } else {
+      return e;
+    }
+  }
+
+ private:
+  Expr var_;
+  int32_t base_;
 };
 
 class LoopVectorizer : public IRMutator {
@@ -535,7 +571,14 @@ class LoopVectorizer : public IRMutator {
       if (!succ || lanes < 1) {
         LOG(FATAL) << "Failed to vectorize loop with extent " << op->extent;
       }
-      return Vectorizer(op->loop_var, lanes).Mutate(op->body);
+      if (lanes > 1 && lanes % 2 != 0) {
+        std::vector<Stmt> statments_;
+        statments_.push_back(Vectorizer(op->loop_var, lanes - 1).Mutate(op->body));
+        statments_.push_back(MakeOneTailStmt(op->loop_var, lanes - 1).Mutate(op->body));
+        return Block::make(statments_);
+      } else {
+        return Vectorizer(op->loop_var, lanes).Mutate(op->body);
+      }
     } else {
       return IRMutator::Mutate_(op, s);
     }

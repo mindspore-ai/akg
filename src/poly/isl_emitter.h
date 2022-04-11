@@ -137,6 +137,9 @@ class IslEmitter {
 
   VarMap var_map_;
 
+  // emit for ast_node_for
+  ForType for_type_{ForType::Serial};
+
   // emit in if
   std::vector<const Node *> cur_if_list_;
   std::unordered_map<isl::id, std::vector<const Node *>, isl::IslIdIslHash> if_map_;

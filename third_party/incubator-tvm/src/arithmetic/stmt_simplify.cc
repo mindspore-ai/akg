@@ -49,6 +49,9 @@ class StmtSimplifier : public IRMutatorWithAnalyzer {
   using Parent::Mutate_;
 
   Expr Mutate(Expr expr) final {
+    if (expr.as<Ramp>()) {
+      return expr;
+    }
     return analyzer_->Simplify(expr);
   }
 
