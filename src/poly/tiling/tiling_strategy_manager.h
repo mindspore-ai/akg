@@ -455,7 +455,13 @@ class GemmStrategy : public TilingStrategy {
 
 class GpuStrategy : public TilingStrategy {
  public:
-  explicit GpuStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {}
+  explicit GpuStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {
+    GpuInfo &gpu_info = GpuInfo::GetInstance(analyzer_->scop_info_.user_config_.GetDeviceType());
+    num_sm_ = gpu_info.GetNumSm();
+    auto abps = gpu_info.GetActiveBlocksPerSm();
+    active_blocks_per_sm_ = std::make_pair(abps, abps + 1);
+    min_elem_for_io_bound_ = gpu_info.GetMinElemForIoBound();
+  }
 
   bool CheckNeedInjectiveSpeedUp();
   void AddNpuConstraint() override;
@@ -536,7 +542,6 @@ class GpuStrategy : public TilingStrategy {
   int64_t elem_per_thread_[3]{static_cast<int64_t>(SpItemPerThread::AUTO)};
   int64_t min_elem_for_io_bound_ = 2;
   size_t depth_{0};
-  bool need_reverse_{false};
   bool reverse_binding_{false};
   int64_t fused_size_{1};
   std::unordered_map<int, std::string> mapping_idx_pos_ = {{0, "x"}, {1, "y"}, {2, "z"}};
@@ -554,6 +559,8 @@ class GpuStrategy : public TilingStrategy {
   int coalesced_size_;
   int total_injective_size_;
   int64_t total_vectorized_bytes_ = 16;  // The default total number of bytes for vectorization is 16.
+  int max_buf_size_to_speedup_inj_ = 5;
+  int double_{2};
 };
 
 class CpuStrategy : public TilingStrategy {

@@ -1,5 +1,5 @@
 /**
- * Copyright 2020-2021 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,13 +28,20 @@ using air::runtime::TVMArgs;
 using air::runtime::TVMRetValue;
 
 TVM_REGISTER_API("gpu.info.mem.shared").set_body([](const TVMArgs args, TVMRetValue *ret) {
-  std::string device_type = akg::common::GetStringEnv("AKG_DEVICE_TYPE");
-  device_type = device_type.empty() ? "v100" : device_type;
+  std::string device_type = akg::common::GetStringEnv("GPU_DEVICE_TYPE");
+  if (device_type.empty() && args.size() == 1) {
+    device_type = std::string(args[0]);
+  } else {
+    device_type = "v100";
+  }
   int default_mem = -1;
   int max_mem = -1;
   if (device_type == "v100") {
     default_mem = 48 * 1024;
     max_mem = 96 * 1024;
+  } else if (device_type == "a100") {
+    default_mem = 64 * 1024;
+    max_mem = 128 * 1024;
   }
   CHECK_NE(default_mem, -1) << "Invalid query for memory on " << device_type;
 
@@ -48,10 +55,16 @@ TVM_REGISTER_API("gpu.info.mem.shared").set_body([](const TVMArgs args, TVMRetVa
 });
 
 TVM_REGISTER_API("gpu.info.mem.reg").set_body([](const TVMArgs args, TVMRetValue *ret) {
-  std::string device_type = akg::common::GetStringEnv("AKG_DEVICE_TYPE");
-  device_type = device_type.empty() ? "v100" : device_type;
+  std::string device_type = akg::common::GetStringEnv("GPU_DEVICE_TYPE");
+  if (device_type.empty() && args.size() == 1) {
+    device_type = std::string(args[0]);
+  } else {
+    device_type = "v100";
+  }
   int default_mem = -1;
   if (device_type == "v100") {
+    default_mem = 64 * 1024;
+  } else if (device_type == "a100") {
     default_mem = 64 * 1024;
   }
   CHECK_NE(default_mem, -1) << "Invalid query for memory on " << device_type;
@@ -59,6 +72,40 @@ TVM_REGISTER_API("gpu.info.mem.reg").set_body([](const TVMArgs args, TVMRetValue
   auto node = air::make_node<air::GpuMemoryInfoNode>();
   node->max_bytes_per_block = default_mem;
   *ret = air::GpuMemoryInfo(node);
+});
+
+TVM_REGISTER_API("gpu.info.compute.instance").set_body([](const TVMArgs args, TVMRetValue *ret) {
+  std::string device_type = akg::common::GetStringEnv("GPU_DEVICE_TYPE");
+  if (device_type.empty() && args.size() == 1) {
+    device_type = std::string(args[0]);
+  } else {
+    device_type = "v100";
+  }
+  int abps = akg::common::GetIntegerEnv("abps");
+  int io = akg::common::GetIntegerEnv("io");
+
+  device_type = device_type.empty() ? "v100" : device_type;
+  int num_sm = -1;
+  int active_blocks_per_sm = -1;
+  int min_elem_for_io_bound = -1;
+  if (device_type == "v100") {
+    num_sm = 80;
+    active_blocks_per_sm = 5;
+    min_elem_for_io_bound = 2;
+  } else if (device_type == "a100") {
+    num_sm = 108;
+    active_blocks_per_sm = abps == 0 ? 10 : abps;
+    min_elem_for_io_bound = io == 0 ? 2 : io;
+  }
+  CHECK_NE(num_sm, -1) << "Invalid query for compute ability on " << device_type;
+  CHECK_NE(active_blocks_per_sm, -1) << "Invalid query for compute ability on " << device_type;
+  CHECK_NE(min_elem_for_io_bound, -1) << "Invalid query for compute ability on " << device_type;
+
+  auto node = air::make_node<air::GpuComputeInfoNode>();
+  node->num_sm = num_sm;
+  node->active_blocks_per_sm = active_blocks_per_sm;
+  node->min_elem_for_io_bound = min_elem_for_io_bound;
+  *ret = air::GpuComputeInfo(node);
 });
 
 }  // namespace ir

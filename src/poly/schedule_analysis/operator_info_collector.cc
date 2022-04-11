@@ -23,9 +23,7 @@ namespace poly {
 
 class CollectToTTensor : public IRVisitor {
  public:
-  void Visit_(const Variable *op) final {
-    loop_vars_.insert(op->name_hint);
-  }
+  void Visit_(const Variable *op) final { loop_vars_.insert(op->name_hint); }
 
   void Visit_(const IntImm *op) final {
     if (scope_halide_) {
@@ -35,7 +33,9 @@ class CollectToTTensor : public IRVisitor {
 
   void Visit_(const Call *op) final {
     if (op->call_type == Call::PureIntrinsic) {
-      if(IsVisitPureIntrinsicEnd(op)) { return; }
+      if (IsVisitPureIntrinsicEnd(op)) {
+        return;
+      }
     } else if (op->call_type == Call::Halide) {
       scope_halide_ = true;
       if (!scope_collect_) {
@@ -44,7 +44,7 @@ class CollectToTTensor : public IRVisitor {
         return;
       }
     }
-    for (auto e: op->args) {
+    for (auto e : op->args) {
       IRVisitor::Visit(e);
     }
     scope_halide_ = false;
@@ -136,7 +136,7 @@ class CollectToTTensor : public IRVisitor {
     indices_.clear();
     tensor_name_ = "";
     scope_collect_ = true;
-    for (auto e: args) {
+    for (auto e : args) {
       IRVisitor::Visit(e);
     }
     scope_collect_ = false;
@@ -154,7 +154,7 @@ class CollectToTTensor : public IRVisitor {
     CollectLoopVars_(args);
     scope_rhs_ = false;
     rhs_idx_.clear();
-    rhs_tensor.name = func_name.empty()? tensor_name_ : func_name;
+    rhs_tensor.name = func_name.empty() ? tensor_name_ : func_name;
     rhs_tensor.loop_vars.insert(loop_vars_.begin(), loop_vars_.end());
     rhs_tensor.indices.assign(indices_.begin(), indices_.end());
     rhs.push_back(rhs_tensor);
@@ -189,9 +189,7 @@ class CheckContainsConst : public IRVisitor {
     IRVisitor::Visit(op->false_value);
   }
 
-  void Visit_(const IntImm *op) final {
-    contains_const_ = true;
-  }
+  void Visit_(const IntImm *op) final { contains_const_ = true; }
 
   const FunctionRef &func_;
 };
@@ -209,8 +207,7 @@ void OpTypeCollector::WriteToScopInfo() {
 }
 
 void OpTypeCollector::Dump() {
-  LOG(INFO) << "OP TEMPLATE = "
-            << scop_info_.analysis_result_.ShowOpTemplate();
+  LOG(INFO) << "OP TEMPLATE = " << scop_info_.analysis_result_.ShowOpTemplate();
   for (auto it : provides_ana_) {
     auto loop = it.first;
     auto provs = it.second;
@@ -259,13 +256,13 @@ void OpTypeCollector::Visit_(const IfThenElse *op) {
 TensorEntry OpTypeCollector::MakeTensorEntry(const ToTTensor &tot) {
   TensorEntry tensor;
   tensor.name = tot.name;
-  for (std::string var: tot.loop_vars) {
+  for (std::string var : tot.loop_vars) {
     tensor.args.push_back(Expr(var));
     VarNames vname;
     vname.push_back(var);
     tensor.var_names.push_back(vname);
   }
-  for (int idx: tot.indices) {
+  for (int idx : tot.indices) {
     tensor.args.push_back(Expr(idx));
   }
   tensor = MatchLoopByName(tensor);
@@ -273,7 +270,7 @@ TensorEntry OpTypeCollector::MakeTensorEntry(const ToTTensor &tot) {
 }
 
 const Call *GetAtomicRhs(const Array<Expr> &args) {
-  for (auto e: args) {
+  for (auto e : args) {
     auto ref_call = e.as<Call>();
     if (ref_call != nullptr && ref_call->name == "&" && static_cast<int>(ref_call->args.size()) == 1) {
       auto atomic_rhs = ref_call->args[0].as<Call>();
@@ -292,7 +289,7 @@ void OpTypeCollector::Visit_(const Evaluate *op) {
       auto atomic_rhs = GetAtomicRhs(call->args);
       CHECK(atomic_rhs);
       count_op_tensor_.name = call->name;
-      for (auto arg: atomic_rhs->args) {
+      for (auto arg : atomic_rhs->args) {
         VarNames vname;
         vname = VisitVarNames(arg, vname);
         count_op_tensor_.var_names.emplace_back(vname);
@@ -310,7 +307,7 @@ TensorEntry OpTypeCollector::GetDstTensor(const Provide *op) {
   dst_tensor.name = op->func->func_name();
   for (auto arg : op->args) {
     VarNames vname;
-    vname = VisitVarNames(arg, vname);
+    vname = VisitVarNames(arg, vname, true);
     dst_tensor.var_names.emplace_back(vname);
   }
   dst_tensor = MatchLoopByName(dst_tensor);
@@ -338,7 +335,7 @@ std::vector<TensorEntry> OpTypeCollector::GetSourceTensors(const Provide *op) {
     // get variable names
     for (auto arg : call->args) {
       VarNames vname;
-      vname = VisitVarNames(arg, vname);
+      vname = VisitVarNames(arg, vname, true);
       tensor.var_names.emplace_back(vname);
     }
     tensor = MatchLoopByName(tensor);
@@ -393,7 +390,7 @@ void OpTypeCollector::AnalyzeProvide(const Provide *op) {
     tot_tensors.Visit_(op);
     TensorEntry lhs = MakeTensorEntry(tot_tensors.lhs);
     std::vector<TensorEntry> rhs;
-    for (auto rhs_tensor: tot_tensors.rhs) {
+    for (auto rhs_tensor : tot_tensors.rhs) {
       rhs.push_back(MakeTensorEntry(rhs_tensor));
     }
     basic_op_type = GetBasicOpType(lhs, rhs);
@@ -435,11 +432,11 @@ TensorEntry OpTypeCollector::MatchLoopByName(TensorEntry tensor) {
   return tensor;
 }
 
-size_t OpTypeCollector::CountUniqueLoopName(std::vector<VarNames> &var_names) {
+size_t OpTypeCollector::CountUniqueLoopName(std::vector<VarNames> &var_names, bool count_num) {
   std::unordered_set<std::string> uni_name;
   for (auto names : var_names) {
     for (auto n : names) {
-      if (IsNum(n)) {
+      if (!count_num && IsNum(n)) {
         continue;
       }
       uni_name.insert(n);
@@ -449,7 +446,9 @@ size_t OpTypeCollector::CountUniqueLoopName(std::vector<VarNames> &var_names) {
 }
 
 bool OpTypeCollector::IsTranspose(std::vector<VarNames> &dst_vars, std::vector<VarNames> &src_vars) {
-  if (dst_vars.empty() || src_vars.empty()) { return false; }
+  if (dst_vars.empty() || src_vars.empty()) {
+    return false;
+  }
   while (!dst_vars.empty() && !src_vars.empty()) {
     VarNames dst_name = dst_vars.back();
     VarNames src_name = src_vars.back();
@@ -507,6 +506,9 @@ std::string OpTypeCollector::GetSingleOpType(const TensorEntry &d, const TensorE
   auto src_vars = s.var_names;
   auto dst_vars_size = CountUniqueLoopName(dst_vars);
   auto src_vars_size = CountUniqueLoopName(src_vars);
+  auto dst_vars_size_with_num = CountUniqueLoopName(dst_vars, true);
+  auto src_vars_size_with_num = CountUniqueLoopName(src_vars, true);
+
   std::string type = "";
 
   if (scop_info_.user_config_.GetTarget() == TARGET_CCE) {
@@ -532,8 +534,13 @@ std::string OpTypeCollector::GetSingleOpType(const TensorEntry &d, const TensorE
       return type + AT_TRANSPOSE;
     }
     if (d.loops.size() == s.loops.size()) {
-      // A[i,j] = B[i,j]
-      return type + AT_ELEMWISE;
+      if (dst_vars_size_with_num == src_vars_size_with_num) {
+        // A[i,j] = B[i,j]
+        return type + AT_ELEMWISE;
+      } else {
+        // A[i] = B[i - 1] or A[i] = B[floormod(i, 4096)]
+        return type + AT_PARTIAL_ELEM;
+      }
     } else {
       // AutoFused case in cuda
       return type + GetFusedCaseType(d, s);

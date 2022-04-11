@@ -66,7 +66,7 @@ void GemmStrategy::AddGpuConstraint() {
      << ", " << middle_band.n << ", " << middle_band.k << "]";
   analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
 
-  GpuInfo &gpu_info = GpuInfo::GetInstance();
+  GpuInfo &gpu_info = GpuInfo::GetInstance(analyzer_->scop_info_.user_config_.GetDeviceType());
   sm_bytes_ = static_cast<int>(gpu_info.GetMemoryLimitInScope(static_cast<int>(MEM_SCOPE_SHARED)));
   sm_bytes_ = (sm_bytes_ / sm_bytes_div_factor_) * sm_bytes_mul_factor_;
   reg_bytes_ = static_cast<int>(MAX_REGISTER_PER_THREAD_BLOCK * REGISTER_ALLOC_RATIO);
@@ -905,6 +905,16 @@ bool GpuStrategy::CheckNeedInjectiveSpeedUp() {
        (template_ == Template::REDUCTION && !analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib())) &&
       analyzer_->scop_info_.analysis_result_.GetTensorOfTensor()) {
     need_injective_speed_up = !NeedModifyOrderOfAxis();
+  } else {
+    int global_buf_size = 0;
+    for (auto &it : analyzer_->buf_info_) {
+      auto buf = it.second.get();
+      CHECK(buf != nullptr);
+      if (buf->scope == TilingMemScope::MEM_SCOPE_GM) {
+        ++global_buf_size;
+      }
+    }
+    need_injective_speed_up = global_buf_size < max_buf_size_to_speedup_inj_;
   }
   return need_injective_speed_up;
 }
@@ -1174,13 +1184,6 @@ void GpuStrategy::InitMappingLimit() {
 
   // Block configuration
   UpdateBlockConfig(direct, use_lib);
-
-  std::vector<std::string> elem_cfg = common::Split(analyzer_->scop_info_.user_config_.GetElemPerThread(), " ");
-  for (size_t i = 0; i < max_dim_; ++i) {
-    if (i < elem_cfg.size() && !elem_cfg[i].empty()) {
-      elem_per_thread_[i] = StrToDecimalInt64(elem_cfg[i]);
-    }
-  }
 }
 
 void GpuStrategy::BuildAxesQueue() {
@@ -1660,6 +1663,7 @@ std::pair<int64_t, int64_t> GpuStrategy::GetProposalParallelSize(int problem_siz
     thread_size = total_available_thread_;
     block_size = num_sm_ * active_blocks_per_sm_.second;
   }
+
   return std::make_pair(block_size, thread_size);
 }
 
@@ -1756,7 +1760,7 @@ void GpuStrategy::InjectiveSpeedup() {
   CHECK(proposal_threads != 0 && total_blocks != 0);
   int64_t shrinked_threads =
     std::min<int64_t>(total_threads / SafeDivisor(proposal_threads), proposal_blocks / SafeDivisor(total_blocks));
-  int64_t shrinked_blocks = total_blocks / SafeDivisor(proposal_blocks);
+  int64_t shrinked_blocks = (total_blocks - 1 + proposal_blocks) / SafeDivisor(proposal_blocks);
 
   auto thread_to_block = shrinked_threads > 0 && total_blocks < proposal_blocks;
   auto block_to_elem = proposal_elem_per_thread > 0 && shrinked_blocks > 0;
@@ -1768,7 +1772,7 @@ void GpuStrategy::InjectiveSpeedup() {
      << " proposal_elem_per_thread = " << proposal_elem_per_thread << " shrinked_threads = " << shrinked_threads
      << " shrinked_blocks = " << shrinked_blocks;
   analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
-  ss << "Parallel size = [" << parallel_size.first << ", " << parallel_size.second << "]";
+  ss << "Parallel size = [" << proposal_blocks << ", " << proposal_threads << "]";
   analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
 
   HandleShrinkThreadToBlock(shrinked_threads, thread_to_block, ss);
@@ -1793,8 +1797,14 @@ void GpuStrategy::InjectiveSpeedup() {
         coef = aligned_coef;
       }
       if (block_to_elem) {
-        shrinked_blocks /= coef;
-        axis->block_constraints.map_extent_ = before_shrink / SafeDivisor(coef);
+        auto actual_block = TilingAnalyzer::FindDivisibleTilingFactor(before_shrink / SafeDivisor(coef), before_shrink);
+        auto actual_coef = before_shrink / SafeDivisor(actual_block);
+        ss << "block_to_elem: \n"
+           << shrinked_blocks << " /= " << coef << "\n block = " << before_shrink << " / " << coef << " = "
+           << axis->block_constraints.map_extent_ << ", actual coef = " << actual_coef << "\n";
+        coef = actual_coef;
+        shrinked_blocks /= SafeDivisor(actual_coef);
+        axis->block_constraints.map_extent_ = actual_block;
       } else {
         shrinked_threads /= coef;
         axis->thread_constraints.map_extent_ = before_shrink / SafeDivisor(coef);
@@ -1819,21 +1829,44 @@ const void GpuStrategy::TransposeSpeedup() {
     inner_axes[0]->thread_constraints.item_process_ = min_elem_for_io_bound_;
   } else {
     std::vector<TileAxis *> axes;
-    analyzer_->ForEachAxisTopDown([this, &axes](TileAxis *axis) {
+    auto problem_size = 1;
+    auto curr_size = 1;
+
+    analyzer_->ForEachAxisTopDown([this, &axes, &problem_size, &inner_axes, &curr_size](TileAxis *axis) {
       if (axis == analyzer_->RootAxis() || axis->range_extent.as<IntImm>() == nullptr || axis->index != band_index_) {
         return;
       }
       (void)axes.emplace_back(axis);
+      problem_size *= static_cast<int>(axis->extent_val);
+      if (find(inner_axes.begin(), inner_axes.end(), axis) != inner_axes.end()) {
+        curr_size *= tranpose_tiling_constraints_;
+      }
     });
-    for (auto axis : axes) {
+    auto parallel_size = GetProposalParallelSize(problem_size);
+    auto proposal_blocks = parallel_size.first;
+    auto total_elem_for = problem_size / SafeDivisor(curr_size * proposal_blocks);
+    std::stringstream ss;
+
+    ss << "Propose block size = " << proposal_blocks << ", curr size = " << curr_size
+       << " problem size = " << problem_size << ", min_elem_for_io_bound_=" << min_elem_for_io_bound_
+       << ", total_elem_for = " << total_elem_for;
+
+    auto cur_elem_for = 1;
+    for (int i = static_cast<int>(axes.size()) - 1; i >= 0; --i) {
+      if (total_elem_for / SafeDivisor(cur_elem_for) <= 1) {
+        ss << "stop allocate elem for at axis " << i;
+        break;
+      }
+      auto axis = axes[i];
       if (find(inner_axes.begin(), inner_axes.end(), axis) != inner_axes.end()) {
         axis->TileRestrainLower(tranpose_tiling_constraints_, TileLevel::CACHE1);
         axis->thread_constraints.item_process_ = min_elem_for_io_bound_;
+        cur_elem_for *= min_elem_for_io_bound_;
       } else {
-        axis->TileRestrainUpper(1, TileLevel::CACHE1);
-        axis->thread_constraints.item_process_ = min_elem_for_io_bound_;
+        axis->TileRestrainUpper(MIN_TILE, TileLevel::CACHE1);
       }
     }
+    analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
   }
 }
 
@@ -1877,23 +1910,36 @@ void GpuStrategy::BroadcastSpeedup() {
     ++depth;
     fused_size_ = axis->extent_val;
   });
+  auto IncreaseForLoop = [this]() {
+    analyzer_->ForEachAxisTopDown([this](TileAxis *axis) {
+      if (axis == analyzer_->RootAxis() || axis->range_extent.as<IntImm>() == nullptr || axis->index != band_index_) {
+        return;
+      }
+      axis->forbid_iso = true;
+      auto min_aligned = analyzer_->FindDivisibleTilingFactor(min_elem_for_io_bound_, axis->extent_val);
+      auto max_aligned = analyzer_->FindDivisibleTilingFactor(double_ * min_elem_for_io_bound_, axis->extent_val);
+      if (min_aligned > 1) {
+        axis->thread_constraints.item_process_ = min_aligned;
+      } else if (max_aligned > 1) {
+        axis->thread_constraints.item_process_ = max_aligned;
+      } else {
+        axis->thread_constraints.item_process_ = min_elem_for_io_bound_;
+      }
+    });
+  };
   // Only deal with broadcast + elemwise cases that all axes are fused into one.
   auto mod_axes = analyzer_->GetAxesContainsAttr(AT_MOD);
   if (depth != 1 || mod_axes.size() > 1U) {
     analyzer_->GetTileLogger().AppendLine(GPU_MAPPING,
                                           "Cannot deal with this broadcast, make all axes tile divisible to speedup.");
-    analyzer_->ForEachAxisTopDown([this](TileAxis *axis) {
-      if (axis == analyzer_->RootAxis() || axis->range_extent.as<IntImm>() == nullptr) {
-        return;
-      }
-      axis->forbid_iso = true;
-    });
+    IncreaseForLoop();
     return;
   }
 
   AnalyzeBroadcastIdx();
 
   if (mod_axes.empty() || broadcast_idx_.empty()) {
+    IncreaseForLoop();
     GpuScalarBroadcastStrategy();
   } else {
     GpuVectorBroadcastStrategy();
