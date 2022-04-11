@@ -882,6 +882,8 @@ void GpuStrategy::InitMapping() {
       PadSpeedup();
     } else if (template_ == Template::TRANSPOSE_OP) {
       TransposeSpeedup();
+    } else if (template_ == Template::REDUCTION || template_ == Template::BITWISE_REDUCTION) {
+      use_shared_mem_ = true;
     }
   }
   BuildAxesQueue();
@@ -1372,7 +1374,10 @@ void GpuStrategy::MapPendingAxes(size_t ori_size, std::stringstream &ss, size_t 
       }
     }
 
-    CheckAlignedUse(use, shape, axis, ss);
+    if (!analyzer_->scop_info_.user_config_.GetEnableOneDimThread() || !thread_cfg_.empty()) {
+      // do not align thread usage for threadX with one dim thread enabled
+      CheckAlignedUse(use, shape, axis, ss);
+    }
 
     activated_threads_ *= use;
     ss << ", use = " << use << ", activated threads = " << activated_threads_;
@@ -1440,6 +1445,7 @@ void GpuStrategy::InnerThreadOuterBlock(bool write_cfg) {
     std::tie(axis, shape) = pending_axes_[i];
     auto idx = ((indexing_.size() - 1) - ((pending_axes_.size() - 1) - i));
     auto rest_blocks = idx < block_limit_.size() ? std::min(block_limit_[idx], axis->block_constraints.map_extent_) : 1;
+    rest_blocks = std::min(rest_blocks, shape);
     ss << "axis " << axis->index << "_" << axis->dim_axis << " shape = " << shape << ", block_idx = " << idx
        << ", rest blocks = " << rest_blocks;
     ss << "\n--------> Tile: " << axis->c1_constraints.tile_min_ << "," << axis->c1_constraints.tile_extent_;
@@ -1450,10 +1456,16 @@ void GpuStrategy::InnerThreadOuterBlock(bool write_cfg) {
       analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
       continue;
     }
-    auto use = (rest_blocks > 0 && shape > 1) ? (TilingAnalyzer::FindDivisibleTilingFactor(rest_blocks, shape) > 1
-                                                   ? TilingAnalyzer::FindDivisibleTilingFactor(rest_blocks, shape)
-                                                   : rest_blocks)
-                                              : 1;
+    auto use = 1;
+    if (rest_blocks > 0 && shape > 1) {
+      auto aligned_blocks = TilingAnalyzer::FindDivisibleTilingFactor(rest_blocks, shape);
+      ss << "aligned_blocks = " << aligned_blocks << ", rest_blocks = " << rest_blocks;
+      if (aligned_blocks <= 1 || aligned_blocks * min_elem_for_io_bound_ * double_ < rest_blocks) {
+        use = rest_blocks;
+      } else {
+        use = aligned_blocks;
+      }
+    }
     if (!write_cfg) {
       use = block_cfg_[(pending_axes_.size() - 1) - i];
     }
@@ -1476,7 +1488,9 @@ void GpuStrategy::InnerThreadOuterBlock(bool write_cfg) {
     auto upper = std::max<int64_t>(static_cast<int64_t>(ceil(static_cast<float>(extent) / SafeDivisor(use))), 1);
     CHECK(axis->c1_constraints.tile_min_.as<IntImm>());
     bool partial_block_and_thread = (axis->c1_constraints.tile_min_.as<IntImm>()->value > upper) && (use > thread_size);
-    if (partial_block_and_thread) {
+    if (!use_shared_mem_ && axis->forbid_iso && axis->extent_val % upper != 0) {
+      axis->TileRestrainToSingleValue(thread_size, TileLevel::CACHE1);
+    } else if (partial_block_and_thread) {
       axis->TileRestrainToSingleValue(upper, TileLevel::CACHE1);
     } else {
       axis->TileRestrainUpper(upper, TileLevel::CACHE1);
@@ -1910,12 +1924,16 @@ void GpuStrategy::BroadcastSpeedup() {
     ++depth;
     fused_size_ = axis->extent_val;
   });
-  auto IncreaseForLoop = [this]() {
-    analyzer_->ForEachAxisTopDown([this](TileAxis *axis) {
+  auto IncreaseForLoop = [this, &depth]() {
+    analyzer_->ForEachAxisTopDown([this, &depth](TileAxis *axis) {
       if (axis == analyzer_->RootAxis() || axis->range_extent.as<IntImm>() == nullptr || axis->index != band_index_) {
         return;
       }
       axis->forbid_iso = true;
+      if (!axis->HasAttr(AT_BROADCAST_INNERMOST_AXIS) && depth != 1 &&
+          axis->extent_val > min_elem_for_io_bound_ * max_elem_per_thread_) {
+        return;
+      }
       auto min_aligned = analyzer_->FindDivisibleTilingFactor(min_elem_for_io_bound_, axis->extent_val);
       auto max_aligned = analyzer_->FindDivisibleTilingFactor(double_ * min_elem_for_io_bound_, axis->extent_val);
       if (min_aligned > 1) {
