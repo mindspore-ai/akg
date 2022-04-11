@@ -19,6 +19,7 @@ import akg.utils as utils
 from akg.utils.kernel_exec import product_is_mini
 from akg.utils.format_transform import get_shape
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor)
 def _rsqrt(data1):
     """
@@ -30,13 +31,13 @@ def _rsqrt(data1):
     Returns:
         tvm.tensor.Tensor, inverse sqaure root of data1, with same type as input tensors.
     """
-    # utils.elemwise_dtype_check(data1.dtype)
     utils.ops_dtype_check(data1.dtype, ["float32", "float16"])
     utils.check_shape(data1.shape)
 
     res = akg.topi.rsqrt(data1)
 
     return res
+
 
 @utils.check_input_type(akg.tvm.tensor.Tensor)
 def _rsqrt_ascend(data):
@@ -68,17 +69,20 @@ def _rsqrt_ascend(data):
     is_needed_conv = (dtype == 'float32')
 
     data_ = data.astype('float16') if is_needed_conv else data
-    power_num = akg.tvm.const(-0.5, dtype=('float16' if is_needed_conv else dtype))
+    power_num = akg.tvm.const(-0.5,
+                              dtype=('float16' if is_needed_conv else dtype))
 
     vlog_t = akg.tvm.compute(
         shape, lambda *indice: akg.tvm.log(data_(*indice)), name="vlog_t")
     vmuls_t = akg.tvm.compute(
         shape, lambda *indice: vlog_t(*indice) * power_num, name="vmuls_t")
-    res = akg.tvm.compute(shape, lambda *indice: akg.tvm.exp(vmuls_t(*indice)), name="res")
+    res = akg.tvm.compute(
+        shape, lambda *indice: akg.tvm.exp(vmuls_t(*indice)), name="res")
 
     res = res.astype('float32') if is_needed_conv else res
 
     return res
+
 
 def Rsqrt(data, target=utils.CCE):
     """
@@ -89,7 +93,7 @@ def Rsqrt(data, target=utils.CCE):
 
     Returns:
         tvm.tensor.Tensor, inverse sqaure root of data1, with same type as input tensors.
-    
+
     Supported Platforms:
         'Ascend', 'GPU', 'CPU'
     """

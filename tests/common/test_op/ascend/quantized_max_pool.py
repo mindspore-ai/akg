@@ -19,7 +19,7 @@ from akg.utils.format_transform import get_shape
 import akg.utils as utils
 from akg.utils import custom_tiling as ct_util
 from akg.utils.dsl_create import cal_pad_shapes_by_strategy
-from akg.ops.nn.ascend import MaxPoolWithArgmax
+from akg.ops.nn.ascend import maxpool_with_argmax
 
 
 def quantize_chk_cfg_and_gen_outdtype(
@@ -29,14 +29,14 @@ def quantize_chk_cfg_and_gen_outdtype(
     if quant_algo is None:
         # quantize switch off
         if scale_mode is not None or scale_sqrt is not None \
-            or qdrtensors is not None:
+                or qdrtensors is not None:
             raise RuntimeError("Invalid Quantize Config.")
         out_dtype = "float16"
         return out_dtype
 
     # quantize switch on, all quantize params should not be None
     if scale_mode is None or scale_sqrt is None \
-        or qdrtensors is None:
+            or qdrtensors is None:
         raise RuntimeError("Invalid Quantize Config!")
 
     if len(quant_algo) != 2 or any([i not in [0, 1] for i in quant_algo]):
@@ -74,9 +74,9 @@ def quantize_chk_cfg_and_gen_outdtype(
         raise RuntimeError("Scale for dequantize or requantize only "
                            "support scalar tensor.")
     utils.ops_dtype_check(qdrtensors[0].dtype,
-                            utils.DtypeForDavinci.FLOAT16)
+                          utils.DtypeForDavinci.FLOAT16)
     utils.ops_dtype_check(qdrtensors[1].dtype,
-                            utils.DtypeForDavinci.FLOAT16)
+                          utils.DtypeForDavinci.FLOAT16)
     #  utils.ops_dtype_check(qdrtensors[0].dtype,
     #                          utils.DtypeForDavinci.ALL_FLOAT)
     #  utils.ops_dtype_check(qdrtensors[1].dtype,
@@ -112,8 +112,8 @@ def quantized_chk_and_gen_pool_params(in_tensor, ksize, strides,
     if any([ksize[i] != 1 for i, _ in enumerate(ksize) if i not in hw_indices]):
         raise RuntimeError("Only supports pooling across width/height, "
                            "and other ksize dimension should be one.")
-    if any([strides[i] != 1 for i, _ in enumerate(strides) \
-             if i not in hw_indices]):
+    if any([strides[i] != 1 for i, _ in enumerate(strides)
+            if i not in hw_indices]):
         raise RuntimeError("Only supports pooling across width/height, "
                            "and other strides dimension should be one.")
 
@@ -144,12 +144,12 @@ def get_attrs():
     }
     return default_attr_map
 
+
 def quantized_maxpool_tiling_strategy(data, kernel, stride, pad, quant_algo):
     """Custom tiling for quantized maxpool."""
     batch, c_1, fm_h, fm_w, c_0 = get_shape(data)
     _, [out_h, out_w] = \
         cal_pad_shapes_by_strategy(get_shape(data), kernel, stride, pad)
-
 
     strategy = list()
     if c_0 == 16:
@@ -165,17 +165,25 @@ def quantized_maxpool_tiling_strategy(data, kernel, stride, pad, quant_algo):
             tiling_params.append([1, ct_util.TileConstraint.FACTOR, dim_ind])
             dim_ind = dim_ind + 1
         tiling_params.append([h_cut, ct_util.TileConstraint.FACTOR, dim_ind])
-        tiling_params.append(["H", ct_util.TileConstraint.SET_AXIS_INFO, dim_ind])
-        tiling_params.append([out_w, ct_util.TileConstraint.FACTOR, dim_ind + 1])
+        tiling_params.append(
+            ["H", ct_util.TileConstraint.SET_AXIS_INFO, dim_ind])
+        tiling_params.append(
+            [out_w, ct_util.TileConstraint.FACTOR, dim_ind + 1])
 
         if quant_algo is not None:
-            tiling_params.append([kernel[0], ct_util.TileConstraint.FACTOR, dim_ind + 2])
-            tiling_params.append([kernel[1], ct_util.TileConstraint.FACTOR, dim_ind + 3])
-            tiling_params.append([16, ct_util.TileConstraint.FACTOR, dim_ind + 4])
+            tiling_params.append(
+                [kernel[0], ct_util.TileConstraint.FACTOR, dim_ind + 2])
+            tiling_params.append(
+                [kernel[1], ct_util.TileConstraint.FACTOR, dim_ind + 3])
+            tiling_params.append(
+                [16, ct_util.TileConstraint.FACTOR, dim_ind + 4])
         else:
-            tiling_params.append([kernel[0], ct_util.TileConstraint.FACTOR, dim_ind + 3])
-            tiling_params.append([kernel[1], ct_util.TileConstraint.FACTOR, dim_ind + 4])
-            tiling_params.append([16, ct_util.TileConstraint.FACTOR, dim_ind + 2])
+            tiling_params.append(
+                [kernel[0], ct_util.TileConstraint.FACTOR, dim_ind + 3])
+            tiling_params.append(
+                [kernel[1], ct_util.TileConstraint.FACTOR, dim_ind + 4])
+            tiling_params.append(
+                [16, ct_util.TileConstraint.FACTOR, dim_ind + 2])
 
         for para in tiling_params:
             strategy += ct_util.create_constraint_on_axis(
@@ -219,10 +227,11 @@ def quantized_maxpool_tiling_strategy(data, kernel, stride, pad, quant_algo):
         #      axis=dim_ind+4)
     return strategy
 
+
 def _quantized_max_pool_compute(x, window, stride, qdrtensors,
                                 out_dtype, padding, quant_algo, _):
     """compute for quantized avgpool"""
-    res, _, _ = MaxPoolWithArgmax(x, window, stride, padding)
+    res, _, _ = maxpool_with_argmax(x, window, stride, padding)
 
     if quant_algo is not None:
         scale_req, offset_req = qdrtensors
@@ -237,11 +246,11 @@ def _quantized_max_pool_compute(x, window, stride, qdrtensors,
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor,
-                          (list, tuple, type(None)),
-                          (list, tuple), (list, tuple),
-                          (str, type(None)), (str, type(None)),
-                          (list, tuple, type(None)),
-                          (int, type(None)), (int, type(None)))
+                        (list, tuple, type(None)),
+                        (list, tuple), (list, tuple),
+                        (str, type(None)), (str, type(None)),
+                        (list, tuple, type(None)),
+                        (int, type(None)), (int, type(None)))
 def quantized_max_pool(x, qdrtensors,
                        ksize, strides, padding="VALID", data_format="NHWC",
                        quant_algo=None, scale_mode=None, scale_sqrt=None):
@@ -273,7 +282,8 @@ def quantized_max_pool(x, qdrtensors,
         int8 for non offset quantize algorithm and uint8 for half offset.
     """
     window, stride, padding = \
-        quantized_chk_and_gen_pool_params(x, ksize, strides, padding, data_format)
+        quantized_chk_and_gen_pool_params(
+            x, ksize, strides, padding, data_format)
     out_dtype = quantize_chk_cfg_and_gen_outdtype(quant_algo, scale_mode,
                                                   scale_sqrt, qdrtensors)
     #  out_dtype = "float16"
