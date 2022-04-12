@@ -28,6 +28,7 @@ class ConstructType:
     PARALLEL = "Parallel"
     STITCH = "Stitch"
     TUNE = "Tune"
+    ELEMANY = "ElemAny"
     UNKNOWN = "Unknow"
 
 
@@ -388,8 +389,34 @@ class TotNodeAnalyze(BaseNodeAnalyze):
         BaseNodeAnalyze.leaf_analyze(TotNodeAnalyze.get_name(), ct)
 
 
+class ElemAnyNodeAnalyze(BaseNodeAnalyze):
+    @staticmethod
+    def get_name():
+        """Return type name."""
+        return ConstructType.ELEMANY
+
+    @staticmethod
+    def check_type(desc_d):
+        """Check whether the json object is ELEMANY type."""
+        if "ElemAny" in set(op['name'] for op in desc_d['op_desc']):
+            return ElemAnyNodeAnalyze.get_name()
+        return ConstructType.UNKNOWN
+
+    @staticmethod
+    def extract_infos(desc_d, attrs):
+        """Extract ELEMANY's children information, including jsons, attributes and segment infos."""
+        total_jsons = [json.dumps(desc_d)]
+        total_attrs = [attrs]
+        return total_jsons, total_attrs, {}
+
+    @staticmethod
+    def analyze_children(analyze_json_func, analye_res, ct, type_infos, poly, func):
+        """Process children of ELEMANY."""
+        _ = (analyze_json_func, analye_res, type_infos, poly, func)  # For unused warning...
+        BaseNodeAnalyze.leaf_analyze(ElemAnyNodeAnalyze.get_name(), ct)
+
 class AnalyzeUtils:
-    check_cls_list = [ParallelNodeAnalyze, StitchNodeAnalyze, TotNodeAnalyze, NormalNodeAnalyze]
+    check_cls_list = [ParallelNodeAnalyze, StitchNodeAnalyze, TotNodeAnalyze, ElemAnyNodeAnalyze, NormalNodeAnalyze]
 
     @staticmethod
     def check_json_type(desc_d):

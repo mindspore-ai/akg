@@ -126,7 +126,8 @@ bool IsOtherOp(const std::string &op_name) {
                                            "CSRDiv",
                                            "CSRGather",
                                            "CSR2COO",
-                                           "COO2CSR"};
+                                           "COO2CSR",
+                                           "ElemAny"};
   return elems.find(op_name) != elems.end();
 }
 bool IsElemwise(const std::string &op_name) {

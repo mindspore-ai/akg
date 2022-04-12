@@ -124,6 +124,12 @@ class DimensionFolderPlan : public IRVisitor {
       CHECK(transpose_perm_.size() == inputs[0]->shape.size());
       AddTransposeRelation(inputs[0], output, transpose_perm_);
       transpose_perm_.clear();
+    } else if (prim->name == "ElemAny") {
+      std::unordered_set<int64_t> reduce_axis;
+      for (int64_t i = 0; i < static_cast<int64_t>(inputs[0]->shape.size()); ++i) {
+        reduce_axis.insert(i);
+      }
+      AddReduceRelation(inputs[0], output, reduce_axis);
     } else {
       for (FoldTensor *input : inputs) {
         Relation rel(output);
