@@ -239,6 +239,12 @@ class UserConfig {
     ParseStringAttr(attrs, "mind_trick", &mind_trick_json_);
     ParseBoolAttr(attrs, "mind_trick_autogen_gpu_automap", &mind_trick_gpu_autogen_automap_);
 
+    // MLSched
+    ParseBoolAttr(attrs, "enable_mlsched", &enable_mlsched_);
+    ParseStringAttr(attrs, "mlsched_solver", &mlsched_solver_);
+    ParseBoolAttr(attrs, "mlsched_code_sinking", &mlsched_code_sinking_);
+    ParseBoolAttr(attrs, "mlsched_constant_to_parameter", &mlsched_constant_to_parameter_);
+
     ParseCustomTilingAttr(attrs, "custom_tiling", &custom_tiling_);
     ParseBoolAttr(attrs, "pragma_analyze_reuse_buffer", &pragma_analyze_reuse_buffer_);
     ParseBoolAttr(attrs, "pragma_speedup_tiling", &pragma_speedup_tiling_);
@@ -400,6 +406,15 @@ class UserConfig {
   bool GetMindTrickGpuHasSwizzle(void) const { return mind_trick_gpu_has_swizzle_; }
   void SetMindTrickGpuAutogenAutomap(bool status) { mind_trick_gpu_autogen_automap_ = status; }
   bool GetMindTrickGpuAutogenAutomap(void) const { return mind_trick_gpu_autogen_automap_; }
+
+  void SetEnableMLSched(bool status) { enable_mlsched_ = status; }
+  bool GetEnableMLSched(void) const { return enable_mlsched_; }
+  void SetMLSchedSolver(const std::string &solver) { mlsched_solver_ = solver; }
+  std::string GetMLSchedSolver(void) const { return mlsched_solver_; }
+  void SetMLSchedCodeSinking(bool toggle) { mlsched_code_sinking_ = toggle; }
+  bool GetMLSchedCodeSinking(void) const { return mlsched_code_sinking_; }
+  void SetMLSchedConstantToParameter(bool toggle) { mlsched_constant_to_parameter_ = toggle; }
+  bool GetMLSchedConstantToParameter(void) const { return mlsched_constant_to_parameter_; }
 
   // getter for schedule tree transform config
   bool GetRemoveSelfDependence() const { return remove_self_dependence_; }
@@ -758,6 +773,12 @@ class UserConfig {
   bool mind_trick_gpu_has_swizzle_{false};
   bool mind_trick_gpu_autogen_automap_{true};
 
+  // MLSched config
+  bool enable_mlsched_{false};
+  std::string mlsched_solver_{""};
+  bool mlsched_code_sinking_{false};
+  bool mlsched_constant_to_parameter_{true};
+
   // schedule tree transform config
   bool remove_self_dependence_{true};
   bool force_remove_self_dependence_{false};
@@ -826,6 +847,7 @@ struct MappingScheduleInfo {
 
 using AccessMap = std::unordered_map<const Node *, isl::id>;
 using StatementMap = std::unordered_map<isl::id, const Node *, isl::IslIdIslHash>;
+using ForTypeMap = std::unordered_map<isl::id, std::vector<ForType>, isl::IslIdIslHash>;
 using OperatorDomainMap = std::unordered_map<isl::id, OperatorDomainSpace, isl::IslIdIslHash>;
 using ReduceMap = std::unordered_map<const Provide *, Array<IterVar>>;
 using CondVarsMap = std::unordered_map<isl::id, std::unordered_set<std::string>, isl::IslIdIslHash>;
@@ -960,7 +982,10 @@ class AnalysisResult {
 
   void RecordAccess(const Node *node, const isl::id &tensor_id) { accesses_.emplace(node, tensor_id); }
 
-  void RecordStatement(const isl::id &tensor_id, const Node *node) { statements_.emplace(tensor_id, node); }
+  void RecordStatement(const isl::id &stmt_id, const Node *node) {
+    statements_.emplace(stmt_id, node);
+    directives_.emplace(stmt_id, for_type_);
+  }
   void RecordStmtOpInfo(const isl::id &tensor_id, const StmtOpInfo &op_info) {
     stmt_op_Info_.emplace(tensor_id, op_info);
   }
@@ -1011,6 +1036,8 @@ class AnalysisResult {
   AccessMap &GetAccessMap() { return accesses_; }
   StatementMap &GetStatementMap() { return statements_; }
   StatementMap GetStatementMap() const { return statements_; }
+  ForTypeMap &GetForTypeMap() { return directives_; }
+  ForTypeMap GetForTypeMap() const { return directives_; }
   StmtOpInfoMap &GetStmtOpInfoMap() { return stmt_op_Info_; }
   StmtOpInfoMap GetStmtOpInfoMap() const { return stmt_op_Info_; }
   OperatorDomainMap &GetOperatorDomainMap() { return domains_; }
@@ -1192,6 +1219,7 @@ class AnalysisResult {
   std::vector<std::pair<std::string, STMT_OP_TYPE>> stmt_type_;
   std::vector<std::pair<isl::union_set, BufferedFootPrintInfo>> active_buffer_footprints_;
   std::vector<BufferDefInfo> buffer_def_infos_;
+  std::vector<ForType> for_type_;
   BufferDefInfo default_buffer_def_info_;
   std::unordered_map<const For *, std::vector<ProvideEntry>> provides_ana_;
   std::unordered_map<int, std::string> template_map_ = {
@@ -1228,6 +1256,8 @@ class AnalysisResult {
   isl::union_map inter_band_dependency_;
   AccessMap accesses_;
   StatementMap statements_;
+  ForTypeMap directives_;
+
   StmtOpInfoMap stmt_op_Info_;
   OperatorDomainMap domains_;
   BufferBindVec buf_bind_vec_;

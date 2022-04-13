@@ -23,6 +23,12 @@ namespace akg {
 namespace ir {
 namespace poly {
 
+static constexpr const char *const kEnvStringMsDevPolyScheduler = "MS_DEV_POLY_SCHEDULER";
+static constexpr const char *const kEnvStringMsDevMlsSolver = "MS_DEV_MLS_SOLVER";
+static constexpr const char *const kEnvStringMsDevMlsVerbosity = "MS_DEV_MLS_VERBOSITY";
+static constexpr const char *const kEnvStringMsDevMlsCodeSinking = "MS_DEV_MLS_CODE_SINKING";
+static constexpr const char *const kEnvStringMsDevMlsConstantToParameter = "MS_DEV_MLS_CONSTANT_TO_PARAMETER";
+
 isl::schedule_node TileBand(isl::schedule_node node, const isl::multi_val &sizes) {
   isl::ctx ctx = node.ctx();
   int scale_tile;
@@ -442,6 +448,139 @@ isl::schedule_node GetCanMappingNode(const isl::schedule_node &node) {
 
   return band_node;
 }
+
+#ifdef AKG_USE_MLS
+bool MLSchedShouldBeUsed(akg::ir::poly::ScopInfo &scop_info) {
+  bool maybe_enabled = scop_info.user_config_.GetEnableMLSched();
+
+  // Don't perform the extra checks if we recognize "isl" or "mls".
+  // Otherwise, "auto" mode will let the remainder of the function decide.
+  const char *const ms_dev_scheduler = std::getenv(kEnvStringMsDevPolyScheduler);
+  if (ms_dev_scheduler) {
+    const std::string env_string(ms_dev_scheduler);
+    if (env_string == "isl") {
+      return false;
+    } else if (env_string == "mls") {
+      return true;
+    } else if (env_string == "auto") {
+      maybe_enabled = true;
+    }
+  }
+  if (!maybe_enabled) {
+    return false;
+  }
+
+  // Explicitly avoid reduce and matmul cases
+  if (scop_info.analysis_result_.GetUseGpuReduceLib() ||
+      scop_info.analysis_result_.GetOpTemplate() == Template::MATMUL ||
+      scop_info.analysis_result_.GetOpTemplate() == Template::REDUCTION ||
+      scop_info.analysis_result_.GetOpTemplate() == Template::BITWISE_REDUCTION ||
+      !scop_info.analysis_result_.GetReduceTensorInfoMap().empty() || scop_info.user_config_.GetEnableMatmul() ||
+      scop_info.user_config_.GetEnableTensorCore() || scop_info.user_config_.GetEnableConvTensorCore()) {
+    return false;
+  }
+
+  // Check the kernel name
+  const std::vector<std::string> unsupported_kernels = {
+    "reduce",
+    "matmul",
+  };
+  std::string kernel = scop_info.user_config_.GetKernelName();
+  std::transform(kernel.begin(), kernel.end(), kernel.begin(), [](unsigned char c) { return std::tolower(c); });
+  for (auto substring : unsupported_kernels) {
+    if (kernel.find(substring) != std::string::npos) {
+      return false;
+    }
+  }
+
+  // Lambda to remove the range from the wrapped domain of a map
+  const auto unwrapped_map = [](const isl::map &map) {
+    const isl::set domain = map.domain().unwrap().domain();
+    const isl::set range = map.range();
+    return isl::map(domain, range);
+  };
+  // Lambda to remove ranges from the wrapped domains of an union_map
+  const auto unwrapped_union_map = [&unwrapped_map](const isl::union_map &umap) {
+    if (umap.is_empty()) {
+      return umap;
+    }
+
+    const isl::map_list mlist = umap.map_list();
+    const unsigned size = mlist.size();
+    const isl::map first_element = unwrapped_map(mlist.at(0));
+    isl::union_map result(first_element);
+    for (unsigned i = 1; i < size; ++i) {
+      const isl::map current = mlist.at(i);
+      const isl::map element = unwrapped_map(current);
+      result = result.add_map(element);
+    }
+
+    return result;
+  };
+  // Inspect read and writes to detect potential reductions
+  const isl::union_map reads = unwrapped_union_map(scop_info.analysis_result_.GetReads());
+  const isl::union_map writes = unwrapped_union_map(scop_info.analysis_result_.GetWrites());
+  const isl::union_map intersection = reads.intersect(writes);
+  if (!intersection.is_empty() && !intersection.is_injective()) {
+    return false;
+  }
+
+  return true;
+}
+
+mls::bin::Options MLSchedOptionsInit(akg::ir::poly::ScopInfo &scop_info) {
+  auto env_to_bool = [](const char *const environment_variable, bool default_value = false) {
+    bool result = default_value;
+    const char *const env_cstr = std::getenv(environment_variable);
+    if (env_cstr) {
+      const std::string env_str(env_cstr);
+      if (env_str == "true") {
+        result = true;
+      } else if (env_str == "false") {
+        result = false;
+      }
+    }
+    return result;
+  };
+
+  // Choose a solver from the ScopInfo
+  const std::string solver_string = scop_info.user_config_.GetMLSchedSolver();
+  mls::bin::Options::SolverType solver_type = mls::bin::Options::SolverTypeFromString(solver_string);
+  // Maybe override from the environment
+  const char *const ms_dev_mlsched_solver = std::getenv(kEnvStringMsDevMlsSolver);
+  if (ms_dev_mlsched_solver) {
+    const std::string env_string(ms_dev_mlsched_solver);
+    const mls::bin::Options::SolverType env_solver_type = mls::bin::Options::SolverTypeFromString(env_string);
+    if (env_solver_type != mls::bin::Options::SolverType::kNone) {
+      solver_type = env_solver_type;
+    }
+  }
+  if (solver_type == mls::bin::Options::SolverType::kNone) {
+    // Select a default if for some reason no valid solver could be selected
+    solver_type = mls::bin::Options::SolverType::kQiuqiIp;
+  }
+
+  unsigned long int verbosity = mls::bin::Options::GetDefaultVerbosity();
+  const char *const ms_dev_mlsched_verbosity = std::getenv(kEnvStringMsDevMlsVerbosity);
+  if (ms_dev_mlsched_verbosity) {
+    verbosity = std::stoul(ms_dev_mlsched_verbosity);
+  }
+
+  bool code_sinking = scop_info.user_config_.GetMLSchedCodeSinking();
+  code_sinking = env_to_bool(kEnvStringMsDevMlsCodeSinking, code_sinking);
+
+  bool constant_to_parameter = scop_info.user_config_.GetMLSchedConstantToParameter();
+  constant_to_parameter = env_to_bool(kEnvStringMsDevMlsConstantToParameter, constant_to_parameter);
+
+  mls::bin::Options result;
+  result.SetSolverType(solver_type);
+  result.SetVerbosity(verbosity);
+  result.SetCodeSinking(code_sinking);
+  result.SetConstantToParameter(constant_to_parameter);
+
+  return result;
+}
+#endif
 
 }  // namespace poly
 }  // namespace ir

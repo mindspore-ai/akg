@@ -29,6 +29,11 @@
 #include <tvm/node/container.h>
 #include <tvm/node/node.h>
 
+// MLSched
+#ifdef AKG_USE_MLS
+#include "poly/mls.h"
+#endif
+
 // Internal headers
 #include "poly/isl.h"
 #include "poly/log_util.h"
@@ -39,46 +44,6 @@
 namespace akg {
 namespace ir {
 namespace poly {
-
-///////////////////////////////////////////////////////////////////////////
-// Supported environment variables
-///////////////////////////////////////////////////////////////////////////
-
-static constexpr const char *const env_string_mind_tricks_enable_ = "MS_AKG_MIND_TRICKS";
-static constexpr const char *const env_string_mind_tricks_dir_ = "MS_AKG_MIND_TRICKS_DIR";
-static constexpr const char *const env_string_mind_tricks_verbosity_ = "MS_AKG_MIND_TRICKS_VERBOSITY";
-static constexpr const char *const env_string_mind_tricks_templates_ = "MS_AKG_MIND_TRICKS_TEMPLATES";
-static constexpr const char *const env_string_mind_tricks_operator_blacklist_ = "MS_AKG_MIND_TRICKS_OPERATOR_BLACKLIST";
-
-static constexpr const char *const env_string_mind_tricks_autogen_ = "MS_AKG_MIND_TRICKS_AUTOGEN";
-static constexpr const char *const env_string_mind_tricks_autogen_swizzle_ = "MS_AKG_MIND_TRICKS_AUTOGEN_SWIZZLE";
-
-////////////////////////////////////////////////////////////////////////////////
-// Miscellaneous useful types or classes for SchedulingMindTrick
-////////////////////////////////////////////////////////////////////////////////
-
-enum class SoftToken {
-  INVALID_TOKEN = -1,
-  OPEN_BRACKET,       // 0
-  CLOSE_BRACKET,      // 1
-  OPEN_PARENTHESIS,   // 2
-  CLOSE_PARENTHESIS,  // 3
-  COMMA,              // 4
-  QUESTION_MARK,      // 5
-  MINUS,              // 6
-  DIVISION,           // 7
-  MODULO,             // 8
-  DIGIT,              // 9
-};
-
-// single_data: tuple of <stmt name, scheduling dim, coeff dim, coeff type, value>
-using single_data = std::tuple<std::string, int, int, isl_influence_coeff_type, int>;
-
-// div_mod_data
-// tuple of <stmt name, scheduling dim, pair of <token type, value>>
-// token type can either be modulo or division
-using div_mod_data = std::tuple<std::string, int, std::pair<SoftToken, int>>;
-
 ////////////////////////////////////////////////////////////////////////////////
 // GpuConfig
 ////////////////////////////////////////////////////////////////////////////////
@@ -229,18 +194,14 @@ class SchedulingMindTrick {
   void ParseCheckSchedule(const picojson::value &node);
   void ParseAttrs(const picojson::value &node);
   void ParseVerbosity(const picojson::value &node);
-  void ParseSoftConstraints(const picojson::value &node);
 
   ///////////////////////////////////////////////////////////////////////////
-  // Soft constraints parser utils
+  // Directives utils
   ///////////////////////////////////////////////////////////////////////////
 
-  SoftToken GetSoftToken(const char &token) const;
-  bool HasValidNextToken(const char &token1, const char &token2) const;
-  void FlushSoftData();
-  bool CheckSoftExpression(const std::string &expr);
-  std::pair<int, isl_influence_coeff_type> DetermineCoeffType(unsigned int incr, unsigned int nb_vars,
-                                                              unsigned int nb_params) const;
+#ifdef AKG_USE_MLS
+  void ExtractDirectivesFromAKG(void);
+#endif
 
   ///////////////////////////////////////////////////////////////////////////
   // Schedule
@@ -288,24 +249,14 @@ class SchedulingMindTrick {
   static std::tuple<std::string, std::string> AutoGenSoftConstraints(ScopInfo &scop_info, const isl::schedule &sch);
   static std::tuple<std::string, std::string> AutoGenGPUSoftConstraints(ScopInfo &scop_info, const isl::schedule &sch);
 
-  void CollectSoftConstraintsData(std::string stmt_name, unsigned int dim, unsigned int nb_vars, unsigned int nb_params,
-                                  std::string expr);
-
-  void BuildSoftConstraints();
-  void BuildInfluenceList(std::vector<single_data> singles);
-  void BuildInfluenceEqualList(std::map<std::string, std::vector<single_data>> linked);
-
-  void BuildInfluencedSchedule(void);
-  void IslInfluenceToggle(bool toggle);
-
-  isl::schedule AdjustSchedule(const isl::schedule &schedule, const std::vector<div_mod_data> &modulos_divisions);
+  bool BuildInfluencedSchedule(const isl::schedule &schedule);
 
   ///////////////////////////////////////////////////////////////////////////
   // Miscellaneous methods
   ///////////////////////////////////////////////////////////////////////////
 
   std::vector<std::string> split_string(std::string str, std::string delim) const;
-  int FindStripmineFactor(int val, int limit, bool greedy = false) const;
+  int FindStripmineFactor(int size, int limit, bool greedy = false) const;
   int FindInnermostCoincidentDimension(const isl::schedule_node_band &band);
 
   ///////////////////////////////////////////////////////////////////////////
@@ -327,14 +278,10 @@ class SchedulingMindTrick {
   std::string suggested_schedule_string_{""};
   std::vector<std::string> suggested_schedule_vector_;
 
-  std::vector<std::tuple<std::string, std::vector<int>>> post_transformations_;
+#ifdef AKG_USE_MLS
+  mls::bin::Hints hints_;
+#endif
 
-  std::vector<single_data> singles_;
-  std::map<std::string, std::vector<single_data>> linked_;
-
-  std::vector<div_mod_data> modulos_divisions_;
-  isl_influence_list *influence_list_{nullptr};
-  isl_influence_equal_list *influence_equal_list_{nullptr};
   std::string parse_soft_constraints_log_str_{""};
   isl::schedule influenced_schedule_;
 
@@ -377,7 +324,6 @@ class SchedulingMindTrick {
   SchedulingMindTrick();
   // clang-format on
 };
-
 
 std::tuple<std::string, std::string> AutoGenAscend910SoftConstraints(const ScopInfo &scop_info,
                                                                      const isl::schedule &sch);

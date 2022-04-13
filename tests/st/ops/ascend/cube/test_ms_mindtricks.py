@@ -34,7 +34,8 @@ from tests.common.tensorio import compare_tensor
 
 ########################################################################################################################
 
-MINDTRICK_CASE_DIR = "./mind-trick_cases"
+pwd = os.path.dirname(os.path.abspath(__file__))
+MINDTRICK_CASE_DIR = pwd + "/mind-trick_cases"
 
 # Note: no need to hardcode trick paths for composite_operators unless the trick's name differs from the operator name
 TRICKS_DIR = MINDTRICK_CASE_DIR + "/tricks"

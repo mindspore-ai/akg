@@ -922,6 +922,9 @@ std::ostream &operator<<(std::ostream& out, ForType type) { // NOLINT(*)
     case ForType::Serial:
       out << "for";
       break;
+    case ForType::Invariant:
+      out << "invariant_for";
+      break;
     case ForType::Parallel:
       out << "parallel";
       break;

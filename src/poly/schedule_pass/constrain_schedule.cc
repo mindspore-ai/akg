@@ -39,6 +39,16 @@
 namespace akg {
 namespace ir {
 namespace poly {
+///////////////////////////////////////////////////////////////////////////
+// Supported environment variables
+///////////////////////////////////////////////////////////////////////////
+
+static constexpr const char *const kEnvStringMindTricksEnable = "MS_AKG_MIND_TRICKS";
+static constexpr const char *const kEnvStringMindTricksDir = "MS_AKG_MIND_TRICKS_DIR";
+static constexpr const char *const kEnvStringMindTricksVerbosity = "MS_AKG_MIND_TRICKS_VERBOSITY";
+static constexpr const char *const kEnvStringMindTricksTemplates = "MS_AKG_MIND_TRICKS_TEMPLATES";
+static constexpr const char *const kEnvStringMindTricksOperatorBlacklist = "MS_AKG_MIND_TRICKS_OPERATOR_BLACKLIST";
+static constexpr const char *const kEnvStringMindTricksAutogen = "MS_AKG_MIND_TRICKS_AUTOGEN";
 
 ////////////////////////////////////////////////////////////////////////////////
 // Local "implementation-detail" variables
@@ -79,7 +89,7 @@ std::vector<std::string> ConstrainSchedule::MindTricksDirectories(void) {
   std::vector<std::string> directories;
 
   // We only add the directory specified via the environment.
-  const char *const user_directory = std::getenv(env_string_mind_tricks_dir_);
+  const char *const user_directory = std::getenv(kEnvStringMindTricksDir);
   if (user_directory) {
     directories.push_back(user_directory);
   }
@@ -168,9 +178,9 @@ static inline void RunInfo(const std::string &stage, const std::string &kernel_n
 }
 
 bool ConstrainSchedule::KernelIsBlacklisted(const isl::schedule &sch) const {
-  const char *const blacklist_path = std::getenv(env_string_mind_tricks_operator_blacklist_);
+  const char *const blacklist_path = std::getenv(kEnvStringMindTricksOperatorBlacklist);
   if (!blacklist_path) {
-    Info(log::Verbosity::high, env_string_mind_tricks_operator_blacklist_ + std::string(" not set"));
+    Info(log::Verbosity::high, kEnvStringMindTricksOperatorBlacklist + std::string(" not set"));
     return false;
   }
 
@@ -202,7 +212,7 @@ bool ConstrainSchedule::KernelIsBlacklisted(const isl::schedule &sch) const {
 }
 
 bool ConstrainSchedule::ShouldAutogenMindTrick(const isl::schedule &sch) const {
-  const char *const env_autogen = std::getenv(env_string_mind_tricks_autogen_);
+  const char *const env_autogen = std::getenv(kEnvStringMindTricksAutogen);
   bool enable_autogen = scop_info_.user_config_.GetEnableMindTrickAutogen();
 
   if (env_autogen) {
@@ -260,9 +270,9 @@ bool ConstrainSchedule::IsEnabled(void) {
     return false;
   }
 
-  const char *const env_mind_tricks = std::getenv(env_string_mind_tricks_enable_);
+  const char *const env_mind_tricks = std::getenv(kEnvStringMindTricksEnable);
   if (env_mind_tricks && std::string(env_mind_tricks) == "false") {
-    Info("ConstrainSchedule was disabled via environment variable " + std::string(env_string_mind_tricks_enable_));
+    Info("ConstrainSchedule was disabled via environment variable " + std::string(kEnvStringMindTricksEnable));
     return false;
   }
 
@@ -423,7 +433,7 @@ void ConstrainSchedule::ExtractDisabledPasses(const std::shared_ptr<SchedulingMi
 }
 
 void ConstrainSchedule::CreateMindTrickTemplate(const isl::schedule &sch) {
-  const char *const env_templates = std::getenv(env_string_mind_tricks_templates_);
+  const char *const env_templates = std::getenv(kEnvStringMindTricksTemplates);
   if (!env_templates || std::string(env_templates) != "true") {
     return;
   }
@@ -473,7 +483,7 @@ void ConstrainSchedule::InitVerbosityLevel(void) {
   }
 #endif
   {
-    const char *const env_verbosity_string = std::getenv(env_string_mind_tricks_verbosity_);
+    const char *const env_verbosity_string = std::getenv(kEnvStringMindTricksVerbosity);
     if (env_verbosity_string) {
       const int env_verbosity = std::stoi(env_verbosity_string);
       if (env_verbosity >= 0) verbosity_ = env_verbosity;

@@ -15,6 +15,12 @@
  */
 #include "compute_schedule.h"
 
+#include "poly/isl_util.h"
+
+#ifdef AKG_USE_MLS
+#include "poly/mls.h"
+#endif
+
 namespace akg {
 namespace ir {
 namespace poly {
@@ -161,14 +167,89 @@ isl::union_pw_aff ComputeSchedule::GenerateNewAffine(const isl::union_pw_aff &sw
   return new_aff;
 };
 
+#ifdef AKG_USE_MLS
+mls::bin::Hints ComputeSchedule::ExtractDirectivesFromAKG(void) {
+  mls::bin::Hints hints;
+
+  ForTypeMap directives = scop_info_.analysis_result_.GetForTypeMap();
+  std::map<std::string, std::vector<int>> serials_dir;
+  std::map<std::string, std::vector<int>> vectorials_dir;
+  std::map<std::string, std::vector<int>> parallels_dir;
+  for (const auto &[stmt, vloop_directive] : directives) {
+    std::string stmt_string = stmt.get_name();
+    for (uint i = 0; i < vloop_directive.size(); ++i) {
+      switch (vloop_directive[i]) {
+        case ForType::Serial:
+          break;
+        case ForType::Invariant:
+          LOG(INFO) << stmt_string << "invariant_for";
+          serials_dir[stmt_string].push_back(i);
+          break;
+        case ForType::Parallel:
+          LOG(INFO) << stmt_string << "parallel";
+          parallels_dir[stmt_string].push_back(i);
+          break;
+        case ForType::Vectorized:
+        case ForType::Swizzled:  // treat "Swizzled" like "Vectorized" for the moment
+          LOG(INFO) << stmt_string << "vectorized";
+          vectorials_dir[stmt_string].push_back(i);
+          break;
+        case ForType::Unrolled:
+          LOG(WARNING) << stmt_string << "Do not treat ForType::Unrolled as a directives";
+          break;
+      }
+    }
+  }
+
+  hints.SetSerials(serials_dir);
+  hints.SetVectorials(vectorials_dir);
+  return hints;
+}
+#endif
+
 isl::schedule ComputeSchedule::Run(isl::schedule sch) {
   if (scop_info_.user_config_.GetModScheduleShift()) {
     pass_info_.dependences_ = ModDependences(pass_info_.dependences_);
   }
   pass_info_.constraints_ = MakeScheduleConstraints(sch, pass_info_);
+
+#ifdef AKG_USE_MLS
+  const bool enable_mlsched = MLSchedShouldBeUsed(scop_info_);
+  bool enable_isl = !enable_mlsched;
+
+  isl::schedule result;
+  if (enable_mlsched) {
+    mls::bin::Options options = MLSchedOptionsInit(scop_info_);
+    if (options.ShouldLogInternalDebugging()) {
+      LOG(INFO) << "MLSched v." << mls::bin::VersionString() << std::endl;
+      LOG(INFO) << options.String() << std::endl;
+    }
+
+    const std::string &kernel_name = scop_info_.user_config_.GetKernelName();
+    mls::bin::Scop scop(sch.get(), pass_info_.dependences_.get(), ExtractDirectivesFromAKG(), options, kernel_name);
+    const bool mlsched_success = scop.ComputeSchedule();
+    if (options.ShouldLogInternalDebugging()) {
+      LOG(INFO) << scop.String(options) << std::endl;
+    }
+
+    if (mlsched_success) {
+      result = isl::manage(scop.ToIslSchedule(sch.ctx().get()));
+    } else {
+      enable_isl = true;
+    }
+  }
+
+  // Schedule with isl if MLSched is disabled or cannot return a schedule
+  if (!enable_mlsched || enable_isl) {
+    SetIslOptions();
+    result = pass_info_.constraints_.compute_schedule();
+  }
+#else
   SetIslOptions();
-  auto computed_sch = pass_info_.constraints_.compute_schedule();
-  return computed_sch;
+  result = pass_info_.constraints_.compute_schedule();
+#endif
+
+  return result;
 }
 
 }  // namespace poly

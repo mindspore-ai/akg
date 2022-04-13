@@ -174,6 +174,7 @@ HYBRID_GLOBALS = {
     'vectorize'      : range,
     'parallel'       : range,
     'const_range'    : range,
+    'serial'         : range,
     'bind'           : bind,
     'allocate'       : allocate,
     'output_tensor'  : allocate,

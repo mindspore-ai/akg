@@ -1126,7 +1126,9 @@ enum class ForType : int {
   /*! \brief Unroll annotation. */
   Unrolled = 3,
   /*! \brief Swizzle loop on GPU. */
-  Swizzled = 4
+  Swizzled = 4,
+  /*! \brief Loops are invariant under scheduler optimazation. */
+  Invariant = 5
 };
 
 // Kevice api of for loop

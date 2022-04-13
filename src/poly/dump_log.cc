@@ -288,6 +288,15 @@ void AnalysisResult::DumpScopDataBasics(std::ofstream &of) {
     of << std::endl;
   }
 
+  PrintHeader(of, "directives");
+  for (const auto &stmt : GetForTypeMap()) {
+    of << stmt.first << " : for type[ ";
+    for (const auto &type : stmt.second) {
+      of << type << " ";
+    }
+    of << "]" << std::endl;
+  }
+
   PrintHeader(of, "accesses");
   for (const auto &stmt : GetAccessMap()) {
     of << stmt.second << " : ";

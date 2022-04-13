@@ -125,6 +125,7 @@ class For(Stmt):
     Parallel = 1
     Vectorized = 2
     Unrolled = 3
+    Invariant = 5
     def __init__(self,
                  loop_var,
                  min_val,

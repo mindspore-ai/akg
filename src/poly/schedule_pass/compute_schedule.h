@@ -18,6 +18,10 @@
 
 #include "poly/schedule_pass.h"
 
+#ifdef AKG_USE_MLS
+#include "poly/mls.h"
+#endif
+
 namespace akg {
 namespace ir {
 namespace poly {
@@ -40,12 +44,16 @@ class ComputeSchedule : public SchedulePass {
   void SetIslOptions();
 
   isl::union_map ModDependences(const isl::union_map &dependences);
-  
+
   isl::schedule PermuteOuterBand(const isl::schedule sch);
   long CollectReductionExtent(const isl::union_pw_aff &aff);
   std::unordered_set<std::string> CollectSwapIds(const isl::union_pw_aff &aff, const long reduce_extent);
-  isl::union_pw_aff GenerateNewAffine(const isl::union_pw_aff &swap_out, const isl::union_pw_aff &swap_in, std::unordered_set<std::string> swap_ids);
+  isl::union_pw_aff GenerateNewAffine(const isl::union_pw_aff &swap_out, const isl::union_pw_aff &swap_in,
+                                      std::unordered_set<std::string> swap_ids);
 
+#ifdef AKG_USE_MLS
+  mls::bin::Hints ExtractDirectivesFromAKG(void);
+#endif
 
  private:
   PassInfo &pass_info_;
