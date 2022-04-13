@@ -561,6 +561,7 @@ class GpuStrategy : public TilingStrategy {
   int64_t total_vectorized_bytes_ = 16;  // The default total number of bytes for vectorization is 16.
   int max_buf_size_to_speedup_inj_ = 5;
   int double_{2};
+  bool use_shared_mem_{false};
 };
 
 class CpuStrategy : public TilingStrategy {
