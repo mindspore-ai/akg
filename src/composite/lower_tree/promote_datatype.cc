@@ -101,10 +101,47 @@ void OverflowChecker::Visit_(const AttrStmt *op) {
   IRVisitor::Visit_(op);
 }
 
-void OverflowChecker::Visit(const NodeRef& node) {
+void OverflowChecker::Visit(const NodeRef &node) {
   if (need_promote_int64) return;
   IRVisitor::Visit(node);
 }
+
+class MinMaxDtypeTrans : public IRMutator {
+ public:
+  Expr Mutate_(const Min *op, const Expr &s) {
+    Expr a = CanonicalSimplify(op->a);
+    Expr b = CanonicalSimplify(op->b);
+    auto dtype_a = a.type();
+    auto dtype_b = b.type();
+    if (dtype_a.lanes() == dtype_b.lanes()) {
+      return Min::make(IRMutator::Mutate(a), IRMutator::Mutate(b));
+    }
+    if (dtype_a.lanes() < dtype_b.lanes()) {
+      Expr new_a = Cast::make(dtype_b, a);
+      return Min::make(IRMutator::Mutate(new_a), IRMutator::Mutate(b));
+    } else {
+      Expr new_b = Cast::make(dtype_a, b);
+      return Min::make(IRMutator::Mutate(a), IRMutator::Mutate(new_b));
+    }
+  }
+
+  Expr Mutate_(const Max *op, const Expr &s) {
+    Expr a = CanonicalSimplify(op->a);
+    Expr b = CanonicalSimplify(op->b);
+    auto dtype_a = a.type();
+    auto dtype_b = b.type();
+    if (dtype_a.lanes() == dtype_b.lanes()) {
+      return Max::make(IRMutator::Mutate(a), IRMutator::Mutate(b));
+    }
+    if (dtype_a.lanes() < dtype_b.lanes()) {
+      Expr new_a = Cast::make(dtype_b, a);
+      return Max::make(IRMutator::Mutate(new_a), IRMutator::Mutate(b));
+    } else {
+      Expr new_b = Cast::make(dtype_a, b);
+      return Max::make(IRMutator::Mutate(a), IRMutator::Mutate(new_b));
+    }
+  }
+};
 
 Stmt PromoteIndexDataType(Stmt stmt) {
   auto overflow_checker = OverflowChecker();
@@ -115,7 +152,8 @@ Stmt PromoteIndexDataType(Stmt stmt) {
     std::unordered_map<const Variable *, Expr> var_map{{}};
     var_map[overflow_checker.var_to_replace] =
       Cast::make(Int(poly::INT_64), GetRef<Expr>(overflow_checker.var_to_replace));
-    return Substitute(stmt, var_map);
+    stmt = Substitute(stmt, var_map);
+    stmt = MinMaxDtypeTrans().Mutate(stmt);
   }
   return stmt;
 }
