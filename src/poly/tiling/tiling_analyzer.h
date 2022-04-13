@@ -75,6 +75,20 @@ inline int64_t GetAlignBytes(const int64_t dtype) {
   }
 }
 
+inline int64_t GetMaxBytes(std::unordered_map<std::string, std::vector<int>> dtypes) {
+  int64_t max_byte = -1;
+  for (const auto &it : dtypes) {
+    if (it.second.empty()) {
+      continue;
+    }
+    int max_elem = *max_element(it.second.begin(), it.second.end());
+    if (max_byte == -1 || max_byte < max_elem) {
+      max_byte = max_elem;
+    }
+  }
+  return max_byte;
+}
+
 inline int64_t GetMinBytes(std::unordered_map<std::string, std::vector<int>> dtypes) {
   int64_t min_byte = -1;
   for (const auto &it : dtypes) {

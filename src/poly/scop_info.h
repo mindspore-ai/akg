@@ -902,6 +902,7 @@ constexpr auto AT_ELEMWISE = "ELEMWISE";
 constexpr auto AT_CALL = "CALL";
 constexpr auto AT_COUNT = "COUNT";
 constexpr auto AT_PARTIAL_ELEM = "PARTIAL_ELEM";
+constexpr auto AT_HEAVY_ELTWISE = "HEAVY_ELTWISE";
 
 enum Template {
   DEFAULT = 0,

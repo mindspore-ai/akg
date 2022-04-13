@@ -261,6 +261,15 @@ std::unordered_map<std::string, std::string> ExtractLoopIndicesFromMatricesConv(
   return cube_var_map;
 }
 
+int64_t AlignToDivisibleSize(int64_t original, int64_t divisor) {
+  CHECK_GE(original, divisor) << "Original size must be greater equal to divisor: " << original << " vs " << divisor;
+  if (divisor > 0) {
+    return (original / divisor) * divisor;
+  } else {
+    return 1;
+  }
+}
+
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

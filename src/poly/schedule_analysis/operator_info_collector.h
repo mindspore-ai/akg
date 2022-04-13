@@ -28,6 +28,16 @@ struct ToTTensor {
   std::vector<int64_t> indices;
 };
 
+enum class HeavyEltwiseOp { Tanh=0, Power, Sqrt, Log, Exp };
+
+const std::map<std::string, HeavyEltwiseOp> HEAVY_ELTWISE_OP_MAP = {
+  {"tanh", HeavyEltwiseOp::Tanh},
+  {"power", HeavyEltwiseOp::Power},
+  {"sqrt", HeavyEltwiseOp::Sqrt},
+  {"log", HeavyEltwiseOp::Log},
+  {"exp", HeavyEltwiseOp::Exp},
+};
+
 class OpTypeCollector : public IRVisitor {
  public:
   OpTypeCollector(ScopInfo &scop_info, const Stmt &stmt) : scop_info_(scop_info), stmt_(stmt) {

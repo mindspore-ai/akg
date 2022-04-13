@@ -99,6 +99,11 @@ void SpaceAnalyzer::IdentifyInsnType() {
         MarkGemmAxes(pe);
       }
       MarkCaredType(pe);
+      for (auto src : pe.src) {
+        if (HEAVY_ELTWISE_OP_MAP.find(src.name) != HEAVY_ELTWISE_OP_MAP.end()) {
+          analyzer_->RootAxis()->MarkWithAttr(AttrInfo{AT_HEAVY_ELTWISE, src.name});
+        }
+      }
     }
   }
 }
