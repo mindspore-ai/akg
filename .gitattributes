@@ -124,9 +124,3 @@ prebuild/aarch64/scheduling_mind_trick_ascend.cc.o filter=lfs diff=lfs merge=lfs
 prebuild/x86_64/light_cp.cc.o filter=lfs diff=lfs merge=lfs -text
 prebuild/x86_64/scheduling_mind_trick_ascend.cc.o filter=lfs diff=lfs merge=lfs -text
 prebuild/aarch64/light_cp.cc.o filter=lfs diff=lfs merge=lfs -text
-prebuild/x86_64/libmls.old-abi.a filter=lfs diff=lfs merge=lfs -text
-prebuild/x86_64/libqiuqi_ip.a filter=lfs diff=lfs merge=lfs -text
-prebuild/x86_64/libmls.a filter=lfs diff=lfs merge=lfs -text
-prebuild/aarch64/libmls.a filter=lfs diff=lfs merge=lfs -text
-prebuild/aarch64/libmls.old-abi.a filter=lfs diff=lfs merge=lfs -text
-prebuild/aarch64/libqiuqi_ip.a filter=lfs diff=lfs merge=lfs -text

@@ -201,8 +201,13 @@ mls::bin::Hints ComputeSchedule::ExtractDirectivesFromAKG(void) {
     }
   }
 
-  hints.SetSerials(serials_dir);
-  hints.SetVectorials(vectorials_dir);
+  for (const auto &[key, directive] : serials_dir) {
+    hints.SetStatementSerials(key.c_str(), directive);
+  }
+  for (const auto &[key, directive] : vectorials_dir) {
+    hints.SetStatementVectorials(key.c_str(), directive);
+  }
+
   return hints;
 }
 #endif
@@ -226,7 +231,9 @@ isl::schedule ComputeSchedule::Run(isl::schedule sch) {
     }
 
     const std::string &kernel_name = scop_info_.user_config_.GetKernelName();
-    mls::bin::Scop scop(sch.get(), pass_info_.dependences_.get(), ExtractDirectivesFromAKG(), options, kernel_name);
+    const mls::bin::Hints hints = ExtractDirectivesFromAKG();
+    isl_union_map *const dependences = pass_info_.dependences_.get();
+    mls::bin::Scop scop(sch.get(), dependences, hints, options, kernel_name.c_str());
     const bool mlsched_success = scop.ComputeSchedule();
     if (options.ShouldLogInternalDebugging()) {
       LOG(INFO) << scop.String(options) << std::endl;
