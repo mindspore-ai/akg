@@ -17,13 +17,13 @@
 import numpy as np
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
-from akg.ops.math.ascend import Atan
+from akg.ops.math.ascend import atan
 from tests.common.gen_random import random_gaussian
 from tests.common.base import get_rtol_atol
 
 def atan_run(shape, dtype, attrs):
     """run function for arctangent"""
-    mod = utils.op_build_test(Atan, [shape], [dtype],
+    mod = utils.op_build_test(atan, [shape], [dtype],
                               kernel_name="atan", attrs=attrs)
     expect, inputs, out_buf = gen_data(shape, dtype)
     output = utils.mod_launch(mod, (inputs, out_buf), expect=expect)

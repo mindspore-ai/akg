@@ -20,10 +20,10 @@ from akg.utils import kernel_exec as utils
 from tests.common.base import get_rtol_atol
 from tests.common.gen_random import random_gaussian
 from tests.common.tensorio import compare_tensor
-from akg.ops.math.ascend import AsinGrad
+from akg.ops.math.ascend import asin_grad
 
 def asin_grad_run(shape, dtype, attrs=None):
-    mod = utils.op_build_test(AsinGrad, [shape, shape], [dtype, dtype],
+    mod = utils.op_build_test(asin_grad, [shape, shape], [dtype, dtype],
                               kernel_name="asin_grad", attrs=attrs)
     expect, inputs, output = gen_data(dtype, shape)
     output = utils.mod_launch(mod, (*inputs, output), expect=expect)

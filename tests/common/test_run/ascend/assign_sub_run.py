@@ -14,14 +14,14 @@
 import numpy as np
 from akg.utils import kernel_exec as utils
 from tests.common.tensorio import compare_tensor
-from akg.ops.math.ascend import AssignSub
+from akg.ops.math.ascend import assign_sub
 from tests.common.gen_random import random_gaussian
 
 def assign_sub_run(shape, dtype, attrs):
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(AssignSub, [shape, shape], [dtype, dtype], kernel_name=kernel_name, attrs=attrs,
+        mod = utils.op_build_test(assign_sub, [shape, shape], [dtype, dtype], kernel_name=kernel_name, attrs=attrs,
                                   tuning=t)
         if t:
             expect, input1, input2, output = gen_data(dtype, shape)
@@ -29,7 +29,7 @@ def assign_sub_run(shape, dtype, attrs):
         else:
             return mod
     else:
-        mod = utils.op_build_test(AssignSub, [shape, shape], [dtype, dtype], kernel_name='assign_sub', attrs=attrs)
+        mod = utils.op_build_test(assign_sub, [shape, shape], [dtype, dtype], kernel_name='assign_sub', attrs=attrs)
         expect, input1, input2, output = gen_data(dtype, shape)
         output = utils.mod_launch(mod, (input1, input2, output), expect=expect)
 

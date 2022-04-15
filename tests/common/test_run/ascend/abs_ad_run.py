@@ -15,7 +15,7 @@
 import numpy as np
 from tests.common.tensorio import compare_tensor
 from akg.topi.util import get_const_tuple
-from akg.ops.math.ascend import AbsAd
+from akg.ops.math.ascend import abs_ad
 from akg.utils import kernel_exec as utils
 from tests.common.base import get_rtol_atol
 
@@ -23,14 +23,14 @@ def abs_ad_run(shape, dtype, attrs):
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(AbsAd, [shape, shape], [dtype, dtype], kernel_name=kernel_name, attrs=attrs, tuning=t)
+        mod = utils.op_build_test(abs_ad, [shape, shape], [dtype, dtype], kernel_name=kernel_name, attrs=attrs, tuning=t)
         if t:
             expect, head_np, input_np, output = gen_data(dtype, shape)
             return mod, expect, (head_np, input_np, output)
         else:
             return mod
     else:
-        mod = utils.op_build_test(AbsAd, [shape, shape], [dtype, dtype], kernel_name='abs_ad', attrs=attrs)
+        mod = utils.op_build_test(abs_ad, [shape, shape], [dtype, dtype], kernel_name='abs_ad', attrs=attrs)
         expect, head_np, input_np, output = gen_data(dtype, shape)
         output = utils.mod_launch(mod, (head_np, input_np, output), expect=expect)
         rtol, atol = get_rtol_atol("abs_ad", dtype)

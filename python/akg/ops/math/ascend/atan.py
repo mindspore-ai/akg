@@ -28,6 +28,7 @@ TAN_PI_BY_EIGHT = 0.4142135623730950
 
 ATAN_TAYLOR_COEF = (1.0, -1.0 / 3, 1.0 / 5, -1.0 / 7, 1.0 / 9, -1.0 / 11, 1.0 / 13)
 
+
 def _do_atan_taylor(data):
     """
     Taylor algorithm for atan.
@@ -67,6 +68,7 @@ def _do_atan_taylor(data):
         res2 = topi.add(res2, tvm.const(ATAN_TAYLOR_COEF[i], dtype))
     return topi.minimum(res, topi.multiply(res2, data))
 
+
 def _atan_compute(data):
     """compute for atan"""
     dtype = data.dtype
@@ -101,8 +103,9 @@ def _atan_compute(data):
 
     return res
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, (str, type(None)))
-def Atan(x, target=utils.CCE):
+def atan(x):
     """
     Compute trigonometric inverse tangent of x.
 

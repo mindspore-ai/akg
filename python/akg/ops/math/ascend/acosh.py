@@ -41,7 +41,7 @@ def _sqrt_mini_vsqrt_newton_iter(x):
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, (str, type(None)))
-def Acosh(x, target=utils.CCE):
+def acosh(x, target=utils.CCE):
     r"""
     Compute acosh function.
 

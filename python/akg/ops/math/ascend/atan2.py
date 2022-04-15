@@ -16,11 +16,12 @@
 import akg
 import akg.utils as utils
 from akg import tvm, topi
-from .atan import Atan
-from ..reciprocal import Reciprocal
 from akg.utils.format_transform import get_shape
 from akg.utils.kernel_exec import product_is_mini
 from akg.utils import dsl_create as dc
+from .atan import atan
+from ..reciprocal import Reciprocal
+
 
 
 CONST_PI_BY_TWO = 1.5707963267948966192313216916398
@@ -91,7 +92,7 @@ def _atan2_compute(y, x):
         res = topi.multiply(y, x_rec)
     else:
         res = topi.divide(y, x)
-    res, _ = Atan(res)
+    res, _ = atan(res)
 
     if product_is_mini():
         tensor_zero = dc.zero_const("float16")
@@ -115,7 +116,7 @@ def _atan2_compute(y, x):
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (str, type(None)))
-def Atan2(y, x, target=utils.CCE):
+def atan2(y, x):
     """
     Compute arc tangent of y/x.
 

@@ -18,8 +18,9 @@ import akg.tvm
 import akg.utils as utils
 from ..rsqrt import Rsqrt
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (str, type(None)))
-def AcosGrad(x, dy, target=utils.CCE):
+def acos_grad(x, dy, target=utils.CCE):
     """
     Gradient for acos.
 

@@ -19,10 +19,10 @@ import numpy as np
 from akg.utils import kernel_exec as utils
 from tests.common.base import get_rtol_atol
 from tests.common.tensorio import compare_tensor
-from akg.ops.math.ascend import Asin
+from akg.ops.math.ascend import asin
 
 def asin_run(shape, dtype, attrs=None):
-    mod = utils.op_build_test(Asin, [shape], [dtype], kernel_name="asin", attrs=attrs)
+    mod = utils.op_build_test(asin, [shape], [dtype], kernel_name="asin", attrs=attrs)
     expect, inputs, output = gen_data(dtype, shape)
     output = utils.mod_launch(mod, (inputs, output), expect=expect)
     rtol, atol = get_rtol_atol("asin", dtype)

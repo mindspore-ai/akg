@@ -22,6 +22,7 @@ from akg.utils.kernel_exec import product_is_mini
 from .sign import Sign
 from ..log import Log
 
+
 def sqrt_mini_newton_iter_impl(x):
     """sqrt compute on mini with the Newton's Iteration"""
 
@@ -112,8 +113,8 @@ def log_compute_mini_impl(x, target=utils.CCE):
 
     # overflow
     overflow_threshold = tvm.const(thresholds[3], "float16")
-    res_overflow = topi.cast(topi.add(Log(topi.multiply(x, 1/overflow_div_coffient), target), log_overflow_div_coffient),
-                             "float16")
+    res_overflow = topi.cast(topi.add(Log(topi.multiply(x, 1/overflow_div_coffient), target), 
+                                                                                        log_overflow_div_coffient), "float16")
     res = tvm.compute(shape, lambda *indice: tvm.expr.Select(x_fp16(*indice) >= overflow_threshold,
                                                              res_overflow(*indice), res(*indice)),
                       name="res_4")
@@ -123,7 +124,7 @@ def log_compute_mini_impl(x, target=utils.CCE):
 
 
 @utils.check_input_type(tvm.tensor.Tensor, (str, type(None)))
-def Asinh(x, target=utils.CCE):
+def asinh(x, target=utils.CCE):
     r"""
     Compute asinh function.
 

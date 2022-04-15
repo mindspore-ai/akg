@@ -18,8 +18,9 @@ import akg.tvm
 import akg.topi
 import akg.utils as utils
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (str, type(None)))
-def AssignSub(data1, data2, target=utils.CCE):
+def assign_sub(data1, data2):
     """
     Computes data1 - data2 elementwise.
 

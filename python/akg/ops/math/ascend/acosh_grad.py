@@ -25,6 +25,7 @@ def _sinh_taylor(x):
 
     sinh_2x_times = 3
     dtype = x.dtype
+
     def _sinh_taylor_compute(x):
         """sinh(x) value is x * (1 + x^2( 1/3! + x^2(1/5! + x^2/7!)))"""
         taylor_params = [tvm.const(0.1666666666666666666666666666666666, dtype),
@@ -55,7 +56,7 @@ def _sinh_taylor(x):
 
 
 @utils.check_input_type(tvm.tensor.Tensor, tvm.tensor.Tensor, (str, type(None)))
-def AcoshGrad(y, dy, target=utils.CCE):
+def acosh_grad(y, dy):
     """
     Gradient for acosh.
 

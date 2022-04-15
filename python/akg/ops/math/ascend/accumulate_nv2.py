@@ -53,7 +53,7 @@ def _accumulate_nv2_compute(x):
 
 
 @utils.check_input_type((list, tuple), (str, type(None)))
-def AccumulateNv2(data, target=utils.CCE):
+def accumulate_nv2(data):
     """
     Compute sum of all elements in tensor.
 

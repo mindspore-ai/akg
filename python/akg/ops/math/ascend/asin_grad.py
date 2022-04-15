@@ -18,6 +18,7 @@ import akg.utils as utils
 from akg import topi, tvm
 from akg.utils.kernel_exec import product_is_mini
 
+
 def _newton(start_value, num_to_vrsqrt):
     """Do newton's method to calculate vrsqrt."""
 
@@ -74,7 +75,7 @@ def _asin_grad_compute(x, dy):
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (str, type(None)))
-def AsinGrad(x, dy, target=utils.CCE):
+def asin_grad(x, dy):
     """
     Gradient for arcsin.
 

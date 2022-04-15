@@ -20,11 +20,11 @@ from tests.common.base import get_rtol_atol
 from tests.common.gen_random import random_gaussian
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
-from akg.ops.math.ascend import AtanGrad
+from akg.ops.math.ascend import atan_grad
 
 def atan_grad_run(shape1, dtype1, shape2, dtype2, attrs):
     """run function for arctangent"""
-    mod = utils.op_build_test(AtanGrad, [shape1, shape2], [dtype1, dtype2],
+    mod = utils.op_build_test(atan_grad, [shape1, shape2], [dtype1, dtype2],
                               kernel_name="atan_grad", attrs=attrs)
     expect, inputs, out_buf = gen_data(shape1, dtype1, shape2, dtype2)
     output = utils.mod_launch(mod, (*inputs, out_buf), expect=expect)

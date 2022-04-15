@@ -15,7 +15,7 @@
 import numpy as np
 
 from akg.utils import kernel_exec as utils
-from akg.ops.math.ascend import Asinh
+from akg.ops.math.ascend import asinh
 from tests.common.base import get_rtol_atol
 from tests.common.tensorio import compare_tensor
 from tests.common.gen_random import random_gaussian
@@ -25,7 +25,7 @@ def asinh_run(x_shape, x_dtype, attrs):
     """run function for dsl function asinh."""
     shapes = [x_shape]
     dtypes = [x_dtype]
-    mod = utils.op_build_test(Asinh, shapes, dtypes,
+    mod = utils.op_build_test(asinh, shapes, dtypes,
                               kernel_name="asinh", attrs=attrs)
     bench_mark, input_datas, output = gen_data(x_dtype, x_shape)
     output = utils.mod_launch(mod, input_datas + [output], expect=bench_mark)

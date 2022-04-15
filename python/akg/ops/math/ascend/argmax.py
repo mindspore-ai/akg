@@ -16,11 +16,14 @@
 
 """operator dsl function: argmax"""
 import akg
-from .argmin_argmax_common import common
 import akg.utils as utils
 
+
+from .argmin_argmax_common import common
+
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, int, (str, type(None)))
-def Argmax(data, axis, target=utils.CCE):
+def argmax(data, axis):
     """
     Calculate argmax value on specific axis.
 
