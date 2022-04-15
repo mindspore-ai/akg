@@ -21,8 +21,9 @@ from ..sub import Sub
 from ..abs import Abs
 from ..cast import Cast
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (float, type(None)), (str, type(None)))
-def ApproximateEqual(x, y, tolerance=1e-5, target=utils.CCE):
+def approximate_equal(x, y, tolerance=1e-5, target=utils.CCE):
     """
     abs(x-y) less than or equal to the tolerance
 

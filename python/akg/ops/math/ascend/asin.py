@@ -136,7 +136,7 @@ def _asin_compute(data_input, target):
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, (str, type(None)))
-def Asin(x, target=utils.CCE):
+def asin(x, target=utils.CCE):
     """
     Computes the trignometric inverse sine of `x` element-wise.
 

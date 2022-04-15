@@ -14,7 +14,7 @@
 
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.math.ascend import AsinhGrad
+from akg.ops.math.ascend import asinh_grad
 from tests.common.base import get_rtol_atol
 from tests.common.tensorio import compare_tensor
 from tests.common.gen_random import random_gaussian
@@ -24,7 +24,7 @@ def asinh_grad_run(shape, dtype, attrs):
     """run function for dsl function asinh_grad."""
     shapes = [shape, shape]
     dtypes = [dtype, dtype]
-    mod = utils.op_build_test(AsinhGrad, shapes, dtypes,
+    mod = utils.op_build_test(asinh_grad, shapes, dtypes,
                               kernel_name="asinh_grad", attrs=attrs)
     bench_mark, inputs, output = gen_data(dtype, shape)
     output = utils.mod_launch(mod, inputs + [output], expect=bench_mark)

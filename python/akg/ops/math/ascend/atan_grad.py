@@ -19,8 +19,9 @@ import akg.utils as utils
 import akg.utils.dsl_create as dc
 from akg import tvm
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (str, type(None)))
-def AtanGrad(head, input_x, target=utils.CCE):
+def atan_grad(head, input_x):
     """
     Compute gradient of input_x in atan.
 

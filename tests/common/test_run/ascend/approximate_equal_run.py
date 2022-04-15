@@ -14,7 +14,7 @@
 
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.math.ascend import ApproximateEqual
+from akg.ops.math.ascend import approximate_equal
 from tests.common.gen_random import random_gaussian
 
 
@@ -24,7 +24,7 @@ def approximate_equal_run(x_shape, x_dtype, y_shape, y_dtype, tolerance=None, at
     op_attrs = None
     if tolerance:
         op_attrs = [tolerance]
-    mod = utils.op_build_test(ApproximateEqual, shapes, dtypes, op_attrs,
+    mod = utils.op_build_test(approximate_equal, shapes, dtypes, op_attrs,
           kernel_name="approximate_equal", attrs=attrs)
     benchMark, inputs, output = gen_data(x_dtype, shapes, tolerance)
     output = utils.mod_launch(mod, inputs + [output], expect=benchMark)

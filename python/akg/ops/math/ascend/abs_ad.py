@@ -17,12 +17,14 @@
 """operator dsl function: abs_ad"""
 
 import akg
-from ..abs import Abs
 import akg.utils as utils
+
+from ..abs import Abs
+
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (str, type(None)))
-def AbsAd(head, in_data, target=utils.CCE):
+def abs_ad(head, in_data, target=utils.CCE):
     """
     Compute gradient of abs operator with automatic differentiate.
 

@@ -15,11 +15,13 @@
 """operator dsl function: argmin"""
 import akg
 import akg.utils as utils
+
+
 from .argmin_argmax_common import common
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, int, (str, type(None)))
-def Argmin(data, axis, target=utils.CCE):
+def argmin(data, axis):
     """
     Calculate argmin value on specific axis.
 

@@ -18,14 +18,14 @@ acos run define
 import numpy as np
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
-from akg.ops.math.ascend import Acos
+from akg.ops.math.ascend import acos
 from tests.common.gen_random import random_gaussian
 
 def acos_run(shape, dtype, attrs):
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(Acos, [shape], [dtype], kernel_name=kernel_name, attrs=attrs, tuning=t)
+        mod = utils.op_build_test(acos, [shape], [dtype], kernel_name=kernel_name, attrs=attrs, tuning=t)
         if t:
             expect, inputs, output = gen_data(dtype, shape)
             return mod, expect, (inputs, output)
@@ -34,7 +34,7 @@ def acos_run(shape, dtype, attrs):
     else:
         expect, inputs, output = gen_data(dtype, shape)
         # op build
-        mod = utils.op_build_test(Acos, [shape], [dtype], kernel_name='acos', attrs=attrs)
+        mod = utils.op_build_test(acos, [shape], [dtype], kernel_name='acos', attrs=attrs)
 
         # inputs and output to hold the data and result_tvm
         output = utils.mod_launch(mod, (inputs, output), expect=expect)

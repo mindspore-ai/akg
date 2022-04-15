@@ -34,7 +34,7 @@ def FloorDiv(x, y, target=utils.CCE):
 
 def Argmax(x, axis=-1, target=utils.CCE):
     """Argmax"""
-    return math.Argmax(x, axis, target=target)
+    return math.argmax(x, axis, target=target)
 
 
 def SimpleMean(x, target=utils.CCE):

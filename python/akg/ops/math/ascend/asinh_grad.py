@@ -22,7 +22,7 @@ from .cosh import cosh_compute as cosh
 
 
 @utils.check_input_type(tvm.tensor.Tensor, tvm.tensor.Tensor, (str, type(None)))
-def AsinhGrad(y, dy, target=utils.CCE):
+def asinh_grad(y, dy):
     """
     Gradient for asinh.
 

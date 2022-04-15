@@ -18,6 +18,7 @@ import math
 import akg.tvm
 import akg.utils as utils
 
+
 def factorial_with_step2(n):
     """Calculate factorial"""
     res = 1
@@ -28,7 +29,7 @@ def factorial_with_step2(n):
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, (str, type(None)))
-def Acos(x, target=utils.CCE):
+def acos(x):
     """
     Compute acos.
 
@@ -54,7 +55,7 @@ def Acos(x, target=utils.CCE):
     input_square = akg.tvm.compute(x.shape, lambda *index: x(*index) * x(*index), name="input_square")
     mid = akg.tvm.compute(x.shape, lambda *index: input_square(*index) * coefficient[len(coefficient) - 1], name="mid")
     for i in range(1, len(coefficient) - 1):
-        name = "mid_res" + str(len(coefficient) - 1 - i)
+        name = "" .join( "mid_res{}".format(str(len(coefficient) - 1 - i)))
         mid = akg.tvm.compute(x.shape,
                               lambda *index, ite_i=i: input_square(*index) *
                               (coefficient[len(coefficient) - 1 - ite_i] + mid(*index)),

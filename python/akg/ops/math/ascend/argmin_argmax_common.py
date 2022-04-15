@@ -100,7 +100,7 @@ def common(data, axis, method="min"):
             reducer = akg.tvm.comm_reducer(
                 lambda x, y: dav.fargmax(x, y), lambda t: akg.tvm.min_value(t))
         else:
-            raise ValueError("not support " + method)
+            raise ValueError("not support {}".format(method))
 
         if len(data.shape) == 1:
             res = akg.tvm.compute((1,), lambda i: reducer(data[k], axis=k))

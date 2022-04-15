@@ -14,7 +14,7 @@
 
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.math.ascend import AccumulateNv2
+from akg.ops.math.ascend import accumulate_nv2
 from tests.common.tensorio import compare_tensor
 from tests.common.base import get_rtol_atol
 from tests.common.gen_random import random_gaussian
@@ -44,4 +44,4 @@ def gen_data(dtype, shapes):
 
 def accumulate_nv2_compile(shape, dtype, n, attrs, kernel_name="accumulate_nv2", tuning=False):
     shapes = [shape] * n
-    return utils.op_build_test(AccumulateNv2, [shapes], [dtype], kernel_name=kernel_name, attrs=attrs, tuning=tuning), shapes
+    return utils.op_build_test(accumulate_nv2, [shapes], [dtype], kernel_name=kernel_name, attrs=attrs, tuning=tuning), shapes

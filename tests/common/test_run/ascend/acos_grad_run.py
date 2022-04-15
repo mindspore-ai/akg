@@ -19,21 +19,21 @@ acos_grad run define
 import numpy as np
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
-from akg.ops.math.ascend import AcosGrad
+from akg.ops.math.ascend import acos_grad
 from tests.common.gen_random import random_gaussian
 
 def acos_grad_run(shape, dtype, attrs):
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(AcosGrad, [shape, shape], [dtype, dtype], kernel_name=kernel_name, attrs=attrs, tuning=t)
+        mod = utils.op_build_test(acos_grad, [shape, shape], [dtype, dtype], kernel_name=kernel_name, attrs=attrs, tuning=t)
         if t:
             expect, grad, inputs, output = gen_data(dtype, shape)
             return mod, expect, (inputs, grad, output)
         else:
             return mod
     else:
-        mod = utils.op_build_test(AcosGrad, [shape, shape], [dtype, dtype], kernel_name='acos_grad', attrs=attrs)
+        mod = utils.op_build_test(acos_grad, [shape, shape], [dtype, dtype], kernel_name='acos_grad', attrs=attrs)
         expect, grad, inputs, output = gen_data(dtype, shape)
         output = utils.mod_launch(mod, (inputs, grad, output), expect=expect)
         # compare result
