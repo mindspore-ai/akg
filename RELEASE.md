@@ -1,4 +1,6 @@
-# MindAKG 1.7.0
+# MindAKG Release Notes
+
+[查看中文](./RELEASE.md)
 
 ## MindAKG 1.7.0 Release Notes
 
