@@ -466,11 +466,19 @@ void GpuSolver::InnerThreadOuterBlock() {
 }
 
 void GpuSolver::DetermineTileFactor(TileAxis *axis, const TileLevel &level) {
-  TileAxis::Constraint cons = level == CACHE1 ? axis->c1_constraints : axis->c0_constraints;
+  auto cons = axis->GetConstConstraint(level);
+  CHECK(cons.tile_extent_.as<IntImm>());
+  CHECK(cons.tile_mod_.as<IntImm>());
+  auto tile_extent = cons.tile_extent_.as<IntImm>()->value;
+  auto tile_mod = cons.tile_mod_.as<IntImm>()->value;
+  auto tile_size = tile_extent;
+  if (tile_size >= tile_mod && tile_mod > 0) {
+    tile_size = AlignToDivisibleSize(tile_size, tile_mod);
+  }
   if (level == CACHE1) {
-    cand_.UpdateC1Tile(axis, cons.tile_extent_);
+    cand_.UpdateC1Tile(axis, tile_size);
   } else {
-    cand_.UpdateC0Tile(axis, cons.tile_extent_);
+    cand_.UpdateC0Tile(axis, tile_size);
   }
 }
 

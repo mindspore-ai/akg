@@ -231,6 +231,8 @@ const VarNames ConvFormatK = {kDsaic, kDsakw, kDsakh};
 constexpr auto NO_PRUNE = 0;
 constexpr auto PRUNE_MEM_EXCEED = 1;
 constexpr auto PRUNE_ALIGNED_MEM_EXCEED = 2;
+
+int64_t AlignToDivisibleSize(int64_t original, int64_t divisor);
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

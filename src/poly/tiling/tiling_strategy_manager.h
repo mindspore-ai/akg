@@ -291,9 +291,10 @@ class ReduceStrategy : public TilingStrategy {
 
 class VectorizedStrategy : public TilingStrategy {
  public:
-  explicit VectorizedStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {}
+  explicit VectorizedStrategy(const TilingAnalyzer *a) : TilingStrategy(a) { interested_attr_key = AT_VECTORIZED; }
   void AddNpuConstraint() override;
   void AddGpuConstraint() override;
+  int64_t total_gpu_vectorization_size_ = 16;
 };
 
 class DmaAlignStrategy : public TilingStrategy {
@@ -481,7 +482,6 @@ class GpuStrategy : public TilingStrategy {
   void HandleShrinkThreadToBlock(int64_t &shrinked_threads, bool thread_to_block, std::stringstream &ss);
   void InjectiveSpeedup();
 
-  void VectorizationSpeedup();
   void CheckVectorizationForElemwiseOp();
   bool IsVectorized();
 
@@ -525,6 +525,7 @@ class GpuStrategy : public TilingStrategy {
   void MapBroadcastElem(TileAxis *axis, std::vector<int> original_shape);
   void ApplyConstraintsToBindingSpace();
 
+  void CountGlobalBufferSize();
   int GetLocalAllocBufCount();
   bool NeedModifyOrderOfAxis();
   void InitMapping();
@@ -559,9 +560,12 @@ class GpuStrategy : public TilingStrategy {
   int coalesced_size_;
   int total_injective_size_;
   int64_t total_vectorized_bytes_ = 16;  // The default total number of bytes for vectorization is 16.
+  int global_buf_size_ = 0;
   int max_buf_size_to_speedup_inj_ = 5;
   int double_{2};
   bool use_shared_mem_{false};
+
+  friend class VectorizedStrategy;
 };
 
 class CpuStrategy : public TilingStrategy {

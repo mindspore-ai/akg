@@ -510,7 +510,9 @@ std::string OpTypeCollector::GetSingleOpType(const TensorEntry &d, const TensorE
   auto src_vars_size_with_num = CountUniqueLoopName(src_vars, true);
 
   std::string type = "";
-
+  if (HEAVY_ELTWISE_OP_MAP.find(s.name) != HEAVY_ELTWISE_OP_MAP.end()) {
+    return type + s.name;
+  }
   if (scop_info_.user_config_.GetTarget() == TARGET_CCE) {
     if (this->local_buf_.find(s.name) == this->local_buf_.end()) type += "DMA2_";
     if (this->local_buf_.find(d.name) == this->local_buf_.end()) type += "DMA3_";

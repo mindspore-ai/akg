@@ -1407,6 +1407,7 @@ void TilingAnalyzer::AddPostTilingConstraints() {
     GpuDmaAnalysisStrategy dma_analysis_strategy(this);
     CustomTilingStrategy custom_strategy(this);
     CsrStrategy csr_strategy(this);
+    VectorizedStrategy vectorized_strategy(this);
     GpuStrategy gpu_strategy(this);
     if (scop_info_.analysis_result_.GetIsGpuDmaAnalysed()) {
       actived_strategies.push_back(&dma_analysis_strategy);
@@ -1422,6 +1423,7 @@ void TilingAnalyzer::AddPostTilingConstraints() {
       actived_strategies.push_back(&shift_strategy);
       actived_strategies.push_back(&gemm_strategy);
       actived_strategies.push_back(&conv_strategy);
+      actived_strategies.push_back(&vectorized_strategy);
       if (scop_info_.analysis_result_.GetCsr()) {
         actived_strategies.push_back(&csr_strategy);
       }
@@ -1456,6 +1458,7 @@ void TilingAnalyzer::AddTilingConstraints() {
   if (scop_info_.user_config_.GetTarget() == TARGET_CUDA) {
     CastStrategy cast_strategy(this);
     actived_strategies.push_back(&cast_strategy);
+
     strategy_manager->SetStrategies(actived_strategies);
     strategy_manager->ExecuteGpu();
     return;
