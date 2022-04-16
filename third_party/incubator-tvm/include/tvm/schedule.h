@@ -24,7 +24,8 @@
 
 /*
  * 2019.12.30 - Add new function of buffer_align and buffer_tile.
- * 2021.10.28 - Add no_inline_inject flag in stage to prevent inline inject
+ * 2021.10.28 - Add no_inline_inject flag in stage to prevent inline inject.
+ * 2022.3.28 - Add parameters to support inline of CSR tensors.
  */
 
 // Acknowledgement: Many schedule primitives originate from Halide and Loopy.
@@ -513,6 +514,10 @@ class StageNode : public Node {
   bool double_buffer{false};
   /*! \brief Whether inline inject is allowed for this op */
   bool no_inline_inject{false};
+  /*! \brief expression to access values using CSR format */
+  Expr csr_access;
+  /*! \brief shape of CSR tensors in output */
+  Array<Array<Expr>> csr_output_shape;
   /*!
    * \brief The parent group of the current stage.
    *  The stage cannot be assigned to stages outside the group.

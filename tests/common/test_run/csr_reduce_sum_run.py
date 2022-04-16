@@ -57,7 +57,6 @@ def csr_reduce_sum_run(shape, dtype1, dtype2, axis, nnz=-1, poly_sch=True, attrs
     # gen data
     data, col_idx, row_idx, expect = gen_data(shape, dtype1, dtype2, axis, nnz=nnz)
     output_shape = expect.shape
-    attrs["csr_avg_row"] = data.shape[0] // shape[0]
     attrs["is_csr"] = True
 
     mod = utils.op_build_test(csr_reduce_sum, [data.shape, col_idx.shape, row_idx.shape], 

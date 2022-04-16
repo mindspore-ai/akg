@@ -280,19 +280,18 @@ def _collect_infos(desc, infos):
     """Collect infos."""
     sum_out = []
     for op in desc["op_desc"]:
-        if op["name"] in ["ReduceSum", "UnsortedSegmentSum"]:
-            if op["name"] == "UnsortedSegmentSum":
-                input0, input1 = op["input_desc"][0][0], op["input_desc"][1][0]
-                assert input1["data_type"] == "int32", "Default indices type should be int32"
-                assert op["attr"][1]["name"] == "num_segments", \
-                    "UnsortedSegmentSum only accepts num_segments attribute."
-                infos["indices_input"][input1["tensor_name"]] = MakeIndices(name=op["name"],
-                                                                            data_shape=input0["shape"],
-                                                                            indices_shape=input1["shape"],
-                                                                            indices_dtype=input1["data_type"],
-                                                                            attrs=op["attr"][1]["value"])
-            if "enable_atomic_add" in _get_attr_dict(op["attr"]):
-                sum_out.append(op["output_desc"][0]["tensor_name"])
+        if (op["name"] in ["ReduceSum", "UnsortedSegmentSum", "CSRReduceSum"] and
+            "enable_atomic_add" in _get_attr_dict(op["attr"])):
+            sum_out.append(op["output_desc"][0]["tensor_name"])
+
+        if op["name"] == "UnsortedSegmentSum":
+            input0, input1 = op["input_desc"][0][0], op["input_desc"][1][0]
+            assert input1["data_type"] == "int32", "Default indices type should be int32"
+            infos["indices_input"][input1["tensor_name"]] = MakeIndices(name=op["name"],
+                                                                        data_shape=input0["shape"],
+                                                                        indices_shape=input1["shape"],
+                                                                        indices_dtype=input1["data_type"],
+                                                                        attrs=get_attr(op["attr"], "num_segments"))
         elif op["name"] in ["InplaceAssign", "Assign"]:
             if op["name"] == "InplaceAssign":
                 _collect_inplace_assign_infos(op, infos, sum_out)
@@ -313,7 +312,9 @@ def _collect_infos(desc, infos):
                                                                             attrs=op["attr"][0]["value"])
         elif op["name"].startswith("CSR"):
             input0, input1, input2 = op["input_desc"][0][0], op["input_desc"][1][0], op["input_desc"][2][0]
-            assert input1["shape"] == input2["shape"], "indices and data should have the same shape"
+            if op["name"] != "CSRGather":
+                assert op["input_desc"][1][0]["shape"][0] == op["input_desc"][2][0]["shape"][0], \
+                    "indices and data should have the same shape"
             infos["csr_indptr"][input0["tensor_name"]] = MakeIndices(name=input1["tensor_name"],
                                                                      data_shape=get_attr(op["attr"], "dense_shape"),
                                                                      indices_shape=input1["shape"],
@@ -343,8 +344,6 @@ def _gen_input_data(desc, infos, input_for_mod, commands):
         dtype = input_desc[0]["data_type"]
         if tensor_name in infos["clean_input"]:
             item = np.zeros(shape).astype(dtype)
-        elif tensor_name in infos["indices_input"].keys():
-            item = gen_indices(infos["indices_input"][tensor_name])
         elif tensor_name in infos["csr_indptr"]:
             if tensor_name in csr_idx_pair:
                 item = csr_idx_pair[tensor_name]
@@ -359,6 +358,8 @@ def _gen_input_data(desc, infos, input_for_mod, commands):
                 indptr, indices = gen_csr_indices(infos["csr_indices"][tensor_name])
                 item = indices
                 csr_idx_pair[infos["csr_indices"][tensor_name].name] = indptr
+        elif tensor_name in infos["indices_input"].keys():
+            item = gen_indices(infos["indices_input"][tensor_name])
         else:
             item = random_gaussian(shape, miu=input_mean_value, sigma=0.1).astype(dtype)
         input_for_mod.append(item)

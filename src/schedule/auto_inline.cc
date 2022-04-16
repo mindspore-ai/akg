@@ -102,6 +102,72 @@ bool IsConvInline(const Operation &op, const std::unordered_set<std::string> &in
   return false;
 }
 
+// Returns true if each of the subsequent stage either performs distributive operation on the output tensor,
+// or does not operate on the tensor at all.
+bool CheckDistributive(const Array<Stage> &stages, size_t i) {
+  auto op = stages[i]->op;
+  auto CheckFunc = [&op](const NodeRef &n) {
+    if (auto call = n.as<Call>()) {
+      if (call->func.defined() && call->func.same_as(op)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  for (size_t j = i + 1; j < stages.size(); ++j) {
+    if (auto compute = stages[j]->op.as<ComputeOpNode>()) {
+      for (auto e: compute->body) {
+        bool has_func = false;
+        PostOrderVisit(e, [&has_func, &CheckFunc](const NodeRef &n) {
+          if (CheckFunc(n)) {
+            has_func = true;
+          }
+        });
+        if (!has_func) continue;
+        if (auto mul = e.as<Mul>()) {
+          if (!CheckFunc(mul->a) && !CheckFunc(mul->b)) {
+            return false;
+          }
+        } else if (auto div = e.as<Div>()) {
+          if (!CheckFunc(div->a) && !CheckFunc(div->b)) {
+            return false;
+          }
+        }
+      }
+      return CheckDistributive(stages, j);
+    } else {
+      auto extern_op = stages[j]->op.as<air::ExternOpNode>();
+      auto hybrid_op = stages[j]->op.as<air::HybridOpNode>();
+      Stmt body;
+      if (extern_op != nullptr) {
+        body = extern_op->body;
+      } else if (hybrid_op != nullptr) {
+        body = hybrid_op->body;
+      } else {
+        continue;
+      }
+      bool has_func = false;
+      PostOrderVisit(body, [&has_func, &CheckFunc](const NodeRef &n) {
+        if (CheckFunc(n)) {
+          has_func = true;
+        }
+      });
+      if (has_func) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+bool IsReduceInline(const Array<Stage> &stages, size_t i) {
+  auto compute = stages[i]->op.as<ComputeOpNode>();
+  if (compute == nullptr || !compute->body[0]->IsInstance<air::ir::Reduce>()) {
+    return false;
+  }
+  return CheckDistributive(stages, i);
+}
+
 class ConvInputDetector : public IRVisitor {
  public:
   ConvInputDetector() {}
@@ -229,6 +295,14 @@ class GetCubeMatmulInput : public IRVisitor {
 void AutoInline(Schedule sch, const Target &target, bool enable_cse) {
   std::unordered_set<Operation, NodeHash, NodeEqual> uninlinable;
   std::unordered_set<Operation, NodeHash, NodeEqual> no_inject_inline;
+  bool has_csr = false;
+  for (size_t i = 0; i < sch->stages.size(); ++i) {
+    if (auto extern_op = sch->stages[i]->op.as<air::ExternOpNode>()) {
+      if (extern_op->attrs.count("csr_op")) {
+        has_csr = true;
+      }
+    }
+  }
   for (const Stage &s : sch->stages) {
     if (const auto op = s->op.as<air::HybridOpNode>()) {
       // disable inline the inputs of an op in the following two cases:
@@ -236,7 +310,7 @@ void AutoInline(Schedule sch, const Target &target, bool enable_cse) {
       //    that is the op refusing any inline injecting from inputs
       // 2. if the target is cce, as any inline inputs will be recreated
       //    by the tothreeaddress pass
-      if (op->attrs.count("disable_inline_inject")) {
+      if (op->attrs.count("disable_inline_inject") && !has_csr) {
         for (Tensor t : op->inputs) {
           if (!t->op->IsInstance<PlaceholderOpNode>()) no_inject_inline.insert(t->op);
         }
@@ -247,7 +321,7 @@ void AutoInline(Schedule sch, const Target &target, bool enable_cse) {
       }
     }
     if (const auto op = s->op.as<air::ExternOpNode>()) {
-      if (op->attrs.count("disable_inline_inject")) {
+      if (op->attrs.count("disable_inline_inject") && !has_csr) {
         for (Tensor t : op->inputs) {
           if (!t->op->IsInstance<PlaceholderOpNode>()) no_inject_inline.insert(t->op);
         }
@@ -280,12 +354,15 @@ void AutoInline(Schedule sch, const Target &target, bool enable_cse) {
     uninlinable.insert(filter_op.begin(), filter_op.end());
   }
 
-  for (Stage s : sch->stages) {
+  for (size_t i = 0; i < sch->stages.size(); ++i) {
+    auto s = sch->stages[i];
     if (no_inject_inline.count(s->op)) {
       s->no_inline_inject = true;
       continue;
     }
-    if (!s.is_scheduled() && (IsInjective(s->op) || air::schedule::IsElemWise(s->op)) && !CantInline(s->op, target) &&
+    if (!s.is_scheduled() &&
+        ((IsInjective(s->op) || air::schedule::IsElemWise(s->op)) || (IsReduceInline(sch->stages, i) && has_csr)) &&
+        !CantInline(s->op, target) &&
         !s->is_output && uninlinable.count(s->op) == 0 && !(has_conv && !IsConvInline(s->op, conv_inputs)) &&
         (s->op->attrs.count("no_inline") == 0 && common_subexpr.count(s->op) == 0)) {
       static_cast<void>(s.compute_inline());

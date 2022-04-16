@@ -39,6 +39,7 @@ class IslEmitterCsr : virtual public IslEmitter {
   int max_var_id_{-1};
   int unscoped_max_var_id_{-1};
   int depth_{0};
+  bool csr_dynamic_scope_{false};
 };
 
 class CpuIslEmitterCsr : public IslEmitterCsr, public CpuIslEmitter {
@@ -77,6 +78,7 @@ class GpuIslEmitterCsr : virtual public GpuIslEmitter {
   Stmt EmitTensorOfTensorStmt(const Stmt &s) final;
 
   bool csr_dynamic_scope_{false};
+  std::string max_var_;
 };
 
 class GpuIslEmitterCsrReduce : public GpuIslEmitterCsr, public GpuIslEmitterReduce {

@@ -17,6 +17,7 @@
 #include "gpu_isl_emitter.h"
 #include "emit_pass.h"
 #include "ir_pass.h"
+#include "pass/utils.h"
 #include <sstream>
 #include <algorithm>
 
@@ -323,6 +324,10 @@ Stmt GpuIslEmitter::Emit(const isl::ast_node &node) {
 
   if (info_.analysis_result_.GetOpTemplate() == Template::COUNT_OP) {
     stmt = InitStmtInsertSync().Mutate(stmt);
+  }
+
+  if (info_.analysis_result_.GetCsr()) {
+    stmt = AttrStmt::make(Expr("INFO"), CSR_MAP_THREAD, info_.user_config_.GetCsrThreadNum(), stmt);
   }
 
   // iter var node attr emit

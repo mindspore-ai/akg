@@ -54,7 +54,6 @@ def csr_div_run(shape1, shape2, dtype1, dtype2, nnz=-1, poly_sch=True, attrs=Non
     op_attrs = [shape2]
     dense, sparse_data, col_idx, row_idx, expect = gen_data(shape1, shape2, dtype1, dtype2, nnz=nnz)
     output_shape = expect.shape
-    attrs["csr_avg_row"] = sparse_data.shape[0] // shape1[0]
     attrs["is_csr"] = True
 
     mod = utils.op_build_test(csr_div, [shape1, sparse_data.shape, col_idx.shape, row_idx.shape], 

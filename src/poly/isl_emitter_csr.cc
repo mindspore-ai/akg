@@ -48,23 +48,49 @@ bool CallEqual(const Call *a, const Call *b) {
   return true;
 }
 
-void ReplaceCsrCall(const Node *node, const Stmt &s, int max_var_id = 0) {
-  if (auto eval = s.as<Evaluate>()) {
-    auto call = static_cast<const Call *>(node);
-    auto replaced = eval->value;
-    for (const auto &pair: g_csr) {
-      auto origin = pair.first.as<Call>();
-      if (origin != nullptr && CallEqual(call, origin) && max_var_id >= 0) {
-        auto replace_arr = Downcast<Array<Expr>>(pair.second);
-        int replace_size = static_cast<int>(replace_arr.size());
-        CHECK(max_var_id <= replace_size);
-        if (max_var_id == replace_size) {
-          replace_arr.push_back(replaced);
-        } else {
-          replace_arr.Set(max_var_id, replaced);
-        }
-        g_csr.Set(pair.first, replace_arr);
+void ReplaceCsrCall(const Node *node, const Stmt &s, int max_var_id, std::string max_var = "") {
+  if (max_var_id < 0) {
+    return;
+  }
+  // id 0 is reserved for the original expression
+  max_var_id += 1;
+  auto eval = s.as<Evaluate>();
+  if (eval == nullptr) {
+    return;
+  }
+  auto call = static_cast<const Call *>(node);
+  CHECK(call);
+  for (const auto &pair: g_csr) {
+    auto var = pair.first.as<Variable>();
+    CHECK(var);
+    if (!max_var.empty() && var->name_hint != max_var) continue;
+    auto replace_arr = Downcast<Array<Expr>>(pair.second);
+    int replace_size = static_cast<int>(replace_arr.size());
+    CHECK(replace_size > 0);
+    CHECK(max_var_id <= replace_size);
+    auto origin = replace_arr[0].as<Sub>();
+    CHECK(origin);
+    auto replaced = origin;
+    if (max_var_id < replace_size) {
+      replaced = replace_arr[max_var_id].as<Sub>();
+    }
+    auto replace_a = replaced->a;
+    auto replace_b = replaced->b;
+    if (max_var_id > 0) {
+      if (CallEqual(call, origin->a.as<Call>())) {
+        replace_a = eval->value;
+      } else if (CallEqual(call, origin->b.as<Call>())) {
+        replace_b = eval->value;
       }
+    }
+    if (!replace_a.same_as(replaced->a) || !replace_b.same_as(replaced->b)) {
+      auto new_replaced = Sub::make(replace_a, replace_b);
+      if (max_var_id == replace_size) {
+        replace_arr.push_back(new_replaced);
+      } else {
+        replace_arr.Set(max_var_id, new_replaced);
+      }
+      g_csr.Set(pair.first, replace_arr);
     }
   }
 }
@@ -74,11 +100,13 @@ class CheckCsrCond : public IRVisitor {
   explicit CheckCsrCond(ScopInfo &info) : info_(info) {}
 
   bool has_csr_cond_{false};
+  std::string max_var_;
 
  private:
   void Visit_(const Variable *op) {
     if (info_.analysis_result_.IsCsrDynamicExtent(op)) {
       has_csr_cond_ = true;
+      max_var_ = op->name_hint;
     }
   }
 
@@ -123,7 +151,9 @@ Stmt CpuIslEmitterCsr::EmitFor(const isl::ast_node_for &node) {
   if (isl_cond.as<isl::ast_expr_op_le>()) {
     cond_expr = Simplify_cce(cond_expr + 1);
   }
-  if (ContainsCsrCond(cond_expr, info_)) {
+  bool tmp_csr_dynamic_scope = csr_dynamic_scope_;
+  if (ContainsCsrCond(cond_expr, info_) && !csr_dynamic_scope_) {
+    csr_dynamic_scope_ = true;
     ++max_var_id_;
     if (depth_ == 0) {
       unscoped_max_var_id_ = max_var_id_;
@@ -142,6 +172,7 @@ Stmt CpuIslEmitterCsr::EmitFor(const isl::ast_node_for &node) {
   if (inc > 0 && max_var_id_ > tmp_max_var_id) {
     stmt = AttrStmt::make(Expr("INFO"), "max_var_id", max_var_id_, stmt);
   }
+  csr_dynamic_scope_ = tmp_csr_dynamic_scope;
   return stmt;
 }
 
@@ -157,7 +188,7 @@ Stmt GpuIslEmitterCsr::EmitAccessNodeCall(
   const Node *node, const VarMap &var_map_tmp, BufferedFootPrintInfo &buffer_fp_info) {
   auto stmt = GpuIslEmitter::EmitAccessNodeCall(node, var_map_tmp, buffer_fp_info);
   if (csr_dynamic_scope_) {
-    ReplaceCsrCall(node, stmt);
+    ReplaceCsrCall(node, stmt, 0, max_var_);
   }
   return stmt;
 }
@@ -165,7 +196,7 @@ Stmt GpuIslEmitterCsr::EmitAccessNodeCall(
 Stmt GpuIslEmitterCsr::EmitAccessNodeFromPromoteAcsCall(isl::id var, const Node *node, Array<Expr> &args) {
   auto stmt = GpuIslEmitter::EmitAccessNodeFromPromoteAcsCall(var, node, args);
   if (csr_dynamic_scope_) {
-    ReplaceCsrCall(node, stmt);
+    ReplaceCsrCall(node, stmt, 0, max_var_);
   }
   return stmt;
 }
@@ -179,8 +210,9 @@ Stmt GpuIslEmitterCsr::EmitFor(const isl::ast_node_for &node) {
   auto check_csr_cond = CheckCsrCond(info_);
   check_csr_cond.Visit(cond_expr);
   bool tmp_csr_dynamic_scope = csr_dynamic_scope_;
-  if (ContainsCsrCond(cond_expr, info_)) {
+  if (check_csr_cond.has_csr_cond_) {
     csr_dynamic_scope_ = true;
+    max_var_ = check_csr_cond.max_var_;
   }
   auto stmt = GpuIslEmitter::EmitFor(node);
   csr_dynamic_scope_ = tmp_csr_dynamic_scope;
@@ -204,7 +236,7 @@ Stmt GpuIslEmitterCsr::SubstituteTensorStmt(const Stmt &s, Tensor origin, Tensor
 
 Stmt GpuIslEmitterCsr::EmitTensorOfTensorStmt(const Stmt &s) {
   Stmt stmt = LowerWith(s);
-  if (info_.analysis_result_.GetOpTemplate() == Template::REDUCTION) {
+  if (info_.analysis_result_.GetOpTemplate() == Template::REDUCTION || info_.user_config_.GetEnableAtomicAdd()) {
     stmt = AtomicReturnStmtEmit(info_).Mutate(stmt);
   }
   stmt = AttrStmt::make(Expr("INFO"), REDUCE_LIB_TYPE_FLAG, info_.user_config_.GetReduceLibType(), stmt);

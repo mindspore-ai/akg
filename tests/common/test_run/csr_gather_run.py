@@ -60,7 +60,6 @@ def csr_gather_run(shape, dtype1, dtype2, nnz=-1, poly_sch=True, attrs=None):
     op_attrs = [shape]
     dense, col_idx, row_idx, expect = gen_data(shape, dtype1, dtype2, nnz=nnz)
     output_shape = expect.shape
-    attrs["csr_avg_row"] = col_idx.shape[0] // shape[0]
     attrs["is_csr"] = True
 
     mod = utils.op_build_test(csr_gather, [shape, col_idx.shape, row_idx.shape], 

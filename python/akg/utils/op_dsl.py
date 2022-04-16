@@ -93,18 +93,7 @@ def tensor_scatter_add_np(data, indices, updates):
 
 def gather_np(data, indices, axis):
     """numpy implementation of gather"""
-    ni, nk = data.shape[:axis], data.shape[axis + 1:]
-    nj = indices.shape
-    expect = np.zeros(ni + nj + nk, data.dtype)
-
-    def _update_expect(ii, jj, kk):
-        if 0 <= indices[jj] < data.shape[axis]:
-            expect[ii + jj + kk] = data[ii + (indices[jj],) + kk]
-
-    for i in np.ndindex(ni):
-        for j in np.ndindex(nj):
-            for k in np.ndindex(nk):
-                _update_expect(i, j, k)
+    expect = np.take(data, indices, axis)
     return expect
 
 
@@ -119,9 +108,15 @@ def csrmv_np(indptr, indices, data, weight, shape):
 def csr_reduce_sum_np(indptr, indices, data, shape, axis):
     """numpy implementation of csr_reduce_sum"""
     import scipy.sparse
-    sparse_data = scipy.sparse.csr_matrix((data, indices, indptr), shape)
-    expect = sparse_data.sum(axis)
-    return np.asarray(expect)
+    axis = axis % len(shape)
+    x = data.reshape(data.shape[0], -1)
+    expect = []
+    for i in range(x.shape[-1]):
+        sparse = scipy.sparse.csr_matrix((x[..., i], indices, indptr), shape=shape[:2])
+        out = np.array(sparse.sum(axis))
+        expect.append(out.data)
+    expect = np.moveaxis(np.stack(expect, 0).reshape(shape[2:] + [shape[1 - axis]]), -1, 0)
+    return expect.reshape([shape[0], 1] + shape[2:])
 
 
 def csr_mul_np(indptr, indices, sparse_data, dense, shape):
@@ -135,9 +130,25 @@ def csr_mul_np(indptr, indices, sparse_data, dense, shape):
 def csr_div_np(indptr, indices, sparse_data, dense, shape):
     """numpy implementation of csr_div"""
     import scipy.sparse
-    sparse_data = scipy.sparse.csr_matrix((sparse_data, indices, indptr), shape)
-    expect = sparse_data.multiply(np.divide(1, np.broadcast_to(dense, shape)))
-    return np.asarray(expect)
+    x = sparse_data.reshape(sparse_data.shape[0], -1)
+    y = np.broadcast_to(dense, shape).reshape(shape[0], shape[1], -1)
+    expect = []
+    for i in range(x.shape[-1]):
+        sparse = scipy.sparse.csr_matrix((x[..., i], indices, indptr), shape=shape[:2])
+        out = sparse.multiply(np.divide(1, y[..., i]))
+        expect.append(out.data)
+    expect = np.moveaxis(np.stack(expect, 0).reshape(shape[2:] + [sparse_data.shape[0]]), -1, 0)
+    return expect
+
+
+def csr_gather_np(indptr, indices, dense, shape):
+    """numpy implementation of csr_gather"""
+    import scipy.sparse
+    sparse_data = scipy.sparse.csr_matrix((np.zeros(indices.shape), indices, indptr), shape[:2])
+    coo = sparse_data.tocoo()
+    coo_idx = np.stack((coo.row, coo.col))
+    expect = dense[tuple(coo_idx.tolist())]
+    return expect
 
 
 def one_hot_np(data, axis, on_value, off_value, depth, dtype):
@@ -729,20 +740,24 @@ op_dsl = {
                                             get_attr(attr, "axis")),
     "StandardNormal": lambda inputs, output, attr: "%s = np.random.standard_normal(%s)" %
                                                    (output[0]['tensor_name'], get_attr(attr, "shape")),
-    "CSRMV": lambda inputs, output, attr: "%s = csrmv_np(%s, %s, %s, %s, %s)" %
-                                          (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]),
+    "CSRMV": lambda inputs, output, attr: "{} = csrmv_np({}, {}, {}, {}, {})".format(
+                                           output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]),
                                            get_input(inputs[2][0]),
                                            get_input(inputs[3][0]), get_attr(attr, "dense_shape")),
-    "CSRReduceSum": lambda inputs, output, attr: "%s = csr_reduce_sum_np(%s, %s, %s, %s, %s)" %
-                                                 (output[0]['tensor_name'], get_input(inputs[0][0]),
+    "CSRReduceSum": lambda inputs, output, attr: "{} = csr_reduce_sum_np({}, {}, {}, {}, {})".format(
+                                                  output[0]['tensor_name'], get_input(inputs[0][0]),
                                                   get_input(inputs[1][0]), get_input(inputs[2][0]),
                                                   get_attr(attr, "dense_shape"), get_attr(attr, "axis")),
-    "CSRMul": lambda inputs, output, attr: "%s = csr_reduce_sum_np(%s, %s, %s, %s, %s)" %
-                                           (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]),
-                                            get_input(inputs[2][0]),
-                                            get_input(inputs[3][0]), get_attr(attr, "dense_shape")),
-    "CSRDiv": lambda inputs, output, attr: "%s = csr_reduce_sum_np(%s, %s, %s, %s, %s)" %
-                                           (output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]),
-                                            get_input(inputs[2][0]),
-                                            get_input(inputs[3][0]), get_attr(attr, "dense_shape")),
+    "CSRMul": lambda inputs, output, attr: "{} = csr_mul_np({}, {}, {}, {}, {})".format(
+                                                  output[0]['tensor_name'], get_input(inputs[0][0]),
+                                                  get_input(inputs[1][0]), get_input(inputs[2][0]),
+                                                  get_input(inputs[3][0]), get_attr(attr, "dense_shape")),
+    "CSRDiv": lambda inputs, output, attr: "{} = csr_div_np({}, {}, {}, {}, {})".format(
+                                                  output[0]['tensor_name'], get_input(inputs[0][0]),
+                                                  get_input(inputs[1][0]), get_input(inputs[2][0]),
+                                                  get_input(inputs[3][0]), get_attr(attr, "dense_shape")),
+    "CSRGather": lambda inputs, output, attr: "{} = csr_gather_np({}, {}, {}, {})".format(
+                                                  output[0]['tensor_name'], get_input(inputs[0][0]),
+                                                  get_input(inputs[1][0]), get_input(inputs[2][0]),
+                                                  get_attr(attr, "dense_shape")),
 }

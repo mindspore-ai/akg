@@ -26,16 +26,16 @@ class MaxVarVisitor : public IRVisitor {
     for (const auto &it : g_csr) {
       auto var = it.first.as<Variable>();
       if (var != nullptr && var->name_hint == op->name_hint) {
-        csr_dynamic_extent_ = air::Downcast<Expr>(it.second);
+        csr_dynamic_extent_ = air::Downcast<Array<Expr>>(it.second);
       }
     }
   }
 
  public:
-  Expr csr_dynamic_extent_;
+  Array<Expr> csr_dynamic_extent_;
 };
 
-Expr GetCsrDynamicExtent(const Expr &e) {
+Array<Expr> GetCsrDynamicExtent(const Expr &e) {
   auto max_var_visitor = MaxVarVisitor();
   max_var_visitor.Visit(e);
   return max_var_visitor.csr_dynamic_extent_;
@@ -122,7 +122,7 @@ class InsertInitStmt : public IRMutator {
 
 class RemoveCsrBranch : public IRMutator {
   Stmt Mutate_(const For *op, const Stmt &s) final {
-    if (GetCsrDynamicExtent(op->extent).defined()) {
+    if (GetCsrDynamicExtent(op->extent).size() > 0) {
       csr_loop_ = op;
       check_extent_ = true;
       csr_extent_ = csr_loop_->extent;
@@ -141,7 +141,7 @@ class RemoveCsrBranch : public IRMutator {
 
   Expr Mutate_(const Variable *op, const Expr &e) final {
     if (check_extent_) {
-      if (GetCsrDynamicExtent(e).defined()) {
+      if (GetCsrDynamicExtent(e).size() > 0) {
         csr_extent_ = e;
       }
     }
@@ -173,7 +173,7 @@ class RemoveCsrBranch : public IRMutator {
   }
 
   Stmt Mutate_(const IfThenElse *op, const Stmt &s) final {
-    if (GetCsrDynamicExtent(op->condition).defined()) {
+    if (GetCsrDynamicExtent(op->condition).size() > 0) {
       return IRMutator::Mutate(op->then_case);
     }
     return IRMutator::Mutate_(op, s);
@@ -224,86 +224,13 @@ class VectorizedForLoop : public IRMutator {
   Var max_var_{};
 };
 
-class CombineCsrBlock : public IRMutator {
-  Stmt Mutate_(const Block *op, const Stmt &s) final {
-    if (check_block_) {
-      check_block_ = false;
-      auto first = IRMutator::Mutate(op->first);
-      if (csr_extent_) {
-        csr_extent_ = false;
-        return first;
-      }
-      auto rest = IRMutator::Mutate(op->rest);
-      if (csr_extent_) {
-        auto record_init = RecordInitStmt();
-        record_init.Visit(first);
-        if (record_init.init_stmt_.defined()) {
-          rest = InsertInitStmt(record_init.init_stmt_, record_init.init_tensor_).Mutate(rest);
-        }
-        csr_extent_ = false;
-        return rest;
-      }
-      if (!first.same_as(op->first) || !rest.same_as(op->rest)) {
-        return Block::make(first, rest);
-      }
-      return s;
-    }
-    check_block_ = false;
-    return IRMutator::Mutate_(op, s);
-  }
-
-  Stmt Mutate_(const For *op, const Stmt &s) final {
-    check_block_ = false;
-    auto min = op->min;
-    auto extent = op->extent;
-    if (!csr_extent_) {
-      if (GetCsrDynamicExtent(op->extent).defined()) {
-        csr_extent_ = true;
-      }
-    }
-    auto body = IRMutator::Mutate(op->body);
-    if (!min.same_as(op->min) || !extent.same_as(op->extent) || !body.same_as(op->body)) {
-      return For::make(op->loop_var, min, extent, op->for_type, op->device_api, body);
-    }
-    return s;
-  }
-
-  Stmt Mutate_(const Realize *op, const Stmt &s) final {
-    check_block_ = false;
-    return IRMutator::Mutate_(op, s);
-  }
-
-  bool check_block_{true};
-  bool csr_extent_{false};
-};
-
 class RestoreMaxVar : public IRMutator {
-  Expr Mutate_(const Call *op, const Expr &e) final {
-    if (g_csr.count(e) > 0) {
-      auto replace_arr = Downcast<Array<Expr>>(g_csr.at(e));
-      int replace_size = static_cast<int>(replace_arr.size());
-      if (replace_size == 0) {
-        return e;
-      }
-      max_var_id_ = std::max(max_var_id_, 0);
-      CHECK_LT(max_var_id_, replace_size);
-      auto new_expr = replace_arr[max_var_id_];
-      if (auto new_call = new_expr.as<Call>()) {
-        Array<Expr> args;
-        for (auto orig_arg : new_call->args) {
-          args.push_back(IRMutator::Mutate(orig_arg));
-        }
-        return Call::make(new_call->type, new_call->name, args, new_call->call_type, new_call->func,
-                          new_call->value_index);
-      }
-    }
-    return e;
-  }
-
   Expr Mutate_(const Variable *op, const Expr &e) final {
-    Expr extent = GetCsrDynamicExtent(e);
-    if (extent.defined()) {
-      return IRMutator::Mutate(air::Downcast<Expr>(extent));
+    Array<Expr> extent_arr = GetCsrDynamicExtent(e);
+    if (extent_arr.size() > 0) {
+      int id = std::max(max_var_id_, 1);
+      CHECK_LT(id, static_cast<int>(extent_arr.size()));
+      return extent_arr[id];
     }
     return e;
   }
@@ -332,51 +259,65 @@ class RestoreMaxVar : public IRMutator {
   int max_var_id_{-1};
 };
 
-class CsrInnerLoopVar : public IRVisitor {
- public:
-  void Visit(const NodeRef &node) final {
-    if (in_csr_extent_) {
-      if (node->IsInstance<ExprNode>()) {
-        auto e = air::Downcast<Expr>(node);
-        if (e.as<Variable>() != nullptr) {
-          inner_loop_var_ = e;
-          return;
-        }
-      }
-    }
-    IRVisitor::Visit(node);
-  }
-
-  bool need_swap_{false};
-  Expr csr_loop_var_;
-  Expr csr_extent_;
-  Expr inner_loop_var_;
-  Expr inner_extent_;
-
- private:
-  void Visit_(const For *op) final {
+class SwapCsrLoopWithInner : public IRMutator {
+  Stmt Mutate_(const For *op, const Stmt &s) final {
+    bool is_outer = loops_.empty();
+    loops_[op->loop_var.get()] = op;
+    Stmt stmt;
     if (op->extent.as<Sub>() != nullptr) {
-      csr_loop_var_ = op->loop_var;
-      csr_extent_ = op->extent;
-      in_csr_extent_ = true;
-      IRVisitor::Visit(op->extent);
-      in_csr_extent_ = false;
-      in_csr_loop_ = true;
-      IRVisitor::Visit(op->body);
-      in_csr_loop_ = false;
-      return;
-    } else if (in_csr_loop_) {
-      if (inner_loop_var_.defined() && inner_loop_var_.same_as(op->loop_var)) {
-        inner_extent_ = op->extent;
-        need_swap_ = true;
-        return;
+      bool need_swap = false;
+      PostOrderVisit(op->extent, [this, &op, &need_swap] (const NodeRef &n) {
+        if (n->IsInstance<Variable>()) {
+          auto var = Downcast<Var>(n);
+          if (var->name_hint.rfind("blockIdx", 0) != std::string::npos ||
+              var->name_hint.rfind("threadIdx", 0) != std::string::npos) {
+            return;
+          }
+          if (var.same_as(op->loop_var)) {
+            swap_any_ = true;
+            need_swap = true;
+          } else if (loops_.count(var.get()) == 0) {
+            swap_var_ = var;
+            need_swap = true;
+          }
+        }
+      });
+      if (need_swap) {
+        csr_var_ = op->loop_var;
+        auto body = IRMutator::Mutate(op->body);
+        CHECK(swap_var_.defined() && loops_.count(swap_var_.get()) > 0);
+        auto swap_loop = loops_[swap_var_.get()];
+        stmt = For::make(
+          op->loop_var, swap_loop->min, swap_loop->extent, swap_loop->for_type, swap_loop->device_api, body);
+        csr_var_ = Var();
+        swap_var_ = Var();
+        swap_any_ = false;
+      } else {
+        stmt = s;
       }
+    } else if (op->loop_var.same_as(swap_var_) || swap_any_) {
+      CHECK(csr_var_.defined() && loops_.count(csr_var_.get()) > 0);
+      swap_var_ = op->loop_var;
+      auto csr_loop = loops_[csr_var_.get()];
+      Map<Var, Expr> vmap;
+      vmap.Set(swap_var_, csr_var_);
+      vmap.Set(csr_var_, swap_var_);
+      auto body = Substitute(op->body, vmap);
+      auto extent = Substitute(csr_loop->extent, vmap);
+      stmt = For::make(op->loop_var, csr_loop->min, extent, csr_loop->for_type, csr_loop->device_api, body);
+    } else {
+      stmt = IRMutator::Mutate_(op, s);
     }
-    IRVisitor::Visit_(op);
+    if (is_outer) {
+      loops_.clear();
+    }
+    return stmt;
   }
 
-  bool in_csr_loop_{false};
-  bool in_csr_extent_{false};
+  std::unordered_map<const Variable *, const For *> loops_;
+  Var csr_var_;
+  Var swap_var_;
+  bool swap_any_{false};
 };
 
 class VectorizationChecker : public IRVisitor {
@@ -388,62 +329,13 @@ class VectorizationChecker : public IRVisitor {
   }
 };
 
-class SwapCsrLoopWithInner : public IRMutator {
- public:
-  explicit SwapCsrLoopWithInner(Var csr_loop_var, Expr csr_extent, Var outer_loop_var, Expr outer_extent)
-      : csr_loop_var_(outer_loop_var),
-        csr_extent_(csr_extent),
-        outer_loop_var_(csr_loop_var),
-        outer_extent_(outer_extent) {}
-
- private:
-  Stmt Mutate_(const For *op, const Stmt &s) final {
-    if (op->loop_var.same_as(csr_loop_var_)) {
-      in_csr_loop_ = true;
-      auto body = IRMutator::Mutate(op->body);
-      auto extent = IRMutator::Mutate(csr_extent_);
-      in_csr_loop_ = false;
-      return For::make(csr_loop_var_, op->min, extent, op->for_type, op->device_api, body);
-    } else if (op->loop_var.same_as(outer_loop_var_)) {
-      auto body = IRMutator::Mutate(op->body);
-      return For::make(outer_loop_var_, op->min, outer_extent_, op->for_type, op->device_api, body);
-    }
-    return IRMutator::Mutate_(op, s);
-  }
-
-  Expr Mutate_(const Variable *op, const Expr &e) final {
-    if (in_csr_loop_) {
-      if (e.same_as(csr_loop_var_)) {
-        return outer_loop_var_;
-      }
-      if (e.same_as(outer_loop_var_)) {
-        return csr_loop_var_;
-      }
-    }
-    return e;
-  }
-
-  bool in_csr_loop_{false};
-  Var csr_loop_var_;
-  Expr csr_extent_;
-  Var outer_loop_var_;
-  Expr outer_extent_;
-};
-
 class CsrLoopStride : public IRMutator {
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) {
-    if (op->node->IsInstance<IterVarNode>()) {
-      auto iter_var = air::Downcast<IterVar>(op->node);
-      if (iter_var->iter_type == air::kThreadIndex) {
-        if (iter_var->thread_tag == "threadIdx.x") {
-          if (auto thread_num = op->value.as<IntImm>()) {
-            stride_ = thread_num->value;
-            thread_var_ = iter_var->var;
-          }
-        } else if (iter_var->thread_tag == "blockIdx.y") {
-          block_var_ = iter_var->var;
-        }
-      }
+    if (op->attr_key == CSR_MAP_THREAD) {
+      auto thread_num = op->value.as<IntImm>();
+      CHECK(thread_num);
+      stride_ = thread_num->value;
+      return IRMutator::Mutate(op->body);
     }
     return IRMutator::Mutate_(op, s);
   }
@@ -478,8 +370,6 @@ class CsrLoopStride : public IRMutator {
 
   int stride_{1};
   Expr csr_loop_var_;
-  Expr thread_var_;
-  Expr block_var_;
 };
 
 Stmt RestoreCsrLoop(Stmt stmt, Map<Tensor, Buffer> extern_buffer, bool target_cuda) {
@@ -491,21 +381,13 @@ Stmt RestoreCsrLoop(Stmt stmt, Map<Tensor, Buffer> extern_buffer, bool target_cu
     }
     stmt = RestoreMaxVar().Mutate(stmt);
     g_csr.Clear();
+    stmt = SwapCsrLoopWithInner().Mutate(stmt);
     return stmt;
   }
   stmt = RemoveCsrBranch().Mutate(stmt);
-  stmt = CombineCsrBlock().Mutate(stmt);
   stmt = RestoreMaxVar().Mutate(stmt);
   g_csr.Clear();
-  auto csr_inner_loop = CsrInnerLoopVar();
-  csr_inner_loop.Visit(stmt);
-  if (csr_inner_loop.need_swap_) {
-    CHECK(csr_inner_loop.csr_loop_var_.defined() && csr_inner_loop.csr_extent_.defined() &&
-          csr_inner_loop.inner_loop_var_.defined() && csr_inner_loop.inner_extent_.defined());
-    stmt = SwapCsrLoopWithInner(air::Downcast<Var>(csr_inner_loop.csr_loop_var_), csr_inner_loop.csr_extent_,
-                                air::Downcast<Var>(csr_inner_loop.inner_loop_var_),
-                                csr_inner_loop.inner_extent_).Mutate(stmt);
-  }
+  stmt = SwapCsrLoopWithInner().Mutate(stmt);
   stmt = CsrLoopStride().Mutate(stmt);
   return stmt;
 }

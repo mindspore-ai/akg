@@ -168,7 +168,7 @@ Stmt HalfReduceSumRewrite(Stmt stmt, const Map<Tensor, Buffer> &extern_buffer);
 
 Stmt ScalarComputeRewrite(const Stmt &stmt);
 
-Stmt AddAttrForLayoutOp(Stmt stmt, Schedule sch);
+Stmt AddAttrForLayoutOp(Stmt stmt, Schedule sch, bool need_remove_likely);
 
 Stmt RewriteTensorIndex(Stmt stmt);
 

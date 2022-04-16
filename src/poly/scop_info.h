@@ -318,7 +318,6 @@ class UserConfig {
       ParseBoolAttr(attrs, "enable_stitch_fusion", &enable_stitch_fusion_);
       ParseIntAttr(attrs, "shared_vector_align", &shared_vector_align_);
       ParseIntAttr(attrs, "csr_thread_num", &csr_thread_num_);
-      ParseIntAttr(attrs, "csr_avg_row", &csr_avg_row_);
       ParseStringAttr(attrs, "shared_memory_tensors", &shared_tensors_);
       ParseStringAttr(attrs, "register_memory_tensors", &register_tensors_);
       ParseStringAttr(attrs, "reduce_lib_type", &reduce_lib_type_);
@@ -326,7 +325,6 @@ class UserConfig {
     } else if (GetTarget() == TARGET_CPU) {
       ParseVectorLengthAttr(attrs, "vector_length", &vector_length_, false);
       ParseStringAttr(attrs, "feature", &feature_);
-      ParseIntAttr(attrs, "csr_avg_row", &csr_avg_row_);
     }
 
     if (force_remove_self_dependence_) {
@@ -578,7 +576,6 @@ class UserConfig {
   int GetSharedVectorAlign() { return shared_vector_align_; }
   void SetCsrThreadNum(int csr_thread_num) { csr_thread_num_ = csr_thread_num; }
   int GetCsrThreadNum() { return csr_thread_num_; }
-  int GetCsrAvgRow() { return csr_avg_row_; }
 
   // cpu type
   std::string GetFeature() { return feature_; }
@@ -832,7 +829,6 @@ class UserConfig {
 
   // csr config
   int csr_thread_num_{128};
-  int csr_avg_row_{0};
 };
 
 struct OperatorDomainSpace {
@@ -1215,6 +1211,9 @@ class AnalysisResult {
     CHECK(outer_band_nodes_[band_index] != nullptr) << "current band_node is null";
   }
 
+  void SetCsrAvgRow(int csr_avg_row) { csr_avg_row_ = csr_avg_row; }
+  int GetCsrAvgRow() { return csr_avg_row_; }
+
  public:
   std::vector<std::pair<std::string, STMT_OP_TYPE>> stmt_type_;
   std::vector<std::pair<isl::union_set, BufferedFootPrintInfo>> active_buffer_footprints_;
@@ -1300,6 +1299,7 @@ class AnalysisResult {
   bool is_tensor_of_tensor_{false};
   bool is_csr_{false};
   bool remove_self_dependence_{false};
+  int csr_avg_row_{0};
 };
 
 using TensorEntry = AnalysisResult::TensorEntry;

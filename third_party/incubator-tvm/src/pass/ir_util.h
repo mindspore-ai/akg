@@ -205,6 +205,7 @@ inline bool GetRamp1Base(Expr index, int lanes, Expr *base) {
 
 int64_t gcd(int64_t a, int64_t b);
 int64_t lcm(int64_t a, int64_t b);
+Array<Expr> VarsFromArgs(const Array<Expr> args);
 }  // namespace ir
 }  // namespace air
 #endif  // TVM_PASS_IR_UTIL_H_

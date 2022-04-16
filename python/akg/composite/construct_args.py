@@ -298,7 +298,6 @@ class ParallelNodeAnalyze(BaseNodeAnalyze):
             cur_attrs = attrs.copy()
             _update_bool("enable_atomic_add", json.loads(block_jsons[i]), cur_attrs)
             _update_bool("is_csr", json.loads(block_jsons[i]), cur_attrs)
-            update_attrs(json.loads(block_jsons[i]), "csr_avg_row", cur_attrs)
             attrs_list.append(cur_attrs)
         total_jsons = block_jsons
         total_attrs = attrs_list

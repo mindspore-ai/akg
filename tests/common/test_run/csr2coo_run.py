@@ -45,7 +45,6 @@ def csr2coo_run(shape, nnz, dtype, poly_sch=True, attrs=None):
     op_attrs = [nnz]
     indptr, expect = gen_data(shape, nnz, dtype)
     output_shape = expect.shape
-    attrs["csr_avg_row"] = nnz // (shape[0] - 1)
     attrs["is_csr"] = True
 
     mod = utils.op_build_test(csr2coo, [shape], [dtype], op_attrs=op_attrs, polyhedral=poly_sch,

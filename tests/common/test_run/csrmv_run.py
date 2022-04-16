@@ -41,7 +41,6 @@ def csrmv_run(shape1, dtype1, shape2, dtype2, poly_sch=True, attrs=None):
         attrs["enable_akg_reduce_lib"] = True
         attrs["enable_atomic_add"] = True
     data, indices, indptr, weight, expect = gen_data(shape1, dtype1, shape2, dtype2)
-    attrs["csr_avg_row"] = data.shape[0] // shape1[0]
     attrs["is_csr"] = True
 
     mod = utils.op_build_test(csr_mv, [data.shape, indices.shape, indptr.shape, weight.shape],
