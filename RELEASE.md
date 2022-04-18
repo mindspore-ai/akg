@@ -13,7 +13,7 @@
 ### Bug fixes
 
 * Fix the bug of Gemm/convolution operator due to repeated tiling. [!582](https://gitee.com/mindspore/akg/pulls/582) (GPU)
-* Fixed the bug in the reduce operator when the Y direction is reduced and X is small. [!559](https://gitee.com/mindspore/akg/pulls/559) (CPU)
+* Fix the bug in the reduce operator when the Y direction is reduced and X is small. [!559](https://gitee.com/mindspore/akg/pulls/559) (CPU)
 
 ### Contributors
 
