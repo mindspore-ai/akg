@@ -1,4 +1,8 @@
-## Release 1.7.0
+# MindSpore AKG Release Notes
+
+[View English](./RELEASE.md)
+
+## MindSpore AKG 1.7.0 Release Notes
 
 ### 主要特性和增强
 * 为MindSpore HybridDSL特性提供循环原语支持。[!560](https://gitee.com/mindspore/akg/pulls/560) (所有后端)
