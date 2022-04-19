@@ -102,7 +102,6 @@ constexpr auto kErrorInfo = "";
 constexpr auto kErrorScope = "";
 constexpr auto kAllocBits = "alloc_bits";
 constexpr auto kEnablePolySch = "enable_poly_sch";
-constexpr auto kEnableFuseAxis = "enable_fuse_axis";
 constexpr auto kEnableAtomicAdd = "enable_atomic_add";
 constexpr auto kEnableSwizzleGPU = "enable_swizzle_gpu";
 constexpr auto kEnableElementwiseFlatten = "enable_elementwise_flatten";

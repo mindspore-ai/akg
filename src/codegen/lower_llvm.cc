@@ -32,6 +32,7 @@
 #include "codegen/lower.h"
 #include "codegen/stage_lower.h"
 #include "composite/utils/util.h"
+#include "pass/utils.h"
 
 namespace akg {
 StageResult LLVMLowerBegin(Stmt &, LowerData &data) {
@@ -56,6 +57,9 @@ StageResult LLVMLowerBegin(Stmt &, LowerData &data) {
     stmt = stmt_tmp;
     data->arg_list_0 = arg_list_tmp;
     data->binds_0 = binds_tmp;
+  }
+  if (AttrExists(data->sch, "fuse_axis_extern")) {
+    stmt = NEXT_PASS(FuseAxisExternOp, stmt, data->sch);
   }
   PassMgr::SetArgs(data->arg_list_0);
   stmt = NEXT_PASS(AddAttrForLayoutOp, stmt, data->sch, false);
