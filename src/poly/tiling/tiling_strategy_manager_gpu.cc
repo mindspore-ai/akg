@@ -1796,12 +1796,14 @@ void GpuStrategy::InjectiveSpeedup() {
       auto before_shrink = block_to_elem ? axis->block_constraints.map_extent_ : axis->thread_constraints.map_extent_;
       auto coef = std::min<int64_t>(proposal_elem_per_thread, shrink_limit);
       CHECK(coef);
+      shrink_limit = std::min<int64_t>(shrink_limit, before_shrink);
       int64_t aligned_coef = TilingAnalyzer::FindDivisibleTilingFactor(shrink_limit, before_shrink);
       if (aligned_coef * binary_factor_ > coef) {
         coef = aligned_coef;
       }
       if (block_to_elem) {
-        auto actual_block = TilingAnalyzer::FindDivisibleTilingFactor(before_shrink / SafeDivisor(coef), before_shrink);
+        auto before_shrink_limit = std::max<int64_t>(before_shrink / SafeDivisor(coef), 1);
+        auto actual_block = TilingAnalyzer::FindDivisibleTilingFactor(before_shrink_limit, before_shrink);
         auto actual_coef = before_shrink / SafeDivisor(actual_block);
         ss << "block_to_elem: \n"
            << shrinked_blocks << " /= " << coef << "\n block = " << before_shrink << " / " << coef << " = "
