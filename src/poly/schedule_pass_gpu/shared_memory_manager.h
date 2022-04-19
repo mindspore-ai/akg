@@ -41,6 +41,7 @@ class SharedMemoryManager : public SchedulePass {
 
   // create cluster
   void CreateClusterForOperator(const isl::schedule_node &node);
+  void SetPromotedMarkNames();
 
   // promotion core function
   isl::schedule HoistSharedMemory();
