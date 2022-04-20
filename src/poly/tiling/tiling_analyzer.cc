@@ -1408,6 +1408,7 @@ void TilingAnalyzer::AddPostTilingConstraints() {
     CustomTilingStrategy custom_strategy(this);
     CsrStrategy csr_strategy(this);
     VectorizedStrategy vectorized_strategy(this);
+    TensorOfTensorStrategy tot_strategy(this);
     GpuStrategy gpu_strategy(this);
     if (scop_info_.analysis_result_.GetIsGpuDmaAnalysed()) {
       actived_strategies.push_back(&dma_analysis_strategy);
@@ -1424,6 +1425,7 @@ void TilingAnalyzer::AddPostTilingConstraints() {
       actived_strategies.push_back(&gemm_strategy);
       actived_strategies.push_back(&conv_strategy);
       actived_strategies.push_back(&vectorized_strategy);
+      actived_strategies.push_back(&tot_strategy);
       if (scop_info_.analysis_result_.GetCsr()) {
         actived_strategies.push_back(&csr_strategy);
       }

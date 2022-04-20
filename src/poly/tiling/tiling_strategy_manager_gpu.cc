@@ -851,6 +851,8 @@ const void GpuStrategy::ShowOptions() {
   ss << indent << "[EnableTensorCore]: " << analyzer_->scop_info_.user_config_.GetEnableTensorCore() << "\n";
   ss << indent << "[EnableConvTensorCore]: " << analyzer_->scop_info_.user_config_.GetEnableConvTensorCore() << "\n";
   ss << indent << "[EnableOneDimThread]: " << analyzer_->scop_info_.user_config_.GetEnableOneDimThread() << "\n";
+  ss << indent << "[HasNormalTot]: " << analyzer_->scop_info_.analysis_result_.GetTensorOfTensor() << "\n";
+  ss << indent << "[HasAtomicTot]: " << !analyzer_->scop_info_.analysis_result_.GetTensorOfTensorStmt().empty() << "\n";
   analyzer_->GetTileLogger().AppendLog(GPU_MAPPING, ss);
 }
 
@@ -2452,6 +2454,17 @@ void VectorizedStrategy::AddGpuConstraint() {
   }
 }
 
+void TensorOfTensorStrategy::AddGpuConstraint() {
+  if (!analyzer_->scop_info_.analysis_result_.GetTensorOfTensorStmt().empty()) {
+    // In this case, we have tensor of tensor with atomic operation.
+    // Therefore, we disable shared-mem promotion to improve performance.
+    for (int i = 0; i < analyzer_->scop_info_.analysis_result_.GetOuterBandNumber(); ++i) {
+      auto band = analyzer_->scop_info_.analysis_result_.GetOuterBandNode(i);
+      band->use_shared_memory = false;
+    }
+  }
+}
+
 // No constraint found in cuda
 
 void ModStrategy::AddGpuConstraint() {}
@@ -2459,8 +2472,6 @@ void ModStrategy::AddGpuConstraint() {}
 void ConflictTreeRangeStrategy::AddGpuConstraint() {}
 
 void DmaAlignStrategy::AddGpuConstraint() {}
-
-void TensorOfTensorStrategy::AddGpuConstraint() {}
 
 void PassDownAttrStrategy::AddGpuConstraint() {}
 
