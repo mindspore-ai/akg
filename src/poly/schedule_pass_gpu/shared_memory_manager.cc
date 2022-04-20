@@ -49,9 +49,14 @@ void SharedMemoryManager::PrepareInfoForPromotion() {
 
 isl::schedule_node SharedMemoryManager::HoistSharedMemoryOnMark(const isl::schedule_node &orig_node) {
   current_outer_bn_ = scop_info_.analysis_result_.GetOuterBandNode(band_index_);
+  SetPromotedMarkNames();
+  auto node = orig_node;
   if (!current_outer_bn_->use_shared_memory) {
-    return orig_node;
+    node = InsertMarkerForRegisterPromotion(node);
+    node = DeleUselessMarker(node, mark_names_);
+    return node;
   }
+
   CreateClusterForOperator(orig_node);
 
   std::string mark_name = "";
@@ -72,7 +77,6 @@ isl::schedule_node SharedMemoryManager::HoistSharedMemoryOnMark(const isl::sched
     return HoistClusters(node.parent()).child(0);
   };
 
-  auto node = orig_node;
   for (auto name : mark_names_) {
     mark_name = name;
     node = MapDescendantTopDown(node, GetMarkNode);
@@ -106,25 +110,32 @@ isl::schedule SharedMemoryManager::HoistSharedMemory() {
   return node.get_schedule();
 }
 
-void SharedMemoryManager::CreateClusterForOperator(const isl::schedule_node &node) {
-  SharedCreateCluster create_cluster(scop_info_, band_index_);
+void SharedMemoryManager::SetPromotedMarkNames() {
   if (scop_info_.analysis_result_.GetUseGpuReduceLib()) {
     // reduce operator
     mark_names_.emplace(PROMOTE_GLOBAL_TO_SHARED);
-    create_cluster.CreateClusterListForReduce(node, mark_names_);
   } else if (scop_info_.user_config_.GetEnableMatmul()) {
     // matmul operator
-    remain_memory_ = akg::common::ADVANCED_SHARED_MEMORY_SIZE;
-
     auto tensor_c_name = GetMatmulTensorsName(scop_info_)[MATRIX_C];
     if (std::find(configed_tensors_.begin(), configed_tensors_.end(), tensor_c_name) != configed_tensors_.end()) {
       mark_names_.emplace(PROMOTE_GLOBAL_TO_SHARED_C);
     }
     mark_names_.emplace(PROMOTE_GLOBAL_TO_SHARED_AB);
-
-    create_cluster.CreateClusterListForGemm(node, mark_names_);
   } else {
     mark_names_.emplace(PROMOTE_GLOBAL_TO_SHARED);
+  }
+}
+
+void SharedMemoryManager::CreateClusterForOperator(const isl::schedule_node &node) {
+  SharedCreateCluster create_cluster(scop_info_, band_index_);
+  if (scop_info_.analysis_result_.GetUseGpuReduceLib()) {
+    // reduce operator
+    create_cluster.CreateClusterListForReduce(node, mark_names_);
+  } else if (scop_info_.user_config_.GetEnableMatmul()) {
+    // matmul operator
+    remain_memory_ = akg::common::ADVANCED_SHARED_MEMORY_SIZE;
+    create_cluster.CreateClusterListForGemm(node, mark_names_);
+  } else {
     create_cluster.CreateClusterListForElementWise(node, mark_names_);
   }
 }
