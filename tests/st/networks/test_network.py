@@ -37,6 +37,7 @@ def test_network(backend, network, level, split_nums=1, split_idx=0, check_perfo
         os.makedirs(output, exist_ok=True)
     files_path = os.path.join(pwd, backend, network, level)
     all_files = os.listdir(files_path)
+    all_files.sort()
     files = get_splitted_cases(all_files, split_nums, split_idx)
     for item in files:
         file_path = os.path.join(files_path, item)
@@ -339,15 +340,29 @@ def test_inception_v3_gpu_level0_test1_perf():
 @pytest.mark.level1
 @pytest.mark.platform_x86_gpu_training
 @pytest.mark.env_onecard
-def test_inception_v3_gpu_level1_test0():
-    test_network("gpu", "inception_v3", "level1", 2, 0, check_performance=True)
+def test_inception_v3_gpu_level1_test0_perf():
+    test_network("gpu", "inception_v3", "level1", 4, 0, check_performance=True)
 
 
 @pytest.mark.level1
 @pytest.mark.platform_x86_gpu_training
 @pytest.mark.env_onecard
-def test_inception_v3_gpu_level1_test1():
-    test_network("gpu", "inception_v3", "level1", 2, 1, check_performance=True)
+def test_inception_v3_gpu_level1_test1_pref():
+    test_network("gpu", "inception_v3", "level1", 4, 1, check_performance=True)
+
+
+@pytest.mark.level1
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
+def test_inception_v3_gpu_level1_test2_perf():
+    test_network("gpu", "inception_v3", "level1", 4, 2, check_performance=True)
+
+
+@pytest.mark.level1
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
+def test_inception_v3_gpu_level1_test3_perf():
+    test_network("gpu", "inception_v3", "level1", 4, 3, check_performance=True)
 
 
 @pytest.mark.level0
