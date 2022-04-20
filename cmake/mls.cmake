@@ -12,11 +12,11 @@ if (AKG_USE_MLS)
   add_custom_target(akg-untar-mls
     ALL
     COMMAND
-      "${CMAKE_COMMAND}" -E tar xfz ${PROJECT_SOURCE_DIR}/prebuild/${AKG_MLS_ARCH}/libmls.tar.gz
+      "${CMAKE_COMMAND}" -E tar xfz ${AKG_SOURCE_DIR}/prebuild/${AKG_MLS_ARCH}/libmls.tar.gz
     WORKING_DIRECTORY
       "${CMAKE_CURRENT_BINARY_DIR}/"
     DEPENDS
-      "${PROJECT_SOURCE_DIR}/prebuild/${AKG_MLS_ARCH}/libmls.tar.gz"
+      "${AKG_SOURCE_DIR}/prebuild/${AKG_MLS_ARCH}/libmls.tar.gz"
   )
 
   add_library(libqiuqi-ip STATIC IMPORTED)
@@ -34,7 +34,7 @@ if (AKG_USE_MLS)
       IMPORTED_LOCATION
         "${CMAKE_CURRENT_BINARY_DIR}/libmls.a"
       INTERFACE_INCLUDE_DIRECTORIES
-        "${PROJECT_SOURCE_DIR}/src/poly"
+        "${AKG_SOURCE_DIR}/src/poly"
     DEPENDS
       akg-untar-mls
   )
