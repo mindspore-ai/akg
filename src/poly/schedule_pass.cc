@@ -545,12 +545,12 @@ mls::bin::Options MLSchedOptionsInit(akg::ir::poly::ScopInfo &scop_info) {
 
   // Choose a solver from the ScopInfo
   const std::string solver_string = scop_info.user_config_.GetMLSchedSolver();
-  mls::bin::Options::SolverType solver_type = mls::bin::Options::SolverTypeFromString(solver_string);
+  mls::bin::Options::SolverType solver_type = mls::bin::Options::SolverTypeFromString(solver_string.c_str());
   // Maybe override from the environment
   const char *const ms_dev_mlsched_solver = std::getenv(kEnvStringMsDevMlsSolver);
   if (ms_dev_mlsched_solver) {
     const std::string env_string(ms_dev_mlsched_solver);
-    const mls::bin::Options::SolverType env_solver_type = mls::bin::Options::SolverTypeFromString(env_string);
+    const mls::bin::Options::SolverType env_solver_type = mls::bin::Options::SolverTypeFromString(env_string.c_str());
     if (env_solver_type != mls::bin::Options::SolverType::kNone) {
       solver_type = env_solver_type;
     }

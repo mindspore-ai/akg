@@ -36,13 +36,6 @@
 #include <isl/schedule.h>
 #include <isl/schedule_node.h>
 
-// picojson
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wfloat-equal"
-#pragma GCC diagnostic ignored "-Wconversion"
-#include <picojson.h>
-#pragma GCC diagnostic pop
-
 namespace mls {
 ////////////////////////////////////////////////////////////////////////////////
 // Forward declarations
@@ -84,7 +77,7 @@ long unsigned int VersionPatch(void);
 
 /// \brief Get a string representation of the current version of MLSched
 /// \return String Representation of the current version of MLSched
-std::string VersionString(void);
+std::shared_ptr<char> VersionString(void);
 
 ////////////////////////////////////////////////////////////////////////////////
 // mls::bin::Options
@@ -115,13 +108,13 @@ class Options {
   /// \param t Type to represent as a string
   /// \return A string representation of \a t
   /// \relatesalso mls::bin::Options::SolverType
-  static std::string SolverTypeToString(mls::bin::Options::SolverType t);
+  static std::shared_ptr<char> SolverTypeToString(mls::bin::Options::SolverType t);
 
   /// \brief Read a SolverType type from a string representation
   /// \param s String to read
   /// \return Read Solver type
   /// \relatesalso mls::bin::Options::SolverType
-  static mls::bin::Options::SolverType SolverTypeFromString(const std::string &str);
+  [[gnu::nonnull]] static mls::bin::Options::SolverType SolverTypeFromString(const char *str);
 
   ////////////////////////////////////////////////////////////////////////////////
   // Constructors, destructors, etc.
@@ -224,7 +217,7 @@ class Options {
 
   /// \brief Get a string representation of object
   /// \return A string representation of the object
-  std::string String(void) const;
+  std::shared_ptr<char> String(void) const;
 
   ////////////////////////////////////////////////////////////////////////////////
   // Setters
@@ -275,7 +268,7 @@ class InfluenceOperation {
 
  private:
   /// \brief Target statement
-  std::string statement_{""};
+  std::shared_ptr<char> statement_{nullptr};
   /// \brief Target dimension
   size_t dimension_{0};
   /// \brief Value for the operation
@@ -292,13 +285,13 @@ class InfluenceOperation {
   /// \param[in] dimensions Target dimension
   /// \param[in] value Value for the operation
   /// \param[in] type Type of the operation
-  InfluenceOperation(
-      const std::string &statement, size_t dimension, long int value,
+  [[gnu::nonnull]] InfluenceOperation(
+      const char *statement, size_t dimension, long int value,
       mls::bin::InfluenceOperation::Type type = mls::bin::InfluenceOperation::Type::kNone);
 
   /// \brief Get the target statement
   /// \result The target statement
-  std::string GetStatement(void) const;
+  std::shared_ptr<char> GetStatement(void) const;
 
   /// \brief Get the target dimension
   /// \result The target dimensions
@@ -345,25 +338,14 @@ class Influence {
   /// \param[in,out] src Source mls::bin::Influence
   Influence(mls::bin::Influence &&src);
 
-  /// \brief Constructor from a picojson::value
-  /// \param[in] root Root node of the JSON data
-  /// \warning This method assumes that \a root is the root node of the JSON data
-  Influence(const picojson::value &root);
-
-  /// \brief Constructor from a picojson::value
-  /// \param[in] root Root node of the JSON data
-  /// \param[in] options MLSched options
-  /// \warning This method assumes that \a root is the root node of the JSON data
-  Influence(const picojson::value &root, const mls::bin::Options &options);
-
   /// \brief Constructor from a serialized json string of a MindTrick
   /// \param[in] str Serialized json string of a MindTrick
-  Influence(const std::string &str);
+  [[gnu::nonnull]] Influence(const char *str);
 
   /// \brief Constructor from a serialized json string of a MindTrick
   /// \param[in] str Serialized json string of a MindTrick
   /// \param[in] options MLSched options
-  Influence(const std::string &str, const mls::bin::Options &options);
+  [[gnu::nonnull]] Influence(const char *str, const mls::bin::Options &options);
 
   ////////////////////////////////////////////////////////////////////////////////
   // Operators
@@ -399,24 +381,20 @@ class Influence {
   /// \brief Get a string representation of object
   /// \return A string representation of the object
   /// \note The scop's internal options will be used
-  std::string String(void) const;
+  std::shared_ptr<char> String(void) const;
 
   /// \brief Get a string representation of object
   /// \param[in] options Options that may change the string representation
   /// \return A string representation of the object
-  std::string String(const mls::bin::Options &options) const;
+  std::shared_ptr<char> String(const mls::bin::Options &options) const;
 
   ////////////////////////////////////////////////////////////////////////////////
   // Setters
   ////////////////////////////////////////////////////////////////////////////////
 
-  /// \brief Parse soft constraints from a JSON node
-  /// \param[in] node JSON node of the soft constraints
-  void ParseSoftConstraints(const picojson::value &node);
-
   /// \brief Parse soft constraints from a serialized JSON string
   /// \param[in] str Serialized JSON string
-  void ParseSoftConstraints(const std::string &str);
+  [[gnu::nonnull]] void ParseSoftConstraints(const char *str);
 
   ////////////////////////////////////////////////////////////////////////////////
   // Misc. friend functions
@@ -461,24 +439,13 @@ class Hints {
   Hints(mls::bin::Hints &&src);
 
   /// \brief Constructor from a serialized json string of a MindTrick
-  /// \param[in] root Root node of the JSON data
-  /// \warning This method assumes that \a root is the root node of the JSON data
-  Hints(const picojson::value &node);
-
-  /// \brief Constructor from a serialized json string of a MindTrick
-  /// \param[in] root Root node of the JSON data
-  /// \param[in] options MLSched options
-  /// \warning This method assumes that \a root is the root node of the JSON data
-  Hints(const picojson::value &node, const mls::bin::Options &options);
-
-  /// \brief Constructor from a serialized json string of a MindTrick
   /// \param[in] str Serialized json string of a MindTrick
-  Hints(const std::string &str);
+  [[gnu::nonnull]] Hints(const char *str);
 
   /// \brief Constructor from a serialized json string of a MindTrick
   /// \param[in] str Serialized json string of a MindTrick
   /// \param[in] options MLSched options
-  Hints(const std::string &str, const mls::bin::Options &options);
+  [[gnu::nonnull]] Hints(const char *str, const mls::bin::Options &options);
 
   /// \brief Constructor from a isl_union_map
   /// \param[in] directives Hints represented as an isl_union_map
@@ -518,13 +485,29 @@ class Hints {
   /// \retval false otherwise
   [[gnu::pure]] bool HaveDirectives(void) const;
 
-  /// \brief Get the Serials component of the directives
-  /// \return Serials component of the directives
-  [[gnu::const]] const std::map<std::string, std::vector<int>> &GetSerials(void) const;
+  /// \brief Check whether the Hints has serials directives for a given stateemnt
+  /// \param[in] statement Target statement
+  /// \return A boolean value that indicates whether the Hints has serials directives for \a statement
+  /// \retval true if the Hints has serials directives for \a statement
+  /// \retval false otherwise
+  [[gnu::pure]] bool HasStatementSerials(const char *statement) const;
 
-  /// \brief Get the Vectorials component of the directives
+  /// \brief Check whether the Hints has vectorials directives for a given stateemnt
+  /// \param[in] statement Target statement
+  /// \return A boolean value that indicates whether the Hints has vectorials directives for \a statement
+  /// \retval true if the Hints has vectorials directives for \a statement
+  /// \retval false otherwise
+  [[gnu::pure]] bool HasStatementVectorials(const char *statement) const;
+
+  /// \brief Get the Serials component of the directives for a given statement
+  /// \param[in] statement Target statement
+  /// \return Serials component of the directives
+  [[gnu::pure]] const std::vector<int> &GetStatementSerials(const char *statement) const;
+
+  /// \brief Get the Vectorials component of the directives for a given statement
+  /// \param[in] statement Target statement
   /// \return Vectorials component of the directives
-  [[gnu::const]] const std::map<std::string, std::vector<int>> &GetVectorials(void) const;
+  [[gnu::pure]] const std::vector<int> &GetStatementVectorials(const char *statement) const;
 
   /// \brief Get the Influence component of the directives
   /// \return Influence component of the directives
@@ -533,12 +516,12 @@ class Hints {
   /// \brief Get a string representation of object
   /// \return A string representation of the object
   /// \note The scop's internal options will be used
-  std::string String(void) const;
+  [[gnu::nonnull]] std::shared_ptr<char> String(void) const;
 
   /// \brief Get a string representation of object
   /// \param[in] options Options that may change the string representation
   /// \return A string representation of the object
-  std::string String(const mls::bin::Options &options) const;
+  [[gnu::nonnull]] std::shared_ptr<char> String(const mls::bin::Options &options) const;
 
   ////////////////////////////////////////////////////////////////////////////////
   // Setters
@@ -546,11 +529,11 @@ class Hints {
 
   /// \brief Set the Serials component of the directives
   /// \param[in] serials Serials component for the directives
-  void SetSerials(const std::map<std::string, std::vector<int>> &serials);
+  [[gnu::nonnull]] void SetStatementSerials(const char *statement, const std::vector<int> &serials);
 
   /// \brief Set the Vectorials component of the directives
   /// \param[in] vectorials Serials component for the directives
-  void SetVectorials(const std::map<std::string, std::vector<int>> &vectorials);
+  [[gnu::nonnull]] void SetStatementVectorials(const char *statement, const std::vector<int> &vectorials);
 
   /// \brief Set the Vectorials component of the directives
   /// \param[in] vectorials Serials component for the directives
@@ -561,21 +544,13 @@ class Hints {
   /// \post GetVectorials().empty() == true
   void ClearDirectives(void);
 
-  /// \brief Parse soft constraints from a JSON node
-  /// \param[in] node JSON node of the directives
-  void ParseDirectives(const picojson::value &node);
+  /// \brief Parse directives from a serialized JSON string
+  /// \param[in] str Serialized json string of a MindTrick
+  void ParseDirectives(const char *str);
 
   /// \brief Parse directives from a serialized JSON string
   /// \param[in] str Serialized json string of a MindTrick
-  void ParseDirectives(const std::string &str);
-
-  /// \brief Parse soft constraints from a JSON node
-  /// \param[in] node JSON node of the influence
-  void ParseInfluence(const picojson::value &node);
-
-  /// \brief Parse directives from a serialized JSON string
-  /// \param[in] str Serialized json string of a MindTrick
-  void ParseInfluence(const std::string &str);
+  void ParseInfluence(const char *str);
 
   ////////////////////////////////////////////////////////////////////////////////
   // Misc. friend functions
@@ -621,9 +596,9 @@ class Scop {
   /// \param[in] dependencies Dependencies
   /// \param[in] options Options for MLSched
   /// \param[in] name Optional name for the Scop
-  [[gnu::nonnull]] Scop(
+  [[gnu::nonnull(1, 2)]] Scop(
       __isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies, const mls::bin::Options &options,
-      const std::string &name = "");
+      const char *name = nullptr);
 
   /// \brief Constructor from isl data
   /// \param[in] sch Initial schedule
@@ -631,9 +606,9 @@ class Scop {
   /// \param[in] influence Influence for MLSched
   /// \param[in] options Options for MLSched
   /// \param[in] name Optional name for the Scop
-  [[gnu::nonnull]] Scop(
+  [[gnu::nonnull(1, 2)]] Scop(
       __isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies, const mls::bin::Influence &influence,
-      const mls::bin::Options &options, const std::string &name = "");
+      const mls::bin::Options &options, const char *name = nullptr);
 
   /// \brief Constructor from isl data
   /// \param[in] sch Initial schedule
@@ -641,9 +616,9 @@ class Scop {
   /// \param[in] hints Hints for MLSched
   /// \param[in] options Options for MLSched
   /// \param[in] name Optional name for the Scop
-  [[gnu::nonnull]] Scop(
+  [[gnu::nonnull(1, 2)]] Scop(
       __isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies, const mls::bin::Hints &hints,
-      const mls::bin::Options &options, const std::string &name = "");
+      const mls::bin::Options &options, const char *name = nullptr);
 
   ////////////////////////////////////////////////////////////////////////////////
   // Operators
@@ -691,12 +666,12 @@ class Scop {
   /// \brief Get a string representation of object
   /// \return A string representation of the object
   /// \note The scop's internal options will be used
-  std::string String(void) const;
+  std::shared_ptr<char> String(void) const;
 
   /// \brief Get a string representation of object
   /// \param[in] options Options that may change the string representation
   /// \return A string representation of the object
-  std::string String(const mls::bin::Options &options) const;
+  std::shared_ptr<char> String(const mls::bin::Options &options) const;
 
   ////////////////////////////////////////////////////////////////////////////////
   // Misc. friend functions

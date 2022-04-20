@@ -885,7 +885,8 @@ void SchedulingMindTrick::Parse(const picojson::value &root) {
   ParseAttrs(maybe(root, "attrs"));
   ParseVerbosity(maybe(root, "verbosity"));
 #ifdef AKG_USE_MLS
-  hints_ = mls::bin::Hints(root);
+  const std::string serialized = root.serialize();
+  hints_ = mls::bin::Hints(serialized.c_str());
 #endif
 }
 
@@ -1423,7 +1424,7 @@ bool SchedulingMindTrick::BuildInfluencedSchedule(const isl::schedule &schedule)
   }
 
   const std::string &kernel_name = scop_info_.user_config_.GetKernelName();
-  mls::bin::Scop scop(initial_schedule, dependences, hints_, options, kernel_name);
+  mls::bin::Scop scop(initial_schedule, dependences, hints_, options, kernel_name.c_str());
   const bool success = scop.ComputeSchedule();
 
   if (options.ShouldLogInternalDebugging()) {
@@ -1670,8 +1671,12 @@ void SchedulingMindTrick::ExtractDirectivesFromAKG(void) {
     }
   }
 
-  hints_.SetSerials(serials_dir);
-  hints_.SetVectorials(vectorials_dir);
+  for (const auto &[key, directive] : serials_dir) {
+    hints_.SetStatementSerials(key.c_str(), directive);
+  }
+  for (const auto &[key, directive] : vectorials_dir) {
+    hints_.SetStatementVectorials(key.c_str(), directive);
+  }
 }
 #endif
 
@@ -2208,32 +2213,38 @@ MindTrickType SchedulingMindTrick::GetType(void) const { return type_; }
 void SchedulingMindTrick::SetType(MindTrickType type) { type_ = type; }
 
 // clang-format off
-#define define_scheduling_mind_trick_log_wrappers(func)                                                                  \
-  void SchedulingMindTrick::func(const std::string &message, const bool prefix) const {                                  \
-    const std::string &prefix_text = LogPrefixText(prefix);                                                              \
-    log::func(prefix_text + message);                                                                                    \
-  }                                                                                                                      \
-                                                                                                                         \
-  void SchedulingMindTrick::func(const std::stringstream &stream, const bool prefix) const {                             \
-    const std::string &message = stream.str();                                                                           \
-    func(message, prefix);                                                                                               \
-  }                                                                                                                      \
-                                                                                                                         \
-  void SchedulingMindTrick::func(const int level, const std::string &message, const bool prefix) const {                 \
-    const std::string &prefix_text = LogPrefixText(prefix);                                                              \
-    log::func(level, prefix_text + message);                                                                             \
-  }                                                                                                                      \
-  void SchedulingMindTrick::func(const int level, const std::stringstream &stream, const bool prefix) const {            \
-    const std::string &message = stream.str();                                                                           \
-    func(level, message, prefix);                                                                                        \
-  }                                                                                                                      \
-  void SchedulingMindTrick::func(const log::Verbosity level, const std::string &message, const bool prefix) const {      \
-    const std::string &prefix_text = LogPrefixText(prefix);                                                              \
-    log::func(level, prefix_text + message);                                                                             \
-  }                                                                                                                      \
-  void SchedulingMindTrick::func(const log::Verbosity level, const std::stringstream &stream, const bool prefix) const { \
-    const std::string &message = stream.str();                                                                           \
-    func(level, message, prefix);                                                                                        \
+#define define_scheduling_mind_trick_log_wrappers(func)                                       \
+  void SchedulingMindTrick::func(                                                             \
+      const std::string &message, const bool prefix) const {                                  \
+    const std::string &prefix_text = LogPrefixText(prefix);                                   \
+    log::func(prefix_text + message);                                                         \
+  }                                                                                           \
+                                                                                              \
+  void SchedulingMindTrick::func(                                                             \
+      const std::stringstream &stream, const bool prefix) const {                             \
+    const std::string &message = stream.str();                                                \
+    func(message, prefix);                                                                    \
+  }                                                                                           \
+                                                                                              \
+  void SchedulingMindTrick::func(                                                             \
+      const int level, const std::string &message, const bool prefix) const {                 \
+    const std::string &prefix_text = LogPrefixText(prefix);                                   \
+    log::func(level, prefix_text + message);                                                  \
+  }                                                                                           \
+  void SchedulingMindTrick::func(                                                             \
+      const int level, const std::stringstream &stream, const bool prefix) const {            \
+    const std::string &message = stream.str();                                                \
+    func(level, message, prefix);                                                             \
+  }                                                                                           \
+  void SchedulingMindTrick::func(                                                             \
+      const log::Verbosity level, const std::string &message, const bool prefix) const {      \
+    const std::string &prefix_text = LogPrefixText(prefix);                                   \
+    log::func(level, prefix_text + message);                                                  \
+  }                                                                                           \
+  void SchedulingMindTrick::func(                                                             \
+      const log::Verbosity level, const std::stringstream &stream, const bool prefix) const { \
+    const std::string &message = stream.str();                                                \
+    func(level, message, prefix);                                                             \
   }
 
   define_scheduling_mind_trick_log_wrappers(Info)
