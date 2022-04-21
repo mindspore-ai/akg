@@ -34,20 +34,23 @@ import akg.utils as utils
 
 @tvm.register_func("ElemAny")
 def elem_any(inputs, attrs):
-    del attrs
+    in_tensor = inputs[0]
+    if "dst_type" in attrs and hasattr(attrs["dst_type"], "value"):
+        out_dtype = attrs["dst_type"].value
+    else:
+        out_dtype = in_tensor.dtype
 
     def kernel_ir(dst, data):
         ib = tvm.ir_builder.create()
         with ib.for_range_n(data.shape, "ax") as i:
             zero = tvm.const(0, data.dtype)
-            one = tvm.const(1, data.dtype)
+            one = tvm.const(1, out_dtype)
             with ib.if_scope(ib.load(data, i) > zero):
                 ib.store(dst, 0, one)
         return ib.get()
 
-    in_tensor = inputs[0]
     return tvm.extern((1,), [in_tensor], lambda ins, outs: kernel_ir(outs[0], ins[0]),
-                      name="elemany", dtype=in_tensor.dtype)
+                      name="elemany", dtype=out_dtype, attrs={"disable_inline_inject": 1})
 
 
 @tvm.register_func("ElemAll")
