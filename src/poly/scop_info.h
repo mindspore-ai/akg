@@ -329,6 +329,7 @@ class UserConfig {
     } else if (GetTarget() == TARGET_CPU) {
       ParseVectorLengthAttr(attrs, "vector_length", &vector_length_, false);
       ParseStringAttr(attrs, "feature", &feature_);
+      ParseBoolAttr(attrs, "pragma_enable_conv2d_direct", &enable_conv2d_direct_);
     }
 
     if (force_remove_self_dependence_) {
@@ -544,6 +545,9 @@ class UserConfig {
   bool GetEnableConvTensorCore() { return enable_conv_tensor_core_; }
   void SetEnableConvTensorCore(bool enable_conv_tensor_core) { enable_conv_tensor_core_ = enable_conv_tensor_core; }
 
+  bool GetEnableConv2dDirect() { return enable_conv2d_direct_; }
+  void SetEnableConv2dDirect(bool enable_conv2d_direct) { enable_conv2d_direct_ = enable_conv2d_direct; }
+
   bool GetEnableOneDimThread() { return enable_one_dim_thread_; }
   void SetEnableOneDimThread(bool enable_one_dim_thread) { enable_one_dim_thread_ = enable_one_dim_thread; }
 
@@ -730,6 +734,7 @@ class UserConfig {
   bool enable_tensor_core_use_poly_{false};
   // conv config
   bool enable_conv_tensor_core_{false};
+  bool enable_conv2d_direct_{false};
   // lib config
   bool enable_akg_reduce_lib_{true};
   // tensor of tensor config
@@ -1122,6 +1127,9 @@ class AnalysisResult {
   bool GetRemoveSelfDependence() const { return remove_self_dependence_; }
   void SetRemoveSelfDependence(const bool &remove_self_dependence) { remove_self_dependence_ = remove_self_dependence; }
 
+  std::string GetCpuConvolutionAxes() { return cpu_convolutions_axes_; }
+  void SetCpuConvolutionAxes(std::string axes_str) { cpu_convolutions_axes_ = axes_str; }
+
   bool IsCsrDynamicExtent(const Variable *op) {
     for (const auto &it : g_csr) {
       auto var = it.first.as<Variable>();
@@ -1361,6 +1369,9 @@ class AnalysisResult {
   bool remove_self_dependence_{false};
   int csr_avg_row_{0};
   int csr_feat_len_{1};
+
+  // cpu convolution
+  std::string cpu_convolutions_axes_;
 
   RestartPassName restart_pass_name_{RestartPassName::NOT_RESTART};
   std::unordered_map<std::string, isl::schedule> pass_schedule_map_;

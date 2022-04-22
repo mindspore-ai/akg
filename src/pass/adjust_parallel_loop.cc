@@ -106,6 +106,7 @@ class FuseParallelLoop : public IRMutator {
           if (init_i == 0) {
             vmap[item.first] = Mod::make(op->loop_var, item.second);
             div_extend = Mul::make(div_extend, item.second);
+            ++init_i;
           } else {
             auto tmp_div = Div::make(op->loop_var, div_extend);
             vmap[item.first] = Mod::make(tmp_div, item.second);

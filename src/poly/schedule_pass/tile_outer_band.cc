@@ -1396,7 +1396,80 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCpu(isl::schedule_node node
     }
   }
 
+  if (template_type == Template::CONV) {
+    return TileConvForCpu(node);
+  }
+
   return TileElementWiseForCpu(node);
+}
+
+isl::schedule_node TileOuterBand::TileConvForCpu(const isl::schedule_node &orig_node) {
+  if (!orig_node.isa<isl::schedule_node_band>()) {
+    return orig_node;
+  }
+
+  size_t start_depth = orig_node.get_tree_depth();
+  auto node = orig_node;
+
+  node = node.child(0);
+  std::vector<isl::multi_union_pw_aff> all_mupa;
+  while (node.isa<isl::schedule_node_band>()) {
+    isl::multi_union_pw_aff current_mupa = node.as<isl::schedule_node_band>().get_partial_schedule();
+    node = node.del();
+    all_mupa.push_back(current_mupa);
+  }
+  node = node.parent();
+
+  node = IsolateTilesForCpu(node, TILE_WITH_C1);
+  node = InsertMultiParallelMarker(node.parent(), FOR_PARALLEL).child(0).child(0);
+  node = node.insert_mark(PROMOTE_GLOBAL_TO_REGISTER_C).child(0);
+
+  node = SplitReduceStatements(node).parent();
+  size_t seq_start_depth = node.get_tree_depth();
+  int seq_num = node.n_children();
+  auto axes_names = scop_info_.analysis_result_.GetCpuConvolutionAxes();
+
+  for (int i = 0; i < seq_num; ++i) {
+    node = node.child(i).child(0);
+    node = IsolateTilesForCpu(node, TILE_WITH_C0);
+    if (i == 1) {
+      for (auto mupa : all_mupa) {
+        node = node.insert_partial_schedule(mupa);
+        node = node.as<isl::schedule_node_band>().set_permutable(1);
+        node = node.child(0);
+      }
+      if (axes_names.find(CONV_OC_IN) != std::string::npos) {
+        node = node.insert_mark(PROMOTE_GLOBAL_TO_REGISTER_AB).child(0);
+      }
+    }
+
+    if (node.isa<isl::schedule_node_band>()) {
+      auto band_node = node.as<isl::schedule_node_band>();
+      int pos = 0;
+      if (axes_names.find(CONV_IC_IN) != std::string::npos || axes_names.find(CONV_KH) != std::string::npos ||
+          axes_names.find(CONV_KW) != std::string::npos) {
+        ++pos;
+      }
+
+      if (axes_names.find(CONV_OC_IN) != std::string::npos) {
+        ++pos;
+      }
+      node = pos == 0 ? band_node : band_node.split(band_node.n_member() - pos);
+      if (axes_names.find(CONV_OC_IN) != std::string::npos) {
+        node = InsertMarkerForLoop(node.child(0), FOR_VECTORIZED);
+        node = node.parent();
+      }
+
+      if (axes_names.find(CONV_OW) != std::string::npos) {
+        auto tmp_node = node.as<isl::schedule_node_band>();
+        node = tmp_node.split(tmp_node.n_member() - 1).child(0);
+        node = InsertMarkerForLoop(node, FOR_UNROLLED);
+      }
+    }
+    node = node.ancestor(node.get_tree_depth() - seq_start_depth);
+  }
+
+  return node.ancestor(node.get_tree_depth() - start_depth);
 }
 
 bool TileOuterBand::IsContainReduceStatement(const isl::schedule_node &orig_node) {
@@ -1469,7 +1542,7 @@ isl::schedule_node TileOuterBand::TileGemmBandNodeForCpu(const isl::schedule_nod
   auto node = orig_node;
   node = IsolateTilesForCpu(node, TILE_WITH_C1);
 
-  node = InsertParallelMarkerForGemm(node.parent(), FOR_PARALLEL);
+  node = InsertMultiParallelMarker(node.parent(), FOR_PARALLEL);
   bool is_insert_mark = !GetMarkerName(node, FOR_PARALLEL).empty();
 
   node = node.child(0);
@@ -1641,7 +1714,7 @@ isl::schedule_node TileOuterBand::InsertAllMarker(const isl::schedule_node &orig
     is_insert_mark = !GetMarkerName(node, FOR_PARALLEL).empty();
     node = is_insert_mark ? node.insert_mark(REDUCE_AREA_FLAG) : node;
   } else if (current_outer_bn->template_type == Template::MATMUL && scop_info_.user_config_.GetEnableMatmul()) {
-    node = InsertParallelMarkerForGemm(node, FOR_PARALLEL);
+    node = InsertMultiParallelMarker(node, FOR_PARALLEL);
   } else {
     node = InsertMarkerForLoop(node, FOR_PARALLEL);
   }
@@ -1672,8 +1745,8 @@ isl::schedule_node TileOuterBand::InsertMarkerForLoop(const isl::schedule_node &
   return node.insert_mark(marker_name);
 }
 
-isl::schedule_node TileOuterBand::InsertParallelMarkerForGemm(const isl::schedule_node &orig_node,
-                                                              const std::string &marker_name) {
+isl::schedule_node TileOuterBand::InsertMultiParallelMarker(const isl::schedule_node &orig_node,
+                                                            const std::string &marker_name) {
   if (!orig_node.isa<isl::schedule_node_band>()) {
     return orig_node;
   }
@@ -1693,6 +1766,8 @@ isl::schedule_node TileOuterBand::InsertParallelMarkerForGemm(const isl::schedul
   if (parallel_num == 1) {
     return node.insert_mark(marker_name);
   } else if (parallel_num > 1) {
+    auto template_type = scop_info_.analysis_result_.GetOuterBandNode(cur_band_index_)->template_type;
+    parallel_num = template_type == Template::CONV ? parallel_num - 1 : parallel_num;
     std::string new_marker_name = marker_name + UNDERSCORE_PATTERN + std::to_string(parallel_num);
     return node.insert_mark(new_marker_name);
   }

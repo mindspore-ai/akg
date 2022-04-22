@@ -63,6 +63,7 @@ StageResult LLVMLowerBegin(Stmt &, LowerData &data) {
   }
   PassMgr::SetArgs(data->arg_list_0);
   stmt = NEXT_PASS(AddAttrForLayoutOp, stmt, data->sch, false);
+  stmt = NEXT_PASS(AddAttrForConvolutionsOp, stmt);
   stmt = NEXT_PASS(RewriteTensorIndex, stmt);
   return {stmt, false};
 }

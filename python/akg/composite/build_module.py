@@ -288,12 +288,12 @@ def read_repo_file(repo_file):
 def get_repository_file_path(file):
     # get the abosulte path for a file in currect dir, input is a file's name like "a.json"
     pwd = os.path.dirname(os.path.abspath(__file__))
-    path = pwd + "/" + file
-    if not os.path.exists(path):
-        path = pwd + "/../config/" + file
-        if not os.path.exists(path):
+    path_str = pwd + "/" + file
+    if not os.path.exists(path_str):
+        path_str = pwd + "/../config/" + file
+        if not os.path.exists(path_str):
             raise FileNotFoundError("Can not find {} in directory {} and {}".format(file, pwd, pwd + "/../config"))
-    return path
+    return path_str
 
 
 def _get_repository(file_name, desc_d, target=None):
@@ -345,7 +345,10 @@ def _update_attrs_cpu(all_ops, attrs, poly):
         attrs['pragma_enable_matmul'] = True
         attrs['enable_auto_inline'] = False
         attrs['pragma_enable_schedule_maximize_coincidence'] = True
-    if "feature" not in attrs.keys() and any(i in all_ops for i in ["BatchMatMul", "MatMul"]):
+    if any([i in all_ops for i in ["Conv2D"]]):
+        attrs["enable_auto_fuse"] = False
+        attrs["pragma_enable_conv2d_direct"] = True
+    if "feature" not in attrs.keys() and any([i in all_ops for i in ["BatchMatMul", "MatMul"]]):
         attrs["feature"] = "avx"
     return attrs
 
@@ -373,6 +376,7 @@ def _build_to_module(desc_s, desc_d, attrs=None, poly=True):
     def _update_attr_by_repo(desc_s, attrs):
         desc_d = json.loads(desc_s)
         process = desc_d["process"]
+        attrs.update({"process": process})
         file_name = "repository_" + process + ".json"
         repository = _get_repository(file_name, desc_d)
         all_ops = set(op["name"] for op in desc_d["op_desc"])

@@ -370,6 +370,17 @@ constexpr auto ATTR_GEMM_WEIGHT_TRANSPOSE = "pragma_weight_transpose";
 constexpr auto ATTR_GEMM_WEIGHT_TRANSPOSE_BLOCK = "pragma_weight_transpose_block";
 constexpr auto ATTR_GEMM_WEIGHT_TRANSPOSE_BLOCK_INNER = "pragma_weight_transpose_block_inner";
 
+// cpu conv axis
+constexpr auto CONV_BATCH = "batch";
+constexpr auto CONV_OC_OUT = "oc_out";
+constexpr auto CONV_OH = "oh";
+constexpr auto CONV_OW = "ow";
+constexpr auto CONV_KH = "kh";
+constexpr auto CONV_KW = "kw";
+constexpr auto CONV_OC_IN = "oc_in";
+constexpr auto CONV_IC_OUT = "ic_out";
+constexpr auto CONV_IC_IN = "ic_in";
+
 constexpr auto ATTR_ATOMIC_ADD = "atomic_add";
 constexpr auto ATOMIC_COND_CLEAN = "atomic_cond_clean";
 constexpr auto ATTR_ATOMIC_CLEAN_ZERO = "atomic_clean_zero";
@@ -451,6 +462,7 @@ constexpr auto PROMOTE_GLOBAL_TO_SHARED_C = "promote_global_to_shared_c";
 constexpr auto PROMOTE_SHARED_TO_REGISTER_AB = "promote_shared_to_register_ab";
 constexpr auto PROMOTE_SHARED_TO_REGISTER_C = "promote_shared_to_register_c";
 constexpr auto PROMOTE_GLOBAL_TO_REGISTER_C = "promote_global_to_register_c";
+constexpr auto PROMOTE_GLOBAL_TO_REGISTER_AB = "promote_global_to_register_ab";
 constexpr auto PROMOTE_GLOBAL_TO_REGISTER_VECTORIZED = "promote_global_to_register_vectorized";
 constexpr auto PROMOTE_GLOBAL_TO_SHARED = "promote_global_to_shared";
 constexpr auto PROMOTE_REGISTER_TO_GLOBAL = "promote_register_to_global";

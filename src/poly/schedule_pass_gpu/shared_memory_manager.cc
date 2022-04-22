@@ -96,7 +96,9 @@ isl::schedule SharedMemoryManager::HoistSharedMemory() {
     int number = static_cast<int>(node.n_children());
     for (int i = 0, current_band_index = 0; i < number; ++i) {
       auto promotion_node = node.child(i).child(0);
-      if (promotion_node.isa<isl::schedule_node_leaf>()) continue;
+      if (promotion_node.isa<isl::schedule_node_leaf>()) {
+        continue;
+      }
 
       remain_memory_ = akg::common::SHARED_MEMORY_SIZE;
       mark_names_.clear();
@@ -149,7 +151,7 @@ isl::schedule_node SharedMemoryManager::InsertMarkerForRegisterPromotion(const i
     if (mark_names_.find(PROMOTE_GLOBAL_TO_SHARED_C) != mark_names_.end()) {
       hoist_register_node = orig_node.child(0).insert_mark(PROMOTE_SHARED_TO_REGISTER_C);
     }
-    hoist_register_node = InsertMarkerForThreadGroup(hoist_register_node, WRITE_ID_NAME, PROMOTE_SHARED_TO_GLOBAL);
+    hoist_register_node = InsertMarkerForPromotedNode(hoist_register_node, WRITE_ID_NAME, PROMOTE_SHARED_TO_GLOBAL);
     return ReplaceMarker(hoist_register_node, PROMOTE_GLOBAL_TO_SHARED_AB, SHARED_MEM_PROMOTED_COMPLETE);
   }
 

@@ -31,6 +31,8 @@
  *   Fixed prefetch intrinsic
  * 2022.4.16
  *   Add log optimization intrinsic
+ * 2022.06.15
+ *   Add mark of input buffers alignment.
  */
 
 #ifdef TVM_LLVM_VERSION
@@ -443,7 +445,7 @@ void CodeGenLLVM::GetAlignment(Type t,
   if (align_bits < 8) {
     align_bits = 8;
   }
-  *p_alignment = align_bits / 8;
+  *p_alignment = std::min(align_bits / 8, input_alignment_);
 }
 
 std::unique_ptr<CodeGenLLVM::DebugInfo>
@@ -1315,6 +1317,10 @@ void CodeGenLLVM::VisitStmt_(const AttrStmt* op) {
         analyzer_->Bind(iv->var, Range::make_by_min_extent(0, op->value));
       }
     }
+  } else if (op->attr_key == attr::input_alignment) {
+    const Variable* v = op->node.as<Variable>();
+    CHECK(v);
+    input_alignment_ = static_cast<int>(op->value.as<IntImm>()->value);
   } else if (op->attr_key == ir::attr::storage_scope) {
     const Variable* v = op->node.as<Variable>();
     CHECK(v);

@@ -67,14 +67,30 @@ std::string GetRealTarget(const std::string &target) {
 std::string GetProcess(const picojson::value &input_json) {
   const picojson::value::object &input_obj = input_json.get<picojson::object>();
   std::string target;
+  std::string options = "";
+  std::string feature;
   auto iter = input_obj.find("process");
   if (iter != input_obj.end()) {
     CHECK(iter->second.is<std::string>());
     target = iter->second.get<std::string>();
   }
+  if (input_json.contains("target_info") && input_json.get("target_info").contains("feature")) {
+    auto feat_value = input_json.get("target_info").get("feature");
+    CHECK(feat_value.is<std::string>());
+    feature = feat_value.get<std::string>();
+    if (feature == "avx" || feature == "avx2") {
+      options = " -mcpu=core-avx2 -mattr=avx2";
+    } else if (feature == "avx512") {
+      options = "  -mcpu=skylake-avx512 -mattr=-avx512f";
+    } else if (feature == "neon") {
+      // NOTE(yanzhi): there are many kinds of arm cpu, we should select options here.
+      options = " -target=aarch64-linux-gnu -mattr=+neon";
+    }
+  }
 
-  return GetRealTarget(target);
+  return GetRealTarget(target) + options;
 }
+
 
 picojson::value String2Json(const std::string &json_str) {
   picojson::value v;
@@ -128,7 +144,8 @@ bool IsOtherOp(const std::string &op_name) {
                                            "CSR2COO",
                                            "COO2CSR",
                                            "ElemAny",
-                                           "CSRMM"};
+                                           "CSRMM",
+                                           "LayoutTransform"};
   return elems.find(op_name) != elems.end();
 }
 bool IsElemwise(const std::string &op_name) {

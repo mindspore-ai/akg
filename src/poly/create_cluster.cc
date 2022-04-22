@@ -152,16 +152,12 @@ void CreateCluster::RecordGemmTensors() {
   RecordPromotedTensor(MATRIX_C);
 }
 
-PromotedTensor CreateCluster::GetCurrentMarkerTensorsForGemm(const bool hoist_tensor_c) {
+PromotedTensor CreateCluster::GetCurrentMarkerTensorsForGemm(const std::unordered_set<std::string> &tensor_set) {
   PromotedTensor current_tensors;
   for (auto &tensor : all_tensors_) {
     auto id_name = tensor.first.get_name();
     auto tensor_mark = GetTensorMark(id_name, scop_info_);
-    // Only promote tensor A/B at the position marked A/B.
-    bool is_tensor_ab = !hoist_tensor_c && (tensor_mark == TENSOR_A || tensor_mark == TENSOR_B);
-    // Only promote tensor C at the position marked C.
-    bool is_tensor_c = hoist_tensor_c && tensor_mark == TENSOR_C;
-    if (is_tensor_c || is_tensor_ab) {
+    if (tensor_set.count(tensor_mark) != 0) {
       current_tensors.insert(tensor);
     }
   }
@@ -280,10 +276,18 @@ void SharedCreateCluster::CreateClusterListForGemm(const isl::schedule_node &nod
   // Modify promoted type of tensor A/B/C for gemm operator.
   RecordGemmTensors();
 
+  std::unordered_set<std::string> tensor_set;
   for (const auto &mark_name : mark_names) {
     bool hoist_tensor_c = mark_name == PROMOTE_GLOBAL_TO_SHARED_C;
+    tensor_set.clear();
+    if (hoist_tensor_c) {
+      tensor_set.emplace(TENSOR_C);
+    } else {
+      tensor_set.emplace(TENSOR_A);
+      tensor_set.emplace(TENSOR_B);
+    }
     // Promote the specific tensor at the corresponding marker position.
-    PromotedTensor current_tensors = GetCurrentMarkerTensorsForGemm(hoist_tensor_c);
+    PromotedTensor current_tensors = GetCurrentMarkerTensorsForGemm(tensor_set);
     RecordPromotedTensorInfo(node, mark_name, current_tensors);
   }
 }
@@ -539,10 +543,18 @@ void RegisterCreateCluster::CreateClusterListForGemm(const isl::schedule_node &n
   // Modify promoted type of tensor A/B/C for gemm operator.
   RecordGemmTensors();
 
+  std::unordered_set<std::string> tensor_set;
   for (const auto &mark_name : mark_names) {
     bool hoist_tensor_c = ((mark_name == PROMOTE_GLOBAL_TO_REGISTER_C) || (mark_name == PROMOTE_SHARED_TO_REGISTER_C));
     // Promote the specific tensor at the corresponding marker position.
-    PromotedTensor current_tensors = GetCurrentMarkerTensorsForGemm(hoist_tensor_c);
+    tensor_set.clear();
+    if (hoist_tensor_c) {
+      tensor_set.emplace(TENSOR_C);
+    } else {
+      tensor_set.emplace(TENSOR_A);
+      tensor_set.emplace(TENSOR_B);
+    }
+    PromotedTensor current_tensors = GetCurrentMarkerTensorsForGemm(tensor_set);
     RecordPromotedTensorInfo(node, mark_name, current_tensors);
   }
 }
@@ -617,7 +629,7 @@ bool CpuCreateCluster::CheckPromotion(const isl::schedule_node &current_node, co
                                       const TensorFootprintCluster &cluster,
                                       const std::pair<isl::id, PromotedTensorType> &tensor_info) {
   auto template_type = scop_info_.analysis_result_.GetOuterBandNode(band_index_)->template_type;
-  return template_type == Template::MATMUL && scop_info_.user_config_.GetEnableMatmul();
+  return template_type == Template::MATMUL || template_type == Template::CONV;
 }
 
 void CpuCreateCluster::CreateClusterListForGemm(const isl::schedule_node &node,
@@ -625,10 +637,35 @@ void CpuCreateCluster::CreateClusterListForGemm(const isl::schedule_node &node,
   auto configed_tensors = scop_info_.user_config_.GetRegisterTensors();
   // Initialize the promoted types of all tensors.
   RecordInitPromotedTensorType(configed_tensors);
+  std::unordered_set<std::string> tensor_set;
 
   for (auto mark_name : mark_names) {
     // Promote the specific tensor at the corresponding marker position.
-    PromotedTensor current_tensors = GetCurrentMarkerTensorsForGemm(false);
+    tensor_set.clear();
+    tensor_set.emplace(TENSOR_A);
+    tensor_set.emplace(TENSOR_B);
+    PromotedTensor current_tensors = GetCurrentMarkerTensorsForGemm(tensor_set);
+    RecordPromotedTensorInfo(node, mark_name, current_tensors);
+  }
+}
+
+void CpuCreateCluster::CreateClusterListForConv(const isl::schedule_node &node,
+                                                const std::unordered_set<std::string> &mark_names) {
+  auto configed_tensors = scop_info_.user_config_.GetRegisterTensors();
+  // Initialize the promoted types of all tensors.
+  RecordInitPromotedTensorType(configed_tensors);
+  std::unordered_set<std::string> tensor_set;
+
+  for (auto mark_name : mark_names) {
+    bool hoist_tensor_c = mark_name == PROMOTE_GLOBAL_TO_REGISTER_C;
+    tensor_set.clear();
+    if (hoist_tensor_c) {
+      tensor_set.emplace(TENSOR_C);
+    } else {
+      tensor_set.emplace(TENSOR_B);
+    }
+    // Promote the specific tensor at the corresponding marker position.
+    PromotedTensor current_tensors = GetCurrentMarkerTensorsForGemm(tensor_set);
     RecordPromotedTensorInfo(node, mark_name, current_tensors);
   }
 }

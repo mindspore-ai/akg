@@ -43,11 +43,11 @@ class CpuMemoryManager : public SchedulePass {
                                  const isl::id &dst_tensor_id, TensorFootprintCluster &cluster,
                                  bool force_last_extension_odd);
 
-  isl::schedule InsertVectorizedMarker(const isl::schedule &sch);
-
   isl::schedule HoistCpuMemory();
 
-  bool IsInitFilter(const isl::schedule_node &orig_node);
+  void CreateClusterForOperator(const isl::schedule_node &orig_node);
+  isl::schedule_node InsertMarkerForVectorization(const isl::schedule_node &orig_node);
+  isl::schedule_node HoistCpuMemoryOnMark(const isl::schedule_node &orig_node);
 
   ScopInfo &scop_info_;
   int band_index_{0};

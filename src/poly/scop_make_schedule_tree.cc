@@ -507,6 +507,8 @@ class ScopMakeScheduleTree final : protected IRVisitor {
           scop_info_.analysis_result_.RecordInplaceAssignNodes(pro);
         }
       }
+    } else if (op->attr_key == AKG_CONVOLUTION_AXES) {
+      scop_info_.analysis_result_.SetCpuConvolutionAxes(op->value.as<StringImm>()->value);
     }
 
     sch = MakeScheduleTreeHelper(op->body, scop_info_, set, outer, macro_stmt);

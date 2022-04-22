@@ -170,6 +170,15 @@ Stmt ScalarComputeRewrite(const Stmt &stmt);
 
 Stmt AddAttrForLayoutOp(Stmt stmt, Schedule sch, bool need_remove_likely);
 
+/*!
+ * \brief Add Attr "CONVOLUTION_AXES" for cpu convolution ops.
+ * "CONVOLUTION_AXES" contains a string with axes names, like "|batch|oc_out|..."
+ * We use these axes_names for poly transformation and tiling.
+ * \param stmt The stmt to be transformed.
+ * \return Transformed stmt.
+ */
+Stmt AddAttrForConvolutionsOp(Stmt stmt);
+
 Stmt RewriteTensorIndex(Stmt stmt);
 
 Stmt RewriteVarTensorIdx(Stmt stmt, const Map<Tensor, Buffer> &extern_buffer);

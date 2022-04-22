@@ -443,6 +443,11 @@ constexpr auto AKG_REDUCE_OR = "OrOp";
 constexpr auto AKG_REDUCE_PROD = "ProdOp";
 constexpr auto AKG_REDUCE_UNSUPPORTED = "X";
 
+
+// cpu convolution attrs
+constexpr auto AKG_CONVOLUTION_TPYE = "CONVOLUTION_TPYE";
+constexpr auto AKG_CONVOLUTION_AXES = "CONVOLUTION_AXES";
+
 constexpr auto AKG_TENSOR_NOT_PROMOTE = "TENSOR_NOT_PROMOTE";
 constexpr auto AKG_INNER_TENSOR = "INNER_TENSOR";
 constexpr auto AKG_TENSOR_OF_TENSOR = "TENSOR_OF_TENSOR";

@@ -223,9 +223,9 @@ std::vector<isl::schedule_node> BandsSplitAfterDepth(const std::vector<isl::sche
   return MapWithFunc(split_at_depth, bands);
 }
 
-isl::schedule_node InsertMarkerForThreadGroup(const isl::schedule_node &orig_node, const std::string &filter_name,
-                                              const std::string &marker_name) {
-  auto GetPromotedWriteFilter = [filter_name, marker_name](isl::schedule_node node) -> isl::schedule_node {
+isl::schedule_node InsertMarkerForPromotedNode(const isl::schedule_node &orig_node, const std::string &filter_name,
+                                               const std::string &marker_name, const int aixs_pos) {
+  auto GetPromotedWriteFilter = [filter_name, marker_name, aixs_pos](isl::schedule_node node) -> isl::schedule_node {
     if (!node.isa<isl::schedule_node_filter>()) {
       return node;
     }
@@ -237,8 +237,26 @@ isl::schedule_node InsertMarkerForThreadGroup(const isl::schedule_node &orig_nod
       }
     });
     if (is_gm_filter && node.has_parent() && node.parent().isa<isl::schedule_node_sequence>()) {
-      node = node.child(0).insert_mark(marker_name);
-      node = node.parent();
+      node = node.child(0);
+      if (!node.isa<isl::schedule_node_band>()) {
+        return node;
+      }
+
+      auto band_node = node.as<isl::schedule_node_band>();
+      int n_member = band_node.n_member();
+      LOG(INFO) << "aixs_pos: " << aixs_pos;
+      LOG(INFO) << "n_member: " << n_member;
+      CHECK(std::abs(aixs_pos) <= n_member) << "The position of the inserted axis cannot be greater than the total "
+                                               "number of axes of the current band node.";
+      // aixs_pos: Indicates that the marker is inserted before the i-th axis, starting from 1.
+      int current_aixs_pos = aixs_pos - 1;
+      if (aixs_pos < 0) {
+        current_aixs_pos = n_member + aixs_pos;
+      }
+      bool need_split = current_aixs_pos != 0;
+      node = need_split ? band_node.split(current_aixs_pos).child(0) : node;
+      node = node.insert_mark(marker_name).parent();
+      node = need_split ? node.parent() : node;
     }
     return node;
   };
@@ -748,18 +766,19 @@ std::vector<isl::schedule_node> CollectMarkNode(const isl::schedule_node &tree, 
 
 std::unordered_map<std::string, std::string> GetMatmulTensorsName(ScopInfo &scop_info) {
   std::unordered_map<std::string, std::string> tensors;
-  if (scop_info.user_config_.GetEnableMatmul()) {
-    std::unordered_map<std::string, std::string> matmul_map = scop_info.analysis_result_.GetMatrixMatmulMap();
-    for (auto i : matmul_map) {
-      if (i.second == MATRIX_C) {
-        tensors.emplace(MATRIX_C, i.first);
-      } else if (i.second == MATRIX_A) {
-        tensors.emplace(MATRIX_A, i.first);
-      } else if (i.second == MATRIX_B) {
-        tensors.emplace(MATRIX_B, i.first);
-      } else if (i.second == MATRIX_ELSE) {
-        tensors.emplace(MATRIX_ELSE, i.first);
-      }
+  if (!scop_info.user_config_.GetEnableMatmul() && !scop_info.user_config_.GetEnableConv2dDirect()) {
+    return tensors;
+  }
+  std::unordered_map<std::string, std::string> matmul_map = scop_info.analysis_result_.GetMatrixMatmulMap();
+  for (auto i : matmul_map) {
+    if (i.second == MATRIX_C) {
+      tensors.emplace(MATRIX_C, i.first);
+    } else if (i.second == MATRIX_A) {
+      tensors.emplace(MATRIX_A, i.first);
+    } else if (i.second == MATRIX_B) {
+      tensors.emplace(MATRIX_B, i.first);
+    } else if (i.second == MATRIX_ELSE) {
+      tensors.emplace(MATRIX_ELSE, i.first);
     }
   }
   return tensors;
@@ -773,13 +792,16 @@ std::string GetTensorMark(const std::string &item, ScopInfo &scop_info) {
       (pos = item_tensor_name.find(SHARE_SUFFIX)) != std::string::npos) {
     item_tensor_name = item_tensor_name.erase(pos, item_tensor_name.size() - pos);
   }
+
+  std::string tensor_mark = "";
   if (item_tensor_name == tensors[MATRIX_A]) {
-    return TENSOR_A;
+    tensor_mark = TENSOR_A;
   } else if (item_tensor_name == tensors[MATRIX_B]) {
-    return TENSOR_B;
-  } else {
-    return TENSOR_C;
+    tensor_mark = TENSOR_B;
+  } else if (item_tensor_name == tensors[MATRIX_C]) {
+    tensor_mark = TENSOR_C;
   }
+  return tensor_mark;
 }
 
 isl::schedule_node AdjustAxisPosition(const isl::schedule_node &orig_node, const int orig_pos, const int new_pos) {

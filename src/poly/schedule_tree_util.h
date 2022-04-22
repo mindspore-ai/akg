@@ -114,8 +114,8 @@ isl::schedule_node UnrollByMarkOptions(isl::schedule_node &node, uint64_t unroll
 isl::map GetExtensionSpace(const isl::schedule_node &node, const isl::id &id);
 isl::schedule_node InsertExtensionNodeBeforeOrAfter(const isl::schedule_node &node, const isl::id &id, bool before);
 
-isl::schedule_node InsertMarkerForThreadGroup(const isl::schedule_node &orig_node, const std::string &filter_name,
-                                              const std::string &marker_name);
+isl::schedule_node InsertMarkerForPromotedNode(const isl::schedule_node &orig_node, const std::string &filter_name,
+                                               const std::string &marker_name, const int aixs_pos = 1);
 std::string GetMarkerName(const isl::schedule_node &node, std::string find_name);
 
 isl::union_set GetMappingFilterInfo(const isl::schedule_node node, MappingCfg *mapping_cfg,
