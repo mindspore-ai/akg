@@ -127,7 +127,9 @@ inline StageResult LowerStageTuning(Stmt &stmt, LowerData &data) {
   if (data->polyhedral && level > help_tiling_level["None"]) {
     g_attrs.Set(kDumpTuningLevel, air::make_const(Int(32), level));
     Map<std::string, NodeRef> spec_gemm_attrs = {};
-    NodeRef tuning_spaces = NEXT_PASS(GenTuningSpace, stmt, data->target, data->binds_0, spec_gemm_attrs, data->sch);
+    Target target = Target::Create(data->target);
+    NodeRef tuning_spaces = NEXT_PASS(GenTuningSpace, stmt, target->target_name, data->binds_0,
+                                      spec_gemm_attrs, data->sch);
     return {tuning_spaces, true};
   }
   return {stmt, false};
@@ -136,7 +138,9 @@ inline StageResult LowerStageTuning(Stmt &stmt, LowerData &data) {
 inline StageResult LowerPoly(Stmt &stmt, LowerData &data) {
   if (data->polyhedral) {
     Map<std::string, NodeRef> spec_gemm_attrs = {};
-    Array<NodeRef> poly_res = NEXT_PASS(AutoPoly, stmt, data->binds_0, data->target, false, spec_gemm_attrs, data->sch);
+    Target target = Target::Create(data->target);
+    Array<NodeRef> poly_res = NEXT_PASS(AutoPoly, stmt, data->binds_0, target->target_name, false,
+                                        spec_gemm_attrs, data->sch);
     CHECK_EQ(poly_res.size(), 2);
     stmt = air::Downcast<Stmt>(poly_res[0]);
     g_attrs.Set(kEnablePolySch, air::make_const(Int(32), true));

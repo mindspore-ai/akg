@@ -67,13 +67,19 @@ std::string GetRealTarget(const std::string &target) {
 std::string GetProcess(const picojson::value &input_json) {
   const picojson::value::object &input_obj = input_json.get<picojson::object>();
   std::string target;
+  std::string target_option;
   auto iter = input_obj.find("process");
   if (iter != input_obj.end()) {
     CHECK(iter->second.is<std::string>());
     target = iter->second.get<std::string>();
   }
+  iter = input_obj.find("target_option");
+  if (iter != input_obj.end()) {
+    CHECK(iter->second.is<std::string>());
+    target_option = " " + iter->second.get<std::string>();
+  }
 
-  return GetRealTarget(target);
+  return GetRealTarget(target) + target_option;
 }
 
 picojson::value String2Json(const std::string &json_str) {

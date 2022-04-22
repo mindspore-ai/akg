@@ -50,15 +50,17 @@ void StageManager::RegisterFilter(
 }
 
 std::vector<Stage> StageManager::GetStages(const LowerData &data, StageType begin, StageType end) {
-  CHECK(stages_.find(data->target) != stages_.end()) << GetErrorHint(data->target);
+  Target target = Target::Create(data->target);
+  CHECK(stages_.find(target->target_name) != stages_.end()) << GetErrorHint(target->target_name);
 
-  auto bg_offset = GetIndexOfStageType(data->target, begin);
-  auto end_offset = GetIndexOfStageType(data->target, end);
+  auto bg_offset = GetIndexOfStageType(target->target_name, begin);
+  auto end_offset = GetIndexOfStageType(target->target_name, end);
   CHECK(bg_offset <= end_offset);
 
-  std::vector<Stage> stages(stages_[data->target].begin() + bg_offset, stages_[data->target].begin() + end_offset + 1);
-  if (stage_filters_.find(data->target) != stage_filters_.end()) {
-    return stage_filters_[data->target](data, begin, end, stages);
+  std::vector<Stage> stages(stages_[target->target_name].begin() + bg_offset,
+                            stages_[target->target_name].begin() + end_offset + 1);
+  if (stage_filters_.find(target->target_name) != stage_filters_.end()) {
+    return stage_filters_[target->target_name](data, begin, end, stages);
   }
 
   return stages;
@@ -116,12 +118,13 @@ StageType StageManager::NextStageType(const std::string &target, StageType type)
 }
 
 bool StageLower::SkipTo(StageType to) {
-  size_t cur_index = StageManager::Instance().GetIndexOfStageType(data_->target, cur_stage_);
-  size_t to_index = StageManager::Instance().GetIndexOfStageType(data_->target, to);
+  Target target = Target::Create(data_->target);
+  size_t cur_index = StageManager::Instance().GetIndexOfStageType(target->target_name, cur_stage_);
+  size_t to_index = StageManager::Instance().GetIndexOfStageType(target->target_name, to);
   if (to_index <= cur_index) {
-    LOG(WARNING) << "The stage (" << StageManager::Instance().GetStageByType(data_->target, to)
+    LOG(WARNING) << "The stage (" << StageManager::Instance().GetStageByType(target->target_name, to)
                  << ") want to skip to is behind the current stage("
-                 << StageManager::Instance().GetStageByType(data_->target, cur_stage_) << ")!";
+                 << StageManager::Instance().GetStageByType(target->target_name, cur_stage_) << ")!";
     return false;
   }
   cur_stage_ = to;
@@ -129,10 +132,11 @@ bool StageLower::SkipTo(StageType to) {
 }
 
 StageLower &StageLower::RunTo(StageType to) {
+  Target target = Target::Create(data_->target);
   if (done_) {
     LOG(WARNING) << "The compil>e is done, cannot run "
-                 << StageManager::Instance().GetStageByType(data_->target, cur_stage_) << " to "
-                 << StageManager::Instance().GetStageByType(data_->target, to);
+                 << StageManager::Instance().GetStageByType(target->target_name, cur_stage_) << " to "
+                 << StageManager::Instance().GetStageByType(target->target_name, to);
     return *this;
   }
 
@@ -162,7 +166,7 @@ StageLower &StageLower::RunTo(StageType to) {
     data_->attrs.Set(iter.first, iter.second);
   }
 
-  cur_stage_ = StageManager::Instance().NextStageType(data_->target, to);
+  cur_stage_ = StageManager::Instance().NextStageType(target->target_name, to);
 
   g_attrs = AttrMap();
   return *this;
