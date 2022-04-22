@@ -16,36 +16,52 @@
 import akg.utils as utils
 import akg.ops.array.gpu as array
 import akg.ops.nn.gpu as nn
+from akg.ms.utils import reg_op
 
-def Squeeze(x, axis=None, target=utils.CUDA):
+
+@reg_op("Squeeze", utils.CUDA)
+def squeeze(x, axis=None, target=utils.CUDA):
     """Squeeze"""
     return array.Squeeze(x, axis, target)
 
-def SqueezeGrad(y_grad, x_shape, target=utils.CUDA):
+
+@reg_op("SqueezeGrad", utils.CUDA)
+def squeeze_grad(y_grad, x_shape, target=utils.CUDA):
     """SqueezeGrad"""
     return array.SqueezeGrad(y_grad, x_shape, target)
 
-def ReLU6(x, target=utils.CUDA):
+
+@reg_op("ReLU6", utils.CUDA)
+def relu6(x, target=utils.CUDA):
     """ReLU6"""
     return nn.ReLU6(x, target)
 
-def ReLU6Grad(y_grad, x, target=utils.CUDA):
+
+@reg_op("ReLU6Grad", utils.CUDA)
+def relu6_grad(y_grad, x, target=utils.CUDA):
     """ReLU6Grad"""
     return nn.ReLU6Grad(y_grad, x, target)
 
-def HSwish(x, target=utils.CUDA):
+
+@reg_op("HSwish", utils.CUDA)
+def h_swish(x, target=utils.CUDA):
     """HSwish"""
     return nn.HSwish(x, target)
 
-def HSwishGrad(y_grad, x, target=utils.CUDA):
+
+@reg_op("HSwishGrad", utils.CUDA)
+def h_swish_grad(y_grad, x, target=utils.CUDA):
     """HSwishGrad"""
     return nn.HSwishGrad(y_grad, x, target)
 
-def HSigmoid(x, target=utils.CUDA):
+
+@reg_op("HSigmoid", utils.CUDA)
+def h_sigmoid(x, target=utils.CUDA):
     """HSigmoid"""
     return nn.HSigmoid(x, target)
 
-def HSigmoidGrad(y_grad, x, target=utils.CUDA):
+
+@reg_op("HSigmoidGrad", utils.CUDA)
+def h_sigmoid_grad(y_grad, x, target=utils.CUDA):
     """HSigmoidGrad"""
     return nn.HSigmoidGrad(y_grad, x, target)
-
