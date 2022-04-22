@@ -27,25 +27,13 @@ from akg.utils import kernel_exec as kernel_exec
 from akg.utils.dsl_create import TensorUtils
 from akg.global_configs import get_dump_ir_flag
 from akg.global_configs import get_dump_code_flag
-from . import op_build, ops_ascend, ops_gpu, ops_general
+from akg.ms.utils import get_op
+from . import op_build
 
 
 @utils.check_input_type(dict, dict)
 def _compilewithjson_to_module_op(kernel_info, attrs, processor):
     """compile with json for single op."""
-
-    def _get_ops(op_name):
-        if not op_name:
-            return None
-        op_func = getattr(ops_general, op_name, None)
-        if op_func is not None:
-            return op_func
-        special_ops = None
-        if processor == utils.CCE:
-            special_ops = ops_ascend
-        elif processor == utils.CUDA:
-            special_ops = ops_gpu
-        return getattr(special_ops, op_name, None) if special_ops is not None else None
 
     def _get_op_func(op_name):
         op_func = None
@@ -62,7 +50,7 @@ def _compilewithjson_to_module_op(kernel_info, attrs, processor):
 
         # get built-in ops.
         if op_func is None:
-            op_func = _get_ops(op_name)
+            op_func = get_op(op_name, attrs["target"])
         return op_func
 
     def _compilewithjson_cuda(op_func):
@@ -152,6 +140,7 @@ def _compilewithjson_to_module_op(kernel_info, attrs, processor):
 @utils.check_input_type(dict, dict)
 def _compilewithjson_to_module(kernel_info, attrs):
     """compile with json."""
+
     def _get_target_from_processor(processor):
         if processor is None:
             return None

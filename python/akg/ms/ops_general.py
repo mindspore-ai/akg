@@ -16,103 +16,154 @@
 import akg.utils as utils
 import akg.ops.math as math
 import akg.ops.array as array
+from akg.ms.utils import reg_op
 
-def TensorAdd(x, y, target=utils.CUDA):
+
+@reg_op("TensorAdd")
+def tensor_add(x, y, target=utils.CUDA):
     """TensorAdd"""
     return math.Add(x, y, scale=1.0, polyhedral=True, attrs={}, target=target)
 
-def Add(x, y, target=utils.CUDA):
+
+@reg_op("Add")
+def add(x, y, target=utils.CUDA):
     """Add"""
     return math.Add(x, y, scale=1.0, polyhedral=True, attrs={}, target=target)
 
-def AddN(inputs, target=utils.CUDA):
+
+@reg_op("AddN")
+def add_n(inputs, target=utils.CUDA):
     """AddN"""
     return math.Addn(inputs, target)
 
-def Assign(ref, val, target=utils.CUDA):
+
+@reg_op("Assign")
+def assign(ref, val, target=utils.CUDA):
     """Assign"""
     return math.Assign(ref, val, target)
 
-def Cast(x, dst_type, target=utils.CUDA):
+
+@reg_op("Cast")
+def cast(x, dst_type, target=utils.CUDA):
     """Cast"""
     return math.Cast(x, dst_type, target)
 
-def Equal(input1, input2, target=utils.CUDA):
+
+@reg_op("Equal")
+def equal(input1, input2, target=utils.CUDA):
     """Equal"""
     return math.Equal(input1, input2, target)
 
-def LessEqual(input1, input2, target=utils.CUDA):
+
+@reg_op("LessEqual")
+def less_equal(input1, input2, target=utils.CUDA):
     """LessEqual"""
     return math.LessEqual(input1, input2, target)
 
-def Mul(x, y, target=utils.CUDA):
+
+@reg_op("Mul")
+def mul(x, y, target=utils.CUDA):
     """Mul"""
     return math.Mul(x, y, target)
 
-def Sub(x, y, target=utils.CUDA):
+
+@reg_op("Sub")
+def sub(x, y, target=utils.CUDA):
     """Sub"""
     return math.Sub(x, y, target)
 
-def Div(x, y, target=utils.CUDA):
+
+@reg_op("Div")
+def div(x, y, target=utils.CUDA):
     """Div"""
     return math.Divide(x, y, target)
 
-def Divide(x, y, target=utils.CUDA):
+
+@reg_op("Divide")
+def divide(x, y, target=utils.CUDA):
     """Divide"""
     return math.Divide(x, y, target)
 
-def Tile(data, multiples, target=utils.CUDA):
+
+@reg_op("Tile")
+def tile(data, multiples, target=utils.CUDA):
     """Tile"""
     return array.Tile(data, multiples, target)
 
-def LogicalOr(x, y, target=utils.CUDA):
+
+@reg_op("LogicalOr")
+def logical_or(x, y, target=utils.CUDA):
     """LogicalOr"""
     return math.LogicalOr(x, y, target)
 
-def LogicalAnd(x, y, target=utils.CUDA):
+
+@reg_op("LogicalAnd")
+def logical_and(x, y, target=utils.CUDA):
     """LogicalAnd."""
     return math.LogicalAnd(x, y, target)
 
-def LogicalNot(data, target=utils.CUDA):
+
+@reg_op("LogicalNot")
+def logical_not(data, target=utils.CUDA):
     """LogicalNot"""
     return math.LogicalNot(data, target)
 
-def NotEqual(x, y, target=utils.CUDA):
+
+@reg_op("NotEqual")
+def not_equal(x, y, target=utils.CUDA):
     """NotEqual"""
     return math.NotEqual(x, y, target)
 
-def GreaterEqual(x, y, target=utils.CUDA):
+
+@reg_op("GreaterEqual")
+def greater_equal(x, y, target=utils.CUDA):
     """GreaterEqual"""
     return math.GreaterEqual(x, y, target)
 
-def Max(x, axis=None, keep_dims=False, target=utils.CUDA):
+
+@reg_op("Max")
+def tensor_max(x, axis=None, keep_dims=False, target=utils.CUDA):
     """Max"""
     return math.ReduceMax(x, axis=axis, keepdims=keep_dims, target=target)
 
-def Neg(x, target=utils.CUDA):
+
+@reg_op("Neg")
+def neg(x, target=utils.CUDA):
     """Neg"""
     return math.Neg(x, target)
 
-def Log(x, target=utils.CUDA):
+
+@reg_op("Log")
+def log(x, target=utils.CUDA):
     """Log"""
     return math.Log(x, target)
 
-def Less(x, y, target=utils.CUDA):
+
+@reg_op("Less")
+def less(x, y, target=utils.CUDA):
     """Less"""
     return math.Less(x, y, target)
 
-def Exp(x, target=utils.CUDA):
+
+@reg_op("Exp")
+def exp(x, target=utils.CUDA):
     """Exp"""
     return math.Exp(x, target)
 
-def Sum(data, axis=None, keepdims=False, target=utils.CUDA):
+
+@reg_op("Sum")
+def tensor_sum(data, axis=None, keepdims=False, target=utils.CUDA):
     """Sum"""
     return math.Sum(data, axis, keepdims, target=target)
 
-def Reshape(tensor, shape, target=utils.CUDA):
+
+@reg_op("Reshape")
+def reshape(tensor, shape, target=utils.CUDA):
     """Reshape"""
     return array.Reshape(tensor, shape, target)
 
-def Reciprocal(x, target=utils.CUDA):
+
+@reg_op("Reciprocal")
+def reciprocal(x, target=utils.CUDA):
     """Reciprocal"""
     return math.Reciprocal(x, target)
