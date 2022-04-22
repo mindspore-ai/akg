@@ -22,6 +22,8 @@
  *
  * 2021.12.21
  *   Fixed prefetch intrinsic
+ * 2022.4.16
+ *   Optimize log intrinsic
  */
 #ifdef TVM_LLVM_VERSION
 
@@ -38,7 +40,18 @@ TVM_REGISTER_GLOBAL("tvm.intrin.rule.llvm.fma")
 .set_body(DispatchLLVMPureIntrin<::llvm::Intrinsic::fmuladd, 1>);
 
 TVM_REGISTER_GLOBAL("tvm.intrin.rule.llvm.log")
-.set_body(DispatchLLVMPureIntrin<::llvm::Intrinsic::log, 1>);
+.set_body([](const TVMArgs& targs, TVMRetValue* rv) {
+  Expr e = targs[0];
+  const ir::Call* call = e.as<ir::Call>();
+  CHECK(call != nullptr);
+  const Expr& x = call->args[0];
+  const auto type = x.type();
+  if (type.is_float() && type.bits() == 32) {
+    *rv = e;
+  } else {
+    DispatchLLVMPureIntrin<::llvm::Intrinsic::log, 1>(targs, rv);
+  }
+});
 
 TVM_REGISTER_GLOBAL("tvm.intrin.rule.llvm.sqrt")
 .set_body(DispatchLLVMPureIntrin<::llvm::Intrinsic::sqrt, 1>);

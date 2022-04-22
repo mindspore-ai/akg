@@ -29,6 +29,8 @@
  *   Add sgemm kernel intrinsics
  * 2021.12.21
  *   Fixed prefetch intrinsic
+ * 2022.4.16
+ *   Add log optimization intrinsic
  */
 
 #ifdef TVM_LLVM_VERSION
@@ -870,33 +872,10 @@ llvm::Value* CodeGenLLVM::CreateIntrinsic(const Call* op) {
     return builder_->CreateShuffleVector(v0, v0, indices);
   } else if (op->is_intrinsic("SgemmKernelAvx")) {
     return EmitSgemmKernel(op);
+  } else if (op->is_intrinsic("log")) {
+    return CreateLog(op);
   } else if (op->is_intrinsic("exp")) {
-    auto x_type = op->args[0].type();
-    auto float_type = DataType(kDLFloat, x_type.bits(), x_type.lanes());
-    auto int_type = DataType(kDLInt, x_type.bits(), x_type.lanes());
-    Expr x = ir::Cast::make(float_type, op->args[0]);
-    Expr param_0 = make_const(float_type, 0.693147f);
-    Expr param_1 = make_const(float_type, 1.f / 120.f);
-    Expr param_2 = make_const(float_type, 1.f / 24.f);
-    Expr param_3 = make_const(float_type, 1.f / 6.f);
-    Expr param_4 = make_const(float_type, 0.5f);
-    Expr param_5 = make_const(float_type, 1.f);
-    Expr param_6 = make_const(float_type, 88.f);
-    Expr param_7 = make_const(float_type, -88.f);
-    Expr param_8 = make_const(int_type, 127);
-    Expr param_9 = make_const(int_type, 23);
-
-    Expr input = ir::Max::make(param_7, ir::Min::make(param_6, x));
-    Expr integer = ir::Cast::make(int_type, input / param_0);
-    Expr decimal = input - integer * param_0;
-    Expr int_exp = ir::Call::make(int_type, ir::Call::shift_left, {integer + param_8, param_9}, ir::Call::Intrinsic);
-    Expr tmp = (param_1 * decimal + param_2) * decimal;
-    tmp = decimal * (param_4 + (param_3 + tmp) * decimal);
-    Expr decimal_exp = param_5 + decimal * (param_5 + tmp);
-    llvm::Value *decimal_value = MakeValue(decimal_exp);
-    llvm::Value *int_value = MakeValue(int_exp);
-    llvm::Value *float_value = builder_->CreateBitCast(int_value, decimal_value->getType());
-    return CreateMul(float_type, decimal_value, float_value);
+    return CreateExp(op);
   } else {
     LOG(FATAL) << "unknown intrinsic " << op->name;
     return nullptr;
@@ -1384,6 +1363,127 @@ void CodeGenLLVM::VisitStmt_(const Evaluate* op) {
 
 void CodeGenLLVM::VisitStmt_(const ProducerConsumer* op) {
   this->VisitStmt(op->body);
+}
+
+llvm::Value* CodeGenLLVM::CreateLog(const Call* op) {
+  auto x_type = op->args[0].type();
+  auto float_type = DataType(kDLFloat, x_type.bits(), x_type.lanes());
+  auto int_type = DataType(kDLInt, x_type.bits(), x_type.lanes());
+  Expr p0 = make_const(float_type, 7.0376836292E-2);
+  Expr p1 = make_const(float_type, - 1.1514610310E-1);
+  Expr p2 = make_const(float_type, 1.1676998740E-1);
+  Expr p3 = make_const(float_type, - 1.2420140846E-1);
+  Expr p4 = make_const(float_type, 1.4249322787E-1);
+  Expr p5 = make_const(float_type, - 1.6668057665E-1);
+  Expr p6 = make_const(float_type, 2.0000714765E-1);
+  Expr p7 = make_const(float_type, - 2.4999993993E-1);
+  Expr p8 = make_const(float_type, 3.3333331174E-1);
+  Expr q1 = make_const(float_type, -2.12194440E-4);
+  Expr q2 = make_const(float_type, 0.693359375);
+  Expr sqrthf = make_const(float_type, 0.707106781186547524f);
+  Expr min_norm_pos = make_const(float_type, 1.17549E-38);
+  Expr one = make_const(float_type, 1.f);
+  Expr zero = make_const(float_type, 0.0f);
+
+  Expr offset = make_const(int_type, 0x7f);
+  Expr zero_mask = make_const(int_type, 0x0);
+  Expr inv_zero_mask = make_const(int_type, ~0x0);
+  Expr shl = make_const(int_type, 23);
+  Expr inv_mant_mask = make_const(int_type, ~0x7f800000);
+  Expr five_int = make_const(int_type, 1056964608);
+  Expr five = make_const(float_type, 0.5f);
+
+  Expr input = ir::Cast::make(float_type, op->args[0]);
+  Expr invalid_mask = ir::Select::make(input <= zero, inv_zero_mask, zero_mask);
+  Expr x = ir::Max::make(input, min_norm_pos);
+  llvm::Value *one_value = MakeValue(one);
+  llvm::Value *invalid_value = MakeValue(invalid_mask);
+  llvm::Value *x_value = MakeValue(x);
+  llvm::Value *x_int_value = builder_->CreateBitCast(x_value, invalid_value->getType());
+
+  llvm::Value *xmm0_value = builder_->CreateAShr(x_int_value, MakeValue(shl));
+  xmm0_value = builder_->CreateSub(xmm0_value, MakeValue(offset));
+  llvm::Value *e = builder_->CreateSIToFP(xmm0_value, x_value->getType());
+  e = builder_->CreateFAdd(e, one_value);
+
+  x_int_value = builder_->CreateAnd(x_int_value, MakeValue(inv_mant_mask));
+  x_int_value = builder_->CreateOr(x_int_value, MakeValue(five_int));
+
+  x_value = builder_->CreateBitCast(x_int_value, x_value->getType());
+  llvm::Value *cmp = builder_->CreateFCmpOLT (x_value, MakeValue(sqrthf));
+  llvm::Value *mask = builder_->CreateSelect(cmp, MakeValue(inv_zero_mask), MakeValue(zero_mask));
+  llvm::Value *tmp_int_value = builder_->CreateAnd(x_int_value, mask);
+  llvm::Value *tmp_value = builder_->CreateBitCast(tmp_int_value, x_value->getType());
+
+  x_value = builder_->CreateFSub(x_value, one_value);
+  llvm::Value *one_int_value = builder_->CreateBitCast(one_value, x_int_value->getType());
+  llvm::Value *one_int_mask = builder_->CreateAnd(one_int_value, mask);
+  llvm::Value *one_mask = builder_->CreateBitCast(one_int_mask, x_value->getType());
+  e = builder_->CreateFSub(e, one_mask);
+  x_value = builder_->CreateFAdd(x_value, tmp_value);
+
+  llvm::Value *z = builder_->CreateFMul(x_value, x_value);
+  llvm::Value *y = builder_->CreateFMul(x_value, MakeValue(p0));
+  y = builder_->CreateFAdd(y, MakeValue(p1));
+  y = builder_->CreateFMul(y, x_value);
+  y = builder_->CreateFAdd(y, MakeValue(p2));
+  y = builder_->CreateFMul(y, x_value);
+  y = builder_->CreateFAdd(y, MakeValue(p3));
+  y = builder_->CreateFMul(y, x_value);
+  y = builder_->CreateFAdd(y, MakeValue(p4));
+  y = builder_->CreateFMul(y, x_value);
+  y = builder_->CreateFAdd(y, MakeValue(p5));
+  y = builder_->CreateFMul(y, x_value);
+  y = builder_->CreateFAdd(y, MakeValue(p6));
+  y = builder_->CreateFMul(y, x_value);
+  y = builder_->CreateFAdd(y, MakeValue(p7));
+  y = builder_->CreateFMul(y, x_value);
+  y = builder_->CreateFAdd(y, MakeValue(p8));
+  y = builder_->CreateFMul(y, x_value);
+  y = builder_->CreateFMul(y, z);
+
+  tmp_value = builder_->CreateFMul(e, MakeValue(q1));
+  y = builder_->CreateFAdd(y, tmp_value);
+
+  tmp_value = builder_->CreateFMul(z, MakeValue(five));
+  y = builder_->CreateFSub(y, tmp_value);
+
+  tmp_value = builder_->CreateFMul(e, MakeValue(q2));
+  x_value = builder_->CreateFAdd(x_value, y);
+  x_value = builder_->CreateFAdd(x_value, tmp_value);
+
+  x_int_value = builder_->CreateBitCast(x_value, x_int_value->getType());
+  x_int_value = builder_->CreateOr(x_int_value, invalid_value);
+  return builder_->CreateBitCast(x_int_value, x_value->getType());
+}
+
+llvm::Value* CodeGenLLVM::CreateExp(const Call* op) {
+  auto x_type = op->args[0].type();
+  auto float_type = DataType(kDLFloat, x_type.bits(), x_type.lanes());
+  auto int_type = DataType(kDLInt, x_type.bits(), x_type.lanes());
+  Expr x = ir::Cast::make(float_type, op->args[0]);
+  Expr param_0 = make_const(float_type, 0.693147f);
+  Expr param_1 = make_const(float_type, 1.f / 120.f);
+  Expr param_2 = make_const(float_type, 1.f / 24.f);
+  Expr param_3 = make_const(float_type, 1.f / 6.f);
+  Expr param_4 = make_const(float_type, 0.5f);
+  Expr param_5 = make_const(float_type, 1.f);
+  Expr param_6 = make_const(float_type, 88.f);
+  Expr param_7 = make_const(float_type, -88.f);
+  Expr param_8 = make_const(int_type, 127);
+  Expr param_9 = make_const(int_type, 23);
+
+  Expr input = ir::Max::make(param_7, ir::Min::make(param_6, x));
+  Expr integer = ir::Cast::make(int_type, input / param_0);
+  Expr decimal = input - integer * param_0;
+  Expr int_exp = ir::Call::make(int_type, ir::Call::shift_left, {integer + param_8, param_9}, ir::Call::Intrinsic);
+  Expr tmp = (param_1 * decimal + param_2) * decimal;
+  tmp = decimal * (param_4 + (param_3 + tmp) * decimal);
+  Expr decimal_exp = param_5 + decimal * (param_5 + tmp);
+  llvm::Value *decimal_value = MakeValue(decimal_exp);
+  llvm::Value *int_value = MakeValue(int_exp);
+  llvm::Value *float_value = builder_->CreateBitCast(int_value, decimal_value->getType());
+  return CreateMul(float_type, decimal_value, float_value);
 }
 
 void CodeGenLLVM::EmitSgemmKernelForBody(std::string inline_asm, const int n_dim, llvm::Value *end,

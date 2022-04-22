@@ -1,4 +1,4 @@
-# Copyright 2021 Huawei Technologies Co., Ltd
+# Copyright 2021-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -44,12 +44,12 @@ class TestCase(TestBase):
             "============= {0} Setup case============".format(self.casename))
         self.args_default = [
             ## testflag,opfuncname,testRunArgs, dimArgs
-            ("log_01", log_run, ((1, 128), "float16", "mod_fp16"), ["level0"]),
-            ("log_02", log_run, ((1280, 1280), "float16", "mod_fp16"), ["level0"]),
-            ("log_03", log_run, ((32, 128), "float16", "mod_fp16"), ["level0"]),
-            ("log_04", log_run, ((128, 32), "float16", "mod_fp16"), ["level0"]),
-            ("log_05", log_run, ((32, 32), "float16", "mod_fp16"), ["level0"]),
-            ("log_06", log_run, ((384, 32), "float16", "mod_fp16"), ["level0"]),
+            ("log_01", log_run, ((1, 128), "float16", "log_fp16"), ["level0"]),
+            ("log_02", log_run, ((1280, 1280), "float16", "log_fp16"), ["level0"]),
+            ("log_03", log_run, ((32, 128), "float16", "log_fp16"), ["level0"]),
+            ("log_04", log_run, ((128, 32), "float16", "log_fp16"), ["level0"]),
+            ("log_05", log_run, ((32, 32), "float16", "log_fp16"), ["level0"]),
+            ("log_06", log_run, ((384, 32), "float16", "log_fp16"), ["level0"]),
         ]
         return True
 
@@ -58,7 +58,7 @@ class TestCase(TestBase):
     @pytest.mark.env_onecard
     def test_gpu_level0(self):
         return self.run_cases(self.args_default, utils.CUDA, "level0")
-    
+
     @pytest.mark.level0
     @pytest.mark.platform_x86_cpu
     @pytest.mark.env_onecard

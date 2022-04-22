@@ -316,6 +316,8 @@ class CodeGenLLVM :
                               llvm::Value *b_pref_pointer, llvm::Value *alpha_pointer,
                               llvm::Function *sgemm_kernel);
   llvm::Value* EmitSgemmKernel(const Call* op);
+  llvm::Value* CreateLog(const Call* op);
+  llvm::Value* CreateExp(const Call* op);
 };
 }  // namespace codegen
 }  // namespace air
