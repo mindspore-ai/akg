@@ -29,6 +29,37 @@ void SchedulePassMgr::RegisterPass(std::shared_ptr<SchedulePass> pass) {
   schedule_passes_.push_back(pass);
 }
 
+isl::schedule SchedulePassMgr::GetNewScheduleAfterRestart(const isl::schedule &sch,
+                                                          std::vector<std::shared_ptr<SchedulePass>> &passes) {
+  RestartPassName restart_pass_name = scop_info_.analysis_result_.GetRestartPassName();
+  if (restart_pass_name == RestartPassName::NOT_RESTART) {
+    return sch;
+  }
+
+  if (restart_pass_name == RestartPassName::EXIT) {
+    passes.clear();
+    return sch;
+  }
+
+  std::string restart_str = scop_info_.analysis_result_.ShowPassName();
+  std::string before_restart_str = "";
+  auto it = passes.begin();
+  while (it != passes.end()) {
+    std::string current_pass_name = (*it)->GetPassName();
+    if (current_pass_name == restart_str) {
+      break;
+    } else {
+      it = passes.erase(it);
+      before_restart_str = current_pass_name;
+    }
+  }
+
+  if (before_restart_str.empty()) {
+    return sch;
+  }
+  return scop_info_.analysis_result_.GetPassScheduleMap(before_restart_str);
+}
+
 isl::schedule SchedulePassMgr::Run(const isl::schedule &sch) {
   CHECK(sch);
   return Run(sch, schedule_passes_);
@@ -42,7 +73,7 @@ isl::schedule SchedulePassMgr::Run(const isl::schedule &sch, const std::vector<s
 
   auto final_sch = sch;
   auto replace_sch = sch;
-  need_restart_ = false;
+  scop_info_.analysis_result_.SetRestartPassName(RestartPassName::NOT_RESTART);
 
   std::set<std::string> disabled;
   for (auto &pass : passes) {
@@ -65,6 +96,7 @@ isl::schedule SchedulePassMgr::Run(const isl::schedule &sch, const std::vector<s
     std::stringstream time_log;
     TIMER_START;
     final_sch = pass->Run(final_sch);
+    scop_info_.analysis_result_.RecordPassScheduleMap(pass->GetPassName(), final_sch);
     time_log << "[ Polyhedral exec time" << (scop_info_.mmu_info_.IsSpecGemm() ? "_specgemm" : "") << " ], "
              << pass->GetPassName() << " spent " << TIMER_DURATION << " ms";
 
@@ -73,8 +105,7 @@ isl::schedule SchedulePassMgr::Run(const isl::schedule &sch, const std::vector<s
 
     scop_info_.DumpSchTree(pass->GetPassName(), final_sch);
 
-    if (pass->restart_) {
-      need_restart_ = true;
+    if (scop_info_.analysis_result_.GetRestartPassName() != RestartPassName::NOT_RESTART) {
       break;
     }
     if (!pass->disabled_passes_.empty()) {
@@ -89,7 +120,8 @@ isl::schedule SchedulePassMgr::Run(const isl::schedule &sch, std::shared_ptr<Pas
   CHECK(sch);
   strategy->RegisterPasses();
   std::vector<std::shared_ptr<SchedulePass>> passes = strategy->GetPasses();
-  return Run(sch, passes);
+  isl::schedule new_sch = GetNewScheduleAfterRestart(sch, passes);
+  return Run(new_sch, passes);
 }
 
 }  // namespace poly

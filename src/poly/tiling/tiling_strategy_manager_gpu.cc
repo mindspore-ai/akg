@@ -886,13 +886,9 @@ void GpuStrategy::CountGlobalBufferSize() {
   }
 }
 
-void GpuStrategy::InitMapping() {
+void GpuStrategy::SetInitTiledConfig() {
   InitMappingLimit();
   if (!analyzer_->scop_info_.user_config_.GetIsTuning()) {
-    // Vectorization for Elementwise Op
-    if (template_ == Template::PURE_ELEM || template_ == Template::BROADCAST_OP || template_ == Template::PAD_OP) {
-      CheckVectorizationForElemwiseOp();
-    }
     if (template_ == Template::BROADCAST_OP || template_ == Template::CUSTOM_CONFIG) {
       BroadcastSpeedup();
     } else if (template_ == Template::PAD_OP && !current_outer_bn_->enable_vectorization) {
@@ -938,7 +934,7 @@ void GpuStrategy::AddGpuConstraint() {
   for (auto sorted_idx : analyzer_->GetSortedBands()) {
     band_index_ = sorted_idx;
     current_outer_bn_ = analyzer_->scop_info_.analysis_result_.GetOuterBandNode(band_index_);
-    InitMapping();
+    SetInitTiledConfig();
     if (analyzer_->scop_info_.user_config_.GetIsTuning()) return;
     // tensor of tensor
     bool need_injective_speed_up = CheckNeedInjectiveSpeedUp();
@@ -949,6 +945,7 @@ void GpuStrategy::AddGpuConstraint() {
     // For the outer band is multiple filters, set the thread/block configuration according to the operator with the
     // highest priority, and other operators cannot change it.
     if (!is_first) {
+      current_outer_bn_->enable_vectorization = false;
       continue;
     }
 
@@ -973,85 +970,6 @@ void GpuStrategy::AddGpuConstraint() {
     });
   }
   ShowOptions();
-}
-
-bool GpuStrategy::IsVectorized() {
-  if (!analyzer_->scop_info_.user_config_.GetEnableVectorization() || analyzer_->scop_info_.analysis_result_.GetCsr()) {
-    return false;
-  }
-  auto reads_access = analyzer_->scop_info_.analysis_result_.GetReads().domain_factor_domain();
-  auto write_access = analyzer_->scop_info_.analysis_result_.GetWrites().domain_factor_domain();
-  auto original_access = reads_access.unite(write_access);
-
-  std::vector<Array<Expr>> tensors_shape;
-
-  std::vector<Type> tensor_types;
-  for (auto a : original_access.get_map_list()) {
-    auto id = a.get_tuple_id(isl_dim_out).to_str();
-    Tensor tensor = analyzer_->scop_info_.FindTensor(id);
-    (void)tensors_shape.emplace_back(tensor->shape);
-    Type type = analyzer_->scop_info_.GetDtypeOf(id);
-    int tmp_bytes = total_vectorized_bytes_ / SafeDivisor(type.bytes());
-    vectorized_bytes_ = std::max(tmp_bytes, vectorized_bytes_);
-    if (tensor_types.empty()) {
-      (void)tensor_types.emplace_back(type);
-    } else {
-      if (type != tensor_types[0]) {
-        return false;
-      }
-    }
-    if (type == Bool(1)) {
-      return false;
-    }
-  }
-
-  // To avoid out of memory in local promotion
-  int64_t alloc_thread = 1;
-  for (size_t i = 0; i < thread_cfg_.size(); ++i) {
-    alloc_thread *= thread_cfg_[i];
-  }
-  auto tensor_nums = original_access.get_map_list().size();
-  // Default vectorization mode fp32 = 128bits
-  if (tensor_nums * alloc_thread >= MAX_REGISTER_PER_THREAD_BLOCK) {
-    return false;
-  }
-
-  for (auto i : tensors_shape) {
-    CHECK(i[i.size() - 1].as<IntImm>());
-    auto i_value = i[i.size() - 1].as<IntImm>()->value;
-    if (i_value % SafeDivisor(vectorized_bytes_) != 0) {
-      return false;
-    }
-
-    auto first_tensor = tensors_shape[0];
-    auto first_value = first_tensor[first_tensor.size() - 1].as<IntImm>()->value;
-    if (template_ == Template::PAD_OP && i_value != first_value) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-void GpuStrategy::CheckVectorizationForElemwiseOp() {
-  current_outer_bn_->enable_vectorization = false;
-  if (!IsVectorized()) {
-    return;
-  }
-
-  if (!current_outer_bn_->node.get_permutable()) {
-    return;
-  }
-
-  if (analyzer_->scop_info_.user_config_.GetHasTotOps()) {
-    return;
-  }
-
-  if (analyzer_->scop_info_.user_config_.GetVectorLength() == 0) {
-    // Default vectorization mode fp32 = 128bits
-    analyzer_->scop_info_.user_config_.SetVectorLength(quadruple_warp_size_);
-  }
-  current_outer_bn_->enable_vectorization = !analyzer_->RootAxis()->HasAttr(AT_HEAVY_ELTWISE);
 }
 
 void GpuStrategy::ThreadConfiguration(ReduceDirection direct, bool use_lib) {
@@ -1361,7 +1279,7 @@ void GpuStrategy::MapPendingAxes(size_t ori_size, std::stringstream &ss, size_t 
     if (current_outer_bn_->enable_vectorization && axis->HasAttr(AT_VECTORIZED)) {
       CHECK(axis->c0_constraints.tile_min_.as<IntImm>());
       auto c0_tile = axis->c0_constraints.tile_min_.as<IntImm>()->value;
-      if (tile * c0_tile * use <= shape) {
+      if (tile * c0_tile <= shape) {
         tile *= c0_tile;
         ss << ", vectorized axis, multiply with " << c0_tile;
       }
@@ -1667,6 +1585,7 @@ std::pair<int64_t, int64_t> GpuStrategy::GetProposalParallelSize(int problem_siz
 
 int64_t GpuStrategy::AlignThreadToShape() {
   std::stringstream ss;
+  // sum of threadIdx.x, threadIdx.y and threadIdx.z
   auto total_threads = std::accumulate(thread_cfg_.begin(), thread_cfg_.end(), 1, std::multiplies<int>());
   for (size_t i = 0; i < injective_axes_.size(); ++i) {
     auto axis = injective_axes_[i];
@@ -1684,6 +1603,9 @@ int64_t GpuStrategy::AlignThreadToShape() {
       ss << "thread size is invalid: " << lower << " % " << axis->thread_constraints.map_mod_ << " != 0";
       continue;
     }
+
+    // The modified thread_size cannot be reduced to half of the original thread_size
+    // The modified total thread_size cannot be reduced to half of 1024
     bool is_efficient = lower * binary_factor_ > thread_size ||
                         ((total_threads / SafeDivisor(thread_size)) * lower) * binary_factor_ >= max_x_y_dim_thread_;
     if (is_efficient) {
@@ -2413,26 +2335,27 @@ void CountStrategy::AddGpuConstraint() {
 }
 
 void VectorizedStrategy::AddGpuConstraint() {
-  if (analyzer_->scop_info_.user_config_.GetHasTotOps() || analyzer_->RootAxis()->HasAttr(AT_HEAVY_ELTWISE)) {
-    analyzer_->scop_info_.user_config_.SetEnableVectorization(false);
+  auto vectorized_size = analyzer_->scop_info_.user_config_.GetVectorLength();
+  if (!analyzer_->scop_info_.user_config_.GetEnableVectorization() || vectorized_size == 0) {
     return;
   }
+
   auto interested_info = GetInterestedInfo(interested_attr_key);
   for (auto it : interested_info) {
     TileAxis *axis = it.first;
     auto curr_band = analyzer_->scop_info_.analysis_result_.GetOuterBandNode(axis->index);
-    if (!curr_band->node.get_permutable()) {
+    if (!curr_band->enable_vectorization) {
       continue;
     }
-    auto curr_template = curr_band->template_type;
-    if (curr_template != Template::PURE_ELEM && curr_template != Template::BROADCAST_OP &&
-        curr_template != Template::PAD_OP) {
+
+    if (analyzer_->RootAxis()->HasAttr(AT_HEAVY_ELTWISE)) {
+      curr_band->enable_vectorization = false;
       continue;
     }
-    auto max_bytes = GetMaxBytes(axis->data_size);
-    auto vectorized_size = total_gpu_vectorization_size_ / SafeDivisor(max_bytes);
+
     auto gpu_strategy = GpuStrategy(analyzer_);
     auto parallel_size = gpu_strategy.GetProposalParallelSize(axis->extent_val);
+    auto curr_template = curr_band->template_type;
     if (axis->extent_val % SafeDivisor(vectorized_size) != 0 ||
         (axis->extent_val < parallel_size.second * vectorized_size && curr_template != Template::PAD_OP)) {
       continue;
@@ -2442,7 +2365,6 @@ void VectorizedStrategy::AddGpuConstraint() {
     axis->thread_constraints.map_mod_ = vectorized_size;
     axis->c1_constraints.tile_mod_ = vectorized_size;
     axis->TileRestrainToSingleValue(CastIntToExpr(vectorized_size), TileLevel::CACHE0);
-    curr_band->enable_vectorization = true;
     if (axis->extent_val < parallel_size.first * parallel_size.second) {
       auto min_threads = std::min<int64_t>(total_available_thread_, axis->extent_val);
       axis->thread_constraints.map_extent_ = min_threads / SafeDivisor(vectorized_size);

@@ -216,14 +216,14 @@ bool SharedCreateCluster::CheckPromotion(const isl::schedule_node &current_node,
   if (tensor_info.second > PromotedTensorType::TEMP) {
     return true;
   }
-  auto partial_sched_mupa = ShortScheduleMupa(current_node.root(), current_node);
+
   auto coalesced_access = scop_info_.analysis_result_.GetOuterBandNode(band_index_)->coalesced_access_tensors;
   auto tensor_name = tensor_info.first.get_name();
-  if (CoalescingAccessWay(current_node, node, cluster) ||
-      coalesced_access.find(tensor_name) != coalesced_access.end()) {
-    return true;
+  if (!CoalescingAccessWay(current_node, node, cluster) &&
+      coalesced_access.find(tensor_name) == coalesced_access.end()) {
+    return false;
   }
-  return false;
+  return true;
 }
 
 isl::union_map SharedCreateCluster::GetPartialSchedule(const isl::schedule_node &node) {
@@ -375,25 +375,8 @@ isl::union_map RegisterCreateCluster::GetPartialSchedule(const isl::schedule_nod
 
 // Check if the given "group" can be promoted to registers for the given mapping to thread identifiers and within the
 // given outer schedule.
-bool RegisterCreateCluster::IsPromote(const TensorFootprintCluster &fp_cluster,
-                                      const isl::multi_union_pw_aff &partial_sched_mupa,
-                                      const isl::multi_union_pw_aff &thread_schedule) {
-  // compute the mapping relation between single thread and outer schedule space and tensor elements pair
-  isl::union_map state_schedule_mapping =
-    ScheduleTensorMapping(partial_sched_mupa, fp_cluster.OrigianlAccessRelations());
-  isl::union_map thread_schedule_mapping = state_schedule_mapping.apply_domain(isl::union_map::from(thread_schedule));
-  // check that whether the mapping relation between single thread and outer schedule points and group elements pair
-  // is injective.
-  return thread_schedule_mapping.is_injective();
-}
-
-// Determine whether the current tensor needs to be promoted.
-bool RegisterCreateCluster::CheckPromotion(const isl::schedule_node &current_node, const isl::schedule_node &node,
-                                           const TensorFootprintCluster &cluster,
-                                           const std::pair<isl::id, PromotedTensorType> &tensor_info) {
-  if (tensor_info.second > PromotedTensorType::OTHERS) {
-    return true;
-  }
+bool RegisterCreateCluster::IsResueThread(const TensorFootprintCluster &cluster,
+                                          const isl::schedule_node &current_node) {
   isl::schedule_node root_node = current_node.get_schedule().get_root();
   auto thread_cfg = scop_info_.user_config_.GetThreadConfig();
   CHECK(thread_cfg != nullptr) << "thread config is null";
@@ -409,11 +392,64 @@ bool RegisterCreateCluster::CheckPromotion(const isl::schedule_node &current_nod
 
   auto partial_sched_mupa = ShortScheduleMupa(root_node, tmp_node);
   partial_sched_mupa = partial_sched_mupa.flat_range_product(block_schedule).flat_range_product(thread_schedule);
-  if (IsPromote(cluster, partial_sched_mupa, thread_schedule)) {
+
+  // compute the mapping relation between single thread and outer schedule space and tensor elements pair
+  isl::union_map state_schedule_mapping = ScheduleTensorMapping(partial_sched_mupa, cluster.OrigianlAccessRelations());
+  isl::union_map thread_schedule_mapping = state_schedule_mapping.apply_domain(isl::union_map::from(thread_schedule));
+  // check that whether the mapping relation between single thread and outer schedule points and group elements pair
+  // is injective.
+  return thread_schedule_mapping.is_injective();
+}
+
+bool RegisterCreateCluster::IsSatisfyVectorization(const TensorFootprintCluster &cluster, const isl::id &cluster_id) {
+  auto vectorized_length = scop_info_.user_config_.GetVectorLength();
+  if (vectorized_length == 0) {
+    return false;
+  }
+
+  // check promoted shape
+  auto box_sizes = cluster.GetFixedBoxSizes();
+  auto local_size = 1;
+  for (auto i : box_sizes) {
+    local_size = local_size * i;
+  }
+  if (local_size != vectorized_length || scop_info_.GetDtypeOf(cluster_id).bytes() == 1) {
+    return false;
+  }
+
+  auto tensor_shape = scop_info_.FindTensor(cluster_id)->shape;
+  CHECK(tensor_shape[tensor_shape.size() - 1].as<IntImm>());
+  auto shape_vale = tensor_shape[tensor_shape.size() - 1].as<IntImm>()->value;
+  if (shape_vale < vectorized_length || (tensor_shape.size() > 1 && shape_vale % vectorized_length != 0)) {
+    return false;
+  }
+
+  return true;
+}
+
+// Determine whether the current tensor needs to be promoted.
+bool RegisterCreateCluster::CheckPromotion(const isl::schedule_node &current_node, const isl::schedule_node &node,
+                                           const TensorFootprintCluster &cluster,
+                                           const std::pair<isl::id, PromotedTensorType> &tensor_info) {
+  bool is_enable_vectorization = scop_info_.analysis_result_.GetOuterBandNode(band_index_)->enable_vectorization;
+  if (tensor_info.second > PromotedTensorType::OTHERS && !is_enable_vectorization) {
     return true;
   }
 
-  return false;
+  if (is_enable_vectorization) {
+    if (!IsSatisfyVectorization(cluster, tensor_info.first)) {
+      return false;
+    } else {
+      need_start_ = false;
+      return true;
+    }
+  }
+
+  if (!IsResueThread(cluster, current_node)) {
+    return false;
+  }
+
+  return true;
 }
 
 BufferDefInfo RegisterCreateCluster::GetPromotedInfo(const isl::id &promoted_id, const std::string &mark_name) {
@@ -454,8 +490,8 @@ BufferDefInfo RegisterCreateCluster::GetPromotedInfo(const isl::id &promoted_id,
   return promoted_info;
 }
 
-// Operators that have been promoted to the shared memory do not need to be promoted to the register memory in general.
-// Except for gemm operators.
+// Operators that have been promoted to the shared memory do not need to be promoted to the register memory in
+// general. Except for gemm operators.
 void RegisterCreateCluster::RecordSharedPromotedTensors(const bool is_gemm) {
   for (auto buffer : scop_info_.analysis_result_.active_buffer_footprints_) {
     shared_tensor_.insert(buffer.second.cluster_id.get_name());
@@ -495,20 +531,20 @@ void RegisterCreateCluster::CreateClusterListForGemm(const isl::schedule_node &n
 void RegisterCreateCluster::CreateClusterListForElementWise(const isl::schedule_node &node,
                                                             const std::unordered_set<std::string> &mark_names) {
   auto configed_tensors = scop_info_.user_config_.GetRegisterTensors();
-  bool is_enable_vectorization = scop_info_.analysis_result_.GetOuterBandNode(band_index_)->enable_vectorization;
   // Initialize the promoted types of all tensors.
   RecordInitPromotedTensorType(configed_tensors);
   // Delete the tensor that has been promoted on shared memory.
   RecordSharedPromotedTensors();
   // Add the tensor that needs to be vectorized.
-  RecordVectorizedPromotedTensors(is_enable_vectorization);
+  RecordVectorizedPromotedTensors();
 
   for (const auto &mark_name : mark_names) {
     RecordPromotedTensorInfo(node, mark_name, all_tensors_);
   }
 }
 
-void RegisterCreateCluster::RecordVectorizedPromotedTensors(const bool is_enable_vectorization) {
+void RegisterCreateCluster::RecordVectorizedPromotedTensors() {
+  bool is_enable_vectorization = scop_info_.analysis_result_.GetOuterBandNode(band_index_)->enable_vectorization;
   for (auto tensor : all_tensors_) {
     if (tensor.second > PromotedTensorType::OTHERS) {
       continue;

@@ -64,8 +64,8 @@ isl::schedule TileOuterBand::Run(isl::schedule sch) {
     scop_info_.analysis_result_.SetScheduleMapBeforeTile(sch.get_map());
   }
 
-  auto final_schedule = TileOuterBandHelper(sch, 
-                        std::bind(&TileOuterBand::MarkOuterPermutable, this, std::placeholders::_1));
+  auto final_schedule =
+    TileOuterBandHelper(sch, std::bind(&TileOuterBand::MarkOuterPermutable, this, std::placeholders::_1));
 
   if (scop_info_.user_config_.GetTarget() == TARGET_CCE) {
     scop_info_.AddPartitionInfoToData(AddTileInfo(partition_info_));
@@ -78,8 +78,12 @@ isl::schedule TileOuterBand::Run(isl::schedule sch) {
 
   auto map_before_tile = sch.get_map();
   if (final_schedule.get_map().is_equal(map_before_tile) &&
-    (pass_info_.coincident_ || scop_info_.user_config_.GetConsiderCoincidence())) {
-    restart_ = true;
+      (pass_info_.coincident_ || scop_info_.user_config_.GetConsiderCoincidence())) {
+    if (scop_info_.user_config_.GetTarget() == TARGET_CCE) {
+      scop_info_.analysis_result_.SetRestartPassName(RestartPassName::INIT_SCHEDULE);
+    } else {
+      scop_info_.analysis_result_.SetRestartPassName(RestartPassName::EXIT);
+    }
   }
   if (scop_info_.user_config_.GetIsTuning()) {
     // restore schedule before tiling as input of GenerateTilingSpace
@@ -113,14 +117,22 @@ bool TileOuterBand::SubtreeHasPermutableBands(const isl::schedule_node &node) {
 }
 
 int TileOuterBand::IsCandidate(const isl::schedule_node &node) {
-  if (node.isa<isl::schedule_node_leaf>()) { return 1; }
+  if (node.isa<isl::schedule_node_leaf>()) {
+    return 1;
+  }
 
   int permutable = static_cast<int>(IsPermutable(node, scop_info_.user_config_.GetTileCheckCoincident()));
-  if (permutable) { return permutable; }
-  if (node.isa<isl::schedule_node_filter>()) { return 0; }
+  if (permutable) {
+    return permutable;
+  }
+  if (node.isa<isl::schedule_node_filter>()) {
+    return 0;
+  }
 
   permutable = static_cast<int>(SubtreeHasPermutableBands(node));
-  if (permutable < 0) { return -1; }
+  if (permutable < 0) {
+    return -1;
+  }
   return static_cast<int>(!permutable);
 }
 
@@ -254,7 +266,9 @@ void TileOuterBand::InitCustomDimensionInfo(std::string dim) {
     }
   }
 
-  if (!is_custom_mapping) { return; }
+  if (!is_custom_mapping) {
+    return;
+  }
   CheckCustomMapping(scop_info_.user_config_.GetInnerMappingStrategy());
   CheckCustomMapping(scop_info_.user_config_.GetOuterMappingStrategy());
 }
@@ -277,7 +291,9 @@ void TileOuterBand::InitDimensionInfo(const isl::schedule &sch_init) {
   auto tiling_res = GenerateTiling(sch_init, scop_info_, GenHalide(scop_info_, sch_init, true));
   scop_info_.analysis_result_.SetTileSizes(tiling_res.first);
   scop_info_.analysis_result_.SetTileConstraints(tiling_res.second);
-  if (scop_info_.mmu_info_.IsConv()) { scop_info_.mmu_info_.SetConvMNKInfo(); }
+  if (scop_info_.mmu_info_.IsConv()) {
+    scop_info_.mmu_info_.SetConvMNKInfo();
+  }
 }
 
 void TileOuterBand::MergeTilingInfo() {
@@ -368,7 +384,7 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableNpu(isl::schedule_node node
   if (IsOuterTilable(node) <= 0) return node;
   // make sure the node is a band node and has multiple members, insert empty band if not
   if (!node.isa<isl::schedule_node_band>() || (!node.as<isl::schedule_node_band>().member_get_coincident(0) &&
-      scop_info_.user_config_.GetTileCheckCoincident())) {
+                                               scop_info_.user_config_.GetTileCheckCoincident())) {
     node = InsertEmptyPermutableBand(node);
   }
 
@@ -580,7 +596,9 @@ void TileOuterBand::IsolateLevelInfo(TileType &tile_type, isl::set &tiles, isl::
 isl::schedule_node TileOuterBand::SetIsolateLoopType(isl::schedule_node node) {
   int i, n;
 
-  if (!node.isa<isl::schedule_node_band>()) { return node; }
+  if (!node.isa<isl::schedule_node_band>()) {
+    return node;
+  }
 
   n = static_cast<int>(node.as<isl::schedule_node_band>().n_member());
   for (i = 0; i < n; ++i) {
@@ -620,7 +638,9 @@ isl::schedule_node TileOuterBand::IsolateTiles(const isl::schedule_node &origina
   isl::multi_aff ma1, ma2;
 
   // If not tiled, return
-  if (original_node.is_equal(tiled_node)) { return tiled_node; }
+  if (original_node.is_equal(tiled_node)) {
+    return tiled_node;
+  }
 
   depth = tiled_node.get_schedule_depth();
   dim = static_cast<int>(tiled_node.as<isl::schedule_node_band>().n_member());
@@ -630,7 +650,9 @@ isl::schedule_node TileOuterBand::IsolateTiles(const isl::schedule_node &origina
   if (full_tile_min != nullptr) {
     unsigned int n_dim = tiles.n_dim();
     for (int i = 0; i < dim; ++i) {
-      if (full_tile_min[i] == 0) { continue; }
+      if (full_tile_min[i] == 0) {
+        continue;
+      }
       tiles = isl::manage(
         isl_set_lower_bound_si(tiles.copy(), isl_dim_set, (n_dim - (unsigned int)(dim - i)), full_tile_min[i]));
     }
@@ -638,7 +660,9 @@ isl::schedule_node TileOuterBand::IsolateTiles(const isl::schedule_node &origina
   if (full_tile_max != nullptr) {
     unsigned int n_dim = tiles.n_dim();
     for (int i = 0; i < dim; ++i) {
-      if (MAX_STRIDE == full_tile_max[i]) { continue; }
+      if (MAX_STRIDE == full_tile_max[i]) {
+        continue;
+      }
       tiles = isl::manage(
         isl_set_upper_bound_si(tiles.copy(), isl_dim_set, (n_dim - (unsigned int)(dim - i)), full_tile_max[i]));
     }
@@ -694,8 +718,8 @@ void TileOuterBand::TileTypeC0(isl::schedule_node &node, int *full_tile_min, int
   isl::union_set filter_after_mmu = isl::union_set();
   std::vector<isl::union_set> filter_before_mmu;
   std::vector<TileType> tile_type_before_mmu;
-  isl::union_set_list filters = isl::union_set_list(
-                                node.ctx(), static_cast<int>(scop_info_.analysis_result_.stmt_type_.size() - 1));
+  isl::union_set_list filters =
+    isl::union_set_list(node.ctx(), static_cast<int>(scop_info_.analysis_result_.stmt_type_.size() - 1));
 
   auto mmu_index = GetMmuIndex();
   for (unsigned int set_index = 0; set_index < domain_list.size(); ++set_index) {
@@ -1057,7 +1081,6 @@ isl::schedule_node TileOuterBand::IsolateTilesForCudaAndCpu(const isl::schedule_
   return after_tile_node;
 }
 
-
 /***************************************************************************
  * steps:
  * 1. get tile size.
@@ -1090,7 +1113,8 @@ isl::schedule_node TileOuterBand::TileElementWiseForCuda(const isl::schedule_nod
 
   // get tile size
   auto level_tile_size = GetLevelTileSize(node, TILE_WITH_C1);
-  bool enable_vectorization = scop_info_.analysis_result_.GetOuterBandNode(cur_band_index_)->enable_vectorization;
+  bool enable_vectorization = scop_info_.user_config_.GetEnableVectorization() &&
+                              scop_info_.analysis_result_.GetOuterBandNode(cur_band_index_)->enable_vectorization;
   if (enable_vectorization) {
     node = IsolateTilesForCudaAndCpu(node, level_tile_size);
   } else {
@@ -1330,7 +1354,6 @@ bool TileOuterBand::IsMatrixCPromoteToShared() {
   }
   return false;
 }
-
 
 /***************************************************************************
  * steps:

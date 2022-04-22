@@ -865,13 +865,15 @@ int GetVectorizationTileSize(ScopInfo &scop_info) {
   if (vectorized_length != 0) {
     return vectorized_length;
   }
-  for (auto a : original_access.get_map_list()) {
-    auto id = a.get_tuple_id(isl_dim_out).to_str();
-    Tensor tensor = scop_info.FindTensor(id);
+
+  isl::map_list access_list = original_access.get_map_list();
+  for (int i = 0; i < static_cast<int>(access_list.size()); ++i) {
+    auto access = access_list.at(i);
+    auto id = access.get_tuple_id(isl_dim_out).to_str();
     Type type = scop_info.GetDtypeOf(id);
     CHECK_NE(type.bytes(), 0);
     auto tmp_bytes = TOTAL_VECTORIZATION_BYTES / type.bytes();
-    vectorized_length = std::max(tmp_bytes, vectorized_length);
+    vectorized_length = (i == 0) ? tmp_bytes : std::min(tmp_bytes, vectorized_length);
   }
   scop_info.user_config_.SetVectorLength(vectorized_length);
   return vectorized_length;

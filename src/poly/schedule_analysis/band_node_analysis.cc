@@ -592,28 +592,98 @@ void AnalyzeBandNode::Run() {
     op_info_coll.Run();
   }
   CollectStmtInfo();
-  AnalyzeOuterBandTemplate();
-  if (target_ == TARGET_CPU || target_ == TARGET_CUDA) {
-    AnalyzeAxisPosition();
+  auto &bands = scop_info_.analysis_result_.GetAllOuterBandNode();
+  for (auto &bn : bands) {
+    AnalyzeOuterBandTemplate(bn);
+    if (target_ == TARGET_CPU || target_ == TARGET_CUDA) {
+      AnalyzeAxisPosition(bn);
+    }
+
+    if (target_ == TARGET_CUDA) {
+      CheckVectorization(bn);
+      bn->use_shared_memory = scop_info_.user_config_.GetUseSharedMemory();
+      bn->use_register_memory = scop_info_.user_config_.GetUseRegisterMemory();
+    }
   }
   ShowBandInfo();
 }
 
-void AnalyzeBandNode::AnalyzeAxisPosition() {
-  auto &bands = scop_info_.analysis_result_.GetAllOuterBandNode();
-  for (auto &bn : bands) {
-    if (!bn->node.isa<isl::schedule_node_band>()) {
+void AnalyzeBandNode::AnalyzeAxisPosition(std::unique_ptr<OuterBandNode> &bn) {
+  if (!bn->node.isa<isl::schedule_node_band>()) {
+    return;
+  }
+
+  int last_axis = -1;
+  if (target_ == TARGET_CPU) {
+    last_axis = GetVectorizationAxisForCpu(bn);
+  } else {
+    last_axis = GetCoalescedAccessAxisForCuda(bn);
+  }
+  bn->last_axis = last_axis;
+}
+
+void AnalyzeBandNode::CheckVectorization(std::unique_ptr<OuterBandNode> &bn) {
+  if (bn->template_type != Template::PURE_ELEM && bn->template_type != Template::BROADCAST_OP &&
+      bn->template_type != Template::PAD_OP) {
+    return;
+  }
+
+  if (!bn->node.get_permutable() || !scop_info_.user_config_.GetEnableVectorization() ||
+      scop_info_.user_config_.GetHasTotOps() || scop_info_.analysis_result_.GetTensorOfTensor()) {
+    return;
+  }
+
+  if (!bn->node.get_permutable()) {
+    return;
+  }
+  return CheckVectorizationFromTensorSize(bn);
+}
+
+void AnalyzeBandNode::CheckVectorizationFromTensorSize(std::unique_ptr<OuterBandNode> &bn) {
+  GetVectorizationTileSize(scop_info_);
+  int vectorized_length = scop_info_.user_config_.GetVectorLength();
+  if (vectorized_length == 0) {
+    return;
+  }
+
+  auto reads_access = scop_info_.analysis_result_.GetReads().domain_factor_domain();
+  auto write_access = scop_info_.analysis_result_.GetWrites().domain_factor_domain();
+  isl::map_list original_access_list = reads_access.unite(write_access).get_map_list();
+
+  bool is_first_tensor = true;
+  int64_t first_value = 0;
+  int not_divisible_count = 0;
+  for (auto access : original_access_list) {
+    auto access_id = access.get_tuple_id(isl_dim_out).to_str();
+    Array<Expr> tensor = scop_info_.FindTensor(access_id)->shape;
+    CHECK(tensor[tensor.size() - 1].as<IntImm>());
+    int64_t tensor_value = tensor[tensor.size() - 1].as<IntImm>()->value;
+    // Non-elementwise operator: tensor does not need to be vectorized if its last axis is not divisible by the
+    // vectorized size.
+    // Elementwise operators: tensor does not need to be vectorized if its last axis is not divisible by the
+    // vectorized size and the number of axes is greater than 1.
+    if (tensor_value % vectorized_length != 0 && (bn->template_type != Template::PURE_ELEM || tensor.size() > 1)) {
+      ++not_divisible_count;
+    }
+
+    if (is_first_tensor) {
+      first_value = tensor_value;
+      is_first_tensor = false;
       continue;
     }
 
-    int last_axis = -1;
-    if (target_ == TARGET_CPU) {
-      last_axis = GetVectorizationAxisForCpu(bn);
-    } else {
-      last_axis = GetCoalescedAccessAxisForCuda(bn);
+    // Determine whether the axis filled by the pad operator is the last axis. If it is the last axis, it indicates that
+    // the length of the vectorized axis is not uniform and cannot be vectorized.
+    if ((bn->template_type == Template::PAD_OP || is_unpad_op_) && tensor_value != first_value) {
+      return;
     }
-    bn->last_axis = last_axis;
   }
+
+  if (not_divisible_count == static_cast<int>(original_access_list.size())) {
+    return;
+  }
+
+  bn->enable_vectorization = true;
 }
 
 int AnalyzeBandNode::GetVectorizationAxisForCpu(std::unique_ptr<OuterBandNode> &bn) {
@@ -813,28 +883,28 @@ void AnalyzeBandNode::DetermineTemplateOfBand(std::unique_ptr<OuterBandNode> &bn
     bn->template_type = Template::PARTIAL_ELEM;
   } else {
     bn->template_type = Template::PURE_ELEM;
+    if (concated_op_type.find(AT_UNPAD) != std::string::npos) {
+      is_unpad_op_ = true;
+    }
   }
 }
 
-void AnalyzeBandNode::AnalyzeOuterBandTemplate() {
-  auto &bands = scop_info_.analysis_result_.GetAllOuterBandNode();
-  for (auto &bn : bands) {
-    if (!bn->node || bn->node.get_partial_schedule().is_null()) {
-      continue;
-    }
-    isl::union_pw_aff_list aff_list = bn->node.get_partial_schedule().get_union_pw_aff_list();
-    for (unsigned int i = 0; i < aff_list.size(); ++i) {
-      isl::pw_aff_list pw_list = aff_list.get_at(i).get_pw_aff_list();
-      for (unsigned int j = 0; j < pw_list.size(); ++j) {
-        isl::pw_aff pw = pw_list.get_at(j);
-        std::string stmt_id = pw.domain().get_tuple_name();
-        isl::ctx ctx = bn->node.ctx();
-        isl::id id(ctx, stmt_id);
-        bn->stmts.emplace(id);
-      }
-    }
-    DetermineTemplateOfBand(bn);
+void AnalyzeBandNode::AnalyzeOuterBandTemplate(std::unique_ptr<OuterBandNode> &bn) {
+  if (!bn->node || bn->node.get_partial_schedule().is_null()) {
+    return;
   }
+  isl::union_pw_aff_list aff_list = bn->node.get_partial_schedule().get_union_pw_aff_list();
+  for (unsigned int i = 0; i < aff_list.size(); ++i) {
+    isl::pw_aff_list pw_list = aff_list.get_at(i).get_pw_aff_list();
+    for (unsigned int j = 0; j < pw_list.size(); ++j) {
+      isl::pw_aff pw = pw_list.get_at(j);
+      std::string stmt_id = pw.domain().get_tuple_name();
+      isl::ctx ctx = bn->node.ctx();
+      isl::id id(ctx, stmt_id);
+      bn->stmts.emplace(id);
+    }
+  }
+  DetermineTemplateOfBand(bn);
 }
 
 void AnalyzeBandNode::AnalyzeConvAndMatmulOp(const ProvideEntry &pe) {
@@ -931,6 +1001,9 @@ void AnalyzeBandNode::AnalyzeScheduleTreeTemplate() {
     scop_info_.analysis_result_.SetOpTemplate(Template::COUNT_OP);
   } else {
     scop_info_.analysis_result_.SetOpTemplate(Template::PURE_ELEM);
+    if (concated_op_type.find(AT_UNPAD) != std::string::npos) {
+      is_unpad_op_ = true;
+    }
   }
 }
 

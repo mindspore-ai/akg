@@ -408,6 +408,7 @@ IrAttrInfo GetIRAttr(StitchOpType type, BufferStitchAttr &stitch_attr_info, std:
       static_cast<int>(type) <= static_cast<int>(StitchOpType::Broadcast)) {
     ir_attr_info.attrs.Set("use_shared_memory", Expr(0));
     ir_attr_info.attrs.Set("use_register_memory", Expr(0));
+    ir_attr_info.attrs.Set("enable_vectorization", Expr(0));
   }
   return ir_attr_info;
 }

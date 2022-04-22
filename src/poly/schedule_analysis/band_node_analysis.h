@@ -35,9 +35,9 @@ class AnalyzeBandNode {
   void CollectStmtInfo();
   void AnalyzeConvAndMatmulOp(const ProvideEntry &pe);
   void AnalyzeScheduleTreeTemplate();
-  void AnalyzeOuterBandTemplate();
+  void AnalyzeOuterBandTemplate(std::unique_ptr<OuterBandNode> &bn);
   void ShowBandInfo();
-  void AnalyzeAxisPosition();
+  void AnalyzeAxisPosition(std::unique_ptr<OuterBandNode> &bn);
 
   void DetermineTemplateOfBand(std::unique_ptr<OuterBandNode> &bn);
   bool IsGemmTempleteInBand(std::unique_ptr<OuterBandNode> &bn);
@@ -46,12 +46,15 @@ class AnalyzeBandNode {
   int GetLastAxisPos(const isl::schedule_node &orig_node, std::unordered_set<std::string> skip_tensors = {});
   void RecordAllCoalescedAccessTensors(std::unique_ptr<OuterBandNode> &bn,
                                        std::unordered_set<std::string> skip_tensors = {});
+  void CheckVectorization(std::unique_ptr<OuterBandNode> &bn);
+  void CheckVectorizationFromTensorSize(std::unique_ptr<OuterBandNode> &bn);
 
   std::string target_;
   const isl::schedule &sch_;
   ScopInfo &scop_info_;
   std::vector<const Provide *> gemm_provides_;
   std::unordered_map<isl::id, std::pair<std::string, ReduceDirection>, isl::IslIdIslHash> stmt_info_;
+  bool is_unpad_op_{false};
 };
 
 }  // namespace poly

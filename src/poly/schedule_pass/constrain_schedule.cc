@@ -224,7 +224,7 @@ bool ConstrainSchedule::ShouldAutogenMindTrick(const isl::schedule &sch) const {
     } else if (str == "disable") {
       Info(log::Verbosity::low, "MindTrick autogen is disabled via the environment");
       return false;
-    } else if  (str == "normal") {
+    } else if (str == "normal") {
       Info(log::Verbosity::low, "MindTrick autogen is enable via the environment");
       enable_autogen = true;
     }
@@ -390,6 +390,7 @@ void ConstrainSchedule::ExtractMindTrickInfo(const std::shared_ptr<SchedulingMin
 
     const bool has_swizzle = mind_trick->HasGpuSwizzleDim();
     scop_info_.user_config_.SetMindTrickGpuHasSwizzle(has_swizzle);
+    scop_info_.user_config_.SetEnableRestart(!has_swizzle);
   }
 
   ExtractDisabledPasses(mind_trick);
@@ -469,7 +470,7 @@ void ConstrainSchedule::ExtractAttrs(const std::shared_ptr<SchedulingMindTrick> 
   scop_info_.user_config_.SetAttrs(attrs);
   // update g_attrs
   if (!attrs.empty()) {
-    for (const auto& kv: attrs) {
+    for (const auto &kv : attrs) {
       g_attrs.Set(kv.first, kv.second);
     }
   }

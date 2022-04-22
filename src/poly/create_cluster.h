@@ -101,12 +101,13 @@ class RegisterCreateCluster : public CreateCluster {
   void CreateClusterListForElementWise(const isl::schedule_node &orig_node,
                                        const std::unordered_set<std::string> &mark_names);
 
+  bool need_start_{true};
   isl::union_map GetPartialSchedule(const isl::schedule_node &node) override;
 
  private:
   void RecordSharedPromotedTensors(const bool is_gemm = false);
-  bool IsPromote(const TensorFootprintCluster &fp_cluster, const isl::multi_union_pw_aff &partial_sched_mupa,
-                 const isl::multi_union_pw_aff &thread_schedule);
+  bool IsResueThread(const TensorFootprintCluster &cluster, const isl::schedule_node &current_node);
+  bool IsSatisfyVectorization(const TensorFootprintCluster &cluster, const isl::id &cluster_id);
 
   // Common functions required by shared, register in gpu and cpu.
   bool CheckPromotion(const isl::schedule_node &current_node, const isl::schedule_node &node,
@@ -114,7 +115,7 @@ class RegisterCreateCluster : public CreateCluster {
                       const std::pair<isl::id, PromotedTensorType> &tensor_info) override;
   BufferDefInfo GetPromotedInfo(const isl::id &promoted_id, const std::string &mark_name) override;
 
-  void RecordVectorizedPromotedTensors(const bool is_enable_vectorization);
+  void RecordVectorizedPromotedTensors();
 
   std::set<std::string> shared_tensor_;
 };

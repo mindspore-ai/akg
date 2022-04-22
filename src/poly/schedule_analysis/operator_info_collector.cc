@@ -556,7 +556,11 @@ std::string OpTypeCollector::GetBasicOpType(const TensorEntry &dst, const std::v
   bool is_pad = (dst.name.find("pad") != std::string::npos || dst.name.find("Pad") != std::string::npos);
   if (!is_unpad && is_pad) {
     basic_op_type += AT_PAD;
-    basic_op_type += "_";
+    basic_op_type += UNDERSCORE_PATTERN;
+  }
+  if (is_unpad) {
+    basic_op_type += AT_UNPAD;
+    basic_op_type += UNDERSCORE_PATTERN;
   }
   if (srcs.empty()) {
     // Dst = const

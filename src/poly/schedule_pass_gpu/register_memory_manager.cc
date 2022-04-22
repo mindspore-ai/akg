@@ -121,6 +121,11 @@ void RegisterMemoryManager::CreateClusterForOperator(const isl::schedule_node &n
     mark_names_.emplace(PROMOTE_GLOBAL_TO_REGISTER);
     create_cluster.CreateClusterListForElementWise(node, mark_names_);
   }
+
+  if (create_cluster.need_start_ && scop_info_.analysis_result_.GetOuterBandNode(band_index_)->enable_vectorization) {
+    scop_info_.user_config_.SetEnableVectorization(false);
+    scop_info_.analysis_result_.SetRestartPassName(RestartPassName::ANALYZE_SCHEDULE);
+  }
 }
 
 isl::schedule_node RegisterMemoryManager::InsertMarkerForEmit(const isl::schedule_node &orig_node) {
