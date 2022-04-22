@@ -48,10 +48,32 @@ void SpaceAnalyzer::AnalyzeSpecialAxes() {
   IdentifySharedAxes();
   IdentifyCastAxes();
   IdentifyModAxes();
+  if (analyzer_->scop_info_.user_config_.GetTarget() == TARGET_CUDA) {
+    IdentifyInlinedTensors();
+  }
 
   // Step 3: Support dynamic shape and custom tiling strategies.
   IdentifyDynamicShape();
   IdentifyCustomTiling();
+}
+
+void SpaceAnalyzer::IdentifyInlinedTensors() {
+  std::unordered_map<std::string, int> tensor_count;
+  for (auto it : provides_ana_) {
+    std::vector<ProvideEntry> pes = it.second;
+    for (auto pe : pes) {
+      for (auto src : pe.src) {
+        if (tensor_count.find(src.name) == tensor_count.end()) {
+          tensor_count[src.name] = 1;
+        } else {
+          tensor_count[src.name] += 1;
+        }
+      }
+    }
+  }
+  for (auto it : tensor_count) {
+    analyzer_->RootAxis()->MarkWithAttr(AttrInfo{it.first, std::to_string(it.second)});
+  }
 }
 
 void SpaceAnalyzer::MarkCaredType(ProvideEntry pe) {
