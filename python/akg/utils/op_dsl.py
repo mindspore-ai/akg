@@ -25,7 +25,7 @@ def get_attr(attr_desc, attr_type):
     for attr in attr_desc:
         if attr["name"] == attr_type:
             return attr["value"]
-    logging.warning("attr {} not found, please check.".format(attr_type))
+    logging.warning("attr %s not found, please check." % (attr_type))
     return None
 
 
@@ -562,6 +562,30 @@ def unpad_str(inputs, output, attr):
     return res
 
 
+def cummulative_str(inputs, outputs, attr, op_type):
+    """gen cummulative sum str and product str"""
+    exclusive = get_attr(attr, "exclusive")
+    reverse = get_attr(attr, "reverse")
+    axis = get_attr(attr, "axis")
+    input_shape = inputs[0][0]['shape']
+    res = ""
+    res += "axis = {}\n".format(axis)
+    if reverse:
+        res += "out = np.flip({}, axis)\n".format(get_input(inputs[0][0]))
+        res += "out = np.{}(out, axis)\n".format(op_type)
+    else:
+        res += "out = np.{}({}, axis)\n".format(op_type, get_input(inputs[0][0]))
+    if exclusive:
+        res += "from scipy.ndimage.interpolation import shift\n"
+        res += "shift_axis = [0] * {}\n".format(len(input_shape))
+        res += "shift_axis[axis] = 1\n"
+        res += "out = shift(out, shift_axis)\n"
+    if reverse:
+        res += "out = np.flip(out, axis=axis)\n"
+    res += "{} = out\n".format(outputs[0]['tensor_name'])
+    return res
+
+
 op_dsl = {
     "Custom": lambda inputs, output, attr: custom_str(inputs, output, attr),
     "ReduceSum": lambda inputs, output, attr: reduce_str(inputs, output, attr, "sum"),
@@ -569,10 +593,8 @@ op_dsl = {
     "ReduceMin": lambda inputs, output, attr: reduce_str(inputs, output, attr, "min"),
     "ReduceProd": lambda inputs, output, attr: reduce_str(inputs, output, attr, "prod"),
     "StridedSlice": lambda inputs, output, attr: strided_slice_str(inputs, output, attr),
-    "CumSum": lambda inputs, output, attr: "%s = np.cumsum(%s, %s)" %
-                                           (output[0]['tensor_name'], get_input(inputs[0][0]), get_attr(attr, "axis")),
-    "CumProd": lambda inputs, output, attr: "%s = np.cumprod(%s, %s)" %
-                                            (output[0]['tensor_name'], get_input(inputs[0][0]), get_attr(attr, "axis")),
+    "CumSum": lambda inputs, output, attr: cummulative_str(inputs, output, attr, "cumsum"),
+    "CumProd": lambda inputs, output, attr: cummulative_str(inputs, output, attr, "cumprod"),
     "Sin": lambda inputs, output, attr: "%s = np.sin(%s)" %
                                         (output[0]['tensor_name'], get_input(inputs[0][0])),
     "Cos": lambda inputs, output, attr: "%s = np.cos(%s)" %

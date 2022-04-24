@@ -298,6 +298,25 @@ void SharedCreateCluster::CreateClusterListForElementWise(const isl::schedule_no
   }
 }
 
+void SharedCreateCluster::CreateClusterListForPartialElementWise(const isl::schedule_node &node,
+                                                          const std::unordered_set<std::string> &mark_names) {
+  auto configed_tensors = scop_info_.user_config_.GetSharedTensors();
+  // Initialize the promoted types of all tensors.
+  RecordInitPromotedTensorType(configed_tensors);
+  // Remove write tensors from promoted tensors
+  auto write_map = scop_info_.StmtWriteMap();
+  for (auto item : write_map) {
+    for (auto item_id : item.second) {
+      if (all_tensors_.count(item_id)) {
+        all_tensors_.erase(item_id);
+      }
+    }
+  }
+  for (const auto &mark_name : mark_names) {
+    RecordPromotedTensorInfo(node, mark_name, all_tensors_);
+  }
+}
+
 void SharedCreateCluster::CreateClusterListForReduce(const isl::schedule_node &node,
                                                      const std::unordered_set<std::string> &mark_names) {
   auto configed_tensors = scop_info_.user_config_.GetSharedTensors();

@@ -76,6 +76,8 @@ class SharedCreateCluster : public CreateCluster {
                                   const std::unordered_set<std::string> &mark_names);
   void CreateClusterListForElementWise(const isl::schedule_node &orig_node,
                                        const std::unordered_set<std::string> &mark_names);
+  void CreateClusterListForPartialElementWise(const isl::schedule_node &orig_node,
+                                       const std::unordered_set<std::string> &mark_names);
 
  private:
   bool CoalescingAccessWay(const isl::schedule_node &node, const isl::schedule_node &root,
