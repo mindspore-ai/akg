@@ -34,19 +34,31 @@ class TestCase(TestBase):
         self.params_init(self.case_name, self.case_path)
         return True
 
-    @pytest.mark.level0
-    @pytest.mark.platform_x86_gpu_training
-    @pytest.mark.env_onecard
-    def test_gpu_level0(self):
+    def run_gpu_level0(self):
         return self.run_cases(self.args_default, utils.CUDA, "level0")
     
-    @pytest.mark.level0
-    @pytest.mark.platform_x86_cpu
-    @pytest.mark.env_onecard
-    def test_cpu_level0(self):
+    def run_cpu_level0(self):
         return self.run_cases(self.args_default, utils.LLVM, "level0")
 
     def teardown(self):
         self._log.info("{0} Teardown".format(self.casename))
         super(TestCase, self).teardown()
         return
+
+@pytest.mark.level0
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
+def test_gpu_level0():
+    test_case = TestCase()
+    test_case.setup()
+    test_case.run_gpu_level0()
+    test_case.teardown()
+
+@pytest.mark.level0
+@pytest.mark.platform_x86_cpu
+@pytest.mark.env_onecard
+def test_cpu_level0():
+    test_case = TestCase()
+    test_case.setup()
+    test_case.run_cpu_level0()
+    test_case.teardown()

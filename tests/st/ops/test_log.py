@@ -33,15 +33,9 @@ from tests.common.test_run import log_run
 # TestCase= class: put to tests/*/
 ############################################################
 class TestCase(TestBase):
-    def setup(self):
-        case_name = "test_akg_log"
-        case_path = os.getcwd()
-
-        # params init
-        self.params_init(case_name, case_path)
-        self.caseresult = True
-        self._log.info(
-            "============= {0} Setup case============".format(self.casename))
+    def __init__(self):
+        self.case_name = "test_akg_log"
+        self.case_path = os.getcwd()
         self.args_default = [
             ## testflag,opfuncname,testRunArgs, dimArgs
             ("log_01", log_run, ((1, 128), "float16", "log_fp16"), ["level0"]),
@@ -51,25 +45,20 @@ class TestCase(TestBase):
             ("log_05", log_run, ((32, 32), "float16", "log_fp16"), ["level0"]),
             ("log_06", log_run, ((384, 32), "float16", "log_fp16"), ["level0"]),
         ]
+
+    def setup(self):
+        self.params_init(self.case_name, self.case_path)
+        self._log.info(
+            "============= {0} Setup case============".format(self.casename))
         return True
 
-    @pytest.mark.level0
-    @pytest.mark.platform_x86_gpu_training
-    @pytest.mark.env_onecard
-    def test_gpu_level0(self):
+    def run_gpu_level0(self):
         return self.run_cases(self.args_default, utils.CUDA, "level0")
 
-    @pytest.mark.level0
-    @pytest.mark.platform_x86_cpu
-    @pytest.mark.env_onecard
-    def test_cpu_level0(self):
+    def run_cpu_level0(self):
         return self.run_cases(self.args_default, utils.LLVM, "level0")
 
-    @pytest.mark.level0
-    @pytest.mark.platform_arm_ascend_training
-    @pytest.mark.platform_x86_ascend_training
-    @pytest.mark.env_onecard
-    def test_run(self):
+    def run_ascend_level0(self):
         return self.run_cases(self.args_default, utils.CCE, "level0")
 
     def teardown(self):
@@ -80,3 +69,31 @@ class TestCase(TestBase):
         self._log.info(
             "============= {0} Teardown============".format(self.casename))
         return
+
+@pytest.mark.level0
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
+def test_gpu_level0():
+    test_case = TestCase()
+    test_case.setup()
+    test_case.run_gpu_level0()
+    test_case.teardown()
+
+@pytest.mark.level0
+@pytest.mark.platform_x86_cpu
+@pytest.mark.env_onecard
+def test_cpu_level0():
+    test_case = TestCase()
+    test_case.setup()
+    test_case.run_cpu_level0()
+    test_case.teardown()
+
+@pytest.mark.level0
+@pytest.mark.platform_arm_ascend_training
+@pytest.mark.platform_x86_ascend_training
+@pytest.mark.env_onecard
+def test_ascend_level0():
+    test_case = TestCase()
+    test_case.setup()
+    test_case.run_ascend_level0()
+    test_case.teardown()
