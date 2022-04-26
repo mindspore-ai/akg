@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -57,6 +57,9 @@ Stmt Optimize(Stmt &s, BuildInfo &info) {
   }
   ADD_PASS(pm, AddAttrsForOp);
   ADD_PASS(pm, BroadcastForSSA);
+  if (info.opt.target == "cuda") {
+    ADD_PASS(pm, LogicalOrToAdd);
+  }
   return pm.Run(s);
 }
 

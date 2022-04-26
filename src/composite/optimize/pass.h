@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -73,6 +73,9 @@ Stmt AddAttrsForOp(const Stmt &s, BuildInfo *info);
 
 // add broadct for ssa problem
 Stmt BroadcastForSSA(const Stmt &s, BuildInfo *info);
+
+// change logicalor to add
+Stmt LogicalOrToAdd(const Stmt &s, BuildInfo *info);
 
 }  // namespace akg
 #endif  // COMPOSITE_PASS_H_
