@@ -25,7 +25,7 @@ from akg.ops.math.sub import Sub
 from akg.ops.math.neg import neg
 from akg.ops.math.exp import Exp
 from akg.ops.math.sum import Sum
-from akg.ops.math.ascend.sum_others import SumV2 
+from akg.ops.math.ascend.sum_others import sum_v2
 from akg.ops.math.log import log
 
 
@@ -89,14 +89,14 @@ def sparse_softmax_cross_entropy_with_logits_impl(labels=None, logits=None, redu
         backprop = Sub(prob, labels, target=utils.CCE)
 
         if reduction.lower() == "none":
-            loss = SumV2(cross_entropy, axis, keepdims=True)
+            loss = sum_v2(cross_entropy, axis, keepdims=True)
         elif reduction.lower() == "mean":
-            loss = SumV2(cross_entropy, axis=None)
+            loss = sum_v2(cross_entropy, axis=None)
             factor = logits.shape[0].value
             loss = loss * akg.tvm.const(1 / factor, logits.dtype)
             backprop = backprop * akg.tvm.const(1 / factor, logits.dtype)
         elif reduction.lower() == "sum":
-            loss = SumV2(cross_entropy, axis=None)
+            loss = sum_v2(cross_entropy, axis=None)
         else:
             raise ValueError("reduction method {0} is not supported".format(reduction))
         backprop = akg.topi.multiply(backprop, akg.tvm.const(scale, backprop.dtype))
@@ -130,7 +130,7 @@ def sparse_softmax_cross_entropy_with_logits(labels, logits, reduction='mean'):
         tvm.tensor.Tensor, has the same dtype as logits.
         If reduction is 'none', shape of the tensor is the same as logits,
         otherwise shape of the tensor is the same as labels.
-    
+
     Supported Platforms:
         'Ascend'
     """

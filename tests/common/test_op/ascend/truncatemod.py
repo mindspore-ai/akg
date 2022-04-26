@@ -17,10 +17,11 @@
 import akg.topi
 import akg.tvm
 from akg.ops.math import Divide, Cast
-from akg.ops.math.ascend import Floor
+from akg.ops.math.ascend import floor
 import akg.utils as utils
 from akg.utils.dsl_create import produce_shapes
 from akg.utils.kernel_exec import product_is_mini
+
 
 def _truncatemod_compute_mini(x, y):
     """
@@ -40,7 +41,7 @@ def _truncatemod_compute_mini(x, y):
         def truncatemod_func(a, b):
             """function for truncatemod formula"""
             # For positive numbers, floor and trunc are equivalent
-            return akg.topi.subtract(a, akg.topi.multiply(b, Cast(Floor(Divide(a, b, utils.CCE)), b.dtype, target=utils.CCE)))
+            return akg.topi.subtract(a, akg.topi.multiply(b, Cast(floor(Divide(a, b, utils.CCE)), b.dtype, target=utils.CCE)))
 
         mod_value = truncatemod_func(x_abs_fp32, y_abs_fp32)
 

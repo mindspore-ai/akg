@@ -18,9 +18,10 @@ import akg
 from akg import tvm, topi
 from akg.utils.format_transform import get_shape
 import akg.utils as utils
-from akg.ops.math.ascend import Floor
+from akg.ops.math.ascend import floor
 
-def nudge_min_max(min, max, num_bits, narrow_range):
+
+def nudge_min_max(min_, max_, num_bits, narrow_range):
     """
     Calculate the maximum and minimum values of the quantization
 
@@ -41,9 +42,9 @@ def nudge_min_max(min, max, num_bits, narrow_range):
     else:
         quant_min = 1.00
 
-    scale = (max - min) / (float(quant_max) - quant_min)
+    scale = (max_ - min_) / (float(quant_max) - quant_min)
 
-    zero_point_from_min = quant_min - min / scale
+    zero_point_from_min = quant_min - min_ / scale
 
     # Calculate the maximum and minimum values of the quantization
     if zero_point_from_min < quant_min:
@@ -62,9 +63,9 @@ def nudge_min_max(min, max, num_bits, narrow_range):
 @utils.check_input_type(tvm.tensor.Tensor,
                           (float, int, type(None)),
                           (float, int, type(None)),
-                          (int, type(None)), 
+                          (int, type(None)),
                           (bool, type(None)))
-def fake_quant_with_min_max_args(input_data, min=-6, max=6, num_bits=8, 
+def fake_quant_with_min_max_args(input_data, min_=-6, max_=6, num_bits=8,
                                  narrow_range=False):
     """
     Computes Fake-quantize the 'input_data' tensor,
@@ -77,11 +78,11 @@ def fake_quant_with_min_max_args(input_data, min=-6, max=6, num_bits=8,
     Args:
         data_x1 (tvm.tensor.Tensor): Tensor of dtype "float32"
         min ([float, int]): scalar, defaults to -6
-        max ([float, int]): scalar, defaults to 6. [min; max] define the 
+        max ([float, int]): scalar, defaults to 6. [min; max] define the
                             clamping range for the input_data data
         num_bits ([float, int]): Defaults to 8. num_bits is the bitwidth
                                  of the quantization,between 2 and 16
-        narrow_range ([bool]): 
+        narrow_range ([bool]):
             True, quantized into the quantization range [1; 2^num_bits - 1]
             False,quantized into the quantization range [0; 2^num_bits - 1]
 
@@ -94,10 +95,10 @@ def fake_quant_with_min_max_args(input_data, min=-6, max=6, num_bits=8,
     dtype = input_data.dtype
     utils.ops_dtype_check(dtype, utils.DtypeForDavinci.FLOAT32)
 
-    nudged_min, nudged_max, scale = nudge_min_max(min, max, num_bits,
+    nudged_min, nudged_max, scale = nudge_min_max(min_, max_, num_bits,
                                                   narrow_range)
 
-    zero_tensor = tvm.compute(input_data.shape, 
+    zero_tensor = tvm.compute(input_data.shape,
                               lambda *i: tvm.const(0, dtype="float32"),
                               name="zero_tensor")
     nudged_max_tensor = topi.add(zero_tensor, nudged_max)
@@ -112,7 +113,7 @@ def fake_quant_with_min_max_args(input_data, min=-6, max=6, num_bits=8,
     clamped_shifted = topi.subtract(clamped, nudged_min_tensor)
     vmul_shifted = topi.multiply(clamped_shifted, inv_nudged_scale)
     vadds_shifted = topi.add(vmul_shifted, 0.5)
-    floor_vadds_shifted = Floor(vadds_shifted)
+    floor_vadds_shifted = floor(vadds_shifted)
     floor_cast = akg.lang.ascend.cast_to(floor_vadds_shifted, dtype)
     res_scale = topi.multiply(floor_cast, scale)
     res = topi.add(res_scale, nudged_min_tensor)

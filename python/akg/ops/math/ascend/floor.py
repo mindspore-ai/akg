@@ -16,25 +16,27 @@
 
 """operator dsl function:floor"""
 
-from akg import tvm
 import akg
 import akg.utils as utils
 from akg.utils.kernel_exec import product_is_mini
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, (str, type(None)))
-def Floor(data, target=utils.CCE):
+def floor(data, target=utils.CCE):
     """
     Returns element-wise largest integer not greater than x.
 
     Args:
-        data (tvm.tensor.Tensor): Tensor of type float16, and float32
+        data (akg.tvm.tensor.Tensor): Tensor of type float16, and float32
 
     Returns:
-        tvm.tensor.Tensor, has the same shape as data and type of int32.
-    
+        akg.tvm.tensor.Tensor, has the same shape as data and type of int32.
+
     Supported Platforms:
         'Ascend'
     """
+    if target != utils.CCE:
+        raise RuntimeError('operator not supported on %s' % utils.get_backend(target))
     utils.ops_dtype_check(data.dtype, utils.DtypeForDavinci.ALL_FLOAT)
     shape = [x.value for x in data.shape]
     utils.check_shape(shape)
@@ -59,8 +61,8 @@ def Floor(data, target=utils.CCE):
         # if diff < 0 and floor == ceil, then it's 87 = floor(86.99999)
         res = akg.tvm.compute(shape,
                               lambda *i: akg.tvm.expr.Select(
-                                  diff_fp16(*i) < tvm.const(0, "float16"),
-                                  floor_fp16(*i) - tvm.const(1, "float16"),
+                                  diff_fp16(*i) < akg.tvm.const(0, "float16"),
+                                  floor_fp16(*i) - akg.tvm.const(1, "float16"),
                                   floor_fp16(*i)),
                               name="res")
 

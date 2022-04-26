@@ -20,7 +20,7 @@ from .acos_grad import acos_grad
 from .acosh import acosh
 from .acosh_grad import acosh_grad
 from .approximate_equal import approximate_equal
-from .equal_count import EqualCount
+from .equal_count import equal_count
 from .argmax import argmax
 from .argmin import argmin
 from .asin import asin
@@ -38,21 +38,20 @@ from .batchmatmul import batch_matmul, batch_matmul_bias
 from .broadcast_to import broadcast_to
 from .ceil import ceil
 from .cosh import cosh
-from .equal_count import EqualCount
-from .exp_ad import ExpAd
-from .floor import Floor
-from .floordiv import FloorDiv
-from .log_ad import LogAd
+from .exp_ad import exp_ad
+from .floor import floor
+from .floordiv import floor_div
+from .log_ad import log_ad
 from .matmul import matmul
-from .mean import Mean, MeanV2
-from .prod_force_se_a import ProdForceSeA
-from .prod_force_se_a_grad import ProdForceSeAGrad
+from .mean import mean, mean_v2
+from .prod_force_se_a import prod_force_se_a
+from .prod_force_se_a_grad import prod_force_se_a_grad
 from .realdiv import RealDiv
 from .rec_positive import RecPositive
 from .sign import Sign
 from .sin import Sin
 from .sinh import Sinh
-from .sum_others import SumV2, SumByShape
+from .sum_others import sum_v2, sum_by_shape
 from .tan import tan
 from .tanh import Tanh
 from .tanh_ad import TanhAd

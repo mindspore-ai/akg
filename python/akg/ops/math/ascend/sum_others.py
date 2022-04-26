@@ -14,16 +14,16 @@
 
 """operator dsl function: another implementation of sum"""
 
-import akg.topi
-import akg.tvm
-from akg.utils import format_transform as ft_util
+import akg
 import akg.utils as utils
+from akg.utils import format_transform as ft_util
 from akg.utils.format_transform import get_shape
 from ..cast import Cast
 from ..sum import Sum
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, (list, tuple, int, type(None)), (bool, type(None)), (str, type(None)))
-def SumV2(inputs, axis=None, keepdims=True, target=utils.CCE):
+def sum_v2(inputs, axis=None, keepdims=True, target=utils.CCE):
     """
     another implementation of sum with topi api.
 
@@ -53,10 +53,11 @@ def SumV2(inputs, axis=None, keepdims=True, target=utils.CCE):
             output = step_sum
     return output
 
-def SumByShape(broadcast_data, original_shape, target=utils.CCE):
+
+def sum_by_shape(broadcast_data, original_shape, target=utils.CCE):
     """
     sum the broadcast_data by original shape; gradient for Broadcast.
-    
+
     Supported Platforms:
         'Ascend'
     """

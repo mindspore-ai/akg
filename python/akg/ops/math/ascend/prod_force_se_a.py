@@ -17,7 +17,8 @@ import akg
 import akg.utils as utils
 from akg.tvm.hybrid import script
 
-def ProdForceSeA(net_deriv_tensor, in_deriv_tensor, nlist_tensor, natoms=192, target=utils.CCE):
+
+def prod_force_se_a(net_deriv_tensor, in_deriv_tensor, nlist_tensor, natoms=192, target=utils.CCE):
     """
     Supported Platforms:
         'Ascend'
@@ -32,9 +33,10 @@ def ProdForceSeA(net_deriv_tensor, in_deriv_tensor, nlist_tensor, natoms=192, ta
     nnei = nlist_tensor_shape[2]
 
     output_shape = [nframes, natoms, 3]
+
     @script
     def prod_force_se_a_compute(net_deriv_tensor, in_deriv_tensor, nlist_tensor):
-        force = output_tensor(output_shape, dtype = net_deriv_tensor.dtype)
+        force = output_tensor(output_shape, dtype=net_deriv_tensor.dtype)
         for kk in range(nframes):
             for ii in range(natoms):
                 for cc in range(3):
@@ -51,6 +53,8 @@ def ProdForceSeA(net_deriv_tensor, in_deriv_tensor, nlist_tensor, natoms=192, ta
                                 force[kk, j_idx, cc] += net_deriv_tensor[kk, ii, aa] * in_deriv_tensor[kk, ii, aa, cc]
         return force
     output = prod_force_se_a_compute(net_deriv_tensor, in_deriv_tensor, nlist_tensor)
-    attrs = {'enable_post_poly_loop_partition': False, 'enable_double_buffer': False, 'enable_feature_library': True, 'RewriteVarTensorIdx': True }
-    #attrs['dim'] = "0 0 1 1 0 1 192 1 0 2 1 1 0 3 1 1"
+    attrs = {'enable_post_poly_loop_partition': False,
+             'enable_double_buffer': False,
+             'enable_feature_library': True,
+             'RewriteVarTensorIdx': True}
     return output, attrs
