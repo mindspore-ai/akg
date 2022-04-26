@@ -500,7 +500,9 @@ const std::unordered_set<std::string> AkgSupportedReduceOp = {AKG_REDUCE_SUM, AK
                                                               AKG_REDUCE_AND, AKG_REDUCE_OR,  AKG_REDUCE_PROD};
 
 const std::unordered_set<std::string> AkgSupportedTotOp = {AKG_ATOMIC_TOT, AKG_TENSOR_OF_TENSOR, AKG_TENSOR_NOT_PROMOTE,
-                                                           AKG_INNER_TENSOR, AKG_REMOVE_SELF_DEPENDENCE};
+                                                           AKG_INNER_TENSOR};
+
+const std::unordered_set<std::string> AkgSupportedCsrOp = {AKG_REMOVE_SELF_DEPENDENCE, CSR_AVG_ROW, CSR_FEATURE_LENGTH};
 
 const std::vector<std::string> ConvATTRList = {ATTR_CONV_FEATURE_W,  ATTR_CONV_KERNEL_H,   ATTR_CONV_KERNEL_W,
                                                ATTR_CONV_STRIDE_H,   ATTR_CONV_STRIDE_W,   ATTR_CONV_DILATION_H,

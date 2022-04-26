@@ -356,7 +356,8 @@ void ReduceStrategy::AddGpuConstraint() {
       if (auto ext = axis->range_extent.as<IntImm>()) {
         reduce_length_ *= ext->value;
       } else if (analyzer_->scop_info_.analysis_result_.IsCsrDynamicExtent(axis->range_extent)) {
-        reduce_length_ = analyzer_->scop_info_.user_config_.GetCsrThreadNum();
+        int rest_thread = total_available_thread_ / analyzer_->scop_info_.analysis_result_.GetCsrFeatLen();
+        reduce_length_ = std::min(analyzer_->scop_info_.user_config_.GetCsrThreadNum(), rest_thread);
       }
       if (std::count(reduce_axes_.begin(), reduce_axes_.end(), axis)) {
         return;
@@ -1690,9 +1691,8 @@ void GpuStrategy::InjectiveSpeedup() {
   auto parallel_size = GetProposalParallelSize(problem_size);
   auto proposal_blocks = parallel_size.first;
   auto proposal_threads = parallel_size.second;
-  auto proposal_elem_per_thread = coaleasced_size < warp_sizes_        ? 1
-                                  : total_blocks < proposal_blocks * 8 ? min_elem_for_io_bound_
-                                                                       : 8;
+  auto proposal_elem_per_thread =
+    coaleasced_size < warp_sizes_ ? 1 : total_blocks < proposal_blocks * 8 ? min_elem_for_io_bound_ : 8;
   proposal_elem_per_thread = proposal_elem_per_thread / SafeDivisor(curr_elem_size);
   CHECK(proposal_threads != 0 && total_blocks != 0);
   int64_t shrinked_threads =
@@ -2277,19 +2277,47 @@ void CsrStrategy::AddGpuConstraint() {
     }
     axes.push_back(axis);
   });
+  auto available_threads = total_available_thread_;
+  int csr_thread_num = -1;
+  auto feat_len = analyzer_->scop_info_.analysis_result_.GetCsrFeatLen();
+  if (feat_len > 1) {
+    // CSR schedule with feature dimension (csr.values > 1d), axis has already been
+    // fused to outer axis (static boundary), and inner axis (dynamic boundary).
+    // Feature dimension will be mapped first
+    CHECK(axes.size() == GPU_CSR_FUSION_AXES_SIZE);
+    auto outer_axis = axes[OUTERMOST_AXIS];
+    auto inner_axis = axes[OUTERMOST_AXIS + 1];
+    bool use_reduce_lib = analyzer_->scop_info_.analysis_result_.GetUseGpuReduceLib();
+    csr_thread_num = use_reduce_lib ? analyzer_->scop_info_.user_config_.GetCsrThreadNum() : GPU_CSR_NO_TILE;
+    // For outer axis
+    CHECK(!analyzer_->scop_info_.analysis_result_.IsCsrDynamicExtent(outer_axis->range_extent));
+    int max_nodes_per_block = available_threads / feat_len / csr_thread_num;
+    auto nodes_per_block = std::min(max_nodes_per_block, GPU_CSR_BEST_NUM_NODES_PER_BLOCK);
+    nodes_per_block = SafeDivisor(nodes_per_block);
+    outer_axis->block_constraints.map_extent_ =
+      std::ceil(static_cast<double>(outer_axis->extent_val) / feat_len / nodes_per_block);
+    outer_axis->thread_constraints.map_extent_ = feat_len * nodes_per_block;
+    // For inner axis
+    CHECK(analyzer_->scop_info_.analysis_result_.IsCsrDynamicExtent(inner_axis->range_extent));
+    inner_axis->block_constraints.map_extent_ = GPU_CSR_NO_TILE;
+    inner_axis->thread_constraints.map_extent_ = csr_thread_num;
+    inner_axis->c1_constraints.tile_min_ = GPU_CSR_NO_TILE;
+    inner_axis->c1_constraints.tile_extent_ = csr_thread_num;
+    analyzer_->scop_info_.user_config_.SetCsrThreadNum(csr_thread_num);
+    return;
+  }
   std::sort(axes.begin(), axes.end(), [](TileAxis *a, TileAxis *b) {
     if (a->dim_axis == b->dim_axis) {
       return a->index < b->index;
     }
     return a->dim_axis > b->dim_axis;
   });
-  auto available_threads = total_available_thread_;
-  int csr_thread_num = -1;
   for (size_t i = 0; i < axes.size(); ++i) {
+    // CSR schedule without dimension (csr.values = 1d)
     auto axis = axes[i];
     if (analyzer_->scop_info_.analysis_result_.IsCsrDynamicExtent(axis->range_extent)) {
       if (csr_thread_num != -1) {
-        axis->block_constraints.map_extent_ = 1;
+        axis->block_constraints.map_extent_ = GPU_CSR_NO_TILE;
         axis->thread_constraints.map_extent_ = csr_thread_num;
         axis->c1_constraints.tile_extent_ = csr_thread_num;
       } else {
@@ -2307,14 +2335,14 @@ void CsrStrategy::AddGpuConstraint() {
           csr_thread_num = static_cast<int>(std::exp2(warp_base)) * WARP_SIZE;
         }
         csr_thread_num = std::min(static_cast<int64_t>(csr_thread_num), available_threads);
-        axis->block_constraints.map_extent_ = 1;
+        axis->block_constraints.map_extent_ = GPU_CSR_NO_TILE;
         axis->thread_constraints.map_extent_ = csr_thread_num;
         axis->c1_constraints.tile_extent_ = csr_thread_num;
         analyzer_->scop_info_.user_config_.SetCsrThreadNum(csr_thread_num);
         available_threads /= SafeDivisor(csr_thread_num);
       }
     } else if (axis->dim_axis == 0) {
-      axis->thread_constraints.map_extent_ = 1;
+      axis->thread_constraints.map_extent_ = GPU_CSR_NO_TILE;
     } else {
       available_threads /= SafeDivisor(std::min(axis->extent_val, available_threads));
     }

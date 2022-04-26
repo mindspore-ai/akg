@@ -1238,6 +1238,9 @@ class AnalysisResult {
   void SetCsrAvgRow(int csr_avg_row) { csr_avg_row_ = csr_avg_row; }
   int GetCsrAvgRow() { return csr_avg_row_; }
 
+  void SetCsrFeatLen(int csr_feat_len) { csr_feat_len_ = csr_feat_len; }
+  int GetCsrFeatLen() { return csr_feat_len_; }
+
   void ResetOuterBandNode() { outer_band_nodes_.clear(); }
   void ResetActivateBufferFootprints() { active_buffer_footprints_.clear(); }
   void ResetBufferDefInfos() { buffer_def_infos_.clear(); }
@@ -1323,9 +1326,12 @@ class AnalysisResult {
   std::unordered_set<std::string> tensors_not_promote_;
   std::unordered_set<std::string> inner_tensor_;
   bool is_tensor_of_tensor_{false};
+
+  // csr
   bool is_csr_{false};
   bool remove_self_dependence_{false};
   int csr_avg_row_{0};
+  int csr_feat_len_{1};
 
   RestartPassName restart_pass_name_{RestartPassName::NOT_RESTART};
   std::unordered_map<std::string, isl::schedule> pass_schedule_map_;

@@ -447,8 +447,20 @@ class ScopMakeScheduleTree final : protected IRVisitor {
     } else if (op->attr_key == AKG_INNER_TENSOR) {
       CHECK(op->value.as<StringImm>());
       scop_info_.analysis_result_.RecordInnerTensor(op->value.as<StringImm>()->value);
-    } else if (op->attr_key == AKG_REMOVE_SELF_DEPENDENCE) {
+    }
+  }
+
+  void SetCsrInfo(const AttrStmt *op) {
+    if (op->attr_key == AKG_REMOVE_SELF_DEPENDENCE) {
       scop_info_.analysis_result_.SetRemoveSelfDependence(true);
+    } else if (op->attr_key == CSR_FEATURE_LENGTH) {
+      auto csr_feature_length = op->value.as<IntImm>();
+      CHECK(csr_feature_length);
+      scop_info_.analysis_result_.SetCsrFeatLen(csr_feature_length->value);
+    } else if (op->attr_key == CSR_AVG_ROW) {
+      auto csr_avg_row = op->value.as<IntImm>();
+      CHECK(csr_avg_row);
+      scop_info_.analysis_result_.SetCsrAvgRow(csr_avg_row->value);
     }
   }
 
@@ -479,10 +491,8 @@ class ScopMakeScheduleTree final : protected IRVisitor {
       Op_buffer_bind_scope(op);
     } else if (op->attr_key == ATTR_IM2COL_KEY) {
       scop_info_.analysis_result_.RecordAttrStmt(op);
-    } else if (op->attr_key == CSR_AVG_ROW) {
-      auto csr_avg_row = op->value.as<IntImm>();
-      CHECK(csr_avg_row);
-      scop_info_.analysis_result_.SetCsrAvgRow(csr_avg_row->value);
+    } else if (AkgSupportedCsrOp.count(op->attr_key) != 0) {
+      SetCsrInfo(op);
     }
 
     sch = MakeScheduleTreeHelper(op->body, scop_info_, set, outer, macro_stmt);

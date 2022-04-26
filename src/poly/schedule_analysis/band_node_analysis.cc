@@ -177,7 +177,13 @@ class OperatorInfoCollector {
 
         ReduceDirection reduce_direction = ReduceDirection::UNKNOWN;
         if (scop_info_.analysis_result_.GetCsr()) {
-          reduce_direction = ReduceDirection::X;
+          // If CSR has feature dimension, threadIdx.x should map to the feature
+          // dimension instead, to keep continuous memory load/save
+          if (scop_info_.analysis_result_.GetCsrFeatLen() > 1) {
+            reduce_direction = ReduceDirection::Y;
+          } else {
+            reduce_direction = ReduceDirection::X;
+          }
         } else {
           PostOrderVisit(op->value, [&reduce_direction, &reduce_attrs, op](const NodeRef &node) -> void {
             if (reduce_direction == ReduceDirection::Y) {
