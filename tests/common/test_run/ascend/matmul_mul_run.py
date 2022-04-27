@@ -16,18 +16,18 @@ import numpy as np
 from akg.utils import kernel_exec as utils
 from akg.ops.math.ascend import MatMul
 from tests.common.test_run.ascend.matmul_run import *
-from akg.ops.math import Mul
+from akg.ops.math import mul
 
 def matmul_mul(x, y, c,  b, out_dtype, left_format="zZ", right_format="nZ", out_format="zN", transpose_x=False,
-                transpose_y=False, attrs={}, target="cce"):
-    matmul_res, attrs = MatMul(x, y, b, out_dtype, left_format, right_format, out_format, transpose_x, transpose_y, attrs=None)
+                transpose_y=False, attrs=None, target="cce"):
+    matmul_res, attrs = MatMul(x, y, b, out_dtype, left_format, right_format, out_format, transpose_x, transpose_y, attrs=attrs)
     attr = {}
     print(matmul_res.shape)
-    res = Mul(matmul_res, c, target='cce')
+    res = mul(matmul_res, c, target=target)
     return res, attrs
 
 
-def matmul_mul_execute(shape_x, shape_y, bias, cmul, left_format, right_format, out_format, adj_x, adj_y, dtype, bias_dtype, out_dtype, kernel_name, attrs={}):
+def matmul_mul_execute(shape_x, shape_y, bias, cmul, left_format, right_format, out_format, adj_x, adj_y, dtype, bias_dtype, out_dtype, kernel_name, attrs=None):
     batch_tuple, m, k, n = extract_dim(shape_x, shape_y, adj_x, adj_y)
     m = (m + 15) // 16 * 16
     n = (n + 15) // 16 * 16
@@ -37,7 +37,7 @@ def matmul_mul_execute(shape_x, shape_y, bias, cmul, left_format, right_format, 
         cmul_shape = (1, )
     else:
         cmul_shape = out_shape
-    mod = matmul_mul_compile(shape_x, shape_y, bias, cmul_shape, left_format, right_format, out_format, adj_x, adj_y, dtype, bias_dtype, out_dtype, kernel_name, attrs={})
+    mod = matmul_mul_compile(shape_x, shape_y, bias, cmul_shape, left_format, right_format, out_format, adj_x, adj_y, dtype, bias_dtype, out_dtype, kernel_name, attrs)
     # Generate data
     m_x, m_y, bench_mark, bias_data = matmul_data(batch_tuple, m, k, n, dtype, bias_dtype, out_dtype, bias, adj_x, adj_y, left_format, right_format, out_format)
     cadd_data = random_gaussian(cmul_shape, miu=0.5, sigma=0.01).astype(out_dtype)
@@ -73,4 +73,4 @@ def matmul_mul_compile(shape_x, shape_y, bias, cadd, left_format, right_format, 
         input_shapes = [shape_xx, shape_yy, cadd]
         input_types = [dtype, dtype, out_dtype]
         op_attrs = [None, out_dtype, left_format, right_format, output_format, adj_x, adj_y, attrs]
-    return utils.op_build_test(matmul_mul, input_shapes, input_types, op_attrs, kernel_name, attrs=attrs, tuning=tuning)
+    return utils.op_build_test(matmul_mul, input_shapes, input_types, op_attrs, kernel_name, attrs, tuning=tuning)

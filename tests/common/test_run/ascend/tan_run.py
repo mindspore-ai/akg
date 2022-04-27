@@ -15,7 +15,7 @@
 """tan_run"""
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.math.ascend import Tan
+from akg.ops.math.ascend import tan
 from tests.common.tensorio import compare_tensor
 from tests.common.gen_random import random_gaussian
 from tests.common.base import get_rtol_atol
@@ -24,7 +24,7 @@ def tan_run(shape, dtype, attrs=None):
     """tan_run implementation"""
     if attrs is None:
         attrs = {}
-    mod = utils.op_build_test(Tan, [shape], [dtype], kernel_name='tan', attrs=attrs)
+    mod = utils.op_build_test(tan, [shape], [dtype], kernel_name='tan', attrs=attrs)
     args, exp_output, input_x = gen_data(shape, dtype)
 
     acu_output = utils.mod_launch(mod, args, expect=exp_output)

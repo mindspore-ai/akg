@@ -17,12 +17,12 @@ import numpy as np
 from akg.utils import kernel_exec as utils
 from akg.ops.math.ascend import MatMul
 from tests.common.test_run.ascend.matmul_run import *
-from akg.ops.math import Mul
+from akg.ops.math import mul
 
 def matmul_mul_transdata(x, y, c, b, out_dtype, left_format="zZ", right_format="nZ", out_format="zN", transpose_x=False,
-                        transpose_y=False, attrs={}, target="cce"):
-    matmul_res, attrs = MatMul(x, y, b, out_dtype, left_format, right_format, out_format, transpose_x, transpose_y, attrs=None)
-    res = Mul(matmul_res, c, target='cce')
+                        transpose_y=False, attrs=None, target="cce"):
+    matmul_res, attrs = MatMul(x, y, b, out_dtype, left_format, right_format, out_format, transpose_x, transpose_y, attrs=attrs)
+    res = mul(matmul_res, c, target=target)
     if out_format == 'zN':
         n1, m1, m0, n0 = matmul_res.shape[-4:]
         new_shape = matmul_res.shape[:-4] + [m1 * m0, n1 * n0]
@@ -53,7 +53,7 @@ def matmul_mul_transdata_compile(shape_x, shape_y, bias, muls_c, left_format, ri
         op_attrs = [None, out_dtype, left_format, right_format, output_format, adj_x, adj_y, attrs]
     return utils.op_build_test(matmul_mul_transdata, input_shapes, input_types, op_attrs, kernel_name, attrs=attrs, tuning=tuning)
 
-def matmul_mul_transdata_execute(shape_x, shape_y, bias, muls_c, left_format, right_format, out_format, adj_x, adj_y, dtype, bias_dtype, out_dtype, kernel_name, attrs={}):
+def matmul_mul_transdata_execute(shape_x, shape_y, bias, muls_c, left_format, right_format, out_format, adj_x, adj_y, dtype, bias_dtype, out_dtype, kernel_name, attrs=None):
     batch_tuple, m, k, n = extract_dim(shape_x, shape_y, adj_x, adj_y)
     m = (m + 15) // 16 * 16
     n = (n + 15) // 16 * 16
@@ -63,7 +63,7 @@ def matmul_mul_transdata_execute(shape_x, shape_y, bias, muls_c, left_format, ri
         cmul_shape = (1, )
     else:
         cmul_shape = out_shape
-    mod = matmul_mul_transdata_compile(shape_x, shape_y, bias, cmul_shape, left_format, right_format, out_format, adj_x, adj_y, dtype, bias_dtype, out_dtype, kernel_name, attrs={})
+    mod = matmul_mul_transdata_compile(shape_x, shape_y, bias, cmul_shape, left_format, right_format, out_format, adj_x, adj_y, dtype, bias_dtype, out_dtype, kernel_name, attrs)
     # Generate data
     m_x, m_y, bench_mark, bias_data = matmul_data(batch_tuple, m, k, n, dtype, bias_dtype, out_dtype, bias, adj_x, adj_y, left_format, right_format, out_format)
     cadd_data = random_gaussian(cmul_shape, miu=0.5, sigma=0.01).astype(out_dtype)

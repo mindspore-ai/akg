@@ -16,10 +16,10 @@
 import akg
 import akg.utils as utils
 import akg.utils.dsl_create as dc
-from ..log import Log
 from akg import tvm, topi
 from akg.utils.format_transform import get_shape
 from akg.utils.kernel_exec import product_is_mini
+from ..log import log
 
 def _compute_taylor(data_input):
     """Algorithm: atanh(x) = x + x^3/3 +  x^5/5 +  x^7/7"""
@@ -46,7 +46,7 @@ def _compute_log(data_input, target=utils.CCE):
     data_sub_x = topi.multiply(data_input, dc.neg_one_const(data_input.dtype))
     data_1_sub_x = topi.add(data_sub_x, dc.one_const(data_input.dtype))
     data_x_mul = data_1_sum_x / data_1_sub_x
-    data_x_log = Log(data_x_mul, target)
+    data_x_log = log(data_x_mul, target)
     data_res = topi.multiply(data_x_log, dc.half_const(data_input.dtype))
 
     return data_res
@@ -69,7 +69,7 @@ def _compute_mini(data_input, shape):
                                                            result_ln(*i)),
                            name="le")
 
-    """arctanh has the feature: arctanh(-abs(x)) = -arctanh(abs(x))"""
+    # arctanh has the feature: arctanh(-abs(x)) = -arctanh(abs(x))
     data_res_neg = topi.multiply(data_res, dc.neg_one_const("float16"))
     data_res = tvm.compute(shape,
                            lambda *i : akg.tvm.expr.Select(data_input(*i) < dc.zero_const("float16"),
@@ -83,7 +83,7 @@ def _compute_cloud(data):
     return _compute_log(data)
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, (str, type(None)))
-def Atanh(input_data, target=utils.CCE):
+def atanh(input_data):
     """
     Return atanh(x)=0.5*ln((1+x)/(1-x)) if abs(x)<1.
 

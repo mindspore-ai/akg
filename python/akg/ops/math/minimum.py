@@ -18,7 +18,8 @@ import akg.topi
 import akg.utils as utils
 from .cast import Cast
 
-def Minimum(input1, input2, target=utils.CCE):
+
+def minimum(input1, input2, target=utils.CCE):
     """
     Return the min value of two tensors element-wise.
 
@@ -31,7 +32,7 @@ def Minimum(input1, input2, target=utils.CCE):
 
     Returns:
         Tensor, has the same type as inputs.
-    
+
     Supported Platforms:
         'Ascend', 'GPU', 'CPU'
     """

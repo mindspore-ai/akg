@@ -13,27 +13,25 @@
 # limitations under the License.
 
 """operator dsl function: batch_matmul"""
-import numpy as np
 import akg.topi as topi
 import akg.tvm as tvm
-import akg.utils as utils
 from .matmul_utils import auto_out_transpose
 
 
-def batch_matmul(data1, data2, bias=None, out_dtype="float32", layout1="NHDT", layout2="NHDT", layout_out="NHDT"):
+def batch_matmul(data1, data2, attrs):
+    """Use different batch matmul functions depending on data dimensions"""
     if len(data1.shape) == 4:
-        res = batch_matmul_4D(data1, data2, bias, out_dtype,
-                              layout1, layout2, layout_out)
+        res = batch_matmul_4d(data1, data2, attrs)
     elif len(data1.shape) == 2:
-        res = batch_matmul_2D(data1, data2, bias, out_dtype,
-                              layout1, layout2, layout_out)
+        res = batch_matmul_2d(data1, data2, attrs)
     else:
-        res = batch_matmul_3D(data1, data2, bias, out_dtype,
-                              layout1, layout2, layout_out)
+        res = batch_matmul_3d(data1, data2, attrs)
     return res
 
 
-def batch_matmul_3D(data1, data2, bias=None, out_dtype="float32", layout1="NHDT", layout2="NHDT", layout_out="NHDT"):
+def batch_matmul_3d(data1, data2, attrs):
+    """batch matmul for 3-D data"""
+    bias, out_dtype, layout1, layout2, layout_out = attrs
     layout1_dict = {}
     layout2_dict = {}
     layout1 = layout1[1:]
@@ -49,16 +47,24 @@ def batch_matmul_3D(data1, data2, bias=None, out_dtype="float32", layout1="NHDT"
         layout1_dict[layout1_list[i]] = data1.shape[i]
         layout2_dict[layout2_list[i]] = data2.shape[i]
 
-    reduce_axis = tvm.reduce_axis((0, layout1_dict['k']), name='reduce_axis')
+    reduce_axis = tvm.reduce_axis(
+        (0, layout1_dict.get('k')), name='reduce_axis')
 
     if out_dtype == "float32":
-        res = tvm.compute((layout1_dict['b'], layout1_dict['m'], layout2_dict['n']), lambda b, i, j: tvm.sum(
-            data1[b, i if layout1_list[1] == 'm' else reduce_axis, reduce_axis if layout1_list[2] == 'k' else i].astype("float") *
-            data2[b, j if layout2_list[1] == 'n' else reduce_axis, reduce_axis if layout2_list[2] == 'k' else j].astype("float"), axis=reduce_axis))
+        res = tvm.compute(
+            (layout1_dict.get('b'), layout1_dict.get('m'), layout2_dict.get('n')),
+            lambda b, i, j: tvm.sum(
+                data1[b, i if layout1_list[1] == 'm' else reduce_axis,
+                      reduce_axis if layout1_list[2] == 'k' else i].astype("float") *
+                data2[b, j if layout2_list[1] == 'n' else reduce_axis,
+                      reduce_axis if layout2_list[2] == 'k' else j].astype("float"), axis=reduce_axis))
     else:
-        res = tvm.compute((layout1_dict['b'], layout1_dict['m'], layout2_dict['n']), lambda b, i, j: tvm.sum(
-            data1[b, i if layout1_list[1] == 'm' else reduce_axis, reduce_axis if layout1_list[2] == 'k' else i] *
-            data2[b, j if layout2_list[1] == 'n' else reduce_axis, reduce_axis if layout2_list[2] == 'k' else j], axis=reduce_axis))
+        res = tvm.compute(
+            (layout1_dict.get('b'), layout1_dict.get('m'), layout2_dict.get('n')),
+            lambda b, i, j: tvm.sum(
+                data1[b, i if layout1_list[1] == 'm' else reduce_axis, reduce_axis if layout1_list[2] == 'k' else i] *
+                data2[b, j if layout2_list[1] == 'n' else reduce_axis,
+                      reduce_axis if layout2_list[2] == 'k' else j], axis=reduce_axis))
     if bias is not None:
         res = topi.add(res, bias)
 
@@ -67,7 +73,9 @@ def batch_matmul_3D(data1, data2, bias=None, out_dtype="float32", layout1="NHDT"
     return res
 
 
-def batch_matmul_4D(data1, data2, bias=None, out_dtype="float32", layout1="NHDT", layout2="NHDT", layout_out="NHDT"):
+def batch_matmul_4d(data1, data2, attrs):
+    """batch matmul for 4-D data"""
+    bias, out_dtype, layout1, layout2, layout_out = attrs
     layout1_dict = {}
     layout2_dict = {}
     layout1_str = layout1.replace('N', 'B').replace(
@@ -81,16 +89,27 @@ def batch_matmul_4D(data1, data2, bias=None, out_dtype="float32", layout1="NHDT"
         layout1_dict[layout1_list[i]] = data1.shape[i]
         layout2_dict[layout2_list[i]] = data2.shape[i]
 
-    reduce_axis = tvm.reduce_axis((0, layout1_dict['k']), name='reduce_axis')
+    reduce_axis = tvm.reduce_axis(
+        (0, layout1_dict.get('k')), name='reduce_axis')
 
     if out_dtype == "float32":
-        res = tvm.compute((layout1_dict['B'], layout1_dict['b'], layout1_dict['m'], layout2_dict['n']), lambda B, b, i, j: tvm.sum(
-            data1[B, b, i if layout1_list[2] == 'm' else reduce_axis, reduce_axis if layout1_list[3] == 'k' else i].astype("float") *
-            data2[B, b, j if layout2_list[2] == 'n' else reduce_axis, reduce_axis if layout2_list[3] == 'k' else j].astype("float"), axis=reduce_axis))
+        res = tvm.compute(
+            (layout1_dict.get('B'), layout1_dict.get('b'),
+             layout1_dict.get('m'), layout2_dict.get('n')),
+            lambda B, b, i, j: tvm.sum(
+                data1[B, b, i if layout1_list[2] == 'm' else reduce_axis,
+                      reduce_axis if layout1_list[3] == 'k' else i].astype("float") *
+                data2[B, b, j if layout2_list[2] == 'n' else reduce_axis,
+                      reduce_axis if layout2_list[3] == 'k' else j].astype("float"), axis=reduce_axis))
     else:
-        res = tvm.compute((layout1_dict['B'], layout1_dict['b'], layout1_dict['m'], layout2_dict['n']), lambda B, b, i, j: tvm.sum(
-            data1[B, b, i if layout1_list[2] == 'm' else reduce_axis, reduce_axis if layout1_list[3] == 'k' else i] *
-            data2[B, b, j if layout2_list[2] == 'n' else reduce_axis, reduce_axis if layout2_list[3] == 'k' else j], axis=reduce_axis))
+        res = tvm.compute(
+            (layout1_dict.get('B'), layout1_dict.get('b'),
+             layout1_dict.get('m'), layout2_dict.get('n')),
+            lambda B, b, i, j: tvm.sum(
+                data1[B, b, i if layout1_list[2] == 'm' else reduce_axis,
+                      reduce_axis if layout1_list[3] == 'k' else i] *
+                data2[B, b, j if layout2_list[2] == 'n' else reduce_axis,
+                      reduce_axis if layout2_list[3] == 'k' else j], axis=reduce_axis))
 
     if bias is not None:
         res = topi.add(res, bias)
@@ -100,7 +119,9 @@ def batch_matmul_4D(data1, data2, bias=None, out_dtype="float32", layout1="NHDT"
     return res
 
 
-def batch_matmul_2D(data1, data2, bias=None, out_dtype="float32", layout1="NHDT", layout2="NHDT", layout_out="NHDT"):
+def batch_matmul_2d(data1, data2, attrs):
+    """batch matmul for 2-D data"""
+    bias, out_dtype, layout1, layout2, layout_out = attrs
     layout1_dict = {}
     layout2_dict = {}
     layout1 = layout1[2:]
@@ -114,16 +135,25 @@ def batch_matmul_2D(data1, data2, bias=None, out_dtype="float32", layout1="NHDT"
         layout1_dict[layout1_list[i]] = data1.shape[i]
         layout2_dict[layout2_list[i]] = data2.shape[i]
 
-    reduce_axis = tvm.reduce_axis((0, layout1_dict['k']), name='reduce_axis')
+    reduce_axis = tvm.reduce_axis(
+        (0, layout1_dict.get('k')), name='reduce_axis')
 
     if out_dtype == "float32":
-        res = tvm.compute((layout1_dict['m'], layout2_dict['n']), lambda i, j: tvm.sum(
-            data1[i if layout1_list[0] == 'm' else reduce_axis, reduce_axis if layout1_list[1] == 'k' else i].astype("float") *
-            data2[j if layout2_list[0] == 'n' else reduce_axis, reduce_axis if layout2_list[1] == 'k' else j].astype("float"), axis=reduce_axis))
+        res = tvm.compute(
+            (layout1_dict.get('m'), layout2_dict.get('n')),
+            lambda i, j: tvm.sum(
+                data1[i if layout1_list[0] == 'm' else reduce_axis,
+                      reduce_axis if layout1_list[1] == 'k' else i].astype("float") *
+                data2[j if layout2_list[0] == 'n' else reduce_axis,
+                      reduce_axis if layout2_list[1] == 'k' else j].astype("float"), axis=reduce_axis))
     else:
-        res = tvm.compute((layout1_dict['m'], layout2_dict['n']), lambda i, j: tvm.sum(
-            data1[i if layout1_list[0] == 'm' else reduce_axis, reduce_axis if layout1_list[1] == 'k' else i] *
-            data2[j if layout2_list[0] == 'n' else reduce_axis, reduce_axis if layout2_list[1] == 'k' else j], axis=reduce_axis))
+        res = tvm.compute(
+            (layout1_dict.get('m'), layout2_dict.get('n')),
+            lambda i, j: tvm.sum(
+                data1[i if layout1_list[0] == 'm' else reduce_axis,
+                      reduce_axis if layout1_list[1] == 'k' else i] *
+                data2[j if layout2_list[0] == 'n' else reduce_axis,
+                      reduce_axis if layout2_list[1] == 'k' else j], axis=reduce_axis))
 
     if bias is not None:
         res = topi.add(res, bias)

@@ -34,8 +34,8 @@ from .relu import Relu
 from .relu_ad import ReluAd
 from .resize_nearest_neighbor_grad import ResizeNearestNeighborGrad
 from .softmax import Softmax
-from .sparse_softmax_cross_entropy_with_logits import SparseSoftmaxCrossEntropyWithLogits
-from .sparse_softmax_cross_entropy_with_logits_ad import SparseSoftmaxCrossEntropyWithLogitsAd
+from .sparse_softmax_cross_entropy_with_logits import sparse_softmax_cross_entropy_with_logits
+from .sparse_softmax_cross_entropy_with_logits_ad import sparse_softmax_cross_entropy_with_logits_ad
 from .zeros_like import ZerosLike
 from .fused_batch_norm_split import FusedBn1, FusedBn2, FusedBn3
 from .fused_batch_norm_grad_split import FusedBnGrad1, FusedBnGrad2, FusedBnGrad3

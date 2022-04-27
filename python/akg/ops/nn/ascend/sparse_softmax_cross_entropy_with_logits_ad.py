@@ -16,12 +16,12 @@
 import akg.tvm
 import akg
 from akg.ops.nn.ascend.sparse_softmax_cross_entropy_with_logits import sparse_softmax_cross_entropy_with_logits_impl, \
-    SparseSoftmaxCrossEntropyWithLogits
+    sparse_softmax_cross_entropy_with_logits
 import akg.utils as utils
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, str, float, (str, type(None)))
-def SparseSoftmaxCrossEntropyWithLogitsAd(labels, logits, reduction='mean', grad_scale=1.0, target=utils.CCE):
+def sparse_softmax_cross_entropy_with_logits_ad(labels, logits, reduction='mean', grad_scale=1.0):
     """
     Compute gradient for sparse_softmax_cross_entropy_with_logits operator using automatic differentiate.
     
@@ -31,13 +31,14 @@ def SparseSoftmaxCrossEntropyWithLogitsAd(labels, logits, reduction='mean', grad
     attr_map = {}
 
     def custom_softmax_cross_entropy_with_logits_fdiff(out, inputs, grad, attrs, new_pld_array):
+        del out, grad, attrs, new_pld_array
         strategy, _, backprop = sparse_softmax_cross_entropy_with_logits_impl(inputs[1], inputs[0],
                                                                                    reduction=reduction,
                                                                                    scale=grad_scale)
         if strategy:
             attr_map["custom_tiling"] = strategy
         return [backprop]
-    l_value, _ = SparseSoftmaxCrossEntropyWithLogits(labels, logits, reduction)
+    l_value, _ = sparse_softmax_cross_entropy_with_logits(labels, logits, reduction)
     head = akg.tvm.compute(l_value.shape, lambda *i: akg.tvm.const(1.0, l_value.dtype), name='head')
     [dl_dlogits] = akg.differentiate(l_value, [logits], head, None, None,
                                      override={l_value: ([logits, labels],

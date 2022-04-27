@@ -16,8 +16,9 @@
 import akg
 import akg.utils as utils
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, (str, type(None)))
-def Neg(data, target=utils.CCE):
+def neg(data, target=utils.CCE):
     """
     Computes negative value of input tensor.
 
@@ -26,7 +27,7 @@ def Neg(data, target=utils.CCE):
 
     Returns:
         tvm.tensor.Tensor of same type and shape as input tensor data.
-    
+
     Supported Platforms:
         'Ascend', 'GPU', 'CPU'
     """

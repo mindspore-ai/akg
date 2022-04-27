@@ -22,7 +22,7 @@ from .batch_matmul_orig import batch_matmul
 from .tensorcore_batch_matmul import batch_matmul as tc_batch_matmul
 
 def BatchMatMul(x, y, bias, out_dtype="float32", layout1="NHDT", layout2="NHDT", layout_out="NHDT", tensor_core=True,
-                add_bias=False, target=utils.CUDA):
+                add_bias=False):
     """
     BatchMatmul with auto poly.
 
@@ -33,6 +33,7 @@ def BatchMatMul(x, y, bias, out_dtype="float32", layout1="NHDT", layout2="NHDT",
     if add_bias == False:
         bias = None
     if tensor_core == True:
-        return tc_batch_matmul(x, y, bias, out_dtype, layout1, layout2, layout_out)
+        attrs = [bias, out_dtype, layout1, layout2, layout_out]
+        return tc_batch_matmul(x, y, attrs)
     else:
         return batch_matmul(x, y, bias, layout1, layout2, layout_out)

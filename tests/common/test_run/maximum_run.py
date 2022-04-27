@@ -15,27 +15,31 @@
 """maximum_run"""
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.math import Maximum
+from akg.ops.math import maximum
 from akg.utils import validation_check as vc_util
 from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
 from tests.common.tensorio import compare_tensor
 from tests.common.gen_random import random_gaussian
 
-def maximum_run(shape1, shape2, dtype, attrs_op={}, attrs={}):
+def maximum_run(shape1, shape2, dtype, attrs_op=None, attrs=None):
     """maximum_run"""
-    attrs.update(attrs_op)
+    if attrs_op is not None:
+        if attrs is not None:
+            attrs.update(attrs_op)
+        else:
+            attrs = attrs_op
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(Maximum, [shape1, shape2], [dtype, dtype],
+        mod = utils.op_build_test(maximum, [shape1, shape2], [dtype, dtype],
                                   kernel_name=kernel_name, attrs=attrs, tuning=t)
         if t:
             expect, lhd, output, rhd = gen_data(dtype, shape1, shape2)
             return mod, expect, (lhd, rhd, output)
         return mod
     else:
-        mod = utils.op_build_test(Maximum, [shape1, shape2], [dtype, dtype], kernel_name='maximum', attrs=attrs)
+        mod = utils.op_build_test(maximum, [shape1, shape2], [dtype, dtype], kernel_name='maximum', attrs=attrs)
         expect, lhd, output, rhd = gen_data(dtype, shape1, shape2)
         # result_tvm
         output = utils.mod_launch(mod, (lhd, rhd, output), expect=expect)

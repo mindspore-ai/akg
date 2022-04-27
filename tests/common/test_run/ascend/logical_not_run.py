@@ -14,23 +14,27 @@
 
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.math import LogicalNot
+from akg.ops.math import logical_not
 
 
 
-def logical_not_run(shape1, dtype, kernel_name, attrs_op={}, cce_path="./", attrs={}):
-    attrs.update(attrs_op)
+def logical_not_run(shape1, dtype, kernel_name, attrs_op=None, attrs=None):
+    if attrs_op is not None:
+        if attrs is not None:
+            attrs.update(attrs_op)
+        else:
+            attrs = attrs_op
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(LogicalNot, [shape1], [dtype], kernel_name=kernel_name, attrs=attrs, tuning=t)
+        mod = utils.op_build_test(logical_not, [shape1], [dtype], kernel_name=kernel_name, attrs=attrs, tuning=t)
         if t:
             expect, input1, output = gen_data(shape1)
             return mod, expect, (input1, output)
         else:
             return mod
     else:
-        mod = utils.op_build_test(LogicalNot, [shape1], [dtype], kernel_name=kernel_name, attrs=attrs)
+        mod = utils.op_build_test(logical_not, [shape1], [dtype], kernel_name=kernel_name, attrs=attrs)
         expect, input1, output = gen_data(shape1)
         output = utils.mod_launch(mod, (input1, output), expect=expect)
         return input1, output, expect, np.array_equal(output, expect)

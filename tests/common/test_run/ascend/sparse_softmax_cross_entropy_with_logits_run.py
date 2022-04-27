@@ -15,7 +15,7 @@
 import numpy as np
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
-from akg.ops.nn.ascend import SparseSoftmaxCrossEntropyWithLogits
+from akg.ops.nn.ascend import sparse_softmax_cross_entropy_with_logits
 from tests.common.gen_random import random_gaussian
 from tests.common.base import get_rtol_atol
 
@@ -59,7 +59,7 @@ def sparse_softmax_cross_entropy_with_logits_run(shape1, dtype1, shape2, dtype2,
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(SparseSoftmaxCrossEntropyWithLogits,
+        mod = utils.op_build_test(sparse_softmax_cross_entropy_with_logits,
                                   [shape1, shape2], [dtype1, dtype2], op_attrs=op_attrs,
                                   kernel_name=kernel_name, attrs=attrs, tuning=t)
         if t:
@@ -68,7 +68,7 @@ def sparse_softmax_cross_entropy_with_logits_run(shape1, dtype1, shape2, dtype2,
         else:
             return mod
     else:
-        mod = utils.op_build_test(SparseSoftmaxCrossEntropyWithLogits,
+        mod = utils.op_build_test(sparse_softmax_cross_entropy_with_logits,
                                   [shape1, shape2], [dtype1, dtype2], op_attrs=op_attrs,
                                   kernel_name=kernel_name, attrs=attrs)
         expect, labels, logits, output = gen_data(dtype1, dtype2, reduction, shape1, shape2)

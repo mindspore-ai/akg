@@ -17,7 +17,7 @@ import akg.topi
 import akg.tvm
 import akg.utils as utils
 from .exp import Exp
-from .log import Log
+from .log import log
 from akg.utils.format_transform import refine_reduce_axis
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, (int, tuple, list, type(None)), (bool, type(None)), (str, type(None)))
@@ -54,7 +54,7 @@ def ReduceProd(data, axis=None, keepdims=False, target=utils.CCE):
     if dtype in ["int8", "uint8"]:
         data = akg.topi.cast(data, "float16")
 
-    vlog_t = Log(data, target)
+    vlog_t = log(data, target)
     res = akg.topi.sum(vlog_t, axis=axis_new, keepdims=keepdims)
     res = Exp(res, target)
 

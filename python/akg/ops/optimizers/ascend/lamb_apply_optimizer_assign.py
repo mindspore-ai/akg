@@ -18,9 +18,10 @@
 import akg.tvm
 import akg.utils as utils
 from akg import topi
-from akg.ops.math.log import Log
-from akg.ops.math.neg import Neg
+from akg.ops.math.log import log
+from akg.ops.math.neg import neg
 from akg.ops.math.divide import Divide
+from akg.ops.math.exp import Exp
 from akg.utils.format_transform import get_shape
 from akg.utils import custom_tiling as ct_util
 
@@ -48,7 +49,7 @@ def pow_compute(input_x, input_y, data):
     """
 
     input_x_broadcast = akg.lang.ascend.broadcast(input_x, data.shape)
-    log_value = Log(input_x_broadcast, utils.CCE)
+    log_value = log(input_x_broadcast, utils.CCE)
     mul_value = topi.multiply(input_y, log_value)
     res = Exp(mul_value, utils.CCE)
 
@@ -61,7 +62,7 @@ def pow_compute(input_x, input_y, data):
                           akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor,
                           (str, type(None)))
 def LambApplyOptimizerAssign(grad, input_v, input_m, input_param, beta_1, one_minus_beta_1, beta_2, one_minus_beta_2, epsilon, steps, do_use_weight,
-                             weight_decay_rate, target=utils.CCE):
+                             weight_decay_rate):
 
     # compute next_v
     square_grad = topi.multiply(grad, grad)
@@ -88,12 +89,12 @@ def LambApplyOptimizerAssign(grad, input_v, input_m, input_param, beta_1, one_mi
 
     # compute: beta1_correction = (1 - self.beta_1 ** steps)
     beta_1_steps = pow_compute(beta_1, steps, grad)
-    neg_beta_1_step = Neg(beta_1_steps, utils.CCE)
+    neg_beta_1_step = neg(beta_1_steps, utils.CCE)
     beta1_correction = topi.add(neg_beta_1_step, const_one)
 
     # compute: beta2_correction = (1 - self.beta_2 ** steps)
     beta_2_steps = pow_compute(beta_2, steps, grad)
-    neg_beta_2_step = Neg(beta_2_steps, utils.CCE)
+    neg_beta_2_step = neg(beta_2_steps, utils.CCE)
     beta2_correction = topi.add(neg_beta_2_step, const_one)
 
     # compute: next_m_unbiased = next_m / beta1_correction

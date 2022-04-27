@@ -13,7 +13,7 @@
 # limitations under the License.
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.math import Neg
+from akg.ops.math import neg
 from tests.common.tensorio import compare_tensor
 from tests.common.base import get_rtol_atol
 from tests.common.gen_random import random_gaussian
@@ -26,29 +26,29 @@ def neg_run(shape, dtype, attrs=None):
         kernel_name = attrs.get("kernel_name", False)
         mod = neg_compile(shape, dtype, attrs, kernel_name=kernel_name, tuning=t)
         if t:
-            expect, input, output = gen_data(dtype, shape)
-            return mod, expect, (input, output)
+            expect, input_, output = gen_data(dtype, shape)
+            return mod, expect, (input_, output)
         else:
             return mod
     else:
         mod = neg_compile(shape, dtype, attrs)
-        expect, input, output = gen_data(dtype, shape)
-        output = utils.mod_launch(mod, (input, output), expect=expect)  # unified launch
+        expect, input_, output = gen_data(dtype, shape)
+        output = utils.mod_launch(mod, (input_, output), expect=expect)  # unified launch
         rtol, atol = get_rtol_atol("neg", dtype)
         if attrs.get("profiling", False):
             import akg
             target_name = attrs["target"].split()[0]
-            args_list = to_tvm_nd_array([input, output], akg.tvm.context(target_name, 0))
+            args_list = to_tvm_nd_array([input_, output], akg.tvm.context(target_name, 0))
             target_profiling(mod, *args_list, target=target_name, repeat_time=attrs["repeat_times"])
-        return input, output, expect, compare_tensor(output, expect, rtol=rtol, atol=atol, equal_nan=True)
+        return input_, output, expect, compare_tensor(output, expect, rtol=rtol, atol=atol, equal_nan=True)
 
 
 def gen_data(dtype, shape):
-    input = random_gaussian(shape, miu=1, sigma=0.1).astype(dtype)
-    expect = np.negative(input)
+    input_ = random_gaussian(shape, miu=1, sigma=0.1).astype(dtype)
+    expect = np.negative(input_)
     output = np.full(expect.shape, np.nan, dtype)
-    return expect, input, output
+    return expect, input_, output
 
 
 def neg_compile(shape, dtype, attrs, kernel_name="neg", tuning=False):
-    return utils.op_build_test(Neg, [shape], [dtype], kernel_name=kernel_name, attrs=attrs, tuning=tuning)
+    return utils.op_build_test(neg, [shape], [dtype], kernel_name=kernel_name, attrs=attrs, tuning=tuning)
