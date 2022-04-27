@@ -72,22 +72,24 @@ LowerNodeCreatorManager &LowerNodeCreatorManager::Instance() {
 
 void LowerNodeCreatorManager::RegisterNodeCreator(const std::string &target, const std::string &node_type,
                                                   LowerNodeCreateFunc func) {
-  if (creator_funcs_.find(target) == creator_funcs_.end()) {
-    creator_funcs_.insert({target, {}});
+  std::string target_name = Target::Create(target)->target_name;
+  if (creator_funcs_.find(target_name) == creator_funcs_.end()) {
+    creator_funcs_.insert({target_name, {}});
   }
 
-  CHECK(creator_funcs_[target].find(node_type) == creator_funcs_[target].end())
-    << "Lower node creator of " << node_type << " for " << target << " is all ready exist!";
+  CHECK(creator_funcs_[target_name].find(node_type) == creator_funcs_[target_name].end())
+    << "Lower node creator of " << node_type << " for " << target_name << " is all ready exist!";
 
-  creator_funcs_[target].insert({node_type, func});
+  creator_funcs_[target_name].insert({node_type, func});
 }
 
 LowerNodeCreateFunc LowerNodeCreatorManager::GetLowerNodeCreator(const std::string &target,
                                                                  const std::string &node_type) {
-  CHECK(creator_funcs_.find(target) != creator_funcs_.end()) << "Target " << target << " is not supported!";
-  CHECK(creator_funcs_[target].find(node_type) != creator_funcs_[target].end())
-    << node_type << " lower node creator for target " << target << " is not supported!";
-  return creator_funcs_[target][node_type];
+  std::string target_name = Target::Create(target)->target_name;
+  CHECK(creator_funcs_.find(target_name) != creator_funcs_.end()) << "Target " << target_name << " is not supported!";
+  CHECK(creator_funcs_[target_name].find(node_type) != creator_funcs_[target_name].end())
+    << node_type << " lower node creator for target " << target_name << " is not supported!";
+  return creator_funcs_[target_name][node_type];
 }
 }  // namespace lower
 }  // namespace akg

@@ -56,11 +56,12 @@ BINDS = "binds"
 
 def check_supported_target(target):
     supported_target = [CCE, CUDA, LLVM]
-    if target not in supported_target:
+    if target.split()[0] not in supported_target:
         raise RuntimeError("the target %s is not supported!" % get_backend(target))
 
 
-def get_backend(target):
+def get_backend(target_):
+    target = target_.split()[0]
     if target == CCE:
         return "Ascend"
     elif target == CUDA:

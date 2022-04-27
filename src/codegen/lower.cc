@@ -159,8 +159,9 @@ std::string GetErrorHint(const std::string &target) {
 }
 
 NodeRef LowerImpl::Run(const LowerData &data, bool get_stmt) {
-  CHECK(impls_.find(data->target) != impls_.end()) << GetErrorHint(data->target);
-  return impls_[data->target](data, get_stmt);
+  Target target = Target::Create(data->target);
+  CHECK(impls_.find(target->target_name) != impls_.end()) << GetErrorHint(target->target_name);
+  return impls_[target->target_name](data, get_stmt);
 }
 
 Stmt LowerInitWithSchedule(LowerData &data) {
