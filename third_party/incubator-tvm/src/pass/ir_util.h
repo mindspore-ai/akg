@@ -24,6 +24,7 @@
 
 /*
  * 2019.12.30 - Add utility functions.
+ * 2022.04.26 - GetRamp1Base functions adpat int64.
  */
 
 #ifndef TVM_PASS_IR_UTIL_H_
@@ -197,7 +198,11 @@ inline int GetTempAllocaAlignment(Type type, int32_t const_size) {
 inline bool GetRamp1Base(Expr index, int lanes, Expr *base) {
   const Ramp* r = index.as<Ramp>();
   if (!r) return false;
-  if (!is_one(r->stride)) return false;
+  auto value = r->stride;
+  if (auto cast = value.as<Cast>()) {
+    value = cast->value;
+  }
+  if (!is_one(value)) return false;
   CHECK_EQ(r->lanes, lanes);
   *base = r->base;
   return true;

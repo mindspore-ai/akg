@@ -19,8 +19,8 @@
 
 /*!
  * 2021.11.09 - Support vectorization of non-last axis.
- *
  * 2022.02.20 - Support vectorization when the extent of loop is odd.
+ * 2022.04.26 - Support vectorization when the index is int64.
  */
 
 /*!
@@ -240,6 +240,9 @@ class Vectorizer : public IRMutator {
     Expr value = this->Mutate(op->value);
     if (value.same_as(op->value)) {
       return e;
+    } else if (auto ramp = value.as<Ramp>()) {
+      auto type = op->type.with_lanes(1);
+      return Ramp::make(Cast::make(type, ramp->base), Cast::make(type, ramp->stride), ramp->lanes);
     } else {
       return Cast::make(op->type.with_lanes(value.type().lanes()), value);
     }
