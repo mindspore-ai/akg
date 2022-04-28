@@ -16,11 +16,11 @@
 import akg.tvm
 import akg.topi
 import akg.utils as utils
-from .cast import Cast
 from akg.ops.math.ascend.floor import Floor
 from akg.utils.dsl_create import produce_shapes
 from akg.utils.kernel_exec import product_is_mini
-from akg.ops.math.reciprocal import Reciprocal
+from akg.ops.math.reciprocal import reciprocal
+from .cast import Cast
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor)
@@ -71,7 +71,7 @@ def _div_ascend(data1, data2):
 
 
     if product_is_mini():
-        input2p_rec = Reciprocal(input2p, target=utils.CCE)
+        input2p_rec = reciprocal(input2p, target=utils.CCE)
         res = akg.topi.multiply(input1p, input2p_rec)
     else:
         res = akg.topi.divide(input1p, input2p)

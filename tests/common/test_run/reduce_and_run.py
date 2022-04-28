@@ -18,7 +18,7 @@ from tests.common.gen_random import random_gaussian
 from akg.utils import kernel_exec as utils
 from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
-from akg.ops.math import ReduceAnd
+from akg.ops.math import reduce_and
 
 def gen_data(in_shape, in_dtype, axis, keepdims):
     support_list = {"bool":np.bool}
@@ -38,7 +38,7 @@ def reduce_and_run(in_shape, in_dtype="float32", axis=None, keepdims=False, poly
         return reduce_all_run(in_shape, axis, keepdims, in_dtype, attrs=attrs)
 
     attrs.update({"enable_akg_reduce_lib": True, "enable_atomic_add": False})
-    mod = utils.op_build_test(ReduceAnd, (in_shape, ), (in_dtype, ), op_attrs=[
+    mod = utils.op_build_test(reduce_and, (in_shape, ), (in_dtype, ), op_attrs=[
                              axis, keepdims], kernel_name="reduce_and", attrs=attrs)
 
     data, output, expect = gen_data(in_shape, in_dtype, axis, keepdims)

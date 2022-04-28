@@ -15,7 +15,7 @@
 """operator dsl function: softplus"""
 import akg
 from akg import tvm
-from akg.ops.math import Reciprocal
+from akg.ops.math import reciprocal
 from akg.utils.format_transform import get_shape
 import akg.utils as utils
 
@@ -32,7 +32,7 @@ def softsign_compute(input_features):
 
     data_abs = akg.lang.ascend.vabs(input_features)
     data_add = akg.lang.ascend.vadds(data_abs, SCALAR_ONE)
-    data_rec = Reciprocal(data_add)
+    data_rec = reciprocal(data_add)
     res = akg.lang.ascend.vmul(input_features, data_rec)
 
     if dtype == "float16":

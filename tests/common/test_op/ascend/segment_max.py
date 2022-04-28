@@ -16,7 +16,7 @@
 import akg.tvm
 from akg.utils import custom_tiling as ct_util
 import akg.utils as utils
-from akg.ops.math import ReduceMax
+from akg.ops.math import reduce_max
 from akg.ops.array.ascend import Concat, Split
 
 segment_max_set_dim_map = {
@@ -95,7 +95,7 @@ def segment_max(data, segment_ids, num_segments):
     for i in range(0, out_n):
 
         if i in idx:
-            tmp = ReduceMax(data_list[j], 0, True, target=utils.CCE)
+            tmp = reduce_max(data_list[j], 0, True, target=utils.CCE)
             out.append(tmp)
             j = j + 1
         else:

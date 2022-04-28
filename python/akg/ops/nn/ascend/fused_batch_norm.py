@@ -22,7 +22,7 @@ from akg.utils.kernel_exec import TensorUtils, BINDS
 from akg.utils import custom_tiling as ct_util
 from akg.utils.dsl_create import mul_axis_sum, update_by_moving_average
 from akg.utils.format_transform import get_shape
-from akg.ops.math.rsqrt import Rsqrt
+from akg.ops.math.rsqrt import rsqrt
 from akg.utils.dynamic_shape import shape_is_dynamic
 from akg.utils.validation_check import comp_output_params, check_inputs_in_rank, check_input_shape_equal_5
 
@@ -326,7 +326,7 @@ def FusedBatchNorm(data, gamma, beta, moving_mean, moving_variance, momentum=0.9
     veps_no_bc = akg.lang.ascend.vadds(data_variance, inp_eps)
 
     # rsqrt(var + eps)
-    rsveps_no_bc = Rsqrt(veps_no_bc, utils.CCE)
+    rsveps_no_bc = rsqrt(veps_no_bc, utils.CCE)
     rsveps = akg.lang.ascend.broadcast(rsveps_no_bc, shape)
 
     # -mean

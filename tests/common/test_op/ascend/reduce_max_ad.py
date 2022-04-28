@@ -18,7 +18,7 @@ import akg
 import akg.utils as utils
 from akg.utils.kernel_exec import debug_mode, create_code
 from akg.utils import custom_tiling as ct_util
-from akg.ops.math import Cast, ReduceMax
+from akg.ops.math import Cast, reduce_max
 from akg.utils import format_transform as ft_util
 
 
@@ -41,7 +41,7 @@ def reduce_max_ad_set_dim_func(data, head, axis, keepdims):
 
 @ct_util.reg_set_dim_func(reduce_max_ad_set_dim_func)
 def reduce_max_ad(head, data, axis, keepdims):
-    b = ReduceMax(data, axis, keepdims, target=utils.CCE)
+    b = reduce_max(data, axis, keepdims, target=utils.CCE)
     _jacs = akg.differentiate(b, [data], head)
     return _jacs[0]
 
@@ -61,7 +61,7 @@ def reduce_max_ad_optimized(head, data, axis, keepdims, target="cce"):
                                                     akg.tvm.const(0, dtype=data.dtype)),
                                 name="reduce_max_ad2")]
 
-    l = ReduceMax(data, axis, keepdims, target=target)
+    l = reduce_max(data, axis, keepdims, target=target)
 
     [dl_ddata] = akg.differentiate(l, [data], head, None, None, override={l: ([data], custom_reduce_max_fdiff)})
     return dl_ddata
@@ -115,7 +115,7 @@ def reduce_max_ad_optimized_manual_schedule(input_shape, dtype, axis, keepdims, 
 
     # computation of reduce max
     # not used on the schedule because this is the diferentiation op
-    l = ReduceMax(data, axis, keepdims, target=utils.CCE)
+    l = reduce_max(data, axis, keepdims, target=utils.CCE)
 
     # adjoint tensor for the differentiation
     head = akg.tvm.placeholder(l.shape, name="head", dtype=l.dtype)

@@ -14,7 +14,7 @@
 import numpy as np
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
-from akg.ops.math import Select
+from akg.ops.math import select
 from tests.common.base import get_rtol_atol
 from tests.common.gen_random import random_gaussian
 from akg.utils.result_analysis import target_profiling
@@ -25,7 +25,7 @@ def select_run(shape_cond, shape_x, dtype_cond, dtype_x, attrs=None):
     if attrs is None:
         attrs = {}
 
-    mod = utils.op_build_test(Select, [shape_cond, shape_x, shape_x], [dtype_cond, dtype_x, dtype_x],
+    mod = utils.op_build_test(select, [shape_cond, shape_x, shape_x], [dtype_cond, dtype_x, dtype_x],
                               kernel_name='select', op_attrs=[], attrs=attrs)
     args, exp_output, cond, x1, x2 = gen_data(shape_cond, shape_x, dtype_cond, dtype_x)
     acu_output = utils.mod_launch(mod, args, expect=exp_output)

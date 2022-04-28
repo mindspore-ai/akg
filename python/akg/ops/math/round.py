@@ -16,8 +16,9 @@
 import akg
 import akg.utils as utils
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, (str, type(None)))
-def Round(data, target=utils.CCE):
+def round_(data, target=utils.CCE):
     """
     Round elements of x to nearest integer.
 
@@ -26,7 +27,7 @@ def Round(data, target=utils.CCE):
 
     Returns:
         tvm.tensor.Tensor of same type and shape as data.
-    
+
     Supported Platforms:
         'Ascend', 'GPU', 'CPU'
     """

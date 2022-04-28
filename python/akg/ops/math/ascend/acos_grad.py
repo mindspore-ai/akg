@@ -16,7 +16,7 @@
 
 import akg.tvm
 import akg.utils as utils
-from ..rsqrt import Rsqrt
+from ..rsqrt import rsqrt
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (str, type(None)))
@@ -45,7 +45,7 @@ def acos_grad(x, dy, target=utils.CCE):
 
     one = akg.tvm.const(1.0, dtype=dtype)
     mid_square = akg.tvm.compute(x.shape, lambda *i: (one - x(*i) * x(*i)), name="mid_square")
-    rsq = Rsqrt(mid_square, target)
+    rsq = rsqrt(mid_square, target)
     dx = akg.tvm.compute(x.shape, lambda *i: -rsq(*i) * dy(*i), name="dx")
 
     return dx

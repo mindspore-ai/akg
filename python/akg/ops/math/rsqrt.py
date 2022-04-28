@@ -84,7 +84,7 @@ def _rsqrt_ascend(data):
     return res
 
 
-def Rsqrt(data, target=utils.CCE):
+def rsqrt(data, target=utils.CCE):
     """
     Computes data1 elementwise.
 

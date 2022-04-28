@@ -14,7 +14,7 @@
 
 """operator dsl function: unsorted_segment_max"""
 import akg.tvm
-from akg.ops.math import ReduceMax
+from akg.ops.math import reduce_max
 from akg.ops.array.ascend import Split, Concat
 import akg.utils as utils
 from akg.utils import custom_tiling as ct_util
@@ -126,7 +126,7 @@ def UnsortedSegmentMax(data, segment_ids, num_segments, target=utils.CCE):
     j = 0
     for i in range(0, num_segments):
         if i in new_idx:
-            tmp = ReduceMax(data_list[j], 0, True, target=utils.CCE)
+            tmp = reduce_max(data_list[j], 0, True, target=utils.CCE)
             out.append(tmp)
             j = j + 1
         else:

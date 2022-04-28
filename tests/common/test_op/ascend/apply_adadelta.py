@@ -16,7 +16,7 @@
 
 import akg
 from akg import topi, tvm
-from akg.ops.math import Sqrt, Rsqrt
+from akg.ops.math import Sqrt, rsqrt
 import akg.utils as utils
 from akg.utils.dsl_create import TensorUtils
 from akg.utils.format_transform import get_shape
@@ -48,7 +48,7 @@ def _apply_adadelta_compute(var, accum, accum_update, grad, lr, rho, epsilon):
     rhs = topi.add(accum_update, tensor_epsilon)
     rhs = Sqrt(rhs, target=utils.CCE)
     lhs = topi.add(accum_res, tensor_epsilon)
-    lhs = Rsqrt(lhs, target=utils.CCE)
+    lhs = rsqrt(lhs, target=utils.CCE)
     lhs = topi.multiply(grad, lhs)
     update = topi.multiply(lhs, rhs)
 

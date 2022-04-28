@@ -20,7 +20,7 @@ import akg.utils as utils
 from akg.utils import custom_tiling as ct_util
 from akg.ops.array.ascend.one_hot import OneHot
 from akg.ops.math.mul import mul
-from akg.ops.math.reduce_max import ReduceMax
+from akg.ops.math.reduce_max import reduce_max
 from akg.ops.math.sub import Sub
 from akg.ops.math.neg import neg
 from akg.ops.math.exp import Exp
@@ -75,7 +75,7 @@ def sparse_softmax_cross_entropy_with_logits_impl(labels=None, logits=None, redu
 
     # compute for softmax and cross_entropy
     def softmax_cross_entropy_with_logits(labels, logits, axis, reduction="mean", scale=1.0):
-        max_logits = ReduceMax(logits, axis, keepdims=True, target=utils.CCE)
+        max_logits = reduce_max(logits, axis, keepdims=True, target=utils.CCE)
         data_sub = Sub(logits, max_logits, target=utils.CCE)
         akg.register_variables("minus_max", [logits], data_sub)
         data_exp = Exp(data_sub, target=utils.CCE)

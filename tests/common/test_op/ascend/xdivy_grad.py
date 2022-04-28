@@ -16,7 +16,7 @@
 import akg
 from akg import tvm
 from akg.ops.math import Divide
-from akg.ops.math import Reciprocal
+from akg.ops.math import reciprocal
 from akg.utils.format_transform import get_shape
 from akg.utils.dsl_create import produce_shapes, broadcast_gradient_args
 import akg.utils as utils
@@ -57,9 +57,9 @@ def xdivy_grad_compute(placeholders, shape_max, dtype, rx, ry):
     x1_addepsmin = akg.lang.ascend.vadds(x1, esp_min)
 
     if product_is_mini():
-        x1_addepsmin_rec = Reciprocal(x1_addepsmin)
+        x1_addepsmin_rec = reciprocal(x1_addepsmin)
         not_zero_x1 = akg.lang.ascend.vmul(x1, x1_addepsmin_rec)
-        x2_rec = Reciprocal(x2)
+        x2_rec = reciprocal(x2)
         partial_x1 = akg.lang.ascend.vmul(not_zero_x1, x2_rec)
     else:
         not_zero_x1 = Divide(x1, x1_addepsmin, target="cce")

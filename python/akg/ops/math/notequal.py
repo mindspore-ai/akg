@@ -16,32 +16,15 @@
 import akg.tvm
 import akg.topi
 import akg.utils as utils
-from akg.utils.dsl_create import produce_shapes
+from .utils import make_input_and_value
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor)
 def _not_equal(data1, data2):
-    shape1 = [x.value for x in data1.shape]
-    shape2 = [x.value for x in data2.shape]
-    utils.check_shape(shape1)
-    utils.check_shape(shape2)
-
-    shape1, shape2, shape = produce_shapes(shape1, shape2)
-
-    utils.elemwise_dtype_check(data1.dtype, data2.dtype)
-    dtype = data1.dtype
-
-    t_value = akg.tvm.compute(
-        shape, lambda *indice: akg.tvm.const(1, dtype), "T")
-    f_value = akg.tvm.compute(
-        shape, lambda *indice: akg.tvm.const(0, dtype), "F")
-
-    input1_bro = akg.topi.broadcast_to(data1, shape)
-    input2_bro = akg.topi.broadcast_to(data2, shape)
+    t_value, f_value, input1_bro, input2_bro, shape = make_input_and_value(data1, data2)
     c_out = akg.tvm.compute(shape, lambda *indice: akg.tvm.expr.Select(input1_bro[indice] != input2_bro[indice],
                                                                        t_value[indice], f_value[indice]), name="C")
-    res = akg.tvm.compute(
-        shape, lambda *indice: c_out(*indice).astype("bool"), name="res")
+    res = akg.tvm.compute(shape, lambda *indice: c_out(*indice).astype("bool"), name="res")
 
     return res
 
@@ -53,10 +36,10 @@ def _not_equal_ascend(data1, data2):
 
     # check types
     check_list = ["float16"]
-    if not (data1.dtype.lower() in check_list):
+    if not data1.dtype.lower() in check_list:
         raise RuntimeError("not_equal only support %s while dtype is %s" % (
             ",".join(check_list), data1.dtype))
-    if not (data2.dtype.lower() in check_list):
+    if not data2.dtype.lower() in check_list:
         raise RuntimeError("not_equal only support %s while dtype is %s" % (
             ",".join(check_list), data2.dtype))
 
@@ -64,7 +47,7 @@ def _not_equal_ascend(data1, data2):
     return res
 
 
-def NotEqual(data1, data2, target=utils.CCE):
+def not_equal(data1, data2, target=utils.CCE):
     """
     check whether data1 notequals to data2.
 

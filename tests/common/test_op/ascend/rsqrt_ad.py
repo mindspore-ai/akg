@@ -15,10 +15,10 @@
 """operator dsl function: rsqrt_ad"""
 
 import akg
-from akg.ops.math import Rsqrt
+from akg.ops.math import rsqrt
 
 
 def rsqrt_ad(head, a, target="cce"):
-    b = Rsqrt(a, target='cce')
+    b = rsqrt(a, target='cce')
     _jacs = list(akg.differentiate(b, [a], head))
     return _jacs[0]

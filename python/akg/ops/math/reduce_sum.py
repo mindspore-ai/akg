@@ -17,11 +17,12 @@
 import akg.topi
 import akg.tvm
 from akg.utils.format_transform import refine_reduce_axis
+from akg.lang.ascend import sum as ascend_sum
 import akg.utils as utils
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, (list, tuple, int, type(None)), (bool, type(None)), (str, type(None)))
-def ReduceSum(inputs, axis=None, keepdims=False, target=utils.CCE):
+def reduce_sum(inputs, axis=None, keepdims=False, target=utils.CCE):
     """
     Compute the sum of elements across dimensions of a tensor.
 
@@ -33,14 +34,13 @@ def ReduceSum(inputs, axis=None, keepdims=False, target=utils.CCE):
     Returns:
         tvm.tensor.Tensor, has same type as input. If keepdims is True, all reduced dimensions are retained
         with length 1, else these reduced axis will be eliminate.
-    
+
     Supported Platforms:
         'Ascend', 'GPU', 'CPU'
     """
     utils.check_supported_target(target)
     if target == utils.CCE:
-        from akg.lang.ascend import sum
-        return sum(inputs, axis, keepdims)
+        return ascend_sum(inputs, axis, keepdims)
     axis = refine_reduce_axis(inputs, axis)
     utils.check_shape(inputs.shape)
 
@@ -49,7 +49,7 @@ def ReduceSum(inputs, axis=None, keepdims=False, target=utils.CCE):
         inputs = akg.topi.cast(inputs, 'float32')
 
     output = akg.topi.sum(inputs, axis=axis, keepdims=keepdims)
-    
+
     if in_dtype == 'float16':
         output = akg.topi.cast(output, 'float16')
 

@@ -19,8 +19,9 @@ import akg.tvm
 import akg.utils as utils
 from akg.utils import format_transform as ft_util
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, (list, tuple, int, type(None)), (bool, type(None)), (str, type(None)))
-def ReduceAnd(inputs, axis=None, keepdims=False, target=utils.CUDA):
+def reduce_and(inputs, axis=None, keepdims=False, target=utils.CUDA):
     """
     Compute the logical and of elements across dimensions of a tensor.
 
@@ -32,7 +33,7 @@ def ReduceAnd(inputs, axis=None, keepdims=False, target=utils.CUDA):
     Returns:
         tvm.tensor.Tensor, has same type as input. If keepdims is True, all reduced dimensions are retained
         with length 1, else these reduced axis will be eliminate.
-    
+
     Supported Platforms:
         'GPU', 'CPU'
     """

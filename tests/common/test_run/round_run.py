@@ -16,7 +16,7 @@ import numpy as np
 import secrets
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
-from akg.ops.math import Round
+from akg.ops.math import round_
 from tests.common.gen_random import random_gaussian
 from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
@@ -29,14 +29,14 @@ def round_run(shape, dtype, attrs):
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(Round, in_shape, in_dtype, kernel_name=kernel_name, attrs=attrs, tuning=t)
+        mod = utils.op_build_test(round_, in_shape, in_dtype, kernel_name=kernel_name, attrs=attrs, tuning=t)
         if t:
             expect, input, output = gen_data(shape, dtype, attrs["target"])
             return mod, expect, (input, output)
         else:
             return mod
     else:
-        mod = utils.op_build_test(Round, in_shape, in_dtype, kernel_name='round', attrs=attrs)
+        mod = utils.op_build_test(round_, in_shape, in_dtype, kernel_name='round', attrs=attrs)
         expect, input, output = gen_data(shape, dtype, attrs["target"])
         output = utils.mod_launch(mod, (input, output), expect=expect)
         if attrs.get("profiling", False):

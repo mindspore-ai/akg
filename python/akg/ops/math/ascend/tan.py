@@ -19,7 +19,7 @@ import akg.utils as utils
 from akg.ops.math import divide
 from akg.utils.kernel_exec import product_is_mini
 from ..mul import mul
-from ..reciprocal import Reciprocal
+from ..reciprocal import reciprocal
 
 # define a string name of "float16"
 FLOAT_16 = "float16"
@@ -79,7 +79,7 @@ def _tan_2x_multi(input_x, times):
             res_denominator = topi.add(topi.multiply(tanx_square, -1.0), 1.0)
 
         if product_is_mini():
-            res = mul(res_numerator, Reciprocal(res_denominator, target=utils.CCE), utils.CCE)
+            res = mul(res_numerator, reciprocal(res_denominator, target=utils.CCE), utils.CCE)
         else:
             res = divide.Divide(res_numerator, res_denominator, utils.CCE)
         times = times - 1

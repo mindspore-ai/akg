@@ -16,7 +16,7 @@ import akg
 from akg.utils import kernel_exec as utils
 from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
-from akg.ops.math import ReduceOr
+from akg.ops.math import reduce_or
 
 def gen_data(in_shape, in_dtype, axis, keepdims):
     support_list = {"bool":np.bool}
@@ -33,7 +33,7 @@ def reduce_or_run(in_shape, in_dtype, axis=None, keepdims=False, poly_sch=True, 
     if not attrs:
         attrs = {"target": "cuda"}
     attrs.update({"enable_akg_reduce_lib": True, "enable_atomic_add": False})
-    mod = utils.op_build_test(ReduceOr, (in_shape, ), (in_dtype, ), op_attrs=[
+    mod = utils.op_build_test(reduce_or, (in_shape, ), (in_dtype, ), op_attrs=[
                              axis, keepdims], kernel_name="reduce_or", polyhedral=poly_sch, attrs=attrs)
 
     data, output, expect = gen_data(in_shape, in_dtype, axis, keepdims)

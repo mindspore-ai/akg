@@ -19,7 +19,7 @@ import akg
 from akg.utils import custom_tiling as ct_util
 import akg.utils as utils
 from akg.utils.kernel_exec import debug_mode, create_code
-from akg.ops.math import Cast, ReduceMin
+from akg.ops.math import Cast, reduce_min
 
 
 reduce_min_ad_set_dim_map = {
@@ -41,8 +41,8 @@ def reduce_min_ad_set_dim_func(data, HEAD, axis, keepdims):
 
 @ct_util.reg_set_dim_func(reduce_min_ad_set_dim_func)
 def reduce_min_ad(HEAD, data, axis, keepdims):
-    B = ReduceMin(data, axis, keepdims, target=utils.CCE)
-    _jacs = akg.differentiate(B, [data], HEAD)
+    b = reduce_min(data, axis, keepdims, target=utils.CCE)
+    _jacs = akg.differentiate(b, [data], HEAD)
     return _jacs[0]
 
 
@@ -74,10 +74,10 @@ def reduce_min_ad_optimized(HEAD, data, axis, keepdims, target="cce"):
                                                     akg.tvm.const(0, dtype=data.dtype)),
                                 name="reduce_min_ad2")]
 
-    L = ReduceMin(data, axis, keepdims, target=utils.CCE)
+    l = reduce_min(data, axis, keepdims, target=utils.CCE)
 
-    [dL_ddata] = akg.differentiate(L, [data], HEAD, None, None, override={L: ([data], custom_reduce_min_fdiff)})
-    return dL_ddata
+    [dl_ddata] = akg.differentiate(l, [data], HEAD, None, None, override={l: ([data], custom_reduce_min_fdiff)})
+    return dl_ddata
 
 
 def reduce_min_ad_optimized_manual_schedule(input_shape, dtype, axis, keepdims, polyhedral=True, attrs=None):
@@ -101,59 +101,59 @@ def reduce_min_ad_optimized_manual_schedule(input_shape, dtype, axis, keepdims, 
                                                         grad[i], akg.tvm.const(0, dtype="float16")),
                                     name="reduce_min_ad2")]
 
-    L = ReduceMin(data, axis, target=utils.CCE)
-    head = akg.tvm.placeholder(L.shape, name="head", dtype=L.dtype)
+    l = reduce_min(data, axis, target=utils.CCE)
+    head = akg.tvm.placeholder(l.shape, name="head", dtype=l.dtype)
     head_cast = Cast(head, "float16", target=utils.CCE)
 
-    [dL_ddata] = akg.differentiate(L, [data], head_cast, None, None, override={L: ([data], custom_reduce_min_fdiff)})
+    [dl_ddata] = akg.differentiate(l, [data], head_cast, None, None, override={l: ([data], custom_reduce_min_fdiff)})
 
-    s = akg.tvm.create_schedule([dL_ddata.op])
+    s = akg.tvm.create_schedule([dl_ddata.op])
 
     head_ub = s.cache_read(head, "local.UB", [head_cast])
     if dtype == "float16":
-        data_ub = s.cache_read(data, "local.UB", [dL_ddata])
+        data_ub = s.cache_read(data, "local.UB", [dl_ddata])
     else:
-        data_ub = s.cache_read(data, "local.UB", [dL_ddata.op.input_tensors[0]])
-        min_input_ub = s.cache_read(dL_ddata.op.input_tensors[1].op.input_tensors[0].op.input_tensors[0].op.input_tensors[0].op.input_tensors[0],
+        data_ub = s.cache_read(data, "local.UB", [dl_ddata.op.input_tensors[0]])
+        min_input_ub = s.cache_read(dl_ddata.op.input_tensors[1].op.input_tensors[0].op.input_tensors[0].op.input_tensors[0].op.input_tensors[0],
                                     "local.UB",
-                                    [dL_ddata.op.input_tensors[1].op.input_tensors[0].op.input_tensors[0].op.input_tensors[0]])
-        s[dL_ddata.op.input_tensors[1].op.input_tensors[0].op.input_tensors[0].op.input_tensors[0]].set_scope("local.UB")
+                                    [dl_ddata.op.input_tensors[1].op.input_tensors[0].op.input_tensors[0].op.input_tensors[0]])
+        s[dl_ddata.op.input_tensors[1].op.input_tensors[0].op.input_tensors[0].op.input_tensors[0]].set_scope("local.UB")
 
-    dL_ddata_ub = s.cache_write(dL_ddata, "local.UB")
+    dl_ddata_ub = s.cache_write(dl_ddata, "local.UB")
 
     # tiling
     split_axis = {}
     for i in range(len(attrs['tile'])):
-        split_axis["axis" + str(i)] = s[dL_ddata].split(dL_ddata.op.axis[i], attrs["tile"][i])
+        split_axis["axis" + str(i)] = s[dl_ddata].split(dl_ddata.op.axis[i], attrs["tile"][i])
 
     split_axis_sorted = sorted(split_axis.items())
 
     if dtype == "float16":
-        s[data_ub].compute_at(s[dL_ddata], split_axis_sorted[-1][1][0])
+        s[data_ub].compute_at(s[dl_ddata], split_axis_sorted[-1][1][0])
     else:
-        s[data_ub].compute_at(s[dL_ddata], split_axis_sorted[-1][1][0])
-        s[dL_ddata.op.input_tensors[0]].compute_at(s[dL_ddata], split_axis_sorted[-1][1][0])
-        s[dL_ddata.op.input_tensors[0]].set_scope("local.UB")
-        s[min_input_ub].compute_at(s[dL_ddata], split_axis_sorted[0][1][1])
+        s[data_ub].compute_at(s[dl_ddata], split_axis_sorted[-1][1][0])
+        s[dl_ddata.op.input_tensors[0]].compute_at(s[dl_ddata], split_axis_sorted[-1][1][0])
+        s[dl_ddata.op.input_tensors[0]].set_scope("local.UB")
+        s[min_input_ub].compute_at(s[dl_ddata], split_axis_sorted[0][1][1])
 
-    s[head_ub].compute_at(s[dL_ddata], split_axis_sorted[-1][1][0])
-    s[head_cast].compute_at(s[dL_ddata], split_axis_sorted[-1][1][0])
+    s[head_ub].compute_at(s[dl_ddata], split_axis_sorted[-1][1][0])
+    s[head_cast].compute_at(s[dl_ddata], split_axis_sorted[-1][1][0])
     s[head_cast].set_scope("local.UB")
-    s[dL_ddata.op.input_tensors[1]].compute_at(s[dL_ddata], split_axis_sorted[-1][1][0])
-    s[dL_ddata.op.input_tensors[1]].set_scope("local.UB")
-    s[dL_ddata.op.input_tensors[1].op.input_tensors[0]].compute_at(s[dL_ddata], split_axis_sorted[0][1][1])
-    s[dL_ddata.op.input_tensors[1].op.input_tensors[0]].set_scope("local.UB")
-    s[dL_ddata.op.input_tensors[1].op.input_tensors[0].op.input_tensors[0]].compute_at(s[dL_ddata], split_axis_sorted[0][1][1])
-    s[dL_ddata.op.input_tensors[1].op.input_tensors[0].op.input_tensors[0]].set_scope("local.UB")
+    s[dl_ddata.op.input_tensors[1]].compute_at(s[dl_ddata], split_axis_sorted[-1][1][0])
+    s[dl_ddata.op.input_tensors[1]].set_scope("local.UB")
+    s[dl_ddata.op.input_tensors[1].op.input_tensors[0]].compute_at(s[dl_ddata], split_axis_sorted[0][1][1])
+    s[dl_ddata.op.input_tensors[1].op.input_tensors[0]].set_scope("local.UB")
+    s[dl_ddata.op.input_tensors[1].op.input_tensors[0].op.input_tensors[0]].compute_at(s[dl_ddata], split_axis_sorted[0][1][1])
+    s[dl_ddata.op.input_tensors[1].op.input_tensors[0].op.input_tensors[0]].set_scope("local.UB")
 
     # L is not being used for computation
     # s[L].compute_at(s[dL_ddata], split_axis_sorted[-1][1][0])
     # s[L].set_scope("local.UB"1
 
-    s[dL_ddata_ub].compute_at(s[dL_ddata], split_axis_sorted[-1][1][0])
+    s[dl_ddata_ub].compute_at(s[dl_ddata], split_axis_sorted[-1][1][0])
 
     with akg.build_config(add_lower_pass=debug_mode(0), dump_pass_ir=True):
-        mod = akg.build(s, [data, head, dL_ddata], "cce",
+        mod = akg.build(s, [data, head, dl_ddata], "cce",
                         name="reduce_min_ad_manual_schedule",
                         attrs=attrs, polyhedral=polyhedral)
         source_code = mod.imported_modules[0].get_source()
