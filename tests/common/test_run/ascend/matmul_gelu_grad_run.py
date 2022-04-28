@@ -14,12 +14,12 @@
 
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.math.ascend import MatMul
+from akg.ops.math.ascend import matmul
 from tests.common.test_run.ascend.matmul_run import *
 from tests.common.test_op.ascend import gelu_grad
 
-def matmul_gelugrad(x, y, dy, b, out_dtype, left_format="zZ", right_format="nZ", out_format="zN", transpose_x=False, transpose_y=False, attrs={}):
-    matmul_res, attrs = MatMul(x, y, b, out_dtype, left_format, right_format, out_format, transpose_x, transpose_y, attrs=None)
+def matmul_gelugrad(x, y, dy, b, out_dtype, left_format="zZ", right_format="nZ", out_format="zN", transpose_x=False, transpose_y=False, attrs=None):
+    matmul_res, attrs = matmul(x, y, b, out_dtype, left_format, right_format, out_format, transpose_x, transpose_y, attrs=None)
     res = gelu_grad.gelu_grad(matmul_res, dy)
     return res, attrs
 
@@ -52,7 +52,7 @@ def matmul_gelu_grad_compile(shape_x, shape_y, bias, left_format, right_format, 
         op_attrs = [None, out_dtype, left_format, right_format, output_format, adj_x, adj_y, attrs]
     return utils.op_build_test(matmul_gelugrad, input_shapes, input_types, op_attrs, kernel_name, attrs=attrs, tuning=tuning)
 
-def matmul_gelu_grad_execute(shape_x, shape_y, bias ,left_format, right_format, out_format, adj_x, adj_y, dtype, bias_dtype, out_dtype, kernel_name, attrs={}):
+def matmul_gelu_grad_execute(shape_x, shape_y, bias ,left_format, right_format, out_format, adj_x, adj_y, dtype, bias_dtype, out_dtype, kernel_name, attrs=None):
     batch_tuple, m, k, n = extract_dim(shape_x, shape_y, adj_x, adj_y)
     m = (m + 15) // 16 * 16
     n = (n + 15) // 16 * 16

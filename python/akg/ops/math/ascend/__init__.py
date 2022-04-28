@@ -43,7 +43,7 @@ from .exp_ad import ExpAd
 from .floor import Floor
 from .floordiv import FloorDiv
 from .log_ad import LogAd
-from .matmul import MatMul
+from .matmul import matmul
 from .mean import Mean, MeanV2
 from .prod_force_se_a import ProdForceSeA
 from .prod_force_se_a_grad import ProdForceSeAGrad

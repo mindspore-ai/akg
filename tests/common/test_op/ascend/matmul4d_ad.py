@@ -15,7 +15,7 @@
 """operator dsl function: matmul4d_ad"""
 import akg.tvm
 import akg
-from akg.ops.math.ascend import MatMul
+from akg.ops.math.ascend import matmul
 from akg.utils import custom_tiling as ct_util
 
 
@@ -66,7 +66,7 @@ def matmul4d_ad(head, x, y, b, out_dtype, adj_x=False, adj_y=False):
     x_temp = akg.tvm.placeholder(shape_xx_forward, name="input_1", dtype=x.dtype)
 
     # we transfer all cases to that of adj_x=False
-    out = MatMul(x_temp, y, b, out_dtype, "zN", "nZ", "zN", False, adj_y)[0]
+    out = matmul(x_temp, y, b, out_dtype, "zN", "nZ", "zN", False, adj_y)[0]
 
     ########################################
     #  compute the backward kernel         #
