@@ -152,7 +152,7 @@ void CreateCluster::RecordGemmTensors() {
   RecordPromotedTensor(MATRIX_C);
 }
 
-PromotedTensor CreateCluster::GetCurrentMarkerTensors(const bool hoist_tensor_c) {
+PromotedTensor CreateCluster::GetCurrentMarkerTensorsForGemm(const bool hoist_tensor_c) {
   PromotedTensor current_tensors;
   for (auto &tensor : all_tensors_) {
     auto id_name = tensor.first.get_name();
@@ -283,7 +283,7 @@ void SharedCreateCluster::CreateClusterListForGemm(const isl::schedule_node &nod
   for (const auto &mark_name : mark_names) {
     bool hoist_tensor_c = mark_name == PROMOTE_GLOBAL_TO_SHARED_C;
     // Promote the specific tensor at the corresponding marker position.
-    PromotedTensor current_tensors = GetCurrentMarkerTensors(hoist_tensor_c);
+    PromotedTensor current_tensors = GetCurrentMarkerTensorsForGemm(hoist_tensor_c);
     RecordPromotedTensorInfo(node, mark_name, current_tensors);
   }
 }
@@ -299,7 +299,7 @@ void SharedCreateCluster::CreateClusterListForElementWise(const isl::schedule_no
 }
 
 void SharedCreateCluster::CreateClusterListForPartialElementWise(const isl::schedule_node &node,
-                                                          const std::unordered_set<std::string> &mark_names) {
+                                                                 const std::unordered_set<std::string> &mark_names) {
   auto configed_tensors = scop_info_.user_config_.GetSharedTensors();
   // Initialize the promoted types of all tensors.
   RecordInitPromotedTensorType(configed_tensors);
@@ -451,17 +451,17 @@ bool RegisterCreateCluster::CheckPromotion(const isl::schedule_node &current_nod
                                            const TensorFootprintCluster &cluster,
                                            const std::pair<isl::id, PromotedTensorType> &tensor_info) {
   bool is_enable_vectorization = scop_info_.analysis_result_.GetOuterBandNode(band_index_)->enable_vectorization;
-  if (tensor_info.second > PromotedTensorType::OTHERS && !is_enable_vectorization) {
-    return true;
-  }
-
-  if (is_enable_vectorization) {
+  if (is_enable_vectorization && hoist_vectorized_tensor_) {
     if (!IsSatisfyVectorization(cluster, tensor_info.first)) {
       return false;
     } else {
       need_start_ = false;
       return true;
     }
+  }
+
+  if (tensor_info.second > PromotedTensorType::OTHERS) {
+    return true;
   }
 
   if (!IsResueThread(cluster, current_node)) {
@@ -542,7 +542,7 @@ void RegisterCreateCluster::CreateClusterListForGemm(const isl::schedule_node &n
   for (const auto &mark_name : mark_names) {
     bool hoist_tensor_c = ((mark_name == PROMOTE_GLOBAL_TO_REGISTER_C) || (mark_name == PROMOTE_SHARED_TO_REGISTER_C));
     // Promote the specific tensor at the corresponding marker position.
-    PromotedTensor current_tensors = GetCurrentMarkerTensors(hoist_tensor_c);
+    PromotedTensor current_tensors = GetCurrentMarkerTensorsForGemm(hoist_tensor_c);
     RecordPromotedTensorInfo(node, mark_name, current_tensors);
   }
 }
@@ -554,28 +554,30 @@ void RegisterCreateCluster::CreateClusterListForElementWise(const isl::schedule_
   RecordInitPromotedTensorType(configed_tensors);
   // Delete the tensor that has been promoted on shared memory.
   RecordSharedPromotedTensors();
-  // Add the tensor that needs to be vectorized.
-  RecordVectorizedPromotedTensors();
 
   for (const auto &mark_name : mark_names) {
-    RecordPromotedTensorInfo(node, mark_name, all_tensors_);
+    hoist_vectorized_tensor_ = mark_name == PROMOTE_GLOBAL_TO_REGISTER_VECTORIZED;
+    // Promote the specific tensor at the corresponding marker position.
+    PromotedTensor current_tensors = GetCurrentMarkerTensorsForElementWise();
+    RecordPromotedTensorInfo(node, mark_name, current_tensors);
   }
 }
 
-void RegisterCreateCluster::RecordVectorizedPromotedTensors() {
+PromotedTensor RegisterCreateCluster::GetCurrentMarkerTensorsForElementWise() {
   bool is_enable_vectorization = scop_info_.analysis_result_.GetOuterBandNode(band_index_)->enable_vectorization;
+  PromotedTensor current_tensors;
   for (auto tensor : all_tensors_) {
-    if (tensor.second > PromotedTensorType::OTHERS) {
-      continue;
-    }
-
-    if (is_enable_vectorization) {
-      all_tensors_[tensor.first] = PromotedTensorType::SPECIAL;
-    } else {
-      all_tensors_[tensor.first] = PromotedTensorType::NONE;
+    if (tensor.second > PromotedTensorType::OTHERS && !hoist_vectorized_tensor_) {
+      current_tensors.insert(tensor);
+    } else if (tensor.second == PromotedTensorType::OTHERS && hoist_vectorized_tensor_ && is_enable_vectorization) {
+      // Add the tensor that needs to be vectorized.
+      current_tensors[tensor.first] = PromotedTensorType::SPECIAL;
     }
   }
+
+  return current_tensors;
 }
+
 /*********************************************
  * Cpu Create Cluster
  *********************************************/
@@ -626,7 +628,7 @@ void CpuCreateCluster::CreateClusterListForGemm(const isl::schedule_node &node,
 
   for (auto mark_name : mark_names) {
     // Promote the specific tensor at the corresponding marker position.
-    PromotedTensor current_tensors = GetCurrentMarkerTensors(false);
+    PromotedTensor current_tensors = GetCurrentMarkerTensorsForGemm(false);
     RecordPromotedTensorInfo(node, mark_name, current_tensors);
   }
 }

@@ -58,7 +58,7 @@ class CreateCluster {
 
   // gemm operator
   void RecordGemmTensors();
-  PromotedTensor GetCurrentMarkerTensors(const bool hoist_tensor_c);
+  PromotedTensor GetCurrentMarkerTensorsForGemm(const bool hoist_tensor_c);
 
   ScopInfo &scop_info_;
   PromotedTensor all_tensors_;
@@ -77,7 +77,7 @@ class SharedCreateCluster : public CreateCluster {
   void CreateClusterListForElementWise(const isl::schedule_node &orig_node,
                                        const std::unordered_set<std::string> &mark_names);
   void CreateClusterListForPartialElementWise(const isl::schedule_node &orig_node,
-                                       const std::unordered_set<std::string> &mark_names);
+                                              const std::unordered_set<std::string> &mark_names);
 
  private:
   bool CoalescingAccessWay(const isl::schedule_node &node, const isl::schedule_node &root,
@@ -117,9 +117,10 @@ class RegisterCreateCluster : public CreateCluster {
                       const std::pair<isl::id, PromotedTensorType> &tensor_info) override;
   BufferDefInfo GetPromotedInfo(const isl::id &promoted_id, const std::string &mark_name) override;
 
-  void RecordVectorizedPromotedTensors();
+  PromotedTensor GetCurrentMarkerTensorsForElementWise();
 
   std::set<std::string> shared_tensor_;
+  bool hoist_vectorized_tensor_{false};
 };
 
 class CpuCreateCluster : public CreateCluster {

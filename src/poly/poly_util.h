@@ -448,8 +448,7 @@ constexpr auto PROMOTE_GLOBAL_TO_SHARED_C = "promote_global_to_shared_c";
 constexpr auto PROMOTE_SHARED_TO_REGISTER_AB = "promote_shared_to_register_ab";
 constexpr auto PROMOTE_SHARED_TO_REGISTER_C = "promote_shared_to_register_c";
 constexpr auto PROMOTE_GLOBAL_TO_REGISTER_C = "promote_global_to_register_c";
-
-// promote marker for thread group
+constexpr auto PROMOTE_GLOBAL_TO_REGISTER_VECTORIZED = "promote_global_to_register_vectorized";
 constexpr auto PROMOTE_GLOBAL_TO_SHARED = "promote_global_to_shared";
 constexpr auto PROMOTE_REGISTER_TO_GLOBAL = "promote_register_to_global";
 constexpr auto PROMOTE_REGISTER_TO_SHARED = "promote_register_to_shared";

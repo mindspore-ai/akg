@@ -102,6 +102,7 @@ void RegisterMemoryManager::SetPromotedWriteNameForGemm(std::string &local_tenso
 
 void RegisterMemoryManager::CreateClusterForOperator(const isl::schedule_node &node) {
   RegisterCreateCluster create_cluster(scop_info_, band_index_);
+  bool enable_vectorization = scop_info_.analysis_result_.GetOuterBandNode(band_index_)->enable_vectorization;
   if (scop_info_.user_config_.GetEnableMatmul()) {
     // matmul operator
     std::string local_tensor_c = GetMatmulTensorsName(scop_info_)[MATRIX_C];
@@ -118,11 +119,14 @@ void RegisterMemoryManager::CreateClusterForOperator(const isl::schedule_node &n
 
     create_cluster.CreateClusterListForGemm(node, mark_names_);
   } else {
+    if (enable_vectorization) {
+      mark_names_.emplace(PROMOTE_GLOBAL_TO_REGISTER_VECTORIZED);
+    }
     mark_names_.emplace(PROMOTE_GLOBAL_TO_REGISTER);
     create_cluster.CreateClusterListForElementWise(node, mark_names_);
   }
 
-  if (create_cluster.need_start_ && scop_info_.analysis_result_.GetOuterBandNode(band_index_)->enable_vectorization) {
+  if (create_cluster.need_start_ && enable_vectorization) {
     scop_info_.user_config_.SetEnableVectorization(false);
     scop_info_.analysis_result_.SetRestartPassName(RestartPassName::ANALYZE_SCHEDULE);
   }
