@@ -14,7 +14,7 @@
 
 from akg.utils import kernel_exec as utils
 import numpy as np
-from akg.ops.nn.ascend import FusedBatchNormGrad, fused_bn_grad1, fused_bn_grad2, fused_bn_grad3
+from akg.ops.nn.ascend import fused_batch_norm_grad, fused_bn_grad1, fused_bn_grad2, fused_bn_grad3
 from functools import reduce
 from tests.common.base import get_rtol_atol
 from tests.common.gen_random import random_gaussian
@@ -271,7 +271,7 @@ def fused_batch_norm_grad_run(shape, dtype, eps, data_format, axis, kernel_name,
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(FusedBatchNormGrad, shapes, dtypes, op_attrs,
+        mod = utils.op_build_test(fused_batch_norm_grad, [shapes], dtypes, op_attrs,
                                   kernel_name=kernel_name, attrs=attrs, tuning=t)
         if t:
             data, dy, expects, gamma, mean, outputs, var = gen_data(axes, dtype, eps, data_format,
@@ -281,7 +281,7 @@ def fused_batch_norm_grad_run(shape, dtype, eps, data_format, axis, kernel_name,
         else:
             return mod
     else:
-        mod = utils.op_build_test(FusedBatchNormGrad, shapes, dtypes, op_attrs,
+        mod = utils.op_build_test(fused_batch_norm_grad, [shapes], dtypes, op_attrs,
                                   kernel_name=kernel_name, attrs=attrs)
 
         data, dy, expects, gamma, mean, outputs, var = gen_data(axes, dtype, eps, data_format, param_shape,
