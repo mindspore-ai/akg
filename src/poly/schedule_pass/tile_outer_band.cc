@@ -1130,7 +1130,7 @@ isl::schedule_node TileOuterBand::TileElementWiseForCuda(const isl::schedule_nod
   if (enable_vectorization) {
     level_tile_size = GetLevelTileSize(node, TILE_WITH_C0);
     node = IsolateTilesForCudaAndCpu(node, level_tile_size);
-    node = node.insert_mark(PROMOTE_GLOBAL_TO_REGISTER);
+    node = node.insert_mark(PROMOTE_GLOBAL_TO_REGISTER_VECTORIZED);
   }
   node = node.ancestor(node.get_tree_depth() - start_depth);
   return node;

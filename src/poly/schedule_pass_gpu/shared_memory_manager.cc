@@ -151,8 +151,6 @@ isl::schedule_node SharedMemoryManager::InsertMarkerForRegisterPromotion(const i
     }
     hoist_register_node = InsertMarkerForThreadGroup(hoist_register_node, WRITE_ID_NAME, PROMOTE_SHARED_TO_GLOBAL);
     return ReplaceMarker(hoist_register_node, PROMOTE_GLOBAL_TO_SHARED_AB, SHARED_MEM_PROMOTED_COMPLETE);
-  } else if (current_outer_bn_->enable_vectorization) {
-    return orig_node;
   }
 
   size_t start_depth = orig_node.get_tree_depth();
