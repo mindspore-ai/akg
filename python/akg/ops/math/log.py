@@ -18,12 +18,14 @@ import akg.tvm
 import akg.utils as utils
 from akg.utils.kernel_exec import product_is_mini
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor)
 def _log(data):
     utils.check_shape(data.shape)
     res = akg.topi.log(data)
 
     return res
+
 
 @utils.check_input_type(akg.tvm.tensor.Tensor)
 def _log_ascend(data):
@@ -51,7 +53,8 @@ def _log_ascend(data):
 
     return output
 
-def Log(data, target=utils.CCE):
+
+def log(data, target=utils.CCE):
     """
     Computes log(data) elementwise
 
@@ -60,7 +63,7 @@ def Log(data, target=utils.CCE):
 
     Returns:
         tvm.tensor.Tensor, with same type as input tensors.
-    
+
     Supported Platforms:
         'Ascend', 'GPU', 'CPU'
     """

@@ -16,7 +16,7 @@
 
 import akg
 import akg.utils as utils
-from akg.ops.math import Mul
+from akg.ops.math import mul
 from akg.utils import custom_tiling as ct_util
 
 
@@ -25,6 +25,7 @@ mul_ad_set_dim_map = {
 
 
 def mul_ad_set_dim_func(head, a, b):
+    del head
     key = []
     key.append(tuple(a.shape))
     key.append(tuple(b.shape))
@@ -39,6 +40,6 @@ def mul_ad_set_dim_func(head, a, b):
 
 @ct_util.reg_set_dim_func(mul_ad_set_dim_func)
 def mul_ad(head, a, b):
-    output = Mul(a, b, target=utils.CCE)
+    output = mul(a, b, target=utils.CCE)
     jacs_ = list(akg.differentiate(output, [a], head))
     return jacs_[0]

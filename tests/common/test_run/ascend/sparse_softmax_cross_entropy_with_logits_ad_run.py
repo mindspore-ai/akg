@@ -15,14 +15,16 @@
 import numpy as np
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
-from akg.ops.nn.ascend import SparseSoftmaxCrossEntropyWithLogitsAd
+from akg.ops.nn.ascend import sparse_softmax_cross_entropy_with_logits_ad
 from tests.common.base import get_rtol_atol
 from tests.common.gen_random import random_gaussian
+
 
 def np_sparse_softmax_cross_entropy_with_logits_ad(shape1, dtype1, shape2, dtype2, reduction="mean", scale=1.0):
     logits = random_gaussian(shape2, miu=0, sigma=1).astype(dtype2)
     num_class = logits.shape[1]
-    labels = np.random.randint(low=0, high=num_class, size=shape1).astype(dtype1)
+    labels = np.random.randint(
+        low=0, high=num_class, size=shape1).astype(dtype1)
     features = logits
     features_reshape = np.reshape(features, [-1, num_class])
     labels_reshape = np.reshape(labels, [-1])
@@ -46,14 +48,15 @@ def np_sparse_softmax_cross_entropy_with_logits_ad(shape1, dtype1, shape2, dtype
             cost_num *= cost.shape[i]
         bp_res = np.divide(bp_res, cost_num)
     elif reduction.lower() == "sum":
-         bp_res = bp_res
+        bp_res = bp_res
     else:
         raise ValueError("reduction method for {} is not supported")
     return labels, logits, bp_res*scale
 
 
 def gen_data(dtype1, dtype2, reduction, shape1, shape2, scale=1.0):
-    labels, logits, bp_res = np_sparse_softmax_cross_entropy_with_logits_ad(shape1, dtype1, shape2, dtype2, reduction, scale=scale)
+    labels, logits, bp_res = np_sparse_softmax_cross_entropy_with_logits_ad(
+        shape1, dtype1, shape2, dtype2, reduction, scale=scale)
     expect = bp_res
     output_shape = expect.shape
     output = np.full(output_shape, np.nan, dtype2)
@@ -61,15 +64,17 @@ def gen_data(dtype1, dtype2, reduction, shape1, shape2, scale=1.0):
 
 
 def sparse_softmax_cross_entropy_with_logits_ad_run(shape1, dtype1, shape2, dtype2, reduction, kernel_name, scale=1.0, attrs=None):
-    expect, labels, logits, output = gen_data(dtype1, dtype2, reduction, shape1, shape2, scale=scale)
+    expect, labels, logits, output = gen_data(
+        dtype1, dtype2, reduction, shape1, shape2, scale=scale)
     op_attrs = [reduction]
     op_attrs = op_attrs + [scale]
 
     attrs["pragma_disable_whole_component"] = False
-    mod = utils.op_build_test(SparseSoftmaxCrossEntropyWithLogitsAd,
+    mod = utils.op_build_test(sparse_softmax_cross_entropy_with_logits_ad,
                               [shape1, shape2], [dtype1, dtype2], op_attrs=op_attrs, kernel_name=kernel_name, attrs=attrs)
 
     output = utils.mod_launch(mod, (labels, logits, output), expect=expect)
-    rtol, atol = get_rtol_atol("sparse_softmax_cross_entropy_with_logits_ad", dtype2)
+    rtol, atol = get_rtol_atol(
+        "sparse_softmax_cross_entropy_with_logits_ad", dtype2)
     compare_res = compare_tensor(output, expect, rtol, atol)
     return (labels, logits), output, expect, compare_res

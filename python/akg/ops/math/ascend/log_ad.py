@@ -18,8 +18,8 @@
 
 import akg
 import akg.tvm
-from ..log import Log
 import akg.utils as utils
+from ..log import log
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (str, type(None)))
@@ -41,6 +41,6 @@ def LogAd(head, in_data, target=utils.CCE):
     # check head's validation.
     utils.check_shape(head.shape)
     utils.ops_dtype_check(head.dtype, utils.DtypeForDavinci.ALL_FLOAT)
-    b = Log(in_data, target)
+    b = log(in_data, target)
     jacs = list(akg.differentiate(b, [in_data], head))
     return jacs[0]

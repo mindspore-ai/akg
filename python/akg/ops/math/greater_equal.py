@@ -16,10 +16,10 @@
 import akg.tvm
 import akg.topi
 import akg.utils as utils
-from akg.utils.dsl_create import produce_shapes
+
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (str, type(None)))
-def GreaterEqual(data1, data2, target=utils.CCE):
+def greater_equal(data1, data2, target=utils.CCE):
     """
     Check whether input1 greaterquals to input2.
 
@@ -29,7 +29,7 @@ def GreaterEqual(data1, data2, target=utils.CCE):
 
     Returns:
         tvm.tensor.Tensor. If input1 greaterquals to input2 return True, else return False.
-    
+
     Supported Platforms:
         'Ascend', 'GPU', 'CPU'
     """
@@ -38,8 +38,8 @@ def GreaterEqual(data1, data2, target=utils.CCE):
     shape1 = [x.value for x in data1.shape]
     shape2 = [x.value for x in data2.shape]
     shapes = [shape1, shape2]
-    for i in range(len(shapes)):
-        utils.check_shape(shapes[i])
+    for _, shape in enumerate(shapes):
+        utils.check_shape(shape)
 
     # check types
     dtype = data1.dtype

@@ -19,14 +19,14 @@ from akg.utils.kernel_exec import product_is_mini
 import akg.utils as utils
 from akg.utils import custom_tiling as ct_util
 from akg.ops.array.ascend.one_hot import OneHot
-from akg.ops.math.mul import Mul
+from akg.ops.math.mul import mul
 from akg.ops.math.reduce_max import ReduceMax
 from akg.ops.math.sub import Sub
-from akg.ops.math.neg import Neg
+from akg.ops.math.neg import neg
 from akg.ops.math.exp import Exp
 from akg.ops.math.sum import Sum
 from akg.ops.math.ascend.sum_others import SumV2 
-from akg.ops.math.log import Log
+from akg.ops.math.log import log
 
 
 def sparse_sf_ce_with_logits_tiling_strategy(tensor, out_shape):
@@ -80,10 +80,10 @@ def sparse_softmax_cross_entropy_with_logits_impl(labels=None, logits=None, redu
         akg.register_variables("minus_max", [logits], data_sub)
         data_exp = Exp(data_sub, target=utils.CCE)
         data_expsum = Sum(data_exp, axis, keepdims=True, target=utils.CCE)
-        data_expsum_log = Log(data_expsum, target=utils.CCE)
+        data_expsum_log = log(data_expsum, target=utils.CCE)
         sub_value = Sub(data_sub, data_expsum_log, target=utils.CCE)
-        neg_labels = Neg(labels, target=utils.CCE)
-        cross_entropy = Mul(neg_labels, sub_value, target=utils.CCE)
+        neg_labels = neg(labels, target=utils.CCE)
+        cross_entropy = mul(neg_labels, sub_value, target=utils.CCE)
         # backprop: prob - labels, where prob = softmax(logits)
         prob = Exp(sub_value, target=utils.CCE)
         backprop = Sub(prob, labels, target=utils.CCE)
@@ -110,7 +110,7 @@ def sparse_softmax_cross_entropy_with_logits_impl(labels=None, logits=None, redu
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, str, (str, type(None)))
-def SparseSoftmaxCrossEntropyWithLogits(labels, logits, reduction='mean', target=utils.CCE):
+def sparse_softmax_cross_entropy_with_logits(labels, logits, reduction='mean'):
     """
     Computes sparse softmax cross entropy between `logits` and `labels`.
 

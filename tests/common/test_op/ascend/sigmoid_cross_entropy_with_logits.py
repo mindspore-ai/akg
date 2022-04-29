@@ -16,7 +16,7 @@
 import akg.tvm
 import akg.utils as utils
 from akg.utils.format_transform import get_shape
-from akg.ops.math import Exp, Log, Mul
+from akg.ops.math import Exp, log, mul
 
 def sigmoid_cross_entropy_with_logits(labels=None, logits=None, target="cce"):
     ##
@@ -53,7 +53,7 @@ def sigmoid_cross_entropy_with_logits(labels=None, logits=None, target="cce"):
     relu_logits = akg.tvm.compute(shape, lambda *indice: akg.tvm.expr.Select(logits(*indice) < zero, zero, logits(*indice)), name="relu_logits")
     neg_abs_logits = akg.tvm.compute(shape, lambda *indice: akg.tvm.expr.Select(logits(*indice) < zero, logits(*indice), logits(*indice) * -1), name="neg_abs_logits")
     sigmoid_logits = Exp(neg_abs_logits, target=target) + akg.tvm.const(1, dtype=dtype)
-    ln_sigmoid_logits = Log(sigmoid_logits, target=target)
-    logits_mul_lables = Mul(logits, labels, target=target)
+    ln_sigmoid_logits = log(sigmoid_logits, target=target)
+    logits_mul_lables = mul(logits, labels, target=target)
     res = relu_logits - logits_mul_lables + ln_sigmoid_logits
     return res

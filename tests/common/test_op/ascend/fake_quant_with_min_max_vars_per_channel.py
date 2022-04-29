@@ -18,7 +18,7 @@ from akg import tvm, topi
 import akg.utils as utils
 from akg.utils import dsl_create as dc
 from akg.utils.format_transform import get_shape
-from akg.ops.math import Divide, Mul
+from akg.ops.math import Divide, mul
 from akg.ops.math import Reciprocal
 from akg.utils.kernel_exec import product_is_mini
 
@@ -84,8 +84,8 @@ def nudged_min_max_compute(min_broadcast, max_broadcast, num_bits, narrow_range)
     # compute scale = (max_broadcast - min_broadcast) / (quant_max - quant_min)
     # and min_div_scale = min_broadcast / scale
     if product_is_mini():
-        scale = Mul(max_sub_min, Reciprocal(quant_max_sub_quant_min), target=utils.CCE)
-        min_div_scale = Mul(min_broadcast, Reciprocal(scale), target=utils.CCE)
+        scale = mul(max_sub_min, Reciprocal(quant_max_sub_quant_min), target=utils.CCE)
+        min_div_scale = mul(min_broadcast, Reciprocal(scale), target=utils.CCE)
     else:
         scale = Divide(max_sub_min, quant_max_sub_quant_min, target=utils.CCE)
         min_div_scale = Divide(min_broadcast, scale, target=utils.CCE)
@@ -157,7 +157,7 @@ def fake_quant_with_min_max_vars_per_channel_compute(input_data, input_min, inpu
     # calculate the quantized and dequantized results
     clamped_shifted = topi.subtract(clamped, nudged_min_nudged_max[0])
     if product_is_mini():
-        clamped_shifted_div_scale = Mul(clamped_shifted, Reciprocal(nudged_min_nudged_max[2]), target=utils.CCE)
+        clamped_shifted_div_scale = mul(clamped_shifted, Reciprocal(nudged_min_nudged_max[2]), target=utils.CCE)
     else:
         clamped_shifted_div_scale = Divide(clamped_shifted, nudged_min_nudged_max[2], target=utils.CCE)
     result_tmp = topi.add(clamped_shifted_div_scale, dc.half_const(dtype))

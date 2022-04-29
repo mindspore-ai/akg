@@ -16,7 +16,7 @@
 from akg import topi
 import akg.tvm
 import akg.utils as utils
-from akg.ops.math import Abs, Cast, Mul, Neg, Rsqrt, Exp, Divide, Minimum
+from akg.ops.math import Abs, Cast, mul, neg, Rsqrt, Exp, Divide, minimum
 
 # const value
 ITR_BEFORE = (1.0, 3.5156229, 3.0899424, 1.2067492, 0.2659732, 0.0360768, 0.0045813)
@@ -43,16 +43,16 @@ def _bessel_i0e_compute(input_data):
     # I0e = e^-|x|(1 + 3.5156229t^2 + 3.0899424t^4 + 1.2067492t^6 + 0.2659732t^8
     #       + 0.0360768t^10 + 0.0045813t^12)), |x| <= 3.75
     broad_const_limit = akg.lang.ascend.broadcast(akg.tvm.const(CONST_LIMIT, "float32"), shape_input)
-    before_abs_data = Minimum(abs_data, broad_const_limit)
+    before_abs_data = minimum(abs_data, broad_const_limit)
     data = topi.multiply(before_abs_data, 1.0 / CONST_LIMIT)
-    square_data = Mul(data, data, target=utils.CCE)
+    square_data = mul(data, data, target=utils.CCE)
     before_res = topi.multiply(square_data, ITR_BEFORE[LEN_BEFORE - 1])
     before_res = topi.add(before_res, ITR_BEFORE[LEN_BEFORE - 2])
     for iter_number in ITR_BEFORE[LEN_BEFORE-3::-1]:
-        before_res = Mul(before_res, square_data, target=utils.CCE)
+        before_res = mul(before_res, square_data, target=utils.CCE)
         before_res = topi.add(before_res, iter_number)
-    exp_data = Exp(Neg(before_abs_data, target=utils.CCE), target=utils.CCE)
-    before_res = Mul(before_res, exp_data, target=utils.CCE)
+    exp_data = Exp(neg(before_abs_data, target=utils.CCE), target=utils.CCE)
+    before_res = mul(before_res, exp_data, target=utils.CCE)
 
     # compute bessel_i0e for data in other domain
     # t = |x| / 3.75
@@ -63,11 +63,11 @@ def _bessel_i0e_compute(input_data):
     after_res = topi.multiply(data, ITR_AFTER[LEN_AFTER - 1])
     after_res = topi.add(after_res, ITR_AFTER[LEN_AFTER - 2])
     for iter_number in ITR_AFTER[LEN_AFTER-3::-1]:
-        after_res = Mul(after_res, data, target=utils.CCE)
+        after_res = mul(after_res, data, target=utils.CCE)
         after_res = topi.add(after_res, iter_number)
     rsqrt_data = Rsqrt(abs_data, target=utils.CCE)
-    after_res = Mul(after_res, rsqrt_data, target=utils.CCE)
-    after_res = Minimum(before_res, after_res, target=utils.CCE)
+    after_res = mul(after_res, rsqrt_data, target=utils.CCE)
+    after_res = minimum(before_res, after_res, target=utils.CCE)
 
     # chose the type of data in end
     if dtype_input == "float16":
@@ -77,7 +77,7 @@ def _bessel_i0e_compute(input_data):
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, (str, type(None)))
-def bessel_i0e(x, target=utils.CCE):
+def bessel_i0e(x):
     """
     The modified Bessel i0e function.
 

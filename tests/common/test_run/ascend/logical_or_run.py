@@ -14,23 +14,26 @@
 
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.math import LogicalOr
+from akg.ops.math import logical_or
 
 
-
-def logical_or_run(shape1, shape2, dtype, kernel_name, attrs_op={}, cce_path="./", attrs={}):
-    attrs.update(attrs_op)
+def logical_or_run(shape1, shape2, dtype, kernel_name, attrs_op=None, attrs=None):
+    if attrs_op is not None:
+        if attrs is not None:
+            attrs.update(attrs_op)
+        else:
+            attrs = attrs_op
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(LogicalOr, [shape1, shape2], [dtype, dtype], kernel_name=kernel_name, attrs=attrs, tuning=t)
+        mod = utils.op_build_test(logical_or, [shape1, shape2], [dtype, dtype], kernel_name=kernel_name, attrs=attrs, tuning=t)
         if t:
             expect, input1, input2, output = gen_data(shape1, shape2)
             return mod, expect, (input1, input2, output)
         else:
             return mod
     else:
-        mod = utils.op_build_test(LogicalOr, [shape1, shape2], [dtype, dtype], kernel_name=kernel_name, attrs=attrs)
+        mod = utils.op_build_test(logical_or, [shape1, shape2], [dtype, dtype], kernel_name=kernel_name, attrs=attrs)
         expect, input1, input2, output = gen_data(shape1, shape2)
         output = utils.mod_launch(mod, (input1, input2, output), expect=expect)
         return (input1, input2), output, expect, np.array_equal(output, expect)

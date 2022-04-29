@@ -16,10 +16,10 @@
 import akg
 from akg import tvm,topi
 import akg.utils as utils
-from ..mul import Mul
 from akg.ops.math import divide
-from ..reciprocal import Reciprocal
 from akg.utils.kernel_exec import product_is_mini
+from ..mul import mul
+from ..reciprocal import Reciprocal
 
 # define a string name of "float16"
 FLOAT_16 = "float16"
@@ -79,7 +79,7 @@ def _tan_2x_multi(input_x, times):
             res_denominator = topi.add(topi.multiply(tanx_square, -1.0), 1.0)
 
         if product_is_mini():
-            res = Mul(res_numerator, Reciprocal(res_denominator, target=utils.CCE), utils.CCE)
+            res = mul(res_numerator, Reciprocal(res_denominator, target=utils.CCE), utils.CCE)
         else:
             res = divide.Divide(res_numerator, res_denominator, utils.CCE)
         times = times - 1
@@ -111,7 +111,7 @@ def tan_compute(input_x):
     return res
 
 @utils.check_input_type(tvm.tensor.Tensor, (str, type(None)))
-def Tan(input_x, target=utils.CCE):
+def tan(input_x):
     """
     Calculate tan x = x + x^3/3 + 2*x^5/5 + 17*x^7/315 + 62*x^9/2835 + 1382*x^11/155925...(|x|<pi/2).
 

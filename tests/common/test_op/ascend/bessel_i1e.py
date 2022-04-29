@@ -16,7 +16,7 @@
 from akg import topi
 import akg.tvm
 import akg.utils as utils
-from akg.ops.math import Abs, Cast, Mul, Neg, Rsqrt, Exp, Divide
+from akg.ops.math import Abs, Cast, mul, neg, Rsqrt, Exp, Divide
 from akg.ops.math.ascend import Sign
 from akg.utils.kernel_exec import product_is_mini
 
@@ -40,15 +40,15 @@ def _before_res_compute(abs_data):
     """
 
     data = topi.multiply(abs_data, 1.0 / CONST_LIMIT)
-    data_square = Mul(data, data, target=utils.CCE)
+    data_square = mul(data, data, target=utils.CCE)
     before_res = topi.multiply(data_square, ITR_BEFORE[LEN_BEFORE - 1])
     before_res = topi.add(before_res, ITR_BEFORE[LEN_BEFORE - 2])
     for iter_number in ITR_BEFORE[LEN_BEFORE-3::-1]:
-        before_res = Mul(before_res, data_square, target=utils.CCE)
+        before_res = mul(before_res, data_square, target=utils.CCE)
         before_res = topi.add(before_res, iter_number)
-    exp_value = Exp(Neg(abs_data, target=utils.CCE), target=utils.CCE)
-    before_res = Mul(before_res, exp_value, target=utils.CCE)
-    before_res = Mul(before_res, abs_data, target=utils.CCE)
+    exp_value = Exp(neg(abs_data, target=utils.CCE), target=utils.CCE)
+    before_res = mul(before_res, exp_value, target=utils.CCE)
+    before_res = mul(before_res, abs_data, target=utils.CCE)
     return before_res
 
 
@@ -68,10 +68,10 @@ def _after_res_compute(abs_data):
     after_res = topi.multiply(data, ITR_AFTER[LEN_AFTER - 1])
     after_res = topi.add(after_res, ITR_AFTER[LEN_AFTER - 2])
     for iter_number in ITR_AFTER[LEN_AFTER-3::-1]:
-        after_res = Mul(after_res, data, target=utils.CCE)
+        after_res = mul(after_res, data, target=utils.CCE)
         after_res = topi.add(after_res, iter_number)
     abs_data_rsqrt = Rsqrt(abs_data, target=utils.CCE)
-    after_res = Mul(after_res, abs_data_rsqrt, target=utils.CCE)
+    after_res = mul(after_res, abs_data_rsqrt, target=utils.CCE)
     return after_res
 
 
@@ -104,14 +104,14 @@ def _bessel_i1e_compute(input_data):
               abs_data[indice] < CONST_LIMIT,
               before_res[indice], after_res[indice]))
     data_sign = Sign(input_data, target=utils.CCE)
-    res = Mul(res, data_sign, target=utils.CCE)
+    res = mul(res, data_sign, target=utils.CCE)
     if dtype == "float16":
         res = Cast(res, "float16", target=utils.CCE)
     return res
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, (str, type(None)))
-def bessel_i1e(x, target=utils.CCE):
+def bessel_i1e(x):
     """
     The modified Bessel i1e function.
 

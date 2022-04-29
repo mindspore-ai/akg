@@ -20,7 +20,7 @@ from akg import topi
 from akg import tvm
 from akg.utils.kernel_exec import product_is_mini
 from .sign import Sign
-from ..log import Log
+from ..log import log
 
 
 def sqrt_mini_newton_iter_impl(x):
@@ -30,7 +30,7 @@ def sqrt_mini_newton_iter_impl(x):
     x_rsqrt = topi.rsqrt(x)
     x_sqrt = topi.divide(1, x_rsqrt)
 
-    """newton_iter: x(n+1) = 1/2 *(x(n) + a/x(n))"""
+    # newton_iter: x(n+1) = 1/2 *(x(n) + a/x(n))
     steps = 3
     half = tvm.const(0.5, x.dtype)
     shape = x.shape
@@ -41,22 +41,22 @@ def sqrt_mini_newton_iter_impl(x):
 
 
 def log_compute_mini_impl(x, target=utils.CCE):
-    """log compute on mini for x >= 1"""
-
     """
-    # compute method:
-    # As vlog instruction has some precision problems when x in interval [1,2), the taylor method be used to
-    # calculate log value of x.
-    # For x in interval [1, 4/3),  calculate log value of x by the Taylor formula:
-    # log(1+x) = ((((0.2x - 0.25)x + 0.33333)x - 0.5)x + 1)x.
-    # For x in interval [4/3, 5/3) and [5/3, 2), x are mapped to in interval [1, 4/3), by the following formulas:
-    # [4/3, 5/3) -> log(x * 3/4) + log(4/3),
-    # [5/3, 2) -> log(x * 3/5) + log(5/3).
-    # For x in interval [2, 32768), calculate log value of x by vlog instruction directly:
-    # [2, 32768) -> log(x).
-    # As vlog instruction has overflow problems when x greater or equal to 32768, calculate log value of x
-    # by the following formulas:
-    # [32768, ) -> log(x/2.5) + log(2.5).
+    log compute on mini for x >= 1
+
+    compute method:
+    As vlog instruction has some precision problems when x in interval [1,2), the taylor method be used to
+    calculate log value of x.
+    For x in interval [1, 4/3),  calculate log value of x by the Taylor formula:
+    log(1+x) = ((((0.2x - 0.25)x + 0.33333)x - 0.5)x + 1)x.
+    For x in interval [4/3, 5/3) and [5/3, 2), x are mapped to in interval [1, 4/3), by the following formulas:
+    [4/3, 5/3) -> log(x * 3/4) + log(4/3),
+    [5/3, 2) -> log(x * 3/5) + log(5/3).
+    For x in interval [2, 32768), calculate log value of x by vlog instruction directly:
+    [2, 32768) -> log(x).
+    As vlog instruction has overflow problems when x greater or equal to 32768, calculate log value of x
+    by the following formulas:
+    [32768, ) -> log(x/2.5) + log(2.5).
     """
     thresholds = [4/3, 5/3, 2, 32768]
     thresholds_rec = [3/4, 3/5]
@@ -106,14 +106,14 @@ def log_compute_mini_impl(x, target=utils.CCE):
                       name="res_2")
 
     # vlog
-    x_log = Log(x_fp16, target)
+    x_log = log(x_fp16, target)
     res = tvm.compute(shape, lambda *indice: tvm.expr.Select(x_fp16(*indice) >= thresholds[2], x_log(*indice),
                                                              res(*indice)),
                       name="res_3")
 
     # overflow
     overflow_threshold = tvm.const(thresholds[3], "float16")
-    res_overflow = topi.cast(topi.add(Log(topi.multiply(x, 1/overflow_div_coffient), target), 
+    res_overflow = topi.cast(topi.add(log(topi.multiply(x, 1/overflow_div_coffient), target), 
                                                                                         log_overflow_div_coffient), "float16")
     res = tvm.compute(shape, lambda *indice: tvm.expr.Select(x_fp16(*indice) >= overflow_threshold,
                                                              res_overflow(*indice), res(*indice)),
@@ -146,12 +146,9 @@ def asinh(x, target=utils.CCE):
     utils.ops_dtype_check(x.dtype, utils.DtypeForDavinci.ALL_FLOAT)
     dtype = x.dtype
 
-    """
-    asinh(x) = log(x + sqrt(x*x+1))
-    If x is a large negative number, (x + sqrt(x*x+1)) will be close to zero.
-    asinh(-x) = -asinh(x)
-    So, asinh(x) = sign(x) * log(|x| + sqrt(|x|*|x| + 1))
-    """
+    # Known that, asinh(x) = log(x + sqrt(x*x+1)), and, asinh(-x) = -asinh(x)
+    # If x is a large negative number, (x + sqrt(x*x+1)) will be close to zero.
+    # So, asinh(x) = sign(x) * log(|x| + sqrt(|x|*|x| + 1))
     compute_dtype = dtype
     if dtype == "float16":
         # To avoid overflow and higher accuracy, x is casted to float32
@@ -161,7 +158,7 @@ def asinh(x, target=utils.CCE):
     x_abs = topi.abs(x)
 
     if product_is_mini():
-        """sqrt(|x|*|x| + 1) = |x| * sqrt(1 + 1/(|x|*|x|))"""
+        # sqrt(|x|*|x| + 1) = |x| * sqrt(1 + 1/(|x|*|x|))
         vsquare_add_one = topi.add(1, topi.divide(1, topi.multiply(x_abs, x_abs)))
         sqrt_compute_value = sqrt_mini_newton_iter_impl(vsquare_add_one)
         sqrt_value = topi.multiply(x_abs, sqrt_compute_value)

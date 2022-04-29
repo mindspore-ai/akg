@@ -31,7 +31,7 @@ from .assign_sub import assign_sub
 from .atan import atan
 from .atan_grad import atan_grad
 from .atan2 import atan2
-from .atanh import Atanh
+from .atanh import atanh
 from .axpy import Axpy
 from .batch_norm import BatchNorm
 from .batchmatmul import BatchMatMul, BatchMatMulBias
@@ -53,7 +53,7 @@ from .sign import Sign
 from .sin import Sin
 from .sinh import Sinh
 from .sum_others import SumV2, SumByShape
-from .tan import Tan
+from .tan import tan
 from .tanh import Tanh
 from .tanh_ad import TanhAd
 from .tanh_grad import TanhGrad

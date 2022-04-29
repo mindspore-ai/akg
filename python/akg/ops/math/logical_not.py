@@ -17,8 +17,9 @@ import akg.tvm
 import akg.topi
 import akg.utils as utils
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, (str, type(None)))
-def LogicalNot(input1, target=utils.CCE):
+def logical_not(input1, target=utils.CCE):
     """
     Compute logical_not of input1.
 
@@ -27,7 +28,7 @@ def LogicalNot(input1, target=utils.CCE):
 
     Returns:
         tvm.tensor.Tensor.
-    
+
     Supported Platforms:
         'Ascend', 'GPU', 'CPU'
     """

@@ -71,9 +71,9 @@ def strided_slice(x, begin, end, strides, begin_mask, end_mask, ellipsis_mask, n
 def sparse_softmax_cross_entropy_with_logits(features, labels, is_grad=False, sens=1.0, target=utils.CCE):
     """sparse softmax cross entropy with logits"""
     if is_grad:
-        return nn.SparseSoftmaxCrossEntropyWithLogitsAd(labels, features, reduction='mean', grad_scale=sens,
+        return nn.sparse_softmax_cross_entropy_with_logits_ad(labels, features, reduction='mean', grad_scale=sens,
                                                         target=target)
-    return nn.SparseSoftmaxCrossEntropyWithLogits(labels, features, reduction='mean', target=target)
+    return nn.sparse_softmax_cross_entropy_with_logits(labels, features, reduction='mean', target=target)
 
 
 @reg_op("Softmax", utils.CCE)

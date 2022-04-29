@@ -15,7 +15,7 @@
 """operator dsl function: minimum_ad"""
 import akg
 import akg.utils as utils
-from akg.ops.math import Minimum
+from akg.ops.math import minimum
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (bool, type(None)),
                           (bool, type(None)))
@@ -42,7 +42,7 @@ def minimum_ad(head, data_x, data_y, grad_x=True, grad_y=True):
                                  [utils.DtypeForDavinci.ALL_FLOAT, utils.DtypeForDavinci.INT32])
     if not grad_x and not grad_y:
         raise ValueError("At least one of grad_x and grad_y is True.")
-    op = Minimum(data_x, data_y)
+    op = minimum(data_x, data_y)
     jacs = list(akg.differentiate(op, [data_x, data_y], head))
     if grad_x and grad_y:
         return jacs[0], jacs[1]

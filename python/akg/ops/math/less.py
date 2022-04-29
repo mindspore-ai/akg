@@ -21,8 +21,9 @@ import akg.tvm
 import akg.utils as utils
 from akg.utils.kernel_exec import product_is_mini
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (str, type(None)))
-def Less(data1, data2, target=utils.CCE):
+def less(data1, data2, target=utils.CCE):
     """
     compute tensor with smaller value in data1 and data2 elementwisely.
 
@@ -32,7 +33,7 @@ def Less(data1, data2, target=utils.CCE):
 
     Returns:
         tvm.tensor.Tensor. If data1 less than data2, return True, else return False.
-    
+
     Supported Platforms:
         'Ascend', 'GPU', 'CPU'
     """

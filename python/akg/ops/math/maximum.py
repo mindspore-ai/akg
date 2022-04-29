@@ -18,8 +18,9 @@ import akg.tvm as tvm
 import akg.utils as utils
 from .cast import Cast
 
+
 @utils.check_input_type(tvm.tensor.Tensor, tvm.tensor.Tensor, (str, type(None)))
-def Maximum(data1, data2, target=utils.CCE):
+def maximum(data1, data2, target=utils.CCE):
     """
     Take element-wise maximum of two tensors with auto-broadcasting.
 
@@ -29,7 +30,7 @@ def Maximum(data1, data2, target=utils.CCE):
 
     Returns:
         tvm.tensor.Tensor of maximum of two tensors.
-    
+
     Supported Platforms:
         'Ascend', 'GPU', 'CPU'
     """
@@ -44,9 +45,9 @@ def Maximum(data1, data2, target=utils.CCE):
     dtype = data1.dtype
     need_cast = True if target == utils.CCE and dtype in ["int8", "uint8"] else False
     if need_cast:
-        data1 = topi.cast(data1, "float16")
-        data2 = topi.cast(data2, "float16")
+        data1 = Cast(data1, "float16")
+        data2 = Cast(data2, "float16")
     res = topi.maximum(data1, data2)
     if need_cast:
-        res = topi.cast(res, dtype)
+        res = Cast(res, dtype)
     return res

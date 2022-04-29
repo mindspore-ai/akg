@@ -16,7 +16,7 @@
 import akg.tvm as tvm
 import akg.utils as utils
 from akg.tvm.hybrid import script
-from akg.ops.math import Add, Mul, Exp, Maximum
+from akg.ops.math import Add, mul, Exp, maximum
 
 @utils.check_input_type(tvm.tensor.Tensor, tvm.tensor.Tensor, int, str)
 def gather(data, indices, axis, flag):
@@ -66,6 +66,7 @@ def scatter_add(data, indices, updates):
     right_shape = list(updates.shape[1:])
 
     def gen_ir(data, indices, updates, out):
+        del data
         ib = tvm.ir_builder.create()
         with ib.for_range_n(left_shape, "i") as i:
             with ib.for_range_n(right_shape, "j") as j:
@@ -95,9 +96,9 @@ def fused_gather_gather_add_mul_max_exp_scatter_add(inp1, inp2, inp3, inp4, axis
     gather_out1 = gather(inp1, inp2, axis, "1")
     gather_out2 = gather(inp1, inp2, axis, "2")
 
-    add_out = Add(gather_out1, gather_out2, target=utils.CUDA)
-    mul_out = Mul(add_out, inp3, utils.CUDA)
-    max_out = Maximum(add_out, mul_out, utils.CUDA)
+    add_out = Add(gather_out1, gather_out2, target=target)
+    mul_out = mul(add_out, inp3, utils.CUDA)
+    max_out = maximum(add_out, mul_out, utils.CUDA)
     exp_out = Exp(max_out, utils.CUDA)
     scatter_out = scatter_add(inp1, inp4, exp_out)
 

@@ -58,13 +58,13 @@ def equal(input1, input2, target=utils.CUDA):
 @reg_op("LessEqual")
 def less_equal(input1, input2, target=utils.CUDA):
     """LessEqual"""
-    return math.LessEqual(input1, input2, target)
+    return math.less_equal(input1, input2, target)
 
 
 @reg_op("Mul")
 def mul(x, y, target=utils.CUDA):
     """Mul"""
-    return math.Mul(x, y, target)
+    return math.mul(x, y, target)
 
 
 @reg_op("Sub")
@@ -94,19 +94,19 @@ def tile(data, multiples, target=utils.CUDA):
 @reg_op("LogicalOr")
 def logical_or(x, y, target=utils.CUDA):
     """LogicalOr"""
-    return math.LogicalOr(x, y, target)
+    return math.logical_or(x, y, target)
 
 
 @reg_op("LogicalAnd")
 def logical_and(x, y, target=utils.CUDA):
     """LogicalAnd."""
-    return math.LogicalAnd(x, y, target)
+    return math.logical_and(x, y, target)
 
 
 @reg_op("LogicalNot")
 def logical_not(data, target=utils.CUDA):
     """LogicalNot"""
-    return math.LogicalNot(data, target)
+    return math.logical_not(data, target)
 
 
 @reg_op("NotEqual")
@@ -118,7 +118,7 @@ def not_equal(x, y, target=utils.CUDA):
 @reg_op("GreaterEqual")
 def greater_equal(x, y, target=utils.CUDA):
     """GreaterEqual"""
-    return math.GreaterEqual(x, y, target)
+    return math.greater_equal(x, y, target)
 
 
 @reg_op("Max")
@@ -130,19 +130,19 @@ def tensor_max(x, axis=None, keep_dims=False, target=utils.CUDA):
 @reg_op("Neg")
 def neg(x, target=utils.CUDA):
     """Neg"""
-    return math.Neg(x, target)
+    return math.neg(x, target)
 
 
 @reg_op("Log")
 def log(x, target=utils.CUDA):
     """Log"""
-    return math.Log(x, target)
+    return math.log(x, target)
 
 
 @reg_op("Less")
 def less(x, y, target=utils.CUDA):
     """Less"""
-    return math.Less(x, y, target)
+    return math.less(x, y, target)
 
 
 @reg_op("Exp")

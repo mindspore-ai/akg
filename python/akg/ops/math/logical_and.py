@@ -17,8 +17,9 @@ import akg.tvm
 import akg.topi
 import akg.utils as utils
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (str, type(None)))
-def LogicalAnd(input1, input2, target=utils.CCE):
+def logical_and(input1, input2, target=utils.CCE):
     """
     Compute logical_and of input1 and input2.
 
@@ -27,8 +28,8 @@ def LogicalAnd(input1, input2, target=utils.CCE):
         input2 (tvm.tensor.Tensor): Tensor.
 
     Returns:
-        tvm.tensor.Tensor. LogicalAnd of input1 and input2.
-    
+        tvm.tensor.Tensor. logical_and of input1 and input2.
+
     Supported Platforms:
         'Ascend', 'GPU', 'CPU'
     """

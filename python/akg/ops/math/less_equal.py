@@ -16,10 +16,10 @@
 import akg.tvm
 import akg.topi
 import akg.utils as utils
-from .sub import Sub
-from .cast import Cast
 from akg.utils.kernel_exec import product_is_mini
 from akg.utils.dsl_create import produce_shapes
+from .sub import Sub
+
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor)
 def _less_equal(data1, data2):
@@ -82,7 +82,8 @@ def _less_equal_ascend(data1, data2, target=utils.CCE):
 
     return res
 
-def LessEqual(data1, data2, target=utils.CCE):
+
+def less_equal(data1, data2, target=utils.CCE):
     """
     Check whether input1 lessequals to input2.
 
@@ -92,7 +93,7 @@ def LessEqual(data1, data2, target=utils.CCE):
 
     Returns:
         tvm.tensor.Tensor. If input1 lessequal to input2 return True, else return False.
-    
+
     Supported Platforms:
         'Ascend', 'GPU', 'CPU'
     """

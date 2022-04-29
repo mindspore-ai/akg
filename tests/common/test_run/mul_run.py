@@ -13,7 +13,7 @@
 # limitations under the License.
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.math import Mul
+from akg.ops.math import mul
 from tests.common.tensorio import compare_tensor
 from tests.common.gen_random import random_gaussian
 from tests.common.base import get_rtol_atol
@@ -24,14 +24,14 @@ def mul_run(shapes, dtype, attrs):
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(Mul, shapes, [dtype, dtype], kernel_name=kernel_name, attrs=attrs, tuning=t)
+        mod = utils.op_build_test(mul, shapes, [dtype, dtype], kernel_name=kernel_name, attrs=attrs, tuning=t)
         if t:
             expect, lhd, output, rhd = gen_data(dtype, shapes)
             return mod, expect, (lhd, rhd, output)
         else:
             return mod
     else:
-        mod = utils.op_build_test(Mul, shapes, [dtype, dtype], kernel_name='mul', attrs=attrs)
+        mod = utils.op_build_test(mul, shapes, [dtype, dtype], kernel_name='mul', attrs=attrs)
         expect, lhd, output, rhd = gen_data(dtype, shapes)
         output = utils.mod_launch(mod, (lhd, rhd, output), expect=expect)
         rtol, atol = get_rtol_atol("mul", dtype)

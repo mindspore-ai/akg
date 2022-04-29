@@ -13,15 +13,19 @@
 # limitations under the License.
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.math import LessEqual
+from akg.ops.math import less_equal
 from tests.common.tensorio import compare_tensor
 from tests.common.base import get_rtol_atol
 from tests.common.gen_random import random_gaussian
 from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
 
-def less_equal_run(shapes, dtype, kernel_name="less_equal", attrs_op={}, attrs={}):
-    attrs.update(attrs_op)
+def less_equal_run(shapes, dtype, kernel_name="less_equal", attrs_op=None, attrs=None):
+    if attrs_op is not None:
+        if attrs is not None:
+            attrs.update(attrs_op)
+        else:
+            attrs = attrs_op
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
@@ -38,7 +42,7 @@ def less_equal_run(shapes, dtype, kernel_name="less_equal", attrs_op={}, attrs={
         if attrs.get("profiling", False):
             import akg
             target_name = attrs["target"].split()[0]
-            args_list = to_tvm_nd_array([input, output], akg.tvm.context(target_name, 0))
+            args_list = to_tvm_nd_array([inputs, output], akg.tvm.context(target_name, 0))
             target_profiling(mod, *args_list, target=target_name, repeat_time=attrs["repeat_times"])
         rtol, atol = get_rtol_atol("less_equal", dtype)
         return inputs, output, expect, compare_tensor(output, expect, rtol=rtol, atol=atol, equal_nan=True)
@@ -47,8 +51,8 @@ def gen_data(dtype, shapes):
     inputs = []
     for i in range(len(shapes)):
         shape = shapes[i]
-        input = random_gaussian(shape, miu=1, sigma=(0.1 + 100 * i)).astype(dtype)
-        inputs.append(input)
+        input_ = random_gaussian(shape, miu=1, sigma=(0.1 + 100 * i)).astype(dtype)
+        inputs.append(input_)
     if len(inputs) != 2:
         raise RuntimeError("inputs num should be 2")
     expect = np.less_equal(inputs[0], inputs[1])
@@ -57,4 +61,4 @@ def gen_data(dtype, shapes):
 
 
 def less_equal_compile(shapes, dtype, kernel_name, attrs, tuning=False):
-    return utils.op_build_test(LessEqual, shapes, [dtype, dtype], kernel_name=kernel_name, attrs=attrs, tuning=tuning)
+    return utils.op_build_test(less_equal, shapes, [dtype, dtype], kernel_name=kernel_name, attrs=attrs, tuning=tuning)

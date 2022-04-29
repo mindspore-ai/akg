@@ -17,7 +17,7 @@ import akg.topi
 from akg import tvm
 import akg.utils as utils
 from akg.utils.dsl_create import produce_shapes
-from akg.ops.math import Abs, Mul, Divide
+from akg.ops.math import Abs, mul, Divide
 from akg.utils.format_transform import get_shape
 from akg.utils.kernel_exec import product_is_mini
 
@@ -122,7 +122,7 @@ def div_no_nan(data_x, data_y, target=utils.CCE):
                            name="not_zero")    
    
     # replace [x1 x2]/[y1 0] by [x1 0]/[y1 1] 
-    data_x = Mul(akg.lang.ascend.cast_to(data_x, "float32"), not_zero, target=target)
+    data_x = mul(akg.lang.ascend.cast_to(data_x, "float32"), not_zero, target=target)
     data_y = akg.lang.ascend.cast_to(data_y, "float32") + is_zero
     res = Divide(data_x, data_y, target=target)
 

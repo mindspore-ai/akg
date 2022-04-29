@@ -15,13 +15,13 @@
 import numpy as np
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
-from akg.ops.math import Mul
+from akg.ops.math import mul
 from akg.ops.math.ascend import Mean
 from tests.common.gen_random import random_gaussian
 
 def mean_mul(first_input, second_input, axis=None, keepdims=False, target="cce"):
     temp, _ = Mean(first_input, axis, keepdims)
-    output = Mul(temp, second_input, target=target)
+    output = mul(temp, second_input, target=target)
     return output
 
 

@@ -16,8 +16,9 @@
 import akg.topi
 import akg.utils as utils
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (str, type(None)))
-def Mul(l_input, r_input, target=utils.CCE):
+def mul(l_input, r_input, target=utils.CCE):
     """
     Calculate x * y element-wise.
 
@@ -30,7 +31,7 @@ def Mul(l_input, r_input, target=utils.CCE):
 
     Returns:
         tvm.tensor.Tensor, has the same type as l_input and r_input.
-    
+
     Supported Platforms:
         'Ascend', 'GPU', 'CPU'
     """

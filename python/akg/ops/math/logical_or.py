@@ -17,8 +17,9 @@ import akg.tvm
 import akg.topi
 import akg.utils as utils
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (str, type(None)))
-def LogicalOr(input1, input2, target=utils.CCE):
+def logical_or(input1, input2, target=utils.CCE):
     """
     Compute logical_or of input1 and input2.
 
@@ -27,8 +28,8 @@ def LogicalOr(input1, input2, target=utils.CCE):
         input2 (tvm.tensor.Tensor): Tensor.
 
     Returns:
-        tvm.tensor.Tensor. LogicalOr of input1 and input2.
-    
+        tvm.tensor.Tensor. logical_or of input1 and input2.
+
     Supported Platforms:
         'Ascend', 'GPU', 'CPU'
     """

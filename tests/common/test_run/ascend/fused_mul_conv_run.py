@@ -18,17 +18,17 @@ import sys
 import numpy as np
 from akg.utils import kernel_exec as utils
 from akg.ops.nn.ascend import Conv
-from akg.ops.math import Mul
+from akg.ops.math import mul
 from tests.common.test_run.ascend.conv_utils import conv_forward_naive
 from tests.common.test_run.ascend.conv_utils import random_gaussian
 
 
-def mul_conv(data, fmap_shape, filter_shape, pad_, stride_, dilation_, bypass_l1=False, use_bias=False,
+def mul_conv(data, fmap_shape, filter_shape, pad_, stride_, dilation_, use_bias=False,
              block_size=16, attrs=None, target="cce"):
     a1 = data[0]
     a2 = data[1]
     b = data[2]
-    a = Mul(data[0], data[1], target=target)
+    a = mul(data[0], data[1], target=target)
     if use_bias:
         conv_data = [a, b, data[3]]
     else:
@@ -37,7 +37,7 @@ def mul_conv(data, fmap_shape, filter_shape, pad_, stride_, dilation_, bypass_l1
     return res
 
 
-def fused_mul_conv_run(fmap_shape, filter_shape, pad_, stride_, dilation_, use_bias=False, bypass_l1=False, dump_data=False, attrs=None):
+def fused_mul_conv_run(fmap_shape, filter_shape, pad_, stride_, dilation_, use_bias=False, dump_data=False, attrs=None):
     conv_dtype = 'float16'
 
     fmap_data1, fmap_data2, filter_data, bias_data, expect = gen_data(fmap_shape, filter_shape, pad_, stride_, dilation_, use_bias)
@@ -57,13 +57,13 @@ def fused_mul_conv_run(fmap_shape, filter_shape, pad_, stride_, dilation_, use_b
     out_data = np.full(expect.shape, 0, 'float16')
 
     if use_bias:
-        input = [fmap_data1, fmap_data2, filter_data, bias_data]
+        input_ = [fmap_data1, fmap_data2, filter_data, bias_data]
         input_shape = [fmap_data1.shape, fmap_data2.shape, filter_data.shape, bias_data.shape]
     else:
-        input = [fmap_data1, fmap_data2, filter_data]
+        input_ = [fmap_data1, fmap_data2, filter_data]
         input_shape = [fmap_data1.shape, fmap_data2.shape, filter_data.shape]
 
-    args = input
+    args = input_
     args.append(out_data)
     args = tuple(args)
 
@@ -124,7 +124,7 @@ def fused_mul_conv_run(fmap_shape, filter_shape, pad_, stride_, dilation_, use_b
         np.savetxt("expect.txt", expect.reshape(data_len))
         print(str(e))
 
-    return input, out_data, expect, assert_res
+    return input_, out_data, expect, assert_res
 
 
 def gen_data(fm_shape, w_shape, pad, stride, dilation, bias):
@@ -188,15 +188,15 @@ def gen_data(fm_shape, w_shape, pad, stride, dilation, bias):
     conv_param = {'stride': stride, 'pad': pad, 'dilation': dilation}
     out = conv_forward_naive(x, w, b, conv_param)
 
-    ''' transpose to 5D - NC1HWC0 '''
+    # transpose to 5D - NC1HWC0
     feature1 = x1.reshape(IN, IC // C0, C0, IH, IW).transpose(0, 1, 3, 4, 2).copy()
     feature2 = x2.reshape(IN, IC // C0, C0, IH, IW).transpose(0, 1, 3, 4, 2).copy()
-    ''' transpose to 5D - C1HWNC0 '''
-    filter = w.reshape(WN, WC // C0, C0, WH, WW).transpose(1, 3, 4, 0, 2).copy()
-    filter = filter.reshape(WC // C0 * WH * WW, WN // 16, 16, C0)
+    # transpose to 5D - C1HWNC0
+    filter_ = w.reshape(WN, WC // C0, C0, WH, WW).transpose(1, 3, 4, 0, 2).copy()
+    filter_ = filter_.reshape(WC // C0 * WH * WW, WN // 16, 16, C0)
 
     bb = b.reshape(1, WN // 16, 1, 1, 16)
-    ''' transpose to 5D - NC1HWC0 '''
+    # transpose to 5D - NC1HWC0
     output = out.reshape(ON, OC // C0, C0, OH, OW).transpose(0, 1, 3, 4, 2).copy()
 
-    return feature1, feature2, filter, bb, output
+    return feature1, feature2, filter_, bb, output

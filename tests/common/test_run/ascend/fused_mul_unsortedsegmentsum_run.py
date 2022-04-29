@@ -15,7 +15,7 @@
 import numpy as np
 from akg.utils import kernel_exec as utils
 from akg.ops.array import UnsortedSegmentSum
-from akg.ops.math import Mul
+from akg.ops.math import mul
 from tests.common.tensorio import compare_tensor
 from tests.common.gen_random import random_gaussian
 
@@ -25,7 +25,7 @@ def gen_segment_ids(ishape, irange):
     return segment_ids
 
 
-def cal_outputs(input_data, data_type, segment_ids, num_segments, output_shape):
+def cal_outputs(input_data, data_type, segment_ids, output_shape):
     input_shape = input_data.shape
 
     # assert(input_shape[0] == len(segment_ids))
@@ -53,7 +53,7 @@ def cal_outputs(input_data, data_type, segment_ids, num_segments, output_shape):
 
 def mul_unsortedsegmentsum(input1, input2, ids_tensor, num_segments, target="cce"):
     import akg.tvm
-    temp = Mul(input1, input2, target='cce')
+    temp = mul(input1, input2, target='cce')
     output = UnsortedSegmentSum(temp, ids_tensor, num_segments, target=target)[0]
     output = akg.tvm.compute(output.shape, lambda *i: output(*i), "fused_mul_unsorted")
     return output
@@ -90,7 +90,7 @@ def gen_data(dtype, ids_shape, num_segments, shape1, shape2):
     input2 = random_gaussian(shape2, miu=1, sigma=0.1).astype(support_list[dtype])
     temp = np.multiply(input1, input2)
     output_shape = (num_segments,) + tuple(shape1[len(ids_shape):])
-    expect = cal_outputs(temp, support_list[dtype], segment_ids, num_segments, output_shape)
+    expect = cal_outputs(temp, support_list[dtype], segment_ids, output_shape)
     output = np.full(output_shape, np.nan, dtype)
     return expect, input1, input2, output, segment_ids
 
