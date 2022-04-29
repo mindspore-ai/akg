@@ -34,7 +34,7 @@ using air::ir::substitute;
 static const float HALF_MIN = 5.960464e-08;  // minimum number of float16
 static const float HALF_MAX = 65504.0;       // maximum number of float16
 
-struct  PairHash {
+struct PairHash {
   template <typename T>
   size_t operator()(const std::pair<T, T> &a) const {
     return dmlc::HashCombine(std::hash<T>()(a.first), std::hash<T>()(a.second));
@@ -448,12 +448,17 @@ constexpr auto AKG_INNER_TENSOR = "INNER_TENSOR";
 constexpr auto AKG_TENSOR_OF_TENSOR = "TENSOR_OF_TENSOR";
 constexpr auto AKG_ATOMIC_TOT = "atomic_tot";
 constexpr auto AKG_REMOVE_SELF_DEPENDENCE = "REMOVE_SELF_DEPENDENCE";
+constexpr auto CSR_FEATURE_LENGTH = "csr_feature_length";
 constexpr auto CSR_AVG_ROW = "csr_avg_row";
 constexpr auto CSR_MAP_THREAD = "csr_map_thread";
 
 static constexpr auto ATTR_PREFETCH_MODE = "prefetch_mode";
 enum class PrefetchMode {
-  DEFAULT = 0, TRANSFERBUFFER, DOUBLEBUFFER, TRANSFERBUFFER_THREADGROUP, DOUBLEBUFFER_THREADGROUP
+  DEFAULT = 0,
+  TRANSFERBUFFER,
+  DOUBLEBUFFER,
+  TRANSFERBUFFER_THREADGROUP,
+  DOUBLEBUFFER_THREADGROUP
 };
 
 constexpr auto REDUCE_LIB_TYPE_ORIGIN = "origin";

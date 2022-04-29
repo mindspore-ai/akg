@@ -62,6 +62,9 @@ constexpr auto TOT_BEST_NUM_PER_BLOCK = 1024;
 constexpr auto OUTERMOST_AXIS = 0;
 constexpr auto CPU_CSR_TILING_FACTOR = 1;
 constexpr auto CPU_CSR_PARALLEL_CUTOFF = 4096;
+constexpr auto GPU_CSR_FUSION_AXES_SIZE = 2;
+constexpr auto GPU_CSR_BEST_NUM_NODES_PER_BLOCK = 8;
+constexpr auto GPU_CSR_NO_TILE = 1;
 
 // Controlled by custom tiling.
 constexpr auto ALLOCATION_PERCENTAGE = 0.5;  // reserved for double buffer in default

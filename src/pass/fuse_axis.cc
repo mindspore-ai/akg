@@ -61,9 +61,10 @@ namespace ir {
 
 class FuseAxisExtern : public IRMutator {
  public:
-  std::unordered_map<std::string, std::pair<Var, Range>> var_name_with_range;
-  explicit FuseAxisExtern(std::unordered_map<std::string, std::pair<Var, Range>> &var_and_range)
-      : var_name_with_range{var_and_range} {}
+  std::unordered_map<std::string, std::pair<Var, Range>> var_name_with_range_;
+  Expr feat_len_{1};
+  explicit FuseAxisExtern(std::unordered_map<std::string, std::pair<Var, Range>> &var_and_range, Expr feat_len)
+      : var_name_with_range_{var_and_range}, feat_len_{feat_len} {}
   Stmt Mutate_(const For *op, const Stmt &s) final {
     auto next_for_op = op->body.as<For>();
     if (next_for_op) {
@@ -88,7 +89,7 @@ class FuseAxisExtern : public IRMutator {
 
   bool CheckFusible(std::string name_hint) {
     auto idx = name_hint.find("fused");
-    return var_name_with_range.count(name_hint) || idx != std::string::npos;
+    return var_name_with_range_.count(name_hint) || idx != std::string::npos;
   }
 
   Expr Mutate_(const FloorDiv *op, const Expr &e) final { return air::ir::CanonicalSimplify(e); }
@@ -98,14 +99,18 @@ class FuseAxisExtern : public IRMutator {
 
 class FusionVarCollector : public IRVisitor {
  public:
-  std::unordered_map<std::string, std::pair<Var, Range>> var_name_with_range;
+  std::unordered_map<std::string, std::pair<Var, Range>> var_name_with_range_;
   std::vector<std::string> not_fused_var_name;
 
   void Visit_(const For *op) override {
     std::string var_name = op->loop_var->name_hint;
     if (op->min.as<IntImm>() && op->extent.as<IntImm>()) {
       auto range = Range::make_by_min_extent(op->min, op->extent);
-      var_name_with_range[var_name] = std::make_pair(op->loop_var, range);
+      var_name_with_range_[var_name] = std::make_pair(op->loop_var, range);
+      if (is_feature_dim_) {
+        feat_len_ *= op->extent;
+      }
+      is_feature_dim_ = true;
     }
     IRVisitor::Visit_(op);
   }
@@ -121,6 +126,9 @@ class FusionVarCollector : public IRVisitor {
     }
     IRVisitor::Visit_(op);
   }
+
+  bool is_feature_dim_{false};
+  Expr feat_len_{1};
 };
 
 Stmt FuseAxisExternOp(Stmt stmt, air::Schedule sch) {
@@ -128,11 +136,12 @@ Stmt FuseAxisExternOp(Stmt stmt, air::Schedule sch) {
   auto bounds = air::schedule::InferBound(sch);
   auto fusion_var_vollector = FusionVarCollector();
   fusion_var_vollector.Visit(stmt);
-  auto var_name_with_range{fusion_var_vollector.var_name_with_range};
+  auto var_name_with_range{fusion_var_vollector.var_name_with_range_};
+  auto feat_len{fusion_var_vollector.feat_len_};
   for (auto var_name : fusion_var_vollector.not_fused_var_name) {
     var_name_with_range.erase(var_name);
   }
-  auto fuse_axis_extern = FuseAxisExtern(var_name_with_range);
+  auto fuse_axis_extern = FuseAxisExtern(var_name_with_range, feat_len);
   // prevent infinite loop
   for (size_t i{0}; i < MAX_FUSE_TIMES; ++i) {
     auto fused_stmt = fuse_axis_extern.Mutate(stmt);
@@ -141,6 +150,7 @@ Stmt FuseAxisExternOp(Stmt stmt, air::Schedule sch) {
     }
     stmt = fused_stmt;
   }
+  stmt = AttrStmt::make(Expr("INFO"), "csr_feature_length", fuse_axis_extern.feat_len_, stmt);
   return stmt;
 }
 }  // namespace ir
