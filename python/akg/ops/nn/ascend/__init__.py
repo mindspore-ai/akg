@@ -38,6 +38,6 @@ from .sparse_softmax_cross_entropy_with_logits import SparseSoftmaxCrossEntropyW
 from .sparse_softmax_cross_entropy_with_logits_ad import SparseSoftmaxCrossEntropyWithLogitsAd
 from .zeros_like import ZerosLike
 from .fused_batch_norm_split import FusedBn1, FusedBn2, FusedBn3
-from .fused_batch_norm_grad_split import FusedBnGrad1, FusedBnGrad2, FusedBnGrad3
+from .fused_batch_norm_grad_split import fused_bn_grad1, fused_bn_grad2, fused_bn_grad3
 from .fused_batch_norm import FusedBatchNorm
 from .fused_batch_norm_grad import FusedBatchNormGrad

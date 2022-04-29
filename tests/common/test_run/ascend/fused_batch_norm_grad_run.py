@@ -14,7 +14,7 @@
 
 from akg.utils import kernel_exec as utils
 import numpy as np
-from akg.ops.nn.ascend import FusedBatchNormGrad, FusedBnGrad1, FusedBnGrad2, FusedBnGrad3
+from akg.ops.nn.ascend import FusedBatchNormGrad, fused_bn_grad1, fused_bn_grad2, fused_bn_grad3
 from functools import reduce
 from tests.common.base import get_rtol_atol
 from tests.common.gen_random import random_gaussian
@@ -82,7 +82,7 @@ def fused_bn_grad_5D_run_1(shape, dtype, kernel_name, attrs):
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(FusedBnGrad1,
+        mod = utils.op_build_test(fused_bn_grad1,
                             bng1_shapes, bng1_dtypes,
                             kernel_name=kernel_name + "_step1", attrs=attrs, tuning=t)     
         if t:
@@ -96,7 +96,7 @@ def fused_bn_grad_5D_run_1(shape, dtype, kernel_name, attrs):
         else:
             return mod        
    
-    mod = utils.op_build_test(FusedBnGrad1,
+    mod = utils.op_build_test(fused_bn_grad1,
                         bng1_shapes, bng1_dtypes,
                         kernel_name=kernel_name + "_step1", attrs=attrs)
     # np.random.seed(0)
@@ -139,7 +139,7 @@ def fused_bn_grad_5D_run_2(shape, dtype, eps, kernel_name, attrs):
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(FusedBnGrad2,
+        mod = utils.op_build_test(fused_bn_grad2,
                         bng2_shapes, bng2_dtypes, bng2_opattrs,
                         kernel_name=kernel_name + "_step2", attrs=attrs, tuning=t)    
         if t:
@@ -149,7 +149,7 @@ def fused_bn_grad_5D_run_2(shape, dtype, eps, kernel_name, attrs):
                                  'tuning': False}
         else:
             return mod     
-    mod = utils.op_build_test(FusedBnGrad2,
+    mod = utils.op_build_test(fused_bn_grad2,
                     bng2_shapes, bng2_dtypes, bng2_opattrs,
                     kernel_name=kernel_name + "_step2", attrs=attrs)
     outputs = [np.full(s, np.nan, "float32") for s in out_shapes]
@@ -173,7 +173,7 @@ def fused_bn_grad_5D_run_3(shape, dtype, kernel_name, attrs):
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(FusedBnGrad3,
+        mod = utils.op_build_test(fused_bn_grad3,
                         bng3_shapes, bng3_dtypes,
                         kernel_name=kernel_name + "_step3", attrs=attrs, tuning=t)  
         if t:
@@ -186,7 +186,7 @@ def fused_bn_grad_5D_run_3(shape, dtype, kernel_name, attrs):
     # np.random.seed(0)
     inputs = [np.random.rand(*s).astype(t) for (s, t) in zip(bng3_shapes, bng3_dtypes)]
     outputs = np.full(shape, np.nan, dtype)
-    mod = utils.op_build_test(FusedBnGrad3,
+    mod = utils.op_build_test(fused_bn_grad3,
                     bng3_shapes, bng3_dtypes,
                     kernel_name=kernel_name + "_step3", attrs=attrs)
     outputs = [ utils.mod_launch(mod, (*inputs, outputs), expect=get_expect(*inputs)) ]
@@ -212,7 +212,7 @@ def fused_bn_grad_5D_all_run(shape, dtype, eps, kernel_name, attrs):
     # step 1
     bng1_shapes = [shape, shape, shape_c1c0]
     bng1_dtypes = [dtype, dtype, "float32"]
-    mod = utils.op_build_test(FusedBnGrad1,
+    mod = utils.op_build_test(fused_bn_grad1,
                         bng1_shapes, bng1_dtypes,
                         kernel_name=kernel_name + "_step1", attrs=attrs.copy())
     bng1_inputs = inputs[:3]
@@ -228,7 +228,7 @@ def fused_bn_grad_5D_all_run(shape, dtype, eps, kernel_name, attrs):
     bng2_inputs = bng1_outputs[:2] + inputs[3:]
     bng2_outshapes = [shape_c1c0, shape_c1c0, shape_c1c0, shape_c1c0, shape_c1c0]
     bng2_outputs = [np.full(s, np.nan, "float32") for s in bng2_outshapes]
-    mod = utils.op_build_test(FusedBnGrad2,
+    mod = utils.op_build_test(fused_bn_grad2,
                     bng2_shapes, bng2_dtypes, bng2_opattrs,
                     kernel_name=kernel_name + "_step2", attrs=attrs.copy())
     bng2_outputs = list(utils.mod_launch(mod, (*bng2_inputs, *bng2_outputs),
@@ -240,7 +240,7 @@ def fused_bn_grad_5D_all_run(shape, dtype, eps, kernel_name, attrs):
     bng3_dtypes = [dtype, "float32", "float32", "float32", "float32"]
     bng3_inputs = [inputs[0]] + bng2_outputs[2:] + [bng1_outputs[2]]
     bng3_output = np.full(shape, np.nan, dtype)
-    mod = utils.op_build_test(FusedBnGrad3,
+    mod = utils.op_build_test(fused_bn_grad3,
                     bng3_shapes, bng3_dtypes,
                     kernel_name=kernel_name + "_step3", attrs=attrs.copy())
     bng3_output = utils.mod_launch(mod, (*bng3_inputs, bng3_output), expect=benchmark(*inputs, eps, "NC1HWC0", None))

@@ -301,19 +301,19 @@ def equal_count(x, y, target=utils.CCE):
 @reg_op("BNGrad1", utils.CCE)
 def bn_grad1(dy, data, mean, target=utils.CCE):
     """BNGrad1"""
-    return nn.FusedBnGrad1(dy, data, mean, target)
+    return nn.fused_bn_grad1(dy, data, mean, target)
 
 
 @reg_op("BNGrad2", utils.CCE)
 def bn_grad2(dgamma_red_hw, dbeta_red_hw, variance, gamma, eps=1e-3, data_shape=None, target=utils.CCE):
     """BNGrad2"""
-    return nn.FusedBnGrad2(dgamma_red_hw, dbeta_red_hw, variance, gamma, eps, data_shape, target)
+    return nn.fused_bn_grad2(dgamma_red_hw, dbeta_red_hw, variance, gamma, eps, data_shape, target)
 
 
 @reg_op("BNGrad3", utils.CCE)
 def bn_grad3(dy, rs, dgamma_dx, dbeta_dx, data_minus_mean, target=utils.CCE):
     """BNGrad3"""
-    return nn.FusedBnGrad3(dy, rs, dgamma_dx, dbeta_dx, data_minus_mean, target)
+    return nn.fused_bn_grad3(dy, rs, dgamma_dx, dbeta_dx, data_minus_mean, target)
 
 
 @reg_op("FusedBatchNorm", utils.CCE)
