@@ -20,7 +20,7 @@ import akg.utils as utils
 import akg.utils as utils
 from akg.utils.format_transform import get_shape
 from akg.utils.dsl_create import TensorUtils
-from akg.ops.math import Rsqrt
+from akg.ops.math import rsqrt
 
 
 def _apply_rms_prop_compute(var, ms, mom, grad, lr, momentum, rho, epsilon):
@@ -42,7 +42,7 @@ def _apply_rms_prop_compute(var, ms, mom, grad, lr, momentum, rho, epsilon):
                                 grad(*indice) * one_minus_rho[0], name="rho_grad2")
     ms_update = akg.tvm.compute(shape, lambda *indice: rho_ms(*indice) + rho_grad2(*indice), name="ms_update")
     ms_eps = akg.tvm.compute(shape, lambda *indice: ms_update(*indice) + cons_eps, name="ms_eps")
-    rsq = Rsqrt(ms_eps, target="cce")
+    rsq = rsqrt(ms_eps, target="cce")
     mom_2 = akg.tvm.compute(shape, lambda *indice: lr_grad(*indice) * rsq(*indice), name="mom_2")
     mom_update = akg.tvm.compute(shape, lambda *indice: mom_1(*indice) + mom_2(*indice), name="mom_update")
     var_update = akg.tvm.compute(shape, lambda *indice: var(*indice) - mom_update(*indice), name="var_update")

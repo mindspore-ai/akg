@@ -18,7 +18,7 @@ from akg.utils.format_transform import get_shape
 import akg.utils.dsl_create as dc
 import akg.utils as utils
 from akg.utils.kernel_exec import product_is_mini
-from akg.ops.math import Divide, Exp, Round
+from akg.ops.math import Divide, Exp, round_
 
 SCALER_P = 0.3275911
 SCALER_A1 = 0.254829592
@@ -75,7 +75,7 @@ def _erf_compute(input_x):
     data_sign_abs = topi.abs(data_sign_vmuls)
     data_adds = topi.add(data_sign_abs, fp16_min)
     data_sign_div = Divide(data_sign_vmuls, data_adds, target="cce")
-    data_round = Round(data_sign_div, target=utils.CCE)
+    data_round = round_(data_sign_div, target=utils.CCE)
     # mini device should cast to fp16 first
     if product_is_mini():
         data_round = topi.cast(data_round, "float16")

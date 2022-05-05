@@ -14,7 +14,7 @@
 import numpy as np
 from akg.utils import kernel_exec as utils
 from akg.utils import dsl_create as dsl_utils
-from akg.ops.math import Pow
+from akg.ops.math import pow_
 from tests.common.tensorio import compare_tensor
 from tests.common.base import get_rtol_atol
 from tests.common.gen_random import random_gaussian
@@ -71,4 +71,4 @@ def gen_data(dtype, shape1, shape2):
 
 
 def pow_compile(shape1, shape2, dtype, attrs, kernel_name="pow", tuning=False):
-    return utils.op_build_test(Pow, [shape1, shape2], [dtype, dtype], kernel_name=kernel_name, attrs=attrs, tuning=tuning)
+    return utils.op_build_test(pow_, [shape1, shape2], [dtype, dtype], kernel_name=kernel_name, attrs=attrs, tuning=tuning)

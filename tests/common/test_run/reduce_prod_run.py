@@ -14,7 +14,7 @@
 import numpy as np
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
-from akg.ops.math import ReduceProd
+from akg.ops.math import reduce_prod
 from tests.common.gen_random import random_gaussian
 from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
@@ -25,14 +25,14 @@ def reduce_prod_run(shape, dtype, axis=None, keepdims=False, attrs=None):
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(ReduceProd, [shape], [dtype], ops_attrs, kernel_name=kernel_name, attrs=attrs, tuning=t)
+        mod = utils.op_build_test(reduce_prod, [shape], [dtype], ops_attrs, kernel_name=kernel_name, attrs=attrs, tuning=t)
         if t:
             input, output, ref_res = gen_data(axis, dtype, keepdims, shape)
             return mod, ref_res, (input, output)
         else:
             return mod
     else:
-        mod = utils.op_build_test(ReduceProd, [shape], [dtype], ops_attrs, kernel_name="reduce_prod", attrs=attrs)
+        mod = utils.op_build_test(reduce_prod, [shape], [dtype], ops_attrs, kernel_name="reduce_prod", attrs=attrs)
         input, output, ref_res = gen_data(axis, dtype, keepdims, shape)
         output = utils.mod_launch(mod, (input, output), expect=ref_res)
         if attrs.get("profiling", False):

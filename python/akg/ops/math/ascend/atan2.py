@@ -20,7 +20,7 @@ from akg.utils.format_transform import get_shape
 from akg.utils.kernel_exec import product_is_mini
 from akg.utils import dsl_create as dc
 from .atan import atan
-from ..reciprocal import Reciprocal
+from ..reciprocal import reciprocal
 
 
 
@@ -88,7 +88,7 @@ def _atan2_compute(y, x):
 
     # caculate the atan(y/x) when x > 0
     if product_is_mini():
-        x_rec = Reciprocal(x, target=utils.CCE)
+        x_rec = reciprocal(x, target=utils.CCE)
         res = topi.multiply(y, x_rec)
     else:
         res = topi.divide(y, x)

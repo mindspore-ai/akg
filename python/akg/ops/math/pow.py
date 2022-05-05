@@ -20,13 +20,14 @@ from .cast import Cast
 from akg.utils.dsl_create import produce_shapes
 from akg.utils.kernel_exec import product_is_mini
 
+
 def _pow_ascend(data, scale, target):
     shape1 = [x.value for x in data.shape]
     shape2 = [x.value for x in scale.shape]
 
     check_list = ["float16", "float32", "int32", "int8", "uint8"]
     dtype = data.dtype
-    if not (dtype.lower() in check_list):
+    if not dtype.lower() in check_list:
         raise RuntimeError("tile_cce only support %s while dtype is %s" % (",".join(check_list), dtype))
 
     shape = [x.value for x in data.shape]
@@ -34,13 +35,14 @@ def _pow_ascend(data, scale, target):
     utils.auto_broadcast_check(shape1, shape2)
     compute_dtype = "float32"
     if product_is_mini():
-        compute_dtype = "float16" 
+        compute_dtype = "float16"
     data = Cast(data, compute_dtype, target)
     scale = Cast(scale, compute_dtype, target)
 
-    C = akg.topi.power(data, scale)
-    C = Cast(C, dtype, target)
-    return C
+    c = akg.topi.power(data, scale)
+    c = Cast(c, dtype, target)
+    return c
+
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor)
 def _pow(data1, data2):
@@ -59,7 +61,8 @@ def _pow(data1, data2):
 
     return res
 
-def Pow(data1, data2, target=utils.CCE):
+
+def pow_(data1, data2, target=utils.CCE):
     """
     Computes power(data1,data2) elementwise, broadcast is supported.
 
@@ -69,12 +72,12 @@ def Pow(data1, data2, target=utils.CCE):
 
     Returns:
         tvm.tensor.Tensor, powered result, with same type as input tensors and broadcasted shape of data1 and data2.
-    
+
     Supported Platforms:
         'Ascend', 'GPU', 'CPU'
     """
     utils.check_supported_target(target)
     if target == utils.CCE:
         return _pow_ascend(data1, data2, target)
-    else:
-        return _pow(data1, data2)
+
+    return _pow(data1, data2)

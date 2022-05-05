@@ -19,7 +19,7 @@ import akg.topi
 import akg.utils as utils
 from akg.utils import custom_tiling as ct_util
 from akg.utils.format_transform import get_shape
-from akg.ops.math import ReduceMax
+from akg.ops.math import reduce_max
 from akg.utils.kernel_exec import product_is_mini
 
 focal_loss_set_dim_map = {
@@ -94,7 +94,7 @@ def focal_loss(prediction, tar, gamma):
     axis = -1
     shape = get_shape(prediction)
 
-    maxv = ReduceMax(prediction, axis=axis, keepdims=True, target=utils.CCE)
+    maxv = reduce_max(prediction, axis=axis, keepdims=True, target=utils.CCE)
 
     k1 = akg.tvm.reduce_axis((0, shape[-1]), name="k1")
     expsum = akg.tvm.compute(shape[:-1], lambda *i: akg.tvm.sum(

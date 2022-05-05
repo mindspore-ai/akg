@@ -20,7 +20,7 @@ import akg.topi
 from akg.utils.format_transform import get_shape
 import akg.utils as utils
 from akg.utils.dsl_create import TensorUtils
-from akg.ops.math import Rsqrt
+from akg.ops.math import rsqrt
 from tests.common.test_op.ascend.apply_proximal_gradient_descent import apply_proximal_gradient_descent_impl
 
 
@@ -36,7 +36,7 @@ def _apply_proximal_adagrad_compute(var, accum, lr, l1, l2, grad):
     shape = var.shape
     accum_new = akg.tvm.compute(shape, lambda *indice: accum(*indice) + grad(*indice) * grad(*indice), name="accum_new")
 
-    accum_new_rsqrt = Rsqrt(accum_new, target="cce")
+    accum_new_rsqrt = rsqrt(accum_new, target="cce")
     ada_lr = akg.topi.multiply(lr, accum_new_rsqrt)
 
     var_new = apply_proximal_gradient_descent_impl(var, ada_lr, l1, l2, grad)

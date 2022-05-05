@@ -19,8 +19,9 @@ import akg.tvm
 import akg.utils as utils
 from akg.utils.kernel_exec import product_is_mini
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, (bool, type(None)), (str, type(None)))
-def Reciprocal(data, high_precision=True, target=utils.CCE):
+def reciprocal(data, high_precision=True, target=utils.CCE):
     """
     Computes the reciprocal of data element-wise.
 
@@ -30,7 +31,7 @@ def Reciprocal(data, high_precision=True, target=utils.CCE):
 
     Returns:
         tvm.tensor.Tensor of same type and shape as data.
-    
+
     Supported Platforms:
         'Ascend', 'GPU'
     """
@@ -38,7 +39,7 @@ def Reciprocal(data, high_precision=True, target=utils.CCE):
     shape = [x.value for x in data.shape]
     utils.check_shape(shape)
 
-    res = akg.tvm.compute(shape, lambda *indice: akg.tvm.const(1, data.dtype) / (data(*indice)), name="res")
+    res = akg.tvm.compute(shape, lambda *indice: akg.tvm.const(1, data.dtype) / data(*indice), name="res")
 
     # When product is mini, using Newtom iteration method to achieve higher precision.
     if product_is_mini() and high_precision:

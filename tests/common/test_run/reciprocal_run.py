@@ -15,7 +15,7 @@ import akg
 import numpy as np
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
-from akg.ops.math import Reciprocal
+from akg.ops.math import reciprocal
 from tests.common.base import get_rtol_atol
 from tests.common.gen_random import random_gaussian, gen_epsilon
 from akg.utils.result_analysis import target_profiling
@@ -52,4 +52,4 @@ def gen_data(dtype, shape):
 
 
 def reciprocal_compile(shape, dtype, attrs, kernel_name="reciprocal", tuning=False):
-    return utils.op_build_test(Reciprocal, [shape], [dtype], kernel_name=kernel_name, attrs=attrs, tuning=tuning)
+    return utils.op_build_test(reciprocal, [shape], [dtype], kernel_name=kernel_name, attrs=attrs, tuning=tuning)

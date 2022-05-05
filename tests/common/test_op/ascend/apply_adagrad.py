@@ -17,7 +17,7 @@ import akg
 import akg.utils as utils
 from akg.utils.format_transform import get_shape
 
-from akg.ops.math import Rsqrt
+from akg.ops.math import rsqrt
 
 
 def _apply_adagrad_compute(var, accum, lr, grad, update_slots):
@@ -40,7 +40,7 @@ def _apply_adagrad_compute(var, accum, lr, grad, update_slots):
     lr_grad = akg.tvm.compute(grad.shape,
                               lambda *indices: grad(*indices) * lr[0],
                               tag='elewise_single_VS_mul')
-    rsqrt_accum = Rsqrt(accum, target=utils.CCE)
+    rsqrt_accum = rsqrt(accum, target=utils.CCE)
 
     update = akg.lang.ascend.vmul(lr_grad, rsqrt_accum)
     out_var = akg.lang.ascend.vsub(var, update)

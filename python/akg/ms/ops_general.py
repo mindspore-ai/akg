@@ -49,6 +49,24 @@ def cast(x, dst_type, target=utils.CUDA):
     return math.Cast(x, dst_type, target)
 
 
+@reg_op("Pow")
+def pow(x, scale, target=utils.CUDA):
+    """Pow"""
+    return math.pow_(x, scale, target)
+
+
+@reg_op("Round")
+def round_(x, target=utils.CUDA):
+    """Round"""
+    return math.round_(x, target)
+
+
+@reg_op("Rsqrt")
+def rsqrt(x, target=utils.CUDA):
+    """Rsqrt"""
+    return math.rsqt(x, target)
+
+
 @reg_op("Equal")
 def equal(input1, input2, target=utils.CUDA):
     """Equal"""
@@ -112,7 +130,7 @@ def logical_not(data, target=utils.CUDA):
 @reg_op("NotEqual")
 def not_equal(x, y, target=utils.CUDA):
     """NotEqual"""
-    return math.NotEqual(x, y, target)
+    return math.not_equal(x, y, target)
 
 
 @reg_op("GreaterEqual")
@@ -124,7 +142,37 @@ def greater_equal(x, y, target=utils.CUDA):
 @reg_op("Max")
 def tensor_max(x, axis=None, keep_dims=False, target=utils.CUDA):
     """Max"""
-    return math.ReduceMax(x, axis=axis, keepdims=keep_dims, target=target)
+    return math.reduce_max(x, axis=axis, keepdims=keep_dims, target=target)
+
+
+@reg_op("Min")
+def tensor_min(x, axis=None, keep_dims=False, target=utils.CUDA):
+    """Min"""
+    return math.reduce_min(x, axis=axis, keepdims=keep_dims, target=target)
+
+
+@reg_op("ReduceAnd")
+def tensor_and(x, axis=None, keep_dims=False, target=utils.CUDA):
+    """ReduceAnd"""
+    return math.reduce_and(x, axis=axis, keepdims=keep_dims, target=target)
+
+
+@reg_op("ReduceOr")
+def tensor_or(x, axis=None, keep_dims=False, target=utils.CUDA):
+    """ReduceOr"""
+    return math.reduce_or(x, axis=axis, keepdims=keep_dims, target=target)
+
+
+@reg_op("ReduceSum")
+def tensor_or(x, axis=None, keep_dims=False, target=utils.CUDA):
+    """ReduceSum"""
+    return math.reduce_sum(x, axis=axis, keepdims=keep_dims, target=target)
+
+
+@reg_op("ReduceProd")
+def tensor_or(x, axis=None, keep_dims=False, target=utils.CUDA):
+    """ReduceProd"""
+    return math.reduce_prod(x, axis=axis, keepdims=keep_dims, target=target)
 
 
 @reg_op("Neg")
@@ -166,4 +214,10 @@ def reshape(tensor, shape, target=utils.CUDA):
 @reg_op("Reciprocal")
 def reciprocal(x, target=utils.CUDA):
     """Reciprocal"""
-    return math.Reciprocal(x, target)
+    return math.reciprocal(x, target)
+
+
+@reg_op("Select")
+def select(condition, x1, x2, target=utils.CUDA):
+    """Select"""
+    return math.select(condition, x1, x2, target)

@@ -23,7 +23,7 @@ import akg.lang.ascend
 import akg.utils as utils
 import akg.utils.kernel_exec as kernel_exec
 from akg.utils.dsl_create import TensorUtils
-from akg.ops.math.rsqrt import Rsqrt
+from akg.ops.math.rsqrt import rsqrt
 from akg.utils import custom_tiling as ct_util
 from akg.utils.dsl_create import mul_axis_sum, update_by_moving_average
 from akg.utils.format_transform import get_shape
@@ -459,7 +459,7 @@ def FusedBn3(data, mean, variance, gamma, beta, eps=1e-3, target=utils.CCE):
     ori_dtype = data.dtype
 
     # calculate batch norm result
-    rsd = Rsqrt(akg.tvm.compute(variance.shape,
+    rsd = rsqrt(akg.tvm.compute(variance.shape,
                                 lambda *i:
                                 variance(*i) +
                                 akg.tvm.const(eps, dtype=variance.dtype),

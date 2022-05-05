@@ -15,7 +15,7 @@
 import numpy as np
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
-from akg.ops.math import Rsqrt
+from akg.ops.math import rsqrt
 from tests.common.gen_random import random_gaussian, gen_epsilon
 from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
@@ -24,7 +24,7 @@ def rsqrt_run(shape, dtype, kernel_name="rsqrt", cce_path="./", attrs=None):
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(Rsqrt, [shape], [dtype], kernel_name=kernel_name, attrs=attrs, tuning=t)
+        mod = utils.op_build_test(rsqrt, [shape], [dtype], kernel_name=kernel_name, attrs=attrs, tuning=t)
         if t:
             expect, input, output = gen_data(dtype, shape)
             return mod, expect, (input, output)
@@ -32,7 +32,7 @@ def rsqrt_run(shape, dtype, kernel_name="rsqrt", cce_path="./", attrs=None):
             return mod
     else:
         expect, input, output = gen_data(dtype, shape)
-        mod = utils.op_build_test(Rsqrt, [shape], [dtype], kernel_name=kernel_name, attrs=attrs)
+        mod = utils.op_build_test(rsqrt, [shape], [dtype], kernel_name=kernel_name, attrs=attrs)
         output = utils.mod_launch(mod, (input, output), expect=expect)
         if attrs.get("profiling", False):
             import akg

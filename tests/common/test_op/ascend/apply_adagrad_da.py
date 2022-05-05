@@ -16,7 +16,7 @@
 import akg
 import akg.utils as utils
 from akg import topi, tvm
-from akg.ops.math import Sqrt, Reciprocal
+from akg.ops.math import Sqrt, reciprocal
 from akg.ops.math.ascend import Sign
 from akg.utils.kernel_exec import product_is_mini
 from akg.utils.dsl_create import TensorUtils
@@ -79,7 +79,7 @@ def _apply_adagrad_da_compute(var, gradient_accum, gradient_squared_accum,
 
     # 6.var = x_value / y_value
     if product_is_mini():
-        y_rec = Reciprocal(y_value, target=utils.CCE)
+        y_rec = reciprocal(y_value, target=utils.CCE)
         var_out = topi.multiply(x_value, y_rec)
     else:
         var_out = topi.divide(x_value, y_value)

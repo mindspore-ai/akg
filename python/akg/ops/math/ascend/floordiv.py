@@ -16,7 +16,7 @@
 import akg
 import akg.utils as utils
 from akg.utils.kernel_exec import product_is_mini
-from ..reciprocal import Reciprocal
+from ..reciprocal import reciprocal
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (str, type(None)))
 def FloorDiv(data1, data2, target=utils.CCE):
@@ -40,7 +40,7 @@ def FloorDiv(data1, data2, target=utils.CCE):
     utils.check_shape(shape2)
 
     if product_is_mini():
-        rec = Reciprocal(data2, high_precision=True, target=target)
+        rec = reciprocal(data2, high_precision=True, target=target)
         res = data1 * rec
     else:
         res = akg.topi.divide(data1, data2)

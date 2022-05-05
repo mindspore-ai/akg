@@ -17,7 +17,7 @@
 import numpy as np
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
-from akg.ops.math import ReduceMin
+from akg.ops.math import reduce_min
 from akg.utils.dsl_create import get_reduce_out_shape
 from tests.common.gen_random import random_gaussian
 from tests.common.base import get_rtol_atol
@@ -34,7 +34,7 @@ def reduce_min_run(shape, dtype, axis, keepdims, kernel_name="reduce_min", attrs
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(ReduceMin, [shape], [dtype], 
+        mod = utils.op_build_test(reduce_min, [shape], [dtype], 
                                   op_attrs=op_attrs, kernel_name=kernel_name, attrs=attrs, tuning=t)
         if t:
             expect, inputs, output = gen_data(axis, dtype, keepdims, shape)
@@ -42,7 +42,7 @@ def reduce_min_run(shape, dtype, axis, keepdims, kernel_name="reduce_min", attrs
 
         return mod
 
-    mod = utils.op_build_test(ReduceMin, [shape], [dtype], 
+    mod = utils.op_build_test(reduce_min, [shape], [dtype], 
                               op_attrs=op_attrs, kernel_name=kernel_name, attrs=attrs)
     expect, inputs, output = gen_data(axis, dtype, keepdims, shape)
     output = utils.mod_launch(mod, (inputs, output), expect=expect)

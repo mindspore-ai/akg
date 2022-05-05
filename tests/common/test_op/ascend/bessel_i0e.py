@@ -16,7 +16,7 @@
 from akg import topi
 import akg.tvm
 import akg.utils as utils
-from akg.ops.math import Abs, Cast, mul, neg, Rsqrt, Exp, Divide, minimum
+from akg.ops.math import Abs, Cast, mul, neg, rsqrt, Exp, Divide, minimum
 
 # const value
 ITR_BEFORE = (1.0, 3.5156229, 3.0899424, 1.2067492, 0.2659732, 0.0360768, 0.0045813)
@@ -65,7 +65,7 @@ def _bessel_i0e_compute(input_data):
     for iter_number in ITR_AFTER[LEN_AFTER-3::-1]:
         after_res = mul(after_res, data, target=utils.CCE)
         after_res = topi.add(after_res, iter_number)
-    rsqrt_data = Rsqrt(abs_data, target=utils.CCE)
+    rsqrt_data = rsqrt(abs_data, target=utils.CCE)
     after_res = mul(after_res, rsqrt_data, target=utils.CCE)
     after_res = minimum(before_res, after_res, target=utils.CCE)
 

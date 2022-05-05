@@ -16,7 +16,7 @@
 from akg import topi
 import akg.tvm
 import akg.utils as utils
-from akg.ops.math import Abs, Cast, mul, neg, Rsqrt, Exp, Divide
+from akg.ops.math import Abs, Cast, mul, neg, rsqrt, Exp, Divide
 from akg.ops.math.ascend import Sign
 from akg.utils.kernel_exec import product_is_mini
 
@@ -70,7 +70,7 @@ def _after_res_compute(abs_data):
     for iter_number in ITR_AFTER[LEN_AFTER-3::-1]:
         after_res = mul(after_res, data, target=utils.CCE)
         after_res = topi.add(after_res, iter_number)
-    abs_data_rsqrt = Rsqrt(abs_data, target=utils.CCE)
+    abs_data_rsqrt = rsqrt(abs_data, target=utils.CCE)
     after_res = mul(after_res, abs_data_rsqrt, target=utils.CCE)
     return after_res
 

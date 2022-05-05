@@ -17,7 +17,7 @@
 import akg
 import akg.utils as utils
 from akg import topi, tvm
-from akg.ops.math import Reciprocal
+from akg.ops.math import reciprocal
 from akg.utils.dsl_create import TensorUtils, neg_one_const, one_const
 from akg.utils.format_transform import get_shape
 
@@ -61,7 +61,7 @@ def _apply_ada_max_compute(var, m, v, grad, lr, beta1, beta1_power, beta2, epsil
     # lr * m
     lhs = tvm.compute(m.shape, lambda *i: m(*i) * lr[0])
     # lr * m / (1 - beta1_power) * (v + epsilon)
-    rhs = Reciprocal(rhs)
+    rhs = reciprocal(rhs)
     rhs = topi.multiply(lhs, rhs)
     var = topi.subtract(var, rhs)
 

@@ -16,14 +16,14 @@
 
 import akg
 import akg.utils as utils
-from akg.ops.math import Sum, Rsqrt
+from akg.ops.math import Sum, rsqrt
 
 def l2normalize(data, target=utils.CCE):
     utils.ops_dtype_check(data.dtype, utils.DtypeForDavinci.ALL_FLOAT)
     utils.check_shape(data.shape)
     square_res = akg.lang.ascend.vmul(data, data)
     reduce_sum = Sum(square_res, -1, keepdims=True, target=target)
-    one_of_square = Rsqrt(reduce_sum, target=target)
+    one_of_square = rsqrt(reduce_sum, target=target)
     broad_cast = akg.lang.ascend.broadcast(one_of_square, data.shape)
     res = akg.lang.ascend.vmul(data, broad_cast)
     attrs = {"pragma_modshift": 1}

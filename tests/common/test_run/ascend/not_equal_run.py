@@ -14,7 +14,7 @@
 
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.math import NotEqual
+from akg.ops.math import not_equal
 from tests.common.gen_random import random_gaussian
 
 
@@ -23,14 +23,14 @@ def not_equal_run(shapes, dtype, kernel_name, attrs_op={}, cce_path="./", attrs=
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(NotEqual, shapes, [dtype, dtype], kernel_name=kernel_name, attrs=attrs, tuning=t)
+        mod = utils.op_build_test(not_equal, shapes, [dtype, dtype], kernel_name=kernel_name, attrs=attrs, tuning=t)
         if t:
             benchMark1, inputs1, output1 = gen_data(shapes)
             return mod, benchMark1, inputs1 + [output1]
         else:
             return mod
     else:
-        mod = utils.op_build_test(NotEqual, shapes, [dtype, dtype], kernel_name=kernel_name, attrs=attrs)
+        mod = utils.op_build_test(not_equal, shapes, [dtype, dtype], kernel_name=kernel_name, attrs=attrs)
         benchMark1, inputs1, output1 = gen_data(shapes)
         output1 = utils.mod_launch(mod, inputs1 + [output1], expect=benchMark1)
 

@@ -20,6 +20,7 @@ import akg.utils as utils
 from .cast import Cast
 from akg.utils.format_transform import refine_reduce_axis
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, (list, tuple, int, type(None)), (bool, type(None)))
 def _reduce_min(inputs, axis=None, keepdims=False):
     axis = refine_reduce_axis(inputs, axis)
@@ -30,11 +31,12 @@ def _reduce_min(inputs, axis=None, keepdims=False):
         inputs = akg.topi.cast(inputs, 'float32')
 
     output = akg.topi.min(inputs, axis=axis, keepdims=keepdims)
-    
+
     if in_dtype == 'float16':
         output = akg.topi.cast(output, 'float16')
 
     return output
+
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, (int, list, tuple, type(None)),
                           (bool, type(None)), (str, type(None)))
@@ -92,7 +94,7 @@ def _reduce_min_max_ascend(data, axis=None, keepdims=False, method="min"):
     return res
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, (list, tuple, int, type(None)), (bool, type(None)), (str, type(None)))
-def ReduceMin(inputs, axis=None, keepdims=False, target=utils.CCE):
+def reduce_min(inputs, axis=None, keepdims=False, target=utils.CCE):
     """
     Compute the min of elements across dimensions of a tensor.
 
@@ -104,12 +106,11 @@ def ReduceMin(inputs, axis=None, keepdims=False, target=utils.CCE):
     Returns:
         tvm.tensor.Tensor, has same type as input. If keepdims is True, all reduced dimensions are retained
         with length 1, else these reduced axis will be eliminate.
-    
+
     Supported Platforms:
         'Ascend', 'GPU', 'CPU'
     """
     utils.check_supported_target(target)
     if target == utils.CCE:
         return _reduce_min_max_ascend(inputs, axis, keepdims, "min")
-    else:
-        return _reduce_min(inputs, axis, keepdims)
+    return _reduce_min(inputs, axis, keepdims)

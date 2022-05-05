@@ -18,7 +18,7 @@ import akg.utils as utils
 import akg.utils as utils
 from akg.utils.dsl_create import TensorUtils
 from akg.utils.format_transform import get_shape
-from akg.ops.math import Rsqrt
+from akg.ops.math import rsqrt
 
 def _apply_centered_rms_prop_compute(var, mg, ms, mom, grad, lr, momentum, rho, epsilon):
     """Compute apply_centered_rms_prop"""
@@ -73,7 +73,7 @@ def _apply_centered_rms_prop_compute(var, mg, ms, mom, grad, lr, momentum, rho, 
     rhs_eps = akg.tvm.compute(rhs.shape,
                               lambda *indices: rhs(*indices) + epsilon,
                               tag='elewise_single_VS_add')
-    rhs_eps = Rsqrt(rhs_eps, target=utils.CCE)
+    rhs_eps = rsqrt(rhs_eps, target=utils.CCE)
     rhs_eps = akg.lang.ascend.vmul(lr_grad, rhs_eps)
     out_mom = akg.lang.ascend.vadd(lhs_mom, rhs_eps)
 

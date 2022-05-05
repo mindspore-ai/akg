@@ -20,7 +20,6 @@ import akg.utils as utils
 from akg.utils.format_transform import get_shape
 from akg.utils.kernel_exec import product_is_mini
 
-VALUE_ONE = 1
 
 def select_compute(condition, x1, x2, target=utils.CCE):
     """select compute implementation"""
@@ -28,38 +27,28 @@ def select_compute(condition, x1, x2, target=utils.CCE):
     con_shape = get_shape(condition)
     num_dtype = x1.dtype
     bool_dtype = condition.dtype
-
+    cast_op = akg.lang.ascend.cast_to if target == utils.CCE else akg.topi.cast
     if num_dtype in ("int8", "uint8"):
         x1_dtype = "float32"
-        ones = akg.lang.ascend.broadcast(akg.tvm.const(VALUE_ONE, dtype="float32"),
+        ones = akg.lang.ascend.broadcast(akg.tvm.const(1, dtype="float32"),
                                       shape, output_dtype="float32")
-        if target == utils.CCE:
-            x1 = akg.lang.ascend.cast_to(x1, "float32")
-            x2 = akg.lang.ascend.cast_to(x2, "float32")
-        else:
-            x1 = akg.topi.cast(x1, "float32")
-            x2 = akg.topi.cast(x2, "float32")
+        x1 = cast_op(x1, "float32")
+        x2 = cast_op(x2, "float32")
     else:
         x1_dtype = num_dtype
-        ones = akg.lang.ascend.broadcast(akg.tvm.const(VALUE_ONE, dtype=num_dtype),
+        ones = akg.lang.ascend.broadcast(akg.tvm.const(1, dtype=num_dtype),
                                       shape, output_dtype=num_dtype)
 
     if bool_dtype == "int8":
         if x1_dtype == "int32":
             condition_dtype = akg.lang.ascend.ceil(condition)
         else:
-            if target == utils.CCE:
-                condition_dtype = akg.lang.ascend.cast_to(condition, x1_dtype)
-            else:
-                condition_dtype = akg.topi.cast(condition, x1_dtype)
+            condition_dtype = cast_op(condition, x1_dtype)
     else:
         if x1_dtype == "int32":
             condition_dtype = condition
         else:
-            if target == utils.CCE:
-                condition_dtype = akg.lang.ascend.cast_to(condition, x1_dtype)
-            else:
-                condition_dtype = akg.topi.cast(condition, x1_dtype)
+            condition_dtype = cast_op(condition, x1_dtype)
 
     if list(con_shape) != list(shape):
         condition_dtype = akg.lang.ascend.broadcast(condition_dtype, shape)
@@ -79,15 +68,12 @@ def select_compute(condition, x1, x2, target=utils.CCE):
         temp_y = akg.lang.ascend.vmul(x2, condition_opp)
         res = akg.lang.ascend.vadd(temp_x, temp_y)
     if num_dtype in ("int8", "uint8"):
-        if target == utils.CCE:
-            res = akg.lang.ascend.cast_to(res, num_dtype)
-        else:
-            res = akg.topi.cast(res, num_dtype)
+        res = cast_op(res, num_dtype)
     return res
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (str, type(None)))
-def Select(condition, x1, x2, target=utils.CCE):
+def select(condition, x1, x2, target=utils.CCE):
     """
     Selects elements from x1 or x2, depending on condition.
     Note:

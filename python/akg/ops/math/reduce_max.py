@@ -30,14 +30,15 @@ def _reduce_max(inputs, axis=None, keepdims=False):
         inputs = akg.topi.cast(inputs, 'float32')
 
     output = akg.topi.max(inputs, axis=axis, keepdims=keepdims)
-    
+
     if in_dtype == 'float16':
         output = akg.topi.cast(output, 'float16')
 
     return output
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, (list, tuple, int, type(None)), (bool, type(None)), (str, type(None)))
-def ReduceMax(inputs, axis=None, keepdims=False, target=utils.CCE):
+def reduce_max(inputs, axis=None, keepdims=False, target=utils.CCE):
     """
     Compute the max of elements across dimensions of a tensor.
 
@@ -49,7 +50,7 @@ def ReduceMax(inputs, axis=None, keepdims=False, target=utils.CCE):
     Returns:
         tvm.tensor.Tensor, has same type as input. If keepdims is True, all reduced dimensions are retained
         with length 1, else these reduced axis will be eliminate.
-    
+
     Supported Platforms:
         'Ascend', 'GPU', 'CPU'
     """
@@ -57,5 +58,4 @@ def ReduceMax(inputs, axis=None, keepdims=False, target=utils.CCE):
     if target == utils.CCE:
         from akg.ops.math.reduce_min import _reduce_min_max_ascend
         return _reduce_min_max_ascend(inputs, axis, keepdims, "max")
-    else:
-        return _reduce_max(inputs, axis, keepdims)
+    return _reduce_max(inputs, axis, keepdims)

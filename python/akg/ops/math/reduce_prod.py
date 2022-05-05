@@ -16,12 +16,13 @@
 import akg.topi
 import akg.tvm
 import akg.utils as utils
+from akg.utils.format_transform import refine_reduce_axis
 from .exp import Exp
 from .log import log
 from akg.utils.format_transform import refine_reduce_axis
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, (int, tuple, list, type(None)), (bool, type(None)), (str, type(None)))
-def ReduceProd(data, axis=None, keepdims=False, target=utils.CCE):
+def reduce_prod(data, axis=None, keepdims=False, target=utils.CCE):
     """
     Computes the product of elements along specific axis
 
@@ -33,13 +34,14 @@ def ReduceProd(data, axis=None, keepdims=False, target=utils.CCE):
 
     Returns:
         Tensor, the product of elements of input tensor.
-    
+
     Supported Platforms:
         'Ascend', 'GPU'
     """
     utils.check_supported_target(target)
     shape = [x.value for x in data.shape]
-    utils.ops_dtype_check(data.dtype, [utils.DtypeForDavinci.ALL_FLOAT, utils.DtypeForDavinci.INT8, utils.DtypeForDavinci.UINT8])
+    utils.ops_dtype_check(data.dtype, [utils.DtypeForDavinci.ALL_FLOAT,
+        utils.DtypeForDavinci.INT8, utils.DtypeForDavinci.UINT8])
 
     if axis is None and keepdims is False:
         raise ValueError("keepdims must be True when axis is None!")
