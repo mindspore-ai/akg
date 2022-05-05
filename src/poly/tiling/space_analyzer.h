@@ -50,6 +50,7 @@ class SpaceAnalyzer {
 
   // generalized cases
   void IdentifyInsnType();
+  void IdentifyInlinedTensors();
   void IdentifyDmaUnderCondition();
   void IdentifySharedAxes() const;
   void ShiftHelper(const IntImm *offset, const IntImm *extent, int64_t *pre_off, int64_t *pre_ext, int64_t *shift_time,
