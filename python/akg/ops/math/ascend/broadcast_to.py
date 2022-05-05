@@ -21,7 +21,7 @@ from ..cast import Cast
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, (list, tuple), (str, type(None)))
-def BroadcastTo(x, shape, target=utils.CCE):
+def broadcast_to(x, shape, target=utils.CCE):
     """
     Broadcast an tensor to a compatible shape.
 

@@ -19,13 +19,14 @@ from functools import reduce
 import akg.topi
 import akg.tvm
 from akg.tvm.hybrid import script
-from ..cast import Cast
+import akg.tvm.hybrid as hybrid
 from akg.utils import custom_tiling as ct_util
 import akg.utils as  utils
 from akg.utils.format_transform import get_shape, get_bytes
 from akg.utils.math import greatest_common_divisor, least_common_multiple
 from akg.utils.kernel_exec import product_is_mini
 from akg.utils import dynamic_shape as ds
+from ..cast import Cast
 
 batchmatmul_set_dim_map = {
     # 2D
@@ -536,11 +537,11 @@ def get_shape_pos_map(tensor_shape):
     count = -1
     for i, _ in enumerate(batch_pos):
         count += 1
-        mnk["b%s" % str(i)] = count
+        mnk.update({"b%s" % str(i) : count})
     for i, shp in enumerate(tensor_shape[-3:]):
         if shp != 1:
             count += 1
-        mnk[pos_map[i]] = count
+        mnk.update({pos_map[i] : count})
     return batch_pos, mnk
 
 
@@ -605,20 +606,20 @@ def batchmatmul_tiling_strategy(shape, align_dtype, attrs):
         strategy.append(ct_util.create_constraint_on_axis(values=tile_m,
                                                           constraints=m_constraint,
                                                           band=0,
-                                                          axis=mnk["m"])[0])
+                                                          axis=mnk.get("m", None))[0])
     if n != 1:
         for constraint in n_constraint:
             strategy.append(ct_util.create_constraint_on_axis(values=tile_n,
                                                               constraints=constraint,
                                                               band=0,
-                                                              axis=mnk["n"])[0])
+                                                              axis=mnk.get("n", None))[0])
 
     if k != 1:
         strategy.append(ct_util.create_constraint_on_axis(values=tile_k,
                                                           constraints=k_constraint,
                                                           band=0,
-                                                          axis=mnk["k"])[0])
-    higher_priority_pos = mnk["k"] if k >= n else mnk["n"]
+                                                          axis=mnk.get("k", None))[0])
+    higher_priority_pos = mnk.get("k", None) if k >= n else mnk.get("n", None)
     strategy.append(ct_util.create_constraint_on_axis(values=0,
                                                       constraints=ct_util.TileConstraint.SET_PRIORITY,
                                                       band=0,
@@ -626,6 +627,7 @@ def batchmatmul_tiling_strategy(shape, align_dtype, attrs):
     strategy.append(ct_util.modify_common_constraints(0.7, ct_util.TileConstraint.SET_MEM_RATIO))
     attrs["custom_tiling"] = strategy
     return attrs
+
 
 def batchmatmul_tiling_strategy_dynamic(shape, output, attrs):
     """This is an efficient version of tiling strategy for batchmatmul."""
@@ -638,20 +640,21 @@ def batchmatmul_tiling_strategy_dynamic(shape, output, attrs):
     strategy.append(ct_util.create_constraint_on_axis(values=1,
                                                       constraints=ct_util.TileConstraint.FACTOR,
                                                       band=0,
-                                                      axis=mnk["m"])[0])
+                                                      axis=mnk.get("m", None))[0])
     strategy.append(ct_util.create_constraint_on_axis(values="FULL",
                                                       constraints=ct_util.TileConstraint.MAX,
                                                       band=0,
-                                                      axis=mnk["n"])[0])
+                                                      axis=mnk.get("n", None))[0])
     strategy.append(ct_util.create_constraint_on_axis(values=8,
                                                       constraints=ct_util.TileConstraint.FACTOR,
                                                       band=0,
-                                                      axis=mnk["k"])[0])
+                                                      axis=mnk.get("k", None))[0])
     strategy.append(ct_util.modify_common_constraints(0.7, ct_util.TileConstraint.SET_MEM_RATIO))
 
     attrs["custom_tiling"] = strategy
-    attrs["dynamic_shape"] = ds.set_dynamic_shape_limit_for_tensor(output, 2048, [1,])
+    attrs["dynamic_shape"] = ds.set_dynamic_shape_limit_for_tensor(output, 2048, [1, ])
     return attrs
+
 
 def get_mnk_from_matrix(shape_a_list, shape_b_list, trans_a, trans_b):
     """Get m, n and k value from input tensor shapes."""
@@ -691,7 +694,7 @@ def batchmatmul_no_bias_set_dim(a_value, b_value, trans_a, trans_b):
 
 @ct_util.reg_set_dim_func(batchmatmul_bias_set_dim)
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, bool, bool)
-def BatchMatMulBias(a_value, b_value, bias_value, trans_a, trans_b):
+def batch_matmul_bias(a_value, b_value, bias_value, trans_a, trans_b):
     """
     Multiplies two tensors in batches and adds bias to the output.
 
@@ -720,7 +723,7 @@ def BatchMatMulBias(a_value, b_value, bias_value, trans_a, trans_b):
     if len(a_value.shape) not in [2, 3, 4]:
         raise ValueError("Batch matmul only support 2D, 3D and 4D now.")
 
-    c_value = BatchMatMul(a_value, b_value, trans_a, trans_b)
+    c_value = batch_matmul(a_value, b_value, trans_a, trans_b)
     if isinstance(c_value, (tuple, list)):
         c_value = c_value[0]
 
@@ -740,6 +743,7 @@ def BatchMatMulBias(a_value, b_value, bias_value, trans_a, trans_b):
     attrs = batchmatmul_tiling_strategy(batch + mnk, c_value.dtype, attrs)
     return akg.tvm.compute(bias_value.shape,
                            lambda *indice: c_value(*indice) + bias_value(*indice), name='matmul_bias_output'), attrs
+
 
 def vectormatmul_3d(a_value, b_value, trans_a, trans_b):
     """hybrid implementation for 3D batchmatmul."""
@@ -827,7 +831,7 @@ def vectormatmul_4d(a_value, b_value, trans_a, trans_b):
     zero = akg.tvm.const(0.0, dtype=dtype)
 
     @script(capture=locals())
-    def matmul_hybrid_f_f(a, b, zero):
+    def matmul_4d_hybrid_f_f(a, b, zero):
         t_1 = allocate((bs1, bs2, m, k, n), a.dtype, 'local')
         t_2 = allocate((bs1, bs2, m, n), a.dtype, 'local')
         for i_bs1 in range(0, bs1):
@@ -845,7 +849,7 @@ def vectormatmul_4d(a_value, b_value, trans_a, trans_b):
         return t_2
 
     @script(capture=locals())
-    def matmul_hybrid_f_t(a, b, zero):
+    def matmul_4d_hybrid_f_t(a, b, zero):
         t_1 = allocate((bs1, bs2, m, n, k), a.dtype, 'local')
         t_2 = allocate((bs1, bs2, m, n), a.dtype, 'local')
         for i_bs1 in range(0, bs1):
@@ -859,7 +863,7 @@ def vectormatmul_4d(a_value, b_value, trans_a, trans_b):
         return t_2
 
     @script(capture=locals())
-    def matmul_hybrid_t_f(a, b, zero):
+    def matmul_4d_hybrid_t_f(a, b, zero):
         t_1 = allocate((bs1, bs2, m, k, n), a.dtype, 'local')
         t_2 = allocate((bs1, bs2, m, n), a.dtype, 'local')
         for i_bs1 in range(0, bs1):
@@ -877,11 +881,11 @@ def vectormatmul_4d(a_value, b_value, trans_a, trans_b):
         return t_2
 
     if not trans_a and not trans_b:
-        c_value = matmul_hybrid_f_f(a_value, b_value, zero)
+        c_value = matmul_4d_hybrid_f_f(a_value, b_value, zero)
     elif not trans_a and trans_b:
-        c_value = matmul_hybrid_f_t(a_value, b_value, zero)
+        c_value = matmul_4d_hybrid_f_t(a_value, b_value, zero)
     elif trans_a and not trans_b:
-        c_value = matmul_hybrid_t_f(a_value, b_value, zero)
+        c_value = matmul_4d_hybrid_t_f(a_value, b_value, zero)
     else:
         raise ValueError('Not support both transpose yet')
 
@@ -1117,9 +1121,10 @@ def vectormatmul_2d(a_value, b_value, trans_a, trans_b):
 
     return c_value
 
+
 @ct_util.reg_set_dim_func(batchmatmul_no_bias_set_dim)
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, bool, bool, (str, type(None)))
-def BatchMatMul(a_value, b_value, trans_a=False, trans_b=False, target=utils.CCE):
+def batch_matmul(a_value, b_value, trans_a=False, trans_b=False, target=utils.CCE):
     """
     Multiplies two tensors in batches.
 

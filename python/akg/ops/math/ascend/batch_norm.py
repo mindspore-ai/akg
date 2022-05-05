@@ -23,7 +23,7 @@ from akg.utils.format_transform import get_shape
                           akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor,
                           akg.tvm.tensor.Tensor,
                           float, (bool, type(None)), (dict, type(None)), (str, type(None)))
-def BatchNorm(data, mean, var, gamma, beta, eps, polyhedral=True, attrs=None, target=utils.CCE):
+def batch_norm(data, mean, var, gamma, beta, eps, polyhedral=True, attrs=None):
     """
     Batch normalization.
 
@@ -39,7 +39,7 @@ def BatchNorm(data, mean, var, gamma, beta, eps, polyhedral=True, attrs=None, ta
 
     Returns:
         outs (tvm.tensor.Tensor): Tensor for normalized, scaled, shifted data.
-    
+
     Supported Platforms:
         'Ascend'
     """
@@ -54,10 +54,8 @@ def BatchNorm(data, mean, var, gamma, beta, eps, polyhedral=True, attrs=None, ta
 
     inp_eps = akg.tvm.const(eps, dtype=dtype)
 
-    # var + eps
     veps = akg.lang.ascend.vadds(var, inp_eps)
 
-    # sqrt(var + eps)
     power_num = akg.tvm.const(0.5, dtype=data.dtype)
 
     if len(shape) == 5:

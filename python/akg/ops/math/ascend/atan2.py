@@ -23,10 +23,6 @@ from .atan import atan
 from ..reciprocal import reciprocal
 
 
-
-CONST_PI_BY_TWO = 1.5707963267948966192313216916398
-
-
 def _init_atan2_mask(data_y_, data_x_):
     """
     Compute mask for atan2.
@@ -77,13 +73,14 @@ def _init_atan2_mask(data_y_, data_x_):
 
 def _atan2_compute(y, x):
     """compute for atan2"""
+    const_pi_by_two = 1.5707963267948966192313216916398
     dtype = y.dtype
     if dtype == "float16":
         y = topi.cast(y, "float32")
         x = topi.cast(x, "float32")
 
     x_lt_zero_y_mask, y_ge_zero_mask = _init_atan2_mask(y, x)
-    y_cmp_zero = topi.multiply(y_ge_zero_mask, tvm.const(CONST_PI_BY_TWO, "float32"))
+    y_cmp_zero = topi.multiply(y_ge_zero_mask, tvm.const(const_pi_by_two, "float32"))
     res_x_lt_zero = topi.multiply(x_lt_zero_y_mask, dc.pi_const("float32"))
 
     # caculate the atan(y/x) when x > 0
@@ -129,7 +126,7 @@ def atan2(y, x):
 
     Returns:
         A tvm.tensor.Tensor as angles in radians.
-    
+
     Supported Platforms:
         'Ascend'
     """

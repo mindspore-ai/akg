@@ -14,7 +14,7 @@
 
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.math.ascend import Cosh
+from akg.ops.math.ascend import cosh
 from tests.common.tensorio import compare_tensor
 from tests.common.base import get_rtol_atol
 from tests.common.gen_random import random_gaussian
@@ -45,4 +45,4 @@ def gen_data(dtype, shape):
 
 
 def cosh_compile(shape, dtype, attrs, kernel_name='cosh', runing=False):
-    return utils.op_build_test(Cosh, [shape], [dtype], kernel_name=kernel_name, attrs=attrs, tuning=runing)
+    return utils.op_build_test(cosh, [shape], [dtype], kernel_name=kernel_name, attrs=attrs, tuning=runing)

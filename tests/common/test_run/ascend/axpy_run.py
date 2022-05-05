@@ -16,7 +16,7 @@
 import numpy as np
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
-from akg.ops.math.ascend import Axpy
+from akg.ops.math.ascend import axpy
 from tests.common.gen_random import random_gaussian
 
 def axpy_run(shape1, shape2, alpha, dtype, attrs):
@@ -24,7 +24,7 @@ def axpy_run(shape1, shape2, alpha, dtype, attrs):
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(Axpy, [shape1, shape2], [dtype, dtype], kernel_name=kernel_name,
+        mod = utils.op_build_test(axpy, [shape1, shape2], [dtype, dtype], kernel_name=kernel_name,
                                   op_attrs=[alpha], attrs=attrs, tuning=t)
         if t:
             args, exp_output, inputs1, inputs2 = gen_data(alpha, dtype, shape1, shape2)
@@ -32,7 +32,7 @@ def axpy_run(shape1, shape2, alpha, dtype, attrs):
         else:
             return mod
     else:
-        mod = utils.op_build_test(Axpy, [shape1, shape2], [dtype, dtype], kernel_name='axpy', op_attrs=[alpha],
+        mod = utils.op_build_test(axpy, [shape1, shape2], [dtype, dtype], kernel_name='axpy', op_attrs=[alpha],
                                   attrs=attrs)
         args, exp_output, inputs1, inputs2 = gen_data(alpha, dtype, shape1, shape2)
         # result_tvm

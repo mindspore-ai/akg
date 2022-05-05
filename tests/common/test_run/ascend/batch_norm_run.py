@@ -14,7 +14,7 @@
 
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.math.ascend import BatchNorm
+from akg.ops.math.ascend import batch_norm
 from tests.common.tensorio import compare_tensor
 from tests.common.gen_random import random_gaussian
 
@@ -32,7 +32,7 @@ def batch_norm_run(shape, dtype, eps, kernel_name,  polyhedral=True, attrs={}):
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
         np_beta, np_gamma, np_mean, np_var = get_input_data(c, c0, dtype, support_list)
-        mod = utils.op_build_test(BatchNorm,
+        mod = utils.op_build_test(batch_norm,
                                   [shape, np_mean.shape, np_var.shape, np_gamma.shape, np_beta.shape],
                                   [dtype, dtype, dtype, dtype, dtype], op_attrs, kernel_name=kernel_name, attrs=attrs,
                                   polyhedral=polyhedral, tuning=t)
@@ -43,7 +43,7 @@ def batch_norm_run(shape, dtype, eps, kernel_name,  polyhedral=True, attrs={}):
             return mod
     else:
         np_beta, np_gamma, np_mean, np_var = get_input_data(c, c0, dtype, support_list)
-        mod = utils.op_build_test(BatchNorm,
+        mod = utils.op_build_test(batch_norm,
                                   [shape, np_mean.shape, np_var.shape, np_gamma.shape, np_beta.shape],
                                   [dtype, dtype, dtype, dtype, dtype], op_attrs, kernel_name=kernel_name, attrs=attrs,
                                   polyhedral=polyhedral)

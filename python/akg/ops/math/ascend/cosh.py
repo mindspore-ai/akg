@@ -18,12 +18,14 @@ import akg.utils as utils
 from akg.utils.format_transform import get_shape
 from akg.utils.kernel_exec import product_is_mini
 
+
 def get_attrs():
     """get attrs."""
     attrs = {
         "enable_feature_library": True
     }
     return attrs
+
 
 def cosh_call(x):
     """Compute cosh by the call method."""
@@ -58,7 +60,7 @@ def cosh_compute(data):
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, (str, type(None)))
-def Cosh(data, target=utils.CCE):
+def cosh(data, target=utils.CCE):
     """
     cosh op for input tensor.
 
@@ -79,4 +81,3 @@ def Cosh(data, target=utils.CCE):
     utils.check_shape(data.shape)
 
     return cosh_call(data)
-

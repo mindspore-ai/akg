@@ -14,7 +14,7 @@
 
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.math.ascend import BroadcastTo
+from akg.ops.math.ascend import broadcast_to
 from tests.common.gen_random import random_gaussian
 from tests.common.base import get_rtol_atol
 from tests.common.tensorio import compare_tensor
@@ -25,7 +25,7 @@ def broadcast_to_run(x_shape, x_dtype, shape, attrs):
     dtypes = [x_dtype]
     op_attrs = [shape]
     op_name = "broadcast_to"
-    mod = utils.op_build_test(BroadcastTo, shapes, dtypes, op_attrs=op_attrs,
+    mod = utils.op_build_test(broadcast_to, shapes, dtypes, op_attrs=op_attrs,
                               kernel_name=op_name, attrs=attrs)
     bench_mark, inputs, output = gen_data(dtypes, shapes, shape)
     output = utils.mod_launch(mod, inputs + [output], expect=bench_mark)
