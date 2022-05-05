@@ -31,7 +31,7 @@ from akg.ms.utils import get_op
 from . import op_build
 
 
-@utils.check_input_type(dict, dict)
+@utils.check_input_type(dict, dict, str)
 def _compilewithjson_to_module_op(kernel_info, attrs, processor):
     """compile with json for single op."""
 

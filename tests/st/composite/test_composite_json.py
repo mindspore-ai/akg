@@ -26,6 +26,7 @@ from akg.utils.format_transform import to_tvm_nd_array
 from akg.utils.composite_op_helper import gen_json_data
 from tests.common.base import get_rtol_atol
 from tests.common.tensorio import compare_tensor, dump_tensor
+from akg.ms import compilewithjson
 
 logging.getLogger().setLevel(logging.INFO)
 
@@ -274,6 +275,27 @@ def test_ci(profile=False, poly=False):
 @pytest.mark.env_onecard
 def test_ci_ascend():
     test_ci()
+
+
+@pytest.mark.level0
+@pytest.mark.platform_arm_ascend_training
+@pytest.mark.platform_x86_ascend_training
+@pytest.mark.env_onecard
+def test_ascend_composite_false():
+    # As the current test framework does not support running in scenario
+    # where the composite is false, test compilation only
+    pwd = os.path.dirname(os.path.abspath(__file__))
+    ci_path = pwd + "/ascend_composite_false/"
+    files = os.listdir(ci_path)
+    for fi in files:
+        with open(ci_path + fi, 'r') as f:
+            desc = f.read()
+            res = compilewithjson(desc)
+            if not res:
+                logging.info("----------Error Json info is----------")
+                logging.info(desc)
+                raise ValueError("Compile Error!")
+    logging.info("All ops compile success!")
 
 
 def main(argv):
