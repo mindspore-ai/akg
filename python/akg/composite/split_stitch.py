@@ -1,6 +1,5 @@
-#!/usr/bin/env python3
 # coding: utf-8
-# Copyright 2021 Huawei Technologies Co., Ltd
+# Copyright 2021-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -61,7 +60,7 @@ def set_output_liveness(op_info, out_desc, req_liveness, idx):
 
 
 def set_input_liveness(op_info, req_liveness, idx):
-    inp_names = [sub_input_desc['tensor_name'] for input_desc in op_info['input_desc'] for sub_input_desc in input_desc]
+    inp_names = list(sub_input_desc['tensor_name'] for input_desc in op_info['input_desc'] for sub_input_desc in input_desc)
     for inp_name in inp_names:
         if inp_name in req_liveness and req_liveness[inp_name].end == -1:
             req_liveness[inp_name].end = idx
@@ -144,7 +143,7 @@ def shared_memory_optimization(desc_d, req_map, outputs):
 
 
 def parse_merged_json(desc_d, stitch_tensor_name, input_tensor_name, output_tensor_name):
-    """
+    r"""
     Parse merged json to get subgraph splitted by stitch nodes and input-output relationship of merged graph.
 
     Args:
@@ -186,9 +185,9 @@ def parse_merged_json(desc_d, stitch_tensor_name, input_tensor_name, output_tens
                 extra_subgraph_output[cur_stitch_node].insert(0, tmp_name)
                 break
         if input_desc['tensor_name'] not in in_out_dict:
-            in_out_dict[input_desc['tensor_name']] = [out_desc['tensor_name']]
+            in_out_dict[input_desc['tensor_name']] = [out_desc.get('tensor_name')]
         else:
-            in_out_dict[input_desc['tensor_name']].append(out_desc['tensor_name'])
+            in_out_dict[input_desc['tensor_name']].append(out_desc.get('tensor_name'))
 
     def process_final_output(final_output_graph, sub_graph_length, sub_graph_node):
         if final_output_graph:
@@ -203,9 +202,9 @@ def parse_merged_json(desc_d, stitch_tensor_name, input_tensor_name, output_tens
     # Initialize sub_graph number as the smallest possible number of sub graph.
     # sub graphs number might increase based on graph structure.
     sub_graph_length = len(stitch_tensor_name)
-    sub_graph_node = [set() for _ in range(sub_graph_length)]
+    sub_graph_node = list(set() for _ in range(sub_graph_length))
     # use dict to save extra outputs for each sub_graph.
-    extra_subgraph_output = dict(zip(stitch_tensor_name, [[] for _ in range(sub_graph_length)]))
+    extra_subgraph_output = dict(zip(stitch_tensor_name, list(list() for _ in range(sub_graph_length))))
     in_out_dict = {}
     inter_output_list = set()
     final_output_list = set()
@@ -234,7 +233,7 @@ def parse_merged_json(desc_d, stitch_tensor_name, input_tensor_name, output_tens
                 final_output_within_graph.append(cur_final_node)
 
             sub_graph_node[idx].add(out_desc['tensor_name'])
-            input_descs = [input_desc for in_descs in op_info['input_desc'] for input_desc in in_descs]
+            input_descs = list(input_desc for in_descs in op_info['input_desc'] for input_desc in in_descs)
             for input_desc in input_descs:
                 process_input()
 
@@ -334,14 +333,16 @@ def dump_stitch_sub_json(stitch_json_str, desc_d, op_name, i):
                     pass
                 else:
                     raise err
-        with open('stitch_info/' + op_name + '_stitch_' + str(i + 1) + '.json', 'w+') as f:
+        fname = ''.join(['stitch_info/', op_name, '_stitch_', str(i + 1), '.json'])
+        with os.fdopen(os.open(fname, os.O_WRONLY | os.O_CREAT, 0o400), 'w') as f:
             f.write(stitch_json_str)
-        with open('stitch_info/' + op_name + '_stitch.json', 'w+') as f:
+        stitch_fname = ''.join(['stitch_info/', op_name, '_stitch.json'])
+        with os.fdopen(os.open(stitch_fname, os.O_WRONLY | os.O_CREAT, 0o400), 'w') as f:
             f.write(json.dumps(desc_d))
 
 
 def stitch_json_split(desc_d):
-    """
+    r"""
     split sub graph from merged json file.
     Using 'buffer_stitch' to store stitch info from graph kernel.
     Args:
@@ -353,10 +354,10 @@ def stitch_json_split(desc_d):
     """
     stitch_jsons = []
 
-    input_tensor_name = [tensor[0]['tensor_name'] for tensor in desc_d['input_desc']]
-    output_tensor_name = [tensor['tensor_name'] for tensor in desc_d['output_desc']]
+    input_tensor_name = list(tensor[0]['tensor_name'] for tensor in desc_d['input_desc'])
+    output_tensor_name = list(tensor['tensor_name'] for tensor in desc_d['output_desc'])
     stitch_node = desc_d['buffer_stitch']['stitch_op']
-    stitch_node_name = [node for stitchnode in stitch_node for node in stitchnode]
+    stitch_node_name = list(node for stitchnode in stitch_node for node in stitchnode)
     extra_subgraph_output, final_output_list, final_output_within_graph = \
         parse_merged_json(desc_d, stitch_node_name, input_tensor_name, output_tensor_name)
 
@@ -370,7 +371,7 @@ def stitch_json_split(desc_d):
                 extra_list.append(node)
                 cur_list.append(node)
         stitch_node.append(cur_list)
-    stitch_node_name = [node for stitchnode in stitch_node for node in stitchnode]
+    stitch_node_name = list(node for stitchnode in stitch_node for node in stitchnode)
 
     # initialize req_map
     req_op_size = [0] * len(stitch_node_name)
@@ -378,12 +379,12 @@ def stitch_json_split(desc_d):
     # add final output within subgraph into the last initialized stitch sub_graph.
     stitch_node = stitch_node[:-1] + [stitch_node[-1] + final_output_within_graph]
     # add final output into stitch_op.
-    stitch_node += [[op] for op in final_output_list if op not in stitch_node_name]
-    stitchnode_list = [node for stitchnode in stitch_node for node in stitchnode]
+    stitch_node += list([op] for op in final_output_list if op not in stitch_node_name)
+    stitchnode_list = list(node for stitchnode in stitch_node for node in stitchnode)
     # each output tensor can only be parsed as output once in all subgraphs.
     # All tensors in stitch_node_list will be put into output_name.
     # Save other output tensors which are not in stitch_node_name for the output collection of subgraphs.
-    complement_output = [tensor for tensor in output_tensor_name if tensor not in stitchnode_list]
+    complement_output = list(tensor for tensor in output_tensor_name if tensor not in stitchnode_list)
 
     # initialize sub_stitch_graphs.
     sub_stitch_graphs = []
@@ -401,7 +402,7 @@ def stitch_json_split(desc_d):
         dump_stitch_sub_json(stitch_json_str, desc_d, sg.op_name, i)
         stitch_jsons.append(stitch_json_str)
 
-    clean_op_list = [fake_op for fake_op in fake_output_list if fake_op in stitch_node_name]
+    clean_op_list = list(fake_op for fake_op in fake_output_list if fake_op in stitch_node_name)
     # add fake outputs into output_tensor_name
     output_tensor_name += clean_op_list
     alloc_map, reuse_map = shared_memory_optimization(desc_d, req_map, output_tensor_name)
@@ -409,12 +410,12 @@ def stitch_json_split(desc_d):
     clean_op_map = dict()
     for fake_op in clean_op_list:
         if fake_op in alloc_map:
-            clean_info = alloc_map[fake_op]
+            clean_info = alloc_map.get(fake_op)
             alloc_map.pop(fake_op)
         else:
-            clean_info = reuse_map[fake_op]
+            clean_info = reuse_map.get(fake_op)
             reuse_map.pop(fake_op)
-        clean_op_map[inplace_assign_map[fake_op]] = clean_info
+        clean_op_map[inplace_assign_map.get(fake_op)] = clean_info
 
     if not alloc_map:
         alloc_map['EMPTY'] = []
@@ -427,7 +428,7 @@ def stitch_json_split(desc_d):
 
 def split_stitch_attr(attr, split_num):
     common_attr = {}
-    sub_attr = [{} for _ in range(split_num)]
+    sub_attr = list({} for _ in range(split_num))
     if attr is None or not isinstance(attr, dict):
         return common_attr, sub_attr
     for k, v in attr.items():
@@ -435,7 +436,7 @@ def split_stitch_attr(attr, split_num):
             continue
         common_attr[k] = v
     for i in range(split_num):
-        key = "sub_attr_" + str(i + 1)
+        key = ''.join(["sub_attr_", str(i + 1)])
         if key in attr:
             for k, v in attr[key].items():
                 sub_attr[i][k] = v
@@ -443,14 +444,14 @@ def split_stitch_attr(attr, split_num):
 
 
 def combine_stitch_attr(common_attr, sub_attr):
-    attr = {}
+    attr = dict()
     for k, v in common_attr.items():
-        attr[k] = v
+        attr.update({k : v})
     for i, a in enumerate(sub_attr):
         if not a:
             continue
-        key = "sub_attr_" + str(i + 1)
-        attr[key] = {}
+        key = ''.join(["sub_attr_", str(i + 1)])
+        attr.update({key, dict()})
         for k, v in a.items():
-            attr[key][k] = v
+            attr.update({key : {k : v}})
     return attr

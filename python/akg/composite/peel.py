@@ -1,6 +1,5 @@
-#!/usr/bin/env python3
 # coding: utf-8
-# Copyright 2021 Huawei Technologies Co., Ltd
+# Copyright 2021-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,8 +18,9 @@ import akg.tvm
 
 
 class CompositePeel(object):
-    """Provide interface for C++ DimensionPeeler"""
-
+    """
+    Provide interface for C++ DimensionPeeler
+    """
     def __init__(self, desc, attrs):
         self.desc = desc
         self.analyze_attrs = attrs
@@ -37,14 +37,14 @@ class CompositePeel(object):
 
     def get_peeling_space(self):
         if self.peeling_space is None:
-            return None
-        peeling_space = [s.value for s in self.peeling_space]
+            return list()
+        peeling_space = list(s.value for s in self.peeling_space)
         return peeling_space
 
     def get_peeled_desc(self, peeling, peel_idx=0):
         """
         Returns a peeled json str using the give peeling, peeling is str composed of axis value pairs,
-          e.g. "0 1024 1 1024", "0 1024", "1 1024" are valid ones
+        e.g. "0 1024 1 1024", "0 1024", "1 1024" are valid ones
         """
         func = akg.tvm.get_global_func("get_peeled_body")
         peeled_body = func(self.stmt, peeling)
@@ -53,7 +53,7 @@ class CompositePeel(object):
         peeled_desc = json.loads(peeled_str)
         if "op" in peeled_desc:
             peeling_str = peeling.replace(" ", "_")
-            peeled_desc["op"] = peeled_desc["op"] + "_" + peeling_str + "_peel_" + str(peel_idx)
+            peeled_desc["op"] = ''.join([peeled_desc["op"], "_", peeling_str, "_peel_", str(peel_idx)])
             peeled_str = json.dumps(peeled_desc)
         return peeled_str
 
@@ -61,12 +61,8 @@ class CompositePeel(object):
 def composite_peel_analyze(desc, attrs):
     """
     Analyzes the peeling space for a give json str.
-    Args:
-       desc: json str
-       attrs: dict of attr
-
-    Returns:
-       CompositePeel.
+    Args: desc: json str, attrs: dict of attr
+    Returns: CompositePeel.
     """
     peel = CompositePeel(desc, attrs)
     peel.analyze()
@@ -76,11 +72,8 @@ def composite_peel_analyze(desc, attrs):
 def check_fold_dim(descs):
     """
     Check if we can fold dim on all json str in descs, returns True only if all these json str can fold dim.
-    Args:
-       descs: list of json str
-
-    Returns:
-       Bool.
+    Args: descs: list of json str
+    Returns: Bool.
     """
     func = akg.tvm.get_global_func("check_fold_dim")
     fold_dim = func(descs)
