@@ -14,7 +14,7 @@
 
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.math.ascend import Ceil
+from akg.ops.math.ascend import ceil
 from tests.common.tensorio import compare_tensor
 from tests.common.gen_random import random_gaussian
 
@@ -25,14 +25,14 @@ def ceil_run(shape, dtype, attrs):
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(Ceil, in_shape, in_dtype, kernel_name=kernel_name, attrs=attrs, tuning=t)
+        mod = utils.op_build_test(ceil, in_shape, in_dtype, kernel_name=kernel_name, attrs=attrs, tuning=t)
         if t:
             expect, input, output = gen_data(dtype, shape)
             return mod, expect, (input, output)
         else:
             return mod
     else:
-        mod = utils.op_build_test(Ceil, in_shape, in_dtype, kernel_name='ceil', attrs=attrs)
+        mod = utils.op_build_test(ceil, in_shape, in_dtype, kernel_name='ceil', attrs=attrs)
         expect, input, output = gen_data(dtype, shape)
         output = utils.mod_launch(mod, (input, output), expect=expect)
         return input, output, expect, compare_tensor(output, expect, rtol=5e-03, equal_nan=True)

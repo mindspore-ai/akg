@@ -32,12 +32,12 @@ from .atan import atan
 from .atan_grad import atan_grad
 from .atan2 import atan2
 from .atanh import atanh
-from .axpy import Axpy
-from .batch_norm import BatchNorm
-from .batchmatmul import BatchMatMul, BatchMatMulBias
-from .broadcast_to import BroadcastTo
-from .ceil import Ceil
-from .cosh import Cosh
+from .axpy import axpy
+from .batch_norm import batch_norm
+from .batchmatmul import batch_matmul, batch_matmul_bias
+from .broadcast_to import broadcast_to
+from .ceil import ceil
+from .cosh import cosh
 from .equal_count import EqualCount
 from .exp_ad import ExpAd
 from .floor import Floor

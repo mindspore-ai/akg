@@ -17,12 +17,18 @@ import akg
 import akg.utils as utils
 import akg.utils.dsl_create as dc
 from akg import tvm, topi
-from akg.utils.format_transform import get_shape
 from akg.utils.kernel_exec import product_is_mini
+from akg.utils.format_transform import get_shape
 from ..log import log
 
+
 def _compute_taylor(data_input):
-    """Algorithm: atanh(x) = x + x^3/3 +  x^5/5 +  x^7/7"""
+    """
+    Algorithm: atanh(x) value is (x + x^3/3 +  x^5/5 +  x^7/7)
+    Taylor 1/3 + x^2(1/5 + x^2/7)
+    Taylor 1 + x^2(1/3 + x^2(1/5 + x^2/7))
+    Taylor x(1 + x^2(1/3 + x^2(1/5 + x^2/7)))
+    """
 
     taylor_para = [0, 1.0,  0, 1/3.0, 0, 1.0/5, 0, 1.0/7]
     # x^2
@@ -30,17 +36,15 @@ def _compute_taylor(data_input):
     # 1/5 + x^2/7
     data_mul_2_7 = topi.multiply(data_mul_2, tvm.const(taylor_para[7], "float32"))
     result = topi.add(data_mul_2_7, tvm.const(taylor_para[5], "float32"))
-    # 1/3 + x^2(1/5 + x^2/7)
     result = topi.multiply(data_mul_2, result)
     result = topi.add(result, tvm.const(taylor_para[3], "float32"))
-    # 1 + x^2(1/3 + x^2(1/5 + x^2/7))
     result = topi.multiply(data_mul_2, result)
     result = topi.add(result, tvm.const(taylor_para[1], "float32"))
-    # x(1 + x^2(1/3 + x^2(1/5 + x^2/7)))
     return topi.multiply(data_input, result)
 
+
 def _compute_log(data_input, target=utils.CCE):
-    """Atanh(x) value is 0.5*log((1+x)/(1-x))"""
+    """atanh(x) value is 0.5*log((1+x)/(1-x))"""
 
     data_1_sum_x = topi.add(data_input, dc.one_const(data_input.dtype))
     data_sub_x = topi.multiply(data_input, dc.neg_one_const(data_input.dtype))
@@ -51,8 +55,12 @@ def _compute_log(data_input, target=utils.CCE):
 
     return data_res
 
+
 def _compute_mini(data_input, shape):
-    """Use log and taylor to compute"""
+    """
+    Use log and taylor to compute
+    arctanh has the feature: arctanh(-abs(x)) = -arctanh(abs(x))
+    """
 
     data_abs = topi.abs(data_input)
     result_ln = _compute_log(data_abs)
@@ -78,9 +86,11 @@ def _compute_mini(data_input, shape):
                            name="neg")
     return data_res
 
+
 def _compute_cloud(data):
     """Use log to compute"""
     return _compute_log(data)
+
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, (str, type(None)))
 def atanh(input_data):
@@ -92,7 +102,7 @@ def atanh(input_data):
 
     Returns:
         A tvm.tensor.Tensor as result of atanh.
-    
+
     Supported Platforms:
         'Ascend'
     """

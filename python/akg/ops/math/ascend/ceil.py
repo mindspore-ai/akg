@@ -16,7 +16,8 @@
 import akg
 import akg.utils as utils
 
-def Ceil(inputs, target=utils.CCE):
+
+def ceil(inputs, target=utils.CCE):
     """
     Supported Platforms:
         'Ascend'
@@ -24,7 +25,7 @@ def Ceil(inputs, target=utils.CCE):
     dtype = inputs.dtype
 
     check_list = ["float16", "float32"]
-    if not (dtype.lower() in check_list):
+    if dtype.lower() not in check_list:
         raise RuntimeError("tile_cce only support %s while dtype is %s" % (",".join(check_list), dtype))
 
     shape = inputs.shape

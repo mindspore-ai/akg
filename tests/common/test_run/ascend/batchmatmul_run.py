@@ -20,7 +20,7 @@ from akg import tvm
 from tests.common.tensorio import compare_tensor
 from tests.common.base import get_rtol_atol
 from akg.utils import kernel_exec as utils
-from akg.ops.math.ascend import BatchMatMul, BatchMatMulBias
+from akg.ops.math.ascend import batch_matmul, batch_matmul_bias
 from akg.utils.result_analysis import result_compare
 from tests.common.gen_random import random_gaussian
 from akg.utils.kernel_exec import product_is_mini
@@ -223,8 +223,8 @@ def batchmatmul_compile(bs, m, n, k, bias_shape, dtype, trans_a, trans_b, kernel
             args_value.append(args_dict[item])
 
     if len(bias_shape) > 0:
-        return utils.op_build_test(BatchMatMulBias, input_shapes, input_types, op_attrs,
+        return utils.op_build_test(batch_matmul_bias, input_shapes, input_types, op_attrs,
                                    kernel_name, attrs, tuning=tuning), args_value
     else:
-        return utils.op_build_test(BatchMatMul, input_shapes, input_types, op_attrs,
+        return utils.op_build_test(batch_matmul, input_shapes, input_types, op_attrs,
                                    kernel_name, attrs, tuning=tuning), args_value

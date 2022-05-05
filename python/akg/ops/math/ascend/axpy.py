@@ -17,7 +17,8 @@
 import akg.tvm
 import akg.utils as utils
 
-def Axpy(x, y, alpha, target=utils.CCE):
+
+def axpy(x, y, alpha, target=utils.CCE):
 
     """
     Calculate the result of alpha * x + y
@@ -31,7 +32,7 @@ def Axpy(x, y, alpha, target=utils.CCE):
 
     Returns:
         tvm.tensor.Tensor, has the same type and shape as x.
-    
+
     Supported Platforms:
         'Ascend'
     """

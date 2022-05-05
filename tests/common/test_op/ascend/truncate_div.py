@@ -19,7 +19,7 @@ from akg.utils.format_transform import get_shape
 import akg.utils as utils
 from akg.utils import dsl_create as dc
 from akg.ops.math import Cast
-from akg.ops.math.ascend import Floor, Ceil
+from akg.ops.math.ascend import Floor, ceil
 from akg.utils.kernel_exec import product_is_mini
 
 def truncate_div_compute(input_x1, input_x2):
@@ -31,7 +31,7 @@ def truncate_div_compute(input_x1, input_x2):
         data_x_broad = Cast(input_x1, "float32", target=utils.CCE)
         data_y_broad = Cast(input_x2, "float32", target=utils.CCE)
         res_div = topi.divide(data_x_broad, data_y_broad)
-        res_min_int = Ceil(topi.minimum(res_div, data_zero))
+        res_min_int = ceil(topi.minimum(res_div, data_zero))
         res_max_int = Floor(topi.maximum(res_div, data_zero))
         res_trunc = topi.add(res_min_int, res_max_int)
         res_trunc = Cast(res_trunc, "float32", target=utils.CCE)
