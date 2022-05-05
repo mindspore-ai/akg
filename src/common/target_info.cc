@@ -35,7 +35,7 @@ GpuMemoryInfo GetGpuMemoryInfo(const std::string &scope, const std::string &devi
   if (f == nullptr) {
     return GpuMemoryInfo();
   } else if (!device_type.empty()) {
-    return (*f)(device_type);
+    return (*f)(Expr(device_type));
   } else {
     return (*f)();
   }
@@ -58,7 +58,7 @@ GpuComputeInfo GetGpuComputeInfo(const std::string &scope, const std::string &de
   if (f == nullptr) {
     return GpuComputeInfo();
   } else if (!device_type.empty()) {
-    return (*f)(device_type);
+    return (*f)(Expr(device_type));
   } else {
     return (*f)();
   }
