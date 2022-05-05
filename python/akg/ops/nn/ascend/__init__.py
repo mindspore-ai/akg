@@ -26,7 +26,7 @@ from .conv_filter_ad import ConvFilterAd
 from .conv_input_ad import ConvInputAd
 from .load_im2col import LoadIm2col
 from .maxpool import maxpool, old_maxpool, maxpool_with_argmax, maxpool_with_argmax_dynamic
-from .maxpool_ad import MaxpoolAd
+from .maxpool_ad import maxpool_ad
 from .maxpool_grad import MaxpoolGrad
 from .maxpool_grad_with_argmax import MaxpoolGradWithArgmax
 from .mean_ad import MeanAd
@@ -37,7 +37,7 @@ from .softmax import Softmax
 from .sparse_softmax_cross_entropy_with_logits import sparse_softmax_cross_entropy_with_logits
 from .sparse_softmax_cross_entropy_with_logits_ad import sparse_softmax_cross_entropy_with_logits_ad
 from .zeros_like import ZerosLike
-from .fused_batch_norm_split import FusedBn1, FusedBn2, FusedBn3
+from .fused_batch_norm_split import fused_bn1, fused_bn2, fused_bn3
 from .fused_batch_norm_grad_split import fused_bn_grad1, fused_bn_grad2, fused_bn_grad3
 from .fused_batch_norm import FusedBatchNorm
 from .fused_batch_norm_grad import FusedBatchNormGrad

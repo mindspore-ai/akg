@@ -232,19 +232,19 @@ def lamb_apply_optimizer_assign(grad, input_v, input_m, input_param, beta_1, one
 @reg_op("FusedBN1", utils.CCE)
 def fused_bn1(data, target=utils.CCE):
     """FusedBN1"""
-    return nn.FusedBn1(data, target)
+    return nn.fused_bn1(data, target)
 
 
 @reg_op("FusedBN2", utils.CCE)
 def fused_bn2(mean, var_part, running_mean, running_var, momentum=0.8, target=utils.CCE):
     """FusedBN2"""
-    return nn.FusedBn2(mean, var_part, running_mean, running_var, momentum, target=target)
+    return nn.fused_bn2(mean, var_part, running_mean, running_var, momentum, target=target)
 
 
 @reg_op("FusedBN3", utils.CCE)
 def fused_bn3(data, mean, variance, gamma, beta, eps=1e-3, target=utils.CCE):
     """FusedBN3"""
-    return nn.FusedBn3(data, mean, variance, gamma, beta, eps, target=target)
+    return nn.fused_bn3(data, mean, variance, gamma, beta, eps, target=target)
 
 
 @reg_op("ClearZero", utils.CCE)

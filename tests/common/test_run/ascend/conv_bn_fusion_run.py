@@ -15,7 +15,7 @@
 """run function for fusion operation of splited bn2, add and relu"""
 import time
 import numpy as np
-from akg.ops.nn.ascend import Conv, FusedBn1, FusedBn2, FusedBn3
+from akg.ops.nn.ascend import Conv, fused_bn1, fused_bn2, fused_bn3
 from tests.common.gen_random import random_gaussian
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
@@ -266,20 +266,20 @@ def conv_bn_fusion_run(fm_shape, filter_shape, dtype, pad, stride, dilation,
                                    kernel_name="conv_whole",
                                    attrs=attrs.copy())
     in_shapes_bn1, in_dtypes_bn1 = get_bn_split_param(shape, dtype, 1)
-    mod_bn1 = utils.op_build_test(FusedBn1,
+    mod_bn1 = utils.op_build_test(fused_bn1,
                                   in_shapes_bn1, in_dtypes_bn1,
                                   kernel_name="fused_bn1_whole",
                                   attrs=attrs.copy())
 
     in_shapes_bn2, in_dtypes_bn2 = get_bn_split_param(shape, dtype, 2)
-    mod_bn2 = utils.op_build_test(FusedBn2,
+    mod_bn2 = utils.op_build_test(fused_bn2,
                                   in_shapes_bn2, in_dtypes_bn2,
                                   op_attrs=[momentum],
                                   kernel_name="fused_bn2_whole",
                                   attrs=attrs.copy())
 
     in_shapes_bn3, in_dtypes_bn3 = get_bn_split_param(shape, dtype, 3)
-    mod_bn3 = utils.op_build_test(FusedBn3,
+    mod_bn3 = utils.op_build_test(fused_bn3,
                                   in_shapes_bn3, in_dtypes_bn3,
                                   op_attrs=[eps],
                                   kernel_name="fused_bn3_whole",

@@ -15,6 +15,7 @@
 # limitations under the License.
 
 """operator dsl function: fused_batch_norm_split"""
+from __future__ import absolute_import
 from functools import reduce
 
 import akg
@@ -116,11 +117,12 @@ def bn1_set_dim_func(data):
     """bn1 dim func"""
     hash_key = data.dtype
     if hash_key in ATTR_MAP_BN1.keys():
-        for attr, value in ATTR_MAP_BN1[hash_key].items():
+        attrs_dict = ATTR_MAP_BN1.get(hash_key, {})
+        for attr, value in attrs_dict.items():
             DEFAULT_ATTR_MAP_BN1[attr] = value
     hash_key = str((tuple(get_shape(data))))
     if hash_key in DIM_MAP_BN1.keys():
-        diminfo = ct_util.set_dims(DIM_MAP_BN1[hash_key])
+        diminfo = ct_util.set_dims(DIM_MAP_BN1.get(hash_key, {}))
     else:
         diminfo = ""
 
@@ -140,7 +142,7 @@ def bn1_check(data):
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, (str, type(None)))
-def FusedBn1(data, target=utils.CCE):
+def fused_bn1(data):
     """
     Fused_batch_norm is departed to 3 parts for better performance.
 
@@ -218,6 +220,7 @@ DIM_MAP_BN2 = {
 ATTR_MAP_BN2 = {
 }
 
+
 def inplace_operate_bind(in_tensors, out_tensors, inplace_binds):
     """
     Some tensor need to be calculate inplace.
@@ -234,6 +237,7 @@ def inplace_operate_bind(in_tensors, out_tensors, inplace_binds):
     Returns:
         Two elements tuple, one for output tensors, the other for tensor bind relations.
     """
+
     for in_id, out_id in inplace_binds:
         if in_id >= len(in_tensors) or out_id >= len(out_tensors):
             raise RuntimeError("Inplace binds is invalid, while there are {} "
@@ -245,6 +249,7 @@ def inplace_operate_bind(in_tensors, out_tensors, inplace_binds):
     out_tensors = list(out_tensors)
     tensor_binds = {}
     inplaced_tensors = []
+
     for i, bind in enumerate(inplace_binds):
         in_tensor = in_tensors[bind[0]]
         out_tensor = out_tensors[bind[1]]
@@ -254,19 +259,23 @@ def inplace_operate_bind(in_tensors, out_tensors, inplace_binds):
         # Caculation is updated inplace in input tensor. But Mindspore
         # needs a related fake tensor(never use) in output list...
         out_tensor_shape = out_tensor.shape
+
         fake_tensor = akg.tvm.compute(
             out_tensor_shape,
             lambda *index, o_tensor=out_tensor: o_tensor(*index),
             name="fake_tensor_{}".format(i))
+
         out_tensors[bind[1]] = fake_tensor
         inplaced_tensors.append(out_tensor)
+
     return (tuple(out_tensors + inplaced_tensors), tensor_binds)
+
 
 def bn2_set_dim_func(*args):
     """bn2 dim func"""
     hash_key = str((tuple(get_shape(args[0]))))
     if hash_key in DIM_MAP_BN2.keys():
-        diminfo = ct_util.set_dims(DIM_MAP_BN2[hash_key])
+        diminfo = ct_util.set_dims(DIM_MAP_BN2.get(hash_key, {}))
     else:
         diminfo = ""
 
@@ -274,9 +283,9 @@ def bn2_set_dim_func(*args):
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor,
-                          akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor,
-                          (float, type(None)), (str, type(None)))
-def FusedBn2(mean, var_part, running_mean, running_var, momentum=0.8, target=utils.CCE):
+                        akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor,
+                        (float, type(None)), (str, type(None)))
+def fused_bn2(mean, var_part, running_mean, running_var, momentum=0.8):
     """
     Calculating mean, variance and update running variables.
 
@@ -304,7 +313,7 @@ def FusedBn2(mean, var_part, running_mean, running_var, momentum=0.8, target=uti
                                                  running_var (updated inplace).
     """
     utils.ops_dtype_check([mean.dtype, var_part.dtype],
-                            utils.DtypeForDavinci.FLOAT32)
+                          utils.DtypeForDavinci.FLOAT32)
 
     dim_info, _ = bn2_set_dim_func(mean, var_part,
                                    running_mean, running_var, momentum)
@@ -405,10 +414,11 @@ def bn3_set_dim_func(*args):
     """dim func for fused_bn3"""
     hash_key = str((tuple(get_shape(args[0]))))
     if hash_key in ATTR_MAP_BN3.keys():
-        for attr in ATTR_MAP_BN3[hash_key]:
+        attrs_dict = ATTR_MAP_BN3.get(hash_key, {})
+        for attr in attrs_dict:
             DEFAULT_ATTR_MAP_BN3[attr[0]] = attr[1]
     if hash_key in DIM_MAP_BN3.keys():
-        dim = ct_util.set_dims(DIM_MAP_BN3[hash_key])
+        dim = ct_util.set_dims(DIM_MAP_BN3.get(hash_key, {}))
     else:
         dim = ""
     return dim, hash_key
@@ -425,13 +435,13 @@ def bn3_check(data, mean, variance, gamma, beta):
 
     utils.ops_dtype_check(dtype, utils.DtypeForDavinci.ALL_FLOAT)
     utils.ops_dtype_check([variance.dtype, mean.dtype, gamma.dtype, beta.dtype],
-                            utils.DtypeForDavinci.FLOAT32)
+                          utils.DtypeForDavinci.FLOAT32)
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor,
-                          akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor,
-                          akg.tvm.tensor.Tensor, (float, type(None)),(str, type(None)))
-def FusedBn3(data, mean, variance, gamma, beta, eps=1e-3, target=utils.CCE):
+                        akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor,
+                        akg.tvm.tensor.Tensor, (float, type(None)), (str, type(None)))
+def fused_bn3(data, mean, variance, gamma, beta, eps=1e-3):
     """
     The third part of fused batch norm, calculate the normalized result.
 
@@ -482,7 +492,8 @@ def FusedBn3(data, mean, variance, gamma, beta, eps=1e-3, target=utils.CCE):
 
     bn_res_fp32 = akg.tvm.compute(data.shape,
                                   lambda *i:
-                                  akg.lang.ascend.vmadd(data_fp32(*i), hat_gamma_bc(*i), hat_beta_bc(*i)),
+                                  akg.lang.ascend.vmadd(
+                                      data_fp32(*i), hat_gamma_bc(*i), hat_beta_bc(*i)),
                                   name="bn_res_fp32")
     res = akg.tvm.compute(bn_res_fp32.shape,
                           lambda *i: bn_res_fp32(*i).astype(ori_dtype),
