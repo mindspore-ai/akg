@@ -15,7 +15,7 @@
 from tests.common.base import get_rtol_atol
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
-from akg.ops.array.gpu import GatherNd
+from akg.ops.array.gpu import gather_nd
 from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
 from akg.utils.op_dsl import gather_nd_np
@@ -38,7 +38,7 @@ def gen_data(shape1, dtype1, shape2, dtype2):
 def gather_nd_run(shape1, dtype1, shape2, dtype2, poly_sch=True, attrs=None):
     if not attrs:
         attrs = {"target": "cuda"}
-    mod = utils.op_build_test(GatherNd, [shape1, shape2], [dtype1, dtype2],
+    mod = utils.op_build_test(gather_nd, [shape1, shape2], [dtype1, dtype2],
                  polyhedral=poly_sch, attrs=attrs, kernel_name="gather_nd")
 
     # gen data

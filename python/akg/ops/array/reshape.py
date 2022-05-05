@@ -14,14 +14,16 @@
 
 """operator dsl function: reshape"""
 
+from functools import reduce
 import akg
 import akg.topi
 import akg.utils as  utils
 from akg.utils.format_transform import get_shape
-from functools import reduce
 from akg.utils import dynamic_shape as ds
 
+
 def get_out_shape(in_shape, out_shape):
+    """Computes output shape."""
     access_size = 1
     for i, o_shape in enumerate(out_shape):
         if -1 != o_shape:
@@ -32,11 +34,12 @@ def get_out_shape(in_shape, out_shape):
     if ori_size % access_size != 0:
         raise ValueError(("Invalid out_shape ({})".format(out_shape)))
 
-    out_shape[hit_idx] = int(ori_size / access_size)
+    out_shape[hit_idx] = int(ori_size // access_size)
     return out_shape
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, (list, tuple), (str, type(None)))
-def Reshape(data, out_shape, target=utils.CUDA):
+def reshape(data, out_shape, target=utils.CUDA):
     """
     Rearranges input tensor data to new shape out_shape.
 
@@ -47,7 +50,7 @@ def Reshape(data, out_shape, target=utils.CUDA):
 
     Returns:
         The reshaped akg.tvm.tensor of same type as input tensor data.
-    
+
     Supported Platforms:
         'Ascend', 'GPU'
     """
@@ -65,6 +68,7 @@ def Reshape(data, out_shape, target=utils.CUDA):
     res = akg.topi.reshape(data, out_shape)
     return res
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, (list, tuple), (str, type(None)))
 def _reshape_ascend(data, out_shape):
     """
@@ -77,7 +81,7 @@ def _reshape_ascend(data, out_shape):
 
     Returns:
         The reshaped akg.tvm.tensor of same type as input tensor data.
-    
+
     Supported Platforms:
         'Ascend'
     """

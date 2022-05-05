@@ -17,8 +17,9 @@ import akg.tvm
 import akg.topi
 import akg.utils as utils
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, (list, tuple), (str, type(None)))
-def Tile(data, multiples, target=utils.CCE):
+def tile(data, multiples, target=utils.CCE):
     """
     Repeats the data in the specified dimensions according to the multiples.
 
@@ -28,7 +29,7 @@ def Tile(data, multiples, target=utils.CCE):
 
     Returns:
         tvm.tensor.Tensor, has the same dtype as data.
-    
+
     Supported Platforms:
         'Ascend', 'GPU', 'CPU'
     """

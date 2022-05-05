@@ -17,8 +17,9 @@ import akg.tvm
 import akg.utils as  utils
 from akg.composite import gather as cuda_gather
 
-@utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, int, (str, type(None)))
-def Gather(data, indices, axis, target=utils.CUDA):
+
+@utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, int)
+def gather(data, indices, axis):
     """
     Supported Platforms:
         'GPU'

@@ -17,7 +17,7 @@ from tests.common.gen_random import random_gaussian
 from akg.utils import kernel_exec as utils
 from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
-from akg.ops.array.gpu import StandardNormal
+from akg.ops.array.gpu import standard_normal
 
 
 def gen_data(shape):
@@ -26,10 +26,10 @@ def gen_data(shape):
     return output, expect
 
 
-def standard_normal_run(seed, shape, poly_sch=True, attrs=None):
+def standard_normal_run(seed, shape, attrs=None):
     if not attrs:
         attrs = {"target": "cuda"}
-    mod = utils.op_build_test(StandardNormal, [], [], kernel_name="StandardNormal", op_attrs=[seed, shape], attrs=attrs)
+    mod = utils.op_build_test(standard_normal, [], [], kernel_name="standard_normal", op_attrs=[seed, shape], attrs=attrs)
 
     output, expect = gen_data(shape)
     output = utils.mod_launch(mod, (output,), expect=expect)

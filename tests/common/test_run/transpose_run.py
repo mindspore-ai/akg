@@ -14,16 +14,16 @@
 import numpy as np
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
-from akg.ops.array import Transpose
+from akg.ops.array import transpose
 from tests.common.base import get_rtol_atol
 from tests.common.gen_random import random_gaussian
 from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
 
 def transpose_data(shape, axes, dtype):
-    input = random_gaussian(shape, miu=1, sigma=0.3).astype(dtype)
-    bench_mark = input.transpose(axes)
-    return input, bench_mark
+    data_input = random_gaussian(shape, miu=1, sigma=0.3).astype(dtype)
+    bench_mark = data_input.transpose(axes)
+    return data_input, bench_mark
 
 def transpose_run(shape, axes, dtype, attrs):
     if 'tuning' in attrs.keys():
@@ -31,37 +31,37 @@ def transpose_run(shape, axes, dtype, attrs):
         kernel_name = attrs.get("kernel_name", False)
         mod = transpose_compile(shape, axes, dtype, attrs, kernel_name=kernel_name, tuning=t)
         if t:
-            bench_mark, input, output = gen_data(axes, dtype, shape)
-            return mod, bench_mark, (input, output)
+            bench_mark, data_input, output = gen_data(axes, dtype, shape)
+            return mod, bench_mark, (data_input, output)
         else:
             return mod
     else:
         mod = transpose_compile(shape, axes, dtype, attrs)
-        bench_mark, input, output = gen_data(axes, dtype, shape)
-        output = utils.mod_launch(mod, (input, output), expect=bench_mark)
+        bench_mark, data_input, output = gen_data(axes, dtype, shape)
+        output = utils.mod_launch(mod, (data_input, output), expect=bench_mark)
         if attrs.get("profiling", False):
             import akg
             target_name = attrs["target"].split()[0]
-            args_list = to_tvm_nd_array([input, output], akg.tvm.context(target_name, 0))
+            args_list = to_tvm_nd_array([data_input, output], akg.tvm.context(target_name, 0))
             target_profiling(mod, *args_list, target=target_name, repeat_time=attrs["repeat_times"])
         # compare result
         rtol, atol = get_rtol_atol("transpose", dtype)
         compare_result = compare_tensor(output, bench_mark, rtol=rtol, atol=atol, equal_nan=True)
-        return input, output, bench_mark, compare_result
+        return data_input, output, bench_mark, compare_result
 
 
 def gen_data(axes, dtype, shape):
     # Generate data
-    input = random_gaussian(shape, miu=1, sigma=0.3).astype(dtype)
-    bench_mark = input.transpose(axes)
+    data_input = random_gaussian(shape, miu=1, sigma=0.3).astype(dtype)
+    bench_mark = data_input.transpose(axes)
     # mod launch
     out_shape = ()
     for i in axes:
         out_shape = out_shape + (shape[i],)
     output = np.full(out_shape, np.nan, dtype)
-    return bench_mark, input, output
+    return bench_mark, data_input, output
 
 
 def transpose_compile(shape, axes, dtype, attrs, kernel_name='transpose', tuning=False):
     op_attrs = [axes]
-    return utils.op_build_test(Transpose, [shape], [dtype], op_attrs, kernel_name=kernel_name, attrs=attrs, tuning=tuning)
+    return utils.op_build_test(transpose, [shape], [dtype], op_attrs, kernel_name=kernel_name, attrs=attrs, tuning=tuning)

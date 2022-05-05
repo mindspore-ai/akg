@@ -14,7 +14,7 @@
 
 from akg.utils import kernel_exec as utils
 import numpy as np
-from akg.ops.array import Tile
+from akg.ops.array import tile
 from tests.common.tensorio import compare_tensor
 from tests.common.base import get_rtol_atol
 from tests.common.gen_random import random_gaussian
@@ -52,4 +52,4 @@ def gen_data(dtype, multiples, shape):
 
 
 def tile_compile(shape, dtype, multiples, attrs, kernel_name="tile", tuning=False):
-    return utils.op_build_test(Tile, [shape], [dtype], [multiples], kernel_name=kernel_name, attrs=attrs, tuning=tuning)
+    return utils.op_build_test(tile, [shape], [dtype], [multiples], kernel_name=kernel_name, attrs=attrs, tuning=tuning)
