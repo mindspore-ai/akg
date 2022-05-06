@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # coding: utf-8
 # Copyright 2020-2022 Huawei Technologies Co., Ltd
 #
@@ -46,7 +45,9 @@ class ConstructKey:
 
 
 def _reducemax_pattern(kernel_info):
-    """Check ReduceMax and return reduce_size when true."""
+    """
+    Check ReduceMax and return reduce_size when true.
+    """
     for op in kernel_info['op_desc']:
         if op['name'] == 'ReduceMax':
             input_shape = op['input_desc'][0][0]['shape']
@@ -57,7 +58,9 @@ def _reducemax_pattern(kernel_info):
 
 
 def should_enable_attr(kernel_info, key):
-    """Check whether enable the attribute denoted by key for this kernel or not."""
+    """
+    Check whether enable the attribute denoted by key for this kernel or not.
+    """
     for op in kernel_info["op_desc"]:
         if not op["attr"]:
             continue
@@ -65,6 +68,7 @@ def should_enable_attr(kernel_info, key):
             if attr["name"] == key and attr["value"]:
                 return True
     return False
+
 
 def update_attrs(kernel_info, key, attrs):
     for op in kernel_info["op_desc"]:
@@ -76,8 +80,11 @@ def update_attrs(kernel_info, key, attrs):
                 return
     return
 
+
 def _set_reducemax_attrs(desc_d, attrs):
-    """Add addition attributes for ReduceMax."""
+    """
+    Add addition attributes for ReduceMax.
+    """
     backend = desc_d['process']
     if backend == 'cuda' and _reducemax_pattern(desc_d)[0]:
         attrs['enable_tile_c0'] = True
@@ -87,16 +94,18 @@ def _set_reducemax_attrs(desc_d, attrs):
         griddim_x = 1
         griddim_y = _reducemax_pattern(desc_d)[1] / (blockdim_y * elem_per_thread)
         attrs['dim'] = ' 0 0 128 64 b1 t1 0 1 128 128 b0 t0'
-        attrs['bind_block'] = str(griddim_x) + ' ' + str(griddim_y)
-        attrs['bind_thread'] = str(blockdim_x) + ' ' + str(blockdim_y)
+        attrs['bind_block'] = ''.join([str(griddim_x), ' ', str(griddim_y)])
+        attrs['bind_thread'] = ''.join([str(blockdim_x), ' ', str(blockdim_y)])
     return attrs
 
 
 class ConstructNode:
-    """Lower node for kernel construction."""
-
+    """
+    Lower node for kernel construction.
+    """
     def __init__(self, parent, ntype, nid):
-        r"""Initialization.
+        r"""
+        Initialization.
         Args:
             parent (ConstructNode): Parent node object.
             ntype (str): Current node's type.
@@ -108,13 +117,17 @@ class ConstructNode:
         if parent:
             parent.subs.append(self)
 
-    def Name(self):
-        """Get this node's name."""
+    def name(self):
+        """
+        Get this node's name.
+        """
         return "{}{}".format(self.ntype, self.nid)
 
 
 class ConstructTree:
-    """Lower tree for kernel construction."""
+    """
+    Lower tree for kernel construction.
+    """
 
     def __init__(self):
         self.root = None
@@ -123,7 +136,9 @@ class ConstructTree:
         self.nodes = []
 
     def add(self, ntype: str):
-        """Add new lower node."""
+        """
+        Add new lower node.
+        """
         nid = self.type_collect.get(ntype, -1) + 1
         if not self.knot_stack:
             new_node = ConstructNode(None, ntype, nid)
@@ -134,23 +149,31 @@ class ConstructTree:
         self.type_collect[ntype] = nid
 
     def add_knot(self, ntype: str):
-        """Add new knot for this tree, and get ready to add more child nodes."""
+        """
+        Add new knot for this tree, and get ready to add more child nodes.
+        """
         self.add(ntype)
         self.set_last_as_knot()
 
     def set_last_as_knot(self):
-        """Set last lower node as current tree knot."""
+        """
+        Set last lower node as current tree knot.
+        """
         self.knot_stack.append(self.nodes[-1])
 
     def pop_knot(self):
-        """Pop out current tree knot."""
+        """
+        Pop out current tree knot.
+        """
         if self.knot_stack:
             self.knot_stack.pop()
 
     def get_construct_type(self):
-        """Get whole construction type string by tracing this construct tree."""
+        """
+        Get whole construction type string by tracing this construct tree.
+        """
         def _recursive_get(node):
-            res = node.Name()
+            res = node.name()
             if node.subs:
                 sub_res = []
                 for sub in node.subs:
@@ -165,7 +188,9 @@ class ConstructTree:
 
 
 class ChildNodeTrace:
-    """Custom with environment for latter child in construct tree."""
+    """
+    Custom with environment for latter child in construct tree.
+    """
 
     def __init__(self, ct: ConstructTree):
         self.trace = ct
@@ -180,12 +205,15 @@ class ChildNodeTrace:
 class BaseNodeAnalyze:
     @staticmethod
     def get_name():
-        """Return type name."""
+        """
+        Return type name.
+        """
         raise RuntimeError("Not implemented.")
 
     @staticmethod
     def check_type(desc_d):
-        r"""Check whether the json object is this type.
+        r"""
+        Check whether the json object is this type.
 
         Args:
             desc_d (dict): Json detail dictionary.
@@ -198,7 +226,8 @@ class BaseNodeAnalyze:
 
     @staticmethod
     def extract_infos(desc_d, attrs):
-        r"""Extract children's jsons, attributes and segment infos.
+        r"""
+        Extract children's jsons, attributes and segment infos.
 
         Args:
             desc_d (dict): Json detail dictionary.
@@ -214,7 +243,8 @@ class BaseNodeAnalyze:
 
     @staticmethod
     def analyze_children(analyze_json_func, analye_res, ct, type_infos, poly, func):
-        r"""Process children of type.
+        r"""
+        Process children of type.
 
         Args:
             analyze_json_func (function): Analyze function for recursive call.
@@ -229,7 +259,9 @@ class BaseNodeAnalyze:
 
     @staticmethod
     def multi_children_analyze(json_type, analyze_json_func, analye_res, ct, type_infos, poly, func):
-        """Analyze multiple children."""
+        """
+        Analyze multiple children.
+        """
         with ChildNodeTrace(ct) as akt:
             akt.add_knot(json_type)
             jsons_list, attrs_list, _ = type_infos
@@ -238,7 +270,9 @@ class BaseNodeAnalyze:
 
     @staticmethod
     def leaf_analyze(json_type, ct):
-        """Analyze leaf information."""
+        """
+        Analyze leaf information.
+        """
         with ChildNodeTrace(ct) as akt:
             akt.add_knot(json_type)
             akt.add(ConstructType.P)
@@ -247,25 +281,33 @@ class BaseNodeAnalyze:
 class NormalNodeAnalyze(BaseNodeAnalyze):
     @staticmethod
     def get_name():
-        """Return type name."""
+        """
+        Return type name.
+        """
         return ConstructType.NORMAL
 
     @staticmethod
     def check_type(_):
-        """Check whether the json object is NORMAL type."""
+        """
+        Check whether the json object is NORMAL type.
+        """
         # Final check.
         return NormalNodeAnalyze.get_name()
 
     @staticmethod
     def extract_infos(desc_d, attrs):
-        """Extract NORMAL's children information, including jsons, attributes and segment infos."""
+        """
+        Extract NORMAL's children information, including jsons, attributes and segment infos.
+        """
         total_jsons = [json.dumps(desc_d)]
         total_attrs = [attrs]
         return total_jsons, total_attrs, {}
 
     @staticmethod
     def analyze_children(analyze_json_func, analye_res, ct, type_infos, poly, func):
-        """Process children of NORMAL."""
+        """
+        Process children of NORMAL.
+        """
         _ = (analyze_json_func, analye_res, type_infos, poly, func)  # For unused warning...
         BaseNodeAnalyze.leaf_analyze(NormalNodeAnalyze.get_name(), ct)
 
@@ -273,19 +315,25 @@ class NormalNodeAnalyze(BaseNodeAnalyze):
 class ParallelNodeAnalyze(BaseNodeAnalyze):
     @staticmethod
     def get_name():
-        """Return type name."""
+        """
+        Return type name.
+        """
         return ConstructType.PARALLEL
 
     @staticmethod
     def check_type(desc_d):
-        """Check whether the json object is PARALLEL type."""
+        """
+        Check whether the json object is PARALLEL type.
+        """
         if "parallel_fusion" in desc_d:
             return ParallelNodeAnalyze.get_name()
         return ConstructType.UNKNOWN
 
     @staticmethod
     def extract_infos(desc_d, attrs):
-        """Extract PARALLEL's children information, including jsons, attributes and segment infos."""
+        """
+        Extract PARALLEL's children information, including jsons, attributes and segment infos.
+        """
         def _update_bool(key, kernel_info, target_dict):
             new_bool = should_enable_attr(kernel_info, key)
             target_bool = target_dict.get(key, None)
@@ -296,7 +344,9 @@ class ParallelNodeAnalyze(BaseNodeAnalyze):
             attrs["pipeline_groups"] = desc_d["parallel_fusion"]['type_info']
         attrs_list = []
         for i, _ in enumerate(block_jsons):
-            cur_attrs = attrs.copy()
+            cur_attrs = dict()
+            for key in attrs:
+                cur_attrs.update({key : attrs.get(key)})
             _update_bool("enable_atomic_add", json.loads(block_jsons[i]), cur_attrs)
             _update_bool("is_csr", json.loads(block_jsons[i]), cur_attrs)
             attrs_list.append(cur_attrs)
@@ -309,7 +359,9 @@ class ParallelNodeAnalyze(BaseNodeAnalyze):
 
     @staticmethod
     def analyze_children(analyze_json_func, analye_res, ct, type_infos, poly, func):
-        """Process children of PARALLEL."""
+        """
+        Process children of PARALLEL.
+        """
         type_name = ParallelNodeAnalyze.get_name()
         BaseNodeAnalyze.multi_children_analyze(type_name, analyze_json_func, analye_res, ct, type_infos, poly, func)
 
@@ -317,28 +369,37 @@ class ParallelNodeAnalyze(BaseNodeAnalyze):
 class StitchNodeAnalyze(BaseNodeAnalyze):
     @staticmethod
     def get_name():
-        """Return type name."""
+        """
+        Return type name.
+        """
         return ConstructType.STITCH
 
     @staticmethod
     def check_type(desc_d):
-        """Check whether the json object is STITCH type."""
+        """
+        Check whether the json object is STITCH type.
+        """
         if "buffer_stitch" in desc_d:
-            stitch_nodes = [node for node_list in desc_d["buffer_stitch"]["stitch_op"] for node in node_list]
+            stitch_nodes = list(node for node_list in desc_d["buffer_stitch"]["stitch_op"] for node in node_list)
             for op in desc_d["op_desc"]:
-                op_outputs = [out["tensor_name"] for out in op["output_desc"]]
+                op_outputs = list(out["tensor_name"] for out in op["output_desc"])
                 if set(stitch_nodes).intersection(set(op_outputs)):
                     return StitchNodeAnalyze.get_name()
         return ConstructType.UNKNOWN
 
     @staticmethod
     def extract_infos(desc_d, attrs):
-        """Extract STITCH's children information, including jsons, attributes and segment infos."""
+        """
+        Extract STITCH's children information, including jsons, attributes and segment infos.
+        """
         stitch_jsons, input_tensor_name, output_tensor_name, alloc_map, reuse_map, clean_op_map \
             = stitch_json_split(desc_d)
         attrs = _set_reducemax_attrs(desc_d, attrs)
         attrs["enable_stitch_fusion"] = True
-        attrs_list = [attrs.copy() for i, _ in enumerate(stitch_jsons)]
+        new_attrs = dict()
+        for key in attrs:
+            new_attrs.update({key : attrs.get(key)})
+        attrs_list = list(new_attrs for i, _ in enumerate(stitch_jsons))
         stitch_origin_json = json.dumps(desc_d)
         total_jsons = stitch_jsons
         total_attrs = attrs_list
@@ -355,7 +416,9 @@ class StitchNodeAnalyze(BaseNodeAnalyze):
 
     @staticmethod
     def analyze_children(analyze_json_func, analye_res, ct, type_infos, poly, func):
-        """Process children of STITCH."""
+        """
+        Process children of STITCH.
+        """
         type_name = StitchNodeAnalyze.get_name()
         BaseNodeAnalyze.multi_children_analyze(type_name, analyze_json_func, analye_res, ct, type_infos, poly, func)
 
@@ -363,27 +426,34 @@ class StitchNodeAnalyze(BaseNodeAnalyze):
 class TotNodeAnalyze(BaseNodeAnalyze):
     @staticmethod
     def get_name():
-        """Return type name."""
+        """
+        Return type name.
+        """
         return ConstructType.TOT
 
     @staticmethod
     def check_type(desc_d):
-        """Check whether the json object is TOT type."""
-        all_ops = set([op['name'] for op in desc_d['op_desc']])
-        if any([i in all_ops for i in ["Gather", "TensorScatterAdd"]]):
+        """
+        Check whether the json object is TOT type.
+        """
+        all_ops = set(list(op['name'] for op in desc_d['op_desc']))
+        if any(list(i in all_ops for i in ["Gather", "TensorScatterAdd"])):
             return TotNodeAnalyze.get_name()
         return ConstructType.UNKNOWN
 
     @staticmethod
     def extract_infos(desc_d, attrs):
-        """Extract TOT's children information, including jsons, attributes and segment infos."""
+        """
+        Extract TOT's children information, including jsons, attributes and segment infos."""
         total_jsons = [json.dumps(desc_d)]
         total_attrs = [attrs]
         return total_jsons, total_attrs, {}
 
     @staticmethod
     def analyze_children(analyze_json_func, analye_res, ct, type_infos, poly, func):
-        """Process children of TOT."""
+        """
+        Process children of TOT.
+        """
         _ = (analyze_json_func, analye_res, type_infos, poly, func)  # For unused warning...
         BaseNodeAnalyze.leaf_analyze(TotNodeAnalyze.get_name(), ct)
 
@@ -391,26 +461,33 @@ class TotNodeAnalyze(BaseNodeAnalyze):
 class ElemAnyNodeAnalyze(BaseNodeAnalyze):
     @staticmethod
     def get_name():
-        """Return type name."""
+        """
+        Return type name.
+        """
         return ConstructType.ELEMANY
 
     @staticmethod
     def check_type(desc_d):
-        """Check whether the json object is ELEMANY type."""
+        """
+        Check whether the json object is ELEMANY type.
+        """
         if "ElemAny" in set(op['name'] for op in desc_d['op_desc']):
             return ElemAnyNodeAnalyze.get_name()
         return ConstructType.UNKNOWN
 
     @staticmethod
     def extract_infos(desc_d, attrs):
-        """Extract ELEMANY's children information, including jsons, attributes and segment infos."""
+        """
+        Extract ELEMANY's children information, including jsons, attributes and segment infos."""
         total_jsons = [json.dumps(desc_d)]
         total_attrs = [attrs]
         return total_jsons, total_attrs, {}
 
     @staticmethod
     def analyze_children(analyze_json_func, analye_res, ct, type_infos, poly, func):
-        """Process children of ELEMANY."""
+        """
+        Process children of ELEMANY.
+        """
         _ = (analyze_json_func, analye_res, type_infos, poly, func)  # For unused warning...
         BaseNodeAnalyze.leaf_analyze(ElemAnyNodeAnalyze.get_name(), ct)
 
@@ -440,7 +517,7 @@ class AnalyzeUtils:
         raise RuntimeError("Not support type: {}".format(jtype))
 
 
-def AnalyzeJson(analye_res: dict, ct: ConstructTree, json_str, attrs, poly, extract_func):
+def analyze_json(analye_res: dict, ct: ConstructTree, json_str, attrs, poly, extract_func):
     def _update_res(res, need_update):
         def _update(res, name, new_append):
             value = res.get(name, [])
@@ -458,7 +535,7 @@ def AnalyzeJson(analye_res: dict, ct: ConstructTree, json_str, attrs, poly, extr
     json_type, type_infos = extract_func(json.loads(json_str), attrs, poly)
     _update_res(analye_res, type_infos)
 
-    AnalyzeUtils.analyze_children_by_type(json_type, AnalyzeJson, analye_res, ct, type_infos, poly, extract_func)
+    AnalyzeUtils.analyze_children_by_type(json_type, analyze_json, analye_res, ct, type_infos, poly, extract_func)
 
 
 def _extract_type_infos(desc_d, attrs, poly, post_funcs: dict):
@@ -474,7 +551,7 @@ def _extract_type_infos(desc_d, attrs, poly, post_funcs: dict):
 def get_construct_args(json_str, attrs, post_funcs):
     segment_infos = {}
     ct = ConstructTree()
-    AnalyzeJson(segment_infos, ct, json_str, attrs, True,
+    analyze_json(segment_infos, ct, json_str, attrs, True,
                 lambda d, a, p: _extract_type_infos(d, a, p, post_funcs))
     segment_tree = ct.get_construct_type()
     return segment_tree, segment_infos
