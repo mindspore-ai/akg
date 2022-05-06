@@ -61,8 +61,6 @@ class CompositePeel(object):
 def composite_peel_analyze(desc, attrs):
     """
     Analyzes the peeling space for a give json str.
-    Args: desc: json str, attrs: dict of attr
-    Returns: CompositePeel.
     """
     peel = CompositePeel(desc, attrs)
     peel.analyze()
@@ -72,8 +70,6 @@ def composite_peel_analyze(desc, attrs):
 def check_fold_dim(descs):
     """
     Check if we can fold dim on all json str in descs, returns True only if all these json str can fold dim.
-    Args: descs: list of json str
-    Returns: Bool.
     """
     func = akg.tvm.get_global_func("check_fold_dim")
     fold_dim = func(descs)
