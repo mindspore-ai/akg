@@ -2279,6 +2279,7 @@ void CsrStrategy::AddGpuConstraint() {
   });
   auto available_threads = total_available_thread_;
   int csr_thread_num = -1;
+  std::unordered_map<int, int64_t> index_mapping;
   auto feat_len = analyzer_->scop_info_.analysis_result_.GetCsrFeatLen();
   if (feat_len > 1) {
     // CSR schedule with feature dimension (csr.values > 1d), axis has already been
@@ -2344,7 +2345,20 @@ void CsrStrategy::AddGpuConstraint() {
     } else if (axis->dim_axis == 0) {
       axis->thread_constraints.map_extent_ = GPU_CSR_NO_TILE;
     } else {
-      available_threads /= SafeDivisor(std::min(axis->extent_val, available_threads));
+      if (index_mapping.count(axis->dim_axis)) {
+        auto prev_mapping = index_mapping[axis->dim_axis];
+        if (axis->extent_val > prev_mapping) {
+          auto additional_mapping = static_cast<int64_t>(
+            std::ceil(static_cast<float>(axis->extent_val) / prev_mapping));
+          additional_mapping = std::clamp<int64_t>(additional_mapping, 1, available_threads);
+          available_threads /= SafeDivisor(additional_mapping);
+          index_mapping[axis->dim_axis] = prev_mapping * additional_mapping;
+        }
+      } else {
+        auto thread_num = std::min(axis->extent_val, available_threads);
+        available_threads /= SafeDivisor(thread_num);
+        index_mapping[axis->dim_axis] = thread_num;
+      }
     }
   }
 }

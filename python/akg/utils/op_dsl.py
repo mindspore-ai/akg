@@ -122,9 +122,15 @@ def csr_reduce_sum_np(indptr, indices, data, shape, axis):
 def csr_mul_np(indptr, indices, sparse_data, dense, shape):
     """numpy implementation of csr_mul"""
     import scipy.sparse
-    sparse_data = scipy.sparse.csr_matrix((sparse_data, indices, indptr), shape)
-    expect = sparse_data.multiply(np.broadcast_to(dense, shape))
-    return np.asarray(expect)
+    x = sparse_data.reshape(sparse_data.shape[0], -1)
+    y = np.broadcast_to(dense, shape).reshape(shape[0], shape[1], -1)
+    expect = []
+    for i in range(x.shape[-1]):
+        sparse = scipy.sparse.csr_matrix((x[..., i], indices, indptr), shape=shape[:2])
+        out = sparse.multiply(y[..., i])
+        expect.append(out.data)
+    expect = np.moveaxis(np.stack(expect, 0).reshape(shape[2:] + [sparse_data.shape[0]]), -1, 0)
+    return expect
 
 
 def csr_div_np(indptr, indices, sparse_data, dense, shape):

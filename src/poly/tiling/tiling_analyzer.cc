@@ -74,7 +74,7 @@ TileAxis::TileAxis(const Expr &l1_size, const Expr &l0_size, const std::string &
 
 int64_t GetExtentVal(Expr &range_extent, TilingAnalyzer *analyzer) {
   if (analyzer->scop_info_.analysis_result_.IsCsrDynamicExtent(range_extent)) {
-    return analyzer->scop_info_.user_config_.GetCsrThreadNum();
+    return std::max(1, analyzer->scop_info_.user_config_.GetCsrThreadNum());
   }
   auto extent = range_extent.as<IntImm>();
   if (extent != nullptr) {

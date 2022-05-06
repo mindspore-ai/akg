@@ -307,7 +307,7 @@ TensorEntry OpTypeCollector::GetDstTensor(const Provide *op) {
   dst_tensor.name = op->func->func_name();
   for (auto arg : op->args) {
     VarNames vname;
-    vname = VisitVarNames(arg, vname, true);
+    vname = VisitVarNames(arg, vname, true, scop_info_.analysis_result_.GetTensorOfTensor());
     dst_tensor.var_names.emplace_back(vname);
   }
   dst_tensor = MatchLoopByName(dst_tensor);
@@ -335,7 +335,7 @@ std::vector<TensorEntry> OpTypeCollector::GetSourceTensors(const Provide *op) {
     // get variable names
     for (auto arg : call->args) {
       VarNames vname;
-      vname = VisitVarNames(arg, vname, true);
+      vname = VisitVarNames(arg, vname, true, scop_info_.analysis_result_.GetTensorOfTensor());
       tensor.var_names.emplace_back(vname);
     }
     tensor = MatchLoopByName(tensor);
