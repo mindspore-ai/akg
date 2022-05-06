@@ -28,6 +28,10 @@ static constexpr const char *const kEnvStringMsDevMlsSolver = "MS_DEV_MLS_SOLVER
 static constexpr const char *const kEnvStringMsDevMlsVerbosity = "MS_DEV_MLS_VERBOSITY";
 static constexpr const char *const kEnvStringMsDevMlsCodeSinking = "MS_DEV_MLS_CODE_SINKING";
 static constexpr const char *const kEnvStringMsDevMlsConstantToParameter = "MS_DEV_MLS_CONSTANT_TO_PARAMETER";
+static constexpr const char *const kEnvStringMsDevMlsParameterShifting = "MS_DEV_MLS_PARAMETER_SHIFTING";
+static constexpr const char *const kEnvStringMsDevMlsPostProcessFullSets = "MS_DEV_MLS_POST_PROCESS_FULL_SETS";
+static constexpr const char *const kEnvStringMsDevMlsPostProcessExtraOuterParallelLoop =
+  "MS_DEV_MLS_POST_PROCESS_EXTRA_OUTER_PARALLEL_LOOP";
 
 isl::schedule_node TileBand(isl::schedule_node node, const isl::multi_val &sizes) {
   isl::ctx ctx = node.ctx();
@@ -415,6 +419,31 @@ isl::schedule_node GetCanMappingNode(const isl::schedule_node &node) {
 }
 
 #ifdef AKG_USE_MLS
+isl::union_map UnwrappedAccesses(const isl::union_map &umap) {
+  // Lambda to remove the range from the wrapped domain of a map
+  const auto unwrapped_map = [](const isl::map &map) {
+    const isl::set domain = map.domain().unwrap().domain();
+    const isl::set range = map.range();
+    return isl::map(domain, range);
+  };
+
+  if (umap.is_empty()) {
+    return umap;
+  }
+
+  const isl::map_list mlist = umap.map_list();
+  const unsigned size = mlist.size();
+  const isl::map first_element = unwrapped_map(mlist.at(0));
+  isl::union_map result(first_element);
+  for (unsigned i = 1; i < size; ++i) {
+    const isl::map current = mlist.at(i);
+    const isl::map element = unwrapped_map(current);
+    result = result.add_map(element);
+  }
+
+  return result;
+}
+
 bool MLSchedShouldBeUsed(akg::ir::poly::ScopInfo &scop_info) {
   bool maybe_enabled = scop_info.user_config_.GetEnableMLSched();
 
@@ -458,33 +487,9 @@ bool MLSchedShouldBeUsed(akg::ir::poly::ScopInfo &scop_info) {
     }
   }
 
-  // Lambda to remove the range from the wrapped domain of a map
-  const auto unwrapped_map = [](const isl::map &map) {
-    const isl::set domain = map.domain().unwrap().domain();
-    const isl::set range = map.range();
-    return isl::map(domain, range);
-  };
-  // Lambda to remove ranges from the wrapped domains of an union_map
-  const auto unwrapped_union_map = [&unwrapped_map](const isl::union_map &umap) {
-    if (umap.is_empty()) {
-      return umap;
-    }
-
-    const isl::map_list mlist = umap.map_list();
-    const unsigned size = mlist.size();
-    const isl::map first_element = unwrapped_map(mlist.at(0));
-    isl::union_map result(first_element);
-    for (unsigned i = 1; i < size; ++i) {
-      const isl::map current = mlist.at(i);
-      const isl::map element = unwrapped_map(current);
-      result = result.add_map(element);
-    }
-
-    return result;
-  };
   // Inspect read and writes to detect potential reductions
-  const isl::union_map reads = unwrapped_union_map(scop_info.analysis_result_.GetReads());
-  const isl::union_map writes = unwrapped_union_map(scop_info.analysis_result_.GetWrites());
+  const isl::union_map reads = UnwrappedAccesses(scop_info.analysis_result_.GetReads());
+  const isl::union_map writes = UnwrappedAccesses(scop_info.analysis_result_.GetWrites());
   const isl::union_map intersection = reads.intersect(writes);
   if (!intersection.is_empty() && !intersection.is_injective()) {
     return false;
@@ -493,7 +498,8 @@ bool MLSchedShouldBeUsed(akg::ir::poly::ScopInfo &scop_info) {
   return true;
 }
 
-mls::bin::Options MLSchedOptionsInit(akg::ir::poly::ScopInfo &scop_info) {
+mls::bin::Options MLSchedOptionsInit(const akg::ir::poly::PassInfo &pass_info,
+                                     const akg::ir::poly::ScopInfo &scop_info) {
   auto env_to_bool = [](const char *const environment_variable, bool default_value = false) {
     bool result = default_value;
     const char *const env_cstr = std::getenv(environment_variable);
@@ -531,17 +537,30 @@ mls::bin::Options MLSchedOptionsInit(akg::ir::poly::ScopInfo &scop_info) {
     verbosity = std::stoul(ms_dev_mlsched_verbosity);
   }
 
-  bool code_sinking = scop_info.user_config_.GetMLSchedCodeSinking();
+  bool code_sinking = scop_info.user_config_.GetMLSchedCodeSinking() || pass_info.dependences_.is_empty();
   code_sinking = env_to_bool(kEnvStringMsDevMlsCodeSinking, code_sinking);
 
   bool constant_to_parameter = scop_info.user_config_.GetMLSchedConstantToParameter();
   constant_to_parameter = env_to_bool(kEnvStringMsDevMlsConstantToParameter, constant_to_parameter);
+
+  bool parameter_shifting = scop_info.user_config_.GetMLSchedParameterShifting();
+  parameter_shifting = env_to_bool(kEnvStringMsDevMlsParameterShifting, parameter_shifting);
+
+  bool post_process_full_sets = scop_info.user_config_.GetMLSchedPostProcessingFullSets();
+  post_process_full_sets = env_to_bool(kEnvStringMsDevMlsPostProcessFullSets, post_process_full_sets);
+
+  bool post_process_extra_outer_parallel_loop = scop_info.user_config_.GetMLSchedPostProcessingExtraOuterParallelLoop();
+  post_process_extra_outer_parallel_loop =
+    env_to_bool(kEnvStringMsDevMlsPostProcessExtraOuterParallelLoop, post_process_extra_outer_parallel_loop);
 
   mls::bin::Options result;
   result.SetSolverType(solver_type);
   result.SetVerbosity(verbosity);
   result.SetCodeSinking(code_sinking);
   result.SetConstantToParameter(constant_to_parameter);
+  result.SetParameterShifting(parameter_shifting);
+  result.SetFullSetsPostProcessing(post_process_full_sets);
+  result.SetExtraParallelOuterLoopPostProcessing(post_process_extra_outer_parallel_loop);
 
   return result;
 }

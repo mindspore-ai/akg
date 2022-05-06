@@ -109,6 +109,11 @@ bool IsReadOrWriteTensor(const isl::schedule_node &node, const std::string &read
 isl::schedule_node GetCanMappingNode(const isl::schedule_node &node);
 
 #ifdef AKG_USE_MLS
+/// \brief Unwrap and remove extra refs from an isl::union_map
+/// \param[in] umap isl::union_map to sanitize
+/// \return Sanitized isl::union_map
+isl::union_map UnwrappedAccesses(const isl::union_map &umap);
+
 /// \brief Determine whether the MLSched scheduler should be used
 /// \param[in] scop_info ScopInfo to maybe inspect
 /// \return A boolean value that indicates whether MLSched should be used
@@ -118,11 +123,13 @@ bool MLSchedShouldBeUsed(akg::ir::poly::ScopInfo &scop_info);
 
 /// \brief Initialize runtime options for MLSched
 /// \param[in] scop_info ScopInfo to maybe inspect
+/// \param[in] pass_info PassInfo to maybe inspect
 /// \result Options for MLSched
 ///
 /// The method initializes and returns runtime options for the MLSched scheduler.
-/// The options may be decided arbitrarily, from the environment or from \a scop_info.
-mls::bin::Options MLSchedOptionsInit(akg::ir::poly::ScopInfo &scop_info);
+/// The options may be decided arbitrarily, from the environment or from \a pass_info and \a scop_info.
+mls::bin::Options MLSchedOptionsInit(const akg::ir::poly::PassInfo &pass_info,
+                                     const akg::ir::poly::ScopInfo &scop_info);
 #endif
 
 }  // namespace poly

@@ -168,7 +168,9 @@ bool TileOuterBand::IsPermutable(const isl::schedule_node &node) {
 isl::schedule_node TileOuterBand::ReverseTraverseChild(isl::schedule_node node,
                                                        const std::function<isl::schedule_node(isl::schedule_node)> &f) {
   if (node.isa<isl::schedule_node_band>()) {
-    tile_sizes_ = tiles_[0].dim_infos;
+    if (!tiles_.empty()) {
+      tile_sizes_ = tiles_[0].dim_infos;
+    }
     node = node.map_descendant_bottom_up(f);
   } else {
     is_sequence_node_ = node.isa<isl::schedule_node_sequence>();

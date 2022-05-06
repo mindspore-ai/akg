@@ -226,7 +226,7 @@ isl::schedule ComputeSchedule::Run(isl::schedule sch) {
 
   isl::schedule result;
   if (enable_mlsched) {
-    mls::bin::Options options = MLSchedOptionsInit(scop_info_);
+    mls::bin::Options options = MLSchedOptionsInit(pass_info_, scop_info_);
     if (options.ShouldLogInternalDebugging()) {
       LOG(INFO) << "MLSched v." << mls::bin::VersionString() << std::endl;
       LOG(INFO) << options.String() << std::endl;
@@ -234,8 +234,10 @@ isl::schedule ComputeSchedule::Run(isl::schedule sch) {
 
     const std::string &kernel_name = scop_info_.user_config_.GetKernelName();
     const mls::bin::Hints hints = ExtractDirectivesFromAKG();
+    const isl::union_map reads = UnwrappedAccesses(scop_info_.analysis_result_.GetReads());
+    const isl::union_map writes = UnwrappedAccesses(scop_info_.analysis_result_.GetWrites());
     isl_union_map *const dependences = pass_info_.dependences_.get();
-    mls::bin::Scop scop(sch.get(), dependences, hints, options, kernel_name.c_str());
+    mls::bin::Scop scop(sch.get(), dependences, reads.get(), writes.get(), hints, options, kernel_name.c_str());
     const bool mlsched_success = scop.ComputeSchedule();
     if (options.ShouldLogInternalDebugging()) {
       LOG(INFO) << scop.String(options) << std::endl;
