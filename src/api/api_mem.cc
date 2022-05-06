@@ -30,8 +30,12 @@ using air::runtime::TVMRetValue;
 TVM_REGISTER_API("gpu.info.mem.shared").set_body([](const TVMArgs args, TVMRetValue *ret) {
   std::string device_type = akg::common::GetStringEnv("GPU_DEVICE_TYPE");
   if (device_type.empty() && args.size() == 1) {
-    device_type = std::string(args[0]);
-  } else {
+    auto expr = Expr(args[0]);
+    if (expr.as<StringImm>()) {
+      device_type = std::string(expr.as<StringImm>()->value);
+    }
+  }
+  if (device_type.empty()) {
     device_type = "v100";
   }
   int default_mem = -1;
@@ -57,8 +61,12 @@ TVM_REGISTER_API("gpu.info.mem.shared").set_body([](const TVMArgs args, TVMRetVa
 TVM_REGISTER_API("gpu.info.mem.reg").set_body([](const TVMArgs args, TVMRetValue *ret) {
   std::string device_type = akg::common::GetStringEnv("GPU_DEVICE_TYPE");
   if (device_type.empty() && args.size() == 1) {
-    device_type = std::string(args[0]);
-  } else {
+    auto expr = Expr(args[0]);
+    if (expr.as<StringImm>()) {
+      device_type = std::string(expr.as<StringImm>()->value);
+    }
+  }
+  if (device_type.empty()) {
     device_type = "v100";
   }
   int default_mem = -1;
@@ -77,8 +85,12 @@ TVM_REGISTER_API("gpu.info.mem.reg").set_body([](const TVMArgs args, TVMRetValue
 TVM_REGISTER_API("gpu.info.compute.instance").set_body([](const TVMArgs args, TVMRetValue *ret) {
   std::string device_type = akg::common::GetStringEnv("GPU_DEVICE_TYPE");
   if (device_type.empty() && args.size() == 1) {
-    device_type = std::string(args[0]);
-  } else {
+    auto expr = Expr(args[0]);
+    if (expr.as<StringImm>()) {
+      device_type = std::string(expr.as<StringImm>()->value);
+    }
+  }
+  if (device_type.empty()) {
     device_type = "v100";
   }
   int abps = akg::common::GetIntegerEnv("abps");
