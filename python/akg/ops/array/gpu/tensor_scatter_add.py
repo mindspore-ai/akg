@@ -17,8 +17,9 @@ import akg.tvm
 import akg.utils as  utils
 from akg.composite import tensor_scatter_add as cuda_tensor_scatter_add
 
-@utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (str, type(None)))
-def TensorScatterAdd(data, indices, updates, target=utils.CUDA):
+
+@utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor)
+def tensor_scatter_add(data, indices, updates):
     """
     Supported Platforms:
         'GPU'

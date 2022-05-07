@@ -15,7 +15,7 @@
 from tests.common.base import get_rtol_atol
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
-from akg.ops.array.gpu import TensorScatterAdd
+from akg.ops.array.gpu import tensor_scatter_add
 from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
 from akg.utils.op_dsl import tensor_scatter_add_np
@@ -42,7 +42,7 @@ def tensor_scatter_add_run(data_shape, data_type, indices_shape, indices_type, a
     else:
         updates_shape = indices_shape + data_shape[1:]
 
-    mod = utils.op_build_test(TensorScatterAdd, [data_shape, indices_shape, updates_shape], [data_type, indices_type, data_type],
+    mod = utils.op_build_test(tensor_scatter_add, [data_shape, indices_shape, updates_shape], [data_type, indices_type, data_type],
                             attrs=default_attrs, kernel_name="tensor_scatter_add", polyhedral=poly_sch)
 
     # gen data

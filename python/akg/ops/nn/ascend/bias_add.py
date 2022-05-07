@@ -17,7 +17,7 @@
 """operator dsl function: bias_add"""
 
 import akg
-from akg.ops.array.reshape import Reshape
+from akg.ops.array.reshape import reshape
 import akg.utils as utils
 from akg.utils.format_transform import get_shape
 
@@ -61,7 +61,7 @@ def BiasAdd(data1, data2, data_format, target=utils.CCE):
                 raise ValueError("The size of bias should be equal to the channel dimension, "
                                  " while the size of bias is {0} and the channel dimension is "
                                  "{1}".format(shape2[0], c_dim_len))
-            data2_reshaped = Reshape(data2, [1, 1, 1, shape2[0]], target=utils.CCE)
+            data2_reshaped = reshape(data2, [1, 1, 1, shape2[0]], target)
         elif data_format == "DefaultFormat":
             if len(shape1) != 2 and len(shape1) != 4:
                 raise RuntimeError("bias_add only support 2D and 4D shape when data format is DefaultFormat!")
@@ -71,10 +71,10 @@ def BiasAdd(data1, data2, data_format, target=utils.CCE):
                                  " while the size of bias is {0} and the channel dimension is "
                                  "{1}".format(shape2[0], c_dim_len))
             if len(shape1) == 2:
-                data2_reshaped = Reshape(data2, [1, shape2[0]], target=utils.CCE)
+                data2_reshaped = reshape(data2, [1, shape2[0]], target)
             else:
                 # NCHW
-                data2_reshaped = Reshape(data2, [1, shape2[0], 1, 1], target=utils.CCE)
+                data2_reshaped = reshape(data2, [1, shape2[0], 1, 1], target)
 
         data2_new = akg.lang.ascend.broadcast(data2_reshaped, shape1)
         res = akg.lang.ascend.vadd(data1, data2_new)

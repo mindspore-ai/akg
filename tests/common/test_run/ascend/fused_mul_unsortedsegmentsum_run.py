@@ -14,7 +14,7 @@
 
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.array import UnsortedSegmentSum
+from akg.ops.array import unsorted_segment_sum
 from akg.ops.math import mul
 from tests.common.tensorio import compare_tensor
 from tests.common.gen_random import random_gaussian
@@ -54,7 +54,7 @@ def cal_outputs(input_data, data_type, segment_ids, output_shape):
 def mul_unsortedsegmentsum(input1, input2, ids_tensor, num_segments, target="cce"):
     import akg.tvm
     temp = mul(input1, input2, target='cce')
-    output = UnsortedSegmentSum(temp, ids_tensor, num_segments, target=target)[0]
+    output = unsorted_segment_sum(temp, ids_tensor, num_segments, target=target)[0]
     output = akg.tvm.compute(output.shape, lambda *i: output(*i), "fused_mul_unsorted")
     return output
 

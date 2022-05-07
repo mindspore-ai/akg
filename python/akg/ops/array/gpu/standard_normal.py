@@ -17,8 +17,9 @@ import akg.tvm
 import akg.utils as  utils
 from akg.composite import standard_normal as cuda_standard_normal
 
-@utils.check_input_type(int, tuple, (str, type(None)))
-def StandardNormal(seed, shape, target=utils.CUDA):
+
+@utils.check_input_type(int, tuple)
+def standard_normal(seed, shape):
     """
     Operator dsl function for standard_normal.
 
@@ -28,7 +29,7 @@ def StandardNormal(seed, shape, target=utils.CUDA):
 
     Returns:
         Tensor with the given shape.
-    
+
     Supported Platforms:
         'GPU'
     """

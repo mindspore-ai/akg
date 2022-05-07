@@ -18,8 +18,8 @@ import akg.utils as  utils
 from akg.composite import gather_nd as cuda_gather_nd
 
 
-@utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (str, type(None)))
-def GatherNd(data, indices, target=utils.CUDA):
+@utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor)
+def gather_nd(data, indices):
     """
     Supported Platforms:
         'GPU'

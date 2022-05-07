@@ -18,7 +18,7 @@ from tests.common.base import get_rtol_atol
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
 from akg.utils import CCE
-from akg.ops.array import UnsortedSegmentSum
+from akg.ops.array import unsorted_segment_sum
 from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
 from akg.utils.gen_random import random_gaussian, gen_indices_unsorted_segment_sum
@@ -34,18 +34,18 @@ def unsorted_segment_sum_run(shape, ids_shape, num_segments, dtype, attrs):
         kernel_name = attrs.get("kernel_name", False)
         mod = unsortedsegmentsum_compile(shape, ids_shape, num_segments, dtype, attrs, kernel_name=kernel_name, tuning=t)
         if t:
-            expect, input, output, segment_ids = gen_data_ascend(dtype, ids_shape, num_segments, shape)
-            return mod, expect, (input, segment_ids, output)
+            expect, data_input, output, segment_ids = gen_data_ascend(dtype, ids_shape, num_segments, shape)
+            return mod, expect, (data_input, segment_ids, output)
         else:
             return mod
     else:
         attrs["multicore_loop_switch_hoist"] = False
         mod = unsortedsegmentsum_compile(shape, ids_shape, num_segments, dtype, attrs)
-        expect, input, output, segment_ids = gen_data_ascend(dtype, ids_shape, num_segments, shape)
-        output = utils.mod_launch(mod, (input, segment_ids, output), expect=expect)
+        expect, data_input, output, segment_ids = gen_data_ascend(dtype, ids_shape, num_segments, shape)
+        output = utils.mod_launch(mod, (data_input, segment_ids, output), expect=expect)
 
         rtol, atol = get_rtol_atol("unsortedsegmentsum", dtype)
-        return (input, segment_ids, num_segments), output, expect, compare_tensor(output, expect, rtol=rtol, atol=atol,
+        return (data_input, segment_ids, num_segments), output, expect, compare_tensor(output, expect, rtol=rtol, atol=atol,
                                                                                   equal_nan=True)
 
 def unsorted_segment_sum_run_others(data_shape, data_type, indices_shape, indices_type, num, attrs=None):
@@ -85,7 +85,7 @@ def gen_segment_ids(ishape, irange):
     return segment_ids
 
 
-def cal_outputs(input_data, data_type, segment_ids, num_segments, output_shape):
+def cal_outputs(input_data, data_type, segment_ids, output_shape):
     input_shape = input_data.shape
 
     # assert(input_shape[0] == len(segment_ids))
@@ -116,11 +116,11 @@ def gen_data_ascend(dtype, ids_shape, num_segments, shape):
         raise RuntimeError("Auto-tensor only support %s while dtype is %s" % (",".join(support_list.keys()), dtype))
     segment_ids = gen_segment_ids(ids_shape, num_segments)
     # Generate data for testing the op
-    input = random_gaussian(shape, miu=1, sigma=0.1).astype(support_list[dtype])
+    data_input = random_gaussian(shape, miu=1, sigma=0.1).astype(support_list[dtype])
     output_shape = (num_segments,) + tuple(shape[len(ids_shape):])
-    expect = cal_outputs(input, support_list[dtype], segment_ids, num_segments, output_shape)
+    expect = cal_outputs(data_input, support_list[dtype], segment_ids, output_shape)
     output = np.full(output_shape, np.nan, dtype)
-    return expect, input, output, segment_ids
+    return expect, data_input, output, segment_ids
 
 def gen_data(shape1, dtype1, shape2, dtype2, num):
     input1 = random_gaussian(shape1).astype(dtype1)
@@ -132,5 +132,5 @@ def gen_data(shape1, dtype1, shape2, dtype2, num):
 def unsortedsegmentsum_compile(shape, ids_shape, num_segments, dtype, attrs, kernel_name='unsortedsegmentsum_run',
                                tuning=False):
     segment_shape = gen_segment_ids(ids_shape, num_segments).shape if attrs["target"] == utils.CCE else ids_shape
-    return utils.op_build_test(UnsortedSegmentSum, [shape, segment_shape], [dtype, 'int32'],
+    return utils.op_build_test(unsorted_segment_sum, [shape, segment_shape], [dtype, 'int32'],
                                op_attrs=[num_segments], kernel_name=kernel_name, attrs=attrs, tuning=tuning)

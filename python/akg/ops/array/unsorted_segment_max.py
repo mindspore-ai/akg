@@ -21,17 +21,18 @@ from akg.utils import custom_tiling as ct_util
 
 
 unsorted_segment_max_set_dim_map = {
-    str(((128, 32), "float16")): ((128, 128), (32, 32)),
-    str(((512, 256), "float16")): ((512, 512), (8, 8)),
-    str(((128, 128, 16, 16), "float16")): ((128, 128), (16, 16), (16, 16)),
-    str(((1024, 1024), "float16")): ((1024, 1024), (32, 32)),
-    str(((256, 1024), "float32")): ((256, 256), (4, 4)),
-    str(((128, 64, 32), "float16")): ((128, 128), (64, 64), (1, 1)),
+    '((128, 32), "float16")': ((128, 128), (32, 32)),
+    '((512, 256), "float16")': ((512, 512), (8, 8)),
+    '((128, 128, 16, 16), "float16")': ((128, 128), (16, 16), (16, 16)),
+    '((1024, 1024), "float16")': ((1024, 1024), (32, 32)),
+    '((256, 1024), "float32")': ((256, 256), (4, 4)),
+    '((128, 64, 32), "float16")': ((128, 128), (64, 64), (1, 1)),
 
 }
 
 
 def unsorted_segment_max_set_dim_func(data, segment_ids, num_segments):
+    """Sets dim for UnsortedSegmentMax."""
     key = []
     key.append(tuple(data.shape))
     key.append(data.dtype)
@@ -41,7 +42,7 @@ def unsorted_segment_max_set_dim_func(data, segment_ids, num_segments):
 
 
 def gen_ids(segment_ids):
-
+    """Generates ids."""
     segment_ids = list(segment_ids)
 
     res = []
@@ -63,7 +64,9 @@ def gen_ids(segment_ids):
     index.append(segment_ids[-1])
     return res, index
 
+
 def get_data_from_data_list(idx, data_list, i):
+    """Gets data from data list."""
     data = []
     for (tmp, tmp_data) in zip(idx, data_list):
         if tmp == i:
@@ -71,9 +74,8 @@ def get_data_from_data_list(idx, data_list, i):
     return data
 
 
-
 def split_new(data, new_segment_ids, idx, num_segments):
-
+    """Splits new."""
     data_list = Split(data, new_segment_ids)
     if not isinstance(data_list, (list, tuple)):
         data_list = [data_list]
@@ -90,7 +92,7 @@ def split_new(data, new_segment_ids, idx, num_segments):
 
 
 @ct_util.reg_set_dim_func(unsorted_segment_max_set_dim_func)
-def UnsortedSegmentMax(data, segment_ids, num_segments, target=utils.CCE):
+def unsorted_segment_max(data, segment_ids, num_segments, target=utils.CCE):
     """
     Computes the max value along segment_ids of a akg.tvm.Tensor
 
@@ -101,36 +103,33 @@ def UnsortedSegmentMax(data, segment_ids, num_segments, target=utils.CCE):
 
     Returns:
         akg.tvm.Tensor of same type as input_data
-    
+
     Supported Platforms:
         'Ascend'
     """
-    d_dtype = data.dtype
-    utils.ops_dtype_check(d_dtype, utils.DtypeForDavinci.ALL_FLOAT)
+    utils.ops_dtype_check(data.dtype, utils.DtypeForDavinci.ALL_FLOAT)
 
     d_shape = [x.value for x in data.shape]
     utils.check_shape(d_shape)
 
-    s_shape = segment_ids.shape
-    utils.check_shape(s_shape)
+    utils.check_shape(segment_ids.shape)
 
     new_segment_ids, idx = gen_ids(segment_ids)
 
-    output_shape = (1, ) + tuple(d_shape[len(s_shape):])
+    output_shape = (1, ) + tuple(d_shape[len(segment_ids.shape):])
 
-    zero_data = akg.tvm.compute(output_shape, lambda*i: akg.tvm.const(0.0, d_dtype), name ="zero")
+    zero_data = akg.tvm.compute(output_shape, lambda*i: akg.tvm.const(0.0, data.dtype), name="zero")
 
     data_list, new_idx = split_new(data, new_segment_ids, idx, num_segments)
- 
+
     out = []
     j = 0
     for i in range(0, num_segments):
         if i in new_idx:
-            tmp = reduce_max(data_list[j], 0, True, target=utils.CCE)
+            tmp = reduce_max(data_list[j], 0, True, target)
             out.append(tmp)
             j = j + 1
         else:
             out.append(zero_data)
 
-    res = Concat(out, 0)
-    return res
+    return Concat(out, 0)

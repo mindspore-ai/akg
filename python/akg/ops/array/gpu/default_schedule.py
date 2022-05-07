@@ -19,7 +19,9 @@ import akg.tvm as tvm
 
 DEFAULT_GPU_THREAD = 1024
 
+
 def get_op_list(outs_list):
+    """Gets op list."""
     outputs_tensor = Queue()
     outputs_tensor.put(outs_list[0])
     op_list = []
@@ -30,6 +32,7 @@ def get_op_list(outs_list):
             for input_tensor in out.op.input_tensors:
                 outputs_tensor.put(input_tensor)
     return op_list
+
 
 def default_schedule(outs):
     """

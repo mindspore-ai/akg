@@ -221,3 +221,64 @@ def reciprocal(x, target=utils.CUDA):
 def select(condition, x1, x2, target=utils.CUDA):
     """Select"""
     return math.select(condition, x1, x2, target)
+
+
+
+@reg_op("Transpose")
+def transpose(tensor, axes, target=utils.CUDA):
+    """Transpose"""
+    return array.transpose(tensor, axes, target)
+
+
+@reg_op("UnsortedSegmentMax")
+def unsorted_segment_max(data, segment_ids, num_segments, target=utils.CCE):
+    """UnsortedSegmentMax"""
+    return array.unsorted_segment_max(data, segment_ids, num_segments, target)
+
+
+@reg_op("UnsortedSegmentSum")
+def unsorted_segment_sum(data, indices, num, op_id=0, target=utils.CUDA):
+    """UnsortedSegmentSum"""
+    return array.unsorted_segment_sum(data, indices, num, op_id, target)
+
+
+@reg_op("GatherNd")
+def gather_nd(data, indices, target=utils.CUDA):
+    """GatherNd"""
+    return array.gpu.gather_nd(data, indices, target)
+
+
+@reg_op("Gather")
+def gather(data, indices, axis, target=utils.CUDA):
+    """Gather"""
+    return array.gpu.gather(data, indices, axis, target)
+
+
+@reg_op("OneHot")
+def one_hot(indices, on_value, off_value, depth, axis, dtype, target=utils.CUDA):
+    """OneHot"""
+    return array.gpu.one_hot(indices, on_value, off_value, depth, axis, dtype, target)
+
+
+@reg_op("SqueezeGrad")
+def squeeze_grad(y_grad, x_shape, target=utils.CUDA):
+    """SqueezeGrad"""
+    return array.gpu.squeeze_grad(y_grad, x_shape, target)
+
+
+@reg_op("Squeeze")
+def squeeze(x, axis=None, target=utils.CUDA):
+    """Squeeze"""
+    return array.gpu.squeeze(x, axis, target)
+
+
+@reg_op("StandardNormal")
+def standard_normal(seed, shape, target=utils.CUDA):
+    """StandardNormal"""
+    return array.gpu.standard_normal(seed, shape, target)
+
+
+@reg_op("TensorScatterAdd")
+def tensor_scatter_add(data, indices, updates, target=utils.CUDA):
+    """TensorScatterAdd"""
+    return array.gpu.tensor_scatter_add(data, indices, updates, target)

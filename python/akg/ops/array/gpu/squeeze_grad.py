@@ -17,7 +17,8 @@ import akg.topi as topi
 import akg.utils as utils
 import akg
 
-def gpu_schedule_SqueezeGrad(outs):
+
+def gpu_schedule_squeeze_grad(outs):
     """
     gpu schedule SqueezeGrad.
 
@@ -27,11 +28,12 @@ def gpu_schedule_SqueezeGrad(outs):
     Returns:
         sch (schedule.Schedule): The created schedule.
     """
-    from .default_schedule import default_schedule
-    return default_schedule(outs)
+    import default_schedule
+    return default_schedule.default_schedule(outs)
 
-@akg.schedule(gpu_schedule_SqueezeGrad)
-def SqueezeGrad(y_grad, x_shape, target=utils.CUDA):
+
+@akg.schedule(gpu_schedule_squeeze_grad)
+def squeeze_grad(y_grad, x_shape):
     """
     Computes gradients for squeeze op.
 
