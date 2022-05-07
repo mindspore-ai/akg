@@ -2329,9 +2329,14 @@ void CsrStrategy::AddGpuConstraint() {
     csr_thread_num = use_reduce_lib ? analyzer_->scop_info_.user_config_.GetCsrThreadNum() : GPU_CSR_NO_TILE;
     // For outer axis
     CHECK(!analyzer_->scop_info_.analysis_result_.IsCsrDynamicExtent(outer_axis->range_extent));
-    int max_nodes_per_block = available_threads / feat_len / csr_thread_num;
+    available_threads /= feat_len;
+    int max_nodes_per_block = available_threads / csr_thread_num;
+    while (max_nodes_per_block < 1 && (csr_thread_num >> 1) > reduce_length_limit_) {
+      csr_thread_num >>= 1;
+      max_nodes_per_block = available_threads / csr_thread_num;
+    }
     auto nodes_per_block = std::min(max_nodes_per_block, GPU_CSR_BEST_NUM_NODES_PER_BLOCK);
-    nodes_per_block = SafeDivisor(nodes_per_block);
+    nodes_per_block = std::max(1, nodes_per_block);
     outer_axis->block_constraints.map_extent_ =
       std::ceil(static_cast<double>(outer_axis->extent_val) / feat_len / nodes_per_block);
     outer_axis->thread_constraints.map_extent_ = feat_len * nodes_per_block;
