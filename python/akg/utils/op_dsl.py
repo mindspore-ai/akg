@@ -26,7 +26,7 @@ def get_attr(attr_desc, attr_type):
         if attr["name"] == attr_type:
             return attr["value"]
     logging.warning("attr %s not found, please check." % (attr_type))
-    return None
+    return []
 
 
 def get_input(desc):
@@ -434,10 +434,10 @@ def func_pack(func_name, func_body, params, ret):
 def matmul_str(inputs, output, attr):
     """gen matmul string"""
     left_format = get_attr(attr, "left_format")
-    if left_format is None:
+    if not left_format:
         left_format = get_attr(attr, "pri_format")
     right_format = get_attr(attr, "right_format")
-    if right_format is None:
+    if not right_format:
         right_format = get_attr(attr, "pri_format")
     trans_a = get_attr(attr, "transpose_a")
     trans_b = get_attr(attr, "transpose_b")
@@ -518,7 +518,7 @@ def conv_2d_str(inputs, output, attr):
     res += "out_shape = (n, out_h, out_w, out_c)\n"
     res += "shape_data_pad = (n, h + p_t + p_b, w + p_l + p_r, c)\n"
 
-    res += "data_pad = np.zeros(shape_data_pad).astype({})\n".format(support_list[dtype])
+    res += "data_pad = np.zeros(shape_data_pad).astype({})\n".format(support_list.get(dtype))
     if has_pad:
         res += ("data_pad[:, p_t:p_t+h, p_l:p_l+w, :] = {}\n".format(shape_data_name))
     else:
@@ -526,7 +526,7 @@ def conv_2d_str(inputs, output, attr):
 
     res += "whd = (kh - 1) * d_h + 1\n"
     res += "wwd = (kw - 1) * d_w + 1\n"
-    res += "{} = np.zeros(out_shape).astype({})\n".format(output_name, support_list[out_dtype])
+    res += "{} = np.zeros(out_shape).astype({})\n".format(output_name, support_list.get(out_dtype))
     res += "for i in range(out_h):\n"
     res += "    for j in range(out_w):\n"
     res += "        for f in range(out_c):\n"

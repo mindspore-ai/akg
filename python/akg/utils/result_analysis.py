@@ -389,8 +389,8 @@ def precision_analyze(desc: dict, tensors):
         if x in input_tensors:
             logging.debug("Skip {}, because it comes from input tensors".format(x))
             return False
-        if x in ops and ops[x] in exclude_op_list:
-            logging.debug("Skip {}, because it comes from [{}] that will not reduce precision".format(x, ops[x]))
+        if x in ops and ops.get(x) in exclude_op_list:
+            logging.debug("Skip {}, because it comes from [{}] that will not reduce precision".format(x, ops.get(x)))
             return False
         return True
 
