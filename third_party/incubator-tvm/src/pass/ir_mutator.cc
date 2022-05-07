@@ -19,6 +19,8 @@
 
 /*!
  * \file ir_mutator.cc
+ * 2022.05.07
+ *  Adapt Ramp with type change
  */
 #include <tvm/ir.h>
 #include <tvm/ir_mutator.h>
@@ -465,6 +467,9 @@ Expr IRMutator::Mutate_(const Ramp *op, const Expr& e) {
       stride.same_as(op->stride)) {
     return e;
   } else {
+    if (base.type() != stride.type()) {
+      return Ramp::make(base, Cast::make(base.type(), stride), op->lanes);
+    }
     return Ramp::make(base, stride, op->lanes);
   }
 }
