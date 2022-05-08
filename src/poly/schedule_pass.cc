@@ -217,17 +217,10 @@ isl::union_map ComputeFakeCopyin(const isl::schedule &schedule, const isl::union
 }
 
 isl::schedule_constraints MakeScheduleConstraints(const isl::schedule &schedule, PassInfo &pass_info) {
-  isl::schedule_constraints constraints;
-  if (pass_info.coincident_) {
-    constraints = isl::schedule_constraints::on_domain(schedule.get_domain())
-                    .set_coincidence(pass_info.dependences_)  // keep it, check for more cases
-                    .set_validity(pass_info.dependences_)
-                    .set_proximity(pass_info.dependences_);
-  } else {
-    constraints = isl::schedule_constraints::on_domain(schedule.get_domain())
-                    .set_validity(pass_info.dependences_)
-                    .set_proximity(pass_info.dependences_);
-  }
+  auto constraints = isl::schedule_constraints::on_domain(schedule.get_domain());
+  constraints = constraints.set_validity(pass_info.dependences_)
+                           .set_proximity(pass_info.dependences_)
+                           .set_coincidence(pass_info.dependences_);
   return constraints;
 }
 

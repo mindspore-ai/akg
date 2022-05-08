@@ -61,7 +61,7 @@ class TileOuterBand : public SchedulePass {
                                           const std::function<isl::schedule_node(isl::schedule_node)> &f);
   int IsOuterTilable(const isl::schedule_node &node);
   int IsCandidate(const isl::schedule_node &node);
-  bool IsPermutable(const isl::schedule_node &node, bool checkCoincident);
+  bool IsPermutable(const isl::schedule_node &node);
   bool SubtreeHasPermutableBands(const isl::schedule_node &node);
   isl::multi_val ComputeBandTilesSizes(const isl::schedule_node &node, const int *tile_size);
   bool BoolNot(bool b) { return !b; }

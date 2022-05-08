@@ -24,9 +24,7 @@ namespace ir {
 namespace poly {
 class DsaMgrStrategy : public PassMgrStrategy {
  public:
-  explicit DsaMgrStrategy(ScopInfo &scop_info) : PassMgrStrategy(scop_info) {
-    pass_info_.coincident_ = scop_info_.user_config_.GetConsiderCoincidence();
-  }
+  explicit DsaMgrStrategy(ScopInfo &scop_info) : PassMgrStrategy(scop_info) {}
   ~DsaMgrStrategy() override = default;
 
   void RegisterSchedulePasses();
