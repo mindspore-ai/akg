@@ -135,7 +135,7 @@ def max_pool_with_argmax(x, pad_mode="valid", window=1, pad=0, stride=1, target=
 @reg_op("MatMul", utils.CCE)
 def mat_mul(x1, x2, out_dtype, transpose_a=False, transpose_b=False, target=utils.CCE):
     """MatMul"""
-    return math.MatMul(x=x1, y=x2, b=None, out_dtype=out_dtype, left_format="zN", right_format="zN", out_format="zN",
+    return math.matmul(x=x1, y=x2, b=None, out_dtype=out_dtype, left_format="zN", right_format="zN", out_format="zN",
                        transpose_x=transpose_a, transpose_y=transpose_b, target=target)
 
 
@@ -273,7 +273,7 @@ def bias_add_grad(dout, data_format=None, target=utils.CCE):
 @reg_op("BatchMatMul", utils.CCE)
 def batch_matmul(x1, x2, transpose_a=False, transpose_b=False, target=utils.CCE):
     """use cube version matmul"""
-    return math.MatMul(x=x1, y=x2, b=None, out_dtype=x1.dtype,
+    return math.matmul(x=x1, y=x2, b=None, out_dtype=x1.dtype,
                        left_format="zN", right_format="zN", out_format="zN",
                        transpose_x=transpose_a, transpose_y=transpose_b, target=target)
 

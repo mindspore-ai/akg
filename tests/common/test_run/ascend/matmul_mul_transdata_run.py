@@ -15,13 +15,13 @@
 import akg.tvm
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.math.ascend import MatMul
+from akg.ops.math.ascend import matmul
 from tests.common.test_run.ascend.matmul_run import *
 from akg.ops.math import mul
 
 def matmul_mul_transdata(x, y, c, b, out_dtype, left_format="zZ", right_format="nZ", out_format="zN", transpose_x=False,
                         transpose_y=False, attrs=None, target="cce"):
-    matmul_res, attrs = MatMul(x, y, b, out_dtype, left_format, right_format, out_format, transpose_x, transpose_y, attrs=attrs)
+    matmul_res, attrs = matmul(x, y, b, out_dtype, left_format, right_format, out_format, transpose_x, transpose_y, attrs=attrs)
     res = mul(matmul_res, c, target=target)
     if out_format == 'zN':
         n1, m1, m0, n0 = matmul_res.shape[-4:]
