@@ -60,7 +60,9 @@ void GemmStrategy::AddGpuConstraint() {
     return;
   }
 
-  analyzer_->scop_info_.user_config_.SetEnableOneDimThread(true);
+  if (!analyzer_->scop_info_.user_config_.EnableStitchFusion()) {
+    analyzer_->scop_info_.user_config_.SetEnableOneDimThread(true);
+  }
   Mma middle_band = {shape->m / SafeDivisor(mma.m), shape->n / SafeDivisor(mma.n), shape->k / SafeDivisor(mma.k)};
   std::stringstream ss;
   ss << "[Gemm] M = " << shape->m << " N = " << shape->n << " K = " << shape->k << ", middle band = [" << middle_band.m
@@ -2101,7 +2103,9 @@ void ConvStrategy::AddGpuConstraint() {
     return;
   }
 
-  analyzer_->scop_info_.user_config_.SetEnableOneDimThread(true);
+  if (!analyzer_->scop_info_.user_config_.EnableStitchFusion()) {
+    analyzer_->scop_info_.user_config_.SetEnableOneDimThread(true);
+  }
   MmaConv middle_band = {shape->m / SafeDivisor(mma.m), shape->h, shape->w, shape->n / SafeDivisor(mma.n),
                          shape->k / SafeDivisor(mma.k)};
   std::stringstream ss;

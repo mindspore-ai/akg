@@ -355,7 +355,7 @@ class EmitExpr : public air::ir::IRMutator {
   Expr Mutate(Expr e) final {
     // use cache first
     for (auto i : cache_) {
-      if (Equal(e, i.first)) {
+      if (Equal(e, i.first) && e.type() == i.first.type()) {
         return i.second;
       }
     }
