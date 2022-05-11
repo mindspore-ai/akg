@@ -16,12 +16,12 @@ import numpy as np
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
 from akg.ops.math import mul
-from akg.ops.math.ascend import Mean
+from akg.ops.math.ascend import mean
 from tests.common.gen_random import random_gaussian
 
 def mul_mean(first_input, second_input, axis=None, keepdims=False, target="cce"):
     temp = mul(first_input, second_input, target=target)
-    output, _ = Mean(temp, axis, keepdims)
+    output, _ = mean(temp, axis, keepdims)
     return output
 
 

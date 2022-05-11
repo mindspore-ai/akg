@@ -32,7 +32,7 @@ def real_div(x, y, target=utils.CCE):
 @reg_op("FloorDiv", utils.CCE)
 def floor_div(x, y, target=utils.CCE):
     """FloorDiv"""
-    return math.FloorDiv(x, y, target)
+    return math.floor_div(x, y, target)
 
 
 @reg_op("Argmax", utils.CCE)
@@ -44,7 +44,7 @@ def argmax(x, axis=-1, target=utils.CCE):
 @reg_op("SimpleMean", utils.CCE)
 def simple_mean(x, target=utils.CCE):
     """SimpleMean"""
-    return math.Mean(x, axis=[2, 3], keepdims=True, target=target)
+    return math.mean(x, axis=[2, 3], keepdims=True, target=target)
 
 
 @reg_op("ReLU", utils.CCE)
@@ -91,19 +91,19 @@ def relu_grad(y_backprop, x, target=utils.CCE):
 @reg_op("ReduceMean", utils.CCE)
 def reduce_mean(x, axis, keepdims, target=utils.CCE):
     """ReduceMean"""
-    return math.Mean(x, axis=axis, keepdims=keepdims, target=target)
+    return math.mean(x, axis=axis, keepdims=keepdims, target=target)
 
 
 @reg_op("ProdForceSeA", utils.CCE)
 def prod_force_sea(net_deriv_tensor, in_deriv_tensor, nlist_tensor, natoms=192, target=utils.CCE):
     """ProdForceSeA"""
-    return math.ProdForceSeA(net_deriv_tensor, in_deriv_tensor, nlist_tensor, natoms, target)
+    return math.prod_force_se_a(net_deriv_tensor, in_deriv_tensor, nlist_tensor, natoms, target)
 
 
 @reg_op("ProdForceSeAGrad", utils.CCE)
 def prod_force_sea_grad(grad_tensor, in_deriv_tensor, nlist_tensor, natoms=192, target=utils.CCE):
     """ProdForceSeAGrad"""
-    return math.ProdForceSeAGrad(grad_tensor, in_deriv_tensor, nlist_tensor, natoms, target)
+    return math.prod_force_se_a_grad(grad_tensor, in_deriv_tensor, nlist_tensor, natoms, target)
 
 
 @reg_op("OneHot", utils.CCE)
@@ -295,7 +295,7 @@ def apply_momentum(variable, accumulation, learning_rate, gradient, momentum, us
 @reg_op("EqualCount", utils.CCE)
 def equal_count(x, y, target=utils.CCE):
     """EqualCount"""
-    return math.EqualCount(x, y, target)
+    return math.equal_count(x, y, target)
 
 
 @reg_op("BNGrad1", utils.CCE)

@@ -14,7 +14,7 @@
 
 """mean_square"""
 from tests.common.test_op.ascend.square import square
-from akg.ops.math.ascend import Mean
+from akg.ops.math.ascend import mean
 
 def mean_square(inputs, axis=None, keepdims=False, target="cce"):
     """Mean of square value of a tensor, alongside the specified axis.
@@ -33,4 +33,4 @@ def mean_square(inputs, axis=None, keepdims=False, target="cce"):
     Notice: There is some precision problem for the operator and remain to solve
     """
     inputs_square = square(inputs)
-    return Mean(inputs_square, axis, keepdims, target=target)
+    return mean(inputs_square, axis, keepdims, target=target)

@@ -13,12 +13,11 @@
 # limitations under the License.
 from akg.utils import kernel_exec as utils
 import numpy as np
+import random
 from tests.common.tensorio import compare_tensor
 from tests.common.gen_random import random_gaussian
 from tests.common.base import get_rtol_atol
-from akg.ops.math.ascend import ProdForceSeAGrad
-
-import random
+from akg.ops.math.ascend import prod_force_se_a_grad
 
 
 def gen_data(input_shapes):
@@ -48,7 +47,7 @@ def prod_force_grad_cpu(grad_tensor, in_deriv_tensor, nlist_tensor, natoms=192):
 
 
     output_shape = [nframes, natoms, ndescript]
-    
+
     grad_net = np.full(output_shape, 0, "float32")
     for kk in range(nframes):
         for ii in range(natoms):
@@ -59,7 +58,7 @@ def prod_force_grad_cpu(grad_tensor, in_deriv_tensor, nlist_tensor, natoms=192):
             for aa in range(ndescript):
                 for cc in range(3):
                     grad_net[kk, ii, aa] -= grad_tensor[kk, ii, cc] * in_deriv_tensor[kk, ii, aa, cc]
-            
+
             for jj in range(nnei):
                 j_idx = nlist_tensor[kk, ii, jj]
                 if j_idx > -1:
@@ -68,11 +67,17 @@ def prod_force_grad_cpu(grad_tensor, in_deriv_tensor, nlist_tensor, natoms=192):
                             grad_net[kk, ii, aa] += grad_tensor[kk, j_idx, cc] * in_deriv_tensor[kk, ii, aa, cc]
     return grad_net
 
-def prod_force_se_a_grad_run(input_shapes, input_dtype, attrs = {}):
+
+def prod_force_se_a_grad_run(input_shapes, input_dtype, attrs=None):
+    if attrs is None:
+        attrs = {}
     attrs["pragma_disable_whole_component"] = False
-    mod = utils.op_build_test(ProdForceSeAGrad, input_shapes, input_dtype, kernel_name = "force_grad", attrs = attrs)
+    mod = utils.op_build_test(prod_force_se_a_grad, input_shapes,
+                              input_dtype,
+                              kernel_name = "force_grad",
+                              attrs = attrs)
     args, expect, input1, input2, input3 = gen_data(input_shapes)
     output = utils.mod_launch(mod, args, expect=expect)
     rtol, atol = get_rtol_atol("prod_force_se_a_grad", input_dtype)
-    compare_res = compare_tensor(output, expect, rtol=rtol, atol=atol, equal_nan=True)
+    compare_res = compare_tensor(output, expect, rtol = rtol, atol=atol, equal_nan = True)
     return (input1, input2, input3), output, expect, compare_res

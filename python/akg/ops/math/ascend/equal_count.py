@@ -16,16 +16,16 @@
 
 """operator dsl function: equal_count"""
 import akg.topi
-import akg.tvm
 import akg.utils as utils
-from ..cast import Cast
-from ..sum import Sum
 from akg.utils.kernel_exec import product_is_mini
 from akg.utils.dsl_create import produce_shapes
 from akg.utils.format_transform import get_shape
+from ..cast import Cast
+from ..sum import Sum
+
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (str, type(None)))
-def EqualCount(x, y, target=utils.CCE):
+def equal_count(x, y, target=utils.CCE):
     """
     compute equal num of x and y.
 
@@ -35,7 +35,7 @@ def EqualCount(x, y, target=utils.CCE):
 
     Returns:
         tvm.tensor.Tensor, equal num, type is int32.
-    
+
     Supported Platforms:
         'Ascend'
     """

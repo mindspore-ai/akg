@@ -16,7 +16,7 @@
 import akg.tvm
 import akg.topi
 import akg.utils as utils
-from akg.ops.math.ascend.floor import Floor
+from akg.ops.math.ascend.floor import floor
 from akg.utils.dsl_create import produce_shapes
 from akg.utils.kernel_exec import product_is_mini
 from akg.ops.math.reciprocal import reciprocal
@@ -77,7 +77,7 @@ def _div_ascend(data1, data2):
         res = akg.topi.divide(input1p, input2p)
 
     if dtype in ("int8", "uint8"):
-        res = Floor(res, utils.CCE)
+        res = floor(res, utils.CCE)
         res = Cast(res, "float16", utils.CCE)
     if dtype in ("int32", "int8", "uint8"):
         res = Cast(res, dtype, utils.CCE)

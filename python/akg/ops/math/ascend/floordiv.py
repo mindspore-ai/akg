@@ -18,8 +18,9 @@ import akg.utils as utils
 from akg.utils.kernel_exec import product_is_mini
 from ..reciprocal import reciprocal
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (str, type(None)))
-def FloorDiv(data1, data2, target=utils.CCE):
+def floor_div(data1, data2, target=utils.CCE):
     """
     Calculate x/y, and always returns an integer which is floored.
 
@@ -29,7 +30,7 @@ def FloorDiv(data1, data2, target=utils.CCE):
 
     Returns:
         tvm.tensor.Tensor, has type of int32.
-    
+
     Supported Platforms:
         'Ascend'
     """

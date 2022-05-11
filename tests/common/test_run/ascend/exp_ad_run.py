@@ -15,7 +15,7 @@
 import numpy as np
 from tests.common.base import get_rtol_atol
 from akg.topi.util import get_const_tuple
-from akg.ops.math.ascend import ExpAd
+from akg.ops.math.ascend import exp_ad
 from akg.utils import kernel_exec as utils
 from tests.common.tensorio import compare_tensor
 
@@ -23,7 +23,7 @@ def exp_ad_run(shape, dtype, attrs):
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(ExpAd, [shape, shape], [dtype, dtype], kernel_name=kernel_name, attrs=attrs, tuning=t)
+        mod = utils.op_build_test(exp_ad, [shape, shape], [dtype, dtype], kernel_name=kernel_name, attrs=attrs, tuning=t)
         expect, head_np, input_np = gen_data(dtype, shape)
         if t:
             output = np.full(expect.shape, np.nan, dtype)
@@ -31,7 +31,7 @@ def exp_ad_run(shape, dtype, attrs):
         else:
             return mod
     else:
-        mod = utils.op_build_test(ExpAd, [shape, shape], [dtype, dtype], kernel_name='exp_ad', attrs=attrs)
+        mod = utils.op_build_test(exp_ad, [shape, shape], [dtype, dtype], kernel_name='exp_ad', attrs=attrs)
         expect, head_np, input_np = gen_data(dtype, shape)
         output = np.full(expect.shape, np.nan, dtype)
         output = utils.mod_launch(mod, (head_np, input_np, output), expect=expect)

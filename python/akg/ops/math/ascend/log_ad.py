@@ -23,7 +23,7 @@ from ..log import log
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (str, type(None)))
-def LogAd(head, in_data, target=utils.CCE):
+def log_ad(head, in_data, target=utils.CCE):
     """
     Compute gradient of log operator using automatic differentiate.
 
@@ -33,7 +33,7 @@ def LogAd(head, in_data, target=utils.CCE):
 
     Returns:
         tvm.tensor.Tensor has the same shape as input.
-    
+
     Supported Platforms:
         'Ascend'
     """

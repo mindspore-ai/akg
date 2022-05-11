@@ -19,11 +19,14 @@ import akg
 import akg.utils as utils
 from akg.tvm.hybrid import script
 
-def ProdForceSeAGrad(grad_tensor, in_deriv_tensor, nlist_tensor, natoms=192, target=utils.CCE):
+
+def prod_force_se_a_grad(grad_tensor, in_deriv_tensor, nlist_tensor, natoms=192, target=utils.CCE):
     """
     Supported Platforms:
         'Ascend'
     """
+    if target != utils.CCE:
+        raise RuntimeError('operator not supported on %s' % utils.get_backend(target))
     net_deriv_tensor_shape = grad_tensor.shape
     natoms = net_deriv_tensor_shape[1]
     nframes = net_deriv_tensor_shape[0]
@@ -33,9 +36,8 @@ def ProdForceSeAGrad(grad_tensor, in_deriv_tensor, nlist_tensor, natoms=192, tar
 
     @script
     def prod_force_se_a_grad_compute(grad_tensor, in_deriv_tensor, nlist_tensor):
-        grad_net = output_tensor(output_shape, dtype = grad_tensor.dtype)
+        grad_net = output_tensor(output_shape, dtype=grad_tensor.dtype)
 
-        
         for kk in range(nframes):
             for ii in range(natoms):
                 for jj in range(nnei):
@@ -49,11 +51,14 @@ def ProdForceSeAGrad(grad_tensor, in_deriv_tensor, nlist_tensor, natoms=192, tar
         return grad_net
 
     output = prod_force_se_a_grad_compute(grad_tensor, in_deriv_tensor, nlist_tensor)
-    attrs = {'enable_post_poly_loop_partition': False, 'enable_double_buffer': False, 'enable_cover_protect_optimize': False, 'enable_feature_library': True, 'RewriteVarTensorIdx': False}
+    attrs = {'enable_post_poly_loop_partition': False,
+             'enable_double_buffer': False,
+             'enable_cover_protect_optimize': False,
+             'enable_feature_library': True,
+             'RewriteVarTensorIdx': False}
     if nframes.value > 1:
         attrs['dim'] = "0 0 1 1 0 1 192 1 0 2 1 1 0 3 1 1"
     else:
         attrs['dim'] = "0 0 192 1 0 1 1 1 0 2 1 1 0 3 1 1"
-
 
     return output, attrs

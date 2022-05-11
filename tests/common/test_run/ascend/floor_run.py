@@ -15,28 +15,29 @@
 from akg.utils import kernel_exec as utils
 import numpy as np
 from tests.common.tensorio import compare_tensor
-from akg.ops.math.ascend import Floor
+from akg.ops.math.ascend import floor
 from tests.common.gen_random import random_gaussian
+
 
 def floor_run(shape, dtype, kernel_name, attrs):
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(Floor, [shape], [dtype], kernel_name=kernel_name, attrs=attrs, tuning=t)
+        mod = utils.op_build_test(floor, [shape], [dtype], kernel_name=kernel_name, attrs=attrs, tuning=t)
         if t:
-            expect, input, output = gen_data(dtype, shape)
-            return mod, expect, (input, output)
+            expect, input_, output = gen_data(dtype, shape)
+            return mod, expect, (input_, output)
         else:
             return mod
     else:
-        mod = utils.op_build_test(Floor, [shape], [dtype], kernel_name=kernel_name, attrs=attrs)
-        expect, input, output = gen_data(dtype, shape)
-        output = utils.mod_launch(mod, (input, output), expect=expect)
-        return input, output, expect, compare_tensor(output, expect, rtol=5e-03, equal_nan=True)
+        mod = utils.op_build_test(floor, [shape], [dtype], kernel_name=kernel_name, attrs=attrs)
+        expect, input_, output = gen_data(dtype, shape)
+        output = utils.mod_launch(mod, (input_, output), expect=expect)
+        return input_, output, expect, compare_tensor(output, expect, rtol=5e-03, equal_nan=True)
 
 
 def gen_data(dtype, shape):
-    input = random_gaussian(shape, miu=1.000001, sigma=0.09).astype(dtype)
-    expect = np.floor(input).astype(np.int32)
+    input_ = random_gaussian(shape, miu=1.000001, sigma=0.09).astype(dtype)
+    expect = np.floor(input_).astype(np.int32)
     output = np.full(shape, np.nan, "int32")
-    return expect, input, output
+    return expect, input_, output

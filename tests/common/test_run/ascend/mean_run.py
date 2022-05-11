@@ -18,7 +18,7 @@ from akg import tvm
 from tests.common.tensorio import compare_tensor
 from tests.common.base import get_rtol_atol
 from tests.common.gen_random import random_gaussian
-from akg.ops.math.ascend import Mean
+from akg.ops.math.ascend import mean
 from akg.utils import kernel_exec as utils
 from akg.utils.result_analysis import akg_fp16_mean
 from akg.utils.dsl_create import get_reduce_out_shape
@@ -63,14 +63,14 @@ def mean_execute(shape, dtype, axis, keepdims, kernel_name, attrs):
         kernel_name = attrs.get("kernel_name", False)
         mod = mean_compile(shape, dtype, axis, keepdims, kernel_name, attrs, tuning=t)
         if t:
-            expect, input, output = gen_data(axis, dtype, keepdims, shape)
-            return mod, expect, (input, output)
+            expect, input_, output = gen_data(axis, dtype, keepdims, shape)
+            return mod, expect, (input_, output)
         else:
             return mod
     else:
         mod = mean_compile(shape, dtype, axis, keepdims, kernel_name, attrs)
-        expect, input, output = gen_data(axis, dtype, keepdims, shape)
-        args = [input, output]
+        expect, input_, output = gen_data(axis, dtype, keepdims, shape)
+        args = [input_, output]
         if attrs.get("dynamic"):
             _, dynamic_args = process_dynamic_shape([shape], attrs, keep_axis=[4])
             args += dynamic_args
@@ -78,19 +78,19 @@ def mean_execute(shape, dtype, axis, keepdims, kernel_name, attrs):
             args.append(block_dim)
         output = utils.mod_launch(mod, args, outputs=(1,), expect=expect)  # unified launch
         rtol, atol = get_rtol_atol("mean", dtype)
-        return input, output, expect, compare_tensor(output, expect, rtol=rtol, atol=atol, equal_nan=True)
+        return input_, output, expect, compare_tensor(output, expect, rtol=rtol, atol=atol, equal_nan=True)
 
 
 def gen_data(axis, dtype, keepdims, shape):
     support_list = {"float16": np.float16, "float32": np.float32}
-    input = random_gaussian(shape, miu=0.05, sigma=0.1).astype(support_list[dtype])
+    input_ = random_gaussian(shape, miu=0.05, sigma=0.1).astype(support_list[dtype])
     if dtype == "float16":
-        expect = akg_fp16_mean(input, axis=axis, keepdims=keepdims)
+        expect = akg_fp16_mean(input_, axis=axis, keepdims=keepdims)
     else:
-        expect = np.mean(input, axis=axis, keepdims=keepdims)
+        expect = np.mean(input_, axis=axis, keepdims=keepdims)
     out_shape = get_reduce_out_shape(shape, axis=axis, keepdims=keepdims)
     output = np.full(out_shape, 0, dtype)
-    return expect, input, output
+    return expect, input_, output
 
 
 def mean_compile(shape, dtype, axis, keepdims, kernel_name, attrs, tuning=False):
@@ -102,4 +102,4 @@ def mean_compile(shape, dtype, axis, keepdims, kernel_name, attrs, tuning=False)
         attrs["enable_post_poly_loop_partition"] = False
     else:
         build_shape = shape
-    return utils.op_build_test(Mean, [build_shape], [dtype], op_attrs=[axis, keepdims], kernel_name=kernel_name, attrs=attrs, tuning=tuning)
+    return utils.op_build_test(mean, [build_shape], [dtype], op_attrs=[axis, keepdims], kernel_name=kernel_name, attrs=attrs, tuning=tuning)

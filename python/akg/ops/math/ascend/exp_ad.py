@@ -20,8 +20,9 @@ import akg
 import akg.utils as utils
 from ..exp import Exp
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (str, type(None)))
-def ExpAd(head, in_data, target=utils.CCE):
+def exp_ad(head, in_data, target=utils.CCE):
     """
     Compute gradient of exp operator using automatic differentiate.
 
@@ -31,7 +32,7 @@ def ExpAd(head, in_data, target=utils.CCE):
 
     Returns:
         tvm.tensor.Tensor has the same shape as input.
-    
+
     Supported Platforms:
         'Ascend'
     """

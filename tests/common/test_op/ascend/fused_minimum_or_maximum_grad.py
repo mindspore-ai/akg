@@ -1,4 +1,4 @@
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,8 +16,8 @@
 import akg
 import akg.lang.ascend.te_compute.util as akg_compute_util
 from akg import topi, tvm
-from akg.ops.math import Sum, Cast
-from akg.ops.math.ascend import SumByShape
+from akg.ops.math import Cast
+from akg.ops.math.ascend import sum_by_shape
 import akg.utils as utils
 from akg.utils.dsl_create import zero_const
 from akg.utils.format_transform import get_shape
@@ -102,8 +102,8 @@ def fused_minimum_or_maximum_grad(dz, x, y, grad_x, grad_y, op_type):
         if get_shape(dy) != y_shape:
             dy = Cast(dy, "float32", "cce")
 
-    dx = SumByShape(dx, x_shape)
-    dy = SumByShape(dy, y_shape)
+    dx = sum_by_shape(dx, x_shape)
+    dy = sum_by_shape(dy, y_shape)
 
     if ori_dtype != dx.dtype:
         dx = Cast(dx, ori_dtype, "cce")
