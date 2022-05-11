@@ -1,4 +1,4 @@
-# Copyright 2021 Huawei Technologies Co., Ltd
+# Copyright 2021-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 
 """__init__"""
 from .avgpool import Avgpool
-from .batch_norm_ad import BatchNormAd
+from .batch_norm_ad import batch_norm_ad
 from .bias_add import BiasAdd
 from .bias_add_ad import BiasAddAd
 from .bias_add_ad_v2 import BiasAddAdV2
@@ -39,5 +39,5 @@ from .sparse_softmax_cross_entropy_with_logits_ad import sparse_softmax_cross_en
 from .zeros_like import ZerosLike
 from .fused_batch_norm_split import fused_bn1, fused_bn2, fused_bn3
 from .fused_batch_norm_grad_split import fused_bn_grad1, fused_bn_grad2, fused_bn_grad3
-from .fused_batch_norm import FusedBatchNorm
-from .fused_batch_norm_grad import FusedBatchNormGrad
+from .fused_batch_norm import fused_batch_norm
+from .fused_batch_norm_grad import fused_batch_norm_grad

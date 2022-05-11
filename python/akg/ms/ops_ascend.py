@@ -1,4 +1,4 @@
-# Copyright 2021 Huawei Technologies Co., Ltd
+# Copyright 2021-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -72,7 +72,7 @@ def sparse_softmax_cross_entropy_with_logits(features, labels, is_grad=False, se
     """sparse softmax cross entropy with logits"""
     if is_grad:
         return nn.sparse_softmax_cross_entropy_with_logits_ad(labels, features, reduction='mean', grad_scale=sens,
-                                                        target=target)
+                                                              target=target)
     return nn.sparse_softmax_cross_entropy_with_logits(labels, features, reduction='mean', target=target)
 
 
@@ -324,9 +324,9 @@ def fused_batch_norm(x, scale, b, mean, variance, momentum=0.99, epsilon=1e-3, d
         data_format = [DEFAULT]
     if isinstance(data_format, list):
         data_format = data_format[0]
-    outputs = nn.FusedBatchNorm(x, scale, b, mean, variance, momentum=momentum, eps=epsilon,
-                                is_training=True, data_format=data_format, axis=1, target=target)
-    return outputs
+    attrs = {"momentum": momentum, "eps": epsilon, "is_training": True, "data_format": data_format,
+             "axis": 1, "target": target}
+    return nn.fused_batch_norm([x, scale, b, mean, variance], attrs)
 
 
 @reg_op("FusedBatchNormGrad", utils.CCE)
@@ -338,8 +338,8 @@ def fused_batch_norm_grad(dy, x, scale, save_mean, save_inv_variance, data_forma
     if isinstance(data_format, list):
         data_format = data_format[0]
     eps = 1e-3
-    return nn.FusedBatchNormGrad(dy, x, save_mean, save_inv_variance, scale, eps=eps, data_format=data_format,
-                                 axis=1, target=target)
+    return nn.fused_batch_norm_grad([dy, x, save_mean, save_inv_variance, scale], eps=eps, data_format=data_format,
+                                    axis=1, target=target)
 
 
 @reg_op("FusedBatchNormInfer", utils.CCE)
@@ -351,13 +351,14 @@ def fused_batch_norm_infer(x, scale, b, mean, variance, momentum=0.99, epsilon=1
         data_format = [DEFAULT]
     if isinstance(data_format, list):
         data_format = data_format[0]
-    return nn.FusedBatchNorm(x, scale, b, mean, variance, momentum=momentum, eps=epsilon,
-                             is_training=False, data_format=data_format, axis=1, target=target)
+    attrs = {"momentum": momentum, "eps": epsilon, "is_training": False, "data_format": data_format,
+             "axis": 1, "target": target}
+    return nn.fused_batch_norm([x, scale, b, mean, variance], attrs)
 
 
 @reg_op("Conv2DBackpropInput", utils.CCE)
 def conv_2d_backprop_input(out_backprop, input_sizes, filter_0, filter_shape, pad_list, stride=1, dilation=1,
-                            target=utils.CCE):
+                           target=utils.CCE):
     """back propagation of 2d convolution on input"""
     if len(pad_list) != 4:
         raise IndexError("Length of pad must be equal 4")
@@ -376,7 +377,7 @@ def conv_2d_backprop_input(out_backprop, input_sizes, filter_0, filter_shape, pa
 
 @reg_op("Conv2DBackpropFilter", utils.CCE)
 def conv_2d_backprop_filter(out_backprop, input_0, input_shape, filter_sizes, pad_list, stride=1, dilation=1,
-                             target=utils.CCE):
+                            target=utils.CCE):
     """back propagation of 2d convolution on filter"""
     if len(pad_list) != 4:
         raise IndexError("Length of pad must be equal 4")
