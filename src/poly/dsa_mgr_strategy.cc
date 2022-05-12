@@ -20,7 +20,6 @@
 #include "poly/schedule_pass/memory_manager.h"
 #include "poly/schedule_pass/sink_c0.h"
 #include "poly/schedule_pass/sink_last_axis.h"
-#include "poly/schedule_pass/reorder_invariant_set_schedule.h"
 #include "poly/schedule_pass/keep_outer_band_order.h"
 
 #include "poly/schedule_pass/split_outer_band.h"
@@ -83,7 +82,6 @@ void DsaMgrStrategy::RegisterPasses() {
   RegisterConstrainedScheduling();
 
   RegisterSchedulePasses();
-  RegisterPass(std::make_shared<ReorderInvariantSetSchedule>(pass_info_));
 
   if (scop_info_.user_config_.GetOuterBandNeedSplit() && !scop_info_.mmu_info_.IsSpecGemm()) {
     RegisterPass(std::make_shared<SplitOuterBand>());
@@ -97,7 +95,6 @@ void DsaMgrStrategy::RegisterPasses() {
   if (scop_info_.user_config_.GetIsTuning()) {
     return;
   }
-  RegisterPass(std::make_shared<ReorderInvariantSetSchedule>(pass_info_));
   RegisterPass(std::make_shared<ResetCoincidenceOfReduce>(scop_info_, pass_info_));
   if (scop_info_.user_config_.GetPragmaSetAllCoincident()) {
     RegisterPass(std::make_shared<SetAllCoincidence>());

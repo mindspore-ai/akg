@@ -45,8 +45,6 @@ class SchedulePass {
 
 bool LoadScheduleTreeFromFile(const std::string &filename, isl::schedule &schedule);
 
-isl::schedule_node ReorderFilters(const isl::schedule_node &node,
-                                  const std::unordered_map<size_t, size_t> &old_to_new_map);
 isl::union_map DependenceAnalysis(const isl::union_map &sources, const isl::union_map &targets,
                                   const isl::union_map &kills, const isl::union_map &sch);
 isl::union_map ComputeAllDependences(const isl::schedule &schedule, const isl::union_map &reads_um,
@@ -70,8 +68,6 @@ isl::schedule_constraints MakeScheduleConstraints(const isl::schedule &schedule,
 isl::union_map RemoveReduceOpSelfDependence(ScopInfo &scop_info, PassInfo &pass_info);
 
 isl::union_map RemoveSelfDependence(PassInfo &pass_info, std::map<std::string, std::string> tensor_name_map = {});
-
-isl::union_map RemoveInvariantDependence(const isl::schedule &schedule, PassInfo &pass_info, ScopInfo &scop_info);
 
 /*
  * Compute copyin for each filter and return the union of such copyins.

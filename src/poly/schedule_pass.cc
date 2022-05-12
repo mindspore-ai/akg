@@ -55,34 +55,6 @@ isl::schedule_node TileBand(isl::schedule_node node, const isl::multi_val &sizes
   return node;
 }
 
-/* Reorder filters of a sequence/set node.
- * node: must be a sequence or set node.
- * old_to_new_map: map from original child position to new child position.
- * The caller should make sure that there are no duplicate values.
- */
-isl::schedule_node ReorderFilters(const isl::schedule_node &node,
-                                  const std::unordered_map<size_t, size_t> &old_to_new_map) {
-  auto n_children = node.n_children();
-  isl_schedule_tree *old_tree = isl_schedule_node_get_tree(node.get());
-  CHECK(old_tree != nullptr);
-  isl_schedule_tree *new_tree = isl_schedule_node_get_tree(node.get());
-  CHECK(new_tree != nullptr);
-  for (auto &it : old_to_new_map) {
-    auto old_pos = it.first;
-    auto new_pos = it.second;
-    CHECK(old_pos < n_children);
-    CHECK(new_pos < n_children);
-    isl_schedule_tree *old_child = isl_schedule_tree_get_child(old_tree, old_pos);
-    CHECK(old_child != nullptr);
-    new_tree = isl_schedule_tree_replace_child(new_tree, new_pos, old_child);
-    CHECK(new_tree != nullptr);
-  }
-  static_cast<void>(isl_schedule_tree_free(old_tree));
-  isl_schedule_node *new_node = isl_schedule_node_graft_tree(node.copy(), new_tree);
-  CHECK(new_node != nullptr);
-  return isl::manage(new_node);
-}
-
 size_t CountConsecutiveCoincident(const isl::schedule_node &node) {
   size_t count = 0;
   if (!node.isa<isl::schedule_node_band>()) {

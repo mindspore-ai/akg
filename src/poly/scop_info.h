@@ -258,7 +258,6 @@ class UserConfig {
     ParseBoolAttr(attrs, "pragma_rmselfdep", &remove_self_dependence_);
     ParseBoolAttr(attrs, "pragma_force_rmselfdep", &force_remove_self_dependence_);
     ParseBoolAttr(attrs, "pragma_disable_whole_component", &disable_whole_component_);
-    ParseBoolAttr(attrs, "pragma_remove_invariant_dependence", &remove_invariant_dependence_);
     ParseBoolAttr(attrs, "pragma_disable_schedule_shift", &disable_schedule_shift_);
     ParseBoolAttr(attrs, "pragma_enable_schedule_max_constant", &enable_schedule_max_constant_);
     ParseBoolAttr(attrs, "pragma_enable_schedule_outer_coincidence", &enable_schedule_outer_coincidence_);
@@ -417,7 +416,6 @@ class UserConfig {
   // getter for schedule tree transform config
   bool GetRemoveSelfDependence() const { return remove_self_dependence_; }
   bool GetForceRemoveSelfDependence() const { return force_remove_self_dependence_; }
-  bool GetRemoveInvariantDependence() const { return remove_invariant_dependence_; }
   bool GetDisableWholeComponent() const { return disable_whole_component_; }
   bool GetDisableScheduleShift() const { return disable_schedule_shift_; }
   bool GetEnableScheduleMaxConstant() const { return enable_schedule_max_constant_; }
@@ -779,7 +777,6 @@ class UserConfig {
   // schedule tree transform config
   bool remove_self_dependence_{true};
   bool force_remove_self_dependence_{false};
-  bool remove_invariant_dependence_{true};
   bool disable_whole_component_{true};
   bool disable_schedule_shift_{false};
   bool enable_schedule_max_constant_{false};
