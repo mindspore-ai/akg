@@ -36,7 +36,7 @@ def export_to_dot(tensors, filename="test.dot"):
     def export_tensor_shape(a_shape):
         result = "("
         for _, a_shp in enumerate(a_shape):
-            result = result + str(a_shp.value) + ", "
+            result = "{}{}, ".format(result, str(a_shp.value))
         result = result + ")"
         return result
 
@@ -73,18 +73,18 @@ def export_to_dot(tensors, filename="test.dot"):
             elif isinstance(tensor.op.body[0], akg.tvm.expr.Div):
                 tensor_opcode_name = '/'
             elif isinstance(tensor.op.body[0], akg.tvm.expr.Call):
-                tensor_opcode_name = 'Call ' + tensor.op.body[0].name
+                tensor_opcode_name = 'Call {}'.format(tensor.op.body[0].name)
             elif isinstance(tensor.op.body[0], akg.tvm.expr.Cast):
-                tensor_opcode_name = 'Cast:' + tensor.op.input_tensors[0].dtype + '=>' + tensor.dtype
+                tensor_opcode_name = 'Cast: {} => {}'.format(tensor.op.input_tensors[0].dtype, tensor.dtype)
             else:
                 tensor_opcode_name = 'Unsupported yet OP'
-            tensor_node_name = '    "' + exported_op_nodes[tensor] + '" [label = "' + exported_op_nodes[tensor] +\
-                               '\\n' + export_tensor_shape(tensor.shape) + '; ' + tensor.dtype + '\\n' +\
-                               tensor_opcode_name + '"; shape = ellipse; style = filled; color = lightgrey];'
+            tensor_node_name = '    "{}" [label = "{}\\n{}; {}\\n{}"; shape = ellipse; style = filled; color = lightgrey];\
+                '.format(exported_op_nodes[tensor], exported_op_nodes[tensor],
+                         export_tensor_shape(tensor.shape), tensor.dtype, tensor_opcode_name)
         else:  # isinstance(tensor.op,akg.tvm.tensor.PlaceholderOp):
-            tensor_node_name = '    "' + exported_op_nodes[tensor] + '" [label = "' + exported_op_nodes[tensor] +\
-                               '\\n' + export_tensor_shape(tensor.shape) +\
-                               '"; shape = box; style = filled; color = lightseagreen];'
+            tensor_node_name = '    "{}" [label = "{}\\n{}"; shape = box; style = filled; color = \
+                lightseagreen];'.format(exported_op_nodes[tensor], exported_op_nodes[tensor],
+                                        export_tensor_shape(tensor.shape))
         return tensor_node_name
 
     def recursive_export_nodes_name(tensor, f, exported_op_nodes):
@@ -92,44 +92,44 @@ def export_to_dot(tensors, filename="test.dot"):
             recursive_export_nodes_name(child, f, exported_op_nodes)
 
         if isinstance(tensor.op, akg.tvm.tensor.ComputeOp) and \
-                isinstance(tensor.op.body[0], (akg.tvm.expr.Mul, akg.tvm.expr.Add, akg.tvm.expr.Sub, akg.tvm.expr.Div)) and \
-                len(tensor.op.input_tensors) < 2:
+                isinstance(tensor.op.body[0], (akg.tvm.expr.Mul, akg.tvm.expr.Add, akg.tvm.expr.Sub,
+                                               akg.tvm.expr.Div)) and len(tensor.op.input_tensors) < 2:
             if isinstance(tensor.op.body[0].a, akg.tvm.expr.FloatImm):
-                tensor_node_name = '    "Const_a_' + exported_op_nodes[tensor] +\
-                                   '" [label = "' + str(tensor.op.body[0].a.value) + '\\n' +\
-                                   tensor.op.body[0].a.dtype +\
-                                   '"; shape = box; style = filled; color = lightseagreen];'
-                f.write(tensor_node_name + "\n")
+                tensor_node_name = '    "Const_a_{}" [label = "{}\\n{}"; shape = box; style = filled; color \
+                    = lightseagreen];'.format(exported_op_nodes[tensor], str(tensor.op.body[0].a.value),
+                                              tensor.op.body[0].a.dtype)
+                f.write(tensor_node_name)
+                f.write("\n")
             if isinstance(tensor.op.body[0].b, akg.tvm.expr.FloatImm):
-                tensor_node_name = '    "Const_b_' + exported_op_nodes[tensor] +\
-                                   '" [label = "' + str(tensor.op.body[0].b.value) + '\\n' +\
-                                   tensor.op.body[0].b.dtype +\
-                                   '"; shape = box; style = filled; color = lightseagreen];'
-                f.write(tensor_node_name + "\n")
-        f.write(export_node_name(tensor) + "\n")
+                tensor_node_name = '    "Const_b_{}" [label = "{}\\n{}"; shape = box; style = filled; color = lightseagreen];'\
+                    .format(exported_op_nodes[tensor], str(tensor.op.body[0].b.value), tensor.op.body[0].b.dtype)
+                f.write(tensor_node_name)
+                f.write("\n")
+        f.write(export_node_name(tensor))
+        f.write("\n")
 
     def recursive_export_edges(tensor, f, exported_op_nodes, exported_edges):
         to_name = '"' + exported_op_nodes[tensor] + '"'
         for child in tensor.op.input_tensors:
             recursive_export_edges(child, f, exported_op_nodes, exported_edges)
-            from_name = '"' + exported_op_nodes[child] + '"'
+            from_name = '"{}"'.format(exported_op_nodes.get(child))
             if (from_name, to_name) not in exported_edges:
                 exported_edges.add((from_name, to_name))
-                f.write('    ' + from_name + " -> " + to_name
-                        + '   [label = "' + export_tensor_shape(child.shape) + '"];\n')
+                f.write('    {} -> {}   [label = "{}"];\n'.format(from_name,
+                                                                  to_name, export_tensor_shape(child.shape)))
         if isinstance(tensor.op, akg.tvm.tensor.ComputeOp) and \
                 isinstance(tensor.op.body[0], (akg.tvm.expr.Mul, akg.tvm.expr.Add, akg.tvm.expr.Sub, akg.tvm.expr.Div)) and \
                 len(tensor.op.input_tensors) < 2:
             if isinstance(tensor.op.body[0].a, akg.tvm.expr.FloatImm):
-                from_name = '"Const_a_' + exported_op_nodes[tensor] + '"'
+                from_name = '"Const_a_{}"'.format(exported_op_nodes[tensor])
                 if (from_name, to_name) not in exported_edges:
                     exported_edges.add((from_name, to_name))
-                    f.write('    ' + from_name + " -> " + to_name + '   [label = "(const)"];\n')
+                    f.write('    {} -> {}   [label = "(const)"];\n'.format(from_name, to_name))
             if isinstance(tensor.op.body[0].b, akg.tvm.expr.FloatImm):
-                from_name = '"Const_b_' + exported_op_nodes[tensor] + '"'
+                from_name = '"Const_b_{}"'.format(exported_op_nodes[tensor])
                 if (from_name, to_name) not in exported_edges:
                     exported_edges.add((from_name, to_name))
-                    f.write('    ' + from_name + " -> " + to_name + '   [label = "(const)"];\n')
+                    f.write('    {} -> {}   [label = "(const)"];\n'.format(from_name, to_name))
         return exported_edges
 
     with open(filename, "w+") as f_out:
@@ -140,7 +140,7 @@ def export_to_dot(tensors, filename="test.dot"):
         repeat_name = 0
 
         if isinstance(tensors, akg.tvm.container.Array):
-            list_tensors = [x for x in tensors]
+            list_tensors = list(x for x in tensors)
         else:
             if isinstance(tensors, akg.tvm.tensor.Tensor):
                 list_tensors = [tensors]
@@ -159,18 +159,22 @@ variable_map = {}
 
 
 def register_variables(name, input_var, output_var):
-    """register variables as a dictionary."""
+    """
+    register variables as a dictionary.
+    """
     if not isinstance(name, str):
         raise ValueError("key {} is not str.".format(name))
     variable_map[name] = [output_var, input_var]
 
 
 def get_variables(name):
-    """get variables from dictionary."""
+    """
+    get variables from dictionary.
+    """
     if isinstance(name, str):
-        if not variable_map[name]:
+        if not name in variable_map:
             raise ValueError("value to key {} is empty.".format(name))
-        return variable_map[name]
+        return variable_map.get(name)
     raise ValueError("key {} is not str.".format(name))
 
 
@@ -338,7 +342,7 @@ def differentiate(output, inputs=None, head=None, ad_attrs=None, new_pld_array=N
                     cache[(out, head)] = override[out][1](
                         out, override[out][0], head, ad_attrs, new_pld_array)
                 idx = override[out][0].index(inp)
-                return cache[(out, head)][idx]
+                return cache.get((out, head), {})[idx]
             return old_fdiff(out, inp, head, ad_attrs, new_pld_array)
 
         fdiff = modified_fdiff
