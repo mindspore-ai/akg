@@ -1,4 +1,4 @@
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -36,20 +36,45 @@ OPAQUE = "OPAQUE"
 
 BINDS = "binds"
 
+ALL = "all"
 
-def reg_op(op_name, target=None):
+
+def _process_reg_targets(targets):
+    if targets is None:
+        targets = ALL
+    if not isinstance(targets, (list, tuple)):
+        targets = [targets]
+    for _, target in enumerate(targets):
+        if not isinstance(target, str):
+            raise TypeError("targets should be of type None, str or list/tuple of str, but got {} with type {}"
+                            .format(targets, type(targets)))
+    targets = list(set(targets))
+    return targets
+
+
+def reg_op(op_name, targets=None):
     """
     Register operator.
 
     :param op_name: str. The name of operator to be registered.
-    :param target: None or str. The supported target of operator, if None, means support all targets.
+    :param targets: None, str or list/tuple of str. The supported targets of operator, if None,
+        means support all targets.
     :return:
     """
+
+    targets = _process_reg_targets(targets)
+    if not targets:
+        raise ValueError("targets can not be empty!")
+
     def decorator(op):
         registered_ops = getattr(reg_op, "registered_ops", {})
-        if op_name in registered_ops:
-            logging.warning("Op [{}] already exists in the registry and will be overridden!".format(op_name))
-        registered_ops[op_name] = {"op": op, "target": target}
+        if op_name not in registered_ops:
+            registered_ops[op_name] = {}
+        for target in targets:
+            if target in registered_ops[op_name]:
+                logging.warning("Op [{}] for target {} already exists in the registry and will be overridden!"
+                                .format(op_name, target))
+            registered_ops[op_name][target] = op
         setattr(reg_op, "registered_ops", registered_ops)
 
         @functools.wraps(op)
@@ -66,13 +91,20 @@ def get_op(op_name, target):
     Get operator from registry.
 
     :param op_name: str. The name of operator.
-     :param target: None or str. The target of operator.
+    :param target: None or str. The target of operator.
     :return: The operator.
     """
+    if target is None:
+        target = ALL
+    if not isinstance(target, str):
+        raise TypeError("target should be of type None or str, but got {} with type {}".format(target, type(target)))
+
     registered_ops = getattr(reg_op, "registered_ops", None)
     if not isinstance(registered_ops, dict) or registered_ops.get(op_name) is None:
-        raise ValueError("Op [{}] not found! Please register it first.".format(op_name))
-    registered_target = registered_ops[op_name].get("target")
-    if registered_target is not None and registered_target != target:
-        raise ValueError("Op [{}] for target {} not found! Please register it first.".format(op_name, target))
-    return registered_ops[op_name].get("op")
+        raise ValueError("Op [{}] for target {} is not found in the registry! Please register it first."
+                         .format(op_name, target))
+    op = registered_ops[op_name].get(target, registered_ops[op_name].get(ALL))
+    if op is None:
+        raise ValueError("Op [{}] for target {} is not found in the registry! Please register it first."
+                         .format(op_name, target))
+    return op
