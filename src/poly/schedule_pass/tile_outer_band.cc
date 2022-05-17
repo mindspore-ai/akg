@@ -79,7 +79,7 @@ isl::schedule TileOuterBand::Run(isl::schedule sch) {
   if (final_schedule.get_map().is_equal(map_before_tile) &&
     scop_info_.user_config_.GetConsiderCoincidence()) {
     if (scop_info_.user_config_.GetTarget() == TARGET_CCE) {
-      scop_info_.analysis_result_.SetRestartPassName(RestartPassName::INIT_SCHEDULE);
+      scop_info_.analysis_result_.SetRestartPassName(RestartPassName::TILE_OUTER_BAND);
     } else {
       scop_info_.analysis_result_.SetRestartPassName(RestartPassName::EXIT);
     }
