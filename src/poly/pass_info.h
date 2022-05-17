@@ -63,7 +63,6 @@ class PassInfo {
   ~PassInfo() {}
 
   bool has_grouped_{false};
-  bool tile_check_coincident_{false};
 
   std::unordered_map<isl::id, isl::union_set_list, isl::IslIdIslHash> group_filter_map_;
 
@@ -72,8 +71,6 @@ class PassInfo {
   isl::union_pw_multi_aff group_upma_;
 
   isl::schedule_constraints constraints_;
-
-  bool coincident_{true};
 
   isl::union_map dependences_;
   isl::union_map force_dependences_;
