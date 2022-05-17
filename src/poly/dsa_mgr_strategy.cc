@@ -108,9 +108,7 @@ void DsaMgrStrategy::RegisterPasses() {
   RegisterMemPromPasses();
   RegisterPass(std::make_shared<ReorderMarkNodes>());
   RegisterPass(std::make_shared<MarkFuseOp>(scop_info_));
-  // if coincidence constraints are disabled (due to reschedule), we cannot determine multicore axis reliably
-  bool can_use_multiCore = !scop_info_.mmu_info_.IsSpecGemm() && scop_info_.user_config_.GetConsiderCoincidence();
-  if (can_use_multiCore) {
+  if (!scop_info_.mmu_info_.IsSpecGemm()) {
     RegisterPass(std::make_shared<MarkOuterMost>(scop_info_));
   }
 }
