@@ -17,6 +17,7 @@
 #include "build_module.h"
 #include "gpu_emit/emit_pass.h"
 #include "isl_emitter_csr.h"
+#include "poly/poly_util.h"
 
 namespace akg {
 namespace ir {
@@ -234,8 +235,105 @@ Stmt GpuIslEmitterCsr::SubstituteTensorStmt(const Stmt &s, Tensor origin, Tensor
   return GpuIslEmitter::SubstituteTensorStmt(s, origin, replaced);
 }
 
+class RemoveAtomic : public IRMutator {
+ public:
+  explicit RemoveAtomic(ScopInfo &info) : info_(info) {}
+
+ private:
+  Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
+    if (IsStartsWith(op->attr_key, ATOMIC_MARKER)) {
+      need_check_ = true;
+      auto body = IRMutator::Mutate(op->body);
+      need_check_ = false;
+      if (need_remove_) {
+        need_remove_ = false;
+        return body;
+      }
+      if (!body.same_as(op->body)) {
+        return AttrStmt::make(op->node, op->attr_key, op->value, body);
+      }
+    } else {
+      auto body = IRMutator::Mutate(op->body);
+      auto attr_value = op->value.as<StringImm>();
+      if (need_check_ && need_remove_ && attr_value &&
+          (AkgSupportedReduceOp.count(attr_value->value) || attr_value->value == AKG_REDUCE_UNSUPPORTED)) {
+        return body;
+      }
+      if (!body.same_as(op->body)) {
+        return AttrStmt::make(op->node, op->attr_key, op->value, body);
+      }
+    }
+    return s;
+  }
+
+  Stmt Mutate_(const For *op, const Stmt &s) final {
+    if (ContainsCsrCond(op->extent, info_)) {
+      csr_vars_.insert(op->loop_var.get());
+      auto stmt = IRMutator::Mutate_(op, s);
+      csr_vars_.erase(op->loop_var.get());
+      return stmt;
+    }
+    return IRMutator::Mutate_(op, s);
+  }
+
+  Stmt Mutate_(const Provide *op, const Stmt &s) final {
+    if (!need_check_) return s;
+    std::unordered_set<const Variable *> dst_vars, src_vars;
+    bool has_func = false;
+    bool is_reduce = false;
+    bool reduce_csr = false;
+    auto func = op->func;
+    CHECK(func.defined());
+    for (auto arg : op->args) {
+      PostOrderVisit(arg, [&dst_vars] (const NodeRef &n) {
+        auto var = n.as<Variable>();
+        if (var != nullptr && !IsStartsWith(var->name_hint, "blockIdx") && !IsStartsWith(var->name_hint, "threadIdx")) {
+          dst_vars.insert(var);
+        }
+      });
+    }
+    PostOrderVisit(op->value, [&func, &has_func] (const NodeRef &n) {
+      auto call = n.as<Call>();
+      if (call != nullptr && call->func.defined() && call->func->func_name() == func->func_name()) {
+        has_func = true;
+      }
+    });
+    if (has_func) {
+      PostOrderVisit(op->value, [&src_vars] (const NodeRef &n) {
+        auto var = n.as<Variable>();
+        if (var != nullptr && !IsStartsWith(var->name_hint, "blockIdx") && !IsStartsWith(var->name_hint, "threadIdx")) {
+          src_vars.insert(var);
+        }
+      });
+      for (auto v : src_vars) {
+        if (dst_vars.count(v) == 0) {
+          is_reduce = true;
+          if (csr_vars_.count(v) > 0) {
+            // reduce axis is in src vars but not dst vars
+            reduce_csr = true;
+          }
+        }
+      }
+    }
+    if (is_reduce) {
+      if (!reduce_csr) {
+        need_remove_ = true;
+      }
+    } else if (!has_func) {
+      need_remove_ = true;
+    }
+    return s;
+  }
+
+  ScopInfo &info_;
+  std::unordered_set<const Variable *> csr_vars_;
+  bool need_check_{false};
+  bool need_remove_{false};
+};
+
 Stmt GpuIslEmitterCsr::EmitTensorOfTensorStmt(const Stmt &s) {
   Stmt stmt = LowerWith(s);
+  stmt = RemoveAtomic(info_).Mutate(stmt);
   if (info_.analysis_result_.GetOpTemplate() == Template::REDUCTION || info_.user_config_.GetEnableAtomicAdd()) {
     stmt = AtomicReturnStmtEmit(info_).Mutate(stmt);
   }

@@ -766,9 +766,9 @@ def csr_div(inputs, attrs):
             end = ib.load(row_idx, i + 1)
             with ib.for_range(0, end - start, name='j') as j:
                 pos = start + j
-                with ib.if_scope(pos < end):
-                    col = ib.load(col_idx, pos)
-                    with ib.for_range_n(feature_shape, 'k') as k:
+                with ib.for_range_n(feature_shape, 'k') as k:
+                    with ib.if_scope(pos < end):
+                        col = ib.load(col_idx, pos)
                         store_loc = [pos] + k
                         val = ib.load(sparse_data, store_loc)
                         with ib.if_scope(need_expand):
