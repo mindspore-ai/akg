@@ -189,13 +189,6 @@ isl::schedule Scop::Transform(const isl::schedule &input_schedule) {
   // We offer a restart mechanism for scalar stmt that cannot tile: do not consider coincidence
   // and re-compute/re-tile to generate final schedule.
   ResetConfig();
-  if (info_.user_config_.GetTarget() == TARGET_CCE) {
-    pass_stra.reset(new DsaMgrStrategy(info_));
-  } else if (info_.user_config_.GetTarget() == TARGET_CUDA) {
-    pass_stra.reset(new GPUMgrStrategy(info_));
-  } else if (info_.user_config_.GetTarget() == TARGET_CPU) {
-    pass_stra.reset(new CPUMgrStrategy(info_));
-  }
 
   final_schedule = mgr.Run(input_schedule, pass_stra);
   info_.DumpTransform("scalar_transform.log", pass_stra->pass_info_);
