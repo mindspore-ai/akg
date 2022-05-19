@@ -27,8 +27,19 @@ class FindProvide : public IRVisitor {
   const Provide *provide_{nullptr};
 };
 
+void NormalizeSames(FuncRefMap &sames) {
+  for (const auto &[k, v] : sames) {
+    auto i = v;
+    while (sames.count(i)) {
+      sames[k] = sames[i];
+      i = sames[i];
+    }
+  }
+}
+
 Stmt BroadcastForSSA(const Stmt &s, BuildInfo *info) {
   auto &sames = info->opt.sames;
+  NormalizeSames(sames);
   auto outputs = info->opt.output_funcs;
   auto IsOutput = [&outputs](const FunctionRef &func) {
     return std::find(outputs.begin(), outputs.end(), func) != outputs.end();
