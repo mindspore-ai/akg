@@ -113,10 +113,10 @@ class MinMaxDtypeTrans : public IRMutator {
     Expr b = CanonicalSimplify(op->b);
     auto dtype_a = a.type();
     auto dtype_b = b.type();
-    if (dtype_a.lanes() == dtype_b.lanes()) {
+    if (dtype_a.bytes() == dtype_b.bytes()) {
       return Min::make(IRMutator::Mutate(a), IRMutator::Mutate(b));
     }
-    if (dtype_a.lanes() < dtype_b.lanes()) {
+    if (dtype_a.bytes() < dtype_b.bytes()) {
       Expr new_a = Cast::make(dtype_b, a);
       return Min::make(IRMutator::Mutate(new_a), IRMutator::Mutate(b));
     } else {
@@ -130,10 +130,10 @@ class MinMaxDtypeTrans : public IRMutator {
     Expr b = CanonicalSimplify(op->b);
     auto dtype_a = a.type();
     auto dtype_b = b.type();
-    if (dtype_a.lanes() == dtype_b.lanes()) {
+    if (dtype_a.bytes() == dtype_b.bytes()) {
       return Max::make(IRMutator::Mutate(a), IRMutator::Mutate(b));
     }
-    if (dtype_a.lanes() < dtype_b.lanes()) {
+    if (dtype_a.bytes() < dtype_b.bytes()) {
       Expr new_a = Cast::make(dtype_b, a);
       return Max::make(IRMutator::Mutate(new_a), IRMutator::Mutate(b));
     } else {
