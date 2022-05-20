@@ -242,6 +242,14 @@ def transpose_str(inputs, output, attr):
         output[0]['tensor_name'], get_input(inputs[0][0]), axes)
     return s
 
+def concat_str(inputs, output, attr):
+    axis = get_attr(attr, 'axis')
+    inputs_list = []
+    for i in range(len(inputs[0])):
+        inputs_list.append(get_input(inputs[0][i]))
+    s = '{} = np.concatenate(({}), axis={})'.format(output[0]['tensor_name'], ', '.join(inputs_list), axis)
+    return s
+    
 
 def trans_data_two2fractal(input_, src_format, dst_format):
     """two2fractal"""
@@ -814,4 +822,5 @@ op_dsl = {
     "Complex": lambda inputs, output, attr: "%s = np.vectorize(complex)(%s, %s)" %
     (output[0]['tensor_name'], get_input(inputs[0][0]),
                                                get_input(inputs[1][0])),
+    "Concat": lambda inputs, output, attr: concat_str(inputs, output, attr)
 }

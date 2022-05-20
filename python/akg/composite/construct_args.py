@@ -18,6 +18,7 @@ import json
 from os import stat
 from .split_block import parallel_json_split
 from .split_stitch import stitch_json_split
+from .split_pass_through import pass_through_json_split, concat_json_split
 
 
 class ConstructType:
@@ -29,6 +30,7 @@ class ConstructType:
     TUNE = "Tune"
     ELEMANY = "ElemAny"
     UNKNOWN = "Unknow"
+    CONCAT = "PassThroughConcat"
 
 
 class ConstructKey:
@@ -42,6 +44,10 @@ class ConstructKey:
     KERNEL_INPUTS = "kernel_inputs"
     KERNEL_OUTPUTS = "kernel_outputs"
     GET_STMT = "get_stmt"
+    OUTPUT_TENSOR_SHAPES = "output_tensor_shapes"
+    INPUT_TENSOR_SHAPES = "input_tensor_shapes"
+    KERNEL_NAME = "kernel_name"
+    CONCAT_SHAPES = "concat_shapes"
 
 
 def _reducemax_pattern(kernel_info):
@@ -457,6 +463,53 @@ class TotNodeAnalyze(BaseNodeAnalyze):
         _ = (analyze_json_func, analye_res, type_infos, poly, func)  # For unused warning...
         BaseNodeAnalyze.leaf_analyze(TotNodeAnalyze.get_name(), ct)
 
+class PassThroughNodeAnalyze(BaseNodeAnalyze):
+    def __init__(self, op_name, skip_ops_list):
+        self.op_name = op_name
+        self.skip_ops_list = skip_ops_list
+        
+    def get_name(self):
+        return "PassThrough" + self.op_name
+    
+    def check_type(self, desc_d):
+        """Check whether the json object is PassThrough type."""
+        if  self.op_name in desc_d['op']:
+            return self.get_name()
+        return ConstructType.UNKNOWN
+    
+    def extract_infos(self, desc_d, attrs):
+        """Extract PassThrough's children information, including jsons, attributes and segment infos."""
+        self.total_jsons, self.input_tensor_names, self.output_tensor_names, self.input_tensor_shapes, self.output_tensor_shapes = pass_through_json_split(desc_d, self.skip_ops_list)
+        
+        self.total_attrs = [attrs.copy() for _ in range(len(self.total_jsons))]
+        type_name = self.get_name()
+
+        self.segment_infos = {
+            type_name: {
+                ConstructKey.KERNEL_NAME: desc_d['op'],
+                ConstructKey.KERNEL_INPUTS: self.input_tensor_names,
+                ConstructKey.KERNEL_OUTPUTS: self.output_tensor_names,
+                ConstructKey.INPUT_TENSOR_SHAPES: self.input_tensor_shapes,
+                ConstructKey.OUTPUT_TENSOR_SHAPES: self.output_tensor_shapes,
+            }
+        }
+
+        return self.total_jsons, self.total_attrs, self.segment_infos
+    
+    def analyze_children(self, analyze_json_func, analye_res, ct, type_infos, poly, func):
+        """Process children of PassThrough."""
+        type_name = self.get_name()
+        BaseNodeAnalyze.multi_children_analyze(type_name, analyze_json_func, analye_res, ct, type_infos, poly, func)
+
+class ConcatNodeAnalyze(PassThroughNodeAnalyze):
+    def __init__(self):
+        super().__init__("Concat", ["Concat"])
+    
+    def extract_infos(self, desc_d, attrs):
+        super().extract_infos(desc_d, attrs)
+        concat_shapes = concat_json_split(desc_d)
+        self.segment_infos[self.get_name()][ConstructKey.CONCAT_SHAPES] = concat_shapes
+        return self.total_jsons, self.total_attrs, self.segment_infos
 
 class ElemAnyNodeAnalyze(BaseNodeAnalyze):
     @staticmethod
@@ -492,7 +545,7 @@ class ElemAnyNodeAnalyze(BaseNodeAnalyze):
         BaseNodeAnalyze.leaf_analyze(ElemAnyNodeAnalyze.get_name(), ct)
 
 class AnalyzeUtils:
-    check_cls_list = [ParallelNodeAnalyze, StitchNodeAnalyze, TotNodeAnalyze, ElemAnyNodeAnalyze, NormalNodeAnalyze]
+    check_cls_list = [ParallelNodeAnalyze, StitchNodeAnalyze, ConcatNodeAnalyze(), TotNodeAnalyze, ElemAnyNodeAnalyze, NormalNodeAnalyze]
 
     @staticmethod
     def check_json_type(desc_d):
