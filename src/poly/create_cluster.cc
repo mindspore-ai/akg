@@ -642,8 +642,13 @@ void CpuCreateCluster::CreateClusterListForGemm(const isl::schedule_node &node,
   for (auto mark_name : mark_names) {
     // Promote the specific tensor at the corresponding marker position.
     tensor_set.clear();
-    tensor_set.emplace(TENSOR_A);
-    tensor_set.emplace(TENSOR_B);
+    if (mark_name == PROMOTE_GLOBAL_TO_REGISTER_A) {
+      tensor_set.emplace(TENSOR_A);
+    } else if (mark_name == PROMOTE_GLOBAL_TO_REGISTER_B) {
+      tensor_set.emplace(TENSOR_B);
+    } else {
+      tensor_set.emplace(TENSOR_C);
+    }
     PromotedTensor current_tensors = GetCurrentMarkerTensorsForGemm(tensor_set);
     RecordPromotedTensorInfo(node, mark_name, current_tensors);
   }

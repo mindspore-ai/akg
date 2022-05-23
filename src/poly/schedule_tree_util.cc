@@ -223,9 +223,12 @@ std::vector<isl::schedule_node> BandsSplitAfterDepth(const std::vector<isl::sche
   return MapWithFunc(split_at_depth, bands);
 }
 
+// Insert the relevant marker on the boosted band node.
+// aixs_pos: Indicates that the marker is inserted before the i-th axis, starting from 1.
 isl::schedule_node InsertMarkerForPromotedNode(const isl::schedule_node &orig_node, const std::string &filter_name,
                                                const std::string &marker_name, const int aixs_pos) {
-  auto GetPromotedWriteFilter = [filter_name, marker_name, aixs_pos](isl::schedule_node node) -> isl::schedule_node {
+  CHECK(std::abs(aixs_pos) > 0) << "The position of the inserted axis must be greater than 0.";
+  auto GetPromotedFilter = [filter_name, marker_name, aixs_pos](isl::schedule_node node) -> isl::schedule_node {
     if (!node.isa<isl::schedule_node_filter>()) {
       return node;
     }
@@ -236,32 +239,33 @@ isl::schedule_node InsertMarkerForPromotedNode(const isl::schedule_node &orig_no
         is_gm_filter = true;
       }
     });
-    if (is_gm_filter && node.has_parent() && node.parent().isa<isl::schedule_node_sequence>()) {
-      node = node.child(0);
-      if (!node.isa<isl::schedule_node_band>()) {
-        return node;
-      }
-
-      auto band_node = node.as<isl::schedule_node_band>();
-      int n_member = band_node.n_member();
-      if (n_member == 0) {
-        return node.parent();
-      }
-      CHECK(std::abs(aixs_pos) <= n_member) << "The position of the inserted axis cannot be greater than the total "
-                                               "number of axes of the current band node.";
-      // aixs_pos: Indicates that the marker is inserted before the i-th axis, starting from 1.
-      int current_aixs_pos = aixs_pos - 1;
-      if (aixs_pos < 0) {
-        current_aixs_pos = n_member + aixs_pos;
-      }
-      bool need_split = current_aixs_pos != 0;
-      node = need_split ? band_node.split(current_aixs_pos).child(0) : node;
-      node = node.insert_mark(marker_name).parent();
-      node = need_split ? node.parent() : node;
+    if (!is_gm_filter) {
+      return node;
     }
+    auto child_node = node.child(0);
+    if (!child_node.isa<isl::schedule_node_band>()) {
+      return node;
+    }
+
+    auto band_node = child_node.as<isl::schedule_node_band>();
+    int n_member = band_node.n_member();
+    if (n_member == 0) {
+      return node;
+    }
+    CHECK(std::abs(aixs_pos) <= n_member)
+      << "The position of the inserted axis: " << std::abs(aixs_pos)
+      << " cannot be greater than the total number of axes of the current band node: " << n_member << ".";
+    int current_aixs_pos = aixs_pos - 1;
+    if (aixs_pos < 0) {
+      current_aixs_pos = n_member + aixs_pos;
+    }
+    bool need_split = current_aixs_pos != 0;
+    node = need_split ? band_node.split(current_aixs_pos).child(0) : child_node;
+    node = node.insert_mark(marker_name).parent();
+    node = need_split ? node.parent() : node;
     return node;
   };
-  return orig_node.map_descendant_bottom_up(GetPromotedWriteFilter);
+  return orig_node.map_descendant_bottom_up(GetPromotedFilter);
 }
 
 std::string GetMarkerName(const isl::schedule_node &node, std::string find_name) {

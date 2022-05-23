@@ -27,6 +27,14 @@ namespace poly {
 /*
  * Manager memory in CPU.
  */
+
+struct GemmTensorInfo {
+  bool need_transpose;
+  int vectorized_pos;
+  int unrolled_pos;
+  std::vector<size_t> tensor_shape;
+};
+
 class CpuMemoryManager : public SchedulePass {
  public:
   explicit CpuMemoryManager(ScopInfo &scop_info) : scop_info_(scop_info) { pass_name_ = __FUNCTION__; };
@@ -46,14 +54,19 @@ class CpuMemoryManager : public SchedulePass {
   isl::schedule HoistCpuMemory();
 
   void CreateClusterForOperator(const isl::schedule_node &orig_node);
-  isl::schedule_node InsertMarkerForVectorization(const isl::schedule_node &orig_node);
   isl::schedule_node HoistCpuMemoryOnMark(const isl::schedule_node &orig_node);
+  isl::schedule_node InsertMarkerForEmit(const isl::schedule_node &orig_node);
+  isl::schedule_node InsertMarkerForGemm(const isl::schedule_node &orig_node);
+  isl::schedule_node TileVectorizationForGemm(const isl::schedule_node &orig_node, const std::string &tensor_name,
+                                              const std::string &tensor_mark);
+  void GetRealPosition(const std::string &tensor_name, const std::vector<size_t> &tensor_shape);
 
   ScopInfo &scop_info_;
   int band_index_{0};
   OuterBandNode *current_outer_bn_{nullptr};
   isl::schedule schedule_;
   std::unordered_set<std::string> mark_names_;
+  std::unordered_map<std::string, GemmTensorInfo> gemm_tensor_info_map_;
 };
 
 }  // namespace poly

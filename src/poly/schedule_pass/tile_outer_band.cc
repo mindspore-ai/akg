@@ -866,6 +866,9 @@ std::vector<int> TileOuterBand::GetTileSizeOfLevel(const int member_size, const 
   if (tile_level == TileType::VECTORIZATION) {
     // Get the size of the vectorized tiling.
     int vectorized_tile_size = GetVectorizationTileSize(scop_info_);
+    CHECK(vectorization_axis_pos_ < member_size)
+      << "The position of the vectorized axes(" << vectorization_axis_pos_
+      << ") must be less than the total number of the current band node(" << member_size << ")!";
     tile_size[vectorization_axis_pos_] = vectorized_tile_size;
     return tile_size;
   }
@@ -1327,46 +1330,79 @@ isl::schedule_node TileOuterBand::TileCsrForCpu(const isl::schedule_node &orig_n
   return node.ancestor(node.get_tree_depth() - start_depth);
 }
 
+void TileOuterBand::RecordCopyinForGemm(const isl::schedule_node_sequence &seq_node) {
+  auto ori_reads = scop_info_.analysis_result_.GetReads();
+  auto ori_writes = scop_info_.analysis_result_.GetWrites();
+  auto new_copyin = scop_info_.analysis_result_.GetCopyin();
+
+  for (size_t i = 0; i < seq_node.n_children(); ++i) {
+    auto child_node = seq_node.child(i);
+    auto cur_copyin = ComputeFilterCopyin(child_node, ori_reads, ori_writes, seq_node.get_schedule());
+    new_copyin = new_copyin.unite(cur_copyin);
+  }
+  scop_info_.analysis_result_.RecordCopyin(new_copyin);
+}
+
 isl::schedule_node TileOuterBand::TileGemmOperatorForCpu(const isl::schedule_node &orig_node) {
   size_t start_depth = orig_node.get_tree_depth();
 
-  isl::schedule_node node = TileGemmBandNodeForCpu(orig_node);
+  // the first tiling: for parallel
+  isl::schedule_node node = TileAccordingToTileType(orig_node, TileType::C1);
+  node = InsertMultiMarker(node.parent(), FOR_PARALLEL).child(0);
+
+  // the second tiling: promote tensor_b
+  std::vector<int> tile_size_c1 = GetTileSizeForCpu(node, TileType::C1);
+  std::vector<int> tile_size_c0 = GetTileSizeForCpu(node, TileType::C0);
+  const int n_reverse_pos = 2;
+  tile_size_c0[tile_size_c0.size() - n_reverse_pos] = tile_size_c1[tile_size_c1.size() - n_reverse_pos];
+  node = TileAccordingToTileType(node, TileType::Invalid, tile_size_c0);
+  node = node.insert_mark(PROMOTE_GLOBAL_TO_REGISTER_A).child(0);
+
+  // the third tiling: promote tensor_a
+  node = TileAccordingToTileType(node, TileType::C0);
+  node = node.insert_mark(PROMOTE_GLOBAL_TO_REGISTER_B).child(0);
+
+  // the last tiling: micro kernel
   auto seq_node = SplitReduceStatements(node).parent();
   if (!seq_node.isa<isl::schedule_node_sequence>()) {
     return orig_node;
   }
 
+  // In order to recognize the output tensor of the batch_matmul operator as both read and write, the information of
+  // copy_in needs to be readjusted.
+  RecordCopyinForGemm(seq_node.as<isl::schedule_node_sequence>());
+  size_t seq_start_depth = seq_node.get_tree_depth();
   for (size_t i = 0; i < seq_node.n_children(); ++i) {
     node = seq_node.child(i);
     if (!node.isa<isl::schedule_node_filter>()) {
       continue;
     }
     bool is_gemm = IsContainReduceStatement(node);
-    node = node.child(0);
-
-    if (is_gemm) {
-      node = node.insert_mark(TENSOR_C);
-    } else {
-      node = TileElementWiseForCpu(node);
+    if (!is_gemm) {
+      continue;
     }
-    seq_node = node.parent().parent();
+    node = node.child(0);
+    std::vector<int> tile_size(tile_size_c1.size(), 1);
+    tile_size[0] = scop_info_.analysis_result_.GetMmaMode().m;
+    tile_size[1] = scop_info_.analysis_result_.GetMmaMode().n;
+    // To ensure that the information in the computation phase is stored in registers.
+    node = TileAccordingToTileType(node, TileType::Invalid, tile_size);
+    auto band_node = node.parent().as<isl::schedule_node_band>();
+    node = band_node.split(band_node.n_member() - 1).child(0);
+    node = node.insert_mark(PROMOTE_GLOBAL_TO_REGISTER_C).child(0);
+    // m axis(4): unroll
+    node = node.child(0).as<isl::schedule_node_band>().split(1);
+    node = InsertMarkerForLoop(node, FOR_UNROLLED).child(0);
+
+    // n axis(24): unroll + vectorization
+    vectorization_axis_pos_ = 0;
+    node = TileAccordingToTileType(node.child(0), TileType::VECTORIZATION);
+    node = InsertMarkerForLoop(node, FOR_VECTORIZED).parent();
+    node = InsertMarkerForLoop(node, FOR_UNROLLED);
+    seq_node = node.ancestor(node.get_tree_depth() - seq_start_depth);
   }
 
   return node.ancestor(node.get_tree_depth() - start_depth);
-}
-
-isl::schedule_node TileOuterBand::TileGemmBandNodeForCpu(const isl::schedule_node &orig_node) {
-  if (!orig_node.isa<isl::schedule_node_band>()) {
-    return orig_node;
-  }
-
-  auto node = orig_node;
-  node = TileAccordingToTileType(node, TileType::C1);
-
-  node = InsertMultiMarker(node.parent(), FOR_PARALLEL).child(0);
-  node = node.insert_mark(PROMOTE_GLOBAL_TO_REGISTER).child(0);
-
-  return node;
 }
 
 isl::schedule_node TileOuterBand::TileAllReduceForCpu(const isl::schedule_node &orig_node) {
@@ -1490,7 +1526,8 @@ std::vector<int> TileOuterBand::GetTileSizeForCpu(const isl::schedule_node &orig
 
   const int n_member = orig_node.as<isl::schedule_node_band>().n_member();
   const int tile_number = static_cast<int>(tile_sizes_.size());
-  CHECK(start_pos_ < tile_number) << "The starting position cannot be greater than or equal to the tiling size.";
+  CHECK(start_pos_ < tile_number) << "The starting position(" << start_pos_
+                                  << ") cannot be greater than or equal to the tiling size(" << tile_number << ")!";
   int dim_num = std::min(n_member, tile_number);
 
   // Get the size of the parallel and unroll tiling.

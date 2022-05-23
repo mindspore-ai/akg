@@ -331,6 +331,7 @@ class UserConfig {
     } else if (GetTarget() == TARGET_CPU) {
       ParseStringAttr(attrs, "feature", &feature_);
       ParseBoolAttr(attrs, "pragma_enable_conv2d_direct", &enable_conv2d_direct_);
+      ParseStringAttr(attrs, "gemm_kernel_mnk", &gemm_kernel_mnk_);
     }
 
     if (force_remove_self_dependence_) {
@@ -608,6 +609,9 @@ class UserConfig {
   std::string GetFeature() { return feature_; }
   void SetFeature(std::string feature) { feature_ = feature; }
 
+  std::string GetGemmKernelMNK() { return gemm_kernel_mnk_; }
+  void SetGemmKernelMNK(std::string gemm_kernel_mnk) { gemm_kernel_mnk_ = gemm_kernel_mnk; }
+
  private:
   // tools for parsing user config
   static void ParseIntAttr(const Map<std::string, NodeRef> &attrs, const std::string &attr_name, int *attr_to_set) {
@@ -833,6 +837,7 @@ class UserConfig {
 
   // cpu type
   std::string feature_{SSE_INSTRUCTION_SET};
+  std::string gemm_kernel_mnk_;
 
   // csr config
   int csr_thread_num_{128};

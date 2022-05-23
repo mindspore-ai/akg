@@ -401,12 +401,6 @@ constexpr auto B2 = "b2";
 constexpr auto T0 = "t0";
 constexpr auto T1 = "t1";
 constexpr auto T2 = "t2";
-constexpr auto TILE_WITH_C1 = "C1";
-constexpr auto TILE_WITH_C0 = "C0";
-constexpr auto TILE_WITH_C0_C1 = "C0_C1";
-constexpr auto TILE_WITH_LAST_C1 = "LAST_C1";
-constexpr auto TILE_WITH_LAST_C0 = "LAST_C0";
-constexpr auto TILE_WITH_WARP_C1 = "WARP_C1";
 constexpr auto REPLACE = "replace_";
 constexpr auto COMPUTE = "compute";
 constexpr auto REPEATED_MAPPING = "repeated_";
@@ -436,7 +430,6 @@ constexpr auto REDUCE_Y_FLAG = "reduce_y";
 /******************************************************
  * Following const is the mark tags for schedule tree
  ******************************************************/
-constexpr auto TOTAL_VECTORIZATION_BYTES = 16;
 constexpr auto REALIZE = "realize";
 constexpr auto CONV_GEMM = "conv_gemm";
 constexpr auto CONV_KHKW_OUTER = "conv_khkw_outer";
@@ -471,6 +464,9 @@ constexpr auto PROMOTE_REGISTER_TO_GLOBAL = "promote_register_to_global";
 constexpr auto PROMOTE_REGISTER_TO_SHARED = "promote_register_to_shared";
 constexpr auto PROMOTE_SHARED_TO_GLOBAL = "promote_shared_to_global";
 constexpr auto PROMOTE_GLOBAL_TO_REGISTER = "promote_global_to_register";
+constexpr auto PROMOTE_GLOBAL_TO_REGISTER_A = "promote_global_to_register_a";
+constexpr auto PROMOTE_GLOBAL_TO_REGISTER_B = "promote_global_to_register_b";
+constexpr auto PROMOTE_TRANSPOSE = "promoted_transpose";
 
 // Tensor mark
 constexpr auto TENSOR_A = "tensor_a";
@@ -513,8 +509,9 @@ constexpr auto PROMOTION_INFIX = "_promotion_";
 
 // cpu instruction set
 constexpr auto BLOCK_SIZE_4 = 4;
-constexpr auto BLOCK_SIZE_8 = 8;
-constexpr auto BLOCK_SIZE_16 = 16;
+constexpr auto BLOCK_SIZE_12 = 12;
+constexpr auto BLOCK_SIZE_24 = 24;
+constexpr auto BLOCK_SIZE_48 = 48;
 constexpr auto ONE_BYTE_TO_BIT = 8;
 constexpr auto VECTORIZED_128_BIT = 128;
 constexpr auto VECTORIZED_256_BIT = 256;
@@ -557,11 +554,11 @@ const std::unordered_map<std::string, int> CpuInstructionSetBits = {{NEON_INSTRU
                                                                     {AVX512_INSTRUCTION_SET, VECTORIZED_512_BIT}};
 
 static std::unordered_map<std::string, std::vector<int>> CpuPackABBlockSize = {
-  {NEON_INSTRUCTION_SET, {BLOCK_SIZE_16, BLOCK_SIZE_4}},
-  {SSE_INSTRUCTION_SET, {BLOCK_SIZE_8, BLOCK_SIZE_4}},
-  {AVX_INSTRUCTION_SET, {BLOCK_SIZE_8, BLOCK_SIZE_4}},
-  {AVX2_INSTRUCTION_SET, {BLOCK_SIZE_8, BLOCK_SIZE_4}},
-  {AVX512_INSTRUCTION_SET, {BLOCK_SIZE_8, BLOCK_SIZE_4}}};
+  {NEON_INSTRUCTION_SET, {BLOCK_SIZE_4, BLOCK_SIZE_12}},
+  {SSE_INSTRUCTION_SET, {BLOCK_SIZE_4, BLOCK_SIZE_12}},
+  {AVX_INSTRUCTION_SET, {BLOCK_SIZE_4, BLOCK_SIZE_24}},
+  {AVX2_INSTRUCTION_SET, {BLOCK_SIZE_4, BLOCK_SIZE_24}},
+  {AVX512_INSTRUCTION_SET, {BLOCK_SIZE_4, BLOCK_SIZE_48}}};
 
 constexpr auto DEC = 10;
 
