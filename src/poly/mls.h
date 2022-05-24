@@ -549,7 +549,7 @@ class Hints {
   /// \retval false otherwise
   [[gnu::pure]] bool HasStatementVectorials(const char *statement) const;
 
-  /// \brief Check whether the Hints has reduces directives for a given stateemnt
+  /// \brief Check whether the Hints has reduces directives for a given statement
   /// \param[in] statement Target statement
   /// \return A boolean value that indicates whether the Hints has reduces directives for \a statement
   /// \retval true if the Hints has reduces directives for \a statement

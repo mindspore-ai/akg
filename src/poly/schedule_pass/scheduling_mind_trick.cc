@@ -1426,6 +1426,10 @@ bool SchedulingMindTrick::BuildInfluencedSchedule(const isl::schedule &schedule)
   }
 
   const std::string &kernel_name = scop_info_.user_config_.GetKernelName();
+  if (!hints_.HaveDirectives()) {
+    mls::bin::Hints directive_hint = ExtractDirectivesFromAKG(scop_info_);
+    UpdateHints(directive_hint);
+  }
   mls::bin::Scop scop(initial_schedule, dependences, reads, writes, hints_, options, kernel_name.c_str());
   const bool success = scop.ComputeSchedule();
 
@@ -1642,44 +1646,25 @@ isl::schedule SchedulingMindTrick::GpuPostProcessSchedule(const isl::schedule &s
 ///////////////////////////////////////////////////////////////////////////
 
 #ifdef AKG_USE_MLS
-void SchedulingMindTrick::ExtractDirectivesFromAKG(void) {
-  ForTypeMap directives = scop_info_.analysis_result_.GetForTypeMap();
-  std::map<std::string, std::vector<int>> serials_dir;
-  std::map<std::string, std::vector<int>> vectorials_dir;
-  std::map<std::string, std::vector<int>> parallels_dir;
-  for (const auto &[stmt, vloop_directive] : directives) {
-    std::string stmt_string = stmt.get_name();
-    for (uint i = 0; i < vloop_directive.size(); ++i) {
-      switch (vloop_directive[i]) {
-        case ForType::Serial:
-          break;
-        case ForType::Invariant:
-          LOG(INFO) << "invariant_for";
-          serials_dir[stmt_string].push_back(i);
-          break;
-        case ForType::Parallel:
-          LOG(INFO) << "parallel";
-          parallels_dir[stmt_string].push_back(i);
-          break;
-        case ForType::Vectorized:
-        case ForType::Swizzled:  // treat "Swizzled" like "Vectorized" for the moment
-          LOG(INFO) << "vectorized";
-          vectorials_dir[stmt_string].push_back(i);
-          break;
-        case ForType::Unrolled:
-          LOG(WARNING) << "Do not treat ForType::Unrolled as a directives";
-          break;
-        default:
-          break;
+void SchedulingMindTrick::UpdateHints(mls::bin::Hints directive_hint) {
+  if (!hints_.HaveDirectives()) {
+    ForTypeMap directives = scop_info_.analysis_result_.GetForTypeMap();
+    for (const auto &[stmt, vloop_directive] : directives) {
+      (void)vloop_directive;
+      const char *stmt_string = stmt.get_name().c_str();
+      if (directive_hint.HasStatementSerials(stmt_string)) {
+        hints_.SetStatementSerials(stmt_string, directive_hint.GetStatementSerials(stmt_string));
+      }
+      if (directive_hint.HasStatementVectorials(stmt_string)) {
+        hints_.SetStatementVectorials(stmt_string, directive_hint.GetStatementVectorials(stmt_string));
+      }
+      if (directive_hint.HasStatementParallels(stmt_string)) {
+        hints_.SetStatementParallels(stmt_string, directive_hint.GetStatementParallels(stmt_string));
+      }
+      if (directive_hint.HasStatementReduces(stmt_string)) {
+        hints_.SetStatementReduces(stmt_string, directive_hint.GetStatementReduces(stmt_string));
       }
     }
-  }
-
-  for (const auto &[key, directive] : serials_dir) {
-    hints_.SetStatementSerials(key.c_str(), directive);
-  }
-  for (const auto &[key, directive] : vectorials_dir) {
-    hints_.SetStatementVectorials(key.c_str(), directive);
   }
 }
 #endif
