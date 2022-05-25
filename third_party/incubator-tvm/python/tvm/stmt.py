@@ -126,6 +126,7 @@ class For(Stmt):
     Vectorized = 2
     Unrolled = 3
     Invariant = 5
+    Reduce = 6
     def __init__(self,
                  loop_var,
                  min_val,

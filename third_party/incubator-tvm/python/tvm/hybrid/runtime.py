@@ -175,6 +175,7 @@ HYBRID_GLOBALS = {
     'parallel'       : range,
     'const_range'    : range,
     'serial'         : range,
+    'reduce'         : range,
     'bind'           : bind,
     'allocate'       : allocate,
     'output_tensor'  : allocate,
