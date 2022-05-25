@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -255,6 +255,16 @@ bool ElimReshapeAnalysis::AnalysisElemwiseBackward(const FunctionRef &output) {
       if (!EqualShape(input_shape_change, input_shape)) {
         LOG(INFO) << "[ELEMWISE] RESHAPE: " << input->func_name() << ": " << input_shape_change << "->" << input_shape;
         result_.CollectReshape(g_.func_stmts[output], i, input_shape_change, input_shape);
+      } else {
+        auto op = g_.func_stmts[output];
+        if (!result_.need_reshape_map.count(op)) continue;
+        for (auto it = result_.need_reshape_map[op].begin(); it < result_.need_reshape_map[op].end();) {
+          if ((*it).pos == i && !EqualShape((*it).origin_shape, input_shape)) {
+            it = result_.need_reshape_map[op].erase(it);
+          } else {
+            ++it;
+          }
+        }
       }
     }
   }
