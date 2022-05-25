@@ -30,8 +30,13 @@ constexpr auto kKernelName = "kernel_name";
 void JsonLowerLeaf::Lower(StageType s) {
   auto info = GenBuildInfo(attrs_);
   attrs_.Set(kOriginKernelName, Expr(origin_kernel_name_));
-  data_ = LowerDataNode::make(GetScheduleWithBuildInfo(info), info.args, info.in_binds, attrs_,
-                              GetProcess(String2Json(json_str_)), info.kernel_name, GetConfig(), polyhedral_);
+  std::string process = GetProcess(String2Json(json_str_));
+  if (attrs_.count("target_option")) {
+    CHECK(attrs_["target_option"]->IsInstance<StringImm>());
+    process = process + " " + attrs_["target_option"].as<StringImm>()->value;
+  }
+  data_ = LowerDataNode::make(GetScheduleWithBuildInfo(info), info.args, info.in_binds, attrs_, process,
+                              info.kernel_name, GetConfig(), polyhedral_);
   current_stage_ = StageType::Begin;
 }
 
