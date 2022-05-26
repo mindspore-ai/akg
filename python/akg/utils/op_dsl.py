@@ -25,7 +25,7 @@ def get_attr(attr_desc, attr_type):
     for attr in attr_desc:
         if attr["name"] == attr_type:
             return attr["value"]
-    logging.warning("attr %s not found, please check." % (attr_type))
+    logging.warning("attr %s not found, please check.", attr_type)
     return []
 
 
@@ -99,6 +99,14 @@ def gather_np(data, indices, axis):
 
 def csrmv_np(indptr, indices, data, weight, shape):
     """numpy implementation of csrmv"""
+    import scipy.sparse
+    sparse_data = scipy.sparse.csr_matrix((data, indices, indptr), shape)
+    expect = sparse_data * weight
+    return np.asarray(expect)
+
+
+def csrmm_np(indptr, indices, data, weight, shape):
+    """numpy implementation of csrmm"""
     import scipy.sparse
     sparse_data = scipy.sparse.csr_matrix((data, indices, indptr), shape)
     expect = sparse_data * weight
@@ -788,4 +796,8 @@ op_dsl = {
                                                   output[0]['tensor_name'], get_input(inputs[0][0]),
                                                   get_input(inputs[1][0]), get_input(inputs[2][0]),
                                                   get_attr(attr, "dense_shape")),
+    "CSRMM": lambda inputs, output, attr: "{} = csrmm_np({}, {}, {}, {}, {})".format(
+                                           output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]),
+                                           get_input(inputs[2][0]),
+                                           get_input(inputs[3][0]), get_attr(attr, "dense_shape")),
 }

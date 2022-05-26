@@ -1024,3 +1024,41 @@ def coo2csr(inputs, attrs):
                       dtype=row_indices.dtype,
                       out_buffers=[out_buf],
                       name=output_name)
+
+
+
+@tvm.register_func("CSRMM")
+def csr_mm(inputs, _):
+    indptr, indices, data, dense = inputs
+    assert len(indptr.shape) == 1, "CSRTensor.indptr should be 1-dim."
+    assert len(indices.shape) == 1, "CSRTensor.indices should be 1-dim."
+    assert len(data.shape) == 1, "CSRTensor.values should be 1-dim."
+    assert len(dense.shape) == 2, "Dense Tensor should be 2-dim."
+    assert data.dtype == dense.dtype, "values and dense should have the same dtype."
+    num_rows = indptr.shape[0] - 1
+    num_cols = dense.shape[1]
+
+    def csr_mm_ir(indptr, indices, data, dense, out):
+        ib = tvm.ir_builder.create()
+        with ib.for_range(0, num_rows, name="row") as row:
+            row_start = ib.load(indptr, row)
+            row_end = ib.load(indptr, row+1)
+            num_eles = row_end - row_start
+            with ib.for_range(0, num_cols, name="col") as col:
+                ib.store(out, [row, col], tvm.const(0, data.dtype))
+                with ib.for_range(0, num_eles, name="strides") as strides:
+                    idx = row_start + strides
+                    val = tvm.expr.Select(idx < row_end,
+                                          ib.load(data, idx) * ib.load(dense, [ib.load(indices, idx), col]),
+                                          tvm.const(0, data.dtype))
+                    ib.scope_attr([tvm.api._IterVar((0, dense.shape[0]), "strides", 2)], "reduce_update", "")
+                    temp = val + ib.load(out, [row, col])
+                    ib.store(out, [row, col], temp)
+        return ib.get()
+
+    output_shape = [num_rows, num_cols]
+    output_name = "T_csr_mm_" + dense.op.name + "_" + data.op.name
+    out_buf = tvm.decl_buffer(output_shape, data.dtype, output_name)
+    return tvm.extern([output_shape], [indptr, indices, data, dense],
+                      lambda ins, outs: csr_mm_ir(ins[0], ins[1], ins[2], ins[3], outs[0]),
+                      dtype=data.dtype, out_buffers=[out_buf], name=output_name)

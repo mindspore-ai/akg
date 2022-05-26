@@ -27,6 +27,7 @@ from .csr_div_run import csr_div_run
 from .csr_mul_run import csr_mul_run
 from .csr_reduce_sum_run import csr_reduce_sum_run
 from .cumprod_run import cumprod_run
+from .csr_mm_run import csr_mm_run
 from .cumsum_run import cumsum_run
 from .div_run import div_run
 from .equal_run import equal_run
