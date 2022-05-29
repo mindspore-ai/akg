@@ -27,54 +27,103 @@ class FindProvide : public IRVisitor {
   const Provide *provide_{nullptr};
 };
 
-void NormalizeSames(FuncRefMap &sames) {
-  for (const auto &[k, v] : sames) {
-    auto i = v;
-    while (sames.count(i)) {
-      sames[k] = sames[i];
-      i = sames[i];
+bool IsOutput(const FuncRefList &outputs, const FunctionRef &func) {
+  return std::find(outputs.begin(), outputs.end(), func) != outputs.end();
+};
+
+class NormalizeOutput : public IRMutator {
+ public:
+  NormalizeOutput(BuildInfo *info, const std::vector<FuncRefSet> &sames_vec)
+      : info_(info), outputs_(info->opt.output_funcs), sames_vec_(sames_vec){};
+
+ private:
+  Stmt Mutate_(const Provide *op, const Stmt &s) override {
+    if (!IsOutput(outputs_, op->func)) {
+      for (const auto &i : sames_vec_) {
+        if (i.count(op->func)) {
+          for (const auto &j : i) {
+            if (IsOutput(outputs_, j)) {
+              replaces_[op->func] = j;
+              auto it = info_->opt.inplaces.find(op->func);
+              if (it != info_->opt.inplaces.end()) {
+                info_->opt.inplaces[j] = info_->opt.inplaces[op->func];
+                info_->opt.inplaces.erase(it);
+              }
+              return Provide::make(j, op->value_index, this->Mutate(op->value), op->args);
+            }
+          }
+        }
+      }
     }
+    return IRMutator::Mutate_(op, s);
   }
+  Expr Mutate_(const Call *op, const Expr &e) final {
+    Array<Expr> args;
+    for (const auto &arg : op->args) {
+      if (auto tensor = arg.as<Call>()) {
+        if (replaces_.count(tensor->func)) {
+          auto replaced = replaces_[tensor->func];
+          args.push_back(Call::make(tensor->type, replaced->func_name(), tensor->args, tensor->call_type, replaced,
+                                    tensor->value_index));
+        } else {
+          args.push_back(arg);
+        }
+      } else {
+        args.push_back(arg);
+      }
+    }
+    return Call::make(op->type, op->name, args, op->call_type, op->func);
+  }
+  BuildInfo *info_;
+  FuncRefList outputs_;
+  FuncRefMap replaces_;
+  std::vector<FuncRefSet> sames_vec_;
+};
+
+std::vector<FuncRefSet> NormalizeSames(const FuncRefMap &sames) {
+  std::vector<FuncRefSet> sames_vec;
+  for (const auto &[k, v] : sames) {
+    bool found = false;
+    for (auto &i : sames_vec) {
+      if (i.count(k) || i.count(v)) {
+        i.insert(k);
+        i.insert(v);
+        found = true;
+      }
+    }
+    if (found) continue;
+    sames_vec.push_back({k, v});
+  }
+  return sames_vec;
 }
 
 Stmt BroadcastForSSA(const Stmt &s, BuildInfo *info) {
-  auto &sames = info->opt.sames;
-  NormalizeSames(sames);
   auto outputs = info->opt.output_funcs;
-  auto IsOutput = [&outputs](const FunctionRef &func) {
-    return std::find(outputs.begin(), outputs.end(), func) != outputs.end();
-  };
-  auto HasSameIn = [&sames](const FunctionRef &in, const FunctionRef &out) {
-    bool same = false;
-    for (const auto &[first, second] : sames) {
-      if (second == in && first != out) same = true;
-    }
-    return same;
-  };
+  std::vector<FuncRefSet> sames_vec = NormalizeSames(info->opt.sames);
+  auto stmt = NormalizeOutput(info, sames_vec).Mutate(s);
   std::vector<Stmt> stmts;
-  stmts.push_back(s);
-  for (auto it = sames.begin(); it != sames.end();) {
-    auto out = it->first;
-    auto in = it->second;
-    if (IsOutput(out) && (IsOutput(in) || HasSameIn(in, out))) {
-      auto find = FindProvide(in);
-      find.Visit(s);
-      if (find.provide_) {
-        auto shape = find.provide_->args;
-        CHECK((find.provide_->value).as<Call>());
-        auto type = (find.provide_->value).as<Call>()->type;
-        auto input_call = Call::make(type, in->func_name(), shape, Call::CallType::Halide, in);
-        auto stmt =
-          Provide::make(out, 0, Call::make(type, "BroadcastTo", {input_call}, Call::CallType::PureIntrinsic), shape);
-        Map<std::string, NodeRef> broad_attrs;
-        broad_attrs.Set("shape", shape);
-        stmt = AttrStmt::make(broad_attrs, "attrs", Expr(1), stmt);
-        stmts.push_back(stmt);
-        it = sames.erase(it);
-        continue;
+  stmts.push_back(stmt);
+  for (auto &i : sames_vec) {
+    for (const auto &j : i) {
+      auto find = FindProvide(j);
+      find.Visit(stmt);
+      if (IsOutput(outputs, j) && find.provide_) {
+        for (const auto &k : i) {
+          if (j != k && IsOutput(outputs, k)) {
+            auto shape = find.provide_->args;
+            CHECK((find.provide_->value).as<Call>());
+            auto type = (find.provide_->value).as<Call>()->type;
+            auto input_call = Call::make(type, j->func_name(), shape, Call::CallType::Halide, j);
+            auto p =
+              Provide::make(k, 0, Call::make(type, "BroadcastTo", {input_call}, Call::CallType::PureIntrinsic), shape);
+            Map<std::string, NodeRef> broad_attrs;
+            broad_attrs.Set("shape", shape);
+            p = AttrStmt::make(broad_attrs, "attrs", Expr(1), p);
+            stmts.push_back(p);
+          }
+        }
       }
     }
-    ++it;
   }
   return Block::make(stmts);
 }
