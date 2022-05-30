@@ -1667,6 +1667,8 @@ void SchedulingMindTrick::ExtractDirectivesFromAKG(void) {
         case ForType::Unrolled:
           LOG(WARNING) << "Do not treat ForType::Unrolled as a directives";
           break;
+        default:
+          break;
       }
     }
   }
@@ -1772,6 +1774,9 @@ static inline std::string key_name(const std::string &key) { return quote(key) +
 std::string SchedulingMindTrick::str(void) const {
   std::stringstream stream;
 
+  constexpr uint INDENT2 = 2;
+  constexpr uint INDENT3 = 3;
+
   const std::string &sep = ",";
 
   stream << "{" << std::endl;
@@ -1788,14 +1793,14 @@ std::string SchedulingMindTrick::str(void) const {
   }
   if (target_ == "" || target_ == TARGET_CUDA) {
     stream << indent(1) << key_name("gpu") << "{" << std::endl;
-    stream << indent(2) << key_name("blocks") << quote(GetGpuBlocks()) << sep << std::endl;
-    stream << indent(2) << key_name("threads") << quote(GetGpuThreads()) << sep << std::endl;
+    stream << indent(INDENT2) << key_name("blocks") << quote(GetGpuBlocks()) << sep << std::endl;
+    stream << indent(INDENT2) << key_name("threads") << quote(GetGpuThreads()) << sep << std::endl;
     if (!gpu_info_.compiler_flags_.empty()) {
-      stream << indent(2) << key_name("compiler flags") << "[" << std::endl;
+      stream << indent(INDENT2) << key_name("compiler flags") << "[" << std::endl;
       for (const std::string &flag : gpu_info_.compiler_flags_) {
-        stream << indent(3) << quote(flag) << sep << std::endl;
+        stream << indent(INDENT3) << quote(flag) << sep << std::endl;
       }
-      stream << indent(2) << "]" << sep << std::endl;
+      stream << indent(INDENT2) << "]" << sep << std::endl;
     }
     stream << indent(1) << "}" << sep << std::endl;
   }
@@ -1804,7 +1809,7 @@ std::string SchedulingMindTrick::str(void) const {
   if (!disabled_passes_.empty()) {
     stream << indent(1) << key_name("disable") << "[" << std::endl;
     for (const std::string &pass : disabled_passes_) {
-      stream << indent(2) << quote(pass) << sep << std::endl;
+      stream << indent(INDENT2) << quote(pass) << sep << std::endl;
     }
     stream << indent(1) << "]" << sep << std::endl;
   }
@@ -1815,7 +1820,7 @@ std::string SchedulingMindTrick::str(void) const {
   if (!suggested_schedule_vector_.empty()) {
     stream << indent(1) << key_name("schedule") << "[" << std::endl;
     for (auto dim : suggested_schedule_vector_) {
-      stream << indent(2) << quote(dim) << sep << std::endl;
+      stream << indent(INDENT2) << quote(dim) << sep << std::endl;
     }
     stream << indent(1) << "]" << sep << std::endl;
   }

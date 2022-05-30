@@ -197,6 +197,8 @@ mls::bin::Hints ComputeSchedule::ExtractDirectivesFromAKG(void) {
         case ForType::Unrolled:
           LOG(WARNING) << stmt_string << "Do not treat ForType::Unrolled as a directives";
           break;
+        default:
+          break;
       }
     }
   }

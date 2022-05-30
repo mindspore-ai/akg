@@ -248,6 +248,8 @@ IterVarType ForTypeToIterVarType(ir::ForType for_type) {
     return kUnrolled;
   case ForType::Invariant:
     return kOrdered;
+  case ForType::Reduce:
+    return kCommReduce;
   default:
     return kDataPar;
   }
@@ -265,6 +267,8 @@ ir::ForType IterVarTypeToForType(IterVarType iter_type) {
     return ForType::Unrolled;
   case kOrdered:
     return ForType::Invariant;
+  case kCommReduce:
+    return ForType::Reduce;
   default:
     return ForType::Serial;
   }
