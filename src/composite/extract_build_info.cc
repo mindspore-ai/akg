@@ -43,25 +43,6 @@ void CollectBinds(BuildInfo &info) {
   }
 }
 
-void ProcessSames(BuildOpt &opt) {
-  // b = func(a)
-  // c = InplaceAssign(x, y, b)     c = b
-  // d = InplaceAssign(i, j, c)     d = c
-  bool changed = true;
-  while (!opt.sames.empty() && changed) {
-    changed = false;
-    for (auto it = opt.sames.begin(); it != opt.sames.end();) {
-      if (opt.tensor_map.count(it->second)) {
-        opt.tensor_map[it->first] = opt.tensor_map[it->second];
-        it = opt.sames.erase(it);
-        changed = true;
-      } else {
-        ++it;
-      }
-    }
-  }
-}
-
 void CollectInputs(BuildInfo &info) {
   for (const auto &input : info.input_names) {
     auto iter =
@@ -144,7 +125,6 @@ void CollectBuildInfo(BuildInfo &info) {
   DumpBuildInfo(info);
   CollectIsolatedInplaceTensor(info.opt);
   CollectBinds(info);
-  ProcessSames(info.opt);
   CollectInputs(info);
   CollectOutputsAndComputes(info);
   CollectSchOnlyComputes(info);

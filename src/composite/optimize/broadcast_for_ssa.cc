@@ -82,17 +82,25 @@ class NormalizeOutput : public IRMutator {
 
 std::vector<FuncRefSet> NormalizeSames(const FuncRefMap &sames) {
   std::vector<FuncRefSet> sames_vec;
-  for (const auto &[k, v] : sames) {
-    bool found = false;
-    for (auto &i : sames_vec) {
-      if (i.count(k) || i.count(v)) {
-        i.insert(k);
-        i.insert(v);
-        found = true;
+  auto sames_copy = sames;
+  while (!sames_copy.empty()) {
+    auto begin = sames_copy.begin();
+    FuncRefSet fset{begin->first, begin->second};
+    bool changed = false;
+    do {
+      changed = false;
+      for (auto it = sames_copy.begin(); it != sames_copy.end();) {
+        if (fset.count(it->first) || fset.count(it->second)) {
+          fset.insert(it->first);
+          fset.insert(it->second);
+          changed = true;
+          it = sames_copy.erase(it);
+        } else {
+          it++;
+        }
       }
-    }
-    if (found) continue;
-    sames_vec.push_back({k, v});
+    } while (changed);
+    sames_vec.push_back(fset);
   }
   return sames_vec;
 }
