@@ -300,8 +300,8 @@ class InitStmtInsertSync : public IRMutator {
     auto stmt = IRMutator::Mutate_(op, s);
     if (scop_init_) {
       scop_init_ = false;
-      return Block::make(stmt, Evaluate::make(
-        Call::make(Int(int_bit_count_), "tvm_storage_sync", {StringImm::make("shared")}, Call::Intrinsic)));
+      return Block::make(stmt, Evaluate::make(Call::make(Int(int_bit_count_), "tvm_storage_sync",
+                                                         {StringImm::make("shared")}, Call::Intrinsic)));
     }
     return stmt;
   }
@@ -517,11 +517,11 @@ Expr GpuIslEmitter::AdaptThreadNewVar(const std::string &name, MappingCfg *mappi
   Expr e;
   int mx = mapping_cfg->GetX().second;
   if (name.find(WARP_COMPUTE) != std::string::npos) {
-    if (name.find(T0) != std::string::npos) {
+    if (IsEndsWith(name, T0)) {
       e = Div::make(iter_name_map_[T0], WARP_SIZE);
       e = Mod::make(e, mx);
       return e;
-    } else if (name.find(T1) != std::string::npos) {
+    } else if (IsEndsWith(name, T1)) {
       e = Div::make(iter_name_map_[T0], WARP_SIZE);
       e = Div::make(e, mx);
       return e;
@@ -547,7 +547,7 @@ Expr GpuIslEmitter::AdaptOneConfigForMulAxis(MappingCfg *mapping_cfg, const std:
   for (size_t i = 0; i < mapping_cfg->bound; ++i) {
     std::string config_id_name = is_thread ? THREAD_STR : BLOCK_STR;
     config_id_name += std::to_string(i);
-    if (name.find(config_id_name) == std::string::npos) {
+    if (!IsEndsWith(name, config_id_name)) {
       continue;
     }
 

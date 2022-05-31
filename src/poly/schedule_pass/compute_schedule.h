@@ -50,6 +50,7 @@ class ComputeSchedule : public SchedulePass {
   std::unordered_set<std::string> CollectSwapIds(const isl::union_pw_aff &aff, const long reduce_extent);
   isl::union_pw_aff GenerateNewAffine(const isl::union_pw_aff &swap_out, const isl::union_pw_aff &swap_in,
                                       std::unordered_set<std::string> swap_ids);
+  isl::schedule AdjustInplaceAssignOrder(const isl::schedule &sch);
 
  private:
   PassInfo &pass_info_;

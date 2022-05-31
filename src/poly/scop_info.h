@@ -109,11 +109,11 @@ struct MappingCfg {
   }
   std::pair<std::string, int> GetAt(std::string cfg_name) {
     std::pair<std::string, int> fixed_pos_cfg = {};
-    if (cfg_name.find(T0) != std::string::npos || cfg_name.find(B0) != std::string::npos) {
+    if (IsEndsWith(cfg_name, T0) || IsEndsWith(cfg_name, B0)) {
       fixed_pos_cfg = GetX();
-    } else if (cfg_name.find(T1) != std::string::npos || cfg_name.find(B1) != std::string::npos) {
+    } else if (IsEndsWith(cfg_name, T1) || IsEndsWith(cfg_name, B1)) {
       fixed_pos_cfg = GetY();
-    } else if (cfg_name.find(T2) != std::string::npos || cfg_name.find(B2) != std::string::npos) {
+    } else if (IsEndsWith(cfg_name, T2) || IsEndsWith(cfg_name, B2)) {
       fixed_pos_cfg = GetZ();
     } else {
       bool is_find = false;
@@ -1163,6 +1163,9 @@ class AnalysisResult {
   ReduceMap &GetReduceMap() { return reduces_; }
   ReduceMap GetReduceMap() const { return reduces_; }
 
+  void RecordInplaceAssignNodes(const Provide *node) { inplace_assign_nodes_.push_back(node); }
+  std::vector<const Provide *> GetInplaceAssignNodes() const { return inplace_assign_nodes_; }
+
   void RecordReduceAxisForMatmul(const std::vector<const Variable *> &reduce_axis) {
     reduce_axis_ = std::move(reduce_axis);
   }
@@ -1267,9 +1270,7 @@ class AnalysisResult {
     // If it already exists, the latest value is updated
     provide_stmts_[stmt_id] = node;
   }
-  void ResetProvideStmtsMap() {
-    provide_stmts_.clear();
-  }
+  void ResetProvideStmtsMap() { provide_stmts_.clear(); }
 
  public:
   std::vector<std::pair<std::string, STMT_OP_TYPE>> stmt_type_;
@@ -1301,6 +1302,7 @@ class AnalysisResult {
   std::unordered_set<std::string> not_reduce_attrs_;
   std::vector<const Variable *> reduce_axis_;
   std::vector<const Variable *> not_reduce_axis_;
+  std::vector<const Provide *> inplace_assign_nodes_;
   unsigned int batch_axis_num_;
 
   isl::union_map reads_;

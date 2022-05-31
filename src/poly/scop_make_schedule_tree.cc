@@ -464,28 +464,33 @@ class ScopMakeScheduleTree final : protected IRVisitor {
     }
   }
 
+  Stmt GetAttrProvide(const AttrStmt *op) {
+    if (op->body.as<Provide>()) {
+      return op->body;
+    }
+    auto blo = op->body.as<Block>();
+    if (blo) {
+      while (blo->rest.defined() && blo->rest.as<Block>()) {
+        blo = blo->rest.as<Block>();
+      }
+      if (blo->rest.as<Provide>()) {
+        return blo->rest;
+      } else if (blo->first.as<Provide>()) {
+        return blo->first;
+      }
+    }
+    return Stmt();
+  }
+
   void Visit_(const AttrStmt *op) final {
     if (AkgSupportedTotOp.count(op->attr_key) != 0) {
       SetTensorOfTensorInfo(op);
     } else if (op->attr_key == air::ir::attr::reduce_update) {
       Array<IterVar> red = Downcast<Array<IterVar>>(op->node);
-      const auto pro = op->body.as<Provide>();
+      Stmt attr_provide = GetAttrProvide(op);
+      const auto pro = attr_provide.as<Provide>();
       if (pro) {
         scop_info_.analysis_result_.RecordReduce(pro, red);
-      } else {
-        auto blo = op->body.as<Block>();
-        if (blo) {
-          while (blo->rest.defined() && blo->rest.as<Block>()) {
-            blo = blo->rest.as<Block>();
-          }
-          const auto pro_first = blo->first.as<Provide>();
-          const auto pro_rest = blo->rest.as<Provide>();
-          if (pro_rest) {
-            scop_info_.analysis_result_.RecordReduce(pro_rest, red);
-          } else if (pro_first) {
-            scop_info_.analysis_result_.RecordReduce(pro_first, red);
-          }
-        }
       }
     } else if (op->attr_key == air::ir::attr::buffer_bind_scope) {
       Op_buffer_bind_scope(op);
@@ -493,6 +498,15 @@ class ScopMakeScheduleTree final : protected IRVisitor {
       scop_info_.analysis_result_.RecordAttrStmt(op);
     } else if (AkgSupportedCsrOp.count(op->attr_key) != 0) {
       SetCsrInfo(op);
+    } else if (op->attr_key == ATTR_TENSOR_ATTRS) {
+      auto attrs = Downcast<Map<std::string, NodeRef>>(op->node);
+      if (attrs.find(ATTR_ENABLE_AUTO_INPLACE) != attrs.end()) {
+        Stmt attr_provide = GetAttrProvide(op);
+        const auto pro = attr_provide.as<Provide>();
+        if (pro) {
+          scop_info_.analysis_result_.RecordInplaceAssignNodes(pro);
+        }
+      }
     }
 
     sch = MakeScheduleTreeHelper(op->body, scop_info_, set, outer, macro_stmt);

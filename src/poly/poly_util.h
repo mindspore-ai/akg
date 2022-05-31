@@ -437,6 +437,9 @@ constexpr auto ALLOC_REALIZE_OUT = "alloc_out";
 constexpr auto CALL_IM2COL_UB = "cce_img2col_ub";
 constexpr auto ATTR_IM2COL_KEY = "im2colKey";
 
+constexpr auto ATTR_ENABLE_AUTO_INPLACE = "enable_auto_inplace";
+constexpr auto ATTR_TENSOR_ATTRS = "tensor_attrs";
+
 // delimiter pattern
 constexpr auto SPACE_PATTERN = " ";
 constexpr auto UNDERSCORE_PATTERN = "_";

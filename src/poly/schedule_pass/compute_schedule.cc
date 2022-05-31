@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 #include "compute_schedule.h"
-
+#include "poly/schedule_tree_util.h"
 #include "poly/isl_util.h"
 
 #ifdef AKG_USE_MLS
@@ -167,6 +167,54 @@ isl::union_pw_aff ComputeSchedule::GenerateNewAffine(const isl::union_pw_aff &sw
   return new_aff;
 };
 
+isl::schedule ComputeSchedule::AdjustInplaceAssignOrder(const isl::schedule &sch) {
+  isl::schedule_node outer_band_node = GetOuterBand(sch.get_root());
+
+  auto inplace_assign_nodes = scop_info_.analysis_result_.GetInplaceAssignNodes();
+  if (!outer_band_node.isa<isl::schedule_node_set>() || inplace_assign_nodes.empty()) {
+    return sch;
+  }
+
+  std::unordered_set<std::string> inplace_assign_stmts;
+  for (auto &op : inplace_assign_nodes) {
+    for (auto &stmt : scop_info_.analysis_result_.GetStatementMap()) {
+      if (op == stmt.second) {
+        inplace_assign_stmts.emplace(stmt.first.get_name());
+        break;
+      }
+    }
+  }
+
+  auto set_node = outer_band_node.as<isl::schedule_node_set>();
+  auto after_set_node = outer_band_node;
+  std::vector<size_t> new_pos;
+  std::vector<size_t> after_pos;
+  for (size_t i = 0; i < set_node.n_children(); ++i) {
+    auto child_node = set_node.child(i);
+    isl::union_set filter_set = child_node.as<isl::schedule_node_filter>().filter();
+    bool is_inplace_assign = false;
+    filter_set.foreach_set([inplace_assign_stmts, &is_inplace_assign](isl::set s) {
+      if (inplace_assign_stmts.count(s.get_tuple_name()) != 0) {
+        is_inplace_assign = true;
+        return;
+      }
+    });
+
+    if (is_inplace_assign) {
+      after_pos.push_back(i);
+    } else {
+      new_pos.push_back(i);
+    }
+  }
+
+  new_pos.insert(new_pos.end(), after_pos.begin(), after_pos.end());
+  auto domain_node = isl::schedule_node::from_domain(sch.get_domain());
+  auto new_node = ReConstructChildScheduleTree(domain_node, sch.get_root(), outer_band_node);
+  auto empty_node = isl::schedule_node();
+  new_node = ReConstructSetOrSequenceNode(GetOuterBand(new_node), outer_band_node, empty_node, new_pos);
+  return new_node.get_schedule();
+}
+
 isl::schedule ComputeSchedule::Run(isl::schedule sch) {
   if (scop_info_.user_config_.GetModScheduleShift()) {
     pass_info_.dependences_ = ModDependences(pass_info_.dependences_);
@@ -213,6 +261,7 @@ isl::schedule ComputeSchedule::Run(isl::schedule sch) {
   result = pass_info_.constraints_.compute_schedule();
 #endif
 
+  result = AdjustInplaceAssignOrder(result);
   return result;
 }
 
