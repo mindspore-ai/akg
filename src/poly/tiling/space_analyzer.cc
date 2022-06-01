@@ -115,8 +115,8 @@ void SpaceAnalyzer::IdentifyInsnType() {
   for (auto it : provides_ana_) {
     std::vector<ProvideEntry> pes = it.second;
     for (auto pe : pes) {
-      bool is_gemm = pe.basic_op_type.find(AT_TRANSPOSE) != std::string::npos &&
-                     pe.basic_op_type.find(AT_ELEMWISE) != std::string::npos;
+      auto temp = analyzer_->scop_info_.analysis_result_.GetOpTemplate();
+      bool is_gemm = ((temp == Template::CONV) || (temp == Template::MATMUL));
       if (analyzer_->scop_info_.user_config_.GetTarget() == TARGET_CUDA && is_gemm) {
         MarkGemmAxes(pe);
       }
