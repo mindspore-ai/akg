@@ -16,8 +16,10 @@ import os
 import sys
 import json
 import time
+import functools
 import pytest
 import logging
+import numpy as np
 import akg.tvm as tvm
 from akg import composite
 from akg.utils import kernel_exec as utils
@@ -87,7 +89,7 @@ def _compare_func(output, expect, compare_tolerance=None):
 
 
 def _dump_data(path, inputs, output, expect):
-    inputs= inputs if isinstance(inputs, (list, tuple)) else [inputs]
+    inputs = inputs if isinstance(inputs, (list, tuple)) else [inputs]
     output = output if isinstance(output, (list, tuple)) else [output]
     expect = expect if isinstance(expect, (list, tuple)) else [expect]
 
@@ -140,6 +142,21 @@ def get_result(desc, poly, attrs=None, profiling=True, need_compare=True):
         output = output[0]
     output = output if isinstance(output, (list, tuple)) else [output]
     expect = expect if isinstance(expect, (list, tuple)) else [expect]
+    output = list(output)
+    expect = list(expect)
+    for i, _ in enumerate(expect):
+        if expect[i].dtype == "complex128" or expect[i].dtype == "complex64":
+            final_shape = functools.reduce(lambda x, y: x*y, output[i].shape)
+            flattern_output = output[i].reshape((final_shape,))
+            output_real = []
+            output_imag = []
+            for k, _ in enumerate(flattern_output):
+                if k % 2 == 0:
+                    output_real.append(flattern_output[k])
+                else:
+                    output_imag.append(flattern_output[k])
+            output[i] = np.vectorize(complex)(output_real, output_imag)
+            output[i] = output[i].reshape(expect[i].shape)
     if len(output) != len(expect):
         raise RuntimeError("output and expect have different length, {} vs {}".format(len(output), len(expect)))
 
@@ -153,8 +170,14 @@ def get_result(desc, poly, attrs=None, profiling=True, need_compare=True):
         return False
     if profiling and backend in ["cuda", "cpu"]:
         ctx = tvm.context(backend, 0)
-        inputs = to_tvm_nd_array(input_for_mod, ctx)
-        target_profiling(mod, *inputs, target=backend, repeat_time=1000)
+        has_complex = False
+        for i in input_for_mod:
+            if i.dtype == "complex64" or i.dtype == "complex128":
+                has_complex = True
+                break
+        if has_complex == False:
+            inputs = to_tvm_nd_array(input_for_mod, ctx)
+            target_profiling(mod, *inputs, target=backend, repeat_time=1000)
     return True
 
 
@@ -243,7 +266,7 @@ def test_ci(profile=False, poly=False):
                 logging.info("Composite Json %s pass!", fi)
             else:
                 old_op_cycles = old_dict[fi]
-                op_cycles, diff = get_op_cycles_info( cycle_info_file, old_op_cycles)
+                op_cycles, diff = get_op_cycles_info(cycle_info_file, old_op_cycles)
                 logging.info("~~~~~~~~~~~cycle diff is~~~~~~~~~~~")
                 logging.info(diff)
                 if diff > 500:

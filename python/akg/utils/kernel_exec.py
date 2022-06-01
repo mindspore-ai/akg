@@ -571,7 +571,23 @@ def mod_launch_default(mod, args, outputs=(-1,), target=CUDA, tuning=False, devi
     if device_id == -1:
         device_id = int(os.environ.get("DEVICE_ID", 0))
     ctx = akg.tvm.context(target, device_id)
-    mod_args = list(akg.tvm.nd.array(a, ctx) for a in args)
+    mod_args = []
+    for a in args:
+        if a.dtype == "complex64" or a.dtype == "complex128":
+            final_shape = []
+            for i in a.shape:
+                final_shape.append(i)
+            final_shape.append(2)
+            real = np.real(a).flatten()
+            imag = np.imag(a).flatten()
+            new_a = []
+            for i in range(real.shape[0]):
+                new_a.append([real[i], imag[i]])
+            new_a = np.array(new_a)
+            new_a = new_a.reshape(final_shape)
+            mod_args.append(akg.tvm.nd.array(new_a, ctx))
+        else:
+            mod_args.append(akg.tvm.nd.array(a, ctx))
     mod(*mod_args)
     out_list = list(mod_args[len(args) + i if i < 0 else i].asnumpy() for i in outputs)
     if not tuning:
