@@ -800,4 +800,13 @@ op_dsl = {
                                            output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]),
                                            get_input(inputs[2][0]),
                                            get_input(inputs[3][0]), get_attr(attr, "dense_shape")),
+    "CImag": lambda inputs, output, attr: "%s = np.imag(%s)" %
+    (output[0]['tensor_name'], get_input(inputs[0][0])),
+
+    "CReal": lambda inputs, output, attr: "%s = np.real(%s)" %
+    (output[0]['tensor_name'], get_input(inputs[0][0])),
+
+    "Complex": lambda inputs, output, attr: "%s = np.vectorize(complex)(%s, %s)" %
+    (output[0]['tensor_name'], get_input(inputs[0][0]),
+                                               get_input(inputs[1][0])),
 }

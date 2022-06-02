@@ -889,3 +889,10 @@ def test_yolov3_darknet53_gpu_level1_tensorcore1_test1():
 @pytest.mark.env_onecard
 def test_transformer_ascend_level0():
     test_network("ascend", "transformer", "level0")
+
+
+@pytest.mark.level0
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
+def test_sponge_gpu_level0():
+    test_network("gpu", "sponge", "level0")
