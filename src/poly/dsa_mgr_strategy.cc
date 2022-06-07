@@ -57,7 +57,11 @@ void DsaMgrStrategy::RegisterMemPromPasses() {
 }
 
 void DsaMgrStrategy::RegisterSchedulePasses() {
+#ifdef AKG_USE_MLS
   const bool enable_mlsched = MLSchedShouldBeUsed(scop_info_);
+#else
+  const bool enable_mlsched = false;
+#endif
   if (!enable_mlsched && !scop_info_.user_config_.GetDisableGroup()) {
     RegisterPass(std::make_shared<GroupStatements>(pass_info_));
   }

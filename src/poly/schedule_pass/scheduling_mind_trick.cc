@@ -1416,15 +1416,17 @@ bool SchedulingMindTrick::BuildInfluencedSchedule(const isl::schedule &schedule)
 
   isl_union_map *const dependences = pass_info_.dependences_.get();
   isl_schedule *const initial_schedule = schedule.get();
+  isl_union_map *const reads = scop_info_.analysis_result_.GetReads().get();
+  isl_union_map *const writes = scop_info_.analysis_result_.GetWrites().get();
 
-  const mls::bin::Options options = MLSchedOptionsInit(scop_info_);
+  const mls::bin::Options options = MLSchedOptionsInit(pass_info_, scop_info_);
   if (options.ShouldLogInternalDebugging()) {
     LOG(INFO) << "MLSched v." << mls::bin::VersionString();
     LOG(INFO) << options.String();
   }
 
   const std::string &kernel_name = scop_info_.user_config_.GetKernelName();
-  mls::bin::Scop scop(initial_schedule, dependences, hints_, options, kernel_name.c_str());
+  mls::bin::Scop scop(initial_schedule, dependences, reads, writes, hints_, options, kernel_name.c_str());
   const bool success = scop.ComputeSchedule();
 
   if (options.ShouldLogInternalDebugging()) {

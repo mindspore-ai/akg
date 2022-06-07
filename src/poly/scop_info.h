@@ -244,6 +244,10 @@ class UserConfig {
     ParseStringAttr(attrs, "mlsched_solver", &mlsched_solver_);
     ParseBoolAttr(attrs, "mlsched_code_sinking", &mlsched_code_sinking_);
     ParseBoolAttr(attrs, "mlsched_constant_to_parameter", &mlsched_constant_to_parameter_);
+    ParseBoolAttr(attrs, "mlsched_parameter_shifting", &mlsched_parameter_shifting_);
+    ParseBoolAttr(attrs, "mlsched_post_processing_full_sets", &mlsched_post_processing_full_sets_);
+    ParseBoolAttr(attrs, "mlsched_post_processing_extra_outer_parallel_loop",
+                  &mlsched_post_processing_extra_outer_parallel_loop_);
 
     ParseCustomTilingAttr(attrs, "custom_tiling", &custom_tiling_);
     ParseBoolAttr(attrs, "pragma_analyze_reuse_buffer", &pragma_analyze_reuse_buffer_);
@@ -412,6 +416,16 @@ class UserConfig {
   bool GetMLSchedCodeSinking(void) const { return mlsched_code_sinking_; }
   void SetMLSchedConstantToParameter(bool toggle) { mlsched_constant_to_parameter_ = toggle; }
   bool GetMLSchedConstantToParameter(void) const { return mlsched_constant_to_parameter_; }
+  void SetMLSchedParameterShifting(bool toggle) { mlsched_parameter_shifting_ = toggle; }
+  bool GetMLSchedParameterShifting(void) const { return mlsched_parameter_shifting_; }
+  void SetMLSchedPostProcessingFullSets(bool toggle) { mlsched_post_processing_full_sets_ = toggle; }
+  bool GetMLSchedPostProcessingFullSets(void) const { return mlsched_post_processing_full_sets_; }
+  void SetMLSchedPostProcessingExtraOuterParallelLoop(bool toggle) {
+    mlsched_post_processing_extra_outer_parallel_loop_ = toggle;
+  }
+  bool GetMLSchedPostProcessingExtraOuterParallelLoop(void) const {
+    return mlsched_post_processing_extra_outer_parallel_loop_;
+  }
 
   // getter for schedule tree transform config
   bool GetRemoveSelfDependence() const { return remove_self_dependence_; }
@@ -771,8 +785,11 @@ class UserConfig {
   // MLSched config
   bool enable_mlsched_{false};
   std::string mlsched_solver_{""};
-  bool mlsched_code_sinking_{false};
+  bool mlsched_code_sinking_{true};
   bool mlsched_constant_to_parameter_{true};
+  bool mlsched_parameter_shifting_{true};
+  bool mlsched_post_processing_full_sets_{true};
+  bool mlsched_post_processing_extra_outer_parallel_loop_{false};
 
   // schedule tree transform config
   bool remove_self_dependence_{true};
