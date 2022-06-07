@@ -21,9 +21,6 @@ from tests.common.test_run import csr_mm_run
 # TestCase= class: put to tests/*/
 ############################################################
 class TestCase(TestBase):
-    def __init__(self):
-        self.test_args = None
-
     def setup(self):
         case_name = "test_csr_mm"
         case_path = os.getcwd()
