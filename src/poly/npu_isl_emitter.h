@@ -33,7 +33,7 @@ class NPUIslEmitter : public IslEmitter {
   }
   ~NPUIslEmitter() override = default;
 
-  Stmt Emit(const isl::ast_node &node) final;
+  Stmt EmitterPostProcess(Stmt &s) override;
 
  private:
   // override emitters for NPU

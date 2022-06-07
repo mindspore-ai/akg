@@ -1259,6 +1259,15 @@ class AnalysisResult {
   void ResetActivateBufferFootprints() { active_buffer_footprints_.clear(); }
   void ResetBufferDefInfos() { buffer_def_infos_.clear(); }
 
+  StatementMap &GetProvideStmtsMap() { return provide_stmts_; }
+  void RecordProvideStmt(const isl::id &stmt_id, const Node *node) {
+    // If it already exists, the latest value is updated
+    provide_stmts_[stmt_id] = node;
+  }
+  void ResetProvideStmtsMap() {
+    provide_stmts_.clear();
+  }
+
  public:
   std::vector<std::pair<std::string, STMT_OP_TYPE>> stmt_type_;
   std::vector<std::pair<isl::union_set, BufferedFootPrintInfo>> active_buffer_footprints_;
@@ -1301,6 +1310,7 @@ class AnalysisResult {
   AccessMap accesses_;
   StatementMap statements_;
   ForTypeMap directives_;
+  StatementMap provide_stmts_;
 
   StmtOpInfoMap stmt_op_Info_;
   OperatorDomainMap domains_;

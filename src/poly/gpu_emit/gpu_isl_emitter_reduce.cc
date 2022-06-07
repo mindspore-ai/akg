@@ -21,11 +21,9 @@ namespace akg {
 namespace ir {
 namespace poly {
 
-Stmt GpuIslEmitterReduce::Emit(const isl::ast_node &node) {
-  Stmt stmt = GpuIslEmitter::Emit(node);
-
+Stmt GpuIslEmitterReduce::EmitterPostProcess(Stmt &stmt) {
+  stmt = GpuIslEmitter::EmitterPostProcess(stmt);
   stmt = EmitForReduce(stmt, info_);
-
   return stmt;
 }
 

@@ -26,7 +26,7 @@ class CpuIslEmitter : virtual public IslEmitter {
  public:
   CpuIslEmitter(ScopInfo &info, const NodeInfoRepo &n, const isl::id_list &i) : IslEmitter(info, n, i) {}
   ~CpuIslEmitter() override = default;
-  Stmt Emit(const isl::ast_node &node) override;
+  Stmt EmitterPostProcess(Stmt &s) override;
   Stmt EmitFor(const isl::ast_node_for &node) override;
   virtual Stmt EmitInfo(const Stmt &stmt);
 

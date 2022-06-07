@@ -103,6 +103,8 @@ class SpaceAnalyzer {
                    const std::string &attr_key, const std::string &attr_value, TileAxis *target);
   std::string ParseAllTypeExpr(const Expr constraint);
   std::string ParseArrayExpr(const Array<Expr> constraint);
+  
+  Template GetOpTemplate(const Node *op);
 };
 }  // namespace poly
 }  // namespace ir
