@@ -1,4 +1,4 @@
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -28,6 +28,7 @@ from akg.utils.dsl_create import TensorUtils
 from akg.global_configs import get_dump_ir_flag
 from akg.global_configs import get_dump_code_flag
 from akg.ms.utils import get_op
+from akg.ms.info_version_adapt import InfoVersionAdapt
 from . import op_build
 
 
@@ -153,13 +154,16 @@ def _compilewithjson_to_module(kernel_info, attrs):
         else:
             return None
 
+    ret = InfoVersionAdapt(kernel_info).run()
+    if not ret:
+        return False
+
     processor = kernel_info['process'] if 'process' in kernel_info else utils.CUDA
     attrs["target"] = _get_target_from_processor(processor)
+    if "target_info" in kernel_info:
+        attrs["target_info"] = kernel_info["target_info"]
 
-    if processor == 'cuda' and 'compute_capability' in kernel_info:
-        attrs['compute_capability'] = kernel_info['compute_capability']
-
-    if 'composite' in kernel_info and kernel_info['composite'] is True:
+    if kernel_info.get('composite', False):
         try:
             composite.build(kernel_info, attrs)
             return True
