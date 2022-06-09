@@ -23,6 +23,7 @@
 #include "composite/utils/util.h"
 
 namespace akg {
+constexpr int F32 = 32;
 std::tuple<std::string, std::string, picojson::array, picojson::array, picojson::array> ParseInputJson(
   const picojson::value &input_json);
 void ParseInputTensors(const picojson::array &input_descs, std::vector<std::string> &input_tensors);
@@ -237,6 +238,7 @@ class OpDescsParser {
       NodeRef value;
       bool name_found = false;
       bool value_found = false;
+      bool is_illegal_attr = false;
       for (const auto &kv : obj) {
         // parse attr name
         if (kv.first == "name") {
@@ -257,9 +259,17 @@ class OpDescsParser {
               arr_v.push_back(Integer(static_cast<int>(v.get<int64_t>())));
             } else if (v.is<std::string>()) {
               arr_v.push_back(StringImm::make(v.get<std::string>()));
+            } else if (v.is<double>()) {
+              arr_v.push_back(FloatImm::make(Float(F32), v.get<double>()));
             } else {
-              LOG(FATAL) << "Not parsed type in array attr.";
+              is_illegal_attr = true;
+              LOG(WARNING) << "array attr's value type only support int, bool, string or float, but the value is : "
+                           << v.to_str();
+              break;
             }
+          }
+          if (is_illegal_attr) {
+            continue;
           }
           value = arr_v;
         } else if (kv.second.is<bool>()) {
@@ -268,8 +278,12 @@ class OpDescsParser {
           value = Integer(static_cast<int>(kv.second.get<int64_t>()));
         } else if (kv.second.is<std::string>()) {
           value = StringImm::make(kv.second.get<std::string>());
+        } else if (kv.second.is<double>()) {
+          value = FloatImm::make(Float(F32), kv.second.get<double>());
         } else {
-          LOG(FATAL) << "Not parsed type in op_attrs.";
+          LOG(WARNING) << "attr's value type only support int, bool, string or float, but the value is : "
+                       << kv.second.to_str();
+          continue;
         }
       }
       CHECK(name_found);
