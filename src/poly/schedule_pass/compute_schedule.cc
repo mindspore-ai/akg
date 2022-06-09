@@ -167,53 +167,6 @@ isl::union_pw_aff ComputeSchedule::GenerateNewAffine(const isl::union_pw_aff &sw
   return new_aff;
 };
 
-#ifdef AKG_USE_MLS
-mls::bin::Hints ComputeSchedule::ExtractDirectivesFromAKG(void) {
-  mls::bin::Hints hints;
-
-  ForTypeMap directives = scop_info_.analysis_result_.GetForTypeMap();
-  std::map<std::string, std::vector<int>> serials_dir;
-  std::map<std::string, std::vector<int>> vectorials_dir;
-  std::map<std::string, std::vector<int>> parallels_dir;
-  for (const auto &[stmt, vloop_directive] : directives) {
-    std::string stmt_string = stmt.get_name();
-    for (uint i = 0; i < vloop_directive.size(); ++i) {
-      switch (vloop_directive[i]) {
-        case ForType::Serial:
-          break;
-        case ForType::Invariant:
-          LOG(INFO) << stmt_string << "invariant_for";
-          serials_dir[stmt_string].push_back(i);
-          break;
-        case ForType::Parallel:
-          LOG(INFO) << stmt_string << "parallel";
-          parallels_dir[stmt_string].push_back(i);
-          break;
-        case ForType::Vectorized:
-        case ForType::Swizzled:  // treat "Swizzled" like "Vectorized" for the moment
-          LOG(INFO) << stmt_string << "vectorized";
-          vectorials_dir[stmt_string].push_back(i);
-          break;
-        case ForType::Unrolled:
-          LOG(WARNING) << stmt_string << "Do not treat ForType::Unrolled as a directives";
-          break;
-        default:
-          break;
-      }
-    }
-  }
-
-  for (const auto &[key, directive] : serials_dir) {
-    hints.SetStatementSerials(key.c_str(), directive);
-  }
-  for (const auto &[key, directive] : vectorials_dir) {
-    hints.SetStatementVectorials(key.c_str(), directive);
-  }
-
-  return hints;
-}
-#endif
-
 isl::schedule ComputeSchedule::Run(isl::schedule sch) {
   if (scop_info_.user_config_.GetModScheduleShift()) {
     pass_info_.dependences_ = ModDependences(pass_info_.dependences_);
@@ -233,7 +186,7 @@ isl::schedule ComputeSchedule::Run(isl::schedule sch) {
     }
 
     const std::string &kernel_name = scop_info_.user_config_.GetKernelName();
-    const mls::bin::Hints hints = ExtractDirectivesFromAKG();
+    const mls::bin::Hints hints = ExtractDirectivesFromAKG(scop_info_);
     const isl::union_map reads = UnwrappedAccesses(scop_info_.analysis_result_.GetReads());
     const isl::union_map writes = UnwrappedAccesses(scop_info_.analysis_result_.GetWrites());
     isl_union_map *const dependences = pass_info_.dependences_.get();

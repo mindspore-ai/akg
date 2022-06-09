@@ -564,6 +564,63 @@ mls::bin::Options MLSchedOptionsInit(const akg::ir::poly::PassInfo &pass_info,
 
   return result;
 }
+
+mls::bin::Hints ExtractDirectivesFromAKG(ScopInfo &scop_info) {
+  mls::bin::Hints hints;
+
+  ForTypeMap directives = scop_info.analysis_result_.GetForTypeMap();
+  std::map<std::string, std::vector<int>> serials_directive;
+  std::map<std::string, std::vector<int>> vectorials_directive;
+  std::map<std::string, std::vector<int>> parallels_directive;
+  std::map<std::string, std::vector<int>> reduces_directive;
+  for (const auto &[stmt, vloop_directive] : directives) {
+    std::string stmt_string = stmt.get_name();
+    for (uint i = 0; i < vloop_directive.size(); ++i) {
+      switch (vloop_directive[i]) {
+        case ForType::Serial:
+          break;
+        case ForType::Invariant:
+          LOG(INFO) << stmt_string << " invariant_for";
+          serials_directive[stmt_string].push_back(i);
+          break;
+        case ForType::Parallel:
+          LOG(INFO) << stmt_string << " parallel";
+          parallels_directive[stmt_string].push_back(i);
+          break;
+        case ForType::Vectorized:
+        case ForType::Swizzled:  // treat "Swizzled" like "Vectorized" for the moment
+          LOG(INFO) << stmt_string << " vectorized";
+          vectorials_directive[stmt_string].push_back(i);
+          break;
+        case ForType::Reduce:
+          LOG(INFO) << stmt_string << " reduce";
+          reduces_directive[stmt_string].push_back(i);
+          break;
+        case ForType::Unrolled:
+          LOG(WARNING) << stmt_string << " Do not treat ForType::Unrolled as a directives";
+          break;
+        default:
+          LOG(WARNING) << stmt_string << " Unknow ForType loop";
+          break;
+      }
+    }
+  }
+
+  for (const auto &[key, directive] : serials_directive) {
+    hints.SetStatementSerials(key.c_str(), directive);
+  }
+  for (const auto &[key, directive] : vectorials_directive) {
+    hints.SetStatementVectorials(key.c_str(), directive);
+  }
+  for (const auto &[key, directive] : parallels_directive) {
+    hints.SetStatementParallels(key.c_str(), directive);
+  }
+  for (const auto &[key, directive] : reduces_directive) {
+    hints.SetStatementReduces(key.c_str(), directive);
+  }
+
+  return hints;
+}
 #endif
 
 }  // namespace poly

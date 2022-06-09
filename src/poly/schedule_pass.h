@@ -130,6 +130,10 @@ bool MLSchedShouldBeUsed(akg::ir::poly::ScopInfo &scop_info);
 /// The options may be decided arbitrarily, from the environment or from \a pass_info and \a scop_info.
 mls::bin::Options MLSchedOptionsInit(const akg::ir::poly::PassInfo &pass_info,
                                      const akg::ir::poly::ScopInfo &scop_info);
+
+/// \brief Extract the directives informations from the information coming from AKG scop
+/// \result return an hint object that can be used for MLSched scheduler.
+mls::bin::Hints ExtractDirectivesFromAKG(ScopInfo &scop_info);
 #endif
 
 }  // namespace poly
