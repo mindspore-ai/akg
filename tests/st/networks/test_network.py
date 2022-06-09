@@ -281,6 +281,48 @@ def test_gpt_gpu_level0():
     test_network("gpu", "gpt", "level0")
 
 
+@pytest.mark.level1
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
+def test_gpt_gpu_level1_test0():
+    test_network("gpu", "gpt", "level1", 3, 0)
+
+
+@pytest.mark.level1
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
+def test_gpt_gpu_level1_test0_perf():
+    test_network("gpu", "gpt", "level1", 3, 0, check_performance=True)
+
+
+@pytest.mark.level1
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
+def test_gpt_gpu_level1_test1():
+    test_network("gpu", "gpt", "level1", 3, 1)
+
+
+@pytest.mark.level1
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
+def test_gpt_gpu_level1_test1_perf():
+    test_network("gpu", "gpt", "level1", 3, 1, check_performance=True)
+
+
+@pytest.mark.level1
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
+def test_gpt_gpu_level1_test2():
+    test_network("gpu", "gpt", "level1", 3, 2)
+
+
+@pytest.mark.level1
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
+def test_gpt_gpu_level1_test2_perf():
+    test_network("gpu", "gpt", "level1", 3, 2, check_performance=True)
+
+
 @pytest.mark.level0
 @pytest.mark.platform_x86_gpu_training
 @pytest.mark.env_onecard

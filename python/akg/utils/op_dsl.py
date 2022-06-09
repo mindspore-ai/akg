@@ -646,6 +646,8 @@ op_dsl = {
                                           (output[0]['tensor_name'], get_input(inputs[0][0])),
     "Neg": lambda inputs, output, attr: "%s = np.negative(%s)" %
                                         (output[0]['tensor_name'], get_input(inputs[0][0])),
+    "Floor": lambda inputs, output, attr: "%s = np.floor(%s)" %
+                                        (output[0]['tensor_name'], get_input(inputs[0][0])),
     "Exp": lambda inputs, output, attr: "%s = np.exp(%s)" %
                                         (output[0]['tensor_name'], get_input(inputs[0][0])),
     "RealDiv": lambda inputs, output, attr: "%s = np.divide(%s, %s)" %
@@ -677,9 +679,9 @@ op_dsl = {
     "Reshape": lambda inputs, output, attr: "%s = np.reshape(%s, %s)" %
                                             (output[0]['tensor_name'], get_input(inputs[0][0]), output[0]['shape']),
     "OneHot": lambda inputs, output, attr: "%s = one_hot_np(%s, %s, %s, %s, %s, np.%s)" %
-                                           (output[0]['tensor_name'], get_input(inputs[0][0]), attr[1]['value'],
+                                           (output[0]['tensor_name'], get_input(inputs[0][0]), get_attr(attr, "axis"),
                                             get_input(inputs[1][0]),
-                                            get_input(inputs[2][0]), attr[0]['value'], output[0]['data_type']),
+                                            get_input(inputs[2][0]), get_attr(attr, "depth"), output[0]['data_type']),
     "ZerosLike": lambda inputs, output, attr: "%s = np.zeros_like(%s)" %
                                               (output[0]['tensor_name'], get_input(inputs[0][0])),
     "AddN": lambda inputs, output, attr: "%s = %s" %
@@ -730,6 +732,9 @@ op_dsl = {
     "ExpandDims": lambda inputs, output, attr: "%s = np.expand_dims(%s, %s)" %
                                                (output[0]['tensor_name'], get_input(inputs[0][0]),
                                                 get_attr(attr, "axis")),
+    "ElemAny": lambda inputs, output, attr: "%s = (%s.all() > 0).astype(np.%s).reshape(1)" %
+                                               (output[0]['tensor_name'], get_input(inputs[0][0]),
+                                                output[0]['data_type']),
     "Transpose": lambda inputs, output, attr: transpose_str(inputs, output, attr),
     "TransData": trans_data_dsl,
     "BroadcastTo": lambda inputs, output, attr: broadcast_str(inputs, output, attr),
