@@ -574,8 +574,9 @@ mls::bin::Hints ExtractDirectivesFromAKG(ScopInfo &scop_info) {
   std::map<std::string, std::vector<int>> parallels_directive;
   std::map<std::string, std::vector<int>> reduces_directive;
   for (const auto &[stmt, vloop_directive] : directives) {
-    std::string stmt_string = stmt.get_name();
-    for (uint i = 0; i < vloop_directive.size(); ++i) {
+    const std::string stmt_string = stmt.get_name();
+    for (uint ivd = 0; ivd < vloop_directive.size(); ++ivd) {
+      const int i = static_cast<int>(ivd);
       switch (vloop_directive[i]) {
         case ForType::Serial:
           break;
