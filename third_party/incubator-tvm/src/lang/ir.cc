@@ -23,6 +23,7 @@
 
 /*
  * 2019.12.30 - Add new conditions for call types.
+ * 2022.05.30 - Fix types of base and stride did not match in Ramp.
  */
 
 #include <tvm/base.h>
@@ -154,6 +155,17 @@ Expr Ramp::make(Expr base, Expr stride, int lanes) {
   CHECK(base.type().is_scalar());
   CHECK(stride.type().is_scalar());
   CHECK_GT(lanes, 1);
+  bool need_cast = ((base.type() != stride.type()) && ((base.type().is_int() || base.type().is_uint()) &&
+                   (stride.type().is_int() || stride.type().is_uint())));
+  if (need_cast) {
+    bool cast_base = ((base.type().bits() < stride.type().bits()) ||
+                     ((base.type().bits() == stride.type().bits()) && (stride.type().is_int())));
+    if (cast_base) {
+      base = Cast::make(stride.type(), base);
+    } else {
+      stride = Cast::make(base.type(), stride);
+    }
+  }
   CHECK_EQ(stride.type(), base.type());
 
   NodePtr<Ramp> node = make_node<Ramp>();

@@ -24,7 +24,8 @@
 
 /*
  * 2019.12.30 - Add utility functions.
- * 2022.04.26 - GetRamp1Base functions adpat int64.
+ * 2022.04.26 - GetRamp1Base functions adapt int64.
+ * 2022.05.31 - Adapt multiple cast.
  */
 
 #ifndef TVM_PASS_IR_UTIL_H_
@@ -199,7 +200,7 @@ inline bool GetRamp1Base(Expr index, int lanes, Expr *base) {
   const Ramp* r = index.as<Ramp>();
   if (!r) return false;
   auto value = r->stride;
-  if (auto cast = value.as<Cast>()) {
+  while (auto cast = value.as<Cast>()) {
     value = cast->value;
   }
   if (!is_one(value)) return false;
