@@ -281,7 +281,7 @@ def _collect_infos(desc, infos):
     sum_out = []
     for op in desc["op_desc"]:
         if (op["name"] in ["ReduceSum", "UnsortedSegmentSum", "CSRReduceSum"] and
-            "enable_atomic_add" in _get_attr_dict(op["attr"])):
+                "enable_atomic_add" in _get_attr_dict(op["attr"])) or op["name"] in ["ElemAny"]:
             sum_out.append(op["output_desc"][0]["tensor_name"])
 
         if op["name"] == "UnsortedSegmentSum":
