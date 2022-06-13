@@ -47,7 +47,7 @@ class GpuIslEmitterReduce : virtual public GpuIslEmitter {
   GpuIslEmitterReduce(ScopInfo &info, const NodeInfoRepo &n, const isl::id_list &i) : GpuIslEmitter(info, n, i) {}
   ~GpuIslEmitterReduce() override = default;
 
-  Stmt Emit(const isl::ast_node &node) final;
+  Stmt EmitterPostProcess(Stmt &s) override;
   Stmt EmitUserStmt(const isl::ast_node_user &node);
 
  private:

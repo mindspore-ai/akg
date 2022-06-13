@@ -20,16 +20,14 @@
 namespace akg {
 namespace ir {
 namespace poly {
-Stmt GpuIslEmitterTensorCore::Emit(const isl::ast_node &node) {
-  Stmt stmt = GpuIslEmitter::Emit(node);
-
+Stmt GpuIslEmitterTensorCore::EmitterPostProcess(Stmt &stmt) {
+  stmt = GpuIslEmitter::EmitterPostProcess(stmt);
   if (info_.user_config_.GetEnableTensorCoreUsePoly() && info_.user_config_.GetEnableEmitCore()) {
     stmt = EmitForTensorCore(stmt, tensor_core_info_, info_);
   } else {
     tensor_core_info_.cast_tensors_ = info_.analysis_result_.GetCastTensors();
     stmt = EmitForTensorCoreDesignOne(stmt, tensor_core_info_);
   }
-
   return stmt;
 }
 

@@ -39,6 +39,11 @@ using std::placeholders::_4;
 namespace akg {
 namespace ir {
 namespace poly {
+namespace {
+constexpr auto ATTR_INFO = "INFO";
+constexpr auto STMT_ID = "stmt_id";
+}
+
 bool AOutThanB(std::vector<const Node *> a, std::vector<const Node *> b) {
   if (a.size() > b.size()) {
     return false;
@@ -82,8 +87,10 @@ Expr IslEmitter::InterpretBinaryOp(const isl::ast_expr_op &e) {
   } else if (e.as<isl::ast_expr_op_div>()) {
     return DivRoundToZero(left, right);
   } else if (e.as<isl::ast_expr_op_fdiv_q>()) {
+    CHECK(!IsZero(right));
     return left / right;
   } else if (e.as<isl::ast_expr_op_pdiv_q>()) {
+    CHECK(!IsZero(right));
     return left / right;
   } else if (e.as<isl::ast_expr_op_pdiv_r>()) {
     return left % right;
@@ -659,6 +666,7 @@ Stmt IslEmitter::EmitUserStmtContent(const Provide *provide_node) {
   Expr value = EmitExpr(f, var_map_).Mutate(provide_node->value);
   Stmt provide_stmt = Provide::make(provide_new->func, provide_new->value_index, value, provide_new->args);
 
+  provide_stmt = AttrStmt::make(Expr(ATTR_INFO), STMT_ID, StringImm::make(stmt_id_.get_name()), provide_stmt);
   if (info_.analysis_result_.GetConditionalWriteBufferFootprints().count(write_tensor)) {
     return Block::make(provide_stmt, GenerateCopyOut(info_, provide_node, provide_new, var_map_));
   }
@@ -797,7 +805,12 @@ Stmt IslEmitter::EmitAst(const isl::ast_node &node) {
   return s;
 }
 
-Stmt IslEmitter::Emit(const isl::ast_node &node) { return EmitAst(node); }
+Stmt IslEmitter::Emit(const isl::ast_node &node) {
+  EmitterPreProcess();
+  auto stmt = EmitAst(node);
+  stmt = EmitterPostProcess(stmt);
+  return stmt;
+}
 
 void IslEmitter::PushIter(const Variable *iter) { iters_.push_back(iter); }
 
@@ -817,6 +830,38 @@ const Variable *IslEmitter::GetIterByName(const std::string &id) const {
     }
   }
   return nullptr;
+}
+
+class ProcessProvideNode: public IRMutator {
+ public:
+  explicit ProcessProvideNode(ScopInfo &info): info_(info) {}
+  ~ProcessProvideNode() = default;
+
+  Stmt Mutate_(const AttrStmt *op, const Stmt &s) override {
+    if (op->attr_key == STMT_ID) {
+      auto body = IRMutator::Mutate(op->body);
+      auto value = op->value.as<StringImm>()->value;
+      isl::id id(info_.ctx_, value);
+      info_.analysis_result_.RecordProvideStmt(id, current_);
+      return body;
+    }
+    return IRMutator::Mutate_(op, s);
+  }
+
+  Stmt Mutate_(const Provide *op, const Stmt &s) {
+    current_ = op;
+    return IRMutator::Mutate_(op, s);
+  }
+
+ private:
+  ScopInfo &info_;
+  const Node *current_;
+};
+
+Stmt IslEmitter::EmitterPostProcess(Stmt &s) {
+  info_.analysis_result_.ResetProvideStmtsMap();
+  ProcessProvideNode p(info_);
+  return p.Mutate(s);
 }
 }  // namespace poly
 }  // namespace ir

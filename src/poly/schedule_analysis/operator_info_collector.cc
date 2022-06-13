@@ -234,17 +234,17 @@ void OpTypeCollector::Visit_(const Provide *op) {
 }
 
 void OpTypeCollector::Visit_(const For *op) {
+  // start of an outer band
+  if (loop_count_ == 0) {
+    band_count_ += 1;
+    cur_band_.clear();
+  }
   loop_count_ += 1;
   cur_loop_ = op;
   cur_band_.emplace_back(cur_loop_);
   IRVisitor::Visit_(op);
   cur_loop_ = op;
   loop_count_ -= 1;
-  // end of an outer band
-  if (loop_count_ == 0) {
-    band_count_ += 1;
-    cur_band_.clear();
-  }
 }
 
 void OpTypeCollector::Visit_(const IfThenElse *op) {
@@ -296,7 +296,7 @@ void OpTypeCollector::Visit_(const Evaluate *op) {
       }
       count_op_tensor_ = MatchLoopByName(count_op_tensor_);
       count_op_tensor_.args = call->args;
-      count_op_tensor_.band_index = band_count_;
+      count_op_tensor_.band_index = GetBandIndex();
       count_op_tensor_.type_byte = call->type.bytes();
     }
   }
@@ -312,7 +312,7 @@ TensorEntry OpTypeCollector::GetDstTensor(const Provide *op) {
   }
   dst_tensor = MatchLoopByName(dst_tensor);
   dst_tensor.args = op->args;
-  dst_tensor.band_index = band_count_;
+  dst_tensor.band_index = GetBandIndex();
   dst_tensor.type_byte = scop_info_.user_config_.GetDataBytes(dst_tensor.name);
 
   return dst_tensor;
@@ -340,7 +340,7 @@ std::vector<TensorEntry> OpTypeCollector::GetSourceTensors(const Provide *op) {
     }
     tensor = MatchLoopByName(tensor);
     tensor.args = call->args;
-    tensor.band_index = band_count_;
+    tensor.band_index = GetBandIndex();
     tensor.type_byte = call->type.bytes();
     src_tensor.emplace_back(tensor);
   }
@@ -404,7 +404,7 @@ void OpTypeCollector::AnalyzeProvide(const Provide *op) {
     prov.basic_op_type += AT_COUNT;
   }
 
-  prov.band_index = band_count_;
+  prov.band_index = GetBandIndex();
   prov.src = src_tensor;
   prov.dst = dst_tensor;
   prov.op = op;

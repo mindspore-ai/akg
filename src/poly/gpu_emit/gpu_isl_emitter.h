@@ -46,10 +46,11 @@ class GpuIslEmitter : public IslEmitter {
   ~GpuIslEmitter() override = default;
 
   bool NoNeedToEmitForTempTensor(const isl::id &id);
-  Stmt Emit(const isl::ast_node &node) override;
   Expr Interpret(const isl::ast_expr &e);
   Stmt EmitStmt(const isl::ast_node_user &node) override;
   Stmt EmitMark(const isl::ast_node_mark &node_id) override;
+  void EmitterPreProcess() override;
+  Stmt EmitterPostProcess(Stmt &s) override;
   virtual Expr AdaptPolyNewVar(std::string name);
   Expr AdaptThreadNewVar(const std::string &name, MappingCfg *mapping_cfg);
   Expr AdaptOneConfigForMulAxis(MappingCfg *mapping_cfg, const std::string &orig_name, const bool is_thread);

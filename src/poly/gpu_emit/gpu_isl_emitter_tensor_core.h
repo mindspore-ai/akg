@@ -77,7 +77,7 @@ class GpuIslEmitterTensorCore : public GpuIslEmitter {
   GpuIslEmitterTensorCore(ScopInfo &info, const NodeInfoRepo &n, const isl::id_list &i) : GpuIslEmitter(info, n, i) {}
   ~GpuIslEmitterTensorCore() override = default;
 
-  Stmt Emit(const isl::ast_node &node) final;
+  Stmt EmitterPostProcess(Stmt &s) override;
 
  private:
   Stmt EmitMark(const isl::ast_node_mark &node_id) final;
