@@ -50,12 +50,14 @@ class InfoVersionAdapt:
 
     def __init__(self, kernel_info):
         self.kernel_info = kernel_info
+        self.msg = ""
 
     def run(self):
         version = self.kernel_info.get("version", 0)
         if version > self.CURRENT_VERSION:
-            logging.error("The akg only supports kernel info of version up to {}, but got kernel info of version {}, "
-                          "please upgrade mindspore for akg.".format(self.CURRENT_VERSION, version))
+            self.msg = "The akg only supports kernel info of version up to {}, but got kernel info of version {}, please upgrade mindspore for akg.".format(
+                self.CURRENT_VERSION, version)
+            logging.error(self.msg)
             return False
         if version < self.CURRENT_VERSION:
             for i in range(version, self.CURRENT_VERSION):

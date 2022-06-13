@@ -176,12 +176,29 @@ def _set_tiling_attrs(out_shape, attrs):
         attrs['dim'] = ' '.join(str(x) for x in dim_list)
     return attrs
 
+def _update_target_info(desc_d, attr):
+    target_info = desc_d.get("target_info")
+    if not target_info:
+        return attr
+
+    process = desc_d.get("process")
+    if process != "cuda":
+        return attr
+
+    # auto detect proper gpu device type according to compute capability description
+    if target_info.get("compute_capability") == "8.0":
+        attr["device_type"] = "a100"
+
+    return attr
 
 def _update_compile_attr(desc_d, attr):
     # For user defined akg compile attr
-    if desc_d['op_desc'] is None:
+
+    attr = _update_target_info(desc_d, attr)
+
+    if desc_d.get('op_desc') is None:
         return attr
-    for op in desc_d['op_desc']:
+    for op in desc_d.get('op_desc'):
         op_attrs = op.get("attr", {})
         if not isinstance(op_attrs, Iterable):
             continue
@@ -553,6 +570,15 @@ def build(kernel_desc, attrs=None, poly=True, use_repo=True):
             raise TypeError("kernel_desc should be a dict, but get a {}".format(type(kernel_desc)))
         desc_s = json.dumps(kernel_desc)
         desc_d = kernel_desc
+
+    from akg.ms.info_version_adapt import InfoVersionAdapt
+    info_adapter = InfoVersionAdapt(desc_d)
+    ret = info_adapter.run()
+    if not ret:
+        raise RuntimeError(info_adapter.msg)
+        return False
+    desc_s = json.dumps(desc_d)
+
     if attrs is None:
         attrs = dict()
     backend = desc_d['process']

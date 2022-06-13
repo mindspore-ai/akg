@@ -28,7 +28,6 @@ from akg.utils.dsl_create import TensorUtils
 from akg.global_configs import get_dump_ir_flag
 from akg.global_configs import get_dump_code_flag
 from akg.ms.utils import get_op
-from akg.ms.info_version_adapt import InfoVersionAdapt
 from . import op_build
 
 
@@ -154,14 +153,8 @@ def _compilewithjson_to_module(kernel_info, attrs):
         else:
             return None
 
-    ret = InfoVersionAdapt(kernel_info).run()
-    if not ret:
-        return False
-
     processor = kernel_info['process'] if 'process' in kernel_info else utils.CUDA
     attrs["target"] = _get_target_from_processor(processor)
-    if "target_info" in kernel_info:
-        attrs["target_info"] = kernel_info["target_info"]
 
     if kernel_info.get('composite', False):
         try:
