@@ -1646,7 +1646,7 @@ isl::schedule SchedulingMindTrick::GpuPostProcessSchedule(const isl::schedule &s
 ///////////////////////////////////////////////////////////////////////////
 
 #ifdef AKG_USE_MLS
-void SchedulingMindTrick::UpdateHints(mls::bin::Hints directive_hint) {
+void SchedulingMindTrick::UpdateHints(const mls::bin::Hints &directive_hint) {
   if (!hints_.HaveDirectives()) {
     ForTypeMap directives = scop_info_.analysis_result_.GetForTypeMap();
     for (const auto &[stmt, vloop_directive] : directives) {
