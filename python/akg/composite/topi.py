@@ -18,13 +18,17 @@
 import functools
 import itertools
 import operator
+import fcntl
+import logging
 import os
 import sys
+import traceback
 import importlib.util
 from pathlib import Path
 
 from akg import tvm, autodiff
 from akg.tvm.hybrid import script
+from akg.global_configs import get_kernel_meta_path
 from akg.utils.format_transform import get_const, get_shape
 from akg.utils.dsl_create import get_broadcast_shape
 from akg.utils import validation_check as vc_util
@@ -483,13 +487,13 @@ def _launch_kernel_from_source(inputs, op_attrs, source_str, real_inputs_num, is
         res = hybrid_func(*inputs[:real_inputs_num], *op_attrs.values())
         forward_ouput = res if isinstance(res, list) else [res]
         # douts and outs should have the same length, so the num of douts is (len(inputs)-real_inputs_num)/2
-        if int(len(inputs)-real_inputs_num) <= 0:
+        if int(len(inputs) - real_inputs_num) <= 0:
             raise ValueError(
                 "Cannot compute autodiff for function with no outputs/douts")
-        if int(len(inputs)-real_inputs_num) % 2 != 0:
+        if int(len(inputs) - real_inputs_num) % 2 != 0:
             raise ValueError(
                 "douts and douts should have the same length.")
-        dout = inputs[int((len(inputs)+real_inputs_num)/2):]
+        dout = inputs[int((len(inputs) + real_inputs_num) / 2):]
         outputs = autodiff.SingleHybridOpDifferentiate(forward_ouput, inputs[:real_inputs_num], dout)
         output = outputs if len(outputs) != 1 else outputs[0]
     else:
@@ -498,20 +502,29 @@ def _launch_kernel_from_source(inputs, op_attrs, source_str, real_inputs_num, is
     return output
 
 
-def _launch_kernel_from_path(inputs, op_attrs, func_type, op_imply_path, func_name):
-    if not os.path.isfile(op_imply_path):
-        raise ValueError("Can't find file under path: {}".format(str(op_imply_path)))
-    # here we need to drop some sys module with name tvm, akg and topi
-    # as they will lead to conflict with TBE on ascend when exec module
-    akg_key_list = []
-    for key in sys.modules.keys():
-        if "tvm" in key or "akg" in key or "topi" in key:
-            akg_key_list.append(key)
-    for key in akg_key_list:
-        sys.modules.pop(key)
-    # del akg related path in the sys.path
-    # these two paths are added when akg kernel compiler is launched
-    sys.path = sys.path[2:]
+def _launch_kernel_from_path(inputs, op_attrs, func_type, func_source, func_name):
+    kernel_meta_path = get_kernel_meta_path()
+    cuda_path = os.path.realpath(kernel_meta_path)
+    if not os.path.isdir(cuda_path):
+        os.makedirs(cuda_path, exist_ok=True)
+    if not func_name:
+        raise ValueError("Can't find name of function")
+    if not func_source:
+        raise ValueError("Can't find source of function: {}".format(str(func_name)))
+
+    op_imply_path = os.path.realpath(kernel_meta_path + func_name + ".py")
+    if os.path.exists(op_imply_path):
+        os.remove(op_imply_path)
+    try:
+        with open(op_imply_path, 'at') as file:
+            fcntl.flock(file.fileno(), fcntl.LOCK_EX)
+            file.seek(0, 2)
+            if file.tell() == 0:
+                file.write(func_source)
+        os.chmod(op_imply_path, 0o400)
+    except Exception:
+        logging.error(traceback.format_exc())
+        return None
 
     custom_mod_name = Path(op_imply_path).resolve().stem
     mod_spec = importlib.util.spec_from_file_location(
@@ -554,19 +567,19 @@ def custom(inputs, attrs):
         if attr_name in attr_names:
             op_attrs[ext_arg[0]] = ext_arg[1]
 
+    if not "func_source_str" in attrs:
+        raise ValueError("Can't find the source str for the function: {}".format(func_name))
+
+    source_str = attrs["func_source_str"].value
+
     if func_type == "hybrid":
-        if not "func_source_str" in attrs:
-            raise ValueError("Can't find the source str for the function: {}".format(func_name))
-
-        source_str = attrs["func_source_str"].value
-
         return _launch_kernel_from_source(inputs, op_attrs, source_str,
                                           attrs["inputs_num"].value if "inputs_num" in attrs else len(inputs),
                                           attrs["autodiff"].value if "autodiff" in attrs else False)
 
     else:
         return _launch_kernel_from_path(inputs, op_attrs, func_type,
-                                        attrs["imply_path"].value if "imply_path" in attrs else "",
+                                        source_str,
                                         func_name)
 
 
@@ -1026,7 +1039,6 @@ def coo2csr(inputs, attrs):
                       name=output_name)
 
 
-
 @tvm.register_func("CSRMM")
 def csr_mm(inputs, _):
     indptr, indices, data, dense = inputs
@@ -1042,7 +1054,7 @@ def csr_mm(inputs, _):
         ib = tvm.ir_builder.create()
         with ib.for_range(0, num_rows, name="row") as row:
             row_start = ib.load(indptr, row)
-            row_end = ib.load(indptr, row+1)
+            row_end = ib.load(indptr, row + 1)
             num_eles = row_end - row_start
             with ib.for_range(0, num_cols, name="col") as col:
                 ib.store(out, [row, col], tvm.const(0, data.dtype))
