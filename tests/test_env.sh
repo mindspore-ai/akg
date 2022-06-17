@@ -29,7 +29,7 @@ if [ $# -eq 1 ] && [ $1 = "gpu_ci" ]; then
 elif [ $# -eq 1 ] && [ $1 = "mstune" ] ; then
   setup_autotune
 else
-  CUR_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+  CUR_DIR="$( cd "$( dirname "${BASH_SOURCE[0]:-${(%):-%x}}" )" && pwd )"
   AKG_DIR="${AKG_DIR:-${CUR_DIR}/..}"
   AKG_BUILD_DIR="${AKG_BUILD_DIR:-${AKG_DIR}/build}"
   TVM_ROOT="${AKG_DIR}/third_party/incubator-tvm"
