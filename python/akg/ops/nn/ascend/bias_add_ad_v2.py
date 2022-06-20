@@ -17,13 +17,15 @@
 import akg.tvm
 import akg
 import akg.utils as utils
-from .bias_add import BiasAdd
+from .bias_add import bias_add
 
-def BiasAddAdV2(head, input_shape, data_format, target=utils.CCE):
+
+def bias_add_ad_v2(head, input_shape, data_format, target=utils.CCE):
     """Compute gradient for bias_add operator using automatic differentiate."""
     check_list = ["NHWC", "NC1HWC0", "DefaultFormat"]
     if data_format not in check_list:
-        raise RuntimeError("bias_add_grad only support %s while dataformat is %s" % (",".join(check_list), data_format))
+        raise RuntimeError("bias_add_grad only support %s while dataformat is %s" %
+                           (",".join(check_list), data_format))
     head_plh = akg.tvm.placeholder(head.shape, head.dtype, "head_plh")
     if data_format == "NC1HWC0":
         bias_shape = (1, head.shape[1], 1, 1, head.shape[4])
@@ -34,7 +36,7 @@ def BiasAddAdV2(head, input_shape, data_format, target=utils.CCE):
     else:
         bias_shape = (input_shape[1],)
         bias_plh = akg.tvm.placeholder(bias_shape, head.dtype, "bias_plh")
-    bias_add_res = BiasAdd(head_plh, bias_plh, data_format)
+    bias_add_res = bias_add(head_plh, bias_plh, data_format)
 
     shape1 = [x.value for x in head_plh.shape]
     shape2 = [x.value for x in bias_plh.shape]

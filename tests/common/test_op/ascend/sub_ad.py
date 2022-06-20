@@ -15,7 +15,7 @@
 """operator dsl function: sub_ad"""
 
 import akg
-from akg.ops.math import Sub
+from akg.ops.math import sub
 from akg.utils import custom_tiling as ct_util
 
 sub_ad_set_dim_map = {
@@ -37,6 +37,6 @@ def sub_ad_set_dim_func(head, a, b):
 
 @ct_util.reg_set_dim_func(sub_ad_set_dim_func)
 def sub_ad(head, a, b):
-    output = Sub(a, b, target='cce')
+    output = sub(a, b, target='cce')
     _jacs = list(akg.differentiate(output, [a], head))
     return _jacs[0]

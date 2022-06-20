@@ -14,12 +14,13 @@
 
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.math import Sub
+from akg.ops.math import sub
 from tests.common.tensorio import compare_tensor
 from tests.common.base import get_rtol_atol
 from tests.common.gen_random import random_gaussian
 from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
+
 
 def sub_run(shape1, shape2, dtype, attrs=None):
     if 'tuning' in attrs.keys():
@@ -53,4 +54,4 @@ def gen_data(dtype, shape1, shape2):
 
 
 def sub_compile(shape1, shape2, dtype, attrs, kernel_name='sub', tuning=False):
-    return utils.op_build_test(Sub, [shape1, shape2], [dtype, dtype], kernel_name=kernel_name, attrs=attrs, tuning=tuning)
+    return utils.op_build_test(sub, [shape1, shape2], [dtype, dtype], kernel_name=kernel_name, attrs=attrs, tuning=tuning)

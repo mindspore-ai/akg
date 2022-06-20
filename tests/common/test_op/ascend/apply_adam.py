@@ -18,7 +18,8 @@ import akg.topi
 from akg.utils.format_transform import get_shape
 import akg.utils as utils
 from akg.utils.dsl_create import TensorUtils
-from akg.ops.math import Divide, Sqrt
+from akg.ops.math import Divide, sqrt
+
 
 def _apply_adam_compute(var, m, v, beta1_power, beta2_power, lr, beta1, beta2, epsilon, grad, use_nesterov=False):
     """Compute for adam algorithm"""
@@ -34,7 +35,7 @@ def _apply_adam_compute(var, m, v, beta1_power, beta2_power, lr, beta1, beta2, e
 
     # lr_t <- lr*sqrt(1-beta2_power)/(1-beta1_power)
     one_const = akg.tvm.const(1, var.dtype)
-    sqrt_value_beta2 = Sqrt(akg.topi.subtract(one_const, beta2_power), target=utils.CCE)
+    sqrt_value_beta2 = sqrt(akg.topi.subtract(one_const, beta2_power), target=utils.CCE)
     lr_mul_sqrt_value = akg.topi.multiply(lr, sqrt_value_beta2)
     sub_value_beta1 = akg.topi.subtract(one_const, beta1_power)
     lr_t = Divide(lr_mul_sqrt_value, sub_value_beta1, target=utils.CCE)
@@ -47,7 +48,7 @@ def _apply_adam_compute(var, m, v, beta1_power, beta2_power, lr, beta1, beta2, e
                                          name="lr_t_mul_m_new")
     else:
         lr_t_mul_m_new = akg.tvm.compute(shape, lambda *indice: lr_t[0] * m_new(*indice), name="lr_t_mul_m_new")
-    sqrt_value_v_new = Sqrt(v_new, target=utils.CCE)
+    sqrt_value_v_new = sqrt(v_new, target=utils.CCE)
     epsilon_add_sqrt_value = akg.topi.add(epsilon, sqrt_value_v_new)
     div_value = Divide(lr_t_mul_m_new, epsilon_add_sqrt_value, target=utils.CCE)
     var_new = akg.topi.subtract(var, div_value)

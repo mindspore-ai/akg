@@ -15,7 +15,7 @@ import math
 import numpy as np
 from akg import tvm
 from akg.utils import kernel_exec as utils
-from akg.ops.math import Sum
+from akg.ops.math import sum
 from tests.common.tensorio import compare_tensor
 from tests.common.base import get_rtol_atol
 from akg.utils.result_analysis import np_bisect_sum
@@ -23,6 +23,7 @@ from akg.utils.dsl_create import get_reduce_out_shape
 from tests.common.gen_random import random_gaussian
 from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
+
 
 def compute_blockdim(shape):
     size = 0
@@ -34,6 +35,7 @@ def compute_blockdim(shape):
     else:
         size = 2
     return min(32, math.ceil(size / 8192 + 1))
+
 
 def reduce_sum_run(shape, reduce_axis, keepdims, dtype, attrs):
     if attrs is None:
@@ -62,7 +64,7 @@ def reduce_sum_run(shape, reduce_axis, keepdims, dtype, attrs):
             import akg
             target_name = attrs["target"].split()[0]
             args_list = to_tvm_nd_array([input1, output], akg.tvm.context(target_name, 0))
-            target_profiling(mod, *args_list, target=target_name, repeat_time=attrs["repeat_times"])
+            target_profiling(mod, *args_list, target=target_name, epeat_time=attrs["repeat_times"])
         rtol, atol = get_rtol_atol("sum", dtype)
         return input1, output, expect, compare_tensor(output, expect, rtol=rtol, atol=atol, equal_nan=True)
 
@@ -95,4 +97,4 @@ def sum_compile(shape, reduce_axis, keepdims, dtype, attrs, kernel_name="sum", t
         build_shape = var_shape
     else:
         build_shape = shape
-    return utils.op_build_test(Sum, [build_shape], [dtype], op_attrs, kernel_name=kernel_name, attrs=attrs, tuning=tuning)
+    return utils.op_build_test(sum, [build_shape], [dtype], op_attrs, kernel_name=kernel_name, attrs=attrs, tuning=tuning)

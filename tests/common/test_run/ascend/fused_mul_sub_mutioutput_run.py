@@ -16,12 +16,13 @@ import numpy as np
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
 from akg.ops.math import mul
-from akg.ops.math import Sub
+from akg.ops.math import sub
 from tests.common.gen_random import random_gaussian
+
 
 def mul_sub_mutioutput(first_input, second_input, third_input, target="cce"):
     temp = mul(first_input, second_input, target=target)
-    output = Sub(temp, third_input, target=target)
+    output = sub(temp, third_input, target=target)
     return [temp, output]
 
 

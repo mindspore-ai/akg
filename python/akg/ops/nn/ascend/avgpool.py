@@ -25,16 +25,15 @@ from akg.utils.dsl_create import cal_pad_shapes_by_strategy, zero_const
 from akg.utils.format_transform import get_shape
 from akg.ops.nn.ascend.maxpool import img2col
 
-avgpool_set_dim_map = {
-    str(((1, 1, 16, 16, 16), (4, 4), (3, 3), 'VALID', 'float16')): ((16, 1), (20, 1), (5, 1)),
-    str(((1, 1, 16, 16, 16), (4, 4), (3, 3), (0, 0, 0, 0), 'float16')): ((16, 1), (20, 1), (5, 1)),
-    str(((10, 3, 16, 16, 16), (4, 4), (3, 3), (0, 0, 0, 0), 'float16')): ((2, 2), (3, 3), (16, 16), (5, 5), (5, 5)),
-    str(((1, 2, 16, 16, 16), (4, 4), (3, 3), (1, 1, 1, 1), 'float16')): ((1, 1), (16, 16), (19, 19)),
-}
-
 
 def avgpool_set_dim_func(a_value, kernel, stride, pad):
     """set dim info to attr with avgpool_set_dim_map"""
+    avgpool_set_dim_map = {
+        str(((1, 1, 16, 16, 16), (4, 4), (3, 3), 'VALID', 'float16')): ((16, 1), (20, 1), (5, 1)),
+        str(((1, 1, 16, 16, 16), (4, 4), (3, 3), (0, 0, 0, 0), 'float16')): ((16, 1), (20, 1), (5, 1)),
+        str(((10, 3, 16, 16, 16), (4, 4), (3, 3), (0, 0, 0, 0), 'float16')): ((2, 2), (3, 3), (16, 16), (5, 5), (5, 5)),
+        str(((1, 2, 16, 16, 16), (4, 4), (3, 3), (1, 1, 1, 1), 'float16')): ((1, 1), (16, 16), (19, 19)),
+    }
     key = []
     key.append(tuple(get_shape(a_value)))
     key.append(kernel)
@@ -70,7 +69,8 @@ def avg_pool_5d_hybrid(a_value, kernel, stride, strategy):
 
     @script(capture=locals())
     def avg_pool_hybrid(inputs, zero, avg_pre):
-        output = output_tensor((batch_size, c1_, out_size_h, out_size_w, c0_), inputs.dtype)
+        output = output_tensor(
+            (batch_size, c1_, out_size_h, out_size_w, c0_), inputs.dtype)
 
         for n in range(batch_size):
             for c1 in range(c1_):
@@ -140,8 +140,8 @@ def avg_pool_5d_hybrid(a_value, kernel, stride, strategy):
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, (list, tuple),
-                          (list, tuple), (str, list, tuple), (str, type(None)))
-def Avgpool(data, kernel, stride, strategy, target=utils.CCE):
+                        (list, tuple), (str, list, tuple), (str, type(None)))
+def avgpool(data, kernel, stride, strategy, target=utils.CCE):
     """
     Performs the average pooling on the input datas.
 
@@ -190,7 +190,7 @@ def Avgpool(data, kernel, stride, strategy, target=utils.CCE):
 
     Returns:
         Tensor as result for average pooling.
-    
+
     Supported Platforms:
         'Ascend'
     """
@@ -253,6 +253,7 @@ def Avgpool(data, kernel, stride, strategy, target=utils.CCE):
                                 res[n, c1, h, w, c0] / dividor,
                                 name="res_value")
     return res_value, attrs
+
 
 def avgpool_with_img2col(data, kernel, stride, strategy):
     """

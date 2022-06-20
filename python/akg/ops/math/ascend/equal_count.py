@@ -21,7 +21,7 @@ from akg.utils.kernel_exec import product_is_mini
 from akg.utils.dsl_create import produce_shapes
 from akg.utils.format_transform import get_shape
 from ..cast import Cast
-from ..sum import Sum
+from ..sum import sum
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (str, type(None)))
@@ -71,7 +71,7 @@ def equal_count(x, y, target=utils.CCE):
     y = akg.topi.broadcast_to(y, shape)
     z = akg.tvm.compute(shape, lambda *indice: akg.tvm.expr.Select(
                         x[indice] == y[indice], t[indice], f[indice]), name="z")
-    res = Sum(z, target=target)
+    res = sum(z, target=target)
     if res.dtype != orig_dtype:
         res = Cast(res, orig_dtype, target)
     return res

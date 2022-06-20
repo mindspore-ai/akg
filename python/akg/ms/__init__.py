@@ -20,7 +20,7 @@ from .message import compilewithjson
 from .message import compilewithjsonname
 from .ops_general import (tensor_add, add, add_n, assign, cast, equal, less_equal, mul, sub, div, divide, tile,
                           logical_or, logical_and, logical_not, not_equal, greater_equal, tensor_max, neg, log, less,
-                          exp, tensor_sum, reshape, reciprocal)
+                          exp, tensor_sum, reshape, reciprocal, sqrt)
 from .ops_ascend import (real_div, floor_div, argmax, simple_mean, relu, zeros_like, strided_slice,
                          sparse_softmax_cross_entropy_with_logits, softmax, relu_grad, reduce_mean, prod_force_sea,
                          prod_force_sea_grad, one_hot, simple_mean_grad, max_pool_with_argmax, mat_mul, conv_2d,

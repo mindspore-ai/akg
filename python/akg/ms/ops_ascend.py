@@ -267,7 +267,7 @@ def bias_add_grad(dout, data_format=None, target=utils.CCE):
     if data_format is None:
         data_format = ["NCHW"]
     dout_shape = get_shape(dout)
-    return nn.BiasAddAd(dout, dout_shape, data_format[0], target)
+    return nn.bias_add_ad(dout, dout_shape, data_format[0], target)
 
 
 @reg_op("BatchMatMul", utils.CCE)

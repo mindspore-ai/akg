@@ -15,7 +15,8 @@
 """sum_square"""
 import akg.utils as utils
 from tests.common.test_op.ascend.square import square
-from akg.ops.math import Sum
+from akg.ops.math import sum
+
 
 def sum_square(inputs, axis=None, keepdims=False, target=utils.CCE):
     """
@@ -31,4 +32,4 @@ def sum_square(inputs, axis=None, keepdims=False, target=utils.CCE):
     """
 
     inputs_square = square(inputs)
-    return Sum(inputs_square, axis, keepdims, target=target)
+    return sum(inputs_square, axis, keepdims, target=target)

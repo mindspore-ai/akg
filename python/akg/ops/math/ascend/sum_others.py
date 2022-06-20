@@ -19,7 +19,7 @@ import akg.utils as utils
 from akg.utils import format_transform as ft_util
 from akg.utils.format_transform import get_shape
 from ..cast import Cast
-from ..sum import Sum
+from ..sum import sum
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, (list, tuple, int, type(None)), (bool, type(None)), (str, type(None)))
@@ -69,19 +69,19 @@ def sum_by_shape(broadcast_data, original_shape, target=utils.CCE):
     if broadcast_shape == original_shape:
         return broadcast_data
     if original_shape == [1]:
-        data = Sum(broadcast_data, target=target)
+        data = sum(broadcast_data, target=target)
         return data
 
     utils.broadcast_check(original_shape, broadcast_shape)
     axis_len = len(broadcast_shape) - len(original_shape)
     if axis_len > 0:
         axis = list(range(axis_len))
-        broadcast_data = Sum(broadcast_data, axis, False, target=target)
+        broadcast_data = sum(broadcast_data, axis, False, target=target)
         broadcast_shape = get_shape(broadcast_data)
 
     axis = []
     for i, _ in enumerate(original_shape):
         if original_shape[i] != broadcast_shape[i]:
             axis.append(i)
-    res = Sum(broadcast_data, axis, True, target=target)[0] if axis else broadcast_data
+    res = sum(broadcast_data, axis, True, target=target)[0] if axis else broadcast_data
     return res

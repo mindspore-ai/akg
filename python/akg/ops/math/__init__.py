@@ -46,6 +46,6 @@ from .reciprocal import reciprocal
 from .round import round_
 from .rsqrt import rsqrt
 from .select import select
-from .sqrt import Sqrt
-from .sub import Sub
-from .sum import Sum
+from .sqrt import sqrt
+from .sub import sub
+from .sum import sum

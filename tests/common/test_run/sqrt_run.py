@@ -14,7 +14,7 @@
 import akg
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.math import Sqrt
+from akg.ops.math import sqrt
 from tests.common.tensorio import compare_tensor
 from tests.common.gen_random import random_gaussian
 from akg.utils.result_analysis import target_profiling
@@ -24,7 +24,7 @@ def sqrt_run(shape, dtype, attrs):
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(Sqrt, [shape], [dtype], kernel_name=kernel_name, attrs=attrs, tuning=t)
+        mod = utils.op_build_test(sqrt, [shape], [dtype], kernel_name=kernel_name, attrs=attrs, tuning=t)
         if t:
             expect, input, output = gen_data(dtype, shape)
             return mod, expect, (input, output)
@@ -32,7 +32,7 @@ def sqrt_run(shape, dtype, attrs):
             return mod
     else:
         expect, input, output = gen_data(dtype, shape)
-        mod = utils.op_build_test(Sqrt, [shape], [dtype], kernel_name='sqrt', attrs=attrs)
+        mod = utils.op_build_test(sqrt, [shape], [dtype], kernel_name='sqrt', attrs=attrs)
         output = utils.mod_launch(mod, (input, output), expect=expect)
         if attrs.get("profiling", False):
             target_name = attrs["target"].split()[0]
