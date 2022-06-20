@@ -1,8 +1,37 @@
-# MindSpore AKG Release Notes
+# MindAKG Release Notes
 
 [View English](./RELEASE.md)
 
-## MindSpore AKG 1.7.0 Release Notes
+## MindAKG 1.8.0 Release Notes
+
+### 主要特性和增强
+
+* 自定义算子支持CPU编译流程。 [!612](https://gitee.com/mindspore/akg/pulls/612) (CPU)
+* 支持高维CSR算子及其性能优化。[!664](https://gitee.com/mindspore/akg/pulls/664) (GPU)
+* 更新昇腾后端Poly重启动流程策略。[!701](https://gitee.com/mindspore/akg/pulls/701) (Ascend)
+* 支持CSRMM算子的自动生成。[!709](https://gitee.com/mindspore/akg/pulls/709) (GPU)
+* 新调度器支持调度原语辅助调度。 [!715](https://gitee.com/mindspore/akg/pulls/715) (All backends)
+
+
+### Bug 修复
+* 修复了融合算子编译优化过程中reshape消除引入的bug。[!707](https://gitee.com/mindspore/akg/pulls/707) (All)
+* 修复了三地址pass的一个bug。 [!728](https://gitee.com/mindspore/akg/pulls/728) (Ascend)
+* 修复了算子类别识别流程中的bug。 [!730](https://gitee.com/mindspore/akg/pulls/730) (All)
+
+* Fix the bug of reshape elimination for the fused operators. [!707](https://gitee.com/mindspore/akg/pulls/707) (All)
+* Fix the bug of to_three_address pass. [!728](https://gitee.com/mindspore/akg/pulls/728) (Ascend)
+* Fix the bug of Operator types matching rules. [!730](https://gitee.com/mindspore/akg/pulls/730) (All)
+
+### 贡献者
+
+感谢以下开发者做出的贡献:
+
+yangsijia, polyhedral, zhangrenwei, yiyanzhi, hujiahui8, zhengzuohe, zhangzhaochuang, xuhui, liuchao, xiaruijie, DeshiChen, nelson.lossing, zhenzhang,
+
+chenlei_autodiff, wYann, hanhuifeng, gaoxiong, zichun_ye, chengbin, wangrao124, huangmengxi, harenome, huoxinyou, yanglinfeng, Etienne
+
+
+## MindAKG 1.7.0 Release Notes
 
 ### 主要特性和增强
 * 为MindSpore HybridDSL特性提供循环原语支持。[!560](https://gitee.com/mindspore/akg/pulls/560) (所有后端)
