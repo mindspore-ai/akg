@@ -446,6 +446,20 @@ void ScopInfo::DumpScopDataAdvanced(std::ofstream &of) {
 }
 
 void UserConfig::DumpScopDataScheduleAttrs(std::ofstream &of) {
+  PrintHeader(of, "Scheduler");
+  of << "initial scheduler : " << (polytops_was_used_ ? "PolyTOPS" : "isl") << std::endl;
+
+  PrintHeader(of, "PolyTOPS");
+  of << "enable polytops: " << GetEnablePolyTOPS() << std::endl;
+  of << "solver: " << (GetPolyTOPSSolver() != "" ? GetPolyTOPSSolver() : "default") << std::endl;
+  of << "check schedules: " << GetPolyTOPSCheckSchedules() << std::endl;
+  of << "code sinking: " << GetPolyTOPSCodeSinking() << std::endl;
+  of << "constant to parameter: " << GetPolyTOPSConstantToParameter() << std::endl;
+  of << "parameter shifting: " << GetPolyTOPSParameterShifting() << std::endl;
+  of << "post processing: full sets: " << GetPolyTOPSPostProcessingFullSets() << std::endl;
+  of << "post processing: extra outer parallel loop: " << GetPolyTOPSPostProcessingExtraOuterParallelLoop()
+     << std::endl;
+
   PrintHeader(of, "MindTrick");
   of << "mind trick status : " << mind_trick_status_ << std::endl;
 

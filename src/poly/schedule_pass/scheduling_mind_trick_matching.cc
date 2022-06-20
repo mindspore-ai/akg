@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifdef AKG_USE_MLS
+#ifdef AKG_USE_POLYTOPS
 
 #include "poly/schedule_pass/scheduling_mind_trick.h"
 
@@ -342,4 +342,4 @@ bool PatternMatches(const isl::schedule &sch, const std::string &pattern_, const
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg
-#endif  // AKG_USE_MLS
+#endif  // AKG_USE_POLYTOPS

@@ -1,5 +1,5 @@
-#ifndef _MLS_H
-#define _MLS_H
+#ifndef _POLYTOPS_H
+#define _POLYTOPS_H
 
 /**
  * Copyright 2021 Huawei Technologies Co., Ltd
@@ -17,8 +17,8 @@
  * limitations under the License.
  */
 
-/// \file mls.h
-/// \brief Header file for the MLSched polyhedral scheduler
+/// \file polytops.h
+/// \brief Header file for the PolyTOPS polyhedral scheduler
 
 ////////////////////////////////////////////////////////////////////////////////
 // Headers
@@ -36,25 +36,25 @@
 #include <isl/schedule.h>
 #include <isl/schedule_node.h>
 
-namespace mls {
+namespace polytops {
 ////////////////////////////////////////////////////////////////////////////////
 // Forward declarations
 ////////////////////////////////////////////////////////////////////////////////
 
 namespace runtime {
-/// \brief Runtime options for MLSched
+/// \brief Runtime options for PolyTOPS
 class Options;
 }  // namespace runtime
 
-/// \brief Scop for MLSched
+/// \brief Scop for PolyTOPS
 template <typename T>
 class Scop;
 
-/// \brief Influence for MLSched
+/// \brief Influence for PolyTOPS
 template <typename T>
 class Influence;
 
-/// \brief Hints for MLSched
+/// \brief Hints for PolyTOPS
 template <typename T>
 class Hints;
 
@@ -63,31 +63,31 @@ namespace bin {
 // Version
 ////////////////////////////////////////////////////////////////////////////////
 
-/// \brief Get the current version major of MLSched
-/// \return Current version major of MLSched
+/// \brief Get the current version major of PolyTOPS
+/// \return Current version major of PolyTOPS
 long unsigned int VersionMajor(void);
 
-/// \brief Get the current version minor of MLSched
-/// \return Current version minor of MLSched
+/// \brief Get the current version minor of PolyTOPS
+/// \return Current version minor of PolyTOPS
 long unsigned int VersionMinor(void);
 
-/// \brief Get the current version patch of MLSched
-/// \return Current version patch of MLSched
+/// \brief Get the current version patch of PolyTOPS
+/// \return Current version patch of PolyTOPS
 long unsigned int VersionPatch(void);
 
-/// \brief Get a string representation of the current version of MLSched
-/// \return String Representation of the current version of MLSched
+/// \brief Get a string representation of the current version of PolyTOPS
+/// \return String Representation of the current version of PolyTOPS
 std::shared_ptr<char> VersionString(void);
 
 ////////////////////////////////////////////////////////////////////////////////
-// mls::bin::Options
+// polytops::bin::Options
 ////////////////////////////////////////////////////////////////////////////////
 
-/// \brief Options for the MLSChed polyhedral scheduler
+/// \brief Options for the POLYTOPSChed polyhedral scheduler
 class Options {
  private:
-  /// \brief Inner MLSched options
-  mls::runtime::Options *options_{nullptr};
+  /// \brief Inner PolyTOPS options
+  polytops::runtime::Options *options_{nullptr};
 
  public:
   ////////////////////////////////////////////////////////////////////////////////
@@ -107,14 +107,14 @@ class Options {
   /// \brief Get a string representation of a Solver type
   /// \param t Type to represent as a string
   /// \return A string representation of \a t
-  /// \relatesalso mls::bin::Options::SolverType
-  static std::shared_ptr<char> SolverTypeToString(mls::bin::Options::SolverType t);
+  /// \relatesalso polytops::bin::Options::SolverType
+  static std::shared_ptr<char> SolverTypeToString(polytops::bin::Options::SolverType t);
 
   /// \brief Read a SolverType type from a string representation
   /// \param s String to read
   /// \return Read Solver type
-  /// \relatesalso mls::bin::Options::SolverType
-  [[gnu::nonnull]] static mls::bin::Options::SolverType SolverTypeFromString(const char *str);
+  /// \relatesalso polytops::bin::Options::SolverType
+  [[gnu::nonnull]] static polytops::bin::Options::SolverType SolverTypeFromString(const char *str);
 
   ////////////////////////////////////////////////////////////////////////////////
   // Constructors, destructors, etc.
@@ -127,12 +127,12 @@ class Options {
   ~Options(void);
 
   /// \brief Copy-Constructor
-  /// \param[in] rhs Source mls::bin::Options
-  Options(const mls::bin::Options &rhs);
+  /// \param[in] rhs Source polytops::bin::Options
+  Options(const polytops::bin::Options &rhs);
 
   /// \brief Move-Constructor
-  /// \param[in,out] src Source mls::bin::Options
-  Options(mls::bin::Options &&src);
+  /// \param[in,out] src Source polytops::bin::Options
+  Options(polytops::bin::Options &&src);
 
   ////////////////////////////////////////////////////////////////////////////////
   // Operators
@@ -141,27 +141,27 @@ class Options {
   /// \brief Copy-assignment operator
   /// \param[in] rhs Source options
   /// \return Destination options
-  mls::bin::Options &operator=(mls::bin::Options rhs);
+  polytops::bin::Options &operator=(polytops::bin::Options rhs);
 
   /// \brief Dereference operator
-  /// \return Pointer to the inner mls::runtime::Options
-  mls::runtime::Options *operator*(void);
+  /// \return Pointer to the inner polytops::runtime::Options
+  polytops::runtime::Options *operator*(void);
 
   /// \brief Dereference operator
-  /// \return Pointer to the inner mls::runtime::Options
-  [[gnu::const]] const mls::runtime::Options *operator*(void) const;
+  /// \return Pointer to the inner polytops::runtime::Options
+  [[gnu::const]] const polytops::runtime::Options *operator*(void) const;
 
   ////////////////////////////////////////////////////////////////////////////////
   // Getters
   ////////////////////////////////////////////////////////////////////////////////
 
-  /// \brief Get the default verbosity level for MLSched
-  /// \return Default verbosity level for MLSched
+  /// \brief Get the default verbosity level for PolyTOPS
+  /// \return Default verbosity level for PolyTOPS
   static unsigned long int GetDefaultVerbosity(void);
 
   /// \brief Get the current solver type
   /// \return Current solver type
-  [[gnu::pure]] mls::bin::Options::SolverType GetSolverType(void) const;
+  [[gnu::pure]] polytops::bin::Options::SolverType GetSolverType(void) const;
 
   /// \brief Get the current verbosity level
   /// \return Current verbosity level
@@ -255,7 +255,7 @@ class Options {
 
   /// \brief Set the current solver type
   /// \param[in] type New solver type
-  void SetSolverType(mls::bin::Options::SolverType type);
+  void SetSolverType(polytops::bin::Options::SolverType type);
 
   /// \brief Set the current verbosity level
   /// \param[in] level New verbosity level
@@ -296,17 +296,17 @@ class Options {
   /// \brief Swap two options
   /// \param[in,out] lhs Left hand side options
   /// \param[in,out] rhs Right hand side options
-  friend void swap(mls::bin::Options &lhs, mls::bin::Options &rhs);
+  friend void swap(polytops::bin::Options &lhs, polytops::bin::Options &rhs);
 };
 
 ////////////////////////////////////////////////////////////////////////////////
-// mls::bin::InfluenceOperation
+// polytops::bin::InfluenceOperation
 ////////////////////////////////////////////////////////////////////////////////
 
-/// \brief InfluenceOperation for the MLSched polyhedral scheduler
+/// \brief InfluenceOperation for the PolyTOPS polyhedral scheduler
 class InfluenceOperation {
  public:
-  /// \brief Type for the mls::bin::InfluenceOperation class
+  /// \brief Type for the polytops::bin::InfluenceOperation class
   enum Type {
     /// \brief Undefined type
     kNone,
@@ -324,7 +324,7 @@ class InfluenceOperation {
   /// \brief Value for the operation
   long int value_{0};
   /// \brief Type of the operation
-  mls::bin::InfluenceOperation::Type type_{mls::bin::InfluenceOperation::Type::kNone};
+  polytops::bin::InfluenceOperation::Type type_{polytops::bin::InfluenceOperation::Type::kNone};
 
  public:
   /// \brief Constructor
@@ -337,7 +337,7 @@ class InfluenceOperation {
   /// \param[in] type Type of the operation
   [[gnu::nonnull]] InfluenceOperation(
     const char *statement, size_t dimension, long int value,
-    mls::bin::InfluenceOperation::Type type = mls::bin::InfluenceOperation::Type::kNone);
+    polytops::bin::InfluenceOperation::Type type = polytops::bin::InfluenceOperation::Type::kNone);
 
   /// \brief Get the target statement
   /// \result The target statement
@@ -353,21 +353,21 @@ class InfluenceOperation {
 
   /// \brief Get the type of the operation
   /// \result The value type of operation
-  mls::bin::InfluenceOperation::Type GetType(void) const;
+  polytops::bin::InfluenceOperation::Type GetType(void) const;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
-// mls::bin::Influence
+// polytops::bin::Influence
 ////////////////////////////////////////////////////////////////////////////////
 
-/// \brief Influence for the MLSched polyhedral scheduler
+/// \brief Influence for the PolyTOPS polyhedral scheduler
 ///
 /// Influence can be used to provide additional constraints to the
 /// polyhedral scheduler and to attempt to influence its behaviour.
 class Influence {
  private:
-  /// \brief Inner MLSched Influence
-  mls::Influence<int64_t> *influence_{nullptr};
+  /// \brief Inner PolyTOPS Influence
+  polytops::Influence<int64_t> *influence_{nullptr};
 
  public:
   ////////////////////////////////////////////////////////////////////////////////
@@ -381,12 +381,12 @@ class Influence {
   ~Influence(void);
 
   /// \brief Copy-Constructor
-  /// \param[in] src Source mls::bin::Influence
-  Influence(const mls::bin::Influence &src);
+  /// \param[in] src Source polytops::bin::Influence
+  Influence(const polytops::bin::Influence &src);
 
   /// \brief Move-Constructor
-  /// \param[in,out] src Source mls::bin::Influence
-  Influence(mls::bin::Influence &&src);
+  /// \param[in,out] src Source polytops::bin::Influence
+  Influence(polytops::bin::Influence &&src);
 
   /// \brief Constructor from a serialized json string of a MindTrick
   /// \param[in] str Serialized json string of a MindTrick
@@ -394,8 +394,8 @@ class Influence {
 
   /// \brief Constructor from a serialized json string of a MindTrick
   /// \param[in] str Serialized json string of a MindTrick
-  /// \param[in] options MLSched options
-  [[gnu::nonnull]] Influence(const char *str, const mls::bin::Options &options);
+  /// \param[in] options PolyTOPS options
+  [[gnu::nonnull]] Influence(const char *str, const polytops::bin::Options &options);
 
   ////////////////////////////////////////////////////////////////////////////////
   // Operators
@@ -404,15 +404,15 @@ class Influence {
   /// \brief Copy-assignment operator
   /// \param[in] rhs Source Influence
   /// \return Destination options
-  mls::bin::Influence &operator=(mls::bin::Influence rhs);
+  polytops::bin::Influence &operator=(polytops::bin::Influence rhs);
 
   /// \brief Dereference operator
-  /// \return Pointer to the inner mls::Influence
-  mls::Influence<int64_t> *operator*(void);
+  /// \return Pointer to the inner polytops::Influence
+  polytops::Influence<int64_t> *operator*(void);
 
   /// \brief Dereference operator
-  /// \return Pointer to the inner mls::Influence
-  [[gnu::const]] const mls::Influence<int64_t> *operator*(void) const;
+  /// \return Pointer to the inner polytops::Influence
+  [[gnu::const]] const polytops::Influence<int64_t> *operator*(void) const;
 
   ////////////////////////////////////////////////////////////////////////////////
   // Getters
@@ -426,7 +426,7 @@ class Influence {
 
   /// \brief Get the ordered vector of modulo and divisions operations
   /// \return The vector of modulo and divisions operations
-  std::vector<mls::bin::InfluenceOperation> GetOperations(void) const;
+  std::vector<polytops::bin::InfluenceOperation> GetOperations(void) const;
 
   /// \brief Get a string representation of object
   /// \return A string representation of the object
@@ -436,7 +436,7 @@ class Influence {
   /// \brief Get a string representation of object
   /// \param[in] options Options that may change the string representation
   /// \return A string representation of the object
-  std::shared_ptr<char> String(const mls::bin::Options &options) const;
+  std::shared_ptr<char> String(const polytops::bin::Options &options) const;
 
   ////////////////////////////////////////////////////////////////////////////////
   // Setters
@@ -453,21 +453,21 @@ class Influence {
   /// \brief Swap two Influence
   /// \param[in,out] lhs Left hand side Influence
   /// \param[in,out] rhs Right hand side Influence
-  friend void swap(mls::bin::Influence &lhs, mls::bin::Influence &rhs);
+  friend void swap(polytops::bin::Influence &lhs, polytops::bin::Influence &rhs);
 };
 
 ////////////////////////////////////////////////////////////////////////////////
-// mls::bin::Hints
+// polytops::bin::Hints
 ////////////////////////////////////////////////////////////////////////////////
 
-/// \brief Hints for the MLSched polyhedral scheduler
+/// \brief Hints for the PolyTOPS polyhedral scheduler
 ///
 /// Hints can be used to provide additional constraints to the
 /// polyhedral scheduler and to attempt to influence its behaviour.
 class Hints {
  private:
-  /// \brief Inner MLSched Hints
-  mls::Hints<int64_t> *hints_{nullptr};
+  /// \brief Inner PolyTOPS Hints
+  polytops::Hints<int64_t> *hints_{nullptr};
 
  public:
   ////////////////////////////////////////////////////////////////////////////////
@@ -481,12 +481,12 @@ class Hints {
   ~Hints(void);
 
   /// \brief Copy-Constructor
-  /// \param[in] src Source mls::bin::Hints
-  Hints(const mls::bin::Hints &src);
+  /// \param[in] src Source polytops::bin::Hints
+  Hints(const polytops::bin::Hints &src);
 
   /// \brief Move-Constructor
-  /// \param[in,out] src Source mls::bin::Hints
-  Hints(mls::bin::Hints &&src);
+  /// \param[in,out] src Source polytops::bin::Hints
+  Hints(polytops::bin::Hints &&src);
 
   /// \brief Constructor from a serialized json string of a MindTrick
   /// \param[in] str Serialized json string of a MindTrick
@@ -494,13 +494,13 @@ class Hints {
 
   /// \brief Constructor from a serialized json string of a MindTrick
   /// \param[in] str Serialized json string of a MindTrick
-  /// \param[in] options MLSched options
-  [[gnu::nonnull]] Hints(const char *str, const mls::bin::Options &options);
+  /// \param[in] options PolyTOPS options
+  [[gnu::nonnull]] Hints(const char *str, const polytops::bin::Options &options);
 
   /// \brief Constructor from a isl_union_map
   /// \param[in] directives Hints represented as an isl_union_map
   /// \param[in] options Runtime options
-  [[gnu::nonnull]] Hints(__isl_keep isl_union_map *const directives, const mls::bin::Options &options);
+  [[gnu::nonnull]] Hints(__isl_keep isl_union_map *const directives, const polytops::bin::Options &options);
 
   ////////////////////////////////////////////////////////////////////////////////
   // Operators
@@ -509,15 +509,15 @@ class Hints {
   /// \brief Copy-assignment operator
   /// \param[in] rhs Source Hints
   /// \return Destination options
-  mls::bin::Hints &operator=(mls::bin::Hints rhs);
+  polytops::bin::Hints &operator=(polytops::bin::Hints rhs);
 
   /// \brief Dereference operator
-  /// \return Pointer to the inner mls::Hints
-  mls::Hints<int64_t> *operator*(void);
+  /// \return Pointer to the inner polytops::Hints
+  polytops::Hints<int64_t> *operator*(void);
 
   /// \brief Dereference operator
-  /// \return Pointer to the inner mls::Hints
-  [[gnu::const]] const mls::Hints<int64_t> *operator*(void) const;
+  /// \return Pointer to the inner polytops::Hints
+  [[gnu::const]] const polytops::Hints<int64_t> *operator*(void) const;
 
   ////////////////////////////////////////////////////////////////////////////////
   // Getters
@@ -535,14 +535,14 @@ class Hints {
   /// \retval false otherwise
   [[gnu::pure]] bool HaveDirectives(void) const;
 
-  /// \brief Check whether the Hints has serials directives for a given stateemnt
+  /// \brief Check whether the Hints has serials directives for a given statement
   /// \param[in] statement Target statement
   /// \return A boolean value that indicates whether the Hints has serials directives for \a statement
   /// \retval true if the Hints has serials directives for \a statement
   /// \retval false otherwise
   [[gnu::pure]] bool HasStatementSerials(const char *statement) const;
 
-  /// \brief Check whether the Hints has vectorials directives for a given stateemnt
+  /// \brief Check whether the Hints has vectorials directives for a given statement
   /// \param[in] statement Target statement
   /// \return A boolean value that indicates whether the Hints has vectorials directives for \a statement
   /// \retval true if the Hints has vectorials directives for \a statement
@@ -556,36 +556,36 @@ class Hints {
   /// \retval false otherwise
   [[gnu::pure]] bool HasStatementReduces(const char *statement) const;
 
-  /// \brief Check whether the Hints has parallels directives for a given stateemnt
+  /// \brief Check whether the Hints has parallels directives for a given statement
   /// \param[in] statement Target statement
   /// \return A boolean value that indicates whether the Hints has parallels directives for \a statement
   /// \retval true if the Hints has parallels directives for \a statement
   /// \retval false otherwise
   [[gnu::pure]] bool HasStatementParallels(const char *statement) const;
 
-  /// \brief Get the Serials component of the directives for a given statement
+  /// \brief Get the Serials component of the hints for a given statement
   /// \param[in] statement Target statement
-  /// \return Serials component of the directives
+  /// \return Serials component of the hints
   [[gnu::pure]] const std::vector<int> &GetStatementSerials(const char *statement) const;
 
-  /// \brief Get the Vectorials component of the directives for a given statement
+  /// \brief Get the Vectorials component of the hints for a given statement
   /// \param[in] statement Target statement
-  /// \return Vectorials component of the directives
+  /// \return Vectorials component of the hints
   [[gnu::pure]] const std::vector<int> &GetStatementVectorials(const char *statement) const;
 
-  /// \brief Get the Reduces component of the directives for a given statement
+  /// \brief Get the Reduces component of the hints for a given statement
   /// \param[in] statement Target statement
-  /// \return Reduces component of the directives
+  /// \return Reduces component of the hints
   [[gnu::pure]] const std::vector<int> &GetStatementReduces(const char *statement) const;
 
-  /// \brief Get the Parallels component of the directives for a given statement
+  /// \brief Get the Parallels component of the hints for a given statement
   /// \param[in] statement Target statement
-  /// \return Parallels component of the directives
+  /// \return Parallels component of the hints
   [[gnu::pure]] const std::vector<int> &GetStatementParallels(const char *statement) const;
 
   /// \brief Get the Influence component of the hints
   /// \return Influence component of the hints
-  mls::bin::Influence GetInfluence(void) const;
+  polytops::bin::Influence GetInfluence(void) const;
 
   /// \brief Get a string representation of object
   /// \return A string representation of the object
@@ -595,31 +595,55 @@ class Hints {
   /// \brief Get a string representation of object
   /// \param[in] options Options that may change the string representation
   /// \return A string representation of the object
-  [[gnu::nonnull]] std::shared_ptr<char> String(const mls::bin::Options &options) const;
+  [[gnu::nonnull]] std::shared_ptr<char> String(const polytops::bin::Options &options) const;
 
   ////////////////////////////////////////////////////////////////////////////////
   // Setters
   ////////////////////////////////////////////////////////////////////////////////
 
-  /// \brief Set the Serials component of the directives
+  /// \brief Set the Serials component of the hints
   /// \param[in] serials Serials component for the directives
   [[gnu::nonnull]] void SetStatementSerials(const char *statement, const std::vector<int> &serials);
 
-  /// \brief Set the Vectorials component of the directives
+  /// \brief Set the Vectorials component of the hints
   /// \param[in] vectorials Vectorials component for the directives
   [[gnu::nonnull]] void SetStatementVectorials(const char *statement, const std::vector<int> &vectorials);
 
-  /// \brief Set the Reduces component of the directives
+  /// \brief Set the Reduces component of the hints
   /// \param[in] reduces Reduces component for the directives
   [[gnu::nonnull]] void SetStatementReduces(const char *statement, const std::vector<int> &reduces);
 
-  /// \brief Set the Parallels component of the directives
+  /// \brief Set the Parallels component of the hints
   /// \param[in] parallels Parallels component for the directives
   [[gnu::nonnull]] void SetStatementParallels(const char *statement, const std::vector<int> &parallels);
 
   /// \brief Set the Influence component of the hints
   /// \param[in] influence Influence component of the hints
-  void SetInfluence(const mls::bin::Influence &influence);
+  void SetInfluence(const polytops::bin::Influence &influence);
+
+  /// \brief Import Serials from another polytops::bin::Hints
+  /// \param[in] hints Input hints
+  void ImportSerials(const polytops::bin::Hints &hints);
+
+  /// \brief Import Vectorials from another polytops::bin::Hints
+  /// \param[in] hints Input hints
+  void ImportVectorials(const polytops::bin::Hints &hints);
+
+  /// \brief Import Reduces from another polytops::bin::Hints
+  /// \param[in] hints Input hints
+  void ImportReduces(const polytops::bin::Hints &hints);
+
+  /// \brief Import Parallels from another polytops::bin::Hints
+  /// \param[in] hints Input hints
+  void ImportParallels(const polytops::bin::Hints &hints);
+
+  /// \brief Import Directives from another polytops::bin::Hints
+  /// \param[in] hints Input hints
+  void ImportDirectives(const polytops::bin::Hints &hints);
+
+  /// \brief Import Influence from another polytops::bin::Hints
+  /// \param[in] hints Input hints
+  void ImportInfluence(const polytops::bin::Hints &hints);
 
   /// \brief Clear all directive components of the Hints
   /// \post GetSerials().empty() == true
@@ -643,18 +667,18 @@ class Hints {
   /// \brief Swap two Hints
   /// \param[in,out] lhs Left hand side Hints
   /// \param[in,out] rhs Right hand side Hints
-  friend void swap(mls::bin::Hints &lhs, mls::bin::Hints &rhs);
+  friend void swap(polytops::bin::Hints &lhs, polytops::bin::Hints &rhs);
 };
 
 ////////////////////////////////////////////////////////////////////////////////
-// mls::bin::Scop
+// polytops::bin::Scop
 ////////////////////////////////////////////////////////////////////////////////
 
-/// \brief Scop data for the MLSched polyhedral scheduler
+/// \brief Scop data for the PolyTOPS polyhedral scheduler
 class Scop {
  private:
-  /// \brief Pointer to the inner mls::Scop
-  mls::Scop<int64_t> *scop_{nullptr};
+  /// \brief Pointer to the inner polytops::Scop
+  polytops::Scop<int64_t> *scop_{nullptr};
 
  public:
   ////////////////////////////////////////////////////////////////////////////////
@@ -668,40 +692,40 @@ class Scop {
   ~Scop(void);
 
   /// \brief Copy-Constructor
-  /// \param[in] src Source mls::bin::Scop
-  Scop(const mls::bin::Scop &src);
+  /// \param[in] src Source polytops::bin::Scop
+  Scop(const polytops::bin::Scop &src);
 
   /// \brief Move-Constructor
-  /// \param[in,out] src Source mls::bin::Scop
-  Scop(mls::bin::Scop &&src);
+  /// \param[in,out] src Source polytops::bin::Scop
+  Scop(polytops::bin::Scop &&src);
 
   /// \brief Constructor from isl data
   /// \param[in] sch Initial schedule
   /// \param[in] dependencies Dependencies
-  /// \param[in] options Options for MLSched
+  /// \param[in] options Options for PolyTOPS
   /// \param[in] name Optional name for the Scop
   [[gnu::nonnull(1, 2)]] Scop(__isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies,
-                              const mls::bin::Options &options, const char *name = nullptr);
+                              const polytops::bin::Options &options, const char *name = nullptr);
 
   /// \brief Constructor from isl data
   /// \param[in] sch Initial schedule
   /// \param[in] dependencies Dependencies
   /// \param[in] reads Reads
   /// \param[in] writes Writes
-  /// \param[in] options Options for MLSched
+  /// \param[in] options Options for PolyTOPS
   /// \param[in] name Optional name for the Scop
   [[gnu::nonnull(1, 4)]] Scop(__isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies,
                               __isl_keep isl_union_map *reads, __isl_keep isl_union_map *writes,
-                              const mls::bin::Options &options, const char *name = nullptr);
+                              const polytops::bin::Options &options, const char *name = nullptr);
 
   /// \brief Constructor from isl data
   /// \param[in] sch Initial schedule
   /// \param[in] dependencies Dependencies
-  /// \param[in] influence Influence for MLSched
-  /// \param[in] options Options for MLSched
+  /// \param[in] influence Influence for PolyTOPS
+  /// \param[in] options Options for PolyTOPS
   /// \param[in] name Optional name for the Scop
   [[gnu::nonnull(1, 2)]] Scop(__isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies,
-                              const mls::bin::Influence &influence, const mls::bin::Options &options,
+                              const polytops::bin::Influence &influence, const polytops::bin::Options &options,
                               const char *name = nullptr);
 
   /// \brief Constructor from isl data
@@ -709,22 +733,22 @@ class Scop {
   /// \param[in] dependencies Dependencies
   /// \param[in] reads Reads
   /// \param[in] writes Writes
-  /// \param[in] influence Influence for MLSched
-  /// \param[in] options Options for MLSched
+  /// \param[in] influence Influence for PolyTOPS
+  /// \param[in] options Options for PolyTOPS
   /// \param[in] name Optional name for the Scop
   [[gnu::nonnull(1, 4)]] Scop(__isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies,
                               __isl_keep isl_union_map *reads, __isl_keep isl_union_map *writes,
-                              const mls::bin::Influence &influence, const mls::bin::Options &options,
+                              const polytops::bin::Influence &influence, const polytops::bin::Options &options,
                               const char *name = nullptr);
 
   /// \brief Constructor from isl data
   /// \param[in] sch Initial schedule
   /// \param[in] dependencies Dependencies
-  /// \param[in] hints Hints for MLSched
-  /// \param[in] options Options for MLSched
+  /// \param[in] hints Hints for PolyTOPS
+  /// \param[in] options Options for PolyTOPS
   /// \param[in] name Optional name for the Scop
   [[gnu::nonnull(1, 2)]] Scop(__isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies,
-                              const mls::bin::Hints &hints, const mls::bin::Options &options,
+                              const polytops::bin::Hints &hints, const polytops::bin::Options &options,
                               const char *name = nullptr);
 
   /// \brief Constructor from isl data
@@ -732,12 +756,12 @@ class Scop {
   /// \param[in] dependencies Dependencies
   /// \param[in] reads Reads
   /// \param[in] writes Writes
-  /// \param[in] hints Hints for MLSched
-  /// \param[in] options Options for MLSched
+  /// \param[in] hints Hints for PolyTOPS
+  /// \param[in] options Options for PolyTOPS
   /// \param[in] name Optional name for the Scop
   [[gnu::nonnull(1, 4)]] Scop(__isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies,
                               __isl_keep isl_union_map *reads, __isl_keep isl_union_map *writes,
-                              const mls::bin::Hints &hints, const mls::bin::Options &options,
+                              const polytops::bin::Hints &hints, const polytops::bin::Options &options,
                               const char *name = nullptr);
 
   ////////////////////////////////////////////////////////////////////////////////
@@ -747,15 +771,15 @@ class Scop {
   /// \brief Copy-assignment operator
   /// \param[in] rhs Source Scop
   /// \return Destination Scop
-  mls::bin::Scop &operator=(mls::bin::Scop rhs);
+  polytops::bin::Scop &operator=(polytops::bin::Scop rhs);
 
   /// \brief Dereference operator
-  /// \return Pointer to the inner mls::Scop
-  mls::Scop<int64_t> *operator*(void);
+  /// \return Pointer to the inner polytops::Scop
+  polytops::Scop<int64_t> *operator*(void);
 
   /// \brief Dereference operator
-  /// \return Pointer to the inner mls::Hints
-  [[gnu::const]] const mls::Scop<int64_t> *operator*(void) const;
+  /// \return Pointer to the inner polytops::Hints
+  [[gnu::const]] const polytops::Scop<int64_t> *operator*(void) const;
 
   ////////////////////////////////////////////////////////////////////////////////
   // Operations
@@ -773,7 +797,7 @@ class Scop {
   /// \param[in] ctx isl_ctx to use for the conversion into an isl schedule tree
   /// \return The computed schedule represented as an isl schedule tree
   /// \pre ComputeSchedule() has been called and returned true
-  /// \seealso mls::bin::Scop::ComputeSchedule()
+  /// \seealso polytops::bin::Scop::ComputeSchedule()
   [[nodiscard]] __isl_give isl_schedule *ToIslSchedule(__isl_keep isl_ctx *ctx) const;
 
   /// \brief Check a schedule
@@ -791,15 +815,15 @@ class Scop {
   /// \brief Get a string representation of object
   /// \param[in] options Options that may change the string representation
   /// \return A string representation of the object
-  std::shared_ptr<char> String(const mls::bin::Options &options) const;
+  std::shared_ptr<char> String(const polytops::bin::Options &options) const;
 
   ////////////////////////////////////////////////////////////////////////////////
   // Misc. friend functions
   ////////////////////////////////////////////////////////////////////////////////
 
-  friend void swap(mls::bin::Scop &lhs, mls::bin::Scop &rhs);
+  friend void swap(polytops::bin::Scop &lhs, polytops::bin::Scop &rhs);
 };
 }  // namespace bin
-}  // namespace mls
+}  // namespace polytops
 
-#endif  // _MLS_H
+#endif  // _POLYTOPS_H

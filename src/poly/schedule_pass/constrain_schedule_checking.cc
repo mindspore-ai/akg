@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifdef AKG_USE_MLS
+#ifdef AKG_USE_POLYTOPS
 
 #include "poly/schedule_pass/constrain_schedule.h"
 
@@ -203,4 +203,4 @@ static __isl_give isl_stat isl_schedule_check(const isl::schedule &schedule,
 }  // namespace ir
 }  // namespace akg
 
-#endif  // AKG_USE_MLS
+#endif  // AKG_USE_POLYTOPS

@@ -18,8 +18,8 @@
 
 #include "poly/schedule_pass.h"
 
-#ifdef AKG_USE_MLS
-#include "poly/mls.h"
+#ifdef AKG_USE_POLYTOPS
+#include "poly/polytops.h"
 #endif
 
 namespace akg {

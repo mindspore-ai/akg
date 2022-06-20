@@ -17,8 +17,8 @@
 #include "poly/schedule_tree_util.h"
 #include "poly/isl_util.h"
 
-#ifdef AKG_USE_MLS
-#include "poly/mls.h"
+#ifdef AKG_USE_POLYTOPS
+#include "poly/polytops.h"
 #endif
 
 namespace akg {
@@ -222,37 +222,59 @@ isl::schedule ComputeSchedule::Run(isl::schedule sch) {
   pass_info_.constraints_ = MakeScheduleConstraints(sch, pass_info_);
 
   isl::schedule result;
-#ifdef AKG_USE_MLS
-  const bool enable_mlsched = MLSchedShouldBeUsed(scop_info_);
-  bool enable_isl = !enable_mlsched;
+#ifdef AKG_USE_POLYTOPS
+  const bool enable_polytops = PolyTOPSShouldBeUsed(scop_info_);
+  bool enable_isl = !enable_polytops;
 
-  if (enable_mlsched) {
-    mls::bin::Options options = MLSchedOptionsInit(pass_info_, scop_info_);
+  if (enable_polytops) {
+    polytops::bin::Options options = PolyTOPSOptionsInit(pass_info_, scop_info_);
     if (options.ShouldLogInternalDebugging()) {
-      LOG(INFO) << "MLSched v." << mls::bin::VersionString() << std::endl;
+      LOG(INFO) << "PolyTOPS v." << polytops::bin::VersionString() << std::endl;
       LOG(INFO) << options.String() << std::endl;
     }
 
+    // Initialize the PolyTOPS SCoP
     const std::string &kernel_name = scop_info_.user_config_.GetKernelName();
-    const mls::bin::Hints hints = ExtractDirectivesFromAKG(scop_info_);
-    const isl::union_map reads = UnwrappedAccesses(scop_info_.analysis_result_.GetReads());
-    const isl::union_map writes = UnwrappedAccesses(scop_info_.analysis_result_.GetWrites());
+    const polytops::bin::Hints hints = ExtractDirectivesFromAKG(scop_info_);
+    const isl::union_map reads = scop_info_.analysis_result_.GetReads().domain_factor_domain();
+    const isl::union_map writes = scop_info_.analysis_result_.GetWrites().domain_factor_domain();
     isl_union_map *const dependences = pass_info_.dependences_.get();
-    mls::bin::Scop scop(sch.get(), dependences, reads.get(), writes.get(), hints, options, kernel_name.c_str());
-    const bool mlsched_success = scop.ComputeSchedule();
+    polytops::bin::Scop scop(sch.get(), dependences, reads.get(), writes.get(), hints, options, kernel_name.c_str());
+    // Compute a schedule
+    bool polytops_success = scop.ComputeSchedule();
     if (options.ShouldLogInternalDebugging()) {
       LOG(INFO) << scop.String(options) << std::endl;
     }
-
-    if (mlsched_success) {
+    // Extract the computed schedule and maybe recheck it
+    if (polytops_success) {
+      // First extract the schedule
       result = isl::manage(scop.ToIslSchedule(sch.ctx().get()));
+      // Maybe recheck the schedule
+      const bool should_check = PolyTOPSShouldCheckSchedules(scop_info_);
+      if (should_check) {
+        polytops_success = scop.CheckSchedule(result.get());
+        if (!polytops_success) {
+          LOG(INFO) << "Possibly illegal schedule" << std::endl;
+        } else {
+          LOG(INFO) << "Valid schedule" << std::endl;
+        }
+      }
     } else {
+      LOG(INFO) << "PolyTOPS could not compute a schedule" << std::endl;
+    }
+
+    if (polytops_success) {
+      // result already contains the schedule, we just record extra info
+      scop_info_.user_config_.SetPolyTOPSWasUsed(true);
+    } else {
+      // result will be overwritten with isl's schedule
       enable_isl = true;
+      LOG(INFO) << "Fallback to isl" << std::endl;
     }
   }
 
-  // Schedule with isl if MLSched is disabled or cannot return a schedule
-  if (!enable_mlsched || enable_isl) {
+  // Schedule with isl if PolyTOPS is disabled or cannot return a schedule
+  if (!enable_polytops || enable_isl) {
     SetIslOptions();
     result = pass_info_.constraints_.compute_schedule();
   }

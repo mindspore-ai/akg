@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifdef AKG_USE_MLS
+#ifdef AKG_USE_POLYTOPS
 
 #include "scheduling_mind_trick.h"
 
@@ -892,9 +892,9 @@ void SchedulingMindTrick::Parse(const picojson::value &root) {
   ParseCheckSchedule(maybe(root, "check schedule"));
   ParseAttrs(maybe(root, "attrs"));
   ParseVerbosity(maybe(root, "verbosity"));
-#ifdef AKG_USE_MLS
+#ifdef AKG_USE_POLYTOPS
   const std::string serialized = root.serialize();
-  hints_ = mls::bin::Hints(serialized.c_str());
+  hints_ = polytops::bin::Hints(serialized.c_str());
 #endif
 }
 
@@ -1152,12 +1152,12 @@ isl::schedule_node_band SchedulingMindTrick::DetectAndSplitSwizzleDim(const isl:
   const long size = isl_set_plain_get_num_si(lexmax, innermost) + 1;
   log::Info(log::Verbosity::medium, "innermost = " + std::to_string(innermost) + ", size = " + std::to_string(size));
   if (size == 2 || size == 4) {
-    const std::vector<mls::bin::InfluenceOperation> operations = hints_.GetInfluence().GetOperations();
+    const std::vector<polytops::bin::InfluenceOperation> operations = hints_.GetInfluence().GetOperations();
 
     bool is_swizzle_dim = false;
     for (auto operation : operations) {
-      const mls::bin::InfluenceOperation::Type type = operation.GetType();
-      if (type != mls::bin::InfluenceOperation::kModulo) {
+      const polytops::bin::InfluenceOperation::Type type = operation.GetType();
+      if (type != polytops::bin::InfluenceOperation::kModulo) {
         continue;
       }
 
@@ -1417,7 +1417,7 @@ isl::schedule SchedulingMindTrick::GpuAutomap(const isl::schedule &schedule, Gpu
 }
 
 bool SchedulingMindTrick::BuildInfluencedSchedule(const isl::schedule &schedule) {
-#ifdef AKG_USE_MLS
+#ifdef AKG_USE_POLYTOPS
   if (hints_.Empty()) {
     return false;
   }
@@ -1427,18 +1427,18 @@ bool SchedulingMindTrick::BuildInfluencedSchedule(const isl::schedule &schedule)
   isl_union_map *const reads = scop_info_.analysis_result_.GetReads().get();
   isl_union_map *const writes = scop_info_.analysis_result_.GetWrites().get();
 
-  const mls::bin::Options options = MLSchedOptionsInit(pass_info_, scop_info_);
+  const polytops::bin::Options options = PolyTOPSOptionsInit(pass_info_, scop_info_);
   if (options.ShouldLogInternalDebugging()) {
-    LOG(INFO) << "MLSched v." << mls::bin::VersionString();
+    LOG(INFO) << "PolyTOPS v." << polytops::bin::VersionString();
     LOG(INFO) << options.String();
   }
 
   const std::string &kernel_name = scop_info_.user_config_.GetKernelName();
   if (!hints_.HaveDirectives()) {
-    mls::bin::Hints directive_hint = ExtractDirectivesFromAKG(scop_info_);
+    polytops::bin::Hints directive_hint = ExtractDirectivesFromAKG(scop_info_);
     UpdateHints(directive_hint);
   }
-  mls::bin::Scop scop(initial_schedule, dependences, reads, writes, hints_, options, kernel_name.c_str());
+  polytops::bin::Scop scop(initial_schedule, dependences, reads, writes, hints_, options, kernel_name.c_str());
   const bool success = scop.ComputeSchedule();
 
   if (options.ShouldLogInternalDebugging()) {
@@ -1653,8 +1653,8 @@ isl::schedule SchedulingMindTrick::GpuPostProcessSchedule(const isl::schedule &s
 // Directives utils
 ///////////////////////////////////////////////////////////////////////////
 
-#ifdef AKG_USE_MLS
-void SchedulingMindTrick::UpdateHints(const mls::bin::Hints &directive_hint) {
+#ifdef AKG_USE_POLYTOPS
+void SchedulingMindTrick::UpdateHints(const polytops::bin::Hints &directive_hint) {
   if (!hints_.HaveDirectives()) {
     ForTypeMap directives = scop_info_.analysis_result_.GetForTypeMap();
     for (const auto &[stmt, vloop_directive] : directives) {
@@ -1758,9 +1758,7 @@ static inline std::string escape(const char *input, char c) {
   return stream.str();
 }
 
-static inline std::string escape(const std::string &input, char c) {
-  return escape(input.c_str(), c);
-}
+static inline std::string escape(const std::string &input, char c) { return escape(input.c_str(), c); }
 
 static inline std::string quote(const std::string &input) { return "\"" + input + "\""; }
 
@@ -2257,4 +2255,4 @@ void SchedulingMindTrick::SetType(MindTrickType type) { type_ = type; }
 }  // namespace ir
 }  // namespace akg
 
-#endif  // AKG_USE_MLS
+#endif  // AKG_USE_POLYTOPS

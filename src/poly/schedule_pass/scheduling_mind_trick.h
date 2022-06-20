@@ -15,7 +15,7 @@
  */
 #ifndef POLY_SCHEDULING_MIND_TRICK_H_
 #define POLY_SCHEDULING_MIND_TRICK_H_
-#ifdef AKG_USE_MLS
+#ifdef AKG_USE_POLYTOPS
 
 // STL includes
 #include <ostream>
@@ -30,9 +30,9 @@
 #include <tvm/node/container.h>
 #include <tvm/node/node.h>
 
-// MLSched
-#ifdef AKG_USE_MLS
-#include "poly/mls.h"
+// PolyTOPS
+#ifdef AKG_USE_POLYTOPS
+#include "poly/polytops.h"
 #endif
 
 // Internal headers
@@ -200,8 +200,8 @@ class SchedulingMindTrick {
   // Directives utils
   ///////////////////////////////////////////////////////////////////////////
 
-#ifdef AKG_USE_MLS
-  void UpdateHints(const mls::bin::Hints &directive_hint);
+#ifdef AKG_USE_POLYTOPS
+  void UpdateHints(const polytops::bin::Hints &directive_hint);
 #endif
 
   ///////////////////////////////////////////////////////////////////////////
@@ -279,8 +279,8 @@ class SchedulingMindTrick {
   std::string suggested_schedule_string_{""};
   std::vector<std::string> suggested_schedule_vector_;
 
-#ifdef AKG_USE_MLS
-  mls::bin::Hints hints_;
+#ifdef AKG_USE_POLYTOPS
+  polytops::bin::Hints hints_;
 #endif
 
   std::string parse_soft_constraints_log_str_{""};
@@ -333,5 +333,5 @@ std::tuple<std::string, std::string> AutoGenAscend910SoftConstraints(const ScopI
 }  // namespace ir
 }  // namespace akg
 
-#endif  // AKG_USE_MLS
+#endif  // AKG_USE_POLYTOPS
 #endif  // POLY_SCHEDULING_MIND_TRICK_H_
