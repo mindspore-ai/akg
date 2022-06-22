@@ -109,6 +109,12 @@ void CpuStrategy::SetParallelTileValue(TileAxis *axis, const int64_t axis_size, 
     parallel_num = evaluate_num;
   }
   int64_t tile_value = axis_size / parallel_num;
+  auto direction = analyzer_->scop_info_.analysis_result_.GetOuterBandNode(current_band_)->reduce_direction;
+  if (direction == ReduceDirection::Y || direction == ReduceDirection::ALL) {
+    if (axis_size % parallel_num != 0) {
+      tile_value = axis_size;
+    }
+  }
   if (tile_value < min_unroll_num_) {
     tile_value = std::min(axis_size, static_cast<int64_t>(min_unroll_num_));
     c0_tile_value = tile_value;
@@ -189,6 +195,7 @@ void CpuStrategy::SetMultiLevelTileValue() {
     return;
   }
   for (auto idx = 0; idx < static_cast<int>(pending_axes_.size()); ++idx) {
+    current_band_ = idx;
     auto op_type = analyzer_->scop_info_.analysis_result_.GetOuterBandNode()->template_type;
     if (op_type == Template::MATMUL) {
       SetMatMulTileValue(idx);
