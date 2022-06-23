@@ -69,7 +69,7 @@ Refer to [MindSpore Installation](https://www.mindspore.cn/install/en) for more 
   source ./test_env.sh gpu
   ```
 
-- CPU V100/A100
+- CPU
   ```
   cd tests
   source ./test_env.sh cpu
