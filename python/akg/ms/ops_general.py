@@ -88,7 +88,7 @@ def mul(x, y, target=utils.CUDA):
 @reg_op("Sub")
 def sub(x, y, target=utils.CUDA):
     """Sub"""
-    return math.Sub(x, y, target)
+    return math.sub(x, y, target)
 
 
 @reg_op("Div")
@@ -202,7 +202,7 @@ def exp(x, target=utils.CUDA):
 @reg_op("Sum")
 def tensor_sum(data, axis=None, keepdims=False, target=utils.CUDA):
     """Sum"""
-    return math.Sum(data, axis, keepdims, target=target)
+    return math.sum(data, axis, keepdims, target=target)
 
 
 @reg_op("Reshape")
@@ -239,3 +239,9 @@ def unsorted_segment_max(data, segment_ids, num_segments, target=utils.CCE):
 def unsorted_segment_sum(data, indices, num, op_id=0, target=utils.CUDA):
     """UnsortedSegmentSum"""
     return array.unsorted_segment_sum(data, indices, num, op_id, target)
+
+
+@reg_op("Sqrt")
+def sqrt(x, target=utils.CUDA):
+    """Sqrt"""
+    return math.sqrt(x, target)

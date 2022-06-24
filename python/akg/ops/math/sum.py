@@ -19,8 +19,9 @@ import akg.tvm
 from akg.utils import format_transform as ft_util
 import akg.utils as utils
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, (list, tuple, int, type(None)), (bool, type(None)), (str, type(None)))
-def Sum(inputs, axis=None, keepdims=False, target=utils.CCE):
+def sum(inputs, axis=None, keepdims=False, target=utils.CCE):
     """
     Compute the sum of elements across dimensions of a tensor.
 
@@ -32,7 +33,7 @@ def Sum(inputs, axis=None, keepdims=False, target=utils.CCE):
     Returns:
         tvm.tensor.Tensor, has same type as input. If keepdims is True, all reduced dimensions are retained
         with length 1, else these reduced axis will be eliminate.
-    
+
     Supported Platforms:
         'Ascend', 'GPU', 'CPU'
     """

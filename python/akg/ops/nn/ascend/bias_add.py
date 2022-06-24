@@ -23,7 +23,7 @@ from akg.utils.format_transform import get_shape
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, str, (str, type(None)))
-def BiasAdd(data1, data2, data_format, target=utils.CCE):
+def bias_add(data1, data2, data_format, target=utils.CCE):
     """
     Adds bias data2 to input tensor data1.
 
@@ -35,7 +35,7 @@ def BiasAdd(data1, data2, data_format, target=utils.CCE):
 
     Returns:
         tvm.tensor.Tensor of same shape and type as data1.
-    
+
     Supported Platforms:
         'Ascend'
     """

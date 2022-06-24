@@ -14,7 +14,8 @@
 
 import akg.utils as utils
 from .abs import Abs
-from .sum import Sum
+from .sum import sum
+
 
 def AbsSum(inputs, axis=None, keepdims=False, target=utils.CCE):
     """
@@ -27,10 +28,10 @@ def AbsSum(inputs, axis=None, keepdims=False, target=utils.CCE):
 
     Returns:
         A akg.tvm.Tensor of same type as inputs.
-    
+
     Supported Platforms:
         'Ascend', 'GPU', 'CPU'
     """
     utils.check_supported_target(target)
     input_abs = Abs(inputs, target)
-    return Sum(input_abs, axis, keepdims, target=target)
+    return sum(input_abs, axis, keepdims, target=target)

@@ -17,7 +17,7 @@ import akg.tvm
 from akg.utils.kernel_exec import product_is_mini
 from akg.utils import validation_check as utils
 from akg.utils.format_transform import get_shape
-from ..sub import Sub
+from ..sub import sub
 from ..abs import Abs
 from ..cast import Cast
 
@@ -35,7 +35,7 @@ def approximate_equal(x, y, tolerance=1e-5, target=utils.CCE):
     Returns:
         tvm.tensor.Tensor. If abs(x-y) less than or equal to the tolerance return True,
         else return False.
-    
+
     Supported Platforms:
         'Ascend'
     """
@@ -59,7 +59,7 @@ def approximate_equal(x, y, tolerance=1e-5, target=utils.CCE):
         raise RuntimeError("input type must be same, but got %s  vs %s",
                            dtype, y.dtype)
 
-    res_vsub = Sub(x, y, target)
+    res_vsub = sub(x, y, target)
     res_vabs = Abs(res_vsub, target)
 
     # As vcmp_lt and vsel instruction don't support fp32 on mini

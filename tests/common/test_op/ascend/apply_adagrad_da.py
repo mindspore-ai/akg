@@ -16,11 +16,12 @@
 import akg
 import akg.utils as utils
 from akg import topi, tvm
-from akg.ops.math import Sqrt, reciprocal
+from akg.ops.math import sqrt, reciprocal
 from akg.ops.math.ascend import Sign
 from akg.utils.kernel_exec import product_is_mini
 from akg.utils.dsl_create import TensorUtils
 from akg.utils.format_transform import get_shape
+
 
 def _apply_adagrad_da_compute(var, gradient_accum, gradient_squared_accum,
                               grad, lr, l1, l2, global_step):
@@ -74,7 +75,7 @@ def _apply_adagrad_da_compute(var, gradient_accum, gradient_squared_accum,
     # 5.y_value = l2 * global_step * lr + sqrt(grad_squared_accum)
     pro_val = topi.multiply(l2, global_step)
     pro_val = topi.multiply(pro_val, lr)
-    sqrt_val = Sqrt(gradient_squared_accum, target=utils.CCE)
+    sqrt_val = sqrt(gradient_squared_accum, target=utils.CCE)
     y_value = topi.add(pro_val, sqrt_val)
 
     # 6.var = x_value / y_value

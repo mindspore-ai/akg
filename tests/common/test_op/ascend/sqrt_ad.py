@@ -14,10 +14,10 @@
 
 """operator dsl function: sqrt_ad"""
 import akg
-from akg.ops.math import Sqrt
+from akg.ops.math import sqrt
 
 
 def sqrt_ad(head, a, target="cce"):
-    b = Sqrt(a, target=target)
+    b = sqrt(a, target=target)
     _jacs = list(akg.differentiate(b, [a], head))
     return _jacs[0]

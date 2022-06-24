@@ -16,10 +16,11 @@ import numpy as np
 from tests.common.tensorio import compare_tensor
 from tests.common.base import get_rtol_atol
 from akg.utils import kernel_exec as utils
-from akg.ops.nn.ascend import BiasAddAd, BiasAddAdV2
+from akg.ops.nn.ascend import bias_add_ad, bias_add_ad_v2
 from akg.ms.utils import DEFAULT
 from akg.utils.result_analysis import np_bisect_sum
 from tests.common.gen_random import random_gaussian
+
 
 def gen_data(data_format, dtype, shape):
     """Generate data for testing the op"""
@@ -49,7 +50,8 @@ def bias_add_ad_run(shape, data_format, dtype,  default_ver=True, attrs=None):
 
     check_list = ["NHWC", "NC1HWC0", DEFAULT]
     if not (data_format in check_list):
-        raise RuntimeError("bias_add_grad only support %s while dataformat is %s" % (",".join(check_list), data_format))
+        raise RuntimeError("bias_add_grad only support %s while dataformat is %s" %
+                           (",".join(check_list), data_format))
 
     if (data_format == "NHWC"):
         bias = list()
@@ -72,10 +74,10 @@ def bias_add_ad_run(shape, data_format, dtype,  default_ver=True, attrs=None):
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
         if default_ver:
-            mod = utils.op_build_test(BiasAddAd, [shape], [dtype], op_attrs=[real_shape, data_format],
+            mod = utils.op_build_test(bias_add_ad, [shape], [dtype], op_attrs=[real_shape, data_format],
                                       kernel_name=kernel_name, attrs=attrs, tuning=t)
         else:
-            mod = utils.op_build_test(BiasAddAdV2, [shape], [dtype], op_attrs=[real_shape, data_format],
+            mod = utils.op_build_test(bias_add_ad_v2, [shape], [dtype], op_attrs=[real_shape, data_format],
                                       kernel_name=kernel_name, attrs=attrs, tuning=t)
         if t:
             expect, head_np, input, output = gen_data(data_format, dtype, shape)
@@ -84,10 +86,10 @@ def bias_add_ad_run(shape, data_format, dtype,  default_ver=True, attrs=None):
             return mod
     else:
         if default_ver:
-            mod = utils.op_build_test(BiasAddAd, [shape], [dtype], op_attrs=[real_shape, data_format],
+            mod = utils.op_build_test(bias_add_ad, [shape], [dtype], op_attrs=[real_shape, data_format],
                                       kernel_name='bias_add_ad', attrs=attrs)
         else:
-            mod = utils.op_build_test(BiasAddAdV2, [shape], [dtype], op_attrs=[real_shape, data_format],
+            mod = utils.op_build_test(bias_add_ad_v2, [shape], [dtype], op_attrs=[real_shape, data_format],
                                       kernel_name='bias_add_ad', attrs=attrs)
         expect, head_np, input, output = gen_data(data_format, dtype, shape)
         output = utils.mod_launch(mod, (head_np, output), expect=expect)

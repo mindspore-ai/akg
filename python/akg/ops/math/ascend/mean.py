@@ -21,7 +21,7 @@ from akg.utils import format_transform as ft_util
 import akg.utils as utils
 from akg.utils import custom_tiling as ct_util
 from akg.utils.dynamic_shape import shape_is_dynamic
-from ..sum import Sum
+from ..sum import sum
 from .sum_others import sum_v2
 
 
@@ -103,7 +103,7 @@ def mean(data, axis=None, keepdims=False, target=utils.CCE):
     count = 1
     for i in axis:
         count *= shape[i]
-    output = Sum(data, axis, keepdims, target=target)
+    output = sum(data, axis, keepdims, target=target)
 
     if shape_is_dynamic(data):
         res = akg.tvm.compute(output.shape, lambda *i: akg.lang.ascend.divide_var(output(*i), count), name="res")

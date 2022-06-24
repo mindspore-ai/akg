@@ -13,11 +13,11 @@
 # limitations under the License.
 
 """__init__"""
-from .avgpool import Avgpool
+from .avgpool import avgpool
 from .batch_norm_ad import batch_norm_ad
-from .bias_add import BiasAdd
-from .bias_add_ad import BiasAddAd
-from .bias_add_ad_v2 import BiasAddAdV2
+from .bias_add import bias_add
+from .bias_add_ad import bias_add_ad
+from .bias_add_ad_v2 import bias_add_ad_v2
 from .conv import Conv
 from .conv_backprop_filter import conv_backprop_filter
 from .conv_backprop_input import conv_backprop_input

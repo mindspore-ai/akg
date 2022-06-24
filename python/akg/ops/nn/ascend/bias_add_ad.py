@@ -19,10 +19,11 @@
 import akg.tvm
 import akg
 import akg.utils as utils
-from akg.ops.nn.ascend.bias_add import BiasAdd
+from akg.ops.nn.ascend.bias_add import bias_add
+
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, (list, tuple), str, (str, type(None)))
-def BiasAddAd(head, input_shape, data_format, target=utils.CCE):
+def bias_add_ad(head, input_shape, data_format, target=utils.CCE):
     """
     Compute gradient for bias_add operator using automatic differentiate.
 
@@ -33,14 +34,15 @@ def BiasAddAd(head, input_shape, data_format, target=utils.CCE):
 
     Returns:
         tvm.tensor.Tensor of same shape and type as head.
-    
+
     Supported Platforms:
         'Ascend'
     """
 
     check_list = ["NHWC", "NC1HWC0", "DefaultFormat"]
     if data_format not in check_list:
-        raise RuntimeError("bias_add_grad only support %s while dataformat is %s" % (",".join(check_list), data_format))
+        raise RuntimeError("bias_add_grad only support %s while dataformat is %s" %
+                           (",".join(check_list), data_format))
     utils.check_shape(head.shape)
     shape1 = [x.value for x in head.shape]
     utils.davinci_format_check(shape1, data_format)
@@ -54,7 +56,7 @@ def BiasAddAd(head, input_shape, data_format, target=utils.CCE):
     else:
         bias_shape = (input_shape[1],)
         b = akg.tvm.placeholder(bias_shape, head.dtype, "B")
-    c = BiasAdd(a, b, data_format)
+    c = bias_add(a, b, data_format)
 
     jacs = list(akg.differentiate(c, [b], head))
     attrs = {}

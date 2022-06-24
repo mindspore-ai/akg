@@ -17,7 +17,7 @@ import akg.tvm
 import akg.topi
 import akg.utils as utils
 from .cast import Cast
-from .sub import Sub
+from .sub import sub
 from akg.utils.dsl_create import produce_shapes
 from akg.utils.kernel_exec import product_is_mini
 
@@ -68,7 +68,7 @@ def _equal_ascend(input1, input2, target=utils.CCE):
         dtype = "float32"
 
     if orig_dtype == "float32" and dtype == "float16":
-        input_sub = Sub(input1, input2, target)
+        input_sub = sub(input1, input2, target)
         input_sub = Cast(input_sub, dtype, target)
         zero = akg.tvm.const(0.0, dtype)
         res = akg.topi.equal(input_sub, zero)
