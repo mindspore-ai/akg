@@ -18,6 +18,8 @@
 #include "composite/emitter.h"
 
 namespace akg {
+constexpr auto kEnableAutoInplace = "enable_auto_inplace";
+
 // particular used for custom op
 // arg s is in the form of "0 1 1 -1 2 -1" and should be translated into {{0,1},{1,-1},{2,-1}}
 // {0,1} means outputs[0] and inputs[1] are in inplace relation; {1,-1} means outputs[1] has no inplace relation
@@ -150,6 +152,9 @@ void Emitter::EmitTopi(const Provide *op, const Array<NodeRef> &real_inputs) {
       }
       CollectNoinlineCandidate(real_inputs, t);
       opt_.tensor_map[op->func] = t;
+      if (op_attrs_.count(kEnableAutoInplace) > 0) {
+        opt_.tensor_attrs[t].Set(kEnableAutoInplace, op_attrs_[kEnableAutoInplace]);
+      }
     }
   } else {
     LOG(FATAL) << "Unexpected op func type: " << op->func;

@@ -187,6 +187,10 @@ Stmt LowerInitWithSchedule(LowerData &data) {
   data->sch = data->sch.normalize();
   auto bounds = air::schedule::InferBound(data->sch);
   Stmt stmt = make_pass("schedule.ScheduleOps", data->sch, bounds, false);
+  if (g_attrs.count(kTensorAttrs) > 0) {
+    const auto tensor_attrs = Downcast<Map<Tensor, Map<std::string, NodeRef>>>(g_attrs[kTensorAttrs]);
+    stmt = NEXT_PASS(AddTensorAttrs, stmt, tensor_attrs);
+  }
   stmt = NEXT_PASS(TensorAccessRewrite, stmt);
   return stmt;
 }

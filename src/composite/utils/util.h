@@ -146,6 +146,8 @@ struct BuildOpt {
   FuncTensorMap tensor_map;
   Array<Tensor> noinline_candidate;  // eg, Gather's output and TensorScatterAdd's update
   Array<Tensor> noinline_indeed;     // the tensor make noinline by fake into args, noinline_candidate excludes args
+  std::unordered_map<Tensor, Map<std::string, NodeRef>, NodeHash, NodeEqual>
+    tensor_attrs;  // attrs for individual tensor
   std::string target;
   bool stitch{false};
   bool tuning{false};

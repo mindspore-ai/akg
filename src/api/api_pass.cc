@@ -129,6 +129,7 @@ REGISTER_PASS(FeatureLibTransform);
 REGISTER_PASS(GatherLoopInfo);
 REGISTER_PASS(EliminateIf);
 REGISTER_PASS(InjectAttr);
+REGISTER_PASS(AddTensorAttrs);
 REGISTER_PASS(LowerWith);
 REGISTER_PASS(MathIntrinRewrite);
 REGISTER_PASS(PostFusion);
