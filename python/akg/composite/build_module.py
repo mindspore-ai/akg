@@ -416,7 +416,8 @@ def _build_to_module(desc_s, desc_d, attrs=None, poly=True):
         ConstructType.PARALLEL: _common_postprocess,
         ConstructType.STITCH: _stitch_postprocess,
         ConstructType.NORMAL: _common_postprocess,
-        ConstructType.TOT: _common_postprocess
+        ConstructType.TOT: _common_postprocess,
+        ConstructType.CONCAT: _common_postprocess
     }
     segment_tree, segment_infos = get_construct_args(desc_s, attrs, post_funcs)
     process = desc_d["process"]
