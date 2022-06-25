@@ -279,6 +279,7 @@ class UserConfig {
     ParseBoolAttr(attrs, "pragma_opt_for_dsa", &optimize_for_dsa_);
     ParseBoolAttr(attrs, "enable_feature_library", &enable_feature_library_);
     ParseBoolAttr(attrs, "enable_hoist_cond_write", &enable_hoist_cond_write_);
+    ParseBoolAttr(attrs, "enable_approximate_read", &enable_approximate_read_);
 
     ParseIntAttr(attrs, "kernel_h", &matB_dim_h_);
     ParseIntAttr(attrs, "kernel_w", &matB_dim_w_);
@@ -454,6 +455,7 @@ class UserConfig {
   bool GetOptimizeForNPU() const { return optimize_for_dsa_; }
   bool GetEnableFeatureLib() const { return enable_feature_library_; }
   bool GetEnableHoistCondWrite() const { return enable_hoist_cond_write_; }
+  bool GetEnableApproximateRead() const { return enable_approximate_read_; }
 
   // getter for conv config
   int GetMatBDimH() const { return matB_dim_h_; }
@@ -815,6 +817,7 @@ class UserConfig {
   bool optimize_for_dsa_{false};
   bool enable_feature_library_{false};
   bool enable_hoist_cond_write_{true};
+  bool enable_approximate_read_{false};
 
   // conv config
   int matB_dim_h_{-1};
