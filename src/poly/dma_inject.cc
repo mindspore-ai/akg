@@ -1578,7 +1578,7 @@ isl::schedule_node PlaceDataCopyBelowImpl(ScopInfo &scop_info, isl::schedule_nod
   auto special_dma = IsSpecialDma(scop_info, cluster_id);
 
   isl::set read_set;
-  if (special_dma) {
+  if (special_dma || scop_info.user_config_.GetEnableApproximateRead()) {
     read_set = cluster.ExtractSingleAccessRelation().intersect_range(original_elements).wrap();
   } else {
     read_set = exact_reads.intersect_range(original_elements).wrap();
