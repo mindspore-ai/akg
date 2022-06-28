@@ -30,6 +30,11 @@ constexpr auto kKernelName = "kernel_name";
 void JsonLowerLeaf::Lower(StageType s) {
   auto info = GenBuildInfo(attrs_);
   attrs_.Set(kOriginKernelName, Expr(origin_kernel_name_));
+  Map<Tensor, Map<std::string, NodeRef>> tensor_attrs_map;
+  for (auto it : info_.opt.tensor_attrs) {
+    tensor_attrs_map.Set(it.first, it.second);
+  }
+  attrs_.Set(kTensorAttrs, tensor_attrs_map);
   std::string process = GetProcess(String2Json(json_str_));
   if (attrs_.count("target_option")) {
     CHECK(attrs_["target_option"]->IsInstance<StringImm>());

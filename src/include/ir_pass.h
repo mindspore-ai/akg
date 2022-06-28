@@ -213,6 +213,8 @@ Stmt EliminateAtomicDma(Stmt stmt);
 
 Stmt AutoReorder(Stmt stmt);
 
+Stmt AddTensorAttrs(Stmt stmt, const Map<Tensor, Map<std::string, NodeRef>> &attrs);
+
 Stmt BypassL1(const Stmt &stmt);
 
 Stmt ExpandC0(Stmt stmt);
