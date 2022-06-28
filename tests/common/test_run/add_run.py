@@ -14,7 +14,7 @@
 import akg
 import numpy as np
 from akg import tvm
-from akg.ops.math import Add
+from akg.ops.math import add
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
 from tests.common.base import get_rtol_atol
@@ -53,7 +53,7 @@ def add_run(shape1, shape2, dtype, kernel_name="add", scale=1.0, attrs_op=None, 
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(Add, [build_shape1, build_shape2], [dtype, dtype], op_attrs,
+        mod = utils.op_build_test(add, [build_shape1, build_shape2], [dtype, dtype], op_attrs,
                                   kernel_name=kernel_name, attrs=attrs, polyhedral=polyhedral,
                                   tuning=t)
         if t:
@@ -63,7 +63,7 @@ def add_run(shape1, shape2, dtype, kernel_name="add", scale=1.0, attrs_op=None, 
             return mod
     else:
         args, expect, input1, input2 = gen_data(shape1, shape2, dtype, scale)
-        mod = utils.op_build_test(Add, [build_shape1, build_shape2], [dtype, dtype], op_attrs,
+        mod = utils.op_build_test(add, [build_shape1, build_shape2], [dtype, dtype], op_attrs,
                                   kernel_name=kernel_name, attrs=attrs, polyhedral=polyhedral)
         if attrs.get("dynamic"):
             for i in range(len(shape1)):

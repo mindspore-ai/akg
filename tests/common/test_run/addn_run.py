@@ -1,4 +1,4 @@
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,12 +14,13 @@
 import akg
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.math import Addn
+from akg.ops.math import addn
 from tests.common.tensorio import compare_tensor
 from tests.common.base import get_rtol_atol
 from tests.common.gen_random import random_gaussian
 from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
+
 
 def addn_run(shape, dtype, n, attrs={}):
     # for i in range(len(shapes)):
@@ -65,4 +66,4 @@ def addn_compile(shape, dtype, n, attrs, kernel_name="addn", tuning=False):
     shapes = []
     for _ in range(n):
         shapes.append(shape)
-    return utils.op_build_test(Addn, [shapes], [dtype], kernel_name=kernel_name, attrs=attrs, tuning=tuning), shapes
+    return utils.op_build_test(addn, [shapes], [dtype], kernel_name=kernel_name, attrs=attrs, tuning=tuning), shapes

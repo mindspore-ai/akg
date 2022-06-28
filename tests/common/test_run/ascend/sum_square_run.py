@@ -1,4 +1,4 @@
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,7 +15,7 @@
 import numpy as np
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
-from akg.ops.math import AbsSum
+from akg.ops.math import abs_sum
 from akg.utils.dsl_create import get_reduce_out_shape
 from tests.common.gen_random import random_gaussian
 
@@ -25,7 +25,7 @@ def sum_square_run(shape, reduce_axis, keepdims, dtype, attrs):
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(AbsSum, [shape], [dtype], op_attrs, kernel_name=kernel_name, attrs=attrs, tuning=t)
+        mod = utils.op_build_test(abs_sum, [shape], [dtype], op_attrs, kernel_name=kernel_name, attrs=attrs, tuning=t)
         if t:
             expect, input1, output = gen_data(dtype, keepdims, reduce_axis, shape)
             return mod, expect, (input1, output)
@@ -33,7 +33,7 @@ def sum_square_run(shape, reduce_axis, keepdims, dtype, attrs):
             return mod
     else:
         expect, input1, output = gen_data(dtype, keepdims, reduce_axis, shape)
-        mod = utils.op_build_test(AbsSum, [shape], [dtype], op_attrs, attrs=attrs)
+        mod = utils.op_build_test(abs_sum, [shape], [dtype], op_attrs, attrs=attrs)
         output = utils.mod_launch(mod, (input1, output), expect=expect)
         return input1, output, expect, compare_tensor(output, expect, rtol=5e-03, atol=5e-3, equal_nan=True)
 

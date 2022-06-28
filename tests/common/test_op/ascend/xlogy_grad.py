@@ -15,7 +15,7 @@
 """operator dsl function: xlogy_grad"""
 import akg
 from akg import tvm
-from akg.ops.math import Divide
+from akg.ops.math import divide
 from akg.ops.math import reciprocal
 from akg.utils.format_transform import get_shape
 from akg.utils.dsl_create import produce_shapes, broadcast_gradient_args
@@ -63,13 +63,13 @@ def xlogy_grad_compute(placeholders, shape_max, dtype, rx, ry):
             lambda *i: (tvm.log(x2(*i).astype("float16"))).astype("float32"),
             name="log_x2")
     else:
-        not_zero_x1 = Divide(x1, x1_addespmin, target="cce")
+        not_zero_x1 = divide(x1, x1_addespmin, target="cce")
         log_x2 = akg.lang.ascend.vlog(x2)
 
     partial_x1 = akg.lang.ascend.vmul(not_zero_x1, log_x2)
     partial_x1g = akg.lang.ascend.vmul(partial_x1, grad)
 
-    partial_x2 = Divide(x1, x2, target="cce") if not product_is_mini() else \
+    partial_x2 = divide(x1, x2, target="cce") if not product_is_mini() else \
         akg.lang.ascend.vmul(x1, reciprocal(x2))
     partial_x2g = akg.lang.ascend.vmul(partial_x2, grad)
 

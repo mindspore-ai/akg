@@ -16,7 +16,7 @@
 
 import akg.tvm
 import akg.topi
-from akg.ops.math import Cast
+from akg.ops.math import cast
 import akg.utils as utils
 
 
@@ -54,8 +54,8 @@ def scale(input_data, scale_data, target="cce"):
     if dtype == "int32":
         dtype = "float32"
     if dtype != orig_dtype:
-        input_data = Cast(input_data, dtype, target=utils.CCE)
-        scale_data = Cast(scale_data, dtype, target=utils.CCE)
+        input_data = cast(input_data, dtype, target=utils.CCE)
+        scale_data = cast(scale_data, dtype, target=utils.CCE)
 
     if scale_shape != input_data_shape:
         scale_data = akg.topi.broadcast_to(scale_data, input_data_shape)
@@ -63,7 +63,7 @@ def scale(input_data, scale_data, target="cce"):
     res = akg.tvm.compute(input_data_shape, lambda *indice: input_data(*indice) * scale_data(*indice), name="res")
 
     if res.dtype != orig_dtype:
-        res = Cast(res, orig_dtype, target=utils.CCE)
+        res = cast(res, orig_dtype, target=utils.CCE)
 
     return res
 
@@ -102,8 +102,8 @@ def scale_bias(input_data, scale_data, bias_data, target="cce"):
     if dtype == "int32":
         dtype = "float32"
     if dtype != orig_dtype:
-        scale_input_data = Cast(scale_input_data, dtype, target=utils.CCE)
-        bias_data = Cast(bias_data, dtype, target=utils.CCE)
+        scale_input_data = cast(scale_input_data, dtype, target=utils.CCE)
+        bias_data = cast(bias_data, dtype, target=utils.CCE)
 
     if bias_shape != input_data_shape:
         bias_data = akg.topi.broadcast_to(bias_data, input_data_shape)
@@ -111,6 +111,6 @@ def scale_bias(input_data, scale_data, bias_data, target="cce"):
     res = akg.tvm.compute(input_data_shape, lambda *indice: scale_input_data(*indice) + bias_data(*indice), name="res_bias")
 
     if res.dtype != orig_dtype:
-        res = Cast(res, orig_dtype, target=utils.CCE)
+        res = cast(res, orig_dtype, target=utils.CCE)
 
     return res

@@ -1,4 +1,4 @@
-# Copyright 2021 Huawei Technologies Co., Ltd
+# Copyright 2021-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,14 +17,14 @@ import numpy as np
 from akg.utils import kernel_exec as utils
 from akg.ops.math.ascend import matmul
 from tests.common.test_run.ascend.matmul_run import *
-from akg.ops.math import Addn
-from akg.ops.math import Add
+from akg.ops.math import addn
+from akg.ops.math import add
 
 def matmul_addn_transdata(x, y, adds, b, out_dtype, left_format="zZ", right_format="nZ", out_format="zN", transpose_x=False,
                         transpose_y=False, attrs=None, target='cce'):
     matmul_res, attrs_mat = matmul(x, y, b, out_dtype, left_format, right_format, out_format, transpose_x, transpose_y, attrs=attrs)
-    addn_res = Addn(adds, target=target)
-    res = Add(matmul_res, addn_res, target=target)
+    addn_res = addn(adds, target=target)
+    res = add(matmul_res, addn_res, target=target)
     if out_format == 'zN':
         n1, m1, m0, n0 = matmul_res.shape[-4:]
         new_shape = matmul_res.shape[:-4] + [m1 * m0, n1 * n0]

@@ -1,4 +1,4 @@
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,12 +15,13 @@ import akg
 import numpy as np
 from akg import tvm
 from akg.utils import kernel_exec as utils
-from akg.ops.math import Cast
+from akg.ops.math import cast
 from tests.common.tensorio import compare_tensor
 from tests.common.base import get_rtol_atol
 from tests.common.test_utils import compute_blockdim
 from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
+
 
 def cast_run(shape, srcType, dstType, attrs={}):
     op_attrs = [dstType]
@@ -36,14 +37,14 @@ def cast_run(shape, srcType, dstType, attrs={}):
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(Cast, [build_shape], [srcType], op_attrs, kernel_name=kernel_name, attrs=attrs, tuning=t)
+        mod = utils.op_build_test(cast, [build_shape], [srcType], op_attrs, kernel_name=kernel_name, attrs=attrs, tuning=t)
         if t:
             args, exp_output, input = gen_data(dstType, shape, srcType)
             return mod, exp_output, args
         else:
             return mod
     else:
-        mod = utils.op_build_test(Cast, [build_shape], [srcType], op_attrs, kernel_name='cast', attrs=attrs)
+        mod = utils.op_build_test(cast, [build_shape], [srcType], op_attrs, kernel_name='cast', attrs=attrs)
         args, exp_output, input = gen_data(dstType, shape, srcType)
         if attrs.get("dynamic"):
             for i in range(len(shape)):

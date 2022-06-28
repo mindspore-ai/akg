@@ -1,4 +1,4 @@
-# Copyright 2020-2021 Huawei Technologies Co., Ltd
+# Copyright 2020-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -28,7 +28,6 @@ def _exp(data):
     return output
 
 
-
 @utils.check_input_type(akg.tvm.tensor.Tensor)
 def _exp_ascend(in_data):
     dtype = in_data.dtype
@@ -43,7 +42,8 @@ def _exp_ascend(in_data):
 
     return output
 
-def Exp(data, target=utils.CCE):
+
+def exp(data, target=utils.CCE):
     """
     Calculate exponential of input data.
 

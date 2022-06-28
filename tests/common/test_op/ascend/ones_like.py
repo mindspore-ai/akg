@@ -16,7 +16,7 @@
 
 import akg.tvm
 import akg.utils as utils
-from akg.ops.math import Cast
+from akg.ops.math import cast
 from akg.utils.format_transform import get_shape
 
 @utils.check_input_type(akg.tvm.tensor.Tensor)
@@ -35,5 +35,5 @@ def ones_like(input):
     utils.ops_dtype_check(dtype, [utils.DtypeForDavinci.ALL_TYPES])
     utils.check_shape(shape)
     res = akg.tvm.compute(shape, lambda *i: akg.tvm.const(1, "float16"), name="res", attrs={'no_inline': 1})
-    res = Cast(res, dtype, target=utils.CCE)
+    res = cast(res, dtype, target=utils.CCE)
     return res

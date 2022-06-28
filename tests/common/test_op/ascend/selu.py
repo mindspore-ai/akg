@@ -16,7 +16,7 @@
 import akg.lang.ascend
 from akg import tvm, topi
 import akg.utils as utils
-from akg.ops.math import Exp
+from akg.ops.math import exp
 
 
 # define selu oprator's required constants
@@ -45,7 +45,7 @@ def selu_compute(input_data):
     # When the element value is greater than 0 and less than 0
     negative_res = topi.minimum(input_data, tensor_zero)
     positive_res = topi.maximum(input_data, tensor_zero)
-    exp_res = Exp(negative_res, 'cce')
+    exp_res = exp(negative_res, 'cce')
     sub_res = topi.add(exp_res, tvm.const(SCALAR_NEGATIVE_ONE, dtype=type_tmp))
     negative_muls_res = topi.multiply(sub_res, tvm.const(SCALE_ALPHA_PRODUCT, dtype=type_tmp))
     if dtype == "int8":

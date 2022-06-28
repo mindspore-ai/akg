@@ -1,4 +1,4 @@
-# Copyright 2020-2021 Huawei Technologies Co., Ltd
+# Copyright 2020-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -81,7 +81,7 @@ def _tan_2x_multi(input_x, times):
         if product_is_mini():
             res = mul(res_numerator, reciprocal(res_denominator, target=utils.CCE), utils.CCE)
         else:
-            res = divide.Divide(res_numerator, res_denominator, utils.CCE)
+            res = divide.divide(res_numerator, res_denominator, utils.CCE)
         times = times - 1
     return res
 

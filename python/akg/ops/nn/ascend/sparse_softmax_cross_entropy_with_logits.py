@@ -1,4 +1,4 @@
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@ from akg.ops.math.mul import mul
 from akg.ops.math.reduce_max import reduce_max
 from akg.ops.math.sub import sub
 from akg.ops.math.neg import neg
-from akg.ops.math.exp import Exp
+from akg.ops.math.exp import exp
 from akg.ops.math.sum import sum
 from akg.ops.math.ascend.sum_others import sum_v2
 from akg.ops.math.log import log
@@ -78,14 +78,14 @@ def sparse_softmax_cross_entropy_with_logits_impl(labels=None, logits=None, redu
         max_logits = reduce_max(logits, axis, keepdims=True, target=utils.CCE)
         data_sub = sub(logits, max_logits, target=utils.CCE)
         akg.register_variables("minus_max", [logits], data_sub)
-        data_exp = Exp(data_sub, target=utils.CCE)
+        data_exp = exp(data_sub, target=utils.CCE)
         data_expsum = sum(data_exp, axis, keepdims=True, target=utils.CCE)
         data_expsum_log = log(data_expsum, target=utils.CCE)
         sub_value = sub(data_sub, data_expsum_log, target=utils.CCE)
         neg_labels = neg(labels, target=utils.CCE)
         cross_entropy = mul(neg_labels, sub_value, target=utils.CCE)
         # backprop: prob - labels, where prob = softmax(logits)
-        prob = Exp(sub_value, target=utils.CCE)
+        prob = exp(sub_value, target=utils.CCE)
         backprop = sub(prob, labels, target=utils.CCE)
 
         if reduction.lower() == "none":

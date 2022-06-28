@@ -1,4 +1,4 @@
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,11 +13,11 @@
 # limitations under the License.
 
 import akg.utils as utils
-from .abs import Abs
+from .abs import abs
 from .sum import sum
 
 
-def AbsSum(inputs, axis=None, keepdims=False, target=utils.CCE):
+def abs_sum(inputs, axis=None, keepdims=False, target=utils.CCE):
     """
     Computes the sum of absolute value of inputs tensor along axis.
 
@@ -33,5 +33,5 @@ def AbsSum(inputs, axis=None, keepdims=False, target=utils.CCE):
         'Ascend', 'GPU', 'CPU'
     """
     utils.check_supported_target(target)
-    input_abs = Abs(inputs, target)
+    input_abs = abs(inputs, target)
     return sum(input_abs, axis, keepdims, target=target)

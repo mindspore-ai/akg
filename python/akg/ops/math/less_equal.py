@@ -1,4 +1,4 @@
-# Copyright 2020-2021 Huawei Technologies Co., Ltd
+# Copyright 2020-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@ import akg.utils as utils
 from akg.utils.kernel_exec import product_is_mini
 from akg.utils.dsl_create import produce_shapes
 from .sub import sub
-from .cast import Cast
+from .cast import cast
 from .utils import make_input_and_value
 
 

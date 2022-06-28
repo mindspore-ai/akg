@@ -1,4 +1,4 @@
-# Copyright 2020-2021 Huawei Technologies Co., Ltd
+# Copyright 2020-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,9 +20,11 @@ from akg.utils import kernel_exec as utils
 from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
 
+
 def has_pad(padding):
     p_l, p_r, p_t, p_b = padding
     return not(p_l == 0 and p_r == 0 and p_t == 0 and p_b == 0)
+
 
 def gen_data(shape_data, shape_filter, stride, padding, dilation, dtype, out_dtype):
     support_list = {"float16": np.float16, "float32": np.float32}

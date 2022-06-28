@@ -1,4 +1,4 @@
-# Copyright 2020-2021 Huawei Technologies Co., Ltd
+# Copyright 2020-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,8 +17,8 @@
 import akg.topi
 import akg.tvm
 import akg.utils as utils
-from .cast import Cast
 from akg.utils.format_transform import refine_reduce_axis
+from .cast import cast
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, (list, tuple, int, type(None)), (bool, type(None)))
@@ -81,7 +81,7 @@ def _reduce_min_max_ascend(data, axis=None, keepdims=False, method="min"):
 
     # In the emit_insn pass, for vmin and vmax, reduce_last_axis only support float16.
     if dtype != "float16":
-        data = Cast(data, "float16", target="cce")
+        data = cast(data, "float16", target="cce")
 
     if method == "min":
         res = akg.topi.min(data, axis=axis, keepdims=keepdims)
@@ -89,9 +89,10 @@ def _reduce_min_max_ascend(data, axis=None, keepdims=False, method="min"):
         res = akg.topi.max(data, axis=axis, keepdims=keepdims)
 
     if res.dtype != dtype:
-        res = Cast(res, dtype, target="cce")
+        res = cast(res, dtype, target="cce")
 
     return res
+
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, (list, tuple, int, type(None)), (bool, type(None)), (str, type(None)))
 def reduce_min(inputs, axis=None, keepdims=False, target=utils.CCE):

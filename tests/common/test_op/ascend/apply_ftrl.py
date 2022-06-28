@@ -21,7 +21,7 @@ from akg.utils.format_transform import get_shape
 import akg.utils as utils
 from akg.utils.kernel_exec import product_is_mini
 from akg.utils.dsl_create import TensorUtils
-from akg.ops.math import Divide
+from akg.ops.math import divide
 
 
 def apply_ftrl_impl(var, accum, linear, grad, lr, l1, l2, l2_shrinkage, lr_power, with_l2_shrinkage=False):
@@ -55,7 +55,7 @@ def apply_ftrl_impl(var, accum, linear, grad, lr, l1, l2, l2_shrinkage, lr_power
     accum_new_pow = akg.topi.power(accum_new, lr_power_neg)
     accum_pow = akg.topi.power(accum, lr_power_neg)
     accum_pow_sub = akg.topi.subtract(accum_new_pow, accum_pow)
-    accum_pow_sub_div_lr = Divide(accum_pow_sub, lr, target=utils.CCE)
+    accum_pow_sub_div_lr = divide(accum_pow_sub, lr, target=utils.CCE)
     linear_add_shrinkage = akg.topi.add(linear, grad_shrinkage)
     linear_new = akg.tvm.compute(shape, lambda *indice:
                                  linear_add_shrinkage(*indice) - accum_pow_sub_div_lr(*indice)*var(*indice),
@@ -66,11 +66,11 @@ def apply_ftrl_impl(var, accum, linear, grad, lr, l1, l2, l2_shrinkage, lr_power
     linear_new_clip = akg.topi.minimum(akg.topi.maximum(linear_new, l1_neg), l1)
     x_res = akg.topi.subtract(linear_new_clip, linear_new)
     # y = accum_new^(-lr_power) / lr + 2 * l2
-    accum_new_pow_div_lr = Divide(accum_new_pow, lr, target="cce")
+    accum_new_pow_div_lr = divide(accum_new_pow, lr, target="cce")
     l2_2 = akg.topi.multiply(l2, 2)
     y_res = akg.topi.add(accum_new_pow_div_lr, l2_2)
     # var_new = x / y
-    var_new = Divide(x_res, y_res, target="cce")
+    var_new = divide(x_res, y_res, target="cce")
 
     # cast to original type
     if dtype == "float16":

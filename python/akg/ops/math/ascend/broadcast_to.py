@@ -1,4 +1,4 @@
-# Copyright 2020-2021 Huawei Technologies Co., Ltd
+# Copyright 2020-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@ import akg
 import akg.utils as utils
 from akg import topi
 from akg.utils.format_transform import get_shape
-from ..cast import Cast
+from ..cast import cast
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, (list, tuple), (str, type(None)))
@@ -47,9 +47,9 @@ def broadcast_to(x, shape, target=utils.CCE):
     # It can be simplified by some methods, such as , "auto cast"
     x_shape = get_shape(x)
     if len(x_shape) == 1 and x_shape[0] == 1 and dtype in ["int8", "uint8"]:
-        x = Cast(x, "float16", target)
+        x = cast(x, "float16", target)
 
     res = topi.broadcast_to(x, shape)
     if res.dtype != dtype:
-        res = Cast(res, dtype, target)
+        res = cast(res, dtype, target)
     return res

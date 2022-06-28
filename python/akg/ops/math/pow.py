@@ -1,4 +1,4 @@
-# Copyright 2020-2021 Huawei Technologies Co., Ltd
+# Copyright 2020-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,9 +16,9 @@
 import akg.topi
 import akg.tvm
 import akg.utils as utils
-from .cast import Cast
 from akg.utils.dsl_create import produce_shapes
 from akg.utils.kernel_exec import product_is_mini
+from .cast import cast
 
 
 def _pow_ascend(data, scale, target):
@@ -36,11 +36,11 @@ def _pow_ascend(data, scale, target):
     compute_dtype = "float32"
     if product_is_mini():
         compute_dtype = "float16"
-    data = Cast(data, compute_dtype, target)
-    scale = Cast(scale, compute_dtype, target)
+    data = cast(data, compute_dtype, target)
+    scale = cast(scale, compute_dtype, target)
 
     c = akg.topi.power(data, scale)
-    c = Cast(c, dtype, target)
+    c = cast(c, dtype, target)
     return c
 
 

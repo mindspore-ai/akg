@@ -17,7 +17,7 @@ import akg.topi
 from akg import tvm
 import akg.utils as utils
 from akg.utils.dsl_create import produce_shapes
-from akg.ops.math import Abs, mul, Divide
+from akg.ops.math import abs, mul, divide
 from akg.utils.format_transform import get_shape
 from akg.utils.kernel_exec import product_is_mini
 
@@ -104,7 +104,7 @@ def div_no_nan(data_x, data_y, target=utils.CCE):
     data_y_fp32 = akg.lang.ascend.cast_to(data_y, "float32")
     # avoid when y > 2^15 cast from fp32 to fp16 in mini
     clip_y_fp32 = akg.topi.clip(data_y_fp32, -1.0, 1.0)
-    abs_clip_y_fp32 = Abs(clip_y_fp32, target)
+    abs_clip_y_fp32 = abs(clip_y_fp32, target)
     y_cmp = akg.lang.ascend.cast_to(abs_clip_y_fp32, compute_dtype) 
 
     is_zero = tvm.compute(data_y.shape,
@@ -124,7 +124,7 @@ def div_no_nan(data_x, data_y, target=utils.CCE):
     # replace [x1 x2]/[y1 0] by [x1 0]/[y1 1] 
     data_x = mul(akg.lang.ascend.cast_to(data_x, "float32"), not_zero, target=target)
     data_y = akg.lang.ascend.cast_to(data_y, "float32") + is_zero
-    res = Divide(data_x, data_y, target=target)
+    res = divide(data_x, data_y, target=target)
 
     if dtype in ("int8", "uint8", "int32"):
         res = akg.lang.ascend.floor(res)

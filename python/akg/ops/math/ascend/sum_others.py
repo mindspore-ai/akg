@@ -1,4 +1,4 @@
-# Copyright 2020-2021 Huawei Technologies Co., Ltd
+# Copyright 2020-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@ import akg
 import akg.utils as utils
 from akg.utils import format_transform as ft_util
 from akg.utils.format_transform import get_shape
-from ..cast import Cast
+from ..cast import cast
 from ..sum import sum
 
 
@@ -41,14 +41,14 @@ def sum_v2(inputs, axis=None, keepdims=True, target=utils.CCE):
         output = akg.topi.identity(inputs)
     else:
         if dtype == "float16":
-            step_sum = Cast(inputs, "float32", target)
+            step_sum = cast(inputs, "float32", target)
         else:
             step_sum = inputs
 
         step_sum = akg.topi.sum(step_sum, axis=axis, keepdims=keepdims)
 
         if dtype == "float16":
-            output = Cast(step_sum, "float16", target)
+            output = cast(step_sum, "float16", target)
         else:
             output = step_sum
     return output

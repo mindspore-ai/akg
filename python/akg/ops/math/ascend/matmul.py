@@ -1,4 +1,4 @@
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@ import akg
 from akg.utils.kernel_exec import BLOCK_OUT, BLOCK_REDUCE
 from akg.utils import custom_tiling as ct_util
 import akg.utils as  utils
-from ..cast  import Cast
+from ..cast  import cast
 
 
 matmul_set_dim_map = {
@@ -242,6 +242,7 @@ def matmul4d_compute(x, y, bias_value, out_dtype, left_format, right_format, out
 
         return akg.lang.ascend.mmad((x(*x_indices) * y(*y_indices)).astype("float32"), axis=[ko, ki])
 
+
     def matmul_set_format(left_format, right_format, transpose_x, transpose_y):
         if left_format == "zZ":
             data_trans = "N"
@@ -306,7 +307,8 @@ def matmul4d_compute(x, y, bias_value, out_dtype, left_format, right_format, out
     })
 
     if bias_value is None and out_dtype == "float16":
-        result_matmul = Cast(result_matmul, out_dtype, target=utils.CCE)
+        result_matmul = cast(result_matmul, out_dtype, target=utils.CCE)
+
 
     def matmul_reshape(shape, result_matmul, *indices):
         n = len(shape)
@@ -320,6 +322,7 @@ def matmul4d_compute(x, y, bias_value, out_dtype, left_format, right_format, out
     else:
         result = result_matmul
 
+
     def bias_compute(output_shape, result, bias, output_format, *indices):
         n = len(output_shape)
         # reduce axis
@@ -330,7 +333,7 @@ def matmul4d_compute(x, y, bias_value, out_dtype, left_format, right_format, out
         return result(*indices) + bias(bias_indices)
     if bias == 1:
         if bias_value.dtype == "float16":
-            bias_value = Cast(bias_value, "float32", target=utils.CCE)
+            bias_value = cast(bias_value, "float32", target=utils.CCE)
         if out_format == "zN":
             out = akg.tvm.compute(output_shape_zn, 
                                   lambda *indices: bias_compute(
@@ -342,7 +345,7 @@ def matmul4d_compute(x, y, bias_value, out_dtype, left_format, right_format, out
                                       output_shape_zz, result, bias_value, out_format, *indices),
                                   name="output")
         if out_dtype == "float16" and bias_value.dtype == "float32":
-            out = Cast(out, out_dtype, target=utils.CCE)
+            out = cast(out, out_dtype, target=utils.CCE)
     else:
         out = result
 

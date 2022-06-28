@@ -17,7 +17,7 @@ from functools import reduce
 import akg
 import akg.utils as utils
 from akg.dim import DIM
-from akg.ops.math.add import Add
+from akg.ops.math.add import add
 from akg.utils import custom_tiling as ct_util
 from akg.utils.kernel_exec import product_is_mini
 from akg.utils.format_transform import get_shape
@@ -232,7 +232,7 @@ def fused_batch_norm_grad(inputs, eps=1e-3, data_format="DefaultFormat", axis=1)
     if product_is_mini():
         rsqvar = akg.topi.cast(rsqvar, DTYPE_FLOAT32)
 
-    data_minus_mean = Add(data, mean, -1.0, target=utils.CCE)[0]
+    data_minus_mean = add(data, mean, -1.0, target=utils.CCE)[0]
 
     dbeta = sum_data(dy, params.get("axes"), keepdims=is_special5d)
     dbeta_bc = akg.lang.ascend.broadcast(

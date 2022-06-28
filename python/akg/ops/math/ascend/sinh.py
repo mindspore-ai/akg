@@ -1,4 +1,4 @@
-# Copyright 2020-2021 Huawei Technologies Co., Ltd
+# Copyright 2020-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,8 +16,9 @@
 import akg
 import akg.utils as utils
 from akg import topi, tvm
-from ..exp import Exp
 from akg.utils.format_transform import get_shape
+from ..exp import exp
+
 
 def sinh_compute(x):
     """Compute sinh."""
@@ -26,9 +27,9 @@ def sinh_compute(x):
     if dtype == "float16":
         x = topi.cast(x, "float32")
 
-    data_exp = Exp(x, utils.CCE)
+    data_exp = exp(x, utils.CCE)
     negative_data = topi.multiply(x, -1)
-    negative_data_exp = Exp(negative_data, utils.CCE)
+    negative_data_exp = exp(negative_data, utils.CCE)
     data_exp_sub = topi.subtract(data_exp, negative_data_exp)
 
     res = topi.multiply(data_exp_sub, tvm.const(0.5, "float32"))
@@ -37,12 +38,14 @@ def sinh_compute(x):
 
     return res
 
+
 def get_attrs():
     """get attrs."""
     attrs = {
         "enable_feature_library": True
     }
     return attrs
+
 
 def sinh_call(x):
     """Compute sinh."""
@@ -58,6 +61,7 @@ def sinh_call(x):
         res = akg.lang.ascend.cast_to(res, "float16")
 
     return res, get_attrs()
+
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, (str, type(None)))
 def Sinh(x, target=utils.CCE):

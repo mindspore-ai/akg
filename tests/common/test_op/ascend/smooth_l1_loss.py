@@ -19,7 +19,7 @@ import akg.utils as utils
 from akg.utils import custom_tiling as ct_util
 from akg.dim import DIM
 from akg.utils.format_transform import get_shape
-from akg.ops.math import Cast
+from akg.ops.math import cast
 from akg.utils.kernel_exec import product_is_mini
 
 smooth_l1_loss_set_dim_map = {
@@ -111,7 +111,7 @@ def smooth_l1_loss(prediction, targets, anchor_samples,
 
     # cast anchor_samples to float type in order to use the vcmp instruction
     if anchor_samples.dtype.lower() != prediction_dtype.lower():
-        anchor_samples = Cast(anchor_samples, prediction_dtype, target=utils.CCE)
+        anchor_samples = cast(anchor_samples, prediction_dtype, target=utils.CCE)
     anchor_samples_dtype = anchor_samples.dtype.lower()
 
     coefficient = akg.tvm.const(0.5, dtype=prediction_dtype)

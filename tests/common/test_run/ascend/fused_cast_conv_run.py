@@ -1,4 +1,4 @@
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@ import sys
 
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.math import Cast
+from akg.ops.math import cast
 from akg.ops.nn.ascend import Conv
 from akg.ops.nn.ascend.conv import conv_core
 from akg import dim
@@ -209,7 +209,7 @@ def cast_conv_set_dim_func(data, fmap_shape, filter_shape, pad_, stride_, dilati
 def cast_conv(data, fmap_shape, filter_shape, pad_, stride_, dilation_, use_bias=False, block_size=16, attrs=None):
     a = data[0]
     data[1].dtype = 'float32'
-    b = Cast(data[1], 'float16', target='cce')
+    b = cast(data[1], 'float16', target='cce')
     if use_bias:
         conv_data = [a, b, data[2]]
     else:

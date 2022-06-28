@@ -1,6 +1,4 @@
-#!/usr/bin/env python3
-# coding: utf-8
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,11 +15,12 @@
 """operator dsl function: tanh_ad"""
 import akg
 import akg.utils as utils
-from .tanh import Tanh
 from akg.utils.kernel_exec import product_is_mini
+from .tanh import Tanh
+
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (str, type(None)))
-def TanhAd(head, in_data, target=utils.CCE):
+def tanh_ad(head, in_data, target=utils.CCE):
     """
     Compute gradient of tanh operator using automatic differentiate.
 

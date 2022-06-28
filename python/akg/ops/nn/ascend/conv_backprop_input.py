@@ -1,6 +1,4 @@
-#!/usr/bin/env python3
-# coding: utf-8
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,7 +18,7 @@ import akg
 import akg.tvm
 import akg.utils as utils
 from akg import dim
-from akg.ops.math.cast import Cast
+from akg.ops.math.cast import cast
 from akg.utils.validation_check import comp_conv_backprop_out_shape
 
 
@@ -183,7 +181,7 @@ def conv_backprop_input_compute(data, output_shape, filter_shape, input_shape, p
     a_value = data[0]
 
     if data[1].dtype == 'float32':
-        b_value = Cast(data[1], 'float16', utils.CCE)
+        b_value = cast(data[1], 'float16', utils.CCE)
         tiling_args = get_cast_tiling_args()
     else:
         b_value = data[1]
@@ -355,7 +353,7 @@ def conv_backprop_input_compute(data, output_shape, filter_shape, input_shape, p
                                 axis=[kc1, kh, kw, kc0]), name=output_name,
                             attrs=conv_attrs)
 
-    res_c = Cast(res_c, "float16", utils.CCE)
+    res_c = cast(res_c, "float16", utils.CCE)
 
     return res_c, {"dim": info, "pragma_rmselfdep": 0}
 

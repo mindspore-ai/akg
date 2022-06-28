@@ -17,7 +17,7 @@
 import akg.tvm
 import akg
 import akg.utils as utils
-from akg.ops.math import Cast
+from akg.ops.math import cast
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, (str, type(None)))
 def bitwise_not(data, target=utils.CCE):
@@ -37,5 +37,5 @@ def bitwise_not(data, target=utils.CCE):
     minus_one = akg.tvm.const(-1, dtype=data.dtype)
     add_one = akg.lang.ascend.vadds(data, one)
     multiply_one = akg.lang.ascend.vmuls(add_one, minus_one)
-    res = Cast(multiply_one, data.dtype, target=target)
+    res = cast(multiply_one, data.dtype, target=target)
     return res

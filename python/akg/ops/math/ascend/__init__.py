@@ -1,4 +1,4 @@
-# Copyright 2021 Huawei Technologies Co., Ltd
+# Copyright 2021-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -54,5 +54,5 @@ from .sinh import Sinh
 from .sum_others import sum_v2, sum_by_shape
 from .tan import tan
 from .tanh import Tanh
-from .tanh_ad import TanhAd
-from .tanh_grad import TanhGrad
+from .tanh_ad import tanh_ad
+from .tanh_grad import tanh_grad

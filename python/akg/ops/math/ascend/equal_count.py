@@ -1,6 +1,4 @@
-#!/usr/bin/env python3
-# coding: utf-8
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,7 +18,7 @@ import akg.utils as utils
 from akg.utils.kernel_exec import product_is_mini
 from akg.utils.dsl_create import produce_shapes
 from akg.utils.format_transform import get_shape
-from ..cast import Cast
+from ..cast import cast
 from ..sum import sum
 
 
@@ -61,8 +59,8 @@ def equal_count(x, y, target=utils.CCE):
         dtype = "float16"
     else:
         dtype = "float32"
-    x = Cast(x, dtype, target)
-    y = Cast(y, dtype, target)
+    x = cast(x, dtype, target)
+    y = cast(y, dtype, target)
 
     shape1, shape2, shape = produce_shapes(shape1, shape2)
     t = akg.tvm.compute(shape, lambda *indice: akg.tvm.const(1, dtype), "t")
@@ -73,5 +71,5 @@ def equal_count(x, y, target=utils.CCE):
                         x[indice] == y[indice], t[indice], f[indice]), name="z")
     res = sum(z, target=target)
     if res.dtype != orig_dtype:
-        res = Cast(res, orig_dtype, target)
+        res = cast(res, orig_dtype, target)
     return res

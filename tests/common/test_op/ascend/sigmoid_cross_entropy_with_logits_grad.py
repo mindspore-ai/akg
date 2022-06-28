@@ -16,7 +16,7 @@
 import akg
 from akg import tvm, topi
 import akg.utils as utils
-from akg.ops.math import Exp
+from akg.ops.math import exp
 
 # define a scalar, value = 1
 SCALAR_ONE = 1
@@ -34,7 +34,7 @@ def sigmoid_cross_entropy_with_logits_grad_compute(predict, tar, dout):
         dout = topi.cast(dout, "float32")
 
     # e^x
-    val1 = Exp(predict, target='cce')
+    val1 = exp(predict, target='cce')
     # 1 + e^x
     val2 = topi.add(val1, tvm.const(SCALAR_ONE, dtype="float32"))
     # e^x / (1 + e^x)

@@ -19,7 +19,7 @@ import akg
 from akg.utils import custom_tiling as ct_util
 import akg.utils as utils
 from akg.utils.kernel_exec import debug_mode, create_code
-from akg.ops.math import Cast, reduce_min
+from akg.ops.math import cast, reduce_min
 
 
 reduce_min_ad_set_dim_map = {
@@ -94,7 +94,7 @@ def reduce_min_ad_optimized_manual_schedule(input_shape, dtype, axis, keepdims, 
             min_ = akg.lang.ascend.reduce_min(min_input, axis=-1, keepdims=True)
             min_broadcast = akg.lang.ascend.broadcast(min_, shape)
             if dtype != "float16":
-                data = Cast(data, "float16", target=utils.CCE)
+                data = cast(data, "float16", target=utils.CCE)
             return [akg.tvm.compute(shape,
                                     lambda i, j:
                                     akg.tvm.expr.Select(data[i, j] == min_broadcast[i, j],
@@ -103,7 +103,7 @@ def reduce_min_ad_optimized_manual_schedule(input_shape, dtype, axis, keepdims, 
 
     l = reduce_min(data, axis, target=utils.CCE)
     head = akg.tvm.placeholder(l.shape, name="head", dtype=l.dtype)
-    head_cast = Cast(head, "float16", target=utils.CCE)
+    head_cast = cast(head, "float16", target=utils.CCE)
 
     [dl_ddata] = akg.differentiate(l, [data], head_cast, None, None, override={l: ([data], custom_reduce_min_fdiff)})
 

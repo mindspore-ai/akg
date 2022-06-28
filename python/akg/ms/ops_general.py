@@ -1,4 +1,4 @@
-# Copyright 2021 Huawei Technologies Co., Ltd
+# Copyright 2021-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,31 +22,31 @@ from akg.ms.utils import reg_op
 @reg_op("TensorAdd")
 def tensor_add(x, y, target=utils.CUDA):
     """TensorAdd"""
-    return math.Add(x, y, scale=1.0, polyhedral=True, attrs={}, target=target)
+    return math.add(x, y, scale=1.0, polyhedral=True, attrs={}, target=target)
 
 
 @reg_op("Add")
 def add(x, y, target=utils.CUDA):
     """Add"""
-    return math.Add(x, y, scale=1.0, polyhedral=True, attrs={}, target=target)
+    return math.add(x, y, scale=1.0, polyhedral=True, attrs={}, target=target)
 
 
 @reg_op("AddN")
 def add_n(inputs, target=utils.CUDA):
     """AddN"""
-    return math.Addn(inputs, target)
+    return math.addn(inputs, target)
 
 
 @reg_op("Assign")
 def assign(ref, val, target=utils.CUDA):
     """Assign"""
-    return math.Assign(ref, val, target)
+    return math.assign(ref, val, target)
 
 
 @reg_op("Cast")
 def cast(x, dst_type, target=utils.CUDA):
     """Cast"""
-    return math.Cast(x, dst_type, target)
+    return math.cast(x, dst_type, target)
 
 
 @reg_op("Pow")
@@ -94,13 +94,13 @@ def sub(x, y, target=utils.CUDA):
 @reg_op("Div")
 def div(x, y, target=utils.CUDA):
     """Div"""
-    return math.Divide(x, y, target)
+    return math.divide(x, y, target)
 
 
 @reg_op("Divide")
 def divide(x, y, target=utils.CUDA):
     """Divide"""
-    return math.Divide(x, y, target)
+    return math.divide(x, y, target)
 
 
 @reg_op("Tile")
@@ -196,7 +196,7 @@ def less(x, y, target=utils.CUDA):
 @reg_op("Exp")
 def exp(x, target=utils.CUDA):
     """Exp"""
-    return math.Exp(x, target)
+    return math.exp(x, target)
 
 
 @reg_op("Sum")

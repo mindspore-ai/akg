@@ -16,7 +16,7 @@
 import akg.lang.ascend
 import akg.utils as utils
 from akg.utils.format_transform import get_shape
-from akg.ops.math import Divide
+from akg.ops.math import divide
 
 def lin_space_compute(input_assist, input_start, input_stop, input_num):
     """inv_grad compute implementation"""
@@ -24,7 +24,7 @@ def lin_space_compute(input_assist, input_start, input_stop, input_num):
     num_divided = akg.lang.ascend.vadds(num_float, -1.0)
 
     step_divider = akg.lang.ascend.vsub(input_stop, input_start)
-    step = Divide(step_divider, num_divided, target="cce")
+    step = divide(step_divider, num_divided, target="cce")
 
     res_temp = akg.lang.ascend.vmul(input_assist, akg.lang.ascend.broadcast(step, input_assist.shape))
     res = akg.lang.ascend.vadd(res_temp, akg.lang.ascend.broadcast(input_start, input_assist.shape))

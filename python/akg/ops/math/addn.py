@@ -1,4 +1,4 @@
-# Copyright 2020-2021 Huawei Technologies Co., Ltd
+# Copyright 2020-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,8 +17,9 @@ import akg
 import akg.topi
 import akg.utils as utils
 
+
 @utils.check_input_type(((list, tuple), akg.tvm.tensor.Tensor), (str, type(None)))
-def Addn(data, target=utils.CCE):
+def addn(data, target=utils.CCE):
     """
     Compute sum of all elements in tensor.
 

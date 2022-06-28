@@ -16,7 +16,7 @@
 
 import akg.topi
 import akg.tvm
-from akg.ops.math import Divide, Cast
+from akg.ops.math import divide, cast
 from akg.ops.math.ascend import floor
 import akg.utils as utils
 from akg.utils.dsl_create import produce_shapes
@@ -41,7 +41,7 @@ def _truncatemod_compute_mini(x, y):
         def truncatemod_func(a, b):
             """function for truncatemod formula"""
             # For positive numbers, floor and trunc are equivalent
-            return akg.topi.subtract(a, akg.topi.multiply(b, Cast(floor(Divide(a, b, utils.CCE)), b.dtype, target=utils.CCE)))
+            return akg.topi.subtract(a, akg.topi.multiply(b, cast(floor(divide(a, b, utils.CCE)), b.dtype, target=utils.CCE)))
 
         mod_value = truncatemod_func(x_abs_fp32, y_abs_fp32)
 
@@ -101,12 +101,12 @@ def truncatemod(x, y, target=utils.CCE):
         # For brevity, lex x = 132.05, y = 131.95; x and y are very close, but the difference between trunc(x)=132
         # and trunc(y)=131 is 1
         if dtype != "float32":
-            x = Cast(x, "float32", target=target)
-            y = Cast(y, "float32", target=target)
+            x = cast(x, "float32", target=target)
+            y = cast(y, "float32", target=target)
         res = akg.topi.mod(x, y)
     else:
         res = _truncatemod_compute_mini(x, y)
 
     if res.dtype != dtype:
-        res = Cast(res, dtype, target=target)
+        res = cast(res, dtype, target=target)
     return res
