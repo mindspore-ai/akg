@@ -938,3 +938,10 @@ def test_transformer_ascend_level0():
 @pytest.mark.env_onecard
 def test_sponge_gpu_level0():
     test_network("gpu", "sponge", "level0")
+
+
+@pytest.mark.level0
+@pytest.mark.platform_x86_cpu
+@pytest.mark.env_onecard
+def test_deepfm_cpu_level0():
+    test_network("cpu", "deepfm", "level0")
