@@ -16,7 +16,7 @@
 
 import akg
 from akg import topi, tvm
-from akg.ops.math import Exp
+from akg.ops.math import exp
 from akg.ops.math.ascend import Sign
 import akg.utils as utils
 import akg.utils as utils
@@ -43,7 +43,7 @@ def _compute_update(logbase, sign_decay, sign_gm, grad):
                            lambda *indice: sign_gm(*indice) * sign_decay[0])
     vmul_tmp = tvm.compute(vmul_tmp.shape,
                            lambda *indice: vmul_tmp(*indice) * logbase[0])
-    exp_tmp = Exp(vmul_tmp, target="cce")
+    exp_tmp = exp(vmul_tmp, target="cce")
     update = topi.multiply(exp_tmp, grad)
     return update
 

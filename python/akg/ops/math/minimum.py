@@ -1,4 +1,4 @@
-# Copyright 2020-2021 Huawei Technologies Co., Ltd
+# Copyright 2020-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 import akg.tvm
 import akg.topi
 import akg.utils as utils
-from .cast import Cast
+from .cast import cast
 
 
 def minimum(input1, input2, target=utils.CCE):
@@ -50,9 +50,9 @@ def minimum(input1, input2, target=utils.CCE):
 
     need_cast = True if target == utils.CCE and dtype in ["int8", "uint8"] else False
     if need_cast:
-        input1 = Cast(input1, "float16", target)
-        input2 = Cast(input2, "float16", target)
+        input1 = cast(input1, "float16", target)
+        input2 = cast(input2, "float16", target)
     res = akg.topi.minimum(input1, input2)
     if need_cast:
-        res = Cast(res, dtype, target)
+        res = cast(res, dtype, target)
     return res

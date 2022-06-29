@@ -1,4 +1,4 @@
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@
 # limitations under the License.
 import akg
 import numpy as np
-from akg.ops.math import Exp
+from akg.ops.math import exp
 from akg.utils import kernel_exec as utils
 from tests.common.tensorio import compare_tensor
 from tests.common.base import get_rtol_atol
@@ -25,14 +25,14 @@ def exp_run(shape, dtype, attrs={}):
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(Exp, [shape], [dtype], kernel_name=kernel_name, attrs=attrs, tuning=t)
+        mod = utils.op_build_test(exp, [shape], [dtype], kernel_name=kernel_name, attrs=attrs, tuning=t)
         if t:
             expect, input, output = gen_data(dtype, shape)
             return mod, expect, (input, output)
         else:
             return mod
     else:
-        mod = utils.op_build_test(Exp, [shape], [dtype], kernel_name='exp', attrs=attrs)
+        mod = utils.op_build_test(exp, [shape], [dtype], kernel_name='exp', attrs=attrs)
         expect, input, output = gen_data(dtype, shape)
         output = utils.mod_launch(mod, (input, output), expect=expect)
         rtol, atol = get_rtol_atol("exp", dtype)

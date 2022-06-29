@@ -1,4 +1,4 @@
-# Copyright 2021 Huawei Technologies Co., Ltd
+# Copyright 2021-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,12 +16,12 @@ import numpy as np
 from akg.utils import kernel_exec as utils
 from akg.ops.math.ascend import matmul
 from tests.common.test_run.ascend.matmul_run import *
-from akg.ops.math import Add
+from akg.ops.math import add
 
 def matmul_tensoradd(x, y, c, b, out_dtype, left_format="zZ", right_format="nZ", out_format="zN", transpose_x=False, transpose_y=False,
                     attrs=None, target='cce'):
     matmul_res, attrs = matmul(x, y, b, out_dtype, left_format, right_format, out_format, transpose_x, transpose_y, attrs=None)
-    res = Add(matmul_res, c, target=target)
+    res = add(matmul_res, c, target=target)
     return res, attrs
 
 def matmul_add_execute(shape_x, shape_y, bias, cadd, left_format, right_format, out_format, adj_x, adj_y, dtype, bias_dtype, out_dtype, kernel_name, attrs=None):

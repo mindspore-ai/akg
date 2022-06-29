@@ -15,7 +15,7 @@
 """operator dsl function: xdivy_grad"""
 import akg
 from akg import tvm
-from akg.ops.math import Divide
+from akg.ops.math import divide
 from akg.ops.math import reciprocal
 from akg.utils.format_transform import get_shape
 from akg.utils.dsl_create import produce_shapes, broadcast_gradient_args
@@ -62,8 +62,8 @@ def xdivy_grad_compute(placeholders, shape_max, dtype, rx, ry):
         x2_rec = reciprocal(x2)
         partial_x1 = akg.lang.ascend.vmul(not_zero_x1, x2_rec)
     else:
-        not_zero_x1 = Divide(x1, x1_addepsmin, target="cce")
-        partial_x1 = Divide(not_zero_x1, x2, target="cce")
+        not_zero_x1 = divide(x1, x1_addepsmin, target="cce")
+        partial_x1 = divide(not_zero_x1, x2, target="cce")
 
     partial_x1g = akg.lang.ascend.vmul(partial_x1, grad)
 

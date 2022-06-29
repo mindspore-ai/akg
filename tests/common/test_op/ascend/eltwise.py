@@ -1,4 +1,4 @@
-# Copyright 2020-2021 Huawei Technologies Co., Ltd
+# Copyright 2020-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@ import akg.tvm
 import akg.utils as utils
 import akg.utils as utils
 from akg.utils.format_transform import get_shape
-from akg.ops.math import Addn
+from akg.ops.math import addn
 
 def _max(data):
     """

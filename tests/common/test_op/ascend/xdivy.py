@@ -15,7 +15,7 @@
 """operator dsl function: xdivy"""
 import akg
 from akg import tvm
-from akg.ops.math import Divide
+from akg.ops.math import divide
 from akg.utils.format_transform import get_shape
 from akg.utils.dsl_create import produce_shapes
 import akg.utils as utils
@@ -81,7 +81,7 @@ def xdivy_compute(input_x, input_y):
         broadcast_x = akg.lang.ascend.cast_to(broadcast_x, "float32")
         input_y_revised = akg.lang.ascend.cast_to(input_y_revised, "float32")
 
-    res = Divide(broadcast_x, input_y_revised, target="cce")
+    res = divide(broadcast_x, input_y_revised, target="cce")
 
     if dtype == "float16":
         res = akg.lang.ascend.cast_to(res, dtype)

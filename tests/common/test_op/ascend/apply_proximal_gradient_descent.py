@@ -20,7 +20,7 @@ import akg.topi
 from akg.utils.format_transform import get_shape
 import akg.utils as utils
 from akg.utils.dsl_create import TensorUtils
-from akg.ops.math import Divide
+from akg.ops.math import divide
 from akg.utils.kernel_exec import product_is_mini
 from akg.ops.math.ascend import Sign
 
@@ -48,10 +48,10 @@ def apply_proximal_gradient_descent_impl(var, alpha, l1, l2, delta):
     max_value = akg.tvm.compute(shape, lambda *indice: akg.tvm.max(
         akg.tvm.abs(prox_var(*indice)) - alpha(*indice)*l1(*indice),
         akg.tvm.const(0, compute_type)), name="max_value")
-    var_new_l1_gt_0 = akg.topi.multiply(Divide(sign_prox_var, alpha_l2_1, target="cce"), max_value)
+    var_new_l1_gt_0 = akg.topi.multiply(divide(sign_prox_var, alpha_l2_1, target="cce"), max_value)
 
     # l1<=0: var_new = prox_var/(1+alpha*l2)
-    var_new_l1_le_0 = Divide(prox_var, alpha_l2_1, target="cce")
+    var_new_l1_le_0 = divide(prox_var, alpha_l2_1, target="cce")
 
     if product_is_mini():
         var_new = akg.tvm.compute(shape, lambda *indice:

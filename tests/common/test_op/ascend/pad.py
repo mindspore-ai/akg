@@ -14,7 +14,7 @@
 
 """operator dsl function:pad"""
 
-from akg.ops.math import Cast
+from akg.ops.math import cast
 from akg.utils.format_transform import get_const
 from akg.topi.nn import pad as tvm_pad
 import akg.utils as utils
@@ -53,7 +53,7 @@ def pad(data, paddings, padtype, target="cce"):
 
     dtype = data.dtype
     if dtype == 'int8' or dtype == 'uint8':
-        data = Cast(data, "float16", target=target)
+        data = cast(data, "float16", target=target)
 
     rank = len(data.shape)
     pad_before = []
@@ -61,8 +61,8 @@ def pad(data, paddings, padtype, target="cce"):
     for i in range(rank):
         pad_before.append(paddings[i][0])
         pad_after.append(paddings[i][1])
-    B = tvm_pad(data, pad_before, pad_after=pad_after, name='B')
+    b = tvm_pad(data, pad_before, pad_after=pad_after, name='B')
 
     if dtype == 'int8' or dtype == 'uint8':
-        B = Cast(B, dtype, target=target)
-    return B
+        b = cast(b, dtype, target=target)
+    return b

@@ -1,4 +1,4 @@
-# Copyright 2020-2021 Huawei Technologies Co., Ltd
+# Copyright 2020-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,8 +18,8 @@ from akg.utils.kernel_exec import product_is_mini
 from akg.utils import validation_check as utils
 from akg.utils.format_transform import get_shape
 from ..sub import sub
-from ..abs import Abs
-from ..cast import Cast
+from ..abs import abs
+from ..cast import cast
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (float, type(None)), (str, type(None)))
@@ -60,13 +60,13 @@ def approximate_equal(x, y, tolerance=1e-5, target=utils.CCE):
                            dtype, y.dtype)
 
     res_vsub = sub(x, y, target)
-    res_vabs = Abs(res_vsub, target)
+    res_vabs = abs(res_vsub, target)
 
     # As vcmp_lt and vsel instruction don't support fp32 on mini
     # It can be simplified by some methods, such as , "auto cast"
     if product_is_mini():
         dtype = "float16"
-        res_vabs = Cast(res_vabs, dtype, target)
+        res_vabs = cast(res_vabs, dtype, target)
 
     t = akg.tvm.compute(shape, lambda *indice: akg.tvm.const(1, dtype), "t")
     f = akg.tvm.compute(shape, lambda *indice: akg.tvm.const(0, dtype), "f")
@@ -75,6 +75,6 @@ def approximate_equal(x, y, tolerance=1e-5, target=utils.CCE):
         t[indice], f[indice]))
 
     #  It can be be simplified that let cast op support fp16 and fp32 to bool type
-    res_fp16 = Cast(res, "float16", target)
+    res_fp16 = cast(res, "float16", target)
     res_bool = akg.tvm.compute(shape, lambda *indice: res_fp16(*indice).astype("bool"))
     return res_bool

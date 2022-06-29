@@ -1,6 +1,4 @@
-#!/usr/bin/env python3
-# coding: utf-8
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,7 +17,7 @@ from functools import reduce
 import akg.topi
 import akg.tvm
 import akg
-from akg.ops.math.cast  import Cast
+from akg.ops.math.cast  import cast
 from akg.ops.nn.ascend.conv import conv_core
 from akg.ops.nn.ascend.conv import conv_set_dim_func
 import akg.utils as utils
@@ -239,7 +237,7 @@ def ConvBn1(data, fmap_shape, filter_shape, pad, stride, dilation, use_bias=Fals
 
     conv_res_32 = conv_core(data, fmap_shape, filter_shape, pad, stride, dilation, use_bias, attrs)
 
-    conv_res_16 = Cast(conv_res_32, "float16", utils.CCE)
+    conv_res_16 = cast(conv_res_32, "float16", utils.CCE)
 
     axes = [3, 2, 0]
     conv_res_32_shape = [x.value for x in conv_res_32.shape]

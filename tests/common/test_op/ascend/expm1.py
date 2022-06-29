@@ -16,7 +16,7 @@
 
 import akg
 import akg.utils as utils
-from akg.ops.math import Exp
+from akg.ops.math import exp
 
 def expm1(data, target=utils.CCE):
     """
@@ -33,6 +33,6 @@ def expm1(data, target=utils.CCE):
 
     utils.ops_dtype_check(data.dtype, utils.DtypeForDavinci.ALL_FLOAT)
 
-    output = akg.lang.ascend.vadds(Exp(data, target=target), -1)
+    output = akg.lang.ascend.vadds(exp(data, target=target), -1)
 
     return output

@@ -18,7 +18,7 @@ from akg.utils.format_transform import get_shape
 import akg.utils.dsl_create as dc
 import akg.utils as utils
 from akg.utils.kernel_exec import product_is_mini
-from akg.ops.math import Divide, Exp, round_
+from akg.ops.math import divide, exp, round_
 
 SCALER_P = 0.3275911
 SCALER_A1 = 0.254829592
@@ -74,7 +74,7 @@ def _erf_compute(input_x):
     data_sign_vmuls = topi.multiply(input_x, fp16_max)
     data_sign_abs = topi.abs(data_sign_vmuls)
     data_adds = topi.add(data_sign_abs, fp16_min)
-    data_sign_div = Divide(data_sign_vmuls, data_adds, target="cce")
+    data_sign_div = divide(data_sign_vmuls, data_adds, target="cce")
     data_round = round_(data_sign_div, target=utils.CCE)
     # mini device should cast to fp16 first
     if product_is_mini():
@@ -84,12 +84,12 @@ def _erf_compute(input_x):
     # t = 1 / (1 + px)
     tensor_abs = topi.abs(input_x)
     one_plus_px = topi.add(cst_one, topi.multiply(tensor_abs, cst_p))
-    data_t = Divide(topi.full(shape, "float32", 1.0), one_plus_px, target="cce")
+    data_t = divide(topi.full(shape, "float32", 1.0), one_plus_px, target="cce")
 
     # e^{-x^2}
     abs_square = topi.multiply(tensor_abs, tensor_abs)
     neg_square = topi.multiply(abs_square, cst_neg_one)
-    exp_neg_square = Exp(neg_square, target="cce")
+    exp_neg_square = exp(neg_square, target="cce")
 
     # a1t + a2t^2 + a3t^3 + a4t^4 + a5t^5 = ((((a5t + a4)t + a3)t + a2)t + a1)t
     tmp_a5 = topi.multiply(cst_a5, data_t)

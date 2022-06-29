@@ -1,4 +1,4 @@
-# Copyright 2020-2021 Huawei Technologies Co., Ltd
+# Copyright 2020-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 from akg import topi
 import akg.tvm
 import akg.utils as utils
-from akg.ops.math import Abs, Cast, mul, neg, rsqrt, Exp, Divide, minimum
+from akg.ops.math import abs, cast, mul, neg, rsqrt, exp, divide, minimum
 
 # const value
 ITR_BEFORE = (1.0, 3.5156229, 3.0899424, 1.2067492, 0.2659732, 0.0360768, 0.0045813)
@@ -35,8 +35,8 @@ def _bessel_i0e_compute(input_data):
 
     # chose the type of data in begin
     if dtype_input == "float16":
-        input_data = Cast(input_data, "float32", target=utils.CCE)
-    abs_data = Abs(input_data, target=utils.CCE)
+        input_data = cast(input_data, "float32", target=utils.CCE)
+    abs_data = abs(input_data, target=utils.CCE)
 
     # compute bessel_i0e for data in (-3.75, 3.75)
     # t = |x| / 3.75
@@ -51,7 +51,7 @@ def _bessel_i0e_compute(input_data):
     for iter_number in ITR_BEFORE[LEN_BEFORE-3::-1]:
         before_res = mul(before_res, square_data, target=utils.CCE)
         before_res = topi.add(before_res, iter_number)
-    exp_data = Exp(neg(before_abs_data, target=utils.CCE), target=utils.CCE)
+    exp_data = exp(neg(before_abs_data, target=utils.CCE), target=utils.CCE)
     before_res = mul(before_res, exp_data, target=utils.CCE)
 
     # compute bessel_i0e for data in other domain
@@ -59,7 +59,7 @@ def _bessel_i0e_compute(input_data):
     # I0e(x) = (1 / sqrt(|x|))*(0.39894228 + 0.01328592t^-1 + 0.00225319t^-2 + -0.00157565t^-3
     #           + 0.00916281t^-4 + -0.02057706t^-5 + 0.02635537t^-6 + -0.01647633t^-7
     #           + 0.00392377t^-8), |x| >= 3.75
-    data = Divide(broad_const_limit, abs_data, target=utils.CCE)
+    data = divide(broad_const_limit, abs_data, target=utils.CCE)
     after_res = topi.multiply(data, ITR_AFTER[LEN_AFTER - 1])
     after_res = topi.add(after_res, ITR_AFTER[LEN_AFTER - 2])
     for iter_number in ITR_AFTER[LEN_AFTER-3::-1]:
@@ -71,7 +71,7 @@ def _bessel_i0e_compute(input_data):
 
     # chose the type of data in end
     if dtype_input == "float16":
-        after_res = Cast(after_res, "float16", target=utils.CCE)
+        after_res = cast(after_res, "float16", target=utils.CCE)
 
     return after_res
 

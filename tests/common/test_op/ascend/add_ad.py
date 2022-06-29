@@ -15,12 +15,12 @@
 """operator dsl function:add_ad"""
 import akg
 import akg.utils as utils
-from akg.ops.math import Add
+from akg.ops.math import add
 
 
 def add_ad(head, a, b, scale, target="cce"):
     """Compute gradient of add operator using automatic differentiate."""
-    output = Add(a, b, scale, target=target)
+    output = add(a, b, scale, target=target)
     jacs = list(akg.differentiate(output, [a], head))
     return jacs[0]
 
