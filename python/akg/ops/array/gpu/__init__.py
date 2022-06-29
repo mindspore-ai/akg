@@ -13,10 +13,10 @@
 # limitations under the License.
 
 """__init__"""
-from .gather import Gather
-from .gather_nd import GatherNd
-from .one_hot import OneHot
-from .squeeze import Squeeze
-from .squeeze_grad import SqueezeGrad
-from .standard_normal import StandardNormal
-from .tensor_scatter_add import TensorScatterAdd
+from .gather import gather
+from .gather_nd import gather_nd
+from .one_hot import one_hot
+from .squeeze import squeeze
+from .squeeze_grad import squeeze_grad
+from .standard_normal import standard_normal
+from .tensor_scatter_add import tensor_scatter_add

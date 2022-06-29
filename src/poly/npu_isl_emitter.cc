@@ -2465,10 +2465,8 @@ class SpecialLoopDistribution : public IRMutator {
   std::vector<const For *> to_distribued_loops_;
 };
 
-Stmt NPUIslEmitter::Emit(const isl::ast_node &node) {
-  Stmt stmt = EmitAst(node);
+Stmt NPUIslEmitter::EmitterPostProcess(Stmt &stmt) {
   stmt = RemoveCond(stmt);
-
   /// emit global realize
   if (!info_.mmu_info_.IsSpecGemm()) {
     for (const auto &i : global_realize_out_) {
@@ -2510,7 +2508,7 @@ Stmt NPUIslEmitter::Emit(const isl::ast_node &node) {
   for (const auto &i : iters_new_name_) {
     vmap.emplace(i.first, VarExpr(i.second));
   }
-  return stmt;
+  return IslEmitter::EmitterPostProcess(stmt);
 }
 
 void GetNameWithoutLocal(isl::id &tensor_id, ScopInfo &info) {

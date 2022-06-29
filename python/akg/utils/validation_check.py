@@ -680,7 +680,7 @@ def comp_output_params(is_special5d, shape, in_rank, axis):
         mid_shape[axis] = shape[axis]
 
     out_params = {
-        "is_special5d": is_special5d,
+        "is_special5d": bool(is_special5d),
         "axis": axis,
         "axes": tuple(axes),
         "mid_shape": mid_shape

@@ -1,4 +1,4 @@
-# Copyright 2020-2021 Huawei Technologies Co., Ltd
+# Copyright 2020-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 import akg.topi as topi
 import akg.tvm as tvm
 import akg.utils as utils
-from .cast import Cast
+from .cast import cast
 
 
 @utils.check_input_type(tvm.tensor.Tensor, tvm.tensor.Tensor, (str, type(None)))
@@ -45,9 +45,9 @@ def maximum(data1, data2, target=utils.CCE):
     dtype = data1.dtype
     need_cast = True if target == utils.CCE and dtype in ["int8", "uint8"] else False
     if need_cast:
-        data1 = Cast(data1, "float16")
-        data2 = Cast(data2, "float16")
+        data1 = cast(data1, "float16")
+        data2 = cast(data2, "float16")
     res = topi.maximum(data1, data2)
     if need_cast:
-        res = Cast(res, dtype)
+        res = cast(res, dtype)
     return res

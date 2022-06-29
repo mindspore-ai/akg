@@ -18,8 +18,8 @@ import akg.topi
 import akg.utils as  utils
 
 
-@utils.check_input_type(akg.tvm.tensor.Tensor, int, int, int, int, str, (str, type(None)))
-def OneHot(indices, on_value, off_value, depth, axis, dtype, target=utils.CUDA):
+@utils.check_input_type(akg.tvm.tensor.Tensor, int, int, int, int, str)
+def one_hot(indices, on_value, off_value, depth, axis, dtype):
     """
     Supported Platforms:
         'GPU'

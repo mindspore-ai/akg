@@ -113,8 +113,7 @@ def modify_common_constraints(value, constraint, level=TileLevel.C1):
         return create_custom_tiling_node(TileMode.COMMON, block_max=value)
     if constraint == TileConstraint.BLOCK_MOD:
         return create_custom_tiling_node(TileMode.COMMON, block_mod=value)
-    raise TypeError("Constraint {} is not supported in this api, please use other api"
-                    .format(constraint.value))
+    raise TypeError("Constraint {} is not supported in this api, please use other api".format(constraint.value))
 
 
 @check_input_type((str, int), TileConstraint, int, (int, list, tuple, type(None)), TileLevel)

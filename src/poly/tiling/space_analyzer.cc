@@ -111,12 +111,37 @@ void SpaceAnalyzer::MarkCaredType(ProvideEntry pe) {
   }
 }
 
+Template SpaceAnalyzer::GetOpTemplate(const Node *op) {
+  CHECK(op->IsInstance<Provide>());
+  isl::id s_id;
+  auto &stmts = analyzer_->scop_info_.analysis_result_.GetProvideStmtsMap();
+  for (auto &s: stmts) {
+    if (s.second == op) {
+      s_id = s.first;
+      break;
+    }
+  }
+  Template temp(Template::DEFAULT);
+  if (s_id.is_null()) {
+    return temp;
+  }
+  auto &bands = analyzer_->scop_info_.analysis_result_.GetAllOuterBandNode();
+  for (auto &b: bands) {
+    for (auto &i: b->stmts) {
+      if (s_id == i) {
+        return b->template_type;
+      }
+    }
+  }
+  return temp;
+}
+
 void SpaceAnalyzer::IdentifyInsnType() {
   for (auto it : provides_ana_) {
     std::vector<ProvideEntry> pes = it.second;
     for (auto pe : pes) {
-      bool is_gemm = pe.basic_op_type.find(AT_TRANSPOSE) != std::string::npos &&
-                     pe.basic_op_type.find(AT_ELEMWISE) != std::string::npos;
+      Template temp = GetOpTemplate(pe.op);
+      bool is_gemm = ((temp == Template::CONV) || (temp == Template::MATMUL));
       if (analyzer_->scop_info_.user_config_.GetTarget() == TARGET_CUDA && is_gemm) {
         MarkGemmAxes(pe);
       }

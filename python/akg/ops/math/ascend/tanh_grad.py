@@ -1,4 +1,4 @@
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,7 +18,8 @@ import akg
 import akg.tvm
 import akg.utils as utils
 
-def TanhGrad(data_y, data_dy, target=utils.CCE):
+
+def tanh_grad(data_y, data_dy, target=utils.CCE):
     """
     Compute the backpropogation gradient of tanh.
 

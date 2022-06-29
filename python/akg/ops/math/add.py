@@ -1,4 +1,4 @@
-# Copyright 2020-2021 Huawei Technologies Co., Ltd
+# Copyright 2020-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@ from akg.utils.dsl_create import produce_shapes
 from akg.utils.format_transform import get_shape
 from akg.utils.dynamic_shape import shape_is_dynamic
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor)
 def _add(data1, data2):
     utils.elemwise_dtype_check(data1.dtype, data2.dtype)
@@ -31,6 +32,7 @@ def _add(data1, data2):
     res = akg.topi.add(data1, data2)
 
     return res
+
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor,
                           (int, float, type(None)), (bool, type(None)), (dict, type(None)))
@@ -118,7 +120,8 @@ def _add_ascend(first_input, second_input, scale=1.0, polyhedral=True, attrs=Non
 
     return res_cast, comp_func
 
-def Add(data1, data2, scale=1.0, polyhedral=True, attrs={}, target=utils.CCE):
+
+def add(data1, data2, scale=1.0, polyhedral=True, attrs=None, target=utils.CCE):
     """
     Computes data1 + data2 elementwise, broadcast is supported.
 

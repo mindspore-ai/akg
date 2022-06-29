@@ -19,7 +19,7 @@ import akg.tvm
 import akg.topi
 import akg
 import akg.utils as utils
-from akg.ops.nn.ascend.maxpool import maxpool, old_maxpool
+from akg.ops.nn.ascend.maxpool import old_maxpool
 from akg.utils.format_transform import get_shape
 from akg.utils.dsl_create import cal_pad_shapes_by_strategy
 from akg.utils.kernel_exec import debug_mode, create_code
@@ -44,6 +44,7 @@ def maxpool_ad_no_custom_diff_manual_schedule_all_max(head, data, kernel, stride
              "enable_pre_poly_loop_partition": False}
     maxpool_fwd = old_maxpool(data, kernel, stride, pad)
     [dl_ddata] = akg.differentiate(maxpool_fwd, [data], head, None, None)
+
     # schedule for differetiation operation
     s = akg.tvm.create_schedule([dl_ddata.op])
 
@@ -56,7 +57,7 @@ def maxpool_ad_no_custom_diff_manual_schedule_all_max(head, data, kernel, stride
 
     def comp_func(s):
         data_ub = s.cache_read(data, "local.UB", [forward, new_tensor])
-        head_ub = s.cache_read(head, "local.UB", [new_tensor])
+        head_ub = s.cache_read(head, "local.UB", [new_tensor])        
         result_ub = s.cache_write(new_tensor_red, "local.UB")
 
         s[broadcast].set_scope("local.UB")
@@ -78,7 +79,7 @@ def maxpool_ad_no_custom_diff_manual_schedule_all_max(head, data, kernel, stride
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor,
                         akg.tvm.tensor.Tensor, (list, tuple), (list, tuple), (str, list, tuple), (str, type(None)))
-def MaxpoolAd(head, data, forward, mask, kernel, stride, pad, target=utils.CCE):
+def maxpool_ad(head, data, forward, mask, kernel, stride, pad, target=utils.CCE):
     """
     automatic differentiate of maxpool with manual schedule.
 
@@ -389,7 +390,6 @@ def maxpool_ad_manual_schedule_all_max(shape, kernel, stride, pad, dtype, polyhe
     b, c1, h, w, c0 = result_pad.op.axis
     oh, ow = result_pad.op.reduce_axis
     s[result_pad].reorder(oh, ow, b, c1, h, w, c0)
-    # s[result_pad].compute_at(s[result], result.op.axis[1])
 
     b, c1, h, w, c0 = result.op.axis
     h_out, _ = s[result].split(h, stride_h)

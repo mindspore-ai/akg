@@ -17,7 +17,7 @@
 import math
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.nn.ascend import BiasAdd
+from akg.ops.nn.ascend import bias_add
 from tests.common.tensorio import compare_tensor
 from tests.common.gen_random import random_gaussian
 from tests.common.base import get_rtol_atol
@@ -46,7 +46,7 @@ def bias_add_run(shape, data_format, dtype, attrs):
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(BiasAdd,
+        mod = utils.op_build_test(bias_add,
                                   [shape, bias_shape], [dtype, dtype],
                                   kernel_name=kernel_name, op_attrs=[data_format], attrs=attrs, tuning=t)
         if t:
@@ -57,7 +57,7 @@ def bias_add_run(shape, data_format, dtype, attrs):
     if 'mod' in attrs.keys():
         mod = attrs["mod"]
     else:
-        mod = utils.op_build_test(BiasAdd, [shape, bias_shape], [dtype, dtype], kernel_name='bias_add',
+        mod = utils.op_build_test(bias_add, [shape, bias_shape], [dtype, dtype], kernel_name='bias_add',
                                   op_attrs=[data_format], attrs=attrs)
     expect, inputs, output = gen_data(bias, dtype, shape, data_format)
     args = [inputs, bias, output]

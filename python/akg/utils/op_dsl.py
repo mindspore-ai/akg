@@ -25,7 +25,7 @@ def get_attr(attr_desc, attr_type):
     for attr in attr_desc:
         if attr["name"] == attr_type:
             return attr["value"]
-    logging.warning("attr %s not found, please check." % (attr_type))
+    logging.warning("attr %s not found, please check.", attr_type)
     return []
 
 
@@ -105,6 +105,14 @@ def csrmv_np(indptr, indices, data, weight, shape):
     return np.asarray(expect)
 
 
+def csrmm_np(indptr, indices, data, weight, shape):
+    """numpy implementation of csrmm"""
+    import scipy.sparse
+    sparse_data = scipy.sparse.csr_matrix((data, indices, indptr), shape)
+    expect = sparse_data * weight
+    return np.asarray(expect)
+
+
 def csr_reduce_sum_np(indptr, indices, data, shape, axis):
     """numpy implementation of csr_reduce_sum"""
     import scipy.sparse
@@ -122,9 +130,15 @@ def csr_reduce_sum_np(indptr, indices, data, shape, axis):
 def csr_mul_np(indptr, indices, sparse_data, dense, shape):
     """numpy implementation of csr_mul"""
     import scipy.sparse
-    sparse_data = scipy.sparse.csr_matrix((sparse_data, indices, indptr), shape)
-    expect = sparse_data.multiply(np.broadcast_to(dense, shape))
-    return np.asarray(expect)
+    x = sparse_data.reshape(sparse_data.shape[0], -1)
+    y = np.broadcast_to(dense, shape).reshape(shape[0], shape[1], -1)
+    expect = []
+    for i in range(x.shape[-1]):
+        sparse = scipy.sparse.csr_matrix((x[..., i], indices, indptr), shape=shape[:2])
+        out = sparse.multiply(y[..., i])
+        expect.append(out.data)
+    expect = np.moveaxis(np.stack(expect, 0).reshape(shape[2:] + [sparse_data.shape[0]]), -1, 0)
+    return expect
 
 
 def csr_div_np(indptr, indices, sparse_data, dense, shape):
@@ -228,6 +242,14 @@ def transpose_str(inputs, output, attr):
         output[0]['tensor_name'], get_input(inputs[0][0]), axes)
     return s
 
+def concat_str(inputs, output, attr):
+    axis = get_attr(attr, 'axis')
+    inputs_list = []
+    for i in range(len(inputs[0])):
+        inputs_list.append(get_input(inputs[0][i]))
+    s = '{} = np.concatenate(({}), axis={})'.format(output[0]['tensor_name'], ', '.join(inputs_list), axis)
+    return s
+    
 
 def trans_data_two2fractal(input_, src_format, dst_format):
     """two2fractal"""
@@ -632,6 +654,8 @@ op_dsl = {
                                           (output[0]['tensor_name'], get_input(inputs[0][0])),
     "Neg": lambda inputs, output, attr: "%s = np.negative(%s)" %
                                         (output[0]['tensor_name'], get_input(inputs[0][0])),
+    "Floor": lambda inputs, output, attr: "%s = np.floor(%s)" %
+                                        (output[0]['tensor_name'], get_input(inputs[0][0])),
     "Exp": lambda inputs, output, attr: "%s = np.exp(%s)" %
                                         (output[0]['tensor_name'], get_input(inputs[0][0])),
     "RealDiv": lambda inputs, output, attr: "%s = np.divide(%s, %s)" %
@@ -663,9 +687,9 @@ op_dsl = {
     "Reshape": lambda inputs, output, attr: "%s = np.reshape(%s, %s)" %
                                             (output[0]['tensor_name'], get_input(inputs[0][0]), output[0]['shape']),
     "OneHot": lambda inputs, output, attr: "%s = one_hot_np(%s, %s, %s, %s, %s, np.%s)" %
-                                           (output[0]['tensor_name'], get_input(inputs[0][0]), attr[1]['value'],
+                                           (output[0]['tensor_name'], get_input(inputs[0][0]), get_attr(attr, "axis"),
                                             get_input(inputs[1][0]),
-                                            get_input(inputs[2][0]), attr[0]['value'], output[0]['data_type']),
+                                            get_input(inputs[2][0]), get_attr(attr, "depth"), output[0]['data_type']),
     "ZerosLike": lambda inputs, output, attr: "%s = np.zeros_like(%s)" %
                                               (output[0]['tensor_name'], get_input(inputs[0][0])),
     "AddN": lambda inputs, output, attr: "%s = %s" %
@@ -716,6 +740,9 @@ op_dsl = {
     "ExpandDims": lambda inputs, output, attr: "%s = np.expand_dims(%s, %s)" %
                                                (output[0]['tensor_name'], get_input(inputs[0][0]),
                                                 get_attr(attr, "axis")),
+    "ElemAny": lambda inputs, output, attr: "%s = (%s.all() > 0).astype(np.%s).reshape(1)" %
+                                               (output[0]['tensor_name'], get_input(inputs[0][0]),
+                                                output[0]['data_type']),
     "Transpose": lambda inputs, output, attr: transpose_str(inputs, output, attr),
     "TransData": trans_data_dsl,
     "BroadcastTo": lambda inputs, output, attr: broadcast_str(inputs, output, attr),
@@ -782,4 +809,18 @@ op_dsl = {
                                                   output[0]['tensor_name'], get_input(inputs[0][0]),
                                                   get_input(inputs[1][0]), get_input(inputs[2][0]),
                                                   get_attr(attr, "dense_shape")),
+    "CSRMM": lambda inputs, output, attr: "{} = csrmm_np({}, {}, {}, {}, {})".format(
+                                           output[0]['tensor_name'], get_input(inputs[0][0]), get_input(inputs[1][0]),
+                                           get_input(inputs[2][0]),
+                                           get_input(inputs[3][0]), get_attr(attr, "dense_shape")),
+    "CImag": lambda inputs, output, attr: "%s = np.imag(%s)" %
+    (output[0]['tensor_name'], get_input(inputs[0][0])),
+
+    "CReal": lambda inputs, output, attr: "%s = np.real(%s)" %
+    (output[0]['tensor_name'], get_input(inputs[0][0])),
+
+    "Complex": lambda inputs, output, attr: "%s = np.vectorize(complex)(%s, %s)" %
+    (output[0]['tensor_name'], get_input(inputs[0][0]),
+                                               get_input(inputs[1][0])),
+    "Concat": lambda inputs, output, attr: concat_str(inputs, output, attr)
 }

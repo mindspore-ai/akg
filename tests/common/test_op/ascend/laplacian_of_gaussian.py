@@ -16,7 +16,7 @@
 import akg.topi
 import akg.tvm
 import akg
-from akg.ops.math import Exp
+from akg.ops.math import exp
 
 def gaussian(x, sig=1.0, mean=0.0):
     r"""
@@ -27,12 +27,12 @@ def gaussian(x, sig=1.0, mean=0.0):
     if (len(x.shape) == 1):
         two = akg.tvm.const(2, x.dtype)
         sig_cast = akg.tvm.const(sig, x.dtype)
-        return 1 / (sig_cast * sig_cast * (akg.tvm.const(6.283, x.dtype))) * Exp(-(x) * (x) / (two * sig_cast * sig_cast), target='cce')
+        return 1 / (sig_cast * sig_cast * (akg.tvm.const(6.283, x.dtype))) * exp(-(x) * (x) / (two * sig_cast * sig_cast), target='cce')
     elif (len(x.shape) == 2):
         sig_cast = akg.tvm.const(sig, x.dtype)
         x_square = akg.tvm.compute(x.shape, lambda *i:  x(*i) * x(*i))
         sum_reduce = akg.topi.sum(akg.tvm.compute(x.shape, lambda *i: x_square(*i)*akg.tvm.const(-0.5, x.dtype)), axis=(1), keepdims=True)
-        return 1 / (sig_cast * sig_cast * (akg.tvm.const(6.283, x.dtype))) * Exp(sum_reduce, target='cce')
+        return 1 / (sig_cast * sig_cast * (akg.tvm.const(6.283, x.dtype))) * exp(sum_reduce, target='cce')
     else:
         raise RuntimeError("Do not support {0} dim laplacian of gaussian.".format(len(x.shape)))
 

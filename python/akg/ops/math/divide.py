@@ -1,4 +1,4 @@
-# Copyright 2020-2021 Huawei Technologies Co., Ltd
+# Copyright 2020-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,11 +16,11 @@
 import akg.tvm
 import akg.topi
 import akg.utils as utils
-from akg.ops.math.ascend.floor import Floor
+from akg.ops.math.ascend.floor import floor
 from akg.utils.dsl_create import produce_shapes
 from akg.utils.kernel_exec import product_is_mini
 from akg.ops.math.reciprocal import reciprocal
-from .cast import Cast
+from .cast import cast
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor)
@@ -63,8 +63,8 @@ def _div_ascend(data1, data2):
         input2_cast = data2
 
     if dtype in ("int32", "int8", "uint8"):
-        input1p = Case(input1_cast, "float16", utils.CCE)
-        input2p = Cast(input2_cast, "float16", utils.CCE)
+        input1p = cast(input1_cast, "float16", utils.CCE)
+        input2p = cast(input2_cast, "float16", utils.CCE)
     else:
         input1p = input1_cast
         input2p = input2_cast
@@ -77,15 +77,16 @@ def _div_ascend(data1, data2):
         res = akg.topi.divide(input1p, input2p)
 
     if dtype in ("int8", "uint8"):
-        res = Floor(res, utils.CCE)
-        res = Cast(res, "float16", utils.CCE)
+        res = floor(res, utils.CCE)
+        res = cast(res, "float16", utils.CCE)
     if dtype in ("int32", "int8", "uint8"):
-        res = Cast(res, dtype, utils.CCE)
+        res = cast(res, dtype, utils.CCE)
 
     return res
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (str, type(None)))
-def Divide(lhs, rhs, target=utils.CCE):
+def divide(lhs, rhs, target=utils.CCE):
     """
     Calculate divide.
 

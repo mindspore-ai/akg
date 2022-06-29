@@ -107,6 +107,9 @@ class IslEmitter {
   virtual Stmt EmitUserStmtContent(const Block *block_node);
   virtual Stmt EmitUserStmtContent(const AttrStmt *stmt_node);
 
+  virtual void EmitterPreProcess() {};
+  virtual Stmt EmitterPostProcess(Stmt &s);
+
   // Loop isl iters info
   virtual void PushIter(const Variable *iter);
   virtual void PopIter(const Variable *iter);

@@ -33,11 +33,10 @@ static std::unordered_map<std::string, std::function<Expr(Expr, Expr)>> maker_ma
 static std::unordered_set<std::string> arm_instruction_set = {"avx", "sse", "avx512"};
 static constexpr auto X86_INSTRUCTION_SET = "neon";
 
-Stmt CpuIslEmitter::Emit(const isl::ast_node &node) {
-  Stmt stmt = EmitAst(node);
+Stmt CpuIslEmitter::EmitterPostProcess(Stmt &stmt) {
   stmt = EmitRealizeForGlobalTensor(stmt);
   stmt = EmitInfo(stmt);
-  return stmt;
+  return IslEmitter::EmitterPostProcess(stmt);
 }
 
 Stmt CpuIslEmitter::EmitInfo(const Stmt &stmt) {

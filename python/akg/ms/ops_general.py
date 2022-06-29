@@ -1,4 +1,4 @@
-# Copyright 2021 Huawei Technologies Co., Ltd
+# Copyright 2021-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,31 +22,31 @@ from akg.ms.utils import reg_op
 @reg_op("TensorAdd")
 def tensor_add(x, y, target=utils.CUDA):
     """TensorAdd"""
-    return math.Add(x, y, scale=1.0, polyhedral=True, attrs={}, target=target)
+    return math.add(x, y, scale=1.0, polyhedral=True, attrs={}, target=target)
 
 
 @reg_op("Add")
 def add(x, y, target=utils.CUDA):
     """Add"""
-    return math.Add(x, y, scale=1.0, polyhedral=True, attrs={}, target=target)
+    return math.add(x, y, scale=1.0, polyhedral=True, attrs={}, target=target)
 
 
 @reg_op("AddN")
 def add_n(inputs, target=utils.CUDA):
     """AddN"""
-    return math.Addn(inputs, target)
+    return math.addn(inputs, target)
 
 
 @reg_op("Assign")
 def assign(ref, val, target=utils.CUDA):
     """Assign"""
-    return math.Assign(ref, val, target)
+    return math.assign(ref, val, target)
 
 
 @reg_op("Cast")
 def cast(x, dst_type, target=utils.CUDA):
     """Cast"""
-    return math.Cast(x, dst_type, target)
+    return math.cast(x, dst_type, target)
 
 
 @reg_op("Pow")
@@ -88,25 +88,25 @@ def mul(x, y, target=utils.CUDA):
 @reg_op("Sub")
 def sub(x, y, target=utils.CUDA):
     """Sub"""
-    return math.Sub(x, y, target)
+    return math.sub(x, y, target)
 
 
 @reg_op("Div")
 def div(x, y, target=utils.CUDA):
     """Div"""
-    return math.Divide(x, y, target)
+    return math.divide(x, y, target)
 
 
 @reg_op("Divide")
 def divide(x, y, target=utils.CUDA):
     """Divide"""
-    return math.Divide(x, y, target)
+    return math.divide(x, y, target)
 
 
 @reg_op("Tile")
 def tile(data, multiples, target=utils.CUDA):
     """Tile"""
-    return array.Tile(data, multiples, target)
+    return array.tile(data, multiples, target)
 
 
 @reg_op("LogicalOr")
@@ -196,19 +196,19 @@ def less(x, y, target=utils.CUDA):
 @reg_op("Exp")
 def exp(x, target=utils.CUDA):
     """Exp"""
-    return math.Exp(x, target)
+    return math.exp(x, target)
 
 
 @reg_op("Sum")
 def tensor_sum(data, axis=None, keepdims=False, target=utils.CUDA):
     """Sum"""
-    return math.Sum(data, axis, keepdims, target=target)
+    return math.sum(data, axis, keepdims, target=target)
 
 
 @reg_op("Reshape")
 def reshape(tensor, shape, target=utils.CUDA):
     """Reshape"""
-    return array.Reshape(tensor, shape, target)
+    return array.reshape(tensor, shape, target)
 
 
 @reg_op("Reciprocal")
@@ -221,3 +221,27 @@ def reciprocal(x, target=utils.CUDA):
 def select(condition, x1, x2, target=utils.CUDA):
     """Select"""
     return math.select(condition, x1, x2, target)
+
+
+@reg_op("Transpose")
+def transpose(tensor, axes, target=utils.CUDA):
+    """Transpose"""
+    return array.transpose(tensor, axes, target)
+
+
+@reg_op("UnsortedSegmentMax")
+def unsorted_segment_max(data, segment_ids, num_segments, target=utils.CCE):
+    """UnsortedSegmentMax"""
+    return array.unsorted_segment_max(data, segment_ids, num_segments, target)
+
+
+@reg_op("UnsortedSegmentSum")
+def unsorted_segment_sum(data, indices, num, op_id=0, target=utils.CUDA):
+    """UnsortedSegmentSum"""
+    return array.unsorted_segment_sum(data, indices, num, op_id, target)
+
+
+@reg_op("Sqrt")
+def sqrt(x, target=utils.CUDA):
+    """Sqrt"""
+    return math.sqrt(x, target)

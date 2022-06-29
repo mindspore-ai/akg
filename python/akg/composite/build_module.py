@@ -17,6 +17,7 @@
 """build module"""
 import os
 import json
+from collections import Iterable
 import akg
 from akg import tvm
 from akg.utils.kernel_exec import ReturnType
@@ -28,7 +29,9 @@ from .construct_args import ConstructType, ConstructKey
 
 
 def generate_trait(desc):
-    """ generate trait of kernel description """
+    """
+    generate trait of kernel description
+    """
 
     def get_op_trait(op, counter, tensor_idx):
         input_idx = []
@@ -37,7 +40,7 @@ def generate_trait(desc):
                 if input_desc[0].get('value', None) is None:
                     input_idx.append(counter - tensor_idx[input_desc[0]['tensor_name']])
         input_idx.sort()
-        input_idx_str = ''.join([str(i) for i in input_idx])
+        input_idx_str = ''.join(str(i) for i in input_idx)
         op_trait = op['name'] + input_idx_str
         if op['name'] == "MatMul":
             for attr in op['attr']:
@@ -65,9 +68,9 @@ def generate_trait(desc):
                 counter += 1
         output_idx = []
         for out_desc in desc['output_desc'] if desc['output_desc'] is not None else []:
-            output_idx.append(tensor_idx[out_desc['tensor_name']])
+            output_idx.append(tensor_idx.get(out_desc.get('tensor_name', "")))
         output_idx.sort()
-        traits.append(''.join([str(i) for i in output_idx]))
+        traits.append(''.join(str(i) for i in output_idx))
         return '.'.join(traits)
 
     def append_trait(traits, data):
@@ -79,10 +82,10 @@ def generate_trait(desc):
     def generate_shape_trait():
         traits = []
         for in_desc in desc['input_desc'] if desc['input_desc'] is not None else []:
-            shape_s = '_'.join([str(i) for i in in_desc[0]['shape']])
+            shape_s = '_'.join(str(i) for i in in_desc[0]['shape'])
             append_trait(traits, shape_s)
         for out_desc in desc['output_desc'] if desc['output_desc'] is not None else []:
-            shape_s = '_'.join([str(i) for i in out_desc['shape']])
+            shape_s = '_'.join(str(i) for i in out_desc['shape'])
             append_trait(traits, shape_s)
         return '.'.join(traits)
 
@@ -150,7 +153,7 @@ def _set_tiling_attrs(out_shape, attrs):
     axis_len = len(out_shape)
     if axis_len < 3:
         return attrs
-    if all(map(lambda x: x == 1, [out_shape[x] for x in range(axis_len - 2)])):
+    if all(map(lambda x: x == 1, list(out_shape[x] for x in range(axis_len - 2)))):
         return attrs
     if attrs.get('bind_block') in (None, ''):
         i = 0
@@ -173,20 +176,39 @@ def _set_tiling_attrs(out_shape, attrs):
         attrs['dim'] = ' '.join(str(x) for x in dim_list)
     return attrs
 
+def _update_target_info(desc_d, attr):
+    target_info = desc_d.get("target_info")
+    if not target_info:
+        return attr
+
+    process = desc_d.get("process")
+    if process != "cuda":
+        return attr
+
+    # auto detect proper gpu device type according to compute capability description
+    if target_info.get("compute_capability") == "8.0":
+        attr["device_type"] = "a100"
+
+    return attr
 
 def _update_compile_attr(desc_d, attr):
     # For user defined akg compile attr
-    if desc_d['op_desc'] is None:
+
+    attr = _update_target_info(desc_d, attr)
+
+    if desc_d.get('op_desc') is None:
         return attr
-    for op in desc_d['op_desc']:
-        if "compile_attr" not in op or op["compile_attr"] is None:
+    for op in desc_d.get('op_desc'):
+        op_attrs = op.get("attr", {})
+        if not isinstance(op_attrs, Iterable):
             continue
-        for i in op["compile_attr"]:
-            if isinstance(i, str):
-                attr.update({i: op["compile_attr"][i]})
-            else:
-                raise ValueError("Currently all compile attrs' name for AKG should be type of str. But got \
-                    an attr name: {}, which type is: {}.".format(i, type(i)))
+        compile_attrs = list(item.get("value", "") for item in op_attrs if isinstance(
+            item, dict) and item.get("name", "") == "func_compile_attrs")
+        if compile_attrs:
+            attrs_dict = json.loads(compile_attrs[0])
+            for key in attrs_dict:
+                attr.update({key: attrs_dict[key]})
+
     return attr
 
 
@@ -295,7 +317,7 @@ def _get_repo_attr(desc_d, compute, shape, dtype, repo, batchmatmul):
 
 def _update_attrs_gpu(all_ops, attrs, poly):
     if poly:
-        if any([i in all_ops for i in ['Argmax', 'Argmin']]):
+        if any(i in all_ops for i in ['Argmax', 'Argmin']):
             # disable auto_fuse and akg_reduce_lib for argmax and argmin
             attrs["enable_akg_reduce_lib"] = False
             attrs["enable_auto_fuse"] = False
@@ -303,7 +325,7 @@ def _update_attrs_gpu(all_ops, attrs, poly):
             attrs["enable_akg_reduce_lib"] = True
 
         if "pragma_enable_matmul" not in attrs.keys() and any(
-                [i in all_ops for i in ["BatchMatMul", "MatMul", "Conv2D"]]):
+                i in all_ops for i in ["BatchMatMul", "MatMul", "Conv2D"]):
             attrs['pragma_enable_matmul'] = True
             attrs['enable_auto_inline'] = False
         if "pragma_enable_conv_tensor_core" not in attrs.keys() and "Conv2D" in all_ops:
@@ -311,7 +333,7 @@ def _update_attrs_gpu(all_ops, attrs, poly):
             attrs["enable_auto_fuse"] = False
         # Close general tot by default
         enable_general_tot = False
-        if "has_tot_ops" not in attrs.keys() and any([i in all_ops for i in ["Gather", "TensorScatterAdd"]]):
+        if "has_tot_ops" not in attrs.keys() and any(i in all_ops for i in ["Gather", "TensorScatterAdd"]):
             attrs["has_tot_ops"] = enable_general_tot
     return attrs
 
@@ -319,20 +341,20 @@ def _update_attrs_gpu(all_ops, attrs, poly):
 def _update_attrs_cpu(all_ops, attrs, poly):
     if not poly:
         return attrs
-    if "pragma_enable_matmul" not in attrs.keys() and any([i in all_ops for i in ["BatchMatMul", "MatMul"]]):
+    if "pragma_enable_matmul" not in attrs.keys() and any(i in all_ops for i in ["BatchMatMul", "MatMul"]):
         attrs['pragma_enable_matmul'] = True
         attrs['enable_auto_inline'] = False
         attrs['pragma_enable_schedule_maximize_coincidence'] = True
-    if "feature" not in attrs.keys() and any([i in all_ops for i in ["BatchMatMul", "MatMul"]]):
+    if "feature" not in attrs.keys() and any(i in all_ops for i in ["BatchMatMul", "MatMul"]):
         attrs["feature"] = "avx"
     return attrs
 
 
 def _update_attrs_ascend(all_ops, attr):
-    attr["pragma_rmselfdep"] = all([i not in all_ops for i in ["BatchMatMul", "MatMul"]])
+    attr["pragma_rmselfdep"] = all(i not in all_ops for i in ["BatchMatMul", "MatMul"])
     # For the MatMul/BatchMatMul with bias, the inline is necessary
     # For the Ascend, turn 'enable_auto_inline' off for composite op by default.
-    attr["enable_auto_inline"] = any([i in all_ops for i in ["BatchMatMul", "MatMul"]])
+    attr["enable_auto_inline"] = any(i in all_ops for i in ["BatchMatMul", "MatMul"])
     return attr
 
 
@@ -353,7 +375,7 @@ def _build_to_module(desc_s, desc_d, attrs=None, poly=True):
         process = desc_d["process"]
         file_name = "repository_" + process + ".json"
         repository = _get_repository(file_name, desc_d)
-        all_ops = set([op["name"] for op in desc_d["op_desc"]])
+        all_ops = set(op["name"] for op in desc_d["op_desc"])
 
         if attrs is None:
             attrs = {"dim": ""}
@@ -375,7 +397,7 @@ def _build_to_module(desc_s, desc_d, attrs=None, poly=True):
 
     def _post_update_attr(desc_s, attrs, poly):
         desc_d, attrs = _update_attr_by_repo(desc_s, attrs)
-        all_ops = set([op["name"] for op in desc_d["op_desc"]])
+        all_ops = set(op["name"] for op in desc_d["op_desc"])
         if desc_d["process"] == "cuda":
             attrs = _update_attrs_gpu(all_ops, attrs, poly)
         elif desc_d["process"] == "cpu":
@@ -396,7 +418,8 @@ def _build_to_module(desc_s, desc_d, attrs=None, poly=True):
         ConstructType.PARALLEL: _common_postprocess,
         ConstructType.STITCH: _stitch_postprocess,
         ConstructType.NORMAL: _common_postprocess,
-        ConstructType.TOT: _common_postprocess
+        ConstructType.TOT: _common_postprocess,
+        ConstructType.CONCAT: _common_postprocess
     }
     segment_tree, segment_infos = get_construct_args(desc_s, attrs, post_funcs)
     process = desc_d["process"]
@@ -430,7 +453,7 @@ def _build_to_module_ascend(desc_s_in, desc_d_in, attr=None, use_repo=True):
 
         if attr is None:
             attr = {'dim': ''}
-        all_ops = set([op['name'] for op in desc_d['op_desc']])
+        all_ops = set(op['name'] for op in desc_d['op_desc'])
         attr = _update_attrs_ascend(all_ops, attr)
         attr = _auto_set_single_block(desc_d, attr)
         if given_attrs is not None:
@@ -487,7 +510,7 @@ def _build_to_module_ascend(desc_s_in, desc_d_in, attr=None, use_repo=True):
                     key = "sub_attr_" + str(i + 1)
                     new_sub_attrs[key] = {}
                     for k, v in a.items():
-                        new_sub_attrs[key][k] = v
+                        new_sub_attrs.get(key)[k] = v
                 combine_attrs.append(new_sub_attrs)
             return combine_attrs
 
@@ -546,9 +569,19 @@ def build(kernel_desc, attrs=None, poly=True, use_repo=True):
         desc_s = kernel_desc
         desc_d = json.loads(kernel_desc)
     else:
-        assert isinstance(kernel_desc, dict)
+        if not isinstance(kernel_desc, dict):
+            raise TypeError("kernel_desc should be a dict, but get a {}".format(type(kernel_desc)))
         desc_s = json.dumps(kernel_desc)
         desc_d = kernel_desc
+
+    from akg.ms.info_version_adapt import InfoVersionAdapt
+    info_adapter = InfoVersionAdapt(desc_d)
+    ret = info_adapter.run()
+    if not ret:
+        raise RuntimeError(info_adapter.msg)
+        return False
+    desc_s = json.dumps(desc_d)
+
     if attrs is None:
         attrs = dict()
     backend = desc_d['process']
@@ -578,7 +611,7 @@ def get_tiling_space(kernel_desc, level=1, attr=None):
     attr['tuning'] = 'on'
     desc_d = json.loads(kernel_desc)
     backend = desc_d['process']
-    all_ops = set([op['name'] for op in desc_d['op_desc']])
+    all_ops = set(op['name'] for op in desc_d['op_desc'])
     if backend == "cuda":
         attr = _update_attrs_gpu(all_ops, attr, True)
     elif backend == "cpu":

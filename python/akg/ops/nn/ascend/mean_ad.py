@@ -17,7 +17,7 @@
 """operator dsl function: mean_ad"""
 import akg.tvm
 import akg
-from akg.ops.math.ascend.mean import Mean 
+from akg.ops.math.ascend.mean import mean
 import akg.utils as utils
 
 
@@ -39,6 +39,6 @@ def MeanAd(head, input_shape, axis, keepdims, target=utils.CCE):
         'Ascend'
     """
     a = akg.tvm.placeholder(input_shape, head.dtype, "A")
-    b, _ = Mean(a, axis, keepdims, target=target)
+    b, _ = mean(a, axis, keepdims, target=target)
     jacs = list(akg.differentiate(b, [a], head))
     return jacs[0]

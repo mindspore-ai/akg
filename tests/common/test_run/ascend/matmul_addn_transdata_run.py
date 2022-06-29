@@ -1,4 +1,4 @@
-# Copyright 2021 Huawei Technologies Co., Ltd
+# Copyright 2021-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,16 +15,16 @@
 import akg.tvm
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.math.ascend import MatMul
+from akg.ops.math.ascend import matmul
 from tests.common.test_run.ascend.matmul_run import *
-from akg.ops.math import Addn
-from akg.ops.math import Add
+from akg.ops.math import addn
+from akg.ops.math import add
 
 def matmul_addn_transdata(x, y, adds, b, out_dtype, left_format="zZ", right_format="nZ", out_format="zN", transpose_x=False,
-                        transpose_y=False, attrs={}, target='cce'):
-    matmul_res, attrs_mat = MatMul(x, y, b, out_dtype, left_format, right_format, out_format, transpose_x, transpose_y, attrs=attrs)
-    addn_res = Addn(adds, target=target)
-    res = Add(matmul_res, addn_res, target=target)
+                        transpose_y=False, attrs=None, target='cce'):
+    matmul_res, attrs_mat = matmul(x, y, b, out_dtype, left_format, right_format, out_format, transpose_x, transpose_y, attrs=attrs)
+    addn_res = addn(adds, target=target)
+    res = add(matmul_res, addn_res, target=target)
     if out_format == 'zN':
         n1, m1, m0, n0 = matmul_res.shape[-4:]
         new_shape = matmul_res.shape[:-4] + [m1 * m0, n1 * n0]
@@ -60,7 +60,7 @@ def matmul_addn_transdata_compile(shape_x, shape_y, bias, add_n, left_format, ri
         op_attrs = [None, out_dtype, left_format, right_format, output_format, adj_x, adj_y, attrs]
     return utils.op_build_test(matmul_addn_transdata, input_shapes, input_types, op_attrs, kernel_name, attrs=attrs, tuning=tuning)
 
-def matmul_addn_transdata_execute(shape_x, shape_y, bias, add_n, left_format, right_format, out_format, adj_x, adj_y, dtype, bias_dtype, out_dtype, kernel_name, attrs={}):
+def matmul_addn_transdata_execute(shape_x, shape_y, bias, add_n, left_format, right_format, out_format, adj_x, adj_y, dtype, bias_dtype, out_dtype, kernel_name, attrs=None):
     batch_tuple, m, k, n = extract_dim(shape_x, shape_y, adj_x, adj_y)
     m = (m + 15) // 16 * 16
     n = (n + 15) // 16 * 16
@@ -70,13 +70,13 @@ def matmul_addn_transdata_execute(shape_x, shape_y, bias, add_n, left_format, ri
     # Generate data
     m_x, m_y, bench_mark, bias_data = matmul_data(batch_tuple, m, k, n, dtype, bias_dtype, out_dtype, bias, adj_x, adj_y, left_format, right_format, out_format)
     
-    inputs = []
+    inputs_lst = []
     mod_data = [m_x, m_y]
     for i in range(add_n):
-        input = random_gaussian(out_shape, miu=1, sigma=0.1).astype(out_dtype)
-        inputs.append(input)
-        mod_data.append(input)
-    bench_mark = np.add(np.sum(inputs, axis=0), bench_mark)
+        input_item = random_gaussian(out_shape, miu=1, sigma=0.1).astype(out_dtype)
+        inputs_lst.append(input_item)
+        mod_data.append(input_item)
+    bench_mark = np.add(np.sum(inputs_lst, axis=0), bench_mark)
 
     transpose_axis = []
     new_shape = []

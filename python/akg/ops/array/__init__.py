@@ -13,8 +13,8 @@
 # limitations under the License.
 
 """__init__"""
-from .reshape import Reshape
-from .transpose import Transpose
-from .tile import Tile
-from .unsorted_segment_max import UnsortedSegmentMax
-from .unsorted_segment_sum import UnsortedSegmentSum
+from .reshape import reshape
+from .transpose import transpose
+from .tile import tile
+from .unsorted_segment_max import unsorted_segment_max
+from .unsorted_segment_sum import unsorted_segment_sum

@@ -71,20 +71,20 @@ isl::schedule TileOuterBand::Run(isl::schedule sch) {
     scop_info_.AddPartitionInfoToData(AddTileInfo(partition_info_));
     scop_info_.analysis_result_.SetIsTiled(true);
     if (sch.plain_is_equal(final_schedule)) {
-      pass_info_.tile_check_coincident_ = scop_info_.user_config_.GetTileCheckCoincident();
       final_schedule = TryMarkScalarStmt(pass_info_).Run(final_schedule);
     }
   }
 
   auto map_before_tile = sch.get_map();
   if (final_schedule.get_map().is_equal(map_before_tile) &&
-      (pass_info_.coincident_ || scop_info_.user_config_.GetConsiderCoincidence())) {
+    scop_info_.user_config_.GetConsiderCoincidence()) {
     if (scop_info_.user_config_.GetTarget() == TARGET_CCE) {
-      scop_info_.analysis_result_.SetRestartPassName(RestartPassName::INIT_SCHEDULE);
+      scop_info_.analysis_result_.SetRestartPassName(RestartPassName::TILE_OUTER_BAND);
     } else {
       scop_info_.analysis_result_.SetRestartPassName(RestartPassName::EXIT);
     }
   }
+
   if (scop_info_.user_config_.GetIsTuning()) {
     // restore schedule before tiling as input of GenerateTilingSpace
     final_schedule = sch;
@@ -110,7 +110,7 @@ isl::schedule TileOuterBand::TileOuterBandHelper(const isl::schedule sch,
 bool TileOuterBand::SubtreeHasPermutableBands(const isl::schedule_node &node) {
   bool all_non_permutable = false;
   all_non_permutable = node.every_descendant([&, this](const isl::schedule_node &node) -> bool {
-    return BoolNot(IsPermutable(node, scop_info_.user_config_.GetTileCheckCoincident()));
+    return BoolNot(IsPermutable(node));
   });
 
   return BoolNot(all_non_permutable);
@@ -121,7 +121,7 @@ int TileOuterBand::IsCandidate(const isl::schedule_node &node) {
     return 1;
   }
 
-  int permutable = static_cast<int>(IsPermutable(node, scop_info_.user_config_.GetTileCheckCoincident()));
+  int permutable = static_cast<int>(IsPermutable(node));
   if (permutable) {
     return permutable;
   }
@@ -157,18 +157,20 @@ int TileOuterBand::IsOuterTilable(const isl::schedule_node &node) {
   return static_cast<int>(BoolNot(static_cast<bool>(tilable)));
 }
 
-bool TileOuterBand::IsPermutable(const isl::schedule_node &node, bool checkCoincident) {
+bool TileOuterBand::IsPermutable(const isl::schedule_node &node) {
   if (!node) return false;
   if (!node.isa<isl::schedule_node_band>()) return false;
   if (!node.as<isl::schedule_node_band>().get_permutable()) return false;
   if (node.as<isl::schedule_node_band>().n_member() < 1) return false;
-  return !(checkCoincident && !node.as<isl::schedule_node_band>().member_get_coincident(0));
+  return true;
 }
 
 isl::schedule_node TileOuterBand::ReverseTraverseChild(isl::schedule_node node,
                                                        const std::function<isl::schedule_node(isl::schedule_node)> &f) {
   if (node.isa<isl::schedule_node_band>()) {
-    tile_sizes_ = tiles_[0].dim_infos;
+    if (!tiles_.empty()) {
+      tile_sizes_ = tiles_[0].dim_infos;
+    }
     node = node.map_descendant_bottom_up(f);
   } else {
     is_sequence_node_ = node.isa<isl::schedule_node_sequence>();
@@ -384,7 +386,7 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableNpu(isl::schedule_node node
   if (IsOuterTilable(node) <= 0) return node;
   // make sure the node is a band node and has multiple members, insert empty band if not
   if (!node.isa<isl::schedule_node_band>() || (!node.as<isl::schedule_node_band>().member_get_coincident(0) &&
-                                               scop_info_.user_config_.GetTileCheckCoincident())) {
+                                               scop_info_.user_config_.GetConsiderCoincidence())) {
     node = InsertEmptyPermutableBand(node);
   }
 

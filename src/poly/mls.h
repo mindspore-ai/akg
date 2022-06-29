@@ -215,6 +215,36 @@ class Options {
   /// \retval false otherwise
   [[gnu::pure]] bool GetConstantToParameter(void) const;
 
+  /// \brief Get the SCC fusing behaviour
+  /// \return A boolean value that indicates whether the SCC maxfuse behaviour is enabled
+  /// \retval true if the SCC maxfuse behaviour is enabled
+  /// \retval false otherwise
+  [[gnu::pure]] bool GetSccMaxfuse(void) const;
+
+  /// \brief Get the parameter shifting behaviour
+  /// \return A boolean value that indicates whether parameter shifting is enabled
+  /// \retval true if parameter shifting is enabled
+  /// \retval false otherwise
+  [[gnu::pure]] bool GetParameterShifting(void) const;
+
+  /// \brief Get the matrix init behaviour
+  /// \return A boolean value that indicates whether lp problems should be initialized with whole matrices
+  /// \retval true if whole matrix initialization is enabled
+  /// \retval false otherwise
+  [[gnu::pure]] bool GetWholeMatrixInitialization(void) const;
+
+  /// \brief Get the full sets post processing behaviour
+  /// \return A boolean value that indicates whether full sets post processing is enabled or disabled
+  /// \retval true full sets post processing is enabled
+  /// \retval false otherwise
+  [[gnu::pure]] bool GetFullSetsPostProcessing(void) const;
+
+  /// \brief Get the extra parallel outer loop post processing behaviour
+  /// \return A boolean value that indicates whether extra parallel outer loop post processing is enabled or disabled
+  /// \retval true Extra parallel outer loop post processing is enabled
+  /// \retval false otherwise
+  [[gnu::pure]] bool GetExtraParallelOuterLoopPostProcessing(void) const;
+
   /// \brief Get a string representation of object
   /// \return A string representation of the object
   std::shared_ptr<char> String(void) const;
@@ -238,6 +268,26 @@ class Options {
   /// \brief Choose the constant to parameter behaviour
   /// \param[in] toggle Enable or disable the constant to parameter behaviour
   void SetConstantToParameter(bool toggle);
+
+  /// \brief Choose the SCC maxfuse behaviour
+  /// \param[in] toggle Enable or disable the SCC maxfuse behaviour
+  void SetSccMaxfuse(bool toogle);
+
+  /// \brief Choose the parameter shifting behaviour
+  /// \param[in] toggle Enable or disable the parameter shifting behaviour
+  void SetParameterShifting(bool toogle);
+
+  /// \brief Choose the whole matrix initialization behaviour
+  /// \param[in] toggle Enable or disable the whole matrix initialization behaviour
+  void SetWholeMatrixInitialization(bool toogle);
+
+  /// \brief Choose the full sets post processing behaviour
+  /// \param[in] toggle Enable or disable full sets post processing
+  void SetFullSetsPostProcessing(bool toogle);
+
+  /// \brief Choose the extra parallel outer loop post processing behaviour
+  /// \param[in] toggle Enable or disable extra parallel outer loop post processing
+  void SetExtraParallelOuterLoopPostProcessing(bool toogle);
 
   ////////////////////////////////////////////////////////////////////////////////
   // Misc. friend functions
@@ -286,8 +336,8 @@ class InfluenceOperation {
   /// \param[in] value Value for the operation
   /// \param[in] type Type of the operation
   [[gnu::nonnull]] InfluenceOperation(
-      const char *statement, size_t dimension, long int value,
-      mls::bin::InfluenceOperation::Type type = mls::bin::InfluenceOperation::Type::kNone);
+    const char *statement, size_t dimension, long int value,
+    mls::bin::InfluenceOperation::Type type = mls::bin::InfluenceOperation::Type::kNone);
 
   /// \brief Get the target statement
   /// \result The target statement
@@ -499,6 +549,20 @@ class Hints {
   /// \retval false otherwise
   [[gnu::pure]] bool HasStatementVectorials(const char *statement) const;
 
+  /// \brief Check whether the Hints has reduces directives for a given statement
+  /// \param[in] statement Target statement
+  /// \return A boolean value that indicates whether the Hints has reduces directives for \a statement
+  /// \retval true if the Hints has reduces directives for \a statement
+  /// \retval false otherwise
+  [[gnu::pure]] bool HasStatementReduces(const char *statement) const;
+
+  /// \brief Check whether the Hints has parallels directives for a given stateemnt
+  /// \param[in] statement Target statement
+  /// \return A boolean value that indicates whether the Hints has parallels directives for \a statement
+  /// \retval true if the Hints has parallels directives for \a statement
+  /// \retval false otherwise
+  [[gnu::pure]] bool HasStatementParallels(const char *statement) const;
+
   /// \brief Get the Serials component of the directives for a given statement
   /// \param[in] statement Target statement
   /// \return Serials component of the directives
@@ -509,8 +573,18 @@ class Hints {
   /// \return Vectorials component of the directives
   [[gnu::pure]] const std::vector<int> &GetStatementVectorials(const char *statement) const;
 
-  /// \brief Get the Influence component of the directives
-  /// \return Influence component of the directives
+  /// \brief Get the Reduces component of the directives for a given statement
+  /// \param[in] statement Target statement
+  /// \return Reduces component of the directives
+  [[gnu::pure]] const std::vector<int> &GetStatementReduces(const char *statement) const;
+
+  /// \brief Get the Parallels component of the directives for a given statement
+  /// \param[in] statement Target statement
+  /// \return Parallels component of the directives
+  [[gnu::pure]] const std::vector<int> &GetStatementParallels(const char *statement) const;
+
+  /// \brief Get the Influence component of the hints
+  /// \return Influence component of the hints
   mls::bin::Influence GetInfluence(void) const;
 
   /// \brief Get a string representation of object
@@ -532,16 +606,26 @@ class Hints {
   [[gnu::nonnull]] void SetStatementSerials(const char *statement, const std::vector<int> &serials);
 
   /// \brief Set the Vectorials component of the directives
-  /// \param[in] vectorials Serials component for the directives
+  /// \param[in] vectorials Vectorials component for the directives
   [[gnu::nonnull]] void SetStatementVectorials(const char *statement, const std::vector<int> &vectorials);
 
-  /// \brief Set the Vectorials component of the directives
-  /// \param[in] vectorials Serials component for the directives
+  /// \brief Set the Reduces component of the directives
+  /// \param[in] reduces Reduces component for the directives
+  [[gnu::nonnull]] void SetStatementReduces(const char *statement, const std::vector<int> &reduces);
+
+  /// \brief Set the Parallels component of the directives
+  /// \param[in] parallels Parallels component for the directives
+  [[gnu::nonnull]] void SetStatementParallels(const char *statement, const std::vector<int> &parallels);
+
+  /// \brief Set the Influence component of the hints
+  /// \param[in] influence Influence component of the hints
   void SetInfluence(const mls::bin::Influence &influence);
 
   /// \brief Clear all directive components of the Hints
   /// \post GetSerials().empty() == true
   /// \post GetVectorials().empty() == true
+  /// \post GetReduces().empty() == true
+  /// \post GetParallels().empty() == true
   void ClearDirectives(void);
 
   /// \brief Parse directives from a serialized JSON string
@@ -596,9 +680,19 @@ class Scop {
   /// \param[in] dependencies Dependencies
   /// \param[in] options Options for MLSched
   /// \param[in] name Optional name for the Scop
-  [[gnu::nonnull(1, 2)]] Scop(
-      __isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies, const mls::bin::Options &options,
-      const char *name = nullptr);
+  [[gnu::nonnull(1, 2)]] Scop(__isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies,
+                              const mls::bin::Options &options, const char *name = nullptr);
+
+  /// \brief Constructor from isl data
+  /// \param[in] sch Initial schedule
+  /// \param[in] dependencies Dependencies
+  /// \param[in] reads Reads
+  /// \param[in] writes Writes
+  /// \param[in] options Options for MLSched
+  /// \param[in] name Optional name for the Scop
+  [[gnu::nonnull(1, 4)]] Scop(__isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies,
+                              __isl_keep isl_union_map *reads, __isl_keep isl_union_map *writes,
+                              const mls::bin::Options &options, const char *name = nullptr);
 
   /// \brief Constructor from isl data
   /// \param[in] sch Initial schedule
@@ -606,9 +700,22 @@ class Scop {
   /// \param[in] influence Influence for MLSched
   /// \param[in] options Options for MLSched
   /// \param[in] name Optional name for the Scop
-  [[gnu::nonnull(1, 2)]] Scop(
-      __isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies, const mls::bin::Influence &influence,
-      const mls::bin::Options &options, const char *name = nullptr);
+  [[gnu::nonnull(1, 2)]] Scop(__isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies,
+                              const mls::bin::Influence &influence, const mls::bin::Options &options,
+                              const char *name = nullptr);
+
+  /// \brief Constructor from isl data
+  /// \param[in] sch Initial schedule
+  /// \param[in] dependencies Dependencies
+  /// \param[in] reads Reads
+  /// \param[in] writes Writes
+  /// \param[in] influence Influence for MLSched
+  /// \param[in] options Options for MLSched
+  /// \param[in] name Optional name for the Scop
+  [[gnu::nonnull(1, 4)]] Scop(__isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies,
+                              __isl_keep isl_union_map *reads, __isl_keep isl_union_map *writes,
+                              const mls::bin::Influence &influence, const mls::bin::Options &options,
+                              const char *name = nullptr);
 
   /// \brief Constructor from isl data
   /// \param[in] sch Initial schedule
@@ -616,9 +723,22 @@ class Scop {
   /// \param[in] hints Hints for MLSched
   /// \param[in] options Options for MLSched
   /// \param[in] name Optional name for the Scop
-  [[gnu::nonnull(1, 2)]] Scop(
-      __isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies, const mls::bin::Hints &hints,
-      const mls::bin::Options &options, const char *name = nullptr);
+  [[gnu::nonnull(1, 2)]] Scop(__isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies,
+                              const mls::bin::Hints &hints, const mls::bin::Options &options,
+                              const char *name = nullptr);
+
+  /// \brief Constructor from isl data
+  /// \param[in] sch Initial schedule
+  /// \param[in] dependencies Dependencies
+  /// \param[in] reads Reads
+  /// \param[in] writes Writes
+  /// \param[in] hints Hints for MLSched
+  /// \param[in] options Options for MLSched
+  /// \param[in] name Optional name for the Scop
+  [[gnu::nonnull(1, 4)]] Scop(__isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies,
+                              __isl_keep isl_union_map *reads, __isl_keep isl_union_map *writes,
+                              const mls::bin::Hints &hints, const mls::bin::Options &options,
+                              const char *name = nullptr);
 
   ////////////////////////////////////////////////////////////////////////////////
   // Operators

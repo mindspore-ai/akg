@@ -14,12 +14,11 @@
 
 from akg.utils import kernel_exec as utils
 import numpy as np
+import random
 from tests.common.tensorio import compare_tensor
 from tests.common.gen_random import random_gaussian
 from tests.common.base import get_rtol_atol
-from akg.ops.math.ascend import ProdForceSeA
-
-import random
+from akg.ops.math.ascend import prod_force_se_a
 
 
 def gen_data(input_shapes):
@@ -58,7 +57,7 @@ def prod_force_cpu(net_deriv_tensor, in_deriv_tensor, nlist_tensor, natoms=192):
             for aa in range(ndescript):
                 for cc in range(3):
                     force[kk, ii, cc] -= net_deriv_tensor[kk, ii, aa] * in_deriv_tensor[kk, ii, aa, cc]
-            
+
             for jj in range(nnei):
                 j_idx = nlist_tensor[kk, ii, jj]
                 if j_idx > -1:
@@ -67,9 +66,12 @@ def prod_force_cpu(net_deriv_tensor, in_deriv_tensor, nlist_tensor, natoms=192):
                             force[kk, j_idx, cc] += net_deriv_tensor[kk, ii, aa] * in_deriv_tensor[kk, ii, aa, cc]
     return force
 
-def prod_force_se_a_run(input_shapes, input_dtype, attrs = {}):
+
+def prod_force_se_a_run(input_shapes, input_dtype, attrs=None):
+    if attrs is None:
+        attrs = {}
     attrs["pragma_disable_whole_component"] = False
-    mod = utils.op_build_test(ProdForceSeA, input_shapes, input_dtype, kernel_name = "force", attrs = attrs)
+    mod = utils.op_build_test(prod_force_se_a, input_shapes, input_dtype, kernel_name="force", attrs = attrs)
     args, expect, input1, input2, input3 = gen_data(input_shapes)
     output = utils.mod_launch(mod, args, expect=expect)
     rtol, atol = get_rtol_atol("prod_force_se_a", input_dtype)

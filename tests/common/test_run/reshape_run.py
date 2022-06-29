@@ -16,7 +16,7 @@ import numpy as np
 from functools import reduce
 from akg import tvm
 from akg.utils import kernel_exec as utils
-from akg.ops.array import Reshape
+from akg.ops.array import reshape
 from tests.common.tensorio import compare_tensor
 from tests.common.base import get_rtol_atol
 from akg.utils.result_analysis import target_profiling
@@ -41,14 +41,14 @@ def reshape_run(in_shape, out_shape, dtype, attrs):
         kernel_name = attrs.get("kernel_name", False)
         mod = reshape_compile(in_shape, out_shape, dtype, attrs, kernel_name=kernel_name, tuning=t)
         if t:
-            expect, input, output = gen_data(dtype, in_shape, out_shape)
-            return mod, expect, (input, output)
+            expect, data_input, output = gen_data(dtype, in_shape, out_shape)
+            return mod, expect, (data_input, output)
         else:
             return mod
     else:
         mod = reshape_compile(in_shape, out_shape, dtype, attrs)
-        expect, input, output = gen_data(dtype, in_shape, out_shape)
-        args = [input, output]
+        expect, data_input, output = gen_data(dtype, in_shape, out_shape)
+        args = [data_input, output]
         if attrs.get("dynamic"):
             for index in range(len(out_shape) - 1):
                 args.append(out_shape[index])
@@ -63,14 +63,14 @@ def reshape_run(in_shape, out_shape, dtype, attrs):
             args_list = to_tvm_nd_array(args, akg.tvm.context(target_name, 0))
             target_profiling(mod, *args_list, target=target_name, repeat_time=attrs["repeat_times"])
         rtol, atol = get_rtol_atol("reshape", dtype)
-        return input, output, expect, compare_tensor(output, expect, rtol=rtol, atol=atol, equal_nan=True)
+        return data_input, output, expect, compare_tensor(output, expect, rtol=rtol, atol=atol, equal_nan=True)
 
 
 def gen_data(dtype, in_shape, out_shape):
-    input = np.random.randint(100, size=in_shape).astype(dtype)
-    expect = np.reshape(input, out_shape)
+    data_input = np.random.randint(100, size=in_shape).astype(dtype)
+    expect = np.reshape(data_input, out_shape)
     output = np.full(expect.shape, np.nan, dtype)
-    return expect, input, output
+    return expect, data_input, output
 
 
 def reshape_compile(in_shape, out_shape, dtype, attrs, kernel_name='reshape', tuning=False):
@@ -93,4 +93,4 @@ def reshape_compile(in_shape, out_shape, dtype, attrs, kernel_name='reshape', tu
         build_in_shape = in_shape
         build_out_shape = out_shape
     op_attr = [build_out_shape]
-    return utils.op_build_test(Reshape, [build_in_shape], [dtype], op_attr, kernel_name=kernel_name, attrs=attrs, tuning=tuning)
+    return utils.op_build_test(reshape, [build_in_shape], [dtype], op_attr, kernel_name=kernel_name, attrs=attrs, tuning=tuning)

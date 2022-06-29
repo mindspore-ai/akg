@@ -18,7 +18,7 @@ from enum import Enum
 from tests.common.gen_random import random_gaussian
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.math.ascend import MatMul
+from akg.ops.math.ascend import matmul
 from tests.common.base import get_rtol_atol
 from tests.common.tensorio import compare_tensor
 
@@ -360,4 +360,4 @@ def matmul_compile(shape_x, shape_y, bias, left_format, right_format, output_for
         input_shapes = [shape_xx, shape_yy]
         input_types = [dtype, dtype]
         op_attrs = [None, out_dtype, left_format, right_format, output_format, adj_x, adj_y, attrs]
-    return utils.op_build_test(MatMul, input_shapes, input_types, op_attrs, kernel_name, attrs, tuning=tuning)
+    return utils.op_build_test(matmul, input_shapes, input_types, op_attrs, kernel_name, attrs, tuning=tuning)

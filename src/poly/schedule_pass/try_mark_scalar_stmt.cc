@@ -23,15 +23,15 @@ namespace ir {
 namespace poly {
 bool TryMarkScalarStmt::SubtreeHasPermutableBands(const isl::schedule_node &node) const {
   bool all_non_permutable = false;
-  auto IsPermutable = [](const isl::schedule_node &node, bool check_coincident) -> bool {
+  auto IsPermutable = [](const isl::schedule_node &node) -> bool {
     if (!node) return false;
     if (!node.isa<isl::schedule_node_band>()) return false;
     if (!node.as<isl::schedule_node_band>().get_permutable()) return false;
     if (node.as<isl::schedule_node_band>().n_member() < 1) return false;
-    return !(check_coincident && !node.as<isl::schedule_node_band>().member_get_coincident(0));
+    return true;
   };
   all_non_permutable = node.every_descendant([this, &IsPermutable](const isl::schedule_node &node) -> bool {
-    return !(IsPermutable(node, pass_info_.tile_check_coincident_));
+    return !(IsPermutable(node));
   });
   return !all_non_permutable;
 }

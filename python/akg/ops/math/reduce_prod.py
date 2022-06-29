@@ -1,4 +1,4 @@
-# Copyright 2021 Huawei Technologies Co., Ltd
+# Copyright 2021-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,9 +17,10 @@ import akg.topi
 import akg.tvm
 import akg.utils as utils
 from akg.utils.format_transform import refine_reduce_axis
-from .exp import Exp
-from .log import log
 from akg.utils.format_transform import refine_reduce_axis
+from .exp import exp
+from .log import log
+
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, (int, tuple, list, type(None)), (bool, type(None)), (str, type(None)))
 def reduce_prod(data, axis=None, keepdims=False, target=utils.CCE):
@@ -58,7 +59,7 @@ def reduce_prod(data, axis=None, keepdims=False, target=utils.CCE):
 
     vlog_t = log(data, target)
     res = akg.topi.sum(vlog_t, axis=axis_new, keepdims=keepdims)
-    res = Exp(res, target)
+    res = exp(res, target)
 
     if dtype in ["int8", "uint8"]:
         res = akg.topi.cast(res, dtype)

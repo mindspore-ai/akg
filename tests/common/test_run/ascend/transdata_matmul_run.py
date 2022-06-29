@@ -15,29 +15,29 @@
 import akg.tvm
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.math.ascend import MatMul
+from akg.ops.math.ascend import matmul
 from tests.common.test_run.ascend.matmul_run import *
 
-def get_matmul_fractal_shape(x, format='zN'):
+def get_matmul_fractal_shape(x, mat_format='zN'):
     shape = x.shape
     m, n = shape[-2], shape[-1]
     m1, n1 = m // 16, n // 16
     m0, n0 = 16, 16
     needPad = m % 16 != 0 or n % 16 != 0
 
-    if format == 'zN':
+    if mat_format == 'zN':
         transpose_axis = [2, 0, 1, 3]
         new_shape = [n1, m1, m0, n0]
-    elif format == 'zZ':
+    elif mat_format == 'zZ':
         transpose_axis = [0, 2, 1, 3]
         new_shape = [m1, n1, m0, n0]
-    elif format == 'nZ':
+    elif mat_format == 'nZ':
         transpose_axis = [0, 2, 3, 1]
         new_shape = [m1, n1, n0, m0]
     return new_shape
 
 def transdata_matmul(x, y, b, out_dtype, left_format="zZ", right_format="nZ", out_format="zN", transpose_x=False,
-                    transpose_y=False, attrs={}, target="cce"):
+                    transpose_y=False, attrs=None, target="cce"):
     x_fractal_shape = get_matmul_fractal_shape(x, 'zN')
     y_fractal_shape = get_matmul_fractal_shape(y, 'zN')
 
@@ -45,7 +45,7 @@ def transdata_matmul(x, y, b, out_dtype, left_format="zZ", right_format="nZ", ou
     x = func([x], {"src_format" : "DefaultFormat", "dst_format" : "FRACTAL_NZ", "output_shape": x_fractal_shape})
     y = func([y], {"src_format" : "DefaultFormat", "dst_format" : "FRACTAL_NZ", "output_shape": y_fractal_shape})
 
-    res, attrs = MatMul(x, y, b, out_dtype, left_format, right_format, out_format, transpose_x, transpose_y, attrs=attrs)
+    res, attrs = matmul(x, y, b, out_dtype, left_format, right_format, out_format, transpose_x, transpose_y, attrs=attrs)
     return res, attrs
 
 def transdata_matmul_compile(shape_x, shape_y, bias, left_format, right_format, output_format, adj_x, adj_y, dtype, bias_dtype, out_dtype, kernel_name, attrs, tuning=False):
@@ -67,7 +67,7 @@ def transdata_matmul_compile(shape_x, shape_y, bias, left_format, right_format, 
         op_attrs = [None, out_dtype, left_format, right_format, output_format, adj_x, adj_y, attrs]
     return utils.op_build_test(transdata_matmul, input_shapes, input_types, op_attrs, kernel_name, attrs=attrs, tuning=tuning)
 
-def transdata_matmul_execute(shape_x, shape_y, bias, left_format, right_format, out_format, adj_x, adj_y, dtype, bias_dtype, out_dtype, kernel_name, attrs={}):
+def transdata_matmul_execute(shape_x, shape_y, bias, left_format, right_format, out_format, adj_x, adj_y, dtype, bias_dtype, out_dtype, kernel_name, attrs=None):
     batch_tuple, m, k, n = extract_dim(shape_x, shape_y, adj_x, adj_y)
     m = (m + 15) // 16 * 16
     n = (n + 15) // 16 * 16

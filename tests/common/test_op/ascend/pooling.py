@@ -16,7 +16,7 @@
 import akg
 import akg.utils as utils
 from akg.utils.format_transform import get_shape
-from akg.ops.nn.ascend import maxpool, Avgpool
+from akg.ops.nn.ascend import maxpool, avgpool
 
 
 def _pooling_compute(x, window, stride,
@@ -57,7 +57,7 @@ def _pooling_compute(x, window, stride,
         res = maxpool(x, window, stride, pad_mode)
     else:
         # AVG
-        res = Avgpool(x, window, stride, pad_mode)
+        res = avgpool(x, window, stride, pad_mode)
 
     return res
 

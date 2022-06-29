@@ -1,4 +1,4 @@
-# Copyright 2021 Huawei Technologies Co., Ltd
+# Copyright 2021-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,14 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""operator dsl function:Assign"""
+"""operator dsl function:assign"""
 
 import akg
 import akg.utils as utils
 from akg.utils.dsl_create import TensorUtils
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (str, type(None)))
-def Assign(ref, val, target=utils.CUDA):
+def assign(ref, val, target=utils.CUDA):
     """
     Assign val to ref.
 

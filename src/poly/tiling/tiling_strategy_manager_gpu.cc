@@ -60,6 +60,9 @@ void GemmStrategy::AddGpuConstraint() {
     return;
   }
 
+  if (!analyzer_->scop_info_.user_config_.EnableStitchFusion()) {
+    analyzer_->scop_info_.user_config_.SetEnableOneDimThread(true);
+  }
   Mma middle_band = {shape->m / SafeDivisor(mma.m), shape->n / SafeDivisor(mma.n), shape->k / SafeDivisor(mma.k)};
   std::stringstream ss;
   ss << "[Gemm] M = " << shape->m << " N = " << shape->n << " K = " << shape->k << ", middle band = [" << middle_band.m
@@ -2100,6 +2103,9 @@ void ConvStrategy::AddGpuConstraint() {
     return;
   }
 
+  if (!analyzer_->scop_info_.user_config_.EnableStitchFusion()) {
+    analyzer_->scop_info_.user_config_.SetEnableOneDimThread(true);
+  }
   MmaConv middle_band = {shape->m / SafeDivisor(mma.m), shape->h, shape->w, shape->n / SafeDivisor(mma.n),
                          shape->k / SafeDivisor(mma.k)};
   std::stringstream ss;
@@ -2317,6 +2323,7 @@ void CsrStrategy::AddGpuConstraint() {
   });
   auto available_threads = total_available_thread_;
   int csr_thread_num = -1;
+  std::unordered_map<int, int64_t> index_mapping;
   auto feat_len = analyzer_->scop_info_.analysis_result_.GetCsrFeatLen();
   if (feat_len > 1) {
     // CSR schedule with feature dimension (csr.values > 1d), axis has already been
@@ -2329,9 +2336,14 @@ void CsrStrategy::AddGpuConstraint() {
     csr_thread_num = use_reduce_lib ? analyzer_->scop_info_.user_config_.GetCsrThreadNum() : GPU_CSR_NO_TILE;
     // For outer axis
     CHECK(!analyzer_->scop_info_.analysis_result_.IsCsrDynamicExtent(outer_axis->range_extent));
-    int max_nodes_per_block = available_threads / feat_len / csr_thread_num;
+    available_threads /= feat_len;
+    int max_nodes_per_block = available_threads / csr_thread_num;
+    while (max_nodes_per_block < 1 && (csr_thread_num >> 1) > reduce_length_limit_) {
+      csr_thread_num >>= 1;
+      max_nodes_per_block = available_threads / csr_thread_num;
+    }
     auto nodes_per_block = std::min(max_nodes_per_block, GPU_CSR_BEST_NUM_NODES_PER_BLOCK);
-    nodes_per_block = SafeDivisor(nodes_per_block);
+    nodes_per_block = std::max(1, nodes_per_block);
     outer_axis->block_constraints.map_extent_ =
       std::ceil(static_cast<double>(outer_axis->extent_val) / feat_len / nodes_per_block);
     outer_axis->thread_constraints.map_extent_ = feat_len * nodes_per_block;
@@ -2382,7 +2394,20 @@ void CsrStrategy::AddGpuConstraint() {
     } else if (axis->dim_axis == 0) {
       axis->thread_constraints.map_extent_ = GPU_CSR_NO_TILE;
     } else {
-      available_threads /= SafeDivisor(std::min(axis->extent_val, available_threads));
+      if (index_mapping.count(axis->dim_axis)) {
+        auto prev_mapping = index_mapping[axis->dim_axis];
+        if (axis->extent_val > prev_mapping) {
+          auto additional_mapping = static_cast<int64_t>(
+            std::ceil(static_cast<float>(axis->extent_val) / prev_mapping));
+          additional_mapping = std::clamp<int64_t>(additional_mapping, 1, available_threads);
+          available_threads /= SafeDivisor(additional_mapping);
+          index_mapping[axis->dim_axis] = prev_mapping * additional_mapping;
+        }
+      } else {
+        auto thread_num = std::min(axis->extent_val, available_threads);
+        available_threads /= SafeDivisor(thread_num);
+        index_mapping[axis->dim_axis] = thread_num;
+      }
     }
   }
 }

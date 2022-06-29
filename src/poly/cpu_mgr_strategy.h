@@ -24,9 +24,7 @@ namespace ir {
 namespace poly {
 class CPUMgrStrategy : public PassMgrStrategy {
  public:
-  explicit CPUMgrStrategy(ScopInfo &scop_info) : PassMgrStrategy(scop_info) {
-    pass_info_.coincident_ = scop_info_.user_config_.GetConsiderCoincidence();
-  }
+  explicit CPUMgrStrategy(ScopInfo &scop_info) : PassMgrStrategy(scop_info) {}
   ~CPUMgrStrategy() override = default;
 
   void RegisterTilingPasses() override;

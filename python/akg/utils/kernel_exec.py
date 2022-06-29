@@ -182,7 +182,7 @@ def load_rpc_server_info(mode):
     """
     env_dic = os.environ
     if env_dic.get('RPC_HOST') and env_dic.get('RPC_PORT'):
-        return None
+        return
 
     if mode == 'rpc_cloud':
         logging.error("runtime_mode=rpc_cloud must set 1980 host ip and port!")
@@ -201,7 +201,7 @@ def load_rpc_server_info(mode):
     for i in info:
         rpc_machine[i] = info[i]
         rpc_lb[i] = 0.0
-    return None
+    return
 
 
 def dispatch(rank=0):
@@ -211,10 +211,10 @@ def dispatch(rank=0):
         items = list(d.items())
         random.shuffle(items)
         items.sort(key=lambda x: x[1])
-        return [item[0] for item in items]
+        return list(item[0] for item in items)
 
     for k, v in rpc_lb.items():
-        logging.info("######rpc_lb[%s]=%f", rpc_machine[k][0], v)
+        logging.info("######rpc_lb[%s]=%f", rpc_machine.get(k)[0], v)
     lb_list = _sort_by_value(rpc_lb)
     if len(lb_list) > rank:
         return lb_list[rank]
@@ -273,8 +273,8 @@ def mod_launch_rpc_thread(mode, mod, args, outputs, results, need_retry, retry, 
             logging.error("runtime_mode=rpc_cloud must set 1980 host ip and port!")
             raise Exception("ERROR:runtime_mode=rpc_cloud must set 1980 host ip and port!")
         remoteevb = dispatch(retry)
-        host = rpc_machine[remoteevb][0]
-        port = rpc_machine[remoteevb][1]
+        host = rpc_machine.get(remoteevb)[0]
+        port = rpc_machine.get(remoteevb)[1]
 
     start_time = timer()
     end_time = 0.0
@@ -309,7 +309,7 @@ def _get_rpc_result(poll_count, threads, thread_index, poll_interval, need_retry
                 logging.error("Thread %d exit with error, spawn a new thread immediately", poll_index)
                 poll_count = 0
                 retried[poll_index] = True
-    return False, None
+    return False, False
 
 
 def mod_launch_rpc(mode, mod, args, outputs, tuning=False):
@@ -331,7 +331,7 @@ def mod_launch_rpc(mode, mod, args, outputs, tuning=False):
     import operator
     arg_filter = filter(lambda x: isinstance(x, np.ndarray), args)
     arg_tensor = list(arg_filter)
-    tensor_size = reduce(operator.add, [reduce(operator.mul, arg.shape) for arg in arg_tensor])
+    tensor_size = reduce(operator.add, (reduce(operator.mul, arg.shape) for arg in arg_tensor))
     expected_upload_speed = 5e6
     expected_upload_time = int(tensor_size / expected_upload_speed)
 
@@ -455,7 +455,7 @@ def profiling_analyse(device_id, time_before_launch):
             prof_file = tmp_path[-3]
         except BaseException:
             logging.warning("failed to decode profiling result")
-            return None
+            return PROF_ERROR_CODE
         logging.debug("prof file is: %s", prof_file)
 
         file_abs_path = public_path + "/" + prof_file + "/" + device_file
@@ -477,22 +477,14 @@ def profiling_analyse(device_id, time_before_launch):
         return PROF_ERROR_CODE
 
 
-def array_as_continue(arr):
-    assert isinstance(arr, np.ndarray)
-    arr = np.ascontiguousarray(arr, dtype=arr.dtype)
-    assert arr.flags['C_CONTIGUOUS']
-    return arr
-
-
 def get_launch_args(arg_list, outputs):
     launch_args = []
-    outputs = set(outputs)
-    for i in range(len(arg_list)):
-        arg = arg_list[i]
+    outputs_set = set(outputs)
+    for i, arg in enumerate(arg_list):
         if isinstance(arg, np.ndarray):
             data = arg.ctypes.data_as(ctypes.c_void_p)
             nbytes = arg.size * arg.dtype.itemsize
-            is_output = 1 if i in outputs else 0
+            is_output = 1 if i in outputs_set else 0
             launch_args.append(data)
             launch_args.append(nbytes)
             launch_args.append(is_output)
@@ -539,14 +531,14 @@ def ascend_run(kernel_name, args, outputs, device_id):
     arg_list = []
     for a in args:
         if isinstance(a, np.ndarray):
-            arg_list.append(array_as_continue(a))
+            arg_list.append(np.ascontiguousarray(a, dtype=a.dtype))
         elif isinstance(a, (list, tuple)):
             for aa in a:
-                value = array_as_continue(a) if isinstance(aa, np.ndarray) else aa
+                value = np.ascontiguousarray(aa, dtype=aa.dtype) if isinstance(aa, np.ndarray) else aa
                 arg_list.append(value)
         else:
             arg_list.append(a)
-    outputs = [len(arg_list) + i if i < 0 else i for i in outputs]
+    outputs = list(len(arg_list) + i if i < 0 else i for i in outputs)
     launch_args_list = get_launch_args(arg_list, outputs)
     akg.tvm.get_global_func("ascend_run")(kernel_name, device_id, *launch_args_list)
     out_list = []
@@ -579,9 +571,25 @@ def mod_launch_default(mod, args, outputs=(-1,), target=CUDA, tuning=False, devi
     if device_id == -1:
         device_id = int(os.environ.get("DEVICE_ID", 0))
     ctx = akg.tvm.context(target, device_id)
-    mod_args = [akg.tvm.nd.array(a, ctx) for a in args]
+    mod_args = []
+    for a in args:
+        if a.dtype == "complex64" or a.dtype == "complex128":
+            final_shape = []
+            for i in a.shape:
+                final_shape.append(i)
+            final_shape.append(2)
+            real = np.real(a).flatten()
+            imag = np.imag(a).flatten()
+            new_a = []
+            for i in range(real.shape[0]):
+                new_a.append([real[i], imag[i]])
+            new_a = np.array(new_a)
+            new_a = new_a.reshape(final_shape)
+            mod_args.append(akg.tvm.nd.array(new_a, ctx))
+        else:
+            mod_args.append(akg.tvm.nd.array(a, ctx))
     mod(*mod_args)
-    out_list = [mod_args[len(args) + i if i < 0 else i].asnumpy() for i in outputs]
+    out_list = list(mod_args[len(args) + i if i < 0 else i].asnumpy() for i in outputs)
     if not tuning:
         return out_list[0] if len(out_list) == 1 else tuple(out_list)
     else:
@@ -653,61 +661,59 @@ def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=-1, expect=None
     raise ValueError("mode must be aic, rpc, aic_cloud, ca, compile_cloud, compile_mini, cpu, csim, ccesim or cdiff")
 
 
-def _append_shape_dtype(input_shapes, input_types, shape_info):
-    """Add shape and dtype to shape_info."""
+def _extract_shape_dtype(input_shapes, input_types):
+    """Extract shape and dtype info."""
+    shape_info_list = []
     for _, (shape, dtype) in enumerate(zip(input_shapes, input_types)):
         if isinstance(shape, (list, tuple)) and shape and isinstance(shape[0], (list, tuple)):
             for _, tmp_shape in enumerate(shape):
                 vc_util.check_shape(tmp_shape)
-                tmp_shape = list(tmp_shape)
-                str_tmp_shape = [str(tmp) for tmp in tmp_shape]
-                shape_info = "%s_%s_%s" % (shape_info, dtype, '_'.join(str_tmp_shape))
+                str_tmp_shape = (str(tmp) for tmp in list(tmp_shape))
+                shape_info_list.append("%s_%s" % (dtype, '_'.join(str_tmp_shape)))
         elif isinstance(shape, akg.tvm.tensor.Tensor):
             for tmp_shape in shape.shape:
                 str_shape = tmp_shape.name if isinstance(tmp_shape, akg.tvm.expr.Var) else str(tmp_shape)
-                shape_info = "%s_%s_%s" % (shape_info, dtype, '_'.join(str_shape))
+                shape_info_list.append("%s_%s" % (dtype, '_'.join(str_shape)))
         else:
             vc_util.check_shape(shape)
-            if isinstance(shape, akg.tvm.expr.Var):
-                shape = [shape]
-            shape = list(shape)
-            str_shape = [str(i) for i in shape]
-            shape_info = "%s_%s_%s" % (shape_info, dtype, '_'.join(str_shape))
-    return shape_info
+            tmp_shape = [shape] if isinstance(shape, akg.tvm.expr.Var) else list(shape)
+            str_shape = (str(i) for i in tmp_shape)
+            shape_info_list.append("%s_%s" % (dtype, '_'.join(str_shape)))
+    return "_".join(shape_info_list)
 
 
-def _append_op_attrs(op_attrs, shape_info):
-    """Add op attrs to shape_info."""
+def _extract_op_attrs(op_attrs):
+    """Extract op attrs."""
     def _to_str(item):
         if isinstance(item, (list, tuple)):
-            str_tmp = [str(i) for i in item]
+            str_tmp = (str(i) for i in item)
             return '_'.join(str_tmp)
         return str(item)
-
+    attrs_info_list = []
     for tmp in op_attrs:
         if isinstance(tmp, (list, tuple)):
             for ele in tmp:
-                shape_info = shape_info + '_' + _to_str(ele)
+                attrs_info_list.append(_to_str(ele))
         elif isinstance(tmp, (int, float)):
-            shape_info = shape_info + '_' + str(tmp)
+            attrs_info_list.append(str(tmp))
         elif isinstance(tmp, str):
-            shape_info = shape_info + '_' + tmp
+            attrs_info_list.append(tmp)
         elif isinstance(tmp, np.ndarray):
             shape = list(tmp.shape)
-            str_shape = [str(i) for i in shape]
-            shape_info = shape_info + '_' + '_'.join(str_shape)
-    return shape_info
+            str_shape = (str(i) for i in shape)
+            attrs_info_list.append('_'.join(str_shape))
+    return "_".join(attrs_info_list)
 
 
 def gen_kernel_name(input_shapes, input_types, op_attrs=None, kernel_name="", attrs=None):
     """generate kernel name."""
     dir_max_length = 250
-    shape_info = ''
-    shape_info = _append_shape_dtype(input_shapes, input_types, shape_info)
+    name_list = [kernel_name]
+    name_list.append(_extract_shape_dtype(input_shapes, input_types))
     if op_attrs is not None:
-        shape_info = _append_op_attrs(op_attrs, shape_info)
+        name_list.append(_extract_op_attrs(op_attrs))
 
-    kernel_name = kernel_name + shape_info
+    kernel_name = "_".join(name_list)
     kernel_name = re.sub(r'[^0-9a-zA-Z]+', '_', kernel_name)
     if len(kernel_name) > dir_max_length:
         logging.info("Dir name %s exceed maximal length, use first %d char as dir name.", kernel_name, dir_max_length)
@@ -771,9 +777,9 @@ def recursive_copy(obj):
         copied object.
     """
     if isinstance(obj, list):
-        return [recursive_copy(it) for it in obj]
+        return list(recursive_copy(it) for it in obj)
     if isinstance(obj, tuple):
-        return tuple([recursive_copy(it) for it in obj])
+        return tuple(recursive_copy(it) for it in obj)
     if isinstance(obj, dict):
         copy_obj = dict()
         for key in obj:
@@ -864,19 +870,18 @@ def get_dim_from_func_map(attrs, op_func, args, input_shapes, input_types, op_at
                 return ct_util.set_dims(func[key])
         raise RuntimeError("Registered set_dim_map is invalid. Must be a function or a dict!")
 
-    if attrs is None or 'dim' not in attrs or not attrs['dim']:
-        dim_info = ""
-        if attrs is None:
-            attrs = dict()
+    if attrs is None:
+        raise RuntimeError("attrs should be a dict!")
 
+    if 'dim' not in attrs or not attrs['dim']:
+        dim_info = ""
         if op_func.__name__ in ct_util.set_dim_func_map.keys():
-            value = ct_util.set_dim_func_map[op_func.__name__]
+            value = ct_util.set_dim_func_map.get(op_func.__name__)
             dim_info = _get_dim_info(value)
         if isinstance(dim_info, (list, tuple)):
             dim_info = dim_info[0]
-
         attrs['dim'] = dim_info
-    return attrs
+    return
 
 
 def parsing_output(output, attrs, compute_func, sch_tmpl, gpu_binds):
@@ -933,7 +938,7 @@ def gen_op_var(inputs, output, op_var):
         else:
             op_var.append(xx)
     if isinstance(output, (list, tuple)):
-        op_var = op_var + [i for i in output if TensorUtils.is_output_value(i)]
+        op_var = op_var + list(i for i in output if TensorUtils.is_output_value(i))
     else:
         if TensorUtils.is_output_value(output):
             op_var = op_var + [output]
@@ -977,11 +982,11 @@ def gen_spaces_dim_key(op_func, args, s, op_var, kernel_name, attrs, polyhedral,
     """
     set_dim_key = ""
     if op_func.__name__ in ct_util.set_dim_func_map.keys():
-        func_ = ct_util.set_dim_func_map[op_func.__name__]
+        func_ = ct_util.set_dim_func_map.get(op_func.__name__)
         if inspect.isfunction(func_):
             set_dim_key = func_(*args)[1]
     elif op_func.__name__ in ct_util.gen_key_func_map.keys():
-        func_ = ct_util.gen_key_func_map[op_func.__name__]
+        func_ = ct_util.gen_key_func_map.get(op_func.__name__)
         if inspect.isfunction(func_):
             set_dim_key = func_(*args)
     with akg.build_config(dump_pass_ir=True):
@@ -1151,7 +1156,9 @@ def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
 
     # backup inputs because the tensor names may be updated inside op_func
     inputs_backup = recursive_copy(inputs)
-    target = attrs.get("target") if attrs and attrs.get("target", None) else CCE
+    if attrs is None:
+        attrs = dict()
+    target = attrs.get("target", CCE)
     kwargs = {"target": target}
     kwargs = parse_kwargs(op_func, **kwargs)
 
@@ -1160,15 +1167,14 @@ def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
     # restore inputs to make sure that tensor names are not changed by op_func
     inputs = inputs_backup
     # set dim
-    attrs = get_dim_from_func_map(attrs, op_func, args, input_shapes, input_types, op_attrs)
+    get_dim_from_func_map(attrs, op_func, args, input_shapes, input_types, op_attrs)
 
     compute_func = None  # func which is defined in dsl for doing compute_inline or other
     sch_tmpl = None
     gpu_binds = None
     output, compute_func, sch_tmpl, gpu_binds = parsing_output(output, attrs, compute_func, sch_tmpl, gpu_binds)
 
-    op_var = []
-    op_var = gen_op_var(inputs, output, op_var)
+    op_var = gen_op_var(inputs, output, [])
 
     shape_var = []
     gen_shape_var(attrs_params, shape_params, shape_var)
@@ -1183,7 +1189,7 @@ def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
         polyhedral = False
 
     level = attrs.get("help_tiling") if attrs and "help_tiling" in attrs else None
-    if tuning or (level is not None and level > help_tiling_level['None']):
+    if tuning or (level is not None and level > help_tiling_level.get('None')):
         return gen_spaces_dim_key(op_func, args, s, op_var, kernel_name, attrs, polyhedral, tuning, target)
 
     binds = None if not attrs else attrs.pop(BINDS, None)
@@ -1274,7 +1280,7 @@ class TestUtils:
     def record_cycle(cycle):
         if os.environ.get(PERFORMANCE_TEST_FILE):
             result_file = os.environ.get(PERFORMANCE_TEST_FILE)
-            with open(result_file, "a+") as f:
+            with os.fdopen(os.open(result_file, os.O_WRONLY | os.O_CREAT), "a+") as f:
                 f.write("{0}\n".format(cycle))
 
     @staticmethod
@@ -1289,5 +1295,5 @@ class TestUtils:
 
         if os.environ.get(PERFORMANCE_TEST_FILE):
             result_file = os.environ.get(PERFORMANCE_TEST_FILE)
-            with open(result_file, "a+") as f:
+            with os.fdopen(os.open(result_file, os.O_WRONLY | os.O_CREAT), "a+") as f:
                 f.write("{0}; ".format(get_core_num()))

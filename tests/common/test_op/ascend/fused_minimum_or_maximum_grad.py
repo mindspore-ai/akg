@@ -1,4 +1,4 @@
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,8 +16,8 @@
 import akg
 import akg.lang.ascend.te_compute.util as akg_compute_util
 from akg import topi, tvm
-from akg.ops.math import Sum, Cast
-from akg.ops.math.ascend import SumByShape
+from akg.ops.math import cast
+from akg.ops.math.ascend import sum_by_shape
 import akg.utils as utils
 from akg.utils.dsl_create import zero_const
 from akg.utils.format_transform import get_shape
@@ -79,13 +79,13 @@ def fused_minimum_or_maximum_grad(dz, x, y, grad_x, grad_y, op_type):
     y = akg.lang.ascend.broadcast(y, dz_shape)
 
     if product_is_mini() and ori_dtype != "float16":
-        x = Cast(x, "float16", "cce")
-        y = Cast(y, "float16", "cce")
-        dz = Cast(dz, "float16", "cce")
+        x = cast(x, "float16", "cce")
+        y = cast(y, "float16", "cce")
+        dz = cast(dz, "float16", "cce")
     elif ori_dtype == "int32":
-        x = Cast(x, "float32", "cce")
-        y = Cast(y, "float32", "cce")
-        dz = Cast(dz, "float32", "cce")
+        x = cast(x, "float32", "cce")
+        y = cast(y, "float32", "cce")
+        dz = cast(dz, "float32", "cce")
     zero = zero_const(dz.dtype)
 
     if op_type == "LE":
@@ -98,17 +98,17 @@ def fused_minimum_or_maximum_grad(dz, x, y, grad_x, grad_y, op_type):
     if dx.dtype == "float16":
         # cast to fp32 for higher precision of reduce_sum.
         if get_shape(dx) != x_shape:
-            dx = Cast(dx, "float32", "cce")
+            dx = cast(dx, "float32", "cce")
         if get_shape(dy) != y_shape:
-            dy = Cast(dy, "float32", "cce")
+            dy = cast(dy, "float32", "cce")
 
-    dx = SumByShape(dx, x_shape)
-    dy = SumByShape(dy, y_shape)
+    dx = sum_by_shape(dx, x_shape)
+    dy = sum_by_shape(dy, y_shape)
 
     if ori_dtype != dx.dtype:
-        dx = Cast(dx, ori_dtype, "cce")
+        dx = cast(dx, ori_dtype, "cce")
     if ori_dtype != dy.dtype:
-        dy = Cast(dy, ori_dtype, "cce")
+        dy = cast(dy, ori_dtype, "cce")
 
     attrs = get_default_attrs()
     if grad_x and grad_y:

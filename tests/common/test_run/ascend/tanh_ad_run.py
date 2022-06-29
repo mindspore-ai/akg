@@ -1,4 +1,4 @@
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
 import numpy as np
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
-from akg.ops.math.ascend import TanhAd
+from akg.ops.math.ascend import tanh_ad
 from tests.common.base import get_rtol_atol
 from tests.common.gen_random import random_gaussian
 
@@ -22,7 +22,7 @@ def tanh_ad_run(shape, dtype, attrs):
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(TanhAd, [shape, shape], [dtype, dtype],
+        mod = utils.op_build_test(tanh_ad, [shape, shape], [dtype, dtype],
                                   kernel_name=kernel_name, attrs=attrs, tuning=t)
 
         if t:
@@ -30,7 +30,7 @@ def tanh_ad_run(shape, dtype, attrs):
             return mod, expect, (head_np, input_np, output)
         return mod
     else:
-        mod = utils.op_build_test(TanhAd, [shape, shape], [dtype, dtype],
+        mod = utils.op_build_test(tanh_ad, [shape, shape], [dtype, dtype],
                                   kernel_name='tanh_ad', attrs=attrs)
 
         expect, head_np, input_np, output = gen_data(dtype, shape)

@@ -1,4 +1,4 @@
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -156,10 +156,7 @@ def _compilewithjson_to_module(kernel_info, attrs):
     processor = kernel_info['process'] if 'process' in kernel_info else utils.CUDA
     attrs["target"] = _get_target_from_processor(processor)
 
-    if processor == 'cuda' and 'compute_capability' in kernel_info:
-        attrs['compute_capability'] = kernel_info['compute_capability']
-
-    if 'composite' in kernel_info and kernel_info['composite'] is True:
+    if kernel_info.get('composite', False):
         try:
             composite.build(kernel_info, attrs)
             return True

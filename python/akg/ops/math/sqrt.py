@@ -13,10 +13,11 @@
 # limitations under the License.
 
 """operator dsl function: sqrt"""
-import akg.topi
+import akg
 import akg.tvm
 import akg.utils as utils
 from akg.utils.kernel_exec import product_is_mini
+
 
 def _sqrt_ascend(data):
     """
@@ -58,8 +59,9 @@ def _sqrt_ascend(data):
     res = res.astype('float32') if is_needed_conv else res
     return res
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, (str, type(None)))
-def Sqrt(data, target=utils.CUDA):
+def sqrt(data, target=utils.CUDA):
     """
     Computes square root of x element-wise.
 

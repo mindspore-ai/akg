@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -191,6 +191,10 @@ void ElimReshapeAnalysis::AnalysisTransform(const FunctionRef &output) {
   CHECK(call->args.size() == 1);
   CHECK(call->args[0].as<Call>());
   auto input = call->args[0].as<Call>()->func;
+  if (std::find(g_.input_funcs.begin(), g_.input_funcs.end(), input) != g_.input_funcs.end() &&
+      std::find(g_.output_funcs.begin(), g_.output_funcs.end(), output) != g_.output_funcs.end()) {
+    return;
+  }
   // if not visited or input shape and output shape as same, can remove this op, change input shape to output
   // shape, replace output tensor to input tensor
   auto input_shape = result_.ShapeChanged(input) ? result_.changed_shapes[input] : g_.func_shape[input];
@@ -213,7 +217,7 @@ void ElimReshapeAnalysis::AnalysisTransform(const FunctionRef &output) {
     result_.to_be_removed.insert(provide);
     g_.visited_funcs.insert(output);
     g_.visited_funcs.insert(input);
-  }  // else if visited and input output shape are different, do noting, if input shape changed, already in set
+  }  // else if visited and input output shape are different, do nothing, if input shape changed, already in set
 }
 
 bool ElimReshapeAnalysis::AnalysisElemwise(const FunctionRef &output) {
@@ -251,6 +255,16 @@ bool ElimReshapeAnalysis::AnalysisElemwiseBackward(const FunctionRef &output) {
       if (!EqualShape(input_shape_change, input_shape)) {
         LOG(INFO) << "[ELEMWISE] RESHAPE: " << input->func_name() << ": " << input_shape_change << "->" << input_shape;
         result_.CollectReshape(g_.func_stmts[output], i, input_shape_change, input_shape);
+      } else {
+        auto op = g_.func_stmts[output];
+        if (!result_.need_reshape_map.count(op)) continue;
+        for (auto it = result_.need_reshape_map[op].begin(); it < result_.need_reshape_map[op].end();) {
+          if ((*it).pos == i && !EqualShape((*it).origin_shape, input_shape)) {
+            it = result_.need_reshape_map[op].erase(it);
+          } else {
+            ++it;
+          }
+        }
       }
     }
   }
@@ -419,7 +433,8 @@ class TSA : public IRMutator {
       p_.emplace_back(op);
     }
     if (op_name == "TensorScatterAdd") {
-      CHECK(call->args.size() == 3);
+      constexpr size_t three_args = 3;
+      CHECK(call->args.size() == three_args);
       auto index = call->args[1].as<Call>();
       CHECK(index);
       auto arg1 = index->func;

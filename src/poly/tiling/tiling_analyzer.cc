@@ -74,7 +74,7 @@ TileAxis::TileAxis(const Expr &l1_size, const Expr &l0_size, const std::string &
 
 int64_t GetExtentVal(Expr &range_extent, TilingAnalyzer *analyzer) {
   if (analyzer->scop_info_.analysis_result_.IsCsrDynamicExtent(range_extent)) {
-    return analyzer->scop_info_.user_config_.GetCsrThreadNum();
+    return std::max(1, analyzer->scop_info_.user_config_.GetCsrThreadNum());
   }
   auto extent = range_extent.as<IntImm>();
   if (extent != nullptr) {
@@ -268,7 +268,12 @@ void TileAxis::TileRestrainToSingleValue(const Expr &value, TileLevel level) {
 
 void TileAxis::TileRestrainEntire(TileLevel level) {
   if (level == CACHE1) {
-    Expr extent = this->range_extent;
+    Expr extent;
+    if (analyzer_->scop_info_.analysis_result_.IsCsrDynamicExtent(range_extent)) {
+      extent = this->extent_val;
+    } else {
+      extent = range_extent;
+    }
     if (this->HasAttr(AT_SHIFT)) extent = this->c1_constraints.tile_extent_;
     this->c1_constraints.tile_min_ = extent;
     this->c1_constraints.tile_extent_ = extent;

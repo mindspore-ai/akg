@@ -1,4 +1,4 @@
-# Copyright 2020-2021 Huawei Technologies Co., Ltd
+# Copyright 2020-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ import akg.utils as utils
 from akg.utils.kernel_exec import product_is_mini
 from akg.utils.format_transform import get_shape
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, str)
 def _cast(data, dst_type):
     if data.dtype == "int64" and dst_type == "float16":
@@ -31,6 +32,7 @@ def _cast(data, dst_type):
     out = akg.topi.cast(data, dst_type)
 
     return out
+
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, str)
 def _cast_ascend(data, dst_type):
@@ -78,7 +80,8 @@ def _cast_ascend(data, dst_type):
 
     return out
 
-def Cast(data, dst_type, target=utils.CCE):
+
+def cast(data, dst_type, target=utils.CCE):
     """
     cast data to target type.
 

@@ -67,19 +67,13 @@ std::string GetRealTarget(const std::string &target) {
 std::string GetProcess(const picojson::value &input_json) {
   const picojson::value::object &input_obj = input_json.get<picojson::object>();
   std::string target;
-  std::string target_option;
   auto iter = input_obj.find("process");
   if (iter != input_obj.end()) {
     CHECK(iter->second.is<std::string>());
     target = iter->second.get<std::string>();
   }
-  iter = input_obj.find("target_option");
-  if (iter != input_obj.end()) {
-    CHECK(iter->second.is<std::string>());
-    target_option = " " + iter->second.get<std::string>();
-  }
 
-  return GetRealTarget(target) + target_option;
+  return GetRealTarget(target);
 }
 
 picojson::value String2Json(const std::string &json_str) {
@@ -133,7 +127,8 @@ bool IsOtherOp(const std::string &op_name) {
                                            "CSRGather",
                                            "CSR2COO",
                                            "COO2CSR",
-                                           "ElemAny"};
+                                           "ElemAny",
+                                           "CSRMM"};
   return elems.find(op_name) != elems.end();
 }
 bool IsElemwise(const std::string &op_name) {
@@ -283,7 +278,7 @@ bool HasFoundReshape(const Array<Expr> &shape_change, const Expr &ori_size, size
 }
 
 bool CheckInputBroadcast(const std::string &type, const std::vector<IndexGroup> &index_groups, size_t i,
-                           const Array<Expr> &shape_ori) {
+                         const Array<Expr> &shape_ori) {
   auto index_group = index_groups[i];
   auto indexs = index_groups[i].indexs;
   auto index_group_start = indexs[0];

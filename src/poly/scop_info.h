@@ -244,6 +244,10 @@ class UserConfig {
     ParseStringAttr(attrs, "mlsched_solver", &mlsched_solver_);
     ParseBoolAttr(attrs, "mlsched_code_sinking", &mlsched_code_sinking_);
     ParseBoolAttr(attrs, "mlsched_constant_to_parameter", &mlsched_constant_to_parameter_);
+    ParseBoolAttr(attrs, "mlsched_parameter_shifting", &mlsched_parameter_shifting_);
+    ParseBoolAttr(attrs, "mlsched_post_processing_full_sets", &mlsched_post_processing_full_sets_);
+    ParseBoolAttr(attrs, "mlsched_post_processing_extra_outer_parallel_loop",
+                  &mlsched_post_processing_extra_outer_parallel_loop_);
 
     ParseCustomTilingAttr(attrs, "custom_tiling", &custom_tiling_);
     ParseBoolAttr(attrs, "pragma_analyze_reuse_buffer", &pragma_analyze_reuse_buffer_);
@@ -258,7 +262,6 @@ class UserConfig {
     ParseBoolAttr(attrs, "pragma_rmselfdep", &remove_self_dependence_);
     ParseBoolAttr(attrs, "pragma_force_rmselfdep", &force_remove_self_dependence_);
     ParseBoolAttr(attrs, "pragma_disable_whole_component", &disable_whole_component_);
-    ParseBoolAttr(attrs, "pragma_remove_invariant_dependence", &remove_invariant_dependence_);
     ParseBoolAttr(attrs, "pragma_disable_schedule_shift", &disable_schedule_shift_);
     ParseBoolAttr(attrs, "pragma_enable_schedule_max_constant", &enable_schedule_max_constant_);
     ParseBoolAttr(attrs, "pragma_enable_schedule_outer_coincidence", &enable_schedule_outer_coincidence_);
@@ -276,6 +279,7 @@ class UserConfig {
     ParseBoolAttr(attrs, "pragma_opt_for_dsa", &optimize_for_dsa_);
     ParseBoolAttr(attrs, "enable_feature_library", &enable_feature_library_);
     ParseBoolAttr(attrs, "enable_hoist_cond_write", &enable_hoist_cond_write_);
+    ParseBoolAttr(attrs, "enable_approximate_read", &enable_approximate_read_);
 
     ParseIntAttr(attrs, "kernel_h", &matB_dim_h_);
     ParseIntAttr(attrs, "kernel_w", &matB_dim_w_);
@@ -413,11 +417,20 @@ class UserConfig {
   bool GetMLSchedCodeSinking(void) const { return mlsched_code_sinking_; }
   void SetMLSchedConstantToParameter(bool toggle) { mlsched_constant_to_parameter_ = toggle; }
   bool GetMLSchedConstantToParameter(void) const { return mlsched_constant_to_parameter_; }
+  void SetMLSchedParameterShifting(bool toggle) { mlsched_parameter_shifting_ = toggle; }
+  bool GetMLSchedParameterShifting(void) const { return mlsched_parameter_shifting_; }
+  void SetMLSchedPostProcessingFullSets(bool toggle) { mlsched_post_processing_full_sets_ = toggle; }
+  bool GetMLSchedPostProcessingFullSets(void) const { return mlsched_post_processing_full_sets_; }
+  void SetMLSchedPostProcessingExtraOuterParallelLoop(bool toggle) {
+    mlsched_post_processing_extra_outer_parallel_loop_ = toggle;
+  }
+  bool GetMLSchedPostProcessingExtraOuterParallelLoop(void) const {
+    return mlsched_post_processing_extra_outer_parallel_loop_;
+  }
 
   // getter for schedule tree transform config
   bool GetRemoveSelfDependence() const { return remove_self_dependence_; }
   bool GetForceRemoveSelfDependence() const { return force_remove_self_dependence_; }
-  bool GetRemoveInvariantDependence() const { return remove_invariant_dependence_; }
   bool GetDisableWholeComponent() const { return disable_whole_component_; }
   bool GetDisableScheduleShift() const { return disable_schedule_shift_; }
   bool GetEnableScheduleMaxConstant() const { return enable_schedule_max_constant_; }
@@ -442,6 +455,7 @@ class UserConfig {
   bool GetOptimizeForNPU() const { return optimize_for_dsa_; }
   bool GetEnableFeatureLib() const { return enable_feature_library_; }
   bool GetEnableHoistCondWrite() const { return enable_hoist_cond_write_; }
+  bool GetEnableApproximateRead() const { return enable_approximate_read_; }
 
   // getter for conv config
   int GetMatBDimH() const { return matB_dim_h_; }
@@ -773,13 +787,15 @@ class UserConfig {
   // MLSched config
   bool enable_mlsched_{false};
   std::string mlsched_solver_{""};
-  bool mlsched_code_sinking_{false};
+  bool mlsched_code_sinking_{true};
   bool mlsched_constant_to_parameter_{true};
+  bool mlsched_parameter_shifting_{true};
+  bool mlsched_post_processing_full_sets_{true};
+  bool mlsched_post_processing_extra_outer_parallel_loop_{false};
 
   // schedule tree transform config
   bool remove_self_dependence_{true};
   bool force_remove_self_dependence_{false};
-  bool remove_invariant_dependence_{true};
   bool disable_whole_component_{true};
   bool disable_schedule_shift_{false};
   bool enable_schedule_max_constant_{false};
@@ -801,6 +817,7 @@ class UserConfig {
   bool optimize_for_dsa_{false};
   bool enable_feature_library_{false};
   bool enable_hoist_cond_write_{true};
+  bool enable_approximate_read_{false};
 
   // conv config
   int matB_dim_h_{-1};
@@ -1245,6 +1262,15 @@ class AnalysisResult {
   void ResetActivateBufferFootprints() { active_buffer_footprints_.clear(); }
   void ResetBufferDefInfos() { buffer_def_infos_.clear(); }
 
+  StatementMap &GetProvideStmtsMap() { return provide_stmts_; }
+  void RecordProvideStmt(const isl::id &stmt_id, const Node *node) {
+    // If it already exists, the latest value is updated
+    provide_stmts_[stmt_id] = node;
+  }
+  void ResetProvideStmtsMap() {
+    provide_stmts_.clear();
+  }
+
  public:
   std::vector<std::pair<std::string, STMT_OP_TYPE>> stmt_type_;
   std::vector<std::pair<isl::union_set, BufferedFootPrintInfo>> active_buffer_footprints_;
@@ -1287,6 +1313,7 @@ class AnalysisResult {
   AccessMap accesses_;
   StatementMap statements_;
   ForTypeMap directives_;
+  StatementMap provide_stmts_;
 
   StmtOpInfoMap stmt_op_Info_;
   OperatorDomainMap domains_;

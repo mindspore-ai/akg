@@ -1,6 +1,4 @@
-#!/usr/bin/env python3
-# coding: utf-8
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -26,7 +24,7 @@ from akg.utils.format_transform import get_shape, get_bytes
 from akg.utils.math import greatest_common_divisor, least_common_multiple
 from akg.utils.kernel_exec import product_is_mini
 from akg.utils import dynamic_shape as ds
-from ..cast import Cast
+from ..cast import cast
 
 batchmatmul_set_dim_map = {
     # 2D
@@ -937,7 +935,7 @@ def vectormatmul_4d_cast(a_value, b_value, trans_a, trans_b, cast_dtype):
         return m_c
 
     c_cast = matmul_4d_dsl(a_value, b_value, trans_a, trans_b)
-    c_value = Cast(c_cast, dtype, utils.CCE)
+    c_value = cast(c_cast, dtype, utils.CCE)
     if trans_a and trans_b:
         c_res = akg.topi.transpose(c_value, (1, 0))
         return c_res
@@ -985,7 +983,7 @@ def vectormatmul_3d_cast(a_value, b_value, trans_a, trans_b, cast_dtype):
         return m_c
 
     c_cast = matmul_3d_dsl(a_value, b_value, trans_a, trans_b)
-    c_value = Cast(c_cast, dtype, utils.CCE)
+    c_value = cast(c_cast, dtype, utils.CCE)
     if trans_a and trans_b:
         c_res = akg.topi.transpose(c_value, (1, 0))
         return c_res
@@ -1031,7 +1029,7 @@ def vectormatmul_2d_cast(a_value, b_value, trans_a, trans_b, cast_dtype):
         return m_c
 
     c_cast = matmul_2d(a_value, b_value, trans_a, trans_b)
-    c_value = Cast(c_cast, dtype, utils.CCE)
+    c_value = cast(c_cast, dtype, utils.CCE)
     if trans_a and trans_b:
         c_res = akg.topi.transpose(c_value, (1, 0))
         return c_res

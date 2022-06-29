@@ -17,7 +17,7 @@ import itertools
 from akg.utils import CCE
 from akg.utils import kernel_exec as utils
 from akg.ops.array.ascend import OneHotV2
-from akg.ops.array.gpu import OneHot
+from akg.ops.array.gpu import one_hot
 from tests.common.tensorio import compare_tensor
 from tests.common.base import get_rtol_atol
 from akg.utils.result_analysis import target_profiling
@@ -30,7 +30,7 @@ def one_hot_run(shape, depth, dtype, on_value, off_value, axis, poly_sch=True, a
     if attrs["target"] == CCE:
         return one_hot_ascend(shape, depth, dtype, on_value, off_value, axis, attrs)
 
-    mod = utils.op_build_test(OneHot, [shape], [dtype], kernel_name="one_hot",
+    mod = utils.op_build_test(one_hot, [shape], [dtype], kernel_name="one_hot",
             op_attrs=[on_value, off_value, depth, axis, dtype], polyhedral=poly_sch, attrs=attrs)
     # gen data
     expect, data_tmp, _, _, output = gen_data(axis, depth, dtype, shape, on_value, off_value)
@@ -55,31 +55,31 @@ def one_hot_run(shape, depth, dtype, on_value, off_value, axis, poly_sch=True, a
 def one_hot_ascend(shape, depth, dtype, on_value, off_value, axis, attrs):
     if axis == -1:
         axis = len(shape)
+    shape_scalar = (1,)
 
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = one_hot_compile(shape, depth, dtype, on_value, off_value, axis, attrs, kernel_name=kernel_name, tuning=t)
+        mod = one_hot_compile(shape, shape_scalar, depth, dtype, axis, attrs, kernel_name=kernel_name, tuning=t)
         if t:
-            expect, input, on_value_tensor, off_value_tensor, output = gen_data(axis, depth, dtype, shape, on_value, off_value)
-            return mod, expect, (input, on_value_tensor, off_value_tensor, output)
+            expect, data_input, on_value_tensor, off_value_tensor, output = gen_data(axis, depth, dtype, shape, on_value, off_value)
+            return mod, expect, (data_input, on_value_tensor, off_value_tensor, output)
         else:
             return mod
     else:
         if not product_is_mini():
             attrs['enable_multicore'] = True
-        shape_scalar = (1,)
         mod = one_hot_compile(shape, shape_scalar, depth, dtype, axis, attrs)
-        expect, input, on_value_tensor, off_value_tensor, output = gen_data(axis, depth, dtype, shape, on_value, off_value)
-        output = utils.mod_launch(mod, (input, on_value_tensor, off_value_tensor, output), expect=expect)
+        expect, data_input, on_value_tensor, off_value_tensor, output = gen_data(axis, depth, dtype, shape, on_value, off_value)
+        output = utils.mod_launch(mod, (data_input, on_value_tensor, off_value_tensor, output), expect=expect)
         rtol, atol = get_rtol_atol("one_hot", dtype)
-        return input, output, expect, compare_tensor(output, expect, rtol=rtol, atol=atol, equal_nan=True)
+        return data_input, output, expect, compare_tensor(output, expect, rtol=rtol, atol=atol, equal_nan=True)
 
 def gen_data(axis, depth, dtype, shape, on_value = 1, off_value = 0):
     in_shape_idx = [i for i in range(len(shape))]
     in_shape_idx.append(len(shape))
     in_shape_idx[axis], in_shape_idx[len(shape)] = in_shape_idx[len(shape)], in_shape_idx[axis]
-    input = np.random.randint(low = -1, high = depth, size=shape, dtype='int32')
+    data_input = np.random.randint(low = -1, high = depth, size=shape, dtype='int32')
     on_value_tensor = np.array([on_value]).astype(dtype)
     off_value_tensor = np.array([off_value]).astype(dtype)
     if axis < 0:
@@ -93,7 +93,7 @@ def gen_data(axis, depth, dtype, shape, on_value = 1, off_value = 0):
     indexs = [x for x in itertools.product(*tuple(dims))]
     indexs = [list(x) for x in indexs]
     temp = 0
-    flatinput = input.flatten()
+    flatinput = data_input.flatten()
     for value in flatinput:
         indexs[temp].insert(axis, value)
         temp = temp + 1
@@ -103,7 +103,7 @@ def gen_data(axis, depth, dtype, shape, on_value = 1, off_value = 0):
             expect[loc]  = on_value
     expect = expect.astype(dtype)
     output = np.full(expect.shape, np.nan, dtype)
-    return expect, input, on_value_tensor, off_value_tensor, output
+    return expect, data_input, on_value_tensor, off_value_tensor, output
 
 
 def one_hot_compile(shape, shape_scalar, depth, dtype, axis, attrs, kernel_name="one_hot", tuning=False):

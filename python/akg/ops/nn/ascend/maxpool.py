@@ -15,6 +15,7 @@
 # limitations under the License.
 
 """operator dsl function:maxpool"""
+from __future__ import absolute_import
 import math
 import akg
 import akg.tvm
@@ -79,11 +80,12 @@ def maxpool_set_dim_func(data, kernel, stride, pad):
     for k, v in default_attr_map.items():
         attr_map[k] = v
     if hash_key in maxpool_set_attr_map.keys():
-        for k, v in maxpool_set_attr_map[hash_key].items():
+        attrs_dict = maxpool_set_attr_map.get(hash_key, {})
+        for k, v in attrs_dict.items():
             attr_map[k] = v
 
     if hash_key in maxpool_set_dim_map.keys():
-        return ct_util.set_dims(maxpool_set_dim_map[hash_key]), hash_key
+        return ct_util.set_dims(maxpool_set_dim_map.get(hash_key, {})), hash_key
     return "", hash_key
 
 
@@ -305,6 +307,7 @@ def maxpool_manual_schedule(shape, kernel, stride, padding, dtype, attrs=None, p
 
 
 def pad_strategy_check(strategy):
+    """check the correctness of pad strategy"""
     if not isinstance(strategy, str) \
             and not (isinstance(strategy, (list, tuple)) and len(strategy) == 4):
         raise ValueError("Only support string or list/tuple of 4 int numbers!")
@@ -710,15 +713,17 @@ def maxpool_with_argmax_set_dim_func(data, kernel, stride, pad):
     for k, v in default_attr_map.items():
         attr_map_v2[k] = v
     if hash_key in maxpool_with_argmax_set_attr_map.keys():
-        for k, v in maxpool_with_argmax_set_attr_map[hash_key].items():
+        attrs_dict = maxpool_with_argmax_set_attr_map.get(hash_key, {})
+        for k, v in attrs_dict.items():
             attr_map_v2[k] = v
 
     if hash_key in maxpool_with_argmax_set_dim_map.keys():
-        return ct_util.set_dims(maxpool_with_argmax_set_dim_map[hash_key]), hash_key
+        return ct_util.set_dims(maxpool_with_argmax_set_dim_map.get(hash_key, {})), hash_key
     return "", hash_key
 
 
 def maxpool_value(index):
+    """return index int of maxpool"""
     print(type(index))
     if isinstance(index, akg.tvm.expr.IntImm):
         return index.value

@@ -1,6 +1,4 @@
-#!/usr/bin/env python3
-# coding: utf-8
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,24 +18,24 @@ import akg.tvm
 import akg.lang.ascend
 import akg.utils as utils
 from akg import dim
-from akg.ops.math.cast  import Cast
+from akg.ops.math.cast  import cast
 from akg.utils.format_transform import get_shape
 from akg.utils.dynamic_shape import set_poly_upper_bound_for_tensor
 
-k_h_fake = 11
-k_w_fake = 31
-p_top_fake = 9
-p_bottom_fake = 8
-p_left_fake = 23
-p_right_fake = 21
-s_h_fake = 7
-s_w_fake = 17
-c1_cut_fake = 67
-tile_out_h_fake = 47
-tile_out_w_fake = 37
-m_cut_fake = 53 * 16
-k_cut_fake = 59 * 16
-n_cut_fake = 61 * 16
+K_H_FAKE = 11
+K_W_FAKE = 31
+P_TOP_FAKE = 9
+P_BOTTOM_FAKE = 8
+P_LEFT_FAKE = 23
+P_RIGHT_FAKE = 21
+S_H_FAKE = 7
+S_W_FAKE = 17
+C1_CUT_FAKE = 67
+TILE_OUT_H_FAKE = 47
+TILE_OUT_W_FAKE = 37
+M_CUT_FAKE = 53 * 16
+K_CUT_FAKE = 59 * 16
+N_CUT_FAKE = 61 * 16
 
 conv_set_dim_map = {
     str(((1, 1024, 14, 14), (2048, 1024, 1, 1), (0, 0, 0, 0), (2, 2), (1, 1), True)):
@@ -416,17 +414,17 @@ def conv_set_dim_func(fmap_shape, filter_shape, pad, stride, dilation,
             info.setdim(index=0, axis=0, tilel1=1, tilel0=0)  # n
 
         if dynamic_tiling:
-            info.setdim(index=0, axis=0, tilel1=c1_cut_fake, tilel0=0)  # c1
+            info.setdim(index=0, axis=0, tilel1=C1_CUT_FAKE, tilel0=0)  # c1
         elif dynamic or out_c1 > 1:
             info.setdim(index=0, axis=0, tilel1=c1_cut, tilel0=0)  # c1
 
         if dynamic_tiling:
-            info.setdim(index=0, axis="H", tilel1=tile_out_h_fake, tilel0=0)  # h
+            info.setdim(index=0, axis="H", tilel1=TILE_OUT_H_FAKE, tilel0=0)  # h
         elif dynamic or out_h > 1:
             info.setdim(index=0, axis="H", tilel1=tile_out_h, tilel0=0)  # h
 
         if dynamic_tiling:
-            info.setdim(index=0, axis="W", tilel1=tile_out_w_fake, tilel0=0)  # w
+            info.setdim(index=0, axis="W", tilel1=TILE_OUT_W_FAKE, tilel0=0)  # w
         elif dynamic or out_w > 1:
             info.setdim(index=0, axis="W", tilel1=tile_out_w, tilel0=0)  # w
 
@@ -579,14 +577,14 @@ def conv_core(data, fmap_shape, filter_shape, pad, stride, dilation, use_bias=Fa
     s_w_real = s_w
 
     if dynamic_tiling:
-        k_h = k_h_fake
-        k_w = k_w_fake
-        p_top = p_top_fake
-        p_bottom = p_bottom_fake
-        p_left = p_left_fake
-        p_right = p_right_fake
-        s_h = s_h_fake
-        s_w = s_w_fake
+        k_h = K_H_FAKE
+        k_w = K_W_FAKE
+        p_top = P_TOP_FAKE
+        p_bottom = P_BOTTOM_FAKE
+        p_left = P_LEFT_FAKE
+        p_right = P_RIGHT_FAKE
+        s_h = S_H_FAKE
+        s_w = S_W_FAKE
 
     # dilation (dilation_h, dilation_w)
     d_h, d_w = dilation
@@ -749,12 +747,12 @@ def conv_core(data, fmap_shape, filter_shape, pad, stride, dilation, use_bias=Fa
         "res": output_name}
 
     if dynamic_tiling:
-        conv_attr["pragma_conv_h_cut"] = (tile_out_h_fake - 1) * s_h + k_h_d
-        conv_attr["pragma_conv_w_cut"] = (tile_out_w_fake - 1) * s_w + k_w_d
-        conv_attr["pragma_conv_co_cut"] = c1_cut_fake * 16
-        conv_attr["pragma_conv_m_cut"] = m_cut_fake
-        conv_attr["pragma_conv_k_cut"] = k_cut_fake
-        conv_attr["pragma_conv_n_cut"] = n_cut_fake
+        conv_attr["pragma_conv_h_cut"] = (TILE_OUT_H_FAKE - 1) * s_h + k_h_d
+        conv_attr["pragma_conv_w_cut"] = (TILE_OUT_W_FAKE - 1) * s_w + k_w_d
+        conv_attr["pragma_conv_co_cut"] = C1_CUT_FAKE * 16
+        conv_attr["pragma_conv_m_cut"] = M_CUT_FAKE
+        conv_attr["pragma_conv_k_cut"] = K_CUT_FAKE
+        conv_attr["pragma_conv_n_cut"] = N_CUT_FAKE
         conv_attr["pragma_conv_tile_co"] = c1_cut
         conv_attr["pragma_conv_tile_ho"] = tile_out_h_real
         conv_attr["pragma_conv_tile_wo"] = tile_out_w_real
@@ -817,7 +815,7 @@ def Conv(data, fmap_shape, filter_shape, pad, stride, dilation, use_bias=False, 
         'Ascend'
     """
     c_value = conv_core(data, fmap_shape, filter_shape, pad, stride, dilation, use_bias, attrs)
-    c_value = Cast(c_value, "float16", utils.CCE)
+    c_value = cast(c_value, "float16", utils.CCE)
 
     if use_bias:
         bias_value = data[2]

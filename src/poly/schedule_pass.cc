@@ -28,6 +28,10 @@ static constexpr const char *const kEnvStringMsDevMlsSolver = "MS_DEV_MLS_SOLVER
 static constexpr const char *const kEnvStringMsDevMlsVerbosity = "MS_DEV_MLS_VERBOSITY";
 static constexpr const char *const kEnvStringMsDevMlsCodeSinking = "MS_DEV_MLS_CODE_SINKING";
 static constexpr const char *const kEnvStringMsDevMlsConstantToParameter = "MS_DEV_MLS_CONSTANT_TO_PARAMETER";
+static constexpr const char *const kEnvStringMsDevMlsParameterShifting = "MS_DEV_MLS_PARAMETER_SHIFTING";
+static constexpr const char *const kEnvStringMsDevMlsPostProcessFullSets = "MS_DEV_MLS_POST_PROCESS_FULL_SETS";
+static constexpr const char *const kEnvStringMsDevMlsPostProcessExtraOuterParallelLoop =
+  "MS_DEV_MLS_POST_PROCESS_EXTRA_OUTER_PARALLEL_LOOP";
 
 isl::schedule_node TileBand(isl::schedule_node node, const isl::multi_val &sizes) {
   isl::ctx ctx = node.ctx();
@@ -53,34 +57,6 @@ isl::schedule_node TileBand(isl::schedule_node node, const isl::multi_val &sizes
   CHECK(status == isl_stat_ok);
 
   return node;
-}
-
-/* Reorder filters of a sequence/set node.
- * node: must be a sequence or set node.
- * old_to_new_map: map from original child position to new child position.
- * The caller should make sure that there are no duplicate values.
- */
-isl::schedule_node ReorderFilters(const isl::schedule_node &node,
-                                  const std::unordered_map<size_t, size_t> &old_to_new_map) {
-  auto n_children = node.n_children();
-  isl_schedule_tree *old_tree = isl_schedule_node_get_tree(node.get());
-  CHECK(old_tree != nullptr);
-  isl_schedule_tree *new_tree = isl_schedule_node_get_tree(node.get());
-  CHECK(new_tree != nullptr);
-  for (auto &it : old_to_new_map) {
-    auto old_pos = it.first;
-    auto new_pos = it.second;
-    CHECK(old_pos < n_children);
-    CHECK(new_pos < n_children);
-    isl_schedule_tree *old_child = isl_schedule_tree_get_child(old_tree, old_pos);
-    CHECK(old_child != nullptr);
-    new_tree = isl_schedule_tree_replace_child(new_tree, new_pos, old_child);
-    CHECK(new_tree != nullptr);
-  }
-  static_cast<void>(isl_schedule_tree_free(old_tree));
-  isl_schedule_node *new_node = isl_schedule_node_graft_tree(node.copy(), new_tree);
-  CHECK(new_node != nullptr);
-  return isl::manage(new_node);
 }
 
 size_t CountConsecutiveCoincident(const isl::schedule_node &node) {
@@ -245,17 +221,10 @@ isl::union_map ComputeFakeCopyin(const isl::schedule &schedule, const isl::union
 }
 
 isl::schedule_constraints MakeScheduleConstraints(const isl::schedule &schedule, PassInfo &pass_info) {
-  isl::schedule_constraints constraints;
-  if (pass_info.coincident_) {
-    constraints = isl::schedule_constraints::on_domain(schedule.get_domain())
-                    .set_coincidence(pass_info.dependences_)  // keep it, check for more cases
-                    .set_validity(pass_info.dependences_)
-                    .set_proximity(pass_info.dependences_);
-  } else {
-    constraints = isl::schedule_constraints::on_domain(schedule.get_domain())
-                    .set_validity(pass_info.dependences_)
-                    .set_proximity(pass_info.dependences_);
-  }
+  auto constraints = isl::schedule_constraints::on_domain(schedule.get_domain());
+  constraints = constraints.set_validity(pass_info.dependences_)
+                           .set_proximity(pass_info.dependences_)
+                           .set_coincidence(pass_info.dependences_);
   return constraints;
 }
 
@@ -450,6 +419,31 @@ isl::schedule_node GetCanMappingNode(const isl::schedule_node &node) {
 }
 
 #ifdef AKG_USE_MLS
+isl::union_map UnwrappedAccesses(const isl::union_map &umap) {
+  // Lambda to remove the range from the wrapped domain of a map
+  const auto unwrapped_map = [](const isl::map &map) {
+    const isl::set domain = map.domain().unwrap().domain();
+    const isl::set range = map.range();
+    return isl::map(domain, range);
+  };
+
+  if (umap.is_empty()) {
+    return umap;
+  }
+
+  const isl::map_list mlist = umap.map_list();
+  const unsigned size = mlist.size();
+  const isl::map first_element = unwrapped_map(mlist.at(0));
+  isl::union_map result(first_element);
+  for (unsigned i = 1; i < size; ++i) {
+    const isl::map current = mlist.at(i);
+    const isl::map element = unwrapped_map(current);
+    result = result.add_map(element);
+  }
+
+  return result;
+}
+
 bool MLSchedShouldBeUsed(akg::ir::poly::ScopInfo &scop_info) {
   bool maybe_enabled = scop_info.user_config_.GetEnableMLSched();
 
@@ -493,33 +487,9 @@ bool MLSchedShouldBeUsed(akg::ir::poly::ScopInfo &scop_info) {
     }
   }
 
-  // Lambda to remove the range from the wrapped domain of a map
-  const auto unwrapped_map = [](const isl::map &map) {
-    const isl::set domain = map.domain().unwrap().domain();
-    const isl::set range = map.range();
-    return isl::map(domain, range);
-  };
-  // Lambda to remove ranges from the wrapped domains of an union_map
-  const auto unwrapped_union_map = [&unwrapped_map](const isl::union_map &umap) {
-    if (umap.is_empty()) {
-      return umap;
-    }
-
-    const isl::map_list mlist = umap.map_list();
-    const unsigned size = mlist.size();
-    const isl::map first_element = unwrapped_map(mlist.at(0));
-    isl::union_map result(first_element);
-    for (unsigned i = 1; i < size; ++i) {
-      const isl::map current = mlist.at(i);
-      const isl::map element = unwrapped_map(current);
-      result = result.add_map(element);
-    }
-
-    return result;
-  };
   // Inspect read and writes to detect potential reductions
-  const isl::union_map reads = unwrapped_union_map(scop_info.analysis_result_.GetReads());
-  const isl::union_map writes = unwrapped_union_map(scop_info.analysis_result_.GetWrites());
+  const isl::union_map reads = UnwrappedAccesses(scop_info.analysis_result_.GetReads());
+  const isl::union_map writes = UnwrappedAccesses(scop_info.analysis_result_.GetWrites());
   const isl::union_map intersection = reads.intersect(writes);
   if (!intersection.is_empty() && !intersection.is_injective()) {
     return false;
@@ -528,7 +498,8 @@ bool MLSchedShouldBeUsed(akg::ir::poly::ScopInfo &scop_info) {
   return true;
 }
 
-mls::bin::Options MLSchedOptionsInit(akg::ir::poly::ScopInfo &scop_info) {
+mls::bin::Options MLSchedOptionsInit(const akg::ir::poly::PassInfo &pass_info,
+                                     const akg::ir::poly::ScopInfo &scop_info) {
   auto env_to_bool = [](const char *const environment_variable, bool default_value = false) {
     bool result = default_value;
     const char *const env_cstr = std::getenv(environment_variable);
@@ -566,19 +537,90 @@ mls::bin::Options MLSchedOptionsInit(akg::ir::poly::ScopInfo &scop_info) {
     verbosity = std::stoul(ms_dev_mlsched_verbosity);
   }
 
-  bool code_sinking = scop_info.user_config_.GetMLSchedCodeSinking();
+  bool code_sinking = scop_info.user_config_.GetMLSchedCodeSinking() || pass_info.dependences_.is_empty();
   code_sinking = env_to_bool(kEnvStringMsDevMlsCodeSinking, code_sinking);
 
   bool constant_to_parameter = scop_info.user_config_.GetMLSchedConstantToParameter();
   constant_to_parameter = env_to_bool(kEnvStringMsDevMlsConstantToParameter, constant_to_parameter);
+
+  bool parameter_shifting = scop_info.user_config_.GetMLSchedParameterShifting();
+  parameter_shifting = env_to_bool(kEnvStringMsDevMlsParameterShifting, parameter_shifting);
+
+  bool post_process_full_sets = scop_info.user_config_.GetMLSchedPostProcessingFullSets();
+  post_process_full_sets = env_to_bool(kEnvStringMsDevMlsPostProcessFullSets, post_process_full_sets);
+
+  bool post_process_extra_outer_parallel_loop = scop_info.user_config_.GetMLSchedPostProcessingExtraOuterParallelLoop();
+  post_process_extra_outer_parallel_loop =
+    env_to_bool(kEnvStringMsDevMlsPostProcessExtraOuterParallelLoop, post_process_extra_outer_parallel_loop);
 
   mls::bin::Options result;
   result.SetSolverType(solver_type);
   result.SetVerbosity(verbosity);
   result.SetCodeSinking(code_sinking);
   result.SetConstantToParameter(constant_to_parameter);
+  result.SetParameterShifting(parameter_shifting);
+  result.SetFullSetsPostProcessing(post_process_full_sets);
+  result.SetExtraParallelOuterLoopPostProcessing(post_process_extra_outer_parallel_loop);
 
   return result;
+}
+
+mls::bin::Hints ExtractDirectivesFromAKG(ScopInfo &scop_info) {
+  mls::bin::Hints hints;
+
+  ForTypeMap directives = scop_info.analysis_result_.GetForTypeMap();
+  std::map<std::string, std::vector<int>> serials_directive;
+  std::map<std::string, std::vector<int>> vectorials_directive;
+  std::map<std::string, std::vector<int>> parallels_directive;
+  std::map<std::string, std::vector<int>> reduces_directive;
+  for (const auto &[stmt, vloop_directive] : directives) {
+    const std::string stmt_string = stmt.get_name();
+    for (uint ivd = 0; ivd < vloop_directive.size(); ++ivd) {
+      const int i = static_cast<int>(ivd);
+      switch (vloop_directive[i]) {
+        case ForType::Serial:
+          break;
+        case ForType::Invariant:
+          LOG(INFO) << stmt_string << " invariant_for";
+          serials_directive[stmt_string].push_back(i);
+          break;
+        case ForType::Parallel:
+          LOG(INFO) << stmt_string << " parallel";
+          parallels_directive[stmt_string].push_back(i);
+          break;
+        case ForType::Vectorized:
+        case ForType::Swizzled:  // treat "Swizzled" like "Vectorized" for the moment
+          LOG(INFO) << stmt_string << " vectorized";
+          vectorials_directive[stmt_string].push_back(i);
+          break;
+        case ForType::Reduce:
+          LOG(INFO) << stmt_string << " reduce";
+          reduces_directive[stmt_string].push_back(i);
+          break;
+        case ForType::Unrolled:
+          LOG(WARNING) << stmt_string << " Do not treat ForType::Unrolled as a directives";
+          break;
+        default:
+          LOG(WARNING) << stmt_string << " Unknow ForType loop";
+          break;
+      }
+    }
+  }
+
+  for (const auto &[key, directive] : serials_directive) {
+    hints.SetStatementSerials(key.c_str(), directive);
+  }
+  for (const auto &[key, directive] : vectorials_directive) {
+    hints.SetStatementVectorials(key.c_str(), directive);
+  }
+  for (const auto &[key, directive] : parallels_directive) {
+    hints.SetStatementParallels(key.c_str(), directive);
+  }
+  for (const auto &[key, directive] : reduces_directive) {
+    hints.SetStatementReduces(key.c_str(), directive);
+  }
+
+  return hints;
 }
 #endif
 

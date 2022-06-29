@@ -1,4 +1,4 @@
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@ tanh grad run define
 """
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.math.ascend import TanhGrad
+from akg.ops.math.ascend import tanh_grad
 from tests.common.tensorio import compare_tensor
 from tests.common.base import get_rtol_atol
 from tests.common.gen_random import random_gaussian
@@ -53,4 +53,4 @@ def gen_data(dtype, shape):
 
 
 def tanh_grad_compile(shape, dtype, attrs, kernel_name='tanh_grad', tuning=False):
-    return utils.op_build_test(TanhGrad, [shape, shape], [dtype, dtype], kernel_name=kernel_name, attrs=attrs, tuning=tuning)
+    return utils.op_build_test(tanh_grad, [shape, shape], [dtype, dtype], kernel_name=kernel_name, attrs=attrs, tuning=tuning)

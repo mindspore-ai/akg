@@ -14,9 +14,11 @@
 
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.math.ascend import EqualCount
+from akg.ops.math.ascend import equal_count
 from akg import tvm
 import math
+
+
 def compute_blockdim(shape):
     size = 0
     if isinstance(shape, (list, tuple)):
@@ -32,6 +34,7 @@ def compute_blockdim(shape):
     else:
         size = 2
     return min(32, math.ceil(size / 8192 + 1))
+
 
 def equal_count_run(shapes, dtype, kernel_name, attrs):
     # shape check
@@ -49,14 +52,15 @@ def equal_count_run(shapes, dtype, kernel_name, attrs):
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(EqualCount, build_shape, [dtype, dtype], kernel_name=kernel_name, attrs=attrs, tuning=t)
+        mod = utils.op_build_test(equal_count, build_shape,
+                                  [dtype, dtype], kernel_name=kernel_name, attrs=attrs, tuning=t)
         if t:
             benchMark1, inputs1, output1 = gen_data(dtype, shapes)
             return mod, benchMark1, inputs1 + [output1]
         else:
             return mod
     else:
-        mod = utils.op_build_test(EqualCount, build_shape, [dtype, dtype], kernel_name=kernel_name, attrs=attrs)
+        mod = utils.op_build_test(equal_count, build_shape, [dtype, dtype], kernel_name=kernel_name, attrs=attrs)
         benchMark1, inputs1, output1 = gen_data(dtype, shapes)
         if attrs.get("dynamic"):
             args = inputs1.copy()
@@ -76,8 +80,8 @@ def gen_data(dtype, shapes, class_num=10):
     inputs1 = []
     for i in range(len(shapes)):
         shape = shapes[i]
-        input = np.random.randint(low=0, high=class_num, size=shape).astype(support_list[dtype.lower()])
-        inputs1.append(input)
+        input_ = np.random.randint(low=0, high=class_num, size=shape).astype(support_list[dtype.lower()])
+        inputs1.append(input_)
     if len(inputs1) != 2:
         raise RuntimeError("inputs num should be 2")
     equal_result = np.equal(inputs1[0], inputs1[1])

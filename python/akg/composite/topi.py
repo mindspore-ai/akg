@@ -18,17 +18,22 @@
 import functools
 import itertools
 import operator
+import fcntl
+import logging
 import os
+import sys
+import traceback
 import importlib.util
 from pathlib import Path
 
 from akg import tvm, autodiff
 from akg.tvm.hybrid import script
+from akg.global_configs import get_kernel_meta_path
 from akg.utils.format_transform import get_const, get_shape
 from akg.utils.dsl_create import get_broadcast_shape
 from akg.utils import validation_check as vc_util
 
-import akg.topi as topi
+import akg.topi as akg_topi
 import akg.utils as utils
 
 
@@ -84,7 +89,7 @@ def pad(inputs, attrs):
         raise ValueError(
             "Input dimensions and pad dimensions dismatch: %d vs %d vs %d" % (n, len(pad_before), len(pad_after)))
     output_name = "T_pad_" + in_tensor.op.name
-    return topi.nn.pad(in_tensor, pad_before, pad_after, pad_value, name=output_name)
+    return akg_topi.nn.pad(in_tensor, pad_before, pad_after, pad_value, name=output_name)
 
 
 @tvm.register_func("UnPadAkg")
@@ -210,7 +215,7 @@ def StridedSlice(inputs, attrs):
             begin[i] = 1
             end[i] = 1
             strides[i] = 1
-            in_tensor = topi.expand_dims(in_tensor, i, 1)
+            in_tensor = akg_topi.expand_dims(in_tensor, i, 1)
             i += 1
             continue
         if i < len(shrink_axis_pos) and shrink_axis_pos[i] == '1':
@@ -482,13 +487,13 @@ def _launch_kernel_from_source(inputs, op_attrs, source_str, real_inputs_num, is
         res = hybrid_func(*inputs[:real_inputs_num], *op_attrs.values())
         forward_ouput = res if isinstance(res, list) else [res]
         # douts and outs should have the same length, so the num of douts is (len(inputs)-real_inputs_num)/2
-        if int(len(inputs)-real_inputs_num) <= 0:
+        if int(len(inputs) - real_inputs_num) <= 0:
             raise ValueError(
                 "Cannot compute autodiff for function with no outputs/douts")
-        if int(len(inputs)-real_inputs_num) % 2 != 0:
+        if int(len(inputs) - real_inputs_num) % 2 != 0:
             raise ValueError(
                 "douts and douts should have the same length.")
-        dout = inputs[int((len(inputs)+real_inputs_num)/2):]
+        dout = inputs[int((len(inputs) + real_inputs_num) / 2):]
         outputs = autodiff.SingleHybridOpDifferentiate(forward_ouput, inputs[:real_inputs_num], dout)
         output = outputs if len(outputs) != 1 else outputs[0]
     else:
@@ -497,9 +502,29 @@ def _launch_kernel_from_source(inputs, op_attrs, source_str, real_inputs_num, is
     return output
 
 
-def _launch_kernel_from_path(inputs, op_attrs, func_type, op_imply_path, func_name):
-    if not os.path.isfile(op_imply_path):
-        raise ValueError("Can't find file under path: {}".format(str(op_imply_path)))
+def _launch_kernel_from_path(inputs, op_attrs, func_type, func_source, func_name):
+    kernel_meta_path = get_kernel_meta_path()
+    cuda_path = os.path.realpath(kernel_meta_path)
+    if not os.path.isdir(cuda_path):
+        os.makedirs(cuda_path, exist_ok=True)
+    if not func_name:
+        raise ValueError("Can't find name of function")
+    if not func_source:
+        raise ValueError("Can't find source of function: {}".format(str(func_name)))
+
+    op_imply_path = os.path.realpath(kernel_meta_path + func_name + ".py")
+    if os.path.exists(op_imply_path):
+        os.remove(op_imply_path)
+    try:
+        with open(op_imply_path, 'at') as file:
+            fcntl.flock(file.fileno(), fcntl.LOCK_EX)
+            file.seek(0, 2)
+            if file.tell() == 0:
+                file.write(func_source)
+        os.chmod(op_imply_path, 0o400)
+    except Exception:
+        logging.error(traceback.format_exc())
+        return None
 
     custom_mod_name = Path(op_imply_path).resolve().stem
     mod_spec = importlib.util.spec_from_file_location(
@@ -542,19 +567,19 @@ def custom(inputs, attrs):
         if attr_name in attr_names:
             op_attrs[ext_arg[0]] = ext_arg[1]
 
+    if not "func_source_str" in attrs:
+        raise ValueError("Can't find the source str for the function: {}".format(func_name))
+
+    source_str = attrs["func_source_str"].value
+
     if func_type == "hybrid":
-        if not "func_source_str" in attrs:
-            raise ValueError("Can't find the source str for the function: {}".format(func_name))
-
-        source_str = attrs["func_source_str"].value
-
         return _launch_kernel_from_source(inputs, op_attrs, source_str,
                                           attrs["inputs_num"].value if "inputs_num" in attrs else len(inputs),
                                           attrs["autodiff"].value if "autodiff" in attrs else False)
 
     else:
         return _launch_kernel_from_path(inputs, op_attrs, func_type,
-                                        attrs["imply_path"].value if "imply_path" in attrs else "",
+                                        source_str,
                                         func_name)
 
 
@@ -766,9 +791,9 @@ def csr_div(inputs, attrs):
             end = ib.load(row_idx, i + 1)
             with ib.for_range(0, end - start, name='j') as j:
                 pos = start + j
-                with ib.if_scope(pos < end):
-                    col = ib.load(col_idx, pos)
-                    with ib.for_range_n(feature_shape, 'k') as k:
+                with ib.for_range_n(feature_shape, 'k') as k:
+                    with ib.if_scope(pos < end):
+                        col = ib.load(col_idx, pos)
                         store_loc = [pos] + k
                         val = ib.load(sparse_data, store_loc)
                         with ib.if_scope(need_expand):
@@ -1012,3 +1037,40 @@ def coo2csr(inputs, attrs):
                       dtype=row_indices.dtype,
                       out_buffers=[out_buf],
                       name=output_name)
+
+
+@tvm.register_func("CSRMM")
+def csr_mm(inputs, _):
+    indptr, indices, data, dense = inputs
+    assert len(indptr.shape) == 1, "CSRTensor.indptr should be 1-dim."
+    assert len(indices.shape) == 1, "CSRTensor.indices should be 1-dim."
+    assert len(data.shape) == 1, "CSRTensor.values should be 1-dim."
+    assert len(dense.shape) == 2, "Dense Tensor should be 2-dim."
+    assert data.dtype == dense.dtype, "values and dense should have the same dtype."
+    num_rows = indptr.shape[0] - 1
+    num_cols = dense.shape[1]
+
+    def csr_mm_ir(indptr, indices, data, dense, out):
+        ib = tvm.ir_builder.create()
+        with ib.for_range(0, num_rows, name="row") as row:
+            row_start = ib.load(indptr, row)
+            row_end = ib.load(indptr, row + 1)
+            num_eles = row_end - row_start
+            with ib.for_range(0, num_cols, name="col") as col:
+                ib.store(out, [row, col], tvm.const(0, data.dtype))
+                with ib.for_range(0, num_eles, name="strides") as strides:
+                    idx = row_start + strides
+                    val = tvm.expr.Select(idx < row_end,
+                                          ib.load(data, idx) * ib.load(dense, [ib.load(indices, idx), col]),
+                                          tvm.const(0, data.dtype))
+                    ib.scope_attr([tvm.api._IterVar((0, dense.shape[0]), "strides", 2)], "reduce_update", "")
+                    temp = val + ib.load(out, [row, col])
+                    ib.store(out, [row, col], temp)
+        return ib.get()
+
+    output_shape = [num_rows, num_cols]
+    output_name = "T_csr_mm_" + dense.op.name + "_" + data.op.name
+    out_buf = tvm.decl_buffer(output_shape, data.dtype, output_name)
+    return tvm.extern([output_shape], [indptr, indices, data, dense],
+                      lambda ins, outs: csr_mm_ir(ins[0], ins[1], ins[2], ins[3], outs[0]),
+                      dtype=data.dtype, out_buffers=[out_buf], name=output_name)

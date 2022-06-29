@@ -1,4 +1,4 @@
-# Copyright 2020-2021 Huawei Technologies Co., Ltd
+# Copyright 2020-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,15 +18,16 @@ import akg.topi
 import akg.utils as utils
 from akg.utils.kernel_exec import product_is_mini
 from akg.utils.dsl_create import produce_shapes
-from .sub import Sub
-from .cast import Cast
+from .sub import sub
+from .cast import cast
 from .utils import make_input_and_value
+
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor)
 def _less_equal(data1, data2):
     t_value, f_value, input1_bro, input2_bro, shape = make_input_and_value(data1, data2)
     c_out = akg.tvm.compute(shape, lambda *indice: akg.tvm.expr.Select(input1_bro[indice] <= input2_bro[indice],
-                                                                         t_value[indice], f_value[indice]), name="C")
+                                                                       t_value[indice], f_value[indice]), name="C")
     res = akg.tvm.compute(shape, lambda *indice: c_out(*indice).astype("bool"), name="res")
 
     return res
@@ -57,7 +58,7 @@ def _less_equal_ascend(data1, data2, target=utils.CCE):
             dtype = "float32"
 
     if orig_dtype == "float32" and dtype == "float16":
-        data_sub = Sub(data1, data2, target)
+        data_sub = sub(data1, data2, target)
         data_sub = akg.topi.cast(data_sub, dtype)
         zero = akg.tvm.const(0.0, dtype)
         res = akg.topi.less_equal(data_sub, zero)

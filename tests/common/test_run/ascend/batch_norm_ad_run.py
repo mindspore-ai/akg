@@ -1,4 +1,4 @@
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@ import numpy as np
 from tests.common.tensorio import compare_tensor
 from tests.common.base import get_rtol_atol
 from akg.utils import kernel_exec as utils
-from akg.ops.nn.ascend import BatchNormAd
+from akg.ops.nn.ascend import batch_norm_ad
 from . import fused_batch_norm_grad_run
 from tests.common.gen_random import random_gaussian
 
@@ -44,7 +44,7 @@ def batch_norm_ad_run(shape, dtype, eps, kernel_name, attrs):
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
 
-        mod = utils.op_build_test(BatchNormAd, [shape, shape, mean_shape, mean_shape, param_shape],
+        mod = utils.op_build_test(batch_norm_ad, [[shape, shape, mean_shape, mean_shape, param_shape]],
                                   [dtype, dtype, dtype, dtype, dtype], kernel_name=kernel_name,
                                   op_attrs=[data_format, axis, eps], attrs=attrs, tuning=t)
 
@@ -60,7 +60,7 @@ def batch_norm_ad_run(shape, dtype, eps, kernel_name, attrs):
         else:
             return mod
     else:
-        mod = utils.op_build_test(BatchNormAd, [shape, shape, mean_shape, mean_shape, param_shape],
+        mod = utils.op_build_test(batch_norm_ad, [[shape, shape, mean_shape, mean_shape, param_shape]],
                                   [dtype, dtype, dtype, dtype, dtype], kernel_name="batch_norm_ad",
                                   op_attrs=[data_format, axis, eps], attrs=attrs)
 

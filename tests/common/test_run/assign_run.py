@@ -1,4 +1,4 @@
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,17 +15,18 @@ import akg
 import numpy as np
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
-from akg.ops.math import Assign
+from akg.ops.math import assign
 from tests.common.gen_random import random_gaussian
 from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
+
 
 def assign_run(ref_shape, val_shape, dtype, kernel_name="assign", attrs_op={}, cce_path="./", attrs={}):
     attrs.update(attrs_op)
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(Assign, [ref_shape, val_shape], [dtype, dtype], kernel_name=kernel_name,
+        mod = utils.op_build_test(assign, [ref_shape, val_shape], [dtype, dtype], kernel_name=kernel_name,
                                   attrs=attrs, tuning=t)
         if t:
             ref, val, expect = gen_data(dtype, ref_shape, val_shape)
@@ -34,7 +35,7 @@ def assign_run(ref_shape, val_shape, dtype, kernel_name="assign", attrs_op={}, c
             return mod
     else:
         ref, val, expect = gen_data(dtype, ref_shape, val_shape)
-        mod = utils.op_build_test(Assign, [ref_shape, val_shape], [dtype, dtype], kernel_name=kernel_name,
+        mod = utils.op_build_test(assign, [ref_shape, val_shape], [dtype, dtype], kernel_name=kernel_name,
                                   attrs=attrs)
         fake_output = np.full(val_shape, np.nan, dtype)
         result, _ = utils.mod_launch(mod, (ref, val, fake_output), outputs=(0, -1), expect=expect)
@@ -43,6 +44,7 @@ def assign_run(ref_shape, val_shape, dtype, kernel_name="assign", attrs_op={}, c
             ref, val, output = to_tvm_nd_array([ref, val, fake_output], akg.tvm.context(target_name, 0))
             target_profiling(mod, ref, val, output, target=target_name, repeat_time=attrs["repeat_times"])
         return (ref, val), result, expect, compare_tensor(result, expect, atol=5e-01, rtol=5e-03, equal_nan=True)
+
 
 def gen_data(dtype, ref_shape, val_shape):
     if dtype == "float16":

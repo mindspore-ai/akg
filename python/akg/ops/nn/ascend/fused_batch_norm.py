@@ -1,4 +1,4 @@
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,10 +13,8 @@
 # limitations under the License.
 
 """operator dsl function: fused batch norm"""
-
+from __future__ import absolute_import
 import akg
-import akg.tvm
-import akg.topi
 import akg.utils as utils
 from akg.utils.kernel_exec import TensorUtils, BINDS
 from akg.utils import custom_tiling as ct_util
@@ -39,6 +37,9 @@ def get_attrs(tensor):
     if shape_is_dynamic(tensor):
         attrs_map["pragma_analyze_reuse_buffer"] = True
     return attrs_map
+
+
+DTYPE_FLOAT32 = "float32"
 
 
 def batch_norm_tiling_strategy_dynamic(tensor):
@@ -126,9 +127,16 @@ def batch_norm_tiling_strategy(tensor, tensor_format):
     return strategy
 
 
-def check_inputs(data, gamma, beta, moving_mean, moving_variance, data_format,
-                 axis):
+def check_inputs(inputs, data_format, axis):
     """check inputs availability for fused_batch_norm op and get params"""
+    if len(inputs) != 5:
+        raise ValueError(
+            "Input tensors number should be 5, but get %s." % len(inputs))
+    data = inputs[0]
+    gamma = inputs[1]
+    beta = inputs[2]
+    moving_mean = inputs[3]
+    moving_variance = inputs[4]
     if any(data.dtype != t.dtype for t in
            [gamma, beta, moving_mean, moving_variance]):
         raise AssertionError("All input tensors should have same dtype!")
@@ -145,7 +153,8 @@ def check_inputs(data, gamma, beta, moving_mean, moving_variance, data_format,
     axis = check_inputs_in_rank(data, axis, in_rank, data_format)
 
     if is_special5d:
-        check_input_shape_equal_5(data, shape,  gamma, beta, moving_mean, moving_variance)
+        check_input_shape_equal_5(
+            data, shape,  gamma, beta, moving_mean, moving_variance)
     else:
         if len(gamma.shape) != 1 or (gamma.shape[0].value != shape[axis]):
             raise AssertionError("gamma mismatch the channel axis(while gamma "
@@ -179,15 +188,9 @@ def sum_data(data, axes, keepdims, single_sum=False):
         data = mul_axis_sum(data, axes, keepdims)
     return data
 
-@utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor,
-                          akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor,
-                          akg.tvm.tensor.Tensor,
-                          (float, type(None)), (float, type(None)),
-                          (bool, type(None)), (str, type(None)),
-                          (int, list, tuple, type(None)), (bool, type(None)),
-                          (str, type(None)))
-def FusedBatchNorm(data, gamma, beta, moving_mean, moving_variance, momentum=0.99, eps=1e-3,
-                   is_training=True, data_format="DefaultFormat", axis=1, single_sum=False):
+
+@utils.check_input_type((list, tuple), dict)
+def fused_batch_norm(inputs, attrs):
     r"""
     Batch normalization.
 
@@ -222,27 +225,29 @@ def FusedBatchNorm(data, gamma, beta, moving_mean, moving_variance, momentum=0.9
         of shape `(C,)`.
 
     Args:
-        data (tvm.tensor.Tensor): Tensor of type float16, float32. (:math:`x_i`)
-        gamma (tvm.tensor.Tensor): Tensor for scaling (:math:`\gamma`).
-        beta (tvm.tensor.Tensor): Tensor for bias (:math:`\beta`).
-        moving_mean (tvm.tensor.Tensor): Tensor for population mean used for
-                                         inference.
-        moving_variance (tvm.tensor.Tensor): Tensor for population variance used
+        inputs:
+            data (tvm.tensor.Tensor): Tensor of type float16, float32. (:math:`x_i`)
+            gamma (tvm.tensor.Tensor): Tensor for scaling (:math:`\gamma`).
+            beta (tvm.tensor.Tensor): Tensor for bias (:math:`\beta`).
+            moving_mean (tvm.tensor.Tensor): Tensor for population mean used for
+                                            inference.
+            moving_variance (tvm.tensor.Tensor): Tensor for population variance used
                                              for inference.
-        momentum (float): A float number used for the moving_mean and
-                          moving_variance computation.
-        eps (float): A small float added to variance to avoid dividing by zero.
-        is_training (bool): A bool value to specify if the operation is used for
-                            training or inference.
-        data_format (str): Support format, \"DefaultFormat\", \"NCHW\", \"NHWC\"
-                           or \"NC1HWC0\".
-        axis (Union[int, list, tuple]): Integer to specify the channel axis when
-                                        data_format is \"DefaultFormat\". List
-                                        or tuple for \"NC1HWC0\". When format is
-                                        \"NCHW\" or \"NHWC\", it's not work.
-                                        Must be in the range
-                                        [-rank(data), rank(data)).
-        single_sum (bool): whether use "mul_axis_sum".
+        attrs:
+            momentum (float): A float number used for the moving_mean and
+                            moving_variance computation.
+            eps (float): A small float added to variance to avoid dividing by zero.
+            is_training (bool): A bool value to specify if the operation is used for
+                                training or inference.
+            data_format (str): Support format, \"DefaultFormat\", \"NCHW\", \"NHWC\"
+                            or \"NC1HWC0\".
+            axis (Union[int, list, tuple]): Integer to specify the channel axis when
+                                            data_format is \"DefaultFormat\". List
+                                            or tuple for \"NC1HWC0\". When format is
+                                            \"NCHW\" or \"NHWC\", it's not work.
+                                            Must be in the range
+                                            [-rank(data), rank(data)).
+            single_sum (bool): whether use "mul_axis_sum".
 
     Returns:
         outs (tvm.tensor.Tensor): Tensor for normalized, scaled, shifted data.
@@ -262,30 +267,35 @@ def FusedBatchNorm(data, gamma, beta, moving_mean, moving_variance, momentum=0.9
                                         `moving_variance`. The variance of `data`.
                                         Only returns when `is_training` is True.
     """
+    if len(inputs) != 5:
+        raise ValueError(
+            "Input tensors number should be 5, but get %s." % len(inputs))
+    data_format = attrs.get("data_format", "DefaultFormat")
+    params = check_inputs(inputs, data_format, attrs.get("axis", 1))
 
-    params = check_inputs(
-        data, gamma, beta, moving_mean, moving_variance, data_format, axis)
-
+    data = inputs[0]
+    gamma = inputs[1]
+    beta = inputs[2]
+    moving_mean = inputs[3]
+    moving_variance = inputs[4]
     ori_dtype = data.dtype
-    dtype = "float32"
     shape = get_shape(data)
-    axes = params["axes"]
-    is_special5d = params["is_special5d"]
-    mid_shape = params["mid_shape"]
-    keepdims = bool(is_special5d)
-    tag = "batchnorm_" + data_format
-    data = akg.tvm.compute(data.shape, lambda *i: data(*i), tag)
+    axes = params.get("axes", (0,))
+    keepdims = params.get("is_special5d", False)
+    mid_shape = params.get("mid_shape", [1, ])
+    data = akg.tvm.compute(data.shape, lambda *i: data(*i),
+                           "batchnorm_" + data_format)
     ori_moving_mean = moving_mean
     ori_moving_variance = moving_variance
-    if ori_dtype != dtype:
-        data = akg.topi.cast(data, dtype)
-        gamma = akg.topi.cast(gamma, dtype)
-        beta = akg.topi.cast(beta, dtype)
-        moving_mean = akg.topi.cast(moving_mean, dtype)
-        moving_variance = akg.topi.cast(moving_variance, dtype)
+    if ori_dtype != DTYPE_FLOAT32:
+        data = akg.topi.cast(data, DTYPE_FLOAT32)
+        gamma = akg.topi.cast(gamma, DTYPE_FLOAT32)
+        beta = akg.topi.cast(beta, DTYPE_FLOAT32)
+        moving_mean = akg.topi.cast(moving_mean, DTYPE_FLOAT32)
+        moving_variance = akg.topi.cast(moving_variance, DTYPE_FLOAT32)
 
     ######## following is dsl ########
-
+    is_training = attrs.get("is_training", True)
     if is_training:
         value_num = 1
         for index in axes:
@@ -297,47 +307,44 @@ def FusedBatchNorm(data, gamma, beta, moving_mean, moving_variance, momentum=0.9
                                       lambda *i: data(*i) * data(*i),
                                       name="data_square")
         # cal mean
-        data_sum = sum_data(data, axes, keepdims, single_sum)
-        data_square_sum = sum_data(data_square, axes, keepdims, single_sum)
-
-        data_mean = akg.lang.ascend.vmuls(data_sum, avg_num)
-        data_square_mean = akg.lang.ascend.vmuls(data_square_sum, avg_num)
+        data_mean = akg.lang.ascend.vmuls(
+            sum_data(data, axes, keepdims, attrs.get("single_sum", False)), avg_num)
+        data_square_mean = akg.lang.ascend.vmuls(sum_data(data_square, axes, keepdims, attrs.get("single_sum", False)),
+                                                 avg_num)
         data_mean_square = akg.tvm.compute(data_mean.shape,
-                                           lambda *i: data_mean(*i) * data_mean(*i),
+                                           lambda *i: data_mean(*i) *
+                                           data_mean(*i),
                                            name="data_mean_square")
 
-        # cal variance
-        # var = E(square(x)) - square(Ex)
         data_variance = akg.tvm.compute(data_mean.shape,
                                         lambda *i:
-                                        data_square_mean(*i) - data_mean_square(*i),
+                                        data_square_mean(
+                                            *i) - data_mean_square(*i),
                                         name="data_variance")
 
-        mean_new = update_by_moving_average(moving_mean, data_mean, momentum)
+        mean_new = update_by_moving_average(
+            moving_mean, data_mean, attrs.get("momentum", 0.99))
         variance_new = update_by_moving_average(moving_variance,
-                                                data_variance, momentum)
+                                                data_variance, attrs.get("momentum", 0.99))
     else:
         # no_bc version
         data_variance = moving_variance
         data_mean = moving_mean
 
-    # var + eps
-    inp_eps = akg.tvm.const(eps, dtype=dtype)
-    veps_no_bc = akg.lang.ascend.vadds(data_variance, inp_eps)
+    rsveps = akg.lang.ascend.vadds(data_variance, akg.tvm.const(
+        attrs.get("eps", 1e-3), dtype=DTYPE_FLOAT32))
+    rsveps = rsqrt(rsveps, utils.CCE)
+    rsveps = akg.lang.ascend.broadcast(rsveps, shape)
 
-    # rsqrt(var + eps)
-    rsveps_no_bc = rsqrt(veps_no_bc, utils.CCE)
-    rsveps = akg.lang.ascend.broadcast(rsveps_no_bc, shape)
+    mean2 = akg.lang.ascend.vmuls(data_mean, akg.tvm.const(-1, data.dtype))
+    mean2 = akg.lang.ascend.broadcast(mean2, shape)
 
-    # -mean
-    mean2_no_bc = akg.lang.ascend.vmuls(data_mean, akg.tvm.const(-1, data.dtype))
-    mean2 = akg.lang.ascend.broadcast(mean2_no_bc, shape)
+    dmean = akg.tvm.compute(
+        shape, lambda *i: data(*i) + mean2(*i), name="dmean")
+    dmsve = akg.tvm.compute(shape, lambda *i: dmean(*i)
+                            * rsveps(*i), name="dmsve")
 
-    # gamma * (data-mean)/sqrt(var+eps) + beta
-    dmean = akg.tvm.compute(shape, lambda *i: data(*i) + mean2(*i), name="dmean")
-    dmsve = akg.tvm.compute(shape, lambda *i: dmean(*i) * rsveps(*i), name="dmsve")
-
-    if not is_special5d:
+    if not keepdims:
         gamma = akg.topi.reshape(gamma, mid_shape)
         beta = akg.topi.reshape(beta, mid_shape)
     gamma_bc = akg.lang.ascend.broadcast(gamma, shape)
@@ -346,10 +353,10 @@ def FusedBatchNorm(data, gamma, beta, moving_mean, moving_variance, momentum=0.9
                              name="dmsveg")
     outs = akg.tvm.compute(shape, lambda *i: dmsveg(*i) + beta_bc(*i),
                            name="output")
-    attrs = get_attrs(outs)
+    out_attrs = get_attrs(outs)
 
     if is_training:
-        if ori_dtype != dtype:
+        if ori_dtype != DTYPE_FLOAT32:
             outs = akg.topi.cast(outs, ori_dtype)
             mean_new = akg.topi.cast(mean_new, ori_dtype)
             variance_new = akg.topi.cast(variance_new, ori_dtype)
@@ -362,7 +369,7 @@ def FusedBatchNorm(data, gamma, beta, moving_mean, moving_variance, momentum=0.9
             ori_moving_variance, variance_new, buffer_name="var_buf")
         binds_info_all = binds_info_mean
         binds_info_all.update(binds_info_var)
-        attrs[BINDS] = binds_info_all
+        out_attrs[BINDS] = binds_info_all
 
         # the new moving_mean and moving_var are updated inplace in
         # inputs(moving_mean and moving_var). But Mindspore needs
@@ -371,19 +378,22 @@ def FusedBatchNorm(data, gamma, beta, moving_mean, moving_variance, momentum=0.9
                                            lambda *indices: mean_new(*indices),
                                            "fake_moving_mean")
         fake_moving_var = akg.tvm.compute(mean_new.shape,
-                                          lambda *indices: variance_new(*indices),
+                                          lambda *indices: variance_new(
+                                              *indices),
                                           "fake_moving_var")
         out_tensors = (outs, fake_moving_mean, fake_moving_var, data_mean,
                        data_variance, mean_new, variance_new,)
     else:
-        if ori_dtype != dtype:
+        if ori_dtype != DTYPE_FLOAT32:
             outs = akg.topi.cast(outs, ori_dtype)
         out_tensors = (outs,)
-    out_tensors = list(out_tensors) if isinstance(out_tensors, tuple) else out_tensors
+    out_tensors = list(out_tensors) if isinstance(
+        out_tensors, tuple) else out_tensors
     if shape_is_dynamic(out_tensors):
-        attrs["custom_tiling"] = batch_norm_tiling_strategy_dynamic(outs)
+        out_attrs["custom_tiling"] = batch_norm_tiling_strategy_dynamic(outs)
     else:
-        attrs["custom_tiling"] = batch_norm_tiling_strategy(outs, data_format)
-    out_tensors.append(attrs)
+        out_attrs["custom_tiling"] = batch_norm_tiling_strategy(
+            outs, data_format)
+    out_tensors.append(out_attrs)
 
     return out_tensors

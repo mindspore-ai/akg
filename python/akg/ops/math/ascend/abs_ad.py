@@ -1,6 +1,4 @@
-#!/usr/bin/env python3
-# coding: utf-8
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,7 +17,7 @@
 import akg
 import akg.utils as utils
 
-from ..abs import Abs
+from ..abs import abs
 
 
 
@@ -44,7 +42,7 @@ def abs_ad(head, in_data, target=utils.CCE):
     utils.ops_dtype_check(head.dtype, utils.DtypeForDavinci.ALL_TYPES)
     need_cast_dtype = ["int8", "int32", "uint8"]
 
-    abs_data = Abs(in_data, target)
+    abs_data = abs(in_data, target)
     if head.dtype in need_cast_dtype:
         head = akg.tvm.compute(head.shape, lambda *indice: head(*indice).astype("float16"), name='head_cast')
     if dtype in need_cast_dtype:

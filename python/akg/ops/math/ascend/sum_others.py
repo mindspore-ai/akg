@@ -1,4 +1,4 @@
-# Copyright 2020-2021 Huawei Technologies Co., Ltd
+# Copyright 2020-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,16 +14,16 @@
 
 """operator dsl function: another implementation of sum"""
 
-import akg.topi
-import akg.tvm
-from akg.utils import format_transform as ft_util
+import akg
 import akg.utils as utils
+from akg.utils import format_transform as ft_util
 from akg.utils.format_transform import get_shape
-from ..cast import Cast
-from ..sum import Sum
+from ..cast import cast
+from ..sum import sum
+
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, (list, tuple, int, type(None)), (bool, type(None)), (str, type(None)))
-def SumV2(inputs, axis=None, keepdims=True, target=utils.CCE):
+def sum_v2(inputs, axis=None, keepdims=True, target=utils.CCE):
     """
     another implementation of sum with topi api.
 
@@ -41,22 +41,23 @@ def SumV2(inputs, axis=None, keepdims=True, target=utils.CCE):
         output = akg.topi.identity(inputs)
     else:
         if dtype == "float16":
-            step_sum = Cast(inputs, "float32", target)
+            step_sum = cast(inputs, "float32", target)
         else:
             step_sum = inputs
 
         step_sum = akg.topi.sum(step_sum, axis=axis, keepdims=keepdims)
 
         if dtype == "float16":
-            output = Cast(step_sum, "float16", target)
+            output = cast(step_sum, "float16", target)
         else:
             output = step_sum
     return output
 
-def SumByShape(broadcast_data, original_shape, target=utils.CCE):
+
+def sum_by_shape(broadcast_data, original_shape, target=utils.CCE):
     """
     sum the broadcast_data by original shape; gradient for Broadcast.
-    
+
     Supported Platforms:
         'Ascend'
     """
@@ -68,19 +69,19 @@ def SumByShape(broadcast_data, original_shape, target=utils.CCE):
     if broadcast_shape == original_shape:
         return broadcast_data
     if original_shape == [1]:
-        data = Sum(broadcast_data, target=target)
+        data = sum(broadcast_data, target=target)
         return data
 
     utils.broadcast_check(original_shape, broadcast_shape)
     axis_len = len(broadcast_shape) - len(original_shape)
     if axis_len > 0:
         axis = list(range(axis_len))
-        broadcast_data = Sum(broadcast_data, axis, False, target=target)
+        broadcast_data = sum(broadcast_data, axis, False, target=target)
         broadcast_shape = get_shape(broadcast_data)
 
     axis = []
     for i, _ in enumerate(original_shape):
         if original_shape[i] != broadcast_shape[i]:
             axis.append(i)
-    res = Sum(broadcast_data, axis, True, target=target)[0] if axis else broadcast_data
+    res = sum(broadcast_data, axis, True, target=target)[0] if axis else broadcast_data
     return res

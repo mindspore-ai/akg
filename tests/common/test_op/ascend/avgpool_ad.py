@@ -16,7 +16,7 @@
 import akg
 from akg.utils import custom_tiling as ct_util
 from akg.utils.format_transform import get_shape
-from akg.ops.nn.ascend import Avgpool
+from akg.ops.nn.ascend import avgpool
 
 avgpool_ad_set_dim_map = {
 }
@@ -42,7 +42,7 @@ def avgpool_ad_set_dim_func(head, data, kernel, stride, pad):
 def avgpool_ad(head, data, kernel, stride, pad):
     """Compute gradient of avgpool operator using automatic differentiate."""
     attrs = {"enable_post_poly_loop_partition": False, "enable_pre_poly_loop_partition": False}
-    avgpool_fwd, _ = Avgpool(data, kernel, stride, pad)
+    avgpool_fwd, _ = avgpool(data, kernel, stride, pad)
     [dl_ddata] = akg.differentiate(avgpool_fwd, [data], head)
     return dl_ddata, attrs
 
@@ -52,7 +52,7 @@ def avgpool_ad(head, data, kernel, stride, pad):
 def avgpool_ad_no_custom_diff_manual_schedule(head, data, kernel, stride, pad):
     """automatic differentiate of avgpool with manual schedule."""
     attrs = {"enable_post_poly_loop_partition": False, "enable_pre_poly_loop_partition": False}
-    avgpool_fwd, _ = Avgpool(data, kernel, stride, pad)
+    avgpool_fwd, _ = avgpool(data, kernel, stride, pad)
     [dl_ddata] = akg.differentiate(avgpool_fwd, [data], head)
     # schedule for differetiation operation
     s = akg.tvm.create_schedule([dl_ddata.op])

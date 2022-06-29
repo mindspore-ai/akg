@@ -16,7 +16,7 @@
 from akg import topi
 import akg.tvm
 import akg.utils as utils
-from akg.ops.math import Abs, Cast, mul, neg, rsqrt, Exp, Divide
+from akg.ops.math import abs, cast, mul, neg, rsqrt, exp, divide
 from akg.ops.math.ascend import Sign
 from akg.utils.kernel_exec import product_is_mini
 
@@ -46,7 +46,7 @@ def _before_res_compute(abs_data):
     for iter_number in ITR_BEFORE[LEN_BEFORE-3::-1]:
         before_res = mul(before_res, data_square, target=utils.CCE)
         before_res = topi.add(before_res, iter_number)
-    exp_value = Exp(neg(abs_data, target=utils.CCE), target=utils.CCE)
+    exp_value = exp(neg(abs_data, target=utils.CCE), target=utils.CCE)
     before_res = mul(before_res, exp_value, target=utils.CCE)
     before_res = mul(before_res, abs_data, target=utils.CCE)
     return before_res
@@ -64,7 +64,7 @@ def _after_res_compute(abs_data):
     """
     broad_const_limit = akg.lang.ascend.broadcast(akg.tvm.const(
                         CONST_LIMIT, abs_data.dtype), abs_data.shape)
-    data = Divide(broad_const_limit, abs_data, target=utils.CCE)
+    data = divide(broad_const_limit, abs_data, target=utils.CCE)
     after_res = topi.multiply(data, ITR_AFTER[LEN_AFTER - 1])
     after_res = topi.add(after_res, ITR_AFTER[LEN_AFTER - 2])
     for iter_number in ITR_AFTER[LEN_AFTER-3::-1]:
@@ -83,9 +83,9 @@ def _bessel_i1e_compute(input_data):
 
     # chose the type of data in begin
     if dtype == "float16":
-        input_data = Cast(input_data, "float32", target=utils.CCE)
+        input_data = cast(input_data, "float32", target=utils.CCE)
 
-    abs_data = Abs(input_data, utils.CCE)
+    abs_data = abs(input_data, utils.CCE)
     # compute bessel_i1e for data in (-3.75, 3.75)
     before_res = _before_res_compute(abs_data)
     # compute bessel_i1e for data in other domain
@@ -98,7 +98,7 @@ def _bessel_i1e_compute(input_data):
             abs_data[indice].astype("float16") < akg.tvm.const(CONST_LIMIT, "float16"),
             before_res[indice].astype("float16"),
             after_res[indice].astype("float16")))
-        res = Cast(res, "float32", target=utils.CCE)
+        res = cast(res, "float32", target=utils.CCE)
     else:
         res = akg.tvm.compute(shape, lambda *indice: akg.tvm.expr.Select(
               abs_data[indice] < CONST_LIMIT,
@@ -106,7 +106,7 @@ def _bessel_i1e_compute(input_data):
     data_sign = Sign(input_data, target=utils.CCE)
     res = mul(res, data_sign, target=utils.CCE)
     if dtype == "float16":
-        res = Cast(res, "float16", target=utils.CCE)
+        res = cast(res, "float16", target=utils.CCE)
     return res
 
 

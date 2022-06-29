@@ -1,4 +1,4 @@
-# Copyright 2020-2021 Huawei Technologies Co., Ltd
+# Copyright 2020-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,10 +16,11 @@
 import akg.tvm
 import akg.topi
 import akg.utils as utils
-from .cast import Cast
-from .sub import Sub
 from akg.utils.dsl_create import produce_shapes
 from akg.utils.kernel_exec import product_is_mini
+from .cast import cast
+from .sub import sub
+
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor)
 def _equal(input1, input2):
@@ -46,6 +47,7 @@ def _equal(input1, input2):
 
     return res
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor)
 def _equal_ascend(input1, input2, target=utils.CCE):
     # check shapes
@@ -68,15 +70,16 @@ def _equal_ascend(input1, input2, target=utils.CCE):
         dtype = "float32"
 
     if orig_dtype == "float32" and dtype == "float16":
-        input_sub = Sub(input1, input2, target)
-        input_sub = Cast(input_sub, dtype, target)
+        input_sub = sub(input1, input2, target)
+        input_sub = cast(input_sub, dtype, target)
         zero = akg.tvm.const(0.0, dtype)
         res = akg.topi.equal(input_sub, zero)
     else:
-        input1 = Cast(input1, dtype, target)
-        input2 = Cast(input2, dtype, target)
+        input1 = cast(input1, dtype, target)
+        input2 = cast(input2, dtype, target)
         res = akg.topi.equal(input1, input2)
     return res
+
 
 def Equal(input1, input2, target=utils.CCE):
     """

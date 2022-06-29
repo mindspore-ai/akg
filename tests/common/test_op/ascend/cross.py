@@ -17,7 +17,7 @@ import akg
 from akg import tvm, topi
 from akg.utils.format_transform import get_shape
 import akg.utils as utils
-from akg.ops.math import Cast
+from akg.ops.math import cast
 from akg.utils.kernel_exec import product_is_mini
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (str, type(None)))
@@ -67,8 +67,8 @@ def cross(x, y, target=utils.CCE):
     shp = shape[1:]
 
     if need_type_convert:
-        x = Cast(x, "float16", target=utils.CCE)
-        y = Cast(y, "float16", target=utils.CCE)
+        x = cast(x, "float16", target=utils.CCE)
+        y = cast(y, "float16", target=utils.CCE)
 
     a0b1 = tvm.compute(shp, lambda *i: x(0, *i) * y(1, *i), name="a0b1")
     a0b2 = tvm.compute(shp, lambda *i: x(0, *i) * y(2, *i), name="a0b2")
@@ -91,6 +91,6 @@ def cross(x, y, target=utils.CCE):
         name='res')
 
     if need_type_convert:
-        res = Cast(res, inp_dtype, target=utils.CCE)
+        res = cast(res, inp_dtype, target=utils.CCE)
 
     return res

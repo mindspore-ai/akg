@@ -17,7 +17,7 @@ import akg.tvm
 import akg.topi
 import akg
 import akg.lang.ascend
-from akg.ops.math import Sum
+from akg.ops.math import sum
 import akg.utils as utils
 
 
@@ -42,7 +42,7 @@ def l2loss(data, target="cce"):
 
     res = akg.lang.ascend.vmuls(data, coeff_sqrt)
     res = akg.lang.ascend.vmul(res, res)
-    res = Sum(res, target=target)
+    res = sum(res, target=target)
 
     if dtype != orig_dtype:
         res = akg.topi.cast(res, orig_dtype)

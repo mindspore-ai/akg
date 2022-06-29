@@ -1,4 +1,4 @@
-# Copyright 2021 Huawei Technologies Co., Ltd
+# Copyright 2021-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -32,7 +32,7 @@ def real_div(x, y, target=utils.CCE):
 @reg_op("FloorDiv", utils.CCE)
 def floor_div(x, y, target=utils.CCE):
     """FloorDiv"""
-    return math.FloorDiv(x, y, target)
+    return math.floor_div(x, y, target)
 
 
 @reg_op("Argmax", utils.CCE)
@@ -44,7 +44,7 @@ def argmax(x, axis=-1, target=utils.CCE):
 @reg_op("SimpleMean", utils.CCE)
 def simple_mean(x, target=utils.CCE):
     """SimpleMean"""
-    return math.Mean(x, axis=[2, 3], keepdims=True, target=target)
+    return math.mean(x, axis=[2, 3], keepdims=True, target=target)
 
 
 @reg_op("ReLU", utils.CCE)
@@ -72,7 +72,7 @@ def sparse_softmax_cross_entropy_with_logits(features, labels, is_grad=False, se
     """sparse softmax cross entropy with logits"""
     if is_grad:
         return nn.sparse_softmax_cross_entropy_with_logits_ad(labels, features, reduction='mean', grad_scale=sens,
-                                                        target=target)
+                                                              target=target)
     return nn.sparse_softmax_cross_entropy_with_logits(labels, features, reduction='mean', target=target)
 
 
@@ -91,19 +91,19 @@ def relu_grad(y_backprop, x, target=utils.CCE):
 @reg_op("ReduceMean", utils.CCE)
 def reduce_mean(x, axis, keepdims, target=utils.CCE):
     """ReduceMean"""
-    return math.Mean(x, axis=axis, keepdims=keepdims, target=target)
+    return math.mean(x, axis=axis, keepdims=keepdims, target=target)
 
 
 @reg_op("ProdForceSeA", utils.CCE)
 def prod_force_sea(net_deriv_tensor, in_deriv_tensor, nlist_tensor, natoms=192, target=utils.CCE):
     """ProdForceSeA"""
-    return math.ProdForceSeA(net_deriv_tensor, in_deriv_tensor, nlist_tensor, natoms, target)
+    return math.prod_force_se_a(net_deriv_tensor, in_deriv_tensor, nlist_tensor, natoms, target)
 
 
 @reg_op("ProdForceSeAGrad", utils.CCE)
 def prod_force_sea_grad(grad_tensor, in_deriv_tensor, nlist_tensor, natoms=192, target=utils.CCE):
     """ProdForceSeAGrad"""
-    return math.ProdForceSeAGrad(grad_tensor, in_deriv_tensor, nlist_tensor, natoms, target)
+    return math.prod_force_se_a_grad(grad_tensor, in_deriv_tensor, nlist_tensor, natoms, target)
 
 
 @reg_op("OneHot", utils.CCE)
@@ -135,7 +135,7 @@ def max_pool_with_argmax(x, pad_mode="valid", window=1, pad=0, stride=1, target=
 @reg_op("MatMul", utils.CCE)
 def mat_mul(x1, x2, out_dtype, transpose_a=False, transpose_b=False, target=utils.CCE):
     """MatMul"""
-    return math.MatMul(x=x1, y=x2, b=None, out_dtype=out_dtype, left_format="zN", right_format="zN", out_format="zN",
+    return math.matmul(x=x1, y=x2, b=None, out_dtype=out_dtype, left_format="zN", right_format="zN", out_format="zN",
                        transpose_x=transpose_a, transpose_y=transpose_b, target=target)
 
 
@@ -232,19 +232,19 @@ def lamb_apply_optimizer_assign(grad, input_v, input_m, input_param, beta_1, one
 @reg_op("FusedBN1", utils.CCE)
 def fused_bn1(data, target=utils.CCE):
     """FusedBN1"""
-    return nn.FusedBn1(data, target)
+    return nn.fused_bn1(data, target)
 
 
 @reg_op("FusedBN2", utils.CCE)
 def fused_bn2(mean, var_part, running_mean, running_var, momentum=0.8, target=utils.CCE):
     """FusedBN2"""
-    return nn.FusedBn2(mean, var_part, running_mean, running_var, momentum, target=target)
+    return nn.fused_bn2(mean, var_part, running_mean, running_var, momentum, target=target)
 
 
 @reg_op("FusedBN3", utils.CCE)
 def fused_bn3(data, mean, variance, gamma, beta, eps=1e-3, target=utils.CCE):
     """FusedBN3"""
-    return nn.FusedBn3(data, mean, variance, gamma, beta, eps, target=target)
+    return nn.fused_bn3(data, mean, variance, gamma, beta, eps, target=target)
 
 
 @reg_op("ClearZero", utils.CCE)
@@ -267,13 +267,13 @@ def bias_add_grad(dout, data_format=None, target=utils.CCE):
     if data_format is None:
         data_format = ["NCHW"]
     dout_shape = get_shape(dout)
-    return nn.BiasAddAd(dout, dout_shape, data_format[0], target)
+    return nn.bias_add_ad(dout, dout_shape, data_format[0], target)
 
 
 @reg_op("BatchMatMul", utils.CCE)
 def batch_matmul(x1, x2, transpose_a=False, transpose_b=False, target=utils.CCE):
     """use cube version matmul"""
-    return math.MatMul(x=x1, y=x2, b=None, out_dtype=x1.dtype,
+    return math.matmul(x=x1, y=x2, b=None, out_dtype=x1.dtype,
                        left_format="zN", right_format="zN", out_format="zN",
                        transpose_x=transpose_a, transpose_y=transpose_b, target=target)
 
@@ -295,7 +295,7 @@ def apply_momentum(variable, accumulation, learning_rate, gradient, momentum, us
 @reg_op("EqualCount", utils.CCE)
 def equal_count(x, y, target=utils.CCE):
     """EqualCount"""
-    return math.EqualCount(x, y, target)
+    return math.equal_count(x, y, target)
 
 
 @reg_op("BNGrad1", utils.CCE)
@@ -324,9 +324,9 @@ def fused_batch_norm(x, scale, b, mean, variance, momentum=0.99, epsilon=1e-3, d
         data_format = [DEFAULT]
     if isinstance(data_format, list):
         data_format = data_format[0]
-    outputs = nn.FusedBatchNorm(x, scale, b, mean, variance, momentum=momentum, eps=epsilon,
-                                is_training=True, data_format=data_format, axis=1, target=target)
-    return outputs
+    attrs = {"momentum": momentum, "eps": epsilon, "is_training": True, "data_format": data_format,
+             "axis": 1, "target": target}
+    return nn.fused_batch_norm([x, scale, b, mean, variance], attrs)
 
 
 @reg_op("FusedBatchNormGrad", utils.CCE)
@@ -338,8 +338,8 @@ def fused_batch_norm_grad(dy, x, scale, save_mean, save_inv_variance, data_forma
     if isinstance(data_format, list):
         data_format = data_format[0]
     eps = 1e-3
-    return nn.FusedBatchNormGrad(dy, x, save_mean, save_inv_variance, scale, eps=eps, data_format=data_format,
-                                 axis=1, target=target)
+    return nn.fused_batch_norm_grad([dy, x, save_mean, save_inv_variance, scale], eps=eps, data_format=data_format,
+                                    axis=1, target=target)
 
 
 @reg_op("FusedBatchNormInfer", utils.CCE)
@@ -351,13 +351,14 @@ def fused_batch_norm_infer(x, scale, b, mean, variance, momentum=0.99, epsilon=1
         data_format = [DEFAULT]
     if isinstance(data_format, list):
         data_format = data_format[0]
-    return nn.FusedBatchNorm(x, scale, b, mean, variance, momentum=momentum, eps=epsilon,
-                             is_training=False, data_format=data_format, axis=1, target=target)
+    attrs = {"momentum": momentum, "eps": epsilon, "is_training": False, "data_format": data_format,
+             "axis": 1, "target": target}
+    return nn.fused_batch_norm([x, scale, b, mean, variance], attrs)
 
 
 @reg_op("Conv2DBackpropInput", utils.CCE)
 def conv_2d_backprop_input(out_backprop, input_sizes, filter_0, filter_shape, pad_list, stride=1, dilation=1,
-                            target=utils.CCE):
+                           target=utils.CCE):
     """back propagation of 2d convolution on input"""
     if len(pad_list) != 4:
         raise IndexError("Length of pad must be equal 4")
@@ -376,7 +377,7 @@ def conv_2d_backprop_input(out_backprop, input_sizes, filter_0, filter_shape, pa
 
 @reg_op("Conv2DBackpropFilter", utils.CCE)
 def conv_2d_backprop_filter(out_backprop, input_0, input_shape, filter_sizes, pad_list, stride=1, dilation=1,
-                             target=utils.CCE):
+                            target=utils.CCE):
     """back propagation of 2d convolution on filter"""
     if len(pad_list) != 4:
         raise IndexError("Length of pad must be equal 4")

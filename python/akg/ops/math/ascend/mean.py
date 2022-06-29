@@ -17,15 +17,12 @@
 """operator dsl function: mean"""
 import akg.topi
 import akg.tvm
-from ..sum import Sum
-from .sum_others import SumV2
 from akg.utils import format_transform as ft_util
 import akg.utils as utils
 from akg.utils import custom_tiling as ct_util
 from akg.utils.dynamic_shape import shape_is_dynamic
-
-
-INT16_MAX = 65536
+from ..sum import sum
+from .sum_others import sum_v2
 
 
 def get_attrs(tensor):
@@ -73,7 +70,7 @@ def mean_dynamic_tiling_strategy(tensor, axis):
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, (list, tuple, int, type(None)), (bool, type(None)), (str, type(None)))
-def Mean(data, axis=None, keepdims=False, target=utils.CCE):
+def mean(data, axis=None, keepdims=False, target=utils.CCE):
     """
     Computes the mean of the values of a Tensor over the whole dataset.
 
@@ -91,7 +88,7 @@ def Mean(data, axis=None, keepdims=False, target=utils.CCE):
     Returns:
             tvm.tensor.Tensor, has the same type as data. If keepdims equal to True, all reduced dimensions are
             retained with length 1. else these reduced axis will be eliminate.
-    
+
     Supported Platforms:
         'Ascend'
     """
@@ -106,7 +103,7 @@ def Mean(data, axis=None, keepdims=False, target=utils.CCE):
     count = 1
     for i in axis:
         count *= shape[i]
-    output = Sum(data, axis, keepdims, target=target)
+    output = sum(data, axis, keepdims, target=target)
 
     if shape_is_dynamic(data):
         res = akg.tvm.compute(output.shape, lambda *i: akg.lang.ascend.divide_var(output(*i), count), name="res")
@@ -120,10 +117,10 @@ def Mean(data, axis=None, keepdims=False, target=utils.CCE):
 
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, (list, tuple, int, type(None)), (bool, type(None)), (str, type(None)))
-def MeanV2(data, axis=None, keepdims=False, target=utils.CCE):
+def mean_v2(data, axis=None, keepdims=False, target=utils.CCE):
     """
     Simple implementation of mean.
-    
+
     Supported Platforms:
         'Ascend'
     """
@@ -141,7 +138,7 @@ def MeanV2(data, axis=None, keepdims=False, target=utils.CCE):
         count *= shape[i]
 
     count_rec = 1 / count
-    output = SumV2(data, axis, keepdims, target=target)
+    output = sum_v2(data, axis, keepdims, target=target)
     res = output * akg.tvm.const(count_rec, dtype)
     attrs = get_attrs(data)
     if shape_is_dynamic(data):

@@ -18,7 +18,7 @@ import akg
 import akg.utils as utils
 from akg.utils.kernel_exec import debug_mode, create_code
 from akg.utils import custom_tiling as ct_util
-from akg.ops.math import Cast, reduce_max
+from akg.ops.math import cast, reduce_max
 from akg.utils import format_transform as ft_util
 
 
@@ -106,7 +106,7 @@ def reduce_max_ad_optimized_manual_schedule(input_shape, dtype, axis, keepdims, 
                                            name="reduce_max_ad2")
         # cast data back to the original dtype
         if dtype != 'float16':
-            return [Cast(max_values_and_zeros, dtype, target=utils.CCE)]
+            return [cast(max_values_and_zeros, dtype, target=utils.CCE)]
         else:
             return [max_values_and_zeros]
 
@@ -122,8 +122,8 @@ def reduce_max_ad_optimized_manual_schedule(input_shape, dtype, axis, keepdims, 
 
     # cast input data
     if dtype != 'float16':
-        data_cast = Cast(data, "float16", target=utils.CCE)
-        head_cast = Cast(head, "float16", target=utils.CCE)
+        data_cast = cast(data, "float16", target=utils.CCE)
+        head_cast = cast(head, "float16", target=utils.CCE)
     else:
         data_cast = data
         head_cast = head

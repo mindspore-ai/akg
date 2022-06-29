@@ -15,18 +15,18 @@
 """operator dsl function: scatter_add"""
 import akg.tvm
 import akg.utils as utils
-from akg.ops.array import UnsortedSegmentSum
-from akg.ops.array.gpu import GatherNd
+from akg.ops.array import unsorted_segment_sum
+from akg.ops.array.gpu import gather_nd
 from akg.ops.math import mul, reduce_sum
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, int,
                         bool, int, (str, type(None)))
 def fused_gather_nd_reduce_sum_mul_unsorted_segment_sum(input1, input2, input3, input4, input5, axis=0, keepdims=False, num=0, target=utils.CUDA):
-    item_get = GatherNd(input1, input2)
-    sum_axis = reduce_sum(item_get, axis, keepdims, target=utils.CUDA)
+    item_get = gather_nd(input1, input2)
+    sum_axis = reduce_sum(item_get, axis, keepdims, target)
     prod = mul(sum_axis, input3, target=utils.CUDA)
-    res1 = UnsortedSegmentSum(prod, input4, num, op_id=0)
-    res2 = UnsortedSegmentSum(prod, input5, num, op_id=1)
+    res1 = unsorted_segment_sum(prod, input4, num, op_id=0)
+    res2 = unsorted_segment_sum(prod, input5, num, op_id=1)
     return res1, res2
 
 

@@ -193,11 +193,6 @@ isl::schedule_node SharedMemoryManager::MapCopiesToThreads(const isl::schedule_n
     auto thread_cfg = scop_info_.user_config_.GetThreadConfig();
     auto mapping_cfg = thread_cfg;
 
-    if (!scop_info_.user_config_.EnableStitchFusion() && !current_outer_bn_->enable_vectorization &&
-        scop_info_.user_config_.GetVectorLength()) {
-      scop_info_.user_config_.SetEnableOneDimThread(true);
-    }
-
     if (scop_info_.user_config_.GetEnableOneDimThread()) {
       mapping_cfg = GetCurrentConfig(band_node);
 
@@ -509,15 +504,18 @@ void SharedMemoryManager::OptimizeSharedDimension(std::vector<size_t> &sizes, Ty
 }
 
 void SharedMemoryManager::OptimizeBankConflict(std::vector<size_t> &sizes, Type type) {
-  if (sizes.back() % 2 != 0) {
+  const int64_t even_check = 2;
+  if (sizes.back() % even_check != 0) {
     return;
   }
-  if (bank_conflict_ && sizes.back() < 32) {
-    sizes.back() = 33;
+  const int64_t bank_conflict_size = 32;
+  if (bank_conflict_ && sizes.back() < bank_conflict_size) {
+    sizes.back() = bank_conflict_size + 1;
   } else {
     size_t pad = 1;
     if (current_outer_bn_->template_type == Template::TRANSPOSE_OP) {
-      pad = std::max<size_t>(1, 4 / type.bytes());
+      const int64_t pad_size = 4;
+      pad = std::max<size_t>(1, pad_size / type.bytes());
     }
     sizes.back() += pad;
   }

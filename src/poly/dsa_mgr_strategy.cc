@@ -20,7 +20,6 @@
 #include "poly/schedule_pass/memory_manager.h"
 #include "poly/schedule_pass/sink_c0.h"
 #include "poly/schedule_pass/sink_last_axis.h"
-#include "poly/schedule_pass/reorder_invariant_set_schedule.h"
 #include "poly/schedule_pass/keep_outer_band_order.h"
 
 #include "poly/schedule_pass/split_outer_band.h"
@@ -58,7 +57,11 @@ void DsaMgrStrategy::RegisterMemPromPasses() {
 }
 
 void DsaMgrStrategy::RegisterSchedulePasses() {
+#ifdef AKG_USE_MLS
   const bool enable_mlsched = MLSchedShouldBeUsed(scop_info_);
+#else
+  const bool enable_mlsched = false;
+#endif
   if (!enable_mlsched && !scop_info_.user_config_.GetDisableGroup()) {
     RegisterPass(std::make_shared<GroupStatements>(pass_info_));
   }
@@ -83,7 +86,6 @@ void DsaMgrStrategy::RegisterPasses() {
   RegisterConstrainedScheduling();
 
   RegisterSchedulePasses();
-  RegisterPass(std::make_shared<ReorderInvariantSetSchedule>(pass_info_));
 
   if (scop_info_.user_config_.GetOuterBandNeedSplit() && !scop_info_.mmu_info_.IsSpecGemm()) {
     RegisterPass(std::make_shared<SplitOuterBand>());
@@ -97,7 +99,6 @@ void DsaMgrStrategy::RegisterPasses() {
   if (scop_info_.user_config_.GetIsTuning()) {
     return;
   }
-  RegisterPass(std::make_shared<ReorderInvariantSetSchedule>(pass_info_));
   RegisterPass(std::make_shared<ResetCoincidenceOfReduce>(scop_info_, pass_info_));
   if (scop_info_.user_config_.GetPragmaSetAllCoincident()) {
     RegisterPass(std::make_shared<SetAllCoincidence>());
@@ -111,9 +112,7 @@ void DsaMgrStrategy::RegisterPasses() {
   RegisterMemPromPasses();
   RegisterPass(std::make_shared<ReorderMarkNodes>());
   RegisterPass(std::make_shared<MarkFuseOp>(scop_info_));
-  // if coincidence constraints are disabled (due to reschedule), we cannot determine multicore axis reliably
-  bool can_use_multiCore = !scop_info_.mmu_info_.IsSpecGemm() && scop_info_.user_config_.GetConsiderCoincidence();
-  if (can_use_multiCore) {
+  if (!scop_info_.mmu_info_.IsSpecGemm()) {
     RegisterPass(std::make_shared<MarkOuterMost>(scop_info_));
   }
 }

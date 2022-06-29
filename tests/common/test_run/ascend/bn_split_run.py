@@ -18,7 +18,7 @@ import time
 import numpy as np
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
-from akg.ops.nn.ascend import FusedBn1, FusedBn2, FusedBn3
+from akg.ops.nn.ascend import fused_bn1, fused_bn2, fused_bn3
 from tests.common.base import get_rtol_atol
 from tests.common.gen_random import random_gaussian
 
@@ -158,7 +158,7 @@ def bn_1_run(shape, dtype, momentum, eps, kernel_name, attrs):
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
 
-        mod = utils.op_build_test(FusedBn1,
+        mod = utils.op_build_test(fused_bn1,
                                   in_shapes, in_dtypes,
                                   kernel_name=kernel_name,
                                   attrs=attrs, tuning=t)
@@ -172,7 +172,7 @@ def bn_1_run(shape, dtype, momentum, eps, kernel_name, attrs):
                 'tuning': False}
         return mod
 
-    mod_1 = utils.op_build_test(FusedBn1,
+    mod_1 = utils.op_build_test(fused_bn1,
                                 in_shapes, in_dtypes,
                                 kernel_name="fusedbn1_"+kernel_name,
                                 attrs=attrs)
@@ -196,7 +196,7 @@ def bn_2_run(shape, dtype, momentum, eps, kernel_name, attrs):
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(FusedBn2,
+        mod = utils.op_build_test(fused_bn2,
                                   in_shapes, in_dtypes,
                                   op_attrs=[momentum],
                                   kernel_name=kernel_name,
@@ -214,7 +214,7 @@ def bn_2_run(shape, dtype, momentum, eps, kernel_name, attrs):
                 'tuning': False}
         return mod
 
-    mod_2 = utils.op_build_test(FusedBn2,
+    mod_2 = utils.op_build_test(fused_bn2,
                                 in_shapes, in_dtypes,
                                 op_attrs=[momentum],
                                 kernel_name="fusedbn2_"+kernel_name,
@@ -242,7 +242,7 @@ def bn_3_run(shape, dtype, momentum, eps, kernel_name, attrs):
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(FusedBn3,
+        mod = utils.op_build_test(fused_bn3,
                                   in_shapes, in_dtypes,
                                   op_attrs=[eps],
                                   kernel_name=kernel_name,
@@ -255,7 +255,7 @@ def bn_3_run(shape, dtype, momentum, eps, kernel_name, attrs):
 
         return mod
 
-    mod_3 = utils.op_build_test(FusedBn3,
+    mod_3 = utils.op_build_test(fused_bn3,
                                 in_shapes, in_dtypes,
                                 op_attrs=[eps],
                                 kernel_name="fusedbn3_"+kernel_name,
@@ -278,21 +278,21 @@ def bn_3_run(shape, dtype, momentum, eps, kernel_name, attrs):
 def bn_split_run(shape, dtype, momentum, eps, kernel_name, attrs):
     """Test run function for whole splited bn"""
     in_shapes1, in_dtypes1 = get_compile_param(shape, dtype, 1)
-    mod_1 = utils.op_build_test(FusedBn1,
+    mod_1 = utils.op_build_test(fused_bn1,
                                 in_shapes1, in_dtypes1,
                                 kernel_name="fused_bn1_"+kernel_name,
                                 attrs=attrs.copy())
 
 
     in_shapes2, in_dtypes2 = get_compile_param(shape, dtype, 2)
-    mod_2 = utils.op_build_test(FusedBn2,
+    mod_2 = utils.op_build_test(fused_bn2,
                                 in_shapes2, in_dtypes2,
                                 op_attrs=[momentum],
                                 kernel_name="fused_bn2_"+kernel_name,
                                 attrs=attrs.copy())
 
     in_shapes3, in_dtypes3 = get_compile_param(shape, dtype, 3)
-    mod_3 = utils.op_build_test(FusedBn3,
+    mod_3 = utils.op_build_test(fused_bn3,
                                 in_shapes3, in_dtypes3,
                                 op_attrs=[eps],
                                 kernel_name="fused_bn3_"+kernel_name,

@@ -15,22 +15,23 @@
 from tests.common.tensorio import compare_tensor
 import numpy as np
 from akg.utils import kernel_exec as utils
-from akg.ops.nn.ascend import Avgpool
+from akg.ops.nn.ascend import avgpool
 from akg.utils.dsl_create import cal_pad_shapes_by_strategy
 from tests.common.gen_random import random_gaussian
 
+
 def benchmark(input, kernel, stride, pad):
     sh, sw = stride
-    N, C1, H, W, C0 = input.shape
+    n, c1, h, w, c0 = input.shape
     KH, KW = kernel
 
     [ph_h, ph_t, pw_h, pw_t], [out_size_h, out_size_w] = cal_pad_shapes_by_strategy(input.shape, kernel, stride, pad)
-    out_shape = (N, C1, out_size_h, out_size_w, C0)
+    out_shape = (n, c1, out_size_h, out_size_w, c0)
 
     out = np.zeros(out_shape)
 
-    inputpad = np.zeros((N, C1, H + ph_h + ph_t, W + pw_h + pw_t, C0))
-    inputpad[:, :, ph_h:ph_h + H, pw_h:pw_h + W, :] = input
+    inputpad = np.zeros((n, c1, h + ph_h + ph_t, w + pw_h + pw_t, c0))
+    inputpad[:, :, ph_h:ph_h + h, pw_h:pw_h + w, :] = input
 
     for i in range(out_size_h):
         for j in range(out_size_w):
@@ -42,7 +43,7 @@ def avgpool_run(shape, kernel, stride, strategy, dtype, attrs):
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(Avgpool, [shape], [dtype], op_attrs=[kernel, stride, strategy],
+        mod = utils.op_build_test(avgpool, [shape], [dtype], op_attrs=[kernel, stride, strategy],
                                   kernel_name=kernel_name, attrs=attrs, tuning=t)
         if t:
             expect, input, output = gen_data(dtype, kernel, shape, strategy, stride)
@@ -50,7 +51,7 @@ def avgpool_run(shape, kernel, stride, strategy, dtype, attrs):
         else:
             return mod
     else:
-        mod = utils.op_build_test(Avgpool, [shape], [dtype], op_attrs=[kernel, stride, strategy],
+        mod = utils.op_build_test(avgpool, [shape], [dtype], op_attrs=[kernel, stride, strategy],
                                   kernel_name='avgpool', attrs=attrs)
         expect, input, output = gen_data(dtype, kernel, shape, strategy, stride)
         output = utils.mod_launch(mod, [input, output], expect=expect)

@@ -51,10 +51,6 @@ class ComputeSchedule : public SchedulePass {
   isl::union_pw_aff GenerateNewAffine(const isl::union_pw_aff &swap_out, const isl::union_pw_aff &swap_in,
                                       std::unordered_set<std::string> swap_ids);
 
-#ifdef AKG_USE_MLS
-  mls::bin::Hints ExtractDirectivesFromAKG(void);
-#endif
-
  private:
   PassInfo &pass_info_;
 

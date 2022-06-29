@@ -75,6 +75,9 @@ class OpTypeCollector : public IRVisitor {
   TensorEntry GetDstTensor(const Provide *op);
   std::vector<TensorEntry> GetSourceTensors(const Provide *op);
   std::string InitBasicOpType(const Provide *op);
+  size_t GetBandIndex() {
+    return band_count_ == 0 ? 0: band_count_ - 1;
+  }
 
   std::string target_;
   ScopInfo &scop_info_;

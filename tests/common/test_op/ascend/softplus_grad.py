@@ -15,7 +15,7 @@
 """operator dsl function: softplus_grad"""
 import akg
 from akg import tvm
-from akg.ops.math import Divide
+from akg.ops.math import divide
 from akg.utils.kernel_exec import product_is_mini
 from akg.utils.format_transform import get_shape
 import akg.utils as utils
@@ -48,7 +48,7 @@ def softplus_grad_compute(input_gradients, input_features):
 
     data_exp_tmp = akg.lang.ascend.vexp(input_features)
     data_add_tmp = akg.lang.ascend.vadds(data_exp_tmp, SCALAR_ONE)
-    data_div_tmp = Divide(data_exp_tmp, data_add_tmp, target="cce")
+    data_div_tmp = divide(data_exp_tmp, data_add_tmp, target="cce")
     res_tmp = akg.lang.ascend.vmul(input_gradients, data_div_tmp)
 
     if dtype == "float16":

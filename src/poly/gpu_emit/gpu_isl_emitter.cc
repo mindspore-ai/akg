@@ -310,11 +310,11 @@ class InitStmtInsertSync : public IRMutator {
   static constexpr int int_bit_count_{32};
 };
 
-Stmt GpuIslEmitter::Emit(const isl::ast_node &node) {
+void GpuIslEmitter::EmitterPreProcess() {
   UpdateGpuIndexDtype();
+}
 
-  Stmt stmt = EmitAst(node);
-
+Stmt GpuIslEmitter::EmitterPostProcess(Stmt &stmt) {
   // emit realize for temporary tensor
   stmt = EmitRealizeForGlobalTensor(stmt);
 
@@ -355,7 +355,7 @@ Stmt GpuIslEmitter::Emit(const isl::ast_node &node) {
   if (info_.user_config_.GetMindTrickWasUsed() && info_.user_config_.GetMindTrickGpuHasSwizzle()) {
     stmt = AttrStmt::make(make_zero(Int(32)), MIND_TRICKS_SWIZZLE_PRAGMA, Expr(1), stmt);
   }
-
+  stmt = IslEmitter::EmitterPostProcess(stmt);
   return stmt;
 }
 

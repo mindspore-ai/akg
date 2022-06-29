@@ -1,6 +1,4 @@
-#!/usr/bin/env python3
-# coding: utf-8
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,10 +16,11 @@
 
 import akg
 import akg.utils as utils
-from ..exp import Exp
+from ..exp import exp
+
 
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (str, type(None)))
-def ExpAd(head, in_data, target=utils.CCE):
+def exp_ad(head, in_data, target=utils.CCE):
     """
     Compute gradient of exp operator using automatic differentiate.
 
@@ -31,7 +30,7 @@ def ExpAd(head, in_data, target=utils.CCE):
 
     Returns:
         tvm.tensor.Tensor has the same shape as input.
-    
+
     Supported Platforms:
         'Ascend'
     """
@@ -39,6 +38,6 @@ def ExpAd(head, in_data, target=utils.CCE):
     # check head's validation.
     utils.check_shape(head.shape)
     utils.ops_dtype_check(head.dtype, utils.DtypeForDavinci.ALL_FLOAT)
-    exp_in_data = Exp(in_data, target)
+    exp_in_data = exp(in_data, target)
     jacs = list(akg.differentiate(exp_in_data, [in_data], head))
     return jacs[0]

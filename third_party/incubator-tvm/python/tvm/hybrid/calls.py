@@ -40,6 +40,7 @@ LOOP_INTRIN = {
     'parallel'    : For.Parallel,
     'vectorize'   : For.Vectorized,
     'serial'      : For.Invariant,
+    'reduce'      : For.Reduce,
     'const_range' : (For.Unrolled, ),
 }
 
@@ -74,7 +75,7 @@ def _grid(annotation, args):
     iter_var = None
     return iter_var, low, ext, for_type, step
 
-range = unroll = vectorize = parallel = const_range = serial = _range # pylint: disable=invalid-name
+range = unroll = vectorize = parallel = const_range = serial = reduce = _range # pylint: disable=invalid-name
 grid = _grid
 
 

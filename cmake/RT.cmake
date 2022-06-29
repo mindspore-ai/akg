@@ -17,9 +17,10 @@ if(USE_CCE_RT)
 
   set(ASCEND_RUNTIME_DIR ${ASCEND_DIR}/fwkacllib/lib64)
   set(ASCEND_CANN_RUNTIME_DIR ${ASCEND_DIR}/latest/fwkacllib/lib64)
+  set(ASCEND_CANN_RUNTIME_NEW_PATH ${ASCEND_DIR}/latest/lib64)
 
   set(TVM_RUNTIME_LINKER_LIBS libruntime.so)
-  link_directories(${ASCEND_RUNTIME_DIR} ${ASCEND_CANN_RUNTIME_DIR})
+  link_directories(${ASCEND_RUNTIME_DIR} ${ASCEND_CANN_RUNTIME_DIR} ${ASCEND_CANN_RUNTIME_NEW_PATH})
 elseif(USE_KC_AIR)
   message("-- Build with kc air")
   add_definitions(-DUSE_CCE_RT=1)

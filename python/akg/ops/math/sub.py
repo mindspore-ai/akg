@@ -17,8 +17,9 @@ import akg.topi
 import akg.tvm
 import akg.utils as utils
 
+
 @utils.check_input_type(akg.tvm.tensor.Tensor, akg.tvm.tensor.Tensor, (str, type(None)))
-def Sub(data1, data2, target=utils.CCE):
+def sub(data1, data2, target=utils.CCE):
     """
     Computes data1 - data2 elementwise, broadcast is supported.
 
@@ -28,7 +29,7 @@ def Sub(data1, data2, target=utils.CCE):
 
     Returns:
         tvm.tensor.Tensor, subtracted result, with same type as input tensors and broadcasted shape of data1 and data2.
-    
+
     Supported Platforms:
         'Ascend', 'GPU', 'CPU'
     """

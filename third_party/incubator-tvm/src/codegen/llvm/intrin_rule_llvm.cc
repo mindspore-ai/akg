@@ -36,6 +36,20 @@ namespace llvm {
 TVM_REGISTER_GLOBAL("tvm.intrin.rule.llvm.prefetch")
 .set_body(DispatchLLVMIntrin<::llvm::Intrinsic::prefetch, 4>);
 
+TVM_REGISTER_GLOBAL("tvm.intrin.rule.llvm.exp")
+.set_body([](const TVMArgs& targs, TVMRetValue* rv) {
+  Expr e = targs[0];
+  const ir::Call* call = e.as<ir::Call>();
+  CHECK(call != nullptr);
+  const Expr& x = call->args[0];
+  const auto type = x.type();
+  if (type.is_float() && type.bits() == 32) {
+    *rv = e;
+  } else {
+    DispatchLLVMPureIntrin<::llvm::Intrinsic::exp, 1>(targs, rv);
+  }
+});
+
 TVM_REGISTER_GLOBAL("tvm.intrin.rule.llvm.fma")
 .set_body(DispatchLLVMPureIntrin<::llvm::Intrinsic::fmuladd, 1>);
 

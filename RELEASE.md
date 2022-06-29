@@ -1,6 +1,31 @@
 # MindAKG Release Notes
 
-[查看中文](./RELEASE.md)
+[查看中文](./RELEASE_CN.md)
+
+## MindAKG 1.8.0 Release Notes
+
+### Major Features and Improvements
+
+* Integrate the CPU compiling process for CustomOp. [!612](https://gitee.com/mindspore/akg/pulls/612) (CPU)
+* Optimize high-dimensional CSR OP. [!664](https://gitee.com/mindspore/akg/pulls/664) (GPU)
+* Update the restart process of Ascend backend. [!701](https://gitee.com/mindspore/akg/pulls/701) (Ascend)
+* Support the generation of CSRMM operator. [!709](https://gitee.com/mindspore/akg/pulls/709) (GPU)
+* Integrate usage of intrinsic directives for the new Scheduler. [!715](https://gitee.com/mindspore/akg/pulls/715) (All backends)
+
+### Bug fixes
+
+* Fix the bug of reshape elimination for the fused operators. [!707](https://gitee.com/mindspore/akg/pulls/707) (All)
+* Fix the bug of to_three_address pass. [!728](https://gitee.com/mindspore/akg/pulls/728) (Ascend)
+* Fix the bug of Operator types matching rules. [!730](https://gitee.com/mindspore/akg/pulls/730) (All)
+
+### Contributors
+
+Thanks goes to these wonderful people:
+
+yangsijia, polyhedral, zhangrenwei, yiyanzhi, hujiahui8, zhengzuohe, zhangzhaochuang, xuhui, liuchao, xiaruijie, DeshiChen, nelson.lossing, zhenzhang,
+
+chenlei_autodiff,  wYann, hanhuifeng, gaoxiong, zichun_ye, chengbin, wangrao124, huangmengxi, harenome, huoxinyou, yanglinfeng, Etienne
+
 
 ## MindAKG 1.7.0 Release Notes
 

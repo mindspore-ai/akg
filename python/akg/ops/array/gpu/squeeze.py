@@ -17,8 +17,9 @@ import akg.topi as topi
 import akg.utils as utils
 import akg
 
+
 @akg.schedule(topi.cuda.schedule_injective)
-def Squeeze(x, axis=None, target=utils.CUDA):
+def squeeze(x, axis=None, target=utils.CUDA):
     """
     Remove the dimensions which have shape size 1.
 
@@ -28,7 +29,7 @@ def Squeeze(x, axis=None, target=utils.CUDA):
 
     Returns:
         tvm.tensor.Tensor, has the same type and element as x, but some size 1 dimensions are removed.
-    
+
     Supported Platforms:
         'GPU'
     """

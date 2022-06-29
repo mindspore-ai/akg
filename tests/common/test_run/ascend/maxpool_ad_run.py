@@ -15,7 +15,7 @@ import itertools
 import numpy as np
 from akg.utils import kernel_exec as utils
 from tests.common.test_run.ascend import maxpool_grad_run
-from akg.ops.nn.ascend import MaxpoolAd
+from akg.ops.nn.ascend import maxpool_ad
 from akg.ops.nn.ascend.maxpool_ad import maxpool_ad_manual_schedule_all_max
 from akg.ops.nn.ascend.maxpool_ad import maxpool_ad_no_custom_diff_manual_schedule_all_max
 from akg.ops.nn.ascend.maxpool_ad import maxpool_ad_no_custom_diff_poly_all_max
@@ -46,7 +46,7 @@ def maxpool_ad_run(shape, kernel, stride, pad, dtype, optimized, polyhedral=Fals
     else:
         if optimized:
             if first_max:
-                mod = utils.op_build_test(MaxpoolAd, [head.shape, shape, forward.shape, mask.shape],
+                mod = utils.op_build_test(maxpool_ad, [head.shape, shape, forward.shape, mask.shape],
                                         [dtype, dtype, dtype, dtype], kernel_name="maxpool_ad_first_max",
                                         op_attrs=[kernel, stride, pad], attrs=attrs, log_code=False, dump_code=True, polyhedral=polyhedral)
                 output = utils.mod_launch(mod, [head, input, forward, mask, output], expect=expect)

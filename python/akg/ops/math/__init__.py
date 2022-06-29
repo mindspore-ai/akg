@@ -1,4 +1,4 @@
-# Copyright 2021 Huawei Technologies Co., Ltd
+# Copyright 2021-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,15 +13,15 @@
 # limitations under the License.
 
 """__init__"""
-from .abs import Abs
-from .abs_sum import AbsSum
-from .add import Add
-from .addn import Addn
-from .assign import Assign
-from .cast import Cast
-from .divide import Divide
+from .abs import abs
+from .abs_sum import abs_sum
+from .add import add
+from .addn import addn
+from .assign import assign
+from .cast import cast
+from .divide import divide
 from .equal import Equal
-from .exp import Exp
+from .exp import exp
 from .expand_dims import ExpandDims
 from .greater_equal import greater_equal
 from .less import less
@@ -46,6 +46,6 @@ from .reciprocal import reciprocal
 from .round import round_
 from .rsqrt import rsqrt
 from .select import select
-from .sqrt import Sqrt
-from .sub import Sub
-from .sum import Sum
+from .sqrt import sqrt
+from .sub import sub
+from .sum import sum

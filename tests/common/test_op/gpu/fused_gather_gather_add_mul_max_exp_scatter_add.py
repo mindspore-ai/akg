@@ -16,7 +16,7 @@
 import akg.tvm as tvm
 import akg.utils as utils
 from akg.tvm.hybrid import script
-from akg.ops.math import Add, mul, Exp, maximum
+from akg.ops.math import add, mul, exp, maximum
 
 @utils.check_input_type(tvm.tensor.Tensor, tvm.tensor.Tensor, int, str)
 def gather(data, indices, axis, flag):
@@ -96,10 +96,10 @@ def fused_gather_gather_add_mul_max_exp_scatter_add(inp1, inp2, inp3, inp4, axis
     gather_out1 = gather(inp1, inp2, axis, "1")
     gather_out2 = gather(inp1, inp2, axis, "2")
 
-    add_out = Add(gather_out1, gather_out2, target=target)
+    add_out = add(gather_out1, gather_out2, target=target)
     mul_out = mul(add_out, inp3, utils.CUDA)
     max_out = maximum(add_out, mul_out, utils.CUDA)
-    exp_out = Exp(max_out, utils.CUDA)
+    exp_out = exp(max_out, utils.CUDA)
     scatter_out = scatter_add(inp1, inp4, exp_out)
 
     return exp_out, scatter_out

@@ -1,6 +1,4 @@
-#!/usr/bin/env python3
-# coding: utf-8
-# Copyright 2021 Huawei Technologies Co., Ltd
+# Copyright 2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,8 +18,8 @@ import akg.utils as utils
 from akg import topi
 from akg.ops.math.log import log
 from akg.ops.math.neg import neg
-from akg.ops.math.divide import Divide
-from akg.ops.math.exp import Exp
+from akg.ops.math.divide import divide
+from akg.ops.math.exp import exp
 from akg.utils.format_transform import get_shape
 from akg.utils import custom_tiling as ct_util
 
@@ -51,7 +49,7 @@ def pow_compute(input_x, input_y, data):
     input_x_broadcast = akg.lang.ascend.broadcast(input_x, data.shape)
     log_value = log(input_x_broadcast, utils.CCE)
     mul_value = topi.multiply(input_y, log_value)
-    res = Exp(mul_value, utils.CCE)
+    res = exp(mul_value, utils.CCE)
 
     return res
 
@@ -98,16 +96,16 @@ def LambApplyOptimizerAssign(grad, input_v, input_m, input_param, beta_1, one_mi
     beta2_correction = topi.add(neg_beta_2_step, const_one)
 
     # compute: next_m_unbiased = next_m / beta1_correction
-    next_m_unbiased = Divide(next_m, beta1_correction, utils.CCE)
+    next_m_unbiased = divide(next_m, beta1_correction, utils.CCE)
     # compute: next_v_unbiased = next_v / beta2_correction
-    next_v_unbiased = Divide(next_v, beta2_correction, utils.CCE)
+    next_v_unbiased = divide(next_v, beta2_correction, utils.CCE)
 
     # compute update
     sqrt_next_v = topi.sqrt(next_v_unbiased)
     # add_2
     add_2_result = topi.add(sqrt_next_v, epsilon)
     # compute: update = next_m / (sqrt(next_v) + self.epsilon)
-    update = Divide(next_m_unbiased, add_2_result, utils.CCE)
+    update = divide(next_m_unbiased, add_2_result, utils.CCE)
 
     # compute do_use_weight_decay
     do_use_weight_mul = topi.multiply(input_param, weight_decay_rate)

@@ -15,7 +15,7 @@ import akg
 import numpy as np
 from tests.common.tensorio import compare_tensor
 from akg.utils import kernel_exec as utils
-from akg.ops.math.abs import Abs
+from akg.ops.math.abs import abs
 from tests.common.base import get_rtol_atol
 from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
@@ -28,14 +28,14 @@ def abs_run(shape, dtype, attrs={}):
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
-        mod = utils.op_build_test(Abs, input_shape, input_dtype, kernel_name=kernel_name, attrs=attrs, tuning=t)
+        mod = utils.op_build_test(abs, input_shape, input_dtype, kernel_name=kernel_name, attrs=attrs, tuning=t)
         if t:
             exp_output, inputs, output = gen_date(dtype, shape)
             return mod, exp_output, (inputs, output)
         else:
             return mod
     else:
-        mod = utils.op_build_test(Abs, input_shape, input_dtype, kernel_name='abs', attrs=attrs)
+        mod = utils.op_build_test(abs, input_shape, input_dtype, kernel_name='abs', attrs=attrs)
         exp_output, inputs, output = gen_date(dtype, shape)
         acu_output = utils.mod_launch(mod, (inputs, output), expect=exp_output)
 
