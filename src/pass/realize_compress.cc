@@ -156,9 +156,8 @@ class CheckIndex : public IRVisitor {
         } else if (index_type_[i] == IndexType::kVarWithOneProvide ||
                    index_type_[i] == IndexType::kVarWithMultiProvide) {
           auto it = var_range_.find(Downcast<Var>(var).get());
-          CHECK(it != var_range_.end()) << " " << func_ << ": " << var;
           // only support const extent loop.
-          if (!it->second->extent.as<IntImm>()) {
+          if ((it == var_range_.end()) || !it->second->extent.as<IntImm>()) {
             index_type_[i] = IndexType::kNoSupport;
             index_ranges_[i].clear();
             continue;
