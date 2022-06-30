@@ -149,6 +149,15 @@ isl::schedule_node DeleUselessMarker(const isl::schedule_node &orig_node,
 isl::schedule_node ReplaceMarker(const isl::schedule_node &orig_node, const std::string &orig_name,
                                  const std::string &replaced_name);
 
+isl::schedule_node ReConstructScheduleTree(const isl::schedule_node &cur_node, const isl::schedule_node &orig_node,
+                                           const isl::schedule_node &exit_node);
+isl::schedule_node ReConstructChildScheduleTree(const isl::schedule_node &cur_node, const isl::schedule_node &orig_node,
+                                                const isl::schedule_node &exit_node);
+isl::schedule_node ReConstructSetOrSequenceNode(const isl::schedule_node &cur_node, const isl::schedule_node &orig_node,
+                                                const isl::schedule_node &exit_node,
+                                                const std::vector<size_t> &pos = {});
+isl::schedule_node ReConstructBandNode(const isl::schedule_node &cur_node, const isl::schedule_node &orig_node);
+
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

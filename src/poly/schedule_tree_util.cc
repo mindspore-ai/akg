@@ -17,6 +17,7 @@
 #include "poly/dma_inject.h"
 #include "poly/schedule_pass.h"
 #include "isl_schedule_node_private.h"
+#include <numeric>
 
 namespace akg {
 namespace ir {
@@ -1018,6 +1019,89 @@ isl::schedule_node ReplaceMarker(const isl::schedule_node &orig_node, const std:
     return node;
   };
   return orig_node.map_descendant_bottom_up(DeleteMarker);
+}
+
+// Reconstruct the schedule_tree, and insert the following child nodes in turn by recursive method.
+// Currently only set, sequence, band, filter, context, mark, leaf nodes are supported.
+isl::schedule_node ReConstructScheduleTree(const isl::schedule_node &cur_node, const isl::schedule_node &orig_node,
+                                           const isl::schedule_node &exit_node) {
+  if (!exit_node.is_null() && orig_node.is_equal(exit_node)) {
+    return cur_node;
+  }
+
+  auto node = cur_node;
+  if (orig_node.isa<isl::schedule_node_set>() || orig_node.isa<isl::schedule_node_sequence>()) {
+    return ReConstructSetOrSequenceNode(node, orig_node, exit_node);
+  } else if (orig_node.isa<isl::schedule_node_band>()) {
+    auto band = orig_node.as<isl::schedule_node_band>();
+    node = ReConstructBandNode(node, band);
+  } else if (orig_node.isa<isl::schedule_node_filter>()) {
+    auto filter = orig_node.as<isl::schedule_node_filter>();
+    node = node.insert_filter(filter.filter());
+  } else if (orig_node.isa<isl::schedule_node_context>()) {
+    auto context = orig_node.as<isl::schedule_node_context>();
+    node = node.insert_context(context.context());
+  } else if (orig_node.isa<isl::schedule_node_mark>()) {
+    auto mark = orig_node.as<isl::schedule_node_mark>();
+    node = node.insert_mark(mark.get_id().get_name());
+  } else if (orig_node.isa<isl::schedule_node_leaf>()) {
+    return node;
+  } else {
+    LOG(FATAL) << "Currently only set, sequence, band, filter, context, mark, leaf nodes are supported.";
+  }
+  return ReConstructChildScheduleTree(node, orig_node, exit_node);
+}
+
+// Insert the following child nodes in turn by recursive method.
+isl::schedule_node ReConstructChildScheduleTree(const isl::schedule_node &cur_node, const isl::schedule_node &orig_node,
+                                                const isl::schedule_node &exit_node) {
+  if (orig_node.n_children() == 0) {
+    return cur_node;
+  }
+  return ReConstructScheduleTree(cur_node.child(0), orig_node.child(0), exit_node).parent();
+}
+
+isl::schedule_node ReConstructSetOrSequenceNode(const isl::schedule_node &cur_node, const isl::schedule_node &orig_node,
+                                                const isl::schedule_node &exit_node, const std::vector<size_t> &pos) {
+  std::vector<size_t> new_pos(orig_node.n_children());
+  if (pos.size() == 0) {
+    std::iota(std::begin(new_pos), std::end(new_pos), 0);
+  } else {
+    new_pos = pos;
+  }
+
+  auto filters = isl::union_set_list(cur_node.ctx(), orig_node.n_children());
+  for (size_t i = 0; i < new_pos.size(); ++i) {
+    auto child_node = orig_node.child(new_pos[i]);
+    if (child_node.isa<isl::schedule_node_filter>()) {
+      auto filter = child_node.as<isl::schedule_node_filter>();
+      filters = filters.add(filter.get_filter());
+    }
+  }
+
+  auto node = cur_node;
+  if (orig_node.isa<isl::schedule_node_sequence>()) {
+    node = node.insert_sequence(filters);
+  } else {
+    node = node.insert_set(filters);
+  }
+
+  for (size_t i = 0; i < new_pos.size(); ++i) {
+    node = ReConstructChildScheduleTree(node.child(i), orig_node.child(new_pos[i]), exit_node).parent();
+  }
+  return node;
+}
+
+isl::schedule_node ReConstructBandNode(const isl::schedule_node &cur_node, const isl::schedule_node &orig_node) {
+  auto orig_band = orig_node.as<isl::schedule_node_band>();
+  auto node = cur_node.insert_partial_schedule(orig_band.get_partial_schedule());
+
+  auto band_node = node.as<isl::schedule_node_band>();
+  band_node = band_node.set_permutable(orig_band.permutable());
+  for (size_t i = 0; i < orig_band.n_member(); ++i) {
+    band_node = band_node.member_set_coincident(i, orig_band.member_get_coincident(i));
+  }
+  return band_node;
 }
 
 }  // namespace poly

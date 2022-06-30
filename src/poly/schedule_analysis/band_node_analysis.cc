@@ -102,16 +102,82 @@ class OperatorInfoCollector {
   void Run() {
     auto op_type = scop_info_.analysis_result_.GetOpTemplate();
     if (op_type == Template::REDUCTION) {
-      RecordReduceInfo();
+      RecordReduceInfo(true);
     } else if (op_type == Template::MATMUL || op_type == Template::CONV) {
       if (scop_info_.user_config_.GetTarget() == TARGET_CPU) {
-        RecordReduceInfo();
+        RecordReduceInfo(false);
       }
       RecordMatmulInfo();
     }
   }
 
-  void RecordReduceInfo() {
+  void RecordReduceDirection(std::unordered_set<std::string> &reduce_attrs, const Provide *op, isl::id red_id) {
+    ReduceDirection reduce_direction = ReduceDirection::UNKNOWN;
+    if (scop_info_.analysis_result_.GetCsr()) {
+      // If CSR has feature dimension, threadIdx.x should map to the feature
+      // dimension instead, to keep continuous memory load/save
+      if (scop_info_.analysis_result_.GetCsrFeatLen() > 1) {
+        reduce_direction = ReduceDirection::Y;
+      } else {
+        reduce_direction = ReduceDirection::X;
+      }
+    } else {
+      PostOrderVisit(op->value, [&reduce_direction, &reduce_attrs, op, this](const NodeRef &node) -> void {
+        if (reduce_direction == ReduceDirection::Y) {
+          return;
+        }
+        auto call = node.as<Call>();
+        if (call == nullptr || call->call_type != Call::CallType::Halide ||
+            call->func->func_name() == op->func->func_name() || call->args.empty()) {
+          return;
+        }
+        int call_size = static_cast<int>(call->args.size());
+        int reduce_position = -1;
+        int non_variable_count = 0;
+        bool is_continuous = true;
+        for (int i = call_size - 1; i >= 0; --i) {
+          auto last_axis = call->args[i];
+          auto mod = last_axis.as<FloorMod>();
+          auto var = mod != nullptr ? mod->a.as<Variable>() : last_axis.as<Variable>();
+          if (var != nullptr) {
+            reduce_position = reduce_attrs.count(var->name_hint) ? i : reduce_position;
+            is_continuous = false;
+          } else if (var == nullptr && is_continuous) {
+            ++non_variable_count;
+          }
+        }
+        if (reduce_position == -1) {
+          return;
+        }
+
+        bool is_all_reduce = true;
+        for (int i = 0; i < static_cast<int>(op->args.size()); ++i) {
+          if (op->args[i].as<IntImm>() == nullptr || op->args[i].as<IntImm>()->value != 0) {
+            is_all_reduce = false;
+            break;
+          }
+        }
+        scop_info_.user_config_.SetTileCheckCoincident(!is_all_reduce);
+
+        if (is_all_reduce) {
+          reduce_direction = ReduceDirection::ALL;
+          return;
+        }
+
+        if (reduce_position == call_size - non_variable_count - 1) {
+          reduce_direction = ReduceDirection::X;
+        } else {
+          reduce_direction = ReduceDirection::Y;
+        }
+      });
+    }
+    if (reduce_direction == ReduceDirection::UNKNOWN) {
+      LOG(WARNING) << "Cannot identify reduce direction for stmt " << red_id;
+    }
+    scop_info_.analysis_result_.RecordReduceDirection(red_id, reduce_direction);
+  }
+
+  void RecordReduceInfo(const bool is_reduce_operator) {
     for (auto &rm : scop_info_.analysis_result_.GetReduceMap()) {
       auto op = rm.first;
       auto reduce_iter_var = rm.second;
@@ -134,20 +200,7 @@ class OperatorInfoCollector {
         reduce_attrs.insert(r->var->name_hint);
       }
 
-      auto args = op->args;
-      std::vector<const Variable *> vars_not_reduce;
-      for (auto &a : args) {
-        ExtractAxisNotUsed(vars_not_reduce, reduce_attrs).Run(a);
-      }
-
-      bool is_all_reduce = vars_not_reduce.size() == 0;
-      scop_info_.user_config_.SetTileCheckCoincident(!is_all_reduce);
-      if (is_all_reduce) {
-        scop_info_.analysis_result_.RecordReduceDirection(red_id, ReduceDirection::ALL);
-      }
-      isl::ctx ctx = op_domain.tuple.ctx();
-
-      isl::aff_list aff_list = isl::aff_list(ctx, 0);
+      isl::aff_list aff_list = isl::aff_list(op_domain.tuple.ctx(), 0);
       for (auto id : op_domain.tuple.get_id_list()) {
         if (reduce_attrs.count(id.get_name()) == 1) {
           continue;
@@ -170,76 +223,24 @@ class OperatorInfoCollector {
       if (type == AKG_REDUCE_AND || type == AKG_REDUCE_OR) {
         scop_info_.analysis_result_.SetOpTemplate(Template::BITWISE_REDUCTION);
       }
-      if (AkgSupportedReduceOp.count(type) != 0) {
+
+      if (is_reduce_operator) {
         reduce_tensor_info.write_tensor_name = op->func->func_name();
         SetReduceWriteDataType(reduce_tensor_info);
         scop_info_.analysis_result_.UpdateReduceTensorInfoMap(red_id, reduce_tensor_info);
+      }
 
-        ReduceDirection reduce_direction = ReduceDirection::UNKNOWN;
-        if (scop_info_.analysis_result_.GetCsr()) {
-          // If CSR has feature dimension, threadIdx.x should map to the feature
-          // dimension instead, to keep continuous memory load/save
-          if (scop_info_.analysis_result_.GetCsrFeatLen() > 1) {
-            reduce_direction = ReduceDirection::Y;
-          } else {
-            reduce_direction = ReduceDirection::X;
-          }
-        } else {
-          PostOrderVisit(op->value, [&reduce_direction, &reduce_attrs, op](const NodeRef &node) -> void {
-            if (reduce_direction == ReduceDirection::Y) {
-              return;
-            }
-            auto call = node.as<Call>();
-            if (call == nullptr || call->call_type != Call::CallType::Halide ||
-                call->func->func_name() == op->func->func_name() || call->args.empty()) {
-              return;
-            }
-            int call_size = static_cast<int>(call->args.size());
-            int reduce_position = -1;
-            int non_variable_count = 0;
-            bool is_continuous = true;
-            for (int i = call_size - 1; i >= 0; --i) {
-              auto last_axis = call->args[i];
-              auto mod = last_axis.as<FloorMod>();
-              auto var = mod != nullptr ? mod->a.as<Variable>() : last_axis.as<Variable>();
-              if (var != nullptr) {
-                reduce_position = reduce_attrs.count(var->name_hint) ? i : reduce_position;
-                is_continuous = false;
-              } else if (var == nullptr && is_continuous) {
-                ++non_variable_count;
-              }
-            }
-            if (reduce_position == -1) {
-              return;
-            }
-
-            bool is_all_reduce = true;
-            for (int i = 0; i < static_cast<int>(op->args.size()); ++i) {
-              if (op->args[i].as<IntImm>() == nullptr || op->args[i].as<IntImm>()->value != 0) {
-                is_all_reduce = false;
-                break;
-              }
-            }
-
-            if (is_all_reduce) {
-              reduce_direction = ReduceDirection::ALL;
-              return;
-            }
-
-            if (reduce_position == call_size - non_variable_count - 1) {
-              reduce_direction = ReduceDirection::X;
-            } else {
-              reduce_direction = ReduceDirection::Y;
-            }
-          });
+      if (AkgSupportedReduceOp.count(type) == 0) {
+        if (is_reduce_operator) {
+          LOG(WARNING) << red_id << " does not detect the reduce operator type!";
+          scop_info_.analysis_result_.SetUseGpuReduceLib(false);
         }
-        if (reduce_direction == ReduceDirection::UNKNOWN) {
-          LOG(WARNING) << "Cannot identify reduce direction for stmt " << red_id;
-        }
-        scop_info_.analysis_result_.RecordReduceDirection(red_id, reduce_direction);
-        if (scop_info_.user_config_.GetEnableAkgReduceLib()) {
-          scop_info_.analysis_result_.SetUseGpuReduceLib(true);
-        }
+        return;
+      }
+
+      RecordReduceDirection(reduce_attrs, op, red_id);
+      if (scop_info_.user_config_.GetEnableAkgReduceLib()) {
+        scop_info_.analysis_result_.SetUseGpuReduceLib(true);
       }
     }
   }

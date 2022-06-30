@@ -76,8 +76,7 @@ isl::schedule TileOuterBand::Run(isl::schedule sch) {
   }
 
   auto map_before_tile = sch.get_map();
-  if (final_schedule.get_map().is_equal(map_before_tile) &&
-    scop_info_.user_config_.GetConsiderCoincidence()) {
+  if (final_schedule.get_map().is_equal(map_before_tile) && scop_info_.user_config_.GetConsiderCoincidence()) {
     if (scop_info_.user_config_.GetTarget() == TARGET_CCE) {
       scop_info_.analysis_result_.SetRestartPassName(RestartPassName::TILE_OUTER_BAND);
     } else {
@@ -109,9 +108,8 @@ isl::schedule TileOuterBand::TileOuterBandHelper(const isl::schedule sch,
 
 bool TileOuterBand::SubtreeHasPermutableBands(const isl::schedule_node &node) {
   bool all_non_permutable = false;
-  all_non_permutable = node.every_descendant([&, this](const isl::schedule_node &node) -> bool {
-    return BoolNot(IsPermutable(node));
-  });
+  all_non_permutable =
+    node.every_descendant([&, this](const isl::schedule_node &node) -> bool { return BoolNot(IsPermutable(node)); });
 
   return BoolNot(all_non_permutable);
 }
