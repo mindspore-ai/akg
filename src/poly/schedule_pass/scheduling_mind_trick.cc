@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#ifdef AKG_USE_MLS
+
 #include "scheduling_mind_trick.h"
 
 #include <fstream>
@@ -346,12 +348,14 @@ int AccessInfo::AccessSwizzleSize(const isl::map &access) {
   const isl::aff &maxbound_aff = maxbound.as_aff();
   const isl::val &maxbound_val = maxbound_aff.constant_val().add(1);
 
-  if (!maxbound_val.ge(2)) {
+  constexpr long lower_limit = 2;
+  constexpr long upper_limit = 4;
+  if (!maxbound_val.ge(lower_limit)) {
     return none;
-  } else if (!maxbound_val.ge(4) && maxbound_val.mod(2).eq(0)) {
+  } else if (!maxbound_val.ge(upper_limit) && maxbound_val.mod(lower_limit).eq(0)) {
     constexpr int two_elements_swizzle = 2;
     return two_elements_swizzle;
-  } else if (maxbound_val.mod(4).ne(0)) {
+  } else if (maxbound_val.mod(upper_limit).ne(0)) {
     return none;
   }
 
@@ -479,13 +483,17 @@ int DimensionsDecision::BestOutermostSwizzleDimension(const isl::set &statement,
 }
 
 float DimensionsDecision::Score(void) const {
-  float result = .0;
+  constexpr long int high_threshold = 1024;
+  constexpr long int low_threshold = 128;
+  constexpr float high_score = 3.0;
+  constexpr float low_score = 3.0;
 
+  float result = .0;
   result += static_cast<float>(swizzle_size_);
-  if (max_consecutive_bytes_ >= 1024) {
-    result += 3.0;
-  } else if (max_consecutive_bytes_ >= 128) {
-    result += 1.0;
+  if (max_consecutive_bytes_ >= high_threshold) {
+    result += high_score;
+  } else if (max_consecutive_bytes_ >= low_threshold) {
+    result += low_score;
   }
 
   return result;
@@ -2248,3 +2256,5 @@ void SchedulingMindTrick::SetType(MindTrickType type) { type_ = type; }
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg
+
+#endif  // AKG_USE_MLS

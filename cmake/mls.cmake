@@ -1,4 +1,8 @@
-option(AKG_USE_MLS "Use MLSched polyhedral scheduler" ON)
+option(AKG_USE_MLS "Use MLSched polyhedral scheduler" OFF)
+
+if(NOT USE_CUDA AND NOT USE_LLVM)
+  set(AKG_USE_MLS ON)
+endif()
 
 if (AKG_USE_MLS)
   execute_process(

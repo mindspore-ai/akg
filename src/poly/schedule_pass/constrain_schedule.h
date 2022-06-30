@@ -15,6 +15,7 @@
  */
 #ifndef POLY_CONSTRAIN_SCHEDULE_H_
 #define POLY_CONSTRAIN_SCHEDULE_H_
+#ifdef AKG_USE_MLS
 
 // STL headers
 #include <vector>
@@ -104,4 +105,5 @@ class ConstrainSchedule : public SchedulePass {
 }  // namespace ir
 }  // namespace akg
 
+#endif  // AKG_USE_MLS
 #endif  // POLY_CONSTRAIN_SCHEDULE_H_
