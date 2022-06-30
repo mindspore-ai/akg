@@ -17,9 +17,20 @@
 
 namespace akg {
 namespace ir {
-class TensorAttrsAdder : public IRMutator {
+/* Add attr passed from composite for a specific tensor
+ * === Example 1 ===
+ * for (ax0, 0, 16)
+ *   for (a10, 0, 16)
+ *     T(ax0, ax1) = input0(ax0, ax1)
+ * -->
+ *  for (ax0, 0, 16)
+ *   for (a10, 0, 16)
+ *     // attr [{"enable_auto_inplace": (int)1}] attrs = 1
+ *     T(ax0, ax1) = input0(ax0, ax1)
+ */
+class AddTensorAttrsMutator : public IRMutator {
  public:
-  explicit TensorAttrsAdder(const Map<Tensor, Map<std::string, NodeRef>> &attrs) {
+  explicit AddTensorAttrsMutator(const Map<Tensor, Map<std::string, NodeRef>> &attrs) {
     for (const auto &kv : attrs) {
       (void)attrs_.emplace(kv.first->op, kv.second);
     }
@@ -27,17 +38,19 @@ class TensorAttrsAdder : public IRMutator {
 
   Stmt Mutate_(const Provide *op, const Stmt &s) final {
     if (attrs_.count(op->func) > 0) {
-      return AttrStmt::make(attrs_[op->func], "tensor_attrs", Expr(1), s);
+      return AttrStmt::make(attrs_[op->func], kTensorAttrs, Expr(1), s);
     }
     return IRMutator::Mutate_(op, s);
   }
 
  private:
-    std::unordered_map<FunctionRef, Map<std::string, NodeRef>, NodeHash, NodeEqual>attrs_;
+  std::unordered_map<FunctionRef, Map<std::string, NodeRef>, NodeHash, NodeEqual> attrs_;
 };
 
-Stmt AddTensorAttrs(Stmt stmt, const Map<Tensor, Map<std::string, NodeRef>> &attrs) {
-  return TensorAttrsAdder(attrs).Mutate(stmt);
+Stmt AddTensorAttrs(const Stmt &stmt, const Map<Tensor, Map<std::string, NodeRef>> &attrs) {
+  AddTensorAttrsMutator attr_adder(attrs);
+  Stmt s = attr_adder.Mutate(stmt);
+  return s;
 }
 }  // namespace ir
 }  // namespace akg
