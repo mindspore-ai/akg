@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 #include "tvm.h"
+#include "codegen/util.h"
 
 namespace akg {
 namespace ir {
