@@ -848,8 +848,6 @@ class HybridParser(ast.NodeVisitor):
                          "The loop iterator should be a variable!")
         if isinstance(ext, _expr.Expr):
             ext = _ir_pass.Simplify(ext)
-        if isinstance(ext, _expr.ConstExpr) and ext.value <= 0:
-            return util.make_nop()
 
         _name = node.target.id
 
