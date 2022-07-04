@@ -1882,7 +1882,7 @@ void GpuStrategy::BroadcastSpeedup() {
     TileAxis *first_axis = nullptr;
     TileAxis *last_axis = nullptr;
     auto parallel_size = GetProposalParallelSize(problem_size);
-    auto vectorizaed_size = analyzer_->scop_info_.user_config_.GetVectorLength();
+    auto vectorized_loop_size = analyzer_->scop_info_.analysis_result_.GetVectorizedLoopSize();
     analyzer_->ForEachAxisTopDown([this, &depth, &first_axis, &last_axis](TileAxis *axis) {
       if (axis == analyzer_->RootAxis() || axis->range_extent.as<IntImm>() == nullptr || axis->index != band_index_) {
         return;
@@ -1905,20 +1905,20 @@ void GpuStrategy::BroadcastSpeedup() {
     }
 
     ss << "\nProblem size = " << problem_size << " parallel size = " << parallel_size.first * parallel_size.second
-       << " vec size " << vectorizaed_size;
+       << " vec size " << vectorized_loop_size;
 
     if (axis != nullptr && (!axis->HasAttr(AT_VECTORIZED) || !current_outer_bn_->enable_vectorization)) {
       auto min_aligned = analyzer_->FindDivisibleTilingFactor(min_elem_for_io_bound_, axis->extent_val);
       auto coef = current_outer_bn_->enable_vectorization ? 1 : double_;
       auto max_aligned = analyzer_->FindDivisibleTilingFactor(coef * min_elem_for_io_bound_, axis->extent_val);
       if (max_aligned > 1 &&
-          problem_size >= parallel_size.first * parallel_size.second * vectorizaed_size * max_aligned) {
+          problem_size >= parallel_size.first * parallel_size.second * vectorized_loop_size * max_aligned) {
         axis->thread_constraints.item_process_ = max_aligned;
       } else if (min_aligned > 1 &&
-                 problem_size >= parallel_size.first * parallel_size.second * vectorizaed_size * min_aligned) {
+                 problem_size >= parallel_size.first * parallel_size.second * vectorized_loop_size * min_aligned) {
         axis->thread_constraints.item_process_ = min_aligned;
       } else if (problem_size >=
-                 parallel_size.first * parallel_size.second * vectorizaed_size * min_elem_for_io_bound_) {
+                 parallel_size.first * parallel_size.second * vectorized_loop_size * min_elem_for_io_bound_) {
         axis->thread_constraints.item_process_ = min_elem_for_io_bound_;
       }
       ss << "\nBroadcast item process = " << axis->thread_constraints.item_process_;
@@ -2432,8 +2432,8 @@ void CountStrategy::AddGpuConstraint() {
 }
 
 void VectorizedStrategy::AddGpuConstraint() {
-  auto vectorized_size = analyzer_->scop_info_.user_config_.GetVectorLength();
-  if (!analyzer_->scop_info_.user_config_.GetEnableVectorization() || vectorized_size == 0) {
+  auto vectorized_loop_size = analyzer_->scop_info_.analysis_result_.GetVectorizedLoopSize();
+  if (!analyzer_->scop_info_.user_config_.GetEnableVectorization() || vectorized_loop_size == 0) {
     return;
   }
   auto gpu_strategy = GpuStrategy(analyzer_);
@@ -2454,19 +2454,19 @@ void VectorizedStrategy::AddGpuConstraint() {
 
     auto parallel_size = gpu_strategy.GetProposalParallelSize(axis->extent_val);
     auto curr_template = curr_band->template_type;
-    if (axis->extent_val % SafeDivisor(vectorized_size) != 0 ||
-        (axis->extent_val < parallel_size.second * vectorized_size && curr_template != Template::PAD_OP)) {
+    if (axis->extent_val % SafeDivisor(vectorized_loop_size) != 0 ||
+        (axis->extent_val < parallel_size.second * vectorized_loop_size && curr_template != Template::PAD_OP)) {
       continue;
     }
     std::stringstream ss;
     ss << "Enable Vectorization for " << axis->index << "_" << axis->dim_axis;
-    axis->thread_constraints.map_mod_ = vectorized_size;
-    axis->c1_constraints.tile_mod_ = vectorized_size;
-    axis->TileRestrainToSingleValue(CastIntToExpr(vectorized_size), TileLevel::CACHE0);
+    axis->thread_constraints.map_mod_ = vectorized_loop_size;
+    axis->c1_constraints.tile_mod_ = vectorized_loop_size;
+    axis->TileRestrainToSingleValue(CastIntToExpr(vectorized_loop_size), TileLevel::CACHE0);
     if (axis->extent_val < parallel_size.first * parallel_size.second) {
       auto min_threads = std::min<int64_t>(total_available_thread_, axis->extent_val);
-      axis->thread_constraints.map_extent_ = min_threads / SafeDivisor(vectorized_size);
-    } else if (axis->extent_val > parallel_size.first * parallel_size.second * vectorized_size) {
+      axis->thread_constraints.map_extent_ = min_threads / SafeDivisor(vectorized_loop_size);
+    } else if (axis->extent_val > parallel_size.first * parallel_size.second * vectorized_loop_size) {
       axis->thread_constraints.map_extent_ = total_available_thread_ / SafeDivisor(gpu_strategy.double_);
       axis->thread_constraints.item_process_ = 1;
     }

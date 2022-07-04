@@ -307,7 +307,7 @@ class OperatorInfoCollector {
       if (enable_tensor_core) {
         // Default vectorization access mode (128 bits).
         if (scop_info_.user_config_.GetVectorLength() == 0 && scop_info_.user_config_.GetTarget() != TARGET_CPU) {
-          scop_info_.user_config_.SetVectorLength(PROMOTE_VECTORIZATION_BIT);
+          scop_info_.analysis_result_.SetVectorizedLength(VECTORIZED_128_BIT);
         }
       }
       scop_info_.user_config_.SetEnableMatmul(enable_matmul);
@@ -537,6 +537,9 @@ class OperatorInfoCollector {
     }
 
     SetMmaModeForTensor(tensor_a_name, tensor_b_name);
+    if (scop_info_.user_config_.GetTarget() == TARGET_CPU) {
+      SetPackBlockSize();
+    }
 
     if (tensor_c_type == Float(16) && enable_tensor_core) {
       std::string shared_tensors = tensor_a_name + " " + tensor_b_name + " " + tensor_c_name;
@@ -581,6 +584,22 @@ class OperatorInfoCollector {
       mma = {16, 16, 8};
     }
     scop_info_.analysis_result_.SetMmaMode(mma);
+  }
+
+  void SetPackBlockSize() {
+    std::string feature = scop_info_.user_config_.GetFeature();
+    if (feature.empty()) {
+      LOG(WARNING) << "The acquired feature is empty and will be set to the default value: sse.";
+      feature = SSE_INSTRUCTION_SET;
+    }
+    auto it = CpuPackABBlockSize.find(feature);
+    CHECK(it != CpuPackABBlockSize.end())
+      << "The instruction set supported by the cpu only includes sse, avx, avx2, avx512 and neon.";
+
+    PackBlockSize pack_block_size;
+    pack_block_size.pack_a_size = it->second[0];
+    pack_block_size.pack_b_size = it->second[1];
+    scop_info_.analysis_result_.SetPackBlockSize(pack_block_size);
   }
 
  private:
@@ -648,8 +667,8 @@ void AnalyzeBandNode::CheckVectorization(std::unique_ptr<OuterBandNode> &bn) {
 
 void AnalyzeBandNode::CheckVectorizationFromTensorSize(std::unique_ptr<OuterBandNode> &bn) {
   GetVectorizationTileSize(scop_info_);
-  int vectorized_length = scop_info_.user_config_.GetVectorLength();
-  if (vectorized_length == 0) {
+  auto vectorized_loop_size = scop_info_.analysis_result_.GetVectorizedLoopSize();
+  if (vectorized_loop_size == 0) {
     return;
   }
 
@@ -669,7 +688,7 @@ void AnalyzeBandNode::CheckVectorizationFromTensorSize(std::unique_ptr<OuterBand
     // vectorized size.
     // Elementwise operators: tensor does not need to be vectorized if its last axis is not divisible by the
     // vectorized size and the number of axes is greater than 1.
-    if (tensor_value % vectorized_length != 0 && (bn->template_type != Template::PURE_ELEM || tensor.size() > 1)) {
+    if (tensor_value % vectorized_loop_size != 0 && (bn->template_type != Template::PURE_ELEM || tensor.size() > 1)) {
       ++not_divisible_count;
     }
 
@@ -695,6 +714,7 @@ void AnalyzeBandNode::CheckVectorizationFromTensorSize(std::unique_ptr<OuterBand
 
 int AnalyzeBandNode::GetVectorizationAxisForCpu(std::unique_ptr<OuterBandNode> &bn) {
   auto bn_schedule_node = bn->node;
+  GetVectorizationTileSize(scop_info_);
 
   auto n_member = static_cast<int>(bn_schedule_node.n_member());
   bool is_reduce_op = (bn->template_type == Template::REDUCTION || bn->template_type == Template::BITWISE_REDUCTION);

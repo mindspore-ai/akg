@@ -483,7 +483,6 @@ constexpr auto FOR_UNROLLED = "for_unrolled";
 constexpr auto FOR_SWIZZLED = "for_swizzled";
 
 constexpr auto SHARED_MEM_PROMOTED_COMPLETE = "shared_mem_promoted_complete";
-constexpr auto PROMOTE_VECTORIZATION_BIT = 128;
 constexpr auto THREAD_MARKER = "thread_marker";
 constexpr auto BLOCK_MARKER = "block_marker";
 constexpr auto WARP_MARKER = "warp_marker";
@@ -510,6 +509,20 @@ constexpr auto LOCAL_SUFFIX = "_local";
 constexpr auto SHARE_SUFFIX = "_shared";
 constexpr auto PROMOTION_INFIX = "_promotion_";
 
+// cpu instruction set
+constexpr auto BLOCK_SIZE_4 = 4;
+constexpr auto BLOCK_SIZE_8 = 8;
+constexpr auto BLOCK_SIZE_16 = 16;
+constexpr auto ONE_BYTE_TO_BIT = 8;
+constexpr auto VECTORIZED_128_BIT = 128;
+constexpr auto VECTORIZED_256_BIT = 256;
+constexpr auto VECTORIZED_512_BIT = 512;
+constexpr auto SSE_INSTRUCTION_SET = "sse";
+constexpr auto AVX_INSTRUCTION_SET = "avx";
+constexpr auto AVX2_INSTRUCTION_SET = "avx2";
+constexpr auto AVX512_INSTRUCTION_SET = "avx512";
+constexpr auto NEON_INSTRUCTION_SET = "neon";
+
 const std::unordered_set<std::string> AkgSupportedReduceOp = {AKG_REDUCE_SUM, AKG_REDUCE_MIN, AKG_REDUCE_MAX,
                                                               AKG_REDUCE_AND, AKG_REDUCE_OR,  AKG_REDUCE_PROD};
 
@@ -534,6 +547,19 @@ const std::unordered_map<std::string, air::ir::ForType> AkgSupportedForType = {
   {FOR_VECTORIZED, air::ir::ForType::Vectorized},
   {FOR_UNROLLED, air::ir::ForType::Unrolled},
   {FOR_SWIZZLED, air::ir::ForType::Swizzled}};
+
+const std::unordered_map<std::string, int> CpuInstructionSetBits = {{NEON_INSTRUCTION_SET, VECTORIZED_128_BIT},
+                                                                    {SSE_INSTRUCTION_SET, VECTORIZED_128_BIT},
+                                                                    {AVX_INSTRUCTION_SET, VECTORIZED_256_BIT},
+                                                                    {AVX2_INSTRUCTION_SET, VECTORIZED_256_BIT},
+                                                                    {AVX512_INSTRUCTION_SET, VECTORIZED_512_BIT}};
+
+static std::unordered_map<std::string, std::vector<int>> CpuPackABBlockSize = {
+  {NEON_INSTRUCTION_SET, {BLOCK_SIZE_16, BLOCK_SIZE_4}},
+  {SSE_INSTRUCTION_SET, {BLOCK_SIZE_8, BLOCK_SIZE_4}},
+  {AVX_INSTRUCTION_SET, {BLOCK_SIZE_8, BLOCK_SIZE_4}},
+  {AVX2_INSTRUCTION_SET, {BLOCK_SIZE_8, BLOCK_SIZE_4}},
+  {AVX512_INSTRUCTION_SET, {BLOCK_SIZE_8, BLOCK_SIZE_4}}};
 
 constexpr auto DEC = 10;
 
