@@ -95,10 +95,6 @@ size_t CountConsecutiveCoincident(const isl::schedule_node &node);
  */
 isl::schedule_node TileBand(isl::schedule_node node, const isl::multi_val &sizes);
 
-std::vector<int> GetTileSizeOfLevel(const int member_size, const int dim_size, const std::string &tile_level,
-                                    TileSizes tile_sizes, const int count_coincident = -1,
-                                    const std::vector<int> &warp_list = {});
-
 /*
  * Obtain the information needed during the data promotion phase.
  */
