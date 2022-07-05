@@ -15,6 +15,7 @@
  */
 
 #ifdef USE_AKG_COMPILE_STUB
+#ifdef AKG_USE_MLS
 #include "poly/schedule_pass/scheduling_mind_trick.h"
 
 namespace akg {
@@ -33,4 +34,5 @@ std::tuple<std::string, std::string> AutoGenAscend910SoftConstraints(const ScopI
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg
+#endif  // AKG_USE_MLS
 #endif

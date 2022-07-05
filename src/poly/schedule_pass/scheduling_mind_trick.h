@@ -15,6 +15,7 @@
  */
 #ifndef POLY_SCHEDULING_MIND_TRICK_H_
 #define POLY_SCHEDULING_MIND_TRICK_H_
+#ifdef AKG_USE_MLS
 
 // STL includes
 #include <ostream>
@@ -331,4 +332,6 @@ std::tuple<std::string, std::string> AutoGenAscend910SoftConstraints(const ScopI
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg
+
+#endif  // AKG_USE_MLS
 #endif  // POLY_SCHEDULING_MIND_TRICK_H_

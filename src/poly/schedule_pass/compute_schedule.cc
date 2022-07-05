@@ -221,11 +221,11 @@ isl::schedule ComputeSchedule::Run(isl::schedule sch) {
   }
   pass_info_.constraints_ = MakeScheduleConstraints(sch, pass_info_);
 
+  isl::schedule result;
 #ifdef AKG_USE_MLS
   const bool enable_mlsched = MLSchedShouldBeUsed(scop_info_);
   bool enable_isl = !enable_mlsched;
 
-  isl::schedule result;
   if (enable_mlsched) {
     mls::bin::Options options = MLSchedOptionsInit(pass_info_, scop_info_);
     if (options.ShouldLogInternalDebugging()) {

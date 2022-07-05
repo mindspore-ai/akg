@@ -39,9 +39,11 @@ class PassMgrStrategy {
   void RegisterNormalizationPasses() { RegisterPass(std::make_shared<InitSchedule>(pass_info_, scop_info_)); }
   void RegisterSchedulingPasses() { RegisterPass(std::make_shared<ComputeSchedule>(pass_info_, scop_info_)); }
   void RegisterConstrainedScheduling() {
+#ifdef AKG_USE_MLS
     if (scop_info_.user_config_.GetEnableMindTrick()) {
       RegisterPass(std::make_shared<ConstrainSchedule>(pass_info_, scop_info_));
     }
+#endif  // AKG_USE_MLS
   }
   virtual void RegisterPasses() = 0;
   virtual void RegisterTilingPasses() = 0;   // each backend has different achievement

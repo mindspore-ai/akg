@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#ifdef AKG_USE_MLS
+
 #include "poly/schedule_pass/constrain_schedule.h"
 #include "build_module.h"
 
@@ -579,3 +581,5 @@ define_constrain_schedule_log_wrappers(Error)
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg
+
+#endif  // AKG_USE_MLS
