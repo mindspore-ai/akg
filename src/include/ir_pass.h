@@ -92,8 +92,6 @@ Stmt InjectTransferBufferScope(Stmt stmt);
  */
 Stmt ReconstructLayout(const Stmt &stmt);
 
-Stmt GemmFactor(const Stmt &stmt);
-
 Stmt AdjustParallelLoop(const Stmt &stmt);
 
 Stmt ReductionFactor(const Stmt &stmt, const Map<Tensor, Buffer> &extern_buffer);
