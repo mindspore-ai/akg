@@ -673,6 +673,7 @@ def tensor_scatter_add(inputs, attrs):
 def tensor_unsorted_segment_sum(inputs, attrs):
     attrs = {k: v for k, v in attrs.items()}
     num = attrs['num_segments']
+    process = attrs['process'] if 'process' in attrs else 'cuda'
     op_id = attrs['op_id'] if 'op_id' in attrs else 0
     if len(inputs) != 2:
         raise ValueError(f"2 inputs expected, but got {len(inputs)}")
@@ -688,25 +689,37 @@ def tensor_unsorted_segment_sum(inputs, attrs):
     output_shape = [num]
     if segment_len > 0:
         output_shape += data_shape[len(indices_shape):]
-    if len(indices_shape) > 1:
-        raise ValueError('only 1-D segment currently supported')
 
     def gen_ir(data, indices, out):
         ib = tvm.ir_builder.create()
         with ib.for_range_n(indices_shape, "i") as i:
             read_idx = ib.load(indices, i)
-            # 1-D segment
-            with ib.for_range_n(data_shape[1:], 'j') as j:
+            with ib.for_range_n(data_shape[len(indices_shape):], 'j') as j:
                 inbound = tvm.all((read_idx >= 0), (read_idx < num))
                 with ib.if_scope(inbound):
                     val = ib.load(data, i + j) + ib.load(out, [read_idx] + j)
                     ib.store(out, [read_idx] + j, val)
         return ib.get()
 
+    def gen_ir_ascend(data, indices, out):
+        ib = tvm.ir_builder.create()
+        with ib.for_range(0, num, "i") as i:
+            with ib.for_range_n(data_shape[len(indices_shape):], "j") as j:
+                ib.store(out, [i] + j, tvm.const(0, data.dtype))
+                with ib.for_range_n(indices_shape, "k") as k:
+                    read_idx = ib.load(indices, k)
+                    match_idx = read_idx == i
+                    with ib.if_scope(match_idx):
+                        val = ib.load(data, k + j) + ib.load(out, [i] + j)
+                        ib.store(out, [i] + j, val)
+        return ib.get()
+
+    ir_func = gen_ir_ascend if process == "aicore" else gen_ir
+
     output_name = "T_uss_" + data.op.name + "_" + indices.op.name
     out_buf = tvm.decl_buffer(output_shape, data.dtype, output_name)
     attrs = {"disable_inline_inject": True}
-    return tvm.extern([data.shape], [data, indices], lambda ins, outs: gen_ir(ins[0], ins[1], outs[0]),
+    return tvm.extern([data.shape], [data, indices], lambda ins, outs: ir_func(ins[0], ins[1], outs[0]),
                       dtype=data.dtype, out_buffers=[out_buf], name=output_name, attrs=attrs)
 
 

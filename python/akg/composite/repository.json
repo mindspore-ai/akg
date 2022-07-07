@@ -2344,5 +2344,27 @@
                 "file_name": "Fused_Cast_Reshape_Cast_ReduceSum_Mul_Sub_Mul_ReduceSum_split_17414949353385617647"
             }
         }
+    },
+    "9.Reshape9.Mul16.Mul18.Reshape11.Mul16.Sqrt1.Reshape13.Add110.Mul114.Pow1.Mul11.Mul16.Mul37.Mul1.Sub13.Mul1419.Pow8.Mul1.Mul1322.Mul110.Add11.Mul1622.Add12.Mul16.Mul117.Add110.112334": {
+        "1_1009020--.1_1005_1004.1_1005_1.1_1005_1004.1_1005_1-.1_1005_1004---": {
+            "float32-----------": {
+                "metadata": {
+                    "attrs": {
+                        "dim": "0 0 32 32 0 1 64 64"
+                    }
+                }
+            }
+        }
+    },
+    "5.Reshape5.Mul14.Sqrt1.Reshape7.Add15.Mul17.Pow1.Mul11.Mul16.Mul37.Mul1.Sub13.16": {
+        "1_1009020-.1_1005_1.1_1005_1004.1_1005_1.1_1005_1004": {
+            "float32-----": {
+                "metadata": {
+                    "attrs": {
+                        "dim": "0 0 32 32 0 1 64 64"
+                    }
+                }
+            }
+        }
     }
 }

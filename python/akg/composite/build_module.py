@@ -355,6 +355,7 @@ def _update_attrs_ascend(all_ops, attr):
     # For the MatMul/BatchMatMul with bias, the inline is necessary
     # For the Ascend, turn 'enable_auto_inline' off for composite op by default.
     attr["enable_auto_inline"] = any(i in all_ops for i in ["BatchMatMul", "MatMul"])
+    attr["multicore_loop_switch_hoist"] = "UnsortedSegmentSum" not in all_ops
     return attr
 
 
@@ -555,6 +556,20 @@ def _build_to_module_ascend(desc_s_in, desc_d_in, attr=None, use_repo=True):
     return func(process, True, segment_tree, segment_infos)
 
 
+def _set_backend(desc_d):
+    desc_d_process = desc_d
+    for i, op in enumerate(desc_d.get("op_desc")):
+        op_attrs = op.get("attr", [])
+        op_name = op.get("name", "")
+        if op_name != "UnsortedSegmentSum":
+            continue
+        op_attrs.append({'data_type': 'string', 'name': 'process', 'value': desc_d['process']})
+        op["attr"] = op_attrs
+        desc_d_process["op_desc"][i] = op
+    desc_s = json.dumps(desc_d_process)
+    return desc_s
+
+
 def build(kernel_desc, attrs=None, poly=True, use_repo=True):
     """
     build kernel with compute description in json format
@@ -580,7 +595,7 @@ def build(kernel_desc, attrs=None, poly=True, use_repo=True):
     if not ret:
         raise RuntimeError(info_adapter.msg)
         return False
-    desc_s = json.dumps(desc_d)
+    desc_s = _set_backend(desc_d)
 
     if attrs is None:
         attrs = dict()
