@@ -573,6 +573,7 @@ class CpuStrategy : public TilingStrategy {
  private:
   void BuildAxesQueue();
   void RecordTileValue();
+  void SetConv2dTileValue(int index);
   void SetMatMulTileValue(int index);
   bool SetReduceYTileValue(int index);
   void SetMultiLevelTileValue();

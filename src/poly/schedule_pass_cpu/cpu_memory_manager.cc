@@ -27,7 +27,8 @@ namespace ir {
 namespace poly {
 
 isl::schedule CpuMemoryManager::Run(isl::schedule sch) {
-  if (!scop_info_.user_config_.GetUseSharedMemory() || !scop_info_.user_config_.GetEnableMatmul()) {
+  if (!scop_info_.user_config_.GetUseSharedMemory() ||
+      (!scop_info_.user_config_.GetEnableMatmul() && !scop_info_.user_config_.GetEnableConv2dDirect())) {
     return sch;
   }
 
@@ -35,9 +36,16 @@ isl::schedule CpuMemoryManager::Run(isl::schedule sch) {
   return HoistCpuMemory();
 }
 
-isl::schedule CpuMemoryManager::HoistCpuMemory() {
+isl::schedule_node CpuMemoryManager::HoistCpuMemoryOnMark(const isl::schedule_node &orig_node) {
+  current_outer_bn_ = scop_info_.analysis_result_.GetOuterBandNode(band_index_);
+  if (!current_outer_bn_->use_shared_memory) {
+    return orig_node;
+  }
+
+  CreateClusterForOperator(orig_node);
+
   std::string mark_name = "";
-  auto HoistCpuMemoryOnMark = [this, &mark_name](isl::schedule_node node) -> isl::schedule_node {
+  auto GetMarkNode = [this, &mark_name](isl::schedule_node node) -> isl::schedule_node {
     if (!node.isa<isl::schedule_node_mark>()) {
       return node;
     }
@@ -50,28 +58,19 @@ isl::schedule CpuMemoryManager::HoistCpuMemory() {
     node = node.del().parent();
     return HoistClusters(node).child(0);
   };
+  auto node = orig_node;
+  for (auto name : mark_names_) {
+    mark_name = name;
+    node = MapDescendantTopDown(node, GetMarkNode);
+  }
+  node = InsertMarkerForVectorization(node);
+  return node;
+}
 
-  auto HoistCoreFunc = [this, HoistCpuMemoryOnMark,
-                        &mark_name](const isl::schedule_node &orig_node) -> isl::schedule_node {
-    current_outer_bn_ = scop_info_.analysis_result_.GetOuterBandNode(band_index_);
-    if (!current_outer_bn_->use_shared_memory) {
-      return orig_node;
-    }
-
-    mark_names_ = {PROMOTE_GLOBAL_TO_REGISTER};
-    CpuCreateCluster create_cluster(scop_info_, band_index_);
-    create_cluster.CreateClusterListForGemm(orig_node, mark_names_);
-    auto node = orig_node;
-    for (auto name : mark_names_) {
-      mark_name = name;
-      node = MapDescendantTopDown(node, HoistCpuMemoryOnMark);
-    }
-    return node;
-  };
-
+isl::schedule CpuMemoryManager::HoistCpuMemory() {
   isl::schedule_node node = GetOuterBand(schedule_.root());
   if (node.isa<isl::schedule_node_band>()) {
-    node = HoistCoreFunc(node);
+    node = HoistCpuMemoryOnMark(node);
   } else {
     int number = static_cast<int>(node.n_children());
     for (int i = 0, current_band_index = 0; i < number; ++i) {
@@ -80,7 +79,9 @@ isl::schedule CpuMemoryManager::HoistCpuMemory() {
         continue;
       }
       band_index_ = current_band_index;
-      node = HoistCoreFunc(promotion_node).ancestor(2);
+      mark_names_.clear();
+      node = HoistCpuMemoryOnMark(promotion_node);
+      node = node.parent().parent();
       ++current_band_index;
     }
   }
@@ -88,24 +89,24 @@ isl::schedule CpuMemoryManager::HoistCpuMemory() {
   return node.get_schedule();
 }
 
-bool CpuMemoryManager::IsInitFilter(const isl::schedule_node &orig_node) {
-  if (!orig_node.isa<isl::schedule_node_filter>()) {
-    return false;
+void CpuMemoryManager::CreateClusterForOperator(const isl::schedule_node &orig_node) {
+  CpuCreateCluster create_cluster(scop_info_, band_index_);
+  if (current_outer_bn_->template_type == Template::MATMUL) {
+    // matmul operator
+    mark_names_ = {PROMOTE_GLOBAL_TO_REGISTER};
+    create_cluster.CreateClusterListForGemm(orig_node, mark_names_);
+  } else if (current_outer_bn_->template_type == Template::CONV) {
+    // conv operator
+    mark_names_.emplace(PROMOTE_GLOBAL_TO_REGISTER_AB);
+    create_cluster.CreateClusterListForConv(orig_node, mark_names_);
   }
+}
 
-  bool is_init_filter = false;
-  auto filter_node = orig_node.as<isl::schedule_node_filter>();
-  auto filter = filter_node.get_filter();
-  filter.foreach_set([&is_init_filter, this](const isl::set &set) -> void {
-    auto id_name = set.get_tuple_id();
-    auto all_init_id = scop_info_.analysis_result_.GetReduceInitIds();
-    auto it = std::find(all_init_id.begin(), all_init_id.end(), id_name);
-    if (it != all_init_id.end()) {
-      is_init_filter = true;
-      return;
-    }
-  });
-  return is_init_filter;
+isl::schedule_node CpuMemoryManager::InsertMarkerForVectorization(const isl::schedule_node &orig_node) {
+  isl::schedule_node node = orig_node;
+  node = InsertMarkerForPromotedNode(node, WRITE_ID_NAME, FOR_VECTORIZED, -1);
+  node = InsertMarkerForPromotedNode(node, READ_ID_NAME, FOR_VECTORIZED, -1);
+  return node;
 }
 
 isl::schedule_node CpuMemoryManager::HoistClusters(const isl::schedule_node &node) {
@@ -186,51 +187,6 @@ isl::schedule_node CpuMemoryManager::HoistMemory(isl::schedule_node &tree, GpuMe
   auto res_node = PlaceOuterDataCopyBelow(scop_info_, tree, cluster, tensor_id, dst_tensor_id, out_schedule,
                                           tree.get_schedule().get_domain().get_space());
   return res_node;
-}
-
-isl::schedule CpuMemoryManager::InsertVectorizedMarker(const isl::schedule &sch) {
-  auto GetPromotedWriteFilter = [this](isl::schedule_node node) -> isl::schedule_node {
-    if (!node.isa<isl::schedule_node_band>() || !node.has_parent() || !node.parent().isa<isl::schedule_node_filter>()) {
-      return node;
-    }
-    auto filter_node = node.parent().as<isl::schedule_node_filter>();
-    isl::union_set uset = filter_node.get_filter();
-    bool is_gm_read = false;
-    uset.foreach_set([&is_gm_read](isl::set s) {
-      if (s.get_tuple_name() == READ_ID_NAME) {
-        is_gm_read = true;
-      }
-    });
-
-    if (!is_gm_read) {
-      return node;
-    }
-
-    auto name_uset = uset.unwrap().domain().unwrap().range();
-    name_uset.foreach_set([this, &node](isl::set s) {
-      auto matrix_name = s.get_tuple_name();
-      std::unordered_map<std::string, std::string> matmul_map = scop_info_.analysis_result_.GetMatrixMatmulMap();
-
-      if (matmul_map.find(matrix_name) == matmul_map.end()) {
-        return;
-      }
-
-      auto matrix_matmul_map = matmul_map[matrix_name];
-      if (matrix_matmul_map != MATRIX_A && matrix_matmul_map != MATRIX_B) {
-        return;
-      }
-
-      auto band_node = node.as<isl::schedule_node_band>();
-      node = band_node.split(band_node.n_member() - 1).child(0);
-      node = node.insert_mark(FOR_VECTORIZED);
-      node = node.parent();
-      return;
-    });
-
-    return node;
-  };
-  auto final_sch = sch.get_root().map_descendant_bottom_up(GetPromotedWriteFilter).schedule();
-  return final_sch;
 }
 
 }  // namespace poly

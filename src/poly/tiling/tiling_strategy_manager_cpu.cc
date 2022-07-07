@@ -40,7 +40,8 @@ void CpuStrategy::BuildAxesQueue() {
     }
     const auto r = axis->range_extent.as<IntImm>();
     if (r && r->value > 0 && !axis->is_inner) {
-      if (this->analyzer_->scop_info_.analysis_result_.GetOuterBandNode(axis->index)->template_type == Template::MATMUL) {
+      if (this->analyzer_->scop_info_.analysis_result_.GetOuterBandNode(axis->index)->template_type ==
+          Template::MATMUL) {
         axis->MarkWithAttr(AttrInfo{"axis_token", this->axes_name_[axis->dim_axis]});
       }
       this->pending_axes_[axis->index].emplace_back(std::make_pair(axis, r->value));
@@ -115,13 +116,94 @@ void CpuStrategy::SetParallelTileValue(TileAxis *axis, const int64_t axis_size, 
       tile_value = axis_size;
     }
   }
-  if (tile_value < min_unroll_num_) {
+  if (tile_value < min_unroll_num_ && is_unroll_axis) {
     tile_value = std::min(axis_size, static_cast<int64_t>(min_unroll_num_));
     c0_tile_value = tile_value;
   }
   tile_value = std::max(tile_value, c0_tile_value);
   axis->TileRestrainToSingleValue(Expr(tile_value), TileLevel::CACHE1);
   axis->TileRestrainToSingleValue(Expr(c0_tile_value), TileLevel::CACHE0);
+}
+
+void CpuStrategy::SetConv2dTileValue(int index) {
+  // format of conv2d tile should be: batch, oc_out, oh, ow, oc_in, ic_out.
+  // all of them can be 1, so we use axes_names to check the exist of each axis.
+
+  auto axes_names = analyzer_->scop_info_.analysis_result_.GetCpuConvolutionAxes();
+  int64_t p = 0;
+
+  // batch
+  if (axes_names.find(CONV_BATCH) != std::string::npos) {
+    TileAxis *batch_axis = nullptr;
+    int64_t _;
+    std::tie(batch_axis, _) = pending_axes_[index][p];
+    batch_axis->TileRestrainToSingleValue(Expr((int64_t)1), TileLevel::CACHE1);
+    batch_axis->TileRestrainToSingleValue(Expr((int64_t)1), TileLevel::CACHE0);    
+    p += 1;
+  }
+
+  // oc_out
+  if (axes_names.find(CONV_OC_OUT) != std::string::npos) {
+    TileAxis *oc_out_axis = nullptr;
+    int64_t _;
+    std::tie(oc_out_axis, _) = pending_axes_[index][p];
+    oc_out_axis->TileRestrainToSingleValue(Expr((int64_t)1), TileLevel::CACHE1);
+    oc_out_axis->TileRestrainToSingleValue(Expr((int64_t)1), TileLevel::CACHE0);
+    p += 1;
+  }
+
+  // oh
+  if (axes_names.find(CONV_OH) != std::string::npos) {
+    TileAxis *oh_axis = nullptr;
+    int64_t _;
+    std::tie(oh_axis, _) = pending_axes_[index][p];
+    oh_axis->TileRestrainToSingleValue(Expr((int64_t)1), TileLevel::CACHE1);
+    oh_axis->TileRestrainToSingleValue(Expr((int64_t)1), TileLevel::CACHE0);
+    p += 1;
+  }
+
+  // ow
+  if (axes_names.find(CONV_OW) != std::string::npos) {
+    TileAxis *ow_axis = nullptr;
+    int64_t ow_shape;
+    std::tie(ow_axis, ow_shape) = pending_axes_[index][p];
+
+    /* ow_inner should follow some strategy:
+    1. ow_shape % ow_tile == 0
+    2. ow_tile is smaller than simd length */
+    int64_t ow_tile = 1;
+    for (auto t = std::min((int64_t)31, ow_shape); t >= 1; t--) {
+      CHECK(t != 0) << "Divisor t is 0, please check it.";
+      if (ow_shape % t == 0) {
+        ow_tile = t;
+        break;
+      }
+    }
+    ow_axis->TileRestrainToSingleValue(Expr(ow_tile), TileLevel::CACHE1);
+    ow_axis->TileRestrainToSingleValue(Expr(ow_tile), TileLevel::CACHE0);
+    p += 1;
+  }
+
+  // oc_in
+  if (axes_names.find(CONV_OC_IN) != std::string::npos) {
+    TileAxis *oc_in_axis = nullptr;
+    int64_t oc_in_shape;
+    std::tie(oc_in_axis, oc_in_shape) = pending_axes_[index][p];
+    oc_in_axis->TileRestrainToSingleValue(Expr(oc_in_shape), TileLevel::CACHE1);
+    oc_in_axis->TileRestrainToSingleValue(Expr(oc_in_shape), TileLevel::CACHE0);
+    p += 1;
+  }
+
+  // ic_out
+  if (axes_names.find(CONV_IC_OUT) != std::string::npos) {
+    TileAxis *ic_out_axis = nullptr;
+    int64_t ic_out_shape;
+    std::tie(ic_out_axis, ic_out_shape) = pending_axes_[index][p];
+    ic_out_axis->TileRestrainToSingleValue(Expr(ic_out_shape), TileLevel::CACHE1);
+    ic_out_axis->TileRestrainToSingleValue(Expr((int64_t)1), TileLevel::CACHE0);
+    p += 1;
+  }
+
 }
 
 void CpuStrategy::SetMatMulTileValue(int index) {
@@ -177,7 +259,7 @@ void CpuStrategy::SetCsrTileValue() {
     axis->TileRestrainToSingleValue(Expr(CPU_CSR_TILING_FACTOR), TileLevel::CACHE0);
   }
   if (analyzer_->scop_info_.analysis_result_.GetOpTemplate() != Template::REDUCTION) {
-    analyzer_->ForEachAxisTopDown([this](TileAxis *a){
+    analyzer_->ForEachAxisTopDown([this](TileAxis *a) {
       if (a == this->analyzer_->RootAxis()) {
         return;
       }
@@ -196,7 +278,11 @@ void CpuStrategy::SetMultiLevelTileValue() {
   }
   for (auto idx = 0; idx < static_cast<int>(pending_axes_.size()); ++idx) {
     current_band_ = idx;
-    auto op_type = analyzer_->scop_info_.analysis_result_.GetOuterBandNode()->template_type;
+    auto op_type = analyzer_->scop_info_.analysis_result_.GetOuterBandNode(idx)->template_type;
+    if (op_type == Template::CONV) {
+      SetConv2dTileValue(idx);
+      continue;
+    }
     if (op_type == Template::MATMUL) {
       SetMatMulTileValue(idx);
       continue;

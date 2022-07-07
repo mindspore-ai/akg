@@ -290,6 +290,8 @@ class CodeGenLLVM :
   std::unordered_map<std::string, llvm::Constant*> str_map_;
   // Whether current function is restricted
   bool is_restricted_{true};
+  // input buffer default alignment
+  int input_alignment_{2};
   // The analyzer information
   std::unique_ptr<arith::Analyzer> analyzer_;
   // set of var that are not restricted(can alias)

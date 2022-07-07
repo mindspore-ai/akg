@@ -38,6 +38,10 @@
  * 2021.12.23 - Add intrinsic var for GEMM op on Cpu.
  */
 
+/*
+ * 2022.06.15 - Add mark of input buffers alignment.
+ */
+
 #ifndef TVM_IR_H_
 #define TVM_IR_H_
 
@@ -1295,6 +1299,8 @@ constexpr const char* bind_thread_x = "bind_thread_x";
 constexpr const char* wmma_scope = "wmma_scope";
 /*! \brief Mark of tensor_of_tensor */
 constexpr const char* atomic_tot = "atomic_tot";
+/*! \brief Mark of alignment of input buffers */
+constexpr const char* input_alignment = "input_alignment";
 
 /*!
  * \brief Mark of prefetch scope, value=offset,

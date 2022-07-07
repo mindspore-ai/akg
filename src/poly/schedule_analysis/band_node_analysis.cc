@@ -495,7 +495,7 @@ class OperatorInfoCollector {
   }
 
   bool CheckMatmul(const Provide *op, bool &enable_tensor_core) {
-    if (!scop_info_.user_config_.GetEnableMatmul()) {
+    if (!scop_info_.user_config_.GetEnableMatmul() && !scop_info_.user_config_.GetEnableConv2dDirect()) {
       return false;
     }
     Type tensor_c_type, tensor_a_type, tensor_b_type;
@@ -915,8 +915,9 @@ void AnalyzeBandNode::AnalyzeOuterBandTemplate(std::unique_ptr<OuterBandNode> &b
 }
 
 void AnalyzeBandNode::AnalyzeConvAndMatmulOp(const ProvideEntry &pe) {
-  if (pe.basic_op_type.find(AT_TRANSPOSE) == std::string::npos ||
-      pe.basic_op_type.find(AT_ELEMWISE) == std::string::npos) {
+  bool is_conv_or_gemm = (pe.basic_op_type.find(AT_TRANSPOSE) != std::string::npos) &&
+                         (pe.basic_op_type.find(AT_ELEMWISE) != std::string::npos);
+  if (!is_conv_or_gemm && !scop_info_.user_config_.GetEnableConv2dDirect()) {
     return;
   }
 
@@ -971,7 +972,7 @@ void AnalyzeBandNode::AnalyzeConvAndMatmulOp(const ProvideEntry &pe) {
 
   // construct relationship between loop indices and loop type(b/m/n/k) and mark axis with corresponding attribute
   std::string attr_key = "";
-  if (scop_info_.user_config_.GetEnableConvTensorCore()) {
+  if (scop_info_.user_config_.GetEnableConvTensorCore() || scop_info_.user_config_.GetEnableConv2dDirect()) {
     scop_info_.analysis_result_.SetOpTemplate(Template::CONV);
   } else {
     scop_info_.analysis_result_.SetOpTemplate(Template::MATMUL);

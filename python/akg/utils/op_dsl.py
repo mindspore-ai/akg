@@ -512,9 +512,120 @@ def custom_str(inputs, output, attr):
     output_name = output[0]['tensor_name']
     return func + "%s = %s(%s)\n" % (output_name, func_name, ','.join(params))
 
+def conv_2d_nchwc_str(inputs, output, attr):
+    
+    support_list = {"float32": 'np.float32'}
+    # NCHWc
+    shape_data = inputs[0][0]['shape']
+    shape_data_name = inputs[0][0]['tensor_name']
+    # OIHWio
+    shape_filter = inputs[1][0]['shape']
+    shape_filter_name = inputs[1][0]['tensor_name']
+    dtype = inputs[0][0]['data_type']
+    padding = get_attr(attr, "pad_list")
+    has_pad = np.sum(padding) > 0
+    stride = get_attr(attr, "stride")
+    dilation = get_attr(attr, "dilation")
+    out_dtype = output[0]["data_type"]
+    output_name = output[0]["tensor_name"]
+
+    res = ""
+    res += "n, c_i_o, h, w, c_i_i = {} \n".format(shape_data)
+    res += "c_o_o, c_i_o, kh, kw, c_i_i, c_o_i = {}\n".format(shape_filter)
+    res += "s_h, s_w = {}\n".format(stride)
+    res += "d_h, d_w = {}\n".format(dilation)
+    res += "p_l, p_r, p_t, p_b = {}\n".format(padding)
+    res += "k_h_d = (kh - 1) * d_h + 1\n"
+    res += "k_w_d = (kw - 1) * d_w + 1\n"
+    res += "out_h = (h + p_t + p_b - k_h_d) // s_h + 1\n"
+    res += "out_w = (w + p_l + p_r - k_w_d) // s_w + 1\n"
+
+    res += "out_shape = (n, c_o_o, out_h, out_w, c_o_i)\n"
+    res += "shape_data_pad = (n, c_i_o, h + p_t + p_b, w + p_l + p_r, c_i_i)\n"
+
+    res += "data_pad = np.zeros(shape_data_pad).astype({})\n".format(support_list[dtype])
+    if has_pad:
+        res += ("data_pad[:, :, p_t:p_t+h, p_l:p_l+w, :] = {}\n".format(shape_data_name))
+    else:
+        res += ("data_pad = {}\n".format(shape_data_name))
+
+    res += "{} = np.zeros(out_shape).astype({})\n".format(output_name, support_list[out_dtype])
+    res += "for oh in range(out_h):\n"
+    res += "    for ow in range(out_w):\n"
+    res += "        for ic_out in range(c_i_o):\n"
+    res += "            for khh in range(kh):\n"
+    res += "                for kww in range(kw):\n"
+    res += "                    for ic_in in range(c_i_i):\n"
+    compute_str = "{}[:, :, oh, ow, :] = {}[:, :, oh, ow, :] + \
+        data_pad[:, ic_out, oh*s_h+khh*d_h, ow*s_w+kww*d_w, ic_in] * {}[:, ic_out, khh, kww, ic_in, :]\n".format(
+        output_name, output_name, shape_filter_name
+    )
+    res += "                        " + compute_str
+
+    return res
+
+def depthwise_conv_2d_nchwc_str(inputs, output, attr):
+    
+    support_list = {"float32": 'np.float32'}
+    # NCHWc
+    shape_data = inputs[0][0]['shape']
+    shape_data_name = inputs[0][0]['tensor_name']
+    # OIHWio
+    shape_filter = inputs[1][0]['shape']
+    shape_filter_name = inputs[1][0]['tensor_name']
+    dtype = inputs[0][0]['data_type']
+    padding = get_attr(attr, "pad_list")
+    has_pad = np.sum(padding) > 0
+    stride = get_attr(attr, "stride")
+    dilation = get_attr(attr, "dilation")
+    out_dtype = output[0]["data_type"]
+    output_name = output[0]["tensor_name"]
+
+    res = ""
+    res += "n, c_i_o, h, w, c_i_i = {} \n".format(shape_data)
+    res += "c_o_o, cm_outer, kh, kw, cm_inner, c_o_i = {}\n".format(shape_filter)
+    res += "s_h, s_w = {}\n".format(stride)
+    res += "d_h, d_w = {}\n".format(dilation)
+    res += "p_l, p_r, p_t, p_b = {}\n".format(padding)
+    res += "k_h_d = (kh - 1) * d_h + 1\n"
+    res += "k_w_d = (kw - 1) * d_w + 1\n"
+    res += "out_h = (h + p_t + p_b - k_h_d) // s_h + 1\n"
+    res += "out_w = (w + p_l + p_r - k_w_d) // s_w + 1\n"
+
+    res += "out_shape = (n, c_o_o, out_h, out_w, c_o_i)\n"
+    res += "shape_data_pad = (n, c_i_o, h + p_t + p_b, w + p_l + p_r, c_i_i)\n"
+
+    res += "data_pad = np.zeros(shape_data_pad).astype({})\n".format(support_list[dtype])
+    if has_pad:
+        res += ("data_pad[:, :, p_t:p_t+h, p_l:p_l+w, :] = {}\n".format(shape_data_name))
+    else:
+        res += ("data_pad = {}\n".format(shape_data_name))
+
+    res += "{} = np.zeros(out_shape).astype({})\n".format(output_name, support_list[out_dtype])
+    res += "for oh in range(out_h):\n"
+    res += "    for ow in range(out_w):\n"
+    res += "        for oc_out in range(c_o_o):\n"
+    res += "            for khh in range(kh):\n"
+    res += "                for kww in range(kw):\n"
+    res += "                    for oc_in in range(c_o_i):\n"
+    compute_str = "{}[:, oc_out, oh, ow, oc_in] = {}[:, oc_out, oh, ow, oc_in] + \
+        data_pad[:, (oc_out*c_o_i+oc_in)//c_i_i, oh*s_h+khh*d_h, ow*s_w+kww*d_w, (oc_out*c_o_i+oc_in)%c_i_i] * {}[oc_out, 0, khh, kww, 0, oc_in]\n".format(
+        output_name, output_name, shape_filter_name
+    )
+    res += "                        " + compute_str
+
+    return res
 
 def conv_2d_str(inputs, output, attr):
     """gen conv_2d string"""
+    is_conv2d_nchwc = get_attr(attr, "data_format") == "NC1HWC0"
+    
+    if is_conv2d_nchwc:
+        is_depth_wise = get_attr(attr, "is_depth_wise") == True
+        if is_depth_wise:
+            return depthwise_conv_2d_nchwc_str(inputs, output, attr)
+        return conv_2d_nchwc_str(inputs, output, attr)
+
     support_list = {"float16": 'np.float16', "float32": 'np.float32'}
     shape_data = inputs[0][0]['shape']
     shape_data_name = inputs[0][0]['tensor_name']
@@ -605,6 +716,85 @@ def cummulative_str(inputs, outputs, attr, op_type):
     if reverse:
         res += "out = np.flip(out, axis=axis)\n"
     res += "{} = out\n".format(outputs[0]['tensor_name'])
+    return res
+
+def layout_transform_str(inputs, output, attr, op_type):
+    """gen layout_transform string"""
+
+    from akg.ops.nn.cpu import get_layout_list, get_tiled_pair, \
+                                get_idx_by_char, get_tile_by_char
+
+    res = "tmp_data = {}\n".format(get_input(inputs[0][0]))
+
+    tmp_data = np.zeros(inputs[0][0]['shape'])
+    data_layout = get_attr(attr, "src_format")
+    output_layout = get_attr(attr, "dst_format")
+    tmp_layout = get_layout_list(data_layout)
+    idx0, idx1 = get_tiled_pair(tmp_layout)
+
+    # Eliminate lower case
+    while idx0 != -1 and idx1 != -1:
+        perm = []
+        new_layout = []
+        new_shape = []
+        tmp_len = len(tmp_layout)
+        for idx in range(tmp_len):
+            if idx == idx0:
+                perm.append(idx0)
+                perm.append(idx1)
+                new_layout.append(tmp_layout[idx0])
+                new_shape.append(tmp_data.shape[idx0] * tmp_data.shape[idx1])
+            elif idx != idx1:
+                perm.append(idx)
+                new_layout.append(tmp_layout[idx])
+                new_shape.append(tmp_data.shape[idx])
+        tmp_data = np.transpose(tmp_data, perm)
+        res += "tmp_data = np.transpose(tmp_data, {})\n".format(str(perm))
+        tmp_data = np.reshape(tmp_data, new_shape)
+        res += "tmp_data = np.reshape(tmp_data, {})\n".format(str(new_shape))
+        tmp_layout = new_layout
+        idx0, idx1 = get_tiled_pair(tmp_layout)
+
+    dst_layout = get_layout_list(output_layout)
+    idx0, idx1 = get_tiled_pair(dst_layout)
+
+    # Split all
+    exclude_list = list()
+    while idx0 != -1 and idx1 != -1:
+        tmp_idx = get_idx_by_char(tmp_layout, dst_layout[idx0])
+        tmp_tile = get_tile_by_char(dst_layout, dst_layout[idx0].lower())
+        new_shape = []
+        new_layout = []
+        tmp_len = len(tmp_layout)
+        for i in range(tmp_len):
+            if i == tmp_idx:
+                new_shape.append(tmp_data.shape[i] // tmp_tile)
+                new_shape.append(tmp_tile)
+                new_layout.append(dst_layout[idx0])
+                new_layout.append(dst_layout[idx1])
+            else:
+                new_shape.append(tmp_data.shape[i])
+                new_layout.append(tmp_layout[i])
+        tmp_data = np.reshape(tmp_data, new_shape)
+        res += "tmp_data = np.reshape(tmp_data, {})\n".format(str(new_shape))
+        tmp_layout = new_layout
+        exclude_list.append(dst_layout[idx0])
+        idx0, idx1 = get_tiled_pair(dst_layout, exclude_list)
+
+    # Perm all
+    perm = []
+    dst_len = len(dst_layout)
+    tmp_len = len(tmp_layout)
+    for j in range(dst_len):
+        for i in range(tmp_len):
+            if tmp_layout[i] == dst_layout[j]:
+                perm.append(i)
+                break
+
+    tmp_data = np.transpose(tmp_data, perm)
+    res += "tmp_data = np.transpose(tmp_data, {})\n".format(str(perm))
+
+    res += "{} = tmp_data\n".format(output[0]['tensor_name'])
     return res
 
 
@@ -822,5 +1012,6 @@ op_dsl = {
     "Complex": lambda inputs, output, attr: "%s = np.vectorize(complex)(%s, %s)" %
     (output[0]['tensor_name'], get_input(inputs[0][0]),
                                                get_input(inputs[1][0])),
+    "LayoutTransform": lambda inputs, output, attr: layout_transform_str(inputs, output, attr, "layout_transform"),
     "Concat": lambda inputs, output, attr: concat_str(inputs, output, attr)
 }

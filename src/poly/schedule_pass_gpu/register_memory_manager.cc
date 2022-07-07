@@ -142,10 +142,10 @@ isl::schedule_node RegisterMemoryManager::InsertMarkerForEmit(const isl::schedul
     if (write_name_ == SHARED_WRITE_ID_NAME) {
       marker_name = PROMOTE_REGISTER_TO_SHARED;
     }
-    node = InsertMarkerForThreadGroup(node, write_name_, marker_name);
+    node = InsertMarkerForPromotedNode(node, write_name_, marker_name);
   } else if (current_outer_bn_->enable_vectorization) {
-    node = InsertMarkerForThreadGroup(node, GML_READ_ID_NAME, FOR_VECTORIZED);
-    node = InsertMarkerForThreadGroup(node, GML_WRITE_ID_NAME, FOR_VECTORIZED);
+    node = InsertMarkerForPromotedNode(node, GML_READ_ID_NAME, FOR_VECTORIZED);
+    node = InsertMarkerForPromotedNode(node, GML_WRITE_ID_NAME, FOR_VECTORIZED);
   }
   return node;
 }

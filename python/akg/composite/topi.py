@@ -363,46 +363,200 @@ def trans_data(inputs, attrs):
                          % (src_format, dst_format))
 
 
-@tvm.register_func("Conv2D")
-def conv2d_nhwc(inputs, attrs):
-    attrs = {k: v for k, v in attrs.items()}
-    # Check inputs and attrs
-    if len(inputs) != 2:
-        raise ValueError("length of inputs shoule be 2, but got %d." % len(inputs))
-    if "stride" not in attrs:
-        raise ValueError("stride not be found in the attrs")
-    data = inputs[0]
-    weight = inputs[1]
-    output_name = "T_conv2d_nhwc_" + data.op.name + "_" + weight.op.name
-    stride = attrs["stride"]
-    data_dtype = data.dtype
-    weight_dtype = weight.dtype
-    # Check data type
-    vc_util.ops_dtype_check(data_dtype, vc_util.DtypeForDavinci.FLOAT16)
-    vc_util.ops_dtype_check(weight_dtype, vc_util.DtypeForDavinci.FLOAT16)
-    # Check shape
-    if len(data.shape) != 4 or len(weight.shape) != 4:
-        raise ValueError("shape of data and weight should be 4-dim, but got %d and %d." % (len(data.shape),
-                                                                                           len(weight.shape)))
-    # Compute output
-    n, in_h, in_w, in_c = data.shape
-    out_c, k_h, k_w, in_c = weight.shape
-    _, _, s_h, s_w = stride
-    o_h = (in_h - k_h) // s_h + 1
-    o_w = (in_w - k_w) // s_w + 1
-    rc = tvm.reduce_axis((0, in_c), name="rc")
-    rh = tvm.reduce_axis((0, k_h), name="rh")
-    rw = tvm.reduce_axis((0, k_w), name="rw")
-    output = tvm.compute(
-        (n, o_h, o_w, out_c),
-        lambda n, h, w, o: tvm.sum(
-            data[n, (h * s_h + rh), (w * s_w + rw), rc]
-            * weight[o, rh, rw, rc],
-            axis=[rc, rh, rw]),
-        name=output_name
-    )
-    return output
+@tvm.register_func("LayoutTransform")
+def layout_transform(inputs, attrs):
+    # In mindspore, we use the field "format" as "layout" in akg.
+    return akg_topi.layout_transform(inputs[0], attrs["src_format"].value, attrs["dst_format"].value)
 
+@tvm.register_func("Conv2D")
+def conv2d(inputs, attrs):
+
+    def conv2d_nhwc_gpu(inputs, attrs):
+        attrs = {k: v for k, v in attrs.items()}
+        # Check inputs and attrs
+        if len(inputs) != 2:
+            raise ValueError("length of inputs shoule be 2, but got %d." % len(inputs))
+        if "stride" not in attrs:
+            raise ValueError("stride not be found in the attrs")
+        data = inputs[0]
+        weight = inputs[1]
+        output_name = "T_conv2d_nhwc_" + data.op.name + "_" + weight.op.name
+        stride = attrs["stride"]
+        data_dtype = data.dtype
+        weight_dtype = weight.dtype
+        # Check data type
+        vc_util.ops_dtype_check(data_dtype, vc_util.DtypeForDavinci.FLOAT16)
+        vc_util.ops_dtype_check(weight_dtype, vc_util.DtypeForDavinci.FLOAT16)
+        # Check shape
+        if len(data.shape) != 4 or len(weight.shape) != 4:
+            raise ValueError("shape of data and weight should be 4-dim, but got %d and %d." % (len(data.shape),
+                                                                                            len(weight.shape)))
+        # Compute output
+        n, in_h, in_w, in_c = data.shape
+        out_c, k_h, k_w, in_c = weight.shape
+        _, _, s_h, s_w = stride
+        o_h = (in_h - k_h) // s_h + 1
+        o_w = (in_w - k_w) // s_w + 1
+        rc = tvm.reduce_axis((0, in_c), name="rc")
+        rh = tvm.reduce_axis((0, k_h), name="rh")
+        rw = tvm.reduce_axis((0, k_w), name="rw")
+        output = tvm.compute(
+            (n, o_h, o_w, out_c),
+            lambda n, h, w, o: tvm.sum(
+                data[n, (h * s_h + rh), (w * s_w + rw), rc]
+                * weight[o, rh, rw, rc],
+                axis=[rc, rh, rw]),
+            name=output_name
+        )
+        return output
+
+    def conv2d_nchwc_cpu(inputs, attrs):
+        attrs = {k: v for k, v in attrs.items()}
+        # Check inputs and attrs
+        if len(inputs) != 2:
+            raise ValueError("length of inputs shoule be 2, but got %d." % len(inputs))
+        data = inputs[0]
+        weight = inputs[1]
+        output_name = "T_conv2d_nchwc_" + data.op.name + "_" + weight.op.name
+        stride = attrs["stride"]
+        dilation = attrs["dilation"]
+        data_dtype = data.dtype
+        weight_dtype = weight.dtype
+        # Check data type
+        vc_util.ops_dtype_check(data_dtype, vc_util.DtypeForDavinci.FLOAT32)
+        vc_util.ops_dtype_check(weight_dtype, vc_util.DtypeForDavinci.FLOAT32)
+        # Check shape
+        if len(data.shape) != 5 or len(weight.shape) != 6:
+            raise ValueError("shape of data and weight should be 5/6-dim, but got %d and %d." % (len(data.shape),
+                                                                                            len(weight.shape)))        
+
+        # data layout = NCHWc
+        batch, ic_outer, i_h, i_w, ic_inner = data.shape
+        oc_outer, ic_outer, k_h, k_w, _, oc_inner = weight.shape
+
+        pad_top, pad_bottom, pad_left, pad_right = attrs["pad"]
+        s_h, s_w = stride
+        d_h, d_w = dilation
+        k_h_d = (k_h - 1) * d_h + 1
+        k_w_d = (k_w - 1) * d_w + 1
+        o_h = (i_h + pad_top + pad_bottom - k_h_d) // s_h + 1
+        o_w = (i_w + pad_left + pad_right - k_w_d) // s_w + 1        
+
+        out_shape = (batch, oc_outer, o_h, o_w, oc_inner)
+
+        if pad_top == 0 and pad_bottom == 0 and pad_left == 0 and pad_right == 0:
+            data_pad = data
+        else:
+            data_pad = akg_topi.nn.pad(data, [0, 0, pad_top, pad_left, 0], [
+                                0, 0, pad_bottom, pad_right, 0], 0.0,)
+
+        ic_out = tvm.reduce_axis((0, ic_outer), name="ic_out")
+        ic_in = tvm.reduce_axis((0, ic_inner), name="ic_in")
+        kh = tvm.reduce_axis((0, k_h), name="kh")
+        kw = tvm.reduce_axis((0, k_w), name="kw")
+
+        out = tvm.compute(out_shape,
+                        lambda batch, oc_out, oh, ow, oc_in: tvm.sum(
+                            data_pad[batch,
+                                    ic_out,
+                                    oh * s_h + kh * d_h,
+                                    ow * s_w + kw * d_w,
+                                    ic_in,
+                                    ].astype("float32") *
+                            weight[oc_out,
+                                    ic_out,
+                                    kh,
+                                    kw,
+                                    ic_in,
+                                    oc_in,
+                                    ].astype("float32"),
+                            axis=[ic_out, kh, kw, ic_in]),
+                        name=output_name)
+
+        return out
+
+    def depthwise_conv2d_nchwc_cpu(inputs, attrs):
+        attrs = {k: v for k, v in attrs.items()}
+        # Check inputs and attrs
+        if len(inputs) != 2:
+            raise ValueError("length of inputs shoule be 2, but got %d." % len(inputs))
+        data = inputs[0]
+        weight = inputs[1]
+        output_name = "T_depthwise_conv2d_nchwc_" + data.op.name + "_" + weight.op.name
+        stride = attrs["stride"]
+        dilation = attrs["dilation"]
+        data_dtype = data.dtype
+        weight_dtype = weight.dtype
+        # Check data type
+        vc_util.ops_dtype_check(data_dtype, vc_util.DtypeForDavinci.FLOAT32)
+        vc_util.ops_dtype_check(weight_dtype, vc_util.DtypeForDavinci.FLOAT32)
+        # Check shape
+        if len(data.shape) != 5 or len(weight.shape) != 6:
+            raise ValueError("shape of data and weight should be 5/6-dim, but got %d and %d." % (len(data.shape),
+                                                                                            len(weight.shape)))        
+
+        batch, ic_outer, i_h, i_w, ic_inner = data.shape
+        oc_outer, cm_outer, k_h, k_w, cm_inner, oc_inner = weight.shape
+        channel_multiplier = cm_outer * cm_inner
+        in_channel = ic_outer * ic_inner
+        out_channel = oc_outer * oc_inner
+
+        pad_top, pad_bottom, pad_left, pad_right = attrs["pad"]
+        s_h, s_w = stride
+        d_h, d_w = dilation
+        k_h_d = (k_h - 1) * d_h + 1
+        k_w_d = (k_w - 1) * d_w + 1
+        o_h = (i_h + pad_top + pad_bottom - k_h_d) // s_h + 1
+        o_w = (i_w + pad_left + pad_right - k_w_d) // s_w + 1
+
+        out_shape = (batch, oc_outer, o_h, o_w, oc_inner)
+
+        if pad_top == 0 and pad_bottom == 0 and pad_left == 0 and pad_right == 0:
+            data_pad = data
+        else:
+            data_pad = akg_topi.nn.pad(data, [0, 0, pad_top, pad_left, 0], [
+                                0, 0, pad_bottom, pad_right, 0], 0.0,)
+
+        kh = tvm.reduce_axis((0, k_h), name="kh")
+        kw = tvm.reduce_axis((0, k_w), name="kw")
+
+        idxdiv = tvm.indexdiv
+        idxmod = tvm.indexmod
+
+        out = tvm.compute(out_shape,
+                        lambda batch, oc_out, oh, ow, oc_in: tvm.sum(
+                            data_pad[batch,
+                                    idxdiv(idxdiv(oc_out * oc_inner + oc_in,
+                                            channel_multiplier), ic_inner),
+                                    oh * s_h + kh * d_h,
+                                    ow * s_w + kw * d_w,
+                                    idxmod(idxdiv(oc_out * oc_inner + oc_in,
+                                            channel_multiplier), ic_inner),
+                                    ] *
+                            weight[oc_out,
+                                    0,
+                                    kh,
+                                    kw,
+                                    0,
+                                    oc_in,
+                                    ],
+                            axis=[kh, kw]),
+                        name=output_name)
+
+        return out
+
+    use_cpu_direct_algorithm = any(
+        [True if x[0] == "data_format" and x[1] == "NC1HWC0" else False for x in attrs.items()])
+    if use_cpu_direct_algorithm:
+        # cpu: direct algorithm
+        is_depth_wise = any(
+            [True if x[0] == "is_depth_wise" and int(x[1]) == 1 else False for x in attrs.items()])
+        if is_depth_wise:
+            return depthwise_conv2d_nchwc_cpu(inputs, attrs)
+        return conv2d_nchwc_cpu(inputs, attrs)
+    else:
+        # gpu: tensorcore impl
+        return conv2d_nhwc_gpu(inputs, attrs)
 
 @tvm.register_func("CumSum")
 def cumsum(inputs, attrs):

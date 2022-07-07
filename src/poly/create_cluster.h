@@ -58,7 +58,7 @@ class CreateCluster {
 
   // gemm operator
   void RecordGemmTensors();
-  PromotedTensor GetCurrentMarkerTensorsForGemm(const bool hoist_tensor_c);
+  PromotedTensor GetCurrentMarkerTensorsForGemm(const std::unordered_set<std::string> &tensor_set);
 
   ScopInfo &scop_info_;
   PromotedTensor all_tensors_;
@@ -129,6 +129,7 @@ class CpuCreateCluster : public CreateCluster {
   ~CpuCreateCluster() {}
   // Promoted tensors needed to create different types of operators.
   void CreateClusterListForGemm(const isl::schedule_node &orig_node, const std::unordered_set<std::string> &mark_names);
+  void CreateClusterListForConv(const isl::schedule_node &node, const std::unordered_set<std::string> &mark_names);
 
  private:
   // Common functions required by shared, register in gpu and cpu.
