@@ -83,7 +83,6 @@ std::string GetProcess(const picojson::value &input_json) {
     } else if (feature == "avx512") {
       options = "  -mcpu=skylake-avx512 -mattr=-avx512f";
     } else if (feature == "neon") {
-      // NOTE(yanzhi): there are many kinds of arm cpu, we should select options here.
       options = " -target=aarch64-linux-gnu -mattr=+neon";
     }
   }
@@ -145,6 +144,7 @@ bool IsOtherOp(const std::string &op_name) {
                                            "COO2CSR",
                                            "ElemAny",
                                            "CSRMM",
+                                           "Pool2D",
                                            "LayoutTransform"};
   return elems.find(op_name) != elems.end();
 }

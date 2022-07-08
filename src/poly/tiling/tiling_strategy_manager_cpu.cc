@@ -98,9 +98,6 @@ void CpuStrategy::SetParallelTileValue(TileAxis *axis, const int64_t axis_size, 
     parallel_num = std::min(axis_size, static_cast<int64_t>(best_parallel_num_));
   } else if (evaluate_num > 1) {
     while (parallel_num > 0 && tile_size % parallel_num != 0) {
-      if (parallel_num < evaluate_num) {
-        break;
-      }
       parallel_num -= parallel_decrease_value_;
     }
   } else {
@@ -137,6 +134,7 @@ void CpuStrategy::SetConv2dTileValue(int index) {
     TileAxis *batch_axis = nullptr;
     int64_t _;
     std::tie(batch_axis, _) = pending_axes_[index][p];
+    CHECK(batch_axis != nullptr);
     batch_axis->TileRestrainToSingleValue(Expr((int64_t)1), TileLevel::CACHE1);
     batch_axis->TileRestrainToSingleValue(Expr((int64_t)1), TileLevel::CACHE0);    
     p += 1;
@@ -147,6 +145,7 @@ void CpuStrategy::SetConv2dTileValue(int index) {
     TileAxis *oc_out_axis = nullptr;
     int64_t _;
     std::tie(oc_out_axis, _) = pending_axes_[index][p];
+    CHECK(oc_out_axis != nullptr);
     oc_out_axis->TileRestrainToSingleValue(Expr((int64_t)1), TileLevel::CACHE1);
     oc_out_axis->TileRestrainToSingleValue(Expr((int64_t)1), TileLevel::CACHE0);
     p += 1;
@@ -157,6 +156,7 @@ void CpuStrategy::SetConv2dTileValue(int index) {
     TileAxis *oh_axis = nullptr;
     int64_t _;
     std::tie(oh_axis, _) = pending_axes_[index][p];
+    CHECK(oh_axis != nullptr);
     oh_axis->TileRestrainToSingleValue(Expr((int64_t)1), TileLevel::CACHE1);
     oh_axis->TileRestrainToSingleValue(Expr((int64_t)1), TileLevel::CACHE0);
     p += 1;
@@ -167,6 +167,7 @@ void CpuStrategy::SetConv2dTileValue(int index) {
     TileAxis *ow_axis = nullptr;
     int64_t ow_shape;
     std::tie(ow_axis, ow_shape) = pending_axes_[index][p];
+    CHECK(ow_axis != nullptr);
 
     /* ow_inner should follow some strategy:
     1. ow_shape % ow_tile == 0
@@ -189,6 +190,7 @@ void CpuStrategy::SetConv2dTileValue(int index) {
     TileAxis *oc_in_axis = nullptr;
     int64_t oc_in_shape;
     std::tie(oc_in_axis, oc_in_shape) = pending_axes_[index][p];
+    CHECK(oc_in_axis != nullptr);
     oc_in_axis->TileRestrainToSingleValue(Expr(oc_in_shape), TileLevel::CACHE1);
     oc_in_axis->TileRestrainToSingleValue(Expr(oc_in_shape), TileLevel::CACHE0);
     p += 1;
@@ -199,6 +201,7 @@ void CpuStrategy::SetConv2dTileValue(int index) {
     TileAxis *ic_out_axis = nullptr;
     int64_t ic_out_shape;
     std::tie(ic_out_axis, ic_out_shape) = pending_axes_[index][p];
+    CHECK(ic_out_axis != nullptr);
     ic_out_axis->TileRestrainToSingleValue(Expr(ic_out_shape), TileLevel::CACHE1);
     ic_out_axis->TileRestrainToSingleValue(Expr((int64_t)1), TileLevel::CACHE0);
     p += 1;

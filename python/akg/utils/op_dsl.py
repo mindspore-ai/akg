@@ -718,6 +718,110 @@ def cummulative_str(inputs, outputs, attr, op_type):
     res += "{} = out\n".format(outputs[0]['tensor_name'])
     return res
 
+def pool2d_str(inputs, output, attr):
+
+    import tvm
+    import akg.topi as akg_topi
+    from akg.topi.util import get_const_tuple
+
+    if get_attr(attr, "global"):
+        # global_pool2d python impl
+        return global_pool2d_str(inputs, output, attr)
+
+    kh, kw = get_attr(attr, "kernel_size")
+    sh, sw = get_attr(attr, "strides")
+    paddings = get_attr(attr, "pad")
+    pt, pl, pb, pr = paddings if len(paddings) == 4 else [0, 0, 0, 0]
+    pool_type = get_attr(attr, "pool_type")
+    ceil_mode = get_attr(attr, "round_mode")
+    count_include_pad = True
+    data_layout = get_attr(attr, "data_layout")
+
+    res = ""
+
+    # We temporarily reshape all format as NCHWc
+    if data_layout == "NCHW":
+        n, ic_out, ih, iw = inputs[0][0]['shape']
+        ic_in = 1
+
+    elif data_layout == "NHWC":
+        n, ih, iw, ic_in = inputs[0][0]['shape']
+        ic_out = 1
+    else:
+        # NCHWc
+        import re
+        pattern = re.compile(r'NCHW\d*c')
+        if pattern.match(data_layout) == None:
+            raise ValueError("Invalid data_layout = {}".format(data_layout))
+        n, ic_out, ih, iw, ic_in = inputs[0][0]['shape']
+
+    tmp_shape = "({},{},{},{},{})".format(n, ic_out, ih, iw, ic_in)
+    res += "tmp_data = np.reshape({}, {})\n".format(inputs[0][0]["tensor_name"], tmp_shape)
+    res += "pt, pl, pb, pr = {}, {}, {}, {}\n".format(pt, pl, pb, pr)
+    res += "kh ,kw = {}, {}\n".format(kh, kw)
+    res += "sh, sw = {}, {}\n".format(sh, sw)
+    input0 = tvm.placeholder((n, ic_out, ih, iw, ic_in), name='a')
+    output0 = akg_topi.nn.pool(input0, kernel=[kh, kw], stride=[sh, sw], padding=(pt, pl, pb, pr),
+                         pool_type=pool_type, ceil_mode=ceil_mode,
+                         layout="NCHWc", count_include_pad=count_include_pad)
+    _, oc_out, oh, ow, oc_in = get_const_tuple(output0.shape)
+    res += "n, ic_out, ih, iw, ic_in = {}, {}, {}, {}, {}\n".format(
+        n, ic_out, ih, iw, ic_in)
+    res += "oc_out, oh, ow, oc_in = {}, {}, {}, {}\n".format(
+        oc_out, oh, ow, oc_in)
+    res += "dtype = np.{}\n".format(inputs[0][0]["data_type"])
+    res += "pad_np = np.zeros(shape=(n, ic_out, ih+pt+pb, iw+pl+pr, ic_in)).astype(dtype)\n"
+    res += "no_zero = (range(n), range(ic_out), (range(pt, ih+pt)), (range(pl, iw+pl)), range(ic_in))\n"
+    res += "pad_np[np.ix_(*no_zero)] = tmp_data\n"
+    res += "b_np = np.zeros(shape=(n, oc_out, oh, ow, oc_in)).astype(dtype)\n"
+
+    if pool_type == "avg":
+        res += "for i in range(oh):\n"
+        res += "    for j in range(ow):\n"
+        res += "        if count_include_pad:\n"
+        res += "            b_np[:, :, i, j, :] = np.mean(\n"
+        res += "                pad_np[:, :, i*sh:i*sh+kh, j*sw:j*sw+kw, :], axis=(2, 3))\n"
+        res += "        else:\n"
+        res += "            pad_count = np.sum(\n"
+        res += "                pad_np[:, :, i*sh:i*sh+kh, j*sw:j*sw+kw, :] > 0, axis=(2, 3))\n"
+        res += "            b_np[:, :, i, j, :] = np.sum(\n"
+        res += "                pad_np[:, :, i*sh:i*sh+kh, j*sw:j*sw+kw, :], axis=(2, 3)) / np.maximum(pad_count, 1)\n"
+    elif pool_type == "max":
+        res += "for i in range(oh):\n"
+        res += "    for j in range(ow):\n"
+        res += "        b_np[:, :, i, j, :] = np.max(\n"
+        res += "            pad_np[:, :, i*sh:i*sh+kh, j*sw:j*sw+kw, :], axis=(2, 3))\n"
+    else:
+        raise ValueError("Invalid pool_type=={}".format(pool_type))
+
+    if data_layout == "NCHW" or data_layout == "NHWC":
+        res += "{} = np.squeeze(b_np)\n".format(output[0]["tensor_name"])
+    else:
+        res += "{} = b_np\n".format(output[0]["tensor_name"])
+
+    return res
+
+
+def global_pool2d_str(inputs, output, attr):
+    pool_type = get_attr(attr, "pool_type")
+    data_layout = get_attr(attr, "data_layout")
+    res = ""
+    if data_layout == "NHWC":
+        res += "pool_idxs = (1, 2)\n"
+    elif data_layout[:4] == "NCHW":
+        # NCHW or NCHWc/ NCHW[x]c
+        res += "pool_idxs = (2, 3)\n"
+
+    res += "global_pool_input = {}\n".format(inputs[0][0]["tensor_name"])
+    if pool_type == 'avg':
+        res += "{} = np.mean(global_pool_input, axis=pool_idxs, keepdims=True)\n".format(
+            output[0]["tensor_name"])
+    elif pool_type == 'max':
+        res += "{} = np.max(global_pool_input, axis=pool_idxs, keepdims=True)\n".format(
+            output[0]["tensor_name"])
+    return res
+
+
 def layout_transform_str(inputs, output, attr, op_type):
     """gen layout_transform string"""
 
@@ -1012,6 +1116,7 @@ op_dsl = {
     "Complex": lambda inputs, output, attr: "%s = np.vectorize(complex)(%s, %s)" %
     (output[0]['tensor_name'], get_input(inputs[0][0]),
                                                get_input(inputs[1][0])),
+    "Pool2D": lambda inputs, output, attr: pool2d_str(inputs, output, attr),  
     "LayoutTransform": lambda inputs, output, attr: layout_transform_str(inputs, output, attr, "layout_transform"),
     "Concat": lambda inputs, output, attr: concat_str(inputs, output, attr)
 }

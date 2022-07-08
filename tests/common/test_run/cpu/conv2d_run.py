@@ -40,7 +40,6 @@ def gen_data(shape_data, shape_weight, stride, padding, dilation, dtype, data_la
 def compute_np_conv2d(data, weight, stride, padding, dilation, dtype, data_layout="NCHWc", output_layout="NCHWc"):
 
     if data_layout == "NCHWc":
-        # NOTE(yanzhi): we change NCHWc to NCHW, and do the compute
         data_nchw = unpack_nchwc_to_nchw_python(data, dtype)
         weight_nchw = unpack_kcrsxy_to_kcrs_python(weight, dtype)
     elif data_layout == "NCHW":
