@@ -241,6 +241,7 @@ file(
   ${AKG_SOURCE_DIR}/src/poly/schedule_analysis/*.cc
   ${AKG_SOURCE_DIR}/src/poly/schedule_pass_cpu/*.cc
   ${AKG_SOURCE_DIR}/src/poly/tiling/*.cc
+  ${AKG_SOURCE_DIR}/src/poly/tiling/hermes/*.cc
   ${AKG_SOURCE_DIR}/src/poly/gpu_emit/*.cc
   ${AKG_SOURCE_DIR}/src/api/*.cc
   ${AKG_SOURCE_DIR}/src/auto_tune/*.cc
