@@ -20,18 +20,14 @@ namespace akg {
 namespace ir {
 namespace poly {
 
-constexpr auto BLOCK_SIZE_4 = 4;
-constexpr auto BLOCK_SIZE_8 = 8;
-constexpr auto BLOCK_SIZE_16 = 16;
 static constexpr auto REDUCE_FUNCTION = "Reduce";
+static constexpr auto PACK_A_ATTR = "pack_a";
+static constexpr auto PACK_B_ATTR = "pack_b";
 static constexpr auto MATRIX_TRANSPOSE_FUNCTION = "MatrixTranspose";
 static constexpr auto LOCAL_MEMORY = "local";
 static std::unordered_map<std::string, std::function<Expr(Expr, Expr)>> maker_map = {
   {"SumOp", Add::make}, {"AddOp", Add::make}, {"SubOp", Sub::make}, {"MulOp", Mul::make}, {"DivOp", Div::make},
   {"MinOp", Min::make}, {"MaxOp", Max::make}, {"AndOp", And::make}, {"OrOp", Or::make}};
-
-static std::unordered_set<std::string> arm_instruction_set = {"avx", "sse", "avx512"};
-static constexpr auto X86_INSTRUCTION_SET = "neon";
 
 Stmt CpuIslEmitter::EmitterPostProcess(Stmt &stmt) {
   stmt = EmitRealizeForGlobalTensor(stmt);
@@ -41,22 +37,20 @@ Stmt CpuIslEmitter::EmitterPostProcess(Stmt &stmt) {
 
 Stmt CpuIslEmitter::EmitInfo(const Stmt &stmt) {
   Stmt result = stmt;
-  auto len = info_.user_config_.GetVectorLength();
-  if (len != 0) {
+
+  if (info_.analysis_result_.GetOpTemplate() == Template::REDUCTION || info_.analysis_result_.GetCsr()) {
+    auto len = info_.analysis_result_.GetVectorizedLoopSize();
     result = AttrStmt::make(Expr("INFO"), "vector_length", Expr(len), result);
+    auto vectorized_bits = info_.analysis_result_.GetVectorizedLength();
+    result = AttrStmt::make(Expr("INFO"), "vectorized_bits", Expr(vectorized_bits), result);
   }
 
-  std::string feature = info_.user_config_.GetFeature();
-  if (feature.empty()) {
-    return result;
+  if (info_.analysis_result_.GetOpTemplate() == Template::MATMUL) {
+    PackBlockSize pack_block_size = info_.analysis_result_.GetPackBlockSize();
+    result = AttrStmt::make(Expr("INFO"), PACK_A_ATTR, Expr(pack_block_size.pack_a_size), result);
+    result = AttrStmt::make(Expr("INFO"), PACK_B_ATTR, Expr(pack_block_size.pack_b_size), result);
   }
 
-  if (arm_instruction_set.find(feature) != arm_instruction_set.end()) {
-    result = AttrStmt::make(Expr("INFO"), "pack_a", Expr(BLOCK_SIZE_8), result);
-  } else if (feature == X86_INSTRUCTION_SET) {
-    result = AttrStmt::make(Expr("INFO"), "pack_a", Expr(BLOCK_SIZE_16), result);
-  }
-  result = AttrStmt::make(Expr("INFO"), "pack_b", Expr(BLOCK_SIZE_4), result);
   return result;
 }
 

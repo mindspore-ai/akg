@@ -293,7 +293,7 @@ MappingCfg *SharedMemoryManager::GetCurrentConfig(isl::schedule_node &node) {
   }
 
   bool enable_vectorization = true;
-  auto vector_length = scop_info_.user_config_.GetVectorLength();
+  auto vector_length = scop_info_.analysis_result_.GetVectorizedLength();
   if (vector_length == 0) {
     enable_vectorization = false;
   }
@@ -380,7 +380,7 @@ void SharedMemoryManager::GatherBufferFootprintDefInfo(const isl::schedule_node 
   Tensor tensor = placeholder(shapes, type, cluster_id.get_name());
   const Buffer buffer = decl_buffer(shapes, scop_info_.GetDtypeOf(tensor_id), cluster_id.get_name());
   scop_info_.user_config_.SetBind(tensor, buffer);
-  if (scop_info_.user_config_.GetVectorLength()) {
+  if (scop_info_.analysis_result_.GetVectorizedLength()) {
     scop_info_.analysis_result_.RecordSharedTensorBitsMap(tensor_id.get_name(),
                                                           scop_info_.GetDtypeOf(tensor_id).bits());
   }

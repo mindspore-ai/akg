@@ -302,6 +302,7 @@ class UserConfig {
     ParseStringAttr(attrs, "dim", &b_dim_);
     ParseBoolAttr(attrs, "enable_vectorization", &enable_vectorization_);
     ParseBoolAttr(attrs, "pragma_enable_matmul", &enable_matmul_);
+    ParseIntAttr(attrs, "vector_length", &vector_length_);
 
     if (GetTarget() == TARGET_CUDA) {
       ParseStringAttr(attrs, "device_type", &device_type_);
@@ -325,9 +326,7 @@ class UserConfig {
       ParseStringAttr(attrs, "shared_memory_tensors", &shared_tensors_);
       ParseStringAttr(attrs, "register_memory_tensors", &register_tensors_);
       ParseStringAttr(attrs, "reduce_lib_type", &reduce_lib_type_);
-      ParseVectorLengthAttr(attrs, "vector_length", &vector_length_);
     } else if (GetTarget() == TARGET_CPU) {
-      ParseVectorLengthAttr(attrs, "vector_length", &vector_length_, false);
       ParseStringAttr(attrs, "feature", &feature_);
       ParseBoolAttr(attrs, "pragma_enable_conv2d_direct", &enable_conv2d_direct_);
     }
@@ -675,34 +674,6 @@ class UserConfig {
     }
   }
 
-  static void ParseVectorLengthAttr(const Map<std::string, NodeRef> &attrs, const std::string &attr_name,
-                                    int *attr_to_set, bool is_cuda = true) {
-    if (is_cuda) {
-      std::string str_cfg = "";
-      ParseStringAttr(attrs, attr_name, &str_cfg);
-      // Vectorization only supports float1/float2/float3/float4
-      std::string support_type = "float";
-      if (str_cfg.size() != support_type.size() + 1 || str_cfg.find(support_type) != 0) {
-        return;
-      }
-      int type_num = std::stoi(str_cfg.substr(support_type.size()));
-      const int max_vec_length = 4;
-      if (type_num < 1 || type_num > max_vec_length) {
-        return;
-      }
-      *attr_to_set = type_num * (Float(32).bits());
-    } else {
-      int bits = -1;
-      ParseIntAttr(attrs, attr_name, &bits);
-      // Vectorization only supports 128/256/512
-      const std::unordered_set<int> support_set = {128, 256, 512};
-      if (support_set.count(bits) == 0) {
-        return;
-      }
-      *attr_to_set = bits / 32;
-    }
-  }
-
  private:
   isl::ctx ctx_{isl_ctx_alloc()};
   std::string target_;
@@ -847,7 +818,7 @@ class UserConfig {
   Schedule origin_sch_;
 
   // cpu type
-  std::string feature_;
+  std::string feature_{SSE_INSTRUCTION_SET};
 
   // csr config
   int csr_thread_num_{128};
@@ -909,6 +880,11 @@ struct MmaConv {
   int64_t w;
   int64_t n;
   int64_t k;
+};
+
+struct PackBlockSize {
+  int64_t pack_a_size;
+  int64_t pack_b_size;
 };
 
 constexpr auto AT_TRANSFORM = "TRANSFORM";
@@ -1042,6 +1018,12 @@ class AnalysisResult {
   void RecordSharedTensorBitsMap(const std::string tensor_name, const int tensor_bits) {
     shared_tensor_bits_map_.emplace(tensor_name, tensor_bits);
   }
+  int GetVectorizedLength() { return vectorized_length_; }
+  void SetVectorizedLength(int vectorized_length) { vectorized_length_ = vectorized_length; }
+  void SetVectorizedLoopSize(const int vectorized_loop_size) { vectorized_loop_size_ = vectorized_loop_size; }
+  int GetVectorizedLoopSize() const { return vectorized_loop_size_; }
+  void SetPackBlockSize(PackBlockSize pack_block_size) { pack_block_size_ = pack_block_size; }
+  PackBlockSize GetPackBlockSize() const { return pack_block_size_; }
   std::unordered_map<std::string, int> GetSharedTensorBitsMap() const { return shared_tensor_bits_map_; }
   void RecordMatrixMatmulMajor(const std::string matrix_name, const std::string matrix_major) {
     matrix_matmul_major_[matrix_name] = matrix_major;
@@ -1351,6 +1333,9 @@ class AnalysisResult {
   bool enabled_auto_tiling_{false};
   std::unordered_map<std::string, std::string> matrix_matmul_map_;
   std::unordered_map<std::string, int> shared_tensor_bits_map_;
+  int vectorized_loop_size_{0};
+  int vectorized_length_{0};
+  PackBlockSize pack_block_size_;
   TensorScheduleRepo tensor_schedule_repo_;
   std::unordered_map<std::string, std::string> matrix_matmul_major_;
   Mma mma_;

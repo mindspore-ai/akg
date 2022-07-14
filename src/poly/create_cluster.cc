@@ -425,8 +425,8 @@ bool RegisterCreateCluster::IsResueThread(const TensorFootprintCluster &cluster,
 }
 
 bool RegisterCreateCluster::IsSatisfyVectorization(const TensorFootprintCluster &cluster, const isl::id &cluster_id) {
-  auto vectorized_length = scop_info_.user_config_.GetVectorLength();
-  if (vectorized_length == 0) {
+  auto vectorized_loop_size = scop_info_.analysis_result_.GetVectorizedLoopSize();
+  if (vectorized_loop_size == 0) {
     return false;
   }
 
@@ -436,14 +436,14 @@ bool RegisterCreateCluster::IsSatisfyVectorization(const TensorFootprintCluster 
   for (auto i : box_sizes) {
     local_size = local_size * i;
   }
-  if (local_size != vectorized_length || scop_info_.GetDtypeOf(cluster_id).bytes() == 1) {
+  if (local_size != vectorized_loop_size || scop_info_.GetDtypeOf(cluster_id).bytes() == 1) {
     return false;
   }
 
   auto tensor_shape = scop_info_.FindTensor(cluster_id)->shape;
   CHECK(tensor_shape[tensor_shape.size() - 1].as<IntImm>());
   auto shape_vale = tensor_shape[tensor_shape.size() - 1].as<IntImm>()->value;
-  if (shape_vale < vectorized_length || (tensor_shape.size() > 1 && shape_vale % vectorized_length != 0)) {
+  if (shape_vale < vectorized_loop_size || (tensor_shape.size() > 1 && shape_vale % vectorized_loop_size != 0)) {
     return false;
   }
 

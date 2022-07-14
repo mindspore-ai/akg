@@ -167,10 +167,6 @@ void CpuMemoryManager::GatherBufferFootprintDefInfo(const isl::schedule_node &no
   Tensor tensor = placeholder(shapes, type, cluster_id.get_name());
   const Buffer buffer = decl_buffer(shapes, scop_info_.GetDtypeOf(tensor_id), cluster_id.get_name());
   scop_info_.user_config_.SetBind(tensor, buffer);
-  if (scop_info_.user_config_.GetVectorLength()) {
-    scop_info_.analysis_result_.RecordSharedTensorBitsMap(tensor_id.get_name(),
-                                                          scop_info_.GetDtypeOf(tensor_id).bits());
-  }
 
   tensor_info.sizes = sizes;
   tensor_info.tensor = tensor;

@@ -244,8 +244,9 @@ isl::schedule_node InsertMarkerForPromotedNode(const isl::schedule_node &orig_no
 
       auto band_node = node.as<isl::schedule_node_band>();
       int n_member = band_node.n_member();
-      LOG(INFO) << "aixs_pos: " << aixs_pos;
-      LOG(INFO) << "n_member: " << n_member;
+      if (n_member == 0) {
+        return node.parent();
+      }
       CHECK(std::abs(aixs_pos) <= n_member) << "The position of the inserted axis cannot be greater than the total "
                                                "number of axes of the current band node.";
       // aixs_pos: Indicates that the marker is inserted before the i-th axis, starting from 1.
@@ -880,26 +881,47 @@ isl::schedule_node InsertEmptyPermutableBand(const isl::schedule_node &orig_node
 }
 
 int GetVectorizationTileSize(ScopInfo &scop_info) {
+  auto vectorized_loop_size = scop_info.analysis_result_.GetVectorizedLoopSize();
+  if (vectorized_loop_size != 0) {
+    return vectorized_loop_size;
+  }
+
+  int vectorized_length = scop_info.user_config_.GetVectorLength();
+  if (vectorized_length == 0) {
+    if (scop_info.user_config_.GetTarget() == TARGET_CPU) {
+      std::string feature = scop_info.user_config_.GetFeature();
+      if (feature.empty()) {
+        LOG(WARNING) << "The acquired feature is empty and will be set to the default value: sse.";
+        feature = SSE_INSTRUCTION_SET;
+      }
+      auto it = CpuInstructionSetBits.find(feature);
+      CHECK(it != CpuInstructionSetBits.end())
+        << "The instruction set supported by the cpu only includes sse, avx, avx2, avx512 and neon.";
+
+      vectorized_length = it->second;
+    } else {
+      vectorized_length = VECTORIZED_128_BIT;
+    }
+  }
+
+  scop_info.analysis_result_.SetVectorizedLength(vectorized_length);
+  vectorized_length = (vectorized_length + ONE_BYTE_TO_BIT - 1) / ONE_BYTE_TO_BIT;
+  CHECK(vectorized_length != 0);
   auto reads_access = scop_info.analysis_result_.GetReads().domain_factor_domain();
   auto write_access = scop_info.analysis_result_.GetWrites().domain_factor_domain();
   auto original_access = reads_access.unite(write_access);
-  int vectorized_length = scop_info.user_config_.GetVectorLength();
-
-  if (vectorized_length != 0) {
-    return vectorized_length;
-  }
-
   isl::map_list access_list = original_access.get_map_list();
   for (int i = 0; i < static_cast<int>(access_list.size()); ++i) {
     auto access = access_list.at(i);
     auto id = access.get_tuple_id(isl_dim_out).to_str();
     Type type = scop_info.GetDtypeOf(id);
     CHECK_NE(type.bytes(), 0);
-    auto tmp_bytes = TOTAL_VECTORIZATION_BYTES / type.bytes();
-    vectorized_length = (i == 0) ? tmp_bytes : std::min(tmp_bytes, vectorized_length);
+    auto tmp_bytes = vectorized_length / type.bytes();
+    vectorized_loop_size = (i == 0) ? tmp_bytes : std::min(tmp_bytes, vectorized_loop_size);
   }
-  scop_info.user_config_.SetVectorLength(vectorized_length);
-  return vectorized_length;
+  CHECK(vectorized_loop_size != 0);
+  scop_info.analysis_result_.SetVectorizedLoopSize(vectorized_loop_size);
+  return vectorized_loop_size;
 }
 
 /*
