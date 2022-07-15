@@ -362,6 +362,66 @@ def trans_data(inputs, attrs):
         raise ValueError("TransData for src_format %s and dst_format %s is not supported"
                          % (src_format, dst_format))
 
+@tvm.register_func("Pool2D")
+def pool2d(inputs, attrs):
+    is_global = attrs["global"].value
+    pool_type = attrs["pool_type"].value
+    data_layout = attrs["data_layout"].value
+
+    if is_global:
+        # global_pool2d dsl
+        if data_layout == "NHWC":
+            red_axis = (1, 2)
+        else:
+            # data_layout is NCHW or NCHWc
+            red_axis = (2, 3)
+
+        if pool_type == "max":
+            out = akg_topi.max(inputs[0], axis=red_axis, keepdims=True)
+        elif pool_type == "avg":
+            out = akg_topi.sum(inputs[0], axis=red_axis, keepdims=True)
+
+            count = 1
+            for i in red_axis:
+                count *= inputs[0].shape[i]
+            out = akg_topi.divide(out, count)
+        else:
+            raise ValueError(
+                "pool_type should be max/avg, current pool_type is {}".format(pool_type))
+
+        return out
+
+    kernels = [get_const(x) for x in attrs["kernel_size"]]
+    strides = [get_const(x) for x in attrs["strides"]]
+    padding = [get_const(x) for x in attrs["pad"]] if attrs.__contains__("pad") else [0, 0, 0,0]
+    ceil_mode = attrs["round_mode"].value
+    return akg_topi.nn.pool(inputs[0], kernels, strides, padding, pool_type, ceil_mode, data_layout)
+
+def global_pool2d(inputs, attrs):
+    
+    data_layout = attrs["data_layout"]
+    pool_type = attrs["pool_type"]
+    if data_layout == "NHWC":
+        red_axis = (1, 2)
+    else:
+        # data_layout is NCHW or NCHWc
+        red_axis = (2, 3)
+
+    if pool_type == "max":
+        out = akg_topi.max(inputs[0], axis=red_axis, keepdims=True)
+    elif pool_type == "avg":
+        out = akg_topi.sum(inputs[0], axis=red_axis, keepdims=True)
+
+        count = 1
+        for i in red_axis:
+            count *= inputs[0].shape[i]
+        out = akg_topi.divide(out, count)
+    else:
+        raise ValueError(
+            "pool_type should be max/avg, current pool_type is {}".format(pool_type))
+
+    return out
+
 
 @tvm.register_func("LayoutTransform")
 def layout_transform(inputs, attrs):

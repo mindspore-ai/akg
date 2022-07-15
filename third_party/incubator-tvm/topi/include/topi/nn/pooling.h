@@ -21,6 +21,12 @@
  * \brief Pooling op constructions
  * \file nn/pooling.h
  */
+
+/*
+ * 2022.7.4
+ *   Fix bug for the name of reduction axes in pool_impl.
+ */
+
 #ifndef TOPI_NN_POOLING_H_
 #define TOPI_NN_POOLING_H_
 
@@ -105,8 +111,8 @@ inline Tensor pool_impl(const Tensor& x,
   auto out_width = air::ir::Simplify(
       indexdiv(width - kernel_width + pad_left + pad_right, stride_width) + 1);
 
-  auto dheight = air::reduce_axis(Range(0, kernel_height));
-  auto dwidth = air::reduce_axis(Range(0, kernel_width));
+  auto dheight = air::reduce_axis(Range(0, kernel_height), "red_h");
+  auto dwidth = air::reduce_axis(Range(0, kernel_width), "red_w");
 
   Array<Expr> out_shape = x->shape;
   out_shape.Set(height_axis, out_height);
@@ -288,6 +294,8 @@ inline Tensor pool_grad_impl(const Tensor& out_grad, const Tensor& x,
 
           // output indices whose pooling windows cover current input element (can be out-of-bound)
           Array<Expr> out_idx{inds.begin(), inds.end()};
+          CHECK(stride_height.as<IntImm>()->value != 0) << "stride_height == 0";
+          CHECK(stride_width.as<IntImm>()->value != 0) << "stride_width == 0";
           out_idx.Set(height_axis, (pad_h_idx / stride_height - windowh));
           out_idx.Set(width_axis, (pad_w_idx / stride_width - windoww));
 

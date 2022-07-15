@@ -348,6 +348,8 @@ def _update_attrs_cpu(all_ops, attrs, poly):
     if any([i in all_ops for i in ["Conv2D"]]):
         attrs["enable_auto_fuse"] = False
         attrs["pragma_enable_conv2d_direct"] = True
+    if any([i in all_ops for i in ["Pool2D"]]):
+        attrs["enable_auto_fuse"] = False
     if "feature" not in attrs.keys() and any([i in all_ops for i in ["BatchMatMul", "MatMul"]]):
         attrs["feature"] = "avx"
     return attrs

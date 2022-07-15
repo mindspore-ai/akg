@@ -15,3 +15,5 @@
 from .conv2d_run import conv2d_run
 from .depthwise_conv2d_run import depthwise_conv2d_run
 from .layout_transform_run import layout_transform_run
+from .pooling_run import pooling_run
+from .global_pooling_run import global_pooling_run

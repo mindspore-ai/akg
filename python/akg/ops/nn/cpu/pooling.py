@@ -12,11 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .conv_utils import get_channel_inners, pack_data, unpack_nchwc_to_nchw
-from .layout_transform_utils import get_layout_list, get_alpha_only, \
-    get_tiled_pair, get_idx_by_char, get_tile_by_char
-from .conv2d import conv2d_nchwc
-from .depthwise_conv2d import depthwise_conv2d_nchwc
-from .layout_transform import layout_transform
-from .pooling import pooling
-from .global_pooling import global_pooling
+"""operator dsl function: pooling"""
+import akg.topi as topi
+from akg.topi.util import get_const_tuple
+import akg.tvm as tvm
+
+def pooling(data, kernel, stride, padding, pool_type, 
+                ceil_mode, count_include_pad=True,
+                data_layout="NCHW"):
+    """Pooling op impl"""
+    out = topi.nn.pool(data, kernel=kernel, stride=stride, padding=padding,
+                pool_type=pool_type, ceil_mode=ceil_mode,
+                layout=data_layout, count_include_pad=count_include_pad)
+    return out
