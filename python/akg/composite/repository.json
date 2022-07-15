@@ -1368,6 +1368,24 @@
             "float32--": {
                 "dim": "0 0 8 1 0 1 4000 1"
             }
+        },
+        "1_1863_3-.1_1863": {
+            "float32--": {
+                "metadata": {
+                    "attrs": {
+                        "dim": "0 0 27 1 0 1 3 1"
+                    }
+                }
+            }
+        },
+        "1_3466_3-.1_3466": {
+            "float32--": {
+                "metadata": {
+                    "attrs": {
+                        "dim": "0 0 2 1 0 1 3 1"
+                    }
+                }
+            }
         }
     },
     "1.Cast1.ReduceSum1.2": {
@@ -2362,6 +2380,51 @@
                 "metadata": {
                     "attrs": {
                         "dim": "0 0 32 32 0 1 64 64"
+                    }
+                }
+            }
+        }
+    },
+    "1.Mul11.ReduceSum1.2": {
+        "1_1005_3.1_1005": {
+            "float32-": {
+                "metadata": {
+                    "attrs": {
+                        "dim": "0 0 15 1 0 1 3 1"
+                    }
+                }
+            }
+        }
+    },
+    "2.Neg2.ReduceSum1.InplaceAssign113.4": {
+        "1_1005_1004_3.1005_3-": {
+            "float32--": {
+                "metadata": {
+                    "attrs": {
+                        "remove_store_dependency": true,
+                        "dim": "0 0 11 1 0 1 3 1 0 2 224 1"
+                    }
+                }
+            }
+        }
+    },
+    "8.Sub23.Pow1.Mul110.ReduceSum1.InplaceAssign115.Add910.Add113.Pow7.Mul114.Add13.Mul1.121718": {
+        "1_1005_1.1_1005_3-----.1-.1_1005_3-": {
+            "float32----------": {
+                "metadata": {
+                    "attrs": {
+                        "dim": "0 0 3 1"
+                    }
+                }
+            }
+        }
+    },
+    "6.Mul56.Sqrt1.Add45.Mul17.Pow1.Mul11.Mul15.Mul36.Mul1.Sub13.ReduceSum1.InplaceAssign1112.17": {
+        "1_1005_1.1_1005_1004-.1_1005_1.1_1005_1004.1-": {
+            "float32------": {
+                "metadata": {
+                    "attrs": {
+                        "dim": "0 0 7 1 0 1 960 1"
                     }
                 }
             }
