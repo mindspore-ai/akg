@@ -45,6 +45,11 @@ class TileOuterBand : public SchedulePass {
     BUFC1,
     BUFC0,
     C1BUFC1,
+    C0C1,
+    LASTC0,
+    LASTC1,
+    WARPC1,
+    VECTORIZATION,
     Invalid,
   };
   virtual isl::schedule Run(isl::schedule sch);
@@ -99,6 +104,9 @@ class TileOuterBand : public SchedulePass {
   std::vector<int> GetFullTileMax(const isl::schedule_node &orig_node, const isl::multi_val &mapped_tile_size);
   isl::schedule_node IsolateTilesForCudaAndCpu(const isl::schedule_node &orig_node,
                                                const isl::multi_val &mapped_tile_size);
+  std::vector<int> GetTileSizeOfLevel(const int member_size, const int dim_size,
+                                      const TileType tile_level = TileType::Invalid, const int count_coincident = -1,
+                                      const std::vector<int> &warp_list = {});
 
   // cuda related functions
   isl::schedule_node MarkOuterPermutableCuda(isl::schedule_node node);
@@ -111,15 +119,20 @@ class TileOuterBand : public SchedulePass {
   void CheckCustomMapping(const MappingStrategyFilterMap &custom_mapping_map);
   bool IsMatrixCPromoteToShared();
 
-  isl::multi_val GetLevelTileSize(const isl::schedule_node &node, const std::string &tile_level,
-                                  const int count_coincident = -1);
+  isl::multi_val GetTileSizeOfLevelForCuda(const isl::schedule_node &node,
+                                           const TileType tile_level = TileType::Invalid,
+                                           const int count_coincident = -1);
   isl::multi_val GetMappedTileSize(const isl::schedule_node &orig_node, MappingCfg *mapping_cfg,
                                    const std::vector<int> &vectorization_tile_size = {});
   isl::schedule_node TileThreadAndBlockConfig(const isl::schedule_node &orig_node, const bool is_block_mapping = false);
 
   // cpu related functions
   isl::schedule_node MarkOuterPermutableCpu(isl::schedule_node node);
-  isl::schedule_node IsolateTilesForCpu(const isl::schedule_node &orig_node, const std::string &tile_level = "");
+  isl::schedule_node IsolateTilesForCpu(const isl::schedule_node &orig_node,
+                                        const TileType tile_level = TileType::Invalid,
+                                        const std::vector<int> &tile_size = {});
+  std::vector<int> GetTileSizeForCpu(const isl::schedule_node &orig_node,
+                                     const TileType tile_level = TileType::Invalid);
 
   isl::schedule_node TileCsrForCpu(const isl::schedule_node &orig_node);
   isl::schedule_node TileReduceXForCpu(const isl::schedule_node &orig_node);

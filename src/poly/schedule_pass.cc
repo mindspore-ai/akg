@@ -223,8 +223,8 @@ isl::union_map ComputeFakeCopyin(const isl::schedule &schedule, const isl::union
 isl::schedule_constraints MakeScheduleConstraints(const isl::schedule &schedule, PassInfo &pass_info) {
   auto constraints = isl::schedule_constraints::on_domain(schedule.get_domain());
   constraints = constraints.set_validity(pass_info.dependences_)
-                           .set_proximity(pass_info.dependences_)
-                           .set_coincidence(pass_info.dependences_);
+                  .set_proximity(pass_info.dependences_)
+                  .set_coincidence(pass_info.dependences_);
   return constraints;
 }
 
@@ -321,36 +321,6 @@ bool ReplaceScheduleTree(isl::schedule &schedule, ScopInfo &info) {
     }
   }
   return false;
-}
-
-std::vector<int> GetTileSizeOfLevel(const int member_size, const int dim_size, const std::string &tile_level,
-                                    TileSizes tile_sizes, const int count_coincident,
-                                    const std::vector<int> &warp_list) {
-  std::vector<int> tile_size(member_size, 0);
-  for (auto i = 0; i < member_size; ++i) {
-    if (i >= dim_size) {
-      tile_size[i] = MAX_STRIDE;
-      continue;
-    }
-    // tile_size maybe bigger than dim_num
-    if (tile_level == TILE_WITH_C0) {
-      tile_size[i] = static_cast<int>(tile_sizes[i].c0_tiling_size);
-    } else if (tile_level == TILE_WITH_C1) {
-      tile_size[i] = static_cast<int>(tile_sizes[i].c1_tiling_size);
-    } else if (tile_level == TILE_WITH_WARP_C1) {
-      tile_size[i] = warp_list[i];
-    } else if (tile_level == TILE_WITH_LAST_C1) {
-      tile_size[i] = static_cast<int>(tile_sizes[tile_sizes.size() - 1 - i].c1_tiling_size);
-    } else if (tile_level == TILE_WITH_LAST_C0) {
-      tile_size[i] = static_cast<int>(tile_sizes[tile_sizes.size() - 1 - i].c0_tiling_size);
-    } else {
-      // The tiling size of n and m is warp_number times of c0_tiling_size, which is equivalent to extracting the for
-      // loop generated during mapping.This avoids the if condition and facilitates isl_emitter.
-      tile_size[i] = (i < count_coincident) ? static_cast<int>(tile_sizes[i].c1_tiling_size)
-                                            : static_cast<int>(tile_sizes[i].c0_tiling_size);
-    }
-  }
-  return tile_size;
 }
 
 std::string GetPromotionTensorName(const isl::schedule_node &node, const std::vector<BufferDefInfo> &buffer_def_infos) {
