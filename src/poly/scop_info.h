@@ -25,6 +25,7 @@
 #include "poly/poly_util.h"
 #include "poly/dynamic_shape.h"
 #include "poly/tiling/custom_tiling.h"
+#include "poly/tiling/hermes/tiling_ir_survey.h"
 #include "poly/dma_dataflow.h"
 #include "poly/pass_info.h"
 #include "poly/sync_manager.h"
@@ -373,6 +374,10 @@ class UserConfig {
   void SetC0BlockSize(const std::vector<int> c0_block_size) { c0_block_size_ = c0_block_size; }
   std::vector<int> GetC0BlockSize() { return c0_block_size_; }
   std::vector<NodeRef> GetCustomTiling() { return custom_tiling_; }
+  bool IsSymbolicTiling(const Stmt &stmt);
+  void SetIsSymbolicTiling(bool is_symbolic_tiling) { is_symbolic_tiling_ = is_symbolic_tiling; }
+  bool GetIsSymbolicTiling() { return is_symbolic_tiling_; }
+  bool GetIsForceSymbolicTiling() { return is_force_symbolic_tiling_; }
   std::string GetBDim() const { return b_dim_; }
   std::string GetDeviceType() const { return device_type_; }
   void SetDefaultDim(std::string b_dim) { b_dim_ = b_dim; }
@@ -734,6 +739,8 @@ class UserConfig {
   std::vector<int> c0_block_size_;
   std::string device_type_;
   int max_elem_per_thread_{1024};
+  bool is_symbolic_tiling_{true};
+  bool is_force_symbolic_tiling_{false};
   std::vector<NodeRef> custom_tiling_;
   bool pragma_analyze_reuse_buffer_{true};
   bool pragma_speedup_tiling_{false};
@@ -1462,7 +1469,6 @@ class CubeInfo {
   void UpdateFractalIntFirstInfo(bool is_conv_backprop_filter, const std::vector<size_t> &im2col_fp_cluster_size,
                                  const std::vector<size_t> &fractal_fp_cluster_size);
 
- public:
   std::map<std::string, Expr> fractal_int_info_;
   std::map<std::string, std::string> fractal_str_info_;
 
@@ -1477,6 +1483,8 @@ class CubeInfo {
   int out_reduce_init_{0};
   TileSizes conv_mnk_dims_;
   bool is_spec_gemm_{false};
+
+  const size_t kSecondIdx = 2;
 };
 
 class ScopInfo {

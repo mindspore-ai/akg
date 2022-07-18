@@ -20,7 +20,7 @@ import json
 from collections import Iterable
 import akg
 from akg import tvm
-from akg.utils.kernel_exec import ReturnType
+from akg.utils.kernel_exec import ReturnType, is_symbolic_tiling
 from .split_stitch import split_stitch_attr
 from .construct_args import get_construct_args, get_tune_construct_args, \
     should_enable_attr, get_stmt_for_tune, add_attrs_in_segment_infos, \
@@ -221,6 +221,7 @@ def _set_attrs(desc_d, attrs, poly):
         attrs["is_csr"] = should_enable_attr(desc_d, "is_csr")
     if "enable_approximate_read" not in attrs.keys():
         attrs["enable_approximate_read"] = should_enable_attr(desc_d, "enable_approximate_read")
+    attrs["enable_symbolic_tiling"] = is_symbolic_tiling(desc_d['op'])
     return _update_compile_attr(desc_d, attrs)
 
 

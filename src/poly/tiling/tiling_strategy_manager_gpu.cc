@@ -22,16 +22,11 @@
 #include "../../src/include/build_module.h"
 #include "./tiling_analyzer.h"
 #include "poly/schedule_pass_gpu/register_memory_manager.h"
+#include "poly/tiling/tiling_utils.h"
 
 namespace akg {
 namespace ir {
 namespace poly {
-template <typename T>
-T SafeDivisor(T x) {
-  CHECK(x != 0);
-  return std::max<T>(x, 1);
-}
-
 bool TryCombination(int64_t shape_m, int64_t shape_n, const Mma &mma, int64_t factor1, int64_t factor2) {
   return (factor1 != 0 && factor2 != 0 && shape_m % factor1 == 0 && shape_n % factor2 == 0 &&
           shape_m / factor1 >= mma.m && shape_n / factor2 >= mma.n);
@@ -1170,7 +1165,7 @@ void GpuStrategy::GreedyMapBlocks(size_t ori_size, size_t block_dim) {
     for (size_t i = pending_axes_.size() - 1; i >= ori_size; --i) {
       auto block_limit = i == 0 ? max_x_dim_block_ : max_y_z_dim_block_;
       auto use = (block_limit > 0 && pending_axes_[i].second > 0)
-                   ? TilingAnalyzer::FindDivisibleTilingFactor(block_limit, pending_axes_[i].second)
+                   ? TilingAnalyzer::GetLargestDivisor(block_limit, pending_axes_[i].second)
                    : 1;
       if (sorted_by_gcd.find(use) == sorted_by_gcd.end()) {
         sorted_by_gcd[use] = {i};
@@ -1206,7 +1201,7 @@ void GpuStrategy::GreedyMapBlocks(size_t ori_size, size_t block_dim) {
 
 void GpuStrategy::CheckAlignedUse(int64_t &use, int64_t shape, TileAxis *axis, std::stringstream &ss) {
   if (axis->forbid_iso && use != 0 && shape % SafeDivisor(use) != 0) {
-    auto aligned_use = TilingAnalyzer::FindDivisibleTilingFactor(use, shape);
+    auto aligned_use = TilingAnalyzer::GetLargestDivisor(use, shape);
     CHECK(aligned_use);
     if (aligned_use % SafeDivisor(axis->thread_constraints.map_mod_) != 0) {
       return;
@@ -1385,7 +1380,7 @@ void GpuStrategy::InnerThreadOuterBlock(bool write_cfg) {
     }
     auto use = 1;
     if (rest_blocks > 0 && shape > 1) {
-      auto aligned_blocks = TilingAnalyzer::FindDivisibleTilingFactor(rest_blocks, shape);
+      auto aligned_blocks = TilingAnalyzer::GetLargestDivisor(rest_blocks, shape);
       ss << "aligned_blocks = " << aligned_blocks << ", rest_blocks = " << rest_blocks;
       if (aligned_blocks <= 1 || aligned_blocks * min_elem_for_io_bound_ * double_ < rest_blocks) {
         use = rest_blocks;
@@ -1465,10 +1460,10 @@ int64_t GpuStrategy::ApplyCustomTile(TileAxis *axis, size_t inner_dim, int64_t t
       auto max_tile = shape / SafeDivisor(least_blocks);
       if (thread_size != 0 && shape % SafeDivisor(thread_size) == 0) {
         // ensure no if condition in thread for-loop
-        tile = TilingAnalyzer::FindDivisibleTilingFactor(max_tile, shape);
+        tile = TilingAnalyzer::GetLargestDivisor(max_tile, shape);
       } else {
         // ensure thread for-loop bound has no min/max
-        tile = TilingAnalyzer::FindDivisibleTilingFactor(max_tile, thread_size);
+        tile = TilingAnalyzer::GetLargestDivisor(max_tile, thread_size);
       }
       ss << "reduce tile size to enable at least " << least_blocks << " blocks, ";
     }
@@ -1595,10 +1590,10 @@ std::pair<int64_t, int64_t> GpuStrategy::GetProposalParallelSize(int problem_siz
     thread_size = warp_sizes_;
     block_size = num_sm_;
   } else if (problem_size <= warp_sizes_ * thread_coef_.first * num_sm_ * active_blocks_per_sm_.first) {
-    thread_size = TilingAnalyzer::FindDivisibleTilingFactor(warp_sizes_ * thread_coef_.first, problem_size);
+    thread_size = TilingAnalyzer::GetLargestDivisor(warp_sizes_ * thread_coef_.first, problem_size);
     block_size = num_sm_ * active_blocks_per_sm_.first;
   } else if (problem_size <= warp_sizes_ * thread_coef_.second * num_sm_ * active_blocks_per_sm_.second) {
-    thread_size = TilingAnalyzer::FindDivisibleTilingFactor(warp_sizes_ * thread_coef_.second, problem_size);
+    thread_size = TilingAnalyzer::GetLargestDivisor(warp_sizes_ * thread_coef_.second, problem_size);
     block_size = num_sm_ * active_blocks_per_sm_.second;
   } else {
     thread_size = total_available_thread_;
@@ -1622,7 +1617,7 @@ int64_t GpuStrategy::AlignThreadToShape() {
       continue;
     }
 
-    int64_t lower = analyzer_->FindDivisibleTilingFactor(thread_size, shape);
+    int64_t lower = analyzer_->GetLargestDivisor(thread_size, shape);
     bool is_invalid = (lower % SafeDivisor(axis->thread_constraints.map_mod_ != 0));
     if (is_invalid) {
       ss << "thread size is invalid: " << lower << " % " << axis->thread_constraints.map_mod_ << " != 0";
@@ -1668,7 +1663,7 @@ void GpuStrategy::HandleShrinkThreadToBlock(int64_t &shrinked_threads, bool thre
       auto block_size = axis->block_constraints.map_extent_;
       CHECK(axis->c1_constraints.tile_extent_.as<IntImm>());
       auto tile_size = axis->c1_constraints.tile_extent_.as<IntImm>()->value;
-      auto coef = TilingAnalyzer::FindDivisibleTilingFactor(shrinked_threads, thread_size);
+      auto coef = TilingAnalyzer::GetLargestDivisor(shrinked_threads, thread_size);
       CHECK(coef != 0);
       shrinked_threads /= SafeDivisor(coef);
       axis->thread_constraints.map_extent_ = thread_size / SafeDivisor(coef);
@@ -1747,7 +1742,7 @@ void GpuStrategy::InjectiveSpeedup() {
       auto coef = std::min<int64_t>(proposal_elem_per_thread, shrink_limit);
       CHECK(coef);
       shrink_limit = std::min<int64_t>(shrink_limit, before_shrink);
-      int64_t aligned_coef = TilingAnalyzer::FindDivisibleTilingFactor(shrink_limit, before_shrink);
+      int64_t aligned_coef = TilingAnalyzer::GetLargestDivisor(shrink_limit, before_shrink);
       ss << "\nTo elem: before shrink = " << before_shrink << " shrink limit " << shrink_limit
          << " aligned_coef = " << aligned_coef;
       ss << " origianl coef = " << coef;
@@ -1757,7 +1752,7 @@ void GpuStrategy::InjectiveSpeedup() {
       ss << " final coef = " << coef << "\n";
       if (block_to_elem) {
         auto before_shrink_limit = std::max<int64_t>(before_shrink / SafeDivisor(coef), 1);
-        auto actual_block = TilingAnalyzer::FindDivisibleTilingFactor(before_shrink_limit, before_shrink);
+        auto actual_block = TilingAnalyzer::GetLargestDivisor(before_shrink_limit, before_shrink);
         auto actual_coef = before_shrink / SafeDivisor(actual_block);
         if (actual_coef > shrink_limit) {
           ss << "actual shrink = " << actual_coef << "exceed shrink limit: " << shrink_limit << ", continue.";
@@ -1853,7 +1848,7 @@ void GpuStrategy::PadSpeedup() {
   for (size_t i = axes.size() - 1; i > 0; --i) {
     auto axis = axes[i];
     axis->thread_constraints.item_process_ =
-      std::max<int64_t>(min_elem_for_io_bound_, TilingAnalyzer::FindDivisibleTilingFactor(coef, axis->extent_val));
+      std::max<int64_t>(min_elem_for_io_bound_, TilingAnalyzer::GetLargestDivisor(coef, axis->extent_val));
     CHECK(axis->thread_constraints.item_process_ != 0);
     coef = std::max<int64_t>(1, coef / SafeDivisor(axis->thread_constraints.item_process_));
     ss << "axis " << axis->index << "_" << axis->dim_axis
@@ -1908,9 +1903,9 @@ void GpuStrategy::BroadcastSpeedup() {
        << " vec size " << vectorized_loop_size;
 
     if (axis != nullptr && (!axis->HasAttr(AT_VECTORIZED) || !current_outer_bn_->enable_vectorization)) {
-      auto min_aligned = analyzer_->FindDivisibleTilingFactor(min_elem_for_io_bound_, axis->extent_val);
+      auto min_aligned = analyzer_->GetLargestDivisor(min_elem_for_io_bound_, axis->extent_val);
       auto coef = current_outer_bn_->enable_vectorization ? 1 : double_;
-      auto max_aligned = analyzer_->FindDivisibleTilingFactor(coef * min_elem_for_io_bound_, axis->extent_val);
+      auto max_aligned = analyzer_->GetLargestDivisor(coef * min_elem_for_io_bound_, axis->extent_val);
       if (max_aligned > 1 &&
           problem_size >= parallel_size.first * parallel_size.second * vectorized_loop_size * max_aligned) {
         axis->thread_constraints.item_process_ = max_aligned;
@@ -1995,7 +1990,7 @@ void GpuStrategy::MapBroadcastElem(TileAxis *axis, std::vector<int> original_sha
       if (broadcast_innermost) {
         auto prev_extent = axis->thread_constraints.map_extent_ > 0 ? axis->thread_constraints.map_extent_ : 1;
         auto thread_limit = max_x_y_dim_thread_ / SafeDivisor(prev_extent);
-        auto coef = TilingAnalyzer::FindDivisibleTilingFactor(thread_limit, original_shape[i]);
+        auto coef = TilingAnalyzer::GetLargestDivisor(thread_limit, original_shape[i]);
         axis->thread_constraints.map_extent_ = prev_extent * coef;
         possible_threads_ = static_cast<int>(axis->thread_constraints.map_extent_);
       }

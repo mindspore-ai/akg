@@ -13,9 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-#include "scop_info.h"
+#include <algorithm>
 #include <regex>
+
+#include "common/common_util.h"
+#include "poly/scop_info.h"
 #include "poly/dma_inject.h"
 #include "poly/dsa_utils.h"
 
@@ -800,6 +802,41 @@ void UserConfig::RecordMappingStrategy(MappingStrategyFilterMap &mapping_strateg
   mapping_strategy_map[filter_pos] = axis_map;
 }
 
+bool UserConfig::IsSymbolicTiling(const Stmt &stmt) {
+  auto str_ret = akg::common::GetStringEnv("SYMBOLIC_TILING");
+  if (str_ret.empty()) {
+    is_symbolic_tiling_ = true;
+  } else {
+    is_symbolic_tiling_ = (akg::common::GetIntegerEnv("SYMBOLIC_TILING") != 0);
+  }
+  if (is_symbolic_tiling_) {
+    if (is_dynamic_) {
+      LOG(DEBUG) << "Symbolic tiling disabled: dynamic IR";
+      is_symbolic_tiling_ = false;
+    } else if (!b_dim_.empty()) {
+      LOG(DEBUG) << "Symbolic tiling disabled: defined build dimension";
+      is_symbolic_tiling_ = false;
+    } else if (g_attrs.GetBool("enable_stitch_fusion", 0)) {
+      LOG(DEBUG) << "Symbolic tiling disabled: buffer stitch";
+      is_symbolic_tiling_ = false;
+    } else if (!g_attrs.GetBool("enable_symbolic_tiling", 1)) {
+      LOG(DEBUG) << "Symbolic tiling disabled: unsupported kernel";
+      is_symbolic_tiling_ = false;
+    } else if (GetTarget() != TARGET_CCE) {
+      LOG(DEBUG) << "Symbolic tiling disabled: does not support CPU or GPU yet";
+      is_symbolic_tiling_ = false;
+    } else {
+      is_force_symbolic_tiling_ = (akg::common::GetIntegerEnv("FORCE_SYMBOLIC_TILING") != 0);
+      if (!is_force_symbolic_tiling_) {
+        auto symbolic_survey = TilingIRSurvey();
+        symbolic_survey.Visit(stmt);
+        is_symbolic_tiling_ = symbolic_survey.IsSymbolicEnabled();
+      }
+    }
+  }
+  return is_symbolic_tiling_;
+}
+
 void CubeInfo::CreateConvModel() {
   if (model_) return;
   if (!attr_info_.empty()) {
@@ -859,7 +896,7 @@ void CubeInfo::UpdateFractalIntLastInfo(std::vector<size_t> filter_fp_cluster_si
     // conv_forward filter: [ko, no, ni, ki]
     fractal_int_info_[ATTR_CONV_TILE_CO] = (int64_t)filter_fp_cluster_size[1];
     fractal_int_info_[ATTR_CONV_TILE_N] = (int64_t)filter_fp_cluster_size[1];
-    fractal_int_info_[ATTR_CONV_N_INNER] = (int64_t)filter_fp_cluster_size[2];
+    fractal_int_info_[ATTR_CONV_N_INNER] = (int64_t)filter_fp_cluster_size[kSecondIdx];
   }
 }
 
@@ -870,7 +907,7 @@ void CubeInfo::UpdateSpecGemmFractalInfo(const BufferDefInfo &tensor_info) {
     fractal_str_info_[ATTR_CONV_GMM_WEIGHT] = tensor_info.dst_tensor_id.get_name();
     CHECK_NE(tensor_info.dst_tensor_id.get_name(), "");
   } else if (IsConv() && IsA(tensor_info.tensor_id.get_name())) {
-    fractal_str_info_[ATTR_CONV_GMM_FEATURE] = tensor_info.data_stream[2].first.get_name();
+    fractal_str_info_[ATTR_CONV_GMM_FEATURE] = tensor_info.data_stream[kSecondIdx].first.get_name();
     CHECK_NE(tensor_info.dst_tensor_id.get_name(), "");
   } else if (IsConv() && IsC(tensor_info.tensor_id.get_name())) {
     fractal_str_info_[ATTR_CONV_GMM_RES] = tensor_info.dst_tensor_id.get_name();

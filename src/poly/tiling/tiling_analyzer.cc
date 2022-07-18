@@ -1706,7 +1706,7 @@ void TilingAnalyzer::DumpBufferUsageTimeable() {
   }
 }
 
-int64_t TilingAnalyzer::FindDivisibleTilingFactor(int64_t limit, int64_t range) {
+int64_t TilingAnalyzer::GetLargestDivisor(int64_t limit, int64_t range) {
   CHECK(range > 0 && limit > 0) << "Need positive range and limit.";
   if (range <= limit) {
     return range;
@@ -1715,7 +1715,7 @@ int64_t TilingAnalyzer::FindDivisibleTilingFactor(int64_t limit, int64_t range) 
   int64_t init = exp > 2 ? exp : 2;
   int64_t end = static_cast<int>(sqrt(range));
   end = end <= init ? range : end;
-  for (auto div = init; div < end; ++div) {
+  for (auto div = init; div <= end; ++div) {
     if (range % div == 0) {
       return (range / div);
     }

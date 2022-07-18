@@ -151,6 +151,8 @@ class Op {
 };
 
 std::string StringOfCategory(Op::OpCategory);
+
+constexpr auto kBatchMatMul = "batchmatmul";
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg
