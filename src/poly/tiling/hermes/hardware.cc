@@ -30,11 +30,11 @@ Hardware::Hardware(int num_core, int mem_VC_size, int mem_C1_size, int mem_C0_si
       mem_C1_align_{mem_C1_align},
       vblocknum_{vblocknum},
       vblocksize_{vblocksize} {
-  // we divide UB by 2 for each UB alloc error
+  // we divide VC by 2 for each VC alloc error
   this->mem_VC_size_ = mem_VC_size / (1 << Hardware::mem_VC_alloc_failed_);
 }
 
-bool Hardware::HasUBFail(const std::string allocation_error_buf) {
+bool Hardware::HasVCFail(const std::string allocation_error_buf) {
   if (allocation_error_buf == "local.UB") {
     return true;
   }

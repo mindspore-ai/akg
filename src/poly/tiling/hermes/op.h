@@ -145,11 +145,7 @@ class Op {
     ReduceY = 8,
     MatMul = 9
   };
-  enum Source {
-    Enum = 0,
-    Info = 1,
-    IR = 2
-  };
+  enum Source { Enum = 0, Info = 1, IR = 2 };
 
   static int Priority(Op::OpCategory cat);
 };

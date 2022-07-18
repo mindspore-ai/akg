@@ -25,9 +25,9 @@ class Hardware {
  public:
   Hardware(int, int, int, int, int, int, int, int);
 
-  static bool HasUBFail(const std::string);
-  static void AddUBFailCounter() { Hardware::mem_VC_alloc_failed_++; }
-  static void ResetUBFailCounter() { Hardware::mem_VC_alloc_failed_ = 0; }
+  static bool HasVCFail(const std::string);
+  static void AddVCFailCounter() { Hardware::mem_VC_alloc_failed_++; }
+  static void ResetVCFailCounter() { Hardware::mem_VC_alloc_failed_ = 0; }
 
   int num_core_;
   int mem_VC_size_;

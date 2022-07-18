@@ -13,46 +13,26 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef POLY_TILING_HERMES_AXIS_H_
-#define POLY_TILING_HERMES_AXIS_H_
+#ifndef POLY_TILING_HERMES_UTILS_H_
+#define POLY_TILING_HERMES_UTILS_H_
 
-#include <set>
+#include <tvm/ir.h>
+
 #include <string>
-#include <utility>
 #include <vector>
 
 namespace akg {
 namespace ir {
 namespace poly {
-class Axis {
- public:
-  enum AxisLabel {
-    kMatMulAxisBatch,
-    kMatMulAxisN,
-    kMatMulAxisM,
-    kMatMulAxis16,
-    kMatMulAxisK,
-    kMultiCore,
-    kVectorization
-  };
-
-  Axis() = default;
-
-  std::string name_;
-  std::string gemm_axis_;
-  size_t dim_axis_{0};
-  size_t range_{0};
-  int tile_{1};
-  int c1_tiling_{0};
-  int index_{0};
-  std::set<AxisLabel> type_;
-
-  bool is_inner_{false};
-  bool is_innermost_{false};
-  bool is_reduce_axis_{false};
-  bool is_reduce_src_last_{false};
-};
+std::string ParseString(air::Expr);
+int ParseInt(air::Integer);
+std::vector<int> ParseIntArray(air::Array<air::Integer>);
+std::vector<std::string> ParseStringArray(air::Array<air::Expr> arr);
+std::string StripRename(std::string name);
+int Get2PowerBelow(int);
+int SearchDownDivisibleNumber(int begin, size_t divided_size);
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg
-#endif  // POLY_TILING_HERMES_AXIS_H_
+
+#endif  // POLY_TILING_HERMES_UTILS_H_
