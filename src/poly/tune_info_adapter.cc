@@ -19,6 +19,13 @@ namespace akg {
 namespace ir {
 namespace poly {
 
+constexpr int BIT32 = 32;
+constexpr int MAX_CORE = 64;
+constexpr int CUBE_MMA_M = 64;
+constexpr int GPU_MMA_M = 64;
+constexpr int GPU_MMA_N = 64;
+constexpr int GPU_MMA_K = 64;
+
 Var GetAxisDescId(TileAxis *a) {
   std::string var_name = std::to_string(a->index) + "_";
   var_name += a->axis_type_.empty() ? std::to_string(a->dim_axis) : a->axis_type_;
@@ -67,35 +74,43 @@ TuneAxisInfo AxisInfoAdapter(TileAxis *a, TileSizes dims) {
 }
 
 void ScopInfoAdapter(TuneInfo *tune_info, ScopInfo *scop_info) {
-  std::string platform = "cpu";
+  std::string platform = TARGET_CPU;
   if (scop_info->user_config_.GetTarget() == TARGET_CCE) {
-    platform = "npu";
+    platform = TARGET_NPU;
   } else if (scop_info->user_config_.GetTarget() == TARGET_CUDA) {
-    platform = "gpu";
+    platform = TARGET_GPU;
   }
   tune_info->analysis.Set("platform", StringImm::make(platform));
-  if (platform == "npu") {
-    tune_info->analysis.Set("max_core_num", make_const(Int(64), GetCoreNumConf()));
+  if (platform == TARGET_NPU) {
+    tune_info->analysis.Set("max_core_num", make_const(Int(MAX_CORE), GetCoreNumConf()));
   }
   std::string op_template = tune_info->analysis.GetStr("op_template", "");
-  if (scop_info->user_config_.GetTarget() == TARGET_CCE || op_template.empty()) {
+  if (platform == TARGET_NPU || op_template.empty()) {
     if (scop_info->mmu_info_.HasCube()) {
-      op_template = "CUBE";
-      tune_info->analysis.Set("mma_m", make_const(Int(64), MMA_UNIT));
+      op_template = AT_CUBE;
+      tune_info->analysis.Set("mma_m", make_const(Int(CUBE_MMA_M), MMA_UNIT));
     } else {
-      op_template = "DEFAULT";
+      op_template = AT_DEFAULT;
     }
     tune_info->analysis.Set("op_template", StringImm::make(op_template));
-  } else if (op_template == "CONV" || op_template == "MATMUL") {
-    auto mma = scop_info->analysis_result_.GetMmaMode();
-    tune_info->analysis.Set("mma_m", make_const(Int(64), mma.m));
-    tune_info->analysis.Set("mma_n", make_const(Int(64), mma.n));
-    tune_info->analysis.Set("mma_k", make_const(Int(64), mma.k));
+  } else if (platform == TARGET_GPU) {
+    if (op_template == AT_CONV || op_template == AT_MATMUL) {
+      auto mma = scop_info->analysis_result_.GetMmaMode();
+      tune_info->analysis.Set("mma_m", make_const(Int(GPU_MMA_M), mma.m));
+      tune_info->analysis.Set("mma_n", make_const(Int(GPU_MMA_N), mma.n));
+      tune_info->analysis.Set("mma_k", make_const(Int(GPU_MMA_K), mma.k));
+    }
+  } else {
+    // cpu
+    if (op_template == AT_CONV) {
+      auto conv_axes = scop_info->analysis_result_.GetCpuConvolutionAxes();
+      tune_info->analysis.Set("conv_axes", StringImm::make(conv_axes));
+    }
   }
 
-  tune_info->analysis.Set("tensor_of_tensor", make_const(Int(32), scop_info->analysis_result_.GetTensorOfTensor()));
-  tune_info->analysis.Set("enable_reduce_lib", make_const(Int(32), scop_info->user_config_.GetEnableAkgReduceLib()));
-  tune_info->analysis.Set("enable_atomic_add", make_const(Int(32), scop_info->user_config_.GetEnableAtomicAdd()));
+  tune_info->analysis.Set("tensor_of_tensor", make_const(Int(BIT32), scop_info->analysis_result_.GetTensorOfTensor()));
+  tune_info->analysis.Set("enable_reduce_lib", make_const(Int(BIT32), scop_info->user_config_.GetEnableAkgReduceLib()));
+  tune_info->analysis.Set("enable_atomic_add", make_const(Int(BIT32), scop_info->user_config_.GetEnableAtomicAdd()));
   for (int i = 0; i < scop_info->analysis_result_.GetOuterBandNumber(); ++i) {
     auto reduce_direction = scop_info->analysis_result_.GetOuterBandNode(i)->reduce_direction;
     tune_info->analysis.Set("reduce_direction_" + std::to_string(i),
@@ -166,7 +181,7 @@ std::unique_ptr<TuneInfo> GenerateTuningInfo(const isl::schedule &sch, ScopInfo 
 
   // 3. get tune info
   auto tune_info = AdaptTuneInfo(analyzer, scop_info, memory_constraints, dims);
-  tune_info->analysis.Set("need_tiling", make_const(Int(32), need_tiling));
+  tune_info->analysis.Set("need_tiling", make_const(Int(BIT32), need_tiling));
   return tune_info;
 }
 

@@ -302,6 +302,8 @@ enum ReduceDirection {
 constexpr auto TARGET_CCE = "cce";
 constexpr auto TARGET_CUDA = "cuda";
 constexpr auto TARGET_CPU = "cpu";
+constexpr auto TARGET_GPU = "gpu";
+constexpr auto TARGET_NPU = "npu";
 
 constexpr auto ATTR_CONV_FEATURE_NAME = "feature";
 constexpr auto ATTR_CONV_FILTER_NAME = "filter";
