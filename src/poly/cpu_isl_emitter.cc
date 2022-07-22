@@ -269,6 +269,7 @@ Stmt CpuIslEmitter::EmitMatrixTranspose(const std::vector<std::string> &names) {
     indices.push_back(make_zero(Int(INT_32)));
     args.push_back(t->shape[i]);
   }
+  args.push_back(t->dtype.bits());
   Expr addr = Call::make(Handle(), air::ir::intrinsic::tvm_address_of, {t(indices)}, Call::PureIntrinsic);
   args.Set(0, addr);
   Expr matrix_trans = Call::make(Handle(), names[1], args, Call::Intrinsic);
