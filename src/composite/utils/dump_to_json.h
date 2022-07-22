@@ -18,9 +18,11 @@
 
 #include <string>
 #include "tvm.h"
+#include "composite/utils/util.h"
 
 namespace akg {
 std::string DumpToJson(const Stmt &stmt, const Map<std::string, NodeRef> &info);
+void DumpCompositeGraph(const Stmt &stmt, const BuildInfo &info);
 }  // namespace akg
 
 #endif  // COMPOSITE_UTILS_DUMP_TO_JSON_H_

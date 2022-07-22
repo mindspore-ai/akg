@@ -595,12 +595,10 @@ def build(kernel_desc, attrs=None, poly=True, use_repo=True):
        Module.
     """
     if isinstance(kernel_desc, str):
-        desc_s = kernel_desc
         desc_d = json.loads(kernel_desc)
     else:
         if not isinstance(kernel_desc, dict):
             raise TypeError("kernel_desc should be a dict, but get a {}".format(type(kernel_desc)))
-        desc_s = json.dumps(kernel_desc)
         desc_d = kernel_desc
 
     from akg.ms.info_version_adapt import InfoVersionAdapt
@@ -608,7 +606,6 @@ def build(kernel_desc, attrs=None, poly=True, use_repo=True):
     ret = info_adapter.run()
     if not ret:
         raise RuntimeError(info_adapter.msg)
-        return False
     desc_s = _set_backend(desc_d)
 
     if attrs is None:

@@ -14,10 +14,16 @@
  * limitations under the License.
  */
 #include "composite/utils/dump_to_json.h"
+#include <fstream>
+#include <sys/stat.h>
+#include <climits>
 #include "picojson.h"
 #include "composite/utils/util.h"
 
 namespace akg {
+namespace {
+constexpr auto kDumpCompositeGraph = "dump_composite_graph";
+
 class DumpToJsonVisitor : public IRVisitor {
  public:
   explicit DumpToJsonVisitor(const Map<std::string, NodeRef> &info) : build_info_(info) {}
@@ -233,10 +239,66 @@ class DumpToJsonVisitor : public IRVisitor {
   picojson::array output_desc_;                           // json["output_desc"]
 };
 
+std::string GetRealPath(const std::string &path) {
+  std::string res;
+  if (path.c_str() == nullptr) {
+    return res;
+  }
+  char real_path[PATH_MAX] = {0};
+  if (strlen(path.c_str()) >= PATH_MAX || realpath(path.c_str(), real_path) == nullptr) {
+    LOG(FATAL) << "Can not get real path from: " << path;
+  }
+  res = std::string(real_path);
+  return res;
+}
+
+std::string GetCompositeGraphDumpPath(const std::string &path, const std::string &kernel_name) {
+  auto dump_path = GetRealPath(path);
+  if (dump_path.empty()) {
+    return dump_path;
+  }
+
+  // If dump_path is a directory, we will concatenate the file name.
+  struct stat s_info;
+  if (stat(dump_path.c_str(), &s_info) == 0) {
+    if (s_info.st_mode & S_IFDIR) {
+      if (dump_path.back() != '/') {
+        dump_path += '/';
+      }
+      dump_path = dump_path + kernel_name + ".info";
+    }
+  }
+  return dump_path;
+}
+}  // namespace
+
 std::string DumpToJson(const Stmt &stmt, const Map<std::string, NodeRef> &info) {
   CHECK(stmt.defined());
   DumpToJsonVisitor visitor(info);
   return visitor.Dump(stmt);
+}
+
+void DumpCompositeGraph(const Stmt &stmt, const BuildInfo &info) {
+  if (!stmt.defined() || !info.attrs.defined() || info.attrs.find(kDumpCompositeGraph) == info.attrs.end()) {
+    return;
+  }
+  auto path = info.attrs[kDumpCompositeGraph].as<StringImm>();
+  CHECK(path);
+  auto dump_path = GetCompositeGraphDumpPath(path->value, info.kernel_name);
+  if (dump_path.empty()) {
+    return;
+  }
+
+  // 1. Stmt --> Json str
+  auto json_str = DumpToJson(stmt, SetBuildInfo(info));
+
+  // 2. Save Json str to file
+  std::ofstream of(dump_path);
+  CHECK(of.is_open()) << "Failed to open \"" << dump_path
+                      << "\" to dump composite graph. Please check the directory specified in \"" << kDumpCompositeGraph
+                      << "\" exists and has write permissions.";
+  of << json_str << std::endl;
+  of.close();
 }
 
 TVM_REGISTER_GLOBAL("dump_to_json").set_body_typed(DumpToJson);
