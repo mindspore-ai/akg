@@ -25,7 +25,7 @@ class Hardware {
  public:
   Hardware(int, int, int, int, int, int, int, int);
 
-  static bool HasVCFail(const std::string);
+  static bool HasVCFail(const std::string &);
   static void AddVCFailCounter() { Hardware::mem_VC_alloc_failed_++; }
   static void ResetVCFailCounter() { Hardware::mem_VC_alloc_failed_ = 0; }
 
@@ -39,7 +39,7 @@ class Hardware {
   int vblocksize_;
 
  private:
-  static int mem_VC_alloc_failed_;
+  static size_t mem_VC_alloc_failed_;
 };
 
 const int kNumCore = 32;

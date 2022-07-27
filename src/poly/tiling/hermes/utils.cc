@@ -18,7 +18,7 @@
 namespace akg {
 namespace ir {
 namespace poly {
-std::string ParseString(air::Expr expression) {
+std::string ParseString(const air::Expr &expression) {
   if (const auto *const strimm = expression.as<air::ir::StringImm>()) {
     return strimm->value;
   } else {
@@ -27,9 +27,9 @@ std::string ParseString(air::Expr expression) {
   }
 }
 
-int ParseInt(air::Integer integer) {
+int ParseInt(const air::Integer &integer) {
   if (const auto *const intimm = integer.as<air::ir::IntImm>()) {
-    return intimm->value;
+    return static_cast<int>(intimm->value);
   } else {
     LOG(FATAL) << "Int cannot be parsed";
     return -1;

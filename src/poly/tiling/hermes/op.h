@@ -18,6 +18,7 @@
 
 #include <string>
 #include <tuple>
+#include <unordered_map>
 #include <vector>
 
 namespace akg {
@@ -107,25 +108,25 @@ class Op {
     Assignment
   };
 
-  Op() = default;
+  Op();
   explicit Op(OpType);
   explicit Op(const std::string &op_name);
 
   static Op::OpType OpTypeFromString(const std::string &op_type);
-  std::string ToString() const;
-  std::string BufferName() const;
+  [[nodiscard]] std::string ToString() const;
+  [[nodiscard]] std::string BufferName() const;
   static Op::OpType OpTypeFromBufferName(const std::string &op_type);
 
-  bool RemoveUselessInput() const;
-  bool IsReduce() const;
-  bool IsInput() const;
-  bool IsConstant() const;
-  bool IsNameless() const;
-  bool IsLonely() const;  // whose buffer name doesn't include its inputs
+  [[nodiscard]] bool RemoveUselessInput() const;
+  [[nodiscard]] bool IsReduce() const;
+  [[nodiscard]] bool IsInput() const;
+  [[nodiscard]] bool IsConstant() const;
+  [[nodiscard]] bool IsNameless() const;
+  [[nodiscard]] bool IsLonely() const;  // whose buffer name doesn't include its inputs
 
-  bool FitBufferName(const std::string &name, bool cstInput) const;
+  [[nodiscard]] bool FitBufferName(const std::string &name, bool cstInput) const;
 
-  OpCategory Category() const;
+  [[nodiscard]] OpCategory Category() const;
   static Op::OpCategory DominantCategory(Op::OpCategory, Op::OpCategory);
 
   OpType op_type_;
@@ -146,6 +147,13 @@ class Op {
     MatMul = 9
   };
   enum Source { Enum = 0, Info = 1, IR = 2 };
+
+  std::unordered_map<OpCategory, Priority> op_category_priority_map_{
+    {OpCategory::Input, Priority::Input},         {OpCategory::Injective, Priority::Injective},
+    {OpCategory::Broadcast, Priority::Broadcast}, {OpCategory::Reshape, Priority::Reshape},
+    {OpCategory::Transpose, Priority::Transpose}, {OpCategory::AllReduce, Priority::AllReduce},
+    {OpCategory::ReduceX, Priority::ReduceX},     {OpCategory::ReduceY, Priority::ReduceY},
+    {OpCategory::MatMul, Priority::MatMul},       {OpCategory::Assignment, Priority::Assignment}};
 
   static int Priority(Op::OpCategory cat);
 };

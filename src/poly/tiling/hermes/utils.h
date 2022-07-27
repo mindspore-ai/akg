@@ -24,8 +24,8 @@
 namespace akg {
 namespace ir {
 namespace poly {
-std::string ParseString(air::Expr);
-int ParseInt(air::Integer);
+std::string ParseString(const air::Expr &);
+int ParseInt(const air::Integer &);
 std::vector<int> ParseIntArray(air::Array<air::Integer>);
 std::vector<std::string> ParseStringArray(air::Array<air::Expr> arr);
 std::string StripRename(std::string name);

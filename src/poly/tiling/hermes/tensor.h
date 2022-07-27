@@ -55,13 +55,13 @@ class Tensor {
     {"uint8", Tensor::DataType::UInt8},     {"bool", Tensor::DataType::Bool1},
     {"bool8", Tensor::DataType::Bool8}};
 
-  Tensor() = default;
+  Tensor();
   Tensor(const std::vector<int> &, DataType, const std::string &);
   Tensor(const std::vector<int> &, const std::string &, const std::string &);
 
   int GetDataTypeCoef() const;
   int GetShapeProduct();
-  bool operator<(const Tensor &other_tensor) const;
+  bool operator<(const Tensor &) const;
 
   std::string ToString() const;
   bool IsScalar();
@@ -90,6 +90,17 @@ class Tensor {
     {DataType::Int64, "int64"},     {DataType::UInt8, "uint8"},     {DataType::UInt16, "uint16"},
     {DataType::UInt32, "uint32"},   {DataType::UInt64, "uint64"},   {DataType::Bool1, "bool"},
     {DataType::Bool8, "bool8"}};
+  std::unordered_map<int, DataType> float_bits_datatype_map_{{kThirtyTwoBits, DataType::Float32},
+                                                             {kSixtyFourBits, DataType::Float64}};
+  std::unordered_map<int, DataType> int_bits_datatype_map_{{kEightBits, DataType::Int8},
+                                                           {kSixteenBits, DataType::Int16},
+                                                           {kThirtyTwoBits, DataType::Int32},
+                                                           {kSixtyFourBits, DataType::Int64}};
+  std::unordered_map<int, DataType> uint_bits_datatype_map_{{kEightBits, DataType::UInt8},
+                                                            {kSixteenBits, DataType::UInt16},
+                                                            {kThirtyTwoBits, DataType::UInt32},
+                                                            {kSixtyFourBits, DataType::UInt64}};
+  std::unordered_map<int, DataType> bool_bits_datatype_map_{{kOneBit, DataType::Bool1}, {kEightBits, DataType::Bool8}};
 
   static const int kOneBit = 1;
   static const int kEightBits = 8;

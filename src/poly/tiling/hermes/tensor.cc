@@ -20,6 +20,8 @@
 namespace akg {
 namespace ir {
 namespace poly {
+Tensor::Tensor() : datatype_{Tensor::DataType::Float16} {}
+
 Tensor::Tensor(const std::vector<int> &shape, DataType datatype, const std::string &format)
     : shape_{shape}, datatype_{datatype}, format_{format}, name_{} {}
 
@@ -31,19 +33,19 @@ int Tensor::GetDataTypeCoef() const {
   if (datatype_coef != datatype_coef_map_.end()) {
     return datatype_coef->second;
   }
-  LOG(FATAL) << "[Tensor::getDataTypeCoef] This data type is not taken into account yet";
+  LOG(FATAL) << "[Tensor::GetDataTypeCoef] This data type is not taken into account yet";
   return 0;
 }
 
 int Tensor::GetShapeProduct() {
   int product = 1;
-  for (auto iter = this->shape_.begin(); iter != this->shape_.end(); iter++) {
-    product *= *iter;
+  for (auto iter : this->shape_) {
+    product *= iter;
   }
   return product;
 }
 
-bool Tensor::operator<(const Tensor &other_tensor) const { return false; }
+bool Tensor::operator<(const Tensor &other_tensor) const { return shape_ < other_tensor.shape_; }
 
 std::string Tensor::ToString() const {
   auto datatype_string = datatype_string_map_.find(datatype_);
@@ -58,45 +60,34 @@ bool Tensor::IsScalar() { return ((shape_.size() == 1) && (shape_[0] == 1)); }
 
 Tensor::DataType Tensor::GetDataTypeFromTVM(const air::Type &tvm_dtype) {
   if (tvm_dtype.is_float16()) {
-    return Tensor::DataType::Float16;
+    return DataType::Float16;
   }
-  if (tvm_dtype.is_float() && tvm_dtype.bits() == kThirtyTwoBits) {
-    return Tensor::DataType::Float32;
+  Tensor tensor;
+  if (tvm_dtype.is_float()) {
+    auto datatype = tensor.float_bits_datatype_map_.find(tvm_dtype.bits());
+    if (datatype != tensor.float_bits_datatype_map_.end()) {
+      return datatype->second;
+    }
   }
-  if (tvm_dtype.is_float() && tvm_dtype.bits() == kSixtyFourBits) {
-    return Tensor::DataType::Float64;
+  if (tvm_dtype.is_int()) {
+    auto datatype = tensor.int_bits_datatype_map_.find(tvm_dtype.bits());
+    if (datatype != tensor.int_bits_datatype_map_.end()) {
+      return datatype->second;
+    }
   }
-  if (tvm_dtype.is_int() && tvm_dtype.bits() == kEightBits) {
-    return Tensor::DataType::Int8;
+  if (tvm_dtype.is_uint()) {
+    auto datatype = tensor.uint_bits_datatype_map_.find(tvm_dtype.bits());
+    if (datatype != tensor.uint_bits_datatype_map_.end()) {
+      return datatype->second;
+    }
   }
-  if (tvm_dtype.is_int() && tvm_dtype.bits() == kSixteenBits) {
-    return Tensor::DataType::Int16;
+  if (tvm_dtype.is_bool()) {
+    auto datatype = tensor.bool_bits_datatype_map_.find(tvm_dtype.bits());
+    if (datatype != tensor.bool_bits_datatype_map_.end()) {
+      return datatype->second;
+    }
   }
-  if (tvm_dtype.is_int() && tvm_dtype.bits() == kThirtyTwoBits) {
-    return Tensor::DataType::Int32;
-  }
-  if (tvm_dtype.is_int() && tvm_dtype.bits() == kSixtyFourBits) {
-    return Tensor::DataType::Int64;
-  }
-  if (tvm_dtype.is_uint() && tvm_dtype.bits() == kEightBits) {
-    return Tensor::DataType::UInt8;
-  }
-  if (tvm_dtype.is_uint() && tvm_dtype.bits() == kSixteenBits) {
-    return Tensor::DataType::UInt16;
-  }
-  if (tvm_dtype.is_uint() && tvm_dtype.bits() == kThirtyTwoBits) {
-    return Tensor::DataType::UInt32;
-  }
-  if (tvm_dtype.is_uint() && tvm_dtype.bits() == kSixtyFourBits) {
-    return Tensor::DataType::UInt64;
-  }
-  if (tvm_dtype.is_bool() && tvm_dtype.bits() == kOneBit) {
-    return Tensor::DataType::Bool8;
-  }
-  if (tvm_dtype.is_bool() && tvm_dtype.bits() == kEightBits) {
-    return Tensor::DataType::Bool8;
-  }
-  LOG(FATAL) << "[GetDataTypeFromTVM] The data type is not taken into account yet";
+  LOG(FATAL) << "[Tensor::GetDataTypeFromTVM] This tvm type is not taken into account yet";
   return Tensor::DataType::Float16;
 }
 
