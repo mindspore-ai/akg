@@ -16,6 +16,7 @@
 
 #include "poly/scop.h"
 #include "poly/tune_info_adapter.h"
+#include "poly/tiling/hermes/check_visitor.h"
 
 namespace akg {
 namespace ir {
@@ -82,6 +83,12 @@ class Poly {
     CHECK(scop_ != nullptr);
     scop_->ParseUserConfig(target, extern_buffer, spec_gemm_attrs, is_tuning, is_dynamic, origin_sch);
     bool is_spec_gemm = !spec_gemm_attrs.empty();
+
+    if (scop_->info_.user_config_.IsSymbolicTiling(stmt)) {
+      poly::CheckVisitor check_visit;
+      check_visit.Clear();
+      check_visit.Visit(stmt);
+    }
 
     std::chrono::high_resolution_clock::time_point timer_start;
     // generate isl schedule from Halide

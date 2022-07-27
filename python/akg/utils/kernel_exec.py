@@ -1120,6 +1120,30 @@ def _feat_mode(ret_mode, s, op_var, shape_params, kernel_name, attrs, target, bi
     return mod, feature
 
 
+def is_symbolic_tiling(kernel_name):
+    import json
+
+    env_str = os.environ.get('SYMBOLIC_TILING', 'True').lower()
+    if env_str == "false" or env_str == "0":
+        return False
+
+    file_name = "st_ci_blacklist.json"
+    pwd = os.path.dirname(os.path.abspath(__file__))
+    file_path = pwd + "/../composite/" + file_name
+    if not os.path.exists(file_path):
+        file_path = pwd + "/../config/" + file_name
+        if not os.path.exists(file_path):
+            raise FileNotFoundError("Can not find {} in directory {}".format(file_name, pwd))
+
+    with open(file_path, 'r') as f:
+        blacklist = json.loads(f.read())
+
+    if kernel_name in blacklist:
+        return False
+
+    return True
+
+
 def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
              attrs=None, log_code=False, dump_ir=True, dump_code=True,
              polyhedral=True, tuning=False, ret_mode=ReturnType.MOD):
@@ -1168,6 +1192,7 @@ def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
     inputs = inputs_backup
     # set dim
     get_dim_from_func_map(attrs, op_func, args, input_shapes, input_types, op_attrs)
+    attrs["enable_symbolic_tiling"] = is_symbolic_tiling(kernel_name)
 
     compute_func = None  # func which is defined in dsl for doing compute_inline or other
     sch_tmpl = None

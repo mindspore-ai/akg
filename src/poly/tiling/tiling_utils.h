@@ -233,6 +233,12 @@ constexpr auto PRUNE_MEM_EXCEED = 1;
 constexpr auto PRUNE_ALIGNED_MEM_EXCEED = 2;
 
 int64_t AlignToDivisibleSize(int64_t original, int64_t divisor);
+
+template <typename T>
+T SafeDivisor(T x) {
+  CHECK(x != 0);
+  return std::max<T>(x, 1);
+}
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

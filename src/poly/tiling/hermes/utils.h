@@ -30,7 +30,8 @@ std::vector<int> ParseIntArray(air::Array<air::Integer>);
 std::vector<std::string> ParseStringArray(air::Array<air::Expr> arr);
 std::string StripRename(std::string name);
 int Get2PowerBelow(int);
-int SearchDownDivisibleNumber(int begin, size_t divided_size);
+
+const int kByTwo = 2;
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

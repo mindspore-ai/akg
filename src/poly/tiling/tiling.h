@@ -1,5 +1,5 @@
 /**
- * Copyright 2020-2021 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,11 +21,18 @@
 
 #include <cmath>
 #include <iostream>
+#include <map>
+#include <memory>
+#include <string>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include "poly/scop_info.h"
 #include "poly/poly_util.h"
+#include "poly/tiling/hermes/axis.h"
+#include "poly/tiling/hermes/node.h"
+#include "poly/tiling/hermes/tensor.h"
 #include "poly/tiling/tiling_analyzer.h"
 #include "poly/tiling/tiling_algorithm.h"
 #include "poly/tiling/tiling_strategy_manager.h"
@@ -62,6 +69,10 @@ class TilingGenerator {
 
   std::pair<TileSizes, std::deque<ParamInfo>> GenerateDynamic();
 
+  TileSizes HermesTiling(TileSizes dims);
+
+  void ExtractAxisInfoFromScheduler(const isl::schedule &sch);
+
   Array<Expr> memory_constraints_;
 
  private:
@@ -81,6 +92,17 @@ class TilingGenerator {
 
   void ConvertPragmaToDims(Map<Var, Expr> var_to_prime_record);
 
+  bool IsSymbolicTiling();
+
+  void CollectAxis();
+
+  static void GetTransformedOutputShapeDatatype(const std::vector<std::shared_ptr<Tensor>> &output_tensors,
+                                                std::vector<Tensor> &transformed_output_shape);
+
+  static std::map<std::string, std::map<Tensor, int>> GetAxisToTensorToShapeIdMap(const std::shared_ptr<Node> &node);
+
+  static std::vector<Axis> GetAxisDimFromGlobal(std::vector<Axis> &axis_of_node);
+
   TilingAnalyzer &analyzer_;
   TileCandidate *cand_{nullptr};
   int64_t mem_limit_[MEM_SCOPE_BULK]{0};
@@ -89,6 +111,8 @@ class TilingGenerator {
   std::vector<int64_t> prev_tiling_;
   TileSizes dims_;
   bool tile_success_{true};
+
+  const int kBit32 = 32;
 };
 
 TileSizes NullTiling();

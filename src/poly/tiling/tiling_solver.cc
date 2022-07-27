@@ -854,7 +854,7 @@ Expr InequalitySolver::DetermineTileForDynamic(const TileAxis *axis, const Expr 
     }
   }
 
-  // Add forbid isolation constraint to final factor by custom cce call `FindDivisibleTilingFactor`.
+  // Add forbid isolation constraint to final factor by custom cce call `GetLargestDivisor`.
   if (level == CACHE1 && axis->forbid_iso) {
     auto max_final_factor = InferBoundOfExprWithCond(final_factor, {tile > 0, tile <= axis->range_extent}).max;
     bool need_constraint = !(max_final_factor.as<IntImm>() && max_final_factor.as<IntImm>()->value == 1);

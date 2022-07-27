@@ -72,6 +72,11 @@ class Tensor {
   std::string format_;
   std::string name_;
 
+  static const int kOneBytePerVal = 1;
+  static const int kTwoBytesPerVal = 2;
+  static const int kFourBytesPerVal = 4;
+  static const int kEightBytesPerVal = 8;
+
  private:
   std::unordered_map<DataType, int> datatype_coef_map_{
     {DataType::Float64, kEightBytesPerVal}, {DataType::Float32, kFourBytesPerVal}, {DataType::Float16, kTwoBytesPerVal},
@@ -86,10 +91,6 @@ class Tensor {
     {DataType::UInt32, "uint32"},   {DataType::UInt64, "uint64"},   {DataType::Bool1, "bool"},
     {DataType::Bool8, "bool8"}};
 
-  static const int kOneBytePerVal = 1;
-  static const int kTwoBytesPerVal = 2;
-  static const int kFourBytesPerVal = 4;
-  static const int kEightBytesPerVal = 8;
   static const int kOneBit = 1;
   static const int kEightBits = 8;
   static const int kSixteenBits = 16;

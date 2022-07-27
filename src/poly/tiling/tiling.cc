@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,7 +14,15 @@
  * limitations under the License.
  */
 
+#include <algorithm>
+#include <unordered_set>
+
 #include "poly/tiling/tiling.h"
+#include "poly/tiling/hermes/check_visitor.h"
+#include "poly/tiling/hermes/hardware.h"
+#include "poly/tiling/hermes/model_graph.h"
+#include "poly/tiling/hermes/tiling_algo.h"
+#include "poly/tiling/hermes/tiling_ir_survey.h"
 
 namespace akg {
 namespace ir {
@@ -23,6 +31,9 @@ namespace poly {
 TileSizes TilingGenerator::Generate() {
   TraverseSolver solver(analyzer_);
   this->cand_ = solver.Solve();
+  if (IsSymbolicTiling()) {
+    CollectAxis();
+  }
   return ConvertToDims();
 }
 
@@ -35,6 +46,9 @@ TileSizes TilingGenerator::GenerateQuickly() {
     InequalitySolver solver(analyzer_);
     this->cand_ = solver.Solve();
     this->memory_constraints_ = solver.GetMemoryConstraints();
+    if (IsSymbolicTiling()) {
+      CollectAxis();
+    }
     ConvertVarTilesToDims();
     return dims_;
   }
@@ -67,6 +81,58 @@ std::pair<TileSizes, std::deque<ParamInfo>> TilingGenerator::GenerateDynamic() {
     param_info_.clear();
   }
   return std::make_pair(dims_, param_info_);
+}
+
+bool TilingGenerator::IsSymbolicTiling() {
+  bool is_symbolic_enabled = analyzer_.scop_info_.user_config_.GetIsSymbolicTiling();
+  if (is_symbolic_enabled) {
+    bool is_force_symbolic_tiling = analyzer_.scop_info_.user_config_.GetIsForceSymbolicTiling();
+    if (is_force_symbolic_tiling) {
+      return is_symbolic_enabled;
+    }
+    if (HasSymbolicStatusChanged(analyzer_.Halide())) {
+      analyzer_.scop_info_.user_config_.SetIsSymbolicTiling(false);
+      return false;
+    }
+  }
+  return is_symbolic_enabled;
+}
+
+void TilingGenerator::CollectAxis() {
+  ModelGraph::global_axis_vec_.clear();
+  auto Collect = [](TileAxis *axis) {
+    if (axis->index < 0) {
+      return;
+    }
+    Axis detected_axis = Axis();
+    detected_axis.index_ = axis->index;
+    detected_axis.dim_axis_ = axis->dim_axis;
+    detected_axis.range_ = axis->GetConstExtent();
+    detected_axis.is_reduce_axis_ = axis->HasAttr(AT_REDUCE_AXIS);
+    detected_axis.is_reduce_src_last_ = axis->HasAttr(AT_REDUCE_SRC_LAST);
+    detected_axis.is_innermost_ =
+      axis->HasAttr(AT_BROADCAST_INNERMOST_AXIS) || axis->HasAttr(AT_TRANSPOSE_INNERMOST_AXIS);
+    if (axis->is_inner && !axis->is_pragma) {
+      detected_axis.is_inner_ = true;
+    }
+    for (auto attr : axis->attrs) {
+      if (attr.attr_key.find(AT_GEMM) != std::string::npos) {
+        detected_axis.gemm_axis_ = attr.attr_value;
+      }
+    }
+    bool has_axis = false;
+    for (auto const &global_axis : ModelGraph::global_axis_vec_) {
+      if (global_axis.dim_axis_ == detected_axis.dim_axis_ && global_axis.range_ == detected_axis.range_ &&
+          global_axis.index_ == detected_axis.index_) {
+        has_axis = true;
+        break;
+      }
+    }
+    if (!has_axis) {
+      ModelGraph::global_axis_vec_.push_back(detected_axis);
+    }
+  };
+  analyzer_.ForEachAxisTopDown(Collect);
 }
 
 TileSizes TilingGenerator::ConvertToDims() {
@@ -392,6 +458,110 @@ TileSizes NullTiling() {
   return dims;
 }
 
+std::vector<Axis> TilingGenerator::GetAxisDimFromGlobal(std::vector<Axis> &axis_of_node) {
+  for (auto &axis : axis_of_node) {
+    bool has_axis = false;
+    for (auto global_axis : ModelGraph::global_axis_vec_) {
+      if (axis.name_ == global_axis.name_) {
+        axis.dim_axis_ = global_axis.dim_axis_;
+        has_axis = true;
+        break;
+      }
+    }
+    if (!has_axis) {
+      for (auto it = ModelGraph::name_dim_set_.begin(); it != ModelGraph::name_dim_set_.end(); it++) {
+        if (axis.name_ == it->first && ModelGraph::global_axis_vec_.size() > it->second) {
+          axis.name_ = ModelGraph::global_axis_vec_[it->second].name_;
+          axis.dim_axis_ = ModelGraph::global_axis_vec_[it->second].dim_axis_;
+          break;
+        }
+      }
+    }
+  }
+  return axis_of_node;
+}
+
+TileSizes TilingGenerator::HermesTiling(TileSizes dims) {
+  std::unique_ptr<InitGraph> init_graph = std::make_unique<InitGraph>(CheckVisitor::nodes_);
+  for (auto node : CheckVisitor::nodes_) {
+    for (auto node_init : init_graph->nodes_) {
+      if (node_init->name_ == node->name_) {
+        node_init->axis_of_node_ = GetAxisDimFromGlobal(node->axis_of_node_);
+      }
+    }
+  }
+
+  bool disable_db_and_bo = true;
+  for (auto node : init_graph->nodes_) {
+    if (node->op_.op_type_ == Op::OpType::MatMul || node->op_.op_type_ == Op::OpType::BatchMatMul) {
+      disable_db_and_bo = false;
+      break;
+    }
+  }
+  if (disable_db_and_bo) {
+    g_attrs.Set(kEnableDoubleBuffer, air::make_const(Int(kBit32), false));
+    g_attrs.Set(kEnableBisectOptimize, air::make_const(Int(kBit32), false));
+  }
+
+  std::unique_ptr<ModelGraph> model_graph = std::make_unique<ModelGraph>(*init_graph);
+  model_graph->is_activated_double_buffer_ = g_attrs.GetBool(kEnableDoubleBuffer, true);
+
+  Hardware hardware(kNumCore, kMemVCSize, kMemC1Size, kMemC0Size, kMemVCAlign, kMemC1Align, kVBlockNum, kVBlockSize);
+
+  GetTilingSize(*model_graph, hardware);
+
+  size_t idx_global_axis_vec = 0;
+  for (size_t i = 0; i < std::min(dims.size(), model_graph->global_axis_vec_.size()); ++i) {
+    if (model_graph->global_axis_vec_[idx_global_axis_vec].is_inner_) {
+      idx_global_axis_vec++;
+      i--;
+      continue;
+    }
+    dims[i].c0_tiling_size = model_graph->global_axis_vec_[idx_global_axis_vec].tile_;
+    if (model_graph->global_axis_vec_[idx_global_axis_vec].c1_tiling_ == 0) {
+      dims[i].c1_tiling_size = model_graph->global_axis_vec_[idx_global_axis_vec].tile_;
+    } else {
+      dims[i].c1_tiling_size = model_graph->global_axis_vec_[idx_global_axis_vec].c1_tiling_;
+    }
+    idx_global_axis_vec++;
+  }
+
+  std::stringstream tensor_dims_str_stream;
+  tensor_dims_str_stream << "tensor dims = [" << model_graph->global_axis_vec_[0].range_;
+  for (size_t i = 1; i < model_graph->global_axis_vec_.size(); ++i) {
+    tensor_dims_str_stream << ";" << model_graph->global_axis_vec_[i].range_;
+  }
+  tensor_dims_str_stream << "]";
+  LOG(INFO) << tensor_dims_str_stream.str();
+
+  LOG(INFO) << "categorie = " << StringOfCategory(model_graph->OperatorCategory()) << std::endl;
+
+  return dims;
+}
+
+void TilingGenerator::ExtractAxisInfoFromScheduler(const isl::schedule &sch) {
+  ModelGraph::name_dim_set_.clear();
+  auto map_list = sch.get_map().get_map_list();
+  auto map_list_size = map_list.size();
+  for (unsigned i = 0; i < map_list_size; i++) {
+    auto set = map_list.get_at(i).domain();
+    auto set_size = set.get_space().dim(isl_dim_out);
+    for (unsigned j = 0; j < set_size; j++) {
+      auto dim = isl::manage(isl_set_get_dim_id(set.get(), isl_dim_out, j));
+      ModelGraph::name_dim_set_.insert(std::make_pair(dim.to_str(), j));
+    }
+  }
+
+  for (auto &global_axis : ModelGraph::global_axis_vec_) {
+    for (auto it = ModelGraph::name_dim_set_.begin(); it != ModelGraph::name_dim_set_.end(); it++) {
+      if (global_axis.dim_axis_ == it->second) {
+        global_axis.name_ = it->first;
+        break;
+      }
+    }
+  }
+}
+
 std::pair<TileSizes, std::deque<ParamInfo>> GenerateTiling(const isl::schedule &sch, ScopInfo &scop_info, Stmt body) {
   scop_info.analysis_result_.SetIsTiled(false);
   TileSizes dims = NullTiling();
@@ -408,6 +578,14 @@ std::pair<TileSizes, std::deque<ParamInfo>> GenerateTiling(const isl::schedule &
     return std::make_pair(dims, param_info);
   }
   TilingGenerator generator(analyzer);
+
+  if (analyzer.scop_info_.user_config_.GetIsSymbolicTiling() && Hardware::HasVCFail(g_attrs.GetStr(kErrorInfo, ""))) {
+    Hardware::AddVCFailCounter();
+    g_attrs.Set(kErrorInfo, StringImm::make(""));
+  } else {
+    Hardware::ResetVCFailCounter();
+  }
+
   if (analyzer.scop_info_.user_config_.GetIsDynamic()) {
     std::tie(dims, param_info) = generator.GenerateDynamic();
   } else if ((scop_info.user_config_.GetPragmaSpeedUpTiling() && analyzer.op_type_ == TileOpType::VECTOR_OP) ||
@@ -418,8 +596,18 @@ std::pair<TileSizes, std::deque<ParamInfo>> GenerateTiling(const isl::schedule &
     dims = generator.Generate();
   }
 
-  LOG(INFO) << "This dim is generated by auto tiling";
-  if (!analyzer.GetTileLogger().DumpLogFile()) LOG(WARNING) << "Write tiling log fail.";
+  // Hermes call
+  if (analyzer.scop_info_.user_config_.GetIsSymbolicTiling()) {
+    generator.ExtractAxisInfoFromScheduler(sch);
+    dims = generator.HermesTiling(dims);
+    LOG(INFO) << "This dim is generated by symbolic tiling";
+  } else {
+    LOG(INFO) << "This dim is generated by auto tiling";
+  }
+  if (!analyzer.GetTileLogger().DumpLogFile()) {
+    LOG(WARNING) << "Write tiling log fail.";
+  }
+
   return std::make_pair(dims, param_info);
 }
 

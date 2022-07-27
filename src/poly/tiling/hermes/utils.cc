@@ -68,15 +68,6 @@ int Get2PowerBelow(int n) {
   }
   return result;
 }
-
-int SearchDownDivisibleNumber(int begin, size_t divided_size) {
-  for (int i = begin; i > 0; i--) {
-    if (divided_size % i == 0) {
-      return i;
-    }
-  }
-  return 1;
-}
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

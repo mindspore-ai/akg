@@ -329,7 +329,7 @@ class TilingAnalyzer {
   void DumpLinearSeq();
   void DumpBufferInfo();
   void DumpBufferUsageTimeable();
-  static int64_t FindDivisibleTilingFactor(int64_t limit, int64_t range);
+  static int64_t GetLargestDivisor(int64_t limit, int64_t range);
   TileLogger &GetTileLogger() const {
     CHECK(logger_);
     return *(logger_.get());
