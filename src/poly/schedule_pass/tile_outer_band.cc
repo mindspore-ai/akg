@@ -1460,7 +1460,9 @@ isl::schedule_node TileOuterBand::TileConvForCpu(const isl::schedule_node &orig_
   node = node.parent();
 
   node = IsolateTilesForCpu(node, TileType::C1);
-  node = InsertMultiParallelMarker(node.parent(), FOR_PARALLEL).child(0).child(0);
+  node = InsertMultiParallelMarker(node.parent(), FOR_PARALLEL);
+  bool is_insert_mark = !GetMarkerName(node, FOR_PARALLEL).empty();
+  node = is_insert_mark ? node.child(0).child(0) : node.child(0);
   node = node.insert_mark(PROMOTE_GLOBAL_TO_REGISTER_C).child(0);
 
   node = SplitReduceStatements(node).parent();
@@ -1470,6 +1472,9 @@ isl::schedule_node TileOuterBand::TileConvForCpu(const isl::schedule_node &orig_
 
   for (int i = 0; i < seq_num; ++i) {
     node = node.child(i).child(0);
+    if (!node.isa<isl::schedule_node_band>()) {
+      continue;
+    }
     node = IsolateTilesForCpu(node, TileType::C0);
     if (i == 1) {
       for (auto mupa : all_mupa) {
