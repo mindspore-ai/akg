@@ -621,6 +621,7 @@ void AnalyzeBandNode::Run() {
   auto &bands = scop_info_.analysis_result_.GetAllOuterBandNode();
   for (auto &bn : bands) {
     AnalyzeOuterBandTemplate(bn);
+    AnalyzeOuterBandAccessInfo(bn);
     if (target_ == TARGET_CPU || target_ == TARGET_CUDA) {
       AnalyzeAxisPosition(bn);
     }
@@ -632,6 +633,24 @@ void AnalyzeBandNode::Run() {
     }
   }
   ShowBandInfo();
+}
+
+void AnalyzeBandNode::AnalyzeOuterBandAccessInfo(std::unique_ptr<OuterBandNode> &bn) {
+  auto GetCurrentBandAccessInfo = [&bn](const isl::union_map &access_map) -> isl::union_map {
+    isl::map_list access_list = access_map.get_map_list();
+    isl::union_map current_access_map = isl::union_map::empty(access_map.ctx());
+    for (auto access : access_list) {
+      auto access_id = access.domain_factor_domain().get_tuple_id(isl_dim_in);
+      for (auto stmt_id : bn->stmts) {
+        if (stmt_id == access_id) {
+          current_access_map = current_access_map.add_map(access);
+        }
+      }
+    }
+    return current_access_map;
+  };
+  bn->reads = GetCurrentBandAccessInfo(scop_info_.analysis_result_.GetReads());
+  bn->writes = GetCurrentBandAccessInfo(scop_info_.analysis_result_.GetWrites());
 }
 
 void AnalyzeBandNode::AnalyzeAxisPosition(std::unique_ptr<OuterBandNode> &bn) {
@@ -672,8 +691,8 @@ void AnalyzeBandNode::CheckVectorizationFromTensorSize(std::unique_ptr<OuterBand
     return;
   }
 
-  auto reads_access = scop_info_.analysis_result_.GetReads().domain_factor_domain();
-  auto write_access = scop_info_.analysis_result_.GetWrites().domain_factor_domain();
+  auto reads_access = bn->reads.domain_factor_domain();
+  auto write_access = bn->writes.domain_factor_domain();
   isl::map_list original_access_list = reads_access.unite(write_access).get_map_list();
 
   bool is_first_tensor = true;
@@ -781,7 +800,7 @@ void AnalyzeBandNode::RecordAllCoalescedAccessTensors(std::unique_ptr<OuterBandN
   }
 
   // Get read and write tensor information.
-  auto reads_access = scop_info_.analysis_result_.GetReads().domain_factor_domain();
+  auto reads_access = bn->reads.domain_factor_domain();
   reads_access.foreach_map([this, &bn, skip_tensors](const isl::map &map) -> void {
     auto node = bn->node;
     int band_number = static_cast<int>(node.as<isl::schedule_node_band>().n_member());

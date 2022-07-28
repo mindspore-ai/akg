@@ -36,6 +36,7 @@ class AnalyzeBandNode {
   void AnalyzeConvAndMatmulOp(const ProvideEntry &pe);
   void AnalyzeScheduleTreeTemplate();
   void AnalyzeOuterBandTemplate(std::unique_ptr<OuterBandNode> &bn);
+  void AnalyzeOuterBandAccessInfo(std::unique_ptr<OuterBandNode> &bn);
   void ShowBandInfo();
   void AnalyzeAxisPosition(std::unique_ptr<OuterBandNode> &bn);
 
