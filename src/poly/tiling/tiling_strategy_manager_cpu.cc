@@ -122,91 +122,61 @@ void CpuStrategy::SetParallelTileValue(TileAxis *axis, const int64_t axis_size, 
   axis->TileRestrainToSingleValue(Expr(c0_tile_value), TileLevel::CACHE0);
 }
 
+void CpuStrategy::GenConv2dTileByAxis(const int index, int64_t &p, int64_t tile1, int64_t tile0) {
+  TileAxis *axis = nullptr;
+  int64_t shape;
+  std::tie(axis, shape) = pending_axes_[index][p];
+  CHECK(axis != nullptr);
+  axis->TileRestrainToSingleValue(Expr((int64_t)tile1), TileLevel::CACHE1);
+  axis->TileRestrainToSingleValue(Expr((int64_t)tile0), TileLevel::CACHE0);
+  p += 1;
+}
+
 void CpuStrategy::SetConv2dTileValue(int index) {
   // format of conv2d tile should be: batch, oc_out, oh, ow, oc_in, ic_out.
   // all of them can be 1, so we use axes_names to check the exist of each axis.
-
   auto axes_names = analyzer_->scop_info_.analysis_result_.GetCpuConvolutionAxes();
   int64_t p = 0;
-
-  // batch
-  if (axes_names.find(CONV_BATCH) != std::string::npos) {
-    TileAxis *batch_axis = nullptr;
-    int64_t _;
-    std::tie(batch_axis, _) = pending_axes_[index][p];
-    CHECK(batch_axis != nullptr);
-    batch_axis->TileRestrainToSingleValue(Expr((int64_t)1), TileLevel::CACHE1);
-    batch_axis->TileRestrainToSingleValue(Expr((int64_t)1), TileLevel::CACHE0);    
-    p += 1;
+  if (axes_names.find(CONV_BATCH) != std::string::npos) {  // batch
+    GenConv2dTileByAxis(index, p, 1, 1);
   }
-
-  // oc_out
-  if (axes_names.find(CONV_OC_OUT) != std::string::npos) {
-    TileAxis *oc_out_axis = nullptr;
-    int64_t _;
-    std::tie(oc_out_axis, _) = pending_axes_[index][p];
-    CHECK(oc_out_axis != nullptr);
-    oc_out_axis->TileRestrainToSingleValue(Expr((int64_t)1), TileLevel::CACHE1);
-    oc_out_axis->TileRestrainToSingleValue(Expr((int64_t)1), TileLevel::CACHE0);
-    p += 1;
+  if (axes_names.find(CONV_OC_OUT) != std::string::npos) {  // oc_out
+    GenConv2dTileByAxis(index, p, 1, 1);
   }
-
-  // oh
-  if (axes_names.find(CONV_OH) != std::string::npos) {
-    TileAxis *oh_axis = nullptr;
-    int64_t _;
-    std::tie(oh_axis, _) = pending_axes_[index][p];
-    CHECK(oh_axis != nullptr);
-    oh_axis->TileRestrainToSingleValue(Expr((int64_t)1), TileLevel::CACHE1);
-    oh_axis->TileRestrainToSingleValue(Expr((int64_t)1), TileLevel::CACHE0);
-    p += 1;
+  if (axes_names.find(CONV_OH) != std::string::npos) {  // oh
+    GenConv2dTileByAxis(index, p, 1, 1);
   }
-
-  // ow
-  if (axes_names.find(CONV_OW) != std::string::npos) {
-    TileAxis *ow_axis = nullptr;
-    int64_t ow_shape;
-    std::tie(ow_axis, ow_shape) = pending_axes_[index][p];
-    CHECK(ow_axis != nullptr);
-
+  if (axes_names.find(CONV_OW) != std::string::npos) {  // ow
+    int64_t ow_shape = pending_axes_[index][p].second;
     /* ow_inner should follow some strategy:
     1. ow_shape % ow_tile == 0
     2. ow_tile is smaller than simd length */
     int64_t ow_tile = 1;
-    for (auto t = std::min((int64_t)31, ow_shape); t >= 1; t--) {
+    for (auto t = std::min((int64_t)15, ow_shape); t >= 1; t--) {
       CHECK(t != 0) << "Divisor t is 0, please check it.";
       if (ow_shape % t == 0) {
         ow_tile = t;
         break;
       }
     }
-    ow_axis->TileRestrainToSingleValue(Expr(ow_tile), TileLevel::CACHE1);
-    ow_axis->TileRestrainToSingleValue(Expr(ow_tile), TileLevel::CACHE0);
-    p += 1;
+    GenConv2dTileByAxis(index, p, ow_tile, ow_tile);
   }
-
-  // oc_in
-  if (axes_names.find(CONV_OC_IN) != std::string::npos) {
-    TileAxis *oc_in_axis = nullptr;
-    int64_t oc_in_shape;
-    std::tie(oc_in_axis, oc_in_shape) = pending_axes_[index][p];
-    CHECK(oc_in_axis != nullptr);
-    oc_in_axis->TileRestrainToSingleValue(Expr(oc_in_shape), TileLevel::CACHE1);
-    oc_in_axis->TileRestrainToSingleValue(Expr(oc_in_shape), TileLevel::CACHE0);
-    p += 1;
+  if (axes_names.find(CONV_OC_IN) != std::string::npos) {  // oc_in
+    int64_t oc_in_shape = pending_axes_[index][p].second;
+    GenConv2dTileByAxis(index, p, oc_in_shape, oc_in_shape);
   }
-
-  // ic_out
-  if (axes_names.find(CONV_IC_OUT) != std::string::npos) {
-    TileAxis *ic_out_axis = nullptr;
-    int64_t ic_out_shape;
-    std::tie(ic_out_axis, ic_out_shape) = pending_axes_[index][p];
-    CHECK(ic_out_axis != nullptr);
-    ic_out_axis->TileRestrainToSingleValue(Expr(ic_out_shape), TileLevel::CACHE1);
-    ic_out_axis->TileRestrainToSingleValue(Expr((int64_t)1), TileLevel::CACHE0);
-    p += 1;
+  if (axes_names.find(CONV_IC_OUT) != std::string::npos) {  // ic_out: reduction axis
+    int64_t ic_out_shape = pending_axes_[index][p].second;
+    GenConv2dTileByAxis(index, p, ic_out_shape, 1);
   }
-
+  if (axes_names.find(CONV_IC_OUT) == std::string::npos &&
+      axes_names.find(CONV_KH) != std::string::npos) {  // kh: reduction axis
+    GenConv2dTileByAxis(index, p, 1, 1);
+  }
+  if (axes_names.find(CONV_IC_OUT) == std::string::npos && axes_names.find(CONV_KH) == std::string::npos &&
+      axes_names.find(CONV_KW) != std::string::npos) {  // kw: reduction axis
+    GenConv2dTileByAxis(index, p, 1, 1);
+  }
 }
 
 void CpuStrategy::SetMatMulTileValue(int index) {
