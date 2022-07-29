@@ -979,6 +979,8 @@ class AnalysisResult {
     bool is_thread_tile{false};
     bool is_block_tile{false};
     std::set<std::string> coalesced_access_tensors;
+    isl::union_map reads;
+    isl::union_map writes;
     // user config
     bool use_shared_memory{true};
     bool use_register_memory{true};
