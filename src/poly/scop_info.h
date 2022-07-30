@@ -305,6 +305,7 @@ class UserConfig {
     ParseBoolAttr(attrs, "enable_vectorization", &enable_vectorization_);
     ParseBoolAttr(attrs, "pragma_enable_matmul", &enable_matmul_);
     ParseIntAttr(attrs, "vector_length", &vector_length_);
+    ParseBoolAttr(attrs, "use_register_memory", &use_register_memory_);
 
     if (GetTarget() == TARGET_CUDA) {
       ParseStringAttr(attrs, "device_type", &device_type_);
@@ -317,7 +318,6 @@ class UserConfig {
       ParseBoolAttr(attrs, "enable_tensor_core_use_poly", &enable_tensor_core_use_poly_);
       ParseBoolAttr(attrs, "enable_akg_reduce_lib", &enable_akg_reduce_lib_);
       ParseBoolAttr(attrs, "has_tot_ops", &has_tot_ops_);
-      ParseBoolAttr(attrs, "use_register_memory", &use_register_memory_);
       ParseBoolAttr(attrs, "use_shared_memory", &use_shared_memory_);
       ParseBoolAttr(attrs, "enable_bank_conflict_opt", &enable_bank_conflict_);
       ParseBoolAttr(attrs, "enable_one_dim_thread", &enable_one_dim_thread_);
@@ -582,8 +582,8 @@ class UserConfig {
 
   bool GetUseRegisterMemory() const { return use_register_memory_; }
   bool GetUseSharedMemory() const { return use_shared_memory_; }
-  void SetGetUseSharedMemory(bool use_shared_memory) { use_shared_memory_ = use_shared_memory; }
-  void SetGetUseRegisterMemory(bool use_register_memory) { use_register_memory_ = use_register_memory; }
+  void SetUseSharedMemory(bool use_shared_memory) { use_shared_memory_ = use_shared_memory; }
+  void SetUseRegisterMemory(bool use_register_memory) { use_register_memory_ = use_register_memory; }
 
   std::unordered_set<std::string> GetSplitTensors(const std::string &tensor_name);
   void RecordSharedTensors(const std::string &tensor_name) { shared_tensors_ += (SPACE_PATTERN + tensor_name); }
@@ -1009,6 +1009,7 @@ class AnalysisResult {
     isl::union_map reads;
     isl::union_map writes;
     std::unordered_map<std::string, int> mnk_pos;
+    bool enable_transpose{false};
     // user config
     bool use_shared_memory{true};
     bool use_register_memory{true};

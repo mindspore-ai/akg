@@ -321,9 +321,12 @@ class CodeGenLLVM :
   llvm::Value* CreateLog(const Call* op);
   llvm::Value* CreateExp(const Call* op);
   llvm::Value* CreateMatrixTranspose(const Call* op);
-  llvm::Value* CreateMatrixTransposeBase(llvm::Value *buffer, size_t row, size_t col, size_t bits=32);
-  llvm::Value* CreateMatrixTranspose4x4(llvm::Value *buffer, size_t row, size_t col, size_t bits=32);
-  llvm::Value* CreateMatrixTranspose8x4(llvm::Value *buffer, size_t row, size_t col, size_t bits=32);
+  llvm::Value* CreateMatrixTransposeBase(llvm::Value* dst_buffer, llvm::Value* src_buffer,
+                                         size_t row, size_t col, size_t bits = 32);
+  llvm::Value* CreateMatrixTranspose4x4(llvm::Value* dst_buffer, llvm::Value* src_buffer,
+                                        size_t row, size_t col, size_t bits = 32);
+  llvm::Value* CreateMatrixTranspose8x4(llvm::Value* dst_buffer, llvm::Value* src_buffer,
+                                        size_t row, size_t col, size_t bits = 32);
 };
 }  // namespace codegen
 }  // namespace air

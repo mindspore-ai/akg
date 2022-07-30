@@ -151,7 +151,11 @@ isl::schedule_node SharedMemoryManager::InsertMarkerForRegisterPromotion(const i
     if (mark_names_.find(PROMOTE_GLOBAL_TO_SHARED_C) != mark_names_.end()) {
       hoist_register_node = orig_node.child(0).insert_mark(PROMOTE_SHARED_TO_REGISTER_C);
     }
-    hoist_register_node = InsertMarkerForPromotedNode(hoist_register_node, WRITE_ID_NAME, PROMOTE_SHARED_TO_GLOBAL);
+    std::unordered_map<std::string, PromoteMarkerInfo> filter_marker_map;
+    PromoteMarkerInfo write_info;
+    write_info.markers = {PROMOTE_SHARED_TO_GLOBAL};
+    filter_marker_map[WRITE_ID_NAME] = write_info;
+    hoist_register_node = InsertMarkerForPromotedNode(hoist_register_node, filter_marker_map);
     return ReplaceMarker(hoist_register_node, PROMOTE_GLOBAL_TO_SHARED_AB, SHARED_MEM_PROMOTED_COMPLETE);
   }
 

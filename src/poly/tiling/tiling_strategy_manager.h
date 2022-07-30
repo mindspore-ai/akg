@@ -579,15 +579,17 @@ class CpuStrategy : public TilingStrategy {
  private:
   void BuildAxesQueue();
   void RecordTileValue();
-  void GenConv2dTileByAxis(const int index, int64_t &p, int64_t tile1, int64_t tile0);
-  void SetConv2dTileValue(int index);
-  void SetMatMulTileValue(int index);
-  bool SetReduceYTileValue(int index);
+  void GenConv2dTileByAxis(int64_t &p, int64_t tile1, int64_t tile0);
+  void SetConv2dTileValue();
+  void SetMatMulTileValue();
+  bool SetReduceYTileValue();
+  void SetCsrTileValue();
+  void SetElementWiseTileValue();
+  void SetTransposeTileValue();
   void SetMultiLevelTileValue();
   void SetUnrollTileValue(TileAxis *axis, const int64_t axis_size, int64_t &tile_left);
   void SetParallelTileValue(TileAxis *axis, const int64_t axis_size, const int64_t data_size,
                             bool is_unroll_axis = false, int64_t tile_left = 1);
-  void SetCsrTileValue();
   std::vector<std::vector<std::pair<TileAxis *, int64_t>>> pending_axes_;
   int min_exec_num_per_thread_{MIN_EXEC_NUM_PER_THREAD};
   int best_parallel_num_{BEST_PARALLEL_NUM};

@@ -25,6 +25,11 @@ namespace akg {
 namespace ir {
 namespace poly {
 
+struct PromoteMarkerInfo {
+  std::vector<std::string> markers;  // Insert markers from back to front
+  int axis_pos{1};
+};
+
 isl::union_set CollectDomain(const isl::schedule_node &node);
 
 isl::schedule_node MapDescendantTopDown(isl::schedule_node node,
@@ -114,8 +119,8 @@ isl::schedule_node UnrollByMarkOptions(isl::schedule_node &node, uint64_t unroll
 isl::map GetExtensionSpace(const isl::schedule_node &node, const isl::id &id);
 isl::schedule_node InsertExtensionNodeBeforeOrAfter(const isl::schedule_node &node, const isl::id &id, bool before);
 
-isl::schedule_node InsertMarkerForPromotedNode(const isl::schedule_node &orig_node, const std::string &filter_name,
-                                               const std::string &marker_name, const int aixs_pos = 1);
+isl::schedule_node InsertMarkerForPromotedNode(
+  const isl::schedule_node &orig_node, const std::unordered_map<std::string, PromoteMarkerInfo> &filter_marker_map);
 std::string GetMarkerName(const isl::schedule_node &node, std::string find_name);
 
 isl::union_set GetMappingFilterInfo(const isl::schedule_node node, MappingCfg *mapping_cfg,

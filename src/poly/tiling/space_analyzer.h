@@ -94,6 +94,7 @@ class SpaceAnalyzer {
                        Band loops);
 
   void MarkBroadcastAxes(const ProvideEntry &pe);
+  void MarkTransposeAxes(const ProvideEntry &pe);
   std::vector<Expr> FindModConstraint(const Expr &arg, std::vector<Expr> constraints);
   const For *GetBufferInnerAxis(const TensorEntry &t, int offset = 1);
   void SetAttrForAxis(int tile_band, int tile_axis, const std::string &attr_key, const std::string &attr_value);
@@ -103,7 +104,7 @@ class SpaceAnalyzer {
                    const std::string &attr_key, const std::string &attr_value, TileAxis *target);
   std::string ParseAllTypeExpr(const Expr constraint);
   std::string ParseArrayExpr(const Array<Expr> constraint);
-  
+
   Template GetOpTemplate(const Node *op);
 };
 }  // namespace poly

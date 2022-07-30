@@ -28,8 +28,7 @@ namespace ir {
 namespace poly {
 
 isl::schedule CpuMemoryManager::Run(isl::schedule sch) {
-  if (!scop_info_.user_config_.GetUseSharedMemory() ||
-      (!scop_info_.user_config_.GetEnableMatmul() && !scop_info_.user_config_.GetEnableConv2dDirect())) {
+  if (!scop_info_.user_config_.GetUseRegisterMemory()) {
     return sch;
   }
 
@@ -39,7 +38,7 @@ isl::schedule CpuMemoryManager::Run(isl::schedule sch) {
 
 isl::schedule_node CpuMemoryManager::HoistCpuMemoryOnMark(const isl::schedule_node &orig_node) {
   current_outer_bn_ = scop_info_.analysis_result_.GetOuterBandNode(band_index_);
-  if (!current_outer_bn_->use_shared_memory) {
+  if (!current_outer_bn_->use_register_memory) {
     return orig_node;
   }
 
@@ -56,7 +55,10 @@ isl::schedule_node CpuMemoryManager::HoistCpuMemoryOnMark(const isl::schedule_no
       return node;
     }
 
-    node = node.del().parent();
+    if (current_outer_bn_->template_type != Template::TRANSPOSE_OP) {
+      node = node.del();
+    }
+    node = node.parent();
     return HoistClusters(node).child(0);
   };
   auto node = orig_node;
@@ -103,19 +105,39 @@ void CpuMemoryManager::CreateClusterForOperator(const isl::schedule_node &orig_n
     mark_names_.emplace(PROMOTE_GLOBAL_TO_REGISTER_AB);
     mark_names_.emplace(PROMOTE_GLOBAL_TO_REGISTER_C);
     create_cluster.CreateClusterListForConv(orig_node, mark_names_);
+  } else if (current_outer_bn_->template_type == Template::TRANSPOSE_OP) {
+    // transpose operator
+    mark_names_.emplace(PROMOTE_TRANSPOSE);
+    create_cluster.CreateClusterListForTranspose(orig_node, mark_names_);
   }
 }
 
 isl::schedule_node CpuMemoryManager::InsertMarkerForEmit(const isl::schedule_node &orig_node) {
   isl::schedule_node node = orig_node;
+  std::unordered_map<std::string, PromoteMarkerInfo> filter_marker_map;
   if (current_outer_bn_->template_type == Template::MATMUL) {
     // matmul operator
     node = InsertMarkerForGemm(node);
   } else if (current_outer_bn_->template_type == Template::CONV) {
     // conv operator
-    node = InsertMarkerForPromotedNode(node, WRITE_ID_NAME, FOR_VECTORIZED, -1);
-    node = InsertMarkerForPromotedNode(node, WRITE_ID_NAME, FOR_UNROLLED, -1);
-    node = InsertMarkerForPromotedNode(node, READ_ID_NAME, FOR_VECTORIZED, -1);
+    PromoteMarkerInfo write_info;
+    write_info.markers = {FOR_VECTORIZED, FOR_UNROLLED};
+    write_info.axis_pos = -1;
+    filter_marker_map[WRITE_ID_NAME] = write_info;
+
+    PromoteMarkerInfo read_info;
+    read_info.markers = {FOR_VECTORIZED};
+    read_info.axis_pos = -1;
+    filter_marker_map[READ_ID_NAME] = read_info;
+    node = InsertMarkerForPromotedNode(node, filter_marker_map);
+  } else if (current_outer_bn_->template_type == Template::TRANSPOSE_OP) {
+    // transpose operator
+    PromoteMarkerInfo read_write_info;
+    read_write_info.markers = {FOR_VECTORIZED, FOR_UNROLLED};
+    read_write_info.axis_pos = -1;
+    filter_marker_map[WRITE_ID_NAME] = read_write_info;
+    filter_marker_map[READ_ID_NAME] = read_write_info;
+    node = InsertMarkerForPromotedNode(node, filter_marker_map);
   }
   return node;
 }

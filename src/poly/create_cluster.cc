@@ -629,7 +629,9 @@ bool CpuCreateCluster::CheckPromotion(const isl::schedule_node &current_node, co
                                       const TensorFootprintCluster &cluster,
                                       const std::pair<isl::id, PromotedTensorType> &tensor_info) {
   auto template_type = scop_info_.analysis_result_.GetOuterBandNode(band_index_)->template_type;
-  return template_type == Template::MATMUL || template_type == Template::CONV;
+  bool need_promotion =
+    template_type == Template::MATMUL || template_type == Template::CONV || template_type == Template::TRANSPOSE_OP;
+  return need_promotion;
 }
 
 void CpuCreateCluster::CreateClusterListForGemm(const isl::schedule_node &node,
@@ -672,6 +674,17 @@ void CpuCreateCluster::CreateClusterListForConv(const isl::schedule_node &node,
     // Promote the specific tensor at the corresponding marker position.
     PromotedTensor current_tensors = GetCurrentMarkerTensorsForGemm(tensor_set);
     RecordPromotedTensorInfo(node, mark_name, current_tensors);
+  }
+}
+
+void CpuCreateCluster::CreateClusterListForTranspose(const isl::schedule_node &node,
+                                                     const std::unordered_set<std::string> &mark_names) {
+  auto configed_tensors = scop_info_.user_config_.GetRegisterTensors();
+  // Initialize the promoted types of all tensors.
+  RecordInitPromotedTensorType(configed_tensors);
+
+  for (auto mark_name : mark_names) {
+    RecordPromotedTensorInfo(node, mark_name, all_tensors_);
   }
 }
 }  // namespace poly

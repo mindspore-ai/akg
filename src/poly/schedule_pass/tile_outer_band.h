@@ -112,6 +112,7 @@ class TileOuterBand : public SchedulePass {
   isl::schedule_node TileGemmOperatorForCpu(const isl::schedule_node &orig_node);
   isl::schedule_node TileElementWiseForCpu(const isl::schedule_node &orig_node, const bool is_all_reduce = false);
   isl::schedule_node TileConvForCpu(const isl::schedule_node &orig_node);
+  isl::schedule_node TileTransposeForCpu(const isl::schedule_node &orig_node);
 
   bool IsContainReduceStatement(const isl::schedule_node &orig_node);
   isl::schedule_node SplitReduceStatements(const isl::schedule_node &orig_node);

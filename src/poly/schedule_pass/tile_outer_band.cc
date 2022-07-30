@@ -1215,6 +1215,10 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCpu(isl::schedule_node node
     return TileConvForCpu(node);
   }
 
+  if (template_type == Template::TRANSPOSE_OP && current_outer_bn->enable_transpose) {
+    return TileTransposeForCpu(node);
+  }
+
   return TileElementWiseForCpu(node);
 }
 
@@ -1315,7 +1319,7 @@ isl::schedule_node TileOuterBand::TileCsrForCpu(const isl::schedule_node &orig_n
   auto band_node = node.as<isl::schedule_node_band>();
   node = band_node.n_member() <= 1 ? band_node : band_node.split(band_node.n_member() - 1);
   node = TileAccordingToTileType(node, TileType::C1);
-  node = InsertMarkerForLoop(node, FOR_PARALLEL);
+  node = InsertMarkerForLoop(node, FOR_PARALLEL).child(0);
   auto template_type = scop_info_.analysis_result_.GetOuterBandNode(cur_band_index_)->template_type;
   if (template_type == Template::REDUCTION) {
     node = SplitReduceStatements(node.child(0));
@@ -1532,6 +1536,29 @@ isl::schedule_node TileOuterBand::InsertMarkerForReduceY(const isl::schedule_nod
       node = node.insert_mark(REDUCE_Y_FLAG);
     }
   }
+  return node;
+}
+
+isl::schedule_node TileOuterBand::TileTransposeForCpu(const isl::schedule_node &orig_node) {
+  if (!orig_node.isa<isl::schedule_node_band>()) {
+    return orig_node;
+  }
+
+  auto node = orig_node;
+  size_t start_depth = node.get_tree_depth();
+
+  // first tiling: parallel
+  node = TileAccordingToTileType(node, TileType::C1);
+  node = TileAccordingToTileType(node, TileType::C0);
+
+  auto band_node = node.as<isl::schedule_node_band>();
+  node = band_node.split(band_node.n_member() - 1).child(0);
+  node = node.insert_mark(FOR_VECTORIZED).parent();
+  node = InsertMultiMarker(node, FOR_UNROLLED, true);
+
+  node = node.insert_mark(PROMOTE_TRANSPOSE).parent();
+  node = InsertMultiMarker(node.parent(), FOR_PARALLEL);
+  node = node.ancestor(node.get_tree_depth() - start_depth);
   return node;
 }
 
