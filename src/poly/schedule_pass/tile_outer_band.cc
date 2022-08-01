@@ -1129,9 +1129,8 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCuda(isl::schedule_node nod
   // check tilable or not, and return the node if not
   if (IsOuterTilable(node) <= 0) return node;
 
-  // make sure the node is a band node and has multiple members, insert empty band if not
-  if (!node.isa<isl::schedule_node_band>() || (!node.as<isl::schedule_node_band>().member_get_coincident(0) &&
-                                               scop_info_.user_config_.GetTileCheckCoincident())) {
+  // make sure the node is a band node, insert empty band if not
+  if (!node.isa<isl::schedule_node_band>()) {
     node = InsertEmptyPermutableBand(node);
   }
 
@@ -1403,9 +1402,8 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCpu(isl::schedule_node node
   // check tilable or not, and return the node if not
   if (IsOuterTilable(node) <= 0) return node;
 
-  // make sure the node is a band node and has multiple members, insert empty band if not
-  if (!node.isa<isl::schedule_node_band>() || (!node.as<isl::schedule_node_band>().member_get_coincident(0) &&
-                                               scop_info_.user_config_.GetTileCheckCoincident())) {
+  // make sure the node is a band node, insert empty band if not
+  if (!node.isa<isl::schedule_node_band>()) {
     node = InsertEmptyPermutableBand(node);
   }
 
