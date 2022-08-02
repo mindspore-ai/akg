@@ -176,6 +176,7 @@ def _set_tiling_attrs(out_shape, attrs):
         attrs['dim'] = ' '.join(str(x) for x in dim_list)
     return attrs
 
+
 def _update_target_info(desc_d, attr):
     target_info = desc_d.get("target_info")
     if not target_info:
@@ -190,6 +191,7 @@ def _update_target_info(desc_d, attr):
         attr["device_type"] = "a100"
 
     return attr
+
 
 def _update_compile_attr(desc_d, attr):
     # For user defined akg compile attr
@@ -221,7 +223,10 @@ def _set_attrs(desc_d, attrs, poly):
         attrs["is_csr"] = should_enable_attr(desc_d, "is_csr")
     if "enable_approximate_read" not in attrs.keys():
         attrs["enable_approximate_read"] = should_enable_attr(desc_d, "enable_approximate_read")
+    if "enable_elementwise_flatten" not in attrs.keys():
+        attrs["enable_elementwise_flatten"] = False
     attrs["enable_symbolic_tiling"] = is_symbolic_tiling(desc_d['op'])
+    attrs["process"] = desc_d["process"]
     return _update_compile_attr(desc_d, attrs)
 
 
@@ -286,25 +291,29 @@ def read_repo_file(repo_file):
     return repo
 
 
-def get_repository_file_path(file):
+def _get_default_repository_file(process):
+    filename = "repository.json" if process == "aicore" else "repository_%s.json" % process
     # get the abosulte path for a file in currect dir, input is a file's name like "a.json"
     pwd = os.path.dirname(os.path.abspath(__file__))
-    path_str = pwd + "/" + file
+    path_str = pwd + "/" + filename
     if not os.path.exists(path_str):
-        path_str = pwd + "/../config/" + file
+        path_str = pwd + "/../config/" + filename
         if not os.path.exists(path_str):
-            raise FileNotFoundError("Can not find {} in directory {} and {}".format(file, pwd, pwd + "/../config"))
+            raise FileNotFoundError("Can not find {} in directory {} and {}".format(filename, pwd, pwd + "/../config"))
     return path_str
 
 
-def _get_repository(file_name, desc_d, target=None):
+def _get_repository(desc_d, attrs):
     if os.getenv('MS_GRAPH_KERNEL_TILING'):
-        repository = read_repo_file(str(os.getenv('MS_GRAPH_KERNEL_TILING')))
-    elif 'buffer_stitch' in desc_d and target == 'cuda':
-        repository = {}
-    else:
-        repository = read_repo_file(get_repository_file_path(file_name))
-    return repository
+        return read_repo_file(str(os.getenv('MS_GRAPH_KERNEL_TILING')))
+    if 'buffer_stitch' in desc_d and attrs.get("process") == 'cuda':
+        return {}
+    if "repository_path" in attrs:
+        filepath = os.path.join(os.path.realpath(attrs["repository_path"]), "repo_op_tiling.json")
+        if os.path.exists(filepath):
+            return read_repo_file(filepath)
+    process = attrs.get("process", "aicore")
+    return read_repo_file(_get_default_repository_file(process))
 
 
 def _get_repo_attr(desc_d, compute, shape, dtype, repo, batchmatmul):
@@ -381,8 +390,7 @@ def _build_to_module(desc_s, desc_d, attrs=None, poly=True):
         desc_d = json.loads(desc_s)
         process = desc_d["process"]
         attrs.update({"process": process})
-        file_name = "repository_" + process + ".json"
-        repository = _get_repository(file_name, desc_d)
+        repository = _get_repository(desc_d, attrs)
         all_ops = set(op["name"] for op in desc_d["op_desc"])
 
         if attrs is None:
@@ -400,7 +408,7 @@ def _build_to_module(desc_s, desc_d, attrs=None, poly=True):
                 if value:
                     attrs[item] = value
         if attrs.get("dim") in (None, "") and "online_tuning" in attrs:
-            attrs = _get_online_tune_attr(desc_s, attrs, get_repository_file_path(file_name))
+            attrs = _get_online_tune_attr(desc_s, attrs, _get_default_repository_file(process))
         return desc_d, attrs
 
     def _post_update_attr(desc_s, attrs, poly):
@@ -438,7 +446,7 @@ def _build_to_module(desc_s, desc_d, attrs=None, poly=True):
     return func(process, poly, segment_tree, segment_infos)
 
 
-def _build_to_module_ascend(desc_s_in, desc_d_in, attr=None, use_repo=True):
+def _build_to_module_ascend(desc_s_in, desc_d_in, attr, use_repo=True):
     """
     build kernel with compute description in json format
     Args:
@@ -449,8 +457,7 @@ def _build_to_module_ascend(desc_s_in, desc_d_in, attr=None, use_repo=True):
     Returns:
        Module.
     """
-
-    repository = _get_repository("repository.json", desc_d_in)
+    repository = _get_repository(desc_d_in, attr)
 
     def _update_attr_by_repo(desc_s, desc_d, attr, given_attrs=None, support_online_tuning=True):
         def _auto_set_single_block(desc_d, attr):
@@ -477,7 +484,7 @@ def _build_to_module_ascend(desc_s_in, desc_d_in, attr=None, use_repo=True):
                 if tiling:
                     attr['dim'] = tiling
                 elif support_online_tuning and 'online_tuning' in attr:
-                    attr = _get_online_tune_attr(desc_s, attr, get_repository_file_path("repository.json"))
+                    attr = _get_online_tune_attr(desc_s, attr, _get_default_repository_file("aicore"))
             _, desc_s = _set_compute_attrs(desc_d, attr)
         return desc_s, attr
 
@@ -531,7 +538,7 @@ def _build_to_module_ascend(desc_s_in, desc_d_in, attr=None, use_repo=True):
             elif "online_tuning" in attr:
                 # If buffer stitch attr not in repo, use online tuning
                 tuning_attr = _get_online_tune_attr(json.dumps(desc_d), origin_stitch_attrs,
-                                                    get_repository_file_path("repository.json"))
+                                                    _get_default_repository_file("aicore"))
                 origin_stitch_attrs.update(tuning_attr)
         # Update sub json attr
         common_attr, stitch_sub_attrs = split_stitch_attr(origin_stitch_attrs, len(stitch_jsons))
@@ -608,8 +615,6 @@ def build(kernel_desc, attrs=None, poly=True, use_repo=True):
         attrs = dict()
     backend = desc_d['process']
     attrs = _set_attrs(desc_d, attrs, poly)
-    if "enable_elementwise_flatten" not in attrs.keys():
-        attrs["enable_elementwise_flatten"] = False
     if backend == 'aicore':
         return _build_to_module_ascend(desc_s, desc_d, attrs, use_repo)
     else:
