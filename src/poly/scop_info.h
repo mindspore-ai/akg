@@ -906,6 +906,21 @@ constexpr auto AT_COUNT = "COUNT";
 constexpr auto AT_PARTIAL_ELEM = "PARTIAL_ELEM";
 constexpr auto AT_HEAVY_ELTWISE = "HEAVY_ELTWISE";
 
+enum class TileType {
+  C0 = 0,
+  C1,
+  BUF,
+  BUFC1,
+  BUFC0,
+  C1BUFC1,
+  C0C1,
+  LASTC0,
+  LASTC1,
+  WARPC1,
+  VECTORIZATION,
+  Invalid,
+};
+
 enum Template {
   DEFAULT = 0,
   CONV,
