@@ -179,7 +179,7 @@ void Emitter::EmitAssign(Tensor &t, const NodeRef &input) {
     t->shape, [&](const Array<Var> &indices) { return t(indices); }, "assign_tensor_" + std::to_string(assign_count_));
   opt_.tensor_map[bind_input->op] = bind_input;
   opt_.sch_only.emplace_back(bind_input);
-  opt_.inplaces[bind_input->op] = Downcast<Expr>(input);
+  opt_.inplaces[bind_input->op] = input;
   assign_count_++;
 }
 
