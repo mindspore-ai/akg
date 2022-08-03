@@ -286,7 +286,7 @@ class TestBase(object):
                         runres = list(runres[:-1])
                     compare_res = runres
                     runres = all(runres)
-                elif isinstance(runres, collections.Iterable):
+                elif isinstance(runres, collections.abc.Iterable):
                     compare_res = list(runres)
                 else:
                     compare_res = [runres]
@@ -306,7 +306,7 @@ class TestBase(object):
                                     runres = list(runres[:-1])
                                 compare_res = runres
                                 runres = all(runres)
-                            elif isinstance(runres, collections.Iterable):
+                            elif isinstance(runres, collections.abc.Iterable):
                                 compare_res = list(runres)
                             else:
                                 compare_res = [runres]

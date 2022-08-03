@@ -17,7 +17,7 @@
 """build module"""
 import os
 import json
-from collections import Iterable
+from collections.abc import Iterable
 import akg
 from akg import tvm
 from akg.utils.kernel_exec import ReturnType, is_symbolic_tiling
