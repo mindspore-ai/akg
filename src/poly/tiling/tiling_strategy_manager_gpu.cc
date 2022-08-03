@@ -1499,7 +1499,7 @@ int64_t GpuStrategy::TileAfterThreadMapping(TileAxis *axis, size_t inner_dim, in
       while (tile_mod % SafeDivisor(tile) != 0 && tile > thread_size) {
         --tile;
       }
-    } else {
+    } else if (axis->forbid_iso) {
       // tile axis with div value
       // e.g. tile cc0 with 512 in the following code (which equals tile floordiv(cc0, 256) with 2)
       // for cc0 in 1024:
