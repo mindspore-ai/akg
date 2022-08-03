@@ -22,8 +22,8 @@
 #include "poly/scop_info.h"
 #include "poly/pass_info.h"
 
-#ifdef AKG_USE_MLS
-#include "poly/mls.h"
+#ifdef AKG_USE_POLYTOPS
+#include "poly/polytops.h"
 #endif
 
 namespace akg {
@@ -48,7 +48,7 @@ bool LoadScheduleTreeFromFile(const std::string &filename, isl::schedule &schedu
 isl::union_map DependenceAnalysis(const isl::union_map &sources, const isl::union_map &targets,
                                   const isl::union_map &kills, const isl::union_map &sch);
 isl::union_map ComputeAllDependences(const isl::schedule &schedule, const isl::union_map &reads_um,
-                                     const isl::union_map &writes_um);
+                                     const isl::union_map &writes_um, akg::ir::poly::ScopInfo &scop_info);
 isl::union_map ComputeRAW(const isl::schedule &schedule, const isl::union_map &reads_um,
                           const isl::union_map &writes_um);
 isl::schedule_node GetOuterBand(const isl::schedule_node &root);
@@ -104,32 +104,34 @@ bool IsReadOrWriteTensor(const isl::schedule_node &node, const std::string &read
 
 isl::schedule_node GetCanMappingNode(const isl::schedule_node &node);
 
-#ifdef AKG_USE_MLS
-/// \brief Unwrap and remove extra refs from an isl::union_map
-/// \param[in] umap isl::union_map to sanitize
-/// \return Sanitized isl::union_map
-isl::union_map UnwrappedAccesses(const isl::union_map &umap);
-
-/// \brief Determine whether the MLSched scheduler should be used
+#ifdef AKG_USE_POLYTOPS
+/// \brief Determine whether the PolyTOPS scheduler should be used
 /// \param[in] scop_info ScopInfo to maybe inspect
-/// \return A boolean value that indicates whether MLSched should be used
-/// \retval true if MLSched should be used
+/// \return A boolean value that indicates whether PolyTOPS should be used
+/// \retval true if PolyTOPS should be used
 /// \retval false otherwise
-bool MLSchedShouldBeUsed(akg::ir::poly::ScopInfo &scop_info);
+bool PolyTOPSShouldBeUsed(akg::ir::poly::ScopInfo &scop_info);
 
-/// \brief Initialize runtime options for MLSched
+/// \brief Determine whether PolyTOPS schedules should be checked
+/// \param[in] scop_info ScopInfo to maybe inspect
+/// \return A boolean value that indicates whether PolyTOPS schedules should be checked
+/// \retval true if PolyTOPS schedules should be checked
+/// \retval false otherwise
+bool PolyTOPSShouldCheckSchedules(const akg::ir::poly::ScopInfo &scop_info);
+
+/// \brief Initialize runtime options for PolyTOPS
 /// \param[in] scop_info ScopInfo to maybe inspect
 /// \param[in] pass_info PassInfo to maybe inspect
-/// \result Options for MLSched
+/// \result Options for PolyTOPS
 ///
-/// The method initializes and returns runtime options for the MLSched scheduler.
+/// The method initializes and returns runtime options for the PolyTOPS scheduler.
 /// The options may be decided arbitrarily, from the environment or from \a pass_info and \a scop_info.
-mls::bin::Options MLSchedOptionsInit(const akg::ir::poly::PassInfo &pass_info,
-                                     const akg::ir::poly::ScopInfo &scop_info);
+polytops::bin::Options PolyTOPSOptionsInit(const akg::ir::poly::PassInfo &pass_info,
+                                           const akg::ir::poly::ScopInfo &scop_info);
 
 /// \brief Extract the directives informations from the information coming from AKG scop
-/// \result return an hint object that can be used for MLSched scheduler.
-mls::bin::Hints ExtractDirectivesFromAKG(ScopInfo &scop_info);
+/// \result return an hint object that can be used for PolyTOPS scheduler.
+polytops::bin::Hints ExtractDirectivesFromAKG(ScopInfo &scop_info);
 #endif
 
 }  // namespace poly

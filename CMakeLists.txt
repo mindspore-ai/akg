@@ -362,7 +362,7 @@ endif(USE_CUDA)
 add_library(akg SHARED ${COMPILER_SRCS} ${RUNTIME_SRCS} ${TOPI_SRCS} ${AKG_EXTEND})
 
 add_dependencies(akg akg::isl_fixed)
-include(cmake/mls.cmake)
+include(cmake/polytops.cmake)
 
 if (EXISTS ${AUTO_TUNE_LIB})
   target_link_libraries(akg ${TVM_LINKER_LIBS} ${TVM_RUNTIME_LINKER_LIBS} akg::isl_fixed pthread ${AUTO_TUNE_LIB})

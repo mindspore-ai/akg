@@ -71,8 +71,8 @@ isl::schedule InitSchedule::Run(isl::schedule sch) {
   ComputeCopyIn(sch);
   RemoveUninitializedCopyin(scop_info_.analysis_result_.GetCopyin(), scop_info_.user_config_.GetOriginBind());
 
-  pass_info_.dependences_ =
-    ComputeAllDependences(sch, scop_info_.analysis_result_.GetReads(), scop_info_.analysis_result_.GetWrites());
+  pass_info_.dependences_ = ComputeAllDependences(sch, scop_info_.analysis_result_.GetReads(),
+                                                  scop_info_.analysis_result_.GetWrites(), scop_info_);
   auto tot_stmt = scop_info_.analysis_result_.GetTensorOfTensorStmt();
   if (!tot_stmt.empty()) {
     if (scop_info_.user_config_.GetTarget() == TARGET_CUDA ||

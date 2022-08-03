@@ -24,14 +24,16 @@ namespace ir {
 namespace poly {
 
 static constexpr const char *const kEnvStringMsDevPolyScheduler = "MS_DEV_POLY_SCHEDULER";
-static constexpr const char *const kEnvStringMsDevMlsSolver = "MS_DEV_MLS_SOLVER";
-static constexpr const char *const kEnvStringMsDevMlsVerbosity = "MS_DEV_MLS_VERBOSITY";
-static constexpr const char *const kEnvStringMsDevMlsCodeSinking = "MS_DEV_MLS_CODE_SINKING";
-static constexpr const char *const kEnvStringMsDevMlsConstantToParameter = "MS_DEV_MLS_CONSTANT_TO_PARAMETER";
-static constexpr const char *const kEnvStringMsDevMlsParameterShifting = "MS_DEV_MLS_PARAMETER_SHIFTING";
-static constexpr const char *const kEnvStringMsDevMlsPostProcessFullSets = "MS_DEV_MLS_POST_PROCESS_FULL_SETS";
-static constexpr const char *const kEnvStringMsDevMlsPostProcessExtraOuterParallelLoop =
-  "MS_DEV_MLS_POST_PROCESS_EXTRA_OUTER_PARALLEL_LOOP";
+static constexpr const char *const kEnvStringMsDevPolyTOPSSolver = "MS_DEV_POLYTOPS_SOLVER";
+static constexpr const char *const kEnvStringMsDevPolyTOPSVerbosity = "MS_DEV_POLYTOPS_VERBOSITY";
+static constexpr const char *const kEnvStringMsDevPolyTOPSCheckSchedules = "MS_DEV_POLYTOPS_CHECK_SCHEDULES";
+static constexpr const char *const kEnvStringMsDevPolyTOPSCodeSinking = "MS_DEV_POLYTOPS_CODE_SINKING";
+static constexpr const char *const kEnvStringMsDevPolyTOPSConstantToParameter = "MS_DEV_POLYTOPS_CONSTANT_TO_PARAMETER";
+static constexpr const char *const kEnvStringMsDevPolyTOPSParameterShifting = "MS_DEV_POLYTOPS_PARAMETER_SHIFTING";
+static constexpr const char *const kEnvStringMsDevPolyTOPSPostProcessFullSets =
+  "MS_DEV_POLYTOPS_POST_PROCESS_FULL_SETS";
+static constexpr const char *const kEnvStringMsDevPolyTOPSPostProcessExtraOuterParallelLoop =
+  "MS_DEV_POLYTOPS_POST_PROCESS_EXTRA_OUTER_PARALLEL_LOOP";
 
 isl::schedule_node TileBand(isl::schedule_node node, const isl::multi_val &sizes) {
   isl::ctx ctx = node.ctx();
@@ -135,7 +137,7 @@ isl::union_map DependenceAnalysis(const isl::union_map &sources, const isl::unio
 }
 
 isl::union_map ComputeAllDependences(const isl::schedule &schedule, const isl::union_map &reads_um,
-                                     const isl::union_map &writes_um) {
+                                     const isl::union_map &writes_um, akg::ir::poly::ScopInfo &scop_info) {
   auto reads = reads_um.domain_factor_domain();
   auto writes = writes_um.domain_factor_domain();
   auto sch = schedule.get_map();
@@ -146,7 +148,17 @@ isl::union_map ComputeAllDependences(const isl::schedule &schedule, const isl::u
   // WAR and WAW
   auto falseDeps = DependenceAnalysis(writes.unite(reads), writes, writes, sch);
 
+#ifdef AKG_USE_POLYTOPS
+  constexpr unsigned threshold = 32;
+  auto united = flowDeps.unite(falseDeps);
+  if (PolyTOPSShouldBeUsed(scop_info) && united.n_map() < threshold) {
+    return united;
+  } else {
+    return united.coalesce();
+  }
+#else
   return flowDeps.unite(falseDeps).coalesce();
+#endif  // AKG_USE_POLYTOPS
 }
 
 isl::union_map ComputeRAW(const isl::schedule &schedule, const isl::union_map &reads_um,
@@ -388,51 +400,46 @@ isl::schedule_node GetCanMappingNode(const isl::schedule_node &node) {
   return band_node;
 }
 
-#ifdef AKG_USE_MLS
-isl::union_map UnwrappedAccesses(const isl::union_map &umap) {
-  // Lambda to remove the range from the wrapped domain of a map
-  const auto unwrapped_map = [](const isl::map &map) {
-    const isl::set domain = map.domain().unwrap().domain();
-    const isl::set range = map.range();
-    return isl::map(domain, range);
-  };
+#ifdef AKG_USE_POLYTOPS
+bool PolyTOPSShouldBeUsed(akg::ir::poly::ScopInfo &scop_info) {
+  const auto tol = [](unsigned char c) { return std::tolower(c); };
 
-  if (umap.is_empty()) {
-    return umap;
-  }
+  bool automatic = false;
 
-  const isl::map_list mlist = umap.map_list();
-  const unsigned size = mlist.size();
-  const isl::map first_element = unwrapped_map(mlist.at(0));
-  isl::union_map result(first_element);
-  for (unsigned i = 1; i < size; ++i) {
-    const isl::map current = mlist.at(i);
-    const isl::map element = unwrapped_map(current);
-    result = result.add_map(element);
-  }
-
-  return result;
-}
-
-bool MLSchedShouldBeUsed(akg::ir::poly::ScopInfo &scop_info) {
-  bool maybe_enabled = scop_info.user_config_.GetEnableMLSched();
-
-  // Don't perform the extra checks if we recognize "isl" or "mls".
+  // We check the environment first, it overrides the scop_info.
+  // Don't perform the extra checks if we recognize "isl" or "polytops".
   // Otherwise, "auto" mode will let the remainder of the function decide.
   const char *const ms_dev_scheduler = std::getenv(kEnvStringMsDevPolyScheduler);
   if (ms_dev_scheduler) {
-    const std::string env_string(ms_dev_scheduler);
+    std::string env_string(ms_dev_scheduler);
+    std::transform(env_string.begin(), env_string.end(), env_string.begin(), tol);
     if (env_string == "isl") {
       return false;
-    } else if (env_string == "mls") {
+    } else if (env_string == "polytops") {
       return true;
-    } else if (env_string == "auto") {
-      maybe_enabled = true;
+    } else if (env_string != "auto") {
+      // warning? default to never, always, auto?
+    } else {
+      automatic = true;
     }
   }
-  if (!maybe_enabled) {
-    return false;
+
+  if (!automatic) {
+    // If no definitive decision can be taken from the environment we check the scop_info
+    std::string enable_polytops = scop_info.user_config_.GetEnablePolyTOPS();
+    std::transform(enable_polytops.begin(), enable_polytops.end(), enable_polytops.begin(), tol);
+    if (enable_polytops == "never") {
+      return false;
+    } else if (enable_polytops == "always") {
+      return true;
+    } else if (enable_polytops != "auto") {
+      // warning, default to... never, always, auto?
+    }
   }
+
+  // We reach this point if:
+  // - the environment did not explicitely specify "isl" nor "polytops"
+  // - enable_polytops did not explicitely specify "nerver" nor "always"
 
   // Explicitly avoid reduce and matmul cases
   if (scop_info.analysis_result_.GetUseGpuReduceLib() ||
@@ -458,8 +465,8 @@ bool MLSchedShouldBeUsed(akg::ir::poly::ScopInfo &scop_info) {
   }
 
   // Inspect read and writes to detect potential reductions
-  const isl::union_map reads = UnwrappedAccesses(scop_info.analysis_result_.GetReads());
-  const isl::union_map writes = UnwrappedAccesses(scop_info.analysis_result_.GetWrites());
+  const isl::union_map reads = scop_info.analysis_result_.GetReads().domain_factor_domain();
+  const isl::union_map writes = scop_info.analysis_result_.GetWrites().domain_factor_domain();
   const isl::union_map intersection = reads.intersect(writes);
   if (!intersection.is_empty() && !intersection.is_injective()) {
     return false;
@@ -468,8 +475,27 @@ bool MLSchedShouldBeUsed(akg::ir::poly::ScopInfo &scop_info) {
   return true;
 }
 
-mls::bin::Options MLSchedOptionsInit(const akg::ir::poly::PassInfo &pass_info,
-                                     const akg::ir::poly::ScopInfo &scop_info) {
+bool PolyTOPSShouldCheckSchedules(const akg::ir::poly::ScopInfo &scop_info) {
+  bool should_check = scop_info.user_config_.GetPolyTOPSCheckSchedules();
+  const char *const env_str = std::getenv(kEnvStringMsDevPolyTOPSCheckSchedules);
+  if (env_str) {
+    const auto tol = [](unsigned char c) { return std::tolower(c); };
+    std::string env_string(env_str);
+    std::transform(env_string.begin(), env_string.end(), env_string.begin(), tol);
+    if (env_string == "true") {
+      should_check = true;
+    } else if (env_string == "false") {
+      should_check = false;
+    } else {
+      // warn for unrecognized string?
+    }
+  }
+
+  return should_check;
+}
+
+polytops::bin::Options PolyTOPSOptionsInit(const akg::ir::poly::PassInfo &pass_info,
+                                           const akg::ir::poly::ScopInfo &scop_info) {
   auto env_to_bool = [](const char *const environment_variable, bool default_value = false) {
     bool result = default_value;
     const char *const env_cstr = std::getenv(environment_variable);
@@ -485,45 +511,47 @@ mls::bin::Options MLSchedOptionsInit(const akg::ir::poly::PassInfo &pass_info,
   };
 
   // Choose a solver from the ScopInfo
-  const std::string solver_string = scop_info.user_config_.GetMLSchedSolver();
-  mls::bin::Options::SolverType solver_type = mls::bin::Options::SolverTypeFromString(solver_string.c_str());
+  const std::string solver_string = scop_info.user_config_.GetPolyTOPSSolver();
+  polytops::bin::Options::SolverType solver_type = polytops::bin::Options::SolverTypeFromString(solver_string.c_str());
   // Maybe override from the environment
-  const char *const ms_dev_mlsched_solver = std::getenv(kEnvStringMsDevMlsSolver);
-  if (ms_dev_mlsched_solver) {
-    const std::string env_string(ms_dev_mlsched_solver);
-    const mls::bin::Options::SolverType env_solver_type = mls::bin::Options::SolverTypeFromString(env_string.c_str());
-    if (env_solver_type != mls::bin::Options::SolverType::kNone) {
+  const char *const ms_dev_polytops_solver = std::getenv(kEnvStringMsDevPolyTOPSSolver);
+  if (ms_dev_polytops_solver) {
+    const std::string env_string(ms_dev_polytops_solver);
+    const polytops::bin::Options::SolverType env_solver_type =
+      polytops::bin::Options::SolverTypeFromString(env_string.c_str());
+    if (env_solver_type != polytops::bin::Options::SolverType::kNone) {
       solver_type = env_solver_type;
     }
   }
-  if (solver_type == mls::bin::Options::SolverType::kNone) {
+  if (solver_type == polytops::bin::Options::SolverType::kNone) {
     // Select a default if for some reason no valid solver could be selected
-    solver_type = mls::bin::Options::SolverType::kQiuqiIp;
+    solver_type = polytops::bin::Options::SolverType::kQiuqiIp;
   }
 
-  unsigned long int verbosity = mls::bin::Options::GetDefaultVerbosity();
-  const char *const ms_dev_mlsched_verbosity = std::getenv(kEnvStringMsDevMlsVerbosity);
-  if (ms_dev_mlsched_verbosity) {
-    verbosity = std::stoul(ms_dev_mlsched_verbosity);
+  unsigned long int verbosity = polytops::bin::Options::GetDefaultVerbosity();
+  const char *const ms_dev_polytops_verbosity = std::getenv(kEnvStringMsDevPolyTOPSVerbosity);
+  if (ms_dev_polytops_verbosity) {
+    verbosity = std::stoul(ms_dev_polytops_verbosity);
   }
 
-  bool code_sinking = scop_info.user_config_.GetMLSchedCodeSinking() || pass_info.dependences_.is_empty();
-  code_sinking = env_to_bool(kEnvStringMsDevMlsCodeSinking, code_sinking);
+  bool code_sinking = scop_info.user_config_.GetPolyTOPSCodeSinking() || pass_info.dependences_.is_empty();
+  code_sinking = env_to_bool(kEnvStringMsDevPolyTOPSCodeSinking, code_sinking);
 
-  bool constant_to_parameter = scop_info.user_config_.GetMLSchedConstantToParameter();
-  constant_to_parameter = env_to_bool(kEnvStringMsDevMlsConstantToParameter, constant_to_parameter);
+  bool constant_to_parameter = scop_info.user_config_.GetPolyTOPSConstantToParameter();
+  constant_to_parameter = env_to_bool(kEnvStringMsDevPolyTOPSConstantToParameter, constant_to_parameter);
 
-  bool parameter_shifting = scop_info.user_config_.GetMLSchedParameterShifting();
-  parameter_shifting = env_to_bool(kEnvStringMsDevMlsParameterShifting, parameter_shifting);
+  bool parameter_shifting = scop_info.user_config_.GetPolyTOPSParameterShifting();
+  parameter_shifting = env_to_bool(kEnvStringMsDevPolyTOPSParameterShifting, parameter_shifting);
 
-  bool post_process_full_sets = scop_info.user_config_.GetMLSchedPostProcessingFullSets();
-  post_process_full_sets = env_to_bool(kEnvStringMsDevMlsPostProcessFullSets, post_process_full_sets);
+  bool post_process_full_sets = scop_info.user_config_.GetPolyTOPSPostProcessingFullSets();
+  post_process_full_sets = env_to_bool(kEnvStringMsDevPolyTOPSPostProcessFullSets, post_process_full_sets);
 
-  bool post_process_extra_outer_parallel_loop = scop_info.user_config_.GetMLSchedPostProcessingExtraOuterParallelLoop();
+  bool post_process_extra_outer_parallel_loop =
+    scop_info.user_config_.GetPolyTOPSPostProcessingExtraOuterParallelLoop();
   post_process_extra_outer_parallel_loop =
-    env_to_bool(kEnvStringMsDevMlsPostProcessExtraOuterParallelLoop, post_process_extra_outer_parallel_loop);
+    env_to_bool(kEnvStringMsDevPolyTOPSPostProcessExtraOuterParallelLoop, post_process_extra_outer_parallel_loop);
 
-  mls::bin::Options result;
+  polytops::bin::Options result;
   result.SetSolverType(solver_type);
   result.SetVerbosity(verbosity);
   result.SetCodeSinking(code_sinking);
@@ -535,8 +563,8 @@ mls::bin::Options MLSchedOptionsInit(const akg::ir::poly::PassInfo &pass_info,
   return result;
 }
 
-mls::bin::Hints ExtractDirectivesFromAKG(ScopInfo &scop_info) {
-  mls::bin::Hints hints;
+polytops::bin::Hints ExtractDirectivesFromAKG(ScopInfo &scop_info) {
+  polytops::bin::Hints hints;
 
   ForTypeMap directives = scop_info.analysis_result_.GetForTypeMap();
   std::map<std::string, std::vector<int>> serials_directive;

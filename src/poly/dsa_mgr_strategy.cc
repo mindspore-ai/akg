@@ -57,12 +57,12 @@ void DsaMgrStrategy::RegisterMemPromPasses() {
 }
 
 void DsaMgrStrategy::RegisterSchedulePasses() {
-#ifdef AKG_USE_MLS
-  const bool enable_mlsched = MLSchedShouldBeUsed(scop_info_);
+#ifdef AKG_USE_POLYTOPS
+  const bool enable_polytops = PolyTOPSShouldBeUsed(scop_info_);
 #else
-  const bool enable_mlsched = false;
+  const bool enable_polytops = false;
 #endif
-  if (!enable_mlsched && !scop_info_.user_config_.GetDisableGroup()) {
+  if (!enable_polytops && !scop_info_.user_config_.GetDisableGroup()) {
     RegisterPass(std::make_shared<GroupStatements>(pass_info_));
   }
   RegisterPass(std::make_shared<ComputeSchedule>(pass_info_, scop_info_));
@@ -75,7 +75,7 @@ void DsaMgrStrategy::RegisterSchedulePasses() {
   if (scop_info_.user_config_.GetKeepOuterBandOrder()) {
     RegisterPass(std::make_shared<KeepOuterBandOrder>(scop_info_));
   }
-  if (!enable_mlsched) {
+  if (!enable_polytops) {
     RegisterPass(std::make_shared<UnGroupStatements>(pass_info_));
   }
 }

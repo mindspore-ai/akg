@@ -35,11 +35,7 @@ def gen_data(shape1, shape2, dtype1, dtype2):
 
 def lu_run(shape1, shape2, dtype1, dtype2, poly_sch=True, attrs=None):
     attrs["pragma_enable_schedule_outer_coincidence"] = True
-    thread = str(shape1[0] if shape1[0] < 1024 else 1024)
-    attrs["dim"] = " 0 0 " + thread + " 1 b0 t0 1 0 " + thread + " 1 b0 t0"
-    attrs["bind_thread"] = thread
-    attrs["bind_block"] = "1"
-    mod = utils.op_build_test(lu, [shape1, shape2], 
+    mod = utils.op_build_test(lu, [shape1, shape2],
                               [dtype1, dtype2], polyhedral=poly_sch,
                               attrs=attrs, kernel_name="lu")
     input1, input2, expect = gen_data(shape1, shape2, dtype1, dtype2)

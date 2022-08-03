@@ -240,15 +240,16 @@ class UserConfig {
     ParseStringAttr(attrs, "mind_trick", &mind_trick_json_);
     ParseBoolAttr(attrs, "mind_trick_autogen_gpu_automap", &mind_trick_gpu_autogen_automap_);
 
-    // MLSched
-    ParseBoolAttr(attrs, "enable_mlsched", &enable_mlsched_);
-    ParseStringAttr(attrs, "mlsched_solver", &mlsched_solver_);
-    ParseBoolAttr(attrs, "mlsched_code_sinking", &mlsched_code_sinking_);
-    ParseBoolAttr(attrs, "mlsched_constant_to_parameter", &mlsched_constant_to_parameter_);
-    ParseBoolAttr(attrs, "mlsched_parameter_shifting", &mlsched_parameter_shifting_);
-    ParseBoolAttr(attrs, "mlsched_post_processing_full_sets", &mlsched_post_processing_full_sets_);
-    ParseBoolAttr(attrs, "mlsched_post_processing_extra_outer_parallel_loop",
-                  &mlsched_post_processing_extra_outer_parallel_loop_);
+    // PolyTOPS
+    ParseStringAttr(attrs, "enable_polytops", &enable_polytops_);
+    ParseStringAttr(attrs, "polytops_solver", &polytops_solver_);
+    ParseBoolAttr(attrs, "polytops_check_schedules", &polytops_check_schedules_);
+    ParseBoolAttr(attrs, "polytops_code_sinking", &polytops_code_sinking_);
+    ParseBoolAttr(attrs, "polytops_constant_to_parameter", &polytops_constant_to_parameter_);
+    ParseBoolAttr(attrs, "polytops_parameter_shifting", &polytops_parameter_shifting_);
+    ParseBoolAttr(attrs, "polytops_post_processing_full_sets", &polytops_post_processing_full_sets_);
+    ParseBoolAttr(attrs, "polytops_post_processing_extra_outer_parallel_loop",
+                  &polytops_post_processing_extra_outer_parallel_loop_);
 
     ParseCustomTilingAttr(attrs, "custom_tiling", &custom_tiling_);
     ParseBoolAttr(attrs, "pragma_analyze_reuse_buffer", &pragma_analyze_reuse_buffer_);
@@ -414,23 +415,27 @@ class UserConfig {
   void SetMindTrickGpuAutogenAutomap(bool status) { mind_trick_gpu_autogen_automap_ = status; }
   bool GetMindTrickGpuAutogenAutomap(void) const { return mind_trick_gpu_autogen_automap_; }
 
-  void SetEnableMLSched(bool status) { enable_mlsched_ = status; }
-  bool GetEnableMLSched(void) const { return enable_mlsched_; }
-  void SetMLSchedSolver(const std::string &solver) { mlsched_solver_ = solver; }
-  std::string GetMLSchedSolver(void) const { return mlsched_solver_; }
-  void SetMLSchedCodeSinking(bool toggle) { mlsched_code_sinking_ = toggle; }
-  bool GetMLSchedCodeSinking(void) const { return mlsched_code_sinking_; }
-  void SetMLSchedConstantToParameter(bool toggle) { mlsched_constant_to_parameter_ = toggle; }
-  bool GetMLSchedConstantToParameter(void) const { return mlsched_constant_to_parameter_; }
-  void SetMLSchedParameterShifting(bool toggle) { mlsched_parameter_shifting_ = toggle; }
-  bool GetMLSchedParameterShifting(void) const { return mlsched_parameter_shifting_; }
-  void SetMLSchedPostProcessingFullSets(bool toggle) { mlsched_post_processing_full_sets_ = toggle; }
-  bool GetMLSchedPostProcessingFullSets(void) const { return mlsched_post_processing_full_sets_; }
-  void SetMLSchedPostProcessingExtraOuterParallelLoop(bool toggle) {
-    mlsched_post_processing_extra_outer_parallel_loop_ = toggle;
+  void SetEnablePolyTOPS(const std::string &status) { enable_polytops_ = status; }
+  std::string GetEnablePolyTOPS(void) const { return enable_polytops_; }
+  void SetPolyTOPSWasUsed(bool status) { polytops_was_used_ = status; }
+  bool GetPolyTOPSWasUsed(void) const { return polytops_was_used_; }
+  void SetPolyTOPSSolver(const std::string &solver) { polytops_solver_ = solver; }
+  std::string GetPolyTOPSSolver(void) const { return polytops_solver_; }
+  void SetPolyTOPSCheckSchedules(const bool enable) { polytops_check_schedules_ = enable; }
+  bool GetPolyTOPSCheckSchedules(void) const { return polytops_check_schedules_; }
+  void SetPolyTOPSCodeSinking(bool toggle) { polytops_code_sinking_ = toggle; }
+  bool GetPolyTOPSCodeSinking(void) const { return polytops_code_sinking_; }
+  void SetPolyTOPSConstantToParameter(bool toggle) { polytops_constant_to_parameter_ = toggle; }
+  bool GetPolyTOPSConstantToParameter(void) const { return polytops_constant_to_parameter_; }
+  void SetPolyTOPSParameterShifting(bool toggle) { polytops_parameter_shifting_ = toggle; }
+  bool GetPolyTOPSParameterShifting(void) const { return polytops_parameter_shifting_; }
+  void SetPolyTOPSPostProcessingFullSets(bool toggle) { polytops_post_processing_full_sets_ = toggle; }
+  bool GetPolyTOPSPostProcessingFullSets(void) const { return polytops_post_processing_full_sets_; }
+  void SetPolyTOPSPostProcessingExtraOuterParallelLoop(bool toggle) {
+    polytops_post_processing_extra_outer_parallel_loop_ = toggle;
   }
-  bool GetMLSchedPostProcessingExtraOuterParallelLoop(void) const {
-    return mlsched_post_processing_extra_outer_parallel_loop_;
+  bool GetPolyTOPSPostProcessingExtraOuterParallelLoop(void) const {
+    return polytops_post_processing_extra_outer_parallel_loop_;
   }
 
   // getter for schedule tree transform config
@@ -767,14 +772,16 @@ class UserConfig {
   bool mind_trick_gpu_has_swizzle_{false};
   bool mind_trick_gpu_autogen_automap_{true};
 
-  // MLSched config
-  bool enable_mlsched_{false};
-  std::string mlsched_solver_{""};
-  bool mlsched_code_sinking_{true};
-  bool mlsched_constant_to_parameter_{true};
-  bool mlsched_parameter_shifting_{true};
-  bool mlsched_post_processing_full_sets_{true};
-  bool mlsched_post_processing_extra_outer_parallel_loop_{false};
+  // PolyTOPS config
+  std::string enable_polytops_{"never"};
+  bool polytops_was_used_{false};
+  std::string polytops_solver_{""};
+  bool polytops_check_schedules_{true};
+  bool polytops_code_sinking_{true};
+  bool polytops_constant_to_parameter_{true};
+  bool polytops_parameter_shifting_{false};
+  bool polytops_post_processing_full_sets_{true};
+  bool polytops_post_processing_extra_outer_parallel_loop_{false};
 
   // schedule tree transform config
   bool remove_self_dependence_{true};

@@ -21,7 +21,7 @@ from tests.st.networks.comm_functions import compare_base_line
 
 
 @pytest.mark.skip
-def test_network(backend, network, level, split_nums=1, split_idx=0, check_performance=False):
+def test_network(backend, network, level, split_nums=1, split_idx=0, check_performance=False, custom_attrs=None):
     pwd = os.path.dirname(os.path.abspath(__file__))
     script_file = os.path.join(pwd, "run_composite_json.py")
 
@@ -43,7 +43,7 @@ def test_network(backend, network, level, split_nums=1, split_idx=0, check_perfo
         file_path = os.path.join(files_path, item)
         if not check_performance:
             poly = True
-            attrs = None
+            attrs = custom_attrs if custom_attrs else None
             test_single_file(file_path, attrs, poly, profiling=False)
         else:
             file_name = item.split('.')[0]
@@ -145,21 +145,21 @@ def test_bert_large_gpu_level1():
 @pytest.mark.platform_x86_gpu_training
 @pytest.mark.env_onecard
 def test_cyclegan_gpu_level0():
-    test_network("gpu", "cyclegan", "level0")
+    test_network("gpu", "cyclegan", "level0", custom_attrs={ "polytops_parameter_shifting": True })
 
 
 @pytest.mark.level1
 @pytest.mark.platform_x86_gpu_training
 @pytest.mark.env_onecard
 def test_cyclegan_gpu_level0_perf():
-    test_network("gpu", "cyclegan", "level0", check_performance=True)
+    test_network("gpu", "cyclegan", "level0", check_performance=True, custom_attrs={ "polytops_parameter_shifting": True })
 
 
 @pytest.mark.level1
 @pytest.mark.platform_x86_gpu_training
 @pytest.mark.env_onecard
 def test_cyclegan_gpu_level1():
-    test_network("gpu", "cyclegan", "level1", check_performance=True)
+    test_network("gpu", "cyclegan", "level1", check_performance=True, custom_attrs={ "polytops_parameter_shifting": True })
 
 
 @pytest.mark.level0
@@ -208,14 +208,14 @@ def test_deep_speech_gpu_level1():
 @pytest.mark.platform_x86_gpu_training
 @pytest.mark.env_onecard
 def test_dqn_gpu_level0():
-    test_network("gpu", "dqn", "level0")
+    test_network("gpu", "dqn", "level0", custom_attrs={ "polytops_parameter_shifting": True })
 
 
 @pytest.mark.level1
 @pytest.mark.platform_x86_gpu_training
 @pytest.mark.env_onecard
 def test_dqn_gpu_level0_perf():
-    test_network("gpu", "dqn", "level0", check_performance=True)
+    test_network("gpu", "dqn", "level0", check_performance=True, custom_attrs={ "polytops_parameter_shifting": True })
 
 
 @pytest.mark.level0
