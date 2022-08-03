@@ -1595,9 +1595,13 @@ std::pair<int64_t, int64_t> GpuStrategy::GetProposalParallelSize(int problem_siz
   } else if (problem_size <= warp_sizes_ * thread_coef_.second * num_sm_ * active_blocks_per_sm_.second) {
     thread_size = TilingAnalyzer::GetLargestDivisor(warp_sizes_ * thread_coef_.second, problem_size);
     block_size = num_sm_ * active_blocks_per_sm_.second;
-  } else {
+  } else if (problem_size <= warp_sizes_ * thread_coef_.second * num_sm_ * active_blocks_per_sm_.second * num_sm_) {
     thread_size = total_available_thread_;
     block_size = num_sm_ * active_blocks_per_sm_.second;
+  } else {
+    // extremely large shape
+    thread_size = total_available_thread_;
+    block_size = num_sm_ * active_blocks_per_sm_.second * double_;
   }
 
   return std::make_pair(block_size, thread_size);
