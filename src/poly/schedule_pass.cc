@@ -34,6 +34,11 @@ static constexpr const char *const kEnvStringMsDevPolyTOPSPostProcessFullSets =
   "MS_DEV_POLYTOPS_POST_PROCESS_FULL_SETS";
 static constexpr const char *const kEnvStringMsDevPolyTOPSPostProcessExtraOuterParallelLoop =
   "MS_DEV_POLYTOPS_POST_PROCESS_EXTRA_OUTER_PARALLEL_LOOP";
+static constexpr const char *const kEnvStringMsDevPolyTOPSLargeOuterBounds = "MS_DEV_POLYTOPS_LARGE_OUTER_BOUNDS";
+static constexpr const char *const kEnvStringMsDevPolyTOPSEnableSkewing = "MS_DEV_POLYTOPS_ENABLE_SKEWING";
+static constexpr const char *const kEnvStringMsDevPolyTOPSEnableParallelSkewingOnly =
+  "MS_DEV_POLYTOPS_ENABLE_PARALLEL_SKEWING_ONLY";
+static constexpr const char *const kEnvStringMsDevPolyTOPSDumpProblems = "MS_DEV_POLYTOPS_DUMP_PROBLEMS";
 
 isl::schedule_node TileBand(isl::schedule_node node, const isl::multi_val &sizes) {
   isl::ctx ctx = node.ctx();
@@ -551,6 +556,19 @@ polytops::bin::Options PolyTOPSOptionsInit(const akg::ir::poly::PassInfo &pass_i
   post_process_extra_outer_parallel_loop =
     env_to_bool(kEnvStringMsDevPolyTOPSPostProcessExtraOuterParallelLoop, post_process_extra_outer_parallel_loop);
 
+  bool large_outer_bounds = scop_info.user_config_.GetPolyTOPSLargeOuterBounds();
+  large_outer_bounds = env_to_bool(kEnvStringMsDevPolyTOPSLargeOuterBounds, large_outer_bounds);
+
+  bool enable_skewing = scop_info.user_config_.GetPolyTOPSEnableSkewing();
+  enable_skewing = env_to_bool(kEnvStringMsDevPolyTOPSEnableSkewing, enable_skewing);
+
+  bool enable_parallel_skewing_only = scop_info.user_config_.GetPolyTOPSEnableParallelSkewingOnly();
+  enable_parallel_skewing_only =
+    env_to_bool(kEnvStringMsDevPolyTOPSEnableParallelSkewingOnly, enable_parallel_skewing_only);
+
+  bool dump_problems = scop_info.user_config_.GetPolyTOPSDumpProblems();
+  dump_problems = env_to_bool(kEnvStringMsDevPolyTOPSDumpProblems, dump_problems);
+
   polytops::bin::Options result;
   result.SetSolverType(solver_type);
   result.SetVerbosity(verbosity);
@@ -559,6 +577,10 @@ polytops::bin::Options PolyTOPSOptionsInit(const akg::ir::poly::PassInfo &pass_i
   result.SetParameterShifting(parameter_shifting);
   result.SetFullSetsPostProcessing(post_process_full_sets);
   result.SetExtraParallelOuterLoopPostProcessing(post_process_extra_outer_parallel_loop);
+  result.SetEnableLargeOuterBounds(large_outer_bounds);
+  result.SetEnableSkewing(enable_skewing);
+  result.SetEnableParallelSkewingOnly(enable_parallel_skewing_only);
+  result.SetDumpProblems(dump_problems);
 
   return result;
 }

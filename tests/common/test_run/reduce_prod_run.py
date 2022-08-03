@@ -20,6 +20,11 @@ from akg.utils.result_analysis import target_profiling
 from akg.utils.format_transform import to_tvm_nd_array
 
 def reduce_prod_run(shape, dtype, axis=None, keepdims=False, attrs=None):
+    default_attrs = { "polytops_parameter_shifting": True }
+    if attrs is None:
+        attrs = {}
+    attrs.update(default_attrs)
+
     ops_attrs = [axis, keepdims]
 
     if 'tuning' in attrs.keys():

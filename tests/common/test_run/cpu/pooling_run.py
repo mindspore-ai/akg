@@ -110,7 +110,7 @@ def pooling_run(shape_data, kernel, stride, padding, pool_type, dtype,
                 ceil_mode, count_include_pad=True,
                 data_layout="NCHWc", poly_sch=True, attrs=None):
 
-    default_attrs = {"enable_auto_fuse": False}
+    default_attrs = {"enable_auto_fuse": False,"polytops_parameter_shifting": True, "polytops_enable_skewing": False}
     attrs = {} if attrs == None else attrs
     attrs.update(default_attrs)
     attrs["target"] = attrs.get("target", "llvm")

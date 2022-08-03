@@ -68,7 +68,7 @@ def conv2d_run(shape_data, shape_weight, stride=(1, 1), padding=(0, 0, 0, 0), di
     if data_layout not in support_layout_format or output_layout not in support_layout_format:
         raise ValueError("Only layout NCHWc/NCHW supported")
 
-    default_attrs = {"enable_auto_fuse": False, "pragma_enable_conv2d_direct": True}
+    default_attrs = {"enable_auto_fuse": False, "pragma_enable_conv2d_direct": True, "polytops_enable_skewing": False }
     attrs = {} if attrs == None else attrs
     attrs.update(default_attrs)
     attrs["feature"] = attrs.get("feature", "avx2")

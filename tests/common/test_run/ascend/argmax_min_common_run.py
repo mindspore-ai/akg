@@ -25,9 +25,10 @@ from tests.common.test_utils import compute_blockdim
 
 
 def common_run(shape, dtype, axis, attrs, method):
+    default_attrs = { "enable_algebra_simplify": True, "polytops_code_sinking": False }
     if attrs is None:
         attrs = {}
-    attrs["enable_algebra_simplify"] = True
+    attrs.update(default_attrs)
     if attrs.get("dynamic"):
         build_shape = []
         for i in range(len(shape)):
