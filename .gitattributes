@@ -120,7 +120,3 @@ prebuild/aarch64/multi_core_loop_switch_hoist.cc.o filter=lfs diff=lfs merge=lfs
 prebuild/aarch64/replace_fargmax_cast.cc.o filter=lfs diff=lfs merge=lfs -text
 prebuild/x86_64/lower_cce.cc.o filter=lfs diff=lfs merge=lfs -text
 prebuild/aarch64/lower_cce.cc.o filter=lfs diff=lfs merge=lfs -text
-prebuild/aarch64/scheduling_mind_trick_ascend.cc.o filter=lfs diff=lfs merge=lfs -text
-prebuild/x86_64/light_cp.cc.o filter=lfs diff=lfs merge=lfs -text
-prebuild/x86_64/scheduling_mind_trick_ascend.cc.o filter=lfs diff=lfs merge=lfs -text
-prebuild/aarch64/light_cp.cc.o filter=lfs diff=lfs merge=lfs -text

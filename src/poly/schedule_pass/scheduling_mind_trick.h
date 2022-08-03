@@ -1,5 +1,5 @@
 /**
- * Copyright 2020-2021 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -249,6 +249,8 @@ class SchedulingMindTrick {
 
   static std::tuple<std::string, std::string> AutoGenSoftConstraints(ScopInfo &scop_info, const isl::schedule &sch);
   static std::tuple<std::string, std::string> AutoGenGPUSoftConstraints(ScopInfo &scop_info, const isl::schedule &sch);
+  static std::tuple<std::string, std::string> AutoGenAscend910SoftConstraints(ScopInfo &scop_info,
+                                                                              const isl::schedule &sch);
 
   bool BuildInfluencedSchedule(const isl::schedule &schedule);
 
@@ -325,10 +327,6 @@ class SchedulingMindTrick {
   SchedulingMindTrick();
   // clang-format on
 };
-
-std::tuple<std::string, std::string> AutoGenAscend910SoftConstraints(const ScopInfo &scop_info,
-                                                                     const isl::schedule &sch);
-
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

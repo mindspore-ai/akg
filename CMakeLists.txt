@@ -235,6 +235,7 @@ file(
   ${TVM_DIR}/src/runtime/vm/profiler/*.cc
   ${TVM_DIR}/src/codegen/stackvm/*.cc
   ${TVM_DIR}/src/runtime/cce/*.cc
+  ${AKG_SOURCE_DIR}/src/light_cp/*.cc
   ${AKG_SOURCE_DIR}/src/poly/*.cc
   ${AKG_SOURCE_DIR}/src/poly/schedule_pass/*.cc
   ${AKG_SOURCE_DIR}/src/poly/schedule_pass_gpu/*.cc
