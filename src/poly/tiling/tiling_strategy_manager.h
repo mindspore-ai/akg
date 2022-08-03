@@ -287,6 +287,7 @@ class ReduceStrategy : public TilingStrategy {
   int64_t total_reduce_size_;
   int64_t possible_injective_blocks_;
   int64_t possible_reduce_blocks_;
+  size_t max_fuse_size_{2};
 };
 
 class VectorizedStrategy : public TilingStrategy {

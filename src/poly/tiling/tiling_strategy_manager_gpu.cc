@@ -515,6 +515,9 @@ void ReduceStrategy::UpdateAxes(int possible_blocks, int default_elem_per_thread
   auto inject_len = injective_axes_.size();
   for (size_t i = 0; i < inject_len; ++i) {
     auto axis_in = injective_axes_[i];
+    if (axis_in->HasAttr(AT_MOD) && axis_in->c1_constraints.tile_min_.as<IntImm>()->value == MIN_TILE) {
+      axis_in->TileRestrainLower(CastIntToExpr(reduce_threads_), TileLevel::CACHE1);
+    }
     if (i == inject_len - 1) {
       axis_in->thread_constraints.map_min_ = injective_threads_;
       axis_in->thread_constraints.map_extent_ = injective_threads_;
@@ -669,16 +672,16 @@ const void ReduceStrategy::DealWith4DFusedReduce() {
       continue;
     }
     int last_mod_value = -1;
-    size_t num_mod_axis = 0;
+    size_t fuse_axis_size = 1;  // count myself
     for (const auto &attr : axis->attrs) {
       if (attr.attr_key != AT_MOD) {
         continue;
       }
       CHECK_NE(attr.attr_value, "");
       last_mod_value = StrToDecimalInt(attr.attr_value);
-      ++num_mod_axis;
+      ++fuse_axis_size;
     }
-    if (num_mod_axis < 1) {
+    if (fuse_axis_size <= max_fuse_size_) {
       continue;
     }
     axis->TileRestrainLower(CastIntToExpr(last_mod_value), TileLevel::CACHE1);
