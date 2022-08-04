@@ -48,7 +48,7 @@ from .. import stmt as _stmt
 from .. import make as _make
 from .. import api  as _api
 from .. import ir_pass as _ir_pass
-from collections import Iterable
+from collections.abc import Iterable
 from ..intrin import call_pure_intrin
 
 
