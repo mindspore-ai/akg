@@ -75,7 +75,7 @@ isl::schedule CpuMemoryManager::HoistCpuMemory() {
     int number = static_cast<int>(node.n_children());
     for (int i = 0, current_band_index = 0; i < number; ++i) {
       auto promotion_node = node.child(i).child(0);
-      if (promotion_node.isa<isl::schedule_node_leaf>()) {
+      if (!IsContainBandNode(promotion_node)) {
         continue;
       }
       band_index_ = current_band_index;

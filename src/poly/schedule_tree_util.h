@@ -157,6 +157,7 @@ isl::schedule_node ReConstructSetOrSequenceNode(const isl::schedule_node &cur_no
                                                 const isl::schedule_node &exit_node,
                                                 const std::vector<size_t> &pos = {});
 isl::schedule_node ReConstructBandNode(const isl::schedule_node &cur_node, const isl::schedule_node &orig_node);
+bool IsContainBandNode(const isl::schedule_node &orig_node);
 
 }  // namespace poly
 }  // namespace ir
