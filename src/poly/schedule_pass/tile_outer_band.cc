@@ -175,7 +175,7 @@ isl::schedule_node TileOuterBand::ReverseTraverseChild(isl::schedule_node node,
     is_sequence_node_ = node.isa<isl::schedule_node_sequence>();
     // multiple outer bands, use same filter strategy as in auto tiling
     for (auto i = 0; i < static_cast<int>(node.n_children()); ++i) {
-      if (node.child(i).child(0).isa<isl::schedule_node_leaf>() && scop_info_.user_config_.GetTarget() != TARGET_CCE) {
+      if (!IsContainBandNode(node.child(i).child(0)) && scop_info_.user_config_.GetTarget() != TARGET_CCE) {
         continue;
       }
       tile_sizes_ = cur_band_index_ < tiles_.size() ? tiles_[cur_band_index_].dim_infos : tiles_[0].dim_infos;

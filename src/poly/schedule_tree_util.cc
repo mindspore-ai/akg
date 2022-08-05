@@ -1148,6 +1148,19 @@ isl::schedule_node ReConstructBandNode(const isl::schedule_node &cur_node, const
   return band_node;
 }
 
+// Determine whether the current node contains a band node.
+bool IsContainBandNode(const isl::schedule_node &orig_node) {
+  bool is_include_band_node = false;
+  orig_node.foreach_descendant_top_down([&is_include_band_node](const isl::schedule_node &node) -> bool {
+    if (node.isa<isl::schedule_node_band>()) {
+      is_include_band_node = true;
+      return false;
+    }
+    return true;
+  });
+  return is_include_band_node;
+}
+
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg
