@@ -18,14 +18,11 @@
 #define POLY_TILING_H_
 
 #include "poly/schedule_pass.h"
+#include "poly/isolate_tile_manager.h"
 
 namespace akg {
 namespace ir {
 namespace poly {
-
-constexpr auto KH_KW_DEPTH = 2;
-constexpr auto DIM_SIZE = 4;
-constexpr auto CUSTOM_DIM_SIZE = 6;
 
 /*
  * Tile the outer band accoding to TilingInfo. In this pass, we get the out-most band,
@@ -38,20 +35,6 @@ class TileOuterBand : public SchedulePass {
   };
   ~TileOuterBand() {}
 
-  enum class TileType {
-    C0 = 0,
-    C1,
-    BUF,
-    BUFC1,
-    BUFC0,
-    C1BUFC1,
-    C0C1,
-    LASTC0,
-    LASTC1,
-    WARPC1,
-    VECTORIZATION,
-    Invalid,
-  };
   virtual isl::schedule Run(isl::schedule sch);
   // general function
   isl::schedule TileOuterBandHelper(const isl::schedule sch,
@@ -70,9 +53,6 @@ class TileOuterBand : public SchedulePass {
   bool SubtreeHasPermutableBands(const isl::schedule_node &node);
   isl::multi_val ComputeBandTilesSizes(const isl::schedule_node &node, const int *tile_size);
   bool BoolNot(bool b) { return !b; }
-  isl::schedule_node IsolateTiles(const isl::schedule_node &original_node, isl::schedule_node tiled_node,
-                                  TileType tile_type, const int *full_tile_min, const int *full_tile_max,
-                                  bool isolation);
   isl::schedule_node MarkOuterPermutable(isl::schedule_node node);
 
   // npu related functions
@@ -85,11 +65,6 @@ class TileOuterBand : public SchedulePass {
   isl::multi_val MultiValFromIntList(const isl::space &space, int dim, const int *list);
   void TileTypeC0(isl::schedule_node &node, int *full_tile_min, int *full_tile_max, TileType &tile_type, bool &isolate,
                   isl::multi_val &sizes);
-  std::pair<isl::set, isl::set> ComputeFullTile(const isl::schedule_node &original_node,
-                                                const isl::schedule_node &tiled_node);
-  isl::map ComputeTileMap(const isl::schedule_node &original_node, const isl::schedule_node &tiled_node);
-  void IsolateLevelInfo(TileType &tile_type, isl::set &tiles, isl::set &all);
-  isl::schedule_node SetIsolateLoopType(isl::schedule_node node);
   void TileTypeC1(isl::schedule_node &node, int *full_tile_min, int *full_tile_max, TileType &tile_type, bool &isolate,
                   isl::multi_val &sizes);
   isl::schedule_node TileBufC1(isl::schedule_node node);
@@ -101,9 +76,6 @@ class TileOuterBand : public SchedulePass {
   unsigned int GetMmuIndex();
 
   // cuda and cpu general function
-  std::vector<int> GetFullTileMax(const isl::schedule_node &orig_node, const isl::multi_val &mapped_tile_size);
-  isl::schedule_node IsolateTilesForCudaAndCpu(const isl::schedule_node &orig_node,
-                                               const isl::multi_val &mapped_tile_size);
   std::vector<int> GetTileSizeOfLevel(const int member_size, const int dim_size,
                                       const TileType tile_level = TileType::Invalid, const int count_coincident = -1,
                                       const std::vector<int> &warp_list = {});
@@ -128,9 +100,9 @@ class TileOuterBand : public SchedulePass {
 
   // cpu related functions
   isl::schedule_node MarkOuterPermutableCpu(isl::schedule_node node);
-  isl::schedule_node IsolateTilesForCpu(const isl::schedule_node &orig_node,
-                                        const TileType tile_level = TileType::Invalid,
-                                        const std::vector<int> &tile_size = {});
+  isl::schedule_node TileAccordingToTileType(const isl::schedule_node &orig_node,
+                                             const TileType tile_level = TileType::Invalid,
+                                             const std::vector<int> &tile_size = {});
   std::vector<int> GetTileSizeForCpu(const isl::schedule_node &orig_node,
                                      const TileType tile_level = TileType::Invalid);
 
@@ -158,14 +130,13 @@ class TileOuterBand : public SchedulePass {
   bool is_sequence_node_{false};
   size_t cur_band_index_{0};
   std::vector<std::vector<int>> partition_info_;
+  std::unique_ptr<IsolateTileManager> isolate_tile_{nullptr};
 
   // cpu related parameters
   int vectorization_axis_pos_{-1};
   int start_pos_{0};
   isl::union_set reduce_statements_;
 };
-
-using TileType = TileOuterBand::TileType;
 
 }  // namespace poly
 }  // namespace ir
