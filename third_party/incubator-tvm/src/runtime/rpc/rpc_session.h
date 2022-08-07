@@ -21,6 +21,11 @@
  * \file rpc_session.h
  * \brief Base RPC session interface.
  */
+
+/*
+ * 2022.8.16 - Update time-evaluator-related funcs: cache flush and cold down
+ */
+
 #ifndef TVM_RUNTIME_RPC_RPC_SESSION_H_
 #define TVM_RUNTIME_RPC_RPC_SESSION_H_
 
@@ -209,7 +214,10 @@ class RPCSession {
                                  TVMContext ctx,
                                  int number,
                                  int repeat,
-                                 int min_repeat_ms);
+                                 int min_repeat_ms,
+                                 int cooldown_interval_ms, 
+                                 int repeats_to_cooldown,
+                                 const std::string& f_preproc_name);
   /*!
    * \brief Call a remote defined system function with arguments.
    * \param fcode The function code.
@@ -325,7 +333,10 @@ PackedFunc WrapTimeEvaluator(PackedFunc f,
                              TVMContext ctx,
                              int number,
                              int repeat,
-                             int min_repeat_ms);
+                             int min_repeat_ms,
+                             int cooldown_interval_ms,
+                             int repeats_to_cooldown,
+                             PackedFunc f_preproc);
 
 /*!
  * \brief Create a Global RPC module that refers to the session.

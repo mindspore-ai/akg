@@ -460,9 +460,10 @@ def get_compare_tolerance(json_str: str, output_indexes: list):
 def target_profiling(mod, *args, target="cuda", repeat_time=1, device_id=0, need_warm_up=True):
     """Do profiling on gpu/cpu for op"""
     ctx = tvm.context(target, device_id)
-    if target == "llvm":
+    if target == "cpu":
         ftimer = mod.time_evaluator(mod.entry_name, ctx, number=repeat_time,
-                                    repeat=3, min_repeat_ms=1000)
+                                    repeat=10, min_repeat_ms=1000,
+                                    preproc_name="cache_flush_cpu_non_first_arg")
         if need_warm_up:
             mod.time_evaluator(mod.entry_name, ctx, number=1000)(*args)
     else:

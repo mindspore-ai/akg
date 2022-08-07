@@ -154,7 +154,8 @@ class Module(ModuleBase):
             kwargs.update({'options': opts})
         fcompile(file_name, files, **kwargs)
 
-    def time_evaluator(self, func_name, ctx, number=10, repeat=1, min_repeat_ms=0):
+    def time_evaluator(self, func_name, ctx, number=10, repeat=1, min_repeat_ms=0,
+                      cooldown_interval_ms=0, repeats_to_cooldown=1, preproc_name=""):
         """Get an evaluator that measures time cost of running function.
 
         Parameters
@@ -184,6 +185,15 @@ class Module(ModuleBase):
             i.e., When the run time of one `repeat` falls below this time, the `number` parameter
             will be automatically increased.
 
+        cooldown_interval_ms: int, optional
+            the interval time between executions.
+
+        repeats_to_cooldown: int, optional
+            the repeat number to count the cooldown loops.
+
+        preproc_name: str, optional
+            the preprocess func for execution. currently we support 'cache_flush_cpu_non_first_arg'.
+
         Note
         ----
         The function will be invoked  (1 + number x repeat) times,
@@ -197,7 +207,8 @@ class Module(ModuleBase):
         """
         try:
             feval = _RPCTimeEvaluator(
-                self, func_name, ctx.device_type, ctx.device_id, number, repeat, min_repeat_ms)
+                self, func_name, ctx.device_type, ctx.device_id, number, repeat, min_repeat_ms,
+                cooldown_interval_ms, repeats_to_cooldown, preproc_name)
 
             def evaluator(*args):
                 """Internal wrapped evaluator."""

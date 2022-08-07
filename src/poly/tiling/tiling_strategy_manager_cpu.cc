@@ -177,6 +177,12 @@ void CpuStrategy::SetConv2dTileValue(int index) {
       axes_names.find(CONV_KW) != std::string::npos) {  // kw: reduction axis
     GenConv2dTileByAxis(index, p, 1, 1);
   }
+  if (axes_names.find(CONV_IC_OUT) == std::string::npos && axes_names.find(CONV_KH) == std::string::npos &&
+      axes_names.find(CONV_KW) == std::string::npos && axes_names.find(CONV_IC_IN) != std::string::npos) {
+    // ic_in: reduction axis
+    int64_t ic_in_shape = pending_axes_[index][p].second;
+    GenConv2dTileByAxis(index, p, ic_in_shape, ic_in_shape);
+  }
 }
 
 void CpuStrategy::SetMatMulTileValue(int index) {
