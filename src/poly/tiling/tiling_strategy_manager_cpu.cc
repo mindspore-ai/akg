@@ -261,7 +261,7 @@ void CpuStrategy::SetMultiLevelTileValue() {
       continue;
     }
     auto reduce_direction = analyzer_->scop_info_.analysis_result_.GetReduceDirection();
-    if (reduce_direction == ReduceDirection::Y) {
+    if (op_type == Template::REDUCTION && reduce_direction == ReduceDirection::Y) {
       bool is_tiled = SetReduceYTileValue(idx);
       if (is_tiled) {
         continue;
