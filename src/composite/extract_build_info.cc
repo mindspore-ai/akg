@@ -23,6 +23,7 @@
 #include "composite/optimize/optimize.h"
 #include "composite/parser.h"
 #include "composite/emitter.h"
+#include "composite/utils/dump_to_json.h"
 
 namespace akg {
 namespace {
@@ -138,6 +139,7 @@ void ExtractBuildInfo(const picojson::value &input_json, BuildInfo &info) {
   auto stmt = Parse(input_json, info);
   // 2. optimize stmt
   stmt = Optimize(stmt, info);
+  DumpCompositeGraph(stmt, info);
   if (info.opt.tuning) {
     return;
   }

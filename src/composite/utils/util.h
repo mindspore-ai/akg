@@ -205,6 +205,7 @@ struct BuildInfo {
   Array<NodeRef> args;                    // the composite kernel's inputs and outputs
   Map<Tensor, Buffer> in_binds;           // the tensors which should be in bind
   std::string kernel_name;                // the composite kernel's name
+  Map<std::string, NodeRef> attrs;        // the compile attrs
   BuildOpt opt;
 };
 inline std::ostream &operator<<(std::ostream &os, const BuildInfo &x) {

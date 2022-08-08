@@ -46,6 +46,7 @@ void JsonLowerLeaf::Lower(StageType s) {
 }
 
 BuildInfo JsonLowerLeaf::GenBuildInfo(Map<std::string, NodeRef> &attrs) {
+  info_.attrs = attrs;
   ExtractBuildInfo(String2Json(json_str_), info_);
   if (attrs.find(kKernelName) != attrs.end()) {
     CHECK(attrs[kKernelName]->IsInstance<StringImm>());
