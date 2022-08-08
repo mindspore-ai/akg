@@ -123,8 +123,23 @@ std::pair<isl::set, isl::set> IsolateTileManager::ComputeFullTile() {
   isl::map el2tile = ComputeTileMap();
   isl::map tile2el = el2tile.reverse();
 
-  isl::union_map prefix = before_tile_node_.as<isl::schedule_node_band>().get_prefix_schedule_union_map();
-  isl::union_set domain = before_tile_node_.as<isl::schedule_node_band>().get_domain();
+  isl::union_map prefix = isl::union_map::empty(before_tile_node_.ctx());
+  isl::union_set domain = isl::union_set::empty(before_tile_node_.ctx());
+  if (is_promotion_) {
+    prefix = ShortSchedule(before_tile_node_);
+    isl::schedule_node parent = before_tile_node_;
+    while (parent.has_parent() && !parent.isa<isl::schedule_node_extension>()) {
+      parent = parent.parent();
+    }
+    if (parent.isa<isl::schedule_node_extension>()) {
+      auto extension = parent.as<isl::schedule_node_extension>();
+      domain = extension.get_extension().range();
+    }
+  } else {
+    prefix = before_tile_node_.as<isl::schedule_node_band>().get_prefix_schedule_union_map();
+    domain = before_tile_node_.as<isl::schedule_node_band>().get_domain();
+  }
+
   isl::union_map before_schedule = before_tile_node_.as<isl::schedule_node_band>().get_partial_schedule_union_map();
   isl::multi_union_pw_aff mupa = isl::multi_union_pw_aff::from_union_map(before_schedule);
 
@@ -148,17 +163,29 @@ std::pair<isl::set, isl::set> IsolateTileManager::ComputeFullTile() {
  *  [[outer] -> [orig]] -> [[outer] -> [tile]].
  */
 isl::map IsolateTileManager::ComputeTileMap() {
-  isl::union_map original_umap = before_tile_node_.as<isl::schedule_node_band>().get_partial_schedule_union_map();
+  auto before_band_node = before_tile_node_.as<isl::schedule_node_band>();
+  auto after_band_node = after_tile_node_.as<isl::schedule_node_band>();
+  isl::union_map before_umap = isl::union_map::empty(before_band_node.ctx());
+  isl::union_map after_umap = isl::union_map::empty(after_band_node.ctx());
+  if (is_promotion_) {
+    auto before_partial_schedule = GetCurrentPartialSchedule(before_band_node, is_promotion_);
+    before_umap = isl::union_map::from(before_partial_schedule);
+
+    auto after_partial_schedule = GetCurrentPartialSchedule(after_band_node, is_promotion_);
+    after_umap = isl::union_map::from(after_partial_schedule);
+  } else {
+    before_umap = before_band_node.get_partial_schedule_union_map();
+    after_umap = after_band_node.get_partial_schedule_union_map();
+  }
   unsigned int depth = before_tile_node_.get_schedule_depth();
 
-  isl::space space = original_umap.get_space().params().set_from_params();
+  isl::space space = before_umap.get_space().params().set_from_params();
   space = space.add_dims(isl_dim_set, depth);
   space = space.map_from_set();
 
   isl::multi_aff maff = isl::multi_aff::identity(space);
-  isl::union_map tiled_umap = after_tile_node_.as<isl::schedule_node_band>().get_partial_schedule_union_map();
-  tiled_umap = original_umap.reverse().apply_range(tiled_umap);
-  isl::multi_union_pw_aff tiling = isl::multi_union_pw_aff::from_union_map(tiled_umap);
+  after_umap = before_umap.reverse().apply_range(after_umap);
+  isl::multi_union_pw_aff tiling = isl::multi_union_pw_aff::from_union_map(after_umap);
 
   isl::map el2tile = isl::map::from(isl::union_map::from(tiling));
   el2tile = isl::map::from(isl::union_map(isl::map::from(maff)).product(el2tile));
@@ -199,8 +226,11 @@ void IsolateTileManager::IsolateLevelInfo(TileType &tile_type, isl::set &tiles, 
 
 std::vector<int> IsolateTileManager::GetFullTileMax(const isl::multi_val &mapped_tile_size, const int start_pos,
                                                     const int all_tile_size) {
-  auto mapping_partial_schedule = GetMappingPartialSchedule(before_tile_node_.as<isl::schedule_node_band>());
-  mapping_partial_schedule = mapping_partial_schedule.intersect_domain(before_tile_node_.domain());
+  auto mapping_partial_schedule =
+    GetCurrentPartialSchedule(before_tile_node_.as<isl::schedule_node_band>(), is_promotion_);
+  if (!is_promotion_) {
+    mapping_partial_schedule = mapping_partial_schedule.intersect_domain(before_tile_node_.domain());
+  }
   auto upa_list = mapping_partial_schedule.get_union_pw_aff_list();
 
   const int n_member = before_tile_node_.as<isl::schedule_node_band>().n_member();

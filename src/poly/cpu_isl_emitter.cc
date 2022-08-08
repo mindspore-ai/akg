@@ -55,17 +55,8 @@ Stmt CpuIslEmitter::EmitInfo(const Stmt &stmt) {
 }
 
 Stmt CpuIslEmitter::EmitMark(const isl::ast_node_mark &node) {
-  const int radix = 10;
   std::string mark = node.get_id().get_name();
-  std::string for_paralle = FOR_PARALLEL;
-  size_t parallel_size = for_paralle.size();
-  if (mark.size() > parallel_size && mark.find(for_paralle) != std::string::npos) {
-    std::string new_mark = mark.substr(parallel_size + 1, mark.size() - parallel_size - 1);
-    if (new_mark.size() > 0) {
-      mark = mark.substr(0, for_paralle.size());
-      parallel_for_num_ = std::strtol(new_mark.c_str(), nullptr, radix);
-    }
-  }
+
   auto it = AkgSupportedForType.find(mark);
   if (it != AkgSupportedForType.end()) {
     for_type_ = it->second;
@@ -79,12 +70,6 @@ Stmt CpuIslEmitter::EmitMark(const isl::ast_node_mark &node) {
 }
 
 Stmt CpuIslEmitter::EmitFor(const isl::ast_node_for &node) {
-  ForType for_type = for_type_;
-  --parallel_for_num_;
-  if (parallel_for_num_ <= 0) {
-    for_type_ = ForType::Serial;
-  }
-
   isl::id isl_iter_id = node.get_iterator().as<isl::ast_expr_id>().get_id();
   VarExpr iter_expr(isl_iter_id.to_str());
   PushIter(iter_expr.get());
@@ -103,9 +88,9 @@ Stmt CpuIslEmitter::EmitFor(const isl::ast_node_for &node) {
 
   int64_t inc = static_cast<int64_t>(WrappedStrtol(node.get_inc().to_C_str()));
   CHECK_EQ(inc, 1) << "We guarantee stride=1 by making scale=false in poly.";
-
+  ForType for_type = for_type_;
+  for_type_ = ForType::Serial;
   Stmt body_stmt = EmitAst(node.get_body());
-  ++parallel_for_num_;
   PopIter(iter_expr.get());
   if (auto imm = cond_expr.as<IntImm>()) {
     if (imm->value == 1) {
@@ -269,7 +254,6 @@ Stmt CpuIslEmitter::EmitMatrixTranspose(const std::vector<std::string> &names) {
     indices.push_back(make_zero(Int(INT_32)));
     args.push_back(t->shape[i]);
   }
-  args.push_back(t->dtype.bits());
   Expr addr = Call::make(Handle(), air::ir::intrinsic::tvm_address_of, {t(indices)}, Call::PureIntrinsic);
   args.Set(0, addr);
   Expr matrix_trans = Call::make(Handle(), names[1], args, Call::Intrinsic);

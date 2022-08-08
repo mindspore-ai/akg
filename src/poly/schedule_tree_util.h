@@ -141,7 +141,7 @@ int GetVectorizationTileSize(ScopInfo &scop_info);
 isl::multi_val CheckAndGetMapSize(const isl::schedule_node &mapping_root, const isl::union_pw_aff_list &aff_list,
                                   MappingStrategyAxisMap &required_mapping_strategy, MappingCfg *mapping_cfg,
                                   const std::vector<int> &additional_tile_size = {});
-isl::multi_union_pw_aff GetMappingPartialSchedule(const isl::schedule_node_band &node, const bool is_promotion = false);
+isl::multi_union_pw_aff GetCurrentPartialSchedule(const isl::schedule_node_band &node, const bool is_promotion = false);
 isl::schedule_node GetMarkerNode(const isl::schedule_node &orig_node, const std::string &marker_name);
 isl::schedule_node DeleUselessMarker(const isl::schedule_node &orig_node,
                                      const std::unordered_set<std::string> &mark_names);
@@ -158,6 +158,9 @@ isl::schedule_node ReConstructSetOrSequenceNode(const isl::schedule_node &cur_no
                                                 const std::vector<size_t> &pos = {});
 isl::schedule_node ReConstructBandNode(const isl::schedule_node &cur_node, const isl::schedule_node &orig_node);
 bool IsContainBandNode(const isl::schedule_node &orig_node);
+
+isl::schedule_node InsertMarkerForLoop(const isl::schedule_node &orig_node, const std::string &marker_name,
+                                       const bool is_promotion = false, const int insert_pos = 0);
 
 }  // namespace poly
 }  // namespace ir

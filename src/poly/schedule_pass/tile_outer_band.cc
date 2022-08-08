@@ -862,11 +862,11 @@ isl::schedule_node TileOuterBand::TileBandAndCollectMark(isl::schedule_node node
 
 std::vector<int> TileOuterBand::GetTileSizeOfLevel(const int member_size, const int dim_size, const TileType tile_level,
                                                    const int count_coincident, const std::vector<int> &warp_list) {
-  std::vector<int> tile_size(member_size, 0);
+  std::vector<int> tile_size(member_size, 1);
   if (tile_level == TileType::VECTORIZATION) {
     // Get the size of the vectorized tiling.
     int vectorized_tile_size = GetVectorizationTileSize(scop_info_);
-    tile_size = std::vector<int>(member_size, vectorized_tile_size);
+    tile_size[vectorization_axis_pos_] = vectorized_tile_size;
     return tile_size;
   }
 
@@ -1017,7 +1017,7 @@ isl::multi_val TileOuterBand::GetMappedTileSize(const isl::schedule_node &orig_n
     }
   }
 
-  auto mapping_partial_schedule = GetMappingPartialSchedule(orig_node.as<isl::schedule_node_band>());
+  auto mapping_partial_schedule = GetCurrentPartialSchedule(orig_node.as<isl::schedule_node_band>());
   mapping_partial_schedule = mapping_partial_schedule.intersect_domain(orig_node.domain());
   auto upa_list = mapping_partial_schedule.get_union_pw_aff_list();
   auto mapped_tile_size =
@@ -1188,13 +1188,7 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCpu(isl::schedule_node node
   }
 
   auto current_outer_bn = scop_info_.analysis_result_.GetOuterBandNode(cur_band_index_);
-  vectorization_axis_pos_ = current_outer_bn->last_axis;
-  if (vectorization_axis_pos_ == -1) {
-    return node;
-  }
-
   auto template_type = current_outer_bn->template_type;
-
   if (scop_info_.analysis_result_.GetCsr()) {
     return TileCsrForCpu(node);
   }
@@ -1227,7 +1221,7 @@ isl::schedule_node TileOuterBand::TileConvForCpu(const isl::schedule_node &orig_
 
   size_t start_depth = orig_node.get_tree_depth();
   auto node = orig_node;
-
+  // Get reduce axis information that is not in the outermost band node.
   node = node.child(0);
   std::vector<isl::multi_union_pw_aff> all_mupa;
   while (node.isa<isl::schedule_node_band>()) {
@@ -1237,16 +1231,29 @@ isl::schedule_node TileOuterBand::TileConvForCpu(const isl::schedule_node &orig_
   }
   node = node.parent();
 
-  node = TileAccordingToTileType(node, TileType::C1);
-  node = InsertMultiParallelMarker(node.parent(), FOR_PARALLEL);
-  bool is_insert_mark = !GetMarkerName(node, FOR_PARALLEL).empty();
-  node = is_insert_mark ? node.child(0).child(0) : node.child(0);
+  // Determines the number of reduction axes in the outermost band node.
+  auto axes_names = scop_info_.analysis_result_.GetCpuConvolutionAxes();
+  int reduce_axis_num = 0;
+  if (axes_names.find(CONV_IC_IN) != std::string::npos || axes_names.find(CONV_KH) != std::string::npos ||
+      axes_names.find(CONV_KW) != std::string::npos) {
+    reduce_axis_num = 1;
+  }
+
+  // The current parallel strategy is only used on batch, oc_out and oh axes.
+  auto parallel_num = static_cast<int>(node.as<isl::schedule_node_band>().n_member()) - reduce_axis_num;
+  if (axes_names.find(CONV_OC_IN) != std::string::npos) {
+    --parallel_num;
+  }
+  if (axes_names.find(CONV_OW) != std::string::npos) {
+    --parallel_num;
+  }
+  node = TileAccordingToTileType(node, TileType::C1).parent();
+  node = InsertMultiMarker(node, FOR_PARALLEL, false, parallel_num).child(0);
   node = node.insert_mark(PROMOTE_GLOBAL_TO_REGISTER_C).child(0);
 
   node = SplitReduceStatements(node).parent();
   size_t seq_start_depth = node.get_tree_depth();
   int seq_num = node.n_children();
-  auto axes_names = scop_info_.analysis_result_.GetCpuConvolutionAxes();
 
   for (int i = 0; i < seq_num; ++i) {
     node = node.child(i).child(0);
@@ -1266,26 +1273,16 @@ isl::schedule_node TileOuterBand::TileConvForCpu(const isl::schedule_node &orig_
     }
 
     if (node.isa<isl::schedule_node_band>()) {
-      auto band_node = node.as<isl::schedule_node_band>();
-      int pos = 0;
-      if (axes_names.find(CONV_IC_IN) != std::string::npos || axes_names.find(CONV_KH) != std::string::npos ||
-          axes_names.find(CONV_KW) != std::string::npos) {
-        ++pos;
-      }
-
       if (axes_names.find(CONV_OC_IN) != std::string::npos) {
-        ++pos;
-      }
-      node = pos == 0 ? band_node : band_node.split(band_node.n_member() - pos);
-      if (axes_names.find(CONV_OC_IN) != std::string::npos) {
-        node = InsertMarkerForLoop(node.child(0), FOR_VECTORIZED);
+        auto band_node = node.as<isl::schedule_node_band>();
+        vectorization_axis_pos_ = band_node.n_member() - 1 - reduce_axis_num;
+        node = TileAccordingToTileType(node, TileType::VECTORIZATION);
+        node = InsertMultiMarker(node, FOR_VECTORIZED, true);
         node = node.parent();
       }
 
       if (axes_names.find(CONV_OW) != std::string::npos) {
-        auto tmp_node = node.as<isl::schedule_node_band>();
-        node = tmp_node.split(tmp_node.n_member() - 1).child(0);
-        node = InsertMarkerForLoop(node, FOR_UNROLLED);
+        node = InsertMultiMarker(node, FOR_UNROLLED);
       }
     }
     node = node.ancestor(node.get_tree_depth() - seq_start_depth);
@@ -1312,7 +1309,7 @@ isl::schedule_node TileOuterBand::TileCsrForCpu(const isl::schedule_node &orig_n
 
   // Tile outermost axis for parallel
   auto band_node = node.as<isl::schedule_node_band>();
-  node = band_node.split(band_node.n_member() - 1);
+  node = band_node.n_member() <= 1 ? band_node : band_node.split(band_node.n_member() - 1);
   node = TileAccordingToTileType(node, TileType::C1);
   node = InsertMarkerForLoop(node, FOR_PARALLEL);
   auto template_type = scop_info_.analysis_result_.GetOuterBandNode(cur_band_index_)->template_type;
@@ -1321,7 +1318,9 @@ isl::schedule_node TileOuterBand::TileCsrForCpu(const isl::schedule_node &orig_n
     while (node.has_children()) {
       node = node.child(0);
     }
-    node = TileAccordingToTileType(node.parent(), TileType::VECTORIZATION).child(0);
+    node = node.parent();
+    vectorization_axis_pos_ = static_cast<int>(node.as<isl::schedule_node_band>().n_member()) - 1;
+    node = TileAccordingToTileType(node, TileType::VECTORIZATION).child(0);
     node = node.insert_mark(FOR_VECTORIZED);
     node = node.parent().insert_mark(REDUCE_AREA_FLAG);
   }
@@ -1364,11 +1363,7 @@ isl::schedule_node TileOuterBand::TileGemmBandNodeForCpu(const isl::schedule_nod
   auto node = orig_node;
   node = TileAccordingToTileType(node, TileType::C1);
 
-  node = InsertMultiParallelMarker(node.parent(), FOR_PARALLEL);
-  bool is_insert_mark = !GetMarkerName(node, FOR_PARALLEL).empty();
-
-  node = node.child(0);
-  node = is_insert_mark ? node.child(0) : node;
+  node = InsertMultiMarker(node.parent(), FOR_PARALLEL).child(0);
   node = node.insert_mark(PROMOTE_GLOBAL_TO_REGISTER).child(0);
 
   return node;
@@ -1422,6 +1417,10 @@ isl::schedule_node TileOuterBand::TileElementWiseForCpu(const isl::schedule_node
   if (!orig_node.isa<isl::schedule_node_band>()) {
     return orig_node;
   }
+  vectorization_axis_pos_ = scop_info_.analysis_result_.GetOuterBandNode(cur_band_index_)->last_axis;
+  if (vectorization_axis_pos_ == -1) {
+    return orig_node;
+  }
 
   auto node = orig_node;
   size_t start_depth = node.get_tree_depth();
@@ -1439,6 +1438,7 @@ isl::schedule_node TileOuterBand::TileElementWiseForCpu(const isl::schedule_node
   node = band_node.split(band_node.n_member() - 1).child(0);
 
   // last tiling: vectorized
+  vectorization_axis_pos_ = 0;
   node = TileAccordingToTileType(node, TileType::VECTORIZATION);
   node = InsertAllMarker(node, is_all_reduce);
 
@@ -1465,6 +1465,7 @@ isl::schedule_node TileOuterBand::TileReduceXForCpu(const isl::schedule_node &or
   node = TileAccordingToTileType(node, TileType::LASTC0);
 
   // vetorized tile
+  vectorization_axis_pos_ = 0;
   node = TileAccordingToTileType(node, TileType::VECTORIZATION);
 
   bool is_insert_mark = false;
@@ -1534,13 +1535,10 @@ isl::schedule_node TileOuterBand::InsertAllMarker(const isl::schedule_node &orig
 
   node = node.parent();
   // Insert the parallel marker on the axis corresponding.
-  auto current_outer_bn = scop_info_.analysis_result_.GetOuterBandNode(cur_band_index_);
   if (is_all_reduce) {
     node = InsertMarkerForLoop(node, FOR_PARALLEL);
     is_insert_mark = !GetMarkerName(node, FOR_PARALLEL).empty();
     node = is_insert_mark ? node.insert_mark(REDUCE_AREA_FLAG) : node;
-  } else if (current_outer_bn->template_type == Template::MATMUL && scop_info_.user_config_.GetEnableMatmul()) {
-    node = InsertMultiParallelMarker(node, FOR_PARALLEL);
   } else {
     node = InsertMarkerForLoop(node, FOR_PARALLEL);
   }
@@ -1548,60 +1546,63 @@ isl::schedule_node TileOuterBand::InsertAllMarker(const isl::schedule_node &orig
   return node;
 }
 
-isl::schedule_node TileOuterBand::InsertMarkerForLoop(const isl::schedule_node &orig_node,
-                                                      const std::string &marker_name, const int insert_pos) {
+isl::schedule_node TileOuterBand::InsertMultiMarker(const isl::schedule_node &orig_node, const std::string &marker_name,
+                                                    const bool return_orig_pos, const int insert_marker_num) {
+  // Insert corresponding markers for all axes with shape greater than 1 in the current band node.
   if (!orig_node.isa<isl::schedule_node_band>()) {
     return orig_node;
   }
 
   auto band_node = orig_node.as<isl::schedule_node_band>();
   int band_member = static_cast<int>(band_node.n_member());
-  CHECK(insert_pos < band_member) << "The split position cannot be greater than the number of axis.";
   auto partial_schedule = band_node.get_partial_schedule().intersect_domain(orig_node.get_domain());
   auto upa_list = partial_schedule.get_union_pw_aff_list();
-  auto extent = upa_list.get_at(insert_pos).floor().max_val().get_num_si();
-  if (extent < 1) {
-    return orig_node;
-  }
+
+  CHECK(insert_marker_num <= band_member)
+    << "The number of parallel axes set must be less than the number of axes of the band node";
 
   auto node = orig_node;
-  if (insert_pos > 0) {
-    node = band_node.split(insert_pos).child(0);
-  }
-  auto vectorized_loop_size = scop_info_.analysis_result_.GetVectorizedLoopSize();
-  if (marker_name == FOR_VECTORIZED && extent > vectorized_loop_size - 1) {
-    node = TileAccordingToTileType(node, TileType::VECTORIZATION).parent();
-    node = node.insert_mark(FOR_UNROLLED).child(0);
-    node = node.child(0);
-  }
-  return node.insert_mark(marker_name);
-}
-
-isl::schedule_node TileOuterBand::InsertMultiParallelMarker(const isl::schedule_node &orig_node,
-                                                            const std::string &marker_name) {
-  if (!orig_node.isa<isl::schedule_node_band>()) {
-    return orig_node;
-  }
-
-  auto node = orig_node.as<isl::schedule_node_band>();
-  int band_member = static_cast<int>(node.n_member());
-  auto partial_schedule = node.get_partial_schedule().intersect_domain(orig_node.get_domain());
-  auto upa_list = partial_schedule.get_union_pw_aff_list();
-  int parallel_num = 0;
-  for (int i = 0; i < band_member - 1; ++i) {
+  int cur_marker_num = 0;
+  int child_depth = 0;
+  // The size of the axis is judged from the back to the front, and the corresponding marker is inserted on the
+  // corresponding axis.
+  for (int i = band_member - 1; i >= 0; --i) {
     auto extent = upa_list.get_at(i).floor().max_val().get_num_si();
-    if (extent < 1) {
+    // If the size of the current axis is 0 or the current axis does not need to insert a marker, then this axis is
+    // skipped.
+    if (extent < 1 || (i >= insert_marker_num && insert_marker_num != -1)) {
+      ++cur_marker_num;
       continue;
     }
-    ++parallel_num;
+
+    if (!node.isa<isl::schedule_node_band>()) {
+      break;
+    }
+
+    auto cur_band_node = node.as<isl::schedule_node_band>();
+    band_member = static_cast<int>(cur_band_node.n_member());
+    if ((band_member == 1) || (band_member - 1 == cur_marker_num)) {
+      node = cur_band_node;
+    } else {
+      node = cur_band_node.split(band_member - 1 - cur_marker_num).child(0);
+      ++child_depth;
+    }
+    node = node.insert_mark(marker_name);
+    // If it is the 0th axis, it is fixed to the position of the marker node, otherwise it returns to the previous band
+    // node.
+    node = i != 0 ? node.parent() : node;
+    cur_marker_num = 0;
+    ++child_depth;
   }
-  if (parallel_num == 1) {
-    return node.insert_mark(marker_name);
-  } else if (parallel_num > 1) {
-    auto template_type = scop_info_.analysis_result_.GetOuterBandNode(cur_band_index_)->template_type;
-    parallel_num = template_type == Template::CONV ? parallel_num - 1 : parallel_num;
-    std::string new_marker_name = marker_name + UNDERSCORE_PATTERN + std::to_string(parallel_num);
-    return node.insert_mark(new_marker_name);
+
+  if (return_orig_pos) {
+    return node;
+  }
+
+  // Return to the child nodes of the last mark node.
+  while (child_depth != 0) {
+    node = node.child(0);
+    --child_depth;
   }
   return node;
 }
