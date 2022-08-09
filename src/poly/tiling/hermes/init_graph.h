@@ -28,14 +28,14 @@ namespace ir {
 namespace poly {
 class InitGraph {
  public:
-  InitGraph(const std::string &, std::vector<std::shared_ptr<Node>> &, const std::vector<std::shared_ptr<Node>> &,
+  InitGraph(const std::string &, const std::vector<std::shared_ptr<Node>> &, const std::vector<std::shared_ptr<Node>> &,
             const std::vector<std::shared_ptr<Node>> &);
   explicit InitGraph(const std::vector<std::shared_ptr<akg::ir::poly::Node>> &);
   InitGraph() = default;
 
   Op::OpCategory OperatorCategory();
   void RemoveNameless();
-  void AddNodesName(std::vector<std::string>);
+  void AddNodesName(const std::vector<std::string> &);
   std::string ToString();
 
   std::string name_;
@@ -55,7 +55,7 @@ class InitGraph {
   static std::set<std::string> GetIntermediateOutputsNames(const std::vector<std::string> &names);
   static std::vector<std::shared_ptr<Node>> GetInputs(std::set<std::string> intermed_output_names,
                                                       const std::vector<std::shared_ptr<Node>> &nodes);
-  static std::string FindName(std::vector<std::string> names, std::shared_ptr<Node> node);
+  static std::string FindName(std::vector<std::string> names, const std::shared_ptr<Node> &node);
   static bool HasConstantInput(const std::shared_ptr<Node> &node);
   static void FilterNames(std::vector<std::string> names, const std::string &out);
 

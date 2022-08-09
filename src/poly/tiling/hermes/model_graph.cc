@@ -38,18 +38,20 @@ ModelGraph::ModelGraph(InitGraph &init_graph, const std::vector<std::shared_ptr<
       critical_nodes_{critical_nodes} {}
 
 void ModelGraph::CompleteNodesGeneratedByReduce(InitGraph &init_graph) {
-  int index_reduce = -1;
+  bool is_reduce = false;
+  size_t reduce_idx = 0;
   for (size_t index_node = init_graph.nodes_.size(); index_node > 0; --index_node) {
     if (init_graph.nodes_[index_node - 1]->op_.IsReduce()) {
-      index_reduce = static_cast<int>(index_node) - 1;
+      reduce_idx = index_node - 1;
+      is_reduce = true;
       break;
     }
   }
-  if (index_reduce < 0) {
+  if (!is_reduce) {
     return;
   }
 
-  auto &reduce_node = init_graph.nodes_[index_reduce];
+  auto &reduce_node = init_graph.nodes_[reduce_idx];
 
   ReduceDirection reduce_type = GetReduceDirection(reduce_node);
 

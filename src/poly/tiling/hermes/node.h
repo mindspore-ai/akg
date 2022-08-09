@@ -20,6 +20,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "poly/tiling/hermes/axis.h"
@@ -36,11 +37,11 @@ class Node {
     Transpose_B,
   };
 
-  Node(const std::string &, Op, const std::vector<std::shared_ptr<Tensor>> &,
+  Node();
+  Node(const std::string &, const Op &, const std::vector<std::shared_ptr<Tensor>> &,
        const std::vector<std::shared_ptr<Tensor>> &, const std::vector<std::shared_ptr<Node>> &,
        const std::vector<std::shared_ptr<Node>> &, const std::vector<Axis> &, const std::vector<Tensor> &,
        const std::map<std::string, std::map<Tensor, int>> &, const std::list<attributes> &);
-  Node() = default;
 
   bool HasName() const;
   bool HasAxis(const Axis &);

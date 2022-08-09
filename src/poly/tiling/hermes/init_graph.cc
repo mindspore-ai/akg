@@ -13,8 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <algorithm>
-
 #include "poly/tiling/hermes/init_graph.h"
 #include "poly/tiling/hermes/tensor.h"
 #include "poly/tiling/hermes/utils.h"
@@ -22,7 +20,7 @@
 namespace akg {
 namespace ir {
 namespace poly {
-InitGraph::InitGraph(const std::string &name, std::vector<std::shared_ptr<Node>> &nodes,
+InitGraph::InitGraph(const std::string &name, const std::vector<std::shared_ptr<Node>> &nodes,
                      const std::vector<std::shared_ptr<Node>> &inputs,
                      const std::vector<std::shared_ptr<Node>> &outputs)
     : name_{name}, nodes_{nodes}, inputs_{inputs}, outputs_{outputs} {}
@@ -136,13 +134,13 @@ int InitGraph::IdOfNodeName(const std::string &name, const std::vector<std::shar
 // True if all inputs of a node were assigned a name
 bool AreAllInputsAssigned(std::set<std::shared_ptr<Node>> assigned, std::vector<std::shared_ptr<Node>> inputs) {
   bool is_assigned = true;
-  for_each(std::begin(inputs), std::end(inputs), [&is_assigned, &assigned](const std::shared_ptr<Node> &node) {
-    is_assigned &= (assigned.find(node) != assigned.end()) || (node->op_.IsConstant());
+  std::for_each(std::begin(inputs), std::end(inputs), [&is_assigned, &assigned](const std::shared_ptr<Node> &node) {
+    is_assigned = is_assigned && ((assigned.find(node) != assigned.end()) || node->op_.IsConstant());
   });
   return is_assigned;
 }
 
-void InitGraph::AddNodesName(std::vector<std::string> names) {
+void InitGraph::AddNodesName(const std::vector<std::string> &names) {
   std::set<std::shared_ptr<Node>> nexts = std::set<std::shared_ptr<Node>>();  // yet to assign
   std::set<std::shared_ptr<Node>> assigned;
   std::string found;
@@ -182,7 +180,7 @@ void InitGraph::AddNodesName(std::vector<std::string> names) {
 
   std::shared_ptr<Node> node;
 
-  //  Breadth-First Search
+  // Breadth-First Search
   while (!nexts.empty()) {
     auto it1 = std::find_if(nexts.begin(), nexts.end(), [&assigned](const std::shared_ptr<Node> &node) {
       return (AreAllInputsAssigned(assigned, node->pred_));
@@ -202,13 +200,13 @@ void InitGraph::AddNodesName(std::vector<std::string> names) {
     }
 
     nexts.erase(node);
-    found = FindName(names, node);
 
+    found = FindName(names, node);
     node->name_ = found;
     assigned.insert(node);
 
     // add to next only if not assigned already
-    for_each(node->succ_.begin(), node->succ_.end(), [&assigned, &nexts](const std::shared_ptr<Node> &node) {
+    std::for_each(node->succ_.begin(), node->succ_.end(), [&assigned, &nexts](const std::shared_ptr<Node> &node) {
       if (assigned.find(node) == assigned.end()) {
         nexts.insert(node);
       }
@@ -280,10 +278,9 @@ bool InputsAreInside(std::vector<std::shared_ptr<Node>> inputs, const std::strin
 }
 
 // find the name of a node
-std::string InitGraph::FindName(std::vector<std::string> names, std::shared_ptr<Node> node) {
+std::string InitGraph::FindName(std::vector<std::string> names, const std::shared_ptr<Node> &node) {
   std::vector<std::string> possibles;
   std::vector<std::shared_ptr<Node>> inputs;
-  std::string result;
   if (!node->op_.IsLonely()) {  // ie Exp does't have its input written
     inputs = node->pred_;
   }
@@ -307,10 +304,9 @@ std::string InitGraph::FindName(std::vector<std::string> names, std::shared_ptr<
 }
 
 bool InitGraph::HasConstantInput(const std::shared_ptr<Node> &node) {
-  int size = node->pred_.size();
   bool all_consts = true;
-  for (int i = 0; i < size; ++i) {
-    all_consts &= node->pred_[i]->op_.IsConstant();
+  for (size_t i = 0; i < node->pred_.size(); ++i) {
+    all_consts = all_consts && (node->pred_[i]->op_.IsConstant());
   }
   return all_consts;
 }
@@ -318,20 +314,20 @@ bool InitGraph::HasConstantInput(const std::shared_ptr<Node> &node) {
 // remove name assigned & similar ones (with local_UB.*)
 void InitGraph::FilterNames(std::vector<std::string> names, const std::string &out) {
   std::vector<int> to_remove;
-  for (int i = names.size() - 1; i >= 0; --i) {
+  int size = static_cast<int>(names.size());
+  for (int i = size - 1; i >= 0; --i) {
     if (names[i] == out) {
       to_remove.push_back(i);
     }
   }
 
-  for_each(std::begin(to_remove), std::end(to_remove), [&](int i) { names.erase(names.begin() + i); });
+  std::for_each(std::begin(to_remove), std::end(to_remove), [&names](int i) { names.erase(names.begin() + i); });
 }
 
 std::string InitGraph::ToString() {
   std::stringstream buf;
   buf << "{ name = " << this->name_;
-  int size = this->nodes_.size();
-  for (int i = 0; i < size; i++) {
+  for (size_t i = 0; i < this->nodes_.size(); i++) {
     buf << "{node:" << nodes_[i] << "}" << std::endl;
   }
   return buf.str();

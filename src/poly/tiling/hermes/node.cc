@@ -20,7 +20,9 @@
 namespace akg {
 namespace ir {
 namespace poly {
-Node::Node(const std::string &name, Op op, const std::vector<std::shared_ptr<Tensor>> &output_tensors,
+Node::Node() : op_{Op()} {}
+
+Node::Node(const std::string &name, const Op &op, const std::vector<std::shared_ptr<Tensor>> &output_tensors,
            const std::vector<std::shared_ptr<Tensor>> &input_tensors, const std::vector<std::shared_ptr<Node>> &succ,
            const std::vector<std::shared_ptr<Node>> &pred, const std::vector<Axis> &axis,
            const std::vector<Tensor> &transformed_output_shape,
@@ -40,8 +42,7 @@ Node::Node(const std::string &name, Op op, const std::vector<std::shared_ptr<Ten
 bool Node::HasName() const { return !(this->name_.empty()); }
 
 bool Node::HasAxis(const Axis &axis) {
-  int size = this->axis_of_node_.size();
-  for (int i = 0; i < size; i++) {
+  for (size_t i = 0; i < this->axis_of_node_.size(); i++) {
     if (axis.dim_axis_ == this->axis_of_node_[i].dim_axis_) {
       return true;
     }
@@ -49,14 +50,15 @@ bool Node::HasAxis(const Axis &axis) {
   return false;
 }
 
-std::string AttrToString(Node::attributes attr) {
+std::string AttrToString(const Node::attributes &attr) {
   switch (attr) {
     case Node::attributes::Transpose_A:
       return "transpose_a";
     case Node::attributes::Transpose_B:
       return "transpose_b";
+    default:
+      LOG(FATAL) << "[Node::attributes::AttrToString] This attribute has no string equivalent yet";
   }
-  LOG(FATAL) << "[Node::attributes::AttrToString] This attribute has no string equivalent yet";
   return "";
 }
 
@@ -66,11 +68,11 @@ bool AttrIsTrue(const std::string &to_find, const std::string &str, size_t pos) 
   return (pos != std::string::npos);
 }
 
-std::list<Node::attributes> FindAttributes(std::vector<std::string> attrs) {
+std::list<Node::attributes> FindAttributes(const std::vector<std::string> &attrs) {
   std::list<Node::attributes> att_l;
   std::string name = "'name':";
   size_t name_len = name.length();
-  for (std::string str : attrs) {
+  for (std::string const &str : attrs) {
     size_t pos = str.find(name);
     if (pos == std::string::npos) {
       continue;

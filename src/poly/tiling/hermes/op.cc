@@ -13,8 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <dmlc/logging.h>
 #include <algorithm>
+#include <dmlc/logging.h>
 
 #include "poly/tiling/hermes/op.h"
 
@@ -85,6 +85,8 @@ const std::vector<std::tuple<Op::OpType, std::string, std::string>> Op::ops_{
   std::tuple<Op::OpType, std::string, std::string>{Op::OpType::Assignment, "Assignment", ""},
 };
 
+Op::Op() : op_type_{Op::OpType::Assignment} {}
+
 Op::Op(OpType op_type) : op_type_{op_type} {}
 
 Op::Op(const std::string &op_name) : op_type_{OpTypeFromString(op_name)} {}
@@ -102,7 +104,7 @@ Op::OpType Op::OpTypeFromString(const std::string &op_type) {
 }
 
 std::string Op::ToString() const {
-  auto it = std::find_if(ops_.begin(), ops_.end(), [&](const std::tuple<Op::OpType, std::string, std::string> &op) {
+  auto it = std::find_if(ops_.begin(), ops_.end(), [this](const std::tuple<Op::OpType, std::string, std::string> &op) {
     return std::get<Op::Source::Enum>(op) == op_type_;
   });
   if (it == ops_.end()) {
@@ -113,7 +115,7 @@ std::string Op::ToString() const {
 }
 
 std::string Op::BufferName() const {
-  auto it = std::find_if(ops_.begin(), ops_.end(), [&](const std::tuple<Op::OpType, std::string, std::string> &op) {
+  auto it = std::find_if(ops_.begin(), ops_.end(), [this](const std::tuple<Op::OpType, std::string, std::string> &op) {
     return std::get<Op::Source::Enum>(op) == op_type_;
   });
   if (it == ops_.end()) {
@@ -152,7 +154,6 @@ bool Op::IsReduce() const {
     default:
       return false;
   }
-  return false;
 }
 
 bool Op::IsConstant() const {
@@ -162,7 +163,6 @@ bool Op::IsConstant() const {
     default:
       return false;
   }
-  return false;
 }
 
 // Not used
@@ -175,7 +175,6 @@ bool Op::IsNameless() const {
     default:
       return false;
   }
-  return false;
 }
 
 bool Op::RemoveUselessInput() const {
@@ -185,7 +184,6 @@ bool Op::RemoveUselessInput() const {
     default:
       return false;
   }
-  return false;
 }
 
 bool Op::IsInput() const {
@@ -197,7 +195,6 @@ bool Op::IsInput() const {
     default:
       return false;
   }
-  return false;
 }
 
 bool Op::IsLonely() const {
@@ -221,7 +218,6 @@ bool Op::IsLonely() const {
     default:
       return false;
   }
-  return false;
 }
 
 bool hasReduceName(const std::string &name) { return !(name.find("red", name.size() - 4) == std::string::npos); }
@@ -328,34 +324,18 @@ Op::OpCategory Op::Category() const {
 
     case Op::OpType::Assignment:
       return Op::OpCategory::Assignment;
-  }
 
-  LOG(FATAL) << "[Op::category] This op_type is not taken into account yet";
+    default:
+      LOG(FATAL) << "[Op::category] This op_type is not taken into account yet";
+  }
   return Op::OpCategory::Injective;
 }
 
-int Op::Priority(Op::OpCategory cat) {
-  switch (cat) {
-    case Op::OpCategory::Input:
-      return Op::Priority::Input;
-    case Op::OpCategory::Injective:
-      return Op::Priority::Injective;
-    case Op::OpCategory::Broadcast:
-      return Op::Priority::Broadcast;
-    case Op::OpCategory::Reshape:
-      return Op::Priority::Reshape;
-    case Op::OpCategory::Transpose:
-      return Op::Priority::Transpose;
-    case Op::OpCategory::AllReduce:
-      return Op::Priority::AllReduce;
-    case Op::OpCategory::ReduceX:
-      return Op::Priority::ReduceX;
-    case Op::OpCategory::ReduceY:
-      return Op::Priority::ReduceY;
-    case Op::OpCategory::MatMul:
-      return Op::Priority::MatMul;
-    case Op::OpCategory::Assignment:
-      return Op::Priority::Assignment;
+int Op::Priority(Op::OpCategory category) {
+  Op op;
+  auto priority = op.op_category_priority_map_.find(category);
+  if (priority != op.op_category_priority_map_.end()) {
+    return static_cast<int>(priority->second);
   }
   LOG(FATAL) << "[Op.cc] This OpCategory has no priority assigned";
   return 0;
@@ -390,8 +370,9 @@ std::string StringOfCategory(Op::OpCategory cat) {
       return "MatMul";
     case Op::OpCategory::Assignment:
       return "Assignment";
+    default:
+      LOG(FATAL) << "[StringOfCategory] This OpCategory is not taken into account yet";
   }
-  LOG(FATAL) << "[StringOfCategory] This OpCategory is not taken into account yet";
   return "";
 }
 }  // namespace poly
