@@ -243,7 +243,12 @@ class CastStrategy : public TilingStrategy {
 
 class ReduceStrategy : public TilingStrategy {
  public:
-  explicit ReduceStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {}
+  explicit ReduceStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {
+    if (analyzer_->scop_info_.analysis_result_.GetCsr()) {
+      // For CSR-Reduce case, we must tile the outter fused axis according to original shape.
+      max_fuse_size_ = 1;
+    }
+  }
   void AddNpuConstraint() override;
   void AddGpuConstraint() override;
   void ComputeProperReduceThreads(bool use_local);
