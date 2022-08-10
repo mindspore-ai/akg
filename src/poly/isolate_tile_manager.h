@@ -17,6 +17,7 @@
 #ifndef POLY_ISOLATE_TILE_MANAGER_H_
 #define POLY_ISOLATE_TILE_MANAGER_H_
 
+#include "poly/scop.h"
 #include "isl.h"
 #include <iostream>
 #include <vector>
@@ -25,7 +26,8 @@ namespace ir {
 namespace poly {
 class IsolateTileManager {
  public:
-  IsolateTileManager(ScopInfo &scop_info) : scop_info_(scop_info) {}
+  IsolateTileManager(ScopInfo &scop_info, bool is_promotion = false)
+      : scop_info_(scop_info), is_promotion_(is_promotion) {}
   ~IsolateTileManager() {}
 
   isl::schedule_node IsolateTilesForCce(const isl::schedule_node &orig_node, const isl::schedule_node &tiled_node,
@@ -47,6 +49,7 @@ class IsolateTileManager {
   isl::schedule_node IsolateTiles(const isl::set &tiles);
 
   ScopInfo &scop_info_;
+  bool is_promotion_{false};
   isl::schedule_node before_tile_node_;
   isl::schedule_node after_tile_node_;
 };

@@ -40,8 +40,6 @@ class CpuIslEmitter : virtual public IslEmitter {
   Stmt EmitReduce(const std::vector<std::string> &args);
   Stmt EmitMatrixTranspose(const std::vector<std::string> &names);
   Stmt EmitForParallel(const Stmt &stmt);
-
-  int parallel_for_num_{0};
 };
 
 }  // namespace poly

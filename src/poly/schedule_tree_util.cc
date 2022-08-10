@@ -999,7 +999,7 @@ isl::multi_val CheckAndGetMapSize(const isl::schedule_node &mapping_root, const 
 }
 
 // get mapping partial schedule
-isl::multi_union_pw_aff GetMappingPartialSchedule(const isl::schedule_node_band &node, const bool is_promotion) {
+isl::multi_union_pw_aff GetCurrentPartialSchedule(const isl::schedule_node_band &node, const bool is_promotion) {
   auto partial_schedule = node.get_partial_schedule();
   if (is_promotion) {
     // we need to to get range of promoted band from extension node so that we can correctly fix stride
@@ -1159,6 +1159,34 @@ bool IsContainBandNode(const isl::schedule_node &orig_node) {
     return true;
   });
   return is_include_band_node;
+}
+
+isl::schedule_node InsertMarkerForLoop(const isl::schedule_node &orig_node, const std::string &marker_name,
+                                       const bool is_promotion, const int insert_pos) {
+  // Insert the corresponding marker at a fixed position of a band node. If the size of the axis is 1, the label is not
+  // inserted.
+  if (!orig_node.isa<isl::schedule_node_band>() || insert_pos < 0) {
+    return orig_node;
+  }
+
+  auto band_node = orig_node.as<isl::schedule_node_band>();
+  int band_member = static_cast<int>(band_node.n_member());
+  CHECK(insert_pos < band_member) << "The split position cannot be greater than the number of axis.";
+  auto partial_schedule = GetCurrentPartialSchedule(band_node, is_promotion);
+  if (!is_promotion) {
+    partial_schedule = partial_schedule.intersect_domain(orig_node.get_domain());
+  }
+  auto upa_list = partial_schedule.get_union_pw_aff_list();
+  auto extent = upa_list.get_at(insert_pos).floor().max_val().get_num_si();
+  if (extent < 1) {
+    return orig_node;
+  }
+
+  auto node = orig_node;
+  if (insert_pos != 0) {
+    node = band_node.split(insert_pos).child(0);
+  }
+  return node.insert_mark(marker_name);
 }
 
 }  // namespace poly

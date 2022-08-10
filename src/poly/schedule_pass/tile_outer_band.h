@@ -117,9 +117,8 @@ class TileOuterBand : public SchedulePass {
   bool IsContainReduceStatement(const isl::schedule_node &orig_node);
   isl::schedule_node SplitReduceStatements(const isl::schedule_node &orig_node);
   isl::schedule_node InsertAllMarker(const isl::schedule_node &orig_node, const bool is_all_reduce);
-  isl::schedule_node InsertMarkerForLoop(const isl::schedule_node &orig_node, const std::string &marker_name,
-                                         const int insert_pos = 0);
-  isl::schedule_node InsertMultiParallelMarker(const isl::schedule_node &orig_node, const std::string &marker_name);
+  isl::schedule_node InsertMultiMarker(const isl::schedule_node &orig_node, const std::string &marker_name,
+                                       const bool return_orig_pos = false, const int insert_marker_num = -1);
   isl::schedule_node InsertMarkerForReduceY(const isl::schedule_node &orig_node, size_t start_depth);
 
  private:

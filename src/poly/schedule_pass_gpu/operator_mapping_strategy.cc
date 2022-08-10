@@ -128,7 +128,7 @@ isl::schedule_node OperatorMappingStrategy::MapDimToThreadsBlocks(const isl::sch
   }
 
   auto band_node = orig_node.as<isl::schedule_node_band>();
-  auto mapping_partial_schedule = GetMappingPartialSchedule(band_node, is_promotion_mapping_);
+  auto mapping_partial_schedule = GetCurrentPartialSchedule(band_node, is_promotion_mapping_);
   auto upa_list = mapping_partial_schedule.get_union_pw_aff_list();
 
   bool is_tiled = false;
@@ -165,7 +165,7 @@ std::string OperatorMappingStrategy::SetOneConfigForMulAxis(const isl::schedule_
   }
 
   auto band_node = node.as<isl::schedule_node_band>();
-  auto mapping_partial_schedule = GetMappingPartialSchedule(band_node, is_promotion_mapping_);
+  auto mapping_partial_schedule = GetCurrentPartialSchedule(band_node, is_promotion_mapping_);
   if (!is_promotion_mapping_) {
     mapping_partial_schedule = mapping_partial_schedule.intersect_domain(node.domain());
   }
