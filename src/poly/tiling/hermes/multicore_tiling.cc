@@ -22,9 +22,9 @@
 namespace akg {
 namespace ir {
 namespace poly {
-int GetMcAxis(const Axis &axis, const ModelGraph &model_graph, Hardware hardware) {
+int64_t GetMcAxis(const Axis &axis, const ModelGraph &model_graph, Hardware hardware) {
   // Adapt the min shape that this axis mapped
-  int min_shape = axis.range_;
+  int64_t min_shape = axis.range_;
   int data_coef = 0;
   std::tie(std::ignore, data_coef) = model_graph.GetMinShapeAndDataCoef(axis);
 
@@ -41,17 +41,17 @@ int GetMcAxis(const Axis &axis, const ModelGraph &model_graph, Hardware hardware
   }
 
   if (reduce_Y) {
-    return GetMcReduceYAxisSize(hardware, min_shape, input_fp16, static_cast<int>(model_graph.outputs_.size()));
+    return GetMcReduceYAxisSize(hardware, min_shape, input_fp16, model_graph.outputs_.size());
   }
 
   return GetMcAxisSize(hardware, min_shape, data_coef);
 }
 
-int GetMcReduceYAxisSize(Hardware hardware, int min_shape, bool input_fp16, int model_graph_out_size) {
+int64_t GetMcReduceYAxisSize(Hardware hardware, int64_t min_shape, bool input_fp16, size_t model_graph_out_size) {
   // Initial Size for multicore (at least 1 per core)
-  int multicore_axis_size = 1;
-  if (hardware.num_core_ > 0 && min_shape % hardware.num_core_ == 0) {
-    multicore_axis_size = min_shape / hardware.num_core_;
+  int64_t multicore_axis_size = 1;
+  if (hardware.num_core_ > 0 && min_shape % static_cast<int64_t>(hardware.num_core_) == 0) {
+    multicore_axis_size = min_shape / static_cast<int64_t>(hardware.num_core_);
   }
 
   if (model_graph_out_size > 1) {
@@ -75,13 +75,15 @@ int GetMcReduceYAxisSize(Hardware hardware, int min_shape, bool input_fp16, int 
   return multicore_axis_size;
 }
 
-int GetMcAxisSize(Hardware hardware, int min_shape, int data_coef) {
+int64_t GetMcAxisSize(Hardware hardware, int64_t min_shape, int data_coef) {
   // Initial Size for multicore (at least 1 per core)
-  int multicore_axis_size = 1;
+  int64_t multicore_axis_size = 1;
 
-  if (data_coef > 0 && min_shape >= hardware.num_core_ * (hardware.vblocksize_ / data_coef)) {
+  auto num_core_vblock_per_datatype =
+    static_cast<int64_t>(static_cast<int>(hardware.num_core_ * hardware.vblocksize_) / data_coef);
+  if (data_coef > 0 && min_shape >= num_core_vblock_per_datatype) {
     if (min_shape > kSmallAxisSize) {
-      multicore_axis_size = hardware.vblocksize_ / SafeDivisor(data_coef);
+      multicore_axis_size = static_cast<int64_t>(static_cast<int>(hardware.vblocksize_) / SafeDivisor(data_coef));
     }
   }
 

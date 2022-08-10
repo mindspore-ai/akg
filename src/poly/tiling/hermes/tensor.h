@@ -42,10 +42,6 @@ class Tensor {
     Bool1,
     Bool8
   };
-  std::unordered_map<int, Tensor::DataType> bytes_datatype_map_{{1, Tensor::DataType::Int8},
-                                                                {2, Tensor::DataType::Int16},
-                                                                {4, Tensor::DataType::Int32},
-                                                                {8, Tensor::DataType::Int64}};
   std::unordered_map<std::string, Tensor::DataType> string_datatype_map_{
     {"float64", Tensor::DataType::Float64}, {"float32", Tensor::DataType::Float32},
     {"float16", Tensor::DataType::Float16}, {"int64", Tensor::DataType::Int64},
@@ -56,18 +52,18 @@ class Tensor {
     {"bool8", Tensor::DataType::Bool8}};
 
   Tensor();
-  Tensor(const std::vector<int> &, DataType, const std::string &);
-  Tensor(const std::vector<int> &, const std::string &, const std::string &);
+  Tensor(const std::vector<int64_t> &, DataType, const std::string &);
+  Tensor(const std::vector<int64_t> &, const std::string &, const std::string &);
 
   int GetDataTypeCoef() const;
-  int GetShapeProduct();
+  int64_t GetShapeProduct();
   bool operator<(const Tensor &) const;
 
   std::string ToString() const;
   bool IsScalar();
   static Tensor::DataType GetDataTypeFromTVM(const air::Type &tvm_dtype);
 
-  std::vector<int> shape_;
+  std::vector<int64_t> shape_;
   DataType datatype_;
   std::string format_;
   std::string name_;
@@ -110,7 +106,6 @@ class Tensor {
 };
 
 Tensor::DataType DataTypeFromString(const std::string &datatype);
-Tensor::DataType DataTypeFromBytes(const int bytes);
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

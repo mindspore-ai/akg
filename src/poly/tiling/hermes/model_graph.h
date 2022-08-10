@@ -17,8 +17,10 @@
 #define POLY_TILING_HERMES_MODEL_GRAPH_H_
 
 #include <memory>
+#include <set>
 #include <string>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include "poly/poly_util.h"
@@ -31,11 +33,11 @@ namespace ir {
 namespace poly {
 class ModelGraph : public InitGraph {
  public:
-  ModelGraph(InitGraph &, const std::vector<std::shared_ptr<Node>> &);
   explicit ModelGraph(InitGraph &init_graph);
+  ModelGraph(const InitGraph &, const std::vector<std::shared_ptr<Node>> &);
   ModelGraph() = default;
 
-  std::tuple<int, int> GetMinShapeAndDataCoef(const Axis &axis) const;
+  std::tuple<int64_t, int> GetMinShapeAndDataCoef(const Axis &axis) const;
 
   std::vector<std::shared_ptr<Node>> critical_nodes_;
   bool is_activated_double_buffer_{false};
@@ -48,13 +50,13 @@ class ModelGraph : public InitGraph {
   static bool IsInVector(const std::string &name, const std::vector<std::shared_ptr<Node>> &node_vec);
   static ReduceDirection GetReduceDirection(const std::shared_ptr<Node> &reduce_node);
   static std::shared_ptr<Node> SetReduceSrcDstNodes(const std::shared_ptr<Node> &reduce_node, const std::string &suffix,
-                                                    Op::OpType op_type, int shape_size);
+                                                    Op::OpType op_type, int64_t shape_size);
   static std::vector<std::shared_ptr<Node>> GetCriticalNodes(const InitGraph &init_graph);
 
-  static const int kExtraMemoryCoeffRequiredByAllReduce = 16;
-  static const int kExtraMemoryCoeffRequiredByReduceDst = 8;
-  static const int kExtraMemoryCoeffRequiredByReduceSrc = 64;
-  static const int kMinShapeSize = 1;
+  static const int64_t kExtraMemoryCoeffRequiredByAllReduce = 16;
+  static const int64_t kExtraMemoryCoeffRequiredByReduceDst = 8;
+  static const int64_t kExtraMemoryCoeffRequiredByReduceSrc = 64;
+  static const int64_t kMinShapeSize = 1;
   inline static const std::string kSrcTmpSuffix = "_src_tmp";
   inline static const std::string kDstTmpSuffix = "_dst_tmp";
 };

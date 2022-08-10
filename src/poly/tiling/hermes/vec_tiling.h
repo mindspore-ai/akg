@@ -28,20 +28,20 @@
 namespace akg {
 namespace ir {
 namespace poly {
-int GetVecAxis(const Axis &axis, const ModelGraph &model_graph, Hardware hardware);
-int GetMixTypeAxis(const Axis &axis, const ModelGraph &model_graph, Hardware hardware);
-int GetTileFromRemainingVecGranularity(const Axis &global_axis, int data_coef, int axis_result);
-size_t GetLastDimAxis();
-size_t GetNewAlignMissFactor(size_t align_miss_factor, const Axis &critical_node_axis,
-                             const std::vector<Axis> &global_axis_vec, int min_to_align);
-void ExtendMulticoreAxisTile(int curr_max_alloc_buffer, int num_core, int axis_result, int data_coef, int mem_VC_size,
-                             int mem_VC_align, const Axis &axis,
-                             const std::vector<std::shared_ptr<Node>> &critical_node);
-std::tuple<int, int> GetMaxAllocAndUpperBoundBuffer(int mem_VC_size, int mem_VC_align_, const Axis &axis,
-                                                    const std::vector<std::shared_ptr<Node>> &critical_node);
+int64_t GetVecAxis(const Axis &axis, const ModelGraph &model_graph, Hardware hardware);
+int64_t GetMixTypeAxis(const Axis &axis, const ModelGraph &model_graph, Hardware hardware);
+int64_t GetTileFromRemainingVecGranularity(const Axis &global_axis, int data_coef, int64_t axis_result);
+int GetLastDimAxis();
+int64_t GetNewAlignMissFactor(int64_t curr_align_miss_factor, const Axis &critical_node_axis,
+                              const std::vector<Axis> &global_axis_vec, int64_t min_to_align);
+void ExtendMulticoreAxisTile(int64_t curr_max_alloc_buffer, size_t num_core, int64_t axis_result, int data_coef,
+                             size_t mem_VC_size, size_t mem_VC_align, const Axis &axis,
+                             const std::vector<std::shared_ptr<Node>> &critical_nodes);
+std::tuple<int64_t, int64_t> GetMaxAllocAndUpperBoundBuffer(size_t mem_VC_size, size_t mem_VC_align, const Axis &axis,
+                                                            const std::vector<std::shared_ptr<Node>> &critical_nodes);
 std::tuple<float, float> GetTileAndMulticoreAxisSizes(const Axis &current_axis, const Axis &critical_node_axis,
-                                                      const std::vector<Axis> &global_axis_vec, float tile_size,
-                                                      float tile_multicore_axis_size);
+                                                      const std::vector<Axis> &global_axis_vec_, float curr_tile_size,
+                                                      float curr_tile_multicore_axis_size);
 bool PrioAxis(const Axis &axis, const ModelGraph &model_graph);
 
 const int kBlocksNumForVectorization = 8;

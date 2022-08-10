@@ -29,9 +29,11 @@ int ParseInt(const air::Integer &);
 std::vector<int> ParseIntArray(air::Array<air::Integer>);
 std::vector<std::string> ParseStringArray(air::Array<air::Expr> arr);
 std::string StripRename(std::string name);
-int Get2PowerBelow(int);
+int64_t Get2PowerBelow(int64_t n);
 
 const int kByTwo = 2;
+const size_t kByTwoUL = 2;
+const int64_t kByTwoL = 2;
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

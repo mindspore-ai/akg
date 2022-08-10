@@ -60,10 +60,9 @@ std::string StripRename(std::string name) {
   return name.substr(0, pos);
 }
 
-int Get2PowerBelow(int n) {
-  int result = n;
-  constexpr int twice = 2;
-  for (int i = 1; i < n; i *= twice) {
+int64_t Get2PowerBelow(int64_t n) {
+  int64_t result = n;
+  for (int64_t i = 1; i < n; i *= kByTwoL) {
     result = i;
   }
   return result;

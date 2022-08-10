@@ -80,14 +80,14 @@ void CheckVisitor::Visit_(const Provide *op) {
         for (auto const &var : vars) {
           auto iter = realize_node_.axis_to_tensor_to_shape_id_map_.find(var);
           auto res = iter->second.begin();
-          int range = res->second;
+          int64_t range = res->second;
 
           Axis axis_of_provide;
           axis_of_provide.name_ = var;
           axis_of_provide.range_ = range;
           provide_node->axis_of_node_.push_back(axis_of_provide);
 
-          std::map<Tensor, int> tensor_to_range_map = {{*tensor_of_provide, range}};
+          std::map<Tensor, int64_t> tensor_to_range_map = {{*tensor_of_provide, range}};
           provide_node->axis_to_tensor_to_shape_id_map_.insert(
             std::make_pair(axis_of_provide.name_, tensor_to_range_map));
         }
@@ -131,15 +131,15 @@ void CheckVisitor::Visit_(const Provide *op) {
 
 void CheckVisitor::Visit_(const For *op) {
   Axis axis_for = Axis();
-  int range = 0;
+  int64_t range = 0;
   if (op->extent.as<IntImm>() != nullptr) {
-    range = static_cast<int>(op->extent.as<IntImm>()->value);
+    range = static_cast<int64_t>(op->extent.as<IntImm>()->value);
   }
   std::string axis_for_name = op->loop_var->name_hint;
   // check if the axis exist
   merge_map_.insert(std::make_pair(range, axis_for_name));
   axis_for.name_ = axis_for_name;
-  std::map<Tensor, int> tensor_to_range_map = {{realize_node_.transformed_output_shape_[0], range}};
+  std::map<Tensor, int64_t> tensor_to_range_map = {{realize_node_.transformed_output_shape_[0], range}};
   realize_node_.axis_to_tensor_to_shape_id_map_.insert(std::make_pair(axis_for.name_, tensor_to_range_map));
   realize_node_.axis_of_node_.push_back(axis_for);
   loop_var_ = op->loop_var->name_hint;
@@ -175,7 +175,7 @@ void CheckVisitor::Visit_(const Realize *op) {
   Tensor tensor_of_node;
   for (auto bound : op->bounds) {
     CHECK(bound->extent.as<IntImm>());
-    tensor_of_node.shape_.push_back(static_cast<int>(bound->extent.as<IntImm>()->value));
+    tensor_of_node.shape_.push_back(static_cast<int64_t>(bound->extent.as<IntImm>()->value));
   }
   realize_dtype_ = GetDatatypeString(op->type);
   tensor_of_node.datatype_ = DataTypeFromString(realize_dtype_);
@@ -241,7 +241,7 @@ void CheckVisitor::Visit_(const Select *op) {
 }
 
 void CheckVisitor::SetOperatorType(Op::OpType op_type) {
-  for (int i = static_cast<int>(nodes_.size()); i > 0; --i) {
+  for (size_t i = nodes_.size(); i > 0; --i) {
     if (nodes_[i - 1]->name_ == cur_node_->name_ && nodes_[i - 1]->op_.op_type_ != Op::OpType::Input &&
         nodes_[i - 1]->op_.op_type_ == Op::OpType::Assignment) {
       nodes_[i - 1]->op_.op_type_ = op_type;
@@ -299,14 +299,14 @@ void CheckVisitor::SetInputNode(const Call *op) {
     for (auto const &var : vars) {
       auto iter = realize_node_.axis_to_tensor_to_shape_id_map_.find(var);
       auto res = iter->second.begin();
-      int range = res->second;
+      int64_t range = res->second;
 
       Axis axis_call;
       axis_call.name_ = var;
       axis_call.range_ = range;
       input_node->axis_of_node_.push_back(axis_call);
 
-      std::map<Tensor, int> tensor_to_range_map = {{*input_tensor, range}};
+      std::map<Tensor, int64_t> tensor_to_range_map = {{*input_tensor, range}};
       input_node->axis_to_tensor_to_shape_id_map_.insert(std::make_pair(axis_call.name_, tensor_to_range_map));
     }
     vars.clear();
@@ -385,7 +385,7 @@ std::shared_ptr<Tensor> CheckVisitor::GetTensor(const air::ir::FunctionRef &func
 
   for (auto shape : op_tensor->shape) {
     CHECK(shape.as<IntImm>());
-    int range = static_cast<int>(shape.as<IntImm>()->value);
+    auto range = static_cast<int64_t>(shape.as<IntImm>()->value);
     tensor->shape_.push_back(range);
   }
   tensor->name_ = func->func_name();
@@ -403,7 +403,7 @@ std::shared_ptr<Tensor> CheckVisitor::GetTensor(const air::Array<air::Expr> &arg
     }
     auto iter = realize_node_.axis_to_tensor_to_shape_id_map_.find(arg.as<Variable>()->name_hint);
     auto res = iter->second.begin();
-    int range = res->second;
+    int64_t range = res->second;
     tensor->shape_.push_back(range);
   }
   tensor->name_ = name;

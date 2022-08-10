@@ -517,12 +517,11 @@ TileSizes TilingGenerator::HermesTiling(TileSizes dims) {
       i--;
       continue;
     }
-    dims[i].c0_tiling_size = model_graph->global_axis_vec_[idx_global_axis_vec].tile_;
-    if (model_graph->global_axis_vec_[idx_global_axis_vec].c1_tiling_ == 0) {
-      dims[i].c1_tiling_size = model_graph->global_axis_vec_[idx_global_axis_vec].tile_;
-    } else {
-      dims[i].c1_tiling_size = model_graph->global_axis_vec_[idx_global_axis_vec].c1_tiling_;
-    }
+    int64_t c0_tiling = model_graph->global_axis_vec_[idx_global_axis_vec].c0_tiling_;
+    int64_t c1_tiling = std::max(model_graph->global_axis_vec_[idx_global_axis_vec].c0_tiling_,
+                                 model_graph->global_axis_vec_[idx_global_axis_vec].c1_tiling_);
+    dims[i].c0_tiling_size = c0_tiling;
+    dims[i].c1_tiling_size = c1_tiling;
     idx_global_axis_vec++;
   }
 
@@ -554,7 +553,7 @@ void TilingGenerator::ExtractAxisInfoFromScheduler(const isl::schedule &sch) {
 
   for (auto &global_axis : ModelGraph::global_axis_vec_) {
     for (auto it = ModelGraph::name_dim_set_.begin(); it != ModelGraph::name_dim_set_.end(); it++) {
-      if (global_axis.dim_axis_ == it->second) {
+      if (global_axis.dim_axis_ == static_cast<int>(it->second)) {
         global_axis.name_ = it->first;
         break;
       }

@@ -41,7 +41,7 @@ class Node {
   Node(const std::string &, const Op &, const std::vector<std::shared_ptr<Tensor>> &,
        const std::vector<std::shared_ptr<Tensor>> &, const std::vector<std::shared_ptr<Node>> &,
        const std::vector<std::shared_ptr<Node>> &, const std::vector<Axis> &, const std::vector<Tensor> &,
-       const std::map<std::string, std::map<Tensor, int>> &, const std::list<attributes> &);
+       const std::map<std::string, std::map<Tensor, int64_t>> &, const std::list<attributes> &);
 
   bool HasName() const;
   bool HasAxis(const Axis &);
@@ -56,7 +56,7 @@ class Node {
   std::vector<std::shared_ptr<Node>> pred_;
   std::vector<Axis> axis_of_node_;
   std::vector<Tensor> transformed_output_shape_;
-  std::map<std::string, std::map<Tensor, int>> axis_to_tensor_to_shape_id_map_;
+  std::map<std::string, std::map<Tensor, int64_t>> axis_to_tensor_to_shape_id_map_;
   std::list<attributes> attrs_;
 };
 

@@ -27,18 +27,18 @@
 namespace akg {
 namespace ir {
 namespace poly {
-int GetMatmulAxisNTiling(const Axis &axis, const std::vector<std::shared_ptr<Node>> &nodes, int mem_VC_size);
-int GetMulticoreFromAxis(int remaining_core, size_t axis_size);
-int GetMatmulAxisMTiling(const Axis &axis, const ModelGraph &model_graph, Hardware hardware);
-int GetMatmulAxisKTiling(Axis &axis, const ModelGraph &model_graph, Hardware hardware);
-int GetAvailableMemVCSize(const std::vector<std::shared_ptr<Node>> &nodes, int mem_VC_size);
+int64_t GetMatmulAxisNTiling(const Axis &axis, const std::vector<std::shared_ptr<Node>> &nodes, size_t mem_VC_size);
+int64_t GetMatmulAxisMTiling(const Axis &axis, const ModelGraph &model_graph, Hardware hardware);
+int64_t GetMatmulAxisKTiling(Axis &axis, const ModelGraph &model_graph, Hardware hardware);
+size_t GetMulticoreFromAxis(size_t remaining_core, int64_t axis_size);
+size_t GetAvailableMemVCSize(const std::vector<std::shared_ptr<Node>> &nodes, size_t mem_VC_size);
 
-const int kC1DataSizePerBatch = 512;
-const int kC0DataSizePerBatch = 512;
-const int kVCDataSizePerBatch = 1024;
-const int kLargeTensorSize = 219360;  // size of the large tensor.
-const int kCubeDefaultTiling = 16;
-const int kMinNumOfUsedCores = 32;
+const size_t kC1DataSizePerBatch = 512;
+const size_t kC0DataSizePerBatch = 512;
+const size_t kVCDataSizePerBatch = 1024;
+const size_t kMinNumOfUsedCores = 32;
+const int64_t kLargeTensorSize = 219360;
+const int64_t kCubeDefaultTiling = 16;
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

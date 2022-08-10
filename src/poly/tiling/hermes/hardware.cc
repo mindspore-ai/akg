@@ -21,8 +21,8 @@ namespace ir {
 namespace poly {
 size_t Hardware::mem_VC_alloc_failed_ = 0;
 
-Hardware::Hardware(int num_core, int mem_VC_size, int mem_C1_size, int mem_C0_size, int mem_VC_align, int mem_C1_align,
-                   int vblocknum, int vblocksize)
+Hardware::Hardware(size_t num_core, size_t mem_VC_size, size_t mem_C1_size, size_t mem_C0_size, size_t mem_VC_align,
+                   size_t mem_C1_align, size_t vblocknum, size_t vblocksize)
     : num_core_{num_core},
       mem_VC_size_{mem_VC_size / (1 << mem_VC_alloc_failed_)},  // we divide VC by 2 for each VC alloc error
       mem_C1_size_{mem_C1_size},

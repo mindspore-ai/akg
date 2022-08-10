@@ -22,10 +22,10 @@ namespace ir {
 namespace poly {
 Tensor::Tensor() : datatype_{Tensor::DataType::Float16} {}
 
-Tensor::Tensor(const std::vector<int> &shape, DataType datatype, const std::string &format)
+Tensor::Tensor(const std::vector<int64_t> &shape, DataType datatype, const std::string &format)
     : shape_{shape}, datatype_{datatype}, format_{format}, name_{} {}
 
-Tensor::Tensor(const std::vector<int> &shape, const std::string &datatype, const std::string &format)
+Tensor::Tensor(const std::vector<int64_t> &shape, const std::string &datatype, const std::string &format)
     : shape_{shape}, datatype_{DataTypeFromString(datatype)}, format_{format}, name_{} {}
 
 int Tensor::GetDataTypeCoef() const {
@@ -37,9 +37,13 @@ int Tensor::GetDataTypeCoef() const {
   return 0;
 }
 
-int Tensor::GetShapeProduct() {
-  int product = 1;
+int64_t Tensor::GetShapeProduct() {
+  int64_t product = 1;
   for (auto iter : this->shape_) {
+    if (iter < 0) {
+      LOG(WARNING) << "[Tensor::GetShapeProduct] Shape contains negative value";
+      return 0;
+    }
     product *= iter;
   }
   return product;
@@ -89,16 +93,6 @@ Tensor::DataType Tensor::GetDataTypeFromTVM(const air::Type &tvm_dtype) {
   }
   LOG(FATAL) << "[Tensor::GetDataTypeFromTVM] This tvm type is not taken into account yet";
   return Tensor::DataType::Float16;
-}
-
-Tensor::DataType DataTypeFromBytes(const int bytes) {
-  Tensor tensor;
-  auto datatype_coef = tensor.bytes_datatype_map_.find(bytes);
-  if (datatype_coef != tensor.bytes_datatype_map_.end()) {
-    return datatype_coef->second;
-  }
-  LOG(FATAL) << "The number of bytes " << bytes << " is not taken into account yet";
-  return Tensor::DataType::Float32;
 }
 
 Tensor::DataType DataTypeFromString(const std::string &datatype) {

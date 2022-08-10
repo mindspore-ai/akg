@@ -40,11 +40,11 @@ class Axis {
 
   std::string name_;
   std::string gemm_axis_;
-  size_t dim_axis_{0};
-  size_t range_{0};
-  int tile_{1};
-  int c1_tiling_{0};
   int index_{0};
+  int dim_axis_{0};
+  int64_t range_{0};
+  int64_t c0_tiling_{1};
+  int64_t c1_tiling_{1};
   std::set<AxisLabel> type_;
 
   bool is_inner_{false};

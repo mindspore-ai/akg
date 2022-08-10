@@ -26,14 +26,14 @@
 namespace akg {
 namespace ir {
 namespace poly {
-int GetMcAxis(const Axis &axis, const ModelGraph &model_graph, Hardware hardware);
-int GetMcReduceYAxisSize(Hardware hardware, int min_shape, bool input_fp16, int model_graph_out_size);
-int GetMcAxisSize(Hardware hardware, int min_shape, int data_coef);
+int64_t GetMcAxis(const Axis &axis, const ModelGraph &model_graph, Hardware hardware);
+int64_t GetMcReduceYAxisSize(Hardware hardware, int64_t min_shape, bool input_fp16, size_t model_graph_out_size);
+int64_t GetMcAxisSize(Hardware hardware, int64_t min_shape, int data_coef);
 
-const int kSmallAxisSize = 300;
-const int kFloat16LoadGranularity = 128;
-const int kFloat32LoadGranularity = 64;
-const int kReduceMinShapeThreshold = 64;
+const int64_t kSmallAxisSize = 300;
+const int64_t kFloat16LoadGranularity = 128;
+const int64_t kFloat32LoadGranularity = 64;
+const int64_t kReduceMinShapeThreshold = 64;
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

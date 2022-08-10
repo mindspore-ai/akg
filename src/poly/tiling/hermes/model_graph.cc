@@ -33,7 +33,7 @@ ModelGraph::ModelGraph(InitGraph &init_graph) {
   this->critical_nodes_ = critical_nodes;
 }
 
-ModelGraph::ModelGraph(InitGraph &init_graph, const std::vector<std::shared_ptr<Node>> &critical_nodes)
+ModelGraph::ModelGraph(const InitGraph &init_graph, const std::vector<std::shared_ptr<Node>> &critical_nodes)
     : InitGraph{init_graph.name_, init_graph.nodes_, init_graph.inputs_, init_graph.outputs_},
       critical_nodes_{critical_nodes} {}
 
@@ -55,23 +55,23 @@ void ModelGraph::CompleteNodesGeneratedByReduce(InitGraph &init_graph) {
 
   ReduceDirection reduce_type = GetReduceDirection(reduce_node);
 
-  int ax0 = 0;
-  int ax1 = 0;
+  int64_t ax0 = 0;
+  int64_t ax1 = 0;
   for (auto const &axis : ModelGraph::global_axis_vec_) {
     if (axis.dim_axis_ == 0) {
-      ax0 = static_cast<int>(axis.range_);
+      ax0 = axis.range_;
     } else if (axis.dim_axis_ == 1) {
-      ax1 = static_cast<int>(axis.range_);
+      ax1 = axis.range_;
     }
   }
 
-  int dst_shape_size = 0;
-  int src_shape_size = 0;
+  int64_t dst_shape_size = 0;
+  int64_t src_shape_size = 0;
 
   if (reduce_type == ReduceDirection::ALL) {
     reduce_node->op_.op_type_ = Op::OpType::AllReduce;
     reduce_node->output_tensors_[0]->shape_[0] = kExtraMemoryCoeffRequiredByReduceDst;
-    int shape_val = kExtraMemoryCoeffRequiredByReduceDst;
+    int64_t shape_val = kExtraMemoryCoeffRequiredByReduceDst;
     reduce_node->transformed_output_shape_[0].shape_.push_back(shape_val);
 
     dst_shape_size = kExtraMemoryCoeffRequiredByReduceDst;
@@ -106,7 +106,8 @@ void ModelGraph::CompleteNodesGeneratedByReduce(InitGraph &init_graph) {
 }
 
 std::shared_ptr<Node> ModelGraph::SetReduceSrcDstNodes(const std::shared_ptr<Node> &reduce_node,
-                                                       const std::string &suffix, Op::OpType op_type, int shape_size) {
+                                                       const std::string &suffix, Op::OpType op_type,
+                                                       int64_t shape_size) {
   std::shared_ptr<Node> node = std::make_shared<Node>();
 
   node->name_ = reduce_node->name_ + suffix;
@@ -118,7 +119,7 @@ std::shared_ptr<Node> ModelGraph::SetReduceSrcDstNodes(const std::shared_ptr<Nod
   output_tensor->format_ = reduce_node->output_tensors_[0]->format_;
   node->output_tensors_.push_back(output_tensor);
 
-  std::vector<int> tensor_shape;
+  std::vector<int64_t> tensor_shape;
   tensor_shape.push_back(shape_size);
   node->transformed_output_shape_.emplace_back(
     Tensor(tensor_shape, reduce_node->output_tensors_[0]->datatype_, reduce_node->output_tensors_[0]->format_));
@@ -151,13 +152,13 @@ ReduceDirection ModelGraph::GetReduceDirection(const std::shared_ptr<Node> &redu
   return reduce_type;
 }
 
-std::tuple<int, int> ModelGraph::GetMinShapeAndDataCoef(const Axis &axis) const {
-  int min_shape = INT32_MAX;
+std::tuple<int64_t, int> ModelGraph::GetMinShapeAndDataCoef(const Axis &axis) const {
+  int64_t min_shape = INT64_MAX;
   int data_coef = INT32_MAX;
   for (auto const &node : this->nodes_) {
     for (auto const &node_axis : node->axis_of_node_) {
-      if (node_axis.dim_axis_ == axis.dim_axis_ && static_cast<int>(node_axis.range_) < min_shape) {
-        min_shape = static_cast<int>(node_axis.range_);
+      if (node_axis.dim_axis_ == axis.dim_axis_ && node_axis.range_ < min_shape) {
+        min_shape = node_axis.range_;
         data_coef = node->output_tensors_[0]->GetDataTypeCoef();
         break;
       }
@@ -191,13 +192,21 @@ std::vector<std::shared_ptr<Node>> ModelGraph::GetCriticalNodes(const InitGraph 
     } else if (init_graph.nodes_[i]->succ_.size() > 1) {
       critical_nodes.push_back(init_graph.nodes_[i]);
     } else {
-      int curr_node_prod_out_shape = kMinShapeSize;
-      int last_critc_node_prod_out_shape = kMinShapeSize;
+      int64_t curr_node_prod_out_shape = kMinShapeSize;
+      int64_t last_critc_node_prod_out_shape = kMinShapeSize;
       for (auto const &out_t : init_graph.nodes_[i]->output_tensors_) {
         curr_node_prod_out_shape *= out_t->GetShapeProduct() * out_t->GetDataTypeCoef();
+        if (curr_node_prod_out_shape < 0) {
+          curr_node_prod_out_shape = INT64_MAX;
+          break;
+        }
       }
       for (auto const &out_t : critical_nodes.back()->output_tensors_) {
         last_critc_node_prod_out_shape *= out_t->GetShapeProduct() * out_t->GetDataTypeCoef();
+        if (last_critc_node_prod_out_shape < 0) {
+          last_critc_node_prod_out_shape = INT64_MAX;
+          break;
+        }
       }
       if (curr_node_prod_out_shape >= last_critc_node_prod_out_shape) {
         critical_nodes.pop_back();
