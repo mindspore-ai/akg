@@ -334,10 +334,10 @@ def dump_stitch_sub_json(stitch_json_str, desc_d, op_name, i):
                 else:
                     raise err
         fname = ''.join(['stitch_info/', op_name, '_stitch_', str(i + 1), '.json'])
-        with os.fdopen(os.open(fname, os.O_WRONLY | os.O_CREAT, 0o400), 'w') as f:
+        with os.fdopen(os.open(fname, os.O_WRONLY | os.O_CREAT, 0o600), 'w') as f:
             f.write(stitch_json_str)
         stitch_fname = ''.join(['stitch_info/', op_name, '_stitch.json'])
-        with os.fdopen(os.open(stitch_fname, os.O_WRONLY | os.O_CREAT, 0o400), 'w') as f:
+        with os.fdopen(os.open(stitch_fname, os.O_WRONLY | os.O_CREAT, 0o600), 'w') as f:
             f.write(json.dumps(desc_d))
 
 
