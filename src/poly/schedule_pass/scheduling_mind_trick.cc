@@ -1,5 +1,5 @@
 /**
- * Copyright 2020-2021 Huawei Technologies Co., Ltd
+ * Copyright 2020-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,6 +32,8 @@
 #include "poly/isl_util.h"
 #include "poly/log_util.h"
 #include "poly/gpu_emit/gpu_isl_emitter.h"
+
+#include "light_cp/light_cp.h"
 
 namespace akg {
 namespace ir {
@@ -215,6 +217,77 @@ static bool ShouldAutogenSwizzleDimension(ScopInfo &scop_info) {
 
   return result;
 }
+
+enum OperatorKind {
+  OPK_UNKNOWN = 0,
+  OPK_NOT_PROCESS,
+  OPK_SOLO_MATMUL_NOPEELING,
+  OPK_SOLO_MATMUL_PEELING
+};
+
+enum ExprNodeType {
+  EXPR_UNKNOWN,
+  EXPR_CONST,
+  EXPR_CALL,
+  EXPR_CAST,
+  EXPR_MAD
+};
+
+class MatmulAnalysis {
+ public:
+  struct MatMulTensor {
+    Type dtype_;
+    Array<Expr> shapes_;
+    Array<Expr> axis_;
+    bool transpose_;
+    // not necessary, just these containers contain the necessary info as origin.
+    const Call *from_op_;
+    Tensor *from_bind_;
+    std::string name_;
+  } inputa_, inputb_, output_;
+  bool has_output_ = false;
+  // Ex: map "mo" with "ax"
+  std::map<std::string, std::string> dims_map_;
+  const ScopInfo &scop_info_;
+  const isl::schedule &initial_;
+  int nb_statements_;
+  StatementMap statements_;
+  std::multimap<ExprNodeType, std::string> operator_list_;
+  int nb_variables_ = 0;
+  int nb_inputs_ = 0;
+  int mo_ = 0, no_ = 0, ko_ = 0, mi_ = 0, ni_ = 0, ki_ = 0;
+  int nb_outputs_ = 0;
+  OperatorKind operator_kind_;
+
+  MatmulAnalysis(const ScopInfo &scop_info, const isl::schedule &initial);
+  OperatorKind OperatorMatcher(const ScopInfo &scop_info);
+  void DeduceTranspose();
+  bool DeduceDims();
+  template <class tensor>
+  void MatchDimsShapes(size_t index, tensor T, int *dim, std::string dim_name);
+  void ExtractBindOrigInfo(const ScopInfo &scop_info);
+  void Log(void) const;
+};
+
+class MatmulDecision {
+ public:
+  LightCP::Solver cp_;
+  std::vector<std::map<std::string, int>> solutions_;
+  bool interchanged_ = false;
+
+  MatmulDecision(void) {}
+  bool SetModel(const MatmulAnalysis &analysis);
+  void SetModelBeta(const MatmulAnalysis &analysis);
+  std::map<std::string, std::string> GetAttributes(const MatmulAnalysis &analysis) const;
+  std::string GetAttributesStr(const MatmulAnalysis &analysis) const;
+  std::string GetSoftConstraintsStr(const MatmulAnalysis &analysis) const;
+  std::string GenSolDims(const std::map<std::string, int> &solution) const;
+  void Log(void) const;
+  int PCeiling(int a, int b) const;
+};
+
+
+
 
 ////////////////////////////////////////////////////////////////////////////////
 // AccessInfo
@@ -734,6 +807,579 @@ void DimensionAnalysis::Log(void) const {
       current.Log("    ");
     }
   }
+}
+
+
+////////////////////////////////////////////////////////////////////////////////
+// MatmulDecision
+////////////////////////////////////////////////////////////////////////////////
+
+inline int MatmulDecision::PCeiling(int a, int b) const { return (((a) + (b)-1) / (b)); }
+
+bool MatmulDecision::SetModel(const MatmulAnalysis &analysis) {
+  switch (analysis.operator_kind_) {
+    case OPK_SOLO_MATMUL_NOPEELING: {
+      SetModelBeta(analysis);
+      return true;
+    }
+    case OPK_SOLO_MATMUL_PEELING:
+      LOG(INFO) << ("Don't treat this kernel familly (SOLO_MATMUL_PEELING) yet.");
+      break;
+    case OPK_NOT_PROCESS:
+      LOG(INFO) << "Don't know the kernel familly (NOT_PROCESS).";
+      break;
+    case OPK_UNKNOWN:
+      LOG(INFO) << "Don't know the kernel familly (UNKNOWN).";
+      break;
+    default:
+      LOG(WARNING) << "This case never happens!!";
+      break;
+  }
+  return false;
+}
+
+void MatmulDecision::SetModelBeta(const MatmulAnalysis &analysis) {
+  int mo_inp = analysis.mo_;
+  int no_inp = analysis.no_;
+  int ko_inp = analysis.ko_;
+  constexpr int d_cores = 32;
+  constexpr int out_compute_write_pipeline_buffer = 1;
+  constexpr int in_read_pipeline_buffer = 2;
+  int nb_inputs = analysis.nb_inputs_;
+
+  LightCP::Solver cp;
+
+  // Declare input constants
+  constexpr int mad_output_type = 4; // (float32)
+  constexpr int input_type = 2; // (float16)
+
+  // constant of D MAD
+  constexpr int fractal_size = 16 * 16;
+  constexpr int l0ab_size = 64 * 1024 / fractal_size;
+
+  // For 2 and 3 inputs
+  constexpr int nb_inputs_2 = 2;
+  int l0c_size;
+  if (nb_inputs == nb_inputs_2) {
+    constexpr int c_size = 1024;
+    l0c_size = c_size; // 256 * 1024 / fractal_size;
+  } else {
+    constexpr int c_size = 256;
+    l0c_size = c_size; // 64 * 1024 / fractal_size;
+  }
+
+  // max comp per core
+  int max_comp_elem_pcore = l0c_size / mad_output_type;  // = 256
+  int comp_elem_pcore = PCeiling((mo_inp * no_inp), d_cores);
+
+  // usecase comp iteration per core
+  int comp_iter_pcore = PCeiling(comp_elem_pcore, max_comp_elem_pcore);
+  int comp_elem_pcore_piter = PCeiling(comp_elem_pcore, comp_iter_pcore);
+
+  // max elem per mad buffers
+  int max_load_elem_l0ab = l0ab_size / input_type;
+
+  // Variables
+  LightCP::Variable mo(&cp, "mo", 1, fractal_size);
+  LightCP::Variable no(&cp, "no", 1, fractal_size);
+
+  LightCP::Variable mt_d_cores(&cp, "mt_d_cores", 1, mo_inp);
+  LightCP::Variable nt_d_cores(&cp, "nt_d_cores", 1, no_inp);
+
+  LightCP::Variable mt_out_compute_write_repeat(&cp, "mt_out_compute_write_repeat", 1, mo_inp);
+  LightCP::Variable nt_out_compute_write_repeat(&cp, "nt_out_compute_write_repeat", 1, no_inp);
+  LightCP::Variable mt_out_compute_write_pipeline_buffer(&cp, "mt_out_compute_write_pipeline_buffer", 1, mo_inp);
+  LightCP::Variable nt_out_compute_write_pipeline_buffer(&cp, "nt_out_compute_write_pipeline_buffer", 1, no_inp);
+
+  constexpr int max_mad_m = 256;
+  constexpr int max_mad_n = 256;
+  constexpr int max_mad_k = 64;
+  LightCP::Variable mad_m(&cp, "mad_m", 1, max_mad_m);
+  LightCP::Variable mad_n(&cp, "mad_n", 1, max_mad_n);
+  LightCP::Variable mad_k(&cp, "mad_k", 1, max_mad_k);
+
+  constexpr int buf_line = 16;
+  constexpr int max_mo_mad_m = 4095;
+  constexpr int max_no_mad_n = 4095;
+  constexpr int max_ko_mad_k = 1024;
+  LightCP::Variable mo_mad_m(&cp, "mo_mad_m", buf_line, max_mo_mad_m);
+  LightCP::Variable no_mad_n(&cp, "no_mad_n", buf_line, max_no_mad_n);
+  LightCP::Variable ko_mad_k(&cp, "ko_mad_k", buf_line, max_ko_mad_k);
+
+  constexpr int nb_pipe = 4;
+  LightCP::Variable mo_read_pipeline_buffer(&cp, "mo_read_pipeline_buffer", 1, nb_pipe);
+  LightCP::Variable no_read_pipeline_buffer(&cp, "no_read_pipeline_buffer", 1, nb_pipe);
+  LightCP::Variable ko_read_pipeline_buffer(&cp, "ko_read_pipeline_buffer", 1, nb_pipe);
+
+  LightCP::Variable mo_read_repeat(cp);
+  LightCP::Variable no_read_repeat(cp);
+  LightCP::Variable ko_read_repeat(cp);
+
+  LightCP::Variable out_compute_write_repeat(cp);
+
+  // Declare constraints
+  cp.Add(out_compute_write_repeat == comp_iter_pcore);
+  cp.Add(mt_out_compute_write_repeat * nt_out_compute_write_repeat == comp_iter_pcore);
+  cp.Add(mo * no == comp_elem_pcore_piter / out_compute_write_pipeline_buffer);
+  cp.Add(mt_d_cores * nt_d_cores == d_cores);
+  cp.Add(mt_out_compute_write_pipeline_buffer * nt_out_compute_write_pipeline_buffer ==
+         out_compute_write_pipeline_buffer);
+  cp.Add(mt_d_cores * mt_out_compute_write_repeat * mt_out_compute_write_pipeline_buffer == mo_inp / mo);
+  cp.Add(nt_d_cores * nt_out_compute_write_repeat * nt_out_compute_write_pipeline_buffer == no_inp / no);
+  cp.Add(mo_read_repeat * mo_read_pipeline_buffer * mad_m == mo);
+  cp.Add(no_read_repeat * no_read_pipeline_buffer * mad_n == no);
+  cp.Add(ko_read_repeat * ko_read_pipeline_buffer * mad_k == ko_inp);
+  auto &cst2 = mo_read_pipeline_buffer * ko_read_pipeline_buffer;
+  cp.Add(cst2 == in_read_pipeline_buffer);
+  auto &cst3 = no_read_pipeline_buffer * ko_read_pipeline_buffer;
+  cp.Add(cst3 == in_read_pipeline_buffer);
+  cp.Add(mad_m * mad_k <= max_load_elem_l0ab / cst2);
+  cp.Add(mad_n * mad_k <= max_load_elem_l0ab / cst3);
+  cp.Add(mo_mad_m == mad_m * buf_line);
+  cp.Add(no_mad_n == mad_n * buf_line);
+  cp.Add(ko_mad_k == mad_k * buf_line);
+
+  // Declare objective
+  LightCP::Variable mo_ko_mad(cp);
+  LightCP::TernaryMult mo_mad(mo_ko_mad, mo_mad_m, ko_mad_k);
+  LightCP::Variable no_ko_mad(cp);
+  LightCP::TernaryMult no_mad(no_ko_mad, no_mad_n, ko_mad_k);
+  cp.Add(&mo_mad);
+  cp.Add(&no_mad);
+
+  LightCP::Variable obj_var(cp);
+  LightCP::TernaryMult obj(obj_var, mo_ko_mad, no_mad_n);
+  cp.Add(&obj);
+
+  // Maximize objective
+  cp.Maximize(obj.Result());
+
+  // Get and store all results
+  cp.Optimize(
+    [&] {
+      std::map<std::string, int> solution;
+      solution["mo_mad_m"] = mo_mad_m.Value();
+      solution["no_mad_n"] = no_mad_n.Value();
+      solution["ko_mad_k"] = ko_mad_k.Value();
+      solution["ko_read_repeat"] = ko_read_repeat.Value();
+      solution["ko"] = ko_inp;
+      solutions_.push_back(solution);
+    },
+    true);
+
+  if (log::GetVerbosityLevel() >= log::Verbosity::high) {
+    LOG(INFO) << "LightCP # solutions: " << cp.NbSol() << "\n";
+  }
+}
+
+std::string MatmulDecision::GenSolDims(const std::map<std::string, int> &solution) const {
+  constexpr int buf_line = 16;
+  // define attr dim
+  std::string no_dim = " 0 no ";
+  std::string mo_dim = " 0 mo ";
+  std::string mi_dim = " 0 mi 16 16";
+  std::string ni_dim = " 0 ni 16 16";
+  std::string ko_dim = " 0 ko ";
+
+  std::string noValue = std::to_string(solution.at("no_mad_n") / buf_line);
+  no_dim = no_dim + noValue + " " + noValue;
+  std::string moValue = std::to_string(solution.at("mo_mad_m") / buf_line);
+  mo_dim = mo_dim + moValue + " " + moValue;
+  ko_dim = ko_dim + std::to_string(solution.at("ko") / solution.at("ko_read_repeat")) + " " +
+           std::to_string(solution.at("ko_mad_k") / buf_line);
+  if (!interchanged_) {
+    return "\"" + no_dim + mo_dim + mi_dim + ni_dim + ko_dim + "\"";
+  } else {
+    return "\"" + mo_dim + no_dim + mi_dim + ni_dim + ko_dim + "\"";
+  }
+}
+
+std::map<std::string, std::string> MatmulDecision::GetAttributes(const MatmulAnalysis &analysis) const {
+  std::map<std::string, int> solution = solutions_[0];
+  std::map<std::string, std::string> sol;
+
+  if (log::GetVerbosityLevel() >= log::Verbosity::high) {
+    Log();
+  }
+
+  // define bypass
+  sol["bypass"] = "0";
+  // when the shape is Fractal_Nz + Transpose on A,
+  // A will need transpose for his computation --> so no bypass
+  if (!analysis.inputa_.transpose_) {
+    sol["bypass"] = "2";
+  }
+  // when the shape is Fractal_Nz + No Transpose on B,
+  // B will need transpose for his computation --> so no bypass
+  if (analysis.inputb_.transpose_) {
+    sol["bypass"] = "1";
+  }
+
+  sol["dim"] = GenSolDims(solution);
+
+  // define 2/4 buffer
+  sol["enable_double_buffer"] = "1";
+  sol["enable_quadruple_buffer"] = "0";
+
+  return sol;
+}
+
+std::string MatmulDecision::GetAttributesStr(const MatmulAnalysis &analysis) const {
+  std::map<std::string, std::string> sol = GetAttributes(analysis);
+  std::string attrs{""};
+
+  // compute attrs
+  for (const auto &[key, value] : sol) {
+    attrs += "\n\"" + key + "\": ";
+    attrs += value + ",";
+  }
+
+  if (attrs != "") {
+    attrs.pop_back();
+    attrs = "{" + attrs + "\n}\n";
+  }
+  return attrs;
+}
+
+std::string MatmulDecision::GetSoftConstraintsStr(const MatmulAnalysis &analysis) const {
+  std::string constraints{""};
+  // compute constraints
+  const isl::set_list &statements = analysis.initial_.get_domain().get_set_list();
+  for (unsigned i = 0; i < statements.size(); ++i) {
+    // SoftConstraints
+    const isl::set &statement = statements.get_at(i);
+    const std::string &statement_name = statement.get_tuple_name();
+    picojson::object contents;
+    contents["statement"] = picojson::value(statement_name);
+
+    const int nb_vars = isl_set_dim(statement, isl_dim_set);
+    const int parameters = isl_set_dim(statement, isl_dim_param);
+    picojson::array meta;
+    meta.push_back(picojson::value(std::to_string(nb_vars)));
+    meta.push_back(picojson::value(std::to_string(parameters)));
+    contents["meta"] = picojson::value(meta);
+
+    const std::vector<std::string> &vars = isl_set_all_names(statement);
+    std::vector<std::string> dim_order;
+    if (!interchanged_) {
+      dim_order.assign({"no", "mo", "mi", "ni", "ko", "ki"});
+    } else {
+      dim_order.assign({"mo", "no", "mi", "ni", "ko", "ki"});
+    }
+    picojson::array coefficients;
+    std::string coef;
+    bool tmp_ok;
+    for (int i = 0; i < nb_vars; i++) {
+      tmp_ok = false;
+      coef = "[";
+      for (int j = 0; j < nb_vars; j++) {
+        if (vars[j] == analysis.dims_map_.at(dim_order[i])) {
+          coef += "1";
+          if (!tmp_ok) {
+            tmp_ok = true;
+          } else {
+            LOG(WARNING) << "2 differents dimensions set to '1' for one scheduling dimension.";
+          }
+        } else {
+          coef += "0";
+        }
+        coef += ", ";
+      }
+      coef += "?";
+      coef += "]";
+      coefficients.push_back(picojson::value(coef));
+      if (!tmp_ok) {
+        LOG(WARNING) << "all dimensions set to '0' for one scheduling dimension.";
+      }
+    }
+    contents["coefficients"] = picojson::value(coefficients);
+
+    // Add ',\n' only if the current constraint has a predecessor
+    // The final \n (without the comma!) will be added when the result string is composed
+    if (constraints != "") {
+      constraints += ",\n";
+    }
+    constraints += picojson::value(contents).serialize();
+  }
+  return constraints;
+}
+
+void MatmulDecision::Log(void) const {
+  std::map<std::string, int> solution = solutions_[0];
+  // check all solutions are equal - throw warning if not
+  for (auto &sol : solutions_) {
+    LOG(INFO) << "mo_mad_m: " << sol.at("mo_mad_m");
+    LOG(INFO) << "no_mad_n: " << sol.at("no_mad_n");
+    LOG(INFO) << "ko_mad_k: " << sol.at("ko_mad_k");
+    LOG(INFO) << "ko: " << sol.at("ko");
+    LOG(INFO) << "ko_read_repeat: " << sol.at("ko_read_repeat");
+    LOG(INFO) << "-------------";
+
+    if (sol.at("no_mad_n") != solution.at("no_mad_n") || sol.at("ko_mad_k") != solution.at("ko_mad_k") ||
+        sol.at("ko_read_repeat") != solution.at("ko_read_repeat") || sol.at("ko") != solution.at("ko") ||
+        sol.at("mo_mad_m") != solution.at("mo_mad_m")) {
+      LOG(WARNING) << "All solutions are not equal ! Getting the first solution by default !";
+    }
+    LOG(INFO) << GenSolDims(sol);
+  }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// MatmulAnalysis
+////////////////////////////////////////////////////////////////////////////////
+
+MatmulAnalysis::MatmulAnalysis(const ScopInfo &scop_info, const isl::schedule &initial)
+    : scop_info_(scop_info), initial_(initial) {
+  if (OperatorMatcher(scop_info) != OPK_SOLO_MATMUL_NOPEELING) {
+    Info(log::Verbosity::low, "MatmulAnalysis - operator mismatch - can't generate mindtrick");
+    return;
+  }
+  ExtractBindOrigInfo(scop_info);
+  DeduceTranspose();
+  if (!DeduceDims()) {
+    Info(log::Verbosity::low, "MatmulAnalysis - input/output dimension shapes do not match - can't generate mindtrick");
+    operator_kind_ = OPK_NOT_PROCESS;
+    return;
+  }
+  constexpr int align32 = 32;
+  if (mo_ % align32 != 0 || no_ % align32 != 0) {
+    operator_kind_ = OPK_SOLO_MATMUL_PEELING;
+  };
+
+  if (log::GetVerbosityLevel() >= log::Verbosity::high) {
+    Log();
+  }
+}
+
+void MatmulAnalysis::ExtractBindOrigInfo(const ScopInfo &scop_info) {
+  auto binds_orig = scop_info.user_config_.GetOriginBind();
+  constexpr int FIVE = 5;
+  for (auto bind : binds_orig) {
+    Tensor tensor = bind.first;
+    auto op = bind.first->op;
+    std::string tensor_name = tensor->op->name;
+    if (log::GetVerbosityLevel() >= log::Verbosity::low) {
+      LOG(INFO) << "MatmulAnalysis - Found a variable tensor name: " << tensor_name;
+    }
+    nb_variables_++;
+    if (inputa_.name_ == tensor_name) {
+      inputa_.from_bind_ = &tensor;
+      inputa_.dtype_ = tensor->dtype;
+      inputa_.shapes_ = tensor->shape;
+      nb_inputs_++;
+    } else if (inputb_.name_ == tensor_name) {
+      inputb_.from_bind_ = &tensor;
+      inputb_.dtype_ = tensor->dtype;
+      inputb_.shapes_ = tensor->shape;
+      nb_inputs_++;
+    } else if (tensor_name.substr(0, FIVE) != "input") {
+      nb_outputs_++;
+
+      if (has_output_) {
+        LOG(WARNING) << "MatmulAnalysis - multiple output";
+        has_output_ = false;
+        return;
+      }
+      output_.from_bind_ = &tensor;
+      output_.dtype_ = tensor->dtype;
+      output_.shapes_ = tensor->shape;
+      has_output_ = true;
+    } else {
+      nb_inputs_++;
+    }
+  }
+}
+
+OperatorKind MatmulAnalysis::OperatorMatcher(const ScopInfo &scop_info) {
+  statements_ = scop_info.analysis_result_.GetStatementMap();
+  nb_statements_ = statements_.size();
+  operator_kind_ = OPK_UNKNOWN;
+
+  for (const auto &stmt : statements_) {
+    auto &node = stmt.second;
+
+    if (!node->IsInstance<Provide>()) {
+      LOG(WARNING) << "MatmulAnalysis - a node is not Provide instance.";
+      continue;
+    }
+
+    auto op = static_cast<const Provide *>(node);
+    if (log::GetVerbosityLevel() >= log::Verbosity::low) {
+      LOG(WARNING) << "MatmulAnalysis - stmt: " << op->value;
+    }
+
+    if (is_constant(op->value)) {
+      int64_t cst = GetIntConst(op->value);
+      operator_list_.insert(make_pair(EXPR_CONST, std::to_string(cst)));
+    } else if (const Cast *opcast = op->value.as<Cast>()) {
+      operator_list_.insert(std::make_pair(EXPR_CAST, ExprToString(opcast->value)));
+    } else if (const Call *opcall = op->value.as<Call>()) {
+      if (opcall->name != "mad") {
+        operator_list_.insert(std::make_pair(EXPR_CALL, opcall->name));
+        operator_kind_ = OPK_NOT_PROCESS;
+      } else {
+        for (auto arg : opcall->args) {
+          // in the args,you should have firstly a Call with output name and a Cast with BinaryOpNode<Mul>. Ex.
+          // mad(T_batchmatmul_input_0_input_1(ax0, ax1, ax2, ax3), float32((input_0(ax1, ko, ki, ax2)*input_1(ax0,
+          // ko, ki, ax3)))
+
+          // If arg is an output:
+          if (!arg->IsInstance<Cast>()) {
+            continue;
+          }
+          // In case of input, it is actually a cast because API provides output float32
+          const Cast *opcast = arg.as<Cast>();
+          if (!opcast->value->IsInstance<BinaryOpNode<Mul>>()) {
+            operator_list_.insert(std::make_pair(EXPR_MAD, "unsupported mad"));
+            operator_kind_ = OPK_NOT_PROCESS;
+
+            continue;
+          }
+
+          const BinaryOpNode<Mul> *opmul = opcast->value.as<BinaryOpNode<Mul>>();
+          if (!opmul->a->IsInstance<Call>() || !opmul->b->IsInstance<Call>()) {
+            operator_list_.insert(std::make_pair(EXPR_MAD, "unsupported mad"));
+            operator_kind_ = OPK_NOT_PROCESS;
+
+            continue;
+          }
+          operator_list_.insert(std::make_pair(EXPR_MAD, ""));
+
+          // Have a valid MAD already. Does not support 2 MAD
+          if (operator_kind_ == OPK_SOLO_MATMUL_NOPEELING || operator_kind_ == OPK_NOT_PROCESS) {
+            operator_kind_ = OPK_NOT_PROCESS;
+            continue;
+          }
+          // Only pass match when inital status is OPK_UKKNOWN
+          const Call *a = opmul->a.as<Call>();
+          inputa_.name_ = a->name;
+          inputa_.axis_ = a->args;
+          inputa_.from_op_ = a;
+
+          const Call *b = opmul->b.as<Call>();
+          inputb_.name_ = b->name;
+          inputb_.axis_ = b->args;
+          inputb_.from_op_ = b;
+          operator_kind_ = OPK_SOLO_MATMUL_NOPEELING;
+        }
+      }
+    } else {
+      // Found a node not supported, except from Mad Cast or Const.
+      operator_kind_ = OPK_NOT_PROCESS;
+    }
+  }
+  return operator_kind_;
+}
+
+void MatmulAnalysis::Log(void) const {
+  LOG(INFO) << "inputa_: "
+            << "name: " << inputa_.name_ << " type: " << inputa_.dtype_ << " transpose: " << inputa_.transpose_;
+  LOG(INFO) << "inputb_: "
+            << "name: " << inputb_.name_ << " type: " << inputb_.dtype_ << " transpose: " << inputb_.transpose_;
+  for (auto &shape : inputa_.shapes_) {
+    LOG(INFO) << "inputa_ shapes: " << shape;
+  }
+  for (auto &shape : inputb_.shapes_) {
+    LOG(INFO) << "inputb_ shapes: " << shape;
+  }
+  for (auto &dim : inputa_.axis_) {
+    LOG(INFO) << "inputa_ dims: " << dim;
+  }
+  for (auto &dim : inputb_.axis_) {
+    LOG(INFO) << "inputb_ dims: " << dim;
+  }
+  if (has_output_) {
+    for (auto &shape : output_.shapes_) {
+      LOG(INFO) << "output_ shapes: " << shape;
+    }
+  }
+  LOG(INFO) << "nb_statements_: " << nb_statements_ << "\n nb_variables_ " << nb_variables_ << "\n nb_inputs_ "
+            << nb_inputs_ << "\n nb_outputs_ " << nb_outputs_;
+  LOG(INFO) << "mo: " << mo_ << " no: " << no_ << " ko: " << ko_ << " mi: " << mi_ << " ni: " << ni_ << " ki: " << ki_;
+  LOG(INFO) << "operator_kind_ " << operator_kind_;
+  LOG(INFO) << "map dims with axis: \n"
+            << mo_ << " mo " << dims_map_.at("mo") << "\n"
+            << no_ << " no " << dims_map_.at("no") << "\n"
+            << ko_ << " ko " << dims_map_.at("ko") << "\n"
+            << mi_ << " mi " << dims_map_.at("mi") << "\n"
+            << ni_ << " ni " << dims_map_.at("ni") << "\n"
+            << ki_ << " ki " << dims_map_.at("ki") << std::endl;
+}
+
+void MatmulAnalysis::DeduceTranspose() {
+  std::string inputa_first = ExprToString(inputa_.axis_[0]);
+  std::string inputb_first = ExprToString(inputb_.axis_[0]);
+  constexpr int TWO = 2;
+
+  if (inputa_first == "ko") {
+    inputa_.transpose_ = false;
+  } else if (inputa_first.substr(0, TWO) == "ax") {
+    inputa_.transpose_ = true;
+  } else {
+    LOG(WARNING) << "This case may never happens.";
+  }
+
+  if (inputb_first == "ko") {
+    inputb_.transpose_ = true;
+  } else if (inputb_first.substr(0, TWO) == "ax") {
+    inputb_.transpose_ = false;
+  } else {
+    LOG(WARNING) << "This case may never happens.";
+  }
+}
+
+template <class tensor>
+void MatmulAnalysis::MatchDimsShapes(size_t index, tensor T, int *dim, std::string dim_name) {
+  if (*dim != 0) {
+    if (GetIntConst(T.shapes_[index]) != *dim) {
+      LOG(ERROR) << "Internal error. Shape from inputa_=" << *dim << " and Shape from inputb_=" << T.shapes_[index]
+                 << " they should be same";
+    }
+    return;
+  }
+
+  *dim = GetIntConst(T.shapes_[index]);
+  dims_map_[dim_name] = ExprToString(T.axis_[index]);
+}
+
+bool MatmulAnalysis::DeduceDims() {
+  constexpr int first_position = 1;
+  constexpr int second_position = 2;
+  constexpr int third_position = 3;
+  if (inputa_.transpose_) {
+    MatchDimsShapes<>(0, inputa_, &mo_, "mo");
+    MatchDimsShapes<>(first_position, inputa_, &ko_, "ko");
+    MatchDimsShapes<>(second_position, inputa_, &ki_, "ki");
+    MatchDimsShapes<>(third_position, inputa_, &mi_, "mi");
+  } else {
+    MatchDimsShapes<>(0, inputa_, &ko_, "ko");
+    MatchDimsShapes<>(first_position, inputa_, &mo_, "mo");
+    MatchDimsShapes<>(second_position, inputa_, &mi_, "mi");
+    MatchDimsShapes<>(third_position, inputa_, &ki_, "ki");
+  }
+
+  if (inputb_.transpose_) {
+    MatchDimsShapes<>(0, inputb_, &ko_, "ko");
+    MatchDimsShapes<>(first_position, inputb_, &no_, "no");
+    MatchDimsShapes<>(second_position, inputb_, &ni_, "ni");
+    MatchDimsShapes<>(third_position, inputb_, &ki_, "ki");
+  } else {
+    MatchDimsShapes<>(0, inputb_, &no_, "no");
+    MatchDimsShapes<>(first_position, inputb_, &ko_, "ko");
+    MatchDimsShapes<>(second_position, inputb_, &ki_, "ki");
+    MatchDimsShapes<>(third_position, inputb_, &ni_, "ni");
+  }
+  // output for verify.
+  if (has_output_) {
+    if (GetIntConst(output_.shapes_[0]) != no_ ||
+        GetIntConst(output_.shapes_[first_position]) != mo_ ||
+        GetIntConst(output_.shapes_[second_position]) != mi_ ||
+        GetIntConst(output_.shapes_[third_position]) != ni_) {
+      LOG(ERROR) << "Internal error. Shape from inputa_/inputb_ and shape from output are not the same";
+      return false;
+    }
+  }
+  return true;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1758,7 +2404,9 @@ static inline std::string escape(const char *input, char c) {
   return stream.str();
 }
 
-static inline std::string escape(const std::string &input, char c) { return escape(input.c_str(), c); }
+static inline std::string escape(const std::string &input, char c) {
+  return escape(input.c_str(), c);
+}
 
 static inline std::string quote(const std::string &input) { return "\"" + input + "\""; }
 
@@ -1967,6 +2615,30 @@ std::tuple<std::string, std::string> SchedulingMindTrick::AutoGenGPUSoftConstrai
   }
 
   return std::make_tuple(result, "");
+}
+
+std::tuple<std::string, std::string> SchedulingMindTrick::AutoGenAscend910SoftConstraints(ScopInfo &scop_info,
+                                                                                          const isl::schedule &sch) {
+  const MatmulAnalysis &analysis = MatmulAnalysis(scop_info, sch);
+
+  MatmulDecision decision;
+  if (!decision.SetModel(analysis)) {
+    return std::make_tuple("", "");
+  }
+
+  std::string attrs(decision.GetAttributesStr(analysis));
+  if (attrs == "") {
+    return std::make_tuple("", "");
+  }
+  std::string constraints(decision.GetSoftConstraintsStr(analysis));
+  if (constraints != "") {
+    constraints = "[\n  " + constraints + "\n" + "]\n";
+  }
+
+  LOG(INFO) << "AutoMindtrick found:";
+  LOG(INFO) << "soft constraints: " << constraints;
+  LOG(INFO) << "attrs: " << attrs;
+  return std::make_tuple(constraints, attrs);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
