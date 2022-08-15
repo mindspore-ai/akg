@@ -183,12 +183,13 @@ def _update_target_info(desc_d, attr):
         return attr
 
     process = desc_d.get("process")
-    if process != "cuda":
-        return attr
-
-    # auto detect proper gpu device type according to compute capability description
-    if target_info.get("compute_capability") == "8.0":
-        attr["device_type"] = "a100"
+    if process == "cuda":
+        # auto detect proper gpu device type according to compute capability description
+        if target_info.get("compute_capability") == "8.0":
+            attr["device_type"] = "a100"
+    elif process == "cpu":
+        if target_info.get("feature"):
+            attr["feature"] = target_info.get("feature")
 
     return attr
 

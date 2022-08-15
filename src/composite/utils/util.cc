@@ -64,30 +64,42 @@ std::string GetRealTarget(const std::string &target) {
   return target;
 }
 
+std::string GetOption(const picojson::value &target_json) {
+  std::string option = "";
+  if (target_json.contains("arch")) {
+    std::string default_sys = "none";
+    std::string default_abi = "gnu";
+    std::string default_vendor = "unknown";
+    auto vendor_value = target_json.contains("vendor") ? target_json.get("vendor").get<std::string>() : default_vendor;
+    auto sys_value = target_json.contains("system") ? target_json.get("system").get<std::string>() : default_sys;
+    auto abi_value = target_json.contains("abi") ? target_json.get("abi").get<std::string>() : default_abi;
+    option += " -target=" + target_json.get("arch").get<std::string>();
+    option += "-" + vendor_value;
+    option += "-" + sys_value;
+    option += "-" + abi_value;
+  }
+  if (target_json.contains("cpu")) {
+    option += " -mcpu=" + target_json.get("cpu").get<std::string>();
+  }
+  if (target_json.contains("feature")) {
+    option += " -mattr=+" + target_json.get("feature").get<std::string>();
+  }
+  return option;
+}
+
 std::string GetProcess(const picojson::value &input_json) {
   const picojson::value::object &input_obj = input_json.get<picojson::object>();
   std::string target;
-  std::string options = "";
-  std::string feature;
+  std::string option = "";
   auto iter = input_obj.find("process");
   if (iter != input_obj.end()) {
     CHECK(iter->second.is<std::string>());
     target = iter->second.get<std::string>();
   }
-  if (input_json.contains("target_info") && input_json.get("target_info").contains("feature")) {
-    auto feat_value = input_json.get("target_info").get("feature");
-    CHECK(feat_value.is<std::string>());
-    feature = feat_value.get<std::string>();
-    if (feature == "avx" || feature == "avx2") {
-      options = " -mcpu=core-avx2 -mattr=avx2";
-    } else if (feature == "avx512") {
-      options = "  -mcpu=skylake-avx512 -mattr=-avx512f";
-    } else if (feature == "neon") {
-      options = " -target=aarch64-linux-gnu -mattr=+neon";
-    }
+  if (input_json.contains("target_info")) {
+    option = GetOption(input_json.get("target_info"));
   }
-
-  return GetRealTarget(target) + options;
+  return GetRealTarget(target) + option;
 }
 
 
