@@ -579,8 +579,7 @@ class CpuStrategy : public TilingStrategy {
  private:
   void BuildAxesQueue();
   void RecordTileValue();
-  void GenConv2dTileByAxis(const int index, int64_t &p, int64_t tile1,
-                           int64_t tile0);
+  void GenConv2dTileByAxis(const int index, int64_t &p, int64_t tile1, int64_t tile0);
   void SetConv2dTileValue(int index);
   void SetMatMulTileValue(int index);
   bool SetReduceYTileValue(int index);
@@ -607,7 +606,9 @@ class CsrStrategy : public TilingStrategy {
  public:
   explicit CsrStrategy(const TilingAnalyzer *a) : TilingStrategy(a) {}
   void AddGpuConstraint() override;
-
+  void AddConstraintND(std::vector<TileAxis *> &axes, int csr_thread_num, int feat_len);
+  void AddConstraint2D(std::vector<TileAxis *> &axes, int csr_thread_num,
+                       std::unordered_map<int, int64_t> &index_mapping);
   int warp_factor_reduction_{2};
   int warp_factor_elemwise_{5};
 };
