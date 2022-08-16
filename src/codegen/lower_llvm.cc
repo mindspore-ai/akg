@@ -81,8 +81,6 @@ StageResult LLVMLowerBeforeFlattern(Stmt &stmt, LowerData &data) {
       stmt = NEXT_PASS(FixRealizeShape, stmt, data->target);
     }
     stmt = NEXT_PASS(RealizeCompress, stmt);
-    stmt = NEXT_PASS(ReconstructLayout, stmt);
-    stmt = NEXT_PASS(GemmFactor, stmt);
     stmt = NEXT_PASS(AdjustParallelLoop, stmt);
     stmt = NEXT_PASS(ReductionFactor, stmt, data->binds_0);
   }

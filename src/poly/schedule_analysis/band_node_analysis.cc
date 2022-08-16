@@ -550,38 +550,56 @@ class OperatorInfoCollector {
   }
 
   void SetMmaModeForTensor(const std::string &tensor_a_name, const std::string &tensor_b_name) {
-    std::string custom_dim = scop_info_.user_config_.GetBDim();
-    if (!custom_dim.empty() && !scop_info_.user_config_.GetEnableConvTensorCore()) {
-      const unsigned int each_axis_size_with_mapping = 6;
-      const unsigned int each_axis_size_without_mapping = 4;
-      const unsigned int m_axis_pos = 1;
-      const unsigned int n_axis_pos = 2;
-      const unsigned int k_axis_pos = 3;
-      const unsigned int interval_len = 3;
-      auto each_axis_size =
-        custom_dim.find(T0) != std::string::npos ? each_axis_size_with_mapping : each_axis_size_without_mapping;
-
-      Mma mma;
-      std::vector<std::string> dim_str = Split(custom_dim, " ");
-      auto batch_number = (scop_info_.analysis_result_.GetBatchAxisNumForMatmul() - const_batch_axis_num_) > 0 ? 1 : 0;
-      auto real_m_axis_pos = (m_axis_pos + batch_number - 1) * each_axis_size + interval_len;
-      auto real_n_axis_pos = (n_axis_pos + batch_number - 1) * each_axis_size + interval_len;
-      auto real_k_axis_pos = (k_axis_pos + batch_number - 1) * each_axis_size + interval_len;
-      mma.m = static_cast<int>(WrappedStrtol(dim_str[real_m_axis_pos]));
-      mma.n = static_cast<int>(WrappedStrtol(dim_str[real_n_axis_pos]));
-      mma.k = static_cast<int>(WrappedStrtol(dim_str[real_k_axis_pos]));
-
-      scop_info_.analysis_result_.SetMmaMode(mma);
-      return;
-    }
-
+    const unsigned int m_axis_pos = 1;
+    const unsigned int n_axis_pos = 2;
+    const unsigned int k_axis_pos = 3;
     Mma mma;
-    auto matrix_a_major = scop_info_.analysis_result_.GetMatrixMatmulMajor()[tensor_a_name];
-    auto matrix_b_major = scop_info_.analysis_result_.GetMatrixMatmulMajor()[tensor_b_name];
-    if (matrix_a_major == COL_MAJOR && matrix_b_major == ROW_MAJOR) {
-      mma = {32, 32, 4};
+    if (scop_info_.user_config_.GetTarget() == TARGET_CUDA) {
+      std::string custom_dim = scop_info_.user_config_.GetBDim();
+      if (!custom_dim.empty() && !scop_info_.user_config_.GetEnableConvTensorCore()) {
+        const unsigned int each_axis_size_with_mapping = 6;
+        const unsigned int each_axis_size_without_mapping = 4;
+        const unsigned int interval_len = 3;
+
+        auto each_axis_size =
+          custom_dim.find(T0) != std::string::npos ? each_axis_size_with_mapping : each_axis_size_without_mapping;
+        std::vector<std::string> dim_str = Split(custom_dim, SPACE_PATTERN);
+        auto batch_number =
+          (scop_info_.analysis_result_.GetBatchAxisNumForMatmul() - const_batch_axis_num_) > 0 ? 1 : 0;
+        auto real_m_axis_pos = (m_axis_pos + batch_number - 1) * each_axis_size + interval_len;
+        auto real_n_axis_pos = (n_axis_pos + batch_number - 1) * each_axis_size + interval_len;
+        auto real_k_axis_pos = (k_axis_pos + batch_number - 1) * each_axis_size + interval_len;
+        mma.m = static_cast<int>(WrappedStrtol(dim_str[real_m_axis_pos]));
+        mma.n = static_cast<int>(WrappedStrtol(dim_str[real_n_axis_pos]));
+        mma.k = static_cast<int>(WrappedStrtol(dim_str[real_k_axis_pos]));
+      } else {
+        const int64_t row_major_m = 16;
+        const int64_t row_major_n = 16;
+        const int64_t row_major_k = 8;
+        const int64_t col_major_m = 32;
+        const int64_t col_major_n = 32;
+        const int64_t col_major_k = 4;
+        auto matrix_a_major = scop_info_.analysis_result_.GetMatrixMatmulMajor()[tensor_a_name];
+        auto matrix_b_major = scop_info_.analysis_result_.GetMatrixMatmulMajor()[tensor_b_name];
+        if (matrix_a_major == COL_MAJOR && matrix_b_major == ROW_MAJOR) {
+          mma = {col_major_m, col_major_n, col_major_k};
+        } else {
+          mma = {row_major_m, row_major_n, row_major_k};
+        }
+      }
     } else {
-      mma = {16, 16, 8};
+      std::string custom_mnk = scop_info_.user_config_.GetGemmKernelMNK();
+      if (!custom_mnk.empty()) {
+        std::vector<std::string> tile_size_kernel = Split(custom_mnk, SPACE_PATTERN);
+        mma.m = static_cast<int>(WrappedStrtol(tile_size_kernel[m_axis_pos - 1]));
+        mma.n = static_cast<int>(WrappedStrtol(tile_size_kernel[n_axis_pos - 1]));
+        mma.k = static_cast<int>(WrappedStrtol(tile_size_kernel[k_axis_pos - 1]));
+      } else {
+        const int64_t pack_a = 4;
+        const int64_t pack_b = 24;
+        const int64_t mma_k = 8;
+        mma = {pack_a, pack_b, mma_k};
+      }
     }
     scop_info_.analysis_result_.SetMmaMode(mma);
   }
