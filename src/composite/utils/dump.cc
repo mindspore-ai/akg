@@ -35,58 +35,6 @@ void DumpIRAttr(const std::string &kernel_name, const IrAttrInfo &attr, size_t i
   of.close();
 }
 
-void DumpStitchInfo(const std::string &kernel_name, StitchAttrInfo &store_attr,
-                    std::unordered_map<std::string, StitchBufferInfo> &stitch_buffer_map,
-                    std::unordered_map<std::string, StitchBufferInfo> &buf_within_op_map,
-                    std::vector<std::string> &allocate_revoke) {
-  if (getenv(GetDumpIRFlag().c_str()) == nullptr) return;
-  std::ofstream of;
-  of.open("stitch_info/" + kernel_name + "_stitch.log", std::ios::app);
-  if (!of.is_open()) return;
-  DumpHeader(of, "StitchAttrInfo");
-  of << "broadcast_size: " << store_attr.broadcast_size << std::endl;
-  of << "type_array: ";
-  for (const auto &a : store_attr.type_array) {
-    std::string type;
-    switch (a) {
-      case StitchOpType::Elem:
-        type = "Elem";
-        break;
-      case StitchOpType::Broadcast:
-        type = "Broadcast";
-        break;
-      case StitchOpType::Reduce2D_X:
-        type = "Reduce2D_X";
-        break;
-      case StitchOpType::All_Reduce:
-        type = "All_Reduce";
-        break;
-      case StitchOpType::Reduce2D_Y:
-        type = "Reduce2D_Y ";
-        break;
-      default:
-        CHECK(0) << "Unknow stitch op type";
-    }
-    of << type << " ";
-  }
-  of << std::endl;
-
-  DumpHeader(of, "stitch_buffer_map");
-  for (const auto &kv : stitch_buffer_map) {
-    of << kv.first << std::endl;
-    of << kv.second << std::endl;
-  }
-  DumpHeader(of, "buf_within_op_map");
-  for (const auto &kv : buf_within_op_map) {
-    of << kv.first << std::endl;
-    of << kv.second << std::endl;
-  }
-  DumpHeader(of, "allocate_revoke");
-  for (const auto &a : allocate_revoke) {
-    of << a << std::endl;
-  }
-  of.close();
-}
 
 void DumpStr2File(const std::string &file_name, const std::string &str) {
   if (getenv(GetDumpIRFlag().c_str()) == nullptr) return;

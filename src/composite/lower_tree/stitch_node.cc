@@ -41,7 +41,7 @@ Stmt String2LowerStmtSimple(const StringImm *json_str, const Map<std::string, No
 
   LowerData data = LowerDataNode::make(GetScheduleWithBuildInfo(info), info.args, info.in_binds, attrs, kCuda,
                                        info.kernel_name + "_check", GetConfig(), poly);
-  auto node_ref = StageLower(data).RunTo(StageType::BeforeLowerFunc).Node();
+  auto node_ref = StageLower(data).RunTo(StageType::BeforeFlattern).Node();
   for (auto si : data->split_index) {
     split_index.push_back(int64_t(si));
   }
@@ -89,9 +89,9 @@ void ModifyStitchAttrs(Map<std::string, NodeRef> &forward_infos, BuildInfo &info
 }
 
 void AttachStitchDecorator(const std::string &target, BaseLowerNode *child, size_t index,
-               Map<std::string, NodeRef> &forward_infos, Map<std::string, NodeRef> *backward_infos) {
+                           Map<std::string, NodeRef> &forward_infos, Map<std::string, NodeRef> *backward_infos) {
   auto func = [&target, index, &forward_infos, backward_infos](BaseLowerNode *node, LowerRunner *next, StageType s) {
-    JsonLowerLeaf *leaf = static_cast<JsonLowerLeaf*>(node);
+    JsonLowerLeaf *leaf = static_cast<JsonLowerLeaf *>(node);
     auto &attrs = leaf->Attrs();
     ModifyStitchInfo(attrs, forward_infos, &leaf->info_);
     if (forward_infos.find(kExtraAttrs) != forward_infos.end()) {
@@ -101,7 +101,7 @@ void AttachStitchDecorator(const std::string &target, BaseLowerNode *child, size
       }
     }
     next->Lower(s);
-    leaf->Data()->name += std::string("_Stitch_")  + std::to_string(index);
+    leaf->Data()->name += std::string("_Stitch_") + std::to_string(index);
     if (target == "cuda") {
       LowerDataNode *data = leaf->Data().operator->();
       ModifyStitchAttrs(forward_infos, leaf->info_, &data->attrs);
@@ -133,136 +133,29 @@ bool CheckFoldDim(const NodeRef &block_json) {
   return true;
 }
 
-void CudaStitchLowerNode::Lower(StageType to) {
+void StitchLowerNode::Lower(StageType to) {
   CHECK(children_.size() > 1);
+
   // 0. check.
   // Catch all children's jsons.
+  bool fold_dim;
   Array<Expr> block_jsons;
   std::vector<Map<std::string, NodeRef>> block_attrs;
   std::tie(block_jsons, block_attrs) = CatchChild();
+  Map<std::string, NodeRef> &attrs = block_attrs[0];
 
-  bool fold_dim;
-  if (block_attrs[0].defined() && block_attrs[0].find(kFoldDim) != block_attrs[0].end()) {
-    fold_dim = GetBoolValueFromMap(block_attrs[0], kFoldDim);
+  if (attrs.defined() && attrs.find(kFoldDim) != attrs.end()) {
+    fold_dim = GetBoolValueFromMap(attrs, kFoldDim);
   } else {
     fold_dim = CheckFoldDim(block_jsons);
   }
-
-  std::vector<GridBlockDims> dim_array;
-  std::vector<size_t> split_index;
-  std::vector<Stmt> stitch_irs;
-  std::vector<LowerData> datas;
-
-  ir_type_array_.clear();
-  // 1. Run child.
-  for (size_t i = 0; i < children_.size(); ++i) {
-    auto &child = children_[i];
-    auto forward_infos =
-      GetStitchForwardInfo(block_jsons[i], block_attrs[i], i, fold_dim, dim_array, ir_type_array_, split_index);
-    Map<std::string, NodeRef> backward_infos;
-    AttachMultiChildDecorator(child.get(), forward_infos, &backward_infos);
-    AttachStitchDecorator(target_, child.get(), i, forward_infos, &backward_infos);
-    child->Run(this);
-    ChildPostProcess(child->Data(), backward_infos);
-    datas.push_back(child->Data());
-    auto stitch_ir = Downcast<Stmt>(child->Node());
-    stitch_irs.push_back(InsertSync(stitch_ir));
-  }
-
-  // 2. Merge datas and block irs.
-  Merge(datas, stitch_irs);
-
-  // 3. Run to.
-  Postprocess(to);
-}
-
-Map<std::string, NodeRef> CudaStitchLowerNode::GetStitchForwardInfo(
-  Expr child_json, const Map<std::string, NodeRef> &child_attrs, size_t i, bool fold_dim,
-  std::vector<GridBlockDims> &dim_array, std::vector<StitchOpType> &ir_type_array, std::vector<size_t> &split_index) {
-  auto forward_infos = GetCommonForwardInfo();
-  forward_infos.Set(kAllocMap, alloc_map_);
-  forward_infos.Set(kIdx, Expr(i));
-  forward_infos.Set(kFoldDim, Expr(fold_dim));
-
-  // New attrs.
-  std::vector<OpDesc> op_v = ParseOpDesc(child_json.as<StringImm>()->value);
-  auto kernel_name = ParseKernelName(child_json.as<StringImm>()->value);
-  const std::function<Stmt(const StringImm *, const Map<std::string, NodeRef> &, bool, bool, bool,
-                           std::vector<size_t> &)>
-    f = std::bind(&String2LowerStmtSimple, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3,
-                  std::placeholders::_4, std::placeholders::_5, std::placeholders::_6);
-  BufferStitchAttr stitch_attr_info(f);
-  stitch_attr_info.GetBufferStitchAttr(child_json, op_v, child_attrs, true, fold_dim);
-  dim_array.push_back(stitch_attr_info.dims);  // save current dims into array.
-  auto stitch_type = stitch_attr_info.stitch_type_;
-  IrAttrInfo ir_attr_info = GetIRAttr(stitch_type, stitch_attr_info, ir_type_array, dim_array, child_attrs);
-  DumpIRAttr(kernel_name, ir_attr_info, i);
-  ir_type_array.push_back(stitch_type);  // Note this should be done AFTER GetIrAttr.
-  auto new_attrs = BindBlockAndThread(ir_attr_info.dims, true, ir_attr_info.attrs);
-  if (i == 0) split_index = stitch_attr_info.split_index;
-  new_attrs = SetAutoFuseAttr(split_index, new_attrs);
-
-  forward_infos.Set(kEnableStitch, Expr(true));
-  forward_infos.Set(kExtraAttrs, new_attrs);
-
-  return forward_infos;
-}
-
-Stmt CudaStitchLowerNode::MergeStmts(const LowerData &data, std::vector<Stmt> &stitch_irs) {
-  auto dump_mng = DumpManager(data->name + "_merge", data->config->dump_pass_ir);
-  DUMP_ORIGIN_IR(dump_mng, stitch_irs);
-
-  StitchAttrInfo stitch_attr;
-  stitch_attr.type_array = ir_type_array_;
-
-  StitchBufAlloc buf_manager(stitch_irs, alloc_map_, reuse_map_, clean_op_map_, outputs2args_);
-  buf_manager.BufferAllocReuse();
-
-  GetRealOutputs();
-
-  Stmt stitched_ir;
-  TRANSFORM_AND_TRY_DUMP(dump_mng, stitched_ir, StitchFusionGpu, stitch_irs, data->name, stitch_attr,
-                         buf_manager.stitch_buffer_map, buf_manager.buf_within_op_map, buf_manager.allocate_revoke,
-                         real_outputs_, workspace_args_);
-
-  auto ElimDupInputs = [](Stmt stmt, const Array<NodeRef> &inputs) { return ElimDuplicateInputs(inputs).Run(stmt); };
-  TRANSFORM_AND_TRY_DUMP(dump_mng, stitched_ir, ElimDupInputs, stitched_ir, inputs_);
-  TRANSFORM_AND_TRY_DUMP(dump_mng, stitched_ir, ir::ProcessSyncInnerThread, stitched_ir);
-  TRANSFORM_AND_TRY_DUMP(dump_mng, stitched_ir, ElimDupInputs, stitched_ir, inputs_);
-
-  return stitched_ir;
-}
-
-void CudaStitchLowerNode::PostUpdateDataAndNodeRef(LowerData &data, NodeRef &) {
-  data->arg_list_0 = ReorderArgs(inputs_, outputs_, all_args_, outputs2args_, workspace_args_);
-}
-
-void AscendStitchLowerNode::Lower(StageType to) {
-  CHECK(children_.size() > 1);
-
-  // 0. check.
-  // Catch all children's jsons.
-  bool fold_dim;
-  std::vector<Map<std::string, NodeRef>> block_attrs;
-  {
-    Array<Expr> block_jsons;
-    std::tie(block_jsons, block_attrs) = CatchChild();
-
-    Map<std::string, NodeRef> &attrs = block_attrs[0];
-
-    if (attrs.defined() && attrs.find(kFoldDim) != attrs.end()) {
-      fold_dim = GetBoolValueFromMap(attrs, kFoldDim);
-    } else {
-      fold_dim = CheckFoldDim(block_jsons);
-    }
-  }
-
+  GetStitchForwardInfoArgs();
   std::vector<Stmt> stitch_irs;
   std::vector<LowerData> datas;
   // 1. Run child.
   for (size_t i = 0; i < children_.size(); ++i) {
     auto &child = children_[i];
-    auto forward_infos = GetStitchForwardInfo(block_attrs[i], i, fold_dim);
+    auto forward_infos = GetStitchForwardInfo(block_attrs[i], i, fold_dim, block_jsons[i]);
     Map<std::string, NodeRef> backward_infos;
     AttachMultiChildDecorator(child.get(), forward_infos, &backward_infos);
     AttachStitchDecorator(target_, child.get(), i, forward_infos, &backward_infos);
@@ -282,12 +175,129 @@ void AscendStitchLowerNode::Lower(StageType to) {
   Postprocess(to);
 }
 
-Map<std::string, NodeRef> AscendStitchLowerNode::GetStitchForwardInfo(const Map<std::string, NodeRef> &child_attrs,
-                                                                      size_t i, bool fold_dim) {
+Stmt StitchLowerNode::MergeStmts(const LowerData &data, std::vector<Stmt> &stitch_irs) {
+  auto dump_mng = DumpManager(data->name + "_merge", data->config->dump_pass_ir);
+  DUMP_ORIGIN_IR(dump_mng, stitch_irs);
+
+  GetBufferManager(stitch_irs);
+  GetRealOutputs();
+
+  Stmt merged_irs;
+
+  MergeIRAndTryDump(dump_mng, merged_irs, stitch_irs, data);
+
+  return merged_irs;
+}
+
+Map<std::string, NodeRef> StitchLowerNode::GetStitchForwardInfo(const Map<std::string, NodeRef> &child_attrs, size_t i,
+                                                                bool fold_dim, Expr child_json) {
   auto forward_infos = GetCommonForwardInfo();
   forward_infos.Set(kIdx, Expr(i));
   forward_infos.Set(kFoldDim, Expr(fold_dim));
 
+  Map<std::string, NodeRef> new_attrs = GetNewAttr(forward_infos, child_attrs, i, fold_dim, child_json);
+
+  forward_infos.Set(kEnableStitch, Expr(true));
+  forward_infos.Set(kExtraAttrs, new_attrs);
+
+  return forward_infos;
+}
+
+void StitchLowerNode::PostUpdateDataAndNodeRef(LowerData &data, NodeRef &node_ref) {
+  FixLowerDataForStitch(data, node_ref);
+}
+
+Map<std::string, NodeRef> CudaStitchLowerNode::GetNewAttr(Map<std::string, NodeRef> &forward_infos,
+                                                          const Map<std::string, NodeRef> &child_attrs, size_t i,
+                                                          bool fold_dim, Expr child_json) {
+  forward_infos.Set(kAllocMap, alloc_map_);
+
+  // New attrs.
+  std::vector<OpDesc> op_v = ParseOpDesc(child_json.as<StringImm>()->value);
+  auto kernel_name = ParseKernelName(child_json.as<StringImm>()->value);
+  const std::function<Stmt(const StringImm *, const Map<std::string, NodeRef> &, bool, bool, bool,
+                           std::vector<size_t> &)>
+    f = std::bind(&String2LowerStmtSimple, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3,
+                  std::placeholders::_4, std::placeholders::_5, std::placeholders::_6);
+  BufferStitchAttr stitch_attr_info(f);
+  stitch_attr_info.GetBufferStitchAttr(child_json, op_v, child_attrs, true, fold_dim);
+  dim_array.push_back(stitch_attr_info.dims);  // save current dims into array.
+  auto stitch_type = stitch_attr_info.stitch_type_;
+  IrAttrInfo ir_attr_info = GetIRAttr(stitch_type, stitch_attr_info, ir_type_array_, dim_array, child_attrs);
+  DumpIRAttr(kernel_name, ir_attr_info, i);
+  ir_type_array_.push_back(stitch_type);  // Note this should be done AFTER GetIrAttr.
+  auto new_attrs = BindBlockAndThread(ir_attr_info.dims, true, ir_attr_info.attrs);
+  if (i == 0) split_index = stitch_attr_info.split_index;
+  new_attrs = SetAutoFuseAttr(split_index, new_attrs);
+  return new_attrs;
+}
+
+void CudaStitchLowerNode::GetStitchForwardInfoArgs() {
+  ir_type_array_.clear();
+  dim_array.clear();
+  split_index.clear();
+}
+
+std::unordered_map<std::string, NodeRef> CudaStitchLowerNode::GetStitchBuffer(
+  const Map<std::string, Array<NodeRef>> &alloc_map) {
+  std::unordered_map<std::string, NodeRef> stitch_buffer;
+  Map<std::string, NodeRef> stitch_buffer_alloc_size_map;
+
+  if (!reuse_map_.count("EMPTY")) {
+    for (const auto &it : reuse_map_) {
+      std::string name = it.first;
+      auto alloc_info = it.second[0].as<StringImm>()->value;
+
+      CHECK(outputs2args_.find(alloc_info) != outputs2args_.end());
+      CHECK(outputs2args_.find(name) != outputs2args_.end());
+
+      std::string ir_var_name = outputs2args_.at(name).as<BufferNode>()->name;
+      NodeRef ir_var_buffer = outputs2args_.at(alloc_info);
+
+      stitch_buffer.insert(std::make_pair(name, ir_var_buffer));
+      stitch_buffer.insert(std::make_pair(ir_var_name, ir_var_buffer));
+
+      std::string shared_name = ir_var_buffer.as<BufferNode>()->name + "_shared";
+      if (!buf_region_map_.count(shared_name)) {
+        stitch_buffer_alloc_size_map.Set(shared_name, Expr(it.second[1].as<IntImm>()->value / total_block_));
+      }
+    }
+  }
+  for (auto &kv : outputs2args_) {
+    if (alloc_map.count(kv.first)) {
+      stitch_buffer.insert(kv);
+
+      std::string shared_name = kv.second.as<BufferNode>()->name + "_shared";
+      if (!buf_region_map_.count(shared_name)) {
+        stitch_buffer_alloc_size_map.Set(shared_name, Expr(alloc_map[kv.first][1].as<IntImm>()->value / total_block_));
+      }
+    }
+  }
+  data_->gpu_stitch_buf_alloc_size = stitch_buffer_alloc_size_map;
+  return stitch_buffer;
+}
+// detach
+void CudaStitchLowerNode::GetBufferManager(std::vector<Stmt> &stitch_irs) {
+  auto info_func = GetGpuMutateInfo(stitch_irs);
+  total_block_ = info_func.get_total_block();
+  buf_region_map_ = info_func.get_buffer_region_map();
+  stitch_buffer_ = GetStitchBuffer(alloc_map_);
+}
+
+void CudaStitchLowerNode::MergeIRAndTryDump(DumpManager &dump_mng, Stmt &merged_ir, std::vector<Stmt> &stitch_irs,
+                                            const LowerData &data) {
+  TRANSFORM_AND_TRY_DUMP(dump_mng, merged_ir, StitchFusionGPU, stitch_irs, data->name, stitch_buffer_, real_outputs_,
+                         workspace_args_, workspace_binds_);
+}
+
+void CudaStitchLowerNode::FixLowerDataForStitch(LowerData &data, NodeRef &) {
+  Array<NodeRef> ordered_args = ReorderArgs(inputs_, outputs_, all_args_, outputs2args_, workspace_args_);
+  data->arg_list_0 = ordered_args;
+}
+
+Map<std::string, NodeRef> AscendStitchLowerNode::GetNewAttr(Map<std::string, NodeRef> &forward_infos,
+                                                            const Map<std::string, NodeRef> &child_attrs, size_t i,
+                                                            bool fold_dim, Expr child_json) {
   auto peeled_tensors = GetOriginPeelInfo(stitch_origin_json_, child_attrs, fold_dim);
   forward_infos.Set(kPeeledTensors, PeelingToNodeRef(peeled_tensors));
 
@@ -308,11 +318,34 @@ Map<std::string, NodeRef> AscendStitchLowerNode::GetStitchForwardInfo(const Map<
       }
     }
   }
+  return new_attrs;
+}
 
-  forward_infos.Set(kEnableStitch, Expr(true));
-  forward_infos.Set(kExtraAttrs, new_attrs);
+void AscendStitchLowerNode::GetBufferManager(std::vector<Stmt> &stitch_irs) {
+  stitch_buffer = GetStitchBuffer(alloc_map_);
+}
 
-  return forward_infos;
+void AscendStitchLowerNode::MergeIRAndTryDump(DumpManager &dump_mng, Stmt &merged_ir, std::vector<Stmt> &stitch_irs,
+                                              const LowerData &data) {
+  TRANSFORM_AND_TRY_DUMP(dump_mng, merged_ir, StitchFusionAscend, stitch_irs, data->name, stitch_buffer, real_outputs_,
+                         workspace_args_, workspace_binds_);
+}
+
+void AscendStitchLowerNode::FixLowerDataForStitch(LowerData &data, NodeRef &node_ref) {
+  // Fix LowerData for stitch.
+  Array<NodeRef> ordered_args = ReorderArgs(inputs_, outputs_, all_args_, outputs2args_, workspace_args_);
+  data->arg_list_0 = ordered_args;
+  data->binds_0 = FixBinds(data->binds_0, ordered_args);
+  // Add workspace tensors to binds
+  for (const auto &it : workspace_binds_) {
+    data->binds_0.Set(it.first, it.second);
+  }
+
+  CHECK(node_ref->IsInstance<Stmt::ContainerType>());
+  auto stmt = Downcast<Stmt>(node_ref);
+  node_ref = AddPeelInfoForLoopAndData(stmt, data, data->attrs);
+
+  data->attrs.Set(kEnableMulticore, Expr(1));
 }
 
 Stmt AscendStitchLowerNode::AddPeelInfoForLoopAndData(Stmt &s, LowerData &data, Map<std::string, NodeRef> &attrs) {
@@ -346,36 +379,6 @@ Map<Tensor, Buffer> AscendStitchLowerNode::FixBinds(const Map<Tensor, Buffer> &o
     }
   }
   return new_binds;
-}
-
-Stmt AscendStitchLowerNode::MergeStmts(const LowerData &data, std::vector<Stmt> &stitch_irs) {
-  auto dump_mng = DumpManager(data->name + "_merge", data->config->dump_pass_ir);
-  DUMP_ORIGIN_IR(dump_mng, stitch_irs);
-
-  auto stitch_buffer = GetStitchBuffer(alloc_map_);
-  GetRealOutputs();
-
-  Stmt merged_ir;
-  TRANSFORM_AND_TRY_DUMP(dump_mng, merged_ir, StitchFusionAscend, stitch_irs, data->name, stitch_buffer, real_outputs_,
-                         workspace_args_, workspace_binds_);
-  return merged_ir;
-}
-
-void AscendStitchLowerNode::PostUpdateDataAndNodeRef(LowerData &data, NodeRef &node_ref) {
-  // Fix LowerData for stitch.
-  Array<NodeRef> ordered_args = ReorderArgs(inputs_, outputs_, all_args_, outputs2args_, workspace_args_);
-  data->arg_list_0 = ordered_args;
-  data->binds_0 = FixBinds(data->binds_0, ordered_args);
-  // Add workspace tensors to binds
-  for (const auto &it : workspace_binds_) {
-    data->binds_0.Set(it.first, it.second);
-  }
-
-  CHECK(node_ref->IsInstance<Stmt::ContainerType>());
-  auto stmt = Downcast<Stmt>(node_ref);
-  node_ref = AddPeelInfoForLoopAndData(stmt, data, data->attrs);
-
-  data->attrs.Set(kEnableMulticore, Expr(1));
 }
 
 BaseLowerNodePtr CreateCudaStitchLowerNode(const std::string &target, bool,

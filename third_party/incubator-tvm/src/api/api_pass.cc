@@ -178,6 +178,8 @@ REGISTER_PASS(VerifyCompactBuffer);
 REGISTER_PASS(HoistIfThenElse);
 REGISTER_PASS(InferFragment);
 REGISTER_PASS(InferFragmentStmt);
-REGISTER_PASS(LowerThreadAllreduceStmt)
+REGISTER_PASS(LowerThreadAllreduceStmt);
+REGISTER_PASS(StitchGpuAllocResize);
+REGISTER_PASS(ElimDuplicateInputsPass);
 }  // namespace ir
 }  // namespace air

@@ -26,6 +26,9 @@ from .construct_args import get_construct_args, get_tune_construct_args, \
     should_enable_attr, get_stmt_for_tune, add_attrs_in_segment_infos, \
     update_attrs
 from .construct_args import ConstructType, ConstructKey
+from .construct_args import get_construct_args, get_tune_construct_args, \
+    should_enable_attr, get_stmt_for_tune, add_attrs_in_segment_infos
+from .split_stitch import split_stitch_attr
 
 
 def generate_trait(desc):
@@ -387,6 +390,9 @@ def _build_to_module(desc_s, desc_d, attrs=None, poly=True):
        Module.
     """
 
+    process = desc_d["process"]
+    file_name = "repository_" + process + ".json"
+
     def _update_attr_by_repo(desc_s, attrs):
         desc_d = json.loads(desc_s)
         process = desc_d["process"]
@@ -415,9 +421,9 @@ def _build_to_module(desc_s, desc_d, attrs=None, poly=True):
     def _post_update_attr(desc_s, attrs, poly):
         desc_d, attrs = _update_attr_by_repo(desc_s, attrs)
         all_ops = set(op["name"] for op in desc_d["op_desc"])
-        if desc_d["process"] == "cuda":
+        if process == "cuda":
             attrs = _update_attrs_gpu(all_ops, attrs, poly)
-        elif desc_d["process"] == "cpu":
+        elif process == "cpu":
             attrs = _update_attrs_cpu(all_ops, attrs, poly)
         return attrs
 
@@ -426,10 +432,45 @@ def _build_to_module(desc_s, desc_d, attrs=None, poly=True):
             attrs_list[i] = _post_update_attr(cur_json_str, cur_attr, poly)
         return json_str_list, attrs_list
 
-    def _stitch_postprocess(desc_d, json_str_list, attrs_list, poly):
-        for i, cur_attr in enumerate(attrs_list):
-            attrs_list[i] = _post_update_attr(json.dumps(desc_d), cur_attr, poly)
-        return json_str_list, attrs_list
+    def _get_stitch_repo(desc_d):
+        compute, shape, dtype = generate_trait(desc_d)
+        repo_attr = get_attr_from_dict([compute, shape, dtype], _get_repository(file_name, desc_d), {})
+        return repo_attr
+
+    def _stitch_postprocess(desc_d, json_str_list, attrs_list, _):
+        def _stitch_combine_attrs(common_attr, sub_attrs):
+            combine_attrs = []
+            for i, a in enumerate(sub_attrs):
+                new_sub_attrs = {}
+                for k, v in common_attr.items():
+                    new_sub_attrs[k] = v
+                if a:
+                    key = "sub_attr_" + str(i + 1)
+                    new_sub_attrs[key] = {}
+                    for k, v in a.items():
+                        new_sub_attrs.get(key)[k] = v
+                combine_attrs.append(new_sub_attrs)
+            return combine_attrs
+
+        origin_stitch_attrs = attrs_list[0]
+        if origin_stitch_attrs.get("peeling") is None:
+            # Read buffer stitch attr from repo
+            stitch_repo = _get_stitch_repo(desc_d)
+            if stitch_repo.get("peeling") is not None:
+                origin_stitch_attrs.update(stitch_repo)
+            elif "online_tuning" in attrs:
+                # If buffer stitch attr not in repo, use online tuning
+                tuning_attr = _get_online_tune_attr(json.dumps(desc_d), origin_stitch_attrs,
+                                                    _get_default_repository_file(process))
+                origin_stitch_attrs.update(tuning_attr)
+        # Update sub json attr
+        common_attr, stitch_sub_attrs = split_stitch_attr(origin_stitch_attrs, len(json_str_list))
+        # common_attr.update({'peeling': '0 1', 'fold_dim': False})
+        for i, cur_attr in enumerate(stitch_sub_attrs):
+            stitch_sub_attrs[i] = _post_update_attr(json.dumps(desc_d), cur_attr, poly)
+        stitch_attrs = _stitch_combine_attrs(common_attr, stitch_sub_attrs)
+
+        return json_str_list, stitch_attrs
 
     post_funcs = {
         ConstructType.PARALLEL: _common_postprocess,

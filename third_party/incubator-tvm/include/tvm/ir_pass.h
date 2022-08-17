@@ -219,6 +219,24 @@ Stmt StorageFlatten(Stmt stmt,
                     bool create_bound_attribute = false);
 
 /*!
+ * \brief Eliminate duplicate inputs derived from previous pass.
+ *
+ * \param stmt The stmt to be transformed.
+ * \param inputs_list input args list of stmt.
+ * \return Transformed stmt.
+ */
+Stmt ElimDuplicateInputsPass(Stmt stmt, Array<NodeRef> inputs_list);
+
+/*!
+ * \brief resize the stitch buffer Allocate node.
+ *
+ * \param stmt The stmt to be trasnformed.
+ * \param gpu_stitch_buf_alloc_size a map containing allocate size.
+ * \return Transformed stmt.
+ */
+Stmt StitchGpuAllocResize(Stmt stmt, Map<std::string, NodeRef> gpu_stitch_buf_alloc_size);
+
+/*!
  * \brief Try to modify the AST to support TensorCore
  *
  * \param stmt The stmt to be trasnformed.
