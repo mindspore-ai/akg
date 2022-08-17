@@ -214,6 +214,20 @@ def _update_compile_attr(desc_d, attr):
 
     return attr
 
+def update_tuned_attrs(desc_d, attrs):
+    """update attrs from tuning to build process, like 'tuned_dim' -> 'dim'
+    """
+    tuned_attrs_list = ["tuned_dim", "tuned_bind_block", "tuned_bind_thread"]
+    if desc_d.get("op_desc", None):
+        return attrs
+    for op in desc_d.get("op_desc"):
+        if op.get("attr", None):
+            continue
+        for a in op.get("attr"):
+            if a["name"] in tuned_attrs_list:
+                name = a["name"][6:] # remove 'tuned_'
+                attrs[name] = attrs.get(name, a["value"])
+    return attrs
 
 def _set_attrs(desc_d, attrs, poly):
     if "enable_atomic_add" not in attrs.keys():
@@ -228,6 +242,7 @@ def _set_attrs(desc_d, attrs, poly):
         attrs["enable_elementwise_flatten"] = False
     attrs["enable_symbolic_tiling"] = is_symbolic_tiling(desc_d['op'])
     attrs["process"] = desc_d["process"]
+    attrs = update_tuned_attrs(desc_d, attrs)
     return _update_compile_attr(desc_d, attrs)
 
 

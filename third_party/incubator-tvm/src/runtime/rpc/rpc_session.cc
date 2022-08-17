@@ -24,6 +24,7 @@
 
 /*
  * 2019.12.30 - Add some LOG prints.
+ * 2022.8.9 - Update time_evaluator: cache flush and cold down
  */
 
 #include <tvm/runtime/packed_func.h>
@@ -38,6 +39,7 @@
 #include <utility>
 #include <cmath>
 #include <algorithm>
+#include <thread>
 #include "rpc_session.h"
 #include "../object_internal.h"
 #include "../../common/ring_buffer.h"
@@ -1033,9 +1035,12 @@ void RPCSession::CopyFromRemote(void* from,
 }
 
 RPCFuncHandle RPCSession::GetTimeEvaluator(
-    RPCFuncHandle fhandle, TVMContext ctx, int number, int repeat, int min_repeat_ms) {
+    RPCFuncHandle fhandle, TVMContext ctx, int number, int repeat, int min_repeat_ms,
+                              int cooldown_interval_ms, int repeats_to_cooldown,
+                              const std::string& f_preproc_name) {
   return this->CallRemote(
-      RPCCode::kGetTimeEvaluator, fhandle, ctx, number, repeat, min_repeat_ms);
+      RPCCode::kGetTimeEvaluator, fhandle, ctx, number, repeat, min_repeat_ms,
+                                cooldown_interval_ms, repeats_to_cooldown, f_preproc_name);
 }
 
 // Event handler functions
@@ -1173,7 +1178,16 @@ void RPCNDArrayFree(TVMArgs args, TVMRetValue *rv) {
 
 void RPCGetTimeEvaluator(TVMArgs args, TVMRetValue *rv) {
   PackedFunc *pf = static_cast<PackedFunc*>(args[0].operator void*());
-  void *fhandle = new PackedFunc(WrapTimeEvaluator(*pf, args[1], args[2], args[3], args[4]));
+  std::string f_preproc_name = args[7];
+  PackedFunc f_preproc;
+  if (!f_preproc_name.empty()) {
+    auto* pf_preproc = runtime::Registry::Get(f_preproc_name);
+    CHECK(pf_preproc != nullptr)
+        << "Cannot find " << f_preproc_name << " in the global function";
+    f_preproc = *pf_preproc;
+  }  
+  void *fhandle = new PackedFunc(WrapTimeEvaluator(*pf, args[1], args[2], args[3], 
+                                                    args[4], args[5], args[6], f_preproc));
   delete pf;
   *rv = fhandle;
 }
@@ -1229,8 +1243,12 @@ PackedFunc WrapTimeEvaluator(PackedFunc pf,
                              TVMContext ctx,
                              int number,
                              int repeat,
-                             int min_repeat_ms) {
-  auto ftimer = [pf, ctx, number, repeat, min_repeat_ms](TVMArgs args, TVMRetValue *rv) mutable {
+                             int min_repeat_ms,
+                             int cooldown_interval_ms, 
+                             int repeats_to_cooldown,
+                             PackedFunc f_preproc) {
+  auto ftimer = [pf, ctx, number, repeat, min_repeat_ms, cooldown_interval_ms, repeats_to_cooldown,
+                 f_preproc](TVMArgs args, TVMRetValue *rv) mutable {
     TVMRetValue temp;
     std::ostringstream os;
     // skip first time call, to activate lazy compilation components.
@@ -1238,6 +1256,10 @@ PackedFunc WrapTimeEvaluator(PackedFunc pf,
     DeviceAPI::Get(ctx)->StreamSync(ctx, nullptr);
 
     for (int i = 0; i < repeat; ++i) {
+      if (f_preproc != nullptr) {
+        f_preproc.CallPacked(args, &temp);
+      }
+
       std::chrono::time_point<
         std::chrono::high_resolution_clock, std::chrono::nanoseconds> tbegin, tend;
       double duration_ms = 0.0;
@@ -1264,6 +1286,10 @@ PackedFunc WrapTimeEvaluator(PackedFunc pf,
       double speed = std::chrono::duration_cast<std::chrono::duration<double> >(
           tend - tbegin).count() / number;
       os.write(reinterpret_cast<char*>(&speed), sizeof(speed));
+
+      if (cooldown_interval_ms > 0 && (i % repeats_to_cooldown) == 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(cooldown_interval_ms));
+      }
     }
     std::string blob = os.str();
     TVMByteArray arr;
