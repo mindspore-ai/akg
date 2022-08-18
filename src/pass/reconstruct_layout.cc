@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,6 +36,30 @@
 namespace akg {
 namespace ir {
 
+static constexpr auto MATRIX_A = "matrix_a";
+static constexpr auto MATRIX_B = "matrix_b";
+static constexpr auto GEMM_PACK_A = "pack_a";
+static constexpr auto GEMM_PACK_B = "pack_b";
+static constexpr auto PROMOTE_TRANSPOSE = "promoted_transpose";
+static constexpr auto MATRIX_TRANSPOSE = "MatrixTranspose";
+static constexpr auto LOCAL = "local";
+static constexpr auto REGISTER = "register";
+static constexpr auto TRANS_A = "row_major_matrix_a";
+static constexpr auto TRANS_B = "col_major_matrix_b";
+static constexpr auto PACK_A_SIZE = 4;
+static constexpr auto PACK_B_SIZE = 24;
+static constexpr auto NUM_2 = 2;
+static constexpr auto NUM_3 = 3;
+static constexpr auto NUM_4 = 4;
+static constexpr auto NUM_5 = 5;
+static constexpr auto NUM_6 = 6;
+static constexpr auto NUM_7 = 7;
+static constexpr auto NUM_8 = 8;
+static constexpr auto NUM_16 = 16;
+static constexpr auto NUM_32 = 32;
+static constexpr auto NUM_40 = 40;
+static constexpr auto INT32 = 32;
+
 class TensorCoreMatcher : public IRVisitor {
  public:
   void Visit_(const AttrStmt *op) final {
@@ -44,8 +68,8 @@ class TensorCoreMatcher : public IRVisitor {
     } else if (op->attr_key == air::ir::attr::realize_scope) {
       auto pos = op->value.as<StringImm>()->value.find("wmma.matrix_");
       if (pos != std::string::npos) {
-        wmma_matrix_.insert(std::make_pair(
-            akg::common::GetGlobalName(op->node.as<PlaceholderOpNode>()->name), op->value.as<StringImm>()->value));
+        wmma_matrix_.insert(std::make_pair(akg::common::GetGlobalName(op->node.as<PlaceholderOpNode>()->name),
+                                           op->value.as<StringImm>()->value));
       }
     } else if (op->attr_key == "batch_axis_num") {
       batch_axis_num_ = op->value.as<IntImm>()->value;
@@ -69,30 +93,35 @@ class TensorCoreMatcher : public IRVisitor {
     if (const auto call = op->value.as<Call>()) {
       if (tensor_core_on_ && call->is_intrinsic(air::ir::intrinsic::tvm_load_matrix_sync)) {
         Expr warp_tile_m = call->args[1];
-        Expr warp_tile_n = call->args[2];
-        Expr warp_tile_k = call->args[3];
+        Expr warp_tile_n = call->args[NUM_2];
+        Expr warp_tile_k = call->args[NUM_3];
         auto it_matrix = wmma_matrix_.find(akg::common::GetGlobalName(call->args[0].as<Variable>()->name_hint));
         if (it_matrix != wmma_matrix_.end()) {
-            wmma_layout_.insert(std::make_pair(it_matrix->second, call->args[7].as<StringImm>()->value));
-          if (warp_tile_m.as<IntImm>()->value == 16 && warp_tile_n.as<IntImm>()->value == 16 && 
-              warp_tile_k.as<IntImm>()->value == 8) {
-            auto pair_name = std::pair<std::string, std::string>(it_matrix->second, call->args[7].as<StringImm>()->value);
+          wmma_layout_.insert(std::make_pair(it_matrix->second, call->args[NUM_7].as<StringImm>()->value));
+          if (warp_tile_m.as<IntImm>()->value == NUM_16 && warp_tile_n.as<IntImm>()->value == NUM_16 &&
+              warp_tile_k.as<IntImm>()->value == NUM_8) {
+            auto pair_name =
+              std::pair<std::string, std::string>(it_matrix->second, call->args[NUM_7].as<StringImm>()->value);
             std::vector<Expr> tmp;
-            tmp.reserve(2);
-            if (it_matrix->second == "wmma.matrix_a" && call->args[7].as<StringImm>()->value == "row_major") {
+            tmp.reserve(NUM_2);
+            if (it_matrix->second == "wmma.matrix_a" && call->args[NUM_7].as<StringImm>()->value == "row_major") {
               tmp.emplace_back(warp_tile_m);
               tmp.emplace_back(warp_tile_k);
-            } else if (it_matrix->second == "wmma.matrix_a" && call->args[7].as<StringImm>()->value == "col_major") {
+            } else if (it_matrix->second == "wmma.matrix_a" &&
+                       call->args[NUM_7].as<StringImm>()->value == "col_major") {
               tmp.emplace_back(warp_tile_k);
               tmp.emplace_back(warp_tile_m);
-            } else if (it_matrix->second == "wmma.matrix_b" && call->args[7].as<StringImm>()->value == "row_major") {
+            } else if (it_matrix->second == "wmma.matrix_b" &&
+                       call->args[NUM_7].as<StringImm>()->value == "row_major") {
               tmp.emplace_back(warp_tile_k);
               tmp.emplace_back(warp_tile_n);
-            } else if (it_matrix->second == "wmma.matrix_b" && call->args[7].as<StringImm>()->value == "col_major") {
+            } else if (it_matrix->second == "wmma.matrix_b" &&
+                       call->args[NUM_7].as<StringImm>()->value == "col_major") {
               tmp.emplace_back(warp_tile_n);
               tmp.emplace_back(warp_tile_k);
             } else {
-              LOG(FATAL) << "Not supported layout " << call->args[7].as<StringImm>()->value << " for " << it_matrix->second;
+              LOG(FATAL) << "Not supported layout " << call->args[NUM_7].as<StringImm>()->value << " for "
+                         << it_matrix->second;
             }
             tile_size_[pair_name] = tmp;
           }
@@ -102,8 +131,8 @@ class TensorCoreMatcher : public IRVisitor {
 
     IRVisitor::Visit_(op);
   }
-  
-  inline bool Matched() { return tensor_core_on_;}
+
+  inline bool Matched() { return tensor_core_on_; }
 
   friend class SharedReconstruction;
 
@@ -146,12 +175,12 @@ class SharedReconstruction : public IRMutator {
           if (i == batch_axis_num_) {
             new_arg = split_args[0];
           }
-          if (i == op->args.size() - 2) {
-            new_arg = Add::make(Mul::make(new_arg, 
-              Div::make(it_bound->second.back(), it_tile->second[1])), split_args[1]);
+          if (i == op->args.size() - NUM_2) {
+            new_arg =
+              Add::make(Mul::make(new_arg, Div::make(it_bound->second.back(), it_tile->second[1])), split_args[1]);
           }
           if (i == op->args.size() - 1) {
-            new_arg = Add::make(Mul::make(split_args[2], it_tile->second[1]), split_args[3]);
+            new_arg = Add::make(Mul::make(split_args[NUM_2], it_tile->second[1]), split_args[NUM_3]);
           }
           fuse_args.push_back(new_arg);
         }
@@ -175,41 +204,47 @@ class SharedReconstruction : public IRMutator {
         auto it_layout = wmma_layout_.find(it_matrix->second);
         auto it_bound = shared_bound_.find(akg::common::GetGlobalName(wmma_op->args[0].as<Variable>()->name_hint));
         if (it_bound == shared_bound_.end()) {
-          LOG(FATAL) << "Insufficient arguments for shared memory tensor " << 
-              akg::common::GetGlobalName(wmma_op->args[0].as<Variable>()->name_hint);
+          LOG(FATAL) << "Insufficient arguments for shared memory tensor "
+                     << akg::common::GetGlobalName(wmma_op->args[0].as<Variable>()->name_hint);
         }
         Expr inner_bound = it_bound->second.back();
         for (size_t i = 1; i < it_bound->second.size() - 1; i++) {
           inner_bound = inner_bound * it_bound->second[i];
         }
-        if (wmma_op->args[1].as<IntImm>()->value == 16 && wmma_op->args[2].as<IntImm>()->value == 16 && 
-            wmma_op->args[3].as<IntImm>()->value == 8) {
+        if (wmma_op->args[1].as<IntImm>()->value == NUM_16 && wmma_op->args[NUM_2].as<IntImm>()->value == NUM_16 &&
+            wmma_op->args[NUM_3].as<IntImm>()->value == NUM_8) {
           if ((it_layout->first == "wmma.matrix_a" && it_layout->second == "row_major") ||
-            (it_layout->first == "wmma.matrix_b" && it_layout->second == "col_major")) {
-            if (inner_bound.as<IntImm>()->value <= 16) {
-              shared_offset_[akg::common::GetGlobalName(wmma_op->args[0].as<Variable>()->name_hint)] = IntImm::make(Int(32), 32);
-            } else if (inner_bound.as<IntImm>()->value <= 40) {
-              shared_offset_[akg::common::GetGlobalName(wmma_op->args[0].as<Variable>()->name_hint)] = IntImm::make(Int(32), 16);
+              (it_layout->first == "wmma.matrix_b" && it_layout->second == "col_major")) {
+            if (inner_bound.as<IntImm>()->value <= NUM_16) {
+              shared_offset_[akg::common::GetGlobalName(wmma_op->args[0].as<Variable>()->name_hint)] =
+                IntImm::make(Int(INT32), NUM_32);
+            } else if (inner_bound.as<IntImm>()->value <= NUM_40) {
+              shared_offset_[akg::common::GetGlobalName(wmma_op->args[0].as<Variable>()->name_hint)] =
+                IntImm::make(Int(INT32), NUM_16);
             } else {
-              shared_offset_[akg::common::GetGlobalName(wmma_op->args[0].as<Variable>()->name_hint)] = IntImm::make(Int(32), 8);
+              shared_offset_[akg::common::GetGlobalName(wmma_op->args[0].as<Variable>()->name_hint)] =
+                IntImm::make(Int(INT32), NUM_8);
             }
-            offset_expr_ = IntImm::make(Int(32), 8);
+            offset_expr_ = IntImm::make(Int(INT32), NUM_8);
           } else if ((it_layout->first == "wmma.matrix_a" && it_layout->second == "col_major") ||
-              (it_layout->first == "wmma.matrix_b" && it_layout->second == "row_major")) {
-            if (inner_bound.as<IntImm>()->value <= 32) {
-              shared_offset_[akg::common::GetGlobalName(wmma_op->args[0].as<Variable>()->name_hint)] = IntImm::make(Int(32), 32);
+                     (it_layout->first == "wmma.matrix_b" && it_layout->second == "row_major")) {
+            if (inner_bound.as<IntImm>()->value <= NUM_32) {
+              shared_offset_[akg::common::GetGlobalName(wmma_op->args[0].as<Variable>()->name_hint)] =
+                IntImm::make(Int(INT32), NUM_32);
             } else {
-              shared_offset_[akg::common::GetGlobalName(wmma_op->args[0].as<Variable>()->name_hint)] = IntImm::make(Int(32), 16);
+              shared_offset_[akg::common::GetGlobalName(wmma_op->args[0].as<Variable>()->name_hint)] =
+                IntImm::make(Int(INT32), NUM_16);
             }
-            offset_expr_ = IntImm::make(Int(32), 16);                        
+            offset_expr_ = IntImm::make(Int(INT32), NUM_16);
           } else {
             LOG(FATAL) << "Not supported layout " << it_layout->second << " for " << it_layout->first;
           }
         } else {
-          shared_offset_[akg::common::GetGlobalName(wmma_op->args[0].as<Variable>()->name_hint)] = IntImm::make(Int(32), 16);
-          offset_expr_ = IntImm::make(Int(32), wmma_op->args[6].as<IntImm>()->value + 16);
+          shared_offset_[akg::common::GetGlobalName(wmma_op->args[0].as<Variable>()->name_hint)] =
+            IntImm::make(Int(INT32), NUM_16);
+          offset_expr_ = IntImm::make(Int(INT32), wmma_op->args[NUM_6].as<IntImm>()->value + NUM_16);
         }
-        auto shared_op = wmma_op->args[5].as<Call>();
+        auto shared_op = wmma_op->args[NUM_5].as<Call>();
         auto call_op = shared_op->args[0].as<Call>();
         Array<Expr> fuse_args;
         auto pair_name = std::pair<std::string, std::string>(it_layout->first, it_layout->second);
@@ -225,12 +260,12 @@ class SharedReconstruction : public IRMutator {
             if (i == batch_axis_num_) {
               new_arg = split_args[0];
             }
-            if (i == call_op->args.size() - 2) {
-              new_arg = Add::make(Mul::make(new_arg, 
-                Div::make(it_bound->second.back(), it_tile->second[1])), split_args[1]);
+            if (i == call_op->args.size() - NUM_2) {
+              new_arg =
+                Add::make(Mul::make(new_arg, Div::make(it_bound->second.back(), it_tile->second[1])), split_args[1]);
             }
             if (i == call_op->args.size() - 1) {
-              new_arg = Add::make(Mul::make(split_args[2], it_tile->second[1]), split_args[3]);
+              new_arg = Add::make(Mul::make(split_args[NUM_2], it_tile->second[1]), split_args[NUM_3]);
             }
             fuse_args.push_back(new_arg);
           }
@@ -240,15 +275,15 @@ class SharedReconstruction : public IRMutator {
           }
         }
         Array<Expr> split_args_in;
-        split_args_in.push_back(
-            Call::make(call_op->type, call_op->name, fuse_args, Call::CallType::Halide, call_op->func, call_op->value_index));
-        auto new_shared_op = Call::make(
-            shared_op->type, shared_op->name, split_args_in, shared_op->call_type, shared_op->func, shared_op->value_index);
+        split_args_in.push_back(Call::make(call_op->type, call_op->name, fuse_args, Call::CallType::Halide,
+                                           call_op->func, call_op->value_index));
+        auto new_shared_op = Call::make(shared_op->type, shared_op->name, split_args_in, shared_op->call_type,
+                                        shared_op->func, shared_op->value_index);
         return Evaluate::make(
-            Call::make(Handle(), air::ir::intrinsic::tvm_load_matrix_sync, {
-                wmma_op->args[0], wmma_op->args[1], wmma_op->args[2], 
-                wmma_op->args[3], wmma_op->args[4], new_shared_op,
-                offset_expr_, wmma_op->args[7]}, Call::Intrinsic));
+          Call::make(Handle(), air::ir::intrinsic::tvm_load_matrix_sync,
+                     {wmma_op->args[0], wmma_op->args[1], wmma_op->args[NUM_2], wmma_op->args[NUM_3],
+                      wmma_op->args[NUM_4], new_shared_op, offset_expr_, wmma_op->args[NUM_7]},
+                     Call::Intrinsic));
       }
     }
     return stmt;
@@ -273,7 +308,7 @@ class SharedReconstruction : public IRMutator {
           if (i == batch_axis_num_) {
             new_extent = new_extent / it_tile->second[0];
           }
-          if (i == op->bounds.size() - 2) {
+          if (i == op->bounds.size() - NUM_2) {
             new_extent = new_extent * (op->bounds[op->bounds.size() - 1]->extent / it_tile->second[1]);
           }
           if (i == op->bounds.size() - 1) {
@@ -287,9 +322,8 @@ class SharedReconstruction : public IRMutator {
         for (size_t i = 0; i < op->bounds.size() - 1; ++i) {
           new_bounds.push_back(Range::make_by_min_extent(op->bounds[i]->min, op->bounds[i]->extent));
         }
-        new_bounds.push_back(
-            Range::make_by_min_extent(op->bounds[op->bounds.size() - 1]->min, 
-            op->bounds[op->bounds.size() - 1]->extent + offset->second));
+        new_bounds.push_back(Range::make_by_min_extent(op->bounds[op->bounds.size() - 1]->min,
+                                                       op->bounds[op->bounds.size() - 1]->extent + offset->second));
         return Realize::make(op->func, op->value_index, op->type, new_bounds, op->condition, op->body);
       }
     }
@@ -307,61 +341,98 @@ class SharedReconstruction : public IRMutator {
   unsigned int batch_axis_num_{0};
   std::unordered_map<std::string, std::string> wmma_matrix_;
   std::unordered_map<std::string, std::string> wmma_layout_;
-  std::unordered_map<std::string, std::vector<Expr>> shared_bound_;    
+  std::unordered_map<std::string, std::vector<Expr>> shared_bound_;
   std::unordered_map<std::pair<std::string, std::string>, std::vector<Expr>, PairHash> tile_size_;
   std::unordered_map<std::string, Expr> shared_offset_;
   Expr offset_expr_;
 };
 
-class PackedMatcher : public IRVisitor {
+class CPULocalMatcher : public IRVisitor {
  public:
-  explicit PackedMatcher() {}
+  explicit CPULocalMatcher() {}
 
   void Visit_(const AttrStmt *op) final {
-    if (op->attr_key == "pack_a" || op->attr_key == "pack_b") {
+    if (op->attr_key == GEMM_PACK_A || op->attr_key == GEMM_PACK_B) {
       is_matched_ = true;
+      return;
     }
     IRVisitor::Visit_(op);
   }
 
   inline bool Matched() { return is_matched_; }
+
  private:
   bool is_matched_ = false;
 };
 
-class PackedReconstruction : public IRMutator {
+class TransReadMutator : public IRMutator {
  public:
-  explicit PackedReconstruction() {}
+  explicit TransReadMutator(Tensor tensor) : tensor_(tensor) {}
+
+  Stmt Mutate_(const Provide *op, const Stmt &s) final {
+    return Provide::make(tensor_->op, op->value_index, op->value, args_);
+  }
+
+  Stmt Mutate_(const For *op, const Stmt &s) final {
+    args_.push_back(op->loop_var);
+    return IRMutator::Mutate_(op, s);
+  }
+
+ private:
+  Tensor tensor_;
+  Array<Expr> args_;
+};
+
+class TransWriteMutator : public IRMutator {
+ public:
+  explicit TransWriteMutator(Tensor tensor) : tensor_(tensor) {}
+
+  Stmt Mutate_(const Provide *op, const Stmt &s) final {
+    auto index = args_[1] * tensor_->shape[0] + args_[0];
+    auto value = tensor_(Array<Expr>{floordiv(index, tensor_->shape[1]), indexmod(index, tensor_->shape[1])});
+    return Provide::make(op->func, op->value_index, value, op->args);
+  }
+
+  Stmt Mutate_(const For *op, const Stmt &s) final {
+    args_.push_back(op->loop_var);
+    auto body = IRMutator::Mutate(op->body);
+    if (auto second = body.as<For>()) {
+      auto stmt = For::make(op->loop_var, op->min, op->extent, second->for_type, second->device_api, second->body);
+      return For::make(second->loop_var, second->min, second->extent, op->for_type, op->device_api, stmt);
+    }
+    return IRMutator::Mutate_(op, s);
+  }
+
+ private:
+  Tensor tensor_;
+  Array<Expr> args_;
+};
+
+class CPULocalReconstruction : public IRMutator {
+ public:
+  explicit CPULocalReconstruction() {}
 
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
-    if (op->attr_key == "pack_a") {
-      int value = op->value.as<IntImm>()->value;
-      a_block_size_ = value;
-    } else if (op->attr_key == "pack_b") {
-      int value = op->value.as<IntImm>()->value;
-      b_block_size_ = value;
+    if (op->attr_key == GEMM_PACK_A) {
+      a_pack_size_ = op->value.as<IntImm>()->value;
+      return IRMutator::Mutate(op->body);
+    } else if (op->attr_key == GEMM_PACK_B) {
+      b_pack_size_ = op->value.as<IntImm>()->value;
+      return IRMutator::Mutate(op->body);
+    } else if (op->attr_key == PROMOTE_TRANSPOSE) {
+      return PromoteForTranspose(op);
     } else {
       auto value_ptr = op->value.as<StringImm>();
       if (!value_ptr) {
         return IRMutator::Mutate_(op, s);
       }
       auto value = value_ptr->value;
-      if (value == "col_major_matrix_b") {
-        b_col_major_ = true;
-        b_n_len_ = b_extent0_;
-        b_k_len_ = b_extent1_;
-      } else if(value == "row_major_matrix_b") {
-        b_col_major_ = false;
-        b_k_len_ = b_extent0_;
-        b_n_len_ = b_extent1_;
-      } else if(value == "col_major_matrix_a") {
-        a_col_major_ = true;
-        a_k_len_ = a_extent0_;
-        a_m_len_ = a_extent1_;
-      } else if(value == "row_major_matrix_a") {
-        a_col_major_ = false;
-        a_m_len_ = a_extent0_;
-        a_k_len_ = a_extent1_;
+      if (value == TRANS_B) {
+        b_trans_ = true;
+        return IRMutator::Mutate(op->body);
+      } else if (value == TRANS_A) {
+        a_trans_ = true;
+        return IRMutator::Mutate(op->body);
       }
     }
     return IRMutator::Mutate_(op, s);
@@ -377,106 +448,134 @@ class PackedReconstruction : public IRMutator {
       return IRMutator::Mutate_(op, s);
     }
     auto attr_key = attr_ptr->attr_key;
-    auto matrix_name = attr_key.size() >= 8 ? attr_key.substr(attr_key.size() - 8) : "";
+    auto matrix_name = attr_key.size() >= NUM_8 ? attr_key.substr(attr_key.size() - NUM_8) : "";
     auto local_name = op->func->func_name();
-    if (matrix_name == "matrix_a") {
-      a_local_name_ = local_name;
-      a_dtype_ = op->type;
-      a_extent0_ = op->bounds[0]->extent;
-      a_extent1_ = op->bounds[1]->extent;
-    }
-    if (matrix_name == "matrix_b") {
-      b_local_name_ = local_name;
-      b_dtype_ = op->type;
-      b_extent0_ = op->bounds[0]->extent;
-      b_extent1_ = op->bounds[1]->extent;
+    if (matrix_name == MATRIX_A || matrix_name == MATRIX_B) {
+      if (matrix_name == MATRIX_A) {
+        a_func_ = op->func;
+        a_block_size_ = a_pack_size_;
+      } else {
+        b_func_ = op->func;
+        b_block_size_ = b_pack_size_;
+      }
+      auto body = IRMutator::Mutate(op->body);
+      auto block_size = matrix_name == MATRIX_A ? a_block_size_ : b_block_size_;
+      auto trans = matrix_name == MATRIX_A ? a_trans_ : b_trans_;
+      auto bound_n = trans ? op->bounds[0] : op->bounds[1];
+      auto bound_k = trans ? op->bounds[1] : op->bounds[0];
+      if (auto bound_int = bound_n->extent.as<IntImm>()) {
+        if (static_cast<int>(bound_int->value) < block_size) {
+          if (matrix_name == MATRIX_A) {
+            a_block_size_ = bound_int->value;
+          } else {
+            b_block_size_ = bound_int->value;
+          }
+          block_size = bound_int->value;
+        }
+      }
+      Region new_bounds;
+      new_bounds.push_back(Range::make_by_min_extent(bound_n->min, floordiv(bound_n->extent, block_size)));
+      new_bounds.push_back(bound_k);
+      new_bounds.push_back(Range::make_by_min_extent(bound_n->min, block_size));
+      return Realize::make(op->func, op->value_index, op->type, new_bounds, op->condition, body);
     }
     return IRMutator::Mutate_(op, s);
   }
 
   Stmt Mutate_(const Provide *op, const Stmt &s) final {
-    auto name = op->func->func_name();
-    if (name == a_local_name_) {
-      auto r = op->args[0];
-      auto c = op->args[1];
-      int block_size = b_block_size_;
-      Expr new_ld = a_col_major_ ? a_m_len_ : a_k_len_;
-      Expr new_idx = get_new_idx(a_col_major_, block_size, r, c, a_k_len_, a_m_len_);
-      return Provide::make(op->func, op->value_index, op->value,
-        {floordiv(new_idx, new_ld), indexmod(new_idx, new_ld)});
+    if (op->func == a_func_ || op->func == b_func_) {
+      auto block_size = op->func == a_func_ ? a_block_size_ : b_block_size_;
+      auto trans = op->func == a_func_ ? a_trans_ : b_trans_;
+      auto n = trans ? op->args[0] : op->args[1];
+      auto k = trans ? op->args[1] : op->args[0];
+      auto provide =
+        Provide::make(op->func, op->value_index, op->value, {floordiv(n, block_size), k, indexmod(n, block_size)});
+      provide_ = provide;
+      return provide;
     }
-    if (name == b_local_name_) {
-      auto r = op->args[0];
-      auto c = op->args[1];
-      int block_size = a_block_size_;
-      Expr new_ld = b_col_major_ ? b_k_len_ : b_n_len_;
-      Expr new_idx = get_new_idx(!b_col_major_, block_size, r, c, b_k_len_, b_n_len_);
-      return Provide::make(op->func, op->value_index, op->value,
-        {floordiv(new_idx, new_ld), indexmod(new_idx, new_ld)});
+    auto provide = IRMutator::Mutate_(op, s);
+    provide_ = provide;
+    return provide;
+  }
+
+  Expr Mutate_(const Call *op, const Expr &e) final {
+    if (op->func == a_func_ || op->func == b_func_) {
+      auto block_size = op->func == a_func_ ? a_block_size_ : b_block_size_;
+      auto trans = op->func == a_func_ ? a_trans_ : b_trans_;
+      auto n = trans ? op->args[0] : op->args[1];
+      auto k = trans ? op->args[1] : op->args[0];
+      return Call::make(op->type, op->name, {floordiv(n, block_size), k, indexmod(n, block_size)}, op->call_type,
+                        op->func, op->value_index);
     }
-    return s;
+    return IRMutator::Mutate_(op, e);
+  }
+
+  Stmt Mutate_(const For *op, const Stmt &s) final {
+    extents_.push_back(op->extent);
+    fors_.push_back(op);
+    return IRMutator::Mutate_(op, s);
   }
 
  private:
-  Expr get_new_idx(bool km, int block_size, Expr r, Expr c, Expr k_len, Expr m_len) {
-    auto block_num = ceil(div(m_len, block_size * 1.0));
-    auto m_rest = indexmod(m_len, block_size);
-    Expr k = km ? r : c;
-    Expr m = km ? c : r;
-    auto block_idx = floordiv(m, block_size);
-    auto mm = indexmod(m, block_size);
-    Type int_type = Int(32);
-    auto in_last_block = block_idx == block_num - 1;
-    Expr a = 0;
-    Expr b = cast(int_type, m_rest == 0 || in_last_block == 0) * block_size;
-    int small_block = block_size / 2;
-    while (small_block > 0) {
-      auto has_small_block = in_last_block && (m_rest & small_block) > 0;
-      b = b + cast(int_type, has_small_block && mm >= a && mm < a + small_block && b == 0) * small_block;
-      a = a + cast(int_type, has_small_block && b == 0) * small_block;
-      small_block /= 2;
+  Stmt PromoteForTranspose(const AttrStmt *op) {
+    extents_.clear();
+    auto stmt = IRMutator::Mutate(op->body);
+    Array<Expr> shapes;
+    shapes.assign(extents_.begin(), extents_.end());
+    extents_.clear();
+
+    auto provide = provide_.as<Provide>();
+    Tensor tensor = placeholder(shapes, provide->value.type(), provide->func->func_name() + "_" + REGISTER);
+    Region bounds;
+
+    auto read = TransReadMutator(tensor).Mutate(stmt);
+    auto write = TransWriteMutator(tensor).Mutate(stmt);
+    Array<Expr> indices;
+    Array<Expr> args;
+    args.push_back(make_zero(Int(INT32)));
+    for (size_t i = 0; i < tensor.ndim(); i++) {
+      indices.push_back(make_zero(Int(INT32)));
+      args.push_back(tensor->shape[i]);
     }
-    auto new_idx = (block_idx * block_size + a) * k_len + mm - a + b * k;
-    return new_idx;
+    Expr addr = Call::make(Handle(), air::ir::intrinsic::tvm_address_of, {tensor(indices)}, Call::PureIntrinsic);
+    args.Set(0, addr);
+    Expr matrix_trans = Call::make(Handle(), MATRIX_TRANSPOSE, args, Call::Intrinsic);
+    auto block = Block::make({read, Evaluate::make(matrix_trans), write});
+    for (auto j : tensor->shape) {
+      bounds.push_back(Range::make_by_min_extent(Expr(0), j));
+    }
+    auto realize = Realize::make(tensor->op, tensor->value_index, tensor->dtype, bounds, const_true(1), block);
+    return AttrStmt::make(tensor->op, air::ir::attr::realize_scope, Expr(LOCAL), realize);
   }
 
-  std::string a_local_name_ = "";
-  bool a_col_major_ = false;
-  int a_block_size_ = 8;
-  Type a_dtype_;
-  Expr a_k_len_;
-  Expr a_m_len_;
-  Expr a_extent0_;
-  Expr a_extent1_;
-
-  std::string b_local_name_ = "";
-  bool b_col_major_ = false;
-  int b_block_size_ = 4;
-  Type b_dtype_;
-  Expr b_k_len_;
-  Expr b_n_len_;
-  Expr b_extent0_;
-  Expr b_extent1_;
+ private:
+  FunctionRef a_func_;
+  FunctionRef b_func_;
+  int a_pack_size_{PACK_A_SIZE};
+  int b_pack_size_{PACK_B_SIZE};
+  int a_block_size_{PACK_A_SIZE};
+  int b_block_size_{PACK_B_SIZE};
+  bool a_trans_{false};
+  bool b_trans_{false};
+  std::vector<Expr> extents_;
+  std::vector<const For *> fors_;
+  Stmt provide_;
 };
 
 Stmt ReconstructLayout(const Stmt &stmt) {
-  PackedMatcher packed_matcher;
-  packed_matcher.Visit(stmt);
-  Stmt stmt_out;
-  if (packed_matcher.Matched()) {
-    PackedReconstruction packed_reconstruction;
-    stmt_out = packed_reconstruction.Mutate(stmt);
-  } else {
-    stmt_out = stmt;
+  CPULocalMatcher cpu_local_matcher;
+  cpu_local_matcher.Visit(stmt);
+  if (cpu_local_matcher.Matched()) {
+    return CPULocalReconstruction().Mutate(stmt);
   }
-  
+
   TensorCoreMatcher tensorcore_matcher;
-  tensorcore_matcher.Visit(stmt_out);
-  if (!tensorcore_matcher.Matched()) {
-    return stmt_out;
+  tensorcore_matcher.Visit(stmt);
+  if (tensorcore_matcher.Matched()) {
+    return SharedReconstruction(tensorcore_matcher).Mutate(stmt);
   }
-  return SharedReconstruction(tensorcore_matcher).Mutate(stmt_out);
+  return stmt;
 }
 
-} // namespace ir
-} // namespace akg
+}  // namespace ir
+}  // namespace akg

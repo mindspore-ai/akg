@@ -186,8 +186,10 @@ void CpuStrategy::SetConv2dTileValue(int index) {
 }
 
 void CpuStrategy::SetMatMulTileValue(int index) {
+  auto pack_size = analyzer_->scop_info_.analysis_result_.GetPackBlockSize();
   for (int i = 0; i < static_cast<int>(pending_axes_[index].size()); ++i) {
     TileAxis *axis;
+    int64_t pack = 1;
     int64_t shape;
     std::tie(axis, shape) = pending_axes_[index][i];
     int64_t value = shape;
@@ -195,6 +197,12 @@ void CpuStrategy::SetMatMulTileValue(int index) {
       value = best_factor_for_matmul_;
     }
     axis->TileRestrainToSingleValue(Expr(value), TileLevel::CACHE1);
+    if (i == axis_m_) {
+      pack = pack_size.pack_a_size;
+    } else if (i == axis_n_) {
+      pack = pack_size.pack_b_size;
+    }
+    value = value / pack * pack;
     axis->TileRestrainToSingleValue(Expr(value), TileLevel::CACHE0);
   }
 }
