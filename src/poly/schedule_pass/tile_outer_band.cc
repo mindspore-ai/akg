@@ -23,6 +23,7 @@
 #include "poly/schedule_pass/try_mark_scalar_stmt.h"
 #include "poly/schedule_pass_gpu/operator_mapping_strategy.h"
 #include "poly/reduce_manager.h"
+#include "poly/tiling/tiling_utils.h"
 
 namespace akg {
 namespace ir {
@@ -1343,22 +1344,124 @@ void TileOuterBand::RecordCopyinForGemm(const isl::schedule_node_sequence &seq_n
   scop_info_.analysis_result_.RecordCopyin(new_copyin);
 }
 
+std::unordered_map<std::string, int> TileOuterBand::GetMNKPosForMatmul() {
+  auto outer_band_node = scop_info_.analysis_result_.GetOuterBandNode(cur_band_index_);
+  if (!outer_band_node->mnk_pos.empty()) {
+    return outer_band_node->mnk_pos;
+  }
+  auto origin_binds = scop_info_.user_config_.GetOriginBind();
+  int64_t m = 1, n = 1, k = 1;
+  for (const auto &bind : origin_binds) {
+    std::string id_name = bind.first->op->name;
+    auto matmul_map = scop_info_.analysis_result_.GetMatrixMatmulMap();
+    auto matmul_major = scop_info_.analysis_result_.GetMatrixMatmulMajor();
+
+    auto map_item = matmul_map.find(id_name);
+    auto major_item = matmul_major.find(id_name);
+    if (map_item == matmul_map.end() || major_item == matmul_major.end()) {
+      continue;
+    }
+
+    Array<Expr> tensor_shape = bind.second->shape;
+    int last_pos = static_cast<int>(tensor_shape.size()) - 1;
+    CHECK(last_pos >= 1) << "The bmm operator must contain at least two axes.";
+    if (map_item->second == MATRIX_C) {
+      n = tensor_shape[last_pos].as<IntImm>()->value;
+      m = tensor_shape[last_pos - 1].as<IntImm>()->value;
+    } else if (map_item->second == MATRIX_A) {
+      last_pos = (major_item->second == ROW_MAJOR) ? last_pos : last_pos - 1;
+      k = tensor_shape[last_pos].as<IntImm>()->value;
+    }
+  }
+
+  auto band_node = outer_band_node->node;
+  int orig_member = static_cast<int>(band_node.n_member());
+  std::unordered_map<std::string, int> mnk_pos;
+  const int mnk_count = 3;
+  int init_pos = std::max(orig_member - mnk_count, 0);
+  if (m != 1) {
+    mnk_pos[kDsami] = init_pos;
+    ++init_pos;
+  }
+
+  if (n != 1) {
+    mnk_pos[kDsani] = init_pos;
+    ++init_pos;
+  }
+
+  if (k != 1) {
+    mnk_pos[kDsaki] = init_pos;
+    ++init_pos;
+  }
+  CHECK(init_pos <= orig_member);
+  outer_band_node->mnk_pos = mnk_pos;
+  return mnk_pos;
+}
+
+isl::schedule_node TileOuterBand::TileVectorizationForGemm(const isl::schedule_node &orig_node,
+                                                           const std::unordered_map<std::string, int> &mnk_pos) {
+  if (!orig_node.isa<isl::schedule_node_band>()) {
+    return orig_node;
+  }
+  std::vector<int> tile_size(orig_node.as<isl::schedule_node_band>().n_member(), 1);
+  auto m_pos = mnk_pos.find(kDsami);
+  auto n_pos = mnk_pos.find(kDsani);
+  auto k_pos = mnk_pos.find(kDsaki);
+  if (m_pos != mnk_pos.end()) {
+    tile_size[m_pos->second] = scop_info_.analysis_result_.GetMmaMode().m;
+  }
+  if (n_pos != mnk_pos.end()) {
+    tile_size[n_pos->second] = scop_info_.analysis_result_.GetMmaMode().n;
+  }
+
+  // To ensure that the information in the computation phase is stored in registers.
+  auto node = TileAccordingToTileType(orig_node, TileType::Invalid, tile_size);
+  if (k_pos != mnk_pos.end()) {
+    auto band_node = node.parent().as<isl::schedule_node_band>();
+    node = band_node.split(k_pos->second).child(0);
+  }
+  node = node.insert_mark(PROMOTE_GLOBAL_TO_REGISTER_C).child(0);
+
+  // m axis(4): unroll
+  if (m_pos != mnk_pos.end()) {
+    node = node.child(0).as<isl::schedule_node_band>().split(m_pos->second + 1);
+    node = InsertMultiMarker(node, FOR_UNROLLED).child(0);
+  }
+
+  // n axis(24): unroll + vectorization
+  vectorization_axis_pos_ = 0;
+  node = TileAccordingToTileType(node, TileType::VECTORIZATION);
+  node = InsertMarkerForLoop(node, FOR_VECTORIZED).parent();
+  node = InsertMarkerForLoop(node, FOR_UNROLLED);
+  return node;
+}
+
 isl::schedule_node TileOuterBand::TileGemmOperatorForCpu(const isl::schedule_node &orig_node) {
   size_t start_depth = orig_node.get_tree_depth();
+  std::unordered_map<std::string, int> mnk_pos = GetMNKPosForMatmul();
 
   // the first tiling: for parallel
   isl::schedule_node node = TileAccordingToTileType(orig_node, TileType::C1);
-  node = InsertMultiMarker(node.parent(), FOR_PARALLEL).child(0);
+  node = node.parent();
+  auto k_pos = mnk_pos.find(kDsaki);
+  if (k_pos != mnk_pos.end()) {
+    // Parallel labels cannot be inserted on the k-axis.
+    node = InsertMultiMarker(node, FOR_PARALLEL, false, k_pos->second).child(0);
+  } else {
+    node = InsertMultiMarker(node, FOR_PARALLEL).child(0);
+  }
 
-  // the second tiling: promote tensor_b
+  // the second tiling: promote tensor_a
   std::vector<int> tile_size_c1 = GetTileSizeForCpu(node, TileType::C1);
   std::vector<int> tile_size_c0 = GetTileSizeForCpu(node, TileType::C0);
-  const int n_reverse_pos = 2;
-  tile_size_c0[tile_size_c0.size() - n_reverse_pos] = tile_size_c1[tile_size_c1.size() - n_reverse_pos];
+  auto n_pos = mnk_pos.find(kDsani);
+  if (n_pos != mnk_pos.end()) {
+    tile_size_c0[n_pos->second] = tile_size_c1[n_pos->second];
+  }
   node = TileAccordingToTileType(node, TileType::Invalid, tile_size_c0);
   node = node.insert_mark(PROMOTE_GLOBAL_TO_REGISTER_A).child(0);
 
-  // the third tiling: promote tensor_a
+  // the third tiling: promote tensor_b
   node = TileAccordingToTileType(node, TileType::C0);
   node = node.insert_mark(PROMOTE_GLOBAL_TO_REGISTER_B).child(0);
 
@@ -1381,24 +1484,7 @@ isl::schedule_node TileOuterBand::TileGemmOperatorForCpu(const isl::schedule_nod
     if (!is_gemm) {
       continue;
     }
-    node = node.child(0);
-    std::vector<int> tile_size(tile_size_c1.size(), 1);
-    tile_size[0] = scop_info_.analysis_result_.GetMmaMode().m;
-    tile_size[1] = scop_info_.analysis_result_.GetMmaMode().n;
-    // To ensure that the information in the computation phase is stored in registers.
-    node = TileAccordingToTileType(node, TileType::Invalid, tile_size);
-    auto band_node = node.parent().as<isl::schedule_node_band>();
-    node = band_node.split(band_node.n_member() - 1).child(0);
-    node = node.insert_mark(PROMOTE_GLOBAL_TO_REGISTER_C).child(0);
-    // m axis(4): unroll
-    node = node.child(0).as<isl::schedule_node_band>().split(1);
-    node = InsertMarkerForLoop(node, FOR_UNROLLED).child(0);
-
-    // n axis(24): unroll + vectorization
-    vectorization_axis_pos_ = 0;
-    node = TileAccordingToTileType(node.child(0), TileType::VECTORIZATION);
-    node = InsertMarkerForLoop(node, FOR_VECTORIZED).parent();
-    node = InsertMarkerForLoop(node, FOR_UNROLLED);
+    node = TileVectorizationForGemm(node.child(0), mnk_pos);
     seq_node = node.ancestor(node.get_tree_depth() - seq_start_depth);
   }
 

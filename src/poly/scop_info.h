@@ -1008,6 +1008,7 @@ class AnalysisResult {
     std::set<std::string> coalesced_access_tensors;
     isl::union_map reads;
     isl::union_map writes;
+    std::unordered_map<std::string, int> mnk_pos;
     // user config
     bool use_shared_memory{true};
     bool use_register_memory{true};

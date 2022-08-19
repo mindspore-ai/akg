@@ -27,6 +27,8 @@ class TestCase(TestBase):
         self.args_default = [
             ("000_case", batch_matmul_run, ((128, 64), (128, 64), 'float32', 'float32', "NHDT", "NHDT", "NHDT",
                 (1, ), False, False), ["level0"]),
+            ("001_case", batch_matmul_run, ((32, 12, 128, 128), (32, 12, 128, 64), 'float32', 'float32', "NHDT",
+                "NHTD", "NHDT", (1, ), False, False), ["level0"])
         ]
         self.args_gpu = [
             ("001_case", batch_matmul_run, ((32, 12, 128, 128), (32, 12, 128, 64), 'float16', 'float16', "NHDT",
