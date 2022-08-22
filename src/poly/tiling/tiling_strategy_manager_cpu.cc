@@ -15,6 +15,7 @@
  */
 #include "tiling_analyzer.h"
 #include "tiling_strategy_manager.h"
+#include "poly/tiling/tiling_utils.h"
 
 namespace akg {
 namespace ir {
@@ -40,10 +41,6 @@ void CpuStrategy::BuildAxesQueue() {
     }
     const auto r = axis->range_extent.as<IntImm>();
     if (r && r->value > 0 && !axis->is_inner) {
-      if (this->analyzer_->scop_info_.analysis_result_.GetOuterBandNode(axis->index)->template_type ==
-          Template::MATMUL) {
-        axis->MarkWithAttr(AttrInfo{"axis_token", this->axes_name_[axis->dim_axis]});
-      }
       this->pending_axes_[axis->index].emplace_back(std::make_pair(axis, r->value));
     }
   });
@@ -193,17 +190,25 @@ void CpuStrategy::SetMatMulTileValue(int index) {
     int64_t shape;
     std::tie(axis, shape) = pending_axes_[index][i];
     int64_t value = shape;
-    if ((i != axis_m_) && (shape % best_factor_for_matmul_ == 0)) {
-      value = best_factor_for_matmul_;
+    for (const auto &attr : axis->attrs) {
+      if (attr.attr_key != AT_GEMM) {
+        continue;
+      }
+
+      if (attr.attr_value == kDsabi) {
+        value = 1;
+      }
+      axis->TileRestrainToSingleValue(Expr(value), TileLevel::CACHE1);
+      if (attr.attr_value == kDsami) {
+        pack = pack_size.pack_a_size;
+      } else if (attr.attr_value == kDsani) {
+        pack = pack_size.pack_b_size;
+      }
+      value = value / pack * pack;
+      axis->TileRestrainToSingleValue(Expr(value), TileLevel::CACHE0);
+      auto current_outer_node = analyzer_->scop_info_.analysis_result_.GetOuterBandNode(current_band_);
+      current_outer_node->mnk_pos[attr.attr_value] = axis->dim_axis;
     }
-    axis->TileRestrainToSingleValue(Expr(value), TileLevel::CACHE1);
-    if (i == axis_m_) {
-      pack = pack_size.pack_a_size;
-    } else if (i == axis_n_) {
-      pack = pack_size.pack_b_size;
-    }
-    value = value / pack * pack;
-    axis->TileRestrainToSingleValue(Expr(value), TileLevel::CACHE0);
   }
 }
 

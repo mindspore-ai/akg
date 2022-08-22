@@ -347,6 +347,7 @@ class OperatorInfoCollector {
       }
     }
   }
+
   void SetReduceWriteDataType(ReduceTensorInfo &reduce_tensor_info) {
     auto init_value = reduce_tensor_info.init_value;
     if (!init_value.defined()) {

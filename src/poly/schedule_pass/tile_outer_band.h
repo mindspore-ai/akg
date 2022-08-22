@@ -120,6 +120,9 @@ class TileOuterBand : public SchedulePass {
                                        const bool return_orig_pos = false, const int insert_marker_num = -1);
   isl::schedule_node InsertMarkerForReduceY(const isl::schedule_node &orig_node, size_t start_depth);
   void RecordCopyinForGemm(const isl::schedule_node_sequence &seq_node);
+  isl::schedule_node TileVectorizationForGemm(const isl::schedule_node &orig_node,
+                                              const std::unordered_map<std::string, int> &mnk_pos);
+  std::unordered_map<std::string, int> GetMNKPosForMatmul();
 
  private:
   PassInfo &pass_info_;

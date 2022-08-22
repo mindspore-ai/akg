@@ -461,8 +461,9 @@ class CPULocalReconstruction : public IRMutator {
       auto body = IRMutator::Mutate(op->body);
       auto block_size = matrix_name == MATRIX_A ? a_block_size_ : b_block_size_;
       auto trans = matrix_name == MATRIX_A ? a_trans_ : b_trans_;
-      auto bound_n = trans ? op->bounds[0] : op->bounds[1];
-      auto bound_k = trans ? op->bounds[1] : op->bounds[0];
+      int start_pos = std::max(static_cast<int>(op->bounds.size()) - NUM_2, 0);
+      auto bound_n = trans ? op->bounds[start_pos] : op->bounds[start_pos + 1];
+      auto bound_k = trans ? op->bounds[start_pos + 1] : op->bounds[start_pos];
       if (auto bound_int = bound_n->extent.as<IntImm>()) {
         if (static_cast<int>(bound_int->value) < block_size) {
           if (matrix_name == MATRIX_A) {
@@ -474,6 +475,9 @@ class CPULocalReconstruction : public IRMutator {
         }
       }
       Region new_bounds;
+      for (int i = 0; i < start_pos; ++i) {
+        new_bounds.push_back(op->bounds[i]);
+      }
       new_bounds.push_back(Range::make_by_min_extent(bound_n->min, floordiv(bound_n->extent, block_size)));
       new_bounds.push_back(bound_k);
       new_bounds.push_back(Range::make_by_min_extent(bound_n->min, block_size));
@@ -484,12 +488,8 @@ class CPULocalReconstruction : public IRMutator {
 
   Stmt Mutate_(const Provide *op, const Stmt &s) final {
     if (op->func == a_func_ || op->func == b_func_) {
-      auto block_size = op->func == a_func_ ? a_block_size_ : b_block_size_;
-      auto trans = op->func == a_func_ ? a_trans_ : b_trans_;
-      auto n = trans ? op->args[0] : op->args[1];
-      auto k = trans ? op->args[1] : op->args[0];
-      auto provide =
-        Provide::make(op->func, op->value_index, op->value, {floordiv(n, block_size), k, indexmod(n, block_size)});
+      Array<Expr> new_args = GetNewArgs(op);
+      auto provide = Provide::make(op->func, op->value_index, op->value, new_args);
       provide_ = provide;
       return provide;
     }
@@ -500,14 +500,28 @@ class CPULocalReconstruction : public IRMutator {
 
   Expr Mutate_(const Call *op, const Expr &e) final {
     if (op->func == a_func_ || op->func == b_func_) {
-      auto block_size = op->func == a_func_ ? a_block_size_ : b_block_size_;
-      auto trans = op->func == a_func_ ? a_trans_ : b_trans_;
-      auto n = trans ? op->args[0] : op->args[1];
-      auto k = trans ? op->args[1] : op->args[0];
-      return Call::make(op->type, op->name, {floordiv(n, block_size), k, indexmod(n, block_size)}, op->call_type,
-                        op->func, op->value_index);
+      Array<Expr> new_args = GetNewArgs(op);
+      return Call::make(op->type, op->name, new_args, op->call_type, op->func, op->value_index);
     }
     return IRMutator::Mutate_(op, e);
+  }
+
+  template <class T>
+  Array<Expr> GetNewArgs(const T *op) {
+    Array<Expr> new_args;
+    int block_size = op->func == a_func_ ? a_block_size_ : b_block_size_;
+    bool trans = op->func == a_func_ ? a_trans_ : b_trans_;
+    int start_pos = std::max(static_cast<int>(op->args.size()) - NUM_2, 0);
+    Expr n = trans ? op->args[start_pos] : op->args[start_pos + 1];
+    Expr k = trans ? op->args[start_pos + 1] : op->args[start_pos];
+
+    for (int i = 0; i < start_pos; ++i) {
+      new_args.push_back(op->args[i]);
+    }
+    new_args.push_back(floordiv(n, block_size));
+    new_args.push_back(k);
+    new_args.push_back(indexmod(n, block_size));
+    return new_args;
   }
 
   Stmt Mutate_(const For *op, const Stmt &s) final {

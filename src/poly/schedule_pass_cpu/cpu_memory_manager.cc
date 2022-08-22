@@ -101,6 +101,7 @@ void CpuMemoryManager::CreateClusterForOperator(const isl::schedule_node &orig_n
   } else if (current_outer_bn_->template_type == Template::CONV) {
     // conv operator
     mark_names_.emplace(PROMOTE_GLOBAL_TO_REGISTER_AB);
+    mark_names_.emplace(PROMOTE_GLOBAL_TO_REGISTER_C);
     create_cluster.CreateClusterListForConv(orig_node, mark_names_);
   }
 }
@@ -113,6 +114,7 @@ isl::schedule_node CpuMemoryManager::InsertMarkerForEmit(const isl::schedule_nod
   } else if (current_outer_bn_->template_type == Template::CONV) {
     // conv operator
     node = InsertMarkerForPromotedNode(node, WRITE_ID_NAME, FOR_VECTORIZED, -1);
+    node = InsertMarkerForPromotedNode(node, WRITE_ID_NAME, FOR_UNROLLED, -1);
     node = InsertMarkerForPromotedNode(node, READ_ID_NAME, FOR_VECTORIZED, -1);
   }
   return node;
