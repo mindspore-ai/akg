@@ -497,6 +497,8 @@ bool AttrExists(air::Schedule sch, std::string attr_name);
 
 constexpr auto PURE_INTRINSIC_WITH = "with";
 constexpr auto PURE_INTRINSIC_ORIG = "orig";
+
+bool IsCountOp(const Provide *op);
 }  // namespace akg
 
 #endif  // PASS_UTILS_H_
