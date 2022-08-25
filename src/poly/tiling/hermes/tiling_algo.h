@@ -24,7 +24,7 @@ namespace akg {
 namespace ir {
 namespace poly {
 void GetTilingSize(ModelGraph &model_graph, Hardware hardware);
-int GetAxis(Axis &axis, const ModelGraph &model_graph, Hardware hardware);
+int64_t GetAxis(Axis &axis, const ModelGraph &model_graph, Hardware hardware);
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

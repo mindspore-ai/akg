@@ -22,11 +22,11 @@ namespace akg {
 namespace ir {
 namespace poly {
 void ClassifyAxis(const Node &node);
-void SetAxisTypeAsMultiCore(size_t dim_axis);
-void SetAxisTypeAsVectorization(size_t dim_axis);
-void SetAxisTypeAsMultiCoreAndVectorization(size_t dim_axis);
+void SetAxisTypeAsMultiCore(int dim_axis);
+void SetAxisTypeAsVectorization(int dim_axis);
+void SetAxisTypeAsMultiCoreAndVectorization(int dim_axis);
 void ClassifyMatmulAxis();
-void DefineAxisType(size_t dim_axis);
+void DefineAxisType(int dim_axis);
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

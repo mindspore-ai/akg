@@ -23,33 +23,33 @@ namespace ir {
 namespace poly {
 class Hardware {
  public:
-  Hardware(int, int, int, int, int, int, int, int);
+  Hardware(size_t, size_t, size_t, size_t, size_t, size_t, size_t, size_t);
 
   static bool HasVCFail(const std::string &);
   static void AddVCFailCounter() { Hardware::mem_VC_alloc_failed_++; }
   static void ResetVCFailCounter() { Hardware::mem_VC_alloc_failed_ = 0; }
 
-  int num_core_;
-  int mem_VC_size_;
-  int mem_C1_size_;
-  int mem_C0_size_;
-  int mem_VC_align_;
-  int mem_C1_align_;
-  int vblocknum_;
-  int vblocksize_;
+  size_t num_core_;
+  size_t mem_VC_size_;
+  size_t mem_C1_size_;
+  size_t mem_C0_size_;
+  size_t mem_VC_align_;
+  size_t mem_C1_align_;
+  size_t vblocknum_;
+  size_t vblocksize_;
 
  private:
   static size_t mem_VC_alloc_failed_;
 };
 
-const int kNumCore = 32;
-const int kMemVCSize = 262144;
-const int kMemC1Size = 1048576;
-const int kMemC0Size = 65536;
-const int kMemVCAlign = 32;
-const int kMemC1Align = 512;
-const int kVBlockNum = 8;
-const int kVBlockSize = 32;
+const size_t kNumCore = 32;
+const size_t kMemVCSize = 262144;
+const size_t kMemC1Size = 1048576;
+const size_t kMemC0Size = 65536;
+const size_t kMemVCAlign = 32;
+const size_t kMemC1Align = 512;
+const size_t kVBlockNum = 8;
+const size_t kVBlockSize = 32;
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

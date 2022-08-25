@@ -16,6 +16,7 @@
 #include <cmath>
 
 #include "poly/tiling/tiling_analyzer.h"
+#include "poly/tiling/tiling_utils.h"
 #include "poly/tiling/hermes/cube_tiling.h"
 #include "poly/tiling/hermes/utils.h"
 
@@ -27,15 +28,15 @@ namespace poly {
 // Second rule: The size of the axis can be divisible by tiling.
 // Third rule:  Use all the cores.
 // Fourth rule: Maximize the tiling.
-int GetMatmulAxisNTiling(const Axis &axis, const std::vector<std::shared_ptr<Node>> &nodes, int mem_VC_size) {
-  int N_axis_tiling = 0;
-  int available_mem_VC_size = GetAvailableMemVCSize(nodes, mem_VC_size);
+int64_t GetMatmulAxisNTiling(const Axis &axis, const std::vector<std::shared_ptr<Node>> &nodes, size_t mem_VC_size) {
+  int64_t N_axis_tiling = 0;
+  size_t available_mem_VC_size = GetAvailableMemVCSize(nodes, mem_VC_size);
 
   // Try to maximize the tiling of N and M. And carrying to the power of two to compute.
-  int first_tiling = static_cast<int>(std::round(std::sqrt(available_mem_VC_size)));
-  int power_of_two = 1;
+  auto first_tiling = static_cast<int64_t>(std::round(std::sqrt(available_mem_VC_size)));
+  int64_t power_of_two = 1;
   while (power_of_two < first_tiling) {
-    power_of_two *= kByTwo;
+    power_of_two *= kByTwoL;
   }
   first_tiling = power_of_two;
 
@@ -49,13 +50,14 @@ int GetMatmulAxisNTiling(const Axis &axis, const std::vector<std::shared_ptr<Nod
   return N_axis_tiling;
 }
 
-int GetMulticoreFromAxis(int remaining_core, size_t axis_size) {
-  int core_used = 1;
-  if (axis_size > 0 && remaining_core % axis_size == 0) {
-    core_used = static_cast<int>(axis_size);
+size_t GetMulticoreFromAxis(size_t remaining_core, int64_t axis_size) {
+  size_t core_used = 1;
+  auto axis_range = static_cast<size_t>(axis_size);
+  if (axis_range > 0 && remaining_core % axis_range == 0) {
+    core_used = axis_range;
   } else {
-    for (int i = remaining_core; i > 0; i--) {
-      if (remaining_core % i == 0 && axis_size % i == 0) {
+    for (size_t i = remaining_core; i > 0; i--) {
+      if (remaining_core % i == 0 && axis_range % i == 0) {
         core_used = i;
         break;
       }
@@ -64,22 +66,22 @@ int GetMulticoreFromAxis(int remaining_core, size_t axis_size) {
   return core_used;
 }
 
-int GetMatmulAxisMTiling(const Axis &axis, const ModelGraph &model_graph, Hardware hardware) {
-  int M_axis_tiling = 0;
-  int available_mem_VC_size = GetAvailableMemVCSize(model_graph.nodes_, hardware.mem_VC_size_);
+int64_t GetMatmulAxisMTiling(const Axis &axis, const ModelGraph &model_graph, Hardware hardware) {
+  int64_t M_axis_tiling = 0;
+  size_t available_mem_VC_size = GetAvailableMemVCSize(model_graph.nodes_, hardware.mem_VC_size_);
 
   // Try to get the information on the N-axis, if it exists.
-  size_t N_axis_range = 1;
-  int N_axis_tiling = 1;
+  int64_t N_axis_range = 1;
+  int64_t N_axis_tiling = 1;
   for (auto const &global_axis : ModelGraph::global_axis_vec_) {
     if (global_axis.type_.count(Axis::AxisLabel::kMatMulAxisN) != 0) {
       N_axis_range = global_axis.range_;
-      N_axis_tiling = global_axis.tile_;
+      N_axis_tiling = global_axis.c0_tiling_;
       break;
     }
   }
 
-  int core_used = 1;
+  size_t core_used = 1;
   // Calculate how many cores are used on the Batch-axis.
   for (auto const &global_axis : ModelGraph::global_axis_vec_) {
     if (global_axis.type_.count(Axis::AxisLabel::kMatMulAxisBatch) != 0) {
@@ -92,12 +94,12 @@ int GetMatmulAxisMTiling(const Axis &axis, const ModelGraph &model_graph, Hardwa
   }
 
   // Ensure that the VC memory is not exceeded.
-  int available_M_axis_tiling = available_mem_VC_size / N_axis_tiling;
+  int64_t available_M_axis_tiling = static_cast<int64_t>(available_mem_VC_size) / N_axis_tiling;
 
   // Search for a divisible tiling.
-  if (axis.range_ % (hardware.num_core_ / core_used) == 0) {
-    M_axis_tiling =
-      TilingAnalyzer::GetLargestDivisor(available_M_axis_tiling, axis.range_ / (hardware.num_core_ / core_used));
+  auto core_used_ratio = static_cast<int64_t>(SafeDivisor(hardware.num_core_ / core_used));
+  if (axis.range_ % core_used_ratio == 0) {
+    M_axis_tiling = TilingAnalyzer::GetLargestDivisor(available_M_axis_tiling, axis.range_ / core_used_ratio);
   } else {
     M_axis_tiling = TilingAnalyzer::GetLargestDivisor(available_M_axis_tiling, axis.range_);
   }
@@ -105,26 +107,26 @@ int GetMatmulAxisMTiling(const Axis &axis, const ModelGraph &model_graph, Hardwa
   return M_axis_tiling;
 }
 
-int GetMatmulAxisKTiling(Axis &axis, const ModelGraph &model_graph, Hardware hardware) {
+int64_t GetMatmulAxisKTiling(Axis &axis, const ModelGraph &model_graph, Hardware hardware) {
   // Try to get the information on the N-axis and the M-axis, if they exist.
-  int K_axis_tiling = 0;
-  int N_axis_tiling = 1;
-  size_t N_axis_range = 1;
-  int M_axis_tiling = 1;
-  size_t M_axis_range = 1;
+  int64_t K_axis_tiling = 0;
+  int64_t N_axis_tiling = 1;
+  int64_t N_axis_range = 1;
+  int64_t M_axis_tiling = 1;
+  int64_t M_axis_range = 1;
   for (auto const &global_axis : ModelGraph::global_axis_vec_) {
     if (global_axis.type_.count(Axis::AxisLabel::kMatMulAxisN) != 0) {
-      N_axis_tiling = global_axis.tile_;
+      N_axis_tiling = global_axis.c0_tiling_;
       N_axis_range = global_axis.range_;
     }
     if (global_axis.type_.count(Axis::AxisLabel::kMatMulAxisM) != 0) {
-      M_axis_tiling = global_axis.tile_;
+      M_axis_tiling = global_axis.c0_tiling_;
       M_axis_range = global_axis.range_;
     }
   }
 
   // Ensure that the C0 memory is not exceeded.
-  int available_mem_C0_size = hardware.mem_C0_size_ / kC0DataSizePerBatch;
+  auto available_mem_C0_size = static_cast<int64_t>(hardware.mem_C0_size_ / kC0DataSizePerBatch);
   K_axis_tiling = (N_axis_tiling >= M_axis_tiling) ? (available_mem_C0_size / N_axis_tiling)
                                                    : (available_mem_C0_size / M_axis_tiling);
 
@@ -132,17 +134,18 @@ int GetMatmulAxisKTiling(Axis &axis, const ModelGraph &model_graph, Hardware har
   K_axis_tiling = TilingAnalyzer::GetLargestDivisor(K_axis_tiling, axis.range_);
 
   if (model_graph.is_activated_double_buffer_) {
-    size_t largest_tensor_size =
+    int64_t largest_tensor_size =
       (N_axis_range >= M_axis_range) ? N_axis_range * axis.range_ : M_axis_range * axis.range_;
     if (largest_tensor_size < kLargeTensorSize) {
-      if (K_axis_tiling % kByTwo == 0) {  // if enough memory (tiling==axis) -> not divided by 2
-        K_axis_tiling /= kByTwo;
+      if (K_axis_tiling % kByTwoL == 0) {  // if enough memory (tiling==axis) -> not divided by 2
+        K_axis_tiling /= kByTwoL;
       }
     }
   }
 
   if (N_axis_range * M_axis_range >= kLargeTensorSize) {
-    int available_mem_C1_size = hardware.mem_C1_size_ / kC1DataSizePerBatch / (N_axis_tiling + M_axis_tiling);
+    auto mem_C1_data_size_ratio = static_cast<int64_t>(hardware.mem_C1_size_ / kC1DataSizePerBatch);
+    int64_t available_mem_C1_size = mem_C1_data_size_ratio / (N_axis_tiling + M_axis_tiling);
     axis.c1_tiling_ = TilingAnalyzer::GetLargestDivisor(available_mem_C1_size, axis.range_);
   }
 
@@ -194,7 +197,7 @@ bool IsNotReused(const std::vector<std::shared_ptr<Node>> &nodes) {
   return is_not_reused;
 }
 
-int GetAvailableMemVCSize(const std::vector<std::shared_ptr<Node>> &nodes, int mem_VC_size) {
+size_t GetAvailableMemVCSize(const std::vector<std::shared_ptr<Node>> &nodes, size_t mem_VC_size) {
   bool is_elementwise_op = false;
   bool is_not_reused = false;
   bool is_select_op = false;
@@ -211,15 +214,15 @@ int GetAvailableMemVCSize(const std::vector<std::shared_ptr<Node>> &nodes, int m
     }
   }
 
-  int available_mem_VC_size = mem_VC_size / kVCDataSizePerBatch;
+  size_t available_mem_VC_size = mem_VC_size / kVCDataSizePerBatch;
   if (is_elementwise_op) {
-    available_mem_VC_size /= kByTwo;
+    available_mem_VC_size /= kByTwoUL;
   }
   if (is_not_reused) {
-    available_mem_VC_size /= kByTwo;
+    available_mem_VC_size /= kByTwoUL;
   }
   if (is_select_op) {
-    available_mem_VC_size /= kByTwo;
+    available_mem_VC_size /= kByTwoUL;
   }
 
   return available_mem_VC_size;

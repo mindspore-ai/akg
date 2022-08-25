@@ -26,7 +26,7 @@ Node::Node(const std::string &name, const Op &op, const std::vector<std::shared_
            const std::vector<std::shared_ptr<Tensor>> &input_tensors, const std::vector<std::shared_ptr<Node>> &succ,
            const std::vector<std::shared_ptr<Node>> &pred, const std::vector<Axis> &axis,
            const std::vector<Tensor> &transformed_output_shape,
-           const std::map<std::string, std::map<Tensor, int>> &axis_to_tensor_to_shape_id_map,
+           const std::map<std::string, std::map<Tensor, int64_t>> &axis_to_tensor_to_shape_id_map,
            const std::list<attributes> &attrs)
     : name_{name},
       op_{op},

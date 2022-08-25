@@ -36,19 +36,19 @@ void GetTilingSize(ModelGraph &model_graph, Hardware hardware) {
   // extra inner (16) axis treatment
   for (auto &axis : ModelGraph::global_axis_vec_) {
     if (axis.is_inner_) {
-      axis.tile_ = static_cast<int>(axis.range_);
+      axis.c0_tiling_ = axis.range_;
     }
   }
 
   // computing Mc tiling size
   for (auto &axis : ModelGraph::global_axis_vec_) {
     if (!axis.is_inner_) {
-      axis.tile_ = GetAxis(axis, model_graph, hardware);
+      axis.c0_tiling_ = GetAxis(axis, model_graph, hardware);
     }
   }
 }
 
-int GetAxis(Axis &axis, const ModelGraph &model_graph, Hardware hardware) {
+int64_t GetAxis(Axis &axis, const ModelGraph &model_graph, Hardware hardware) {
   if (axis.type_.count(Axis::AxisLabel::kMatMulAxisBatch) != 0) {
     // AKG limitation : the batch-axis can only tile by 1.
     return 1;

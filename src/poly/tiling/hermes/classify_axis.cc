@@ -49,7 +49,7 @@ void ClassifyAxis(const Node &node) {
   }
 }
 
-void SetAxisTypeAsMultiCore(size_t dim_axis) {
+void SetAxisTypeAsMultiCore(int dim_axis) {
   for (auto &axis : ModelGraph::global_axis_vec_) {
     if (axis.dim_axis_ == dim_axis) {
       axis.type_.insert(Axis::AxisLabel::kMultiCore);
@@ -57,7 +57,7 @@ void SetAxisTypeAsMultiCore(size_t dim_axis) {
   }
 }
 
-void SetAxisTypeAsVectorization(size_t dim_axis) {
+void SetAxisTypeAsVectorization(int dim_axis) {
   for (auto &axis : ModelGraph::global_axis_vec_) {
     if (axis.dim_axis_ == dim_axis) {
       axis.type_.insert(Axis::AxisLabel::kVectorization);
@@ -65,7 +65,7 @@ void SetAxisTypeAsVectorization(size_t dim_axis) {
   }
 }
 
-void SetAxisTypeAsMultiCoreAndVectorization(size_t dim_axis) {
+void SetAxisTypeAsMultiCoreAndVectorization(int dim_axis) {
   for (auto &axis : ModelGraph::global_axis_vec_) {
     if (axis.dim_axis_ == dim_axis) {
       axis.type_.insert(Axis::AxisLabel::kMultiCore);
@@ -93,7 +93,7 @@ void ClassifyMatmulAxis() {
   }
 }
 
-void DefineAxisType(size_t dim_axis) {
+void DefineAxisType(int dim_axis) {
   if (!ModelGraph::global_axis_vec_.empty() && ModelGraph::global_axis_vec_[0].dim_axis_ == dim_axis) {
     SetAxisTypeAsMultiCore(dim_axis);
   } else {
