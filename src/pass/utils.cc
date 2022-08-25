@@ -3056,4 +3056,33 @@ bool AttrExists(air::Schedule sch, std::string attr_name) {
   }
   return false;
 }
+
+bool IsCountOp(const Provide *op) {
+  auto value = Simplify(op->value);
+  if (value->IsInstance<Add>() || value->IsInstance<Sub>() || value->IsInstance<Mul>() || value->IsInstance<Div>() ||
+      value->IsInstance<FloorDiv>() || value->IsInstance<Mod>() || value->IsInstance<FloorMod>() ||
+      value->IsInstance<And>() || value->IsInstance<Or>()) {
+    auto subexprs = ir::ExtractSubExprs(value);
+    CHECK(subexprs.size() == 2);
+    const Call *call{nullptr};
+    const IntImm *constant{nullptr};
+    if (subexprs[0]->IsInstance<Call>()) {
+      call = subexprs[0].as<Call>();
+      constant = subexprs[1].as<IntImm>();
+    } else if (subexprs[0]->IsInstance<IntImm>()) {
+      call = subexprs[1].as<Call>();
+      constant = subexprs[0].as<IntImm>();
+    }
+    if (call != nullptr && constant != nullptr &&
+        op->func.defined() && op->func.same_as(call->func) && op->args.size() == call->args.size()) {
+      for (size_t i = 0; i < op->args.size(); ++i) {
+        if (!op->args[i].same_as(call->args[i])) {
+          return false;
+        }
+      }
+      return true;
+    }
+  }
+  return false;
+}
 }  // namespace akg
