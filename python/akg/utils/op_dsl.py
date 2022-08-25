@@ -391,11 +391,12 @@ def strided_slice_str(inputs, output, attr):
     end = get_attr(attr, "end")
     strides = get_attr(attr, "strides")
     shape = inputs[0][0]["shape"]
-    begin_pos = bin(get_attr(attr, "begin_mask"))[-1:1:-1]
-    end_pos = bin(get_attr(attr, "end_mask"))[-1:1:-1]
-    ellipsis_pos = bin(get_attr(attr, "ellipsis_mask"))[-1:1:-1]
-    new_axis_pos = bin(get_attr(attr, "new_axis_mask"))[-1:1:-1]
-    shrink_axis_pos = bin(get_attr(attr, "shrink_axis_mask"))[-1:1:-1]
+    begin_pos = [0] if get_attr(attr, "begin_mask") == [] else bin(get_attr(attr, "begin_mask"))[-1:1:-1]
+    end_pos = [0] if get_attr(attr, "end_mask") == [] else bin(get_attr(attr, "end_mask"))[-1:1:-1]
+    ellipsis_pos = [0] if get_attr(attr, "ellipsis_mask") == [] else bin(get_attr(attr, "ellipsis_mask"))[-1:1:-1]
+    new_axis_pos = [0] if get_attr(attr, "new_axis_mask") == [] else bin(get_attr(attr, "new_axis_mask"))[-1:1:-1]
+    shrink_axis_pos = [0] if get_attr(attr, "shrink_axis_mask") == [] else \
+        bin(get_attr(attr, "shrink_axis_mask"))[-1:1:-1]
     new_axis = -1
     shrink_axis = -1
     slice_str = ""
@@ -427,6 +428,8 @@ def strided_slice_str(inputs, output, attr):
             strides_num = strides[i]
         if i < len(shrink_axis_pos) and shrink_axis_pos[i] == '1':
             # delete an axis
+            if start_num < 0:
+                start_num += shape[i]
             end_num = start_num + 1
             strides_num = 1
             shrink_axis = i

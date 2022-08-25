@@ -220,6 +220,8 @@ def StridedSlice(inputs, attrs):
             continue
         if i < len(shrink_axis_pos) and shrink_axis_pos[i] == '1':
             shrink_axes.append(i)
+            if int(begin[i]) < 0:
+                begin[i] += shape[j]
             i += 1
             j += 1
             continue
