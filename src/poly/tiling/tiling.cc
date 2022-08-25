@@ -581,7 +581,7 @@ std::pair<TileSizes, std::deque<ParamInfo>> GenerateTiling(const isl::schedule &
   if (analyzer.scop_info_.user_config_.GetIsSymbolicTiling() && Hardware::HasVCFail(g_attrs.GetStr(kErrorInfo, ""))) {
     Hardware::AddVCFailCounter();
     g_attrs.Set(kErrorInfo, StringImm::make(""));
-  } else {
+  } else if (!g_attrs.GetBool(kIsPolyConfigReset, false)) {
     Hardware::ResetVCFailCounter();
   }
 

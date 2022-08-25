@@ -18,6 +18,7 @@
 #include "poly/tiling/hermes/classify_axis.h"
 #include "poly/tiling/hermes/multicore_tiling.h"
 #include "poly/tiling/hermes/tiling_algo.h"
+#include "poly/tiling/hermes/tiling_mem.h"
 #include "poly/tiling/hermes/vec_tiling.h"
 
 namespace akg {
@@ -40,36 +41,51 @@ void GetTilingSize(ModelGraph &model_graph, Hardware hardware) {
     }
   }
 
-  // computing Mc tiling size
+  // compute tile size
   for (auto &axis : ModelGraph::global_axis_vec_) {
     if (!axis.is_inner_) {
       axis.c0_tiling_ = GetAxis(axis, model_graph, hardware);
     }
   }
+
+  // extend mc axis
+  for (auto &axis : ModelGraph::global_axis_vec_) {
+    if (!axis.is_inner_ && axis.dim_axis_ == GetLastDimAxis()) {
+      if (axis.type_.count(Axis::AxisLabel::kMatMulAxisBatch) == 0 &&
+          axis.type_.count(Axis::AxisLabel::kMatMulAxisN) == 0 &&
+          axis.type_.count(Axis::AxisLabel::kMatMulAxisM) == 0 &&
+          axis.type_.count(Axis::AxisLabel::kMatMulAxis16) == 0 &&
+          axis.type_.count(Axis::AxisLabel::kMatMulAxisK) == 0) {
+        ExtendMulticoreAxisTile(axis, model_graph, hardware);
+      }
+    }
+  }
 }
 
 int64_t GetAxis(Axis &axis, const ModelGraph &model_graph, Hardware hardware) {
-  if (axis.type_.count(Axis::AxisLabel::kMatMulAxisBatch) != 0) {
+  if (axis.type_.find(Axis::AxisLabel::kMatMulAxisBatch) != axis.type_.end()) {
     // AKG limitation : the batch-axis can only tile by 1.
     return 1;
   }
-  if (axis.type_.count(Axis::AxisLabel::kMatMulAxisN) != 0) {
+  if (axis.type_.find(Axis::AxisLabel::kMatMulAxisN) != axis.type_.end()) {
     return GetMatmulAxisNTiling(axis, model_graph.nodes_, hardware.mem_VC_size_);
   }
-  if (axis.type_.count(Axis::AxisLabel::kMatMulAxisM) != 0) {
+  if (axis.type_.find(Axis::AxisLabel::kMatMulAxisM) != axis.type_.end()) {
     return GetMatmulAxisMTiling(axis, model_graph, hardware);
   }
-  if (axis.type_.count(Axis::AxisLabel::kMatMulAxis16) != 0) {
+  if (axis.type_.find(Axis::AxisLabel::kMatMulAxis16) != axis.type_.end()) {
     // AKG limitation : the 16-axis can only tile by 16.
     return kCubeDefaultTiling;
   }
-  if (axis.type_.count(Axis::AxisLabel::kMatMulAxisK) != 0) {
+  if (axis.type_.find(Axis::AxisLabel::kMatMulAxisK) != axis.type_.end()) {
     return GetMatmulAxisKTiling(axis, model_graph, hardware);
   }
-  if (axis.type_.count(Axis::AxisLabel::kMultiCore) != 0 && axis.type_.count(Axis::AxisLabel::kVectorization) == 0) {
+  if (axis.type_.find(Axis::AxisLabel::kMultiCore) != axis.type_.end() &&
+      axis.type_.count(Axis::AxisLabel::kVectorization) == 0) {
     return GetMcAxis(axis, model_graph, hardware);
   }
-  if (axis.type_.count(Axis::AxisLabel::kVectorization) != 0 && axis.type_.count(Axis::AxisLabel::kMultiCore) == 0) {
+  if (axis.type_.find(Axis::AxisLabel::kVectorization) != axis.type_.end() &&
+      axis.type_.count(Axis::AxisLabel::kMultiCore) == 0) {
     return GetVecAxis(axis, model_graph, hardware);
   }
   return GetMixTypeAxis(axis, model_graph, hardware);

@@ -24,12 +24,12 @@
 namespace akg {
 namespace ir {
 namespace poly {
-std::string ParseString(const air::Expr &);
-int ParseInt(const air::Integer &);
-std::vector<int> ParseIntArray(air::Array<air::Integer>);
-std::vector<std::string> ParseStringArray(air::Array<air::Expr> arr);
+std::string ParseString(const air::Expr &expr);
+int ParseInt(const air::Integer &num);
+std::vector<int> ParseIntArray(const air::Array<air::Integer> &arr);
+std::vector<std::string> ParseStringArray(const air::Array<air::Expr> &arr);
 std::string StripRename(std::string name);
-int64_t Get2PowerBelow(int64_t n);
+int64_t Get2PowerBelow(int64_t num);
 
 const int kByTwo = 2;
 const size_t kByTwoUL = 2;

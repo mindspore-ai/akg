@@ -45,14 +45,17 @@ void CheckVisitor::PrintBuildGraphInfo() {
 void CheckVisitor::Visit_(const Provide *op) {
   bool exist = false;
   std::string node_name;
+  std::string iter_node_name = op->func->func_name();
   for (auto const &node : nodes_) {
-    if (node->name_ == op->func->func_name()) {
+    if (node->name_ == iter_node_name) {
       node_name = GetNewNodeName(node, op->args);
       if (node_name.empty()) {
         exist = true;
         cur_node_ = node;
+      } else {
+        exist = false;
+        iter_node_name = node_name;
       }
-      break;
     }
   }
   if (!exist) {
@@ -60,42 +63,42 @@ void CheckVisitor::Visit_(const Provide *op) {
     tensor_of_provide = GetTensor(op->func, op->value_index);
 
     std::shared_ptr<Node> provide_node = std::make_shared<Node>();
+    provide_node->orig_name_ = op->func->func_name();
     if (node_name.empty()) {
       provide_node->name_ = op->func->func_name();
     } else {
       provide_node->name_ = node_name;
     }
     provide_node->transformed_output_shape_.push_back(*tensor_of_provide);
-    if (op->args.size() > 1 || op->args[0].as<Variable>() != nullptr) {
-      for (auto const &arg : op->args) {
-        std::vector<std::string> vars{};
-        if (arg.as<Variable>() == nullptr) {
-          vars = GetVarNamesFromExpr(arg);
-          if (vars.empty()) {
-            continue;
-          }
-        } else {
-          vars.push_back(arg.as<Variable>()->name_hint);
+    for (auto const &arg : op->args) {
+      std::vector<std::string> vars{};
+      if (arg.as<Variable>() == nullptr) {
+        vars = GetVarNamesFromExpr(arg);
+        if (vars.empty()) {
+          continue;
         }
-        for (auto const &var : vars) {
-          auto iter = realize_node_.axis_to_tensor_to_shape_id_map_.find(var);
-          auto res = iter->second.begin();
-          int64_t range = res->second;
-
-          Axis axis_of_provide;
-          axis_of_provide.name_ = var;
-          axis_of_provide.range_ = range;
-          provide_node->axis_of_node_.push_back(axis_of_provide);
-
-          std::map<Tensor, int64_t> tensor_to_range_map = {{*tensor_of_provide, range}};
-          provide_node->axis_to_tensor_to_shape_id_map_.insert(
-            std::make_pair(axis_of_provide.name_, tensor_to_range_map));
-        }
-        vars.clear();
+      } else {
+        vars.push_back(arg.as<Variable>()->name_hint);
       }
+      for (auto const &var : vars) {
+        auto iter = realize_node_.axis_to_tensor_to_shape_id_map_.find(var);
+        auto res = iter->second.begin();
+        int64_t range = res->second;
+
+        Axis axis_of_provide;
+        axis_of_provide.name_ = var;
+        axis_of_provide.range_ = range;
+        provide_node->axis_of_node_.push_back(axis_of_provide);
+
+        std::map<Tensor, int64_t> tensor_to_range_map = {{*tensor_of_provide, range}};
+        provide_node->axis_to_tensor_to_shape_id_map_.insert(
+          std::make_pair(axis_of_provide.name_, tensor_to_range_map));
+      }
+      vars.clear();
     }
     provide_node->op_.op_type_ = Op::OpType::Assignment;
     provide_node->output_tensors_.push_back(tensor_of_provide);
+    provide_node->output_tensors_.back()->name_ = provide_node->name_;
     nodes_.push_back(provide_node);
     cur_node_ = nodes_.back();
   }
@@ -151,7 +154,7 @@ void CheckVisitor::Visit_(const For *op) {
 void CheckVisitor::Visit_(const Call *op) {
   DefineCallOpType(op);
   if (cur_node_ && op->func) {
-    if (op->name != cur_node_->name_) {
+    if (op->name != cur_node_->orig_name_) {
       std::shared_ptr<Tensor> tensor_of_input;
       bool exist = false;
       for (auto const &node : nodes_) {

@@ -49,6 +49,7 @@ class Node {
   std::string ToString() const;
 
   std::string name_;
+  std::string orig_name_;
   Op op_;
   std::vector<std::shared_ptr<Tensor>> output_tensors_;
   std::vector<std::shared_ptr<Tensor>> input_tensors_;

@@ -16,6 +16,7 @@
 #ifndef POLY_TILING_HERMES_MULTICORE_TILING_H_
 #define POLY_TILING_HERMES_MULTICORE_TILING_H_
 
+#include <tuple>
 #include <vector>
 
 #include "poly/tiling/hermes/axis.h"
@@ -29,11 +30,18 @@ namespace poly {
 int64_t GetMcAxis(const Axis &axis, const ModelGraph &model_graph, Hardware hardware);
 int64_t GetMcReduceYAxisSize(Hardware hardware, int64_t min_shape, bool input_fp16, size_t model_graph_out_size);
 int64_t GetMcAxisSize(Hardware hardware, int64_t min_shape, int data_coef);
+std::tuple<float, float> GetTileAndMulticoreAxisSizes(const Axis &current_axis, const Axis &critical_node_axis,
+                                                      const std::vector<Axis> &global_axis_vec_, float curr_tile_size,
+                                                      float curr_tile_multicore_axis_size);
+void ExtendMulticoreAxisTile(const Axis &axis, const ModelGraph &model_graph, Hardware hardware);
+int64_t GetTileFromRemainingVecGranularity(const Axis &global_axis, int data_coef, int64_t axis_result);
 
 const int64_t kSmallAxisSize = 300;
 const int64_t kFloat16LoadGranularity = 128;
 const int64_t kFloat32LoadGranularity = 64;
 const int64_t kReduceMinShapeThreshold = 64;
+const int kVectorizationGranularity = 128;
+const float kMaxAllowedAllocPercentage = 0.9;
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg
