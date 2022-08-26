@@ -140,6 +140,7 @@ constexpr auto AT_DMA = "DMA";
 constexpr auto AT_DMA2 = "DMA2";
 constexpr auto AT_DMA3 = "DMA3";
 constexpr auto AT_OP_TYPE = "OP_TYPE";
+constexpr auto AT_AXIS_TYPE = "AXIS_TYPE";
 
 constexpr auto AT_REDUCE_DST_LAST = "REDUCE_DST_LAST";
 constexpr auto AT_REDUCE_SRC_LAST = "REDUCE_SRC_LAST";
@@ -147,6 +148,8 @@ constexpr auto AT_TRANSPOSE_INNERMOST_AXIS = "TRANSPOSE_INNERMOST_AXIS";
 constexpr auto AT_BROADCAST_INNERMOST_AXIS = "BROADCAST_INNERMOST_AXIS";
 constexpr auto AT_REDUCE_FLOW = "REDUCE_FLOW";
 constexpr auto AT_REDUCE_AXIS = "REDUCE_AXIS";
+constexpr auto AT_TRANSPOSE_AXIS = "TRANSPOSE_AXIS";
+constexpr auto AT_BROADCAST_AXIS = "BROADCAST_AXIS";
 constexpr auto AT_COUNT_AXIS = "COUNT_AXIS";
 constexpr auto AT_POST_FUSION_REDUCE_TENSOR = "POST_FUSION_REDUCE_TENSOR";
 constexpr auto AT_CONV = "CONV";

@@ -643,12 +643,12 @@ void AnalyzeBandNode::Run() {
     AnalyzeOuterBandAccessInfo(bn);
     if (target_ == TARGET_CPU || target_ == TARGET_CUDA) {
       AnalyzeAxisPosition(bn);
+      bn->use_register_memory = scop_info_.user_config_.GetUseRegisterMemory();
     }
 
     if (target_ == TARGET_CUDA) {
       CheckVectorization(bn);
       bn->use_shared_memory = scop_info_.user_config_.GetUseSharedMemory();
-      bn->use_register_memory = scop_info_.user_config_.GetUseRegisterMemory();
     }
   }
   ShowBandInfo();

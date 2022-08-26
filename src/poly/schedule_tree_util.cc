@@ -224,22 +224,21 @@ std::vector<isl::schedule_node> BandsSplitAfterDepth(const std::vector<isl::sche
 }
 
 // Insert the relevant marker on the boosted band node.
-// aixs_pos: Indicates that the marker is inserted before the i-th axis, starting from 1.
-isl::schedule_node InsertMarkerForPromotedNode(const isl::schedule_node &orig_node, const std::string &filter_name,
-                                               const std::string &marker_name, const int aixs_pos) {
-  CHECK(std::abs(aixs_pos) > 0) << "The position of the inserted axis must be greater than 0.";
-  auto GetPromotedFilter = [filter_name, marker_name, aixs_pos](isl::schedule_node node) -> isl::schedule_node {
+isl::schedule_node InsertMarkerForPromotedNode(
+  const isl::schedule_node &orig_node, const std::unordered_map<std::string, PromoteMarkerInfo> &filter_marker_map) {
+  auto GetPromotedFilter = [filter_marker_map](isl::schedule_node node) -> isl::schedule_node {
     if (!node.isa<isl::schedule_node_filter>()) {
       return node;
     }
     isl::union_set uset = node.as<isl::schedule_node_filter>().get_filter();
-    bool is_gm_filter = false;
-    uset.foreach_set([&is_gm_filter, filter_name](isl::set s) {
-      if (s.get_tuple_name() == filter_name) {
-        is_gm_filter = true;
+    std::string filter_name = "";
+    uset.foreach_set([&filter_name, filter_marker_map](isl::set s) {
+      std::string set_name = s.get_tuple_name();
+      if (filter_marker_map.count(set_name) != 0) {
+        filter_name = set_name;
       }
     });
-    if (!is_gm_filter) {
+    if (filter_name.empty()) {
       return node;
     }
     auto child_node = node.child(0);
@@ -252,17 +251,36 @@ isl::schedule_node InsertMarkerForPromotedNode(const isl::schedule_node &orig_no
     if (n_member == 0) {
       return node;
     }
-    CHECK(std::abs(aixs_pos) <= n_member)
+
+    size_t start_depth = node.get_tree_depth();
+    PromoteMarkerInfo marker_info = filter_marker_map.at(filter_name);
+    int aixs_pos = marker_info.axis_pos;
+    auto marker_names = marker_info.markers;
+
+    // aixs_pos: Indicates that the marker is inserted before the i-th axis, starting from 1.
+    CHECK(std::abs(aixs_pos) <= n_member && aixs_pos != 0)
       << "The position of the inserted axis: " << std::abs(aixs_pos)
       << " cannot be greater than the total number of axes of the current band node: " << n_member << ".";
     int current_aixs_pos = aixs_pos - 1;
     if (aixs_pos < 0) {
       current_aixs_pos = n_member + aixs_pos;
     }
-    bool need_split = current_aixs_pos != 0;
-    node = need_split ? band_node.split(current_aixs_pos).child(0) : child_node;
-    node = node.insert_mark(marker_name).parent();
-    node = need_split ? node.parent() : node;
+    current_aixs_pos -= (static_cast<int>(marker_names.size()) - 1);
+
+    node = (current_aixs_pos > 0) ? band_node.split(current_aixs_pos).child(0) : child_node;
+    for (auto marker_name : marker_names) {
+      auto cur_node = node.as<isl::schedule_node_band>();
+      int band_number = cur_node.n_member();
+      if (band_number > 1) {
+        node = cur_node.split(band_number - 1).child(0);
+      }
+      node = node.insert_mark(marker_name).parent();
+
+      if (band_number == 1) {
+        break;
+      }
+    }
+    node = node.ancestor(node.get_tree_depth() - start_depth);
     return node;
   };
   return orig_node.map_descendant_bottom_up(GetPromotedFilter);

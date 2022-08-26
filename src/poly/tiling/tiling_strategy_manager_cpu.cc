@@ -119,32 +119,32 @@ void CpuStrategy::SetParallelTileValue(TileAxis *axis, const int64_t axis_size, 
   axis->TileRestrainToSingleValue(Expr(c0_tile_value), TileLevel::CACHE0);
 }
 
-void CpuStrategy::GenConv2dTileByAxis(const int index, int64_t &p, int64_t tile1, int64_t tile0) {
+void CpuStrategy::GenConv2dTileByAxis(int64_t &p, int64_t tile1, int64_t tile0) {
   TileAxis *axis = nullptr;
   int64_t shape;
-  std::tie(axis, shape) = pending_axes_[index][p];
+  std::tie(axis, shape) = pending_axes_[current_band_][p];
   CHECK(axis != nullptr);
   axis->TileRestrainToSingleValue(Expr((int64_t)tile1), TileLevel::CACHE1);
   axis->TileRestrainToSingleValue(Expr((int64_t)tile0), TileLevel::CACHE0);
   p += 1;
 }
 
-void CpuStrategy::SetConv2dTileValue(int index) {
+void CpuStrategy::SetConv2dTileValue() {
   // format of conv2d tile should be: batch, oc_out, oh, ow, oc_in, ic_out.
   // all of them can be 1, so we use axes_names to check the exist of each axis.
   auto axes_names = analyzer_->scop_info_.analysis_result_.GetCpuConvolutionAxes();
   int64_t p = 0;
   if (axes_names.find(CONV_BATCH) != std::string::npos) {  // batch
-    GenConv2dTileByAxis(index, p, 1, 1);
+    GenConv2dTileByAxis(p, 1, 1);
   }
   if (axes_names.find(CONV_OC_OUT) != std::string::npos) {  // oc_out
-    GenConv2dTileByAxis(index, p, 1, 1);
+    GenConv2dTileByAxis(p, 1, 1);
   }
   if (axes_names.find(CONV_OH) != std::string::npos) {  // oh
-    GenConv2dTileByAxis(index, p, 1, 1);
+    GenConv2dTileByAxis(p, 1, 1);
   }
   if (axes_names.find(CONV_OW) != std::string::npos) {  // ow
-    int64_t ow_shape = pending_axes_[index][p].second;
+    int64_t ow_shape = pending_axes_[current_band_][p].second;
     /* ow_inner should follow some strategy:
     1. ow_shape % ow_tile == 0
     2. ow_tile is smaller than simd length */
@@ -156,39 +156,39 @@ void CpuStrategy::SetConv2dTileValue(int index) {
         break;
       }
     }
-    GenConv2dTileByAxis(index, p, ow_tile, ow_tile);
+    GenConv2dTileByAxis(p, ow_tile, ow_tile);
   }
   if (axes_names.find(CONV_OC_IN) != std::string::npos) {  // oc_in
-    int64_t oc_in_shape = pending_axes_[index][p].second;
-    GenConv2dTileByAxis(index, p, oc_in_shape, oc_in_shape);
+    int64_t oc_in_shape = pending_axes_[current_band_][p].second;
+    GenConv2dTileByAxis(p, oc_in_shape, oc_in_shape);
   }
   if (axes_names.find(CONV_IC_OUT) != std::string::npos) {  // ic_out: reduction axis
-    int64_t ic_out_shape = pending_axes_[index][p].second;
-    GenConv2dTileByAxis(index, p, ic_out_shape, 1);
+    int64_t ic_out_shape = pending_axes_[current_band_][p].second;
+    GenConv2dTileByAxis(p, ic_out_shape, 1);
   }
   if (axes_names.find(CONV_IC_OUT) == std::string::npos &&
       axes_names.find(CONV_KH) != std::string::npos) {  // kh: reduction axis
-    GenConv2dTileByAxis(index, p, 1, 1);
+    GenConv2dTileByAxis(p, 1, 1);
   }
   if (axes_names.find(CONV_IC_OUT) == std::string::npos && axes_names.find(CONV_KH) == std::string::npos &&
       axes_names.find(CONV_KW) != std::string::npos) {  // kw: reduction axis
-    GenConv2dTileByAxis(index, p, 1, 1);
+    GenConv2dTileByAxis(p, 1, 1);
   }
   if (axes_names.find(CONV_IC_OUT) == std::string::npos && axes_names.find(CONV_KH) == std::string::npos &&
       axes_names.find(CONV_KW) == std::string::npos && axes_names.find(CONV_IC_IN) != std::string::npos) {
     // ic_in: reduction axis
-    int64_t ic_in_shape = pending_axes_[index][p].second;
-    GenConv2dTileByAxis(index, p, ic_in_shape, ic_in_shape);
+    int64_t ic_in_shape = pending_axes_[current_band_][p].second;
+    GenConv2dTileByAxis(p, ic_in_shape, ic_in_shape);
   }
 }
 
-void CpuStrategy::SetMatMulTileValue(int index) {
+void CpuStrategy::SetMatMulTileValue() {
   auto pack_size = analyzer_->scop_info_.analysis_result_.GetPackBlockSize();
-  for (int i = 0; i < static_cast<int>(pending_axes_[index].size()); ++i) {
+  for (int i = 0; i < static_cast<int>(pending_axes_[current_band_].size()); ++i) {
     TileAxis *axis;
     int64_t pack = 1;
     int64_t shape;
-    std::tie(axis, shape) = pending_axes_[index][i];
+    std::tie(axis, shape) = pending_axes_[current_band_][i];
     int64_t value = shape;
     for (const auto &attr : axis->attrs) {
       if (attr.attr_key != AT_GEMM) {
@@ -212,14 +212,14 @@ void CpuStrategy::SetMatMulTileValue(int index) {
   }
 }
 
-bool CpuStrategy::SetReduceYTileValue(int index) {
-  auto axes_num = pending_axes_[index].size();
+bool CpuStrategy::SetReduceYTileValue() {
+  auto axes_num = pending_axes_[current_band_].size();
   CHECK(axes_num >= REDUCE_Y_LEAST_AXES_NUM) << "axes_num is less than 2";
   bool is_tiled = false;
   TileAxis *axis1, *axis0;
   int64_t shape1, shape0;
-  std::tie(axis0, shape0) = pending_axes_[index][0];
-  std::tie(axis1, shape1) = pending_axes_[index][1];
+  std::tie(axis0, shape0) = pending_axes_[current_band_][0];
+  std::tie(axis1, shape1) = pending_axes_[current_band_][1];
   int64_t value1 = shape1;
   if (shape1 >= REDUCE_Y_LEAST_BLOCK_SIZE && shape0 <= REDUCE_Y_LEAST_X_SIZE) {
     int64_t value0 = shape0;
@@ -263,6 +263,94 @@ void CpuStrategy::SetCsrTileValue() {
   }
 }
 
+void CpuStrategy::SetElementWiseTileValue() {
+  size_t ori_size = pending_axes_[current_band_].size();
+  int64_t data_size = 1;
+  for (int i = static_cast<int>(ori_size - 1); i >= 0; i--) {
+    TileAxis *axis;
+    int64_t shape;
+    std::tie(axis, shape) = pending_axes_[current_band_][i];
+    data_size *= shape;
+    int64_t tile_outer_left = 1;
+
+    int vectorize_axis = analyzer_->scop_info_.analysis_result_.GetOuterBandNode(current_band_)->last_axis;
+    if (vectorize_axis == i) {
+      SetUnrollTileValue(axis, shape, tile_outer_left);
+    }
+
+    /* Set parallel tile size on the outermost axis */
+    if (i == 0) {
+      bool is_unroll_axis = vectorize_axis == 0 ? true : false;
+      SetParallelTileValue(axis, shape, data_size, is_unroll_axis, tile_outer_left);
+    }
+  }
+}
+
+void CpuStrategy::SetTransposeTileValue() {
+  std::unordered_set<std::string> write_tensor_name;
+  auto current_outer_bn = analyzer_->scop_info_.analysis_result_.GetOuterBandNode(current_band_);
+  isl::map_list access_list = current_outer_bn->writes.get_map_list();
+  for (auto access : access_list) {
+    auto access_id = access.domain_factor_domain().get_tuple_id(isl_dim_out);
+    write_tensor_name.insert(access_id.get_name());
+  }
+
+  int transpose_write_axis_pos = -1;
+  std::unordered_set<int> transpose_axis_pos;
+  size_t ori_size = pending_axes_[current_band_].size();
+  for (int i = static_cast<int>(ori_size - 1); i >= 0; i--) {
+    TileAxis *axis;
+    int64_t shape;
+    std::tie(axis, shape) = pending_axes_[current_band_][i];
+
+    bool is_inner_axis = false;
+    bool is_transpose_axis = false;
+    std::string tensor_name;
+    for (const auto &attr : axis->attrs) {
+      if (attr.attr_value == AT_TRANSPOSE_AXIS) {
+        is_transpose_axis = true;
+      }
+
+      if (attr.attr_key == AT_TRANSPOSE_INNERMOST_AXIS) {
+        is_inner_axis = true;
+        tensor_name = attr.attr_value;
+      }
+    }
+
+    if (is_transpose_axis && is_inner_axis) {
+      transpose_axis_pos.emplace(i);
+      if (write_tensor_name.count(tensor_name) != 0) {
+        transpose_write_axis_pos = i;
+      }
+    }
+  }
+
+  const size_t transpose_size = 2;
+  const int64_t transpose_row = 8;
+  const int64_t transpose_col = 4;
+  if (transpose_axis_pos.size() == transpose_size) {
+    current_outer_bn->enable_transpose = true;
+    for (int i = static_cast<int>(ori_size - 1); i >= 0; i--) {
+      TileAxis *axis;
+      int64_t shape;
+      std::tie(axis, shape) = pending_axes_[current_band_][i];
+      int64_t tile_val = 1;
+      if (transpose_axis_pos.count(i) != 0) {
+        if (transpose_write_axis_pos == i) {
+          tile_val = shape < transpose_row ? shape : transpose_row;
+        } else {
+          tile_val = shape < transpose_col ? shape : transpose_col;
+        }
+      }
+
+      axis->TileRestrainToSingleValue(Expr(tile_val), TileLevel::CACHE1);
+      axis->TileRestrainToSingleValue(Expr(tile_val), TileLevel::CACHE0);
+    }
+  } else {
+    SetElementWiseTileValue();
+  }
+}
+
 void CpuStrategy::SetMultiLevelTileValue() {
   if (analyzer_->scop_info_.analysis_result_.GetCsr()) {
     SetCsrTileValue();
@@ -272,40 +360,27 @@ void CpuStrategy::SetMultiLevelTileValue() {
     current_band_ = idx;
     auto op_type = analyzer_->scop_info_.analysis_result_.GetOuterBandNode(idx)->template_type;
     if (op_type == Template::CONV) {
-      SetConv2dTileValue(idx);
+      SetConv2dTileValue();
       continue;
     }
     if (op_type == Template::MATMUL) {
-      SetMatMulTileValue(idx);
+      SetMatMulTileValue();
       continue;
     }
     auto reduce_direction = analyzer_->scop_info_.analysis_result_.GetReduceDirection();
     if (op_type == Template::REDUCTION && reduce_direction == ReduceDirection::Y) {
-      bool is_tiled = SetReduceYTileValue(idx);
+      bool is_tiled = SetReduceYTileValue();
       if (is_tiled) {
         continue;
       }
     }
-    size_t ori_size = pending_axes_[idx].size();
-    int64_t data_size = 1;
-    for (int i = static_cast<int>(ori_size - 1); i >= 0; i--) {
-      TileAxis *axis;
-      int64_t shape;
-      std::tie(axis, shape) = pending_axes_[idx][i];
-      data_size *= shape;
-      int64_t tile_outer_left = 1;
 
-      int vectorize_axis = analyzer_->scop_info_.analysis_result_.GetOuterBandNode(idx)->last_axis;
-      if (vectorize_axis == i) {
-        SetUnrollTileValue(axis, shape, tile_outer_left);
-      }
-
-      /* Set parallel tile size on the outermost axis */
-      if (i == 0) {
-        bool is_unroll_axis = vectorize_axis == 0 ? true : false;
-        SetParallelTileValue(axis, shape, data_size, is_unroll_axis, tile_outer_left);
-      }
+    if (op_type == Template::TRANSPOSE_OP) {
+      SetTransposeTileValue();
+      continue;
     }
+
+    SetElementWiseTileValue();
   }
 }
 

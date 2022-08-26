@@ -130,6 +130,7 @@ class CpuCreateCluster : public CreateCluster {
   // Promoted tensors needed to create different types of operators.
   void CreateClusterListForGemm(const isl::schedule_node &orig_node, const std::unordered_set<std::string> &mark_names);
   void CreateClusterListForConv(const isl::schedule_node &node, const std::unordered_set<std::string> &mark_names);
+  void CreateClusterListForTranspose(const isl::schedule_node &node, const std::unordered_set<std::string> &mark_names);
 
  private:
   // Common functions required by shared, register in gpu and cpu.

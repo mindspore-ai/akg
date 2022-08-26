@@ -1658,7 +1658,9 @@ llvm::Value* CodeGenLLVM::EmitSgemmKernel(const Call* op) {
   return sgemm_ret;
 }
 
-llvm::Value* CodeGenLLVM::CreateMatrixTransposeBase(llvm::Value *buffer, size_t row, size_t col, size_t bits) {
+llvm::Value* CodeGenLLVM::CreateMatrixTransposeBase(llvm::Value* dst_buffer,
+                                                    llvm::Value* src_buffer, size_t row, size_t col,
+                                                    size_t bits) {
 #if TVM_LLVM_VERSION >= 110
   auto align = llvm::Align(row * col);
   std::vector<int> indices;
@@ -1666,18 +1668,23 @@ llvm::Value* CodeGenLLVM::CreateMatrixTransposeBase(llvm::Value *buffer, size_t 
   auto align = row * col;
   std::vector<unsigned> indices;
 #endif
-  llvm::Value* ptr = CreateBufferVecPtr(DataType(kDLUInt, bits, row * col), buffer, ConstInt32(0));
-  llvm::LoadInst* load = builder_->CreateAlignedLoad(ptr, align, true);
+  llvm::Value* src_ptr =
+      CreateBufferVecPtr(DataType(kDLUInt, bits, row * col), src_buffer, ConstInt32(0));
+  llvm::LoadInst* load = builder_->CreateAlignedLoad(src_ptr, align, true);
   for (unsigned i = 0; i < col; i++) {
     for (unsigned j = 0; j < row; j++) {
       indices.push_back(j * col + i);
     }
   }
+
   auto dst = builder_->CreateShuffleVector(load, indices);
-  return builder_->CreateAlignedStore(dst, ptr, align, true);
+  llvm::Value* dst_ptr =
+      CreateBufferVecPtr(DataType(kDLUInt, bits, row * col), dst_buffer, ConstInt32(0));
+  return builder_->CreateAlignedStore(dst, dst_ptr, align, true);
 }
 
-llvm::Value* CodeGenLLVM::CreateMatrixTranspose4x4(llvm::Value *buffer, size_t row, size_t col, size_t bits) {
+llvm::Value* CodeGenLLVM::CreateMatrixTranspose4x4(llvm::Value* dst_buffer, llvm::Value* src_buffer,
+                                                   size_t row, size_t col, size_t bits) {
 #if TVM_LLVM_VERSION >= 110
   auto align = llvm::Align(col);
   std::vector<int> low = {0, 4, 1, 5};
@@ -1693,10 +1700,10 @@ llvm::Value* CodeGenLLVM::CreateMatrixTranspose4x4(llvm::Value *buffer, size_t r
 #endif
   llvm::StoreInst* store;
 
-  llvm::Value* ptr0 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), buffer, ConstInt32(0));
-  llvm::Value* ptr1 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), buffer, ConstInt32(1));
-  llvm::Value* ptr2 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), buffer, ConstInt32(2));
-  llvm::Value* ptr3 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), buffer, ConstInt32(3));
+  llvm::Value* ptr0 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), src_buffer, ConstInt32(0));
+  llvm::Value* ptr1 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), src_buffer, ConstInt32(1));
+  llvm::Value* ptr2 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), src_buffer, ConstInt32(2));
+  llvm::Value* ptr3 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), src_buffer, ConstInt32(3));
 
   llvm::LoadInst* xmm0 = builder_->CreateAlignedLoad(ptr0, align, true);
   llvm::LoadInst* xmm1 = builder_->CreateAlignedLoad(ptr1, align, true);
@@ -1712,6 +1719,11 @@ llvm::Value* CodeGenLLVM::CreateMatrixTranspose4x4(llvm::Value *buffer, size_t r
   tmp2 = builder_->CreateBitCast(tmp2, LLVMType(DataType(kDLUInt, bits * 2, col / 2)));
   tmp3 = builder_->CreateBitCast(tmp3, LLVMType(DataType(kDLUInt, bits * 2, col / 2)));
 
+  ptr0 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), dst_buffer, ConstInt32(0));
+  ptr1 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), dst_buffer, ConstInt32(1));
+  ptr2 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), dst_buffer, ConstInt32(2));
+  ptr3 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), dst_buffer, ConstInt32(3));
+
   auto row0 = builder_->CreateShuffleVector(tmp0, tmp2, low_h);
   store = builder_->CreateAlignedStore(row0, ptr0, llvm::Align(row), true);
   auto row1 = builder_->CreateShuffleVector(tmp0, tmp2, high_h);
@@ -1723,7 +1735,8 @@ llvm::Value* CodeGenLLVM::CreateMatrixTranspose4x4(llvm::Value *buffer, size_t r
   return store;
 }
 
-llvm::Value* CodeGenLLVM::CreateMatrixTranspose8x4(llvm::Value *buffer, size_t row, size_t col, size_t bits) {
+llvm::Value* CodeGenLLVM::CreateMatrixTranspose8x4(llvm::Value* dst_buffer, llvm::Value* src_buffer,
+                                                   size_t row, size_t col, size_t bits) {
 #if TVM_LLVM_VERSION >= 110
   auto align = llvm::Align(col);
   std::vector<int> concat = {0, 1, 2, 3, 4, 5, 6, 7};
@@ -1741,14 +1754,14 @@ llvm::Value* CodeGenLLVM::CreateMatrixTranspose8x4(llvm::Value *buffer, size_t r
 #endif
   llvm::StoreInst* store;
 
-  llvm::Value* ptr0 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), buffer, ConstInt32(0));
-  llvm::Value* ptr1 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), buffer, ConstInt32(1));
-  llvm::Value* ptr2 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), buffer, ConstInt32(2));
-  llvm::Value* ptr3 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), buffer, ConstInt32(3));
-  llvm::Value* ptr4 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), buffer, ConstInt32(4));
-  llvm::Value* ptr5 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), buffer, ConstInt32(5));
-  llvm::Value* ptr6 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), buffer, ConstInt32(6));
-  llvm::Value* ptr7 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), buffer, ConstInt32(7));
+  llvm::Value* ptr0 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), src_buffer, ConstInt32(0));
+  llvm::Value* ptr1 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), src_buffer, ConstInt32(1));
+  llvm::Value* ptr2 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), src_buffer, ConstInt32(2));
+  llvm::Value* ptr3 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), src_buffer, ConstInt32(3));
+  llvm::Value* ptr4 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), src_buffer, ConstInt32(4));
+  llvm::Value* ptr5 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), src_buffer, ConstInt32(5));
+  llvm::Value* ptr6 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), src_buffer, ConstInt32(6));
+  llvm::Value* ptr7 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), src_buffer, ConstInt32(7));
 
   llvm::LoadInst* xmm0 = builder_->CreateAlignedLoad(ptr0, align, true);
   llvm::LoadInst* xmm4 = builder_->CreateAlignedLoad(ptr4, align, true);
@@ -1773,10 +1786,10 @@ llvm::Value* CodeGenLLVM::CreateMatrixTranspose8x4(llvm::Value *buffer, size_t r
   tmp2 = builder_->CreateBitCast(tmp2, LLVMType(DataType(kDLUInt, bits * 2, row / 2)));
   tmp3 = builder_->CreateBitCast(tmp3, LLVMType(DataType(kDLUInt, bits * 2, row / 2)));
 
-  ptr0 = CreateBufferVecPtr(DataType(kDLUInt, bits, row), buffer, ConstInt32(0));
-  ptr1 = CreateBufferVecPtr(DataType(kDLUInt, bits, row), buffer, ConstInt32(1));
-  ptr2 = CreateBufferVecPtr(DataType(kDLUInt, bits, row), buffer, ConstInt32(2));
-  ptr3 = CreateBufferVecPtr(DataType(kDLUInt, bits, row), buffer, ConstInt32(3));
+  ptr0 = CreateBufferVecPtr(DataType(kDLUInt, bits, row), dst_buffer, ConstInt32(0));
+  ptr1 = CreateBufferVecPtr(DataType(kDLUInt, bits, row), dst_buffer, ConstInt32(1));
+  ptr2 = CreateBufferVecPtr(DataType(kDLUInt, bits, row), dst_buffer, ConstInt32(2));
+  ptr3 = CreateBufferVecPtr(DataType(kDLUInt, bits, row), dst_buffer, ConstInt32(3));
 
   auto row0 = builder_->CreateShuffleVector(tmp0, tmp2, low_h);
   store = builder_->CreateAlignedStore(row0, ptr0, llvm::Align(row), true);
@@ -1790,22 +1803,26 @@ llvm::Value* CodeGenLLVM::CreateMatrixTranspose8x4(llvm::Value *buffer, size_t r
 }
 
 llvm::Value* CodeGenLLVM::CreateMatrixTranspose(const Call* op) {
-  llvm::Value *buffer = MakeValue(op->args[0]);
-  if (op->args[1].as<IntImm>() == nullptr || op->args[2].as<IntImm>() == nullptr) {
+  const int row_pos = 2;
+  const int col_pos = 3;
+  const int bit_pos = 4;
+  llvm::Value* dst_buffer = MakeValue(op->args[0]);
+  llvm::Value* src_buffer = MakeValue(op->args[1]);
+  if (op->args[row_pos].as<IntImm>() == nullptr || op->args[col_pos].as<IntImm>() == nullptr) {
     LOG(FATAL) << "Fail to call MatrixTranspose function, The row or col must be IntImm!";
   }
-  unsigned row = op->args[1].as<IntImm>()->value;
-  unsigned col = op->args[2].as<IntImm>()->value;
+  unsigned row = op->args[row_pos].as<IntImm>()->value;
+  unsigned col = op->args[col_pos].as<IntImm>()->value;
   unsigned bits = 32;
-  if (op->args.size() > 3) {
-    bits = op->args[3].as<IntImm>()->value;
+  if (op->args.size() > bit_pos) {
+    bits = op->args[bit_pos].as<IntImm>()->value;
   }
   if (row == 4 && col == 4) {
-    return CreateMatrixTranspose4x4(buffer, row, col, bits);
+    return CreateMatrixTranspose4x4(dst_buffer, src_buffer, row, col, bits);
   } else if (row == 8 && col == 4) {
-    return CreateMatrixTranspose8x4(buffer, row, col, bits);
+    return CreateMatrixTranspose8x4(dst_buffer, src_buffer, row, col, bits);
   }
-  return CreateMatrixTransposeBase(buffer, row, col, bits);
+  return CreateMatrixTransposeBase(dst_buffer, src_buffer, row, col, bits);
 }
 
 }  // namespace codegen

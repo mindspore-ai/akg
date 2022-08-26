@@ -547,12 +547,14 @@ class CPULocalReconstruction : public IRMutator {
     Array<Expr> indices;
     Array<Expr> args;
     args.push_back(make_zero(Int(INT32)));
+    args.push_back(make_zero(Int(INT32)));
     for (size_t i = 0; i < tensor.ndim(); i++) {
       indices.push_back(make_zero(Int(INT32)));
       args.push_back(tensor->shape[i]);
     }
     Expr addr = Call::make(Handle(), air::ir::intrinsic::tvm_address_of, {tensor(indices)}, Call::PureIntrinsic);
     args.Set(0, addr);
+    args.Set(1, addr);
     Expr matrix_trans = Call::make(Handle(), MATRIX_TRANSPOSE, args, Call::Intrinsic);
     auto block = Block::make({read, Evaluate::make(matrix_trans), write});
     for (auto j : tensor->shape) {

@@ -136,6 +136,7 @@ void RegisterMemoryManager::CreateClusterForOperator(const isl::schedule_node &n
 
 isl::schedule_node RegisterMemoryManager::InsertMarkerForEmit(const isl::schedule_node &orig_node) {
   auto node = orig_node;
+  std::unordered_map<std::string, PromoteMarkerInfo> filter_marker_map;
   if (scop_info_.user_config_.GetEnableMatmul()) {
     if (scop_info_.user_config_.GetEnableTensorCoreUsePoly()) {
       node = TileTensorAccordingInterfaceValue(orig_node);
@@ -144,10 +145,16 @@ isl::schedule_node RegisterMemoryManager::InsertMarkerForEmit(const isl::schedul
     if (write_name_ == SHARED_WRITE_ID_NAME) {
       marker_name = PROMOTE_REGISTER_TO_SHARED;
     }
-    node = InsertMarkerForPromotedNode(node, write_name_, marker_name);
+    PromoteMarkerInfo write_info;
+    write_info.markers = {marker_name};
+    filter_marker_map[write_name_] = write_info;
+    node = InsertMarkerForPromotedNode(node, filter_marker_map);
   } else if (current_outer_bn_->enable_vectorization) {
-    node = InsertMarkerForPromotedNode(node, GML_READ_ID_NAME, FOR_VECTORIZED);
-    node = InsertMarkerForPromotedNode(node, GML_WRITE_ID_NAME, FOR_VECTORIZED);
+    PromoteMarkerInfo read_write_info;
+    read_write_info.markers = {FOR_VECTORIZED};
+    filter_marker_map[GML_WRITE_ID_NAME] = read_write_info;
+    filter_marker_map[GML_READ_ID_NAME] = read_write_info;
+    node = InsertMarkerForPromotedNode(node, filter_marker_map);
   }
   return node;
 }

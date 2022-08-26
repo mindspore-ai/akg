@@ -98,6 +98,7 @@ void SpaceAnalyzer::MarkCaredType(ProvideEntry pe) {
       }
       MarkInnerMostAxis({target}, AT_BROADCAST_INNERMOST_AXIS);
     } else if (ct == AT_TRANSPOSE) {
+      MarkTransposeAxes(pe);
       std::vector<TensorEntry> tensors = {pe.dst};
       for (auto src : pe.src) {
         tensors.emplace_back(src);
@@ -292,7 +293,42 @@ void SpaceAnalyzer::MarkBroadcastAxes(const ProvideEntry &pe) {
   }
 
   for (auto axis : broadcasted) {
-    axis->MarkWithAttr(AttrInfo{AT_OP_TYPE, AT_BROADCAST});
+    axis->MarkWithAttr(AttrInfo{AT_AXIS_TYPE, AT_BROADCAST_AXIS});
+  }
+}
+
+void SpaceAnalyzer::MarkTransposeAxes(const ProvideEntry &pe) {
+  std::unordered_set<const For *> dst_transpose;
+  for (auto dst_it : pe.dst.loops) {
+    for (auto l : dst_it.second) {
+      dst_transpose.insert(l);
+    }
+  }
+
+  std::unordered_set<const For *> src_transpose;
+  for (auto src : pe.src) {
+    if (src.loops.size() == 0 || src.loops.size() != pe.dst.loops.size()) {
+      continue;
+    }
+    for (auto src_it : src.loops) {
+      for (auto l : src_it.second) {
+        src_transpose.insert(l);
+      }
+    }
+  }
+
+  if (dst_transpose.size() != src_transpose.size()) {
+    return;
+  }
+
+  for (auto dst_it = dst_transpose.begin(), src_it = src_transpose.begin(); dst_it != dst_transpose.end();
+       dst_it++, src_it++) {
+    auto dst_for = *dst_it;
+    auto src_for = *src_it;
+    if (dst_for->loop_var->name_hint != src_for->loop_var->name_hint) {
+      auto axis = analyzer_->Axis(dst_for);
+      axis->MarkWithAttr(AttrInfo{AT_AXIS_TYPE, AT_TRANSPOSE_AXIS});
+    }
   }
 }
 
