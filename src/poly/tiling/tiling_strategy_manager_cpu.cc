@@ -204,6 +204,7 @@ void CpuStrategy::SetMatMulTileValue() {
       } else if (attr.attr_value == kDsani) {
         pack = pack_size.pack_b_size;
       }
+      CHECK(pack != 0);
       value = value / pack * pack;
       axis->TileRestrainToSingleValue(Expr(value), TileLevel::CACHE0);
       auto current_outer_node = analyzer_->scop_info_.analysis_result_.GetOuterBandNode(current_band_);
@@ -335,6 +336,14 @@ void CpuStrategy::SetTransposeTileValue() {
       int64_t shape;
       std::tie(axis, shape) = pending_axes_[current_band_][i];
       int64_t tile_val = 1;
+      if (analyzer_->IsPrime(shape)) {
+        tile_val = shape < thread_num_ ? shape : thread_num_;
+      } else {
+        tile_val = analyzer_->GetLargestDivisor(shape - 1, shape);
+      }
+      axis->TileRestrainToSingleValue(Expr(tile_val), TileLevel::CACHE1);
+
+      tile_val = 1;
       if (transpose_axis_pos.count(i) != 0) {
         if (transpose_write_axis_pos == i) {
           tile_val = shape < transpose_row ? shape : transpose_row;
@@ -342,11 +351,10 @@ void CpuStrategy::SetTransposeTileValue() {
           tile_val = shape < transpose_col ? shape : transpose_col;
         }
       }
-
-      axis->TileRestrainToSingleValue(Expr(tile_val), TileLevel::CACHE1);
       axis->TileRestrainToSingleValue(Expr(tile_val), TileLevel::CACHE0);
     }
   } else {
+    current_outer_bn->enable_transpose = false;
     SetElementWiseTileValue();
   }
 }
@@ -375,7 +383,8 @@ void CpuStrategy::SetMultiLevelTileValue() {
       }
     }
 
-    if (op_type == Template::TRANSPOSE_OP) {
+    auto enable_transpose = analyzer_->scop_info_.user_config_.GetEnableTranspose();
+    if (op_type == Template::TRANSPOSE_OP && enable_transpose) {
       SetTransposeTileValue();
       continue;
     }

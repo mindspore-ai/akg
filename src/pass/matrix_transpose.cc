@@ -26,6 +26,7 @@ static constexpr auto PROMOTE_TRANSPOSE = "promoted_transpose";
 static constexpr auto MATRIX_TRANSPOSE = "MatrixTranspose";
 static constexpr auto INT32 = 32;
 static constexpr auto PARAMETER_NUM = 4;
+static constexpr size_t LOOP_NUM = 2;
 
 class MatrixTransposeMutator : public IRMutator {
  public:
@@ -33,7 +34,7 @@ class MatrixTransposeMutator : public IRMutator {
 
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
     if (op->attr_key == PROMOTE_TRANSPOSE) {
-      return CallTransposeInterface(op, s);
+      return CallTransposeInterface(op);
     }
     return IRMutator::Mutate_(op, s);
   }
@@ -50,19 +51,20 @@ class MatrixTransposeMutator : public IRMutator {
   }
 
  private:
-  Stmt CallTransposeInterface(const AttrStmt *op, const Stmt &s) {
+  Stmt CallTransposeInterface(const AttrStmt *op) {
     extents_.clear();
     auto stmt = IRMutator::Mutate(op->body);
-    for (auto extent : extents_) {
-      auto extent_value = extent.as<IntImm>()->value;
-      if (extent_value & (extent_value - 1)) {
-        return s;
-      }
+    if (extents_.size() != LOOP_NUM) {
+      return stmt;
     }
-
     Array<Expr> shapes;
-    std::reverse(extents_.begin(), extents_.end());
-    shapes.assign(extents_.begin(), extents_.end());
+    for (auto it = extents_.rbegin(); it != extents_.rend(); ++it) {
+      auto extent_value = it->as<IntImm>()->value;
+      if (extent_value & (extent_value - 1)) {
+        return stmt;
+      }
+      shapes.push_back(*it);
+    }
     extents_.clear();
 
     auto provide = provide_.as<Provide>();

@@ -1425,10 +1425,11 @@ isl::schedule_node TileOuterBand::TileVectorizationForGemm(const isl::schedule_n
     node = band_node.split(k_pos->second).child(0);
   }
   node = node.insert_mark(PROMOTE_GLOBAL_TO_REGISTER_C).child(0);
+  node = node.child(0);
 
   // m axis(4): unroll
   if (m_pos != mnk_pos.end()) {
-    node = node.child(0).as<isl::schedule_node_band>().split(m_pos->second + 1);
+    node = node.as<isl::schedule_node_band>().split(m_pos->second + 1);
     node = InsertMultiMarker(node, FOR_UNROLLED).child(0);
   }
 

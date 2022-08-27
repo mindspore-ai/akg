@@ -383,65 +383,75 @@ class OperatorInfoCollector {
     reduce_tensor_info.init_value = init_value;
   }
 
+  class CollectInfoOfBody : public IRVisitor {
+   public:
+    CollectInfoOfBody() {}
+    using IRVisitor::Visit_;
+
+    void Visit_(const Call *op) final {
+      IRVisitor::Visit_(op);
+      args_.insert(std::make_pair(op->name, op->args));
+    }
+
+    std::unordered_map<std::string, Array<Expr>> GetArgs() { return args_; }
+
+   private:
+    std::unordered_map<std::string, Array<Expr>> args_;
+  };
+
   bool SetMatmulRowColInfo(const Provide *op) {
     auto axis = scop_info_.analysis_result_.GetNotReduceAxisForMatmul();
     auto reduce_axis = scop_info_.analysis_result_.GetReduceAxisForMatmul();
     auto batch_num_axis = scop_info_.analysis_result_.GetBatchAxisNumForMatmul();
     auto nonzero_batch_axis_num = batch_num_axis - const_batch_axis_num_;
     const unsigned int not_reduce_axis_num = 2;
-    if (axis.size() < not_reduce_axis_num || reduce_axis.size() < 1 || axis.size() <= nonzero_batch_axis_num) {
+    if (reduce_axis.size() < 1 || axis.size() <= nonzero_batch_axis_num) {
       return false;
     }
 
-    const Variable *axis_var[not_reduce_axis_num];
-    const Variable *reduce_axis_var;
-    axis_var[0] = axis[nonzero_batch_axis_num];
-    axis_var[1] = axis.back();
-    reduce_axis_var = reduce_axis.back();
-
-    class CollectInfoOfBody : public IRVisitor {
-     public:
-      CollectInfoOfBody() {}
-      using IRVisitor::Visit_;
-
-      void Visit_(const Call *op) final {
-        IRVisitor::Visit_(op);
-        args_.insert(std::make_pair(op->name, op->args));
-      }
-
-      std::unordered_map<std::string, Array<Expr>> GetArgs() { return args_; }
-
-     private:
-      std::unordered_map<std::string, Array<Expr>> args_;
-    } collect_info_of_body;
+    if (scop_info_.user_config_.GetTarget() == TARGET_GPU && axis.size() < not_reduce_axis_num) {
+      return false;
+    }
 
     auto right = op->value;
     auto add_op = right.as<Add>();
     CHECK(add_op);
 
+    CollectInfoOfBody collect_info_of_body;
     collect_info_of_body.Visit(add_op->b);
-
+    const Variable *reduce_axis_var = reduce_axis.back();
     for (auto iter : collect_info_of_body.GetArgs()) {
       auto name = iter.first;
       auto args = iter.second;
-      if (args.size() < 2) continue;
+
+      auto matmul_map = scop_info_.analysis_result_.GetMatrixMatmulMap();
+      auto matmul_name = matmul_map.find(name);
+
+      const size_t mn_k_num = 2;
+      if (matmul_name == matmul_map.end() || args.size() < mn_k_num) {
+        continue;
+      }
 
       const Variable *var0 = args[batch_num_axis].as<Variable>();
       const Variable *var1 = args[args.size() - 1].as<Variable>();
-      if (var0 == nullptr || var1 == nullptr) continue;
+      if (scop_info_.user_config_.GetTarget() == TARGET_GPU && (var0 == nullptr || var1 == nullptr)) {
+        continue;
+      }
 
       std::string major;
-      if ((var0 == reduce_axis_var) && (var1 == axis_var[0])) {
-        major = COL_MAJOR;
-      } else if ((var0 == reduce_axis_var) && (var1 == axis_var[1])) {
-        major = ROW_MAJOR;
-      } else if ((var0 == axis_var[0]) && (var1 == reduce_axis_var)) {
-        major = ROW_MAJOR;
-      } else if ((var0 == axis_var[1]) && (var1 == reduce_axis_var)) {
-        major = COL_MAJOR;
+      bool is_matrix_a = matmul_name->second == MATRIX_A;
+      if (is_matrix_a || matmul_name->second == MATRIX_B) {
+        if (var0 == reduce_axis_var) {
+          major = is_matrix_a ? COL_MAJOR : ROW_MAJOR;
+        } else if (var1 == reduce_axis_var) {
+          major = is_matrix_a ? ROW_MAJOR : COL_MAJOR;
+        } else {
+          return false;
+        }
       } else {
         return false;
       }
+
       scop_info_.analysis_result_.RecordMatrixMatmulMajor(name, major);
     }
     scop_info_.analysis_result_.RecordMatrixMatmulMajor(op->func->func_name(), ROW_MAJOR);
@@ -623,6 +633,7 @@ class OperatorInfoCollector {
 
  private:
   ScopInfo &scop_info_;
+  // The batch axis is the number of one.
   unsigned int const_batch_axis_num_;
 };
 
@@ -632,23 +643,24 @@ void AnalyzeBandNode::Run() {
   }
   AnalyzeScheduleTreeTemplate();
   // Collect information about MatMul and Conv operators
-  if (target_ == TARGET_CUDA || target_ == TARGET_CPU) {
-    OperatorInfoCollector op_info_coll(scop_info_);
-    op_info_coll.Run();
-  }
+  OperatorInfoCollector op_info_coll(scop_info_);
+  op_info_coll.Run();
+
   CollectStmtInfo();
   auto &bands = scop_info_.analysis_result_.GetAllOuterBandNode();
   for (auto &bn : bands) {
     AnalyzeOuterBandTemplate(bn);
     AnalyzeOuterBandAccessInfo(bn);
-    if (target_ == TARGET_CPU || target_ == TARGET_CUDA) {
-      AnalyzeAxisPosition(bn);
-      bn->use_register_memory = scop_info_.user_config_.GetUseRegisterMemory();
-    }
+    AnalyzeAxisPosition(bn);
+    bn->use_register_memory = scop_info_.user_config_.GetUseRegisterMemory();
 
     if (target_ == TARGET_CUDA) {
       CheckVectorization(bn);
       bn->use_shared_memory = scop_info_.user_config_.GetUseSharedMemory();
+    } else if (target_ == TARGET_CPU) {
+      if (bn->template_type == Template::TRANSPOSE_OP) {
+        bn->enable_transpose = scop_info_.user_config_.GetEnableTranspose();
+      }
     }
   }
   ShowBandInfo();
@@ -736,8 +748,8 @@ void AnalyzeBandNode::CheckVectorizationFromTensorSize(std::unique_ptr<OuterBand
       continue;
     }
 
-    // Determine whether the axis filled by the pad operator is the last axis. If it is the last axis, it indicates that
-    // the length of the vectorized axis is not uniform and cannot be vectorized.
+    // Determine whether the axis filled by the pad operator is the last axis. If it is the last axis, it indicates
+    // that the length of the vectorized axis is not uniform and cannot be vectorized.
     if ((bn->template_type == Template::PAD_OP || is_unpad_op_) && tensor_value != first_value) {
       return;
     }

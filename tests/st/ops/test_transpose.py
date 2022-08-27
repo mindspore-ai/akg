@@ -123,6 +123,7 @@ class TestCase(TestBase):
             ("000_case", transpose_run, ((8, 24, 38, 38), (0, 2, 1, 3), 'float32'), ["level0"]),
             ("001_case", transpose_run, ((8, 24, 38, 38), (0, 2, 1, 3), 'float16'), ["level0"]),
             ("002_case", transpose_run, ((8, 24, 32, 16), (0, 1, 3, 2), 'float32'), ["level0"]),
+            ("003_case", transpose_run, ((1, 1, 32, 16), (0, 1, 3, 2), 'float32'), ["level0"])
         ]
 
         return True
