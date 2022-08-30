@@ -213,20 +213,13 @@ TilingGenerator::ParamReplacement TilingGenerator::CreateVarTileReplaceMap() {
   ParamReplacement param_replacement;
   std::vector<int64_t> var_tile_replace;
   int64_t base_num = 37;
-  auto IsPrime = [&base_num]() -> bool {
-    for (auto i = 2; i < static_cast<int>(sqrt(base_num)); ++i) {
-      if (base_num % i == 0) return false;
-    }
-    return true;
-  };
-
   auto Finish = [&param_replacement]() -> bool {
     return (param_replacement.mod_tile.size() == GEN_PRIME_NUM) &&
            (param_replacement.mod_tile.size() == param_replacement.l0_tile.size());
   };
   while (!Finish()) {
     if (!IsConflictPrime(base_num, param_replacement)) {
-      if (IsPrime()) {
+      if (analyzer_.IsPrime(base_num)) {
         if (param_replacement.mod_tile.empty() ||
             param_replacement.mod_tile.size() <= param_replacement.l0_tile.size()) {
           param_replacement.mod_tile.insert(param_replacement.mod_tile.begin(), base_num);

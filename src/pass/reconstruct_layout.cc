@@ -48,6 +48,7 @@ static constexpr auto TRANS_A = "row_major_matrix_a";
 static constexpr auto TRANS_B = "col_major_matrix_b";
 static constexpr auto PACK_A_SIZE = 4;
 static constexpr auto PACK_B_SIZE = 24;
+static constexpr size_t LOOP_NUM = 2;
 static constexpr auto NUM_2 = 2;
 static constexpr auto NUM_3 = 3;
 static constexpr auto NUM_4 = 4;
@@ -534,6 +535,10 @@ class CPULocalReconstruction : public IRMutator {
   Stmt PromoteForTranspose(const AttrStmt *op) {
     extents_.clear();
     auto stmt = IRMutator::Mutate(op->body);
+    if (extents_.size() != LOOP_NUM) {
+      return stmt;
+    }
+
     Array<Expr> shapes;
     shapes.assign(extents_.begin(), extents_.end());
     extents_.clear();

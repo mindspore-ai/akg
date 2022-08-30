@@ -332,6 +332,7 @@ class UserConfig {
       ParseStringAttr(attrs, "feature", &feature_);
       ParseBoolAttr(attrs, "pragma_enable_conv2d_direct", &enable_conv2d_direct_);
       ParseStringAttr(attrs, "gemm_kernel_mnk", &gemm_kernel_mnk_);
+      ParseBoolAttr(attrs, "pragma_enable_transpose", &enable_transpose_);
     }
 
     if (force_remove_self_dependence_) {
@@ -580,6 +581,9 @@ class UserConfig {
   bool GetEnableVectorization() { return enable_vectorization_; }
   void SetEnableVectorization(bool enable_vectorization) { enable_vectorization_ = enable_vectorization; }
 
+  bool GetEnableTranspose() { return enable_transpose_; }
+  void SetEnableTranspose(bool enable_transpose) { enable_transpose_ = enable_transpose; }
+
   bool GetUseRegisterMemory() const { return use_register_memory_; }
   bool GetUseSharedMemory() const { return use_shared_memory_; }
   void SetUseSharedMemory(bool use_shared_memory) { use_shared_memory_ = use_shared_memory; }
@@ -739,6 +743,8 @@ class UserConfig {
   int vector_length_{0};
   bool enable_one_dim_thread_{false};
   bool enable_vectorization_{true};
+
+  bool enable_transpose_{true};
 
   // tiling config
   std::string b_dim_;
@@ -1009,11 +1015,11 @@ class AnalysisResult {
     isl::union_map reads;
     isl::union_map writes;
     std::unordered_map<std::string, int> mnk_pos;
-    bool enable_transpose{false};
     // user config
     bool use_shared_memory{true};
     bool use_register_memory{true};
     bool enable_vectorization{false};
+    bool enable_transpose{false};
   };
 
   void RecordWrites(const isl::union_map &writes) { writes_ = writes; }

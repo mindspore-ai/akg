@@ -330,6 +330,7 @@ class TilingAnalyzer {
   void DumpBufferInfo();
   void DumpBufferUsageTimeable();
   static int64_t GetLargestDivisor(int64_t limit, int64_t range);
+  static bool IsPrime(int64_t base_num);
   TileLogger &GetTileLogger() const {
     CHECK(logger_);
     return *(logger_.get());

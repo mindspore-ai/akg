@@ -1723,6 +1723,19 @@ int64_t TilingAnalyzer::GetLargestDivisor(int64_t limit, int64_t range) {
   return 1;
 }
 
+bool TilingAnalyzer::IsPrime(int64_t base_num) {
+  const auto smallest_prime = 2;
+  if (base_num < smallest_prime) {
+    return false;
+  }
+  for (auto i = smallest_prime; i <= static_cast<int>(sqrt(base_num)); ++i) {
+    if (base_num % i == 0) {
+      return false;
+    }
+  }
+  return true;
+};
+
 std::vector<int> TilingAnalyzer::GetSortedBands() const {
   std::vector<int> sorted_bands;
   std::unordered_map<Template, std::vector<int>> templates_map;
