@@ -225,114 +225,11 @@ class UserConfig {
 
   void SetAttrs(const Map<std::string, NodeRef> &attrs) {
     if (attrs.empty()) return;
-    ParseBoolAttr(attrs, "enable_restart", &enable_restart_);
-
-    ParseDynamicShapeAttr(attrs, "dynamic_shape", &dynamic_shape_);
-    ParseIntAttr(attrs, "dynamic_shape_bound", &dynamic_shape_bound_);
-    ParseBoolAttr(attrs, "pragma_tilesize_is_var", &tile_size_is_var_);
-    ParseBoolAttr(attrs, "pragma_outerband_need_split", &outer_band_need_split_);
-
-    // Mind-trick pass
-    ParseIntAttr(attrs, "constrain_schedule_verbosity", &constrain_schedule_verbosity_);
-    ParseIntAttr(attrs, "enable_multicore", &enable_multicore_);
-    ParseBoolAttr(attrs, "enable_mind_trick", &enable_mind_trick_);
-    ParseBoolAttr(attrs, "enable_mind_trick_autogen", &enable_mind_trick_autogen_);
-    ParseStringAttr(attrs, "mind_trick", &mind_trick_json_);
-    ParseBoolAttr(attrs, "mind_trick_autogen_gpu_automap", &mind_trick_gpu_autogen_automap_);
-
-    // PolyTOPS
-    ParseStringAttr(attrs, "enable_polytops", &enable_polytops_);
-    ParseStringAttr(attrs, "polytops_solver", &polytops_solver_);
-    ParseBoolAttr(attrs, "polytops_check_schedules", &polytops_check_schedules_);
-    ParseBoolAttr(attrs, "polytops_code_sinking", &polytops_code_sinking_);
-    ParseBoolAttr(attrs, "polytops_constant_to_parameter", &polytops_constant_to_parameter_);
-    ParseBoolAttr(attrs, "polytops_parameter_shifting", &polytops_parameter_shifting_);
-    ParseBoolAttr(attrs, "polytops_post_processing_full_sets", &polytops_post_processing_full_sets_);
-    ParseBoolAttr(attrs, "polytops_post_processing_extra_outer_parallel_loop",
-                  &polytops_post_processing_extra_outer_parallel_loop_);
-
-    ParseCustomTilingAttr(attrs, "custom_tiling", &custom_tiling_);
-    ParseBoolAttr(attrs, "pragma_analyze_reuse_buffer", &pragma_analyze_reuse_buffer_);
-    ParseBoolAttr(attrs, "pragma_speedup_tiling", &pragma_speedup_tiling_);
-    ParseBoolAttr(attrs, "pragma_allow_tail_tiling", &pragma_allow_tail_tiling_);
-    ParseBoolAttr(attrs, "pragma_analyze_multicore", &pragma_analyze_multicore_);
-    ParseIntAttr(attrs, "prune_tuning_space_level", &prune_tuning_space_level_);
-    ParseBoolAttr(attrs, "pragma_checkcoincident", &tile_check_coincident_);
-    ParseIntAttr(attrs, "max_unroll_loop", &max_unroll_loop_);
-    ParseBoolAttr(attrs, "unroll_shared", &unroll_shared_);
-
-    ParseBoolAttr(attrs, "pragma_rmselfdep", &remove_self_dependence_);
-    ParseBoolAttr(attrs, "pragma_force_rmselfdep", &force_remove_self_dependence_);
-    ParseBoolAttr(attrs, "pragma_disable_whole_component", &disable_whole_component_);
-    ParseBoolAttr(attrs, "pragma_disable_schedule_shift", &disable_schedule_shift_);
-    ParseBoolAttr(attrs, "pragma_enable_schedule_max_constant", &enable_schedule_max_constant_);
-    ParseBoolAttr(attrs, "pragma_enable_schedule_outer_coincidence", &enable_schedule_outer_coincidence_);
-    ParseBoolAttr(attrs, "pragma_enable_schedule_maximize_coincidence", &enable_schedule_maximize_coincidence_);
-    ParseBoolAttr(attrs, "pragma_disable_loop_reversal", &disable_loop_reversal_);
-    ParseBoolAttr(attrs, "pragma_disable_loop_fusion", &disable_loop_fusion_);
-    ParseBoolAttr(attrs, "pragma_reorder_schedule", &reorder_schedule_);
-    ParseBoolAttr(attrs, "pragma_sink_last_axis", &sink_last_axis_);
-    ParseBoolAttr(attrs, "pragma_keep_outer_band_order", &keep_outer_band_order_);
-    ParseBoolAttr(attrs, "pragma_modshift", &mod_schedule_shift_);
-    ParseBoolAttr(attrs, "pragma_disable_group", &disable_group_);
-    ParseBoolAttr(attrs, "pragma_set_all_coincident", &pragma_set_all_coincident_);
-    ParseBoolAttr(attrs, "pragma_enable_reschedule", &enable_reschedule_);
-
-    ParseBoolAttr(attrs, "pragma_opt_for_dsa", &optimize_for_dsa_);
-    ParseBoolAttr(attrs, "enable_feature_library", &enable_feature_library_);
-    ParseBoolAttr(attrs, "enable_hoist_cond_write", &enable_hoist_cond_write_);
-    ParseBoolAttr(attrs, "enable_approximate_read", &enable_approximate_read_);
-
-    ParseIntAttr(attrs, "kernel_h", &matB_dim_h_);
-    ParseIntAttr(attrs, "kernel_w", &matB_dim_w_);
-    ParseIntAttr(attrs, "bypassL1", &bypassL1_);
-    ParseIntAttr(attrs, "isolated_idx", &isolated_idx_);
-    ParseIntAttr(attrs, "conv_backprop_filter", &conv_back_prop_filter_);
-    ParseBoolAttr(attrs, "pragma_conv_special_dma", &conv_special_dma_);
-    ParseStringAttr(attrs, "kernel_name", &kernel_name_);
-    ParseIntAttr(attrs, "pragma_is_conv", &pragma_is_conv_);
-    ParseBoolAttr(attrs, "dynamic_shape_conv_full_parametric", &dynamic_shape_conv_full_parametric_);
-
-    ParseIntAttr(attrs, "dump_tuning_level", &dump_tuning_level_);
-    ParseBoolAttr(attrs, "dump_pass_ir", &dump_pass_ir_);
-    ParseStringAttr(attrs, "dump_poly_dir", &dump_poly_dir_);
-
-    ParseBoolAttr(attrs, "enable_atomic_add", &enable_atomic_add_);
-    ParseBoolAttr(attrs, "use_new_space", &use_new_space_);
-
-    // cuda and cpu common attr
-    ParseStringAttr(attrs, "dim", &b_dim_);
-    ParseBoolAttr(attrs, "enable_vectorization", &enable_vectorization_);
-    ParseBoolAttr(attrs, "pragma_enable_matmul", &enable_matmul_);
-    ParseIntAttr(attrs, "vector_length", &vector_length_);
-    ParseBoolAttr(attrs, "use_register_memory", &use_register_memory_);
-
+    SetAttrsCommon(attrs);
     if (GetTarget() == TARGET_CUDA) {
-      ParseStringAttr(attrs, "device_type", &device_type_);
-      ParseMappingCfgAttr(attrs, "bind_block", &block_cfg_);
-      ParseMappingCfgAttr(attrs, "bind_thread", &thread_cfg_);
-      ParseIntAttr(attrs, "max_elem_per_thread", &max_elem_per_thread_);
-      ParseBoolAttr(attrs, "pragma_enable_tensor_core", &enable_tensor_core_);
-      ParseBoolAttr(attrs, "pragma_enable_emit_core", &pragma_enable_emit_core_);
-      ParseBoolAttr(attrs, "pragma_enable_conv_tensor_core", &enable_conv_tensor_core_);
-      ParseBoolAttr(attrs, "enable_tensor_core_use_poly", &enable_tensor_core_use_poly_);
-      ParseBoolAttr(attrs, "enable_akg_reduce_lib", &enable_akg_reduce_lib_);
-      ParseBoolAttr(attrs, "has_tot_ops", &has_tot_ops_);
-      ParseBoolAttr(attrs, "use_shared_memory", &use_shared_memory_);
-      ParseBoolAttr(attrs, "enable_bank_conflict_opt", &enable_bank_conflict_);
-      ParseBoolAttr(attrs, "enable_one_dim_thread", &enable_one_dim_thread_);
-      ParseBoolAttr(attrs, "shared_inversed_thread_map", &shared_inversed_thread_map_);
-      ParseBoolAttr(attrs, "enable_stitch_fusion", &enable_stitch_fusion_);
-      ParseIntAttr(attrs, "shared_vector_align", &shared_vector_align_);
-      ParseIntAttr(attrs, "csr_thread_num", &csr_thread_num_);
-      ParseStringAttr(attrs, "shared_memory_tensors", &shared_tensors_);
-      ParseStringAttr(attrs, "register_memory_tensors", &register_tensors_);
-      ParseStringAttr(attrs, "reduce_lib_type", &reduce_lib_type_);
+      SetAttrsGPU(attrs);
     } else if (GetTarget() == TARGET_CPU) {
-      ParseStringAttr(attrs, "feature", &feature_);
-      ParseBoolAttr(attrs, "pragma_enable_conv2d_direct", &enable_conv2d_direct_);
-      ParseStringAttr(attrs, "gemm_kernel_mnk", &gemm_kernel_mnk_);
-      ParseBoolAttr(attrs, "pragma_enable_transpose", &enable_transpose_);
+      SetAttrsCPU(attrs);
     }
 
     if (force_remove_self_dependence_) {
@@ -615,8 +512,124 @@ class UserConfig {
 
   std::string GetGemmKernelMNK() { return gemm_kernel_mnk_; }
   void SetGemmKernelMNK(std::string gemm_kernel_mnk) { gemm_kernel_mnk_ = gemm_kernel_mnk; }
+  bool NeedPackMatrixB() { return pack_matrix_b_; }
 
  private:
+  void SetAttrsCommon(const Map<std::string, NodeRef> &attrs) {
+    ParseBoolAttr(attrs, "enable_restart", &enable_restart_);
+
+    ParseDynamicShapeAttr(attrs, "dynamic_shape", &dynamic_shape_);
+    ParseIntAttr(attrs, "dynamic_shape_bound", &dynamic_shape_bound_);
+    ParseBoolAttr(attrs, "pragma_tilesize_is_var", &tile_size_is_var_);
+    ParseBoolAttr(attrs, "pragma_outerband_need_split", &outer_band_need_split_);
+
+    // Mind-trick pass
+    ParseIntAttr(attrs, "constrain_schedule_verbosity", &constrain_schedule_verbosity_);
+    ParseIntAttr(attrs, "enable_multicore", &enable_multicore_);
+    ParseBoolAttr(attrs, "enable_mind_trick", &enable_mind_trick_);
+    ParseBoolAttr(attrs, "enable_mind_trick_autogen", &enable_mind_trick_autogen_);
+    ParseStringAttr(attrs, "mind_trick", &mind_trick_json_);
+    ParseBoolAttr(attrs, "mind_trick_autogen_gpu_automap", &mind_trick_gpu_autogen_automap_);
+
+    // PolyTOPS
+    ParseStringAttr(attrs, "enable_polytops", &enable_polytops_);
+    ParseStringAttr(attrs, "polytops_solver", &polytops_solver_);
+    ParseBoolAttr(attrs, "polytops_check_schedules", &polytops_check_schedules_);
+    ParseBoolAttr(attrs, "polytops_code_sinking", &polytops_code_sinking_);
+    ParseBoolAttr(attrs, "polytops_constant_to_parameter", &polytops_constant_to_parameter_);
+    ParseBoolAttr(attrs, "polytops_parameter_shifting", &polytops_parameter_shifting_);
+    ParseBoolAttr(attrs, "polytops_post_processing_full_sets", &polytops_post_processing_full_sets_);
+    ParseBoolAttr(attrs, "polytops_post_processing_extra_outer_parallel_loop",
+                  &polytops_post_processing_extra_outer_parallel_loop_);
+
+    ParseCustomTilingAttr(attrs, "custom_tiling", &custom_tiling_);
+    ParseBoolAttr(attrs, "pragma_analyze_reuse_buffer", &pragma_analyze_reuse_buffer_);
+    ParseBoolAttr(attrs, "pragma_speedup_tiling", &pragma_speedup_tiling_);
+    ParseBoolAttr(attrs, "pragma_allow_tail_tiling", &pragma_allow_tail_tiling_);
+    ParseBoolAttr(attrs, "pragma_analyze_multicore", &pragma_analyze_multicore_);
+    ParseIntAttr(attrs, "prune_tuning_space_level", &prune_tuning_space_level_);
+    ParseBoolAttr(attrs, "pragma_checkcoincident", &tile_check_coincident_);
+    ParseIntAttr(attrs, "max_unroll_loop", &max_unroll_loop_);
+    ParseBoolAttr(attrs, "unroll_shared", &unroll_shared_);
+
+    ParseBoolAttr(attrs, "pragma_rmselfdep", &remove_self_dependence_);
+    ParseBoolAttr(attrs, "pragma_force_rmselfdep", &force_remove_self_dependence_);
+    ParseBoolAttr(attrs, "pragma_disable_whole_component", &disable_whole_component_);
+    ParseBoolAttr(attrs, "pragma_disable_schedule_shift", &disable_schedule_shift_);
+    ParseBoolAttr(attrs, "pragma_enable_schedule_max_constant", &enable_schedule_max_constant_);
+    ParseBoolAttr(attrs, "pragma_enable_schedule_outer_coincidence", &enable_schedule_outer_coincidence_);
+    ParseBoolAttr(attrs, "pragma_enable_schedule_maximize_coincidence", &enable_schedule_maximize_coincidence_);
+    ParseBoolAttr(attrs, "pragma_disable_loop_reversal", &disable_loop_reversal_);
+    ParseBoolAttr(attrs, "pragma_disable_loop_fusion", &disable_loop_fusion_);
+    ParseBoolAttr(attrs, "pragma_reorder_schedule", &reorder_schedule_);
+    ParseBoolAttr(attrs, "pragma_sink_last_axis", &sink_last_axis_);
+    ParseBoolAttr(attrs, "pragma_keep_outer_band_order", &keep_outer_band_order_);
+    ParseBoolAttr(attrs, "pragma_modshift", &mod_schedule_shift_);
+    ParseBoolAttr(attrs, "pragma_disable_group", &disable_group_);
+    ParseBoolAttr(attrs, "pragma_set_all_coincident", &pragma_set_all_coincident_);
+    ParseBoolAttr(attrs, "pragma_enable_reschedule", &enable_reschedule_);
+
+    ParseBoolAttr(attrs, "pragma_opt_for_dsa", &optimize_for_dsa_);
+    ParseBoolAttr(attrs, "enable_feature_library", &enable_feature_library_);
+    ParseBoolAttr(attrs, "enable_hoist_cond_write", &enable_hoist_cond_write_);
+    ParseBoolAttr(attrs, "enable_approximate_read", &enable_approximate_read_);
+
+    ParseIntAttr(attrs, "kernel_h", &matB_dim_h_);
+    ParseIntAttr(attrs, "kernel_w", &matB_dim_w_);
+    ParseIntAttr(attrs, "bypassL1", &bypassL1_);
+    ParseIntAttr(attrs, "isolated_idx", &isolated_idx_);
+    ParseIntAttr(attrs, "conv_backprop_filter", &conv_back_prop_filter_);
+    ParseBoolAttr(attrs, "pragma_conv_special_dma", &conv_special_dma_);
+    ParseStringAttr(attrs, "kernel_name", &kernel_name_);
+    ParseIntAttr(attrs, "pragma_is_conv", &pragma_is_conv_);
+    ParseBoolAttr(attrs, "dynamic_shape_conv_full_parametric", &dynamic_shape_conv_full_parametric_);
+
+    ParseIntAttr(attrs, "dump_tuning_level", &dump_tuning_level_);
+    ParseBoolAttr(attrs, "dump_pass_ir", &dump_pass_ir_);
+    ParseStringAttr(attrs, "dump_poly_dir", &dump_poly_dir_);
+
+    ParseBoolAttr(attrs, "enable_atomic_add", &enable_atomic_add_);
+    ParseBoolAttr(attrs, "use_new_space", &use_new_space_);
+
+    // cuda and cpu common attr
+    ParseStringAttr(attrs, "dim", &b_dim_);
+    ParseBoolAttr(attrs, "enable_vectorization", &enable_vectorization_);
+    ParseBoolAttr(attrs, "pragma_enable_matmul", &enable_matmul_);
+    ParseIntAttr(attrs, "vector_length", &vector_length_);
+    ParseBoolAttr(attrs, "use_register_memory", &use_register_memory_);
+  }
+
+  void SetAttrsGPU(const Map<std::string, NodeRef> &attrs) {
+    ParseStringAttr(attrs, "device_type", &device_type_);
+    ParseMappingCfgAttr(attrs, "bind_block", &block_cfg_);
+    ParseMappingCfgAttr(attrs, "bind_thread", &thread_cfg_);
+    ParseIntAttr(attrs, "max_elem_per_thread", &max_elem_per_thread_);
+    ParseBoolAttr(attrs, "pragma_enable_tensor_core", &enable_tensor_core_);
+    ParseBoolAttr(attrs, "pragma_enable_emit_core", &pragma_enable_emit_core_);
+    ParseBoolAttr(attrs, "pragma_enable_conv_tensor_core", &enable_conv_tensor_core_);
+    ParseBoolAttr(attrs, "enable_tensor_core_use_poly", &enable_tensor_core_use_poly_);
+    ParseBoolAttr(attrs, "enable_akg_reduce_lib", &enable_akg_reduce_lib_);
+    ParseBoolAttr(attrs, "has_tot_ops", &has_tot_ops_);
+    ParseBoolAttr(attrs, "use_shared_memory", &use_shared_memory_);
+    ParseBoolAttr(attrs, "enable_bank_conflict_opt", &enable_bank_conflict_);
+    ParseBoolAttr(attrs, "enable_one_dim_thread", &enable_one_dim_thread_);
+    ParseBoolAttr(attrs, "shared_inversed_thread_map", &shared_inversed_thread_map_);
+    ParseBoolAttr(attrs, "enable_stitch_fusion", &enable_stitch_fusion_);
+    ParseIntAttr(attrs, "shared_vector_align", &shared_vector_align_);
+    ParseIntAttr(attrs, "csr_thread_num", &csr_thread_num_);
+    ParseStringAttr(attrs, "shared_memory_tensors", &shared_tensors_);
+    ParseStringAttr(attrs, "register_memory_tensors", &register_tensors_);
+    ParseStringAttr(attrs, "reduce_lib_type", &reduce_lib_type_);
+  }
+
+  void SetAttrsCPU(const Map<std::string, NodeRef> &attrs) {
+    ParseStringAttr(attrs, "feature", &feature_);
+    ParseBoolAttr(attrs, "pragma_enable_conv2d_direct", &enable_conv2d_direct_);
+    ParseStringAttr(attrs, "gemm_kernel_mnk", &gemm_kernel_mnk_);
+    ParseBoolAttr(attrs, "pragma_enable_transpose", &enable_transpose_);
+    ParseBoolAttr(attrs, "pack_matrix_b", &pack_matrix_b_);
+  }
+
   // tools for parsing user config
   static void ParseIntAttr(const Map<std::string, NodeRef> &attrs, const std::string &attr_name, int *attr_to_set) {
     CHECK(attr_to_set != nullptr);
@@ -844,6 +857,7 @@ class UserConfig {
   // cpu type
   std::string feature_{SSE_INSTRUCTION_SET};
   std::string gemm_kernel_mnk_;
+  bool pack_matrix_b_{true};
 
   // csr config
   int csr_thread_num_{128};
@@ -1057,6 +1071,15 @@ class AnalysisResult {
   void RecordContextParams(const isl::set &context_params) { context_params_ = context_params; }
   void RecordMatrixMatmulMap(const std::string matrix_name, const std::string matrix_position) {
     matrix_matmul_map_.emplace(matrix_name, matrix_position);
+  }
+  std::string GetMatrixName(const std::string matrix_position) {
+    std::string res;
+    for (auto &i: matrix_matmul_map_) {
+      if (i.second == matrix_position) {
+        res = i.first;
+      }
+    }
+    return res;
   }
   void RecordCastTensors(const std::string tensor_name) { cast_tensors_.insert(tensor_name); }
   void RecordSharedTensorBitsMap(const std::string tensor_name, const int tensor_bits) {

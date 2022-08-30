@@ -38,14 +38,17 @@ namespace ir {
 
 static constexpr auto MATRIX_A = "matrix_a";
 static constexpr auto MATRIX_B = "matrix_b";
+static constexpr auto MATRIX_C = "matrix_c";
 static constexpr auto GEMM_PACK_A = "pack_a";
 static constexpr auto GEMM_PACK_B = "pack_b";
 static constexpr auto PROMOTE_TRANSPOSE = "promoted_transpose";
 static constexpr auto MATRIX_TRANSPOSE = "MatrixTranspose";
 static constexpr auto LOCAL = "local";
 static constexpr auto REGISTER = "register";
+static constexpr auto ROW_MAJOR = "row_major";
 static constexpr auto TRANS_A = "row_major_matrix_a";
 static constexpr auto TRANS_B = "col_major_matrix_b";
+static constexpr auto PREPARE_PACK = "prepare_pack";
 static constexpr auto PACK_A_SIZE = 4;
 static constexpr auto PACK_B_SIZE = 24;
 static constexpr size_t LOOP_NUM = 2;
@@ -56,6 +59,8 @@ static constexpr auto NUM_5 = 5;
 static constexpr auto NUM_6 = 6;
 static constexpr auto NUM_7 = 7;
 static constexpr auto NUM_8 = 8;
+static constexpr auto NUM_9 = 9;
+static constexpr auto NUM_10 = 10;
 static constexpr auto NUM_16 = 16;
 static constexpr auto NUM_32 = 32;
 static constexpr auto NUM_40 = 40;
@@ -416,12 +421,20 @@ class CPULocalReconstruction : public IRMutator {
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
     if (op->attr_key == GEMM_PACK_A) {
       a_pack_size_ = op->value.as<IntImm>()->value;
+      a_block_size_ = a_pack_size_;
       return IRMutator::Mutate(op->body);
     } else if (op->attr_key == GEMM_PACK_B) {
       b_pack_size_ = op->value.as<IntImm>()->value;
+      b_block_size_ = b_pack_size_;
       return IRMutator::Mutate(op->body);
     } else if (op->attr_key == PROMOTE_TRANSPOSE) {
       return PromoteForTranspose(op);
+    } else if (op->attr_key == PREPARE_PACK) {
+      auto value = op->value.as<StringImm>()->value;
+      CHECK(value.size() > NUM_10);
+      matrix_b_ = value.substr(0, value.size() - NUM_10);
+      b_trans_ = value.substr(value.size() - NUM_9) == ROW_MAJOR ? false : true;
+      return IRMutator::Mutate(op->body);
     } else {
       auto value_ptr = op->value.as<StringImm>();
       if (!value_ptr) {
@@ -454,10 +467,8 @@ class CPULocalReconstruction : public IRMutator {
     if (matrix_name == MATRIX_A || matrix_name == MATRIX_B) {
       if (matrix_name == MATRIX_A) {
         a_func_ = op->func;
-        a_block_size_ = a_pack_size_;
       } else {
         b_func_ = op->func;
-        b_block_size_ = b_pack_size_;
       }
       auto body = IRMutator::Mutate(op->body);
       auto block_size = matrix_name == MATRIX_A ? a_block_size_ : b_block_size_;
@@ -483,6 +494,12 @@ class CPULocalReconstruction : public IRMutator {
       new_bounds.push_back(bound_k);
       new_bounds.push_back(Range::make_by_min_extent(bound_n->min, block_size));
       return Realize::make(op->func, op->value_index, op->type, new_bounds, op->condition, body);
+    } else if (!matrix_b_.empty() && matrix_name == MATRIX_C) {
+      if (auto bound_int = op->bounds[op->bounds.size() - 1]->extent.as<IntImm>()) {
+        if (static_cast<int>(bound_int->value) < b_pack_size_) {
+          b_block_size_ = bound_int->value;
+        }
+      }
     }
     return IRMutator::Mutate_(op, s);
   }
@@ -502,6 +519,23 @@ class CPULocalReconstruction : public IRMutator {
   Expr Mutate_(const Call *op, const Expr &e) final {
     if (op->func == a_func_ || op->func == b_func_) {
       Array<Expr> new_args = GetNewArgs(op);
+      return Call::make(op->type, op->name, new_args, op->call_type, op->func, op->value_index);
+    } else if (op->func->func_name() == matrix_b_) {
+      int block_size = b_block_size_;
+      Array<Expr> new_args;
+      int start_pos = std::max(static_cast<int>(op->args.size()) - NUM_2, 0);
+      Expr n = b_trans_ ? op->args[start_pos] : op->args[start_pos + 1];
+      Expr k = b_trans_ ? op->args[start_pos + 1] : op->args[start_pos];
+      for (int i = 0; i < start_pos; ++i) {
+        new_args.push_back(op->args[i]);
+      }
+      const Operation *operation = static_cast<const Operation *>(&op->func);
+      auto tensor = operation->output(0);
+      Expr K = b_trans_ ? tensor->shape[start_pos + 1] : tensor->shape[start_pos];
+      Expr col = tensor->shape[tensor.ndim() - 1];
+      Expr index = floordiv(n, b_pack_size_) * b_pack_size_ * K + k * block_size + indexmod(n, b_pack_size_);
+      new_args.push_back(floordiv(index, col));
+      new_args.push_back(indexmod(index, col));
       return Call::make(op->type, op->name, new_args, op->call_type, op->func, op->value_index);
     }
     return IRMutator::Mutate_(op, e);
@@ -581,6 +615,7 @@ class CPULocalReconstruction : public IRMutator {
   std::vector<Expr> extents_;
   std::vector<const For *> fors_;
   Stmt provide_;
+  std::string matrix_b_;
 };
 
 Stmt ReconstructLayout(const Stmt &stmt) {

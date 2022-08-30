@@ -509,6 +509,10 @@ class OperatorInfoCollector {
     if (!scop_info_.user_config_.GetEnableMatmul() && !scop_info_.user_config_.GetEnableConv2dDirect()) {
       return false;
     }
+    if (scop_info_.user_config_.GetTarget() == TARGET_CPU) {
+      SetPackBlockSize();
+    }
+
     Type tensor_c_type, tensor_a_type, tensor_b_type;
     std::string tensor_c_name, tensor_a_name, tensor_b_name;
 
@@ -548,9 +552,6 @@ class OperatorInfoCollector {
     }
 
     SetMmaModeForTensor(tensor_a_name, tensor_b_name);
-    if (scop_info_.user_config_.GetTarget() == TARGET_CPU) {
-      SetPackBlockSize();
-    }
 
     if (tensor_c_type == Float(16) && enable_tensor_core) {
       std::string shared_tensors = tensor_a_name + " " + tensor_b_name + " " + tensor_c_name;
@@ -606,8 +607,9 @@ class OperatorInfoCollector {
         mma.n = static_cast<int>(WrappedStrtol(tile_size_kernel[n_axis_pos - 1]));
         mma.k = static_cast<int>(WrappedStrtol(tile_size_kernel[k_axis_pos - 1]));
       } else {
-        const int64_t pack_a = 4;
-        const int64_t pack_b = 24;
+        auto block_size = scop_info_.analysis_result_.GetPackBlockSize();
+        const int64_t pack_a = block_size.pack_a_size;
+        const int64_t pack_b = block_size.pack_b_size;
         const int64_t mma_k = 8;
         mma = {pack_a, pack_b, mma_k};
       }

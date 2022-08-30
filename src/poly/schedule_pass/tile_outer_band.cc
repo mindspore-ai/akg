@@ -1468,7 +1468,9 @@ isl::schedule_node TileOuterBand::TileGemmOperatorForCpu(const isl::schedule_nod
 
   // the third tiling: promote tensor_b
   node = TileAccordingToTileType(node, TileType::C0);
-  node = node.insert_mark(PROMOTE_GLOBAL_TO_REGISTER_B).child(0);
+  if (scop_info_.user_config_.NeedPackMatrixB()) {
+    node = node.insert_mark(PROMOTE_GLOBAL_TO_REGISTER_B).child(0);
+  }
 
   // the last tiling: micro kernel
   auto seq_node = SplitReduceStatements(node).parent();

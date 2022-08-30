@@ -476,16 +476,17 @@ def matmul_str(inputs, output, attr):
     left_input_name = get_input(left_input)
     right_input_name = get_input(right_input)
     res = ''
-    if left_format == 'FRACTAL_NZ':
-        left_ori_shape = convert_fracal_shape(left_input['shape'], "zN")
-        left_trans_str = get_trans_data_str(left_input_name, left_input_name, left_ori_shape, left_format,
-                                            'DefaultFormat')
-        res = res + left_trans_str + "\n"
-    if right_format == 'FRACTAL_NZ':
-        right_ori_shape = convert_fracal_shape(right_input['shape'], "zN")
-        right_trans_str = get_trans_data_str(right_input_name, right_input_name, right_ori_shape, right_format,
-                                             'DefaultFormat')
-        res = res + right_trans_str + "\n"
+    if get_attr(attr, 'process') != 'cpu':
+        if left_format == 'FRACTAL_NZ':
+            left_ori_shape = convert_fracal_shape(left_input['shape'], "zN")
+            left_trans_str = get_trans_data_str(left_input_name, left_input_name, left_ori_shape, left_format,
+                                                'DefaultFormat')
+            res = res + left_trans_str + "\n"
+        if right_format == 'FRACTAL_NZ':
+            right_ori_shape = convert_fracal_shape(right_input['shape'], "zN")
+            right_trans_str = get_trans_data_str(right_input_name, right_input_name, right_ori_shape, right_format,
+                                                'DefaultFormat')
+            res = res + right_trans_str + "\n"
     mm_str = np_matmul_str(inputs, output, attr)
     res = res + mm_str + "\n"
 
@@ -498,7 +499,7 @@ def matmul_str(inputs, output, attr):
                 get_input(bias), str(bias_shape), bias['data_type'])
 
         res += "%s = np.add(%s, %s)\n" % (output_name, output_name, get_input(bias))
-    if output_format != 'DefaultFormat':
+    if get_attr(attr, 'process') != 'cpu' and output_format != 'DefaultFormat':
         output_trans_str = get_trans_data_str(output_name, output_name, output_shape, 'DefaultFormat', output_format)
         res = res + output_trans_str + "\n"
     func_name = "matmul_func"

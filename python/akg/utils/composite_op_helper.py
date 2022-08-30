@@ -34,7 +34,13 @@ from akg.utils.op_dsl import get_attr, op_dsl
 
 RANDOM_SEED_NUM = 20
 MakeIndices = namedtuple("MakeIndices", "name data_shape indices_shape indices_dtype attrs")
-
+CpuPackBBlockSize = {
+    "neon": 12,
+    "sse": 12,
+    "avx": 24,
+    "avx2": 24,
+    "avx512": 48
+}
 
 class Log(logging.Logger):
     def __init__(self, case_name, case_path):
@@ -279,6 +285,10 @@ def _collect_inplace_assign_infos(op, infos, sum_out):
 def _collect_infos(desc, infos):
     """Collect infos."""
     sum_out = []
+    target = desc["process"]
+    if target  == "cpu":
+        target_info = desc.get("target_info", {})
+        infos["feature"] = target_info.get("feature", "avx")
     for op in desc["op_desc"]:
         if (op["name"] in ["ReduceSum", "UnsortedSegmentSum", "CSRReduceSum"] and
                 "enable_atomic_add" in _get_attr_dict(op["attr"])) or op["name"] in ["ElemAny"]:
@@ -325,13 +335,40 @@ def _collect_infos(desc, infos):
                                                                       indices_shape=input1["shape"],
                                                                       indices_dtype=input1["data_type"],
                                                                       attrs=None)
+        elif target == "cpu" and op["name"] in ["MatMul", "BatchMatMul"]:
+            input1 = op["input_desc"][1][0]
+            infos["need_pack_b"][input1["tensor_name"]] = get_attr(op["attr"], "pack_b")
+            infos["need_transpose"][input1["tensor_name"]] = get_attr(op["attr"], "transpose_b")
 
+def _pack_matrix(data, feature):
+    def _get_size(shape):
+        res = 1
+        for i in shape:
+            res *= i
+        return res
+    block_size = CpuPackBBlockSize.get(feature, "avx")
+    shape = data.shape
+    if shape[-1] <= block_size:
+        return data
+    block_num = shape[-1] // block_size
+    split_pos = block_num * block_size
+    new_data = np.split(data, indices_or_sections=[split_pos,], axis=-1)
+    body_data = np.split(new_data[0], block_num, -1)
+    dim_size = (int)(_get_size(shape) / shape[-1])
+    data_list = []
+    for block in body_data:
+        data_list.append(block.reshape((dim_size * block_size,)))
+    data_list.append(new_data[1].reshape((dim_size * (shape[-1] % block_size)),))
+    packed_data = np.concatenate(data_list, axis=-1)
+    packed_data = packed_data.reshape(shape)
+    return packed_data
 
 def _gen_input_data(desc, infos, input_for_mod, commands):
     """Generate input data."""
     idx = 0
     csr_idx_pair = {}
     input_mean_value = precheck(desc)
+    target = desc["process"]
     for input_desc in desc["input_desc"] if desc.get("input_desc") is not None else []:
         tensor_name = input_desc[0]["tensor_name"]
         infos["input_order"][tensor_name] = idx
@@ -362,7 +399,16 @@ def _gen_input_data(desc, infos, input_for_mod, commands):
             item = gen_indices(infos["indices_input"][tensor_name])
         else:
             item = random_gaussian(shape, miu=input_mean_value, sigma=0.1).astype(dtype)
-        input_for_mod.append(item)
+        if target == "cpu" and tensor_name in infos["need_pack_b"].keys() and \
+            infos["need_pack_b"][tensor_name]:
+            if infos["need_transpose"][tensor_name]:
+                axis = [x - len(shape) for x in range(len(shape))]
+                axis[-1] = -2
+                axis[-2] = -1
+                item = item.transpose(axis)
+            input_for_mod.append(_pack_matrix(item, infos["feature"]))
+        else:
+            input_for_mod.append(item)
         infos["input_dict"][tensor_name] = item
         idx += 1
 
@@ -445,6 +491,8 @@ def _gen_op_compute(desc, commands):
             need_reshape, fractal_tensor, default_tensor = _check_need_reshape(op["input_desc"])
             if need_reshape:
                 commands.append(_emit_reshape(fractal_tensor, default_tensor))
+        if op.get('attr', None):
+            op['attr'].append({'name': 'process', 'value': desc['process']})
         sent = dsl_fun(op['input_desc'], op['output_desc'], op['attr'])
         commands.append(sent)
 
@@ -506,7 +554,11 @@ def gen_json_data(op_desc, with_compute=True, input_for_mod=None):
              "csr_indptr": {},
              "csr_indices": {},
              "input_dict": {},
-             "input_order": {}}
+             "input_order": {},
+             "feature": "avx",
+             "need_pack_b": {},
+             "need_transpose": {},
+             }
     if input_for_mod is None:
         input_for_mod = []
         infos["gen_data"] = True

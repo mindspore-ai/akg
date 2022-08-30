@@ -49,6 +49,15 @@ Stmt CpuIslEmitter::EmitInfo(const Stmt &stmt) {
     PackBlockSize pack_block_size = info_.analysis_result_.GetPackBlockSize();
     result = AttrStmt::make(Expr("INFO"), PACK_A_ATTR, Expr(pack_block_size.pack_a_size), result);
     result = AttrStmt::make(Expr("INFO"), PACK_B_ATTR, Expr(pack_block_size.pack_b_size), result);
+    if (!info_.user_config_.NeedPackMatrixB()) {
+      auto tensor_name = info_.analysis_result_.GetMatrixName(MATRIX_B);
+      auto major_map = info_.analysis_result_.GetMatrixMatmulMajor();
+      std::string major;
+      if (major_map.count(tensor_name) != 0) {
+        major = major_map[tensor_name];
+      }
+      result = AttrStmt::make(Expr("INFO"), PREPARE_PACK, Expr(tensor_name + "_" + major), result);
+    }
   }
 
   return result;
