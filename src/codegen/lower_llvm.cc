@@ -83,6 +83,12 @@ StageResult LLVMLowerBeforeFlattern(Stmt &stmt, LowerData &data) {
     stmt = NEXT_PASS(RealizeCompress, stmt);
     stmt = NEXT_PASS(ReconstructLayout, stmt);
     stmt = NEXT_PASS(MatrixTranspose, stmt);
+    if (g_attrs.count(kDynamicInputIndex) > 0 && !g_attrs[kDynamicInputIndex].as<StringImm>()->value.empty()) {
+      Array<Expr> shape;
+      shape.push_back(Expr(1));
+      auto bs = AddAdditionalArg(data->arg_list_0, data->binds_0, shape, air::Int(32), "batch");
+      stmt = NEXT_PASS(AdaptDynamicBatch, stmt, data->arg_list_0, data->binds_0, bs, g_attrs[kDynamicInputIndex]);
+    }
     stmt = NEXT_PASS(AdjustParallelLoop, stmt);
     stmt = NEXT_PASS(ReductionFactor, stmt, data->binds_0);
   }

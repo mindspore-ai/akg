@@ -94,6 +94,9 @@ Stmt ReconstructLayout(const Stmt &stmt);
 
 Stmt MatrixTranspose(const Stmt &stmt);
 
+Stmt AdaptDynamicBatch(const Stmt &stmt, const Array<NodeRef> &args, const Map<Tensor, Buffer> &binds, const Tensor &bs,
+                       const NodeRef &dynamic_input_index);
+
 Stmt AdjustParallelLoop(const Stmt &stmt);
 
 Stmt ReductionFactor(const Stmt &stmt, const Map<Tensor, Buffer> &extern_buffer);
