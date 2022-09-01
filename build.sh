@@ -75,7 +75,7 @@ fi
 THREAD_NUM=32
 SIMD_SET=off
 CMAKE_ARGS=""
-while getopts 'e:j:u:t:o' opt
+while getopts 'e:j:u:t:od' opt
 do
     case "${opt}" in
         e)
@@ -100,6 +100,9 @@ do
             ;;
         u)
             CMAKE_ARGS="${CMAKE_ARGS} -DUSE_AUTO_TUNE=1"
+            ;;
+        d)
+            CMAKE_ARGS="${CMAKE_ARGS} -DCMAKE_BUILD_TYPE=Debug -DUSE_AKG_LOG=1"
             ;;
         o)
             arch_info=`arch | tr '[A-Z]' '[a-z]'`

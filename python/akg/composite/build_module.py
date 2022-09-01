@@ -243,6 +243,8 @@ def _set_attrs(desc_d, attrs, poly):
     attrs["enable_symbolic_tiling"] = is_symbolic_tiling(desc_d['op'])
     attrs["process"] = desc_d["process"]
     attrs = update_tuned_attrs(desc_d, attrs)
+    if desc_d["process"] == "cpu":
+        attrs["pack_matrix_b"] = False if should_enable_attr(desc_d, "pack_b") else True
     return _update_compile_attr(desc_d, attrs)
 
 
