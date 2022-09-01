@@ -17,17 +17,36 @@
 # pylint: disable=invalid-name
 # 2020.9.15 - Add default GPU arch: sm_70.
 # 2020.9.19 - Modify default GPU arch function.
-# 2020.10.26- Add the logic of finding AkgReduce library.
+# 2020.10.26 - Add the logic of finding AkgReduce library.
+# 2022.9.5 - Add the check of gcc version.
 """Utility to invoke nvcc compiler in the system"""
 from __future__ import absolute_import as _abs
 
 import subprocess
 import os
+import re
 import warnings
 from . import util
 from .. import ndarray as nd
 from ..api import register_func
 from .._ffi.base import py_str
+
+
+def get_gcc_version():
+    """Get the gcc version from environment.
+    Return
+    ------
+    ver : tuple of int
+        The version of gcc likes: (7.3.0), (9.4.0)
+    """
+    f = os.popen("gcc --version")
+    for line in f:
+        if line[:3] == "gcc":
+            m = re.findall(r"\d+\.\d+\.\d+", line)[0]
+            a, b, c = m.split(".")
+            ver = (int(a), int(b), int(c))
+            return ver
+    return None
 
 def compile_cuda(code,
                  target="ptx",
@@ -58,6 +77,12 @@ def compile_cuda(code,
     cubin : bytearray
         The bytearray of the cubin
     """
+    # supported gcc version for cuda code generation
+    gcc_version = get_gcc_version()
+    if gcc_version is None or (7,3,0) > gcc_version or gcc_version > (9,4,0):
+        raise ValueError("gcc version is {}, not in range [7.3.0, 9.4.0]".format(
+            gcc_version))
+
     arch_exception = ["sm_00", None]
     temp = util.tempdir()
     if target not in ["cubin", "ptx", "fatbin"]:
