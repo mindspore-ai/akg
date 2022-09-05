@@ -18,7 +18,7 @@ import os
 
 @akg.tvm.register_func
 def get_kernel_meta_path():
-    return os.path.realpath(os.getenv('MS_COMPILER_CACHE_PATH', './')) + '/kernel_meta/'
+    return os.path.realpath(os.getenv('MS_COMPILER_CACHE_PATH', './')) + '/akg_kernel_meta/'
 
 @akg.tvm.register_func
 def get_dump_ir_flag():
