@@ -2429,5 +2429,16 @@
                 }
             }
         }
+    },
+    "2.ReduceSum2.InplaceAssign112.3": {
+        "1_1666_1665_3.1666_3-": {
+            "float32--": {
+                "metadata": {
+                    "attrs": {
+                        "remove_store_dependency": true
+                    }
+                }
+            }
+        }
     }
 }
