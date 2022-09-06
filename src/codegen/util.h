@@ -107,6 +107,7 @@ constexpr auto kEnableAtomicAdd = "enable_atomic_add";
 constexpr auto kEnableSwizzleGPU = "enable_swizzle_gpu";
 constexpr auto kEnableElementwiseFlatten = "enable_elementwise_flatten";
 constexpr auto kRemoveStoreDependency = "remove_store_dependency";
+constexpr auto kIsPolyConfigReset = "is_poly_config_reset";
 
 static std::unordered_map<std::string, int> help_tiling_level = {
   {"None", 0},

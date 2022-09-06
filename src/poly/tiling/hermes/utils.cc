@@ -18,36 +18,34 @@
 namespace akg {
 namespace ir {
 namespace poly {
-std::string ParseString(const air::Expr &expression) {
-  if (const auto *const strimm = expression.as<air::ir::StringImm>()) {
+std::string ParseString(const air::Expr &expr) {
+  if (const auto *const strimm = expr.as<air::ir::StringImm>()) {
     return strimm->value;
-  } else {
-    LOG(FATAL) << "String cannot be parsed";
-    return "";
   }
+  LOG(FATAL) << "String cannot be parsed";
+  return "";
 }
 
-int ParseInt(const air::Integer &integer) {
-  if (const auto *const intimm = integer.as<air::ir::IntImm>()) {
+int ParseInt(const air::Integer &num) {
+  if (const auto *const intimm = num.as<air::ir::IntImm>()) {
     return static_cast<int>(intimm->value);
-  } else {
-    LOG(FATAL) << "Int cannot be parsed";
-    return -1;
   }
+  LOG(FATAL) << "Int cannot be parsed";
+  return -1;
 }
 
-std::vector<int> ParseIntArray(air::Array<air::Integer> arr) {
+std::vector<int> ParseIntArray(const air::Array<air::Integer> &arr) {
   std::vector<int> vec;
-  for (air::Integer i : arr) {
-    vec.push_back(ParseInt(i));
+  for (air::Integer num : arr) {
+    vec.push_back(ParseInt(num));
   }
   return vec;
 }
 
-std::vector<std::string> ParseStringArray(air::Array<air::Expr> arr) {
+std::vector<std::string> ParseStringArray(const air::Array<air::Expr> &arr) {
   std::vector<std::string> vec;
-  for (air::Expr s : arr) {
-    vec.push_back(ParseString(s));
+  for (air::Expr expr : arr) {
+    vec.push_back(ParseString(expr));
   }
   return vec;
 }
@@ -60,9 +58,9 @@ std::string StripRename(std::string name) {
   return name.substr(0, pos);
 }
 
-int64_t Get2PowerBelow(int64_t n) {
-  int64_t result = n;
-  for (int64_t i = 1; i < n; i *= kByTwoL) {
+int64_t Get2PowerBelow(int64_t num) {
+  int64_t result = num;
+  for (int64_t i = 1; i < num; i *= kByTwoL) {
     result = i;
   }
   return result;

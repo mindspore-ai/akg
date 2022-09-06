@@ -41,6 +41,7 @@ class Scop {
   void ResetConfig();
   Stmt body_;
   isl::ctx ctx_;
+  const int kBit32 = 32;
 };
 
 Stmt GenHalide(ScopInfo &info, const isl::schedule &, bool used_for_tile_out_band = false);

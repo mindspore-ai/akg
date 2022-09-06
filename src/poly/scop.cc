@@ -183,12 +183,14 @@ isl::schedule Scop::Transform(const isl::schedule &input_schedule) {
   RestartPassName restart_pass = info_.analysis_result_.GetRestartPassName();
   if (restart_pass == RestartPassName::NOT_RESTART || restart_pass == RestartPassName::EXIT ||
       !info_.user_config_.GetEnableRestart()) {
+    g_attrs.Set(kIsPolyConfigReset, air::make_const(Int(kBit32), false));
     return final_schedule;
   }
 
   // We offer a restart mechanism for scalar stmt that cannot tile: do not consider coincidence
   // and re-compute/re-tile to generate final schedule.
   ResetConfig();
+  g_attrs.Set(kIsPolyConfigReset, air::make_const(Int(kBit32), true));
 
   final_schedule = mgr.Run(input_schedule, pass_stra);
   info_.DumpTransform("scalar_transform.log", pass_stra->pass_info_);
