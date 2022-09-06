@@ -23,6 +23,11 @@ endif()
 
 project(akg C CXX)
 
+if (CMAKE_COMPILER_IS_GNUCC AND (CMAKE_CXX_COMPILER_VERSION VERSION_LESS 7.3 OR 
+                                 CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 9.4))
+  message(SEND_ERROR "gcc version should be in [7.3, 9.4], while ${CMAKE_CXX_COMPILER_VERSION} is detected")
+endif()
+
 set(AKG_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 set(TVM_DIR "${AKG_SOURCE_DIR}/third_party/incubator-tvm")
 
