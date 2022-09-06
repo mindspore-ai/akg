@@ -24,6 +24,8 @@
  *   Fixed prefetch intrinsic
  * 2022.4.16
  *   Optimize log intrinsic
+ * 2022.9.6
+ *   Optimize tanh intrinsic
  */
 #ifdef TVM_LLVM_VERSION
 
@@ -32,6 +34,13 @@
 namespace air {
 namespace codegen {
 namespace llvm {
+
+static constexpr auto COEF_0 = 28.f;
+static constexpr auto COEF_1 = 378.0f;
+static constexpr auto COEF_2 = 3150.0f;
+static constexpr auto COEF_3 = 17325.0f;
+static constexpr auto COEF_4 = 62370.0f;
+static constexpr auto COEF_5 = 135135.0f;
 
 TVM_REGISTER_GLOBAL("tvm.intrin.rule.llvm.prefetch")
 .set_body(DispatchLLVMIntrin<::llvm::Intrinsic::prefetch, 4>);
@@ -90,23 +99,16 @@ TVM_REGISTER_GLOBAL("tvm.intrin.rule.llvm.nearbyint")
 
 TVM_REGISTER_GLOBAL("tvm.intrin.rule.llvm.tanh")
 .set_body([](const TVMArgs& targs, TVMRetValue* rv) {
+  // Efficient tanh computation using Lambert's continued fraction
+  // tanh(x) = ((((x^2 + 378) * x^2 + 17325) * x^2 + 135135) * x) / (((28 * x^2 + 3150) * x^2 + 62370) * x^2 + 135135)
   Expr e = targs[0];
   const ir::Call* call = e.as<ir::Call>();
   CHECK(call != nullptr);
   const Expr& x = call->args[0];
-  Expr one = make_const(x.type(), 1);
-  Expr two = make_const(x.type(), 2);
-  Expr neg_two = make_const(x.type(), -2);
-
-  Expr exp_neg2x = ir::Call::make(
-      x.type(), "exp", {neg_two * x}, ir::Call::PureIntrinsic);
-  Expr exp_pos2x = ir::Call::make(
-      x.type(), "exp", {two * x}, ir::Call::PureIntrinsic);
-
-  Expr tanh_pos = (one - exp_neg2x) / (one + exp_neg2x);
-  Expr tanh_neg = (exp_pos2x - one) / (exp_pos2x + one);
-  *rv = ir::Select::make(
-      x >= make_zero(x.type()), tanh_pos, tanh_neg);
+  Expr square = x * x;
+  Expr a = (((square + COEF_1) * square + COEF_3) * square + COEF_5) * x;
+  Expr b = ((COEF_0 * square + COEF_2) * square + COEF_4) * square + COEF_5;
+  *rv = ir::Div::make(a, b);
 });
 
 TVM_REGISTER_GLOBAL("tvm.intrin.rule.llvm.pow")
