@@ -145,6 +145,7 @@ REGISTER_PASS(UnifyLoopVars);
 REGISTER_PASS(TileCoverCorrect);
 REGISTER_PASS(ReconstructLayout);
 REGISTER_PASS(MatrixTranspose);
+REGISTER_PASS(AdaptDynamicBatch);
 REGISTER_PASS(AdjustParallelLoop);
 REGISTER_PASS(ReductionFactor);
 }  // namespace ir

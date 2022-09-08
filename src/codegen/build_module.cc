@@ -390,6 +390,15 @@ void RenameBinds(Map<Tensor, Buffer> &binds, const BuildConfig &config, Array<No
   return;
 }
 
+Tensor AddAdditionalArg(Array<NodeRef> &args, Map<Tensor, Buffer> &binds, const Array<Expr> &shape, const Type &type,
+                        const std::string &tensor_name) {
+  Tensor tensor = placeholder(shape, type, tensor_name);
+  const Buffer buffer = decl_buffer(shape, type, tensor_name);
+  args.push_back(buffer);
+  binds.Set(tensor, buffer);
+  return tensor;
+}
+
 void FixParametricBinds(const Map<Tensor, Buffer> &binds, const Array<NodeRef> &in_args, const BuildConfig &config,
                         Map<Tensor, Buffer> *out_binds, Array<NodeRef> *out_args) {
   constexpr size_t SHAPE_SIZE = 5;

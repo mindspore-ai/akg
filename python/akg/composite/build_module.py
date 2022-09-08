@@ -229,6 +229,17 @@ def update_tuned_attrs(desc_d, attrs):
                 attrs[name] = attrs.get(name, a["value"])
     return attrs
 
+
+def update_dynmaic_batch_attrs(desc_d, attrs):
+    """update attrs related to dynamic batch
+    """
+    if "dynamic_input_index" in desc_d:
+        attrs["dynamic_input_index"] = desc_d["dynamic_input_index"]
+    else:
+        attrs["dynamic_input_index"] = ""
+    return attrs
+
+
 def _set_attrs(desc_d, attrs, poly):
     if "enable_atomic_add" not in attrs.keys():
         attrs["enable_atomic_add"] = should_enable_attr(desc_d, "enable_atomic_add")
@@ -243,6 +254,7 @@ def _set_attrs(desc_d, attrs, poly):
     attrs["enable_symbolic_tiling"] = is_symbolic_tiling(desc_d['op'])
     attrs["process"] = desc_d["process"]
     attrs = update_tuned_attrs(desc_d, attrs)
+    attrs = update_dynmaic_batch_attrs(desc_d, attrs)
     if desc_d["process"] == "cpu":
         attrs["pack_matrix_b"] = False if should_enable_attr(desc_d, "pack_b") else True
     return _update_compile_attr(desc_d, attrs)

@@ -107,6 +107,9 @@ void RenameBinds(Map<Tensor, Buffer> &binds, const BuildConfig &config, Array<No
 void GetFlattenedBinds(const Array<NodeRef> &args, const Map<Tensor, Buffer> &binds, const BuildConfig &config,
                        Array<NodeRef> &out_args, Map<Tensor, Buffer> &out_binds, bool is_dynamic);
 
+Tensor AddAdditionalArg(Array<NodeRef> &args, Map<Tensor, Buffer> &binds, const Array<Expr> &shape, const Type &type,
+                        const std::string &tensor_name);
+
 void FixParametricBinds(const Map<Tensor, Buffer> &binds, const Array<NodeRef> &in_args, const BuildConfig &config,
                         Map<Tensor, Buffer> *out_binds, Array<NodeRef> *out_args);
 }  // namespace akg
