@@ -18,6 +18,7 @@
 
 #include <tvm/dtype.h>
 
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -52,6 +53,7 @@ class Tensor {
     {"bool8", Tensor::DataType::Bool8}};
 
   Tensor();
+  explicit Tensor(const std::shared_ptr<Tensor> &);
   Tensor(const std::vector<int64_t> &, DataType, const std::string &);
   Tensor(const std::vector<int64_t> &, const std::string &, const std::string &);
 

@@ -48,14 +48,14 @@ void GetTilingSize(ModelGraph &model_graph, Hardware hardware) {
     }
   }
 
-  // extend mc axis
+  // extend axis
   for (auto &axis : ModelGraph::global_axis_vec_) {
-    if (!axis.is_inner_ && axis.dim_axis_ == GetLastDimAxis()) {
-      if (axis.type_.count(Axis::AxisLabel::kMatMulAxisBatch) == 0 &&
-          axis.type_.count(Axis::AxisLabel::kMatMulAxisN) == 0 &&
-          axis.type_.count(Axis::AxisLabel::kMatMulAxisM) == 0 &&
-          axis.type_.count(Axis::AxisLabel::kMatMulAxis16) == 0 &&
-          axis.type_.count(Axis::AxisLabel::kMatMulAxisK) == 0) {
+    if (!axis.is_inner_ && axis.type_.count(Axis::AxisLabel::kMatMulAxisBatch) == 0 &&
+        axis.type_.count(Axis::AxisLabel::kMatMulAxisN) == 0 && axis.type_.count(Axis::AxisLabel::kMatMulAxisM) == 0 &&
+        axis.type_.count(Axis::AxisLabel::kMatMulAxis16) == 0 && axis.type_.count(Axis::AxisLabel::kMatMulAxisK) == 0) {
+      if (axis.type_.find(Axis::AxisLabel::kVectorization) != axis.type_.end()) {
+        ExtendVecAxisTile(axis, model_graph, hardware);
+      } else if (axis.type_.find(Axis::AxisLabel::kMultiCore) != axis.type_.end()) {
         ExtendMulticoreAxisTile(axis, model_graph, hardware);
       }
     }

@@ -26,6 +26,7 @@ namespace poly {
 int64_t GetVecAxis(const Axis &axis, const ModelGraph &model_graph, Hardware hardware);
 int64_t GetMixTypeAxis(const Axis &axis, const ModelGraph &model_graph, Hardware hardware);
 bool PrioAxis(const Axis &axis, const ModelGraph &model_graph);
+void ExtendVecAxisTile(Axis &axis, const ModelGraph &model_graph, Hardware hardware);
 
 const int kBlocksNumForVectorization = 8;
 const int kSecondAxis = 2;
