@@ -2,6 +2,26 @@
 
 [查看中文](./RELEASE_CN.md)
 
+
+## MindAKG 1.9.0 Release Notes
+### Major Features and Improvements
+
+* Support the auto-generation of cpu-pool2d(avg/max/global). [!763](https://gitee.com/mindspore/akg/pulls/763) (CPU)
+* Integerate Symbolic Tiling algorithm for AKG. [!764](https://gitee.com/mindspore/akg/pulls/764) (Ascend)
+* AutoTiling optimization on GPU Backend. [!784](https://gitee.com/mindspore/akg/pulls/784) [!785](https://gitee.com/mindspore/akg/pulls/785) [!783](https://gitee.com/mindspore/akg/pulls/783)  (GPU)
+* optimization for Transpose Operator. [!811](https://gitee.com/mindspore/akg/pulls/811) (CPU)
+
+### Bug fixes
+* Fix the bug that analysis error of read-write relationship in multi-filter.[!778](https://gitee.com/mindspore/akg/pulls/778) (All)
+* Fix the bug when batch_matmul recognizes the axis. [!807](https://gitee.com/mindspore/akg/pulls/807) (CPU)
+* Fix the bug when gcc version is less then 7.3. [!817](https://gitee.com/mindspore/akg/pulls/817) (All)
+
+ ### Contributors
+
+Thanks goes to these wonderful people:
+
+yangsijia, polyhedral, zhangrenwei, yiyanzhi, hujiahui8, zhengzuohe, zhangzhaochuang, xuhui, liuchao, xiaruijie, DeshiChen, nelson.lossing, zhenzhang, chenlei_autodiff,  wYann, hanhuifeng, gaoxiong, zichun_ye, chengbin, wangrao124, huangmengxi, harenome, huoxinyou, yanglinfeng, Etienne
+
 ## MindAKG 1.8.0 Release Notes
 
 ### Major Features and Improvements
