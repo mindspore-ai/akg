@@ -83,10 +83,6 @@ class DumpManager {
 };
 void DumpStr2File(const std::string &file_name, const std::string &str);
 void DumpStmt2File(const std::string &file_name, const Stmt &stmt);
-void DumpStitchInfo(const std::string &kernel_name, StitchAttrInfo &store_attr,
-                    std::unordered_map<std::string, StitchBufferInfo> &stitch_buffer_map,
-                    std::unordered_map<std::string, StitchBufferInfo> &buf_within_op_map,
-                    std::vector<std::string> &allocate_revoke);
 void DumpIRAttr(const std::string &kernel_name, const IrAttrInfo &attr, size_t index);
 void DumpHeader(std::ofstream &of, const std::string &str);
 void DumpBuildInfo(const BuildInfo &info);

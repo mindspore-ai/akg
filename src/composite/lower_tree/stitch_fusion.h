@@ -15,6 +15,8 @@
  */
 #ifndef STITCH_FUSION_H_
 #define STITCH_FUSION_H_
+#define GLOBAL "global"
+#define LOCAL_L1 "local_L1"
 #include "composite/utils/util.h"
 
 namespace akg {
@@ -49,259 +51,6 @@ struct IrAttrInfo {
   Map<std::string, NodeRef> attrs;
   Expr broadcast_size{0};
   Expr elemwise_size{0};
-};
-
-class StitchBufAlloc : public IRVisitor {
- public:
-  StitchBufAlloc(const std::vector<Stmt> &stitch_irs, const Map<std::string, Array<NodeRef>> &alloc_map,
-                 const Map<std::string, Array<NodeRef>> &reuse_map,
-                 const Map<std::string, Array<NodeRef>> &global_stitch,
-                 const std::unordered_map<std::string, NodeRef> &outputs2args)
-      : stitch_irs_(stitch_irs),
-        alloc_map_(alloc_map),
-        reuse_map_(reuse_map),
-        global_stitch_(global_stitch),
-        outputs2args_(outputs2args){};
-  ~StitchBufAlloc() override = default;
-
-  void GetTotalBlock() {
-    for (const auto &ir : stitch_irs_) {
-      ir_idx_ += 1;
-      if (total_block_) {
-        block_extent_ = 1;
-      }
-      IRVisitor::Visit(ir);
-      if (!total_block_) {
-        total_block_ = block_extent_;
-      }
-
-      if (block_extent_ != 1) {
-        if (total_block_ != block_extent_) LOG(INFO) << "GridDim between splitted irs should be the same.";
-      }
-    }
-  }
-
-  void ProcessGlobalStitch() {
-    for (const auto &it : global_stitch_) {
-      std::string name = it.first;
-      if (name == "EMPTY") {
-        break;
-      }
-      auto alloc_info = it.second[0].as<StringImm>()->value;
-      auto alloc_size = it.second[1].as<IntImm>()->value;
-      std::string ir_var = name;
-      StitchBufferInfo info;
-      info.name = name;
-      info.type = StorageType::Global;
-      info.buf_name = ir_var;
-      info.alloc_size = alloc_size;
-      stitch_buffer_map[ir_var] = info;
-    }
-  }
-
-  void ProcessAllocMap() {
-    for (const auto &it : alloc_map_) {
-      std::string name = it.first;
-      auto dtype = it.second[0].as<StringImm>()->value;
-      CHECK_GT(total_block_, 0);
-      uint64_t alloc_size_per_block = it.second[1].as<IntImm>()->value / total_block_;
-      // first, check whether variable is already in buf_within_op_map. If NOT, do allocation or reuse.
-      CHECK(outputs2args_.find(name) != outputs2args_.end());
-      std::string ir_var = outputs2args_.at(name).as<BufferNode>()->name;
-      std::string shared_name = ir_var + "_shared";
-      std::string ir_var_shared;
-      if (buf_within_op_map.find(shared_name) != buf_within_op_map.end()) {
-        ir_var_shared = shared_name;
-      } else {
-        allocated_share_size_ += alloc_size_per_block;
-        ir_var_shared = ir_var + "_shared_stitch";
-      }
-
-      StitchBufferInfo info;
-      info.name = name;
-      info.type = StorageType::Shared;
-      info.buf_name = ir_var_shared;
-      info.alloc_size = alloc_size_per_block;
-      info.dtype = type_mapping[dtype];
-      stitch_buffer_map[ir_var] = info;
-      buf_alloc_op_[ir_var] = info;
-    }
-  }
-
-  void ProcessReuseMap() {
-    for (const auto &it : reuse_map_) {
-      std::string name = it.first;
-      if (name == "EMPTY") {
-        break;
-      }
-      auto alloc_info = it.second[0].as<StringImm>()->value;
-      uint64_t alloc_size_per_block = it.second[1].as<IntImm>()->value / total_block_;
-      CHECK(outputs2args_.find(alloc_info) != outputs2args_.end());
-      CHECK(outputs2args_.find(name) != outputs2args_.end());
-      auto ir_var_reuse = outputs2args_.at(alloc_info).as<BufferNode>()->name;
-      auto ir_var = outputs2args_.at(name).as<BufferNode>()->name;
-      auto alloc_stitch_info = buf_alloc_op_[ir_var_reuse];
-      std::string shared_name = ir_var + "_shared";
-
-      bool can_reuse = true;
-      for (auto &kv : store_load_) {
-        if (shared_name != kv.first->buffer_var->name_hint) continue;
-        for (auto &item : kv.second) {
-          if (alloc_info == item->buffer_var->name_hint) can_reuse = false;
-        }
-      }
-
-      if (can_reuse && buf_within_op_map.find(shared_name) != buf_within_op_map.end()) {
-        // add replaced buffer into stitch_buffer_map.
-        if (allocated_share_size_ >= alloc_size_per_block) {
-          StitchBufferInfo info;
-          info.name = name;
-          info.type = StorageType::Shared;
-          info.buf_name = alloc_stitch_info.buf_name;
-          info.alloc_size = alloc_size_per_block;
-          stitch_buffer_map[shared_name] = info;
-          // remember to reduce allocated_share_size_ due to reuse.
-          allocated_share_size_ -= alloc_size_per_block;
-          allocate_revoke.push_back(shared_name);
-        }
-      }
-      StitchBufferInfo info;
-      info.name = name;
-      info.type = StorageType::Shared;
-      info.buf_name = alloc_stitch_info.buf_name;
-      info.alloc_size = alloc_size_per_block;
-      stitch_buffer_map[ir_var] = info;
-      buf_alloc_op_.erase(ir_var_reuse);
-    }
-  }
-
-  void ProccessSharedMemOverflow() {
-    if (allocated_share_size_ >= MEM_LIMIT) {
-      std::vector<std::pair<std::string, StitchBufferInfo>> reuse_free_map(buf_alloc_op_.begin(), buf_alloc_op_.end());
-      std::sort(reuse_free_map.begin(), reuse_free_map.end(),
-                [=](std::pair<std::string, StitchBufferInfo> &a, std::pair<std::string, StitchBufferInfo> &b) -> bool {
-                  return (a.second.alloc_size > b.second.alloc_size);
-                });
-      auto overflow_size = allocated_share_size_ - MEM_LIMIT;
-      bool cover_overflow_size = false;
-      std::string moveout_var;
-      for (const auto &iv : reuse_free_map) {
-        if (iv.second.alloc_size >= overflow_size) {
-          moveout_var = iv.first;
-          cover_overflow_size = true;
-        } else {
-          break;
-        }
-      }
-      if (cover_overflow_size) {
-        auto moveout_info = stitch_buffer_map[moveout_var];
-        moveout_info.type = StorageType::Global;
-        moveout_info.buf_name = moveout_info.buf_name + "_global";
-        stitch_buffer_map[moveout_var] = moveout_info;
-        stitch_buffer_map[moveout_var].alloc_size *= total_block_;
-      }
-      if (!cover_overflow_size) {
-        auto covered_size = 0;
-        for (const auto &iv : reuse_free_map) {
-          auto moveout_info = stitch_buffer_map[iv.first];
-          covered_size += iv.second.alloc_size;
-          moveout_info.type = StorageType::Global;
-          moveout_info.buf_name = moveout_info.buf_name + "_global";
-          stitch_buffer_map[iv.first].type = StorageType::Global;
-          stitch_buffer_map[iv.first].alloc_size *= total_block_;
-          if (static_cast<uint64_t>(covered_size) >= overflow_size) {
-            break;
-          }
-        }
-      }
-    }
-  }
-
-  void BufferAllocReuse() {
-    GetTotalBlock();
-    ProcessGlobalStitch();
-    ProcessAllocMap();
-    ProcessReuseMap();
-    ProccessSharedMemOverflow();
-  }
-
-  void Dump() {
-    LOG(INFO) << "=========buf_within_op_map=========: ";
-    for (const auto &kv : buf_within_op_map) {
-      LOG(INFO) << "EACH : ";
-      LOG(INFO) << kv.first;
-      LOG(INFO) << kv.second;
-    }
-    LOG(INFO) << "=========stitch_buffer_map=========:  ";
-    for (const auto &kv : stitch_buffer_map) {
-      LOG(INFO) << "EACH : ";
-      LOG(INFO) << kv.first;
-      LOG(INFO) << kv.second;
-    }
-  }
-
- public:
-  std::unordered_map<std::string, StitchBufferInfo> buf_within_op_map;
-  std::unordered_map<std::string, StitchBufferInfo> stitch_buffer_map;
-  std::vector<std::string> allocate_revoke;
-
- private:
-  void Visit_(const AttrStmt *op) final {
-    if (op->attr_key == air::ir::attr::storage_scope && op->value.as<StringImm>()->value == SHARED) {
-      gather_shared_ = true;
-    }
-    if (op->attr_key == air::ir::attr::thread_extent) {
-      const auto *iv = op->node.as<IterVarNode>();
-      CHECK(iv);
-      std::string name = iv->var->name_hint;
-      if (name.compare(0, BLOCKIDX_LEN, BLOCKIDX) == 0) {
-        block_extent_ *= op->value.as<IntImm>()->value;
-      }
-    }
-    IRVisitor::Visit(op->body);
-  }
-
-  void Visit_(const Allocate *op) final {
-    if (gather_shared_) {
-      const Variable *buf = op->buffer_var.get();
-      std::string name = buf->name_hint;
-      CHECK_GE(op->constant_allocation_size(), 0) << "allocation size < 0";
-      auto size = static_cast<uint64_t>(op->constant_allocation_size());
-      allocated_share_size_ += size * op->type.bytes();
-      StitchBufferInfo info;
-      info.name = name;
-      info.type = StorageType::Shared;
-      info.buf_name = name;
-      info.alloc_size = size * op->type.bytes();
-      buf_within_op_map[name] = info;
-
-      gather_shared_ = false;
-    }
-    IRVisitor::Visit(op->body);
-  }
-
-  void Visit_(const Store *op) final {
-    IRVisitor::Visit(op->value);
-    store_load_[op] = loads_;
-    loads_.clear();
-  }
-
-  void Visit_(const Load *op) final { loads_.emplace_back(op); }
-
- private:
-  std::vector<Stmt> stitch_irs_;
-  Map<std::string, Array<NodeRef>> alloc_map_;
-  Map<std::string, Array<NodeRef>> reuse_map_;
-  Map<std::string, Array<NodeRef>> global_stitch_;
-  std::unordered_map<std::string, NodeRef> outputs2args_;
-  std::unordered_map<std::string, StitchBufferInfo> buf_alloc_op_;
-  std::vector<const Load *> loads_;
-  std::unordered_map<const Store *, std::vector<const Load *>> store_load_;
-  int ir_idx_ = 0;
-  int total_block_ = 0;
-  int block_extent_ = 1;
-  uint64_t allocated_share_size_ = 0;
-  bool gather_shared_ = false;
 };
 
 class BufferStitchAttr : public GridBlockDimsAttr {
@@ -384,17 +133,69 @@ class BufferStitchAttr : public GridBlockDimsAttr {
   std::vector<size_t> split_index;
 };
 
+class GetGpuMutateInfo : public IRVisitor {
+ public:
+  GetGpuMutateInfo(const std::vector<Stmt> &stitch_irs) : stitch_irs_(stitch_irs){};
+  ~GetGpuMutateInfo() override = default;
+  int get_total_block() {
+    int total_block_ = 0;
+    block_extent_ = 1;
+    for (const auto &ir : stitch_irs_) {
+      if (total_block_) {
+        block_extent_ = 1;
+      }
+      IRVisitor::Visit(ir);
+      if (!total_block_) {
+        total_block_ = block_extent_;
+      }
+      if (block_extent_ != 1) {
+        if (total_block_ != block_extent_) LOG(INFO) << "GridDim between splitted irs should be the same";
+      }
+    }
+    return total_block_;
+  }
+  std::unordered_map<std::string, Region> get_buffer_region_map() {
+    for (const auto &ir : stitch_irs_) {
+      IRVisitor::Visit(ir);
+    }
+    return buf_region_map_;
+  }
+
+ private:
+  void Visit_(const AttrStmt *op) final {
+    if (op->attr_key == air::ir::attr::thread_extent) {
+      const auto *iv = op->node.as<air::IterVarNode>();
+      CHECK(iv);
+      std::string name = iv->var->name_hint;
+      if (name.compare(0, BLOCKIDX_LEN, BLOCKIDX) == 0) {
+        block_extent_ *= op->value.as<IntImm>()->value;
+      }
+    }
+    IRVisitor::Visit(op->body);
+  }
+
+  void Visit_(const Realize *op) final {
+    if (op->func.defined()) {
+      std::string buffer_name = op->func->func_name();
+      if (!buf_region_map_.count(buffer_name)) buf_region_map_[buffer_name] = op->bounds;
+    }
+    IRVisitor::Visit(op->body);
+  }
+  std::vector<Stmt> stitch_irs_;
+  int block_extent_;
+  std::unordered_map<std::string, Region> buf_region_map_;
+};
+
 IrAttrInfo GetIRAttr(StitchOpType type, BufferStitchAttr &stitch_attr_info, std::vector<StitchOpType> &type_array,
                      std::vector<GridBlockDims> &dim_array, const Map<std::string, NodeRef> &attrs);
-Stmt StitchFusionGpu(std::vector<Stmt> &stitch_irs, const std::string &kernel_name, StitchAttrInfo &store_attr,
-                     std::unordered_map<std::string, StitchBufferInfo> &stitch_buffer_map,
-                     std::unordered_map<std::string, StitchBufferInfo> &buf_within_op_map,
-                     std::vector<std::string> &allocate_revoke,
-                     const std::unordered_map<std::string, NodeRef> &real_outputs, Array<NodeRef> &workspace_args);
 Stmt StitchFusionAscend(std::vector<Stmt> &stitch_irs, const std::string &kernel_name,
                         std::unordered_map<std::string, NodeRef> &stitch_buffer,
                         const std::unordered_map<std::string, NodeRef> &real_outputs, Array<NodeRef> &workspace_args,
                         Map<Tensor, Buffer> &workspace_binds);
+Stmt StitchFusionGPU(std::vector<Stmt> &stitch_irs, const std::string &kernel_name,
+                     std::unordered_map<std::string, NodeRef> &stitch_buffer,
+                     const std::unordered_map<std::string, NodeRef> &real_outputs, Array<NodeRef> &workspace_args,
+                     Map<Tensor, Buffer> &workspace_binds);
 }  // namespace akg
 
 #endif  // STITCH_FUSION_H_

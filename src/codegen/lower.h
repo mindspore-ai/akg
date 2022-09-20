@@ -46,6 +46,7 @@ class LowerDataNode : public Node {
   Array<Integer> split_index;
   std::string target{"Unknown"};
   bool tuning{false};
+  Map<std::string, NodeRef> gpu_stitch_buf_alloc_size;
 
   TVM_DLL static LowerData make();
   TVM_DLL static LowerData make(Schedule sch, const Array<NodeRef> &args, const Map<Tensor, Buffer> &binds,
@@ -157,6 +158,8 @@ inline StageResult LowerDone(Stmt &stmt, LowerData &data) {
 
 inline StageResult LowerFlattern(Stmt &stmt, LowerData &data) {
   stmt = NEXT_PASS(StorageFlatten, stmt, data->binds_0, 64, data->config->instrument_bound_checkers);
+  stmt = NEXT_PASS(StitchGpuAllocResize, stmt, data->gpu_stitch_buf_alloc_size);
+  stmt = NEXT_PASS(ElimDuplicateInputsPass, stmt, data->arg_list_0);
   stmt = NEXT_PASS(CanonicalSimplify, stmt);
   return {stmt, false};
 }

@@ -180,7 +180,7 @@ def parse_merged_json(desc_d, stitch_tensor_name, input_tensor_name, output_tens
                            and tmp_name not in input_tensor_name
             used_by_other_sg = tmp_name in subgraph
             used_as_output = tmp_name in output_tensor_name
-            extra_output = extra_output and (used_by_other_sg or used_as_output)
+            extra_output = extra_output and (used_by_other_sg)
             if extra_output and cur_stitch_node and not final_output_graph:
                 extra_subgraph_output[cur_stitch_node].insert(0, tmp_name)
                 break
@@ -399,7 +399,10 @@ def stitch_json_split(desc_d):
         sg.ops = list(reversed(sg.ops))
         sg.op_name = desc_d['op']
         stitch_json_str = sub_graph_info(sg, desc_d)
-        dump_stitch_sub_json(stitch_json_str, desc_d, sg.op_name, i)
+        try:
+            dump_stitch_sub_json(stitch_json_str, desc_d, sg.op_name, i)
+        except:
+            pass
         stitch_jsons.append(stitch_json_str)
 
     clean_op_list = list(fake_op for fake_op in fake_output_list if fake_op in stitch_node_name)
