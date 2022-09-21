@@ -695,7 +695,7 @@ isl::union_map RemoveReduceOpSelfDependence(ScopInfo &scop_info, PassInfo &pass_
               !res.second.empty()) {
             bool is_global = false;
             for (auto it : scop_info.user_config_.GetOriginBind()) {
-              if (it.second->data->name_hint == res.second) {
+              if (it.first->op->name == res.second) {
                 is_global = true;
                 break;
               }
