@@ -68,10 +68,12 @@
 #include <llvm/IR/InlineAsm.h>
 
 #include <llvm/IR/LegacyPassManager.h>
+#include <llvm/Transforms/Utils.h>
 #include <llvm/Transforms/Utils/Cloning.h>
 #include <llvm/Transforms/Utils/ModuleUtils.h>
 #include <llvm/Transforms/IPO/PassManagerBuilder.h>
 #include <llvm/Transforms/IPO.h>
+#include <llvm/Transforms/Scalar.h>
 
 #if TVM_LLVM_VERSION >= 100
 #include <llvm/Support/Alignment.h>

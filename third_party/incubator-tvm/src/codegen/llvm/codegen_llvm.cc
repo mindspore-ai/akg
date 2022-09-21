@@ -291,6 +291,11 @@ void CodeGenLLVM::Optimize() {
   fpass.add(llvm::createTargetTransformInfoWrapperPass(
               target_machine_ ? target_machine_->getTargetIRAnalysis() :
               llvm::TargetIRAnalysis()));
+  fpass.add(llvm::createLowerExpectIntrinsicPass());
+  fpass.add(llvm::createCFGSimplificationPass());
+  fpass.add(llvm::createSROAPass());
+  fpass.add(llvm::createEarlyCSEPass());
+  fpass.add(llvm::createPromoteMemoryToRegisterPass());
 
   // place optimization pass
   llvm::PassManagerBuilder builder;
@@ -1698,6 +1703,7 @@ llvm::Value* CodeGenLLVM::CreateMatrixTranspose4x4(llvm::Value* dst_buffer, llvm
   std::vector<unsigned> low_h = {0, 2};
   std::vector<unsigned> high_h = {1, 3};
 #endif
+  bool is_volatile = false;
   llvm::StoreInst* store;
 
   llvm::Value* ptr0 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), src_buffer, ConstInt32(0));
@@ -1705,12 +1711,12 @@ llvm::Value* CodeGenLLVM::CreateMatrixTranspose4x4(llvm::Value* dst_buffer, llvm
   llvm::Value* ptr2 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), src_buffer, ConstInt32(2));
   llvm::Value* ptr3 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), src_buffer, ConstInt32(3));
 
-  llvm::LoadInst* xmm0 = builder_->CreateAlignedLoad(ptr0, align, true);
-  llvm::LoadInst* xmm1 = builder_->CreateAlignedLoad(ptr1, align, true);
+  llvm::LoadInst* xmm0 = builder_->CreateAlignedLoad(ptr0, align, is_volatile);
+  llvm::LoadInst* xmm1 = builder_->CreateAlignedLoad(ptr1, align, is_volatile);
   auto tmp0 = builder_->CreateShuffleVector(xmm0, xmm1, low);
   auto tmp1 = builder_->CreateShuffleVector(xmm0, xmm1, high);
-  llvm::LoadInst* xmm2 = builder_->CreateAlignedLoad(ptr2, align, true);
-  llvm::LoadInst* xmm3 = builder_->CreateAlignedLoad(ptr3, align, true);
+  llvm::LoadInst* xmm2 = builder_->CreateAlignedLoad(ptr2, align, is_volatile);
+  llvm::LoadInst* xmm3 = builder_->CreateAlignedLoad(ptr3, align, is_volatile);
   auto tmp2 = builder_->CreateShuffleVector(xmm2, xmm3, low);
   auto tmp3 = builder_->CreateShuffleVector(xmm2, xmm3, high);
 
@@ -1725,13 +1731,13 @@ llvm::Value* CodeGenLLVM::CreateMatrixTranspose4x4(llvm::Value* dst_buffer, llvm
   ptr3 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), dst_buffer, ConstInt32(3));
 
   auto row0 = builder_->CreateShuffleVector(tmp0, tmp2, low_h);
-  store = builder_->CreateAlignedStore(row0, ptr0, llvm::Align(row), true);
+  store = builder_->CreateAlignedStore(row0, ptr0, llvm::Align(row), is_volatile);
   auto row1 = builder_->CreateShuffleVector(tmp0, tmp2, high_h);
-  store = builder_->CreateAlignedStore(row1, ptr1, llvm::Align(row), true);
+  store = builder_->CreateAlignedStore(row1, ptr1, llvm::Align(row), is_volatile);
   auto row2 = builder_->CreateShuffleVector(tmp1, tmp3, low_h);
-  store = builder_->CreateAlignedStore(row2, ptr2, llvm::Align(row), true);
+  store = builder_->CreateAlignedStore(row2, ptr2, llvm::Align(row), is_volatile);
   auto row3 = builder_->CreateShuffleVector(tmp1, tmp3, high_h);
-  store = builder_->CreateAlignedStore(row3, ptr3, llvm::Align(row), true);
+  store = builder_->CreateAlignedStore(row3, ptr3, llvm::Align(row), is_volatile);
   return store;
 }
 
@@ -1752,6 +1758,7 @@ llvm::Value* CodeGenLLVM::CreateMatrixTranspose8x4(llvm::Value* dst_buffer, llvm
   std::vector<unsigned> low_h = {0, 4, 2, 6};
   std::vector<unsigned> high_h = {1, 5, 3, 7};
 #endif
+  bool is_volatile = false;
   llvm::StoreInst* store;
 
   llvm::Value* ptr0 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), src_buffer, ConstInt32(0));
@@ -1763,17 +1770,17 @@ llvm::Value* CodeGenLLVM::CreateMatrixTranspose8x4(llvm::Value* dst_buffer, llvm
   llvm::Value* ptr6 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), src_buffer, ConstInt32(6));
   llvm::Value* ptr7 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), src_buffer, ConstInt32(7));
 
-  llvm::LoadInst* xmm0 = builder_->CreateAlignedLoad(ptr0, align, true);
-  llvm::LoadInst* xmm4 = builder_->CreateAlignedLoad(ptr4, align, true);
+  llvm::LoadInst* xmm0 = builder_->CreateAlignedLoad(ptr0, align, is_volatile);
+  llvm::LoadInst* xmm4 = builder_->CreateAlignedLoad(ptr4, align, is_volatile);
   auto ymm0 = builder_->CreateShuffleVector(xmm0, xmm4, concat);
-  llvm::LoadInst* xmm1 = builder_->CreateAlignedLoad(ptr1, align, true);
-  llvm::LoadInst* xmm5 = builder_->CreateAlignedLoad(ptr5, align, true);
+  llvm::LoadInst* xmm1 = builder_->CreateAlignedLoad(ptr1, align, is_volatile);
+  llvm::LoadInst* xmm5 = builder_->CreateAlignedLoad(ptr5, align, is_volatile);
   auto ymm1 = builder_->CreateShuffleVector(xmm1, xmm5, concat);
-  llvm::LoadInst* xmm2 = builder_->CreateAlignedLoad(ptr2, align, true);
-  llvm::LoadInst* xmm6 = builder_->CreateAlignedLoad(ptr6, align, true);
+  llvm::LoadInst* xmm2 = builder_->CreateAlignedLoad(ptr2, align, is_volatile);
+  llvm::LoadInst* xmm6 = builder_->CreateAlignedLoad(ptr6, align, is_volatile);
   auto ymm2 = builder_->CreateShuffleVector(xmm2, xmm6, concat);
-  llvm::LoadInst* xmm3 = builder_->CreateAlignedLoad(ptr3, align, true);
-  llvm::LoadInst* xmm7 = builder_->CreateAlignedLoad(ptr7, align, true);
+  llvm::LoadInst* xmm3 = builder_->CreateAlignedLoad(ptr3, align, is_volatile);
+  llvm::LoadInst* xmm7 = builder_->CreateAlignedLoad(ptr7, align, is_volatile);
   auto ymm3 = builder_->CreateShuffleVector(xmm3, xmm7, concat);
 
   auto tmp0 = builder_->CreateShuffleVector(ymm0, ymm1, low);
@@ -1792,13 +1799,13 @@ llvm::Value* CodeGenLLVM::CreateMatrixTranspose8x4(llvm::Value* dst_buffer, llvm
   ptr3 = CreateBufferVecPtr(DataType(kDLUInt, bits, row), dst_buffer, ConstInt32(3));
 
   auto row0 = builder_->CreateShuffleVector(tmp0, tmp2, low_h);
-  store = builder_->CreateAlignedStore(row0, ptr0, llvm::Align(row), true);
+  store = builder_->CreateAlignedStore(row0, ptr0, llvm::Align(row), is_volatile);
   auto row1 = builder_->CreateShuffleVector(tmp0, tmp2, high_h);
-  store = builder_->CreateAlignedStore(row1, ptr1, llvm::Align(row), true);
+  store = builder_->CreateAlignedStore(row1, ptr1, llvm::Align(row), is_volatile);
   auto row2 = builder_->CreateShuffleVector(tmp1, tmp3, low_h);
-  store = builder_->CreateAlignedStore(row2, ptr2, llvm::Align(row), true);
+  store = builder_->CreateAlignedStore(row2, ptr2, llvm::Align(row), is_volatile);
   auto row3 = builder_->CreateShuffleVector(tmp1, tmp3, high_h);
-  store = builder_->CreateAlignedStore(row3, ptr3, llvm::Align(row), true);
+  store = builder_->CreateAlignedStore(row3, ptr3, llvm::Align(row), is_volatile);
   return store;
 }
 
