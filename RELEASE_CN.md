@@ -2,6 +2,28 @@
 
 [View English](./RELEASE.md)
 
+## MindAKG 1.9.0 Release Notes
+
+### 主要特性和增强
+
+* 支持CPU后端pool2d相关算子(avg/max/global)的自动生成流程。[!763](https://gitee.com/mindspore/akg/pulls/763) (CPU)
+* AKG集成符号切分算法。[!764](https://gitee.com/mindspore/akg/pulls/764) (Ascend)
+* GPU后端自动切分算法优化。 [!784](https://gitee.com/mindspore/akg/pulls/784) [!785](https://gitee.com/mindspore/akg/pulls/785) [!783](https://gitee.com/mindspore/akg/pulls/783)  (GPU)
+* CPU后端Transpose算子性能优化。[!811](https://gitee.com/mindspore/akg/pulls/811) (CPU)
+
+### Bug 修复
+
+* 修复了多filter场景中读写依赖分析时的bug。[!778](https://gitee.com/mindspore/akg/pulls/778) (All)
+* 修复了CPU后端batchMatmul识别轴流程中的bug。[!807](https://gitee.com/mindspore/akg/pulls/807) (CPU)
+* 修复了系统环境gcc版本低于7.3时，编译reduce算子时存在的bug。[!817](https://gitee.com/mindspore/akg/pulls/817) (All)
+
+### 贡献者
+
+感谢以下开发者做出的贡献：
+
+yangsijia, polyhedral, zhangrenwei, yiyanzhi, hujiahui8, zhengzuohe, zhangzhaochuang, xuhui, liuchao, xiaruijie, DeshiChen, nelson.lossing, zhenzhang, chenlei_autodiff, wYann, hanhuifeng, gaoxiong, zichun_ye, chengbin, wangrao124, huangmengxi, harenome, huoxinyou, yanglinfeng, Etienne
+
+
 ## MindAKG 1.8.0 Release Notes
 
 ### 主要特性和增强
