@@ -126,53 +126,6 @@ extern HcclResult HcomSetGradFusionByIndex(const char *group, u32 segmentNum, co
  * @return HcclResult
  */
 extern HcclResult HcomSetGradFusionBySize(const char *group, u32 segmentNum, const float *sizeList);
-
-/**
- * @brief Initialize hcom executor.
- *
- * @param void
- * @return HcclResult
- */
-HcclResult HcomExecInitialize();
-
-/**
- * @brief Finalize hcom executor.
- *
- * @param void
- * @return HcclResult
- */
-HcclResult HcomExecFinalize();
-
-/**
- * @brief Put collective communication operation into hcom executor.
- *
- * @param opInfo information about collective communication operation.
- * @param callback callback after collective communication operation.
- * @return HcclResult
- */
-HcclResult HcomExecEnqueueOperation(HcomOperation opInfo, std::function<void(HcclResult status)> callback);
-
-/**
- * @brief Put remote access operation into hcom executor.
- *
- * @param remoteAccessType operation type (read or write).
- * @param addrInfos address information about collective communication operation.
- * @param callback callback after collective communication operation.
- * @return HcclResult
- */
-HcclResult HcomExecEnqueueRemoteAccess(const std::string& remoteAccessType,
-                                       const std::vector<HcomRemoteAccessAddrInfo>& addrInfos,
-                                       std::function<void(HcclResult status)> callback);
-
-/**
- * @brief Register memories and init resources for remote access.
- *
- * @param addrList memory addresses for remote access.
- * @param count number of remote memory addresses.
- * @return HcclResult
- */
-extern HcclResult HcomRegRemoteAccessMem(const MemRegisterAddr* addrList, u32 count);
-
 #ifdef __cplusplus
 }
 #endif // __cplusplus

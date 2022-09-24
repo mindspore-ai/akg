@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright 2019 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -141,6 +141,30 @@ REG_OP(If)
  *@par Third-party framework compatibility
  *@Compatible with the TensorFlow operator Case.
  */
+REG_OP(StatelessCase)
+    .INPUT(branch_index, DT_INT32)
+    .DYNAMIC_INPUT(input, TensorType::ALL())
+    .DYNAMIC_OUTPUT(output, TensorType::ALL())
+    .DYNAMIC_GRAPH(branches)
+    .OP_END_FACTORY_REG(StatelessCase)
+
+/**
+ *@brief Select one of the subgraphs to pass the input tensors and return the output tensors . \n
+
+ *@par Inputs:
+ *@li branch_index: A int32 scalar which determines the selected subgraph.
+ *@li input: The input tensors, which will be passed to the subgraph . It's a dynamic input. \n
+
+ *@par Graphs:
+ *branches: A list of subgraphs, each of which takes 'input' and returns a list of tensors,
+ *          whose types are the same as what every other subgraph returns . \n
+
+ *@par Outputs:
+ *output: The output tensors returned by one of branches . It's a dynamic output. \n
+
+ *@par Third-party framework compatibility
+ *@Compatible with the TensorFlow operator Case.
+ */
 REG_OP(Case)
     .INPUT(branch_index, DT_INT32)
     .DYNAMIC_INPUT(input, TensorType::ALL())
@@ -162,9 +186,6 @@ REG_OP(Case)
  *          if it is a string scalar, non-empty means True and empty means False;
  *          if it is not a scalar, non-empty means True and empty means False.
  *@li body: A subgraph takes 'input' and returns a another list of tensors .  \n
-
- *@par Attributes:
- *parallel_iterations: An optional int, default as 10 . \n
 
  *@par Outputs:
  *output: The output tensors returned by "body". Has the same type as "input" . \n
@@ -328,6 +349,72 @@ REG_OP(StatefulPartitionedCall)
     .ATTR(executor_type, String, "")
     .OP_END_FACTORY_REG(StatefulPartitionedCall)
 
+/**
+ * @par Inputs:
+ * @li input: The input tensors \n
+ *
+ * @par Outputs:
+ * @li output: The output tensors. \n
+ */
+REG_OP(ToBool)
+    .INPUT(input, TensorType({DT_INT64, DT_INT32, DT_INT16, DT_INT8, \
+        DT_UINT8, DT_FLOAT, DT_DOUBLE, DT_STRING, DT_BOOL}))
+    .OUTPUT(output, DT_BOOL)
+    .OP_END_FACTORY_REG(ToBool)
+
+/**
+ * @brief Abstract tiling function to an op definition
+ *        The input will be data or shape \n
+
+ * @par Inputs:
+ * @li x: the data of input.  all types are available,
+ * @li outputshape: the shape of previous op output shape . all types are available. \n
+
+ * @par Outputs:
+ * @li tiling_data: tiling data of tiling function. It should be a buffer
+ * @li tiling_key: tiling key of tiling function.
+ * @li block_dim: block dim of tiling function.
+ * @li tiling_cond: tiling condition of tiling function which will be used to determined real execute kernel. \n
+
+ * @par Attributes:
+ * @li tiling_node: A string. real tiling node such as matmul.
+ * @li op_type:  A string. Op type of the original node. \n
+
+ * @par Third-party framework compatibility
+ */
+REG_OP(OpTiling)
+    .DYNAMIC_INPUT(x, TensorType::ALL())
+    .DYNAMIC_INPUT(output_shape, TensorType::ALL())
+    .OUTPUT(tiling_data, TensorType({DT_UINT8}))
+    .OUTPUT(tiling_key, TensorType({DT_UINT64}))
+    .OUTPUT(block_dim, TensorType({DT_INT32}))
+    .OUTPUT(tiling_cond, TensorType({DT_INT32}))
+    .REQUIRED_ATTR(tiling_node, String)
+    .REQUIRED_ATTR(op_type, String)
+    .OP_END_FACTORY_REG(OpTiling)
+
+/**
+ * @brief  Calculate condition value by input tensor which will be used for if input or case input. \n
+
+ * @par Inputs:
+ * @li x: the data or shape of input.  all types are available,
+
+ * @par Outputs:
+ * @li cond: condition value calculated by cond fuction.
+            It will be cond input of if or branch_index input of case. \n
+
+ * @par Attributes:
+ * @li cond_func: A string. real condition function registered to calculate condition value.
+ * @li x_dependency: List of int. It should be the same number of inputs: 0(shape) 1(data). \n
+
+ * @par Third-party framework compatibility
+ */
+REG_OP(ConditionCalc)
+    .DYNAMIC_INPUT(x, TensorType::ALL())
+    .OUTPUT(cond, TensorType({DT_INT32}))
+    .REQUIRED_ATTR(cond_func, String)
+    .REQUIRED_ATTR(x_dependency, ListInt)
+    .OP_END_FACTORY_REG(ConditionCalc)
 }  // namespace ge
 
 #endif  // OPS_BUILT_IN_OP_PROTO_INC_FUNCTIONAL_OPS_H_

@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@
 #define SRC_RUNTIME_ASCEND_RUNTIME_ERROR_CODES_H_
 
 #include <string>
-#include "runtime/rt_error_codes.h"
+#include "external/runtime/rt_error_codes.h"
 namespace air {
 namespace runtime {
 std::string GetErrorMsg(uint32_t rt_error_code);

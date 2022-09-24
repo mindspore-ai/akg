@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,6 +23,8 @@
 #include "toolchain/slog.h"
 #include "runtime/base.h"
 
+namespace air {
+namespace runtime {
 enum ProfCommandHandleType {
   kProfCommandhandleInit = 0,
   kProfCommandhandleStart,
@@ -32,9 +34,6 @@ enum ProfCommandHandleType {
   kProfCommandhandleModelUnsubscribe
 };
 
-namespace air {
-namespace runtime {
-
 class ProfileMgr {
  public:
   ProfileMgr() = default;
@@ -42,13 +41,11 @@ class ProfileMgr {
 
   void RegCtrlCallback(MsprofCtrlCallback func) { ctrl_cb_ = func; }
 
-  void RegSetDeviceCallback(MsprofSetDeviceCallback func) { set_device_cb_ = func; }
-
   void RegReporterCallback(MsprofReporterCallback func) { reporter_cb_ = func; }
 
   bool ProfRegisterCtrlCallback() const;
 
-  Status CommandHandle(ProfCommandHandleType type);
+  Status ProfCommandHandle(ProfCommandHandleType type);
 
   static ProfileMgr &GetInstance();
 
@@ -73,12 +70,13 @@ class ProfileMgr {
   void PluginUnInit() const;
 
   MsprofCtrlCallback ctrl_cb_{nullptr};
-  MsprofSetDeviceCallback set_device_cb_{nullptr};
   MsprofReporterCallback reporter_cb_{nullptr};
   uint32_t device_id_{0};
   std::string kernel_label_;
 };
 
+
+Status ProfCommandHandle(ProfCommandHandleType type);
 rtError_t CtrlCallbackHandle(uint32_t rt_type, void *data, uint32_t len);
 Status ProfCtrlSwitchHandle(void *data);
 }  // namespace runtime

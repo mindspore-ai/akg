@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright 2019 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -35,7 +35,7 @@ namespace ge {
 * @li values:A `Tensor`. Must have the same type as `sorted_x`. \n
 
 *@par Attributes:
-*@li out_type:An optional `DType` from: `int32, int64`.
+*out_type:An optional `DType` from: `int32, int64`.
 Defaults to `int32`. \n
 
 *@par Outputs:
@@ -498,13 +498,34 @@ REG_OP(Constant)
     .OP_END_FACTORY_REG(Constant)
 
 /**
+*@brief Creates a file constant tensor, The operator is used to process the very large weight which is store in file. \n
+
+*@par Attributes:
+*file_path: A string, used to record file path. \n
+*file_id: A string, used to record file id. \n
+*shape: data shape. \n
+*dtype: data type. \n
+
+*@par Outputs:
+*y: The FileConstant tensor. \n
+*/
+REG_OP(FileConstant)
+    .OUTPUT(y, TensorType({DT_FLOAT, DT_FLOAT16, DT_INT8, DT_INT16, DT_UINT16, \
+        DT_UINT8, DT_INT32, DT_INT64, DT_UINT32, DT_UINT64, DT_BOOL, DT_DOUBLE}))
+    .ATTR(file_path, String, "")
+    .ATTR(file_id, String, "")
+    .REQUIRED_ATTR(shape, ListInt)
+    .REQUIRED_ATTR(dtype, Type)
+    .OP_END_FACTORY_REG(FileConstant)
+
+/**
 *@brief Returns a copy of the input tensor. \n
 
 *@par Inputs:
 *x: A tensor. \n
 
 *@par Outputs:
-*y: A tensor. \n
+*y: A copy of input tensor. \n
 
 *@par Third-party framework compatibility
 *Compatible with the TensorFlow operator Snapshot.
@@ -626,7 +647,7 @@ REG_OP(StopGradient)
 *x: A tensor. \n
 
 *@par Outputs:
-*y: A tensor. \n
+*y: A tensor with the same shape and contents as input. \n
 
 *@par Third-party framework compatibility
 *Compatible with the TensorFlow operator Identity.
@@ -666,7 +687,7 @@ REG_OP(IdentityN)
 *@li axis: The dimension index at which to expand. \n
 
 *@par Outputs:
-*y: A tensor. \n
+*y: A tensor with the same data as input, with an additional dimension inserted at the index specified by axis. \n
 
 *@par Third-party framework compatibility
 *Compatible with the TensorFlow operator ExpandDims.
@@ -684,7 +705,9 @@ REG_OP(ExpandDims)
 
 *@par Inputs:
 *@li x: Original tensor.
-*@li axis: List of ints. \n
+
+*@par Attributes:
+*@li axes: List of ints indicating the dimensions to be inserted. \n
 
 *@par Outputs:
 *y: Reshape tensor with same data as input. \n
@@ -700,6 +723,53 @@ REG_OP(Unsqueeze)
     .OP_END_FACTORY_REG(Unsqueeze)
 
 /**
+*@brief Inserts a dimension of 1 into a tensor's shape. Only the tensor shape is changed, without changing the data. \n
+
+*@par Inputs:
+*@li x: Original tensor.
+
+*@par Attributes:
+*@li axes: List of ints indicating the dimensions to be inserted. \n
+
+*@par Outputs:
+*y: Reshape tensor with same data as input. \n
+
+*@par Third-party framework compatibility
+*Compatible with the Onnx operator Unsqueeze.
+
+*@par Restrictions:
+* Warning: THIS FUNCTION IS DEPRECATED. Please use Unsqueeze instead.
+*/
+
+REG_OP(UnsqueezeV2)
+    .INPUT(x, TensorType::ALL())
+    .OUTPUT(y, TensorType::ALL())
+    .ATTR(axis, ListInt, {})
+    .OP_END_FACTORY_REG(UnsqueezeV2)
+
+
+/**
+*@brief Inserts a dimension of 1 into a tensor's shape. Only the tensor shape
+is changed, but the data is not changed. \n
+
+*@par Inputs:
+*x: A tensor.
+*axes: A list of int64, which indicates the dimensions to be inserted. \n
+
+*@par Outputs:
+*y: Reshape tensor with same data as input. \n
+
+*@par Third-party framework compatibility
+*Compatible with the Onnx operator Unsqueeze in V13. \n
+*/
+
+REG_OP(UnsqueezeV3)
+    .INPUT(x, TensorType::ALL())
+    .INPUT(axes, ListInt)
+    .OUTPUT(y, TensorType::ALL())
+    .OP_END_FACTORY_REG(UnsqueezeV3)
+
+/**
 *@brief Reshapes a tensor. Only the tensor shape is changed, without changing the data. \n
 
 *@par Inputs:
@@ -713,7 +783,7 @@ REG_OP(Unsqueeze)
 *@par Outputs:
 *y: A tensor. \n
 
-*@par Attention:
+*@attention Constraints:
 *This operator cannot be directly called by the acllopExecute API. \n
 
 *@par Third-party framework compatibility
@@ -752,13 +822,59 @@ REG_OP(Squeeze)
     .OP_END_FACTORY_REG(Squeeze)
 
 /**
-*@brief Returns an integer representing the rank of input tensor. The rank of a tensor is the number of indices required to uniquely select each element of the tensor, that is, the dimension size of the tensor. \n
+*@brief Removes dimensions of size 1 from the shape of a tensor. \n
 
 *@par Inputs:
 *x: A tensor. \n
 
+*@par Attributes:
+*axis: An optional list of int32 or int64. If not specified, squeezes all dimensions of size 1.   If specified, only squeezes the dimensions listed. It is an error to squeeze a dimension that is not 1. \n
+
 *@par Outputs:
-*y: A tensor. The rank of input tensor. \n
+*y: A tensor. \n
+
+*@par Third-party framework compatibility
+*Compatible with the TensorFlow operator Squeeze.
+
+*@par Restrictions:
+* Warning: THIS FUNCTION IS DEPRECATED. Please use Squeeze instead.
+*/
+REG_OP(SqueezeV2)
+    .INPUT(x, TensorType::ALL())
+    .OUTPUT(y, TensorType::ALL())
+    .ATTR(axis, ListInt, {})
+    .OP_END_FACTORY_REG(SqueezeV2)
+
+/**
+*@brief Removes dimensions of size 1 from the shape of a tensor according to axes. \n
+
+*@par Inputs:
+*x: A tensor.
+*axes: An optional list of int64. If not specified, squeezes all dimensions of
+size 1. If specified, only squeezes the dimensions listed. It is an error to
+squeeze a dimension that is not 1. \n 
+
+*@par Outputs:
+*y: Reshape tensor with same data as input. \n
+
+*@par Third-party framework compatibility
+*Compatible with the onnx operator Squeeze in V13. \n
+*/
+
+REG_OP(SqueezeV3)
+    .INPUT(x, TensorType::ALL())
+    .OPTIONAL_INPUT(axes, ListInt)
+    .OUTPUT(y, TensorType::ALL())
+    .OP_END_FACTORY_REG(SqueezeV3)
+
+/**
+*@brief Returns an integer representing the rank of input tensor. The rank of a tensor is the number of indices required to uniquely select each element of the tensor, that is, the dimension size of the tensor. \n
+
+*@par Inputs:
+*x: A Tensor of type float32, float16, int8, int16, uint16, uint8, int32, int64, uint32, uint64, bool, double. \n
+
+*@par Outputs:
+*y: A tensor. The rank of input tensor. Type is int32. \n
 
 *@par Third-party framework compatibility
 *Compatible with the TensorFlow operator Rank.
@@ -848,7 +964,6 @@ REG_OP(PlaceHolder)
 *x: A tensor. \n
 
 *@par Attributes:
-*@li dtype: data type of tensor.
 *@li shape: tensor shape. \n
 
 *@par Outputs:
@@ -867,13 +982,13 @@ REG_OP(PlaceholderWithDefault)
 *@brief Reads and returns the value of the input variable tensor. \n
 
 *@par Inputs:
-*x: A tensor. \n
+*x: A tensor must have numeric type. \n
 
 *@par Attributes:
 *dtype: An optional int32 or int64. The output data type. Defaults to int32. \n
 
 *@par Outputs:
-*y: A tensor. \n
+*y: A tensor must have numeric type. \n
 
 *@par Third-party framework compatibility
 *Compatible with the TensorFlow operator ReadVariableOp.
@@ -944,6 +1059,25 @@ REG_OP(Shape)
     .OUTPUT(y, TensorType({DT_INT32, DT_INT64}))
     .ATTR(dtype, Int, DT_INT32)
     .OP_END_FACTORY_REG(Shape)
+
+/**
+*@brief Gather selected dims of input which returns the shape of tensor shape after gathershapes.\n
+
+*@par Inputs:
+*x: A list of input tensors. It's a dynamic input. \n
+
+*@par Attributes:
+*axes: Select some dims of input. \n
+
+*@par Outputs:
+*shape: The shape of tensor shape after gathershapes. \n
+*/
+REG_OP(GatherShapes)
+    .DYNAMIC_INPUT(x, TensorType::ALL())
+    .OUTPUT(shape, TensorType({DT_INT32, DT_INT64}))
+    .REQUIRED_ATTR(axes, ListListInt)
+    .ATTR(dtype, Int, DT_INT32)
+    .OP_END_FACTORY_REG(GatherShapes)
 
 /**
 *@brief Returns shape of tensors. \n
@@ -1026,27 +1160,27 @@ REG_OP(MirrorPadGrad)
     .OP_END_FACTORY_REG(MirrorPadGrad)
 
 /**
-*@brief Returns locations of nonzero / true values in a tensor. \n
+* @brief Returns locations of nonzero / true values in a tensor. \n
 
-*@par Inputs:
-*Including:
-*x: A Tensor. Must be one of the following types:
-DT_DOUBLE, DT_FLOAT, DT_FLOAT16, DT_INT8, DT_UINT8, DT_INT16,
-DT_UINT16, DT_INT32, DT_UINT32, DT_INT64, DT_UINT64, DT_BOOL. \n
+* @par Inputs:
+* Including:
+* @li x: A Tensor. Must be one of the following types:
+  DT_DOUBLE, DT_FLOAT, DT_FLOAT16, DT_INT8, DT_UINT8, DT_QINT8,
+  DT_QUINT8, DT_INT16, DT_UINT16, DT_INT32, DT_UINT32, DT_QINT32,
+  DT_INT64, DT_UINT64, DT_BOOL, DT_COMPLEX64, DT_COMPLEX128 \n
 
-*@par Outputs:
-*y: A Tensor of type DT_INT64. \n
+* @par Outputs:
+* @li y: A Tensor of type DT_INT64. \n
 
-*@attention Constraints:
-*Where runs on the Ascend AI CPU, which delivers poor performance.\n
+* @attention Constraints:
+* Where runs on the Ascend AI CPU, which delivers poor performance.\n
 
-*@par Third-party framework compatibility
-*Compatible with the TensorFlow operator Where.
+* @par Third-party framework compatibility
+* Compatible with the TensorFlow operator Where.
 */
 
 REG_OP(Where)
-    .INPUT(x, TensorType({DT_DOUBLE, DT_FLOAT, DT_FLOAT16, DT_INT8, DT_UINT8, DT_INT16, \
-              DT_UINT16, DT_INT32, DT_UINT32, DT_INT64, DT_UINT64, DT_BOOL}))
+    .INPUT(x, TensorType({BasicType(), DT_BOOL}))
     .OUTPUT(y, TensorType({DT_INT64}))
     .OP_END_FACTORY_REG(Where)
 
@@ -1072,6 +1206,39 @@ REG_OP(Copy)
               DT_UINT16, DT_INT32, DT_UINT32, DT_INT64, DT_UINT64}))
     .REQUIRED_ATTR(N, Int)
     .OP_END_FACTORY_REG(Copy);
+
+/**
+*@brief copy the src tensor to the dst tensor according the special parameter . \n
+
+*@par Inputs:
+*Eight inputs, including:
+*dst: A tensor. Must be one of the following types:
+* double, float32, float16, int8, uint8, int16, uint16, int32, uint32, int64, uint64, bool
+*dst_size: A tensor with type int32
+*dst_stride: A tensor with type int32
+*dst_storage_offset: A tensor with type int32
+*src: A tensor. Must be one of the following types:
+* double, float32, float16, int8, uint8, int16, uint16, int32, uint32, int64, uint64, bool
+*src_size: A tensor with type int32
+*src_stride: A tensor with type int32
+*src_storage_offset: the storage_offset of src tensor . \n
+
+*@par Outputs:
+*dst: An ref tensor.Must be one of the following types:
+* double, float32, float16, int8, uint8, int16, uint16, int32, uint32, int64, uint64, bool . \n
+*/
+
+REG_OP(ViewCopy)
+    .INPUT(dst, TensorType::BasicType())
+    .INPUT(dst_size, TensorType::IndexNumberType())
+    .INPUT(dst_stride, TensorType::IndexNumberType())
+    .INPUT(dst_storage_offset, TensorType::IndexNumberType())
+    .INPUT(src, TensorType::BasicType())
+    .INPUT(src_size, TensorType::IndexNumberType())
+    .INPUT(src_stride, TensorType::IndexNumberType())
+    .INPUT(src_storage_offset, TensorType::IndexNumberType())
+    .OUTPUT(dst, TensorType::BasicType())
+    .OP_END_FACTORY_REG(ViewCopy)
 
 /**
 *@brief Generates fingerprint values. \n
@@ -1134,10 +1301,10 @@ This is an M-length vector.
 This is an R-length vector
 
 *@par Attributes:
-*@li normalize: boolean (if true, edit distances are normalized by length of truth). \n
+*normalize: boolean (if true, edit distances are normalized by length of truth). \n
 
 *@par Outputs:
-*@li output: A dense float tensor with rank R - 1. \n
+*output: A dense float tensor with rank R - 1. \n
 
 *@par Third-party framework compatibility
 * Compatible with TensorFlow EditDistance operator.
@@ -1154,22 +1321,23 @@ REG_OP(EditDistance)
     .OP_END_FACTORY_REG(EditDistance)
 
 /**
-* @brief sort_v2.
+* @brief sort the input tensor without returning the value of index.
 
 * @par Inputs:
-* @li x: An ND tensor of type float16.
+* x: An ND tensor of type float16.
 
 * @par Attributes:
-
 * @li axis: An optional int. The dimension to sort along. This value defaults to -1.
 * @li descending: An optional bool. Controls the sorting order (ascending or descending). This value defaults to False.
 
 * @par Outputs:
-* @li y: An ND tensor of type float16.
+* y: An ND tensor of type float16.
 
 * @attention Constraints:
 * @li Axis should select the last dim.
-* @li The upper limit of data on Ascend310 is 500K, and that on Ascend910 is 2000K.
+* @li When the sorting data is less than 150K, it is recommended to use this tbe ops,
+ and the descending performance is better than the ascending.
+* @li The upper limit of data on Ascend910 is 2000K.
 */
 REG_OP(SortV2)
     .INPUT(x, TensorType({DT_FLOAT16, DT_FLOAT, DT_DOUBLE}))
@@ -1184,7 +1352,7 @@ REG_OP(SortV2)
 * @par Inputs:
 * One inputs, including:
 * @li x: A Tensor. Must be one of the following types:
-*     float16, float32, int32, int8 ,uint8. \n
+*     float16, float32, int32, int8, uint8, bool. \n
 * @li shape: A Tensor to specify the shape that the input tensor expanded to. \n
 
 * @par Outputs:
@@ -1195,35 +1363,259 @@ REG_OP(SortV2)
 */
 
 REG_OP(Expand)
-    .INPUT(x, TensorType({DT_FLOAT16, DT_FLOAT, DT_INT32, DT_INT8, DT_UINT8}))
+    .INPUT(x, TensorType({DT_FLOAT16, DT_FLOAT, DT_INT32,DT_INT64, DT_INT8, DT_UINT8, DT_BOOL}))
     .INPUT(shape, TensorType({DT_INT16, DT_INT32, DT_INT64}))
-    .OUTPUT(y, TensorType({DT_FLOAT16, DT_FLOAT, DT_INT32, DT_INT8, DT_UINT8}))
+    .OUTPUT(y, TensorType({DT_FLOAT16, DT_FLOAT, DT_INT32,DT_INT64, DT_INT8, DT_UINT8, DT_BOOL}))
     .OP_END_FACTORY_REG(Expand)
+
+/**
+*@Returns a tensor containing the indices of all non-zero elements of input. \n
+
+*@par Inputs:
+*x: A Tensor. Must be one of the following types: float16, float32, int32, int64.
+
+*@par Attributes:
+* transpose: the output tensor will be transposed if true. \n
+
+*@par Outputs:
+* y: A Tensor. Has the same type as "x" . \n
+
+*@par Third-party framework compatibility
+*Compatible with the PyTorch operator NonZero.
+*/
+
+REG_OP(NonZero)
+    .INPUT(x, TensorType({DT_DOUBLE, DT_FLOAT, DT_FLOAT16, DT_INT8, DT_UINT8, DT_INT16, \
+              DT_UINT16, DT_INT32, DT_UINT32, DT_INT64, DT_UINT64, DT_BOOL}))
+    .OUTPUT(y, TensorType({DT_INT64, DT_INT32}))
+    .ATTR(transpose, Bool, false)
+    .ATTR(dtype, Type, DT_INT64)
+    .OP_END_FACTORY_REG(NonZero)
+
+/**
+*@Returns a tensor containing the indices of all non-zero elements of input. \n
+
+*@par Inputs:
+*x: A Tensor. Must be one of the following types: float16, float32, int32, int64.
+
+*@par Attributes:
+* transpose: the output tensor will be transposed if true. \n
+
+*@par Outputs:
+* value: A Tensor. Has the same type as "x" . \n
+* index: A Tensor. The type is INT32, means index for input. \n
+* count: A Scalar. The type is INT32, means count for non_zero ele in input. \n
+
+*@par Third-party framework compatibility
+*Compatible with the PyTorch operator NonZeroWithValue.
+*/
+
+REG_OP(NonZeroWithValue)
+    .INPUT(x, TensorType({DT_DOUBLE, DT_FLOAT, DT_FLOAT16, DT_INT8, DT_UINT8, DT_INT16, \
+           DT_UINT16, DT_INT32, DT_UINT32, DT_INT64, DT_UINT64, DT_BOOL}))
+    .OUTPUT(value, TensorType({DT_DOUBLE, DT_FLOAT, DT_FLOAT16, DT_INT8, DT_UINT8, DT_INT16, \
+            DT_UINT16, DT_INT32, DT_UINT32, DT_INT64, DT_UINT64, DT_BOOL}))
+    .OUTPUT(index, TensorType({DT_INT32}))
+    .OUTPUT(count, TensorType({DT_INT32}))
+    .ATTR(transpose, Bool, false)
+    .ATTR(dtype, Type, DT_INT32)
+    .OP_END_FACTORY_REG(NonZeroWithValue)
+
+
+
+/**
+*@Returns a tensor with updated shape from NonZeroWithValue. \n
+
+*@par Inputs:
+*value: A Tensor. The output of NonZeroWithValue. \n
+*index: A Tensor. The output of NonZeroWithValue. \n
+*count: A Tensor. The type is INT32, means count for non_zero ele in input. \n
+
+* out_value: A Tensor. Has the same type as "value" . \n
+* out_index: A Tensor. Has the same type as "index". \n
+*/
+REG_OP(NonZeroWithValueShape)
+    .INPUT(value, TensorType({DT_DOUBLE, DT_FLOAT, DT_FLOAT16, DT_INT8, DT_UINT8, DT_INT16,
+                            DT_UINT16, DT_INT32, DT_UINT32, DT_INT64, DT_UINT64, DT_BOOL}))
+    .INPUT(index, TensorType({DT_INT32}))
+    .INPUT(count, TensorType({DT_INT32}))
+    .OUTPUT(out_value, TensorType({DT_DOUBLE, DT_FLOAT, DT_FLOAT16, DT_INT8, DT_UINT8, DT_INT16,
+                            DT_UINT16, DT_INT32, DT_UINT32, DT_INT64, DT_UINT64, DT_BOOL}))
+    .OUTPUT(out_index, TensorType({DT_INT32}))
+    .OP_END_FACTORY_REG(NonZeroWithValueShape)
+
 
 /**
 * @brief Expand the input tensor to a compatible shape. \n
 
 * @par Inputs:
 * One inputs, including:
-* @li x: A Tensor. Must be one of the following types:
-*     float16, float32, int32, int8 ,uint8. \n
+* x: A Tensor. Must be one of the following types:
+*     float16, float32, int32, int8, uint8, bool. \n
 
 * @par Attributes:
-* @li shape: A required listInt to specify the shape that the input tensor expanded to. \n
+* shape: A required listInt to specify the shape that the input tensor expanded to. \n
 
 
 * @par Outputs:
-* @li y: A Tensor. Has the same type as "x", and the shape specified by input and attr shape \n
+* y: A Tensor. Has the same type as "x", and the shape specified by input and attr shape \n
 
 * @par Third-party framework compatibility
 * Compatible with the ONNX operator Expand.
 */
 
 REG_OP(ExpandD)
-    .INPUT(x, TensorType({DT_FLOAT16, DT_FLOAT, DT_INT32, DT_INT8, DT_UINT8}))
-    .OUTPUT(y, TensorType({DT_FLOAT16, DT_FLOAT, DT_INT32, DT_INT8, DT_UINT8}))
+    .INPUT(x, TensorType({DT_FLOAT16, DT_FLOAT, DT_INT32, DT_INT8, DT_UINT8, DT_BOOL}))
+    .OUTPUT(y, TensorType({DT_FLOAT16, DT_FLOAT, DT_INT32, DT_INT8, DT_UINT8, DT_BOOL}))
     .REQUIRED_ATTR(shape, ListInt)
     .OP_END_FACTORY_REG(ExpandD)
+
+/**
+*@brief Get dim number in tensordesc. \n
+
+*@par Inputs:
+*x: A Tensor. \n
+
+*@par Outputs:
+*y: A 1D tensor. The data type must be int32. \n
+
+*@par Restrictions:
+*Warning: THIS FUNCTION IS EXPERIMENTAL. Please do not use.
+*/
+REG_OP(GetShape)
+    .DYNAMIC_INPUT(x, TensorType({DT_DOUBLE, DT_FLOAT, DT_FLOAT16, DT_INT8, DT_UINT8, DT_INT16, \
+        DT_UINT16, DT_INT32, DT_UINT32, DT_INT64, DT_UINT64, DT_BOOL}))
+    .OUTPUT(y, TensorType({DT_INT32}))
+    .OP_END_FACTORY_REG(GetShape)
+
+/**
+*@brief Update the tensor_desc of the output. \n
+
+* @par attributes:
+* @li shape: A listInt contains the data to update. \n
+
+*@par outputs:
+* y: a tensor_desc, type is int.\n
+
+*@par Restrictions:
+*Warning: THIS FUNCTION IS EXPERIMENTAL. Please do not use.
+*/
+REG_OP(UpdateTensorDesc)
+    .INPUT(x, TensorType({DT_BOOL, DT_FLOAT16, DT_FLOAT, DT_INT8, DT_INT32, DT_UINT32, DT_UINT8,
+                          DT_INT64, DT_UINT64, DT_INT16, DT_UINT16, DT_DOUBLE}))
+    .OUTPUT(y, TensorType({DT_BOOL, DT_FLOAT16, DT_FLOAT, DT_INT8, DT_INT32, DT_UINT32, DT_UINT8,
+                           DT_INT64, DT_UINT64, DT_INT16, DT_UINT16, DT_DOUBLE}))
+    .REQUIRED_ATTR(shape, ListInt)
+    .OP_END_FACTORY_REG(UpdateTensorDesc)
+
+/**
+*@brief Queue data for other operators. \n
+*@par Attributes:
+*index: Index of the input tensor.The data type must be int32 or int64.
+Assume that net has three data nodes, one should be set 0, another should
+be set 1, and the left should be set 2. \n
+*queue_name: queue name
+*output_types: types of outputs data
+*output_shapes: shapes of outputs data
+*@par Outputs:
+*y: A DT_UINT8 tensor. \n
+*/
+REG_OP(QueueData)
+    .OUTPUT(y, TensorType({DT_UINT8}))
+    .ATTR(index, Int, 0)
+    .ATTR(queue_name, String, "")
+    .ATTR(output_types, ListType, {})
+    .ATTR(output_shapes, ListListInt, {{}, {}})
+    .OP_END_FACTORY_REG(QueueData)
+
+/**
+* @brief Ensures that the tensor's shape matches the expected shape. \n
+* @par Inputs:
+* input: A Tensor. that need to be checked with desired shape 
+*        Must be one of the following types:
+*        int8, uint8, int16, uint16, int32, int64, float16, float
+*        double, complex64 complex128 \n
+* @par Attributes:
+* shape: required, a desired tensor shape. type: list int \n
+* @par Outputs:
+* output: A tensor. has the same type and contents as input 
+*        Must be one of the following types:
+*        int8, uint8, int16, uint16, int32, int64, float16, float
+*        double, complex64 complex128 \n
+*/
+REG_OP(EnsureShape)
+    .INPUT(input, TensorType({DT_INT8,DT_UINT8, DT_INT16, DT_UINT16, DT_INT32, DT_INT64, DT_FLOAT16, \
+                            DT_FLOAT, DT_DOUBLE, DT_COMPLEX64, DT_COMPLEX128}))
+    .OUTPUT(output, TensorType({DT_INT8, DT_UINT8, DT_INT16, DT_UINT16, DT_INT32, DT_INT64, DT_FLOAT16, \
+                            DT_FLOAT,DT_DOUBLE, DT_COMPLEX64, DT_COMPLEX128}))
+    .REQUIRED_ATTR(shape, ListInt)
+    .OP_END_FACTORY_REG(EnsureShape)
+
+/**
+* @brief Finds the first unique element from every consecutive group of equivalent elements.
+
+* @par Inputs:
+* x: A ND tensor.
+
+* @par Attributes:
+* @li return_idx: An optional bool. Whether to also return the indices. The default value is False
+* @li return_count: An optional bool. Whether to also return the counts for each element. The default is False.
+* @li axis: An optional int. Which one axis to apply unique. The default is 1000, which means None.
+
+* @par Outputs:
+* @li y: "x" in the unique output "y".
+* @li idx: The index of each value of "x".
+* @li count: The counts of each value of "y".
+
+* @attention Constraints:
+* UniqueConsecutive runs on the Ascend AI CPU, which delivers poor performance.
+
+* @par Third-party framework compatibility
+* Compatible with the PyTorch operator UniqueConsecutive.
+*/
+
+REG_OP(UniqueConsecutive)
+    .INPUT(x, TensorType::BasicType())
+    .OUTPUT(y, TensorType::BasicType())
+    .OUTPUT(idx, TensorType::IndexNumberType())
+    .OUTPUT(count, TensorType::IndexNumberType())
+    .ATTR(return_idx, Bool, false)
+    .ATTR(return_counts, Bool, false)
+    .ATTR(axis, Int, 1000)
+    .OP_END_FACTORY_REG(UniqueConsecutive)
+
+/**
+* @brief Decodes a variant Tensor into a RaggedTensor. \n
+*
+* @par Input:  
+* @li encoded_ragged:  A Tensor of type variant. A variant Tensor containing encoded RaggedTensors. \n
+*
+* @par Outputs:
+* @li output_nested_splits: A list of output_ragged_rank Tensor objects with type int32 or int64.
+* @li output_dense_values:  A Tensor, which must be one of the following types:
+*               double, float32, float16, int8, uint8, int16, uint16, int32, uint32, int64, uint64, bool. \n
+*
+* @par Attributes:
+* @li input_ragged_rank: An int that is >= -1. The ragged rank of each encoded RaggedTensor component in the input. 
+*         If set to -1, this is inferred as output_n - rank(encoded_ragged).
+* @li output_ragged_rank: An int that is >= 0. The expected ragged rank of the output RaggedTensor. 
+*          The following must hold: output_n = rank(encoded_ragged) + input_n.
+* @li Tvalues: The data type of output_dense_values.
+* @li Tsplits: The data type of output_nested_splits. An optional DType of "int32, int64". Defaults to `int64`. \n
+*
+* @par Third-party framework compatibility.
+* Compatible with tensorflow RaggedTensorFromVariant operator.
+*/
+REG_OP(RaggedTensorFromVariant)
+    .INPUT(encoded_ragged, TensorType({DT_VARIANT}))
+    .DYNAMIC_OUTPUT(output_nested_splits, TensorType({DT_INT32, DT_INT64}))
+    .OUTPUT(output_dense_values, TensorType::BasicType())
+    .REQUIRED_ATTR(input_ragged_rank, Int)
+    .REQUIRED_ATTR(output_ragged_rank, Int)
+    .REQUIRED_ATTR(Tvalues, Type)
+    .ATTR(Tsplits, Type, DT_INT64)
+    .OP_END_FACTORY_REG(RaggedTensorFromVariant)
+
 }  // namespace ge
 
 #endif  // OPS_BUILT_IN_OP_PROTO_INC_ARRAY_OPS_H_

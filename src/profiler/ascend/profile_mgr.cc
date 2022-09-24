@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2022 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,21 +28,26 @@ constexpr Status PROF_SUCCESS = 0;
 constexpr Status PROF_FAILED = 0xFFFFFFFF;
 }  // namespace
 
-Status ProfCommandHandle(ProfCommandHandleType type) {
-  return air::runtime::ProfileMgr::GetInstance().CommandHandle(type);
-}
-
 bool IsInitialize() { return true; }
 
 namespace air {
 namespace runtime {
+
+Status ProfCommandHandle(ProfCommandHandleType type) {
+  return air::runtime::ProfileMgr::GetInstance().ProfCommandHandle(type);
+}
 Status ProfileMgr::PluginInit() const {
   if (reporter_cb_ == nullptr) {
     LOG(ERROR) << "reporter_cb_ is nullptr.";
     return PROF_FAILED;
   }
-  return reporter_cb_(static_cast<uint32_t>(MsprofReporterModuleId::MSPROF_MODULE_FRAMEWORK),
+  int32_t ret = MsprofReportData(static_cast<uint32_t>(MsprofReporterModuleId::MSPROF_MODULE_FRAMEWORK),
                       static_cast<uint32_t>(MsprofReporterCallbackType::MSPROF_REPORTER_INIT), nullptr, 0);
+  if (ret != static_cast<int32_t>(PROF_SUCCESS)) {
+    LOG(ERROR) << "Profiling init failed, ret: " << ret;
+    return PROF_FAILED;
+  }
+  return PROF_SUCCESS;
 }
 
 void ProfileMgr::PluginUnInit() const {
@@ -50,10 +55,11 @@ void ProfileMgr::PluginUnInit() const {
     LOG(ERROR) << "MsprofReporterCallback callback is nullptr.";
     return;
   }
-  int32_t ret = reporter_cb_(static_cast<uint32_t>(MsprofReporterModuleId::MSPROF_MODULE_FRAMEWORK),
-                             static_cast<uint32_t>(MsprofReporterCallbackType::MSPROF_REPORTER_UNINIT), nullptr, 0);
-  if (ret != 0) {
-    LOG(WARNING) << "profiling plugin uninit failed, ret:%d" << ret;
+  int32_t cb_ret =
+    MsprofReportData(static_cast<uint32_t>(MsprofReporterModuleId::MSPROF_MODULE_FRAMEWORK),
+                     static_cast<uint32_t>(MsprofReporterCallbackType::MSPROF_REPORTER_UNINIT), nullptr, 0);
+  if (cb_ret != 0) {
+    LOG(WARNING) << "profiling plugin uninit failed, ret:%d" << cb_ret;
   }
 }
 
@@ -144,7 +150,7 @@ bool ProfileMgr::StopProfiling() {
   return true;
 }
 
-Status ProfileMgr::CommandHandle(ProfCommandHandleType type) {
+Status ProfileMgr::ProfCommandHandle(ProfCommandHandleType type) {
   LOG(INFO) << "ProfCommandHandle start, type:" << type;
   if (type == kProfCommandhandleInit) {
     auto cb_ret = ProfileMgr::GetInstance().PluginInit();
@@ -162,7 +168,7 @@ ProfileMgr &ProfileMgr::GetInstance() {
 }
 
 bool ProfileMgr::ProfRegisterCtrlCallback() const {
-  rtError_t rt_ret = rtProfRegisterCtrlCallback(GE, CtrlCallbackHandle);
+  rtError_t rt_ret = MsprofRegisterCallback(GE, CtrlCallbackHandle);
   if (rt_ret != RT_ERROR_NONE) {
     LOG(ERROR) << "Call rtProfRegisterCtrlCallback failed.";
     return false;

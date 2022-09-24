@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright 2019 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -45,7 +45,13 @@ namespace ge {
 *corresponding weights in sparse_weights. This field maybe omitted for the dense approach.It's a dynamic input.
 *@li sparse_weights: a list of vectors where each value is the weight associated with a sparse feature group.
 *@li dense_weights: a list of vectors where the values are the weights associated with a dense feature group.It's a dynamic input.
-*@li example_state_data: a list of vectors containing the example state data.
+*@li example_state_data: a list of vectors containing the example state data. \n
+
+*@par Attributes:
+*@li adaptive: the type is bool default false.
+*@li num_sparse_features:The num of sparse.
+*@li num_sparse_features_with_values: The num of sparse_feature_values
+*@li num_dense_features:The num of dense.
 *@li loss_type: Type of the primal loss. Currently SdcaSolver supports logistic, squared and hinge losses.
 *@li l1: Symmetric l1 regularization strength.
 *@li l2: Symmetric l2 regularization strength.
@@ -53,10 +59,10 @@ namespace ge {
 *@li num_inner_iterations: Number of iterations per mini-batch . \n
 
 *@par Outputs:
-*y: A Returns a list of vectors containing the updated example state
+*@li out_example_state_data: A Returns a list of vectors containing the updated example state
 *data.a list of vectors where each value is the delta
-*weights associated with a sparse feature group.a list of vectors where the values are the delta
-*weights associated with a dense feature group . \n
+*@li out_delta_sparse_weights:weights associated with a sparse feature group.a list of vectors where the values are the delta
+*@li out_delta_dense_weights:weights associated with a dense feature group . \n
 
 *@par Third-party framework compatibility
 * Compatible with tensorflow SdcaOptimizerV2 operator.

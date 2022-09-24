@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright 2019 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -77,8 +77,8 @@ REG_OP(LookupTableInsert)
 *handle: A Tensor of type resource. Handle to the table . \n
 
 *@par Attributes:
-*@li Tkeys: A DType.
-*@li Tvalues: A DType . \n
+*@li Tkeys: A DType of keys.
+*@li Tvalues: A DType of values.
 
 *@par Outputs:
 *@li keys: A Tensor of type Tkeys.
@@ -303,6 +303,21 @@ REG_OP(MutableHashTable)
     .REQUIRED_ATTR(key_dtype, Type)
     .REQUIRED_ATTR(value_dtype, Type)
     .OP_END_FACTORY_REG(MutableHashTable)
+
+/**
+* @brief Remove keys in the given table . \n
+
+* @par Inputs:
+* @li table_handle: A Tensor of type resource. Handle to the table. \n
+* @li keys: A Tensor. Any shape. Keys to remove. \n
+
+* @par Third-party framework compatibility.
+* Compatible with tensorflow LookupTableInsert operator.
+*/
+REG_OP(LookupTableRemove)
+    .INPUT(table_handle, TensorType({DT_RESOURCE}))
+    .INPUT(keys,TensorType({RealNumberType, DT_BOOL, DT_STRING}))
+    .OP_END_FACTORY_REG(LookupTableRemove)
 }   // namespace ge
 
 #endif  // OPS_BUILT_IN_OP_PROTO_INC_LOOKUP_OPS_H_

@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright 2019 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -61,8 +61,8 @@ REG_OP(CholeskyGrad)
 
 *@par Inputs:
 *The input x has to be symmetric and positive definite.Inputs include:
-*x:A Tensor. Must be one of the following types: double, float32. Shape
-is [..., M, M] . \n
+*x:A Tensor. Must be one of the following types: double, float32, float16,
+complex64, complex128. Shape is [..., M, M] . \n
 
 *@par Outputs:
 *y:A Tensor. Has the same type as x . \n
@@ -76,9 +76,30 @@ form square matrices.
 */
 
 REG_OP(Cholesky)
-    .INPUT(x, TensorType({DT_FLOAT, DT_DOUBLE}))
-    .OUTPUT(y, TensorType({DT_FLOAT, DT_DOUBLE}))
+    .INPUT(x, TensorType({DT_FLOAT, DT_DOUBLE, \
+        DT_FLOAT16, DT_COMPLEX64, DT_COMPLEX128}))
+    .OUTPUT(y, TensorType({DT_FLOAT, DT_DOUBLE, \
+        DT_FLOAT16, DT_COMPLEX64, DT_COMPLEX128}))
     .OP_END_FACTORY_REG(Cholesky)
+
+/**
+*@brief Computes the outer product of two 1D vectors . \n
+
+*@par Inputs:
+*The input x1 and x2 has to be a 1D vector.Inputs include:
+*@li x1:A Tensor. Must be one of the following types: float16, float32. 
+Shape is [N] . \n
+*@li x2:A Tensor. Must have the same type as x. Shape is [M] . \n
+
+*@par Outputs:
+*y:A Tensor. Has the same type as x . \n
+*/
+
+REG_OP(Ger)
+    .INPUT(x1, TensorType({DT_FLOAT16, DT_FLOAT}))
+    .INPUT(x2, TensorType({DT_FLOAT16, DT_FLOAT}))
+    .OUTPUT(y, TensorType({DT_FLOAT16, DT_FLOAT}))
+    .OP_END_FACTORY_REG(Ger)
 
 /**
 *@brief Computes the sign and the log of the absolute value of the determinant
@@ -87,8 +108,8 @@ of one or more square matrices . \n
 *@par Inputs:
 *The input x is a tensor of shape [N, M, M] whose inner-most 2 dimensions
 form square matrices. Inputs include:
-*x:A Tensor. Must be one of the following types: double, float32. Shape is
-[..., M, M] . \n
+*x:A Tensor. Must be one of the following types: double, float32,
+complex64, complex128. Shape is [..., M, M] . \n
 
 *@par Outputs:
 *@li y:A Tensor. Has the same type as x.
@@ -103,9 +124,9 @@ form square matrices. \n
 */
 
 REG_OP(LogMatrixDeterminant)
-    .INPUT(x, TensorType({DT_FLOAT, DT_DOUBLE}))
-    .OUTPUT(sign, TensorType({DT_FLOAT, DT_DOUBLE}))
-    .OUTPUT(y, TensorType({DT_FLOAT, DT_DOUBLE}))
+    .INPUT(x, TensorType({DT_FLOAT, DT_DOUBLE, DT_COMPLEX64, DT_COMPLEX128}))
+    .OUTPUT(sign, TensorType({DT_FLOAT, DT_DOUBLE, DT_COMPLEX64, DT_COMPLEX128}))
+    .OUTPUT(y, TensorType({DT_FLOAT, DT_DOUBLE, DT_COMPLEX64, DT_COMPLEX128}))
     .OP_END_FACTORY_REG(LogMatrixDeterminant)
 
 /**
@@ -114,8 +135,8 @@ REG_OP(LogMatrixDeterminant)
 *@par Inputs:
 *The input x is a tensor of shape [N, M, M] whose inner-most 2 dimensions
 form square matrices. Inputs include:
-*x:A Tensor. Must be one of the following types: double, float32. Shape is
-[..., M, M] . \n
+*x:A Tensor. Must be one of the following types: double, float32, complex64,
+complex128. Shape is [..., M, M] . \n
 
 *@par Outputs:
 *y:A Tensor. Has the same type as x . \n
@@ -129,8 +150,8 @@ form square matrices.
 */
 
 REG_OP(MatrixDeterminant)
-    .INPUT(x, TensorType({DT_FLOAT, DT_DOUBLE}))
-    .OUTPUT(y, TensorType({DT_FLOAT, DT_DOUBLE}))
+    .INPUT(x, TensorType({DT_FLOAT, DT_DOUBLE, DT_COMPLEX64, DT_COMPLEX128}))
+    .OUTPUT(y, TensorType({DT_FLOAT, DT_DOUBLE, DT_COMPLEX64, DT_COMPLEX128}))
     .OP_END_FACTORY_REG(MatrixDeterminant)
 
 /**
@@ -140,8 +161,7 @@ their adjoints (conjugate transposes) . \n
 *@par Inputs:
 *The input x is a tensor of shape [..., M, M] whose inner-most 2 dimensions
 form square matrices. Inputs include:
-*x:A Tensor. Must be one of the following types: double, float. Shape is
-[..., M, M] . \n
+*x:A Tensor of input. Shape is [..., M, M] . \n
 
 *@par Attributes:
 *adjoint:An optional bool. Defaults to False.Boolean indicating whether to
@@ -159,8 +179,8 @@ form square matrices.  \n
 */
 
 REG_OP(MatrixInverse)
-    .INPUT(x, TensorType({DT_FLOAT, DT_DOUBLE}))
-    .OUTPUT(y, TensorType({DT_FLOAT, DT_DOUBLE}))
+    .INPUT(x, TensorType({DT_FLOAT, DT_DOUBLE, DT_COMPLEX64, DT_COMPLEX128}))
+    .OUTPUT(y, TensorType({DT_FLOAT, DT_DOUBLE, DT_COMPLEX64, DT_COMPLEX128}))
     .ATTR(adjoint, Bool, false)
     .OP_END_FACTORY_REG(MatrixInverse)
 
@@ -169,8 +189,7 @@ REG_OP(MatrixInverse)
 
 *@par Inputs:
 *The input rhs must have the same type as matrix. Inputs include:
-*@li matrix:A Tensor. Must be one of the following types: double, float.
-Shape is [..., M, M].
+*@li matrix:A Tensor of input. Shape is [..., M, M].
 *@li rhs:A Tensor. Must have the same type as matrix. Shape is [..., M, K] . \n
 
 *@par Attributes:
@@ -189,9 +208,9 @@ dimensions form square matrices.  \n
 */
 
 REG_OP(MatrixSolve)
-    .INPUT(matrix, TensorType({DT_FLOAT, DT_DOUBLE}))
-    .INPUT(rhs, TensorType({DT_FLOAT, DT_DOUBLE}))
-    .OUTPUT(y, TensorType({DT_FLOAT, DT_DOUBLE}))
+    .INPUT(matrix, TensorType({DT_FLOAT, DT_DOUBLE, DT_COMPLEX64, DT_COMPLEX128}))
+    .INPUT(rhs, TensorType({DT_FLOAT, DT_DOUBLE, DT_COMPLEX64, DT_COMPLEX128}))
+    .OUTPUT(y, TensorType({DT_FLOAT, DT_DOUBLE, DT_COMPLEX64, DT_COMPLEX128}))
     .ATTR(adjoint, Bool, false)
     .OP_END_FACTORY_REG(MatrixSolve)
 
@@ -221,8 +240,8 @@ dimensions form square matrices.  \n
 */
 
 REG_OP(MatrixSolveLs)
-    .INPUT(matrix, TensorType({DT_FLOAT, DT_DOUBLE}))
-    .INPUT(rhs, TensorType({DT_FLOAT, DT_DOUBLE}))
+    .INPUT(matrix, TensorType({DT_FLOAT, DT_DOUBLE, DT_COMPLEX64, DT_COMPLEX128}))
+    .INPUT(rhs, TensorType({DT_FLOAT, DT_DOUBLE, DT_COMPLEX64, DT_COMPLEX128}))
     .INPUT(l2, TensorType({DT_DOUBLE}))
     .OUTPUT(y, TensorType({DT_FLOAT, DT_DOUBLE}))
     .ATTR(fast, Bool, true)
@@ -234,8 +253,7 @@ matrices by backsubstitution . \n
 
 *@par Inputs:
 *The input rhs must have the same type as matrix. Inputs include:
-*@li matrix: A Tensor. Must be one of the following types: double, float.
-Shape is [..., M, M].
+*@li matrix: A Tensor. Shape is [..., M, M].
 *@li rhs:A Tensor. Must have the same type as matrix. Shape is [..., M, K] . \n
 
 *@par Attributes:
@@ -256,9 +274,9 @@ dimensions form square matrices.  \n
 */
 
 REG_OP(MatrixTriangularSolve)
-    .INPUT(matrix, TensorType({DT_FLOAT, DT_DOUBLE}))
-    .INPUT(rhs, TensorType({DT_FLOAT, DT_DOUBLE}))
-    .OUTPUT(y, TensorType({DT_FLOAT, DT_DOUBLE}))
+    .INPUT(matrix, TensorType({DT_FLOAT, DT_DOUBLE, DT_COMPLEX64, DT_COMPLEX128}))
+    .INPUT(rhs, TensorType({DT_FLOAT, DT_DOUBLE, DT_COMPLEX64, DT_COMPLEX128}))
+    .OUTPUT(y, TensorType({DT_FLOAT, DT_DOUBLE, DT_COMPLEX64, DT_COMPLEX128}))
     .ATTR(lower, Bool, true)
     .ATTR(adjoint, Bool, false)
     .OP_END_FACTORY_REG(MatrixTriangularSolve)
@@ -268,8 +286,7 @@ REG_OP(MatrixTriangularSolve)
 
 *@par Inputs:
 *The input shape of x must be [..., M, N]. Inputs include:
-*x:A Tensor whose shape is [..., M, N]. Must be one of the following types:
-double, float . \n
+*x:A Tensor whose shape is [..., M, N]. \n
 
 *@par Attributes:
 *full_matrices: An optional bool. Defaults to False. If true, compute
@@ -289,9 +306,12 @@ dimensions form matrices of size [M, N].  \n
 */
 
 REG_OP(Qr)
-    .INPUT(x, TensorType({ DT_FLOAT16, DT_FLOAT, DT_DOUBLE }))
-    .OUTPUT(q, TensorType({ DT_FLOAT16, DT_FLOAT, DT_DOUBLE }))
-    .OUTPUT(r, TensorType({ DT_FLOAT16, DT_FLOAT, DT_DOUBLE }))
+    .INPUT(x, TensorType({ DT_FLOAT16, DT_FLOAT, DT_DOUBLE, \
+        DT_COMPLEX64, DT_COMPLEX128 }))
+    .OUTPUT(q, TensorType({ DT_FLOAT16, DT_FLOAT, DT_DOUBLE, \
+        DT_COMPLEX64, DT_COMPLEX128 }))
+    .OUTPUT(r, TensorType({ DT_FLOAT16, DT_FLOAT, DT_DOUBLE, \
+        DT_COMPLEX64, DT_COMPLEX128 }))
     .ATTR(full_matrices, Bool, false)
     .OP_END_FACTORY_REG(Qr)
 
@@ -320,11 +340,42 @@ form square matrices.   \n
 */
 
 REG_OP(SelfAdjointEig)
-    .INPUT(x, TensorType({ DT_DOUBLE, DT_FLOAT }))
-    .OUTPUT(eigen_value, TensorType({ DT_DOUBLE, DT_FLOAT }))
-    .OUTPUT(eigen_vector, TensorType({ DT_DOUBLE, DT_FLOAT }))
+    .INPUT(x, TensorType({ DT_DOUBLE, DT_FLOAT, DT_COMPLEX64, DT_COMPLEX128 }))
+    .OUTPUT(eigen_value, TensorType({ DT_DOUBLE, DT_FLOAT, DT_COMPLEX64, DT_COMPLEX128 }))
+    .OUTPUT(eigen_vector, TensorType({ DT_DOUBLE, DT_FLOAT, DT_COMPLEX64, DT_COMPLEX128 }))
     .ATTR(compute_v, Bool, true)
     .OP_END_FACTORY_REG(SelfAdjointEig)
+
+/**
+*@par Restrictions:
+*Warning: THIS FUNCTION IS EXPERIMENTAL. Please do not use.
+
+*@brief Computes the sign and the log of the absolute value of the determinant
+of one or more square matrices . \n
+
+*@par Inputs:
+*The input x is a tensor of shape [N, M, M] whose inner-most 2 dimensions
+form square matrices. Inputs include:
+*x:A Tensor. Must be one of the following types: double, float32, float16
+Shape is [..., M, M] . \n
+
+*@par Outputs:
+*@li y:A Tensor. Has the same type as x.
+*@li sign:A Tensor. Has the same type as x . \n
+
+*@attention Constraints:
+*The input x is a tensor of shape [N, M, M] whose inner-most 2 dimensions
+form square matrices. \n
+
+*@par Third-party framework compatibility
+*Compatible with tensorflow LogMatrixDeterminant operator.
+*/
+
+REG_OP(Slogdet)
+    .INPUT(x, TensorType({DT_FLOAT16, DT_FLOAT, DT_DOUBLE}))
+    .OUTPUT(sign, TensorType({DT_FLOAT16, DT_FLOAT, DT_DOUBLE}))
+    .OUTPUT(y, TensorType({DT_FLOAT16, DT_FLOAT, DT_DOUBLE}))
+    .OP_END_FACTORY_REG(Slogdet)
 
 /**
 *@brief Computes the singular value decompositions of one or more matrices . \n
@@ -334,9 +385,10 @@ REG_OP(SelfAdjointEig)
 *x:Tensor of shape [..., M, N]. Let P be the minimum of M and N . \n
 
 *@par Attributes:
-*compute_uv:If True then left and right singular vectors will be computed and
+*@li compute_uv:If True then left and right singular vectors will be computed and
 returned in u and v, respectively. Otherwise, only the singular values will
-be computed, which can be significantly faster . \n
+be computed, which can be significantly faster .
+*@li full_matrices:the param effect u,v.  \n
 
 *@par Outputs:
 *@li sigma:Singular values. Shape is [..., P]. The values are sorted in
@@ -358,10 +410,10 @@ form square matrices.  \n
 */
 
 REG_OP(Svd)
-    .INPUT(x, TensorType({ DT_DOUBLE, DT_FLOAT }))
-    .OUTPUT(sigma, TensorType({ DT_DOUBLE, DT_FLOAT }))
-    .OUTPUT(u, TensorType({ DT_DOUBLE, DT_FLOAT }))
-    .OUTPUT(v, TensorType({ DT_DOUBLE, DT_FLOAT }))
+    .INPUT(x, TensorType({ DT_DOUBLE, DT_FLOAT, DT_COMPLEX64, DT_COMPLEX128 }))
+    .OUTPUT(sigma, TensorType({ DT_DOUBLE, DT_FLOAT, DT_COMPLEX64, DT_COMPLEX128 }))
+    .OUTPUT(u, TensorType({ DT_DOUBLE, DT_FLOAT, DT_COMPLEX64, DT_COMPLEX128 }))
+    .OUTPUT(v, TensorType({ DT_DOUBLE, DT_FLOAT, DT_COMPLEX64, DT_COMPLEX128 }))
     .ATTR(compute_uv, Bool, true)
     .ATTR(full_matrices, Bool, false)
     .OP_END_FACTORY_REG(Svd)
@@ -379,13 +431,16 @@ denotes the lower triangular factor `L` with unit diagonal.
 *@li p: upper triangular part denotes the upper triangular factor `U`.Permutation
 of the rows encoded as a list of indices in `0..M-1`. Shape is `[..., M]` . \n
 
+*@par Attributes:
+*output_idx_type: An optional DType from: int32, int64.
+
 *@par Third-party framework compatibility
 * Compatible with TensorFlow Lu operator.
 */
 
 REG_OP(Lu)
-    .INPUT(input, TensorType({DT_FLOAT, DT_DOUBLE}))
-    .OUTPUT(lu, TensorType({DT_FLOAT, DT_DOUBLE}))
+    .INPUT(input, TensorType({DT_FLOAT, DT_DOUBLE, DT_COMPLEX64, DT_COMPLEX128}))
+    .OUTPUT(lu, TensorType({DT_FLOAT, DT_DOUBLE, DT_COMPLEX64, DT_COMPLEX128}))
     .OUTPUT(p, TensorType({DT_INT32, DT_INT64}))
     .REQUIRED_ATTR(output_idx_type, Type)
     .OP_END_FACTORY_REG(Lu)
@@ -404,8 +459,8 @@ y: Shape is `[..., M, M]` . \n
 */
 
 REG_OP(MatrixSquareRoot)
-    .INPUT(input, TensorType({DT_FLOAT, DT_DOUBLE}))
-    .OUTPUT(y, TensorType({DT_FLOAT, DT_DOUBLE}))
+    .INPUT(input, TensorType({DT_FLOAT, DT_DOUBLE, DT_COMPLEX64, DT_COMPLEX128}))
+    .OUTPUT(y, TensorType({DT_FLOAT, DT_DOUBLE, DT_COMPLEX64, DT_COMPLEX128}))
     .OP_END_FACTORY_REG(MatrixSquareRoot)
 
 /**
@@ -419,17 +474,77 @@ left-hand side . \n
 *@par Outputs:
 y: Tensor of shape `[..., M, K]` containing the solutions \n
 
+*@par Attributes:
+*partial_pivoting: Whether to perform partial pivoting. `True` by default.
+Partial pivoting makes the procedure more stable, but slower. Partial
+pivoting is unnecessary in some cases, including diagonally dominant and
+symmetric positive definite matrices
+
 *@par Third-party framework compatibility
 * Compatible with TensorFlow TridiagonalSolve operator.
 */
 
 REG_OP(TridiagonalSolve)
-    .INPUT(diagonals, TensorType({DT_FLOAT, DT_DOUBLE}))
-    .INPUT(rhs, TensorType({DT_FLOAT, DT_DOUBLE}))
-    .OUTPUT(y, TensorType({DT_FLOAT, DT_DOUBLE}))
+    .INPUT(diagonals, TensorType({DT_FLOAT, DT_DOUBLE, DT_COMPLEX64, DT_COMPLEX128}))
+    .INPUT(rhs, TensorType({DT_FLOAT, DT_DOUBLE, DT_COMPLEX64, DT_COMPLEX128}))
+    .OUTPUT(y, TensorType({DT_FLOAT, DT_DOUBLE, DT_COMPLEX64, DT_COMPLEX128}))
     .ATTR(partial_pivoting, Bool, true)
     .OP_END_FACTORY_REG(TridiagonalSolve)
 
+/**
+* @brief Solution of banded triangular matrix . \n
+
+* @par Inputs:
+* The input bands has to be symmetric and positive definite.
+* @li bands:A Tensor. Must be one of the following types: double, float32,
+  float16,complex64, complex128. Shape is  [... K,M], K corresponds to the
+  number of bands (actually stored diagonals), and M is the data of the
+  diagonals.
+  @li rhs:shape is [...M] or [...M, N]. Has the same type as bands \n
+
+* @par Outputs:
+* @li output:A Tensor. Has the same type as bands . \n
+
+* @par Attributes:
+* @li lower:An optional bool. Defaults to True.True: indicates the lower
+  triangular matrix. False: indicates the upper triangular matrix.
+* @li adjoint:An optional bool. Defaults to False.Boolean indicating whether to
+  solve with matrix or its (block-wise) adjoint. \n
+
+* @par Third-party framework compatibility
+* Compatible with tensorflow BandedTriangularSolve operator.
+*/
+
+REG_OP(BandedTriangularSolve)
+    .INPUT(bands, TensorType({DT_FLOAT, DT_DOUBLE, \
+        DT_FLOAT16, DT_COMPLEX64, DT_COMPLEX128}))
+    .INPUT(rhs, TensorType({DT_FLOAT, DT_DOUBLE, \
+        DT_FLOAT16, DT_COMPLEX64, DT_COMPLEX128}))
+    .OUTPUT(output,TensorType({DT_FLOAT, DT_DOUBLE, \
+        DT_FLOAT16, DT_COMPLEX64, DT_COMPLEX128}))
+    .ATTR(lower, Bool, true)
+    .ATTR(adjoint, Bool, false)
+    .OP_END_FACTORY_REG(BandedTriangularSolve)
+
+/**
+* @brief Returns the complex conjugatetranspose.
+
+* @par Inputs:
+* @li x: A Tensor. Must be one of the following types: double, float32, float16,
+         int8, uint8, int16, uint16, int32, uint32, int64, uint64, bool
+* @li perm: A Index. Must be one of the following types: int32, int64 \n
+*
+* @par Outputs:
+* @li y: A Tensor. Has the same type as "x" . \n
+
+* @par Third-party framework compatibility.
+* Compatible with tensorflow ConjugateTranspose operator.
+*/
+REG_OP(ConjugateTranspose)
+    .INPUT(x, TensorType::BasicType())
+    .INPUT(perm, TensorType::IndexNumberType())
+    .OUTPUT(y, TensorType::BasicType())
+    .OP_END_FACTORY_REG(ConjugateTranspose)
 }  // namespace ge
 
 #endif  // OPS_BUILT_IN_OP_PROTO_INC_LINALG_OPS_H_

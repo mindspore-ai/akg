@@ -1,18 +1,12 @@
-/**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+/*
+* @file mmpa_linux.h
+*
+* Copyright (C) Huawei Technologies Co., Ltd. 2019-2021. All Rights Reserved.
+*
+* This program is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+*/
 
 #ifndef MMPA_LINUX_MMPA_LINUX_H
 #define MMPA_LINUX_MMPA_LINUX_H
@@ -58,31 +52,31 @@ typedef long MM_LONG;
 typedef VOID *(*userProcFunc)(VOID *pulArg);
 
 typedef struct {
-  userProcFunc procFunc;  // Callback function pointer
-  VOID *pulArg;           // Callback function parameters
+    userProcFunc procFunc;  // Callback function pointer
+    VOID *pulArg;           // Callback function parameters
 } mmUserBlock_t;
 
 typedef struct {
-  const char *dli_fname;
-  void *dli_fbase;
-  const char *dli_sname;
-  void *dli_saddr;
-  size_t dli_size; /* ELF only */
-  int dli_bind; /* ELF only */
-  int dli_type;
+    const CHAR *dli_fname;
+    VOID *dli_fbase;
+    const CHAR *dli_sname;
+    VOID *dli_saddr;
+    size_t dli_size; /* ELF only */
+    INT32 dli_bind; /* ELF only */
+    INT32 dli_type;
 } mmDlInfo;
 
 typedef struct {
-  int wSecond;             // Seconds. [0-60] (1 leap second)
-  int wMinute;             // Minutes. [0-59]
-  int wHour;               // Hours. [0-23]
-  int wDay;                // Day. [1-31]
-  int wMonth;              // Month. [1-12]
-  int wYear;               // Year
-  int wDayOfWeek;          // Day of week. [0-6]
-  int tm_yday;             // Days in year.[0-365]
-  int tm_isdst;            // DST. [-1/0/1]
-  long int wMilliseconds;  // milliseconds
+    INT32 wSecond;             // Seconds. [0-60] (1 leap second)
+    INT32 wMinute;             // Minutes. [0-59]
+    INT32 wHour;               // Hours. [0-23]
+    INT32 wDay;                // Day. [1-31]
+    INT32 wMonth;              // Month. [1-12]
+    INT32 wYear;               // Year
+    INT32 wDayOfWeek;          // Day of week. [0-6]
+    INT32 tm_yday;             // Days in year.[0-365]
+    INT32 tm_isdst;            // DST. [-1/0/1]
+    LONG wMilliseconds;        // milliseconds
 } mmSystemTime_t;
 
 typedef sem_t mmSem_t;
@@ -98,72 +92,72 @@ typedef ssize_t mmSsize_t;
 typedef size_t mmSize; // size
 
 typedef struct {
-  UINT32 createFlag;
-  INT32 oaFlag;
+    UINT32 createFlag;
+    INT32 oaFlag;
 } mmCreateFlag;
 
 typedef struct {
-  VOID *sendBuf;
-  INT32 sendLen;
+    VOID *sendBuf;
+    INT32 sendLen;
 } mmIovSegment;
 typedef struct in_addr mmInAddr;
 
 typedef struct {
-  VOID *inbuf;
-  INT32 inbufLen;
-  VOID *outbuf;
-  INT32 outbufLen;
-  mmOverLap *oa;
+    VOID *inbuf;
+    INT32 inbufLen;
+    VOID *outbuf;
+    INT32 outbufLen;
+    mmOverLap *oa;
 } mmIoctlBuf;
 
 typedef int mmAtomicType;
 typedef int mmAtomicType64;
 
 typedef enum {
-  pollTypeRead = 1,  // pipe read
-  pollTypeRecv,      // socket recv
-  pollTypeIoctl,     // ioctl
+    pollTypeRead = 1,  // pipe read
+    pollTypeRecv,      // socket recv
+    pollTypeIoctl,     // ioctl
 } mmPollType;
 
 typedef struct {
-  mmPollHandle handle;            // The file descriptor or handle of poll is required
-  mmPollType pollType;            // Operation type requiring poll
+    mmPollHandle handle;            // The file descriptor or handle of poll is required
+    mmPollType pollType;            // Operation type requiring poll
                                   // read or recv or ioctl
-  INT32 ioctlCode;                // IOCTL operation code, dedicated to IOCTL
-  mmComPletionKey completionKey;  // The default value is blank, which is used in windows
+    INT32 ioctlCode;                // IOCTL operation code, dedicated to IOCTL
+    mmComPletionKey completionKey;  // The default value is blank, which is used in windows
                                   // The data used to receive the difference between which handle is readable
 } mmPollfd;
 
 typedef struct {
-  VOID *priv;              // User defined private content
-  mmPollHandle bufHandle;  // Value of handle corresponding to buf
-  mmPollType bufType;      // Data types polled to
-  VOID *buf;               // Data used in poll
-  UINT32 bufLen;           // Data length used in poll
-  UINT32 bufRes;           // Actual return length
+    VOID *priv;              // User defined private content
+    mmPollHandle bufHandle;  // Value of handle corresponding to buf
+    mmPollType bufType;      // Data types polled to
+    VOID *buf;               // Data used in poll
+    UINT32 bufLen;           // Data length used in poll
+    UINT32 bufRes;           // Actual return length
 } mmPollData, *pmmPollData;
 
 typedef VOID (*mmPollBack)(pmmPollData);
 
 typedef struct {
-  INT32 tz_minuteswest;  // How many minutes is it different from Greenwich
-  INT32 tz_dsttime;      // type of DST correction
+    INT32 tz_minuteswest;  // How many minutes is it different from Greenwich
+    INT32 tz_dsttime;      // type of DST correction
 } mmTimezone;
 
 typedef struct {
-  LONG tv_sec;
-  LONG tv_usec;
+    LONG tv_sec;
+    LONG tv_usec;
 } mmTimeval;
 
 typedef struct {
-  MM_LONG tv_sec;
-  MM_LONG tv_nsec;
+    MM_LONG tv_sec;
+    MM_LONG tv_nsec;
 } mmTimespec;
 
 typedef struct {
-  ULONGLONG totalSize;
-  ULONGLONG freeSize;
-  ULONGLONG availSize;
+    ULONGLONG totalSize;
+    ULONGLONG freeSize;
+    ULONGLONG availSize;
 } mmDiskSize;
 
 #define mmTLS __thread
@@ -174,40 +168,40 @@ typedef mode_t mmMode_t;
 typedef struct option mmStructOption;
 
 typedef struct {
-  char addr[MMPA_MACINFO_DEFAULT_SIZE];  // ex:aa-bb-cc-dd-ee-ff\0
+    CHAR addr[MMPA_MACINFO_DEFAULT_SIZE];  // ex:aa-bb-cc-dd-ee-ff\0
 } mmMacInfo;
 
 typedef struct {
-  char **argv;
-  INT32 argvCount;
-  char **envp;
-  INT32 envpCount;
+    CHAR **argv;
+    INT32 argvCount;
+    CHAR **envp;
+    INT32 envpCount;
 } mmArgvEnv;
 
 typedef struct {
-  char arch[MMPA_CPUDESC_DEFAULT_SIZE];
-  char manufacturer[MMPA_CPUDESC_DEFAULT_SIZE];  // vendor
-  char version[MMPA_CPUDESC_DEFAULT_SIZE];       // modelname
-  INT32 frequency;                               // cpu frequency
-  INT32 maxFrequency;                            // max speed
-  INT32 ncores;                                  // cpu cores
-  INT32 nthreads;                                // cpu thread count
-  INT32 ncounts;                                 // logical cpu nums
+    CHAR arch[MMPA_CPUDESC_DEFAULT_SIZE];
+    CHAR manufacturer[MMPA_CPUDESC_DEFAULT_SIZE];  // vendor
+    CHAR version[MMPA_CPUDESC_DEFAULT_SIZE];       // modelname
+    INT32 frequency;                               // cpu frequency
+    INT32 maxFrequency;                            // max speed
+    INT32 ncores;                                  // cpu cores
+    INT32 nthreads;                                // cpu thread count
+    INT32 ncounts;                                 // logical cpu nums
 } mmCpuDesc;
 
 typedef mode_t MODE;
 
 typedef struct {
-  INT32 detachFlag;    // Determine whether to set separation property 0, not to separate 1
-  INT32 priorityFlag;  // Determine whether to set priority 0 and not set 1
-  INT32 priority;      // Priority value range to be set 1-99
-  INT32 policyFlag;    // Set scheduling policy or not 0 do not set 1 setting
-  INT32 policy;        // Scheduling policy value value
-                       //  MMPA_THREAD_SCHED_RR
-                       //  MMPA_THREAD_SCHED_OTHER
-                       //  MMPA_THREAD_SCHED_FIFO
-  INT32 stackFlag;     // Set stack size or not: 0 does not set 1 setting
-  UINT32 stackSize;    // The stack size unit bytes to be set cannot be less than MMPA_THREAD_STACK_MIN
+    INT32 detachFlag;    // Determine whether to set separation property 0, not to separate 1
+    INT32 priorityFlag;  // Determine whether to set priority 0 and not set 1
+    INT32 priority;      // Priority value range to be set 1-99
+    INT32 policyFlag;    // Set scheduling policy or not 0 do not set 1 setting
+    INT32 policy;        // Scheduling policy value value
+                         //  MMPA_THREAD_SCHED_RR
+                         //  MMPA_THREAD_SCHED_OTHER
+                         //  MMPA_THREAD_SCHED_FIFO
+    INT32 stackFlag;     // Set stack size or not: 0 does not set 1 setting
+    UINT32 stackSize;    // The stack size unit bytes to be set cannot be less than MMPA_THREAD_STACK_MIN
 } mmThreadAttr;
 
 #ifdef __ANDROID__
@@ -326,8 +320,8 @@ MMPA_FUNC_VISIBILITY INT32 mmCondDestroy(mmCond *cond);
 MMPA_FUNC_VISIBILITY INT32 mmGetPid();
 MMPA_FUNC_VISIBILITY INT32 mmGetTid();
 MMPA_FUNC_VISIBILITY INT32 mmGetPidHandle(mmProcess *processHandle);
-MMPA_FUNC_VISIBILITY INT32 mmGetLocalTime(mmSystemTime_t *sysTime);
-MMPA_FUNC_VISIBILITY INT32 mmGetSystemTime(mmSystemTime_t *sysTime);
+MMPA_FUNC_VISIBILITY INT32 mmGetLocalTime(mmSystemTime_t *sysTimePtr);
+MMPA_FUNC_VISIBILITY INT32 mmGetSystemTime(mmSystemTime_t *sysTimePtr);
 
 MMPA_FUNC_VISIBILITY INT32 mmSemInit(mmSem_t *sem, UINT32 value);
 MMPA_FUNC_VISIBILITY INT32 mmSemWait(mmSem_t *sem);
@@ -393,7 +387,7 @@ MMPA_FUNC_VISIBILITY mmSsize_t mmWritev(mmProcess fd, mmIovSegment *iov, INT32 i
 MMPA_FUNC_VISIBILITY VOID mmMb();
 MMPA_FUNC_VISIBILITY INT32 mmInetAton(const CHAR *addrStr, mmInAddr *addr);
 
-MMPA_FUNC_VISIBILITY mmProcess mmOpenFile(const CHAR *fileName, UINT32 access, mmCreateFlag fileFlag);
+MMPA_FUNC_VISIBILITY mmProcess mmOpenFile(const CHAR *fileName, UINT32 accessFlag, mmCreateFlag fileFlag);
 MMPA_FUNC_VISIBILITY mmSsize_t mmReadFile(mmProcess fileId, VOID *buffer, INT32 len);
 MMPA_FUNC_VISIBILITY mmSsize_t mmWriteFile(mmProcess fileId, VOID *buffer, INT32 len);
 MMPA_FUNC_VISIBILITY INT32 mmCloseFile(mmProcess fileId);
@@ -407,13 +401,13 @@ MMPA_FUNC_VISIBILITY mmAtomicType64 mmValueSub64(mmAtomicType64 *ptr, mmAtomicTy
 MMPA_FUNC_VISIBILITY INT32 mmCreateTaskWithDetach(mmThread *threadHandle, mmUserBlock_t *funcBlock);
 
 // The following 3 interfaces are to be deleted
-MMPA_FUNC_VISIBILITY INT32 mmCreateNamedPipe(mmPipeHandle pipe[], CHAR *pipeName[], INT32 waitMode);
-MMPA_FUNC_VISIBILITY INT32 mmOpenNamePipe(mmPipeHandle pipe[], CHAR *pipeName[], INT32 waitMode);
+MMPA_FUNC_VISIBILITY INT32 mmCreateNamedPipe(mmPipeHandle pipeHandle[], CHAR *pipeName[], INT32 waitMode);
+MMPA_FUNC_VISIBILITY INT32 mmOpenNamePipe(mmPipeHandle pipeHandle[], CHAR *pipeName[], INT32 waitMode);
 MMPA_FUNC_VISIBILITY VOID mmCloseNamedPipe(mmPipeHandle namedPipe[]);
 
-MMPA_FUNC_VISIBILITY INT32 mmCreatePipe(mmPipeHandle pipe[], CHAR *pipeName[], UINT32 pipeCount, INT32 waitMode);
-MMPA_FUNC_VISIBILITY INT32 mmOpenPipe(mmPipeHandle pipe[], CHAR *pipeName[], UINT32 pipeCount, INT32 waitMode);
-MMPA_FUNC_VISIBILITY VOID mmClosePipe(mmPipeHandle pipe[], UINT32 pipeCount);
+MMPA_FUNC_VISIBILITY INT32 mmCreatePipe(mmPipeHandle pipeHandle[], CHAR *pipeName[], UINT32 pipeCount, INT32 waitMode);
+MMPA_FUNC_VISIBILITY INT32 mmOpenPipe(mmPipeHandle pipeHandle[], CHAR *pipeName[], UINT32 pipeCount, INT32 waitMode);
+MMPA_FUNC_VISIBILITY VOID mmClosePipe(mmPipeHandle pipeHandle[], UINT32 pipeCount);
 
 // Poll related interface
 MMPA_FUNC_VISIBILITY mmCompletionHandle mmCreateCompletionPort();
@@ -467,10 +461,10 @@ MMPA_FUNC_VISIBILITY INT32 mmGetOptOpt();
 MMPA_FUNC_VISIBILITY VOID mmSetOpOpt(INT32 mmOptOpt);
 MMPA_FUNC_VISIBILITY CHAR *mmGetOptArg();
 MMPA_FUNC_VISIBILITY VOID mmSetOptArg(CHAR *mmOptArg);
-MMPA_FUNC_VISIBILITY INT32 mmGetOpt(INT32 argc, char *const *argv, const char *opts);
+MMPA_FUNC_VISIBILITY INT32 mmGetOpt(INT32 argc, CHAR *const *argv, const CHAR *opts);
 MMPA_FUNC_VISIBILITY INT32 mmGetOptLong(INT32 argc,
-                                        char *const *argv,
-                                        const char *opts,
+                                        CHAR *const *argv,
+                                        const CHAR *opts,
                                         const mmStructOption *longOpts,
                                         INT32 *longIndex);
 
@@ -496,7 +490,7 @@ MMPA_FUNC_VISIBILITY INT32 mmSetEnv(const CHAR *name, const CHAR *value, INT32 o
 MMPA_FUNC_VISIBILITY CHAR *mmStrTokR(CHAR *str, const CHAR *delim, CHAR **saveptr);
 MMPA_FUNC_VISIBILITY CHAR *mmDirName(CHAR *path);
 MMPA_FUNC_VISIBILITY CHAR *mmBaseName(CHAR *path);
-MMPA_FUNC_VISIBILITY INT32 mmGetDiskFreeSpace(const char *path, mmDiskSize *diskSize);
+MMPA_FUNC_VISIBILITY INT32 mmGetDiskFreeSpace(const CHAR *path, mmDiskSize *diskSize);
 
 /*
  * Function: set the thread name created by mmcreatetask
@@ -540,7 +534,7 @@ MMPA_FUNC_VISIBILITY INT32 mmGetCpuInfo(mmCpuDesc **cpuInfo, INT32 *count);
 MMPA_FUNC_VISIBILITY INT32 mmCpuInfoFree(mmCpuDesc *cpuInfo, INT32 count);
 MMPA_FUNC_VISIBILITY INT32 mmCreateProcess(const CHAR *fileName,
                                            const mmArgvEnv *env,
-                                           const char *stdoutRedirectFile,
+                                           const CHAR *stdoutRedirectFile,
                                            mmProcess *id);
 
 MMPA_FUNC_VISIBILITY INT32 mmCreateTaskWithThreadAttr(mmThread *threadHandle,
@@ -550,6 +544,10 @@ MMPA_FUNC_VISIBILITY mmFileHandle mmShmOpen(const CHAR *name, INT32 oflag, mmMod
 MMPA_FUNC_VISIBILITY INT32 mmShmUnlink(const CHAR *name);
 MMPA_FUNC_VISIBILITY VOID *mmMmap(mmFd_t fd, mmSize_t size, mmOfft_t offset, mmFd_t *extra, INT32 prot, INT32 flags);
 MMPA_FUNC_VISIBILITY INT32 mmMunMap(VOID *data, mmSize_t size, mmFd_t *extra);
+
+MMPA_FUNC_VISIBILITY mmSize mmGetPageSize();
+MMPA_FUNC_VISIBILITY VOID *mmAlignMalloc(mmSize mallocSize, mmSize alignSize);
+MMPA_FUNC_VISIBILITY VOID mmAlignFree(VOID *addr);
 #define MMPA_DLL_API
 
 #ifdef __cplusplus

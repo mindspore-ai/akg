@@ -1,21 +1,11 @@
-/**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+/*
+ * Copyright (c) Huawei Technologies Co., Ltd. 2020-2021. All rights reserved.
+ * Description: config.h
+ * Create: 2020-01-01
  */
 
-#ifndef __CCE_RUNTIME_CONFIG_H__
-#define __CCE_RUNTIME_CONFIG_H__
+#ifndef CCE_RUNTIME_CONFIG_H
+#define CCE_RUNTIME_CONFIG_H
 
 #include "base.h"
 
@@ -23,28 +13,31 @@
 extern "C" {
 #endif
 
-#define PLAT_COMBINE(arch, chip, ver) ((arch << 16) | (chip << 8) | (ver))
-#define PLAT_GET_ARCH(type)           ((type >> 16) & 0xffff)
-#define PLAT_GET_CHIP(type)           ((type >> 8) & 0xff)
-#define PLAT_GET_VER(type)            (type & 0xff)
+#define PLAT_COMBINE(arch, chip, ver) (((arch) << 16U) | ((chip) << 8U) | (ver))
+#define PLAT_GET_ARCH(type)           (((type) >> 16U) & 0xffffU)
+#define PLAT_GET_CHIP(type)           (((type) >> 8U) & 0xffU)
+#define PLAT_GET_VER(type)            ((type) & 0xffU)
 
 typedef enum tagRtArchType {
     ARCH_BEGIN = 0,
     ARCH_V100 = ARCH_BEGIN,
-    ARCH_V200,
-    ARCH_END,
+    ARCH_V200 = 1,
+    ARCH_V300 = 2,
+    ARCH_END = 3,
 } rtArchType_t;
 
 typedef enum tagRtChipType {
     CHIP_BEGIN = 0,
     CHIP_MINI = CHIP_BEGIN,
-    CHIP_CLOUD,
-    CHIP_MDC,
-    CHIP_LHISI,
-    CHIP_DC,
-    CHIP_CLOUD_V2,
-    CHIP_NO_DEVICE,
-    CHIP_END,
+    CHIP_CLOUD = 1,
+    CHIP_MDC = 2,
+    CHIP_LHISI = 3,
+    CHIP_DC = 4,
+    CHIP_CLOUD_V2 = 5,
+    CHIP_NO_DEVICE = 6,
+    CHIP_MINI_V3 = 7,
+    CHIP_5612 = 8, /* 1911T */
+    CHIP_END = 9,
 } rtChipType_t;
 
 typedef enum tagRtAicpuScheType {
@@ -59,29 +52,39 @@ typedef enum tagRtDeviceCapabilityType {
     RT_SCHEDULE_HARDWARE, // HWTS Schedule
     RT_AICPU_BLOCKING_OP_NOT_SUPPORT,
     RT_AICPU_BLOCKING_OP_SUPPORT, // 1910/1980/1951 ts support AICPU blocking operation
+    RT_MODE_NO_FFTS, // no ffts
+    RT_MODE_FFTS, // 1981 get ffts work mode, ffts
+    RT_MODE_FFTS_PLUS, // 1981 get ffts work mode, ffts plus
 } rtDeviceCapabilityType;
 
 typedef enum tagRtVersion {
     VER_BEGIN = 0,
     VER_NA = VER_BEGIN,
-    VER_ES,
-    VER_CS,
-    VER_SD3403,
-    VER_END,
+    VER_ES = 1,
+    VER_CS = 2,
+    VER_SD3403 = 3,
+    VER_END = 4,
 } rtVersion_t;
 
 /* match rtChipType_t */
 typedef enum tagRtPlatformType {
     PLATFORM_BEGIN = 0,
     PLATFORM_MINI_V1 = PLATFORM_BEGIN,
-    PLATFORM_CLOUD_V1,
-    PLATFORM_MINI_V2,
-    PLATFORM_LHISI_ES,
-    PLATFORM_LHISI_CS,
-    PLATFORM_DC,
-    PLATFORM_CLOUD_V2,
-    PLATFORM_LHISI_SD3403,
-    PLATFORM_END,
+    PLATFORM_CLOUD_V1 = 1,
+    PLATFORM_MINI_V2 = 2,
+    PLATFORM_LHISI_ES = 3,
+    PLATFORM_LHISI_CS = 4,
+    PLATFORM_DC = 5,
+    PLATFORM_CLOUD_V2 = 6,
+    PLATFORM_LHISI_SD3403 = 7,
+    PLATFORM_MINI_V3 = 8,
+    PLATFORM_MINI_5612 = 9,
+    PLATFORM_CLOUD_V2_910B1 = 10,
+    PLATFORM_CLOUD_V2_910B2 = 11,
+    PLATFORM_CLOUD_V2_910B3 = 12,
+    PLATFORM_CLOUD_V2_910B4 = 13,
+    PLATFORM_MDC_PG2 = 14,
+    PLATFORM_END = 15,
 } rtPlatformType_t;
 
 typedef enum tagRtCubeFracMKNFp16 {
@@ -189,11 +192,20 @@ RTS_API rtError_t rtGetMemoryConfig(rtMemoryConfig_t *memoryConfig);
 
 /**
  * @ingroup
+ * @brief get float overflow mode
+ * @param [out] floatOverflowMode
+ * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for error input
+ */
+RTS_API rtError_t rtGetFloatOverflowMode(rtFloatOverflowMode_t * const floatOverflowMode);
+
+/**
+ * @ingroup
  * @brief get l2 buffer Info,virtual baseaddr,Size
- * @param [in] stream
+ * @param [in] stm
  * @return RT_ERROR_NONE for ok, errno for failed
  */
-RTS_API rtError_t rtMemGetL2Info(rtStream_t stream, void **ptr, uint32_t *size);
+RTS_API rtError_t rtMemGetL2Info(rtStream_t stm, void **ptr, uint32_t *size);
 
 /**
  * @ingroup
@@ -212,11 +224,11 @@ RTS_API rtError_t rtGetRuntimeVersion(uint32_t *runtimeVersion);
  * @param [in] deviceId
  * @param [in] moduleType
  * @param [in] featureType
- * @param [out] value
+ * @param [out] val
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
  */
-RTS_API rtError_t rtGetDeviceCapability(int32_t deviceId, int32_t moduleType, int32_t featureType, int32_t *value);
+RTS_API rtError_t rtGetDeviceCapability(int32_t deviceId, int32_t moduleType, int32_t featureType, int32_t *val);
 
 /**
  * @ingroup
@@ -236,8 +248,18 @@ RTS_API rtError_t rtSetOpWaitTimeOut(uint32_t timeout);
  */
 RTS_API rtError_t rtSetOpExecuteTimeOut(uint32_t timeout);
 
+/**
+ * @ingroup
+ * @brief get is Heterogenous.
+ * @param [out] heterogenous=1 Heterogenous Mode: read isHeterogenous=1 in ini file.
+ * @param [out] heterogenous=0 NOT Heterogenous Mode:
+ *      1:not found ini file, 2:error when reading ini, 3:Heterogenous value is not 1
+ * @return RT_ERROR_NONE for ok
+ */
+RTS_API rtError_t rtGetIsHeterogenous(int32_t *heterogenous);
+
 #if defined(__cplusplus)
 }
 #endif
 
-#endif // __CCE_RUNTIME_STREAM_H__
+#endif // CCE_RUNTIME_CONFIG_H

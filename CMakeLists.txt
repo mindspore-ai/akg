@@ -1,4 +1,4 @@
-# Copyright 2020-2021 Huawei Technologies Co., Ltd
+# Copyright 2020-2022 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -381,8 +381,9 @@ if(USE_CCE_PROFILING)
   set(ASCEND_RUNTIME_PATH ${ASCEND_PATH}/fwkacllib/lib64)
   set(ASCEND_CANN_RUNTIME_PATH ${ASCEND_PATH}/latest/fwkacllib/lib64)
   find_library(PROFILING msprofiler ${ASCEND_RUNTIME_PATH} ${ASCEND_CANN_RUNTIME_PATH})
+  find_library(GERT gert ${ASCEND_RUNTIME_PATH} ${ASCEND_CANN_RUNTIME_PATH})
   message(STATUS "PROFILING: ${PROFILING}")
-  target_link_libraries(akg -Wl,--no-as-needed ${PROFILING})
+  target_link_libraries(akg -Wl,--no-as-needed ${PROFILING} ${GERT})
 endif()
 
 # Related headers

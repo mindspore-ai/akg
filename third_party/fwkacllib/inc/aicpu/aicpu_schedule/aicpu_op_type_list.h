@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright (c) Huawei Technologies Co., Ltd. 2019-2020. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 #ifndef AICPU_OP_TYPE_LIST_H_
 #define AICPU_OP_TYPE_LIST_H_
 
+extern "C" {
 enum OpKernelType {
     TF_KERNEL,
     CPU_KERNEL
@@ -29,17 +30,11 @@ enum ReturnCode {
 };
 
 #pragma pack(push, 1)
-//One byte alignment
+// One byte alignment
 struct SysOpInfo {
     uint64_t opLen;
     uint64_t opType;
     OpKernelType kernelsType;
-};
-
-struct OpParamInfo {
-    uint64_t num;
-    uint64_t dtypeList;
-    uint64_t formatList;
 };
 
 struct SysOpCheckInfo {
@@ -57,4 +52,6 @@ struct SysOpCheckResp {
     uint64_t opParamInfoList;
 };
 #pragma pack(pop)
+}
+
 #endif  // AICPU_OP_TYPE_LIST_H_
