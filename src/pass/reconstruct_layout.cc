@@ -574,7 +574,13 @@ class CPULocalReconstruction : public IRMutator {
     }
 
     Array<Expr> shapes;
-    shapes.assign(extents_.begin(), extents_.end());
+    for (auto it = extents_.begin(); it != extents_.end(); ++it) {
+      auto extent_value = it->as<IntImm>()->value;
+      if (extent_value & (extent_value - 1)) {
+        return stmt;
+      }
+      shapes.push_back(*it);
+    }
     extents_.clear();
 
     auto provide = provide_.as<Provide>();
