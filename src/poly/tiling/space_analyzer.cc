@@ -298,21 +298,21 @@ void SpaceAnalyzer::MarkBroadcastAxes(const ProvideEntry &pe) {
 }
 
 void SpaceAnalyzer::MarkTransposeAxes(const ProvideEntry &pe) {
-  std::unordered_set<const For *> dst_transpose;
+  std::vector<const For *> dst_transpose;
   for (auto dst_it : pe.dst.loops) {
     for (auto l : dst_it.second) {
-      dst_transpose.insert(l);
+      dst_transpose.emplace_back(l);
     }
   }
 
-  std::unordered_set<const For *> src_transpose;
+  std::vector<const For *> src_transpose;
   for (auto src : pe.src) {
     if (src.loops.size() == 0 || src.loops.size() != pe.dst.loops.size()) {
       continue;
     }
     for (auto src_it : src.loops) {
       for (auto l : src_it.second) {
-        src_transpose.insert(l);
+        src_transpose.emplace_back(l);
       }
     }
   }

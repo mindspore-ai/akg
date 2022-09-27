@@ -1186,6 +1186,7 @@ isl::schedule_node TileOuterBand::MarkOuterPermutableCpu(isl::schedule_node node
   // check tilable or not, and return the node if not
   if (IsOuterTilable(node) <= 0) return node;
 
+  start_pos_ = 0;
   // make sure the node is a band node, insert empty band if not
   if (!node.isa<isl::schedule_node_band>()) {
     node = InsertEmptyPermutableBand(node);
