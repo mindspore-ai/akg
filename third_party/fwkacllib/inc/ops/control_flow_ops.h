@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright 2019 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -96,7 +96,7 @@ REG_OP(RefMerge)
  *       Otherwise, the data is forwarded to "output_false" . \n
 
  *@par Inputs:
- *@li data: The tensor to be forwarded. \ n
+ *@li data: The tensor to be forwarded.
  *          Must be one of the following types: float16, float32, float64,
  *          int8, int16, int32, int64, uint8, uint16, uint32, uint64, bool.
  *@li pred: A boolean scalar. The output port that will receive data . \n
@@ -387,12 +387,12 @@ REG_OP(ControlTrigger)
 
 *@par Inputs:
 * Three inputs, including:
-*@li x: One dimensional tensore of type int32, specifying queried shape, max size is 8.
-*@li data_seq: One dimensional tensore of type int32, specifying the mapped table is queried.
-*@li level_index: One dimensional tensore of type int32, specifying secondary index. \n
+*@li x: One dimensional tensor of type int32, specifying queried shape, max size is 128.
+*@li data_seq: One dimensional tensor of type int32, specifying the mapped table is queried.
+*@li level_index: One dimensional tensor of type int32, specifying secondary index. \n
 
 *@par Outputs:
-*@li y: A Tensor with shape [batch, 8], of type int32, specifying index of shape in the map.
+*@li y: A Tensor with shape [8], of type int32, specifying index of shape in the map.
 *@par Third-party framework compatibility
 * It is a custom operator. It has no corresponding operator in Caffe.
 */

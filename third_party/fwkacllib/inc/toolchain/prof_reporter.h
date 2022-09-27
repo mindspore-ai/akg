@@ -1,26 +1,14 @@
-/**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+/*
+ * Copyright (c) Huawei Technologies Co., Ltd. 2019-2021. All rights reserved.
+ * Description: handle perf data
+ * Author: xp
+ * Create: 2019-10-13
  */
 
-#ifndef MSPROF_ENGINE_PROF_REPORTER_H_
-#define MSPROF_ENGINE_PROF_REPORTER_H_
-#ifndef OS_TYPE
-#define OS_TYPE 0
-#endif // OS_TYPE
+#ifndef MSPROF_ENGINE_PROF_REPORTER_H
+#define MSPROF_ENGINE_PROF_REPORTER_H
 
-#if (OS_TYPE != LINUX)
+#if (defined(_WIN32) || defined(_WIN64) || defined(_MSC_VER))
 #define MSVP_PROF_API __declspec(dllexport)
 #else
 #define MSVP_PROF_API __attribute__((visibility("default")))
@@ -84,4 +72,4 @@ public:
 }  // namespace Engine
 }  // namespace Msprof
 
-#endif  // MSPROF_ENGINE_PROF_REPORTER_H_
+#endif  // MSPROF_ENGINE_PROF_REPORTER_H

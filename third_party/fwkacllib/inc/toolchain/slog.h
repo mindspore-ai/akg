@@ -111,14 +111,14 @@ extern "C" {
 #define OPERATION_LOG_MASK  (0x10000000)
 #define RESERVERD_LENGTH 52
 
-typedef struct tagDCODE {
-  const char *cName;
-  int cVal;
+typedef struct {
+    const char *cName;
+    int cVal;
 } DCODE;
 
 typedef struct tagKV {
-  char *kname;
-  char *value;
+    char *kname;
+    char *value;
 } KeyValue;
 
 typedef enum {
@@ -139,72 +139,77 @@ typedef struct {
  * module id
  */
 enum {
-  SLOG,          /**< Slog */
-  IDEDD,         /**< IDE daemon device */
-  IDEDH,         /**< IDE daemon host */
-  HCCL,          /**< HCCL */
-  FMK,           /**< Adapter */
-  HIAIENGINE,    /**< Matrix */
-  DVPP,          /**< DVPP */
-  RUNTIME,       /**< Runtime */
-  CCE,           /**< CCE */
+    SLOG,          /**< Slog */
+    IDEDD,         /**< IDE daemon device */
+    IDEDH,         /**< IDE daemon host */
+    HCCL,          /**< HCCL */
+    FMK,           /**< Adapter */
+    HIAIENGINE,    /**< Matrix */
+    DVPP,          /**< DVPP */
+    RUNTIME,       /**< Runtime */
+    CCE,           /**< CCE */
 #if (OS_TYPE == LINUX)
     HDC,         /**< HDC */
 #else
     HDCL,
 #endif // OS_TYPE
-  DRV,           /**< Driver */
-  MDCFUSION,     /**< Mdc fusion */
-  MDCLOCATION,   /**< Mdc location */
-  MDCPERCEPTION, /**< Mdc perception */
-  MDCFSM,
-  MDCCOMMON,
-  MDCMONITOR,
-  MDCBSWP,    /**< MDC base software platform */
-  MDCDEFAULT, /**< MDC undefine */
-  MDCSC,      /**< MDC spatial cognition */
-  MDCPNC,
-  MLL,      /**< abandon */
-  DEVMM,    /**< Dlog memory managent */
-  KERNEL,   /**< Kernel */
-  LIBMEDIA, /**< Libmedia */
-  CCECPU,   /**< aicpu shedule */
-  ASCENDDK, /**< AscendDK */
-  ROS,      /**< ROS */
-  HCCP,
-  ROCE,
-  TEFUSION,
-  PROFILING, /**< Profiling */
-  DP,        /**< Data Preprocess */
-  APP,       /**< User Application */
-  TS,        /**< TS module */
-  TSDUMP,    /**< TSDUMP module */
-  AICPU,     /**< AICPU module */
-  LP,        /**< LP module */
-  TDT,       /**< tsdaemon or aicpu shedule */
-  FE,
-  MD,
-  MB,
-  ME,
-  IMU,
-  IMP,
-  GE, /**< Fmk */
-  MDCFUSA,
-  CAMERA,
-  ASCENDCL,
-  TEEOS,
-  ISP,
-  SIS,
-  HSM,
-  DSS,
-  PROCMGR,     // Process Manager, Base Platform
-  BBOX,
-  AIVECTOR,
-  TBE,
-  FV,
-  MDCMAP,
-  TUNE,
-  INVLID_MOUDLE_ID
+    DRV,           /**< Driver */
+    MDCFUSION,     /**< Mdc fusion */
+    MDCLOCATION,   /**< Mdc location */
+    MDCPERCEPTION, /**< Mdc perception */
+    MDCFSM,
+    MDCCOMMON,
+    MDCMONITOR,
+    MDCBSWP,    /**< MDC base software platform */
+    MDCDEFAULT, /**< MDC undefine */
+    MDCSC,      /**< MDC spatial cognition */
+    MDCPNC,
+    MLL,      /**< abandon */
+    DEVMM,    /**< Dlog memory managent */
+    KERNEL,   /**< Kernel */
+    LIBMEDIA, /**< Libmedia */
+    CCECPU,   /**< aicpu shedule */
+    ASCENDDK, /**< AscendDK */
+    ROS,      /**< ROS */
+    HCCP,
+    ROCE,
+    TEFUSION,
+    PROFILING, /**< Profiling */
+    DP,        /**< Data Preprocess */
+    APP,       /**< User Application */
+    TS,        /**< TS module */
+    TSDUMP,    /**< TSDUMP module */
+    AICPU,     /**< AICPU module */
+    LP,        /**< LP module */
+    TDT,       /**< tsdaemon or aicpu shedule */
+    FE,
+    MD,
+    MB,
+    ME,
+    IMU,
+    IMP,
+    GE, /**< Fmk */
+    MDCFUSA,
+    CAMERA,
+    ASCENDCL,
+    TEEOS,
+    ISP,
+    SIS,
+    HSM,
+    DSS,
+    PROCMGR,     // Process Manager, Base Platform
+    BBOX,
+    AIVECTOR,
+    TBE,
+    FV,
+    MDCMAP,
+    TUNE,
+    HSS, /**< helper */
+    FFTS,
+    OP,
+    UDF,
+    HICAID,
+    INVLID_MOUDLE_ID
 };
 
 /**
@@ -261,9 +266,9 @@ DLL_EXPORT int DlogSetAttr(LogAttr logAttr);
  * @param [in]fmt: log content
  */
 #define dlog_error(moduleId, fmt, ...)                                          \
-  do {                                                                          \
-    DlogErrorInner(moduleId, "[%s:%d]" fmt, __FILE__, __LINE__, ##__VA_ARGS__); \
-  } while (TMP_LOG != 0)
+    do {                                                                          \
+        DlogErrorInner(moduleId, "[%s:%d]" fmt, __FILE__, __LINE__, ##__VA_ARGS__); \
+    } while (TMP_LOG != 0)
 
 /**
  * @ingroup slog
@@ -274,11 +279,11 @@ DLL_EXPORT int DlogSetAttr(LogAttr logAttr);
  * @param [in]fmt: log content
  */
 #define dlog_warn(moduleId, fmt, ...)                                               \
-  do {                                                                              \
-    if(CheckLogLevel(moduleId, DLOG_WARN) == 1) {                                   \
-        DlogWarnInner(moduleId, "[%s:%d]" fmt, __FILE__, __LINE__, ##__VA_ARGS__);  \
-    }                                                                               \
-  } while (TMP_LOG != 0)
+    do {                                                                              \
+        if (CheckLogLevel(moduleId, DLOG_WARN) == 1) {                                   \
+            DlogWarnInner(moduleId, "[%s:%d]" fmt, __FILE__, __LINE__, ##__VA_ARGS__);  \
+        }                                                                               \
+    } while (TMP_LOG != 0)
 
 /**
  * @ingroup slog
@@ -289,11 +294,11 @@ DLL_EXPORT int DlogSetAttr(LogAttr logAttr);
  * @param [in]fmt: log content
  */
 #define dlog_info(moduleId, fmt, ...)                                               \
-  do {                                                                              \
-    if(CheckLogLevel(moduleId, DLOG_INFO) == 1) {                                   \
-        DlogInfoInner(moduleId, "[%s:%d]" fmt, __FILE__, __LINE__, ##__VA_ARGS__);  \
-    }                                                                               \
-  } while (TMP_LOG != 0)
+    do {                                                                              \
+        if (CheckLogLevel(moduleId, DLOG_INFO) == 1) {                                   \
+            DlogInfoInner(moduleId, "[%s:%d]" fmt, __FILE__, __LINE__, ##__VA_ARGS__);  \
+        }                                                                               \
+    } while (TMP_LOG != 0)
 
 /**
  * @ingroup slog
@@ -304,11 +309,11 @@ DLL_EXPORT int DlogSetAttr(LogAttr logAttr);
  * @param [in]fmt: log content
  */
 #define dlog_debug(moduleId, fmt, ...)                                              \
-  do {                                                                              \
-    if(CheckLogLevel(moduleId, DLOG_DEBUG) == 1) {                                  \
-        DlogDebugInner(moduleId, "[%s:%d]" fmt, __FILE__, __LINE__, ##__VA_ARGS__); \
-    }                                                                               \
-  } while (TMP_LOG != 0)
+    do {                                                                              \
+        if (CheckLogLevel(moduleId, DLOG_DEBUG) == 1) {                                  \
+            DlogDebugInner(moduleId, "[%s:%d]" fmt, __FILE__, __LINE__, ##__VA_ARGS__); \
+        }                                                                               \
+    } while (TMP_LOG != 0)
 
 /**
  * @ingroup slog
@@ -318,9 +323,9 @@ DLL_EXPORT int DlogSetAttr(LogAttr logAttr);
  * @param [in]fmt: log content
  */
 #define dlog_event(moduleId, fmt, ...)                                          \
-  do {                                                                          \
-    DlogEventInner(moduleId, "[%s:%d]" fmt, __FILE__, __LINE__, ##__VA_ARGS__); \
-  } while (TMP_LOG != 0)
+    do {                                                                          \
+        DlogEventInner(moduleId, "[%s:%d]" fmt, __FILE__, __LINE__, ##__VA_ARGS__); \
+    } while (TMP_LOG != 0)
 
 /**
  * @ingroup slog
@@ -332,11 +337,11 @@ DLL_EXPORT int DlogSetAttr(LogAttr logAttr);
  * @param [in]fmt: log content
  */
 #define Dlog(moduleId, level, fmt, ...)                                                 \
-  do {                                                                                  \
-    if(CheckLogLevel(moduleId, level) == 1) {                                           \
-        DlogInner(moduleId, level, "[%s:%d]" fmt, __FILE__, __LINE__, ##__VA_ARGS__);   \
-     }                                                                                  \
-  } while (TMP_LOG != 0)
+    do {                                                                                  \
+        if (CheckLogLevel(moduleId, level) == 1) {                                           \
+            DlogInner(moduleId, level, "[%s:%d]" fmt, __FILE__, __LINE__, ##__VA_ARGS__);   \
+        }                                                                                  \
+    } while (TMP_LOG != 0)
 
 /**
  * @ingroup slog
@@ -349,11 +354,11 @@ DLL_EXPORT int DlogSetAttr(LogAttr logAttr);
  * @param [in]fmt: log content
  */
 #define DlogSub(moduleId, submodule, level, fmt, ...)                                                   \
-  do {                                                                                                  \
-    if(CheckLogLevel(moduleId, level) == 1) {                                                           \
-        DlogInner(moduleId, level, "[%s:%d][%s]" fmt, __FILE__, __LINE__, submodule, ##__VA_ARGS__);    \
-    }                                                                                                   \
-  } while (TMP_LOG != 0)
+    do {                                                                                                  \
+        if (CheckLogLevel(moduleId, level) == 1) {                                                           \
+            DlogInner(moduleId, level, "[%s:%d][%s]" fmt, __FILE__, __LINE__, submodule, ##__VA_ARGS__);    \
+        }                                                                                                   \
+    } while (TMP_LOG != 0)
 
 /**
  * @ingroup slog
@@ -367,11 +372,11 @@ DLL_EXPORT int DlogSetAttr(LogAttr logAttr);
  * @param [in]fmt: log content
  */
 #define DlogWithKV(moduleId, level, pstKVArray, kvNum, fmt, ...)                                                \
-  do {                                                                                                          \
-    if(CheckLogLevel(moduleId, level) == 1) {                                                                   \
-        DlogWithKVInner(moduleId, level, pstKVArray, kvNum, "[%s:%d]" fmt, __FILE__, __LINE__, ##__VA_ARGS__);  \
-    }                                                                                                           \
-  } while (TMP_LOG != 0)
+    do {                                                                                                          \
+        if (CheckLogLevel(moduleId, level) == 1) {                                                                   \
+            DlogWithKVInner(moduleId, level, pstKVArray, kvNum, "[%s:%d]" fmt, __FILE__, __LINE__, ##__VA_ARGS__);  \
+        }                                                                                                           \
+    } while (TMP_LOG != 0)
 
 /**
  * @ingroup slog
@@ -451,11 +456,11 @@ DLL_EXPORT int DlogSetAttrForC(LogAttr logAttr);
  * @param [in]fmt: log content
  */
 #define DlogForC(moduleId, level, fmt, ...)                                                 \
-  do {                                                                                  \
-    if(CheckLogLevelForC(moduleId, level) == 1) {                                           \
-        DlogInnerForC(moduleId, level, "[%s:%d]" fmt, __FILE__, __LINE__, ##__VA_ARGS__);   \
-     }                                                                                  \
-  } while (TMP_LOG != 0)
+    do {                                                                                  \
+        if (CheckLogLevelForC(moduleId, level) == 1) {                                           \
+            DlogInnerForC(moduleId, level, "[%s:%d]" fmt, __FILE__, __LINE__, ##__VA_ARGS__);   \
+        }                                                                                  \
+    } while (TMP_LOG != 0)
 
 /**
  * @ingroup slog
@@ -468,11 +473,11 @@ DLL_EXPORT int DlogSetAttrForC(LogAttr logAttr);
  * @param [in]fmt: log content
  */
 #define DlogSubForC(moduleId, submodule, level, fmt, ...)                                                   \
-  do {                                                                                                  \
-    if(CheckLogLevelForC(moduleId, level) == 1) {                                                           \
-        DlogInnerForC(moduleId, level, "[%s:%d][%s]" fmt, __FILE__, __LINE__, submodule, ##__VA_ARGS__);    \
-    }                                                                                                   \
-  } while (TMP_LOG != 0)
+    do {                                                                                                  \
+        if (CheckLogLevelForC(moduleId, level) == 1) {                                                           \
+            DlogInnerForC(moduleId, level, "[%s:%d][%s]" fmt, __FILE__, __LINE__, submodule, ##__VA_ARGS__);    \
+        }                                                                                                   \
+    } while (TMP_LOG != 0)
 
 /**
  * @ingroup slog
@@ -486,11 +491,11 @@ DLL_EXPORT int DlogSetAttrForC(LogAttr logAttr);
  * @param [in]fmt: log content
  */
 #define DlogWithKVForC(moduleId, level, pstKVArray, kvNum, fmt, ...)                                                \
-  do {                                                                                                          \
-    if(CheckLogLevelForC(moduleId, level) == 1) {                                                                   \
-        DlogWithKVInnerForC(moduleId, level, pstKVArray, kvNum, "[%s:%d]" fmt, __FILE__, __LINE__, ##__VA_ARGS__);  \
-    }                                                                                                           \
-  } while (TMP_LOG != 0)
+    do {                                                                                                          \
+        if (CheckLogLevelForC(moduleId, level) == 1) {                                                                \
+            DlogWithKVInnerForC(moduleId, level, pstKVArray, kvNum, "[%s:%d]" fmt, __FILE__, __LINE__, ##__VA_ARGS__); \
+        }                                                                                                           \
+    } while (TMP_LOG != 0)
 
 /**
  * @ingroup slog

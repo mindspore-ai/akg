@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright 2020 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,16 +25,18 @@
 
 namespace ge {
 /**
-*@brief Computes the for the gelu of "x" . \n
+* @brief The GELU activation function is x*Φ(x),
+* where Φ(x) the standard Gaussian cumulative distribution function.
 
-*@par Inputs:
-*Two inputs, including:
-* @li x: A Tensor. Must be one of the following types: float16, float32
+* @par Inputs:
+* One input, including: \n
+* x: A Tensor. Must be one of the following types: float16, float32. \n
 
-*@par Outputs:
-*y: A Tensor. Has the same type as "x".
-*@par Third-party framework compatibility
-*Compatible with the TensorFlow operator Gelu
+* @par Outputs:
+* y: A Tensor. Has the same type as "x". \n
+
+* @par Third-party framework compatibility:
+* Compatible with the TensorFlow operator Gelu.
 */
 REG_OP(Gelu)
     .INPUT(x, TensorType({DT_FLOAT16, DT_FLOAT}))
@@ -42,18 +44,99 @@ REG_OP(Gelu)
     .OP_END_FACTORY_REG(Gelu)
 
 /**
-*@brief Computes the gradient for the gelu of "x" . \n
+* @brief Compute hard_swish of "x" element-wise . \n
+
+*@par Inputs:
+*One input, including:
+*x: A Tensor. Must be one of the following types: float16, float32
+
+*@par Outputs:
+*y: A Tensor. Has the same type as "x".
+*@par Third-party framework compatibility
+* Compatible with the Torch operator HardSwish.
+*/
+REG_OP(HardSwish)
+    .INPUT(x, TensorType({DT_FLOAT16, DT_FLOAT}))
+    .OUTPUT(y, TensorType({DT_FLOAT16, DT_FLOAT}))
+    .OP_END_FACTORY_REG(HardSwish)
+
+/**
+*@brief Computes the gradient for the hard_swish of "x" . \n
+
+* @par Inputs:
+*Two inputs, including:
+* @li grad: A Tensor. Must be one of the following types: float16, float32
+* @li x: A Tensor of the same type as "grad" . \n
+
+*@par Outputs:
+*y: A Tensor. Has the same type as "grad".
+* @par Third-party framework compatibility
+* Compatible with the Torch operator HardSwishGrad.
+*/
+REG_OP(HardSwishGrad)
+    .INPUT(grad, TensorType({DT_FLOAT16, DT_FLOAT}))
+    .INPUT(x, TensorType({DT_FLOAT16, DT_FLOAT}))
+    .OUTPUT(y, TensorType({DT_FLOAT16, DT_FLOAT}))
+    .OP_END_FACTORY_REG(HardSwishGrad)
+
+/**
+*@brief Computes the for the Swish of "x" . \n
+
+*@par Inputs:
+*One input, including:
+*x: A Tensor. Must be one of the following types: float16, float32
+
+*@par Outputs:
+*y: A Tensor. Has the same type as "x".
+
+*@par Attributes:
+*scale: scalar parameter, default value = 1.0
+
+*@par Third-party framework compatibility
+*Compatible with the Torch operator Swish
+*/
+REG_OP(Swish)
+    .INPUT(x, TensorType({DT_FLOAT16, DT_FLOAT}))
+    .OUTPUT(y, TensorType({DT_FLOAT16, DT_FLOAT}))
+    .ATTR(scale, Float, 1.0)
+    .OP_END_FACTORY_REG(Swish)
+
+/**
+*@brief Computes the gradient for the Swish of "x" . \n
 
 *@par Inputs:
 *Three inputs, including:
-* @li dy: A Tensor. Must be one of the following types: float16, float32
+* @li grad: A Tensor. Must be one of the following types: float16, float32
+* @li x: A Tensor of the same type as "grad".
+* @li y: A Tensor of the same type as "grad" . \n
+* @par Attributes:
+* scale: A optional scalar. The data type is float . \n
+*@par Outputs:
+*grad_x: A Tensor. Has the same type as "grad".
+*@par Third-party framework compatibility
+*Compatible with the Torch operator SwishGrad
+*/
+REG_OP(SwishGrad)
+    .INPUT(grad, TensorType({DT_FLOAT16, DT_FLOAT}))
+    .INPUT(x, TensorType({DT_FLOAT16, DT_FLOAT}))
+    .INPUT(y, TensorType({DT_FLOAT16, DT_FLOAT}))
+    .OUTPUT(grad_x, TensorType({DT_FLOAT16, DT_FLOAT}))
+    .ATTR(scale, Float, 1.0)
+    .OP_END_FACTORY_REG(SwishGrad)
+
+/**
+* @brief Computes the gradient for the gelu of "x" .
+
+* @par Inputs:
+* Three inputs, including:
+* @li dy: A Tensor. Must be one of the following types: float16, float32.
 * @li x: A Tensor of the same type as "dy".
 * @li y: A Tensor of the same type as "dy" . \n
 
-*@par Outputs:
-*z: A Tensor. Has the same type as "dy".
-*@par Third-party framework compatibility
-*Compatible with the TensorFlow operator GeluGrad
+* @par Outputs:
+* z: A Tensor. Has the same type as "dy".
+* @par Third-party framework compatibility
+* Compatible with the TensorFlow operator GeluGrad.
 */
 REG_OP(GeluGrad)
     .INPUT(dy, TensorType({DT_FLOAT16, DT_FLOAT}))
@@ -63,11 +146,11 @@ REG_OP(GeluGrad)
     .OP_END_FACTORY_REG(GeluGrad)
 
 /**
-*@brief Computes the for the fast_gelu of "x" . \n
+*@brief The FastGelu activation function is x*e^(0.851*x)*(x-|x|)/(1+e^(-1.702|x|)). \n
 
 *@par Inputs:
-*Two inputs, including:
-* @li x: A Tensor. Must be one of the following types: float16, float32
+*One input, including:
+*x: A Tensor. Must be one of the following types: float16, float32
 
 *@par Outputs:
 *y: A Tensor. Has the same type as "x".
@@ -78,12 +161,28 @@ REG_OP(FastGelu)
     .INPUT(x, TensorType({DT_FLOAT16, DT_FLOAT}))
     .OUTPUT(y, TensorType({DT_FLOAT16, DT_FLOAT}))
     .OP_END_FACTORY_REG(FastGelu)
+/**
+*@brief The FastGeluV2 activation function is x*(sgn(x)*[(a/2)*(clip(|x|,max=-b)+b)^2+0.5]+0.5),
+*       where sgn(x) function is (x+0.000000000001)/|(x+0.000000000001)|. \n
 
+*@par Inputs:
+*One input, including:
+*x: A Tensor. Must be one of the following types: float16, float32
+
+*@par Outputs:
+*y: A Tensor. Has the same type as "x".
+*@par Third-party framework compatibility
+*Compatible with the TensorFlow operator FastGeluV2
+*/
+REG_OP(FastGeluV2)
+    .INPUT(x, TensorType({DT_FLOAT16, DT_FLOAT}))
+    .OUTPUT(y, TensorType({DT_FLOAT16, DT_FLOAT}))
+    .OP_END_FACTORY_REG(FastGeluV2)
 /**
 *@brief Computes the gradient for the fast_gelu of "x" . \n
 
 *@par Inputs:
-*Three inputs, including:
+*Two inputs, including:
 * @li dy: A Tensor. Must be one of the following types: float16, float32
 * @li x: A Tensor of the same type as "dy" . \n
 
@@ -97,7 +196,6 @@ REG_OP(FastGeluGrad)
     .INPUT(x, TensorType({DT_FLOAT16, DT_FLOAT}))
     .OUTPUT(z, TensorType({DT_FLOAT16, DT_FLOAT}))
     .OP_END_FACTORY_REG(FastGeluGrad)
-
 
 /**
 *@brief Computes the gradient for the tanh of "x" . \n
@@ -169,7 +267,7 @@ REG_OP(Relu)
 * x: A Tensor of type RealNumberType . \n
 
 * @par Outputs:
-* y: A Tensor of type RealNumberType . \n
+* y: A Tensor with the same type as x . \n
 
 * @par Third-party framework compatibility
 * Compatible with the TensorFlow operator Relu6.
@@ -209,8 +307,12 @@ REG_OP(Relu6D)
 *     backprops = gradients * (features > 0) * (features < 6) . \n
 
 * @par Inputs:
-* @li features: A Tensor of type RealNumberType.
-* @li gradients: A Tensor of type RealNumberType . \n
+* @li gradients: A Tensor of type RealNumberType. The backpropagated
+      gradients to the corresponding Relu6 operation.
+* @li features: A Tensor with the same type as gradients.he features passed
+      as input to the corresponding Relu6 operation, or its output;
+      using either one produces the same result.  \n
+
 
 * @par Outputs:
 * backprops: A Tensor of type RealNumberType . \n
@@ -223,7 +325,29 @@ REG_OP(Relu6Grad)
     .INPUT(features, TensorType::RealNumberType())
     .OUTPUT(backprops, TensorType::RealNumberType())
     .OP_END_FACTORY_REG(Relu6Grad)
-
+/**
+*@brief Calculate the elu_grad_v2 function.
+*Applies the element-wise function:
+* Computes the backward for the elu: if x>0, 1; otherwise elu() + alpha .
+*@par Inputs:
+*Two inputs, including:
+* @li grads: A tensor. Must be one of the following types:
+*     float16, float32.
+* @li activations: A tensor. Must be one of the following types:
+*     float16, float32.
+*
+*@par Outputs:
+*y: A Tensor with the same type and shape of grads's.
+*
+*@par Attributes:
+*alpha: scalar parameter, default value = 1.0
+*/
+REG_OP(EluGradV2)
+    .INPUT(grads, TensorType({DT_FLOAT, DT_FLOAT16}))
+    .INPUT(activations, TensorType({DT_FLOAT, DT_FLOAT16}))
+    .OUTPUT(y, TensorType({DT_FLOAT, DT_FLOAT16}))
+    .ATTR(alpha, Float, 1.0)
+    .OP_END_FACTORY_REG(EluGradV2)
 /**
 * @brief Compute sigmoid of "x" element-wise . \n
 
@@ -296,12 +420,12 @@ REG_OP(Softplus)
     .OP_END_FACTORY_REG(Softplus)
 
 /**
-*@brief Computes softplus gradients for a softplus operation . \n
+* @brief Computes softplus gradients for a softplus operation .
 
 *@par Inputs:
 *Two inputs:
-* @li gradients: An NC1HWC0 or ND Tensor of type float16 or float32.
-* @li features: An NC1HWC0 or ND Tensor of type float16 or float32.
+* @li gradients: A ND Tensor of type float16 or float32.
+* @li features: A ND Tensor of type float16 or float32.
 
 
 *@par Outputs:
@@ -317,7 +441,7 @@ REG_OP(SoftplusGrad)
     .OP_END_FACTORY_REG(SoftplusGrad)
 
 /**
-*@brief Computes softsign: x/(abs(x) + 1) . \n
+* @brief Computes softsign: x/(abs(x) + 1) .
 
 *@par Inputs:
 * One input:
@@ -335,15 +459,34 @@ REG_OP(Softsign)
     .OP_END_FACTORY_REG(Softsign)
 
 /**
+ * @brief Computes softsignGrad: gradients / (1 + abs(features)) ** 2 .
+ *
+ * @par Inputs:
+ * Two inputs, including:
+ * @li gradients: A Tensor.Must be one of the following types:float16, float32,
+ * @li features: A Tensor of the same type and shape as "gradients".
+
+ * @par Outputs:
+ * output:A Tensor. Has the same type as "gradients".
+ * @par Third-party framework compatibility
+ * Compatible with the TensorFlow operator SoftsignGrad.
+ */
+REG_OP(SoftsignGrad)
+    .INPUT(gradients, TensorType::FloatingDataType())
+    .INPUT(features, TensorType::FloatingDataType())
+    .OUTPUT(output, TensorType::FloatingDataType())
+    .OP_END_FACTORY_REG(SoftsignGrad)
+
+/**
 *@brief Computes scaled exponential linear: scale * alpha * (exp(x) - 1) . \n
 
 *@par Inputs:
 * One input:
 *x: A Tensor. Must be one of the following types: float16, float, double
- * int32, int8. format:ND, NC1HWC0 . \n
+ * int32, int8. format:ND. \n
 
 *@par Outputs:
-*y: A Tensor. Has the same type and format as input "x". format:ND, NC1HWC0 . \n
+*y: A Tensor. Has the same type and format as input "x". format:ND. \n
 
 *@see Region()
 
@@ -356,6 +499,26 @@ REG_OP(Selu)
     .OUTPUT(y, TensorType({DT_FLOAT16,DT_FLOAT,DT_DOUBLE,
                                      DT_INT8,DT_INT32}))
     .OP_END_FACTORY_REG(Selu)
+
+/**
+* @brief Computes SeluGrad backprops: gradients * (outputs + scale * alpha)
+*    if outputs < 0, scale * gradients otherwise .
+
+* @par Inputs:
+* Two inputs, including:
+* @li gradients: A Tensor of type RealNumberType .
+* @li outputs: A Tensor of type RealNumberType .
+* @par Outputs:
+* y: A Tensor. Must have the same type as "gradients" .
+
+* @par Third-party framework compatibility
+* Compatible with the TensorFlow operator SeluGrad.
+*/
+REG_OP(SeluGrad)
+    .INPUT(gradients, TensorType::RealNumberType())
+    .INPUT(outputs, TensorType::RealNumberType())
+    .OUTPUT(y, TensorType::RealNumberType())
+    .OP_END_FACTORY_REG(SeluGrad)
 
 /**
 *@brief Computes rectified linear gradients for a ReLU operation . \n
@@ -509,6 +672,66 @@ REG_OP(Elu)
     .OP_END_FACTORY_REG(Elu)
 
 /**
+*@brief Continuously Differentiable Exponential Linear Uints:
+*       Perform the linear uint element-wise on the input tensor X using formula:
+*       max(0, x) + min(0, alpha * (exp(x/alpha) - 1)). \n
+
+*@par Inputs:
+*x: A float16, float32, for the input data type . \n
+
+*@par Attributes:
+*@li alpha1: A float32. Defines at which negative value the ELU saturates. Defaults to "1.0" .
+*@li alpha2: A float32. Defines at which negative value the ELU saturates. Defaults to "1.0" .
+*@li alpha3: A float32. Defines at which positive value the ELU saturates. Defaults to "1.0" . \n
+
+*@par Outputs:
+*y: A float16, float32, for the normalized result . \n
+
+*@attention Constraints:
+*@li The input is of type float16 or float32 . \n
+
+*@par Multiple batches supported or not
+*Supported
+*@par Third-party framework compatibility
+*@li Compatible with ONNX's Celu operator
+*/
+REG_OP(Celu)
+    .INPUT(x, TensorType({DT_FLOAT,DT_FLOAT16}))
+    .OUTPUT(y, TensorType({DT_FLOAT,DT_FLOAT16}))
+    .ATTR(alpha1, Float, 1.0)
+    .ATTR(alpha2, Float, 1.0)
+    .ATTR(alpha3, Float, 1.0)
+    .OP_END_FACTORY_REG(Celu)
+
+/**
+*@brief Continuously Differentiable Exponential Linear Uints:
+*       Perform the linear uint element-wise on the input tensor X using formula:
+*       max(0, x) + min(0, alpha * (exp(x/alpha) - 1)). \n
+
+*@par Inputs:
+*x: A float16, float32, for the input data type . \n
+
+*@par Attributes:
+*li alpha: A float32. Defines at which negative value the CELU saturates. Defaults to "1.0" .
+
+*@par Outputs:
+*y: A float16, float32, for the normalized result . \n
+
+*@attention Constraints:
+*@li The input is of type float16 or float32 . \n
+
+*@par Multiple batches supported or not
+*Supported
+*@par Third-party framework compatibility
+*@li Compatible with ONNX's Celu operator
+*/
+REG_OP(CeluV2)
+    .INPUT(x, TensorType({DT_FLOAT,DT_FLOAT16}))
+    .OUTPUT(y, TensorType({DT_FLOAT,DT_FLOAT16}))
+    .ATTR(alpha, Float, 1.0)
+    .OP_END_FACTORY_REG(CeluV2)
+
+/**
 *@brief Computes gradients for the exponential linear (Elu) operation.
 *
 *@par Inputs:
@@ -576,20 +799,20 @@ REG_OP(LeakyReluGrad)
     .OP_END_FACTORY_REG(LeakyReluGrad)
 
 /**
-*@brief Thresholds grad each element of the input Tensor . \n
+* @brief Thresholds grad each element of the input Tensor .
 
-*@par Inputs:
+* @par Inputs:
 * @li gradients: A Tensor shape and dtype of input gradients. Support float16, int32.
 * @li features: A Tensor shape and dtype of input features. Support float16, int32 . \n
 
-*@par Attributes:
-*threshold: A float32 scale value to threshold at . \n
+* @par Attributes:
+* threshold: A float32 scale value to threshold at . \n
 
-*@par Outputs:
-*backprops: A Tensor of shape and dtype of output backprops, should be same shape and type as inputs . \n
+* @par Outputs:
+* backprops: A Tensor of shape and dtype of output backprops, should be same shape and type as inputs . \n
 
-*@par Restrictions:
-*Warning: THIS FUNCTION IS EXPERIMENTAL. Please do not use.
+* @par Restrictions:
+* Warning: THIS FUNCTION IS EXPERIMENTAL. Please do not use.
 */
 REG_OP(ThresholdGradV2D)
     .INPUT(gradients, TensorType({DT_INT32, DT_FLOAT16}))
@@ -599,20 +822,20 @@ REG_OP(ThresholdGradV2D)
     .OP_END_FACTORY_REG(ThresholdGradV2D)
 
 /**
-*@brief Thresholds each element of the input Tensor y = (x > threshold) ? x : value . \n
+* @brief Thresholds each element of the input Tensor y = (x > threshold) ? x : value .
 
-*@par Inputs:
-*x: A Tensor dtype of real number . \n
+* @par Inputs:
+* x: A Tensor dtype of real number . \n
 
-*@par Attributes:
-*@li threshold: A float32 scale value to threshold at.
-*@li value: A float32 scale value to replace with . \n
+* @par Attributes:
+* @li threshold: A float32 scale value to threshold at.
+* @li value: A float32 scale value to replace with . \n
 
-*@par Outputs:
-*y: A Tensor of shape and dtype of output, should be same shape and type as input . \n
+* @par Outputs:
+* y: A Tensor of shape and dtype of output, should be same shape and type as input . \n
 
-*@par Restrictions:
-*Warning: THIS FUNCTION IS EXPERIMENTAL. Please do not use.
+* @par Restrictions:
+* Warning: THIS FUNCTION IS EXPERIMENTAL. Please do not use.
 */
 REG_OP(ThresholdV2D)
     .INPUT(x, TensorType::RealNumberType())
@@ -641,23 +864,42 @@ REG_OP(Mish)
     .OP_END_FACTORY_REG(Mish)
 
 /**
+ * @brief: pytorch mish_grad operator.
+ * @par Inputs:
+ * three input, including:
+ * @li grad: A Tensor. shape, datatype and format is same as x
+ * @li x: A Tensor. Must be one of the following types: float16, float32
+ * @li tanhx: A Tensor. shape, datatype and format is same as x
+ * @par Outputs:
+ * One output, including:
+ * x_grad: A Tensor. shape, datatype and format is same as x
+ */
+
+REG_OP(MishGrad)
+    .INPUT(grad, TensorType({ DT_FLOAT,DT_FLOAT16 }))
+    .INPUT(x, TensorType({ DT_FLOAT,DT_FLOAT16 }))
+    .OPTIONAL_INPUT(tanhx, TensorType({ DT_FLOAT,DT_FLOAT16 }))
+    .OUTPUT(x_grad, TensorType({ DT_FLOAT,DT_FLOAT16 }))
+    .OP_END_FACTORY_REG(MishGrad)
+
+/**
  * @brief pytorch hardtanh_backward operator.
  *
  * @par Inputs:
- * 2 inputs, including:
+ * Two inputs, including:
  * @li result, minimum tensor of the linear region range,
  * datatype: float16/float32, format:ND/5HD.
  * @li grad, maximum tensor of the linear region range,
  * datatype:float16/float32, format:ND/5HD. \n
 
  * @par Attributes:
- * 2 attributes, including:
+ * Two attributes, including:
  * @li min_val, minimum value of the linear region range, datatype:float.
  * @li max_val, maximum value of the linear region range, datatype:float. \n
 
  * @par Outputs:
- * 1 output, including:
- * @li y, hardtanh_backward output tensor, datatype and format is same as
+ * One output, including:
+ * y, hardtanh_backward output tensor, datatype and format is same as
  * input result. \n
 
  * @attention Constraints:
@@ -679,7 +921,7 @@ REG_OP(HardtanhGrad)
 
 * @par Inputs:
 * One inputs, including:
-* @li x: A mutable Tensor. Must be one of the following types:
+* x: A mutable Tensor. Must be one of the following types:
 *     float16, float32. \n
 
 * @par Attributes:
@@ -688,7 +930,7 @@ REG_OP(HardtanhGrad)
 * @li threshold: An optional float. Defaults to "20.0" \n
 
 * @par Outputs:
-* @li y: A mutable Tensor. Has the same type as "x" \n
+* y: A mutable Tensor. Has the same type as "x" \n
 
 * @par Third-party framework compatibility
 * Compatible with the Pytorch operator Softplus.
@@ -715,7 +957,7 @@ REG_OP(SoftplusV2)
 * @li threshold: An optional float. Defaults to "20.0" \n
 
 * @par Outputs:
-* @li output_backprops: A mutable Tensor. Has the same type as "input_gradients" \n
+* output_backprops: A mutable Tensor. Has the same type as "input_gradients" \n
 
 * @par Third-party framework compatibility
 * Compatible with the Pytorch operator SoftplusGrad.
@@ -731,15 +973,18 @@ REG_OP(SoftplusV2Grad)
 /**
  * @brief ThresholdedRelu takes one input data (Tensor) and produces one output data (Tensor)
  *  where the rectified linear function, y = x for x > alpha, y = 0 otherwise, is applied to the tensor elementwise.
- * 
- * @par inputs
+ *
+ * @par Inputs:
  * one input including:
- * @li x: input A Tensor. Must be one of the following types: float32, float16
- * 
- * @par output
+ * x: input A Tensor. Must be one of the following types: float32, float16
+ *
+ * @par Attributes:
+ * alpha: An optional float. Defaults to 1.0. \n
+
+ * @par Outputs:
  * one output including:
- * @li y:A Tensor of the same type as x
- * 
+ * y:A Tensor of the same type as x
+ *
  */
 REG_OP(ThresholdedRelu)
     .INPUT(x, TensorType({DT_FLOAT16, DT_FLOAT}))
@@ -752,14 +997,14 @@ REG_OP(ThresholdedRelu)
 
 * @par Inputs:
 * One inputs, including:
-* @li input_x: A tensor. Must be one of the following types:
+* input_x: A tensor. Must be one of the following types:
 *     float16, float32. \n
 
 * @par Attributes:
-* @li lambd: An optional float. Defaults to 0.5. \n
+* lambd: An optional float. Defaults to 0.5. \n
 
 * @par Outputs:
-* y: A Tensor with the same dtype and shape of input_x's. \n
+* output_y: A Tensor with the same dtype and shape of input_x's. \n
 
 * @par Third-party framework compatibility
 * Compatible with the Pytorch operator Hardshrink. \n
@@ -771,11 +1016,39 @@ REG_OP(HardShrink)
     .OP_END_FACTORY_REG(HardShrink)
 
 /**
+*@brief Calculate the hard shrink grad function. \n
+*
+* Computes the gradient for the HardShrink: if x > lambda or x < -lambda, x,otherwise 0
+*
+*@par Inputs:
+*Two inputs, including:
+* @li gradients: A tensor. Must be one of the following types:
+*     float16, float32. \n
+* @li features: A tensor. Must be one of the following types:
+*     float16, float32. \n
+*
+*@par Outputs:
+*backprops: A Tensor with the same type and shape of features's. \n
+*
+*@par Attributes:
+*lambd: An optional float.Defaults to 0.5. \n
+*
+*@par Third-party framework compatibility
+*Compatible with the Pytorch operator Hardshrink_backward. \n
+*/
+  REG_OP(HardShrinkGrad)
+  .INPUT(gradients, TensorType({DT_FLOAT16, DT_FLOAT}))
+  .INPUT(features, TensorType({DT_FLOAT16, DT_FLOAT}))
+  .OUTPUT(backprops, TensorType({DT_FLOAT16, DT_FLOAT}))
+  .ATTR(lambd, Float, 0.5)
+  .OP_END_FACTORY_REG(HardShrinkGrad)
+
+/**
 * @brief Calculate the hard sigmoid function. \n
 
 * @par Inputs:
 * One inputs, including:
-* @li input_x: A tensor. Must be one of the following types:
+* input_x: A tensor. Must be one of the following types:
 *     float16, float32, int32. \n
 
 * @par Attributes:
@@ -787,7 +1060,7 @@ REG_OP(HardShrink)
 
 * @par Third-party framework compatibility
 * Compatible with the Pytorch operator Hardsigmoid. \n
-*/    
+*/
 REG_OP(HardSigmoid)
     .INPUT(input_x, TensorType({DT_FLOAT, DT_FLOAT16, DT_INT32}))
     .OUTPUT(output_y, TensorType({DT_FLOAT, DT_FLOAT16}))
@@ -800,11 +1073,11 @@ REG_OP(HardSigmoid)
 
 * @par Inputs:
 * One inputs, including:
-* @li input_x: A tensor. Must be one of the following types:
+* input_x: A tensor. Must be one of the following types:
 *     float16, float32. \n
 
 * @par Attributes:
-* @li lambd: An optional float. Defaults to 0.5. \n
+* lambd: An optional float. Defaults to 0.5. \n
 
 * @par Outputs:
 * y: A Tensor with the same dtype and shape of input_x's. \n
@@ -828,7 +1101,7 @@ REG_OP(SoftShrink)
 * @li input_x: A tensor of the same dtype as "input_grad". \n
 
 * @par Attributes:
-* @li lambd: An optional float. Defaults to 0.5. \n
+* lambd: An optional float. Defaults to 0.5. \n
 
 * @par Outputs:
 * y: A Tensor of the same dtype and shape as "input_graxd". \n
@@ -842,6 +1115,131 @@ REG_OP(SoftShrinkGrad)
      .OUTPUT(output_y, TensorType({DT_FLOAT16, DT_FLOAT}))
      .ATTR(lambd, Float, 0.5)
      .OP_END_FACTORY_REG(SoftShrinkGrad)
+
+/**
+*@brief Calculate the gradient of log simoid. \n
+
+*@par Inputs:
+*Two inputs, including:
+* @li grads: A tensor, gradient of previous layer. Must be one of the following types:
+*       float16, float32. \n
+* @li features: A tensor, input of log sigmoid. Must be one of the following types:
+*       float16, float32. \n
+
+*@par Outputs:
+*One outputs, including:
+* @li backprops: A tensor with the same type of and shape of grads. \n
+
+*@par Third-party framework compatibility
+*Compatible with the Pytorch operator LogSigmoidBackward. \n
+*/
+REG_OP(LogSigmoidGrad)
+    .INPUT(grads, TensorType({DT_FLOAT16, DT_FLOAT}))
+    .INPUT(features, TensorType({DT_FLOAT16, DT_FLOAT}))
+    .OUTPUT(backprops, TensorType({DT_FLOAT16, DT_FLOAT}))
+    .OP_END_FACTORY_REG(LogSigmoidGrad)
+
+/**
+*@brief Calculate -ln(1+e^(-x)). \n
+
+*@par Inputs:
+*One inputs, including:
+* x: A tensor. Must be one of the following types:
+*       float16, float32. \n
+
+*@par Outputs:
+*One outputs, including:
+* y: A tensor with the same type and shape of x's. \n
+
+*@par Third-party framework compatibility
+*Compatible with the Pytorch operator LogSigmoid. \n
+*/
+REG_OP(LogSigmoid)
+    .INPUT(x, TensorType({DT_FLOAT16, DT_FLOAT})) /* "input:x" */
+    .OUTPUT(y, TensorType({DT_FLOAT16, DT_FLOAT}))  /* "output:y" */
+    .OP_END_FACTORY_REG(LogSigmoid)
+
+/**
+*@brief Calculate the backward outputs of the function "hard_sigmoid" \n
+
+*@par Inputs:
+*One inputs, including:
+* @li grads: A tensor. Must be one of the following types:
+*       float16, float32. \n
+* @li input_x: A tensor. Must be one of the following types:
+*       float16, float32. \n
+
+*@par Outputs:
+*One outputs, including:
+* y: A tensor with the same type and shape of x's. \n
+
+* @par Attributes:
+* @li alpha: An optional float. Defaults to 0.16666666. \n
+* @li beta: An optional float. Defaults to 0.5. \n
+
+*@par Third-party framework compatibility
+*Compatible with the Pytorch operator LogSigmoidGrad. \n
+*/
+REG_OP(HardSigmoidGrad)
+    .INPUT(grads, TensorType({DT_FLOAT, DT_FLOAT16}))
+    .INPUT(input_x, TensorType({DT_FLOAT, DT_FLOAT16}))
+    .OUTPUT(y, TensorType({DT_FLOAT, DT_FLOAT16}))
+    .ATTR(alpha, Float, 0.16666666)
+    .ATTR(beta, Float, 0.5)
+    .OP_END_FACTORY_REG(HardSigmoidGrad)
+
+/**
+* @brief Calculate the shrink function. \n
+
+* @par Inputs:
+* One inputs, including:
+* @li input_x: A tensor. Must be one of the following types:
+*     float16, float32. \n
+
+* @par Attributes:
+* @li lambd: An optional float. Defaults to 0.5. \n
+* @li bias: An optional float. Defaults to 0.0. \n
+
+* @par Outputs:
+* y: A Tensor with the same dtype and shape of input_x's. \n
+
+* @par Third-party framework compatibility
+* Compatible with the ONNX operator Shrink. \n
+*/
+REG_OP(Shrink)
+    .INPUT(input_x, TensorType({DT_FLOAT16, DT_FLOAT}))
+    .OUTPUT(output_y, TensorType({DT_FLOAT16, DT_FLOAT}))
+    .ATTR(lambd, Float, 0.5)
+    .ATTR(bias, Float, 0.0)
+    .OP_END_FACTORY_REG(Shrink)
+
+/**
+* @brief Thresholds each element of the input Tensor: y = (x > threshold) ? x : value \n
+
+* @par Inputs:
+* Three inputs, including:
+* @li x: A Tensor.
+* Must be one of the following types on Ascend310: float16, int8, int32, uint8.
+* Must be one of the following types on Ascend310P or Ascend910: float16, float32, int8, int32, uint8. \n
+* @li threshold: A Tensor which should have the shape (1,), the value to threshold at.
+* Must be one of the following types on Ascend310: float16, int8, int32, uint8.
+* Must be one of the following types on Ascend310P or Ascend910: float16, float32, int8, int32, uint8. \n
+* @li value: A Tensor which should have the shape (1,), the value to replace with. default value is 0.
+* Must be one of the following types on Ascend310: float16, int8, int32, uint8.
+* Must be one of the following types on Ascend310P or Ascend910: float16, float32, int8, int32, uint8. \n
+
+* @par Outputs:
+* y: A Tensor which has the same shape and type as the input x. \n
+
+* @par Third-party framework compatibility
+* Compatible with the Pytorch operator Threshold.
+*/
+REG_OP(ThresholdV2)
+     .INPUT(x, TensorType({DT_FLOAT16, DT_FLOAT32, DT_INT8, DT_INT32, DT_UINT8}))
+     .INPUT(threshold, TensorType({DT_FLOAT16, DT_FLOAT32, DT_INT8, DT_INT32, DT_UINT8}))
+     .OPTIONAL_INPUT(value, TensorType({DT_FLOAT16, DT_FLOAT32, DT_INT8, DT_INT32, DT_UINT8}))
+     .OUTPUT(y, TensorType({DT_FLOAT16, DT_FLOAT32, DT_INT8, DT_INT32, DT_UINT8}))
+     .OP_END_FACTORY_REG(ThresholdV2)
 } // namespace ge
 
 #endif  // OPS_BUILT_IN_OP_PROTO_INC_NONLINEAR_FUC_OPS_H_

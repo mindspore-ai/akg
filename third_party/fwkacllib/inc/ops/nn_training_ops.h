@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright (c) Huawei Technologies Co., Ltd. 2020-2021. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -159,6 +159,7 @@ REG_OP(SparseApplyAdagrad)
     .INPUT(grad, TensorType({DT_FLOAT}))
     .INPUT(indices, TensorType({DT_INT32}))
     .OUTPUT(var, TensorType({DT_FLOAT}))
+    .OUTPUT(accum, TensorType({DT_FLOAT}))
     .ATTR(use_locking, Bool, false)
     .ATTR(update_slots, Bool, true)
     .OP_END_FACTORY_REG(SparseApplyAdagrad)
@@ -289,7 +290,8 @@ REG_OP(SparseApplyAdagradV2D)
 *     Should be from a Variable().
 *@li lr: A scalar. Has the same type as "var".
 *@li grad: A tensor for the gradient. Has the same type as "var".
-*
+*@li momentum: Momentum. Must be a scalar.
+
 *@par Attributes:
 *@li use_nesterov: An optional bool. Defaults to "False".
 *     If "True", the tensor passed to compute grad will be
@@ -605,6 +607,78 @@ REG_OP(ApplyAdamWithAmsgrad)
 
 
 /**
+*@brief Updates '*var' according to the Adam algorithm..
+*   lr_t := {learning_rate} * sqrt{1 - beta_2^t} / (1 - beta_1^t)
+*   m_t := beta_1 * m_{t-1} + (1 - beta_1) * g
+*   v_t := beta_2 * v_{t-1} + (1 - beta_2) * g * g
+*   vhat_t := max{vhat_{t-1}, v_t}
+*   variable := variable - lr_t * m_t / (sqrt{vhat_t} + epsilon)
+*
+*@par Inputs:
+*Eleven inputs, including:
+*@li var: A mutable tensor. Must be one of the data types defined in
+*    TensorType::NumberType(). Should be from a Variable().
+*@li m: A mutable tensor. Has the same type as "var". Should be from a
+*    Variable().
+*@li v: A mutable tensor. Has the same type as "var". Should be from a
+*    Variable().
+*@li vhat: A mutable tensor. Has the same type as "var". Should be from a
+*    Variable().
+*@li beta1_power: A mutable tensor. Has the same type as "var". Should be from a
+*    Variable().
+*@li beta2_power: A mutable tensor. Has the same type as "var". Should be from a
+*    Variable().
+*@li lr: A tensor for the learning rate. Has the same type as "var". Should be
+*    from a Variable().
+*@li beta1: A mutable tensor. Has the same type as "var". Should be
+*    from a Variable().
+*@li beta2: A mutable tensor. Has the same type as "var". Should be
+*    from a Variable().
+*@li epsilon: A mutable tensor. Has the same type as "var". Should be
+*    from a Variable().
+*@li grad: A tensor for the gradient. Has the same type as "var". Should be
+*    from a Variable().
+*
+*@par Attribute:
+*one attribute, including:
+*@li use_locking: An optional bool. Defaults to "False".
+*    If "True", updating of the "var" tensor is protected by a lock;
+*    otherwise the behavior is undefined, but may exhibit less contention.
+*
+*@par Outputs:
+*four outputs, including:
+*@li var: A mutable tensor. Has the same type as input "var".
+*@li m: A mutable tensor. Has the same type as input "var"
+*@li v: A mutable tensor. Has the same type as input "var"
+*@li vhat: A mutable tensor. Has the same type as input "var"
+*
+*@attention Constraints:
+* The input tensors must have the same shape.
+*
+*@par Third-party framework compatibility
+* Compatible with the TensorFlow operator ResourceApplyKerasMomentum.
+*
+*/
+REG_OP(ApplyAdamWithAmsgradV2)
+    .INPUT(var, TensorType({DT_FLOAT}))
+    .INPUT(m, TensorType({DT_FLOAT}))
+    .INPUT(v, TensorType({DT_FLOAT}))
+    .INPUT(vhat, TensorType({DT_FLOAT}))
+    .INPUT(beta1_power, TensorType({DT_FLOAT}))
+    .INPUT(beta2_power, TensorType({DT_FLOAT}))
+    .INPUT(lr, TensorType({DT_FLOAT}))
+    .INPUT(beta1, TensorType({DT_FLOAT}))
+    .INPUT(beta2, TensorType({DT_FLOAT}))
+    .INPUT(epsilon, TensorType({DT_FLOAT}))
+    .INPUT(grad, TensorType({DT_FLOAT}))
+    .OUTPUT(var, TensorType({DT_FLOAT}))
+    .OUTPUT(m, TensorType({DT_FLOAT}))
+    .OUTPUT(v, TensorType({DT_FLOAT}))
+    .OUTPUT(vhat, TensorType({DT_FLOAT}))
+    .ATTR(use_locking, Bool, false)
+    .OP_END_FACTORY_REG(ApplyAdamWithAmsgradV2)
+
+/**
 *@brief Updates "var" according to the AddSign update.
 *  t-1 mean previous period.
 *  m_t <- beta1 * m_{t-1} + (1 - beta1) * grad
@@ -701,7 +775,7 @@ REG_OP(ApplyPowerSignD)
 /**
 *@brief Updates "var" as FOBOS algorithm with fixed learning rate.
 *  prox_v = var - alpha * delta
-*  var = sign(prox_v)/(1+alpha*l2) * max{|prox_v|-alpha*l1,0}
+*  var = sign(prox_v)/(1+alpha * l2) * max{|prox_v|-alpha * l1,0}
 *
 *@attention Constraints:
 *  the input tensors must have the same shape.
@@ -2000,40 +2074,41 @@ REG_OP(ApplyAdadeltaD)
     .OP_END_FACTORY_REG(ApplyAdadeltaD)
 
 /**
-* @brief Updates "var" according to the ApplyMomentum algorithm.
-*   accum = accum * momentum + x1 * x2
-*   if use_nesterov is True:
-*       var -= x1 * x2 * lr + accum * momentum * lr
-*   else:
-*       var -= accum * lr
+*@brief Updates "var" according to the ApplyMomentum algorithm.
+* accum = accum * momentum + x1 * x2
+* if use_nesterov is True:
+* var -= x1 * x2 * lr + accum * momentum * lr
+* else: var -= accum * lr
 *
-* @par Inputs:
-*   Six inputs, including:
-*  @li var: A mutable Tensor has type TensorType::NumberType().
-*      Should be a Variable Tensor.
-*  @li accum: A mutable Tensor has the same type as "var".
-*      Should be a Variable Tensor.
-*  @li lr: A scalar has the same type as "var", for the scaling factor.
-*  @li x1: A Tensor has type TensorType::NumberType().
-*  @li momentum: A scalar has the same type as "var".
-*  @li x2: A scalar has the same type as "var".
+*@par Inputs:
+* Six inputs, including:
+*@li var: A mutable Tensor has type TensorType::NumberType().
+* Should be a Variable Tensor.
+*@li accum: A mutable Tensor has the same type as "var".
+* Should be a Variable Tensor.
+*@li lr: A scalar has the same type as "var", for the scaling factor.
+*@li x1: A Tensor has type TensorType::NumberType().
+*@li momentum: A scalar has the same type as "var".
+*@li x2: A scalar has the same type as "var". \n
 *
-* @par Attributes:
-*   Two attributes, including:
-*  @li use_nesterov: An optional bool. Defaults to "False".
-*       If True, the tensor passed to compute grad will be var - lr * momentum * accum,
-*       so in the end, the var you get is actually var - lr * momentum * accum.
-*  @li use_locking: An optional bool. Defaults to "False".
-*       If "True", updating of the "var", m", and "v" tensors will be protected
-*       by a lock; otherwise the behavior is undefined, but may exhibit less contention.
+*@par Attributes:
+* Two attributes, including:
+*@li use_nesterov: An optional bool. Defaults to "False".
+* If True, the tensor passed to compute grad will be
+* var - lr * momentum * accum, so in the end,
+* the var you get is actually var - lr * momentum * accum.
+*@li use_locking: An optional bool. Defaults to "False".
+* If "True", updating of the "var", m", and "v" tensors will be protected
+* by a lock; otherwise the behavior is undefined, but may exhibit
+* less contention. \n
 *
-* @par Outputs:
-*   Two outputs, including:
-*  @li var: A mutable Tensor has the same type as "var".
-*  @li accum: A mutable Tensor has the same type as "var".
+*@par Outputs:
+* Two outputs, including:
+*@li var: A mutable Tensor has the same type as "var".
+*@li accum: A mutable Tensor has the same type as "var". \n
 
 *@par Restrictions:
-*Warning: THIS FUNCTION IS EXPERIMENTAL.  Please do not use.
+* Warning: THIS FUNCTION IS EXPERIMENTAL. Please do not use.
 */
 REG_OP(FusedMulApplyMomentum)
     .INPUT(var, TensorType::NumberType())
@@ -2100,6 +2175,57 @@ REG_OP(FusedMulApplyMomentumExtern)
     .ATTR(use_nesterov, Bool, false)
     .ATTR(use_locking, Bool, false)
     .OP_END_FACTORY_REG(FusedMulApplyMomentumExtern)
+
+/**
+*@brief Updates '*var' according to the momentum scheme.
+*   accum = accum * momentum - x1 * x2 * lr
+*   if use_nesterov is True:
+*       var += accum * momentum - x1 * x2 * lr
+*   else:
+*       var += accum
+*
+*@par Inputs:
+*@li var: A mutable tensor. Must be one of the data types defined in
+*    TensorType::NumberType(). Should be from a Variable().
+*@li accum: A mutable tensor. Has the same type as "var". Should be from a
+*    Variable().
+*@li lr: A tensor for the learning rate. Has the same type as "var". Should be
+*    from a Variable().
+*@li x1: A Tensor has type TensorType::NumberType().
+*@li momentum: A scalar. Has the same type as "var".
+*@li x2: A scalar has the same type as "var".
+*
+*@par Attributes:
+*@li use_nesterov: An optional bool. Defaults to "False".
+*    If "True", var will be updated by using Nesterov momentum.
+*@li use_locking: An optional bool. Defaults to "False".
+*    If "True", updating of the "var" tensor is protected by a lock;
+*    otherwise the behavior is undefined, but may exhibit less contention.
+*
+*@par Outputs:
+* @li var: A mutable tensor. Has the same type as input "var".
+* @li accum: A mutable tensor. Has the same type as input "accum".
+*
+*@attention Constraints:
+* @li var: A mutable tensor. Has the same type as input "var".
+* @li accum: A mutable tensor. Has the same type as input "accum".
+*
+*@par Third-party framework compatibility
+* Compatible with the TensorFlow operator ResourceApplyKerasMomentum.
+*
+*/
+REG_OP(FusedMulApplyKerasMomentum)
+    .INPUT(var, TensorType::NumberType())
+    .INPUT(accum, TensorType::NumberType())
+    .INPUT(lr, TensorType::NumberType())
+    .INPUT(x1, TensorType::NumberType())
+    .INPUT(momentum, TensorType::NumberType())
+    .INPUT(x2, TensorType::NumberType())
+    .OUTPUT(var, TensorType::NumberType())
+    .OUTPUT(accum, TensorType::NumberType())
+    .ATTR(use_locking, Bool, false)
+    .ATTR(use_nesterov, Bool, false)
+    .OP_END_FACTORY_REG(FusedMulApplyKerasMomentum)
 
 /**
 *@brief Update "g" according to the LARS algorithm . \n
@@ -2593,6 +2719,19 @@ REG_OP(SparseApplyAdadeltaD)
 REG_OP(AtomicAddrClean)
     .ATTR(automic_add_mem_size, ListInt, {})
     .OP_END_FACTORY_REG(AtomicAddrClean)
+
+/**
+*@brief Clean memory of workspace list . \n
+
+*@par Attributes:
+* @li workspace_size: sizes of workspaces . \n
+
+*@par Restrictions:
+*Warning: THIS FUNCTION IS EXPERIMENTAL.  Please do not use.
+*/
+REG_OP(DynamicAtomicAddrClean)
+    .ATTR(automic_add_mem_size, ListInt, {})
+    .OP_END_FACTORY_REG(DynamicAtomicAddrClean)
 }  // namespace ge
 
 #endif  // OPS_BUILT_IN_OP_PROTO_INC_NN_TRAINING_OPS_H_

@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright 2019 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,13 +37,18 @@ namespace ge {
 *deprecated name.
 *@li indices: Indices in the outermost dimension of `params` of the values that should be
 *gathered.
+
+*@par Attributes:
+*@li PARAMS_RAGGED_RANK:The ragged rank of the params_nested_splits.
+*@li Tsplits:A type of output_nested_splits.
 *@li OUTPUT_RAGGED_RANK: The ragged rank of the output RaggedTensor. `output_nested_splits` will contain
 *this number of `row_splits` tensors. This value should equal
 *`indices.shape.ndims + params.ragged_rank - 1` . \n
 
 *@par Outputs:
-*y:A Returns The `nested_row_splits` tensors that define the row-partitioning for the
-*returned RaggedTensor.The `flat_values` for the returned RaggedTensor . \n
+*@li output_nested_splits:A Returns The `nested_row_splits` tensors that define the row-partitioning for the
+*returned RaggedTensor.The `flat_values` for the returned RaggedTensor . 
+*@li output_dense_values:The `flat_values` for the returned RaggedTensor. \n
 
 *@par Third-party framework compatibility
 * Compatible with tensorflow RaggedGather operator.

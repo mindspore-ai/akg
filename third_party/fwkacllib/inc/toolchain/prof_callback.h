@@ -1,29 +1,29 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * @file prof_callback.h
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
+ * Copyright (c) Huawei Technologies Co., Ltd. 2019-2022. All rights reserved.
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
  *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
 #ifndef MSPROFILER_PROF_CALLBACK_H_
 #define MSPROFILER_PROF_CALLBACK_H_
 
+#include <stddef.h>
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
 
-
-#include "stddef.h"
-#include "stdint.h"
+#if (defined(_WIN32) || defined(_WIN64) || defined(_MSC_VER))
+#define MSVP_PROF_API __declspec(dllexport)
+#else
+#define MSVP_PROF_API __attribute__((visibility("default")))
+#endif
 
 /**
  * @name  MsprofErrorCode
@@ -38,7 +38,7 @@ enum MsprofErrorCode {
     MSPROF_ERROR,
 };
 
-#define MSPROF_ENGINE_MAX_TAG_LEN (31)
+#define MSPROF_ENGINE_MAX_TAG_LEN (63)
 
 /**
  * @name  ReporterData
@@ -71,7 +71,8 @@ enum MsprofReporterModuleId {
     MSPROF_MODULE_HCCL,                   // HCCL
     MSPROF_MODULE_ACL,                    // AclModule
     MSPROF_MODULE_FRAMEWORK,              // Framework
-    MSPROF_MODULE_RUNTIME                 // runtime
+    MSPROF_MODULE_RUNTIME,                // runtime
+    MSPROF_MODULE_MSPROF                  // msprofTx
 };
 
 /**
@@ -85,18 +86,6 @@ enum MsprofReporterCallbackType {
     MSPROF_REPORTER_DATA_MAX_LEN,         // data max length for calling report callback
     MSPROF_REPORTER_HASH                  // hash data to id
 };
-
-/**
- * @name  MsprofReporterCallback
- * @brief callback to start reporter/stop reporter/report date
- * @param moduleId  [IN] enum MsprofReporterModuleId
- * @param type      [IN] enum MsprofReporterCallbackType
- * @param data      [IN] callback data (nullptr on INTI/UNINIT)
- * @param len       [IN] callback data size (0 on INIT/UNINIT)
- * @return enum MsprofErrorCode
- */
-typedef int32_t (*MsprofReporterCallback)(uint32_t moduleId, uint32_t type, void *data, uint32_t len);
-
 
 #define MSPROF_OPTIONS_DEF_LEN_MAX (2048)
 
@@ -115,65 +104,105 @@ struct MsprofGeOptions {
  */
 enum MsprofCtrlCallbackType {
     MSPROF_CTRL_INIT_ACL_ENV = 0,           // start profiling with acl env
-    MSPROF_CTRL_INIT_ACL_JSON,              // start profiling with acl.json
+    MSPROF_CTRL_INIT_ACL_JSON,              // start pro with acl.json
     MSPROF_CTRL_INIT_GE_OPTIONS,            // start profiling with ge env and options
     MSPROF_CTRL_FINALIZE,                   // stop profiling
-    MSPROF_CTRL_REPORT_FUN_P,               // for report callback
-    MSPROF_CTRL_PROF_SWITCH_ON,             // for prof switch on
-    MSPROF_CTRL_PROF_SWITCH_OFF             // for prof switch off
+    MSPROF_CTRL_INIT_HELPER,                // start profiling in helper device
+    MSPROF_CTRL_INIT_DYNA = 0xFF,           // start profiling for dynamic profiling
 };
 
-#define    PROF_COMMANDHANDLE_TYPE_INIT              (0)
-#define    PROF_COMMANDHANDLE_TYPE_START             (1)
-#define    PROF_COMMANDHANDLE_TYPE_STOP              (2)
-#define    PROF_COMMANDHANDLE_TYPE_FINALIZE          (3)
-#define    PROF_COMMANDHANDLE_TYPE_MODEL_SUBSCRIBE   (4)
-#define    PROF_COMMANDHANDLE_TYPE_MODEL_UNSUBSCRIBE (5)
-
-#define MSPROF_MAX_DEV_NUM (64)
-
-struct MsprofCommandHandle {
-    uint64_t profSwitch;
-    uint32_t devNums; // length of device id list
-    uint32_t devIdList[MSPROF_MAX_DEV_NUM];
-    uint32_t modelId;
+enum MsprofCommandHandleType {
+    PROF_COMMANDHANDLE_TYPE_INIT = 0,
+    PROF_COMMANDHANDLE_TYPE_START,
+    PROF_COMMANDHANDLE_TYPE_STOP,
+    PROF_COMMANDHANDLE_TYPE_FINALIZE,
+    PROF_COMMANDHANDLE_TYPE_MODEL_SUBSCRIBE,
+    PROF_COMMANDHANDLE_TYPE_MODEL_UNSUBSCRIBE
 };
 
 /**
- * @name  MsprofCtrlCallback
+ * @brief   profiling command type
+ */
+enum ProfCtrlType {
+    PROF_CTRL_INVALID = 0,
+    PROF_CTRL_SWITCH,
+    PROF_CTRL_REPORTER,
+    PROF_CTRL_STEPINFO,
+    PROF_CTRL_BUTT
+};
+
+/**
+ * @brief   Prof Chip ID
+ */
+enum Prof_Chip_ID {
+    PROF_CHIP_ID0 = 0
+};
+
+typedef int32_t (*MsprofCtrlCallback)(uint32_t type, void *data, uint32_t len);
+typedef int32_t (*MsprofReporterCallback)(uint32_t moduleId, uint32_t type, void *data, uint32_t len);
+
+/**
+ * @brief  the struct of profiling set setp info
+ */
+typedef struct ProfStepInfoCmd {
+    uint64_t index_id;
+    uint16_t tag_id;
+    void *stream;
+} ProfStepInfoCmd_t;
+
+/**
+ * @name  ProfCommandHandle
  * @brief callback to start/stop profiling
- * @param type      [IN] enum MsprofCtrlCallbackType
+ * @param type      [IN] enum call back type
  * @param data      [IN] callback data
  * @param len       [IN] callback data size
  * @return enum MsprofErrorCode
  */
-typedef int32_t (*MsprofCtrlCallback)(uint32_t type, void *data, uint32_t len);
-
-/**
- * @name  MsprofSetDeviceCallback
- * @brief callback to notify set/reset device
- * @param devId     [IN] device id
- * @param isOpenDevice  [IN] true: set device, false: reset device
- */
-typedef void (*MsprofSetDeviceCallback)(uint32_t devId, bool isOpenDevice);
-
+typedef int32_t (*ProfCommandHandle)(uint32_t type, void *data, uint32_t len);
 /*
- * @name  MsprofInit
+ * @name  profInit
  * @brief Profiling module init
  * @param [in] dataType: profiling type: ACL Env/ACL Json/GE Option
  * @param [in] data: profiling switch data
  * @param [in] dataLen: Length of data
  * @return 0:SUCCESS, >0:FAILED
  */
-int32_t MsprofInit(uint32_t dataType, void *data, uint32_t dataLen);
-
+MSVP_PROF_API int32_t MsprofInit(uint32_t moduleId, void *data, uint32_t dataLen);
+/**
+ * @name  profRegisterCallback
+ * @brief register callback to profiling
+ * @param moduleId  [IN] module Id
+ * @param handle    [IN] the pointer of callback
+ */
+MSVP_PROF_API int32_t MsprofRegisterCallback(uint32_t moduleId, ProfCommandHandle handle);
 /*
- * @name AscendCL
+ * @name profReportData
+ * @brief start reporter/stop reporter/report date
+ * @param moduleId  [IN] enum profReporterModuleId
+ * @param type      [IN] enum profReporterCallbackType
+ * @param data      [IN] data (nullptr on INTI/UNINIT)
+ * @param len       [IN] data size (0 on INIT/UNINIT)
+ * @return enum MsprofErrorCod
+ */
+MSVP_PROF_API int32_t MsprofReportData(uint32_t moduleId, uint32_t type, void* data, uint32_t len);
+
+MSVP_PROF_API int32_t MsprofSetDeviceIdByGeModelIdx(const uint32_t geModelIdx, const uint32_t deviceId);
+MSVP_PROF_API int32_t MsprofUnsetDeviceIdByGeModelIdx(const uint32_t geModelIdx, const uint32_t deviceId);
+/*
+ * @name profFinalize
  * @brief Finishing Profiling
  * @param NULL
  * @return 0:SUCCESS, >0:FAILED
  */
-int32_t MsprofFinalize();
+MSVP_PROF_API int32_t MsprofFinalize();
+/**
+ * @name  profNotifySetDevice
+ * @brief notify set/reset device
+ * @param devId     [IN] device id
+ * @param isOpenDevice  [IN] true: set device, false: reset device
+ */
+MSVP_PROF_API int32_t MsprofNotifySetDevice(uint32_t chipId, uint32_t deviceId, bool isOpen);
+
 #ifdef __cplusplus
 }
 #endif

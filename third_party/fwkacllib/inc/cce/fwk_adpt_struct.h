@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-#ifndef FWK_ADPT_STRUCT_H__
-#define FWK_ADPT_STRUCT_H__
+#ifndef FWK_ADPT_STRUCT_H
+#define FWK_ADPT_STRUCT_H
 
 #include <cstdint>
 
 namespace aicpu {
 namespace FWKAdapter {
-
+using char_t = char;
 // API RETURN CODE
 enum FWKAdptAPIRetCode {
   FWK_ADPT_SUCCESS = 0,                  // success
@@ -60,7 +60,20 @@ enum FWKTaskExtInfoType {
   FWK_ADPT_EXT_UPDATE_ADDR,
   FWK_ADPT_EXT_OP_NAME,
   FWK_ADPT_EXT_SESSION_INFO,
+  FWK_ADPT_EXT_BITMAP,
+  FWK_ADPT_EXT_TOPIC_TYPE,
+  FWK_ADPT_EXT_ASYNCWAIT,
+  FWK_ADPT_EXT_UNKNOWN_SHAPE_INPUT_INDEX,
+  FWK_ADPT_EXT_UNKNOWN_SHAPE_OUTPUT_INDEX,
   FWK_ADPT_EXT_INVALID
+};
+
+enum FWKExtTopicType {
+  FWK_ADPT_TOPIC_DEVICE_ONLY = 0,
+  FWK_ADPT_TOPIC_DEVICE_FIRST,
+  FWK_ADPT_TOPIC_HOST_ONLY,
+  FWK_ADPT_TOPIC_HOST_FIRST,
+  FWK_ADPT_TOPIC_INVALID
 };
 
 enum FWKExtUpdateAddrType {
@@ -68,6 +81,12 @@ enum FWKExtUpdateAddrType {
   FWK_ADPT_UPDATE_INPUT,
   FWK_ADPT_UPDATE_OUTPUT,
   FWK_ADPT_UPDATE_INPUT_OUTPUT
+};
+
+enum FWKExtWaitType {
+  FWK_ADPT_WAIT_TYPE_NULL = 0,
+  FWK_ADPT_WAIT_TYPE_EVENT,
+  FWK_ADPT_WAIT_TYPE_INVALID
 };
 
 #pragma pack(push, 1)
@@ -93,10 +112,10 @@ struct StrFWKKernel {
 };
 #pragma pack(pop)
 
-typedef StrFWKKernel FWKOperateParam;
+using FWKOperateParam = StrFWKKernel;
 
 // Extent info ShapeAndType
-const uint32_t kMaxShapeDims = 8;
+const uint32_t kMaxShapeDims = 8U;
 #pragma pack(push, 1)
 struct ShapeAndType {
   int32_t type;
@@ -105,13 +124,13 @@ struct ShapeAndType {
 #pragma pack(pop)
 
 // Extend info structure for extInfoAddr
-const uint32_t kExtInfoHeadSize = 8;
+const uint32_t kExtInfoHeadSize = 8U;
 
 #pragma pack(push, 1)
 struct ExtInfo {
   int32_t  infoType;    // extend type
   uint32_t infoLen;     // length for infoMsg
-  char     infoMsg[0];  // extend value
+  char_t  infoMsg[0];  // extend value
 };
 #pragma pack(pop)
 
@@ -123,7 +142,16 @@ struct ResultSummary {
   uint64_t raw_data_size;    // size of raw data
 };
 #pragma pack(pop)
+
+#pragma pack(push, 1)
+struct AsyncWait {
+  uint8_t waitType;  // wait type, FWk_ADPT_WAIT_TPYE_EVENT: event wait
+  uint32_t waitId;  // wait id, GE refresh
+  uint32_t timeOut;  // reserved
+  uint64_t reserved;
+};
+#pragma pack(pop)
 }  // end  namespace FWKAdapter
 }  // namespace aicpu
 
-#endif  // FWK_ADPT_STRUCT_H__
+#endif  // FWK_ADPT_STRUCT_H

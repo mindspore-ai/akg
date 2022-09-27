@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright 2019 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,6 +25,235 @@
 #include "graph/operator_reg.h"
 
 namespace ge {
+/**
+*@brief Creates ngrams from ragged string data . \n
+
+*@par Inputs:
+include:
+*@li data:1-D.The values tensor of the ragged string tensor to make ngrams out of.
+*@li data_splits:The splits tensor of the ragged string tensor to make ngrams out of . \n
+
+*@par Attributes:
+* separator:The string to append between elements of the token. Use "" for no separator.
+* ngram_widths:The sizes of the ngrams to create.
+* left_pad:The string to use to pad the left side of the ngram sequence. Only used if pad_width != 0.
+* right_pad:The string to use to pad the right side of the ngram sequence. Only used if pad_width != 0.
+* pad_width:The number of padding elements to add to each side of each sequence. 
+* preserve_short_sequences: Preserve short sequences. \n
+
+*@par Outputs:
+*@li ngrams:The values tensor of the output ngrams ragged tensor.
+*@li ngrams_splits:The splits tensor of the output ngrams ragged tensor. \n
+
+*@see StringNGrams()
+
+*@par Third-party framework compatibility
+*compatible with StringNGrams op of tensorflow
+
+*@par Restrictions:
+*Warning: THIS FUNCTION IS EXPERIMENTAL. Please do not use.
+*/
+REG_OP(StringNGrams)
+    .INPUT(data, TensorType({DT_STRING}))
+    .INPUT(data_splits, TensorType({DT_INT32, DT_INT64}))
+    .OUTPUT(ngrams, TensorType({DT_STRING}))
+    .OUTPUT(ngrams_splits, TensorType({DT_INT32, DT_INT64}))
+    .REQUIRED_ATTR(separator, String)
+    .ATTR(ngram_widths, ListInt, {})
+    .REQUIRED_ATTR(left_pad, String)
+    .REQUIRED_ATTR(right_pad, String)
+    .REQUIRED_ATTR(pad_width, Int)
+    .REQUIRED_ATTR(preserve_short_sequences, Bool)
+    .OP_END_FACTORY_REG(StringNGrams)
+
+/**
+*@brief Decodes each string in `input` into a sequence of Unicode code points . \n
+
+*@par Inputs:
+include:
+*@li input:The text to be decoded. Can have any shape. Note that the output is flattened
+to a vector of char values. \n
+
+*@par Attributes:
+* input_encoding:Text encoding of the input strings. This is any of the encodings supported
+by ICU ucnv algorithmic converters. Examples: `"UTF-16", "US ASCII", "UTF-8"`.
+* errors:Error handling policy when there is invalid formatting found in the input.
+The value of 'strict' will cause the operation to produce a InvalidArgument
+error on any invalid input formatting. A value of 'replace' (the default) will
+cause the operation to replace any invalid formatting in the input with the
+`replacement_char` codepoint. A value of 'ignore' will cause the operation to
+skip any invalid formatting in the input and produce no corresponding output
+character.
+* replacement_char:The replacement character codepoint to be used in place of any invalid
+formatting in the input when `errors='replace'`. Any valid unicode codepoint may
+be used. The default value is the default unicode replacement character is
+0xFFFD or U+65533.
+* replace_control_characters:Whether to replace the C0 control characters (00-1F) with the
+`replacement_char`. Default is false. \n
+
+*@par Outputs:
+*@li row_splits:A 1D tensor containing the row splits.
+*@li char_values:A 1D tensor containing the decoded codepoints.
+*@li char_to_byte_starts:A 1D int32 Tensor containing the byte index in the input string where each
+character in `char_values` starts. \n
+
+*@see UnicodeDecodeWithOffsets()
+
+*@par Third-party framework compatibility
+*compatible with UnicodeDecodeWithOffsets op of tensorflow
+
+*@par Restrictions:
+*Warning: THIS FUNCTION IS EXPERIMENTAL. Please do not use.
+*/
+REG_OP(UnicodeDecodeWithOffsets)
+    .INPUT(input, TensorType({DT_STRING}))
+    .OUTPUT(row_splits, TensorType({DT_INT64}))
+    .OUTPUT(char_values, TensorType({DT_INT32}))
+    .OUTPUT(char_to_byte_starts, TensorType({DT_INT64}))
+    .REQUIRED_ATTR(input_encoding, String)
+    .ATTR(errors, String, "replace")
+    .ATTR(replacement_char, Int, 65533)
+    .ATTR(replace_control_characters, Bool, false)
+    .ATTR(Tsplits, Type, DT_INT64)
+    .OP_END_FACTORY_REG(UnicodeDecodeWithOffsets)
+
+/**
+*@brief Decodes each string in `input` into a sequence of Unicode code points. \n
+
+*@par Inputs:
+include:
+*@li input:The text to be decoded. Can have any shape. Note that the output is flattened
+to a vector of char values. \n
+
+*@par Attributes:
+* input_encoding:Text encoding of the input strings. This is any of the encodings supported
+by ICU ucnv algorithmic converters. Examples: `"UTF-16", "US ASCII", "UTF-8"`.
+* errors:Error handling policy when there is invalid formatting found in the input.
+The value of 'strict' will cause the operation to produce a InvalidArgument
+error on any invalid input formatting. A value of 'replace' (the default) will
+cause the operation to replace any invalid formatting in the input with the
+`replacement_char` codepoint. A value of 'ignore' will cause the operation to
+skip any invalid formatting in the input and produce no corresponding output
+character.
+* replacement_char:The replacement character codepoint to be used in place of any invalid
+formatting in the input when `errors='replace'`. Any valid unicode codepoint may
+be used. The default value is the default unicode replacement character is
+0xFFFD or U+65533.
+* replace_control_characters:Whether to replace the C0 control characters (00-1F) with the
+`replacement_char`. Default is false. \n
+
+*@par Outputs:
+*@li row_splits:A 1D tensor containing the row splits.
+*@li char_values:A 1D tensor containing the decoded codepoints. \n
+
+*@see UnicodeDecode()
+
+*@par Third-party framework compatibility
+*compatible with UnicodeDecode op of tensorflow
+
+*@par Restrictions:
+*Warning: THIS FUNCTION IS EXPERIMENTAL. Please do not use.
+*/
+REG_OP(UnicodeDecode)
+    .INPUT(input, TensorType({DT_STRING}))
+    .OUTPUT(row_splits, TensorType({DT_INT64}))
+    .OUTPUT(char_values, TensorType({DT_INT32}))
+    .REQUIRED_ATTR(input_encoding, String)
+    .ATTR(errors, String, "replace")
+    .ATTR(replacement_char, Int, 65533)
+    .ATTR(replace_control_characters, Bool, false)
+    .ATTR(Tsplits, Type, DT_INT64)
+    .OP_END_FACTORY_REG(UnicodeDecode)
+
+/**
+*@brief Transcode the input text from a source encoding to a destination encoding. \n
+
+*@par Inputs:
+include:
+*@li input:The text to be processed. Can have any shape. \n
+
+*@par Attributes:
+* input_encoding:Text encoding of the input strings. This is any of the encodings supported
+by ICU ucnv algorithmic converters. Examples: `"UTF-16", "US ASCII", "UTF-8"`.
+* output_encoding:The unicode encoding to use in the output. Must be one of `"UTF-8", "UTF-16-BE", "UTF-32-BE"`.
+Multi-byte encodings will be big-endian.
+* errors:Error handling policy when there is invalid formatting found in the input.
+The value of 'strict' will cause the operation to produce a InvalidArgument
+error on any invalid input formatting. A value of 'replace' (the default) will
+cause the operation to replace any invalid formatting in the input with the
+`replacement_char` codepoint. A value of 'ignore' will cause the operation to
+skip any invalid formatting in the input and produce no corresponding output
+character.
+* replacement_char:The replacement character codepoint to be used in place of any invalid
+formatting in the input when `errors='replace'`. Any valid unicode codepoint may
+be used. The default value is the default unicode replacement character is
+0xFFFD or U+65533.
+* replace_control_characters:Whether to replace the C0 control characters (00-1F) with the
+`replacement_char`. Default is false. \n
+
+*@par Outputs:
+*@li output:A string tensor containing unicode text encoded using `output_encoding`. \n
+
+*@see UnicodeTranscode()
+
+*@par Third-party framework compatibility
+*compatible with UnicodeTranscode op of tensorflow
+
+*@par Restrictions:
+*Warning: THIS FUNCTION IS EXPERIMENTAL. Please do not use.
+*/
+REG_OP(UnicodeTranscode)
+    .INPUT(input, TensorType({DT_STRING}))
+    .OUTPUT(output, TensorType({DT_STRING}))
+    .REQUIRED_ATTR(input_encoding, String)
+    .ATTR(output_encoding, String, "UTF-8")
+    .ATTR(errors, String, "replace")
+    .ATTR(replacement_char, Int, 65533)
+    .ATTR(replace_control_characters, Bool, false)
+    .OP_END_FACTORY_REG(UnicodeTranscode)
+
+/**
+*@brief Encode a tensor of ints into unicode strings. \n
+
+*@par Inputs:
+include:
+*@li input_values:A 1D tensor containing the unicode codepoints that should be encoded.
+*@li input_splits:A 1D tensor specifying how the unicode codepoints should be split into strings. \n
+
+*@par Attributes:
+* output_encoding:The unicode encoding to use in the output. Must be one of `"UTF-8", "UTF-16-BE", "UTF-32-BE"`.
+Multi-byte encodings will be big-endian.
+* errors:Error handling policy when there is invalid formatting found in the input.
+The value of 'strict' will cause the operation to produce a InvalidArgument
+error on any invalid input formatting. A value of 'replace' (the default) will
+cause the operation to replace any invalid formatting in the input with the
+`replacement_char` codepoint. A value of 'ignore' will cause the operation to
+skip any invalid formatting in the input and produce no corresponding output
+character.
+* replacement_char:The replacement character codepoint to be used in place of any invalid
+formatting in the input when `errors='replace'`. Any valid unicode codepoint may
+be used. The default value is the default unicode replacement character is
+0xFFFD or U+65533. \n
+
+*@par Outputs:
+*@li output:The 1-D Tensor of strings encoded from the provided unicode codepoints. \n
+
+*@see UnicodeEncode()
+
+*@par Third-party framework compatibility
+*compatible with UnicodeEncode op of tensorflow
+
+*@par Restrictions:
+*Warning: THIS FUNCTION IS EXPERIMENTAL. Please do not use.
+*/
+REG_OP(UnicodeEncode)
+    .INPUT(input_values, TensorType({DT_INT32}))
+    .INPUT(input_splits, TensorType({DT_INT32, DT_INT64}))
+    .OUTPUT(output, TensorType({DT_STRING}))
+    .ATTR(errors, String, "replace")
+    .ATTR(output_encoding, String, "UTF-8")
+    .ATTR(replacement_char, Int, 65533)
+    .OP_END_FACTORY_REG(UnicodeEncode)
 
 /**
 *@brief Split elements of input based on delimiter into a SparseTensor . \n
@@ -60,6 +289,116 @@ REG_OP(StringSplit)
     .OUTPUT(shape, TensorType({DT_INT64}))
     .ATTR(skip_empty, Bool, true)
     .OP_END_FACTORY_REG(StringSplit)
+
+/**
+*@brief Replaces the match of pattern in input with rewrite. \n
+
+*@par Inputs:
+include:
+*input:A Tensor of type string. The text to be processed. \n
+
+*@par Attributes:
+*@li pattern:A string. The regular expression to match the input.
+*@li rewrite:A string. The rewrite to be applied to the matched expression.
+*@li replace_global:An optional bool. Defaults to True. If True, the replacement is global,
+otherwise the replacement is done only on the first match.
+
+*@par Outputs:
+*output::A Tensor of type string.
+*/
+REG_OP(StaticRegexReplace)
+    .INPUT(input, TensorType({DT_STRING}))
+    .OUTPUT(output, TensorType({DT_STRING}))
+    .ATTR(pattern, String, "")
+    .ATTR(rewrite, String, "")
+    .ATTR(replace_global, Bool, true)
+    .OP_END_FACTORY_REG(StaticRegexReplace)
+
+/**
+*@brief The input is a string tensor of any shape. The pattern is the
+*regular expression to be matched with every element of the input tensor.
+*The boolean values (True or False) of the output tensor indicate
+*if the input matches the regex pattern provided.
+
+*@par Inputs:
+include:
+*input:A Tensor of type string. The text to be processed. \n
+
+*@par Attributes:
+*pattern:A string. The regular expression to match the input.
+
+*@par Outputs:
+*output::A bool tensor with the same shape as `input`.
+*/
+REG_OP(StaticRegexFullMatch)
+    .INPUT(input, TensorType({DT_STRING}))
+    .OUTPUT(output, TensorType({DT_BOOL}))
+    .ATTR(pattern, String, "")
+    .OP_END_FACTORY_REG(StaticRegexFullMatch)
+
+/**
+*@brief A Tensor of type string. The input to be joined. \n
+
+*@par Inputs:
+include:
+*@li input:A Tensor of type string. The text to be processed. 
+*@li segment_ids:A Tensor. Must be one of the following types: int32, int64. 
+*A tensor whose shape is a prefix of data.shape. Negative segment ids are not supported.
+*@li num_segments:A Tensor. Must be one of the following types: int32, int64. A scalar. 
+
+*@par Attributes:
+*separator:An optional string. Defaults to "". The separator to use when joining.
+
+*@par Outputs:
+*output::A Tensor of type string..
+*/
+REG_OP(UnsortedSegmentJoin)
+    .INPUT(input, TensorType({DT_STRING}))
+    .INPUT(segment_ids, TensorType({DT_INT32,DT_INT64}))
+    .INPUT(num_segments, TensorType({DT_INT32,DT_INT64}))
+    .OUTPUT(output, TensorType({DT_STRING}))
+    .ATTR(separator, String, "")
+    .OP_END_FACTORY_REG(UnsortedSegmentJoin)
+
+/**
+*@brief Inputs to TensorFlow operations are outputs of another TensorFlow operation.
+*This method is used to obtain a symbolic handle that represents the computation of the input.
+
+*@par Inputs:
+include:
+*input:A Tensor of type string. The text to be processed. 
+
+*@par Attributes:
+*encoding:An optional string. Defaults to "". 
+
+*@par Outputs:
+*output::A Tensor of type string..
+*/
+REG_OP(StringLower)
+    .INPUT(input, TensorType({DT_STRING}))
+    .OUTPUT(output, TensorType({DT_STRING}))
+    .ATTR(encoding, String, "")
+    .OP_END_FACTORY_REG(StringLower)
+
+/**
+*@brief Inputs to TensorFlow operations are outputs of another TensorFlow operation.
+*This method is used to obtain a symbolic handle that represents the computation of the input.
+
+*@par Inputs:
+include:
+*input:A Tensor of type string. The text to be processed. 
+
+*@par Attributes:
+*encoding:An optional string. Defaults to "". 
+
+*@par Outputs:
+*output::A Tensor of type string..
+*/
+REG_OP(StringUpper)
+    .INPUT(input, TensorType({DT_STRING}))
+    .OUTPUT(output, TensorType({DT_STRING}))
+    .ATTR(encoding, String, "")
+    .OP_END_FACTORY_REG(StringUpper)
 
 /**
 *@brief Split elements of source based on sep into a SparseTensor . \n
@@ -488,7 +827,7 @@ include:
 */
 REG_OP(AsString)
     .INPUT(x, TensorType({DT_INT8, DT_INT16, DT_INT32, DT_INT64, DT_FLOAT, \
-        DT_DOUBLE, DT_BOOL}))
+        DT_DOUBLE, DT_BOOL, DT_COMPLEX64, DT_COMPLEX128}))
     .OUTPUT(y, TensorType({DT_STRING}))
     .ATTR(precision, Int, -1)
     .ATTR(scientific, Bool, false)
@@ -557,6 +896,45 @@ REG_OP(DecodeBase64)
     .INPUT(x, TensorType({DT_STRING}))
     .OUTPUT(y, TensorType({DT_STRING}))
     .OP_END_FACTORY_REG(DecodeBase64)
+
+/**
+*@brief StringNormalization performs string operations for basic cleaning . \n
+
+*@par Inputs:
+*input: only accepts [C] or [1, C] UTF-8 strings tensor . \n
+
+*@par Outputs:
+*output: UTF-8 strings tensor after cleaning . \n
+
+*@par Attributes:
+*@li stopwords : list of strings (default is empty).
+*List of stop words. If not set, no word would be removed from input strings
+tensor.
+
+*@li is_case_sensitive : bool (default is false).
+*Boolean. Whether the identification of stop words in input strings tensor is
+case-sensitive. Default is false.
+
+*@li case_change_action : string (default is "NONE").
+*string enum that cases output to be lowercased/uppercases/unchanged. Valid
+values are "LOWER", "UPPER", "NONE". Default is "NONE".
+
+*@li locale : string (default is "C").
+*Environment dependent string that denotes the locale according to which output
+strings needs to be upper/lowercased.Default C or platform specific equivalent
+as decided by the implementation. \n
+
+*@attention Constraints:
+*input can be either a 1-D or 2-D tensor, the shape of 2-D tensor must be [1, C].
+*/
+REG_OP(StringNormalizer)
+    .INPUT(input, TensorType({DT_STRING}))
+    .OUTPUT(output, TensorType({DT_STRING}))
+    .ATTR(stopwords, ListString, {})
+    .ATTR(is_case_sensitive, Bool, false)
+    .ATTR(case_change_action, String, "NONE")
+    .ATTR(locale, String, "C")
+    .OP_END_FACTORY_REG(StringNormalizer)
 }  // namespace ge
 
 #endif  // OPS_BUILT_IN_OP_PROTO_INC_STRING_OPS_H_

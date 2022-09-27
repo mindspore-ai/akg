@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright 2019 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -281,9 +281,9 @@ REG_OP(SparseSliceGrad)
 * @li size: A 1D Tensor of type int64. The size of the slice . \n
 
 *@par Outputs:
-*y_indices: A Tensor of type int64.
-*y_values: A Tensor. Has the same type as "values".
-*y_values: A Tensor of type int64 . \n
+*@li y_indices: A Tensor of type int64.
+*@li y_values: A Tensor. Has the same type as "values".
+*@li y_shape: A Tensor of type int64 . \n
 
 *@par Third-party framework compatibility
 * Compatible with the TensorFlow operator SparseSlice.
@@ -313,8 +313,8 @@ REG_OP(SparseSlice)
 * @li sum_indices: A 2D Tensor of type int64. The indices of the sum SparseTensor, with size [nnz(sum), ndims] . \n
 
 *@par Outputs:
-*x1_val_grad: A Tensor. Has the same type as "backprop_val_grad".
-*x2_val_grad: A Tensor. Has the same type as "backprop_val_grad" . \n
+*@li x1_val_grad: A Tensor. Has the same type as "backprop_val_grad".
+*@li x2_val_grad: A Tensor. Has the same type as "backprop_val_grad" . \n
 
 *@par Third-party framework compatibility
 * Compatible with the TensorFlow operator SparseAddGrad.
@@ -363,7 +363,7 @@ REG_OP(SparseFillEmptyRowsGrad)
 
 *@par Inputs:
 * @li x1_indices: A 2D Tensor of type int32 or int64.
-* @li The indices of the matrix "SparseTensor", with size [nnz, 2].
+*The indices of the matrix "SparseTensor", with size [nnz, 2].
 * @li x1_values: A 1D Tensor. The values of the SparseTensor, with size [nnz].
 * @li x1_shape: A 1D Tensor of type int64. The shape of the SparseTensor, with size [2].
 * @li x2: A dense matrix Tensor of the same type as "x1_values". 2D . \n
@@ -373,9 +373,9 @@ REG_OP(SparseFillEmptyRowsGrad)
 
 *@par Attributes:
 *@li adjoint_a: An optional bool. Defaults to "False".Use the adjoint of A in the matrix multiply.
-*@li If A is complex, this is transpose(conj(A)). Otherwise it is transpose(A).
+*If A is complex, this is transpose(conj(A)). Otherwise it is transpose(A).
 *@li adjoint_b: An optional bool. Defaults to "False".Use the adjoint of B in the matrix multiply.
-*@li If B is complex, this is transpose(conj(B)). Otherwise it is transpose(B) . \n
+*If B is complex, this is transpose(conj(B)). Otherwise it is transpose(B) . \n
 
 *@par Third-party framework compatibility
 * Compatible with the TensorFlow operator SparseTensorDenseMatMul.
@@ -383,11 +383,11 @@ REG_OP(SparseFillEmptyRowsGrad)
 REG_OP(SparseTensorDenseMatMul)
     .INPUT(x1_indices, TensorType({DT_INT32, DT_INT64}))
     .INPUT(x1_values, TensorType({DT_FLOAT, DT_DOUBLE, DT_INT32, \
-        DT_COMPLEXT64, DT_COMPLEX128, DT_FLOAT16}))
+        DT_COMPLEXT64, DT_COMPLEX128, DT_FLOAT16, DT_INT64}))
     .INPUT(x1_shape, TensorType({DT_INT64}))
-    .INPUT(x2, TensorType({DT_FLOAT, DT_DOUBLE, DT_INT32, DT_COMPLEXT64, \
+    .INPUT(x2, TensorType({DT_FLOAT, DT_DOUBLE, DT_INT64, DT_INT32, DT_COMPLEXT64, \
         DT_COMPLEX128, DT_FLOAT16}))
-    .OUTPUT(y, TensorType({DT_FLOAT, DT_DOUBLE, DT_INT32, DT_COMPLEXT64, \
+    .OUTPUT(y, TensorType({DT_FLOAT, DT_DOUBLE, DT_INT64, DT_INT32, DT_COMPLEXT64, \
         DT_COMPLEX128, DT_FLOAT16}))
     .ATTR(adjoint_a, Bool, false)
     .ATTR(adjoint_b, Bool, false)
@@ -400,8 +400,12 @@ REG_OP(SparseTensorDenseMatMul)
 * @li indices: A 0D, 1D, or 2D Tensor of type int32 or int64.
 * @li output_shape: A 1D Tensor of the same type as "sparse_indices". The shape of the dense output tensor.
 * @li values: A 1D Tensor. Values corresponding to each row of "sparse_indices",
-* @li or a scalar value to be used for all sparse indices.
+or a scalar value to be used for all sparse indices.
 * @li default_value: A Tensor of the same type as "sparse_values" . \n
+
+*@par Attributes:
+*validate_indices: If true, indices are checked to make sure they are sorted in
+lexicographic order and that there are no repeats. \n
 
 *@par Outputs:
 *y: A Tensor. Has the same type as "values" . \n
@@ -427,7 +431,6 @@ REG_OP(SparseToDense)
 *Concatenation is with respect to the dense versions of these sparse tensors . \n
 
 *@par Inputs:
-*3 or 5 inputs,contains:
 * @li indices:A list of at least 2 `Tensor` objects with type `int64`.2-D.
 *Indices of each input `SparseTensor`.It's a dynamic input.
 * @li values:A list with the same length as `indices` of `Tensor` objects with the same type.
@@ -700,7 +703,6 @@ REG_OP(SparseReduceMaxSparse)
 *@brief Computes the sum of elements across dimensions of a SparseTensor . \n
 
 *@par Inputs:
-*4 or 5 inputs, including:
 * @li x_indices: A 2D Tensor of type int64.
 *"N x R" matrix with the indices of non-empty values in a
 *SparseTensor, possibly not in canonical ordering.
@@ -711,13 +713,11 @@ REG_OP(SparseReduceMaxSparse)
 *A length-"K" vector containing the reduction axes . \n
 
 *@par Attributes:
-* keep_dims: An optional bool. Defaults to "False".
+*keep_dims: An optional bool. Defaults to "False".
 *If true, retains reduced dimensions with length 1 . \n
 
 *@par Outputs:
-* @li y_indices: A Tensor of type int64.
-* @li y_values: A Tensor. Has the same type as "input_values".
-* @li y_shape: A Tensor of type int64 . \n
+*y: A Tensor. Has the same type as "x_values". \n
 
 *@par Third-party framework compatibility
 * Compatible with the TensorFlow operator SparseReduceSum.
@@ -818,7 +818,6 @@ REG_OP(SparseSplit)
 *@brief Generates sparse cross from a list of sparse and dense tensors . \n
 
 *@par Inputs:
-*8 or 10 inputs, including:
 * @li indices: A list of 2D Tensor objects of type int64.
 * Indices of each input SparseTensor.It's a dynamic input.
 * @li values: A list of 1D Tensor objects of type int64 or string.
@@ -899,9 +898,8 @@ REG_OP(AddManySparseToTensorsMap)
 *@brief Reads SparseTensors from a "SparseTensorsMap" and concatenate them . \n
 
 *@par Inputs:
-*2 or 4 inputs, including:
 * handles: A 1D Tensor of type int64.
-* The "N" serialized SparseTensor objects . \n
+*The "N" serialized SparseTensor objects . \n
 
 *@par Attributes:
 * @li dtype: A tf.DType. The "dtype" of the SparseTensor objects stored in the "SparseTensorsMap".
@@ -911,9 +909,9 @@ REG_OP(AddManySparseToTensorsMap)
 *The shared name for the "SparseTensorsMap" read by this op . \n
 
 *@par Outputs:
-* @li indices: A Tensor of type int64.
-* @li values: A Tensor of type "dtype".
-* @li shape: A Tensor of type int64 . \n
+* @li indices: A Tensor of type int64.2-D. The `indices` of the minibatch `SparseTensor`.
+* @li values: A Tensor of type "dtype". 1-D. The `values` of the minibatch `SparseTensor`.
+* @li shape: A Tensor of type int64 . 1-D. The `shape` of the minibatch `SparseTensor`. \n
 
 *@par Third-party framework compatibility
 * Compatible with the TensorFlow operator TakeManySparseFromTensorsMap.
@@ -953,7 +951,7 @@ REG_OP(SerializeSparse)
         DT_UINT16, DT_INT32, DT_INT64, DT_DOUBLE, DT_FLOAT, DT_FLOAT16, \
         DT_COMPLEX64, DT_COMPLEX128, DT_RESOURCE, DT_STRING}))
     .INPUT(shape, TensorType({DT_INT64}))
-    .OUTPUT(serialized_sparse, TensorType({DT_STRING}))
+    .OUTPUT(serialized_sparse, TensorType({DT_STRING, DT_VARIANT}))
     .ATTR(out_type, Type, DT_STRING)
     .OP_END_FACTORY_REG(SerializeSparse)
 
@@ -981,7 +979,7 @@ REG_OP(SerializeManySparse)
         DT_UINT16, DT_INT32, DT_INT64, DT_DOUBLE, DT_FLOAT, DT_FLOAT16, \
         DT_COMPLEX64, DT_COMPLEX128, DT_RESOURCE, DT_STRING}))
     .INPUT(shape, TensorType({DT_INT64}))
-    .OUTPUT(serialized_sparse, TensorType({DT_STRING}))
+    .OUTPUT(serialized_sparse, TensorType({DT_STRING, DT_VARIANT}))
     .ATTR(out_type, Type, DT_STRING)
     .OP_END_FACTORY_REG(SerializeManySparse)
 
@@ -989,8 +987,7 @@ REG_OP(SerializeManySparse)
 *@brief Deserializes SparseTensor objects . \n
 
 *@par Inputs:
-*Two inputs, including:
-* serialized_sparse: A Tensor. The serialized SparseTensor objects.
+*serialized_sparse: A Tensor. The serialized SparseTensor objects.
 *The last dimension must have 3 columns . \n
 
 *@par Attributes:
@@ -1005,7 +1002,7 @@ REG_OP(SerializeManySparse)
 * Compatible with the TensorFlow operator DeserializeSparse.
 */
 REG_OP(DeserializeSparse)
-    .INPUT(serialized_sparse, TensorType({DT_STRING}))
+    .INPUT(serialized_sparse, TensorType({DT_STRING, DT_VARIANT}))
     .OUTPUT(indices, TensorType({DT_INT64}))
     .OUTPUT(values, TensorType({DT_BOOL, DT_INT8, DT_UINT8, DT_INT16, \
         DT_UINT16, DT_INT32, DT_INT64, DT_DOUBLE, DT_FLOAT, DT_FLOAT16, \

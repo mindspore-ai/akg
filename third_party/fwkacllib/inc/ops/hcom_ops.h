@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright 2020 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,7 +28,7 @@ namespace ge {
  * @brief Outputs a tensor gathering all input tensors.
  * @par Inputs:
  * x: A tensor. Must be one of the following types: int8, int16, int32, float16,
-  float32.
+  float32, uint8, uint16, uint32, float64.
  * @par Attributes:
  * @li rank_size: A required integer identifying the number of ranks
   participating in the op.
@@ -41,8 +41,10 @@ namespace ge {
   as the name of a world group.
  */
 REG_OP(HcomAllGather)
-    .INPUT(x, TensorType({DT_FLOAT, DT_INT32, DT_INT8, DT_INT16, DT_FLOAT16, DT_INT64, DT_UINT64}))
-    .OUTPUT(y, TensorType({DT_FLOAT, DT_INT32, DT_INT8, DT_INT16, DT_FLOAT16, DT_INT64, DT_UINT64}))
+    .INPUT(x, TensorType({DT_FLOAT, DT_INT32, DT_INT8, DT_INT16, DT_FLOAT16, DT_INT64, DT_UINT64,
+                          DT_UINT8, DT_UINT16, DT_UINT32, DT_FLOAT64}))
+    .OUTPUT(y, TensorType({DT_FLOAT, DT_INT32, DT_INT8, DT_INT16, DT_FLOAT16, DT_INT64, DT_UINT64,
+                          DT_UINT8, DT_UINT16, DT_UINT32, DT_FLOAT64}))
     .REQUIRED_ATTR(rank_size, Int)
     .REQUIRED_ATTR(group, String)
     .OP_END_FACTORY_REG(HcomAllGather)
@@ -99,8 +101,10 @@ REG_OP(HcomAllReduce)
   as the name of a world group.
  */
 REG_OP(HcomBroadcast)
-    .DYNAMIC_INPUT(x, TensorType({DT_FLOAT, DT_INT32, DT_INT8, DT_INT16, DT_FLOAT16, DT_INT64, DT_UINT64}))
-    .DYNAMIC_OUTPUT(y, TensorType({DT_FLOAT, DT_INT32, DT_INT8, DT_INT16, DT_FLOAT16, DT_INT64, DT_UINT64}))
+    .DYNAMIC_INPUT(x, TensorType({DT_FLOAT, DT_INT32, DT_INT8, DT_INT16, DT_FLOAT16, DT_INT64, DT_UINT64,
+                          DT_UINT8, DT_UINT16, DT_UINT32, DT_FLOAT64}))
+    .DYNAMIC_OUTPUT(y, TensorType({DT_FLOAT, DT_INT32, DT_INT8, DT_INT16, DT_FLOAT16, DT_INT64, DT_UINT64,
+                          DT_UINT8, DT_UINT16, DT_UINT32, DT_FLOAT64}))
     .REQUIRED_ATTR(root_rank, Int)
     .REQUIRED_ATTR(group, String)
     .ATTR(fusion, Int, 0)
@@ -186,7 +190,8 @@ REG_OP(HcomReduceScatter)
  * @see HcomReceive
 */
 REG_OP(HcomSend)
-    .INPUT(x, TensorType({DT_FLOAT, DT_INT32, DT_INT8, DT_INT16, DT_FLOAT16, DT_INT64, DT_UINT64}))
+    .INPUT(x, TensorType({DT_FLOAT, DT_INT32, DT_INT8, DT_INT16, DT_FLOAT16, DT_INT64, DT_UINT64,
+                          DT_UINT8, DT_UINT16, DT_UINT32, DT_FLOAT64}))
     .REQUIRED_ATTR(group, String)
     .REQUIRED_ATTR(sr_tag, Int)
     .REQUIRED_ATTR(dest_rank, Int)
@@ -217,7 +222,8 @@ REG_OP(HcomSend)
  * @see HcomSend
 */
 REG_OP(HcomReceive)
-    .OUTPUT(y, TensorType({DT_FLOAT, DT_INT32, DT_INT8, DT_INT16, DT_FLOAT16, DT_INT64, DT_UINT64}))
+    .OUTPUT(y, TensorType({DT_FLOAT, DT_INT32, DT_INT8, DT_INT16, DT_FLOAT16, DT_INT64, DT_UINT64,
+                          DT_UINT8, DT_UINT16, DT_UINT32, DT_FLOAT64}))
     .REQUIRED_ATTR(group, String)
     .REQUIRED_ATTR(sr_tag, Int)
     .REQUIRED_ATTR(src_rank, Int)
@@ -238,6 +244,15 @@ REG_OP(HcomRemoteRead)
     .REQUIRED_ATTR(dtype, Type)
     .OP_END_FACTORY_REG(HcomRemoteRead)
 
+/**
+ * @brief Performs Remote Ref Read of input tensors
+ * @par Inputs:
+ * remote: A tensor. describing the remote memory address to read: u64 remoteId, u64 addrRemote, u64 length
+ * cache_var: The local base address
+ * local_offset: Skip step length
+ * @par Outputs:
+ * cache_var: The local base address
+ */
 REG_OP(HcomRemoteRefRead)
     .INPUT(remote, TensorType({DT_UINT64}))
     .INPUT(cache_var, TensorType({DT_UINT64}))
@@ -258,11 +273,94 @@ REG_OP(HcomRemoteWrite)
     .INPUT(local, TensorType::ALL())
     .OP_END_FACTORY_REG(HcomRemoteWrite)
 
+/**
+ * @brief Performs Remote Write of input tensors
+ * @par Inputs:
+ * remote: A tensor. describing the remote memory address to write: u64 remoteId, u64 addrRemote, u64 length
+ * @par Inputs:
+ * local: A Tensor. whose value is length / size_of(Type)
+ */
 REG_OP(HcomRemoteScatterWrite)
     .INPUT(remote, TensorType({DT_INT64, DT_UINT64}))
     .INPUT(local, TensorType::ALL())
     .OPTIONAL_INPUT(local_offset, TensorType({DT_UINT64}))
     .OP_END_FACTORY_REG(HcomRemoteScatterWrite)
+
+/**
+ * @brief All ranks send different amount of data to, and receive different
+  amount of data from, all ranks.
+ * @par Inputs:
+ * Five inputs, including:
+ * @li send_data: A tensor. the memory to send.
+ * @li send_counts: A list, where entry i specifies the number of elements in
+  send_data to send to rank i.
+ * @li send_displacements: A list, where entry i specifies the displacement
+  (offset from sendbuf) from which to send data to rank i.
+ * @li recv_counts: A list, where entry i specifies the number of 
+  elements to receive from rank i.
+ * @li recv_displacements: A list, , where entry i specifies the displacement
+  (offset from recv_data) to which data from rank i should be written.
+ * @par Outputs:
+ * recv_data: A Tensor  has same element type as send_data.
+ * @par Attributes:
+ * @li group: A string identifying the group name of ranks participating in
+  the op.
+* @attention all ranks participating in the op should be full-mesh networking
+  using the RDMA.
+ */
+REG_OP(HcomAllToAllV)
+    .INPUT(send_data, TensorType({DT_FLOAT, DT_INT32, DT_INT8, DT_INT16, DT_FLOAT16, DT_INT64, DT_UINT64,
+                          DT_UINT8, DT_UINT16, DT_UINT32, DT_FLOAT64}))
+    .INPUT(send_counts, TensorType({DT_INT64}))
+    .INPUT(send_displacements, TensorType({DT_INT64}))
+    .INPUT(recv_counts, TensorType({DT_INT64}))
+    .INPUT(recv_displacements, TensorType({DT_INT64}))
+    .OUTPUT(recv_data, TensorType({DT_FLOAT, DT_INT32, DT_INT8, DT_INT16, DT_FLOAT16, DT_INT64, DT_UINT64,
+                          DT_UINT8, DT_UINT16, DT_UINT32, DT_FLOAT64}))
+    .REQUIRED_ATTR(group, String)
+    .OP_END_FACTORY_REG(HcomAllToAllV)
+
+/**
+ * @brief All ranks send different amount of data to, and receive different
+  amount of data from, all ranks. And concat all data descripting by addrinfo
+  togather into output gathered.
+ * @par Inputs:
+ * Four inputs, including:
+ * @li addrinfo: A tensor, descripting the memory info(address, length) to send.
+ * @li addrinfo_count_per_rank: A list, where entry i specifies the number of
+  elements in send_data to send to rank i.
+ * @li recv_counts: A list, where entry i specifies the number of 
+  elements to receive from rank i.
+ * @li recv_displacements: A list, , where entry i specifies the displacement 
+  (offset from recv_data) to which data from rank i should be written.
+ * @par Outputs:
+ * Two outputs, including:
+ * @li recv_data: A Tensor  has same element type as dtype.
+ * @li gathered: A Tensor  has same element type as dtype.
+ * @par Attributes:
+ * @li group: A string identifying the group name of ranks participating in
+  the op.
+ * @li dtype: Datatype of send buffer elements.
+ * @li addr_length: descripting the element memory length in the addrinfo.
+  -2: all element memory length in the addrinfo is the same, but it is unknown.
+  -1: all element memory length is unknown.
+  >0: all element memory length in the addrinfo is the same. the attr value is the memory length.
+ * @attention all ranks participating in the op should be full-mesh networking
+  using the RDMA.
+ */
+REG_OP(HcomGatherAllToAllV)
+    .INPUT(addrinfo, TensorType({DT_UINT64}))
+    .INPUT(addrinfo_count_per_rank, TensorType({DT_INT64}))
+    .INPUT(recv_counts, TensorType({DT_INT64}))
+    .INPUT(recv_displacements, TensorType({DT_INT64}))
+    .OUTPUT(recv_data, TensorType({DT_FLOAT, DT_INT32, DT_INT8, DT_INT16, DT_FLOAT16, DT_INT64, DT_UINT64,
+                          DT_UINT8, DT_UINT16, DT_UINT32, DT_FLOAT64}))
+    .OUTPUT(gathered, TensorType({DT_FLOAT, DT_INT32, DT_INT8, DT_INT16, DT_FLOAT16, DT_INT64, DT_UINT64,
+                          DT_UINT8, DT_UINT16, DT_UINT32, DT_FLOAT64}))
+    .REQUIRED_ATTR(group, String)
+    .REQUIRED_ATTR(dtype, Type)
+    .REQUIRED_ATTR(addr_length, Int)
+    .OP_END_FACTORY_REG(HcomGatherAllToAllV)
 
 } // namespace ge
 #endif  // OPS_BUILT_IN_OP_PROTO_INC_HCOM_OPS_H_

@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright 2019 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -61,7 +61,6 @@ REG_OP(RaggedTensorToSparse)
 *@brief Create a dense tensor from a ragged tensor, possibly altering its shape . \n
 
 *@par Inputs:
-*Six inputs, including:
 *@li shape:A `Tensor`. Must be one of the following types: `int64`, `int32`.
 *@li values:A 1D tensor representing the values of the ragged tensor.
 *@li default_value:A `Tensor`. Must have the same type as `values`.
@@ -78,7 +77,7 @@ The types of the row partition tensors. At present, these can be:
 is preceeded by "FIRST_DIM_SIZE" . \n
 
 *@par Outputs:
-*@li result: A `Tensor`. Has the same type as `values`.
+*result: A `Tensor`. Has the same type as `values`.
 */
 REG_OP(RaggedTensorToTensor)
     .INPUT(shape, TensorType({DT_INT32, DT_INT64}))

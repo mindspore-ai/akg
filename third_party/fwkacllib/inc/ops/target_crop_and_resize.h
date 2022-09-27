@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright 2019 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,7 +39,7 @@ namespace ge {
 *input_format: A required string, specifying the input format. \n
 
 *@par Outputs:
-*y: The output tensor of type uint8, format only support NC1HWC0_C04.
+*y: The output tensor of type uint8.
 *@par Third-party framework compatibility
 * It is a custom operator. It has no corresponding operator in Caffe.
 *

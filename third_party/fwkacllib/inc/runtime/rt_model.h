@@ -1,21 +1,11 @@
-/**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+/*
+ * Copyright (c) Huawei Technologies Co., Ltd. 2020-2021. All rights reserved.
+ * Description: rt_model.h
+ * Create: 2020-01-01
  */
 
-#ifndef __CCE_RUNTIME_MODEL_H__
-#define __CCE_RUNTIME_MODEL_H__
+#ifndef CCE_RUNTIME_RT_MODEL_H
+#define CCE_RUNTIME_RT_MODEL_H
 
 #include "base.h"
 
@@ -42,7 +32,7 @@ typedef enum tagModelTaskType {
     RT_MODEL_TASK_NOTIFY_WAIT,
     RT_MODEL_TASK_REDUCE_ASYNC,
     RT_MODEL_TASK_RDMA_SEND,
-    RT_MODEL_TASK_EVENT_RESET = 18,
+    RT_MODEL_TASK_EVENT_RESET,
     RT_MODEL_TASK_MODEL_END_GRAPH,
     RT_MODEL_TASK_STREAM_SWITCH_N,
     RT_MODEL_TASK_RDMA_DB_SEND,
@@ -53,6 +43,13 @@ typedef enum tagModelTaskType {
     RT_MODEL_TASK_ALL_KERNEL,
     RT_MODEL_TASK_PROFILER_TRACE_EX,
     RT_MODEL_TASK_FFTS_TASK,
+    RT_MODEL_TASK_FFTS_PLUS_TASK,
+    RT_MODEL_TASK_DSA_TASK,
+    RT_MODEL_TASK_CMO,
+    RT_MODEL_TASK_BARRIER,
+    RT_MODEL_TASK_NPU_GET_FLOAT_STATUS,
+    RT_MODEL_TASK_NPU_CLEAR_FLOAT_STATUS,
+    RT_MODEL_TASK_DVPP,
 } rtModelTaskType_t;
 
 typedef enum tagModelStreamType {
@@ -65,16 +62,16 @@ typedef enum tagModelQueueFlag {
     RT_MODEL_OUTPUT_QUEUE = 1
 } rtModelQueueFlag_t;
 
-#define EXECUTOR_NONE ((uint32_t)0x0)
-#define EXECUTOR_TS ((uint32_t)0x01)
-#define EXECUTOR_AICPU ((uint32_t)0x02)
+#define EXECUTOR_NONE (0x0U)
+#define EXECUTOR_TS (0x01U)
+#define EXECUTOR_AICPU (0x02U)
 
 /*
  * @ingroup rt_model
  * @brief debug flag for kernel exception dump
  */
-#define RT_DEBUG_FLAG_AICORE_OVERFLOW (0x1 << 0)
-#define RT_DEBUG_FLAG_ATOMIC_ADD_OVERFLOW (0x1 << 1)
+#define RT_DEBUG_FLAG_AICORE_OVERFLOW (0x1U << 0U)
+#define RT_DEBUG_FLAG_ATOMIC_ADD_OVERFLOW (0x1U << 1U)
 
 /**
  * @ingroup
@@ -124,9 +121,9 @@ typedef struct tagKernelTaskInfo {
     uint16_t argsCount;
     uint16_t argsSize;
     uint16_t reserved;
-    char *stubFunc;
+    const char_t *stubFunc;
     uint8_t *smDesc;
-    uint8_t *args;
+    const uint8_t *args;
     uint16_t *argsOffset;
 } rtKernelTaskInfo_t;
 
@@ -135,17 +132,17 @@ typedef struct tagAllKernelTaskInfo {
     uint16_t argsCount;
     uint16_t argsSize;
     uint16_t reserved;
-    void *devfunc;
+    uint64_t tilingKey;
     void *handle;
     uint8_t *smDesc;
-    uint8_t *args;
+    const uint8_t *args;
     uint16_t *argsOffset;
 } rtAllKernelTaskInfo_t;
 
 typedef struct tagKernelTaskInfoEx {
     uint32_t flags;
     uint32_t argsSize;
-    void *args;
+    const void *args;
     uint32_t reserved[6];
 } rtKernelTaskInfoEx_t;
 
@@ -207,9 +204,9 @@ typedef struct tagProfilerTraceExTaskInfo {
 } rtProfilerTraceEx_t;
 
 typedef struct tagrtMemcpyAsyncTaskInfo {
-    void *dst;
+    const void *dst;
     uint64_t destMax;
-    void *src;
+    const void *src;
     uint64_t count;
     uint32_t kind;
     uint32_t reserved;
@@ -221,9 +218,9 @@ typedef struct tagrtNotifyTaskInfo {
 } rtNotifyTaskInfo_t;
 
 typedef struct tagrtReduceAsyncTaskInfo {
-    void *dst;
+    const void *dst;
     uint64_t destMax;
-    void *src;
+    const void *src;
     uint64_t count;
     uint32_t kind;
     uint32_t type;
@@ -267,6 +264,18 @@ typedef struct tagrtStreamLabelGotoTask_t {
     uint8_t reserved[36];
 } rtStreamLabelGotoTask_t;
 
+typedef struct tagrtNpuGetFloatStatusTask_t {
+    uint64_t outputAddr;
+    uint64_t outputSize;
+    uint32_t checkMode;
+    uint8_t reserved[20];
+} rtNpuGetFloatStatusTask_t;
+
+typedef struct tagrtNpuClearFloatStatusTask_t {
+    uint32_t checkMode;
+    uint8_t reserved[36];
+} rtNpuClearFloatStatusTask_t;
+
 typedef struct tagTaskInfo {
     uint32_t type;
     uint32_t streamID;
@@ -292,6 +301,8 @@ typedef struct tagTaskInfo {
         rtStreamSwitchNTaskInfo_t streamSwitchNTask;
         rtStreamLabelSwitchByIndexTask_t streamLabelSwitchIndexTask;
         rtStreamLabelGotoTask_t streamLabelGotoTask;
+        rtNpuGetFloatStatusTask_t npuGetFloatStatusTask;
+        rtNpuClearFloatStatusTask_t npuClearFloatStatusTask;
         uint32_t reserved[10];
     } u;
 } rtTaskInfo_t;
@@ -319,7 +330,7 @@ typedef struct tagLabelDevInfo_t {
     }u;
 }rtLabelDevInfo;
 
-typedef rtError_t (*rtTaskGenCallback)(rtModel_t model, rtTaskInfo_t *taskInfo);
+typedef rtError_t (*rtTaskGenCallback)(rtModel_t mdl, rtTaskInfo_t *taskInfo);
 
 /**
  * @ingroup rt_model
@@ -333,165 +344,185 @@ RTS_API rtError_t rtSetTaskGenCallback(rtTaskGenCallback callback);
 /**
  * @ingroup rt_model
  * @brief create model instance
- * @param [out]    model   created model
+ * @param [out]    mdl     created model
  * @param [in]     flag    reserved
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
  */
-RTS_API rtError_t rtModelCreate(rtModel_t *model, uint32_t flag);
+RTS_API rtError_t rtModelCreate(rtModel_t *mdl, uint32_t flag);
+
+/**
+ * @ingroup rt_model
+ * @brief set ge model id to aicpu
+ * @param [in]     model   aicpu model
+ * @param [in]     extid   ge model id
+ * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for error input
+ */
+rtError_t rtModelSetExtId(rtModel_t mdl, uint32_t extId);
 
 /**
  * @ingroup rt_model
  * @brief destroy model instance
- * @param [in] model   model to destroy
+ * @param [in] mdl   model to destroy
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
  */
-RTS_API rtError_t rtModelDestroy(rtModel_t model);
+RTS_API rtError_t rtModelDestroy(rtModel_t mdl);
 
 /**
  * @ingroup rt_model
  * @brief bind model and stream instance
- * @param [in] model   binded model
- * @param [in] stream  binded stream
+ * @param [in] mdl   binded model
+ * @param [in] stm  binded stream
  * @param [in] flag    reserved
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
  */
-RTS_API rtError_t rtModelBindStream(rtModel_t model, rtStream_t stream, uint32_t flag);
+RTS_API rtError_t rtModelBindStream(rtModel_t mdl, rtStream_t stm, uint32_t flag);
 
 /**
  * @ingroup rt_model
  * @brief unbind model and stream instance
- * @param [in] model   unbinded model
- * @param [in] stream  unbinded stream
+ * @param [in] mdl   unbinded model
+ * @param [in] stm  unbinded stream
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
  */
-RTS_API rtError_t rtModelUnbindStream(rtModel_t model, rtStream_t stream);
+RTS_API rtError_t rtModelUnbindStream(rtModel_t mdl, rtStream_t stm);
 
 /**
  * @ingroup rt_model
  * @brief tell runtime Model has been Loaded
- * @param [in] model   model to execute
+ * @param [in] mdl   model to execute
  * @return RT_ERROR_NONE for ok
  */
-RTS_API rtError_t rtModelLoadComplete(rtModel_t model);
+RTS_API rtError_t rtModelLoadComplete(rtModel_t mdl);
 
 /**
  * @ingroup rt_model
  * @brief execute model instance
- * @param [in] model   model to execute
+ * @param [in] mdl   model to execute
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
  */
-RTS_API rtError_t rtModelExecute(rtModel_t model, rtStream_t stream, uint32_t flag);
+RTS_API rtError_t rtModelExecute(rtModel_t mdl, rtStream_t stm, uint32_t flag);
 
 /**
  * @ingroup rt_model
  * @brief get model the last persist task id
- * @param [in] model   model to execute
- * @param [out] taskid last task id of the model
- * @param [out] streamid last steam id of the model
+ * @param [in] mdl   model to execute
+ * @param [out] taskId last task id of the model
+ * @param [out] streamId last steam id of the model
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
  */
-RTS_API rtError_t rtModelGetTaskId(rtModel_t model, uint32_t *taskid, uint32_t *streamid);
+RTS_API rtError_t rtModelGetTaskId(rtModel_t mdl, uint32_t *taskId, uint32_t *streamId);
 
 /**
  * @ingroup rt_model
  * @brief add a end graph task to stream
- * @param [in] model   model to execute
+ * @param [in] mdl   model to execute
  * @param [in] end graph stream
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
  */
-RTS_API rtError_t rtEndGraph(rtModel_t model, rtStream_t stream);
+RTS_API rtError_t rtEndGraph(rtModel_t mdl, rtStream_t stm);
 
 /**
  * @ingroup rt_model
  * @brief add a end graph task with flag to stream
- * @param [in] model   model to execute
+ * @param [in] mdl   model to execute
  * @param [in] end graph stream
  * @param [in] flags   AICPU datadump
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
  */
-RTS_API rtError_t rtEndGraphEx(rtModel_t model, rtStream_t stream, uint32_t flags);
+RTS_API rtError_t rtEndGraphEx(rtModel_t mdl, rtStream_t stm, uint32_t flags);
 
 /**
  * @ingroup rt_model
  * @brief add a end graph task to stream
- * @param [in] model   model to execute
+ * @param [in] mdl   model to execute
  * @param [in] flags EXECUTOR_TS | EXECUTOR_AICPU
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
  */
-RTS_API rtError_t rtModelExecutorSet(rtModel_t model, uint8_t flags);
+RTS_API rtError_t rtModelExecutorSet(rtModel_t mdl, uint8_t flags);
 
 /**
  * @ingroup rt_model
  * @brief abort model
- * @param [in] model   model to abort
+ * @param [in] mdl   model to abort
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
  */
-RTS_API rtError_t rtModelAbort(rtModel_t model);
+RTS_API rtError_t rtModelAbort(rtModel_t mdl);
 
 /**
  * @ingroup rt_model
  * @brief end graph task to model default stream
- * @param [in] model   model to execute
+ * @param [in] mdl   model to execute
  * @param [in] end graph stream
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
  */
-RTS_API rtError_t rtModelExit(rtModel_t model, rtStream_t stream);
+RTS_API rtError_t rtModelExit(rtModel_t mdl, rtStream_t stm);
 
 /**
  * @ingroup rt_model
  * @brief bind queue
- * @param [in] model     model to bind
+ * @param [in] mdl     model to bind
  * @param [in] queueId   queueId to bind
  * @param [in] flag
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
  */
-RTS_API rtError_t rtModelBindQueue(rtModel_t model, uint32_t queueId, rtModelQueueFlag_t flag);
+RTS_API rtError_t rtModelBindQueue(rtModel_t mdl, uint32_t queueId, rtModelQueueFlag_t flag);
 
 /**
  * @ingroup rt_model
  * @brief get model id
- * @param [in] model
+ * @param [in] mdl
  * @param [out] modelId   model id
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
  */
-RTS_API rtError_t rtModelGetId(rtModel_t model, uint32_t *modelId);
+RTS_API rtError_t rtModelGetId(rtModel_t mdl, uint32_t *modelId);
 
 /*
  * @ingroup rt_model
  * @brief enable debug for dump overflow exception
  * @param [in] addr: ddr address of kernel exception dumpped
- * @param [in] model: model handle
+ * @param [in] mdl: model handle
  * @param [in] flag: debug flag
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
  */
-RTS_API rtError_t rtDebugRegister(rtModel_t model, uint32_t flag, const void *addr,
+RTS_API rtError_t rtDebugRegister(rtModel_t mdl, uint32_t flag, const void *addr,
                                   uint32_t *streamId, uint32_t *taskId);
 
 /*
  * @ingroup rt_model
  * @brief disable debug for dump overflow exception
- * @param [in] model: model handle
+ * @param [in] mdl: model handle
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
  */
-RTS_API rtError_t rtDebugUnRegister(rtModel_t model);
+RTS_API rtError_t rtDebugUnRegister(rtModel_t mdl);
+
+/**
+ * @ingroup rt_model
+ * @brief set model group id
+ * @param [in]    mdl     model
+ * @param [in]     schGrpId    groupId  (0,4) 0:default invalid value   1-4 valid value Maximum support 4 groups
+ * @return RT_ERROR_NONE for ok
+ * @return RT_ERROR_INVALID_VALUE for error input
+ */
+RTS_API rtError_t rtModelSetSchGroupId(rtModel_t mdl, const int16_t schGrpId);
 
 #if defined(__cplusplus)
 }
 #endif
 
-#endif  // __CCE_RUNTIME_MODEL_H__
+#endif  // CCE_RUNTIME_RT_MODEL_H

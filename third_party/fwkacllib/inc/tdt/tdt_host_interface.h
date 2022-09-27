@@ -1,18 +1,10 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+* @file tdt_host_interface.h
+*
+* Copyright (C) Huawei Technologies Co., Ltd. 2019-2020. All Rights Reserved.
+*
+* This program is used to host server
+*/
 
 #ifndef HOST_INNER_INC_TDT_HOST_INTERFACE_H_
 #define HOST_INNER_INC_TDT_HOST_INTERFACE_H_
@@ -61,7 +53,7 @@ int32_t TdtHostInit(uint32_t deviceId);
 * @li tdt_host_interface.h: Header file where the interface declaration is located.
 * @li data_common.h: Header file where 'DataItem' defined
 */
-int32_t TdtHostPushData(const std::string &channelName, const std::vector<DataItem> &item);
+int32_t TdtHostPushData(const std::string &channelName, const std::vector<DataItem> &item, uint32_t deviceId = 0);
 
 /**
 * @ingroup TdtHostDestroy
@@ -203,25 +195,6 @@ int32_t TdtInFeedDestroy(uint32_t deviceId);
 * @li tdt_host_interface.h: Header file where the interface declaration is located.
 */
 int32_t TdtOutFeedDestroy();
-
-/**
-* @ingroup TdtInFeedData
-* @brief Blocking queue. When the queue is full, the Push interface will block.
-*
-* @par Function
-* Blocking queue. When the queue is full, the Push interface will block.
-*
-* @param channelName [IN] type #String. queue channel name
-* @param items [IN] type #vector<DataItem> DataItem is defined in data_common.h.  input data
-* @retval 0 Success
-* @retval OtherValues 0 Fail
-*
-* @par Dependency
-* @li libtsdclient.so: Library to which the interface belongs.
-* @li tdt_host_interface.h: Header file where the interface declaration is located.
-* @li data_common.h: Header file where 'DataItem' defined
-*/
-int32_t TdtInFeedData(const std::string &channelName, const std::vector<DataItem> &item, uint32_t deviceId);
 }  // namespace tdt
 #ifdef __cplusplus
 }

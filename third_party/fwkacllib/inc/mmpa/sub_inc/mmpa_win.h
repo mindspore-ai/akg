@@ -1,18 +1,12 @@
-/**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
+﻿/*
+* @file mmpa_win.h
+*
+* Copyright (C) Huawei Technologies Co., Ltd. 2019-2021. All Rights Reserved.
+*
+* This program is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+*/
 
 #ifndef MMPA_WIN_MMPA_WIN_H
 #define MMPA_WIN_MMPA_WIN_H
@@ -368,8 +362,8 @@ MMPA_FUNC_VISIBILITY INT32 mmCondDestroy(mmCond *cond);
 MMPA_FUNC_VISIBILITY INT32 mmGetPid(VOID);
 MMPA_FUNC_VISIBILITY INT32 mmGetTid(VOID);
 MMPA_FUNC_VISIBILITY INT32 mmGetPidHandle(mmProcess *processHandle);
-MMPA_FUNC_VISIBILITY INT32 mmGetLocalTime(mmSystemTime_t *sysTime);
-MMPA_FUNC_VISIBILITY INT32 mmGetSystemTime(mmSystemTime_t *sysTime);
+MMPA_FUNC_VISIBILITY INT32 mmGetLocalTime(mmSystemTime_t *sysTimePtr);
+MMPA_FUNC_VISIBILITY INT32 mmGetSystemTime(mmSystemTime_t *sysTimePtr);
 MMPA_FUNC_VISIBILITY INT32 mmSemInit(mmSem_t *sem, UINT32 value);
 MMPA_FUNC_VISIBILITY INT32 mmSemWait(mmSem_t *sem);
 MMPA_FUNC_VISIBILITY INT32 mmSemPost(mmSem_t *sem);
@@ -431,7 +425,7 @@ MMPA_FUNC_VISIBILITY mmSsize_t mmWritev(mmSockHandle fd, mmIovSegment *iov, INT3
 MMPA_FUNC_VISIBILITY VOID mmMb();
 MMPA_FUNC_VISIBILITY INT32 mmInetAton(const CHAR *addrStr, mmInAddr *addr);
 
-MMPA_FUNC_VISIBILITY mmProcess mmOpenFile(const CHAR *fileName, UINT32 access, mmCreateFlag fileFlag);
+MMPA_FUNC_VISIBILITY mmProcess mmOpenFile(const CHAR *fileName, UINT32 accessFlag, mmCreateFlag fileFlag);
 MMPA_FUNC_VISIBILITY mmSsize_t mmReadFile(mmProcess fileId, VOID *buffer, INT32 len);
 MMPA_FUNC_VISIBILITY mmSsize_t mmWriteFile(mmProcess fileId, VOID *buffer, INT32 len);
 MMPA_FUNC_VISIBILITY INT32 mmCloseFile(mmProcess fileId);
@@ -444,13 +438,13 @@ MMPA_FUNC_VISIBILITY mmAtomicType64 mmValueInc64(mmAtomicType64 *ptr, mmAtomicTy
 MMPA_FUNC_VISIBILITY mmAtomicType64 mmValueSub64(mmAtomicType64 *ptr, mmAtomicType64 value);
 MMPA_FUNC_VISIBILITY INT32 mmCreateTaskWithDetach(mmThread *threadHandle, mmUserBlock_t *funcBlock);
 
-MMPA_FUNC_VISIBILITY INT32 mmCreateNamedPipe(mmPipeHandle pipe[], CHAR *pipeName[], INT32 waitMode);
-MMPA_FUNC_VISIBILITY INT32 mmOpenNamePipe(mmPipeHandle pipe[], CHAR *pipeName[], INT32 waitMode);
+MMPA_FUNC_VISIBILITY INT32 mmCreateNamedPipe(mmPipeHandle pipeHandle[], CHAR *pipeName[], INT32 waitMode);
+MMPA_FUNC_VISIBILITY INT32 mmOpenNamePipe(mmPipeHandle pipeHandle[], CHAR *pipeName[], INT32 waitMode);
 MMPA_FUNC_VISIBILITY VOID mmCloseNamedPipe(mmPipeHandle namedPipe[]);
 
-MMPA_FUNC_VISIBILITY INT32 mmCreatePipe(mmPipeHandle pipe[], CHAR *pipeName[], UINT32 pipeCount, INT32 waitMode);
-MMPA_FUNC_VISIBILITY INT32 mmOpenPipe(mmPipeHandle pipe[], CHAR *pipeName[], UINT32 pipeCount, INT32 waitMode);
-MMPA_FUNC_VISIBILITY VOID mmClosePipe(mmPipeHandle pipe[], UINT32 pipeCount);
+MMPA_FUNC_VISIBILITY INT32 mmCreatePipe(mmPipeHandle pipeHandle[], CHAR *pipeName[], UINT32 pipeCount, INT32 waitMode);
+MMPA_FUNC_VISIBILITY INT32 mmOpenPipe(mmPipeHandle pipeHandle[], CHAR *pipeName[], UINT32 pipeCount, INT32 waitMode);
+MMPA_FUNC_VISIBILITY VOID mmClosePipe(mmPipeHandle pipeHandle[], UINT32 pipeCount);
 
 MMPA_FUNC_VISIBILITY mmCompletionHandle mmCreateCompletionPort();
 MMPA_FUNC_VISIBILITY VOID mmCloseCompletionPort(mmCompletionHandle handle);
@@ -557,6 +551,10 @@ MMPA_FUNC_VISIBILITY mmFileHandle mmShmOpen(const CHAR *name, INT32 oflag, mmMod
 MMPA_FUNC_VISIBILITY INT32 mmShmUnlink(const CHAR *name);
 MMPA_FUNC_VISIBILITY VOID *mmMmap(mmFd_t fd, mmSize_t size, mmOfft_t offset, mmFd_t *extra, INT32 prot, INT32 flags);
 MMPA_FUNC_VISIBILITY INT32 mmMunMap(VOID *data, mmSize_t size, mmFd_t *extra);
+
+MMPA_FUNC_VISIBILITY mmSize mmGetPageSize();
+MMPA_FUNC_VISIBILITY VOID *mmAlignMalloc(mmSize mallocSize, mmSize alignSize);
+MMPA_FUNC_VISIBILITY VOID mmAlignFree(VOID *addr);
 #ifdef __cplusplus
 #if __cplusplus
 }

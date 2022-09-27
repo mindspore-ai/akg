@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright 2019 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -64,10 +64,10 @@ the same types as "x_tensors" .  It's a dynamic output.  \n
 REG_OP(Batch)
   .DYNAMIC_INPUT(x_tensors, TensorType({DT_FLOAT16, DT_FLOAT, DT_INT8, \
       DT_INT16, DT_UINT16, DT_UINT8, DT_INT32, DT_INT64, DT_BOOL, DT_DOUBLE}))
-  .OUTPUT(y_index, TensorType({ DT_INT64 }))
-  .OUTPUT(y_id, TensorType({ DT_INT64 }))
   .DYNAMIC_OUTPUT(y_tensors, TensorType({DT_INT8, DT_UINT8, DT_INT16, \
       DT_UINT16, DT_INT32, DT_INT64, DT_FLOAT, DT_FLOAT16, DT_DOUBLE, DT_BOOL}))
+  .OUTPUT(y_index, TensorType({ DT_INT64 }))
+  .OUTPUT(y_id, TensorType({ DT_INT64 }))
   .REQUIRED_ATTR(num_batch_threads, Int)
   .REQUIRED_ATTR(max_batch_size, Int)
   .ATTR(max_enqueued_batches, Int, 10)
@@ -107,11 +107,13 @@ across multiple sessions .   \n
 
 REG_OP(Unbatch)
   .INPUT(x_tensor, TensorType({DT_INT8, DT_UINT8, DT_INT16, DT_UINT16, \
-      DT_INT32, DT_INT64, DT_BOOL, DT_FLOAT, DT_DOUBLE}))
+      DT_INT32, DT_INT64, DT_BOOL, DT_FLOAT, DT_DOUBLE, DT_FLOAT16, \
+      DT_COMPLEX64, DT_COMPLEX128}))
   .INPUT(index, TensorType({DT_INT64}))
   .INPUT(id, TensorType({DT_INT64}))
   .OUTPUT(y_tensor, TensorType({DT_INT8, DT_UINT8, DT_INT16, DT_UINT16, \
-      DT_INT32, DT_INT64, DT_BOOL, DT_FLOAT, DT_DOUBLE}))
+      DT_INT32, DT_INT64, DT_BOOL, DT_FLOAT, DT_DOUBLE, DT_FLOAT16, \
+      DT_COMPLEX64, DT_COMPLEX128}))
   .REQUIRED_ATTR(timeout_micros, Int)
   .ATTR(container, String, "")
   .ATTR(shared_name, String, "")
@@ -146,13 +148,16 @@ across multiple sessions .   \n
 
 REG_OP(UnbatchGrad)
   .INPUT(x_input, TensorType({DT_INT8, DT_UINT8, DT_INT16, DT_UINT16, \
-      DT_INT32, DT_INT64, DT_BOOL, DT_FLOAT, DT_DOUBLE}))
+      DT_INT32, DT_INT64, DT_BOOL, DT_FLOAT, DT_DOUBLE, DT_FLOAT16, \
+      DT_COMPLEX64, DT_COMPLEX128}))
   .INPUT(index, TensorType({DT_INT64}))
   .INPUT(grad, TensorType({DT_INT8, DT_UINT8, DT_INT16, DT_UINT16, \
-      DT_INT32, DT_INT64, DT_BOOL, DT_FLOAT, DT_DOUBLE}))
+      DT_INT32, DT_INT64, DT_BOOL, DT_FLOAT, DT_DOUBLE, DT_FLOAT16, \
+      DT_COMPLEX64, DT_COMPLEX128}))
   .INPUT(id, TensorType({DT_INT64}))
   .OUTPUT(y_grad, TensorType({DT_INT8, DT_UINT8, DT_INT16, DT_UINT16, \
-      DT_INT32, DT_INT64, DT_BOOL, DT_FLOAT, DT_DOUBLE}))
+      DT_INT32, DT_INT64, DT_BOOL, DT_FLOAT, DT_DOUBLE, DT_FLOAT16, \
+      DT_COMPLEX64, DT_COMPLEX128}))
   .ATTR(container, String, "")
   .ATTR(shared_name, String, "")
   .OP_END_FACTORY_REG(UnbatchGrad)

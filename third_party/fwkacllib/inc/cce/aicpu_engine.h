@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright (C) Huawei Technologies Co., Ltd. 2019-2022. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,9 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-#ifndef AICPU_ENGINE_H__
-#define AICPU_ENGINE_H__
+#ifndef AICPU_ENGINE_H
+#define AICPU_ENGINE_H
 
 #include <stdint.h>
 
@@ -24,15 +23,16 @@ extern "C" {
 #endif
 
 typedef enum {
-  AE_STATUS_SUCCESS = 0,
-  AE_STATUS_BAD_PARAM = 1,
-  AE_STATUS_OPEN_SO_FAILED = 2,
-  AE_STATUS_GET_KERNEL_NAME_FAILED = 3,
-  AE_STATUS_INNER_ERROR = 4,
-  AE_STATUS_KERNEL_API_INNER_ERROR = 5,
-  AE_STATUS_END_OF_SEQUENCE = 6,
-  AE_STATUS_DUMP_FAILED = 7,
-  AE_STATUS_RESERVED
+    AE_STATUS_SUCCESS = 0,
+    AE_STATUS_BAD_PARAM = 1,
+    AE_STATUS_OPEN_SO_FAILED = 2,
+    AE_STATUS_GET_KERNEL_NAME_FAILED = 3,
+    AE_STATUS_INNER_ERROR = 4,
+    AE_STATUS_KERNEL_API_INNER_ERROR = 5,
+    AE_STATUS_END_OF_SEQUENCE = 6,
+    AE_STATUS_DUMP_FAILED = 7,
+    AE_STATUS_TASK_WAIT = 101,
+    AE_STATUS_RESERVED
 } aeStatus_t;
 
 /**
@@ -59,4 +59,4 @@ aeStatus_t aeBatchLoadKernelSo(const uint32_t loadSoNum, const char *soPaths[], 
 }
 #endif
 
-#endif  // AICPU_ENGINE_H__
+#endif  // AICPU_ENGINE_H

@@ -1,21 +1,11 @@
-/**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+/*
+ * Copyright (c) Huawei Technologies Co., Ltd. 2020-2021. All rights reserved.
+ * Description: event.h
+ * Create: 2020-01-01
  */
 
-#ifndef __CCE_RUNTIME_EVENT_H__
-#define __CCE_RUNTIME_EVENT_H__
+#ifndef CCE_RUNTIME_EVENT_H
+#define CCE_RUNTIME_EVENT_H
 
 #include "base.h"
 
@@ -29,12 +19,17 @@ typedef enum rtEventWaitStatus {
     EVENT_STATUS_MAX = 2,
 } rtEventWaitStatus_t;
 
+typedef enum rtEventStatus {
+    RT_EVENT_INIT = 0,
+    RT_EVENT_RECORDED = 1,
+} rtEventStatus_t;
+
 /**
  * @ingroup event_flags
  * @brief event op bit flags
  */
-#define RT_EVENT_DEFAULT (0x0E)
-#define RT_EVENT_WITH_FLAG (0x0B)
+#define RT_EVENT_DEFAULT (0x0EU)
+#define RT_EVENT_WITH_FLAG (0x0BU)
 
 #define RT_EVENT_DDSYNC_NS    0x01U
 #define RT_EVENT_STREAM_MARK  0x02U
@@ -48,7 +43,7 @@ typedef enum rtEventWaitStatus {
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
  */
-RTS_API rtError_t rtEventCreate(rtEvent_t *event);
+RTS_API rtError_t rtEventCreate(rtEvent_t *evt);
 
 /**
  * @ingroup dvrt_event
@@ -57,103 +52,113 @@ RTS_API rtError_t rtEventCreate(rtEvent_t *event);
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
  */
-RTS_API rtError_t rtEventCreateWithFlag(rtEvent_t *event, uint32_t flag);
+RTS_API rtError_t rtEventCreateWithFlag(rtEvent_t *evt, uint32_t flag);
 
 /**
  * @ingroup dvrt_event
  * @brief destroy event instance
- * @param [in] event   event to destroy
+ * @param [in] evt   event to destroy
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
  */
-RTS_API rtError_t rtEventDestroy(rtEvent_t event);
+RTS_API rtError_t rtEventDestroy(rtEvent_t evt);
 
 /**
  * @ingroup dvrt_event
  * @brief get event id
- * @param [in] event_ event to be get
+ * @param [in] evt event to be get
  * @param [in|out] event_id   event_id id
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
  */
-RTS_API rtError_t rtGetEventID(rtEvent_t event, uint32_t *eventId);
+RTS_API rtError_t rtGetEventID(rtEvent_t evt, uint32_t *evtId);
 
 /**
  * @ingroup dvrt_event
  * @brief event record
  * @param [int] event   event to record
- * @param [int] stream   stream handle
+ * @param [int] stm   stream handle
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
  */
-RTS_API rtError_t rtEventRecord(rtEvent_t event, rtStream_t stream);
+RTS_API rtError_t rtEventRecord(rtEvent_t evt, rtStream_t stm);
 
 /**
  * @ingroup dvrt_event
  * @brief event reset
  * @param [int] event   event to reset
- * @param [int] stream   stream handle
+ * @param [int] stm   stream handle
  * @return RT_ERROR_NONE for ok
  */
-RTS_API rtError_t rtEventReset(rtEvent_t event, rtStream_t stream);
+RTS_API rtError_t rtEventReset(rtEvent_t evt, rtStream_t stm);
 
 /**
  * @ingroup dvrt_event
  * @brief wait event to be complete
- * @param [in] event   event to wait
+ * @param [in] evt   event to wait
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
  */
-RTS_API rtError_t rtEventSynchronize(rtEvent_t event);
+RTS_API rtError_t rtEventSynchronize(rtEvent_t evt);
 
 /**
  * @ingroup dvrt_event
  * @brief Queries an event's status
- * @param [in] event   event to query
+ * @param [in] evt   event to query
  * @return RT_ERROR_NONE for complete
  * @return RT_ERROR_EVENT_NOT_COMPLETE for not complete
  */
-RTS_API rtError_t rtEventQuery(rtEvent_t event);
+RTS_API rtError_t rtEventQuery(rtEvent_t evt);
 
 /**
  * @ingroup dvrt_event
  * @brief Queries an event's wait status
- * @param [in] event   event to query
+ * @param [in] evt   event to query
  * @param [in out] EVENT_WAIT_STATUS status
  * @return EVENT_STATUS_COMPLETE for complete
  * @return EVENT_STATUS_NOT_READY for not complete
  */
-RTS_API rtError_t rtEventQueryWaitStatus(rtEvent_t event, rtEventWaitStatus_t *status);
+RTS_API rtError_t rtEventQueryWaitStatus(rtEvent_t evt, rtEventWaitStatus_t *status);
+
+/**
+ * @ingroup dvrt_event
+ * @brief Queries an event's status
+ * @param [in] evt   event to query
+ * @param [in out] rtEventStatus_t status
+ * @return RT_EVENT_RECORDED  for recorded
+ * @return RT_EVENT_INIT for not recorded
+ */
+RTS_API rtError_t rtEventQueryStatus(rtEvent_t evt, rtEventStatus_t *status);
 
 /**
  * @ingroup dvrt_event
  * @brief computes the elapsed time between events.
- * @param [in] time   time between start and end in ms
- * @param [in] start  starting event
- * @param [in] end  ending event
+ * @param [in] timeInterval   time between start and end in ms
+ * @param [in] startEvent  starting event
+ * @param [in] endEvent  ending event
  * @return RT_ERROR_NONE for ok, errno for failed
  */
-RTS_API rtError_t rtEventElapsedTime(float *time, rtEvent_t start, rtEvent_t end);
+RTS_API rtError_t rtEventElapsedTime(float32_t *timeInterval, rtEvent_t startEvent, rtEvent_t endEvent);
 
 /**
  * @ingroup dvrt_event
  * @brief get the elapsed time from a event after event recorded.
- * @param [in] time   time in ms
- * @param [in] event  event handle
+ * @param [in] timeStamp   time in ms
+ * @param [in] evt  event handle
  * @return RT_ERROR_NONE for ok, errno for failed
  */
-RTS_API rtError_t rtEventGetTimeStamp(uint64_t *time, rtEvent_t event);
+RTS_API rtError_t rtEventGetTimeStamp(uint64_t *timeStamp, rtEvent_t evt);
 
 /**
  * @ingroup dvrt_event
  * @brief name an event
- * @param [in] event  event to be named
+ * @param [in] evt  event to be named
  * @param [in] name  identification name
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input of event, name
  * @return RT_ERROR_DRV_ERR for driver error
  */
-RTS_API rtError_t rtNameEvent(rtEvent_t event, const char *name);
+RTS_API rtError_t rtNameEvent(rtEvent_t evt, const char_t *name);
 
 /**
  * @ingroup dvrt_event
@@ -184,7 +189,7 @@ RTS_API rtError_t rtNotifyDestroy(rtNotify_t notify);
  * @return RT_ERROR_INVALID_VALUE for error input
  * @return RT_ERROR_STREAM_CONTEXT for stream is not in current ctx
  */
-RTS_API rtError_t rtNotifyRecord(rtNotify_t notify, rtStream_t stream);
+RTS_API rtError_t rtNotifyRecord(rtNotify_t notify, rtStream_t stm);
 
 /**
  * @ingroup dvrt_event
@@ -195,19 +200,19 @@ RTS_API rtError_t rtNotifyRecord(rtNotify_t notify, rtStream_t stream);
  * @return RT_ERROR_INVALID_VALUE for error input
  * @return RT_ERROR_STREAM_CONTEXT for stream is not in current ctx
  */
-RTS_API rtError_t rtNotifyWait(rtNotify_t notify, rtStream_t stream);
+RTS_API rtError_t rtNotifyWait(rtNotify_t notify, rtStream_t stm);
 
 /**
  * @ingroup dvrt_event
  * @brief Wait for a notify with time out
- * @param [in] notify_ notify to be wait
- * @param [in] stream_  input stream
+ * @param [in] notify notify to be wait
+ * @param [in] stm  input stream
  * @param [in] timeOut  input timeOut
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
  * @return RT_ERROR_STREAM_CONTEXT for stream is not in current ctx
  */
-RTS_API rtError_t rtNotifyWaitWithTimeOut(rtNotify_t notify_, rtStream_t stream_, uint32_t timeOut);
+RTS_API rtError_t rtNotifyWaitWithTimeOut(rtNotify_t notify, rtStream_t stm, uint32_t timeOut);
 
 /**
  * @ingroup dvrt_event
@@ -217,7 +222,7 @@ RTS_API rtError_t rtNotifyWaitWithTimeOut(rtNotify_t notify_, rtStream_t stream_
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
  */
-RTS_API rtError_t rtNameNotify(rtNotify_t notify, const char *name);
+RTS_API rtError_t rtNameNotify(rtNotify_t notify, const char_t *name);
 
 /**
  * @ingroup dvrt_event
@@ -237,7 +242,7 @@ RTS_API rtError_t rtGetNotifyID(rtNotify_t notify, uint32_t *notifyId);
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input of
  */
-RTS_API rtError_t rtIpcSetNotifyName(rtNotify_t notify, char *name, uint32_t len);
+RTS_API rtError_t rtIpcSetNotifyName(rtNotify_t notify, char_t *name, uint32_t len);
 
 /**
  * @ingroup dvrt_event
@@ -247,7 +252,7 @@ RTS_API rtError_t rtIpcSetNotifyName(rtNotify_t notify, char *name, uint32_t len
  * @return RT_ERROR_NONE for ok
  * @return RT_ERROR_INVALID_VALUE for error input
  */
-RTS_API rtError_t rtIpcOpenNotify(rtNotify_t *notify, const char *name);
+RTS_API rtError_t rtIpcOpenNotify(rtNotify_t *notify, const char_t *name);
 
 /**
  * @ingroup dvrt_event
@@ -270,10 +275,10 @@ RTS_API rtError_t rtNotifyGetAddrOffset(rtNotify_t notify, uint64_t *devAddrOffs
  * @return RT_ERROR_INVALID_VALUE for error input
  * @return RT_ERROR_DRV_ERR for driver error
  */
-RTS_API rtError_t rtSetIpcNotifyPid(const char *name, int32_t pid[], int num);
+RTS_API rtError_t rtSetIpcNotifyPid(const char_t *name, int32_t pid[], int32_t num);
 
 #if defined(__cplusplus)
 }
 #endif
 
-#endif  // __CCE_RUNTIME_EVENT_H__
+#endif  // CCE_RUNTIME_EVENT_H

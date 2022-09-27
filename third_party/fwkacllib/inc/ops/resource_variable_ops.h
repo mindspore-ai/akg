@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright 2019 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -33,10 +33,12 @@ namespace ge {
 *y:A Tensor of type resource. \n
 
 *@par Attributes:
-* @li container: optional, string.
-* @li shared_name: optional, string.
-* @li dtype: required, type.
-* @li shape: optional, ListInt. \n
+* @li container: optional, string. the container this 
+variable is placed in.
+* @li shared_name: optional, string.the name by which
+ this variable is referred to.
+* @li dtype: required, type. the output of type.
+* @li shape: optional, ListInt. the output of shape. \n
 
 *@see VarHandleOp.
 */
@@ -53,11 +55,11 @@ REG_OP(VarHandleOp)
 *@brief Assigns a new value to a variable. \n
 
 *@par Inputs:
-*resource:Handle to the resource in which to store the variable.
-*value:The value to set the new tensor to use. \n
+*@li resource:Handle to the resource in which to store the variable.
+*@li value:The value to set the new tensor to use. \n
 
 *@par Attributes:
-* @li dtype: required, type. \n
+* dtype: required, type. \n
 
 *@see AssignVariableOp.
 */
@@ -73,11 +75,11 @@ REG_OP(AssignVariableOp)
 *@brief Adds a value to the current value of a variable. \n
 
 *@par Inputs:
-*resource:Handle to the resource in which to store the variable.
-*value:The value by which the variable will be incremented. \n
+*@li resource:Handle to the resource in which to store the variable.
+*@li value:The value by which the variable will be incremented. \n
 
 *@par Attributes:
-* @li dtype: required, type. \n
+* dtype: required, type. \n
 
 *@see AssignAddVariableOp.
 */
@@ -93,11 +95,11 @@ REG_OP(AssignAddVariableOp)
 *@brief Subtracts a value to the current value of a variable. \n
 
 *@par Inputs:
-*resource:Handle to the resource in which to store the variable.
-*value:The value by which the variable will be incremented. \n
+*@li resource:Handle to the resource in which to store the variable.
+*@li value:The value by which the variable will be incremented. \n
 
 *@par Attributes:
-* @li dtype: required, type. \n
+* dtype: required, type. \n
 
 *@see AssignSubVariableOp.
 */

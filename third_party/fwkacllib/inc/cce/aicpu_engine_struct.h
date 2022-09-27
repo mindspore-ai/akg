@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright (c) Huawei Technologies Co., Ltd. 2022. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef AICPU_ENGINE_STRUCT_H__
-#define AICPU_ENGINE_STRUCT_H__
+#ifndef AICPU_ENGINE_STRUCT_H
+#define AICPU_ENGINE_STRUCT_H
 
 #include "fwk_adpt_struct.h"
 
@@ -53,4 +53,4 @@ struct SessionInfo {
 #ifdef __cplusplus
 }
 #endif
-#endif  // AICPU_ENGINE_STRUCT_H__
+#endif  // AICPU_ENGINE_STRUCT_H

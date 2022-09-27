@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright 2019 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -35,7 +35,11 @@ namespace ge {
 *@li deltas: The deltas of each range . \n
 
 *@par Outputs:
-*y:A Returns The `row_splits` for the returned `RaggedTensor`.The `flat_values` for the returned `RaggedTensor` . \n
+*@li rt_dense_values:The `flat_values` for the returned `RaggedTensor`.
+*@li rt_nested_splits:The `row_splits` for the returned `RaggedTensor`. \n
+
+*@par Attributes:
+*Tsplits:A type of rt_nested_splits.
 
 *@attention Constraints:
 *The input tensors `starts`, `limits`, and `deltas` may be scalars or vectors.

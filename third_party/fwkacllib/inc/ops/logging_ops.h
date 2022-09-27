@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright 2019 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -111,6 +111,38 @@ REG_OP(PrintV2)
   .INPUT(x, TensorType({DT_STRING}))
   .ATTR(output_stream, String, "stderr")
   .OP_END_FACTORY_REG(PrintV2)
+
+/**
+*@brief Prints a list of tensors. \n
+
+*@par Inputs:
+*x: A tensor passwd through this op . \n
+*data: A list of tensors to print out when op is evaluated. \n
+
+*@par Attributes:
+*message: A string, prefix of the error message. \n
+*first_n: Only log first_n number of times. Negative numbers 
+*log always; this is the default. \n
+*summarize: Only print this many entries of each tensor. 
+*If None, then a maximum of 3 elements are printed per input tensor. \n
+
+*@par Third-party framework compatibility
+*Compatible with tensorflow Print operator . \n
+
+*@par Restrictions:
+*Warning: THIS FUNCTION IS EXPERIMENTAL. Please do not use.
+*/
+REG_OP(PrintV3)
+  .INPUT(x, TensorType({DT_FLOAT, DT_FLOAT16, DT_INT8, DT_INT16, DT_UINT16, DT_UINT8, DT_INT32,
+    DT_INT64, DT_UINT32, DT_UINT64, DT_DOUBLE, DT_STRING}))
+  .DYNAMIC_INPUT(data, TensorType({DT_FLOAT, DT_FLOAT16, DT_INT8, DT_INT16, DT_UINT16, DT_UINT8, DT_INT32,
+    DT_INT64, DT_UINT32, DT_UINT64, DT_DOUBLE, DT_STRING}))
+  .OUTPUT(y, TensorType({DT_FLOAT, DT_FLOAT16, DT_INT8, DT_INT16, DT_UINT16, DT_UINT8, DT_INT32,
+    DT_INT64, DT_UINT32, DT_UINT64, DT_DOUBLE, DT_STRING}))
+  .ATTR(message, String, "")
+  .ATTR(first_n, Int, -1)
+  .ATTR(summarize, Int, 3)
+  .OP_END_FACTORY_REG(PrintV3)
 }  // namespace ge
 
 #endif  // OPS_BUILT_IN_OP_PROTO_INC_LOGGING_OPS_H_

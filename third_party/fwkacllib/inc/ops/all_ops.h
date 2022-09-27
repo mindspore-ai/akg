@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
+ * Copyright 2019 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,8 +39,10 @@
 #include "image_ops.h"
 #include "internal_ops.h"
 #include "linalg_ops.h"
+#include "list_ops.h"
 #include "logging_ops.h"
 #include "lookup_ops.h"
+#include "map_ops.h"
 #include "math_ops.h"
 #include "matrix_calculation_ops.h"
 #include "nn_batch_norm_ops.h"
@@ -76,4 +78,7 @@
 #include "transformation_ops.h"
 #include "condtake_ops.h"
 #include "warp_perspective_ops.h"
+#include "vector_search.h"
+#include "deep_md.h"
+#include "encoding_ops.h"
 #endif  // OPS_BUILT_IN_OP_PROTO_INC_ALL_OPS_H_

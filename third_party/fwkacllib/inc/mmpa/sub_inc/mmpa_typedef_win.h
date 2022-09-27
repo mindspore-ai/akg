@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Copyright 2019-2020 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -62,6 +62,9 @@ extern "C" {
 #define MMPA_LOW_NI (-5)
 #define MMPA_MIN_NI (-20)
 #define MMPA_MAX_FILE 128
+
+#define MMPA_PATH_SEPARATOR_STR "\\"
+#define MMPA_PATH_SEPARATOR_CHAR '\\'
 
 #define MMPA_MAX_THREAD_PIO 99
 #define MMPA_MIDDLE_THREAD_PIO 66

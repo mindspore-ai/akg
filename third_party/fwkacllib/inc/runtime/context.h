@@ -1,21 +1,11 @@
-/**
- * Copyright 2019-2020 Huawei Technologies Co., Ltd
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+/*
+ * Copyright (c) Huawei Technologies Co., Ltd. 2020-2021. All rights reserved.
+ * Description: context.h
+ * Create: 2020-01-01
  */
 
-#ifndef __CCE_RUNTIME_CONTEXT_H__
-#define __CCE_RUNTIME_CONTEXT_H__
+#ifndef CCE_RUNTIME_CONTEXT_H
+#define CCE_RUNTIME_CONTEXT_H
 
 #include "base.h"
 
@@ -53,46 +43,57 @@ typedef struct tagRtGroupInfo {
 /**
  * @ingroup rt_context
  * @brief create context and associates it with the calling thread
- * @param [out] ctx   created context
+ * @param [out] createCtx   created context
  * @param [in] flags   context creation flag. set to 0.
- * @param [in] device    device to create context on
+ * @param [in] devId    device to create context on
  * @return RT_ERROR_NONE for ok
  */
-RTS_API rtError_t rtCtxCreate(rtContext_t *ctx, uint32_t flags, int32_t device);
+RTS_API rtError_t rtCtxCreate(rtContext_t *createCtx, uint32_t flags, int32_t devId);
 
 /**
  * @ingroup rt_context
  * @brief create context and associates it with the calling thread
- * @param [out] ctx   created context
+ * @param [out] createCtx   created context
  * @param [in] flags   context creation flag. set to 0.
- * @param [in] device    device to create context on
+ * @param [in] devId    device to create context on
+ * @param [in] deviceMode    the device mode
  * @return RT_ERROR_NONE for ok
  */
-RTS_API rtError_t rtCtxCreateEx(rtContext_t *ctx, uint32_t flags, int32_t device);
+RTS_API rtError_t rtCtxCreateV2(rtContext_t *createCtx, uint32_t flags, int32_t devId, rtDeviceMode deviceMode);
+
+/**
+ * @ingroup rt_context
+ * @brief create context and associates it with the calling thread
+ * @param [out] createCtx   created context
+ * @param [in] flags   context creation flag. set to 0.
+ * @param [in] devId    device to create context on
+ * @return RT_ERROR_NONE for ok
+ */
+RTS_API rtError_t rtCtxCreateEx(rtContext_t *createCtx, uint32_t flags, int32_t devId);
 
 /**
  * @ingroup rt_context
  * @brief destroy context instance
- * @param [in] ctx   context to destroy
+ * @param [in] destroyCtx   context to destroy
  * @return RT_ERROR_NONE for ok
  */
-RTS_API rtError_t rtCtxDestroy(rtContext_t ctx);
+RTS_API rtError_t rtCtxDestroy(rtContext_t destroyCtx);
 
 /**
  * @ingroup rt_context
  * @brief destroy context instance
- * @param [in] ctx   context to destroy
+ * @param [in] destroyCtx   context to destroy
  * @return RT_ERROR_NONE for ok
  */
-RTS_API rtError_t rtCtxDestroyEx(rtContext_t ctx);
+RTS_API rtError_t rtCtxDestroyEx(rtContext_t destroyCtx);
 
 /**
  * @ingroup rt_context
  * @brief binds context to the calling CPU thread.
- * @param [in] ctx   context to bind. if NULL, unbind current context.
+ * @param [in] currentCtx   context to bind. if NULL, unbind current context.
  * @return RT_ERROR_NONE for ok
  */
-RTS_API rtError_t rtCtxSetCurrent(rtContext_t ctx);
+RTS_API rtError_t rtCtxSetCurrent(rtContext_t currentCtx);
 
 /**
  * @ingroup rt_context
@@ -104,26 +105,26 @@ RTS_API rtError_t rtCtxSynchronize(void);
 /**
  * @ingroup rt_context
  * @brief returns the context bound to the calling CPU thread.
- * @param [out] ctx   returned context
+ * @param [out] currentCtx   returned context
  * @return RT_ERROR_NONE for ok
  */
-RTS_API rtError_t rtCtxGetCurrent(rtContext_t *ctx);
+RTS_API rtError_t rtCtxGetCurrent(rtContext_t *currentCtx);
 
 /**
  * @ingroup rt_context
  * @brief returns the primary context of device.
- * @param [out] ctx   returned context
+ * @param [out] primaryCtx   returned context
  * @return RT_ERROR_NONE for ok
  */
-RTS_API rtError_t rtGetPriCtxByDeviceId(int32_t device, rtContext_t *ctx);
+RTS_API rtError_t rtGetPriCtxByDeviceId(int32_t devId, rtContext_t *primaryCtx);
 
 /**
  * @ingroup rt_context
  * @brief returns the device ID for the current context
- * @param [out] device   returned device id
+ * @param [out] devId   returned device id
  * @return RT_ERROR_NONE for ok
  */
-RTS_API rtError_t rtCtxGetDevice(int32_t *device);
+RTS_API rtError_t rtCtxGetDevice(int32_t *devId);
 
 /**
  * @ingroup
@@ -139,7 +140,7 @@ RTS_API rtError_t rtSetGroup(int32_t groupId);
  * @param [in] groupid count
  * @return RT_ERROR_NONE for ok, errno for failed
  */
-RTS_API rtError_t rtGetGroupInfo(int32_t groupId, rtGroupInfo_t *groupInfo, uint32_t count);
+RTS_API rtError_t rtGetGroupInfo(int32_t groupId, rtGroupInfo_t *groupInfo, uint32_t cnt);
 
 /**
  * @ingroup
@@ -147,19 +148,19 @@ RTS_API rtError_t rtGetGroupInfo(int32_t groupId, rtGroupInfo_t *groupInfo, uint
  * @param [in] groupid count
  * @return RT_ERROR_NONE for ok, errno for failed
  */
-RTS_API rtError_t rtGetGroupCount(uint32_t *count);
+RTS_API rtError_t rtGetGroupCount(uint32_t *cnt);
 
 /**
  * @ingroup rt_context
  * @brief set context INF mode
- * @param [in] mode
+ * @param [in] infMode
  * @return RT_ERROR_NONE for ok
  */
-RTS_API rtError_t rtSetCtxINFMode(bool mode);
+RTS_API rtError_t rtSetCtxINFMode(bool infMode);
 
 #if defined(__cplusplus)
 }
 #endif
 
 
-#endif  // __CCE_RUNTIME_CONTEXT_H__
+#endif  // CCE_RUNTIME_CONTEXT_H
