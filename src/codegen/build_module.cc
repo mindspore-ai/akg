@@ -314,9 +314,13 @@ void RenameBinds(Map<Tensor, Buffer> &binds, const BuildConfig &config, Array<No
             .output(0);
       } else if (auto pop = old_tensor->op.as<air::PlaceholderOpNode>()) {
         new_tensor = air::PlaceholderOpNode::make(new_name, pop->shape, pop->dtype).output(0);
+      } else if (auto eop = old_tensor->op.as<air::ExternOpNode>()) {
+        new_tensor = air::ExternOpNode::make(new_name, eop->tag, eop->attrs, eop->inputs, eop->input_placeholders,
+                                             eop->output_placeholders, eop->body)
+                       .output(0);
       } else {
         LOG(FATAL) << "The tensor op [" << old_tensor
-                   << "] is not in the supported list: ComputeOpNode, HybridOpNode or PlaceholderOpNode.";
+                   << "] is not in the supported list: ComputeOpNode, HybridOpNode, ExternOpNode or PlaceholderOpNode.";
       }
 
       tensor_replace.Set(old_tensor, new_tensor);
@@ -474,7 +478,7 @@ void FixParametricBinds(const Map<Tensor, Buffer> &binds, const Array<NodeRef> &
       output_buffer = DeclBuffer(tt, config->data_alignment, config->offset_factor, x.second->name);
       out_binds->Set(tt, output_buffer);
     } else if (x.second->name.find(kernel) != std::string::npos) {
-      CHECK_EQ(x.second->shape.size(), 4);
+      CHECK_EQ(x.second->shape.size(), SHAPE_SIZE - 1);
       auto n = CI1 * KH * KW;
       shape.push_back(n);
       shape.push_back(x.second->shape[1]);
