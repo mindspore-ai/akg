@@ -102,7 +102,6 @@ std::string GetProcess(const picojson::value &input_json) {
   return GetRealTarget(target) + option;
 }
 
-
 picojson::value String2Json(const std::string &json_str) {
   picojson::value v;
   std::string err = picojson::parse(v, json_str);
@@ -570,11 +569,20 @@ Map<std::string, NodeRef> SetBuildInfo(const BuildInfo &info) {
   for (const auto &name : info.output_names) {
     output_names_arr.push_back(Expr(name));
   }
+  // Record the inplace tensor names, which will saved in the .info file later.
+  Map<std::string, Expr> inplace;
+  for (const auto &it : info.opt.inplaces) {
+    auto call = it.second.as<Call>();
+    if (it.first.defined() && call != nullptr) {
+      inplace.Set(it.first->func_name(), Expr(call->name));
+    }
+  }
   Map<std::string, NodeRef> build_info;
   build_info.Set("op", Expr(info.kernel_name));
   build_info.Set("process", Expr(info.opt.target));
   build_info.Set("input_names", input_names_arr);
   build_info.Set("output_names", output_names_arr);
+  build_info.Set("inplace", inplace);
   return build_info;
 }
 }  // namespace akg

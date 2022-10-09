@@ -25,18 +25,17 @@ namespace akg {
 
 class TranslatePassMgr {
  public:
-  using PassFunc = std::function<Stmt(const Stmt&, BuildInfo*)>;
+  using PassFunc = std::function<Stmt(const Stmt &, BuildInfo *)>;
 
-  explicit TranslatePassMgr(BuildInfo *info) : info_(info) {}
+  explicit TranslatePassMgr(BuildInfo *info, const std::string &dump_dir_suffix = "composite")
+      : info_(info), dump_dir_suffix_(dump_dir_suffix) {}
   ~TranslatePassMgr() = default;
 
-  void Register(const std::string &name, PassFunc pass) {
-    passes_.emplace_back(std::make_pair(name, pass));
-  }
+  void Register(const std::string &name, PassFunc pass) { passes_.emplace_back(std::make_pair(name, pass)); }
 
   Stmt Run(const Stmt &s) {
     auto file_name = !info_->opt.stitch
-                       ? info_->kernel_name + "_composite"
+                       ? info_->kernel_name + "_" + dump_dir_suffix_
                        : "stitch_info/" + info_->kernel_name + "_stitch_" + std::to_string(info_->opt.stitch_ir_idx);
     auto enable_dump = info_->opt.enable_dump && getenv(GetDumpIRFlag().c_str()) != nullptr;
     auto dump_mng = DumpManager(file_name, enable_dump);
@@ -51,9 +50,12 @@ class TranslatePassMgr {
 
  private:
   BuildInfo *info_;
+  std::string dump_dir_suffix_;
   std::vector<std::pair<std::string, PassFunc>> passes_;
 };
 
 Stmt Optimize(Stmt &s, BuildInfo &info);
+
+Stmt OptimizeForTBE(const Stmt &s, BuildInfo &info);
 }  // namespace akg
 #endif  // COMPOSITE_OPTIMIZE_H_

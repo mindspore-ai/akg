@@ -77,5 +77,7 @@ Stmt BroadcastForSSA(const Stmt &s, BuildInfo *info);
 // change logicalor to add
 Stmt LogicalOrToAdd(const Stmt &s, BuildInfo *info);
 
+// eliminate InplaceAssign
+Stmt ElimInplaceAssign(const Stmt &s, BuildInfo *info);
 }  // namespace akg
 #endif  // COMPOSITE_PASS_H_
