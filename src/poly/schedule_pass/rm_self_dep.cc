@@ -694,10 +694,16 @@ isl::union_map RemoveReduceOpSelfDependence(ScopInfo &scop_info, PassInfo &pass_
           if (is_tuple_reduce_op[tuple_id_key] >= 1 && scop_info.user_config_.GetEnableAtomicAdd() &&
               !res.second.empty()) {
             bool is_global = false;
-            for (auto it : scop_info.user_config_.GetOriginBind()) {
-              if (it.first->op->name == res.second) {
-                is_global = true;
-                break;
+            auto reduce_atomicadd_tensors = scop_info.analysis_result_.GetReduceAtomcAddTensors();
+            if (reduce_atomicadd_tensors.find(res.second) != reduce_atomicadd_tensors.end()) {
+              is_global = true;
+            }
+            else {
+              for (auto it : scop_info.user_config_.GetOriginBind()) {
+                if (it.second->data->name_hint == res.second) {
+                  is_global = true;
+                  break;
+                }
               }
             }
             if (is_global) {

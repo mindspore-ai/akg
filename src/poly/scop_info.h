@@ -1241,6 +1241,10 @@ class AnalysisResult {
     return reduce_direction_map_;
   }
 
+  std::unordered_set<std::string> GetReduceAtomcAddTensors() const { return reduce_atomicadd_tensors_; }
+  void RecordReduceAtomcAddTensors(const std::string &tensor_name) { reduce_atomicadd_tensors_.insert(tensor_name); }
+
+
   // the whole operator information
   void SetOpTemplate(Template op_template) { op_template_ = op_template; }
   Template GetOpTemplate() { return op_template_; }
@@ -1360,6 +1364,7 @@ class AnalysisResult {
   std::vector<const Variable *> reduce_axis_;
   std::vector<const Variable *> not_reduce_axis_;
   std::vector<const Provide *> inplace_assign_nodes_;
+  std::unordered_set<std::string> reduce_atomicadd_tensors_;
   unsigned int batch_axis_num_;
 
   isl::union_map reads_;
