@@ -22,6 +22,12 @@ namespace ir {
 namespace poly {
 Tensor::Tensor() : datatype_{Tensor::DataType::Float16} {}
 
+Tensor::Tensor(const std::shared_ptr<Tensor> &orig_tensor)
+    : shape_{orig_tensor->shape_},
+      datatype_{orig_tensor->datatype_},
+      format_{orig_tensor->format_},
+      name_{orig_tensor->name_} {}
+
 Tensor::Tensor(const std::vector<int64_t> &shape, DataType datatype, const std::string &format)
     : shape_{shape}, datatype_{datatype}, format_{format}, name_{} {}
 

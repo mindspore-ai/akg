@@ -29,11 +29,14 @@ int ParseInt(const air::Integer &num);
 std::vector<int> ParseIntArray(const air::Array<air::Integer> &arr);
 std::vector<std::string> ParseStringArray(const air::Array<air::Expr> &arr);
 std::string StripRename(std::string name);
-int64_t Get2PowerBelow(int64_t num);
+int64_t Get2PowerLess(int64_t num);
+int64_t Get2PowerLessEq(int64_t num);
+int64_t GetLowestPrimeFactorsProductBelow(int64_t num, int64_t ulimit);
 
 const int kByTwo = 2;
 const size_t kByTwoUL = 2;
 const int64_t kByTwoL = 2;
+const float kMaxAllowedAllocPercentage = 0.9;
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

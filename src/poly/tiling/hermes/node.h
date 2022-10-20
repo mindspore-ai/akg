@@ -38,11 +38,13 @@ class Node {
   };
 
   Node();
+  explicit Node(const std::shared_ptr<Node> &);
   Node(const std::string &, const Op &, const std::vector<std::shared_ptr<Tensor>> &,
        const std::vector<std::shared_ptr<Tensor>> &, const std::vector<std::shared_ptr<Node>> &,
        const std::vector<std::shared_ptr<Node>> &, const std::vector<Axis> &, const std::vector<Tensor> &,
        const std::map<std::string, std::map<Tensor, int64_t>> &, const std::list<attributes> &);
 
+  static void SetNodesAxisDim(std::vector<std::shared_ptr<Node>> &nodes);
   bool HasName() const;
   bool HasAxis(const Axis &);
   bool HasAttr(const std::string &attr) const;

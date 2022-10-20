@@ -69,9 +69,7 @@ class TilingGenerator {
 
   std::pair<TileSizes, std::deque<ParamInfo>> GenerateDynamic();
 
-  TileSizes HermesTiling(TileSizes dims);
-
-  void ExtractAxisInfoFromScheduler(const isl::schedule &sch);
+  TileSizes HermesTiling(const isl::schedule &sch, TileSizes dims);
 
   Array<Expr> memory_constraints_;
 
@@ -100,8 +98,6 @@ class TilingGenerator {
                                                 std::vector<Tensor> &transformed_output_shape);
 
   static std::map<std::string, std::map<Tensor, int>> GetAxisToTensorToShapeIdMap(const std::shared_ptr<Node> &node);
-
-  static std::vector<Axis> GetAxisDimFromGlobal(std::vector<Axis> &axis_of_node);
 
   TilingAnalyzer &analyzer_;
   TileCandidate *cand_{nullptr};

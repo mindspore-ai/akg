@@ -16,11 +16,31 @@
 #include <dmlc/logging.h>
 
 #include "poly/tiling/hermes/node.h"
+#include "poly/tiling/hermes/model_graph.h"
 
 namespace akg {
 namespace ir {
 namespace poly {
 Node::Node() : op_{Op()} {}
+
+Node::Node(const std::shared_ptr<Node> &orig_node)
+    : name_{orig_node->name_},
+      op_{orig_node->op_},
+      succ_{orig_node->succ_},
+      pred_{orig_node->pred_},
+      axis_of_node_{orig_node->axis_of_node_},
+      transformed_output_shape_{orig_node->transformed_output_shape_},
+      axis_to_tensor_to_shape_id_map_{orig_node->axis_to_tensor_to_shape_id_map_},
+      attrs_{orig_node->attrs_} {
+  output_tensors_.reserve(orig_node->output_tensors_.size());
+  for (auto const &tensor : orig_node->output_tensors_) {
+    output_tensors_.push_back(std::make_shared<Tensor>(tensor));
+  }
+  input_tensors_.reserve(orig_node->input_tensors_.size());
+  for (auto const &tensor : orig_node->input_tensors_) {
+    input_tensors_.push_back(std::make_shared<Tensor>(tensor));
+  }
+}
 
 Node::Node(const std::string &name, const Op &op, const std::vector<std::shared_ptr<Tensor>> &output_tensors,
            const std::vector<std::shared_ptr<Tensor>> &input_tensors, const std::vector<std::shared_ptr<Node>> &succ,
@@ -38,6 +58,18 @@ Node::Node(const std::string &name, const Op &op, const std::vector<std::shared_
       transformed_output_shape_{transformed_output_shape},
       axis_to_tensor_to_shape_id_map_{axis_to_tensor_to_shape_id_map},
       attrs_{attrs} {}
+
+void Node::SetNodesAxisDim(std::vector<std::shared_ptr<Node>> &nodes) {
+  for (auto &node : nodes) {
+    for (auto &axis : node->axis_of_node_) {
+      for (auto const &name_dim_range : ModelGraph::name_dim_range_set_) {
+        if (axis.name_ == std::get<0>(name_dim_range) && axis.range_ == std::get<2>(name_dim_range)) {
+          axis.dim_axis_ = std::get<1>(name_dim_range);
+        }
+      }
+    }
+  }
+}
 
 bool Node::HasName() const { return !(this->name_.empty()); }
 

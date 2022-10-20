@@ -16,10 +16,12 @@
 #ifndef POLY_TILING_HERMES_AXIS_H_
 #define POLY_TILING_HERMES_AXIS_H_
 
+#include <map>
 #include <set>
 #include <string>
-#include <utility>
 #include <vector>
+
+#include "isl/cpp.h"
 
 namespace akg {
 namespace ir {
@@ -38,6 +40,8 @@ class Axis {
 
   Axis() = default;
 
+  static void SetGlobalAxisName();
+
   std::string name_;
   std::string gemm_axis_;
   int index_{0};
@@ -51,6 +55,42 @@ class Axis {
   bool is_innermost_{false};
   bool is_reduce_axis_{false};
   bool is_reduce_src_last_{false};
+};
+
+class ScheduleAxisInfo {
+ public:
+  ScheduleAxisInfo() = default;
+
+  static void GetAxisInfo(const isl::schedule &sch);
+
+ private:
+  struct AxisRange {
+    int64_t lb{0};
+    int64_t ub{0};
+    int64_t stride{0};
+  };
+
+  struct AxisDim {
+    std::string name;
+    int statement_dim{0};
+    int schedule_dim{0};
+    int offset{0};
+  };
+
+  struct AxisInfo {
+    std::string name;
+    std::map<std::string, AxisDim> mapping;
+    std::vector<AxisRange> ranges;
+  };
+
+  static void GetAxisRanges(__isl_keep isl_schedule *tree, std::map<std::string, AxisInfo> *result);
+  static void GetAxisRanges(__isl_keep isl_union_set *full_domain, __isl_keep isl_union_map *schedule,
+                            std::map<std::string, AxisInfo> *result);
+  static void GetAxisMapping(__isl_keep isl_schedule *tree, std::map<std::string, AxisInfo> *result);
+  static void GetAxisMapping(__isl_keep isl_union_map *umap, std::map<std::string, AxisInfo> *result);
+  static void GetAxisMapping(__isl_keep isl_map *map, std::map<std::string, AxisInfo> *result);
+  static void GetAxisMapping(__isl_keep isl_basic_map *bmap, std::map<std::string, AxisInfo> *result);
+  static std::vector<std::string> GetTupleNames(__isl_keep isl_union_set *uset);
 };
 }  // namespace poly
 }  // namespace ir

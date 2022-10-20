@@ -33,15 +33,15 @@ int64_t GetMcAxisSize(Hardware hardware, int64_t min_shape, int data_coef);
 std::tuple<float, float> GetTileAndMulticoreAxisSizes(const Axis &current_axis, const Axis &critical_node_axis,
                                                       const std::vector<Axis> &global_axis_vec_, float curr_tile_size,
                                                       float curr_tile_multicore_axis_size);
-void ExtendMulticoreAxisTile(const Axis &axis, const ModelGraph &model_graph, Hardware hardware);
-int64_t GetTileFromRemainingVecGranularity(const Axis &global_axis, int data_coef, int64_t axis_result);
+void ExtendMulticoreAxisTile(Axis &axis, const ModelGraph &model_graph, Hardware hardware);
+int64_t GetTileFromRemainingBuffer(const Axis &axis, int data_coef, int64_t axis_result, int64_t max_alloc_buffer);
+int64_t GetTileFromRemainingVecGranularity(const Axis &axis, int data_coef, int64_t axis_result);
 
 const int64_t kSmallAxisSize = 300;
 const int64_t kFloat16LoadGranularity = 128;
 const int64_t kFloat32LoadGranularity = 64;
-const int64_t kReduceMinShapeThreshold = 64;
+const int64_t kMinShapeThreshold = 64;
 const int kVectorizationGranularity = 128;
-const float kMaxAllowedAllocPercentage = 0.9;
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg

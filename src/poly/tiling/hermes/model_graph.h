@@ -38,12 +38,14 @@ class ModelGraph : public InitGraph {
   ModelGraph() = default;
 
   std::tuple<int64_t, int> GetMinShapeAndDataCoef(const Axis &axis) const;
+  static void InsertToNameDimRangeSet(const std::string &dim_name, const int sch_dim, const int64_t &range);
 
   std::vector<std::shared_ptr<Node>> critical_nodes_;
+  Op::OpCategory dominant_category_;
   bool is_activated_double_buffer_{false};
 
   static std::vector<Axis> global_axis_vec_;
-  static std::set<std::pair<std::string, size_t>> name_dim_set_;
+  static std::set<std::tuple<std::string, int, int64_t>> name_dim_range_set_;
 
  private:
   static void CompleteNodesGeneratedByReduce(InitGraph &init_graph);

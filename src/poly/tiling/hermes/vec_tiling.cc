@@ -38,7 +38,7 @@ int64_t GetVecAxis(const Axis &axis, const ModelGraph &model_graph, Hardware har
 
   axis_result = std::min(max_alloc_buffer, min_shape);
   if ((axis_result != min_shape) && (axis_result & (axis_result - 1)) != 0) {
-    axis_result = Get2PowerBelow(axis_result);
+    axis_result = Get2PowerLess(axis_result);
   }
 
   axis_result = std::min(min_shape, axis_result);
@@ -46,12 +46,12 @@ int64_t GetVecAxis(const Axis &axis, const ModelGraph &model_graph, Hardware har
   int last_dim_axis = GetLastDimAxis();
   if (last_dim_axis - axis.dim_axis_ > 1) {
     if ((upper_bound_buffer != min_shape) && (upper_bound_buffer & (upper_bound_buffer - 1)) != 0) {
-      upper_bound_buffer = Get2PowerBelow(upper_bound_buffer);
+      upper_bound_buffer = Get2PowerLess(upper_bound_buffer);
     }
     if (axis.is_innermost_) {
       auto avg_tiling = static_cast<int64_t>(std::pow(static_cast<float>(max_alloc_buffer),
                                                       1.0F / static_cast<float>((last_dim_axis - axis.dim_axis_ + 1))));
-      avg_tiling = (avg_tiling & (avg_tiling - 1)) != 0 ? Get2PowerBelow(avg_tiling) : avg_tiling;
+      avg_tiling = (avg_tiling & (avg_tiling - 1)) != 0 ? Get2PowerLess(avg_tiling) : avg_tiling;
       avg_tiling = std::max(avg_tiling,
                             upper_bound_buffer);  // no need to reduce the tiling if there is enough space to fully tile
       axis_result = std::min(axis_result, avg_tiling);
@@ -80,7 +80,7 @@ int64_t GetVecAxis(const Axis &axis, const ModelGraph &model_graph, Hardware har
           (penultimate_axis.c0_tiling_ * axis.range_ > axis_result * penultimate_axis.range_) &&
           penultimate_axis.c0_tiling_ > static_cast<int64_t>(hardware.vblocknum_))) &&
         axis_result < min_shape && axis_result < axis.range_) {
-      ModelGraph::global_axis_vec_[second_last_global_axis].c0_tiling_ = Get2PowerBelow(penultimate_axis.c0_tiling_);
+      ModelGraph::global_axis_vec_[second_last_global_axis].c0_tiling_ = Get2PowerLess(penultimate_axis.c0_tiling_);
       axis_result = GetVecAxis(axis, model_graph, hardware);
     }
   }
@@ -155,7 +155,7 @@ int64_t GetMixTypeAxis(const Axis &axis, const ModelGraph &model_graph, Hardware
   }
 
   if (axis_result != min_shape && (axis_result & (axis_result - 1)) != 0) {
-    axis_result = Get2PowerBelow(axis_result);
+    axis_result = Get2PowerLess(axis_result);
   }
 
   return axis_result;
@@ -173,6 +173,78 @@ bool PrioAxis(const Axis &axis, const ModelGraph &model_graph) {
     }
   }
   return prio;
+}
+
+void ExtendVecAxisTile(Axis &axis, const ModelGraph &model_graph, Hardware hardware) {
+  int64_t available_tiling = axis.range_ / axis.c0_tiling_;
+  if (available_tiling <= 1) {
+    return;
+  }
+
+  int64_t axis_result = 1;
+
+  int64_t min_shape = axis.range_;
+  int data_coef = 0;
+  std::tie(std::ignore, data_coef) = model_graph.GetMinShapeAndDataCoef(axis);
+
+  int64_t curr_max_alloc_buffer = 0;
+  int64_t upper_bound_buffer = 0;
+  std::tie(curr_max_alloc_buffer, upper_bound_buffer) =
+    GetMaxAllocAndUpperBoundBuffer(hardware.mem_VC_size_, hardware.mem_VC_align_, axis, model_graph.critical_nodes_);
+
+  if (model_graph.dominant_category_ == Op::OpCategory::Injective) {
+    int64_t prime_factors_prod = GetLowestPrimeFactorsProductBelow(axis.range_, curr_max_alloc_buffer);
+    if (prime_factors_prod > axis.c0_tiling_) {
+      axis.c0_tiling_ = prime_factors_prod;
+      return;
+    }
+  }
+
+  axis_result = std::min(curr_max_alloc_buffer, min_shape);
+  if ((axis_result != min_shape) && (axis_result & (axis_result - 1)) != 0) {
+    axis_result = Get2PowerLess(axis_result);
+  }
+
+  if (axis_result == 0) {
+    return;
+  }
+
+  int64_t remaining_tiling = curr_max_alloc_buffer / axis_result;
+  if (remaining_tiling < 1) {
+    return;
+  }
+
+  if (hardware.num_core_ == 0) {
+    LOG(WARNING) << "Number of cores is 0!";
+    return;
+  }
+
+  size_t num_mc_axis = axis.type_.count(Axis::AxisLabel::kMultiCore);
+
+  for (int64_t i = remaining_tiling; i > 0; --i) {
+    if (available_tiling % i == 0) {
+      int64_t axis_range = axis.range_;
+      int64_t axis_tile = axis.c0_tiling_;
+      if (available_tiling > static_cast<int64_t>(hardware.num_core_) &&
+          ((num_mc_axis != 0 && available_tiling / static_cast<int64_t>(hardware.num_core_) < i) ||
+           axis_range % (i * axis_tile) != 0 || (i * axis_tile) % static_cast<int64_t>(hardware.num_core_) != 0)) {
+        continue;
+      }
+      int64_t old_tiling = axis.c0_tiling_;
+      axis.c0_tiling_ *= i;
+      int64_t max_alloc_buffer = 0;
+      std::tie(max_alloc_buffer, std::ignore) = GetMaxAllocAndUpperBoundBuffer(
+        hardware.mem_VC_size_, hardware.mem_VC_align_, axis, model_graph.critical_nodes_);
+      auto max_percentage =
+        static_cast<int64_t>(std::round(static_cast<float>(max_alloc_buffer) * kMaxAllowedAllocPercentage));
+      if (max_percentage < axis_result || axis.c0_tiling_ < old_tiling) {
+        axis.c0_tiling_ = old_tiling;
+      } else {
+        remaining_tiling /= i;
+        break;
+      }
+    }
+  }
 }
 }  // namespace poly
 }  // namespace ir
