@@ -63,9 +63,10 @@ def gen_data(in_shape, in_dtype, inter_dtype, layout, out_dtype):
     return data, output, expect
 
 def fused_bn_follow_relu_avgpool_run(in_shape, layout='NHWC', in_dtype='float16', out_dtype='float16', poly_sch=True, attrs=None):
+    default_attrs = { "enable_akg_reduce_lib": True, "enable_atomic_add": True, "polytops_parameter_shifting": True }
     if not attrs:
         attrs = {"target": "cuda"}
-    attrs.update({"enable_akg_reduce_lib": True, "enable_atomic_add": True})
+    attrs.update(default_attrs)
     if layout != "NHWC" and layout != "NCHW":
         raise NotImplementedError(
             'Layout not supported {} '.format(layout))

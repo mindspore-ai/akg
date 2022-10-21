@@ -50,7 +50,7 @@ def gen_data(shape_data, pool_type, dtype, data_layout):
 def global_pooling_run(shape_data, pool_type, dtype,
                        data_layout="NCHWc", poly_sch=True, attrs=None):
 
-    default_attrs = {"enable_auto_fuse": True}
+    default_attrs = {"enable_auto_fuse": True, "polytops_parameter_shifting": True, "polytops_enable_skewing": False}
     attrs = {} if attrs == None else attrs
     attrs.update(default_attrs)
     attrs["target"] = attrs.get("target", "llvm")

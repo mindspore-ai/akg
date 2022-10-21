@@ -88,6 +88,9 @@ def gen_data(axis, dtype, shape):
 
 
 def softmax_compile(shape, dtype, axis, kernel_name, attrs, tuning=False):
+    default_attrs = { "polytops_code_sinking": False }
+    attrs = {} if attrs is None else attrs
+    attrs.update(default_attrs)
     if attrs is not None and attrs.get("dynamic"):
         var_shape = []
         for i in range(len(shape)):

@@ -88,7 +88,7 @@ def conv_run(shape_data, shape_weight, stride=(1,1), padding=(0,0,0,0), dilation
         default_attrs.update(attrs)
     if use_tensor_core:
         op_attrs += [out_dtype]
-        default_attrs.update({"pragma_enable_matmul": True, "pragma_enable_conv_tensor_core": True})
+        default_attrs.update({"pragma_enable_matmul": True, "pragma_enable_conv_tensor_core": True, "polytops_enable_skewing": False})
         if poly_sch:
             mod = utils.op_build_test(
                 TensorcoreConv, (shape_data, shape_weight), (dtype, dtype),

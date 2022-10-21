@@ -46,7 +46,7 @@ namespace runtime {
 class Options;
 }  // namespace runtime
 
-/// \brief Scop for PolyTOPS
+/// \brief SCoP for PolyTOPS
 template <typename T>
 class Scop;
 
@@ -107,10 +107,10 @@ class Options {
   /// \brief Get a string representation of a Solver type
   /// \param t Type to represent as a string
   /// \return A string representation of \a t
-  /// \relatesalso polytops::bin::Options::SolverType
+  /// \relatesalso polytops::bin::Options::Type
   static std::shared_ptr<char> SolverTypeToString(polytops::bin::Options::SolverType t);
 
-  /// \brief Read a SolverType type from a string representation
+  /// \brief Read a Type type from a string representation
   /// \param s String to read
   /// \return Read Solver type
   /// \relatesalso polytops::bin::Options::SolverType
@@ -227,12 +227,6 @@ class Options {
   /// \retval false otherwise
   [[gnu::pure]] bool GetParameterShifting(void) const;
 
-  /// \brief Get the matrix init behaviour
-  /// \return A boolean value that indicates whether lp problems should be initialized with whole matrices
-  /// \retval true if whole matrix initialization is enabled
-  /// \retval false otherwise
-  [[gnu::pure]] bool GetWholeMatrixInitialization(void) const;
-
   /// \brief Get the full sets post processing behaviour
   /// \return A boolean value that indicates whether full sets post processing is enabled or disabled
   /// \retval true full sets post processing is enabled
@@ -244,6 +238,52 @@ class Options {
   /// \retval true Extra parallel outer loop post processing is enabled
   /// \retval false otherwise
   [[gnu::pure]] bool GetExtraParallelOuterLoopPostProcessing(void) const;
+
+  /// \brief Get the large outer bounds behaviour
+  /// \return A boolean value that indicates whether large outer bounds are taken into account
+  /// \retval true if large outer bounds are taken into account
+  /// \retval false otherwise
+  [[gnu::pure]] bool GetEnableLargeOuterBounds(void) const;
+
+  /// \brief Get the skewing behaviour
+  /// \return A boolean value that indicates whether skewing is enabled
+  /// \retval true if skewing is enabled
+  /// \retval false otherwise
+  [[gnu::pure]] bool GetEnableSkewing(void) const;
+
+  /// \brief Get the parallel-only skewing only behaviour
+  /// \return A boolean value that indicates whether parallel-only skewing is enabled
+  /// \retval true if skewing is enabled
+  /// \retval false otherwise
+  [[gnu::pure]] bool GetEnableParallelSkewingOnly(void) const;
+
+  /// \brief Get the iterator binding behaviour
+  /// \return A boolean value that indicates whether iterator binding is enabled
+  /// \retval true if iterator binding is enabled
+  /// \retval false otherwise
+  [[gnu::pure]] bool GetEnableIteratorBinding(void) const;
+
+  /// \brief Get the progression relaxation behaviour
+  /// \return A boolean value that indicates whether progression relaxation is enabled
+  /// \retval true if progression relaxation is enabled
+  /// \retval false otherwise
+  [[gnu::pure]] bool GetEnableRelaxProgression(void) const;
+
+  /// \brief Get the problem dumping behaviour
+  /// \return A boolean value that indicates whether problem dumping is enabled
+  /// \retval true if problem dumping is enabled
+  /// \retval false otherwise
+  [[gnu::pure]] bool GetDumpProblems(void) const;
+
+  /// \brief Get the timer behaviour
+  /// \return A boolean value that indicates whether timers are enabled
+  /// \retval true if timers are enabled
+  /// \retval false otherwise
+  [[gnu::pure]] bool GetTimersAreEnabled(void) const;
+
+  /// \brief Get the timers
+  /// \return String of the timers
+  std::shared_ptr<char> GetTimers(void) const;
 
   /// \brief Get a string representation of object
   /// \return A string representation of the object
@@ -277,10 +317,6 @@ class Options {
   /// \param[in] toggle Enable or disable the parameter shifting behaviour
   void SetParameterShifting(bool toogle);
 
-  /// \brief Choose the whole matrix initialization behaviour
-  /// \param[in] toggle Enable or disable the whole matrix initialization behaviour
-  void SetWholeMatrixInitialization(bool toogle);
-
   /// \brief Choose the full sets post processing behaviour
   /// \param[in] toggle Enable or disable full sets post processing
   void SetFullSetsPostProcessing(bool toogle);
@@ -288,6 +324,40 @@ class Options {
   /// \brief Choose the extra parallel outer loop post processing behaviour
   /// \param[in] toggle Enable or disable extra parallel outer loop post processing
   void SetExtraParallelOuterLoopPostProcessing(bool toogle);
+
+  /// \brief Choose the large outer bounds behaviour
+  /// \param[in] toggle Enable or disable the large outer bounds behaviour
+  void SetEnableLargeOuterBounds(bool toggle);
+
+  /// \brief Enable or disable skewing
+  /// \param[in] toggle Enable or disable skewing
+  void SetEnableSkewing(bool toggle);
+
+  /// \brief Enable or disable parallel-only skewing
+  /// \param[in] toggle Enable or disable parallel-only skewing
+  void SetEnableParallelSkewingOnly(bool toggle);
+
+  /// \brief Get the iterator binding behaviour
+  /// \return A boolean value that indicates whether iterator binding is enabled
+  /// \retval true if iterator binding is enabled
+  /// \retval false otherwise
+  void SetEnableIteratorBinding(bool toggle);
+
+  /// \brief Get the progression relaxation behaviour
+  /// \return A boolean value that indicates whether progression relaxation is enabled
+  /// \retval true if progression relaxation is enabled
+  /// \retval false otherwise
+  void SetEnableRelaxProgression(bool toggle);
+
+  /// \brief Enable or disable problem dumping
+  /// \param[in] toggle Enable or disable problem dumping
+  void SetDumpProblems(bool toggle);
+
+  /// \brief Enable timers
+  void EnableTimers(void);
+
+  /// \brief Disable timers
+  void DisableTimers(void);
 
   ////////////////////////////////////////////////////////////////////////////////
   // Misc. friend functions
@@ -674,7 +744,7 @@ class Hints {
 // polytops::bin::Scop
 ////////////////////////////////////////////////////////////////////////////////
 
-/// \brief Scop data for the PolyTOPS polyhedral scheduler
+/// \brief SCoP data for the PolyTOPS polyhedral scheduler
 class Scop {
  private:
   /// \brief Pointer to the inner polytops::Scop
@@ -703,7 +773,7 @@ class Scop {
   /// \param[in] sch Initial schedule
   /// \param[in] dependencies Dependencies
   /// \param[in] options Options for PolyTOPS
-  /// \param[in] name Optional name for the Scop
+  /// \param[in] name Optional name for the SCoP
   [[gnu::nonnull(1, 2)]] Scop(__isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies,
                               const polytops::bin::Options &options, const char *name = nullptr);
 
@@ -713,7 +783,7 @@ class Scop {
   /// \param[in] reads Reads
   /// \param[in] writes Writes
   /// \param[in] options Options for PolyTOPS
-  /// \param[in] name Optional name for the Scop
+  /// \param[in] name Optional name for the SCoP
   [[gnu::nonnull(1, 4)]] Scop(__isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies,
                               __isl_keep isl_union_map *reads, __isl_keep isl_union_map *writes,
                               const polytops::bin::Options &options, const char *name = nullptr);
@@ -723,7 +793,7 @@ class Scop {
   /// \param[in] dependencies Dependencies
   /// \param[in] influence Influence for PolyTOPS
   /// \param[in] options Options for PolyTOPS
-  /// \param[in] name Optional name for the Scop
+  /// \param[in] name Optional name for the SCoP
   [[gnu::nonnull(1, 2)]] Scop(__isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies,
                               const polytops::bin::Influence &influence, const polytops::bin::Options &options,
                               const char *name = nullptr);
@@ -735,7 +805,7 @@ class Scop {
   /// \param[in] writes Writes
   /// \param[in] influence Influence for PolyTOPS
   /// \param[in] options Options for PolyTOPS
-  /// \param[in] name Optional name for the Scop
+  /// \param[in] name Optional name for the SCoP
   [[gnu::nonnull(1, 4)]] Scop(__isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies,
                               __isl_keep isl_union_map *reads, __isl_keep isl_union_map *writes,
                               const polytops::bin::Influence &influence, const polytops::bin::Options &options,
@@ -746,7 +816,7 @@ class Scop {
   /// \param[in] dependencies Dependencies
   /// \param[in] hints Hints for PolyTOPS
   /// \param[in] options Options for PolyTOPS
-  /// \param[in] name Optional name for the Scop
+  /// \param[in] name Optional name for the SCoP
   [[gnu::nonnull(1, 2)]] Scop(__isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies,
                               const polytops::bin::Hints &hints, const polytops::bin::Options &options,
                               const char *name = nullptr);
@@ -758,7 +828,7 @@ class Scop {
   /// \param[in] writes Writes
   /// \param[in] hints Hints for PolyTOPS
   /// \param[in] options Options for PolyTOPS
-  /// \param[in] name Optional name for the Scop
+  /// \param[in] name Optional name for the SCoP
   [[gnu::nonnull(1, 4)]] Scop(__isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies,
                               __isl_keep isl_union_map *reads, __isl_keep isl_union_map *writes,
                               const polytops::bin::Hints &hints, const polytops::bin::Options &options,
@@ -769,8 +839,8 @@ class Scop {
   ////////////////////////////////////////////////////////////////////////////////
 
   /// \brief Copy-assignment operator
-  /// \param[in] rhs Source Scop
-  /// \return Destination Scop
+  /// \param[in] rhs Source SCoP
+  /// \return Destination SCoP
   polytops::bin::Scop &operator=(polytops::bin::Scop rhs);
 
   /// \brief Dereference operator
@@ -786,6 +856,9 @@ class Scop {
   ////////////////////////////////////////////////////////////////////////////////
 
   /// \brief Compute a schedule
+  /// \return A boolean value that indicates whether a schedule could be computed.
+  /// \retval true if a schedule could be computed
+  /// \retval false otherwise
   /// \pre The Scop contains an initial schedule and dependencies
   [[nodiscard]] bool ComputeSchedule(void);
 
@@ -805,7 +878,12 @@ class Scop {
   /// \return A boolean value that indicates whether the schedule is valid
   /// \retval true if the schedule is valid
   /// \retval false otherwise
+  /// \pre The SCoP contains dependencies
   bool CheckSchedule(__isl_keep isl_schedule *schedule) const;
+
+  /// \brief Get internal options
+  /// \return The internal options of the SCoP
+  polytops::bin::Options GetOptions(void) const;
 
   /// \brief Get a string representation of object
   /// \return A string representation of the object

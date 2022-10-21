@@ -26,8 +26,10 @@ from akg.utils.format_transform import to_tvm_nd_array
 
 def reduce_max_run(shape, dtype, axis, keepdims, kernel_name="reduce_max", attrs=None):
     """run function for dsl function reduce_max"""
+    default_attrs = { "polytops_parameter_shifting": True }
     if attrs is None:
         attrs = {}
+    attrs.update(default_attrs)
 
     op_attrs = [axis, keepdims]
 

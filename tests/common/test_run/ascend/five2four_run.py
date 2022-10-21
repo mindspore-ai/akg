@@ -72,6 +72,10 @@ def five2four_execute(shape4d, out_dtype, format, dtype, attrs):
 
 
 def five2four_compile(shape_5d, dtype, op_attrs, attrs, kernel_name='five2four', tuning=False):
+    default_attrs = { "polytops_code_sinking": False }
+    attrs = {} if attrs == None else attrs
+    attrs.update(default_attrs)
+
     if attrs.get("dynamic"):
         var_shape = []
         shape4d, dst_type, _ = op_attrs

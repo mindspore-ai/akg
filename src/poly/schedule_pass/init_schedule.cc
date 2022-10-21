@@ -83,7 +83,11 @@ isl::schedule InitSchedule::Run(isl::schedule sch) {
 
   pass_info_.orig_dependences_ = pass_info_.dependences_;
 
+#ifdef AKG_USE_POLYTOPS
+  if (scop_info_.user_config_.GetTarget() == TARGET_CCE && !PolyTOPSShouldBeUsed(scop_info_)) {
+#else
   if (scop_info_.user_config_.GetTarget() == TARGET_CCE) {
+#endif
     ModDependencesBeforeGroup(sch);
   }
 

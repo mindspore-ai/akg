@@ -336,6 +336,14 @@ class UserConfig {
   bool GetPolyTOPSPostProcessingExtraOuterParallelLoop(void) const {
     return polytops_post_processing_extra_outer_parallel_loop_;
   }
+  void SetPolyTOPSLargeOuterBounds(bool toggle) { polytops_large_outer_bounds_ = toggle; }
+  bool GetPolyTOPSLargeOuterBounds(void) const { return polytops_large_outer_bounds_; }
+  void SetPolyTOPSEnableSkewing(bool toggle) { polytops_enable_skewing_ = toggle; }
+  bool GetPolyTOPSEnableSkewing(void) const { return polytops_enable_skewing_; }
+  void SetPolyTOPSEnableParallelSkewingOnly(bool toggle) { polytops_enable_parallel_skewing_only_ = toggle; }
+  bool GetPolyTOPSEnableParallelSkewingOnly(void) const { return polytops_enable_parallel_skewing_only_; }
+  void SetPolyTOPSDumpProblems(bool toggle) { polytops_dump_problems_ = toggle; }
+  bool GetPolyTOPSDumpProblems(void) const { return polytops_dump_problems_; }
 
   // getter for schedule tree transform config
   bool GetRemoveSelfDependence() const { return remove_self_dependence_; }
@@ -541,6 +549,10 @@ class UserConfig {
     ParseBoolAttr(attrs, "polytops_post_processing_full_sets", &polytops_post_processing_full_sets_);
     ParseBoolAttr(attrs, "polytops_post_processing_extra_outer_parallel_loop",
                   &polytops_post_processing_extra_outer_parallel_loop_);
+    ParseBoolAttr(attrs, "polytops_large_outer_bounds", &polytops_large_outer_bounds_);
+    ParseBoolAttr(attrs, "polytops_enable_skewing", &polytops_enable_skewing_);
+    ParseBoolAttr(attrs, "polytops_enable_parallel_skewing_only", &polytops_enable_parallel_skewing_only_);
+    ParseBoolAttr(attrs, "polytops_dump_problems", &polytops_dump_problems_);
 
     ParseCustomTilingAttr(attrs, "custom_tiling", &custom_tiling_);
     ParseBoolAttr(attrs, "pragma_analyze_reuse_buffer", &pragma_analyze_reuse_buffer_);
@@ -802,9 +814,13 @@ class UserConfig {
   bool polytops_check_schedules_{true};
   bool polytops_code_sinking_{true};
   bool polytops_constant_to_parameter_{true};
-  bool polytops_parameter_shifting_{false};
+  bool polytops_parameter_shifting_{true};
   bool polytops_post_processing_full_sets_{true};
   bool polytops_post_processing_extra_outer_parallel_loop_{false};
+  bool polytops_large_outer_bounds_{false};
+  bool polytops_enable_skewing_{false};
+  bool polytops_enable_parallel_skewing_only_{false};
+  bool polytops_dump_problems_{false};
 
   // schedule tree transform config
   bool remove_self_dependence_{true};
