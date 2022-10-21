@@ -510,6 +510,12 @@ class ScopMakeScheduleTree final : protected IRVisitor {
           scop_info_.analysis_result_.RecordInplaceAssignNodes(pro);
         }
       }
+      if (attrs.find(ATTR_ENABLE_ATOMIC_ADD) != attrs.end()) {
+        auto atomicadd_tensor = attrs.at(ATTR_ENABLE_ATOMIC_ADD).as<StringImm>();
+        if (atomicadd_tensor) {
+          scop_info_.analysis_result_.RecordReduceAtomcAddTensors(atomicadd_tensor->value);
+        }
+      }
     } else if (op->attr_key == AKG_CONVOLUTION_AXES) {
       scop_info_.analysis_result_.SetCpuConvolutionAxes(op->value.as<StringImm>()->value);
     }
