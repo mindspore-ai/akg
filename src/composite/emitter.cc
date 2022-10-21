@@ -19,6 +19,7 @@
 
 namespace akg {
 constexpr auto kEnableAutoInplace = "enable_auto_inplace";
+constexpr auto kEnableAtomicAdd = "enable_atomic_add";
 
 // particular used for custom op
 // arg s is in the form of "0 1 1 -1 2 -1" and should be translated into {{0,1},{1,-1},{2,-1}}
@@ -154,6 +155,11 @@ void Emitter::EmitTopi(const Provide *op, const Array<NodeRef> &real_inputs) {
       opt_.tensor_map[op->func] = t;
       if (op_attrs_.count(kEnableAutoInplace) > 0) {
         opt_.tensor_attrs[t].Set(kEnableAutoInplace, op_attrs_[kEnableAutoInplace]);
+      }
+      // enable_atomic_add is a parameter which we set to tensor map if we found it enabled in fused json rep
+      if ((op_name_ == "ReduceSum") && (op_attrs_.find(kEnableAtomicAdd) != op_attrs_.end()) &&
+          (GetBoolValueFromMap(op_attrs_, kEnableAtomicAdd) == true)) {
+        opt_.tensor_attrs[t].Set(kEnableAtomicAdd, Expr(t->op->name));
       }
     }
   } else {

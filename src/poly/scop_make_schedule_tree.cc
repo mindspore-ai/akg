@@ -468,6 +468,9 @@ class ScopMakeScheduleTree final : protected IRVisitor {
     if (op->body.as<Provide>()) {
       return op->body;
     }
+    if (op->body.as<AttrStmt>()) {
+      return GetAttrProvide(op->body.as<AttrStmt>());
+    }
     auto blo = op->body.as<Block>();
     if (blo) {
       while (blo->rest.defined() && blo->rest.as<Block>()) {
