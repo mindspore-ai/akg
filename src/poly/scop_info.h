@@ -938,6 +938,7 @@ struct MmaConv {
 };
 
 struct PackBlockSize {
+  PackBlockSize() : pack_a_size(1), pack_b_size(1){};
   int64_t pack_a_size;
   int64_t pack_b_size;
 };
@@ -1090,7 +1091,7 @@ class AnalysisResult {
   }
   std::string GetMatrixName(const std::string matrix_position) {
     std::string res;
-    for (auto &i: matrix_matmul_map_) {
+    for (auto &i : matrix_matmul_map_) {
       if (i.second == matrix_position) {
         res = i.first;
       }
@@ -1259,7 +1260,6 @@ class AnalysisResult {
 
   std::unordered_set<std::string> GetReduceAtomcAddTensors() const { return reduce_atomicadd_tensors_; }
   void RecordReduceAtomcAddTensors(const std::string &tensor_name) { reduce_atomicadd_tensors_.insert(tensor_name); }
-
 
   // the whole operator information
   void SetOpTemplate(Template op_template) { op_template_ = op_template; }
