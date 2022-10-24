@@ -63,4 +63,15 @@ Stmt Optimize(Stmt &s, BuildInfo &info) {
   return pm.Run(s);
 }
 
+Stmt OptimizeForTBE(const Stmt &s, BuildInfo &info) {
+  auto pm = TranslatePassMgr(&info, "composite_tbe");
+  ADD_PASS(pm, ReshapeTensor);
+  ADD_PASS(pm, AxisAttrNormalize);
+  ADD_PASS(pm, ElimReshapeBackward);
+  ADD_PASS(pm, ElimReshapeForward);
+  ADD_PASS(pm, FoldDimension);
+  ADD_PASS(pm, TypeCastInserter);
+  ADD_PASS(pm, ElimInplaceAssign);
+  return pm.Run(s);
+}
 }  // namespace akg

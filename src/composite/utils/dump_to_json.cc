@@ -23,6 +23,7 @@
 namespace akg {
 namespace {
 constexpr auto kDumpCompositeGraph = "dump_composite_graph";
+constexpr auto kGlobalAttrs = "global_attrs";
 
 class DumpToJsonVisitor : public IRVisitor {
  public:
@@ -38,20 +39,36 @@ class DumpToJsonVisitor : public IRVisitor {
     // Collect inputs and outputs name from build info
     InitInputsOutputs();
 
+    // Collect inplace tensor names from build info
+    CollectInplaceInfo();
+
     IRVisitor::Visit(stmt);
     desc["op_desc"] = picojson::value(op_desc_);
     FillInputsOutputs();
     desc["input_desc"] = picojson::value(input_desc_);
     desc["output_desc"] = picojson::value(output_desc_);
+    if (!global_attrs_.empty()) {
+      desc[kGlobalAttrs] = picojson::value(global_attrs_);
+    }
 
     picojson::value v(desc);
     return v.serialize();
   }
 
   void Visit_(const AttrStmt *op) final {
-    // Collect op attr
     if (op->node.as<StrMapNode>() != nullptr) {
-      op_attr_ = Downcast<Map<std::string, NodeRef>>(op->node);
+      if (op->attr_key == kGlobalAttrs) {
+        // Collect global attr
+        auto attrs = ParseAttr(Downcast<Map<std::string, NodeRef>>(op->node));
+        if (!attrs.empty()) {
+          for (const auto &attr : attrs) {
+            global_attrs_.push_back(attr);
+          }
+        }
+      } else {
+        // Collect op attr
+        op_attr_ = Downcast<Map<std::string, NodeRef>>(op->node);
+      }
     }
     Visit(op->body);
   }
@@ -65,7 +82,7 @@ class DumpToJsonVisitor : public IRVisitor {
     op_desc["name"] = picojson::value(call->name);
 
     // Parse op attr
-    auto attr = ParseAttr();
+    auto attr = ParseAttr(op_attr_);
     if (!attr.empty()) {
       op_desc["attr"] = picojson::value(attr);
     }
@@ -124,7 +141,7 @@ class DumpToJsonVisitor : public IRVisitor {
       }
     }
 
-    if (build_info_.find("input_names") != build_info_.end()) {
+    if (build_info_.find("output_names") != build_info_.end()) {
       auto output_names = Downcast<Array<Expr>>(build_info_["output_names"]);
       for (const auto &name : output_names) {
         auto it = name.as<StringImm>();
@@ -139,7 +156,7 @@ class DumpToJsonVisitor : public IRVisitor {
     for (const auto &name : input_names_) {
       if (io_.find(name) == io_.end()) {
         LOG(WARNING) << "Input name " << name << " is not found in stmt.";
-      } else {
+      } else if (!io_[name].empty()) {
         picojson::array input{picojson::value(io_[name])};
         input_desc_.push_back(picojson::value(input));
       }
@@ -150,6 +167,17 @@ class DumpToJsonVisitor : public IRVisitor {
         LOG(WARNING) << "Output name " << name << " is not found in stmt.";
       } else {
         output_desc_.push_back(picojson::value(io_[name]));
+      }
+    }
+  }
+
+  void CollectInplaceInfo() {
+    if (build_info_.find("inplace") != build_info_.end()) {
+      auto inplace = Downcast<Map<std::string, Expr>>(build_info_["inplace"]);
+      for (const auto &it : inplace) {
+        auto to = it.second.as<StringImm>();
+        CHECK(to != nullptr);
+        inplace_[it.first] = to->value;
       }
     }
   }
@@ -176,12 +204,12 @@ class DumpToJsonVisitor : public IRVisitor {
     return ret;
   }
 
-  picojson::array ParseAttr() {
+  picojson::array ParseAttr(const Map<std::string, NodeRef> &attr_map) {
     picojson::array attr;
-    if (op_attr_.empty()) {
+    if (attr_map.empty()) {
       return attr;
     }
-    for (const auto &it : op_attr_) {
+    for (const auto &it : attr_map) {
       picojson::object cur_attr;
       auto name = it.first;
       auto value = it.second;
@@ -193,7 +221,7 @@ class DumpToJsonVisitor : public IRVisitor {
         auto v = Downcast<Expr>(value);
         cur_attr["value"] = ParseConst(v);
       } else {
-        LOG(FATAL) << "Not parsed type " << value << " in op attr " << op_attr_;
+        LOG(FATAL) << "Not parsed type " << value << " in op attr " << attr_map;
       }
       attr.push_back(picojson::value(cur_attr));
     }
@@ -209,6 +237,10 @@ class DumpToJsonVisitor : public IRVisitor {
     tensor["shape"] = picojson::value(ParseArray(shape));
     if (value.defined()) {
       tensor["value"] = ParseConst(value);
+    }
+    // Save inplace tensor name if exists.
+    if (inplace_.find(name) != inplace_.end()) {
+      tensor["inplace_to"] = picojson::value(inplace_[name]);
     }
     return tensor;
   }
@@ -237,6 +269,8 @@ class DumpToJsonVisitor : public IRVisitor {
   std::unordered_map<std::string, picojson::object> io_;  // inputs, outputs map
   picojson::array input_desc_;                            // json["input_desc"]
   picojson::array output_desc_;                           // json["output_desc"]
+  picojson::array global_attrs_;                          // json["global_attrs"]
+  std::unordered_map<std::string, std::string> inplace_;  // inplace_[a] = b, means a inplace to b
 };
 
 std::string GetRealPath(const std::string &path) {

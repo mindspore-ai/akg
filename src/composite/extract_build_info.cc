@@ -27,6 +27,8 @@
 
 namespace akg {
 namespace {
+constexpr auto kOptimizeForTBE = "optimize_for_tbe";
+
 void CollectBinds(BuildInfo &info) {
   for (const auto &kv : info.opt.inplaces) {
     CHECK(info.opt.tensor_map.count(kv.first)) << kv.first->func_name() << " not in tensor map";
@@ -131,15 +133,30 @@ void CollectBuildInfo(BuildInfo &info) {
   CollectSchOnlyComputes(info);
   DumpBuildInfo(info);
 }
+
+bool EnableOptimizeForTBE(const Map<std::string, NodeRef> &attrs) {
+  return (attrs.defined() && attrs.find(kOptimizeForTBE) != attrs.end() && attrs[kOptimizeForTBE].as<UIntImm>() &&
+          attrs[kOptimizeForTBE].as<UIntImm>()->value != 0);
+}
 }  // namespace
 
 void ExtractBuildInfo(const picojson::value &input_json, BuildInfo &info) {
   CHECK(input_json.is<picojson::object>());
   // 1. make stmt by input_json
   auto stmt = Parse(input_json, info);
+  // optimize stmt for tbe
+  bool optimize_for_tbe = EnableOptimizeForTBE(info.attrs);
+  if (optimize_for_tbe) {
+    // some passes will modify BuildInfo, and the modification can not be reused in AKG, so we copied BuildInfo
+    BuildInfo build_info = info;
+    auto s = OptimizeForTBE(stmt, build_info);
+    DumpCompositeGraph(s, build_info);
+  }
   // 2. optimize stmt
   stmt = Optimize(stmt, info);
-  DumpCompositeGraph(stmt, info);
+  if (!optimize_for_tbe) {
+    DumpCompositeGraph(stmt, info);
+  }
   if (info.opt.tuning) {
     return;
   }
