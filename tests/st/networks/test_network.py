@@ -934,6 +934,14 @@ def test_transformer_ascend_level0():
 
 
 @pytest.mark.level0
+@pytest.mark.platform_arm_ascend_training
+@pytest.mark.platform_x86_ascend_training
+@pytest.mark.env_onecard
+def test_sponge_ascend_level0():
+    test_network("ascend", "sponge", "level0", custom_attrs={ "enable_polytops": "always" })
+
+
+@pytest.mark.level0
 @pytest.mark.platform_x86_gpu_training
 @pytest.mark.env_onecard
 def test_sponge_gpu_level0():
