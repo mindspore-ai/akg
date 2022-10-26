@@ -129,14 +129,17 @@ def _dump_info(desc, build_attrs, poly, inputs, output, expect):
     _dump_data(dump_path, inputs, output, expect)
 
 
-def get_result(desc, poly, attrs=None, profiling=True, need_compare=True):
+def get_result(desc, poly, attrs=None, profiling=True, need_compare=True, precision_check=True):
     backend = _get_backend(desc)
 
     mod = composite.build(desc, attrs, poly=poly)
     if not need_compare:
         return True
-    input_for_mod, expect, output_indexes = gen_json_data(desc)
+    input_for_mod, expect, output_indexes = gen_json_data(desc, with_compute=precision_check)
     output = utils.mod_launch(mod, input_for_mod, output_indexes)
+    if not precision_check:
+        logging.info("No precision error check!")
+        return True
     # In profiling mode, mod_launch will return compute outputs and profiling value, only compute outputs needed here
     if isinstance(output, tuple) and len(output) > 0 and isinstance(output[-1], dict):
         output = output[0]
@@ -292,6 +295,65 @@ def test_ci(profile=False, poly=False):
                 "No significant performance improvement. Do not need to update Baseline!")
 
 
+def test_customop(subfolder, profile=False, poly=True):
+    pwd = os.path.dirname(os.path.abspath(__file__))
+    ci_path = pwd + "/customop_ci/" + subfolder + "/"
+    target_process = ["aicore"]
+    if profile:
+        need_update = False
+        base_json_file = pwd + "/customop_ci/" + subfolder + "/base.json"
+        cycle_info_file = pwd + "/cycle_path/a.txt"
+        os.environ['PROFILING'] = "true"
+        os.environ['CYCLES_PATH'] = os.getcwd() + '/' + cycle_info_file
+        with open(base_json_file, 'r') as f:
+            base = f.read()
+            old_dict = json.loads(base)
+    files = os.listdir(ci_path)
+    for fi in files:
+        with open(ci_path + fi, 'r') as f:
+            if fi == "base.json":
+                continue
+            desc = f.read()
+            json_desc = json.loads(desc)
+            if "process" not in json_desc or json_desc["process"] not in target_process:
+                logging.info("------ Skip %s", fi)
+                continue
+            print("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%  fi: %s", fi)
+            flag = get_result(desc, poly, precision_check=False)
+            if not flag:
+                logging.info("----------Error Json info is----------")
+                logging.info(desc)
+                raise ValueError("Precision Error")
+            elif not profile:
+                logging.info("Composite Json %s pass!", fi)
+            else:
+                old_op_cycles = old_dict[fi]
+                op_cycles, diff = get_op_cycles_info(cycle_info_file, old_op_cycles)
+                logging.info("~~~~~~~~~~~cycle diff is~~~~~~~~~~~")
+                logging.info(diff)
+                if diff > 500:
+                    need_update = True
+                    logging.info("Find Better Cycle the Json Info is:")
+                    logging.info(desc)
+                    logging.info("The Better Cycle is:")
+                    logging.info(op_cycles)
+                    old_dict[fi] = op_cycles
+                elif diff < -1000:
+                    logging.info("----------Error Json info is----------")
+                    logging.info(desc)
+                    raise ValueError("Performance Degradation")
+            assert (flag)
+    logging.info("All ops are ok!")
+    if profile:
+        if need_update:
+            logging.info("Need to Update Baseline!!!")
+            with open(base_json_file, 'w', encoding='utf-8') as f:
+                json.dump(old_dict, f, indent=4)
+        else:
+            logging.info(
+                "No significant performance improvement. Do not need to update Baseline!")
+
+
 @pytest.mark.level0
 @pytest.mark.platform_arm_ascend_training
 @pytest.mark.platform_x86_ascend_training
@@ -299,6 +361,14 @@ def test_ci(profile=False, poly=False):
 def test_ci_ascend():
     test_ci()
 
+@pytest.mark.level0
+@pytest.mark.platform_arm_ascend_training
+@pytest.mark.platform_x86_ascend_training
+@pytest.mark.env_onecard
+def test_ci_customop():
+    test_customop("custom_intrin")
+    test_customop("lu")
+    test_customop("solve_triangular")
 
 @pytest.mark.level0
 @pytest.mark.platform_arm_ascend_training

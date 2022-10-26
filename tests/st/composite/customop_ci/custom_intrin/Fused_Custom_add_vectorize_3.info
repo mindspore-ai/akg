@@ -1,0 +1,128 @@
+{ 
+  "composite" : true,
+  "composite_graph" : "33.34",
+  "id" : 0,
+  "input_desc" : [ 
+      [ { 
+          "data_type" : "float32",
+          "format" : "DefaultFormat",
+          "shape" : [ 
+              1024,
+              32
+            ],
+          "tensor_name" : "input_0"
+        } ],
+      [ { 
+          "data_type" : "float32",
+          "format" : "DefaultFormat",
+          "shape" : [ 
+              1024,
+              64
+            ],
+          "tensor_name" : "input_1"
+        } ]
+    ],
+  "op" : "Fused_Custom_add_vectorize_3",
+  "op_desc" : [ { 
+        "attr" : [ 
+            { 
+              "data_type" : "str",
+              "name" : "func_type",
+              "value" : "hybrid"
+            },
+            { 
+              "data_type" : "str",
+              "name" : "func_source_str",
+              "value" : "def add_vectorize_3(a, b):\n    l0 = b.shape[1]\n    l1 = a.shape[0]\n    l2 = a.shape[1]\n    out = output_tensor((l0, l1, l2), a.dtype)\n    for i in vectorize(l0):\n        for j in range(l1):\n            for k in vectorize(l2):\n                out[i, j, k] = a[j, k] + b[j, i]\n    return out\n"
+            },
+            { 
+              "data_type" : "bool",
+              "name" : "visited",
+              "value" : true
+            },
+            { 
+              "data_type" : "int",
+              "name" : "inputs_num",
+              "value" : 2
+            },
+            { 
+              "data_type" : "str",
+              "name" : "func_compile_attrs",
+              "value" : "{\"enable_polytops\": \"always\"}"
+            },
+            { 
+              "data_type" : "bool",
+              "name" : "single_scalar_output",
+              "value" : false
+            },
+            { 
+              "data_type" : "str",
+              "name" : "func_name",
+              "value" : "add_vectorize_3"
+            },
+            { 
+              "data_type" : "bool",
+              "name" : "fake_output",
+              "value" : true
+            },
+            { 
+              "data_type" : "bool",
+              "name" : "autodiff",
+              "value" : false
+            },
+            { 
+              "data_type" : "int",
+              "name" : "PROFILING_ITER_END",
+              "value" : 1
+            }
+          ],
+        "impl_path" : "",
+        "input_desc" : [ 
+            [ { 
+                "data_type" : "float32",
+                "format" : "DefaultFormat",
+                "name" : "input_0",
+                "shape" : [ 
+                    1024,
+                    32
+                  ],
+                "tensor_name" : "input_0"
+              } ],
+            [ { 
+                "data_type" : "float32",
+                "format" : "DefaultFormat",
+                "name" : "input_1",
+                "shape" : [ 
+                    1024,
+                    64
+                  ],
+                "tensor_name" : "input_1"
+              } ]
+          ],
+        "name" : "Custom",
+        "output_desc" : [ { 
+              "data_type" : "float32",
+              "format" : "DefaultFormat",
+              "name" : "output_0",
+              "shape" : [ 
+                  64,
+                  1024,
+                  32
+                ],
+              "tensor_name" : "output_0_0"
+            } ]
+      } ],
+  "output_desc" : [ { 
+        "data_type" : "float32",
+        "format" : "DefaultFormat",
+        "shape" : [ 
+            64,
+            1024,
+            32
+          ],
+        "tensor_name" : "output_0_0"
+      } ],
+  "platform" : "AKG",
+  "process" : "aicore",
+  "version" : 1
+}
