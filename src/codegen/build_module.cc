@@ -278,6 +278,41 @@ void UpdateMultiValueFuncBinds(Map<Tensor, Buffer> &binds, Array<NodeRef> &tenso
   tensor_args_list = new_tensor_args_list;
 }
 
+void UpdateMultiValueBufferNames(Map<Tensor, Buffer> &binds, Array<NodeRef> &buffer_args_list,
+                                 const BuildConfig &config, const Map<Tensor, Tensor> &tensor_replace) {
+  Map<Buffer, Buffer> buffer_replace;
+  for (const auto &x : tensor_replace) {
+    Tensor tensor = x.second;
+    if (binds.count(tensor) == 0) {
+      continue;
+    }
+    Buffer buffer = binds[tensor];
+    Buffer new_buffer;
+    if (buffer_replace.count(buffer) == 0) {
+      new_buffer = DeclBuffer(tensor, config->data_alignment, config->offset_factor, tensor->op->func_name());
+      buffer_replace.Set(buffer, new_buffer);
+    } else {
+      new_buffer = buffer_replace[buffer];
+    }
+    binds.Set(tensor, new_buffer);
+  }
+
+  Array<NodeRef> new_buffer_args_list;
+  for (const auto &x : buffer_args_list) {
+    if (x->IsInstance<BufferNode>()) {
+      Buffer buffer_node = GetRef<Buffer>(x.as<BufferNode>());
+      if (buffer_replace.count(buffer_node) != 0) {
+        new_buffer_args_list.push_back(buffer_replace[buffer_node]);
+      } else {
+        new_buffer_args_list.push_back(buffer_node);
+      }
+    } else {
+      new_buffer_args_list.push_back(x);
+    }
+  }
+  buffer_args_list = new_buffer_args_list;
+}
+
 void RenameBinds(Map<Tensor, Buffer> &binds, const BuildConfig &config, Array<NodeRef> &tensor_args_list,
                  Array<NodeRef> &buffer_args_list, Map<Tensor, Tensor> &tensor_replace) {
   std::unordered_map<std::string, int> tensor_name_count;
