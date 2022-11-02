@@ -98,6 +98,8 @@ Buffer DeclBuffer(const NodeRef &arg, const int data_alignment, const int offset
 
 void UpdateMultiValueFuncBinds(Map<Tensor, Buffer> &binds, Array<NodeRef> &tensor_args_list,
                                Map<Tensor, Tensor> &tensor_replace);
+void UpdateMultiValueBufferNames(Map<Tensor, Buffer> &binds, Array<NodeRef> &buffer_args_list,
+                                 const BuildConfig &config, const Map<Tensor, Tensor> &tensor_replace);
 
 void GetBinds(const Array<NodeRef> &args, const Map<Tensor, Buffer> &binds, const BuildConfig &config,
               Array<NodeRef> *out_args, Map<Tensor, Buffer> *out_binds);

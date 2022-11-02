@@ -54,6 +54,9 @@ StageResult CudaLowerBegin(Stmt &, LowerData &data) {
 
   Map<Tensor, Tensor> multi_output_mapping;
   UpdateMultiValueFuncBinds(data->binds_0, data->args, multi_output_mapping);
+  if (!multi_output_mapping.empty()) {
+    UpdateMultiValueBufferNames(data->binds_0, data->arg_list_0, data->config, multi_output_mapping);
+  }
   stmt = NEXT_PASS(RewriteMultiValueFunc, stmt, multi_output_mapping);
 
   Map<Tensor, Tensor> replace;
