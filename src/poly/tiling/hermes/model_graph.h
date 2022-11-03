@@ -38,7 +38,7 @@ class ModelGraph : public InitGraph {
   ModelGraph() = default;
 
   std::tuple<int64_t, int> GetMinShapeAndDataCoef(const Axis &axis) const;
-  static void InsertToNameDimRangeSet(const std::string &dim_name, const int sch_dim, const int64_t &range);
+  static void InsertToNameDimRangeSet(const std::string &axis_name, const int sch_dim, const int64_t &range);
 
   std::vector<std::shared_ptr<Node>> critical_nodes_;
   Op::OpCategory dominant_category_;

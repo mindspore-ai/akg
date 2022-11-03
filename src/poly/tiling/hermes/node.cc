@@ -15,6 +15,7 @@
  */
 #include <dmlc/logging.h>
 
+#include "poly/tiling/hermes/stmt_info.h"
 #include "poly/tiling/hermes/node.h"
 #include "poly/tiling/hermes/model_graph.h"
 
@@ -61,14 +62,36 @@ Node::Node(const std::string &name, const Op &op, const std::vector<std::shared_
 
 void Node::SetNodesAxisDim(std::vector<std::shared_ptr<Node>> &nodes) {
   for (auto &node : nodes) {
+    std::string statement;
+    if (node->orig_name_.empty()) {
+      statement = StmtInfo::node_to_stmt_map_.find(node->name_)->second;
+    } else {
+      statement = StmtInfo::node_to_stmt_map_.find(node->orig_name_)->second;
+    }
+    std::vector<StmtInfo::StmtAxes> stmt_axes = StmtInfo::stmt_name_dim_range_map_.find(statement)->second;
     for (auto &axis : node->axis_of_node_) {
-      for (auto const &name_dim_range : ModelGraph::name_dim_range_set_) {
-        if (axis.name_ == std::get<0>(name_dim_range) && axis.range_ == std::get<2>(name_dim_range)) {
-          axis.dim_axis_ = std::get<1>(name_dim_range);
+      bool is_axis_found = false;
+      for (auto const &name_dim_range : stmt_axes) {
+        if (axis.name_ == name_dim_range.name) {
+          axis.dim_axis_ = name_dim_range.dim;
+          is_axis_found = true;
+          break;
         }
+      }
+      if (!is_axis_found) {
+        axis.dim_axis_ = GetAxisDimFromNameRange(axis);
       }
     }
   }
+}
+
+int Node::GetAxisDimFromNameRange(const Axis &axis) {
+  for (auto const &name_dim_range : ModelGraph::name_dim_range_set_) {
+    if (axis.name_ == std::get<0>(name_dim_range) && axis.range_ == std::get<2>(name_dim_range)) {
+      return std::get<1>(name_dim_range);
+    }
+  }
+  return 0;
 }
 
 bool Node::HasName() const { return !(this->name_.empty()); }

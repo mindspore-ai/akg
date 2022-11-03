@@ -21,6 +21,7 @@
 #include "poly/tiling/hermes/check_visitor.h"
 #include "poly/tiling/hermes/hardware.h"
 #include "poly/tiling/hermes/model_graph.h"
+#include "poly/tiling/hermes/stmt_info.h"
 #include "poly/tiling/hermes/tiling_algo.h"
 #include "poly/tiling/hermes/tiling_ir_survey.h"
 
@@ -467,6 +468,7 @@ TileSizes TilingGenerator::HermesTiling(const isl::schedule &sch, TileSizes dims
   }
 
   ScheduleAxisInfo::GetAxisInfo(sch);
+  StmtInfo::SetNodeStmtMap(analyzer_.scop_info_.analysis_result_);
   Node::SetNodesAxisDim(init_graph->nodes_);
   Axis::SetGlobalAxisName();
 

@@ -151,7 +151,7 @@ ReduceDirection ModelGraph::GetReduceDirection(const std::shared_ptr<Node> &redu
     }
   }
   if (reduce_type == ReduceDirection::UNKNOWN) {
-    LOG(FATAL) << "unknown reduce type";
+    LOG(DEBUG) << "unknown reduce type";
   }
   return reduce_type;
 }

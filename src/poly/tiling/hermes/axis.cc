@@ -14,8 +14,10 @@
  * limitations under the License.
  */
 #include <memory>
+#include <utility>
 
 #include "poly/tiling/hermes/axis.h"
+#include "poly/tiling/hermes/stmt_info.h"
 #include "poly/tiling/hermes/model_graph.h"
 
 namespace akg {
@@ -43,16 +45,20 @@ void ScheduleAxisInfo::GetAxisInfo(const isl::schedule &sch) {
   GetAxisMapping(sch.get(), &result);
 
   ModelGraph::name_dim_range_set_.clear();
+  StmtInfo::stmt_name_dim_range_map_.clear();
 
   for (const auto &[statement, statement_info] : result) {
     (void)statement;
+    std::vector<StmtInfo::StmtAxes> stmt_axes;
     for (const auto &[axis_name, axis_info] : statement_info.mapping) {
       auto dim_idx = axis_info.schedule_dim;
       int64_t range = (statement_info.ranges[dim_idx].ub - statement_info.ranges[dim_idx].lb + 1) *
                       statement_info.ranges[dim_idx].stride;
       auto dim = axis_info.schedule_dim - axis_info.offset;
       ModelGraph::InsertToNameDimRangeSet(axis_name, dim, range);
+      stmt_axes.emplace_back(axis_name, dim, range);
     }
+    StmtInfo::stmt_name_dim_range_map_.insert(std::make_pair(statement, stmt_axes));
   }
 }
 

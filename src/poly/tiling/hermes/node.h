@@ -20,7 +20,6 @@
 #include <map>
 #include <memory>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include "poly/tiling/hermes/axis.h"
@@ -61,6 +60,9 @@ class Node {
   std::vector<Tensor> transformed_output_shape_;
   std::map<std::string, std::map<Tensor, int64_t>> axis_to_tensor_to_shape_id_map_;
   std::list<attributes> attrs_;
+
+ private:
+  static int GetAxisDimFromNameRange(const Axis &axis);
 };
 
 std::list<Node::attributes> FindAttributes(std::vector<std::string>);
