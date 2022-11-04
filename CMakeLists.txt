@@ -23,9 +23,12 @@ endif()
 
 project(akg C CXX)
 
-if (CMAKE_COMPILER_IS_GNUCC AND (CMAKE_CXX_COMPILER_VERSION VERSION_LESS 7.3 OR 
-                                 CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 9.4))
-  message(SEND_ERROR "gcc version should be in [7.3, 9.4], while ${CMAKE_CXX_COMPILER_VERSION} is detected")
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 7.3.0)
+        message(FATAL_ERROR "GCC version must be 7.3.0 and above, but found ${CMAKE_CXX_COMPILER_VERSION}")
+    elseif(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 9.4.0)
+        message(WARNING "GCC version ${CMAKE_CXX_COMPILER_VERSION} is greater than 9.4.0, may cause unknown problems.")
+    endif()
 endif()
 
 set(AKG_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
