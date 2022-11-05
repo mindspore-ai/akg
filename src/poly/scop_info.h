@@ -938,7 +938,8 @@ struct MmaConv {
 };
 
 struct PackBlockSize {
-  PackBlockSize() : pack_a_size(1), pack_b_size(1){};
+  PackBlockSize(int64_t pack_a_size_ = 1, int64_t pack_b_size_ = 1)
+      : pack_a_size(pack_a_size_), pack_b_size(pack_b_size_){};
   int64_t pack_a_size;
   int64_t pack_b_size;
 };
