@@ -199,7 +199,7 @@ void CpuStrategy::SetMatMulTileValue() {
       if (attr.attr_value == kDsabi) {
         value = 1;
       } else if (attr.attr_value == kDsaki) {
-        value = shape / k_align_value * k_align_value;
+        value = std::max(shape / k_align_value * k_align_value, 1L);
       }
       axis->TileRestrainToSingleValue(Expr(value), TileLevel::CACHE1);
 
@@ -209,7 +209,7 @@ void CpuStrategy::SetMatMulTileValue() {
         pack = pack_size.pack_b_size;
       }
       CHECK(pack != 0);
-      value = value / pack * pack;
+      value = std::max(value / pack * pack, 1L);
       axis->TileRestrainToSingleValue(Expr(value), TileLevel::CACHE0);
 
       auto current_outer_node = analyzer_->scop_info_.analysis_result_.GetOuterBandNode(current_band_);
