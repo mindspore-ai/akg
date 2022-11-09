@@ -43,10 +43,10 @@ TRICKS_DIR = MINDTRICK_CASE_DIR + "/tricks"
 COMPOSITE_OPS_DIR = MINDTRICK_CASE_DIR + "/"
 composite_targets = {
     "MatmulautoMindtrickAscend": [
-        "Fused_MatMul_fusion_9831280846358004819",
-        "Fused_MatMul_fusion_10794569435289069110",
-        "Fused_MatMul_split_1356348199771806006",
         "Fused_MatMul_fusion_18383406674537542536",
+        "Fused_MatMul_fusion_9831280846358004819",
+        "Fused_MatMul_split_1356348199771806006",
+        "Fused_MatMul_fusion_10794569435289069110",
         "Fused_MatMul_split_14044301349123753727",
         "Fused_MatMul_split_16954896143381380691",
         "Fused_MatMul_Add_split_1076027639005245194"
