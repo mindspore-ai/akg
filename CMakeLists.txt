@@ -26,8 +26,8 @@ project(akg C CXX)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 7.3.0)
         message(FATAL_ERROR "GCC version must be 7.3.0 and above, but found ${CMAKE_CXX_COMPILER_VERSION}")
-    elseif(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 9.4.0)
-        message(WARNING "GCC version ${CMAKE_CXX_COMPILER_VERSION} is greater than 9.4.0, may cause unknown problems.")
+    elseif(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER 11.1.0)
+        message(WARNING "GCC version ${CMAKE_CXX_COMPILER_VERSION} is greater than 11.1.0, may cause unknown problems.")
     endif()
 endif()
 
@@ -179,10 +179,10 @@ if(NATIVE_BUILD AND ENABLE_NATIVE_BUILD)
 endif()
 
 set(CMAKE_SKIP_RPATH TRUE)
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -pipe -Wall -fPIC -fstack-protector-all")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -pipe -Wall -fPIC -fstack-protector-all -Wno-uninitialized -Wno-parentheses")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wl,-z,relro,-z,now,-z,noexecstack")
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -pipe -Wall -fPIC -fstack-protector-all")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -pipe -Wall -fPIC -fstack-protector-all -Wno-uninitialized -Wno-parentheses")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wl,-z,relro,-z,now,-z,noexecstack")
 
 if("${CMAKE_BUILD_TYPE}" STREQUAL "Debug")

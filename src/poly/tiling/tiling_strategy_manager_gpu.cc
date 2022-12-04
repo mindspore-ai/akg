@@ -750,7 +750,7 @@ void GpuStrategy::ApplyConstraintsToBindingSpace() {
 
   std::unordered_set<std::string> thread_keys = {AT_THREAD_MIN, AT_THREAD_MAX, AT_THREAD_MOD};
   std::unordered_set<std::string> block_keys = {AT_BLOCK_MIN, AT_BLOCK_MAX, AT_BLOCK_MOD};
-  for (const auto attr : analyzer_->RootAxis()->attrs) {
+  for (const auto &attr : analyzer_->RootAxis()->attrs) {
     std::vector<int64_t> constraint;
     std::vector<TileAxis::MappingConstraint> target;
     if (thread_keys.find(attr.attr_key) != thread_keys.end()) {
@@ -1952,7 +1952,7 @@ void GpuStrategy::AnalyzeBroadcastIdx() {
       continue;
     }
     auto op_types = common::Split(attr.attr_key, "_");
-    for (const auto type : op_types) {
+    for (const auto &type : op_types) {
       if (type.find(AT_BROADCAST) == std::string::npos) {
         continue;
       }

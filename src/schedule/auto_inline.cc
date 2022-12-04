@@ -200,16 +200,16 @@ class CSE {
     for (const Stage &s : sch->stages) {
       op_list.insert(s->op);
     }
-    for (const auto op : sch->outputs) {
+    for (const auto &op : sch->outputs) {
       count_used_number(op);
     }
-    for (const auto op : counter) {
+    for (const auto &op : counter) {
       if (op.second > 1) {
         RemoveShortCommonExpr(op.first, op.first);
       }
     }
     std::unordered_set<Operation> common_op;
-    for (const auto op : counter) {
+    for (const auto &op : counter) {
       if (op.first.as<ComputeOpNode>() != nullptr && op.second > 1) {
         common_op.insert(op.first);
       }
