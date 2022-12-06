@@ -19,6 +19,7 @@
 # 2020.9.19 - Modify default GPU arch function.
 # 2020.10.26 - Add the logic of finding AkgReduce library.
 # 2022.9.5 - Add the check of gcc version.
+# 2022.12.5 - Add the check of gcc version 11.1 .
 """Utility to invoke nvcc compiler in the system"""
 from __future__ import absolute_import as _abs
 
@@ -37,7 +38,7 @@ def get_gcc_version():
     Return
     ------
     ver : tuple of int
-        The version of gcc likes: (7.3.0), (9.4.0)
+        The version of gcc likes: (7.3.0), (11.1.0)
     """
     f = os.popen("gcc --version")
     for line in f:
@@ -79,8 +80,8 @@ def compile_cuda(code,
     """
     # supported gcc version for cuda code generation
     gcc_version = get_gcc_version()
-    if gcc_version is None or (7,3,0) > gcc_version or gcc_version > (9,4,0):
-        raise ValueError("gcc version is {}, not in range [7.3.0, 9.4.0]".format(
+    if gcc_version is None or (7,3,0) > gcc_version or gcc_version > (11,1,0):
+        raise ValueError("gcc version is {}, not in range [7.3.0, 11.1.0]".format(
             gcc_version))
 
     arch_exception = ["sm_00", None]
