@@ -374,9 +374,9 @@ add_dependencies(akg akg::isl_fixed)
 include(cmake/polytops.cmake)
 
 if (EXISTS ${AUTO_TUNE_LIB})
-  target_link_libraries(akg ${TVM_LINKER_LIBS} ${TVM_RUNTIME_LINKER_LIBS} akg::isl_fixed pthread ${AUTO_TUNE_LIB})
+  target_link_libraries(akg akg::isl_fixed ${TVM_LINKER_LIBS} ${TVM_RUNTIME_LINKER_LIBS} pthread ${AUTO_TUNE_LIB})
 else()
-  target_link_libraries(akg ${TVM_LINKER_LIBS} ${TVM_RUNTIME_LINKER_LIBS} akg::isl_fixed pthread)
+  target_link_libraries(akg akg::isl_fixed ${TVM_LINKER_LIBS} ${TVM_RUNTIME_LINKER_LIBS} pthread)
 endif()
 
 if(USE_CCE_PROFILING)
