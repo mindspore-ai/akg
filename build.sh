@@ -23,6 +23,7 @@ usage()
     echo "bash build.sh [-e cpu|gpu|ascend] [-j[n]] [-t on|off] [-o] [-u]"
     echo ""
     echo "Options:"
+    echo "    -d Debug mode"
     echo "    -e Hardware environment: cpu, gpu or ascend"
     echo "    -j[n] Set the threads when building (Default: -j8)"
     echo "    -t Unit test: on or off (Default: off)"
@@ -41,7 +42,7 @@ mk_new_dir()
     mkdir -pv "${create_dir}"
 }
 
-write_checksum()
+write_checksum_tar()
 {
     cd "$OUTPUT_PATH" || exit
     PACKAGE_LIST=$(ls lib*.tar.gz) || exit
@@ -175,7 +176,8 @@ cp libakg.so ${OUTPUT_PATH}
 cd ${OUTPUT_PATH}
 tar czvf libakg.tar.gz libakg.so
 rm -rf libakg.so
-write_checksum
+write_checksum_tar
+source ${AKG_DIR}/scripts/package.sh
 
 cd -
 echo "---------------- AKG: build end ----------------"

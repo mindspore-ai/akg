@@ -15,7 +15,15 @@
 import os
 from setuptools import setup
 
-VERSION = '1.6.0'
+pwd = os.path.dirname(os.path.realpath(__file__))
+
+
+def _read_file(filename):
+    with open(os.path.join(pwd, filename), encoding='UTF-8') as f:
+        return f.read()
+
+
+version = _read_file('version.txt').replace("\n", "")
 
 package_data = {
     'akg': [
@@ -33,7 +41,7 @@ package_data = {
 
 def collect_dirs(cur_dir, dirs):
     """Collect all sub dirs in current dir."""
-    for root, all_dirs, files in os.walk(cur_dir, followlinks=True):
+    for root, all_dirs, _ in os.walk(cur_dir, followlinks=True):
         for d in all_dirs:
             if '.' in d:
                 continue
@@ -67,7 +75,7 @@ def find_files(where=None):
 
 setup(
     name='akg',
-    version=VERSION,
+    version=version,
     author='The MindSpore Authors',
     author_email='contact@mindspore.cn',
     url='https://www.mindspore.cn/',
