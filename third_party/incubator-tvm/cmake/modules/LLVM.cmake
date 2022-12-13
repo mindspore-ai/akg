@@ -36,7 +36,7 @@ if(NOT USE_LLVM STREQUAL "OFF")
       set_source_files_properties(${COMPILER_LLVM_SRCS}
         PROPERTIES COMPILE_DEFINITIONS "DMLC_ENABLE_RTTI=0")
       set_source_files_properties(${COMPILER_LLVM_SRCS}
-        PROPERTIES COMPILE_FLAGS "-fno-rtti -Wno-init-list-lifetime")
+        PROPERTIES COMPILE_FLAGS "-fno-rtti -Wno-init-list-lifetime -Wno-mismatched-new-delete -Wno-deprecated-declarations")
     endif()
   endif()
 endif()

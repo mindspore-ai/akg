@@ -23,6 +23,16 @@ if [ ! -d ${OUTPUT_PATH} ]; then
     mkdir -pv "${OUTPUT_PATH}"
 fi
 
+write_version() {
+    if [ ! -e ${BASEPATH}/version.txt ]; then
+        version=`git branch | sed -n '/\* /s///p'`
+        if [ -z ${version} ]; then
+            version='master'
+        fi
+        echo ${version#r} > ${BASEPATH}/version.txt
+    fi
+}
+
 write_checksum() {
     cd "${OUTPUT_PATH}"
     PACKAGE_LIST=$(ls akg-*.whl)
@@ -32,6 +42,7 @@ write_checksum() {
     done
 }
 
+write_version
 cd ${BASEPATH}
 ${PYTHON} setup.py sdist bdist_wheel
 
@@ -46,8 +57,10 @@ do
         PY_TAGS="cp37-cp37m"
     elif [[ $PY_VERSION == *3.8* ]]; then
         PY_TAGS="cp38-cp38"
+    elif [[ $PY_VERSION == *3.9* ]]; then
+        PY_TAGS="cp39-cp39"
     else
-        echo "Error: Could not find Python 3.8 or Python 3.7"
+        echo "Error: Could not find Python between 3.7 and 3.9"
         exit 1
     fi
     new_file_name="${prefix}-${PY_TAGS}-linux_${CUR_ARCH}.whl"
