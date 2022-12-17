@@ -1,7 +1,7 @@
 {
 	"composite": true,
 	"composite_graph": "23.24",
-	"compute_capability": "7.0",
+	"compute_capability":"7.0",
 	"id": 0,
 	"input_desc": [
 		[{
