@@ -20,6 +20,7 @@ import json
 from collections.abc import Iterable
 import akg
 from akg import tvm
+from tvm.autotvm.env import AutotvmGlobalScope
 from akg.utils.kernel_exec import ReturnType, is_symbolic_tiling
 from .split_stitch import split_stitch_attr
 from .construct_args import get_construct_args, get_tune_construct_args, \
@@ -655,6 +656,13 @@ def _set_backend(desc_d):
     return desc_s
 
 
+def _set_cuda_compute_capability(desc_d):
+    """set the compute_capability from info file"""
+    sm_str = "".join(desc_d.get("target_info", {}).get("compute_capability", "0.0").split("."))
+    if sm_str != "00":
+        AutotvmGlobalScope.current.cuda_target_arch = "sm_" + sm_str
+
+
 def build(kernel_desc, attrs=None, poly=True, use_repo=True):
     """
     build kernel with compute description in json format
@@ -683,6 +691,9 @@ def build(kernel_desc, attrs=None, poly=True, use_repo=True):
         attrs = dict()
     backend = desc_d['process']
     attrs = _set_attrs(desc_d, attrs, poly)
+    # set compute_capability for cuda backend
+    if backend == "cuda":
+        _set_cuda_compute_capability(desc_d)
     if backend == 'aicore':
         return _build_to_module_ascend(desc_s, desc_d, attrs, use_repo)
     else:
