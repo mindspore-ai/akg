@@ -208,9 +208,8 @@ class IdentifyReduceChance : public IRVisitor {
           if (cur_reduce_data_->vector_parallel_for == nullptr) {
             if (value < vectorize_size_) {
               cur_reduce_data_->isolate_vector_for.insert(op);
-            } else {
-              cur_reduce_data_->vector_parallel_for = op;
             }
+            cur_reduce_data_->vector_parallel_for = op;
           } else {
             if (value < vectorize_size_) {
               cur_reduce_data_->isolate_vector_for.insert(op);
