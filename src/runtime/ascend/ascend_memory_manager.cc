@@ -26,20 +26,27 @@ constexpr uint64_t kAscendInitDeviceMemGB = 30;
 constexpr uint64_t kMemSizeGB = 30;
 constexpr uint64_t kAscendDeviceMemSize = (kAscendInitDeviceMemGB << kMemSizeGB);
 
-uint64_t GetDeviceHBMSize() {
+uint64_t GetDeviceMemSize() {
   size_t free = 0;
   size_t total = 0;
   rtError_t ret = rtMemGetInfoEx(RT_MEMORYINFO_HBM, &free, &total);
-  if (ret != RT_ERROR_NONE || total == 0) {
+  if (ret != RT_ERROR_NONE) {
     LOG(FATAL) << "Get Device HBM memory size failed, ret = " << ret << ", total =  " << total;
+  }
+  if (total != 0) {
+    return total;
+  }
+  ret = rtMemGetInfoEx(RT_MEMORYINFO_DDR, &free, &total);
+  if (ret != RT_ERROR_NONE) {
+    LOG(FATAL) << "Get Device DDR memory size failed, ret = " << ret << ", total =  " << total;
   }
   return total;
 }
 
 uint64_t GetDefaultDeviceMemSize() {
-  auto total = GetDeviceHBMSize();
+  auto total = GetDeviceMemSize();
   auto ret = total * 15 / 16;  // reserved memory is 1/16 of total
-  LOG(INFO) << "The Device HBM memory size is " << total << ", allocate " << ret << " for backend.";
+  LOG(INFO) << "The Device total memory size is " << total << ", allocate " << ret << " for backend.";
   return ret;
 }
 
