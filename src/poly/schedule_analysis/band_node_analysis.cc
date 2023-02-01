@@ -188,6 +188,11 @@ class OperatorInfoCollector {
           break;
         }
       }
+      if (red_id.is_null()) {
+        LOG(WARNING) << "Not find corresponding reduce identifier statement (red_id) for statement: "
+          << op->func;
+        continue;
+      }
 
       OperatorDomainSpace op_domain;
       auto dm = scop_info_.analysis_result_.GetOperatorDomainMap();
