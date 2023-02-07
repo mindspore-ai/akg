@@ -41,13 +41,15 @@ TuneAxisInfo AxisInfoAdapter(TileAxis *a, TileSizes dims) {
     axis_info->dim_axis = a->axis_type_;
   }
   axis_info->range_min = a->range_min;
-  axis_info->range_extent = a->range_extent;
-  axis_info->c1_constraints.tile_mod_ = a->c1_constraints.tile_mod_;
-  axis_info->c1_constraints.tile_min_ = a->c1_constraints.tile_min_;
-  axis_info->c1_constraints.tile_extent_ = a->c1_constraints.tile_extent_;
-  axis_info->c0_constraints.tile_mod_ = a->c0_constraints.tile_mod_;
-  axis_info->c0_constraints.tile_min_ = a->c0_constraints.tile_min_;
-  axis_info->c0_constraints.tile_extent_ = a->c0_constraints.tile_extent_;
+  // when a axis has shifted-loops, the tile_extent_ could be larger than extent
+  axis_info->range_extent =
+    std::max(a->range_extent.as<IntImm>()->value, a->c1_constraints.tile_extent_.as<IntImm>()->value);
+  axis_info->c1_constraints.tile_mod_ = int(a->c1_constraints.tile_mod_.as<IntImm>()->value);
+  axis_info->c1_constraints.tile_min_ = int(a->c1_constraints.tile_min_.as<IntImm>()->value);
+  axis_info->c1_constraints.tile_extent_ = int(a->c1_constraints.tile_extent_.as<IntImm>()->value);
+  axis_info->c0_constraints.tile_mod_ = int(a->c0_constraints.tile_mod_.as<IntImm>()->value);
+  axis_info->c0_constraints.tile_min_ = int(a->c0_constraints.tile_min_.as<IntImm>()->value);
+  axis_info->c0_constraints.tile_extent_ = int(a->c0_constraints.tile_extent_.as<IntImm>()->value);
   axis_info->forbid_iso = a->forbid_iso;
   axis_info->is_inner = a->is_inner;
   axis_info->mc_sup = a->mc_sup;

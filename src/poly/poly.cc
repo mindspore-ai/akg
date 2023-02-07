@@ -103,7 +103,11 @@ class Poly {
 
     // generate Halide from isl schedule
     TIMER_START;
-    stmt_ = scop_->GenHalide(sched);
+    if (is_tuning) {
+      stmt_ = GenHalide(scop_->info_, sched, true);
+    } else {
+      stmt_ = scop_->GenHalide(sched);
+    }
     TIMER_SHOW("GenHalide", std::string(is_spec_gemm ? "_specgemm" : ""));
     if (scop_->info_.user_config_.GetTarget() == TARGET_CCE) {
       stmt_ = FixLoopMin(stmt_);
