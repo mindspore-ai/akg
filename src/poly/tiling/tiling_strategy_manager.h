@@ -351,7 +351,10 @@ class ShiftAxisStrategy : public TilingStrategy {
       for (const auto &attr : it.second) {
         CHECK_NE(attr.attr_value, "");
         auto share_time = StrToDecimalInt(attr.attr_value);
-        axis->TileRestrainToSingleValue(const_extent * (share_time + 1), CACHE1);
+        // Since the shift loops have one overlap iter, the proper value of shift loop 
+        // should be const_extent * (share_time + 1) - share_time.
+        // For example: loop(1~10) + loop(10~19) + loop(19~28)
+        axis->TileRestrainToSingleValue(const_extent * (share_time + 1) - share_time, CACHE1);
         break;
       }
     }
