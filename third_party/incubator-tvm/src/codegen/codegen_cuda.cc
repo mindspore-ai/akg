@@ -338,7 +338,7 @@ void CodeGenCUDA::PrintType(Type t, std::ostream& os) {  // NOLINT(*)
             LOG(FATAL) << "Cannot convert type " << t << " to CUDA type on a L32 platform";
           }
         } else {
-          os << "long"; break;
+          os << "long long int"; break;
         }
       }
       case 1: os << "int"; break;

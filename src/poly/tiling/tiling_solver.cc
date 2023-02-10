@@ -536,7 +536,11 @@ void InequalitySolver::InitTileAxis(const TileLevel &level) {
     // Step 1: Create unique tile var for each axis.
     std::string var_name = level == CACHE1 ? "T1_" : "T0_";
     var_name += std::to_string(axis->index) + "_";
-    var_name += axis->axis_type_.empty() ? std::to_string(axis->dim_axis) : axis->axis_type_;
+    if (analyzer_.scop_info_.user_config_.GetIsTuning()) {
+      var_name += std::to_string(axis->dim_axis);
+    } else {
+      var_name += axis->axis_type_.empty() ? std::to_string(axis->dim_axis) : axis->axis_type_;
+    }
     Var tile_var;
 
     // ensure unique address

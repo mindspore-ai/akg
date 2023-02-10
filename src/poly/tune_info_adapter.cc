@@ -28,18 +28,14 @@ constexpr int GPU_MMA_K = 64;
 
 Var GetAxisDescId(TileAxis *a) {
   std::string var_name = std::to_string(a->index) + "_";
-  var_name += a->axis_type_.empty() ? std::to_string(a->dim_axis) : a->axis_type_;
+  var_name += std::to_string(a->dim_axis);
   return Var(var_name);
 }
 
 TuneAxisInfo AxisInfoAdapter(TileAxis *a, TileSizes dims) {
   auto axis_info = make_node<TuneAxisInfoNode>();
   axis_info->index = a->index;
-  if (a->axis_type_.empty()) {
-    axis_info->dim_axis = std::to_string(a->dim_axis);
-  } else {
-    axis_info->dim_axis = a->axis_type_;
-  }
+  axis_info->dim_axis = std::to_string(a->dim_axis);
   axis_info->range_min = a->range_min;
   // when a axis has shifted-loops, the tile_extent_ could be larger than extent
   axis_info->range_extent =
