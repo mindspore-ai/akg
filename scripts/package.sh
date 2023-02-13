@@ -26,7 +26,7 @@ fi
 write_version() {
     if [ ! -e ${BASEPATH}/version.txt ]; then
         version=`git branch | sed -n '/\* /s///p'`
-        if [ -z ${version} ]; then
+        if [ -z "${version}" ]; then
             version='master'
         fi
         echo ${version#r} > ${BASEPATH}/version.txt
