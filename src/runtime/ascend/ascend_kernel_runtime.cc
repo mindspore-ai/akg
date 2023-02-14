@@ -123,7 +123,7 @@ bool AscendKernelRuntime::InitDevice() {
     return false;
   }
 
-  ret = rtStreamCreateWithFlags(&stream_, 0, RT_STREAM_HUGE);
+  ret = rtStreamCreateWithFlags(&stream_, 0, RT_STREAM_DEFAULT);
   if (ret != RT_ERROR_NONE) {
     LOG(FATAL) << "Call rtStreamCreate, ret[" << GetErrorMsg(ret) << "]";
   }
