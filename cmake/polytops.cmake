@@ -43,6 +43,8 @@ if (AKG_USE_POLYTOPS)
       akg-untar-polytops
   )
 
+  add_dependencies(libpolytops akg-untar-polytops)
+  add_dependencies(libqiuqi-ip akg-untar-polytops)
   add_compile_definitions(AKG_USE_POLYTOPS)
   target_link_libraries(akg libpolytops)
   target_link_libraries(akg libqiuqi-ip)
