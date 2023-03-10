@@ -423,5 +423,16 @@
                 "bind_thread": "800 1"
             }
         }
+    },
+    "2.Reshape1.Cast1.ReduceSum1.Add1.RealDiv16.356": {
+        "1.32_16.1.512.1": {
+            "float32.int32.float32--": {
+                "metadata": {
+                    "attrs": {
+                        "pragma_disable_whole_component": false
+                    }
+                }
+            }
+        }
     }
 }
