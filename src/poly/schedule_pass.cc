@@ -29,11 +29,15 @@ static constexpr const char *const kEnvStringMsDevPolyTOPSVerbosity = "MS_DEV_PO
 static constexpr const char *const kEnvStringMsDevPolyTOPSCheckSchedules = "MS_DEV_POLYTOPS_CHECK_SCHEDULES";
 static constexpr const char *const kEnvStringMsDevPolyTOPSCodeSinking = "MS_DEV_POLYTOPS_CODE_SINKING";
 static constexpr const char *const kEnvStringMsDevPolyTOPSConstantToParameter = "MS_DEV_POLYTOPS_CONSTANT_TO_PARAMETER";
+static constexpr const char *const kEnvStringMsDevPolyTOPSUnfuseIndependentStmts =
+  "MS_DEV_POLYTOPS_UNFUSE_INDEPENDENT_STMTS";
 static constexpr const char *const kEnvStringMsDevPolyTOPSParameterShifting = "MS_DEV_POLYTOPS_PARAMETER_SHIFTING";
 static constexpr const char *const kEnvStringMsDevPolyTOPSPostProcessFullSets =
   "MS_DEV_POLYTOPS_POST_PROCESS_FULL_SETS";
 static constexpr const char *const kEnvStringMsDevPolyTOPSPostProcessExtraOuterParallelLoop =
   "MS_DEV_POLYTOPS_POST_PROCESS_EXTRA_OUTER_PARALLEL_LOOP";
+static constexpr const char *const kEnvStringMsDevPolyTOPSPreProcessSortRelations =
+  "MS_DEV_POLYTOPS_PRE_PROCESS_SORT_RELATIONS";
 static constexpr const char *const kEnvStringMsDevPolyTOPSLargeOuterBounds = "MS_DEV_POLYTOPS_LARGE_OUTER_BOUNDS";
 static constexpr const char *const kEnvStringMsDevPolyTOPSEnableSkewing = "MS_DEV_POLYTOPS_ENABLE_SKEWING";
 static constexpr const char *const kEnvStringMsDevPolyTOPSEnableParallelSkewingOnly =
@@ -545,6 +549,9 @@ polytops::bin::Options PolyTOPSOptionsInit(const akg::ir::poly::PassInfo &pass_i
   bool constant_to_parameter = scop_info.user_config_.GetPolyTOPSConstantToParameter();
   constant_to_parameter = env_to_bool(kEnvStringMsDevPolyTOPSConstantToParameter, constant_to_parameter);
 
+  bool unfuse_independent_stmts = scop_info.user_config_.GetPolyTOPSUnfuseIndependentStmts();
+  unfuse_independent_stmts = env_to_bool(kEnvStringMsDevPolyTOPSUnfuseIndependentStmts, unfuse_independent_stmts);
+
   bool parameter_shifting = scop_info.user_config_.GetPolyTOPSParameterShifting();
   parameter_shifting = env_to_bool(kEnvStringMsDevPolyTOPSParameterShifting, parameter_shifting);
 
@@ -555,6 +562,9 @@ polytops::bin::Options PolyTOPSOptionsInit(const akg::ir::poly::PassInfo &pass_i
     scop_info.user_config_.GetPolyTOPSPostProcessingExtraOuterParallelLoop();
   post_process_extra_outer_parallel_loop =
     env_to_bool(kEnvStringMsDevPolyTOPSPostProcessExtraOuterParallelLoop, post_process_extra_outer_parallel_loop);
+
+  bool pre_process_sort_relations = scop_info.user_config_.GetPolyTOPSPreProcessingSortRelations();
+  pre_process_sort_relations = env_to_bool(kEnvStringMsDevPolyTOPSPreProcessSortRelations, pre_process_sort_relations);
 
   bool large_outer_bounds = scop_info.user_config_.GetPolyTOPSLargeOuterBounds();
   large_outer_bounds = env_to_bool(kEnvStringMsDevPolyTOPSLargeOuterBounds, large_outer_bounds);
@@ -574,9 +584,11 @@ polytops::bin::Options PolyTOPSOptionsInit(const akg::ir::poly::PassInfo &pass_i
   result.SetVerbosity(verbosity);
   result.SetCodeSinking(code_sinking);
   result.SetConstantToParameter(constant_to_parameter);
+  result.SetUnfuseIndepStmts(unfuse_independent_stmts);
   result.SetParameterShifting(parameter_shifting);
   result.SetFullSetsPostProcessing(post_process_full_sets);
   result.SetExtraParallelOuterLoopPostProcessing(post_process_extra_outer_parallel_loop);
+  result.SetRelationSortingPreProcessing(pre_process_sort_relations);
   result.SetEnableLargeOuterBounds(large_outer_bounds);
   result.SetEnableSkewing(enable_skewing);
   result.SetEnableParallelSkewingOnly(enable_parallel_skewing_only);

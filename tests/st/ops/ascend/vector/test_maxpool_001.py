@@ -16,6 +16,7 @@ import os
 import pytest
 from tests.common.base import TestBase
 from tests.common.test_run.ascend.maxpool_run import maxpool_run
+from tests.common.test_run.ascend.maxpool_run import maxpool_run_unfuse
 
 ############################################################
 # TestCase= class: put to tests/*/
@@ -35,12 +36,12 @@ class TestCase(TestBase):
         self.testarg = [
             # testflag,opfuncname,testRunArgs:shape,kernel,stride,pad,hybrid,dtype,dimArgs
             # reid
-            ("reid_mp_fp16_01", maxpool_run, ((2, 16, 40, 24, 16), (1, 1), (2, 2), (0, 0, 0, 0), True, "float16")),
-            ("reid_mp_fp32_01", maxpool_run, ((2, 16, 40, 24, 16), (1, 1), (2, 2), (0, 0, 0, 0), True, "float32")),
+            ("reid_mp_fp16_01", maxpool_run_unfuse, ((2, 16, 40, 24, 16), (1, 1), (2, 2), (0, 0, 0, 0), True, "float16")),
+            ("reid_mp_fp32_01", maxpool_run_unfuse, ((2, 16, 40, 24, 16), (1, 1), (2, 2), (0, 0, 0, 0), True, "float32")),
             # others
             ("001_maxpool_fp16", maxpool_run, ((1, 1, 16, 16, 16), (2, 2), (1, 1), (0, 0, 0, 0), True, "float16")),
             ("002_maxpool_fp16", maxpool_run, ((1, 1, 16, 16, 16), (2, 2), (2, 2), (1, 1, 1, 1), True, "float16")),
-            ("003_maxpool_fp16", maxpool_run, ((1, 1, 16, 16, 16), (2, 2), (1, 1), (1, 1, 1, 1), True, "float16")),
+            ("003_maxpool_fp16", maxpool_run_unfuse, ((1, 1, 16, 16, 16), (2, 2), (1, 1), (1, 1, 1, 1), True, "float16")),
             # ("004_maxpool_fp16", maxpool_run, ((1, 1, 29, 29, 16), (2, 2), (1, 1), (1, 1, 1, 1), True, "float16")),
             ("005_maxpool_fp16", maxpool_run, ((1, 1, 30, 30, 16), (2, 2), (1, 1), (0, 0, 0, 0), True, "float16")),
             ("006_maxpool_fp16", maxpool_run, ((1, 2, 16, 16, 16), (4, 4), (3, 3), (1, 1, 1, 1), True, "float16")),

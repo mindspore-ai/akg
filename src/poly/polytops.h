@@ -2,7 +2,7 @@
 #define _POLYTOPS_H
 
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2023 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@
  * limitations under the License.
  */
 
-/// \file polytops.h
+/// \file polytops.hpp
 /// \brief Header file for the PolyTOPS polyhedral scheduler
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -105,13 +105,13 @@ class Options {
   };
 
   /// \brief Get a string representation of a Solver type
-  /// \param t Type to represent as a string
+  /// \param[in] t Type to represent as a string
   /// \return A string representation of \a t
   /// \relatesalso polytops::bin::Options::Type
   static std::shared_ptr<char> SolverTypeToString(polytops::bin::Options::SolverType t);
 
   /// \brief Read a Type type from a string representation
-  /// \param s String to read
+  /// \param[in] str String to read
   /// \return Read Solver type
   /// \relatesalso polytops::bin::Options::SolverType
   [[gnu::nonnull]] static polytops::bin::Options::SolverType SolverTypeFromString(const char *str);
@@ -149,7 +149,7 @@ class Options {
 
   /// \brief Dereference operator
   /// \return Pointer to the inner polytops::runtime::Options
-  [[gnu::const]] const polytops::runtime::Options *operator*(void) const;
+  [[gnu::pure]] const polytops::runtime::Options *operator*(void) const;
 
   ////////////////////////////////////////////////////////////////////////////////
   // Getters
@@ -215,6 +215,12 @@ class Options {
   /// \retval false otherwise
   [[gnu::pure]] bool GetConstantToParameter(void) const;
 
+  /// \brief Get the independent statements behaviour
+  /// \return A boolean value that indicates whether independent stmts will be fused or not
+  /// \retval true if we want to unfuse the independent stmts
+  /// \retval false otherwise
+  [[gnu::pure]] bool GetUnfuseIndepStmts(void) const;
+
   /// \brief Get the SCC fusing behaviour
   /// \return A boolean value that indicates whether the SCC maxfuse behaviour is enabled
   /// \retval true if the SCC maxfuse behaviour is enabled
@@ -238,6 +244,12 @@ class Options {
   /// \retval true Extra parallel outer loop post processing is enabled
   /// \retval false otherwise
   [[gnu::pure]] bool GetExtraParallelOuterLoopPostProcessing(void) const;
+
+  /// \brief Get the relation sorting pre processing behaviour
+  /// \return A boolean value that indicates whether relation sorting pre processing is enabled or disabled
+  /// \retval true relation sorting pre processing is enabled
+  /// \retval false otherwise
+  [[gnu::pure]] bool GetRelationSortingPreProcessing(void) const;
 
   /// \brief Get the large outer bounds behaviour
   /// \return A boolean value that indicates whether large outer bounds are taken into account
@@ -309,21 +321,29 @@ class Options {
   /// \param[in] toggle Enable or disable the constant to parameter behaviour
   void SetConstantToParameter(bool toggle);
 
+  /// \brief Choose the independent statements fusion behaviour
+  /// \param[in] toggle Enable or disable the independent statements unfusion
+  void SetUnfuseIndepStmts(bool toggle);
+
   /// \brief Choose the SCC maxfuse behaviour
   /// \param[in] toggle Enable or disable the SCC maxfuse behaviour
-  void SetSccMaxfuse(bool toogle);
+  void SetSccMaxfuse(bool toggle);
 
   /// \brief Choose the parameter shifting behaviour
   /// \param[in] toggle Enable or disable the parameter shifting behaviour
-  void SetParameterShifting(bool toogle);
+  void SetParameterShifting(bool toggle);
 
   /// \brief Choose the full sets post processing behaviour
   /// \param[in] toggle Enable or disable full sets post processing
-  void SetFullSetsPostProcessing(bool toogle);
+  void SetFullSetsPostProcessing(bool toggle);
 
   /// \brief Choose the extra parallel outer loop post processing behaviour
   /// \param[in] toggle Enable or disable extra parallel outer loop post processing
-  void SetExtraParallelOuterLoopPostProcessing(bool toogle);
+  void SetExtraParallelOuterLoopPostProcessing(bool toggle);
+
+  /// \brief Choose the relation sorting pre processing behaviour
+  /// \param[in] toggle Enable or disable relation sorting pre processing
+  void SetRelationSortingPreProcessing(bool toggle);
 
   /// \brief Choose the large outer bounds behaviour
   /// \param[in] toggle Enable or disable the large outer bounds behaviour
@@ -338,15 +358,11 @@ class Options {
   void SetEnableParallelSkewingOnly(bool toggle);
 
   /// \brief Get the iterator binding behaviour
-  /// \return A boolean value that indicates whether iterator binding is enabled
-  /// \retval true if iterator binding is enabled
-  /// \retval false otherwise
+  /// \param[in] toggle A boolean value that indicates whether iterator binding should be enabled
   void SetEnableIteratorBinding(bool toggle);
 
   /// \brief Get the progression relaxation behaviour
-  /// \return A boolean value that indicates whether progression relaxation is enabled
-  /// \retval true if progression relaxation is enabled
-  /// \retval false otherwise
+  /// \param[in] toggle A boolean value that indicates whether progression relaxation should be enabled
   void SetEnableRelaxProgression(bool toggle);
 
   /// \brief Enable or disable problem dumping
@@ -402,7 +418,7 @@ class InfluenceOperation {
 
   /// \brief Constructor
   /// \param[in] statement Target statement
-  /// \param[in] dimensions Target dimension
+  /// \param[in] dimension Target dimension
   /// \param[in] value Value for the operation
   /// \param[in] type Type of the operation
   [[gnu::nonnull]] InfluenceOperation(
@@ -414,7 +430,7 @@ class InfluenceOperation {
   std::shared_ptr<char> GetStatement(void) const;
 
   /// \brief Get the target dimension
-  /// \result The target dimensions
+  /// \result The target dimension
   size_t GetDimension(void) const;
 
   /// \brief Get the value for the operation
@@ -482,7 +498,7 @@ class Influence {
 
   /// \brief Dereference operator
   /// \return Pointer to the inner polytops::Influence
-  [[gnu::const]] const polytops::Influence<int64_t> *operator*(void) const;
+  [[gnu::pure]] const polytops::Influence<int64_t> *operator*(void) const;
 
   ////////////////////////////////////////////////////////////////////////////////
   // Getters
@@ -587,7 +603,7 @@ class Hints {
 
   /// \brief Dereference operator
   /// \return Pointer to the inner polytops::Hints
-  [[gnu::const]] const polytops::Hints<int64_t> *operator*(void) const;
+  [[gnu::pure]] const polytops::Hints<int64_t> *operator*(void) const;
 
   ////////////////////////////////////////////////////////////////////////////////
   // Getters
@@ -672,18 +688,22 @@ class Hints {
   ////////////////////////////////////////////////////////////////////////////////
 
   /// \brief Set the Serials component of the hints
+  /// \param[in] statement Target statement
   /// \param[in] serials Serials component for the directives
   [[gnu::nonnull]] void SetStatementSerials(const char *statement, const std::vector<int> &serials);
 
   /// \brief Set the Vectorials component of the hints
+  /// \param[in] statement Target statement
   /// \param[in] vectorials Vectorials component for the directives
   [[gnu::nonnull]] void SetStatementVectorials(const char *statement, const std::vector<int> &vectorials);
 
   /// \brief Set the Reduces component of the hints
+  /// \param[in] statement Target statement
   /// \param[in] reduces Reduces component for the directives
   [[gnu::nonnull]] void SetStatementReduces(const char *statement, const std::vector<int> &reduces);
 
   /// \brief Set the Parallels component of the hints
+  /// \param[in] statement Target statement
   /// \param[in] parallels Parallels component for the directives
   [[gnu::nonnull]] void SetStatementParallels(const char *statement, const std::vector<int> &parallels);
 
@@ -774,7 +794,7 @@ class Scop {
   /// \param[in] dependencies Dependencies
   /// \param[in] options Options for PolyTOPS
   /// \param[in] name Optional name for the SCoP
-  [[gnu::nonnull(1, 2)]] Scop(__isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies,
+  [[gnu::nonnull(2, 2)]] Scop(__isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies,
                               const polytops::bin::Options &options, const char *name = nullptr);
 
   /// \brief Constructor from isl data
@@ -784,7 +804,7 @@ class Scop {
   /// \param[in] writes Writes
   /// \param[in] options Options for PolyTOPS
   /// \param[in] name Optional name for the SCoP
-  [[gnu::nonnull(1, 4)]] Scop(__isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies,
+  [[gnu::nonnull(2, 4)]] Scop(__isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies,
                               __isl_keep isl_union_map *reads, __isl_keep isl_union_map *writes,
                               const polytops::bin::Options &options, const char *name = nullptr);
 
@@ -794,7 +814,7 @@ class Scop {
   /// \param[in] influence Influence for PolyTOPS
   /// \param[in] options Options for PolyTOPS
   /// \param[in] name Optional name for the SCoP
-  [[gnu::nonnull(1, 2)]] Scop(__isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies,
+  [[gnu::nonnull(2, 2)]] Scop(__isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies,
                               const polytops::bin::Influence &influence, const polytops::bin::Options &options,
                               const char *name = nullptr);
 
@@ -806,7 +826,7 @@ class Scop {
   /// \param[in] influence Influence for PolyTOPS
   /// \param[in] options Options for PolyTOPS
   /// \param[in] name Optional name for the SCoP
-  [[gnu::nonnull(1, 4)]] Scop(__isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies,
+  [[gnu::nonnull(2, 4)]] Scop(__isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies,
                               __isl_keep isl_union_map *reads, __isl_keep isl_union_map *writes,
                               const polytops::bin::Influence &influence, const polytops::bin::Options &options,
                               const char *name = nullptr);
@@ -817,7 +837,7 @@ class Scop {
   /// \param[in] hints Hints for PolyTOPS
   /// \param[in] options Options for PolyTOPS
   /// \param[in] name Optional name for the SCoP
-  [[gnu::nonnull(1, 2)]] Scop(__isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies,
+  [[gnu::nonnull(2, 2)]] Scop(__isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies,
                               const polytops::bin::Hints &hints, const polytops::bin::Options &options,
                               const char *name = nullptr);
 
@@ -829,7 +849,7 @@ class Scop {
   /// \param[in] hints Hints for PolyTOPS
   /// \param[in] options Options for PolyTOPS
   /// \param[in] name Optional name for the SCoP
-  [[gnu::nonnull(1, 4)]] Scop(__isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies,
+  [[gnu::nonnull(2, 4)]] Scop(__isl_keep isl_schedule *sch, __isl_keep isl_union_map *dependencies,
                               __isl_keep isl_union_map *reads, __isl_keep isl_union_map *writes,
                               const polytops::bin::Hints &hints, const polytops::bin::Options &options,
                               const char *name = nullptr);
@@ -849,7 +869,7 @@ class Scop {
 
   /// \brief Dereference operator
   /// \return Pointer to the inner polytops::Hints
-  [[gnu::const]] const polytops::Scop<int64_t> *operator*(void) const;
+  [[gnu::pure]] const polytops::Scop<int64_t> *operator*(void) const;
 
   ////////////////////////////////////////////////////////////////////////////////
   // Operations
@@ -870,10 +890,17 @@ class Scop {
   /// \param[in] ctx isl_ctx to use for the conversion into an isl schedule tree
   /// \return The computed schedule represented as an isl schedule tree
   /// \pre ComputeSchedule() has been called and returned true
-  /// \seealso polytops::bin::Scop::ComputeSchedule()
+  /// \see polytops::bin::Scop::ComputeSchedule()
   [[nodiscard]] __isl_give isl_schedule *ToIslSchedule(__isl_keep isl_ctx *ctx) const;
 
-  /// \brief Check a schedule
+  /// \brief Check the computed schedule
+  /// \retval true if the schedule is valid
+  /// \retval false otherwise
+  /// \pre The SCoP contains dependencies
+  /// \pre ComputeSchedule() has been called and returned true
+  bool CheckComputedSchedule(void) const;
+
+  /// \brief Check an arbitrary schedule
   /// \param[in] schedule Schedule to check
   /// \return A boolean value that indicates whether the schedule is valid
   /// \retval true if the schedule is valid
@@ -899,6 +926,9 @@ class Scop {
   // Misc. friend functions
   ////////////////////////////////////////////////////////////////////////////////
 
+  /// \brief Swap two SCoPs
+  /// \param[in,out] lhs Left hand side SCoP
+  /// \param[in,out] rhs Right hand side SCoP
   friend void swap(polytops::bin::Scop &lhs, polytops::bin::Scop &rhs);
 };
 }  // namespace bin

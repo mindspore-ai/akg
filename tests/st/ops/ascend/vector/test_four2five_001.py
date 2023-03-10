@@ -35,9 +35,9 @@ class TestCase(TestBase):
             ("four2five_004", "four2five_run", ([1, 64, 16, 16], "float16", 'NCHW', 'float16')),
             ("four2five_005", "four2five_run", ([8, 64, 16, 16], "float16", 'NCHW', 'float16')),
             ("four2five_006", "four2five_run", ([1, 64, 15, 15], "float16", 'NCHW', 'float16')),
-            ("four2five_007", "four2five_run", ([1, 24, 16, 16], "float16", 'NCHW', 'float16')),
-            ("four2five_008", "four2five_run", ([1, 60, 15, 15], "float16", 'NCHW', 'float16')),
-            ("four2five_009", "four2five_run", ([1, 59, 121, 15], "float16", 'NCHW', 'float16')),
+            ("four2five_007", "four2five_run_isl", ([1, 24, 16, 16], "float16", 'NCHW', 'float16')),
+            ("four2five_008", "four2five_run_isl", ([1, 60, 15, 15], "float16", 'NCHW', 'float16')),
+            ("four2five_009", "four2five_run_isl", ([1, 59, 121, 15], "float16", 'NCHW', 'float16')),
             # Resnet50
             ("four2five_011", "four2five_run", ([64, 64, 56, 56], "float16", 'NCHW', 'float16')),
             ("four2five_012", "four2five_run", ([32, 1001, 1, 1], "float16", 'NCHW', 'float16')),
@@ -64,7 +64,7 @@ class TestCase(TestBase):
             #("four2five_020", four2five_run, ([8, 64, 16, 16], "float32", 'NCHW', 'float16')),
             #("four2five_021", four2five_run, ([1, 64, 15, 15], "float32", 'NCHW', 'float16')),
             #("four2five_022", four2five_run, ([1, 24, 16, 16], "float32", 'NCHW', 'float16')),
-            ("four2five_023", "four2five_run", ([1, 59, 121, 15], "float32", 'NCHW', 'float32')),
+            ("four2five_023", "four2five_run_isl", ([1, 59, 121, 15], "float32", 'NCHW', 'float32')),
             ("four2five_001", "four2five_run", ([32, 1, 1, 1], "float32", 'NCHW', 'float32')),
 
             ("four2five_024", "four2five_run", ([6, 16, 2, 8], "float32", 'NHWC', 'float32')),
