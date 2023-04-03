@@ -830,6 +830,28 @@ TVM_REGISTER_GLOBAL("CudaBatchMatMul").set_body([](TVMArgs args, TVMRetValue *rv
   BatchMatMul(args, rv);
 });
 
+TVM_REGISTER_GLOBAL("FastGeLU").set_body([](TVMArgs args, TVMRetValue *rv) {
+  CHECK_GE(args.size(), ONE);
+  auto inputs = args[0].operator Array<NodeRef>();
+  CHECK(inputs[0]->IsInstance<TensorNode>());
+  constexpr double const1 = 0.851;
+  constexpr double const2 = -1.702;
+  auto x = Downcast<Tensor>(inputs[0]);
+  auto dtype = x->dtype;
+  auto const_1 = make_const(dtype, const1);
+  auto const_2 = make_const(dtype, const2);
+  auto const_one = make_const(dtype, 1.0);
+  auto abs_x = topi::abs(x);
+  auto sub1 = topi::subtract(x, abs_x);
+  auto mul1 = topi::multiply(sub1, const_1);
+  auto exp1 = topi::exp(mul1);
+  auto tmp1 = topi::multiply(x, exp1);
+  auto mul2 = topi::multiply(abs_x, const_2);
+  auto exp2 = topi::exp(mul2);
+  auto tmp2 = topi::add(exp2, const_one);
+  *rv = topi::divide(tmp1, tmp2);
+});
+
 void TypeChecker(const Tensor &input_data, const std::string &name, const air::DataType &type) {
   if (input_data->dtype != type) {
     LOG(FATAL) << "dtype of " << name << " is not supported";
