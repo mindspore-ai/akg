@@ -16,13 +16,17 @@
 import akg.tvm
 import os
 
+
 @akg.tvm.register_func
 def get_kernel_meta_path():
-    return os.path.realpath(os.getenv('MS_COMPILER_CACHE_PATH', './')) + '/akg_kernel_meta/'
+    kernel_meta_dir = os.getenv("KERNEL_META_DIR", default="akg_kernel_meta")
+    return os.path.realpath(os.getenv('MS_COMPILER_CACHE_PATH', './')) + '/' + kernel_meta_dir + '/'
+
 
 @akg.tvm.register_func
 def get_dump_ir_flag():
     return 'MS_DEV_DUMP_IR'
+
 
 @akg.tvm.register_func
 def get_dump_code_flag():

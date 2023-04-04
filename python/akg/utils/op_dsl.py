@@ -906,6 +906,21 @@ def layout_transform_str(inputs, output, attr, op_type):
     return res
 
 
+def fast_gelu_str(inputs, output, attr):
+    x = inputs[0][0]["tensor_name"]
+    x_type = inputs[0][0]["data_type"]
+    res = "abs_x = np.absolute(%s)\n" % x
+    res += "sub1 = np.subtract(%s, abs_x)\n" % x
+    res += "mul1 = np.multiply(sub1, np.%s(0.851))\n" % x_type
+    res += "exp1 = np.exp(mul1)\n"
+    res += "tmp1 = np.multiply(%s, exp1)\n" % x
+    res += "mul2 = np.multiply(abs_x, np.%s(-1.702))\n" % x_type
+    res += "exp2 = np.exp(mul2)\n"
+    res += "tmp2 = np.add(exp2, np.%s(1))\n" % x_type
+    res += "%s = np.divide(tmp1, tmp2)\n" % output[0]["tensor_name"]
+    return res
+
+
 op_dsl = {
     "Custom": lambda inputs, output, attr: custom_str(inputs, output, attr),
     "ReduceSum": lambda inputs, output, attr: reduce_str(inputs, output, attr, "sum"),
@@ -1122,5 +1137,6 @@ op_dsl = {
                                                get_input(inputs[1][0])),
     "Pool2D": lambda inputs, output, attr: pool2d_str(inputs, output, attr),  
     "LayoutTransform": lambda inputs, output, attr: layout_transform_str(inputs, output, attr, "layout_transform"),
-    "Concat": lambda inputs, output, attr: concat_str(inputs, output, attr)
+    "Concat": lambda inputs, output, attr: concat_str(inputs, output, attr),
+    "FastGeLU": lambda inputs, output, attr: fast_gelu_str(inputs, output, attr)
 }
