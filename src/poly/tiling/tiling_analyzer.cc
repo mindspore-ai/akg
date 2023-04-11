@@ -566,7 +566,7 @@ bool TileCandidate::GetActualBufSize(const BufferEntry *buf, BufSizeInfo *buf_si
       Expr tile_expr = is_l0_tile[buf->scope] ? this->tile_val_[a].tile_c0 : this->tile_val_[a].tile_c1;
       if (const auto tile_imm = tile_expr.as<IntImm>()) tile = tile_imm->value;
     }
-    if (tile >= divisor) {
+    if (tile >= divisor || tile <= 0) {
       tile = divisor;
     }
     CHECK_GT(tile, 0) << "Tile factor must be positive";
