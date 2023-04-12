@@ -147,7 +147,7 @@ function(__find_pkg_then_add_target pkg_name pkg_exe lib_path)
         endif()
 
         if (EXISTS ${${pkg_name}_BASE_DIR}/include)
-            set_target_properties(${pkg_name}::${_LIB_NAME} PROPERTIES 
+            set_target_properties(${pkg_name}::${_LIB_NAME} PROPERTIES
                 INTERFACE_INCLUDE_DIRECTORIES "${${pkg_name}_BASE_DIR}/include")
         endif ()
 
@@ -205,7 +205,7 @@ set(AKG_FIND_NO_DEFAULT_PATH NO_CMAKE_PATH NO_CMAKE_ENVIRONMENT_PATH NO_SYSTEM_E
 function(akg_add_pkg pkg_name )
     set(options )
     set(oneValueArgs URL MD5 GIT_REPOSITORY GIT_TAG VER EXE DIR CMAKE_PATH CUSTOM_CMAKE)
-    set(multiValueArgs CMAKE_OPTION LIBS PATCHES)
+    set(multiValueArgs CMAKE_OPTION  CONFIGURE_COMMAND LIBS PATCHES)
     cmake_parse_arguments(PKG "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN} )
 
     if(NOT PKG_LIB_PATH)
@@ -330,7 +330,7 @@ function(akg_add_pkg pkg_name )
             message(FATAL_ERROR "Failed patch: ${_LF_PATCH_FILE}")
         endif()
     endforeach(_PATCH_FILE)
- 
+
     file(LOCK ${${pkg_name}_BASE_DIR} DIRECTORY GUARD FUNCTION RESULT_VARIABLE ${pkg_name}_LOCK_RET TIMEOUT 600)
     if(NOT ${pkg_name}_LOCK_RET EQUAL "0")
         message(FATAL_ERROR "error! when try lock ${${pkg_name}_BASE_DIR} : ${${pkg_name}_LOCK_RET}")
@@ -368,6 +368,16 @@ function(akg_add_pkg pkg_name )
 
             __exec_cmd(COMMAND ${CMAKE_COMMAND} --build . --target install -- -j${THNUM}
                     WORKING_DIRECTORY ${${pkg_name}_SOURCE_DIR}/_build)
+
+        elseif(PKG_CONFIGURE_COMMAND)
+           __exec_cmd(COMMAND ${PKG_CONFIGURE_COMMAND}
+                      ${${pkg_name}_MAKE_CFLAGS} ${${pkg_name}_MAKE_CXXFLAGS} ${${pkg_name}_MAKE_LDFLAGS}
+                      --prefix=${${pkg_name}_BASE_DIR}
+                      WORKING_DIRECTORY ${${pkg_name}_SOURCE_DIR})
+           __exec_cmd(COMMAND ${CMAKE_MAKE_PROGRAM} ${${pkg_name}_BUILD_OPTION} -j${THNUM}
+                      WORKING_DIRECTORY ${${pkg_name}_SOURCE_DIR})
+           __exec_cmd(COMMAND ${CMAKE_MAKE_PROGRAM} install
+                      WORKING_DIRECTORY ${${pkg_name}_SOURCE_DIR})
         endif()
     endif()
 
