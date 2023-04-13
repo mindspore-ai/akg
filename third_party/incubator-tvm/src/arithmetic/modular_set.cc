@@ -20,6 +20,9 @@
 /*!
  * \file modular_set.cc
  * \brief Modular set analysis
+ *
+ * 2023.4.13
+ *   Fix compilation warning
  */
 #include <tvm/arithmetic.h>
 #include <tvm/expr_operator.h>
@@ -133,7 +136,7 @@ class ModularSetAnalyzer::Impl :
   }
 
   Entry VisitExpr_(const UIntImm* op) final {
-    if (op->value < std::numeric_limits<int64_t>::max()) {
+    if (op->value < std::numeric_limits<uint64_t>::max()) {
       return Entry(0, static_cast<int>(op->value));
     } else {
       return Everything();
