@@ -373,10 +373,17 @@ add_library(akg SHARED ${COMPILER_SRCS} ${RUNTIME_SRCS} ${TOPI_SRCS} ${AKG_EXTEN
 add_dependencies(akg akg::isl_fixed)
 include(cmake/polytops.cmake)
 
-if (EXISTS ${AUTO_TUNE_LIB})
-  target_link_libraries(akg akg::isl_fixed ${TVM_LINKER_LIBS} ${TVM_RUNTIME_LINKER_LIBS} pthread ${AUTO_TUNE_LIB})
+string(FIND "${TVM_LINKER_LIBS}" "-ltinfo" TINFO)
+if (NOT ${TINFO} MATCHES "-1")
+  string(REPLACE "-ltinfo" "" TVM_LINKER_LIBS "${TVM_LINKER_LIBS}")
+  include(cmake/external_libs/ncurses.cmake)
+  target_link_libraries(akg akg::isl_fixed ${TVM_LINKER_LIBS} ${TVM_RUNTIME_LINKER_LIBS} akg::ncurses pthread)
 else()
   target_link_libraries(akg akg::isl_fixed ${TVM_LINKER_LIBS} ${TVM_RUNTIME_LINKER_LIBS} pthread)
+endif()
+
+if (EXISTS ${AUTO_TUNE_LIB})
+  target_link_libraries(akg ${AUTO_TUNE_LIB})
 endif()
 
 if(USE_CCE_PROFILING)
