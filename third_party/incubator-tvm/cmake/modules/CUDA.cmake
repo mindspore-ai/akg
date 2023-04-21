@@ -55,11 +55,6 @@ if(USE_CUDA)
             installation position. (e.g. export CUDA_HOME=/home/user_name/cuda)")
   endif()
 
-  list(APPEND TVM_LINKER_LIBS ${CUDA_NVRTC_LIBRARY})
-  list(APPEND TVM_RUNTIME_LINKER_LIBS ${CUDA_CUDART_LIBRARY})
-  list(APPEND TVM_RUNTIME_LINKER_LIBS ${CUDA_CUDA_LIBRARY})
-  list(APPEND TVM_RUNTIME_LINKER_LIBS ${CUDA_NVRTC_LIBRARY})
-
   if(USE_CUDNN)
     message(STATUS "Build with cuDNN support")
     file(GLOB CONTRIB_CUDNN_SRCS ${TVM_DIR}/src/runtime/contrib/cudnn/*.cc)

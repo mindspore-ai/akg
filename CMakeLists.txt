@@ -261,8 +261,7 @@ file(
   ${AKG_SOURCE_DIR}/src/composite/lower_tree/*.cc
   ${AKG_SOURCE_DIR}/src/composite/utils/*.cc
   ${AKG_SOURCE_DIR}/src/composite/optimize/*.cc
-  ${AKG_SOURCE_DIR}/src/common/*.cc
-  ${AKG_SOURCE_DIR}/src/runtime/stub/*.cc)
+  ${AKG_SOURCE_DIR}/src/common/*.cc)
 
 # Check if auto tune lib exists and remove stub if exists
 if (USE_AUTO_TUNE)
@@ -283,11 +282,6 @@ if (USE_AUTO_TUNE)
       message("Cannot use auto tune: lib not found.")
     endif()
   endif()
-endif()
-
-file(GLOB RUNTIME_STUB_SRC ${AKG_SOURCE_DIR}/src/runtime/stub/*.cc)
-if(USE_CCE_RT OR USE_KC_AIR)
-  list(REMOVE_ITEM COMPILER_SRCS ${RUNTIME_STUB_SRC})
 endif()
 
 if(USE_CCE_PROFILING)

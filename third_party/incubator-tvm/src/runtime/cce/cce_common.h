@@ -24,6 +24,7 @@
 
 /*!
  * 2019.12.30 - Add file cce_common.h.
+ * 2023.4.21 - Include cce_wrapper.h.
  */
 
 #ifndef TVM_RUNTIME_CCE_CCE_COMMON_H_
@@ -33,6 +34,7 @@
 #include <runtime/rt.h>
 #include <runtime/workspace_pool.h>
 #include <string>
+#include "cce_wrapper.h"
 
 namespace air {
 namespace runtime {

@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
+ *
  *   http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing,
  * software distributed under the License is distributed on an
  * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -28,6 +28,7 @@
  * 2020.8.14 - Get thread info inside BuildCUDA function,
  *             enable dump cuda meta.
  * 2021.8.9 - Pass workspace to cuda meta dump function.
+ * 2023.4.21 - load cuda symbols.
  */
 
 #if defined(__linux__)
@@ -135,6 +136,7 @@ std::string NVRTCCompile(const std::string& code, bool include_path = false) {
 }
 
 runtime::Module BuildCUDA(Array<LoweredFunc> funcs) {
+  air::runtime::CudaWrapper::GetInstance();
   using air::runtime::Registry;
   bool output_ssa = false;
   CodeGenCUDA cg;

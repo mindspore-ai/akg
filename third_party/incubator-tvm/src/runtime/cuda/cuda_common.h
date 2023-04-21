@@ -28,6 +28,7 @@
 #include <tvm/runtime/packed_func.h>
 #include <string>
 #include "../workspace_pool.h"
+#include "cuda_wrapper.h"
 
 namespace air {
 namespace runtime {
