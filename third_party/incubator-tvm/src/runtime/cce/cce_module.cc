@@ -23,6 +23,7 @@
 
 /*!
  * 2019.12.30 - Add file cce_module.cc.
+ * 2023.4.21 - load cce symbols.
  */
 
 #include "runtime/cce/cce_module.h"
@@ -59,6 +60,7 @@ class CceModuleNode : public air::runtime::ModuleNode {
       : data_(data), fmt_(fmt), fmap_(fmap), cce_source_(cce_source) {
     std::fill(module_.begin(), module_.end(), nullptr);
     std::fill(stub_.begin(), stub_.end(), std::unordered_map<std::string, void*>());
+    CceWrapper::GetInstance();
   }
   // destructor
   ~CceModuleNode() override {

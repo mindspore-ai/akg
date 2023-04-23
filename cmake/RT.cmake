@@ -17,7 +17,6 @@ if(USE_CCE_RT)
 
   set(ASCEND_CANN_RUNTIME_PATH ${ASCEND_DIR}/latest/lib64)
 
-  set(TVM_RUNTIME_LINKER_LIBS libruntime.so)
   link_directories(${ASCEND_CANN_RUNTIME_PATH})
 elseif(USE_KC_AIR)
   message("-- Build with kc air")

@@ -23,6 +23,7 @@
  * 2020.09.22 - Separate the implementation of KC and GPU.
  * 2021.06.08 - While compiling the cuda, limit the register num for per thread to avoid out of
  * memory problem.
+ * 2023.04.21 - Load cuda symbols.
  */
 #include "cuda_module.h"
 
@@ -45,7 +46,7 @@
 
 namespace air {
 namespace runtime {
-
+bool LoadCudaLibrary();
 // Module to support thread-safe multi-GPU execution.
 // cuModule is a per-GPU module
 // The runtime will contain a per-device module table
@@ -58,6 +59,7 @@ class CUDAModuleNode : public runtime::ModuleNode {
       : data_(data), fmt_(fmt), fmap_(fmap), cuda_source_(cuda_source) {
     std::fill(module_.begin(), module_.end(), nullptr);
     std::fill(func_.begin(), func_.end(), nullptr);
+    CudaWrapper::GetInstance();
   }
   // destructor
   ~CUDAModuleNode() {
