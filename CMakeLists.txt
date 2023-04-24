@@ -38,71 +38,11 @@ get_property(COMPILE_DEFS DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY COMPILE
 list(REMOVE_ITEM COMPILE_DEFS "_GLIBCXX_USE_CXX11_ABI=0")
 list(REMOVE_ITEM COMPILE_DEFS "_GLIBCXX_USE_CXX11_ABI=1")
 set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY COMPILE_DEFINITIONS ${COMPILE_DEFS})
-if(NOT CMAKE_SYSTEM_NAME MATCHES "Windows" AND NOT USE_KC_AIR AND NOT USE_LLVM)
-  add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=0)
-  set(AKG_GLIBCXX_USE_CXX11_ABI OFF)
-endif()
 
 include(cmake/RT.cmake)
 include(cmake/utils.cmake)
 include(cmake/external_libs/isl.cmake)
 
-if(USE_CCE_RT)
-  set(AKG_RPATH ${AKG_RPATH}:/usr/local/Ascend/latest/lib64)
-  set(AKG_RPATH ${AKG_RPATH}:/usr/local/Ascend/nnae/latest/lib64/plugin/opskernel)
-  set(AKG_RPATH ${AKG_RPATH}:/usr/local/Ascend/ascend-toolkit/latest/lib64/plugin/opskernel)
-  set(AKG_RPATH ${AKG_RPATH}:/usr/local/Ascend/lib64/plugin/opskernel)
-  set(AKG_RPATH ${AKG_RPATH}:/usr/local/Ascend/add-ons)
-  set(AKG_RPATH ${AKG_RPATH}:/usr/local/Ascend/opp/op_impl/built-in/ai_core/tbe/op_tiling)
-  set(AKG_RPATH ${AKG_RPATH}:/usr/local/Ascend/nnae/latest/opp/op_impl/built-in/ai_core/tbe/op_tiling)
-  set(AKG_RPATH ${AKG_RPATH}:/usr/local/Ascend/ascend-toolkit/latest/opp/op_impl/built-in/ai_core/tbe/op_tiling)
-  set(AKG_RPATH ${AKG_RPATH}:/usr/local/Ascend/latest/opp/op_impl/built-in/ai_core/tbe/op_tiling)
-elseif(USE_CUDA)
-  set(AKG_RPATH ${AKG_RPATH}:/usr/local/cuda/lib64)
-endif()
-link_directories(${AKG_RPATH})
-
-# Search AKG_EXTEND by order
-set(AKG_EXTEND )
-if(NOT USE_CUDA AND NOT USE_LLVM)
-  set(AKG_EXTEND_FILE )
-  set(LIB_PATH1 ${AKG_SOURCE_DIR}/libakg_ext.a)
-  set(LIB_PATH2 ${CMAKE_CURRENT_BINARY_DIR}/libakg_ext.a)
-
-  if(EXISTS ${LIB_PATH1})  # Search libakg_ext.a in akg_source_dir/
-    set(AKG_EXTEND_FILE ${LIB_PATH1})
-    message("-- Find ${LIB_PATH1}")
-  else()
-    if(EXISTS ${LIB_PATH2})  # If .a not found, search .a in akg_build_dir/
-      set(AKG_EXTEND_FILE ${LIB_PATH2})
-      message("-- Find ${LIB_PATH2}")
-    elseif(NOT USE_KC_AIR)  # If .a not found, search .o in akg_source_dir/prebuild
-      execute_process(COMMAND bash ${AKG_SOURCE_DIR}/build.sh -o
-              WORKING_DIRECTORY ${AKG_SOURCE_DIR}
-              OUTPUT_VARIABLE EXEC_OUTPUT
-              RESULT_VARIABLE RESULT)
-      message("${EXEC_OUTPUT}")
-      if(RESULT EQUAL 0)
-        string(STRIP ${EXEC_OUTPUT} AKG_EXTEND_DIR)
-        file(GLOB AKG_EXTEND ${AKG_EXTEND_DIR}/*.o)
-        message("-- Find .o in ${AKG_EXTEND_DIR}")
-      endif()
-    endif()
-  endif()
-
-  if(EXISTS ${AKG_EXTEND_FILE})
-    file(COPY ${AKG_EXTEND_FILE} DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/akg_extend)
-    execute_process(COMMAND ar -x libakg_ext.a
-            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/akg_extend)
-    file(GLOB AKG_EXTEND ${CMAKE_CURRENT_BINARY_DIR}/akg_extend/*.o)
-  endif()
-
-  if(NOT AKG_EXTEND)
-    message("-- Warning: Build AKG without Ascend back-end support")
-  else()
-    message("-- Build AKG with Ascend back-end support")
-  endif()
-endif()
 
 if (BUILD_AUTO_TUNE)
   set(PY_AUTOTUNE ${AKG_SOURCE_DIR}/python/akg/auto_tune)
@@ -321,12 +261,16 @@ file(
   ${TVM_DIR}/src/runtime/vm/*.cc
   ${TVM_DIR}/src/runtime/stackvm/*.cc)
 
+
 if(USE_CUDA)
   include(${TVM_DIR}/cmake/util/FindCUDA.cmake)
   include(${TVM_DIR}/cmake/modules/CUDA.cmake)
   include(${TVM_DIR}/cmake/util/FindLLVM.cmake)
   file(GLOB PROFILER_SRCS ${AKG_SOURCE_DIR}/src/profiler/gpu/*.cc)
   list(APPEND COMPILER_SRCS ${PROFILER_SRCS})
+endif()
+
+if(USE_CUDA OR USE_CCE_RT OR USE_KC_AIR)
   if(USE_LLVM)
     find_llvm_macro(${USE_LLVM})
     if(NOT LLVM_FOUND)

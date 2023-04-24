@@ -20,11 +20,11 @@ OUTPUT_PATH="${AKG_DIR}/output"
 usage()
 {
     echo "Usage:"
-    echo "bash build.sh [-e cpu|gpu|ascend] [-j[n]] [-t on|off] [-o] [-u]"
+    echo "bash build.sh [-e cpu|gpu|ascend|all] [-j[n]] [-t on|off] [-o] [-u]"
     echo ""
     echo "Options:"
     echo "    -d Debug mode"
-    echo "    -e Hardware environment: cpu, gpu or ascend"
+    echo "    -e Hardware environment: cpu, gpu, ascend or all"
     echo "    -j[n] Set the threads when building (Default: -j8)"
     echo "    -t Unit test: on or off (Default: off)"
     echo "    -o Output .o file directory"
@@ -88,6 +88,8 @@ do
                 # AKG requires LLVM on CPU, the optimal version is 12.xx.xx.
                 # if not found in the environment, it will find another existing version to use.
                 CMAKE_ARGS="${CMAKE_ARGS} -DUSE_LLVM=ON -DUSE_RPC=ON"
+            elif [[ "${OPTARG}" == "all" ]]; then
+                CMAKE_ARGS="${CMAKE_ARGS} -DUSE_CUDA=ON -DUSE_CCE_RT=1 -DUSE_LLVM=ON -DUSE_RPC=ON"
             else
                 echo "Unknown parameter ${OPTARG}!"
                 usage
@@ -177,7 +179,7 @@ cd ${OUTPUT_PATH}
 tar czvf libakg.tar.gz libakg.so
 rm -rf libakg.so
 write_checksum_tar
-source ${AKG_DIR}/scripts/package.sh
+bash ${AKG_DIR}/scripts/package.sh
 
 cd -
 echo "---------------- AKG: build end ----------------"
