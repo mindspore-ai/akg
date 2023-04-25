@@ -2,6 +2,22 @@
 
 [View English](./RELEASE.md)
 
+## MindAKG 2.0.0 Release Notes
+
+### 主要特性和增强
+
+### Bug 修复
+
+* 修复了构建时对PolyTOPS的依赖问题。[!873](https://gitee.com/mindspore/akg/pulls/873) (All)
+* 修复了int64在GPU上代码生成的问题。[!868](https://gitee.com/mindspore/akg/pulls/868) (GPU)
+
+### 贡献者
+
+感谢以下开发者做出的贡献：
+
+liuchao, yiyanzhi, hujiahui8, xuhui, yangshuo, nelson.lossing
+
+
 ## MindAKG 1.9.0 Release Notes
 
 ### 主要特性和增强
