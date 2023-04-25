@@ -43,6 +43,45 @@ include(cmake/RT.cmake)
 include(cmake/utils.cmake)
 include(cmake/external_libs/isl.cmake)
 
+# Search AKG_EXTEND by order
+set(AKG_EXTEND )
+if(ENABLE_D)
+  set(AKG_EXTEND_FILE )
+  set(LIB_PATH1 ${AKG_SOURCE_DIR}/libakg_ext.a)
+  set(LIB_PATH2 ${CMAKE_CURRENT_BINARY_DIR}/libakg_ext.a)
+
+  if(EXISTS ${LIB_PATH1})  # Search libakg_ext.a in akg_source_dir/
+    set(AKG_EXTEND_FILE ${LIB_PATH1})
+    message("-- Find ${LIB_PATH1}")
+  else()
+    if(EXISTS ${LIB_PATH2})  # If .a not found, search .a in akg_build_dir/
+      set(AKG_EXTEND_FILE ${LIB_PATH2})
+      message("-- Find ${LIB_PATH2}")
+    elseif(NOT USE_KC_AIR)  # If .a not found, search .o in akg_source_dir/prebuild
+      execute_process(COMMAND bash ${AKG_SOURCE_DIR}/build.sh -o
+              WORKING_DIRECTORY ${AKG_SOURCE_DIR}
+              OUTPUT_VARIABLE EXEC_OUTPUT
+              RESULT_VARIABLE RESULT)
+      message("${EXEC_OUTPUT}")
+      if(RESULT EQUAL 0)
+        string(STRIP ${EXEC_OUTPUT} AKG_EXTEND_DIR)
+        file(GLOB AKG_EXTEND ${AKG_EXTEND_DIR}/*.o)
+        message("-- Find .o in ${AKG_EXTEND_DIR}")
+      endif()
+    endif()
+  endif()
+
+  if(EXISTS ${AKG_EXTEND_FILE})
+    file(COPY ${AKG_EXTEND_FILE} DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/akg_extend)
+    execute_process(COMMAND ar -x libakg_ext.a
+            WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/akg_extend)
+    file(GLOB AKG_EXTEND ${CMAKE_CURRENT_BINARY_DIR}/akg_extend/*.o)
+  endif()
+
+  if(NOT AKG_EXTEND)
+    message(FATAL_ERROR "Can not find akg extend for ascend!")
+  endif()
+endif()
 
 if (BUILD_AUTO_TUNE)
   set(PY_AUTOTUNE ${AKG_SOURCE_DIR}/python/akg/auto_tune)
@@ -233,7 +272,7 @@ if(USE_CCE_PROFILING)
   include_directories(AFTER "${AKG_SOURCE_DIR}/src/profiler/ascend")
 endif()
 
-if (USE_CCE_RT)
+if (ENABLE_D)
   file(
     GLOB
     ASCEND_RUNTIME_SRCS
@@ -265,12 +304,12 @@ file(
 if(USE_CUDA)
   include(${TVM_DIR}/cmake/util/FindCUDA.cmake)
   include(${TVM_DIR}/cmake/modules/CUDA.cmake)
-  include(${TVM_DIR}/cmake/util/FindLLVM.cmake)
   file(GLOB PROFILER_SRCS ${AKG_SOURCE_DIR}/src/profiler/gpu/*.cc)
   list(APPEND COMPILER_SRCS ${PROFILER_SRCS})
 endif()
 
-if(USE_CUDA OR USE_CCE_RT OR USE_KC_AIR)
+if(USE_CUDA OR ENABLE_D)
+  include(${TVM_DIR}/cmake/util/FindLLVM.cmake)
   if(USE_LLVM)
     find_llvm_macro(${USE_LLVM})
     if(NOT LLVM_FOUND)
