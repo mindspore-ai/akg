@@ -4,8 +4,6 @@
 
 ## MindAKG 2.0.0 Release Notes
 
-### Major Features and Improvements
-
 ### Bug Fixes
 
 * Fixed the dependency issue on PolyTOPS during building. [!873](https://gitee.com/mindspore/akg/pulls/873) (All)
