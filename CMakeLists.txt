@@ -79,7 +79,7 @@ if(ENABLE_D)
   endif()
 
   if(NOT AKG_EXTEND)
-    message(FATAL_ERROR "Can not find akg extend for ascend!")
+    message(FATAL_ERROR "Can not find akg extend for ascend! Please recompile after `git lfs pull`.")
   endif()
 endif()
 

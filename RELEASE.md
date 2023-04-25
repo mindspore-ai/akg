@@ -2,6 +2,20 @@
 
 [查看中文](./RELEASE_CN.md)
 
+## MindAKG 2.0.0 Release Notes
+
+### Major Features and Improvements
+
+### Bug Fixes
+
+* Fixed the dependency issue on PolyTOPS during building. [!873](https://gitee.com/mindspore/akg/pulls/873) (All)
+* Fixed the data type issue of int64 in GPU code generation. [!868](https://gitee.com/mindspore/akg/pulls/868) (GPU)
+
+### Contributors
+
+Thanks goes to these wonderful people:
+
+liuchao, yiyanzhi, hujiahui8, xuhui, yangshuo, nelson.lossing
 
 ## MindAKG 1.9.0 Release Notes
 ### Major Features and Improvements
