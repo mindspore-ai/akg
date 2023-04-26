@@ -19,6 +19,9 @@
 
 /*!
  * \file codegen_stackvm.cc
+ *
+ * 2023.4.13
+ *   Fix compilation warning
  */
 #include <tvm/runtime/registry.h>
 #include <tvm/packed_func_ext.h>
@@ -281,7 +284,7 @@ void CodeGenStackVM::VisitExpr_(const IntImm *op) {
 }
 
 void CodeGenStackVM::VisitExpr_(const UIntImm *op) {
-  CHECK(op->value <= std::numeric_limits<int>::max())
+  CHECK(op->value <= std::numeric_limits<uint64_t>::max())
       << "Int constant exceed bound";
   this->PushOp(StackVM::PUSH_I64, static_cast<int>(op->value));
 }
