@@ -131,17 +131,21 @@ do
               if [ $? -ne 0 ]; then
                 echo "-- Warning: git lfs not found, you can perform the following steps:"
                 echo "            1. Install git lfs, refer https://github.com/git-lfs/git-lfs/wiki/installation"
-                echo "            2. After installing git lfs, executing the following commands:"
+                echo "            2. After installing git lfs, do not forget executing the following command:"
+                echo "               git lfs install"
+                echo "            3. Download the files tracked by git lfs, executing the following commands:"
+                echo "               cd ${AKG_DIR}"
+                echo "               git lfs pull"
+                echo "            4. Re-compile the source codes"
+                exit 1
+              else
+                echo "-- Warning: git lfs found, but lfs files are not downloaded, you can perform the following steps:"
+                echo "            1. After installing git lfs, do not forget executing the following command:"
+                echo "               git lfs install"
+                echo "            2. Download the files tracked by git lfs, executing the following commands:"
                 echo "               cd ${AKG_DIR}"
                 echo "               git lfs pull"
                 echo "            3. Re-compile the source codes"
-                exit 1
-              else
-                echo "-- Warning: git lfs found, but lfs files is not downloaded, you can perform the following steps:"
-                echo "            1. Download files tracked by git lfs, executing the following commands:"
-                echo "               cd ${AKG_DIR}"
-                echo "               git lfs pull"
-                echo "            2. Re-compile the source codes"
                 exit 1
               fi
             fi
