@@ -135,21 +135,18 @@ void LowerImpl::Register(const std::string &target, std::function<NodeRef(const 
 std::string GetErrorHint(const std::string &target) {
   static std::unordered_map<std::string, std::string> error_hint = {
     {"cce",
-     "Can not enable target cce, because akg Ascend back-end's binary file is not linked to"
-     " libakg.so during the compiling process, please check the following cases:\n"
-     "case 1: If compile akg with -DUSE_KC_AIR=1, check if libakg_ext.a exists in"
-     " akg_source_dir(CMAKE_CURRENT_SOURCE_DIR) or akg_build_dir(CMAKE_CURRENT_BINARY_DIR)."
-     " If not, you need:\n"
-     "        1. Compile libakg_ext.a by yourself, put it to akg_source_dir or akg_build_dir\n"
-     "        2. Re-compile the source codes\n"
-     "case 2: If compile akg without -DUSE_KC_AIR=1(compiling akg from mindspore belongs to"
-     " this case), then you can perform the following steps:\n"
-     "        1. Check if git-lfs is installed, if not, install git-lfs, refer"
+     "Can not enable target cce, because akg Ascend backend's binary files are not linked to"
+     " libakg.so during the compiling process, please perform the following steps:\n"
+     "1. Check if git lfs is installed:\n"
+     "   which git-lfs\n"
+     "2. If git lfs is not installed, then you need to install git lfs, refer"
      " https://github.com/git-lfs/git-lfs/wiki/installation\n"
-     "        2. After installing git lfs, executing the following commands:\n"
-     "           cd akg_source_dir (e.g. cd /home/user_name/akg)\n"
-     "           git lfs pull\n"
-     "        3. Re-compile the source codes"}};
+     "3. After installing git lfs, do not forget executing the following command:\n"
+     "   git lfs install\n"
+     "4. Download the files tracked by git lfs:\n"
+     "   cd akg_source_dir (e.g. cd /home/user_name/akg)\n"
+     "   git lfs pull\n"
+     "5. Re-compile the source codes"}};
 
   if (error_hint.find(target) == error_hint.end()) {
     return std::string("Unsupport lower for ") + target;
