@@ -20,7 +20,11 @@ from tests.common.test_op.ascend import space_to_batch_nd
 
 def space_to_batch_nd_run(input_shape, input_dtype, block, pad, kernel_name, attrs=None):
     op_attrs = [block, pad]
-    attrs["pragma_disable_whole_component"] = False
+
+    default_attrs = { "pragma_disable_whole_component": False, "polytops_parameter_shifting": False }
+    attrs = [] if attrs == None else attrs
+    attrs.update(default_attrs)
+    
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)

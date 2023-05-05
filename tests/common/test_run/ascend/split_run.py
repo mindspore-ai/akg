@@ -20,6 +20,9 @@ from tests.common.gen_random import random_gaussian
 
 def split_run(shape, num_or_size_splits, split_axis, dtype, attrs):
     op_attrs = [num_or_size_splits, split_axis]
+    default_attrs = { "polytops_unfuse_independent_stmts" : True }
+    attrs = [] if attrs == None else attrs
+    attrs.update(default_attrs)
 
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)

@@ -252,7 +252,7 @@ isl::schedule ComputeSchedule::Run(isl::schedule sch) {
       // Maybe recheck the schedule
       const bool should_check = PolyTOPSShouldCheckSchedules(scop_info_);
       if (should_check) {
-        polytops_success = scop.CheckSchedule(result.get());
+        polytops_success = scop.CheckComputedSchedule();
         if (!polytops_success) {
           LOG(INFO) << "Possibly illegal schedule" << std::endl;
         } else {

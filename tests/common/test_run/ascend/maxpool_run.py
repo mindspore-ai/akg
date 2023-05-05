@@ -88,6 +88,53 @@ def maxpool_run(shape, kernel, stride, pad, hybrid, dtype, attrs_op=None, polyhe
         rtol, atol = get_rtol_atol("maxpool", dtype)
         return input_0, output, expect, compare_tensor(output, expect, rtol=rtol, atol=atol, equal_nan=True)
 
+def maxpool_run_unfuse(shape, kernel, stride, pad, hybrid, dtype, attrs_op=None, polyhedral=True, attrs=None):
+    default_attrs = { "polytops_unfuse_independent_stmts" : True }
+    attrs = {} if attrs is None else attrs
+    attrs_op = {} if attrs_op is None else attrs_op
+
+    attrs.update(attrs_op)
+    attrs.update(default_attrs)
+    if attrs.get("dynamic"):
+        var_shape = []
+        for i, s in enumerate(shape):
+            if i == len(shape) - 1:
+                var_shape.append(shape[i])
+            else:
+                var_shape.append(tvm.var("I" + str(i)))
+        build_shape = var_shape
+    else:
+        build_shape = shape
+    if 'tuning' in attrs.keys():
+        t = attrs.get("tuning", False)
+        kernel_name = attrs.get("kernel_name", False)
+        mod = utils.op_build_test(maxpool, [build_shape], [dtype], op_attrs=[kernel, stride, pad],
+                                  kernel_name=kernel_name, attrs=attrs, tuning=t)
+        if t:
+            expect, input_0, out_shape, res = gen_data(
+                dtype, kernel, pad, shape, stride)
+            return mod, expect,  {"args": (input_0, res), 'outputs': (-1, ), 'tuning': False}
+        else:
+            return mod
+    else:
+        if polyhedral:
+            if hybrid:
+                mod = utils.op_build_test(maxpool, [build_shape], [dtype], op_attrs=[kernel, stride, pad],
+                                          kernel_name='maxpool', attrs=attrs)
+            else:
+                mod = utils.op_build_test(old_maxpool, [build_shape], [dtype], op_attrs=[kernel, stride, pad],
+                                          kernel_name='maxpool_old', attrs=attrs)
+        else:
+            from akg.ops.nn.ascend.maxpool import maxpool_manual_schedule
+            mod = maxpool_manual_schedule(
+                build_shape, kernel, stride, pad, dtype, attrs=attrs, polyhedral=polyhedral)
+        expect, input_0, out_shape, res = gen_data(
+            dtype, kernel, pad, shape, stride)
+        output = utils.mod_launch(mod, [input_0, res], expect=expect)
+        rtol, atol = get_rtol_atol("maxpool", dtype)
+        return input_0, output, expect, compare_tensor(output, expect, rtol=rtol, atol=atol, equal_nan=True)
+
+
 
 def gen_data(dtype, kernel, pad, shape, stride):
     support_list = {"float16": np.float16, "float32": np.float32}

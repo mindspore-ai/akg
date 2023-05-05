@@ -1,4 +1,4 @@
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2023 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -35,7 +35,7 @@ def compute_blockdim(shape):
 def four2five_execute(shape, dtype, format, dst_type, attrs=None):
     # Generate data
     op_attrs = [format, dst_type]
-    default_attrs = { "polytops_parameter_shifting" : False }
+    default_attrs = { "polytops_parameter_shifting" : False, "enable_polytops" : "never" }
     if attrs is None:
         attrs = {}
     attrs["pragma_disable_whole_component"] = False
@@ -82,7 +82,7 @@ def four2five_compile(shape, dtype, op_attrs, attrs, kernel_name='four2five', tu
             channel_idx = 1
         elif format == 'NHWC':
             channel_idx = len(shape) - 1
-        for i in range(len(shape)):
+        for i, s in enumerate(shape):
             if i == channel_idx:
                 var_shape.append(shape[i])
             else:
