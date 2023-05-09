@@ -1,6 +1,6 @@
 option(AKG_USE_POLYTOPS "Use PolyTOPS polyhedral scheduler" OFF)
 
-if (NOT USE_CUDA AND NOT USE_LLVM)
+if ((NOT USE_CUDA AND NOT USE_LLVM) OR ENABLE_D)
   set(AKG_USE_POLYTOPS ON)
 endif()
 
