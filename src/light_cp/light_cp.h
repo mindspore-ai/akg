@@ -746,9 +746,11 @@ class Bisection : public Search {
     std::vector<Range> rv;
     rv.push_back(SplitLeft(domain));
     rv.push_back(SplitRight(domain));
+#ifndef NDEBUG
     const size_t expected_size = 2;
     assert(rv.size() == expected_size);
     assert(rv[0].GetUB() + 1 == rv[1].GetLB());
+#endif
     return rv;
   }
 };
