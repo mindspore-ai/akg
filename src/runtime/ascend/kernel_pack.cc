@@ -70,16 +70,21 @@ void KernelPack::ParseKernelJson(const picojson::value::object &js) {
   if (js.count("opParaSize")) {
     kernel_json_info_.op_para_size = static_cast<uint32_t>(js.at("opParaSize").get<int64_t>());
   }
+  kernel_json_info_.sha256 = js.at("sha256").get<std::string>();
   if (js.find("parameters") != js.end()) {
     if (!js.at("parameters").is<picojson::array>()) {
       LOG(DEBUG) << "Format error!,parameters should be array.";
+      return;
     }
     picojson::array sizes = js.at("parameters").get<picojson::array>();
     for (auto size : sizes) {
+      if (size.is<picojson::null>()) {
+        kernel_json_info_.parameters.push_back(0);
+        continue;
+      }
       kernel_json_info_.parameters.push_back(size.get<int64_t>());
     }
   }
-  kernel_json_info_.sha256 = js.at("sha256").get<std::string>();
 }
 
 bool KernelPack::LoadKernelMeta(const std::string &json_f) {
