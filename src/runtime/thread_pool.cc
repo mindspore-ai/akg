@@ -34,16 +34,10 @@ size_t MaxThreadNumber() {
   if (process_core_num < 1) {
     process_core_num = 1;
   }
-  size_t thread_num;
-#if ENABLE_D || ENABLE_GPU
-  thread_num = process_core_num / kDeviceNum;
-#else
+  size_t thread_num = process_core_num;
   if (const char* val = getenv("AKG_NUM_THREADS")) {
     thread_num = std::min((size_t)atoi(val), process_core_num);
-  } else {
-    thread_num = process_core_num;
   }
-#endif
   if (thread_num < 1) {
     thread_num = 1;
   }
