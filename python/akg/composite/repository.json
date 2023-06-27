@@ -811,6 +811,72 @@
                     "file_name": "Fused_MatMul_split_2965019690349343666"
                 }
             }
+        },
+        "320_64_16_16.320_320_16_16.320_64_16_16": {
+            "float16--": {
+                "metadata": {
+                    "attrs": {
+                        "dim": "0 0 16 16 0 1 8 8 0 2 16 16 0 3 16 16 0 4 8 4",
+                        "enable_quadruple_buffer": false,
+                        "bypass": 0
+                    }
+                }
+            }
+        },
+        "80_64_16_16.320_80_16_16.320_64_16_16": {
+            "float16--": {
+                "metadata": {
+                    "attrs": {
+                        "dim": "0 0 16 16 0 1 8 8 0 2 16 16 0 3 16 16 0 4 10 4",
+                        "enable_quadruple_buffer": false,
+                        "bypass": 2
+                    }
+                }
+            }
+        },
+        "80_1_16_16.320_80_16_16.320_1_16_16": {
+            "float16--": {
+                "metadata": {
+                    "attrs": {
+                        "dim": "0 0 16 16 0 1 16 16 0 2 16 16 0 3 20 4",
+                        "enable_quadruple_buffer": true,
+                        "bypass": 0
+                    }
+                }
+            }
+        },
+        "1_1_16_16--": {
+            "float16--": {
+                "metadata": {
+                    "attrs": {
+                        "dim": "0 0 128 16 0 1 16 16 0 2 16 16",
+                        "enable_quadruple_buffer": false,
+                        "bypass": 2
+                    }
+                }
+            }
+        },
+        "64_1_16_16.64_64_16_16.64_1_16_16": {
+            "float16--": {
+                "metadata": {
+                    "attrs": {
+                        "dim": "0 0 4 4 0 1 16 16 0 2 16 16 0 3 60 8",
+                        "enable_quadruple_buffer": true,
+                        "bypass": 0
+                    }
+                }
+            }
+        },
+        "320_1_16_16.320_320_16_16.320_1_16_16": {
+            "float16--": {
+                "metadata": {
+                    "attrs": {
+                        "dim": "0 0 8 8 0 1 16 16 0 2 16 16 0 3 4 4",
+                        "enable_quadruple_buffer": true,
+                        "bypass": 2
+                    }
+                }
+            }
         }
     },
     "2.MatMul12_0_0.TransData1.3": {
@@ -896,6 +962,28 @@
                         "enable_quadruple_buffer": false
                     },
                     "file_name": "Fused_MatMul_split_10140193613891141098"
+                }
+            }
+        },
+        "320_1_16_16.320_4396_16_16.4396_1_16_16": {
+            "float16--": {
+            "metadata": {
+                "attrs": {
+                "dim": "0 0 28 28 0 1 16 16 0 2 16 16 0 3 4 4",
+                "enable_quadruple_buffer": false,
+                "bypass": 0
+                }
+            }
+            }
+        },
+        "320_64_16_16.320_4396_16_16.4396_64_16_16": {
+            "float16--": {
+                "metadata": {
+                    "attrs": {
+                        "dim": "0 0 16 16 0 1 8 8 0 2 16 16 0 3 16 16 0 4 8 4",
+                        "enable_quadruple_buffer": false,
+                        "bypass": 0
+                    }
                 }
             }
         }
@@ -2439,6 +2527,113 @@
                     }
                 }
             }
+        }
+    },
+    "3.MatMul13_0_1.Add13.4": {
+        "320_64_16_16.1280.320_80_16_16.80_64_16_16": {
+          "float16---": {
+            "metadata": {
+              "attrs": {
+                "dim": "0 0 10 10 0 1 8 8 0 2 16 16 0 3 16 16 0 4 5 5",
+                "enable_quadruple_buffer": false,
+                "bypass": 0
+              }
+            }
+          }
+        },
+        "320_1_16_16.1280.320_80_16_16.80_1_16_16": {
+          "float16---": {
+            "metadata": {
+              "attrs": {
+                "dim": "0 0 5 5 0 1 16 16 0 2 16 16 0 3 40 8",
+                "enable_quadruple_buffer": false,
+                "bypass": 0
+              }
+            }
+          }
+        }
+    },
+    "3.MatMul13_0_0.Add13.FastGeLU1.5": {
+        "320_64_16_16.5120.320_320_16_16.320_64_16_16": {
+            "float16---": {
+                "metadata": {
+                    "attrs": {
+                    "dim": "0 0 16 16 0 1 8 8 0 2 16 16 0 3 16 16 0 4 8 5",
+                    "bypass": 2,
+                    "enable_quadruple_buffer": true
+                    }
+                }
+            }
+        }
+    },
+    "3.MatMul23_0_1.Add12.4": {
+        "320_64_16_16.320_240_16_16.3840.240_64_16_16": {
+            "float16---": {
+                "metadata": {
+                    "attrs": {
+                        "dim": "0 0 16 16 0 1 8 8 0 2 16 16 0 3 16 16 0 4 8 5",
+                        "bypass": 2,
+                        "enable_quadruple_buffer": true
+                    }
+                }
+            }
+        },
+        "320_1_16_16.320_240_16_16.3840.240_1_16_16": {
+            "float16---": {
+            "metadata": {
+                "attrs": {
+                "dim": "0 0 16 16 0 1 16 16 0 2 16 16 0 3 8 5",
+                "enable_quadruple_buffer": false,
+                "bypass": 0
+                }
+            }
+            }
+        },
+        "320_64_16_16.320_160_16_16.2560.160_64_16_16": {
+            "float16---": {
+            "metadata": {
+                "attrs": {
+                "dim": "0 0 10 10 0 1 8 8 0 2 16 16 0 3 16 16 0 4 8 4",
+                "enable_quadruple_buffer": false,
+                "bypass": 0
+                }
+            }
+            }
+        },
+        "320_1_16_16.320_160_16_16.2560.160_1_16_16": {
+            "float16---": {
+            "metadata": {
+                "attrs": {
+                "dim": "0 0 8 8 0 1 16 16 0 2 16 16 0 3 48 8",
+                "enable_quadruple_buffer": false,
+                "bypass": 0
+                }
+            }
+            }
+        }
+    },
+    "3.MatMul12_0_1.Add14.4": {
+        "1280.320_64_16_16.320_80_16_16.80_64_16_16": {
+        "float16---": {
+            "metadata": {
+            "attrs": {
+                "dim": "0 0 10 10 0 1 8 8 0 2 16 16 0 3 16 16 0 4 8 4",
+                "enable_quadruple_buffer": false,
+                "bypass": 0
+            }
+            }
+        }
+        },
+        "1280.320_1_16_16.320_80_16_16.80_1_16_16": {
+        "float16---": {
+            "metadata": {
+            "attrs": {
+                "dim": "0 0 4 4 0 1 16 16 0 2 16 16 0 3 64 8",
+                "enable_quadruple_buffer": true,
+                "bypass": 0
+            }
+            }
+        }
         }
     }
 }
