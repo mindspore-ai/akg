@@ -48,7 +48,6 @@ Stmt Optimize(Stmt &s, BuildInfo &info) {
     ADD_PASS(pm, DeleteCast);
   }
   if (info.opt.target == "aicore") {
-    ADD_PASS(pm, IntrinRewriter);
     ADD_PASS(pm, PeelDimension);
   }
   ADD_PASS(pm, ComplexExpander);
