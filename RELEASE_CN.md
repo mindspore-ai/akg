@@ -2,6 +2,19 @@
 
 [View English](./RELEASE.md)
 
+## MindAKG 2.1.0 Release Notes
+
+### Bug 修复
+* 修复了PolyTops在昇腾后端的编译问题。[!908](https://gitee.com/mindspore/akg/pulls/908) (Ascend)
+* 修复了CANN 6.4的适配问题。[!911](https://gitee.com/mindspore/akg/pulls/911) (Ascend)
+* 修复了MSLite昇腾后端矩阵乘计算的适配问题。[!914](https://gitee.com/mindspore/akg/pulls/914) (Ascend)
+
+### 贡献者
+
+感谢以下开发者做出的贡献：
+
+liuchao, huoxinyou, yangsijia, Harenome Ranaivoarivony-Razanajato
+
 ## MindAKG 2.0.0 Release Notes
 
 ### 主要特性和增强

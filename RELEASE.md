@@ -2,6 +2,19 @@
 
 [查看中文](./RELEASE_CN.md)
 
+## MindAKG 2.1.0 Release Notes
+
+### Bug Fixes
+* Fixed the inconsistencies issue during build to support PolyTops on Ascend. [!908](https://gitee.com/mindspore/akg/pulls/908) (Ascend)
+* Fixed the adaptability issue to CANN 6.4. [!911](https://gitee.com/mindspore/akg/pulls/911) (Ascend)
+* Fixed the adaptability issue to MatMul on MSLite Ascend. [!914](https://gitee.com/mindspore/akg/pulls/914) (Ascend)
+
+### Contributors
+
+Thanks goes to these wonderful people:
+
+liuchao, huoxinyou, yangsijia, Harenome Ranaivoarivony-Razanajato
+
 ## MindAKG 2.0.0 Release Notes
 
 ### Major Features and Improvements
