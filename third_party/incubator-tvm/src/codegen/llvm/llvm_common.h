@@ -26,6 +26,8 @@
  * 2021.11.01
  *   Adapt LLVM 12 interface support
  *   Add some intrinsics.
+ * 2023.08.05
+ *   Adapt LLVM 15 interface support
  */
 
 #ifndef TVM_CODEGEN_LLVM_LLVM_COMMON_H_
@@ -37,64 +39,63 @@
 
 #ifdef TVM_LLVM_VERSION
 
-#include <llvm/ExecutionEngine/MCJIT.h>
-
 #include <llvm/Analysis/TargetTransformInfo.h>
 #include <llvm/Bitcode/BitcodeWriter.h>
-#include <llvm/Support/SourceMgr.h>
-
+#include <llvm/ExecutionEngine/MCJIT.h>
 #include <llvm/IR/Value.h>
+#include <llvm/Support/SourceMgr.h>
 #if TVM_LLVM_VERSION >= 100
 #include <llvm/IR/IntrinsicsAMDGPU.h>
 #include <llvm/IR/IntrinsicsARM.h>
 #include <llvm/IR/IntrinsicsNVPTX.h>
 #include <llvm/IR/IntrinsicsX86.h>
 #endif
-#include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/Argument.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
-#include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/DIBuilder.h>
+#include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/InlineAsm.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/LegacyPassManager.h>
+#include <llvm/IR/MDBuilder.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Type.h>
-#include <llvm/IR/Intrinsics.h>
-#include <llvm/IR/MDBuilder.h>
 #include <llvm/IR/Verifier.h>
-#include <llvm/IR/InlineAsm.h>
-
-#include <llvm/IR/LegacyPassManager.h>
+#include <llvm/Transforms/IPO.h>
+#include <llvm/Transforms/IPO/PassManagerBuilder.h>
+#include <llvm/Transforms/Scalar.h>
 #include <llvm/Transforms/Utils.h>
 #include <llvm/Transforms/Utils/Cloning.h>
 #include <llvm/Transforms/Utils/ModuleUtils.h>
-#include <llvm/Transforms/IPO/PassManagerBuilder.h>
-#include <llvm/Transforms/IPO.h>
-#include <llvm/Transforms/Scalar.h>
 
 #if TVM_LLVM_VERSION >= 100
 #include <llvm/Support/Alignment.h>
 #include <llvm/Support/Host.h>
 #endif
+#include <llvm/Support/Casting.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/raw_ostream.h>
-#include <llvm/Support/Casting.h>
+#if TVM_LLVM_VERSION >= 140
+#include <llvm/MC/TargetRegistry.h>
+#else
 #include <llvm/Support/TargetRegistry.h>
+#endif
+#include <llvm/CodeGen/TargetLoweringObjectFileImpl.h>
+#include <llvm/IRReader/IRReader.h>
+#include <llvm/Linker/Linker.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/Target/TargetOptions.h>
-#include <llvm/IRReader/IRReader.h>
-#include <llvm/CodeGen/TargetLoweringObjectFileImpl.h>
 
-#include <llvm/Linker/Linker.h>
-
-#include <utility>
-#include <string>
 #include <memory>
+#include <string>
+#include <utility>
 
 namespace air {
 namespace codegen {
@@ -113,11 +114,8 @@ void InitializeLLVM();
  * \param options the options
  * \param mattr The attributes
  */
-void ParseLLVMTargetOptions(const std::string& target_str,
-                            std::string* triple,
-                            std::string* mcpu,
-                            std::string* mattr,
-                            llvm::TargetOptions* options);
+void ParseLLVMTargetOptions(const std::string& target_str, std::string* triple, std::string* mcpu,
+                            std::string* mattr, llvm::TargetOptions* options);
 
 /*!
  * \brief Get target machine from target_str string.
@@ -125,8 +123,8 @@ void ParseLLVMTargetOptions(const std::string& target_str,
  * \param allow_null Whether allow null to be returned.
  * \return target machine
  */
-std::unique_ptr<llvm::TargetMachine>
-GetLLVMTargetMachine(const std::string& target_str, bool allow_null = false);
+std::unique_ptr<llvm::TargetMachine> GetLLVMTargetMachine(const std::string& target_str,
+                                                          bool allow_null = false);
 
 }  // namespace codegen
 }  // namespace air
