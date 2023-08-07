@@ -6,9 +6,9 @@
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
  * with the License.  You may obtain a copy of the License at
- * 
+ *
  *   http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing,
  * software distributed under the License is distributed on an
  * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -29,14 +29,15 @@
 
 #ifdef TVM_LLVM_VERSION
 
-#include <tvm/runtime/device_api.h>
 #include <tvm/runtime/c_runtime_api.h>
+#include <tvm/runtime/device_api.h>
 #include <tvm/runtime/registry.h>
-#include "codegen_llvm.h"
-#include "../build_common.h"
-#include "../codegen_source_base.h"
+
 #include "../../pass/ir_util.h"
 #include "../../runtime/rocm/rocm_module.h"
+#include "../build_common.h"
+#include "../codegen_source_base.h"
+#include "codegen_llvm.h"
 
 namespace air {
 namespace codegen {
@@ -53,8 +54,8 @@ static inline int DetectROCMmaxThreadsPerBlock() {
     TVMRetValue val;
     api->GetAttr(tvm_ctx, air::runtime::kExist, &val);
     if (val.operator int() == 1) {
-      air::runtime::DeviceAPI::Get(tvm_ctx)->
-        GetAttr(tvm_ctx, air::runtime::kMaxThreadsPerBlock, &val);
+      air::runtime::DeviceAPI::Get(tvm_ctx)->GetAttr(tvm_ctx, air::runtime::kMaxThreadsPerBlock,
+                                                     &val);
       return val.operator int();
     }
   }
@@ -84,8 +85,7 @@ class CodeGenAMDGPU : public CodeGenLLVM {
       buf = MakeValue(op->new_expr);
     } else {
       int32_t constant_size = op->constant_allocation_size();
-      CHECK_GT(constant_size, 0)
-          << "Can only handle constant size stack allocation in GPU";
+      CHECK_GT(constant_size, 0) << "Can only handle constant size stack allocation in GPU";
       StorageInfo& info = alloc_storage_info_[op->buffer_var.get()];
       if (constant_size % 4 == 0 && info.alignment == 0) {
         info.alignment = GetTempAllocaAlignment(op->type, constant_size);
@@ -98,10 +98,14 @@ class CodeGenAMDGPU : public CodeGenLLVM {
         // const int local_address_space = 5;
         // TODO(tqchen): for higher version of LLVM, local address space can be set.
         llvm::AllocaInst* alloca = WithFunctionEntry([&]() {
-            return builder_->CreateAlloca(
-                LLVMType(op->type), ConstInt32(constant_size));
-          });
-        if (alloca->getAlignment() < static_cast<uint32_t>(info.alignment)) {
+          return builder_->CreateAlloca(LLVMType(op->type), ConstInt32(constant_size));
+        });
+#if TVM_LLVM_VERSION >= 110
+        auto alignment = static_cast<unsigned>(alloca->getAlign().value());
+#else
+        unsigned alignment = alloca->getAlignment();
+#endif
+        if (alignment < static_cast<unsigned>(info.alignment)) {
 #if TVM_LLVM_VERSION >= 100
           alloca->setAlignment(llvm::Align(info.alignment));
 #else
@@ -116,9 +120,9 @@ class CodeGenAMDGPU : public CodeGenLLVM {
         const unsigned shared_address_space = 3;
         llvm::Type* type = llvm::ArrayType::get(LLVMType(op->type), constant_size);
         // Allocate shared memory in global, address_space = 3
-        llvm::GlobalVariable *global = new llvm::GlobalVariable(
-            *module_, type, false, llvm::GlobalValue::PrivateLinkage, 0, ".shared",
-            nullptr, llvm::GlobalValue::NotThreadLocal, shared_address_space);
+        llvm::GlobalVariable* global = new llvm::GlobalVariable(
+            *module_, type, false, llvm::GlobalValue::PrivateLinkage, 0, ".shared", nullptr,
+            llvm::GlobalValue::NotThreadLocal, shared_address_space);
 #if TVM_LLVM_VERSION >= 100
         global->setAlignment(llvm::Align(info.alignment));
 #else
@@ -128,8 +132,7 @@ class CodeGenAMDGPU : public CodeGenLLVM {
       }
     }
     buf = builder_->CreatePointerCast(
-        buf, LLVMType(op->type)->getPointerTo(
-            buf->getType()->getPointerAddressSpace()));
+        buf, LLVMType(op->type)->getPointerTo(buf->getType()->getPointerAddressSpace()));
     CHECK(!var_map_.count(op->buffer_var.get()));
     var_map_[op->buffer_var.get()] = buf;
     this->VisitStmt(op->body);
@@ -141,18 +144,32 @@ class CodeGenAMDGPU : public CodeGenLLVM {
     llvm::Intrinsic::ID intrin_id = ::llvm::Intrinsic::amdgcn_workitem_id_x;
     if (ts.rank == 1) {
       switch (ts.dim_index) {
-        case 0: intrin_id = ::llvm::Intrinsic::amdgcn_workitem_id_x; break;
-        case 1: intrin_id = ::llvm::Intrinsic::amdgcn_workitem_id_y; break;
-        case 2: intrin_id = ::llvm::Intrinsic::amdgcn_workitem_id_z; break;
-        default: LOG(FATAL) << "unknown workitem idx";
+        case 0:
+          intrin_id = ::llvm::Intrinsic::amdgcn_workitem_id_x;
+          break;
+        case 1:
+          intrin_id = ::llvm::Intrinsic::amdgcn_workitem_id_y;
+          break;
+        case 2:
+          intrin_id = ::llvm::Intrinsic::amdgcn_workitem_id_z;
+          break;
+        default:
+          LOG(FATAL) << "unknown workitem idx";
       }
     } else {
       CHECK_EQ(ts.rank, 0);
       switch (ts.dim_index) {
-        case 0: intrin_id = ::llvm::Intrinsic::amdgcn_workgroup_id_x; break;
-        case 1: intrin_id = ::llvm::Intrinsic::amdgcn_workgroup_id_y; break;
-        case 2: intrin_id = ::llvm::Intrinsic::amdgcn_workgroup_id_z; break;
-        default: LOG(FATAL) << "unknown workgroup idx";
+        case 0:
+          intrin_id = ::llvm::Intrinsic::amdgcn_workgroup_id_x;
+          break;
+        case 1:
+          intrin_id = ::llvm::Intrinsic::amdgcn_workgroup_id_y;
+          break;
+        case 2:
+          intrin_id = ::llvm::Intrinsic::amdgcn_workgroup_id_z;
+          break;
+        default:
+          LOG(FATAL) << "unknown workgroup idx";
       }
     }
     llvm::Function* f = llvm::Intrinsic::getDeclaration(module_.get(), intrin_id);
@@ -164,9 +181,8 @@ class CodeGenAMDGPU : public CodeGenLLVM {
     if (sync == "warp") {
       return nullptr;
     } else if (sync == "shared") {
-      llvm::Function* f = llvm::Intrinsic::getDeclaration(
-          module_.get(),
-          ::llvm::Intrinsic::amdgcn_s_barrier);
+      llvm::Function* f =
+          llvm::Intrinsic::getDeclaration(module_.get(), ::llvm::Intrinsic::amdgcn_s_barrier);
       return builder_->CreateCall(f, {});
     } else {
       LOG(FATAL) << "Do not support sync " << sync;
@@ -178,9 +194,7 @@ class CodeGenAMDGPU : public CodeGenLLVM {
     // Additional optimization hook to tweak the builder.
   }
 
-  unsigned GetGlobalAddressSpace() {
-    return 1;
-  }
+  unsigned GetGlobalAddressSpace() { return 1; }
 
  protected:
   void InitTarget(llvm::TargetMachine* tm) final {
@@ -220,26 +234,22 @@ runtime::Module BuildAMDGPU(Array<LoweredFunc> funcs, std::string target) {
   // issue #4087 for a discussion
 #endif
   InitializeLLVM();
-  CHECK(target.length() >= 4 &&
-        target.substr(0, 4) == "rocm");
+  CHECK(target.length() >= 4 && target.substr(0, 4) == "rocm");
   std::ostringstream config;
-  config << "-mtriple=amdgcn-amd-amdhsa-hcc -mcpu=gfx"
-         << DetectROCMComputeVersion(target)
-         << " -mattr=-code-object-v3 "
-         << target.substr(4, target.length() - 4);
+  config << "-mtriple=amdgcn-amd-amdhsa-hcc -mcpu=gfx" << DetectROCMComputeVersion(target)
+         << " -mattr=-code-object-v3 " << target.substr(4, target.length() - 4);
   std::unique_ptr<llvm::TargetMachine> tm = GetLLVMTargetMachine(config.str());
   std::unique_ptr<CodeGenAMDGPU> cg(new CodeGenAMDGPU());
   std::unique_ptr<llvm::LLVMContext> ctx(new llvm::LLVMContext());
   cg->Init(funcs[0]->name, tm.get(), ctx.get(), false, false);
-  for (LoweredFunc f :  funcs) {
+  for (LoweredFunc f : funcs) {
     cg->AddFunction(f);
   }
 
-  const auto *find_rocm_bitcodes =
-      air::runtime::Registry::Get("tvm_callback_rocm_bitcode_path");
+  const auto* find_rocm_bitcodes = air::runtime::Registry::Get("tvm_callback_rocm_bitcode_path");
   Array<Expr> bitcode_files = (*find_rocm_bitcodes)();
 
-  for (auto &bitcode : bitcode_files) {
+  for (auto& bitcode : bitcode_files) {
     std::string path = bitcode.as<StringImm>()->value;
     llvm::SMDiagnostic err;
     std::unique_ptr<llvm::Module> mlib = llvm::parseIRFile(path, err, *ctx);
@@ -250,7 +260,7 @@ runtime::Module BuildAMDGPU(Array<LoweredFunc> funcs, std::string target) {
     }
     mlib->setTargetTriple(tm->getTargetTriple().str());
     mlib->setDataLayout(tm->createDataLayout());
-    for (llvm::Function &f : mlib->functions()) {
+    for (llvm::Function& f : mlib->functions()) {
       f.addFnAttr(llvm::Attribute::AlwaysInline);
     }
     cg->AddLinkModule(std::move(mlib));
@@ -273,33 +283,28 @@ runtime::Module BuildAMDGPU(Array<LoweredFunc> funcs, std::string target) {
   llvm::legacy::PassManager pass;
 
 #if TVM_LLVM_VERSION <= 60
-  CHECK(tm->addPassesToEmitFile(
-            pass, destObj, llvm::TargetMachine::CGFT_ObjectFile) == 0)
-            << "Cannot emit target CGFT_ObjectFile";
+  CHECK(tm->addPassesToEmitFile(pass, destObj, llvm::TargetMachine::CGFT_ObjectFile) == 0)
+      << "Cannot emit target CGFT_ObjectFile";
 #elif TVM_LLVM_VERSION <= 90
-  CHECK(tm->addPassesToEmitFile(
-            pass, destObj, nullptr, llvm::TargetMachine::CGFT_ObjectFile) == 0)
-            << "Cannot emit target CGFT_ObjectFile";
+  CHECK(tm->addPassesToEmitFile(pass, destObj, nullptr, llvm::TargetMachine::CGFT_ObjectFile) == 0)
+      << "Cannot emit target CGFT_ObjectFile";
 #else
-  CHECK(tm->addPassesToEmitFile(
-            pass, destObj, nullptr, llvm::CGFT_ObjectFile) == 0)
-            << "Cannot emit target CGFT_ObjectFile";
+  CHECK(tm->addPassesToEmitFile(pass, destObj, nullptr, llvm::CGFT_ObjectFile) == 0)
+      << "Cannot emit target CGFT_ObjectFile";
 #endif
   pass.run(*mObj);
   std::string obj(dataObj.begin(), dataObj.end());
 
   llvm::legacy::PassManager passAsm;
 #if TVM_LLVM_VERSION <= 60
-  CHECK(tm->addPassesToEmitFile(passAsm, destAsm,
-                                llvm::TargetMachine::CGFT_AssemblyFile) == 0)
+  CHECK(tm->addPassesToEmitFile(passAsm, destAsm, llvm::TargetMachine::CGFT_AssemblyFile) == 0)
       << "Cannot emit target CGFT_AssemblyFile";
 #elif TVM_LLVM_VERSION <= 90
   CHECK(tm->addPassesToEmitFile(passAsm, destAsm, nullptr,
                                 llvm::TargetMachine::CGFT_AssemblyFile) == 0)
       << "Cannot emit target CGFT_AssemblyFile";
 #else
-  CHECK(tm->addPassesToEmitFile(passAsm, destAsm, nullptr,
-                                llvm::CGFT_AssemblyFile) == 0)
+  CHECK(tm->addPassesToEmitFile(passAsm, destAsm, nullptr, llvm::CGFT_AssemblyFile) == 0)
       << "Cannot emit target CGFT_AssemblyFile";
 #endif
   passAsm.run(*mAsm);
@@ -317,8 +322,7 @@ runtime::Module BuildAMDGPU(Array<LoweredFunc> funcs, std::string target) {
   return ROCMModuleCreate(hsaco, "hsaco", ExtractFuncInfo(funcs), ll, assembly);
 }
 
-TVM_REGISTER_API("codegen.build_rocm")
-.set_body_typed(BuildAMDGPU);
+TVM_REGISTER_API("codegen.build_rocm").set_body_typed(BuildAMDGPU);
 
 }  // namespace codegen
 }  // namespace air
