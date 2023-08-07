@@ -25,6 +25,8 @@
 /*
  * 2021.11.01
  *   Add dump cpu info.
+ * 2023.08.05
+ *   Adapt LLVM 15 interface support
  */
 
 #ifdef TVM_LLVM_VERSION
@@ -82,7 +84,13 @@ class LLVMModuleNode final : public runtime::ModuleNode {
                   const std::string& format) final {
     std::string fmt = runtime::GetFileFormat(file_name, format);
     std::error_code ecode;
-    llvm::raw_fd_ostream dest(file_name, ecode, llvm::sys::fs::F_None);
+
+#if TVM_LLVM_VERSION <= 70
+    constexpr auto open_flag = llvm::sys::fs::F_None;
+#else
+    constexpr auto open_flag = llvm::sys::fs::OF_None;
+#endif
+    llvm::raw_fd_ostream dest(file_name, ecode, open_flag);
     CHECK_EQ(ecode.value(), 0) << "Cannot open file: " << file_name
                                << " " << ecode.message();
     if (fmt == "o" || fmt == "obj") {
