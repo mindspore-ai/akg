@@ -27,6 +27,8 @@
  *   Adapt LLVM 12 interface support
  * 2022.3.1
  *   Add a extern data argument for kernel
+ * 2023.08.12
+ *   Adapt LLVM 15 interface support
  */
 
 #ifndef TVM_CODEGEN_LLVM_CODEGEN_CPU_H_
@@ -106,7 +108,7 @@ class CodeGenCPU : public CodeGenLLVM {
   llvm::Value* CreateStaticHandle();
   llvm::Value* GetPackedFuncHandle(const std::string& str);
   llvm::Value* PackClosureData(const Array<Var>& fields, uint64_t *num_bytes);
-  llvm::Value* CreateStructRefPtr(Type t, llvm::Value* buffer, llvm::Value* index, int kind);
+  CodeGenLLVM::TypedPointer CreateStructRefPtr(Type t, llvm::Value* buffer, llvm::Value* index, int kind);
   void UnpackClosureData(llvm::Value*cdata,
                          const Array<Var>& fields,
                          std::unordered_map<const Variable*, llvm::Value*>* vmap);

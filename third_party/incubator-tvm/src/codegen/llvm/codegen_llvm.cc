@@ -35,6 +35,8 @@
  *   Add matrix transpose intrinsic.
  * 2023.08.05
  *   Adapt LLVM 15 interface support
+ * 2023.08.12
+ *   Adapt LLVM 15 interface support
  */
 
 #ifdef TVM_LLVM_VERSION
@@ -646,7 +648,7 @@ llvm::Value* CodeGenLLVM::CreateBufferPtr(Type t, llvm::Value* buffer, llvm::Val
   if (btype != ptype) {
     buffer = builder_->CreatePointerCast(buffer, ptype);
   }
-  return builder_->CreateInBoundsGEP(buffer->getType()->getPointerElementType(), buffer, index);
+  return builder_->CreateInBoundsGEP(LLVMType(t), buffer, index);
 }
 
 llvm::Value* CodeGenLLVM::CreateBufferVecPtr(Type t, llvm::Value* buffer, llvm::Value* index) {
@@ -657,7 +659,7 @@ llvm::Value* CodeGenLLVM::CreateBufferVecPtr(Type t, llvm::Value* buffer, llvm::
   if (btype != ptype) {
     buffer = builder_->CreatePointerCast(buffer, ptype);
   }
-  return builder_->CreateInBoundsGEP(buffer->getType()->getPointerElementType(), buffer, index);
+  return builder_->CreateInBoundsGEP(LLVMType(t), buffer, index);
 }
 
 llvm::Value* CodeGenLLVM::GetVarValue(const Variable* v) const {
@@ -993,8 +995,8 @@ llvm::Value* CodeGenLLVM::VisitExpr_(const Load* op) {
     GetAlignment(t, op->buffer_var.get(), op->index, &alignment, &native_bits);
     llvm::Value* ptr = CreateBufferPtr(t, buffer, index);
 #if TVM_LLVM_VERSION >= 110
-    llvm::LoadInst* load = builder_->CreateAlignedLoad(ptr->getType()->getPointerElementType(), ptr,
-                                                       llvm::Align(alignment), is_volatile);
+    llvm::LoadInst* load =
+        builder_->CreateAlignedLoad(LLVMType(t), ptr, llvm::Align(alignment), is_volatile);
 #else
     llvm::LoadInst* load = builder_->CreateAlignedLoad(ptr, alignment, is_volatile);
 #endif
@@ -1011,8 +1013,8 @@ llvm::Value* CodeGenLLVM::VisitExpr_(const Load* op) {
         llvm::Value* ptr = CreateBufferPtr(t.element_of(), buffer, MakeValue(ramp->base));
         ptr = builder_->CreatePointerCast(ptr, LLVMType(t)->getPointerTo(addrspace));
 #if TVM_LLVM_VERSION >= 110
-        llvm::LoadInst* load = builder_->CreateAlignedLoad(
-            ptr->getType()->getPointerElementType(), ptr, llvm::Align(alignment), is_volatile);
+        llvm::LoadInst* load =
+            builder_->CreateAlignedLoad(LLVMType(t), ptr, llvm::Align(alignment), is_volatile);
 #else
         llvm::LoadInst* load = builder_->CreateAlignedLoad(ptr, alignment, is_volatile);
 #endif
@@ -1027,7 +1029,7 @@ llvm::Value* CodeGenLLVM::VisitExpr_(const Load* op) {
   auto f = [&](int i, llvm::Value* index) {
     llvm::Value* ptr = CreateBufferPtr(t.element_of(), buffer, index);
 #if TVM_LLVM_VERSION >= 110
-    llvm::LoadInst* load = builder_->CreateAlignedLoad(ptr->getType()->getPointerElementType(), ptr,
+    llvm::LoadInst* load = builder_->CreateAlignedLoad(LLVMType(t.element_of()), ptr,
                                                        llvm::Align(basic_align), is_volatile);
 #else
     llvm::LoadInst* load = builder_->CreateAlignedLoad(ptr, basic_align, is_volatile);
@@ -1413,10 +1415,9 @@ llvm::Value* CodeGenLLVM::CreateMatrixTransposeBase(llvm::Value* dst_buffer,
   auto align = row * col;
   std::vector<unsigned> indices;
 #endif
-  llvm::Value* src_ptr =
-      CreateBufferVecPtr(DataType(kDLUInt, bits, row * col), src_buffer, ConstInt32(0));
-  auto src_type = src_ptr->getType()->getPointerElementType();
-  llvm::LoadInst* load = builder_->CreateAlignedLoad(src_type, src_ptr, align, true);
+  auto src_type = DataType(kDLUInt, bits, row * col);
+  llvm::Value* src_ptr = CreateBufferVecPtr(src_type, src_buffer, ConstInt32(0));
+  llvm::LoadInst* load = builder_->CreateAlignedLoad(LLVMType(src_type), src_ptr, align, true);
   for (unsigned i = 0; i < col; i++) {
     for (unsigned j = 0; j < row; j++) {
       indices.push_back(j * col + i);
@@ -1447,18 +1448,18 @@ llvm::Value* CodeGenLLVM::CreateMatrixTranspose4x4(llvm::Value* dst_buffer, llvm
   bool is_volatile = false;
   llvm::StoreInst* store;
 
-  llvm::Value* ptr0 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), src_buffer, ConstInt32(0));
-  llvm::Value* ptr1 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), src_buffer, ConstInt32(1));
-  llvm::Value* ptr2 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), src_buffer, ConstInt32(2));
-  llvm::Value* ptr3 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), src_buffer, ConstInt32(3));
-  auto ptr_type = ptr0->getType()->getPointerElementType();
+  auto type = DataType(kDLUInt, bits, col);
+  llvm::Value* ptr0 = CreateBufferVecPtr(type, src_buffer, ConstInt32(0));
+  llvm::Value* ptr1 = CreateBufferVecPtr(type, src_buffer, ConstInt32(1));
+  llvm::Value* ptr2 = CreateBufferVecPtr(type, src_buffer, ConstInt32(2));
+  llvm::Value* ptr3 = CreateBufferVecPtr(type, src_buffer, ConstInt32(3));
 
-  llvm::LoadInst* xmm0 = builder_->CreateAlignedLoad(ptr_type, ptr0, align, is_volatile);
-  llvm::LoadInst* xmm1 = builder_->CreateAlignedLoad(ptr_type, ptr1, align, is_volatile);
+  llvm::LoadInst* xmm0 = builder_->CreateAlignedLoad(LLVMType(type), ptr0, align, is_volatile);
+  llvm::LoadInst* xmm1 = builder_->CreateAlignedLoad(LLVMType(type), ptr1, align, is_volatile);
   auto tmp0 = builder_->CreateShuffleVector(xmm0, xmm1, low);
   auto tmp1 = builder_->CreateShuffleVector(xmm0, xmm1, high);
-  llvm::LoadInst* xmm2 = builder_->CreateAlignedLoad(ptr_type, ptr2, align, is_volatile);
-  llvm::LoadInst* xmm3 = builder_->CreateAlignedLoad(ptr_type, ptr3, align, is_volatile);
+  llvm::LoadInst* xmm2 = builder_->CreateAlignedLoad(LLVMType(type), ptr2, align, is_volatile);
+  llvm::LoadInst* xmm3 = builder_->CreateAlignedLoad(LLVMType(type), ptr3, align, is_volatile);
   auto tmp2 = builder_->CreateShuffleVector(xmm2, xmm3, low);
   auto tmp3 = builder_->CreateShuffleVector(xmm2, xmm3, high);
 
@@ -1503,27 +1504,27 @@ llvm::Value* CodeGenLLVM::CreateMatrixTranspose8x4(llvm::Value* dst_buffer, llvm
   bool is_volatile = false;
   llvm::StoreInst* store;
 
-  llvm::Value* ptr0 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), src_buffer, ConstInt32(0));
-  llvm::Value* ptr1 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), src_buffer, ConstInt32(1));
-  llvm::Value* ptr2 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), src_buffer, ConstInt32(2));
-  llvm::Value* ptr3 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), src_buffer, ConstInt32(3));
-  llvm::Value* ptr4 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), src_buffer, ConstInt32(4));
-  llvm::Value* ptr5 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), src_buffer, ConstInt32(5));
-  llvm::Value* ptr6 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), src_buffer, ConstInt32(6));
-  llvm::Value* ptr7 = CreateBufferVecPtr(DataType(kDLUInt, bits, col), src_buffer, ConstInt32(7));
-  auto ptr_type = ptr0->getType()->getPointerElementType();
+  auto type = DataType(kDLUInt, bits, col);
+  llvm::Value* ptr0 = CreateBufferVecPtr(type, src_buffer, ConstInt32(0));
+  llvm::Value* ptr1 = CreateBufferVecPtr(type, src_buffer, ConstInt32(1));
+  llvm::Value* ptr2 = CreateBufferVecPtr(type, src_buffer, ConstInt32(2));
+  llvm::Value* ptr3 = CreateBufferVecPtr(type, src_buffer, ConstInt32(3));
+  llvm::Value* ptr4 = CreateBufferVecPtr(type, src_buffer, ConstInt32(4));
+  llvm::Value* ptr5 = CreateBufferVecPtr(type, src_buffer, ConstInt32(5));
+  llvm::Value* ptr6 = CreateBufferVecPtr(type, src_buffer, ConstInt32(6));
+  llvm::Value* ptr7 = CreateBufferVecPtr(type, src_buffer, ConstInt32(7));
 
-  llvm::LoadInst* xmm0 = builder_->CreateAlignedLoad(ptr_type, ptr0, align, is_volatile);
-  llvm::LoadInst* xmm4 = builder_->CreateAlignedLoad(ptr_type, ptr4, align, is_volatile);
+  llvm::LoadInst* xmm0 = builder_->CreateAlignedLoad(LLVMType(type), ptr0, align, is_volatile);
+  llvm::LoadInst* xmm4 = builder_->CreateAlignedLoad(LLVMType(type), ptr4, align, is_volatile);
   auto ymm0 = builder_->CreateShuffleVector(xmm0, xmm4, concat);
-  llvm::LoadInst* xmm1 = builder_->CreateAlignedLoad(ptr_type, ptr1, align, is_volatile);
-  llvm::LoadInst* xmm5 = builder_->CreateAlignedLoad(ptr_type, ptr5, align, is_volatile);
+  llvm::LoadInst* xmm1 = builder_->CreateAlignedLoad(LLVMType(type), ptr1, align, is_volatile);
+  llvm::LoadInst* xmm5 = builder_->CreateAlignedLoad(LLVMType(type), ptr5, align, is_volatile);
   auto ymm1 = builder_->CreateShuffleVector(xmm1, xmm5, concat);
-  llvm::LoadInst* xmm2 = builder_->CreateAlignedLoad(ptr_type, ptr2, align, is_volatile);
-  llvm::LoadInst* xmm6 = builder_->CreateAlignedLoad(ptr_type, ptr6, align, is_volatile);
+  llvm::LoadInst* xmm2 = builder_->CreateAlignedLoad(LLVMType(type), ptr2, align, is_volatile);
+  llvm::LoadInst* xmm6 = builder_->CreateAlignedLoad(LLVMType(type), ptr6, align, is_volatile);
   auto ymm2 = builder_->CreateShuffleVector(xmm2, xmm6, concat);
-  llvm::LoadInst* xmm3 = builder_->CreateAlignedLoad(ptr_type, ptr3, align, is_volatile);
-  llvm::LoadInst* xmm7 = builder_->CreateAlignedLoad(ptr_type, ptr7, align, is_volatile);
+  llvm::LoadInst* xmm3 = builder_->CreateAlignedLoad(LLVMType(type), ptr3, align, is_volatile);
+  llvm::LoadInst* xmm7 = builder_->CreateAlignedLoad(LLVMType(type), ptr7, align, is_volatile);
   auto ymm3 = builder_->CreateShuffleVector(xmm3, xmm7, concat);
 
   auto tmp0 = builder_->CreateShuffleVector(ymm0, ymm1, low);

@@ -23,6 +23,8 @@
  *
  * 2023.08.05
  *   Adapt LLVM 15 interface support
+ * 2023.08.12
+ *   Adapt LLVM 15 interface support
  */
 
 #ifndef TVM_CODEGEN_LLVM_CODEGEN_LLVM_H_
@@ -145,6 +147,15 @@ class CodeGenLLVM : public ExprFunctor<llvm::Value*(const Expr&)>,
   void VisitStmt_(const ProducerConsumer* op) override;
 
  protected:
+  /*!
+   * \brief Address and type pair to assist in handling opaque pointers.
+   */
+  struct TypedPointer {
+    TypedPointer() = default;
+    TypedPointer(llvm::Type* t, llvm::Value* a) : type(t), addr(a) {}
+    llvm::Type* type = nullptr;  /*!< Type of the value pointed to. */
+    llvm::Value* addr = nullptr; /*!< Address of the value.         */
+  };
   /*! \brief The storage information */
   struct StorageInfo {
     /*! \brief The storage scope */

@@ -28,6 +28,8 @@
  *   Change buffer manager interface as argument
  * 2022.3.1
  *   Add a extern data argument for kernel
+ * 2023.08.12
+ *   Adapt LLVM 15 interface support
  */
 
 #ifdef TVM_LLVM_VERSION
@@ -237,7 +239,7 @@ std::unique_ptr<llvm::Module> CodeGenCPU::Finish() {
   }
   return CodeGenLLVM::Finish();
 }
-llvm::Value* CodeGenCPU::CreateStructRefPtr(Type t, llvm::Value* buf, llvm::Value* index,
+CodeGenLLVM::TypedPointer CodeGenCPU::CreateStructRefPtr(Type t, llvm::Value* buf, llvm::Value* index,
                                             int kind) {
   if (kind < intrinsic::kArrKindBound_) {
     if (buf->getType() == t_void_p_) {
@@ -246,64 +248,70 @@ llvm::Value* CodeGenCPU::CreateStructRefPtr(Type t, llvm::Value* buf, llvm::Valu
       CHECK_EQ(buf->getType(), t_tvm_array_->getPointerTo());
     }
   }
-  auto type = buf->getType()->getPointerElementType();
   switch (kind) {
     case intrinsic::kArrAddr: {
-      return builder_->CreateInBoundsGEP(type, buf, index);
+      return TypedPointer(t_tvm_array_, builder_->CreateInBoundsGEP(t_tvm_array_, buf, index));
     }
     case intrinsic::kArrData: {
-      return builder_->CreateInBoundsGEP(type, buf, {index, ConstInt32(0)});
+      auto type = t_tvm_array_->getStructElementType(0);
+      return TypedPointer(type, builder_->CreateInBoundsGEP(t_tvm_array_, buf, {index, ConstInt32(0)}));
     }
     case intrinsic::kArrShape: {
-      return builder_->CreateInBoundsGEP(type, buf, {index, ConstInt32(4)});
+      auto type = t_tvm_array_->getStructElementType(4);
+      return TypedPointer(type, builder_->CreateInBoundsGEP(t_tvm_array_, buf, {index, ConstInt32(4)}));
     }
     case intrinsic::kArrStrides: {
-      return builder_->CreateInBoundsGEP(type, buf, {index, ConstInt32(5)});
+      auto type = t_tvm_array_->getStructElementType(5);
+      return TypedPointer(type, builder_->CreateInBoundsGEP(t_tvm_array_, buf, {index, ConstInt32(5)}));
     }
     case intrinsic::kArrNDim: {
-      return builder_->CreateInBoundsGEP(type, buf, {index, ConstInt32(2)});
+      auto type = t_tvm_array_->getStructElementType(2);
+      return TypedPointer(type, builder_->CreateInBoundsGEP(t_tvm_array_, buf, {index, ConstInt32(2)}));
     }
     case intrinsic::kArrTypeCode: {
-      return builder_->CreateInBoundsGEP(type, buf, {index, ConstInt32(3), ConstInt32(0)});
+      auto type = t_tvm_array_->getStructElementType(3)->getStructElementType(0);
+      return TypedPointer(type, builder_->CreateInBoundsGEP(t_tvm_array_, buf, {index, ConstInt32(3), ConstInt32(0)}));
     }
     case intrinsic::kArrTypeBits: {
-      return builder_->CreateInBoundsGEP(type, buf, {index, ConstInt32(3), ConstInt32(1)});
+      auto type = t_tvm_array_->getStructElementType(3)->getStructElementType(1);
+      return TypedPointer(type, builder_->CreateInBoundsGEP(t_tvm_array_, buf, {index, ConstInt32(3), ConstInt32(1)}));
     }
     case intrinsic::kArrTypeLanes: {
-      return builder_->CreateInBoundsGEP(type, buf, {index, ConstInt32(3), ConstInt32(2)});
+      auto type = t_tvm_array_->getStructElementType(3)->getStructElementType(2);
+      return TypedPointer(type, builder_->CreateInBoundsGEP(t_tvm_array_, buf, {index, ConstInt32(3), ConstInt32(2)}));
     }
     case intrinsic::kArrByteOffset: {
-      return builder_->CreateInBoundsGEP(type, buf, {index, ConstInt32(6)});
+      auto type = t_tvm_array_->getStructElementType(6);
+      return TypedPointer(type, builder_->CreateInBoundsGEP(t_tvm_array_, buf, {index, ConstInt32(6)}));
     }
     case intrinsic::kArrDeviceId: {
-      return builder_->CreateInBoundsGEP(type, buf, {index, ConstInt32(1), ConstInt32(1)});
+      auto type = t_tvm_array_->getStructElementType(1)->getStructElementType(1);
+      return TypedPointer(type, builder_->CreateInBoundsGEP(t_tvm_array_, buf, {index, ConstInt32(1), ConstInt32(1)}));
     }
     case intrinsic::kArrDeviceType: {
-      return builder_->CreateInBoundsGEP(type, buf, {index, ConstInt32(1), ConstInt32(0)});
+      auto type = t_tvm_array_->getStructElementType(1)->getStructElementType(0);
+      return TypedPointer(type, builder_->CreateInBoundsGEP(t_tvm_array_, buf, {index, ConstInt32(1), ConstInt32(0)}));
     }
     case intrinsic::kTVMValueContent: {
       CHECK_EQ(t.lanes(), 1);
       CHECK(t.is_handle() || t.bits() == 64);
       if (t.is_int()) {
         buf = builder_->CreatePointerCast(buf, t_int64_->getPointerTo());
-        auto type = buf->getType()->getPointerElementType();
-        return builder_->CreateInBoundsGEP(type, buf, index);
+        return TypedPointer(t_int64_, builder_->CreateInBoundsGEP(t_int64_, buf, index));
       } else if (t.is_float()) {
         buf = builder_->CreatePointerCast(buf, t_float64_->getPointerTo());
-        auto type = buf->getType()->getPointerElementType();
-        return builder_->CreateInBoundsGEP(type, buf, index);
+        return TypedPointer(t_float64_, builder_->CreateInBoundsGEP(t_float64_, buf, index));
       } else {
         CHECK(t.is_handle());
         buf = builder_->CreatePointerCast(buf, t_tvm_value_->getPointerTo());
-        auto type = buf->getType()->getPointerElementType();
-        buf = builder_->CreateInBoundsGEP(type, buf, index);
-        return builder_->CreatePointerCast(buf, t_void_p_->getPointerTo());
+        buf = builder_->CreateInBoundsGEP(t_tvm_value_, buf, index);
+        return TypedPointer(t_void_p_, builder_->CreatePointerCast(buf, t_void_p_->getPointerTo()));
       }
     }
     default:
       LOG(FATAL) << "unknown field code";
-      return nullptr;
   }
+  return TypedPointer(nullptr, nullptr);
 }
 
 llvm::Value* CodeGenCPU::CreateCallExtern(const Call* op) {
@@ -512,19 +520,27 @@ llvm::Value* CodeGenCPU::PackClosureData(const Array<Var>& vfields, uint64_t* nu
     builder_->CreateStore(var_map_.at(vfields[i].get()),
                           builder_->CreateInBoundsGEP(tcdata, cdata, {zero, ConstInt32(i)}));
   }
-  *num_bytes = data_layout_->getTypeAllocSize(
-      llvm::cast<llvm::PointerType>(cdata->getType())->getPointerElementType());
+  *num_bytes = data_layout_->getTypeAllocSize(tcdata);
   return cdata;
 }
 
 void CodeGenCPU::UnpackClosureData(llvm::Value* cdata, const Array<Var>& vfields,
                                    std::unordered_map<const Variable*, llvm::Value*>* vmap) {
-  auto tcdata = cdata->getType()->getPointerElementType();
+  std::vector<llvm::Type*> fields;
+  for (Var v : vfields) {
+    auto it = var_map_.find(v.get());
+    CHECK(it != var_map_.end());
+    fields.push_back(it->second->getType());
+  }
+  llvm::StructType* tcdata = llvm::StructType::create(fields);
   for (size_t i = 0; i < vfields.size(); ++i) {
-    llvm::Value* field_addr =
-        builder_->CreateInBoundsGEP(tcdata, cdata, {ConstInt32(0), ConstInt32(i)});
-    (*vmap)[vfields[i].get()] =
-        builder_->CreateLoad(field_addr->getType()->getPointerElementType(), field_addr);
+    llvm::Type* field_type = tcdata->getStructElementType(i);
+#if TVM_LLVM_VERSION >= 130
+    llvm::Value* field_addr = builder_->CreateInBoundsGEP(tcdata, cdata, {ConstInt32(0), ConstInt32(i)});
+#else
+    llvm::Value* field_addr = builder_->CreateInBoundsGEP(cdata, {ConstInt32(0), ConstInt32(i)});
+#endif
+    (*vmap)[vfields[i].get()] = builder_->CreateLoad(field_type, field_addr);
   }
 }
 
@@ -678,8 +694,10 @@ llvm::Value* CodeGenCPU::GetPackedFuncHandle(const std::string& fname) {
   BasicBlock* end_block = BasicBlock::Create(*ctx_, "handle_init_end", function_);
 #if TVM_LLVM_VERSION >= 110
   llvm::Value* handle = builder_->CreateAlignedLoad(hptr->getValueType(), hptr, llvm::Align(align));
-#else
+#elif TVM_LLVM_VERSION >= 80
   llvm::Value* handle = builder_->CreateAlignedLoad(hptr->getValueType(), hptr, align);
+#else
+  llvm::Value* handle = builder_->CreateAlignedLoad(hptr, align);
 #endif
   llvm::Value* handle_not_null =
       builder_->CreateICmpNE(handle, llvm::Constant::getNullValue(t_tvm_func_handle_));
@@ -705,8 +723,9 @@ llvm::Value* CodeGenCPU::GetPackedFuncHandle(const std::string& fname) {
   llvm::Value* retcode = builder_->CreateCall(env_callee, {ctx, GetConstString(fname), out});
   init_block = CheckCallSuccess(retcode);
 #if TVM_LLVM_VERSION >= 110
-  llvm::Value* loaded_handle =
-      builder_->CreateAlignedLoad(out->getType()->getPointerElementType(), out, llvm::Align(align));
+  llvm::Value* loaded_handle = builder_->CreateAlignedLoad(t_tvm_func_handle_, out, llvm::Align(align));
+#elif TVM_LLVM_VERSION >= 80
+  llvm::Value* loaded_handle = builder_->CreateAlignedLoad(t_tvm_func_handle_, out, align);
 #else
   llvm::Value* loaded_handle = builder_->CreateAlignedLoad(out, align);
 #endif
@@ -751,8 +770,9 @@ llvm::BasicBlock* CodeGenCPU::MakeCallPacked(const Array<Expr>& args, llvm::Valu
   llvm::Value* load_ptr =
       builder_->CreatePointerCast(ret_value, LLVMType(r_api_type)->getPointerTo());
 #if TVM_LLVM_VERSION >= 110
-  *rvalue = builder_->CreateAlignedLoad(load_ptr->getType()->getPointerElementType(), load_ptr,
-                                        llvm::Align(8));
+  *rvalue = builder_->CreateAlignedLoad(LLVMType(r_api_type), load_ptr, llvm::Align(8));
+#elif TVM_LLVM_VERSION >= 80
+  *rvalue = builder_->CreateAlignedLoad(LLVMType(r_api_type), load_ptr, 8);
 #else
   *rvalue = builder_->CreateAlignedLoad(load_ptr, 8);
 #endif
@@ -858,24 +878,24 @@ llvm::Value* CodeGenCPU::CreateIntrinsic(const Call* op) {
   } else if (op->is_intrinsic(intrinsic::tvm_struct_get)) {
     CHECK_EQ(op->args.size(), 3U);
     int kind = op->args[2].as<IntImm>()->value;
-    llvm::Value* ref =
+    auto ref =
         this->CreateStructRefPtr(op->type, MakeValue(op->args[0]), MakeValue(op->args[1]), kind);
     if (kind == intrinsic::kArrAddr) {
-      return builder_->CreatePointerCast(ref, t_void_p_);
+      return builder_->CreatePointerCast(ref.addr, t_void_p_);
     } else {
-      return builder_->CreateLoad(ref->getType()->getPointerElementType(), ref);
+      return builder_->CreateLoad(ref.type, ref.addr);
     }
   } else if (op->is_intrinsic(intrinsic::tvm_struct_set)) {
     CHECK_EQ(op->args.size(), 4U);
     int kind = op->args[2].as<IntImm>()->value;
     llvm::Value* value = MakeValue(op->args[3]);
-    llvm::Value* ref = this->CreateStructRefPtr(op->args[3].type(), MakeValue(op->args[0]),
+    auto ref = this->CreateStructRefPtr(op->args[3].type(), MakeValue(op->args[0]),
                                                 MakeValue(op->args[1]), kind);
     CHECK(kind != intrinsic::kArrAddr);
     if (value->getType()->isPointerTy()) {
-      value = builder_->CreatePointerCast(value, ref->getType()->getPointerElementType());
+      value = builder_->CreatePointerCast(value, ref.type);
     }
-    builder_->CreateStore(value, ref);
+    builder_->CreateStore(value, ref.addr);
     return ConstInt32(0);
   } else if (op->is_intrinsic(intrinsic::tvm_stack_alloca)) {
     CHECK_EQ(op->args.size(), 2U);
