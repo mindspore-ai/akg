@@ -16,6 +16,7 @@
 # under the License.
 """Hybrid Script Parser"""
 
+# 2023.08.16 - Support parser for python 3.9 and up.
 # 2022.02.15 - Support grid as new loop mode.
 # 2022.01.19 - Support negative extent for range.
 # 2021.12.15 - Support block_realize intrin in with scope.
@@ -650,7 +651,7 @@ class HybridParser(ast.NodeVisitor):
                     _apply_indices(self.closure_vars[node.value.id], args))
 
             buf = self.visit(node.value)
-            if isinstance(buf, Array):
+            if isinstance(buf, (Array, list)):
                 for i in args:
                     if isinstance(i, numbers.Integral):
                         buf = buf[i]
