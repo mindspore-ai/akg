@@ -42,8 +42,7 @@ from . import env
 #from . import tophub
 
 # some shortcuts
-from .measure import measure_option, MeasureInput, MeasureResult, MeasureErrorNo, \
-    LocalBuilder, LocalRunner, RPCRunner
+from .measure import measure_option, MeasureInput, MeasureResult, MeasureErrorNo, LocalBuilder
 from .tuner import callback
 from .task import template, get_config, create, ConfigSpace, ConfigEntity, \
     register_topi_compute, register_topi_schedule, \

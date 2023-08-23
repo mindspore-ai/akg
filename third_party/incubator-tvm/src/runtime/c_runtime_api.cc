@@ -117,7 +117,7 @@ class DeviceAPIManager {
   }
   // Get or initialize API.
   DeviceAPI* GetAPI(int type, bool allow_missing) {
-    if (type < kRPCSessMask) {
+    if (type < 128) {
       if (api_[type] != nullptr) return api_[type];
       std::lock_guard<std::mutex> lock(mutex_);
       if (api_[type] != nullptr) return api_[type];

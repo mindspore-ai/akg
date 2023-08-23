@@ -268,7 +268,6 @@ def load(path, fmt=""):
     cc.create_shared if the path is in format .o or .tar
     """
     # High level handling for .o and .tar file.
-    # We support this to be consistent with RPC module load.
     if path.endswith(".o"):
         _cc.create_shared(path + ".so", path)
         path += ".so"

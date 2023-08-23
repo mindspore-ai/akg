@@ -101,7 +101,7 @@ def get_result(desc, poly, attrs=None):
                    expect if isinstance(expect, (list, tuple)) else [expect])):
         logging.info(mod.imported_modules[0].get_source())
         return False
-    if backend == "cuda":
+    if attrs.get("profiling", False):
         inputs = to_tvm_nd_array(input_for_mod)
         expect = to_tvm_nd_array(expect)
         target_profiling(mod, *inputs, *expect, repeat_time=400)

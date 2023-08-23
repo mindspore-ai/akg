@@ -200,9 +200,6 @@ class TVM_DLL DeviceAPI {
   static DeviceAPI* Get(TVMContext ctx, bool allow_missing = false);
 };
 
-/*! \brief The device type bigger than this is RPC device */
-constexpr int kRPCSessMask = 128;
-
 /*!
  * \brief The name of Device API factory.
  * \param type The device type.
@@ -230,10 +227,6 @@ inline const char* DeviceName(int type) {
 #ifndef _LIBCPP_SGX_NO_IOSTREAMS
 inline std::ostream& operator<<(std::ostream& os, DLContext ctx) {  // NOLINT(*)
   int device_type = static_cast<int>(ctx.device_type);
-  if (device_type > kRPCSessMask) {
-    os << "remote[" << (device_type / kRPCSessMask) << "]-";
-    device_type = device_type % kRPCSessMask;
-  }
   os << runtime::DeviceName(device_type) << "(" << ctx.device_id << ")";
   return os;
 }

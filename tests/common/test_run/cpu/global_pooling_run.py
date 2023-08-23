@@ -77,7 +77,6 @@ def global_pooling_run(shape_data, pool_type, dtype,
         print(mod_source.get_source())
         raise AssertionError("Test fail")
 
-    attrs["profiling"] = True
     if attrs.get("profiling", False):
         data, output = to_tvm_nd_array(
             [data, output], akg.tvm.context(target_name, 0))

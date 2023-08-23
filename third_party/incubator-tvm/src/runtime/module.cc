@@ -39,16 +39,6 @@ namespace air {
 namespace runtime {
 
 void ModuleNode::Import(Module other) {
-  // specially handle rpc
-  if (!std::strcmp(this->type_key(), "rpc")) {
-    static const PackedFunc* fimport_ = nullptr;
-    if (fimport_ == nullptr) {
-      fimport_ = runtime::Registry::Get("rpc._ImportRemoteModule");
-      CHECK(fimport_ != nullptr);
-    }
-    (*fimport_)(GetRef<Module>(this), other);
-    return;
-  }
   // cyclic detection.
   std::unordered_set<const ModuleNode*> visited{other.operator->()};
   std::vector<const ModuleNode*> stack{other.operator->()};
@@ -154,8 +144,6 @@ bool RuntimeEnabled(const std::string& target) {
     f_name = "device_api.vulkan";
   } else if (target == "stackvm") {
     f_name = "codegen.build_stackvm";
-  } else if (target == "rpc") {
-    f_name = "device_api.rpc";
   } else if (target == "vpi" || target == "verilog") {
     f_name = "device_api.vpi";
   } else if (target == "micro_dev") {

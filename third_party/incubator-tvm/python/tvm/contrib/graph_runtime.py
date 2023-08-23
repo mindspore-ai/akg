@@ -20,7 +20,6 @@ import numpy as np
 from .._ffi.base import string_types
 from .._ffi.function import get_global_func
 from .._ffi.runtime_ctypes import TVMContext
-from ..rpc import base as rpc_base
 
 def create(graph_json_str, libmod, ctx):
     """Create a runtime executor module given a graph and module.
@@ -48,59 +47,8 @@ def create(graph_json_str, libmod, ctx):
         except AttributeError:
             raise ValueError("Type %s is not supported" % type(graph_json_str))
 
-    ctx, num_rpc_ctx, device_type_id = get_device_ctx(libmod, ctx)
-
-    if num_rpc_ctx == len(ctx):
-        hmod = rpc_base._ModuleHandle(libmod)
-        fcreate = ctx[0]._rpc_sess.get_function("tvm.graph_runtime.remote_create")
-        return GraphModule(fcreate(graph_json_str, hmod, *device_type_id))
-
     fcreate = get_global_func("tvm.graph_runtime.create")
     return GraphModule(fcreate(graph_json_str, libmod, *device_type_id))
-
-def get_device_ctx(libmod, ctx):
-    """Parse and validate all the device context(s).
-    Parameters
-    ----------
-    libmod : tvm.Module
-        The module of the corresponding function
-    ctx : TVMContext or list of TVMContext
-    Returns
-    -------
-    ctx : list of TVMContext
-    num_rpc_ctx : Number of rpc contexts
-    device_type_id : List of device type and device id
-    """
-
-    if isinstance(ctx, TVMContext):
-        ctx = [ctx]
-    elif not isinstance(ctx, (list, tuple)):
-        raise ValueError("ctx has to be the type of TVMContext or a list of "
-                         "TVMCTVMContext")
-    for cur_ctx in ctx:
-        if not isinstance(cur_ctx, TVMContext):
-            raise ValueError("ctx has to be the type of TVMContext or a list "
-                             "of TVMContext")
-
-    # device_type_id[0], device_type_id[1] are used as the primary/fallback
-    # context type and id. All other ones are used as device context for
-    # heterogeneous execution.
-    num_rpc_ctx = 0
-    device_type_id = []
-    for cur_ctx in ctx:
-        device_type = cur_ctx.device_type
-        if device_type >= rpc_base.RPC_SESS_MASK:
-            assert libmod.type_key == "rpc"
-            assert rpc_base._SessTableIndex(
-                libmod) == cur_ctx._rpc_sess._tbl_index
-            num_rpc_ctx += 1
-            device_type = cur_ctx.device_type % rpc_base.RPC_SESS_MASK
-        device_type_id.append(device_type)
-        device_type_id.append(cur_ctx.device_id)
-
-    if 0 < num_rpc_ctx < len(ctx):
-        raise ValueError("Either all or none of the contexts should be rpc.")
-    return ctx, num_rpc_ctx, device_type_id
 
 
 class GraphModule(object):
@@ -149,7 +97,6 @@ class GraphModule(object):
             self._get_input(key).copyfrom(value)
 
         if params:
-            # upload big arrays first to avoid memory issue in rpc mode
             keys = list(params.keys())
             keys.sort(key=lambda x: -np.prod(params[x].shape))
             for k in keys:
