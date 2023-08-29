@@ -59,5 +59,51 @@ class InplaceAssignMutator : public IRMutator {
   Map<std::string, NodeRef> op_attrs_;
 };
 
+class AssignToInplaceAssignMutator : public IRMutator {
+ public:
+  Stmt Mutate_(const AttrStmt *op, const Stmt &s) override {
+    Map<std::string, NodeRef> attrs;
+    if (op->attr_key == "attrs") {
+      attrs = Downcast<Map<std::string, NodeRef>>(op->node);
+      is_assign_ = false;
+      has_attrs_ = true;
+      auto body = this->Mutate(op->body);
+      has_attrs_ = false;
+      if (!is_assign_) {
+        return s;
+      }
+      is_assign_ = false;
+      attrs.Set("fake_output", make_const(Int(1), true));
+      return AttrStmt::make(attrs, "attrs", Expr(1), body);
+    }
+    return IRMutator::Mutate_(op, s);
+  }
+
+  Stmt Mutate_(const Provide *op, const Stmt &s) override {
+    CHECK(op->value.as<Call>());
+    auto call = op->value.as<Call>();
+    auto op_name = call->name;
+    if (op_name == "Assign") {
+      is_assign_ = true;
+      auto &inputs = call->args;
+      auto p = Provide::make(
+        op->func, op->value_index,
+        Call::make(call->type, "InplaceAssign", {inputs[0], inputs[1], inputs[1]}, call->call_type), op->args);
+      if (has_attrs_) {
+        return p;
+      }
+      Map<std::string, NodeRef> attrs;
+      attrs.Set("fake_output", make_const(Int(1), true));
+      return AttrStmt::make(attrs, "attrs", Expr(1), p);
+    }
+    return IRMutator::Mutate_(op, s);
+  }
+
+ private:
+  bool has_attrs_{false};
+  bool is_assign_{false};
+};
+
+Stmt AssignToInplaceAssign(const Stmt &s, BuildInfo *) { return AssignToInplaceAssignMutator().Mutate(s); }
 Stmt InplaceAssignOpt(const Stmt &s, BuildInfo *info) { return InplaceAssignMutator(info->opt).Mutate(s); }
 }  // namespace akg

@@ -351,16 +351,8 @@ def _collect_inputs(input_desc):
     return inputs
 
 
-def _get_op_attr(op_name, attrs, attr_name):
-    """Get op attr value."""
-    for attr in attrs:
-        if attr["name"] == attr_name:
-            return attr["value"]
-    raise ValueError("Can not find attr '{}' in op {}".format(attr_name, op_name))
-
-
 def precision_analyze(desc: dict, tensors):
-    exclude_op_list = ["Minimum", "Maximum", "Reshape", "ZerosLike", "Tile", "Select", "InplaceAssign", "Greater",
+    exclude_op_list = ["Minimum", "Maximum", "Reshape", "ZerosLike", "Tile", "Select", "Greater",
                        "SelectGT", "SelectLT", "LessEqual", "Less", "EquivFormat", "ExpandDims", "Transpose",
                        "TransData", "BroadcastTo", "Assign"]
     input_tensors = _collect_inputs(desc["input_desc"])
@@ -369,21 +361,9 @@ def precision_analyze(desc: dict, tensors):
     graph = {}
     ops = {}  # recorder the operator that generates the current output
     for op in desc["op_desc"]:
-        if op["name"] == "InplaceAssign":
-            output = IOInfo(op["input_desc"][0][0]["tensor_name"], op["input_desc"][0][0]["data_type"])
-            inputs = IOInfo(op["input_desc"][1][0]["tensor_name"], op["input_desc"][1][0]["data_type"])
-            graph[output] = [inputs]
-            ops[output] = op["name"]
-            fake_output = _get_op_attr(op["name"], op["attr"], "fake_output")
-            if not fake_output:
-                output = IOInfo(op["output_desc"][0]["tensor_name"], op["output_desc"][0]["data_type"])
-                inputs = IOInfo(op["input_desc"][2][0]["tensor_name"], op["input_desc"][2][0]["data_type"])
-                graph[output] = [inputs]
-                ops[output] = op["name"]
-        else:
-            output = IOInfo(op["output_desc"][0]["tensor_name"], op["output_desc"][0]["data_type"])
-            graph[output] = _collect_inputs(op["input_desc"])
-            ops[output] = op["name"]
+        output = IOInfo(op["output_desc"][0]["tensor_name"], op["output_desc"][0]["data_type"])
+        graph[output] = _collect_inputs(op["input_desc"])
+        ops[output] = op["name"]
 
     def _precision_reduce(x: IOInfo):
         if x in input_tensors:

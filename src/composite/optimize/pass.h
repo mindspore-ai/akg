@@ -20,6 +20,9 @@
 
 namespace akg {
 
+// change Assign to InplaceAssign
+Stmt AssignToInplaceAssign(const Stmt &s, BuildInfo *);
+
 // insert broadcast
 Stmt BroadcastInserter(const Stmt &s, BuildInfo *info);
 

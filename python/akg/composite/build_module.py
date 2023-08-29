@@ -24,13 +24,9 @@ from tvm.autotvm.env import AutotvmGlobalScope
 from akg.utils.tbe_codegen_utils import build_tbe_codegen
 from akg.utils.kernel_exec import ReturnType, is_symbolic_tiling
 from .split_stitch import split_stitch_attr
-from .construct_args import get_construct_args, get_tune_construct_args, \
-    should_enable_attr, get_stmt_for_tune, add_attrs_in_segment_infos, \
-    update_attrs
 from .construct_args import ConstructType, ConstructKey
 from .construct_args import get_construct_args, get_tune_construct_args, \
     should_enable_attr, get_stmt_for_tune, add_attrs_in_segment_infos
-from .split_stitch import split_stitch_attr
 
 
 def generate_trait(desc):

@@ -23,6 +23,10 @@ namespace akg {
 
 Stmt Optimize(Stmt &s, BuildInfo &info) {
   auto pm = TranslatePassMgr(&info);
+  // The InplaceAssign is deleted from mindspore, only Assign is sent to akg.
+  // From now, the "fake_output" of InplaceAssign is always True, and the 2nd input is always same with 3rd input.
+  ADD_PASS(pm, AssignToInplaceAssign);
+
   ADD_PASS(pm, BroadcastInserter);
   if (info.opt.target == "aicore") {
     ADD_PASS(pm, ReshapeTensor);
@@ -64,6 +68,7 @@ Stmt Optimize(Stmt &s, BuildInfo &info) {
 
 Stmt OptimizeForTBE(const Stmt &s, BuildInfo &info) {
   auto pm = TranslatePassMgr(&info, "composite_tbe");
+  ADD_PASS(pm, AssignToInplaceAssign);
   ADD_PASS(pm, ReshapeTensor);
   ADD_PASS(pm, AxisAttrNormalize);
   ADD_PASS(pm, ElimReshapeBackward);
