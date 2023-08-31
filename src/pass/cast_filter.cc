@@ -1,5 +1,5 @@
 /**
- * Copyright 2020-2021 Huawei Technologies Co., Ltd
+ * Copyright 2020-2023 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -147,7 +147,8 @@ class CastFilterMutator : public IRMutator {
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
     if (air::ir::attr::IsPragmaKey(op->attr_key) && op->attr_key == "pragma_emit_insn") {
       auto pragma = op->value.as<StringImm>()->value;
-      if (pragma == "vec_single_cast") {
+      // "vector_auto" pragma is used for tbe emit
+      if (pragma == "vec_single_cast" || pragma == "vector_auto") {
         cast_can_remove_ = false;
         auto stmt = IRMutator::Mutate_(op, s);
         if (cast_can_remove_) {

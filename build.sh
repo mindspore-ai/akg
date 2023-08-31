@@ -59,8 +59,11 @@ check_binary_file()
   do
     file_lines=`cat "${cur_file}" | wc -l`
     if [ ${file_lines} -eq 3 ]; then
-      echo "-- Warning: ${cur_file} is not a valid binary file."
-      return 1
+        check_sha=`cat ${cur_file} | grep "oid sha256"`
+        if [ $? -eq 0 ]; then
+            echo "-- Warning: ${cur_file} is not a valid binary file."
+            return 1
+        fi
     fi
   done
   return 0

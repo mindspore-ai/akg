@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2023 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -57,7 +57,7 @@ inline void DumpRealContent(const Array<LoweredFunc> &func_list, std::ostream &b
 class PassMgr {
  public:
   template <typename... Args>
-  PassMgr(const std::string &func, Args &&... args) : pass_name_(func) {
+  PassMgr(const std::string &func, Args &&...args) : pass_name_(func) {
     InitializeSubName();
 
     int args_num = sizeof...(Args) + 1;
@@ -70,6 +70,11 @@ class PassMgr {
 
   PassMgr &enable_timer() {
     enable_timer_ = true;
+    return *this;
+  }
+
+  PassMgr &check_activate_passes() {
+    check_activated_passes_ = true;
     return *this;
   }
 
@@ -107,6 +112,7 @@ class PassMgr {
   std::vector<int> args_types_;
 
   bool enable_timer_ = false;
+  bool check_activated_passes_ = false;
 
   template <typename T>
   void TryDumpC(const T &node) const {
@@ -132,14 +138,14 @@ class PassMgr {
 };
 
 template <typename... Args>
-PassMgr make_pass(const std::string &func, Args &&... args) {
+PassMgr make_pass(const std::string &func, Args &&...args) {
   return PassMgr(func, std::forward<Args>(args)...);
 }
 #define GET_VA_ARG_1(...) GET_VA_ARG_1_(__VA_ARGS__, )  // Make sure that also for 1 argument it works
 #define GET_VA_ARG_1_(a1, ...) a1
-#define NEXT_PASS(PASS, args...) make_pass("ir_pass." #PASS, args).enable_timer()
+#define NEXT_PASS(PASS, args...) make_pass("ir_pass." #PASS, args).check_activate_passes().enable_timer()
 #define NEXT_PASS_IF(condition, PASS, args...) \
-  (condition) ? make_pass("ir_pass." #PASS, args).enable_timer() : GET_VA_ARG_1(args)
+  (condition) ? make_pass("ir_pass." #PASS, args).check_activate_passes().enable_timer() : GET_VA_ARG_1(args)
 }  // namespace akg
 
 #endif  // CODEGEN_PASS_MGR_H_

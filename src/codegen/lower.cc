@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2023 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -173,7 +173,7 @@ Stmt LowerInitWithSchedule(LowerData &data) {
       akg::schedule::AutoInline(data->sch, target_platform, g_attrs.GetBool(kEnableCSE, false));
     }
     if ((target_platform->device_type == kDLGPU || target_platform->device_type == kDLCPU) &&
-      g_attrs.GetBool(kEnableAutoFuse, true)) {
+        g_attrs.GetBool(kEnableAutoFuse, true)) {
       std::vector<size_t> split_index;
       akg::schedule::AutoFuse(data->sch, g_attrs.GetStr(kAutoFuseSplit, ""), split_index,
                               g_attrs.GetBool("enable_stitch_fusion", 0));
@@ -183,7 +183,8 @@ Stmt LowerInitWithSchedule(LowerData &data) {
 
   data->sch = data->sch.normalize();
   auto bounds = air::schedule::InferBound(data->sch);
-  Stmt stmt = make_pass("schedule.ScheduleOps", data->sch, bounds, false);
+  auto keep_trivial_loop = (data->attrs.defined() && data->attrs.find(kKeepTrivialLoop) != data->attrs.end());
+  Stmt stmt = make_pass("schedule.ScheduleOps", data->sch, bounds, keep_trivial_loop);
   if (g_attrs.count(kTensorAttrs) > 0) {
     const auto tensor_attrs = Downcast<Map<Tensor, Map<std::string, NodeRef>>>(g_attrs[kTensorAttrs]);
     stmt = NEXT_PASS(AddTensorAttrs, stmt, tensor_attrs);

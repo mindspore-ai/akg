@@ -1,5 +1,5 @@
 /**
- * Copyright 2020-2022 Huawei Technologies Co., Ltd
+ * Copyright 2020-2023 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -434,6 +434,8 @@ class UserConfig {
 
   bool GetUseNewSpace() { return use_new_space_; }
 
+  bool GetFrontendLower() { return frontend_lower_; }
+
   bool GetEnableAtomicAdd() { return enable_atomic_add_; }
 
   bool GetEnableAkgReduceLib() { return enable_akg_reduce_lib_; }
@@ -534,6 +536,9 @@ class UserConfig {
     ParseIntAttr(attrs, "dynamic_shape_bound", &dynamic_shape_bound_);
     ParseBoolAttr(attrs, "pragma_tilesize_is_var", &tile_size_is_var_);
     ParseBoolAttr(attrs, "pragma_outerband_need_split", &outer_band_need_split_);
+
+    // AKG_TBE
+    ParseBoolAttr(attrs, "is_tbe_codegen", &frontend_lower_);
 
     // Mind-trick pass
     ParseIntAttr(attrs, "constrain_schedule_verbosity", &constrain_schedule_verbosity_);
@@ -747,6 +752,8 @@ class UserConfig {
 
   bool enable_atomic_add_{false};
   bool use_new_space_{false};
+  bool frontend_lower_{false};
+
   // tensor_core config
   bool enable_matmul_{false};
   bool enable_tensor_core_{false};
@@ -1371,6 +1378,7 @@ class AnalysisResult {
     {10, "EXTERN_CALL"}, {11, "COUNT_OP"},    {12, "PARTIAL_ELEM"}};
   std::unordered_map<int, std::string> direction_map_ = {
     {0, "UNKNOWN"}, {1, "X_DIRECTION"}, {2, "Y_DIRECTION"}, {3, "ALL_DIRECTION"}};
+  const Provide *mmu_bias_init_c_{nullptr};
 
  private:
   // the whole operator information

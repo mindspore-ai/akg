@@ -1,4 +1,4 @@
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2023 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -122,6 +122,7 @@ class TestBase(object):
         dynamic = False
         partial_dynamic = False
         bypass_l1 = False
+        enable_atomic_add = False
         if isinstance(arg, tuple):
             arg = list(arg)
         if "dynamic" in arg:
@@ -133,6 +134,10 @@ class TestBase(object):
         if "bypassL1" in arg:
             bypass_l1 = True
             arg.remove("bypassL1")
+        if "enable_atomic_add" in arg:
+            enable_atomic_add = True
+            arg.remove("enable_atomic_add")
+
         if is_conv:
             dy = dynamic or partial_dynamic
             if len(arg) == 4:
@@ -193,6 +198,9 @@ class TestBase(object):
             res = {"dim": str(info), "dynamic": dynamic}
             if enable_multicore:
                 res["enable_multicore"] = enable_multicore
+            if enable_atomic_add:
+                res["enable_atomic_add"] = enable_atomic_add
+
             return res
 
     def get_env_var(self, env_key=None):
@@ -274,6 +282,14 @@ class TestBase(object):
                         self._log.error("common_run :: circle {0} fail !".format(self.translate_func_name(arg)))
                         self._log.error("common_run :: compile failed !")
                         self.case_result = False
+            elif mode == "lower":
+                if kwargs.get("attrs") is None:
+                    kwargs["attrs"] = {}
+
+                kwargs["attrs"]["simple_mode"] = True
+                kwargs["attrs"]["is_tbe_codegen"] = True
+
+                return func(*args, **kwargs)
 
             elif mode == "execute":
                 input, output, expect, runres = func(*args, **kwargs)

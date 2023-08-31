@@ -918,7 +918,7 @@ inline void JSONWriter::WriteSeperator() {
   }
 }
 
-inline void JSONObjectReadHelper::ReadAllFields(JSONReader *reader) {
+__attribute__((visibility("hidden"))) inline void JSONObjectReadHelper::ReadAllFields(JSONReader *reader) {
   reader->BeginObject();
   std::map<std::string, int> visited;
   std::string key;

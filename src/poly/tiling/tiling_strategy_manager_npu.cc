@@ -347,7 +347,7 @@ void GemmStrategy::AddNpuConstraint() {
       } else if (attr.attr_value == kDsabo || attr.attr_value == kDsabi) {
         axis->TileRestrainToSingleValue(CastIntToExpr(MIN_TILE), CACHE1);
         axis->TileRestrainToSingleValue(CastIntToExpr(MIN_TILE), CACHE0);
-      } else if (attr.attr_value == kDsamo || attr.attr_value == kDsano) {
+      } else if (attr.attr_value == kDsamo || attr.attr_value == kDsano|| attr.attr_value == kDsako) {
         axis->forbid_iso = true;
       }
     }

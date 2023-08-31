@@ -30,6 +30,8 @@
 #include "expr.h"
 #include "expr_operator.h"
 #include "tvm/node/container.h"
+#include "span.h"
+#include "string.h"
 
 namespace air {
 
@@ -132,6 +134,11 @@ class BufferNode : public Node {
   int offset_factor;
   /*! \brief buffer type */
   BufferType buffer_type;
+  
+  /** For TVM 0.8 IR.*/
+  Span span = Span();
+  String name_str;
+
   /*! \brief constructor */
   BufferNode() {}
 
@@ -146,6 +153,20 @@ class BufferNode : public Node {
     v->Visit("data_alignment", &data_alignment);
     v->Visit("offset_factor", &offset_factor);
     v->Visit("buffer_type", &buffer_type);
+  }
+
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    v->Visit("data", &data);
+    v->Visit("dtype", &dtype);
+    v->Visit("shape", &shape);
+    v->Visit("strides", &strides);
+    v->Visit("elem_offset", &elem_offset);
+    name_str = name;
+    v->Visit("name", &name_str);
+    v->Visit("data_alignment", &data_alignment);
+    v->Visit("offset_factor", &offset_factor);
+    v->Visit("buffer_type", &buffer_type);
+    v->Visit("span", &span);
   }
 
   /*! \return preferred index type for this buffer node */
@@ -167,6 +188,7 @@ class BufferNode : public Node {
                              BufferType buffer_type);
 
   static constexpr const char* _type_key = "Buffer";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(BufferNode, Node);
 };
 

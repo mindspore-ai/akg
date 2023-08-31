@@ -42,6 +42,10 @@
  * 2022.06.15 - Add mark of input buffers alignment.
  */
 
+/*
+ * 2023.02.03 - Add bounds, stride and attrs of node.
+ */
+
 #ifndef TVM_IR_H_
 #define TVM_IR_H_
 
@@ -49,9 +53,11 @@
 #include <string>
 #include <vector>
 #include <utility>
+#include <tvm/visit_attrs_util.h>
 #include "base.h"
 #include "expr.h"
 #include "runtime/util.h"
+#include "string.h"
 
 namespace air {
 namespace ir {
@@ -73,9 +79,16 @@ class UIntImm : public ExprNode {
     v->Visit("value", &value);
   }
 
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    v->Visit("dtype", &type);
+    v->Visit("value", &value);
+    v->Visit("span", &span);
+  }
+
   TVM_DLL static Expr make(Type t, uint64_t value);
 
   static constexpr const char* _type_key = "UIntImm";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(UIntImm, ExprNode);
 };
 
@@ -90,9 +103,16 @@ class FloatImm : public ExprNode {
     v->Visit("value", &value);
   }
 
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    v->Visit("dtype", &type);
+    v->Visit("value", &value);
+    v->Visit("span", &span);
+  }
+
   TVM_DLL static Expr make(Type t, double value);
 
   static constexpr const char* _type_key = "FloatImm";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(FloatImm, ExprNode);
 };
 
@@ -101,15 +121,27 @@ class StringImm : public ExprNode {
  public:
   /*! \brief The constant value content. */
   std::string value;
+  
+  /** \brief For TVM 0.8 IR.*/
+  String value_str;
 
   void VisitAttrs(AttrVisitor* v) {
     v->Visit("dtype", &type);
     v->Visit("value", &value);
+    
+  }
+
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    value_str = value;
+    v->Visit("dtype", &type);
+    v->Visit("value", &value_str);
+    v->Visit("span", &span);
   }
 
   TVM_DLL Expr static make(std::string value);
 
   static constexpr const char* _type_key = "StringImm";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(StringImm, ExprNode);
 };
 
@@ -127,8 +159,15 @@ class Cast : public ExprNode {
     v->Visit("value", &value);
   }
 
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    v->Visit("dtype", &type);
+    v->Visit("value", &value);
+    v->Visit("span", &span);
+  }
+
   TVM_DLL static Expr make(Type t, Expr v);
 
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   static constexpr const char* _type_key = "Cast";
   TVM_DECLARE_NODE_TYPE_INFO(Cast, ExprNode);
 };
@@ -151,6 +190,13 @@ class BinaryOpNode : public ExprNode {
     v->Visit("b", &b);
   }
 
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    v->Visit("dtype", &(this->type));
+    v->Visit("a", &a);
+    v->Visit("b", &b);
+    v->Visit("span", &span);
+  }
+
   static Expr make(Expr a, Expr b) {
     CHECK(a.defined()) << "ValueError: a is undefined\n";
     CHECK(b.defined()) << "ValueError: b is undefined\n";
@@ -164,6 +210,7 @@ class BinaryOpNode : public ExprNode {
     return Expr(node);
   }
 
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(T, ExprNode);
 };
 
@@ -245,6 +292,13 @@ class CmpOpNode : public ExprNode {
     v->Visit("b", &b);
   }
 
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    v->Visit("dtype", &(this->type));
+    v->Visit("a", &a);
+    v->Visit("b", &b);
+    v->Visit("span", &span);
+  }
+
   static Expr make(Expr a, Expr b) {
     CHECK(a.defined()) << "ValueError: a is undefined\n";
     CHECK(b.defined()) << "ValueError: b is undefined\n";
@@ -258,6 +312,7 @@ class CmpOpNode : public ExprNode {
     return Expr(node);
   }
 
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(T, ExprNode);
 };
 
@@ -311,9 +366,17 @@ class And : public ExprNode {
     v->Visit("b", &b);
   }
 
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    v->Visit("dtype", &(this->type));
+    v->Visit("a", &a);
+    v->Visit("b", &b);
+    v->Visit("span", &span);
+  }
+
   TVM_DLL static Expr make(Expr a, Expr b);
 
   static constexpr const char* _type_key = "And";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(And, ExprNode);
 };
 
@@ -331,9 +394,17 @@ class Or : public ExprNode {
     v->Visit("b", &b);
   }
 
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    v->Visit("dtype", &(this->type));
+    v->Visit("a", &a);
+    v->Visit("b", &b);
+    v->Visit("span", &span);
+  }
+
   TVM_DLL static Expr make(Expr a, Expr b);
 
   static constexpr const char* _type_key = "Or";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(Or, ExprNode);
 };
 
@@ -348,9 +419,16 @@ class Not : public ExprNode {
     v->Visit("a", &a);
   }
 
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    v->Visit("dtype", &(this->type));
+    v->Visit("a", &a);
+    v->Visit("span", &span);
+  }
+
   TVM_DLL static Expr make(Expr a);
 
   static constexpr const char* _type_key = "Not";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(Not, ExprNode);
 };
 
@@ -377,9 +455,18 @@ class Select : public ExprNode {
     v->Visit("false_value", &false_value);
   }
 
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    v->Visit("dtype", &type);
+    v->Visit("condition", &condition);
+    v->Visit("true_value", &true_value);
+    v->Visit("false_value", &false_value);
+    v->Visit("span", &span);
+  }
+
   TVM_DLL static Expr make(Expr condition, Expr true_value, Expr false_value);
 
   static constexpr const char* _type_key = "Select";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(Select, ExprNode);
 };
 
@@ -414,9 +501,18 @@ class Load : public ExprNode {
     v->Visit("predicate", &predicate);
   }
 
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    v->Visit("dtype", &type);
+    v->Visit("buffer_var", &buffer_var);
+    v->Visit("index", &index);
+    v->Visit("predicate", &predicate);
+    v->Visit("span", &span);
+  }
+
   TVM_DLL static Expr make(Type type, Var buffer_var, Expr index, Expr predicate);
 
   static constexpr const char* _type_key = "Load";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(Load, ExprNode);
 };
 
@@ -445,9 +541,18 @@ class Ramp : public ExprNode {
     v->Visit("lanes", &lanes);
   }
 
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    v->Visit("dtype", &type);
+    v->Visit("base", &base);
+    v->Visit("stride", &stride);
+    v->Visit("lanes", &lanes);
+    v->Visit("span", &span);
+  }
+
   TVM_DLL static Expr make(Expr base, Expr stride, int lanes);
 
   static constexpr const char* _type_key = "Ramp";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(Ramp, ExprNode);
 };
 
@@ -465,8 +570,16 @@ class Broadcast : public ExprNode {
     v->Visit("lanes", &lanes);
   }
 
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    v->Visit("dtype", &type);
+    v->Visit("value", &value);
+    v->Visit("lanes", &lanes);
+    v->Visit("span", &span);
+  }
+
   TVM_DLL static Expr make(Expr value, int lanes);
 
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   static constexpr const char* _type_key = "Broadcast";
   TVM_DECLARE_NODE_TYPE_INFO(Broadcast, ExprNode);
 };
@@ -490,9 +603,18 @@ class Let : public ExprNode {
     v->Visit("body", &body);
   }
 
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    v->Visit("dtype", &type);
+    v->Visit("var", &var);
+    v->Visit("value", &value);
+    v->Visit("body", &body);
+    v->Visit("span", &span);
+  }
+
   TVM_DLL static Expr make(Var var, Expr value, Expr body);
 
   static constexpr const char* _type_key = "Let";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(Let, ExprNode);
 };
 
@@ -517,6 +639,26 @@ class FunctionRef : public NodeRef {
  public:
   TVM_DEFINE_NODE_REF_METHODS(FunctionRef, NodeRef, FunctionBaseNode);
 };
+
+class IntrinsicOpNode:public ExprNode{
+  public:
+  String name;
+    void VisitAttrs(AttrVisitor* v) {
+  }
+  static constexpr const char* _type_key = "Op";
+  // static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;    
+  TVM_DECLARE_FINAL_OBJECT_INFO(IntrinsicOpNode, ExprNode);
+};
+
+class IntrinsicOp:public Expr{
+ public: 
+ TVM_DLL explicit IntrinsicOp(String name);
+TVM_DEFINE_OBJECT_REF_METHODS(IntrinsicOp, Expr, IntrinsicOpNode);
+};
+
+class Call;
+
+void VisitIntrinsicOp(Call* self);
 
 /*!
  * \brief Call node.
@@ -548,6 +690,12 @@ class Call : public ExprNode {
   FunctionRef func;
   /*! \brief The output value index if func's value is a tuple. */
   int value_index{0};
+  /*! \brief The attributes. */
+  Map<std::string, NodeRef> attrs;
+
+  /** \brief For TVM 0.8 IR.*/
+  IntrinsicOp op;
+  Map<String, NodeRef> attrs_;
 
   void VisitAttrs(AttrVisitor* v) {
     v->Visit("dtype", &type);
@@ -556,6 +704,22 @@ class Call : public ExprNode {
     v->Visit("call_type", &call_type);
     v->Visit("func", &func);
     v->Visit("value_index", &value_index);
+    v->Visit("attrs", &attrs);
+  }
+
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    if(call_type != Halide){
+      VisitAttrsForIntrinsicOp(v);
+    }
+  }
+
+  void VisitAttrsForIntrinsicOp(AttrVisitor* v) {
+    v->Visit("dtype", &type);
+    v->Visit("args", &args);
+    v->Visit("op", &op);
+    VisitMap(this->attrs,this->attrs_);
+    v->Visit("attrs", &attrs_);
+    v->Visit("span", &span);
   }
 
   TVM_DLL static Expr make(Type type,
@@ -563,7 +727,8 @@ class Call : public ExprNode {
                            Array<Expr> args,
                            CallType call_type,
                            FunctionRef func = FunctionRef(),
-                           int value_index = 0);
+                           int value_index = 0,
+                           Map<std::string, NodeRef> attrs = {});
 
   /*! \return Whether call node is pure. */
   bool is_pure() const {
@@ -587,6 +752,7 @@ class Call : public ExprNode {
   bool is_vectorizable() const;
 
   static constexpr const char* _type_key = "Call";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(Call, ExprNode);
 
   // Build-in intrinsics
@@ -626,11 +792,18 @@ class Shuffle : public ExprNode {
     v->Visit("indices", &indices);
   }
 
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    v->Visit("vectors", &vectors);
+    v->Visit("indices", &indices);
+    v->Visit("span", &span);
+  }
+
   TVM_DLL static Expr make(Array<Expr> vectors, Array<Expr> indices);
   TVM_DLL static Expr make_concat(Array<Expr> vectors);
   TVM_DLL static Expr make_extract_element(Expr vector, int index);
 
   static constexpr const char* _type_key = "Shuffle";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(Shuffle, ExprNode);
 };
 
@@ -673,6 +846,10 @@ class CommReducerNode : public Node {
    *  the binary operation of this reducer uses.
    */
   Array<Expr> identity_element;
+  
+  /** \brief For TVM 0.8 IR.*/
+  Span span = Span();
+  
   /*! \brief Function call operator to combine a and b */
   Array<Expr> operator()(Array<Expr> a, Array<Expr> b) const;
   /*! \brief construct CommReducer from args, result and identity_element */
@@ -688,7 +865,16 @@ class CommReducerNode : public Node {
     v->Visit("identity_element", &identity_element);
   }
 
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    v->Visit("lhs", &lhs);
+    v->Visit("rhs", &rhs);
+    v->Visit("result", &result);
+    v->Visit("identity_element", &identity_element);
+    v->Visit("span", &span);
+  }
+
   static constexpr const char* _type_key = "CommReducer";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(CommReducerNode, Node);
 };
 
@@ -716,6 +902,9 @@ class Reduce : public ExprNode {
   /*! \brief the index of this reduce node */
   int value_index;
 
+  /** \brief For TVM 0.8 IR.*/
+  Array<Expr> init = Array<Expr>();
+
   /*! \brief construct expr from op and rdom */
   TVM_DLL static Expr make(CommReducer combiner,
                            Array<Expr> src,
@@ -732,7 +921,19 @@ class Reduce : public ExprNode {
     v->Visit("value_index", &value_index);
   }
 
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    v->Visit("dtype", &type);
+    v->Visit("combiner", &combiner);
+    v->Visit("source", &source);
+    v->Visit("axis", &axis);
+    v->Visit("condition", &condition);
+    v->Visit("value_index", &value_index);
+    v->Visit("init", &init);
+    v->Visit("span", &span);
+  }
+
   static constexpr const char* _type_key = "Reduce";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(Reduce, ExprNode);
 };
 
@@ -740,6 +941,7 @@ class Reduce : public ExprNode {
 class Any : public ExprNode {
  public:
   void VisitAttrs(AttrVisitor* v) {}
+  void VisitAttrsForTVM08(AttrVisitor* v) {v->Visit("span", &span);}
   /*! \brief Convert to var. */
   Var ToVar() const {
     return Variable::make(Int(32), "any_dim");
@@ -748,6 +950,7 @@ class Any : public ExprNode {
   TVM_DLL static Expr make();
 
   static constexpr const char* _type_key = "Any";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(Any, ExprNode);
 };
 
@@ -770,9 +973,17 @@ class LetStmt : public StmtNode {
     v->Visit("body", &body);
   }
 
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    v->Visit("var", &var);
+    v->Visit("value", &value);
+    v->Visit("body", &body);
+    v->Visit("span", &span);
+  }
+
   TVM_DLL static Stmt make(Var var, Expr value, Stmt body);
 
   static constexpr const char* _type_key = "LetStmt";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(LetStmt, StmtNode);
 };
 
@@ -796,20 +1007,38 @@ class AttrStmt : public StmtNode {
   Expr value;
   /*! \brief The body statement to be executed */
   Stmt body;
+  /*! \brief saving allocate at bounds */
+  Region bounds;
+
+  /*! \brief For TVM 0.8 IR.*/
+  String attr_key_str;
 
   void VisitAttrs(AttrVisitor* v) {
     v->Visit("node", &node);
     v->Visit("attr_key", &attr_key);
     v->Visit("value", &value);
     v->Visit("body", &body);
+    v->Visit("bounds", &bounds);
   }
+
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    v->Visit("node", &node);
+    attr_key_str = attr_key;
+    v->Visit("attr_key", &attr_key_str);
+    v->Visit("value", &value);
+    v->Visit("body", &body);
+    v->Visit("bounds", &bounds);
+    v->Visit("span", &span);
+   }
 
   TVM_DLL static Stmt make(NodeRef node,
                            std::string type_key,
                            Expr value,
-                           Stmt body);
+                           Stmt body,
+                           Region bounds = Region());
 
   static constexpr const char* _type_key = "AttrStmt";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(AttrStmt, StmtNode);
 };
 
@@ -834,9 +1063,17 @@ class AssertStmt : public StmtNode {
     v->Visit("body", &body);
   }
 
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    v->Visit("condition", &condition);
+    v->Visit("message", &message);
+    v->Visit("body", &body);
+    v->Visit("span", &span);
+  }
+
   TVM_DLL static Stmt make(Expr condition, Expr message, Stmt body);
 
   static constexpr const char* _type_key = "AssertStmt";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(AssertStmt, StmtNode);
 };
 
@@ -899,12 +1136,21 @@ class Store : public StmtNode {
     v->Visit("predicate", &predicate);
   }
 
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    v->Visit("buffer_var", &buffer_var);
+    v->Visit("value", &value);
+    v->Visit("index", &index);
+    v->Visit("predicate", &predicate);
+    v->Visit("span", &span);
+  }
+
   TVM_DLL static Stmt make(Var buffer_var,
                            Expr value,
                            Expr index,
                            Expr predicate);
 
   static constexpr const char* _type_key = "Store";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(Store, StmtNode);
 };
 
@@ -958,6 +1204,9 @@ class Allocate : public StmtNode {
   Expr new_expr;
   std::string free_function;
 
+  /** \brief For TVM 0.8 IR.*/
+  Map<Expr, Expr> annotations = Map<Expr, Expr>();
+
   void VisitAttrs(AttrVisitor* v) {
     v->Visit("buffer_var", &buffer_var);
     v->Visit("dtype", &type);
@@ -966,6 +1215,17 @@ class Allocate : public StmtNode {
     v->Visit("body", &body);
     v->Visit("new_expr", &new_expr);
     v->Visit("free_function", &free_function);
+  }
+
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    v->Visit("buffer_var", &buffer_var);
+    v->Visit("dtype", &type);
+    v->Visit("extents", &extents);
+    v->Visit("condition", &condition);
+    v->Visit("body", &body);
+    v->Visit("new_expr", &new_expr);
+    v->Visit("annotations", &annotations);
+    v->Visit("span", &span);
   }
 
   TVM_DLL static Stmt make(Var buffer_var,
@@ -994,6 +1254,7 @@ class Allocate : public StmtNode {
       const Array<Expr>& extents);
 
   static constexpr const char* _type_key = "Allocate";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(Allocate, StmtNode);
 };
 
@@ -1002,7 +1263,7 @@ class Free : public StmtNode {
  public:
   /*! \brief The buffer variable. */
   Var buffer_var;
-
+  
   void VisitAttrs(AttrVisitor* v) {
     v->Visit("buffer_var", &buffer_var);
   }
@@ -1062,15 +1323,24 @@ class Block : public StmtNode {
   /*! \brief The restof statments. */
   Stmt rest;
 
+  /*! \brief For TVM 0.8 IR.*/
+  Array<Stmt> seq;
+
   void VisitAttrs(AttrVisitor* v) {
     v->Visit("first", &first);
     v->Visit("rest", &rest);
+  }
+
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    v->Visit("seq", &seq);
+    v->Visit("span", &span);
   }
 
   TVM_DLL static Stmt make(Stmt first, Stmt rest);
   TVM_DLL static Stmt make(const std::vector<Stmt> &stmts);
 
   static constexpr const char* _type_key = "Block";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(Block, StmtNode);
 };
 
@@ -1092,9 +1362,17 @@ class IfThenElse : public StmtNode {
     v->Visit("else_case", &else_case);
   }
 
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    v->Visit("condition", &condition);
+    v->Visit("then_case", &then_case);
+    v->Visit("else_case", &else_case);
+    v->Visit("span", &span);
+  }
+
   TVM_DLL static Stmt make(Expr condition, Stmt then_case, Stmt else_case = Stmt());
 
   static constexpr const char* _type_key = "IfThenElse";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(IfThenElse, StmtNode);
 };
 
@@ -1113,9 +1391,15 @@ class Evaluate : public StmtNode {
     v->Visit("value", &value);
   }
 
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    v->Visit("value", &value);
+    v->Visit("span", &span);
+  }
+
   TVM_DLL static Stmt make(Expr v);
 
   static constexpr const char* _type_key = "Evaluate";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(Evaluate, StmtNode);
 };
 
@@ -1171,13 +1455,20 @@ class For : public StmtNode {
   DeviceAPI device_api;
   /*! \brief The body of the for loop. */
   Stmt body;
+    /*! \brief The stride when for loop execution. */
+  Expr stride;
+
+  /** \brief For TVM 0.8 IR.*/
+  IterVar thread_binding;
+  Map<Expr, Expr> annotations;
 
   TVM_DLL static Stmt make(Var loop_var,
                            Expr min,
                            Expr extent,
                            ForType for_type,
                            DeviceAPI device_api,
-                           Stmt body);
+                           Stmt body,
+                           Expr stride = Expr());
 
   void VisitAttrs(AttrVisitor* v) {
     v->Visit("loop_var", &loop_var);
@@ -1186,9 +1477,23 @@ class For : public StmtNode {
     v->Visit("for_type", &for_type);
     v->Visit("device_api", &device_api);
     v->Visit("body", &body);
+    v->Visit("stride", &stride);
+  }
+
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    v->Visit("loop_var", &loop_var);
+    v->Visit("min", &min);
+    v->Visit("extent", &extent);
+    v->Visit("kind", &for_type);
+    v->Visit("body", &body);
+    v->Visit("thread_binding", &thread_binding);
+    v->Visit("annotations", &annotations);
+    v->Visit("span", &span);
+    v->Visit("stride", &stride);
   }
 
   static constexpr const char* _type_key = "For";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(For, StmtNode);
 };
 
@@ -1213,12 +1518,19 @@ class Prefetch : public StmtNode {
     v->Visit("bounds", &bounds);
   }
 
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    // TODO: Add buffer
+    v->Visit("bounds", &bounds);
+    v->Visit("span", &span);
+  }
+
   TVM_DLL static Stmt make(FunctionRef func,
                            int value_index,
                            DataType type,
                            Region bounds);
 
   static constexpr const char* _type_key = "Prefetch";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(Prefetch, StmtNode);
 };
 

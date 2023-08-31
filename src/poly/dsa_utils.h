@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2023 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -90,6 +90,7 @@ extern const DataFlowAttrs Mmu_Gemm_B;
 extern const DataFlowAttrs Mmu_Spec_Gemm_C;
 extern const DataFlowAttrs Mmu_Gemm_C;
 extern const DataFlowAttrs Inst_BUF;
+extern const DataFlowAttrs Mmu_BIAS;
 extern const DataFlowAttrs Im2Col_C1;
 
 int GetCoreValue(const std::string &name);

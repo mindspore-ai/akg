@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2023 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -103,13 +103,25 @@ BaseLowerNodePtr ConstructLowerTree(const std::string &target, bool poly, const 
   return lower_root;
 }
 
-Module LowerCompositeToModule(const std::string &target, bool poly, const std::string &segment_tree_str,
-                              const Map<std::string, NodeRef> &segment_infos) {
+BaseLowerNodePtr DoLower(const std::string &target, bool poly, const std::string &segment_tree_str,
+                         const Map<std::string, NodeRef> &segment_infos) {
   auto build_str = std::string(kModule) + "0[" + segment_tree_str + "]";
   auto build_root = std::dynamic_pointer_cast<ModuleLowerNode>(
     ConstructLowerTree(GetRealTarget(target), poly, build_str, segment_infos));
   build_root->Process();
-  return build_root->GetModule();
+  return build_root;
+}
+
+Module LowerCompositeToModule(const std::string &target, bool poly, const std::string &segment_tree_str,
+                              const Map<std::string, NodeRef> &segment_infos) {
+  return std::dynamic_pointer_cast<ModuleLowerNode>(
+    DoLower(target, poly, segment_tree_str, segment_infos))->GetModule();
+}
+
+Array<NodeRef> LowerComposite(const std::string &target, bool poly, const std::string &segment_tree_str,
+                              const Map<std::string, NodeRef> &segment_infos) {
+  return std::dynamic_pointer_cast<ModuleLowerNode>(
+    DoLower(target, poly, segment_tree_str, segment_infos))->GetArgs();
 }
 
 NodeRef TuneComposite(const std::string &target, bool poly, const std::string &segment_tree_str,
@@ -121,6 +133,7 @@ NodeRef TuneComposite(const std::string &target, bool poly, const std::string &s
 }
 }  // namespace lower
 
+TVM_REGISTER_GLOBAL("lower_composite").set_body_typed(lower::LowerComposite);
 TVM_REGISTER_GLOBAL("lower_composite_to_module").set_body_typed(lower::LowerCompositeToModule);
 TVM_REGISTER_GLOBAL("tune_composite").set_body_typed(lower::TuneComposite);
 }  // namespace akg

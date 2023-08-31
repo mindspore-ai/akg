@@ -24,12 +24,15 @@
 /*
  * 2019.12.30 - Add new conditions for call types.
  * 2022.05.30 - Fix types of base and stride did not match in Ramp.
+ * 2023.02.03 - Add bounds, stride and attrs of node.
+ * 2023.03.25 - Add TVM 0.8 attributes to the node and conversion pass for exporting TVM 0.8 IR.
  */
 
 #include <tvm/base.h>
 #include <tvm/expr.h>
 #include <tvm/ir.h>
 #include <tvm/ir_pass.h>
+#include <tvm/string.h>
 #include <memory>
 #include "../pass/ir_util.h"
 
@@ -222,9 +225,13 @@ Expr Call::make(DataType type,
                 Array<Expr> args,
                 CallType call_type,
                 FunctionRef func,
-                int value_index) {
+                int value_index,
+                Map<std::string, NodeRef> attrs) {
   for (size_t i = 0; i < args.size(); ++i) {
     CHECK(args[i].defined());
+  }
+  for (auto iv : attrs) {
+    CHECK(iv.second.defined());
   }
 
   if (call_type == Halide) {
@@ -240,6 +247,7 @@ Expr Call::make(DataType type,
   node->call_type = call_type;
   node->func = std::move(func);
   node->value_index = value_index;
+  node->attrs = std::move(attrs);
   return Expr(node);
 }
 
@@ -352,12 +360,14 @@ Stmt LetStmt::make(Var var, Expr value, Stmt body) {
 Stmt AttrStmt::make(NodeRef node,
                     std::string attr_key,
                     Expr value,
-                    Stmt body) {
+                    Stmt body,
+                    Region bounds) {
   auto n = make_node<AttrStmt>();
   n->node = node;
   n->attr_key = std::move(attr_key);
   n->value = std::move(value);
   n->body = std::move(body);
+  n->bounds = std::move(bounds);
   return Stmt(n);
 }
 
@@ -390,7 +400,8 @@ Stmt For::make(Var loop_var,
                Expr extent,
                ForType for_type,
                DeviceAPI device_api,
-               Stmt body) {
+               Stmt body,
+               Expr stride) {
   CHECK(min.defined());
   CHECK(extent.defined());
   CHECK(min.type().is_scalar());
@@ -405,6 +416,7 @@ Stmt For::make(Var loop_var,
   node->for_type = for_type;
   node->device_api = device_api;
   node->body = std::move(body);
+  node->stride = std::move(stride);
   return Stmt(node);
 }
 
@@ -537,7 +549,7 @@ Stmt Block::make(Stmt first, Stmt rest) {
   // canonicalize.
   if (const Block* b = first.as<Block>()) {
     node->first = b->first;
-    node->rest  = Block::make(b->rest, rest);
+    node->rest = Block::make(b->rest, rest);
   } else {
     node->first = std::move(first);
     node->rest = std::move(rest);
@@ -574,6 +586,27 @@ Stmt Evaluate::make(Expr value) {
   NodePtr<Evaluate> node = make_node<Evaluate>();
   node->value = std::move(value);
   return Stmt(node);
+}
+
+struct RefToObjectPtr : public ObjectRef {
+  static ObjectPtr<Object> Get(const ObjectRef& ref) { return GetDataPtr<Object>(ref); }
+};
+
+TVM_REGISTER_REFLECTION_VTABLE(runtime::StringObj,
+                               ::air::detail::ReflectionTrait<runtime::StringObj>)
+    .set_creator([](const std::string& bytes) {
+      return RefToObjectPtr::Get(runtime::String(bytes));
+    })
+    .set_repr_bytes([](const Object* n) -> std::string {
+      return GetRef<runtime::String>(static_cast<const runtime::StringObj*>(n))
+          .
+          operator std::string();
+    });
+
+IntrinsicOp::IntrinsicOp(String name){
+  ObjectPtr<IntrinsicOpNode> n = make_object<IntrinsicOpNode>();
+  n->name = std::move(name);
+  data_ = std::move(n);
 }
 
 // Printers
@@ -1220,54 +1253,63 @@ TVM_STATIC_IR_FUNCTOR(IRPrinter, vtable)
     p->stream << "?";
 });
 
-TVM_REGISTER_NODE_TYPE(CommReducerNode);
-TVM_REGISTER_NODE_TYPE(Reduce);
-TVM_REGISTER_NODE_TYPE(Any);
-TVM_REGISTER_NODE_TYPE(AttrStmt);
-TVM_REGISTER_NODE_TYPE(FloatImm);
+TVM_STATIC_IR_FUNCTOR(IRPrinter, vtable)
+.set_dispatch<IntrinsicOpNode>([](const ObjectRef& node, IRPrinter* p) {
+    auto* op = static_cast<const IntrinsicOpNode*>(node.get());
+    p->stream << "IntrinsicOp(" << op->name << ")";
+  });
+
+
+TVM_REGISTER_NODE_TYPE(CommReducerNode).set_rename_type_key("tir.CommReducerNode");
+TVM_REGISTER_NODE_TYPE(Reduce).set_rename_type_key("tir.Reduce");
+TVM_REGISTER_NODE_TYPE(Any).set_rename_type_key("tir.Any");
+TVM_REGISTER_NODE_TYPE(AttrStmt).set_rename_type_key("tir.AttrStmt");
+TVM_REGISTER_NODE_TYPE(FloatImm).set_rename_type_key("FloatImm");
 TVM_REGISTER_NODE_TYPE(IntImm);
-TVM_REGISTER_NODE_TYPE(UIntImm);
-TVM_REGISTER_NODE_TYPE(StringImm);
-TVM_REGISTER_NODE_TYPE(Cast);
-TVM_REGISTER_NODE_TYPE(Variable);
-TVM_REGISTER_NODE_TYPE(Add);
-TVM_REGISTER_NODE_TYPE(Sub);
-TVM_REGISTER_NODE_TYPE(Mul);
-TVM_REGISTER_NODE_TYPE(Div);
-TVM_REGISTER_NODE_TYPE(Mod);
-TVM_REGISTER_NODE_TYPE(FloorDiv);
-TVM_REGISTER_NODE_TYPE(FloorMod);
-TVM_REGISTER_NODE_TYPE(Min);
-TVM_REGISTER_NODE_TYPE(Max);
-TVM_REGISTER_NODE_TYPE(EQ);
-TVM_REGISTER_NODE_TYPE(NE);
-TVM_REGISTER_NODE_TYPE(LT);
-TVM_REGISTER_NODE_TYPE(LE);
-TVM_REGISTER_NODE_TYPE(GT);
-TVM_REGISTER_NODE_TYPE(GE);
-TVM_REGISTER_NODE_TYPE(And);
-TVM_REGISTER_NODE_TYPE(Or);
-TVM_REGISTER_NODE_TYPE(Not);
-TVM_REGISTER_NODE_TYPE(Select);
-TVM_REGISTER_NODE_TYPE(Load);
-TVM_REGISTER_NODE_TYPE(Ramp);
-TVM_REGISTER_NODE_TYPE(Broadcast);
-TVM_REGISTER_NODE_TYPE(Shuffle);
-TVM_REGISTER_NODE_TYPE(Prefetch);
-TVM_REGISTER_NODE_TYPE(Call);
-TVM_REGISTER_NODE_TYPE(Let);
-TVM_REGISTER_NODE_TYPE(LetStmt);
-TVM_REGISTER_NODE_TYPE(AssertStmt);
-TVM_REGISTER_NODE_TYPE(ProducerConsumer);
-TVM_REGISTER_NODE_TYPE(For);
-TVM_REGISTER_NODE_TYPE(Store);
-TVM_REGISTER_NODE_TYPE(Provide);
-TVM_REGISTER_NODE_TYPE(Allocate);
-TVM_REGISTER_NODE_TYPE(Free);
-TVM_REGISTER_NODE_TYPE(Realize);
-TVM_REGISTER_NODE_TYPE(Block);
-TVM_REGISTER_NODE_TYPE(IfThenElse);
-TVM_REGISTER_NODE_TYPE(Evaluate);
+TVM_REGISTER_NODE_TYPE(UIntImm).set_rename_type_key("IntImm");
+TVM_REGISTER_NODE_TYPE(StringImm).set_rename_type_key("tir.StringImm");
+TVM_REGISTER_NODE_TYPE(Cast).set_rename_type_key("tir.Cast");
+TVM_REGISTER_NODE_TYPE(Variable).set_rename_type_key("tir.Var");
+TVM_REGISTER_NODE_TYPE(Add).set_rename_type_key("tir.Add");
+TVM_REGISTER_NODE_TYPE(Sub).set_rename_type_key("tir.Sub");
+TVM_REGISTER_NODE_TYPE(Mul).set_rename_type_key("tir.Mul");
+TVM_REGISTER_NODE_TYPE(Div).set_rename_type_key("tir.Div");
+TVM_REGISTER_NODE_TYPE(Mod).set_rename_type_key("tir.Mod");
+TVM_REGISTER_NODE_TYPE(FloorDiv).set_rename_type_key("tir.FloorDiv");
+TVM_REGISTER_NODE_TYPE(FloorMod).set_rename_type_key("tir.FloorMod");
+TVM_REGISTER_NODE_TYPE(Min).set_rename_type_key("tir.Min");
+TVM_REGISTER_NODE_TYPE(Max).set_rename_type_key("tir.Max");
+TVM_REGISTER_NODE_TYPE(EQ).set_rename_type_key("tir.EQ");
+TVM_REGISTER_NODE_TYPE(NE).set_rename_type_key("tir.NE");
+TVM_REGISTER_NODE_TYPE(LT).set_rename_type_key("tir.LT");
+TVM_REGISTER_NODE_TYPE(LE).set_rename_type_key("tir.LE");
+TVM_REGISTER_NODE_TYPE(GT).set_rename_type_key("tir.GT");
+TVM_REGISTER_NODE_TYPE(GE).set_rename_type_key("tir.GE");
+TVM_REGISTER_NODE_TYPE(And).set_rename_type_key("tir.And");
+TVM_REGISTER_NODE_TYPE(Or).set_rename_type_key("tir.Or");
+TVM_REGISTER_NODE_TYPE(Not).set_rename_type_key("tir.Not");
+TVM_REGISTER_NODE_TYPE(Select).set_rename_type_key("tir.Select");
+TVM_REGISTER_NODE_TYPE(Load).set_rename_type_key("tir.Load");
+TVM_REGISTER_NODE_TYPE(Ramp).set_rename_type_key("tir.Ramp");
+TVM_REGISTER_NODE_TYPE(Broadcast).set_rename_type_key("tir.Broadcast");
+TVM_REGISTER_NODE_TYPE(Shuffle).set_rename_type_key("tir.Shuffle");
+TVM_REGISTER_NODE_TYPE(Prefetch).set_rename_type_key("tir.Prefetch");
+TVM_REGISTER_NODE_TYPE(Call).set_rename_type_key("tir.Call");
+TVM_REGISTER_NODE_TYPE(Let).set_rename_type_key("tir.Let");
+TVM_REGISTER_NODE_TYPE(LetStmt).set_rename_type_key("tir.LetStmt");
+TVM_REGISTER_NODE_TYPE(AssertStmt).set_rename_type_key("tir.AssertStmt");
+TVM_REGISTER_NODE_TYPE(ProducerConsumer).set_rename_type_key("tir.ProducerConsumer");
+TVM_REGISTER_NODE_TYPE(For).set_rename_type_key("tir.For");
+TVM_REGISTER_NODE_TYPE(Store).set_rename_type_key("tir.Store");
+TVM_REGISTER_NODE_TYPE(Provide).set_rename_type_key("tir.Provide");
+TVM_REGISTER_NODE_TYPE(Allocate).set_rename_type_key("tir.Allocate");
+TVM_REGISTER_NODE_TYPE(Free).set_rename_type_key("tir.Free");
+TVM_REGISTER_NODE_TYPE(Realize).set_rename_type_key("tir.Realize");
+TVM_REGISTER_NODE_TYPE(Block).set_rename_type_key("tir.SeqStmt");
+TVM_REGISTER_NODE_TYPE(IfThenElse).set_rename_type_key("tir.IfThenElse");
+TVM_REGISTER_NODE_TYPE(Evaluate).set_rename_type_key("tir.Evaluate");
+TVM_REGISTER_NODE_TYPE(IntrinsicOpNode).set_rename_type_key("Op")
+.set_repr_bytes([](const Object* n) -> std::string { return static_cast<const IntrinsicOpNode*>(n)->name; });
 
 }  // namespace ir
 }  // namespace air

@@ -1,5 +1,5 @@
 /**
- * Copyright 2021-2022 Huawei Technologies Co., Ltd
+ * Copyright 2021-2023 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -191,6 +191,9 @@ class ScopMakeScheduleTree final : protected IRVisitor {
     new_writes_with_conds = new_writes.curry().intersect_domain(write_set.unbind_params(op_domain.tuple)).uncurry();
 
     ParseStmtOps(id, op, scop_info_.analysis_result_, new_reads, new_writes);
+    if (op == scop_info_.analysis_result_.mmu_bias_init_c_) {
+      scop_info_.analysis_result_.GetStmtOpInfoMap().at(id).C_IN_ = id.get_name();
+    }
 
     // The parameters should be added as constraints of the reads/writes sets
     // otherwise isl may not be able to obtain a fixed box.
@@ -499,6 +502,11 @@ class ScopMakeScheduleTree final : protected IRVisitor {
       Op_buffer_bind_scope(op);
     } else if (op->attr_key == ATTR_IM2COL_KEY) {
       scop_info_.analysis_result_.RecordAttrStmt(op);
+    } else if (op->attr_key == ATTR_AKG_C_INIT_BIAS) {
+      const auto pro = op->body.as<Provide>();
+      if (pro) {
+        scop_info_.analysis_result_.mmu_bias_init_c_ = pro;
+      }
     } else if (AkgSupportedCsrOp.count(op->attr_key) != 0) {
       SetCsrInfo(op);
     } else if (op->attr_key == ATTR_TENSOR_ATTRS) {

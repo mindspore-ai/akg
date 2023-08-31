@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2022 Huawei Technologies Co., Ltd
+ * Copyright 2019-2023 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,6 +27,11 @@ namespace ir {
 namespace poly {
 class MadMarker : public IRMutator {
  public:
+  Stmt Mutate_(const For *op, const Stmt &s) final {
+    ++cur_loop_;
+    return IRMutator::Mutate_(op, s);
+  }
+
   Stmt Mutate_(const Provide *op, const Stmt &s) final {
     Stmt stmt = ParseStmtOps(op, s);
     return stmt;
@@ -53,7 +58,7 @@ class MadMarker : public IRMutator {
     if (op && op->name == "mad") InsertInsnAttr(pop, std::string("mad"));
   }
 
-  Stmt Run(Stmt stmt) {
+  Stmt Run(Stmt stmt, Expr mad_pattern) {
     stmt = this->Mutate(stmt);
     if (insn_attrs_.empty()) return stmt;
 
@@ -67,6 +72,19 @@ class MadMarker : public IRMutator {
         }
       }
       if (i->second == "mad") {
+        bool is_frontend_lower = mad_pattern.defined();
+        if (is_frontend_lower) {
+          // Move in if poly emits larger than 6 axes for mad
+          while (cur_loop_ > support_mad_loop_) {
+            auto for_body = stmt.as<For>();
+            CHECK(for_body);
+            CHECK(for_body->extent.as<IntImm>());
+            CHECK_EQ(for_body->extent.as<IntImm>()->value, 1);
+            stmt = for_body->body;
+            --cur_loop_;
+          }
+          stmt = AttrStmt::make(make_zero(Int(INT_32)), "pragma_emit_insn_attr_mad_pattern", mad_pattern, stmt);
+        }
         stmt = AttrStmt::make(make_zero(Int(INT_32)), "pragma_emit_insn", Expr(i->second), stmt);
       }
     }
@@ -79,6 +97,8 @@ class MadMarker : public IRMutator {
 
  private:
   std::vector<std::pair<const Provide *, std::string>> insn_attrs_;
+  int cur_loop_{0};
+  int support_mad_loop_{6};
 };
 
 class GatherVar : public air::ir::IRVisitor {
@@ -814,8 +834,8 @@ Stmt NPUIslEmitter::EmitWrite(const isl::ast_node_user &node, AtomicType atomic)
       if (doatomic) {
         auto call = Call::make(type, t_w->op->name, local_args, Call::CallType::Halide, t_w->op, t_w->value_index);
         value = Add::make(call, value);
-        return AttrStmt::make(
-            make_zero(Int(INT_32)), ATTR_ATOMIC_ADD, Expr(1), Provide::make(t_w->op, 0, value, local_args));
+        return AttrStmt::make(make_zero(Int(INT_32)), ATTR_ATOMIC_ADD, Expr(1),
+                              Provide::make(t_w->op, 0, value, local_args));
       }
 
       // remove original copy out promotion statement because it is sinked into if stmt of computation
@@ -1054,13 +1074,13 @@ Stmt NPUIslEmitter::EmitGemmRangeInfoBackPropFilter(const Stmt &stmt) {
   int ko_min = k_isolate ? ((c0_range_idx / k_base % BINARY_FACTOR) ? (KO * KI / tile_k) : (0)) : (0);
   int ko_ext = k_isolate ? ((c0_range_idx / k_base % BINARY_FACTOR) ? (1) : (KO * KI / tile_k)) : (KO * KI / tile_k);
   range_map.Set("ko_", Range(Expr(ko_min), Expr(ko_ext)));
-  
+
   if (k_isolate && (c0_range_idx / k_base % BINARY_FACTOR)) {
     range_map.Set("k_size", Range(Expr(0), Expr(K - KO * KI / tile_k * tile_k)));
   } else {
     range_map.Set("k_size", Range(Expr(0), Expr(tile_k)));
   }
-  
+
   if ((!k_isolate) && (KO * KI != K)) {
     range_map.Set("k_tail_size", Range(Expr(0), Expr(K - (KO * KI / tile_k - 1) * tile_k)));
     range_map.Set("k_tail", Range(Expr(0), Expr(KO * KI / tile_k - 1)));
@@ -1508,9 +1528,9 @@ void NPUIslEmitter::EmitReadAttrAtC0(std::vector<Stmt> &stmts, int i, Tensor &t)
   if (info_.mmu_info_.IsSpecGemm()) {
     // this case is conv gemm
     is_im2col = (t->op->name.find(FRACTAL_C1_LOCAL_C0A) != std::string::npos ||
-        t->op->name.find(FRACTAL_C1_LOCAL_C0B) != std::string::npos);
+                 t->op->name.find(FRACTAL_C1_LOCAL_C0B) != std::string::npos);
     is_filter_c0 = (t->op->name.find(LOCAL_C1_LOCAL_C0B) != std::string::npos ||
-        t->op->name.find(LOCAL_C1_LOCAL_C0A) != std::string::npos);
+                    t->op->name.find(LOCAL_C1_LOCAL_C0A) != std::string::npos);
   } else {
     // this case is ordinary gemm
     std::string data_trans = info_.mmu_info_.ExtractStringFromAttrsAndInfo(ATTR_GEMM_DATA_TRANSPOSE);
@@ -1523,7 +1543,7 @@ void NPUIslEmitter::EmitReadAttrAtC0(std::vector<Stmt> &stmts, int i, Tensor &t)
     constexpr auto bypathC1_pos1 = 1;
     constexpr auto bypathC1_pos2 = 2;
     is_filter_c0 = ((bypathC1_ == bypathC1_pos2 && pos1 != std::string::npos) ||
-        (bypathC1_ == bypathC1_pos1 && pos2 != std::string::npos));
+                    (bypathC1_ == bypathC1_pos1 && pos2 != std::string::npos));
   }
 
   if (is_im2col) {
@@ -1755,7 +1775,11 @@ Stmt NPUIslEmitter::EmitBlock(const isl::ast_node_block &block_node) {
     Stmt body = (EmitAst(child));
 
     if (is_mmu_) {
-      body = MadMarker().Run(body);
+      Expr mad_pattern;
+      if (info_.user_config_.GetFrontendLower()) {
+        mad_pattern = info_.mmu_info_.IsGemm() ? Expr(0) : info_.mmu_info_.IsConv() ? Expr(1) : Expr(-1);
+      }
+      body = MadMarker().Run(body, mad_pattern);
       body = IfThenElseSplitter().Run(body);
       opinfo_.ops.clear();
       opinfo_.isMMU = false;
@@ -1837,7 +1861,6 @@ void NPUIslEmitter::ConvBackPropFilterFixMadInit(const isl::ast_node_mark &node,
         }
       }
     }
-
   }
 }
 
@@ -1993,7 +2016,12 @@ Stmt NPUIslEmitter::EmitMarkMulticore(const isl::ast_node_mark &node) {
     is_mmu_ = false;
     Stmt body = EmitAst(node.get_node());
     if (is_mmu_) {
-      body = MadMarker().Run(body);
+      Expr mad_pattern;
+      if (info_.user_config_.GetFrontendLower()) {
+        mad_pattern = info_.mmu_info_.IsGemm() ? Expr(0) : info_.mmu_info_.IsConv() ? Expr(1) : Expr(-1);
+      }
+
+      body = MadMarker().Run(body, mad_pattern);
       body = IfThenElseSplitter().Run(body);
       opinfo_.ops.clear();
       opinfo_.isMMU = false;

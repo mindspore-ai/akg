@@ -131,7 +131,7 @@ ExtTypeVTable* ExtTypeVTable::RegisterInternal(
 }  // namespace air
 
 /*! \brief entry to to easily hold returning information */
-struct TVMFuncThreadLocalEntry {
+struct __attribute__((visibility("hidden"))) TVMFuncThreadLocalEntry {
   /*! \brief result holder for returning strings */
   std::vector<std::string> ret_vec_str;
   /*! \brief result holder for returning string pointers */

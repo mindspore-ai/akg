@@ -1,4 +1,4 @@
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2023 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -40,6 +40,8 @@ def compute_blockdim(shape):
 def reduce_sum_run(shape, reduce_axis, keepdims, dtype, attrs):
     if attrs is None:
         attrs = {}
+    if attrs.get("is_tbe_codegen") and not attrs.get("enable_atomic_add", False):
+        attrs["keep_trivial_loop"] = 1
     if 'tuning' in attrs.keys():
         t = attrs.get("tuning", False)
         kernel_name = attrs.get("kernel_name", False)
@@ -69,11 +71,11 @@ def reduce_sum_run(shape, reduce_axis, keepdims, dtype, attrs):
         return input1, output, expect, compare_tensor(output, expect, rtol=rtol, atol=atol, equal_nan=True)
 
 
-def gen_data(dtype, keepdims, reduce_axis, shape):
+def gen_data(dtype, keepdims, reduce_axis, shape, use_bisect=True):
     support_list = {"float16": np.float16, "float32": np.float32}
     input1 = random_gaussian(shape, miu=1, sigma=0.1)
     input1 = input1.astype(support_list[dtype])
-    if dtype == 'float16':
+    if dtype == 'float16' and use_bisect:
         expect = np_bisect_sum(input1, axis=reduce_axis, keepdims=keepdims)
     else:
         expect = np.sum(input1, axis=reduce_axis, keepdims=keepdims)
@@ -88,6 +90,10 @@ def gen_data(dtype, keepdims, reduce_axis, shape):
 
 
 def sum_compile(shape, reduce_axis, keepdims, dtype, attrs, kernel_name="sum", tuning=False):
+    if attrs is None:
+        attrs = {}
+    if attrs.get("is_tbe_codegen") and not attrs.get("enable_atomic_add", False):
+        attrs["keep_trivial_loop"] = 1
     op_attrs = [reduce_axis, keepdims]
     if attrs is not None and attrs.get("dynamic"):
         var_shape = []

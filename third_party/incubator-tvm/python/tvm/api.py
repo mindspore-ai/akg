@@ -155,21 +155,22 @@ def load_json(json_str):
     return _api_internal._load_json(json_str)
 
 
-def save_json(node):
+def save_json(node, version="0.6.0"):
     """Save tvm object as json string.
 
     Parameters
     ----------
     node : Node
         A TVM Node object to be saved.
+    version : str
+        A TVM version string, only support "0.6.0", "0.8.0" for now.
 
     Returns
     -------
     json_str : str
         Saved json string.
     """
-    return _api_internal._save_json(node)
-
+    return _api_internal._save_json(node, version)
 
 def var(name="tindex", dtype=int32):
     """Create a new variable with specified name and dtype

@@ -143,7 +143,7 @@ class TextMetaDataContext {
    */
   Doc GetMetaSection() const {
     if (meta_data_.size() == 0) return Doc();
-    return Doc(SaveJSON(Map<std::string, NodeRef>(meta_data_.begin(), meta_data_.end())));
+    return Doc(SaveJSON(Map<std::string, NodeRef>(meta_data_.begin(), meta_data_.end()),tvm06_version));
   }
 
   /*! \return whether the meta data context is empty. */

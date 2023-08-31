@@ -341,13 +341,13 @@ std::string NormalizeError(std::string err_msg) {
 
 using namespace air::runtime;
 
-struct TVMRuntimeEntry {
+struct TVMRuntimeEntryLocal {
   std::string ret_str;
   std::string last_error;
   TVMByteArray ret_bytes;
 };
 
-typedef dmlc::ThreadLocalStore<TVMRuntimeEntry> TVMAPIRuntimeStore;
+typedef dmlc::ThreadLocalStore<TVMRuntimeEntryLocal> TVMAPIRuntimeStore;
 
 const char *TVMGetLastError() {
   return TVMAPIRuntimeStore::Get()->last_error.c_str();
@@ -475,7 +475,7 @@ int TVMFuncCall(TVMFunctionHandle func,
   if (rv.type_code() == kStr ||
       rv.type_code() == kTVMType ||
       rv.type_code() == kBytes) {
-    TVMRuntimeEntry* e = TVMAPIRuntimeStore::Get();
+    TVMRuntimeEntryLocal* e = TVMAPIRuntimeStore::Get();
     if (rv.type_code() != kTVMType) {
       e->ret_str = *rv.ptr<std::string>();
     } else {

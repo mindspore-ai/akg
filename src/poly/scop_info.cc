@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2022 Huawei Technologies Co., Ltd
+ * Copyright 2019-2023 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -1265,6 +1265,8 @@ void ScopInfo::CreateDataFlow() {
   auto GetStmtType = [this](const StmtOpInfo &stmt) {
     if (stmt.isMMU && mmu_info_.IsConv()) {
       return STMT_OP_TYPE::MMU_CONV;
+    } else if (!stmt.C_IN_.empty()) {
+      return STMT_OP_TYPE::MMU_BIAS;
     } else if (stmt.isMMU && !mmu_info_.IsConv()) {
       if (stmt.A_.find(_FRACTAL_C1) != std::string::npos || stmt.A_.find(LOCAL_C1) != std::string::npos ||
           stmt.B_.find(LOCAL_C1) != std::string::npos || stmt.B_.find(_FRACTAL_C1) != std::string::npos) {

@@ -120,3 +120,13 @@ prebuild/aarch64/multi_core_loop_switch_hoist.cc.o filter=lfs diff=lfs merge=lfs
 prebuild/aarch64/replace_fargmax_cast.cc.o filter=lfs diff=lfs merge=lfs -text
 prebuild/x86_64/lower_cce.cc.o filter=lfs diff=lfs merge=lfs -text
 prebuild/aarch64/lower_cce.cc.o filter=lfs diff=lfs merge=lfs -text
+prebuild/x86_64/dsa_halide_fixer.cc.o filter=lfs diff=lfs merge=lfs -text
+prebuild/x86_64/hoist_matrixc_init.cc.o filter=lfs diff=lfs merge=lfs -text
+prebuild/x86_64/init_matrixc_with_bias.cc.o filter=lfs diff=lfs merge=lfs -text
+prebuild/x86_64/npu_inference_adapter.cc.o filter=lfs diff=lfs merge=lfs -text
+prebuild/aarch64/dsa_halide_fixer.cc.o filter=lfs diff=lfs merge=lfs -text
+prebuild/aarch64/identity_pass.cc.o filter=lfs diff=lfs merge=lfs -text
+prebuild/aarch64/npu_inference_adapter.cc.o filter=lfs diff=lfs merge=lfs -text
+prebuild/x86_64/identity_pass.cc.o filter=lfs diff=lfs merge=lfs -text
+prebuild/aarch64/hoist_matrixc_init.cc.o filter=lfs diff=lfs merge=lfs -text
+prebuild/aarch64/init_matrixc_with_bias.cc.o filter=lfs diff=lfs merge=lfs -text

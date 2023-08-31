@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # coding: utf-8
-# Copyright 2019 Huawei Technologies Co., Ltd
+# Copyright 2019-2023 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -28,7 +28,6 @@ from akg.tvm import _api_internal
 from akg.tvm import schedule
 
 
-tuning_spaces = None
 help_tiling_level = {
     "None": 0, "General": 1, "Candidates": 2, "Tuning": 3
 }
@@ -36,7 +35,7 @@ EMPTY_CODE = 0
 L0_DEFAULT_TILING = 1
 
 
-def dump_tiling_info(level):
+def dump_tiling_info(level, tuning_spaces = None):
     """Dump tiling info."""
     if tuning_spaces is None:
         return
@@ -107,7 +106,8 @@ def lower(sch, args, shape_params=None, name="default_function", binds=None, att
     ret = _api_internal._Lower(sch, args, shape_params, name,
                                tmp_binds, tmp_attrs, simple_mode,
                                polyhedral, tuning, target, cfg)
-
+    if tmp_attrs is None:
+        tmp_attrs = {}
     level = tmp_attrs.get("help_tiling")
     if attrs.get("use_new_space", False):
         # new space: constraints format
@@ -118,7 +118,6 @@ def lower(sch, args, shape_params=None, name="default_function", binds=None, att
         return space
     elif tuning or (level is not None and level > help_tiling_level['None']):
         level = help_tiling_level['Tuning'] if tuning else level
-        global tuning_spaces
         tuning_spaces = {}
         tuning_spaces["index"] = ret.index_table.asnumpy().tolist()
         tuning_spaces["c1_range"] = ret.c1_tile_range_table.asnumpy().tolist()
@@ -132,7 +131,7 @@ def lower(sch, args, shape_params=None, name="default_function", binds=None, att
         if level >= help_tiling_level["Candidates"]:
             tuning_spaces["tuning_space"] = ret.tiling_candidate.asnumpy().tolist()
         if not tuning:
-            dump_tiling_info(level)
+            dump_tiling_info(level, tuning_spaces)
     return ret
 
 

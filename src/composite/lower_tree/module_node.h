@@ -31,6 +31,7 @@ class ModuleLowerNode : public BaseLowerNode {
   ~ModuleLowerNode() override = default;
 
   void Process();
+  Array<NodeRef> GetArgs();
   Module GetModule() { return module_; }
 
  private:
