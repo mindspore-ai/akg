@@ -235,9 +235,9 @@ class AttrStmt(Stmt):
     body : Stmt
         The body statement.
     """
-    def __init__(self, node, attr_key, value, body):
+    def __init__(self, node, attr_key, value, body, bounds=None):
         self.__init_handle_by_constructor__(
-            _make.AttrStmt, node, attr_key, value, body)
+            _make.AttrStmt, node, attr_key, value, body, bounds)
 
 
 @register_node

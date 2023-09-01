@@ -21,12 +21,19 @@
  * \file tvm/tensor_intrin.h
  * \brief Tensor intrinsic operations.
  */
+
+/*
+ * 2023.03.25 - Add TVM 0.8 attributes to the node and conversion pass for exporting TVM 0.8 IR.
+ */
+
 #ifndef TVM_TENSOR_INTRIN_H_
 #define TVM_TENSOR_INTRIN_H_
 
 #include <string>
-#include "tensor.h"
+#include <tvm/version_info.h>
+
 #include "buffer.h"
+#include "tensor.h"
 
 namespace air {
 
@@ -84,11 +91,26 @@ class TensorIntrinNode : public Node {
    *  Reduce: do a reduction of current output buffer with the result.
    */
   Stmt reduce_update;
+
+  /*! For TVM 0.8 IR.*/
+  String name_str;
   /*! \brief constructor */
   TensorIntrinNode() {}
 
   void VisitAttrs(AttrVisitor* v) {
     v->Visit("name", &name);
+    v->Visit("op", &op);
+    v->Visit("inputs", &inputs);
+    v->Visit("buffers", &buffers);
+    v->Visit("scalar_params", &scalar_params);
+    v->Visit("body", &body);
+    v->Visit("reduce_init", &reduce_init);
+    v->Visit("reduce_update", &reduce_update);
+  }
+
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    name_str = name;
+    v->Visit("name", &name_str);
     v->Visit("op", &op);
     v->Visit("inputs", &inputs);
     v->Visit("buffers", &buffers);
@@ -152,12 +174,26 @@ class TensorIntrinCallNode : public Node {
   /*! \brief scalar expression inputs */
   Array<Expr> scalar_inputs;
 
+  /** \brief For TVM 0.8 IR*/
+  Array<Expr> sparse_axis = Array<Expr>();
+  Array<Expr> sort_axis = Array<Expr>();
+
   void VisitAttrs(AttrVisitor* v) {
     v->Visit("intrin", &intrin);
     v->Visit("tensors", &tensors);
     v->Visit("regions", &regions);
     v->Visit("reduce_axis", &reduce_axis);
     v->Visit("scalar_inputs", &scalar_inputs);
+  }
+
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    v->Visit("intrin", &intrin);
+    v->Visit("tensors", &tensors);
+    v->Visit("regions", &regions);
+    v->Visit("reduce_axis", &reduce_axis);
+    v->Visit("scalar_inputs", &scalar_inputs);
+    v->Visit("sparse_axis", &sparse_axis);
+    v->Visit("sort_axis", &sort_axis);
   }
   static TensorIntrinCall make(TensorIntrin intrin,
                                Array<Tensor> tensors,
@@ -166,6 +202,7 @@ class TensorIntrinCallNode : public Node {
                                Array<Expr> scalar_inputs);
 
   static constexpr const char* _type_key = "TensorIntrinCall";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(TensorIntrinCallNode, Node);
 };
 

@@ -21,6 +21,11 @@
  * Utility functions for serialization.
  * \file tvm/node/serialization.h
  */
+
+/*
+ * 2023.03.25 - Add TVM 0.8 attributes to the node and conversion pass for exporting TVM 0.8 IR.
+ */
+
 #ifndef TVM_NODE_SERIALIZATION_H_
 #define TVM_NODE_SERIALIZATION_H_
 
@@ -36,7 +41,7 @@ namespace air {
  *
  * \return the string representation of the node.
  */
-TVM_DLL std::string SaveJSON(const runtime::ObjectRef& node);
+TVM_DLL std::string SaveJSON(const runtime::ObjectRef& node, const std::string& version);
 
 /*!
  * \brief Internal implementation of LoadJSON

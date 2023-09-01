@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2021 Huawei Technologies Co., Ltd
+ * Copyright 2019-2023 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -115,7 +115,7 @@ inline std::ostream &operator<<(std::ostream &os, const BufferDefInfo &def_info)
   return os;
 }
 
-enum STMT_OP_TYPE { MMU_CONV = 1, MMU_GEMM, INST, IM2COL_BUF, MMU_SPEC_GEMM };
+enum STMT_OP_TYPE { MMU_CONV = 1, MMU_GEMM, INST, IM2COL_BUF, MMU_SPEC_GEMM, MMU_BIAS };
 
 using StmtIdHashMap = std::unordered_map<isl::id, std::vector<isl::id>, isl::IslIdIslHash>;
 using MemFlow = std::vector<MemType>;
@@ -156,8 +156,10 @@ class DataFlow {
   std::unordered_map<std::string, TensorDF> GetCombinedFlow();
   std::pair<std::map<std::string, MemFlow>, std::map<std::string, std::vector<std::string>>> ExtractCombinedFlow();
   void SetMmuFlow(const std::string &stmt_id);
+  void SetMmuInitCId(const std::string &stmt_id);
   StmtDataFlow &GetStmtFlow(const std::string &stmt_id);
   std::string GetMmuId();
+  std::string GetMmuInitCId();
   void Print();
   void Clear();
 
@@ -170,6 +172,7 @@ class DataFlow {
   DataFlow() = default;
   OpDataFlow op_data_flow_;
   std::string mmu_stmt_id_;
+  std::string mmu_init_c_id_;
 };
 
 void DispatchDataFlow(STMT_OP_TYPE op_type, const isl::id &stmt_id, const StmtOpInfo &stmt_op, StmtIdHashMap &read_map,

@@ -43,7 +43,7 @@ TVM_REGISTER_API("_raw_ptr")
   });
 
 TVM_REGISTER_API("_save_json")
-.set_body_typed<std::string(ObjectRef)>(SaveJSON);
+.set_body_typed<std::string(ObjectRef,std::string)>(SaveJSON);
 
 TVM_REGISTER_API("_load_json")
 .set_body_typed<ObjectRef(std::string)>(LoadJSON);

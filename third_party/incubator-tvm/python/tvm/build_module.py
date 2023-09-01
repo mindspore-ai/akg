@@ -21,6 +21,7 @@ LoweredFunc and compiled Module.
 """
 # 2021.01.13 - Modify variable unroll_explicit to False.
 # 2021.03.17 - Add dump_mlir.
+# 2023.02.03 - Add activated_pass.
 
 from __future__ import absolute_import as _abs
 import warnings
@@ -182,6 +183,19 @@ class BuildConfig(NodeBase):
             add_lower_pass_args += [x[0], x[1]]
         _api_internal._BuildConfigSetAddLowerPass(self, *add_lower_pass_args)
 
+    @property
+    def activated_passes(self):
+        size = _api_internal._BuildConfigGetActivatedPassesInfo(self)
+        result = []
+        for i in range(size):
+            result.append(_api_internal._BuildConfigGetActivatedPassesInfo(self, i))
+        return result
+
+    @activated_passes.setter
+    def activated_passes(self, value):
+        activated_passes_args = [pass_name for pass_name in value]
+        _api_internal._BuildConfigSetActivatedPasses(self, *activated_passes_args)
+
     def __enter__(self):
         # pylint: disable=protected-access
         _api_internal._EnterBuildConfigScope(self)
@@ -266,7 +280,8 @@ def build_config(**kwargs):
 
     if "add_lower_pass" in kwargs:
         config.add_lower_pass = kwargs["add_lower_pass"]
-
+    if "activated_passes" in kwargs:
+        config.activated_passes = kwargs["activated_passes"]
     return config
 
 def get_binds(args, compact=False, binds=None):

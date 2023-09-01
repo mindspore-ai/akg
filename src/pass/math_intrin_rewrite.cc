@@ -46,7 +46,7 @@ class DivRewriter : public IRMutator {
   Expr Mutate_(const Div *op, const Expr &e) final {
     const std::string productName = GetProductName();
     // In mini need mutate div to rec
-    if (productName != "cloud") {
+    if (productName == "mini") {
       if (op->b.type().is_float()) {
         auto it =
           std::find_if(cache_.begin(), cache_.end(), [&](const std::pair<Expr, Expr> &i) { return Equal(e, i.first); });

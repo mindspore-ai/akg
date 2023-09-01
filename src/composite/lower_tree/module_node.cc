@@ -29,6 +29,10 @@ void ModuleLowerNode::Process() {
   module_ = BuildToModule(build_rst, children_[0]->Data()->target);
 }
 
+Array<NodeRef> ModuleLowerNode::GetArgs() {
+  return Array<NodeRef>({children_[0]->Node(), children_[0]->Data()->arg_list_0});
+}
+
 BaseLowerNodePtr CreateModuleLowerNode(const std::string &, bool, const Map<std::string, NodeRef> &) {
   return std::make_shared<ModuleLowerNode>();
 }

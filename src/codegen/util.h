@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2021 Huawei Technologies Co., Ltd
+ * Copyright 2019-2023 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -107,6 +107,9 @@ constexpr auto kDynamicInputIndex = "dynamic_input_index";
 constexpr auto kEnableAtomicAdd = "enable_atomic_add";
 constexpr auto kEnableSwizzleGPU = "enable_swizzle_gpu";
 constexpr auto kEnableElementwiseFlatten = "enable_elementwise_flatten";
+constexpr auto kEnableCInit = "enable_c_init";
+constexpr auto kIsTbeCodeGen = "is_tbe_codegen";
+constexpr auto kKeepTrivialLoop = "keep_trivial_loop";
 constexpr auto kRemoveStoreDependency = "remove_store_dependency";
 constexpr auto kIsPolyConfigReset = "is_poly_config_reset";
 
@@ -134,9 +137,7 @@ class AttrMap : public Map<std::string, NodeRef> {
 
 class CsrMap : public Map<NodeRef, NodeRef> {
  public:
-  void Clear() {
-    this->CopyOnWrite()->data.clear();
-  }
+  void Clear() { this->CopyOnWrite()->data.clear(); }
 };
 
 class PassTimer {

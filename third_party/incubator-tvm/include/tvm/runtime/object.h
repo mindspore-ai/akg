@@ -20,10 +20,16 @@
  * \file tvm/runtime/object.h
  * \brief A managed object in the TVM runtime.
  */
+
+/*
+ * 2023.03.25 - Add TVM 0.8 attributes to the node and conversion pass for exporting TVM 0.8 IR.
+ */
+
 #ifndef TVM_RUNTIME_OBJECT_H_
 #define TVM_RUNTIME_OBJECT_H_
 
 #include <dmlc/logging.h>
+#include <tvm/version_info.h>
 #include <type_traits>
 #include <string>
 #include <utility>
@@ -212,6 +218,7 @@ class Object {
   static constexpr bool _type_final = false;
   static constexpr uint32_t _type_child_slots = 0;
   static constexpr bool _type_child_slots_can_overflow = true;
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = false;
   // NOTE: the following field is not type index of Object
   // but was intended to be used by sub-classes as default value.
   // The type index of Object is TypeIndex::kRoot

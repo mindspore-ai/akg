@@ -1,5 +1,5 @@
 /**
- * Copyright 2021 Huawei Technologies Co., Ltd
+ * Copyright 2021-2023 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -85,6 +85,7 @@ const DataFlowAttrs Mmu_Spec_Gemm_C = {{MemType::DDR, ""}};
 const DataFlowAttrs Mmu_Gemm_C = {{MemType::DDR, ""}};
 const DataFlowAttrs Inst_BUF = {{MemType::DDR, ""}};
 const DataFlowAttrs Im2Col_C1 = {{MemType::DDR, ""}};
+const DataFlowAttrs Mmu_BIAS = {{MemType::DDR, ""}};
 
 int GetCoreValue(const std::string &name) {
   if (name == "Core_num") {

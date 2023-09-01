@@ -26,6 +26,10 @@
  * 2021.03.17 - Add dump_mlir.
  */
 
+/*
+ * 2023.02.03 - Add the name list of actual activate passes.
+ */
+
 #ifndef TVM_BUILD_MODULE_H_
 #define TVM_BUILD_MODULE_H_
 
@@ -239,6 +243,9 @@ class BuildConfigNode : public Node {
 
   /*! \brief Whether to dump MLIR */
   bool dump_mlir = false;
+
+  /*! \brief The name list of actual activate passes */
+  std::vector<std::string> activated_passes;
 
   void VisitAttrs(AttrVisitor* v) {
     v->Visit("data_alignment", &data_alignment);

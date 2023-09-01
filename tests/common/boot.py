@@ -1,4 +1,4 @@
-# Copyright 2019-2021 Huawei Technologies Co., Ltd
+# Copyright 2019-2023 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -41,8 +41,14 @@ class TestCase(TestBase):
         self.params_init(case_name, case_path)
 
         if isinstance(func, str):
-            lib = "tests.common.test_run.ascend." + func
-            exec("import " + lib)
+            try:
+                lib = "tests.common.test_run.ascend." + func
+                exec("import " + lib)
+            except Exception as e:
+                print("import fail: {} try another path...".format(e))
+                lib = "tests.common.test_run." + func
+                exec("import " + lib)
+                
             mod = sys.modules[lib]
             self._build_only = build_only and hasattr(mod, func.split('_run')[0] + "_compile")
             # backward compatible with xxx_run function entry
@@ -57,6 +63,9 @@ class TestCase(TestBase):
             self.common_run(self.testarg, mode='compile', is_conv=is_conv)
         else:
             self.common_run(self.testarg, is_conv=is_conv)
+
+    def test_lower(self, is_conv=False):
+        return self.common_run(self.testarg, mode='lower', is_conv=is_conv)
 
     def teardown(self):
         self._log.info("============= {0} Teardown============".format(self.casename))
@@ -81,3 +90,10 @@ def build(*case):
     a.setup(case, True)
     a.test_run()
     a.teardown()
+
+def lower(*case):
+    a = TestCase()
+    a.setup(case, True)
+    res = a.test_lower()
+    a.teardown()
+    return res

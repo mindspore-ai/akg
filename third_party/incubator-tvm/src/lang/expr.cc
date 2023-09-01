@@ -25,6 +25,10 @@
  * 2019.12.30 - Add new expr functions for different data types.
  */
 
+/*
+ * 2023.03.25 - Add TVM 0.8 attributes to the node and conversion pass for exporting TVM 0.8 IR.
+ */
+
 #include <tvm/base.h>
 #include <tvm/expr.h>
 #include <tvm/ir.h>
@@ -229,8 +233,7 @@ TVM_STATIC_IR_FUNCTOR(IRPrinter, vtable)
 
 TVM_REGISTER_NODE_TYPE(ArrayNode);
 TVM_REGISTER_NODE_TYPE(MapNode);
-TVM_REGISTER_NODE_TYPE(StrMapNode);
+TVM_REGISTER_NODE_TYPE(StrMapNode).set_rename_type_key("Map");
 TVM_REGISTER_NODE_TYPE(RangeNode);
-TVM_REGISTER_NODE_TYPE(IterVarNode);
-
+TVM_REGISTER_NODE_TYPE(IterVarNode).set_rename_type_key("tir.IterVar");
 }  // namespace air

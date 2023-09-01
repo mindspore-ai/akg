@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2022 Huawei Technologies Co., Ltd
+ * Copyright 2019-2023 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -443,6 +443,7 @@ constexpr auto ALLOC_REALIZE_OUT = "alloc_out";
 
 constexpr auto CALL_IM2COL_UB = "cce_img2col_ub";
 constexpr auto ATTR_IM2COL_KEY = "im2colKey";
+constexpr auto ATTR_AKG_C_INIT_BIAS = "akg_c_init_bias";
 
 constexpr auto ATTR_ENABLE_ATOMIC_ADD = "enable_atomic_add";
 constexpr auto ATTR_ENABLE_AUTO_INPLACE = "enable_auto_inplace";

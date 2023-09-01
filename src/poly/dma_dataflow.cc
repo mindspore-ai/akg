@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2021 Huawei Technologies Co., Ltd
+ * Copyright 2019-2023 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -201,6 +201,13 @@ void DispatchDataFlow(STMT_OP_TYPE op_type, const isl::id &stmt_id, const StmtOp
       }
     }
   };
+
+  auto GenerateGemmBias = [&]() {
+    DataFlow::Get().SetMmuInitCId(stmt_id.get_name());
+    GenerateDf(stmt_id, read_map, true, Mmu_BIAS);
+    GenerateDf(stmt_id, write_map, false, Mmu_BIAS);
+  };
+
   auto GenerateVetorDf = [&]() {
     GenerateDf(stmt_id, read_map, true, Inst_BUF);
     GenerateDf(stmt_id, write_map, false, Inst_BUF);
@@ -244,11 +251,9 @@ void DispatchDataFlow(STMT_OP_TYPE op_type, const isl::id &stmt_id, const StmtOp
   };
 
   const std::map<STMT_OP_TYPE, std::function<void(void)>> dispatch_map = {
-    {STMT_OP_TYPE::INST, GenerateVetorDf},
-    {STMT_OP_TYPE::MMU_GEMM, GenerateGemmDf},
-    {STMT_OP_TYPE::MMU_CONV, GenerateConvDf},
-    {STMT_OP_TYPE::IM2COL_BUF, GenerateIm2colDf},
-    {STMT_OP_TYPE::MMU_SPEC_GEMM, GenerateSpecGemmDf}};
+    {STMT_OP_TYPE::INST, GenerateVetorDf},      {STMT_OP_TYPE::MMU_GEMM, GenerateGemmDf},
+    {STMT_OP_TYPE::MMU_CONV, GenerateConvDf},   {STMT_OP_TYPE::IM2COL_BUF, GenerateIm2colDf},
+    {STMT_OP_TYPE::MMU_BIAS, GenerateGemmBias}, {STMT_OP_TYPE::MMU_SPEC_GEMM, GenerateSpecGemmDf}};
 
   if (dispatch_map.find(op_type) != dispatch_map.end()) {
     dispatch_map.find(op_type)->second();
@@ -395,6 +400,9 @@ std::unordered_map<std::string, TensorDF> DataFlow::GetCombinedFlow() {
   for (auto it : op_data_flow_) {
     auto &tensor_df = it.second;
     CombineFlow(tensor_df.read);
+    if (it.first == GetMmuInitCId()) {
+      continue;
+    }
     CombineFlow(tensor_df.write);
   }
   return res;
@@ -402,7 +410,10 @@ std::unordered_map<std::string, TensorDF> DataFlow::GetCombinedFlow() {
 
 void DataFlow::SetMmuFlow(const std::string &stmt_id) { mmu_stmt_id_ = stmt_id; }
 
+void DataFlow::SetMmuInitCId(const std::string &stmt_id) { mmu_init_c_id_ = stmt_id; }
+
 std::string DataFlow::GetMmuId() { return mmu_stmt_id_; }
+std::string DataFlow::GetMmuInitCId() { return mmu_init_c_id_; }
 
 StmtDataFlow &DataFlow::GetStmtFlow(const std::string &stmt_id) { return op_data_flow_[stmt_id]; }
 

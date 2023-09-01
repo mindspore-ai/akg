@@ -1,5 +1,5 @@
 /**
- * Copyright 2019-2022 Huawei Technologies Co., Ltd
+ * Copyright 2019-2023 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -1356,7 +1356,172 @@ class ThreeAddressStmtMutator : public IRMutator {
       : reuse_variable_(reuse_variable), minimum_split_(minimum_split), cross_stmt_simplify_(cross_stmt_simplify) {}
   ~ThreeAddressStmtMutator() override = default;
 
+  void SortReducetionVars(const Expr &value) {
+    // sort reduction vars  (Here we use a simplified version, only deal with the relation
+    // between spatial and reduce vars, while ignore the relation among reduce vars)
+    // - 1. collect relations
+    PostOrderVisit(value, [this](const NodeRef &node) {
+      if (node->IsInstance<Call>() && node.as<Call>()->call_type == Call::Halide) {
+        const Array<Expr> &call_args = node.as<Call>()->args;
+        CHECK(call_args.defined());
+        for (size_t i = 0; i < call_args.size(); ++i) {
+          for (size_t j = i + 1; j < call_args.size(); ++j) {
+            if (is_constant(call_args[i]) || !call_args[j]->IsInstance<Variable>()) {
+              continue;
+            }
+            std::vector<Var> call_arg_vars;
+            GatherVars(call_args[i], &call_arg_vars);
+            if (call_arg_vars.size() == 1) {
+              Var vi = call_arg_vars.front(), vj = Downcast<Var>(call_args[j]);
+              if (!Equal(vi, vj)) {
+                re_new_args_vars_.insert(vi);
+                re_new_args_vars_.insert(vj);
+                re_edges_[vi].insert(vj);
+              }
+            }
+          }
+        }
+      }
+    });
+  }
+
+  std::vector<Var> GetAllVars(const Array<Expr> &args, const Expr &value) {
+    VarSet spatial_vars;
+    std::vector<Var> all_vars;
+
+    // collect reduction vars
+    size_t args_size = args.size();
+    for (size_t i = 0; i < args_size; ++i) {
+      GatherVars(args[i], &spatial_vars);
+    }
+    all_vars = std::vector<Var>(spatial_vars.begin(), spatial_vars.end());
+    GatherVars(value, &all_vars);
+
+    for (const auto &x : all_vars) {
+      if (!spatial_vars.count(x)) {
+        reduce_vars_.insert(x);
+      }
+    }
+    return all_vars;
+  }
+
+  void SetFollowingTerms(const Array<Expr> &args, const Array<Expr> &shape, const Expr &value) {
+    // for non-variable terms, attach them to its previous variable term
+    VarSet vars_add_to_args(reduce_vars_.begin(), reduce_vars_.end());
+    size_t i = 0;
+    while (i < args.size()) {
+      size_t j = i + 1;
+      if (!is_constant(args[i])) {
+        std::vector<Var> arg_vars;
+        GatherVars(args[i], &arg_vars);
+        for (const auto &x : arg_vars) {
+          Var vi = x;
+          if (re_new_args_vars_.size() == 0 && vars_add_to_args.size() == 0) {
+            vars_add_to_args.insert(vi);
+          } else if (re_new_args_vars_.find(vi) != re_new_args_vars_.end()) {
+            vars_add_to_args.insert(vi);
+            size_t k = j;
+            while (k < args.size() && is_constant(args[k])) {
+              re_following_terms_arg_[vi].push_back(args[k]);
+              re_following_terms_shape_[vi].push_back(shape[k]);
+              k++;
+            }
+          }
+        }
+      }
+      i = j;
+    }
+    re_vars_add_to_args_ = vars_add_to_args;
+  }
+
+  void SetReductionShape(Array<Expr> &args, Array<Expr> &shape, const Expr &value) {
+    std::vector<Var> all_vars = GetAllVars(args, value);
+    SortReducetionVars(value);
+    SetFollowingTerms(args, shape, value);
+
+    // topo-sort
+    Array<Expr> new_args;
+    Array<Expr> new_shape;
+    size_t check_ct = 0;
+    std::queue<Var> out_queue;
+    std::unordered_map<Var, size_t, air::NodeHash, air::NodeEqual> degree;
+    for (const auto &iter : re_edges_) {
+      for (const auto &to : iter.second) {
+        degree[to]++;
+      }
+    }
+
+    for (const auto &x : all_vars) {
+      if (degree[x] == 0) {
+        out_queue.push(x);
+      }
+    }
+
+    while (check_ct < all_vars.size()) {
+      if (out_queue.empty()) {
+        size_t min_degree = std::numeric_limits<int>::max();
+        for (const auto &x : all_vars) {
+          if (degree[x] > 0 && degree[x] < min_degree) {
+            min_degree = degree[x];
+          }
+        }
+        for (const auto &x : reduce_vars_) {
+          if (degree[x] == min_degree) {
+            out_queue.push(x);
+            degree[x] = 0;
+            break;
+          }
+        }
+        if (out_queue.empty()) {
+          for (const auto &x : re_vars_add_to_args_) {
+            if (degree[x] == min_degree) {
+              out_queue.push(x);
+              degree[x] = 0;
+              break;
+            }
+          }
+        }
+      }
+      check_ct++;
+      const Var x = out_queue.front();
+      out_queue.pop();
+
+      if (re_vars_add_to_args_.count(x)) {
+        new_args.push_back(x);
+        CHECK_GT(dom_map.count(x), 0);
+        new_shape.push_back(dom_map[x]->min + dom_map[x]->extent);
+
+        CHECK_EQ(re_following_terms_arg_[x].size(), re_following_terms_shape_[x].size());
+        for (size_t dim = 0; dim < re_following_terms_arg_[x].size(); dim++) {
+          const Expr &arg = re_following_terms_arg_[x][dim];
+          const Expr &shape_ = re_following_terms_shape_[x][dim];
+          bool index_is_const_zero = Equal(arg, Expr(0));
+          bool dim_extent_is_one = Equal(shape_, Expr(1));
+          if (!index_is_const_zero && !dim_extent_is_one) {
+            new_args.push_back(arg);
+            new_shape.push_back(shape_);
+          }
+        }
+      }
+
+      for (const auto &y : re_edges_[x]) {
+        if (--degree[y] == 0) {
+          out_queue.push(y);
+        }
+      }
+    }
+    CHECK_EQ(check_ct, all_vars.size());
+    args = !new_args.empty() ? new_args : args;
+    shape = !new_shape.empty() ? new_shape : shape;
+    CHECK_EQ(args.size(), shape.size());
+  }
+
   Stmt Mutate_(const Provide *op, const Stmt &s) final {
+    // skip marked provide
+    if (op == skip_stmt_) {
+      skip_stmt_ = nullptr;
+      return IRMutator::Mutate_(op, s);
+    }
     // skip cube operators (conv2d, matmul)
     bool is_reduction = IsReductionOp(op);
     air::arith::Analyzer analyzer_;
@@ -1380,159 +1545,7 @@ class ThreeAddressStmtMutator : public IRMutator {
     Array<Expr> shape = output->shape;
 
     if (is_reduction) {
-      VarSet spatial_vars;
-      std::vector<Var> all_vars;
-
-      // collect reduction vars
-      for (size_t i = 0; i < op->args.size(); ++i) {
-        GatherVars(op->args[i], &spatial_vars);
-      }
-      all_vars = std::vector<Var>(spatial_vars.begin(), spatial_vars.end());
-      GatherVars(value, &all_vars);
-
-      VarSet reduce_vars;
-      for (const auto &x : all_vars) {
-        if (!spatial_vars.count(x)) {
-          reduce_vars.insert(x);
-        }
-      }
-
-      std::unordered_map<Var, VarSet, air::NodeHash, air::NodeEqual> edges;
-      std::unordered_map<Var, size_t, air::NodeHash, air::NodeEqual> degree;
-      VarSet new_args_vars;
-
-      // sort reduction vars  (Here we use a simplified version, only deal with the relation
-      // between spatial and reduce vars, while ignore the relation among reduce vars)
-      // - 1. collect relations
-      PostOrderVisit(value, [&reduce_vars, &spatial_vars, &new_args_vars, &edges](const NodeRef &node) {
-        if (node->IsInstance<Call>() && node.as<Call>()->call_type == Call::Halide) {
-          const Array<Expr> &call_args = node.as<Call>()->args;
-          CHECK(call_args.defined());
-          for (size_t i = 0; i < call_args.size(); ++i) {
-            for (size_t j = i + 1; j < call_args.size(); ++j) {
-              if (is_constant(call_args[i]) || !call_args[j]->IsInstance<Variable>()) {
-                continue;
-              }
-              std::vector<Var> call_arg_vars;
-              GatherVars(call_args[i], &call_arg_vars);
-              if (call_arg_vars.size() == 1) {
-                Var vi = call_arg_vars.front(), vj = Downcast<Var>(call_args[j]);
-                if (!Equal(vi, vj)) {
-                  new_args_vars.insert(vi);
-                  new_args_vars.insert(vj);
-                  edges[vi].insert(vj);
-                }
-              }
-            }
-          }
-        }
-      });
-
-      // for non-variable terms, attach them to its previous variable term
-      std::unordered_map<Var, std::vector<Expr>, air::NodeHash, air::NodeEqual> following_terms_arg;
-      std::unordered_map<Var, std::vector<Expr>, air::NodeHash, air::NodeEqual> following_terms_shape;
-      VarSet vars_add_to_args(reduce_vars.begin(), reduce_vars.end());
-
-      size_t i = 0;
-      while (i < args.size()) {
-        size_t j = i + 1;
-        if (!is_constant(args[i])) {
-          std::vector<Var> arg_vars;
-          GatherVars(args[i], &arg_vars);
-          for (const auto &x : arg_vars) {
-            Var vi = x;
-            if (new_args_vars.size() == 0 && vars_add_to_args.size() == 0) {
-              vars_add_to_args.insert(vi);
-            } else if (new_args_vars.find(vi) != new_args_vars.end()) {
-              vars_add_to_args.insert(vi);
-              size_t k = j;
-              while (k < args.size() && is_constant(args[k])) {
-                following_terms_arg[vi].push_back(args[k]);
-                following_terms_shape[vi].push_back(shape[k]);
-                k++;
-              }
-            }
-          }
-        }
-        i = j;
-      }
-
-      // topo-sort
-      Array<Expr> new_args;
-      Array<Expr> new_shape;
-
-      size_t check_ct = 0;
-      std::queue<Var> out_queue;
-
-      for (const auto &iter : edges) {
-        for (const auto &to : iter.second) {
-          degree[to]++;
-        }
-      }
-
-      for (const auto &x : all_vars) {
-        if (degree[x] == 0) {
-          out_queue.push(x);
-        }
-      }
-
-      while (check_ct < all_vars.size()) {
-        if (out_queue.empty()) {
-          size_t min_degree = std::numeric_limits<int>::max();
-          for (const auto &x : all_vars) {
-            if (degree[x] > 0 && degree[x] < min_degree) {
-              min_degree = degree[x];
-            }
-          }
-          for (const auto &x : reduce_vars) {
-            if (degree[x] == min_degree) {
-              out_queue.push(x);
-              degree[x] = 0;
-              break;
-            }
-          }
-          if (out_queue.empty()) {
-            for (const auto &x : vars_add_to_args) {
-              if (degree[x] == min_degree) {
-                out_queue.push(x);
-                degree[x] = 0;
-                break;
-              }
-            }
-          }
-        }
-        check_ct++;
-        const Var x = out_queue.front();
-        out_queue.pop();
-
-        if (vars_add_to_args.count(x)) {
-          new_args.push_back(x);
-          CHECK_GT(dom_map.count(x), 0);
-          new_shape.push_back(dom_map[x]->min + dom_map[x]->extent);
-
-          CHECK_EQ(following_terms_arg[x].size(), following_terms_shape[x].size());
-          for (size_t dim = 0; dim < following_terms_arg[x].size(); dim++) {
-            const Expr &arg = following_terms_arg[x][dim];
-            const Expr &shape_ = following_terms_shape[x][dim];
-            bool index_is_const_zero = Equal(arg, Expr(0));
-            bool dim_extent_is_one = Equal(shape_, Expr(1));
-            if (!index_is_const_zero && !dim_extent_is_one) {
-              new_args.push_back(arg);
-              new_shape.push_back(shape_);
-            }
-          }
-        }
-
-        for (const auto &y : edges[x]) {
-          if (--degree[y] == 0) {
-            out_queue.push(y);
-          }
-        }
-      }
-      CHECK_EQ(check_ct, all_vars.size());
-      args = !new_args.empty() ? new_args : args;
-      shape = !new_shape.empty() ? new_shape : shape;
-      CHECK_EQ(args.size(), shape.size());
+      SetReductionShape(args, shape, value);
     }
 
     // find broadcast call
@@ -1624,6 +1637,10 @@ class ThreeAddressStmtMutator : public IRMutator {
   }
 
   Stmt Mutate_(const AttrStmt *op, const Stmt &s) final {
+    if (op->attr_key == skip_attr_key_ && op->body.as<Provide>()) {
+      skip_stmt_ = op->body.as<Provide>();
+      return IRMutator::Mutate(op->body);
+    }
     FunctionRef func = Downcast<FunctionRef>(op->node);
     attr_node_[func] = op;
     Stmt ret = IRMutator::Mutate_(op, s);
@@ -1699,6 +1716,14 @@ class ThreeAddressStmtMutator : public IRMutator {
 
   std::unordered_map<size_t, std::pair<Expr, Expr>> global_common_expr_;
 
+  // reduction operator
+  VarSet reduce_vars_;
+  std::unordered_map<Var, VarSet, air::NodeHash, air::NodeEqual> re_edges_;
+  VarSet re_new_args_vars_;
+  VarSet re_vars_add_to_args_;
+  std::unordered_map<Var, std::vector<Expr>, air::NodeHash, air::NodeEqual> re_following_terms_arg_;
+  std::unordered_map<Var, std::vector<Expr>, air::NodeHash, air::NodeEqual> re_following_terms_shape_;
+
   int loop_level{0};
   bool is_simple_{true};
 
@@ -1709,6 +1734,10 @@ class ThreeAddressStmtMutator : public IRMutator {
   bool reuse_variable_;
   int minimum_split_;
   bool cross_stmt_simplify_;
+
+  // skip to-three-address for marked provides under attrstmt
+  std::string skip_attr_key_{"skip_to_three_address"};
+  const Provide *skip_stmt_{nullptr};
 };
 
 class ExprArgsExtract : public IRVisitor {

@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2023 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 
 #include "codegen/pass_mgr.h"
 
+#include <algorithm>
 #include <unordered_set>
 #include <chrono>
 
@@ -28,8 +29,15 @@ void PassMgr::InitializeSubName() {
 }
 
 TVMRetValue PassMgr::Run() const {
-  const auto *packed_func = air::runtime::Registry::Get(pass_name_);
-  CHECK(packed_func != nullptr) << "PackedFunc " << pass_name_ << " not found";
+  std::string actual_pass_name = pass_name_;
+  if (check_activated_passes_ && !tl_config_->activated_passes.empty()) {
+    auto it = std::find(tl_config_->activated_passes.begin(), tl_config_->activated_passes.end(), sub_name_);
+    if (it == tl_config_->activated_passes.end()) {
+      actual_pass_name = "ir_pass.IdentityPass";
+    }
+  }
+  const auto *packed_func = air::runtime::Registry::Get(actual_pass_name);
+  CHECK(packed_func != nullptr) << "PackedFunc " << actual_pass_name << " not found";
 
   TVMRetValue res;
 

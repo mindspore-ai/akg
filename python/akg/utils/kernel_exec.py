@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # coding: utf-8
-# Copyright 2019-2022 Huawei Technologies Co., Ltd
+# Copyright 2019-2023 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -402,9 +402,7 @@ def profiling_mode_run(kernel_name, args, outputs, tuning, device_id):
         logging.error("OOPS, can't correctly parsing cycles!")
     TestUtils.record_cycle(cycle)
     logging.info('=====parsing cycles==============================')
-    if tuning:
-        return output_data, {'run_time': cycle}
-    return output_data
+    return output_data, {'run_time': cycle}
 
 
 def profiling_analyse(device_id, time_before_launch):
@@ -617,6 +615,20 @@ def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=-1, expect=None
     gc.collect()
     if device_id == -1:
         device_id = int(os.environ.get("DEVICE_ID", 0))
+
+    # npu-inference process
+    if isinstance(mod, str):
+        kernel_name = mod
+        run_func = ascend_run
+        run_args = [kernel_name, args, outputs, device_id]
+        if os.environ.get("PROFILING_MODE") == "true":
+            run_func = profiling_mode_run
+            run_args = [kernel_name, args, outputs, tuning, device_id]
+            if os.environ.get("PROFILING_DIR", None) is None:
+                os.environ["PROFILING_DIR"] = "."
+                logging.info("[RUNTIME_WARNING] In profiling mode, while profiling dir is not set!Set to current dir by default.")
+        output = run_func(*run_args)
+        return output
 
     module = mod if mod.type_key == LLVM else mod.imported_modules[0]
     target = module.type_key
@@ -1213,6 +1225,10 @@ def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
         compute_func(s)
         polyhedral = False
 
+    if attrs.get("simple_mode"):
+        attrs.pop("simple_mode")
+        return s, inputs, output, attrs
+
     level = attrs.get("help_tiling") if attrs and "help_tiling" in attrs else None
     if tuning or (level is not None and level > help_tiling_level.get('None')):
         return gen_spaces_dim_key(op_func, args, s, op_var, kernel_name, attrs, polyhedral, tuning, target)
@@ -1231,10 +1247,11 @@ def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
                             polyhedral=polyhedral, binds=binds)
             source_code = mod.get_source()
     elif target_name == CCE:
-        with akg.build_config(dump_pass_ir=dump_ir):
-            mod = akg.build(s, op_var, target, shape_var, name=kernel_name, attrs=attrs,
-                            polyhedral=polyhedral, binds=binds)
+        mod = npu_op_build(s, op_var, shape_var, kernel_name, binds, attrs, dump_ir, polyhedral)
+        if attrs.get("is_tbe_codegen"):
             source_code = mod.imported_modules[0].get_source()
+        else:
+            return mod
 
     if log_code:
         logging.debug("#################code####################")
@@ -1243,6 +1260,36 @@ def op_build(op_func, input_shapes, input_types, op_attrs=None, kernel_name="",
         create_code(kernel_name, "./", source_code, target_name)
     return mod
 
+
+def npu_op_build(s, op_var, shape_var, kernel_name="", binds=None, attrs=None,
+                 dump_ir=True, polyhedral=True):
+    if attrs.get("is_tbe_codegen"):
+        # use akg + tbe compile
+        from akg.tvm import build_module
+        from akg.python.akg.utils.tbe_codegen_utils import build_tbe_codegen
+        if attrs is None:
+            attrs = {} 
+        attrs.update({"is_tbe_codegen":True})
+        binds, arg_list = build_module.get_binds(op_var)
+        stmt = akg.lower(s, op_var, shape_params=shape_var, name=kernel_name, binds=binds, attrs=attrs,
+            simple_mode=True, polyhedral=polyhedral, tuning=False, target="cce")
+
+        json_str = akg.tvm.save_json(stmt, "0.8.0")
+
+        args_json = []
+        for buf in enumerate(arg_list):
+            args_json.append(akg.tvm.save_json(buf, "0.8.0"))
+
+        is_success = build_tbe_codegen(kernel_name, json_str, args_json, attrs.get("dynamic", False))
+        if not is_success:
+            raise TypeError("npu_inference codegen failed.")
+        return kernel_name
+    else:
+        # use the whole akg complie
+        with akg.build_config(dump_pass_ir=dump_ir):
+            mod = akg.build(s, op_var, CCE, shape_var, name=kernel_name, attrs=attrs,
+                            polyhedral=polyhedral, binds=binds)
+        return mod
 
 def get_runtime_mode():
     """get runtime mode."""

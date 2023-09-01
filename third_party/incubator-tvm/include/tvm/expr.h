@@ -26,6 +26,10 @@
  * 2019.12.30 - Add new type of constructors for expr.
  */
 
+/*
+ * 2023.02.03 - Add upper and lower bound of node.
+ */
+
 #ifndef TVM_EXPR_H_
 #define TVM_EXPR_H_
 
@@ -39,8 +43,12 @@
 #include "node/container.h"
 #include "node/functor.h"
 #include "runtime/c_runtime_api.h"
+#include "string.h"
+#include "type.h"
 
 namespace air {
+
+using air::runtime::String;
 
 /*! \brief Base node of all expressions. */
 class ExprNode : public Node {
@@ -48,6 +56,7 @@ class ExprNode : public Node {
   /*! \brief The data type of the expression. */
   DataType type;
 
+  Span span = Span();
   static constexpr const char* _type_key = "Expr";
   TVM_DECLARE_BASE_NODE_INFO(ExprNode, Node);
 };
@@ -91,6 +100,9 @@ class Expr : public NodeRef {
 /*! \brief Base node of all statements. */
 class StmtNode : public Node {
  public:
+   /** \brief For TVM 0.8 IR. */
+  Span span = Span();
+
   static constexpr const char* _type_key = "Stmt";
   TVM_DECLARE_BASE_NODE_INFO(StmtNode, Node);
 };
@@ -120,15 +132,36 @@ class Variable : public ExprNode {
    * \note Each variable is uniquely identified by its address.
    */
   std::string name_hint;
+  int64_t lower_bound;
+  int64_t upper_bound;
+  bool specified_range{false};
 
+  /** \brief For TVM 0.8 IR.*/
+  TypeAnnotationType type_annotation;
+  String name_hint_str;
   static Var make(DataType dtype, std::string name_hint);
 
   void VisitAttrs(AttrVisitor* v) {
     v->Visit("dtype", &type);
     v->Visit("name", &name_hint);
+    v->Visit("lower_bound", &lower_bound);
+    v->Visit("upper_bound", &upper_bound);
+    v->Visit("specified_range", &specified_range);
+  }
+
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    v->Visit("dtype", &type);
+    name_hint_str = name_hint;
+    v->Visit("name", &name_hint_str);
+    v->Visit("type_annotation", &type_annotation);
+    v->Visit("lower_bound", &lower_bound);
+    v->Visit("upper_bound", &upper_bound);
+    v->Visit("specified_range", &specified_range);
+    v->Visit("span", &span);
   }
 
   static constexpr const char* _type_key = "Variable";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(Variable, ExprNode);
 };
 
@@ -152,6 +185,9 @@ class Var : public Expr {
    */
   const Variable* operator->() const {
     return get();
+  }
+  Variable* operator->() {
+    return static_cast<Variable*>(get_mutable());
   }
   /*!
    * \brief Get pointer to the internal value.
@@ -182,9 +218,16 @@ class IntImm : public ExprNode {
     v->Visit("value", &value);
   }
 
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    v->Visit("dtype", &type);
+    v->Visit("value", &value);
+    v->Visit("span", &span);
+  }
+
   TVM_DLL static Integer make(DataType t, int64_t value);
 
   static constexpr const char* _type_key = "IntImm";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(IntImm, ExprNode);
 };
 
@@ -239,6 +282,10 @@ class RangeNode : public Node {
   Expr min;
   /*! \brief the extend of range */
   Expr extent;
+
+  /** \brief For TVM 0.8 IR.*/
+  Span span = Span();
+
   /*! \brief constructor */
   RangeNode() {}
   RangeNode(Expr min, Expr extent) : min(min), extent(extent) {}
@@ -248,7 +295,14 @@ class RangeNode : public Node {
     v->Visit("extent", &extent);
   }
 
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    v->Visit("min", &min);
+    v->Visit("extent", &extent);
+    v->Visit("span", &span);
+  }
+
   static constexpr const char* _type_key = "Range";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(RangeNode, Node);
 };
 
@@ -419,6 +473,10 @@ class IterVarNode : public Node {
    */
   std::string thread_tag;
 
+  /** \brief For TVM 0.8 IR.*/
+  String thread_tag_str;
+  Span span = Span();
+
   void VisitAttrs(AttrVisitor* v) {
     v->Visit("dom", &dom);
     v->Visit("var", &var);
@@ -426,11 +484,21 @@ class IterVarNode : public Node {
     v->Visit("thread_tag", &thread_tag);
   }
 
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    v->Visit("dom", &dom);
+    v->Visit("var", &var);
+    v->Visit("iter_type", &iter_type);
+    thread_tag_str = thread_tag;
+    v->Visit("thread_tag", &thread_tag_str);
+    v->Visit("span", &span);
+  }
+
   TVM_DLL static IterVar make(Range dom, Var var,
                               IterVarType iter_type,
                               std::string thread_tag = "");
 
   static constexpr const char* _type_key = "IterVar";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(IterVarNode, Node);
 };
 

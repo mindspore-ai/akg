@@ -96,7 +96,7 @@ std::string GetProcess(const picojson::value &input_json) {
     CHECK(iter->second.is<std::string>());
     target = iter->second.get<std::string>();
   }
-  if (input_json.contains("target_info")) {
+  if (input_json.contains("target_info") && target != "aicore") {
     option = GetOption(input_json.get("target_info"));
   }
   return GetRealTarget(target) + option;

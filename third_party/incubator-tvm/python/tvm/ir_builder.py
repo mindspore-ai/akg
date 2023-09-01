@@ -174,7 +174,7 @@ class IRBuilder(object):
             node = _make.StringImm(node)
         if isinstance(value, string_types):
             value = _make.StringImm(value)
-        self.emit(lambda x: _make.AttrStmt(node, attr_key, value, x))
+        self.emit(lambda x: _make.AttrStmt(node, attr_key, value, x, None))
 
     def for_range(self, begin, end, name="i", dtype="int32", for_type="serial"):
         """Create a for iteration scope.

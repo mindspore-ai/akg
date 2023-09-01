@@ -1,5 +1,5 @@
 /**
- * Copyright 2021-2022 Huawei Technologies Co., Ltd
+ * Copyright 2021-2023 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,6 +26,8 @@ namespace {
 constexpr auto kAttrs = "attrs";
 constexpr auto kJsonStr = "json_str";
 constexpr auto kKernelName = "kernel_name";
+constexpr auto kIsTbeCodeGen = "is_tbe_codegen";
+constexpr auto kArgs = "args";
 }  // namespace
 void JsonLowerLeaf::Lower(StageType s) {
   auto info = GenBuildInfo(attrs_);

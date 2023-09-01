@@ -20,6 +20,7 @@
 /*
  * 2020.7.14 - Support cce target.
  * 2021.3.17 - Add dump_mlir.
+ * 2023.2.03 - Add activated_pass.
  */
 
 /*!
@@ -823,6 +824,31 @@ TVM_REGISTER_API("_BuildConfigGetAddLowerPassInfo")
     } else {
       *ret = item.second;
     }
+  }
+  });
+
+TVM_REGISTER_API("_BuildConfigSetActivatedPasses")
+.set_body([](TVMArgs args, TVMRetValue* ret) {
+  BuildConfig cfg = args[0];
+  std::vector<std::string> activated_passes;
+  for (int i = 1; i < args.size(); i += 1) {
+    activated_passes.push_back(args[i].operator std::string());
+  }
+  cfg->activated_passes = activated_passes;
+  });
+
+TVM_REGISTER_API("_BuildConfigGetActivatedPassesInfo")
+.set_body([](TVMArgs args, TVMRetValue* ret) {
+  // Return one of the following:
+  //  * Size of activated_passes if num_args == 1
+  //  * Name of no.index activated pass if args are (config, index)
+  BuildConfig cfg = args[0];
+  if (args.num_args == 1) {
+    *ret = static_cast<int64_t>(cfg->activated_passes.size());
+  } else {
+    int index = args[1];
+    auto item = cfg->activated_passes[index];
+    *ret = item;
   }
   });
 

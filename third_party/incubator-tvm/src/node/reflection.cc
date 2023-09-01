@@ -36,8 +36,8 @@ class AttrGetter : public AttrVisitor {
   TVMRetValue* ret;
 
   AttrGetter(const std::string &skey,
-             TVMRetValue* ret)
-      : skey(skey), ret(ret) {}
+             TVMRetValue* ret, std::string tvm_version)
+      : AttrVisitor(tvm_version), skey(skey), ret(ret){}
 
   bool found_ref_object{false};
 
@@ -85,14 +85,14 @@ class AttrGetter : public AttrVisitor {
 runtime::TVMRetValue ReflectionVTable::GetAttr(
     Object* self, const std::string& field_name) const {
   runtime::TVMRetValue ret;
-  AttrGetter getter(field_name, &ret);
+  AttrGetter getter(field_name, &ret, tvm06_version);
 
   bool success;
   if (getter.skey == "type_key") {
     ret = self->GetTypeKey();
     success = true;
   } else if (!self->IsInstance<DictAttrsNode>()) {
-    VisitAttrs(self, &getter);
+    VisitAttrs(self, &getter, tvm06_version);
     success = getter.found_ref_object || ret.type_code() != kNull;
   } else {
     // specially handle dict attr
@@ -115,6 +115,7 @@ runtime::TVMRetValue ReflectionVTable::GetAttr(
 // List names;
 class AttrDir : public AttrVisitor {
  public:
+  AttrDir(std::string tvm_version):AttrVisitor(tvm_version){}
   std::vector<std::string>* names;
 
   void Visit(const char* key, double* value) final {
@@ -152,11 +153,11 @@ class AttrDir : public AttrVisitor {
 std::vector<std::string>
 ReflectionVTable::ListAttrNames(Object* self) const {
   std::vector<std::string> names;
-  AttrDir dir;
+  AttrDir dir(tvm06_version);
   dir.names = &names;
 
   if (!self->IsInstance<DictAttrsNode>()) {
-    VisitAttrs(self, &dir);
+    VisitAttrs(self, &dir, tvm06_version);
   } else {
     // specially handle dict attr
     DictAttrsNode* dnode = static_cast<DictAttrsNode*>(self);
@@ -176,15 +177,20 @@ ObjectPtr<Object>
 ReflectionVTable::CreateInitObject(const std::string& type_key,
                                    const std::string& global_key) const {
   uint32_t tindex = Object::TypeKey2Index(type_key);
-  if (tindex >= fvisit_attrs_.size() || fvisit_attrs_[tindex] == nullptr) {
+  if(tindex >= fvisit_attrs_.size()){
     LOG(FATAL) << "TypeError: " << type_key
-               << " is not registered via TVM_REGISTER_NODE_TYPE";
+        << " is not registered via TVM_REGISTER_NODE_TYPE";
+  }
+  if (fvisit_attrs_[tindex].count(tvm06_version) == 0 || fvisit_attrs_[tindex].at(tvm06_version) == nullptr) {
+    LOG(FATAL) << "TypeError: " << type_key
+               << " does not have VisitAttrs function.";
   }
   return fcreate_[tindex](global_key);
 }
 
 class NodeAttrSetter : public AttrVisitor {
  public:
+  NodeAttrSetter(std::string tvm_version):AttrVisitor(tvm_version){}
   std::string type_key;
   std::unordered_map<std::string, runtime::TVMArgValue> attrs;
 
@@ -232,7 +238,7 @@ class NodeAttrSetter : public AttrVisitor {
 };
 
 void InitNodeByPackedArgs(Object* n, const TVMArgs& args) {
-  NodeAttrSetter setter;
+  NodeAttrSetter setter(tvm06_version);
   setter.type_key = n->GetTypeKey();
   CHECK_EQ(args.size() % 2, 0);
   for (int i = 0; i < args.size(); i += 2) {
@@ -240,7 +246,7 @@ void InitNodeByPackedArgs(Object* n, const TVMArgs& args) {
                          args[i + 1]);
   }
   auto* reflection = ReflectionVTable::Global();
-  reflection->VisitAttrs(n, &setter);
+  reflection->VisitAttrs(n, &setter, tvm06_version);
 
   if (setter.attrs.size() != 0) {
     std::ostringstream os;

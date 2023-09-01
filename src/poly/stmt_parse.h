@@ -38,6 +38,7 @@ struct StmtOpInfo {
   std::string A_ = "";
   std::string B_ = "";
   std::string C_ = "";
+  std::string C_IN_ = "";
   air::DataType MadType_ = Float(16);
 };
 

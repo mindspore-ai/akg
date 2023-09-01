@@ -1,4 +1,4 @@
-# Copyright 2020-2022 Huawei Technologies Co., Ltd
+# Copyright 2020-2023 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,15 +11,18 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+from copy import copy
 import os
 import sys
 import json
 import time
 import functools
-import pytest
+import glob
 import logging
+from multiprocessing import Process
+import pytest
 import numpy as np
+import akg
 import akg.tvm as tvm
 from akg import composite
 from akg.utils import kernel_exec as utils
@@ -29,9 +32,18 @@ from akg.utils.composite_op_helper import gen_json_data
 from tests.common.base import get_rtol_atol
 from tests.common.tensorio import compare_tensor, dump_tensor
 from akg.ms import compilewithjson
+from akg.utils.composite_op_helper import random_data_to_disk
+from akg.utils.tbe_codegen_utils import copy_to_akg_kernel_meta
 
 logging.getLogger().setLevel(logging.INFO)
 
+
+def enable_input_cache():
+    if os.environ.get("RANDOM_DATA_DISK_PATH", None) is None:
+        os.environ["RANDOM_DATA_DISK_PATH"] = "."
+    random_files = os.environ.get("RANDOM_DATA_DISK_PATH") + "/random_data*bin"
+    if len(glob.glob(random_files)) == 0:
+        random_data_to_disk(size=10485760, miu=[1, 0.5, 0.1], sigma=[0.1, 0.05, 0.01])
 
 def print_usage():
     template = "  {0:15}{1}"
@@ -129,20 +141,71 @@ def _dump_info(desc, build_attrs, poly, inputs, output, expect):
     _dump_data(dump_path, inputs, output, expect)
 
 
-def get_result(desc, poly, attrs=None, profiling=True, need_compare=True, precision_check=True):
-    backend = _get_backend(desc)
 
-    mod = composite.build(desc, attrs, poly=poly)
-    if not need_compare:
-        return True
-    input_for_mod, expect, output_indexes = gen_json_data(desc, with_compute=precision_check)
-    output = utils.mod_launch(mod, input_for_mod, output_indexes)
-    if not precision_check:
-        logging.info("No precision error check!")
-        return True
+def save_profiling_csv(kernel_name, akg_cycle=-1, tbe_cycle=-1):
+    import csv
+    path = "./profiling.csv"
+    if os.path.exists(path) is False:
+        with open(path, 'w') as f:
+            csv_write = csv.writer(f)
+            data_row = ["kernel_name", "akg_cycle", "tbe_cycle"]
+            csv_write.writerow(data_row)
+    with open(path, 'a+') as f:
+        csv_write = csv.writer(f)
+        data_row = [kernel_name, akg_cycle, tbe_cycle]
+        csv_write.writerow(data_row)
+
+
+def get_profiling_compare_result(desc, poly, attrs=None, profiling=True, need_compare=True):
+    akg_cycles = True
+    tbe_cycles = True
+    result, akg_cycles = get_result(desc, poly, attrs, profiling, need_compare)
+    if akg_cycles is None:
+        akg_cycles_num = -1
+    else:
+        akg_cycles_num = akg_cycles['run_time']
+
+    npu_pro_com = os.getenv("USE_NPU_PROFILING_COMPARE")
+    if npu_pro_com is None:
+        return result
+
+    logging.info("============================= TBE =============================")
+
+    _, tbe_cycles = get_result(desc, poly, attrs, profiling, need_compare, is_only_npu = True)
+    if tbe_cycles is None:
+        tbe_cycles_num = -1
+    else:
+        tbe_cycles_num = tbe_cycles['run_time']
+
+    kerel_name = json.loads(desc).get("op", "test")
+    save_profiling_csv(kerel_name, akg_cycles_num, tbe_cycles_num)
+    return result
+
+
+def get_model(desc, poly, backend, attrs=None, is_only_npu=False):
+    kernel_name = json.loads(desc).get("op", "test")
+    if os.environ.get("SYMBOLIC_TILING") == "1":
+        kernel_name_str = "ST_TBE_" + kernel_name
+    else:
+        kernel_name_str = "AT_TBE_" + kernel_name
+
+    logging.info("[KERNEL NAME]: %s", kernel_name_str)
+    if is_only_npu:
+        postfixs = [".o", ".json"]
+        is_success = copy_to_akg_kernel_meta(kernel_name, postfixs)
+        if not is_success:
+            return None
+        return kernel_name
+    elif backend in ["cuda", "cpu", "aicore"]:
+        mod = composite.build(desc, attrs, poly=poly)
+        return mod
+
+    else:
+        raise ValueError("The current {} backend does not support.".format(backend))
+
+
+def get_compare_result(desc, output, expect, output_indexes):
     # In profiling mode, mod_launch will return compute outputs and profiling value, only compute outputs needed here
-    if isinstance(output, tuple) and len(output) > 0 and isinstance(output[-1], dict):
-        output = output[0]
     output = output if isinstance(output, (list, tuple)) else [output]
     expect = expect if isinstance(expect, (list, tuple)) else [expect]
     output = list(output)
@@ -165,12 +228,43 @@ def get_result(desc, poly, attrs=None, profiling=True, need_compare=True, precis
 
     compare_tolerance = get_compare_tolerance(desc, output_indexes)
     compare_res = list(map(_compare_func, output, expect, compare_tolerance))
+    return compare_res
+
+
+def get_result(desc, poly, attrs=None, profiling=True, need_compare=True, precision_check=True, is_only_npu=False):
+    backend = _get_backend(desc)
+    mod = get_model(desc, poly, backend, attrs, is_only_npu)
+    if mod is None:
+        return False, None
+    input_for_mod, expect, output_indexes = gen_json_data(desc, with_compute=precision_check)
+    output = utils.mod_launch(mod, input_for_mod, output_indexes)
+
+    if not precision_check:
+        logging.info("No precision error check!")
+        return True, None
+
+    if not need_compare:
+        return True, None
+
+    cycles = None
+    if isinstance(output, tuple) and len(output) > 0 and isinstance(output[-1], dict):
+        cycles = output[1]
+        output = output[0]
+
+    compare_res = get_compare_result(desc, output, expect, output_indexes)
+
     if not all(compare_res):
-        source = (mod.imported_modules[0] if backend == "cuda" else mod).get_source()
-        logging.debug(source)
-        _dump_info(desc, attrs, poly, input_for_mod, output, expect)
-        logging.warning("Compare results: %s", str(compare_res))
-        return False
+        try:
+            source = (mod.imported_modules[0] if backend == "cuda" else mod).get_source()
+            logging.debug(source)
+            _dump_info(desc, attrs, poly, input_for_mod, output, expect)
+            logging.warning("Compare results: %s", str(compare_res))
+        except UnboundLocalError:
+            logging.error("Maybe you are using TBE for codegen and there is no mod. Please try `export USE_AKG_EMIT_ASCEND=AKG`")
+        except Exception as e:
+            logging.error("Unknown error: {}".format(e))
+        logging.error("Compare Fail!")
+        return False, None
     if profiling and backend in ["cuda", "cpu"]:
         ctx = tvm.context(backend, 0)
         has_complex = False
@@ -181,7 +275,7 @@ def get_result(desc, poly, attrs=None, profiling=True, need_compare=True, precis
         if has_complex == False:
             inputs = to_tvm_nd_array(input_for_mod, ctx)
             target_profiling(mod, *inputs, target=backend, repeat_time=1000)
-    return True
+    return True, cycles
 
 
 @pytest.mark.skip
@@ -190,10 +284,13 @@ def test_single_file(input_file, attrs, poly, profiling=True, max_run_times=3):
         print("Skip {}, only process file with .info or .json suffix".format(input_file))
         return
     logging.info("test file: %s", input_file)
+
+    enable_input_cache()
+
     with open(input_file, 'r') as f:
         desc = f.read()
         for i in range(max_run_times):
-            if get_result(desc, poly, attrs, profiling):
+            if get_profiling_compare_result(desc, poly, attrs, profiling):
                 logging.info("Run Pass! max run time: %d, current run time: %d", max_run_times, i + 1)
                 return
             logging.info("Precision error! max run time: %d, current run time: %d", max_run_times, i + 1)
@@ -202,6 +299,9 @@ def test_single_file(input_file, attrs, poly, profiling=True, max_run_times=3):
 
 @pytest.mark.skip
 def test_json_dir(poly, use_custom, json_dir="./json_dir/", online_tuning=0):
+    # enable input cache for json dir testing
+    enable_input_cache()
+
     json_dims_file = json_dir + "dims.json"
     dims_dict = {}
     if use_custom:
@@ -222,7 +322,7 @@ def test_json_dir(poly, use_custom, json_dir="./json_dir/", online_tuning=0):
             if online_tuning:
                 attrs["online_tuning"] = online_tuning
                 need_compare = False
-            if not get_result(desc, poly, attrs, need_compare=need_compare):
+            if not get_profiling_compare_result(desc, poly, attrs, need_compare=need_compare):
                 logging.info("----------Error Json name is----------")
                 logging.info(input_file)
                 raise ValueError("Precision Error")
@@ -260,7 +360,7 @@ def test_ci(profile=False, poly=False):
                 logging.info("------ Skip %s", fi)
                 continue
             print("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%  fi: %s", fi)
-            flag = get_result(desc, poly)
+            flag, _ = get_result(desc, poly)
             if not flag:
                 logging.info("----------Error Json info is----------")
                 logging.info(desc)
@@ -319,7 +419,7 @@ def test_customop(subfolder, profile=False, poly=True):
                 logging.info("------ Skip %s", fi)
                 continue
             print("%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%  fi: %s", fi)
-            flag = get_result(desc, poly, precision_check=False)
+            flag, _ = get_result(desc, poly, precision_check=False)
             if not flag:
                 logging.info("----------Error Json info is----------")
                 logging.info(desc)
@@ -396,7 +496,7 @@ def main(argv):
     # disable pylint too broad Exception
     # pylint: disable=W0703
     try:
-        options, args = getopt.getopt(argv, "atdcf:mh", ["auto", "manual", "ci", "profile", "tune"
+        options, args = getopt.getopt(argv, "atldcf:mh", ["auto", "manual", "ci", "profile", "tune", "lower", "benchmark=",
                                                          "enable_atomic_add=", "dim=", "bind_block=", "bind_thread=",
                                                          "mind-trick-enable=", "mind-trick-file=", "mind-trick-string=",
                                                          "help"])
@@ -419,6 +519,10 @@ def main(argv):
             elif option in ("-t", "--tune"):
                 online_tuning = 1
                 attrs_list["online_tuning"] = 1
+            elif option in ("-l", "--lower"):
+                attrs_list["is_tbe_codegen"] = True
+            elif option in ("-bm", "--benchmark"):
+                attrs_list["benchmark"] = True
             elif option == "--ci":
                 ci_test = True
             elif option == "--profile":
@@ -449,30 +553,81 @@ def main(argv):
         print_usage()
         return
 
-    if single_file:
-        test_single_file(file_name, attrs_list, poly)
-    elif dir_test:
-        if len(args) == 1:
-            all_json_path = list()
-            json_path = args[0]
-            if os.path.exists(json_path) and os.path.isdir(json_path):
-                files = os.listdir(json_path)
-                if len(files) > 0 and os.path.isfile(json_path + files[0]):
-                    all_json_path.append(json_path)
-                else:
-                    # parent dir
-                    for f in files:
-                        all_json_path.append(json_path + f + "/")
-            for p in all_json_path:
-                test_json_dir(poly, use_custom, p, online_tuning)
-        else:
-            test_json_dir(poly, use_custom, online_tuning=online_tuning)
 
-    elif ci_test:
-        poly = False
-        test_ci(use_profiling, poly)
+    if attrs_list.get("benchmark"):
+        frontend_envdict = [
+            {"SYMBOLIC_TILING": "0"},
+            {"SYMBOLIC_TILING": "1"},
+        ]
+        file_names = []
+        if single_file:
+            file_names.append(file_name)
+        elif dir_test:
+            if len(args) == 1:
+                all_json_path = list()
+                json_path = args[0]
+                if os.path.exists(json_path) and os.path.isdir(json_path):
+                    files = os.listdir(json_path)
+                    if len(files) > 0 and os.path.isfile(json_path + files[0]):
+                        all_json_path.append(json_path)
+                    else:
+                        # parent dir
+                        for f in files:
+                            all_json_path.append(json_path + f + "/")
+                for p in all_json_path:
+                    files = os.listdir(p)
+                    for input_file in files:
+                        file_names.append(p + "/" + input_file)
+        for file_name in file_names:
+            for frontend_choice in frontend_envdict:
+                for fk, fv in frontend_choice.items():
+                    os.environ[fk] = fv
+                    logging.info("Frontend Choice: {}={}".format(fk, os.environ[fk]))
+                    if attrs_list.get("is_tbe_codegen"):
+                        attrs_list.pop("is_tbe_codegen")
+                    attrs_copy = copy.deepcopy(attrs_list)
+                    if 1:
+                        p = Process(target=test_single_file,
+                            args=(file_name, attrs_copy, poly, True,1))
+                        p.start()
+                        p.join()
+                    else:
+                        try:
+                            test_single_file(file_name, attrs_copy, True, profiling=True, max_run_times=1)
+                        except ValueError:
+                            raise logging.error("Precision Error")
+                        except Exception as e:
+                            msg = str(e)
+                            logging.error(msg)
     else:
-        print_usage()
+        if single_file:
+            p = Process(target=test_single_file,
+                args=(file_name, attrs_list, poly, True))
+            p.start()
+            p.join()
+
+        elif dir_test:
+            if len(args) == 1:
+                all_json_path = list()
+                json_path = args[0]
+                if os.path.exists(json_path) and os.path.isdir(json_path):
+                    files = os.listdir(json_path)
+                    if len(files) > 0 and os.path.isfile(json_path + files[0]):
+                        all_json_path.append(json_path)
+                    else:
+                        # parent dir
+                        for f in files:
+                            all_json_path.append(json_path + f + "/")
+                for p in all_json_path:
+                    test_json_dir(poly, use_custom, p, online_tuning)
+            else:
+                test_json_dir(poly, use_custom, online_tuning=online_tuning)
+
+        elif ci_test:
+            poly = False
+            test_ci(use_profiling, poly)
+        else:
+            print_usage()
 
 
 if __name__ == "__main__":

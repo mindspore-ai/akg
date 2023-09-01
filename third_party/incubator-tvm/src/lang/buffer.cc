@@ -20,6 +20,11 @@
 /*!
  * \file buffer.cc
  */
+
+/*
+ * 2023.03.25 - Add TVM 0.8 attributes to the node and conversion pass for exporting TVM 0.8 IR.
+ */
+
 #include <tvm/buffer.h>
 #include <tvm/runtime/device_api.h>
 #include <tvm/ir.h>
@@ -456,6 +461,6 @@ TVM_STATIC_IR_FUNCTOR(IRPrinter, vtable)
     p->stream << "buffer(" << op->name << ", " << op << ")";
 });
 
-TVM_REGISTER_NODE_TYPE(BufferNode);
+TVM_REGISTER_NODE_TYPE(BufferNode).set_rename_type_key("tir.Buffer");
 
 }  // namespace air

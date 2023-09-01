@@ -26,6 +26,10 @@
  * 2019.12.30 - Add new Tensor function of compute.
  */
 
+/*
+ * 2023.03.25 - Add TVM 0.8 attributes to the node and conversion pass for exporting TVM 0.8 IR.
+ */
+
 #ifndef TVM_OPERATION_H_
 #define TVM_OPERATION_H_
 
@@ -38,6 +42,7 @@
 #include "schedule.h"
 #include "arithmetic.h"
 #include "buffer.h"
+#include <tvm/visit_attrs_util.h>
 
 namespace air {
 
@@ -66,6 +71,10 @@ class OperationNode : public ir::FunctionBaseNode {
   std::string tag;
   /*! \brief additional attributes of the operation*/
   Map<std::string, NodeRef> attrs;
+
+  /** \brief For TVM 0.8 IR.*/
+  Map<String, NodeRef> attrs_;
+
   /*! \return name of the operation */
   const std::string& func_name() const final {
     return name;
@@ -200,11 +209,21 @@ class PlaceholderOpNode : public OperationNode {
     v->Visit("shape", &shape);
     v->Visit("dtype", &dtype);
   }
+
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    VisitMap(attrs, attrs_);
+    v->Visit("name", &name);
+    v->Visit("tag", &tag);
+    v->Visit("attrs", &attrs_);
+    v->Visit("shape", &shape);
+    v->Visit("dtype", &dtype);
+  }
   static Operation make(std::string name,
                         Array<Expr> shape,
                         Type dtype);
 
   static constexpr const char* _type_key = "PlaceholderOp";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(PlaceholderOpNode, OperationNode);
 };
 
@@ -219,6 +238,11 @@ class TVM_DLL BaseComputeOpNode : public OperationNode {
   Array<IterVar> axis;
   /*! \brief IterVar on each reduction axis, if the body is a Reduce */
   Array<IterVar> reduce_axis;
+
+    /** \brief For TVM 0.8 IR*/
+  Array<Expr> sparse_axis = Array<Expr>();
+  Array<Expr> sort_axis = Array<Expr>();
+
   // override functions
   Array<IterVar> root_iter_vars() const final;
   Array<Expr> output_shape(size_t idx) const final;
@@ -279,6 +303,18 @@ class TVM_DLL ComputeOpNode : public BaseComputeOpNode {
     v->Visit("reduce_axis", &reduce_axis);
     v->Visit("body", &body);
   }
+
+void VisitAttrsForTVM08(AttrVisitor* v) {
+    VisitMap(attrs, attrs_);
+    v->Visit("name", &name);
+    v->Visit("tag", &tag);
+    v->Visit("attrs", &attrs);
+    v->Visit("axis", &axis);
+    v->Visit("reduce_axis", &reduce_axis);
+    v->Visit("body", &body);
+    v->Visit("sparse_axis", &sparse_axis);
+    v->Visit("sort_axis", &sort_axis);
+  }
   static Operation make(std::string name,
                         std::string tag,
                         Map<std::string, NodeRef> attrs,
@@ -286,6 +322,7 @@ class TVM_DLL ComputeOpNode : public BaseComputeOpNode {
                         Array<Expr> body);
 
   static constexpr const char* _type_key = "ComputeOp";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(ComputeOpNode, BaseComputeOpNode);
 };
 
@@ -334,6 +371,23 @@ class TensorComputeOpNode : public BaseComputeOpNode {
     v->Visit("inputs", &inputs);
     v->Visit("input_regions", &input_regions);
     v->Visit("scalar_inputs", &scalar_inputs);
+    v->Visit("sparse_axis", &sparse_axis);
+    v->Visit("sort_axis", &sort_axis);
+  }
+
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    VisitMap(attrs, attrs_);
+    v->Visit("name", &name);
+    v->Visit("tag", &tag);
+    v->Visit("axis", &axis);
+    v->Visit("reduce_axis", &reduce_axis);
+    v->Visit("schedulable_ndim", &schedulable_ndim);
+    v->Visit("intrin", &intrin);
+    v->Visit("inputs", &inputs);
+    v->Visit("input_regions", &input_regions);
+    v->Visit("scalar_inputs", &scalar_inputs);
+    v->Visit("sparse_axis", &sparse_axis);
+    v->Visit("sort_axis", &sort_axis);
   }
   static Operation make(std::string name,
                         std::string tag,
@@ -346,6 +400,7 @@ class TensorComputeOpNode : public BaseComputeOpNode {
                         Array<Expr> scalar_inputs);
 
   static constexpr const char* _type_key = "TensorComputeOp";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(TensorComputeOpNode, BaseComputeOpNode);
 };
 
@@ -417,6 +472,20 @@ class ScanOpNode : public OperationNode {
     v->Visit("inputs", &inputs);
     v->Visit("spatial_axis_", &spatial_axis_);
   }
+
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    VisitMap(attrs, attrs_);
+    v->Visit("name", &name);
+    v->Visit("tag", &tag);
+    v->Visit("attrs", &attrs_);
+    v->Visit("scan_axis", &scan_axis);
+    v->Visit("init", &init);
+    v->Visit("update", &update);
+    v->Visit("state_placeholder", &state_placeholder);
+    v->Visit("inputs", &inputs);
+    v->Visit("spatial_axis_", &spatial_axis_);
+  }
+
   static Operation make(std::string name,
                         std::string tag,
                         Map<std::string, NodeRef> attrs,
@@ -427,6 +496,7 @@ class ScanOpNode : public OperationNode {
                         Array<Tensor> input);
 
   static constexpr const char* _type_key = "ScanOp";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(ScanOpNode, OperationNode);
 };
 
@@ -482,6 +552,18 @@ class ExternOpNode : public OperationNode {
     v->Visit("output_placeholders", &output_placeholders);
     v->Visit("body", &body);
   }
+
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    VisitMap(attrs, attrs_);
+    v->Visit("name", &name);
+    v->Visit("tag", &tag);
+    v->Visit("attrs", &attrs_);
+    v->Visit("inputs", &inputs);
+    v->Visit("input_placeholders", &input_placeholders);
+    v->Visit("output_placeholders", &output_placeholders);
+    v->Visit("body", &body);
+  }
+
   TVM_DLL static Operation make(std::string name,
                                std::string tag,
                                Map<std::string, NodeRef> attrs,
@@ -491,6 +573,7 @@ class ExternOpNode : public OperationNode {
                                Stmt body);
 
   static constexpr const char* _type_key = "ExternOp";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(ExternOpNode, OperationNode);
 };
 
@@ -562,6 +645,22 @@ class HybridOpNode : public OperationNode {
     v->Visit("axis", &axis);
     v->Visit("body", &body);
   }
+
+  void VisitAttrsForTVM08(AttrVisitor* v) {
+    VisitMap(attrs, attrs_);
+    v->Visit("name", &name);
+    v->Visit("tag", &tag);
+    v->Visit("attrs", &attrs_);
+    v->Visit("inputs", &inputs);
+    v->Visit("outputs", &outputs);
+    v->Visit("input_buffers", &input_buffers_);
+    v->Visit("output_buffers", &output_buffers_);
+    v->Visit("input_regions", &input_buffers_);
+    v->Visit("output_regions", &output_buffers_);
+    v->Visit("axis", &axis);
+    v->Visit("body", &body);
+  }
+
   TVM_DLL static Operation make(std::string name,
                                 std::string tag,
                                 Map<std::string, NodeRef> attrs,
@@ -574,6 +673,7 @@ class HybridOpNode : public OperationNode {
                                 Stmt body);
 
   static constexpr const char* _type_key = "HybridOp";
+  static constexpr bool _type_has_method_visit_attrs_for_tvm08 = true;
   TVM_DECLARE_NODE_TYPE_INFO(HybridOpNode, OperationNode);
 };
 

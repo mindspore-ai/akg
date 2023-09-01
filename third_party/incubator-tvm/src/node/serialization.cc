@@ -21,6 +21,11 @@
  * \file node/serialization.cc
  * \brief Utilities to serialize TVM AST/IR objects.
  */
+
+/*
+ * 2023.03.25 - Add TVM 0.8 attributes to the node and conversion pass for exporting TVM 0.8 IR.
+ */
+
 #include <dmlc/json.h>
 #include <dmlc/memory_io.h>
 
@@ -35,7 +40,7 @@
 #include <map>
 
 #include "../common/base64.h"
-
+#include "../pass/tir_mutator.h"
 namespace air {
 
 inline std::string Type2String(const DataType& t) {
@@ -54,7 +59,7 @@ class NodeIndexer : public AttrVisitor {
   std::unordered_map<DLTensor*, size_t> tensor_index_;
   std::vector<DLTensor*> tensor_list_;
   ReflectionVTable* reflection_ = ReflectionVTable::Global();
-
+  NodeIndexer(std::string tvm_version):AttrVisitor(tvm_version){}
   void Visit(const char* key, double* value) final {}
   void Visit(const char* key, int64_t* value) final {}
   void Visit(const char* key, uint64_t* value) final {}
@@ -103,7 +108,9 @@ class NodeIndexer : public AttrVisitor {
         MakeIndex(const_cast<Object*>(kv.second.get()));
       }
     } else {
-      reflection_->VisitAttrs(node, this);
+      if (!reflection_->GetReprBytes(node, nullptr)) {
+        reflection_->VisitAttrs(node, this, tvm_version);
+      }
     }
   }
 };
@@ -123,10 +130,16 @@ struct JSONNode {
   std::vector<std::string> keys;
   /*! \brief values of a map or array. */
   std::vector<size_t> data;
-
+  /*! \brief The str repr representation. */
+  std::string repr_bytes;
   void Save(dmlc::JSONWriter *writer) const {
     writer->BeginObject();
     writer->WriteObjectKeyValue("type_key", type_key);
+    if (repr_bytes.size() != 0) {
+      // choose to use str representation or base64, based on whether
+      // the byte representation is printable.
+      writer->WriteObjectKeyValue("repr_str", repr_bytes);
+    }
     if (global_key.size() != 0) {
       writer->WriteObjectKeyValue("global_key", global_key);
     }
@@ -165,7 +178,7 @@ class JSONAttrGetter : public AttrVisitor {
   const std::unordered_map<DLTensor*, size_t>* tensor_index_;
   JSONNode* node_;
   ReflectionVTable* reflection_ = ReflectionVTable::Global();
-
+  JSONAttrGetter(std::string tvm_version):AttrVisitor(tvm_version){}
   void Visit(const char* key, double* value) final {
     std::stringstream ss;
     ss << *value;
@@ -209,8 +222,13 @@ class JSONAttrGetter : public AttrVisitor {
       node_->type_key.clear();
       return;
     }
-    node_->type_key = node->GetTypeKey();
+
     node_->global_key = reflection_->GetGlobalKey(node);
+    if (!reflection_->GetRenameTypeKeyInSpcialCase(node,&(node_->type_key), tvm_version) && !reflection_->RenameTypeKey(node, &(node_->type_key), tvm_version)) {
+      node_->type_key = node->GetTypeKey();
+    }
+    if (reflection_->GetReprBytes(node, &(node_->repr_bytes))) return;
+
     // No need to recursively visit fields of global singleton
     // They are registered via the environment.
     if (node_->global_key.length() != 0) return;
@@ -242,7 +260,7 @@ class JSONAttrGetter : public AttrVisitor {
       }
     } else {
       // recursively index normal object.
-      reflection_->VisitAttrs(node, this);
+      reflection_->VisitAttrs(node, this, tvm_version);
     }
   }
 };
@@ -256,7 +274,7 @@ class JSONAttrSetter : public AttrVisitor {
   JSONNode* node_;
 
   ReflectionVTable* reflection_ = ReflectionVTable::Global();
-
+  JSONAttrSetter(std::string tvm_version):AttrVisitor(tvm_version){}
   std::string GetValue(const char* key) const {
     auto it = node_->attrs.find(key);
     if (it == node_->attrs.end()) {
@@ -334,7 +352,7 @@ class JSONAttrSetter : public AttrVisitor {
             = ObjectRef(node_list_->at(node_->data[i]));
       }
     } else {
-      reflection_->VisitAttrs(node, this);
+      reflection_->VisitAttrs(node, this, tvm_version);
     }
   }
 };
@@ -349,7 +367,6 @@ struct JSONGraph {
   std::vector<std::string> b64ndarrays;
   // global attributes
   AttrMap attrs;
-
   void Save(dmlc::JSONWriter *writer) const {
     writer->BeginObject();
     writer->WriteObjectKeyValue("root", root);
@@ -371,11 +388,11 @@ struct JSONGraph {
     helper.ReadAllFields(reader);
   }
 
-  static JSONGraph Create(const ObjectRef& root) {
+  static JSONGraph Create(const ObjectRef& root,const std::string& tvm_version) {
     JSONGraph g;
-    NodeIndexer indexer;
+    NodeIndexer indexer(tvm_version);
     indexer.MakeIndex(const_cast<Object*>(root.get()));
-    JSONAttrGetter getter;
+    JSONAttrGetter getter(tvm_version);
     getter.node_index_ = &indexer.node_index_;
     getter.tensor_index_ = &indexer.tensor_index_;
     for (Object* n : indexer.node_list_) {
@@ -399,8 +416,49 @@ struct JSONGraph {
   }
 };
 
-std::string SaveJSON(const ObjectRef& n) {
-  auto jgraph = JSONGraph::Create(n);
+/*! \brief Node structure for json format. */
+struct JSONNodeForNewIR : public JSONNode {
+  void Save(dmlc::JSONWriter* writer) const {
+    writer->BeginObject();
+    writer->WriteObjectKeyValue("type_key", type_key);
+    if (repr_bytes.size() != 0) {
+      // choose to use str representation or base64, based on whether
+      // the byte representation is printable.
+      writer->WriteObjectKeyValue("repr_str", repr_bytes);
+    }
+    if (attrs.size() != 0) {
+      writer->WriteObjectKeyValue("attrs", attrs);
+    }
+    if (keys.size() != 0) {
+      writer->WriteObjectKeyValue("keys", keys);
+    }
+    if (data.size() != 0) {
+      writer->WriteObjectKeyValue("data", data);
+    }
+    writer->EndObject();
+  }
+
+  void Load(dmlc::JSONReader* reader) {
+    attrs.clear();
+    data.clear();
+    repr_bytes.clear();
+    type_key.clear();
+    std::string repr_b64, repr_str;
+    dmlc::JSONObjectReadHelper helper;
+    helper.DeclareOptionalField("type_key", &type_key);
+    helper.DeclareOptionalField("repr_str", &repr_str);
+    helper.DeclareOptionalField("attrs", &attrs);
+    helper.DeclareOptionalField("keys", &keys);
+    helper.DeclareOptionalField("data", &data);
+    helper.ReadAllFields(reader);
+  }
+};
+
+std::string SaveJSON(const ObjectRef& n,const std::string& version) {
+  if(version != tvm06_version){
+    ir::IR_Conversion(n);
+  }
+  auto jgraph = JSONGraph::Create(n,version);
   std::ostringstream os;
   dmlc::JSONWriter writer(&os);
   jgraph.Save(&writer);
@@ -411,7 +469,6 @@ ObjectRef LoadJSON(std::string json_str) {
   std::istringstream is(json_str);
   dmlc::JSONReader reader(&is);
   JSONGraph jgraph;
-  // load in json graph.
   jgraph.Load(&reader);
   std::vector<ObjectPtr<Object> > nodes;
   std::vector<runtime::NDArray> tensors;
@@ -439,7 +496,7 @@ ObjectRef LoadJSON(std::string json_str) {
     }
   }
   CHECK_EQ(nodes.size(), jgraph.nodes.size());
-  JSONAttrSetter setter;
+  JSONAttrSetter setter(tvm06_version);
   setter.node_list_ = &nodes;
   setter.tensor_list_ = &tensors;
 
