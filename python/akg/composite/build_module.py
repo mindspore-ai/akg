@@ -655,10 +655,10 @@ def _build_to_module_ascend(desc_s_in, desc_d_in, attr, use_repo=True):
     }
     process = desc_d_in["process"]
     ascend_type = _get_ascend_type(desc_d_in)
-    ascend_type_to_section = {"Ascend910": "1.6", "Ascend310P3": "1.7",
+    ascend_type_to_section = {"Ascend910A": "1.6", "Ascend310P3": "1.7",
                               "Ascend910B1": "2.1", "Ascend910B2": "2.2", "Ascend910B3": "2.3", "Ascend910B4": "2.4"}
     if ascend_type is not None:
-        section = ascend_type_to_section.get(ascend_type)
+        section = ascend_type_to_section.get(ascend_type, "1.6")
         config_func = akg.tvm.get_global_func("cce.set_product_section")
         config_func(section)
         if section >= "2.1":
