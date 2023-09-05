@@ -240,11 +240,10 @@ def parse_merged_json(desc_d, stitch_tensor_name, input_tensor_name, output_tens
     return extra_subgraph_output, list(final_output_list), final_output_within_graph
 
 
-def process_inplace_assign(op_info, inplace_assign_map, fake_output_list):
-    inplace_assign_map[op_info['output_desc'][0]['tensor_name']] = op_info['input_desc'][0][0]['tensor_name']
-    if op_info['attr'][0]['name'] == 'fake_output' and op_info['attr'][0]['value'] == 1:
-        fake_output_list.append(op_info['output_desc'][0]['tensor_name'])
-    return inplace_assign_map, fake_output_list
+def process_assign(op_info, assign_map, fake_output_list):
+    assign_map[op_info['output_desc'][0]['tensor_name']] = op_info['input_desc'][0][0]['tensor_name']
+    fake_output_list.append(op_info['output_desc'][0]['tensor_name'])
+    return assign_map, fake_output_list
 
 
 def process_each_subgraph(op_info, req_map, input_tensor_name, output_tensor_name, stitch_node_list, sg):
@@ -291,16 +290,16 @@ def process_each_subgraph(op_info, req_map, input_tensor_name, output_tensor_nam
 
 
 def collect_subgraph_info(desc_d, sub_stitch_graphs, req_map, input_tensor_name, output_tensor_name, stitch_node_list):
-    inplace_assign_map = {}
+    assign_map = {}
     fake_output_list = []
     # traversal desc_d by reverse topologically order.
     for i in range(len(desc_d['op_desc']) - 1, -1, -1):
         op_info = desc_d['op_desc'][i]
-        if op_info['name'] == "InplaceAssign":
-            inplace_assign_map, fake_output_list = process_inplace_assign(op_info, inplace_assign_map, fake_output_list)
+        if op_info['name'] == "Assign":
+            assign_map, fake_output_list = process_assign(op_info, assign_map, fake_output_list)
         for sg in sub_stitch_graphs:
             process_each_subgraph(op_info, req_map, input_tensor_name, output_tensor_name, stitch_node_list, sg)
-    return sub_stitch_graphs, inplace_assign_map, fake_output_list
+    return sub_stitch_graphs, assign_map, fake_output_list
 
 
 def sub_graph_info(sub_graph, desc_d):
@@ -391,7 +390,7 @@ def stitch_json_split(desc_d):
     for i, stitch_op in enumerate(stitch_node):
         sub_stitch_graphs.append(Graph(stitch_op))
 
-    sub_stitch_graphs, inplace_assign_map, fake_output_list = \
+    sub_stitch_graphs, assign_map, fake_output_list = \
         collect_subgraph_info(desc_d, sub_stitch_graphs, req_map,
                               input_tensor_name, complement_output, stitchnode_list)
     # reverse op order to generate topological subgraph
@@ -418,7 +417,7 @@ def stitch_json_split(desc_d):
         else:
             clean_info = reuse_map.get(fake_op)
             reuse_map.pop(fake_op)
-        clean_op_map[inplace_assign_map.get(fake_op)] = clean_info
+        clean_op_map[assign_map.get(fake_op)] = clean_info
 
     if not alloc_map:
         alloc_map['EMPTY'] = []
