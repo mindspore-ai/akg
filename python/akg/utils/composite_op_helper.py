@@ -538,7 +538,11 @@ def _update_workspace_data(kernel_name, input_for_mod, output_indexes):
 def gen_json_data(op_desc, with_compute=True, input_for_mod=None):
     """Generating test data for composite json"""
     desc = json.loads(op_desc)
-
+    from akg.ms.info_version_adapt import InfoVersionAdapt
+    info_adapter = InfoVersionAdapt(desc)
+    ret = info_adapter.run()
+    if not ret:
+        raise RuntimeError(info_adapter.msg)
     output_indexes = []
     expect = []
     infos = {"gen_data": False,

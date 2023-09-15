@@ -31,6 +31,38 @@ v1(r1.8):
 import logging
 
 
+def convert_input_to_attr(kernel_info:dict):
+    op_info = {
+        "Reshape": [(1, "shape")],
+        "ReduceMax": [(1, "axis")],
+        "ReduceMin": [(1, "axis")],
+        "ReduceSum": [(1, "axis")],
+        "Transpose": [(1, "perm")],
+        "ExpandDims": [(1, "axis")],
+        "Tile": [(1, "multiples")],
+        "StridedSlice": [(1, "begin"), (2, "end"), (3, "strides")],
+        "OneHot": [(1, "depth")],
+        "Gather": [(1, "axis")],
+        "UnsortedSegmentSum": [(2, "num_segments")],
+        "CumSum": [(1, "axis")]
+    }
+
+    ops = kernel_info["op_desc"]
+    for op in ops:
+        op_name = op["name"]
+        if op_name in op_info:
+            attr = []
+            if op["attr"]:
+                attr = op["attr"]
+            for input_info in op_info[op_name]:
+                input_index = input_info[0]
+                input_name = input_info[1]
+                input_desc_i = op["input_desc"].pop(input_index)
+                input_value = input_desc_i[0]["value"]
+                attr.append({"name": input_name, "dtype": "listInt", "value": input_value})
+            op["attr"] = attr
+
+
 def _adapt_version_0(kernel_info: dict):
     if "compute_capability" in kernel_info:
         # move the "compute_capability" into "target_info" field.
@@ -39,8 +71,21 @@ def _adapt_version_0(kernel_info: dict):
         kernel_info.pop("compute_capability")
 
 
+def _adapt_version_1(kernel_info:dict):
+    pass
+
+
+def _adapt_version_2(kernel_info:dict):
+    if kernel_info.get("version", 0) < 2:
+        return
+    else:
+        convert_input_to_attr(kernel_info)
+
+
 _adapt_func_list = [
     _adapt_version_0,
+    _adapt_version_1,
+    _adapt_version_2,
 ]
 
 
