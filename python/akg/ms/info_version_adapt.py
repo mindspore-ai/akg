@@ -1,4 +1,4 @@
-# Copyright 2022 Huawei Technologies Co., Ltd
+# Copyright 2022-2023 Huawei Technologies Co., Ltd
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -26,6 +26,13 @@ v1(r1.8):
    * on cpu, it contains "arch", "system" and "feature" fields.
    * on gpu, it contains "compute_capability" and "sm_count" fields,
      the "compute_capability" already exists from v0.
+
+v2(r2.2):
+1. For all the ops, the number of inputs in akg info is equal to the number of
+real inputs, which means that no inputs are converted to attributes in the info.
+AKG needs to handle this process by itself from now on.
+2. For those inputs need to be converted to attributes, a key in "input_desc" of
+this op named "value" is guaranteed, which contains the value of this input.
 """
 
 import logging
@@ -40,12 +47,14 @@ def convert_input_to_attr(kernel_info:dict):
         "Transpose": [(1, "perm")],
         "ExpandDims": [(1, "axis")],
         "Tile": [(1, "multiples")],
-        "StridedSlice": [(1, "begin"), (2, "end"), (3, "strides")],
+        "StridedSlice": [(3, "strides"), (2, "end"), (1, "begin")],
         "OneHot": [(1, "depth")],
-        "Gather": [(1, "axis")],
+        "Gather": [(2, "axis")],
         "UnsortedSegmentSum": [(2, "num_segments")],
         "CumSum": [(1, "axis")]
     }
+
+    reduce_op = {"ReduceMax", "ReduceMin", "ReduceSum"}
 
     ops = kernel_info["op_desc"]
     for op in ops:
@@ -57,9 +66,16 @@ def convert_input_to_attr(kernel_info:dict):
             for input_info in op_info[op_name]:
                 input_index = input_info[0]
                 input_name = input_info[1]
+                if input_index >= len(op["input_desc"]):
+                    continue
                 input_desc_i = op["input_desc"].pop(input_index)
                 input_value = input_desc_i[0]["value"]
-                attr.append({"name": input_name, "dtype": "listInt", "value": input_value})
+                input_dtype = "listInt"
+                if op_name in reduce_op and isinstance(input_value, int):
+                    input_value = [input_value]
+                if isinstance(input_value, int):
+                    input_dtype = "int"
+                attr.append({"name": input_name, "dtype": input_dtype, "value": input_value})
             op["attr"] = attr
 
 
