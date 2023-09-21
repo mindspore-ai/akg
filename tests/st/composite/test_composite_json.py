@@ -601,10 +601,7 @@ def main(argv):
                             logging.error(msg)
     else:
         if single_file:
-            p = Process(target=test_single_file,
-                args=(file_name, attrs_list, poly, True))
-            p.start()
-            p.join()
+            test_single_file(file_name, attrs_list, poly, True)
 
         elif dir_test:
             if len(args) == 1:

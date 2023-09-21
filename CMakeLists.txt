@@ -340,6 +340,10 @@ if(USE_RPC)
   list(APPEND RUNTIME_SRCS ${RUNTIME_RPC_SRCS})
 endif(USE_RPC)
 
+message(STATUS "Build with Profiling support...")
+file(GLOB RUNTIME_PROF_SRCS ${TVM_DIR}/src/runtime/profiling/*.cc)
+list(APPEND RUNTIME_SRCS ${RUNTIME_PROF_SRCS})
+
 file(GLOB COMPILER_OFF_SRC ${TVM_DIR}/src/codegen/opt/build_*_off.cc)
 list(APPEND COMPILER_SRCS ${COMPILER_OFF_SRC})
 

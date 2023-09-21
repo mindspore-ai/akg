@@ -206,7 +206,7 @@ class Module(ModuleBase):
             The ProfileResult reports `repeat` time costs in seconds.
         """
         try:
-            feval = _RPCTimeEvaluator(
+            feval = _TimeEvaluator(
                 self, func_name, ctx.device_type, ctx.device_id, number, repeat, min_repeat_ms,
                 cooldown_interval_ms, repeats_to_cooldown, preproc_name)
 

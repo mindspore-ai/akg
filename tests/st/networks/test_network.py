@@ -20,6 +20,17 @@ from tests.st.composite.test_composite_json import test_single_file
 from tests.st.networks.comm_functions import compare_base_line
 
 
+def profile_avaible():
+    try:
+        sp = subprocess.Popen(['nvidia-smi', '-L'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        out_str = sp.communicate()[0].decode('utf-8')
+        if 'V100' in out_str.lower():
+            return True
+        else:
+            return False
+    except Exception as e:
+        return False
+
 @pytest.mark.skip
 def test_network(backend, network, level, split_nums=1, split_idx=0, check_performance=False, custom_attrs=None):
     pwd = os.path.dirname(os.path.abspath(__file__))
@@ -41,7 +52,7 @@ def test_network(backend, network, level, split_nums=1, split_idx=0, check_perfo
     files = get_splitted_cases(all_files, split_nums, split_idx)
     for item in files:
         file_path = os.path.join(files_path, item)
-        if not check_performance:
+        if not check_performance or not profile_avaible():
             poly = True
             attrs = custom_attrs if custom_attrs else None
             test_single_file(file_path, attrs, poly, profiling=False)
@@ -50,7 +61,7 @@ def test_network(backend, network, level, split_nums=1, split_idx=0, check_perfo
             file_result = os.path.join(output, file_name + ".csv")
             if os.path.isfile(file_result):
                 os.remove(file_result)
-            if subprocess.call("nvprof --csv --log-file %s python3 %s -f %s" %
+            if subprocess.call("nvprof --openacc-profiling off --csv --log-file %s python3 %s -f %s" %
                                (file_result, script_file, file_path), shell=True):
                 raise ValueError("Test %s failed" % file_path)
             if not compare_base_line(pwd, file_result, network, level, file_name):
@@ -116,8 +127,22 @@ def test_bert_base_gpu_level0_perf():
 @pytest.mark.level1
 @pytest.mark.platform_x86_gpu_training
 @pytest.mark.env_onecard
-def test_bert_base_gpu_level1():
-    test_network("gpu", "bert_base", "level1", check_performance=True)
+def test_bert_base_gpu_level1_0():
+    test_network("gpu", "bert_base", "level1_0", check_performance=True)
+
+
+@pytest.mark.level1
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
+def test_bert_base_gpu_level1_1():
+    test_network("gpu", "bert_base", "level1_1", check_performance=True)
+
+
+@pytest.mark.level1
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
+def test_bert_base_gpu_level1_2():
+    test_network("gpu", "bert_base", "level1_2", check_performance=True)
 
 
 @pytest.mark.level0
