@@ -50,3 +50,9 @@ def test_feature(dir, level, split_nums=1, split_idx=0):
 @pytest.mark.env_onecard
 def test_elemany_gpu_level0():
     test_feature("elemany", "level0")
+
+@pytest.mark.level0
+@pytest.mark.platform_x86_gpu_training
+@pytest.mark.env_onecard
+def test_input_to_attr_ops_gpu_level0():
+    test_feature("input_to_attr_ops", "level0")

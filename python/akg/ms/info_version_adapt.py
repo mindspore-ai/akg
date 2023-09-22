@@ -51,10 +51,13 @@ def convert_input_to_attr(kernel_info:dict):
         "OneHot": [(1, "depth")],
         "Gather": [(2, "axis")],
         "UnsortedSegmentSum": [(2, "num_segments")],
-        "CumSum": [(1, "axis")]
+        "CumSum": [(1, "axis")],
     }
 
-    reduce_op = {"ReduceMax", "ReduceMin", "ReduceSum"}
+    int_input_required_ops = {
+        "OneHot",
+        "UnsortedSegmentSum",
+    }
 
     ops = kernel_info["op_desc"]
     for op in ops:
@@ -71,11 +74,13 @@ def convert_input_to_attr(kernel_info:dict):
                 input_desc_i = op["input_desc"].pop(input_index)
                 input_value = input_desc_i[0]["value"]
                 input_dtype = "listInt"
-                if op_name in reduce_op and isinstance(input_value, int):
+                if op_name not in int_input_required_ops and isinstance(input_value, int):
                     input_value = [input_value]
                 if isinstance(input_value, int):
                     input_dtype = "int"
-                attr.append({"name": input_name, "dtype": input_dtype, "value": input_value})
+                attr.append(
+                    {"name": input_name, "dtype": input_dtype, "value": input_value}
+                )
             op["attr"] = attr
 
 
