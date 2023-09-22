@@ -273,7 +273,6 @@ class NDArray::Container {
   friend class TVMPODValue_;
   friend class TVMArgValue;
   friend class TVMRetValue;
-  friend class RPCWrappedFunc;
   /*!
    * \brief Type flag used to indicate subclass.
    *  Default value 0 means normal NDArray::Conatainer.

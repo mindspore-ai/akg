@@ -334,12 +334,6 @@ if(USE_OPENMP)
   include(${TVM_DIR}/cmake/modules/OpenMP.cmake)
 endif()
 
-if(USE_RPC)
-  message(STATUS "Build with RPC support...")
-  file(GLOB RUNTIME_RPC_SRCS ${TVM_DIR}/src/runtime/rpc/*.cc)
-  list(APPEND RUNTIME_SRCS ${RUNTIME_RPC_SRCS})
-endif(USE_RPC)
-
 message(STATUS "Build with Profiling support...")
 file(GLOB RUNTIME_PROF_SRCS ${TVM_DIR}/src/runtime/profiling/*.cc)
 list(APPEND RUNTIME_SRCS ${RUNTIME_PROF_SRCS})

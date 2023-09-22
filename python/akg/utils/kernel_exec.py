@@ -35,8 +35,6 @@ import numpy as np
 
 import akg
 import akg.tvm
-from akg.tvm import autotvm
-from akg.tvm import rpc
 from akg.tvm import _api_internal
 from akg.build_module import help_tiling_level
 from akg.utils import result_analysis as ra_util
@@ -53,8 +51,6 @@ sh = logging.StreamHandler(sys.stdout)
 logging.getLogger().addHandler(sh)
 logging.getLogger().setLevel(logging.INFO)
 
-rpc_machine = {}
-rpc_lb = {}
 
 PERFORMANCE_TEST_FILE = "PERFORMANCE_TEST_FILE"
 BINDS = "binds"
@@ -171,211 +167,6 @@ def gen_name_kernel(kernel, dtype, shapes):
         res = "%s%s'_'" % (res, s)
     res = "%s_%s%s" % (kernel, res, dtype)
     return res
-
-
-def load_rpc_server_info(mode):
-    """
-    load rpc server host and port info.
-
-    Args:
-        mode (str): string of runtime choose, can set ca aic and rpc.
-    """
-    env_dic = os.environ
-    if env_dic.get('RPC_HOST') and env_dic.get('RPC_PORT'):
-        return
-
-    if mode == 'rpc_cloud':
-        logging.error("runtime_mode=rpc_cloud must set 1980 host ip and port!")
-        raise Exception("ERROR:runtime_mode=rpc_cloud must set 1980 host ip and port!")
-
-    rpc_server_info_config = env_dic.get('RPC_SERVER_INFO_FILE')
-    if not rpc_server_info_config:
-        logging.error("runtime_mode=rpc must set RPC_SERVER_INFO_FILE for rpc server info config")
-        raise Exception("ERROR:runtime_mode=rpc must set RPC_SERVER_INFO_FILE for rpc server info config")
-
-    # load rpc server host and port info from local file.
-    import json
-    with open(rpc_server_info_config, 'r') as f:
-        info = json.load(f)
-
-    for i in info:
-        rpc_machine[i] = info[i]
-        rpc_lb[i] = 0.0
-    return
-
-
-def dispatch(rank=0):
-    """Function for lock waiting dispatch handle version 1."""
-
-    def _sort_by_value(d):
-        items = list(d.items())
-        random.shuffle(items)
-        items.sort(key=lambda x: x[1])
-        return list(item[0] for item in items)
-
-    for k, v in rpc_lb.items():
-        logging.info("######rpc_lb[%s]=%f", rpc_machine.get(k)[0], v)
-    lb_list = _sort_by_value(rpc_lb)
-    if len(lb_list) > rank:
-        return lb_list[rank]
-    return lb_list[len(lb_list) - 1]
-
-
-def commit(remote, weight):
-    rpc_lb[remote] = weight
-
-
-@func_time_required
-def mod_launch_rpc_worker(mod, args, outputs, host, port, tuning=False):
-    """internal RPC worker, should be called by mod_launch_rpc_thread."""
-    logging.info("%s:====start connect to rpc ip: %s, rpc port: %d ",
-                 datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), host, port)
-    remote = rpc.connect(host, port, session_timeout=300)
-    logging.info("%s:====connect to rpc ip: %s, rpc port: %d finished ",
-                 datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), host, port)
-    uuid_str = uuid.uuid4().hex
-    temp_file_name = "stackvm_%s.o" % uuid_str
-    mod.save(temp_file_name)
-    remote.upload(temp_file_name)
-    remote_mod = remote.load_module(temp_file_name)
-    ctx = remote.cce()
-    arg_list = []
-    for a in args:
-        arg_list.append(akg.tvm.nd.array(a, ctx))
-    start_time = timer()
-    remote_mod(*arg_list)
-    ctx.sync()
-    if os.path.exists(temp_file_name):
-        os.remove(temp_file_name)
-    out_list = []
-    for i in outputs:
-        out = arg_list[len(arg_list) + i if i < 0 else i].asnumpy()
-        out_list.append(out)
-    # this time measure is no accurate now, to be improved soon
-    t = timer() - start_time
-    if not tuning:
-        return out_list[0] if len(out_list) == 1 else tuple(out_list)
-    stat_info = {"run_time": t}
-    return out_list[0] if len(out_list) == 1 else tuple(out_list), stat_info
-
-
-def mod_launch_rpc_thread(mode, mod, args, outputs, results, need_retry, retry, tuning=False):
-    """internal RPC thread, should be called by mod_launch_rpc_multithread."""
-    remoteevb = '0'
-    host = None
-    port = None
-    env_dic = os.environ
-    if env_dic.get('RPC_HOST') and env_dic.get('RPC_PORT'):
-        host = env_dic.get('RPC_HOST')
-        port = int(env_dic.get('RPC_PORT'))
-    else:
-        if mode == 'rpc_cloud':
-            logging.error("runtime_mode=rpc_cloud must set 1980 host ip and port!")
-            raise Exception("ERROR:runtime_mode=rpc_cloud must set 1980 host ip and port!")
-        remoteevb = dispatch(retry)
-        host = rpc_machine.get(remoteevb)[0]
-        port = rpc_machine.get(remoteevb)[1]
-
-    start_time = timer()
-    end_time = 0.0
-    logging.debug("rpc ip: %s, rpc port: %d", host, port)
-    try:
-        out_list = mod_launch_rpc_worker(mod, args, outputs, host, port, tuning=tuning)
-        end_time = timer()
-        t = end_time - start_time
-        if not env_dic.get('RPC_HOST'):
-            commit(remoteevb, 20 if t > 20 else t)
-        logging.info("===this round host is %s time is %f", host, (end_time - start_time))
-        results[retry] = out_list
-    except RuntimeError:
-        need_retry[retry] = True
-        end_time = timer()
-        logging.error("===Failed! this round host is %s time is %f", host, (end_time - start_time))
-        if not env_dic.get('RPC_HOST'):
-            commit(remoteevb, end_time - start_time + 20 * (retry + 1))
-        logging.error("rpc retry error: %d %s", retry, sys.exc_info())
-
-
-def _get_rpc_result(poll_count, threads, thread_index, poll_interval, need_retry, results, retried):
-    """Get rpc run result."""
-    while poll_count > 0:
-        poll_count -= 1
-        # wait for the newly created thread, because it is most likely to complete first
-        threads[thread_index].join(poll_interval)
-        for poll_index in range(thread_index + 1):
-            if not threads[poll_index].is_alive() and not need_retry[poll_index]:
-                return True, results[poll_index]
-            if need_retry[poll_index] and not retried[poll_index]:
-                logging.error("Thread %d exit with error, spawn a new thread immediately", poll_index)
-                poll_count = 0
-                retried[poll_index] = True
-    return False, False
-
-
-def mod_launch_rpc(mode, mod, args, outputs, tuning=False):
-    """
-    launch rpc or rpc_cloud module with retry.
-
-    Note:
-        To minimize waiting time of struggler RPC servers, we wait for a short timeout and spawn
-        a new thread after the timeout.
-        In normal case, RPC would complete before the short timeout, so, only one thread will be created.
-        When the RPC server is slow, we create multiple threads that run concurrently.
-        We wait for the first thread that successfully completes its work and return the result.
-        If a thread fails (an exception is raised), we spawn a new thread to retry.
-        Newly spawned threads will use different RPC servers.
-        We bound the maximum number of threads, i.e. maximum number of retries.
-    """
-    max_num_threads = 5
-
-    import operator
-    arg_filter = filter(lambda x: isinstance(x, np.ndarray), args)
-    arg_tensor = list(arg_filter)
-    tensor_size = reduce(operator.add, (reduce(operator.mul, arg.shape) for arg in arg_tensor))
-    expected_upload_speed = 5e6
-    expected_upload_time = int(tensor_size / expected_upload_speed)
-
-    timeout_before_spawning_new_thread = 200 + expected_upload_time
-    poll_interval = 1
-    thread_timeout = 400 + expected_upload_time * 3
-
-    load_rpc_server_info(mode)
-
-    threads = [None] * max_num_threads
-    results = [None] * max_num_threads
-    need_retry = [None] * max_num_threads
-    retried = [False] * max_num_threads
-    for thread_index in range(max_num_threads):
-        if thread_index > 0:
-            logging.error("Thread %d run for %d seconds, spawn a new thread to retry",
-                          (thread_index - 1), timeout_before_spawning_new_thread)
-        threads[thread_index] = Thread(target=mod_launch_rpc_thread,
-                                       args=(mode, mod, args, outputs, results, need_retry, thread_index, tuning))
-        # daemonize the thread to prevent long running threads from hanging the whole process
-        threads[thread_index].daemon = True
-        threads[thread_index].start()
-        poll_count = timeout_before_spawning_new_thread // poll_interval
-        has_res, res = _get_rpc_result(poll_count, threads, thread_index, poll_interval, need_retry, results, retried)
-        if has_res:
-            return res
-
-    logging.error("All %d threads are created, poll the threads until the first one exits normally, \
-                  or all threads exit abnormally or timeout", max_num_threads)
-    poll_count = thread_timeout // poll_interval
-    for _ in range(poll_count):
-        threads[max_num_threads - 1].join(poll_interval)
-        exit_thread_count = 0
-        for poll_index in range(max_num_threads):
-            if not threads[poll_index].is_alive() and not need_retry[poll_index]:
-                return results[poll_index]
-            if not threads[poll_index].is_alive():
-                exit_thread_count += 1
-            if exit_thread_count == max_num_threads:
-                logging.error("All %d threads exit abnormally", max_num_threads)
-                return None
-
-    logging.error("All %d threads timeout", max_num_threads)
-    return None
 
 
 def profiling_mode_run(kernel_name, args, outputs, tuning, device_id):
@@ -647,8 +438,6 @@ def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=-1, expect=None
             return output
         ra_util.get_ticks(stat_info)
         return output, stat_info
-    if mode in ('rpc', 'rpc_cloud'):
-        return mod_launch_rpc(mode, mod, args, outputs, tuning)
 
     # The air_cloud is the current default mode and needs to be modified in the future
     if mode == 'air_cloud':
@@ -670,7 +459,7 @@ def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=-1, expect=None
         mod(*tvm_array)
         return tvm_array[-1].asnumpy()
 
-    raise ValueError("mode must be aic, rpc, aic_cloud, ca, compile_cloud, compile_mini, cpu, csim, ccesim or cdiff")
+    raise ValueError("mode must be aic, aic_cloud, ca, compile_cloud, compile_mini, cpu, csim, ccesim or cdiff")
 
 
 def _extract_shape_dtype(input_shapes, input_types):
@@ -1016,44 +805,6 @@ def _create_gpu_mod(s, op_var, target, shape_var, kernel_name, attrs, polyhedral
     return mod
 
 
-def _create_gpu_tuning_mod(sch_tmpl, shape_var, kernel_name, attrs, binds):
-    """Create tuning module on gpu."""
-    @autotvm.template
-    def _autotune_template():
-        s = sch_tmpl['schedule'](sch_tmpl['output'])
-        return s, op_var
-
-    # create autotune task
-    task = autotvm.task.create(_autotune_template, args=list(), target='cuda')
-    print("task config: ", task.config_space)
-
-    # set measure_option
-    measure_option = autotvm.measure_option(
-        builder=autotvm.LocalBuilder(),
-        runner=autotvm.LocalRunner(repeat=5, min_repeat_ms=150, timeout=4)
-    )
-
-    # Begin tuning, log records to file `kernel_name.log`
-    tuner = autotvm.tuner.RandomTuner(task)
-    if not os.path.exists(kernel_name + '.log'):
-        tuner.tune(n_trial=len(task.config_space),
-                   measure_option=measure_option,
-                   callbacks=[autotvm.callback.log_to_file(kernel_name + '.log')])
-
-    # query best config
-    dispatch_context = autotvm.apply_history_best(kernel_name + '.log')
-    best_config = dispatch_context.query(task.target, task.workload)
-    print("\nBest config is:")
-    print(best_config)
-
-    # apply best config
-    with autotvm.apply_history_best(kernel_name + '.log'):
-        s, op_var = _autotune_template()
-        mod = akg.build(s, op_var, "cuda", shape_var, name=kernel_name, attrs=attrs,
-                        polyhedral=False, binds=binds)
-    return mod
-
-
 def create_gpu_mod(sch_tmpl, s, op_func, op_var, shape_var, kernel_name, attrs, polyhedral, binds, dump_ir, dump_code,
                    tuning):
     """
@@ -1091,7 +842,7 @@ def create_gpu_mod(sch_tmpl, s, op_func, op_var, shape_var, kernel_name, attrs, 
                 s = sch_tmpl['schedule'](sch_tmpl['output'])
                 mod = _create_gpu_mod(s, op_var, "cuda", shape_var, kernel_name, attrs, False, binds, dump_ir)
             else:
-                mod = _create_gpu_tuning_mod(sch_tmpl, shape_var, kernel_name, attrs, binds)
+                raise ValueError("Tuning is not supported.")
     else:
         mod = _create_gpu_mod(s, op_var, target, shape_var, kernel_name, attrs, polyhedral, binds, dump_ir)
     if dump_code:
@@ -1295,7 +1046,7 @@ def get_runtime_mode():
     """get runtime mode."""
     env_dic = os.environ
     if not env_dic.get('RUNTIME_MODE'):
-        mode = 'rpc_cloud'
+        mode = 'aic_cloud'
     else:
         mode = env_dic.get('RUNTIME_MODE')
     return mode
@@ -1312,7 +1063,7 @@ def get_profiling_mode():
 def product_is_mini():
     """check whether in mini environment."""
     mode = get_runtime_mode()
-    if mode in ('rpc', 'air', 'aic', 'compile_mini'):
+    if mode in ('air', 'aic', 'compile_mini'):
         return True
     return False
 

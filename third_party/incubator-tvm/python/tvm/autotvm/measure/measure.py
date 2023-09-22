@@ -46,7 +46,7 @@ class MeasureResult(namedtuple("MeasureResult", ["costs", "error_no", "all_cost"
     error_no: int
         Denote error type, defined by MeasureErrorNo
     all_cost: float
-        All cost of this measure, including rpc, compilation, test runs
+        All cost of this measure, including compilation, test runs
     timestamp: float
         The absolute time stamp when we finish measurement.
     """
@@ -190,15 +190,6 @@ def measure_option(builder, runner):
     >>>         number=10,
     >>>         timeout=5)
     >>> )
-
-    # example setting for using remote devices
-    >>> measure_option = autotvm.measure_option(
-    >>>    builder=autotvm.LocalBuilder(),  # use all local cpu cores for compilation
-    >>>    runner=autotvm.RPCRunner(
-    >>>        'rasp3b', 'locahost', 9190, # device key, host and port of the rpc tracker
-    >>>        number=4,
-    >>>        timeout=4) # timeout of a run on the device. RPC request waiting time is excluded.
-    >>>)
 
     Note
     ----

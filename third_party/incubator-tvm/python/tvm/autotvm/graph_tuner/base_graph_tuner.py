@@ -441,11 +441,7 @@ class BaseGraphTuner(object):
         builder = autotvm.LocalBuilder(n_parallel=n_parallel, build_func=build_func)
         runner = autotvm.LocalRunner(number=min_exec_num, repeat=1, timeout=timeout)
         if use_rpc:
-            if device_key is None:
-                raise RuntimeError("device_key need to be set to use rpc tracker mode.")
-            runner = autotvm.measure.RPCRunner(device_key, host, port, n_parallel=n_parallel,
-                                               number=min_exec_num, repeat=1,
-                                               timeout=timeout)
+            raise RuntimeError("rpc is not supported.")
         measure_option = autotvm.measure_option(builder=builder, runner=runner)
         for args in args_list:
             data, in_layout, out_layout = args

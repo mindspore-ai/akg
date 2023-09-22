@@ -84,15 +84,15 @@ do
     case "${opt}" in
         e)
             if [[ "${OPTARG}" == "gpu" ]]; then
-                CMAKE_ARGS="${CMAKE_ARGS} -DUSE_CUDA=ON -DUSE_LLVM=ON -DUSE_RPC=ON"
+                CMAKE_ARGS="${CMAKE_ARGS} -DUSE_CUDA=ON -DUSE_LLVM=ON"
             elif [[ "${OPTARG}" == "ascend" ]]; then
                 CMAKE_ARGS="${CMAKE_ARGS} -DENABLE_D=ON -DUSE_LLVM=ON"
             elif [[ "${OPTARG}" == "cpu" ]]; then
                 # AKG requires LLVM on CPU, the optimal version is 12.xx.xx.
                 # if not found in the environment, it will find another existing version to use.
-                CMAKE_ARGS="${CMAKE_ARGS} -DUSE_LLVM=ON -DUSE_RPC=ON"
+                CMAKE_ARGS="${CMAKE_ARGS} -DUSE_LLVM=ON"
             elif [[ "${OPTARG}" == "all" ]]; then
-                CMAKE_ARGS="${CMAKE_ARGS} -DUSE_CUDA=ON -DENABLE_D=ON -DUSE_LLVM=ON -DUSE_RPC=ON"
+                CMAKE_ARGS="${CMAKE_ARGS} -DUSE_CUDA=ON -DENABLE_D=ON -DUSE_LLVM=ON"
             else
                 echo "Unknown parameter ${OPTARG}!"
                 usage

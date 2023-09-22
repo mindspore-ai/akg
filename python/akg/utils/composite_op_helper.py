@@ -95,7 +95,7 @@ def compare_tensor(acu_output, exp_output, rtol=1.e-5, atol=1.e-8, equal_nan=Fal
 
 def get_rtol_atol(op_name, dtype, rtol=5e-03, atol=5e-03):
     run_mode = os.environ.get('RUNTIME_MODE')
-    if run_mode in ("rpc_cloud", "air_cloud"):
+    if run_mode in ("air_cloud",):
         if dtype == "float16":
             rtol = atol = 1e-03
         else:
