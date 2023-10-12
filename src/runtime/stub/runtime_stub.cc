@@ -1,5 +1,5 @@
 /**
- * Copyright 2019 Huawei Technologies Co., Ltd
+ * Copyright 2019-2023 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +19,6 @@
 
 #include <iostream>
 
-#include "prof_mgr_core.h"
 #define EVENT_LENTH 10
 
 #define FUNC_ENTRY LOG(INFO) << "Run in func " << __FUNCTION__;
@@ -41,7 +40,7 @@ rtError_t rtEventCreate(rtEvent_t *event) {
   return RT_ERROR_NONE;
 }
 
-rtError_t rtMalloc(void **devPtr, uint64_t size, rtMemType_t type) {
+rtError_t rtMalloc(void **devPtr, uint64_t size, rtMemType_t type, const uint16_t moduleId) {
   FUNC_ENTRY
   CHECK_GT(size, 0);
   *devPtr = new (std::nothrow) uint8_t[size];

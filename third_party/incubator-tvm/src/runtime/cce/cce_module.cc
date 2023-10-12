@@ -36,7 +36,6 @@
 
 #include <mutex>
 
-#include "prof_mgr_core.h"
 #include "runtime/cce/cce_common.h"
 #include "codegen/util.h"
 #include <climits>

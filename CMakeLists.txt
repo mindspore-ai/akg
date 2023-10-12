@@ -124,8 +124,9 @@ include_directories(AFTER "${TVM_DIR}/3rdparty/compiler-rt")
 include_directories(AFTER "${TVM_DIR}/3rdparty/rang/include")
 include_directories(AFTER "${TVM_DIR}/3rdparty/picojson")
 # cce rt
-include_directories(AFTER "${AKG_SOURCE_DIR}/third_party/fwkacllib/inc")
-include_directories(AFTER "${AKG_SOURCE_DIR}/third_party/fwkacllib/inc/toolchain")
+include_directories(AFTER "${AKG_SOURCE_DIR}/third_party/fwkacllib/910/inc")
+include_directories(AFTER "${AKG_SOURCE_DIR}/third_party/fwkacllib/910/inc/toolchain")
+
 
 # initial variables
 set(TVM_LINKER_LIBS )

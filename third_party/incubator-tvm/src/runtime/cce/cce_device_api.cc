@@ -33,7 +33,6 @@
 #include <runtime/rt.h>
 #include <tvm/runtime/registry.h>
 #include "runtime/cce/cce_common.h"
-#include "prof_mgr_core.h"
 
 namespace air {
 namespace runtime {
@@ -82,7 +81,7 @@ class CceDeviceAPI final : public DeviceAPI {
 
     // alignment check here
     CCE_CALL(rtSetDevice(ctx.device_id));
-    CCE_CALL(rtMalloc(&ptr, size + 32, RT_MEMORY_HBM));
+    CCE_CALL(rtMalloc(&ptr, size + 32, RT_MEMORY_HBM, 0));
 
     return ptr;
   }
