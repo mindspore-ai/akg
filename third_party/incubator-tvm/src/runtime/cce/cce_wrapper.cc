@@ -197,10 +197,10 @@ rtError_t rtStreamWaitEvent(rtStream_t stream, rtEvent_t event) {
   return func(stream, event);
 }
 
-rtError_t rtMalloc(void **dev_ptr, uint64_t size, rtMemType_t type) {
+rtError_t rtMalloc(void **dev_ptr, uint64_t size, rtMemType_t type, uint16_t moduleId) {
   auto func = air::runtime::CceWrapper::GetInstance()->rtMalloc;
   CHECK_NOTNULL(func);
-  return func(dev_ptr, size, type);
+  return func(dev_ptr, size, type, moduleId);
 }
 
 rtError_t rtFree(void *dev_ptr) {

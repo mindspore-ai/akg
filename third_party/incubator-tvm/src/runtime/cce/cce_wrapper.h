@@ -67,7 +67,7 @@ class CceWrapper : public SymbolsWrapper {
   using rtStreamDestroyFunc = rtError_t (*)(rtStream_t);
   using rtStreamSynchronizeFunc = rtError_t (*)(rtStream_t);
   using rtStreamWaitEventFunc = rtError_t (*)(rtStream_t, rtEvent_t);
-  using rtMallocFunc = rtError_t (*)(void **, uint64_t, rtMemType_t);
+  using rtMallocFunc = rtError_t (*)(void **, uint64_t, rtMemType_t, uint16_t);
   using rtFreeFunc = rtError_t (*)(void *);
   using rtMemcpyFunc = rtError_t (*)(void *, uint64_t, const void *, uint64_t, rtMemcpyKind_t);
   using rtMemcpyAsyncFunc = rtError_t (*)(void *, uint64_t, const void *, uint64_t, rtMemcpyKind_t, rtStream_t);

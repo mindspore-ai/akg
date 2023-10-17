@@ -57,7 +57,7 @@ void AscendMemoryManager::MallocDeviceMemory() {
   rtError_t ret;
   auto max_retry = 3;
   for (auto i = 0; i < max_retry; ++i) {
-    ret = rtMalloc(reinterpret_cast<void **>(&device_mem_base_), device_mem_size_, RT_MEMORY_HBM);
+    ret = rtMalloc(reinterpret_cast<void **>(&device_mem_base_), device_mem_size_, RT_MEMORY_HBM, 0);
     if (ret == ACL_ERROR_RT_MEMORY_ALLOCATION) {
       LOG(WARNING) << "Device may be occupied, sleep 1s and retry again!";
       device_mem_base_ = nullptr;
