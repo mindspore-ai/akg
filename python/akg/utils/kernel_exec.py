@@ -43,10 +43,12 @@ from akg.utils import custom_tiling as ct_util
 from akg.utils import validation_check as vc_util
 from akg.utils.dsl_create import TensorUtils
 from akg.utils.util import parse_kwargs
-from akg.backend.parsing_profiling_data import HWTSLogParser
+from akg.backend.parsing_profiling_data import HWTSLogParser, max_time_consume
 from akg.backend.parsing_profiling_data import validate_and_normalize_path
 from akg.backend import aic_model
-
+from .ascend_profilier.cann_file_parser import CANNFileParser
+from .ascend_profilier.op_summary_parser import OpSummaryParser
+from .ascend_profilier.op_summary_headers import OpSummaryHeaders
 sh = logging.StreamHandler(sys.stdout)
 logging.getLogger().addHandler(sh)
 logging.getLogger().setLevel(logging.INFO)
@@ -169,7 +171,7 @@ def gen_name_kernel(kernel, dtype, shapes):
     return res
 
 
-def profiling_mode_run(kernel_name, args, outputs, tuning, device_id):
+def profiling_mode_run(kernel_name, args, outputs, tuning, device_id, arch=None):
     """
     Function for collecting cycle data from device.
 
@@ -180,21 +182,45 @@ def profiling_mode_run(kernel_name, args, outputs, tuning, device_id):
         tuning: tuning model.
         device_id: device_id on device.
     """
-    akg.tvm.get_global_func("ascend_start_profiling")(device_id)
+    akg.tvm.get_global_func("ascend_start_profiling")(kernel_name)
     time_before_launch = time.time()
     output_data = ascend_run(kernel_name, args, outputs, device_id)
     akg.tvm.get_global_func("ascend_stop_profiling")()
-
-    cycle = profiling_analyse(device_id, time_before_launch)
-    logging.info('=====parsing cycles==============================')
+    cycle = 0
+    if arch is not None and "910B" in arch:
+        # for ascend910B profiling
+        cycle = profiling_analyse_910B(time_before_launch)
+    else:
+        cycle = profiling_analyse(device_id, time_before_launch)
+    logging.info('=====Task Duration(us)==============================')
     if cycle != PROF_ERROR_CODE:
         logging.info(cycle)
     else:
-        logging.error("OOPS, can't correctly parsing cycles!")
+        logging.error("OOPS, can't correctly Task Duration!")
     TestUtils.record_cycle(cycle)
-    logging.info('=====parsing cycles==============================')
+    logging.info('=====Task Duration(us)==============================')
     return output_data, {'run_time': cycle}
 
+def  profiling_analyse_910B(time_before_launch):
+    public_path = os.getenv('PROFILING_DIR')
+    if public_path is None:
+        raise RuntimeError("Environment PROFILING_DIR not set!")
+    public_path = validate_and_normalize_path(public_path)
+    CANNFileParser(public_path).export_cann_profiling()
+    cann_file_parser = OpSummaryParser(public_path)
+    profiler_file = cann_file_parser._profiler_path
+    logging.debug("prof file is: %s", os.path.basename(profiler_file))
+    file_create_time = os.path.getctime(profiler_file)
+    if file_create_time < time_before_launch:
+        raise RuntimeError("The PROF file is too old")
+    datas:dict = cann_file_parser.generate_op_summary_data()
+    task_duration = float(datas.get(OpSummaryHeaders.TASK_DURATION,max_time_consume))
+    # # aic_total_cycles means ai core cycle
+    # # aiv_total_cycles means ai vector cycle
+    # aiv_total_cycle = int(datas.get(OpSummaryHeaders.AIV_TOTAL_CYCLES,max_time_consume))
+    # aic_total_cycle = int(datas.get(OpSummaryHeaders.AIC_TOTAL_CYCLES,max_time_consume))
+    # return aiv_total_cycle+aic_total_cycle
+    return task_duration
 
 def profiling_analyse(device_id, time_before_launch):
     """analyse profiling."""
@@ -348,12 +374,12 @@ def get_kernel_name_from_mod(mod):
     return kernel_name
 
 
-def mod_launch_ascend_profiling(mod, args, outputs=(-1,), tuning=False, device_id=-1):
+def mod_launch_ascend_profiling(mod, args, outputs=(-1,), tuning=False, device_id=-1, arch=None):
     gc.collect()
     if device_id == -1:
         device_id = int(os.environ.get("DEVICE_ID", 0))
     kernel_name = get_kernel_name_from_mod(mod)
-    return profiling_mode_run(kernel_name, args, outputs, tuning, device_id)
+    return profiling_mode_run(kernel_name, args, outputs, tuning, device_id, arch=arch)
 
 
 def mod_launch_default(mod, args, outputs=(-1,), target=CUDA, tuning=False, device_id=-1, repeat_time=400):
@@ -387,7 +413,7 @@ def mod_launch_default(mod, args, outputs=(-1,), target=CUDA, tuning=False, devi
 
 
 @func_time_required
-def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=-1, expect=None, repeat_time=400):
+def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=-1, expect=None, repeat_time=400, arch=None):
     """
     unified run CCE kernel api.
 
@@ -398,7 +424,7 @@ def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=-1, expect=None
         tuning (bool): tuning model.
         device_id: device_id on device.
         expect: when mode in ["compile_cloud", "compile_mini"], return it.
-
+        arch: Ascend arch type
     Returns:
         output numpy array, or tuple of numpy array if multi-output.
     """
@@ -414,7 +440,7 @@ def mod_launch(mod, args, outputs=(-1,), tuning=False, device_id=-1, expect=None
         run_args = [kernel_name, args, outputs, device_id]
         if os.environ.get("PROFILING_MODE") == "true":
             run_func = profiling_mode_run
-            run_args = [kernel_name, args, outputs, tuning, device_id]
+            run_args = [kernel_name, args, outputs, tuning, device_id, arch]
             if os.environ.get("PROFILING_DIR", None) is None:
                 os.environ["PROFILING_DIR"] = "."
                 logging.info("[RUNTIME_WARNING] In profiling mode, while profiling dir is not set!Set to current dir by default.")

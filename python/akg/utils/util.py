@@ -63,3 +63,11 @@ def write_code(js_dict, fname):
     with os.fdopen(os.open(fname, os.O_WRONLY | os.O_CREAT, 0o400), 'w') as f:
         json.dump(js_dict, f, sort_keys=True, indent=4, separators=(',', ':'))
 
+def get_ascend_type(desc):
+    if "target_info" not in desc.keys():
+        return None
+
+    target_info_type = desc["target_info"]
+    if target_info_type.get("arch"):
+        return target_info_type.get("arch")
+    return None

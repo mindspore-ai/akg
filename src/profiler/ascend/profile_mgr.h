@@ -20,11 +20,27 @@
 #include <string>
 #include "toolchain/prof_callback.h"
 #include "toolchain/prof_acl_api.h"
+#include "toolchain/prof_api.h"
 #include "toolchain/slog.h"
 #include "runtime/base.h"
+#include <vector>
 
 namespace air {
 namespace runtime {
+
+constexpr uint32_t kTensorInfoBytes = 44UL;
+constexpr uint32_t kTensorInfoBytesWithCap = 56U;
+
+struct TensorInfoWrapper {
+  MsprofAdditionalInfo tensor_info;
+  uint64_t tensor_num;
+};
+
+struct ProfNodeAdditionInfo {
+  MsprofCompactInfo node_basic_info;
+  MsprofApi api;
+};
+
 enum ProfCommandHandleType {
   kProfCommandhandleInit = 0,
   kProfCommandhandleStart,
@@ -53,7 +69,7 @@ class ProfileMgr {
 
   void SetDeviceId(uint32_t id) { device_id_ = id; }
 
-  bool StartupProfiling(uint32_t device_id);
+  bool StartupProfiling(const std::string &op_name);
 
   bool StopProfiling();
 
@@ -69,10 +85,19 @@ class ProfileMgr {
   Status PluginInit() const;
   void PluginUnInit() const;
 
+   void InitReportNode();
+  uint64_t GetMsprofHashId(const std::string &info);
+  void InitLaunchApi(const uint64_t name_hash, MsprofApi *api);
+  void InitReportOp(const std::string &op_name);
+ void RecordLaunchTaskBegin(const std::string &op_name, const bool is_op_name);
+ std::string GetFullScopeName(const std::string &op_name, const bool is_op_name);
+ void ReportTask();
+
   MsprofCtrlCallback ctrl_cb_{nullptr};
   MsprofReporterCallback reporter_cb_{nullptr};
   uint32_t device_id_{0};
   std::string kernel_label_;
+  ProfNodeAdditionInfo node_addition_info_;
 };
 
 

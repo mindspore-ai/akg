@@ -34,7 +34,7 @@ from tests.common.tensorio import compare_tensor, dump_tensor
 from akg.ms import compilewithjson
 from akg.utils.composite_op_helper import random_data_to_disk
 from akg.utils.tbe_codegen_utils import copy_to_akg_kernel_meta
-
+from akg.utils.util import get_ascend_type
 logging.getLogger().setLevel(logging.INFO)
 
 
@@ -234,10 +234,11 @@ def get_compare_result(desc, output, expect, output_indexes):
 def get_result(desc, poly, attrs=None, profiling=True, need_compare=True, precision_check=True, is_only_npu=False):
     backend = _get_backend(desc)
     mod = get_model(desc, poly, backend, attrs, is_only_npu)
+    arch = get_ascend_type(_get_json_dict(desc))
     if mod is None:
         return False, None
     input_for_mod, expect, output_indexes = gen_json_data(desc, with_compute=precision_check)
-    output = utils.mod_launch(mod, input_for_mod, output_indexes)
+    output = utils.mod_launch(mod, input_for_mod, output_indexes, arch=arch)
 
     if not precision_check:
         logging.info("No precision error check!")

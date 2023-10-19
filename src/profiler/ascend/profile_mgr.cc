@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <sys/syscall.h>
+#include <unistd.h>
 #include <string.h>
 #include "profile_mgr.h"
 #include "toolchain/prof_acl_api.h"
@@ -100,8 +102,7 @@ Status ProfileMgr::GetProfConf(MsprofGeOptions *prof) {
   return PROF_SUCCESS;
 }
 
-bool ProfileMgr::StartupProfiling(uint32_t device_id) {
-  device_id_ = device_id;
+bool ProfileMgr::StartupProfiling(const std::string &op_name) {
 
   struct MsprofGeOptions prof_conf = {0};
   if (GetProfConf(&prof_conf) != PROF_SUCCESS) {
@@ -113,6 +114,8 @@ bool ProfileMgr::StartupProfiling(uint32_t device_id) {
     LOG(ERROR) << "ProfMgrStartUp failed.";
     return false;
   }
+  InitReportOp(op_name);
+  RecordLaunchTaskBegin(op_name,false);
   return true;
 }
 
@@ -138,7 +141,7 @@ bool ProfileMgr::ProfStartUp(MsprofGeOptions *prof_conf) {
 
 bool ProfileMgr::StopProfiling() {
   LOG(INFO) << "StopProfiling";
-
+  ReportTask();
   // plugin unregister
   PluginUnInit();
   // stop runtime profiler
@@ -202,8 +205,70 @@ Status ProfCtrlSwitchHandle(void *data) {
   return ProfCommandHandle(type);
 }
 
+
+void ProfileMgr::InitLaunchApi(const uint64_t name_hash, MsprofApi *api) {
+  const auto kernel_type_hash = MSPROF_REPORT_NODE_LAUNCH_TYPE;
+  api->type = kernel_type_hash;
+  api->level = MSPROF_REPORT_NODE_LEVEL;
+  api->itemId = name_hash;
+}
+
+uint64_t ProfileMgr::GetMsprofHashId(const std::string &info) {
+  const char *hash_info = info.c_str();
+  uint64_t hash_id = MsprofGetHashId(hash_info, info.length());
+  return hash_id;
+}
+
+void ProfileMgr::InitReportOp(const std::string &op_name) {
+  uint64_t opName_hash_id = GetMsprofHashId(op_name);
+  InitLaunchApi(opName_hash_id, &node_addition_info_.api);
+}
+
+std::string ProfileMgr::GetFullScopeName(const std::string &op_name, const bool is_op_name) {
+  std::string full_scope_name;
+  if (!is_op_name) {
+    auto op_index = op_name.find("-op");
+    if (op_index != std::string::npos) {
+      full_scope_name = op_name.substr(0, op_name.find("_", op_index + 1));
+    }
+  } else {
+    full_scope_name = op_name;
+  }
+  return full_scope_name;
+}
+
+void ProfileMgr::RecordLaunchTaskBegin(const std::string &op_name, const bool is_op_name) {
+  std::string full_scope_name = GetFullScopeName(op_name, is_op_name);
+  kernel_label_ = full_scope_name;
+  node_addition_info_.api.beginTime = MsprofSysCycleTime();
+  LOG(DEBUG) << "api Launch begin " << full_scope_name << ", " << node_addition_info_.api.beginTime;
+}
+
+
+
+
+void ProfileMgr::ReportTask() {
+  const uint64_t prof_time = MsprofSysCycleTime();
+  node_addition_info_.node_basic_info.timeStamp = prof_time;
+  auto tid = syscall(SYS_gettid);
+  node_addition_info_.node_basic_info.threadId = static_cast<uint32_t>(tid);
+  auto compact_ret = MsprofReportCompactInfo(false, &node_addition_info_.node_basic_info, sizeof(MsprofCompactInfo));
+  if (compact_ret != MSPROF_ERROR_NONE) {
+      LOG(ERROR) << "MsprofReportCompactInfo failed.";
+  }
+
+  node_addition_info_.api.endTime = prof_time;
+  node_addition_info_.api.threadId = static_cast<uint32_t>(tid);
+  auto api_ret = MsprofReportApi(false, &node_addition_info_.api);
+  if (api_ret != MSPROF_ERROR_NONE) {
+    LOG(ERROR) << "MsprofReportAdditionalInfo failed.";
+  }
+    
+}
+
+
 TVM_REGISTER_GLOBAL("ascend_start_profiling").set_body([](TVMArgs args, TVMRetValue *ret) {
-  ProfileMgr::GetInstance().StartupProfiling(static_cast<uint32_t>(args[0].operator int()));
+  ProfileMgr::GetInstance().StartupProfiling(args[0].operator std::string());
 });
 
 TVM_REGISTER_GLOBAL("ascend_stop_profiling").set_body([](TVMArgs args, TVMRetValue *ret) {
