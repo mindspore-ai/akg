@@ -27,8 +27,7 @@ from .split_stitch import split_stitch_attr
 from .construct_args import ConstructType, ConstructKey
 from .construct_args import get_construct_args, get_tune_construct_args, \
     should_enable_attr, get_stmt_for_tune, add_attrs_in_segment_infos
-
-
+from utils.util import get_ascend_type
 def generate_trait(desc):
     """
     generate trait of kernel description
@@ -523,17 +522,6 @@ def _build_to_module(desc_s, desc_d, attrs=None, poly=True):
 
     return _cpp_build(attrs, process, poly, segment_tree, segment_infos)
 
-
-def _get_ascend_type(desc):
-    if "target_info" not in desc.keys():
-        return None
-
-    target_info_type = desc["target_info"]
-    if target_info_type.get("arch"):
-        return target_info_type.get("arch")
-    return None
-
-
 def _build_to_module_ascend(desc_s_in, desc_d_in, attr, use_repo=True):
     """
     build kernel with compute description in json format
@@ -650,7 +638,7 @@ def _build_to_module_ascend(desc_s_in, desc_d_in, attr, use_repo=True):
         ConstructType.NORMAL: _normal_postprocess,
     }
     process = desc_d_in["process"]
-    ascend_type = _get_ascend_type(desc_d_in)
+    ascend_type = get_ascend_type(desc_d_in)
     ascend_type_to_section = {"Ascend910A": "1.6", "Ascend310P3": "1.7",
                               "Ascend910B1": "2.1", "Ascend910B2": "2.2", "Ascend910B3": "2.3", "Ascend910B4": "2.4"}
     if ascend_type is not None:
