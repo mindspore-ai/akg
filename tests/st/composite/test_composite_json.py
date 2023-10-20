@@ -34,7 +34,7 @@ from tests.common.tensorio import compare_tensor, dump_tensor
 from akg.ms import compilewithjson
 from akg.utils.composite_op_helper import random_data_to_disk
 from akg.utils.tbe_codegen_utils import copy_to_akg_kernel_meta
-from akg.utils.util import get_ascend_type
+from utils.util import get_ascend_type
 logging.getLogger().setLevel(logging.INFO)
 
 
