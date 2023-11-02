@@ -18,15 +18,20 @@ import logging
 
 logging.getLogger().setLevel(logging.INFO)
 
+def create_directory(dir):
+    if not os.path.exists(dir):
+        os.mkdir(dir)
 
 def copy_to_akg_kernel_meta(kernel_name, postfixs):
-    akg_kernel_mate_str = "akg_kernel_meta"
+    akg_kernel_mate_str = os.getenv("KERNEL_META_DIR",default="akg_kernel_meta")
     source = os.path.realpath(os.getenv('MS_COMPILER_CACHE_PATH', './'))
     import shutil
     target = source + "/" + akg_kernel_mate_str + "/" + kernel_name
     source = source + "/" + "kernel_meta/" + kernel_name
-    if not os.path.exists(akg_kernel_mate_str):
-        os.mkdir(akg_kernel_mate_str)
+    if source == target:
+        return True
+    akg_kernel_mate_str = os.path.abspath(akg_kernel_mate_str)
+    create_directory(akg_kernel_mate_str)
     for postfix in postfixs:
         if os.path.exists(source + postfix):
             try:
