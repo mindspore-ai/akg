@@ -24,9 +24,23 @@ import akg.tvm
 from akg.global_configs import get_kernel_meta_path
 from akg.utils.util import parse_workspace, write_code
 
+def set_ascend910b(code, core_type, title_dict):
+    if len(core_type) == 0:
+        return
+    if core_type == "MIX":
+        title_dict["magic"] = "RT_DEV_BINARY_MAGIC_ELF"
+        title_dict["coreType"] = "MIX"
+        title_dict["intercoreSync"] = 1
+        title_dict["taskRation"] = "1:2"
+    elif core_type == "AIC":
+        title_dict["coreType"] = "AiCore"
+        title_dict["magic"] = "RT_DEV_BINARY_MAGIC_ELF_AICUBE"
+    elif core_type == "AIV":
+        title_dict["coreType"] = "VectorCore"
+        title_dict["magic"] = "RT_DEV_BINARY_MAGIC_ELF_AIVEC"
 
 @akg.tvm.register_func
-def tvm_callback_cce_postproc(code, block_dim=1, workspace=None):
+def tvm_callback_cce_postproc(code, block_dim=1, workspace=None, core_type=""):
     """Function for dumping ascend meta."""
     if "__aicore__" in code:
         title_dict = {"magic": "RT_DEV_BINARY_MAGIC_ELF"}
@@ -35,8 +49,13 @@ def tvm_callback_cce_postproc(code, block_dim=1, workspace=None):
         title_dict = dict()
 
     # kernel name
-    kernel_name = code.split("_kernel")[0].split(" ")[-1]
-    title_dict["kernelName"] = kernel_name + "_kernel0"
+    if "_kernel" in code:
+        kernel_name = code.split("_kernel")[0].split(" ")[-1]
+        title_dict["kernelName"] = kernel_name + "_kernel0"
+    elif "_mix_aic" in code:
+        kernel_name = code.split("_mix_aic")[0].split(" ")[-1]
+        title_dict["kernelName"] = kernel_name
+    set_ascend910b(code, core_type, title_dict)
 
     # thread info
     title_dict["blockDim"] = block_dim
