@@ -130,3 +130,5 @@ prebuild/aarch64/npu_inference_adapter.cc.o filter=lfs diff=lfs merge=lfs -text
 prebuild/x86_64/identity_pass.cc.o filter=lfs diff=lfs merge=lfs -text
 prebuild/aarch64/hoist_matrixc_init.cc.o filter=lfs diff=lfs merge=lfs -text
 prebuild/aarch64/init_matrixc_with_bias.cc.o filter=lfs diff=lfs merge=lfs -text
+prebuild/aarch64/align_realize_last_range.cc.o filter=lfs diff=lfs merge=lfs -text
+prebuild/x86_64/align_realize_last_range.cc.o filter=lfs diff=lfs merge=lfs -text

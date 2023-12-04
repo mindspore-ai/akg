@@ -148,5 +148,6 @@ REGISTER_PASS(MatrixTranspose);
 REGISTER_PASS(AdaptDynamicBatch);
 REGISTER_PASS(AdjustParallelLoop);
 REGISTER_PASS(ReductionFactor);
+REGISTER_PASS(CheckBoundTensor);
 }  // namespace ir
 }  // namespace akg

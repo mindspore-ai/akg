@@ -19,6 +19,7 @@ import os
 import json
 import types
 import akg.tvm
+from akg.utils.format_transform import get_shape
 
 
 def parse_int_const(value):
@@ -28,6 +29,35 @@ def parse_int_const(value):
         return value.value
     return None
 
+
+def parse_workspace_map(attrs):
+    if not isinstance(attrs, akg.tvm.container.Map):
+        return None
+    if "workspace" not in attrs:
+        return None
+
+    workspace_map = attrs["workspace"]
+    if not isinstance(workspace_map, akg.tvm.container.Map):
+        return None
+    if "num" not in workspace_map or "size" not in workspace_map:
+        return None
+
+    worksapce_num =  parse_int_const(workspace_map["num"])
+    if not isinstance(workspace_map["size"], akg.tvm.container.Array):
+        return None
+
+    workspace_size = []
+    tt = get_shape(workspace_map["size"])
+    for item in tt:
+        workspace_size.append(parse_int_const(item))
+    if len(workspace_size) != worksapce_num:
+        return None
+
+    workspace_dict = {
+        "num": worksapce_num,
+        "size": workspace_size
+    }
+    return workspace_dict
 
 def parse_workspace(workspace):
     if not isinstance(workspace, akg.tvm.container.Map):

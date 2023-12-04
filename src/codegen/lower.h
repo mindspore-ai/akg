@@ -37,6 +37,8 @@ class LowerDataNode : public Node {
   Map<std::string, NodeRef> attrs;
   Map<Tensor, Buffer> binds;
   Map<Tensor, Buffer> binds_0;
+  Array<Tensor> workspace_tensors;
+
   BuildConfig config;
   std::string name;
   bool polyhedral{true};
@@ -141,8 +143,8 @@ inline StageResult LowerPoly(Stmt &stmt, LowerData &data) {
     Map<std::string, NodeRef> spec_gemm_attrs = {};
     Target target = Target::Create(data->target);
     Array<NodeRef> poly_res = NEXT_PASS(AutoPoly, stmt, data->binds_0, target->target_name, false,
-                                        spec_gemm_attrs, data->sch);
-    CHECK_EQ(poly_res.size(), 2);
+                                        spec_gemm_attrs, data->sch, data->workspace_tensors);
+    CHECK_EQ(poly_res.size(), 3);
     stmt = air::Downcast<Stmt>(poly_res[0]);
     g_attrs.Set(kEnablePolySch, air::make_const(Int(32), true));
   }

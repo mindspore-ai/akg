@@ -1006,14 +1006,22 @@ std::unordered_set<isl::id, isl::IslIdIslHash> GatherStatementsInSubtree(const i
 }
 
 bool IsExtensionUsedInSubTree(const ScopInfo &scop_info, const isl::schedule_node &tree,
-                              const isl::union_map &extension, const isl::union_map &accesses) {
+                              const isl::union_map &extension, const isl::union_map &accesses,
+                              isl_bool before) {
   auto statements = GatherStatementsInSubtree(tree);
 
+  bool is_workspace = false;
   std::unordered_set<isl::id, isl::IslIdIslHash> promoted_tensors;
   extension.foreach_map([&](const isl::map &footprint) -> void {
     if (!footprint.range().is_wrapping()) return;
     const isl::id &tensor_id = footprint.range().unwrap().domain().unwrap().get_tuple_id(isl_dim_out);
     AddAllBufferFootprintOfTensor(scop_info, tensor_id, promoted_tensors);
+
+    for (auto workspace : scop_info.analysis_result_.GetWorkspaceBind()) {
+      if (tensor_id.get_name() == workspace.first->op->name) {
+        is_workspace = true;
+      }
+    }
   });
 
   bool found_extension_in_subtree = false;
@@ -1024,6 +1032,18 @@ bool IsExtensionUsedInSubTree(const ScopInfo &scop_info, const isl::schedule_nod
       if (statements.count(statement_id) > 0) found_extension_in_subtree = true;
     }
   });
+
+  if (is_workspace && found_extension_in_subtree) {
+    auto workspace_dependence = scop_info.analysis_result_.GetWorkspaceDependence();
+    workspace_dependence.foreach_map([&](const isl::map &access) -> void {
+      const isl::id &read_id = access.get_tuple_id(isl_dim_out);
+      const isl::id &write_id = access.get_tuple_id(isl_dim_in);
+      bool is_gm_read = before && (statements.count(read_id) > 0);
+      bool is_gm_write = !before && (statements.count(write_id) > 0);
+
+      found_extension_in_subtree = is_gm_read || is_gm_write;
+    });
+  }
 
   return found_extension_in_subtree;
 }
@@ -1072,7 +1092,7 @@ isl::schedule_node InsertExtensionToFirstAccessedFilters(const ScopInfo &scop_in
   unsigned int n_children = tree.n_children();
   for (unsigned int i = 0; i < n_children; ++i) {
     unsigned int child_idx = before ? i : n_children - 1 - i;
-    if (IsExtensionUsedInSubTree(scop_info, tree.get_child(child_idx), extension, accesses)) {
+    if (IsExtensionUsedInSubTree(scop_info, tree.get_child(child_idx), extension, accesses, before)) {
       tree = tree.child(child_idx).child(0);
 
       bool insert_here = false;

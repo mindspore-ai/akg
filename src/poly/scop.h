@@ -30,7 +30,7 @@ class Scop {
 
   void ParseUserConfig(std::string target, const Map<Tensor, Buffer> &extern_buffer,
                        const Map<std::string, NodeRef> &spec_gemm_attrs, bool is_tuning, bool is_dynamic,
-                       const Schedule &sch);
+                       const Schedule &sch, const Array<Tensor> &workspace_tensors = {});
   isl::schedule GenIsl();
   isl::schedule Transform(const isl::schedule &input_schedule);
   Stmt GenHalide(const isl::schedule &sch);

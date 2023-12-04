@@ -30,7 +30,8 @@ void ModuleLowerNode::Process() {
 }
 
 Array<NodeRef> ModuleLowerNode::GetArgs() {
-  return Array<NodeRef>({children_[0]->Node(), children_[0]->Data()->arg_list_0});
+  return Array<NodeRef>({children_[0]->Node(), children_[0]->Data()->arg_list_0,
+                         children_[0]->Data()->attrs});
 }
 
 BaseLowerNodePtr CreateModuleLowerNode(const std::string &, bool, const Map<std::string, NodeRef> &) {

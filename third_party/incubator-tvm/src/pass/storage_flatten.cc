@@ -211,7 +211,8 @@ class StorageFlattener : public IRMutator {
         if (info.defined()) {
           align = (info->max_simd_bits + op->type.bits() - 1) / op->type.bits();
           CHECK_LE(const_size * op->type.bits(), info->max_num_bits)
-              << "Allocation exceed bound of memory tag " << skey.to_string();
+              << "Allocation exceed bound of memory tag " << skey.to_string()
+              << " : " << op->func->func_name();
         }
       }
       Array<Expr> strides;

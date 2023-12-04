@@ -77,11 +77,12 @@ class Poly {
 
   void Run(const Stmt &stmt, const Map<Tensor, Buffer> &extern_buffer, std::string target,
            const Map<std::string, NodeRef> &spec_gemm_attrs, bool is_tuning, bool is_dynamic,
-           const Schedule &origin_sch) {
+           const Schedule &origin_sch, const Array<Tensor> &workspace_tensors = {}) {
     stmt_ = stmt;
     scop_.reset(new poly::Scop(Simplify_cce(stmt_), isl_ctx_));
     CHECK(scop_ != nullptr);
-    scop_->ParseUserConfig(target, extern_buffer, spec_gemm_attrs, is_tuning, is_dynamic, origin_sch);
+    scop_->ParseUserConfig(target, extern_buffer, spec_gemm_attrs, is_tuning, is_dynamic, origin_sch,
+                           workspace_tensors);
     bool is_spec_gemm = !spec_gemm_attrs.empty();
 
     if (scop_->info_.user_config_.IsSymbolicTiling(stmt)) {
@@ -152,6 +153,10 @@ class Poly {
     return tiling_params_array;
   }
 
+  Map<Tensor, Buffer> GetWorkspaceParams() {
+    return scop_->info_.analysis_result_.GetWorkspaceBind();
+  }
+
   void GatherVars(const Expr expr, std::unordered_set<Var, air::NodeHash, air::NodeEqual> *vset) {
     PostOrderVisit(expr, [&vset](const NodeRef &node) {
       if (node.as<Variable>()) {
@@ -172,10 +177,11 @@ class Poly {
 
 /// Interface for lower pass
 Array<NodeRef> AutoPoly(const Stmt &stmt, const Map<Tensor, Buffer> &extern_buffer, std::string target,
-                        const bool is_dynamic, const Map<std::string, NodeRef> &spec_gemm_attrs, Schedule sch) {
+                        const bool is_dynamic, const Map<std::string, NodeRef> &spec_gemm_attrs, Schedule sch,
+                        const Array<Tensor> &workspace_tensors) {
   Poly poly;
-  poly.Run(stmt, extern_buffer, target, spec_gemm_attrs, false, is_dynamic, sch);
-  return Array<NodeRef>({poly.GetStmt(), poly.GetTilingParams()});
+  poly.Run(stmt, extern_buffer, target, spec_gemm_attrs, false, is_dynamic, sch, workspace_tensors);
+  return Array<NodeRef>({poly.GetStmt(), poly.GetTilingParams(), poly.GetWorkspaceParams()});
 }
 
 NodeRef GenTuningSpace(const Stmt &stmt, std::string target, const Map<Tensor, Buffer> &extern_buffer,
