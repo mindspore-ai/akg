@@ -112,6 +112,10 @@ constexpr auto kIsTbeCodeGen = "is_tbe_codegen";
 constexpr auto kKeepTrivialLoop = "keep_trivial_loop";
 constexpr auto kRemoveStoreDependency = "remove_store_dependency";
 constexpr auto kIsPolyConfigReset = "is_poly_config_reset";
+// worksapce
+constexpr auto kWorkspaceAttr = "workspace";
+constexpr auto kWorkspaceNum = "num";
+constexpr auto kWorkspaceSize = "size";
 
 static std::unordered_map<std::string, int> help_tiling_level = {
   {"None", 0},

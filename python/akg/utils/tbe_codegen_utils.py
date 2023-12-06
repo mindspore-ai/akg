@@ -15,6 +15,8 @@
 # limitations under the License.
 import os
 import logging
+from akg.utils.util import write_code
+import json
 
 logging.getLogger().setLevel(logging.INFO)
 
@@ -22,7 +24,16 @@ def create_directory(dir):
     if not os.path.exists(dir):
         os.mkdir(dir)
 
-def copy_to_akg_kernel_meta(kernel_name, postfixs):
+def set_workspace_for_json(json_path, workspace_dict):
+    if workspace_dict is None:
+        return
+    with open(json_path, 'r') as f:
+        js_info = json.loads(f.read())
+    js_info["workspace"] = workspace_dict
+    write_code(js_info, json_path)
+
+
+def copy_to_akg_kernel_meta(kernel_name, postfixs, workspace_dict=None):
     akg_kernel_mate_str = os.getenv("KERNEL_META_DIR",default="akg_kernel_meta")
     source = os.path.realpath(os.getenv('MS_COMPILER_CACHE_PATH', './'))
     import shutil
@@ -36,6 +47,8 @@ def copy_to_akg_kernel_meta(kernel_name, postfixs):
         if os.path.exists(source + postfix):
             try:
                 shutil.move(source + postfix, target + postfix)
+                if postfix == ".json" and workspace_dict is not None:
+                    set_workspace_for_json(target + postfix, workspace_dict)
             except IOError as e:
                 logging.error("Unable to move file. {}".format(e))
             except Exception as e:
@@ -157,7 +170,7 @@ def build_npu_for_akg(kernel_name,
     generate_cce_code(mod, "cce", None)
 
 
-def build_tbe_codegen(kernel_name, stmt_json, arg_json, ascend_type=None, is_dynamic=False):
+def build_tbe_codegen(kernel_name, stmt_json, arg_json, attr, ascend_type=None):
     import sys
     copy_modules = sys.modules.copy()
     clean_env()
@@ -191,6 +204,9 @@ def build_tbe_codegen(kernel_name, stmt_json, arg_json, ascend_type=None, is_dyn
     arg_list = []
     for buff in arg_json:
         arg_list.append(tbe.tvm.ir.load_json(buff))
+
+    is_dynamic = attr.get("dynamic", False)
+    workspace_dict = attr.get("workspace", None)
     with AscendPassContext(config=cfg):
         build_npu_for_akg(kernel_name,
                           stmt,
@@ -198,6 +214,6 @@ def build_tbe_codegen(kernel_name, stmt_json, arg_json, ascend_type=None, is_dyn
                           is_dynamic=is_dynamic,
                           cfg=cfg)
     postfixs = [".o", ".cce", ".json"]
-    is_success = copy_to_akg_kernel_meta(kernel_name, postfixs)
+    is_success = copy_to_akg_kernel_meta(kernel_name, postfixs, workspace_dict)
     sys.modules = copy_modules
     return is_success

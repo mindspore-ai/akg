@@ -21,6 +21,7 @@ from collections.abc import Iterable
 import akg
 from akg import tvm
 from tvm.autotvm.env import AutotvmGlobalScope
+from akg.utils.util import parse_workspace_map
 from akg.utils.tbe_codegen_utils import build_tbe_codegen
 from akg.utils.kernel_exec import ReturnType, is_symbolic_tiling
 from .split_stitch import split_stitch_attr
@@ -647,6 +648,7 @@ def _build_to_module_ascend(desc_s_in, desc_d_in, attr, use_repo=True):
         config_func(section)
         if section >= "2.1":
             attr["is_tbe_codegen"] = True
+            attr["pragma_modshift"] = True
     segment_tree, segment_infos = get_construct_args(desc_s_in, attr, post_funcs)
     poly = True
     res = _cpp_build(attr, process, poly, segment_tree, segment_infos)
@@ -656,8 +658,12 @@ def _build_to_module_ascend(desc_s_in, desc_d_in, attr, use_repo=True):
         args_json = []
         for buf in res[1]:
             args_json.append(akg.tvm.save_json(buf, "0.8.0"))
+        
+        workspace_dict = parse_workspace_map(res[2])
+        if workspace_dict is not None:
+            attr["workspace"] = workspace_dict
 
-        is_success = build_tbe_codegen(kernel_name, stmt_json, args_json, ascend_type, attr.get("dynamic", False))
+        is_success = build_tbe_codegen(kernel_name, stmt_json, args_json, attr, ascend_type)
         if not is_success:
             raise TypeError("npu_inference codegen failed.")
         return kernel_name

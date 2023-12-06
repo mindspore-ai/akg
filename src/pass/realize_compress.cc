@@ -92,6 +92,9 @@ enum IndexType {
   kNoSupport,  // we don't handle it in this pass.
 };
 
+using VarSet = std::unordered_set<Var, air::NodeHash, air::NodeEqual>;
+using FuncVarMap = std::unordered_map<FunctionRef, VarSet, air::NodeHash, air::NodeEqual>;
+
 class CheckIndex : public IRVisitor {
  public:
   CheckIndex(const FunctionRef &func, size_t args_num, Array<Expr> &max_index, std::vector<IndexType> &index_type,
@@ -447,7 +450,117 @@ class LoadIm2colCheck : public IRVisitor {
   }
 };
 
+class CheckRedundantVar : public IRVisitor {
+ public:
+  FuncVarMap result_;
+
+ private:
+  void Visit_(const Provide *op) final {
+    std::unordered_set<Var, air::NodeHash, air::NodeEqual> vars;
+    if (op->func->func_name() == realize_name_) {
+      auto args = op->args;
+      for (size_t i = 0; i < args.size(); ++i) {
+        GatherVars(args[i], &vars);
+      }
+      auto for_var = for_var_map_[realize_name_];
+      VarSet result_var;
+      for (auto var : vars) {
+        if (for_var.count(var)) {
+          continue;
+        }
+        result_var.emplace(var);
+      }
+      if (!result_var.empty()) {
+        result_[op->func] = result_var;
+      }
+    }
+    IRVisitor::Visit_(op);
+  }
+
+  void Visit_(const Realize *op) final {
+    realize_name_ = op->func->func_name();
+    IRVisitor::Visit(op->body);
+    realize_name_ = "";
+  }
+
+  void Visit_(const For *op) final {
+    bool is_int_min = op->min.as<IntImm>() || op->min.as<UIntImm>();
+    bool is_int_extent = op->extent.as<IntImm>() || op->extent.as<UIntImm>();
+    if (!is_int_min || !is_int_extent) {
+      realize_name_ = "";
+      return IRVisitor::Visit(op->body);
+    }
+    if (!realize_name_.empty()) {
+      VarSet for_var_set;
+      if (for_var_map_.count(realize_name_)) {
+        for_var_set = for_var_map_[realize_name_];
+      }
+      for_var_set.emplace(op->loop_var);
+      for_var_map_[realize_name_] = for_var_set;
+    }
+    IRVisitor::Visit(op->body);
+    if (!realize_name_.empty()) {
+      VarSet for_var_set;
+      if (for_var_map_.count(realize_name_)) {
+        for_var_set = for_var_map_[realize_name_];
+      }
+      for_var_set.erase(for_var_set.find(op->loop_var));
+      for_var_map_[realize_name_] = for_var_set;
+    }
+  }
+
+  std::string realize_name_;
+  std::unordered_map<std::string, VarSet> for_var_map_;
+};
+
+class RemoveRedundantVar : public IRMutator {
+ public:
+  explicit RemoveRedundantVar(FuncVarMap result) : result_(result) {}
+  ~RemoveRedundantVar() override = default;
+
+ private:
+  Array<Expr> ReplaceVar(const Array<Expr> &old_args, const VarSet &var_set){
+    std::unordered_map<const Variable*, Expr> var_map;
+    for (auto var : var_set) {
+      var_map[var.get()] = Expr(0);
+    }
+      
+    Array<Expr> new_args;
+    for (auto arg: old_args) {
+      Expr new_arg = Simplify(Substitute(arg, var_map));
+      new_args.push_back(new_arg);
+    }
+    return new_args;
+  }
+
+  Stmt Mutate_(const Provide *op, const Stmt &s) final {
+    auto iter = result_.find(op->func);
+    if (iter != result_.end()) {
+      Array<Expr> new_args = ReplaceVar(op->args, iter->second);
+      Expr new_value = IRMutator::Mutate(op->value);
+      return Provide::make(op->func, op->value_index, new_value, new_args);
+    }
+    return IRMutator::Mutate_(op, s);
+  }
+
+  Expr Mutate_(const Call *op, const Expr &e) final {
+    auto iter = result_.find(op->func);
+    if (iter != result_.end()) {
+      Array<Expr> new_args = ReplaceVar(op->args, iter->second);
+      return Call::make(op->type, op->name, new_args, op->call_type, op->func, op->value_index);
+    }
+    return IRMutator::Mutate_(op, e);
+  }
+
+ private:
+  FuncVarMap result_;
+};
+
 Stmt RealizeCompress(Stmt stmt) {
+  CheckRedundantVar redundant_var;
+  redundant_var.Visit(stmt);
+  stmt = RemoveRedundantVar(redundant_var.result_).Mutate(stmt);
+
   LoadIm2colCheck checker;
   checker.Visit(stmt);
   if (checker.is_load_im2col_) {

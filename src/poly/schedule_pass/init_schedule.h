@@ -38,6 +38,7 @@ class InitSchedule : public SchedulePass {
   virtual isl::schedule Run(isl::schedule sch);
 
   void ComputeCopyIn(const isl::schedule &schedule);
+  isl::union_map ComputeWorkspaceInfo(const isl::union_map &read_or_write);
   void RemoveUninitializedCopyin(isl::union_map &copy_in, const Binds &binds);
 
   void ModDependencesBeforeGroup(const isl::schedule &schedule);

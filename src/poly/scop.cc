@@ -36,7 +36,7 @@ namespace ir {
 namespace poly {
 void Scop::ParseUserConfig(std::string target, const Map<Tensor, Buffer> &extern_buffer,
                            const Map<std::string, NodeRef> &spec_gemm_attrs, bool is_tuning, bool is_dynamic,
-                           const Schedule &sch) {
+                           const Schedule &sch, const Array<Tensor> &workspace_tensors) {
   info_.user_config_.SetTarget(target);
   if (spec_gemm_attrs.empty()) {
     info_.user_config_.SetAttrs(g_attrs);
@@ -50,6 +50,7 @@ void Scop::ParseUserConfig(std::string target, const Map<Tensor, Buffer> &extern
 
   info_.user_config_.SetBind(extern_buffer);
   info_.user_config_.SetOriginBind(extern_buffer);
+  info_.user_config_.SetWorkspaceTensors(workspace_tensors);
   info_.user_config_.SetIsTuning(is_tuning);
   info_.user_config_.SetDynamic(is_dynamic);
   info_.user_config_.SetScheduleInfo(sch);

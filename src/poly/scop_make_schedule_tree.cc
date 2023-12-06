@@ -391,6 +391,15 @@ class ScopMakeScheduleTree final : protected IRVisitor {
     /// add old realize
     scop_info_.user_config_.InsertRealizeFromInput(isl::id(scop_info_.GetCtx(), name));
 
+    /// add workspace
+    auto workspace_tensors = scop_info_.user_config_.GetWorkspaceTensors();
+    for (auto workspace : workspace_tensors) {
+      if (workspace->op->name == name) {
+        scop_info_.analysis_result_.SetWorkspaceBind(tensor, buffer);
+        scop_info_.user_config_.SetOriginBind(tensor, buffer);
+      }
+    }
+
     auto binds = scop_info_.user_config_.GetBind();
     for (auto i : binds) {
       if (i.first->op->name == name) return;

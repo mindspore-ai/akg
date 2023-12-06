@@ -408,8 +408,11 @@ class UserConfig {
   void SetOuterLetStmts(std::vector<Stmt> &outer_let_stmts) { outer_let_stmts_ = outer_let_stmts; }
   std::unordered_set<isl::id, isl::IslIdIslHash> GetRealizeFromInput() { return realize_from_input_; }
   void InsertRealizeFromInput(const isl::id &id) { realize_from_input_.insert(id); }
+  void SetOriginBind(const Tensor &t, const Buffer &buf) { binds_orig_.Set(t, buf); }
   void SetOriginBind(const Binds &binds_orig) { binds_orig_ = binds_orig; }
   Binds GetOriginBind() const { return binds_orig_; }
+  void SetWorkspaceTensors(const Array<Tensor> &workspace_tensors) { workspace_tensors_ = workspace_tensors;}
+  Array<Tensor> GetWorkspaceTensors() const { return workspace_tensors_; }
   void RecordRealizeTensors(const Tensor &t) { realize_tensors_.emplace(t); }
   std::unordered_set<Tensor> GetRealizeTensors() const { return realize_tensors_; }
   void SetBind(const Tensor &t, const Buffer &buf) { binds_.Set(t, buf); }
@@ -735,6 +738,7 @@ class UserConfig {
   std::unordered_set<isl::id, isl::IslIdIslHash> realize_from_input_;
   Binds binds_orig_;
   Binds binds_;
+  Array<Tensor> workspace_tensors_;
   std::unordered_set<Tensor> realize_tensors_;
   Stmt body_;
   std::unordered_map<std::string, Var> params_;
@@ -1212,6 +1216,13 @@ class AnalysisResult {
   std::string GetCpuConvolutionAxes() { return cpu_convolutions_axes_; }
   void SetCpuConvolutionAxes(std::string axes_str) { cpu_convolutions_axes_ = axes_str; }
 
+  isl::union_map GetWorkspaceDependence() const { return workspace_dependence_; }
+  void SetWorkspaceDependence(const isl::union_map &workspace_dependence) { workspace_dependence_ = workspace_dependence; }
+
+  void SetWorkspaceBind(const Binds &binds_workspace) { binds_workspace_ = binds_workspace; }
+  void SetWorkspaceBind(const Tensor &t, const Buffer &buf) { binds_workspace_.Set(t, buf); }
+  Binds GetWorkspaceBind() const { return binds_workspace_; }
+
   bool IsCsrDynamicExtent(const Variable *op) {
     for (const auto &it : g_csr) {
       auto var = it.first.as<Variable>();
@@ -1462,6 +1473,10 @@ class AnalysisResult {
 
   // cpu convolution
   std::string cpu_convolutions_axes_;
+
+  // workspace
+  isl::union_map workspace_dependence_;
+  Binds binds_workspace_;
 
   RestartPassName restart_pass_name_{RestartPassName::NOT_RESTART};
   std::unordered_map<std::string, isl::schedule> pass_schedule_map_;

@@ -66,7 +66,7 @@ Stmt RenameRealize(Stmt stmt, const Map<Tensor, Buffer> &extern_buffer, const Ma
 
 Array<NodeRef> AutoPoly(const Stmt &body, const Map<Tensor, Buffer> &extern_buffer, std::string target,
                         const bool is_dynamic, const Map<std::string, NodeRef> &spec_gemm_attrs = {},
-                        Schedule sch = Schedule());
+                        Schedule sch = Schedule(), const Array<Tensor> &workspace_tensors = {});
 
 NodeRef GenTuningSpace(const Stmt &body, std::string target, const Map<Tensor, Buffer> &extern_buffer,
                        const Map<std::string, NodeRef> &spec_gemm_attrs = {}, Schedule sch = Schedule());
@@ -262,6 +262,8 @@ Stmt PostProcessImg2col(Stmt stmt);
 Stmt ModDivEliminate(Stmt stmt);
 
 Stmt RealizeCompress(Stmt stmt);
+
+Array<NodeRef> CheckBoundTensor(Stmt stmt, const Map<Tensor, Buffer> &extern_buffer);
 
 Stmt RestoreCsrLoop(Stmt stmt, Map<Tensor, Buffer> extern_buffer, bool target_cuda);
 

@@ -1057,7 +1057,7 @@ def npu_op_build(s, op_var, shape_var, kernel_name="", binds=None, attrs=None,
         for buf in enumerate(arg_list):
             args_json.append(akg.tvm.save_json(buf, "0.8.0"))
 
-        is_success = build_tbe_codegen(kernel_name, json_str, args_json, attrs.get("dynamic", False))
+        is_success = build_tbe_codegen(kernel_name, json_str, args_json, attrs)
         if not is_success:
             raise TypeError("npu_inference codegen failed.")
         return kernel_name

@@ -55,8 +55,38 @@ void InitSchedule::ModDependencesBeforeGroup(const isl::schedule &schedule) {
   }
 }
 
+isl::union_map InitSchedule::ComputeWorkspaceInfo(const isl::union_map &read_or_write) {
+  auto workspace_map = scop_info_.analysis_result_.GetWorkspaceBind();
+  isl::union_map result_map = isl::union_map::empty(read_or_write.ctx());
+  if (workspace_map.empty()) {
+    return result_map;
+  }
+
+  for (auto workspace : workspace_map) {
+    auto workspace_name = workspace.first->op->name;
+    auto rw_list = read_or_write.get_map_list();
+    for (size_t i = 0; i < rw_list.size(); ++i) {
+      auto item = rw_list.at(i);
+      auto item_domain = item.domain_factor_domain();
+      auto item_out = item_domain.get_tuple_id(isl_dim_out).get_name();
+      if (item_out != workspace_name) {
+        continue;
+      }
+
+
+      if (result_map.is_empty()) {
+        result_map = isl::union_map(item);
+      } else {
+        result_map = result_map.unite(isl::union_map(item));
+      }
+    }
+  }
+  return result_map;
+}
+
 void InitSchedule::ComputeCopyIn(const isl::schedule &schedule) {
-  auto reads = scop_info_.analysis_result_.GetReads().domain_factor_domain();
+  auto orig_reads = scop_info_.analysis_result_.GetReads();
+  auto reads = orig_reads.domain_factor_domain();
   auto writes = scop_info_.analysis_result_.GetWrites().domain_factor_domain();
   auto uai = isl::union_access_info(reads);
   uai = uai.set_kill(writes);
@@ -64,7 +94,12 @@ void InitSchedule::ComputeCopyIn(const isl::schedule &schedule) {
   uai = uai.set_schedule(schedule);
   auto flow = uai.compute_flow();
   auto mayNoSource = flow.get_may_no_source();
-  scop_info_.analysis_result_.RecordCopyin(scop_info_.analysis_result_.GetReads().intersect_range(mayNoSource.range()));
+  auto copy_in = orig_reads.intersect_range(mayNoSource.range());
+  auto workspace_info = ComputeWorkspaceInfo(orig_reads);
+  if (!workspace_info.is_empty()) {
+    copy_in = copy_in.unite(orig_reads.intersect_domain(workspace_info.domain()));
+  }
+  scop_info_.analysis_result_.RecordCopyin(copy_in);
 }
 
 isl::schedule InitSchedule::Run(isl::schedule sch) {
@@ -89,6 +124,13 @@ isl::schedule InitSchedule::Run(isl::schedule sch) {
   if (scop_info_.user_config_.GetTarget() == TARGET_CCE) {
 #endif
     ModDependencesBeforeGroup(sch);
+    auto writes = scop_info_.analysis_result_.GetWrites();
+    auto workspace_info = ComputeWorkspaceInfo(writes);
+    if (!workspace_info.is_empty()) {
+      auto workspace_domain = workspace_info.domain_factor_domain().domain();
+      auto workspace_dependence = pass_info_.dependences_.intersect_domain(workspace_domain);
+      scop_info_.analysis_result_.SetWorkspaceDependence(workspace_dependence);
+    }
   }
 
   scop_info_.origin_schedule_ = sch;
