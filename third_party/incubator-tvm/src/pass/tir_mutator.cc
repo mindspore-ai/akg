@@ -23,6 +23,7 @@
  */
 
 /*
+ * 2023.12.19 - Add case where index calculation exceeds int32.
  * 2023.03.25 - Add TVM 0.8 attributes to the node and conversion pass for exporting TVM 0.8 IR.
  */
 #include "tir_mutator.h"
@@ -259,6 +260,17 @@ void IRConverter::Visit_(const TensorIntrinNode* op) {
   this->Visit_(op->body);
   this->Visit_(op->reduce_init);
   this->Visit_(op->reduce_update);
+}
+
+void IRConverter::Visit_(const IntImm* op) {
+  auto int_op = const_cast<IntImm*>(op);
+  const int64_t int_max = 2147483647;
+  const int64_t block_max = 64;
+  int64_t upper_limit = int_max / block_max;
+  if (int_op->value >  upper_limit) {
+    DataType new_type = Int(64, 1);
+    int_op->type = new_type;
+  }
 }
 
 void IRConverter::Visit_(const ObjectRef& f) {

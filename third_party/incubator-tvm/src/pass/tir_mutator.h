@@ -22,6 +22,7 @@
  */
 
 /*
+ * 2023.12.19 - Add case where index calculation exceeds int32.
  * 2023.03.25 - Add TVM 0.8 attributes to the node and conversion pass for exporting TVM 0.8 IR.
  */
 
@@ -67,6 +68,7 @@ class IRConverter : public IRVisitor {
   void Visit_(const TensorIntrinNode* op);
 
   void Visit_(const ObjectRef& op);
+  void Visit_(const IntImm* op);
 
  private:
   void FlattenBlock(const Stmt& s, std::vector<Stmt>* res);
