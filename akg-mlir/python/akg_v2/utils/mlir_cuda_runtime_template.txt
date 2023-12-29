@@ -1,0 +1,195 @@
+/**
+ * Copyright 2023 Huawei Technologies Co., Ltd
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+
+#include <stdio.h>
+#include <string.h>
+#include <fstream>
+#include <sstream>
+#include <iostream>
+#include <chrono>
+#include <vector>
+#include <numeric>
+#include <cuda.h>
+#include <cuda_runtime.h>
+#include<iomanip>
+#include <cuda_fp16.h>
+
+#define checkCudaDrvErrors(call)                                                                                   \
+    do {                                                                                                           \
+        CUresult status = call;                                                                                    \
+        if (status != 0) {                                                                                         \
+            const char *msg = nullptr;                                                                             \
+            cuGetErrorString(status, &msg);                                                                        \
+            std::cerr << "CUDA error at line " << __LINE__ << " in file " << __FILE__ << ": " << msg << std::endl; \
+            exit(1);                                                                                               \
+        }                                                                                                          \
+    } while (0)
+
+std::string ReadFileToString(const char *filename)
+{
+    std::ifstream ifile(filename);
+    std::ostringstream buf;
+    char ch;
+    while (buf && ifile.get(ch))
+        buf.put(ch);
+    return buf.str();
+}
+
+extern "C" void cuda_runtime_profiling(
+    rt_code_params_list,
+    int number=1,
+    int repeat=1,
+    int min_repeat_ms=0
+    )
+{
+    std::cout<< "Start runtime profiling:\n";
+    // initialize cuda
+    checkCudaDrvErrors(cuInit(0));
+    // get the number of cuda devices
+    int device_count = 0;
+    checkCudaDrvErrors(cuDeviceGetCount(&device_count));
+
+    if (device_count == 0) {
+        std::cerr << "No cuda devices found" << std::endl;
+        exit(1);
+    }
+
+    // get the first cuda device
+    CUdevice device;
+    checkCudaDrvErrors(cuDeviceGet(&device, 0));
+
+    // create a cuda context on the device
+    CUcontext context;
+    checkCudaDrvErrors(cuCtxCreate(&context, 0, device));
+
+    CUstream stream;
+    cuStreamCreate(&stream, 0);    
+
+    std::string ptx_code = ReadFileToString(rt_code_ptx_path);
+
+    CUmodule module;
+    checkCudaDrvErrors(cuModuleLoadData(&module, ptx_code.c_str()));
+
+    // get the cuda kernel function
+    CUfunction kernel;
+    checkCudaDrvErrors(cuModuleGetFunction(&kernel, module, rt_code_kernel_name));
+
+    // allocate input and output arrays on the gpu
+rt_code_mem_alloc
+
+    // copy input arrays from cpu to gpu
+rt_code_mem_copy_htod
+
+rt_code_set_grid_params
+rt_code_set_block_params
+rt_code_init_memref_params
+    std::cout<< "Profiling init done;\n";
+    // launch the kernel
+    void *args[] = {rt_code_set_args_params};
+
+    // skip first launch
+    checkCudaDrvErrors(cuLaunchKernel(kernel, gx, gy, gz, bx, by, bz, 0, stream, args, NULL));
+    cuStreamSynchronize(stream);
+    std::vector<double> res;
+    for (int i = 0; i < repeat; ++i) {
+
+        std::chrono::time_point<
+            std::chrono::high_resolution_clock, std::chrono::nanoseconds> tbegin, tend;
+
+
+        tbegin = std::chrono::high_resolution_clock::now();
+        // start timing
+        for (int i = 0; i < number; ++i) {
+            checkCudaDrvErrors(cuLaunchKernel(kernel, gx, gy, gz, bx, by, bz, 0, stream, args, NULL));
+        }
+        cuStreamSynchronize(stream);
+        tend = std::chrono::high_resolution_clock::now();
+
+        // ns->ms
+        double speed = std::chrono::duration_cast<std::chrono::duration<double> >(
+            tend - tbegin).count() / number; 
+        res.push_back(speed);
+    }
+
+    // copy output array from gpu to cpu
+rt_code_mem_copy_dtoh
+    // free memory
+rt_code_free_d_mem
+    cuStreamDestroy(stream);
+    cuCtxDestroy(context);
+    double avg = 0.0;
+    for (double r : res) {
+        avg += r;
+    }
+    avg /= static_cast<double>(res.size());
+    std::cout<< "average latency = " <<  std::fixed << std::setprecision(10)  << avg * 1000 << "ms" << std::endl;
+    std::cout<< "Finish runtime profiling.\n";
+}
+
+
+extern "C" void cuda_runtime_exec(rt_code_params_list)
+{
+    std::cout<< "Start runtime execution.\n";
+    // initialize cuda
+    checkCudaDrvErrors(cuInit(0));
+
+    // get the number of cuda devices
+    int device_count = 0;
+    checkCudaDrvErrors(cuDeviceGetCount(&device_count));
+
+    if (device_count == 0) {
+        std::cerr << "No cuda devices found" << std::endl;
+        exit(1);
+    }
+
+    // get the first cuda device
+    CUdevice device;
+    checkCudaDrvErrors(cuDeviceGet(&device, 0));
+
+    // create a cuda context on the device
+    CUcontext context;
+    checkCudaDrvErrors(cuCtxCreate(&context, 0, device));
+
+    std::string ptx_code = ReadFileToString(rt_code_ptx_path);
+
+    CUmodule module;
+    checkCudaDrvErrors(cuModuleLoadData(&module, ptx_code.c_str()));
+
+    // get the cuda kernel function
+    CUfunction kernel;
+    checkCudaDrvErrors(cuModuleGetFunction(&kernel, module, rt_code_kernel_name));
+
+    // allocate input and output arrays on the gpu
+rt_code_mem_alloc
+
+    // copy input arrays from cpu to gpu
+rt_code_mem_copy_htod
+
+rt_code_set_grid_params
+rt_code_set_block_params
+rt_code_init_memref_params
+
+    // launch the kernel
+    void *args[] = {rt_code_set_args_params};
+    checkCudaDrvErrors(cuLaunchKernel(kernel, gx, gy, gz, bx, by, bz, 0, NULL, args, NULL));
+
+    // copy output array from gpu to cpu
+rt_code_mem_copy_dtoh
+    // free memory
+rt_code_free_d_mem
+    std::cout<< "Finish runtime execution.\n";
+}

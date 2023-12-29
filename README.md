@@ -1,61 +1,61 @@
-- [What Is AKG?](#what-is-akg)
-- [Hardware Backends Support](#hardware-backends-support)
-- [Build](#build)
-    - [Build With MindSpore](#build-with-mindspore)
-    - [Build Standalone](#build-standalone)
-- [Run](#run)
-- [Contributing](#contributing)
-- [Release Notes](#release-notes)
-- [License](#license)
+- [AKG简述](#AKG简述)
+- [硬件后端支持](#硬件后端支持)
+- [构建](#构建)
+    - [从MindSpore侧构建](#从MindSpore侧构建)
+    - [独立构建](#独立构建)
+- [运行](#运行)
+- [贡献](#贡献)
+- [版本说明](#版本说明)
+- [许可证](#许可证)
 
-[查看中文](./README_CN.md)
+[View English](./README.md)
 
-## What Is AKG
-AKG(Auto Kernel Generator) is an optimizer for operators in Deep Learning Networks. It provides the ability to automatically fuse ops with specific patterns. AKG works with MindSpore-GraphKernel to improve the performance of networks running on different hardware backends.
+## AKG简述
+AKG(Auto Kernel Generator)对深度神经网络中的算子进行优化，并提供特定模式下的算子自动融合功能。AKG与MindSpore的图算融合功能协同工作，可提升在不同硬件后端上运行网络的性能。
 
-AKG composes with three basic optimization module, normalization, auto schedule and backend optimization.
-- **normalization.** In order to solve the limitation in expression ability of polyhedral(which can only process static linear programs), the computation IR needs to be normalized first. The mainly optimization of normalization module includes auto-inline, loop fusing, common subexpression elimination and so on.
-- **auto schedule.** Base on polyhedral technology, the auto schedule module mainly have auto-vectorization, auto-tiling, thread/block mapping, dependency analysis and memory promotion.
-- **backend optimization.** The backend optimization module mainly consists of TensorCore acceleration, double buffer optimization, storage flatten optimization and inject sync optimization.
+AKG由三个基本的优化模块组成：规范化、自动调度和后端优化。
+- **规范化：** 为了解决polyhedral表达能力的局限性（只能处理静态的线性程序），需要首先对计算公式IR进行规范化。规范化模块中的优化主要包括自动运算符inline、自动循环融合和公共子表达式优化等。
+- **自动调度：** 自动调度模块基于polyhedral技术，主要包括自动向量化、自动切分、thread/block映射、依赖分析和数据搬移等。
+- **后端优化：** 后端优化模块的优化主要包括TensorCore使能、双缓冲区、内存展开和同步指令插入等。
 
   <img src="docs/akg-design.png" style="zoom:80%" div align=center/>
 
-## Hardware Backends Support
-At present, `Ascend910`, `NVIDIA V100/A100` and `CPU` are supported. More Backends are on the list.
+## 硬件后端支持
+当前支持`Ascend910`、`NVIDIA V100/A100`和`CPU`等，更多硬件后端支持待开发。
 
-## Build
+## 构建
 
-### Build With MindSpore
-See [MindSpore README.md](https://gitee.com/mindspore/mindspore/blob/master/README.md) for details.
+### 从MindSpore侧构建
+详细细节请参考[MindSpore README.md](https://gitee.com/mindspore/mindspore/blob/master/README.md)。
 
-### Build Standalone
-We suggest you build and run akg together with MindSpore. And we also provide a way to run case in standalone mode for convenience sake.
-Refer to [MindSpore Installation](https://www.mindspore.cn/install/en) for more information about compilation dependencies.
-- Build on Ascend910
+### 独立构建
+我们建议您从MindSpore侧构建运行AKG代码，但同时为了方便开发，我们提供了独立编译运行AKG的方式。
+详细的编译依赖请参考[MindSpore安装指南](https://www.mindspore.cn/install)。
+- 构建Ascend910版本
 
-  [git-lfs](https://github.com/git-lfs/git-lfs/wiki/installation) needs to be installed before cloning the source codes.
+  在下载代码前需安装[git-lfs软件](https://github.com/git-lfs/git-lfs/wiki/installation)。
   ```
   git clone https://gitee.com/mindspore/akg.git
   cd akg
   bash build.sh -e ascend -j8
   ```
 
-- Build on GPU
+- 构建GPU版本
   ```
   git clone https://gitee.com/mindspore/akg.git
   cd akg
   bash build.sh -e gpu -j8
   ```
 
-- Build on CPU
+- 构建CPU版本
   ```
   git clone https://gitee.com/mindspore/akg.git
   cd akg
   bash build.sh -e cpu -j8
   ```
 
-## Run Standalone
-1. Set Environment
+## 运行
+1. 设置环境变量
 
 - Ascend910
   ```
@@ -75,46 +75,93 @@ Refer to [MindSpore Installation](https://www.mindspore.cn/install/en) for more 
   source ./test_env.sh cpu
   ```
 
-2. Run test
-
-- Use script:
+2. 运行测试用例
+- 使用测试脚本：
 ```
 cd tests/st
-python run.py -e gpu -o add -l level0  # run add operator on GPU
+python run.py -e gpu -o add -l level0  # 执行GPU Add算子的level0用例
 ```
-  Detailed instructions see:`python run.py -h`
-- Use specific case:
-
+  使用说明可以`python run.py -h`查看．
+- 使用测试文件：
+  
   - Ascend910
   ```
   cd tests/st/ops/
-  pytest -s test_abs.py -m "level0 and platform_x86_ascend_training" # run level0 testcases on Ascend
+  pytest -s test_abs.py -m "level0 and platform_x86_ascend_training" # 运行Ascend level0测试用例
   ```
 
   - NVIDIA V100/A100
   ```
   cd tests/st/ops/
-  pytest -s test_abs.py -m "level0 and platform_x86_gpu_training" # run level0 testcases on GPU
+  pytest -s test_abs.py -m "level0 and platform_x86_gpu_training" # 运行GPU level0测试用例
   ```
 
   - CPU
   ```
   cd tests/st/ops/
-  pytest -s test_abs.py -m "level0 and platform_x86_cpu" # run level0 testcases on CPU
+  pytest -s test_abs.py -m "level0 and platform_x86_cpu" # 运行CPU level0测试用例
   ```
 
-## Using AKG to generate high performance kernels
-See [Wiki](https://gitee.com/mindspore/akg/wikis).
+## 使用AKG生成高性能算子
+见[Wiki](https://gitee.com/mindspore/akg/wikis)。
 
-## Contributing
+## AKG-MLIR
 
-Welcome contributions. See [MindSpore Contributor Wiki](https://gitee.com/mindspore/mindspore/blob/master/CONTRIBUTING.md) for
-more details.
+AKG-MLIR是基于MLIR（Multi-Level Intermediate Representation）开发的新一代AKG，GPU和CPU后端下部分场景性能超越AKG，同时增加了对于动态形状表达和计算的支持。
 
-## Release Notes
+### 构建
 
-The release notes, see our [RELEASE](RELEASE.md).
+基于上述AKG构建方式，增加选项`-r`编译akg-mlir部分，以CPU为例：
 
-## License
+```shell
+bash build.sh -e cpu -j8 -r
 
-[Apache License 2.0](LICENSE)
+Usage:
+bash build.sh [-e cpu|gpu|ascend|all] [-j[n]] [-t on|off] [-o] [-u] [-m akg-mlir-only|all] [-s] [-c] [-h]
+
+Options:
+    -h Print usage
+    -d Debug mode
+    -e Hardware environment: cpu, gpu, ascend or all
+    -j[n] Set the threads when building (Default: -j8)
+    -t Unit test: on or off (Default: off)
+    -o Output .o file directory
+    -u Enable auto tune
+    -m Compile mode: akg-mlir-only or all, default: all
+    -s Specifies the source path of third-party, default: none \n\t[0]llvm-project\n\t[1]symengine
+    -c Clean built files, default: off
+    -r Enable akg-mlir, default: off
+```
+
+由于AKG-MLIR基于MLIR/LLVM框架搭建，构建所需依赖项请参考[LLVM安装说明](https://llvm.org/docs/GettingStarted.html#getting-the-source-code-and-building-llvm)提前安装。
+
+### 运行
+
+- 运行一个CPU融合算子的st用例，并显示运行10次后的平均执行时间：
+
+```shell
+cd ${AKG_ROOT_PATH}/akg-mlir/test
+source test_env.sh
+cd ${AKG_ROOT_PATH}/akg-mlir/python/akg_v2/exec_tools
+python py_benchmark.py -e cpu -f ${AKG_ROOT_PATH}/akg-mlir/test/st/cpu/user_cases/Fused_Reshape_Mul_Sub_Mul_split_1885787488857948654.info -tr=10
+```
+
+- 运行一个包含多个mindspore.broadcast_to算子函数的ut用例，并显示将它们lower到Linalg Dialect的结果：
+
+```shell
+cd ${AKG_ROOT_PATH}/akg-mlir/test/ut/Dialect/MindSpore
+export AKG_MLIR_TOOLS=${AKG_ROOT_PATH}/build/akg-mlir/bin
+${AKG_MLIR_TOOLS}/akg-opt mindspore_broadcast_to_op.mlir -convert-mindspore-to-linalg
+```
+
+## 贡献
+
+欢迎您的贡献，具体细节请参考[MindSpore贡献者Wiki](https://gitee.com/mindspore/mindspore/blob/master/CONTRIBUTING.md)。
+
+## 版本说明
+
+版本说明详见[RELEASE](RELEASE.md)。
+
+## 许可证
+
+[Apache License 2.0](LICENSE)。

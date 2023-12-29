@@ -1,0 +1,1686 @@
+From 0c5260fd08a91cb08b8eb37b80207e9cece3c66c Mon Sep 17 00:00:00 2001
+From: zhengzuohe <zhengzuohe@huawei.com>
+Date: Thu, 16 Nov 2023 17:47:41 +0800
+Subject: [llvm_patch_7cbf1a2591520c2491aa35339f227775f4d3adf6] zzh modify
+
+---
+ .../mlir/Dialect/Affine/CMakeLists.txt        |   1 +
+ mlir/include/mlir/Dialect/Affine/Passes.h     |   3 +-
+ .../Dialect/Affine/Transforms/CMakeLists.txt  |   0
+ .../Affine/Transforms/SuperVectorize.h        | 125 ++++++++++
+ mlir/include/mlir/Dialect/Affine/Utils.h      |  19 ++
+ .../Linalg/IR/LinalgNamedStructuredOps.yaml   | 141 +++++++++++
+ .../Dialect/Linalg/IR/LinalgStructuredOps.td  |  76 ++++++
+ .../Transforms/BufferizableOpInterfaceImpl.h  |   9 +-
+ mlir/include/mlir/Dialect/Tosa/IR/TosaOps.td  |   4 +-
+ mlir/lib/Conversion/FuncToLLVM/FuncToLLVM.cpp |  12 +
+ mlir/lib/Conversion/MathToLibm/MathToLibm.cpp |  10 +-
+ .../Conversion/OpenMPToLLVM/OpenMPToLLVM.cpp  |   6 +
+ mlir/lib/Conversion/SCFToGPU/SCFToGPU.cpp     |  18 +-
+ .../Conversion/SCFToOpenMP/SCFToOpenMP.cpp    |  30 ++-
+ .../Conversion/TosaToLinalg/TosaToLinalg.cpp  |  67 ++++-
+ .../Affine/Analysis/AffineAnalysis.cpp        |  39 ++-
+ .../Dialect/Affine/Analysis/LoopAnalysis.cpp  |  12 +-
+ mlir/lib/Dialect/Affine/Analysis/Utils.cpp    |  13 +-
+ .../Transforms/AffineDataCopyGeneration.cpp   |  12 +-
+ .../Affine/Transforms/SuperVectorize.cpp      | 162 +++++--------
+ mlir/lib/Dialect/Affine/Utils/Utils.cpp       |  13 +
+ .../GPU/Transforms/KernelOutlining.cpp        |  69 +++++-
+ mlir/lib/Dialect/Linalg/IR/LinalgOps.cpp      | 228 ++++++++++++++++++
+ .../BufferizableOpInterfaceImpl.cpp           |   8 +-
+ .../Linalg/Transforms/ElementwiseOpFusion.cpp |  65 +++++
+ .../Linalg/Transforms/Generalization.cpp      |   2 +-
+ 26 files changed, 988 insertions(+), 156 deletions(-)
+ create mode 100644 mlir/include/mlir/Dialect/Affine/Transforms/CMakeLists.txt
+ create mode 100644 mlir/include/mlir/Dialect/Affine/Transforms/SuperVectorize.h
+
+diff --git a/mlir/include/mlir/Dialect/Affine/CMakeLists.txt b/mlir/include/mlir/Dialect/Affine/CMakeLists.txt
+index fe1b372f6e03..3b53dcb07b46 100644
+--- a/mlir/include/mlir/Dialect/Affine/CMakeLists.txt
++++ b/mlir/include/mlir/Dialect/Affine/CMakeLists.txt
+@@ -1,5 +1,6 @@
+ add_subdirectory(IR)
+ add_subdirectory(TransformOps)
++add_subdirectory(Transforms)
+ 
+ set(LLVM_TARGET_DEFINITIONS Passes.td)
+ mlir_tablegen(Passes.h.inc -gen-pass-decls -name Affine)
+diff --git a/mlir/include/mlir/Dialect/Affine/Passes.h b/mlir/include/mlir/Dialect/Affine/Passes.h
+index 7102626db0f6..5a6743bb8914 100644
+--- a/mlir/include/mlir/Dialect/Affine/Passes.h
++++ b/mlir/include/mlir/Dialect/Affine/Passes.h
+@@ -58,7 +58,8 @@ createAffineLoopNormalizePass(bool promoteSingleIter = false);
+ std::unique_ptr<OperationPass<func::FuncOp>> createAffineDataCopyGenerationPass(
+     unsigned slowMemorySpace, unsigned fastMemorySpace,
+     unsigned tagMemorySpace = 0, int minDmaTransferSize = 1024,
+-    uint64_t fastMemCapacityBytes = std::numeric_limits<uint64_t>::max());
++    uint64_t fastMemCapacityBytes = std::numeric_limits<uint64_t>::max(),
++    bool generateDmaArg = true, bool skipNonUnitStrideLoopsArg = false);
+ /// Overload relying on pass options for initialization.
+ std::unique_ptr<OperationPass<func::FuncOp>>
+ createAffineDataCopyGenerationPass();
+diff --git a/mlir/include/mlir/Dialect/Affine/Transforms/CMakeLists.txt b/mlir/include/mlir/Dialect/Affine/Transforms/CMakeLists.txt
+new file mode 100644
+index 000000000000..e69de29bb2d1
+diff --git a/mlir/include/mlir/Dialect/Affine/Transforms/SuperVectorize.h b/mlir/include/mlir/Dialect/Affine/Transforms/SuperVectorize.h
+new file mode 100644
+index 000000000000..140088fde681
+--- /dev/null
++++ b/mlir/include/mlir/Dialect/Affine/Transforms/SuperVectorize.h
+@@ -0,0 +1,125 @@
++//===--------------- SuperVectorize.h - vectorize op ------------*- C++ -*-===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++
++#ifndef MLIR_DIALECT_AFFINE_TRANSFORMS_SUPERVECTORIZE_H
++#define MLIR_DIALECT_AFFINE_TRANSFORMS_SUPERVECTORIZE_H
++
++#include "mlir/IR/Operation.h"
++#include "mlir/IR/Builders.h"
++#include "mlir/IR/IRMapping.h"
++#include "mlir/Dialect/Affine/Utils.h"
++
++namespace mlir {
++namespace vector {
++struct VectorizationState {
++
++  VectorizationState(MLIRContext *context) : builder(context) {}
++
++  /// Registers the vector replacement of a scalar operation and its result
++  /// values. Both operations must have the same number of results.
++  ///
++  /// This utility is used to register the replacement for the vast majority of
++  /// the vectorized operations.
++  ///
++  /// Example:
++  ///   * 'replaced': %0 = arith.addf %1, %2 : f32
++  ///   * 'replacement': %0 = arith.addf %1, %2 : vector<128xf32>
++  void registerOpVectorReplacement(Operation *replaced, Operation *replacement);
++
++  /// Registers the vector replacement of a scalar value. The replacement
++  /// operation should have a single result, which replaces the scalar value.
++  ///
++  /// This utility is used to register the vector replacement of block arguments
++  /// and operation results which are not directly vectorized (i.e., their
++  /// scalar version still exists after vectorization), like uniforms.
++  ///
++  /// Example:
++  ///   * 'replaced': block argument or operation outside of the vectorized
++  ///     loop.
++  ///   * 'replacement': %0 = vector.broadcast %1 : f32 to vector<128xf32>
++  void registerValueVectorReplacement(Value replaced, Operation *replacement);
++
++  /// Registers the vector replacement of a block argument (e.g., iter_args).
++  ///
++  /// Example:
++  ///   * 'replaced': 'iter_arg' block argument.
++  ///   * 'replacement': vectorized 'iter_arg' block argument.
++  void registerBlockArgVectorReplacement(BlockArgument replaced,
++                                         BlockArgument replacement);
++
++  /// Registers the scalar replacement of a scalar value. 'replacement' must be
++  /// scalar. Both values must be block arguments. Operation results should be
++  /// replaced using the 'registerOp*' utilitites.
++  ///
++  /// This utility is used to register the replacement of block arguments
++  /// that are within the loop to be vectorized and will continue being scalar
++  /// within the vector loop.
++  ///
++  /// Example:
++  ///   * 'replaced': induction variable of a loop to be vectorized.
++  ///   * 'replacement': new induction variable in the new vector loop.
++  void registerValueScalarReplacement(BlockArgument replaced,
++                                      BlockArgument replacement);
++
++  /// Registers the scalar replacement of a scalar result returned from a
++  /// reduction loop. 'replacement' must be scalar.
++  ///
++  /// This utility is used to register the replacement for scalar results of
++  /// vectorized reduction loops with iter_args.
++  ///
++  /// Example 2:
++  ///   * 'replaced': %0 = affine.for %i = 0 to 512 iter_args(%x = ...) -> (f32)
++  ///   * 'replacement': %1 = vector.reduction <add>, %0 : vector<4xf32> into
++  ///   f32
++  void registerLoopResultScalarReplacement(Value replaced, Value replacement);
++
++  /// Returns in 'replacedVals' the scalar replacement for values in
++  /// 'inputVals'.
++  void getScalarValueReplacementsFor(ValueRange inputVals,
++                                     SmallVectorImpl<Value> &replacedVals);
++
++  /// Erases the scalar loop nest after its successful vectorization.
++  void finishVectorizationPattern(AffineForOp rootLoop);
++
++  // Used to build and insert all the new operations created. The insertion
++  // point is preserved and updated along the vectorization process.
++  OpBuilder builder;
++
++  // Maps input scalar operations to their vector counterparts.
++  DenseMap<Operation *, Operation *> opVectorReplacement;
++  // Maps input scalar values to their vector counterparts.
++  IRMapping valueVectorReplacement;
++  // Maps input scalar values to their new scalar counterparts in the vector
++  // loop nest.
++  IRMapping valueScalarReplacement;
++  // Maps results of reduction loops to their new scalar counterparts.
++  DenseMap<Value, Value> loopResultScalarReplacement;
++
++  // Maps the newly created vector loops to their vector dimension.
++  DenseMap<Operation *, unsigned> vecLoopToVecDim;
++
++  // Maps the new vectorized loops to the corresponding vector masks if it is
++  // required.
++  DenseMap<Operation *, Value> vecLoopToMask;
++
++  // The strategy drives which loop to vectorize by which amount.
++  const VectorizationStrategy *strategy = nullptr;
++
++private:
++  /// Internal implementation to map input scalar values to new vector or scalar
++  /// values.
++  void registerValueVectorReplacementImpl(Value replaced, Value replacement);
++  void registerValueScalarReplacementImpl(Value replaced, Value replacement);
++};
++
++Operation *vectorizeOneOperationAKG(Operation *op,
++                                    VectorizationState &state);
++
++}
++}
++#endif // MLIR_DIALECT_AFFINE_TRANSFORMS_SUPERVECTORIZE_H
+diff --git a/mlir/include/mlir/Dialect/Affine/Utils.h b/mlir/include/mlir/Dialect/Affine/Utils.h
+index b6e60b064cca..22d0b2a0aa10 100644
+--- a/mlir/include/mlir/Dialect/Affine/Utils.h
++++ b/mlir/include/mlir/Dialect/Affine/Utils.h
+@@ -13,6 +13,7 @@
+ #ifndef MLIR_DIALECT_AFFINE_UTILS_H
+ #define MLIR_DIALECT_AFFINE_UTILS_H
+ 
++#include "mlir/Dialect/Affine/Analysis/NestedMatcher.h"
+ #include "mlir/Dialect/Affine/Analysis/AffineAnalysis.h"
+ #include "mlir/Dialect/Affine/IR/AffineOps.h"
+ #include <optional>
+@@ -384,6 +385,24 @@ private:
+   Location loc;
+ };
+ 
++/// It is convenient to reference static functions in AKG.
++Optional<NestedPattern> makePatternAKG(const DenseSet<Operation *> &parallelLoops, int vectorRank,
++                                       ArrayRef<int64_t> fastestVaryingPattern = {});
++
++void computeIntersectionBucketsAKG(ArrayRef<NestedMatch> matches,
++                                   std::vector<SmallVector<NestedMatch, 8>> &intersectionBuckets);
++
++LogicalResult analyzeProfitabilityAKG(ArrayRef<NestedMatch> matches, unsigned depthInPattern, unsigned patternDepth,
++                                      VectorizationStrategy *strategy);
++
++void vectorizeLoopIfProfitableAKG(Operation *loop, unsigned depthInPattern, unsigned patternDepth,
++                                  VectorizationStrategy *strategy);
++
++void getMatchedAffineLoopsAKG(NestedMatch match, std::vector<SmallVector<AffineForOp, 2>> &loops);
++
++LogicalResult vectorizeLoopNestAKG(std::vector<SmallVector<AffineForOp, 2>> &loops,
++                                   const VectorizationStrategy &strategy);
++
+ } // namespace mlir
+ 
+ #endif // MLIR_DIALECT_AFFINE_UTILS_H
+diff --git a/mlir/include/mlir/Dialect/Linalg/IR/LinalgNamedStructuredOps.yaml b/mlir/include/mlir/Dialect/Linalg/IR/LinalgNamedStructuredOps.yaml
+index cbe40fcec5e0..a39507f68462 100644
+--- a/mlir/include/mlir/Dialect/Linalg/IR/LinalgNamedStructuredOps.yaml
++++ b/mlir/include/mlir/Dialect/Linalg/IR/LinalgNamedStructuredOps.yaml
+@@ -932,6 +932,147 @@ structured_op: !LinalgStructuredOpConfig
+                 - !ScalarExpression
+                   scalar_arg: y
+ --- !LinalgOpConfig
++metadata: !LinalgOpMetadata
++  name: batch_matmul_4d
++  cpp_class_name: BatchMatmul4DOp
++  doc: |-
++    Performs a batched matrix multiplication of two 4D inputs.
++
++    Numeric casting is performed on the operands to the inner multiply, promoting
++    them to the same data type as the accumulator/output.
++  implements:
++  - LinalgContractionOpInterface
++structured_op: !LinalgStructuredOpConfig
++  args:
++  - !LinalgOperandDefConfig
++    name: A
++    kind: input_tensor
++    type_var: T1
++    shape_map: affine_map<()[s0, s1, s2, s3, s4] -> (s0, s1, s2, s3)>
++  - !LinalgOperandDefConfig
++    name: B
++    kind: input_tensor
++    type_var: T2
++    shape_map: affine_map<()[s0, s1, s2, s3, s4] -> (s0, s1, s3, s4)>
++  - !LinalgOperandDefConfig
++    name: C
++    kind: output_tensor
++    type_var: U
++    shape_map: affine_map<()[s0, s1, s2, s3, s4] -> (s0, s1, s2, s4)>
++  indexing_maps: !LinalgIndexingMapsConfig
++    static_indexing_maps:
++    - affine_map<(d0, d1, d2, d3, d4)[s0, s1, s2, s3, s4] -> (d0, d1, d2, d4)>
++    - affine_map<(d0, d1, d2, d3, d4)[s0, s1, s2, s3, s4] -> (d0, d1, d4, d3)>
++    - affine_map<(d0, d1, d2, d3, d4)[s0, s1, s2, s3, s4] -> (d0, d1, d2, d3)>
++  iterator_types:
++  - parallel
++  - parallel
++  - parallel
++  - parallel
++  - reduction
++  assignments:
++  - !ScalarAssign
++    arg: C
++    value: !ScalarExpression
++      scalar_fn:
++        kind: binary
++        fn_name: add
++        operands:
++        - !ScalarExpression
++          scalar_arg: C
++        - !ScalarExpression
++          scalar_fn:
++            kind: binary
++            fn_name: mul
++            operands:
++            - !ScalarExpression
++              scalar_fn:
++                kind: type
++                fn_name: cast_signed
++                type_var: U
++                operands:
++                - !ScalarExpression
++                  scalar_arg: A
++            - !ScalarExpression
++              scalar_fn:
++                kind: type
++                fn_name: cast_signed
++                type_var: U
++                operands:
++                - !ScalarExpression
++                  scalar_arg: B
++--- !LinalgOpConfig
++metadata: !LinalgOpMetadata
++  name: batch_matmul_4d_transpose_b
++  cpp_class_name: BatchMatmul4DTransposeBOp
++  doc: |-
++    Performs a batched matrix multiplication of two 4D inputs where rhs operand has its non-batch
++    dimensions transposed.
++
++    Numeric casting is performed on the operands to the inner multiply, promoting
++    them to the same data type as the accumulator/output.
++  implements:
++  - LinalgContractionOpInterface
++structured_op: !LinalgStructuredOpConfig
++  args:
++  - !LinalgOperandDefConfig
++    name: A
++    kind: input_tensor
++    type_var: T1
++    shape_map: affine_map<()[s0, s1, s2, s3, s4] -> (s0, s1, s2, s3)>
++  - !LinalgOperandDefConfig
++    name: B
++    kind: input_tensor
++    type_var: T2
++    shape_map: affine_map<()[s0, s1, s2, s3, s4] -> (s0, s1, s4, s3)>
++  - !LinalgOperandDefConfig
++    name: C
++    kind: output_tensor
++    type_var: U
++    shape_map: affine_map<()[s0, s1, s2, s3, s4] -> (s0, s1, s2, s4)>
++  indexing_maps: !LinalgIndexingMapsConfig
++    static_indexing_maps:
++    - affine_map<(d0, d1, d2, d3, d4)[s0, s1, s2, s3, s4] -> (d0, d1, d2, d4)>
++    - affine_map<(d0, d1, d2, d3, d4)[s0, s1, s2, s3, s4] -> (d0, d1, d3, d4)>
++    - affine_map<(d0, d1, d2, d3, d4)[s0, s1, s2, s3, s4] -> (d0, d1, d2, d3)>
++  iterator_types:
++  - parallel
++  - parallel
++  - parallel
++  - parallel
++  - reduction
++  assignments:
++  - !ScalarAssign
++    arg: C
++    value: !ScalarExpression
++      scalar_fn:
++        kind: binary
++        fn_name: add
++        operands:
++        - !ScalarExpression
++          scalar_arg: C
++        - !ScalarExpression
++          scalar_fn:
++            kind: binary
++            fn_name: mul
++            operands:
++            - !ScalarExpression
++              scalar_fn:
++                kind: type
++                fn_name: cast_signed
++                type_var: U
++                operands:
++                - !ScalarExpression
++                  scalar_arg: A
++            - !ScalarExpression
++              scalar_fn:
++                kind: type
++                fn_name: cast_signed
++                type_var: U
++                operands:
++                - !ScalarExpression
++                  scalar_arg: B
++--- !LinalgOpConfig
+ metadata: !LinalgOpMetadata
+   name: vecmat
+   cpp_class_name: VecmatOp
+diff --git a/mlir/include/mlir/Dialect/Linalg/IR/LinalgStructuredOps.td b/mlir/include/mlir/Dialect/Linalg/IR/LinalgStructuredOps.td
+index dd2a943184a3..0ed47978be8f 100644
+--- a/mlir/include/mlir/Dialect/Linalg/IR/LinalgStructuredOps.td
++++ b/mlir/include/mlir/Dialect/Linalg/IR/LinalgStructuredOps.td
+@@ -229,6 +229,82 @@ def GenericOp : LinalgStructuredBase_Op<"generic", [
+ }
+ 
+ 
++//===----------------------------------------------------------------------===//
++// Template Linalg ops.
++//===----------------------------------------------------------------------===//
++
++def TemplateOp
++        : LinalgStructuredBase_Op<"template", [
++          DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmBlockArgumentNames"]>,
++          AttrSizedOperandSegments]> {
++
++  let arguments = (ins Variadic<AnyType>:$inputs,
++                        Variadic<AnyShaped>:$outputs,
++                        AffineMapArrayAttr:$indexing_maps,
++                        IteratorTypeArrayAttr:$iterator_types,
++                        OptionalAttr<StrAttr>:$doc,
++                        OptionalAttr<StrAttr>:$library_call);
++  let results = (outs Variadic<AnyRankedTensor>:$result_tensors);
++  let regions = (region AnyRegion:$region);
++
++  let builders = [
++  OpBuilder<(ins "TypeRange":$resultTensorTypes, "ValueRange":$inputs,
++    "ValueRange":$outputs, "ArrayAttr":$indexingMaps,
++    "ArrayAttr":$iteratorTypes, "StringAttr":$doc,
++    "StringAttr":$libraryCall,
++    "function_ref<void(OpBuilder &, Location, ValueRange)>",
++    CArg<"ArrayRef<NamedAttribute>", "{}">:$attributes)>,
++  OpBuilder<(ins "TypeRange":$resultTensorTypes, "ValueRange":$inputs,
++    "ValueRange":$outputs, "ArrayRef<AffineMap>":$indexingMaps,
++    "ArrayRef<utils::IteratorType>":$iteratorTypes, "StringRef":$doc,
++    "StringRef":$libraryCall,
++    CArg<"function_ref<void(OpBuilder &, Location, ValueRange)>", "nullptr">,
++    CArg<"ArrayRef<NamedAttribute>", "{}">:$attributes)>,
++    OpBuilder<(ins "ValueRange":$inputs, "ValueRange":$outputBuffers,
++    "ArrayRef<AffineMap>":$indexingMaps, "ArrayRef<utils::IteratorType>":$iteratorTypes,
++    "StringRef":$doc, "StringRef":$libraryCall,
++    CArg<"function_ref<void(OpBuilder &, Location, ValueRange)>", "nullptr">,
++    CArg<"ArrayRef<NamedAttribute>", "{}">:$attributes)>,
++  OpBuilder<(ins "TypeRange":$resultTensorTypes, "ValueRange":$inputs,
++    "ValueRange":$outputs, "ArrayRef<AffineMap>":$indexingMaps,
++    "ArrayRef<utils::IteratorType>":$iteratorTypes,
++    CArg<"function_ref<void(OpBuilder &, Location, ValueRange)>", "nullptr">,
++    CArg<"ArrayRef<NamedAttribute>", "{}">:$attributes)>,
++    OpBuilder<(ins "ValueRange":$inputs, "ValueRange":$outputBuffers,
++    "ArrayRef<AffineMap>":$indexingMaps, "ArrayRef<utils::IteratorType>":$iteratorTypes,
++    CArg<"function_ref<void(OpBuilder &, Location, ValueRange)>", "nullptr">,
++    CArg<"ArrayRef<NamedAttribute>", "{}">:$attributes)>
++  ];
++
++  let extraClassDeclaration = structuredOpsBaseDecls # [{
++    SmallVector<StringRef, 8> linalgTraitAttrNames() {
++      return SmallVector<StringRef, 8>{
++          getDocAttrName(),
++          getIndexingMapsAttrName(), getLibraryCallAttrName(),
++          getIteratorTypesAttrName(),
++      };
++    }
++    std::string getLibraryCallName() {
++      return getLibraryCall() ?
++             getLibraryCall()->str() : "op_has_no_registered_library_name";
++    }
++
++    std::pair<int64_t, int64_t> getDpsInitsPositionRange() {
++      int64_t getNumOperands = this->getNumOperands();
++      return {getNumOperands - 1, getNumOperands};
++    }
++
++    static std::function<void(ImplicitLocOpBuilder &,
++                              Block &, ArrayRef<NamedAttribute>)>
++    getRegionBuilder() {
++      return nullptr;
++    }
++  }];
++
++  let hasCustomAssemblyFormat = 1;
++  let hasFolder = 1;
++}
++
+ //===----------------------------------------------------------------------===//
+ // Map op.
+ //===----------------------------------------------------------------------===//
+diff --git a/mlir/include/mlir/Dialect/Linalg/Transforms/BufferizableOpInterfaceImpl.h b/mlir/include/mlir/Dialect/Linalg/Transforms/BufferizableOpInterfaceImpl.h
+index 3afe2cd0d32f..b24ab71f4460 100644
+--- a/mlir/include/mlir/Dialect/Linalg/Transforms/BufferizableOpInterfaceImpl.h
++++ b/mlir/include/mlir/Dialect/Linalg/Transforms/BufferizableOpInterfaceImpl.h
+@@ -8,10 +8,17 @@
+ 
+ #ifndef MLIR_DIALECT_LINALG_BUFFERIZABLEOPINTERFACEIMPL_H
+ #define MLIR_DIALECT_LINALG_BUFFERIZABLEOPINTERFACEIMPL_H
++#include "mlir/Dialect/Bufferization/IR/BufferizableOpInterface.h"
++#include "mlir/Support/LogicalResult.h"
+ 
+ namespace mlir {
+-class DialectRegistry;
++class RewriterBase;
++class DestinationStyleOpInterface;
++LogicalResult bufferizeDestinationStyleOpInterface(RewriterBase &rewriter,
++                                     DestinationStyleOpInterface op,
++                                     const mlir::bufferization::BufferizationOptions &options);
+ 
++class DialectRegistry;
+ namespace linalg {
+ void registerBufferizableOpInterfaceExternalModels(DialectRegistry &registry);
+ } // namespace linalg
+diff --git a/mlir/include/mlir/Dialect/Tosa/IR/TosaOps.td b/mlir/include/mlir/Dialect/Tosa/IR/TosaOps.td
+index f9221662b1d7..5d58f9209d74 100644
+--- a/mlir/include/mlir/Dialect/Tosa/IR/TosaOps.td
++++ b/mlir/include/mlir/Dialect/Tosa/IR/TosaOps.td
+@@ -1538,11 +1538,11 @@ def Tosa_TileOp: Tosa_Op<"tile", [
+   }];
+ 
+   let arguments = (ins
+-    Tosa_Tensor1Dto4D:$input1,
++    Tosa_Tensor:$input1,
+     DenseI64ArrayAttr:$multiples);
+ 
+   let results = (outs
+-    Tosa_Tensor1Dto4D:$output
++    Tosa_Tensor:$output
+   );
+ 
+   let hasFolder = 1;
+diff --git a/mlir/lib/Conversion/FuncToLLVM/FuncToLLVM.cpp b/mlir/lib/Conversion/FuncToLLVM/FuncToLLVM.cpp
+index 6ff52566dee3..63126a1e2ce5 100644
+--- a/mlir/lib/Conversion/FuncToLLVM/FuncToLLVM.cpp
++++ b/mlir/lib/Conversion/FuncToLLVM/FuncToLLVM.cpp
+@@ -565,6 +565,18 @@ struct CallOpInterfaceLowering : public ConvertOpToLLVMPattern<CallOpType> {
+         return failure();
+     }
+ 
++    if (this->getTypeConverter()->getOptions().useBarePtrCallConv) {
++      auto canUseBarePtr = llvm::all_of(callOp->getOperands(), [&](mlir::Value operand){
++        if (auto memrefTy = operand.getType().dyn_cast<BaseMemRefType>()) {
++          return this->getTypeConverter()->canConvertToBarePtr(memrefTy);
++        }
++        return true;
++      });
++      if (!canUseBarePtr) {
++        return failure();
++      }
++    }
++
+     auto promoted = this->getTypeConverter()->promoteOperands(
+         callOp.getLoc(), /*opOperands=*/callOp->getOperands(),
+         adaptor.getOperands(), rewriter);
+diff --git a/mlir/lib/Conversion/MathToLibm/MathToLibm.cpp b/mlir/lib/Conversion/MathToLibm/MathToLibm.cpp
+index 93b58e2ab7d1..6112ea8f9a93 100644
+--- a/mlir/lib/Conversion/MathToLibm/MathToLibm.cpp
++++ b/mlir/lib/Conversion/MathToLibm/MathToLibm.cpp
+@@ -157,14 +157,12 @@ void mlir::populateMathToLibmConversionPatterns(
+     std::optional<PatternBenefit> log1pBenefit) {
+   patterns.add<VecOpToScalarOp<math::Atan2Op>, VecOpToScalarOp<math::CbrtOp>,
+                VecOpToScalarOp<math::ExpM1Op>, VecOpToScalarOp<math::TanhOp>,
+-               VecOpToScalarOp<math::CosOp>, VecOpToScalarOp<math::SinOp>,
+                VecOpToScalarOp<math::ErfOp>, VecOpToScalarOp<math::RoundEvenOp>,
+                VecOpToScalarOp<math::RoundOp>, VecOpToScalarOp<math::AtanOp>,
+                VecOpToScalarOp<math::TanOp>, VecOpToScalarOp<math::TruncOp>>(
+       patterns.getContext(), benefit);
+   patterns.add<PromoteOpToF32<math::Atan2Op>, PromoteOpToF32<math::CbrtOp>,
+                PromoteOpToF32<math::ExpM1Op>, PromoteOpToF32<math::TanhOp>,
+-               PromoteOpToF32<math::CosOp>, PromoteOpToF32<math::SinOp>,
+                PromoteOpToF32<math::ErfOp>, PromoteOpToF32<math::RoundEvenOp>,
+                PromoteOpToF32<math::RoundOp>, PromoteOpToF32<math::AtanOp>,
+                PromoteOpToF32<math::TanOp>, PromoteOpToF32<math::TruncOp>>(
+@@ -187,10 +185,6 @@ void mlir::populateMathToLibmConversionPatterns(
+       patterns.getContext(), "roundevenf", "roundeven", benefit);
+   patterns.add<ScalarOpToLibmCall<math::RoundOp>>(patterns.getContext(),
+                                                   "roundf", "round", benefit);
+-  patterns.add<ScalarOpToLibmCall<math::CosOp>>(patterns.getContext(), "cosf",
+-                                                "cos", benefit);
+-  patterns.add<ScalarOpToLibmCall<math::SinOp>>(patterns.getContext(), "sinf",
+-                                                "sin", benefit);
+   patterns.add<ScalarOpToLibmCall<math::Log1pOp>>(
+       patterns.getContext(), "log1pf", "log1p", log1pBenefit.value_or(benefit));
+   patterns.add<ScalarOpToLibmCall<math::FloorOp>>(patterns.getContext(),
+@@ -217,7 +211,9 @@ void ConvertMathToLibmPass::runOnOperation() {
+   ConversionTarget target(getContext());
+   target.addLegalDialect<arith::ArithDialect, BuiltinDialect, func::FuncDialect,
+                          vector::VectorDialect>();
+-  target.addIllegalDialect<math::MathDialect>();
++  target.addIllegalOp<math::Atan2Op, math::CbrtOp, math::ExpM1Op, math::TanhOp,
++  		math::ErfOp, math::RoundEvenOp, math::RoundOp, math::AtanOp,
++		math::TanOp, math::TruncOp, math::Log1pOp, math::FloorOp, math::CeilOp, math::AtanOp>();
+   if (failed(applyPartialConversion(module, target, std::move(patterns))))
+     signalPassFailure();
+ }
+diff --git a/mlir/lib/Conversion/OpenMPToLLVM/OpenMPToLLVM.cpp b/mlir/lib/Conversion/OpenMPToLLVM/OpenMPToLLVM.cpp
+index 6a2d375c69f7..2f78bfef41d9 100644
+--- a/mlir/lib/Conversion/OpenMPToLLVM/OpenMPToLLVM.cpp
++++ b/mlir/lib/Conversion/OpenMPToLLVM/OpenMPToLLVM.cpp
+@@ -145,6 +145,12 @@ struct ConvertOpenMPToLLVMPass
+ void ConvertOpenMPToLLVMPass::runOnOperation() {
+   auto module = getOperation();
+ 
++  bool isParallel = false;
++  module.walk([&](omp::ParallelOp op) {
++    isParallel = true;
++  });
++  if (!isParallel) return;
++
+   // Convert to OpenMP operations with LLVM IR dialect
+   RewritePatternSet patterns(&getContext());
+   LLVMTypeConverter converter(&getContext());
+diff --git a/mlir/lib/Conversion/SCFToGPU/SCFToGPU.cpp b/mlir/lib/Conversion/SCFToGPU/SCFToGPU.cpp
+index 03cf661c8899..3504e06e3f57 100644
+--- a/mlir/lib/Conversion/SCFToGPU/SCFToGPU.cpp
++++ b/mlir/lib/Conversion/SCFToGPU/SCFToGPU.cpp
+@@ -603,8 +603,10 @@ ParallelToGpuLaunchLowering::matchAndRewrite(ParallelOp parallelOp,
+ 
+   // We can only transform starting at the outer-most loop. Launches inside of
+   // parallel loops are not supported.
+-  if (auto parentLoop = parallelOp->getParentOfType<ParallelOp>())
+-    return failure();
++  if (auto parentLoop = parallelOp->getParentOfType<ParallelOp>()) {
++    llvm::outs() << "TODO(baiji): ignore this failure for now.\n";
++    // return failure();
++  }
+   // Create a launch operation. We start with bound one for all grid/block
+   // sizes. Those will be refined later as we discover them from mappings.
+   Location loc = parallelOp.getLoc();
+@@ -638,8 +640,10 @@ ParallelToGpuLaunchLowering::matchAndRewrite(ParallelOp parallelOp,
+     if (auto nestedParallel = dyn_cast<ParallelOp>(op)) {
+       // Before entering a nested scope, make sure there have been no
+       // sideeffects until now.
+-      if (seenSideeffects)
+-        return failure();
++      if (seenSideeffects) {
++        llvm::outs() << "TODO(baiji): ignore this failure for now.\n";
++        // return failure();
++      }
+       // A nested scf.parallel needs insertion of code to compute indices.
+       // Insert that now. This will also update the worklist with the loops
+       // body.
+@@ -662,8 +666,10 @@ ParallelToGpuLaunchLowering::matchAndRewrite(ParallelOp parallelOp,
+       seenSideeffects |=
+           !isMemoryEffectFree(clone) || clone->getNumRegions() != 0;
+       // If we are no longer in the innermost scope, sideeffects are disallowed.
+-      if (seenSideeffects && leftNestingScope)
+-        return failure();
++      if (seenSideeffects) {
++        llvm::outs() << "TODO(baiji): ignore this failure for now.\n";
++        // return failure();
++      }
+     }
+   }
+ 
+diff --git a/mlir/lib/Conversion/SCFToOpenMP/SCFToOpenMP.cpp b/mlir/lib/Conversion/SCFToOpenMP/SCFToOpenMP.cpp
+index 1c3e35d4a91d..e7980cf2b362 100644
+--- a/mlir/lib/Conversion/SCFToOpenMP/SCFToOpenMP.cpp
++++ b/mlir/lib/Conversion/SCFToOpenMP/SCFToOpenMP.cpp
+@@ -12,6 +12,7 @@
+ //===----------------------------------------------------------------------===//
+ 
+ #include "mlir/Conversion/SCFToOpenMP/SCFToOpenMP.h"
++#include "mlir/Dialect/Func/IR/FuncOps.h"
+ 
+ #include "mlir/Analysis/SliceAnalysis.h"
+ #include "mlir/Dialect/Affine/Analysis/LoopAnalysis.h"
+@@ -331,6 +332,15 @@ static omp::ReductionDeclareOp declareReduction(PatternRewriter &builder,
+         decl, reduce);
+   }
+ 
++  if (matchSimpleReduction<arith::MaxFOp, LLVM::MaxNumOp>(reduction)) {
++    return createDecl(builder, symbolTable, reduce,
++                      minMaxValueForFloat(type, !isMin));
++  }
++  if (matchSimpleReduction<arith::MinFOp, LLVM::MinNumOp>(reduction)) {
++    return createDecl(builder, symbolTable, reduce,
++                      minMaxValueForFloat(type, isMin));
++  }
++  
+   return nullptr;
+ }
+ 
+@@ -383,8 +393,26 @@ struct ParallelOpLowering : public OpRewritePattern<scf::ParallelOp> {
+           reduceOp, reduceOp.getOperand(), std::get<1>(pair));
+     }
+ 
++	std::string omp_get_max_threads_name = "omp_get_max_threads";
++	auto module = SymbolTable::getNearestSymbolTable(parallelOp);
++    auto opFunc = dyn_cast_or_null<SymbolOpInterface>(SymbolTable::lookupSymbolIn(module, omp_get_max_threads_name));
++	if (!opFunc) {
++      OpBuilder::InsertionGuard guard(rewriter);
++      rewriter.setInsertionPointToStart(&module->getRegion(0).front());
++      auto i32 = IntegerType::get(rewriter.getContext(), 32);
++      auto opFunctionTy = FunctionType::get(rewriter.getContext(), {}, i32);
++      opFunc = rewriter.create<func::FuncOp>(rewriter.getUnknownLoc(), omp_get_max_threads_name, opFunctionTy);
++      opFunc.setPrivate();
++      opFunc->setAttr(LLVM::LLVMDialect::getReadnoneAttrName(), UnitAttr::get(rewriter.getContext()));
++	}
++	assert(isa<FunctionOpInterface>(SymbolTable::lookupSymbolIn(module, omp_get_max_threads_name)));
++
++	auto callop = rewriter.create<func::CallOp>(
++      loc, omp_get_max_threads_name, IntegerType::get(rewriter.getContext(), 32), ValueRange());
+     // Create the parallel wrapper.
+     auto ompParallel = rewriter.create<omp::ParallelOp>(loc);
++	auto NumThreadsVar = ompParallel.getNumThreadsVarMutable();
++	NumThreadsVar.append(callop.getResults());
+     {
+ 
+       OpBuilder::InsertionGuard guard(rewriter);
+@@ -441,7 +469,7 @@ static LogicalResult applyPatterns(ModuleOp module) {
+   ConversionTarget target(*module.getContext());
+   target.addIllegalOp<scf::ReduceOp, scf::ReduceReturnOp, scf::ParallelOp>();
+   target.addLegalDialect<omp::OpenMPDialect, LLVM::LLVMDialect,
+-                         memref::MemRefDialect>();
++                         memref::MemRefDialect, func::FuncDialect>();
+ 
+   RewritePatternSet patterns(module.getContext());
+   patterns.add<ParallelOpLowering>(module.getContext());
+diff --git a/mlir/lib/Conversion/TosaToLinalg/TosaToLinalg.cpp b/mlir/lib/Conversion/TosaToLinalg/TosaToLinalg.cpp
+index aa41c962826d..2d961e184b1a 100644
+--- a/mlir/lib/Conversion/TosaToLinalg/TosaToLinalg.cpp
++++ b/mlir/lib/Conversion/TosaToLinalg/TosaToLinalg.cpp
+@@ -552,18 +552,23 @@ elementwiseMatchAndRewriteHelper(Operation *operation,
+ 
+   for (auto arg : operation->getOperands()) {
+     auto operandTy = arg.getType().cast<ShapedType>();
+-    for (int i = 0; i < operandTy.getRank(); i++) {
+-      if (operandTy.isDynamicDim(i) && !dynDims[i])
+-        dynDims[i] = rewriter.create<tensor::DimOp>(loc, arg, i);
++    for (int i = rank -1, j = operandTy.getRank() -1; i >= 0 && j >= 0; i--, j--) {
++      if(resultTy.isDynamicDim(i) && operandTy.isDynamicDim(j) && !dynDims[i]) {
++        dynDims[i] = rewriter.create<tensor::DimOp>(loc, arg, j);
++      }
+     }
+   }
+ 
+   SmallVector<Value> filteredDims = condenseValues(dynDims);
+ 
+   for (auto result : results) {
+-    auto resultTy = result.getType().template cast<ShapedType>();
+-    emptyTensors.push_back(rewriter.create<tensor::EmptyOp>(
++    if (RankedTensorType rankedType = result.getType().dyn_cast<RankedTensorType>()) {
++      emptyTensors.push_back(rewriter.create<tensor::EmptyOp>(loc, rankedType, filteredDims));
++    } else {
++      auto resultTy = result.getType().template cast<ShapedType>();
++      emptyTensors.push_back(rewriter.create<tensor::EmptyOp>(
+         loc, resultTy.getShape(), resultTy.getElementType(), filteredDims));
++    }
+     opResultTypes.push_back(result.getType());
+   }
+ 
+@@ -587,18 +592,41 @@ elementwiseMatchAndRewriteHelper(Operation *operation,
+     SmallVector<int64_t, 5> newShape;
+     SmallVector<AffineExpr, 4> affineExprs;
+     newShape.reserve(type.getRank());
++    // indicates indexes that do not need to be collapsed.
++    SmallVector<uint64_t, 5> indices;
+     for (const auto &it : llvm::enumerate(type.getShape())) {
+       if (it.value() == resultTy.getDimSize(it.index())) {
+         newShape.push_back(it.value());
+         affineExprs.push_back(
+             mlir::getAffineDimExpr(it.index(), rewriter.getContext()));
++        indices.push_back(it.index());
+       }
+     }
+ 
+-    if (newShape.size() != rank) {
+-      operand = rewriter.create<tosa::ReshapeOp>(
+-          loc, RankedTensorType::get(newShape, type.getElementType()), operand,
+-          rewriter.getDenseI64ArrayAttr(newShape));
++    if (newShape.size() != (uint64_t)type.getRank()) {
++      // prepare reassociationMap for tensor.collapse_shape Op
++      indices.push_back(type.getRank());
++      SmallVector<ReassociationIndices, 4> reassociationMap;
++      for (uint64_t i = 0; i < indices.size() - 1; i++) {
++        ReassociationIndices reassociationIndices;
++        for (uint64_t j = indices[i]; j < indices[i + 1]; j++) {
++          reassociationIndices.push_back(j);
++        }
++        reassociationMap.push_back(reassociationIndices);
++      }
++      if(indices.size() != 1 && reassociationMap[0][0] != 0) {
++        ReassociationIndices reassociationIndices;
++        for (uint64_t i = 0; i < (uint64_t)reassociationMap[0][0]; i++) {
++          reassociationIndices.push_back(i);
++        }
++        for (uint64_t i : reassociationMap[0]) {
++          reassociationIndices.push_back(i);
++        }
++        reassociationMap[0] = reassociationIndices;
++      }
++
++      operand = rewriter.create<tensor::CollapseShapeOp>(
++          loc, RankedTensorType::get(newShape, type.getElementType()), operand, reassociationMap);
+     }
+ 
+     operands.push_back(operand);
+@@ -958,6 +986,11 @@ public:
+     ShapedType resultTy = reshape.getType().template cast<ShapedType>();
+     bool isDynamic = !operandTy.hasStaticShape();
+ 
++    if (operandTy.getShape() == resultTy.getShape() && operandTy.getElementType() == resultTy.getElementType()) {
++      rewriter.replaceOp(reshape, adaptor.getOperands()[0]);
++      return success();
++    }
++
+     if (isDynamic && resultTy.getRank() != 1) {
+       return rewriter.notifyMatchFailure(
+           reshape, "Cannot collapse dynamic dims to more than one dimension");
+@@ -996,6 +1029,12 @@ public:
+     ShapedType resultTy = reshape.getType().template cast<ShapedType>();
+     bool isDynamic = !operandTy.hasStaticShape();
+ 
++    if (operandTy.getShape() == resultTy.getShape() && operandTy.getElementType() == resultTy.getElementType()) {
++      rewriter.replaceOp(reshape, adaptor.getOperands()[0]);
++      return success();
++    }
++
++
+     if (isDynamic && operandTy.getRank() != 1) {
+       return rewriter.notifyMatchFailure(
+           reshape, "Cannot expand dynamic dims from more than one dimension");
+@@ -1034,6 +1073,11 @@ public:
+     ShapedType operandTy = adaptor.getInput1().getType().cast<ShapedType>();
+     ShapedType resultTy = reshape.getType().template cast<ShapedType>();
+     bool isDynamic = !operandTy.hasStaticShape();
++    
++    if (operandTy.getShape() == resultTy.getShape() && operandTy.getElementType() == resultTy.getElementType()) {
++      rewriter.replaceOp(reshape, adaptor.getOperands()[0]);
++      return success();
++    }
+ 
+     SmallVector<int64_t> intermediateShape;
+     if (!findIntermediateShape(resultTy.getShape(), operandTy.getShape(),
+@@ -1088,8 +1132,9 @@ public:
+ 
+     SmallVector<Value> filteredDims = condenseValues(dynDims);
+ 
+-    auto emptyTensor = rewriter.create<tensor::EmptyOp>(
+-        loc, resultTy.getShape(), resultTy.getElementType(), filteredDims);
++    RankedTensorType rankedType = op.getType().dyn_cast<RankedTensorType>();
++    assert(rankedType);
++    auto emptyTensor = rewriter.create<tensor::EmptyOp>(loc, rankedType, filteredDims);
+ 
+     SmallVector<AffineMap, 2> affineMaps = {
+         AffineMap::get(resultTy.getRank(), /*symbolCount=*/0, inputExprs,
+diff --git a/mlir/lib/Dialect/Affine/Analysis/AffineAnalysis.cpp b/mlir/lib/Dialect/Affine/Analysis/AffineAnalysis.cpp
+index 6e730140a3b9..42b0e363ddc7 100644
+--- a/mlir/lib/Dialect/Affine/Analysis/AffineAnalysis.cpp
++++ b/mlir/lib/Dialect/Affine/Analysis/AffineAnalysis.cpp
+@@ -18,6 +18,7 @@
+ #include "mlir/Dialect/Affine/IR/AffineOps.h"
+ #include "mlir/Dialect/Affine/IR/AffineValueMap.h"
+ #include "mlir/Dialect/Func/IR/FuncOps.h"
++#include "mlir/Dialect/Vector/IR/VectorOps.h"
+ #include "mlir/IR/AffineExprVisitor.h"
+ #include "mlir/IR/BuiltinOps.h"
+ #include "mlir/IR/IntegerSet.h"
+@@ -149,6 +150,14 @@ bool mlir::isLoopMemoryParallel(AffineForOp forOp) {
+       // Filter out stores the same way as above.
+       if (!isLocallyDefined(writeOp.getMemRef(), forOp))
+         loadAndStoreOps.push_back(op);
++    } else if (auto transferReadOp = dyn_cast<vector::TransferReadOp>(op)) {
++      if (!isLocallyDefined(transferReadOp.getSource(), forOp)) {
++        loadAndStoreOps.push_back(op);
++      }
++    } else if (auto transferWriteOp = dyn_cast<vector::TransferWriteOp>(op)) {
++      if (!isLocallyDefined(transferWriteOp.getSource(), forOp)) {
++        loadAndStoreOps.push_back(op);
++      }
+     } else if (!isa<AffineForOp, AffineYieldOp, AffineIfOp>(op) &&
+                !hasSingleEffect<MemoryEffects::Allocate>(op) &&
+                !isMemoryEffectFree(op)) {
+@@ -503,10 +512,30 @@ LogicalResult MemRefAccess::getAccessRelation(FlatAffineRelation &rel) const {
+ void MemRefAccess::getAccessMap(AffineValueMap *accessMap) const {
+   // Get affine map from AffineLoad/Store.
+   AffineMap map;
+-  if (auto loadOp = dyn_cast<AffineReadOpInterface>(opInst))
++  if (auto loadOp = dyn_cast<AffineReadOpInterface>(opInst)) {
+     map = loadOp.getAffineMap();
+-  else
+-    map = cast<AffineWriteOpInterface>(opInst).getAffineMap();
++  } else if (auto storeOp = dyn_cast<AffineWriteOpInterface>(opInst)) {
++    map = storeOp.getAffineMap();
++  } else if (auto readOp = dyn_cast<vector::TransferReadOp>(opInst)) {
++    map = readOp.getPermutationMap();
++  } else if (auto writeOp = dyn_cast<vector::TransferWriteOp>(opInst)) {
++    map = writeOp.getPermutationMap();
++  }
++
++  // update map
++  // (d0) -> (0) ==> (d0) -> (d0)
++  // (d0, d1) -> (d1) ==> (d0, d1) -> (d0, d1)
++  if (isa<vector::TransferReadOp, vector::TransferWriteOp>(opInst)) {
++    auto resultDims = map.getNumResults();
++    for (size_t i = 0; i < resultDims; ++i) {
++      map = map.dropResult(i);
++    }
++    auto dims = map.getNumDims();
++    for (size_t i = 0; i < dims; ++i) {
++      auto insertDimExpr = getAffineDimExpr(i, opInst->getContext());
++      map = map.insertResult(insertDimExpr, i);
++    }
++  }
+ 
+   SmallVector<Value, 8> operands(indices.begin(), indices.end());
+   fullyComposeAffineMapAndOperands(&map, &operands);
+@@ -616,8 +645,8 @@ DependenceResult mlir::checkMemrefAccessDependence(
+ 
+   // Return 'NoDependence' if one of these accesses is not an
+   // AffineWriteOpInterface.
+-  if (!allowRAR && !isa<AffineWriteOpInterface>(srcAccess.opInst) &&
+-      !isa<AffineWriteOpInterface>(dstAccess.opInst))
++  if (!allowRAR && !isa<AffineWriteOpInterface, vector::TransferWriteOp>(srcAccess.opInst) &&
++      !isa<AffineWriteOpInterface, vector::TransferWriteOp>(dstAccess.opInst))
+     return DependenceResult::NoDependence;
+ 
+   // We can't analyze further if the ops lie in different affine scopes.
+diff --git a/mlir/lib/Dialect/Affine/Analysis/LoopAnalysis.cpp b/mlir/lib/Dialect/Affine/Analysis/LoopAnalysis.cpp
+index 81d06552aaef..98507ce2f756 100644
+--- a/mlir/lib/Dialect/Affine/Analysis/LoopAnalysis.cpp
++++ b/mlir/lib/Dialect/Affine/Analysis/LoopAnalysis.cpp
+@@ -272,12 +272,12 @@ isVectorizableLoopBodyWithOpCond(AffineForOp loop,
+   auto *forOp = loop.getOperation();
+ 
+   // No vectorization across conditionals for now.
+-  auto conditionals = matcher::If();
+-  SmallVector<NestedMatch, 8> conditionalsMatched;
+-  conditionals.match(forOp, &conditionalsMatched);
+-  if (!conditionalsMatched.empty()) {
+-    return false;
+-  }
++  // auto conditionals = matcher::If();
++  // SmallVector<NestedMatch, 8> conditionalsMatched;
++  // conditionals.match(forOp, &conditionalsMatched);
++  // if (!conditionalsMatched.empty()) {
++  //   return false;
++  // }
+ 
+   // No vectorization across unknown regions.
+   auto regions = matcher::Op([](Operation &op) -> bool {
+diff --git a/mlir/lib/Dialect/Affine/Analysis/Utils.cpp b/mlir/lib/Dialect/Affine/Analysis/Utils.cpp
+index ff88acdf8f19..564f2420c727 100644
+--- a/mlir/lib/Dialect/Affine/Analysis/Utils.cpp
++++ b/mlir/lib/Dialect/Affine/Analysis/Utils.cpp
+@@ -19,6 +19,7 @@
+ #include "mlir/Dialect/Affine/IR/AffineValueMap.h"
+ #include "mlir/Dialect/Arith/IR/Arith.h"
+ #include "mlir/Dialect/Utils/StaticValueUtils.h"
++#include "mlir/Dialect/Vector/IR/VectorOps.h"
+ #include "mlir/IR/IntegerSet.h"
+ #include "llvm/ADT/SmallPtrSet.h"
+ #include "llvm/Support/Debug.h"
+@@ -1212,13 +1213,21 @@ mlir::insertBackwardComputationSlice(Operation *srcOpInst, Operation *dstOpInst,
+ // Constructs  MemRefAccess populating it with the memref, its indices and
+ // opinst from 'loadOrStoreOpInst'.
+ MemRefAccess::MemRefAccess(Operation *loadOrStoreOpInst) {
+-  if (auto loadOp = dyn_cast<AffineReadOpInterface>(loadOrStoreOpInst)) {
++  if (auto readOp = dyn_cast<vector::TransferReadOp>(loadOrStoreOpInst)) {
++    memref = readOp.getSource();
++    opInst = loadOrStoreOpInst;
++    llvm::append_range(indices, readOp.getIndices());
++  } else if (auto writeOp = dyn_cast<vector::TransferWriteOp>(loadOrStoreOpInst)) {
++    opInst = loadOrStoreOpInst;
++    memref = writeOp.getSource();
++    llvm::append_range(indices, writeOp.getIndices());
++  } else if (auto loadOp = dyn_cast<AffineReadOpInterface>(loadOrStoreOpInst)) {
+     memref = loadOp.getMemRef();
+     opInst = loadOrStoreOpInst;
+     llvm::append_range(indices, loadOp.getMapOperands());
+   } else {
+     assert(isa<AffineWriteOpInterface>(loadOrStoreOpInst) &&
+-           "Affine read/write op expected");
++          "Affine read/write op or Vector read/write op expected");
+     auto storeOp = cast<AffineWriteOpInterface>(loadOrStoreOpInst);
+     opInst = loadOrStoreOpInst;
+     memref = storeOp.getMemRef();
+diff --git a/mlir/lib/Dialect/Affine/Transforms/AffineDataCopyGeneration.cpp b/mlir/lib/Dialect/Affine/Transforms/AffineDataCopyGeneration.cpp
+index a9d6f940200b..7cf9133ef549 100644
+--- a/mlir/lib/Dialect/Affine/Transforms/AffineDataCopyGeneration.cpp
++++ b/mlir/lib/Dialect/Affine/Transforms/AffineDataCopyGeneration.cpp
+@@ -63,12 +63,16 @@ struct AffineDataCopyGeneration
+                                     unsigned fastMemorySpace,
+                                     unsigned tagMemorySpace,
+                                     int minDmaTransferSize,
+-                                    uint64_t fastMemCapacityBytes) {
++                                    uint64_t fastMemCapacityBytes,
++                                    bool generateDmaArg,
++                                    bool skipNonUnitStrideLoopsArg) {
+     this->slowMemorySpace = slowMemorySpace;
+     this->fastMemorySpace = fastMemorySpace;
+     this->tagMemorySpace = tagMemorySpace;
+     this->minDmaTransferSize = minDmaTransferSize;
+     this->fastMemoryCapacity = fastMemCapacityBytes / 1024;
++    this->generateDma = generateDmaArg;
++    this->skipNonUnitStrideLoops = skipNonUnitStrideLoopsArg;
+   }
+ 
+   void runOnOperation() override;
+@@ -89,10 +93,12 @@ mlir::createAffineDataCopyGenerationPass(unsigned slowMemorySpace,
+                                          unsigned fastMemorySpace,
+                                          unsigned tagMemorySpace,
+                                          int minDmaTransferSize,
+-                                         uint64_t fastMemCapacityBytes) {
++                                         uint64_t fastMemCapacityBytes,
++                                         bool generateDmaArg,
++                                         bool skipNonUnitStrideLoopsArg) {
+   return std::make_unique<AffineDataCopyGeneration>(
+       slowMemorySpace, fastMemorySpace, tagMemorySpace, minDmaTransferSize,
+-      fastMemCapacityBytes);
++      fastMemCapacityBytes, generateDmaArg, skipNonUnitStrideLoopsArg);
+ }
+ std::unique_ptr<OperationPass<func::FuncOp>>
+ mlir::createAffineDataCopyGenerationPass() {
+diff --git a/mlir/lib/Dialect/Affine/Transforms/SuperVectorize.cpp b/mlir/lib/Dialect/Affine/Transforms/SuperVectorize.cpp
+index 30affbb8442d..1036762bb099 100644
+--- a/mlir/lib/Dialect/Affine/Transforms/SuperVectorize.cpp
++++ b/mlir/lib/Dialect/Affine/Transforms/SuperVectorize.cpp
+@@ -12,6 +12,7 @@
+ //===----------------------------------------------------------------------===//
+ 
+ #include "mlir/Dialect/Affine/Passes.h"
++#include "mlir/Dialect/Affine/Transforms/SuperVectorize.h"
+ 
+ #include "mlir/Analysis/SliceAnalysis.h"
+ #include "mlir/Dialect/Affine/Analysis/AffineAnalysis.h"
+@@ -24,6 +25,7 @@
+ #include "mlir/Dialect/Vector/IR/VectorOps.h"
+ #include "mlir/Dialect/Vector/Utils/VectorUtils.h"
+ #include "mlir/IR/IRMapping.h"
++#include "mlir/IR/IntegerSet.h"
+ #include "mlir/Pass/Pass.h"
+ #include "mlir/Support/LLVM.h"
+ #include "llvm/ADT/STLExtras.h"
+@@ -669,111 +671,6 @@ static LogicalResult analyzeProfitability(ArrayRef<NestedMatch> matches,
+ 
+ ///// end TODO: Hoist to a VectorizationStrategy.cpp when appropriate /////
+ 
+-namespace {
+-
+-struct VectorizationState {
+-
+-  VectorizationState(MLIRContext *context) : builder(context) {}
+-
+-  /// Registers the vector replacement of a scalar operation and its result
+-  /// values. Both operations must have the same number of results.
+-  ///
+-  /// This utility is used to register the replacement for the vast majority of
+-  /// the vectorized operations.
+-  ///
+-  /// Example:
+-  ///   * 'replaced': %0 = arith.addf %1, %2 : f32
+-  ///   * 'replacement': %0 = arith.addf %1, %2 : vector<128xf32>
+-  void registerOpVectorReplacement(Operation *replaced, Operation *replacement);
+-
+-  /// Registers the vector replacement of a scalar value. The replacement
+-  /// operation should have a single result, which replaces the scalar value.
+-  ///
+-  /// This utility is used to register the vector replacement of block arguments
+-  /// and operation results which are not directly vectorized (i.e., their
+-  /// scalar version still exists after vectorization), like uniforms.
+-  ///
+-  /// Example:
+-  ///   * 'replaced': block argument or operation outside of the vectorized
+-  ///     loop.
+-  ///   * 'replacement': %0 = vector.broadcast %1 : f32 to vector<128xf32>
+-  void registerValueVectorReplacement(Value replaced, Operation *replacement);
+-
+-  /// Registers the vector replacement of a block argument (e.g., iter_args).
+-  ///
+-  /// Example:
+-  ///   * 'replaced': 'iter_arg' block argument.
+-  ///   * 'replacement': vectorized 'iter_arg' block argument.
+-  void registerBlockArgVectorReplacement(BlockArgument replaced,
+-                                         BlockArgument replacement);
+-
+-  /// Registers the scalar replacement of a scalar value. 'replacement' must be
+-  /// scalar. Both values must be block arguments. Operation results should be
+-  /// replaced using the 'registerOp*' utilitites.
+-  ///
+-  /// This utility is used to register the replacement of block arguments
+-  /// that are within the loop to be vectorized and will continue being scalar
+-  /// within the vector loop.
+-  ///
+-  /// Example:
+-  ///   * 'replaced': induction variable of a loop to be vectorized.
+-  ///   * 'replacement': new induction variable in the new vector loop.
+-  void registerValueScalarReplacement(BlockArgument replaced,
+-                                      BlockArgument replacement);
+-
+-  /// Registers the scalar replacement of a scalar result returned from a
+-  /// reduction loop. 'replacement' must be scalar.
+-  ///
+-  /// This utility is used to register the replacement for scalar results of
+-  /// vectorized reduction loops with iter_args.
+-  ///
+-  /// Example 2:
+-  ///   * 'replaced': %0 = affine.for %i = 0 to 512 iter_args(%x = ...) -> (f32)
+-  ///   * 'replacement': %1 = vector.reduction <add>, %0 : vector<4xf32> into
+-  ///   f32
+-  void registerLoopResultScalarReplacement(Value replaced, Value replacement);
+-
+-  /// Returns in 'replacedVals' the scalar replacement for values in
+-  /// 'inputVals'.
+-  void getScalarValueReplacementsFor(ValueRange inputVals,
+-                                     SmallVectorImpl<Value> &replacedVals);
+-
+-  /// Erases the scalar loop nest after its successful vectorization.
+-  void finishVectorizationPattern(AffineForOp rootLoop);
+-
+-  // Used to build and insert all the new operations created. The insertion
+-  // point is preserved and updated along the vectorization process.
+-  OpBuilder builder;
+-
+-  // Maps input scalar operations to their vector counterparts.
+-  DenseMap<Operation *, Operation *> opVectorReplacement;
+-  // Maps input scalar values to their vector counterparts.
+-  IRMapping valueVectorReplacement;
+-  // Maps input scalar values to their new scalar counterparts in the vector
+-  // loop nest.
+-  IRMapping valueScalarReplacement;
+-  // Maps results of reduction loops to their new scalar counterparts.
+-  DenseMap<Value, Value> loopResultScalarReplacement;
+-
+-  // Maps the newly created vector loops to their vector dimension.
+-  DenseMap<Operation *, unsigned> vecLoopToVecDim;
+-
+-  // Maps the new vectorized loops to the corresponding vector masks if it is
+-  // required.
+-  DenseMap<Operation *, Value> vecLoopToMask;
+-
+-  // The strategy drives which loop to vectorize by which amount.
+-  const VectorizationStrategy *strategy = nullptr;
+-
+-private:
+-  /// Internal implementation to map input scalar values to new vector or scalar
+-  /// values.
+-  void registerValueVectorReplacementImpl(Value replaced, Value replacement);
+-  void registerValueScalarReplacementImpl(Value replaced, Value replacement);
+-};
+-
+-} // namespace
+-
+ /// Registers the vector replacement of a scalar operation and its result
+ /// values. Both operations must have the same number of results.
+ ///
+@@ -1390,6 +1287,21 @@ static Operation *vectorizeAffineForOp(AffineForOp forOp,
+   return vecForOp;
+ }
+ 
++static Operation *vectorizeAffineIfOp(AffineIfOp ifOp,
++                                      VectorizationState &state) {
++  SmallVector<Value, 8> vecIterOperands;;
++  state.getScalarValueReplacementsFor(ifOp.getOperands(), vecIterOperands);
++  auto vecIfOp = state.builder.create<AffineIfOp>(
++    ifOp.getLoc(), ifOp.getIntegerSet(), vecIterOperands, false);
++  vecIfOp.getThenRegion().walk<WalkOrder::PreOrder>([&](AffineYieldOp op) {
++    op.erase();
++  });
++  state.registerOpVectorReplacement(ifOp, vecIfOp);
++
++  state.builder.setInsertionPointToStart(&vecIfOp.getThenRegion().front());
++  return vecIfOp;
++}
++
+ /// Vectorizes arbitrary operation by plain widening. We apply generic type
+ /// widening of all its results and retrieve the vector counterparts for all its
+ /// operands.
+@@ -1485,6 +1397,8 @@ static Operation *vectorizeOneOperation(Operation *op,
+     return vectorizeAffineLoad(loadOp, state);
+   if (auto storeOp = dyn_cast<AffineStoreOp>(op))
+     return vectorizeAffineStore(storeOp, state);
++  if(auto ifOp = dyn_cast<AffineIfOp>(op))
++    return vectorizeAffineIfOp(ifOp, state);
+   if (auto forOp = dyn_cast<AffineForOp>(op))
+     return vectorizeAffineForOp(forOp, state);
+   if (auto yieldOp = dyn_cast<AffineYieldOp>(op))
+@@ -1861,4 +1775,42 @@ vectorizeAffineLoopNest(std::vector<SmallVector<AffineForOp, 2>> &loops,
+   return vectorizeLoopNest(loops, strategy);
+ }
+ 
++/// It is convenient to reference static functions in AKG.
++Optional<NestedPattern> makePatternAKG(const DenseSet<Operation *> &parallelLoops, int vectorRank,
++                                       ArrayRef<int64_t> fastestVaryingPattern) {
++  return makePattern(parallelLoops, vectorRank, fastestVaryingPattern);
++}
++
++void computeIntersectionBucketsAKG(ArrayRef<NestedMatch> matches,
++                                   std::vector<SmallVector<NestedMatch, 8>> &intersectionBuckets) {
++  computeIntersectionBuckets(matches, intersectionBuckets);
++}
++
++LogicalResult analyzeProfitabilityAKG(ArrayRef<NestedMatch> matches, unsigned depthInPattern, unsigned patternDepth,
++                                      VectorizationStrategy *strategy) {
++  return analyzeProfitability(matches, depthInPattern, patternDepth, strategy);
++}
++
++void vectorizeLoopIfProfitableAKG(Operation *loop, unsigned depthInPattern, unsigned patternDepth,
++                                  VectorizationStrategy *strategy) {
++  vectorizeLoopIfProfitable(loop, depthInPattern, patternDepth, strategy);
++}
++
++void getMatchedAffineLoopsAKG(NestedMatch match, std::vector<SmallVector<AffineForOp, 2>> &loops) {
++  getMatchedAffineLoops(match, loops);
++}
++
++LogicalResult vectorizeLoopNestAKG(std::vector<SmallVector<AffineForOp, 2>> &loops,
++                                   const VectorizationStrategy &strategy) {
++  return vectorizeLoopNest(loops, strategy);
++}
++
++namespace vector {
++
++Operation *vectorizeOneOperationAKG(Operation *op,
++                                    VectorizationState &state) {
++  return vectorizeOneOperation(op, state);
++}
++
++} // namespace vector
+ } // namespace mlir
+diff --git a/mlir/lib/Dialect/Affine/Utils/Utils.cpp b/mlir/lib/Dialect/Affine/Utils/Utils.cpp
+index 180fef853e20..b14d8ae252d9 100644
+--- a/mlir/lib/Dialect/Affine/Utils/Utils.cpp
++++ b/mlir/lib/Dialect/Affine/Utils/Utils.cpp
+@@ -163,6 +163,19 @@ public:
+     auto rhs = visit(expr.getRHS());
+     assert(lhs && rhs && "unexpected affine expr lowering failure");
+ 
++    bool isPositiveDivisor = isa<memref::DimOp>(lhs.getDefiningOp());
++    if (isPositiveDivisor) {
++      // Positive divisors, no branching using
++      Value oneCst = builder.create<arith::ConstantIndexOp>(loc, 1);
++      Value decremented = builder.create<arith::SubIOp>(loc, lhs, oneCst);
++      Value dividend = decremented;
++      Value quotient = builder.create<arith::DivSIOp>(loc, dividend, rhs);
++      Value incrementedQuotient =
++          builder.create<arith::AddIOp>(loc, quotient, oneCst);
++      Value result = incrementedQuotient;
++      return result;
++    }
++
+     Value zeroCst = builder.create<arith::ConstantIndexOp>(loc, 0);
+     Value oneCst = builder.create<arith::ConstantIndexOp>(loc, 1);
+     Value nonPositive = builder.create<arith::CmpIOp>(
+diff --git a/mlir/lib/Dialect/GPU/Transforms/KernelOutlining.cpp b/mlir/lib/Dialect/GPU/Transforms/KernelOutlining.cpp
+index 8abf75993a63..25a620c1b5e1 100644
+--- a/mlir/lib/Dialect/GPU/Transforms/KernelOutlining.cpp
++++ b/mlir/lib/Dialect/GPU/Transforms/KernelOutlining.cpp
+@@ -165,6 +165,72 @@ static DenseI32ArrayAttr maybeConstantDimsAttr(gpu::KernelDim3 dims) {
+   }
+   return DenseI32ArrayAttr::get(ctx, constants);
+ }
++ 
++
++static bool idxIsInVector(size_t funcIdx, SmallVector<int, 8> &mapResult) {
++  return std::any_of(mapResult.begin(), mapResult.end(), [funcIdx](int idx) {
++    return idx == static_cast<int>(funcIdx);
++  });
++}
++
++static Value findAllocOpForFuncArg(func::FuncOp funcOp, BlockArgument targetArg) {
++  memref::CopyOp targetCopyOp = nullptr;
++  (void)funcOp.walk([&](memref::CopyOp op) {
++    if (op.getTarget() == targetArg) {
++      targetCopyOp = op;
++    }
++  });
++  if (!targetCopyOp) {
++    funcOp.emitError("Error: can't find memref::CopyOp \n");
++    return Value();
++  }
++  auto *prevOp = targetCopyOp.getSource().getDefiningOp();
++  if (auto alloc = dyn_cast<memref::AllocOp>(prevOp)) {
++    return alloc.getResult();
++  }
++  funcOp.emitError("Error: next Op is not memref::AllocOp \n");
++  return Value();
++}
++
++
++static void reviseProperOperandOrder(gpu::LaunchOp launchOp, SetVector<Value> &operands) {
++  if (auto funcOp = launchOp->getParentOfType<func::FuncOp>()) {
++    auto funcArguments = funcOp.getArguments();
++    SmallVector<int, 8> mapResult(funcArguments.size(), -1);
++    if (funcArguments.size() != operands.size()) {
++      funcOp.emitError("Error: funcArguments size is not equal to launchFuncOp operands size, plz check it. \n");
++      return;
++    }
++    for (size_t idx = 0; idx < operands.size(); idx++) {
++      for (size_t funcIdx = 0; funcIdx < funcArguments.size(); funcIdx++) {
++        if (funcArguments[funcIdx] == operands[idx]) {
++          mapResult[idx] = funcIdx;
++          break;
++        }
++      }
++    }
++    for (size_t funcIdx = 0; funcIdx < funcArguments.size(); funcIdx++) {
++      if (!idxIsInVector(funcIdx, mapResult)) {
++        auto alloc = findAllocOpForFuncArg(funcOp, funcArguments[funcIdx]);
++        if (!alloc) continue;
++        for (size_t idx = 0; idx < operands.size(); idx++) {
++          if (alloc == operands[idx]) {
++            mapResult[idx] = static_cast<int>(funcIdx);
++            break;
++          }
++        }
++      }
++    }
++    SmallVector<Value, 8> tmpOperands(operands.size(), Value());
++    for (size_t i = 0; i < operands.size(); i ++ ) {
++      tmpOperands[mapResult[i]] = operands[i];
++    }
++    operands.clear();
++    for (size_t idx = 0; idx < tmpOperands.size(); idx++) {
++      operands.insert(tmpOperands[idx]);
++    }
++  }
++}
+ 
+ /// Outline the `gpu.launch` operation body into a kernel function. Replace
+ /// `gpu.terminator` operations by `gpu.return` in the generated function.
+@@ -181,7 +247,8 @@ static gpu::GPUFuncOp outlineKernelFuncImpl(gpu::LaunchOp launchOp,
+   // Identify uses from values defined outside of the scope of the launch
+   // operation.
+   getUsedValuesDefinedAbove(launchOpBody, operands);
+-
++  reviseProperOperandOrder(launchOp, operands);
++ 
+   // Create the gpu.func operation.
+   SmallVector<Type, 4> kernelOperandTypes;
+   kernelOperandTypes.reserve(operands.size());
+diff --git a/mlir/lib/Dialect/Linalg/IR/LinalgOps.cpp b/mlir/lib/Dialect/Linalg/IR/LinalgOps.cpp
+index dc0b39afbf28..df1e3218e4ea 100644
+--- a/mlir/lib/Dialect/Linalg/IR/LinalgOps.cpp
++++ b/mlir/lib/Dialect/Linalg/IR/LinalgOps.cpp
+@@ -955,6 +955,234 @@ LogicalResult GenericOp::fold(FoldAdaptor, SmallVectorImpl<OpFoldResult> &) {
+   return memref::foldMemRefCast(*this);
+ }
+ 
++//===----------------------------------------------------------------------===//
++// TemplateOps
++//===----------------------------------------------------------------------===//
++void TemplateOp::getAsmBlockArgumentNames(Region &region,
++                                        OpAsmSetValueNameFn setNameFn) {
++  for (Value v : getRegionInputArgs())
++    setNameFn(v, "in");
++  for (Value v : getRegionOutputArgs())
++    setNameFn(v, "init");
++}
++
++void TemplateOp::build(
++    OpBuilder &builder, OperationState &result, TypeRange resultTensorTypes,
++    ValueRange inputs, ValueRange outputs, ArrayAttr indexingMaps,
++    ArrayAttr iteratorTypes, StringAttr doc, StringAttr libraryCall,
++    function_ref<void(OpBuilder &, Location, ValueRange)> bodyBuild,
++    ArrayRef<NamedAttribute> attributes) {
++  build(builder, result, resultTensorTypes, inputs, outputs, indexingMaps,
++        iteratorTypes, doc, libraryCall);
++  result.addAttributes(attributes);
++  if (!bodyBuild)
++    return;
++
++  SmallVector<Type, 4> blockArgTypes;
++  SmallVector<Location, 4> blockArgLocs;
++  for (ValueRange container : {inputs, outputs}) {
++    for (Value v : container) {
++      blockArgTypes.push_back(getElementTypeOrSelf(v));
++      blockArgLocs.push_back(v.getLoc());
++    }
++  }
++
++  OpBuilder::InsertionGuard guard(builder);
++  auto &region = *result.regions.front();
++  Block *bodyBlock =
++      builder.createBlock(&region, region.end(), blockArgTypes, blockArgLocs);
++  bodyBuild(builder, result.location, bodyBlock->getArguments());
++}
++
++void TemplateOp::build(
++    OpBuilder &builder, OperationState &result, TypeRange resultTensorTypes,
++    ValueRange inputs, ValueRange outputs, ArrayRef<AffineMap> indexingMaps,
++    ArrayRef<utils::IteratorType> iteratorTypes, StringRef doc, StringRef libraryCall,
++    function_ref<void(OpBuilder &, Location, ValueRange)> bodyBuild,
++    ArrayRef<NamedAttribute> attributes) {
++  build(builder, result, resultTensorTypes, inputs, outputs,
++        builder.getAffineMapArrayAttr(indexingMaps),
++        // builder.getStrArrayAttr(iteratorTypes),
++        builder.getArrayAttr(llvm::to_vector(llvm::map_range(
++            iteratorTypes,
++            [&](utils::IteratorType iter) -> mlir::Attribute {
++              return IteratorTypeAttr::get(builder.getContext(), iter);
++            }))),
++        doc.empty() ? StringAttr() : builder.getStringAttr(doc),
++        libraryCall.empty() ? StringAttr() : builder.getStringAttr(libraryCall),
++        bodyBuild, attributes);
++}
++
++void TemplateOp::build(
++    OpBuilder &builder, OperationState &result, ValueRange inputs,
++    ValueRange outputs, ArrayRef<AffineMap> indexingMaps,
++    ArrayRef<utils::IteratorType> iteratorTypes, StringRef doc, StringRef libraryCall,
++    function_ref<void(OpBuilder &, Location, ValueRange)> bodyBuild,
++    ArrayRef<NamedAttribute> attributes) {
++  build(builder, result, TypeRange{}, inputs, outputs, indexingMaps,
++        iteratorTypes, doc, libraryCall, bodyBuild, attributes);
++}
++
++void TemplateOp::build(
++    OpBuilder &builder, OperationState &result, ValueRange inputs,
++    ValueRange outputs, ArrayRef<AffineMap> indexingMaps,
++    ArrayRef<utils::IteratorType> iteratorTypes,
++    function_ref<void(OpBuilder &, Location, ValueRange)> bodyBuild,
++    ArrayRef<NamedAttribute> attributes) {
++  build(builder, result, inputs, outputs, indexingMaps, iteratorTypes,
++        /*doc=*/"",
++        /*libraryCall=*/"", bodyBuild, attributes);
++}
++
++void TemplateOp::build(
++    OpBuilder &builder, OperationState &result, TypeRange resultTensorTypes,
++    ValueRange inputs, ValueRange outputs, ArrayRef<AffineMap> indexingMaps,
++    ArrayRef<utils::IteratorType> iteratorTypes,
++    function_ref<void(OpBuilder &, Location, ValueRange)> bodyBuild,
++    ArrayRef<NamedAttribute> attributes) {
++  build(builder, result, resultTensorTypes, inputs, outputs, indexingMaps,
++        iteratorTypes,
++        /*doc=*/"",
++        /*libraryCall=*/"", bodyBuild, attributes);
++}
++
++void TemplateOp::print(OpAsmPrinter &p) {
++  p << " ";
++
++  // Print extra attributes.
++  auto genericAttrNames = linalgTraitAttrNames();
++
++  llvm::StringSet<> genericAttrNamesSet;
++  genericAttrNamesSet.insert(genericAttrNames.begin(), genericAttrNames.end());
++  SmallVector<NamedAttribute, 8> genericAttrs;
++  for (auto attr : (*this)->getAttrs()) {
++    if (attr.getName() == getIteratorTypesAttrName()) {
++      auto iteratorTypes =
++          attr.getValue()
++              .cast<ArrayAttr>()
++              .getAsValueRange<IteratorTypeAttr, utils::IteratorType>();
++      // Convert IteratorType enums into the string representation. This is
++      // needed, because tests still use the old format when 'iterator_types'
++      // attribute is represented as an array of strings.
++      // TODO: Remove this conversion once tests are fixed.
++      SmallVector<Attribute> iteratorTypeNames =
++          llvm::to_vector(llvm::map_range(
++              iteratorTypes, [&](utils::IteratorType t) -> Attribute {
++                return StringAttr::get(getContext(), stringifyIteratorType(t));
++              }));
++
++      genericAttrs.emplace_back(
++          getIteratorTypesAttrName(),
++          ArrayAttr::get(getContext(), iteratorTypeNames));
++    } else if (genericAttrNamesSet.count(attr.getName().strref()) > 0) {
++      genericAttrs.push_back(attr);
++    }
++  }
++  if (!genericAttrs.empty()) {
++    auto genericDictAttr = DictionaryAttr::get(getContext(), genericAttrs);
++    p << genericDictAttr;
++  }
++
++  // Printing is shared with named ops, except for the region and attributes
++  printCommonStructuredOpParts(p, getInputs(), getOutputs());
++
++  genericAttrNames.push_back("operand_segment_sizes");
++  genericAttrNamesSet.insert(genericAttrNames.back());
++
++  bool hasExtraAttrs = false;
++  for (NamedAttribute n : (*this)->getAttrs()) {
++    if ((hasExtraAttrs = !genericAttrNamesSet.contains(n.getName().strref())))
++      break;
++  }
++  if (hasExtraAttrs) {
++    p << " attrs = ";
++    p.printOptionalAttrDict((*this)->getAttrs(),
++                            /*elidedAttrs=*/genericAttrNames);
++  }
++
++  // Print region.
++  if (!getRegion().empty()) {
++    p << ' ';
++    p.printRegion(getRegion());
++  }
++
++  // Print results.
++  printNamedStructuredOpResults(p, getResultTensors().getTypes());
++}
++
++ParseResult TemplateOp::parse(OpAsmParser &parser, OperationState &result) {
++  DictionaryAttr dictAttr;
++  // Parse the core linalg traits that must check into a dictAttr.
++  // The name is unimportant as we will overwrite result.attributes.
++  // The core linalg traits must contain the information necessary to pass the
++  // verifier.
++  if (parser.parseAttribute(dictAttr, "_", result.attributes))
++    return failure();
++  result.attributes.assign(dictAttr.getValue().begin(),
++                           dictAttr.getValue().end());
++
++  // Convert array of string into an array of IteratyType enums. This is needed,
++  // because tests still use the old format when 'iterator_types' attribute is
++  // represented as an array of strings.
++  // TODO: Remove this conversion once tests are fixed.
++  ArrayAttr iteratorTypes =
++      result.attributes.get(getIteratorTypesAttrName(result.name))
++          .cast<ArrayAttr>();
++
++  SmallVector<Attribute> iteratorTypeAttrs;
++
++  for (StringRef s : iteratorTypes.getAsValueRange<StringAttr>()) {
++    auto maybeIteratorType = utils::symbolizeIteratorType(s);
++    if (!maybeIteratorType.has_value())
++      return parser.emitError(parser.getCurrentLocation())
++             << "unexpected iterator_type (" << s << ")";
++
++    iteratorTypeAttrs.push_back(
++        IteratorTypeAttr::get(parser.getContext(), maybeIteratorType.value()));
++  }
++  result.attributes.set(getIteratorTypesAttrName(result.name),
++                        parser.getBuilder().getArrayAttr(iteratorTypeAttrs));
++
++  // Parsing is shared with named ops, except for the region.
++  SmallVector<Type, 1> inputTypes, outputTypes;
++  if (parseCommonStructuredOpParts(parser, result, inputTypes, outputTypes))
++    return failure();
++
++  // Optional attributes may be added.
++  if (succeeded(parser.parseOptionalKeyword("attrs")))
++    if (failed(parser.parseEqual()) ||
++        failed(parser.parseOptionalAttrDict(result.attributes)))
++      return failure();
++
++  std::unique_ptr<Region> region = std::make_unique<Region>();
++  if (parser.parseRegion(*region, {}))
++    return failure();
++  result.addRegion(std::move(region));
++
++  // Generic ops may specify that a subset of its outputs are tensors. Such
++  // outputs are specified in the result type.
++  // TODO: may need to move output parsing before region parsing.
++  // Need to wait for declarative assembly resolution to decide.
++  SmallVector<Type, 1> outputTensorsTypes;
++  if (parseNamedStructuredOpResults(parser, outputTensorsTypes))
++    return failure();
++  result.addTypes(outputTensorsTypes);
++
++  return success();
++}
++
++void TemplateOp::getEffects(
++    SmallVectorImpl<SideEffects::EffectInstance<MemoryEffects::Effect>>
++        &effects) {
++  getGenericEffectsImpl(effects, getOperation()->getResults(), getDpsInputOperands(),
++                        getDpsInputOperands());
++}
++
++LogicalResult TemplateOp::fold(FoldAdaptor,
++                               SmallVectorImpl<OpFoldResult> &) {
++  return memref::foldMemRefCast(*this);
++}
++
+ //===----------------------------------------------------------------------===//
+ // MapOp
+ //===----------------------------------------------------------------------===//
+diff --git a/mlir/lib/Dialect/Linalg/Transforms/BufferizableOpInterfaceImpl.cpp b/mlir/lib/Dialect/Linalg/Transforms/BufferizableOpInterfaceImpl.cpp
+index f934a15588c3..c22b9bd9c950 100644
+--- a/mlir/lib/Dialect/Linalg/Transforms/BufferizableOpInterfaceImpl.cpp
++++ b/mlir/lib/Dialect/Linalg/Transforms/BufferizableOpInterfaceImpl.cpp
+@@ -20,11 +20,9 @@ using namespace mlir;
+ using namespace linalg;
+ using namespace mlir::bufferization;
+ 
+-namespace {
+-
++namespace mlir {
+ /// Generic conversion for any DestinationStyleOpInterface on tensors.
+-static LogicalResult
+-bufferizeDestinationStyleOpInterface(RewriterBase &rewriter,
++LogicalResult bufferizeDestinationStyleOpInterface(RewriterBase &rewriter,
+                                      DestinationStyleOpInterface op,
+                                      const BufferizationOptions &options) {
+   // Take a guard before anything else.
+@@ -85,7 +83,9 @@ bufferizeDestinationStyleOpInterface(RewriterBase &rewriter,
+ 
+   return success();
+ }
++} // namespace mlir
+ 
++namespace {
+ /// Bufferization of linalg.generic. Replace with a new linalg.generic that
+ /// operates entirely on memrefs.
+ template <typename OpTy>
+diff --git a/mlir/lib/Dialect/Linalg/Transforms/ElementwiseOpFusion.cpp b/mlir/lib/Dialect/Linalg/Transforms/ElementwiseOpFusion.cpp
+index e9a8c8326fee..330329e1ed2d 100644
+--- a/mlir/lib/Dialect/Linalg/Transforms/ElementwiseOpFusion.cpp
++++ b/mlir/lib/Dialect/Linalg/Transforms/ElementwiseOpFusion.cpp
+@@ -826,6 +826,12 @@ fuseWithReshapeByExpansion(GenericOp genericOp, Operation *reshapeOp,
+   // Update the index accesses after the expansion.
+   updateExpandedGenericOpRegion(rewriter, loc, fusedRegion, expansionInfo);
+ 
++  auto fusionFlagAttrName = "fusion.flag";
++  auto fusionFlagAttr = genericOp->getAttr(fusionFlagAttrName);
++  if (fusionFlagAttr) {
++    fusedOp->setAttr(fusionFlagAttrName, fusionFlagAttr);
++  }
++
+   // Reshape the result values to their original shape if this is a collapsing
+   // reshape folded into its consumer.
+   SmallVector<Value> resultVals;
+@@ -1559,6 +1565,63 @@ private:
+   ControlFusionFn controlFoldingReshapes;
+ };
+ 
++class FoldReshapeWithGenericOpByCollapsing
++    : public OpRewritePattern<tensor::CollapseShapeOp> {
++public:
++  FoldReshapeWithGenericOpByCollapsing(MLIRContext *context,
++                                       ControlFusionFn foldReshapes,
++                                       PatternBenefit benefit = 1)
++      : OpRewritePattern<tensor::CollapseShapeOp>(context, benefit),
++        controlFoldingReshapes(std::move(foldReshapes)) {}
++
++  LogicalResult matchAndRewrite(tensor::CollapseShapeOp collapseOp,
++                                PatternRewriter &rewriter) const override {
++    // Fold only if all constraints of fusing with reshape by expansion are met.
++    auto producerResult = collapseOp.getSrc().dyn_cast<OpResult>();
++    if (!producerResult) {
++      return rewriter.notifyMatchFailure(collapseOp,
++                                         "source not produced by an operation");
++    }
++
++    auto genericOp = dyn_cast<GenericOp>(producerResult.getOwner());
++    if (!genericOp) {
++      return rewriter.notifyMatchFailure(collapseOp,
++                                         "producer not a generic op");
++    }
++
++    auto fuseInitOperand =
++        genericOp.getDpsInitOperand(producerResult.getResultNumber());
++
++    SmallVector<ReassociationIndices> collapsableIterationDims =
++        getCollapsableIterationSpaceDims(genericOp, fuseInitOperand,
++                                         collapseOp.getReassociationIndices());
++    if (collapsableIterationDims.empty()) {
++      return rewriter.notifyMatchFailure(collapseOp,
++                                         "index map cannot be collapsed");
++    }
++    if (!controlFoldingReshapes(fuseInitOperand)) {
++      return rewriter.notifyMatchFailure(collapseOp, "control function failed");
++    }
++
++    Optional<SmallVector<Value>> replacements =
++        collapseGenericOpIterationDims(genericOp, collapsableIterationDims,
++                                       rewriter);
++
++    Value reshapeReplacement = (*replacements)
++        [collapseOp.getSrc().cast<OpResult>().getResultNumber()];
++    if (auto expandOp = reshapeReplacement.getDefiningOp<tensor::ExpandShapeOp>()) {
++      reshapeReplacement = expandOp.getSrc();
++    }
++
++    rewriter.replaceOp(collapseOp, reshapeReplacement);
++    rewriter.replaceOp(genericOp, *replacements);
++    return success();
++  }
++
++private:
++  ControlFusionFn controlFoldingReshapes;
++};
++
+ /// Pattern to collapse dimensions.
+ class CollapseLinalgDimensions : public OpRewritePattern<GenericOp> {
+ public:
+@@ -1803,6 +1866,8 @@ void mlir::linalg::populateFoldReshapeOpsByCollapsingPatterns(
+     const ControlFusionFn &controlFoldingReshapes) {
+   patterns.add<FoldWithProducerReshapeOpByCollapsing>(patterns.getContext(),
+                                                       controlFoldingReshapes);
++  patterns.add<FoldReshapeWithGenericOpByCollapsing>(patterns.getContext(),
++                                                     controlFoldingReshapes);
+ }
+ 
+ void mlir::linalg::populateElementwiseOpsFusionPatterns(
+diff --git a/mlir/lib/Dialect/Linalg/Transforms/Generalization.cpp b/mlir/lib/Dialect/Linalg/Transforms/Generalization.cpp
+index 4755fa305da3..fb5bdf33059f 100644
+--- a/mlir/lib/Dialect/Linalg/Transforms/Generalization.cpp
++++ b/mlir/lib/Dialect/Linalg/Transforms/Generalization.cpp
+@@ -37,7 +37,7 @@ using namespace mlir::linalg;
+ 
+ static LogicalResult generalizeNamedOpPrecondition(LinalgOp linalgOp) {
+   // Check if the operation is a LinalgOp but not a GenericOp.
+-  if (isa<GenericOp>(linalgOp))
++  if (isa<GenericOp>(linalgOp) || isa<TemplateOp>(linalgOp))
+     return failure();
+   // Check if the operation has a region builder.
+   if (!linalgOp.getRegionBuilder())
+-- 
+2.39.1.388.g2fc9e9ca3c
+
