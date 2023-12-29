@@ -1,6 +1,7 @@
 [submodule "third-party/llvm-project"]
 	path = third-party/llvm-project
 	url = https://gitee.com/mirrors/llvm-project.git
+	branch = llvmorg-16.0.6
 [submodule "third-party/symengine"]
 	path = third-party/symengine
 	url = https://gitee.com/mirrors/SymEngine.git
