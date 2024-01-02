@@ -740,7 +740,8 @@ def _build_to_module_ascend_lib(desc_s_in, kernel_name):
                            "tor": tor, "kv_heads": kv_heads, "op_type": "PagedAttention"}
             if "PagedAttentionMask" in compute:
                 mask_shape = shape_list[5]
-                tiling_info ["mask"] = list(map(int, mask_shape.split("_")))
+                tiling_info["mask"] = list(map(int, mask_shape.split("_")))
+                tiling_info["op_type"] = "PagedAttentionMask"
         elif "ReshapeAndCache" in compute:
             shape_list = _get_all_shape(shape)
             kv = shape_list[0]
