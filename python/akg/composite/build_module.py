@@ -745,9 +745,9 @@ def _build_to_module_ascend_lib(desc_s_in, kernel_name):
             shape_list = _get_all_shape(shape)
             kv = shape_list[0]
 
-            num_tokens = kv.split("_")[0]
-            num_heads = kv.split("_")[1]
-            head_size = kv.split("_")[2]
+            num_tokens = int(kv.split("_")[0])
+            num_heads = int(kv.split("_")[1])
+            head_size = int(kv.split("_")[2])
 
             tiling_info = {"num_tokens": num_tokens, "num_heads": num_heads, "head_size": head_size, 
                            "op_type": "ReshapeAndCache"}
