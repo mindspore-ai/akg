@@ -19,6 +19,7 @@ import os
 import json
 from collections.abc import Iterable
 import akg
+import math
 from akg import tvm
 from tvm.autotvm.env import AutotvmGlobalScope
 from akg.utils.util import parse_workspace_map
@@ -314,12 +315,12 @@ def merge_attrs(attrs_a, attrs_b):
     return attrs
 
 
-def read_repo_file(repo_file):
+def read_repo_file(repo_file, is_json_load=True):
     if not os.path.exists(repo_file):
         return {}
     with open(repo_file, 'r') as f:
-        repo = json.loads(f.read())
-    return repo
+        repo = f.read()
+    return json.loads(repo) if is_json_load else repo
 
 
 def _get_default_repository_file(process):
@@ -639,6 +640,7 @@ def _build_to_module_ascend(desc_s_in, desc_d_in, attr, use_repo=True):
         ConstructType.NORMAL: _normal_postprocess,
     }
     process = desc_d_in["process"]
+    kernel_name = desc_d_in['op']
     ascend_type = get_ascend_type(desc_d_in)
     ascend_type_to_section = {"Ascend910A": "1.6", "Ascend310P3": "1.7",
                               "Ascend910B1": "2.1", "Ascend910B2": "2.2", "Ascend910B3": "2.3", "Ascend910B4": "2.4"}
@@ -650,10 +652,14 @@ def _build_to_module_ascend(desc_s_in, desc_d_in, attr, use_repo=True):
             attr["is_tbe_codegen"] = True
             attr["pragma_modshift"] = True
     segment_tree, segment_infos = get_construct_args(desc_s_in, attr, post_funcs)
+
+    if desc_d_in.get("enable_cce_lib"):
+        attr["enable_cce_lib"] = True
+        return _build_to_module_ascend_lib(desc_s_in, kernel_name)
+
     poly = True
     res = _cpp_build(attr, process, poly, segment_tree, segment_infos)
     if attr.get("is_tbe_codegen"):
-        kernel_name = desc_d_in['op']
         stmt_json = akg.tvm.save_json(res[0], "0.8.0")
         args_json = []
         for buf in res[1]:
@@ -668,6 +674,89 @@ def _build_to_module_ascend(desc_s_in, desc_d_in, attr, use_repo=True):
             raise TypeError("npu_inference codegen failed.")
         return kernel_name
     return res
+
+def _build_to_module_ascend_lib(desc_s_in, kernel_name):
+    def _get_all_shape(shapes):
+        shape_split = shapes.split(".")
+        shape_list = []
+        for shape in shape_split:
+            if "-" in shape:
+                tmp_shape = shape.split("-")[0]
+                for _ in range(shape.count("-") + 1):
+                    shape_list.append(tmp_shape)
+            else:
+                shape_list.append(shape)
+        return shape_list
+    
+    def _get_tiling_info(desc_s):
+        compute, shape, dtype = generate_trait(desc_s)
+        tiling_info = {}
+        if "MatMul" in compute:
+            trans_a = compute.split("_")[1]
+            trans_b = compute.split("_")[-1].split(".")[0]
+
+            shape_list = _get_all_shape(shape)
+            bias_flag = int(len(shape_list) > 3)
+            tensor_A = shape_list[0]
+            tensor_B = shape_list[1]
+
+            tensor_A_split = tensor_A.split("_")
+            if len(tensor_A_split) > 2:
+                batch_size = int(tensor_A.split("_")[0])
+            else:
+                batch_size = 1
+            if trans_a == "1":
+                M = int(tensor_A_split[-1])
+                K = int(tensor_A_split[-2])
+            else:
+                M = int(tensor_A_split[-2])
+                K = int(tensor_A_split[-1])
+
+            if trans_b == "1":
+                N = int(tensor_B.split("_")[-2])
+            else:
+                N = int(tensor_B.split("_")[-1])
+            tensor_A_type = str(dtype.split("-")[0])
+            tiling_info = {"batch_size":batch_size, "M": M, "N": N, "K": K, "trans_a": int(trans_a), "trans_b": int(trans_b),
+                           "tensor_A_type": tensor_A_type, "bias_flag": bias_flag, "op_type": "MatMul"}
+        elif "PagedAttention" in compute or "PagedAttentionMask" in compute:
+            shape_list = _get_all_shape(shape)
+            query = shape_list[0]
+            key_cache = shape_list[1]
+            table_shape = shape_list[3]
+
+            num_tokens = int(query.split("_")[0])
+            num_heads = int(query.split("_")[1])
+            embedding_size = int(query.split("_")[2])
+            num_blocks = int(key_cache.split("_")[0])
+            block_size = int(key_cache.split("_")[1])
+            kv_heads = int(key_cache.split("_")[2])
+
+            max_num_blocks_per_query = int(table_shape.split("_")[1])
+            tor = float(1.0 / math.sqrt(1.0 * embedding_size))
+
+            tiling_info = {"num_tokens": num_tokens, "num_heads": num_heads, "embedding_size": embedding_size, 
+                           "num_blocks": num_blocks, "block_size": block_size, "max_num_blocks_per_query": max_num_blocks_per_query,
+                           "tor": tor, "kv_heads": kv_heads, "op_type": "PagedAttention"}
+            if "PagedAttentionMask" in compute:
+                mask_shape = shape_list[5]
+                tiling_info ["mask"] = list(map(int, mask_shape.split("_")))
+        elif "ReshapeAndCache" in compute:
+            shape_list = _get_all_shape(shape)
+            kv = shape_list[0]
+
+            num_tokens = kv.split("_")[0]
+            num_heads = kv.split("_")[1]
+            head_size = kv.split("_")[2]
+
+            tiling_info = {"num_tokens": num_tokens, "num_heads": num_heads, "head_size": head_size, 
+                           "op_type": "ReshapeAndCache"}
+        return tiling_info
+
+    func = tvm.get_global_func("build_cce_lib")
+    tiling_info = _get_tiling_info(json.loads(desc_s_in))
+    func(kernel_name, tiling_info, None)
+    return kernel_name
 
 def _set_backend(desc_d):
     desc_d_process = desc_d

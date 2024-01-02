@@ -519,8 +519,13 @@ def _update_workspace_data(kernel_name, input_for_mod, output_indexes):
             kernel_desc = json.loads(kernel_json)
             if "workspace" in kernel_desc:
                 workspace_bytes = kernel_desc["workspace"]["size"]
-                item = np.full(workspace_bytes, np.nan, np.int8)
-                workspace_tensors.append(item)
+                workspace_num = kernel_desc["workspace"]["num"]
+                if len(workspace_bytes) != workspace_num:
+                    raise ValueError("workspace num %s and size shape %s are not equal!" 
+                                     % (len(workspace_bytes), workspace_num))
+                for i in range(kernel_desc["workspace"]["num"]):
+                    item = np.full(workspace_bytes[i], np.nan, np.int8)
+                    workspace_tensors.append(item)
     else:
         logging.warning("Kernel json file %s not found", json_file)
 

@@ -29,6 +29,20 @@ def parse_int_const(value):
         return value.value
     return None
 
+def parse_workspace_array(workspace):
+    total_bytes = []
+    workspace_list = get_shape(workspace)
+    for ws in workspace_list:
+        total_bytes.append(parse_int_const(ws))
+
+    if total_bytes is None:
+        return None
+
+    workspace_dict = {
+        "num": len(total_bytes),
+        "size": total_bytes
+    }
+    return workspace_dict
 
 def parse_workspace_map(attrs):
     if not isinstance(attrs, akg.tvm.container.Map):
@@ -65,7 +79,10 @@ def parse_workspace(workspace):
 
     total_bytes = 0
     if "total_bytes" in workspace:
-        total_bytes = parse_int_const(workspace["total_bytes"])
+        ws = workspace["total_bytes"]
+        if isinstance(ws, akg.tvm.container.Array):
+            return parse_workspace_array(ws)
+        total_bytes = parse_int_const(ws)
 
     if total_bytes is None or total_bytes == 0:
         return None
