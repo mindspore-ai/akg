@@ -672,6 +672,7 @@ def _build_to_module_ascend(desc_s_in, desc_d_in, attr, use_repo=True):
         is_success = build_tbe_codegen(kernel_name, stmt_json, args_json, attr, ascend_type)
         if not is_success:
             raise TypeError("npu_inference codegen failed.")
+        akg.tvm.get_global_func("build_host_cce")(res[1], kernel_name)
         return kernel_name
     return res
 

@@ -24,6 +24,7 @@
 
 /*!
  * 2023.4.21 - Add file cce_wrapper.cc.
+ * 2024.1.24 - Change rt*** to aclrt***.
  */
 
 #include "cce_wrapper.h"
@@ -51,48 +52,72 @@ CceWrapper::~CceWrapper() {
 }
 
 bool CceWrapper::UnLoadLibraries() {
-  if (cce_handle_ != nullptr) {
-    if (dlclose(cce_handle_) != 0) {
+  if (ascendcl_handle_ != nullptr) {
+    if (dlclose(ascendcl_handle_) != 0) {
       return false;
     }
   }
-  cce_handle_ = nullptr;
+  ascendcl_handle_ = nullptr;
+
+  if (runtime_handle_ != nullptr) {
+    if (dlclose(runtime_handle_) != 0) {
+      return false;
+    }
+  }
+  runtime_handle_ = nullptr;
   return true;
 }
 
 bool CceWrapper::LoadLibraries() {
+  LoadAscendCL();
+  LoadRuntime();
+  return true;
+}
+
+bool CceWrapper::LoadAscendCL() {
+  std::string library_path = "libascendcl.so";
+  void *handle_ptr = dlopen(library_path.c_str(), RTLD_NOW | RTLD_LOCAL);
+  if (handle_ptr == nullptr) {
+    LOG(ERROR) << "load library " << library_path << " failed!";
+    return false;
+  }
+  ascendcl_handle_ = handle_ptr;
+
+  // aclrt
+  LOAD_FUNCTION_PTR(aclrtSetDevice);
+  LOAD_FUNCTION_PTR(aclrtCreateContext);
+  LOAD_FUNCTION_PTR(aclrtCreateStream);
+  LOAD_FUNCTION_PTR(aclrtMallocHost);
+  LOAD_FUNCTION_PTR(aclrtMalloc);
+  LOAD_FUNCTION_PTR(aclrtMemcpy);
+  LOAD_FUNCTION_PTR(aclrtSynchronizeStream);
+  LOAD_FUNCTION_PTR(aclrtFree);
+  LOAD_FUNCTION_PTR(aclrtFreeHost);
+  LOAD_FUNCTION_PTR(aclrtDestroyStream);
+  LOAD_FUNCTION_PTR(aclrtDestroyContext);
+  LOAD_FUNCTION_PTR(aclrtResetDevice);
+  LOAD_FUNCTION_PTR(aclrtSetCurrentContext);
+  LOAD_FUNCTION_PTR(aclrtGetDeviceCount);
+  LOAD_FUNCTION_PTR(aclrtGetCurrentContext);
+  LOAD_FUNCTION_PTR(aclrtCreateStreamWithConfig);
+  LOAD_FUNCTION_PTR(aclrtMemcpyAsync);
+  LOAD_FUNCTION_PTR(aclrtGetMemInfo);
+  LOAD_FUNCTION_PTR(aclrtGetDevice);
+
+  return true;
+}
+
+bool CceWrapper::LoadRuntime() {
   std::string library_path = "libruntime.so";
   void *handle_ptr = dlopen(library_path.c_str(), RTLD_NOW | RTLD_LOCAL);
   if (handle_ptr == nullptr) {
     LOG(ERROR) << "load library " << library_path << " failed!";
     return false;
   }
-  cce_handle_ = handle_ptr;
+  runtime_handle_ = handle_ptr;
 
-  LOAD_FUNCTION_PTR(rtGetDevice);
-  LOAD_FUNCTION_PTR(rtGetDeviceCount);
-  LOAD_FUNCTION_PTR(rtSetDevice);
-  LOAD_FUNCTION_PTR(rtDeviceReset);
-  LOAD_FUNCTION_PTR(rtCtxCreate);
-  LOAD_FUNCTION_PTR(rtCtxDestroy);
-  LOAD_FUNCTION_PTR(rtCtxGetCurrent);
-  LOAD_FUNCTION_PTR(rtCtxSetCurrent);
-  LOAD_FUNCTION_PTR(rtCtxSynchronize);
-  LOAD_FUNCTION_PTR(rtMemGetInfoEx);
-  LOAD_FUNCTION_PTR(rtEventCreate);
-  LOAD_FUNCTION_PTR(rtStreamCreate);
-  LOAD_FUNCTION_PTR(rtStreamCreateWithFlags);
-  LOAD_FUNCTION_PTR(rtStreamDestroy);
-  LOAD_FUNCTION_PTR(rtStreamSynchronize);
-  LOAD_FUNCTION_PTR(rtStreamWaitEvent);
-  LOAD_FUNCTION_PTR(rtMalloc);
-  LOAD_FUNCTION_PTR(rtFree);
-  LOAD_FUNCTION_PTR(rtMemcpy);
-  LOAD_FUNCTION_PTR(rtMemcpyAsync);
-  LOAD_FUNCTION_PTR(rtDevBinaryRegister);
-  LOAD_FUNCTION_PTR(rtDevBinaryUnRegister);
-  LOAD_FUNCTION_PTR(rtFunctionRegister);
-  LOAD_FUNCTION_PTR(rtKernelLaunch);
+  // rt
+  LOAD_FUNCTION_PTR(rtGetTaskIdAndStreamID);
 
   return true;
 }
@@ -100,150 +125,124 @@ bool CceWrapper::LoadLibraries() {
 }  // namespace runtime
 }  // namespace air
 
-
-rtError_t rtGetDevice(int32_t *device) {
-  auto func = air::runtime::CceWrapper::GetInstance()->rtGetDevice;
+aclError aclrtSetCurrentContext(aclrtContext context) {
+  auto func = air::runtime::CceWrapper::GetInstance()->aclrtSetCurrentContext;
   CHECK_NOTNULL(func);
-  return func(device);
+  return func(context);
 }
 
-rtError_t rtGetDeviceCount(int32_t *count) {
-  auto func = air::runtime::CceWrapper::GetInstance()->rtGetDeviceCount;
+aclError aclrtGetDeviceCount(uint32_t *count) {
+  auto func = air::runtime::CceWrapper::GetInstance()->aclrtGetDeviceCount;
   CHECK_NOTNULL(func);
   return func(count);
 }
 
-rtError_t rtSetDevice(int32_t device) {
-  auto func = air::runtime::CceWrapper::GetInstance()->rtSetDevice;
+aclError aclrtGetCurrentContext(aclrtContext *context) {
+  auto func = air::runtime::CceWrapper::GetInstance()->aclrtGetCurrentContext;
   CHECK_NOTNULL(func);
-  return func(device);
+  return func(context);
 }
 
-rtError_t rtDeviceReset(int32_t device) {
-  auto func = air::runtime::CceWrapper::GetInstance()->rtDeviceReset;
+aclError aclrtCreateStreamWithConfig(aclrtStream *stream, uint32_t priority, uint32_t flag) {
+  auto func = air::runtime::CceWrapper::GetInstance()->aclrtCreateStreamWithConfig;
   CHECK_NOTNULL(func);
-  return func(device);
+  return func(stream, priority, flag);
 }
 
-rtError_t rtCtxCreate(rtContext_t *ctx, uint32_t flags, int32_t dev) {
-  auto func = air::runtime::CceWrapper::GetInstance()->rtCtxCreate;
+aclError aclrtMemcpyAsync(void *dst, size_t destMax, const void *src, size_t count,
+                 aclrtMemcpyKind kind, aclrtStream stream) {
+  auto func = air::runtime::CceWrapper::GetInstance()->aclrtMemcpyAsync;
   CHECK_NOTNULL(func);
-  return func(ctx, flags, dev);
+  return func(dst, destMax,  src, count, kind, stream);
 }
 
-rtError_t rtCtxDestroy(rtContext_t ctx) {
-  auto func = air::runtime::CceWrapper::GetInstance()->rtCtxDestroy;
+aclError aclrtGetMemInfo(aclrtMemAttr attr, size_t *free, size_t *total) {
+  auto func = air::runtime::CceWrapper::GetInstance()->aclrtGetMemInfo;
   CHECK_NOTNULL(func);
-  return func(ctx);
+  return func(attr, free, total);
 }
 
-rtError_t rtCtxGetCurrent(rtContext_t *ctx) {
-  auto func = air::runtime::CceWrapper::GetInstance()->rtCtxGetCurrent;
+aclError aclrtSetDevice(int32_t deviceId) {
+  auto func = air::runtime::CceWrapper::GetInstance()->aclrtSetDevice;
   CHECK_NOTNULL(func);
-  return func(ctx);
+  return func(deviceId);
 }
 
-rtError_t rtCtxSetCurrent(rtContext_t ctx) {
-  auto func = air::runtime::CceWrapper::GetInstance()->rtCtxSetCurrent;
+aclError aclrtCreateContext(aclrtContext *context, int32_t deviceId) {
+  auto func = air::runtime::CceWrapper::GetInstance()->aclrtCreateContext;
   CHECK_NOTNULL(func);
-  return func(ctx);
+  return func(context, deviceId);
 }
 
-rtError_t rtCtxSynchronize(void) {
-  auto func = air::runtime::CceWrapper::GetInstance()->rtCtxSynchronize;
-  CHECK_NOTNULL(func);
-  return func();
-}
 
-rtError_t rtMemGetInfoEx(rtMemInfoType_t info_type, size_t *free_size, size_t *total_size) {
-  auto func = air::runtime::CceWrapper::GetInstance()->rtMemGetInfoEx;
-  CHECK_NOTNULL(func);
-  return func(info_type, free_size, total_size);
-}
-
-rtError_t rtEventCreate(rtEvent_t *event) {
-  auto func = air::runtime::CceWrapper::GetInstance()->rtEventCreate;
-  CHECK_NOTNULL(func);
-  return func(event);
-}
-
-rtError_t rtStreamCreate(rtStream_t *stream, int32_t priority) {
-  auto func = air::runtime::CceWrapper::GetInstance()->rtStreamCreate;
-  CHECK_NOTNULL(func);
-  return func(stream, priority);
-}
-
-rtError_t rtStreamCreateWithFlags(rtStream_t *stm, int32_t priority, uint32_t flags) {
-  auto func = air::runtime::CceWrapper::GetInstance()->rtStreamCreateWithFlags;
-  CHECK_NOTNULL(func);
-  return func(stm, priority, flags);
-}
-
-rtError_t rtStreamDestroy(rtStream_t stream) {
-  auto func = air::runtime::CceWrapper::GetInstance()->rtStreamDestroy;
+aclError aclrtCreateStream(aclrtStream *stream) {
+  auto func = air::runtime::CceWrapper::GetInstance()->aclrtCreateStream;
   CHECK_NOTNULL(func);
   return func(stream);
 }
 
-rtError_t rtStreamSynchronize(rtStream_t stream) {
-  auto func = air::runtime::CceWrapper::GetInstance()->rtStreamSynchronize;
+aclError aclrtMallocHost(void **hostPtr, size_t size) {
+  auto func = air::runtime::CceWrapper::GetInstance()->aclrtMallocHost;
+  CHECK_NOTNULL(func);
+  return func(hostPtr, size);
+}
+
+aclError aclrtMalloc(void **devPtr, size_t size, aclrtMemMallocPolicy policy) {
+  auto func = air::runtime::CceWrapper::GetInstance()->aclrtMalloc;
+  CHECK_NOTNULL(func);
+  return func(devPtr, size, policy);
+}
+
+aclError aclrtMemcpy(void *dst, size_t destMax, const void *src, size_t count, aclrtMemcpyKind kind) {
+  auto func = air::runtime::CceWrapper::GetInstance()->aclrtMemcpy;
+  CHECK_NOTNULL(func);
+  return func(dst, destMax, src, count, kind);
+}
+
+aclError aclrtSynchronizeStream(aclrtStream stream) {
+  auto func = air::runtime::CceWrapper::GetInstance()->aclrtSynchronizeStream;
   CHECK_NOTNULL(func);
   return func(stream);
 }
 
-rtError_t rtStreamWaitEvent(rtStream_t stream, rtEvent_t event) {
-  auto func = air::runtime::CceWrapper::GetInstance()->rtStreamWaitEvent;
+aclError aclrtFree(void *devPtr) {
+  auto func = air::runtime::CceWrapper::GetInstance()->aclrtFree;
   CHECK_NOTNULL(func);
-  return func(stream, event);
+  return func(devPtr);
 }
 
-rtError_t rtMalloc(void **dev_ptr, uint64_t size, rtMemType_t type, uint16_t moduleId) {
-  auto func = air::runtime::CceWrapper::GetInstance()->rtMalloc;
+aclError aclrtFreeHost(void *hostPtr) {
+  auto func = air::runtime::CceWrapper::GetInstance()->aclrtFreeHost;
   CHECK_NOTNULL(func);
-  return func(dev_ptr, size, type, moduleId);
+  return func(hostPtr);
 }
 
-rtError_t rtFree(void *dev_ptr) {
-  auto func = air::runtime::CceWrapper::GetInstance()->rtFree;
+aclError aclrtDestroyStream(aclrtStream stream) {
+  auto func = air::runtime::CceWrapper::GetInstance()->aclrtDestroyStream;
   CHECK_NOTNULL(func);
-  return func(dev_ptr);
+  return func(stream);
 }
 
-rtError_t rtMemcpy(void *dst, uint64_t dest_max, const void *src, uint64_t count, rtMemcpyKind_t kind) {
-  auto func = air::runtime::CceWrapper::GetInstance()->rtMemcpy;
+aclError aclrtDestroyContext(aclrtContext context) {
+  auto func = air::runtime::CceWrapper::GetInstance()->aclrtDestroyContext;
   CHECK_NOTNULL(func);
-  return func(dst, dest_max, src, count, kind);
+  return func(context);
 }
 
-rtError_t rtMemcpyAsync(void *dst, uint64_t dest_max, const void *src, uint64_t count,
-                        rtMemcpyKind_t kind, rtStream_t stream) {
-  auto func = air::runtime::CceWrapper::GetInstance()->rtMemcpyAsync;
+aclError aclrtResetDevice(int32_t deviceId) {
+  auto func = air::runtime::CceWrapper::GetInstance()->aclrtResetDevice;
   CHECK_NOTNULL(func);
-  return func(dst, dest_max, src, count, kind, stream);
+  return func(deviceId);
 }
 
-rtError_t rtDevBinaryRegister(const rtDevBinary_t *bin, void **handle) {
-  auto func = air::runtime::CceWrapper::GetInstance()->rtDevBinaryRegister;
+aclError aclrtGetDevice(int32_t *deviceId) {
+  auto func = air::runtime::CceWrapper::GetInstance()->aclrtGetDevice;
   CHECK_NOTNULL(func);
-  return func(bin, handle);
+  return func(deviceId);
 }
 
-rtError_t rtDevBinaryUnRegister(void *handle) {
-  auto func = air::runtime::CceWrapper::GetInstance()->rtDevBinaryUnRegister;
+rtError_t rtGetTaskIdAndStreamID(uint32_t *taskId, uint32_t *streamId) {
+  auto func = air::runtime::CceWrapper::GetInstance()->rtGetTaskIdAndStreamID;
   CHECK_NOTNULL(func);
-  return func(handle);
-}
-
-rtError_t rtFunctionRegister(void *handle, const void *stub_func, const char *stub_name,
-                             const void *dev_func, uint32_t func_mode) {
-  auto func = air::runtime::CceWrapper::GetInstance()->rtFunctionRegister;
-  CHECK_NOTNULL(func);
-  return func(handle, stub_func, stub_name, dev_func, func_mode);
-}
-
-rtError_t rtKernelLaunch(const void *stub_func, uint32_t block_dim, void *args, uint32_t args_size,
-                         rtL2Ctrl_t *l2ctrl, rtStream_t stream) {
-  auto func = air::runtime::CceWrapper::GetInstance()->rtKernelLaunch;
-  CHECK_NOTNULL(func);
-  return func(stub_func, block_dim, args, args_size, l2ctrl, stream);
+  return func(taskId, streamId);
 }

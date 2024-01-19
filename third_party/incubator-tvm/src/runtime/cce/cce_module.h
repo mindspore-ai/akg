@@ -24,6 +24,7 @@
 
 /*!
  * 2019.12.30 - Add file cce_module.h.
+ * 2024.1.24 - Change rt*** to aclrt***.
  */
 
 #ifndef TVM_RUNTIME_CCE_CCE_MODULE_H_

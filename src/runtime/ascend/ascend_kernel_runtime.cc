@@ -15,7 +15,6 @@
  */
 #include <dmlc/common.h>
 #include "ascend_kernel_runtime.h"
-#include "runtime/rt.h"
 #include "ascend_memory_manager.h"
 #include "kernel.h"
 #include "tvm.h"
@@ -31,7 +30,10 @@ using std::vector;
 
 namespace air {
 namespace runtime {
-static thread_local rtContext_t thread_local_rt_context{nullptr};
+constexpr auto kBinFileSuffix = ".so";
+constexpr auto kDoBinFileSuffix = "_do";
+
+static thread_local aclrtContext thread_local_rt_context{nullptr};
 
 AscendKernelRuntime::AscendKernelRuntime(uint32_t device_id) {
   set_device_id(device_id);
@@ -44,10 +46,10 @@ void AscendKernelRuntime::SetContext() {
   if (thread_local_rt_context == rt_context_) {
     return;
   }
-  auto ret = rtCtxSetCurrent(rt_context_);
+  auto ret = aclrtSetCurrentContext(rt_context_);
   thread_local_rt_context = rt_context_;
-  if (ret != RT_ERROR_NONE) {
-    LOG(FATAL) << "Call rtCtxSetCurrent, ret[" << GetErrorMsg(ret) << "]";
+  if (ret != ACL_SUCCESS) {
+    LOG(FATAL) << "Call aclrtSetCurrentContext, ret[" << GetErrorMsg(ret) << "]";
   }
 }
 
@@ -55,9 +57,9 @@ void AscendKernelRuntime::SetCurrentContext() {
   if (rt_context_ == nullptr) {
     return;
   }
-  auto ret = rtCtxSetCurrent(rt_context_);
-  if (ret != RT_ERROR_NONE) {
-    LOG(FATAL) << "Call rtCtxSetCurrent, ret[" << GetErrorMsg(ret) << "]";
+  auto ret = aclrtSetCurrentContext(rt_context_);
+  if (ret != ACL_SUCCESS) {
+    LOG(FATAL) << "Call aclrtSetCurrentContext, ret[" << GetErrorMsg(ret) << "]";
   }
 }
 
@@ -95,9 +97,9 @@ bool AscendKernelRuntime::Init() {
 
 void AscendKernelRuntime::CreateContext() {
   if (rt_context_ == nullptr) {
-    auto ret = rtCtxCreate(&rt_context_, 0, device_id_);
-    if (ret != RT_ERROR_NONE) {
-      LOG(FATAL) << "Call rtCtxCreate, ret[" << static_cast<int>(ret) << "]";
+    auto ret = aclrtCreateContext(&rt_context_, device_id_);
+    if (ret != ACL_SUCCESS) {
+      LOG(FATAL) << "Call aclrtCreateContext, ret[" << static_cast<int>(ret) << "]";
     }
   }
   SetCurrentContext();
@@ -105,48 +107,49 @@ void AscendKernelRuntime::CreateContext() {
 
 bool AscendKernelRuntime::InitDevice() {
   LOG(INFO) << "InitDevice: " << device_id_;
-  int device_count = 0;
-  auto ret = rtGetDeviceCount(&device_count);
-  if (ret != RT_ERROR_NONE) {
-    LOG(FATAL) << "Call rtGetDeviceCount, ret[" << static_cast<int>(ret) << "]";
+  uint32_t device_count = 0;
+  auto ret = aclrtGetDeviceCount(&device_count);
+  if (ret != ACL_SUCCESS) {
+    LOG(FATAL) << "Call aclrtGetDeviceCount, ret[" << static_cast<int>(ret) << "]";
   }
 
-  ret = rtSetDevice(device_id_);
-  if (ret != RT_ERROR_NONE) {
-    LOG(FATAL) << "Call rtSetDevice, ret[" << static_cast<int>(ret) << "]";
+  ret = aclrtSetDevice(device_id_);
+  if (ret != ACL_SUCCESS) {
+    LOG(FATAL) << "Call aclrtSetDevice, ret[" << static_cast<int>(ret) << "]";
   }
 
-  // Context will be created by rtSetDevice
-  ret = rtCtxGetCurrent(&rt_context_);
-  if (ret != RT_ERROR_NONE || rt_context_ == nullptr) {
-    LOG(FATAL) << "Call rtCtxGetCurrent failed, ret[" << GetErrorMsg(ret) << "]";
+  // Context will be created by aclrtSetDevice
+  ret = aclrtGetCurrentContext(&rt_context_);
+  if (ret != ACL_SUCCESS || rt_context_ == nullptr) {
+    LOG(FATAL) << "Call aclrtGetCurrentContext failed, ret[" << GetErrorMsg(ret) << "]";
     return false;
   }
 
-  ret = rtStreamCreateWithFlags(&stream_, 0, RT_STREAM_DEFAULT);
-  if (ret != RT_ERROR_NONE) {
-    LOG(FATAL) << "Call rtStreamCreate, ret[" << GetErrorMsg(ret) << "]";
+  ret = aclrtCreateStreamWithConfig(&stream_, 0, RT_STREAM_DEFAULT);
+  if (ret != ACL_SUCCESS) {
+    LOG(FATAL) << "Call aclrtCreateStreamWithConfig, ret[" << GetErrorMsg(ret) << "]";
   }
   return true;
 }
 
 AscendKernelRuntime::~AscendKernelRuntime() {
   ReleaseDeviceRes();
+  UnLoadKernelFunc();
 }
 
 bool AscendKernelRuntime::ResetDevice(uint32_t device_id) {
   SetCurrentContext();
   int32_t ret;
   if (stream_ != nullptr) {
-    ret = rtStreamDestroy(stream_);
-    if (ret != RT_ERROR_NONE) {
-      LOG(FATAL) << "Call rtStreamDestroy, ret[" << GetErrorMsg(ret) << "]";
+    ret = aclrtDestroyStream(stream_);
+    if (ret != ACL_SUCCESS) {
+      LOG(FATAL) << "Call aclrtDestroyStream, ret[" << GetErrorMsg(ret) << "]";
     }
     stream_ = nullptr;
   }
-  ret = rtDeviceReset(device_id);
-  if (ret != RT_ERROR_NONE) {
-    LOG(FATAL) << "Call rtDeviceReset, ret[" << GetErrorMsg(ret) << "]";
+  ret = aclrtResetDevice(device_id);
+  if (ret != ACL_SUCCESS) {
+    LOG(FATAL) << "Call aclrtResetDevice, ret[" << GetErrorMsg(ret) << "]";
   }
   // set to nullptr as its not created, only bounded to existing context
   rt_context_ = nullptr;
@@ -161,12 +164,41 @@ inline unsigned int UlongToUint(uint64_t u) {
   return static_cast<unsigned int>(u);
 }
 
+void *AscendKernelRuntime::GetKernelFunc(const std::string &kernel_name, const std::string &func_name) {
+  const auto *f = Registry::Get("get_kernel_meta_path");
+  CHECK(f != nullptr) << "Function get_kernel_meta_path is not registered";
+  std::string file_str = (*f)().operator std::string();
+  (void)file_str.append(kernel_name).append(kBinFileSuffix);
+  char *file_c_str = (char *)file_str.c_str();
+
+  void *handle = dlopen(file_c_str, RTLD_LAZY | RTLD_LOCAL);
+  CHECK(handle != nullptr) << "dlopen failed, file: " << file_c_str;
+
+  std::string func_str = func_name + kDoBinFileSuffix;
+  char *func_c_str = (char *)func_str.c_str();
+  void *func = dlsym(handle, func_c_str);
+  CHECK(func != nullptr) << "dlsym failed, symbol: " << func_str;
+  cce_handle_ = handle;
+  return func;
+}
+
+bool AscendKernelRuntime::UnLoadKernelFunc() {
+  if (cce_handle_ != nullptr) {
+    if (dlclose(cce_handle_) != 0) {
+      return false;
+    }
+  }
+  cce_handle_ = nullptr;
+  return true;
+}
+
 bool AscendKernelRuntime::Run(const std::string &kernel_name, const std::vector<TensorDevicePtr> &input_tensors,
                               const std::vector<int64_t> &input_shape_args) {
   uint32_t blockdim = 1;  // default blockdim equal to 1.
+  std::string func_name = kernel_name;
   auto kernel_pack_ptr = GetKernelPack(kernel_name);
-  auto func_stub = GetFuncStub(*kernel_pack_ptr, &blockdim);
-  if (func_stub == 0) {
+  auto func_stub = GetFuncStub(*kernel_pack_ptr, &blockdim, &func_name);
+  if (!func_stub) {
     LOG(FATAL) << "GenFuncStub failed.";
     return false;
   }
@@ -178,23 +210,20 @@ bool AscendKernelRuntime::Run(const std::string &kernel_name, const std::vector<
   for (const auto &shape_arg : input_shape_args) {
     runtimeargs.push_back(reinterpret_cast<void *>(shape_arg));
   }
-  rtL2Ctrl_t *l2ctrl = nullptr;
-  const void *stubFunc = reinterpret_cast<void *>(func_stub);
-  auto argsSize = static_cast<uint32_t>(UlongToUint(sizeof(void *)) * runtimeargs.size());
+
   if (input_shape_args.size() > 0 && blockdim == INT_MAX) {
     blockdim = input_shape_args[input_shape_args.size() - 1];
   }
-  auto ret = rtKernelLaunch(stubFunc, blockdim, runtimeargs.data(), argsSize, l2ctrl, stream());
+
+  typedef void (*CallFunc)(uint32_t, void*, void*, void**);
+  auto func_ptr = reinterpret_cast<CallFunc>(GetKernelFunc(kernel_name, func_name));
+  func_ptr(blockdim, nullptr, stream(), runtimeargs.data());
   SyncStream();
-  if (ret != RT_ERROR_NONE) {
-    LOG(FATAL) << "Call runtime rtKernelLaunch error, ret[" << GetErrorMsg(ret) << "]";
-    return false;
-  }
 #ifdef USE_CCE_PROFILING
   uint32_t stream_id;
   uint32_t task_id;
   auto rt_ret = rtGetTaskIdAndStreamID(&task_id, &stream_id);
-  if (rt_ret != RT_ERROR_NONE) {
+  if (rt_ret != ACL_SUCCESS) {
     LOG(FATAL) << "Profiling get task_id stream_id failed";
   }
   auto label = std::to_string(stream_id) + "_" + std::to_string(task_id);
@@ -206,27 +235,27 @@ bool AscendKernelRuntime::Run(const std::string &kernel_name, const std::vector<
 bool AscendKernelRuntime::SyncDeviceToHost(size_t size, void *device_ptr, void *host_ptr) {
   CHECK_NOTNULL(host_ptr);
   LOG(INFO) << "SyncDeviceToHost: " << size << " bytes from " << device_ptr << "(device) to " << host_ptr << "(host)";
-  SyncMemory(host_ptr, device_ptr, size, RT_MEMCPY_DEVICE_TO_HOST);
+  SyncMemory(host_ptr, device_ptr, size, ACL_MEMCPY_DEVICE_TO_HOST);
   return true;
 }
 
 bool AscendKernelRuntime::SyncHostToDevice(size_t size, const void *host_ptr, void *device_ptr) {
   CHECK_NOTNULL(host_ptr);
   LOG(INFO) << "SyncHostToDevice: " << size << " bytes from " << host_ptr << "(host) to " << device_ptr << "(device)";
-  SyncMemory(device_ptr, host_ptr, size, RT_MEMCPY_HOST_TO_DEVICE);
+  SyncMemory(device_ptr, host_ptr, size, ACL_MEMCPY_HOST_TO_DEVICE);
   return true;
 }
 
-void AscendKernelRuntime::SyncMemory(void *dst, const void *src, uint64_t size, rtMemcpyKind_t kind) {
+void AscendKernelRuntime::SyncMemory(void *dst, const void *src, uint64_t size, aclrtMemcpyKind kind) {
   SetContext();
   // Only apply asynchronous copy in Pynative && RT_MEMCPY_HOST_TO_DEVICE mode
-  if (kind != RT_MEMCPY_HOST_TO_DEVICE) {
-    auto ret_rt_memcpy = rtMemcpy(dst, size, src, size, kind);
-    if (ret_rt_memcpy != RT_ERROR_NONE) {
-      LOG(FATAL) << "rtMemcpy failed, ret[" << ret_rt_memcpy << "]";
+  if (kind != ACL_MEMCPY_HOST_TO_DEVICE) {
+    auto ret_rt_memcpy = aclrtMemcpy(dst, size, src, size, kind);
+    if (ret_rt_memcpy != ACL_SUCCESS) {
+      LOG(FATAL) << "aclrtMemcpy failed, ret[" << ret_rt_memcpy << "]";
     }
   } else {
-    auto ret = MemcpyAsync(dst, src, size, static_cast<int32_t>(RT_MEMCPY_HOST_TO_DEVICE_EX));
+    auto ret = MemcpyAsync(dst, src, size, static_cast<int32_t>(ACL_MEMCPY_HOST_TO_DEVICE));
     if (!ret) {
       LOG(FATAL) << "MemcpyAsync failed, ret[" << GetErrorMsg(ret) << "]";
     }
@@ -240,13 +269,13 @@ bool AscendKernelRuntime::MemcpyAsync(void *dst, const void *src, uint64_t size,
     return false;
   }
 
-  auto copy_kind = static_cast<rtMemcpyKind_t>(kind);
-  if (copy_kind != RT_MEMCPY_HOST_TO_DEVICE_EX) {
+  auto copy_kind = static_cast<aclrtMemcpyKind>(kind);
+  if (copy_kind != ACL_MEMCPY_HOST_TO_DEVICE) {
     LOG(FATAL) << "Memory copy async not support cache host buffer in kind: " << kind;
   }
-  auto ret = rtMemcpyAsync(dst, size, src, size, static_cast<rtMemcpyKind_t>(kind), stream_);
-  if (ret != RT_ERROR_NONE) {
-    LOG(FATAL) << "Call runtime rtMemcpyAsync error, ret[" << GetErrorMsg(ret) << "]";
+  auto ret = aclrtMemcpyAsync(dst, size, src, size, static_cast<aclrtMemcpyKind>(kind), stream_);
+  if (ret != ACL_SUCCESS) {
+    LOG(FATAL) << "Call runtime aclrtMemcpyAsync error, ret[" << GetErrorMsg(ret) << "]";
     return false;
   }
   return true;
@@ -258,9 +287,9 @@ bool AscendKernelRuntime::SyncStream() {
     LOG(FATAL) << "SyncStream failed. stream_ is nullptr";
     return false;
   }
-  auto ret = rtStreamSynchronize(stream_);
-  if (ret != RT_ERROR_NONE) {  // o for switch stream
-    LOG(FATAL) << "Call runtime rtStreamSynchronize error, ret[" << GetErrorMsg(ret) << "]";
+  auto ret = aclrtSynchronizeStream(stream_);
+  if (ret != ACL_SUCCESS) {  // o for switch stream
+    LOG(FATAL) << "Call runtime aclrtSynchronizeStream error, ret[" << GetErrorMsg(ret) << "]";
     return false;
   }
   return true;

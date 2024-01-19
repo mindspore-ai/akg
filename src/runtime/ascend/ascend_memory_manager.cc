@@ -16,7 +16,7 @@
 #include <thread>
 #include <dmlc/common.h>
 #include "ascend_memory_manager.h"
-#include "runtime/mem.h"
+#include "runtime/cce/cce_acl.h"
 #include "runtime_error_codes.h"
 
 namespace air {
@@ -29,15 +29,15 @@ constexpr uint64_t kAscendDeviceMemSize = (kAscendInitDeviceMemGB << kMemSizeGB)
 uint64_t GetDeviceMemSize() {
   size_t free = 0;
   size_t total = 0;
-  rtError_t ret = rtMemGetInfoEx(RT_MEMORYINFO_HBM, &free, &total);
-  if (ret != RT_ERROR_NONE) {
+  aclError ret = aclrtGetMemInfo(ACL_HBM_MEM, &free, &total);
+  if (ret != ACL_SUCCESS) {
     LOG(FATAL) << "Get Device HBM memory size failed, ret = " << ret << ", total =  " << total;
   }
   if (total != 0) {
     return total;
   }
-  ret = rtMemGetInfoEx(RT_MEMORYINFO_DDR, &free, &total);
-  if (ret != RT_ERROR_NONE) {
+  ret = aclrtGetMemInfo(ACL_DDR_MEM, &free, &total);
+  if (ret != ACL_SUCCESS) {
     LOG(FATAL) << "Get Device DDR memory size failed, ret = " << ret << ", total =  " << total;
   }
   return total;
@@ -54,10 +54,10 @@ uint64_t GetDefaultDeviceMemSize() {
 
 void AscendMemoryManager::MallocDeviceMemory() {
   device_mem_size_ = GetDefaultDeviceMemSize();
-  rtError_t ret;
+  aclError ret;
   auto max_retry = 3;
   for (auto i = 0; i < max_retry; ++i) {
-    ret = rtMalloc(reinterpret_cast<void **>(&device_mem_base_), device_mem_size_, RT_MEMORY_HBM, 0);
+    ret = aclrtMalloc(reinterpret_cast<void **>(&device_mem_base_), device_mem_size_, ACL_MEM_MALLOC_HUGE_FIRST);
     if (ret == ACL_ERROR_RT_MEMORY_ALLOCATION) {
       LOG(WARNING) << "Device may be occupied, sleep 1s and retry again!";
       device_mem_base_ = nullptr;
@@ -67,20 +67,20 @@ void AscendMemoryManager::MallocDeviceMemory() {
     }
   }
 
-  if (ret != RT_ERROR_NONE) {
-    LOG(FATAL) << "rtMalloc mem size[" << device_mem_size_ << "] fail, ret[" << ret << "]";
+  if (ret != ACL_SUCCESS) {
+    LOG(FATAL) << "aclrtMalloc mem size[" << device_mem_size_ << "] fail, ret[" << ret << "]";
   } else {
     device_mem_offset_ = device_mem_size_;
-    LOG(INFO) << "Call rtMalloc to allocate device memory Success, size : " << device_mem_size_
+    LOG(INFO) << "Call aclrtMalloc to allocate device memory Success, size : " << device_mem_size_
               << " bytes , address : " << reinterpret_cast<void *>(device_mem_base_);
   }
 }
 
 void AscendMemoryManager::FreeDeviceMemory() {
   if (device_mem_base_ != nullptr) {
-    auto ret = rtFree(device_mem_base_);
-    if (ret != RT_ERROR_NONE) {
-      LOG(FATAL) << "rtFree mem size[" << device_mem_size_ << "] fail, ret[" << ret << "]";
+    auto ret = aclrtFree(device_mem_base_);
+    if (ret != ACL_SUCCESS) {
+      LOG(FATAL) << "aclrtFree mem size[" << device_mem_size_ << "] fail, ret[" << ret << "]";
     }
     device_mem_base_ = nullptr;
   }

@@ -102,7 +102,7 @@ class ProfileMgr {
 
 
 Status ProfCommandHandle(ProfCommandHandleType type);
-rtError_t CtrlCallbackHandle(uint32_t rt_type, void *data, uint32_t len);
+aclError CtrlCallbackHandle(uint32_t rt_type, void *data, uint32_t len);
 Status ProfCtrlSwitchHandle(void *data);
 }  // namespace runtime
 }  // namespace air

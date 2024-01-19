@@ -24,21 +24,23 @@
 /*!
  * 2019.12.30 - Add file cce_module.cc.
  * 2023.4.21 - load cce symbols.
+ * 2024.1.24 - Change rt*** to aclrt***.
  */
 
 #include "runtime/cce/cce_module.h"
 
 #include <runtime/file_util.h>
 #include <runtime/pack_args.h>
-#include <runtime/rt.h>
 #include <runtime/thread_storage_scope.h>
 #include <tvm/runtime/registry.h>
 
 #include <mutex>
 
 #include "runtime/cce/cce_common.h"
+#include "runtime/cce/cce_acl.h"
 #include "codegen/util.h"
 #include <climits>
+#include <dlfcn.h>
 
 #ifdef USE_CCE_PROFILING
 #include "profile_mgr.h"
@@ -63,15 +65,7 @@ class CceModuleNode : public air::runtime::ModuleNode {
   }
   // destructor
   ~CceModuleNode() override {
-    for (int i = 0; i < static_cast<int>(module_.size()); ++i) {
-      if (module_[i] != nullptr) {
-        try {
-          CCE_CALL(rtSetDevice(i));
-          static_cast<void>(rtDevBinaryUnRegister(module_[i]));
-        } catch (...) {
-        }
-      }
-    }
+    UnLoadKernelFunc();
   }
 
   const char* type_key() const final { return "cce"; }
@@ -110,32 +104,31 @@ class CceModuleNode : public air::runtime::ModuleNode {
     }
   }
 
-  // get a funcStub from primary context in device_id
-  void* GetFuncStub(int device_id, const std::string& func_name) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    // must recheck under the lock scope
-    if (module_[device_id] == nullptr) {
-      rtDevBinary_t devBin;
-      devBin.magic = RT_DEV_BINARY_MAGIC_ELF;
-      devBin.version = 1;
-      devBin.length = data_.size();
-      devBin.data = data_.c_str();
-      static_cast<void>(rtDevBinaryRegister(&devBin, &module_[device_id]));
-    }
+  void *GetKernelFunc(const std::string &func_name) {
+    const auto *f = Registry::Get("get_kernel_meta_path");
+    CHECK(f != nullptr) << "Function get_kernel_meta_path is not registered";
+    std::string file_str = (*f)().operator std::string();
+    (void)file_str.append(func_name).append(".o");
+    char *file_c_str = (char *)file_str.c_str();
 
-    void* func_stub = nullptr;
-    auto search = stub_[device_id].find(func_name);
-    if (search != stub_[device_id].end()) {
-      func_stub = search->second;
-    } else {
-      kernel_stub_gen_++;
-      func_stub = kernel_stub_gen_;
-      static_cast<void>(rtFunctionRegister(module_[device_id], func_stub, func_name.c_str(),
-                                           func_name.c_str(), 0));
-      stub_[device_id][func_name] = func_stub;
-    }
+    void *handle = dlopen(file_c_str, RTLD_LAZY | RTLD_LOCAL);
+    CHECK(handle != nullptr) << "dlopen failed, file: " << file_c_str;
 
-    return func_stub;
+    std::string func_str = func_name + "_do";
+    char *func_c_str = (char *)func_str.c_str();
+    void *func = dlsym(handle, func_c_str);
+    CHECK(func != nullptr) << "dlsym failed, symbol: " << func_str;
+    return func;
+  }
+
+  bool UnLoadKernelFunc() {
+    if (cce_handle_ != nullptr) {
+      if (dlclose(cce_handle_) != 0) {
+        return false;
+      }
+    }
+    cce_handle_ = nullptr;
+    return true;
   }
 
  private:
@@ -154,6 +147,7 @@ class CceModuleNode : public air::runtime::ModuleNode {
   std::mutex mutex_;
   // global increate to make stub unique
   static int* kernel_stub_gen_;
+  void *cce_handle_{nullptr};
 };
 
 int* CceModuleNode::kernel_stub_gen_ = nullptr;
@@ -177,25 +171,15 @@ class CceWrappedFunc {
   // invoke the function with void arguments
   void operator()(const TVMArgs args, TVMRetValue* rv, void** void_args, int64_t* shape_args,
 		  size_t shape_arg_size) const {
-    int device_id;
-    CCE_CALL(rtGetDevice(&device_id));
-
-    if (fcache_[device_id] == nullptr) {
-      fcache_[device_id] = m_->GetFuncStub(device_id, func_name_);
-    }
+    int32_t device_id;
+    CCE_CALL(aclrtGetDevice(&device_id));
 
     ThreadWorkLoad wl = thread_axis_cfg_.Extract(args);
     int blockDim = static_cast<int>(wl.grid_dim(0));
-    rtL2Ctrl_t* l2ctrl = nullptr;
-    auto strm = static_cast<rtStream_t>(CceThreadEntry::ThreadLocal()->stream);
+    auto strm = static_cast<aclrtStream>(CceThreadEntry::ThreadLocal()->stream);
 
     size_t raw_size = arg_size_.size() - shape_arg_size;
-    void** raw_args;
-#ifdef USE_KC_AIR
-    raw_args = new void*[raw_size];
-#else
-    raw_args = new void*[arg_size_.size()];
-#endif
+    void** raw_args = new void*[arg_size_.size()];
     size_t args_size = 0;
     for (size_t i = 0; i < raw_size; ++i) {
       args_size += arg_size_[i];
@@ -203,30 +187,24 @@ class CceWrappedFunc {
       raw_args[i] = *ptr;
     }
 
-    rtError_t result;
-
+    aclError result;
+    typedef void (*CallFunc)(uint32_t, void*, void*, void**);
+    auto func_ptr = reinterpret_cast<CallFunc>(m_->GetKernelFunc(func_name_));
     if (shape_arg_size == 0) {
-      result = rtKernelLaunch(fcache_[device_id], blockDim,
-                              raw_args,  // void_args,
-                              static_cast<uint32_t>(args_size), l2ctrl, strm);
+      func_ptr(blockDim, nullptr, strm, raw_args);
     } else {
-      result = RT_ERROR_NONE;
+      result = ACL_SUCCESS;
       if (blockDim == INT_MAX) {
         blockDim = shape_args[shape_arg_size - 1];
       }
-#ifdef USE_KC_AIR
-      result = rtKernelLaunchShapes(fcache_[device_id], blockDim,
-                                    raw_args, // void_args,
-                                    static_cast<uint32_t>(args_size), shape_args, shape_arg_size,
-                                    l2ctrl, strm);
-#else
+
       for (size_t ssize = raw_size; ssize < arg_size_.size(); ++ssize) {
         void* tempshape = reinterpret_cast<void*> (shape_args[ssize - raw_size]);
         raw_args[ssize] = tempshape;
         args_size += 8;
       }
-      result = rtKernelLaunch(fcache_[device_id], blockDim, raw_args, static_cast<uint32_t>(args_size), l2ctrl, strm);
-#endif
+
+      func_ptr(blockDim, nullptr, strm, raw_args);
       akg::RecordCore(blockDim, true);
     }
 
@@ -234,7 +212,7 @@ class CceWrappedFunc {
     uint32_t stream_id;
     uint32_t task_id;
     auto rt_ret = rtGetTaskIdAndStreamID(&task_id, &stream_id);
-    if (rt_ret != RT_ERROR_NONE) {
+    if (rt_ret != ACL_SUCCESS) {
       LOG(FATAL) << "Profiling get task_id stream_id failed";
     }
     auto label = std::to_string(stream_id) + "_" + std::to_string(task_id);
@@ -242,7 +220,7 @@ class CceWrappedFunc {
 #endif
 
     delete[] raw_args;
-    if (result != RT_ERROR_NONE) {
+    if (result != ACL_SUCCESS) {
       const char* msg{nullptr};
       std::ostringstream os;
 

@@ -116,6 +116,8 @@ constexpr auto kIsPolyConfigReset = "is_poly_config_reset";
 constexpr auto kWorkspaceAttr = "workspace";
 constexpr auto kWorkspaceNum = "num";
 constexpr auto kWorkspaceSize = "size";
+constexpr auto kWorkspaceName = "name";
+constexpr auto kWorkspaceType = "type";
 
 static std::unordered_map<std::string, int> help_tiling_level = {
   {"None", 0},

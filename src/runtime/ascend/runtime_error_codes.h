@@ -18,7 +18,6 @@
 #define SRC_RUNTIME_ASCEND_RUNTIME_ERROR_CODES_H_
 
 #include <string>
-#include "external/runtime/rt_error_codes.h"
 namespace air {
 namespace runtime {
 std::string GetErrorMsg(uint32_t rt_error_code);

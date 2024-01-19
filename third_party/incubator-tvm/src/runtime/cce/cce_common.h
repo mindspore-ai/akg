@@ -25,22 +25,23 @@
 /*!
  * 2019.12.30 - Add file cce_common.h.
  * 2023.4.21 - Include cce_wrapper.h.
+ * 2024.1.24 - Change rt*** to aclrt***.
  */
 
 #ifndef TVM_RUNTIME_CCE_CCE_COMMON_H_
 #define TVM_RUNTIME_CCE_CCE_COMMON_H_
 
 #include <tvm/runtime/packed_func.h>
-#include <runtime/rt.h>
 #include <runtime/workspace_pool.h>
 #include <string>
 #include "cce_wrapper.h"
+#include "runtime/cce/cce_acl.h"
 
 namespace air {
 namespace runtime {
-inline const char* CceGetErrorString(rtError_t e) {
+inline const char* CceGetErrorString(aclError e) {
   switch (e) {
-    case RT_ERROR_NONE:
+    case ACL_SUCCESS:
       return "success";
     default:
       return "Unknow cce error code";
@@ -49,15 +50,15 @@ inline const char* CceGetErrorString(rtError_t e) {
 
 #define CCE_CALL(func)                                                                                  \
   {                                                                                                     \
-    rtError_t e = (func);                                                                               \
-    CHECK(e == RT_ERROR_NONE) << "Cce runtime error: errno=" << e << ", info=" << CceGetErrorString(e); \
+    aclError e = (func);                                                                               \
+    CHECK(e == ACL_SUCCESS) << "Cce runtime error: errno=" << e << ", info=" << CceGetErrorString(e); \
   }
 
 /*! \brief Thread local workspace */
 class CceThreadEntry {
  public:
   /*! \brief The cce stream */
-  rtStream_t stream{nullptr};
+  aclrtStream stream{nullptr};
   /*! \brief thread local pool */
   air::runtime::WorkspacePool pool;
   /*! \brief profiting handle */
@@ -71,33 +72,6 @@ class CceThreadEntry {
   // get the threadlocal workspace
   static CceThreadEntry* ThreadLocal();
 };
-
-#ifndef RT_KERNEL_LAUNCH_PARAMETRIC_SHAPE
-#define RT_KERNEL_LAUNCH_PARAMETRIC_SHAPE
-/**
- * @ingroup kt_kernel
- * @brief launch kernel to device
- * @param [in] stubFunc  stub function
- * @param [in] blockDim  block dimentions
- * @param [in] args  tensor arguments 64-bit address for kernel function
- * @param [in] argsSize  tensor arguments size
- * @param [in] shapes  64-bit integer arguments for kernel function 
- * @param [in] shapeSize  integer arguments size
- * @param [in] smDesc  shared memory description
- * @param [in] stream  associated stream
- * @return RT_ERROR_NONE  for ok, errno for failed
- */
-#ifdef USE_KC_AIR
-extern "C" rtError_t rtKernelLaunchShapes(const void *stubFunc,
-					  uint32_t blockDIm,
-					  void *args,
-					  uint32_t argsSize,
-					  int64_t *shapes,
-					  uint32_t shapeSize,
-					  rtSmDesc_t *smDesc,
-					  rtStream_t stream);
-#endif // USE_KC_AIR
-#endif  // RT_KERNEL_LAUNCH_PARAMETRIC_SHAPE
 
 
 }  // namespace runtime

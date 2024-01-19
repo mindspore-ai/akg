@@ -19,7 +19,7 @@
 #include <string.h>
 #include "profile_mgr.h"
 #include "toolchain/prof_acl_api.h"
-#include <runtime/rt.h>
+#include <runtime/cce/cce_acl.h>
 #include <dmlc/logging.h>
 #include <tvm/runtime/registry.h>
 
@@ -171,8 +171,8 @@ ProfileMgr &ProfileMgr::GetInstance() {
 }
 
 bool ProfileMgr::ProfRegisterCtrlCallback() const {
-  rtError_t rt_ret = MsprofRegisterCallback(GE, CtrlCallbackHandle);
-  if (rt_ret != RT_ERROR_NONE) {
+  aclError rt_ret = MsprofRegisterCallback(GE, CtrlCallbackHandle);
+  if (rt_ret != ACL_SUCCESS) {
     LOG(ERROR) << "Call rtProfRegisterCtrlCallback failed.";
     return false;
   }
@@ -180,7 +180,7 @@ bool ProfileMgr::ProfRegisterCtrlCallback() const {
   return true;
 }
 
-rtError_t CtrlCallbackHandle(uint32_t rt_type, void *data, uint32_t len) {
+aclError CtrlCallbackHandle(uint32_t rt_type, void *data, uint32_t len) {
   if (rt_type == RT_PROF_CTRL_REPORTER) {
     ProfileMgr::GetInstance().RegReporterCallback(reinterpret_cast<MsprofReporterCallback>(data));
     LOG(INFO) << "Set MsprofReporterCallback success.";
@@ -191,7 +191,7 @@ rtError_t CtrlCallbackHandle(uint32_t rt_type, void *data, uint32_t len) {
     }
   }
 
-  return RT_ERROR_NONE;
+  return ACL_SUCCESS;
 }
 
 Status ProfCtrlSwitchHandle(void *data) {

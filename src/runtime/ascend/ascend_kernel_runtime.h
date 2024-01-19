@@ -25,8 +25,8 @@
 #include <unordered_set>
 #include "ascend_memory_manager.h"
 #include "tensor_device.h"
-#include "runtime/context.h"
-#include "runtime/mem.h"
+#include "runtime/cce/cce_acl.h"
+#include <dlfcn.h>
 
 namespace air {
 namespace runtime {
@@ -56,13 +56,16 @@ class AscendKernelRuntime {
   bool InitDevice();
   bool ResetDevice(uint32_t device_id);
   void SetCurrentContext();
-  void SyncMemory(void *dst, const void *src, uint64_t size, rtMemcpyKind_t kind);
+  void SyncMemory(void *dst, const void *src, uint64_t size, aclrtMemcpyKind kind);
+  void *GetKernelFunc(const std::string &kernel_name, const std::string &func_name);
+  bool UnLoadKernelFunc();
 
-  rtContext_t rt_context_{nullptr};
+  aclrtContext rt_context_{nullptr};
   bool initialized_{false};
   uint32_t device_id_{0};
   void *stream_{nullptr};
   std::shared_ptr<AscendMemoryManager> mem_manager_{nullptr};
+  void *cce_handle_{nullptr};
 };
 }  // namespace runtime
 }  // namespace air

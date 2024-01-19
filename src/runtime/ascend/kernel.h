@@ -74,7 +74,7 @@ class KernelPack {
 
 using KernelPackPtr = std::shared_ptr<KernelPack>;
 
-uintptr_t GetFuncStub(const KernelPack &kernel_pack, uint32_t *block_dim);
+bool GetFuncStub(const KernelPack &kernel_pack, uint32_t *block_dim, std::string *func_name);
 KernelPackPtr GetKernelPack(const std::string &kernel_name);
 
 }  // namespace runtime
