@@ -80,8 +80,11 @@ def compile_cuda(code,
     """
     # supported gcc version for cuda code generation
     gcc_version = get_gcc_version()
-    if gcc_version is None or (7,3,0) > gcc_version or gcc_version > (11,1,0):
+    if gcc_version is None or (7, 3, 0) > gcc_version:
         raise ValueError("gcc version is {}, not in range [7.3.0, 11.1.0]".format(
+            gcc_version))
+    if gcc_version > (11, 1, 0):
+        print("[WARNING] gcc version is {}, which beyonds our maintenance range [7.3.0, 11.1.0]".format(
             gcc_version))
 
     arch_exception = ["sm_00", None]
