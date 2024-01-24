@@ -17,6 +17,7 @@ import os
 import logging
 from akg.utils.util import write_code
 import json
+from akg.global_configs import get_kernel_meta_path
 
 logging.getLogger().setLevel(logging.INFO)
 
@@ -34,15 +35,14 @@ def set_workspace_for_json(json_path, workspace_dict):
 
 
 def copy_to_akg_kernel_meta(kernel_name, postfixs, workspace_dict=None):
-    akg_kernel_mate_str = os.getenv("KERNEL_META_DIR",default="akg_kernel_meta")
     source = os.path.realpath(os.getenv('MS_COMPILER_CACHE_PATH', './'))
     import shutil
-    target = source + "/" + akg_kernel_mate_str + "/" + kernel_name
+    target_dir = get_kernel_meta_path()
+    target = target_dir + kernel_name
     source = source + "/" + "kernel_meta/" + kernel_name
     if source == target:
         return True
-    akg_kernel_mate_str = os.path.abspath(akg_kernel_mate_str)
-    create_directory(akg_kernel_mate_str)
+    create_directory(target_dir)
     for postfix in postfixs:
         if os.path.exists(source + postfix):
             try:
