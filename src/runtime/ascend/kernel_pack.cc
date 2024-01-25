@@ -15,13 +15,12 @@
  */
 #include <dmlc/common.h>
 #include <tvm/runtime/registry.h>
-#include "runtime/rt.h"
+#include <runtime/cce/cce_acl.h>
 #include "kernel.h"
 
 namespace air {
 namespace runtime {
 constexpr auto kJsonSuffix = ".json";
-static uintptr_t kernel_stub_gen_ = 0;
 
 inline size_t LongToSize(int64_t u) {
   if (u < 0) {
@@ -120,49 +119,22 @@ bool KernelPack::LoadKernelMeta(const std::string &json_f) {
 
 KernelJsonInfo KernelPack::kernel_json_info() const { return kernel_json_info_; }
 
-uintptr_t GetFuncStub(const KernelPack &kernel_pack, uint32_t *block_dim) {
+bool GetFuncStub(const KernelPack &kernel_pack, uint32_t *block_dim, std::string *func_name) {
   auto kernel = kernel_pack.GetKernel();
   if (kernel == nullptr) {
     LOG(FATAL) << "Invalid kernel pack, json or kernel is nullptr.";
+    return false;
   }
   auto kernel_contents = kernel->contents;
   if (kernel_contents == nullptr) {
     LOG(FATAL) << "Invalid kernel context, json or kernel is nullptr.";
+    return false;
   }
   auto kernel_json_info = kernel_pack.kernel_json_info();
 
   *block_dim = kernel_json_info.block_dim;
-  std::string func_name = kernel_json_info.kernel_name;
-  std::string magic = kernel_json_info.magic;
-
-  static std::map<std::string, uint32_t> magic_maps = {{"RT_DEV_BINARY_MAGIC_PLAIN", RT_DEV_BINARY_MAGIC_PLAIN},
-                                                       {"RT_DEV_BINARY_MAGIC_PLAIN_AICPU", RT_DEV_BINARY_MAGIC_PLAIN_AICPU},
-                                                       {"RT_DEV_BINARY_MAGIC_PLAIN_AIVEC", RT_DEV_BINARY_MAGIC_PLAIN_AIVEC},
-                                                       {"RT_DEV_BINARY_MAGIC_ELF", RT_DEV_BINARY_MAGIC_ELF},
-                                                       {"RT_DEV_BINARY_MAGIC_ELF_AICPU", RT_DEV_BINARY_MAGIC_ELF_AICPU},
-                                                       {"RT_DEV_BINARY_MAGIC_ELF_AIVEC", RT_DEV_BINARY_MAGIC_ELF_AIVEC},
-                                                       {"RT_DEV_BINARY_MAGIC_ELF_AICUBE", RT_DEV_BINARY_MAGIC_ELF_AICUBE}};
-  // object for device register.
-  auto iter = magic_maps.find(magic);
-  if (iter == magic_maps.end()) {
-    LOG(FATAL) << "Invalid magic number: " << magic << ", kernel: " << func_name;
-  }
-
-  // BinaryRegister
-  void *module = nullptr;
-  rtDevBinary_t devBin;
-  devBin.magic = iter->second;
-  devBin.version = 0;
-  devBin.length = kernel->len;
-  devBin.data = kernel->contents;
-  static_cast<void>(rtDevBinaryRegister(&devBin, &module));
-
-  // to diff different funcs.
-  uintptr_t func_stub = ++kernel_stub_gen_;
-  static_cast<void>(
-    rtFunctionRegister(module, reinterpret_cast<void *>(func_stub), func_name.c_str(), func_name.c_str(), 0));
-
-  return func_stub;
+  *func_name = kernel_json_info.kernel_name;
+  return true;
 }
 
 KernelPackPtr GetKernelPack(const std::string &kernel_name) {

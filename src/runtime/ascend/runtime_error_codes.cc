@@ -16,6 +16,7 @@
 #include "runtime_error_codes.h"
 #include <map>
 #include <vector>
+#include "runtime/cce/cce_acl.h"
 
 const std::map<uint32_t, std::string> error_msg = {
   {ACL_RT_SUCCESS, "success"},

@@ -24,21 +24,22 @@
 
 /*!
  * 2019.12.30 - Add file cce_device_api.cc.
+ * 2024.1.24 - Change rt*** to aclrt***.
  */
 
 #include <tvm/runtime/device_api.h>
 
 #include <dmlc/logging.h>
 #include <dmlc/thread_local.h>
-#include <runtime/rt.h>
 #include <tvm/runtime/registry.h>
 #include "runtime/cce/cce_common.h"
+#include "runtime/cce/cce_acl.h"
 
 namespace air {
 namespace runtime {
 class CceDeviceAPI final : public DeviceAPI {
  public:
-  void SetDevice(TVMContext ctx) final { CCE_CALL(rtSetDevice(ctx.device_id)); }
+  void SetDevice(TVMContext ctx) final { CCE_CALL(aclrtSetDevice(ctx.device_id)); }
 
   void GetAttr(TVMContext ctx, DeviceAttrKind kind, TVMRetValue* rv) final {
     switch (kind) {
@@ -80,53 +81,53 @@ class CceDeviceAPI final : public DeviceAPI {
     void* ptr = nullptr;
 
     // alignment check here
-    CCE_CALL(rtSetDevice(ctx.device_id));
-    CCE_CALL(rtMalloc(&ptr, size + 32, RT_MEMORY_HBM, 0));
+    CCE_CALL(aclrtSetDevice(ctx.device_id));
+    CCE_CALL(aclrtMalloc(&ptr, size + 32, ACL_MEM_MALLOC_HUGE_FIRST));
 
     return ptr;
   }
 
   void FreeDataSpace(TVMContext ctx, void* ptr) final {
     if (ptr != nullptr) {
-      CCE_CALL(rtSetDevice(ctx.device_id));
-      CCE_CALL(rtFree(ptr));
+      CCE_CALL(aclrtSetDevice(ctx.device_id));
+      CCE_CALL(aclrtFree(ptr));
     }
   }
 
   void CopyDataFromTo(const void* from, size_t from_offset, void* to, size_t to_offset, size_t num_bytes,
                       TVMContext ctx_from, TVMContext ctx_to, TVMType type_hint, TVMStreamHandle stream) final {
     LOG(INFO) << " from " << from << " to " << to << " ctx_from " << ctx_from;
-    auto cce_stream = static_cast<rtStream_t>(stream);
+    auto cce_stream = static_cast<aclrtStream>(stream);
     from = static_cast<const char*>(from) + from_offset;
     to = static_cast<char*>(to) + to_offset;
 
     if (ctx_from.device_type == kDLCce && ctx_to.device_type == kDLCce) {
-      CCE_CALL(rtSetDevice(ctx_from.device_id));
+      CCE_CALL(aclrtSetDevice(ctx_from.device_id));
       if (ctx_from.device_id == ctx_to.device_id) {
-        CceCopy(from, to, num_bytes, RT_MEMCPY_DEVICE_TO_DEVICE, cce_stream);
+        CceCopy(from, to, num_bytes, ACL_MEMCPY_DEVICE_TO_DEVICE, cce_stream);
       } else {
         LOG(FATAL) << "expect the same device id copy between Cce";
       }
     } else if (ctx_from.device_type == kDLCce && ctx_to.device_type == kDLCPU) {
-      CCE_CALL(rtSetDevice(ctx_from.device_id));
-      CceCopy(from, to, num_bytes, RT_MEMCPY_DEVICE_TO_HOST, cce_stream);
+      CCE_CALL(aclrtSetDevice(ctx_from.device_id));
+      CceCopy(from, to, num_bytes, ACL_MEMCPY_DEVICE_TO_HOST, cce_stream);
     } else if (ctx_from.device_type == kDLCPU && ctx_to.device_type == kDLCce) {
-      CCE_CALL(rtSetDevice(ctx_to.device_id));
-      CceCopy(from, to, num_bytes, RT_MEMCPY_HOST_TO_DEVICE, cce_stream);
+      CCE_CALL(aclrtSetDevice(ctx_to.device_id));
+      CceCopy(from, to, num_bytes, ACL_MEMCPY_HOST_TO_DEVICE, cce_stream);
     } else {
       LOG(FATAL) << "expect copy from/to Cce or between Cce";
     }
   }
 
   void StreamSync(TVMContext ctx, TVMStreamHandle stream) final {
-    auto cce_stream = static_cast<rtStream_t>(stream);
+    auto cce_stream = static_cast<aclrtStream>(stream);
 
-    CCE_CALL(rtSetDevice(ctx.device_id));
-    CCE_CALL(rtStreamSynchronize(cce_stream));
+    CCE_CALL(aclrtSetDevice(ctx.device_id));
+    CCE_CALL(aclrtSynchronizeStream(cce_stream));
   }
 
   void SetStream(TVMContext ctx, TVMStreamHandle stream) final {
-    CceThreadEntry::ThreadLocal()->stream = static_cast<rtStream_t>(stream);
+    CceThreadEntry::ThreadLocal()->stream = static_cast<aclrtStream>(stream);
   }
 
   void* AllocWorkspace(TVMContext ctx, size_t size, TVMType type_hint = {}) final {
@@ -141,34 +142,34 @@ class CceDeviceAPI final : public DeviceAPI {
   }
 
  private:
-  static void CceCopy(const void* from, void* to, size_t num_bytes, rtMemcpyKind_t kind, rtStream_t stream) {
-    if (stream != RT_STREAM_DEFAULT) {
+  static void CceCopy(const void* from, void* to, size_t num_bytes, aclrtMemcpyKind kind, aclrtStream stream) {
+    if (stream != nullptr) {
 #ifdef USE_CCE_RT
-      CCE_CALL(rtMemcpyAsync(to, num_bytes + 1, const_cast<void*>(from), num_bytes, kind, stream));
+      CCE_CALL(aclrtMemcpyAsync(to, num_bytes + 1, const_cast<void*>(from), num_bytes, kind, stream));
 #else
-      CCE_CALL(rtMemcpyAsync(to, const_cast<void*>(from), num_bytes, kind, stream));
+      CCE_CALL(aclrtMemcpyAsync(to, const_cast<void*>(from), num_bytes, kind, stream));
 #endif
     } else {
 #ifdef USE_CCE_RT
 #ifdef USE_KC_AIR
-      CCE_CALL(rtMemcpy(to, num_bytes, from, num_bytes, kind));
+      CCE_CALL(aclrtMemcpy(to, num_bytes, from, num_bytes, kind));
 #else
 
       // because cce runtime cannot support large size memcpy when des/src is alloc by general
       // malloc(not page-pinned), so we copy with large size by small blocks.
       size_t block_size = 1024 * 1024 * 1024;
       for (size_t i = 0; i < num_bytes / block_size; i++) {
-        CCE_CALL(rtMemcpy(to, block_size, const_cast<void*>(from), block_size, kind));
+        CCE_CALL(aclrtMemcpy(to, block_size, const_cast<void*>(from), block_size, kind));
         from = reinterpret_cast<char*>(const_cast<void*>(from)) + block_size;
         to = reinterpret_cast<char*>(to) + block_size;
       }
       size_t remain = num_bytes % block_size;
       if (remain > 0) {
-        CCE_CALL(rtMemcpy(to, remain, const_cast<void*>(from), remain, kind));
+        CCE_CALL(aclrtMemcpy(to, remain, const_cast<void*>(from), remain, kind));
       }
 #endif
 #else
-      CCE_CALL(rtMemcpy(to, const_cast<void*>(from), num_bytes, kind));
+      CCE_CALL(aclrtMemcpy(to, const_cast<void*>(from), num_bytes, kind));
 #endif
     }
   }
