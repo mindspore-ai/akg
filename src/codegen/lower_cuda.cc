@@ -129,13 +129,40 @@ StageResult CudaLowerRewrite(Stmt &stmt, LowerData &data) {
   return {stmt, false};
 }
 
+Stmt CudaUnrollLoop(Stmt stmt, BuildConfig &data_config) {
+  const int tensor_core_step = 3;
+  const int tensor_core_depth = 2;
+  const int tensor_core_depth_v100 = 8;
+  const int tensor_core_extent = 16;
+  const auto v100_str = "v100";
+
+  auto max_step = data_config->auto_unroll_max_step;
+  auto max_depth = data_config->auto_unroll_max_depth;
+  auto max_extent = data_config->auto_unroll_max_extent;
+  auto unroll_explicit = data_config->unroll_explicit;
+
+  std::string tensor_core_str;
+  if (g_attrs.GetStr(kPragmaTensorCore, &tensor_core_str)) {
+    max_step = tensor_core_step;
+    max_depth = tensor_core_depth;
+    max_extent = tensor_core_extent;
+    unroll_explicit = false;
+    std::string device_type;
+    if (g_attrs.GetStr(kDeviceType, &device_type)) {
+      if (device_type == v100_str) {
+        max_depth = tensor_core_depth_v100;
+      }
+    }
+  }
+  return NEXT_PASS(UnrollLoop, stmt, max_step, max_depth, max_extent, unroll_explicit);
+}
+
 StageResult CudaLowerBeforeLowerFunc(Stmt &stmt, LowerData &data) {
   Target target_platform = Target::Create(data->target);
   stmt =
     NEXT_PASS_IF(target_platform->device_type == kDLGPU && data->polyhedral && g_attrs.GetBool(kEnableSwizzleGPU, true),
                  SwizzleGPU, stmt, g_attrs);
-  stmt = NEXT_PASS(UnrollLoop, stmt, data->config->auto_unroll_max_step, data->config->auto_unroll_max_depth,
-                   data->config->auto_unroll_max_extent, data->config->unroll_explicit);
+  stmt = CudaUnrollLoop(stmt, data->config);
 
   stmt = NEXT_PASS(Simplify, stmt);
   stmt = NEXT_PASS(RemoveNoOp, stmt);

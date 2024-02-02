@@ -112,12 +112,8 @@ constexpr auto kIsTbeCodeGen = "is_tbe_codegen";
 constexpr auto kKeepTrivialLoop = "keep_trivial_loop";
 constexpr auto kRemoveStoreDependency = "remove_store_dependency";
 constexpr auto kIsPolyConfigReset = "is_poly_config_reset";
-// worksapce
-constexpr auto kWorkspaceAttr = "workspace";
-constexpr auto kWorkspaceNum = "num";
-constexpr auto kWorkspaceSize = "size";
-constexpr auto kWorkspaceName = "name";
-constexpr auto kWorkspaceType = "type";
+constexpr auto kDeviceType = "device_type";
+constexpr auto kPragmaTensorCore = "pragma_tensor_core";
 
 static std::unordered_map<std::string, int> help_tiling_level = {
   {"None", 0},
