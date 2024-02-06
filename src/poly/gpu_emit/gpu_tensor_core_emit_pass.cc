@@ -21,6 +21,7 @@
 #include "emit_pass.h"
 #include <stack>
 #include <algorithm>
+#include "build_module.h"
 
 namespace akg {
 namespace ir {
@@ -1488,12 +1489,16 @@ Stmt EmitForTensorCore(Stmt stmt, TensorCoreInfo &info, ScopInfo &scop_info) {
 
   // add tensor core plan two attr
   if (scop_info.user_config_.GetEnableTensorCore()) {
+    auto tensor_core_mode = StringImm::make("");
     if (scop_info.user_config_.GetEnableTensorCoreUsePoly()) {
-      stmt = AttrStmt::make(Expr(""), "pragma_tensor_core", StringImm::make(TENSOR_CORE_MODE_TWO), stmt);
+      tensor_core_mode = StringImm::make(TENSOR_CORE_MODE_TWO);
+      stmt = AttrStmt::make(Expr(""), "pragma_tensor_core", tensor_core_mode, stmt);
       stmt = AttrStmt::make(Expr("INFO"), "wmma_scope", StringImm::make(info.wmma_scope_), stmt);
     } else {
-      stmt = AttrStmt::make(Expr(""), "pragma_tensor_core", StringImm::make(TENSOR_CORE_MODE_ONE), stmt);
+      tensor_core_mode = StringImm::make(TENSOR_CORE_MODE_ONE);
+      stmt = AttrStmt::make(Expr(""), "pragma_tensor_core", tensor_core_mode, stmt);
     }
+    g_attrs.Set(kPragmaTensorCore, tensor_core_mode);
   }
 
   return stmt;

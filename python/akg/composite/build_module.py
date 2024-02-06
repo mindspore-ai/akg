@@ -189,6 +189,8 @@ def _update_target_info(desc_d, attr):
         # auto detect proper gpu device type according to compute capability description
         if target_info.get("compute_capability") == "8.0":
             attr["device_type"] = "a100"
+        elif target_info.get("compute_capability") == "7.0":
+            attr["device_type"] = "v100"
     elif process == "cpu":
         if target_info.get("feature"):
             attr["feature"] = target_info.get("feature")
@@ -672,7 +674,7 @@ def _build_to_module_ascend(desc_s_in, desc_d_in, attr, use_repo=True):
         is_success = build_tbe_codegen(kernel_name, stmt_json, args_json, attr, ascend_type)
         if not is_success:
             raise TypeError("npu_inference codegen failed.")
-        akg.tvm.get_global_func("build_host_cce")(res[1], kernel_name)
+        akg.tvm.get_global_func("build_host_cce")(res[1], res[2], kernel_name)
         return kernel_name
     return res
 

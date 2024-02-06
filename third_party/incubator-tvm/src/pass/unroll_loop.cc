@@ -52,13 +52,7 @@ class LoopUnroller : public IRMutator {
   }
 
   Stmt Mutate_(const AttrStmt* op, const Stmt& stmt) final {
-    if (op->attr_key == attr::pragma_tensor_core) {
-      auto_max_step_ = 3;
-      auto_max_depth_ = 8;
-      auto_max_extent_ = 16;
-      explicit_unroll_ = false;
-      return IRMutator::Mutate_(op, stmt);
-    } else if (op->attr_key == "no_unroll") {
+    if (op->attr_key == "no_unroll") {
       no_unroll_ = true;
       return IRMutator::Mutate_(op, stmt);
     } else if (op->attr_key == "pragma_auto_unroll_max_step") {
