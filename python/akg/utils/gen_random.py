@@ -61,16 +61,10 @@ def func(size_, miu_=0, sigma_=8, seed_=None):
 
 @func_time_required
 def random_gaussian(size, miu=0, sigma=8, epsilon=0, seed=None):
-    """Generate random array with absolution value obeys gaussian distribution."""
-    random_data_disk_path = None
-    if os.environ.get("RANDOM_DATA_DISK_PATH") is not None:
-        random_data_disk_path = os.environ.get("RANDOM_DATA_DISK_PATH") + "/random_data_%s_%s.bin" % (
-            str(miu), str(sigma))
-
-    if random_data_disk_path is None or (not os.path.exists(random_data_disk_path)):
+    def random_gaussian_without_bin():
         if sigma <= 0:
             sys.stderr.write("Error: Expect positive sigmal for gaussian distribution. but get %f\n" % sigma)
-            sys.exit(1)
+            return []
         size_c = 1
         for x in size:
             size_c = size_c * x
@@ -97,8 +91,20 @@ def random_gaussian(size, miu=0, sigma=8, epsilon=0, seed=None):
         ret = ret.flatten()
         return ret[:size_c].reshape(size) + epsilon
 
+    """Generate random array with absolution value obeys gaussian distribution."""
+    random_data_disk_path = None
+    if os.environ.get("RANDOM_DATA_DISK_PATH") is not None:
+        random_data_disk_path = os.environ.get("RANDOM_DATA_DISK_PATH") + "/random_data_%s_%s.bin" % (
+            str(miu), str(sigma))
+
+    if random_data_disk_path is None or (not os.path.exists(random_data_disk_path)):
+        return random_gaussian_without_bin()
+
     data_len = functools.reduce(lambda x, y: x * y, size)
     data_pool = np.fromfile(random_data_disk_path)
+    if len(data_pool) == 0:
+        return random_gaussian_without_bin()
+
     if data_len % len(data_pool) != 0:
         copy_num = (data_len // len(data_pool)) + 1
     else:
