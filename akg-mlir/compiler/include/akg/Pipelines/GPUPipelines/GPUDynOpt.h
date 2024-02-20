@@ -22,26 +22,26 @@
 #include "mlir/Pass/PassOptions.h"
 #include "mlir/Pass/PassRegistry.h"
 
-namespace cl = llvm::cl;
 namespace mlir {
 
 struct GPUDynPipelineOptions : public PassPipelineOptions<GPUDynPipelineOptions> {
-  Option<std::string> scheduleOption{*this, "scheduleOption", cl::desc("An option of schedule optimization."),
-                                     cl::init("polySchedule")};
+  Option<std::string> scheduleOption{*this, "scheduleOption", llvm::cl::desc("An option of schedule optimization."),
+                                     llvm::cl::init("polySchedule")};
 
-  Option<bool> saveTemps{*this, "save-temps", cl::desc("Save temporary files"), cl::init(false)};
+  Option<bool> saveTemps{*this, "save-temps", llvm::cl::desc("Save temporary files"), llvm::cl::init(false)};
 
-  Option<std::string> arch{*this, "arch", cl::desc("the gpu architecture, e.g. 'sm_70' or 'sm_80'"), cl::init("sm_70")};
-  Option<std::string> jsonFileName{*this, "json-file-name", cl::desc("mindspore json file name"), cl::init("")};
+  Option<std::string> arch{*this, "arch", llvm::cl::desc("the gpu architecture, e.g. 'sm_70' or 'sm_80'"),
+                           llvm::cl::init("sm_70")};
+  Option<std::string> jsonFileName{*this, "json-file-name", llvm::cl::desc("mindspore json file name"),
+                                   llvm::cl::init("")};
   Option<std::string> tilingMode{
     *this, "tiling-mode",
-    cl::desc("the mode of auto tiling, can be chosen from ['auto', 'static'], mode 'static' will force auto "
-             "tiling to use static tile size for all dynamic shape cases; mode 'auto' will let auto tiling to "
-             "use dynamic tile size for some special dynamic shape cases."),
-    cl::init("auto")};
-  Option<bool> enablePolyTops{*this, "enable-polytops", cl::desc("Whether to enable polytops opt"), cl::init(false)};
-  Option<int> stage{*this, "stage",
-                    cl::desc("the optimizing stage, '1'  (mindspore -> affine) and '2' (affine -> llvm)"), cl::init(1)};
+    llvm::cl::desc("the mode of auto tiling, can be chosen from ['auto', 'static'], mode 'static' will force auto "
+                   "tiling to use static tile size for all dynamic shape cases; mode 'auto' will let auto tiling to "
+                   "use dynamic tile size for some special dynamic shape cases."),
+    llvm::cl::init("auto")};
+  Option<bool> enablePolyTops{*this, "enable-polytops", llvm::cl::desc("Whether to enable polytops opt"),
+                              llvm::cl::init(false)};
 };
 
 void createGpuDynOptPipeline(OpPassManager &pm, const GPUDynPipelineOptions &options);

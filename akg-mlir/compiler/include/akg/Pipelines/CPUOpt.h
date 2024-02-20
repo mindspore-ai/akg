@@ -50,9 +50,6 @@ struct CpuOptPipelineOptions : public PassPipelineOptions<CpuOptPipelineOptions>
   Option<std::string> outliningPlatform{
     *this, "outlining-platform",
     cl::desc("choose the cooperation platform to run outlining kernel, (MindSpore or MLIR)"), cl::init("MLIR")};
- 
-  Option<int> stage{*this, "stage",
-                    cl::desc("the optimizing stage, '1'  (mindspore -> affine) and '2' (affine -> llvm)"), cl::init(1)};
 };
 
 void createCpuOptPipeline(OpPassManager &pm, const CpuOptPipelineOptions &options);

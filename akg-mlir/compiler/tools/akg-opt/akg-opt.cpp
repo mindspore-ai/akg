@@ -56,6 +56,8 @@
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
 #include "mlir/Transforms/Passes.h"
+#include "polytops/mlir/Dialect/Polytops/IR/Polytops.h"
+#include "polytops/mlir/Dialect/Polytops/Transforms/Passes.hpp"
 
 int main(int argc, char **argv) {
   mlir::registerAllPasses();
@@ -71,12 +73,15 @@ int main(int argc, char **argv) {
   registerAKGSCFPasses();
   registerAKGGPUPasses();
 
+  ::polytops::mlir::registerPolytopsScheduleOptPipeline();
+
   DialectRegistry registry;
   registerAllDialects(registry);
   registry.insert<mlir::linalgExt::LinalgExtDialect>();
   registry.insert<mlir::fusion::FusionDialect>();
   registry.insert<mlir::mindspore::MindSporeDialect>();
   registry.insert<mlir::mathExt::MathExtDialect>();
+  registry.insert<::polytops::mlir::PolytopsDialect>();
   registerLLVMDialectTranslation(registry);
 
   registerMLIRContextCLOptions();

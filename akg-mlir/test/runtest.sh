@@ -18,10 +18,21 @@ export PATH=${AKG_MLIR_BUILD_PATH}/bin:$PATH
 export LD_LIBRARY_PATH=${AKG_MLIR_BUILD_PATH}/lib:${LD_LIBRARY_PATH}
 
 # 1. run ut test cases
-#cmake --build ${AKG_MLIR_BUILD_PATH}/test/ --target check-akg-mlir
+cmake --build ${AKG_MLIR_BUILD_PATH}/test/ --target check-akg-mlir
 
 # 2. run st test cases
 if [[ "X${BACKEND_ENV}" = "XCPU" ]] || [[ "X${BACKEND_ENV}" = "Xcpu" ]]; then
+    echo "Running the st cpu dynamic shape tests:"
+    net=${SYSTEM_TEST_DIR}/dynamic_shape/
+    rm -rf ${TOOL_PATH}/akg_kernel_meta
+    rm -rf ${TOOL_PATH}/mlir_files
+    rm -rf ${TOOL_PATH}/tmp_files
+    if [[ $(python ${ST_TOOL} -e cpu -d ${net} -c 1 -ci 1 -t 16 | grep "dir test") == "dir test success" ]]; then
+        echo "test ${net}: Success"
+    else
+        echo "test ${net}: Failed"
+        exit 1
+    fi
 
     echo "Running the st cpu tests:"
     network=$(ls ${SYSTEM_TEST_DIR}/cpu)
@@ -38,6 +49,20 @@ if [[ "X${BACKEND_ENV}" = "XCPU" ]] || [[ "X${BACKEND_ENV}" = "Xcpu" ]]; then
         fi
     done
 elif [[ "X${BACKEND_ENV}" = "XGPU" ]] || [[ "X${BACKEND_ENV}" = "Xgpu" ]]; then
+
+    echo "Running the st gpu dynamic shape tests:"
+    cd ${TOOL_PATH}
+
+    net=${SYSTEM_TEST_DIR}/gpu_dynamic_shape/
+    rm -rf ${TOOL_PATH}/akg_kernel_meta
+    rm -rf ${TOOL_PATH}/mlir_files
+    rm -rf ${TOOL_PATH}/tmp_files
+    if [[ $(python ${ST_TOOL} -e gpu -d ${net} -c 1 -ci 1 -t 8 | grep "dir test") == "dir test success" ]]; then
+        echo "test ${net}: Success"
+    else
+        echo "test ${net}: Failed"
+        exit 1
+    fi
 
     echo "Running the st gpu tests:"
     network=$(ls ${SYSTEM_TEST_DIR}/gpu)

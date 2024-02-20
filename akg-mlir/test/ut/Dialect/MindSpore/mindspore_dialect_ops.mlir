@@ -74,6 +74,14 @@ module {
     return %1 : tensor<8x?xf32>
   }
 
+  func.func @slice(%arg0: tensor<13x21x?xf32>) -> tensor<4x11x?xf32> {
+    // CHECK3: tensor.dim
+    // CHECK3: arith.subi
+    // CHECK3: tensor.extract_slice %arg0[6, 8, 1] [4, 11, %0]
+    %0 = "mindspore.slice"(%arg0) {begin = array<i64: 6, 8, 1>, size = array<i64: 4, 11, -1>} : (tensor<13x21x?xf32>) -> tensor<4x11x?xf32>
+    return %0 : tensor<4x11x?xf32>
+  }
+
   func.func @strided_slice1(%arg0: tensor<5x6x7xf32>) -> tensor<2x2x2xf32> {
     // CHECK3:  tensor.extract_slice %arg0[1, 3, 2] [2, 2, 2] [1, 1, 2] : tensor<5x6x7xf32> to tensor<2x2x2xf32>
     %0 = "mindspore.strided_slice"(%arg0) {start = array<i64: 1, 3, 2>, end = array<i64: 3, 5, 5>, strides = array<i64: 1, 1, 2>} : (tensor<5x6x7xf32>) -> tensor<2x2x2xf32>

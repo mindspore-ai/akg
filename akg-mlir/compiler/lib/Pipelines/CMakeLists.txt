@@ -14,6 +14,7 @@ set(AKG_MLIR_LIBS
   MindSporePasses
   MLIRLinalgExtDialect
   AKGMLIRAnalysis
+  libpolytops-schedule-opt
   nlohmann_json::nlohmann_json
   )
 
