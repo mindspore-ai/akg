@@ -20,7 +20,6 @@ import json
 import logging
 import os
 import pathlib
-import platform
 import subprocess
 
 from .utils.cpu_profiling_wrapper import wrap_timer_func
@@ -85,8 +84,6 @@ class AkgV2Driver(object):
         self.output_dir = get_kernel_meta_path() if output_dir == "" else output_dir
         self.akg_tools_dir = os.path.join(pathlib.Path(__file__).absolute(
         ).parent, "../../../build/akg-mlir/") if akg_tools_dir == "" else akg_tools_dir
-        self.polytops_tools_dir = os.path.join(
-            pathlib.Path(__file__).absolute().parent, "../../third-party/polytops-bin/", platform.machine())
         self.llvm_tools_dir = os.path.join(
             pathlib.Path(__file__).absolute().parent, "../../../third-party/llvm-project/build/") \
             if llvm_tools_dir == "" else llvm_tools_dir
@@ -128,9 +125,7 @@ class AkgV2Driver(object):
     def run_cpu(self):
         """compile cpu kernel of akg-mlir."""
         self._run_mlir_convert()
-        self._run_mlir_cpu_pipeline(self.dynamic_shape, self.kernel_name, stage=1)
-        self._run_polytops_opt(self.kernel_name)
-        self._run_mlir_cpu_pipeline(self.dynamic_shape, self.kernel_name, stage=2)
+        self._run_mlir_cpu_pipeline(self.dynamic_shape, self.kernel_name)
         self._run_mlir_to_llvm(self.kernel_name)
         self._run_cpu_generate_binary(self.kernel_name)
 
@@ -138,9 +133,7 @@ class AkgV2Driver(object):
         """compile gpu kernel of akg-mlir."""
 
         def _build(is_dyn, kernel_name, tiling_mode):
-            self._run_mlir_gpu_pipeline(is_dyn, kernel_name, 1, tiling_mode)
-            self._run_polytops_opt(self.kernel_name)
-            self._run_mlir_gpu_pipeline(is_dyn, kernel_name, 2, tiling_mode)
+            self._run_mlir_gpu_pipeline(is_dyn, kernel_name, tiling_mode)
             self._run_mlir_gpu_codegen(kernel_name)
             self._run_gpu_translate(kernel_name)
             self._run_ptx_replace(is_dyn, kernel_name)
@@ -195,57 +188,31 @@ class AkgV2Driver(object):
             raise RuntimeError(
                 'mlir pipeline failed in converting the case: ' + kernel_name + '!\n')
 
-    def _run_polytops_opt(self, kernel_name):
-        input_file = os.path.join(self.output_dir, kernel_name + "_stage1.mlir")
-        out_file = os.path.join(self.output_dir, kernel_name + "_polytops.mlir")
-        opt_target = "gpu" if self.backend == "cuda" else "cpu"
-        cmd = [os.path.join(self.polytops_tools_dir, 'polytops-opt'),
-               input_file, "--schedule-opt=target=" + opt_target, "-o", out_file]
-        if self.dump_ir:
-            cmd.append("--mlir-print-ir-after-all")
-        log_info = "mlir " + opt_target + " polytops pipeline"
-        try:
-            result = subprocess.run(
-                cmd, check=True, capture_output=True, text=True)
-            if self.dump_ir:
-                dump_log = os.path.join(
-                    self.output_dir, kernel_name + "_dump_" + opt_target + "_polytops.log")
-                with os.fdopen(os.open(dump_log, os.O_WRONLY | os.O_CREAT, 0o755), 'w') as f:
-                    f.write(result.stderr)
-        except subprocess.CalledProcessError:
-            raise RuntimeError(
-                log_info + ' failed in case: ' + kernel_name + '!\n')
-        logging.info("%s success: %s", log_info, kernel_name)
-        return
-
-    def _run_mlir_cpu_pipeline(self, dyn_shape, kernel_name, stage):
-        input_file_name = kernel_name + ".mlir" if stage == 1 else kernel_name + "_polytops.mlir"
-        output_file_name = kernel_name + "_stage1.mlir" if stage == 1 else kernel_name + "_out.mlir"
-        input_file = os.path.join(self.output_dir, input_file_name)
-        out_file = os.path.join(self.output_dir, output_file_name)
+    def _run_mlir_cpu_pipeline(self, dyn_shape, kernel_name):
+        input_file = os.path.join(self.output_dir, kernel_name + ".mlir")
+        out_file = os.path.join(self.output_dir, kernel_name + "_out.mlir")
         cpu_opt_option = "--cpu-opt"
         if dyn_shape:
             cpu_opt_option += "=dynamic-shape=true"
         else:
             cpu_opt_option += "=cpu-outlining=false outlining-platform=" + self.runtime_provider
-        cpu_opt_option += " stage=" + str(stage)
         cmd = [os.path.join(self.akg_tools_dir, 'bin/akg-opt'),
                input_file, cpu_opt_option, "-o", out_file]
         if self.dump_ir:
             cmd.append("--mlir-print-ir-after-all")
-        log_info = "mlir cpu pipeline stage " + str(stage)
         try:
             result = subprocess.run(
                 cmd, check=True, capture_output=True, text=True)
             if self.dump_ir:
                 dump_log = os.path.join(
-                    self.output_dir, kernel_name + "_dump_cpu_stage" + str(stage) + ".log")
+                    self.output_dir, kernel_name + "_dump_cpu.log")
                 with os.fdopen(os.open(dump_log, os.O_WRONLY | os.O_CREAT, 0o755), 'w') as f:
                     f.write(result.stderr)
         except subprocess.CalledProcessError:
             raise RuntimeError(
-                log_info + ' failed in case: ' + kernel_name + '!\n')
-        logging.info("%s success: %s", log_info, kernel_name)
+                'mlir pipeline failed in case: ' + kernel_name + '!\n')
+
+        logging.info("mlir pipeline success")
         return
 
     def _run_mlir_to_llvm(self, kernel_name):
@@ -320,11 +287,9 @@ class AkgV2Driver(object):
                     return True
         return False
 
-    def _run_mlir_gpu_pipeline(self, dyn_shape, kernel_name, stage, tiling_mode=None):
-        input_file_name = kernel_name + ".mlir" if stage == 1 else kernel_name + "_polytops.mlir"
-        output_file_name = kernel_name + "_stage1.mlir" if stage == 1 else kernel_name + "_gpu.mlir"
-        input_file = os.path.join(self.output_dir, input_file_name)
-        out_file = os.path.join(self.output_dir, output_file_name)
+    def _run_mlir_gpu_pipeline(self, dyn_shape, kernel_name, tiling_mode=None):
+        input_file = os.path.join(self.output_dir, kernel_name + ".mlir")
+        out_file = os.path.join(self.output_dir, kernel_name + "_gpu.mlir")
         opt_pipeline = "--gpu-dyn-opt" if dyn_shape else "--gpu-opt"
         opt_options = ""
         if dyn_shape:
@@ -337,8 +302,6 @@ class AkgV2Driver(object):
         if os.path.exists(self.repo_path):
             opt_options += " global-config-file=" + self.repo_path
 
-        opt_options += " stage=" + str(stage)
-
         if opt_options != "":
             opt_pipeline += "=" + opt_options
 
@@ -346,20 +309,18 @@ class AkgV2Driver(object):
                input_file, opt_pipeline, "-o", out_file]
         if self.dump_ir:
             cmd.append("--mlir-print-ir-after-all")
-        log_info = "mlir gpu pipeline stage " + str(stage)
         try:
             result = subprocess.run(
                 cmd, check=True, capture_output=True, text=True)
             if self.dump_ir:
                 dump_log = os.path.join(
-                    self.output_dir, kernel_name + "_dump_gpu_stage" + str(stage) + ".log")
+                    self.output_dir, kernel_name + "_dump_gpu.log")
                 with os.fdopen(os.open(dump_log, os.O_WRONLY | os.O_CREAT, 0o755), 'w') as f:
                     f.write(result.stderr)
         except subprocess.CalledProcessError:
             raise RuntimeError(
-                log_info + ' failed in case: ' + kernel_name + '!\n')
-
-        logging.info("%s success: %s", log_info, kernel_name)
+                'mlir gpu pipeline failed in case: ' + kernel_name + '!\n')
+        logging.info("mlir gpu pipeline success: %s", kernel_name)
         return
 
     def _run_mlir_gpu_codegen(self, kernel_name):

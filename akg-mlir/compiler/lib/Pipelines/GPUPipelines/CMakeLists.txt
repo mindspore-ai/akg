@@ -7,6 +7,7 @@ set(AKG_MLIR_LIBS
   AKGLLVMIRPasses
   MLIRLinalgExtDialect
   AKGMLIRAnalysis
+  libpolytops-schedule-opt
   )
 
 set(LIBS

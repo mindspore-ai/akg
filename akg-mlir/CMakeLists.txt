@@ -139,6 +139,48 @@ set(MLIR_DIR "${LLVM_INSTALL_DIR}/lib/cmake/mlir")
 include(compiler/cmake/MLIR.cmake)
 set(JSON_TARBALL_URL "${AKG_MLIR_SOURCE_DIR}/../third-party/JSON-for-Modern-CPP-v3.10.1.zip")
 
+
+#-------------------------------------------------------------------------------
+# PolyTOPS
+#-------------------------------------------------------------------------------
+
+# Configure and build PolyTOPS
+set(POLYTOPS_USE_OSL OFF)
+set(POLYTOPS_USE_ISL ON)
+set(POLYTOPS_USE_FPL ON)
+set(POLYTOPS_USE_PICOJSON OFF)
+set(POLYTOPS_USE_QIUQI_IP OFF)
+set(POLYTOPS_ENABLE_SANITIZERS OFF)
+set(POLYTOPS_BUILD_MAIN_TOOL OFF)
+set(POLYTOPS_ENABLE_MLIR_DIALECT ON)
+set(POLYTOPS_BUILD_MLIR_TOOL OFF)
+
+set(POLYTOPS_FPL_FOUND ON)
+set(POLYTOPS_MLIR_FOUND ON)
+set(POLYTOPS_LLVM_FOUND ON)
+
+if (AKG_MLIR_BUILD_ISL)
+  # Make PolyTOPS build isl from the bundled third-party tarball
+  set(ISL_FORCE_DOWNLOAD ON)
+  set(ISL_DOWNLOAD_METHOD tarball)
+  set(ISL_TARBALL_URL "${AKG_MLIR_SOURCE_DIR}/../third-party/isl-0.26.tar.gz" CACHE STRING "osl: tarball url or path" FORCE)
+endif ()
+
+include(compiler/cmake/AddPolytops.cmake)
+
+if (POLYTOPS_BUILD_MAIN_TOOL)
+  target_link_libraries(polytops PUBLIC ${MLIR_LIBS})
+  target_include_directories(polytops PUBLIC "${LLVM_INCLUDE_DIRS} ${MLIR_INCLUDE_DIRS}")
+endif()
+if (POLYTOPS_BUILD_SHARED_LIBRARY)
+  target_link_libraries(libpolytops-shared PUBLIC ${MLIR_LIBS})
+  target_include_directories(libpolytops-shared PUBLIC "${LLVM_INCLUDE_DIRS} ${MLIR_INCLUDE_DIRS}")
+endif()
+if (POLYTOPS_BUILD_STATIC_LIBRARY)
+  target_link_libraries(libpolytops-static PUBLIC ${MLIR_LIBS})
+  target_include_directories(libpolytops-static PUBLIC "${LLVM_INCLUDE_DIRS} ${MLIR_INCLUDE_DIRS}")
+endif()
+
 #-------------------------------------------------------------------------------
 # AKG-MLIR
 #-------------------------------------------------------------------------------

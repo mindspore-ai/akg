@@ -10,6 +10,7 @@ set(AKG_MLIR_LIBS
   MLIRLinalgExtDialect
   MLIRFusionDialect
   AKGMLIRAnalysis
+  libpolytops-schedule-opt
 )
 
 set(LLVM_LINK_COMPONENTS

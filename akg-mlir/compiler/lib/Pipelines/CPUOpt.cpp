@@ -28,6 +28,7 @@
 #include "akg/Dialect/Tosa/Passes.h"
 #include "akg/Transforms/Passes.h"
 #include "akg/Utils/AKGGlobalVars.hpp"
+#include "polytops/mlir/Dialect/Polytops/Transforms/Passes.hpp"
 
 #include "mlir/Conversion/SCFToOpenMP/SCFToOpenMP.h"
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
@@ -127,6 +128,12 @@ void affinePreprocess(OpPassManager &pm, const CpuOptPipelineOptions &options) {
   pm.addPass(createCanonicalizerPass());
 }
 
+void affinePolytops(OpPassManager &pm) {
+  polytops::mlir::PolytopsSchedulePipelineOptions polytopsOptions;
+  polytopsOptions.target = kTargetCpu;
+  polytops::mlir::createPolytopsScheduleOptPipeline(pm, polytopsOptions);
+}
+
 void affineOptimize(OpPassManager &pm, const CpuOptPipelineOptions &options) {
   if (options.dynamicShape) {
     pm.addPass(createStoreLoadElimPass());
@@ -195,33 +202,32 @@ void convertToLLVM(OpPassManager &pm, const CpuOptPipelineOptions &options) {
 }
 
 void createCpuOptPipelineImpl(OpPassManager &pm, const CpuOptPipelineOptions &options) {
-  if (options.stage == 1) {
-    jsonToLinalg(pm, options);
-    commonBufferization(pm);
+  jsonToLinalg(pm, options);
+  commonBufferization(pm);
 
-    if (options.dynamicShape) {
-      pm.addPass(memref::createFoldMemRefAliasOpsPass());
-    }
-
-    if (options.cpuFast) {
-      OpPassManager &nestedFunctionPM = pm.nest<func::FuncOp>();
-      nestedFunctionPM.addPass(createConvertLinalgToAffineLoopsPass());
-      nestedFunctionPM.addPass(mlir::createLinalgExtLowerPass());
-      affinePreprocess(pm, options);
-    } else {
-      OpPassManager &nestedFunctionPM1 = pm.nest<func::FuncOp>();
-      nestedFunctionPM1.addPass(mlir::createLinalgExtLowerPass());
-      pm.addPass(createConvertLinalgToLoopsPass());
-      pm.addPass(createConvertShapeToStandardPass());
-      pm.addPass(createCanonicalizerPass());
-    }
-  } else if (options.stage == 2) {
-    if (options.cpuFast) {
-      pm.addPass(createMathExtLowerPass());
-      affineOptimize(pm, options);
-    }
-    convertToLLVM(pm, options);
+  if (options.dynamicShape) {
+    pm.addPass(memref::createFoldMemRefAliasOpsPass());
   }
+
+  if (options.cpuFast) {
+    OpPassManager &nestedFunctionPM = pm.nest<func::FuncOp>();
+    nestedFunctionPM.addPass(createConvertLinalgToAffineLoopsPass());
+    nestedFunctionPM.addPass(mlir::createLinalgExtLowerPass());
+    affinePreprocess(pm, options);
+    if (!options.dynamicShape || (options.dynamicShape && options.dynShapeEnablePoly)) {
+      affinePolytops(pm);
+    }
+    pm.addPass(createMathExtLowerPass());
+    affineOptimize(pm, options);
+  } else {
+    OpPassManager &nestedFunctionPM1 = pm.nest<func::FuncOp>();
+    nestedFunctionPM1.addPass(mlir::createLinalgExtLowerPass());
+    pm.addPass(createConvertLinalgToLoopsPass());
+    pm.addPass(createConvertShapeToStandardPass());
+    pm.addPass(createCanonicalizerPass());
+  }
+
+  convertToLLVM(pm, options);
 }
 }  // namespace
 
@@ -230,7 +236,6 @@ void createCpuOptPipeline(OpPassManager &pm, const CpuOptPipelineOptions &option
   if (options.dynamicShape) {
     assert(options.cpuFast);
   }
-  assert(options.stage == 1 || options.stage == 2);
   createCpuOptPipelineImpl(pm, options);
 }
 }  // namespace mlir

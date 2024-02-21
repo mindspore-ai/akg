@@ -22,21 +22,20 @@
 #include "mlir/Pass/PassOptions.h"
 #include "mlir/Pass/PassRegistry.h"
 
-namespace cl = llvm::cl;
 namespace mlir {
 
 struct GPUPipelineOptions : public PassPipelineOptions<GPUPipelineOptions> {
-  Option<std::string> scheduleOption{*this, "scheduleOption", cl::desc("An option of schedule optimization."),
-                                     cl::init("polySchedule")};
+  Option<std::string> scheduleOption{*this, "scheduleOption", llvm::cl::desc("An option of schedule optimization."),
+                                     llvm::cl::init("polySchedule")};
 
-  Option<bool> saveTemps{*this, "save-temps", cl::desc("Save temporary files"), cl::init(false)};
+  Option<bool> saveTemps{*this, "save-temps", llvm::cl::desc("Save temporary files"), llvm::cl::init(false)};
 
-  Option<std::string> arch{*this, "arch", cl::desc("the gpu architecture, e.g. 'sm_70' or 'sm_80'"), cl::init("sm_70")};
-  Option<std::string> jsonFileName{*this, "json-file-name", cl::desc("mindspore json file name"), cl::init("")};
-  Option<std::string> globalConfigFile{*this, "global-config-file", cl::desc("tuned repository file path"),
-                                       cl::init("")};
-  Option<int> stage{*this, "stage",
-                    cl::desc("the optimizing stage, '1'  (mindspore -> affine) and '2' (affine -> llvm)"), cl::init(1)};
+  Option<std::string> arch{*this, "arch", llvm::cl::desc("the gpu architecture, e.g. 'sm_70' or 'sm_80'"),
+                           llvm::cl::init("sm_70")};
+  Option<std::string> jsonFileName{*this, "json-file-name", llvm::cl::desc("mindspore json file name"),
+                                   llvm::cl::init("")};
+  Option<std::string> globalConfigFile{*this, "global-config-file", llvm::cl::desc("tuned repository file path"),
+                                       llvm::cl::init("")};
 };
 
 void createGpuOptPipeline(OpPassManager &pm, const GPUPipelineOptions &options);
