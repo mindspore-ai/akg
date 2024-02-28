@@ -22,4 +22,4 @@ add_mlir_dialect_library(AKGTosaPasses
   MLIRTransformUtils
   AKGMLIRAnalysis
   )
-target_link_libraries(AKGTosaPasses PRIVATE ${SYMENGINE_LIBRARIES} stdc++fs)
+target_link_libraries(AKGTosaPasses PRIVATE akg::symengine gmp stdc++fs)
