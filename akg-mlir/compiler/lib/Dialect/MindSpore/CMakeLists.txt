@@ -30,4 +30,4 @@ add_mlir_dialect_library(MindSporePasses
   AKGMindSporeToJson
   AKGSpliter
   )
-target_link_libraries(MindSporePasses PRIVATE ${SYMENGINE_LIBRARIES} stdc++fs)
+target_link_libraries(MindSporePasses PRIVATE akg::symengine gmp stdc++fs)

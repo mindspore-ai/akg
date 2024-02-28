@@ -17,17 +17,14 @@ set(CMAKE_CXX_STANDARD 17)
 include(CheckCXXCompilerFlag)
 include(CheckLanguage)
 include(FetchContent)
-include(ExternalProject)
 # We may use projects that rely on PkgConfig
 find_package(PkgConfig)
+include(cmake/utils.cmake)
+include(cmake/external_libs/symengine.cmake)
+include(cmake/external_libs/llvm.cmake)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-attributes -Wno-unknown-pragmas")
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-
-
-option(AKG_MLIR_BUILD_SYMENGINE "Build SymEngine along AKG-MLIR" OFF)
-option(AKG_MLIR_BUILD_ISL "Build isl along AKG-MLIR" ON)
-option(AKG_MLIR_BUILD_OSL "Build osl along AKG-MLIR" ON)
 
 # Set Path
 get_filename_component(AKG_MLIR_SOURCE_DIR "${AKG_MLIR_SOURCE_DIR}" ABSOLUTE)
@@ -60,54 +57,6 @@ else()
 endif()
 
 #-------------------------------------------------------------------------------
-# SymEngine Configuration
-#-------------------------------------------------------------------------------
-
-# Temporarily support legacy variable
-if (DEFINED SYMENGINE_INSTALL_PATH)
-  set(SYMENGINE_BUILD_PATH ${SYMENGINE_INSTALL_PATH})
-  message(WARNING
-    "Deprecated variable SYMENGINE_INSTALL_PATH was set. "
-    "It is recommended to either set cmake variable $SYMENGINE_BUILD_PATH "
-    "or environment variable $SYMENGINE_DIR."
-  )
-endif ()
-
-# First check if SymEngine was installed in system default paths or user environment
-# (Users may set environment variables `$SymEngine_DIR` or `$CMAKE_MODULE_PATH`)
-if (NOT AKG_MLIR_BUILD_SYMENGINE AND NOT DEFINED SYMENGINE_BUILD_PATH)
-  find_package(SymEngine)
-  if (SYMENGINE_FOUND)
-    message(STATUS "SymEngine found via find_package()")
-  endif ()
-endif ()
-
-# Otherwise we try to build it or use an already built (but not installed) SymEngine
-if (DEFINED SYMENGINE_BUILD_PATH)
-  # Legacy method: custom build directory is provided
-  get_filename_component(SYMENGINE_BUILD_PATH ${SYMENGINE_BUILD_PATH} ABSOLUTE)
-  set(SYMENGINE_BUILD_DIR "${SYMENGINE_BUILD_PATH}")
-  find_package(SymEngine PATHS ${SYMENGINE_BUILD_DIR})
-  if(NOT SYMENGINE_FOUND)
-    MESSAGE(FATAL_ERROR "SymEngine is not found")
-  endif()
-  include(${SYMENGINE_BUILD_DIR}/SymEngineConfig.cmake)
-elseif (AKG_MLIR_BUILD_SYMENGINE OR NOT SYMENGINE_FOUND)
-  # Build SymEngine from this cmake instance
-  add_subdirectory(symengine)
-endif ()
-
-if (AKG_MLIR_BUILD_SYMENGINE AND NOT DEFINED SYMENGINE_BUILD_PATH)
-  FetchContent_MakeAvailable(SymEngine)
-
-  get_target_property(SYMENGINE_INCLUDE_DIRS symengine INCLUDE_DIRECTORIES)
-  get_target_property(SYMENGINE_LIBRARIES symengine LINK_LIBRARIES)
-endif ()
-
-include_directories(${SYMENGINE_INCLUDE_DIRS})
-set(SYMENGINE_LIBRARIES symengine ${SYMENGINE_LIBRARIES})
-
-#-------------------------------------------------------------------------------
 # LLVM Configuration
 #-------------------------------------------------------------------------------
 
@@ -124,8 +73,7 @@ endif ()
 set(LLVM_REQUIRES_EH ON)
 set(LLVM_REQUIRES_RTTI ON)
 
-get_filename_component(LLVM_BUILD_PATH ${LLVM_BUILD_PATH} ABSOLUTE)
-
+message("LLVM_BUILD_PATH: ${LLVM_BUILD_PATH}")
 set(LLVM_INSTALL_DIR "${LLVM_BUILD_PATH}")
 set(LLVM_TOOLS_DIR "${LLVM_BUILD_PATH}/bin")
 
@@ -136,7 +84,7 @@ endif()
 
 # ----------------------------- Dependencies
 set(MLIR_DIR "${LLVM_INSTALL_DIR}/lib/cmake/mlir")
-include(compiler/cmake/MLIR.cmake)
+include(cmake/MLIR.cmake)
 set(JSON_TARBALL_URL "${AKG_MLIR_SOURCE_DIR}/../third-party/JSON-for-Modern-CPP-v3.10.1.zip")
 
 
@@ -166,7 +114,7 @@ if (AKG_MLIR_BUILD_ISL)
   set(ISL_TARBALL_URL "${AKG_MLIR_SOURCE_DIR}/../third-party/isl-0.26.tar.gz" CACHE STRING "osl: tarball url or path" FORCE)
 endif ()
 
-include(compiler/cmake/AddPolytops.cmake)
+include(cmake/AddPolytops.cmake)
 
 if (POLYTOPS_BUILD_MAIN_TOOL)
   target_link_libraries(polytops PUBLIC ${MLIR_LIBS})
@@ -180,6 +128,7 @@ if (POLYTOPS_BUILD_STATIC_LIBRARY)
   target_link_libraries(libpolytops-static PUBLIC ${MLIR_LIBS})
   target_include_directories(libpolytops-static PUBLIC "${LLVM_INCLUDE_DIRS} ${MLIR_INCLUDE_DIRS}")
 endif()
+
 
 #-------------------------------------------------------------------------------
 # AKG-MLIR

@@ -33,6 +33,7 @@ endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+set(AKG_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(AKG_TVM_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/akg-tvm")
 set(TVM_DIR "${AKG_TVM_SOURCE_DIR}/third_party/incubator-tvm")
 add_subdirectory(akg-tvm)

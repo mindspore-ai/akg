@@ -31,7 +31,7 @@ usage()
     echo "    -o Output .o file directory"
     echo "    -u Enable auto tune"
     echo "    -m Compile mode: akg-mlir-only or all, default: all"
-    echo "    -s Specifies the source path of third-party, default: none \n\t[0]llvm-project\n\t[1]symengine"
+    echo "    -s Specifies the source path of third-party, default: none \n\tllvm-project"
     echo "    -c Clean built files, default: off"
     echo "    -r Enable akg-mlir, default: off"
 }
@@ -88,7 +88,6 @@ COMPILE_AKG_MLIR="off"
 AKG_MLIR_CMAKE_ARGS=""
 AKG_MLIR_ARGS=""
 PATH_TO_SOURCE_LLVM=${AKG_DIR}/third-party/llvm-project/
-PATH_TO_SOURCE_SYMENGINE=${AKG_DIR}/third-party/symengine/
 _BUILD_TYPE="Release"
 BACKEND_ENV="CPU"
 
@@ -180,7 +179,7 @@ do
             exit 0
             ;;
         s)
-            DEPENDENT_SOURCE=${OPTARG}
+            LLVM_BUILD_PATH=${OPTARG}
             ;;
         m)
             COMPILE_MODE=${OPTARG}
@@ -195,20 +194,6 @@ do
     esac
 done
 echo "CMAKE_ARGS: ${CMAKE_ARGS}"
-
-THIRD_PARTY_COUNT=0
-if [[ "X${DEPENDENT_SOURCE}" != "Xnone" ]]; then
-    for local_var in ${DEPENDENT_SOURCE[@]}
-    do
-        if [[ $THIRD_PARTY_COUNT -eq 0 ]] && [[ "X${local_var}" != "Xnone" ]]; then
-            PATH_TO_SOURCE_LLVM=${local_var}
-        fi
-        if [[ $THIRD_PARTY_COUNT -eq 1 ]] && [[ "X${local_var}" != "Xnone" ]]; then
-            PATH_TO_SOURCE_SYMENGINE=${local_var}
-        fi
-        let THIRD_PARTY_COUNT+=1
-    done
-fi
 
 # Create directories
 mkdir -pv "${BUILD_DIR}"
@@ -272,38 +257,9 @@ build_llvm() {
 
     export PATH_TO_BUILT_LLVM=${PWD}
     cmake --build . --config ${_BUILD_TYPE} -j${THREAD_NUM}
-    cmake --install ${LLVM_BUILD_PATH} --component clang --prefix ${AKG_MLIR_OUTPUT_PATH}
-    cmake --install ${LLVM_BUILD_PATH} --component llc --prefix ${AKG_MLIR_OUTPUT_PATH}
+    cmake --install ${LLVM_BUILD_PATH} --component clang --prefix ${OUTPUT_PATH}
+    cmake --install ${LLVM_BUILD_PATH} --component llc --prefix ${OUTPUT_PATH}
     echo "Success to build llvm project!"
-}
-
-build_symengine() {
-    echo "Start building symengine project."
-    SYMENGINE_BASE_PATH=${PATH_TO_SOURCE_SYMENGINE}
-    echo "SYMENGINE_BASE_PATH = ${SYMENGINE_BASE_PATH}"
-    cd ${SYMENGINE_BASE_PATH}
-    if [ ! -d "./build" ]; then
-        mkdir -pv build
-    fi
-    SYMENGINE_BUILD_PATH=${SYMENGINE_BASE_PATH}/build
-    echo "SYMENGINE_BUILD_PATH = ${SYMENGINE_BUILD_PATH}"
-    cd ${SYMENGINE_BUILD_PATH}
-    cmake .. \
-    -DHAVE_SYMENGINE_NOEXCEPT=OFF \
-    -DCMAKE_BUILD_TYPE:STRING=${_BUILD_TYPE} \
-    -DWITH_BFD:BOOL=OFF \
-    -DWITH_SYMENGINE_ASSERT:BOOL=OFF \
-    -DWITH_SYMENGINE_RCP:BOOL=ON \
-    -DWITH_SYMENGINE_THREAD_SAFE:BOOL=OFF \
-    -DWITH_ECM:BOOL=OFF \
-    -DBUILD_TESTS:BOOL=OFF \
-    -DBUILD_BENCHMARKS:BOOL=OFF \
-    -DBUILD_BENCHMARKS_GOOGLE:BOOL=OFF \
-    -DBUILD_SHARED_LIBS:BOOL=ON \
-    -DCMAKE_INSTALL_RPATH_USE_LINK_PATH:BOOL=ON
-    make -j${THREAD_NUM}
-    export PATH_TO_BUILT_SYMENGINE=${PWD}
-    echo "Success to build symengine project!"
 }
 
 make_clean()
@@ -315,7 +271,7 @@ make_clean()
 
 get_akg_mlir_cmake_args() {
   AKG_MLIR_CMAKE_ARGS="${AKG_MLIR_CMAKE_ARGS} -DLLVM_BUILD_PATH=${PATH_TO_BUILT_LLVM} 
-  -DSYMENGINE_BUILD_PATH=${PATH_TO_BUILT_SYMENGINE} -DLLVM_EXTERNAL_LIT=${PATH_TO_BUILT_LLVM}/bin/llvm-lit"
+  -DLLVM_EXTERNAL_LIT=${PATH_TO_BUILT_LLVM}/bin/llvm-lit"
   if [[ "X${ENABLE_UNIT_TEST}" = "Xon" ]]; then
     AKG_MLIR_ARGS="${AKG_MLIR_ARGS} --target check-akg-mlir"
   fi
@@ -331,13 +287,11 @@ echo "---------------- AKG: build start ----------------"
 if [[ "X$COMPILE_AKG_MLIR" = "Xon" ]]; then
   if [[ "X${COMPILE_MODE}" = "Xakg-mlir-only" ]]; then
     PATH_TO_BUILT_LLVM=${PATH_TO_SOURCE_LLVM}/build
-    PATH_TO_BUILT_SYMENGINE=${PATH_TO_SOURCE_SYMENGINE}/build
     get_akg_mlir_cmake_args
   else
     update_submodule
     third_party_patch
     build_llvm
-    build_symengine
     get_akg_mlir_cmake_args
   fi
 
