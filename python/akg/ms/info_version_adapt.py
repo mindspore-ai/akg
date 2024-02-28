@@ -47,6 +47,8 @@ def convert_input_to_attr(kernel_info:dict):
         "Transpose": [(1, "perm")],
         "ExpandDims": [(1, "axis")],
         "Tile": [(1, "multiples")],
+        "BroadcastTo": [(1, "shape")],
+        "Cast": [(1, "dst_type")],
         "StridedSlice": [(3, "strides"), (2, "end"), (1, "begin")],
         "OneHot": [(1, "depth")],
         "Gather": [(2, "axis")],
