@@ -39,7 +39,7 @@ def _load_lib():
     lib_path = []
 
     pwd = os.path.dirname(os.path.realpath(__file__))
-    paths = [os.path.realpath(pwd + "/../../lib"), os.path.realpath(pwd + "/../../../../../mindspore/lib")]
+    paths = [os.path.realpath(pwd + "/../../lib"), os.path.realpath(pwd + "/../../../../mindspore_lite/lib"), os.path.realpath(pwd + "/../../../../../mindspore/lib")]
     tar_so = "libakg.so"
     for path in paths:
         found_lib = False
