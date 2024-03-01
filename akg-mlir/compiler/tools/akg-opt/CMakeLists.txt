@@ -43,9 +43,9 @@ set(LIBS
 
 link_directories(${AKG_MLIR_BIN_LIB_DIR})
 add_executable(akg-opt akg-opt.cpp)
-add_dependencies(akg-opt ${LIBS})
+add_dependencies(akg-opt ${LIBS} akg::symengine)
 
 llvm_update_compile_flags(akg-opt)
-target_link_libraries(akg-opt PRIVATE ${LIBS})
+target_link_libraries(akg-opt PRIVATE ${LIBS} akg::symengine)
 
 mlir_check_all_link_libraries(akg-opt)

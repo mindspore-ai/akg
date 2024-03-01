@@ -7,6 +7,7 @@ add_akg_translation_library(AkgTargetPTX
   ADDITIONAL_HEADER_DIRS
   ${AKG_SRC_INCLUDE_DIR}/akg/Target/PTX
 
+  DISABLE_INSTALL
   LINK_COMPONENTS
   Core
 

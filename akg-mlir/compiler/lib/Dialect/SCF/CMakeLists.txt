@@ -11,6 +11,7 @@ add_mlir_dialect_library(AKGSCFPasses
   AKGSCFPassIncGen
   MLIRSCFDialect
   
+  DISABLE_INSTALL
   LINK_LIBS PUBLIC
   MLIRArithDialect
   MLIRAsyncDialect

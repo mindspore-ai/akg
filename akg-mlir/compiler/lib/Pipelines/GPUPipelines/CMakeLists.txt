@@ -30,7 +30,7 @@ add_mlir_library(AKGGPUPipelines
 
   DEPENDS
   ${AKG_MLIR_LIBS}
-
+  DISABLE_INSTALL
   LINK_LIBS PUBLIC
   ${LIBS}
 )

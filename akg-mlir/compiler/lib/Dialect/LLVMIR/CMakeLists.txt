@@ -10,6 +10,7 @@ add_mlir_dialect_library(AKGLLVMIRPasses
   DEPENDS
   AKGLLVMIRPassIncGen
 
+  DISABLE_INSTALL
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRAffineDialect

@@ -7,6 +7,7 @@ add_mlir_dialect_library(MLIRMathExtDialect
   DEPENDS
   MLIRMathExtOpsIncGen
 
+  DISABLE_INSTALL
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRMemRefDialect

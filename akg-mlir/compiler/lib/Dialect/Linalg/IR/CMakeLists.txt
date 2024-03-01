@@ -7,6 +7,7 @@ add_mlir_dialect_library(MLIRLinalgExtDialect
   DEPENDS
   MLIRLinalgExtOpsIncGen
 
+  DISABLE_INSTALL
   LINK_LIBS PUBLIC
   MLIRAnalysis
   MLIRIR

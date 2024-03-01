@@ -13,6 +13,7 @@ add_mlir_dialect_library(AKGMathPasses
   MLIRMathExtDialect
   MLIRMemRefDialect
 
+  DISABLE_INSTALL
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRPass

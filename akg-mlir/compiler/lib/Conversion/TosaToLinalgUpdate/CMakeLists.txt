@@ -8,6 +8,7 @@ add_mlir_conversion_library(MLIRTosaToLinalgUpdate
   DEPENDS
   AKGIRConversionPassIncGen
 
+  DISABLE_INSTALL
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRBufferizationTransforms

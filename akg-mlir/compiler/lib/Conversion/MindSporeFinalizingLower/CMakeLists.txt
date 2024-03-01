@@ -6,7 +6,8 @@ add_mlir_conversion_library(MindSporeFinalizingLower
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Dialect/MindSpore
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Dialect/Math
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/IR
-
+  DISABLE_INSTALL
+  
   DEPENDS
   AKGIRConversionPassIncGen
 

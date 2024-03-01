@@ -9,6 +9,7 @@ add_mlir_dialect_library(MLIRFusionDialect
   DEPENDS
   MLIRFusionOpsIncGen
 
+  DISABLE_INSTALL
   LINK_COMPONENTS
   Core
 

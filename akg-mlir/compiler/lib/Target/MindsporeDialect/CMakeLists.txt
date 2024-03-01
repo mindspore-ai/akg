@@ -8,6 +8,7 @@ add_akg_translation_library(AkgTargetJSONToMLIR
   LINK_COMPONENTS
   Core
  
+  DISABLE_INSTALL
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRBufferizationTransforms

@@ -7,6 +7,7 @@ add_mlir_library(AKGLiteIR
   ADDITIONAL_HEADER_DIRS
   ${AKG_MLIR_SRC_INCLUDE_DIR}/akg/Dialect/MindSpore
   
+  DISABLE_INSTALL
   DEPENDS
   AKGMindSporeToJson
 

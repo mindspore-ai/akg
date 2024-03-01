@@ -19,6 +19,7 @@ add_mlir_dialect_library(AKGTransformsPasses
   ${AKG_MLIR_SOURCE_DIR}/akg/Transforms
   ${AKG_MLIR_SOURCE_DIR}/akg/Dialect/CPU
 
+  DISABLE_INSTALL
   DEPENDS
   AKGTransformsPassIncGen
   MLIRCPUDialect
