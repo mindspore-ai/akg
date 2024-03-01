@@ -39,6 +39,7 @@ add_mlir_library(AkgPipelines
   ${AKG_MLIR_LIBS}
   AKGGPUPipelines
   
+  DISABLE_INSTALL
   LINK_LIBS PUBLIC
   ${LIBS}
   AKGGPUPipelines

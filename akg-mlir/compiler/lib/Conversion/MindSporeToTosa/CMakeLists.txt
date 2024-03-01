@@ -9,6 +9,7 @@ add_mlir_conversion_library(MindSporeToTosa
   DEPENDS
   AKGIRConversionPassIncGen
 
+  DISABLE_INSTALL
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRBufferizationTransforms

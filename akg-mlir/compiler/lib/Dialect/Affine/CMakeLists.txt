@@ -9,6 +9,7 @@ add_mlir_dialect_library(AKGAffinePasses
   ${AKG_MLIR_SOURCE_DIR}/akg/Dialect/Affine/Analysis
   ${AKG_MLIR_SOURCE_DIR}/akg/Dialect/Affine/Utils
 
+  DISABLE_INSTALL
   DEPENDS
   AKGAffinePassIncGen
   MLIRAffineDialect

@@ -11,6 +11,7 @@ add_mlir_dialect_library(AKGTosaPasses
   MLIRTosaDialect
   MLIRMemRefDialect
 
+  DISABLE_INSTALL
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRPass

@@ -10,7 +10,8 @@ add_mlir_dialect_library(AKGCPUPasses
   DEPENDS
   AKGCPUPassIncGen
   MLIRCPUDialect
-
+  
+  DISABLE_INSTALL
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRPass

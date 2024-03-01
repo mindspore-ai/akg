@@ -9,6 +9,7 @@ add_mlir_library(AKGMindSporeToJson
   DEPENDS
   MLIRIR
   
+  DISABLE_INSTALL
   LINK_LIBS PUBLIC
   MLIRIR
   nlohmann_json::nlohmann_json

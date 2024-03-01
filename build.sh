@@ -197,7 +197,7 @@ echo "CMAKE_ARGS: ${CMAKE_ARGS}"
 
 # Create directories
 mkdir -pv "${BUILD_DIR}"
-mkdir -pv "${OUTPUT_PATH}"
+mkdir -pv "${OUTPUT_PATH}/akg"
 
 
 third_party_patch() {
@@ -257,8 +257,8 @@ build_llvm() {
 
     export PATH_TO_BUILT_LLVM=${PWD}
     cmake --build . --config ${_BUILD_TYPE} -j${THREAD_NUM}
-    cmake --install ${LLVM_BUILD_PATH} --component clang --prefix ${OUTPUT_PATH}
-    cmake --install ${LLVM_BUILD_PATH} --component llc --prefix ${OUTPUT_PATH}
+    cmake --install ${LLVM_BUILD_PATH} --component clang --prefix ${OUTPUT_PATH}/akg
+    cmake --install ${LLVM_BUILD_PATH} --component llc --prefix ${OUTPUT_PATH}/akg
     echo "Success to build llvm project!"
 }
 
@@ -294,7 +294,6 @@ if [[ "X$COMPILE_AKG_MLIR" = "Xon" ]]; then
     build_llvm
     get_akg_mlir_cmake_args
   fi
-
 fi
 
 
@@ -306,19 +305,27 @@ fi
 cd $BUILD_DIR
 cmake .. ${CMAKE_ARGS} ${AKG_MLIR_CMAKE_ARGS}
 cmake --build . --config ${_BUILD_TYPE} -j${THREAD_NUM} ${AKG_MLIR_ARGS}
-#make install
+cmake --build . --target install
 
-#if [ ! -f "libakg.so" ];then
-#  echo "[ERROR] libakg.so not exist!"
-#  exit 1
-#fi
+
+if [ ! -f "akg-tvm/akg/lib/libakg.so" ];then
+  echo "[ERROR] libakg.so not exist!"
+  exit 1
+fi
+if [[ "X$COMPILE_AKG_MLIR" = "Xon" ]]; then
+  if [ ! -f "akg-mlir/akg/bin/akg-opt" ];then
+    echo "[ERROR] akg-opt not exist!"
+    exit 1
+  fi
+  cp -r akg-mlir/akg/bin ${OUTPUT_PATH}/akg/
+  cp -r akg-mlir/akg/lib ${OUTPUT_PATH}/akg/
+fi
 
 # Copy target to output/ directory
-#cp libakg.so ${OUTPUT_PATH}
-#cd ${OUTPUT_PATH}
-#tar czvf libakg.tar.gz libakg.so
-#rm -rf libakg.so
-#write_checksum_tar
+cp akg-tvm/akg/lib/libakg.so ${OUTPUT_PATH}/akg/lib
+cd ${OUTPUT_PATH}
+tar czvf libakg.tar.gz akg/
+write_checksum_tar
 #bash ${AKG_DIR}/scripts/package.sh
 cd -
 echo "---------------- AKG: build end ----------------"

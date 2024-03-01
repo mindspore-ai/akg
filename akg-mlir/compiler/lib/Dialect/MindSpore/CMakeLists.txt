@@ -15,7 +15,7 @@ add_mlir_dialect_library(MindSporePasses
   MLIRTosaDialect
   MLIRMemRefDialect
 
-
+  DISABLE_INSTALL
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRPass

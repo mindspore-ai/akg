@@ -5,10 +5,9 @@ add_mlir_conversion_library(MLIRLinalgExtLower
   ${MLIR_MAIN_INCLUDE_DIR}/akg/Conversion/LinalgExtLower
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/Dialect/Linalg
   ${MLIR_MAIN_INCLUDE_DIR}/mlir/IR
-
+  DISABLE_INSTALL
   DEPENDS
   AKGIRConversionPassIncGen
-
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRBufferizationTransforms

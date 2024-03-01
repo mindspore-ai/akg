@@ -14,6 +14,7 @@ add_mlir_dialect_library(AKGLinalgPasses
   MLIRLinalgExtDialect
   MLIRMemRefDialect
 
+  DISABLE_INSTALL
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRMemRefDialect

@@ -15,6 +15,7 @@ add_mlir_dialect_library(AKGGPUPasses
   ${NVPTX_LIBS}
   ${AMDGPU_LIBS}
 
+  DISABLE_INSTALL
   DEPENDS
   AKGGPUPassIncGen
   

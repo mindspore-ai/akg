@@ -21,18 +21,17 @@ include(FetchContent)
 find_package(PkgConfig)
 include(cmake/utils.cmake)
 include(cmake/external_libs/symengine.cmake)
-include(cmake/external_libs/llvm.cmake)
+if(ENABLE_AKG)
+  include(cmake/external_libs/llvm.cmake)
+endif()
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-attributes -Wno-unknown-pragmas")
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Set Path
 get_filename_component(AKG_MLIR_SOURCE_DIR "${AKG_MLIR_SOURCE_DIR}" ABSOLUTE)
-message("AKG_MLIR_SOURCE_DIR = ${AKG_MLIR_SOURCE_DIR}")
-
-set(AKG_MLIR_BINARY_DIR ${CMAKE_BINARY_DIR}/akg-mlir)
+set(AKG_MLIR_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR})
 get_filename_component(AKG_MLIR_BINARY_DIR "${AKG_MLIR_BINARY_DIR}" ABSOLUTE)
-message("AKG_MLIR_BINARY_DIR = ${AKG_MLIR_BINARY_DIR}")
 
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${AKG_MLIR_BINARY_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${AKG_MLIR_BINARY_DIR}/lib)
@@ -145,29 +144,6 @@ add_subdirectory(${AKG_MLIR_SOURCE_DIR}/tools ${AKG_MLIR_BINARY_DIR}/tools)
 
 set(AKG_MLIR_TOOLS_DIR ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 
-install(DIRECTORY ${AKG_MLIR_SRC_INCLUDE_DIR}/akg
-  DESTINATION include
-  COMPONENT akg-mlir-headers
-  FILES_MATCHING
-  PATTERN "*.def"
-  PATTERN "*.h"
-  PATTERN "*.inc"
-  PATTERN "*.td"
-  )
-
-install(DIRECTORY ${AKG_MLIR_BIN_INCLUDE_DIR}/akg
-  DESTINATION include
-  COMPONENT akg-mlir-headers
-  FILES_MATCHING
-  PATTERN "*.def"
-  PATTERN "*.h"
-  PATTERN "*.gen"
-  PATTERN "*.inc"
-  PATTERN "*.td"
-  PATTERN "CMakeFiles" EXCLUDE
-  PATTERN "config.h" EXCLUDE
-  )
-
 option(AKG_INCLUDE_TESTS "Generate build targets for the akg-mlir tests." ON)
 if (AKG_INCLUDE_TESTS)
   add_definitions(-DAKG_INCLUDE_TESTS)
@@ -179,3 +155,27 @@ if (AKG_INCLUDE_TESTS)
   set(AKG_TEST_SOURCE_DIR "${AKG_MLIR_SOURCE_DIR}/../test")
   add_subdirectory(${AKG_TEST_SOURCE_DIR} ${AKG_TEST_BUILD_DIR})
 endif()
+
+# Installation rules
+if(ENABLE_AKG)
+  install(TARGETS akg-opt DESTINATION lib${LIB_SUFFIX})
+  install(TARGETS mindspore-translate DESTINATION lib${LIB_SUFFIX})
+  install(TARGETS mlir_akgParallelLaunch_runtime DESTINATION lib${LIB_SUFFIX})
+  if(USE_CUDA)
+    install(TARGETS akg-ptx-replace DESTINATION lib${LIB_SUFFIX})
+    install(TARGETS akg-translate DESTINATION lib${LIB_SUFFIX})
+  endif()
+else()
+  install(TARGETS akg-opt DESTINATION ${AKG_MLIR_BINARY_DIR}/akg/bin)
+  install(TARGETS mindspore-translate DESTINATION  ${AKG_MLIR_BINARY_DIR}/akg/bin)
+  install(TARGETS mlir_akgParallelLaunch_runtime DESTINATION ${AKG_MLIR_BINARY_DIR}/akg/lib)
+  if(USE_CUDA)
+    install(TARGETS akg-ptx-replace DESTINATION ${AKG_MLIR_BINARY_DIR}/akg/bin)
+    install(TARGETS akg-translate DESTINATION ${AKG_MLIR_BINARY_DIR}/akg/bin)
+  endif()
+endif()
+
+install(
+  DIRECTORY
+  ${AKG_MLIR_SOURCE_DIR}/../python/akg_v2/
+  DESTINATION ${AKG_MLIR_BINARY_DIR}/akg)

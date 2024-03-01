@@ -10,6 +10,7 @@ add_mlir_conversion_library(MindSporeToLinalg
   DEPENDS
   AKGIRConversionPassIncGen
 
+  DISABLE_INSTALL
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRBufferizationTransforms

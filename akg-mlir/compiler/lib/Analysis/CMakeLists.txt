@@ -6,7 +6,7 @@ add_mlir_library(AKGMLIRAnalysis
   ${AKG_MLIR_SOURCE_DIR}/akg/Analysis
   ${SYMENGINE_INCLUDE_DIRS}/
   
-
+  DISABLE_INSTALL
   LINK_LIBS PUBLIC
   MLIRAnalysis
   MLIRBufferizationTransforms

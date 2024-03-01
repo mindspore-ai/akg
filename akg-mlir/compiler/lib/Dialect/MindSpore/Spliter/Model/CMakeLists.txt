@@ -13,6 +13,7 @@ add_mlir_library(AKGModel
   AKGMindSporeToJson
   AKGLiteIR
 
+  DISABLE_INSTALL
   LINK_LIBS PUBLIC
   MLIRDialect
   MLIRSupport
