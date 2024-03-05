@@ -655,6 +655,10 @@ def _build_to_module_ascend(desc_s_in, desc_d_in, attr, use_repo=True):
             attr["pragma_modshift"] = True
     segment_tree, segment_infos = get_construct_args(desc_s_in, attr, post_funcs)
 
+    if desc_d_in.get("backend"):
+        backend_func = akg.tvm.get_global_func("cce.set_backend")
+        backend_func(desc_d_in["backend"])
+
     if desc_d_in.get("enable_cce_lib"):
         attr["enable_cce_lib"] = True
         return _build_to_module_ascend_lib(desc_s_in, kernel_name)
