@@ -41,6 +41,7 @@
 
 #include "../common/base64.h"
 #include "../pass/tir_mutator.h"
+#include "../pass/tir_mutator_remove_producer_consumer.h"
 namespace air {
 
 inline std::string Type2String(const DataType& t) {
@@ -401,7 +402,7 @@ struct JSONGraph {
       getter.Get(n);
       g.nodes.emplace_back(std::move(jnode));
     }
-    g.attrs["tvm_version"] = TVM_VERSION;
+    g.attrs["tvm_version"] = tvm_version;
     g.root = indexer.node_index_.at(const_cast<Object*>(root.get()));
     // serialize tensor
     for (DLTensor* tensor : indexer.tensor_list_) {
@@ -455,10 +456,18 @@ struct JSONNodeForNewIR : public JSONNode {
 };
 
 std::string SaveJSON(const ObjectRef& n,const std::string& version) {
-  if(version != tvm06_version){
-    ir::IR_Conversion(n);
+  auto export_n = n;
+  if(version != tvm06_version){    
+    if(n->IsInstance<StmtNode>()){
+      auto n_stmt = Downcast<Stmt>(n);
+      n_stmt = ir::RemoveProducerConsumer(n_stmt);
+      export_n = GetRef<ObjectRef>(n_stmt.as<Object>());
+      ir::IR_Conversion(n_stmt);
+    }else{
+      ir::IR_Conversion(n);
+    }
   }
-  auto jgraph = JSONGraph::Create(n,version);
+  auto jgraph = JSONGraph::Create(export_n,version);
   std::ostringstream os;
   dmlc::JSONWriter writer(&os);
   jgraph.Save(&writer);

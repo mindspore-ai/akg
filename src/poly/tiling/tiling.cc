@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <unordered_set>
 
+#include "tvm.h"
 #include "poly/tiling/tiling.h"
 #include "poly/tiling/hermes/check_visitor.h"
 #include "poly/tiling/hermes/hardware.h"
@@ -28,6 +29,8 @@
 namespace akg {
 namespace ir {
 namespace poly {
+
+using air::runtime::Registry;
 
 TileSizes TilingGenerator::Generate() {
   TraverseSolver solver(analyzer_);
@@ -475,8 +478,17 @@ TileSizes TilingGenerator::HermesTiling(const isl::schedule &sch, TileSizes dims
   std::unique_ptr<ModelGraph> model_graph = std::make_unique<ModelGraph>(*init_graph);
   model_graph->is_activated_double_buffer_ = g_attrs.GetBool(kEnableDoubleBuffer, true);
 
-  Hardware hardware(kNumCore, kMemVCSize, kMemC1Size, kMemC0Size, kMemVCAlign, kMemC1Align, kVBlockNum, kVBlockSize);
+  const PackedFunc *get_product_section = Registry::Get("cce.get_product_section");
+  std::string product_section = (*get_product_section)();
+  const PackedFunc *product_conf_buffer = Registry::Get("cce.product_conf_buffer");
+  size_t memc1_size = (*product_conf_buffer)(product_section,"L1_Buffer");
+  size_t vc_size = (*product_conf_buffer)(product_section,"Unified_Buffer");
+  size_t c0_size = (*product_conf_buffer)(product_section,"L0A_Buffer");
+  size_t l0c_size = (*product_conf_buffer)(product_section,"L0C_Buffer");
+  const PackedFunc *product_conf_core = Registry::Get("cce.product_conf_core");
+  size_t num_core = (*product_conf_core)(product_section,"Core_num");
 
+  Hardware hardware(num_core, vc_size, memc1_size, c0_size, kMemVCAlign, kMemC1Align, kVBlockNum, kVBlockSize, l0c_size, product_section);
   GetTilingSize(*model_graph, hardware);
 
   size_t idx_global_axis_vec = 0;

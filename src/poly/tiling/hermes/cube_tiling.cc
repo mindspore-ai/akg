@@ -30,7 +30,7 @@ namespace poly {
 // Fourth rule: Maximize the tiling.
 int64_t GetMatmulAxisNTiling(const Axis &axis, const std::vector<std::shared_ptr<Node>> &nodes, size_t mem_VC_size) {
   int64_t N_axis_tiling = 0;
-  size_t available_mem_VC_size = GetAvailableMemVCSize(nodes, mem_VC_size);
+  size_t available_mem_VC_size = GetAvailableOutPutCacheSize(nodes, mem_VC_size);
 
   // Try to maximize the tiling of N and M. And carrying to the power of two to compute.
   auto first_tiling = static_cast<int64_t>(std::round(std::sqrt(available_mem_VC_size)));
@@ -68,7 +68,11 @@ size_t GetMulticoreFromAxis(size_t remaining_core, int64_t axis_size) {
 
 int64_t GetMatmulAxisMTiling(const Axis &axis, const ModelGraph &model_graph, Hardware hardware) {
   int64_t M_axis_tiling = 0;
-  size_t available_mem_VC_size = GetAvailableMemVCSize(model_graph.nodes_, hardware.mem_VC_size_);
+  auto matmul_output_cache_size = hardware.mem_VC_size_;
+  if(hardware.section_ >= k910BSection){
+    matmul_output_cache_size = hardware.mem_L0C_size_;
+  }
+  size_t available_mem_VC_size = GetAvailableOutPutCacheSize(model_graph.nodes_, matmul_output_cache_size);
 
   // Try to get the information on the N-axis, if it exists.
   int64_t N_axis_range = 1;
@@ -89,7 +93,11 @@ int64_t GetMatmulAxisMTiling(const Axis &axis, const ModelGraph &model_graph, Ha
     }
   }
   // Calculate how many cores are used on the N-axis.
-  if (core_used < kMinNumOfUsedCores) {
+  auto min_num_of_use_cores = kMinNumOfUsedCores;
+  if(hardware.section_>= k910BSection){
+    min_num_of_use_cores = kMinNumOfUsedCores910B;
+  }
+  if (core_used < min_num_of_use_cores) {
     core_used *= GetMulticoreFromAxis(hardware.num_core_ / core_used, N_axis_range / N_axis_tiling);
   }
 
@@ -197,7 +205,7 @@ bool IsNotReused(const std::vector<std::shared_ptr<Node>> &nodes) {
   return is_not_reused;
 }
 
-size_t GetAvailableMemVCSize(const std::vector<std::shared_ptr<Node>> &nodes, size_t mem_VC_size) {
+size_t GetAvailableOutPutCacheSize(const std::vector<std::shared_ptr<Node>> &nodes, size_t mem_VC_size) {
   bool is_elementwise_op = false;
   bool is_not_reused = false;
   bool is_select_op = false;
