@@ -30,6 +30,31 @@ from .construct_args import ConstructType, ConstructKey
 from .construct_args import get_construct_args, get_tune_construct_args, \
     should_enable_attr, get_stmt_for_tune, add_attrs_in_segment_infos
 from utils.util import get_ascend_type
+
+matmul_keys = [
+    "m0", # [max(16,m)%m0==0, m0%16==0?]
+    "k0", # [max(16,m)%m0==0,]
+    "n0", # [max(16,m)%m0==0,]
+    "swizzlCount",#[1-blockDim],
+    "swizzlDirect"#[0,1] nz or zn format
+]
+
+matmul_calc_keys = [
+    "mLoop",#=max(16,m)/m0
+    "kLoop",#=max(16,m)/m0
+    "nLoop",#=max(16,m)/m0
+    "coreLoop",#=mLoop/nLoop/kLoop
+]
+
+pa_keys = [
+    "headSplit",
+]
+
+kv_keys = [
+    "num_token_tile",
+    "n_burst"
+]
+
 def generate_trait(desc):
     """
     generate trait of kernel description
@@ -44,7 +69,7 @@ def generate_trait(desc):
         input_idx.sort()
         input_idx_str = ''.join(str(i) for i in input_idx)
         op_trait = op['name'] + input_idx_str
-        if op['name'] == "MatMul":
+        if  op['name'].find("MatMul") != -1:
             for attr in op['attr']:
                 if attr['name'] == "transpose_a":
                     transpose_a = str(int(attr['value']))
@@ -661,7 +686,10 @@ def _build_to_module_ascend(desc_s_in, desc_d_in, attr, use_repo=True):
 
     if desc_d_in.get("enable_cce_lib"):
         attr["enable_cce_lib"] = True
-        return _build_to_module_ascend_lib(desc_s_in, kernel_name)
+        repository = None
+        if os.getenv('MS_GRAPH_KERNEL_TILING'):
+            repository = read_repo_file(str(os.getenv('MS_GRAPH_KERNEL_TILING')))
+        return _build_to_module_ascend_lib(desc_s_in, kernel_name, repository)
 
     poly = True
     res = _cpp_build(attr, process, poly, segment_tree, segment_infos)
@@ -682,7 +710,79 @@ def _build_to_module_ascend(desc_s_in, desc_d_in, attr, use_repo=True):
         return kernel_name
     return res
 
-def _build_to_module_ascend_lib(desc_s_in, kernel_name):
+def _build_to_module_ascend_lib(desc_s_in, kernel_name, repository=None):
+    
+    def _convert_dim_to_attr(dim, tiling_info, compute):
+        f = akg.tvm.get_global_func("cce.current_product_conf_core")
+        coreNum = f("Core_num")
+        if coreNum == 0:
+            raise RuntimeError("Get the cce product value is None")
+        if "MatMul" in compute:
+            batch = tiling_info.get("batch_size")
+            m = tiling_info.get("M")
+            n = tiling_info.get("N")
+            k = tiling_info.get("K")
+            matmul_dict = dict()
+            dim_list = dim.split(" ")
+            if len(dim_list) < 4:
+                return {}
+            cnt =  0
+            for i in range(2, len(dim_list), 4):
+                key = matmul_keys[cnt]
+                value = dim_list[i]
+                matmul_dict[key] = int(value)
+                cnt += 1
+            mLoop = (max(16, m) - 1) // matmul_dict.get("m0") + 1
+            nLoop = (max(16, n) - 1) // matmul_dict.get("n0") + 1
+            kLoop = (max(16, k) - 1) // matmul_dict.get("k0") + 1
+            coreLoop = batch * mLoop * nLoop
+            blockDim = min(coreLoop, coreNum)
+            matmul_dict["mLoop"] = mLoop
+            matmul_dict["kLoop"] = kLoop
+            matmul_dict["nLoop"] = nLoop
+            matmul_dict["coreLoop"] = coreLoop
+            matmul_dict["blockDim"] = blockDim
+            return matmul_dict
+        elif "PagedAttention" in compute or "PagedAttentionMask" in compute:
+            num_heads = tiling_info.get("num_heads")
+            num_tokens = tiling_info.get("num_tokens")
+            pa_dict = dict()
+            dim_list = dim.split(" ")
+            if len(dim_list) < 4:
+                return {}
+            cnt =  0
+            for i in range(2, len(dim_list), 4):
+                key = pa_keys[cnt]
+                value = dim_list[i]
+                pa_dict[key] = int(value)
+                cnt += 1
+            head_split = pa_dict.get("headSplit")  # Tuning<<---- [1, num_heads]
+            loopLen = (num_heads + head_split - 1) // head_split
+            block = min(loopLen * num_tokens, coreNum)
+            pa_dict["blockDim"] = block
+            return pa_dict
+        elif "ReshapeAndCache" in compute:
+            num_tokens = tiling_info.get("num_tokens")
+
+            kv_dict = dict()
+            dim_list = dim.split(" ")
+            cnt =  0
+            for i in range(2, len(dim_list), 4):
+                key = kv_keys[cnt]
+                value = dim_list[i]
+                kv_dict[key] = int(value)
+                cnt += 1
+            if "num_token_tile" in kv_dict:
+                block_dim = str((int(num_tokens) - 1) // kv_dict.get("num_token_tile") + 1)
+            else:
+                block_dim = num_tokens
+            
+            kv_dict["block_dim"] = block_dim
+            kv_dict["kernel_version"] = 2
+            return kv_dict
+        else:
+            return {}
+    
     def _get_all_shape(shapes):
         shape_split = shapes.split(".")
         shape_list = []
@@ -708,10 +808,7 @@ def _build_to_module_ascend_lib(desc_s_in, kernel_name):
             tensor_B = shape_list[1]
 
             tensor_A_split = tensor_A.split("_")
-            if len(tensor_A_split) > 2:
-                batch_size = int(tensor_A.split("_")[0])
-            else:
-                batch_size = 1
+
             if trans_a == "1":
                 M = int(tensor_A_split[-1])
                 K = int(tensor_A_split[-2])
@@ -719,13 +816,30 @@ def _build_to_module_ascend_lib(desc_s_in, kernel_name):
                 M = int(tensor_A_split[-2])
                 K = int(tensor_A_split[-1])
 
+            tensor_B_split = tensor_B.split("_")
             if trans_b == "1":
-                N = int(tensor_B.split("_")[-2])
+                N = int(tensor_B_split[-2])
             else:
-                N = int(tensor_B.split("_")[-1])
-            tensor_A_type = str(dtype.split("-")[0])
+                N = int(tensor_B_split[-1])
+            batch_size = 1
+            if len(tensor_A_split) > 2 and len(tensor_B_split) == 2:
+                # some bmm in onnx will have multi batch such as [b1,b0,m,k]*[k,n]
+                batch_sizes = [int(i) for i in tensor_A.split("_")[:-2]]
+                # change bmm with shape [b1,b0,m,k]*[k,n] to matmul with shape [b1*b0*m,k]*[k,n]
+                for b in batch_sizes:
+                    M = M * b
+                batch_size = 1
+            elif len(tensor_A_split) == len(tensor_B_split) and len(tensor_B_split) > 2:
+                # common bmm [b1,b0,m,k]*[b1,b0,k,n]
+                batch_sizes = [int(i) for i in tensor_A.split("_")[:-2]]
+                for b in batch_sizes:
+                    batch_size = batch_size * b
+            op_type = "MatMul"
+            if bias_flag:
+                op_type = "MatMulMix"
+            tensor_a_type = str(dtype.split("-")[0])
             tiling_info = {"batch_size":batch_size, "M": M, "N": N, "K": K, "trans_a": int(trans_a), "trans_b": int(trans_b),
-                           "tensor_A_type": tensor_A_type, "bias_flag": bias_flag, "op_type": "MatMul"}
+                           "tensor_A_type": tensor_a_type, "bias_flag": bias_flag, "op_type": op_type}
         elif "PagedAttention" in compute or "PagedAttentionMask" in compute:
             shape_list = _get_all_shape(shape)
             query = shape_list[0]
@@ -758,7 +872,14 @@ def _build_to_module_ascend_lib(desc_s_in, kernel_name):
             head_size = int(kv.split("_")[2])
 
             tiling_info = {"num_tokens": num_tokens, "num_heads": num_heads, "head_size": head_size, 
-                           "op_type": "ReshapeAndCache"}
+                           "kernel_name": "ReshapeAndCache"}
+        if  repository is not None:
+            repo_attr = get_attr_from_dict([compute, shape, dtype, 'metadata', 'attrs', 'dim'], repository, {})
+            if len(repo_attr) > 0:
+                repo_attr = _convert_dim_to_attr(repo_attr, tiling_info, compute)
+                tiling_info = merge_attrs(tiling_info, repo_attr)
+                tiling_info["use_repo"] = 1
+        tiling_info["arch"] = json.loads(desc_s_in)["target_info"]["arch"]
         return tiling_info
 
     func = tvm.get_global_func("build_cce_lib")
@@ -840,6 +961,11 @@ def get_tiling_space(kernel_desc, level=1, attr=None):
     attr['help_tiling'] = level
     attr['tuning'] = 'on'
     desc_d = json.loads(kernel_desc)
+    from akg.ms.info_version_adapt import InfoVersionAdapt
+    info_adapter = InfoVersionAdapt(desc_d)
+    if not info_adapter.run():
+        raise RuntimeError(info_adapter.msg)
+    kernel_desc = _set_backend(desc_d)
     backend = desc_d['process']
     all_ops = set(op['name'] for op in desc_d['op_desc'])
     if backend == "cuda":
