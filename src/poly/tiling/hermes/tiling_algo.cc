@@ -68,7 +68,11 @@ int64_t GetAxis(Axis &axis, const ModelGraph &model_graph, Hardware hardware) {
     return 1;
   }
   if (axis.type_.find(Axis::AxisLabel::kMatMulAxisN) != axis.type_.end()) {
-    return GetMatmulAxisNTiling(axis, model_graph.nodes_, hardware.mem_VC_size_);
+    size_t cache_size = hardware.mem_VC_size_;
+    if(hardware.section_ >= k910BSection){
+      cache_size = hardware.mem_L0C_size_;
+    } 
+    return GetMatmulAxisNTiling(axis, model_graph.nodes_, cache_size );
   }
   if (axis.type_.find(Axis::AxisLabel::kMatMulAxisM) != axis.type_.end()) {
     return GetMatmulAxisMTiling(axis, model_graph, hardware);

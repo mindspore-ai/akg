@@ -6,9 +6,10 @@ class PathManager:
     @classmethod
     def get_cann_path(cls, profiler_path: str) -> str:
         sub_dirs = os.listdir(os.path.realpath(profiler_path))
+        sub_dirs.sort(reverse=True)
         for sub_dir in sub_dirs:
             sub_path = os.path.join(profiler_path, sub_dir)
-            if os.path.isdir(sub_path) and re.match(r"^PROF_\d+_\d+_[a-zA-Z]+", sub_dir):
+            if os.path.isdir(sub_path) and (re.match(r"^PROF_\d+_\d+_\d+[a-zA-Z]+", sub_dir) or re.match(r"^PROF_\d+_\d+[a-zA-Z]+", sub_dir)):
                 return sub_path
         return ""
 

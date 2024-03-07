@@ -573,8 +573,10 @@ def gen_json_data(op_desc, with_compute=True, input_for_mod=None):
     commands = []
     # Parse input_desc
     _gen_input_data(desc, infos, input_for_mod, commands)
-    # Parse op_desc
-    _gen_op_compute(desc, commands)
+    if with_compute:
+        # Parse op_desc
+        _gen_op_compute(desc, commands)
+
     # Parse output_desc
     _gen_output_data(desc, infos, input_for_mod, output_indexes, commands)
 

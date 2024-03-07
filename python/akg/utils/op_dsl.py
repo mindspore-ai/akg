@@ -383,6 +383,8 @@ def convert_fracal_shape(ori_shape, fractal):
         return ori_shape[:-4] + (ori_shape[-2] * ori_shape[-3], ori_shape[-1] * ori_shape[-4])
     if fractal == "zZ":
         return ori_shape[:-4] + (ori_shape[-4] * ori_shape[-2], ori_shape[-3] * ori_shape[-1])
+    if fractal =="ND":
+        return ori_shape
 
 
 def strided_slice_str(inputs, output, attr):

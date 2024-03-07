@@ -31,12 +31,13 @@ int64_t GetMatmulAxisNTiling(const Axis &axis, const std::vector<std::shared_ptr
 int64_t GetMatmulAxisMTiling(const Axis &axis, const ModelGraph &model_graph, Hardware hardware);
 int64_t GetMatmulAxisKTiling(Axis &axis, const ModelGraph &model_graph, Hardware hardware);
 size_t GetMulticoreFromAxis(size_t remaining_core, int64_t axis_size);
-size_t GetAvailableMemVCSize(const std::vector<std::shared_ptr<Node>> &nodes, size_t mem_VC_size);
+size_t GetAvailableOutPutCacheSize(const std::vector<std::shared_ptr<Node>> &nodes, size_t mem_VC_size);
 
 const size_t kC1DataSizePerBatch = 512;
 const size_t kC0DataSizePerBatch = 512;
 const size_t kVCDataSizePerBatch = 1024;
 const size_t kMinNumOfUsedCores = 32;
+const size_t kMinNumOfUsedCores910B = 24;
 const int64_t kLargeTensorSize = 219360;
 const int64_t kCubeDefaultTiling = 16;
 }  // namespace poly

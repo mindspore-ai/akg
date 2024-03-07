@@ -23,7 +23,7 @@ namespace ir {
 namespace poly {
 class Hardware {
  public:
-  Hardware(size_t, size_t, size_t, size_t, size_t, size_t, size_t, size_t);
+  Hardware(size_t, size_t, size_t, size_t, size_t, size_t, size_t, size_t, size_t, std::string);
 
   static bool HasVCFail(const std::string &);
   static void AddVCFailCounter() { Hardware::mem_VC_alloc_failed_++; }
@@ -37,6 +37,8 @@ class Hardware {
   size_t mem_C1_align_;
   size_t vblocknum_;
   size_t vblocksize_;
+  size_t mem_L0C_size_;
+  std::string section_;
 
  private:
   static size_t mem_VC_alloc_failed_;
@@ -50,6 +52,7 @@ const size_t kMemVCAlign = 32;
 const size_t kMemC1Align = 512;
 const size_t kVBlockNum = 8;
 const size_t kVBlockSize = 32;
+const std::string k910BSection = "2.1";
 }  // namespace poly
 }  // namespace ir
 }  // namespace akg
