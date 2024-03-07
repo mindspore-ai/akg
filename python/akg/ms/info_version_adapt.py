@@ -74,6 +74,7 @@ def convert_input_to_attr(kernel_info:dict):
         "BroadcastTo": [(1, "shape")],
         "Cast": [(1, "dst_type", type_id_to_type_string)],
         "StridedSlice": [(3, "strides"), (2, "end"), (1, "begin")],
+        "StridedSliceV2": [(4, "strides"),(3, "axes"), (2, "end"), (1, "begin")],
         "OneHot": [(1, "depth")],
         "Gather": [(2, "axis")],
         "UnsortedSegmentSum": [(2, "num_segments")],

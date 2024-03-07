@@ -32,10 +32,10 @@ def set_ascend910b(code, core_type, title_dict):
         title_dict["coreType"] = "MIX"
         title_dict["intercoreSync"] = 1
         title_dict["taskRation"] = "1:2"
-    elif core_type == "AIC":
+    elif core_type == "AiCore":
         title_dict["coreType"] = "AiCore"
         title_dict["magic"] = "RT_DEV_BINARY_MAGIC_ELF_AICUBE"
-    elif core_type == "AIV":
+    elif core_type == "VectorCore":
         title_dict["coreType"] = "VectorCore"
         title_dict["magic"] = "RT_DEV_BINARY_MAGIC_ELF_AIVEC"
 

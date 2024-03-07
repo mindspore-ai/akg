@@ -1302,5 +1302,36 @@ inline Tensor one_hot(const Tensor& indices,
   }, name, tag);
 }
 
+inline Tensor strided_slice_v2(const Tensor& x,
+                               const Array<Integer>& begin,
+                               const Array<Integer>& end,
+                               const Array<Integer>& axes,
+                               const Array<Integer>& strides,
+                               std::string name = "T_strided_slice",
+                               std::string tag = kInjective) {
+  size_t src_tensor_dim = static_cast<size_t>(x->shape.size());
+  std::vector<Integer> begin_vec;
+  std::vector<Integer> end_vec;
+  std::vector<Integer> strides_vec;
+  begin_vec.resize(src_tensor_dim,Integer(0));
+  strides_vec.resize(src_tensor_dim,Integer(1));
+  for(size_t i = 0; i < src_tensor_dim; i++){
+    auto dim_i = GetConstInt(x->shape[i]);
+    end_vec.emplace_back(Integer(dim_i));
+  }
+
+  for (size_t i = 0; i < axes.size(); i++) {
+    if (axes[i].defined() && begin[i].defined()) {
+      auto axes_i = axes[i]->value < 0 ? src_tensor_dim + axes[i]->value : axes[i]->value;
+      auto dim_i = GetConstInt(x->shape[axes_i]);
+      begin_vec[axes_i] = Integer(begin[i]->value <= dim_i ?  begin[i]->value : dim_i);
+      end_vec[axes_i] = Integer(end[i]->value <= dim_i ?  end[i]->value : dim_i);
+      strides_vec[axes_i] = Integer(strides[i]->value <= dim_i ?  strides[i]->value : dim_i);
+    }
+  }
+
+  return strided_slice(x, begin_vec,end_vec, strides_vec, name, tag);
+}
+
 }  // namespace topi
 #endif  // TOPI_TRANSFORM_H_

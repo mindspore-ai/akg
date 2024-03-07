@@ -872,7 +872,18 @@ def _build_to_module_ascend_lib(desc_s_in, kernel_name, repository=None):
             head_size = int(kv.split("_")[2])
 
             tiling_info = {"num_tokens": num_tokens, "num_heads": num_heads, "head_size": head_size, 
-                           "kernel_name": "ReshapeAndCache"}
+                           "op_type": "ReshapeAndCache"}
+        elif "Transpose" in compute:
+            shape_list = _get_all_shape(shape)
+            input_shape = shape_list[0]
+
+            axis_1 = int(input_shape.split("_")[0])
+            axis_2 = int(input_shape.split("_")[1])
+            axis_3 = int(input_shape.split("_")[2])
+
+            tiling_info = {"op_type": "AddReshapeTranspose", "axis_1":axis_1, "axis_2": axis_2, "axis_3":axis_3}
+        
+        tiling_info["use_repo"] = 0
         if  repository is not None:
             repo_attr = get_attr_from_dict([compute, shape, dtype, 'metadata', 'attrs', 'dim'], repository, {})
             if len(repo_attr) > 0:
