@@ -38,6 +38,30 @@ this op named "value" is guaranteed, which contains the value of this input.
 import logging
 
 
+def type_id_to_type_string(type_id):
+    type_dict = {
+        30: "bool",
+        32: "int8",
+        33: "int16",
+        34: "int32",
+        35: "int64",
+        37: "uint8",
+        38: "uint16",
+        39: "uint32",
+        40: "uint64",
+        42: "float16",
+        43: "float32",
+        44: "float64",
+        45: "bfloat16",
+        48: "complex64",
+        49: "complex128",
+    }
+    if type_id not in type_dict:
+        logging.exception("Type_id is invalid, please check. Type_id: %s", str(type_id))
+    return type_dict[type_id]
+
+
+
 def convert_input_to_attr(kernel_info:dict):
     op_info = {
         "Reshape": [(1, "shape")],
@@ -48,7 +72,7 @@ def convert_input_to_attr(kernel_info:dict):
         "ExpandDims": [(1, "axis")],
         "Tile": [(1, "multiples")],
         "BroadcastTo": [(1, "shape")],
-        "Cast": [(1, "dst_type")],
+        "Cast": [(1, "dst_type", type_id_to_type_string)],
         "StridedSlice": [(3, "strides"), (2, "end"), (1, "begin")],
         "OneHot": [(1, "depth")],
         "Gather": [(2, "axis")],
@@ -76,6 +100,8 @@ def convert_input_to_attr(kernel_info:dict):
                 input_desc_i = op["input_desc"].pop(input_index)
                 input_value = input_desc_i[0]["value"]
                 input_dtype = "listInt"
+                if len(input_info) > 2:
+                    input_value = input_info[2](input_value)
                 if op_name not in int_input_required_ops and isinstance(input_value, int):
                     input_value = [input_value]
                 if isinstance(input_value, int):
