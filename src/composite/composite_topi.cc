@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 #include "topi/elemwise.h"
-#include "topi/reduction.h"
 #include "topi/broadcast.h"
+#include "topi/reduction.h"
+#include "topi/transform.h"
 #include "pass/utils.h"
 #include "composite/utils/util.h"
 
@@ -1318,6 +1319,21 @@ TVM_REGISTER_GLOBAL("Atan2").set_body([](TVMArgs args, TVMRetValue *rv) {
 
 TVM_REGISTER_GLOBAL("Expm1").set_body([](TVMArgs args, TVMRetValue *rv) {
   TOPI_ONE_INPUT_CALL(args, rv, topi::expm1);
+});
+
+TVM_REGISTER_GLOBAL("StridedSliceV2").set_body([](TVMArgs args, TVMRetValue *rv) {
+  auto inputs = args[0].operator Array<NodeRef>();
+  auto attrs = args[1].operator OpAttr();
+  auto input_x = Downcast<Tensor>(inputs[0]);
+  CHECK(attrs.count("begin"));
+  CHECK(attrs.count("end"));
+  CHECK(attrs.count("strides"));
+  CHECK(attrs.count("axes"));
+  auto begin = ArrayOrInt(attrs["begin"]);
+  auto end = ArrayOrInt(attrs["end"]);
+  auto axes = ArrayOrInt(attrs["axes"]);
+  auto strides = ArrayOrInt(attrs["strides"]);
+  *rv = topi::strided_slice_v2(input_x, begin, end, axes, strides);
 });
 
 }  // namespace akg

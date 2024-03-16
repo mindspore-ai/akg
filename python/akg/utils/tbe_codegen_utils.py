@@ -194,7 +194,7 @@ def build_tbe_codegen(kernel_name, stmt_json, arg_json, attr, ascend_type=None):
     cfg[auto_unroll_max_extent] = 0
     cfg[unroll_explicit] = True
     cfg[dynamic_shape] = False
-    cfg[enable_multicore_sync_with_atomic] = True
+    cfg[enable_multicore_sync_with_atomic] = False
     cfg[kernel_meta_parent_dir] = os.path.realpath(os.getenv('MS_COMPILER_CACHE_PATH', './'))
     if ascend_type is None:
         ascend_type = "Ascend910"

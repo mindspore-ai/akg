@@ -18,6 +18,7 @@ import logging
 import inspect
 from copy import deepcopy
 import numpy as np
+import scipy as sp
 
 
 def get_attr(attr_desc, attr_type):
@@ -34,6 +35,11 @@ def get_input(desc):
     value = desc.get('value', None)
     return value if value is not None else desc['tensor_name']
 
+def strided_slice_v2_np(data, begin, end, strides, axes):
+    """numpy implementation of strided_slice_v2"""
+    for i, axis_i in enumerate(axes):
+        data = np.take(data, np.arange(begin[i], end[i], strides[i]), axis=axis_i)
+    return data
 
 def gather_nd_np(data, indices):
     """numpy implementation of gather_nd"""
@@ -1087,6 +1093,9 @@ op_dsl = {
                                                get_input(inputs[1][0])),
     "Erf": lambda inputs, output, attr: "%s = sp.special.erf(%s)" %
                                         (output[0]['tensor_name'], get_input(inputs[0][0])),
+    "StridedSliceV2": lambda inputs, output, attr: "%s = strided_slice_v2_np(%s, %s, %s, %s, %s)" %
+                                        (output[0]['tensor_name'], get_input(inputs[0][0]), get_attr(attr, "begin"),
+                                        get_attr(attr, "end"), get_attr(attr, "strides"), get_attr(attr, "axes")),
     "TensorScatterAdd": lambda inputs, output, attr: "%s = tensor_scatter_add_np(%s, %s, %s)" %
                                                      (output[0]['tensor_name'], get_input(inputs[0][0]),
                                                       get_input(inputs[1][0]),
