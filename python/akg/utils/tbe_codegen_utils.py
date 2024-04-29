@@ -94,11 +94,21 @@ def build_npu_for_akg(kernel_name,
                       simple_mode=False):
     import tbe
     from tbe.tvm.tir import transform
-    from tbe.tvm.driver.cce_build_module import _count_time, generate_cce_code
+    from tbe.tvm.driver.cce_build_module import _count_time
     from tbe.common.buildcfg import set_current_build_config
     from tbe.common.buildcfg.buildcfg_mapping import dynamic_shape, disable_vectorize, tik, enable_const_fold, \
         dynamic_tik, instrument_bound_checkers, tbe_workspace_size_list_length
-    
+    # try to find generate_cce_code function, since it may have different name in different tbe.
+    import importlib
+    cce_build_module = importlib.import_module("tbe.tvm.driver.cce_build_module")
+    generate_cce_code_function = None
+    generate_cce_code_function_name = {"_generate_cce_code","generate_cce_code"}
+    for func_name in generate_cce_code_function_name:
+        if hasattr(cce_build_module, func_name):
+            generate_cce_code_function = getattr(cce_build_module, func_name)
+    if generate_cce_code_function is None:
+       raise ValueError("Can not find generate cce code function.")
+
     set_current_build_config(tbe_workspace_size_list_length,
                              tbe.tvm.runtime.cce_runtime.tbe_workspace_size_list_length())
 
@@ -167,7 +177,7 @@ def build_npu_for_akg(kernel_name,
 
     _count_time(mod)
     mod = transform.SplitCoreCode()(mod)
-    generate_cce_code(mod, "cce", None)
+    generate_cce_code_function(mod, "cce", None)
 
 
 def build_tbe_codegen(kernel_name, stmt_json, arg_json, attr, ascend_type=None):
