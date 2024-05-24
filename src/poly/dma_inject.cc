@@ -54,7 +54,7 @@ void ExtractOffsetFromConstraintEx(__isl_keep isl_constraint *c, EqualityInfoMap
   CHECK(equality_info_map != nullptr);
   if (!isl_constraint_is_equality(c)) return;
 
-  EqualityConstraintInfo info;
+  EqualityConstraintInfo info{0};
   auto val_ptr = isl_constraint_get_constant_val(c);
   info.offset = static_cast<int>(isl_val_get_num_si(val_ptr));
   static_cast<void>(isl_val_free(val_ptr));
