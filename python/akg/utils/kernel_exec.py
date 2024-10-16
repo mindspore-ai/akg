@@ -187,8 +187,8 @@ def profiling_mode_run(kernel_name, args, outputs, tuning, device_id, arch=None)
     output_data = ascend_run(kernel_name, args, outputs, device_id)
     akg.tvm.get_global_func("ascend_stop_profiling")()
     cycle = 0
-    if arch is not None and "910B" in arch:
-        # for ascend910B profiling
+    if arch is not None and ("910B" in arch or "910_93" in arch):
+        # for ascend910B and ascend910_93 profiling
         cycle = profiling_analyse_910B(time_before_launch)
     else:
         cycle = profiling_analyse(device_id, time_before_launch)

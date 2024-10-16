@@ -670,7 +670,11 @@ def _build_to_module_ascend(desc_s_in, desc_d_in, attr, use_repo=True):
     kernel_name = desc_d_in['op']
     ascend_type = get_ascend_type(desc_d_in)
     ascend_type_to_section = {"Ascend910A": "1.6", "Ascend310P3": "1.7",
-                              "Ascend910B1": "2.1", "Ascend910B2": "2.2", "Ascend910B3": "2.3", "Ascend910B4": "2.4"}
+                              "Ascend910B1": "2.1", "Ascend910B2": "2.2",
+                              "Ascend910B3": "2.3", "Ascend910B4": "2.4",
+                              "Ascend910_9391": "2.5", "Ascend910_9381": "2.5",
+                              "Ascend910_9392": "2.5", "Ascend910_9382": "2.5",
+                              "Ascend910_9372": "2.5", "Ascend910_9361": "2.5"}
     if ascend_type is not None:
         section = ascend_type_to_section.get(ascend_type, "1.6")
         config_func = akg.tvm.get_global_func("cce.set_product_section")
