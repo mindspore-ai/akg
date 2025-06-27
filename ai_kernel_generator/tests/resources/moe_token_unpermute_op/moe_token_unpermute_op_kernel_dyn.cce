@@ -1,0 +1,93 @@
+#define __aicore__ [aicore]
+__aicore__ void moe_token_unpermute_op_impl_npu_0_kernel(__gm__ uint8_t *__restrict__ gm_permute_token, __gm__ uint8_t *__restrict__ gm_sorted_idx, __gm__ uint8_t *__restrict__ gm_probs, __gm__ uint8_t *__restrict__ gm_output, __gm__ uint8_t *__restrict__ tiling) {
+  __ubuf__ int32_t * ub_tiling_6 = (__ubuf__ int32_t *)((uintptr_t)(0));
+  __ubuf__ int32_t * ub_14 = (__ubuf__ int32_t *)((uintptr_t)(512));
+  __ubuf__ int32_t * ub_17 = (__ubuf__ int32_t *)((uintptr_t)(544));
+  __ubuf__ half * local_out_25 = (__ubuf__ half *)((uintptr_t)(28736));
+  __ubuf__ half * prob_ub_4 = (__ubuf__ half *)((uintptr_t)(15392));
+  __ubuf__ half * ub_2 = (__ubuf__ half *)((uintptr_t)(14368));
+  __ubuf__ half * ub_3 = (__ubuf__ half *)((uintptr_t)(14880));
+  __ubuf__ half * ub_31 = (__ubuf__ half *)((uintptr_t)(14368));
+  __ubuf__ int32_t * ub_11 = (__ubuf__ int32_t *)((uintptr_t)(576));
+  __ubuf__ int32_t * ub_idx_8 = (__ubuf__ int32_t *)((uintptr_t)(608));
+  __ubuf__ int32_t * ub_33 = (__ubuf__ int32_t *)((uintptr_t)(250*1024));
+  __ubuf__ half * dst_row_40 = (__ubuf__ half *)((uintptr_t)(32));
+  __ubuf__ half * weighted_row_41 = (__ubuf__ half *)((uintptr_t)(14400));
+  __ubuf__ half * local_out_42 = (__ubuf__ half *)((uintptr_t)(43072));
+  int32_t block_idx_0 = (int32_t)block_idx;
+  pipe_barrier(PIPE_S);
+  copy_gm_to_ubuf(ub_tiling_6, (__gm__ int32_t *)tiling, 0, 1, 16, 0, 0);
+  set_flag(PIPE_MTE2, PIPE_V, (event_t)0);
+  wait_flag(PIPE_MTE2, PIPE_V, (event_t)0);
+  copy_ubuf_to_ubuf(ub_14, ub_tiling_6 + 2, 0, 1, 1, 15, 0);
+  set_flag(PIPE_V, PIPE_S, (event_t)0);
+  wait_flag(PIPE_V, PIPE_S, (event_t)0);
+  int32_t tokens_per_core_19 = *(__ubuf__ int32_t *)ub_14;
+  for (int dynamic_loop_var_0_21 = 0; dynamic_loop_var_0_21 < tokens_per_core_19; ++dynamic_loop_var_0_21) {
+    int32_t scalar_23 = float(block_idx_0) * float(tokens_per_core_19);
+    pipe_barrier(PIPE_S);
+    int32_t scalar_27 = float(scalar_23) + float(dynamic_loop_var_0_21);
+    copy_ubuf_to_ubuf(ub_17, ub_tiling_6 + 1, 0, 1, 1, 15, 0);
+    set_flag(PIPE_V, PIPE_S, (event_t)0);
+    wait_flag(PIPE_V, PIPE_S, (event_t)0);
+    int32_t top_k_20 = *(__ubuf__ int32_t *)ub_17;
+    vector_dup(local_out_25 + 0, (half)0.0000000000, 56, 1, 0, 8, 0);
+    pipe_barrier(PIPE_V);
+    for (int dynamic_loop_var_1_22 = 0; dynamic_loop_var_1_22 < top_k_20; ++dynamic_loop_var_1_22) {
+      copy_gm_to_ubuf(prob_ub_4, (__gm__ half *)gm_probs, 0, 1, 8, 0, 0);
+      set_flag(PIPE_MTE2, PIPE_V, (event_t)0);
+      wait_flag(PIPE_MTE2, PIPE_V, (event_t)0);
+      v4dtrans((__ubuf__ uint16_t*)ub_2, (__ubuf__ uint16_t*)prob_ub_4, 16, 8, true);
+      pipe_barrier(PIPE_V);
+      v4dtrans((__ubuf__ uint16_t*)ub_3, (__ubuf__ uint16_t*)ub_2, 16, 16, false);
+      pipe_barrier(PIPE_V);
+      copy_ubuf_to_ubuf(prob_ub_4, ub_3, 0, 1, 16, 0, 0);
+      pipe_barrier(PIPE_V);
+      set_flag(PIPE_MTE2, PIPE_V, (event_t)0);
+      wait_flag(PIPE_MTE2, PIPE_V, (event_t)0);
+      copy_ubuf_to_ubuf(ub_31, prob_ub_4 + ((scalar_27) * 16) + (dynamic_loop_var_1_22), 0, 1, 1, 0, 0);
+      set_flag(PIPE_V, PIPE_S, (event_t)0);
+      wait_flag(PIPE_V, PIPE_S, (event_t)0);
+      half prob_34 = *(__ubuf__ half *)ub_31;
+      set_flag(PIPE_S, PIPE_V, (event_t)0);
+      wait_flag(PIPE_S, PIPE_V, (event_t)0);
+      pipe_barrier(PIPE_S);
+      copy_ubuf_to_ubuf(ub_11, ub_tiling_6 + 0, 0, 1, 1, 15, 0);
+      set_flag(PIPE_V, PIPE_S, (event_t)0);
+      wait_flag(PIPE_V, PIPE_S, (event_t)0);
+      int32_t token_num_18 = *(__ubuf__ int32_t *)ub_11;
+      pipe_barrier(PIPE_S);
+      int32_t scalar_26 = float(dynamic_loop_var_1_22) * float(token_num_18);
+      pipe_barrier(PIPE_S);
+      int32_t scalar_28 = float(scalar_26) + float(scalar_27);
+      set_flag(PIPE_S, PIPE_V, (event_t)0);
+      wait_flag(PIPE_S, PIPE_V, (event_t)0);
+      copy_gm_to_ubuf(ub_idx_8, (__gm__ int32_t *)gm_sorted_idx, 0, 1, 16, 0, 0);
+      set_flag(PIPE_MTE2, PIPE_V, (event_t)0);
+      wait_flag(PIPE_MTE2, PIPE_V, (event_t)0);
+      copy_ubuf_to_ubuf(ub_33, ub_idx_8 + scalar_28, 0, 1, 1, 15, 0);
+      set_flag(PIPE_V, PIPE_S, (event_t)0);
+      wait_flag(PIPE_V, PIPE_S, (event_t)0);
+      int32_t idx_35 = *(__ubuf__ int32_t *)ub_33;
+      set_flag(PIPE_S, PIPE_MTE2, (event_t)0);
+      wait_flag(PIPE_S, PIPE_MTE2, (event_t)0);
+      copy_gm_to_ubuf(dst_row_40, (__gm__ half *)gm_permute_token + (idx_35) * 7168, 0, 1, 448, 56896, 0);
+      set_flag(PIPE_MTE2, PIPE_V, (event_t)0);
+      wait_flag(PIPE_MTE2, PIPE_V, (event_t)0);
+      vmuls(weighted_row_41 + 0, dst_row_40 + 0, prob_34, 56, 1, 1, 8, 8);
+      pipe_barrier(PIPE_V);
+      vadd(local_out_25 + 0, local_out_25 + 0, weighted_row_41 + 0, 56, 1, 1, 1, 8, 8, 8);
+      pipe_barrier(PIPE_ALL);
+    }
+    set_flag(PIPE_V, PIPE_MTE3, (event_t)0);
+    wait_flag(PIPE_V, PIPE_MTE3, (event_t)0);
+    copy_ubuf_to_gm((__gm__ half *)gm_output + (scalar_27) * 7168, local_out_25, 0, 1, 448, 0, 6720);
+    pipe_barrier(PIPE_ALL);
+  }
+}
+__global__ __aicore__ void ai_core_do(__gm__ uint8_t *__restrict__ gm_permute_token, __gm__ uint8_t *__restrict__ gm_sorted_idx, __gm__ uint8_t *__restrict__ gm_probs, __gm__ uint8_t *__restrict__ gm_output, __gm__ uint8_t *__restrict__ tiling){
+  moe_token_unpermute_op_impl_npu_0_kernel(gm_permute_token, gm_sorted_idx, gm_probs, gm_output, tiling);
+}
+extern "C"  void ai_core(uint32_t blockDim, void *l2ctrl, void *stream, uint8_t * gm_permute_token, uint8_t * gm_sorted_idx, uint8_t * gm_probs, uint8_t * gm_output, uint8_t * tiling){
+  ai_core_do<<<8, l2ctrl, stream>>>(gm_permute_token, gm_sorted_idx, gm_probs, gm_output, tiling);
+}

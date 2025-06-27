@@ -1,0 +1,353 @@
+#!/usr/bin/env python3
+# coding: utf-8
+# Copyright 2025 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from swft.core import Tensor, Scalar, name_tensor, Instruction
+from swft.intrinsic import *
+from copy import deepcopy
+from swft.utils import *
+
+
+def slice_move_instruction(src, dst_mem, begin, slice_size, attrs=None, dst=None, instr=None):
+    slice_size = slice_size_infer(slice_size)
+    if not dst:
+        dst = Tensor(dst_mem, src.dtype, slice_size, src.format, src.multi_core)
+    if not instr:
+        instr = "SLICEMOV"
+    begin = slice_begin_infer(begin)
+    slice_size = (Scalar("INT32", x) for x in slice_size)
+    begin = (Scalar("INT32", x) if isinstance(x, int) else x for x in begin)
+    Instruction(instr, (src,) + tuple(begin) +
+                tuple(slice_size), (dst, ), attrs)()
+    return dst
+
+
+@name_tensor
+def split_to_ub(src, split_size, split_axis, relu=False, no_autopad=False):
+    input_start = [0] * len(src.shape)
+    input_end = deepcopy(src.shape)
+    input_end[split_axis] = split_size[0]
+    strides = [1] * len(src.shape)
+    out = []
+    for i in range(len(split_size)):
+        attrs = {"mem_type": "UB", "format": None, "input_start": input_start,
+                 "input_end": input_end, "strides": strides}
+        if relu:
+            attrs["relu"] = [1.0]
+        if no_autopad:
+            attrs["no_pad"] = [1.0]
+        out_mem_type = move_memtype_infer(src.mem_type, attrs)
+        out_dtype = default_dtype_infer(src.dtype)
+        out_format = move_format_infer(src.format, attrs)
+        out_size = split_shape_infer(src.shape, attrs)
+        multi_core = src.multi_core
+        dst = Tensor(out_mem_type, out_dtype, out_size, out_format, multi_core)
+        Split(src, dst, deepcopy(attrs))()
+        out.append(dst)
+        input_start[split_axis] = split_size[i]
+        if i < len(split_size) - 1:
+            input_end[split_axis] = split_size[i + 1]
+    return out
+
+
+@name_tensor
+def slice_to_ub(src, begin, slicesize, no_autopad=False):
+    strides = [1] * len(src.shape)
+    attrs = {"mem_type": "UB", "format": src.format}
+    if no_autopad:
+        attrs["no_pad"] = [1.0]
+    dst = slice_move_instruction(src, "UB", begin, slicesize, attrs=attrs)
+    return dst
+
+
+@name_tensor
+def pad_to_ub(src, shape):
+    attrs = {"mem_type": "UB", "format": None, "pad_row": [1.0]}
+    pad_shape = pad_shape_infer(src.shape, shape, attrs)
+    dst = Tensor("UB", src.dtype, shape, src.format, src.multi_core)
+    Instruction("MOV", (src,), (dst, ), attrs)()
+    return dst
+
+
+@name_tensor
+def split_to_l1(src, split_size, split_axis):
+    input_start = [0] * len(src.shape)
+    input_start[split_axis] = 0
+    input_end = deepcopy(src.shape)
+    input_end[split_axis] = split_size[0]
+    strides = [1] * len(src.shape)
+    out = []
+    for i in range(len(split_size)):
+        attrs = {"mem_type": "L1", "format": None, "input_start": input_start,
+                 "input_end": input_end, "strides": strides}
+        out_mem_type = move_memtype_infer(src.mem_type, attrs)
+        out_dtype = default_dtype_infer(src.dtype)
+        out_format = move_format_infer(src.format, attrs)
+        out_size = split_shape_infer(src.shape, attrs)
+        multi_core = src.multi_core
+        dst = Tensor(out_mem_type, out_dtype, out_size, out_format, multi_core)
+        Split(src, dst, deepcopy(attrs))()
+        out.append(dst)
+        input_start[split_axis] = split_size[i]
+        if i < len(split_size) - 1:
+            input_end[split_axis] = split_size[i + 1]
+    return out
+
+
+@name_tensor
+def slice_to_l1(src, begin, slicesize):
+    strides = [1] * len(src.shape)
+    attrs = {"mem_type": "L1", "format": None}
+    # slicesize provided
+    dst = slice_move_instruction(src, "L1", begin, slicesize)
+    return dst
+
+
+@name_tensor
+def split_to_l0A(src, split_size, split_axis, transpose=False):
+    input_start = [0] * len(src.shape)
+    input_start[split_axis] = 0
+    input_end = deepcopy(src.shape)
+    input_end[split_axis] = split_size[0]
+    strides = [1] * len(src.shape)
+    slize_size = deepcopy(src.shape)
+    out = []
+    attrs = {"mem_type": "L0A", "format": None}
+    if transpose:
+        attrs["transpose"] = [1.0]
+    for i in range(len(split_size)):
+        for j in range(len(slize_size)):
+            slize_size[j] = input_end[j] - input_start[j]
+        if transpose:
+            slize_size[-1], slize_size[-2] = slize_size[-2], slize_size[-1]
+        # slicesize provided
+        dst = slice_move_instruction(src, "L0A", input_start, slize_size, instr="MOV", attrs=attrs)
+        out.append(dst)
+        input_start[split_axis] = split_size[i]
+        if i < len(split_size) - 1:
+            input_end[split_axis] = split_size[i + 1]
+    return out
+
+
+@name_tensor
+def slice_to_l0A(src, begin, slicesize, transpose=False):
+    strides = [1] * len(src.shape)
+    attrs = {"mem_type": "L0A", "format": None}
+    if transpose:
+        attrs["transpose"] = [1.0]
+    # slicesize provided
+    if transpose:
+        slicesize[-1], slicesize[-2] = slicesize[-2], slicesize[-1]
+    # slicesize provided
+    dst = slice_move_instruction(src, "L0A", begin, slicesize, instr="MOV", attrs=attrs)
+    return dst
+
+
+@name_tensor
+def split_to_l0B(src, split_size, split_axis, transpose=False):
+    input_start = [0] * len(src.shape)
+    input_start[split_axis] = 0
+    input_end = deepcopy(src.shape)
+    input_end[split_axis] = split_size[0]
+    strides = [1] * len(src.shape)
+    slize_size = deepcopy(src.shape)
+    out = []
+    attrs = {"mem_type": "L0B", "format": None}
+    if transpose:
+        attrs["transpose"] = [1.0]
+    for i in range(len(split_size)):
+        for j in range(len(slize_size)):
+            slize_size[j] = input_end[j] - input_start[j]
+        if transpose:
+            slize_size[-1], slize_size[-2] = slize_size[-2], slize_size[-1]
+        # slicesize provided
+        dst = slice_move_instruction(src, "L0B", input_start, slize_size, instr="MOV", attrs=attrs)
+        out.append(dst)
+        input_start[split_axis] = split_size[i]
+        if i < len(split_size) - 1:
+            input_end[split_axis] = split_size[i + 1]
+    return out
+
+
+@name_tensor
+def slice_to_l0B(src, begin, slicesize, transpose=False):
+    strides = [1] * len(src.shape)
+    attrs = {"mem_type": "L0B", "format": None}
+    if transpose:
+        attrs["transpose"] = [1.0]
+    if transpose:
+        slicesize[-1], slicesize[-2] = slicesize[-2], slicesize[-1]
+    dst = slice_move_instruction(src, "L0B", begin, slicesize, instr="MOV", attrs=attrs)
+    return dst
+
+
+@name_tensor
+def concat(src_lst, concat_axis):
+    out_size = deepcopy(src_lst[0].shape)
+    out_size[concat_axis] = 0
+    src = src_lst[0]
+    if concat_axis < 0:
+        concat_axis += len(out_size)
+    if concat_axis >= len(out_size):
+        raise ValueError("Concat axis exceed range.")
+    output_start = []
+    output_end = []
+    strides = []
+    for i in range(len(src_lst)):
+        if len(src_lst[i].shape) != len(out_size):
+            raise ValueError("Concat shape mismatch.")
+        for j in range(len(out_size)):
+            if j != concat_axis:
+                if out_size[j] != src_lst[i].shape[j]:
+                    raise ValueError("Concat shape mismatch.")
+                output_start.append(0)
+                output_end.append(out_size[j])
+            else:
+                output_start.append(out_size[j])
+                out_size[j] += src_lst[i].shape[j]
+                output_end.append(out_size[j])
+            strides.append(1)
+    attrs = {"mem_type": "UB", "format": None, "output_start": output_start,
+             "output_end": output_end, "strides": strides, "out_shape": out_size}
+    out_mem_type = concat_memtype_infer(
+        *(i.mem_type for i in src_lst), attrs=attrs)
+    out_dtype = concat_dtype_infer(*(i.dtype for i in src_lst), attrs=attrs)
+    out_format = concat_format_infer(*(i.format for i in src_lst), attrs=attrs)
+    multi_core = src.multi_core
+    dst = Tensor(out_mem_type, out_dtype, out_size, out_format, multi_core)
+    Concat(src_lst, dst, deepcopy(attrs))()
+    return dst
+
+
+@name_tensor
+def concat_to_l1(src_lst, concat_axis):
+    out_size = deepcopy(src_lst[0].shape)
+    ut_size = deepcopy(src_lst[0].shape)
+    out_size[concat_axis] = 0
+    src = src_lst[0]
+    if concat_axis < 0:
+        concat_axis += len(out_size)
+    if concat_axis >= len(out_size):
+        raise ValueError("Concat axis exceed range.")
+    output_start = []
+    output_end = []
+    strides = []
+    for i in range(len(src_lst)):
+        if len(src_lst[i].shape) != len(out_size):
+            raise ValueError("Concat shape mismatch.")
+        for j in range(len(out_size)):
+            if j != concat_axis:
+                if out_size[j] != src_lst[i].shape[j]:
+                    raise ValueError("Concat shape mismatch.")
+                output_start.append(0)
+                output_end.append(out_size[j])
+            else:
+                output_start.append(out_size[j])
+                out_size[j] += src_lst[i].shape[j]
+                output_end.append(out_size[j])
+            strides.append(1)
+    attrs = {"mem_type": "L1", "format": None, "output_start": output_start,
+             "output_end": output_end, "strides": strides, "out_shape": out_size}
+    out_mem_type = concat_memtype_infer(
+        *(i.mem_type for i in src_lst), attrs=attrs)
+    out_dtype = concat_dtype_infer(
+        *(i.dtype for i in src_lst), attrs=attrs)
+    out_format = concat_format_infer(
+        *(i.format for i in src_lst), attrs=attrs)
+    multi_core = src.multi_core
+    dst = Tensor(out_mem_type, out_dtype, out_size, out_format, multi_core)
+    Concat(src_lst, dst, deepcopy(attrs))()
+    return dst
+
+
+def concat_to_gm(dst, src_lst, concat_axis):
+    out_size = deepcopy(src_lst[0].shape)
+    out_size[concat_axis] = 0
+    src = src_lst[0]
+    if concat_axis < 0:
+        concat_axis += len(out_size)
+    if concat_axis >= len(out_size):
+        raise ValueError("Concat axis exceed range.")
+    output_start = []
+    output_end = []
+    strides = []
+    for i in range(len(src_lst)):
+        if len(src_lst[i].shape) != len(out_size):
+            raise ValueError("Concat shape mismatch.")
+        for j in range(len(out_size)):
+            if j != concat_axis:
+                if out_size[j] != src_lst[i].shape[j]:
+                    raise ValueError("Concat shape mismatch.")
+                output_start.append(0)
+                output_end.append(out_size[j])
+            else:
+                output_start.append(out_size[j])
+                out_size[j] += src_lst[i].shape[j]
+                output_end.append(out_size[j])
+            strides.append(1)
+    attrs = {"mem_type": "GM", "format": None, "output_start": output_start,
+             "output_end": output_end, "strides": strides, "out_shape": out_size}
+    out_mem_type = concat_memtype_infer(
+        *(i.mem_type for i in src_lst), attrs=attrs)
+    out_dtype = concat_dtype_infer(
+        *(i.dtype for i in src_lst), attrs=attrs)
+    out_format = concat_format_infer(
+        *(i.format for i in src_lst), attrs=attrs)
+    multi_core = src.multi_core
+    if out_mem_type != dst.mem_type:
+        raise TypeError("Concat mem_type mismatch.")
+    if out_dtype != dst.dtype:
+        raise TypeError("Concat dtype mismatch.")
+    if out_format != dst.format:
+        raise TypeError("Concat format mismatch.")
+    if multi_core != src.multi_core:
+        raise ValueError("Concat multi_core mismatch.")
+
+    Concat(src_lst, dst, deepcopy(attrs))()
+    return dst
+
+
+def insert_to_gm(dst, src, begin, slicesize, no_autopad=False):
+    strides = [1] * len(src.shape)
+    attrs = {"mem_type": "GM", "format": None, "out_shape": dst.shape}
+    out_mem_type = move_memtype_infer(src.mem_type, attrs)
+    out_dtype = default_dtype_infer(src.dtype)
+    out_format = move_format_infer(src.format, attrs)
+
+    if out_mem_type != dst.mem_type:
+        raise TypeError("insert_to_gm mem_type mismatch.")
+    if out_dtype != dst.dtype:
+        raise TypeError("insert_to_gm dtype mismatch.")
+    if out_format != dst.format:
+        raise TypeError("insert_to_gm format mismatch.")
+    if src.multi_core != dst.multi_core:
+        raise ValueError("insert_to_gm multi_core mismatch.")
+
+    attrs = {"to_slice": [1.0]}
+    if no_autopad:
+        attrs["no_pad"] = [1.0]
+
+    slice_move_instruction(src, "GM", begin, slicesize, attrs, dst)
+    return dst
+
+
+@name_tensor
+def slice(src, begin, slicesize):
+    strides = [1] * len(src.shape)
+    if src.mem_type != "GM":
+        raise TypeError("for slice op, mem_type must be GM")
+    # slicesize provided
+    dst = slice_move_instruction(src, src.mem_type, begin, slicesize, instr="SLICE")
+    return dst

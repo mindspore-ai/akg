@@ -1,0 +1,226 @@
+import os
+import json
+import numpy as np
+from typing import Union, Literal, List, Tuple, Any
+
+{% if framework == "torch" %}
+import torch
+from {{ op_name }}_torch import Model as FrameworkModel, get_inputs, get_init_inputs
+TensorType = torch.Tensor
+{% else %}
+import mindspore as ms
+from mindspore.common import np_dtype
+from {{ op_name }}_mindspore import Model as FrameworkModel, get_inputs, get_init_inputs
+TensorType = ms.Tensor
+
+# MindSpore 到 NumPy 的数据类型映射
+MS_TO_NP_DTYPE_MAP = {
+    ms.float32: np.float32,
+    ms.float16: np.float16,
+    ms.bfloat16: np_dtype.bfloat16,
+    ms.int8: np.int8,
+    ms.int16: np.int16,
+    ms.int32: np.int32,
+    ms.int64: np.int64,
+    ms.uint8: np.uint8,
+    ms.uint16: np.uint16,
+    ms.uint32: np.uint32,
+    ms.uint64: np.uint64,
+    ms.bool_: np.bool_,
+}
+{% endif %}
+
+{% if impl_type == "triton" %}
+from {{ op_name }}_triton import {{ impl_func_name }}
+{% elif impl_type == "swft" %}
+from {{ op_name }}_swft import {{ impl_func_name }}
+{% endif %}
+
+{% if framework == "torch" %}
+def save_tensor(tensor: TensorType, bin_path: str):
+    """将PyTorch张量保存为二进制文件"""
+    tensor_contiguous = tensor.contiguous().cpu()
+    uint8_view = tensor_contiguous.view(torch.uint8)
+    with open(bin_path, 'wb') as f:
+        f.write(uint8_view.numpy().tobytes())
+
+def load_tensor(bin_path: str, expect_tensor: TensorType) -> TensorType:
+    """从二进制文件加载PyTorch张量"""
+    with open(bin_path, 'rb') as f:
+        data = f.read()
+        uint8_tensor = torch.frombuffer(data, dtype=torch.uint8)
+        return uint8_tensor.view(expect_tensor.dtype).reshape(expect_tensor.shape)
+
+{% else %}
+def save_tensor(tensor: TensorType, bin_path: str):
+    """将MindSpore张量保存为二进制文件"""
+    tensor_np = tensor.asnumpy()
+    uint8_view = tensor_np.view(np.uint8)
+    with open(bin_path, 'wb') as f:
+        f.write(uint8_view.tobytes())
+
+def load_tensor(bin_path: str, expect_tensor: TensorType) -> TensorType:
+    """从二进制文件加载MindSpore张量"""
+    with open(bin_path, 'rb') as f:
+        data = f.read()
+        uint8_array = np.frombuffer(data, dtype=np.uint8)
+        numpy_dtype = MS_TO_NP_DTYPE_MAP.get(expect_tensor.dtype)
+        if numpy_dtype is None:
+            raise ValueError(f"不支持的数据类型: {expect_tensor.dtype}")
+        numpy_tensor = uint8_array.view(numpy_dtype).reshape(expect_tensor.shape)
+        return ms.Tensor(numpy_tensor, dtype=expect_tensor.dtype)
+{% endif %}
+
+def gen_binary_data(inputs, outputs, data_dir):
+    """生成二进制数据文件
+    
+    Args:
+        inputs: 输入张量列表
+        outputs: 输出张量列表或单个张量
+        data_dir: 数据保存目录
+    """
+    os.makedirs(data_dir, exist_ok=True)
+    
+    # 创建输入输出目录
+    input_dir = os.path.join(data_dir, "{{ op_name }}", "input")
+    output_dir = os.path.join(data_dir, "{{ op_name }}", "output")
+    os.makedirs(input_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # 保存输入数据
+    for i, input_tensor in enumerate(inputs):
+        if isinstance(input_tensor, TensorType):
+            bin_path = os.path.join(input_dir, f"input{i}.bin")
+            save_tensor(input_tensor, bin_path)
+    
+    # 处理输出数据
+    if not isinstance(outputs, (list, tuple)):
+        outputs = [outputs]  # 将单个张量转换为列表
+    
+    # 保存golden输出
+    for i, output_tensor in enumerate(outputs):
+        if isinstance(output_tensor, TensorType):
+            golden_path = os.path.join(output_dir, f"output{i}_golden.bin")
+            save_tensor(output_tensor, golden_path)
+
+def load_binary_data(data_dir, reference_outputs):
+    """加载二进制数据文件并转换为张量
+    
+    Args:
+        data_dir: 数据目录
+        reference_outputs: 参考输出张量列表或单个张量，用于确定数据类型和形状
+    
+    Returns:
+        加载的张量列表
+    """
+    if not isinstance(reference_outputs, (list, tuple)):
+        reference_outputs = [reference_outputs]
+    
+    output_dir = os.path.join(data_dir, "{{ op_name }}", "output")
+    loaded_outputs = []
+    i = 0
+    while True:
+        output_path = os.path.join(output_dir, f"output{i}_actual.bin")
+        if not os.path.exists(output_path):
+            break
+        if i >= len(reference_outputs):
+            raise RuntimeError(f"输出文件数量({i+1})超过参考输出数量({len(reference_outputs)})")
+        loaded_outputs.append(load_tensor(output_path, reference_outputs[i]))
+        i += 1
+    
+    if not loaded_outputs:
+        raise RuntimeError("未找到任何输出文件")
+    
+    return loaded_outputs
+
+def run_generation_implementations():
+    """运行生成实现"""
+    # 获取运行模式
+    backend = "{{ backend }}"  # 计算设备后端
+    arch = "{{ arch }}"  # 硬件架构
+    impl_type = "{{ impl_type }}"  # 实现方式
+    
+    {% if framework == "torch" %}
+    # PyTorch设备设置
+    if backend == "cuda":
+        os.environ['CUDA_VISIBLE_DEVICES'] = str({{ device_id }})
+        device = torch.device("cuda")
+        # 设置CUDA架构
+        if arch == "a100":
+            torch.cuda.set_device(0)  # 使用第一个a100设备
+        elif arch == "v100":
+            torch.cuda.set_device(0)  # 使用第一个v100设备
+    elif backend == "ascend":
+        os.environ['DEVICE_ID'] = str({{ device_id }})
+        if "ascend910" in arch:
+            device = torch.device("npu")
+        elif "ascend310" in arch:
+            device = torch.device("cpu")
+        else:
+            raise ValueError(f"不支持的ascend架构: {arch}")
+    elif backend == "cpu":
+        device = torch.device("cpu")
+    else:
+        raise ValueError(f"不支持的后端: {backend}")
+    {% else %}
+    # MindSpore设备设置
+    ms.set_seed(0)
+    if backend == "ascend":
+        device = "Ascend"
+        # 设置Ascend架构
+        if arch not in ["ascend910b4", "ascend310p3"]:
+            raise ValueError(f"不支持的ascend架构: {arch}")
+    elif backend == "cpu":
+        device = "CPU"
+    else:
+        raise ValueError(f"MindSpore不支持的后端: {backend}")
+    {% endif %}
+
+    # 获取初始化参数和输入数据
+    init_params = get_init_inputs()
+    framework_model = FrameworkModel(*init_params)
+    
+    {% if framework == "torch" %}
+    framework_model = framework_model.to(device)
+    # 处理输入数据
+    inputs = get_inputs()
+    def process_input(x):
+        if isinstance(x, torch.Tensor):
+            return x.to(device)
+        elif isinstance(x, np.ndarray):
+            return torch.from_numpy(x).to(device)
+        elif isinstance(x, (list, tuple)):
+            return type(x)(process_input(item) for item in x)
+        elif isinstance(x, (int, float, bool, type(None))):
+            return x
+        else:
+            try:
+                return x.to(device)
+            except (AttributeError, TypeError):
+                return x
+    inputs = [process_input(x) for x in inputs]
+    {% else %}
+    inputs = get_inputs()
+    {% endif %}
+    
+    {% if impl_type == "triton" %}
+    # 运行Triton实现
+    for _ in range({{ total_count }}):
+        impl_output = {{ impl_func_name }}(*inputs, *init_params)
+    {% elif impl_type == "swft" %}
+    # 运行SWFT实现
+    data_dir = os.path.dirname(__file__)
+    
+    # 生成二进制数据文件
+    gen_binary_data(inputs, framework_output, data_dir)
+    
+    # 运行SWFT实现
+    for _ in range({{ total_count }}):
+        {{ impl_func_name }}(device_id=int({{ device_id }}))
+    
+    # 加载SWFT输出
+    impl_output = load_binary_data(data_dir, framework_output)
+    {% endif %}
+
+if __name__ == "__main__":
+    run_generation_implementations()

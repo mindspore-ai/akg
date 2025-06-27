@@ -1,0 +1,24 @@
+# 设置默认行为，如果core.autocrlf没有设置，Git会自动处理行结束符
+* text=auto
+
+# 明确指定文本文件使用LF行结束符
+*.py text eol=lf
+*.txt text eol=lf
+*.md text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.json text eol=lf
+*.j2 text eol=lf
+*.sh text eol=lf
+CMakeLists.txt text eol=lf
+*.cmake text eol=lf
+
+# 二进制文件不应该被修改
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.tar.gz binary 
