@@ -44,6 +44,7 @@ def arange_naive(num, dtype="INT32"):
         ub_range = move_scalar_to_ub(i, ub_range, i)
     return ub_range
 
+
 def arange_simd(start, stop, step, simd_width, values):
     size = int(np.ceil((stop - start) / step))
     vec_loops = size // simd_width
@@ -67,6 +68,7 @@ def arange_simd(start, stop, step, simd_width, values):
             values = slice_to_ub(values, [0], [remainder])
             arange_lst.append(values)
     return concat(arange_lst, 0)
+
 
 @name_tensor
 def arange(start, stop=None, step=1, dtype="INT32"):

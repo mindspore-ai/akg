@@ -24,10 +24,11 @@ from swft.utils import *
 def move_to_gm(src, no_autopad=False):
     dst = Tensor("GM", src.dtype, src.shape, src.format, src.multi_core)
     if no_autopad:
-        dst.load(src, {"no_pad" : [1.0]})
+        dst.load(src, {"no_pad": [1.0]})
     else:
         dst.load(src)
     return dst
+
 
 @name_tensor
 def move_to_scalar(src):
@@ -36,6 +37,7 @@ def move_to_scalar(src):
     dst = Scalar(src.dtype)
     dst.load(src)
     return dst
+
 
 @name_tensor
 def move_to_ub(src, dtype=None, relu=False, no_autopad=False):
@@ -132,6 +134,7 @@ def move_to_l0C(src, out_shape, multi_core=True):
     dst = Tensor("L0C", out_dtype, out_size, "NZ", multi_core)
     dst.load(src)
     return dst
+
 
 @name_tensor
 def move_scalar_to_ub(src_s, src_ub, index):

@@ -19,6 +19,7 @@ from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
+
 class TaskPool:
     """
     异步任务池，用于管理和控制异步任务的执行。
@@ -65,7 +66,6 @@ class TaskPool:
         )
         return task
 
-    
     async def run(self, coro_func: Callable, *args: Any, **kwargs: Any) -> Any:
         """
         在任务池中执行协程函数
@@ -89,7 +89,7 @@ class TaskPool:
             except Exception as e:
                 logger.error(f'Task execution failed: {str(e)}')
                 raise
-    
+
     async def wait_all(self) -> List[Any]:
         """
         等待所有任务完成并返回结果

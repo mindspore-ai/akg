@@ -61,6 +61,8 @@ def test_kernel_verifier_ascend910b4(op_name, framework, impl_type, backend):
     assert result, f"验证失败: {error_log}"
 
 # ascend310p3
+
+
 @pytest.mark.level0
 @pytest.mark.parametrize("op_name", ["relu"])
 @pytest.mark.parametrize("framework,impl_type,backend", [
@@ -103,6 +105,8 @@ def test_kernel_verifier_ascend310p3(op_name, framework, impl_type, backend):
     assert result, f"验证失败: {error_log}"
 
 # a100
+
+
 @pytest.mark.level0
 @pytest.mark.parametrize("op_name", ["relu"])
 @pytest.mark.parametrize("framework,impl_type,backend", [
@@ -143,6 +147,8 @@ def test_kernel_verifier_a100(op_name, framework, impl_type, backend):
     assert result, f"验证失败: {error_log}"
 
 # v100
+
+
 @pytest.mark.level0
 @pytest.mark.parametrize("op_name", ["relu"])
 @pytest.mark.parametrize("framework,impl_type,backend", [
@@ -222,31 +228,31 @@ def test_kernel_verifier_profiling_ascend910b4(op_name, framework, impl_type, ba
         parsed_code.triton_code = kernel_code
     else:
         raise ValueError(f"Invalid implementation type: {impl_type}")
-    
+
     # 先进行验证，确保验证通过
     result, error_log = verifier.run(parsed_code)
     assert result, f"验证失败: {error_log}"
-    
+
     # 进行性能分析
     profile_settings = {
         "run_times": 50,
         "warmup_times": 5
     }
     speedup = verifier.run_profile(current_step=0, device_id="0", profile_settings=profile_settings)
-    
+
     # 检查加速比结果
     assert isinstance(speedup, float), f"加速比应该是float类型，实际类型: {type(speedup)}"
     assert speedup >= 0.0, f"加速比应该大于等于0，实际值: {speedup}"
-    
+
     # 检查结果文件是否生成
     profiling_dir = os.path.join(log_dir, op_name, "profiling")
     result_file = os.path.join(profiling_dir, "speed_up_record.txt")
     assert os.path.exists(result_file), f"结果文件不存在: {result_file}"
-    
+
     # 检查文件内容
     with open(result_file, "r", encoding="utf-8") as f:
         content = f.read()
         assert op_name in content, f"结果文件中应包含op_name: {op_name}"
         assert "speedup:" in content, "结果文件中应包含speedup信息"
-    
+
     print(f"✓ Profiling测试通过，加速比: {speedup:.2f}x")

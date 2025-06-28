@@ -78,7 +78,9 @@ def run_command(cmd_list, cmd_msg="untitled_command", env=None):
             result = (returncode == 0)
             cmd_desc = f"'{cmd_msg}'" if cmd_msg else "Untitled"
             if result:
-                logger.info(f"{cmd_desc} executed successfully.") if result else logger.error(f"{cmd_desc} failed with return code {returncode}.")
+                logger.info(f"{cmd_desc} executed successfully.")
+            else:
+                logger.error(f"{cmd_desc} failed with return code {returncode}.")
             return (result, ''.join(error_lines))
 
         # 确保捕获剩余输出 (仅用于非Windows系统)
@@ -96,7 +98,9 @@ def run_command(cmd_list, cmd_msg="untitled_command", env=None):
         result = (returncode == 0)
         cmd_desc = f"'{cmd_msg}'" if cmd_msg else "Untitled"
         if result:
-            logger.info(f"{cmd_desc} executed successfully.") if result else logger.error(f"{cmd_desc} failed with return code {returncode}.")
+            logger.info(f"{cmd_desc} executed successfully.")
+        else:
+            logger.error(f"{cmd_desc} failed with return code {returncode}.")
         return (result, ''.join(error_lines))
 
     except Exception as e:

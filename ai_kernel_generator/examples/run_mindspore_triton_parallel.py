@@ -18,6 +18,7 @@ from ai_kernel_generator.core.async_pool.task_pool import TaskPool
 from ai_kernel_generator.core.async_pool.device_pool import DevicePool
 from ai_kernel_generator.config.config_validator import load_config
 
+
 def get_op_name_and_task_desc():
     pair1 = ('relu', '''
 import mindspore as ms
@@ -80,12 +81,13 @@ def get_init_inputs():
     ''')
     return [pair1, pair2]
 
+
 async def run_mindspore_triton_parallel():
     op_name_and_task_desc = get_op_name_and_task_desc()
 
     task_pool = TaskPool()
     device_pool = DevicePool(["0", "1"])
-    config = load_config() # or load_config("/your-path-to-config/xxx_config.yaml")
+    config = load_config()  # or load_config("/your-path-to-config/xxx_config.yaml")
 
     for i, (op_name, task_desc) in enumerate(op_name_and_task_desc):
         task = Task(
@@ -100,7 +102,7 @@ async def run_mindspore_triton_parallel():
             framework="mindspore"
         )
         task_pool.create_task(task.run)
-    
+
     results = await task_pool.wait_all()
     for op_name, result in results:
         if result:

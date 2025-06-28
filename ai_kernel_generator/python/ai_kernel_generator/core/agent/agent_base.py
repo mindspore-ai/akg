@@ -69,7 +69,7 @@ class AgentBase(ABC):
         """
         template_path = Path(get_prompt_path()) / "generation" / file_path
         template_str = self.read_file(template_path)
-        
+
         prompt_template = PromptTemplate(
             template=template_str,
             template_format=template_format
@@ -114,7 +114,7 @@ class AgentBase(ABC):
                     {"role": "system", "content": ""},  # 空的system prompt
                     {"role": "user", "content": formatted_prompt}
                 ]
-                
+
                 # 直接调用OpenAI API
                 response = await model.chat.completions.create(
                     model=model.model_name,
@@ -123,14 +123,14 @@ class AgentBase(ABC):
                     top_p=model.top_p,
                     stream=False
                 )
-                
+
                 content = response.choices[0].message.content
                 reasoning_content = response.choices[0].message.reasoning_content
-                
+
             else:
                 # 其他模型使用原来的chain方式
                 chain = prompt | model
-                
+
                 if not stream_output_mode:
                     raw_result = await chain.ainvoke(input)
                     content = raw_result.content

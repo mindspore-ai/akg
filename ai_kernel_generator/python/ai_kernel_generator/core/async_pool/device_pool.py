@@ -16,6 +16,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 class DevicePool:
     """
     设备资源池管理类，用于分配和回收Ascend/CUDA设备
@@ -29,7 +30,7 @@ class DevicePool:
         self.available_devices = asyncio.Queue()
         self.condition = asyncio.Condition()
         self.device_list = device_list
-        
+
         # 初始化设备ID队列
         for device_id in device_list:
             self.available_devices.put_nowait(device_id)

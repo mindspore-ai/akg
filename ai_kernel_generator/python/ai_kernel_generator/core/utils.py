@@ -15,7 +15,8 @@
 
 from enum import Enum
 from dataclasses import dataclass
-    
+
+
 class ActionType(Enum):
     DO_DESIGNER = "DoDesigner"
     FIX_DESIGNER = "FixDesigner"
@@ -23,7 +24,8 @@ class ActionType(Enum):
     FIX_CODER = "FixCoder"
     DO_TESTER = "DoTester"
     EXIT = "Exit"
-    
+
+
 @dataclass
 class Record:
     action_type: ActionType = ActionType.DO_DESIGNER
@@ -39,6 +41,7 @@ class ParsedCode:
     aul_code: str = ""
     swft_code: str = ""
     triton_code: str = ""
+
 
 def check_backend_arch(backend: str, arch: str):
     """
@@ -56,6 +59,7 @@ def check_backend_arch(backend: str, arch: str):
     elif backend == "cpu" and arch not in ["x86_64", "aarch64"]:
         raise ValueError("cpu backend only support x86_64 and aarch64")
 
+
 def check_impl_type(impl_type: str):
     """
     验证实现类型
@@ -65,6 +69,7 @@ def check_impl_type(impl_type: str):
     if impl_type not in ["triton", "swft"]:
         raise ValueError("impl_type must be triton or swft")
 
+
 def check_task_type(task_type: str):
     """
     验证任务类型
@@ -73,3 +78,51 @@ def check_task_type(task_type: str):
     """
     if task_type not in ["precision_only", "profile"]:
         raise ValueError("task_type must be precision_only or profile")
+
+
+# 配置依赖关系映射表
+VALID_CONFIGS = {
+    # framework -> backend -> arch -> impl_type
+    "mindspore": {
+        "ascend": {
+            "ascend910b4": ["triton"],
+            "ascend310p3": ["swft"]
+        },
+    },
+    "torch": {
+        "ascend": {
+            "ascend910b4": ["triton"],
+            "ascend310p3": ["swft"]
+        },
+        "cuda": {
+            "a100": ["triton"],
+        },
+    },
+    "numpy": {
+        "ascend": {
+            "ascend310p3": ["swft"]
+        },
+    }
+}
+
+
+def check_task_config(framework: str, backend: str, arch: str, impl_type: str):
+    """
+    统一验证配置参数之间的依赖关系
+    Args:
+        framework: 框架类型
+        backend: 硬件后端名称
+        arch: 硬件架构名称
+        impl_type: 实现类型
+    """
+    if framework not in VALID_CONFIGS:
+        raise ValueError(f"Unsupported framework: {framework}")
+
+    if backend not in VALID_CONFIGS[framework]:
+        raise ValueError(f"Framework {framework} does not support backend: {backend}")
+
+    if arch not in VALID_CONFIGS[framework][backend]:
+        raise ValueError(f"Backend {backend} does not support arch: {arch}")
+
+    if impl_type not in VALID_CONFIGS[framework][backend][arch]:
+        raise ValueError(f"Arch {arch} does not support impl_type: {impl_type}")

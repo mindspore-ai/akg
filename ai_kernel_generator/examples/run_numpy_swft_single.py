@@ -12,18 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from ai_kernel_generator.config.config_validator import load_config
+from ai_kernel_generator.core.async_pool.device_pool import DevicePool
+from ai_kernel_generator.core.async_pool.task_pool import TaskPool
+from ai_kernel_generator.core.task import Task
+import asyncio
 import os
 os.environ['STREAM_OUTPUT_MODE'] = 'on'
-
-import asyncio
-from ai_kernel_generator.core.task import Task
-from ai_kernel_generator.core.async_pool.task_pool import TaskPool
-from ai_kernel_generator.core.async_pool.device_pool import DevicePool
-from ai_kernel_generator.config.config_validator import load_config
 
 
 def get_op_name():
     return 'relu'
+
 
 def get_task_desc():
     return '''
@@ -54,13 +54,14 @@ def get_init_inputs():
     return []  # No special initialization inputs needed 
 '''
 
+
 async def run_numpy_swft_single():
     op_name = get_op_name()
     task_desc = get_task_desc()
 
     task_pool = TaskPool()
     device_pool = DevicePool(["0"])
-    config = load_config() # or load_config("/your-path-to-config/xxx_config.yaml")
+    config = load_config()  # or load_config("/your-path-to-config/xxx_config.yaml")
 
     task = Task(
         op_name=op_name,
@@ -73,7 +74,7 @@ async def run_numpy_swft_single():
         device_pool=device_pool,
         framework="numpy"
     )
-    
+
     task_pool.create_task(task.run)
     results = await task_pool.wait_all()
     for op_name, result in results:

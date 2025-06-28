@@ -16,6 +16,7 @@
 
 from swft.core import Instruction, Scalar, name_tensor
 
+
 @name_tensor
 def get_block_idx():
     block_idx = Scalar("INT32")

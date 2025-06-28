@@ -20,6 +20,7 @@ from copy import deepcopy
 from swft.utils import *
 from .slicedata import concat
 
+
 @name_tensor
 def mmad(src0, src1, src2=None):
     if src2 is None:
@@ -38,6 +39,7 @@ def mmad(src0, src1, src2=None):
     Mmad(src0, src1, out, src2)()
     return out
 
+
 @name_tensor
 def vadd(src0, src1):
     out_mem_type = bino_memtype_infer(src0.mem_type, src1.mem_type)
@@ -48,6 +50,7 @@ def vadd(src0, src1):
     out = Tensor(out_mem_type, out_dtype, out_size, out_format, multi_core)
     Vadd(src0, src1, out)()
     return out
+
 
 @name_tensor
 def vsub(src0, src1):
@@ -60,6 +63,7 @@ def vsub(src0, src1):
     Vsub(src0, src1, out)()
     return out
 
+
 @name_tensor
 def vmul(src0, src1):
     out_mem_type = bino_memtype_infer(src0.mem_type, src1.mem_type)
@@ -71,6 +75,7 @@ def vmul(src0, src1):
     Vmul(src0, src1, out)()
     return out
 
+
 @name_tensor
 def vdiv(src0, src1):
     out_mem_type = bino_memtype_infer(src0.mem_type, src1.mem_type)
@@ -81,6 +86,7 @@ def vdiv(src0, src1):
     out = Tensor(out_mem_type, out_dtype, out_size, out_format, multi_core)
     Vdiv(src0, src1, out)()
     return out
+
 
 @name_tensor
 def vdivs(src, factor):
@@ -97,6 +103,7 @@ def vdivs(src, factor):
     Vmuls(src, factor_reciprocal, out)()
     return out
 
+
 @name_tensor
 def vmax(src0, src1):
     out_mem_type = bino_memtype_infer(src0.mem_type, src1.mem_type)
@@ -107,6 +114,7 @@ def vmax(src0, src1):
     out = Tensor(out_mem_type, out_dtype, out_size, out_format, multi_core)
     Vmax(src0, src1, out)()
     return out
+
 
 @name_tensor
 def vmin(src0, src1):
@@ -119,6 +127,7 @@ def vmin(src0, src1):
     Vmin(src0, src1, out)()
     return out
 
+
 @name_tensor
 def vand(src0, src1):
     out_mem_type = bino_memtype_infer(src0.mem_type, src1.mem_type)
@@ -130,6 +139,7 @@ def vand(src0, src1):
     Vand(src0, src1, out)()
     return out
 
+
 @name_tensor
 def vor(src0, src1):
     out_mem_type = bino_memtype_infer(src0.mem_type, src1.mem_type)
@@ -140,6 +150,7 @@ def vor(src0, src1):
     out = Tensor(out_mem_type, out_dtype, out_size, out_format, multi_core)
     Vor(src0, src1, out)()
     return out
+
 
 @name_tensor
 def vadds(src, factor):
@@ -154,6 +165,7 @@ def vadds(src, factor):
     Vadds(src, factor, out)()
     return out
 
+
 @name_tensor
 def vmuls(src, factor):
     if (not isinstance(factor, Scalar)):
@@ -166,6 +178,7 @@ def vmuls(src, factor):
     out = Tensor(out_mem_type, out_dtype, out_size, out_format, multi_core)
     Vmuls(src, factor, out)()
     return out
+
 
 @name_tensor
 def vsubs(src, factor):
@@ -181,6 +194,7 @@ def vsubs(src, factor):
     Vadds(src, factor, out)()
     return out
 
+
 @name_tensor
 def vmaxs(src, factor):
     if (not isinstance(factor, Scalar)):
@@ -193,6 +207,7 @@ def vmaxs(src, factor):
     out = Tensor(out_mem_type, out_dtype, out_size, out_format, multi_core)
     Vmaxs(src, factor, out)()
     return out
+
 
 @name_tensor
 def vmins(src, factor):
@@ -207,6 +222,7 @@ def vmins(src, factor):
     Vmins(src, factor, out)()
     return out
 
+
 @name_tensor
 def vexp(src):
     out_mem_type = mono_memtype_infer(src.mem_type)
@@ -217,6 +233,7 @@ def vexp(src):
     out = Tensor(out_mem_type, out_dtype, out_size, out_format, multi_core)
     Vexp(src, out)()
     return out
+
 
 @name_tensor
 def vsqrt(src):
@@ -229,6 +246,7 @@ def vsqrt(src):
     Vsqrt(src, out)()
     return out
 
+
 @name_tensor
 def vrelu(src):
     out_mem_type = mono_memtype_infer(src.mem_type)
@@ -239,6 +257,7 @@ def vrelu(src):
     out = Tensor(out_mem_type, out_dtype, out_size, out_format, multi_core)
     Vrelu(src, out)()
     return out
+
 
 @name_tensor
 def vln(src):
@@ -251,6 +270,7 @@ def vln(src):
     Vln(src, out)()
     return out
 
+
 @name_tensor
 def vrec(src):
     out_mem_type = mono_memtype_infer(src.mem_type)
@@ -261,6 +281,7 @@ def vrec(src):
     out = Tensor(out_mem_type, out_dtype, out_size, out_format, multi_core)
     Vrec(src, out)()
     return out
+
 
 @name_tensor
 def vabs(src):
@@ -273,6 +294,7 @@ def vabs(src):
     Vabs(src, out)()
     return out
 
+
 @name_tensor
 def vnot(src):
     out_mem_type = mono_memtype_infer(src.mem_type)
@@ -283,6 +305,7 @@ def vnot(src):
     out = Tensor(out_mem_type, out_dtype, out_size, out_format, multi_core)
     Vnot(src, out)()
     return out
+
 
 @name_tensor
 def vconv_s42f16(src):
@@ -327,6 +350,7 @@ def vconv_s42f16(src):
     ub_out = concat(ub_output_list, 0)
     return ub_out
 
+
 @name_tensor
 def vconv(src, dtype, type=None):
     out_mem_type = mono_memtype_infer(src.mem_type)
@@ -338,7 +362,7 @@ def vconv(src, dtype, type=None):
     if type is None:
         attrs = {"dtype": dtype}
     else:
-        attrs = {"dtype": dtype, type:[1.0]}
+        attrs = {"dtype": dtype, type: [1.0]}
     Vconv(src, out, attrs)()
     return out
 
@@ -357,6 +381,7 @@ def vcmax(src, reduce_axis):
     Vcmax(src, out, attrs={"reduce_axis": [reduce_axis]})()
     return out
 
+
 @name_tensor
 def vcmin(src, reduce_axis):
     if (reduce_axis < 0):
@@ -370,6 +395,7 @@ def vcmin(src, reduce_axis):
     out = Tensor(out_mem_type, out_dtype, out_size, out_format, multi_core)
     Vcmin(src, out, attrs={"reduce_axis": [reduce_axis]})()
     return out
+
 
 @name_tensor
 def vcadd(src, reduce_axis):
@@ -385,6 +411,7 @@ def vcadd(src, reduce_axis):
     Vcadd(src, out, attrs={"reduce_axis": [reduce_axis]})()
     return out
 
+
 @name_tensor
 def vbrcb(src, broadcast_axis, broad_size):
     if (broadcast_axis < 0):
@@ -399,6 +426,7 @@ def vbrcb(src, broadcast_axis, broad_size):
     Vbrcb(src, out, attrs={"broadcast_axis": [
           broadcast_axis], "broad_size": [broad_size]})()
     return out
+
 
 @name_tensor
 def vector_dup(factor, size, multi_core):

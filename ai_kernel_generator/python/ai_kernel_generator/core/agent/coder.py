@@ -43,7 +43,7 @@ class CoderFactory:
             framework (str): 框架类型，支持 "torch" 和 "mindspore"
         Returns:
             Union[SWFTCoder, TritonCoder]: 对应的coder实例
-  
+
         Raises:
             ValueError: 当impl_type不受支持时
         """

@@ -16,12 +16,15 @@ from setuptools import setup, find_packages
 import os
 
 # 读取版本号
+
+
 def _read_version():
     try:
         with open("version.txt", "r", encoding="utf-8") as f:
             return f.read().strip()
     except FileNotFoundError:
         return "0.1.0"
+
 
 # 读取 README.md 作为长描述
 with open("README.md", "r", encoding="utf-8") as fh:
@@ -32,6 +35,8 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
     requirements = [line.strip() for line in fh if line.strip() and not line.startswith("#")]
 
 # 确保包含所有数据文件
+
+
 def package_files(directory):
     paths = []
     for (path, directories, filenames) in os.walk(directory):
@@ -39,6 +44,7 @@ def package_files(directory):
             if filename.endswith(('.j2', '.md', '.txt', '.json', '.yaml')):
                 paths.append(os.path.join('..', path, filename))
     return paths
+
 
 # 获取所有需要包含的数据文件
 extra_files = []
@@ -68,6 +74,7 @@ setup(
             '**/*.txt',
             '**/*.json',
             '**/*.yaml',
+            '**/*.py',
         ],
     },
     include_package_data=True,
@@ -76,4 +83,4 @@ setup(
         "License :: OSI Approved :: Apache Software License",
     ],
     python_requires=">=3.8",
-) 
+)

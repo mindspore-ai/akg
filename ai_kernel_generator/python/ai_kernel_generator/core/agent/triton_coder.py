@@ -24,13 +24,14 @@ from ai_kernel_generator.core.utils import ParsedCode, ActionType
 logger = logging.getLogger(__name__)
 
 
-def get_triton_sample_code() -> str:
+def get_triton_sample_code(framework: str) -> str:
     """读取triton_docs/examples目录下的所有Python代码文件，并将它们拼接在一起
 
     Returns:
         str: 所有Python代码文件内容拼接后的字符串
     """
-    sample_dir = Path(get_project_root()) / "resources" / "docs" / "triton_docs" / "examples"
+    base_dir = Path(get_project_root()) / "resources" / "docs" / "triton_docs" / "examples"
+    sample_dir = base_dir / f"{framework}_examples"
 
     if not sample_dir.exists():
         logger.warning(f"Triton示例目录不存在: {sample_dir}, 返回空字符串")
@@ -57,7 +58,7 @@ class TritonCoder(AgentBase):
         self.model_config = model_config
         self.impl_type = impl_type
         self.framework = framework
-        
+
         agent_name = f"TritonCoder -- [impl_type] {self.impl_type} -- [action] DO_CODER -- [op_name] {self.op_name} -- [framework] {self.framework}"
         super().__init__(agent_name=agent_name)
 
@@ -68,7 +69,7 @@ class TritonCoder(AgentBase):
         # 初始化Triton生成模板
         self.triton_gen_prompt = self.load_template("triton/triton_gen_template.j2")
         self.triton_fix_prompt = self.load_template("triton/triton_fix_template.j2")
-        
+
         # 准备基础文档数据
         self.triton_base_doc = {
             "op_name": self.op_name,
@@ -76,10 +77,10 @@ class TritonCoder(AgentBase):
             "framework": self.framework,
             "triton_api_str": self.load_doc("triton_docs/triton_api.md"),
             "triton_tutorial_str": self.load_doc("triton_docs/triton_tutorial.md"),
-            "triton_sample_code": get_triton_sample_code(),
+            "triton_sample_code": get_triton_sample_code(self.framework),
             "format_instructions": self.format_instructions,
         }
-        
+
         # 初始化输入配置
         self.triton_gen_input = {
             "aul_code": "",
@@ -96,15 +97,15 @@ class TritonCoder(AgentBase):
         """更新代理状态"""
         if action_type != ActionType.DO_CODER:
             self.agent_name = f"TritonCoder -- [impl_type] {self.impl_type} -- [action] {action_type.name} -- [op_name] {self.op_name}"
-            
+
         if aul_code:
             self.aul_code = aul_code
             self.triton_gen_input["aul_code"] = aul_code
             self.triton_fix_input["aul_code"] = aul_code
-            
+
         if triton_code:
             self.triton_fix_input["triton_code"] = triton_code
-            
+
         if suggestions:
             self.triton_fix_input["suggestions"] = suggestions
 
@@ -114,7 +115,7 @@ class TritonCoder(AgentBase):
         Args:
             action_type: 执行的动作类型
             parsed_code: conductor传入的解析代码内容
-            suggestions: 建议
+            suggestions: 基于反馈的改进建议
 
         Returns:
             tuple: (生成内容, 格式化提示词, 推理内容)
@@ -123,7 +124,7 @@ class TritonCoder(AgentBase):
         aul_code = parsed_code.aul_code if parsed_code else ""
         triton_code = parsed_code.triton_code if parsed_code else ""
         self.update(action_type, aul_code, triton_code, suggestions)
-        
+
         # 根据动作类型选择对应的处理逻辑
         if action_type == ActionType.DO_CODER:
             return await self.run_llm(self.triton_gen_prompt, self.triton_gen_input, self.model_config["triton_coder"])

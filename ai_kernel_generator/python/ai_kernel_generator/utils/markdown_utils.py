@@ -20,6 +20,7 @@ from ai_kernel_generator import get_project_root
 
 logger = logging.getLogger(__name__)
 
+
 class SWFTDocsProcessor:
     def __init__(self, api_to_use):
         self.api_to_use = api_to_use
@@ -90,10 +91,10 @@ class SWFTDocsProcessor:
             if not self.api_to_use[file_name]:
                 continue
             md_file = os.path.join(root_dir, "resources", "docs", "swft_docs", f"{file_name}.md")
-            py_file = os.path.join(root_dir, "resources", "docs", "swft_docs", "api", f"{file_name}.py")
+            py_file = os.path.join(root_dir, "resources", "docs", "swft_docs", "api", f"{file_name}.txt")
             with open(md_file, 'r', encoding='utf-8') as f:
                 content = f.read()
-            self.output_lines.append(f"# {file_name}.py\n\n")
+            self.output_lines.append(f"# {file_name}.txt\n\n")
             for function in self.api_to_use[file_name]:
                 func_name = f"## {function}"
                 api_docs = self.add_function_dscb(content, function)
@@ -113,6 +114,7 @@ def generate_available_api(swft_api):
     processor = SWFTDocsProcessor(swft_api)
     result = processor.run()
     return result
+
 
 def extract_function_details():
     swft_doc_files = [
@@ -134,7 +136,6 @@ def extract_function_details():
             logger.error(f"Failed to load AUL doc {doc_file}: {e}")
             continue
 
-
     # 匹配二级标题和对应的函数说明
     pattern = r'^##\s+(.+?)\n.*?^###\s+函数说明\s*?\n([\s\S]*?)(?=^##|\Z)'
     matches = re.findall(pattern, combined_spec, flags=re.MULTILINE | re.DOTALL)
@@ -145,5 +146,5 @@ def extract_function_details():
         cleaned_desc = re.sub(r'```.*?\n', '', desc, flags=re.DOTALL).strip()
         cleaned_desc = re.sub(r'\n{2,}', '\n', cleaned_desc)
         result[title.strip()] = cleaned_desc
-        
+
     return result

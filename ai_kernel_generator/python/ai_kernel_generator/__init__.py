@@ -38,6 +38,7 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+
 def get_project_root():
     """获取项目根目录的绝对路径
 

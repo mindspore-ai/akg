@@ -161,7 +161,6 @@ class SWFTCoder(AgentBase):
         if update_list:
             logger.debug("SWFTCoder update success: [%s] changed", ", ".join(update_list))
 
-
     async def run(self, action_type: ActionType, parsed_code: ParsedCode, suggestions: str) -> Tuple[str, str, str]:
         """执行SWFT代码生成或修复
 

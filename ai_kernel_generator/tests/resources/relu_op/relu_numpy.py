@@ -1,5 +1,6 @@
 import numpy as np
 
+
 class Model:
     """
     NumPy实现的模型类
@@ -22,4 +23,4 @@ def get_inputs():
 
 
 def get_init_inputs():
-    return []  # No special initialization inputs needed 
+    return []  # No special initialization inputs needed

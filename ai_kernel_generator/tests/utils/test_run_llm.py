@@ -19,7 +19,7 @@ from ai_kernel_generator.core.agent.agent_base import AgentBase
 
 class TestAgent(AgentBase):
     """测试用的Agent类，继承自AgentBase"""
-    
+
     def __init__(self):
         super().__init__(agent_name="TestAgent")
 
@@ -28,24 +28,24 @@ async def test_simple_run_llm():
     """简单的VLLM测试"""
     # 创建测试Agent
     agent = TestAgent()
-    
+
     # 自定义prompt string
     prompt_string = "你好，请简单介绍一下自己"
-    
+
     # 创建提示模板
     prompt = PromptTemplate.from_template(prompt_string)
-    
+
     # 准备输入
     input_data = {}
-    
+
     # 指定model name
     model_name = "vllm_deepseek_r1_default"
-    
+
     # 跑run_llm
     content, formatted_prompt, reasoning_content = await agent.run_llm(
         prompt, input_data, model_name
     )
-    
+
     # 输出结果
     print(f"\n=== run_llm测试 ===")
     print(f"Prompt: {formatted_prompt}")
@@ -57,4 +57,4 @@ async def test_simple_run_llm():
 
 
 if __name__ == "__main__":
-    asyncio.run(test_simple_run_llm()) 
+    asyncio.run(test_simple_run_llm())

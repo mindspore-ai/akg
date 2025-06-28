@@ -64,7 +64,7 @@ def relu_triton_torch(x):
     x = x.contiguous()
     n_elements = x.numel()
     output = torch.empty_like(x, device=x.device)
-    
+
     BLOCK_SIZE = 1024
     grid = (triton.cdiv(n_elements, BLOCK_SIZE),)
 

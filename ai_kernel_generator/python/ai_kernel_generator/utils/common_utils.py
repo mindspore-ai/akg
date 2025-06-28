@@ -28,13 +28,6 @@ from langchain.output_parsers import PydanticOutputParser
 logger = logging.getLogger(__name__)
 
 
-class ProcessStage(Enum):
-    """Enum class representing different stages in the kernel generation process."""
-    DESIGNER = auto()
-    CODER = auto()
-    TESTER = auto()
-
-
 @dataclass
 class PyAikgStatus:
     success: bool = False
@@ -67,14 +60,16 @@ def get_prompt_path():
     prompt_dir = os.path.join(root_dir, "ai_kernel_generator/resources/prompts/")
     return prompt_dir
 
+
 def load_yaml(yaml_path: str):
     if not os.path.exists(yaml_path):
         raise FileNotFoundError(f"YAML file not found: {yaml_path}")
-    
+
     # 加载配置
     with open(yaml_path, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
     return config
+
 
 def create_log_dir(prefix_name: str = "test_log"):
     """
@@ -94,7 +89,7 @@ class ParserFactory:
     """
     解析器工厂类，提供常用的解析器创建和获取功能
     """
-    
+
     # 类级别的预定义解析器缓存
     _code_parser = None
     _check_parser = None
@@ -105,15 +100,15 @@ class ParserFactory:
         """获取代码解析器"""
         if cls._code_parser is None:
             cls._code_parser = cls.create_output_parser(
-                "CodeBlock", 
+                "CodeBlock",
                 {
                     'code': (str, ...),
                     'description': (str, ...)
                 }
             )
         return cls._code_parser
-    
-    @classmethod  
+
+    @classmethod
     def get_check_parser(cls):
         """获取分析解析器"""
         if cls._check_parser is None:
@@ -126,8 +121,8 @@ class ParserFactory:
                 }
             )
         return cls._check_parser
-    
-    @classmethod  
+
+    @classmethod
     def get_api_parser(cls):
         """获取API解析器"""
         if cls._api_parser is None:
@@ -145,11 +140,11 @@ class ParserFactory:
     @staticmethod
     def create_output_parser(parser_name, fields):
         """创建输出解析器
-        
+
         Args:
             parser_name: 模型类名
             fields: 字段定义字典，格式为 {字段名: (类型, 默认值或...)}
-            
+
         Returns:
             配置好的PydanticOutputParser实例
         """
@@ -159,21 +154,21 @@ class ParserFactory:
     @staticmethod
     def robust_parse(content: str, parser: PydanticOutputParser):
         """稳健的解析方法，支持多种解析策略
-        
+
         Args:
             content: 待解析的内容
             parser: PydanticOutputParser实例
-            
+
         Returns:
             解析后的对象
         """
-        
+
         # 策略1: 直接解析（适用于标准格式）
         try:
             return parser.parse(content)
         except Exception:
             logger.debug("直接解析失败，尝试提取JSON块")
-        
+
         # 策略2: 多位置JSON提取
         try:
             extracted_json = ParserFactory._extract_json_comprehensive(content)
@@ -181,7 +176,7 @@ class ParserFactory:
                 return parser.parse(extracted_json)
         except Exception:
             logger.debug("JSON提取解析失败")
-        
+
         # 所有策略都失败
         logger.warning("无法从内容中提取有效的JSON格式")
         return ""
@@ -189,12 +184,12 @@ class ParserFactory:
     @staticmethod
     def _extract_json_comprehensive(text: str) -> str:
         """全面的JSON提取，支持检测各个位置的JSON"""
-        
+
         # 方法1: 优先查找末尾的完整JSON块（最常见）
         json_candidate = ParserFactory._extract_final_json(text)
         if json_candidate:
             return json_candidate
-        
+
         # 方法2: 查找```json代码块
         json_blocks = re.findall(r'```json\s*(.*?)\s*```', text, re.DOTALL)
         for block in reversed(json_blocks):  # 从后往前尝试
@@ -203,11 +198,11 @@ class ParserFactory:
                 return block.strip()
             except json.JSONDecodeError:
                 continue
-        
+
         # 方法3: 查找所有花括号包围的内容
         json_pattern = r'\{(?:[^{}]|(?:\{[^{}]*\}))*\}'
         matches = re.findall(json_pattern, text, re.DOTALL)
-        
+
         # 优先尝试较后面的匹配（通常更完整）
         for match in reversed(matches):
             try:
@@ -217,7 +212,7 @@ class ParserFactory:
                     return match
             except json.JSONDecodeError:
                 continue
-        
+
         # 方法4: 查找通用代码块中的JSON
         code_blocks = re.findall(r'```\s*(.*?)\s*```', text, re.DOTALL)
         for block in reversed(code_blocks):
@@ -228,7 +223,7 @@ class ParserFactory:
                     return block
                 except json.JSONDecodeError:
                     continue
-        
+
         return None
 
     @staticmethod
@@ -238,11 +233,11 @@ class ParserFactory:
         last_brace_start = text.rfind('{')
         if last_brace_start == -1:
             return None
-            
+
         # 从最后一个{开始，向后匹配完整的JSON
         brace_count = 0
         json_end = -1
-        
+
         for i in range(last_brace_start, len(text)):
             if text[i] == '{':
                 brace_count += 1
@@ -251,7 +246,7 @@ class ParserFactory:
                 if brace_count == 0:
                     json_end = i + 1
                     break
-        
+
         if json_end > 0:
             json_candidate = text[last_brace_start:json_end]
             try:
@@ -260,5 +255,5 @@ class ParserFactory:
                 return json_candidate
             except json.JSONDecodeError:
                 pass
-        
+
         return None

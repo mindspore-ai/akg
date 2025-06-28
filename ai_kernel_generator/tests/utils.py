@@ -43,7 +43,7 @@ def get_benchmark_name(task_index_list, framework="mindspore"):
     task_path = os.path.join(os.path.dirname(commom_path), 'benchmark', 'kernelbench', framework)
     task_prefix_list = [f"{task_index}_" for task_index in task_index_list]
     matched_folders = []
-    
+
     if os.path.exists(task_path):
         for file in os.listdir(task_path):
             if any(file.startswith(task_prefix) for task_prefix in task_prefix_list):
@@ -54,4 +54,3 @@ def get_benchmark_name(task_index_list, framework="mindspore"):
 
 def remove_alnum_from_benchmark_name(benchmark_name):
     return re.sub(r'^\d+_', '', benchmark_name).rstrip('_') + "_op"
-

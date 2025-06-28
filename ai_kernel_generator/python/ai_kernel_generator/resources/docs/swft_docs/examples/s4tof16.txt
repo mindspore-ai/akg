@@ -39,10 +39,12 @@ def quant(y_fp16):
     y_int8 = (y_fp / scale).astype(np.int8).reshape((EXP, K, N))
     return y_int8, scale
 
+
 def i8toi4(y_int8):
     input_x = ((y_int8 + 16) % 16).astype(np.uint8).reshape(-1)
     input_y = (input_x[::2] << 4) | input_x[1::2]
     return input_y
+
 
 def i4toi8(y_int8):
     input_x_0 = ((y_int8 & 0xf0) >> 4).astype(np.uint16)
@@ -53,6 +55,7 @@ def i4toi8(y_int8):
     input_y_2 = ((input_x[2::4] << 4) | (input_x[3::4])).astype(np.uint8)
     input_y = np.stack([input_y_2, input_y_1]).transpose(1, 0).reshape(-1)
     return input_y
+
 
 def gen_data():
     y_fp16 = np.random.uniform(-0.3, 0.3, [8*8192]).astype(np.float16)
@@ -81,5 +84,6 @@ if __name__ == '__main__':
     compile_kernel(f"./{OP_NAME}/{OP_NAME}.cce", OP_NAME)
     exec_kernel(OP_NAME, locals(), inputs=['gm_x'], outputs=['gm_out'])
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    return_code = os.system(f'python3 {script_dir}/../verify_result.py ./{OP_NAME}/output/gm_out_actual.bin ./{OP_NAME}/output/gm_out_golden.bin')
+    return_code = os.system(
+        f'python3 {script_dir}/../verify_result.py ./{OP_NAME}/output/gm_out_actual.bin ./{OP_NAME}/output/gm_out_golden.bin')
     sys.exit(return_code >> 8)

@@ -18,6 +18,7 @@ from swft.core import Tensor, name_tensor
 from swft.intrinsic import *
 from swft.utils import *
 
+
 @name_tensor
 def vgather(src, indices, axis=0, batchdims=0):
     attrs = {"mem_type": "UB", "format": None, "axis": [axis], "batchdims": [batchdims]}

@@ -19,22 +19,25 @@ from swft.intrinsic import *
 from copy import deepcopy
 from swft.utils import *
 
+
 @name_tensor
 def vconcat(src0, src1=None):
     shape = deepcopy(src0.shape)
     shape[-1] = shape[-1] * 8
     dst = Tensor("UB", src0.dtype, shape, src0.format, src0.multi_core)
     if (src1 is None):
-        Instruction("VCONCAT", (src0, ), (dst, ), {"type" : [4]})()
+        Instruction("VCONCAT", (src0, ), (dst, ), {"type": [4]})()
         return dst
-    Instruction("VCONCAT", (src0, src1, ), (dst, ), {"type" : [4, 5]})()
+    Instruction("VCONCAT", (src0, src1, ), (dst, ), {"type": [4, 5]})()
     return dst
+
 
 @name_tensor
 def vsort16(src0):
     dst = Tensor("UB", src0.dtype, src0.shape, src0.format, src0.multi_core)
     Instruction("VBITSORT16", (src0, ), (dst, ))()
     return dst
+
 
 @name_tensor
 def vmrgsort4(src0, src1=None, src2=None, src3=None):
@@ -58,12 +61,13 @@ def vmrgsort4(src0, src1=None, src2=None, src3=None):
     Instruction("VMRGSORT4", (src0, src1, src2, src3), (dst, ), {"config": [15]})()
     return dst
 
+
 @name_tensor
 def vextract(src):
     shape = deepcopy(src.shape)
     shape[-1] = shape[-1] // 8
     dst0 = Tensor("UB", src.dtype, shape, src.format, src.multi_core)
-    Instruction("VEXTRACT", (src, ), (dst0, ), {"type" : [4]})()
+    Instruction("VEXTRACT", (src, ), (dst0, ), {"type": [4]})()
     dst1 = Tensor("UB", src.dtype, shape, src.format, src.multi_core)
-    Instruction("VEXTRACT", (src, ), (dst1, ), {"type" : [5]})()
+    Instruction("VEXTRACT", (src, ), (dst1, ), {"type": [5]})()
     return dst0, dst1

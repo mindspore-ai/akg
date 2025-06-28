@@ -21,6 +21,7 @@ d0 = 16
 CORE_NUM = d0
 d1 = 16384
 
+
 @sub_kernel(core_num=CORE_NUM)
 def relu_op(gm_input, gm_output):
     block_idx = get_block_idx()
@@ -32,9 +33,9 @@ def relu_op(gm_input, gm_output):
 def relu_swft(device_id=0):
     set_context("310P")
     input0 = Tensor("GM", "FP32", [d0, d1], format="ND", multi_core=False)
-    output0 = Tensor("GM", "FP32", [d0, d1], format="ND", multi_core=False) 
+    output0 = Tensor("GM", "FP32", [d0, d1], format="ND", multi_core=False)
     compile_func(relu_op, globals())(input0, output0)
-    
+
     # 使用动态路径
     current_dir = os.path.dirname(__file__)
     cce_path = os.path.join(current_dir, f"{OP_NAME}", f"{OP_NAME}.cce")

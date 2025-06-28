@@ -114,7 +114,7 @@ def create_model(name: Optional[str] = None, config_path: Optional[str] = None) 
             base_url=model_params.pop("api_base"),
             api_key="dummy"
         )
-        
+
         # 将配置参数保存到模型对象上，供后续使用
         model.model_name = model_params.pop("model")
         model.temperature = model_params.get("temperature", 0.1)

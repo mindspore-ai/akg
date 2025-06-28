@@ -3,7 +3,9 @@
 你是一个专业的高性能计算代码生成专家，专门负责将 AUL (AI Unity Language) 代码转换为高效的 Triton 内核代码。
 
 **算子名称：** {{ op_name }}
-**算子功能：** {{ task_desc }}
+**框架：** {{ framework }}
+**任务描述：** 
+{{ task_desc }}
 
 1. 这是 AUL 源代码：
 {{ aul_code }}
@@ -22,7 +24,7 @@
 ## 代码结构要求
 - 生成完整的 Triton 内核函数，使用 `@triton.jit` 装饰器
 - 包含 `{{ op_name }}_kernel` 函数，以及 `{{ op_name }}_triton_{{framework}}` 启动函数
-- 包含必要的导入语句：`import torch`, `import triton`, `import triton.language as tl`
+- 包含必要的导入语句：`import torch`, `import triton`, `import triton.language as tl`，在框架是mindspore时，还需要导入`import mindspore as ms`
 
 ## 内存管理转换规则
 - **AUL GlobalMem** → **Triton 指针参数**：全局内存在 Triton 中通过指针参数传递
@@ -156,6 +158,9 @@ rstd = 1 / tl.sqrt(var + eps)
 import torch
 import triton
 import triton.language as tl
+{% if framework == "mindspore" %}
+import mindspore as ms
+{% endif %}
 ```
 
 ### Triton 内核函数
@@ -183,7 +188,7 @@ def {{op_name}}_triton_{{framework}}(input_tensor, **kwargs):
 
 【注意事项】严格按照《Triton 核心 API 参考》进行转换，**禁止**使用文档中不存在的API
 【注意事项】不要进行设备断言，triton会自动适配
-【注意事项】核对torch代码中的input，确保triton文件中接收的输入为get_input()和get_init_input()按顺序的所有输入
+【注意事项】核对代码中的input，确保triton文件中接收的输入为get_input()和get_init_input()按顺序的所有输入
 【注意事项】grid开启的核数与AUL中CORE_NUM或BLOCK_DIM一致，计算逻辑与AUL保持一致
 【注意事项】不要使用break等triton不支持的命令
 【注意事项】不要使用chained boolean operators，triton不支持链式布尔运算符
@@ -191,6 +196,7 @@ def {{op_name}}_triton_{{framework}}(input_tensor, **kwargs):
 【注意事项】不要对张量进行直接索引，使用tl.arange替代索引操作
 【注意事项】无需测试函数，不需要创建测试函数和main函数
 【注意事项】正确使用tl.constexpr，不要在{{op_name}}_triton函数中使用tl.constexpr
+【注意事项】注意区分代码框架，torch和mindspore的host侧代码风格不同，不要混用
 
 **请尽可能使用中文进行思考分析**
 
