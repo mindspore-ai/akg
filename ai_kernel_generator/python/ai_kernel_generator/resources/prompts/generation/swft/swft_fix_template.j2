@@ -1,0 +1,122 @@
+你是一个 SWFT (Ascend后端编译器) 代码验证修复专家，现在需要你修复一个算子的SWFT代码，这个算子是由AUL（AI Unity Language）转换而来。请仔细检查以下代码是否符合规范，并修复发现的问题。
+
+1. 原始任务描述：
+
+{{ task_desc }}
+
+
+2. AUL代码：
+
+{{ aul_code }}
+
+
+3. 待修复的 SWFT 代码：
+
+{{ swft_code }}
+
+
+4. SWFT支持的API
+- 装饰器
+@sub_kernel(core_num=...), core_num表示核数
+
+- Host侧定义, Tensor(mem_type, dtype=None, size=None, format=None, multi_core=False)
+  - mem_type: "GM"
+  - dtype: "FP16", "FP32", "INT32", "INT8"等，从原始任务以及AUL代码的输入输出分析
+  - format: "ND", "NZ", "NCHW", "NHWC", "NC0HWC1", "FM", "FT"
+  - size: [s0, s1, s2...]，需要明确给出size大小，从原始任务或者AUL的输入输出分析
+  - multi_core: 永远为False，不需要考虑
+
+- 当前任务SWFT支持的API列表(MarkDown格式)
+{{ supported_api }}
+
+
+5. AUL到SWFT转换指南
+  - AUL中的`U.vbinary_op, U.vunary_op, U.vreduce_op, U.matmul_op, U.vectorscalar_op`等转换为SWFT的计算API
+  - AUL中的`U.data_copy`需要转换为SWFT的数据移动API
+  - AUL中的`U.get_core_idx()`转换为SWFT的get_block_idx()
+  - AUL中的`U.Pipelined`循环结构需要转换为for循环
+  - AUL中的`U.Tile`和`U.FilledTile`不需要翻译，直接删除，直接删除，直接删除
+
+
+6. 生成的SWFT代码模板如下：
+```
+from swft.core import *    #必须导入
+from swft.api import *     #必须导入
+import os                  #必须导入
+OP_NAME = "{{ op_name }}"
+
+@sub_kernel(core_num=...)
+def {{ op_name }}_impl(input0, ..., output0):
+    ...
+
+def {{ op_name }}_swft(device_id=0):
+    set_context("310P")
+    input0 = Tensor("GM", ...)  #必须命名为input+索引号
+    output0 = Tensor("GM", ...) #必须命名为output+索引号
+    ...
+
+    compile_func({{ op_name }}_impl, globals())(input0, output0)
+    current_dir = os.path.dirname(__file__)
+    cce_path = os.path.join(current_dir, f"{OP_NAME}", f"{OP_NAME}.cce")
+    compile_kernel(cce_path, OP_NAME)
+    exec_kernel(OP_NAME, locals(), inputs=['input0'], outputs=['output0'], device_id=device_id)
+
+def {{ op_name }}_swft_{{framework}}(device_id=0):
+    {{ op_name }}_swft(device_id)
+```
+
+
+7. SWFT错误样例代码参考：
+
+{{ error_sample }}
+
+
+8. 请检查以下方面并进行修复：
+
+## 语法和API正确性检查
+- 确保所有使用的计算和搬移API都是SWFT支持的API
+- 检查是否有Python语法错误
+- 确保生成的代码严格按照SWFT模板
+- 确保正确导入 `from swft.core import *`、`from swft.api import *`、`import os`
+
+## SWFT 特定限制检查
+- 如果输入Tensor是标量，必须表示为常量，不能以入参的形式给出
+- for循环中使用range中的参数不要使用Scalar对象，只能是integer
+- 不要重复定义变量，变量只能被赋值一次
+- 当使用vector_dup时，需要将factor转换成Scalar
+- 如果双目运算允许Tensor和Scalar进行运算，则删去vector_dup操作
+- slice_to_ub不要出现dst参数
+- slice_to_ub和insert_to_gm要求入参begin和slicesize的数据维度必须和输入Tensor的数据维度一致
+- move_to_scalar入参的Tensor的shape必须为[1]
+- SWFT中计算tanh的API是tanh，而**不是vtanh**
+- 输入输出命名必须为input/output + 索引，如input0, output1等
+
+## 内存访问和边界检查
+- 检查指针偏移计算是否正确
+- 确保所有内存访问都有适当的掩码防止越界
+- 验证多维数组的步幅计算是否正确
+- 确保访问模式与数据布局匹配
+
+## 数值计算正确性检查
+- 验证计算逻辑是否与 AUL 源代码一致
+- 检查数据类型转换和一致性
+
+{% if suggestions %}
+9. 我们获得了一些关于修复的建议，但是这些建议不一定是正确的，请你检查建议是否正确，如果正确，那就参考来进行修复，如果错误，那就忽略这些建议，并按照自己的想法进行修复。建议如下：
+{{ suggestions }}
+
+{% endif %}
+
+【注意事项】保证数值正确性，确保修复不会引入数值错误
+【注意事项】维护代码可读性，修复后的代码应该清晰易懂
+【注意事项】严格按照SWFT代码模板请输出修复后的完整代码
+
+**请尽可能使用中文进行思考分析**
+
+**请按照以下格式输出你的结果，仅返回json格式，不要包含任何解释或额外内容：**
+
+{{ format_instructions }}
+
+**请按照以下格式输出你的结果，仅返回json格式，不要包含任何解释或额外内容：**
+
+{{ format_instructions }}

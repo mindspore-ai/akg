@@ -1,0 +1,131 @@
+#!/usr/bin/env python3
+# coding: utf-8
+# Copyright 2025 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+import numpy as np
+import os
+import sys
+from swft.core import *
+from swft.api import *
+
+OP_NAME = 'dyn_quant'
+os.system(f"mkdir -p {OP_NAME}")
+os.system(f"mkdir -p {OP_NAME}/input")
+os.system(f"mkdir -p {OP_NAME}/output")
+
+MAX_TOKENS = 4096
+K = 4608
+Scale_Fac = 0.00787402
+CORE_NUM = 8
+TOKEN_LEN = MAX_TOKENS
+# Numpy Test
+# ===============================================================================
+
+
+def gen_golden_data():
+    """
+    实现 scaleOut = row_max(abs(x)) / 127 和 yOut = round(x / scaleOut)
+    :param x: 输入的 numpy 数组
+    :return: yOut 计算结果
+    """
+    # 计算每行元素绝对值的最大值\
+    x = np.random.uniform(-1, 1, [TOKEN_LEN, K]).astype(np.float16)
+    row_max_abs = np.max(np.abs(x), axis=-1, keepdims=True)
+    # 计算 scaleOut
+    scaleOut = row_max_abs.astype(np.float32) / 127
+    # 计算 yOut
+    new_x = x.astype(np.float32) / scaleOut
+    yOut = np.round(new_x).astype(np.int8)
+    x.tofile(f"./{OP_NAME}/input/gm_x.bin")
+    scaleOut.tofile(f"./{OP_NAME}/output/gm_scale_golden.bin")
+    yOut.tofile(f"./{OP_NAME}/output/gm_y_golden.bin")
+    token_len = np.array([TOKEN_LEN], dtype=np.int32)
+    token_len.tofile(f"./{OP_NAME}/input/token_len.bin")
+
+# OP Impl
+# ===============================================================================
+
+
+@sub_kernel(core_num=CORE_NUM)
+def dyn_quant_7168(gm_x, gm_scale, gm_y, token_len):
+    block_idx = get_block_idx()
+    percore_size = ((token_len + CORE_NUM - 1) // CORE_NUM).copy()
+    percore_size = (percore_size + 7) // 8 * 8
+    token_num = Scalar("INT32", 0)
+    if (block_idx + 1) * percore_size < token_len:
+        token_num.load(percore_size)
+    elif block_idx * percore_size < token_len:
+        token_num.load(token_len - block_idx * percore_size)
+    else:
+        token_num.load(Scalar("INT32", 0))
+    for i in dynamic_loop(token_num // 8):
+        ub_scale = vector_dup(Scalar("FP32", 0), [8], False)
+        for j in dynamic_loop(8):
+            ub_x = slice_to_ub(
+                gm_x, [block_idx * percore_size + i * 8 + j, 0], [1, K])
+            ub_x_fp32 = vconv(ub_x, "FP32")
+            ub_abs = vabs(ub_x_fp32)
+            ub_max = vcmax(ub_abs, reduce_axis=-1)
+            scale_max = move_to_scalar(ub_max)
+            scale = scale_max / Scalar("FP32", 127.0)
+            ub_scale = move_scalar_to_ub(scale, ub_scale, j)
+            rec_scale = Scalar("FP32", 127.0) / scale_max
+            ub_divx = vmuls(ub_x_fp32, rec_scale)
+            ub_divx_fp16 = vconv(ub_divx, "FP16", "o")
+            ub_quant_x = vconv(ub_divx_fp16, "INT8")
+            insert_to_gm(gm_y, ub_quant_x, [
+                         block_idx * percore_size + i * 8 + j, 0], [1, K])
+        insert_to_gm(gm_scale, ub_scale, [
+                     block_idx * percore_size + i * 8], [8])
+
+    res_num = token_num % 8
+    if (res_num > 0):
+        ub_scale = vector_dup(Scalar("FP32", 0), [8], False)
+        for j in dynamic_loop(res_num):
+            ub_x = slice_to_ub(
+                gm_x, [block_idx * percore_size + token_num - res_num + j, 0], [1, K])
+            ub_x_fp32 = vconv(ub_x, "FP32")
+            ub_abs = vabs(ub_x_fp32)
+            ub_max = vcmax(ub_abs, reduce_axis=-1)
+            scale_max = move_to_scalar(ub_max)
+            scale = scale_max * Scale_Fac
+            ub_scale = move_scalar_to_ub(scale, ub_scale, j)
+            rec_scale = Scalar("FP32", 1.0) / scale
+            ub_divx = vmuls(ub_x_fp32, rec_scale)
+            ub_divx_fp16 = vconv(ub_divx, "FP16")
+            ub_quant_x = vconv(ub_divx_fp16, "INT8")
+            insert_to_gm(gm_y, ub_quant_x, [
+                         block_idx * percore_size + token_num - res_num + j, 0], [1, K])
+        insert_to_gm(gm_scale, ub_scale, [
+                     block_idx * percore_size + token_num - res_num], [8])
+
+
+if __name__ == "__main__":
+    set_context("310P")
+    gen_golden_data()
+    gm_x = Tensor("GM", "FP16", [MAX_TOKENS, K], format="ND", multi_core=False)
+    gm_y = Tensor("GM", "INT8", [MAX_TOKENS, K], format="ND", multi_core=False)
+    gm_scale = Tensor("GM", "FP32", [MAX_TOKENS],
+                      format="ND", multi_core=False)
+    token_len = Scalar("INT32")
+    compile_func(dyn_quant_7168, globals())(gm_x, gm_scale, gm_y, token_len)
+    compile_kernel(f"./{OP_NAME}/{OP_NAME}.cce", OP_NAME, hard_sync=True)
+    exec_kernel(OP_NAME, locals(), inputs=['gm_x', 'token_len'], outputs=['gm_y', 'gm_scale'])
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    return_code_1 = os.system(
+        f'python3 {script_dir}/../verify_result.py ./{OP_NAME}/output/gm_scale_actual.bin ./{OP_NAME}/output/gm_scale_golden.bin float32 1e-4 1e-4 4e-3')
+    return_code_2 = os.system(
+        f'python3 {script_dir}/../verify_result.py ./{OP_NAME}/output/gm_y_actual.bin ./{OP_NAME}/output/gm_y_golden.bin int8 1e-4 1e-4 4e-4')
+    sys.exit(return_code_1 >> 8 or return_code_2 >> 8)

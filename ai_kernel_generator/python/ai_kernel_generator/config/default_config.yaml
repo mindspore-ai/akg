@@ -1,0 +1,19 @@
+# 模型预设配置
+agent_model_config:
+  aul_designer: deepseek_r1_default
+  aul_designer_fix: deepseek_r1_default
+  swft_coder: deepseek_r1_default
+  swft_coder_api: deepseek_r1_default
+  swft_coder_fix: deepseek_v3_default
+  triton_coder: deepseek_r1_default
+  triton_coder_fix: deepseek_r1_default
+  conductor_check: deepseek_v3_default
+  conductor_analyze: deepseek_r1_default
+
+# 日志配置
+log_dir: "~/aikg_logs"
+
+# 性能分析配置
+profile_settings:
+  run_times: 50
+  warmup_times: 5
