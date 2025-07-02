@@ -2,31 +2,42 @@
 ## memory_system
 ├── gm (GlobalMemory/DeviceMemory):
 |    └── size: 40GB
-├── Buffers(per npu_core): // 整个芯片有8个物理npu_core
-|    └── vector_core:
-|         ├── 数量: 1块 // 每个npu_core有1个vector_core，所以一共有8个vector_core
-|         └── vector_buffer: // 一个vector_core独享一块vector_buffer
-|              ├── size: 256KB
-|              ├── from_data: [\"gm\"]
-|              ├── to_data: [\"gm\"]
-|              └── data_align: 256B
+├── L2Cache: // 全部核共用
+|    └── size: 16MB
+├── Buffers(per ai_core) x 8: // 整个芯片有8个ai_core
+|    ├── vector_core:
+|    |    ├── 数量: 1块 // 每个ai_core有1个vector_core，所以一共有8个vector_core
+|    |    └── unified_buffer:
+|    |         ├── size: 256KB
+|    |         └── data_align: 256B
+|    └── cube_core:
+|         ├── 数量: 1块 // 每个ai_core有1个cube_core，所以一共有8个cube_core
+|         ├── L1_buffer:
+|         |    ├── size: 1MB
+|         |    └── data_align: 256B
+|         └── L0_buffers: // matmul计算专用缓冲区
+|              ├── L0A_buffer: // 存储矩阵A的数据
+|              |    ├── size: 64KB
+|              |    ├── 用途: 存储输入矩阵A的m0xk0块数据
+|              |    └── data_align: 256B
+|              ├── L0B_buffer: // 存储矩阵B的数据
+|              |    ├── size: 64KB
+|              |    ├── 用途: 存储输入矩阵B的k0xn0块数据
+|              |    └── data_align: 256B
+|              └── L0C_buffer: // 存储矩阵C的结果
+|                   ├── size: 128KB
+|                   ├── 用途: 存储输出矩阵C的m0xn0块结果
+|                   └── data_align: 256B
 
-## compute_system
-├── vector_compute_unit // 每vector_core内的vector_compute_unit、vector_buffer互不关联:
-|    ├── 输入Buffer: vector_buffer
-|    ├── 输入Buffer: vector_buffer
-|    ├── 约束: 需要vector_buffer能放下
+
+## compute_system 
+├── vector_compute_unit:
+|    ├── 约束: 需要unified_buffer能放下
 |    ├── 约束: 只能做连续、带mask的vector计算
-|    └── 功能: numpy常规的vector计算，默认npu都有，例如vector_add、reduce_sum等
-└── scalar_compute_unit
-     └── 功能：相当于一个小cpu，可以读gm、vector_buffer里的数据，并完成一定的scalar计算
-
-
-## 搬移Pipeline
-- MTE2：从gm搬到vector_buffer // 一次只能处理一个搬运任务
-- MTE3：从vector_buffer搬到gm // 一次只能处理一个搬运任务
-## 执行逻辑
-全部unit（数据搬移Pipeline、计算单元）都是并行的，它们的同步通过set_flag/wait_flag给出，即：前置unit完成执行后set flag，后续unit wait后接收到flag后才开始执行。用户需要显式管理这些flag。
-
-前置需求：
-请你思考，并理解上面的npu系统，包括存储结构、数据流向、计算方式等等。
+|    └── 功能: 常规的vector计算，带mask vector计算等
+├── cube_compute_unit:
+|    ├── 约束1: 需要m0xk0xsizeof(A.dtype) < L0A_buffer_size(64KB)
+|    ├── 约束2: 需要n0xk0xsizeof(B.dtype) < L0B_buffer_size(64KB)
+|    ├── 约束3: 需要m0xn0xsizeof(C.dtype==fp32) < L0C_buffer_size(256KB)
+|    ├── 约束: 专门用于矩阵乘法等tensor计算
+|    └── 功能: 高效的矩阵乘法，一次完成一个m0xk0xn0的矩阵乘法

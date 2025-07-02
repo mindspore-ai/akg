@@ -2,7 +2,7 @@
 
 ## memory_system
 ├── gm (GlobalMemory/DeviceMemory):
-|    └── size: 80GB HBM2E (40GB/80GB可选)
+|    └── size: 80GB HBM2E (40GB/80GB两种型号)
 ├── shared_memory (per SM): // A100有108个SM流多处理器
 |    └── shared_memory_block:
 |         ├── 大小: 164KB (最大可用)

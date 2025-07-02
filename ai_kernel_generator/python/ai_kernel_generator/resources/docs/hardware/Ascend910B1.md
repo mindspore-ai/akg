@@ -1,17 +1,17 @@
 # NPU硬件说明
 ## memory_system
 ├── gm (GlobalMemory/DeviceMemory):
-|    └── size: 32GB
+|    └── size: 64GB
 ├── L2Cache: // 全部核共用
-|    └── size: 96MB
-├── Buffers(per ai_core) x 20: // 整个芯片有20个ai_core
+|    └── size: 192MB
+├── Buffers(per ai_core) x 24: // 整个芯片有24个ai_core
 |    ├── vector_core:
-|    |    ├── 数量: 2块 // 每个ai_core有2个vector_core，所以一共有40个vector_core
+|    |    ├── 数量: 2块 // 每个ai_core有2个vector_core，所以一共有48个vector_core
 |    |    └── unified_buffer:
 |    |         ├── size: 192KB
 |    |         └── data_align: 256B
 |    └── cube_core:
-|         ├── 数量: 1块 // 每个ai_core有1个cube_core，所以一共有20个cube_core
+|         ├── 数量: 1块 // 每个ai_core有1个cube_core，所以一共有24个cube_core
 |         ├── L1_buffer:
 |         |    ├── size: 1MB
 |         |    └── data_align: 256B

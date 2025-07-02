@@ -154,6 +154,7 @@ def run_generation_implementations():
         os.environ['DEVICE_ID'] = str({{ device_id }})
         if "ascend910" in arch:
             device = torch.device("npu")
+            torch.npu.set_device({{ device_id }})
         elif "ascend310" in arch:
             device = torch.device("cpu")
         else:
@@ -162,8 +163,11 @@ def run_generation_implementations():
         device = torch.device("cpu")
     else:
         raise ValueError(f"不支持的后端: {backend}")
-    {% else %}
+    {% elif framework == "numpy" %}
+    # numpy 不需要设备设置
+    {% elif framework == "mindspore" %}
     # MindSpore设备设置
+    os.environ['DEVICE_ID'] = str({{ device_id }})
     ms.set_seed(0)
     if backend == "ascend":
         device = "Ascend"

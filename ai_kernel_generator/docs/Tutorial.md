@@ -59,7 +59,7 @@ async def run_mindspore_triton_single():
     task_desc = get_task_desc()
 
     task_pool = TaskPool()
-    device_pool = DevicePool(["0"])
+    device_pool = DevicePool([0])
     config = load_config()
 
     task = Task(

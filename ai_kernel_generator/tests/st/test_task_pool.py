@@ -14,7 +14,7 @@ from ai_kernel_generator.core.utils import ActionType, ParsedCode
 ])
 async def test_parallel_task_triton_ascend910b4(framework, impl_type, backend, arch):
     task_pool = TaskPool()
-    device_pool = DevicePool(["1", "2"])
+    device_pool = DevicePool([1, 2])
     config = load_config()  # or load_config("/your-path-to-config/xxx_config.yaml")
     benchmark_name = get_benchmark_name([19], framework=framework)
 
@@ -66,7 +66,7 @@ async def test_parallel_task_triton_ascend910b4(framework, impl_type, backend, a
 ])
 async def test_parallel_task_swft_ascend310p3(framework, impl_type, backend, arch):
     task_pool = TaskPool()
-    device_pool = DevicePool(["1", "2"])
+    device_pool = DevicePool([1, 2])
     config = load_config()  # or load_config("/your-path-to-config/xxx_config.yaml")
     benchmark_name = get_benchmark_name([19], framework=framework)
 
@@ -118,7 +118,7 @@ async def test_parallel_task_swft_ascend310p3(framework, impl_type, backend, arc
 ])
 async def test_parallel_task_triton_a100(framework, impl_type, backend, arch):
     task_pool = TaskPool()
-    device_pool = DevicePool(["1", "2"])
+    device_pool = DevicePool([1, 2])
     config = load_config()  # or load_config("/your-path-to-config/xxx_config.yaml")
     benchmark_name = get_benchmark_name([19], framework=framework)
 
@@ -170,7 +170,7 @@ async def test_parallel_task_triton_a100(framework, impl_type, backend, arch):
 ])
 async def test_parallel_task_from_coder(framework, impl_type, backend, arch):
     task_pool = TaskPool()
-    device_pool = DevicePool(["1", "2"])
+    device_pool = DevicePool([1, 2])
     config = load_config()
     benchmark_name = get_benchmark_name([19, 20, 21, 22], framework=framework)
 
@@ -209,7 +209,7 @@ async def test_parallel_task_from_coder(framework, impl_type, backend, arch):
 ])
 async def test_parallel_task_from_verifier(framework, impl_type, backend, arch):
     task_pool = TaskPool()
-    device_pool = DevicePool(["4", "5"])
+    device_pool = DevicePool([4, 5])
     config = load_config()
     benchmark_name = get_benchmark_name([19], framework=framework) * 2
 
@@ -247,6 +247,6 @@ async def test_parallel_task_from_verifier(framework, impl_type, backend, arch):
         else:
             raise ValueError(f"Invalid implementation type: {impl_type}")
 
-        task_pool.create_task(task.run, ActionType.DO_TESTER, parsed_code)
+        task_pool.create_task(task.run, ActionType.VERIFY, parsed_code)
 
     await task_pool.wait_all()

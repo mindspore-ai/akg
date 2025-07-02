@@ -14,6 +14,7 @@
 
 import logging
 import json
+import asyncio
 from typing import Tuple
 from ai_kernel_generator.core.async_pool.device_pool import DevicePool
 from ai_kernel_generator.core.utils import ActionType, ParsedCode, check_task_config, check_task_type
@@ -98,11 +99,11 @@ class Task:
         self.conductor.initialize_check_docs()
 
         # 插入初始记录
-        if init_action_type in (ActionType.DO_CODER, ActionType.DO_TESTER):
+        if init_action_type in (ActionType.DO_CODER, ActionType.VERIFY):
             self.conductor.trace.insert_designer_or_coder_record(
                 json.dumps({"code": init_parsed_code.aul_code, "description": ""}), "", "", ActionType.DO_DESIGNER
             )
-        if init_action_type == ActionType.DO_TESTER:
+        if init_action_type == ActionType.VERIFY:
             if self.impl_type == "triton":
                 self.conductor.trace.insert_designer_or_coder_record(
                     json.dumps({"code": init_parsed_code.triton_code, "description": ""}), "", "", ActionType.DO_CODER
@@ -143,16 +144,21 @@ class Task:
                         self.conductor.trace.base_doc.update(self.coder.intermediate_base_doc)
                     self.conductor.trace.insert_designer_or_coder_record(
                         coder_res, coder_prompt, coder_reasoning, action_type)
-                elif action_type == ActionType.DO_TESTER:
+                elif action_type == ActionType.VERIFY:
                     device_id = await self.device_pool.acquire_device()
                     try:
                         current_step = len(self.conductor.trace.trace_list)
-                        verify_res, verify_log = self.verifier.run(parsed_code, current_step, device_id)
+                        loop = asyncio.get_running_loop()
+                        verify_res, verify_log = await loop.run_in_executor(
+                            None, 
+                            self.verifier.run, 
+                            parsed_code, current_step, device_id
+                        )
                         profile_res = ""
                         if verify_res and self.task_type == "profile" and self.backend == "ascend":
                             speedup = self.verifier.run_profile(current_step, device_id, self.profile_settings)
                             profile_res = f"speedup: {speedup:.6f}x"
-                        self.conductor.trace.insert_tester_record(
+                        self.conductor.trace.insert_verifier_record(
                             str(verify_res), verify_log, profile_res, action_type)
                     finally:
                         await self.device_pool.release_device(device_id)

@@ -22,7 +22,7 @@ class ActionType(Enum):
     FIX_DESIGNER = "FixDesigner"
     DO_CODER = "DoCoder"
     FIX_CODER = "FixCoder"
-    DO_TESTER = "DoTester"
+    VERIFY = "Verify"
     EXIT = "Exit"
 
 
