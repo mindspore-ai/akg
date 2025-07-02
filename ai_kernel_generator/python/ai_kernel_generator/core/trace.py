@@ -77,17 +77,17 @@ class Trace:
             ('reasoning', reasoning)
         ])
 
-    def insert_tester_record(self, verify_res: str, verify_log: str, profile: str, action_type=ActionType.DO_TESTER) -> None:
+    def insert_verifier_record(self, verify_res: str, verify_log: str, profile: str, action_type=ActionType.VERIFY) -> None:
         """
         插入测试器的记录。
 
         Args:
             verify_log (str): 验证日志。
             profile (str): 性能数据。
-            action_type (ActionType, optional): 操作类型。默认为ActionType.DO_TESTER。
+            action_type (ActionType, optional): 操作类型。默认为ActionType.VERIFY。
         """
-        if action_type != ActionType.DO_TESTER:
-            raise ValueError("action_type must be Tester")
+        if action_type != ActionType.VERIFY:
+            raise ValueError("action_type must be Verify")
 
         record = Record(action_type=action_type, result=verify_res, error_log=verify_log, profile=profile)
         self.trace_list.append(record)
@@ -105,7 +105,7 @@ class Trace:
             base_name = f"I{self.task_id}_S{len(self.trace_list):02d}_{self.op_name}_CheckDesigner_"
         elif action_type in [ActionType.DO_CODER, ActionType.FIX_CODER]:
             base_name = f"I{self.task_id}_S{len(self.trace_list):02d}_{self.op_name}_CheckCoder_"
-        elif action_type == ActionType.DO_TESTER:
+        elif action_type == ActionType.VERIFY:
             base_name = f"I{self.task_id}_S{len(self.trace_list):02d}_{self.op_name}_AnalyzeError_"
         params = [
             ('result', res),

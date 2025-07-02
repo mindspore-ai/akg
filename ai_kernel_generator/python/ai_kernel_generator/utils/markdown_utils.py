@@ -15,7 +15,6 @@
 import logging
 import re
 import os
-from pathlib import Path
 from ai_kernel_generator import get_project_root
 
 logger = logging.getLogger(__name__)

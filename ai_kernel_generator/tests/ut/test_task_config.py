@@ -33,9 +33,9 @@ class TestTaskConfig:
         for framework, impl_type, backend, arch in valid_configs:
             try:
                 check_task_config(framework, backend, arch, impl_type)
-                print(f"✅ 有效配置: {framework} + {backend} + {arch} + {impl_type}")
+                print(f"有效配置: {framework} + {backend} + {arch} + {impl_type}")
             except ValueError as e:
-                pytest.fail(f"❌ 应该有效的配置失败了: {framework} + {backend} + {arch} + {impl_type}, 错误: {e}")
+                pytest.fail(f"有效配置验证未通过: {framework} + {backend} + {arch} + {impl_type}, 错误: {e}")
 
     def test_invalid_framework(self):
         """测试无效的框架"""
@@ -48,7 +48,7 @@ class TestTaskConfig:
         for framework, impl_type, backend, arch in invalid_configs:
             with pytest.raises(ValueError, match="Unsupported framework"):
                 check_task_config(framework, backend, arch, impl_type)
-                print(f"✅ 正确捕获无效框架错误: {framework}")
+                print(f"正确捕获无效框架错误: {framework}")
 
     def test_invalid_backend(self):
         """测试无效的后端"""
@@ -61,7 +61,7 @@ class TestTaskConfig:
         for framework, impl_type, backend, arch in invalid_configs:
             with pytest.raises(ValueError, match="does not support backend"):
                 check_task_config(framework, backend, arch, impl_type)
-                print(f"✅ 正确捕获无效后端错误: {framework} + {backend}")
+                print(f"正确捕获无效后端错误: {framework} + {backend}")
 
     def test_invalid_arch(self):
         """测试无效的架构"""
@@ -74,7 +74,7 @@ class TestTaskConfig:
         for framework, impl_type, backend, arch in invalid_configs:
             with pytest.raises(ValueError, match="does not support arch"):
                 check_task_config(framework, backend, arch, impl_type)
-                print(f"✅ 正确捕获无效架构错误: {backend} + {arch}")
+                print(f"正确捕获无效架构错误: {backend} + {arch}")
 
     def test_invalid_impl_type(self):
         """测试无效的实现类型"""
@@ -87,7 +87,7 @@ class TestTaskConfig:
         for framework, impl_type, backend, arch in invalid_configs:
             with pytest.raises(ValueError, match="does not support impl_type"):
                 check_task_config(framework, backend, arch, impl_type)
-                print(f"✅ 正确捕获无效实现类型错误: {impl_type}")
+                print(f"正确捕获无效实现类型错误: {impl_type}")
 
     def test_mismatched_combinations(self):
         """测试不匹配的组合"""
@@ -104,7 +104,7 @@ class TestTaskConfig:
         for framework, impl_type, backend, arch in mismatched_configs:
             with pytest.raises(ValueError, match="does not support impl_type"):
                 check_task_config(framework, backend, arch, impl_type)
-                print(f"✅ 正确捕获不匹配组合错误: {framework} + {backend} + {arch} + {impl_type}")
+                print(f"正确捕获不匹配组合错误: {framework} + {backend} + {arch} + {impl_type}")
 
     def test_nonexistent_combinations(self):
         """测试不存在的组合"""
@@ -120,7 +120,7 @@ class TestTaskConfig:
         for framework, impl_type, backend, arch in nonexistent_configs:
             with pytest.raises(ValueError):
                 check_task_config(framework, backend, arch, impl_type)
-                print(f"✅ 正确捕获不存在组合错误: {framework} + {backend} + {arch} + {impl_type}")
+                print(f"正确捕获不存在组合错误: {framework} + {backend} + {arch} + {impl_type}")
 
     def test_edge_cases(self):
         """测试边界情况"""
@@ -136,7 +136,7 @@ class TestTaskConfig:
         with pytest.raises(ValueError):
             check_task_config("MindSpore", "ascend", "ascend910b4", "triton")
 
-        print("✅ 正确捕获边界情况错误")
+        print("正确捕获边界情况错误")
 
     def test_all_valid_combinations(self):
         """测试所有有效的组合"""
@@ -156,6 +156,7 @@ class TestTaskConfig:
         for framework, impl_type, backend, arch in all_valid_combinations:
             try:
                 check_task_config(framework, backend, arch, impl_type)
-                print(f"✅ 有效组合: {framework} + {backend} + {arch} + {impl_type}")
+                print(f"有效组合: {framework} + {backend} + {arch} + {impl_type}")
             except ValueError as e:
-                pytest.fail(f"❌ 应该有效的组合失败了: {framework} + {backend} + {arch} + {impl_type}, 错误: {e}")
+                
+                pytest.fail(f"有效组合验证未通过: {framework} + {backend} + {arch} + {impl_type}, 错误: {e}")

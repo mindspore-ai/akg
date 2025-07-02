@@ -86,7 +86,7 @@ async def run_mindspore_triton_parallel():
     op_name_and_task_desc = get_op_name_and_task_desc()
 
     task_pool = TaskPool()
-    device_pool = DevicePool(["0", "1"])
+    device_pool = DevicePool([0, 1])
     config = load_config()  # or load_config("/your-path-to-config/xxx_config.yaml")
 
     for i, (op_name, task_desc) in enumerate(op_name_and_task_desc):

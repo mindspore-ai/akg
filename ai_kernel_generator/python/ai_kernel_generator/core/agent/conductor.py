@@ -172,7 +172,7 @@ class Conductor(AgentBase):
                                    ActionType.DO_CODER, ActionType.FIX_CODER]:
                     logger.info(f"Task {self.task_id}, op_name: {self.op_name}, action_type: Conductor Self-Check")
                     return await self.self_check(action_type, result, parsed_code)
-                elif action_type == ActionType.DO_TESTER:
+                elif action_type == ActionType.VERIFY:
                     if result == "False":
                         error_log = pre_trace.error_log
                         logger.info(
@@ -208,7 +208,7 @@ class Conductor(AgentBase):
 
     def _update_fixed_step(self, action_type: ActionType):
         """更新重试计数"""
-        if action_type in [ActionType.DO_DESIGNER, ActionType.DO_CODER, ActionType.DO_TESTER]:
+        if action_type in [ActionType.DO_DESIGNER, ActionType.DO_CODER, ActionType.VERIFY]:
             self.fixed_step = 0
         elif action_type in [ActionType.FIX_DESIGNER, ActionType.FIX_CODER]:
             self.fixed_step += 1
@@ -230,7 +230,7 @@ class Conductor(AgentBase):
                 parsed_code.swft_code = code
                 self.check_coder_input["swft_code"] = code
                 self.check_coder_input["supported_api"] = self.trace.base_doc.get("supported_api", "")
-        elif self._is_tester_action(action_type):
+        elif self._is_verifier_action(action_type):
             self.analyze_error_input["designer_code"] = parsed_code.aul_code
             if self.impl_type == "triton":
                 self.analyze_error_input["coder_code"] = parsed_code.triton_code
@@ -249,8 +249,8 @@ class Conductor(AgentBase):
         """获取强制跳转的下一步动作"""
         next_actions = {
             ActionType.FIX_DESIGNER: ActionType.DO_CODER,
-            ActionType.FIX_CODER: ActionType.DO_TESTER,
-            ActionType.DO_TESTER: ActionType.EXIT
+            ActionType.FIX_CODER: ActionType.VERIFY,
+            ActionType.VERIFY: ActionType.EXIT
         }
         next_action = next_actions.get(action_type, ActionType.EXIT)
         return next_action, parsed_code, ""
@@ -306,7 +306,7 @@ class Conductor(AgentBase):
             self.analyze_error_input,
             self.model_config["conductor_analyze"]
         )
-        self.trace.insert_conductor_record(res, prompt, reasoning, ActionType.DO_TESTER)
+        self.trace.insert_conductor_record(res, prompt, reasoning, ActionType.VERIFY)
 
         parsed_result = ParserFactory.robust_parse(res, self.check_parser)
         if parsed_result.result == 1:
@@ -327,10 +327,10 @@ class Conductor(AgentBase):
             parsed_code.swft_code = coder_code
 
         # 更新重试计数
-        self._update_fixed_step(ActionType.DO_TESTER)
+        self._update_fixed_step(ActionType.VERIFY)
 
         # 解析代码并设置到parsed_code
-        self._parse_and_set_code(ActionType.DO_TESTER, "", parsed_code)
+        self._parse_and_set_code(ActionType.VERIFY, "", parsed_code)
         self.analyze_error_input["error_log"] = error_log
 
         return self.run_llm_analyze_error(parsed_code)
@@ -343,18 +343,18 @@ class Conductor(AgentBase):
         """判断是否为Coder相关动作"""
         return action_type in [ActionType.DO_CODER, ActionType.FIX_CODER]
 
-    def _is_tester_action(self, action_type: ActionType) -> bool:
-        """判断是否为Tester相关动作"""
-        return action_type == ActionType.DO_TESTER
+    def _is_verifier_action(self, action_type: ActionType) -> bool:
+        """判断是否为Verifier相关动作"""
+        return action_type == ActionType.VERIFY
 
     def _get_next_action(self, action_type: ActionType, parsed_code: ParsedCode, suggestions: str):
         """获取下一步动作"""
         next_actions = {
             ActionType.DO_DESIGNER: ActionType.DO_CODER,
             ActionType.FIX_DESIGNER: ActionType.DO_CODER,
-            ActionType.DO_CODER: ActionType.DO_TESTER,
-            ActionType.FIX_CODER: ActionType.DO_TESTER,
-            ActionType.DO_TESTER: ActionType.EXIT
+            ActionType.DO_CODER: ActionType.VERIFY,
+            ActionType.FIX_CODER: ActionType.VERIFY,
+            ActionType.VERIFY: ActionType.EXIT
         }
         next_action = next_actions.get(action_type, ActionType.EXIT)
         return next_action, parsed_code, suggestions

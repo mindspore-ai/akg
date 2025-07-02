@@ -20,10 +20,9 @@
     - [6.2 Designer](#62-designer)
     - [6.3 Coder](#63-coder)
     - [6.4 Verifier](#64-verifier)
-    - [6.5 SWFT Backend](#65-swft-backend)
-    - [6.6 Triton Backend](#66-triton-backend)
-  - [7. 版本说明](#7-版本说明)
-  - [8. 许可证](#8-许可证)
+    - [6.5 Conductor](#65-conductor)
+    - [6.6 SWFT Backend](#66-swft-backend)
+    - [6.7 Triton Backend](#67-triton-backend)
 
 ## 1. 项目简介
 AIKG 是一款 AI 驱动的算子生成器。
@@ -125,16 +124,11 @@ task = Task(
 ### 6.4 Verifier
 请参考 [Verifier](./docs/Verifier.md) 文档
 
-### 6.5 SWFT Backend
+### 6.5 Conductor
+请参考 [Conductor](./docs/Conductor.md) 文档
+
+### 6.6 SWFT Backend
 请参考 [SWFT](./docs/SWFT.md) 文档
 
-### 6.6 Triton Backend
+### 6.7 Triton Backend
 请参考 [Triton](./docs/Triton.md) 文档
-
-## 7. 版本说明
-
-版本说明详见[RELEASE](../RELEASE.md)。
-
-## 8. 许可证
-
-[Apache License 2.0](LICENSE)。

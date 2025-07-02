@@ -90,7 +90,7 @@ class KernelVerifier:
         os.makedirs(target_dir, exist_ok=True)
         return target_dir
 
-    def gen_verify_project(self, impl_code: str, verify_dir: str, device_id: str = "0"):
+    def gen_verify_project(self, impl_code: str, verify_dir: str, device_id: int = 0):
         """生成验证项目文件到指定目录"""
         # 创建框架实现文件
         framework_file = os.path.join(verify_dir, f"{self.op_name}_{self.framework}.py")
@@ -129,7 +129,7 @@ class KernelVerifier:
         python_cmd = ["python", f"verify_{self.op_name}.py"]
         return run_command(python_cmd, f"verify_{self.op_name}")
 
-    def gen_profile_project(self, verify_dir: str, device_id: str = "0", warmup_times: int = 5, run_times: int = 50):
+    def gen_profile_project(self, verify_dir: str, device_id: int = 0, warmup_times: int = 5, run_times: int = 50):
         """生成profile项目文件到指定目录"""
         total_count = warmup_times + run_times
         # 生成基准性能测试脚本
@@ -139,7 +139,7 @@ class KernelVerifier:
         profile_file = os.path.join(verify_dir, f"profile_{self.op_name}_generation.py")
         self.gen_profile_file_from_template(PROFILE_GENERATION_TEMPLATE_PATH, profile_file, device_id, total_count)
 
-    def gen_profile_file_from_template(self, template_path: str, profile_file: str, device_id: str, total_count: int):
+    def gen_profile_file_from_template(self, template_path: str, profile_file: str, device_id: int, total_count: int):
         """从模板生成profile文件"""
         # 从文件加载模板
         with open(template_path, "r", encoding="utf-8") as f:
@@ -266,7 +266,7 @@ class KernelVerifier:
             logger.warning(f"[{self.task_id}:{self.op_name}] 性能分析失败: {str(e)}")
             return 0.0
 
-    def run(self, parsed_code: ParsedCode, current_step: int = 0, device_id: str = "0"):
+    def run(self, parsed_code: ParsedCode, current_step: int = 0, device_id: int = 0):
         """完整的验证流程
 
         Args:

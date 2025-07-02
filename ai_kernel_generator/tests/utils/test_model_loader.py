@@ -54,12 +54,12 @@ def test_verify_all_models():
 
             # 如果成功，添加到工作模型列表
             working_models.append(preset)
-            print(f"✓ {preset}: 验证成功")
+            print(f"{preset}: 验证成功")
 
         except Exception as e:
             # 如果失败，添加到失败模型列表
             failed_models.append((preset, str(e)))
-            print(f"✗ {preset}: 验证失败 - {str(e)}")
+            print(f"{preset}: 验证失败 - {str(e)}")
 
     # 打印总结
     print("\n=== 验证结果总结 ===")
@@ -107,7 +107,7 @@ def test_ollama_model_with_env():
         print(f"输出: {response.content}")
         print("============================")
 
-        print(f"✓ Ollama环境变量测试成功: {test_api_base}")
+        print(f"Ollama环境变量测试成功: {test_api_base}")
 
     except Exception as e:
         pytest.fail(f"Ollama环境变量测试失败: {str(e)}")
@@ -156,7 +156,7 @@ def test_vllm_model_with_env():
         print(f"输出: {response.content}")
         print("============================")
 
-        print(f"✓ VLLM环境变量测试成功: {test_api_base}")
+        print(f"VLLM环境变量测试成功: {test_api_base}")
 
     except Exception as e:
         pytest.fail(f"VLLM环境变量测试失败: {str(e)}")

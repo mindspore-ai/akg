@@ -5,7 +5,7 @@ Trace模块负责完整记录AI Kernel生成过程中的大模型推理痕迹，
 
 
 ## 类方法说明
-### `insert_designer_or_coder_record()` 和 `insert_tester_record()`
+### `insert_designer_or_coder_record()` 和 `insert_verifier_record()`
 
 **功能**
 - 记录大模型的推理过程和生成结果，并保存到指定目录。
@@ -23,7 +23,7 @@ Trace模块负责完整记录AI Kernel生成过程中的大模型推理痕迹，
 - prompt.txt：完整的prompt模板
 - reasoning.txt：推理过程文本
 
-### `insert_tester_record()`
+### `insert_verifier_record()`
 
 **功能**
 - 记录测试结果和性能分析数据。

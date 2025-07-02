@@ -26,7 +26,7 @@ class DevicePool:
         device_count (int): 可用设备总数
     """
 
-    def __init__(self, device_list: List[str]):
+    def __init__(self, device_list: List[int]):
         self.available_devices = asyncio.Queue()
         self.condition = asyncio.Condition()
         self.device_list = device_list
@@ -35,7 +35,7 @@ class DevicePool:
         for device_id in device_list:
             self.available_devices.put_nowait(device_id)
 
-    async def acquire_device(self) -> str:
+    async def acquire_device(self) -> int:
         """
         异步获取可用设备
 
@@ -52,7 +52,7 @@ class DevicePool:
             logger.debug(f"Acquired device: {device_id}")
             return device_id
 
-    async def release_device(self, device_id: str):
+    async def release_device(self, device_id: int):
         """
         释放设备回资源池
 

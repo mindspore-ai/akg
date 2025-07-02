@@ -21,7 +21,6 @@ import json
 import re
 import yaml
 from dataclasses import dataclass
-from enum import Enum, auto
 from pydantic import create_model as create_pydantic_model
 from langchain.output_parsers import PydanticOutputParser
 
