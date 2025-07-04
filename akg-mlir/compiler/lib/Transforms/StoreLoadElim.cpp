@@ -76,8 +76,8 @@ struct StoreLoadElimPass : public StoreLoadElimBase<StoreLoadElimPass> {
  private:
   Value getLoadResult(Operation *loadOp) const {
     Value loadResult;
-    if (dyn_cast<AffineLoadOp>(loadOp)) {
-      loadResult = dyn_cast<AffineLoadOp>(loadOp).getResult();
+    if (dyn_cast<affine::AffineLoadOp>(loadOp)) {
+      loadResult = dyn_cast<affine::AffineLoadOp>(loadOp).getResult();
     } else if (dyn_cast<memref::LoadOp>(loadOp)) {
       loadResult = dyn_cast<memref::LoadOp>(loadOp).getResult();
     } else {
@@ -93,7 +93,7 @@ struct StoreLoadElimPass : public StoreLoadElimBase<StoreLoadElimPass> {
       if (user == storeOp) {
         continue;
       }
-      if (dyn_cast<memref::LoadOp>(user) || dyn_cast<AffineLoadOp>(user)) {
+      if (dyn_cast<memref::LoadOp>(user) || dyn_cast<affine::AffineLoadOp>(user)) {
         auto storeBlock = storeOp->getBlock();
         auto loadBlock = user->getBlock();
         bool inDiffBranch = (storeBlock != loadBlock);
@@ -117,7 +117,7 @@ void StoreLoadElimPass::runOnOperation() {
   SmallVector<Operation *> toElimStores;
   SmallVector<Operation *> toElimLoads;
   getOperation()->walk([&](Operation *op) {
-    if (dyn_cast<memref::StoreOp>(op) || dyn_cast<AffineStoreOp>(op)) {
+    if (dyn_cast<memref::StoreOp>(op) || dyn_cast<affine::AffineStoreOp>(op)) {
       auto elimLoads = getPossibleElimLoads(op);
       size_t eraseSize = 0;
       for (auto loadOp : elimLoads) {

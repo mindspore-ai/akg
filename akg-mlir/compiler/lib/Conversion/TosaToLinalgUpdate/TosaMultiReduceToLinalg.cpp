@@ -89,7 +89,7 @@ void findNextRedOp(size_t currIdx, size_t groupNum, const SmallVector<Operation 
   }
 }
 
-static Attribute createInitialValueForReduceOp(Operation *op, Type elementTy, PatternRewriter &rewriter) {
+static TypedAttr createInitialValueForReduceOp(Operation *op, Type elementTy, PatternRewriter &rewriter) {
   if (isa<tosa::ReduceSumOp>(op) && elementTy.isa<FloatType>()) {
     return rewriter.getFloatAttr(elementTy, 0.0);
   }
@@ -162,7 +162,7 @@ static Value createLinalgBodyCalculationForReduceOp(Operation *op, ValueRange ar
   }
 
   if (isa<tosa::ReduceMinOp>(op) && elementTy.isa<FloatType>()) {
-    return rewriter.create<arith::MinFOp>(loc, args[0], args[1]);
+    return rewriter.create<arith::MinNumFOp>(loc, args[0], args[1]);
   }
 
   if (isa<tosa::ReduceMinOp>(op) && elementTy.isa<IntegerType>()) {
@@ -171,7 +171,7 @@ static Value createLinalgBodyCalculationForReduceOp(Operation *op, ValueRange ar
   }
 
   if (isa<tosa::ReduceMaxOp>(op) && elementTy.isa<FloatType>()) {
-    return rewriter.create<arith::MaxFOp>(loc, args[0], args[1]);
+    return rewriter.create<arith::MaxNumFOp>(loc, args[0], args[1]);
   }
 
   if (isa<tosa::ReduceMaxOp>(op) && elementTy.isa<IntegerType>()) {
@@ -253,7 +253,6 @@ static LogicalResult reduceMatchAndRewriteHelper(Operation *op, PatternRewriter 
     if (!fillValueAttr) {
       return rewriter.notifyMatchFailure(op, "No initial value found for reduction operation");
     }
-
     auto fillValue = rewriter.create<arith::ConstantOp>(loc, fillValueAttr);
     auto filledTensor = rewriter.create<linalg::FillOp>(loc, ValueRange{fillValue}, ValueRange{emptyTensor}).result();
 
@@ -271,7 +270,7 @@ static LogicalResult reduceMatchAndRewriteHelper(Operation *op, PatternRewriter 
     }
 
     bool didEncounterError = false;
-    auto maps = AffineMap::inferFromExprList({srcExprs, dstExprs});
+    auto maps = AffineMap::inferFromExprList({srcExprs, dstExprs}, rewriter.getContext());
     auto linalgOp = rewriter.create<linalg::GenericOp>(
       loc, reduceTy, input, filledTensor, maps, iteratorTypes,
       [&](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange blockArgs) {

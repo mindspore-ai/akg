@@ -21,4 +21,8 @@ add_mlir_dialect_library(AKGAffinePasses
   MLIRMemRefDialect
   MLIRSideEffectInterfaces
   MLIRSupport
+  MLIRAffineTransforms
+  MLIRAffineTransformOps
+  MLIRAffineUtils
+  MLIRAffineAnalysis
   )

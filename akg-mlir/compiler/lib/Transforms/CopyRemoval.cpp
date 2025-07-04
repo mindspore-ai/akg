@@ -247,7 +247,7 @@ struct CopyRemovalPass : public CopyRemovalBase<CopyRemovalPass> {
     }
     Value src = copyOp.getSource();
     Value dest = copyOp.getTarget();
-    if (src.getDefiningOp() == nullptr && dest.getDefiningOp() == nullptr ||
+    if ((src.getDefiningOp() == nullptr && dest.getDefiningOp() == nullptr) ||
         isa<memref::GetGlobalOp>(src.getDefiningOp()) || isa<memref::ExpandShapeOp>(src.getDefiningOp()) ||
         isa<memref::CollapseShapeOp>(src.getDefiningOp()) || isa<memref::ReshapeOp>(src.getDefiningOp()) ||
         isa<memref::SubViewOp>(src.getDefiningOp())) {

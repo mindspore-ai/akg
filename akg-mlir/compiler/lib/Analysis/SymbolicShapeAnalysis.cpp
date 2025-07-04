@@ -17,6 +17,7 @@
 #include "akg/Analysis/SymbolicShapeAnalysis.h"
 
 #include <algorithm>
+#include <optional>
 #include <string>
 #include "akg/Analysis/TypeUtils.h"
 #include "symengine/expression.h"
@@ -38,7 +39,7 @@ bool SymbolicShapeAnalysis::hasSymbolicShape(Type type) const {
   return dict && dict.contains(getSymbolShapeAttrName());
 }
 
-llvm::Optional<llvm::SmallVector<std::string>> SymbolicShapeAnalysis::getSymbolicShape(Type type) const {
+std::optional<llvm::SmallVector<std::string>> SymbolicShapeAnalysis::getSymbolicShape(Type type) const {
   RankedTensorType ty = type.dyn_cast<RankedTensorType>();
   if (!ty || !hasSymbolicShape(ty)) {
     return std::nullopt;
@@ -51,7 +52,7 @@ llvm::Optional<llvm::SmallVector<std::string>> SymbolicShapeAnalysis::getSymboli
   return symbolicShape;
 }
 
-llvm::Optional<NamedAttribute> SymbolicShapeAnalysis::getSymbolShapeNamedAttr(Type type) const {
+std::optional<NamedAttribute> SymbolicShapeAnalysis::getSymbolShapeNamedAttr(Type type) const {
   auto ty = type.dyn_cast<RankedTensorType>();
   if (!ty || !hasSymbolicShape(ty)) {
     return std::nullopt;
@@ -60,8 +61,8 @@ llvm::Optional<NamedAttribute> SymbolicShapeAnalysis::getSymbolShapeNamedAttr(Ty
   return dAttrs.getNamed(getSymbolShapeAttrName());
 }
 
-llvm::Optional<llvm::SmallVector<SymEngine::Expression>> SymbolicShapeAnalysis::getSymbolicShapeExpr(Type type) {
-  llvm::Optional<llvm::SmallVector<std::string>> symbolicShape = getSymbolicShape(type);
+std::optional<llvm::SmallVector<SymEngine::Expression>> SymbolicShapeAnalysis::getSymbolicShapeExpr(Type type) {
+  std::optional<llvm::SmallVector<std::string>> symbolicShape = getSymbolicShape(type);
   if (!symbolicShape) {
     return std::nullopt;
   }
@@ -76,16 +77,16 @@ llvm::Optional<llvm::SmallVector<SymEngine::Expression>> SymbolicShapeAnalysis::
   return expr;
 }
 
-llvm::Optional<std::string> SymbolicShapeAnalysis::getSymbolicDim(Type type, uint64_t idx) const {
-  llvm::Optional<llvm::SmallVector<std::string>> symbolicShape = getSymbolicShape(type);
+std::optional<std::string> SymbolicShapeAnalysis::getSymbolicDim(Type type, uint64_t idx) const {
+  std::optional<llvm::SmallVector<std::string>> symbolicShape = getSymbolicShape(type);
   if (!symbolicShape) {
     return std::nullopt;
   }
   return (*symbolicShape)[idx];
 }
 
-llvm::Optional<SymEngine::Expression> SymbolicShapeAnalysis::getSymbolicDimExpr(Type type, uint64_t idx) {
-  llvm::Optional<llvm::SmallVector<std::string>> symbolicShape = getSymbolicShape(type);
+std::optional<SymEngine::Expression> SymbolicShapeAnalysis::getSymbolicDimExpr(Type type, uint64_t idx) {
+  std::optional<llvm::SmallVector<std::string>> symbolicShape = getSymbolicShape(type);
   if (!symbolicShape) {
     return std::nullopt;
   }
@@ -159,8 +160,8 @@ bool SymbolicShapeAnalysis::isSameSymbolicDim(std::string lhs, std::string rhs) 
 }
 
 bool SymbolicShapeAnalysis::isSameSymbolicDim(Type lhs, uint64_t lhsIdx, Type rhs, uint64_t rhsIdx) {
-  llvm::Optional<std::string> l = getSymbolicDim(lhs, lhsIdx);
-  llvm::Optional<std::string> r = getSymbolicDim(rhs, rhsIdx);
+  std::optional<std::string> l = getSymbolicDim(lhs, lhsIdx);
+  std::optional<std::string> r = getSymbolicDim(rhs, rhsIdx);
   if (!l || !r) {
     return false;
   }

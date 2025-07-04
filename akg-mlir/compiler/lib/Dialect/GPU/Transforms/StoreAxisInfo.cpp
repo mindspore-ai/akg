@@ -37,10 +37,10 @@ namespace gpu {
 namespace {
 struct StoreAxisInfoPass : public impl::StoreAxisInfoBase<StoreAxisInfoPass> {
   StoreAxisInfoPass() {}
-  void runOnOperation() {
+  void runOnOperation() override {
     std::deque<std::string> newTags;
     getOperation()->walk([&](Operation *op) {
-      if (!isa<AffineForOp, AffineParallelOp>(op)) {
+      if (!isa<affine::AffineForOp, affine::AffineParallelOp>(op)) {
         return;
       }
       if (op->getAttr(kLoopTag)) {
@@ -63,4 +63,3 @@ struct StoreAxisInfoPass : public impl::StoreAxisInfoBase<StoreAxisInfoPass> {
 std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> mlir::createStoreAxisInfoPass() {
   return std::make_unique<gpu::StoreAxisInfoPass>();
 }
-

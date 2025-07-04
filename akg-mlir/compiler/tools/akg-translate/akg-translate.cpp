@@ -22,7 +22,7 @@
 using namespace mlir;
 
 int main(int argc, char **argv) {
-#ifdef USE_CUDA
+#ifdef USE_CUDA_BACKEND
   registerToPTXTranslation();
 #endif
 

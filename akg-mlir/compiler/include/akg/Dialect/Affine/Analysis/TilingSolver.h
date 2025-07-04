@@ -72,8 +72,8 @@ class HeuristicTilingSolver : public TilingSolver {
   explicit HeuristicTilingSolver(const ModelGraphPtr modelGraph) : TilingSolver(modelGraph) {}
   virtual ~HeuristicTilingSolver() = default;
 
-  bool genSolveTarget();
-  std::vector<ConfigPtr> sortSolveTask(const AxisPtr &axis);
+  bool genSolveTarget() override;
+  std::vector<ConfigPtr> sortSolveTask(const AxisPtr &axis) override;
 };
 
 class GlobalConfigSolver {

@@ -33,8 +33,6 @@ def MindSpore_Dialect : Dialect {
   let cppNamespace = "mlir::mindspore";
 
   let dependentDialects = ["tensor::TensorDialect"];
-
-  let useFoldAPI = kEmitFoldAdaptorFolder;
 }
 
 #endif // AKG_DIALECT_MINDSPORE_IR_MINDSPORE_BASE

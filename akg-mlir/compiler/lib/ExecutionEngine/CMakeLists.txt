@@ -4,6 +4,7 @@ find_package(OpenMP REQUIRED)
 append("-fopenmp" CMAKE_CXX_FLAGS)
 set(LLVM_OPTIONAL_SOURCES
 AKGParallelLaunchRuntime.cpp
+AKGAscendLaunchRuntime.cpp
 )
 # Use a separate library for OptUtils, to avoid pulling in the entire JIT and
 # codegen infrastructure. Unlike MLIRExecutionEngine, this is part of
@@ -14,3 +15,6 @@ AKGParallelLaunchRuntime.cpp
 )
 set_property(TARGET mlir_akgParallelLaunch_runtime PROPERTY CXX_STANDARD 17)
 target_compile_definitions(mlir_akgParallelLaunch_runtime PRIVATE mlir_akgParallelLaunch_runtime_EXPORTS)
+
+#set AscendLaunchRuntime
+add_subdirectory(AscendLaunchRuntime)

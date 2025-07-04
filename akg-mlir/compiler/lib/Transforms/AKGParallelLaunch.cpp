@@ -98,77 +98,83 @@ class AKGParallelLaunch : public impl::AKGParallelLaunchBase<AKGParallelLaunch> 
 void AKGParallelLaunch::MindSporeParallelLaunch(
   SmallVector<std::pair<CPU::ParallelLaunchOp, LLVM::LLVMFuncOp>> &toBeHandled, const LLVM::LLVMFuncOp &mainFunc,
   const ArrayRef<BlockArgument> &args) const {
-  assert(args.size() >= (1 + int(isMindSpore)));
+#if 0
+    assert(args.size() >= (1 + int(isMindSpore)));
 
-  // first convert to int32ptr;
-  Type typeInt32 = IntegerType::get(context, 32);
-  mlir::Type i32Ptr = LLVM::LLVMPointerType::get(typeInt32);
-  for (auto &[launchOp, lambdaFunc] : toBeHandled) {
-    LLVM::LLVMFunctionType ftypeMLIRParallelLambda = lambdaFunc.getFunctionType();
-    LLVM::LLVMPointerType ftypeMLIRParallelLambdaPtr = LLVM::LLVMPointerType::get(ftypeMLIRParallelLambda);
-    SmallVector<Type, 4> parallelLaunchFuncOperandTypes;
-    parallelLaunchFuncOperandTypes.push_back(ftypeMLIRParallelLambdaPtr);
-    auto launchArgs = launchOp.getArgs();
-    // we should drop the first args in federated mode
-    for (size_t i = 0; i < launchArgs.size(); i++) {
-      parallelLaunchFuncOperandTypes.push_back(launchArgs[i].getType());
-    }
-    parallelLaunchFuncOperandTypes.push_back(typeInt32);
-    LLVM::LLVMFunctionType ftypeMLIRParallelLaunch = LLVM::LLVMFunctionType::get(
-      ftypeMLIRParallelLambda.getContext(), typeInt32, parallelLaunchFuncOperandTypes, false);
-    OpBuilder builder(launchOp);
-    auto loc = launchOp.getLoc();
-    Value parallelLaunchFuncPtr;
-    LLVM::LLVMFuncOp parallelLaunchFunc;
-    auto lambdaFuncAddr = builder.create<LLVM::AddressOfOp>(loc, lambdaFunc);
-    auto attrs = lambdaFunc.getOperation()->getAttrs();
-    if (!isMindSpore) {
-      auto module = mainFunc->getParentOfType<ModuleOp>();
-      parallelLaunchFunc = module.lookupSymbol<LLVM::LLVMFuncOp>(kParallelLaunchFunc);
-      if (!parallelLaunchFunc) {
-        OpBuilder::InsertionGuard guard(builder);
-        builder.setInsertionPointToStart(module.getBody());
-        parallelLaunchFunc =
-          builder.create<LLVM::LLVMFuncOp>(builder.getUnknownLoc(), kParallelLaunchFunc, ftypeMLIRParallelLaunch);
-      }
-    } else {
-      LLVM::LLVMPointerType ftypeMLIRParallelLaunchPtr = LLVM::LLVMPointerType::get(ftypeMLIRParallelLaunch);
-      LLVM::LLVMPointerType ftypeMLIRParallelLaunchPtrPtr = LLVM::LLVMPointerType::get(ftypeMLIRParallelLaunchPtr);
-      auto firstArgs = args.front();
-      auto parallelLaunchFuncPtrPtr = builder.create<LLVM::BitcastOp>(loc, ftypeMLIRParallelLaunchPtrPtr, firstArgs);
-      parallelLaunchFuncPtr = builder.create<LLVM::LoadOp>(loc, ftypeMLIRParallelLaunchPtr, parallelLaunchFuncPtrPtr);
-    }
-
-    // create func args
-    SmallVector<Value, 4> callFuncArgs;
-    // 1.add indirect call func as first operands, and the call arguments as the remaining operands
-    if (isMindSpore) {
-      callFuncArgs.push_back(parallelLaunchFuncPtr);
-    }
-    callFuncArgs.push_back(lambdaFuncAddr);
-    for (size_t i = 0; i < launchArgs.size(); i++) {
-      callFuncArgs.push_back(launchArgs[i]);
-    }
-    if (!isMindSpore) {
-      int64_t upperBoundVal = 1;
-      for (auto attr : attrs) {
-        if (attr.getName().str() == kUpperBound) {
-          upperBoundVal = attr.getValue().cast<IntegerAttr>().getInt();
+    // first convert to int32ptr;
+    Type typeInt32 = IntegerType::get(context, 32);
+    mlir::Type i32Ptr = LLVM::LLVMPointerType::get(typeInt32);
+    for (auto &[launchOp, lambdaFunc] : toBeHandled) {
+        LLVM::LLVMFunctionType ftypeMLIRParallelLambda = lambdaFunc.getFunctionType();
+        LLVM::LLVMPointerType ftypeMLIRParallelLambdaPtr = LLVM::LLVMPointerType::get(ftypeMLIRParallelLambda);
+        SmallVector<Type, 4> parallelLaunchFuncOperandTypes;
+        parallelLaunchFuncOperandTypes.push_back(ftypeMLIRParallelLambdaPtr);
+        auto launchArgs = launchOp.getArgs();
+        // we should drop the first args in federated mode
+        for (size_t i = 0; i < launchArgs.size(); i++) {
+            parallelLaunchFuncOperandTypes.push_back(launchArgs[i].getType());
         }
-      }
-      auto upperBoundConstant = builder.create<LLVM::ConstantOp>(loc, builder.getI32Type(), (int32_t)upperBoundVal);
-      callFuncArgs.push_back(upperBoundConstant);
-      builder.create<LLVM::CallOp>(loc, parallelLaunchFunc, callFuncArgs);
-    } else {
-      auto secondArgs = args[1];
-      auto int32PtrVal = builder.create<LLVM::BitcastOp>(loc, i32Ptr, secondArgs);
-      auto taskNums = builder.create<LLVM::LoadOp>(loc, typeInt32, int32PtrVal);
-      callFuncArgs.push_back(taskNums);
-      builder.create<LLVM::CallOp>(loc, TypeRange(typeInt32), callFuncArgs);
-    }
+        parallelLaunchFuncOperandTypes.push_back(typeInt32);
+        LLVM::LLVMFunctionType ftypeMLIRParallelLaunch = LLVM::LLVMFunctionType::get(
+            ftypeMLIRParallelLambda.getContext(), typeInt32, parallelLaunchFuncOperandTypes, false);
+        OpBuilder builder(launchOp);
+        auto loc = launchOp.getLoc();
+        Value parallelLaunchFuncPtr;
+        LLVM::LLVMFuncOp parallelLaunchFunc;
+        auto lambdaFuncAddr = builder.create<LLVM::AddressOfOp>(loc, lambdaFunc);
+        auto attrs = lambdaFunc.getOperation()->getAttrs();
+        if (!isMindSpore) {
+            auto module = mainFunc->getParentOfType<ModuleOp>();
+            parallelLaunchFunc = module.lookupSymbol<LLVM::LLVMFuncOp>(kParallelLaunchFunc);
+            if (!parallelLaunchFunc) {
+                OpBuilder::InsertionGuard guard(builder);
+                builder.setInsertionPointToStart(module.getBody());
+                parallelLaunchFunc = builder.create<LLVM::LLVMFuncOp>(
+                    builder.getUnknownLoc(), kParallelLaunchFunc, ftypeMLIRParallelLaunch);
+            }
+        } else {
+            LLVM::LLVMPointerType ftypeMLIRParallelLaunchPtr = LLVM::LLVMPointerType::get(ftypeMLIRParallelLaunch);
+            LLVM::LLVMPointerType ftypeMLIRParallelLaunchPtrPtr =
+                LLVM::LLVMPointerType::get(ftypeMLIRParallelLaunchPtr);
+            auto firstArgs = args.front();
+            auto parallelLaunchFuncPtrPtr =
+                builder.create<LLVM::BitcastOp>(loc, ftypeMLIRParallelLaunchPtrPtr, firstArgs);
+            parallelLaunchFuncPtr =
+                builder.create<LLVM::LoadOp>(loc, ftypeMLIRParallelLaunchPtr, parallelLaunchFuncPtrPtr);
+        }
 
-    launchOp->erase();
-  }
+        // create func args
+        SmallVector<Value, 4> callFuncArgs;
+        // 1.add indirect call func as first operands, and the call arguments as the remaining operands
+        if (isMindSpore) {
+            callFuncArgs.push_back(parallelLaunchFuncPtr);
+        }
+        callFuncArgs.push_back(lambdaFuncAddr);
+        for (size_t i = 0; i < launchArgs.size(); i++) {
+            callFuncArgs.push_back(launchArgs[i]);
+        }
+        if (!isMindSpore) {
+            int64_t upperBoundVal = 1;
+            for (auto attr : attrs) {
+                if (attr.getName().str() == kUpperBound) {
+                    upperBoundVal = attr.getValue().cast<IntegerAttr>().getInt();
+                }
+            }
+            auto upperBoundConstant =
+                builder.create<LLVM::ConstantOp>(loc, builder.getI32Type(), (int32_t)upperBoundVal);
+            callFuncArgs.push_back(upperBoundConstant);
+            builder.create<LLVM::CallOp>(loc, parallelLaunchFunc, callFuncArgs);
+        } else {
+            auto secondArgs = args[1];
+            auto int32PtrVal = builder.create<LLVM::BitcastOp>(loc, i32Ptr, secondArgs);
+            auto taskNums = builder.create<LLVM::LoadOp>(loc, typeInt32, int32PtrVal);
+            callFuncArgs.push_back(taskNums);
+            builder.create<LLVM::CallOp>(loc, TypeRange(typeInt32), callFuncArgs);
+        }
+
+        launchOp->erase();
+    }
+#endif
 }
 
 void AKGParallelLaunch::addFuncConversion(LLVM::LLVMFuncOp &mainFunc,

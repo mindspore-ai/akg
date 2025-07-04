@@ -90,6 +90,8 @@ def LinalgExt_GatherOp : LinalgExt_Op<"gather", [
       int64_t getNumOperands = this->getNumOperands();
       return {getNumOperands - 1, getNumOperands};
     }
+
+   MutableOperandRange getDpsInitsMutable() { return getOutputMutable(); }
   }];
   let hasCustomAssemblyFormat = 1;
 }
@@ -118,7 +120,93 @@ def LinalgExt_UnsortedSegmentSumOp : LinalgExt_Op<"unsorted_segment_sum", [
       int64_t getNumOperands = this->getNumOperands();
       return {getNumOperands - 1, getNumOperands};
     }
+
+   MutableOperandRange getDpsInitsMutable() { return getOutputMutable(); }
   }];
+  let hasCustomAssemblyFormat = 1;
+}
+
+//===----------------------------------------------------------------------===//
+// Template Linalg ops.
+//===----------------------------------------------------------------------===//
+
+def TemplateOp
+        : LinalgExtStructuredBase_Op<"template", [
+          DeclareOpInterfaceMethods<OpAsmOpInterface, ["getAsmBlockArgumentNames"]>,
+          AttrSizedOperandSegments]> {
+
+  let arguments = (ins Variadic<AnyType>:$inputs,
+                        Variadic<AnyShaped>:$outputs,
+                        AffineMapArrayAttr:$indexing_maps,
+                        IteratorTypeArrayAttr:$iterator_types,
+                        OptionalAttr<StrAttr>:$doc,
+                        OptionalAttr<StrAttr>:$library_call);
+  let results = (outs Variadic<AnyRankedTensor>:$result_tensors);
+  let regions = (region AnyRegion:$region);
+
+  let builders = [
+  OpBuilder<(ins "TypeRange":$resultTensorTypes, "ValueRange":$inputs,
+    "ValueRange":$outputs, "ArrayAttr":$indexingMaps,
+    "ArrayAttr":$iteratorTypes, "StringAttr":$doc,
+    "StringAttr":$libraryCall,
+    "function_ref<void(OpBuilder &, Location, ValueRange)>",
+    CArg<"ArrayRef<NamedAttribute>", "{}">:$attributes)>,
+  OpBuilder<(ins "TypeRange":$resultTensorTypes, "ValueRange":$inputs,
+    "ValueRange":$outputs, "ArrayRef<AffineMap>":$indexingMaps,
+    "ArrayRef<utils::IteratorType>":$iteratorTypes, "StringRef":$doc,
+    "StringRef":$libraryCall,
+    CArg<"function_ref<void(OpBuilder &, Location, ValueRange)>", "nullptr">,
+    CArg<"ArrayRef<NamedAttribute>", "{}">:$attributes)>,
+    OpBuilder<(ins "ValueRange":$inputs, "ValueRange":$outputBuffers,
+    "ArrayRef<AffineMap>":$indexingMaps, "ArrayRef<utils::IteratorType>":$iteratorTypes,
+    "StringRef":$doc, "StringRef":$libraryCall,
+    CArg<"function_ref<void(OpBuilder &, Location, ValueRange)>", "nullptr">,
+    CArg<"ArrayRef<NamedAttribute>", "{}">:$attributes)>,
+  OpBuilder<(ins "TypeRange":$resultTensorTypes, "ValueRange":$inputs,
+    "ValueRange":$outputs, "ArrayRef<AffineMap>":$indexingMaps,
+    "ArrayRef<utils::IteratorType>":$iteratorTypes,
+    CArg<"function_ref<void(OpBuilder &, Location, ValueRange)>", "nullptr">,
+    CArg<"ArrayRef<NamedAttribute>", "{}">:$attributes)>,
+    OpBuilder<(ins "ValueRange":$inputs, "ValueRange":$outputBuffers,
+    "ArrayRef<AffineMap>":$indexingMaps, "ArrayRef<utils::IteratorType>":$iteratorTypes,
+    CArg<"function_ref<void(OpBuilder &, Location, ValueRange)>", "nullptr">,
+    CArg<"ArrayRef<NamedAttribute>", "{}">:$attributes)>
+  ];
+
+  let extraClassDeclaration = structuredOpsBaseDecls # [{
+    SmallVector<StringRef, 8> linalgTraitAttrNames() {
+      return SmallVector<StringRef, 8>{
+          getDocAttrName(),
+          getIndexingMapsAttrName(), getLibraryCallAttrName(),
+          getIteratorTypesAttrName(),
+      };
+    }
+    std::string getLibraryCallName() {
+      return getLibraryCall() ?
+             getLibraryCall()->str() : "op_has_no_registered_library_name";
+    }
+
+    std::pair<int64_t, int64_t> getDpsInitsPositionRange() {
+      int64_t getNumOperands = this->getNumOperands();
+      return {getNumOperands - 1, getNumOperands};
+    }
+
+    static std::function<void(ImplicitLocOpBuilder &,
+                              Block &, ArrayRef<NamedAttribute>)>
+    getRegionBuilder() {
+      return nullptr;
+    }
+
+    MutableOperandRange getDpsInitsMutable() { return getOutputsMutable(); }
+
+    void getSuccessorRegions(mlir::RegionBranchPoint point,
+        ::llvm::SmallVectorImpl<mlir::RegionSuccessor> &regions) {
+      // Op has a region, but conceptually the control flow does not enter the
+      // region.
+      return;
+    }
+  }];
+
   let hasCustomAssemblyFormat = 1;
 }
 

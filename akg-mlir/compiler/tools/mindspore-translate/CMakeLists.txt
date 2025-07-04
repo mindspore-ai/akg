@@ -11,7 +11,6 @@ set(LIBS
   ${dialect_libs}
   ${mindspore_translation_libs}
   ${translation_libs}
-  AKGMindSporeToJson
   MLIRIR
   MLIRBufferizationTransforms
   MLIRTosaDialect

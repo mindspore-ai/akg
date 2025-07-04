@@ -19,6 +19,16 @@
 
 include "mlir/Pass/PassBase.td"
 
+def AKGOperatorIdentify : Pass<"akg-operator-identify", "func::FuncOp"> {
+  let summary = "Identify all operator type templates.";
+  let constructor = "mlir::createAKGOperatorIdentifyPass()";
+}
+
+def FoldDimension : Pass<"fold-dimension", "func::FuncOp"> {
+  let summary = "Fold consecutive dimensions together if requirements satisfied.";
+  let constructor = "mlir::createFoldDimensionPass()";
+}
+
 def CopyRemoval : Pass<"copy-removal"> {
   let summary = "Remove redundant copy operations";
   let constructor = "mlir::createCopyRemovalPass()";
@@ -48,7 +58,7 @@ def RemoveSymbolic : Pass<"remove-symbolic"> {
 }
 
 def SymbolRemoval : Pass<"symbol-removal"> {
-  let summary = "Remove symbol after polytops (This pass may be removed)";
+  let summary = "Remove symbol after polytops";
   let constructor = "mlir::createSymbolRemovalPass()";
 }
 

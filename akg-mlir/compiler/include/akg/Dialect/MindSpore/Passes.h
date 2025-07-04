@@ -25,17 +25,20 @@
 
 #include <memory>
 
-#include "akg/Dialect/MindSpore/Transforms/AKGSplitGraph.h"
 #include "akg/Dialect/MindSpore/Transforms/EliminateReshape.h"
 #include "akg/Dialect/MindSpore/Transforms/MoveDownReductionOps.h"
 #include "akg/Dialect/MindSpore/Transforms/RemoveRedundantReduce.h"
 
 namespace mlir {
 
+std::unique_ptr<mlir::Pass> createEliminateDimensionPass();
+std::unique_ptr<mlir::Pass> createAlignDimensionPass();
 std::unique_ptr<mlir::Pass> createMakeDynamicBroadcastablePass();
+std::unique_ptr<mlir::Pass> createMindsporeMakeBroadcastablePass();
 std::unique_ptr<OperationPass<func::FuncOp>> createRemoveRedundantReducePass();
 std::unique_ptr<OperationPass<func::FuncOp>> createMoveDownReductionOpsPass();
 std::unique_ptr<OperationPass<func::FuncOp>> createEliminateReshapePass();
+std::unique_ptr<mlir::Pass> createLegalizeTypePass();
 
 std::unique_ptr<mlir::Pass> createMakeDynamicBroadcastablePass(bool ignoreImplicitBroadcast);
 #define GEN_PASS_REGISTRATION

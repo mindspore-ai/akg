@@ -97,9 +97,8 @@ class FusionTransposeLowering : public OpRewritePattern<fusion::TransposeOp> {
   using OpRewritePattern<fusion::TransposeOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(fusion::TransposeOp op, PatternRewriter &rewriter) const override {
-    auto vecTranspose =
-      rewriter.create<vector::TransposeOp>(op.getLoc(), op.getResultType(), op.getVector(), op.getTranspAttr());
-    rewriter.replaceOp(op, vecTranspose->getResults());
+    // auto vecTranspose = rewriter.create<vector::TransposeOp>(op.getLoc(), op.getVector(), op.getTranspAttr());
+    // rewriter.replaceOp(op, vecTranspose->getResults());
     return success();
   }
 };

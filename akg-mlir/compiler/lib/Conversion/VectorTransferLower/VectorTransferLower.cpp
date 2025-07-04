@@ -23,6 +23,7 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
+#include "mlir/Dialect/Vector/Transforms/LoweringPatterns.h"
 #include "mlir/Dialect/Vector/Transforms/VectorDistribution.h"
 #include "mlir/Dialect/Vector/Transforms/VectorRewritePatterns.h"
 #include "mlir/Dialect/Vector/Transforms/VectorTransforms.h"
@@ -35,6 +36,7 @@ namespace mlir {
 }  // namespace mlir
 
 using namespace mlir;
+using namespace mlir::vector;
 
 namespace {
 class VectorTransferLowerPass : public impl::VectorTransferLowerBase<VectorTransferLowerPass> {

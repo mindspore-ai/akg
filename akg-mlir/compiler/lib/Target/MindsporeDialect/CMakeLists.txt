@@ -1,3 +1,7 @@
+include(FetchContent)
+FetchContent_Declare(json URL ${JSON_TARBALL_URL})
+FetchContent_MakeAvailable(json)
+
 add_akg_translation_library(AkgTargetJSONToMLIR
   TranslateRegistration.cpp
   TranslateToMindsporeDialect.cpp
@@ -14,5 +18,5 @@ add_akg_translation_library(AkgTargetJSONToMLIR
   MLIRBufferizationTransforms
   MLIRTosaDialect
   MLIRLinalgDialect
-  AKGMindSporeToJson
+  nlohmann_json::nlohmann_json
   )

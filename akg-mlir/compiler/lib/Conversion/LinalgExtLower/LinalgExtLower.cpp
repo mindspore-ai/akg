@@ -1,5 +1,5 @@
 /**
- * Copyright 2023 Huawei Technologies Co., Ltd
+ * Copyright 2023-2024 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,8 @@
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/GPU/IR/GPUDialect.h"
+#include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Linalg/Utils/Utils.h"
 #include "mlir/Dialect/Math/IR/Math.h"
@@ -55,7 +57,7 @@ class GatherOpConverter : public OpRewritePattern<linalgExt::GatherOp> {
   explicit GatherOpConverter(MLIRContext *context) : OpRewritePattern(context) {}
 
   LogicalResult matchAndRewrite(linalgExt::GatherOp op, PatternRewriter &rewriter) const override {
-    assert(op.hasBufferSemantics() && "expected linalg op with buffer semantics");
+    assert(op.hasPureBufferSemantics() && "expected linalg op with buffer semantics");
 
     Value data = op.getOperands()[0];
     auto dataShape = data.getType().cast<ShapedType>().getShape();
@@ -74,27 +76,28 @@ class GatherOpConverter : public OpRewritePattern<linalgExt::GatherOp> {
 
     auto loc = op.getLoc();
     Value output = op.getOutput();
-    buildAffineLoopNest(
+    affine::buildAffineLoopNest(
       rewriter, loc, lowerBounds, indicesShape, steps,
       [&](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange ivs) {
         Value slice = nestedBuilder.create<memref::LoadOp>(nestedLoc, indices, ivs);
         Value sliceIdx = nestedBuilder.create<arith::IndexCastOp>(nestedLoc, nestedBuilder.getIndexType(), slice);
 
-        buildAffineLoopNest(rewriter, loc, lowerBounds2, upperBounds2, steps2,
-                            [&](OpBuilder &nestedBuilder2, Location nestedLoc2, ValueRange ivs2) {
-                              buildAffineLoopNest(
-                                rewriter, loc, lowerBounds3, upperBounds3, steps3,
-                                [&](OpBuilder &nestedBuilder3, Location nestedLoc3, ValueRange ivs3) {
-                                  SmallVector<Value, kVectorInitSize> dataIndices(ivs2);
-                                  dataIndices.push_back(sliceIdx);
-                                  dataIndices.append(SmallVector<Value, kVectorInitSize>(ivs3));
-                                  SmallVector<Value, kVectorInitSize> outputIndices(ivs2);
-                                  outputIndices.append(SmallVector<Value, kVectorInitSize>(ivs));
-                                  outputIndices.append(SmallVector<Value, kVectorInitSize>(ivs3));
-                                  Value val = nestedBuilder3.create<memref::LoadOp>(nestedLoc3, data, dataIndices);
-                                  (void)nestedBuilder3.create<memref::StoreOp>(nestedLoc3, val, output, outputIndices);
-                                });
-                            });
+        affine::buildAffineLoopNest(
+          rewriter, loc, lowerBounds2, upperBounds2, steps2,
+          [&](OpBuilder &nestedBuilder2, Location nestedLoc2, ValueRange ivs2) {
+            affine::buildAffineLoopNest(
+              rewriter, loc, lowerBounds3, upperBounds3, steps3,
+              [&](OpBuilder &nestedBuilder3, Location nestedLoc3, ValueRange ivs3) {
+                SmallVector<Value, kVectorInitSize> dataIndices(ivs2);
+                dataIndices.push_back(sliceIdx);
+                dataIndices.append(SmallVector<Value, kVectorInitSize>(ivs3));
+                SmallVector<Value, kVectorInitSize> outputIndices(ivs2);
+                outputIndices.append(SmallVector<Value, kVectorInitSize>(ivs));
+                outputIndices.append(SmallVector<Value, kVectorInitSize>(ivs3));
+                Value val = nestedBuilder3.create<memref::LoadOp>(nestedLoc3, data, dataIndices);
+                (void)nestedBuilder3.create<memref::StoreOp>(nestedLoc3, val, output, outputIndices);
+              });
+          });
       });
     rewriter.eraseOp(op);
     return success();
@@ -107,7 +110,7 @@ class UnsortedSegmentSumOpConverter : public OpRewritePattern<linalgExt::Unsorte
       : OpRewritePattern(context), veclen(vectorSize) {}
 
   LogicalResult matchAndRewrite(linalgExt::UnsortedSegmentSumOp op, PatternRewriter &rewriter) const override {
-    assert(op.hasBufferSemantics() && "expected linalgExt op with buffer semantics");
+    assert(op.hasPureBufferSemantics() && "expected linalgExt op with buffer semantics");
     Value data = op.getOperands()[0];
     Value indices = op.getOperands()[1];
     auto dataShape = data.getType().cast<ShapedType>().getShape();
@@ -123,13 +126,13 @@ class UnsortedSegmentSumOpConverter : public OpRewritePattern<linalgExt::Unsorte
     SmallVector<int64_t, kVectorInitSize> sliceShape(dataShape.begin() + indicesShape.size(), dataShape.end());
 
     auto loc = op.getLoc();
-    buildAffineLoopNest(
+    affine::buildAffineLoopNest(
       rewriter, loc, lowerBounds, indicesShape, steps,
       [&](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange ivs) {
         Value slice = nestedBuilder.create<memref::LoadOp>(nestedLoc, indices, ivs);
         Value sliceIdx = nestedBuilder.create<arith::IndexCastOp>(nestedLoc, nestedBuilder.getIndexType(), slice);
 
-        buildAffineLoopNest(
+        affine::buildAffineLoopNest(
           rewriter, nestedLoc, lowerBounds2, sliceShape, steps2,
           [&](OpBuilder &nestedBuilder2, Location nestedLoc2, ValueRange ivs2) {
             SmallVector<Value, kVectorInitSize> dataIndices(ivs);
@@ -146,7 +149,7 @@ class UnsortedSegmentSumOpConverter : public OpRewritePattern<linalgExt::Unsorte
             Value step = rewriter.create<arith::ConstantIndexOp>(nestedLoc2, veclen);
             Value upperBound = rewriter.create<arith::ConstantIndexOp>(nestedLoc2, sliceShape.back());
             Value affineMin =
-              rewriter.createOrFold<AffineMinOp>(nestedLoc2, minMap, ValueRange{upperBound, ivs2.back(), step});
+              rewriter.createOrFold<affine::AffineMinOp>(nestedLoc2, minMap, ValueRange{upperBound, ivs2.back(), step});
             auto maskTy = VectorType::get({veclen}, rewriter.getIntegerType(1));
             Value vectorMask = rewriter.create<vector::CreateMaskOp>(nestedLoc2, maskTy, ValueRange{affineMin});
 
@@ -197,7 +200,7 @@ struct LinalgExtLowerPass : public LinalgExtLowerBase<LinalgExtLowerPass> {
     // clang-format off
     registry.insert<
         arith::ArithDialect,
-        mlir::AffineDialect,
+        mlir::affine::AffineDialect,
         vector::VectorDialect,
         math::MathDialect,
         shape::ShapeDialect,

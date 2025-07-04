@@ -80,7 +80,8 @@ LogicalResult mlir::translateToPTX(Operation *op, raw_ostream &os, const std::st
 
   auto ctx = moduleOp.getContext();
   mlir::PassManager pm(ctx);
-  applyPassManagerCLOptions(pm);
+  if (failed(applyPassManagerCLOptions(pm)))
+    return failure();
   auto &kernelPm = pm.nest<mlir::gpu::GPUModuleOp>();
   kernelPm.addPass(std::move(pass));
 

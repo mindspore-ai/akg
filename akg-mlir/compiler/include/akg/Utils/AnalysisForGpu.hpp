@@ -248,7 +248,7 @@ class GpuCommonUtils {
     }
     mlir::memref::ExpandShapeOp targetExpandShape = nullptr;
     (void)funcOp->walk([&](mlir::memref::ExpandShapeOp op) {
-      if (op.getOperand() == targetArg) {
+      if (op.getOperands()[0] == targetArg) {
         targetExpandShape = op;
       }
     });

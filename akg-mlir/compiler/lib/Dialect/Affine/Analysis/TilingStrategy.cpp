@@ -28,24 +28,6 @@ namespace autotiling {
 using akg::utils::GpuInfo;
 using akg::utils::StrategyHelper;
 
-static int getIntConst(const mlir::Value value) {
-  auto constValueAttr = value.getDefiningOp()->getAttr("value");
-  if (isa<IntegerAttr>(constValueAttr)) {
-    return constValueAttr.dyn_cast<IntegerAttr>().getInt();
-  }
-  // Other type const, e.g. float, will return 0.
-  return 0;
-}
-
-static bool UniquePrimeChecker(Operation *funcOp, int64_t prime) {
-  bool isUnique = true;
-  funcOp->walk([&](mlir::arith::ConstantOp constOp) {
-    auto constValue = getIntConst(constOp);
-    isUnique |= constValue == prime;
-  });
-  return isUnique;
-}
-
 bool TilingStrategy::IsRelevant(const AxisPtr &a, const InitGraphPtr graph) {
   if (a->axisType.find(workForAxisLabel) != a->axisType.end()) {
     return true;

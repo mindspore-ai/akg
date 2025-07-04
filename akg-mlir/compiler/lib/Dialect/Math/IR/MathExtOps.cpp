@@ -28,6 +28,7 @@
 #include "mlir/Dialect/CommonFolders.h"
 #include "mlir/Dialect/Quant/QuantOps.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/Matchers.h"
@@ -36,6 +37,7 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Transforms/InliningUtils.h"
 
+#include <optional>
 #include "akg/Dialect/Math/IR/MathExtOps.h"
 #include "akg/Dialect/Math/IR/MathExtOpsDialect.cpp.inc"
 
@@ -64,7 +66,7 @@ static Type getI1SameShape(const Type type) {
     return UnrankedTensorType::get(i1Type);
   }
   if (auto vectorType = type.dyn_cast<VectorType>()) {
-    return VectorType::get(vectorType.getShape(), i1Type, vectorType.getNumScalableDims());
+    return VectorType::get(vectorType.getShape(), i1Type, vectorType.getScalableDims());
   }
   return i1Type;
 }
@@ -90,7 +92,7 @@ void mlir::mathExt::MathExtDialect::initialize() {
 
 OpFoldResult mathExt::AsinOp::fold(FoldAdaptor adaptor) {
   const uint64_t width64 = 64, width32 = 32;
-  return constFoldUnaryOpConditional<FloatAttr>(adaptor.getOperands(), [](const APFloat &a) -> Optional<APFloat> {
+  return constFoldUnaryOpConditional<FloatAttr>(adaptor.getOperands(), [](const APFloat &a) -> std::optional<APFloat> {
     switch (APFloat::getSizeInBits(a.getSemantics())) {
       case width64:
         return APFloat(asin(a.convertToDouble()));
@@ -107,7 +109,7 @@ OpFoldResult mathExt::AsinOp::fold(FoldAdaptor adaptor) {
 // ===----------------------------------------------------------------------===//
 OpFoldResult mathExt::AcosOp::fold(FoldAdaptor adaptor) {
   const uint64_t width64 = 64, width32 = 32;
-  return constFoldUnaryOpConditional<FloatAttr>(adaptor.getOperands(), [](const APFloat &a) -> Optional<APFloat> {
+  return constFoldUnaryOpConditional<FloatAttr>(adaptor.getOperands(), [](const APFloat &a) -> std::optional<APFloat> {
     switch (APFloat::getSizeInBits(a.getSemantics())) {
       case width64:
         return APFloat(acos(a.convertToDouble()));

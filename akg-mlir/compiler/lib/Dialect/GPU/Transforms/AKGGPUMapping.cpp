@@ -219,6 +219,12 @@ struct SCFForToParallelPattern : public RewritePattern {
         newOp->setAttr(attr.getName(), attr.getValue());
       }
       rewriter.replaceOp(op, parallelOp.getResults());
+
+      Operation *terminator = parallelOp.getRegion().getBlocks().front().getTerminator();
+      if (auto yieldOp = dyn_cast<scf::YieldOp>(terminator)){
+          rewriter.setInsertionPoint(yieldOp);
+          rewriter.replaceOpWithNewOp<scf::ReduceOp>(yieldOp);
+      }
       return success();
     }
     return failure();
@@ -655,7 +661,10 @@ bool AKGGPUMappingLoops::saveMappingResultToJson() {
   auto kernelName = getAkgKernelName();
   (void)DirUtils::CheckOrCreateDirectory("./akg_kernel_meta/");
   std::string output_filename = "./akg_kernel_meta/" + kernelName + ".json";
-  if (llvm::writeFileAtomically("tmp_%%%%%%%%.json", output_filename, res)) {
+  if (llvm::writeToOutput(output_filename, [&](llvm::raw_ostream &OS) -> llvm::Error {
+        OS << res;
+        return llvm::Error::success();
+      })) {
     llvm::report_fatal_error(llvm::StringRef("Write json file to " + output_filename + " failed."));
     return false;
   }

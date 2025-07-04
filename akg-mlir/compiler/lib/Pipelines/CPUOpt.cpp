@@ -25,14 +25,16 @@
 #include "akg/Dialect/LLVMIR/Passes.h"
 #include "akg/Dialect/Linalg/Passes.h"
 #include "akg/Dialect/MindSpore/Passes.h"
-#include "akg/Dialect/Tosa/Passes.h"
 #include "akg/Transforms/Passes.h"
 #include "akg/Utils/AKGGlobalVars.hpp"
-#include "polytops/mlir/Dialect/Polytops/Transforms/Passes.hpp"
 
+#include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
+#include "mlir/Conversion/GPUToNVVM/GPUToNVVMPass.h"
 #include "mlir/Conversion/SCFToOpenMP/SCFToOpenMP.h"
+#include "mlir/Dialect/Affine/Passes.h"
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
 #include "mlir/Dialect/OpenMP/OpenMPDialect.h"
+#include "mlir/Dialect/Tensor/Transforms/Passes.h"
 #include "mlir/IR/AsmState.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dialect.h"
@@ -86,27 +88,19 @@ void jsonToLinalg(OpPassManager &pm, const CpuOptPipelineOptions &options) {
   }
   nestedFunctionPM.addPass(createLinalgSimplifyPass());
   nestedFunctionPM.addPass(createSymbolicRemovalPass());
-  if (!options.cpuFast || (options.dynamicShape && !options.dynShapeEnablePoly)) {
+  if (!options.cpuFast || options.dynamicShape) {
     nestedFunctionPM.addPass(createLinalgElementwiseOpFusionPass());
     nestedFunctionPM.addPass(createLinalgElementwiseFusionExtPass());
   }
   nestedFunctionPM.addPass(tosa::createTosaToArith());
-
-  if (!options.cpuFast) {
-    pm.addPass(createMathExtLowerPass());
-  }
 }
 
 void commonBufferization(OpPassManager &pm) {
   // Bufferization and Tensor Transform
   OpPassManager &nestedFunctionPM = pm.nest<func::FuncOp>();
-  nestedFunctionPM.addPass(createShapeBufferizePass());
   nestedFunctionPM.addPass(createLinalgCopyBufferizePass());
-  nestedFunctionPM.addPass(createLinalgBufferizePass());
   nestedFunctionPM.addPass(createLinalgExtBufferizePass());
-  pm.addPass(arith::createArithBufferizePass());
   pm.addPass(bufferization::createEmptyTensorToAllocTensorPass());
-  pm.addPass(createTensorBufferizePass());
   pm.addPass(func::createFuncBufferizePass());
   pm.addPass(bufferization::createBufferResultsToOutParamsPass());
   pm.addPass(createCanonicalizerPass());
@@ -115,10 +109,8 @@ void commonBufferization(OpPassManager &pm) {
 
 void affinePreprocess(OpPassManager &pm, const CpuOptPipelineOptions &options) {
   pm.addPass(createCSEPass());
-  if (!options.dynamicShape || (options.dynamicShape && options.dynShapeEnablePoly)) {
-    bool promoteSingleIter = true;
-    pm.addPass(createAffineLoopNormalizePass(promoteSingleIter));
-  }
+  bool promoteSingleIter = true;
+  pm.addPass(affine::createAffineLoopNormalizePass(promoteSingleIter));
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createCopyElisionPass());
   pm.addPass(createSimplifyShapePass());
@@ -126,12 +118,6 @@ void affinePreprocess(OpPassManager &pm, const CpuOptPipelineOptions &options) {
   pm.addPass(createCopyRemovalPass());
   pm.addPass(createCSEPass());
   pm.addPass(createCanonicalizerPass());
-}
-
-void affinePolytops(OpPassManager &pm) {
-  polytops::mlir::PolytopsSchedulePipelineOptions polytopsOptions;
-  polytopsOptions.target = kTargetCpu;
-  polytops::mlir::createPolytopsScheduleOptPipeline(pm, polytopsOptions);
 }
 
 void affineOptimize(OpPassManager &pm, const CpuOptPipelineOptions &options) {
@@ -154,13 +140,12 @@ void affineOptimize(OpPassManager &pm, const CpuOptPipelineOptions &options) {
     // elim store-load pairs before vectorization and after `merge-fusion + extract-if`
     nestedFunctionPM1.addPass(createStoreLoadElimPass());
   }
-  nestedFunctionPM1.addPass(createAKGVectorizePass(options.target, options.feature));
   nestedFunctionPM1.addPass(createRemoveRedundantLoopsPass());
   nestedFunctionPM1.addPass(createAKGLoopParallelizePass(options.enableParallel));
   nestedFunctionPM1.addPass(createVectorTransferLowerPass());
 
-  if (options.dynamicShape && !options.dynShapeEnablePoly) {
-    pm.addPass(createFixDynamicIndexingPass());  // have issue when polytops not call...
+  if (options.dynamicShape) {
+    pm.addPass(createFixDynamicIndexingPass());
   }
 }
 
@@ -172,25 +157,24 @@ void convertToLLVM(OpPassManager &pm, const CpuOptPipelineOptions &options) {
   }
   pm.addPass(createCanonicalizerPass());
   //   MemrefToLLVM must be put before SCFToCF
-  pm.addPass(createMemRefToLLVMConversionPass());
+  // pm.addPass(createMemRefToLLVMConversionPass());
   pm.addPass(createConvertSCFToCFPass());
   pm.addPass(memref::createExpandStridedMetadataPass());
   pm.addPass(createCanonicalizerPass());
   // Convert All dialects to LLVM and packing parameters
-  pm.addPass(createMathExtToLibmPass());
   pm.addPass(createConvertMathToLibmPass());
   pm.addPass(createConvertVectorToLLVMPass());
   pm.addPass(createArithToLLVMConversionPass());
   pm.addPass(createConvertMathToLLVMPass());
-  pm.addPass(createConvertLinalgToLLVMPass());
+  // pm.addPass(createConvertLinalgToLLVMPass());
   mlir::MLIRContext tmp_context;
-  LowerToLLVMOptions llvmOptions(&tmp_context);
+  ConvertFuncToLLVMPassOptions llvmOptions;
   llvmOptions.useBarePtrCallConv = true;
   pm.addPass(createConvertFuncToLLVMPass(llvmOptions));
   llvmOptions.useBarePtrCallConv = false;
   // ArithToLLVM must be put before CFToLLVM
   pm.addPass(createConvertFuncToLLVMPass(llvmOptions));
-  pm.addPass(cf::createConvertControlFlowToLLVMPass());
+  pm.addPass(createConvertControlFlowToLLVMPass());
   pm.addPass(LLVM::createParameterPackingPass(options.outliningPlatform == "MindSpore"));
   pm.addPass(createAKGParallelLaunchPass(options.outliningPlatform == "MindSpore", options.cpuOutlining));
   if (!options.cpuOutlining) {
@@ -214,10 +198,6 @@ void createCpuOptPipelineImpl(OpPassManager &pm, const CpuOptPipelineOptions &op
     nestedFunctionPM.addPass(createConvertLinalgToAffineLoopsPass());
     nestedFunctionPM.addPass(mlir::createLinalgExtLowerPass());
     affinePreprocess(pm, options);
-    if (!options.dynamicShape || (options.dynamicShape && options.dynShapeEnablePoly)) {
-      affinePolytops(pm);
-    }
-    pm.addPass(createMathExtLowerPass());
     affineOptimize(pm, options);
   } else {
     OpPassManager &nestedFunctionPM1 = pm.nest<func::FuncOp>();
@@ -239,4 +219,3 @@ void createCpuOptPipeline(OpPassManager &pm, const CpuOptPipelineOptions &option
   createCpuOptPipelineImpl(pm, options);
 }
 }  // namespace mlir
-

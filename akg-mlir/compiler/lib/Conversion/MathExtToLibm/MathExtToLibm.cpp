@@ -28,7 +28,6 @@
 #include "akg/Analysis/SymbolicShapeAnalysis.h"
 #include "akg/Conversion/Passes.h"
 #include "akg/Dialect/Linalg/IR/LinalgExtOps.h"
-#include "akg/Dialect/Math/IR/MathExtOps.h"
 #include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -127,7 +126,7 @@ LogicalResult VecOpToScalarOp<Op>::matchAndRewrite(Op op, PatternRewriter &rewri
     loc, DenseElementsAttr::get(vecType, FloatAttr::get(vecType.getElementType(), 0.0)));
   SmallVector<int64_t> strides = computeStrides(shape);
   for (auto linearIndex = 0; linearIndex < numElements; ++linearIndex) {
-    SmallVector<int64_t> positions = delinearize(strides, linearIndex);
+    SmallVector<int64_t> positions = delinearize(linearIndex, strides);
     SmallVector<Value> operands;
     for (auto input : op->getOperands()) {
       operands.push_back(rewriter.create<vector::ExtractOp>(loc, input, positions));
@@ -208,7 +207,7 @@ struct MathExtToLibmPass : public MathExtToLibmBase<MathExtToLibmPass> {
     registry.insert<math::MathDialect>();
     registry.insert<mathExt::MathExtDialect>();
     registry.insert<scf::SCFDialect>();
-    registry.insert<AffineDialect>();
+    registry.insert<affine::AffineDialect>();
     registry.insert<memref::MemRefDialect>();
     registry.insert<bufferization::BufferizationDialect>();
   }

@@ -17,7 +17,6 @@
 #ifndef COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_DEPENDENCEANALYSIS_H_
 #define COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_DEPENDENCEANALYSIS_H_
 
-#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"

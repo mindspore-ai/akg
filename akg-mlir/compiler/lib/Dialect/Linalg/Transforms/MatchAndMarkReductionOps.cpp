@@ -101,7 +101,7 @@ static void MatchAndMarkRedOpInAffine(Operation *funcOp) {
       SmallVector<bool, 8> redFlags(false);
       auto curOp = redOp;
       while (curOp) {
-        if (isa<AffineForOp>(curOp)) {
+        if (isa<affine::AffineForOp>(curOp)) {
           if (curOp->hasAttr("reduceLoop")) {
             redFlags.push_back(true);
           } else {

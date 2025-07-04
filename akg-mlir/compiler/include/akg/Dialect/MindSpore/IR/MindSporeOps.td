@@ -1403,9 +1403,9 @@ def MindSpore_SelectOp : MindSpore_Op<"select", [Pure]> {
   }];
 
   let arguments = (ins
-    I1Tensor:$cond,
-    MindSpore_Tensor:$x,
-    MindSpore_Tensor:$y
+    I1Tensor:$pred,
+    MindSpore_Tensor:$on_true,
+    MindSpore_Tensor:$on_false
   );
 
   let results = (outs
@@ -1864,8 +1864,8 @@ def MindSpore_MaximumOp : MindSpore_Op<"maximum", [Pure]> {
   }];
 
   let arguments = (ins
-    MindSpore_Tensor:$x,
-    MindSpore_Tensor:$y
+    MindSpore_Tensor:$input1,
+    MindSpore_Tensor:$input2
   );
 
   let results = (outs
@@ -1885,8 +1885,8 @@ def MindSpore_MinimumOp : MindSpore_Op<"minimum", [Pure]> {
   }];
 
   let arguments = (ins
-    MindSpore_Tensor:$x,
-    MindSpore_Tensor:$y
+    MindSpore_Tensor:$input1,
+    MindSpore_Tensor:$input2
   );
 
   let results = (outs

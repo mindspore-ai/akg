@@ -114,7 +114,7 @@ static mlir::LogicalResult PrimeNumReplace(Operation *funcOp) {
       builder.setInsertionPointAfter(unknownUpperBound);
 
       auto loc = unknownUpperBound->getLoc();
-      mlir::Attribute constAttr = builder.getIndexAttr((long)primeNum);
+      auto constAttr = builder.getIndexAttr((long)primeNum);
       auto newPrimeConstant = builder.create<mlir::arith::ConstantOp>(loc, constAttr);
       unknownUpperBound->replaceAllUsesWith(newPrimeConstant);
       auto keepArgs = builder.create<mindspore::KeepArgsOp>(loc, upperBound, newPrimeConstant.getResult());

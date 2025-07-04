@@ -33,28 +33,26 @@ namespace mlir {
 
 void createGpuCodegenPipeline(OpPassManager &pm, const GPUCodegenPipelineOptions &options) {
   // Add Passes.
-  pm.addPass(createMathExtLowerPass());
   pm.addPass(createConvertVectorToLLVMPass());
   pm.addPass(createCanonicalizerPass());
   pm.addPass(createLowerAffinePass());
   pm.addPass(createConvertVectorToGPUPass());
   pm.addPass(createConvertSCFToCFPass());
 
-  pm.addPass(cf::createConvertControlFlowToLLVMPass());
-  pm.addPass(createLowerGpuOpsToNVVMOpsPass());
+  pm.addPass(createConvertControlFlowToLLVMPass());
+  pm.addPass(createConvertGpuOpsToNVVMOps());
   pm.addPass(createConvertMathToLLVMPass());
-  pm.addPass(createConvertLinalgToLLVMPass());
+  // pm.addPass(createConvertLinalgToLLVMPass());
   pm.addPass(createConvertMathToLLVMPass());
-  pm.addPass(createMemRefToLLVMConversionPass());
+  // pm.addPass(createMemRefToLLVMConversionPass());
   pm.addPass(mlir::memref::createExpandStridedMetadataPass());
 
   mlir::MLIRContext tmp_context;
-  LowerToLLVMOptions llvmOptions(&tmp_context);
+  ConvertFuncToLLVMPassOptions llvmOptions;
   llvmOptions.useBarePtrCallConv = true;
   pm.addPass(createConvertFuncToLLVMPass(llvmOptions));
-  pm.addPass(createLowerGpuOpsToNVVMOpsPass());
+  pm.addPass(createConvertGpuOpsToNVVMOps());
   pm.addPass(createStripDebugInfoPass());
-  pm.addPass(createLowerGpuOpsToNVVMOpsPass());
+  pm.addPass(createConvertGpuOpsToNVVMOps());
 }
 }  // namespace mlir
-

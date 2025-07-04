@@ -15,6 +15,7 @@
  */
 
 #include "akg/Dialect/Affine/Analysis/DependenceAnalysis.h"
+#include "akg/Dialect/Affine/Analysis/AffineAnalysis.h"
 
 #include "akg/Utils/AnalysisCommon.hpp"
 #include "llvm/ADT/DenseMap.h"
@@ -37,7 +38,7 @@ namespace akg {
 unsigned Node::getLoadOpCount(Value memref) const {
   unsigned loadOpCount = 0;
   for (Operation *loadOp : loads) {
-    if (memref == cast<AffineReadOpInterface>(loadOp).getMemRef()) {
+    if (memref == cast<affine::AffineReadOpInterface>(loadOp).getMemRef()) {
       ++loadOpCount;
     }
   }
@@ -48,7 +49,7 @@ unsigned Node::getLoadOpCount(Value memref) const {
 unsigned Node::getStoreOpCount(Value memref) const {
   unsigned storeOpCount = 0;
   for (Operation *storeOp : stores) {
-    if (memref == cast<AffineWriteOpInterface>(storeOp).getMemRef()) {
+    if (memref == cast<affine::AffineWriteOpInterface>(storeOp).getMemRef()) {
       ++storeOpCount;
     }
   }
@@ -184,15 +185,15 @@ bool MemRefDependenceGraph::hasDependencePath(unsigned srcId, unsigned dstId) {
 bool MemRefDependenceGraph::hasMemrefAccessDependence(unsigned srcId, unsigned dstId) {
   Operation *srcOp = getNode(srcId)->op;
   Operation *dstOp = getNode(dstId)->op;
-  unsigned numCommonLoops = getNumCommonSurroundingLoops(*srcOp, *dstOp);
-  MemRefAccess srcAccess(srcOp);
-  MemRefAccess dstAccess(dstOp);
+  unsigned numCommonLoops = affine::getNumCommonSurroundingLoops(*srcOp, *dstOp);
+  affine::AKGMemRefAccess srcAccess(srcOp);
+  affine::AKGMemRefAccess dstAccess(dstOp);
   for (unsigned d = 1; d <= numCommonLoops + 1; ++d) {
-    FlatAffineValueConstraints dependenceConstraints;
+    affine::FlatAffineValueConstraints dependenceConstraints;
     // todo: Cache dependence analysis results, check cache here.
-    DependenceResult result =
-      mlir::checkMemrefAccessDependence(srcAccess, dstAccess, d, &dependenceConstraints, nullptr);
-    if (result.value == DependenceResult::HasDependence) {
+    affine::DependenceResult result =
+      mlir::affine::checkMemrefAccessDependenceAKG(srcAccess, dstAccess, d, &dependenceConstraints, nullptr);
+    if (result.value == affine::DependenceResult::HasDependence) {
       return true;
     }
   }
@@ -208,21 +209,21 @@ void MemRefDependenceGraph::getDirectlyDependentNodes(unsigned id, DenseSet<unsi
 
 void MemRefDependenceGraph::createInitNode(DenseMap<Value, SetVector<unsigned>> &memrefAccesses) {
   block->walk([&](Operation *op) {
-    if (auto loadOp = dyn_cast<AffineReadOpInterface>(op)) {
+    if (auto loadOp = dyn_cast<affine::AffineReadOpInterface>(op)) {
       // Create graph node for top-level load op.
       Node node(nextNodeId++, op);
       node.loads.push_back(op);
-      auto memref = cast<AffineReadOpInterface>(op).getMemRef();
+      auto memref = cast<affine::AffineReadOpInterface>(op).getMemRef();
       memrefAccesses[memref].insert(node.id);
       nodes.insert({node.id, node});
-    } else if (auto storeOp = dyn_cast<AffineWriteOpInterface>(op)) {
+    } else if (auto storeOp = dyn_cast<affine::AffineWriteOpInterface>(op)) {
       // Create graph node for top-level store op.
       Node node(nextNodeId++, op);
       node.stores.push_back(op);
-      auto memref = cast<AffineWriteOpInterface>(op).getMemRef();
+      auto memref = cast<affine::AffineWriteOpInterface>(op).getMemRef();
       memrefAccesses[memref].insert(node.id);
       nodes.insert({node.id, node});
-    } else if (op->getNumRegions() != 0 || isa<AffineYieldOp, func::ReturnOp>(op)) {
+    } else if (op->getNumRegions() != 0 || isa<affine::AffineYieldOp, func::ReturnOp>(op)) {
       // Return false if another region is found (not currently supported).
       return;
     } else if (isa<CallOpInterface>(op)) {

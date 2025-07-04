@@ -133,30 +133,32 @@ void tryToSinkOps(Region &parallelRegion) {
 }
 
 void addCallBackPtrToFunc(SmallVector<func::FuncOp> &funcOps) {
-  for (auto &func : funcOps) {
-    auto context = func->getContext();
-    OpBuilder builder(func);
-    auto loc = func.getLoc();
-    SmallVector<Type, 4> newFuncOperandTypes;
-    LLVM::LLVMPointerType llvmPointerType = LLVM::LLVMPointerType::get(IntegerType::get(context, 8));
-    const int32_t firstArgPos = 0;
-    func.insertArgument(firstArgPos, llvmPointerType, {}, loc);  // callback func
-    func.insertArgument(firstArgPos, llvmPointerType, {}, loc);  // task nums
+#if 0
+    for (auto &func : funcOps) {
+        auto context = func->getContext();
+        OpBuilder builder(func);
+        auto loc = func.getLoc();
+        SmallVector<Type, 4> newFuncOperandTypes;
+        LLVM::LLVMPointerType llvmPointerType = LLVM::LLVMPointerType::get(context);
+        const int32_t firstArgPos = 0;
+        func.insertArgument(firstArgPos, llvmPointerType, {}, loc);  // callback func
+        func.insertArgument(firstArgPos, llvmPointerType, {}, loc);  // task nums
 
-    for (auto type : func.getArgumentTypes()) {
-      (void)newFuncOperandTypes.emplace_back(type);
+        for (auto type : func.getArgumentTypes()) {
+            (void)newFuncOperandTypes.emplace_back(type);
+        }
+        auto newFuncTypes = FunctionType::get(context, newFuncOperandTypes, {});
+        func.setType(newFuncTypes);
+        auto origFuncAttributes = func.getOperation()->getAttrs();
+        SmallVector<NamedAttribute> newFuncAttrs;
+        for (auto attr : origFuncAttributes) {
+            (void)newFuncAttrs.emplace_back(attr);
+        }
+        (void)newFuncAttrs.emplace_back(
+            NamedAttribute(StringAttr::get(context, kFuncType), StringAttr::get(context, kCpuMainFunc)));
+        func->setAttrs(newFuncAttrs);
     }
-    auto newFuncTypes = FunctionType::get(context, newFuncOperandTypes, {});
-    func.setType(newFuncTypes);
-    auto origFuncAttributes = func.getOperation()->getAttrs();
-    SmallVector<NamedAttribute> newFuncAttrs;
-    for (auto attr : origFuncAttributes) {
-      (void)newFuncAttrs.emplace_back(attr);
-    }
-    (void)newFuncAttrs.emplace_back(
-      NamedAttribute(StringAttr::get(context, kFuncType), StringAttr::get(context, kCpuMainFunc)));
-    func->setAttrs(newFuncAttrs);
-  }
+#endif
   return;
 }
 
@@ -272,21 +274,6 @@ func::FuncOp tryToRewriteCPUParallelLaunchOp(func::FuncOp &mainFunc, scf::Parall
 
   return lambdaFunc;
 }
-
-static void addCPUParallelLaunchFuncOp(Operation *outliningOp, const func::FuncOp &lambdaFunc,
-                                       const ValueRange operands) {
-  auto loc = outliningOp->getLoc();
-  OpBuilder builder(outliningOp);
-  Value zero = builder.create<arith::ConstantIntOp>(loc, 0, 32);
-  SmallVector<Value, 4> newOperands;
-  (void)newOperands.emplace_back(zero);
-  (void)newOperands.emplace_back(zero);
-  (void)std::copy(operands.begin(), operands.end(), std::back_inserter(newOperands));
-  (void)builder.create<func::CallOp>(loc, SymbolRefAttr::get(lambdaFunc), TypeRange{}, newOperands);
-  outliningOp->erase();
-  return;
-}
-
 }  // namespace mlir
 
 namespace {
@@ -320,13 +307,11 @@ class AKGFuncOutlining : public impl::AKGFuncOutliningBase<AKGFuncOutlining> {
     SymbolTable symTable(getOperation());
     // try to extract the functions;
     func::FuncOp mainFunc;
-    tryToSplitFuncs(toBeHandleFuncOps, mainFunc, &symTable);
     return;
   }
 
   void getProcessFuncs(ModuleOp &module, SmallVector<func::FuncOp> &funcOps);
 
-  void tryToSplitFuncs(SmallVector<func::FuncOp> &funcOps, func::FuncOp &mainFunc, SymbolTable *symbolTablePtr);
   bool hasParallel = false;
   bool isNestedParallel = false;
   MLIRContext *context = nullptr;
@@ -334,195 +319,8 @@ class AKGFuncOutlining : public impl::AKGFuncOutliningBase<AKGFuncOutlining> {
 
   bool isOutlining = false;
   bool isMindSpore = false;
-
-  void handleCalculateFunc(func::FuncOp &func);
-  void tryToSplitParallelFunc(func::FuncOp &func, func::FuncOp &mainFunc, SymbolTable *symbolTablePtr);
 };
 }  // namespace
-
-void AKGFuncOutlining::handleCalculateFunc(func::FuncOp &func) {
-  // only if there has parallel,we just add static schdule
-  if (hasParallel) {
-    SmallVector<scf::ParallelOp> parallelOpVec;
-    func->walk([&](const scf::ParallelOp op) {
-      if (op->getParentOfType<scf::ParallelOp>()) {
-        return;
-      }
-      (void)parallelOpVec.emplace_back(op);
-    });
-    // one func we think only one parallel region;
-    assert(parallelOpVec.size() == 1);
-    scf::ParallelOp parallelOp = parallelOpVec.front();
-    auto loc = parallelOp.getLoc();
-    OpBuilder builder(parallelOp);
-    scf::ParallelOp cloned = cast<scf::ParallelOp>(builder.clone(*parallelOp.getOperation()));
-
-    Value numIdx = func.getArgument(0);
-    Value numCores = func.getArgument(1);
-    Value upperIdx = parallelOp.getUpperBound()[0];
-    Value stepIdx = parallelOp.getStep()[0];
-
-    // record original for upper bound Op
-    origParallelUpperBoundDefOp = upperIdx.getDefiningOp();
-    auto upperVal = builder.create<arith::IndexCastOp>(loc, builder.getI32Type(), upperIdx);
-    auto stepVal = builder.create<arith::IndexCastOp>(loc, builder.getI32Type(), stepIdx);
-    Value one = builder.create<arith::ConstantIntOp>(loc, 1, 32);
-
-    // ( numCore + (upperBound - 1)) % numCore
-    auto upperCores = builder.create<arith::SubIOp>(loc, numCores, one);
-    auto numCoreAddBound = builder.create<arith::AddIOp>(loc, upperVal, upperCores);
-    auto iterRange = builder.create<arith::DivSIOp>(loc, numCoreAddBound, numCores);
-    // real_coreIdx = coreIdx + 1
-    auto realCoreIdx = builder.create<arith::AddIOp>(loc, numIdx, one);
-    // get the current core's upper bound
-    auto curIterUpperBound = builder.create<arith::MulIOp>(loc, iterRange, realCoreIdx);
-    auto coreLowerBound = builder.create<arith::MulIOp>(loc, iterRange, numIdx);
-    // get aligned upperBound and lowerBound rem
-    //  lowerBoundRemVal = (coreLowerBound) % step
-    auto lowerBoundRemVal = builder.create<arith::RemSIOp>(loc, coreLowerBound, stepVal);
-    auto upperBoundRemVal = builder.create<arith::RemSIOp>(loc, curIterUpperBound, stepVal);
-
-    // calculate real aligned lowerBound/upperBound iteration value
-    auto realLowerBoundIterVal = builder.create<arith::SubIOp>(loc, coreLowerBound, lowerBoundRemVal);
-    auto realUpperBoundIterVal = builder.create<arith::SubIOp>(loc, curIterUpperBound, upperBoundRemVal);
-    // compre(realUpperBoundIterVal, forOpUpperBound)
-    auto cmpRes = builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt, realUpperBoundIterVal, upperVal);
-    auto curCoreUpperBound = builder.create<arith::SelectOp>(loc, cmpRes, realUpperBoundIterVal, upperVal);
-    auto lowerBoundCmpRes =
-      builder.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt, realLowerBoundIterVal, upperVal);
-    auto coreLowerBoundIndex = builder.create<arith::IndexCastOp>(loc, builder.getIndexType(), realLowerBoundIterVal);
-    auto curCoreUpperBoundIndex = builder.create<arith::IndexCastOp>(loc, builder.getIndexType(), curCoreUpperBound);
-
-    auto ifOp = builder.create<scf::IfOp>(loc, TypeRange{}, lowerBoundCmpRes, false);
-    SmallVector<Value> lowerBoundVec;
-    SmallVector<Value> upperBoundVec;
-    SmallVector<Value> stepVec;
-    (void)lowerBoundVec.emplace_back(coreLowerBoundIndex);
-    (void)upperBoundVec.emplace_back(curCoreUpperBoundIndex);
-    (void)stepVec.emplace_back(stepIdx);
-    // set the new cloned parallelOp
-    cloned->setOperands(0, lowerBoundVec.size(), lowerBoundVec);
-    cloned->setOperands(lowerBoundVec.size(), upperBoundVec.size(), upperBoundVec);
-    cloned->setOperands(lowerBoundVec.size() + upperBoundVec.size(), stepVec.size(), stepVec);
-    // now, we sink the Parallel down to scf::forOp
-    Block *thenBlock = &ifOp.getThenRegion().getBlocks().front();
-    builder.setInsertionPointToStart(thenBlock);
-    cloned->moveBefore(thenBlock, thenBlock->begin());
-    // erase the origin parallelOp
-    parallelOp->erase();
-  }
-  return;
-}
-
-void AKGFuncOutlining::tryToSplitParallelFunc(func::FuncOp &funcOps, func::FuncOp &mainFunc,
-                                              SymbolTable *symbolTablePtr) {
-  // if the original func doesn't have any parallel region, we don't need to outlining the parallel region.
-  if (!hasParallel) {
-    return;
-  }
-  // otherwise, we find the Parellel op
-  SmallVector<scf::ParallelOp> parallelOps;
-  mainFunc.walk([&](scf::ParallelOp op) {
-    if (op->getParentOfType<scf::ParallelOp>()) {
-      return;
-    }
-    (void)parallelOps.emplace_back(op);
-  });
-
-  // MainFunc real args
-  auto args = mainFunc.getArguments();
-  SmallVector<Value> mainFuncRealArgs;
-  size_t startIdx = isMindSpore ? kMindsporeArgOffset : 0;
-  for (size_t i = startIdx; i < args.size(); i++) {
-    (void)mainFuncRealArgs.emplace_back(args[i]);
-  }
-  Block::iterator insertPtr(mainFunc->getNextNode());
-  for (const auto &op : llvm::enumerate(parallelOps)) {
-    SmallVector<Value> operands = mainFuncRealArgs;
-    auto lambdaName = getLambdaName(funcOps.getName());
-    Operation *outLiningOp = nullptr;
-    auto outLiningParallelFunc =
-      tryToRewriteCPUParallelLaunchOp(mainFunc, op.value(), operands, lambdaName, outLiningOp);
-    assert(outLiningOp != nullptr);
-    // we expect the lambda func only use mainFuncRealArgs as its real args;
-    symbolTablePtr->insert(outLiningParallelFunc, insertPtr);
-    addCPUParallelLaunchFuncOp(outLiningOp, outLiningParallelFunc, operands);
-    handleCalculateFunc(outLiningParallelFunc);
-  }
-
-  return;
-}
-
-void AKGFuncOutlining::tryToSplitFuncs(SmallVector<func::FuncOp> &funcOps, func::FuncOp &mainFunc,
-                                       SymbolTable *symbolTablePtr) {
-  assert(funcOps.size() == 1);
-  for (auto &func : funcOps) {
-    OpBuilder builder(func);
-    auto funcName = func.getName();
-    auto loc = func.getLoc();
-    // try to build the new kernel_name and lambda func
-    auto origFuncAttributes = func.getOperation()->getAttrs();
-    SmallVector<NamedAttribute> newMainFuncAttrs;
-    SmallVector<NamedAttribute> newCalculateFuncAttrs;
-
-    for (auto attr : origFuncAttributes) {
-      if (attr.getName().str() == "function_type" || attr.getName().str() == "sym_name") {
-        continue;
-      }
-      (void)newMainFuncAttrs.emplace_back(attr);
-      (void)newCalculateFuncAttrs.emplace_back(attr);
-    }
-
-    //  build the origin func (the same name but params are different)
-    //  (callback func, task_nums, input params)
-    SmallVector<Type, 4> mainFuncOperandTypes;
-    LLVM::LLVMPointerType llvmPointerType = LLVM::LLVMPointerType::get(IntegerType::get(context, 8));
-    if (isMindSpore) {
-      // insert the first arg: callback func
-      (void)mainFuncOperandTypes.emplace_back(llvmPointerType);
-      // insert the second arg: task_nums
-      (void)mainFuncOperandTypes.emplace_back(llvmPointerType);
-    }
-    std::copy(func.getArgumentTypes().begin(), func.getArgumentTypes().end(), std::back_inserter(mainFuncOperandTypes));
-    auto mainFuncTypes = FunctionType::get(context, mainFuncOperandTypes, {});
-
-    mainFunc = builder.create<func::FuncOp>(loc, funcName, mainFuncTypes);
-    mainFunc.setPublic();
-    for (auto attr : mainFunc->getAttrs()) {
-      if (attr.getName().str() == "function_type" || attr.getName().str() == "sym_name") {
-        (void)newMainFuncAttrs.emplace_back(attr);
-      }
-    }
-    (void)newMainFuncAttrs.emplace_back(
-      NamedAttribute(StringAttr::get(context, kFuncType), StringAttr::get(context, kCpuMainFunc)));
-    IRMapping maps;
-    auto oldFuncOperands = func.getArguments();
-
-    OpBuilder::InsertionGuard insertGuard(builder);
-    Block *FuncBody = mainFunc.addEntryBlock();
-    mainFunc->setAttrs(newMainFuncAttrs);
-    builder.setInsertionPointToEnd(FuncBody);
-    // the first 2 args are callback pointer and task_nums
-    size_t argOffset = isMindSpore ? kMindsporeArgOffset : 0;
-    if (isMindSpore) {
-      assert(mainFuncOperandTypes.size() == oldFuncOperands.size() + argOffset);
-    }
-    for (auto opnd : llvm::enumerate(oldFuncOperands)) {
-      maps.map(opnd.value(), FuncBody->getArgument(opnd.index() + argOffset));
-    }
-
-    for (Block &block : func.getBody()) {
-      for (Operation &op : block.getOperations()) {
-        builder.clone(op, maps);
-      }
-    }
-
-    // try to find scf.parallel and try to outline them as a lambda func
-    tryToSplitParallelFunc(func, mainFunc, symbolTablePtr);
-    func.erase();
-  }
-  return;
-}
 
 void AKGFuncOutlining::getProcessFuncs(ModuleOp &module, SmallVector<func::FuncOp> &funcOps) {
   for (func::FuncOp funcOp : module.getOps<func::FuncOp>()) {

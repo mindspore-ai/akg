@@ -17,6 +17,7 @@
 #include "akg/Dialect/Affine/Transforms/RemoveRedundantLoops.h"
 #include "akg/Utils/AnalysisCommon.hpp"
 
+#include <optional>
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "mlir/Dialect/Affine/Analysis/AffineAnalysis.h"
@@ -64,15 +65,15 @@ class RemoveRedundantLoops : public impl::RemoveRedundantLoopsBase<RemoveRedunda
 void RemoveRedundantLoops::runOnOperation() {
   func::FuncOp func = getOperation();
   OpBuilder b(func);
-  SmallVector<AffineForOp, 8> redundantLoops;
-  func->walk([&](AffineForOp forOp) {
+  SmallVector<affine::AffineForOp, 8> redundantLoops;
+  func->walk([&](affine::AffineForOp forOp) {
     // skipped for now
     // todo: %0 = affine.for %arg2 = 0 to 4 step 4 iter_args(%arg3 = %cst_0) -> (vector<4xf32>)
     if (!forOp.getResults().empty()) {
       return;
     }
 
-    Optional<uint64_t> maybeConstTripCount = getConstantTripCount(forOp);
+    std::optional<uint64_t> maybeConstTripCount = getConstantTripCount(forOp);
     if (!maybeConstTripCount) {
       return;
     }
@@ -84,14 +85,14 @@ void RemoveRedundantLoops::runOnOperation() {
 
   for (size_t i = 0; i < redundantLoops.size(); ++i) {
     auto forOp = redundantLoops[i];
-    AffineForOp dependentOp = nullptr;
+    affine::AffineForOp dependentOp = nullptr;
     for (auto value : forOp.getOperation()->getOperands()) {
       if (auto blockArg = value.dyn_cast<BlockArgument>()) {
         if (blockArg.getType().isa<IndexType>()) {
           Block *block = blockArg.getOwner();
           Operation *parentOp = block->getParentOp();
-          if (parentOp && isa<AffineForOp>(parentOp)) {
-            dependentOp = dyn_cast<AffineForOp>(parentOp);
+          if (parentOp && isa<affine::AffineForOp>(parentOp)) {
+            dependentOp = dyn_cast<affine::AffineForOp>(parentOp);
           }
         }
       }

@@ -24,7 +24,7 @@ using namespace mlir;
 namespace cl = llvm::cl;
 namespace mlir {
 struct CpuOptPipelineOptions : public PassPipelineOptions<CpuOptPipelineOptions> {
-  Option<bool> cpuFast{*this, "cpu-fast", cl::desc("cpu affine optimize"), cl::init(true)};
+  Option<bool> cpuFast{*this, "cpu-fast", cl::desc("cpu affine optimize"), cl::init(false)};
 
   Option<bool> enableParallel{*this, "enable-parallel", cl::desc("cpu enable parallel"), cl::init(true)};
 
@@ -40,9 +40,6 @@ struct CpuOptPipelineOptions : public PassPipelineOptions<CpuOptPipelineOptions>
   Option<std::string> feature{*this, "feature", cl::desc("the cpu feature, e.g. 'sse', 'avx' or 'neon'"),
                               cl::init("neon")};
   Option<std::string> jsonFileName{*this, "json-file-name", cl::desc("mindspore json file name"), cl::init("")};
-
-  Option<bool> dynShapeEnablePoly{*this, "dynamic-shape-enable-polytops", cl::desc("cpu dynamic shape enable polytops"),
-                                  cl::init(false)};
 
   Option<bool> cpuOutlining{*this, "cpu-outlining", cl::desc("outline lambda func for external openmp schedule"),
                             cl::init(false)};

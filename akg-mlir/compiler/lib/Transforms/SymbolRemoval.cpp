@@ -78,7 +78,7 @@ AffineExpr replaceSymbolExpr(AffineExpr expr, OpBuilder b, unsigned numDims) {
     case AffineExprKind::DimId:
       return expr;
     case AffineExprKind::SymbolId: {
-      unsigned pos = expr.cast<AffineSymbolExpr>().getPosition();
+      unsigned pos = llvm::cast<AffineSymbolExpr>(expr).getPosition();
       unsigned idx = pos + numDims;
       auto newExpr = b.getAffineDimExpr(idx);
       return newExpr;
@@ -88,7 +88,7 @@ AffineExpr replaceSymbolExpr(AffineExpr expr, OpBuilder b, unsigned numDims) {
     case AffineExprKind::FloorDiv:
     case AffineExprKind::CeilDiv:
     case AffineExprKind::Mod:
-      auto binOp = expr.cast<AffineBinaryOpExpr>();
+      auto binOp = llvm::cast<AffineBinaryOpExpr>(expr);
       auto lhs = binOp.getLHS(), rhs = binOp.getRHS();
       auto newLHS = replaceSymbolExpr(lhs, b, numDims);
       auto newRHS = replaceSymbolExpr(rhs, b, numDims);
@@ -102,13 +102,13 @@ AffineExpr replaceSymbolExpr(AffineExpr expr, OpBuilder b, unsigned numDims) {
 
 void SymbolRemovalPass::runOnOperation() {
   OpBuilder b(getOperation());
-  SmallVector<AffineLoadOp, 8> loadOps;
-  SmallVector<AffineStoreOp, 8> storeOps;
+  SmallVector<affine::AffineLoadOp, 8> loadOps;
+  SmallVector<affine::AffineStoreOp, 8> storeOps;
   getOperation()->walk([&](Operation *op) {
-    if (AffineLoadOp loadOp = dyn_cast<AffineLoadOp>(op)) {
+    if (affine::AffineLoadOp loadOp = dyn_cast<affine::AffineLoadOp>(op)) {
       loadOps.push_back(loadOp);
     }
-    if (AffineStoreOp storeOp = dyn_cast<AffineStoreOp>(op)) {
+    if (affine::AffineStoreOp storeOp = dyn_cast<affine::AffineStoreOp>(op)) {
       storeOps.push_back(storeOp);
     }
   });
@@ -123,7 +123,7 @@ void SymbolRemovalPass::runOnOperation() {
     auto newMap = AffineMap::get(/*dimCount=*/loadOp.getIndices().size(),
                                  /*symbolCount=*/0, exprs, map.getContext());
     b.setInsertionPoint(loadOp);
-    auto newLoadOp = b.create<AffineLoadOp>(loadOp.getLoc(), loadOp.getMemRef(), newMap, loadOp.getIndices());
+    auto newLoadOp = b.create<affine::AffineLoadOp>(loadOp.getLoc(), loadOp.getMemRef(), newMap, loadOp.getIndices());
     loadOp.getOperation()->replaceAllUsesWith(newLoadOp.getOperation());
     loadOp.erase();
   }
@@ -138,7 +138,8 @@ void SymbolRemovalPass::runOnOperation() {
     auto newMap = AffineMap::get(/*dimCount=*/storeOp.getIndices().size(),
                                  /*symbolCount=*/0, exprs, map.getContext());
     b.setInsertionPoint(storeOp);
-    b.create<AffineStoreOp>(storeOp.getLoc(), storeOp.getValue(), storeOp.getMemRef(), newMap, storeOp.getIndices());
+    b.create<affine::AffineStoreOp>(storeOp.getLoc(), storeOp.getValue(), storeOp.getMemRef(), newMap,
+                                    storeOp.getIndices());
     storeOp.erase();
   }
 }

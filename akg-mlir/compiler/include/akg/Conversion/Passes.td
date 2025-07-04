@@ -1,5 +1,5 @@
 /**
- * Copyright 2023 Huawei Technologies Co., Ltd
+ * Copyright 2023-2024 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -52,8 +52,9 @@ def VectorTransferLower : Pass<"vector-transfer-lower"> {
     Pass that converts vector transfer read/write to vector load/store.
   }];
   let constructor = "mlir::createVectorTransferLowerPass()";
- }
- //===---------------------------------------------------------------------===//
+}
+
+//===---------------------------------------------------------------------===//
 // ConvertMindSporeToTosa
 //===----------------------------------------------------------------------===//
 
@@ -66,6 +67,7 @@ def ConvertMindSporeToTosa : Pass<"convert-mindspore-to-tosa", "func::FuncOp"> {
   let constructor = "mlir::createMindSporeToTosaPass()";
 }
 
+//===---------------------------------------------------------------------===//
 // ConvertMindSporeToLinalg
 //===----------------------------------------------------------------------===//
 def ConvertMindSporeToLinalg : Pass<"convert-mindspore-to-linalg", "func::FuncOp"> {
@@ -74,6 +76,29 @@ def ConvertMindSporeToLinalg : Pass<"convert-mindspore-to-linalg", "func::FuncOp
     ...
   }];
   let constructor = "mlir::createMindSporeToLinalgPass()";
+}
+
+//===----------------------------------------------------------------------===//
+// ConvertMindSporeToLinalgNamed
+//===----------------------------------------------------------------------===//
+def ConvertMindSporeToLinalgNamed : Pass<"convert-mindspore-to-linalg-named", "func::FuncOp"> {
+  let summary = "Convert MindSpore ops to Linalg named ops";
+  let description = [{
+    ...
+  }];
+  let constructor = "mlir::createMindSporeToLinalgNamedPass()";
+}
+
+//===----------------------------------------------------------------------===//
+// ConvertArithToLinalg
+//===----------------------------------------------------------------------===//
+def ConvertArithToLinalg : Pass<"convert-arith-to-linalg", "func::FuncOp"> {
+  let summary = "Convert Arith ops to Linalg ops";
+  let description = [{
+    Pass that converts element-wise arithmetic and math operations from the Arith and Math dialects
+    to equivalent generic operations in the Linalg dialect.
+  }];
+  let constructor = "mlir::createArithToLinalgConversionPass()";
 }
 
 //===----------------------------------------------------------------------===//
@@ -105,38 +130,19 @@ def LinalgExtLower : Pass<"linalg-ext-lower", "func::FuncOp"> {
 }
 
 //===----------------------------------------------------------------------===//
-// MathExtSpecicalLower
-//===----------------------------------------------------------------------===//
-def MathExtLower : Pass<"math-ext-lower", "mlir::ModuleOp"> {
-  let summary = "lower MathExt ops to  standard Math/SCF/Arith ops";
-  let description = [{
-    ...
-  }];
-  let constructor = "mlir::createMathExtLowerPass()";
-}
-
-//===----------------------------------------------------------------------===//
-// MathExt Convert to LLVM Libm
-//===----------------------------------------------------------------------===//
-def MathExtToLibm : Pass<"math-ext-to-libm", "mlir::ModuleOp"> {
-  let summary = "lower MathExt ops to  LLVM call ops";
-  let description = [{
-    ...
-  }];
-  let constructor = "mlir::createMathExtToLibmPass()";
-}
-
-
-//===----------------------------------------------------------------------===//
 // PureOpenMPToLLVM
 //===----------------------------------------------------------------------===//
 def PureOpenMPToLLVM : Pass<"convert-pure-omp-to-llvm", "mlir::ModuleOp"> {
-  let summary = "lower OepnMP dialect to LLVM dialect";
+  let summary = "lower OpenMP dialect to LLVM dialect";
   let description = [{
     This pass only deal with openmp dialect, while MLIR's convert-openmp-to-llvm
     also converts func, arith, memref and other related dialects.
   }];
   let constructor = "mlir::createPureOpenMPToLLVMPass()";
 }
+
+//===----------------------------------------------------------------------===//
+// SCFToGPU
+//===----------------------------------------------------------------------===//
 
 #endif // AKG_CONVERSION_PASSES

@@ -103,7 +103,7 @@ class GpuScheduleTool {
     size_t loopSize = this->loopSize();
     OpBuilder builder(funcOp);
     funcOp->walk([&](Operation *op) {
-      if (!isa<AffineForOp, AffineParallelOp, scf::ParallelOp>(op)) {
+      if (!isa<affine::AffineForOp, affine::AffineParallelOp, scf::ParallelOp>(op)) {
         return;
       }
       auto tagName = getNameAt(loopSize - 1 - i);
@@ -530,7 +530,7 @@ class ShapeAlignTool {
 
       // init the newSymbol as original shape, e.g. "S0"
       std::string newSymbol(srcShape);
-      for (auto vi : newIndex) {
+      for (size_t vi : newIndex) {
         vi = static_cast<unsigned>(vi);
         assert(vi < destShapes.size());
         // destShapes[vi] != -1 means this dim has static shape

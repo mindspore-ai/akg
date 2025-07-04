@@ -18,7 +18,6 @@
 #include "akg/Analysis/SymbolicShapeAnalysis.h"
 #include "akg/Conversion/Passes.h"
 #include "akg/Dialect/Linalg/IR/LinalgExtOps.h"
-#include "akg/Dialect/Math/IR/MathExtOps.h"
 #include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -57,7 +56,6 @@ namespace mlir {
 using namespace mlir;
 using namespace mlir::tosa;
 using namespace mlir::mindspore;
-using namespace mlir::mathExt;
 
 static Value createAsinhOp(Operation *op, const ValueRange args, ArrayRef<Type> resultTypes,
                            PatternRewriter &rewriter) {
@@ -98,22 +96,6 @@ static Value createMathOps(Operation *op, ValueRange args, ArrayRef<Type> result
 
   if (isa<mindspore::Atan2Op>(op) && elementTy.isa<FloatType>()) {
     return rewriter.create<mlir::math::Atan2Op>(loc, resultTypes, args);
-  }
-
-  if (isa<mindspore::AcosOp>(op) && elementTy.isa<FloatType>()) {
-    return rewriter.create<mathExt::AcosOp>(loc, resultTypes, args);
-  }
-
-  if (isa<mindspore::AsinOp>(op) && elementTy.isa<FloatType>()) {
-    return rewriter.create<mathExt::AsinOp>(loc, resultTypes, args);
-  }
-
-  if (isa<mindspore::IsinfOp>(op) && elementTy.isa<FloatType>()) {
-    return rewriter.create<mathExt::IsinfOp>(loc, resultTypes, args);
-  }
-
-  if (isa<mindspore::IsnanOp>(op) && elementTy.isa<FloatType>()) {
-    return rewriter.create<mathExt::IsnanOp>(loc, resultTypes, args);
   }
 
   if (isa<mindspore::AsinhOp>(op) && elementTy.isa<FloatType>()) {
@@ -277,8 +259,9 @@ static LogicalResult elementwiseMatchAndRewriteHelper(Operation *operation, Patt
       (void)nestedBuilder.create<linalg::YieldOp>(loc, opResult);
     });
 
-  if (didEncounterError)
+  if (didEncounterError) {
     return rewriter.notifyMatchFailure(operation, "unable to create linalg.generic body for elementwise op");
+  }
 
   rewriter.replaceOp(operation, linalgOp.getResult(0));
   return success();
@@ -393,6 +376,150 @@ class MindSporeGatherConverter : public OpConversionPattern<mindspore::GatherOp>
   }
 };
 
+class MindSporeUnsortedSegmentSumOpConverter : public OpConversionPattern<mindspore::UnsortedSegmentSumOp> {
+ public:
+  using OpConversionPattern<mindspore::UnsortedSegmentSumOp>::OpConversionPattern;
+  LogicalResult matchAndRewrite(mindspore::UnsortedSegmentSumOp op, typename mindspore::UnsortedSegmentSumOp::Adaptor,
+                                ConversionPatternRewriter &rewriter) const final {
+    Location loc = op.getLoc();
+    auto outputTy = op.getType().cast<RankedTensorType>();
+    auto outputElementTy = outputTy.getElementType();
+    auto zeroAttrEType = rewriter.getZeroAttr(outputElementTy);
+    auto zeroEType = rewriter.create<arith::ConstantOp>(loc, zeroAttrEType);
+    auto zeroICst = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+    auto oneICst = rewriter.create<arith::ConstantIndexOp>(loc, 1);
+    auto indicesTy = op.getSegmentIds().getType().dyn_cast<TensorType>();
+    auto dataTy = op.getX().getType().dyn_cast<TensorType>();
+    // Collapse acc and data reductiondims on 1D for tiling purpose.
+    // We collapse index dimensions to improve pipelining opportunities.
+    Value collapsedData;
+    // if there is no need to collapse indices  Dims nor reduction dims
+    if (indicesTy.getRank() == 1 && dataTy.getRank() - indicesTy.getRank() <= 1) {
+      collapsedData = op.getX();
+    } else {
+      //  Collapse indices dims
+      SmallVector<ReassociationIndices> dataReassociationMap;
+      dataReassociationMap.push_back({llvm::to_vector(llvm::seq<int64_t>(0, indicesTy.getRank()))});
+      // Collapse reduction dims
+      dataReassociationMap.push_back({llvm::to_vector(llvm::seq<int64_t>(indicesTy.getRank(), dataTy.getRank()))});
+      collapsedData = rewriter.create<tensor::CollapseShapeOp>(loc, op.getX(), dataReassociationMap);
+    }
+    Value collapsedIndex;
+    if (indicesTy.getRank() == 1) {
+      collapsedIndex = op.getSegmentIds();
+    } else {
+      SmallVector<ReassociationIndices> indexReassociationMap;
+      indexReassociationMap.push_back({llvm::to_vector(llvm::seq<int64_t>(0, indicesTy.getRank()))});
+      collapsedIndex = rewriter.create<tensor::CollapseShapeOp>(loc, op.getSegmentIds(), indexReassociationMap);
+    }
+    auto collapsedDataTy = collapsedData.getType().cast<RankedTensorType>();
+    auto uniqSize = SmallVector<int64_t>({1});
+    ArrayRef<int64_t> sliceShape = outputTy.getRank() == 1 ? uniqSize : collapsedDataTy.getShape().take_back();
+    Value emptyTensor = rewriter.create<tensor::EmptyOp>(loc, outputTy, ValueRange{});
+    Value zeroTensor = rewriter.create<linalg::FillOp>(loc, ValueRange{zeroEType}, ValueRange{emptyTensor}).result();
+    Value collapsedResult;
+    if (dataTy.getRank() - indicesTy.getRank() <= 1) {
+      collapsedResult = zeroTensor;
+    } else {
+      auto collapsedAccShape = llvm::to_vector(outputTy.getShape().take_front());
+      collapsedAccShape.push_back(sliceShape[0]);
+      auto collapsedAccTy = outputTy.clone(collapsedAccShape).cast<RankedTensorType>();
+      SmallVector<ReassociationIndices> accReassociationMap{{0}};
+      // Associate reductionDims
+      accReassociationMap.push_back({llvm::to_vector(llvm::seq<int64_t>(1, outputTy.getRank()))});
+      collapsedResult = rewriter.create<tensor::CollapseShapeOp>(loc, collapsedAccTy, zeroTensor, accReassociationMap);
+    }
+    SmallVector<Value> lbs({zeroICst});
+    SmallVector<Value> steps({oneICst});
+    SmallVector<Value> ubs({rewriter.createOrFold<tensor::DimOp>(loc, collapsedIndex, 0)});
+
+    // Acc/Data slice is 1 for the index dimension followed by the rest of the acc size
+    SmallVector<Value> sliceSizes{oneICst};
+    SmallVector<Value> accOffsets(1, zeroICst);
+    SmallVector<Value> accStrides(1, oneICst);
+    if (outputTy.getRank() != 1) {
+      auto sliceSize = rewriter.createOrFold<tensor::DimOp>(loc, collapsedData, collapsedDataTy.getRank() - 1);
+      sliceSizes.push_back(sliceSize);
+      accOffsets.push_back(zeroICst);
+      accStrides.push_back(oneICst);
+    }
+
+    auto loops = buildUSSLoopNest(rewriter, op, loc, lbs, ubs, steps, collapsedData, collapsedResult, collapsedIndex,
+                                  sliceSizes, accStrides, accOffsets);
+    // expand addOp back to result Shape
+    Value expandAdd;
+    if (dataTy.getRank() - indicesTy.getRank() <= 1) {
+      expandAdd = loops.results.front();
+    } else {
+      SmallVector<ReassociationIndices> accReassociationMap{{0}};
+      // Associate reductionDims
+      accReassociationMap.push_back({llvm::to_vector(llvm::seq<int64_t>(1, outputTy.getRank()))});
+      expandAdd = rewriter.create<tensor::ExpandShapeOp>(loc, outputTy, loops.results.front(), accReassociationMap);
+    }
+    rewriter.replaceOp(op, {expandAdd});
+    return success();
+  }
+
+  scf::LoopNest buildUSSLoopNest(ConversionPatternRewriter &rewriter, mindspore::UnsortedSegmentSumOp op, Location loc,
+                                 ValueRange lbs, ValueRange ubs, ValueRange steps, Value collapsedData,
+                                 Value collapsedResult, Value collapsedIndex, SmallVectorImpl<Value> &sliceSizes,
+                                 SmallVectorImpl<Value> &accStrides, SmallVectorImpl<Value> &accOffsets) const {
+    auto outputTy = op.getType().cast<RankedTensorType>();
+    auto zeroICst = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+    auto oneICst = rewriter.create<arith::ConstantIndexOp>(loc, 1);
+    auto collapsedDataTy = collapsedData.getType().cast<RankedTensorType>();
+    auto uniqSize = SmallVector<int64_t>({1});
+    ArrayRef<int64_t> sliceShape = outputTy.getRank() == 1 ? uniqSize : collapsedDataTy.getShape().take_back();
+    auto sliceTy = outputTy.clone(sliceShape).cast<RankedTensorType>();
+    SmallVector<Value> dataOffsets(collapsedDataTy.getRank(), zeroICst);
+    SmallVector<Value> dataStrides(collapsedDataTy.getRank(), oneICst);
+    auto toOpFoldResult = [](Value v) -> OpFoldResult {
+      auto op = v.getDefiningOp<arith::ConstantIndexOp>();
+      if (!op) {
+        return v;
+      }
+      return op.getValue();
+    };
+
+    auto buildBody = [&](OpBuilder &builder, Location loc, ValueRange ivs, ValueRange args) -> scf::ValueVector {
+      // data offsets = [{{ivs, ...}}, 0].
+      std::copy(ivs.begin(), ivs.end(), dataOffsets.begin());
+
+      auto dataSlice = builder.create<tensor::ExtractSliceOp>(
+        loc, sliceTy, collapsedData, llvm::to_vector(llvm::map_range(dataOffsets, toOpFoldResult)),
+        llvm::to_vector(llvm::map_range(sliceSizes, toOpFoldResult)),
+        llvm::to_vector(llvm::map_range(dataStrides, toOpFoldResult)));
+
+      auto index = builder.create<tensor::ExtractOp>(loc, collapsedIndex, ivs);
+      auto castIndex = builder.createOrFold<arith::IndexCastOp>(loc, builder.getIndexType(), index);
+      accOffsets[0] = castIndex;
+      auto accSlice = builder.create<tensor::ExtractSliceOp>(
+        loc, sliceTy, args[0], llvm::to_vector(llvm::map_range(accOffsets, toOpFoldResult)),
+        llvm::to_vector(llvm::map_range(sliceSizes, toOpFoldResult)),
+        llvm::to_vector(llvm::map_range(accStrides, toOpFoldResult)));
+      // create an elementwise generic adding extracted acc and data
+      // we do not generate tosa::AddOp as they generate expensive allocs
+      SmallVector<AffineMap> indexingMaps = {rewriter.getMultiDimIdentityMap(1), rewriter.getMultiDimIdentityMap(1)};
+
+      auto iteratorTypes = getNParallelLoopsAttrs(1);
+      auto addOp =
+        rewriter
+          .create<linalg::GenericOp>(
+            loc, TypeRange{sliceTy}, ValueRange{dataSlice}, ValueRange{accSlice}, indexingMaps, iteratorTypes,
+            [](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange blockArgs) {
+              Value opResult = nestedBuilder.create<arith::AddFOp>(nestedLoc, blockArgs[0], blockArgs[1]);
+              nestedBuilder.create<linalg::YieldOp>(nestedLoc, opResult);
+            })
+          .getResult(0);
+      return {builder.create<tensor::InsertSliceOp>(loc, addOp, args[0],
+                                                    llvm::to_vector(llvm::map_range(accOffsets, toOpFoldResult)),
+                                                    llvm::to_vector(llvm::map_range(sliceSizes, toOpFoldResult)),
+                                                    llvm::to_vector(llvm::map_range(accStrides, toOpFoldResult)))};
+    };
+    return scf::buildLoopNest(rewriter, loc, lbs, ubs, steps, ValueRange{collapsedResult}, buildBody);
+  }
+};
+
 template <typename sourceOp, typename targetOp>
 class MindsporeSpecificOpConverter : public OpConversionPattern<sourceOp> {
  public:
@@ -438,7 +565,7 @@ class MindsporeSpecificOpConverter : public OpConversionPattern<sourceOp> {
   }
 };
 
-static Attribute createIntInitValue(Operation *op, const Type elementTy, PatternRewriter &rewriter) {
+static TypedAttr createIntInitValue(Operation *op, const Type elementTy, PatternRewriter &rewriter) {
   if (isa<mindspore::ReduceSumOp>(op)) {
     return rewriter.getIntegerAttr(elementTy, 0);
   }
@@ -457,7 +584,7 @@ static Attribute createIntInitValue(Operation *op, const Type elementTy, Pattern
   llvm_unreachable("current reduce pattern is not supported");
 }
 
-static Attribute createFloatInitValue(Operation *op, const Type elementTy, PatternRewriter &rewriter) {
+static TypedAttr createFloatInitValue(Operation *op, const Type elementTy, PatternRewriter &rewriter) {
   if (isa<mindspore::ReduceSumOp>(op) && elementTy.isa<FloatType>()) {
     return rewriter.getFloatAttr(elementTy, 0.0);
   }
@@ -477,7 +604,7 @@ static Attribute createFloatInitValue(Operation *op, const Type elementTy, Patte
   llvm_unreachable("current reduce pattern is not supported");
 }
 
-static Attribute createInitValueForReduce(Operation *op, const Type elementTy, PatternRewriter &rewriter) {
+static TypedAttr createInitValueForReduce(Operation *op, const Type elementTy, PatternRewriter &rewriter) {
   if (isa<mindspore::ReduceAllOp>(op) && elementTy.isInteger(1)) {
     return rewriter.getIntegerAttr(elementTy, APInt::getAllOnes(1));
   }
@@ -521,13 +648,13 @@ static Value createFloatCombiner(Operation *op, ValueRange args, OpBuilder &rewr
     return rewriter.create<arith::MulFOp>(loc, args);
   }
   if (isa<mindspore::ReduceMinOp>(op)) {
-    return rewriter.create<arith::MinFOp>(loc, args[0], args[1]);
+    return rewriter.create<arith::MinNumFOp>(loc, args[0], args[1]);
   }
   if (isa<mindspore::ReduceSumOp>(op)) {
     return rewriter.create<arith::AddFOp>(loc, args);
   }
   if (isa<mindspore::ReduceMaxOp>(op)) {
-    return rewriter.create<arith::MaxFOp>(loc, args[0], args[1]);
+    return rewriter.create<arith::MaxNumFOp>(loc, args[0], args[1]);
   }
   llvm_unreachable("current reduce pattern is not supported");
 }
@@ -1016,7 +1143,7 @@ class ConvertMindSporeReduceOp : public OpConversionPattern<sourceOp> {
         reduceOutputExprs.push_back(mlir::getAffineDimExpr((unsigned int)i, rewriter.getContext()));
       }
     }
-    auto maps = AffineMap::inferFromExprList({reduceInputExprs, reduceOutputExprs});
+    auto maps = AffineMap::inferFromExprList({reduceInputExprs, reduceOutputExprs}, rewriter.getContext());
     auto ReductionOp = rewriter.create<linalg::GenericOp>(
       loc, reduceTy, opnd, initTensor, maps, iteratorTypes,
       [&](OpBuilder &nestedBuilder, Location, const ValueRange blockArgs) {
@@ -1110,7 +1237,6 @@ class MindsporeMatMulOpConverter : public OpConversionPattern<SrcOp> {
 
     constexpr auto kMatmulRank = 2;
     constexpr auto kBatchMatmulRank = 3;
-    constexpr auto kBatchMatmul4DRank = 4;
     switch (int(transposeB)) {
       case 0:
         switch (outputRank) {
@@ -1118,8 +1244,6 @@ class MindsporeMatMulOpConverter : public OpConversionPattern<SrcOp> {
             return ReplaceMatMulOp<linalg::MatmulOp>(mindsporeOp, adaptor, rewriter, zeroTensor);
           case kBatchMatmulRank:
             return ReplaceMatMulOp<linalg::BatchMatmulOp>(mindsporeOp, adaptor, rewriter, zeroTensor);
-          case kBatchMatmul4DRank:
-            return ReplaceMatMulOp<linalg::BatchMatmul4DOp>(mindsporeOp, adaptor, rewriter, zeroTensor);
           default:
             return failure();
         }
@@ -1129,14 +1253,13 @@ class MindsporeMatMulOpConverter : public OpConversionPattern<SrcOp> {
             return ReplaceMatMulOp<linalg::MatmulTransposeBOp>(mindsporeOp, adaptor, rewriter, zeroTensor);
           case kBatchMatmulRank:
             return ReplaceMatMulOp<linalg::BatchMatmulTransposeBOp>(mindsporeOp, adaptor, rewriter, zeroTensor);
-          case kBatchMatmul4DRank:
-            return ReplaceMatMulOp<linalg::BatchMatmul4DTransposeBOp>(mindsporeOp, adaptor, rewriter, zeroTensor);
           default:
             return failure();
         }
       default:
         break;
     }
+    return success();
   }
 
  private:
@@ -1183,6 +1306,7 @@ void mlir::populateLowerMindSporeToLinalgPattern(RewritePatternSet &patterns) {
     // (2).mindspore.gather->linalg.gather->affine loop
     // MindsporeSpecificOpConverter<mindspore::GatherOp, linalgExt::GatherOp>,
     MindsporeSpecificOpConverter<mindspore::UnsortedSegmentSumOp, linalgExt::UnsortedSegmentSumOp>,
+    MindSporeUnsortedSegmentSumOpConverter,
     MindsporeMatMulOpConverter<mindspore::MatMulOp>,
     MindsporeMatMulOpConverter<mindspore::BatchMatMulOp>
   >(patterns.getContext());
@@ -1203,7 +1327,7 @@ struct ConvertMindSporeToLinalgPass : public ConvertMindSporeToLinalgBase<Conver
     registry.insert<math::MathDialect>();
     registry.insert<arith::ArithDialect>();
     registry.insert<LLVM::LLVMDialect>();
-    registry.insert<mathExt::MathExtDialect>();
+    registry.insert<scf::SCFDialect>();
   }
 
   void runOnOperation() override {
@@ -1212,7 +1336,7 @@ struct ConvertMindSporeToLinalgPass : public ConvertMindSporeToLinalgBase<Conver
 
     target.addLegalDialect<arith::ArithDialect, tosa::TosaDialect, linalg::LinalgDialect, linalgExt::LinalgExtDialect,
                            tensor::TensorDialect, func::FuncDialect, math::MathDialect, shape::ShapeDialect,
-                           LLVM::LLVMDialect, mathExt::MathExtDialect>();
+                           LLVM::LLVMDialect, scf::SCFDialect>();
     target.addIllegalDialect<mindspore::MindSporeDialect>();
     target.addLegalOp<mindspore::ReshapeOp>();
     target.addLegalOp<mindspore::SliceOp>();

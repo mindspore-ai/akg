@@ -17,6 +17,7 @@
 #ifndef COMPILER_INCLUDE_AKG_DIALECT_LINALG_TRANSFORMS_TEMPLATEOPFUSION_H_
 #define COMPILER_INCLUDE_AKG_DIALECT_LINALG_TRANSFORMS_TEMPLATEOPFUSION_H_
 
+#include <optional>
 #include "akg/Dialect/Fusion/IR/Fusion.h"
 #include "akg/Dialect/Linalg/IR/LinalgExtOps.h"
 #include "akg/Dialect/Linalg/Passes.h"
@@ -25,6 +26,8 @@
 
 // using namespace mlir;
 // using namespace mlir::linalg;
+
+#if 0
 
 namespace mlir {
 namespace linalg {
@@ -86,7 +89,7 @@ class FuseTemplateOps : public OpRewritePattern<MatchOp> {
   void setMappedIndices(SmallVectorImpl<Value> &mappedIndices, const SmallVectorImpl<Value> &indices, AffineMap map,
                         OpBuilder &builder, const Location &loc) const;
   Type getMappedType(Type origType, AffineMap map) const;
-  llvm::Optional<AffineMap> getInvGenericOperandIndexMap(GenericOp genericOp, OpOperand *operand) const;
+  std::optional<AffineMap> getInvGenericOperandIndexMap(GenericOp genericOp, OpOperand *operand) const;
   llvm::SmallVector<AffineMap> getFusedOperandToAllMaps(GenericOp producer,
                                                         AffineMap invGenericFusedOperandIndexMap) const;
   AffineMap getMinorSubMapWithPadZero(AffineMap map, unsigned numResults) const;
@@ -117,8 +120,12 @@ class FuseTemplateOps : public OpRewritePattern<MatchOp> {
   LogicalResult fuseElementwiseToTemplateFunc(TemplateOp templateOp, GenericOp genericOp, OpOperand *fusedOperand,
                                               FusedTemplateOpInfo *fusedTemplateOpInfo) const;
   LogicalResult fuseTemplateOps(RewriterBase &rewriter, OpOperand *fusedOperand) const;
+  llvm::SmallVector<AffineMap> getGenericFuseOperand2AllOperandMaps(GenericOp genericOp, OpOperand *fusedOperand) const;
+  AffineMap changeLoadOpOrStoreOpIndices(llvm::SmallVector<AffineMap> genericFuseOperand2AllOperandMaps) const;
 };
 }  // namespace linalg
 }  // namespace mlir
+
+#endif
 
 #endif  // COMPILER_INCLUDE_AKG_DIALECT_LINALG_TRANSFORMS_TEMPLATEOPFUSION_H_

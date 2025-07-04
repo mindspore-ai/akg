@@ -12,6 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+cmake_minimum_required(VERSION 3.14)
+
+if(POLICY CMP0054)
+  cmake_policy(SET CMP0054 NEW)
+endif()
+if(POLICY CMP0072)
+  cmake_policy(SET CMP0072 NEW)
+endif()
+
+project(akg C CXX)
+
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 7.5.0)
+        message(FATAL_ERROR "GCC version must be 7.5.0 and above, but found ${CMAKE_CXX_COMPILER_VERSION}")
+    endif()
+endif()
+
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(AKG_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+set(AKG_MLIR_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/compiler")
+
 set(CMAKE_CXX_STANDARD 17)
 
 include(CheckCXXCompilerFlag)
@@ -45,15 +66,15 @@ set(AKG_MLIR_BIN_LIB_DIR ${AKG_MLIR_BINARY_DIR}/lib)
 #-------------------------------------------------------------------------------
 # CUDA Backend Configuration
 #-------------------------------------------------------------------------------
-string(TOUPPER ${USE_CUDA} USE_CUDA)
+#string(TOUPPER ${USE_CUDA} USE_CUDA)
 
-if(USE_CUDA STREQUAL "ON")
-  find_package(CUDA  REQUIRED)
-  add_definitions(-DUSE_CUDA)
-  message(STATUS "CUDA backend enabled")
-else()
-  message(STATUS "CUDA backend disabled")
-endif()
+#if(USE_CUDA STREQUAL "ON")
+#  find_package(CUDA  REQUIRED)
+#  add_definitions(-DUSE_CUDA)
+#  message(STATUS "CUDA backend enabled")
+#else()
+#  message(STATUS "CUDA backend disabled")
+#endif()
 
 #-------------------------------------------------------------------------------
 # LLVM Configuration
@@ -86,47 +107,6 @@ set(MLIR_DIR "${LLVM_INSTALL_DIR}/lib/cmake/mlir")
 include(cmake/MLIR.cmake)
 set(JSON_TARBALL_URL "${AKG_MLIR_SOURCE_DIR}/../third-party/JSON-for-Modern-CPP-v3.10.1.zip")
 
-
-#-------------------------------------------------------------------------------
-# PolyTOPS
-#-------------------------------------------------------------------------------
-
-# Configure and build PolyTOPS
-set(POLYTOPS_USE_OSL OFF)
-set(POLYTOPS_USE_ISL ON)
-set(POLYTOPS_USE_FPL ON)
-set(POLYTOPS_USE_PICOJSON OFF)
-set(POLYTOPS_USE_QIUQI_IP OFF)
-set(POLYTOPS_ENABLE_SANITIZERS OFF)
-set(POLYTOPS_BUILD_MAIN_TOOL OFF)
-set(POLYTOPS_ENABLE_MLIR_DIALECT ON)
-set(POLYTOPS_BUILD_MLIR_TOOL OFF)
-
-set(POLYTOPS_FPL_FOUND ON)
-set(POLYTOPS_MLIR_FOUND ON)
-set(POLYTOPS_LLVM_FOUND ON)
-
-if (AKG_MLIR_BUILD_ISL)
-  # Make PolyTOPS build isl from the bundled third-party tarball
-  set(ISL_FORCE_DOWNLOAD ON)
-  set(ISL_DOWNLOAD_METHOD tarball)
-  set(ISL_TARBALL_URL "${AKG_MLIR_SOURCE_DIR}/../third-party/isl-0.26.tar.gz" CACHE STRING "osl: tarball url or path" FORCE)
-endif ()
-
-include(cmake/AddPolytops.cmake)
-
-if (POLYTOPS_BUILD_MAIN_TOOL)
-  target_link_libraries(polytops PUBLIC ${MLIR_LIBS})
-  target_include_directories(polytops PUBLIC "${LLVM_INCLUDE_DIRS} ${MLIR_INCLUDE_DIRS}")
-endif()
-if (POLYTOPS_BUILD_SHARED_LIBRARY)
-  target_link_libraries(libpolytops-shared PUBLIC ${MLIR_LIBS})
-  target_include_directories(libpolytops-shared PUBLIC "${LLVM_INCLUDE_DIRS} ${MLIR_INCLUDE_DIRS}")
-endif()
-if (POLYTOPS_BUILD_STATIC_LIBRARY)
-  target_link_libraries(libpolytops-static PUBLIC ${MLIR_LIBS})
-  target_include_directories(libpolytops-static PUBLIC "${LLVM_INCLUDE_DIRS} ${MLIR_INCLUDE_DIRS}")
-endif()
 
 
 #-------------------------------------------------------------------------------
@@ -168,7 +148,7 @@ if(ENABLE_AKG)
 else()
   install(TARGETS akg-opt DESTINATION ${AKG_MLIR_BINARY_DIR}/akg/bin)
   install(TARGETS mindspore-translate DESTINATION  ${AKG_MLIR_BINARY_DIR}/akg/bin)
-  install(TARGETS mlir_akgParallelLaunch_runtime DESTINATION ${AKG_MLIR_BINARY_DIR}/akg/lib)
+  #install(TARGETS mlir_akgParallelLaunch_runtime DESTINATION ${AKG_MLIR_BINARY_DIR}/akg/lib)
   if(USE_CUDA)
     install(TARGETS akg-ptx-replace DESTINATION ${AKG_MLIR_BINARY_DIR}/akg/bin)
     install(TARGETS akg-translate DESTINATION ${AKG_MLIR_BINARY_DIR}/akg/bin)

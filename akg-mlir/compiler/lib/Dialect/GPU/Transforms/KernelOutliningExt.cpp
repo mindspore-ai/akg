@@ -58,14 +58,6 @@ static void createForAllDimensions(OpBuilder &builder, const Location loc, Small
   }
 }
 
-static int getIntConst(mlir::Value value) {
-  auto constValueAttr = value.getDefiningOp()->getAttr("value");
-  if (isa<IntegerAttr>(constValueAttr)) {
-    return constValueAttr.dyn_cast<IntegerAttr>().getInt();
-  }
-  return 0;
-}
-
 /// Adds operations generating block/thread ids and grid/block dimensions at the
 /// beginning of the `launchFuncOpBody` region. Add mapping from argument in
 /// entry block of `launchOpBody`, to the corresponding result value of the
@@ -226,16 +218,6 @@ static gpu::GPUFuncOp outlineKernelFuncImpl(gpu::LaunchOp launchOp, StringRef ke
   auto outlinedFunc = builder.create<gpu::GPUFuncOp>(loc, kernelFnName, type);
   outlinedFunc->setAttr(gpu::GPUDialect::getKernelFuncAttrName(), builder.getUnitAttr());
 
-  // If we can infer bounds on the grid and/or block sizes from the arguments
-  // to the launch op, propagate them to the generated kernel. This is safe
-  // because multiple launches with the same body are not deduplicated.
-  if (auto blockBounds = maybeConstantDimsAttr(launchOp.getBlockSizeOperandValues())) {
-    outlinedFunc->setAttr(gpu::GPUFuncOp::getKnownBlockSizeAttrName(), blockBounds);
-  }
-  if (auto gridBounds = maybeConstantDimsAttr(launchOp.getGridSizeOperandValues())) {
-    outlinedFunc->setAttr(gpu::GPUFuncOp::getKnownGridSizeAttrName(), gridBounds);
-  }
-
   IRMapping map;
 
   // Map the arguments corresponding to the launch parameters like blockIdx,
@@ -366,7 +348,6 @@ class GpuKernelOutliningExt : public impl::GpuKernelOutliningExtBase<GpuKernelOu
   }
 
   void RecordStaticShapeArgs() {
-    ShapeAlignTool &tool = ShapeAlignTool::getInstance();
     std::vector<std::vector<int>> shapeArgs;
     size_t mainFuncSize = 0;
     getOperation()->walk([&](func::FuncOp func) { mainFuncSize = func.getBody().front().getArguments().size(); });
@@ -376,7 +357,8 @@ class GpuKernelOutliningExt : public impl::GpuKernelOutliningExtBase<GpuKernelOu
         mlir::MemRefType memrefType = operands[i].getType().cast<mlir::MemRefType>();
         int64_t offset;
         SmallVector<int64_t> strides;
-        getStridesAndOffset(memrefType, strides, offset);
+        if (failed(getStridesAndOffset(memrefType, strides, offset)))
+            return;
         std::vector<int> shapeArg;
         shapeArg.push_back(offset);
         for (auto s : memrefType.getShape()) {
@@ -396,10 +378,14 @@ class GpuKernelOutliningExt : public impl::GpuKernelOutliningExtBase<GpuKernelOu
         kernelName = func.getName().str();
         return WalkResult::interrupt();
       }
+      return WalkResult::advance();
     });
     (void)DirUtils::CheckOrCreateDirectory("./akg_kernel_meta/");
     std::string output_filename = "./akg_kernel_meta/" + kernelName + "_shape_arg.txt";
-    if (llvm::writeFileAtomically("tmp_%%%%%%%%.json", output_filename, j.dump())) {
+    if (llvm::writeToOutput(output_filename, [&](llvm::raw_ostream &OS) -> llvm::Error {
+          OS << j.dump();
+          return llvm::Error::success();
+        })) {
       llvm::errs() << "Write json file to " << output_filename << " failed.\n";
     }
   }

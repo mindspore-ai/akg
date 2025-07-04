@@ -15,6 +15,7 @@
  */
 
 #include "akg/Dialect/Affine/Transforms/AKGLoopParallelize.h"
+#include "akg/Dialect/Affine/Analysis/AffineAnalysis.h"
 
 #include <deque>
 #include <map>
@@ -50,7 +51,7 @@ struct AKGLoopParallelize : public impl::AKGAffineLoopParallelizeBase<AKGLoopPar
   AKGLoopParallelize(const bool enableParallel) : enableParallel(enableParallel) {}
 
   void runOnOperation() override;
-  bool isAncestorLoopParallel(SmallVector<AffineForOp, 6> nonParallelizableLoops, Operation *op);
+  bool isAncestorLoopParallel(SmallVector<affine::AffineForOp, 6> nonParallelizableLoops, Operation *op);
 
   bool enableParallel = true;
   static constexpr long PARALLEL_SIZE = 65536;
@@ -58,16 +59,18 @@ struct AKGLoopParallelize : public impl::AKGAffineLoopParallelizeBase<AKGLoopPar
 
 /// Descriptor of a potentially parallelizable loop.
 struct ParallelizationCandidate {
-  ParallelizationCandidate(AffineForOp l, SmallVector<LoopReduction> &&r) : loop(l), reductions(std::move(r)) {}
+  ParallelizationCandidate(affine::AffineForOp l, SmallVector<affine::LoopReduction> &&r)
+      : loop(l), reductions(std::move(r)) {}
 
   /// The potentially parallelizable loop.
-  AffineForOp loop;
+  affine::AffineForOp loop;
   /// Desciprtors of reductions that can be parallelized in the loop.
-  SmallVector<LoopReduction> reductions;
+  SmallVector<affine::LoopReduction> reductions;
 };
 }  // namespace
 
-bool AKGLoopParallelize::isAncestorLoopParallel(SmallVector<AffineForOp, 6> nonParallelizableLoops, Operation *op) {
+bool AKGLoopParallelize::isAncestorLoopParallel(SmallVector<affine::AffineForOp, 6> nonParallelizableLoops,
+                                                Operation *op) {
   for (auto nonParallelizable : nonParallelizableLoops) {
     if (nonParallelizable.getBody()->findAncestorOpInBlock(*op) != nullptr) {
       return false;
@@ -82,10 +85,10 @@ void AKGLoopParallelize::runOnOperation() {
   }
   // todo(lijintao): multi bands
   func::FuncOp funcOp = getOperation();
-  std::map<AffineForOp, bool> smallLoop;
-  for (auto band : funcOp.getOps<AffineForOp>()) {
+  std::map<affine::AffineForOp, bool> smallLoop;
+  for (auto band : funcOp.getOps<affine::AffineForOp>()) {
     int64_t upperSize = 1;
-    band->walk([&](AffineForOp forOp) {
+    band->walk([&](affine::AffineForOp forOp) {
       if (!forOp.hasConstantBounds()) {
         return;
       }
@@ -94,7 +97,7 @@ void AKGLoopParallelize::runOnOperation() {
     if (upperSize > PARALLEL_SIZE) {
       continue;
     }
-    band->walk([&](AffineForOp forOp) { smallLoop[forOp] = true; });
+    band->walk([&](affine::AffineForOp forOp) { smallLoop[forOp] = true; });
   }
 
   // todo: tiling reduction axis to support parallelism for reduce op
@@ -102,10 +105,10 @@ void AKGLoopParallelize::runOnOperation() {
   // The walker proceeds in pre-order to process the outer loops first
   // and control the number of outer parallel loops.
   std::vector<ParallelizationCandidate> parallelizableLoops;
-  SmallVector<AffineForOp, 6> nonParallelizableLoops;
-  funcOp.walk<WalkOrder::PreOrder>([&](AffineForOp loop) {
-    SmallVector<LoopReduction> reductions;
-    if (mlir::isLoopParallel(loop, parallelReductions ? &reductions : nullptr) && !smallLoop[loop]) {
+  SmallVector<affine::AffineForOp, 6> nonParallelizableLoops;
+  funcOp.walk<WalkOrder::PreOrder>([&](affine::AffineForOp loop) {
+    SmallVector<affine::LoopReduction> reductions;
+    if (mlir::affine::isLoopParallelAKG(loop, parallelReductions ? &reductions : nullptr) && !smallLoop[loop]) {
       parallelizableLoops.emplace_back(loop, std::move(reductions));
     } else {
       nonParallelizableLoops.push_back(loop);
@@ -113,14 +116,14 @@ void AKGLoopParallelize::runOnOperation() {
   });
 
   for (const ParallelizationCandidate &candidate : parallelizableLoops) {
-    AffineForOp loop = candidate.loop;
+    affine::AffineForOp loop = candidate.loop;
     if (!isAncestorLoopParallel(nonParallelizableLoops, loop)) {
       continue;
     }
     unsigned numParentParallelOps = 0;
     for (Operation *op = loop->getParentOp(); op != nullptr && !op->hasTrait<OpTrait::AffineScope>();
          op = op->getParentOp()) {
-      if (isa<AffineParallelOp>(op)) {
+      if (isa<affine::AffineParallelOp>(op)) {
         ++numParentParallelOps;
       }
     }

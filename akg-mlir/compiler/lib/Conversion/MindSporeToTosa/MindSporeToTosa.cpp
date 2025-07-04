@@ -44,16 +44,6 @@ namespace mlir {
 using namespace mlir;
 using namespace mlir::mindspore;
 
-class ConvertMindSporeConstOp : public OpRewritePattern<mindspore::ConstOp> {
- public:
-  using OpRewritePattern<mindspore::ConstOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(mindspore::ConstOp op, PatternRewriter &rewriter) const final {
-    (void)rewriter.replaceOpWithNewOp<tosa::ConstOp>(op, op.getType(), op.getValue());
-    return success();
-  }
-};
-
 class ConvertMindSporeConcatOp : public OpRewritePattern<mindspore::ConcatOp> {
  public:
   using OpRewritePattern<mindspore::ConcatOp>::OpRewritePattern;
@@ -340,11 +330,6 @@ class ConvertMindSporePadOp : public OpConversionPattern<SrcOp> {
       mindsporeOp.setModeAttr(rewriter.getStringAttr("constant"));
     }
 
-    mode = mindsporeOp.getMode();
-    if (!(*mode).equals("constant")) {
-      return rewriter.notifyMatchFailure(op, "only support for constant mode in Pad operation");
-    }
-
     int64_t rank = inputTy.getRank();
 
     SmallVector<int64_t> padInts;
@@ -483,6 +468,7 @@ struct ConvertMindSporeToTosaPass : public ConvertMindSporeToTosaBase<ConvertMin
     target.addLegalOp<mindspore::TileOp>();
     target.addLegalOp<mindspore::MatMulOp>();
     target.addLegalOp<mindspore::BatchMatMulOp>();
+    target.addLegalOp<mindspore::ConstOp>();
 
     // clang-format off
     (void)patterns.add<
@@ -513,7 +499,6 @@ struct ConvertMindSporeToTosaPass : public ConvertMindSporeToTosaBase<ConvertMin
       ConvertMindSporeMulOp<mindspore::MulOp>,
       ConvertMindSporeMulOp<mindspore::SquareOp>,
       ConvertMindSporeConcatOp,
-      ConvertMindSporeConstOp,
       ConvertMindSporePadOp<mindspore::PadOp>
     >(patterns.getContext());
     mlir::populateMindSporeLowerPattern(patterns);

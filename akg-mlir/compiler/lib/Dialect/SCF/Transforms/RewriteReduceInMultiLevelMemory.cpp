@@ -76,10 +76,10 @@ Value createInitialValue(Operation *op, mlir::Location loc, OpBuilder &builder) 
     initialValue = builder.create<arith::ConstantIntOp>(loc, 0, elementType.cast<IntegerType>());
   } else if (isa<arith::MulIOp>(op)) {
     initialValue = builder.create<arith::ConstantIntOp>(loc, 1, elementType.cast<IntegerType>());
-  } else if (isa<arith::MinFOp>(op)) {
+  } else if (isa<arith::MinNumFOp>(op)) {
     initialValue = builder.create<arith::ConstantFloatOp>(
       loc, APFloat::getLargest(elementType.cast<FloatType>().getFloatSemantics()), elementType.cast<FloatType>());
-  } else if (isa<arith::MaxFOp>(op)) {
+  } else if (isa<arith::MaxNumFOp>(op)) {
     initialValue = builder.create<arith::ConstantFloatOp>(
       loc, APFloat::getSmallest(elementType.cast<FloatType>().getFloatSemantics()), elementType.cast<FloatType>());
   } else if (isa<arith::MinSIOp>(op)) {
@@ -185,7 +185,8 @@ struct RewriteReduceInMultiLevelMemory
             redOps.push_back(op);
           } else {
             (void)op->emitError(
-              "reduction related operands are not promoted, can't apply RewriteReduceInMultiLevelMemory.");
+              "reduction related operands are not promoted, can't apply "
+              "RewriteReduceInMultiLevelMemory.");
           }
         }
       }

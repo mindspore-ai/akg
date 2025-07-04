@@ -301,7 +301,6 @@ struct MakeDynamicBroadcastable : public impl::MakeDynamicBroadcastableBase<Make
     // tosa dialect
     (void)patterns.add<EnableTosaBroadCastOp<tosa::AddOp>>(ctx);
     (void)patterns.add<EnableTosaBroadCastOp<tosa::ArithmeticRightShiftOp>>(ctx);
-    (void)patterns.add<EnableTosaBroadCastOp<tosa::DivOp>>(ctx);
     (void)patterns.add<EnableTosaBroadCastOp<tosa::EqualOp>>(ctx);
     (void)patterns.add<EnableTosaBroadCastOp<tosa::GreaterEqualOp>>(ctx);
     (void)patterns.add<EnableTosaBroadCastOp<tosa::GreaterOp>>(ctx);

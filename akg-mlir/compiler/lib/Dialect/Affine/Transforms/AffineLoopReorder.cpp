@@ -95,7 +95,7 @@ bool AffineLoopReorder::needToReorder(const std::vector<int> &nums) {
 bool AffineLoopReorder::isInsideIn(Operation *const op0, const Operation *const op1) {
   Operation *curOp = op0;
   while (curOp) {
-    if (auto forOp = dyn_cast<AffineForOp>(curOp)) {
+    if (auto forOp = dyn_cast<affine::AffineForOp>(curOp)) {
       if (curOp == op1) {
         return true;
       }
@@ -115,10 +115,10 @@ void AffineLoopReorder::SinkApplyOps(OpBuilder &builder, SmallVector<Operation *
     }
     WalkResult::advance();
   });
-  auto firstOp = &*dyn_cast<AffineForOp>(opList[opList.size() - 1]).getRegion().front().getOperations().begin();
+  auto firstOp = &*dyn_cast<affine::AffineForOp>(opList[opList.size() - 1]).getRegion().front().getOperations().begin();
   builder.setInsertionPoint(firstOp);
   SmallVector<Operation *, 8> ops;
-  funcOp->walk([&](AffineApplyOp op) {
+  funcOp->walk([&](affine::AffineApplyOp op) {
     if (!isInsideIn(op.getOperation(), opList[opList.size() - 1])) {
       ops.push_back(op.getOperation());
     }
@@ -139,7 +139,7 @@ void AffineLoopReorder::runOnOperation() {
   }
 
   SmallVector<Operation *, 8> opList;
-  funcOp->walk([&](AffineForOp op) { opList.push_back(op.getOperation()); });
+  funcOp->walk([&](affine::AffineForOp op) { opList.push_back(op.getOperation()); });
   std::reverse(opList.begin(), opList.end());
 
   // Get the order and check the validations
@@ -179,17 +179,17 @@ void AffineLoopReorder::runOnOperation() {
   builder.setInsertionPointAfter(opList[start]);
   // create new nest-loop
   for (size_t i = start; i < opList.size(); i++) {
-    auto matchedLoop = dyn_cast<AffineForOp>(opList[start + order[i - start]]);
-    auto newLoop = builder.create<mlir::AffineForOp>(
+    auto matchedLoop = dyn_cast<affine::AffineForOp>(opList[start + order[i - start]]);
+    auto newLoop = builder.create<mlir::affine::AffineForOp>(
       matchedLoop.getLoc(), matchedLoop.getLowerBoundOperands(), matchedLoop.getLowerBoundMap(),
-      matchedLoop.getUpperBoundOperands(), matchedLoop.getUpperBoundMap(), matchedLoop.getStep());
+      matchedLoop.getUpperBoundOperands(), matchedLoop.getUpperBoundMap(), matchedLoop.getStepAsInt());
     Operation *newOp = newLoop.getOperation();
     newOp->setAttrs(matchedLoop.getOperation()->getAttrs());
     newOpList.push_back(newOp);
     mapper.map(matchedLoop.getInductionVar(), newLoop.getInductionVar());
     builder.setInsertionPointToStart(newLoop.getBody());
   }
-  for (auto &op : dyn_cast<AffineForOp>(opList[opList.size() - 1]).getBody()->without_terminator()) {
+  for (auto &op : dyn_cast<affine::AffineForOp>(opList[opList.size() - 1]).getBody()->without_terminator()) {
     builder.clone(op, mapper);
   }
   opList[start]->erase();

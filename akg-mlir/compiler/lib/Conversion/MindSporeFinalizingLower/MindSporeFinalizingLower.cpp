@@ -19,7 +19,6 @@
 #include "akg/Analysis/SymbolicShapeAnalysis.h"
 #include "akg/Conversion/Passes.h"
 #include "akg/Dialect/Linalg/IR/LinalgExtOps.h"
-#include "akg/Dialect/Math/IR/MathExtOps.h"
 #include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -55,7 +54,16 @@ namespace mlir {
 using namespace mlir;
 using namespace mlir::tosa;
 using namespace mlir::mindspore;
-using namespace mlir::mathExt;
+
+class ConvertMindSporeConstOp : public OpRewritePattern<mindspore::ConstOp> {
+ public:
+  using OpRewritePattern<mindspore::ConstOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(mindspore::ConstOp op, PatternRewriter &rewriter) const final {
+    (void)rewriter.replaceOpWithNewOp<arith::ConstantOp>(op, op.getValue());
+    return success();
+  }
+};
 
 template <typename SourceOp>
 class ConvertMindSporeSliceOp : public OpRewritePattern<SourceOp> {
@@ -134,6 +142,7 @@ class ConvertMindSporeReshapeOp : public OpConversionPattern<mindspore::ReshapeO
 void mlir::populateMindSporeLowerPattern(RewritePatternSet &patterns) {
   // clang-format off
   (void)patterns.add<
+    ConvertMindSporeConstOp,
     ConvertMindSporeReshapeOp
   >(patterns.getContext());
   // clang-format on
@@ -149,9 +158,8 @@ struct MindSporeFinalizingLowerPass : public MindSporeFinalizingLowerBase<MindSp
     registry.insert<func::FuncDialect>();
     registry.insert<shape::ShapeDialect>();
     registry.insert<math::MathDialect>();
-    registry.insert<mlir::AffineDialect>();
+    registry.insert<mlir::affine::AffineDialect>();
     registry.insert<tensor::TensorDialect>();
-    registry.insert<mathExt::MathExtDialect>();
   }
 
   void runOnOperation() override {
@@ -161,8 +169,7 @@ struct MindSporeFinalizingLowerPass : public MindSporeFinalizingLowerBase<MindSp
 
     // todo: remove Tosa.
     target.addLegalDialect<tosa::TosaDialect, arith::ArithDialect, linalg::LinalgDialect, linalgExt::LinalgExtDialect,
-                           tensor::TensorDialect, func::FuncDialect, math::MathDialect, shape::ShapeDialect,
-                           mathExt::MathExtDialect>();
+                           tensor::TensorDialect, func::FuncDialect, math::MathDialect, shape::ShapeDialect>();
     target.addIllegalDialect<mindspore::MindSporeDialect>();
     target.addLegalOp<mindspore::AddNOp>();
     // clang-format off

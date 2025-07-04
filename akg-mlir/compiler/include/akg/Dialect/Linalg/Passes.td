@@ -32,27 +32,11 @@ def LinalgExtBufferize : Pass<"linalg-ext-bufferize", "func::FuncOp"> {
   let summary = "Bufferize the linalg-ext and linalg dialect";
   let constructor = "mlir::createLinalgExtBufferizePass()";
   let dependentDialects = [
-    "AffineDialect",
+    "affine::AffineDialect",
     "bufferization::BufferizationDialect",
     "linalg::LinalgDialect",
     "linalgExt::LinalgExtDialect",
     "memref::MemRefDialect"
-  ];
-}
-
-def LinalgTemplateOpOpFusion : Pass<"linalg-fuse-template-ops", "ModuleOp"> {
-  let summary = "Fuse elementwise operations to template ops";
-  let constructor = "mlir::createLinalgTemplateOpFusionPass()";
-  let options = [
-    Option<"optReshapeByExpand", "opt-reshape-by-expand", "bool",
-           /*default=*/"false",
-           "do reshape optimization by expand generic op">,
-    Option<"optReshapeByCollapse", "opt-reshape-by-collapse", "bool",
-           /*default=*/"false",
-           "do reshape optimization by collapse generic op">
-  ];
-  let dependentDialects = [
-    "AffineDialect", "linalg::LinalgDialect", "memref::MemRefDialect"
   ];
 }
 
@@ -65,7 +49,7 @@ def LinalgTemplated: Pass<"linalg-template-named-ops", "ModuleOp"> {
            "the path of operation templated implementation">
   ];
   let dependentDialects = [
-    "AffineDialect",
+    "affine::AffineDialect",
     "scf::SCFDialect",
     "bufferization::BufferizationDialect",
     "linalg::LinalgDialect",
@@ -93,7 +77,7 @@ def MatchAndMarkReductionOps : Pass<"match-and-mark-reduction-ops", "func::FuncO
   let dependentDialects = [
     "linalg::LinalgDialect",
     "arith::ArithDialect",
-    "AffineDialect"
+    "affine::AffineDialect"
   ];
 }
 
@@ -114,7 +98,7 @@ def LinalgElementwiseFusionExt : Pass<"linalg-fuse-elementwise-ext"> {
   let summary = "Extension of elementwise fusion on tensors";
   let constructor = "mlir::createLinalgElementwiseFusionExtPass()";
   let dependentDialects = [
-    "AffineDialect",
+    "affine::AffineDialect",
     "linalg::LinalgDialect",
     "linalgExt::LinalgExtDialect",
     "memref::MemRefDialect"

@@ -56,28 +56,29 @@ struct AffineIteratorConversion : public impl::AffineIteratorConversionBase<Affi
 }  // namespace mlir
 
 class CreateArithOp {
+ private:
+  OpBuilder b;
+  affine::AffineForOp newLoop;
+  affine::AffineLoadOp loadOp;
+  affine::AffineStoreOp storeOp;
+
  public:
-  CreateArithOp(OpBuilder b, AffineForOp newLoop, AffineLoadOp loadOp, AffineStoreOp storeOp, Operation *arithOp)
+  CreateArithOp(OpBuilder b, affine::AffineForOp newLoop, affine::AffineLoadOp loadOp, affine::AffineStoreOp storeOp,
+                Operation *arithOp)
       : b(b), newLoop(newLoop), loadOp(loadOp), storeOp(storeOp), arithOp(arithOp) {}
 
   template <typename opType>
   Operation *create() {
-    auto newLoadOp = b.create<AffineLoadOp>(loadOp.getLoc(), loadOp.getMemRef(), loadOp.getAffineMapAttr().getValue(),
-                                            loadOp.getIndices());
+    auto newLoadOp = b.create<affine::AffineLoadOp>(loadOp.getLoc(), loadOp.getMemRef(),
+                                                    loadOp.getAffineMapAttr().getValue(), loadOp.getIndices());
     auto newArithOp = b.create<opType>(newLoadOp.getLoc(), newLoadOp.getResult().getType(),
                                        ValueRange{newLoop.getResults().back(), newLoadOp.getResult()});
-    b.create<AffineStoreOp>(storeOp.getLoc(), newArithOp.getResult(), storeOp.getMemRef(),
-                            storeOp.getAffineMapAttr().getValue(), storeOp.getIndices());
+    b.create<affine::AffineStoreOp>(storeOp.getLoc(), newArithOp.getResult(), storeOp.getMemRef(),
+                                    storeOp.getAffineMapAttr().getValue(), storeOp.getIndices());
     return newArithOp.getOperation();
   }
   ~CreateArithOp() {}
   Operation *arithOp;
-
- private:
-  OpBuilder b;
-  AffineForOp newLoop;
-  AffineLoadOp loadOp;
-  AffineStoreOp storeOp;
 };
 
 static Operation *identifyAndCreateArithOp(CreateArithOp &rewriter) {
@@ -89,8 +90,8 @@ static Operation *identifyAndCreateArithOp(CreateArithOp &rewriter) {
     .Case([&](arith::AndIOp) { newArithOp = rewriter.create<arith::AndIOp>(); })
     .Case([&](arith::OrIOp) { newArithOp = rewriter.create<arith::OrIOp>(); })
     .Case([&](arith::MulIOp) { newArithOp = rewriter.create<arith::MulIOp>(); })
-    .Case([&](arith::MinFOp) { newArithOp = rewriter.create<arith::MinFOp>(); })
-    .Case([&](arith::MaxFOp) { newArithOp = rewriter.create<arith::MaxFOp>(); })
+    .Case([&](arith::MinNumFOp) { newArithOp = rewriter.create<arith::MinNumFOp>(); })
+    .Case([&](arith::MaxNumFOp) { newArithOp = rewriter.create<arith::MaxNumFOp>(); })
     .Case([&](arith::MinSIOp) { newArithOp = rewriter.create<arith::MinSIOp>(); })
     .Case([&](arith::MaxSIOp) { newArithOp = rewriter.create<arith::MaxSIOp>(); })
     .Case([&](arith::MinUIOp) { newArithOp = rewriter.create<arith::MinUIOp>(); })
@@ -119,12 +120,12 @@ void AffineIteratorConversion::removeInitMemoryCopy(func::FuncOp func) {
   copyOp.erase();
 }
 
-static AffineLoadOp getLoadOp(AffineForOp reduceForOp, Operation *arithOp) {
+static affine::AffineLoadOp getLoadOp(affine::AffineForOp reduceForOp, Operation *arithOp) {
   auto lhs = arithOp->getOperands()[0];
   auto rhs = arithOp->getOperands()[1];
   auto iv = reduceForOp.getInductionVar();
-  AffineLoadOp loadOp;
-  reduceForOp.walk([&](AffineLoadOp op) {
+  affine::AffineLoadOp loadOp;
+  reduceForOp.walk([&](affine::AffineLoadOp op) {
     if (op != lhs.getDefiningOp() && op != rhs.getDefiningOp()) {
       return;
     }
@@ -145,7 +146,7 @@ static AffineLoadOp getLoadOp(AffineForOp reduceForOp, Operation *arithOp) {
 
 static Operation *getInnermostReduceOp(Operation *curOp) {
   Operation *innermostReduceOp = nullptr;
-  curOp->walk([&](AffineForOp op) -> WalkResult {
+  curOp->walk([&](affine::AffineForOp op) -> WalkResult {
     if (op->getAttr("reduceLoop")) {
       innermostReduceOp = op.getOperation();
       return WalkResult::interrupt();
@@ -174,11 +175,11 @@ void AffineIteratorConversion::loadRemoveEachBand(Operation *curOp) {
   if (!reduceLoopOp) {
     return;
   }
-  AffineStoreOp initStoreOp = nullptr;
-  while (isa<AffineForOp>(reduceLoopOp) && reduceLoopOp->getAttr("reduceLoop")) {
-    AffineForOp reduceLoop = cast<AffineForOp>(reduceLoopOp);
+  affine::AffineStoreOp initStoreOp = nullptr;
+  while (isa<affine::AffineForOp>(reduceLoopOp) && reduceLoopOp->getAttr("reduceLoop")) {
+    affine::AffineForOp reduceLoop = cast<affine::AffineForOp>(reduceLoopOp);
     // init load statement
-    AffineLoadOp loadOp = getLoadOp(reduceLoop, reduceArithOp);
+    affine::AffineLoadOp loadOp = getLoadOp(reduceLoop, reduceArithOp);
     // init statement
     auto initOp = CommonUtils::getReduceInitOp(reduceArithOp, curOp->getBlock());
     if (initOp) {
@@ -186,8 +187,8 @@ void AffineIteratorConversion::loadRemoveEachBand(Operation *curOp) {
     }
 
     // reduce result store statement
-    AffineStoreOp storeOp = nullptr;
-    reduceLoop.walk([&](AffineStoreOp op) {
+    affine::AffineStoreOp storeOp = nullptr;
+    reduceLoop.walk([&](affine::AffineStoreOp op) {
       if (op.getMemref() == loadOp.getMemref()) {
         storeOp = op;
       }
@@ -201,27 +202,31 @@ void AffineIteratorConversion::loadRemoveEachBand(Operation *curOp) {
       return;
     }
     arith::ConstantOp constOp = cast<arith::ConstantOp>(definingOp);
-    auto newLoop = replaceForOpWithNewYields(b, reduceLoop, constOp.getResult(), SmallVector<Value>{storeOp.getValue()},
-                                             storeOp.getValue());
-    loadOp.getResult().replaceUsesWithIf(newLoop.getLoopBody().getArguments().back(), [&](OpOperand &use) {
+    IRRewriter rewriter(curOp->getContext());
+    auto newLoop = cast<affine::AffineForOp>(*reduceLoop.replaceWithAdditionalYields(
+      rewriter, constOp.getResult(),
+      /*replaceInitOperandUsesInLoop=*/false, [&](OpBuilder &b, Location loc, ArrayRef<BlockArgument> newBbArgs) {
+        return SmallVector<Value>{storeOp.getValue()};
+      }));
+    loadOp.getResult().replaceUsesWithIf(newLoop.getBody()->getArguments().back(), [&](OpOperand &use) {
       Operation *user = use.getOwner();
       return newLoop->isProperAncestor(user);
     });
     b.setInsertionPoint(reduceLoop);
     auto parentOp = newLoop.getOperation()->getParentOp();
-    if (isa<AffineForOp>(parentOp) && parentOp->getAttr("reduceLoop")) {
+    if (isa<affine::AffineForOp>(parentOp) && parentOp->getAttr("reduceLoop")) {
       CreateArithOp rewriter(b, newLoop, loadOp, storeOp, reduceArithOp);
       reduceArithOp = identifyAndCreateArithOp(rewriter);
     } else {
-      b.create<AffineStoreOp>(storeOp.getLoc(), newLoop.getResults().back(), storeOp.getMemRef(),
-                              storeOp.getAffineMapAttr().getValue(), storeOp.getIndices());
+      b.create<affine::AffineStoreOp>(storeOp.getLoc(), newLoop.getResults().back(), storeOp.getMemRef(),
+                                      storeOp.getAffineMapAttr().getValue(), storeOp.getIndices());
     }
     reduceLoop.erase();
     loadOp.erase();
     storeOp.erase();
     reduceLoopOp = newLoop.getOperation()->getParentOp();
   }
-  AffineIfOp ifOp = dyn_cast<AffineIfOp>(initStoreOp.getOperation()->getParentOp());
+  affine::AffineIfOp ifOp = dyn_cast<affine::AffineIfOp>(initStoreOp.getOperation()->getParentOp());
   if (initStoreOp) {
     initStoreOp.erase();
   }
@@ -246,8 +251,8 @@ void AffineIteratorConversion::runOnOperation() {
     reduceLoop->setAttr("reduceLoop", b.getUnitAttr());
   }
 
-  SmallVector<AffineForOp, 6> bands;
-  for (auto band : func.getOps<AffineForOp>()) {
+  SmallVector<affine::AffineForOp, 6> bands;
+  for (auto band : func.getOps<affine::AffineForOp>()) {
     bands.push_back(band);
   }
   for (auto band : bands) {
@@ -255,8 +260,8 @@ void AffineIteratorConversion::runOnOperation() {
   }
 
   // remove empty for
-  func->walk([&](AffineForOp forOp) {
-    if (isa<AffineYieldOp>(forOp.getBody()->front())) {
+  func->walk([&](affine::AffineForOp forOp) {
+    if (isa<affine::AffineYieldOp>(forOp.getBody()->front())) {
       forOp.erase();
     }
   });

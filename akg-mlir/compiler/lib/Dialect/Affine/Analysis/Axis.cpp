@@ -26,7 +26,7 @@ namespace mlir {
 namespace akg {
 namespace autotiling {
 
-Axis::Axis(size_t bandIdx, size_t axisIdx, const std::shared_ptr<AffineForOp> loop)
+Axis::Axis(size_t bandIdx, size_t axisIdx, const std::shared_ptr<affine::AffineForOp> loop)
     : bandIdx(bandIdx), axisIdx(axisIdx), loop(loop) {
   auto nameSuffix = std::to_string(bandIdx) + "_" + std::to_string(axisIdx);
   this->name = "Axis_" + nameSuffix;

@@ -1,5 +1,6 @@
 add_mlir_conversion_library(MindSporeToLinalg
   MindSporeToLinalg.cpp
+  MindSporeToLinalgNamed.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${MLIR_MAIN_INCLUDE_DIR}/akg/Conversion/MindSporeToLinalg
@@ -15,5 +16,4 @@ add_mlir_conversion_library(MindSporeToLinalg
   MLIRIR
   MLIRBufferizationTransforms
   MindSporeDialect
-  MLIRMathExtDialect
 )

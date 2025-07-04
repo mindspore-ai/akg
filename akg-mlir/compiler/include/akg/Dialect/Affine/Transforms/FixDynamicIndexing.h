@@ -29,4 +29,3 @@ std::unique_ptr<OperationPass<func::FuncOp>> createFixDynamicIndexingPass();
 }  // namespace mlir
 
 #endif  // COMPILER_INCLUDE_AKG_DIALECT_AFFINE_TRANSFORMS_FIXDYNAMICINDEXING_H_
-

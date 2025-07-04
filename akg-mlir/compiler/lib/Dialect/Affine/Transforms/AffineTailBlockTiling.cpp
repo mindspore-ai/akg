@@ -62,7 +62,7 @@ struct AffineTailBlockTiling : public impl::AffineTailBlockTilingBase<AffineTail
   AffineTailBlockTiling(const std::string &target, const std::string &feature) : target(target), feature(feature) {}
 
   void runOnOperation() override;
-  LogicalResult tailBlockTiling(func::FuncOp func, AffineForOp rootLoop);
+  LogicalResult tailBlockTiling(func::FuncOp func, affine::AffineForOp rootLoop);
 
   std::string target = kTargetCpu;
   std::string feature = kNEONInstructionSet;
@@ -72,7 +72,7 @@ struct AffineTailBlockTiling : public impl::AffineTailBlockTilingBase<AffineTail
 static int64_t getVectorSize(Operation *cpuOp, const int64_t instructionSetBit = kVectorize128Bit) {
   int64_t vectorSize = instructionSetBit;
   cpuOp->walk([&vectorSize, instructionSetBit](Operation *op) {
-    if (auto loadOp = dyn_cast<AffineLoadOp>(op)) {
+    if (auto loadOp = dyn_cast<affine::AffineLoadOp>(op)) {
       MemRefType memRefType = loadOp.getMemRefType();
       Type elementType = memRefType.getElementType();
       int64_t elementBit = static_cast<int64_t>(elementType.getIntOrFloatBitWidth());
@@ -94,19 +94,19 @@ static int64_t getDifferenceUbAndLb(AffineMap ubMap, AffineMap lbMap) {
   }
 
   auto constExpr = simplifyAffineExpr(ubMap.getResult(0) - lbMap.getResult(0), lbMapDim, lbMapSymbol);
-  if (auto cExpr = constExpr.dyn_cast<AffineConstantExpr>()) {
+  if (auto cExpr = llvm::dyn_cast<AffineConstantExpr>(constExpr)) {
     return cExpr.getValue();
   }
   return -1;
 }
 
 // Updates the upper bound of all users of the trailing block for loop.
-static void updateForOpUsers(AffineForOp forOp, int64_t newSize) {
+static void updateForOpUsers(affine::AffineForOp forOp, int64_t newSize) {
   if (!newSize) {
     return;
   }
   for (OpOperand &use : forOp.getInductionVar().getUses()) {
-    if (auto tiledOp = dyn_cast<AffineForOp>(use.getOwner())) {
+    if (auto tiledOp = dyn_cast<affine::AffineForOp>(use.getOwner())) {
       auto ubMap = tiledOp.getUpperBoundMap();
       auto newExpr = tiledOp.getLowerBoundMap().getResult(0) + newSize;
       ubMap = ubMap.replace(ubMap.getResult(0), newExpr, ubMap.getNumDims(), ubMap.getNumSymbols());
@@ -115,17 +115,16 @@ static void updateForOpUsers(AffineForOp forOp, int64_t newSize) {
   }
 }
 
-LogicalResult AffineTailBlockTiling::tailBlockTiling(func::FuncOp func, AffineForOp rootLoop) {
-  OperatorTemplate opType = CommonUtils::getOperatorType(func);
+LogicalResult AffineTailBlockTiling::tailBlockTiling(func::FuncOp func, affine::AffineForOp rootLoop) {
   ReduceDirection reduceDirection = CommonUtils::getReduceDirection(func);
-  AffineForOp tileLoop = nullptr;
+  affine::AffineForOp tileLoop = nullptr;
   if (reduceDirection == ReduceDirection::ALL) {
     tileLoop = rootLoop;
   } else if (reduceDirection == ReduceDirection::Y) {
     SmallVector<Operation *, 8> reduceLoops = CommonUtils::collectReductionAxes(func);
-    tileLoop = dyn_cast<AffineForOp>(reduceLoops[0]->getParentOp());
+    tileLoop = dyn_cast<affine::AffineForOp>(reduceLoops[0]->getParentOp());
   } else {
-    rootLoop.walk([&](AffineForOp op) {
+    rootLoop.walk([&](affine::AffineForOp op) {
       if (tileLoop == nullptr) {
         tileLoop = op;
       }
@@ -170,7 +169,7 @@ LogicalResult AffineTailBlockTiling::tailBlockTiling(func::FuncOp func, AffineFo
 
   OpBuilder b(tileLoop);
   b.setInsertionPointAfter(tileLoop);
-  AffineForOp tailLoop = dyn_cast<AffineForOp>(b.clone(*tileLoop.getOperation()));
+  affine::AffineForOp tailLoop = dyn_cast<affine::AffineForOp>(b.clone(*tileLoop.getOperation()));
   tailLoop.setLowerBoundMap(ubMap);
   tailLoop.setUpperBoundMap(origUbMap);
   replaceAllUsesInRegionWith(tailLoop.getInductionVar(), tailLoop.getInductionVar(), tailLoop.getRegion());
@@ -181,12 +180,14 @@ LogicalResult AffineTailBlockTiling::tailBlockTiling(func::FuncOp func, AffineFo
 
 void AffineTailBlockTiling::runOnOperation() {
   func::FuncOp func = getOperation();
-  SmallVector<AffineForOp, 6> rootLoops;
-  for (auto rootLoop : func.getOps<AffineForOp>()) {
+  SmallVector<affine::AffineForOp, 6> rootLoops;
+  for (auto rootLoop : func.getOps<affine::AffineForOp>()) {
     rootLoops.push_back(rootLoop);
   }
   for (auto rootLoop : rootLoops) {
-    tailBlockTiling(func, rootLoop);
+    if (failed(tailBlockTiling(func, rootLoop))) {
+      return signalPassFailure();
+    }
   }
 }
 

@@ -21,12 +21,9 @@
 #include "akg/Dialect/LLVMIR/Passes.h"
 #include "akg/Dialect/Linalg/IR/LinalgExtOps.h"
 #include "akg/Dialect/Linalg/Passes.h"
-#include "akg/Dialect/Math/IR/MathExtOps.h"
-#include "akg/Dialect/Math/Passes.h"
 #include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
 #include "akg/Dialect/MindSpore/Passes.h"
 #include "akg/Dialect/SCF/Passes.h"
-#include "akg/Dialect/Tosa/Passes.h"
 #include "akg/Pipelines/InitAllPipelines.h"
 #include "akg/Transforms/Passes.h"
 #include "llvm/Support/CommandLine.h"
@@ -36,6 +33,7 @@
 #include "llvm/Support/ToolOutputFile.h"
 #include "mlir/Bytecode/BytecodeWriter.h"
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
+#include "mlir/Dialect/Linalg/TransformOps/DialectExtension.h"
 #include "mlir/ExecutionEngine/OptUtils.h"
 #include "mlir/IR/AsmState.h"
 #include "mlir/IR/Attributes.h"
@@ -45,6 +43,7 @@
 #include "mlir/IR/Location.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/InitAllDialects.h"
+#include "mlir/InitAllExtensions.h"
 #include "mlir/InitAllPasses.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/Pass.h"
@@ -56,14 +55,11 @@
 #include "mlir/Target/LLVMIR/ModuleTranslation.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
 #include "mlir/Transforms/Passes.h"
-#include "polytops/mlir/Dialect/Polytops/IR/Polytops.h"
-#include "polytops/mlir/Dialect/Polytops/Transforms/Passes.hpp"
 
 int main(int argc, char **argv) {
   mlir::registerAllPasses();
 
   registerMindSporePasses();
-  registerAKGTosaPasses();
   registerAKGAffinePasses();
   registerMindSporePasses();
   registerAKGLinalgPasses();
@@ -73,20 +69,16 @@ int main(int argc, char **argv) {
   registerAKGSCFPasses();
   registerAKGGPUPasses();
 
-  ::polytops::mlir::registerPolytopsScheduleOptPipeline();
-
   DialectRegistry registry;
   registerAllDialects(registry);
   registry.insert<mlir::linalgExt::LinalgExtDialect>();
   registry.insert<mlir::fusion::FusionDialect>();
   registry.insert<mlir::mindspore::MindSporeDialect>();
-  registry.insert<mlir::mathExt::MathExtDialect>();
-  registry.insert<::polytops::mlir::PolytopsDialect>();
   registerLLVMDialectTranslation(registry);
 
   registerMLIRContextCLOptions();
   registerPassManagerCLOptions();
   registerConversionPasses();
   registerAllPiplines();
-  return mlir::asMainReturnCode(mlir::MlirOptMain(argc, argv, "AKG-MLIR pass driver\n", registry, false));
+  return mlir::asMainReturnCode(mlir::MlirOptMain(argc, argv, "AKG-MLIR pass driver\n", registry));
 }

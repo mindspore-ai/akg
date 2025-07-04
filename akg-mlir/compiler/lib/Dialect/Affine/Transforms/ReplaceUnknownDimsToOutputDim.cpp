@@ -86,7 +86,7 @@ std::string getOutputSymbol(mlir::DictionaryAttr dictAttr, std::string target) {
 
 void collectRelatedDimsAndAffineMax(func::FuncOp funcOp, SmallVector<SmallVector<Operation *, 8>, 8> &dimPack,
                                     SmallVector<Operation *, 8> &maxList) {
-  funcOp.walk([&](AffineMaxOp maxOp) {
+  funcOp.walk([&](affine::AffineMaxOp maxOp) {
     bool flag = true;
     dimPack.push_back(SmallVector<Operation *, 8>());
     auto new_idx = dimPack.size() - 1;

@@ -32,7 +32,6 @@ def CPU_Dialect : Dialect {
   }];
   let cppNamespace = "::mlir::CPU";
 
-  let useFoldAPI = kEmitFoldAdaptorFolder;
 }
 
 #endif // AKG_DIALECT_CPU_IR_CPU_BASE

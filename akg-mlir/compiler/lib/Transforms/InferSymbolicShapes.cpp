@@ -32,6 +32,7 @@
 #include "akg/Transforms/Passes.h"
 #include "akg/Utils/AKGGlobalVars.hpp"
 
+#include <optional>
 #include <string>
 #include "symengine/expression.h"
 
@@ -58,7 +59,7 @@ static const uint64_t kDimIdx1 = 1;
 static const uint64_t kDimIdx2 = 2;
 static const uint64_t kDimIdx3 = 3;
 
-static llvm::Optional<NamedAttribute> getSymbolicShapeFromFrontend(Operation *op, StringRef &key) {
+static std::optional<NamedAttribute> getSymbolicShapeFromFrontend(Operation *op, StringRef &key) {
   if (!op->hasAttr(getFrontendSymbolAttrName())) {
     return std::nullopt;
   }
@@ -84,7 +85,7 @@ struct PropagateMindsporeReduceOp : public OpRewritePattern<OpTy> {
     // operand
     mlir::Value opnd0 = op.getOperation()->getOperands()[0];
     opnd0.setType(analysis.createNewSymbolicShape(opnd0.getType()));
-    llvm::Optional<llvm::SmallVector<std::string>> symShape = analysis.getSymbolicShape(opnd0.getType());
+    std::optional<llvm::SmallVector<std::string>> symShape = analysis.getSymbolicShape(opnd0.getType());
     if (!symShape) {
       return success();
     }
@@ -110,7 +111,7 @@ struct PropagateMindsporeCastOp : public OpRewritePattern<OpTy> {
     // operand
     mlir::Value opnd0 = op.getOperation()->getOperands()[0];
     opnd0.setType(analysis.createNewSymbolicShape(opnd0.getType()));
-    llvm::Optional<NamedAttribute> namedAttr = analysis.getSymbolShapeNamedAttr(opnd0.getType());
+    std::optional<NamedAttribute> namedAttr = analysis.getSymbolShapeNamedAttr(opnd0.getType());
     if (!namedAttr) {
       return success();
     }
@@ -134,7 +135,7 @@ struct PropagateSameOprandsAndResultsShapeTosaOp : public OpRewritePattern<OpTy>
     // operand0
     mlir::Value opnd0 = op.getOperation()->getOperands()[0];
     opnd0.setType(analysis.createNewSymbolicShape(opnd0.getType()));
-    llvm::Optional<NamedAttribute> namedAttr = analysis.getSymbolShapeNamedAttr(opnd0.getType());
+    std::optional<NamedAttribute> namedAttr = analysis.getSymbolShapeNamedAttr(opnd0.getType());
     if (!namedAttr) {
       return success();
     }
@@ -163,9 +164,9 @@ static SymEngine::Expression GetBroadCastDim(const SymEngine::Expression &lhs, c
 }
 
 // todo: To handle complex expressions, the parameters will be changed to SymEngine::Expression.
-static llvm::Optional<llvm::SmallVector<std::string>> GetInferenceShape(
-  const llvm::SmallVector<std::string> &longShape, const llvm::SmallVector<std::string> &shortShape,
-  const llvm::ArrayRef<int64_t> &res) {
+static std::optional<llvm::SmallVector<std::string>> GetInferenceShape(const llvm::SmallVector<std::string> &longShape,
+                                                                       const llvm::SmallVector<std::string> &shortShape,
+                                                                       const llvm::ArrayRef<int64_t> &res) {
   // Scenario 1.1: ShortShape's dims are all '1'
   // (n, m) + (1) => (n, m)
   // (n, m, k) + (1, 1) => (n, m, k)
@@ -226,8 +227,8 @@ struct PropagateElementWiseOp : public OpRewritePattern<OpTy> {
     int64_t rhsRank = opnd1.getType().cast<ShapedType>().getRank();
     opnd0.setType(analysis.createNewSymbolicShape(opnd0.getType()));
     opnd1.setType(analysis.createNewSymbolicShape(opnd1.getType()));
-    llvm::Optional<llvm::SmallVector<std::string>> lSymShape = analysis.getSymbolicShape(opnd0.getType());
-    llvm::Optional<llvm::SmallVector<std::string>> rSymShape = analysis.getSymbolicShape(opnd1.getType());
+    std::optional<llvm::SmallVector<std::string>> lSymShape = analysis.getSymbolicShape(opnd0.getType());
+    std::optional<llvm::SmallVector<std::string>> rSymShape = analysis.getSymbolicShape(opnd1.getType());
     assert(lSymShape && rSymShape);
     mlir::Value resVal = op.getOperation()->getResults()[0];
     if (analysis.hasSymbolicShape(resVal.getType())) {
@@ -245,7 +246,7 @@ struct PropagateElementWiseOp : public OpRewritePattern<OpTy> {
     // Scenario 1: The dims of the lhs and rhs are not equal.
     // lhs as longShape
     if (lhsRank > rhsRank) {
-      llvm::Optional<llvm::SmallVector<std::string>> resShape =
+      std::optional<llvm::SmallVector<std::string>> resShape =
         GetInferenceShape(*lSymShape, *rSymShape, resVal.getType().cast<ShapedType>().getShape());
       if (resShape == std::nullopt) {
         resVal.setType(analysis.createNewSymbolicShape(resVal.getType()));
@@ -256,7 +257,7 @@ struct PropagateElementWiseOp : public OpRewritePattern<OpTy> {
     }
     // rhs as longShape
     if (lhsRank < rhsRank) {
-      llvm::Optional<llvm::SmallVector<std::string>> resShape =
+      std::optional<llvm::SmallVector<std::string>> resShape =
         GetInferenceShape(*rSymShape, *lSymShape, resVal.getType().cast<ShapedType>().getShape());
       if (resShape == std::nullopt) {
         resVal.setType(analysis.createNewSymbolicShape(resVal.getType()));
@@ -287,8 +288,8 @@ struct PropagateElementWiseOp : public OpRewritePattern<OpTy> {
         continue;
       }
       // Scenario 2.3: symbolic infer is required for the remaining scenarios.
-      llvm::Optional<SymEngine::Expression> lhs = analysis.getSymbolicDimExpr(opnd0.getType(), i);
-      llvm::Optional<SymEngine::Expression> rhs = analysis.getSymbolicDimExpr(opnd1.getType(), i);
+      std::optional<SymEngine::Expression> lhs = analysis.getSymbolicDimExpr(opnd0.getType(), i);
+      std::optional<SymEngine::Expression> rhs = analysis.getSymbolicDimExpr(opnd1.getType(), i);
       SymEngine::Expression bs = GetBroadCastDim(*lhs, *rhs);
       (void)symShape.emplace_back(analysis.getSymbolicDimFromExpression(bs));
     }
@@ -305,8 +306,8 @@ struct PropagateTosaBatchMatMulOp : public OpRewritePattern<OpTy> {
     SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
     mlir::Value opnd0 = op.getOperation()->getOperands()[0];
     mlir::Value opnd1 = op.getOperation()->getOperands()[1];
-    llvm::Optional<llvm::SmallVector<std::string>> symShape0 = analysis.getSymbolicShape(opnd0.getType());
-    llvm::Optional<llvm::SmallVector<std::string>> symShape1 = analysis.getSymbolicShape(opnd1.getType());
+    std::optional<llvm::SmallVector<std::string>> symShape0 = analysis.getSymbolicShape(opnd0.getType());
+    std::optional<llvm::SmallVector<std::string>> symShape1 = analysis.getSymbolicShape(opnd1.getType());
     if (!symShape0 && !symShape1) {
       return success();
     }
@@ -363,8 +364,8 @@ struct PropagateMindSporeReshapeOp : public OpRewritePattern<mindspore::ReshapeO
     if (rankType == nullptr || rankType.getNumDynamicDims() >= 2 || rankType.getNumDynamicDims() == 0) {
       return success();
     }
-    llvm::Optional<llvm::SmallVector<std::string>> opndShape = analysis.getSymbolicShape(opnd.getType());
-    llvm::Optional<llvm::SmallVector<std::string>> resShape = analysis.getSymbolicShape(resVal.getType());
+    std::optional<llvm::SmallVector<std::string>> opndShape = analysis.getSymbolicShape(opnd.getType());
+    std::optional<llvm::SmallVector<std::string>> resShape = analysis.getSymbolicShape(resVal.getType());
 
     std::string intermediateShape("1");
     for (auto sym : *opndShape) {
@@ -405,7 +406,7 @@ void InferSymbolicShapesInFunc(func::FuncOp &func, bool isFinalInference) {
       continue;
     }
     StringRef key("input_" + std::to_string(i++));
-    llvm::Optional<NamedAttribute> symbol = getSymbolicShapeFromFrontend(func.getOperation(), key);
+    std::optional<NamedAttribute> symbol = getSymbolicShapeFromFrontend(func.getOperation(), key);
     if (symbol != std::nullopt) {
       Type newTy = analysis.updateSymbolicShape(opnd.getType(), *symbol);
       opnd.setType(newTy);
@@ -426,7 +427,7 @@ void InferSymbolicShapesInFunc(func::FuncOp &func, bool isFinalInference) {
           continue;
         }
         StringRef key("input_" + std::to_string(j++));
-        llvm::Optional<NamedAttribute> symbol = getSymbolicShapeFromFrontend(&op, key);
+        std::optional<NamedAttribute> symbol = getSymbolicShapeFromFrontend(&op, key);
         if (symbol != std::nullopt) {
           opnd.setType(analysis.updateSymbolicShape(opnd.getType(), *symbol));
         }
@@ -438,7 +439,7 @@ void InferSymbolicShapesInFunc(func::FuncOp &func, bool isFinalInference) {
           continue;
         }
         StringRef key("output_" + std::to_string(j++));
-        llvm::Optional<NamedAttribute> symbol = getSymbolicShapeFromFrontend(&op, key);
+        std::optional<NamedAttribute> symbol = getSymbolicShapeFromFrontend(&op, key);
         if (symbol != std::nullopt) {
           resVal.setType(analysis.updateSymbolicShape(resVal.getType(), *symbol));
         }
@@ -455,7 +456,7 @@ void InferSymbolicShapesInFunc(func::FuncOp &func, bool isFinalInference) {
         continue;
       }
       StringRef key("output_" + std::to_string(i++));
-      llvm::Optional<NamedAttribute> symbol = getSymbolicShapeFromFrontend(func.getOperation(), key);
+      std::optional<NamedAttribute> symbol = getSymbolicShapeFromFrontend(func.getOperation(), key);
       if (symbol != std::nullopt) {
         Type newTy = analysis.updateSymbolicShape(opnd.getType(), *symbol);
         opnd.setType(newTy);
@@ -517,7 +518,7 @@ struct InferSymbolicShapes : public impl::InferSymbolicShapesBase<InferSymbolicS
     ShapeAlignTool &tool = ShapeAlignTool::getInstance();
     std::map<size_t, ShapeInfo> hostShapes = {};
 
-    auto convertToShapeInfo = [&](llvm::Optional<llvm::SmallVector<std::string>> symShape) -> ShapeInfo {
+    auto convertToShapeInfo = [&](std::optional<llvm::SmallVector<std::string>> symShape) -> ShapeInfo {
       ShapeInfo record;
       for (auto shape : *symShape) {
         record.push_back(shape);

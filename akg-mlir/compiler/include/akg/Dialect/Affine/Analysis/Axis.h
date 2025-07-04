@@ -33,7 +33,7 @@ class Axis {
  public:
   enum AxisLabel { kDefault = 0, kMultiCore, kUnroll, kVectorization, kReduction, kDynamic };
   explicit Axis(const std::string &name);
-  Axis(size_t bandIdx, size_t axisIdx, const std::shared_ptr<AffineForOp>);
+  Axis(size_t bandIdx, size_t axisIdx, const std::shared_ptr<affine::AffineForOp>);
   Axis() = default;
   void forEachAxisTopDown(const std::function<void(AxisPtr)> &fn) const;
   void forEachAxisBottomUp(const std::function<void(AxisPtr)> &fn) const;
@@ -50,7 +50,7 @@ class Axis {
   size_t axisIdx;
   // Indicates whether the axis is the innermost axis of a tensor.
   bool isInnerMost{false};
-  std::shared_ptr<AffineForOp> loop{nullptr};
+  std::shared_ptr<affine::AffineForOp> loop{nullptr};
   std::pair<int64_t, int64_t> range{std::make_pair(0, 0)};
   std::vector<AxisPtr> children;
   std::set<AxisLabel> axisType;
@@ -63,4 +63,3 @@ class Axis {
 }  // namespace mlir
 
 #endif  // COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_AXIS_H_
-

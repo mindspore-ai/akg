@@ -338,8 +338,9 @@ OpFoldResult LoadOp::fold(FoldAdaptor) {
   auto &builder = parser.getBuilder();
   auto indexType = builder.getIndexType();
   if (parser.resolveOperand(memrefInfo, memrefType, result.operands) ||
-      parser.resolveOperands(indexInfo, indexType, result.operands))
+      parser.resolveOperands(indexInfo, indexType, result.operands)) {
     return failure();
+  }
 
   if (hasPadding.succeeded()) {
     if (parser.resolveOperand(paddingInfo, memrefType.getElementType(), result.operands)) {

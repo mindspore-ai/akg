@@ -1,5 +1,5 @@
 /**
- * Copyright 2023 Huawei Technologies Co., Ltd
+ * Copyright 2023-2024 Huawei Technologies Co., Ltd
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -111,20 +111,6 @@ def AffineTailBlockTiling : Pass<"affine-tail-block-tiling", "func::FuncOp"> {
   let constructor = "mlir::createAffineTailBlockTilingPass()";
 }
 
-def AKGAffineVectorize : Pass<"akg-affine-vectorize", "func::FuncOp"> {
-  let summary = "Vectorize to a target independent n-D vector abstraction";
-  let dependentDialects = ["vector::VectorDialect"];
-  let constructor = "mlir::createAKGVectorizePass()";
-  let options = [
-    Option<"vectorSize", "vector-size", "int64_t", /*default=*/"0",
-           "Specify a vector size for vectorization">,
-    Option<"vectorizeReductions", "vectorize-reductions", "bool",
-           /*default=*/"true",
-           "Vectorize known reductions expressed via iter_args. "
-           "Switched off by default.">
-  ];
-}
-
 def AKGAffineLoopUnroll : Pass<"akg-affine-loop-unroll", "func::FuncOp"> {
   let summary = "AKG Unroll affine loops";
   let constructor = "mlir::createAKGLoopUnrollPass()";
@@ -189,12 +175,12 @@ def GenerateSingleAffineParallel : Pass<"generate-single-affine-parallel", "func
            "`0` means generate a fake for on top only when there is no loop; while `1` means generate no matter what">,
   ];
   let dependentDialects = [
-    "mlir::AffineDialect"
+    "mlir::affine::AffineDialect"
   ];
 }
 
 def ExtractIfOp : Pass<"extract-if", "func::FuncOp"> {
-  let summary = "Extract the AffineIfOp inside the loop and move the statements inside the ThenBlock out of the loop.";
+  let summary = "Extract the affine::AffineIfOp inside the loop and move the statements inside the ThenBlock out of the loop.";
   let options = [
     Option<"extractAllOp", "extract-all-op", "bool", "false", 
     "CPU backend: the reduce initialization statement does not need to be extracted. (default=true)">, 
@@ -206,7 +192,7 @@ def FixDynamicIndexing : Pass<"fix-dynamic-indexing", "func::FuncOp"> {
   let summary = "Fix the dynamic indexing in affine.";
   let constructor = "mlir::createFixDynamicIndexingPass()";
   let dependentDialects = [
-    "mlir::AffineDialect"
+    "mlir::affine::AffineDialect"
   ];
 }
 
@@ -214,7 +200,7 @@ def ReplaceUnknownDimsToOutputDim : Pass<"replace-unknown-dims-to-output-dim", "
   let summary = "Replace unknown dims to output dim.";
   let constructor = "mlir::createReplaceUnknownDimsToOutputDimPass()";
   let dependentDialects = [
-    "mlir::AffineDialect"
+    "mlir::affine::AffineDialect"
   ];
 }
 
@@ -233,6 +219,34 @@ def WorkaroundFixReduceInitialization : Pass<"workaround-fix-reduce-initializati
     When fix memory-promotion, this pass may disapear. But it may require more work to do that this pass.
   }];
   let constructor = "mlir::createWorkaroundFixReduceInitializationPass()";
+}
+
+def AKGAffineDataCopyGeneration : Pass<"akg-affine-data-copy-generate", "func::FuncOp"> {
+  let summary = "Generate explicit copying for affine memory operations";
+  let constructor = "mlir::affine::createAKGAffineDataCopyGenerationPass()";
+  let dependentDialects = ["memref::MemRefDialect"];
+  let options = [
+    Option<"fastMemoryCapacity", "fast-mem-capacity", "uint64_t",
+           /*default=*/"std::numeric_limits<uint64_t>::max()",
+           "Set fast memory space capacity in KiB (default: unlimited)">,
+    Option<"fastMemorySpace", "fast-mem-space", "unsigned",
+           /*default=*/"1",
+           "Fast memory space identifier for copy generation (default: 1)">,
+    Option<"generateDma", "generate-dma", "bool",
+           /*default=*/"true", "Generate DMA instead of point-wise copy">,
+    Option<"minDmaTransferSize", "min-dma-transfer", "int",
+           /*default=*/"1024",
+           "Minimum DMA transfer size supported by the target in bytes">,
+    Option<"slowMemorySpace", "slow-mem-space", "unsigned",
+           /*default=*/"0",
+           "Slow memory space identifier for copy generation (default: 0)">,
+    Option<"skipNonUnitStrideLoops", "skip-non-unit-stride-loops", "bool",
+           /*default=*/"false", "Testing purposes: avoid non-unit stride loop "
+                                "choice depths for copy placement">,
+    Option<"tagMemorySpace", "tag-mem-space", "unsigned",
+           /*default=*/"0",
+           "Tag memory space identifier for copy generation (default: 0)">,
+  ];
 }
 
 #endif // AKG_MLIR_DIALECT_AFFINE_PASSES

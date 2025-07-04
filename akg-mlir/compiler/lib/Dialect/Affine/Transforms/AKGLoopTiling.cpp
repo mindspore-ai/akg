@@ -81,7 +81,7 @@ class AKGLoopTiling : public impl::AKGAffineLoopTilingBase<AKGLoopTiling> {
  private:
   void runCpuOperation();
   void runCudaOperation();
-  void BandCheck(const std::vector<SmallVector<AffineForOp, 6>> &bands);
+  void BandCheck(const std::vector<SmallVector<affine::AffineForOp, 6>> &bands);
   void getTileSizes();
   std::string getHardware();
   bool isDynamicShape() const;
@@ -89,24 +89,27 @@ class AKGLoopTiling : public impl::AKGAffineLoopTilingBase<AKGLoopTiling> {
   // core tiling function
   void tileEachBand();
   // initial tiling function
-  void constructTiledLoop(AffineForOp rootAffineForOp, unsigned width, MutableArrayRef<AffineForOp> tiledLoops);
-  void constructTiledIndex(MutableArrayRef<AffineForOp> newLoops);
+  void constructTiledLoop(affine::AffineForOp rootAffineForOp, unsigned width,
+                          MutableArrayRef<affine::AffineForOp> tiledLoops);
+  void constructTiledIndex(MutableArrayRef<affine::AffineForOp> newLoops);
   void setInsertInequality(int curTile, bool &insertInequality);
-  void setNewUpperBound(MutableArrayRef<AffineForOp> newLoops, int curTile, bool insertInequality = true);
+  void setNewUpperBound(MutableArrayRef<affine::AffineForOp> newLoops, int curTile, bool insertInequality = true);
 
   // tile tail block
-  void updateForOpUsers(AffineForOp forOp, int64_t newSize = 0);
-  LogicalResult createTailBlockForBody(AffineForOp forOp);
-  LogicalResult createTailBlock(AffineForOp forOp);
-  LogicalResult createFullBlock(MutableArrayRef<AffineForOp> tiledLoops, SmallVectorImpl<AffineForOp> &fullTileLoops);
-  LogicalResult createTailBlockDynamic(AffineForOp forOp, AffineSymbolExpr sExpr);
-  LogicalResult createTailBlockStatic(AffineForOp forOp, int64_t differenceUbAndLb);
+  void updateForOpUsers(affine::AffineForOp forOp, int64_t newSize = 0);
+  LogicalResult createTailBlockForBody(affine::AffineForOp forOp);
+  LogicalResult createTailBlock(affine::AffineForOp forOp);
+  LogicalResult createFullBlock(MutableArrayRef<affine::AffineForOp> tiledLoops,
+                                SmallVectorImpl<affine::AffineForOp> &fullTileLoops);
+  LogicalResult createTailBlockDynamic(affine::AffineForOp forOp, AffineSymbolExpr sExpr);
+  LogicalResult createTailBlockStatic(affine::AffineForOp forOp, int64_t differenceUbAndLb);
 
-  LogicalResult separateFullTilesNoIf(SmallVector<AffineForOp, 6> tiledLoops);
+  LogicalResult separateFullTilesNoIf(SmallVector<affine::AffineForOp, 6> tiledLoops);
 
-  LogicalResult perfectlyNestedWithIf(SmallVector<AffineForOp, 6> tiledLoops);
-  void updateInsertIfLoops(SmallVector<AffineForOp, 6> &newTiledLoops, std::unordered_set<unsigned> inequalityForIndex);
-  AffineIfOp createperfectlyNestedCondition(SmallVector<AffineForOp, 6> tiledLoops, OpBuilder b);
+  LogicalResult perfectlyNestedWithIf(SmallVector<affine::AffineForOp, 6> tiledLoops);
+  void updateInsertIfLoops(SmallVector<affine::AffineForOp, 6> &newTiledLoops,
+                           std::unordered_set<unsigned> inequalityForIndex);
+  affine::AffineIfOp createperfectlyNestedCondition(SmallVector<affine::AffineForOp, 6> tiledLoops, OpBuilder b);
 
   // If true, tile sizes are set to avoid max/min in bounds if possible.
   bool avoidMaxMinBounds{true};
@@ -119,7 +122,7 @@ class AKGLoopTiling : public impl::AKGAffineLoopTilingBase<AKGLoopTiling> {
   size_t levelToTile{1};
 
   SmallVector<unsigned, 6> bandTileSizes;
-  MutableArrayRef<AffineForOp> band;
+  MutableArrayRef<affine::AffineForOp> band;
 };
 }  // namespace
 
@@ -151,7 +154,7 @@ std::unique_ptr<OperationPass<func::FuncOp>> mlir::createAKGLoopTilingPass(const
   return std::make_unique<AKGLoopTiling>(target, feature, useAutoTiling);
 }
 
-static void moveLoopBody(AffineForOp src, AffineForOp dest) {
+static void moveLoopBody(affine::AffineForOp src, affine::AffineForOp dest) {
   Block::iterator loc = dest.getBody()->begin();
   auto &ops = src.getBody()->getOperations();
   dest.getBody()->getOperations().splice(loc, ops, ops.begin(), std::prev(ops.end()));
@@ -182,17 +185,17 @@ static AffineExpr getDifferenceUbAndLb(AffineMap ubMap, AffineMap lbMap) {
 //   }
 // }
 // ```
-void AKGLoopTiling::constructTiledLoop(AffineForOp rootAffineForOp, unsigned width,
-                                       MutableArrayRef<AffineForOp> tiledLoops) {
+void AKGLoopTiling::constructTiledLoop(affine::AffineForOp rootAffineForOp, unsigned width,
+                                       MutableArrayRef<affine::AffineForOp> tiledLoops) {
   Location loc = rootAffineForOp.getLoc();
 
   Operation *topLoop = rootAffineForOp.getOperation();
-  AffineForOp innermostPointLoop;
+  affine::AffineForOp innermostPointLoop;
 
   for (unsigned i = 0; i < width; ++i) {
     OpBuilder b(topLoop);
     // Loop bounds will be set later.
-    AffineForOp pointLoop = b.create<AffineForOp>(loc, 0, 0);
+    affine::AffineForOp pointLoop = b.create<affine::AffineForOp>(loc, 0, 0);
     pointLoop.getBody()->getOperations().splice(pointLoop.getBody()->begin(), topLoop->getBlock()->getOperations(),
                                                 topLoop);
     tiledLoops[width - 1 - i] = pointLoop;
@@ -230,7 +233,7 @@ void AKGLoopTiling::constructTiledLoop(AffineForOp rootAffineForOp, unsigned wid
 //   }
 // }
 // ```
-void AKGLoopTiling::constructTiledIndex(MutableArrayRef<AffineForOp> newLoops) {
+void AKGLoopTiling::constructTiledIndex(MutableArrayRef<affine::AffineForOp> newLoops) {
   int bandSize = band.size();
   if (bandSize == 0) {
     return;
@@ -319,7 +322,8 @@ void AKGLoopTiling::setInsertInequality(int curTile, bool &insertInequality) {
 //     }
 //   }
 // }
-void AKGLoopTiling::setNewUpperBound(MutableArrayRef<AffineForOp> newLoops, int curTile, bool insertInequality) {
+void AKGLoopTiling::setNewUpperBound(MutableArrayRef<affine::AffineForOp> newLoops, int curTile,
+                                     bool insertInequality) {
   // Set the upper bound.
   int bandSize = band.size();
   int lastTile = curTile - bandSize;
@@ -328,7 +332,7 @@ void AKGLoopTiling::setNewUpperBound(MutableArrayRef<AffineForOp> newLoops, int 
 
   setInsertInequality(curTile, insertInequality);
   if (insertInequality) {
-    AffineBound lastTileUb = newLoops[lastTile].getUpperBound();
+    affine::AffineBound lastTileUb = newLoops[lastTile].getUpperBound();
     AffineMap lastTileUbMap = lastTileUb.getMap();
     SmallVector<Value, 4> ubOperands;
     ubOperands.reserve(lastTileUb.getNumOperands() + 1);
@@ -349,7 +353,7 @@ void AKGLoopTiling::setNewUpperBound(MutableArrayRef<AffineForOp> newLoops, int 
     // needs to be inserted.
     bool insertLoopUb = true;
     for (auto ubMap : lastTileUbMap.getResults()) {
-      if (ubMap.isa<AffineConstantExpr>()) {
+      if (llvm::isa<AffineConstantExpr>(ubMap)) {
         insertLoopUb = false;
       }
     }
@@ -371,7 +375,7 @@ void AKGLoopTiling::setNewUpperBound(MutableArrayRef<AffineForOp> newLoops, int 
     newLoops[curTile].setUpperBound(ubOperands, ubMap);
   } else {
     AffineExpr dim = b.getAffineDimExpr(0);
-    AffineMap ubMap = AffineMap::get(1, 0, dim + newLoops[lastTile].getStep());
+    AffineMap ubMap = AffineMap::get(1, 0, dim + newLoops[lastTile].getStepAsInt());
     newLoops[curTile].setUpperBound(newLoops[lastTile].getInductionVar(), ubMap);
   }
 }
@@ -380,7 +384,7 @@ void AKGLoopTiling::getTileSizes() {
   // TODO: Separately tile axis
   if (useAutoTiling && solver) {
     // TODO: remove levelToTile
-    SmallVector<AffineForOp, 6> curband;
+    SmallVector<affine::AffineForOp, 6> curband;
     curband.assign(band.begin(), band.end());
     for (size_t level = 0; level < levelToTile; ++level) {
       // TODO: Multiple band
@@ -422,8 +426,8 @@ void AKGLoopTiling::getTileSizes() {
 //   }
 // }
 // ```
-LogicalResult AKGLoopTiling::createFullBlock(MutableArrayRef<AffineForOp> intraTileLoops,
-                                             SmallVectorImpl<AffineForOp> &fullTileLoops) {
+LogicalResult AKGLoopTiling::createFullBlock(MutableArrayRef<affine::AffineForOp> intraTileLoops,
+                                             SmallVectorImpl<affine::AffineForOp> &fullTileLoops) {
   if (intraTileLoops.size() == 0) {
     return success();
   }
@@ -432,7 +436,7 @@ LogicalResult AKGLoopTiling::createFullBlock(MutableArrayRef<AffineForOp> intraT
 
   // For each loop in the original nest identify a lower/upper bound pair such
   // that their difference is a constant.
-  FlatAffineValueConstraints cst;
+  affine::FlatAffineValueConstraints cst;
   for (auto loop : intraTileLoops) {
     SmallVector<Operation *, 1> loopOp{loop.getOperation()};
     (void)getIndexSet(loopOp, &cst);
@@ -450,13 +454,13 @@ LogicalResult AKGLoopTiling::createFullBlock(MutableArrayRef<AffineForOp> intraT
     // symbols above could be outer loop IVs (corresponding tile space IVs).
     cst.setDimSymbolSeparation(0);
 
-    AffineValueMap lbVmap, ubVmap;
+    affine::AffineValueMap lbVmap, ubVmap;
     cst.getIneqAsAffineValueMap(0, lbPos, lbVmap, b.getContext());
     cst.getIneqAsAffineValueMap(0, ubPos, ubVmap, b.getContext());
 
-    AffineForOp fullTileLoop =
-      createCanonicalizedAffineForOp(b, loop.getLoc(), lbVmap.getOperands(), lbVmap.getAffineMap(),
-                                     ubVmap.getOperands(), ubVmap.getAffineMap(), loop.getStep());
+    affine::AffineForOp fullTileLoop =
+      affine::createCanonicalizedAffineForOp(b, loop.getLoc(), lbVmap.getOperands(), lbVmap.getAffineMap(),
+                                             ubVmap.getOperands(), ubVmap.getAffineMap(), loop.getStepAsInt());
     b = OpBuilder::atBlockTerminator(fullTileLoop.getBody());
     fullTileLoops.push_back(fullTileLoop);
   }
@@ -478,16 +482,16 @@ LogicalResult AKGLoopTiling::createFullBlock(MutableArrayRef<AffineForOp> intraT
 
   // insert the full block, replacing the original nested for
   Block *intraBlock = intraTileLoops[0].getOperation()->getBlock();
-  AffineForOp outermostFullTileLoop = fullTileLoops[0];
+  affine::AffineForOp outermostFullTileLoop = fullTileLoops[0];
   intraBlock->getOperations().splice(std::prev(intraBlock->end()), outermostFullTileLoop->getBlock()->getOperations(),
                                      Block::iterator(outermostFullTileLoop));
   intraTileLoops[0].erase();
   return success();
 }
 
-LogicalResult AKGLoopTiling::createTailBlockForBody(AffineForOp forOp) {
+LogicalResult AKGLoopTiling::createTailBlockForBody(affine::AffineForOp forOp) {
   for (auto &op : forOp.getBody()->without_terminator()) {
-    if (auto bodyOp = dyn_cast<AffineForOp>(op)) {
+    if (auto bodyOp = dyn_cast<affine::AffineForOp>(op)) {
       if (failed(createTailBlock(bodyOp))) {
         return failure();
       }
@@ -497,12 +501,12 @@ LogicalResult AKGLoopTiling::createTailBlockForBody(AffineForOp forOp) {
 }
 
 // Updates the upper bound of all users of the trailing block for loop.
-void AKGLoopTiling::updateForOpUsers(AffineForOp forOp, int64_t newSize) {
+void AKGLoopTiling::updateForOpUsers(affine::AffineForOp forOp, int64_t newSize) {
   if (!newSize) {
     return;
   }
   for (OpOperand &use : forOp.getInductionVar().getUses()) {
-    if (auto tiledOp = dyn_cast<AffineForOp>(use.getOwner())) {
+    if (auto tiledOp = dyn_cast<affine::AffineForOp>(use.getOwner())) {
       auto ubMap = tiledOp.getUpperBoundMap();
       auto newExpr = tiledOp.getLowerBoundMap().getResult(0) + newSize;
       ubMap = ubMap.replace(ubMap.getResult(0), newExpr, ubMap.getNumDims(), ubMap.getNumSymbols());
@@ -552,22 +556,22 @@ void AKGLoopTiling::updateForOpUsers(AffineForOp forOp, int64_t newSize) {
 //   }
 // }
 // ```
-LogicalResult AKGLoopTiling::createTailBlock(AffineForOp forOp) {
+LogicalResult AKGLoopTiling::createTailBlock(affine::AffineForOp forOp) {
   auto origUbMap = forOp.getUpperBoundMap();
   auto origLbMap = forOp.getLowerBoundMap();
   AffineExpr differenceExpr = getDifferenceUbAndLb(origUbMap, origLbMap);
-  if (auto cExpr = differenceExpr.dyn_cast<AffineConstantExpr>()) {
+  if (auto cExpr = llvm::dyn_cast<AffineConstantExpr>(differenceExpr)) {
     return createTailBlockStatic(forOp, cExpr.getValue());
-  } else if (auto sExpr = differenceExpr.dyn_cast<AffineSymbolExpr>()) {
+  } else if (auto sExpr = llvm::dyn_cast<AffineSymbolExpr>(differenceExpr)) {
     return createTailBlockDynamic(forOp, sExpr);
   }
   return success();
 }
 
-LogicalResult AKGLoopTiling::createTailBlockStatic(AffineForOp forOp, int64_t differenceUbAndLb) {
+LogicalResult AKGLoopTiling::createTailBlockStatic(affine::AffineForOp forOp, int64_t differenceUbAndLb) {
   auto origUbMap = forOp.getUpperBoundMap();
   auto origLbMap = forOp.getLowerBoundMap();
-  int64_t origStep = forOp.getStep();
+  int64_t origStep = forOp.getStepAsInt();
   int64_t tailSize = differenceUbAndLb % origStep;
   if (tailSize == 0) {
     // Recursively processes the forOp body.
@@ -582,7 +586,7 @@ LogicalResult AKGLoopTiling::createTailBlockStatic(AffineForOp forOp, int64_t di
   ubMap = ubMap.replace(ubMap.getResult(0), newExpr, ubMap.getNumDims(), ubMap.getNumSymbols());
   int64_t newDifferenceUbAndLb = 0;
   AffineExpr differenceExpr = getDifferenceUbAndLb(origUbMap, ubMap);
-  if (auto cExpr = differenceExpr.dyn_cast<AffineConstantExpr>()) {
+  if (auto cExpr = llvm::dyn_cast<AffineConstantExpr>(differenceExpr)) {
     newDifferenceUbAndLb = cExpr.getValue();
   } else {
     forOp.emitError("Error: Could not get the difference between upper and lower bounds of the loop.");
@@ -623,7 +627,7 @@ LogicalResult AKGLoopTiling::createTailBlockStatic(AffineForOp forOp, int64_t di
   OpBuilder b(forOp);
   b.setInsertionPointAfter(forOp);
   auto tailOp = b.clone(*forOp.getOperation());
-  auto tailForOp = dyn_cast<AffineForOp>(tailOp);
+  auto tailForOp = dyn_cast<affine::AffineForOp>(tailOp);
   tailForOp.setLowerBoundMap(ubMap);
   tailForOp.setUpperBoundMap(origUbMap);
   tailForOp.setStep(tailSize);
@@ -637,14 +641,14 @@ LogicalResult AKGLoopTiling::createTailBlockStatic(AffineForOp forOp, int64_t di
   return success();
 }
 
-LogicalResult AKGLoopTiling::createTailBlockDynamic(AffineForOp forOp, AffineSymbolExpr sExpr) {
+LogicalResult AKGLoopTiling::createTailBlockDynamic(affine::AffineForOp forOp, AffineSymbolExpr sExpr) {
   if (band.size() != bandTileSizes.size()) {
     forOp.emitError("Dynamic shape supports only one tiling.");
     return failure();
   }
   auto origUbMap = forOp.getUpperBoundMap();
   auto origUbOp = forOp.getUpperBoundOperands();
-  int64_t origStep = forOp.getStep();
+  int64_t origStep = forOp.getStepAsInt();
   // When the dynamic shape step is 1, the tail block does not need to be processed.
   // affine.for %arg4 = 0 to %dim
   if (origStep == 1) {
@@ -668,8 +672,8 @@ LogicalResult AKGLoopTiling::createTailBlockDynamic(AffineForOp forOp, AffineSym
   // Insert the tail tiles
   OpBuilder b(forOp);
   b.setInsertionPointAfter(forOp);
-  AffineForOp tailForOp =
-    b.create<AffineForOp>(forOp.getLoc(), forOp.getUpperBoundOperands(), ubMap, origUbOp, origUbMap, 1);
+  affine::AffineForOp tailForOp =
+    b.create<affine::AffineForOp>(forOp.getLoc(), forOp.getUpperBoundOperands(), ubMap, origUbOp, origUbMap, 1);
 
   // Add the body for the full tile loop nest.
   b = OpBuilder::atBlockTerminator(tailForOp.getBody());
@@ -687,10 +691,10 @@ LogicalResult AKGLoopTiling::createTailBlockDynamic(AffineForOp forOp, AffineSym
   return success();
 }
 
-LogicalResult AKGLoopTiling::separateFullTilesNoIf(SmallVector<AffineForOp, 6> tiledLoops) {
+LogicalResult AKGLoopTiling::separateFullTilesNoIf(SmallVector<affine::AffineForOp, 6> tiledLoops) {
   // full block
-  auto intraTileLoops = MutableArrayRef<AffineForOp>(tiledLoops).drop_front(band.size());
-  SmallVector<AffineForOp, 4> fullTileLoops;
+  auto intraTileLoops = MutableArrayRef<affine::AffineForOp>(tiledLoops).drop_front(band.size());
+  SmallVector<affine::AffineForOp, 4> fullTileLoops;
   if (failed(createFullBlock(intraTileLoops, fullTileLoops))) {
     if (!fullTileLoops.empty()) {
       fullTileLoops.front().erase();
@@ -737,7 +741,8 @@ LogicalResult AKGLoopTiling::separateFullTilesNoIf(SmallVector<AffineForOp, 6> t
 //   }
 // }
 // ```
-AffineIfOp AKGLoopTiling::createperfectlyNestedCondition(SmallVector<AffineForOp, 6> tiledLoops, OpBuilder b) {
+affine::AffineIfOp AKGLoopTiling::createperfectlyNestedCondition(SmallVector<affine::AffineForOp, 6> tiledLoops,
+                                                                 OpBuilder b) {
   if (tiledLoops.empty()) {
     return nullptr;
   }
@@ -749,7 +754,7 @@ AffineIfOp AKGLoopTiling::createperfectlyNestedCondition(SmallVector<AffineForOp
   int64_t symbolNum = 0;
   int64_t dimNum = 0;
   for (auto loop : tiledLoops) {
-    assert(loop.getStep() == 1 && "point loop step expected to be one");
+    assert(loop.getStepAsInt() == 1 && "point loop step expected to be one");
 
     // Find the outermost for loop, that is, the for loop before tiling.
     Operation *outerOp = nullptr;
@@ -764,15 +769,15 @@ AffineIfOp AKGLoopTiling::createperfectlyNestedCondition(SmallVector<AffineForOp
       }
     }
 
-    if (!outerOp || !isa<AffineForOp>(outerOp)) {
+    if (!outerOp || !isa<affine::AffineForOp>(outerOp)) {
       continue;
     }
 
-    auto outerForOp = dyn_cast<AffineForOp>(outerOp);
+    auto outerForOp = dyn_cast<affine::AffineForOp>(outerOp);
     auto context = loop.getContext();
     AffineExpr upperExpr = outerForOp.getUpperBoundMap().getResult(0);
     // Adapts to dynamic shapes.
-    if (upperExpr.isa<AffineSymbolExpr>()) {
+    if (llvm::isa<AffineSymbolExpr>(upperExpr)) {
       for (auto operand : outerForOp->getOperands()) {
         if (Operation *parentOp = operand.getDefiningOp()) {
           symbolOperands.push_back(parentOp->getResult(0));
@@ -793,12 +798,12 @@ AffineIfOp AKGLoopTiling::createperfectlyNestedCondition(SmallVector<AffineForOp
   }
 
   IntegerSet ifCondSet = IntegerSet::get(tiledLoops.size(), symbolNum, exprs, eqFlags);
-  canonicalizeSetAndOperands(&ifCondSet, &dimOperands);
-  return b.create<AffineIfOp>(tiledLoops[0].getLoc(), ifCondSet, dimOperands, false);
+  affine::canonicalizeSetAndOperands(&ifCondSet, &dimOperands);
+  return b.create<affine::AffineIfOp>(tiledLoops[0].getLoc(), ifCondSet, dimOperands, false);
   ;
 }
 
-void AKGLoopTiling::updateInsertIfLoops(SmallVector<AffineForOp, 6> &newTiledLoops,
+void AKGLoopTiling::updateInsertIfLoops(SmallVector<affine::AffineForOp, 6> &newTiledLoops,
                                         std::unordered_set<unsigned> inequalityForIndex) {
   auto it = newTiledLoops.begin();
   unsigned i = 0;
@@ -840,7 +845,7 @@ void AKGLoopTiling::updateInsertIfLoops(SmallVector<AffineForOp, 6> &newTiledLoo
 //   }
 // }
 // ```
-LogicalResult AKGLoopTiling::perfectlyNestedWithIf(SmallVector<AffineForOp, 6> tiledLoops) {
+LogicalResult AKGLoopTiling::perfectlyNestedWithIf(SmallVector<affine::AffineForOp, 6> tiledLoops) {
   unsigned forNum = band.size();
   unsigned tileSizesNum = bandTileSizes.size();
   unsigned allTiledForNum = forNum + tileSizesNum;
@@ -862,8 +867,8 @@ LogicalResult AKGLoopTiling::perfectlyNestedWithIf(SmallVector<AffineForOp, 6> t
   }
 
   // Gets all for loops except the first tiling.
-  auto tileLoops = MutableArrayRef<AffineForOp>(tiledLoops).drop_front(forNum);
-  SmallVector<AffineForOp, 4> fullTileLoops;
+  auto tileLoops = MutableArrayRef<affine::AffineForOp>(tiledLoops).drop_front(forNum);
+  SmallVector<affine::AffineForOp, 4> fullTileLoops;
 
   if (failed(createFullBlock(tileLoops, fullTileLoops))) {
     if (!fullTileLoops.empty()) {
@@ -876,7 +881,7 @@ LogicalResult AKGLoopTiling::perfectlyNestedWithIf(SmallVector<AffineForOp, 6> t
     return success();
   }
 
-  SmallVector<AffineForOp, 6> newTiledLoops;
+  SmallVector<affine::AffineForOp, 6> newTiledLoops;
   getPerfectlyNestedLoops(newTiledLoops, tiledLoops[0]);
   Block *forBody = newTiledLoops[newTiledLoops.size() - 1].getBody();
   OpBuilder b(forBody, forBody->begin());
@@ -884,13 +889,13 @@ LogicalResult AKGLoopTiling::perfectlyNestedWithIf(SmallVector<AffineForOp, 6> t
   // Records all ops in the for loop to facilitate the insertion of if statements.
   for (auto it = forBody->begin(); it != forBody->end(); ++it) {
     Operation *op = &*it;
-    if (isa<AffineYieldOp>(op)) {
+    if (isa<affine::AffineYieldOp>(op)) {
       continue;
     }
     bodyOp.push_back(op);
   }
   updateInsertIfLoops(newTiledLoops, inequalityForIndex);
-  AffineIfOp ifOp = createperfectlyNestedCondition(newTiledLoops, b);
+  affine::AffineIfOp ifOp = createperfectlyNestedCondition(newTiledLoops, b);
   if (!ifOp) {
     fullTileLoops.front().erase();
     newTiledLoops[0].emitError("Cannot construct an if statement.");
@@ -911,7 +916,7 @@ void AKGLoopTiling::tileEachBand() {
   unsigned forNum = band.size();
   unsigned tileSizesNum = bandTileSizes.size();
   if (forNum == tileSizesNum) {
-    SmallVector<AffineForOp, 6> tiledNest;
+    SmallVector<affine::AffineForOp, 6> tiledNest;
     if (failed(tilePerfectlyNested(band, bandTileSizes, &tiledNest))) {
       // An empty band always succeeds.
       assert(!band.empty() && "guaranteed to succeed on empty bands");
@@ -919,7 +924,7 @@ void AKGLoopTiling::tileEachBand() {
     }
 
     if (separate) {
-      auto intraTileLoops = MutableArrayRef<AffineForOp>(tiledNest).drop_front(forNum);
+      auto intraTileLoops = MutableArrayRef<affine::AffineForOp>(tiledNest).drop_front(forNum);
       if (failed(separateFullTiles(intraTileLoops))) {
         assert(!intraTileLoops.empty() && "guaranteed to succeed on empty bands");
         LLVM_DEBUG(intraTileLoops.front()->emitRemark("separation post tiling failed!\n"));
@@ -935,9 +940,9 @@ void AKGLoopTiling::tileEachBand() {
     }
   } else if (tileSizesNum > forNum && tileSizesNum % forNum == 0) {
     // Tiles the specified band of perfectly nested loops.
-    AffineForOp rootAffineForOp = band[0];
+    affine::AffineForOp rootAffineForOp = band[0];
     unsigned width = tileSizesNum + forNum;
-    SmallVector<AffineForOp, 6> tiledLoops(width);
+    SmallVector<affine::AffineForOp, 6> tiledLoops(width);
     constructTiledLoop(rootAffineForOp, width, tiledLoops);
     constructTiledIndex(tiledLoops);
     SmallVector<Value, 8> origLoopIVs;
@@ -975,10 +980,10 @@ void AKGLoopTiling::runCpuOperation() {
       reduceLoop->setAttr("reduceLoop", b.getUnitAttr());
     }
   } else if (opType == OperatorTemplate::Broadcast) {
-    llvm::SmallSet<AffineForOp, 6> allBroadcastFor;
-    funcOp.walk([&](AffineForOp forOp) {
-      llvm::SmallSet<AffineForOp, 6> multiFor;
-      for (auto op : forOp->getBlock()->getOps<AffineForOp>()) {
+    llvm::SmallSet<affine::AffineForOp, 6> allBroadcastFor;
+    funcOp.walk([&](affine::AffineForOp forOp) {
+      llvm::SmallSet<affine::AffineForOp, 6> multiFor;
+      for (auto op : forOp->getBlock()->getOps<affine::AffineForOp>()) {
         multiFor.insert(op);
       }
 
@@ -1037,7 +1042,7 @@ void AKGLoopTiling::runCudaOperation() {
   }
 }
 
-void AKGLoopTiling::BandCheck(const std::vector<SmallVector<AffineForOp, 6>> &bands) {
+void AKGLoopTiling::BandCheck(const std::vector<SmallVector<affine::AffineForOp, 6>> &bands) {
   func::FuncOp funcOp = getOperation();
 
   // A common checker for CPU/GPU that disables reshape op with empty band.
@@ -1062,7 +1067,7 @@ void AKGLoopTiling::BandCheck(const std::vector<SmallVector<AffineForOp, 6>> &ba
   }
 
   // 3. single-band + dynamic axis checker cause we cannot map the dynamic axis
-  getOperation()->walk([&](AffineForOp forOp) {
+  getOperation()->walk([&](affine::AffineForOp forOp) {
     if (!forOp.hasConstantLowerBound() || !forOp.hasConstantUpperBound()) {
       llvm::report_fatal_error(
         llvm::StringRef("[BandCheck]: Dynamic bound, may have performance issue in static shape."));
@@ -1073,7 +1078,7 @@ void AKGLoopTiling::BandCheck(const std::vector<SmallVector<AffineForOp, 6>> &ba
 void AKGLoopTiling::runOnOperation() {
   // Bands of loops to tile.
   func::FuncOp funcOp = getOperation();
-  std::vector<SmallVector<AffineForOp, 6>> bands;
+  std::vector<SmallVector<affine::AffineForOp, 6>> bands;
   getTileableBands(funcOp, &bands);
   if (getOperation()->getAttr("process")) {
     target = getOperation()->getAttr("process").dyn_cast<StringAttr>().getValue().str();
@@ -1096,7 +1101,7 @@ void AKGLoopTiling::runOnOperation() {
 
   // Tile each band.
   for (auto &curBand : bands) {
-    band = MutableArrayRef<AffineForOp>(curBand);
+    band = MutableArrayRef<affine::AffineForOp>(curBand);
     if (target == kTargetCpu) {
       runCpuOperation();
     } else if (target == kTargetCuda) {

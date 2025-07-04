@@ -114,7 +114,10 @@ bool DumpShapeInfoPass::save(const std::string &res) {
 
   std::string output_filename = "./akg_kernel_meta/" + fileName;
   llvm::outs() << "Dump to " << output_filename << "\n";
-  if (llvm::writeFileAtomically("tmp_%%%%%%%%.json", output_filename, res)) {
+  if (llvm::writeToOutput(output_filename, [&](llvm::raw_ostream &OS) -> llvm::Error {
+        OS << res;
+        return llvm::Error::success();
+      })) {
     llvm::errs() << "Write json file to " << output_filename << " failed.\n";
     return false;
   }
