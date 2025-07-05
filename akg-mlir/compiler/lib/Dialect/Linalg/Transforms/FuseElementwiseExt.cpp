@@ -254,7 +254,7 @@ public:
   LogicalResult matchAndRewrite(tensor::CollapseShapeOp collapseOp,
                                 PatternRewriter &rewriter) const override {
     // Fold only if all constraints of fusing with reshape by expansion are met.
-    auto producerResult = collapseOp.getSrc().dyn_cast<OpResult>();
+    auto producerResult = dyn_cast<OpResult>(collapseOp.getSrc());
     if (!producerResult) {
       return rewriter.notifyMatchFailure(collapseOp,
                                          "source not produced by an operation");
@@ -279,20 +279,6 @@ public:
     if (!controlFoldingReshapes(fuseInitOperand)) {
       return rewriter.notifyMatchFailure(collapseOp, "control function failed");
     }
-    /*
-    std::optional<CollapseResult> replacements =
-        collapseOpIterationDims(genericOp, collapsableIterationDims, rewriter);
-
-    Value reshapeReplacement =
-        (replacements->results)[collapseOp.getSrc().cast<OpResult>().getResultNumber()];
-    if (auto expandOp =
-            reshapeReplacement.getDefiningOp<tensor::ExpandShapeOp>()) {
-      reshapeReplacement = expandOp.getSrc();
-    }
-
-    rewriter.replaceOp(collapseOp, reshapeReplacement);
-    rewriter.replaceOp(genericOp, replacements->results);
-    */
     return success();
   }
 

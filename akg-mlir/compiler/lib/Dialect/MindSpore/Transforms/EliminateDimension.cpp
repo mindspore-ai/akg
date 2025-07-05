@@ -35,7 +35,7 @@ using namespace mlir::mindspore;
 namespace {
 
 static DictionaryAttr addOpSymShapeAttr(Type inputType, MLIRContext *context) {
-  ShapedType shapedType = inputType.cast<ShapedType>();
+  ShapedType shapedType = cast<ShapedType>(inputType);
   ArrayRef<int64_t> typeShapes = shapedType.getShape();
   SmallVector<Attribute> symAttr;
   for (size_t i = 0; i < typeShapes.size(); i++) {
@@ -54,7 +54,7 @@ struct ConvertBroadcastToOp : public OpRewritePattern<mindspore::BroadcastToOp> 
   LogicalResult matchAndRewrite(mindspore::BroadcastToOp brcOp,
                                 PatternRewriter &rewriter) const override {
     Value input = brcOp.getInput();
-    auto inputType = input.getType().cast<ShapedType>();
+    auto inputType = cast<ShapedType>(input.getType());
     auto inputShape = inputType.getShape();
     if (!brcOp.getOperation()->hasAttr("frontend_symbol")) {
       DictionaryAttr symbolAttrs = addOpSymShapeAttr(input.getType(), brcOp.getContext());

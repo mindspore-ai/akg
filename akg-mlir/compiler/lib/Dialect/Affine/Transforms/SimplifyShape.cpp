@@ -161,7 +161,7 @@ struct SimplifyShapePass : public mlir::impl::SimplifyShapeBase<SimplifyShapePas
     MemRefType initSimplifyType = initSimplifyInfos.first;
 
     Value resultValue = reshapeOp.getResult();
-    MemRefType resultType = resultValue.getType().cast<mlir::MemRefType>();
+    MemRefType resultType = cast<mlir::MemRefType>(resultValue.getType());
     const SimplifiedShapeInfos resultSimplifyInfos = getSimplifiedShapeInfos(resultType);
     MemRefType resultSimplifyType = resultSimplifyInfos.first;
 
@@ -272,10 +272,10 @@ struct SimplifyShapePass : public mlir::impl::SimplifyShapeBase<SimplifyShapePas
 
       size_t argIdx = 0;
       for (BlockArgument &bbArg : fop.getArguments()) {
-        MemRefType argType = bbArg.getType().cast<MemRefType>();
+        MemRefType argType = cast<MemRefType>(bbArg.getType());
         const SimplifiedShapeInfos argSimplifiedInfos = getSimplifiedShapeInfos(argType);
         MemRefType argSimplifyType = argSimplifiedInfos.first;
-        tool.alignStaticShapeReconstruct(argIdx, argType.dyn_cast<Type>(), argSimplifyType.dyn_cast<Type>());
+        tool.alignStaticShapeReconstruct(argIdx, dyn_cast<Type>(argType), dyn_cast<Type>(argSimplifyType));
         simplifyValue(bbArg, argType, argSimplifiedInfos);
         bbArg.setType(argSimplifyType);
         // update the type of arg
@@ -290,7 +290,7 @@ struct SimplifyShapePass : public mlir::impl::SimplifyShapeBase<SimplifyShapePas
 
   void simplifyDefiningOp(Operation *oldOp) {
     Value result = oldOp->getResult(0);
-    MemRefType resultType = result.getType().cast<MemRefType>();
+    MemRefType resultType = cast<MemRefType>(result.getType());
     const SimplifiedShapeInfos resultSimplifiedInfos = getSimplifiedShapeInfos(resultType);
     MemRefType resultSimplifyType = resultSimplifiedInfos.first;
     LLVM_DEBUG({
@@ -336,13 +336,13 @@ struct SimplifyShapePass : public mlir::impl::SimplifyShapeBase<SimplifyShapePas
   void simplifyGlobalOps(mlir::ModuleOp m) {
     // First simplify the globalops definition in the symbol table
     m.walk([&](mlir::memref::GlobalOp globalop) {
-      MemRefType resultType = globalop.getType().cast<MemRefType>();
+      MemRefType resultType = cast<MemRefType>(globalop.getType());
       const SimplifiedShapeInfos resultSimplifiedInfos = getSimplifiedShapeInfos(resultType);
       MemRefType resultSimplifyType = resultSimplifiedInfos.first;
 
       if (resultType != resultSimplifyType) {
         Attribute initValue = globalop.getConstantInitValue();
-        DenseElementsAttr elementsAttr = initValue.dyn_cast_or_null<DenseElementsAttr>();
+        DenseElementsAttr elementsAttr = dyn_cast_or_null<DenseElementsAttr>(initValue);
         // Check if the global op is a constant
         if (elementsAttr) {
           Type simplifiedTensorType = mlir::memref::getTensorTypeFromMemRefType(resultSimplifyType);

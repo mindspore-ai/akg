@@ -69,7 +69,7 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
   std::map<long unsigned int, py::buffer_info> bf16_buf_map;
 
   for (long unsigned int i = 0; i < args.size(); i++) {
-    auto tensor_obj_ptr = args[i].cast<AscendTensorObjStructPtr>();
+    auto tensor_obj_ptr = cast<AscendTensorObjStructPtr>(args[i]);
     py::buffer_info buffer_info = tensor_obj_ptr->buffer_info.request();
     auto is_bf16 = (bool)(tensor_obj_ptr->is_bf16);
     if (is_bf16) {
@@ -95,7 +95,7 @@ void akg_ascend_run(std::string path, std::string kernel_name, int device_id, bo
   kernel_runtime.RunOpImpl(path, kernel_name, is_dynamic, input_tensors, input_shapes);
 
   for(auto iter = bf16_buf_map.begin(); iter != bf16_buf_map.end(); iter++) {
-    auto tensor_obj_ptr = args[iter->first].cast<AscendTensorObjStructPtr>();
+    auto tensor_obj_ptr = cast<AscendTensorObjStructPtr>(args[iter->first]);
     py::buffer_info res_buf = tensor_obj_ptr->buffer_info.request();
     ConvertToFP32(bf16_buf_map[iter->first], res_buf);
   }

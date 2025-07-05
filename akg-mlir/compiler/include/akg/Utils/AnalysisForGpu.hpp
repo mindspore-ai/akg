@@ -38,7 +38,7 @@ class GpuAttrUtils {
     }
     gpu::Processor processor = gpu::Processor::Sequential;
     for (Attribute attr : mappingAttr) {
-      auto annotation = attr.dyn_cast<gpu::ParallelLoopDimMappingAttr>();
+      auto annotation = dyn_cast<gpu::ParallelLoopDimMappingAttr>(attr);
       processor = annotation.getProcessor();
     }
     return processor;

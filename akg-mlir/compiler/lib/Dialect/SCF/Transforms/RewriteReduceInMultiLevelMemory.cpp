@@ -64,35 +64,35 @@ Value createInitialValue(Operation *op, mlir::Location loc, OpBuilder &builder) 
   Value initialValue;
   if (isa<arith::AddFOp>(op)) {
     initialValue =
-      builder.create<arith::ConstantFloatOp>(loc, APFloat(APFloat::IEEEsingle(), "0.0"), elementType.cast<FloatType>());
+      builder.create<arith::ConstantFloatOp>(loc, APFloat(APFloat::IEEEsingle(), "0.0"), cast<FloatType>(elementType));
   } else if (isa<arith::MulFOp>(op)) {
     initialValue =
-      builder.create<arith::ConstantFloatOp>(loc, APFloat(APFloat::IEEEsingle(), "1.0"), elementType.cast<FloatType>());
+      builder.create<arith::ConstantFloatOp>(loc, APFloat(APFloat::IEEEsingle(), "1.0"), cast<FloatType>(elementType));
   } else if (isa<arith::AddIOp>(op)) {
-    initialValue = builder.create<arith::ConstantIntOp>(loc, 0, elementType.cast<IntegerType>());
+    initialValue = builder.create<arith::ConstantIntOp>(loc, 0, cast<IntegerType>(elementType));
   } else if (isa<arith::AndIOp>(op)) {
-    initialValue = builder.create<arith::ConstantIntOp>(loc, 1, elementType.cast<IntegerType>());
+    initialValue = builder.create<arith::ConstantIntOp>(loc, 1, cast<IntegerType>(elementType));
   } else if (isa<arith::OrIOp>(op)) {
-    initialValue = builder.create<arith::ConstantIntOp>(loc, 0, elementType.cast<IntegerType>());
+    initialValue = builder.create<arith::ConstantIntOp>(loc, 0, cast<IntegerType>(elementType));
   } else if (isa<arith::MulIOp>(op)) {
-    initialValue = builder.create<arith::ConstantIntOp>(loc, 1, elementType.cast<IntegerType>());
+    initialValue = builder.create<arith::ConstantIntOp>(loc, 1, cast<IntegerType>(elementType));
   } else if (isa<arith::MinNumFOp>(op)) {
     initialValue = builder.create<arith::ConstantFloatOp>(
-      loc, APFloat::getLargest(elementType.cast<FloatType>().getFloatSemantics()), elementType.cast<FloatType>());
+      loc, APFloat::getLargest(cast<FloatType>(elementType).getFloatSemantics()), cast<FloatType>(elementType));
   } else if (isa<arith::MaxNumFOp>(op)) {
     initialValue = builder.create<arith::ConstantFloatOp>(
-      loc, APFloat::getSmallest(elementType.cast<FloatType>().getFloatSemantics()), elementType.cast<FloatType>());
+      loc, APFloat::getSmallest(cast<FloatType>(elementType).getFloatSemantics()), cast<FloatType>(elementType));
   } else if (isa<arith::MinSIOp>(op)) {
     initialValue =
-      builder.create<arith::ConstantIntOp>(loc, std::numeric_limits<int64_t>::max(), elementType.cast<IntegerType>());
+      builder.create<arith::ConstantIntOp>(loc, std::numeric_limits<int64_t>::max(), cast<IntegerType>(elementType));
   } else if (isa<arith::MaxSIOp>(op)) {
     initialValue = builder.create<arith::ConstantIntOp>(loc, std::numeric_limits<int64_t>::lowest(),
-                                                        elementType.cast<IntegerType>());
+                                                        cast<IntegerType>(elementType));
   } else if (isa<arith::MinUIOp>(op)) {
     initialValue =
-      builder.create<arith::ConstantIntOp>(loc, std::numeric_limits<uint64_t>::max(), elementType.cast<IntegerType>());
+      builder.create<arith::ConstantIntOp>(loc, std::numeric_limits<uint64_t>::max(), cast<IntegerType>(elementType));
   } else if (isa<arith::MaxUIOp>(op)) {
-    initialValue = builder.create<arith::ConstantIntOp>(loc, 0, elementType.cast<IntegerType>());
+    initialValue = builder.create<arith::ConstantIntOp>(loc, 0, cast<IntegerType>(elementType));
   } else {
     (void)op->emitError("Unsupported operation type\n");
     return nullptr;

@@ -175,8 +175,8 @@ class CommonUtils {
     assert(constraintValues.size() == ifOps.size());
     int64_t i = 0;
     for (auto value : ifOps) {
-      if (auto blockArg = value.dyn_cast<BlockArgument>()) {
-        if (blockArg.getType().isa<IndexType>()) {
+      if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+        if (isa<IndexType>(blockArg.getType())) {
           Block *block = blockArg.getOwner();
           Operation *parentOp = block->getParentOp();
           if (auto forOp = dyn_cast<affine::AffineForOp>(parentOp)) {
@@ -250,7 +250,7 @@ class CommonUtils {
       return opType;
     }
     // TODO: multi band
-    auto opTypeStr = op->getAttr(kOperatorTypeStr).dyn_cast<StringAttr>().getValue().str();
+    auto opTypeStr = dyn_cast<StringAttr>(op->getAttr(kOperatorTypeStr)).getValue().str();
     for (auto it = operatorTemplateMap.begin(); it != operatorTemplateMap.end(); ++it) {
       if (it->second == opTypeStr) {
         return OperatorTemplate(it->first);
@@ -266,7 +266,7 @@ class CommonUtils {
     std::string directionStr;
     op->walk([&directionStr](Operation *curOp) {
       if (curOp->getAttr(kReductionTypeStr)) {
-        directionStr = curOp->getAttr(kReductionTypeStr).cast<StringAttr>().getValue().str();
+        directionStr = cast<StringAttr>(curOp->getAttr(kReductionTypeStr)).getValue().str();
       }
     });
 
@@ -340,8 +340,8 @@ class CommonUtils {
   }
 
   static void collectRelatedAxes(Value value, SmallVector<Operation *, 8> &axes) {
-    if (auto blockArg = value.dyn_cast<BlockArgument>()) {
-      if (blockArg.getType().isa<IndexType>()) {
+    if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+      if (isa<IndexType>(blockArg.getType())) {
         Block *block = blockArg.getOwner();
         Operation *parentOp = block->getParentOp();
         if (isa<affine::AffineForOp>(parentOp) || isa<scf::ParallelOp>(parentOp)) {
@@ -440,7 +440,7 @@ class CommonUtils {
     auto bufferType = memref.getType();
     auto memspace = bufferType.getMemorySpace();
     if (dyn_cast_or_null<IntegerAttr>(memspace)) {
-      cacheLevel = memspace.cast<IntegerAttr>().getInt();
+      cacheLevel = cast<IntegerAttr>(memspace).getInt();
     }
     return cacheLevel;
   }
@@ -486,13 +486,13 @@ class CommonUtils {
           continue;
         }
         auto newAlloc = dyn_cast<memref::AllocOp>(opAlloc);
-        auto newRank = newAlloc.getType().template cast<ShapedType>().getRank();
+        auto newRank = cast<ShapedType>(newAlloc.getType()).getRank();
         if (ret == nullptr) {
           ret = opAlloc;
           continue;
         }
         auto currAlloc = dyn_cast<memref::AllocOp>(ret);
-        auto currRank = currAlloc.getType().template cast<ShapedType>().getRank();
+        auto currRank = cast<ShapedType>(currAlloc.getType()).getRank();
         if (newRank > currRank) {
           ret = opAlloc;
         }

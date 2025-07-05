@@ -501,7 +501,7 @@ struct CallOpInterfaceLowering : public ConvertOpToLLVMPattern<CallOpType> {
 #if 1
     if (this->getTypeConverter()->getOptions().useBarePtrCallConv) {
       auto canUseBarePtr = llvm::all_of(callOp->getOperands(), [&](mlir::Value operand) {
-        if (auto memrefTy = operand.getType().dyn_cast<BaseMemRefType>()) {
+        if (auto memrefTy = dyn_cast<BaseMemRefType>(operand.getType())) {
           return this->getTypeConverter()->canConvertToBarePtr(memrefTy);
         }
         return true;

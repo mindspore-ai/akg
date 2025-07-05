@@ -494,7 +494,7 @@ bool ParallelStrategy::tryMapGrid(const GpuModelGraphPtr gpuGraph, const AxisPtr
     if (axis->axisType.find(Axis::AxisLabel::kReduction) == axis->axisType.end()) {
       return false;
     }
-    return !gpuGraph->globalConfigs[akg::utils::kEnableAtomicAdd].dyn_cast<BoolAttr>().getValue();
+    return !dyn_cast<BoolAttr>(gpuGraph->globalConfigs[akg::utils::kEnableAtomicAdd]).getValue();
   };
   // Calculate rest extent after mapping to block (if any), and then try to map to grid.
   auto loopExtent = axis->getRestExtent();
@@ -557,7 +557,7 @@ void ReduceStrategy::AddGpuConstraint(GpuModelGraphPtr gpuGraph) {
 
   bool enableParallelReduction = true;
   bool enableAtomicReduction = gpuGraph->funcOp->hasAttr(akg::utils::kEnableAtomicAdd) &&
-                               gpuGraph->funcOp->getAttr(akg::utils::kEnableAtomicAdd).dyn_cast<BoolAttr>().getValue();
+                               dyn_cast<BoolAttr>(gpuGraph->funcOp->getAttr(akg::utils::kEnableAtomicAdd)).getValue();
   bool applyReorderPass = true;
   GpuTemplateSolver::SolveScheduleForReductionOps(axes, enableParallelReduction, enableAtomicReduction,
                                                   applyReorderPass);

@@ -40,10 +40,10 @@ struct AKGOperatorIdentify : public impl::AKGOperatorIdentifyBase<AKGOperatorIde
 static bool elementwiseMatch(Operation *operation) {
   assert(operation->getNumResults() == 1 && "All TOSA elementwise ops should only return a single result.");
 
-  auto resultTy = operation->getResult(0).getType().dyn_cast<ShapedType>();
+  auto resultTy = dyn_cast<ShapedType>(operation->getResult(0).getType());
   // Input indexing maps may be broadcasted.
   for (Value operand : operation->getOperands()) {
-    ShapedType type = operand.getType().cast<ShapedType>();
+    ShapedType type = cast<ShapedType>(operand.getType());
     if (type.getShape() != resultTy.getShape()) {
       return false;
     }

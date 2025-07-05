@@ -44,7 +44,7 @@ struct StoreAxisInfoPass : public impl::StoreAxisInfoBase<StoreAxisInfoPass> {
         return;
       }
       if (op->getAttr(kLoopTag)) {
-        auto loopTag = op->getAttr(kLoopTag).dyn_cast<StringAttr>().getValue().str();
+        auto loopTag = dyn_cast<StringAttr>(op->getAttr(kLoopTag)).getValue().str();
         newTags.push_front(loopTag);
       } else {
         newTags.push_front(kPlaceHolder);

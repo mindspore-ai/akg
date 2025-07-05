@@ -79,7 +79,7 @@ bool foldDimensionAnalyser::backtrackUpdateTensors(const Value &value, const llv
   updateList.push(value);
   while (!updateList.empty()) {
     auto curTensor = updateList.front();
-    auto oriSize = value.getType().dyn_cast<ShapedType>().getShape().size();
+    auto oriSize = dyn_cast<ShapedType>(value.getType()).getShape().size();
     if (oriSize != 1) {
       if (oriSize != info.size()) {
         LLVM_DEBUG(llvm::dbgs() << "Unsupported different ranks before and after folding.\n");
@@ -164,7 +164,7 @@ void foldDimensionAnalyser::analyseElementwiseOp(Operation *op) {
   }
 
   auto res = op->getResult(0);
-  auto resTy = res.getType().dyn_cast<ShapedType>();
+  auto resTy = dyn_cast<ShapedType>(res.getType());
   auto resRank = resTy.getShape().size();
 
   // current foldable status: [0,0,...,0]
@@ -212,9 +212,9 @@ void foldDimensionAnalyser::analyseSymbolicBroadcastOp(const ShapedType ty0, con
 
 void foldDimensionAnalyser::analyseTensorCastOp(Operation *op) {
   auto input = op->getOperand(0);
-  auto ty0 = input.getType().dyn_cast<ShapedType>();
+  auto ty0 = dyn_cast<ShapedType>(input.getType());
   auto res = op->getResult(0);
-  auto ty1 = res.getType().dyn_cast<ShapedType>();
+  auto ty1 = dyn_cast<ShapedType>(res.getType());
   SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
   if (!(analysis.hasSymbolicShape(ty0) && analysis.hasSymbolicShape(ty1))) {
     foldable = false;
@@ -229,9 +229,9 @@ void foldDimensionAnalyser::analyseTensorCastOp(Operation *op) {
 void foldDimensionAnalyser::analyseElemwiseBroadcastOp(Operation *op) {
   assert(op->getNumOperands() == kBroadcastInputNum);
 
-  auto ty0 = op->getOperand(0).getType().dyn_cast<ShapedType>();
+  auto ty0 = dyn_cast<ShapedType>(op->getOperand(0).getType());
   auto shape0 = ty0.getShape();
-  auto ty1 = op->getOperand(1).getType().dyn_cast<ShapedType>();
+  auto ty1 = dyn_cast<ShapedType>(op->getOperand(1).getType());
   auto shape1 = ty1.getShape();
   auto isInput0Const = llvm::all_of(shape0, [](int64_t dim) -> bool { return dim == 1; });
   auto isInput1Const = llvm::all_of(shape1, [](int64_t dim) -> bool { return dim == 1; });
@@ -286,7 +286,7 @@ void foldDimensionAnalyser::analyseElemwiseBroadcastOp(Operation *op) {
 void foldDimensionAnalyser::analyseBroadcastToOp(Operation *op) {
   assert(op->getNumOperands() == 1);
 
-  auto inputTy = op->getOperand(0).getType().dyn_cast<ShapedType>();
+  auto inputTy = dyn_cast<ShapedType>(op->getOperand(0).getType());
 
   SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
   if (analysis.hasSymbolicShape(inputTy)) {
@@ -298,7 +298,7 @@ void foldDimensionAnalyser::analyseBroadcastToOp(Operation *op) {
   auto inputShape = inputTy.getShape();
   auto inputRank = inputShape.size();
   auto res = op->getResult(0);
-  auto resTy = res.getType().dyn_cast<ShapedType>();
+  auto resTy = dyn_cast<ShapedType>(res.getType());
   auto resShape = resTy.getShape();
   if (inputRank != resShape.size()) {
     foldable = false;
@@ -322,10 +322,10 @@ void foldDimensionAnalyser::analyseBroadcastToOp(Operation *op) {
 }
 
 void foldDimensionAnalyser::analyseReduceOp(Operation *op) {
-  auto inputTy = op->getOperand(0).getType().dyn_cast<ShapedType>();
+  auto inputTy = dyn_cast<ShapedType>(op->getOperand(0).getType());
   auto inputRank = inputTy.getRank();
   auto res = op->getResult(0);
-  auto resRank = res.getType().dyn_cast<ShapedType>().getRank();
+  auto resRank = dyn_cast<ShapedType>(res.getType()).getRank();
   if (inputRank != resRank) {
     foldable = false;
     LLVM_DEBUG(llvm::dbgs() << "[" DEBUG_TYPE "] Unsupported different ranks between input and output in '"
@@ -335,10 +335,10 @@ void foldDimensionAnalyser::analyseReduceOp(Operation *op) {
 
   llvm::SmallVector<int64_t> axes;
   auto axis_attr = op->getAttr("axis");
-  if (auto axis_array_attr = axis_attr.dyn_cast<DenseI64ArrayAttr>()) {
+  if (auto axis_array_attr = dyn_cast<DenseI64ArrayAttr>(axis_attr)) {
     auto axis_array = axis_array_attr.asArrayRef();
     (void)axes.insert(axes.end(), axis_array.begin(), axis_array.end());
-  } else if (auto axis_int_attr = axis_attr.dyn_cast<IntegerAttr>()) {
+  } else if (auto axis_int_attr = dyn_cast<IntegerAttr>(axis_attr)) {
     (void)axes.emplace_back(axis_int_attr.getInt());
   }
 
@@ -366,7 +366,7 @@ void foldDimensionAnalyser::analyseReduceOp(Operation *op) {
 }
 
 void foldDimensionAnalyser::analyseReshapeOp(Operation *op) {
-  auto inputTy = op->getOperand(0).getType().dyn_cast<ShapedType>();
+  auto inputTy = dyn_cast<ShapedType>(op->getOperand(0).getType());
 
   SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
   if (analysis.hasSymbolicShape(inputTy)) {
@@ -388,14 +388,14 @@ void foldDimensionAnalyser::analyseReshapeOp(Operation *op) {
     // input not visited: add children and status = [0,0,..,0] length equal to input dim
     llvm::SmallDenseSet<Value> emptyParents;
     llvm::SmallDenseSet<Value> children = {res};
-    auto inputRank = input.getType().dyn_cast<ShapedType>().getRank();
+    auto inputRank = dyn_cast<ShapedType>(input.getType()).getRank();
     llvm::SmallVector<int64_t> foldableInfo(inputRank, 0);
     tensorInfoMap[input] = std::make_pair(std::make_pair(emptyParents, children), std::make_pair(foldableInfo, ""));
   }
   // output: Add parents and status = [0,0,..,0] length equal to output dim
   llvm::SmallDenseSet<Value> parents{input};
   llvm::SmallDenseSet<Value> emptyChildren;
-  auto resRank = res.getType().dyn_cast<ShapedType>().getRank();
+  auto resRank = dyn_cast<ShapedType>(res.getType()).getRank();
   llvm::SmallVector<int64_t> foldableInfo(resRank, 0);
   tensorInfoMap[res] = std::make_pair(std::make_pair(parents, emptyChildren), std::make_pair(foldableInfo, "Reshape"));
 }
@@ -403,9 +403,9 @@ void foldDimensionAnalyser::analyseReshapeOp(Operation *op) {
 bool foldDimensionAnalyser::checkBroadcast(Operation *op) const {
   bool isBroadcast = false;
   assert(op->getNumResults() == 1 && "Elementwise ops should only return one result.");
-  auto resultTy = op->getResult(0).getType().dyn_cast<ShapedType>();
+  auto resultTy = dyn_cast<ShapedType>(op->getResult(0).getType());
   for (Value operand : op->getOperands()) {
-    ShapedType type = operand.getType().cast<ShapedType>();
+    ShapedType type = cast<ShapedType>(operand.getType());
     SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
     bool hasDifferentSymbolShape = (analysis.hasSymbolicShape(type) && analysis.hasSymbolicShape(resultTy) &&
                                     !analysis.isSameSymbolicShape(type, resultTy));
@@ -456,7 +456,7 @@ llvm::SmallVector<int64_t> foldDimensionAnalyser::getNormalizedFlattenShape(cons
   auto info = tensorInfoMap[value].second.first;
   LLVM_DEBUG(value.getType().dump());
   printVector<int64_t>(info);
-  auto shape = value.getType().dyn_cast<ShapedType>().getShape();
+  auto shape = dyn_cast<ShapedType>(value.getType()).getShape();
   auto rank = shape.size();
   llvm::SmallVector<int64_t> normalizedShape;
   int64_t currentDim;
@@ -497,7 +497,7 @@ void foldDimensionAnalyser::updatefuncArgsMap(const Value &input, const llvm::Sm
   if (it == funcArgsMap.end()) {
     return;
   }
-  auto inputRank = input.getType().dyn_cast<ShapedType>().getShape().size();
+  auto inputRank = dyn_cast<ShapedType>(input.getType()).getShape().size();
   auto needFixIndices = it->second;
   int64_t needFix;
   llvm::SmallVector<int64_t> newNeedFixIndices;
@@ -605,7 +605,7 @@ void foldDimensionAnalyser::recordTensorCanFold() {
 
     auto foldableInfo = item.second.second.first;
     auto operatorType = item.second.second.second;
-    auto inputTy = input.getType().dyn_cast<ShapedType>();
+    auto inputTy = dyn_cast<ShapedType>(input.getType());
     auto inputRank = inputTy.getShape().size();
     if (!inputTy || inputRank == 1 || inputRank < foldableInfo.size()) {
       continue;
@@ -636,7 +636,7 @@ void foldDimensionAnalyser::recordTensorCanFold() {
       updatefuncArgsMap(input, foldableInfo);
       // record the new shape type for each tensor can be folded
       newTy = RankedTensorType::get(flattenedShape, inputTy.getElementType());
-      newTy = analysis.updateSymbolicShape(newTy, flattenedSymbolShape).dyn_cast<RankedTensorType>();
+      newTy = dyn_cast<RankedTensorType>(analysis.updateSymbolicShape(newTy, flattenedSymbolShape));
     } else {
       llvm::SmallVector<int64_t> normalizedShapeAfter;
       getFoldedType(inputTy, foldableInfo, &flattenedShape, &normalizedShapeAfter);
@@ -746,8 +746,8 @@ void rewriteConstOpAttr(T constOp) {
 }
 
 void rewriteTosaReduceAxis(tosa::TosaOp op) {
-  auto inputShape = op->getOperand(0).getType().dyn_cast<ShapedType>().getShape();
-  auto outputShape = op->getResult(0).getType().dyn_cast<ShapedType>().getShape();
+  auto inputShape = dyn_cast<ShapedType>(op->getOperand(0).getType()).getShape();
+  auto outputShape = dyn_cast<ShapedType>(op->getResult(0).getType()).getShape();
   int64_t newAxis = -1;
   for (size_t i = 0; i < inputShape.size(); i++) {
     if (outputShape[i] == 1 && inputShape[i] != outputShape[i]) {
@@ -761,8 +761,8 @@ void rewriteTosaReduceAxis(tosa::TosaOp op) {
 }
 
 void rewriteMindReduceAxis(mindspore::MindSporeOp op) {
-  auto inputShape = op->getOperand(0).getType().dyn_cast<ShapedType>().getShape();
-  auto outputShape = op->getResult(0).getType().dyn_cast<ShapedType>().getShape();
+  auto inputShape = dyn_cast<ShapedType>(op->getOperand(0).getType()).getShape();
+  auto outputShape = dyn_cast<ShapedType>(op->getResult(0).getType()).getShape();
   assert(inputShape.size() == outputShape.size());
   llvm::SmallVector<int64_t> newAxes;
   for (size_t i = 0; i < inputShape.size(); i++) {
@@ -777,7 +777,7 @@ void rewriteMindReduceAxis(mindspore::MindSporeOp op) {
 }
 
 void rewriteReshapeAttr(Operation *op) {
-  auto outputShape = op->getResult(0).getType().dyn_cast<ShapedType>().getShape();
+  auto outputShape = dyn_cast<ShapedType>(op->getResult(0).getType()).getShape();
   auto newShapeAttr = DenseI64ArrayAttr::get(op->getContext(), outputShape);
   op->setAttr("new_shape", newShapeAttr);
 }

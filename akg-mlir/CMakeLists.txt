@@ -66,15 +66,15 @@ set(AKG_MLIR_BIN_LIB_DIR ${AKG_MLIR_BINARY_DIR}/lib)
 #-------------------------------------------------------------------------------
 # CUDA Backend Configuration
 #-------------------------------------------------------------------------------
-#string(TOUPPER ${USE_CUDA} USE_CUDA)
+string(TOUPPER "${USE_CUDA}" USE_CUDA)
 
-#if(USE_CUDA STREQUAL "ON")
-#  find_package(CUDA  REQUIRED)
-#  add_definitions(-DUSE_CUDA)
-#  message(STATUS "CUDA backend enabled")
-#else()
-#  message(STATUS "CUDA backend disabled")
-#endif()
+if(USE_CUDA STREQUAL "ON")
+  find_package(CUDA  REQUIRED)
+  add_definitions(-DUSE_CUDA)
+  message(STATUS "CUDA backend enabled")
+else()
+  message(STATUS "CUDA backend disabled")
+endif()
 
 #-------------------------------------------------------------------------------
 # LLVM Configuration
@@ -148,7 +148,6 @@ if(ENABLE_AKG)
 else()
   install(TARGETS akg-opt DESTINATION ${AKG_MLIR_BINARY_DIR}/akg/bin)
   install(TARGETS mindspore-translate DESTINATION  ${AKG_MLIR_BINARY_DIR}/akg/bin)
-  #install(TARGETS mlir_akgParallelLaunch_runtime DESTINATION ${AKG_MLIR_BINARY_DIR}/akg/lib)
   if(USE_CUDA)
     install(TARGETS akg-ptx-replace DESTINATION ${AKG_MLIR_BINARY_DIR}/akg/bin)
     install(TARGETS akg-translate DESTINATION ${AKG_MLIR_BINARY_DIR}/akg/bin)

@@ -110,10 +110,10 @@ static LogicalResult elementwiseMatchAndRewriteHelper(Operation *op, PatternRewr
   Attribute attr = getOperationKindAttribute(op);
   auto nameAttr = StringAttr::get(op->getContext(), "fun");
   attrs.push_back({nameAttr, attr});
-  auto resultTy = op->getResult(0).getType().cast<ShapedType>();
+  auto resultTy = cast<ShapedType>(op->getResult(0).getType());
   Value inputRes;
   for (auto input : op->getOperands()) {
-    auto inputTy = input.getType().dyn_cast<ShapedType>();
+    auto inputTy = dyn_cast<ShapedType>(input.getType());
     if (inputTy && inputTy == resultTy) {
       inputRes = input;
       break;
@@ -178,10 +178,10 @@ static LogicalResult invMatchAndRewriteHelper(Operation *op, PatternRewriter &re
   Attribute attr = linalg::BinaryFnAttr::get(op->getContext(), kind);
   auto nameAttr = StringAttr::get(op->getContext(), "fun");
   attrs.push_back({nameAttr, attr});
-  auto resultTy = op->getResult(0).getType().cast<ShapedType>();
+  auto resultTy = cast<ShapedType>(op->getResult(0).getType());
   Value inputRes;
   for (auto input : op->getOperands()) {
-    auto inputTy = input.getType().dyn_cast<ShapedType>();
+    auto inputTy = dyn_cast<ShapedType>(input.getType());
     if (inputTy && inputTy == resultTy) {
       inputRes = input;
       break;
@@ -225,8 +225,8 @@ static SmallVector<ReassociationExprs> getExpandMap(
 static Value createExpandShapeOp(Operation *op, PatternRewriter &rewriter, 
                                  Value expandSrc, Value expandDst, uint64_t axis) {
   SmallVector<int64_t> dims = {static_cast<int64_t>(axis)};
-  int64_t expandInputRank = expandSrc.getType().cast<ShapedType>().getRank();
-  int64_t expandOutputRank = expandDst.getType().cast<ShapedType>().getRank();
+  int64_t expandInputRank = cast<ShapedType>(expandSrc.getType()).getRank();
+  int64_t expandOutputRank = cast<ShapedType>(expandDst.getType()).getRank();
   auto reassociation = getExpandMap(dims, expandInputRank, expandOutputRank, rewriter);
   Value expandShapeOp = rewriter.create<tensor::ExpandShapeOp>(
     op->getLoc(), expandDst.getType(), expandSrc, reassociation);
@@ -615,8 +615,8 @@ static std::vector<int> ArrayAttrToVectorInt(ArrayAttr array) {
 static DenseI64ArrayAttr computeDiffShape(mindspore::BroadcastToOp brcOp) {
   Value input = brcOp.getInput();
   Value output = brcOp.getOutput();
-  auto inputShape = input.getType().cast<ShapedType>().getShape();
-  auto outputShape = output.getType().cast<ShapedType>().getShape();
+  auto inputShape = cast<ShapedType>(input.getType()).getShape();
+  auto outputShape = cast<ShapedType>(output.getType()).getShape();
   auto inputShapeSize = inputShape.size();
   auto outputShapeSize = outputShape.size();
 
@@ -653,7 +653,7 @@ static DenseI64ArrayAttr computeSameShape(mindspore::BroadcastToOp brcOp) {
     brcOp.getOperation()->getAttr("frontend_symbol"));
   auto intputShapeAttr = dyn_cast<ArrayAttr>(symbolAttr.get("input_0"));
   auto inputShape = ArrayAttrToVectorInt(intputShapeAttr);
-  auto outputShape = output.getType().cast<ShapedType>().getShape();
+  auto outputShape = cast<ShapedType>(output.getType()).getShape();
 
   SmallVector<int64_t> dim;
   for (size_t idx = 0; idx < inputShape.size(); idx++) {
@@ -672,7 +672,7 @@ static DenseI64ArrayAttr computeDimension(mindspore::BroadcastToOp brcOp) {
   auto symbolAttr = dyn_cast<DictionaryAttr>(
     brcOp.getOperation()->getAttr("frontend_symbol"));
   auto intputShapeAttr = dyn_cast<ArrayAttr>(symbolAttr.get("input_0"));
-  auto outputShape = output.getType().cast<ShapedType>().getShape();
+  auto outputShape = cast<ShapedType>(output.getType()).getShape();
 
   DenseI64ArrayAttr dimension;
   if (intputShapeAttr.getValue().size() == outputShape.size())
@@ -717,14 +717,14 @@ broadcastMatchAndRewriteHelper(mindspore::BroadcastToOp brcOp,
 
   SmallVector<Value> dynDims;
   auto brcDst = getDynamicRankTensor(brcOp);
-  auto brcDstTy = brcDst.getType().cast<ShapedType>();
+  auto brcDstTy = cast<ShapedType>(brcDst.getType());
   for (int i = 0; i < brcDstTy.getRank(); i++) {
     if (brcDstTy.isDynamicDim(i)) {
       dynDims.push_back(rewriter.create<tensor::DimOp>(loc, brcDst, i));
     }
   }
 
-  auto resultTy = output.getType().cast<ShapedType>();
+  auto resultTy = cast<ShapedType>(output.getType());
   Value emptyTensor = rewriter.create<tensor::EmptyOp>(
     loc, resultTy.getShape(), resultTy.getElementType(), dynDims);
   auto dimension = computeDimension(brcOp);

@@ -20,10 +20,6 @@
 #include "akg/ExecutionEngine/AscendLaunchRuntime/AscendMemoryManager.h"
 #include "akg/ExecutionEngine/AscendLaunchRuntime/RuntimeErrorCodes.h"
 
-#if 0  // #ifdef USE_CCE_PROFILING
-#include "profile_mgr.h"
-#endif
-
 using std::vector;
 
 namespace mlir {

@@ -278,8 +278,8 @@ void ExtractIfOpPass::extractBroadcastForwardOp(affine::AffineIfOp ifOp) const {
   Operation *outermostOp = nullptr;
   Operation *innermostOp = nullptr;
   for (auto value : ifOp.getOperands()) {
-    if (auto blockArg = value.dyn_cast<BlockArgument>()) {
-      if (blockArg.getType().isa<IndexType>()) {
+    if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+      if (isa<IndexType>(blockArg.getType())) {
         Block *block = blockArg.getOwner();
         Operation *parentOp = block->getParentOp();
         if (!parentOp->hasAttr("broadcastLoop")) {
@@ -307,8 +307,8 @@ void ExtractIfOpPass::extractBroadcastForwardOp(affine::AffineIfOp ifOp) const {
 
     llvm::SmallSet<Operation *, 8> relatedAxes;
     for (size_t i = 0; i < indices.size(); ++i) {
-      if (auto blockArg = indices[i].dyn_cast<BlockArgument>()) {
-        if (blockArg.getType().isa<IndexType>()) {
+      if (auto blockArg = dyn_cast<BlockArgument>(indices[i])) {
+        if (isa<IndexType>(blockArg.getType())) {
           Block *block = blockArg.getOwner();
           Operation *parentOp = block->getParentOp();
           if (parentOp->hasAttr("broadcastLoop")) {

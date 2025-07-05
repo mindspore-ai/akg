@@ -132,36 +132,6 @@ void tryToSinkOps(Region &parallelRegion) {
   return;
 }
 
-void addCallBackPtrToFunc(SmallVector<func::FuncOp> &funcOps) {
-#if 0
-    for (auto &func : funcOps) {
-        auto context = func->getContext();
-        OpBuilder builder(func);
-        auto loc = func.getLoc();
-        SmallVector<Type, 4> newFuncOperandTypes;
-        LLVM::LLVMPointerType llvmPointerType = LLVM::LLVMPointerType::get(context);
-        const int32_t firstArgPos = 0;
-        func.insertArgument(firstArgPos, llvmPointerType, {}, loc);  // callback func
-        func.insertArgument(firstArgPos, llvmPointerType, {}, loc);  // task nums
-
-        for (auto type : func.getArgumentTypes()) {
-            (void)newFuncOperandTypes.emplace_back(type);
-        }
-        auto newFuncTypes = FunctionType::get(context, newFuncOperandTypes, {});
-        func.setType(newFuncTypes);
-        auto origFuncAttributes = func.getOperation()->getAttrs();
-        SmallVector<NamedAttribute> newFuncAttrs;
-        for (auto attr : origFuncAttributes) {
-            (void)newFuncAttrs.emplace_back(attr);
-        }
-        (void)newFuncAttrs.emplace_back(
-            NamedAttribute(StringAttr::get(context, kFuncType), StringAttr::get(context, kCpuMainFunc)));
-        func->setAttrs(newFuncAttrs);
-    }
-#endif
-  return;
-}
-
 static func::FuncOp parallelRegionOutLiningImpl(const func::FuncOp &mainFunc, Operation *outLiningOp,
                                                 const StringRef lambdaName, SetVector<Value> &operands,
                                                 const Operation *origParallelUpperBoundDefOp) {
@@ -200,7 +170,7 @@ static func::FuncOp parallelRegionOutLiningImpl(const func::FuncOp &mainFunc, Op
                                                     StringAttr::get(outLiningOp->getContext(), kCpuCalcFunc)));
   if (origParallelUpperBoundDefOp) {
     if (auto constantOp = dyn_cast<arith::ConstantOp>(origParallelUpperBoundDefOp)) {
-      auto val = constantOp.getValue().cast<IntegerAttr>().getInt();
+      auto val = cast<IntegerAttr>(constantOp.getValue()).getInt();
       auto attr = NamedAttribute(StringAttr::get(lambdaFunc->getContext(), kUpperBound),
                                  IntegerAttr::get(builder.getI64Type(), val));
       (void)lambdaFuncAttrs.emplace_back(attr);
@@ -300,7 +270,6 @@ class AKGFuncOutlining : public impl::AKGFuncOutliningBase<AKGFuncOutlining> {
     context = &getContext();
     getProcessFuncs(module, toBeHandleFuncOps);
     if (isMindSpore && !isOutlining) {
-      addCallBackPtrToFunc(toBeHandleFuncOps);
       return;
     }
 

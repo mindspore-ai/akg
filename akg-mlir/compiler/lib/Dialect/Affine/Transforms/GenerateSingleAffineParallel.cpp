@@ -151,12 +151,12 @@ void GenerateSingleAffineParallelPass::updateReductionLoop() {
   OpBuilder builder(funcOp);
   (void)funcOp->walk([&](Operation *redOp) {
     if (!isa<mlir::func::FuncOp>(redOp) && redOp->hasAttr(kReductionAxesStr)) {
-      ArrayAttr axesArrayAttr = redOp->getAttr(kReductionAxesStr).cast<ArrayAttr>();
+      ArrayAttr axesArrayAttr = cast<ArrayAttr>(redOp->getAttr(kReductionAxesStr));
       ;
       SmallVector<mlir::Attribute> intAttrs;
       SmallVector<int, 8> flags;
       for (auto axisAttr : axesArrayAttr) {
-        auto value = axisAttr.cast<IntegerAttr>().getInt() + 1;
+        auto value = cast<IntegerAttr>(axisAttr).getInt() + 1;
         flags.push_back(value);
         auto intAttr = builder.getIntegerAttr(builder.getIndexType(), value);
         intAttrs.push_back(intAttr);

@@ -190,7 +190,7 @@ void GlobalConfigSolver::solve(func::FuncOp funcOp) {
       akgglobal::GpuScheduleTool::getInstance().tagLoopWithAxisName(funcOp);
       if (modelGraph->graphTemplate == GraphTemplate::REDUCTION &&
           modelGraph->globalConfigs.find(akg::utils::kApplyReorderPass) != modelGraph->globalConfigs.end() &&
-          modelGraph->globalConfigs[akg::utils::kApplyReorderPass].dyn_cast<BoolAttr>().getValue()) {
+          dyn_cast<BoolAttr>(modelGraph->globalConfigs[akg::utils::kApplyReorderPass]).getValue()) {
         akgglobal::GpuScheduleTool::getInstance().setReductionOrder();
       } else {
         setEnableVectorize();

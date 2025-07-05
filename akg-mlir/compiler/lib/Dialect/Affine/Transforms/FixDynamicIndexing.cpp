@@ -59,8 +59,8 @@ static bool IsDynamicDim(const mlir::Value memref, size_t dim) {
     return false;
   }
   mlir::Type shapedValue = memref.getType();
-  auto shapedType = shapedValue.cast<ShapedType>();
-  if (!shapedType || !shapedType.isa<MemRefType>()) {
+  auto shapedType = cast<ShapedType>(shapedValue);
+  if (!shapedType || !isa<MemRefType>(shapedType)) {
     return false;
   }
   return dim < static_cast<size_t>(shapedType.getRank()) && shapedType.isDynamicDim(dim);
@@ -337,7 +337,7 @@ void FixDynamicIndexingPass::CollectReductionRelatedOps() {
   SmallVector<mlir::Value> redArgs;
   auto funcOp = getOperation();
   if (!funcOp->hasAttr("OperatorType") ||
-      funcOp->getAttr("OperatorType").dyn_cast<StringAttr>().getValue().str() == "Reduce") {
+      dyn_cast<StringAttr>(funcOp->getAttr("OperatorType")).getValue().str() == "Reduce") {
     funcOp->walk([&](Operation *op) {
       if (op->hasAttr(kReductionTypeStr)) {
         auto operand0 = op->getOperand(0);
@@ -649,7 +649,7 @@ void FixDynamicIndexingPass::runOnOperation() {
   std::string target{kTargetCpu};
 
   if (getOperation()->getAttr("process")) {
-    target = getOperation()->getAttr("process").dyn_cast<StringAttr>().getValue().str();
+    target = dyn_cast<StringAttr>(getOperation()->getAttr("process")).getValue().str();
   }
   if (bands.size() > 1 && target == kTargetCuda) {
     llvm::report_fatal_error(llvm::StringRef("Detect multiple bands (nested affine for)."));

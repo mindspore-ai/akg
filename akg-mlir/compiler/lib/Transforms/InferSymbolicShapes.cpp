@@ -63,7 +63,7 @@ static std::optional<NamedAttribute> getSymbolicShapeFromFrontend(Operation *op,
   if (!op->hasAttr(getFrontendSymbolAttrName())) {
     return std::nullopt;
   }
-  DictionaryAttr dict = op->getAttr(getFrontendSymbolAttrName()).dyn_cast_or_null<DictionaryAttr>();
+  DictionaryAttr dict = dyn_cast_or_null<DictionaryAttr>(op->getAttr(getFrontendSymbolAttrName()));
   std::optional<NamedAttribute> namedAttr = dict.getNamed(key);
   if (namedAttr == std::nullopt) {
     return std::nullopt;
@@ -223,8 +223,8 @@ struct PropagateElementWiseOp : public OpRewritePattern<OpTy> {
     SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
     mlir::Value opnd0 = op.getOperation()->getOperands()[0];
     mlir::Value opnd1 = op.getOperation()->getOperands()[1];
-    int64_t lhsRank = opnd0.getType().cast<ShapedType>().getRank();
-    int64_t rhsRank = opnd1.getType().cast<ShapedType>().getRank();
+    int64_t lhsRank = cast<ShapedType>(opnd0.getType()).getRank();
+    int64_t rhsRank = cast<ShapedType>(opnd1.getType()).getRank();
     opnd0.setType(analysis.createNewSymbolicShape(opnd0.getType()));
     opnd1.setType(analysis.createNewSymbolicShape(opnd1.getType()));
     std::optional<llvm::SmallVector<std::string>> lSymShape = analysis.getSymbolicShape(opnd0.getType());
@@ -247,7 +247,7 @@ struct PropagateElementWiseOp : public OpRewritePattern<OpTy> {
     // lhs as longShape
     if (lhsRank > rhsRank) {
       std::optional<llvm::SmallVector<std::string>> resShape =
-        GetInferenceShape(*lSymShape, *rSymShape, resVal.getType().cast<ShapedType>().getShape());
+        GetInferenceShape(*lSymShape, *rSymShape, cast<ShapedType>(resVal.getType()).getShape());
       if (resShape == std::nullopt) {
         resVal.setType(analysis.createNewSymbolicShape(resVal.getType()));
         return success();
@@ -258,7 +258,7 @@ struct PropagateElementWiseOp : public OpRewritePattern<OpTy> {
     // rhs as longShape
     if (lhsRank < rhsRank) {
       std::optional<llvm::SmallVector<std::string>> resShape =
-        GetInferenceShape(*rSymShape, *lSymShape, resVal.getType().cast<ShapedType>().getShape());
+        GetInferenceShape(*rSymShape, *lSymShape, cast<ShapedType>(resVal.getType()).getShape());
       if (resShape == std::nullopt) {
         resVal.setType(analysis.createNewSymbolicShape(resVal.getType()));
         return success();
@@ -271,20 +271,20 @@ struct PropagateElementWiseOp : public OpRewritePattern<OpTy> {
     for (int i = 0; i < lhsRank; i++) {
       // Scenario 2.1: The res dim has been determined to be a static shape.
       //          e.g. (? or 4) + (? or 4) => (4)
-      if (resVal.getType().cast<ShapedType>().getShape()[i] != ShapedType::kDynamic) {
-        (void)symShape.emplace_back(std::to_string(resVal.getType().cast<ShapedType>().getShape()[i]));
+      if (cast<ShapedType>(resVal.getType()).getShape()[i] != ShapedType::kDynamic) {
+        (void)symShape.emplace_back(std::to_string(cast<ShapedType>(resVal.getType()).getShape()[i]));
         continue;
       }
       // Scenario 2.2: (4) + (?) => (4)
-      if (opnd0.getType().cast<ShapedType>().getShape()[i] > 1 &&
-          opnd1.getType().cast<ShapedType>().getShape()[i] == ShapedType::kDynamic) {
-        (void)symShape.emplace_back(std::to_string(opnd0.getType().cast<ShapedType>().getShape()[i]));
+      if (cast<ShapedType>(opnd0.getType()).getShape()[i] > 1 &&
+          cast<ShapedType>(opnd1.getType()).getShape()[i] == ShapedType::kDynamic) {
+        (void)symShape.emplace_back(std::to_string(cast<ShapedType>(opnd0.getType()).getShape()[i]));
         continue;
       }
       //            or (?) + (4) => (4)
-      if (opnd1.getType().cast<ShapedType>().getShape()[i] > 1 &&
-          opnd0.getType().cast<ShapedType>().getShape()[i] == ShapedType::kDynamic) {
-        (void)symShape.emplace_back(std::to_string(opnd1.getType().cast<ShapedType>().getShape()[i]));
+      if (cast<ShapedType>(opnd1.getType()).getShape()[i] > 1 &&
+         cast<ShapedType>( opnd0.getType()).getShape()[i] == ShapedType::kDynamic) {
+        (void)symShape.emplace_back(std::to_string(cast<ShapedType>(opnd1.getType()).getShape()[i]));
         continue;
       }
       // Scenario 2.3: symbolic infer is required for the remaining scenarios.
@@ -315,7 +315,7 @@ struct PropagateTosaBatchMatMulOp : public OpRewritePattern<OpTy> {
     if (analysis.hasSymbolicShape(resVal.getType())) {
       return success();
     }
-    int64_t rank = opnd0.getType().cast<ShapedType>().getRank();
+    int64_t rank = cast<ShapedType>(opnd0.getType()).getRank();
     int64_t fourthRank = 4;
     if (rank == fourthRank && op.getOperation()->getAttr("transpose_b")) {
       if (!symShape1) {
@@ -360,7 +360,7 @@ struct PropagateMindSporeReshapeOp : public OpRewritePattern<mindspore::ReshapeO
     // second infer
     // If two dimensions of the output shape are dynamic, the Op semantics are ambiguous or illegal. And symbolic
     // information cannot be deduced here.
-    auto rankType = resVal.getType().dyn_cast<RankedTensorType>();
+    auto rankType = dyn_cast<RankedTensorType>(resVal.getType());
     if (rankType == nullptr || rankType.getNumDynamicDims() >= 2 || rankType.getNumDynamicDims() == 0) {
       return success();
     }
@@ -373,7 +373,7 @@ struct PropagateMindSporeReshapeOp : public OpRewritePattern<mindspore::ReshapeO
     }
     uint dimIdx = 0, inferDim = 0;
     for (auto sym : *resShape) {
-      if (resVal.getType().cast<ShapedType>().getShape()[dimIdx] == ShapedType::kDynamic) {
+      if (cast<ShapedType>(resVal.getType()).getShape()[dimIdx] == ShapedType::kDynamic) {
         inferDim = dimIdx;
         dimIdx++;
         continue;

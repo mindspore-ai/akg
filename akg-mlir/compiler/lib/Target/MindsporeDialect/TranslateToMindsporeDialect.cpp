@@ -1117,7 +1117,7 @@ void MindBuilder::convertBroadcastToOp(OpBuilder builder, OpNode opNode, SmallVe
   if (existAttr)
     newShape = ArrayRef<int64_t>(getAttrFromJson<SmallVector<int64_t>>(opNode.attrs, kShape, {1}));
   else
-    newShape = outputTys[0].cast<ShapedType>().getShape();
+    newShape = cast<ShapedType>(outputTys[0]).getShape();
 
   if (newShape.size() == 0) {
     newShape = {1};

@@ -157,7 +157,6 @@ void convertToLLVM(OpPassManager &pm, const CpuOptPipelineOptions &options) {
   }
   pm.addPass(createCanonicalizerPass());
   //   MemrefToLLVM must be put before SCFToCF
-  // pm.addPass(createMemRefToLLVMConversionPass());
   pm.addPass(createConvertSCFToCFPass());
   pm.addPass(memref::createExpandStridedMetadataPass());
   pm.addPass(createCanonicalizerPass());
@@ -166,7 +165,6 @@ void convertToLLVM(OpPassManager &pm, const CpuOptPipelineOptions &options) {
   pm.addPass(createConvertVectorToLLVMPass());
   pm.addPass(createArithToLLVMConversionPass());
   pm.addPass(createConvertMathToLLVMPass());
-  // pm.addPass(createConvertLinalgToLLVMPass());
   mlir::MLIRContext tmp_context;
   ConvertFuncToLLVMPassOptions llvmOptions;
   llvmOptions.useBarePtrCallConv = true;

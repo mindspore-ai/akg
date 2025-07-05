@@ -77,7 +77,7 @@ class ConvertMindSporeSliceOp : public OpRewritePattern<SourceOp> {
     // get offsets(starts)
     ArrayRef<int64_t> starts;
     // get strides, default: (1, 1, 1...)
-    ArrayRef<int64_t> strides(SmallVector<int64_t>(op.getType().template cast<ShapedType>().getRank(), 1));
+    ArrayRef<int64_t> strides(SmallVector<int64_t>(cast<ShapedType>(op.getType()).getRank(), 1));
 
     // slice sizes, consists of dynSizes and staticSizes
     // Note: strided_SliceOp only own staticSizes
@@ -122,7 +122,7 @@ class ConvertMindSporeReshapeOp : public OpConversionPattern<mindspore::ReshapeO
 
   LogicalResult matchAndRewrite(mindspore::ReshapeOp reshape, OpAdaptor adaptor,
                                 ConversionPatternRewriter &rewriter) const final {
-    ShapedType resultTy = reshape.getType().template cast<ShapedType>();
+    ShapedType resultTy = cast<ShapedType>(reshape.getType());
     if (adaptor.getNewShapeValue() != nullptr) {
       Value newReshape =
         rewriter.create<tensor::ReshapeOp>(reshape.getLoc(), resultTy, adaptor.getInput(), adaptor.getNewShapeValue());

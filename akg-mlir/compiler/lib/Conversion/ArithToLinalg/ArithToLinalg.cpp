@@ -43,7 +43,7 @@ using namespace mlir;
 
 static bool operateOnTensors(Operation *op) {
   return llvm::all_of(op->getOperandTypes(),
-                      [](Type type) { return type.isa<RankedTensorType>(); });
+                      [](Type type) { return isa<RankedTensorType>(type); });
 }
 
 template <typename UnaryOp, linalg::UnaryFn linalgFn>
@@ -138,7 +138,7 @@ void ConvertArithToLinalgPass::runOnOperation() {
       [](Operation *op) {
         if (auto constantOp = dyn_cast<arith::ConstantOp>(op)) {
           auto denseAttr =
-              constantOp.getValue().dyn_cast<DenseIntOrFPElementsAttr>();
+              dyn_cast<DenseIntOrFPElementsAttr>(constantOp.getValue());
           if (denseAttr && denseAttr.isSplat())
             return false;
           return true;

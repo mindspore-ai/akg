@@ -1081,7 +1081,7 @@ void AKGLoopTiling::runOnOperation() {
   std::vector<SmallVector<affine::AffineForOp, 6>> bands;
   getTileableBands(funcOp, &bands);
   if (getOperation()->getAttr("process")) {
-    target = getOperation()->getAttr("process").dyn_cast<StringAttr>().getValue().str();
+    target = dyn_cast<StringAttr>(getOperation()->getAttr("process")).getValue().str();
   }
 
   if (!isDynamicShape()) {

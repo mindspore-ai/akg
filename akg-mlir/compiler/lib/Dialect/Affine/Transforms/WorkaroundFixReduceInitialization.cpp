@@ -148,7 +148,7 @@ void WorkaroundFixReduceInitializationPass::moveInitializationOp() {
 
 void WorkaroundFixReduceInitializationPass::runOnOperation() {
   func::FuncOp funcOp = getOperation();
-  if (funcOp->hasAttr(kOperatorTypeStr) && funcOp->getAttr(kOperatorTypeStr).dyn_cast<StringAttr>() == kReduceStr) {
+  if (funcOp->hasAttr(kOperatorTypeStr) && dyn_cast<StringAttr>(funcOp->getAttr(kOperatorTypeStr)) == kReduceStr) {
     LLVM_DEBUG({ llvm::dbgs() << DEBUG_TYPE << " - reduce FuncOp\n"; });
     findReduceValue(funcOp);
     moveInitializationOp();

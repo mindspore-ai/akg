@@ -68,7 +68,7 @@ void Tensor::SetStoreTensor(T storeOp, const std::vector<AxisPtr> &loopNest) {
 Tensor::Tensor(mlir::Operation *op, const std::vector<AxisPtr> &loopNest) : op_(op) {
   // 1. get op_type
   if (op->hasAttr("OperatorType")) {
-    opType = op->getAttr("OperatorType").dyn_cast<StringAttr>().getValue().str();
+    opType = dyn_cast<StringAttr>(op->getAttr("OperatorType")).getValue().str();
   } else if (op->hasAttr("reduction_axes")) {
     opType = "Reduce";
     loopNest_ = loopNest;
@@ -222,7 +222,7 @@ GpuModelGraph::GpuModelGraph(const InitGraphPtr &initGraph) : ModelGraph(initGra
 
 void GpuModelGraph::InitResource() {
   if (this->funcOp->getAttr("compute_capability")) {
-    auto compute_capability = funcOp->getAttr("compute_capability").dyn_cast<StringAttr>().getValue().str();
+    auto compute_capability = dyn_cast<StringAttr>(funcOp->getAttr("compute_capability")).getValue().str();
     if (compute_capability == "8.0") {
       hardware = akg::utils::kA100Device;
     } else {

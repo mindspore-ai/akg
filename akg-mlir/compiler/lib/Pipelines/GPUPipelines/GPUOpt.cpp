@@ -63,7 +63,6 @@ void createGpuOptPipeline(OpPassManager &pm, const GPUPipelineOptions &options) 
   nestedFunctionPM.addPass(createCanonicalizerPass());
   nestedFunctionPM.addPass(tosa::createTosaLayerwiseConstantFoldPass());
   nestedFunctionPM.addPass(createTosaMultiReduceToLinalgPass());
-  // nestedFunctionPM.addPass(tosa::createTosaValidationPass());
   nestedFunctionPM.addPass(tosa::createTosaToLinalg());
   nestedFunctionPM.addPass(tosa::createTosaToTensor());
   nestedFunctionPM.addPass(tosa::createTosaToArith());

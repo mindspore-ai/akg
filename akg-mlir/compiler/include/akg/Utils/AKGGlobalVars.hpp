@@ -460,9 +460,9 @@ class ShapeAlignTool {
     if (getFuncArgSizes() == 0 || oldType == newType) {
       return;
     }
-    auto oldShape = oldType.cast<ShapedType>();
+    auto oldShape = cast<ShapedType>(oldType);
     assert(oldShape && "Old Type should be a ShapedType");
-    auto newShape = newType.cast<ShapedType>();
+    auto newShape = cast<ShapedType>(newType);
     assert(newShape && "New Type should be a ShapedType");
     ShapeInfo oldDeviceShape = getCurrShapeInfo(argIdx);
     SmallVector<int64_t> oldShapeList;
@@ -566,7 +566,7 @@ class ShapeAlignTool {
   // And we do align based on the reassociation indices.
   void search(Operation *op, ShapeInfo &originShapes) const {
     if (auto expandShape = dyn_cast<memref::ExpandShapeOp>(op)) {
-      auto shapedType = expandShape.getResultType().cast<ShapedType>();
+      auto shapedType = cast<ShapedType>(expandShape.getResultType());
       if (!shapedType) {
         (void)op->emitError("Op is not shapedType, cannot align shape.");
         return;
@@ -575,7 +575,7 @@ class ShapeAlignTool {
       convertToConstShapes(shapedType, destShapes);
       doAlign(expandShape.getReassociationIndices(), originShapes, destShapes);
     } else if (auto collapse = dyn_cast<memref::CollapseShapeOp>(op)) {
-      auto shapedType = collapse.getSrcType().cast<ShapedType>();
+      auto shapedType = cast<ShapedType>(collapse.getSrcType());
       if (!shapedType) {
         (void)op->emitError("Op is not shapedType, cannot align shape.");
         return;

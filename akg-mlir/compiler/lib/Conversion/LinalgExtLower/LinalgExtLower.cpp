@@ -60,9 +60,9 @@ class GatherOpConverter : public OpRewritePattern<linalgExt::GatherOp> {
     assert(op.hasPureBufferSemantics() && "expected linalg op with buffer semantics");
 
     Value data = op.getOperands()[0];
-    auto dataShape = data.getType().cast<ShapedType>().getShape();
+    auto dataShape = cast<ShapedType>(data.getType()).getShape();
     Value indices = op.getOperands()[1];
-    auto indicesShape = indices.getType().cast<ShapedType>().getShape();
+    auto indicesShape = cast<ShapedType>(indices.getType()).getShape();
     auto axis = op.getAxis();
 
     SmallVector<int64_t, kVectorInitSize> lowerBounds(indicesShape.size(), 0);
@@ -113,8 +113,8 @@ class UnsortedSegmentSumOpConverter : public OpRewritePattern<linalgExt::Unsorte
     assert(op.hasPureBufferSemantics() && "expected linalgExt op with buffer semantics");
     Value data = op.getOperands()[0];
     Value indices = op.getOperands()[1];
-    auto dataShape = data.getType().cast<ShapedType>().getShape();
-    auto indicesShape = indices.getType().cast<ShapedType>().getShape();
+    auto dataShape = cast<ShapedType>(data.getType()).getShape();
+    auto indicesShape = cast<ShapedType>(indices.getType()).getShape();
 
     SmallVector<int64_t, kVectorInitSize> lowerBounds(indicesShape.size(), 0);
     SmallVector<int64_t, kVectorInitSize> steps(indicesShape.size(), 1);
@@ -153,15 +153,15 @@ class UnsortedSegmentSumOpConverter : public OpRewritePattern<linalgExt::Unsorte
             auto maskTy = VectorType::get({veclen}, rewriter.getIntegerType(1));
             Value vectorMask = rewriter.create<vector::CreateMaskOp>(nestedLoc2, maskTy, ValueRange{affineMin});
 
-            Type elementType = data.getType().cast<ShapedType>().getElementType();
+            Type elementType = cast<ShapedType>(data.getType()).getElementType();
             Value padding = nestedBuilder2.create<arith::ConstantOp>(nestedLoc2, elementType,
                                                                      nestedBuilder2.getZeroAttr(elementType));
             auto vectorType = VectorType::get({veclen}, elementType);
 
-            auto dataRank = data.getType().cast<ShapedType>().getRank();
+            auto dataRank = cast<ShapedType>(data.getType()).getRank();
 
             Value output = op.getOutput();
-            auto outputRank = output.getType().cast<ShapedType>().getRank();
+            auto outputRank = cast<ShapedType>(output.getType()).getRank();
             auto dataMap =
               AffineMap::get(dataRank, 0, {nestedBuilder2.getAffineDimExpr(dataRank - 1)}, nestedBuilder2.getContext());
             auto outputMap = AffineMap::get(outputRank, 0, {nestedBuilder2.getAffineDimExpr(outputRank - 1)},

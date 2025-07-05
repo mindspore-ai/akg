@@ -97,8 +97,8 @@ static void elementwiseOpOperandSimplify(PatternRewriter &rewriter, OpOperand *f
   if (!producer.getOutputs()[0].hasOneUse()) {
     return;
   }
-  if (producer.getOutputs()[0].getType().cast<ShapedType>().getElementType() !=
-      consumer.getOutputs()[0].getType().cast<ShapedType>().getElementType()) {
+  if (cast<ShapedType>(producer.getOutputs()[0].getType()).getElementType() !=
+      cast<ShapedType>(consumer.getOutputs()[0].getType()).getElementType()) {
     return;
   }
   // if no symbolic expression, return.
@@ -204,8 +204,8 @@ struct LinalgSimplify : public impl::LinalgSimplifyBase<LinalgSimplify> {
       llvm::SmallVector<std::string> inSymbol = *analysis.getSymbolicShape(inTy);
       llvm::SmallVector<std::string> outSymbol = *analysis.getSymbolicShape(outTy);
       for (uint64_t j = 0; j < inSymbol.size(); j++) {
-        if (inTy.cast<ShapedType>().getShape()[j] != ShapedType::kDynamic ||
-            outTy.cast<ShapedType>().getShape()[j] != ShapedType::kDynamic) {
+        if (cast<ShapedType>(inTy).getShape()[j] != ShapedType::kDynamic ||
+            cast<ShapedType>(outTy).getShape()[j] != ShapedType::kDynamic) {
           continue;
         }
         if (symMap0.find(outSymbol[j]) == symMap0.end()) {

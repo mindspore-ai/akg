@@ -37,7 +37,7 @@ using namespace mlir::mindspore;
 namespace {
 
 DictionaryAttr addOpSymShapeAttr(Type inputType, MLIRContext *context) {
-  ShapedType shapedType = inputType.cast<ShapedType>();
+  ShapedType shapedType = cast<ShapedType>(inputType);
   ArrayRef<int64_t> typeShapes = shapedType.getShape();
   SmallVector<Attribute> symAttr;
   for (size_t i = 0; i < typeShapes.size(); i++) {

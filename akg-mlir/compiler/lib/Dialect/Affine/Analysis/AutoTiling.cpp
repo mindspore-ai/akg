@@ -64,7 +64,7 @@ InitGraphPtr parseIr(const std::vector<SmallVector<affine::AffineForOp, 6>> &ban
 
 ModelGraphPtr buildModelGraph(InitGraphPtr initGraph) {
   auto hardware = initGraph->hardware;
-  auto operatorTypes = initGraph->funcOp->getAttr("OperatorType").dyn_cast<StringAttr>();
+  auto operatorTypes = dyn_cast<StringAttr>(initGraph->funcOp->getAttr("OperatorType"));
   initGraph->setGraphType(operatorTypes);
 
   if (initGraph->graphType == "Reduce") {
@@ -104,7 +104,7 @@ void UniquePrimeCollect(Operation *op) {
     int constValue = 0;
     auto constValueAttr = constOp.getOperation()->getAttr("value");
     if (isa<IntegerAttr>(constValueAttr)) {
-      constValue = static_cast<int>(constValueAttr.dyn_cast<IntegerAttr>().getInt());
+      constValue = static_cast<int>(dyn_cast<IntegerAttr>(constValueAttr).getInt());
     }
     tool.updateVisited(constValue);
   });
@@ -211,4 +211,3 @@ void getTileSizeWithSolver(const TilingSolverPtr &solver, SmallVector<affine::Af
 }  // namespace autotiling
 }  // namespace akg
 }  // namespace mlir
-

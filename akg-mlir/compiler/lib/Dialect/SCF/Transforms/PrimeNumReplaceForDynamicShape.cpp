@@ -63,7 +63,7 @@ struct ConvertInfo {
 static int getIntConst(mlir::Value value) {
   auto constValueAttr = value.getDefiningOp()->getAttr("value");
   if (isa<IntegerAttr>(constValueAttr)) {
-    return constValueAttr.dyn_cast<IntegerAttr>().getInt();
+    return dyn_cast<IntegerAttr>(constValueAttr).getInt();
   }
   return 0;
 }
@@ -86,8 +86,8 @@ static Value getReplacedGpuIter(Operation *primeOp, gpu::LaunchOp gpuLaunch, Ope
   };
 
   for (auto attr : attrs) {
-    auto attrNameStr = attr.getName().dyn_cast<StringAttr>();
-    auto attrValueInt = attr.getValue().dyn_cast_or_null<IntegerAttr>();
+    auto attrNameStr = dyn_cast<StringAttr>(attr.getName());
+    auto attrValueInt = dyn_cast_or_null<IntegerAttr>(attr.getValue());
     if (!attrNameStr || !attrValueInt || attrValueInt.getInt() != replacedPrime) {
       continue;
     }

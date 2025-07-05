@@ -38,7 +38,7 @@ static Type RemoveTypeSymbolic(Type type) {
   if (!analysis.hasSymbolicShape(type)) {
     return type;
   }
-  return RankedTensorType::get(type.cast<ShapedType>().getShape(), type.cast<ShapedType>().getElementType());
+  return RankedTensorType::get(cast<ShapedType>(type).getShape(), cast<ShapedType>(type).getElementType());
 }
 
 static void RemoveFuncSymbolic(func::FuncOp &func) {

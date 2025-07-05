@@ -343,7 +343,7 @@ bool AKGMemoryPromotion::DirectlyPromoteGlobalTempBuffer() {
     if (tempGm != redAlloc) {
       continue;
     }
-    auto origType = tempGm.getType().dyn_cast<MemRefType>();
+    auto origType = dyn_cast<MemRefType>(tempGm.getType());
     auto newType = MemRefType::get(origType.getShape(), origType.getElementType(), {}, fastMemorySpace);
     for (auto *user : redAlloc->getUsers()) {
       for (auto operand : user->getOperands()) {

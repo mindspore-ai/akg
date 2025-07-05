@@ -83,9 +83,9 @@ FailureOr<std::string> LinalgTemplatedPass::getTemplateFile(LinalgOp linalgOp) {
   std::string type_postfix = "";
   llvm::raw_string_ostream os(type_postfix);
   for (auto type : linalgOp->getOperandTypes()) {
-    if (auto tensorType = type.dyn_cast<TensorType>()) {
+    if (auto tensorType = dyn_cast<TensorType>(type)) {
       os << "_" << tensorType.getElementType();
-    } else if (auto memType = type.dyn_cast<MemRefType>()) {
+    } else if (auto memType = dyn_cast<MemRefType>(type)) {
       os << "_" << memType.getElementType();
     } else {
       os << "_" << type;

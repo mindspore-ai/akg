@@ -83,26 +83,26 @@ static Value createAcoshOp(Operation *op, const ValueRange args, ArrayRef<Type> 
 
 static Value createMathOps(Operation *op, ValueRange args, ArrayRef<Type> resultTypes, PatternRewriter &rewriter) {
   Location loc = op->getLoc();
-  auto elementTy = op->getOperand(0).getType().cast<ShapedType>().getElementType();
+  auto elementTy = cast<ShapedType>(op->getOperand(0).getType()).getElementType();
   // mindspore::SinOp
-  if (isa<mindspore::SinOp>(op) && elementTy.isa<FloatType>()) {
+  if (isa<mindspore::SinOp>(op) && isa<FloatType>(elementTy)) {
     return rewriter.create<mlir::math::SinOp>(loc, resultTypes, args);
   }
 
   // mindspore::CosOp
-  if (isa<mindspore::CosOp>(op) && elementTy.isa<FloatType>()) {
+  if (isa<mindspore::CosOp>(op) && isa<FloatType>(elementTy)) {
     return rewriter.create<mlir::math::CosOp>(loc, resultTypes, args);
   }
 
-  if (isa<mindspore::Atan2Op>(op) && elementTy.isa<FloatType>()) {
+  if (isa<mindspore::Atan2Op>(op) && isa<FloatType>(elementTy)) {
     return rewriter.create<mlir::math::Atan2Op>(loc, resultTypes, args);
   }
 
-  if (isa<mindspore::AsinhOp>(op) && elementTy.isa<FloatType>()) {
+  if (isa<mindspore::AsinhOp>(op) && isa<FloatType>(elementTy)) {
     return createAsinhOp(op, args, resultTypes, rewriter);
   }
 
-  if (isa<mindspore::AcoshOp>(op) && elementTy.isa<FloatType>()) {
+  if (isa<mindspore::AcoshOp>(op) && isa<FloatType>(elementTy)) {
     return createAcoshOp(op, args, resultTypes, rewriter);
   }
   return nullptr;
@@ -111,9 +111,9 @@ static Value createMathOps(Operation *op, ValueRange args, ArrayRef<Type> result
 static Value createLinalgBodyCalculationForElementwiseOp(Operation *op, ValueRange args, ArrayRef<Type> resultTypes,
                                                          PatternRewriter &rewriter) {
   Location loc = op->getLoc();
-  auto elementTy = op->getOperand(0).getType().cast<ShapedType>().getElementType();
+  auto elementTy = cast<ShapedType>(op->getOperand(0).getType()).getElementType();
   // mindspore::AddNOp
-  if (isa<mindspore::AddNOp>(op) && elementTy.isa<FloatType>()) {
+  if (isa<mindspore::AddNOp>(op) && isa<FloatType>(elementTy)) {
     Value add = rewriter.create<mlir::arith::AddFOp>(loc, resultTypes, args[0], args[1]);
     for (uint64_t i = 2; i < args.size(); i++) {
       add = rewriter.create<mlir::arith::AddFOp>(loc, resultTypes, add, args[i]);
@@ -127,20 +127,20 @@ static Value createLinalgBodyCalculationForElementwiseOp(Operation *op, ValueRan
 
   // mindspore::DivOp
   if (isa<mindspore::DivOp>(op)) {
-    if (elementTy.isa<IntegerType>()) {
+    if (isa<IntegerType>(elementTy)) {
       return rewriter.create<arith::DivSIOp>(loc, resultTypes, args);
     }
-    if (elementTy.isa<FloatType>()) {
+    if (isa<FloatType>(elementTy)) {
       return rewriter.create<arith::DivFOp>(loc, resultTypes, args);
     }
   }
 
-  if (isa<mindspore::SqrtOp>(op) && elementTy.isa<FloatType>()) {
+  if (isa<mindspore::SqrtOp>(op) && isa<FloatType>(elementTy)) {
     return rewriter.create<mlir::math::SqrtOp>(loc, resultTypes, args);
   }
 
   // MindSpore::LessOp
-  if (isa<mindspore::LessOp>(op) && elementTy.isa<FloatType>()) {
+  if (isa<mindspore::LessOp>(op) && isa<FloatType>(elementTy)) {
     return rewriter.create<arith::CmpFOp>(loc, arith::CmpFPredicate::OLT, args[0], args[1]);
   }
 
@@ -149,7 +149,7 @@ static Value createLinalgBodyCalculationForElementwiseOp(Operation *op, ValueRan
   }
 
   // MindSpore::LessEqualOp
-  if (isa<mindspore::LessEqualOp>(op) && elementTy.isa<FloatType>()) {
+  if (isa<mindspore::LessEqualOp>(op) && isa<FloatType>(elementTy)) {
     return rewriter.create<arith::CmpFOp>(loc, arith::CmpFPredicate::OLE, args[0], args[1]);
   }
 
@@ -167,7 +167,7 @@ static LogicalResult elementwiseMatchAndRewriteHelper(Operation *operation, Patt
   assert(operation->getNumResults() == 1 && "All MindSpore elementwise ops should only return a single result.");
 
   auto results = operation->getResults();
-  auto resultTy = operation->getResult(0).getType().dyn_cast<ShapedType>();
+  auto resultTy = dyn_cast<ShapedType>(operation->getResult(0).getType());
   if (!resultTy) {
     return rewriter.notifyMatchFailure(operation, "All results must be a shaped type");
   }
@@ -184,10 +184,10 @@ static LogicalResult elementwiseMatchAndRewriteHelper(Operation *operation, Patt
   SmallVector<Value> emptyTensors;
 
   SmallVector<Value> dynDims;
-  dynDims.resize(results.front().getType().cast<ShapedType>().getRank());
+  dynDims.resize(cast<ShapedType>(results.front().getType()).getRank());
 
   for (auto arg : oprds) {
-    auto operandTy = arg.getType().cast<ShapedType>();
+    auto operandTy = cast<ShapedType>(arg.getType());
     for (int i = 0; i < operandTy.getRank(); i++) {
       if (operandTy.isDynamicDim((unsigned long)i) && !dynDims[(unsigned int)i]) {
         dynDims[i] = rewriter.create<tensor::DimOp>(loc, arg, (unsigned long)i);
@@ -198,10 +198,10 @@ static LogicalResult elementwiseMatchAndRewriteHelper(Operation *operation, Patt
   SmallVector<Value> filteredDims = condenseValues(dynDims);
 
   for (auto result : results) {
-    if (RankedTensorType rankedType = result.getType().dyn_cast<RankedTensorType>()) {
+    if (RankedTensorType rankedType = dyn_cast<RankedTensorType>(result.getType())) {
       emptyTensors.push_back(rewriter.create<tensor::EmptyOp>(loc, rankedType, filteredDims));
     } else {
-      auto curResultTy = result.getType().template cast<ShapedType>();
+      auto curResultTy = cast<ShapedType>(result.getType());
       emptyTensors.push_back(
         rewriter.create<tensor::EmptyOp>(loc, curResultTy.getShape(), curResultTy.getElementType(), filteredDims));
     }
@@ -217,7 +217,7 @@ static LogicalResult elementwiseMatchAndRewriteHelper(Operation *operation, Patt
 
   // Input indexing maps may be broadcasted.
   for (Value operand : oprds) {
-    ShapedType type = operand.getType().cast<ShapedType>();
+    ShapedType type = cast<ShapedType>(operand.getType());
     if (type.getShape() == resultTy.getShape()) {
       operands.push_back(operand);
       indexingMaps.push_back(rewriter.getMultiDimIdentityMap(rank));
@@ -317,13 +317,13 @@ class MindSporeGatherConverter : public OpConversionPattern<mindspore::GatherOp>
     Value data = op.getOperands()[0];
     Value indices = op.getOperands()[1];
     Value output = op.getOutput();
-    auto indicesRank = indices.getType().cast<ShapedType>().getRank();
-    auto outputTy = op.getType().template cast<ShapedType>();
-    auto outputRank = output.getType().template cast<ShapedType>().getRank();
+    auto indicesRank = cast<ShapedType>(indices.getType()).getRank();
+    auto outputTy = cast<ShapedType>( op.getType());
+    auto outputRank = cast<ShapedType>(output.getType()).getRank();
     // axis
     int64_t axis = op.getAxisAttr().getInt();
     if (axis < 0) {
-      axis += data.getType().cast<ShapedType>().getRank();
+      axis += cast<ShapedType>(data.getType()).getRank();
     }
     // batchDims
     uint64_t batchDims = 0;
@@ -335,7 +335,7 @@ class MindSporeGatherConverter : public OpConversionPattern<mindspore::GatherOp>
     }
     // create outs emptyTensor
     Value emptyTensor;
-    if (auto rankedTensorType = op.getType().template cast<RankedTensorType>()) {
+    if (auto rankedTensorType = cast<RankedTensorType>(op.getType())) {
       emptyTensor = rewriter.create<tensor::EmptyOp>(loc, outputTy.getShape(), outputTy.getElementType(),
                                                      rankedTensorType.getEncoding());
     } else {
@@ -382,14 +382,14 @@ class MindSporeUnsortedSegmentSumOpConverter : public OpConversionPattern<mindsp
   LogicalResult matchAndRewrite(mindspore::UnsortedSegmentSumOp op, typename mindspore::UnsortedSegmentSumOp::Adaptor,
                                 ConversionPatternRewriter &rewriter) const final {
     Location loc = op.getLoc();
-    auto outputTy = op.getType().cast<RankedTensorType>();
+    auto outputTy = cast<RankedTensorType>(op.getType());
     auto outputElementTy = outputTy.getElementType();
     auto zeroAttrEType = rewriter.getZeroAttr(outputElementTy);
     auto zeroEType = rewriter.create<arith::ConstantOp>(loc, zeroAttrEType);
     auto zeroICst = rewriter.create<arith::ConstantIndexOp>(loc, 0);
     auto oneICst = rewriter.create<arith::ConstantIndexOp>(loc, 1);
-    auto indicesTy = op.getSegmentIds().getType().dyn_cast<TensorType>();
-    auto dataTy = op.getX().getType().dyn_cast<TensorType>();
+    auto indicesTy = dyn_cast<TensorType>(op.getSegmentIds().getType());
+    auto dataTy = dyn_cast<TensorType>(op.getX().getType());
     // Collapse acc and data reductiondims on 1D for tiling purpose.
     // We collapse index dimensions to improve pipelining opportunities.
     Value collapsedData;
@@ -412,7 +412,7 @@ class MindSporeUnsortedSegmentSumOpConverter : public OpConversionPattern<mindsp
       indexReassociationMap.push_back({llvm::to_vector(llvm::seq<int64_t>(0, indicesTy.getRank()))});
       collapsedIndex = rewriter.create<tensor::CollapseShapeOp>(loc, op.getSegmentIds(), indexReassociationMap);
     }
-    auto collapsedDataTy = collapsedData.getType().cast<RankedTensorType>();
+    auto collapsedDataTy = cast<RankedTensorType>(collapsedData.getType());
     auto uniqSize = SmallVector<int64_t>({1});
     ArrayRef<int64_t> sliceShape = outputTy.getRank() == 1 ? uniqSize : collapsedDataTy.getShape().take_back();
     Value emptyTensor = rewriter.create<tensor::EmptyOp>(loc, outputTy, ValueRange{});
@@ -423,7 +423,7 @@ class MindSporeUnsortedSegmentSumOpConverter : public OpConversionPattern<mindsp
     } else {
       auto collapsedAccShape = llvm::to_vector(outputTy.getShape().take_front());
       collapsedAccShape.push_back(sliceShape[0]);
-      auto collapsedAccTy = outputTy.clone(collapsedAccShape).cast<RankedTensorType>();
+      auto collapsedAccTy = cast<RankedTensorType>(outputTy.clone(collapsedAccShape));
       SmallVector<ReassociationIndices> accReassociationMap{{0}};
       // Associate reductionDims
       accReassociationMap.push_back({llvm::to_vector(llvm::seq<int64_t>(1, outputTy.getRank()))});
@@ -464,13 +464,13 @@ class MindSporeUnsortedSegmentSumOpConverter : public OpConversionPattern<mindsp
                                  ValueRange lbs, ValueRange ubs, ValueRange steps, Value collapsedData,
                                  Value collapsedResult, Value collapsedIndex, SmallVectorImpl<Value> &sliceSizes,
                                  SmallVectorImpl<Value> &accStrides, SmallVectorImpl<Value> &accOffsets) const {
-    auto outputTy = op.getType().cast<RankedTensorType>();
+    auto outputTy = cast<RankedTensorType>(op.getType());
     auto zeroICst = rewriter.create<arith::ConstantIndexOp>(loc, 0);
     auto oneICst = rewriter.create<arith::ConstantIndexOp>(loc, 1);
-    auto collapsedDataTy = collapsedData.getType().cast<RankedTensorType>();
+    auto collapsedDataTy = cast<RankedTensorType>(collapsedData.getType());
     auto uniqSize = SmallVector<int64_t>({1});
     ArrayRef<int64_t> sliceShape = outputTy.getRank() == 1 ? uniqSize : collapsedDataTy.getShape().take_back();
-    auto sliceTy = outputTy.clone(sliceShape).cast<RankedTensorType>();
+    auto sliceTy = cast<RankedTensorType>(outputTy.clone(sliceShape));
     SmallVector<Value> dataOffsets(collapsedDataTy.getRank(), zeroICst);
     SmallVector<Value> dataStrides(collapsedDataTy.getRank(), oneICst);
     auto toOpFoldResult = [](Value v) -> OpFoldResult {
@@ -540,16 +540,16 @@ class MindsporeSpecificOpConverter : public OpConversionPattern<sourceOp> {
     // mindspore::UnsortedSegmentSumOp
     if (isa<mindspore::UnsortedSegmentSumOp>(op.getOperation())) {
       Attribute numSegmentsAttr = dyn_cast<mindspore::UnsortedSegmentSumOp>(op.getOperation()).getNumSegmentsAttr();
-      if (numSegmentsAttr.isa<DenseI64ArrayAttr>()) {
+      if (isa<DenseI64ArrayAttr>(numSegmentsAttr)) {
         return rewriter.notifyMatchFailure(op, "num_segments as tensor is unsupported temporarily");
       }
     }
 
-    auto outputTy = op.getType().template cast<ShapedType>();
+    auto outputTy = cast<ShapedType>(op.getType());
 
     // create outs emptyTensor
     Value emptyTensor;
-    if (auto rankedTensorType = op.getType().template cast<RankedTensorType>()) {
+    if (auto rankedTensorType = cast<RankedTensorType>(op.getType())) {
       emptyTensor = rewriter.create<tensor::EmptyOp>(loc, outputTy.getShape(), outputTy.getElementType(),
                                                      rankedTensorType.getEncoding());
     } else {
@@ -585,21 +585,21 @@ static TypedAttr createIntInitValue(Operation *op, const Type elementTy, Pattern
 }
 
 static TypedAttr createFloatInitValue(Operation *op, const Type elementTy, PatternRewriter &rewriter) {
-  if (isa<mindspore::ReduceSumOp>(op) && elementTy.isa<FloatType>()) {
+  if (isa<mindspore::ReduceSumOp>(op) && isa<FloatType>(elementTy)) {
     return rewriter.getFloatAttr(elementTy, 0.0);
   }
-  if (isa<mindspore::ReduceProdOp>(op) && elementTy.isa<FloatType>()) {
+  if (isa<mindspore::ReduceProdOp>(op) && isa<FloatType>(elementTy)) {
     return rewriter.getFloatAttr(elementTy, 1.0);
   }
-  if (isa<mindspore::ReduceMinOp>(op) && elementTy.isa<FloatType>()) {
+  if (isa<mindspore::ReduceMinOp>(op) && isa<FloatType>(elementTy)) {
     return rewriter.getFloatAttr(elementTy,
-                                 APFloat::getLargest(elementTy.cast<FloatType>().getFloatSemantics(), false));
+                                 APFloat::getLargest(cast<FloatType>(elementTy).getFloatSemantics(), false));
   }
-  if (isa<mindspore::ReduceMaxOp>(op) && elementTy.isa<FloatType>()) {
-    return rewriter.getFloatAttr(elementTy, APFloat::getLargest(elementTy.cast<FloatType>().getFloatSemantics(), true));
+  if (isa<mindspore::ReduceMaxOp>(op) && isa<FloatType>(elementTy)) {
+    return rewriter.getFloatAttr(elementTy, APFloat::getLargest(cast<FloatType>(elementTy).getFloatSemantics(), true));
   }
-  if (isa<mindspore::ReduceAnyOp>(op) && elementTy.isa<FloatType>()) {
-    return rewriter.getFloatAttr(elementTy, APFloat::getLargest(elementTy.cast<FloatType>().getFloatSemantics(), true));
+  if (isa<mindspore::ReduceAnyOp>(op) && isa<FloatType>(elementTy)) {
+    return rewriter.getFloatAttr(elementTy, APFloat::getLargest(cast<FloatType>(elementTy).getFloatSemantics(), true));
   }
   llvm_unreachable("current reduce pattern is not supported");
 }
@@ -611,10 +611,10 @@ static TypedAttr createInitValueForReduce(Operation *op, const Type elementTy, P
   if (isa<mindspore::ReduceAnyOp>(op) && elementTy.isInteger(1)) {
     return rewriter.getIntegerAttr(elementTy, APInt::getZero(1));
   }
-  if (elementTy.isa<FloatType>()) {
+  if (isa<FloatType>(elementTy)) {
     return createFloatInitValue(op, elementTy, rewriter);
   }
-  if (elementTy.isa<IntegerType>()) {
+  if (isa<IntegerType>(elementTy)) {
     return createIntInitValue(op, elementTy, rewriter);
   }
   llvm_unreachable("current reduce pattern is not supported");
@@ -669,10 +669,10 @@ static Value createCombinerForReduce(Operation *op, ValueRange args, const Type 
     return rewriter.create<arith::OrIOp>(loc, args);
   }
 
-  if (elementTy.isa<FloatType>()) {
+  if (isa<FloatType>(elementTy)) {
     return createFloatCombiner(op, args, rewriter);
   }
-  if (elementTy.isa<IntegerType>()) {
+  if (isa<IntegerType>(elementTy)) {
     return createIntCombiner(op, args, rewriter);
   }
   llvm_unreachable("current reduce pattern is not supported");
@@ -744,13 +744,13 @@ class ConvertMindSporeTileOp : public OpRewritePattern<mindspore::TileOp> {
   LogicalResult matchAndRewrite(mindspore::TileOp op, PatternRewriter &rewriter) const final {
     auto loc = op->getLoc();
     Value input = op.getInput();
-    auto inputTy = input.getType().cast<ShapedType>();
+    auto inputTy = cast<ShapedType>(input.getType());
     auto inputShape = inputTy.getShape();
     auto elementTy = inputTy.getElementType();
     int64_t rank = inputTy.getRank();
     uint64_t newRankSize = op.getNewRankSize();
     assert(newRankSize >= (uint64_t)inputTy.getRank());
-    auto resultTy = op.getType().cast<ShapedType>();
+    auto resultTy = cast<ShapedType>(op.getType());
     ArrayRef<int64_t> multiples = op.getMultiples();
 
     // todo(xinkai): reuse the tosa.tile op's lower pattern temporarily. In fact, the semantics of mindspore.tile
@@ -808,7 +808,7 @@ class ConvertMindSporeBroadcastToOp : public OpRewritePattern<mindspore::Broadca
     MLIRContext *context = rewriter.getContext();
     auto loc = op.getLoc();
     Value input = op.getInput();
-    auto inputTy = input.getType().cast<ShapedType>();
+    auto inputTy = cast<ShapedType>(input.getType());
     auto inputElementTy = inputTy.getElementType();
     assert(inputTy.getRank() > 0);
     uint64_t newRankSize = op.getNewRankSize();
@@ -842,7 +842,7 @@ class ConvertMindSporeBroadcastToOp : public OpRewritePattern<mindspore::Broadca
       RankedTensorType reshapeTy = RankedTensorType::get(newInputShape, inputElementTy);
       auto reshape = rewriter.create<mindspore::ReshapeOp>(loc, reshapeTy, input, reshapeAttr);
       input = reshape.getResult();
-      inputShape = input.getType().cast<ShapedType>().getShape();
+      inputShape = cast<ShapedType>(input.getType()).getShape();
     }
     // 3.broadcasts input tensor to a given shape
     llvm::SmallVector<int64_t> multiples;
@@ -868,9 +868,9 @@ class ConvertMindSporeBroadcastToOp : public OpRewritePattern<mindspore::Broadca
   LogicalResult broadcastToOpLowerHelper(mindspore::BroadcastToOp op, PatternRewriter &rewriter) const {
     auto loc = op.getLoc();
     auto input = op.getInput();
-    auto inputTy = input.getType().cast<ShapedType>();
+    auto inputTy = cast<ShapedType>(input.getType());
     auto inputShape = inputTy.getShape();
-    auto resultTy = op.getType().cast<ShapedType>();
+    auto resultTy = cast<ShapedType>(op.getType());
     auto resultShape = resultTy.getShape();
     auto elementTy = inputTy.getElementType();
     int64_t rank = inputTy.getRank();
@@ -1067,10 +1067,10 @@ class ConvertMindSporeReduceOp : public OpConversionPattern<sourceOp> {
     Operation *op = mindsporeOp;
     Value opnd = adaptor.getInput();
     auto loc = op->getLoc();
-    auto resultTy = op->getResult(0).getType().dyn_cast<RankedTensorType>();
+    auto resultTy = dyn_cast<RankedTensorType>(op->getResult(0).getType());
     auto resultElementTy = resultTy.getElementType();
     auto encoding = resultTy.getEncoding();
-    auto inputTy = opnd.getType().cast<RankedTensorType>();
+    auto inputTy = cast<RankedTensorType>(opnd.getType());
 
     SmallVector<int64_t> axes(adaptor.getAxis().begin(), adaptor.getAxis().end());
 
@@ -1089,7 +1089,7 @@ class ConvertMindSporeReduceOp : public OpConversionPattern<sourceOp> {
 
     std::string process;
     if (op->getParentOp()->getAttr("process")) {
-      process = op->getParentOp()->getAttr("process").dyn_cast<StringAttr>().getValue().str();
+      process = dyn_cast<StringAttr>(op->getParentOp()->getAttr("process")).getValue().str();
     } else {
       process = "cpu";
       emitWarning(op->getParentOp()->getLoc()) << " Cannot find processing type (cpu or cuda). Default is cpu. \n";
@@ -1106,7 +1106,7 @@ class ConvertMindSporeReduceOp : public OpConversionPattern<sourceOp> {
       collapse_map.push_back(expand_strategy);
       auto collapseOp = rewriter.create<tensor::CollapseShapeOp>(loc, collapseTy, opnd, collapse_map);
       opnd = collapseOp.getResult();
-      inputTy = opnd.getType().cast<RankedTensorType>();
+      inputTy = cast<RankedTensorType>(opnd.getType());
       axes = {0};
     }
 
@@ -1119,7 +1119,7 @@ class ConvertMindSporeReduceOp : public OpConversionPattern<sourceOp> {
     //        %3 = "mindspore.reduce_any"(%2) {axis = array<i64: 0, 1>, keepdims = true, ori_op = "ElemAny"} :
     //          (tensor<4096x1024xi1>) -> tensor<1xf32>
     // ElemAny pre-processing : Cast input to newType(I32Type) and create linalg.genericOp based on the newTpe.
-    if (isa<mindspore::ReduceAnyOp>(op) && op->getAttr("ori_op").cast<StringAttr>().str() == "ElemAny") {
+    if (isa<mindspore::ReduceAnyOp>(op) && cast<StringAttr>(op->getAttr("ori_op")).str() == "ElemAny") {
       inputTy = RankedTensorType::get(inputTy.getShape(), rewriter.getI32Type(), inputTy.getEncoding());
       opnd = rewriter.create<tosa::CastOp>(op->getLoc(), inputTy, opnd);
       reduceTy = RankedTensorType::get(reduceOutShape, inputTy.getElementType(), encoding);
@@ -1152,11 +1152,11 @@ class ConvertMindSporeReduceOp : public OpConversionPattern<sourceOp> {
       });
     opnd = ReductionOp.getResult(0);
     // ElemAny post-processing : Cast ReductionOp's result back to ElemAny's type.
-    if (isa<mindspore::ReduceAnyOp>(op) && op->getAttr("ori_op").cast<StringAttr>().str() == "ElemAny") {
+    if (isa<mindspore::ReduceAnyOp>(op) && cast<StringAttr>(op->getAttr("ori_op")).str() == "ElemAny") {
       auto newTy = RankedTensorType::get(reduceOutShape, resultTy.getElementType(), encoding);
       opnd = rewriter.create<tosa::CastOp>(op->getLoc(), newTy, opnd);
     }
-    int64_t expandInputRank = initTensor.getType().cast<ShapedType>().getRank();
+    int64_t expandInputRank = cast<ShapedType>(initTensor.getType()).getRank();
     int64_t expandOutputRank = resultTy.getRank();
     if (keep_dims && (expandInputRank != 0)) {  // keepdims, dim >= 1 after reduce, expand to output
                                                 // shape
@@ -1193,7 +1193,7 @@ class MindsporeMatMulOpConverter : public OpConversionPattern<SrcOp> {
 
     Operation *op = mindsporeOp;
     auto output = op->getResult(0);
-    auto outputTy = output.getType().cast<ShapedType>();
+    auto outputTy = cast<ShapedType>(output.getType());
     auto outputRank = outputTy.getShape().size();
     const size_t nonBatchAxisNum = 2;
     size_t batchNum = outputRank - nonBatchAxisNum;
@@ -1202,8 +1202,8 @@ class MindsporeMatMulOpConverter : public OpConversionPattern<SrcOp> {
     // If transposeB is true, inputB shape is [N,K] or [B,N,K], else is [K,N] or [B,K,N]
     auto locNInInput = int(batchNum) + int(!transposeB);
 
-    auto firstOperandTy = op->getOperand(0).getType().cast<ShapedType>();
-    auto secondOperandTy = op->getOperand(1).getType().cast<ShapedType>();
+    auto firstOperandTy = cast<ShapedType>(op->getOperand(0).getType());
+    auto secondOperandTy = cast<ShapedType>(op->getOperand(1).getType());
     Location loc = op->getLoc();
 
     SmallVector<Value> dynDims;

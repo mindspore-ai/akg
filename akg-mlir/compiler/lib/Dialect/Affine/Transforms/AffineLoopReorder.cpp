@@ -134,7 +134,7 @@ void AffineLoopReorder::runOnOperation() {
   auto funcOp = getOperation();
 
   if (!funcOp->hasAttr("OperatorType") ||
-      funcOp->getAttr("OperatorType").dyn_cast<StringAttr>().getValue().str() != "Reduce") {
+      dyn_cast<StringAttr>(funcOp->getAttr("OperatorType")).getValue().str() != "Reduce") {
     return;
   }
 

@@ -104,7 +104,7 @@ void MemRefDependenceGraph::addEdge(unsigned srcId, unsigned dstId, Value value)
   if (!hasEdge(srcId, dstId, value)) {
     outEdges[srcId].push_back({dstId, value});
     inEdges[dstId].push_back({srcId, value});
-    if (value.getType().isa<MemRefType>()) {
+    if (isa<MemRefType>(value.getType())) {
       memrefEdgeCount[value]++;
     }
   }
@@ -230,7 +230,7 @@ void MemRefDependenceGraph::createInitNode(DenseMap<Value, SetVector<unsigned>> 
       // Create graph node for top-level Call Op that takes any argument of
       // memref type. Call Op that returns one or more memref type results
       // is already taken care of, by the previous conditions.
-      if (llvm::any_of(op->getOperandTypes(), [&](Type t) { return t.isa<MemRefType>(); })) {
+      if (llvm::any_of(op->getOperandTypes(), [&](Type t) { return isa<MemRefType>(t); })) {
         Node node(nextNodeId++, op);
         nodes.insert({node.id, node});
       }

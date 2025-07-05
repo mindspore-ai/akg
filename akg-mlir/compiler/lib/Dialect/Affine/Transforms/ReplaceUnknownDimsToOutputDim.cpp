@@ -68,7 +68,7 @@ std::vector<std::string> findSymbol(const std::string &str) {
 std::string getOutputSymbol(mlir::DictionaryAttr dictAttr, std::string target) {
   for (auto &keyValuePair : dictAttr) {
     auto key = keyValuePair.getName().str();
-    auto value = keyValuePair.getValue().cast<mlir::StringAttr>().str();
+    auto value = cast<mlir::StringAttr>(keyValuePair.getValue()).str();
     std::vector<std::string> symbols = findSymbol(value);
     bool flag = false;
     for (auto s : symbols) {

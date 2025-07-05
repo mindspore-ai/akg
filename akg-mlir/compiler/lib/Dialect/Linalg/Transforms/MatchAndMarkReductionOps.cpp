@@ -133,7 +133,7 @@ struct MatchAndMarkReductionOps : public impl::MatchAndMarkReductionOpsBase<Matc
     Operation *funcOp = getOperation();
 
     if (!(funcOp->hasAttr(kOperatorTypeStr) &&
-          funcOp->getAttr(kOperatorTypeStr).dyn_cast<StringAttr>() == kReduceStr)) {
+          dyn_cast<StringAttr>(funcOp->getAttr(kOperatorTypeStr)) == kReduceStr)) {
       return;
     }
     if (this->dialect == "linalg") {

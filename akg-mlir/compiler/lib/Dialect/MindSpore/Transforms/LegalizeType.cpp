@@ -35,7 +35,7 @@ using namespace mlir::mindspore;
 namespace {
 
 static Value getCastedValue(PatternRewriter &rewriter, Value oper, Type toElemTy) {
-  ShapedType shapedType = oper.getType().cast<ShapedType>();
+  ShapedType shapedType = cast<ShapedType>(oper.getType());
   if (shapedType.getElementType() == toElemTy)
     return oper;
  
@@ -56,7 +56,7 @@ static Operation* createNewOp(PatternRewriter &rewriter,
 
   auto newOp = rewriter.clone(*op, mapper);
   for (const auto &[idx, res] : llvm::enumerate(op->getResults())) {
-    ShapedType shapedType = res.getType().cast<ShapedType>();
+    ShapedType shapedType = cast<ShapedType>(res.getType());
     auto newResTy = shapedType.clone(rewriter.getI64Type());
     newOp->getResult(idx).setType(newResTy);
   }

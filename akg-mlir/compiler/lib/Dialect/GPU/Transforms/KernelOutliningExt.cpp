@@ -78,25 +78,6 @@ static void injectGpuIndexOperations(Location loc, Region &launchFuncOpBody, Reg
   }
 }
 
-/// Return the provided KernelDim3 as an array of i32 constants if possible.
-static DenseI32ArrayAttr maybeConstantDimsAttr(gpu::KernelDim3 dims) {
-  SmallVector<int32_t, 3> constants;
-  MLIRContext *ctx = dims.x.getContext();
-  for (Value v : {dims.x, dims.y, dims.z}) {
-    APInt constValue;
-    if (!matchPattern(v, m_ConstantInt(&constValue))) {
-      return nullptr;
-    }
-    // In the event someone called for a too-large block or grid dimension,
-    // don't set bounds as it is likely to cause more confusing behavior.
-    if (constValue.ugt(std::numeric_limits<uint32_t>::max())) {
-      return nullptr;
-    }
-    constants.push_back(constValue.getLimitedValue(std::numeric_limits<uint32_t>::max()));
-  }
-  return DenseI32ArrayAttr::get(ctx, constants);
-}
-
 static bool idxIsInVector(size_t funcIdx, SmallVector<int, kVectorInitSize8> &mapResult) {
   return std::any_of(mapResult.begin(), mapResult.end(),
                      [funcIdx](int idx) { return idx == static_cast<int>(funcIdx); });
@@ -300,7 +281,7 @@ class GpuKernelOutliningExt : public impl::GpuKernelOutliningExtBase<GpuKernelOu
         return failure();
       }
 
-      dataLayoutSpec = resultAttr.dyn_cast<DataLayoutSpecInterface>();
+      dataLayoutSpec = dyn_cast<DataLayoutSpecInterface>(resultAttr);
       if (!dataLayoutSpec) {
         return failure();
       }
@@ -354,7 +335,7 @@ class GpuKernelOutliningExt : public impl::GpuKernelOutliningExtBase<GpuKernelOu
     getOperation()->walk([&](gpu::LaunchFuncOp funcOp) {
       auto operands = funcOp.getKernelOperands();
       for (size_t i = 0; i < mainFuncSize; i++) {
-        mlir::MemRefType memrefType = operands[i].getType().cast<mlir::MemRefType>();
+        mlir::MemRefType memrefType = cast<mlir::MemRefType>(operands[i].getType());
         int64_t offset;
         SmallVector<int64_t> strides;
         if (failed(getStridesAndOffset(memrefType, strides, offset)))
@@ -453,7 +434,7 @@ class GpuKernelOutliningExt : public impl::GpuKernelOutliningExtBase<GpuKernelOu
       if (std::optional<SymbolTable::UseRange> symbolUses =
             SymbolTable::getSymbolUses(symbolDefWorklist.pop_back_val())) {
         for (SymbolTable::SymbolUse symbolUse : *symbolUses) {
-          StringRef symbolName = symbolUse.getSymbolRef().cast<FlatSymbolRefAttr>().getValue();
+          StringRef symbolName = cast<FlatSymbolRefAttr>(symbolUse.getSymbolRef()).getValue();
           if (symbolTable.lookup(symbolName)) {
             continue;
           }

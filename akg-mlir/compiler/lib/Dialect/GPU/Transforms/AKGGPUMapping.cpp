@@ -81,7 +81,7 @@ bool isConstant(mlir::Value value) {
 
 int getIntConst(mlir::Value value) {
   auto constValueAttr = value.getDefiningOp()->getAttr("value");
-  return constValueAttr.dyn_cast<IntegerAttr>().getInt();
+  return dyn_cast<IntegerAttr>(constValueAttr).getInt();
 }
 
 int getMaxIntConst(mlir::Value value) {
@@ -239,7 +239,7 @@ bool hasNonZeroConstant(Operation *op) {
       if (isa<arith::AddIOp>(op)) {
         if (isa<arith::ConstantOp>(prevOp)) {
           mlir::Attribute constantValue = prevOp->getAttr("value");
-          if (auto intAttr = constantValue.dyn_cast<mlir::IntegerAttr>()) {
+          if (auto intAttr = dyn_cast<mlir::IntegerAttr>(constantValue)) {
             if (intAttr.getInt() != 0) {
               return true;
             }
@@ -261,7 +261,7 @@ bool isPostFusionSingleStmt(Operation *op) {
     auto right = op->getOperand(1).getDefiningOp();
     if (isa<arith::ConstantOp>(right)) {
       mlir::Attribute constantValue = right->getAttr("value");
-      if (auto intAttr = constantValue.dyn_cast<mlir::IntegerAttr>()) {
+      if (auto intAttr = dyn_cast<mlir::IntegerAttr>(constantValue)) {
         if (intAttr.getInt() != 0) {
           return true;
         }
@@ -643,11 +643,11 @@ std::string AKGGPUMappingLoops::getInferredConfigJson() {
 std::string AKGGPUMappingLoops::getAkgKernelName() {
   std::string defaultName = "akg_kernel";
   for (auto attr : getOperation()->getAttrs()) {
-    auto keyStr = attr.getName().dyn_cast<StringAttr>().getValue().str();
+    auto keyStr = dyn_cast<StringAttr>(attr.getName()).getValue().str();
     if (keyStr != kKernelNameAttrKey) {
       continue;
     }
-    return attr.getValue().dyn_cast<StringAttr>().getValue().str();
+    return dyn_cast<StringAttr>(attr.getValue()).getValue().str();
   }
   return defaultName;
 }
@@ -686,7 +686,7 @@ static void SetRedutionMarkToParallelOp(Operation *funcOp) {
       }
       std::reverse(parallelOps.begin(), parallelOps.end());
       for (auto attr : attrs) {
-        auto idx = attr.dyn_cast<IntegerAttr>().getInt();
+        auto idx = dyn_cast<IntegerAttr>(attr).getInt();
         parallelOps[idx]->setAttr("reduceLoop", builder.getUnitAttr());
       }
       if (!redOp->hasAttr(kEnableParallelReduce)) {
@@ -707,7 +707,7 @@ void AKGGPUMappingLoops::loadGlobalMapping() {
   auto &gpuTool = GpuScheduleTool::getInstance();
   for (auto task : waitingList) {
     if (task.op->hasAttr(kLoopTag)) {
-      auto name = task.op->getAttr(kLoopTag).cast<StringAttr>().getValue().str();
+      auto name = cast<StringAttr>(task.op->getAttr(kLoopTag)).getValue().str();
       auto mapRes = GpuScheduleTool::getInstance().getMappingResult(name);
       totalProblemSize *= task.problemSize;
       if (mapRes.first == "GpuGrid") {

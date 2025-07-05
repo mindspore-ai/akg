@@ -50,7 +50,7 @@ class ConvertMindSporeConcatOp : public OpRewritePattern<mindspore::ConcatOp> {
 
   LogicalResult matchAndRewrite(mindspore::ConcatOp op, PatternRewriter &rewriter) const final {
     IntegerAttr axisAttr = (op.getAxis() == std::nullopt)
-                             ? rewriter.getZeroAttr(rewriter.getI64Type()).cast<IntegerAttr>()
+                             ? cast<IntegerAttr>(rewriter.getZeroAttr(rewriter.getI64Type()))
                              : op.getAxisAttr();
     (void)rewriter.replaceOpWithNewOp<tosa::ConcatOp>(op, op.getType(), op.getInput(), axisAttr);
     return success();
@@ -68,7 +68,7 @@ class ConvertMindSporeMulOp : public OpRewritePattern<SourceOp> {
     Value rhs = op.getInput2();
 
     Operation *operation = op;
-    auto resultTy = operation->getResult(0).getType().dyn_cast<ShapedType>();
+    auto resultTy = dyn_cast<ShapedType>(operation->getResult(0).getType());
     (void)rewriter.replaceOpWithNewOp<tosa::MulOp>(op, resultTy, lhs, rhs, 0);
     return success();
   }
@@ -85,7 +85,7 @@ class ConvertMindSporeUnaryOp : public OpConversionPattern<SourceOp> {
     Operation *op = mindsporeOp;
     Value opnd = adaptor.getInput();
 
-    auto resultTy = op->getResult(0).getType().dyn_cast<ShapedType>();
+    auto resultTy = dyn_cast<ShapedType>(op->getResult(0).getType());
     auto resultElemTy = resultTy.getElementType();
     if (!resultElemTy.isIntOrFloat()) {
       return rewriter.notifyMatchFailure(op, "Only floating-point or integer datatype legalization supported");
@@ -108,7 +108,7 @@ class ConvertMindSporeBinaryOp : public OpConversionPattern<SourceOp> {
     Value lhs = op->getOperand(0);
     Value rhs = op->getOperand(1);
     (void)adaptor;
-    auto resultTy = op->getResult(0).getType().dyn_cast<ShapedType>();
+    auto resultTy = dyn_cast<ShapedType>(op->getResult(0).getType());
     auto resultElemTy = resultTy.getElementType();
     if (!resultElemTy.isIntOrFloat()) {
       return rewriter.notifyMatchFailure(op, "Only floating-point or integer datatype legalization supported");
@@ -131,13 +131,13 @@ class ConvertMindSporeReduceOp : public OpConversionPattern<SourceOp> {
     Operation *op = mindsporeOp;
     auto loc = op->getLoc();
     Value opnd = adaptor.getInput();
-    auto resultTy = op->getResult(0).getType().dyn_cast<ShapedType>();
+    auto resultTy = dyn_cast<ShapedType>(op->getResult(0).getType());
     auto resultElementTy = resultTy.getElementType();
     BoolAttr keepdims_attr = BoolAttr::get(context, false);
     if (adaptor.getKeepdimsAttr()) {
       keepdims_attr = adaptor.getKeepdimsAttr();
     }
-    ShapedType input_shapes = adaptor.getInput().getType().template cast<ShapedType>();
+    ShapedType input_shapes = cast<ShapedType>(adaptor.getInput().getType());
     llvm::SmallVector<int64_t> reduce_output_shape;
     (void)std::copy(input_shapes.getShape().begin(), input_shapes.getShape().end(),
                     std::back_inserter(reduce_output_shape));
@@ -169,7 +169,7 @@ class ConvertMindSporeReduceOp : public OpConversionPattern<SourceOp> {
       if (sym_shape) {
         llvm::SmallVector<std::string> total_size_symbolic;
         (void)total_size_symbolic.emplace_back(std::to_string(total_size));
-        flat_tensor = analysis.updateSymbolicShape(flat_tensor, total_size_symbolic).dyn_cast<RankedTensorType>();
+        flat_tensor = dyn_cast<RankedTensorType>(analysis.updateSymbolicShape(flat_tensor, total_size_symbolic));
       }
       auto flat_op = rewriter.create<mindspore::ReshapeOp>(loc, flat_tensor, opnd, attrs_flat);
       auto out_tensor = RankedTensorType::get(1, resultElementTy);
@@ -200,7 +200,7 @@ class ConvertMindSporeReduceOp : public OpConversionPattern<SourceOp> {
       if (sym_shape) {
         (*sym_shape)[(unsigned long)axis] = "1";
         reduce_inter_tensor =
-          analysis.updateSymbolicShape(reduce_inter_tensor, *sym_shape).dyn_cast<RankedTensorType>();
+          dyn_cast<RankedTensorType>(analysis.updateSymbolicShape(reduce_inter_tensor, *sym_shape));
       }
       auto reduce_op_once = rewriter.create<TargetOp>(loc, reduce_inter_tensor, opnd, attrs_once);
       opnd = reduce_op_once.getResult();
@@ -232,7 +232,7 @@ class ConvertMindSporeNotBinaryOp : public OpConversionPattern<SrcOp> {
     Value lhs = op->getOperand(0);
     Value rhs = op->getOperand(1);
     (void)adaptor;
-    auto resultTy = op->getResult(0).getType().dyn_cast<ShapedType>();
+    auto resultTy = dyn_cast<ShapedType>(op->getResult(0).getType());
     auto resultElemTy = resultTy.getElementType();
     if (!resultElemTy.isIntOrFloat()) {
       return rewriter.notifyMatchFailure(op, "Only floating-point or integer datatype legalization supported");
@@ -255,7 +255,7 @@ class ConvertMindSporeSelectOp : public OpConversionPattern<SrcOp> {
     Value xVal = op->getOperand(1);
     Value yVal = op->getOperand(2);
     (void)adaptor;
-    auto resultTy = op->getResult(0).getType().dyn_cast<ShapedType>();
+    auto resultTy = dyn_cast<ShapedType>(op->getResult(0).getType());
     auto resultElemTy = resultTy.getElementType();
     if (!resultElemTy.isIntOrFloat()) {
       return rewriter.notifyMatchFailure(op, "Only floating-point or integer datatype legalization supported");
@@ -313,14 +313,14 @@ class ConvertMindSporePadOp : public OpConversionPattern<SrcOp> {
     auto value = adaptor.getValue();
     Location loc = op->getLoc();
     Value inputX = adaptor.getInputX();
-    if (!inputX.getType().isa<RankedTensorType>()) {
+    if (!isa<RankedTensorType>(inputX.getType())) {
       return rewriter.notifyMatchFailure(op, "only support for ranked tensor");
     }
-    auto inputTy = inputX.getType().dyn_cast<RankedTensorType>();
+    auto inputTy = dyn_cast<RankedTensorType>(inputX.getType());
     auto inputElemTy = inputTy.getElementType();
     if (!value.has_value()) {
       // set the default value  zero;
-      if (inputElemTy.isa<IntegerType>() || inputElemTy.isa<FloatType>()) {
+      if (isa<IntegerType>(inputElemTy) || isa<FloatType>(inputElemTy)) {
         IntegerType i64Ty = rewriter.getI64Type();
         mindsporeOp.setValueAttr(rewriter.getIntegerAttr(i64Ty, 0));
       }
@@ -371,7 +371,7 @@ class ConvertMindSporePadOp : public OpConversionPattern<SrcOp> {
       return rewriter.notifyMatchFailure(
         op, "Pad value needs to be a scalar constant for conversion to TOSA pad operation");
     }
-    auto resultTy = op->getResult(0).getType().dyn_cast<ShapedType>();
+    auto resultTy = dyn_cast<ShapedType>(op->getResult(0).getType());
     (void)rewriter.replaceOpWithNewOp<tosa::PadOp>(mindsporeOp, resultTy, inputX, padList, padTensor);
     return success();
   }
@@ -385,10 +385,10 @@ class ConvertMindSporePadOp : public OpConversionPattern<SrcOp> {
                                             Value &tosaTensor, const Type dtype,
                                             const llvm::ArrayRef<int64_t> dshape) const {
     uint32_t width32 = 32, width64 = 64;
-    if (dtype.isa<FloatType>()) {
+    if (isa<FloatType>(dtype)) {
       float floatValue = static_cast<float>(padScalarValue);
       tosaTensor = getConstTensor<float>(rewriter, op, {floatValue}, dshape).value();
-    } else if (auto intType = dtype.dyn_cast<IntegerType>()) {
+    } else if (auto intType = dyn_cast<IntegerType>(dtype)) {
       auto w = intType.getWidth();
       if (w != width32 && w != width64) {
         return rewriter.notifyMatchFailure(op, "only support 32 or 64 bits int");

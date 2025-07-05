@@ -102,7 +102,7 @@ ParseResult GatherOp::parse(OpAsmParser &parser, OperationState &result) {
     return failure();
   }
 
-  if (!outputType.isa<MemRefType>()) {
+  if (!isa<MemRefType>(outputType)) {
     result.addTypes(outputType);
   }
   return parser.resolveOperands(operands, {dataType, indicesType, outputType}, parser.getNameLoc(), result.operands);
@@ -135,7 +135,7 @@ ParseResult UnsortedSegmentSumOp::parse(OpAsmParser &parser, OperationState &res
     return failure();
   }
 
-  if (!outputType.isa<MemRefType>()) {
+  if (!isa<MemRefType>(outputType)) {
     result.addTypes(outputType);
   }
   return parser.resolveOperands(operands, {dataType, indicesType, outputType}, parser.getNameLoc(), result.operands);
@@ -344,8 +344,7 @@ void TemplateOp::print(OpAsmPrinter &p) {
   for (auto attr : (*this)->getAttrs()) {
     if (attr.getName() == getIteratorTypesAttrName()) {
       auto iteratorTypes =
-          attr.getValue()
-              .cast<ArrayAttr>()
+              cast<ArrayAttr>(attr.getValue())
               .getAsValueRange<IteratorTypeAttr, utils::IteratorType>();
       // Convert IteratorType enums into the string representation. This is
       // needed, because tests still use the old format when 'iterator_types'
@@ -411,9 +410,7 @@ ParseResult TemplateOp::parse(OpAsmParser &parser, OperationState &result) {
   // because tests still use the old format when 'iterator_types' attribute is
   // represented as an array of strings.
   // TODO: Remove this conversion once tests are fixed.
-  ArrayAttr iteratorTypes =
-      result.attributes.get(getIteratorTypesAttrName(result.name))
-          .cast<ArrayAttr>();
+  ArrayAttr iteratorTypes = cast<ArrayAttr>( result.attributes.get(getIteratorTypesAttrName(result.name)));
 
   SmallVector<Attribute> iteratorTypeAttrs;
 

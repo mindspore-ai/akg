@@ -87,8 +87,8 @@ void RemoveRedundantLoops::runOnOperation() {
     auto forOp = redundantLoops[i];
     affine::AffineForOp dependentOp = nullptr;
     for (auto value : forOp.getOperation()->getOperands()) {
-      if (auto blockArg = value.dyn_cast<BlockArgument>()) {
-        if (blockArg.getType().isa<IndexType>()) {
+      if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+        if (isa<IndexType>(blockArg.getType())) {
           Block *block = blockArg.getOwner();
           Operation *parentOp = block->getParentOp();
           if (parentOp && isa<affine::AffineForOp>(parentOp)) {

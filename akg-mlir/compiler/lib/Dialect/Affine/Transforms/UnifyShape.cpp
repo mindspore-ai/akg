@@ -74,10 +74,10 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
     MemRefType newmemrefType;
     SmallVector<AffineMap, kVectorSizeFour> reassociationMap;
     if (auto csop = dyn_cast<mlir::memref::CollapseShapeOp>(userOp)) {
-      newmemrefType = csop.getType().cast<MemRefType>();
+      newmemrefType = cast<MemRefType>(csop.getType());
       reassociationMap = csop.getReassociationMaps();
     } else if (auto esop = dyn_cast<mlir::memref::ExpandShapeOp>(userOp)) {
-      newmemrefType = esop.getType().cast<MemRefType>();
+      newmemrefType = cast<MemRefType>(esop.getType());
       reassociationMap = esop.getReassociationMaps();
     } else {
       llvm::errs() << DEBUG_TYPE << " - This case may never happen.\n"
@@ -302,7 +302,7 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
       referenceValue.dump();
     });
     UnifyShapeInfos result;
-    MemRefType referenceType = referenceValue.getType().cast<MemRefType>();
+    MemRefType referenceType = cast<MemRefType>(referenceValue.getType());
     MLIRContext *context = referenceValue.getContext();
     Operation *referenceOp = referenceValue.getDefiningOp();
     auto referenceShape = referenceType.getShape();
@@ -638,7 +638,7 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
         for (Operation *uop : resultValue.getUsers()) {
           // If updateCopyOps returns false, there is a problem with
           // the attempt to erase this ExpandShapeOp. Skip.
-          if (!updateCopyOps(uop, esop, initValue.getType().cast<MemRefType>(), unifyShapeInfos)) {
+          if (!updateCopyOps(uop, esop, cast<MemRefType>(initValue.getType()), unifyShapeInfos)) {
             llvm::dbgs() << DEBUG_TYPE
                          << " WARNING -- failed to update corresponding copy Op, a expandShapeOp will be keept\n";
             return WalkResult::skip();
@@ -694,7 +694,7 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
       // Cases where a BlockArgument is the operand should not be
       // handled in this function
       if (!isa<BlockArgument>(initValue)) {
-        MemRefType resultType = csop.getType().cast<MemRefType>();
+        MemRefType resultType = cast<MemRefType>(csop.getType());
         // 1. Get the shape of the operand, which is the one we want to keep
         // Also get the collapse shape reassociation information:
         // we need it to update concerned access functions

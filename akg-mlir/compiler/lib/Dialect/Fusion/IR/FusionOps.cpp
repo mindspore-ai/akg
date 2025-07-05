@@ -55,7 +55,7 @@ struct Wrapper {
 
 template <typename OpTy>
 static LogicalResult produceSubViewErrorMsg(SliceVerificationResult result, OpTy op, Type expectedType) {
-  auto memrefType = expectedType.cast<ShapedType>();
+  auto memrefType = cast<ShapedType>(expectedType);
   switch (result) {
     case SliceVerificationResult::Success:
       return success();
@@ -105,7 +105,7 @@ static std::optional<llvm::SmallBitVector> computeMemRefRankReductionMask(const 
   }
 
   for (const auto &dim : llvm::enumerate(sizes)) {
-    if (auto attr = dim.value().dyn_cast<Attribute>()) {
+    if (auto attr = dyn_cast<Attribute>(dim.value())) {
       (void)unusedDims.set((unsigned int)dim.index());
     }
   }
@@ -237,12 +237,12 @@ static SliceVerificationResult isRankReducedMemRefType(const MemRefType original
     return parser.emitError(typesLoc, "requires two types");
   }
 
-  auto memrefType = types[0].dyn_cast<MemRefType>();
+  auto memrefType = dyn_cast<MemRefType>(types[0]);
   if (!memrefType) {
     return parser.emitError(typesLoc, "requires memref type");
   }
 
-  if (!types[1].isa<VectorType>() && !types[1].isIntOrFloat()) {
+  if (!isa<VectorType>(types[1]) && !types[1].isIntOrFloat()) {
     return parser.emitError(typesLoc, "requires scalar type or vector type");
   }
 
@@ -325,12 +325,12 @@ OpFoldResult LoadOp::fold(FoldAdaptor) {
     return parser.emitError(typesLoc, "requires two types");
   }
 
-  auto memrefType = types[0].dyn_cast<MemRefType>();
+  auto memrefType = dyn_cast<MemRefType>(types[0]);
   if (!memrefType) {
     return parser.emitError(typesLoc, "requires memref type");
   }
 
-  if (!types[1].isa<VectorType>() && !types[1].isIntOrFloat()) {
+  if (!isa<VectorType>(types[1]) && !types[1].isIntOrFloat()) {
     return parser.emitError(typesLoc, "requires scalar type or vector type");
   }
 
@@ -401,7 +401,7 @@ LogicalResult SubViewOp::verify() {
   // Verify result type against inferred type.
   auto expectedType = SubViewOp::inferResultType(baseType, getStaticOffsets(), getStaticSizes(), getStaticStrides());
 
-  auto result = isRankReducedMemRefType(expectedType.cast<MemRefType>(), subViewType, getMixedSizes());
+  auto result = isRankReducedMemRefType(cast<MemRefType>(expectedType), subViewType, getMixedSizes());
   return produceSubViewErrorMsg(result, *this, expectedType);
 }
 
@@ -424,11 +424,11 @@ void SubViewOp::build(OpBuilder &b, OperationState &result, MemRefType resultTyp
   dispatchIndexOpFoldResults(offsets, dynamicOffsets, staticOffsets);
   dispatchIndexOpFoldResults(sizes, dynamicSizes, staticSizes);
   dispatchIndexOpFoldResults(strides, dynamicStrides, staticStrides);
-  auto sourceMemRefType = source.getType().cast<MemRefType>();
+  auto sourceMemRefType = cast<MemRefType>(source.getType());
   // Structuring implementation this way avoids duplication between builders.
   if (!resultType) {
     resultType =
-      SubViewOp::inferResultType(sourceMemRefType, staticOffsets, staticSizes, staticStrides).cast<MemRefType>();
+      cast<MemRefType>(SubViewOp::inferResultType(sourceMemRefType, staticOffsets, staticSizes, staticStrides));
   }
   build(b, result, resultType, source, dynamicOffsets, dynamicSizes, dynamicStrides,
         b.getDenseI64ArrayAttr(staticOffsets), b.getDenseI64ArrayAttr(staticSizes),
@@ -530,7 +530,7 @@ LogicalResult TransposeOp::verify() {
   }
   SmallVector<bool, 8> seen(rank, false);
   for (const auto &ta : llvm::enumerate(transpAttr)) {
-    int64_t i = ta.value().cast<IntegerAttr>().getInt();
+    int64_t i = cast<IntegerAttr>(ta.value()).getInt();
     if (i < 0 || i >= rank) {
       return emitOpError("transposition index out of range: ") << i;
     }
@@ -567,11 +567,11 @@ LogicalResult TransposeOp::verify() {
     return parser.emitError(typesLoc, "requires two types");
   }
 
-  if (!types[0].isa<VectorType>() && types[0].isa<ShapedType>()) {
+  if (!isa<VectorType>(types[0]) && isa<ShapedType>(types[0])) {
     return parser.emitError(typesLoc, "require vector type or scalar type");
   }
 
-  auto memrefType = types[1].dyn_cast<MemRefType>();
+  auto memrefType = dyn_cast<MemRefType>(types[1]);
   if (!memrefType) {
     return parser.emitError(typesLoc, "requires memref or ranked tensor type");
   }
