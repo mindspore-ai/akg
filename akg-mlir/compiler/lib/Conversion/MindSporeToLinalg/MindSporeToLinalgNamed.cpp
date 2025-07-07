@@ -880,7 +880,6 @@ struct ConvertMindSporeToLinalgNamedPass : public ConvertMindSporeToLinalgNamedB
     target.addIllegalDialect<mindspore::MindSporeDialect>();
 
     mlir::populateLowerMindSporeToLinalgNamedPattern(patterns);
-    mlir::populateMindSporeLowerPattern(patterns);
     if (failed(applyPartialConversion(getOperation(), target, std::move(patterns)))) {
       signalPassFailure();
     }
