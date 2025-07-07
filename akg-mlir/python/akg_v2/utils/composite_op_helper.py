@@ -29,6 +29,7 @@ from collections import namedtuple
 import numpy as np
 from akg_v2.utils.gen_random import random_gaussian, gen_indices, gen_csr_indices
 from akg_v2.utils.op_dsl import get_attr, get_op_dsl
+from bfloat16 import bfloat16
 
 
 def get_cpptype_from_pytype(pytype):
@@ -196,6 +197,11 @@ def precheck(desc):
                 input_value
             )
         elif op_name == "ASin" and abs(inputs[0]) >= 1:
+            logging.info(
+                "The input with mean value %s fails the precheck because the value cannot be a input",
+                input_value
+            )
+        elif op_name == "Cast":
             logging.info(
                 "The input with mean value %s fails the precheck because the value cannot be a input",
                 input_value
@@ -481,7 +487,8 @@ def _gen_input_data(desc, infos, input_for_mod, commands):
 
         shape = [1] if not input_desc[0]["shape"] else input_desc[0]["shape"]
         dtype = input_desc[0]["data_type"]
-
+        if (dtype == "bfloat16"):
+            dtype = bfloat16
         item = _gen_input_item(tensor_name, infos, shape,
                                dtype, csr_idx_pair, input_mean_value)
 
@@ -510,6 +517,8 @@ def _gen_output_data(desc, infos, input_for_mod, output_indexes, commands):
         if infos["gen_data"]:
             shape = [1] if not output_desc["shape"] else output_desc["shape"]
             dtype = output_desc["data_type"]
+            if (dtype == "bfloat16"):
+                dtype = bfloat16
             item = np.full(shape, np.nan, dtype)
             input_for_mod.append(item)
         if tensor_name not in fake_output_tensors:
@@ -675,6 +684,7 @@ def gen_json_data(op_desc, with_compute=True, input_for_mod=None):
     uni_file_name = _gen_uniq_file_name(desc.get("op"))
     printer = CodePrinter(uni_file_name)
     printer.out("from akg_v2.utils.op_dsl import *", False)
+    printer.out("from bfloat16 import bfloat16", True)
     printer.out("def get_expect(input_dict, expect):", True)
     for command in commands:
         single_commands = command.split("\n")

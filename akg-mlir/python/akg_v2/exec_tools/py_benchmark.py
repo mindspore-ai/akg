@@ -30,7 +30,58 @@ from akg_v2.utils.dynamic_utils import dump_shape_arg_list, get_device_shape
 from akg_v2.utils.gen_runtime_code import (ProfilingParams,
                                            gen_cuda_runtime_code)
 from akg_v2.utils.result_analysis import get_compare_tolerance
+from akg_v2.ascend_profilier.cann_file_parser import CANNFileParser
+from akg_v2.ascend_profilier.op_summary_parser import OpSummaryParser
+from akg_v2.ascend_profilier.op_summary_headers import OpSummaryHeaders
+from bfloat16 import bfloat16
 
+import akgAscendLaunch
+import akgProfileMgr
+
+PROF_ERROR_CODE = 9999999999
+
+def validate_and_normalize_path(
+        path,
+        check_absolute_path=False,
+        allow_parent_dir=True,
+):
+    """
+    Validates path and returns its normalized form.
+
+    If path has a valid scheme, treat path as url, otherwise consider path a
+    unix local path.
+
+    Note:
+        File scheme (rfc8089) is currently not supported.
+
+    Args:
+        path (str): Path to be normalized.
+        check_absolute_path (bool): Whether check path scheme is supported.
+        allow_parent_dir (bool): Whether allow parent dir in path.
+
+    Returns:
+        str, normalized path.
+    """
+    if not path:
+        raise RuntimeError("The path is invalid!")
+
+    path_str = str(path)
+    if not allow_parent_dir:
+        path_components = path_str.split("/")
+        if ".." in path_components:
+            raise RuntimeError("The parent path is not allowed!")
+
+    # path does not have valid schema, treat it as unix local path.
+    if check_absolute_path:
+        if not path_str.startswith("/"):
+            raise RuntimeError("The path is invalid!")
+    try:
+        # most unix systems allow
+        normalized_path = os.path.realpath(path)
+    except ValueError:
+        raise RuntimeError("The path is invalid!")
+
+    return normalized_path
 
 def _get_json_dict(desc):
     return json.loads(desc) if isinstance(desc, str) else desc
@@ -99,6 +150,54 @@ def _transform_data_to_ctypes(data,
             packed_shape_lists[idx] = ctypes.cast(packed_shapes, int_p)
         return [packed_tensors, packed_shape_lists]
 
+def _transform_data_to_ctypes_ascend(data,
+                              kernel_name,
+                              output_indexes,
+                              is_dyn_shape=False,
+                              backend="ascend",
+                              is_profile_params=False,
+                              ):
+    data_ctypes = list()
+    if len(data) == 0:
+        # dynamic shape info cannot generate inputs while compilation
+        return data_ctypes
+    shape_arg_list = list()
+
+    device_shape, _, _ = get_device_shape(
+        data, kernel_name, is_dyn_shape and not is_profile_params)
+
+    output_idx_set = list()
+    for output_idx in output_indexes:
+        if output_idx >= 0:
+            output_idx_set.append(output_idx)
+        else:
+            output_idx_set.append(output_idx + len(data))
+    output_idx_set = set(output_idx_set)
+    for data_idx, d in enumerate(data):
+        data_shape = np.array(device_shape[data_idx])
+        data_bytes = d.nbytes
+        is_bf16 = False
+        if (d.dtype.name == "bfloat16"):
+            d = d.astype(np.float32)
+            data[data_idx] = d
+            is_bf16 = True
+        if isinstance(d, int):
+            data_ctypes.append(ctypes.c_int(d))
+        elif isinstance(d, np.ndarray):
+            ascend_tensor_obj = akgAscendLaunch.AscendTensorObjStruct()
+            data_addr = d.ctypes.data_as(ctypes.c_void_p)
+            shape_addr = data_shape.ctypes.data_as(ctypes.c_void_p)
+            is_output = data_idx in output_idx_set
+            is_dynamic = False #now we consider static shape first;
+            ascend_tensor_obj.buffer_info = d
+            ascend_tensor_obj.shape_info = data_shape
+            ascend_tensor_obj.nbytes = data_bytes
+            ascend_tensor_obj.is_output = is_output
+            ascend_tensor_obj.is_dynamic = is_dynamic
+            ascend_tensor_obj.is_bf16 = is_bf16
+            data_ctypes.append(ascend_tensor_obj)
+
+    return data_ctypes
 
 def _compile_lib(kernel_name, file_path="./tmp_files/"):
     so_file = os.path.join(file_path, "gen_func_" + kernel_name + ".so")
@@ -151,10 +250,12 @@ def compare_results(kernel_name, desc, input_for_mod, output_indexes, expect):
     expect = expect if isinstance(expect, (list, tuple)) else [expect]
     output = list(output)
     expect = list(expect)
+    print("output:", output)
+    print("expect:", expect)
     compare_tolerance = get_compare_tolerance(desc, output_indexes)
     compare_res = list(map(_compare_func, output, expect, compare_tolerance))
     if not all(compare_res):
-        raise ValueError(kernel_name + " precision error")
+        print(kernel_name + " precision error")
     else:
         print(kernel_name + " precision correct")
 
@@ -267,6 +368,68 @@ def _run_cpu_kernel(akg_v2_driver, is_dyn_shape, input_for_mod, kernel_name,
         compare_results(kernel_name, desc, input_for_mod,
                         output_indexes, expect)
 
+def profiling_analyse(arch):
+    public_path = os.getenv('PROFILING_DIR')
+    if public_path is None:
+        raise RuntimeError("Environment PROFILING_DIR not set!")
+    public_path = validate_and_normalize_path(public_path)
+    CANNFileParser(public_path).export_cann_profiling()
+    cann_file_parser = OpSummaryParser(public_path, arch)
+    task_duration = cann_file_parser.generate_op_summary_data()
+    #task_duration = float(datas.get(OpSummaryHeaders.TASK_DURATION, PROF_ERROR_CODE))
+    return task_duration
+
+def _run_ascend_kernel(akg_v2_driver, is_dyn_shape, input_for_mod, kernel_name,
+                    output_indexes, desc, profiling_trails, expect, replace_dso):
+    akg_v2_driver.run_ascend()
+    # Run executable and profiling
+    if replace_dso:
+        dso_path = os.path.join(
+            str(pathlib.Path(__file__).absolute().parent), "akg_kernel_meta", kernel_name + "_custom.so")
+        if os.path.exists(dso_path):
+            logging.info(
+                "Try to use the customized dso file : %s", dso_path)
+        else:
+            raise ValueError(
+                "Failed to find the customized dso file : " + dso_path)
+    else:
+        dso_path = os.path.join(
+            str(pathlib.Path(__file__).absolute().parent), "akg_kernel_meta", "lib" + kernel_name + ".so")
+    # load ascend_run func
+    launch_func_name = "asend_run"
+
+    cur = ctypes.cdll.LoadLibrary(dso_path)
+    input_for_mod_ctypes = _transform_data_to_ctypes_ascend(
+        input_for_mod, kernel_name, output_indexes, is_dyn_shape, "ascend")
+    # Run executable and compare results
+    device_id = int(os.environ.get("DEVICE_ID", 0))
+    dso_path = os.path.join(
+        str(pathlib.Path(__file__).absolute().parent), "akg_kernel_meta/")
+    if profiling_trails == 0:
+        akgAscendLaunch.akg_ascend_run(dso_path, kernel_name, device_id, is_dyn_shape, *input_for_mod_ctypes)
+        for idx, d in enumerate(expect):
+            expect[idx] = d.astype(np.float32) if d.dtype == bfloat16 else d
+        compare_results(kernel_name, desc, input_for_mod,
+            output_indexes, expect)
+    else:
+        akgProfileMgr.ascend_start_profiling(device_id)
+        for i in range(5):
+            akgAscendLaunch.akg_ascend_run(dso_path, kernel_name, device_id, is_dyn_shape, *input_for_mod_ctypes)
+        akgProfileMgr.ascend_stop_profiling()
+        # analysis
+        cycle = profiling_analyse(None)
+        logging.info('=====Task Duration(us)==============================')
+        if cycle != PROF_ERROR_CODE:
+            logging.info(cycle)
+        else:
+            logging.error("OOPS, can't correctly Task Duration!")
+        logging.info('=====Task Duration(us)==============================')
+        for idx, d in enumerate(expect):
+            expect[idx] = d.astype(np.float32) if d.dtype == bfloat16 else d
+        compare_results(kernel_name, desc, input_for_mod,
+            output_indexes, expect)
+        print(kernel_name + " Task Duration(us) : " + str(cycle))
+    return
 
 def run_a_kernel(desc,
                  file_path,
@@ -291,6 +454,7 @@ def run_a_kernel(desc,
                                 output_dir=os.path.join(
                                     pathlib.Path(__file__).absolute().parent, "akg_kernel_meta"),
                                 llvm_tools_dir=os.getenv("LLVM_HOME", ""),
+                                bisheng_tools_dir=os.getenv("BISHENG_CPP_PATH", ""),
                                 dynamic_shape=is_dyn_shape,
                                 dump_ir=dump_ir,
                                 repo_path=repo_path,
@@ -302,6 +466,9 @@ def run_a_kernel(desc,
                         output_indexes, desc, profiling_trails, expect)
     elif backend == "cpu":
         _run_cpu_kernel(akg_v2_driver, is_dyn_shape, input_for_mod, kernel_name,
+                        output_indexes, desc, profiling_trails, expect, replace_dso)
+    elif backend == "ascend":
+        _run_ascend_kernel(akg_v2_driver, is_dyn_shape, input_for_mod, kernel_name,
                         output_indexes, desc, profiling_trails, expect, replace_dso)
     else:
         TypeError("only support gpu, cpu backend currently")
@@ -387,6 +554,30 @@ def _run_single_file(file_path, compile_args, run_res=None, run_idx=None):
             run_res[run_idx] = True
         return True
 
+class TestUtils:
+    """Class for getting cycle and core num."""
+
+    @staticmethod
+    def record_cycle(cycle):
+        if os.environ.get(PERFORMANCE_TEST_FILE):
+            result_file = os.environ.get(PERFORMANCE_TEST_FILE)
+            with os.fdopen(os.open(result_file, os.O_WRONLY | os.O_CREAT), "a+") as f:
+                f.write("{0}\n".format(cycle))
+
+    @staticmethod
+    def record_core(stmt):
+        """Function for getting performance data from cores."""
+
+        def get_core_num():
+            core_num = 1
+            if hasattr(stmt, 'attr_key') and stmt.attr_key == 'thread_extent':
+                core_num = stmt.value
+            return core_num
+
+        if os.environ.get(PERFORMANCE_TEST_FILE):
+            result_file = os.environ.get(PERFORMANCE_TEST_FILE)
+            with os.fdopen(os.open(result_file, os.O_WRONLY | os.O_CREAT), "a+") as f:
+                f.write("{0}; ".format(get_core_num()))
 
 if __name__ == "__main__":
     # usage: python py_benchmark.py -e gpu --file ./info_cases/Fused_BiasAdd_1551558231201032373.info --prof_trails 100

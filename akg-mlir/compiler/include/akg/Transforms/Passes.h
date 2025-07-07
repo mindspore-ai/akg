@@ -21,6 +21,8 @@
 #include <string>
 #include "akg/Transforms/AKGFuncOutlining.h"
 #include "akg/Transforms/AKGParallelLaunch.h"
+#include "akg/Transforms/AKGOperatorIdentify.h"
+#include "akg/Transforms/FoldDimension.h"
 #include "akg/Transforms/CopyElision.h"
 #include "akg/Transforms/CopyRemoval.h"
 #include "mlir/Pass/Pass.h"

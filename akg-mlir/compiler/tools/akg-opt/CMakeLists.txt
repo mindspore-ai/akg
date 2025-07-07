@@ -1,16 +1,13 @@
 set(AKG_MLIR_LIBS
-  AKGTosaPasses
   AKGAffinePasses
   AKGTransformsPasses
   AKGSCFPasses
   AKGGPUPasses
-  AKGTosaPasses
   AKGLinalgPasses
   AkgPipelines
   MLIRLinalgExtDialect
   MLIRFusionDialect
   AKGMLIRAnalysis
-  libpolytops-schedule-opt
 )
 
 set(LLVM_LINK_COMPONENTS
@@ -27,6 +24,7 @@ set(LIBS
   ${dialect_libs}
   ${conversion_libs}
   ${AKG_MLIR_LIBS}
+  AKGLinalgPasses
   MLIRAnalysis
   MLIRDialect
   MLIROptLib
@@ -36,16 +34,15 @@ set(LIBS
   MLIRTransformUtils
   MLIRSupport
   MLIRIR
+  MLIRMlirOptMain
   )
 
-
-
-
 link_directories(${AKG_MLIR_BIN_LIB_DIR})
+
 add_executable(akg-opt akg-opt.cpp)
-add_dependencies(akg-opt ${LIBS} akg::symengine)
+add_dependencies(akg-opt ${LIBS})
 
 llvm_update_compile_flags(akg-opt)
-target_link_libraries(akg-opt PRIVATE ${LIBS} akg::symengine)
+target_link_libraries(akg-opt PRIVATE ${LIBS})
 
 mlir_check_all_link_libraries(akg-opt)

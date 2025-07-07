@@ -28,6 +28,7 @@
 #include "mlir/Dialect/CommonFolders.h"
 #include "mlir/Dialect/Quant/QuantOps.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
+#include "mlir/Dialect/UB/IR/UBOps.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/Matchers.h"
@@ -36,6 +37,7 @@
 #include "mlir/IR/TypeUtilities.h"
 #include "mlir/Transforms/InliningUtils.h"
 
+#include <optional>
 #include "akg/Dialect/Math/IR/MathExtOps.h"
 #include "akg/Dialect/Math/IR/MathExtOpsDialect.cpp.inc"
 
@@ -57,14 +59,14 @@ struct MathExtInlinerInterface : public DialectInlinerInterface {
 /// Return the type of the same shape (scalar, vector or tensor) containing i1.
 static Type getI1SameShape(const Type type) {
   auto i1Type = IntegerType::get(type.getContext(), 1);
-  if (auto tensorType = type.dyn_cast<RankedTensorType>()) {
+  if (auto tensorType = dyn_cast<RankedTensorType>(type)) {
     return RankedTensorType::get(tensorType.getShape(), i1Type);
   }
-  if (type.isa<UnrankedTensorType>()) {
+  if (isa<UnrankedTensorType>(type)) {
     return UnrankedTensorType::get(i1Type);
   }
-  if (auto vectorType = type.dyn_cast<VectorType>()) {
-    return VectorType::get(vectorType.getShape(), i1Type, vectorType.getNumScalableDims());
+  if (auto vectorType = dyn_cast<VectorType>(type)) {
+    return VectorType::get(vectorType.getShape(), i1Type, vectorType.getScalableDims());
   }
   return i1Type;
 }
@@ -90,7 +92,7 @@ void mlir::mathExt::MathExtDialect::initialize() {
 
 OpFoldResult mathExt::AsinOp::fold(FoldAdaptor adaptor) {
   const uint64_t width64 = 64, width32 = 32;
-  return constFoldUnaryOpConditional<FloatAttr>(adaptor.getOperands(), [](const APFloat &a) -> Optional<APFloat> {
+  return constFoldUnaryOpConditional<FloatAttr>(adaptor.getOperands(), [](const APFloat &a) -> std::optional<APFloat> {
     switch (APFloat::getSizeInBits(a.getSemantics())) {
       case width64:
         return APFloat(asin(a.convertToDouble()));
@@ -107,7 +109,7 @@ OpFoldResult mathExt::AsinOp::fold(FoldAdaptor adaptor) {
 // ===----------------------------------------------------------------------===//
 OpFoldResult mathExt::AcosOp::fold(FoldAdaptor adaptor) {
   const uint64_t width64 = 64, width32 = 32;
-  return constFoldUnaryOpConditional<FloatAttr>(adaptor.getOperands(), [](const APFloat &a) -> Optional<APFloat> {
+  return constFoldUnaryOpConditional<FloatAttr>(adaptor.getOperands(), [](const APFloat &a) -> std::optional<APFloat> {
     switch (APFloat::getSizeInBits(a.getSemantics())) {
       case width64:
         return APFloat(acos(a.convertToDouble()));

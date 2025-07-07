@@ -51,7 +51,7 @@ void Tensor::SetStoreTensor(T storeOp, const std::vector<AxisPtr> &loopNest) {
   auto indices = storeOp.getIndices();
   for (size_t i = 0; i < indices.size(); ++i) {
     for (auto axis : loopNest) {
-      auto forOp = dyn_cast<AffineForOp>(axis->loop->getOperation());
+      auto forOp = dyn_cast<affine::AffineForOp>(axis->loop->getOperation());
       auto inductionVar = forOp.getInductionVar();
       if (indices[i] == inductionVar) {
         axis->isInnerMost = (i == (indices.size() - 1)) || axis->isInnerMost;
@@ -68,16 +68,16 @@ void Tensor::SetStoreTensor(T storeOp, const std::vector<AxisPtr> &loopNest) {
 Tensor::Tensor(mlir::Operation *op, const std::vector<AxisPtr> &loopNest) : op_(op) {
   // 1. get op_type
   if (op->hasAttr("OperatorType")) {
-    opType = op->getAttr("OperatorType").dyn_cast<StringAttr>().getValue().str();
+    opType = dyn_cast<StringAttr>(op->getAttr("OperatorType")).getValue().str();
   } else if (op->hasAttr("reduction_axes")) {
     opType = "Reduce";
     loopNest_ = loopNest;
-  } else if (auto loadOp = dyn_cast<AffineLoadOp>(op)) {
-    SetLoadTensor<AffineLoadOp>(loadOp, loopNest);
+  } else if (auto loadOp = dyn_cast<affine::AffineLoadOp>(op)) {
+    SetLoadTensor<affine::AffineLoadOp>(loadOp, loopNest);
   } else if (auto loadOp = dyn_cast<memref::LoadOp>(op)) {
     SetLoadTensor<memref::LoadOp>(loadOp, loopNest);
-  } else if (auto loadOp = dyn_cast<AffineStoreOp>(op)) {
-    SetStoreTensor<AffineStoreOp>(loadOp, loopNest);
+  } else if (auto loadOp = dyn_cast<affine::AffineStoreOp>(op)) {
+    SetStoreTensor<affine::AffineStoreOp>(loadOp, loopNest);
   } else if (auto loadOp = dyn_cast<memref::StoreOp>(op)) {
     SetStoreTensor<memref::StoreOp>(loadOp, loopNest);
   } else {
@@ -222,7 +222,7 @@ GpuModelGraph::GpuModelGraph(const InitGraphPtr &initGraph) : ModelGraph(initGra
 
 void GpuModelGraph::InitResource() {
   if (this->funcOp->getAttr("compute_capability")) {
-    auto compute_capability = funcOp->getAttr("compute_capability").dyn_cast<StringAttr>().getValue().str();
+    auto compute_capability = dyn_cast<StringAttr>(funcOp->getAttr("compute_capability")).getValue().str();
     if (compute_capability == "8.0") {
       hardware = akg::utils::kA100Device;
     } else {
@@ -295,4 +295,3 @@ ConfigPtr Resource::alloc(const AxisPtr axis, int64_t size) {
 }  // namespace autotiling
 }  // namespace akg
 }  // namespace mlir
-

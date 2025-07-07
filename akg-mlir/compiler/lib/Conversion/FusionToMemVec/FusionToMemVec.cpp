@@ -29,13 +29,13 @@ class FusionLoadLowering : public OpRewritePattern<fusion::LoadOp> {
 
   LogicalResult matchAndRewrite(fusion::LoadOp op, PatternRewriter &rewriter) const override {
     auto resultType = op.getResult().getType();
-    if (!resultType.isa<VectorType>()) {
+    if (!isa<VectorType>(resultType)) {
       auto memLoad = rewriter.create<memref::LoadOp>(op.getLoc(), op.getMemRef(), op.getIndices());
       rewriter.replaceOp(op, memLoad->getResults());
       return success();
     }
 
-    auto resultVecType = resultType.cast<VectorType>();
+    auto resultVecType = cast<VectorType>(resultType);
     auto padding = op.getPadding();
     if (padding.getImpl() == nullptr) {
       auto elemType = resultVecType.getElementType();
@@ -97,9 +97,6 @@ class FusionTransposeLowering : public OpRewritePattern<fusion::TransposeOp> {
   using OpRewritePattern<fusion::TransposeOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(fusion::TransposeOp op, PatternRewriter &rewriter) const override {
-    auto vecTranspose =
-      rewriter.create<vector::TransposeOp>(op.getLoc(), op.getResultType(), op.getVector(), op.getTranspAttr());
-    rewriter.replaceOp(op, vecTranspose->getResults());
     return success();
   }
 };
@@ -108,7 +105,7 @@ class FusionStoreOpLowering : public OpRewritePattern<fusion::StoreOp> {
  public:
   using OpRewritePattern<fusion::StoreOp>::OpRewritePattern;
   LogicalResult matchAndRewrite(fusion::StoreOp op, PatternRewriter &rewriter) const override {
-    if (!op.getValueToStore().getType().isa<VectorType>()) {
+    if (!isa<VectorType>(op.getValueToStore().getType())) {
       auto memStore =
         rewriter.create<memref::StoreOp>(op.getLoc(), op.getValueToStore(), op.getMemRef(), op.getIndices());
       assert(memStore->getResults().size() == 0 && "memRef.store should no need results");
@@ -117,7 +114,7 @@ class FusionStoreOpLowering : public OpRewritePattern<fusion::StoreOp> {
       return success();
     }
 
-    auto vectorType = op.getValueToStore().getType().dyn_cast<VectorType>();
+    auto vectorType = dyn_cast<VectorType>(op.getValueToStore().getType());
     (void)rewriter.create<vector::TransferWriteOp>(
       op->getLoc(), op.getValueToStore(), op.getMemRef(), op.getIndices(),
       AffineMapAttr::get(rewriter.getMultiDimIdentityMap(vectorType.getRank())), op.getInBoundsAttr());

@@ -89,37 +89,37 @@ void findNextRedOp(size_t currIdx, size_t groupNum, const SmallVector<Operation 
   }
 }
 
-static Attribute createInitialValueForReduceOp(Operation *op, Type elementTy, PatternRewriter &rewriter) {
-  if (isa<tosa::ReduceSumOp>(op) && elementTy.isa<FloatType>()) {
+static TypedAttr createInitialValueForReduceOp(Operation *op, Type elementTy, PatternRewriter &rewriter) {
+  if (isa<tosa::ReduceSumOp>(op) && isa<FloatType>(elementTy)) {
     return rewriter.getFloatAttr(elementTy, 0.0);
   }
 
-  if (isa<tosa::ReduceSumOp>(op) && elementTy.isa<IntegerType>()) {
+  if (isa<tosa::ReduceSumOp>(op) && isa<IntegerType>(elementTy)) {
     return rewriter.getIntegerAttr(elementTy, 0);
   }
 
-  if (isa<tosa::ReduceProdOp>(op) && elementTy.isa<FloatType>()) {
+  if (isa<tosa::ReduceProdOp>(op) && isa<FloatType>(elementTy)) {
     return rewriter.getFloatAttr(elementTy, 1.0);
   }
 
-  if (isa<tosa::ReduceProdOp>(op) && elementTy.isa<IntegerType>()) {
+  if (isa<tosa::ReduceProdOp>(op) && isa<IntegerType>(elementTy)) {
     return rewriter.getIntegerAttr(elementTy, 1);
   }
 
-  if (isa<tosa::ReduceMinOp>(op) && elementTy.isa<FloatType>()) {
+  if (isa<tosa::ReduceMinOp>(op) && isa<FloatType>(elementTy)) {
     return rewriter.getFloatAttr(elementTy,
-                                 APFloat::getLargest(elementTy.cast<FloatType>().getFloatSemantics(), false));
+                                 APFloat::getLargest(cast<FloatType>(elementTy).getFloatSemantics(), false));
   }
 
-  if (isa<tosa::ReduceMinOp>(op) && elementTy.isa<IntegerType>()) {
+  if (isa<tosa::ReduceMinOp>(op) && isa<IntegerType>(elementTy)) {
     return rewriter.getIntegerAttr(elementTy, APInt::getSignedMaxValue(elementTy.getIntOrFloatBitWidth()));
   }
 
-  if (isa<tosa::ReduceMaxOp>(op) && elementTy.isa<FloatType>()) {
-    return rewriter.getFloatAttr(elementTy, APFloat::getLargest(elementTy.cast<FloatType>().getFloatSemantics(), true));
+  if (isa<tosa::ReduceMaxOp>(op) && isa<FloatType>(elementTy)) {
+    return rewriter.getFloatAttr(elementTy, APFloat::getLargest(cast<FloatType>(elementTy).getFloatSemantics(), true));
   }
 
-  if (isa<tosa::ReduceMaxOp>(op) && elementTy.isa<IntegerType>()) {
+  if (isa<tosa::ReduceMaxOp>(op) && isa<IntegerType>(elementTy)) {
     return rewriter.getIntegerAttr(elementTy, APInt::getSignedMinValue(elementTy.getIntOrFloatBitWidth()));
   }
 
@@ -131,11 +131,11 @@ static Attribute createInitialValueForReduceOp(Operation *op, Type elementTy, Pa
     return rewriter.getIntegerAttr(elementTy, APInt::getZero(1));
   }
 
-  if (isa<tosa::ArgMaxOp>(op) && elementTy.isa<FloatType>()) {
-    return rewriter.getFloatAttr(elementTy, APFloat::getLargest(elementTy.cast<FloatType>().getFloatSemantics(), true));
+  if (isa<tosa::ArgMaxOp>(op) && isa<FloatType>(elementTy)) {
+    return rewriter.getFloatAttr(elementTy, APFloat::getLargest(cast<FloatType>(elementTy).getFloatSemantics(), true));
   }
 
-  if (isa<tosa::ArgMaxOp>(op) && elementTy.isa<IntegerType>()) {
+  if (isa<tosa::ArgMaxOp>(op) && isa<IntegerType>(elementTy)) {
     return rewriter.getIntegerAttr(elementTy, APInt::getSignedMinValue(elementTy.getIntOrFloatBitWidth()));
   }
 
@@ -145,36 +145,36 @@ static Attribute createInitialValueForReduceOp(Operation *op, Type elementTy, Pa
 static Value createLinalgBodyCalculationForReduceOp(Operation *op, ValueRange args, Type elementTy,
                                                     PatternRewriter &rewriter) {
   Location loc = op->getLoc();
-  if (isa<tosa::ReduceSumOp>(op) && elementTy.isa<FloatType>()) {
+  if (isa<tosa::ReduceSumOp>(op) && isa<FloatType>(elementTy)) {
     return rewriter.create<arith::AddFOp>(loc, args);
   }
 
-  if (isa<tosa::ReduceSumOp>(op) && elementTy.isa<IntegerType>()) {
+  if (isa<tosa::ReduceSumOp>(op) && isa<IntegerType>(elementTy)) {
     return rewriter.create<arith::AddIOp>(loc, args);
   }
 
-  if (isa<tosa::ReduceProdOp>(op) && elementTy.isa<FloatType>()) {
+  if (isa<tosa::ReduceProdOp>(op) && isa<FloatType>(elementTy)) {
     return rewriter.create<arith::MulFOp>(loc, args);
   }
 
-  if (isa<tosa::ReduceProdOp>(op) && elementTy.isa<IntegerType>()) {
+  if (isa<tosa::ReduceProdOp>(op) && isa<IntegerType>(elementTy)) {
     return rewriter.create<arith::MulIOp>(loc, args);
   }
 
-  if (isa<tosa::ReduceMinOp>(op) && elementTy.isa<FloatType>()) {
-    return rewriter.create<arith::MinFOp>(loc, args[0], args[1]);
+  if (isa<tosa::ReduceMinOp>(op) && isa<FloatType>(elementTy)) {
+    return rewriter.create<arith::MinNumFOp>(loc, args[0], args[1]);
   }
 
-  if (isa<tosa::ReduceMinOp>(op) && elementTy.isa<IntegerType>()) {
+  if (isa<tosa::ReduceMinOp>(op) && isa<IntegerType>(elementTy)) {
     auto predicate = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::slt, args[0], args[1]);
     return rewriter.create<arith::SelectOp>(loc, predicate, args[0], args[1]);
   }
 
-  if (isa<tosa::ReduceMaxOp>(op) && elementTy.isa<FloatType>()) {
-    return rewriter.create<arith::MaxFOp>(loc, args[0], args[1]);
+  if (isa<tosa::ReduceMaxOp>(op) && isa<FloatType>(elementTy)) {
+    return rewriter.create<arith::MaxNumFOp>(loc, args[0], args[1]);
   }
 
-  if (isa<tosa::ReduceMaxOp>(op) && elementTy.isa<IntegerType>()) {
+  if (isa<tosa::ReduceMaxOp>(op) && isa<IntegerType>(elementTy)) {
     auto predicate = rewriter.create<arith::CmpIOp>(loc, arith::CmpIPredicate::sgt, args[0], args[1]);
     return rewriter.create<arith::SelectOp>(loc, predicate, args[0], args[1]);
   }
@@ -219,15 +219,15 @@ static LogicalResult reduceMatchAndRewriteHelper(Operation *op, PatternRewriter 
   for (auto redOps : redOpsGroups) {
     SmallVector<int, 8> redAxes;
     for (auto redOp : redOps) {
-      auto axis = redOp->getAttr("axis").dyn_cast<IntegerAttr>().getValue().getSExtValue();
+      auto axis = dyn_cast<IntegerAttr>(redOp->getAttr("axis")).getValue().getSExtValue();
       redAxes.push_back(static_cast<int>(axis));
     }
     Operation *firstRedOp = redOps[0];
     Operation *lastRedOp = redOps[redOps.size() - 1];
     auto loc = lastRedOp->getLoc();
 
-    auto inputTy = firstRedOp->getOperand(0).getType().template cast<ShapedType>();
-    auto resultTy = lastRedOp->getResult(0).getType().template cast<ShapedType>();
+    auto inputTy = cast<ShapedType>(firstRedOp->getOperand(0).getType());
+    auto resultTy = cast<ShapedType>(lastRedOp->getResult(0).getType());
     auto elementTy = resultTy.getElementType();
     Value input = firstRedOp->getOperand(0);
 
@@ -253,7 +253,6 @@ static LogicalResult reduceMatchAndRewriteHelper(Operation *op, PatternRewriter 
     if (!fillValueAttr) {
       return rewriter.notifyMatchFailure(op, "No initial value found for reduction operation");
     }
-
     auto fillValue = rewriter.create<arith::ConstantOp>(loc, fillValueAttr);
     auto filledTensor = rewriter.create<linalg::FillOp>(loc, ValueRange{fillValue}, ValueRange{emptyTensor}).result();
 
@@ -271,7 +270,7 @@ static LogicalResult reduceMatchAndRewriteHelper(Operation *op, PatternRewriter 
     }
 
     bool didEncounterError = false;
-    auto maps = AffineMap::inferFromExprList({srcExprs, dstExprs});
+    auto maps = AffineMap::inferFromExprList({srcExprs, dstExprs}, rewriter.getContext());
     auto linalgOp = rewriter.create<linalg::GenericOp>(
       loc, reduceTy, input, filledTensor, maps, iteratorTypes,
       [&](OpBuilder &nestedBuilder, Location nestedLoc, ValueRange blockArgs) {
@@ -287,7 +286,7 @@ static LogicalResult reduceMatchAndRewriteHelper(Operation *op, PatternRewriter 
       return rewriter.notifyMatchFailure(op, "unable to create linalg.generic body for reduce op");
     }
     SmallVector<ReassociationExprs, 4> reassociationMap;
-    uint64_t expandInputRank = linalgOp.getResults()[0].getType().cast<ShapedType>().getRank();
+    uint64_t expandInputRank = cast<ShapedType>(linalgOp.getResults()[0].getType()).getRank();
     reassociationMap.resize(expandInputRank);
 
     size_t reassociationIdx = 0;

@@ -76,7 +76,7 @@ struct PromoteTempBufferPass : public PromoteTempBufferBase<PromoteTempBufferPas
   }
 
   bool addToPrivateMemory(gpu::GPUFuncOp op, Value value) const {
-    auto type = value.getType().dyn_cast<MemRefType>();
+    auto type = dyn_cast<MemRefType>(value.getType());
     if (!type || !type.hasStaticShape()) {
       llvm::outs() << "Can only promote static shape memrefs for now.\n";
       return false;
@@ -99,7 +99,7 @@ struct PromoteTempBufferPass : public PromoteTempBufferBase<PromoteTempBufferPas
   }
 
   bool addToWorkgroupMemory(gpu::GPUFuncOp op, Value value) const {
-    auto type = value.getType().dyn_cast<MemRefType>();
+    auto type = dyn_cast<MemRefType>(value.getType());
     if (!type || !type.hasStaticShape()) {
       llvm::outs() << "Can only promote static shape memrefs for now.\n";
       return false;

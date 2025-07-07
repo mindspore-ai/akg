@@ -63,7 +63,7 @@ LogicalResult BroadcastToOp::verify() {
   uint64_t newRankSize = getNewRankSize();
   if (getNewShapeValue() == nullptr && getNewShapeAttr() != nullptr) {
     llvm::ArrayRef<int64_t> newShape = *getNewShape();
-    uint64_t inputRank = getInput().getType().cast<ShapedType>().getRank();
+    uint64_t inputRank = cast<ShapedType>(getInput().getType()).getRank();
     for (uint64_t i = 0; i < newRankSize - inputRank; i++) {
       if (newShape[i] == -1) {
         return emitOpError(
@@ -81,7 +81,7 @@ LogicalResult BroadcastToOp::verify() {
 
 uint64_t BroadcastToOp::getNewRankSize() {
   if (getNewShapeValue() != nullptr) {
-    return getNewShapeValue().getType().cast<mlir::ShapedType>().getShape()[0];
+    return cast<mlir::ShapedType>(getNewShapeValue().getType()).getShape()[0];
   }
   if (getNewShapeAttr() != nullptr) {
     return (*getNewShape()).size();

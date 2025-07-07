@@ -190,7 +190,7 @@ void GlobalConfigSolver::solve(func::FuncOp funcOp) {
       akgglobal::GpuScheduleTool::getInstance().tagLoopWithAxisName(funcOp);
       if (modelGraph->graphTemplate == GraphTemplate::REDUCTION &&
           modelGraph->globalConfigs.find(akg::utils::kApplyReorderPass) != modelGraph->globalConfigs.end() &&
-          modelGraph->globalConfigs[akg::utils::kApplyReorderPass].dyn_cast<BoolAttr>().getValue()) {
+          dyn_cast<BoolAttr>(modelGraph->globalConfigs[akg::utils::kApplyReorderPass]).getValue()) {
         akgglobal::GpuScheduleTool::getInstance().setReductionOrder();
       } else {
         setEnableVectorize();
@@ -227,11 +227,11 @@ static std::pair<int, int> CollectAllAxesInfo(func::FuncOp funcOp, const ModelGr
   }
   for (auto node : modelGraph->nodes()) {
     int tensorId = -1;
-    if (node->opType == "Load" && isa<AffineLoadOp>(node->op_)) {
-      auto loadOp = dyn_cast<AffineLoadOp>(node->op_);
+    if (node->opType == "Load" && isa<affine::AffineLoadOp>(node->op_)) {
+      auto loadOp = dyn_cast<affine::AffineLoadOp>(node->op_);
       tensorId = getArgIndex(loadOp.getMemref());
-    } else if (node->opType == "Store" && isa<AffineStoreOp>(node->op_)) {
-      if (auto storeOp = dyn_cast<AffineStoreOp>(node->op_)) {
+    } else if (node->opType == "Store" && isa<affine::AffineStoreOp>(node->op_)) {
+      if (auto storeOp = dyn_cast<affine::AffineStoreOp>(node->op_)) {
         tensorId = getArgIndex(storeOp.getMemref());
       }
     }
@@ -356,4 +356,3 @@ void GlobalConfigSolver::UpdateGlobalInfo(func::FuncOp funcOp) {
 }  // namespace autotiling
 }  // namespace akg
 }  // namespace mlir
-

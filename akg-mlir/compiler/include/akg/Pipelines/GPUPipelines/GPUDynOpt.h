@@ -40,8 +40,6 @@ struct GPUDynPipelineOptions : public PassPipelineOptions<GPUDynPipelineOptions>
                    "tiling to use static tile size for all dynamic shape cases; mode 'auto' will let auto tiling to "
                    "use dynamic tile size for some special dynamic shape cases."),
     llvm::cl::init("auto")};
-  Option<bool> enablePolyTops{*this, "enable-polytops", llvm::cl::desc("Whether to enable polytops opt"),
-                              llvm::cl::init(false)};
 };
 
 void createGpuDynOptPipeline(OpPassManager &pm, const GPUDynPipelineOptions &options);

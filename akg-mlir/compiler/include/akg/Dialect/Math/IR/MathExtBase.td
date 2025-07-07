@@ -31,7 +31,6 @@ def MathExt_Dialect : Dialect {
     Extension for MathExt dialect
   }];
   let cppNamespace = "::mlir::mathExt";
-  let useFoldAPI = kEmitFoldAdaptorFolder;
 }
 
 #endif // AKG_DIALECT_MATH_IR_MATH_EXT_BASE

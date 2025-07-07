@@ -23,6 +23,7 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
+#include "mlir/Dialect/Vector/Transforms/LoweringPatterns.h"
 #include "mlir/Dialect/Vector/Transforms/VectorDistribution.h"
 #include "mlir/Dialect/Vector/Transforms/VectorRewritePatterns.h"
 #include "mlir/Dialect/Vector/Transforms/VectorTransforms.h"
@@ -35,6 +36,7 @@ namespace mlir {
 }  // namespace mlir
 
 using namespace mlir;
+using namespace mlir::vector;
 
 namespace {
 class VectorTransferLowerPass : public impl::VectorTransferLowerBase<VectorTransferLowerPass> {
@@ -51,7 +53,7 @@ class AKGTransferReadToVectorLoadLowering : public OpRewritePattern<vector::Tran
 
   LogicalResult matchAndRewrite(vector::TransferReadOp op, PatternRewriter &rewriter) const override {
     rewriter.setInsertionPoint(op);
-    if (cast<arith::ConstantOp>(op.getPadding().getDefiningOp()).getValueAttr().isa<BoolAttr>()) {
+    if (isa<BoolAttr>(cast<arith::ConstantOp>(op.getPadding().getDefiningOp()).getValueAttr())) {
       return failure();
     }
     auto loadOp = rewriter.create<vector::LoadOp>(op.getLoc(), op.getVectorType(), op.getSource(), op.getIndices());
@@ -67,7 +69,7 @@ class AKGTransferWriteToVectorStoreLowering : public OpRewritePattern<vector::Tr
 
   LogicalResult matchAndRewrite(vector::TransferWriteOp op, PatternRewriter &rewriter) const override {
     rewriter.setInsertionPoint(op);
-    if (op.getVector().getType().cast<VectorType>().getElementType().isInteger(1)) {
+    if (cast<VectorType>(op.getVector().getType()).getElementType().isInteger(1)) {
       return failure();
     }
     rewriter.replaceOpWithNewOp<vector::StoreOp>(op, op.getVector(), op.getSource(), op.getIndices());

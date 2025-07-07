@@ -1,8 +1,8 @@
 FetchContent_Declare(json URL ${JSON_TARBALL_URL})
 FetchContent_MakeAvailable(json)
 add_subdirectory(GPUPipelines)
+add_subdirectory(AscendPipelines)
 set(AKG_MLIR_LIBS
-  AKGTosaPasses
   MindSporePasses
   AKGAffinePasses
   AKGTransformsPasses
@@ -14,7 +14,6 @@ set(AKG_MLIR_LIBS
   MindSporePasses
   MLIRLinalgExtDialect
   AKGMLIRAnalysis
-  libpolytops-schedule-opt
   nlohmann_json::nlohmann_json
   )
 
@@ -38,9 +37,11 @@ add_mlir_library(AkgPipelines
   DEPENDS
   ${AKG_MLIR_LIBS}
   AKGGPUPipelines
+  AKGAscendPipelines
   
   DISABLE_INSTALL
   LINK_LIBS PUBLIC
   ${LIBS}
   AKGGPUPipelines
+  AKGAscendPipelines
   )

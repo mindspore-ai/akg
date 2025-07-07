@@ -70,7 +70,7 @@ class RepositoryStrategy : public TilingStrategy {
   RepositoryStrategy() : TilingStrategy() {}
   virtual ~RepositoryStrategy() = default;
 
-  void AddConstraint(ModelGraphPtr initGraph);
+  void AddConstraint(ModelGraphPtr initGraph) override;
 
  private:
   int extraTileLevel = 2;
@@ -81,8 +81,8 @@ class DynamicShapeStrategy : public TilingStrategy {
   DynamicShapeStrategy() : TilingStrategy() {}
   virtual ~DynamicShapeStrategy() = default;
 
-  void AddGpuConstraint(GpuModelGraphPtr initGraph);
-  void AddCpuConstraint(CpuModelGraphPtr initGraph);
+  void AddGpuConstraint(GpuModelGraphPtr initGraph) override;
+  void AddCpuConstraint(CpuModelGraphPtr initGraph) override;
 
  private:
   Sketch SketchAnalysis(std::vector<int64_t> sketch);
@@ -97,7 +97,7 @@ class ReduceStrategy : public TilingStrategy {
   ReduceStrategy() : TilingStrategy({"Reduce"}) {}
   virtual ~ReduceStrategy() = default;
 
-  void AddGpuConstraint(GpuModelGraphPtr gpuGraph);
+  void AddGpuConstraint(GpuModelGraphPtr gpuGraph) override;
 };
 
 class TransposeStrategy : public TilingStrategy {
@@ -105,7 +105,7 @@ class TransposeStrategy : public TilingStrategy {
   TransposeStrategy() : TilingStrategy() {}
   virtual ~TransposeStrategy() = default;
 
-  void AddGpuConstraint(GpuModelGraphPtr gpuGraph);
+  void AddGpuConstraint(GpuModelGraphPtr gpuGraph) override;
   int maxExpectSeq = 4;
   int maxExpectSeqPerAxis = 2;
   size_t minRankForTranspose = 2;
@@ -116,8 +116,8 @@ class BroadcastStrategy : public TilingStrategy {
   BroadcastStrategy() : TilingStrategy({Axis::AxisLabel::kVectorization}) {}
   virtual ~BroadcastStrategy() = default;
 
-  void AddGpuConstraint(GpuModelGraphPtr gpuGraph);
-  void AddCpuConstraint(CpuModelGraphPtr cpuGraph);
+  void AddGpuConstraint(GpuModelGraphPtr gpuGraph) override;
+  void AddCpuConstraint(CpuModelGraphPtr cpuGraph) override;
 
  private:
   int64_t getMaxByte(const CpuModelGraphPtr cpuGraph, NodePtr &minRankNode);
@@ -137,7 +137,7 @@ class UnrollStrategy : public TilingStrategy {
   UnrollStrategy() : TilingStrategy() {}
   virtual ~UnrollStrategy() = default;
 
-  void AddCpuConstraint(CpuModelGraphPtr cpuGraph);
+  void AddCpuConstraint(CpuModelGraphPtr cpuGraph) override;
 };
 
 class ParallelStrategy : public TilingStrategy {
@@ -145,8 +145,8 @@ class ParallelStrategy : public TilingStrategy {
   ParallelStrategy() : TilingStrategy() {}
   virtual ~ParallelStrategy() = default;
 
-  void AddGpuConstraint(GpuModelGraphPtr gpuGraph);
-  void AddCpuConstraint(CpuModelGraphPtr cpuGraph);
+  void AddGpuConstraint(GpuModelGraphPtr gpuGraph) override;
+  void AddCpuConstraint(CpuModelGraphPtr cpuGraph) override;
 
  private:
   void InitProposalResource(const GpuModelGraphPtr gpuGraph);

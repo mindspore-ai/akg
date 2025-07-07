@@ -17,21 +17,22 @@
 #ifndef COMPILER_INCLUDE_AKG_PIPELINES_INITALLPIPELINES_H_
 #define COMPILER_INCLUDE_AKG_PIPELINES_INITALLPIPELINES_H_
 
-#include "akg/Pipelines/CommonOpt.h"
+#include "akg/Pipelines/AscendPipelines/AscendOpt.h"
 #include "akg/Pipelines/CPUOpt.h"
-#include "akg/Pipelines/GPUPipelines/GPUOpt.h"
-#include "akg/Pipelines/GPUPipelines/GPUDynOpt.h"
+#include "akg/Pipelines/CommonOpt.h"
 #include "akg/Pipelines/GPUPipelines/GPUCodegen.h"
+#include "akg/Pipelines/GPUPipelines/GPUDynOpt.h"
+#include "akg/Pipelines/GPUPipelines/GPUOpt.h"
 
 using namespace mlir;
 
 namespace mlir {
 inline void registerAllPiplines() {
   registerCpuOptPipeline();
-  registerSpliterOptPipeline();
   registerGpuOptPipeline();
   registerGpuDynOptPipeline();
   registerGpuCodegenPipeline();
+  registerAscendOptPipeline();
 }
 }  // namespace mlir
 

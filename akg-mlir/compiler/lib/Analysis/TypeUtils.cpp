@@ -26,7 +26,7 @@ RankedTensorType updateTensorEncodingAttr(RankedTensorType origin, NamedAttribut
   if (!origin) {
     return origin;
   }
-  DictionaryAttr dict = origin.getEncoding().dyn_cast_or_null<DictionaryAttr>();
+  DictionaryAttr dict = dyn_cast_or_null<DictionaryAttr>(origin.getEncoding());
   if (!dict) {
     // If the original encoding is empty or non-DictionaryAttr, initialize it.
     llvm::SmallVector<NamedAttribute> namedAttrs{attr};

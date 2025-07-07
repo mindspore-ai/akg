@@ -68,7 +68,7 @@ std::vector<std::string> findSymbol(const std::string &str) {
 std::string getOutputSymbol(mlir::DictionaryAttr dictAttr, std::string target) {
   for (auto &keyValuePair : dictAttr) {
     auto key = keyValuePair.getName().str();
-    auto value = keyValuePair.getValue().cast<mlir::StringAttr>().str();
+    auto value = cast<mlir::StringAttr>(keyValuePair.getValue()).str();
     std::vector<std::string> symbols = findSymbol(value);
     bool flag = false;
     for (auto s : symbols) {
@@ -86,7 +86,7 @@ std::string getOutputSymbol(mlir::DictionaryAttr dictAttr, std::string target) {
 
 void collectRelatedDimsAndAffineMax(func::FuncOp funcOp, SmallVector<SmallVector<Operation *, 8>, 8> &dimPack,
                                     SmallVector<Operation *, 8> &maxList) {
-  funcOp.walk([&](AffineMaxOp maxOp) {
+  funcOp.walk([&](affine::AffineMaxOp maxOp) {
     bool flag = true;
     dimPack.push_back(SmallVector<Operation *, 8>());
     auto new_idx = dimPack.size() - 1;

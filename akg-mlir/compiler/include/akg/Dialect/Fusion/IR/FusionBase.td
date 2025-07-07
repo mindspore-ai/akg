@@ -43,7 +43,6 @@ def Fusion_Dialect : Dialect {
     }
   }];
 
-  let useFoldAPI = kEmitFoldAdaptorFolder;
 }
 
 #endif // FUSION_BASE

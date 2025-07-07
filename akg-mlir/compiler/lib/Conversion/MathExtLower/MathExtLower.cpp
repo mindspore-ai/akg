@@ -19,7 +19,6 @@
 #include "akg/Analysis/SymbolicShapeAnalysis.h"
 #include "akg/Conversion/Passes.h"
 #include "akg/Dialect/Linalg/IR/LinalgExtOps.h"
-#include "akg/Dialect/Math/IR/MathExtOps.h"
 #include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
 #include "mlir/Dialect/Affine/IR/AffineOps.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -139,7 +138,7 @@ struct MathExtLowerPass : public MathExtLowerBase<MathExtLowerPass> {
     registry.insert<math::MathDialect>();
     registry.insert<mathExt::MathExtDialect>();
     registry.insert<scf::SCFDialect>();
-    registry.insert<AffineDialect>();
+    registry.insert<affine::AffineDialect>();
     registry.insert<memref::MemRefDialect>();
     registry.insert<bufferization::BufferizationDialect>();
   }
@@ -148,11 +147,11 @@ struct MathExtLowerPass : public MathExtLowerBase<MathExtLowerPass> {
     RewritePatternSet patterns(&getContext());
     ConversionTarget target(getContext());
 
-    target
-      .addLegalDialect<vector::VectorDialect, gpu::GPUDialect, scf::SCFDialect, arith::ArithDialect,
-                       linalg::LinalgDialect, linalgExt::LinalgExtDialect, cf::ControlFlowDialect, mlir::BuiltinDialect,
-                       tensor::TensorDialect, func::FuncDialect, math::MathDialect, shape::ShapeDialect,
-                       LLVM::LLVMDialect, AffineDialect, memref::MemRefDialect, bufferization::BufferizationDialect>();
+    target.addLegalDialect<vector::VectorDialect, gpu::GPUDialect, scf::SCFDialect, arith::ArithDialect,
+                           linalg::LinalgDialect, linalgExt::LinalgExtDialect, cf::ControlFlowDialect,
+                           mlir::BuiltinDialect, tensor::TensorDialect, func::FuncDialect, math::MathDialect,
+                           shape::ShapeDialect, LLVM::LLVMDialect, affine::AffineDialect, memref::MemRefDialect,
+                           bufferization::BufferizationDialect>();
     target.addIllegalDialect<mindspore::MindSporeDialect>();
     target.addIllegalDialect<mathExt::MathExtDialect>();
     target.addLegalOp<mathExt::AcosOp>();

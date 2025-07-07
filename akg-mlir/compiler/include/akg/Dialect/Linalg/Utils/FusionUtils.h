@@ -39,7 +39,7 @@ void generateFusedElementwiseOpRegion(RewriterBase &rewriter, CONSUMEROP fusedOp
     llvm::transform(llvm::seq<uint64_t>(0, numFusedOpLoops), std::back_inserter(fusedIndices),
                     [&](uint64_t dim) { return rewriter.create<IndexOp>(producer.getLoc(), dim); });
     for (IndexOp indexOp : llvm::make_early_inc_range(producerBlock.getOps<IndexOp>())) {
-      Value newIndex = rewriter.create<mlir::AffineApplyOp>(
+      Value newIndex = rewriter.create<mlir::affine::AffineApplyOp>(
         producer.getLoc(), consumerToProducerLoopsMap.getSubMap(indexOp.getDim()), fusedIndices);
       mapper.map(indexOp.getResult(), newIndex);
     }
@@ -90,13 +90,13 @@ void generateFusedElementwiseOpRegion(RewriterBase &rewriter, CONSUMEROP fusedOp
   // 9. Now we can map the consumerBlock's `consumerIdx` block argument. Just
   // forward the yield operand.
   auto producerYieldOp = cast<linalg::YieldOp>(producerBlock.getTerminator());
-  unsigned producerResultNumber = fusedOperand->get().cast<OpResult>().getResultNumber();
+  unsigned producerResultNumber = cast<OpResult>(fusedOperand->get()).getResultNumber();
   Value replacement = mapper.lookupOrDefault(producerYieldOp.getOperand(producerResultNumber));
 
   // Sanity checks, if replacement is not already in the mapper then it must be
   // produced outside.
   if (replacement == producerYieldOp.getOperand(producerResultNumber)) {
-    if (auto bb = replacement.dyn_cast<BlockArgument>()) {
+    if (auto bb = dyn_cast<BlockArgument>(replacement)) {
       assert(bb.getOwner() != &producerBlock && "yielded block argument must have been mapped");
     } else {
       assert(!producer->isAncestor(replacement.getDefiningOp()) && "yielded value must have been mapped");

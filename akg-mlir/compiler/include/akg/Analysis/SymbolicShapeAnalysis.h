@@ -20,11 +20,11 @@
 #include <algorithm>
 #include <iostream>
 #include <map>
+#include <optional>
 #include <string>
 #include <utility>
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/IR/Type.h"
@@ -87,11 +87,11 @@ class SymbolicShapeAnalysis {
   template <class Container>
   llvm::SmallVector<SymEngine::Expression> getSymbolicExprsFromStrs(Container symbols);
   bool hasSymbolicShape(Type type) const;
-  llvm::Optional<llvm::SmallVector<std::string>> getSymbolicShape(Type type) const;
-  llvm::Optional<NamedAttribute> getSymbolShapeNamedAttr(Type type) const;
-  llvm::Optional<llvm::SmallVector<SymEngine::Expression>> getSymbolicShapeExpr(Type type);
-  llvm::Optional<std::string> getSymbolicDim(Type type, uint64_t idx) const;
-  llvm::Optional<SymEngine::Expression> getSymbolicDimExpr(Type type, uint64_t idx);
+  std::optional<llvm::SmallVector<std::string>> getSymbolicShape(Type type) const;
+  std::optional<NamedAttribute> getSymbolShapeNamedAttr(Type type) const;
+  std::optional<llvm::SmallVector<SymEngine::Expression>> getSymbolicShapeExpr(Type type);
+  std::optional<std::string> getSymbolicDim(Type type, uint64_t idx) const;
+  std::optional<SymEngine::Expression> getSymbolicDimExpr(Type type, uint64_t idx);
   Type createNewSymbolicShape(Type type);
   Type updateSymbolicShape(Type type, NamedAttribute &nameAttr) const;
   Type updateSymbolicShape(Type type, const llvm::SmallVector<std::string> &symbolicShape) const;

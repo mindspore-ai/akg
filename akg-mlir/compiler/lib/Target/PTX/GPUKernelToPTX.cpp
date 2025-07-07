@@ -31,7 +31,6 @@
 #include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/IPO/AlwaysInliner.h"
 #include "llvm/Transforms/IPO/Internalize.h"
-#include "llvm/Transforms/IPO/PassManagerBuilder.h"
 #include "llvm/Transforms/Scalar/DCE.h"
 #include "llvm/Transforms/Vectorize/LoopVectorize.h"
 #include "llvm/Transforms/Vectorize/SLPVectorizer.h"
@@ -48,23 +47,23 @@ using namespace mlir;
 
 namespace {
 
-static llvm::CodeGenOpt::Level LLVMCodeGenOpt(unsigned optLevel) {
-  llvm::CodeGenOpt::Level codegenOptLevel;
+static llvm::CodeGenOptLevel LLVMCodeGenOpt(unsigned optLevel) {
+  llvm::CodeGenOptLevel codegenOptLevel;
   switch (optLevel) {
     case 0:
-      codegenOptLevel = llvm::CodeGenOpt::None;
+      codegenOptLevel = llvm::CodeGenOptLevel::None;
       break;
     case 1:
-      codegenOptLevel = llvm::CodeGenOpt::Less;
+      codegenOptLevel = llvm::CodeGenOptLevel::Less;
       break;
     case 2:
-      codegenOptLevel = llvm::CodeGenOpt::Default;
+      codegenOptLevel = llvm::CodeGenOptLevel::Default;
       break;
     case 3:
-      codegenOptLevel = llvm::CodeGenOpt::Aggressive;
+      codegenOptLevel = llvm::CodeGenOptLevel::Aggressive;
       break;
     default:
-      codegenOptLevel = llvm::CodeGenOpt::Aggressive;
+      codegenOptLevel = llvm::CodeGenOptLevel::Aggressive;
       break;
   }
   return codegenOptLevel;
@@ -150,8 +149,9 @@ void SerializeToPTX::runOnOperation() {
   }
 
   std::unique_ptr<llvm::TargetMachine> targetMachine = createTargetMachine();
-  if (!targetMachine)
+  if (!targetMachine) {
     return signalPassFailure();
+  }
 
   translateToISA(*llvmModule, *targetMachine);
 }
@@ -186,8 +186,6 @@ void SerializeToPTX::translateToISA(llvm::Module &llvmModule, llvm::TargetMachin
   llvm::OptimizationLevel optLevel = mapToLevel(optLevelAsInt);
   llvm::PassBuilder pB(&targetMachine);
 
-  targetMachine.registerPassBuilderCallbacks(pB);
-
   // Register all basic analyses
   llvm::LoopAnalysisManager lAM;
   llvm::FunctionAnalysisManager fAM;
@@ -216,7 +214,7 @@ void SerializeToPTX::translateToISA(llvm::Module &llvmModule, llvm::TargetMachin
 
   llvm::legacy::PassManager codegenPasses;
   codegenPasses.add(llvm::createVerifierPass());
-  (void)targetMachine.addPassesToEmitFile(codegenPasses, pstream, nullptr, llvm::CGFT_AssemblyFile);
+  (void)targetMachine.addPassesToEmitFile(codegenPasses, pstream, nullptr, llvm::CodeGenFileType::AssemblyFile);
   (void)codegenPasses.run(llvmModule);
 }
 

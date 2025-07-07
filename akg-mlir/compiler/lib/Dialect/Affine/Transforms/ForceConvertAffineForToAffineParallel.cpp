@@ -51,22 +51,22 @@ constexpr auto kReductionAxesStr = "reduction_axes";
 
 struct AffineForToParallelPattern : public RewritePattern {
   AffineForToParallelPattern(MLIRContext *context, std::string matchOpType)
-      : RewritePattern(AffineForOp::getOperationName(), 1, context) {
+      : RewritePattern(affine::AffineForOp::getOperationName(), 1, context) {
     this->matchOpType = matchOpType;
   }
 
   void initialize() { setHasBoundedRewriteRecursion(); }
 
   LogicalResult matchAndRewrite(Operation *op, PatternRewriter &rewriter) const override {
-    if (auto forOp = dyn_cast<AffineForOp>(op)) {
-      auto parallelOp = rewriter.create<AffineParallelOp>(
+    if (auto forOp = dyn_cast<affine::AffineForOp>(op)) {
+      auto parallelOp = rewriter.create<affine::AffineParallelOp>(
         forOp.getLoc(), TypeRange(), ArrayRef<arith::AtomicRMWKind>(), llvm::ArrayRef(forOp.getLowerBoundMap()),
         forOp.getLowerBoundOperands(), llvm::ArrayRef(forOp.getUpperBoundMap()), forOp.getUpperBoundOperands(),
-        llvm::ArrayRef(forOp.getStep()));
+        llvm::ArrayRef(forOp.getStepAsInt()));
       parallelOp.getRegion().takeBody(forOp.getRegion());
       Operation *newOp = parallelOp.getOperation();
 
-      // Copy all Attrs from AffineForOp to AffineParallelOp
+      // Copy all Attrs from affine::AffineForOp to affine::AffineParallelOp
       for (const auto &attr : op->getAttrs()) {
         newOp->setAttr(attr.getName(), attr.getValue());
       }
@@ -85,7 +85,7 @@ struct ForceConvertAffineForToAffineParallel
   explicit ForceConvertAffineForToAffineParallel(const std::string matchOpType) { this->matchOpType = matchOpType; }
 
   StringRef getArgument() const final { return "force-convert-affine-for-to-affine-parallel"; }
-  void runOnOperation() {
+  void runOnOperation() override {
     func::FuncOp funcOp = getOperation();
     MLIRContext *context = funcOp.getContext();
 
@@ -109,4 +109,3 @@ std::unique_ptr<mlir::OperationPass<mlir::func::FuncOp>> mlir::createForceConver
   std::string matchOpType) {
   return std::make_unique<affine::ForceConvertAffineForToAffineParallel>(matchOpType);
 }
-

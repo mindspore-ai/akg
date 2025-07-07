@@ -38,6 +38,7 @@ namespace mlir {
 #define DEBUG_TYPE "akg-affine-loop-unroll"
 
 using namespace mlir;
+using namespace mlir::affine;
 
 namespace {
 
@@ -53,9 +54,9 @@ struct AKGLoopUnroll : public impl::AKGAffineLoopUnrollBase<AKGLoopUnroll> {
 }  // namespace
 
 /// Returns true if no other affine.for ops are nested within `op`.
-static bool isInnermostAffineForOp(AffineForOp op) {
+static bool isInnermostAffineForOp(affine::AffineForOp op) {
   return !op.getBody()
-            ->walk([&](AffineForOp nestedForOp) {
+            ->walk([&](affine::AffineForOp nestedForOp) {
               // Add original result expressions from lower/upper bound map.
               AffineMap lbMap = nestedForOp.getLowerBound().getMap();
               AffineMap ubMap = nestedForOp.getUpperBound().getMap();
@@ -63,7 +64,7 @@ static bool isInnermostAffineForOp(AffineForOp op) {
               SmallVector<AffineExpr, 2> origUbExprs(ubMap.getResults().begin(), ubMap.getResults().end());
 
               // Insert all combinations of upper/lower bound results.
-              int64_t origLoopStep = nestedForOp.getStep();
+              int64_t origLoopStep = nestedForOp.getStepAsInt();
               for (unsigned i = 0; i < origUbExprs.size(); ++i) {
                 AffineExpr newUb = (origUbExprs[i] - origLbExprs[0]).ceilDiv(origLoopStep);
                 if (newUb != 1 || newUb.floorDiv(65) == 0) {
@@ -78,7 +79,7 @@ static bool isInnermostAffineForOp(AffineForOp op) {
 
 /// Returns false if no vector::TransferReadOp or vector::TransferWriteOp ops
 /// are nested within `op`.
-static bool isVectorizedAffineForOp(AffineForOp op) {
+static bool isVectorizedAffineForOp(affine::AffineForOp op) {
   if (!isInnermostAffineForOp(op)) {
     return false;
   }
@@ -94,8 +95,8 @@ static bool isVectorizedAffineForOp(AffineForOp op) {
 }
 
 /// Gathers loops that have no affine.for's nested within.
-static void gatherInnermostLoops(func::FuncOp f, SmallVectorImpl<AffineForOp> &loops) {
-  f.walk([&](AffineForOp forOp) {
+static void gatherInnermostLoops(func::FuncOp f, SmallVectorImpl<affine::AffineForOp> &loops) {
+  f.walk([&](affine::AffineForOp forOp) {
     if (isVectorizedAffineForOp(forOp)) {
       loops.push_back(forOp);
     }
@@ -108,7 +109,7 @@ void AKGLoopUnroll::runOnOperation() {
     return;
   }
 
-  SmallVector<AffineForOp, 4> loops;
+  SmallVector<affine::AffineForOp, 4> loops;
   gatherInnermostLoops(funcOp, loops);
   if (loops.empty()) {
     return;

@@ -33,8 +33,6 @@ def LinalgExt_Dialect : Dialect {
   let cppNamespace = "::mlir::linalgExt";
 
   let dependentDialects = ["tensor::TensorDialect", "linalgExt::LinalgExtDialect"];
-
-  let useFoldAPI = kEmitFoldAdaptorFolder;
 }
 
 def TensorOrMemrefType : AnyTypeOf<[AnyTensor, AnyMemRef]>;

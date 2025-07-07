@@ -38,7 +38,7 @@ class GpuAttrUtils {
     }
     gpu::Processor processor = gpu::Processor::Sequential;
     for (Attribute attr : mappingAttr) {
-      auto annotation = attr.dyn_cast<gpu::ParallelLoopDimMappingAttr>();
+      auto annotation = dyn_cast<gpu::ParallelLoopDimMappingAttr>(attr);
       processor = annotation.getProcessor();
     }
     return processor;
@@ -248,7 +248,7 @@ class GpuCommonUtils {
     }
     mlir::memref::ExpandShapeOp targetExpandShape = nullptr;
     (void)funcOp->walk([&](mlir::memref::ExpandShapeOp op) {
-      if (op.getOperand() == targetArg) {
+      if (op.getOperands()[0] == targetArg) {
         targetExpandShape = op;
       }
     });

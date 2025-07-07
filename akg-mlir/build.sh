@@ -1,166 +1,193 @@
 #!/bin/bash
+# Copyright 2025 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
-set -e
-BASE_PATH=$(cd "$(dirname $0)"; pwd)
-AKG_MLIR_OUTPUT_PATH=${BASE_PATH}/output
-THIRD_PARTY_PATH=${BASE_PATH}/third-party
-PATH_TO_SOURCE_LLVM=${THIRD_PARTY_PATH}/llvm-project/
-PATH_TO_SOURCE_SYMENGINE=${THIRD_PARTY_PATH}/symengine/
-PATH_TO_SOURCE_POLYTOPS=${THIRD_PARTY_PATH}/polytops/
+export AKG_MLIR_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/" && pwd )"
+export AKG_DIR="${AKG_MLIR_DIR}/../"
+echo $AKG_MLIR_DIR
+echo $AKG_DIR
+BUILD_DIR="${AKG_MLIR_DIR}/build"
+OUTPUT_PATH="${AKG_MLIR_DIR}/output"
+C_COMPILER_PATH=$(which gcc)
+CXX_COMPILER_PATH=$(which g++)
 
-export LD_LIBRARY_PATH=${BASE_PATH}/build/lib:${LD_LIBRARY_PATH}
-
-_COUNT=0
-define_flag() {
-    local var=$1
-    local default=$2
-    local opt=$3
-    local flag=$4
-    local intro=$5
-
-    # count flags number
-    _COUNT=$((${_COUNT} + 1))
-
-    local max_flag=8
-    local mod_max=$((${_COUNT} % ${max_flag}))
-    local intro_space="    "
-    local flag_space="              "
-    local flag2=`echo ${flag} | awk '{print $1}'`
-
-    # set global varibles
-    if [[ "X${var}" != "X" ]] && [[ "X${default}" != "X" ]]; then
-        eval "${var}=${default}"
-    fi
-    _OPTS="${_OPTS}${opt}"
-    if [[ "X${mod_max}" = "X1" ]] && [[ "X${mod_max}" != "X${_COUNT}" ]]; then
-        _FLAGS="${_FLAGS}\n${flag_space}[${flag}]"
-    else
-        _FLAGS="${_FLAGS} [${flag}]"
-    fi
-    _INTROS="${_INTROS}${intro_space}${flag2} ${intro}\n"
+usage()
+{
+    echo "Usage:"
+    echo "bash build.sh [-e cpu|gpu|ascend|all] [-j[n]] [-t on|off] [-o] [-u] [-m akg-mlir-only|all] [-s] [-c] [-h]"
+    echo ""
+    echo "Options:"
+    echo "    -h Print usage"
+    echo "    -d Debug mode"
+    echo "    -e Hardware environment: cpu, gpu, ascend or all"
+    echo "    -j[n] Set the threads when building (Default: -j8)"
+    echo "    -t Unit test: on or off (Default: off)"
+    echo "    -o Output .o file directory"
+    echo "    -u Enable auto tune"
+    echo "    -m Compile mode: akg-mlir-only or all, default: all"
+    echo "    -s Specifies the source path of third-party, default: none \n\tllvm-project"
+    echo "    -c Clean built files, default: off"
 }
 
-# define options
-define_flag ""                ""                    "h"  "-h"                     "Print usage"
-define_flag CLEAN_BUILT       "off"                 "c"  "-c"                     "Clean built files, default: off"
-define_flag DEBUG_MODE        "off"                 "d"  "-d"                     "Enable debug mode, default: off"
-define_flag ENABLE_UNIT_TEST  "off"                 "t"  "-t"                     "Unit test: on or off, default: off"
-define_flag COMPILE_MODE      "all"                 "m:" "-m"                     "Compile mode: akg-mlir-only or all, default: all"
-define_flag BACKEND_ENV       "auto"                "e:" "-e"                     "Backend Environment: cpu, gpu, or auto, default: auto"
-define_flag DEPENDENT_BUILD   "none"                "S:"  "-S"                    "Specifies the build path of third-partys, default: none \n\t[0]llvm-project\n\t[1]symengine\n\t[2]polytops"
-define_flag DEPENDENT_SOURCE  "none"                "s:"  "-s"                    "Specifies the source path of third-partys, default: none \n\t[0]llvm-project\n\t[1]symengine\n\t[2]polytops"
-define_flag UPDATE_SUBMODULE  "off"                 "u"  "-u"                     "Update submodule, default: off"
-define_flag THREAD_NUM        8                     "j:" "-j[n]"                  "Set the threads number when building, default: -j8"
+mk_new_dir()
+{
+    local create_dir="$1"
 
-# print usage message
-usage() {
-    printf "Usage:\nbash build.sh${_FLAGS}\n\n"
-    printf "Options:\n${_INTROS}"
+    if [[ -d "${create_dir}" ]]; then
+        rm -rf "${create_dir}"
+    fi
+
+    mkdir -pv "${create_dir}"
 }
 
-# check and set options
-checkopts() {
-    # Process the options
-    while getopts "${_OPTS}" opt
-    do
-        OPTARGRAW=${OPTARG}
-        OPTARG=$(echo ${OPTARG} | tr '[A-Z]' '[a-z]')
-        case "${opt}" in
-            h)
+check_binary_file()
+{
+  local binary_dir="$1"
+  for cur_file in `ls "${binary_dir}"/*.o`
+  do
+    file_lines=`cat "${cur_file}" | wc -l`
+    if [ ${file_lines} -eq 3 ]; then
+        check_sha=`cat ${cur_file} | grep "oid sha256"`
+        if [ $? -eq 0 ]; then
+            echo "-- Warning: ${cur_file} is not a valid binary file."
+            return 1
+        fi
+    fi
+  done
+  return 0
+}
+
+if [ ! -n "$1" ]; then
+    echo "Must input parameter!"
+    usage
+    exit 1
+fi
+
+# Parse arguments
+THREAD_NUM=32
+SIMD_SET=off
+CMAKE_ARGS=""
+COMPILE_AKG_MLIR="off"
+AKG_MLIR_CMAKE_ARGS=""
+AKG_MLIR_ARGS=""
+PATH_TO_SOURCE_LLVM=${AKG_DIR}/third-party/llvm-project/
+_BUILD_TYPE="Release"
+BACKEND_ENV="CPU"
+
+while getopts 'h:e:j:u:t:o:d:m:s:c:r' opt
+do
+    case "${opt}" in
+        h)
+            usage
+            exit 0
+                ;;
+        e)
+            if [[ "${OPTARG}" == "gpu" ]]; then
+                CMAKE_ARGS="${CMAKE_ARGS} -DUSE_CUDA=ON"
+                BACKEND_ENV="GPU"
+            elif [[ "${OPTARG}" == "ascend" ]]; then
+                CMAKE_ARGS="${CMAKE_ARGS} -DUSE_LLVM=ON"
+            elif [[ "${OPTARG}" == "cpu" ]]; then
+                # AKG requires LLVM on CPU, the optimal version is 12.xx.xx.
+                # if not found in the environment, it will find another existing version to use.
+                CMAKE_ARGS="${CMAKE_ARGS} -DUSE_LLVM=ON"
+            elif [[ "${OPTARG}" == "all" ]]; then
+                CMAKE_ARGS="${CMAKE_ARGS} -DUSE_CUDA=ON -DENABLE_D=ON -DUSE_LLVM=ON"
+            else
+                echo "Unknown parameter ${OPTARG}!"
                 usage
-                exit 0
-                ;;
-            m)
-                COMPILE_MODE=${OPTARG}
-                ;;
-            c)
-                CLEAN_BUILT="on"
-                ;;
-            d)
-                DEBUG_MODE="on"
-                ;;
-            u)
-                UPDATE_SUBMODULE="on"
-                ;;
-            j)
-                THREAD_NUM=${OPTARG}
-                ;;
-            e)
-                BACKEND_ENV=${OPTARG}
-                ;;
-            S)
-                DEPENDENT_BUILD=${OPTARG}
-                ;;
-            s)
-                DEPENDENT_SOURCE=${OPTARG}
-                ;;
-            t)
-                ENABLE_UNIT_TEST="on"
-                ;;
-            *)
-                echo "Unknown option ${opt}!"
-                usage
-                exit 1;
-        esac
-    done
-}
-checkopts "$@"
+                exit 1
+            fi
+            ;;
+        j)
+            THREAD_NUM=${OPTARG}
+            ;;
+        t)
+            ENABLE_UNIT_TEST="on"
+            ;;
+        u)
+            CMAKE_ARGS="${CMAKE_ARGS} -DUSE_AUTO_TUNE=1"
+            ;;
+        d)
+            CMAKE_ARGS="${CMAKE_ARGS} -DCMAKE_BUILD_TYPE=Debug -DUSE_AKG_LOG=1"
+            _BUILD_TYPE=Debug
+            ;;
+        o)
+            arch_info=`arch | tr '[A-Z]' '[a-z]'`
+            arch_name=""
+            if [[ "${arch_info}" =~ "aarch64" ]]; then
+              arch_name="aarch64"
+            elif [[ "${arch_info}" =~ "x86_64" ]]; then
+              arch_name="x86_64"
+            else
+              echo "-- Warning: Only supports aarch64 and x86_64, but current is ${arch_info}"
+              exit 1
+            fi
 
-if [[ "X${DEBUG_MODE}" = "Xon" ]]; then
-  _BUILD_TYPE="Debug"
-else
-  _BUILD_TYPE="Release"
-fi
+            akg_extend_dir="${AKG_MLIR_DIR}/prebuild/${arch_name}"
+            if [ ! -d "${akg_extend_dir}" ]; then
+              echo "-- Warning: Prebuild binary file directory ${akg_extend_dir} not exits"
+              exit 1
+            fi
 
-if [[ "X${BACKEND_ENV}" = "XGPU" ]] || [[ "X${BACKEND_ENV}" = "Xgpu" ]]; then
-    CUDA_BACKEND="ON"
-elif [[ "X${BACKEND_ENV}" = "XAUTO" ]] || [[ "X${BACKEND_ENV}" = "Xauto" ]]; then
-    CUDA_BACKEND="AUTO"
-else
-    CUDA_BACKEND="OFF"
-fi
+            check_binary_file "${akg_extend_dir}"
+            if [ $? -ne 0 ]; then
+              GIT_LFS=`which git-lfs`
+              if [ $? -ne 0 ]; then
+                echo "-- Warning: git lfs not found, you can perform the following steps:"
+                echo "            1. Install git lfs, refer https://github.com/git-lfs/git-lfs/wiki/installation"
+                echo "            2. After installing git lfs, do not forget executing the following command:"
+                echo "               git lfs install"
+                echo "            3. Download the files tracked by git lfs, executing the following commands:"
+                echo "               cd ${AKG_MLIR_DIR}"
+                echo "               git lfs pull"
+                echo "            4. Re-compile the source codes"
+                exit 1
+              else
+                echo "-- Warning: git lfs found, but lfs files are not downloaded, you can perform the following steps:"
+                echo "            1. After installing git lfs, do not forget executing the following command:"
+                echo "               git lfs install"
+                echo "            2. Download the files tracked by git lfs, executing the following commands:"
+                echo "               cd ${AKG_MLIR_DIR}"
+                echo "               git lfs pull"
+                echo "            3. Re-compile the source codes"
+                exit 1
+              fi
+            fi
+            echo "${akg_extend_dir}"
+            exit 0
+            ;;
+        s)
+            LLVM_BUILD_PATH=${OPTARG}
+            ;;
+        m)
+            COMPILE_MODE=${OPTARG}
+            ;;
+        c)
+            CLEAN_BUILT="on"
+            ;;
+        *)
+            echo "Unknown option ${opt}!"
+            usage
+            exit 1
+    esac
+done
+echo "CMAKE_ARGS: ${CMAKE_ARGS}"
 
-THIRD_PARTY_COUNT=0
-if [[ "X${DEPENDENT_SOURCE}" != "Xnone" ]]; then
-    for local_var in ${DEPENDENT_SOURCE[@]}
-    do
-        if [[ $THIRD_PARTY_COUNT -eq 0 ]] && [[ "X${local_var}" != "Xnone" ]]; then
-            export PATH_TO_SOURCE_LLVM=${local_var}
-        fi
-        if [[ $THIRD_PARTY_COUNT -eq 1 ]] && [[ "X${local_var}" != "Xnone" ]]; then
-            export PATH_TO_SOURCE_SYMENGINE=${local_var}
-        fi
-        if [[ $THIRD_PARTY_COUNT -eq 2 ]] && [[ "X${local_var}" != "Xnone" ]]; then
-            export PATH_TO_SOURCE_POLYTOPS=${local_var}
-        fi
-        let THIRD_PARTY_COUNT+=1
-    done
-fi
-
-update_submodule(){
-  git -C "${BASE_PATH}" submodule update --init --depth 1
-}
-
-third_party_patch() {
-  echo "Start patching to llvm."
-  local FILE=${THIRD_PARTY_PATH}/llvm_patch_7cbf1a2591520c2491aa35339f227775f4d3adf6.patch
-  if [ -f "$FILE" ]; then
-    cd ${PATH_TO_SOURCE_LLVM}
-    local LLVM_CUR_COMMIT_ID=$(echo `git rev-parse HEAD`)
-    if [[ "X${LLVM_CUR_COMMIT_ID}" != "X7cbf1a2591520c2491aa35339f227775f4d3adf6" ]]; then
-        git checkout main
-        git checkout .
-        git clean -df
-        git pull
-        git reset --hard 7cbf1a2591520c2491aa35339f227775f4d3adf6
-        echo "set llvm to commit: 7cbf1a2591520c2491aa35339f227775f4d3adf6"
-    fi
-    git checkout .
-    git clean -df
-    patch -p1 -i ${FILE}
-    echo "Success patch to llvm!"
-  fi
-}
+# Create directories
+mkdir -pv "${BUILD_DIR}"
+mkdir -pv "${OUTPUT_PATH}/akg"
 
 build_llvm() {
     echo "Start building llvm project."
@@ -174,16 +201,9 @@ build_llvm() {
     echo "LLVM_BUILD_PATH = ${LLVM_BUILD_PATH}"
     cd ${LLVM_BUILD_PATH}
     local LLVM_CMAKE_ARGS="-G Ninja "
-    if [[ "X${BACKEND_ENV}" = "XGPU" ]] || [[ "X${BACKEND_ENV}" = "Xgpu" ]]; then
+    if [[ "X${BACKEND_ENV}" = "XGPU" ]]; then
         LLVM_CMAKE_ARGS="${LLVM_CMAKE_ARGS} -DLLVM_TARGETS_TO_BUILD='host;Native;NVPTX'"
         LLVM_CMAKE_ARGS="${LLVM_CMAKE_ARGS} -DMLIR_ENABLE_CUDA_RUNNER=ON"
-    elif [[ "X${BACKEND_ENV}" = "XAUTO" ]] || [[ "X${BACKEND_ENV}" = "Xauto" ]]; then
-        local flag=$(whereis cuda)
-        if [[ "${flag}" != "cuda:" ]]; then
-            echo "CUDA environment found"
-            LLVM_CMAKE_ARGS="${LLVM_CMAKE_ARGS} -DLLVM_TARGETS_TO_BUILD='host;Native;NVPTX'"
-            LLVM_CMAKE_ARGS="${LLVM_CMAKE_ARGS} -DMLIR_ENABLE_CUDA_RUNNER=ON"
-        fi
     else
         LLVM_CMAKE_ARGS="${LLVM_CMAKE_ARGS} -DLLVM_TARGETS_TO_BUILD='host'"
     fi
@@ -201,111 +221,62 @@ build_llvm() {
     -DCMAKE_BUILD_TYPE=${_BUILD_TYPE} \
     -DLLVM_ENABLE_ASSERTIONS=ON \
     -DLLVM_ENABLE_RTTI=ON \
+    -DCMAKE_C_COMPILER=${C_COMPILER_PATH} \
+    -DCMAKE_CXX_COMPILER=${CXX_COMPILER_PATH} \
     -DMLIR_ENABLE_BINDINGS_PYTHON=OFF
 
     export PATH_TO_BUILT_LLVM=${PWD}
     cmake --build . --config ${_BUILD_TYPE} -j${THREAD_NUM}
-    cmake --install ${LLVM_BUILD_PATH} --component clang --prefix ${AKG_MLIR_OUTPUT_PATH}
-    cmake --install ${LLVM_BUILD_PATH} --component llc --prefix ${AKG_MLIR_OUTPUT_PATH}
+    cmake --install ${LLVM_BUILD_PATH} --component clang --prefix ${OUTPUT_PATH}/akg
+    cmake --install ${LLVM_BUILD_PATH} --component llc --prefix ${OUTPUT_PATH}/akg
     echo "Success to build llvm project!"
 }
 
-build_symengine() {
-    echo "Start building symengine project."
-    SYMENGINE_BASE_PATH=${PATH_TO_SOURCE_SYMENGINE}
-    echo "SYMENGINE_BASE_PATH = ${SYMENGINE_BASE_PATH}"
-    cd ${SYMENGINE_BASE_PATH}
-    if [ ! -d "./build" ]; then
-        mkdir -pv build
-    fi
-    SYMENGINE_BUILD_PATH=${SYMENGINE_BASE_PATH}/build
-    echo "SYMENGINE_BUILD_PATH = ${SYMENGINE_BUILD_PATH}"
-    cd ${SYMENGINE_BUILD_PATH}
-    cmake .. \
-    -DHAVE_SYMENGINE_NOEXCEPT=OFF \
-    -DCMAKE_BUILD_TYPE:STRING=${_BUILD_TYPE} \
-    -DWITH_BFD:BOOL=OFF \
-    -DWITH_SYMENGINE_ASSERT:BOOL=OFF \
-    -DWITH_SYMENGINE_RCP:BOOL=ON \
-    -DWITH_SYMENGINE_THREAD_SAFE:BOOL=OFF \
-    -DWITH_ECM:BOOL=OFF \
-    -DBUILD_TESTS:BOOL=OFF \
-    -DBUILD_BENCHMARKS:BOOL=OFF \
-    -DBUILD_BENCHMARKS_GOOGLE:BOOL=OFF \
-    -DBUILD_SHARED_LIBS:BOOL=ON \
-    -DCMAKE_INSTALL_RPATH_USE_LINK_PATH:BOOL=ON
-    make -j${THREAD_NUM}
-    export PATH_TO_BUILT_SYMENGINE=${PWD}
-    echo "Success to build symengine project!"
+make_clean()
+{
+  echo "enable make clean"
+  cd "${BUILD_PATH}"
+  cmake --build . --target clean
 }
 
-build_akg_mlir() {
-    echo "Start building akg_mlir project."
-    cd ${BASE_PATH}
-    if [ ! -d "./build" ]; then
-        mkdir -pv build
-    fi
-    AKG_MLIR_BUILD_PATH=${BASE_PATH}/build
-    cd ${AKG_MLIR_BUILD_PATH}
-    if [[ "X${CLEAN_BUILT}" = "Xon" ]]; then
-        cmake --build . --target clean
-        echo "Success to clean akg-mlir built files."
-    fi
-
-    local -a AKG_MLIR_ARGS=( )
-    if [[ "x${AKG_MLIR_POLYTOPS_GIT_REPOSITORY}" != "x" ]]; then
-      AKG_MLIR_ARGS+=( "-DAKG_MLIR_POLYTOPS_SOURCE=git" )
-      AKG_MLIR_ARGS+=( "-DAKG_MLIR_POLYTOPS_GIT_REPOSITORY=${AKG_MLIR_POLYTOPS_GIT_REPOSITORY}" )
-    fi
-
-    cmake ../compiler/cmake/ \
-    "${AKG_MLIR_ARGS[@]}" \
-    -DCMAKE_BUILD_TYPE=${_BUILD_TYPE} \
-    -DLLVM_BUILD_PATH=${PATH_TO_BUILT_LLVM} \
-    -DSYMENGINE_BUILD_PATH=${PATH_TO_BUILT_SYMENGINE} \
-    -DLLVM_EXTERNAL_LIT=${PATH_TO_BUILT_LLVM}/bin/llvm-lit \
-    -DUSE_CUDA=${CUDA_BACKEND} \
-    -Wno-dev
-    export PATH=${AKG_MLIR_BUILD_PATH}/bin:$PATH
-	export LD_LIBRARY_PATH=${AKG_MLIR_BUILD_PATH}/lib:${LD_LIBRARY_PATH}
-    if [[ "X${ENABLE_UNIT_TEST}" = "Xon" ]]; then
-        cmake --build . --config ${_BUILD_TYPE} -j${THREAD_NUM} --target check-akg-mlir
-    else
-        cmake --build . --config ${_BUILD_TYPE} -j${THREAD_NUM}
-    fi
-    echo "Success to build akg_mlir project!"
+get_akg_mlir_cmake_args() {
+  AKG_MLIR_CMAKE_ARGS="${AKG_MLIR_CMAKE_ARGS} -DLLVM_BUILD_PATH=${PATH_TO_BUILT_LLVM} 
+  -DLLVM_EXTERNAL_LIT=${PATH_TO_BUILT_LLVM}/bin/llvm-lit"
+  if [[ "X${ENABLE_UNIT_TEST}" = "Xon" ]]; then
+    AKG_MLIR_ARGS="${AKG_MLIR_ARGS} --target check-akg-mlir"
+  fi
 }
 
-echo "---------------- akg-mlir: build start ----------------"
-if [[ "X${COMPILE_MODE}" = "Xakg-mlir-only" ]] || [[ "X${DEPENDENT_BUILD}" != "Xnone" ]]; then
-    export PATH_TO_BUILT_LLVM=${BASE_PATH}/third-party/llvm-project/build
-    export PATH_TO_BUILT_SYMENGINE=${BASE_PATH}/third-party/symengine/build
-    export PATH_TO_BUILT_POLYTOPS=${BASE_PATH}/third-party/polytops/build
-    THIRD_PARTY_COUNT=0
-    if [[ "X${DEPENDENT_BUILD}" != "Xnone" ]]; then
-        for local_var in ${DEPENDENT_BUILD[@]}
-        do
-            if [[ $THIRD_PARTY_COUNT -eq 0 ]] && [[ "X${local_var}" != "Xnone" ]]; then
-                export PATH_TO_BUILT_LLVM=${local_var}
-            fi
-            if [[ $THIRD_PARTY_COUNT -eq 1 ]] && [[ "X${local_var}" != "Xnone" ]]; then
-                export PATH_TO_BUILT_SYMENGINE=${local_var}
-            fi
-            if [[ $THIRD_PARTY_COUNT -eq 2 ]] && [[ "X${local_var}" != "Xnone" ]]; then
-                export PATH_TO_BUILT_POLYTOPS=${local_var}
-            fi
-            let THIRD_PARTY_COUNT+=1
-        done
-    fi
-    build_akg_mlir
+update_submodule(){
+  git submodule update --init --depth 1
+}
+
+
+echo "---------------- AKG: build start ----------------"
+
+if [[ "X${COMPILE_MODE}" = "Xakg-mlir-only" ]]; then
+  PATH_TO_BUILT_LLVM=${PATH_TO_SOURCE_LLVM}/build
+  get_akg_mlir_cmake_args
 else
-    if [[ "X${UPDATE_SUBMODULE}" = "Xon" ]]; then
-        update_submodule
-    fi
-    third_party_patch
-    build_llvm
-    build_symengine
-    build_akg_mlir
+  update_submodule
+  build_llvm
+  get_akg_mlir_cmake_args
 fi
 
-echo "---------------- akg-mlir: build end ----------------"
+if [[ "X$CLEAN_BUILT" = "Xon" ]]; then
+    make_clean
+fi
+
+# Build akg target
+cd $BUILD_DIR
+cmake .. ${CMAKE_ARGS} ${AKG_MLIR_CMAKE_ARGS}
+cmake --build . --config ${_BUILD_TYPE} -j${THREAD_NUM} ${AKG_MLIR_ARGS}
+cmake --build . --target install
+
+if [ ! -f "akg/bin/akg-opt" ];then
+  echo "[ERROR] akg-opt not exist!"
+  exit 1
+fi
+cp -r akg/bin ${OUTPUT_PATH}/akg/
+
+echo "---------------- AKG: build end ----------------"

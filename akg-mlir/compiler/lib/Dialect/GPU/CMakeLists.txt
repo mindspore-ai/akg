@@ -25,7 +25,7 @@ add_mlir_dialect_library(AKGGPUPasses
   MLIRAsyncDialect
   MLIRDataLayoutInterfaces
   MLIRExecutionEngineUtils
-  MLIRGPUOps
+  MLIRGPUDialect
   MLIRIR
   MLIRLLVMDialect
   MLIRLLVMToLLVMIRTranslation

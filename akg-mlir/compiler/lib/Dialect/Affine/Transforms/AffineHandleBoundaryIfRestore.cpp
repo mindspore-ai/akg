@@ -109,14 +109,14 @@ Operation *AffineHandleBoundaryIfRestore::getInnerApplyOp(Operation *funcOp, Sma
   for (auto op : relatedOps) {
     for (auto operand : op->getOperands()) {
       Operation *prev = operand.getDefiningOp();
-      if (prev && isa<AffineApplyOp>(prev)) {
+      if (prev && isa<affine::AffineApplyOp>(prev)) {
         applyOps.push_back(prev);
       }
     }
   }
 
   Operation *res = nullptr;
-  funcOp->walk([&](AffineApplyOp apply) {
+  funcOp->walk([&](affine::AffineApplyOp apply) {
     bool flag = false;
     for (auto op : applyOps) {
       if (apply.getOperation() == op) {
@@ -239,7 +239,7 @@ void AffineHandleBoundaryIfRestore::runOnOperation() {
 
   auto ifOp = dyn_cast<scf::IfOp>(boundaryIf);
   auto forOp = dyn_cast<scf::ForOp>(innerFor);
-  auto block = &forOp.getLoopBody().front();
+  auto block = &forOp.getRegion().front();
   if (underApply) {
     builder.setInsertionPointAfter(innerApply);
   } else {

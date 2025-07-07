@@ -16,6 +16,7 @@
 
 #include "akg/Dialect/Affine/Transforms/AffineMemoryPromotion.h"
 
+#include <optional>
 #include "akg/Utils/AnalysisCommon.hpp"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/Support/CommandLine.h"
@@ -84,13 +85,14 @@ void AKGMemoryPromotion::runOnBlock(Block *block, DenseSet<Operation *> &copyNes
 
   uint64_t fastMemCapacityBytes =
     fastMemoryCapacity != std::numeric_limits<uint64_t>::max() ? fastMemoryCapacity * 1024 : fastMemoryCapacity;
-  AffineCopyOptions copyOptions = {generateDma, slowMemorySpace, fastMemorySpace, tagMemorySpace, fastMemCapacityBytes};
+  affine::AffineCopyOptions copyOptions = {generateDma, slowMemorySpace, fastMemorySpace, tagMemorySpace,
+                                           fastMemCapacityBytes};
 
   // Every affine.for op in the block starts and ends a block range for copying;
   // in addition, a contiguous sequence of operations starting with a
   // load/store op but not including any copy nests themselves is also
   // identified as a copy block range. Straightline code (a contiguous chunk of
-  // operations excluding AffineForOp's) are always assumed to not exhaust
+  // operations excluding affine::AffineForOp's) are always assumed to not exhaust
   // memory. As a result, this approach is conservative in some cases at the
   // moment; we do a check later and report an error with location info.
 
@@ -101,16 +103,16 @@ void AKGMemoryPromotion::runOnBlock(Block *block, DenseSet<Operation *> &copyNes
     // An 'affine.if' operation is being treated similar to an
     // operation. 'affine.if''s could have 'affine.for's in them;
     // treat them separately.
-    if (auto ifOp = dyn_cast<AffineIfOp>(op)) {
+    if (auto ifOp = dyn_cast<affine::AffineIfOp>(op)) {
       bool valid = true;
       ifOp->walk([&](Operation *forOp) {
-        if (isa<AffineForOp>(forOp)) {
+        if (isa<affine::AffineForOp>(forOp)) {
           valid = false;
         }
       });
       return valid;
     }
-    return isa<AffineLoadOp, AffineStoreOp, AffineForOp>(op);
+    return isa<affine::AffineLoadOp, affine::AffineStoreOp, affine::AffineForOp>(op);
   };
 
   // Get to the first load, store, or for op (that is not a copy nest itself).
@@ -119,15 +121,15 @@ void AKGMemoryPromotion::runOnBlock(Block *block, DenseSet<Operation *> &copyNes
   // Create [begin, end) ranges.
   auto it = curBegin;
   while (it != block->end()) {
-    AffineForOp forOp;
+    affine::AffineForOp forOp;
     // If you hit a non-copy for loop, we will split there.
-    if ((forOp = dyn_cast<AffineForOp>(&*it)) && copyNests.count(forOp) == 0) {
+    if ((forOp = dyn_cast<affine::AffineForOp>(&*it)) && copyNests.count(forOp) == 0) {
       // Perform the copying up unti this 'for' op first.
-      (void)affineDataCopyGenerate(curBegin, it, copyOptions, std::nullopt, copyNests);
+      (void)affine::affineDataCopyGenerate(curBegin, it, copyOptions, std::nullopt, copyNests);
 
       // Returns true if the footprint is known to exceed capacity.
-      auto exceedsCapacity = [&](AffineForOp forOp) {
-        Optional<int64_t> footprint = getMemoryFootprintBytes(forOp, 0);
+      auto exceedsCapacity = [&](affine::AffineForOp forOp) {
+        std::optional<int64_t> footprint = getMemoryFootprintBytes(forOp, 0);
         return (footprint.has_value() && static_cast<uint64_t>(*footprint) > fastMemCapacityBytes);
       };
 
@@ -137,7 +139,7 @@ void AKGMemoryPromotion::runOnBlock(Block *block, DenseSet<Operation *> &copyNes
       // the footprint can't be calculated, we assume for now it fits. Recurse
       // inside if footprint for 'forOp' exceeds capacity, or when
       // skipNonUnitStrideLoops is set and the step size is not one.
-      bool recurseInner = skipNonUnitStrideLoops ? forOp.getStep() != 1 : exceedsCapacity(forOp);
+      bool recurseInner = skipNonUnitStrideLoops ? forOp.getStepAsInt() != 1 : exceedsCapacity(forOp);
       if (promoteDepth != 0 && curDepth < static_cast<unsigned>(promoteDepth)) {
         recurseInner = true;
       }
@@ -148,7 +150,7 @@ void AKGMemoryPromotion::runOnBlock(Block *block, DenseSet<Operation *> &copyNes
         runOnBlock(forOp.getBody(), copyNests, curDepth);
       } else {
         // todo(baiji): sometimes there is nullptr in copyNest and don't know why,
-        // so remove them before doing affineDataCopyGenerate for now.
+        // so remove them before doing affine::affineDataCopyGenerate for now.
         copyNests = RemoveEmptyCopyNests(copyNests);
         // We have enough capacity, i.e., copies will be computed for the
         // portion of the block until 'it', and for 'it', which is 'forOp'. Note
@@ -158,7 +160,7 @@ void AKGMemoryPromotion::runOnBlock(Block *block, DenseSet<Operation *> &copyNes
         // Inner loop copies have their own scope - we don't thus update
         // consumed capacity. The footprint check above guarantees this inner
         // loop's footprint fits.
-        (void)affineDataCopyGenerate(it, std::next(it), copyOptions, std::nullopt, copyNests);
+        (void)affine::affineDataCopyGenerate(it, std::next(it), copyOptions, std::nullopt, copyNests);
       }
       // Get to the next load or store op after 'forOp'.
       curBegin = std::find_if(std::next(it), block->end(), canBePromoted);
@@ -175,7 +177,7 @@ void AKGMemoryPromotion::runOnBlock(Block *block, DenseSet<Operation *> &copyNes
     // Can't be a terminator because it would have been skipped above.
     assert(!curBegin->hasTrait<OpTrait::IsTerminator>() && "can't be a terminator");
     // Exclude the affine.yield - hence, the std::prev.
-    (void)affineDataCopyGenerate(curBegin, std::prev(block->end()), copyOptions, std::nullopt, copyNests);
+    (void)affine::affineDataCopyGenerate(curBegin, std::prev(block->end()), copyOptions, std::nullopt, copyNests);
   }
 }
 
@@ -189,7 +191,7 @@ void AKGMemoryPromotion::runOnOperation() {
   OpBuilder topBuilder(f.getBody());
   zeroIndex = topBuilder.create<arith::ConstantIndexOp>(f.getLoc(), 0);
 
-  // Nests that are copy-in's or copy-out's; the root AffineForOps of those
+  // Nests that are copy-in's or copy-out's; the root affine::AffineForOps of those
   // nests are stored herein.
   DenseSet<Operation *> copyNests;
 
@@ -210,9 +212,9 @@ void AKGMemoryPromotion::runOnOperation() {
     // With a post order walk, the erasure of loops does not affect
     // continuation of the walk or the collection of load/store ops.
     nest->walk([&](Operation *op) {
-      if (auto forOp = dyn_cast<AffineForOp>(op)) {
+      if (auto forOp = dyn_cast<affine::AffineForOp>(op)) {
         (void)promoteIfSingleIteration(forOp);
-      } else if (isa<AffineLoadOp, AffineStoreOp>(op)) {
+      } else if (isa<affine::AffineLoadOp, affine::AffineStoreOp>(op)) {
         copyOps.push_back(op);
       }
     });
@@ -222,10 +224,12 @@ void AKGMemoryPromotion::runOnOperation() {
   // contained load's/store's, and the latter could anyway also be
   // canonicalized.
   RewritePatternSet patterns(&getContext());
-  AffineLoadOp::getCanonicalizationPatterns(patterns, &getContext());
-  AffineStoreOp::getCanonicalizationPatterns(patterns, &getContext());
+  affine::AffineLoadOp::getCanonicalizationPatterns(patterns, &getContext());
+  affine::AffineStoreOp::getCanonicalizationPatterns(patterns, &getContext());
   FrozenRewritePatternSet frozenPatterns(std::move(patterns));
-  (void)applyOpPatternsAndFold(copyOps, frozenPatterns, GreedyRewriteStrictness::ExistingAndNewOps);
+  GreedyRewriteConfig config;
+  config.strictMode = GreedyRewriteStrictness::ExistingAndNewOps;
+  (void)applyOpPatternsAndFold(copyOps, frozenPatterns, config);
 
   RemoveGlobalTempBuffer();
 }
@@ -236,7 +240,7 @@ Value AKGMemoryPromotion::MemFlowRemoval(memref::AllocOp memSrc, SmallVector<Ope
   Value memDest;
   for (auto user : memSrc->getUsers()) {
     if (user->use_empty()) {
-      if (dyn_cast<AffineStoreOp>(user)) {
+      if (dyn_cast<affine::AffineStoreOp>(user)) {
         toReplace.push_back(user);
         continue;
       }
@@ -246,7 +250,8 @@ Value AKGMemoryPromotion::MemFlowRemoval(memref::AllocOp memSrc, SmallVector<Ope
       SmallVector<Operation *> gmToFast;
       for (auto store : user->getUsers()) {
         auto memRef = CommonUtils::getStoreMemref(store);
-        if (memRef && memRef.getDefiningOp() && CommonUtils::getCacheLevel(memRef) != kGlobalCache) {
+        if (memRef && memRef.getDefiningOp() &&
+            CommonUtils::getCacheLevel(cast<TypedValue<MemRefType>>(memRef)) != kGlobalCache) {
           memDest = memRef;
           gmToFast.push_back(store);
         }
@@ -282,7 +287,7 @@ void AKGMemoryPromotion::RemoveGlobalTempBuffer() {
     }
     for (auto user : toReplace) {
       bool isFastMemToGlobal = false;
-      getOperation()->walk([&](AffineLoadOp load) {
+      getOperation()->walk([&](affine::AffineLoadOp load) {
         for (auto loadUser : load->getUsers()) {
           isFastMemToGlobal = isFastMemToGlobal || (loadUser == user && tempFastMem == load.getMemref());
         }
@@ -338,7 +343,7 @@ bool AKGMemoryPromotion::DirectlyPromoteGlobalTempBuffer() {
     if (tempGm != redAlloc) {
       continue;
     }
-    auto origType = tempGm.getType().dyn_cast<MemRefType>();
+    auto origType = dyn_cast<MemRefType>(tempGm.getType());
     auto newType = MemRefType::get(origType.getShape(), origType.getElementType(), {}, fastMemorySpace);
     for (auto *user : redAlloc->getUsers()) {
       for (auto operand : user->getOperands()) {
@@ -356,7 +361,7 @@ bool AKGMemoryPromotion::AutoSetPromoteDepth() {
   int lastRedAxisDepth = -1;
   int currDepth = 0;
   // walk from inner to outer ?
-  getOperation()->walk([&](AffineForOp forOp) {
+  getOperation()->walk([&](affine::AffineForOp forOp) {
     if (lastRedAxisDepth == -1 && CommonUtils::isReduceAxis(getOperation(), forOp)) {
       lastRedAxisDepth = currDepth;
     }

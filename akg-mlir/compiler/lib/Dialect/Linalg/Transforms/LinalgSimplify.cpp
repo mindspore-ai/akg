@@ -15,6 +15,7 @@
  */
 
 #include "akg/Dialect/Linalg/Transforms/LinalgSimplify.h"
+#include <optional>
 #include <utility>
 #include "akg/Analysis/SymbolicShapeAnalysis.h"
 #include "akg/Dialect/Linalg/IR/LinalgExtOps.h"
@@ -80,79 +81,6 @@ static std::unordered_map<std::string, ValCollector> dimMap;
 //  : tensor<?x?xf16> into tensor<?xf16>
 // %consumer = linalg.generic {} ins(%collapsed0, %collapsed_1 ...) outs(%11 ...)
 
-static bool DynTileFussionDecision(Value &collapsed0, Value &collapsed1) {
-  Operation *op0 = collapsed0.getDefiningOp();
-  Operation *op1 = collapsed1.getDefiningOp();
-  if (op0 && op1 && op0->getAttr("AttachDynTile") && op1->getAttr("AttachDynTile")) {
-    if (!isa<linalg::GenericOp>(op0->getOperands()[0].getDefiningOp()) ||
-        !isa<linalg::GenericOp>(op1->getOperands()[0].getDefiningOp())) {
-      return false;
-    }
-    uint64_t inRank0 = op0->getOperands()[0].getType().cast<ShapedType>().getRank();
-    uint64_t inRank1 = op1->getOperands()[0].getType().cast<ShapedType>().getRank();
-    uint64_t outRank0 = collapsed0.getType().cast<ShapedType>().getRank();
-    uint64_t outRank1 = collapsed1.getType().cast<ShapedType>().getRank();
-    const uint64_t fusionThreshold = 2;
-    if (inRank0 - outRank0 > fusionThreshold && inRank1 - outRank1 > fusionThreshold) {
-      return false;
-    }
-    if ((inRank1 - outRank1) > (inRank0 - outRank0)) {
-      std::swap(collapsed0, collapsed1);
-    }
-    return true;
-  }
-  return false;
-}
-namespace {
-void populateBroadcastToTransform(Operation &func) {
-  mlir::Location loc = func.getLoc();
-  MLIRContext *context = func.getContext();
-  OpBuilder builder(context);
-  func.walk([&](linalg::GenericOp genericOp) {
-    Operation *consumer = genericOp.getOperation();
-    // genericOp must has two input Operands, collapsed0 and collapsed1.
-    const uint64_t opndNums = 3;
-    if (consumer->getOperands().size() != opndNums) {
-      return WalkResult::advance();
-    }
-    // collapsed1 is regarded as the one to be fused.
-    Value collapsed0 = consumer->getOperands()[0];
-    Value collapsed1 = consumer->getOperands()[1];
-    // if collapsed0 is better suited to be fused operators, swap collapsed0 and collapsed1 in DynTileFussionDecision.
-    if (!DynTileFussionDecision(collapsed0, collapsed1)) {
-      return WalkResult::advance();
-    }
-    builder.setInsertionPoint(consumer);
-    // 1. Find the output shape of the fused dyn_tile.
-    linalg::GenericOp fusiongeneric =
-      dyn_cast<linalg::GenericOp>(collapsed1.getDefiningOp()->getOperands()[0].getDefiningOp());
-    Value finalempty = fusiongeneric.getOutputs()[0];
-    Value shapeofFinalEmpty = builder.create<shape::ShapeOfOp>(loc, finalempty);
-    // 2. collapsed0 is expanded to the target shape.
-    Value reshapeOp = builder.create<tensor::ReshapeOp>(loc, finalempty.getType(), collapsed0, shapeofFinalEmpty);
-    // 3. rebuild generic
-    auto genericShape = finalempty.getType().cast<ShapedType>().getShape();
-    auto elementTy = finalempty.getType().cast<ShapedType>().getElementType();
-    RankedTensorType resultTy = RankedTensorType::get(genericShape, elementTy);
-
-    SmallVector<AffineMap, 2> affineMap = {builder.getMultiDimIdentityMap(genericShape.size())};
-    SmallVector<utils::IteratorType> iterators(genericShape.size(), utils::IteratorType::parallel);
-    auto genericMap = builder.getMultiDimIdentityMap(genericShape.size());
-    auto newGenericOp = builder.create<linalg::GenericOp>(
-      loc, resultTy, ValueRange({reshapeOp, collapsed1.getDefiningOp()->getOperands()[0]}), ValueRange{finalempty},
-      ArrayRef<AffineMap>{genericMap, genericMap, genericMap}, iterators);
-    newGenericOp.getRegion().takeBody(genericOp.getRegion());
-    // 4. Collapse
-    auto reassociationAttr = dyn_cast<tensor::CollapseShapeOp>(collapsed1.getDefiningOp()).getReassociationAttr();
-    Value newCollapsed =
-      builder.create<tensor::CollapseShapeOp>(loc, collapsed1.getType(), newGenericOp.getResult(0), reassociationAttr);
-    genericOp.getResult(0).replaceAllUsesWith(newCollapsed);
-
-    return WalkResult::advance();
-  });
-}
-}  // namespace
-
 static void elementwiseOpOperandSimplify(PatternRewriter &rewriter, OpOperand *fusedOperand) {
   auto producer = fusedOperand->get().getDefiningOp<GenericOp>();
   auto consumer = dyn_cast<GenericOp>(fusedOperand->getOwner());
@@ -169,8 +97,8 @@ static void elementwiseOpOperandSimplify(PatternRewriter &rewriter, OpOperand *f
   if (!producer.getOutputs()[0].hasOneUse()) {
     return;
   }
-  if (producer.getOutputs()[0].getType().cast<ShapedType>().getElementType() !=
-      consumer.getOutputs()[0].getType().cast<ShapedType>().getElementType()) {
+  if (cast<ShapedType>(producer.getOutputs()[0].getType()).getElementType() !=
+      cast<ShapedType>(consumer.getOutputs()[0].getType()).getElementType()) {
     return;
   }
   // if no symbolic expression, return.
@@ -233,7 +161,7 @@ struct LinalgSimplify : public impl::LinalgSimplifyBase<LinalgSimplify> {
 
     // Add elementwise op simplify patterns.
     populateElementwiseOpsSimplify(simplifyPatterns, controlFn);
-    (void)applyPatternsAndFoldGreedily(op->getRegions(), std::move(simplifyPatterns), grc);
+    (void)applyPatternsAndFoldGreedily(getOperation(), std::move(simplifyPatterns), grc);
 
     // Fold consumer's outs to producer's outs
     for (auto &producer : producerConsumerMap) {
@@ -244,7 +172,7 @@ struct LinalgSimplify : public impl::LinalgSimplifyBase<LinalgSimplify> {
     // Add the patterns that clean up dead operands and results.
     RewritePatternSet csePatterns0(context);
     populateEraseUnusedOperandsAndResultsPatterns(csePatterns0);
-    (void)applyPatternsAndFoldGreedily(op->getRegions(), std::move(csePatterns0), grc);
+    (void)applyPatternsAndFoldGreedily(getOperation(), std::move(csePatterns0), grc);
 
     // Binding all equal (such as symbolic-equal) dimensions to the same SSA value.
     SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
@@ -276,8 +204,8 @@ struct LinalgSimplify : public impl::LinalgSimplifyBase<LinalgSimplify> {
       llvm::SmallVector<std::string> inSymbol = *analysis.getSymbolicShape(inTy);
       llvm::SmallVector<std::string> outSymbol = *analysis.getSymbolicShape(outTy);
       for (uint64_t j = 0; j < inSymbol.size(); j++) {
-        if (inTy.cast<ShapedType>().getShape()[j] != ShapedType::kDynamic ||
-            outTy.cast<ShapedType>().getShape()[j] != ShapedType::kDynamic) {
+        if (cast<ShapedType>(inTy).getShape()[j] != ShapedType::kDynamic ||
+            cast<ShapedType>(outTy).getShape()[j] != ShapedType::kDynamic) {
           continue;
         }
         if (symMap0.find(outSymbol[j]) == symMap0.end()) {
@@ -293,7 +221,7 @@ struct LinalgSimplify : public impl::LinalgSimplifyBase<LinalgSimplify> {
       if (!maybeConstantIndex) {
         return WalkResult::advance();
       }
-      llvm::Optional<std::string> dim = analysis.getSymbolicDim(dimOp.getSource().getType(), *maybeConstantIndex);
+      std::optional<std::string> dim = analysis.getSymbolicDim(dimOp.getSource().getType(), *maybeConstantIndex);
       if (!dim) {
         return WalkResult::advance();
       }
@@ -321,7 +249,7 @@ struct LinalgSimplify : public impl::LinalgSimplifyBase<LinalgSimplify> {
     // Add the patterns that clean up dead operands and results.
     RewritePatternSet csePatterns1(context);
     populateEraseUnusedOperandsAndResultsPatterns(csePatterns1);
-    (void)applyPatternsAndFoldGreedily(op->getRegions(), std::move(csePatterns1), grc);
+    (void)applyPatternsAndFoldGreedily(getOperation(), std::move(csePatterns1), grc);
   }
 };
 }  // namespace

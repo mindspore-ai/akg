@@ -16,6 +16,7 @@
 
 import logging
 import inspect
+import itertools
 from copy import deepcopy
 import numpy as np
 
@@ -94,81 +95,6 @@ def gather_np(data, indices, axis):
     return expect
 
 
-def csrmv_np(indptr, indices, data, weight, shape):
-    """numpy implementation of csrmv"""
-    import scipy.sparse
-    sparse_data = scipy.sparse.csr_matrix((data, indices, indptr), shape)
-    expect = sparse_data * weight
-    return np.asarray(expect)
-
-
-def csrmm_np(indptr, indices, data, weight, shape):
-    """numpy implementation of csrmm"""
-    import scipy.sparse
-    sparse_data = scipy.sparse.csr_matrix((data, indices, indptr), shape)
-    expect = sparse_data * weight
-    return np.asarray(expect)
-
-
-def csr_reduce_sum_np(indptr, indices, data, shape, axis):
-    """numpy implementation of csr_reduce_sum"""
-    import scipy.sparse
-    axis = axis % len(shape)
-    x = data.reshape(data.shape[0], -1)
-    expect = []
-    for i in range(x.shape[-1]):
-        sparse = scipy.sparse.csr_matrix(
-            (x[..., i], indices, indptr), shape=shape[:2])
-        out = np.array(sparse.sum(axis))
-        expect.append(out.data)
-    expect = np.moveaxis(np.stack(expect, 0).reshape(
-        shape[2:] + [shape[1 - axis]]), -1, 0)
-    return expect.reshape([shape[0], 1] + shape[2:])
-
-
-def csr_mul_np(indptr, indices, sparse_data, dense, shape):
-    """numpy implementation of csr_mul"""
-    import scipy.sparse
-    x = sparse_data.reshape(sparse_data.shape[0], -1)
-    y = np.broadcast_to(dense, shape).reshape(shape[0], shape[1], -1)
-    expect = []
-    for i in range(x.shape[-1]):
-        sparse = scipy.sparse.csr_matrix(
-            (x[..., i], indices, indptr), shape=shape[:2])
-        out = sparse.multiply(y[..., i])
-        expect.append(out.data)
-    expect = np.moveaxis(np.stack(expect, 0).reshape(
-        shape[2:] + [sparse_data.shape[0]]), -1, 0)
-    return expect
-
-
-def csr_div_np(indptr, indices, sparse_data, dense, shape):
-    """numpy implementation of csr_div"""
-    import scipy.sparse
-    x = sparse_data.reshape(sparse_data.shape[0], -1)
-    y = np.broadcast_to(dense, shape).reshape(shape[0], shape[1], -1)
-    expect = []
-    for i in range(x.shape[-1]):
-        sparse = scipy.sparse.csr_matrix(
-            (x[..., i], indices, indptr), shape=shape[:2])
-        out = sparse.multiply(np.divide(1, y[..., i]))
-        expect.append(out.data)
-    expect = np.moveaxis(np.stack(expect, 0).reshape(
-        shape[2:] + [sparse_data.shape[0]]), -1, 0)
-    return expect
-
-
-def csr_gather_np(indptr, indices, dense, shape):
-    """numpy implementation of csr_gather"""
-    import scipy.sparse
-    sparse_data = scipy.sparse.csr_matrix(
-        (np.zeros(indices.shape), indices, indptr), shape[:2])
-    coo = sparse_data.tocoo()
-    coo_idx = np.stack((coo.row, coo.col))
-    expect = dense[tuple(coo_idx.tolist())]
-    return expect
-
-
 def one_hot_np(data, axis, on_value, off_value, depth, dtype):
     """numpy implementation of one_hot"""
     shape = data.shape
@@ -180,7 +106,6 @@ def one_hot_np(data, axis, on_value, off_value, depth, dtype):
     dims = []
     for dim in shape:
         dims.append(list(range(dim)))
-    import itertools
     indexs = [x for x in itertools.product(*tuple(dims))]
     indexs = [list(x) for x in indexs]
     for i, value in enumerate(data.flatten()):
@@ -198,31 +123,39 @@ def reduce_str(inputs, output, attr, op_type):
     axis = []
     keepdims = False
     axis_value = get_attr(attr, "axis")
-    if not axis_value and len(inputs) == 2 and inputs[1][0]['value']:
+    if not axis_value and len(inputs) == 2 and 'value' in inputs[1][0]:
         axis_value = inputs[1][0]['value']
-    if axis_value:
-        axis = list(axis_value) if isinstance(
-            axis_value, (list, tuple)) else [axis_value]
+
+    axis = list(axis_value) if isinstance(
+        axis_value, (list, tuple)) else [axis_value]
     keepdims_value = get_attr(attr, "keep_dims")
     keepdims = keepdims_value if keepdims_value else keepdims
 
     if not axis:
-        s = "%s = np.%s(%s.astype(np.float32) if %s.dtype == np.float16 else %s, keepdims=%s).astype(%s.dtype)" % (
+        s = "%s = np.%s(%s.astype(np.float32) if %s.dtype == np.float16 or %s.dtype == bfloat16 else %s, keepdims=%s).astype(%s.dtype)" % (
             output[0]['tensor_name'], op_type, get_input(
-                inputs[0][0]), get_input(inputs[0][0]),
+                inputs[0][0]), get_input(inputs[0][0]), get_input(inputs[0][0]),
             get_input(inputs[0][0]), keepdims, get_input(inputs[0][0]))
     else:
-        s = "%s = np.%s(%s.astype(np.float32) if %s.dtype == np.float16 else %s, axis=tuple(%s), keepdims=%s)" \
+        s = "%s = np.%s(%s.astype(np.float32) if %s.dtype == np.float16 or %s.dtype == bfloat16 else %s, axis=tuple(%s), keepdims=%s)" \
             ".astype(%s.dtype); %s = np.reshape(%s, %s) " % \
-            (output[0]['tensor_name'], op_type, get_input(inputs[0][0]), get_input(inputs[0][0]),
-             get_input(inputs[0][0]), axis, keepdims, get_input(inputs[0][0]),
+            (output[0]['tensor_name'], op_type, get_input(inputs[0][0]), get_input(inputs[0][0]), 
+             get_input(inputs[0][0]), get_input(inputs[0][0]), axis, keepdims, get_input(inputs[0][0]),
              output[0]['tensor_name'], output[0]['tensor_name'], output[0]['shape'])
     return s
 
 
 def cast_str(inputs, output, attr):
     """gen cast string"""
-    dst_type = get_attr(attr, "dst_type")
+    dst_type = output[0]["data_type"]
+    if (dst_type == "bfloat16"):
+        if inputs[0][0].get('value', None) is not None:
+            s = "%s = np.array(%s).astype(bfloat16)" % (
+                output[0]['tensor_name'], get_input(inputs[0][0]))
+        else:
+            s = "%s = %s.astype(bfloat16)" % (
+                output[0]['tensor_name'], get_input(inputs[0][0]))
+        return s
     if inputs[0][0].get('value', None) is not None:
         s = "%s = np.array(%s).astype(np.%s)" % (
             output[0]['tensor_name'], get_input(inputs[0][0]), dst_type)
@@ -234,7 +167,11 @@ def cast_str(inputs, output, attr):
 
 def broadcast_str(inputs, output, attr):
     """gen broadcast string"""
-    dst_shape = get_attr(attr, "shape")
+    dst_shape = None
+    if (attr == None):
+        dst_shape = output[0]["shape"]
+    else:
+        dst_shape = get_attr(attr, "shape")
     s = "%s = np.broadcast_to(%s, %s)" % (
         output[0]["tensor_name"], get_input(inputs[0][0]), dst_shape)
     return s
@@ -419,7 +356,7 @@ def strided_slice_str(inputs, output, attr):
 
     new_axis = -1
     shrink_axis = -1
-    slice_str = ""
+    slice_string = ""
     for i, start_num in enumerate(begin):
         end_num = end[i]
         strides_num = strides[i]
@@ -447,12 +384,12 @@ def strided_slice_str(inputs, output, attr):
             end_num = start_num + 1
             strides_num = 1
             shrink_axis = i
-        slice_str += str(start_num) + ':' + str(end_num) + \
+        slice_string += str(start_num) + ':' + str(end_num) + \
             ':' + str(strides_num) + ","
-    slice_str = slice_str[:-1]
+    slice_string = slice_string[:-1]
 
     res = "%s = %s[%s]" % (output[0]['tensor_name'],
-                           get_input(inputs[0][0]), slice_str)
+                           get_input(inputs[0][0]), slice_string)
     if new_axis != -1:
         res += "\n%s = np.expand_dims(%s, axis=%s)" % (
             output[0]['tensor_name'], output[0]['tensor_name'], str(new_axis))
@@ -466,16 +403,16 @@ def slice_str(inputs, output, attr):
     """gen slice string"""
     begin = get_attr(attr, "begin")
     slice_size = get_attr(attr, "size")
-    slice_str = ""
+    slice_string = ""
     for i, value in enumerate(begin):
         start_num = value
         end_num = value + slice_size[i]
-        slice_str += str(start_num) + ':' + str(end_num)
+        slice_string += str(start_num) + ':' + str(end_num)
         if not i == len(begin) - 1:
-            slice_str += ","
+            slice_string += ","
 
     res = "%s = %s[%s]" % (output[0]['tensor_name'],
-                           get_input(inputs[0][0]), slice_str)
+                           get_input(inputs[0][0]), slice_string)
     return res
 
 
@@ -566,7 +503,7 @@ def conv_2d_nchwc_str(inputs, output, attr, is_depthwise):
     # NCHWc
     data = inputs[0][0]
     # OIHWio
-    filter = inputs[1][0]
+    filter_data = inputs[1][0]
     dtype = inputs[0][0]['data_type']
     padding = get_attr(attr, "pad_list")
     stride = get_attr(attr, "stride")
@@ -579,10 +516,10 @@ def conv_2d_nchwc_str(inputs, output, attr, is_depthwise):
     res += "n, c_i_o, h, w, c_i_i = {} \n".format(data['shape'])
     if is_depthwise:
         res += "c_o_o, cm_outer, kh, kw, cm_inner, c_o_i = {}\n".format(
-            filter['shape'])
+            filter_data['shape'])
     else:
         res += "c_o_o, c_i_o, kh, kw, c_i_i, c_o_i = {}\n".format(
-            filter['shape'])
+            filter_data['shape'])
     res += "s_h, s_w = {}\n".format(stride)
     res += "d_h, d_w = {}\n".format(dilation)
     res += "p_l, p_r, p_t, p_b = {}\n".format(padding)
@@ -614,15 +551,18 @@ def conv_2d_nchwc_str(inputs, output, attr, is_depthwise):
     if is_depthwise:
         res += indent + indent + indent + indent + \
             indent + "for oc_in in range(c_o_i):\n"
-        compute_str = "{}[:, oc_out, oh, ow, oc_in] = {}[:, oc_out, oh, ow, oc_in] + \
-            data_pad[:, (oc_out*c_o_i+oc_in)//c_i_i, oh*s_h+khh*d_h, ow*s_w+kww*d_w, (oc_out*c_o_i+oc_in)%c_i_i] * \
-            {}[oc_out, 0, khh, kww, 0, oc_in]\n".format(output_name, output_name, filter['tensor_name'])
+        compute_str = "{output_name}[:, oc_out, oh, ow, oc_in] = {output_name}[:, oc_out, oh, ow, oc_in] + \
+            data_pad[:, (oc_out*c_o_i+oc_in)//c_i_i, \
+            oh*s_h+khh*d_h, ow*s_w+kww*d_w, (oc_out*c_o_i+oc_in)%c_i_i] * \
+            {filter_name}[oc_out, 0, khh, kww, 0, oc_in]\n".format(output_name=output_name,
+                                                                   filter_name=filter_data['tensor_name'])
     else:
         res += indent + indent + indent + indent + \
             indent + "for ic_in in range(c_i_i):\n"
-        compute_str = "{}[:, :, oh, ow, :] = {}[:, :, oh, ow, :] + \
-            data_pad[:, ic_out, oh*s_h+khh*d_h, ow*s_w+kww*d_w, ic_in] * {}[:, ic_out, khh, kww, ic_in, :]\n".format(
-            output_name, output_name, filter['tensor_name']
+        compute_str = "{output_name}[:, :, oh, ow, :] = {output_name}[:, :, oh, ow, :] + \
+            data_pad[:, ic_out, oh*s_h+khh*d_h, ow*s_w+kww*d_w, ic_in] * {filter_name}[:, \
+            ic_out, khh, kww, ic_in, :]\n".format(
+            output_name=output_name, filter_name=filter_data['tensor_name']
         )
     res += indent + indent + indent + indent + indent + indent + compute_str
 
@@ -638,7 +578,7 @@ def conv_2d_str(inputs, output, attr):
 
     support_list = {"float16": 'np.float16', "float32": 'np.float32'}
     data = inputs[0][0]
-    filter = inputs[1][0]
+    filter_data = inputs[1][0]
     padding = get_attr(attr, "pad_list")
     stride = get_attr(attr, "stride")[2:]
     dilation = get_attr(attr, "dilation")[2:]
@@ -647,7 +587,7 @@ def conv_2d_str(inputs, output, attr):
 
     res = ""
     res += "n, h, w, c = {} \n".format(data['shape'])
-    res += "out_c, kh, kw, c = {}\n".format(filter['shape'])
+    res += "out_c, kh, kw, c = {}\n".format(filter_data['shape'])
     res += "s_h, s_w = {}\n".format(stride)
     res += "d_h, d_w = {}\n".format(dilation)
     res += "p_l, p_r, p_t, p_b = {}\n".format(padding)
@@ -671,9 +611,10 @@ def conv_2d_str(inputs, output, attr):
     res += "for i in range(out_h):\n"
     res += indent + "for j in range(out_w):\n"
     res += indent + indent + "for f in range(out_c):\n"
-    res += (indent + indent + indent + "{}[:, i, j, f] = np.sum(data_pad[:, i*s_h:i*s_h+whd:d_h, j*s_w:j*s_w+wwd:d_w, :]"
+    res += (indent + indent + indent +
+            "{}[:, i, j, f] = np.sum(data_pad[:, i*s_h:i*s_h+whd:d_h, j*s_w:j*s_w+wwd:d_w, :]"
             ".astype('float32') *{}[f, :, :, :].astype('float32'),axis=(1, 2, 3))\n"
-            .format(output_name, filter['tensor_name']))
+            .format(output_name, filter_data['tensor_name']))
     return res
 
 
@@ -752,6 +693,7 @@ def global_pool2d_str(inputs, output, attr):
 
 
 def get_op_dsl():
+    """Get DSL for operators"""
     op_dsl = {
         "Custom": lambda inputs, output, attr: custom_str(inputs, output, attr),
         "ReduceSum": lambda inputs, output, attr: reduce_str(inputs, output, attr, "sum"),
@@ -851,8 +793,9 @@ def get_op_dsl():
                                                     inputs[0][0]), output[0]['shape']),
         "OneHot": lambda inputs, output, attr: "%s = one_hot_np(%s, %s, %s, %s, %s, np.%s)" %
                                             (output[0]['tensor_name'], get_input(inputs[0][0]), get_attr(attr, "axis"),
-                                                get_input(inputs[1][0]),
-                                                get_input(inputs[2][0]), get_attr(attr, "depth"), output[0]['data_type']),
+                                                get_input(inputs[1][0]), get_input(
+                                                    inputs[2][0]),
+                                                get_attr(attr, "depth"), output[0]['data_type']),
         "ZerosLike": lambda inputs, output, attr: "%s = np.zeros_like(%s)" %
         (output[0]['tensor_name'],
          get_input(inputs[0][0])),
@@ -968,40 +911,6 @@ def get_op_dsl():
         "StandardNormal": lambda inputs, output, attr: "%s = np.random.standard_normal(%s)" %
         (output[0]['tensor_name'], get_attr(
             attr, "shape")),
-        "CSRMV": lambda inputs, output, attr: "{} = csrmv_np({}, {}, {}, {}, {})".format(
-            output[0]['tensor_name'], get_input(
-                inputs[0][0]), get_input(inputs[1][0]),
-            get_input(inputs[2][0]),
-            get_input(inputs[3][0]), get_attr(attr, "dense_shape")),
-        "CSRReduceSum": lambda inputs, output, attr: "{} = csr_reduce_sum_np({}, {}, {}, {}, {})".format(
-                                                    output[0]['tensor_name'], get_input(
-                                                        inputs[0][0]),
-                                                    get_input(inputs[1][0]), get_input(
-                                                        inputs[2][0]),
-                                                    get_attr(attr, "dense_shape"), get_attr(attr, "axis")),
-        "CSRMul": lambda inputs, output, attr: "{} = csr_mul_np({}, {}, {}, {}, {})".format(
-                                                    output[0]['tensor_name'], get_input(
-                                                        inputs[0][0]),
-                                                    get_input(inputs[1][0]), get_input(
-                                                        inputs[2][0]),
-                                                    get_input(inputs[3][0]), get_attr(attr, "dense_shape")),
-        "CSRDiv": lambda inputs, output, attr: "{} = csr_div_np({}, {}, {}, {}, {})".format(
-                                                    output[0]['tensor_name'], get_input(
-                                                        inputs[0][0]),
-                                                    get_input(inputs[1][0]), get_input(
-                                                        inputs[2][0]),
-                                                    get_input(inputs[3][0]), get_attr(attr, "dense_shape")),
-        "CSRGather": lambda inputs, output, attr: "{} = csr_gather_np({}, {}, {}, {})".format(
-                                                    output[0]['tensor_name'], get_input(
-                                                        inputs[0][0]),
-                                                    get_input(inputs[1][0]), get_input(
-                                                        inputs[2][0]),
-                                                    get_attr(attr, "dense_shape")),
-        "CSRMM": lambda inputs, output, attr: "{} = csrmm_np({}, {}, {}, {}, {})".format(
-            output[0]['tensor_name'], get_input(
-                inputs[0][0]), get_input(inputs[1][0]),
-            get_input(inputs[2][0]),
-            get_input(inputs[3][0]), get_attr(attr, "dense_shape")),
         "CImag": lambda inputs, output, attr: "%s = np.imag(%s)" %
         (output[0]['tensor_name'], get_input(inputs[0][0])),
 

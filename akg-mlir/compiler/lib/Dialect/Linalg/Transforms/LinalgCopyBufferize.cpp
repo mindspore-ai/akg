@@ -37,12 +37,12 @@ constexpr auto kVectorInitSize4 = 4;
 
 Value castTensorToMemref(OpBuilder &builder, Value value) {
   Type type = value.getType();
-  if (auto rankedTensorType = type.dyn_cast<RankedTensorType>()) {
+  if (auto rankedTensorType = dyn_cast<RankedTensorType>(type)) {
     Type memrefType = MemRefType::get(rankedTensorType.getShape(), rankedTensorType.getElementType());
     return builder.create<bufferization::ToMemrefOp>(value.getLoc(), memrefType, value).getResult();
   }
 
-  if (auto unrankedTensorType = type.dyn_cast<UnrankedTensorType>()) {
+  if (auto unrankedTensorType = dyn_cast<UnrankedTensorType>(type)) {
     Type memrefType = UnrankedMemRefType::get(unrankedTensorType.getElementType(), {});
     return builder.create<bufferization::ToMemrefOp>(value.getLoc(), memrefType, value).getResult();
   }
@@ -132,4 +132,3 @@ std::unique_ptr<OperationPass<func::FuncOp>> mlir::createLinalgCopyBufferizePass
 std::unique_ptr<OperationPass<func::FuncOp>> mlir::createLinalgCopyBufferizePass(bool keepOuts) {
   return std::make_unique<LinalgCopyBufferize>(keepOuts);
 }
-

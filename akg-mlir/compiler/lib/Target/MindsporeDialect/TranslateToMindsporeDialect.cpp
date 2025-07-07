@@ -16,6 +16,7 @@
 
 #include <fstream>
 #include <map>
+#include <optional>
 #include "akg/Analysis/SymbolicShapeAnalysis.h"
 #include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
 #include "akg/Target/MindsporeDialect/ToMindsporeDialect.h"
@@ -132,8 +133,8 @@ class MindBuilder {
   DenseElementsAttr buildDenseElementsAttr(OpBuilder builder, SmallVector<double>, RankedTensorType, std::string);
   RankedTensorType buildRankedTensorType(SmallVector<int64_t>, std::string, OpBuilder);
   NamedAttribute createMindsporeAttribute(OpBuilder, nlohmann::json) const;
-  llvm::Optional<DictionaryAttr> addOpSymShapeAttr(nlohmann::json inputDesc, nlohmann::json outputDesc,
-                                                   MLIRContext *context) const;
+  std::optional<DictionaryAttr> addOpSymShapeAttr(nlohmann::json inputDesc, nlohmann::json outputDesc,
+                                                  MLIRContext *context) const;
   SmallVector<NamedAttribute> addFuncSymShapeAttr(SmallVector<NamedAttribute> attrs, SmallVector<ValueNode> inputNodes,
                                                   SmallVector<ValueNode> outputNodes, MLIRContext *context) const;
   bool isIndex1DAttrAsInput(std::string, int64_t);
@@ -184,6 +185,8 @@ class MindBuilder {
                        SmallVector<Value> operands, SmallVector<NamedAttribute> attrs);
   void convertBatchMatMulOp(OpBuilder builder, OpNode opNode, SmallVector<Type> inputTys, SmallVector<Type> outputTys,
                             SmallVector<Value> operands, SmallVector<NamedAttribute> attrs);
+  void convertCastOp(OpBuilder builder, OpNode opNode, SmallVector<Type> inputTys, SmallVector<Type> outputTys,
+                     SmallVector<Value> operands, SmallVector<NamedAttribute> attrs);
   void convertAddNOp(OpBuilder builder, OpNode opNode, SmallVector<Type> inputTys, SmallVector<Type> outputTys,
                      SmallVector<Value> operands, SmallVector<NamedAttribute> attrs);
   void convertUnknownOp(OpBuilder builder, OpNode opNode, SmallVector<Type> inputTys, SmallVector<Type> outputTys,
@@ -332,6 +335,8 @@ void MindConverter::parseInput() {
       symShape = inputDesc.at(kSymbolicShape).get<SmallVector<std::string>>();
     }
     std::string dtype = inputDesc.at(kDataType);
+    if (dtype == "uint8")
+      dtype = "int8";
     ValueNode node(tensorName, dtype, true, shape, symShape);
     inputNodes.push_back(node);
   }
@@ -384,6 +389,8 @@ void MindConverter::parseOutput() {
     std::string tensorName = outputDesc.at(kTensorName);
 
     std::string dtype = outputDesc.at(kDataType);
+    if (dtype == "uint8")
+      dtype = "int8";
     SmallVector<int64_t> shape = {};
     if (this->fakeOutputShapes.count(tensorName) != 0) {
       shape = this->fakeOutputShapes[tensorName];
@@ -427,7 +434,6 @@ void MindBuilder::initMindOpFactory() {
   this->mindOpFactory["Atan"] = &MindBuilder::convertUnaryOp<mindspore::AtanOp>;
   this->mindOpFactory["Rsqrt"] = &MindBuilder::convertUnaryOp<mindspore::RsqrtOp>;
   this->mindOpFactory["Floor"] = &MindBuilder::convertUnaryOp<mindspore::FloorOp>;
-  this->mindOpFactory["Cast"] = &MindBuilder::convertUnaryOp<mindspore::CastOp>;
   this->mindOpFactory["Square"] = &MindBuilder::convertUnaryOp<mindspore::SquareOp>;
   this->mindOpFactory["Sqrt"] = &MindBuilder::convertUnaryOp<mindspore::SqrtOp>;
   this->mindOpFactory["IsInf"] = &MindBuilder::convertUnaryOp<mindspore::IsinfOp>;
@@ -480,6 +486,7 @@ void MindBuilder::initMindOpFactory() {
   this->mindOpFactory["AddN"] = &MindBuilder::convertAddNOp;
   this->mindOpFactory["MatMul"] = &MindBuilder::convertMatMulOp;
   this->mindOpFactory["BatchMatMul"] = &MindBuilder::convertBatchMatMulOp;
+  this->mindOpFactory["Cast"] = &MindBuilder::convertCastOp;
 }
 
 void MindBuilder::initMindTypeMap() {
@@ -495,7 +502,7 @@ void MindBuilder::initMindTypeMap() {
   this->mindTypeMap["float64"] = "float";
   this->mindTypeMap["float32"] = "float";
   this->mindTypeMap["float16"] = "float";
-  this->mindTypeMap["bf16"] = "float";
+  this->mindTypeMap["bfloat16"] = "float";
 }
 
 NamedAttribute MindBuilder::createMindsporeAttribute(OpBuilder builder, nlohmann::json attr) const {
@@ -668,8 +675,8 @@ SmallVector<double> MindBuilder::getConstInputValue(const nlohmann::json node, c
   return value;
 }
 
-llvm::Optional<DictionaryAttr> MindBuilder::addOpSymShapeAttr(nlohmann::json inputDesc, nlohmann::json outputDesc,
-                                                              MLIRContext *context) const {
+std::optional<DictionaryAttr> MindBuilder::addOpSymShapeAttr(nlohmann::json inputDesc, nlohmann::json outputDesc,
+                                                             MLIRContext *context) const {
   SmallVector<NamedAttribute> opSymbol;
   for (size_t i = 0; i < inputDesc.size(); i++) {
     if (inputDesc[i][0].contains(kSymbolicShape)) {
@@ -730,6 +737,8 @@ void MindBuilder::handleOpInput(OpBuilder &builder, OpNode &opNode, SmallVector<
   } else {
     for (size_t i = 0; i < opNode.inputDesc.size(); i++) {
       std::string inputType = opNode.inputDesc[i][0].at(kDataType);
+      if (inputType == "uint8")
+        inputType = "int8";
       SmallVector<int64_t> inputShape = opNode.inputDesc[i][0].at(kShape);
       Type temp = buildRankedTensorType(enableDynamicShape(inputShape), inputType, builder);
       (void)inputTys.emplace_back(temp);
@@ -797,7 +806,10 @@ void MindBuilder::handleOperands(OpBuilder &builder, OpNode &opNode, SmallVector
         SmallVector<int64_t> shape = currInput.at(kShape);
         assert(shape.size() != 0);
         SmallVector<double> value = getConstInputValue(currInput, opNode.opName);
-        convertConstOperand(operandNames[i], shape, value, currInput.at(kDataType), builder);
+        std::string dataType = currInput.at(kDataType);
+        if (dataType == "uint8")
+          dataType = "int8";
+        convertConstOperand(operandNames[i], shape, value, dataType, builder);
       }
       (void)operands.emplace_back(this->operandList[operandNames[i]]);
     }
@@ -813,6 +825,8 @@ void MindBuilder::convertOpNode(OpBuilder builder, OpNode opNode) {
 
   for (size_t i = 0; i < opNode.outputDesc.size(); i++) {
     std::string dtype = opNode.outputDesc[i].at(kDataType);
+    if (dtype == "uint8")
+      dtype = "int8";
     llvm::SmallVector<int64_t> shape = opNode.outputDesc[i].at(kShape);
     Type temp = buildRankedTensorType(enableDynamicShape(shape), dtype, builder);
     (void)outputTys.emplace_back(temp);
@@ -825,7 +839,7 @@ void MindBuilder::convertOpNode(OpBuilder builder, OpNode opNode) {
   // prepare all attrs
   SmallVector<NamedAttribute> allAttrs;
   // append symbol attrs
-  llvm::Optional<DictionaryAttr> symbolAttrs = addOpSymShapeAttr(opNode.inputDesc, opNode.outputDesc, context);
+  std::optional<DictionaryAttr> symbolAttrs = addOpSymShapeAttr(opNode.inputDesc, opNode.outputDesc, context);
   if (symbolAttrs != std::nullopt) {
     (void)allAttrs.emplace_back(StringAttr::get(context, getFrontendSymbolAttrName()), *symbolAttrs);
   }
@@ -875,7 +889,9 @@ void MindBuilder::convertMultiOutputOp(OpBuilder builder, OpNode opNode, SmallVe
   auto res = op.getResult();
 
   assert(res.size() == opNode.outputDesc.size());
-  for (size_t i = 0; i < res.size(); i++) this->operandList[opNode.outputDesc[i].at(kTensorName)] = res[i];
+  for (size_t i = 0; i < res.size(); i++) {
+    this->operandList[opNode.outputDesc[i].at(kTensorName)] = res[i];
+  }
 }
 
 template <typename BinaryOp>
@@ -1091,13 +1107,25 @@ void MindBuilder::convertTileOp(OpBuilder builder, OpNode opNode, SmallVector<Ty
 void MindBuilder::convertBroadcastToOp(OpBuilder builder, OpNode opNode, SmallVector<Type>, SmallVector<Type> outputTys,
                                        SmallVector<Value> operands, SmallVector<NamedAttribute> attrs) {
   MLIRContext *context = builder.getContext();
-  auto newShape = getAttrFromJson<SmallVector<int64_t>>(opNode.attrs, kShape, {1});
+
+  bool existAttr = false;
+  for (auto attr : opNode.attrs)
+    if (attr.at(kName) == kShape)
+      existAttr = true;
+
+  ArrayRef<int64_t> newShape;
+  if (existAttr)
+    newShape = ArrayRef<int64_t>(getAttrFromJson<SmallVector<int64_t>>(opNode.attrs, kShape, {1}));
+  else
+    newShape = cast<ShapedType>(outputTys[0]).getShape();
+
   if (newShape.size() == 0) {
     newShape = {1};
     emitWarning(UnknownLoc::get(context)) << "cannot find newshape in BroadcastToOp, take default value 1\n";
   }
+
   (void)attrs.emplace_back(
-    NamedAttribute(StringAttr::get(context, kNewShape), DenseI64ArrayAttr::get(context, ArrayRef<int64_t>(newShape))));
+    NamedAttribute(StringAttr::get(context, kNewShape), DenseI64ArrayAttr::get(context, newShape)));
   auto op_result = builder.create<mindspore::BroadcastToOp>(UnknownLoc::get(context), outputTys, operands, attrs);
   this->operandList[opNode.outputDesc[0].at(kTensorName)] = op_result;
 }
@@ -1283,6 +1311,17 @@ void MindBuilder::convertBatchMatMulOp(OpBuilder builder, OpNode opNode, SmallVe
   convertBinaryOp<mindspore::BatchMatMulOp>(builder, opNode, inputTys, outputTys, operands, attrs);
 }
 
+void MindBuilder::convertCastOp(OpBuilder builder, OpNode opNode, SmallVector<Type> inputTys,
+                                SmallVector<Type> outputTys, SmallVector<Value> operands,
+                                SmallVector<NamedAttribute> attrs) {
+  MLIRContext *context = builder.getContext();
+  SmallVector<Value> newOperands;
+  newOperands.push_back(operands[0]);
+  std::string outputTy = opNode.outputDesc[0].at(kDataType);
+  (void)attrs.emplace_back(NamedAttribute(StringAttr::get(context, "dst_type"), StringAttr::get(context, outputTy)));
+  convertUnaryOp<mindspore::CastOp>(builder, opNode, inputTys, outputTys, newOperands, attrs);
+}
+
 Value MindBuilder::getIndexFromVector(OpBuilder builder, SmallVector<int64_t> vector) {
   SmallVector<Value> index;
   vector = enableDynamicShape(vector);
@@ -1338,7 +1377,7 @@ mlir::FloatType MindBuilder::getFloatType(std::string dtype, OpBuilder builder) 
     return builder.getF32Type();
   } else if (dtype == "float64") {
     return builder.getF64Type();
-  } else if (dtype == "bf16") {
+  } else if (dtype == "bfloat16") {
     return builder.getBF16Type();
   } else {
     llvm::report_fatal_error(

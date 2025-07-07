@@ -23,13 +23,13 @@
 namespace mlir {
 namespace akg {
 namespace autotiling {
-InitGraphPtr parseIr(Operation *funcOp, const std::vector<SmallVector<AffineForOp, 6>> &bands) {
+InitGraphPtr parseIr(Operation *funcOp, const std::vector<SmallVector<affine::AffineForOp, 6>> &bands) {
   auto initGraph = parseIr(bands);
   initGraph->funcOp = funcOp;
   return initGraph;
 }
 
-InitGraphPtr parseIr(const std::vector<SmallVector<AffineForOp, 6>> &bands) {
+InitGraphPtr parseIr(const std::vector<SmallVector<affine::AffineForOp, 6>> &bands) {
   auto initGraph = std::make_shared<InitGraph>("initGraph");
   initGraph->rootAxis = std::make_shared<Axis>("Root");
   for (size_t i = 0; i < bands.size(); ++i) {
@@ -38,13 +38,13 @@ InitGraphPtr parseIr(const std::vector<SmallVector<AffineForOp, 6>> &bands) {
     std::vector<AxisPtr> loopNest;
     for (size_t j = 0; j < band.size(); ++j) {
       auto loop = band[j];
-      auto axis = std::make_shared<Axis>(i, j, std::make_shared<AffineForOp>(loop));
+      auto axis = std::make_shared<Axis>(i, j, std::make_shared<affine::AffineForOp>(loop));
       loopNest.push_back(axis);
       if (!akgglobal::GpuScheduleTool::getInstance().getIsCustomConfig()) {
         akgglobal::GpuScheduleTool::getInstance().recordLoopStructure(axis->name);
       }
       auto body = loop.getBody();
-      bool isBasicBlock = dyn_cast<AffineForOp>(&body->front()) == nullptr;
+      bool isBasicBlock = dyn_cast<affine::AffineForOp>(&body->front()) == nullptr;
       if (isBasicBlock) {
         body->walk([&](Operation *op) {
           auto node = std::make_shared<Node>(op, loopNest);
@@ -64,7 +64,7 @@ InitGraphPtr parseIr(const std::vector<SmallVector<AffineForOp, 6>> &bands) {
 
 ModelGraphPtr buildModelGraph(InitGraphPtr initGraph) {
   auto hardware = initGraph->hardware;
-  auto operatorTypes = initGraph->funcOp->getAttr("OperatorType").dyn_cast<StringAttr>();
+  auto operatorTypes = dyn_cast<StringAttr>(initGraph->funcOp->getAttr("OperatorType"));
   initGraph->setGraphType(operatorTypes);
 
   if (initGraph->graphType == "Reduce") {
@@ -73,7 +73,7 @@ ModelGraphPtr buildModelGraph(InitGraphPtr initGraph) {
       if (a == nullptr || a->loop.get() == nullptr) {
         return;
       }
-      for (auto dim = 0; dim < funcReductionAxes.size(); ++dim) {
+      for (size_t dim = 0; dim < funcReductionAxes.size(); ++dim) {
         if (CommonUtils::isReduceAxis(funcReductionAxes[dim], a->loop->getOperation())) {
           (void)a->axisType.insert(Axis::AxisLabel::kReduction);
         }
@@ -104,7 +104,7 @@ void UniquePrimeCollect(Operation *op) {
     int constValue = 0;
     auto constValueAttr = constOp.getOperation()->getAttr("value");
     if (isa<IntegerAttr>(constValueAttr)) {
-      constValue = static_cast<int>(constValueAttr.dyn_cast<IntegerAttr>().getInt());
+      constValue = static_cast<int>(dyn_cast<IntegerAttr>(constValueAttr).getInt());
     }
     tool.updateVisited(constValue);
   });
@@ -163,7 +163,7 @@ TilingSolverPtr getHeuristicTilingSolver(ModelGraphPtr modelGraph) {
   return solver;
 }
 
-void getTileSizeWithSolver(const TilingSolverPtr &solver, SmallVector<AffineForOp, 6> band,
+void getTileSizeWithSolver(const TilingSolverPtr &solver, SmallVector<affine::AffineForOp, 6> band,
                            SmallVectorImpl<unsigned> *tileSizes, const TilingTaskDesc &taskDesc) {
   size_t level = taskDesc.level;
   size_t bandIdx = taskDesc.bandIdx;
@@ -211,4 +211,3 @@ void getTileSizeWithSolver(const TilingSolverPtr &solver, SmallVector<AffineForO
 }  // namespace autotiling
 }  // namespace akg
 }  // namespace mlir
-

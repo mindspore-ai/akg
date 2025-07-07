@@ -161,7 +161,7 @@ struct SimplifyShapePass : public mlir::impl::SimplifyShapeBase<SimplifyShapePas
     MemRefType initSimplifyType = initSimplifyInfos.first;
 
     Value resultValue = reshapeOp.getResult();
-    MemRefType resultType = resultValue.getType().cast<mlir::MemRefType>();
+    MemRefType resultType = cast<mlir::MemRefType>(resultValue.getType());
     const SimplifiedShapeInfos resultSimplifyInfos = getSimplifiedShapeInfos(resultType);
     MemRefType resultSimplifyType = resultSimplifyInfos.first;
 
@@ -175,7 +175,7 @@ struct SimplifyShapePass : public mlir::impl::SimplifyShapeBase<SimplifyShapePas
     } else {
       const SmallVector<int64_t, kVectorSizeFour> todelete =
         isa<mlir::memref::CollapseShapeOp>(reshapeOp) ? initSimplifyInfos.second : resultSimplifyInfos.second;
-      T newShapeOp = updateReassociationMaps<T>(reshapeOp, todelete, resultSimplifyType, reshapeOp.getOperand());
+      T newShapeOp = updateReassociationMaps<T>(reshapeOp, todelete, resultSimplifyType, reshapeOp.getSrc());
       reshapeOp->replaceAllUsesWith(newShapeOp);
     }
     reshapeOp.erase();
@@ -209,10 +209,10 @@ struct SimplifyShapePass : public mlir::impl::SimplifyShapeBase<SimplifyShapePas
       }
       llvm::dbgs() << "\n";
     });
-    if (mlir::AffineStoreOp asop = dyn_cast<mlir::AffineStoreOp>(op)) {
-      simplifyAffineOperation<mlir::AffineStoreOp>(asop, todelete);
-    } else if (mlir::AffineLoadOp alop = dyn_cast<mlir::AffineLoadOp>(op)) {
-      simplifyAffineOperation<mlir::AffineLoadOp>(alop, todelete);
+    if (mlir::affine::AffineStoreOp asop = dyn_cast<mlir::affine::AffineStoreOp>(op)) {
+      simplifyAffineOperation<mlir::affine::AffineStoreOp>(asop, todelete);
+    } else if (mlir::affine::AffineLoadOp alop = dyn_cast<mlir::affine::AffineLoadOp>(op)) {
+      simplifyAffineOperation<mlir::affine::AffineLoadOp>(alop, todelete);
     }
     LLVM_DEBUG({
       llvm::dbgs() << DEBUG_TYPE << " - simplifyAffineOps END:\n";
@@ -272,10 +272,10 @@ struct SimplifyShapePass : public mlir::impl::SimplifyShapeBase<SimplifyShapePas
 
       size_t argIdx = 0;
       for (BlockArgument &bbArg : fop.getArguments()) {
-        MemRefType argType = bbArg.getType().cast<MemRefType>();
+        MemRefType argType = cast<MemRefType>(bbArg.getType());
         const SimplifiedShapeInfos argSimplifiedInfos = getSimplifiedShapeInfos(argType);
         MemRefType argSimplifyType = argSimplifiedInfos.first;
-        tool.alignStaticShapeReconstruct(argIdx, argType.dyn_cast<Type>(), argSimplifyType.dyn_cast<Type>());
+        tool.alignStaticShapeReconstruct(argIdx, dyn_cast<Type>(argType), dyn_cast<Type>(argSimplifyType));
         simplifyValue(bbArg, argType, argSimplifiedInfos);
         bbArg.setType(argSimplifyType);
         // update the type of arg
@@ -290,7 +290,7 @@ struct SimplifyShapePass : public mlir::impl::SimplifyShapeBase<SimplifyShapePas
 
   void simplifyDefiningOp(Operation *oldOp) {
     Value result = oldOp->getResult(0);
-    MemRefType resultType = result.getType().cast<MemRefType>();
+    MemRefType resultType = cast<MemRefType>(result.getType());
     const SimplifiedShapeInfos resultSimplifiedInfos = getSimplifiedShapeInfos(resultType);
     MemRefType resultSimplifyType = resultSimplifiedInfos.first;
     LLVM_DEBUG({
@@ -326,9 +326,7 @@ struct SimplifyShapePass : public mlir::impl::SimplifyShapeBase<SimplifyShapePas
         getglobalop.erase();
       }
     }
-    LLVM_DEBUG({
-      llvm::dbgs() << DEBUG_TYPE << " - simplifyDefiningOp END\n";
-    });
+    LLVM_DEBUG({ llvm::dbgs() << DEBUG_TYPE << " - simplifyDefiningOp END\n"; });
   }
 
   void simplifyAllocOpShape(mlir::ModuleOp m) {
@@ -338,17 +336,17 @@ struct SimplifyShapePass : public mlir::impl::SimplifyShapeBase<SimplifyShapePas
   void simplifyGlobalOps(mlir::ModuleOp m) {
     // First simplify the globalops definition in the symbol table
     m.walk([&](mlir::memref::GlobalOp globalop) {
-      MemRefType resultType = globalop.getType().cast<MemRefType>();
+      MemRefType resultType = cast<MemRefType>(globalop.getType());
       const SimplifiedShapeInfos resultSimplifiedInfos = getSimplifiedShapeInfos(resultType);
       MemRefType resultSimplifyType = resultSimplifiedInfos.first;
 
       if (resultType != resultSimplifyType) {
         Attribute initValue = globalop.getConstantInitValue();
-        DenseElementsAttr elementsAttr = initValue.dyn_cast_or_null<DenseElementsAttr>();
+        DenseElementsAttr elementsAttr = dyn_cast_or_null<DenseElementsAttr>(initValue);
         // Check if the global op is a constant
         if (elementsAttr) {
           Type simplifiedTensorType = mlir::memref::getTensorTypeFromMemRefType(resultSimplifyType);
-          DenseElementsAttr reshapedElementsAttr = elementsAttr.reshape(simplifiedTensorType);
+          DenseElementsAttr reshapedElementsAttr = elementsAttr.reshape(cast<ShapedType>(simplifiedTensorType));
           SymbolTable symbolTable(m);
 
           auto loc = globalop.getLoc();
@@ -399,9 +397,9 @@ struct SimplifyShapePass : public mlir::impl::SimplifyShapeBase<SimplifyShapePas
     if (!keepArgsShape) {
       simplifyOpsUsingBlockArguments(m);
     } else {
-      llvm::errs()
-        << DEBUG_TYPE
-        << " - BEAWARE: keepArgsShape not well manage especially when it implies a copy or interprocedural update\n";
+      llvm::errs() << DEBUG_TYPE
+                   << " - BEAWARE: keepArgsShape not well manage especially when it implies a copy or "
+                      "interprocedural update\n";
     }
 
     // Handle GlobalOps

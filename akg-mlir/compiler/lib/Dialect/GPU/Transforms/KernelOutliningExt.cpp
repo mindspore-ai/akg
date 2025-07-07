@@ -58,14 +58,6 @@ static void createForAllDimensions(OpBuilder &builder, const Location loc, Small
   }
 }
 
-static int getIntConst(mlir::Value value) {
-  auto constValueAttr = value.getDefiningOp()->getAttr("value");
-  if (isa<IntegerAttr>(constValueAttr)) {
-    return constValueAttr.dyn_cast<IntegerAttr>().getInt();
-  }
-  return 0;
-}
-
 /// Adds operations generating block/thread ids and grid/block dimensions at the
 /// beginning of the `launchFuncOpBody` region. Add mapping from argument in
 /// entry block of `launchOpBody`, to the corresponding result value of the
@@ -84,25 +76,6 @@ static void injectGpuIndexOperations(Location loc, Region &launchFuncOpBody, Reg
   for (const auto &indexOp : enumerate(indexOps)) {
     map.map(firstBlock.getArgument(indexOp.index()), indexOp.value());
   }
-}
-
-/// Return the provided KernelDim3 as an array of i32 constants if possible.
-static DenseI32ArrayAttr maybeConstantDimsAttr(gpu::KernelDim3 dims) {
-  SmallVector<int32_t, 3> constants;
-  MLIRContext *ctx = dims.x.getContext();
-  for (Value v : {dims.x, dims.y, dims.z}) {
-    APInt constValue;
-    if (!matchPattern(v, m_ConstantInt(&constValue))) {
-      return nullptr;
-    }
-    // In the event someone called for a too-large block or grid dimension,
-    // don't set bounds as it is likely to cause more confusing behavior.
-    if (constValue.ugt(std::numeric_limits<uint32_t>::max())) {
-      return nullptr;
-    }
-    constants.push_back(constValue.getLimitedValue(std::numeric_limits<uint32_t>::max()));
-  }
-  return DenseI32ArrayAttr::get(ctx, constants);
 }
 
 static bool idxIsInVector(size_t funcIdx, SmallVector<int, kVectorInitSize8> &mapResult) {
@@ -226,16 +199,6 @@ static gpu::GPUFuncOp outlineKernelFuncImpl(gpu::LaunchOp launchOp, StringRef ke
   auto outlinedFunc = builder.create<gpu::GPUFuncOp>(loc, kernelFnName, type);
   outlinedFunc->setAttr(gpu::GPUDialect::getKernelFuncAttrName(), builder.getUnitAttr());
 
-  // If we can infer bounds on the grid and/or block sizes from the arguments
-  // to the launch op, propagate them to the generated kernel. This is safe
-  // because multiple launches with the same body are not deduplicated.
-  if (auto blockBounds = maybeConstantDimsAttr(launchOp.getBlockSizeOperandValues())) {
-    outlinedFunc->setAttr(gpu::GPUFuncOp::getKnownBlockSizeAttrName(), blockBounds);
-  }
-  if (auto gridBounds = maybeConstantDimsAttr(launchOp.getGridSizeOperandValues())) {
-    outlinedFunc->setAttr(gpu::GPUFuncOp::getKnownGridSizeAttrName(), gridBounds);
-  }
-
   IRMapping map;
 
   // Map the arguments corresponding to the launch parameters like blockIdx,
@@ -318,7 +281,7 @@ class GpuKernelOutliningExt : public impl::GpuKernelOutliningExtBase<GpuKernelOu
         return failure();
       }
 
-      dataLayoutSpec = resultAttr.dyn_cast<DataLayoutSpecInterface>();
+      dataLayoutSpec = dyn_cast<DataLayoutSpecInterface>(resultAttr);
       if (!dataLayoutSpec) {
         return failure();
       }
@@ -366,17 +329,17 @@ class GpuKernelOutliningExt : public impl::GpuKernelOutliningExtBase<GpuKernelOu
   }
 
   void RecordStaticShapeArgs() {
-    ShapeAlignTool &tool = ShapeAlignTool::getInstance();
     std::vector<std::vector<int>> shapeArgs;
     size_t mainFuncSize = 0;
     getOperation()->walk([&](func::FuncOp func) { mainFuncSize = func.getBody().front().getArguments().size(); });
     getOperation()->walk([&](gpu::LaunchFuncOp funcOp) {
       auto operands = funcOp.getKernelOperands();
       for (size_t i = 0; i < mainFuncSize; i++) {
-        mlir::MemRefType memrefType = operands[i].getType().cast<mlir::MemRefType>();
+        mlir::MemRefType memrefType = cast<mlir::MemRefType>(operands[i].getType());
         int64_t offset;
         SmallVector<int64_t> strides;
-        getStridesAndOffset(memrefType, strides, offset);
+        if (failed(getStridesAndOffset(memrefType, strides, offset)))
+            return;
         std::vector<int> shapeArg;
         shapeArg.push_back(offset);
         for (auto s : memrefType.getShape()) {
@@ -396,10 +359,14 @@ class GpuKernelOutliningExt : public impl::GpuKernelOutliningExtBase<GpuKernelOu
         kernelName = func.getName().str();
         return WalkResult::interrupt();
       }
+      return WalkResult::advance();
     });
     (void)DirUtils::CheckOrCreateDirectory("./akg_kernel_meta/");
     std::string output_filename = "./akg_kernel_meta/" + kernelName + "_shape_arg.txt";
-    if (llvm::writeFileAtomically("tmp_%%%%%%%%.json", output_filename, j.dump())) {
+    if (llvm::writeToOutput(output_filename, [&](llvm::raw_ostream &OS) -> llvm::Error {
+          OS << j.dump();
+          return llvm::Error::success();
+        })) {
       llvm::errs() << "Write json file to " << output_filename << " failed.\n";
     }
   }
@@ -467,7 +434,7 @@ class GpuKernelOutliningExt : public impl::GpuKernelOutliningExtBase<GpuKernelOu
       if (std::optional<SymbolTable::UseRange> symbolUses =
             SymbolTable::getSymbolUses(symbolDefWorklist.pop_back_val())) {
         for (SymbolTable::SymbolUse symbolUse : *symbolUses) {
-          StringRef symbolName = symbolUse.getSymbolRef().cast<FlatSymbolRefAttr>().getValue();
+          StringRef symbolName = cast<FlatSymbolRefAttr>(symbolUse.getSymbolRef()).getValue();
           if (symbolTable.lookup(symbolName)) {
             continue;
           }

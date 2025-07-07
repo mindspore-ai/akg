@@ -50,13 +50,13 @@ class RemoveRedundantReduceOp : public OpRewritePattern<SourceOp> {
   LogicalResult matchAndRewrite(SourceOp mindsporeOp, PatternRewriter &rewriter) const override {
     Operation *op = mindsporeOp;
     Value opnd = op->getOperand(0);
-    auto inputTy = opnd.getType().cast<ShapedType>();
-    llvm::ArrayRef<int64_t> axesAttr = op->getAttr("axis").dyn_cast<DenseI64ArrayAttr>();
+    auto inputTy = cast<ShapedType>(opnd.getType());
+    llvm::ArrayRef<int64_t> axesAttr = dyn_cast<DenseI64ArrayAttr>(op->getAttr("axis"));
     llvm::SmallVector<int64_t> axes;
     (void)std::transform(axesAttr.begin(), axesAttr.end(), std::back_inserter(axes), [](int64_t axis) { return axis; });
     bool keepDims = false;
     if (op->getAttr("keepdims")) {
-      keepDims = op->getAttr("keepdims").dyn_cast<BoolAttr>().getValue();
+      keepDims = dyn_cast<BoolAttr>(op->getAttr("keepdims")).getValue();
     }
     bool isRedundantReduce = true;
     for (int64_t i = 0; i < inputTy.getRank(); i++) {

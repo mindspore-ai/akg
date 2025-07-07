@@ -42,7 +42,7 @@ struct LowerTemplateOp : public OpRewritePattern<TemplateOp> {
 
   LogicalResult matchAndRewrite(TemplateOp templateOp, PatternRewriter &rewriter) const override {
     // find func Op
-    auto fnSym = templateOp->getAttr(TemplateFuncAttrName).cast<SymbolRefAttr>();
+    auto fnSym = cast<SymbolRefAttr>(templateOp->getAttr(TemplateFuncAttrName));
     auto funcOp = dyn_cast_or_null<func::FuncOp>(SymbolTable::lookupNearestSymbolFrom(templateOp, fnSym));
 
     // cast linalg op operands if they are not all dynamic sizes
@@ -93,13 +93,13 @@ SmallVector<Value> LowerTemplateOp::castOperands(SmallVector<Value> operands, Ar
   for (auto item : llvm::zip(operands, dstTypes)) {
     auto oper = std::get<0>(item);
     auto dstType = std::get<1>(item);
-    if (!oper.getType().isa<ShapedType>() || oper.getType() == dstType) {
+    if (!isa<ShapedType>(oper.getType()) || oper.getType() == dstType) {
       newOperands.push_back(oper);
       continue;
     }
 
-    assert(oper.getType().isa<MemRefType>() && "currently only support memref");
-    auto memType = oper.getType().cast<MemRefType>();
+    assert(isa<MemRefType>(oper.getType()) && "currently only support memref");
+    auto memType = cast<MemRefType>(oper.getType());
     bool allDynamicSize = llvm::all_of(memType.getShape(), mlir::ShapedType::isDynamic);
     if (allDynamicSize) {
       newOperands.push_back(oper);

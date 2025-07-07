@@ -49,10 +49,10 @@ static bool ignoreImplicitBroadcast = false;
 
 static bool needInsertBroadCastOrCast(const Type &oprand, const Type &target) {
   SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
-  int64_t opndRank = oprand.cast<ShapedType>().getRank();
-  int64_t targetRank = target.cast<ShapedType>().getRank();
+  int64_t opndRank = cast<ShapedType>(oprand).getRank();
+  int64_t targetRank = cast<ShapedType>(target).getRank();
   for (int64_t i = opndRank - 1; i >= 0; i--) {
-    int64_t oprandDim = oprand.cast<ShapedType>().getShape()[i];
+    int64_t oprandDim = cast<ShapedType>(oprand).getShape()[i];
     if (oprandDim != ShapedType::kDynamic) {
       continue;
     }
@@ -65,11 +65,11 @@ static bool needInsertBroadCastOrCast(const Type &oprand, const Type &target) {
 }
 
 static Type GetCastedShape(Type target, Type oprand, SmallVector<int64_t> &needCastDims) {
-  int64_t opndRank = oprand.cast<ShapedType>().getRank();
-  int64_t targetRank = target.cast<ShapedType>().getRank();
-  auto opndStaticShape = oprand.cast<ShapedType>().getShape();
-  SmallVector<int64_t> targetStaticShape(target.cast<ShapedType>().getShape());
-  auto elementTy = oprand.cast<ShapedType>().getElementType();
+  int64_t opndRank = cast<ShapedType>(oprand).getRank();
+  int64_t targetRank = cast<ShapedType>(target).getRank();
+  auto opndStaticShape = cast<ShapedType>(oprand).getShape();
+  SmallVector<int64_t> targetStaticShape(cast<ShapedType>(target).getShape());
+  auto elementTy = cast<ShapedType>(oprand).getElementType();
   SymbolicShapeAnalysis &analysis = SymbolicShapeAnalysis::getInstance();
   llvm::SmallVector<std::string> castedSymbolShape = *(analysis.getSymbolicShape(target));
   if (targetRank - opndRank > 0) {
@@ -107,7 +107,7 @@ struct EnableTosaBroadCastOp : public OpRewritePattern<OpTy> {
         !analysis.hasSymbolicShape(output.getType())) {
       return success();
     }
-    int64_t rank = output.getType().cast<ShapedType>().getRank();
+    int64_t rank = cast<ShapedType>(output.getType()).getRank();
     bool lhsNeedInsertBroadCastOrCast = needInsertBroadCastOrCast(input1.getType(), output.getType());
     bool rhsNeedInsertBroadCastOrCast = needInsertBroadCastOrCast(input2.getType(), output.getType());
     // ignore implicit broadcast, cast inputs' shape to out's shape directly. Note that this will generate incorrect
@@ -168,7 +168,7 @@ class ShapeTracer {
  public:
   explicit ShapeTracer(SmallVector<tensor::CastOp> needFixOps) : needFixOps(needFixOps) {}
   SmallVector<int64_t> Trace(Value arg) {
-    auto rank = arg.getType().cast<ShapedType>().getRank();
+    auto rank = cast<ShapedType>(arg.getType()).getRank();
     SmallVector<int64_t> needCastDims(rank, 0);
     for (auto castOp : needFixOps) {
       auto src = castOp.getSource();
@@ -227,7 +227,7 @@ class ShapeTracer {
     if (!check(src.getDefiningOp())) {
       return false;
     }
-    auto rank = src.getType().cast<ShapedType>().getRank();
+    auto rank = cast<ShapedType>(src.getType()).getRank();
     SmallVector<int64_t> srcNeedCastDims(rank, 0);
     (void)GetCastedShape(castOp.getDest().getType(), src.getType(), srcNeedCastDims);
     ReassociateShape(src.getType(), arg.getType(), srcNeedCastDims, needCastDims);
@@ -301,7 +301,6 @@ struct MakeDynamicBroadcastable : public impl::MakeDynamicBroadcastableBase<Make
     // tosa dialect
     (void)patterns.add<EnableTosaBroadCastOp<tosa::AddOp>>(ctx);
     (void)patterns.add<EnableTosaBroadCastOp<tosa::ArithmeticRightShiftOp>>(ctx);
-    (void)patterns.add<EnableTosaBroadCastOp<tosa::DivOp>>(ctx);
     (void)patterns.add<EnableTosaBroadCastOp<tosa::EqualOp>>(ctx);
     (void)patterns.add<EnableTosaBroadCastOp<tosa::GreaterEqualOp>>(ctx);
     (void)patterns.add<EnableTosaBroadCastOp<tosa::GreaterOp>>(ctx);

@@ -1,5 +1,4 @@
 set(AKG_MLIR_LIBS
-  AKGTosaPasses
   AKGAffinePasses
   AKGTransformsPasses
   AKGGPUPasses
@@ -7,7 +6,6 @@ set(AKG_MLIR_LIBS
   AKGLLVMIRPasses
   MLIRLinalgExtDialect
   AKGMLIRAnalysis
-  libpolytops-schedule-opt
   )
 
 set(LIBS
@@ -31,6 +29,7 @@ add_mlir_library(AKGGPUPipelines
   DEPENDS
   ${AKG_MLIR_LIBS}
   DISABLE_INSTALL
+
   LINK_LIBS PUBLIC
   ${LIBS}
 )

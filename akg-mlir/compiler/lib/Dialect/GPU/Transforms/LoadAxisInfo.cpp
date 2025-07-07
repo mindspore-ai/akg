@@ -37,7 +37,7 @@ namespace gpu {
 namespace {
 struct LoadAxisInfoPass : public impl::LoadAxisInfoBase<LoadAxisInfoPass> {
   LoadAxisInfoPass() {}
-  void runOnOperation() { GpuScheduleTool::getInstance().tagLoopWithAxisName(getOperation()); }
+  void runOnOperation() override { GpuScheduleTool::getInstance().tagLoopWithAxisName(getOperation()); }
 };
 }  // namespace
 }  // namespace gpu

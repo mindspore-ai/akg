@@ -31,10 +31,10 @@ struct TilingTaskDesc {
   size_t bandIdx;
   size_t level;
 };
-InitGraphPtr parseIr(Operation *funcOp, const std::vector<SmallVector<AffineForOp, 6>> &bands);
+InitGraphPtr parseIr(Operation *funcOp, const std::vector<SmallVector<affine::AffineForOp, 6>> &bands);
 /// Extracts all the information needed to analyze tiling from the mlir: name, nodes, inputs, outputs, root_axis,
 /// abstracted into InitGraph
-InitGraphPtr parseIr(const std::vector<SmallVector<AffineForOp, 6>> &bands);
+InitGraphPtr parseIr(const std::vector<SmallVector<affine::AffineForOp, 6>> &bands);
 
 /// Analyze some contextual information (such as whether subsequent passes need to be opened double_buffer), as well as
 /// some preliminary strategies (such as operator priority, memory bottleneck statements)
@@ -48,11 +48,10 @@ CpuModelGraphPtr buildCpuModelGraph(InitGraphPtr initGraph, const TilingStrategy
 /// Encapsulates the steps required to solve sharding, and supports two solution methods: heuristic and search (Tuning);
 TilingSolverPtr getHeuristicTilingSolver(ModelGraphPtr modelGraph);
 
-void getTileSizeWithSolver(const TilingSolverPtr &solver, SmallVector<AffineForOp, 6> band,
+void getTileSizeWithSolver(const TilingSolverPtr &solver, SmallVector<affine::AffineForOp, 6> band,
                            SmallVectorImpl<unsigned> *tileSizes, const TilingTaskDesc &taskDesc);
 }  // namespace autotiling
 }  // namespace akg
 }  // namespace mlir
 
 #endif  // COMPILER_INCLUDE_AKG_DIALECT_AFFINE_ANALYSIS_AUTOTILING_H_
-

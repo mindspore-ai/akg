@@ -62,10 +62,10 @@ bool AffineHandleBoundaryIfExtract::isBoundaryIf(Operation *outerIfOp) {
   if (outerIfOp->getPrevNode()) {
     return false;
   }
-  if (outerIfOp->getNextNode() && !isa<AffineYieldOp>(outerIfOp->getNextNode())) {
+  if (outerIfOp->getNextNode() && !isa<affine::AffineYieldOp>(outerIfOp->getNextNode())) {
     return false;
   }
-  if (!isa<AffineForOp>(outerIfOp->getParentOp())) {
+  if (!isa<affine::AffineForOp>(outerIfOp->getParentOp())) {
     return false;
   }
   for (auto operand : outerIfOp->getOperands()) {
@@ -86,7 +86,7 @@ void AffineHandleBoundaryIfExtract::runOnOperation() {
   auto funcOp = getOperation();
   Operation *outerIfOp = nullptr;
   (void)funcOp->walk([&](Operation *op) {
-    if (isa<AffineIfOp>(op) && isBoundaryIf(op)) {
+    if (isa<affine::AffineIfOp>(op) && isBoundaryIf(op)) {
       outerIfOp = op;
       return WalkResult::interrupt();
     }
@@ -97,9 +97,9 @@ void AffineHandleBoundaryIfExtract::runOnOperation() {
   }
   OpBuilder builder(funcOp);
   builder.setInsertionPoint(outerIfOp);
-  auto ifOp = dyn_cast<AffineIfOp>(outerIfOp);
+  auto ifOp = dyn_cast<affine::AffineIfOp>(outerIfOp);
   for (auto &op : llvm::make_early_inc_range(ifOp.getThenRegion().front())) {
-    if (!isa<AffineYieldOp>(op)) {
+    if (!isa<affine::AffineYieldOp>(op)) {
       mlir::Operation *clonedOp = builder.clone(op);
       op.replaceAllUsesWith(clonedOp);
     }
@@ -110,11 +110,11 @@ void AffineHandleBoundaryIfExtract::runOnOperation() {
   thenRegion.getBlocks().push_back(newBlock);
   builder.setInsertionPointToEnd(newBlock);
   auto loc = ifOp.getLoc();
-  mlir::Attribute constAttr = builder.getIndexAttr(0);
+  auto constAttr = builder.getIndexAttr(0);
   auto constant = builder.create<mlir::arith::ConstantOp>(loc, constAttr);
   auto keep = builder.create<mindspore::KeepArgsOp>(loc, constant, constant);
   keep.getOperation()->setAttr("BoundaryIf", builder.getUnitAttr());
-  builder.create<mlir::AffineYieldOp>(loc);
+  builder.create<mlir::affine::AffineYieldOp>(loc);
 }
 
 }  // namespace

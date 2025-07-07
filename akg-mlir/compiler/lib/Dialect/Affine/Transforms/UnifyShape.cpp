@@ -74,10 +74,10 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
     MemRefType newmemrefType;
     SmallVector<AffineMap, kVectorSizeFour> reassociationMap;
     if (auto csop = dyn_cast<mlir::memref::CollapseShapeOp>(userOp)) {
-      newmemrefType = csop.getType().cast<MemRefType>();
+      newmemrefType = cast<MemRefType>(csop.getType());
       reassociationMap = csop.getReassociationMaps();
     } else if (auto esop = dyn_cast<mlir::memref::ExpandShapeOp>(userOp)) {
-      newmemrefType = esop.getType().cast<MemRefType>();
+      newmemrefType = cast<MemRefType>(esop.getType());
       reassociationMap = esop.getReassociationMaps();
     } else {
       llvm::errs() << DEBUG_TYPE << " - This case may never happen.\n"
@@ -210,9 +210,9 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
           mlir::OpBuilder builder(cop);
           mlir::arith::ConstantOp newcstOp =
             builder.create<mlir::arith::ConstantOp>(cop.getLoc(), type, IntegerAttr::get(type, newIndex));
-          llvm::dbgs()
-            << DEBUG_TYPE
-            << " - BECAREFULL: memref.dim will be updated, may cause a wrong code? (if fused dim are dynamic)\nFrom\n";
+          llvm::dbgs() << DEBUG_TYPE
+                       << " - BECAREFULL: memref.dim will be updated, may cause a wrong code? (if fused dim "
+                          "are dynamic)\nFrom\n";
           dimOp.dump();
           dimOp->replaceUsesOfWith(idx, newcstOp.getResult());
           llvm::dbgs() << "To\n";
@@ -302,7 +302,7 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
       referenceValue.dump();
     });
     UnifyShapeInfos result;
-    MemRefType referenceType = referenceValue.getType().cast<MemRefType>();
+    MemRefType referenceType = cast<MemRefType>(referenceValue.getType());
     MLIRContext *context = referenceValue.getContext();
     Operation *referenceOp = referenceValue.getDefiningOp();
     auto referenceShape = referenceType.getShape();
@@ -355,16 +355,17 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
               // OK memref.expand_shape [[0, 1]] : memref<?xf16> into memref<?x1024xf16>
               // OK memref.expand_shape [[0, 1], 2] : memref<?x?xf16> into memref<?x1024x?xf16>
               llvm::errs() << DEBUG_TYPE
-                           << " WARNING -- ExpandShapeOp - cannot compute new AffineMap Access function because of "
+                           << " WARNING -- ExpandShapeOp - cannot compute new AffineMap Access function "
+                              "because of "
                               "unknown dynamic/symbolic shape\n";
               result.skip = true;
               return result;
             }
           } else {  // referenceOp is not a  AllocOp or ExpandShapeOp
             llvm::errs() << DEBUG_TYPE << " getNewAffineMapResults- WARNING!!! This case may never happen\n";
-            llvm::dbgs()
-              << DEBUG_TYPE
-              << " WARNING -- cannot compute new AffineMap Access function because of unknown dynamic/symbolic shape\n";
+            llvm::dbgs() << DEBUG_TYPE
+                         << " WARNING -- cannot compute new AffineMap Access function because of unknown "
+                            "dynamic/symbolic shape\n";
             result.skip = true;
             return result;
           }
@@ -380,7 +381,7 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
       }
       newAccesExpr.push_back(accessRes);
 
-      SmallVector<AffineMap, 1> newShapeMap = AffineMap::inferFromExprList({shapeRes});
+      SmallVector<AffineMap, 1> newShapeMap = AffineMap::inferFromExprList({shapeRes}, context);
       result.newShapeMap[newShapeMap[0]] = symbolicValue;
     }
 
@@ -392,7 +393,7 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
       }
     }
 
-    SmallVector<AffineMap, 1> newAccessMap = AffineMap::inferFromExprList(newAccesExpr);
+    SmallVector<AffineMap, 1> newAccessMap = AffineMap::inferFromExprList(newAccesExpr, context);
     assert(newAccessMap.size() == 1 && "Generation from a list of AffineExpr must result in only one AffineMap");
     LLVM_DEBUG({
       llvm::dbgs() << " new access map function:\n";
@@ -422,8 +423,8 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
       // 1. Create/compute the right dynamic size from original dynamic variable and new shape mapping
       SmallVector<Value, kVectorSizeFour> dynamicValue;
       for (auto shapeMap : shapeInfo.newShapeMap) {
-        mlir::AffineApplyOp applyOp =
-          builder.create<mlir::AffineApplyOp>(allocOp.getLoc(), shapeMap.first, shapeMap.second);
+        mlir::affine::AffineApplyOp applyOp =
+          builder.create<mlir::affine::AffineApplyOp>(allocOp.getLoc(), shapeMap.first, shapeMap.second);
         dynamicValue.push_back(applyOp.getResult());
       }
       // 2. Create the new Alloc Op with the new dynamic size
@@ -441,14 +442,14 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
       AffineMap aff = AffineMap::get(uop->getContext());
       StringRef attrStrName;
 
-      if (isa<mlir::AffineLoadOp>(uop)) {
-        mlir::AffineLoadOp alop = cast<mlir::AffineLoadOp>(uop);
+      if (isa<mlir::affine::AffineLoadOp>(uop)) {
+        mlir::affine::AffineLoadOp alop = cast<mlir::affine::AffineLoadOp>(uop);
         aff = alop.getAffineMap();
-        attrStrName = AffineLoadOp::getMapAttrStrName();
-      } else if (isa<mlir::AffineStoreOp>(uop)) {
-        mlir::AffineStoreOp asop = cast<mlir::AffineStoreOp>(uop);
+        attrStrName = affine::AffineLoadOp::getMapAttrStrName();
+      } else if (isa<mlir::affine::AffineStoreOp>(uop)) {
+        mlir::affine::AffineStoreOp asop = cast<mlir::affine::AffineStoreOp>(uop);
         aff = asop.getAffineMap();
-        attrStrName = AffineStoreOp::getMapAttrStrName();
+        attrStrName = affine::AffineStoreOp::getMapAttrStrName();
       }
 
       if (!aff.isEmpty()) {
@@ -460,8 +461,8 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
       // improvment: if operation already have some dynamic access,
       //   just add new value at the end of the list may not be correct
       //   it may result with too many operand :(
-      if (isa<mlir::AffineLoadOp>(uop)) {
-        mlir::AffineLoadOp alop = cast<mlir::AffineLoadOp>(uop);
+      if (isa<mlir::affine::AffineLoadOp>(uop)) {
+        mlir::affine::AffineLoadOp alop = cast<mlir::affine::AffineLoadOp>(uop);
         SmallVector<Value, kVectorSizeFour> operands = uop->getOperands();
         for (auto shape : shapeInfo.newShapeMap) {
           for (auto value : shape.second) {
@@ -469,12 +470,12 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
           }
         }
         AffineMap aff = alop.getAffineMap();
-        auto newOp =
-          builder.create<mlir::AffineLoadOp>(uop->getLoc(), getUpdatedAffineMap(aff, shapeInfo.newAccessMap), operands);
+        auto newOp = builder.create<mlir::affine::AffineLoadOp>(
+          uop->getLoc(), getUpdatedAffineMap(aff, shapeInfo.newAccessMap), operands);
         alop.getResult().replaceAllUsesWith(newOp);
         uop->erase();
-      } else if (isa<mlir::AffineStoreOp>(uop)) {
-        mlir::AffineStoreOp asop = cast<mlir::AffineStoreOp>(uop);
+      } else if (isa<mlir::affine::AffineStoreOp>(uop)) {
+        mlir::affine::AffineStoreOp asop = cast<mlir::affine::AffineStoreOp>(uop);
         SmallVector<Value, kVectorSizeFour> operands = asop.getIndices();
         for (auto shape : shapeInfo.newShapeMap) {
           for (auto value : shape.second) {
@@ -482,8 +483,8 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
           }
         }
         AffineMap aff = asop.getAffineMap();
-        (void)builder.create<mlir::AffineStoreOp>(uop->getLoc(), asop.getValue(), asop.getMemref(),
-                                                  getUpdatedAffineMap(aff, shapeInfo.newAccessMap), operands);
+        (void)builder.create<mlir::affine::AffineStoreOp>(uop->getLoc(), asop.getValue(), asop.getMemref(),
+                                                          getUpdatedAffineMap(aff, shapeInfo.newAccessMap), operands);
         uop->erase();
       }
     }
@@ -557,15 +558,15 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
         targetOp->erase();
       }
     } else if (targetOp == reshapesop) {
-      llvm::errs()
-        << DEBUG_TYPE
-        << " WARNING -- This operation may be inconsistent. Please declare source with appropriate type directly\n";
+      llvm::errs() << DEBUG_TYPE
+                   << " WARNING -- This operation may be inconsistent. Please declare source with appropriate "
+                      "type directly\n";
       return false;
     } else {
       LLVM_DEBUG({
-        llvm::dbgs()
-          << DEBUG_TYPE
-          << " WARNING -- unexpected case. Collapse shape use alloc Operation instead of reshape one? Retry\n";
+        llvm::dbgs() << DEBUG_TYPE
+                     << " WARNING -- unexpected case. Collapse shape use alloc Operation instead of reshape "
+                        "one? Retry\n";
       });
       return false;
     }
@@ -598,7 +599,7 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
         llvm::dbgs() << "\n" << DEBUG_TYPE << " - work on operation:\n";
         esop.dump();
       });
-      Value initValue = esop.getOperand();
+      Value initValue = esop.getOperands()[0];
       // Cases where a BlockArgument is the operand should not be
       // handled in this function
       if (!isa<BlockArgument>(initValue)) {
@@ -620,7 +621,8 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
             if (isa<mlir::memref::DimOp>(uop)) {
               LLVM_DEBUG({
                 llvm::dbgs() << DEBUG_TYPE
-                             << " - Cannot remove the following Operation because of dynamic shape that was fused and "
+                             << " - Cannot remove the following Operation because of dynamic shape "
+                                "that was fused and "
                                 "new dim used:\n";
                 esop.dump();
                 uop->dump();
@@ -636,7 +638,7 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
         for (Operation *uop : resultValue.getUsers()) {
           // If updateCopyOps returns false, there is a problem with
           // the attempt to erase this ExpandShapeOp. Skip.
-          if (!updateCopyOps(uop, esop, initValue.getType().cast<MemRefType>(), unifyShapeInfos)) {
+          if (!updateCopyOps(uop, esop, cast<MemRefType>(initValue.getType()), unifyShapeInfos)) {
             llvm::dbgs() << DEBUG_TYPE
                          << " WARNING -- failed to update corresponding copy Op, a expandShapeOp will be keept\n";
             return WalkResult::skip();
@@ -692,7 +694,7 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
       // Cases where a BlockArgument is the operand should not be
       // handled in this function
       if (!isa<BlockArgument>(initValue)) {
-        MemRefType resultType = csop.getType().cast<MemRefType>();
+        MemRefType resultType = cast<MemRefType>(csop.getType());
         // 1. Get the shape of the operand, which is the one we want to keep
         // Also get the collapse shape reassociation information:
         // we need it to update concerned access functions
@@ -710,7 +712,8 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
             if (isa<mlir::memref::DimOp>(uop)) {
               LLVM_DEBUG({
                 llvm::dbgs() << DEBUG_TYPE
-                             << " - Cannot remove the following Operation because of dynamic shape that was fused and "
+                             << " - Cannot remove the following Operation because of dynamic shape "
+                                "that was fused and "
                                 "new dim used:\n";
                 csop.dump();
                 uop->dump();
@@ -733,7 +736,8 @@ class UnifyShapePass : public mlir::impl::UnifyShapeBase<UnifyShapePass> {
             if (!updateCopyOps(uop, csop, resultType, unifyShapeInfos)) {
               if (!updateCopyOps(uop, allocOp, resultType, unifyShapeInfos)) {
                 llvm::dbgs() << DEBUG_TYPE
-                             << " WARNING -- failed to update corresponding copy Op, a collapseShapeOp will be keept\n";
+                             << " WARNING -- failed to update corresponding copy Op, a collapseShapeOp "
+                                "will be keept\n";
                 return WalkResult::skip();
               }
             }

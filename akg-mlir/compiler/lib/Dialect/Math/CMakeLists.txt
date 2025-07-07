@@ -13,7 +13,6 @@ add_mlir_dialect_library(AKGMathPasses
   MLIRMathExtDialect
   MLIRMemRefDialect
 
-  DISABLE_INSTALL
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRPass
@@ -26,4 +25,4 @@ add_mlir_dialect_library(AKGMathPasses
   MLIRTransformUtils
   AKGMLIRAnalysis
   )
-target_link_libraries(AKGMathPasses PRIVATE akg::symengine gmp stdc++fs)
+target_link_libraries(AKGMathPasses PRIVATE ${SYMENGINE_LIBRARIES} stdc++fs)

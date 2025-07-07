@@ -17,6 +17,7 @@
 #ifndef COMPILER_INCLUDE_AKG_DIALECT_CPU_IR_CPUOPS_H_
 #define COMPILER_INCLUDE_AKG_DIALECT_CPU_IR_CPUOPS_H_
 
+#include "mlir/Bytecode/BytecodeOpInterface.h"
 #include "mlir/Interfaces/InferTypeOpInterface.h"
 
 #include "akg/Dialect/CPU/IR/CPUOpsDialect.h.inc"

@@ -78,7 +78,7 @@ class WorkaroundFixReduceInitializationPass
 void WorkaroundFixReduceInitializationPass::findReduceValue(func::FuncOp funcOp) {
   llvm::MapVector<mlir::Value, SmallVector<mlir::Operation *, kExpectedNBUsage>> reduceCandidate;
 
-  funcOp.walk([&](AffineStoreOp storeOp) {
+  funcOp.walk([&](affine::AffineStoreOp storeOp) {
     mlir::Value candidate = storeOp.getMemref();
     /// if (reduceCandidate.contains(candidate)) { // contains doesn't exist in LLVM 16.0.6
     if (reduceCandidate.count(candidate) != 0) {
@@ -102,11 +102,11 @@ void WorkaroundFixReduceInitializationPass::findReduceValue(func::FuncOp funcOp)
   for (auto [candidateValue, candidateOps] : reduceCandidate) {
     if (candidateOps.size() == kExpectedNbStore) {
       int nbUser = 0;
-      if (isa<mlir::AffineIfOp>(candidateOps[0]->getParentOp())) {
+      if (isa<mlir::affine::AffineIfOp>(candidateOps[0]->getParentOp())) {
         this->reduceValue[candidateValue] = candidateOps;
         for (Operation *userOp : candidateValue.getUsers()) {
           nbUser++;
-          if (isa<mlir::AffineLoadOp>(userOp)) {
+          if (isa<mlir::affine::AffineLoadOp>(userOp)) {
             this->reduceValue[candidateValue].push_back(userOp);
           } else if (isa<mlir::memref::CopyOp>(userOp)) {
             // Do not count memref.copy statement...
@@ -121,7 +121,7 @@ void WorkaroundFixReduceInitializationPass::findReduceValue(func::FuncOp funcOp)
                           "LoadOp to determine the right one:\n";
           candidateValue.dump();
         });
-        (void) this->reduceValue.erase(candidateValue);
+        (void)this->reduceValue.erase(candidateValue);
       }
     }
   }
@@ -148,10 +148,8 @@ void WorkaroundFixReduceInitializationPass::moveInitializationOp() {
 
 void WorkaroundFixReduceInitializationPass::runOnOperation() {
   func::FuncOp funcOp = getOperation();
-  if (funcOp->hasAttr(kOperatorTypeStr) && funcOp->getAttr(kOperatorTypeStr).dyn_cast<StringAttr>() == kReduceStr) {
-    LLVM_DEBUG({
-      llvm::dbgs() << DEBUG_TYPE << " - reduce FuncOp\n";
-    });
+  if (funcOp->hasAttr(kOperatorTypeStr) && dyn_cast<StringAttr>(funcOp->getAttr(kOperatorTypeStr)) == kReduceStr) {
+    LLVM_DEBUG({ llvm::dbgs() << DEBUG_TYPE << " - reduce FuncOp\n"; });
     findReduceValue(funcOp);
     moveInitializationOp();
   }

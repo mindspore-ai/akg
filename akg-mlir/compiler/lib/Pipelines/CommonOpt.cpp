@@ -20,7 +20,6 @@
 
 #include "akg/Conversion/Passes.h"
 #include "akg/Dialect/Linalg/Passes.h"
-#include "akg/Dialect/Tosa/Passes.h"
 #include "akg/Dialect/MindSpore/Passes.h"
 #include "akg/Transforms/Passes.h"
 #include "mlir/IR/MLIRContext.h"
@@ -39,7 +38,6 @@ namespace {
 void createSpliterOptPipelineImpl(OpPassManager &pm, const SpliterOptPipelineOptions &options) {
   OpPassManager &nestedFunctionPM = pm.nest<func::FuncOp>();
   nestedFunctionPM.addPass(mlir::createInferSymbolicShapesPass());
-  nestedFunctionPM.addPass(mlir::createAKGSplitGraphPass(options.dumpDir));
 }
 }  // namespace
 

@@ -1,4 +1,3 @@
 [submodule "third-party/llvm-project"]
 	path = third-party/llvm-project
 	url = https://gitee.com/mirrors/llvm-project.git
-	branch = llvmorg-16.0.6

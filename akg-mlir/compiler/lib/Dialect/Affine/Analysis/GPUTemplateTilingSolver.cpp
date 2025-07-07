@@ -309,16 +309,6 @@ static void processYFullBlock(autotiling::AxisPtr &a, int &len, int &blockNum, s
   len = 1;
 }
 
-static void processYPartBlock(autotiling::AxisPtr &a, int &len, int &blockNum, std::vector<std::string> &axisMap) {
-  auto gridcfg = std::make_shared<GpuGrid>("Manual");
-  gridcfg->value = blockNum;
-  gridcfg->index = ConfigPos::kOuter;
-  a->configs[gridcfg->type].push_back(gridcfg);
-  axisMap[0] = kGpuGridCfg;
-  len = (len - 1) / blockNum + 1;
-  blockNum = 0;
-}
-
 static void processFakeMapThread(autotiling::AxisPtr &a, std::vector<std::string> &axisMap) {
   auto seqOuterTile = a->tryGetConfig(1);
   seqOuterTile->value = 1;

@@ -65,8 +65,6 @@ std::unique_ptr<Pass> createLinalgElementwiseFusionExtPass();
 /// Pattern to fuse `linalg.generic` -> `linalg.template` operations
 /// when both operations are fusable elementwise operations.
 void populateTemplateOpsFusionPatterns(RewritePatternSet &patterns);
-std::unique_ptr<OperationPass<ModuleOp>> createLinalgTemplateOpFusionPass(
-  const linalgExt::TemplateOpFusionOptions &options = linalgExt::TemplateOpFusionOptions());
 
 #define GEN_PASS_REGISTRATION
 #include "akg/Dialect/Linalg/Passes.h.inc"

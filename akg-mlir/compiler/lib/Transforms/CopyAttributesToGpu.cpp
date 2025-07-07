@@ -66,7 +66,7 @@ void CopyAttributesToGpuPass::runOnOperation() {
   if (funcOp && gpuFuncOp) {
     auto attrs = funcOp->getAttrs();
     for (auto attr : attrs) {
-      auto keyStr = attr.getName().dyn_cast<StringAttr>().getValue().str();
+      auto keyStr = dyn_cast<StringAttr>(attr.getName()).getValue().str();
       if (excludedKeys.count(keyStr) != 0) {
         continue;
       }

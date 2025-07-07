@@ -83,7 +83,7 @@ class TosaOperatorType {
   TosaOperatorType() = default;
 
   static bool isTosaElementwiseOp(Operation *op) {
-    return (isa<tosa::AddOp, tosa::SubOp, tosa::MulOp, tosa::DivOp, tosa::NegateOp, tosa::PowOp, tosa::ReciprocalOp,
+    return (isa<tosa::AddOp, tosa::SubOp, tosa::MulOp, tosa::NegateOp, tosa::PowOp, tosa::ReciprocalOp,
                 tosa::RsqrtOp, tosa::LogOp, tosa::ExpOp, tosa::AbsOp, tosa::TanhOp, tosa::BitwiseAndOp,
                 tosa::BitwiseOrOp, tosa::BitwiseNotOp, tosa::BitwiseXorOp, tosa::LogicalAndOp, tosa::LogicalNotOp,
                 tosa::LogicalOrOp, tosa::LogicalXorOp, tosa::CastOp, tosa::LogicalLeftShiftOp,
@@ -104,9 +104,10 @@ class MindOperatorType {
 
   static bool isMindElementwiseOp(Operation *op) {
     return (
-      isa<mindspore::AddNOp, mindspore::DivOp, mindspore::SqrtOp, mindspore::CosOp, mindspore::SinOp, mindspore::AsinOp,
-          mindspore::AcosOp, mindspore::AcoshOp, mindspore::AtanOp, mindspore::IsnanOp, mindspore::IsinfOp,
-          mindspore::InplaceAssignOp, mindspore::AssignOp, mindspore::LessOp, mindspore::LessEqualOp>(op));
+      isa<mindspore::AddOp, mindspore::AddNOp, mindspore::DivOp, mindspore::SqrtOp, mindspore::CosOp, mindspore::SinOp,
+          mindspore::AsinOp,mindspore::AcosOp, mindspore::AcoshOp, mindspore::AtanOp, mindspore::IsnanOp,
+          mindspore::IsinfOp, mindspore::InplaceAssignOp, mindspore::AssignOp, mindspore::LessOp,
+          mindspore::LessEqualOp>(op));
   }
 
   static bool isMindReduceOp(Operation *op) {
@@ -121,15 +122,15 @@ class CommonUtils {
  public:
   CommonUtils() = default;
   // Determines whether a value is in the upper and lower bounds of the loop.
-  static bool isInForUbAndLb(AffineForOp forOp, int64_t constraintValue) {
+  static bool isInForUbAndLb(affine::AffineForOp forOp, int64_t constraintValue) {
     // TODO: getResults().size() > 0
     auto ubMap = forOp.getUpperBoundMap().getResult(0);
     auto lbMap = forOp.getLowerBoundMap().getResult(0);
-    if (!ubMap.isa<AffineConstantExpr>() || !lbMap.isa<AffineConstantExpr>()) {
+    if (!llvm::isa<AffineConstantExpr>(ubMap) || !llvm::isa<AffineConstantExpr>(lbMap)) {
       return true;
     }
-    auto ubValue = ubMap.dyn_cast<AffineConstantExpr>().getValue();
-    auto lbValue = lbMap.dyn_cast<AffineConstantExpr>().getValue();
+    auto ubValue = llvm::dyn_cast<AffineConstantExpr>(ubMap).getValue();
+    auto lbValue = llvm::dyn_cast<AffineConstantExpr>(lbMap).getValue();
     if (constraintValue < lbValue || constraintValue > ubValue) {
       return false;
     }
@@ -142,9 +143,9 @@ class CommonUtils {
       int64_t constraintValue = -1;
       // TODO: if condition type is other
       if (constraint.getKind() == AffineExprKind::Add) {
-        AffineBinaryOpExpr binaryExpr = constraint.cast<AffineBinaryOpExpr>();
-        if (binaryExpr.getRHS().isa<AffineConstantExpr>()) {
-          constraintValue = binaryExpr.getRHS().dyn_cast<AffineConstantExpr>().getValue();
+        AffineBinaryOpExpr binaryExpr = llvm::cast<AffineBinaryOpExpr>(constraint);
+        if (llvm::isa<AffineConstantExpr>(binaryExpr.getRHS())) {
+          constraintValue = llvm::dyn_cast<AffineConstantExpr>(binaryExpr.getRHS()).getValue();
         }
       } else if (constraint.getKind() == AffineExprKind::DimId) {
         constraintValue = 0;
@@ -160,10 +161,10 @@ class CommonUtils {
   // Checks whether the constants in the if condition are within the upper and lower bounds of the corresponding for
   // loop.
   static bool isInRange(Operation *op) {
-    if (!isa<AffineIfOp>(op)) {
+    if (!isa<affine::AffineIfOp>(op)) {
       return true;
     }
-    AffineIfOp ifOp = dyn_cast<AffineIfOp>(op);
+    affine::AffineIfOp ifOp = dyn_cast<affine::AffineIfOp>(op);
     SmallVector<int64_t, 4> constraintValues;
     getConstraintValues(ifOp.getIntegerSet(), constraintValues);
     if (constraintValues.empty()) {
@@ -174,11 +175,11 @@ class CommonUtils {
     assert(constraintValues.size() == ifOps.size());
     int64_t i = 0;
     for (auto value : ifOps) {
-      if (auto blockArg = value.dyn_cast<BlockArgument>()) {
-        if (blockArg.getType().isa<IndexType>()) {
+      if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+        if (isa<IndexType>(blockArg.getType())) {
           Block *block = blockArg.getOwner();
           Operation *parentOp = block->getParentOp();
-          if (auto forOp = dyn_cast<AffineForOp>(parentOp)) {
+          if (auto forOp = dyn_cast<affine::AffineForOp>(parentOp)) {
             if (!isInForUbAndLb(forOp, constraintValues[i])) {
               return false;
             }
@@ -249,7 +250,7 @@ class CommonUtils {
       return opType;
     }
     // TODO: multi band
-    auto opTypeStr = op->getAttr(kOperatorTypeStr).dyn_cast<StringAttr>().getValue().str();
+    auto opTypeStr = dyn_cast<StringAttr>(op->getAttr(kOperatorTypeStr)).getValue().str();
     for (auto it = operatorTemplateMap.begin(); it != operatorTemplateMap.end(); ++it) {
       if (it->second == opTypeStr) {
         return OperatorTemplate(it->first);
@@ -265,7 +266,7 @@ class CommonUtils {
     std::string directionStr;
     op->walk([&directionStr](Operation *curOp) {
       if (curOp->getAttr(kReductionTypeStr)) {
-        directionStr = curOp->getAttr(kReductionTypeStr).cast<StringAttr>().getValue().str();
+        directionStr = cast<StringAttr>(curOp->getAttr(kReductionTypeStr)).getValue().str();
       }
     });
 
@@ -277,22 +278,22 @@ class CommonUtils {
     return ReduceDirection::UNKNOWN;
   }
 
-  static AffineLoadOp getReduceInitLoadOp(Operation *reduceOp) {
+  static affine::AffineLoadOp getReduceInitLoadOp(Operation *reduceOp) {
     if (!reduceOp->hasAttr(kReductionAxesStr)) {
       return nullptr;
     }
     auto lhsOp = reduceOp->getOperands()[0].getDefiningOp();
     auto rhsOp = reduceOp->getOperands()[1].getDefiningOp();
-    if (!isa<AffineLoadOp>(lhsOp) && !isa<AffineLoadOp>(rhsOp)) {
+    if (!isa<affine::AffineLoadOp>(lhsOp) && !isa<affine::AffineLoadOp>(rhsOp)) {
       return nullptr;
-    } else if (!isa<AffineLoadOp>(lhsOp) && isa<AffineLoadOp>(rhsOp)) {
-      return dyn_cast<AffineLoadOp>(rhsOp);
-    } else if (isa<AffineLoadOp>(lhsOp) && !isa<AffineLoadOp>(rhsOp)) {
-      return dyn_cast<AffineLoadOp>(lhsOp);
+    } else if (!isa<affine::AffineLoadOp>(lhsOp) && isa<affine::AffineLoadOp>(rhsOp)) {
+      return dyn_cast<affine::AffineLoadOp>(rhsOp);
+    } else if (isa<affine::AffineLoadOp>(lhsOp) && !isa<affine::AffineLoadOp>(rhsOp)) {
+      return dyn_cast<affine::AffineLoadOp>(lhsOp);
     }
 
-    auto lhsLoadOp = dyn_cast<AffineLoadOp>(lhsOp);
-    auto rhsLoadOp = dyn_cast<AffineLoadOp>(rhsOp);
+    auto lhsLoadOp = dyn_cast<affine::AffineLoadOp>(lhsOp);
+    auto rhsLoadOp = dyn_cast<affine::AffineLoadOp>(rhsOp);
 
     auto lhsIndices = lhsLoadOp.getIndices();
     auto rhsIndices = rhsLoadOp.getIndices();
@@ -307,13 +308,13 @@ class CommonUtils {
   }
 
   // get reduce init store op
-  static AffineStoreOp getReduceInitOp(Operation *reduceOp, Block *block) {
+  static affine::AffineStoreOp getReduceInitOp(Operation *reduceOp, Block *block) {
     auto initLoadOp = getReduceInitLoadOp(reduceOp);
     if (!initLoadOp) {
       return nullptr;
     }
 
-    AffineStoreOp initStoreOp = nullptr;
+    affine::AffineStoreOp initStoreOp = nullptr;
     // build dependence graph
     mlir::akg::MemRefDependenceGraph dependenceGraph = MemRefDependenceGraph(block);
     if (!dependenceGraph.init()) {
@@ -331,7 +332,7 @@ class CommonUtils {
       if (!isInRange(dependenceOp->getParentOp())) {
         continue;
       }
-      if (auto store = dyn_cast<AffineStoreOp>(dependenceOp)) {
+      if (auto store = dyn_cast<affine::AffineStoreOp>(dependenceOp)) {
         initStoreOp = store;
       }
     }
@@ -339,11 +340,11 @@ class CommonUtils {
   }
 
   static void collectRelatedAxes(Value value, SmallVector<Operation *, 8> &axes) {
-    if (auto blockArg = value.dyn_cast<BlockArgument>()) {
-      if (blockArg.getType().isa<IndexType>()) {
+    if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+      if (isa<IndexType>(blockArg.getType())) {
         Block *block = blockArg.getOwner();
         Operation *parentOp = block->getParentOp();
-        if (isa<AffineForOp>(parentOp) || isa<scf::ParallelOp>(parentOp)) {
+        if (isa<affine::AffineForOp>(parentOp) || isa<scf::ParallelOp>(parentOp)) {
           axes.push_back(parentOp);
           for (auto operand : parentOp->getOperands()) {
             collectRelatedAxes(operand, axes);
@@ -364,8 +365,8 @@ class CommonUtils {
             collectRelatedAxes(operand, axes);
           }
         }
-      } else if (auto affineIf = dyn_cast<AffineIfOp>(parentOp)) {
-        affineIf.walk([&](AffineYieldOp yieldOp) { collectRelatedAxes(yieldOp.getOperands()[0], axes); });
+      } else if (auto affineIf = dyn_cast<affine::AffineIfOp>(parentOp)) {
+        affineIf.walk([&](affine::AffineYieldOp yieldOp) { collectRelatedAxes(yieldOp.getOperands()[0], axes); });
       } else {
         for (auto operand : parentOp->getOperands()) {
           collectRelatedAxes(operand, axes);
@@ -376,8 +377,8 @@ class CommonUtils {
 
   static Value getStoreValue(Operation *storeOp) {
     Value storeValue;
-    if (dyn_cast<AffineStoreOp>(storeOp)) {
-      storeValue = dyn_cast<AffineStoreOp>(storeOp).getValueToStore();
+    if (dyn_cast<affine::AffineStoreOp>(storeOp)) {
+      storeValue = dyn_cast<affine::AffineStoreOp>(storeOp).getValueToStore();
     } else if (dyn_cast<memref::StoreOp>(storeOp)) {
       storeValue = dyn_cast<memref::StoreOp>(storeOp).getValueToStore();
     } else {
@@ -390,13 +391,13 @@ class CommonUtils {
     if (auto load = dyn_cast<memref::LoadOp>(op)) {
       return load.getIndices();
     }
-    if (auto load = dyn_cast<AffineLoadOp>(op)) {
+    if (auto load = dyn_cast<affine::AffineLoadOp>(op)) {
       return load.getIndices();
     }
     if (auto store = dyn_cast<memref::StoreOp>(op)) {
       return store.getIndices();
     }
-    if (auto store = dyn_cast<AffineStoreOp>(op)) {
+    if (auto store = dyn_cast<affine::AffineStoreOp>(op)) {
       return store.getIndices();
     }
     return ValueRange();
@@ -404,8 +405,8 @@ class CommonUtils {
 
   static Value getStoreMemref(Operation *storeOp) {
     Value memref;
-    if (dyn_cast<AffineStoreOp>(storeOp)) {
-      memref = dyn_cast<AffineStoreOp>(storeOp).getMemref();
+    if (dyn_cast<affine::AffineStoreOp>(storeOp)) {
+      memref = dyn_cast<affine::AffineStoreOp>(storeOp).getMemref();
     } else if (dyn_cast<memref::StoreOp>(storeOp)) {
       memref = dyn_cast<memref::StoreOp>(storeOp).getMemref();
     } else {
@@ -439,7 +440,7 @@ class CommonUtils {
     auto bufferType = memref.getType();
     auto memspace = bufferType.getMemorySpace();
     if (dyn_cast_or_null<IntegerAttr>(memspace)) {
-      cacheLevel = memspace.cast<IntegerAttr>().getInt();
+      cacheLevel = cast<IntegerAttr>(memspace).getInt();
     }
     return cacheLevel;
   }
@@ -485,13 +486,13 @@ class CommonUtils {
           continue;
         }
         auto newAlloc = dyn_cast<memref::AllocOp>(opAlloc);
-        auto newRank = newAlloc.getType().template cast<ShapedType>().getRank();
+        auto newRank = cast<ShapedType>(newAlloc.getType()).getRank();
         if (ret == nullptr) {
           ret = opAlloc;
           continue;
         }
         auto currAlloc = dyn_cast<memref::AllocOp>(ret);
-        auto currRank = currAlloc.getType().template cast<ShapedType>().getRank();
+        auto currRank = cast<ShapedType>(currAlloc.getType()).getRank();
         if (newRank > currRank) {
           ret = opAlloc;
         }
@@ -512,11 +513,11 @@ class CommonUtils {
       return slowMemAndIndices;
     }
     for (auto user : allocA->getUsers()) {
-      if (!isa<memref::StoreOp, AffineStoreOp>(user)) {
+      if (!isa<memref::StoreOp, affine::AffineStoreOp>(user)) {
         continue;
       }
       auto value = getStoreValue(user);
-      if (value.getDefiningOp() && isa<memref::LoadOp, AffineLoadOp>(value.getDefiningOp())) {
+      if (value.getDefiningOp() && isa<memref::LoadOp, affine::AffineLoadOp>(value.getDefiningOp())) {
         slowMemAndIndices = std::make_pair(value, getStoreLoadIndices(user));
       } else {
         auto index = getStoreLoadIndices(user);
@@ -539,7 +540,7 @@ class CommonUtils {
         break;
       }
       operandRoot = upperOp;
-      if (isa<memref::LoadOp, AffineLoadOp>(operandRoot.getDefiningOp())) {
+      if (isa<memref::LoadOp, affine::AffineLoadOp>(operandRoot.getDefiningOp())) {
         indexRoot = getStoreLoadIndices(operandRoot.getDefiningOp());
       } else {
         indexRoot = index;
@@ -649,7 +650,7 @@ class CommonUtils {
   static void collectBroadcastAxes(Operation *funcOp, llvm::SmallSet<Operation *, 8> &broadcastAxes) {
     SmallVector<Operation *> ops;
     funcOp->walk([&](Operation *op) {
-      if (isa<AffineLoadOp, AffineStoreOp>(op)) {
+      if (isa<affine::AffineLoadOp, affine::AffineStoreOp>(op)) {
         ops.push_back(op);
       }
     });
@@ -658,9 +659,9 @@ class CommonUtils {
     llvm::SmallSet<Operation *, 8> minAxes;
     for (auto op : ops) {
       mlir::ValueRange indices;
-      if (auto load = dyn_cast<AffineLoadOp>(op)) {
+      if (auto load = dyn_cast<affine::AffineLoadOp>(op)) {
         indices = load.getIndices();
-      } else if (auto store = dyn_cast<AffineStoreOp>(op)) {
+      } else if (auto store = dyn_cast<affine::AffineStoreOp>(op)) {
         indices = store.getIndices();
       }
 
@@ -726,8 +727,8 @@ class CommonUtils {
       .Case([&](arith::AndIOp) { return builder.create<mlir::arith::AndIOp>(loc, new_lhs, new_rhs); })
       .Case([&](arith::OrIOp) { return builder.create<mlir::arith::OrIOp>(loc, new_lhs, new_rhs); })
       .Case([&](arith::MulIOp) { return builder.create<mlir::arith::MulIOp>(loc, new_lhs, new_rhs); })
-      .Case([&](arith::MinFOp) { return builder.create<mlir::arith::MinFOp>(loc, new_lhs, new_rhs); })
-      .Case([&](arith::MaxFOp) { return builder.create<mlir::arith::MaxFOp>(loc, new_lhs, new_rhs); })
+      .Case([&](arith::MinNumFOp) { return builder.create<mlir::arith::MinNumFOp>(loc, new_lhs, new_rhs); })
+      .Case([&](arith::MaxNumFOp) { return builder.create<mlir::arith::MaxNumFOp>(loc, new_lhs, new_rhs); })
       .Case([&](arith::MinSIOp) { return builder.create<mlir::arith::MinSIOp>(loc, new_lhs, new_rhs); })
       .Case([&](arith::MaxSIOp) { return builder.create<mlir::arith::MaxSIOp>(loc, new_lhs, new_rhs); })
       .Case([&](arith::MinUIOp) { return builder.create<mlir::arith::MinUIOp>(loc, new_lhs, new_rhs); })

@@ -103,7 +103,7 @@ class GpuScheduleTool {
     size_t loopSize = this->loopSize();
     OpBuilder builder(funcOp);
     funcOp->walk([&](Operation *op) {
-      if (!isa<AffineForOp, AffineParallelOp, scf::ParallelOp>(op)) {
+      if (!isa<affine::AffineForOp, affine::AffineParallelOp, scf::ParallelOp>(op)) {
         return;
       }
       auto tagName = getNameAt(loopSize - 1 - i);
@@ -460,9 +460,9 @@ class ShapeAlignTool {
     if (getFuncArgSizes() == 0 || oldType == newType) {
       return;
     }
-    auto oldShape = oldType.cast<ShapedType>();
+    auto oldShape = cast<ShapedType>(oldType);
     assert(oldShape && "Old Type should be a ShapedType");
-    auto newShape = newType.cast<ShapedType>();
+    auto newShape = cast<ShapedType>(newType);
     assert(newShape && "New Type should be a ShapedType");
     ShapeInfo oldDeviceShape = getCurrShapeInfo(argIdx);
     SmallVector<int64_t> oldShapeList;
@@ -530,7 +530,7 @@ class ShapeAlignTool {
 
       // init the newSymbol as original shape, e.g. "S0"
       std::string newSymbol(srcShape);
-      for (auto vi : newIndex) {
+      for (size_t vi : newIndex) {
         vi = static_cast<unsigned>(vi);
         assert(vi < destShapes.size());
         // destShapes[vi] != -1 means this dim has static shape
@@ -566,7 +566,7 @@ class ShapeAlignTool {
   // And we do align based on the reassociation indices.
   void search(Operation *op, ShapeInfo &originShapes) const {
     if (auto expandShape = dyn_cast<memref::ExpandShapeOp>(op)) {
-      auto shapedType = expandShape.getResultType().cast<ShapedType>();
+      auto shapedType = cast<ShapedType>(expandShape.getResultType());
       if (!shapedType) {
         (void)op->emitError("Op is not shapedType, cannot align shape.");
         return;
@@ -575,7 +575,7 @@ class ShapeAlignTool {
       convertToConstShapes(shapedType, destShapes);
       doAlign(expandShape.getReassociationIndices(), originShapes, destShapes);
     } else if (auto collapse = dyn_cast<memref::CollapseShapeOp>(op)) {
-      auto shapedType = collapse.getSrcType().cast<ShapedType>();
+      auto shapedType = cast<ShapedType>(collapse.getSrcType());
       if (!shapedType) {
         (void)op->emitError("Op is not shapedType, cannot align shape.");
         return;

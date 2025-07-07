@@ -127,7 +127,7 @@ void preprocessReshape(func::FuncOp funcOp) {
                              [](std::string s) { return s; });
         tool.updateCurrShapeInfo(argIdx - 1, newShape);
       }
-      SmallVector<int64_t> newNeedFixIndices{newTy.dyn_cast<ShapedType>().getRank(), 0};
+      SmallVector<int64_t> newNeedFixIndices{dyn_cast<ShapedType>(newTy).getRank(), 0};
       tool.recordNeedFixIndice(argIdx - 1, newNeedFixIndices);
       // erase ReshapeOp and replace its output with the func arg
       arg.setType(newTy);

@@ -61,15 +61,15 @@ class MergeFusionOpPass : public impl::MergeFusionOpBase<MergeFusionOpPass> {
   void runOnOperation() override;
 
  private:
-  void getFusionOpBetweenOp(Block *beforeBlock, AffineForOp after);
+  void getFusionOpBetweenOp(Block *beforeBlock, affine::AffineForOp after);
   void clearFusionOp();
-  AffineIfOp createAffineIfOp(OpBuilder &builder, const bool isBackward = false);
+  affine::AffineIfOp createAffineIfOp(OpBuilder &builder, const bool isBackward = false);
   void createIfThenBlock(Operation *op);
 
   SmallVector<Operation *, 8> forwardFusionOp;
   SmallVector<Operation *, 8> backwardFusionOp;
-  SmallVector<AffineForOp, 4> forwardBetweenLoops;
-  SmallVector<AffineForOp, 4> backwardBetweenLoops;
+  SmallVector<affine::AffineForOp, 4> forwardBetweenLoops;
+  SmallVector<affine::AffineForOp, 4> backwardBetweenLoops;
   SmallSet<Operation *, 8> reduceInitOp;
   std::string target = kTargetCpu;
 };
@@ -83,37 +83,38 @@ void MergeFusionOpPass::clearFusionOp() {
   backwardBetweenLoops.clear();
 }
 
-// Get all AffineForOps from the current op to the ancestor block and return the top-level ancestor Op.
-static Operation *getAncestorForOp(Operation &op, Block *block, SmallVectorImpl<AffineForOp> *betweenLoops = nullptr) {
+// Get all affine::AffineForOps from the current op to the ancestor block and return the top-level ancestor Op.
+static Operation *getAncestorForOp(Operation &op, Block *block,
+                                   SmallVectorImpl<affine::AffineForOp> *betweenLoops = nullptr) {
   auto *currOp = &op;
   // Returns nullptr if the current op doesn't lie in this block.
   if (!block->findAncestorOpInBlock(op)) {
     return nullptr;
   }
 
-  if (auto affineForOp = dyn_cast<AffineForOp>(op)) {
+  if (auto affineForOp = dyn_cast<affine::AffineForOp>(op)) {
     betweenLoops->push_back(affineForOp);
   }
   while (currOp && currOp->getBlock() != block) {
     currOp = currOp->getParentOp();
-    if (auto affineForOp = dyn_cast<AffineForOp>(currOp)) {
+    if (auto affineForOp = dyn_cast<affine::AffineForOp>(currOp)) {
       betweenLoops->push_back(affineForOp);
     }
   }
   return currOp;
 }
 
-static void getAllAffineFor(func::FuncOp f, std::vector<SmallVector<AffineForOp, 6>> *bands) {
-  // multi-filter: the outermost layer consists of multiple AffineForOp
-  for (AffineForOp forOp : f.getOps<AffineForOp>()) {
-    SmallVector<AffineForOp, 6> band;
+static void getAllAffineFor(func::FuncOp f, std::vector<SmallVector<affine::AffineForOp, 6>> *bands) {
+  // multi-filter: the outermost layer consists of multiple affine::AffineForOp
+  for (affine::AffineForOp forOp : f.getOps<affine::AffineForOp>()) {
+    SmallVector<affine::AffineForOp, 6> band;
     // From the inside to outside
-    forOp.walk([&band](const AffineForOp op) { band.push_back(op); });
+    forOp.walk([&band](const affine::AffineForOp op) { band.push_back(op); });
     bands->push_back(band);
   }
 }
 
-static void insertUniqueValue(SmallVectorImpl<AffineForOp> *loopA, SmallVector<AffineForOp, 16> loopB) {
+static void insertUniqueValue(SmallVectorImpl<affine::AffineForOp> *loopA, SmallVector<affine::AffineForOp, 16> loopB) {
   for (auto loop : loopB) {
     if (std::find(loopA->begin(), loopA->end(), loop) != loopA->end()) {
       continue;
@@ -122,41 +123,26 @@ static void insertUniqueValue(SmallVectorImpl<AffineForOp> *loopA, SmallVector<A
   }
 }
 
-static bool isSeparatedByForLoop(Operation *opA, Operation *opB) {
-  Block *block = opA->getBlock();
-  if (block != opB->getBlock() || isa<AffineForOp>(opB)) {
-    return true;
-  }
-
-  for (auto iter = Block::iterator(opA); iter != Block::iterator(opB); ++iter) {
-    if (isa<AffineForOp>(*iter)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 // Get all operators between any two ops and record them in a global variable.
-void MergeFusionOpPass::getFusionOpBetweenOp(Block *beforeBlock, AffineForOp after) {
+void MergeFusionOpPass::getFusionOpBetweenOp(Block *beforeBlock, affine::AffineForOp after) {
   clearFusionOp();
   if (!beforeBlock->findAncestorOpInBlock(*after.getOperation())) {
     return;
   }
   beforeBlock->walk([this, &after](Operation *op) {
-    // Because AffineYieldOp can only be placed at the end of the current
-    // block, no Op can be inserted before AffineYieldOp.
-    // The current solution only handles non-AffineForOp between two loops, so AffineForOp needs to be skipped.
-    // If the inner for loop is an ancestor of the current operator, it means that the
-    // current operator is not between the two for loops.
-    // todo: isSeparatedByForLoop
-    if (isa<AffineYieldOp, AffineForOp, arith::ConstantOp, memref::AllocOp, memref::DeallocOp, memref::CopyOp,
-            memref::DimOp, func::ReturnOp>(op) ||
+    // Because affine::AffineYieldOp can only be placed at the end of the current
+    // block, no Op can be inserted before affine::AffineYieldOp.
+    // The current solution only handles non-affine::AffineForOp between two loops, so affine::AffineForOp needs to
+    // be skipped. If the inner for loop is an ancestor of the current operator, it means that the current operator
+    // is not between the two for loops. todo: isSeparatedByForLoop
+    if (isa<affine::AffineYieldOp, affine::AffineForOp, arith::ConstantOp, memref::AllocOp, memref::DeallocOp,
+            memref::CopyOp, memref::DimOp, func::ReturnOp>(op) ||
         op == after.getOperation() || after.getBody()->findAncestorOpInBlock(*op) != nullptr) {
       return;
     }
 
     // nested statements
-    if (!isa<AffineForOp, func::FuncOp>(op->getParentOp())) {
+    if (!isa<affine::AffineForOp, func::FuncOp>(op->getParentOp())) {
       return;
     }
 
@@ -169,11 +155,11 @@ void MergeFusionOpPass::getFusionOpBetweenOp(Block *beforeBlock, AffineForOp aft
 
     // Collect all affine.for between two for loops to facilitate the generation of
     // conditions in if statements.
-    SmallVector<AffineForOp, 16> betweenLoops;
+    SmallVector<affine::AffineForOp, 16> betweenLoops;
     Operation *opAncestor = getAncestorForOp(*op, commBlock, &betweenLoops);
     Operation *afterAncestor = getAncestorForOp(*(after.getOperation()), commBlock, &betweenLoops);
-    // The current op is the ancestor of after op, that is, the current op contains after op, which is not supported.
-    // reduce_x and all reduce: init op do not need to sink.
+    // The current op is the ancestor of after op, that is, the current op contains after op, which is not
+    // supported. reduce_x and all reduce: init op do not need to sink.
     if (opAncestor == afterAncestor || reduceInitOp.count(op) == 1) {
       return;
     }
@@ -187,15 +173,15 @@ void MergeFusionOpPass::getFusionOpBetweenOp(Block *beforeBlock, AffineForOp aft
   });
 }
 
-AffineIfOp MergeFusionOpPass::createAffineIfOp(OpBuilder &builder, const bool isBackward) {
-  SmallVector<AffineForOp, 4> loops = isBackward ? backwardBetweenLoops : forwardBetweenLoops;
+affine::AffineIfOp MergeFusionOpPass::createAffineIfOp(OpBuilder &builder, const bool isBackward) {
+  SmallVector<affine::AffineForOp, 4> loops = isBackward ? backwardBetweenLoops : forwardBetweenLoops;
   if (loops.empty()) {
     return nullptr;
   }
 
   auto *context = loops[0]->getContext();
 
-  FlatAffineValueConstraints cst;
+  affine::FlatAffineValueConstraints cst;
   SmallVector<Operation *, 8> ops;
   llvm::append_range(ops, loops);
   (void)getIndexSet(ops, &cst);
@@ -206,9 +192,9 @@ AffineIfOp MergeFusionOpPass::createAffineIfOp(OpBuilder &builder, const bool is
   SmallVector<bool, 4> eqFlags;
   auto numVar = cst.getNumDimVars();
   // Determine the number of conditions in the if statement based on the vars of each
-  // AffineForOp in loops.
+  // affine::AffineForOp in loops.
   for (size_t i = 0; i < numVar; ++i) {
-    // variables in each constraint(variables in each AffineForOp)
+    // variables in each constraint(variables in each affine::AffineForOp)
     auto insertDimExpr = allCondSet.getConstraint(i * (unsigned int)2 + (size_t)isBackward);
     exprs.push_back(insertDimExpr);
     // each of the constraints is an equality
@@ -224,20 +210,20 @@ AffineIfOp MergeFusionOpPass::createAffineIfOp(OpBuilder &builder, const bool is
   // right side of a constraint in the if statement
   SmallVector<mlir::Value, 4> setOperands;
   cst.getValues(0, numVar, &setOperands);
-  canonicalizeSetAndOperands(&ifCondSet, &setOperands);
+  affine::canonicalizeSetAndOperands(&ifCondSet, &setOperands);
 
-  return builder.create<AffineIfOp>(loops[0]->getLoc(), ifCondSet, setOperands, false);
+  return builder.create<affine::AffineIfOp>(loops[0]->getLoc(), ifCondSet, setOperands, false);
 }
 
 void MergeFusionOpPass::createIfThenBlock(Operation *op) {
   OpBuilder builder(op);
-  auto body = dyn_cast<AffineForOp>(op).getBody();
+  auto body = dyn_cast<affine::AffineForOp>(op).getBody();
   if (!forwardFusionOp.empty()) {
     builder.setInsertionPoint(&(body->front()));
     if (forwardBetweenLoops.empty()) {
       llvm::errs() << "Forward: Failed to obtain the conditional control variable in the if statement.\n";
     }
-    AffineIfOp ifOp = createAffineIfOp(builder, false);
+    affine::AffineIfOp ifOp = createAffineIfOp(builder, false);
     if (!ifOp) {
       return;
     }
@@ -253,7 +239,7 @@ void MergeFusionOpPass::createIfThenBlock(Operation *op) {
     if (backwardBetweenLoops.empty()) {
       llvm::errs() << "Backward: Failed to obtain the conditional control variable in the if statement.\n";
     }
-    AffineIfOp ifOp = createAffineIfOp(builder, true);
+    affine::AffineIfOp ifOp = createAffineIfOp(builder, true);
     if (!ifOp) {
       return;
     }
@@ -266,7 +252,7 @@ void MergeFusionOpPass::createIfThenBlock(Operation *op) {
 }
 
 void MergeFusionOpPass::runOnOperation() {
-  std::vector<SmallVector<AffineForOp, 6>> bands;
+  std::vector<SmallVector<affine::AffineForOp, 6>> bands;
   auto funcOp = getOperation();
   getAllAffineFor(funcOp, &bands);
 
@@ -312,9 +298,9 @@ void MergeFusionOpPass::runOnOperation() {
     for (int i = num - 1; i >= 0; --i) {
       Operation *curOp = band[(unsigned int)i];
       if (mergeSpecificOp) {
-        getFusionOpBetweenOp(firstOp->getBlock(), dyn_cast<AffineForOp>(curOp));
+        getFusionOpBetweenOp(firstOp->getBlock(), dyn_cast<affine::AffineForOp>(curOp));
       } else {
-        getFusionOpBetweenOp(dyn_cast<AffineForOp>(firstOp).getBody(), dyn_cast<AffineForOp>(curOp));
+        getFusionOpBetweenOp(dyn_cast<affine::AffineForOp>(firstOp).getBody(), dyn_cast<affine::AffineForOp>(curOp));
       }
       if (forwardFusionOp.empty() && backwardFusionOp.empty()) {
         continue;

@@ -52,7 +52,7 @@ def LoadOp : Fusion_Op<"load", [
       setOperand(index, value);
     }
     MemRefType getMemRefType() {
-      return getMemRef().getType().cast<MemRefType>();
+      return cast<MemRefType>(getMemRef().getType());
     }
   }];
 
@@ -87,7 +87,7 @@ def MultiLoadOp : Fusion_Op<"multi_load", [
       setOperand(index, value);
     }
     MemRefType getMemRefType() {
-      return getMemRef().getType().cast<MemRefType>();
+      return cast<MemRefType>(getMemRef().getType());
     }
   }];
 
@@ -184,11 +184,11 @@ def SubViewOp : Fusion_Op<"subview", [
   let extraClassDeclaration = [{
     /// Returns the type of the base memref operand.
     MemRefType getSourceType() {
-      return getSource().getType().cast<MemRefType>();
+      return cast<MemRefType>(getSource().getType());
     }
 
     /// The result of a subview is always a memref.
-    MemRefType getType() { return getResult().getType().cast<MemRefType>(); }
+    MemRefType getType() { return cast<MemRefType>(getResult().getType()); }
 
     /// A subview result type can be fully inferred from the source type and the
     /// static representation of offsets, sizes and strides. Special sentinels
@@ -276,7 +276,7 @@ def Fusion_BroadcastOp :
   let extraClassDeclaration = [{
     Type getSourceType() { return getSource().getType(); }
     VectorType getVectorType() {
-      return getVector().getType().cast<VectorType>();
+      return cast<VectorType>(getVector().getType());
     }
 
     /// Return the dimensions of the result vector that were formerly ones in the
@@ -323,10 +323,10 @@ def Fusion_TransposeOp :
   ];
   let extraClassDeclaration = [{
     VectorType getVectorType() {
-      return getVector().getType().cast<VectorType>();
+      return cast<VectorType>(getVector().getType());
     }
     VectorType getResultType() {
-      return getResult().getType().cast<VectorType>();
+      return cast<VectorType>(getResult().getType());
     }
     void getTransp(SmallVectorImpl<int64_t> &results);
     static StringRef getTranspAttrStrName() { return "transp"; }
@@ -356,7 +356,7 @@ def StoreOp : Fusion_Op<"store", [
     Value getMemRef() { return getOperand(1); }
     void setMemRef(Value value) { setOperand(1, value); }
     MemRefType getMemRefType() {
-      return getMemRef().getType().cast<MemRefType>();
+      return cast<MemRefType>(getMemRef().getType());
     }
   }];
 

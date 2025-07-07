@@ -331,7 +331,7 @@ void CopyElisionPass::runOnOperation() {
   /// Operations that need to be removed.
   llvm::SmallPtrSet<Operation *, kVectorSizeFour> opsToErase;
   getOperation()->walk([&](CopyOpInterface copyOp) {
-    if (copyOp.getTarget().isa<BlockArgument>()) {
+    if (isa<BlockArgument>(copyOp.getTarget())) {
       return;
     }
     reuseCopySourceAsTarget(copyOp, opsToErase);

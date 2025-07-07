@@ -86,11 +86,11 @@ std::string DumpShapeInfoPass::getAkgKernelName() {
     return defaultName;
   }
   for (auto attr : funcOp->getAttrs()) {
-    auto keyStr = attr.getName().dyn_cast<StringAttr>().getValue().str();
+    auto keyStr = dyn_cast<StringAttr>(attr.getName()).getValue().str();
     if (keyStr != kKernelNameAttrKey) {
       continue;
     }
-    return attr.getValue().dyn_cast<StringAttr>().getValue().str();
+    return dyn_cast<StringAttr>(attr.getValue()).getValue().str();
   }
   return defaultName;
 }
@@ -114,7 +114,10 @@ bool DumpShapeInfoPass::save(const std::string &res) {
 
   std::string output_filename = "./akg_kernel_meta/" + fileName;
   llvm::outs() << "Dump to " << output_filename << "\n";
-  if (llvm::writeFileAtomically("tmp_%%%%%%%%.json", output_filename, res)) {
+  if (llvm::writeToOutput(output_filename, [&](llvm::raw_ostream &OS) -> llvm::Error {
+        OS << res;
+        return llvm::Error::success();
+      })) {
     llvm::errs() << "Write json file to " << output_filename << " failed.\n";
     return false;
   }
@@ -155,7 +158,7 @@ void DumpShapeInfoPass::dumpGpuSupportInfo(json &jsonResults) {
   getOperation()->walk([&](func::FuncOp funcOp) {
     auto op = funcOp.getOperation();
     if (op->hasAttr("OperatorType")) {
-      opType = op->getAttr("OperatorType").dyn_cast<StringAttr>().getValue().str();
+      opType = dyn_cast<StringAttr>(op->getAttr("OperatorType")).getValue().str();
       return WalkResult::interrupt();
     }
     return WalkResult::advance();

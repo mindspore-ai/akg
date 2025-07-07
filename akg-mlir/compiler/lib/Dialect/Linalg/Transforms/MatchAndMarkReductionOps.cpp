@@ -101,7 +101,7 @@ static void MatchAndMarkRedOpInAffine(Operation *funcOp) {
       SmallVector<bool, 8> redFlags(false);
       auto curOp = redOp;
       while (curOp) {
-        if (isa<AffineForOp>(curOp)) {
+        if (isa<affine::AffineForOp>(curOp)) {
           if (curOp->hasAttr("reduceLoop")) {
             redFlags.push_back(true);
           } else {
@@ -133,7 +133,7 @@ struct MatchAndMarkReductionOps : public impl::MatchAndMarkReductionOpsBase<Matc
     Operation *funcOp = getOperation();
 
     if (!(funcOp->hasAttr(kOperatorTypeStr) &&
-          funcOp->getAttr(kOperatorTypeStr).dyn_cast<StringAttr>() == kReduceStr)) {
+          dyn_cast<StringAttr>(funcOp->getAttr(kOperatorTypeStr)) == kReduceStr)) {
       return;
     }
     if (this->dialect == "linalg") {

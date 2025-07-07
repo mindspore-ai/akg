@@ -25,6 +25,8 @@
 namespace mlir {
 
 struct GPUPipelineOptions : public PassPipelineOptions<GPUPipelineOptions> {
+  Option<bool> gpuFast{*this, "gpu-fast", llvm::cl::desc("gpu affine optimize"), llvm::cl::init(false)};
+
   Option<std::string> scheduleOption{*this, "scheduleOption", llvm::cl::desc("An option of schedule optimization."),
                                      llvm::cl::init("polySchedule")};
 

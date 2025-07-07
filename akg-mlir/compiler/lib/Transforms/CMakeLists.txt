@@ -1,3 +1,4 @@
+include(FetchContent)
 FetchContent_Declare(json URL ${JSON_TARBALL_URL})
 FetchContent_MakeAvailable(json)
 
@@ -14,6 +15,8 @@ add_mlir_dialect_library(AKGTransformsPasses
   LoadGlobalConfig.cpp
   AKGFuncOutlining.cpp
   AKGParallelLaunch.cpp
+  AKGOperatorIdentify.cpp
+  FoldDimension.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${AKG_MLIR_SOURCE_DIR}/akg/Transforms

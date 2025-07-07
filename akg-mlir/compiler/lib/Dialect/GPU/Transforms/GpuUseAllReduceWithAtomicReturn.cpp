@@ -19,6 +19,7 @@
 #include "akg/Utils/AnalysisCommon.hpp"
 #include "akg/Utils/AnalysisForGpu.hpp"
 
+#include <optional>
 #include "llvm/IR/Module.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Debug.h"
@@ -51,38 +52,38 @@ namespace gpu {
 namespace {
 
 // Convert XXXOp to Atomic kind
-Optional<arith::AtomicRMWKind> ConvertArithOpToAtomicKind(Operation *op) {
-  return TypeSwitch<Operation *, Optional<arith::AtomicRMWKind>>(op)
+std::optional<arith::AtomicRMWKind> ConvertArithOpToAtomicKind(Operation *op) {
+  return TypeSwitch<Operation *, std::optional<arith::AtomicRMWKind>>(op)
     .Case([](arith::AddFOp) { return arith::AtomicRMWKind::addf; })
     .Case([](arith::MulFOp) { return arith::AtomicRMWKind::mulf; })
     .Case([](arith::AddIOp) { return arith::AtomicRMWKind::addi; })
     .Case([](arith::AndIOp) { return arith::AtomicRMWKind::andi; })
     .Case([](arith::OrIOp) { return arith::AtomicRMWKind::ori; })
     .Case([](arith::MulIOp) { return arith::AtomicRMWKind::muli; })
-    .Case([](arith::MinFOp) { return arith::AtomicRMWKind::minf; })
-    .Case([](arith::MaxFOp) { return arith::AtomicRMWKind::maxf; })
+    .Case([](arith::MinNumFOp) { return arith::AtomicRMWKind::minimumf; })
+    .Case([](arith::MaxNumFOp) { return arith::AtomicRMWKind::maximumf; })
     .Case([](arith::MinSIOp) { return arith::AtomicRMWKind::mins; })
     .Case([](arith::MaxSIOp) { return arith::AtomicRMWKind::maxs; })
     .Case([](arith::MinUIOp) { return arith::AtomicRMWKind::minu; })
     .Case([](arith::MaxUIOp) { return arith::AtomicRMWKind::maxu; })
-    .Default([](Operation *) -> Optional<arith::AtomicRMWKind> { return std::nullopt; });
+    .Default([](Operation *) -> std::optional<arith::AtomicRMWKind> { return std::nullopt; });
 }
 
 // Convert XXXOp to gpu::AllReduceOperation
-Optional<mlir::gpu::AllReduceOperation> ConvertArithOpToAllReduceOperation(Operation *op) {
-  return TypeSwitch<Operation *, Optional<mlir::gpu::AllReduceOperation>>(op)
+std::optional<mlir::gpu::AllReduceOperation> ConvertArithOpToAllReduceOperation(Operation *op) {
+  return TypeSwitch<Operation *, std::optional<mlir::gpu::AllReduceOperation>>(op)
     .Case([](arith::AddFOp) { return mlir::gpu::AllReduceOperation::ADD; })
     .Case([](arith::MulFOp) { return mlir::gpu::AllReduceOperation::MUL; })
     .Case([](arith::AddIOp) { return mlir::gpu::AllReduceOperation::ADD; })
     .Case([](arith::AndIOp) { return mlir::gpu::AllReduceOperation::AND; })
     .Case([](arith::OrIOp) { return mlir::gpu::AllReduceOperation::OR; })
     .Case([](arith::MulIOp) { return mlir::gpu::AllReduceOperation::MUL; })
-    .Case([](arith::MinFOp) { return mlir::gpu::AllReduceOperation::MIN; })
-    .Case([](arith::MaxFOp) { return mlir::gpu::AllReduceOperation::MAX; })
-    .Case([](arith::MinSIOp) { return mlir::gpu::AllReduceOperation::MIN; })
-    .Case([](arith::MaxSIOp) { return mlir::gpu::AllReduceOperation::MAX; })
-    .Case([](arith::MinUIOp) { return mlir::gpu::AllReduceOperation::MIN; })
-    .Case([](arith::MaxUIOp) { return mlir::gpu::AllReduceOperation::MAX; });
+    .Case([](arith::MinNumFOp) { return mlir::gpu::AllReduceOperation::MINIMUMF; })
+    .Case([](arith::MaxNumFOp) { return mlir::gpu::AllReduceOperation::MAXIMUMF; })
+    .Case([](arith::MinSIOp) { return mlir::gpu::AllReduceOperation::MINSI; })
+    .Case([](arith::MaxSIOp) { return mlir::gpu::AllReduceOperation::MAXSI; })
+    .Case([](arith::MinUIOp) { return mlir::gpu::AllReduceOperation::MINUI; })
+    .Case([](arith::MaxUIOp) { return mlir::gpu::AllReduceOperation::MAXUI; });
 }
 
 // Collect information of reduction ops
@@ -142,7 +143,7 @@ static mlir::LogicalResult rewritePatternReduceY(ReduceOpInfo redInfo, OpBuilder
   builder.setInsertionPointAfter(globalStore);
 
   // Generate `memref.atomic_rmw` op
-  Optional<arith::AtomicRMWKind> atomicKind = ConvertArithOpToAtomicKind(redInfo.op);
+  std::optional<arith::AtomicRMWKind> atomicKind = ConvertArithOpToAtomicKind(redInfo.op);
   if (atomicKind == std::nullopt) {
     llvm::errs() << "Error: invalid Operation switch to AtomicRMW, please check the type.\n";
     return mlir::failure();
@@ -201,7 +202,7 @@ static mlir::LogicalResult rewritePatternReduceX(ReduceOpInfo redInfo, OpBuilder
 
     // Generate `memref.atomic_rmw` op
     if (redInfo.use_atomic_reduce) {
-      Optional<arith::AtomicRMWKind> atomicKind = ConvertArithOpToAtomicKind(redInfo.op);
+      std::optional<arith::AtomicRMWKind> atomicKind = ConvertArithOpToAtomicKind(redInfo.op);
       if (atomicKind == std::nullopt) {
         llvm::errs() << "Error: invalid Operation switch to AtomicRMW, please check the type.\n";
         return mlir::failure();

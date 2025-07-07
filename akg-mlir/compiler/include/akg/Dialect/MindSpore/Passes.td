@@ -44,8 +44,47 @@ def MoveDownReductionOps : Pass<"move-down-reduction-ops", "func::FuncOp"> {
   let constructor = "mlir::createMoveDownReductionOpsPass()";
 }
 
-def MakeDynamicBroadcastable : Pass<"make-dyn-broadcastable", "func::FuncOp"> {
+def EliminateDimension : Pass<"eliminate-dimension", "func::FuncOp"> {
+  let summary = "MindSpore eliminate dimension";
+  let description = [{
+    Pass that enables broadcast by making all input arrays have the same shape in
+    shape scenario. Insert mindspore.reshape op to preprocess all input parameters.
+  }];
+
+  let constructor = "mlir::createEliminateDimensionPass()";
+}
+
+def LegalizeType : Pass<"legalize-type", "func::FuncOp"> {
+  let summary = "MindSpore legalize type";
+  let description = [{
+    support legalize ui8 to i64 for sub op.
+  }];
+
+  let constructor = "mlir::createLegalizeTypePass()";
+}
+
+def AlignDimension : Pass<"align-dimension", "func::FuncOp"> {
+  let summary = "MindSpore align dimension";
+  let description = [{
+    Pass that enables broadcast by making all input arrays have the same shape in
+    shape scenario. Insert mindspore.reshape op to preprocess all input parameters.
+  }];
+
+  let constructor = "mlir::createAlignDimensionPass()";
+}
+
+def MindsporeMakeBroadcastable : Pass<"mindspore-make-broadcastable", "func::FuncOp"> {
   let summary = "MindSpore rank Reshape to enable Broadcasting";
+  let description = [{
+    Pass that enables broadcast by making all input arrays have the same shape in
+    shape scenario. Insert mindspore.broadcast_to op to preprocess all input parameters.
+  }];
+
+  let constructor = "mlir::createMindsporeMakeBroadcastablePass()";
+}
+
+def MakeDynamicBroadcastable : Pass<"make-dyn-broadcastable", "func::FuncOp"> {
+  let summary = "MindSpore dynaic rank Reshape to enable Broadcasting";
   let description = [{
     Pass that enables broadcast by making all input arrays have the same shape in dynamic
     shape scenario. Insert mindspore.broadcast_to op to preprocess all input parameters.
@@ -57,11 +96,6 @@ def MakeDynamicBroadcastable : Pass<"make-dyn-broadcastable", "func::FuncOp"> {
   ];
 
   let constructor = "mlir::createMakeDynamicBroadcastablePass()";
-}
-
-def AKGSplitGraph : Pass<"akg-split-graph", "func::FuncOp"> {
-    let summary = "split graph for operation fusion.";
-    let constructor = "mlir::createAKGSplitGraphPass()";
 }
 
 def EliminateReshape : Pass<"eliminate-reshape", "func::FuncOp"> {

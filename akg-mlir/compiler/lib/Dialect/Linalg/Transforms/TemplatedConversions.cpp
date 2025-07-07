@@ -83,9 +83,9 @@ FailureOr<std::string> LinalgTemplatedPass::getTemplateFile(LinalgOp linalgOp) {
   std::string type_postfix = "";
   llvm::raw_string_ostream os(type_postfix);
   for (auto type : linalgOp->getOperandTypes()) {
-    if (auto tensorType = type.dyn_cast<TensorType>()) {
+    if (auto tensorType = dyn_cast<TensorType>(type)) {
       os << "_" << tensorType.getElementType();
-    } else if (auto memType = type.dyn_cast<MemRefType>()) {
+    } else if (auto memType = dyn_cast<MemRefType>(type)) {
       os << "_" << memType.getElementType();
     } else {
       os << "_" << type;
@@ -136,11 +136,12 @@ FailureOr<func::FuncOp> LinalgTemplatedPass::insertTemplatedFunc(std::string fil
 }
 
 void LinalgTemplatedPass::templateLinalgOp(LinalgOp linalgOp, func::FuncOp &insertedFunc) {
-  SmallVector<Value> inputOperands = linalgOp.getDpsInputOperands();
-  SmallVector<Value> outputOperands = linalgOp.getDpsInitOperands();
+  SmallVector<Value> inputOperands = linalgOp.getDpsInputs();
+  SmallVector<Value> outputOperands = linalgOp.getDpsInits();
   SmallVector<AffineMap> indexingMaps = linalgOp.getIndexingMapsArray();
   SmallVector<utils::IteratorType> iterators = linalgOp.getIteratorTypesArray();
-  SmallVector<Type> resultTypes = linalgOp.hasTensorSemantics() ? TypeRange(ValueRange(outputOperands)) : TypeRange{};
+  SmallVector<Type> resultTypes =
+    linalgOp.hasPureTensorSemantics() ? TypeRange(ValueRange(outputOperands)) : TypeRange{};
   SmallVector<Type> types(resultTypes.begin(), resultTypes.end());
 
   // All named ops have a region attached that can be inlined.

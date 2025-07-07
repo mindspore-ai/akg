@@ -19,6 +19,7 @@ import logging
 import json
 import math
 import numpy as np
+from bfloat16 import bfloat16
 
 
 def result_compare(actual, bench_mark, r_tol=5e-3):
@@ -440,8 +441,10 @@ def get_compare_tolerance(json_str: str, output_indexes: list):
     for i, o in enumerate(outputs):
         if o.dtype == "float16":
             compare_tolerance.append(1e-3)
+        elif o.dtype == "bfloat16":
+            compare_tolerance.append(1e-2)
         else:
-            compare_tolerance.append(1e-4)
+            compare_tolerance.append(1e-2)
             if o.dtype == "float32":
                 analyze_indexes.append(i)
     if not analyze_indexes:

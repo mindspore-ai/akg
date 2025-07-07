@@ -1,5 +1,4 @@
 add_subdirectory(IR)
-add_subdirectory(Spliter)
 
 file(GLOB_RECURSE SRC_LIST *.cpp)
 add_mlir_dialect_library(MindSporePasses
@@ -27,7 +26,5 @@ add_mlir_dialect_library(MindSporePasses
   MLIRTosaDialect
   MLIRTransformUtils
   AKGMLIRAnalysis
-  AKGMindSporeToJson
-  AKGSpliter
   )
 target_link_libraries(MindSporePasses PRIVATE akg::symengine gmp stdc++fs)
