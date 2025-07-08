@@ -3,7 +3,7 @@ from collections import defaultdict
 from ai_kernel_generator.core.task import Task
 from ai_kernel_generator.core.async_pool.task_pool import TaskPool
 from ai_kernel_generator.core.async_pool.device_pool import DevicePool
-from ..utils import get_benchmark_name, get_benchmark_task, remove_alnum_from_benchmark_name
+from ..utils import get_benchmark_name, get_benchmark_task, add_op_prefix
 from ai_kernel_generator.config.config_validator import load_config
 
 
@@ -22,7 +22,7 @@ async def test_parallel_task_triton_ascend910b4(framework, impl_type, backend, a
 
     for i in range(len(benchmark_name)):
         task_desc = get_benchmark_task(benchmark_name[i], framework=framework)
-        op_name = remove_alnum_from_benchmark_name(benchmark_name[i])
+        op_name = add_op_prefix(benchmark_name[i])
 
         task = Task(
             op_name=op_name,

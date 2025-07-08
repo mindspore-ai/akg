@@ -7,10 +7,11 @@
   - [2. 安装流程](#2-安装流程)
   - [3. 配置](#3-配置)
     - [3.1 配置API环境变量（可选）](#31-配置api环境变量可选)
-    - [3.2 MindSpore 2.7版本 前端依赖](#32-mindspore-27版本-前端依赖)
-    - [3.3 华为Atlas推理系列产品 SWFT 后端依赖](#33-华为atlas推理系列产品-swft-后端依赖)
-    - [3.4 华为Atlas A2训练系列产品 Triton 后端依赖](#34-华为atlas-a2训练系列产品-triton-后端依赖)
-    - [3.5 NVIDIA GPU Triton 后端依赖](#35-nvidia-gpu-triton-后端依赖)
+    - [3.2 第三方依赖](#32-第三方依赖)
+    - [3.3 MindSpore 2.7版本 前端依赖](#33-mindspore-27版本-前端依赖)
+    - [3.4 华为Atlas推理系列产品 SWFT 后端依赖](#34-华为atlas推理系列产品-swft-后端依赖)
+    - [3.5 华为Atlas A2训练系列产品 Triton 后端依赖](#35-华为atlas-a2训练系列产品-triton-后端依赖)
+    - [3.6 NVIDIA GPU Triton 后端依赖](#36-nvidia-gpu-triton-后端依赖)
   - [4. 运行示例](#4-运行示例)
   - [5. 适配新模型](#5-适配新模型)
     - [5.1 通用参数](#51-通用参数)
@@ -59,7 +60,16 @@ export AIKG_DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxx # DeepSeek key
 export AIKG_HUOSHAN_API_KEY=0cbf8bxxxxxx # 火山key
 ```
 
-### 3.2 MindSpore 2.7版本 前端依赖
+### 3.2 第三方依赖
+本项目使用 git submodule 管理部分第三方依赖。
+
+初次克隆或拉取更新后，请使用以下命令初始化并下载 `aikg` 相关的依赖：
+```bash
+# 初始化并拉取 aikg 相关的子模块
+git submodule update --init --remote "aikg/thirdparty/*"
+```
+
+### 3.3 MindSpore 2.7版本 前端依赖
 支持python版本：python3.11、python3.10、python3.9
 支持系统版本：aarch64、x86_64
 ```
@@ -67,14 +77,14 @@ export AIKG_HUOSHAN_API_KEY=0cbf8bxxxxxx # 火山key
 pip install https://repo.mindspore.cn/mindspore/mindspore/version/202506/20250619/master_20250619160020_1261ff4ce06d6f2dc4ce446139948a3e4e9c966b_newest/unified/aarch64/mindspore-2.7.0-cp311-cp311-linux_aarch64.whl
 ```
 
-### 3.3 华为Atlas推理系列产品 SWFT 后端依赖
+### 3.4 华为Atlas推理系列产品 SWFT 后端依赖
 请参考：https://gitee.com/mindspore/akg/swft
 
-### 3.4 华为Atlas A2训练系列产品 Triton 后端依赖
+### 3.5 华为Atlas A2训练系列产品 Triton 后端依赖
 请参考：https://gitee.com/ascend/triton-ascend
 
 
-### 3.5 NVIDIA GPU Triton 后端依赖
+### 3.6 NVIDIA GPU Triton 后端依赖
 请参考：https://github.com/triton-lang/triton
 
 

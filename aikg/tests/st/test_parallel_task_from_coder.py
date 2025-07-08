@@ -2,7 +2,7 @@ import pytest
 from ai_kernel_generator.core.task import Task
 from ai_kernel_generator.core.async_pool.task_pool import TaskPool
 from ai_kernel_generator.core.async_pool.device_pool import DevicePool
-from ..utils import get_benchmark_name, get_benchmark_task, remove_alnum_from_benchmark_name
+from ..utils import get_benchmark_name, get_benchmark_task, add_op_prefix
 from ai_kernel_generator.config.config_validator import load_config
 from ai_kernel_generator.core.utils import ActionType, ParsedCode
 
@@ -19,10 +19,12 @@ async def test_parallel_task_from_coder(framework, impl_type, backend, arch):
 
     for i in range(len(benchmark_name)):
         task_desc = get_benchmark_task(benchmark_name[i], framework=framework)
-        op_name = remove_alnum_from_benchmark_name(benchmark_name[i])
+        op_name = add_op_prefix(benchmark_name[i])
 
         # 读取实现代码
-        aul_path = f"./database/{impl_type}/{arch}/{op_name[:-3]}/aigen/{op_name[:-3]}_aul.py"
+        # Extract the core name from aikg_ prefixed op_name
+        core_name = op_name[5:]  # Remove "aikg_" prefix
+        aul_path = f"./database/{impl_type}/{arch}/{core_name}/aigen/{core_name}_aul.py"
         with open(aul_path, "r", encoding="utf-8") as f:
             aul_code = f.read()
 

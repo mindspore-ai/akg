@@ -13,3 +13,4 @@ pybind11
 pytest
 pytest-asyncio
 tiktoken
+torch
