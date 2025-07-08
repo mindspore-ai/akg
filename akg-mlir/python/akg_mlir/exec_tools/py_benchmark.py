@@ -24,15 +24,15 @@ import subprocess
 import time
 
 import numpy as np
-from akg_v2 import AkgV2Driver
-from akg_v2.utils.composite_op_helper import compare_tensor, gen_json_data
-from akg_v2.utils.dynamic_utils import dump_shape_arg_list, get_device_shape
-from akg_v2.utils.gen_runtime_code import (ProfilingParams,
+from akg_mlir import AkgMlirDriver
+from akg_mlir.utils.composite_op_helper import compare_tensor, gen_json_data
+from akg_mlir.utils.dynamic_utils import dump_shape_arg_list, get_device_shape
+from akg_mlir.utils.gen_runtime_code import (ProfilingParams,
                                            gen_cuda_runtime_code)
-from akg_v2.utils.result_analysis import get_compare_tolerance
-from akg_v2.ascend_profilier.cann_file_parser import CANNFileParser
-from akg_v2.ascend_profilier.op_summary_parser import OpSummaryParser
-from akg_v2.ascend_profilier.op_summary_headers import OpSummaryHeaders
+from akg_mlir.utils.result_analysis import get_compare_tolerance
+from akg_mlir.ascend_profilier.cann_file_parser import CANNFileParser
+from akg_mlir.ascend_profilier.op_summary_parser import OpSummaryParser
+from akg_mlir.ascend_profilier.op_summary_headers import OpSummaryHeaders
 from bfloat16 import bfloat16
 
 import akgAscendLaunch
@@ -294,13 +294,13 @@ def _auto_get_target(desc):
     return "gpu" if process == "cuda" else "cpu"
 
 
-def _run_gpu_kernel(akg_v2_driver, is_dyn_shape, input_for_mod, kernel_name,
+def _run_gpu_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name,
                     output_indexes, desc, profiling_trails, expect):
     if is_dyn_shape:
         dump_shape_arg_list(input_for_mod, kernel_name, str(
             pathlib.Path(__file__).absolute().parent))
 
-    akg_v2_driver.run_gpu()
+    akg_mlir_driver.run_gpu()
     input_for_mod_ctypes = _transform_data_to_ctypes(
         input_for_mod,
         kernel_name,
@@ -331,9 +331,9 @@ def _run_gpu_kernel(akg_v2_driver, is_dyn_shape, input_for_mod, kernel_name,
                                    *prof_params_ctypes)
 
 
-def _run_cpu_kernel(akg_v2_driver, is_dyn_shape, input_for_mod, kernel_name,
+def _run_cpu_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name,
                     output_indexes, desc, profiling_trails, expect, replace_dso):
-    akg_v2_driver.run_cpu()
+    akg_mlir_driver.run_cpu()
     # Run executable and profiling
     if replace_dso:
         dso_path = os.path.join(
@@ -379,9 +379,9 @@ def profiling_analyse(arch):
     #task_duration = float(datas.get(OpSummaryHeaders.TASK_DURATION, PROF_ERROR_CODE))
     return task_duration
 
-def _run_ascend_kernel(akg_v2_driver, is_dyn_shape, input_for_mod, kernel_name,
+def _run_ascend_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name,
                     output_indexes, desc, profiling_trails, expect, replace_dso):
-    akg_v2_driver.run_ascend()
+    akg_mlir_driver.run_ascend()
     # Run executable and profiling
     if replace_dso:
         dso_path = os.path.join(
@@ -450,7 +450,7 @@ def run_a_kernel(desc,
     input_for_mod, expect, output_indexes = gen_json_data(
         static_desc if is_dyn_shape else desc, with_compute=True)
     # Init AkgMlirDriver
-    akg_v2_driver = AkgV2Driver(input_file=file_path,
+    akg_mlir_driver = AkgMlirDriver(input_file=file_path,
                                 output_dir=os.path.join(
                                     pathlib.Path(__file__).absolute().parent, "akg_kernel_meta"),
                                 llvm_tools_dir=os.getenv("LLVM_HOME", ""),
@@ -462,13 +462,13 @@ def run_a_kernel(desc,
                                 runtime_provider="MLIR")
 
     if backend == "gpu":
-        _run_gpu_kernel(akg_v2_driver, is_dyn_shape, input_for_mod, kernel_name,
+        _run_gpu_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name,
                         output_indexes, desc, profiling_trails, expect)
     elif backend == "cpu":
-        _run_cpu_kernel(akg_v2_driver, is_dyn_shape, input_for_mod, kernel_name,
+        _run_cpu_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name,
                         output_indexes, desc, profiling_trails, expect, replace_dso)
     elif backend == "ascend":
-        _run_ascend_kernel(akg_v2_driver, is_dyn_shape, input_for_mod, kernel_name,
+        _run_ascend_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name,
                         output_indexes, desc, profiling_trails, expect, replace_dso)
     else:
         TypeError("only support gpu, cpu backend currently")

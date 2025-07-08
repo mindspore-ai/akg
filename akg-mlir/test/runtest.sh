@@ -11,7 +11,7 @@ BACKEND_ENV=$1
 BASEPATH=$(cd $(dirname $0); pwd)
 AKG_MLIR_BUILD_PATH=${BASEPATH}/../../build/akg-mlir
 SYSTEM_TEST_DIR=${BASEPATH}/st
-TOOL_PATH=${BASEPATH}/../python/akg_v2/exec_tools
+TOOL_PATH=${BASEPATH}/../python/akg_mlir/exec_tools
 ST_TOOL=${TOOL_PATH}/py_benchmark.py
 
 export PATH=${AKG_MLIR_BUILD_PATH}/bin:$PATH

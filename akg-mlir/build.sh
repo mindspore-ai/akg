@@ -13,10 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+set -e
 export AKG_MLIR_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/" && pwd )"
-export AKG_DIR="${AKG_MLIR_DIR}/../"
 echo $AKG_MLIR_DIR
-echo $AKG_DIR
 BUILD_DIR="${AKG_MLIR_DIR}/build"
 OUTPUT_PATH="${AKG_MLIR_DIR}/output"
 C_COMPILER_PATH=$(which gcc)
@@ -81,7 +80,7 @@ CMAKE_ARGS=""
 COMPILE_AKG_MLIR="off"
 AKG_MLIR_CMAKE_ARGS=""
 AKG_MLIR_ARGS=""
-PATH_TO_SOURCE_LLVM=${AKG_DIR}/third-party/llvm-project/
+PATH_TO_SOURCE_LLVM=${AKG_MLIR_DIR}/third-party/llvm-project/
 _BUILD_TYPE="Release"
 BACKEND_ENV="CPU"
 
@@ -248,7 +247,7 @@ get_akg_mlir_cmake_args() {
 }
 
 update_submodule(){
-  git submodule update --init --depth 1
+  git submodule update --init --depth 1 third-party/llvm-project/
 }
 
 
