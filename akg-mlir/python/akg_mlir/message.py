@@ -96,8 +96,8 @@ def del_value(desc):
     desc["op"] = ""
 
 
-class AkgV2Driver(object):
-    """class AkgV2Driver."""
+class AkgMlirDriver(object):
+    """class AkgMlirDriver."""
 
     def __init__(
         self,
@@ -640,7 +640,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     logging.info(args)
 
-    driver = AkgV2Driver(
+    driver = AkgMlirDriver(
         input_file=args.f,
         output_dir=args.o,
         akg_tools_dir=args.akg_tools_dir,

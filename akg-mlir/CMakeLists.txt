@@ -156,5 +156,5 @@ endif()
 
 install(
   DIRECTORY
-  ${AKG_MLIR_SOURCE_DIR}/../python/akg_v2/
+  ${AKG_MLIR_SOURCE_DIR}/../python/akg_mlir/
   DESTINATION ${AKG_MLIR_BINARY_DIR}/akg)

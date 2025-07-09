@@ -18,8 +18,8 @@ import os
 import json
 import pathlib
 from functools import reduce
-from akg_v2.utils.dynamic_utils import get_gpu_setting_by_input, get_device_shape
-from akg_v2.utils.composite_op_helper import get_cpptype_from_pytype
+from akg_mlir.utils.dynamic_utils import get_gpu_setting_by_input, get_device_shape
+from akg_mlir.utils.composite_op_helper import get_cpptype_from_pytype
 
 
 def get_cur_dir():
