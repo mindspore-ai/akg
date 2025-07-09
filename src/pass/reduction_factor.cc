@@ -699,7 +699,7 @@ class ReduceVectorizeEnable : public IRMutator {
     }
 
     // step 2: final reduce area
-    if (!cur_reduce_data_->isolate_reduce_provide.empty()) {
+    if (!cur_reduce_data_->isolate_reduce_provide.empty() && isolate_reduce_provide != nullptr) {
       isolate_value = isolate_reduce_provide->value;
     }
     auto value = reduce_provide->value;

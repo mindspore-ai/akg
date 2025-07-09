@@ -420,10 +420,12 @@ void DimensionPeeler::MapDimToSpace(AffinityAnalyzer &aff, Dim *dom_dim, int axi
     if (visited.count(prod)) return false;
     if (prod != nullptr) visited.insert(prod);
     if (!this->Propagation(axis_idx, dim, prod, affinity)) return false;
-    for (auto &c : prod->cons) {
-      if (!visited.count(c.first)) {
-        cons_visit.emplace_back(prod);
-        break;
+    if (prod != nullptr) {
+      for (auto &c : prod->cons) {
+        if (!visited.count(c.first)) {
+          cons_visit.emplace_back(prod);
+          break;
+        }
       }
     }
     return true;
@@ -432,10 +434,12 @@ void DimensionPeeler::MapDimToSpace(AffinityAnalyzer &aff, Dim *dom_dim, int axi
     if (visited.count(cons)) return false;
     if (cons != nullptr) visited.insert(cons);
     if (!this->Propagation(axis_idx, dim, cons, affinity)) return false;
-    for (auto &p : cons->prod) {
-      if (!visited.count(p.first)) {
-        prod_visit.emplace_back(cons);
-        break;
+    if (cons != nullptr) {
+      for (auto &p : cons->prod) {
+        if (!visited.count(p.first)) {
+          prod_visit.emplace_back(cons);
+          break;
+        }
       }
     }
     return true;
