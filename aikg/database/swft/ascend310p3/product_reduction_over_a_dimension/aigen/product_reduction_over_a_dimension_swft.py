@@ -51,4 +51,4 @@ def product_reduction_over_a_dimension_host_run():
 
 if __name__ == '__main__':
     product_reduction_over_a_dimension_host_run()
-    compile_kernel("./product_reduction_over_a_dimension.cce")
+    compile_kernel("./product_reduction_over_a_dimension.cce")

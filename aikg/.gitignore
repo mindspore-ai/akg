@@ -12,6 +12,12 @@ bin-release/
 **/__pycache__
 .pytest_cache
 
+# Python package build artifacts
+*.egg-info/
+build/
+dist/
+*.egg
+
 # Executables
 *.swf
 *.air
@@ -31,3 +37,7 @@ tmp/
 # Project files, i.e. `.project`, `.actionScriptProperties` and `.flexProperties`
 # should NOT be excluded as they contain compiler settings and other important
 # information for Eclipse / Flash Builder.
+
+
+# test result
+*.txt

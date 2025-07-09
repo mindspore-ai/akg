@@ -36,6 +36,35 @@ class AgentBase(ABC):
         self.root_dir = get_project_root()
 
     @staticmethod
+    def count_tokens(text: str, model_name: str, agent_name: str) -> None:
+        """使用tiktoken准确计算字符串的token数量并打印日志
+
+        Args:
+            text: 要统计的文本
+            model_name: 模型名称，用于日志打印
+            agent_name: 代理名称，用于日志打印
+
+        """
+        if not text:
+            logger.debug(f"LLM Start:  [status] %s -- [model] %s -- [token_count] %s", agent_name, model_name, 0)
+            return
+
+        try:
+            import tiktoken
+        except ImportError:
+            return
+
+        try:
+            encoding = tiktoken.get_encoding("cl100k_base")
+            tokens = encoding.encode(text)
+            token_count = len(tokens)
+            logger.debug(f"LLM Start:  [status] %s -- [model] %s -- [token_count] %s",
+                         agent_name, model_name, token_count)
+
+        except Exception as e:
+            return
+
+    @staticmethod
     def read_file(file_path: str, encoding: str = "utf-8") -> str:
         """读取文件内容
 
@@ -99,10 +128,8 @@ class AgentBase(ABC):
         Returns:
             tuple: (生成内容, 格式化提示词, 推理内容)
         """
-        logger.debug(f"LLM Start:  [status] %s -- [model] %s", self.agent_name, model_name)
-
         formatted_prompt = prompt.format(**input)
-
+        # self.count_tokens(formatted_prompt, model_name, self.agent_name) # 暂不开启token统计
         # 创建模型
         model = create_model(model_name)
 

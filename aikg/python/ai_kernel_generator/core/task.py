@@ -150,8 +150,8 @@ class Task:
                         current_step = len(self.conductor.trace.trace_list)
                         loop = asyncio.get_running_loop()
                         verify_res, verify_log = await loop.run_in_executor(
-                            None, 
-                            self.verifier.run, 
+                            None,
+                            self.verifier.run,
                             parsed_code, current_step, device_id
                         )
                         profile_res = ""

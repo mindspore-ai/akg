@@ -15,7 +15,7 @@ def add_kernel(x_ptr,  # 指向第一个输入向量的指针
     Triton 向量相加内核
     每个程序处理 BLOCK_SIZE 个元素
     """
-    # 获取当前程序的 ID
+    # 获取当前程序的 PID
     pid = tl.program_id(axis=0)
 
     # 计算当前程序处理的数据偏移

@@ -55,4 +55,4 @@ def mean_reduction_over_a_dimension_host_run():
 
 if __name__ == '__main__':
     mean_reduction_over_a_dimension_host_run()
-    compile_kernel("./mean_reduction_over_a_dimension.cce")
+    compile_kernel("./mean_reduction_over_a_dimension.cce")

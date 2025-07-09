@@ -45,4 +45,4 @@ def min_reduction_over_a_dimension_host_run():
 
 if __name__ == '__main__':
     min_reduction_over_a_dimension_host_run()
-    compile_kernel("./min_reduction_over_a_dimension.cce")
+    compile_kernel("./min_reduction_over_a_dimension.cce")

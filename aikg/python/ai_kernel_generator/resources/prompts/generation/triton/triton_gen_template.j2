@@ -2,30 +2,18 @@
 
 你是一个专业的高性能计算代码生成专家，专门负责将 AUL (AI Unity Language) 代码转换为高效的 Triton 内核代码。
 
-**算子名称：** {{ op_name }}
-**框架：** {{ framework }}
-**任务描述：** 
-{{ task_desc }}
-
-1. 这是 AUL 源代码：
-{{ aul_code }}
-
-2. 请参考以下 Triton API 规范生成代码：
+**参考文档**
+1. 请参考以下 Triton API 规范生成代码：
 {{ triton_api_str }}
 
-3. 请参考以下 Triton 编程指南：
+2. 请参考以下 Triton 编程指南：
 {{ triton_tutorial_str }}
 
-4. 请参考以下 Triton 示例代码：
+3. 请参考以下 Triton 示例代码：
 {{ triton_sample_code }}
 
-5. 请按照以下转换要求生成 Triton 代码：
 
-## 代码结构要求
-- 生成完整的 Triton 内核函数，使用 `@triton.jit` 装饰器
-- 包含 `{{ op_name }}_kernel` 函数，以及 `{{ op_name }}_triton_{{framework}}` 启动函数
-- 包含必要的导入语句：`import torch`, `import triton`, `import triton.language as tl`，在框架是mindspore时，还需要导入`import mindspore as ms`
-
+4. 转换规则：
 ## 内存管理转换规则
 - **AUL GlobalMem** → **Triton 指针参数**：全局内存在 Triton 中通过指针参数传递
 - **AUL VecBuf** → **Triton 寄存器**：向量缓存对应 Triton 中的寄存器存储
@@ -43,31 +31,19 @@
 ## 计算操作转换规则
 
 ### 向量操作
-- `U.vbinary_op(op="add", dst, src1, src2)` → `dst = src1 + src2`
-- `U.vbinary_op(op="sub", dst, src1, src2)` → `dst = src1 - src2`
-- `U.vbinary_op(op="mul", dst, src1, src2)` → `dst = src1 * src2`
-- `U.vbinary_op(op="div", dst, src1, src2)` → `dst = src1 / src2`
+- `U.vbinary_op(op="add", dst, src1, src2)` → `dst = src1 + src2`# sub/mul/div/etc 同理
 
 ### 一元操作
-- `U.vunary_op(op="exp", dst, src)` → `dst = tl.exp(src)`
-- `U.vunary_op(op="log", dst, src)` → `dst = tl.log(src)`
-- `U.vunary_op(op="sqrt", dst, src)` → `dst = tl.sqrt(src)`
-- `U.vunary_op(op="abs", dst, src)` → `dst = tl.abs(src)`
-- `U.vunary_op(op="relu", dst, src)` → `dst = tl.where(src > 0, src, 0)`
+- `U.vunary_op(op="exp", dst, src)` → `dst = tl.exp(src)` # log/sqrt/abs/relu/etc 同理
 
 ### 归约操作
-- `U.vreduce_op(op="sum", dst, src, axis=-1)` → `dst = tl.sum(src, axis=axis)`
-- `U.vreduce_op(op="max", dst, src, axis=-1)` → `dst = tl.max(src, axis=axis)`
-- `U.vreduce_op(op="min", dst, src, axis=-1)` → `dst = tl.min(src, axis=axis)`
+- `U.vreduce_op(op="sum", dst, src, axis=-1)` → `dst = tl.sum(src, axis=axis)` # max/min/prod 同理
 
 ### 矩阵操作
 - `U.matmul_op(dst, src1, src2)` → `dst = tl.dot(src1, src2)`
 
 ### 向量标量操作
-- `U.vectorscalar_op(op="adds", dst, src, factor=x)` → `dst = src + x`
-- `U.vectorscalar_op(op="subs", dst, src, factor=x)` → `dst = src - x`
-- `U.vectorscalar_op(op="muls", dst, src, factor=x)` → `dst = src * x`
-- `U.vectorscalar_op(op="divs", dst, src, factor=x)` → `dst = src / x`
+- `U.vectorscalar_op(op="adds", dst, src, factor=x)` → `dst = src + x` # subs/muls/divs/etc 同理
 
 ## 内存访问模式
 
@@ -151,6 +127,27 @@ rstd = 1 / tl.sqrt(var + eps)
 - 除法：添加小常数避免除零
 - 类型转换：必要时转换为 float32 进行计算
 
+
+**当前任务**
+1. 算子名称：
+{{ op_name }}
+
+2. 框架：
+{{ framework }}
+
+3. 任务描述：
+{{ task_desc }}
+
+4. 这是 AUL 源代码：
+{{ aul_code }}
+
+5. 请按照以下转换要求生成 Triton 代码：
+
+## 代码结构要求
+- 生成完整的 Triton 内核函数，使用 `@triton.jit` 装饰器
+- 包含 `{{ op_name }}_kernel` 函数，以及 `{{ op_name }}_triton_{{framework}}` 启动函数
+- 包含必要的导入语句：`import torch`, `import triton`, `import triton.language as tl`，在框架是mindspore时，还需要导入`import mindspore as ms`
+
 6. 请生成完整的 Triton 代码，包括：
 
 ### 导入语句
@@ -176,7 +173,7 @@ def {{op_name}}_kernel(
     pass
 ```
 
-### 启动函数
+### 启动Host侧函数
 ```python
 def {{op_name}}_triton_{{framework}}(input_tensor, **kwargs):
     # 参数验证和预处理
@@ -186,8 +183,7 @@ def {{op_name}}_triton_{{framework}}(input_tensor, **kwargs):
     return output_tensor
 ```
 
-【注意事项】严格按照《Triton 核心 API 参考》进行转换，**禁止**使用文档中不存在的API
-【注意事项】不要进行设备断言，triton会自动适配
+【注意事项】不要进行设备断言/return等，triton会自动适配
 【注意事项】核对代码中的input，确保triton文件中接收的输入为get_input()和get_init_input()按顺序的所有输入
 【注意事项】grid开启的核数与AUL中CORE_NUM或BLOCK_DIM一致，计算逻辑与AUL保持一致
 【注意事项】不要使用break等triton不支持的命令

@@ -46,4 +46,4 @@ def max_reduction_over_a_dimension_host_run():
 
 if __name__ == '__main__':
     max_reduction_over_a_dimension_host_run()
-    compile_kernel("./max_reduction_over_a_dimension.cce")
+    compile_kernel("./max_reduction_over_a_dimension.cce")

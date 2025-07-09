@@ -1,0 +1,14 @@
+# 模型预设配置
+agent_model_config:
+  aul_designer: vllm_deepseek_r1_default
+  aul_designer_fix: vllm_deepseek_r1_default
+  swft_coder: deepseek_v3_default
+  swft_coder_api: vllm_deepseek_r1_default
+  swft_coder_fix: deepseek_v3_default
+  triton_coder: vllm_deepseek_r1_default
+  triton_coder_fix: vllm_deepseek_r1_default
+  conductor_check: vllm_deepseek_r1_default
+  conductor_analyze: deepseek_v3_default
+
+# 日志配置
+log_dir: "~/aikg_logs"

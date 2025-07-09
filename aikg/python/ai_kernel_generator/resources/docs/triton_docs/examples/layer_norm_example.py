@@ -2,6 +2,7 @@ import torch
 import triton
 import triton.language as tl
 
+
 @triton.jit
 def layer_norm_kernel(
     X,  # 输入指针
@@ -23,7 +24,7 @@ def layer_norm_kernel(
     row = tl.program_id(0)
     Y += row * stride
     X += row * stride
-    
+
     # 第一遍：计算均值
     mean = 0
     _mean = tl.zeros([BLOCK_SIZE], dtype=tl.float32)
@@ -32,7 +33,7 @@ def layer_norm_kernel(
         a = tl.load(X + cols, mask=cols < N, other=0.).to(tl.float32)
         _mean += a
     mean = tl.sum(_mean, axis=0) / N
-    
+
     # 第二遍：计算方差
     _var = tl.zeros([BLOCK_SIZE], dtype=tl.float32)
     for off in range(0, N, BLOCK_SIZE):
@@ -42,11 +43,11 @@ def layer_norm_kernel(
         _var += x * x
     var = tl.sum(_var, axis=0) / N
     rstd = 1 / tl.sqrt(var + eps)
-    
+
     # 保存 mean 和 rstd
     tl.store(Mean + row, mean)
     tl.store(Rstd + row, rstd)
-    
+
     # 第三遍：归一化并应用线性变换
     for off in range(0, N, BLOCK_SIZE):
         cols = off + tl.arange(0, BLOCK_SIZE)
@@ -66,11 +67,11 @@ def layer_norm_triton_framework(x, normalized_shape, weight, bias, eps=1e-5):
     """
     # 分配输出张量
     y = torch.empty_like(x)
-    
+
     # 将输入展平为二维
     x_arg = x.reshape(-1, x.shape[-1])
     M, N = x_arg.shape
-    
+
     # 分配中间结果张量
     mean = torch.empty((M, ), dtype=torch.float32, device=x.device)
     rstd = torch.empty((M, ), dtype=torch.float32, device=x.device)
@@ -83,5 +84,5 @@ def layer_norm_triton_framework(x, normalized_shape, weight, bias, eps=1e-5):
         x_arg.stride(0), N, eps,
         BLOCK_SIZE=BLOCK_SIZE
     )
-    
+
     return y

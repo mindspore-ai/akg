@@ -109,10 +109,13 @@ def create_model(name: Optional[str] = None, config_path: Optional[str] = None) 
             model_params["api_base"] = "http://localhost:8001/v1"
             logger.debug(f"未设置环境变量 {VLLM_API_BASE_ENV}，使用默认 api_base: {model_params['api_base']}")
 
+        # 设置20分钟的timeout
+        timeout = httpx.Timeout(60, read=60 * 20)
         # 直接返回openai.AsyncOpenAI客户端
         model = openai.AsyncOpenAI(
             base_url=model_params.pop("api_base"),
-            api_key="dummy"
+            api_key="dummy",
+            http_client=httpx.AsyncClient(verify=False, timeout=timeout)
         )
 
         # 将配置参数保存到模型对象上，供后续使用

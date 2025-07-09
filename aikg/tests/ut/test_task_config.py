@@ -158,5 +158,5 @@ class TestTaskConfig:
                 check_task_config(framework, backend, arch, impl_type)
                 print(f"有效组合: {framework} + {backend} + {arch} + {impl_type}")
             except ValueError as e:
-                
+
                 pytest.fail(f"有效组合验证未通过: {framework} + {backend} + {arch} + {impl_type}, 错误: {e}")

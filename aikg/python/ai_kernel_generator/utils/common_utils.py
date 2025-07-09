@@ -256,3 +256,56 @@ class ParserFactory:
                 pass
 
         return None
+
+
+def remove_copyright_from_text(text: str) -> str:
+    """
+    清除文本中的copyright信息
+
+    Args:
+        text: 原始文本内容
+
+    Returns:
+        清除copyright后的文本
+    """
+    if not text or not text.strip():
+        return text
+
+    # 定义常见的copyright匹配模式
+    copyright_patterns = [
+        # 匹配标准的 # Copyright ... License 格式
+        r'(?m)^#\s*Copyright.*?^#\s*limitations\s+under\s+the\s+License\.\s*$',
+
+        # 匹配 // Copyright ... License 格式（C/C++/Java风格）
+        r'(?m)^//\s*Copyright.*?^//\s*limitations\s+under\s+the\s+License\.\s*$',
+
+        # 匹配 /* Copyright ... License */ 格式（C风格多行注释）
+        r'(?s)/\*.*?Copyright.*?limitations\s+under\s+the\s+License\..*?\*/',
+
+        # 匹配其他常见许可证格式
+        r'(?m)^#\s*Copyright.*?^#\s*(?:distributed\s+under\s+|subject\s+to\s+|under\s+the\s+terms\s+of\s+).*?(?:License|MIT|BSD|GPL)\.?\s*$',
+
+        # 匹配简单的 Copyright 单行格式
+        r'(?m)^#\s*Copyright\s+\d{4}.*?(?:Inc\.|Ltd\.|Corp\.|Co\.).*?$',
+
+        # 匹配 -*- coding: -*- 和 copyright 组合
+        r'(?m)^#.*?-\*-.*?coding.*?-\*-.*?(?:\n#.*?)*?Copyright.*?$',
+    ]
+
+    cleaned_text = text
+
+    # 依次应用所有匹配模式
+    for pattern in copyright_patterns:
+        cleaned_text = re.sub(pattern, '', cleaned_text, flags=re.MULTILINE | re.DOTALL | re.IGNORECASE)
+
+    # 清理多余的空行（保留最多2个连续空行）
+    cleaned_text = re.sub(r'\n\s*\n\s*\n+', '\n\n', cleaned_text)
+
+    # 清理开头的空行
+    cleaned_text = cleaned_text.lstrip('\n\r\t ')
+
+    # 如果清理后文本为空或只有空白字符，返回原文本（避免过度清理）
+    if not cleaned_text.strip():
+        return text
+
+    return cleaned_text

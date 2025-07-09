@@ -6,7 +6,7 @@ AUL (AI Unity Language) 是专门为LLM辅助AI算子生成而设计的一套统
 
 ## 核心理念
 
-- AUL是Python-like语言，简洁描述算子核心设计，无需严格语法
+- AUL是Pythonic DSL，简洁描述算子核心设计，无需严格语法
 - AUL供LLM理解，无需实际执行
 - AUL语法可根据硬件需求定制
 - AUL代码追求简洁，避免冗余

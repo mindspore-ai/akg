@@ -84,4 +84,4 @@ def swiglu_quant_op_host_run():
     assert status.success, "Test failed"
 
 if __name__ == '__main__':
-    swiglu_quant_op_host_run()
+    swiglu_quant_op_host_run()

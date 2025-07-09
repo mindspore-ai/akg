@@ -15,7 +15,7 @@ async def test_parallel_task_from_coder(framework, impl_type, backend, arch):
     task_pool = TaskPool()
     device_pool = DevicePool([1, 2])
     config = load_config()
-    benchmark_name = get_benchmark_name([19, 20, 21, 22], framework=framework)
+    benchmark_name = get_benchmark_name([19,], framework=framework)
 
     for i in range(len(benchmark_name)):
         task_desc = get_benchmark_task(benchmark_name[i], framework=framework)

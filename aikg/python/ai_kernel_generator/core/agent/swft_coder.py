@@ -16,7 +16,7 @@ import logging
 from typing import Tuple
 from pathlib import Path
 
-from ai_kernel_generator.utils.common_utils import ParserFactory
+from ai_kernel_generator.utils.common_utils import ParserFactory, remove_copyright_from_text
 from ai_kernel_generator.core.agent.agent_base import AgentBase
 from ai_kernel_generator import get_project_root
 from ai_kernel_generator.utils.markdown_utils import generate_available_api
@@ -68,7 +68,7 @@ def get_swft_sample_code(skip_name_list=None) -> str:
 class SWFTCoder(AgentBase):
     def __init__(self, op_name: str, task_desc: str, model_config: dict, impl_type: str, framework: str):
         self.op_name = op_name
-        self.task_desc = task_desc
+        self.task_desc = remove_copyright_from_text(task_desc)
         self.model_config = model_config
         self.impl_type = impl_type
         self.framework = framework

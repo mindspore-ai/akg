@@ -10,7 +10,7 @@ def add_rmsnorm_quant_op_impl_npu(gm_input_a, gm_input_b, gm_gamma, gm_scale, gm
     BATCH_SIZE = 2
     DIM = 5120
     SAMPLES_PER_CORE = BATCH_SIZE // BLOCK_DIM
-
+    
     # 获取当前核ID
     core_idx = get_block_idx()
     start_batch = core_idx * SAMPLES_PER_CORE
@@ -22,7 +22,7 @@ def add_rmsnorm_quant_op_impl_npu(gm_input_a, gm_input_b, gm_gamma, gm_scale, gm
     
     # 转换offset到float32
     ub_offset_fp32 = vconv(ub_offset, "FP32")
-
+    
     for i in range(SAMPLES_PER_CORE):
         current_batch = start_batch + i
         

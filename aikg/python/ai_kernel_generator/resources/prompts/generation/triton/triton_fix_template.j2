@@ -1,36 +1,26 @@
 你是一个 Triton 内核验证修复专家，现在需要你修复一个 Triton 算子，这个算子是由AUL（AI Unity Language）转换而来。请仔细检查以下代码是否符合规范，并修复发现的问题。
 
-**算子名称：** {{ op_name }}
-**框架：** {{ framework }}
-**任务描述：**
-
-{{ task_desc }}
-
-1. 这是 AUL 源代码：
-{{ aul_code }}
-
-2. 这是待修复的 Triton 代码：
-{{ triton_code }}
-
-3. 请参考以下 Triton API 规范进行验证：
+**参考文档**
+1. 请参考以下 Triton API 规范进行验证：
 {{ triton_api_str }}
 
-4. 请参考以下 Triton 编程指南进行验证：
+2. 请参考以下 Triton 编程指南进行验证：
 {{ triton_tutorial_str }}
 
-5. 以下是一些正确的 Triton 示例代码：
+3. 以下是一些正确的 Triton 示例代码：
 {{ triton_sample_code }}
 
-6. 请检查以下方面并进行修复：
+4. 请检查以下方面并进行修复：
 
 ## 语法和API正确性检查
-- 确保所有使用的API都在《Triton 核心 API 参考》中存在
+- 确保所有Triton使用的API都存在
 - 检查是否有Python语法错误
 - 确保正确导入 `import torch`、`import triton`、`import triton.language as tl`
 - 确保内核函数使用 `@triton.jit` 装饰器
 
-## Triton 特定限制检查
-- 不要使用 `break` 等 Triton 不支持的控制流语句
+## Triton 特定限制检查（重点关注）
+- **绝对禁止使用 `return` 语句**：Triton 内核不支持早期返回，必须用 `mask` 处理边界
+- **绝对禁止使用 `break/continue` 语句**：Triton 不支持这些控制流语句
 - 不要使用链式布尔运算符（如 `a < b < c`），应拆分为前置布尔运算符
 - 不要使用 lambda 表达式，使用显式函数或内联计算
 - 不要对张量进行直接索引，使用 `tl.arange` 替代索引操作
@@ -64,6 +54,24 @@
 {{ suggestions }}
 
 {% endif %}
+
+
+**当前任务**
+1. 算子名称：
+{{ op_name }}
+
+2. 框架：
+{{ framework }}
+
+3. 任务描述：
+
+{{ task_desc }}
+
+4. 这是 AUL 源代码：
+{{ aul_code }}
+
+5. 这是待修复的 Triton 代码：
+{{ triton_code }}
 
 【注意事项】严格遵循Triton API规范，只使用文档中明确支持的API
 【注意事项】保证数值正确性，确保修复不会引入数值错误

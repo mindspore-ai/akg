@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Tuple
 
 from ai_kernel_generator.core.agent.agent_base import AgentBase
-from ai_kernel_generator.utils.common_utils import ParserFactory
+from ai_kernel_generator.utils.common_utils import ParserFactory, remove_copyright_from_text
 from ai_kernel_generator.utils.markdown_utils import extract_function_details
 from ai_kernel_generator import get_project_root
 from ai_kernel_generator.core.utils import ParsedCode, ActionType
@@ -27,17 +27,27 @@ from ai_kernel_generator.core.utils import ParsedCode, ActionType
 logger = logging.getLogger(__name__)
 
 
-def get_aul_base_doc() -> str:
+def get_aul_base_doc(impl_type: str) -> str:
     """加载AUL规范文档"""
     # 按顺序定义要加载的AUL文档文件
-    aul_doc_files = [
-        "aul_base.md",
-        "aul_rules.md",
-        "aul_npu.md",
-        "aul_npu_special_op.md",
-        "aul_npu_templetes.md",
-        "aul_suggestions.md"
-    ]
+    if impl_type == "swft":
+        aul_doc_files = [
+            "aul_base.md",
+            "aul_rules.md",
+            "aul_npu.md",
+            "aul_npu_special_op.md",
+            "aul_npu_templetes.md",
+            "aul_suggestions.md"
+        ]
+    else:
+        # triton
+        aul_doc_files = [
+            "aul_base.md",
+            "aul_rules.md",
+            "aul_npu.md",
+            "aul_npu_templetes.md",
+            "aul_suggestions.md"
+        ]
 
     aul_docs_dir = Path(get_project_root()) / "resources" / "docs" / "aul_docs"
     combined_spec = ""
@@ -156,8 +166,8 @@ class AULDesigner(AgentBase):
         # 准备基础文档数据
         self.aul_base_doc = {
             "op_name": self.op_name,
-            "task_desc": self.task_desc,
-            "aul_spec": get_aul_base_doc(),
+            "task_desc": remove_copyright_from_text(self.task_desc),
+            "aul_spec": get_aul_base_doc(self.impl_type),
             "supported_compute_api": "",
             "aul_tiling": self.load_doc("aul_docs/aul_tiling.md"),
             "hardware_info": self.get_hardware_doc(),
