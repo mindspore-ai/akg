@@ -1,56 +1,56 @@
-# Task 模块设计文档
+# Task Module Design Document
 
-## 概述
-Task模块是AI Kernel Generator的核心组件，负责执行单个算子的设计、编码、验证和优化流程。它集成了Designer、Coder、Verifier和Conductor四个核心组件，实现了从AUL代码到Triton/SWFT代码的完整转换和验证过程。
-
-
-## 核心功能
-- **任务生命周期管理**：负责从初始化到验证完成的完整执行流程
-- **多组件协调**：集成Designer/Coder/Verifier/Conductor四大核心组件
-- **硬件资源调度**：通过DevicePool实现Ascend/NVIDIA设备的分配与回收
-- **执行控制**：通过limit_steps参数控制最大迭代步数
+## Overview
+The Task module is a core component of the AI Kernel Generator, responsible for executing the design, coding, verification, and optimization flow for a single kernel. It integrates four core components: Designer, Coder, Verifier, and Conductor, implementing the complete conversion and verification process from AUL code to Triton/SWFT code.
 
 
-## 初始化参数
-| 参数名称 | 类型/必选 | 参数说明 |
+## Core Functions
+- **Task Lifecycle Management**: Manages the complete execution flow from initialization to verification completion.
+- **Multi-Component Coordination**: Integrates the four core components: Designer, Coder, Verifier, and Conductor.
+- **Hardware Resource Scheduling**: Manages the allocation and release of Ascend/NVIDIA devices through DevicePool.
+- **Execution Control**: Controls the maximum number of iteration steps through the `limit_steps` parameter.
+
+
+## Initialization Parameters
+| Parameter Name | Type/Required | Description |
 |---------|---------|---------|
-| op_name | str (必选) | 算子名称（如"exp_add"） |
-| task_desc | str (必选) | 任务描述（算子数学定义），仅支持mindspore/torch/numpy的实现 |
-| task_id | str (必选) | 任务id，用于区分op_name相同时不同shape或者计算的标识符 |
-| backend | str (必选) | 计算后端，仅支持ascend/cuda/cpu |
-| arch | str (必选) | 硬件架构，根据backend的不同，硬件架构也不相同，如ascend910b4/a100等 |
-| impl_type | str (必选) | 后端实现类型，仅triton和swft |
-| config | dict (必选) | 包含LLM配置/日志路径等 |
-| device_pool | DevicePool (必选) | 设备资源池 |
-| framework | str (必选) | 框架类型，仅支持mindspore/torch/numpy |
-| task_type | str (可选) | 任务类型，仅支持precision_only（验证结果正确性）, profile（用于性能分析）， 默认：precision_only |
-| limit_steps | int (可选) | 最大执行步数限制，默认：10 |
+| op_name | str (Required) | Kernel name (e.g., "matmul") |
+| task_desc | str (Required) | Task description, supports only MindSpore/Torch/NumPy implementations. |
+| task_id | str (Required) | Task ID, used to distinguish different shapes or computations when `op_name` is the same. |
+| backend | str (Required) | Computation backend, supports only ascend/cuda/cpu |
+| arch | str (Required) | Hardware architecture, which varies depending on the backend, e.g., ascend910b4/a100. |
+| impl_type | str (Required) | Backend implementation type, only triton and swft |
+| config | dict (Required) | Contains LLM configuration, log paths, etc. |
+| device_pool | DevicePool (Required) | The device resource pool. |
+| framework | str (Required) | Framework type, supports only mindspore/torch/numpy |
+| task_type | str (Optional) | Task type, supports `precision_only` (verifies result correctness) or `profile` (for performance analysis). Default: `precision_only` |
+| limit_steps | int (Optional) | Maximum number of execution steps. Default: 10 |
 
 
-## 执行流程 run
+## Execution Flow run
 
-1. **初始化阶段**
-   - 初始化Conductor控制模块
-   - 加载Designer配置参数
-   - 配置Coder代码模板
-   - 准备Verifier验证环境
+1. **Initialization Stage**
+   - Initialize the Conductor control module.
+   - Load Designer configuration parameters.
+   - Configure Coder code templates.
+   - Prepare the Verifier environment.
 
-2. **核心执行阶段**
-   - 基于Conductor决策的 action_type 确定执行步骤
-     - `designer`：调用Designer进行AUL代码生成
-     - `coder`：调用Coder进行Triton/SWFT代码转换
-     - `verifier`：调用Verifier进行精度/性能验证，并释放设备资源
+2. **Core Execution Stage**
+   - Determine the execution step based on the `action_type` decided by the Conductor.
+     - `designer`: Call Designer to generate AUL code.
+     - `coder`: Call Coder to convert to Triton/SWFT code.
+     - `verifier`: Call Verifier for precision/performance verification and release device resources.
 
-3. **日志跟踪与迭代**
-   - 将日志添加到Conductor的日志队列
-   - 循环执行，直到达到最大迭代步数或验证通过
+3. **Logging and Iteration**
+   - Add logs to the Conductor's log queue.
+   - Loop execution until the maximum number of iterations is reached or verification passes.
 
-## 使用示例
+## Usage Example
 ```python
-# 创建任务实例
+# Create a task instance
 task = Task(
     op_name="swish",
-    task_desc="Swish激活函数: x * sigmoid(beta * x)",
+    task_desc="Swish activation function: x * sigmoid(beta * x)",
     backend="ascend",
     arch="ascend310p3",
     impl_type="swft",
@@ -58,8 +58,8 @@ task = Task(
     device_pool=global_device_pool
 )
 
-# 执行任务
+# Execute the task
 async def run_task():
     success = await task.run()
     print(f"Task completed: {success}")
-```
+``` 
