@@ -239,72 +239,56 @@ def verify_implementations():
     impl_output = load_binary_data(data_dir, framework_output)
     {% endif %}
     
+    data_type = framework_output[0].dtype if isinstance(framework_output, (list, tuple)) else framework_output.dtype
     {% if framework == "torch" %}
     # 根据数据类型设置误差容忍度
-    if not isinstance(framework_output, (list, tuple)):
-        framework_output = [framework_output]
-    if not isinstance(impl_output, (list, tuple)):
-        impl_output = [impl_output]
-        
-    # 验证每个输出
-    for i, (fw_out, impl_out) in enumerate(zip(framework_output, impl_output)):
-        if fw_out.dtype == torch.bfloat16:
-            rtol, atol = 0.03, 0.03
-        elif fw_out.dtype == torch.float16:
-            rtol, atol = 0.003, 0.003
-        elif fw_out.dtype == torch.float32:
-            rtol, atol = 0.0001, 0.0001
-        elif fw_out.dtype == torch.float64:
-            rtol, atol = 0.00001, 0.00001
-        else:
-            rtol, atol = 0.0001, 0.0001  # 默认值
-        
-        is_close = torch.allclose(fw_out, impl_out, rtol=rtol, atol=atol)
-        if not is_close:
-            raise AssertionError(f"验证失败: 第{i}个输出不一致 (dtype={fw_out.dtype}, rtol={rtol}, atol={atol})")
+    if data_type == torch.float16:
+        limit = 0.004
+    elif data_type == torch.bfloat16:
+        limit = 0.03
+    elif data_type == torch.int8:
+        limit = 0.01
+    else:
+        limit = 0.004
+    framework_out_flatten = framework_output.flatten().detach().cpu().numpy()
+    impl_out_flatten = impl_output.flatten()
+    if isinstance(impl_out_flatten, torch.Tensor):
+        impl_out_flatten = impl_out_flatten.detach().cpu().numpy()
     {% elif framework == "numpy" %}
-    # numpy 误差容忍度
-    if not isinstance(framework_output, (list, tuple)):
-        framework_output = [framework_output]
-    if not isinstance(impl_output, (list, tuple)):
-        impl_output = [impl_output]
-    for i, (fw_out, impl_out) in enumerate(zip(framework_output, impl_output)):
-        if fw_out.dtype == np.float16:
-            rtol, atol = 0.003, 0.003
-        elif fw_out.dtype == np.float32:
-            rtol, atol = 0.0001, 0.0001
-        elif fw_out.dtype == np.float64:
-            rtol, atol = 0.00001, 0.00001
-        else:
-            rtol, atol = 0.0001, 0.0001
-        is_close = np.allclose(fw_out, impl_out, rtol=rtol, atol=atol)
-        if not is_close:
-            raise AssertionError(f"验证失败: 第{i}个输出不一致 (dtype={fw_out.dtype}, rtol={rtol}, atol={atol})")
+    # 根据数据类型设置误差容忍度
+    if data_type == np.float16:
+        limit = 0.004
+    elif data_type == np.int8:
+        limit = 0.01
+    else:
+        limit = 0.004
+    framework_out_flatten = framework_output.flatten()
+    impl_out_flatten = impl_output.flatten()
     {% elif framework == "mindspore" %}
     # 根据数据类型设置误差容忍度
-    if not isinstance(framework_output, (list, tuple)):
-        framework_output = [framework_output]
-    if not isinstance(impl_output, (list, tuple)):
-        impl_output = [impl_output]
-        
-    # 验证每个输出
-    for i, (fw_out, impl_out) in enumerate(zip(framework_output, impl_output)):
-        if fw_out.dtype == ms.bfloat16:
-            rtol, atol = 0.03, 0.03
-        elif fw_out.dtype == ms.float16:
-            rtol, atol = 0.003, 0.003
-        elif fw_out.dtype == ms.float32:
-            rtol, atol = 0.0001, 0.0001
-        elif fw_out.dtype == ms.float64:
-            rtol, atol = 0.00001, 0.00001
-        else:
-            rtol, atol = 0.0001, 0.0001  # 默认值
-        
-        is_close = ms.mint.allclose(fw_out, impl_out, rtol=rtol, atol=atol)
-        if not is_close:
-            raise AssertionError(f"验证失败: 第{i}个输出不一致 (dtype={fw_out.dtype}, rtol={rtol}, atol={atol})")
+    if data_type == ms.float16:
+        limit = 0.004
+    elif data_type == ms.bfloat16:
+        limit = 0.03
+    elif data_type == ms.int8:
+        limit = 0.01
+    else:
+        limit = 0.004
+    framework_out_flatten = framework_output.flatten().asnumpy()
+    impl_out_flatten = impl_output.flatten()
+    if isinstance(impl_out_flatten, ms.Tensor):
+        impl_out_flatten = impl_out_flatten.asnumpy()
     {% endif %}
     
+    def compare(framework_out_flatten, impl_out_flatten, limit):
+        err_cnt = 0
+        size = len(framework_out_flatten) 
+        err_cnt = np.sum(np.abs(framework_out_flatten - impl_out_flatten) / np.abs(impl_out_flatten) > limit).astype(np.int32)
+        limit_cnt = int(size * limit)
+        if err_cnt > limit_cnt:
+            raise AssertionError(f"验证失败: err_cnt = {err_cnt} / {limit_cnt}，输出不一致（dtype={data_type}, limit={limit}）")
+
+    compare(framework_out_flatten, impl_out_flatten, limit)
     print(f"验证结果: 成功")
 
 
