@@ -17,6 +17,7 @@
 #include <numeric>
 #include "akg/Conversion/Passes.h"
 #include "akg/Dialect/MindSpore/IR/MindSporeOps.h"
+#include "akg/Dialect/HACC/IR/HACC.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Math/IR/Math.h"
@@ -869,6 +870,7 @@ struct ConvertMindSporeToLinalgNamedPass : public ConvertMindSporeToLinalgNamedB
     registry.insert<linalg::LinalgDialect>();
     registry.insert<tensor::TensorDialect>();
     registry.insert<math::MathDialect>();
+    registry.insert<hacc::HACCDialect>();
   }
 
   void runOnOperation() override {
@@ -878,6 +880,10 @@ struct ConvertMindSporeToLinalgNamedPass : public ConvertMindSporeToLinalgNamedB
     target
       .addLegalDialect<arith::ArithDialect, linalg::LinalgDialect, tensor::TensorDialect, math::MathDialect>();
     target.addIllegalDialect<mindspore::MindSporeDialect>();
+
+    FunctionOpInterface func = getOperation();
+    func->setAttr("hacc.function_kind",
+      hacc::HACCFuncTypeAttr::get(func->getContext(), hacc::HACCFuncType::HOST));
 
     mlir::populateLowerMindSporeToLinalgNamedPattern(patterns);
     if (failed(applyPartialConversion(getOperation(), target, std::move(patterns)))) {

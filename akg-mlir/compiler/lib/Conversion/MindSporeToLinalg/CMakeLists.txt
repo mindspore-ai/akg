@@ -16,4 +16,5 @@ add_mlir_conversion_library(MindSporeToLinalg
   MLIRIR
   MLIRBufferizationTransforms
   MindSporeDialect
+  HACCDialect
 )
