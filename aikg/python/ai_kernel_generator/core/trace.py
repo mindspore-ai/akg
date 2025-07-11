@@ -118,3 +118,21 @@ class Trace:
             file_path = os.path.join(target_dir, f"{base_name}{param_name}.txt")
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(str(content))
+                
+    def insert_feature_record(self, res: str, prompt: str, reasoning: str) -> None:
+        expanded_log_dir = os.path.expanduser(self.log_dir)
+        target_dir = os.path.join(expanded_log_dir, self.op_name, "feature_match")
+        os.makedirs(target_dir, exist_ok=True)
+
+        base_name = f"I{self.task_id}_S{len(self.trace_list):02d}_{self.op_name}_feature_match_"
+        params = [
+            ('result', res),
+            ('prompt', prompt),
+            ('reasoning', reasoning)
+        ]
+        for param_name, content in params:
+            if not content:
+                continue
+            file_path = os.path.join(target_dir, f"{base_name}{param_name}.txt")
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(str(content))

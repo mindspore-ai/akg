@@ -63,12 +63,13 @@ async def test_parallel_task_triton_ascend910b4(framework, impl_type, backend, a
 @pytest.mark.asyncio
 @pytest.mark.parametrize("framework,impl_type,backend,arch", [
     ("numpy", "swft", "ascend", "ascend310p3"),
+    # ("torch", "swft", "ascend", "ascend310p3"),
 ])
 async def test_parallel_task_swft_ascend310p3(framework, impl_type, backend, arch):
     task_pool = TaskPool()
     device_pool = DevicePool([1, 2])
     config = load_config()  # or load_config("/your-path-to-config/xxx_config.yaml")
-    benchmark_name = get_benchmark_name([19], framework=framework)
+    benchmark_name = get_benchmark_name([22], framework=framework)
 
     result_dict = defaultdict(int)
 
