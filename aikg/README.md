@@ -1,134 +1,125 @@
-# AI-driven Kernel Generator(AIKG)
+[中文版](./README_CN.md)
 
-## 目录
-- [AI-driven Kernel Generator(AIKG)](#ai-driven-kernel-generatoraikg)
-  - [目录](#目录)
-  - [1. 项目简介](#1-项目简介)
-  - [2. 安装流程](#2-安装流程)
-  - [3. 配置](#3-配置)
-    - [3.1 配置API环境变量（可选）](#31-配置api环境变量可选)
-    - [3.2 MindSpore 2.7版本 前端依赖](#32-mindspore-27版本-前端依赖)
-    - [3.3 华为Atlas推理系列产品 SWFT 后端依赖](#33-华为atlas推理系列产品-swft-后端依赖)
-    - [3.4 华为Atlas A2训练系列产品 Triton 后端依赖](#34-华为atlas-a2训练系列产品-triton-后端依赖)
-    - [3.5 NVIDIA GPU Triton 后端依赖](#35-nvidia-gpu-triton-后端依赖)
-  - [4. 运行示例](#4-运行示例)
-  - [5. 适配新模型](#5-适配新模型)
-    - [5.1 通用参数](#51-通用参数)
-    - [5.2 全流程LLM配置 \& 通用设置](#52-全流程llm配置--通用设置)
-  - [6. 设计文档](#6-设计文档)
-    - [6.1 AIKG通用框架](#61-aikg通用框架)
-    - [6.2 Designer](#62-designer)
-    - [6.3 Coder](#63-coder)
-    - [6.4 Verifier](#64-verifier)
-    - [6.5 Conductor](#65-conductor)
-    - [6.6 SWFT Backend](#66-swft-backend)
-    - [6.7 Triton Backend](#67-triton-backend)
+# AI-driven Kernel Generator (AIKG)
 
-## 1. 项目简介
-AIKG 是一款 AI 驱动的算子生成器。
-AIKG 基于大语言模型(LLM)的代码生成能力，通过大语言模型规划和控制多个 Agent，协同完成多后端、多类型的AI算子生成和自动优化。
+## Table of Contents
+- [AI-driven Kernel Generator (AIKG)](#ai-driven-kernel-generator-aikg)
+  - [Table of Contents](#table-of-contents)
+  - [1. Project Overview](#1-project-overview)
+  - [2. Installation Guide](#2-installation-guide)
+  - [3. Configuration](#3-configuration)
+    - [3.1 API and Model Configuration](#31-api-and-model-configuration)
+    - [3.2 Third-party Dependencies](#32-third-party-dependencies)
+    - [3.3 MindSpore 2.7 Frontend Dependencies](#33-mindspore-27-frontend-dependencies)
+    - [3.4 Huawei Atlas Inference Series SWFT Backend Dependencies](#34-huawei-atlas-inference-series-swft-backend-dependencies)
+    - [3.5 Huawei Atlas A2 Training Series Triton Backend Dependencies](#35-huawei-atlas-a2-training-series-triton-backend-dependencies)
+    - [3.6 NVIDIA GPU Triton Backend Dependencies](#36-nvidia-gpu-triton-backend-dependencies)
+  - [4. Usage Examples](#4-usage-examples)
+  - [5. Design Documentation](#5-design-documentation)
+    - [5.1 AIKG General Framework](#51-aikg-general-framework)
+    - [5.2 Designer](#52-designer)
+    - [5.3 Coder](#53-coder)
+    - [5.4 Verifier](#54-verifier)
+    - [5.5 Conductor](#55-conductor)
+    - [5.6 SWFT Backend](#56-swft-backend)
+    - [5.7 Triton Backend](#57-triton-backend)
 
+## 1. Project Overview
+AIKG is an AI-driven kernel generator that leverages the code generation capabilities of Large Language Models (LLMs). 
+Through LLM-based planning and control of (multi-)agents, AIKG collaboratively accomplishes multi-backend, multi-type AI kernel generation and automatic optimization. 
+Additionally, AIKG provides a rich set of submodules for kernel agents, which enables users to build custom agent tasks.
 
-## 2. 安装流程
+## 2. Installation Guide
 ```bash
-# 使用conda环境（可选， 推荐python3.9/3.10/3.11版本）
+# Create conda environment (optional, recommended Python 3.9/3.10/3.11)
 conda create -n aikg python=3.11
 conda activate aikg
 
-# 或者创建虚拟环境（可选）
+# Or create virtual environment (optional)
 python -m venv .venv
-source .venv/bin/active
+source .venv/bin/activate
 
-# pip安装依赖
+# Install dependencies via pip
 pip install -r requirements.txt
 
-# setup & install
+# Setup & install
 bash build.sh
 pip install output/ai_kernel_generator-*-py3-none-any.whl
 ```
 
+## 3. Configuration
 
-## 3. 配置
+### 3.1 API and Model Configuration
+AIKG uses environment variables to set the API keys and service endpoints for various Large Language Model (LLM) services. Please configure the appropriate environment variables based on the service you are using:
 
-### 3.1 配置API环境变量（可选）
+```bash
+# VLLM (https://github.com/vllm-project/vllm)
+export AIKG_VLLM_API_BASE=http://localhost:8000/v1
+
+# Ollama (https://ollama.com/)
+export AIKG_OLLAMA_API_BASE=http://localhost:11434
+
+# SiliconFlow (https://www.siliconflow.cn/)
+export AIKG_SILICONFLOW_API_KEY=sk-xxxxxxxxxxxxxxxxxxx
+
+# DeepSeek (https://www.deepseek.com/)
+export AIKG_DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxx
+
+# Volcengine (https://www.volcengine.com/)
+export AIKG_HUOSHAN_API_KEY=0cbf8bxxxxxx
 ```
-export AIKG_VLLM_API_BASE=http://localhost:8000/v1 # 本地或远程VLLM服务器地址
-export AIKG_OLLAMA_API_BASE=http://localhost:11434 # 本地或远程Ollama服务器地址
-export AIKG_SILICONFLOW_API_KEY=sk-xxxxxxxxxxxxxxxxxxx # 硅流key
-export AIKG_DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxx # DeepSeek key
-export AIKG_HUOSHAN_API_KEY=0cbf8bxxxxxx # 火山key
+For more detailed information on how to configure and use `llm_config.yaml` (for registering new models) and `xxx_config.yaml` (for orchestrating task workflows), please refer to the comprehensive [API](./docs/API.md) documentation.
+
+### 3.2 Third-party Dependencies
+This project uses git submodules to manage certain third-party dependencies.
+
+After initial cloning or pulling updates, please use the following command to initialize and download `aikg`-related dependencies:
+```bash
+# Initialize and pull aikg-related submodules
+git submodule update --init --remote "aikg/thirdparty/*"
 ```
 
-### 3.2 MindSpore 2.7版本 前端依赖
-支持python版本：python3.11、python3.10、python3.9
-支持系统版本：aarch64、x86_64
+### 3.3 MindSpore 2.7 Frontend Dependencies
+Supported Python versions: Python 3.11, Python 3.10, Python 3.9
+Supported system versions: aarch64, x86_64
 ```
-# python3.11 + aarch64的安装包示例
+# Example installation package for python3.11 + aarch64
 pip install https://repo.mindspore.cn/mindspore/mindspore/version/202506/20250619/master_20250619160020_1261ff4ce06d6f2dc4ce446139948a3e4e9c966b_newest/unified/aarch64/mindspore-2.7.0-cp311-cp311-linux_aarch64.whl
 ```
 
-### 3.3 华为Atlas推理系列产品 SWFT 后端依赖
-请参考：https://gitee.com/mindspore/akg/swft
+### 3.4 Huawei Atlas Inference Series SWFT Backend Dependencies
+Please refer to: https://gitee.com/mindspore/akg/swft
 
-### 3.4 华为Atlas A2训练系列产品 Triton 后端依赖
-请参考：https://gitee.com/ascend/triton-ascend
+### 3.5 Huawei Atlas A2 Training Series Triton Backend Dependencies
+Please refer to: https://gitee.com/ascend/triton-ascend
 
+### 3.6 NVIDIA GPU Triton Backend Dependencies
+Please refer to: https://github.com/triton-lang/triton
 
-### 3.5 NVIDIA GPU Triton 后端依赖
-请参考：https://github.com/triton-lang/triton
+## 4. Usage Examples
+For a simplified workflow demonstrating AIKG's automatic kernel generation capabilities, please refer to the [Tutorial](./docs/Tutorial.md) documentation and example code in the `examples` directory.
 
+## 5. Design Documentation
+### 5.1 AIKG General Framework
+- `Task`: Please refer to [Task](./docs/Task.md) documentation
+- `Trace`: Please refer to [Trace](./docs/Trace.md) documentation
+- `TaskPool`: Please refer to [TaskPool](./docs/TaskPool.md) documentation
+- `DevicePool`: Please refer to [DevicePool](./docs/DevicePool.md) documentation
 
-## 4. 运行示例
-通过AIKG完成算子自动生成的简易流程，请参考[Tutorial](./docs/Tutorial.md)文档以及`examples`目录中示例代码。
+### 5.2 Designer
+Please refer to [Designer](./docs/Designer.md) documentation
 
+### 5.3 Coder
+Please refer to [Coder](./docs/Coder.md) documentation
 
-## 5. 适配新模型
-在 `ai_kernel_generator/core/llm/llm_config.yaml` 文件中可以配置新的模型。每个模型配置可包含以下参数：
+### 5.4 Verifier
+Please refer to [Verifier](./docs/Verifier.md) documentation
 
-### 5.1 通用参数
-- `api_base`: API 基础 URL
-- `model`: 模型名称
-- `max_tokens`: 最大生成 token 数
-- `temperature`: 温度参数，控制随机性
-- `top_p`: 核采样参数，控制多样性
-- `frequency_penalty`: 频率惩罚，控制重复
-- `presence_penalty`: 存在惩罚，控制主题重复
+### 5.5 Conductor
+Please refer to [Conductor](./docs/Conductor.md) documentation
 
-配置完成后，可以通过 `create_model("my_model_name")` 来使用新配置的模型。
+### 5.6 SWFT Backend
+Please refer to [SWFT](./docs/SWFT.md) documentation
 
-### 5.2 全流程LLM配置 & 通用设置
-在aikg完整流程里，可以通过设置自定义`config.yaml`的方式来控制每个子任务调用的LLM
-```python
-config = load_config() # 调用默认配置 default_config.yaml
-config = load_config("/your-path-to-config/vllm_deepseek_r1_config.yaml")
-task = Task(
-    ...
-    config=config,
-)
-```
-
-
-## 6. 设计文档
-### 6.1 AIKG通用框架
-- `Task`: 请参考 [Task](./docs/Task.md) 文档
-- `Trace`: 请参考 [Trace](./docs/Trace.md) 文档
-- `TaskPool`: 请参考 [TaskPool](./docs/TaskPool.md) 文档
-- `DevicePool`: 请参考 [DevicePool](./docs/DevicePool.md) 文档
-
-### 6.2 Designer
-请参考 [Designer](./docs/Designer.md) 文档
-
-### 6.3 Coder
-请参考 [Coder](./docs/Coder.md) 文档
-
-### 6.4 Verifier
-请参考 [Verifier](./docs/Verifier.md) 文档
-
-### 6.5 Conductor
-请参考 [Conductor](./docs/Conductor.md) 文档
-
-### 6.6 SWFT Backend
-请参考 [SWFT](./docs/SWFT.md) 文档
-
-### 6.7 Triton Backend
-请参考 [Triton](./docs/Triton.md) 文档
+### 5.7 Triton Backend
+Please refer to [Triton](./docs/Triton.md) documentation 

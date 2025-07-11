@@ -1,3 +1,8 @@
 [submodule "akg-mlir/third-party/llvm-project"]
 	path = akg-mlir/third-party/llvm-project
 	url = https://gitee.com/mirrors/llvm-project.git
+
+[submodule "aikg/thirdparty/KernelBench"]
+	path = aikg/thirdparty/KernelBench
+	url = https://github.com/ScalingIntelligence/KernelBench.git
+	branch = main

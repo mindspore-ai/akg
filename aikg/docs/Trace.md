@@ -1,78 +1,78 @@
-# Trace 模块设计文档
+# Trace Module Design Document
 
-## 概述
-Trace模块负责完整记录AI Kernel生成过程中的大模型推理痕迹，实现Designer、Coder、Verifier等组件的操作追踪和保存功能。通过标准化的日志格式和存储机制，支持生成过程的可追溯性和问题诊断。
+## Overview
+The Trace module is responsible for completely recording the inference traces of the large model during the AI Kernel generation process. It implements the tracking and saving functions for operations of components like Designer, Coder, and Verifier. Through standardized log formats and storage mechanisms, it supports the traceability and problem diagnosis of the generation process.
 
 
-## 类方法说明
-### `insert_designer_or_coder_record()` 和 `insert_verifier_record()`
+## Class Method Descriptions
+### `insert_designer_or_coder_record()` and `insert_verifier_record()`
 
-**功能**
-- 记录大模型的推理过程和生成结果，并保存到指定目录。
+**Function**
+- Records the inference process and generation results of the large model and saves them to a specified directory.
 
-**参数说明**
-| 参数名 | 类型 | 说明 |
+**Parameter Description**
+| Parameter Name | Type | Description |
 |-------|-----|-----|
-| res | str | 大模型输出的原始响应（包含代码和注释） |
-| prompt | str | 本次操作的完整prompt模板 |
-| reasoning | str | 大模型的推理过程文本 |
-| action_type | ActionType | 操作类型 |
+| res | str | The raw response from the large model (including code and comments). |
+| prompt | str | The complete prompt template for this operation. |
+| reasoning | str | The reasoning process text from the large model. |
+| action_type | ActionType | The type of action. |
 
-**存储内容**
-- result.txt：解析后的纯代码+注释文档
-- prompt.txt：完整的prompt模板
-- reasoning.txt：推理过程文本
+**Stored Content**
+- result.txt: The parsed pure code + commented document.
+- prompt.txt: The complete prompt template.
+- reasoning.txt: The reasoning process text.
 
 ### `insert_verifier_record()`
 
-**功能**
-- 记录测试结果和性能分析数据。
+**Function**
+- Records test results and performance analysis data.
 
-**参数说明**
-| 参数名 | 类型 | 说明 |
+**Parameter Description**
+| Parameter Name | Type | Description |
 |-------|-----|-----|
-| verify_res | str | 验证结果|
-| verify_log | str | 详细的验证日志 |
-| profile | str | 性能分析数据（JSON格式） |
-| action_type | ActionType | 操作类型 |
+| verify_res | str | The verification result.|
+| verify_log | str | Detailed verification log. |
+| profile | str | Performance analysis data (JSON format). |
+| action_type | ActionType | The type of action. |
 
-**存储内容**
-- error_log.txt：详细的验证日志
+**Stored Content**
+- error_log.txt: Detailed verification log.
 
 
-### 文件命名规则
-`I{任务ID}_S{步骤序号:02d}_{算子名称}_{操作类型}_参数名.txt`
+### File Naming Convention
+`I{TaskID}_S{StepNumber:02d}_{KernelName}_{ActionType}_{ParameterName}.txt`
 
-**示例**
+**Example**
 ```
 I123_S03_exp_add_op_DO_DESIGNER_prompt.txt
 I123_S04_exp_add_op_DO_CODER_result.txt
 ```
 
-## 文件存储规范
-### 目录结构
+## File Storage Specification
+### Directory Structure
 ```
 log_dir/
 └── op_name/
-    ├── I{task_id}_S{step}_{op_name}_{action_type}_prompt.txt     # 完整的prompt模板
-    ├── I{task_id}_S{step}_{op_name}_{action_type}_reasoning.txt  # 推理过程文本
-    ├── I{task_id}_S{step}_{op_name}_{action_type}_result.txt     # 解析后的纯代码+注释文档
-    ├── I{task_id}_S{step}_{op_name}_{action_type}_error_log.txt  # 详细的验证日志
+    ├── I{task_id}_S{step}_{op_name}_{action_type}_prompt.txt     # Complete prompt template
+    ├── I{task_id}_S{step}_{op_name}_{action_type}_reasoning.txt  # Reasoning process text
+    ├── I{task_id}_S{step}_{op_name}_{action_type}_result.txt     # Parsed pure code + commented document
+    ├── I{task_id}_S{step}_{op_name}_{action_type}_error_log.txt  # Detailed verification log
     └── conductor/
         ├── I{task_id}_S{step}_{op_name}_CheckDesigner_prompt.txt  # designer self_check prompt
         ├── I{task_id}_S{step}_{op_name}_CheckDesigner_result.txt  # designer self_check result
         ├── I{task_id}_S{step}_{op_name}_CheckCoder_prompt.txt     # coder self_check prompt
         ├── I{task_id}_S{step}_{op_name}_CheckCoder_result.txt     # coder self_check result
-        └── I{task_id}_S{step}_{op_name}_AnalyzeError_prompt.txt   # 错误分析 prompt
-        └── I{task_id}_S{step}_{op_name}_AnalyzeError_result.txt   # 错误分析 result
+        └── I{task_id}_S{step}_{op_name}_AnalyzeError_prompt.txt   # Error analysis prompt
+        └── I{task_id}_S{step}_{op_name}_AnalyzeError_result.txt   # Error analysis result
     └── I{task_id}_S{step}_verify/
-        ├── {op_name}_{framework}.py  # 原始任务mindspore/torch/numpy实现
-        ├── {op_name}_{impl_type}.py  # swft/triton实现
-        └── verify_{op_name}.py       # 错误分析
+        ├── {op_name}_{framework}.py  # Original task mindspore/torch/numpy implementation
+        ├── {op_name}_{impl_type}.py  # swft/triton implementation
+        └── verify_{op_name}.py       # Error analysis
 ```
 
 
-## 使用示例
+## Usage Example
 ```python
 trace = Trace(op_name="swish", task_id="123", log_dir="~/logs")
 
@@ -82,4 +82,4 @@ trace.insert_designer_or_coder_record(
     reasoning=llm_reasoning,
     action_type=ActionType.DO_DESIGNER
 )
-```
+``` 

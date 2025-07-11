@@ -1,49 +1,49 @@
-# DevicePool 模块设计文档
+# DevicePool Module Design Document
 
-## 概述
-DevicePool模块负责Ascend, CUDA, CPU等设备的异步分配与回收管理，采用生产者-消费者模式实现设备资源的并发控制。通过asyncio.Condition实现线程安全的设备等待通知机制。
+## Overview
+The DevicePool module is responsible for the asynchronous allocation and release management of devices such as Ascend, CUDA, and CPU. It uses a producer-consumer model to implement concurrent control of device resources. A thread-safe device waiting and notification mechanism is implemented through `asyncio.Condition`.
 
-## 初始化参数
-| 参数名称 | 类型/必选 | 参数说明 |
+## Initialization Parameters
+| Parameter Name | Type/Required | Description |
 |---------|---------|---------|
-| device_list | List[int] (必选) | 设备ID列表（如[0, 1]）|
+| device_list | List[int] (Required) | A list of device IDs (e.g., [0, 1])|
 
-## 类方法说明
+## Class Method Descriptions
 ### `acquire_device()`
 
-**功能**
-- 异步获取一个可用的设备。
+**Function**
+- Asynchronously acquires an available device.
 
-**参数说明**
-| 参数名 | 类型 | 说明 |
+**Parameter Description**
+| Parameter Name | Type | Description |
 |-------|-----|-----|
-| 返回值 | int | 设备ID（格式：0, 1） |
+| Return Value | int | The device ID (e.g., 0, 1) |
 
 
 ### `release_device()`
 
-**功能**
-- 异步释放指定设备。
+**Function**
+- Asynchronously releases a specified device.
 
-**参数说明**
-| 参数名 | 类型 | 说明 |
+**Parameter Description**
+| Parameter Name | Type | Description |
 |-------|-----|-----|
-| device_id | int | 需释放的设备ID |
+| device_id | int | The ID of the device to be released |
 
 
 
-## 使用示例
+## Usage Example
 ```python
 from ai_kernel_generator.core.async_pool import DevicePool
 import asyncio
 
-# 初始化含3个Ascend设备的资源池
+# Initialize a resource pool with 3 Ascend devices
 device_pool = DevicePool([0, 1, 2])
 
 async def kernel_task():
     device_id = await device_pool.acquire_device()
     try:
-        # 模拟设备计算任务
+        # Simulate a device computation task
         print(f"Start processing on {device_id}")
         await asyncio.sleep(1)
         return f"Task completed on {device_id}"
@@ -51,11 +51,11 @@ async def kernel_task():
         await device_pool.release_device(device_id)
 
 async def main():
-    # 并发执行5个任务（资源池自动调度）
+    # Concurrently execute 5 tasks (the resource pool will schedule them automatically)
     tasks = [kernel_task() for _ in range(5)]
     results = await asyncio.gather(*tasks)
     print("Execution results:", results)
 
 if __name__ == "__main__":
     asyncio.run(main())
-```
+``` 
