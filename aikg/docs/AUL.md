@@ -84,7 +84,7 @@ This part extends AUL by adding specific functions and optimizations for Neural 
 
 ```python
 # Example of getting the unique ID of the current core
-core_idx = U.get_core_idx()  # Range is [0, CORE_NUM-1]
+core_idx = U.get_core_idx()  # Range is [0, core_num-1]
 
 # Software Pipelining loop
 # U.Pipelined is used to indicate that loop iterations can be overlapped to hide latency.
@@ -274,17 +274,18 @@ AUL provides high-level abstractions to simplify pipeline programming:
 ```python
 import aul as U
 
+@sub_kernel
 def vector_add_pipelined(A: U.TensorPtr, B: U.TensorPtr, C: U.TensorPtr):
     
     # 1. Parse configuration parameters
     TILE_LEN = 256
     LOOP_COUNT = 5
     total_len = 10240
-    CORE_NUM = 8
+    BLOCK_DIM = 8
     
     # 2. Get core ID and calculate data range
     core_idx = U.get_core_idx()
-    len_per_core = total_len // CORE_NUM
+    len_per_core = total_len // BLOCK_DIM
     start_idx = core_idx * len_per_core
     end_idx = start_idx + len_per_core
     

@@ -86,7 +86,7 @@ scalar_127 = U.FilledTile((M, N), U.float32, U.VecBuf, value=127.0)
 ## NPU并行控制
 
 ```python
-# 获取当前核的唯一标识，范围为[0, CORE_NUM-1]
+# 获取当前核的唯一标识，范围为[0, core_num-1]
 core_idx = U.get_core_idx()
 
 # 软件流水线循环 (Software Pipelining)

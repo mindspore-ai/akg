@@ -23,7 +23,7 @@
 ## 并行化转换规则
 - **AUL 多核并行**：
   - `U.get_core_idx()` → `tl.program_id(0)` 或适当的程序ID
-  - 多核切分(CORE_NUM或BLOCK_DIM) → Triton 网格启动配置 `grid = (CORE_NUM或BLOCK_DIM,)`
+  - 多核切分core_num → Triton 网格启动配置 `grid = (core_num,)`
   - 核间数据分配 → 基于 `tl.program_id()` 计算数据偏移
 - **AUL 流水线循环**：
   - `U.Pipelined(iterations=N)` → 标准 Python `for` 循环，利用 Triton 的自动优化
@@ -183,9 +183,9 @@ def {{op_name}}_triton_{{framework}}(input_tensor, **kwargs):
     return output_tensor
 ```
 
-【注意事项】不要进行设备断言/return等，triton会自动适配
+【注意事项】不要进行设备断言，triton会自动适配
 【注意事项】核对代码中的input，确保triton文件中接收的输入为get_input()和get_init_input()按顺序的所有输入
-【注意事项】grid开启的核数与AUL中CORE_NUM或BLOCK_DIM一致，计算逻辑与AUL保持一致
+【注意事项】grid开启的核数与AUL中core_num一致，计算逻辑与AUL保持一致
 【注意事项】不要使用break等triton不支持的命令
 【注意事项】不要使用chained boolean operators，triton不支持链式布尔运算符
 【注意事项】不要使用lambda表达式，triton不支持lambda表达式
@@ -193,6 +193,8 @@ def {{op_name}}_triton_{{framework}}(input_tensor, **kwargs):
 【注意事项】无需测试函数，不需要创建测试函数和main函数
 【注意事项】正确使用tl.constexpr，不要在{{op_name}}_triton函数中使用tl.constexpr
 【注意事项】注意区分代码框架，torch和mindspore的host侧代码风格不同，不要混用
+【注意事项】允许拆分多个kernel实现算子，triton不支持核间通信情况下，可以通过补充第二个kernel得到最终结果
+【注意事项】triton_kernel不支持python语法continue、break、return，合理使用mask进行计算
 
 **请尽可能使用中文进行思考分析**
 

@@ -84,7 +84,7 @@ scalar_127 = U.FilledTile((M, N), U.float32, U.VecBuf, value=127.0)
 
 ```python
 # 获取当前核的唯一标识示例
-core_idx = U.get_core_idx()  # 范围为[0, CORE_NUM-1]
+core_idx = U.get_core_idx()  # 范围为[0, core_num-1]
 
 # 软件流水线循环 (Software Pipelining)
 # U.Pipelined 用于指示循环的迭代可以重叠执行，以隐藏延迟
@@ -274,17 +274,18 @@ AUL 提供了高级抽象，简化了流水线编程：
 ```python
 import aul as U
 
+@sub_kernel
 def vector_add_pipelined(A: U.TensorPtr, B: U.TensorPtr, C: U.TensorPtr)
     
     # 1. 解析配置参数
     TILE_LEN = 256
     LOOP_COUNT = 5
     total_len = 10240
-    CORE_NUM = 8
+    BLOCK_DIM = 8
     
     # 2. 获取核心ID并计算数据范围
     core_idx = U.get_core_idx()
-    len_per_core = total_len // CORE_NUM
+    len_per_core = total_len // BLOCK_DIM
     start_idx = core_idx * len_per_core
     end_idx = start_idx + len_per_core
     
