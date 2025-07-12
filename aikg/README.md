@@ -67,6 +67,9 @@ export AIKG_DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxx
 
 # Volcengine (https://www.volcengine.com/)
 export AIKG_HUOSHAN_API_KEY=0cbf8bxxxxxx
+
+# Moonshot (https://www.moonshot.cn/)
+export AIKG_MOONSHOT_API_KEY=sk-xxxxxxxxxxxxxxxxxxx
 ```
 For more detailed information on how to configure and use `llm_config.yaml` (for registering new models) and `xxx_config.yaml` (for orchestrating task workflows), please refer to the comprehensive [API](./docs/API.md) documentation.
 

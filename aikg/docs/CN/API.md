@@ -24,6 +24,9 @@ export AIKG_DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxx
 
 # 火山引擎 (https://www.volcengine.com/)
 export AIKG_HUOSHAN_API_KEY=0cbf8bxxxxxx
+
+# Moonshot (https://www.moonshot.cn/)
+export AIKG_MOONSHOT_API_KEY=sk-xxxxxxxxxxxxxxxxxxx
 ```
 
 ## 2. LLM 模型配置 (`llm_config.yaml`)

@@ -244,5 +244,48 @@ vllm_deepseek_r1_default:
   frequency_penalty: 0.6
   presence_penalty: 0.5
 
+# MOONSHOT 模型配置
+# kimi-k2-0711-preview 模型，官方推荐 temperature: 0.6
+moonshot_kimi_k2:
+  api_base: "https://api.moonshot.cn/v1"
+  model: "kimi-k2-0711-preview"
+  api_key_env: "AIKG_MOONSHOT_API_KEY"
+  max_tokens: 32768
+  temperature: 0.6
+  top_p: 1.0
+  frequency_penalty: 0.0
+  presence_penalty: 0.0
+
+# kimi-latest 系列模型，官方推荐 temperature: 0.3
+moonshot_kimi_8k:
+  api_base: "https://api.moonshot.cn/v1"
+  model: "moonshot-v1-8k"
+  api_key_env: "AIKG_MOONSHOT_API_KEY"
+  max_tokens: 8192
+  temperature: 0.3
+  top_p: 1.0
+  frequency_penalty: 0.0
+  presence_penalty: 0.0
+
+moonshot_kimi_32k:
+  api_base: "https://api.moonshot.cn/v1"
+  model: "moonshot-v1-32k"
+  api_key_env: "AIKG_MOONSHOT_API_KEY"
+  max_tokens: 32768
+  temperature: 0.3
+  top_p: 1.0
+  frequency_penalty: 0.0
+  presence_penalty: 0.0
+
+moonshot_kimi_128k:
+  api_base: "https://api.moonshot.cn/v1"
+  model: "moonshot-v1-128k"
+  api_key_env: "AIKG_MOONSHOT_API_KEY"
+  max_tokens: 131072
+  temperature: 0.3
+  top_p: 1.0
+  frequency_penalty: 0.0
+  presence_penalty: 0.0
+
 # 默认配置名称
 default_preset: "sflow_ds_r1_default" 

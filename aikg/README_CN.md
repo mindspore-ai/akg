@@ -69,6 +69,9 @@ export AIKG_DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxx
 
 # 火山引擎 (https://www.volcengine.com/)
 export AIKG_HUOSHAN_API_KEY=0cbf8bxxxxxx
+
+# Moonshot (https://www.moonshot.cn/)
+export AIKG_MOONSHOT_API_KEY=sk-xxxxxxxxxxxxxxxxxxx
 ```
 关于如何配置和使用 `llm_config.yaml`（用于注册新模型）和 `xxx_config.yaml`（用于编排任务流程）的更详细信息，请参考详细的 [API](./docs/CN/API.md) 文档。
 
