@@ -21,6 +21,7 @@ import logging
 import os
 import pathlib
 import subprocess
+import shutil
 
 from .utils.cpu_profiling_wrapper import wrap_timer_func
 
@@ -34,8 +35,7 @@ SHA256 = "sha256"
 KERNEL_NAME = "kernelName"
 STATIC_TILE_IMPL = "StaticTileImpl"
 
-
-def set_ascend910b(core_type, title_dict):
+def set_ascend_info(core_type, title_dict):
     if len(core_type) == 0:
         return
     if core_type == "MIX":
@@ -50,7 +50,6 @@ def set_ascend910b(core_type, title_dict):
         title_dict["coreType"] = "VectorCore"
         title_dict["magic"] = "RT_DEV_BINARY_MAGIC_ELF_AIVEC"
 
-
 def write_code(js_dict, fname):
     """
     Export kernel config files.
@@ -64,7 +63,6 @@ def write_code(js_dict, fname):
     with os.fdopen(os.open(fname, os.O_WRONLY | os.O_CREAT, 0o400), "w") as f:
         json.dump(js_dict, f, sort_keys=True, indent=4, separators=(",", ":"))
 
-
 def get_kernel_meta_path():
     """Return the PATH of kernel meta files."""
     kernel_meta_dir = os.getenv("KERNEL_META_DIR", default="akg_kernel_meta")
@@ -73,28 +71,29 @@ def get_kernel_meta_path():
         kernel_meta_dir,
     )
 
-
 def _is_single_op(desc_d):
     input_lists = desc_d.get("op_desc", [])
     return len(input_lists) <= 1
 
-
 def generate_unique_hash(input_str):
     unique_hash = hashlib.md5(input_str.encode("utf8")).hexdigest()
     return unique_hash
-
 
 def deal_input(desc):
     for input_desc in desc["input_desc"] if desc.get("input_desc") is not None else []:
         if len(input_desc[0]["shape"]) == 1 and input_desc[0]["shape"][0] == 1 and "value" in input_desc[0]:
             input_desc[0]["value"] = 0
 
-
 def del_value(desc):
     for operation in desc["op_desc"]:
         deal_input(operation)
     desc["op"] = ""
 
+def get_npucompiler_path():
+    npu_compiler_path = shutil.which("bishengir-compile")
+    if npu_compiler_path is None:
+        raise EnvironmentError("Couldn't find executable bishengir-compile.")
+    return npu_compiler_path
 
 class AkgMlirDriver(object):
     """class AkgMlirDriver."""
@@ -105,7 +104,6 @@ class AkgMlirDriver(object):
         output_dir: str = "",
         akg_tools_dir: str = "",
         llvm_tools_dir: str = "",
-        bisheng_tools_dir: str = "",
         dynamic_shape: bool = False,
         log_level: bool = "INFO",
         dump_ir=False,
@@ -127,7 +125,6 @@ class AkgMlirDriver(object):
             if llvm_tools_dir == ""
             else llvm_tools_dir
         )
-        self.bisheng_tools_dir = self.llvm_tools_dir if bisheng_tools_dir == "" else bisheng_tools_dir
         self.log_level = log_level
         self.target_info = ""
         self.dump_ir = dump_ir
@@ -138,12 +135,11 @@ class AkgMlirDriver(object):
         with open(input_file, "r") as f:
             kernel_info = json.loads(f.read())
             self.kernel_name = kernel_info["op"]
-            self.backend = kernel_info["process"]
+            self.backend = "ascend" if kernel_info["process"] == "aicore" else kernel_info["process"]
             if kernel_info.get("target_info"):
                 compute_capability = kernel_info.get("target_info").get("compute_capability", "7.0")
                 self.target_info = "v100" if compute_capability == "7.0" else "a100"
         self.dynamic_shape = dynamic_shape
-        self.backend = "ascend"
 
     def compile(self):
         """
@@ -289,7 +285,7 @@ class AkgMlirDriver(object):
         logging.info("dump ascend meta data:")
         title_dict = dict()
         # ascend info
-        set_ascend910b("VectorCore", title_dict)
+        set_ascend_info("VectorCore", title_dict)
         title_dict["kernelName"] = kernel_name
         # thread info
         title_dict["blockDim"] = block_dim
@@ -317,11 +313,12 @@ class AkgMlirDriver(object):
 
     def _run_ascend_generate_binary(self, kernel_name):
         logging.info("bishengir-compile code generater:")
+        npu_compiler_path = get_npucompiler_path()
         input_file = os.path.join(self.output_dir, kernel_name + "_out.mlir")
         out_file = os.path.join(self.output_dir, kernel_name + ".so")
 
         cmd = [
-            os.path.join(self.bisheng_tools_dir, "bin/bishengir-compile"),
+            npu_compiler_path,
             input_file,
             "-enable-hfusion-compile=true",
             "-enable-hivm-compile=true",
@@ -367,7 +364,7 @@ class AkgMlirDriver(object):
         out_file = os.path.join(self.output_dir, kernel_name + ".s")
         bin_file = os.path.join(self.output_dir, kernel_name + ".so")
         cmd = [
-            os.path.join(self.bisheng_tools_dir, "bin/llc"),
+            os.path.join(self.llvm_tools_dir, "bin/llc"),
             input_file,
             "-relocation-model=pic",
             "-O3",
@@ -380,7 +377,7 @@ class AkgMlirDriver(object):
             raise RuntimeError("generate .s failed in case " + input_file + "!\n")
 
         cmd = [
-            os.path.join(self.bisheng_tools_dir, "bin/clang++"),
+            os.path.join(self.llvm_tools_dir, "bin/clang++"),
             out_file,
             "--rtlib=compiler-rt",
             "-fopenmp",
@@ -390,7 +387,7 @@ class AkgMlirDriver(object):
             "-o",
             bin_file,
             "-L",
-            os.path.join(self.bisheng_tools_dir, "lib/"),
+            os.path.join(self.llvm_tools_dir, "lib/"),
             "-lmlir_c_runner_utils",
         ]
         if self.runtime_provider == "MLIR":
@@ -425,7 +422,7 @@ class AkgMlirDriver(object):
         out_file = os.path.join(self.output_dir, kernel_name + ".s")
         bin_file = os.path.join(self.output_dir, kernel_name + ".so")
         cmd = [
-            os.path.join(self.bisheng_tools_dir, "bin/llc"),
+            os.path.join(self.llvm_tools_dir, "bin/llc"),
             input_file,
             "-relocation-model=pic",
             "-O3",
@@ -439,7 +436,7 @@ class AkgMlirDriver(object):
             raise RuntimeError("generate .s failed in case " + input_file + "!\n")
 
         cmd = [
-            os.path.join(self.bisheng_tools_dir, "bin/clang++"),
+            os.path.join(self.llvm_tools_dir, "bin/clang++"),
             out_file,
             "--rtlib=compiler-rt",
             "-O3",
@@ -448,7 +445,7 @@ class AkgMlirDriver(object):
             "-o",
             bin_file,
             "-L",
-            os.path.join(self.bisheng_tools_dir, "lib/"),
+            os.path.join(self.llvm_tools_dir, "lib/"),
             "-lmlir_c_runner_utils",
         ]
         if self.runtime_provider == "MLIR":
@@ -645,7 +642,6 @@ if __name__ == "__main__":
         output_dir=args.o,
         akg_tools_dir=args.akg_tools_dir,
         llvm_tools_dir=args.llvm_tools_dir,
-        bisheng_tools_dir=args.bisheng_tools_dir,
         dynamic_shape=args.dynamic_shape,
     )
     driver.compile()

@@ -454,7 +454,6 @@ def run_a_kernel(desc,
                                 output_dir=os.path.join(
                                     pathlib.Path(__file__).absolute().parent, "akg_kernel_meta"),
                                 llvm_tools_dir=os.getenv("LLVM_HOME", ""),
-                                bisheng_tools_dir=os.getenv("BISHENG_CPP_PATH", ""),
                                 dynamic_shape=is_dyn_shape,
                                 dump_ir=dump_ir,
                                 repo_path=repo_path,
@@ -471,7 +470,7 @@ def run_a_kernel(desc,
         _run_ascend_kernel(akg_mlir_driver, is_dyn_shape, input_for_mod, kernel_name,
                         output_indexes, desc, profiling_trails, expect, replace_dso)
     else:
-        TypeError("only support gpu, cpu backend currently")
+        TypeError("only support gpu, cpu, ascend backend currently")
     if clear_tmp:
         _clear_tmp_dirs(kernel_name)
 
