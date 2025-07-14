@@ -15,6 +15,7 @@
 import logging
 import json
 import asyncio
+import os
 from typing import Tuple
 from ai_kernel_generator.core.async_pool.device_pool import DevicePool
 from ai_kernel_generator.core.utils import ActionType, ParsedCode
@@ -55,8 +56,30 @@ class Task(TaskBase):
             task_type (str, optional): 任务类型, 默认为"precision_only"。
             limit_steps (int, optional): 限制步数, 默认为10。
         """
+<<<<<<< HEAD
         super().__init__(op_name, task_desc, task_id, backend, arch, impl_type, config, device_pool, framework,
                          task_type, limit_steps)
+=======
+
+        check_task_config(framework, backend, arch, impl_type)
+        check_task_type(task_type)
+
+        self.op_name = op_name
+        self.task_desc = task_desc
+        self.task_id = task_id
+        self.backend = backend.lower()
+        self.arch = arch.lower()
+        self.log_dir = config.get("log_dir")
+        self.database_dir = "database"
+        self.model_name_dict = config.get("agent_model_config")
+        self.profile_settings = config.get("profile_settings")
+        self.impl_type = impl_type
+        self.framework = framework
+        self.task_type = task_type
+        self.limit_steps = limit_steps
+        self.device_pool = device_pool
+
+>>>>>>> 309e4708 (add: vector store, ALL_TO_RAG_DATABASE)
         self.designer = AULDesigner(self.op_name, self.task_desc, self.model_name_dict,
                                     self.impl_type, self.backend, self.arch)
         self.coder = CoderFactory().create_coder(self.op_name, self.task_desc, self.model_name_dict, self.impl_type,
@@ -157,6 +180,8 @@ class Task(TaskBase):
                     action_type = ActionType.EXIT
 
             if verify_res:
+                if os.getenv("ALL_TO_RAG_DATABASE") == "1":
+                    self.verifier.insert_to_database(parsed_code, self.database_dir)
                 return self.op_name, True
             else:
                 return self.op_name, False
