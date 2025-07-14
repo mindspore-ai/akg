@@ -281,11 +281,11 @@ def vector_add_pipelined(A: U.TensorPtr, B: U.TensorPtr, C: U.TensorPtr)
     TILE_LEN = 256
     LOOP_COUNT = 5
     total_len = 10240
-    BLOCK_DIM = 8
+    CORE_NUM = 8
     
     # 2. 获取核心ID并计算数据范围
     core_idx = U.get_core_idx()
-    len_per_core = total_len // BLOCK_DIM
+    len_per_core = total_len // CORE_NUM
     start_idx = core_idx * len_per_core
     end_idx = start_idx + len_per_core
     
