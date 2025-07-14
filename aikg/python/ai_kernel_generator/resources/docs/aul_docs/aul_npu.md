@@ -12,7 +12,7 @@
 ## NPU并行控制
 
 ```python
-# 获取当前核的唯一标识，范围为[0, CORE_NUM-1]
+# 获取当前核的唯一标识，范围为[0, core_num-1]
 core_idx = U.get_core_idx()
 
 # 软件流水线循环 (Software Pipelining)
@@ -24,6 +24,7 @@ for iter_idx in U.Pipelined(iterations=LOOP_COUNT):
 ```
 
 **核心API说明：**
+- '@sub_kernel': 设定当前kernel调用核心数量，用于唤起多核处理，调用时使用[core_num]标记核数
 - `U.get_core_idx()`: 获取当前核心ID，用于多核并行处理。
 - `U.Pipelined(iterations=N)`: 定义N次迭代循环，暗示迭代重叠执行。
 

@@ -4,12 +4,22 @@
 
 ```python
 # 标准AUL算子函数签名
-def operator_name(input1: U.TensorPtr, input2: U.TensorPtr, output: U.TensorPtr):
+@sub_kernel
+def operator_name_kernel(input1: U.TensorPtr, input2: U.TensorPtr, output: U.TensorPtr):
     # 函数体
 ```
+- @sub_kernel标注目前函数是算子kernel，'core_num=core_num'标注算子启用的核数
 - `input/output`: Tensor数据输入输出首地址
+- AUL文件中可以包含一个或多个kernel
 
 **注意：** 用到的Shape信息直接硬编码写入AUL函数主体
+
+## host侧调用签名
+
+```
+def operator_name(input1: U.TensorPtr, input2: U.TensorPtr, output: U.TensorPtr):
+    operator_name_kernel(input1, input2, output)
+```
 
 ## 基础操作函数
 
@@ -22,6 +32,11 @@ U.data_copy(dst=dst_buffer, src=src_buffer)
 
 # 数据填充示例
 scalar_127 = U.FilledTile((M, N), U.float32, U.VecBuf, value=127.0)
+
+# host侧创建GlobalTensor示例
+global_ptr = U.SetGlobalTensorPtr(bufferSize=bufferSize)
+# 等价形式
+global_ptr = U.SetGlobalTensorPtr(length, dtype)
 ```
 
 ## 基础计算操作
@@ -40,6 +55,7 @@ scalar_127 = U.FilledTile((M, N), U.float32, U.VecBuf, value=127.0)
 | **数据操作** | `U.Tile(shape, dtype)` | 创建数据块 |
 |  | `U.data_copy(dst, src)` | 数据搬移 |
 |  | `U.FilledTile(shape, dtype, value)` | 数据填充 |
+|  | `U.SetGlobalTensorPtr(length, dtype)` | 创建gm数据块 |
 | **计算操作** | `+`, `-`, `*`, `/` | 基础算术操作 |
 |  | `==`, `!=`, `>`, `<`, `>=`, `<=` | 比较操作 |
 | **索引操作** | `[]` | 数据索引 |

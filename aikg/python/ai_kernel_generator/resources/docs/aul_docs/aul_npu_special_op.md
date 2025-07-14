@@ -53,12 +53,13 @@ for j in U.Pipelined(iterations=reduce_dim):
 ```python
 import aul as U
 
+@sub_kernel
 def reduce_sum_fused_pipelined(input_np: U.TensorPtr, output_np: U.TensorPtr):
     # 硬编码参数（来自Tiling）
     BATCH_SIZE = 64
     DIM = 1024
-    BLOCK_DIM = 4
-    SAMPLES_PER_CORE = BATCH_SIZE // BLOCK_DIM
+    CORE_NUM = 4
+    SAMPLES_PER_CORE = BATCH_SIZE // CORE_NUM
     
     # 获取当前核ID
     core_idx = U.get_core_idx()
@@ -87,6 +88,10 @@ def reduce_sum_fused_pipelined(input_np: U.TensorPtr, output_np: U.TensorPtr):
         # 写回结果
         U.data_copy(dst=output_np[start_batch:end_batch, 0:DIM], src=output_tile,
                     src_pos=U.VecBuf, dst_pos=U.GlobalMem)
+
+def reduce_sum_fused(input_np: U.TensorPtr, output_np: U.TensorPtr):
+    core_num = 4
+    reduce_sum_fused_pipelined[core_num](input_np, output_np)
 ```
 
 #### 多个连续reduce轴
@@ -94,13 +99,14 @@ def reduce_sum_fused_pipelined(input_np: U.TensorPtr, output_np: U.TensorPtr):
 ```python
 import aul as U
 
+@sub_kernel
 def reduce_max_pipelined(input_np: U.TensorPtr, output_np: U.TensorPtr):
     # 硬编码参数（来自Tiling）
     BATCH_SIZE = 64
     REDUCE_DIM0 = 64
     REDUCE_DIM1 = 64
-    BLOCK_DIM = 1
-    SAMPLES_PER_CORE = BATCH_SIZE // BLOCK_DIM
+    CORE_NUM = 1
+    SAMPLES_PER_CORE = BATCH_SIZE // CORE_NUM
     
     # 获取当前核ID
     core_idx = U.get_core_idx()
@@ -124,6 +130,10 @@ def reduce_max_pipelined(input_np: U.TensorPtr, output_np: U.TensorPtr):
         # 写回结果
         U.data_copy(dst=output_np[start_batch:end_batch, 0:1], src=output_tile,
                     src_pos=U.VecBuf, dst_pos=U.GlobalMem)
+
+def reduce_max(input_np: U.TensorPtr, output_np: U.TensorPtr):
+    core_num = 1
+    reduce_max_pipelined[core_num](input_np, output_np)
 ```
 
 #### 最后一根轴不是reduce轴
@@ -131,13 +141,14 @@ def reduce_max_pipelined(input_np: U.TensorPtr, output_np: U.TensorPtr):
 ```python
 import aul as U
 
+@sub_kernel
 def reduce_max_pipelined(input_np: U.TensorPtr, output_np: U.TensorPtr):
     # 硬编码参数（来自Tiling）
     NON_REDUCE_DIM0 = 64
     REDUCE_DIM0 = 64
     NON_REDUCE_DIM1 = 64
-    BLOCK_DIM = 1
-    SAMPLES_PER_CORE = BATCH_SIZE // BLOCK_DIM
+    CORE_NUM = 1
+    SAMPLES_PER_CORE = BATCH_SIZE // CORE_NUM
     
     # 获取当前核ID
     core_idx = U.get_core_idx()
@@ -163,6 +174,10 @@ def reduce_max_pipelined(input_np: U.TensorPtr, output_np: U.TensorPtr):
         # 写回结果
         U.data_copy(dst=output_np[start_batch:end_batch, 0:1, 0:NON_REDUCE_DIM1], src=output_tile,
                     src_pos=U.VecBuf, dst_pos=U.GlobalMem)
+
+def reduce_max(input_np: U.TensorPtr, output_np: U.TensorPtr):
+    core_num = 1
+    reduce_max_pipelined[core_num](input_np, output_np)
 ```
 
 ----------------------------------------------------------

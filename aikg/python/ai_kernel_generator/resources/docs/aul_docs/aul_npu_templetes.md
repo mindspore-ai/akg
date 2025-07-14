@@ -5,17 +5,18 @@
 ```python
 import aul as U
 
+@sub_kernel
 def vector_add_pipelined(A: U.TensorPtr, B: U.TensorPtr, C: U.TensorPtr):
     
     # 1. 解析配置参数
     TILE_LEN = 256
     LOOP_COUNT = 5
     total_len = 10240
-    CORE_NUM = 8
+    core_num = 8
     
     # 2. 获取核心ID并计算数据范围
     core_idx = U.get_core_idx()
-    len_per_core = total_len // CORE_NUM
+    len_per_core = total_len // core_num
     start_idx = core_idx * len_per_core
     end_idx = start_idx + len_per_core
     
@@ -42,23 +43,80 @@ def vector_add_pipelined(A: U.TensorPtr, B: U.TensorPtr, C: U.TensorPtr):
         # 3.5 流水线阶段3: 写回结果
         U.data_copy(dst=C[current_start:current_end], src=c_tile,
                     src_pos=U.VecBuf, dst_pos=U.GlobalMem)
+
+def vector_add(A: U.TensorPtr, B: U.TensorPtr, C: U.TensorPtr):
+    core_num = 8
+    vector_add_pipelined[core_num](A, B, C)
+```
+
+## 多算子组合
+
+**不支持核间同步**：在不支持核间同步情况下，需要组合不同核的数据，可以采用多个算子组合计算的形式
+
+### 示例
+```python
+import aul as U
+
+@sub_kernel
+def ReductionKernel(input: U.TensorPtr, partial_sum: U.TensorPtr, N: int):
+    core_idx = U.get_core_idx()
+    BLOCK_SIZE = 40
+    elements_per_core = (N + BLOCK_SIZE - 1) // BLOCK_SIZE
+    start_idx = core_idx * elements_per_core
+    end_idx = min(start_idx + elements_per_core, N)
+    
+    acc_tile = U.Tile((1,), U.float32, U.VecBuf)
+    U.vectorscalar_op(op="adds", dst=acc_tile, fill_value=0.0)
+    
+    BLOCK_SIZE = 256
+    data_tile = U.Tile((BLOCK_SIZE,), U.float32, U.VecBuf)
+    
+    for idx in U.Pipelined(iterations=(end_idx - start_idx + BLOCK_SIZE - 1) // BLOCK_SIZE):
+        offset = start_idx + idx * BLOCK_SIZE
+        valid_count = min(BLOCK_SIZE, end_idx - offset)
+        U.data_copy(dst=data_tile, src=input + offset, 
+                   src_pos=U.GlobalMem, dst_pos=U.VecBuf)
+        block_acc = U.Tile((1,), U.float32, U.VecBuf)
+        U.vreduce_op(op="sum", dst=block_acc, src=data_tile, axis=0)
+        U.vbinary_op(op="add", dst=acc_tile, src1=acc_tile, src2=block_acc)
+    
+    U.data_copy(dst=partial_sum + core_idx, src=acc_tile, src_pos=U.VecBuf, dst_pos=U.GlobalMem)
+
+@sub_kernel
+def FinalReductionKernel(partial_sum: U.TensorPtr, output: U.TensorPtr):
+    core_idx = U.get_core_idx()
+    BLOCK_SIZE = 1
+    final_acc = U.Tile((1,), U.float32, U.VecBuf)
+    U.vectorscalar_op(op="adds", dst=final_acc, fill_value=0.0)
+    data_tile = U.Tile((40,), U.float32, U.VecBuf)
+    U.data_copy(dst=data_tile, src=partial_sum, src_pos=U.GlobalMem, dst_pos=U.VecBuf)
+    U.vreduce_op(op="sum", dst=final_acc, src=data_tile, axis=0)
+    U.data_copy(dst=output, src=final_acc, src_pos=U.VecBuf, dst_pos=U.GlobalMem)
+
+def ComputeTotalSum(input: U.TensorPtr, output: U.TensorPtr, N: int):
+    partial_sum = U.SetGlobalTensorPtr(length=(40,), dtype=U.float32)
+    core_num1 = 40
+    ReductionKernel[core_num1](input, partial_sum, N)
+    core_num2 = 1
+    FinalReductionKernel[core_num2](partial_sum, output)
 ```
 
 ## 错误示例与推荐示例对比
 
-### 错误示例1：非法使用Python原生语法
+### 错误示例1：未生成host侧调用代码
+
+**点评：** AUL需要有一个host侧代码对kernel进行调用。
+
+### 推荐示例1：使用正确的host侧代码
 
 ```python
-with open('file.txt') as f:
-    ...
-```
-**点评：** AUL不允许使用Python原生控制流语法，如with、try等。
+@sub_kernel
+def op_kernel(input, output):
+    pass
 
-### 推荐示例1：仅用AUL定义的语法
-
-```python
-# 仅允许AUL定义的算子、数据类型、操作
-x = U.Tile((16,), U.float32)
+def op(input, output):
+    core_num = *
+    op_kernel[core_num](input, output)
 ```
 **点评：** 只用AUL语法，避免混用Python原生语法。
 
