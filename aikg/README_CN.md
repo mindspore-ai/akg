@@ -52,7 +52,7 @@ pip install output/ai_kernel_generator-*-py3-none-any.whl
 ## 3. 配置
 
 ### 3.1 API与模型配置
-AIKG 通过环境变量来设置不同大语言模型（LLM）服务的 API Key 和服务地址（Endpoint）。请根据您使用的服务，配置相应的环境变量：
+AIKG 通过环境变量来设置不同大语言模型（LLM）服务的 API。请根据您使用的服务，配置相应的环境变量：
 
 ```bash
 # VLLM (https://github.com/vllm-project/vllm)
@@ -61,16 +61,10 @@ export AIKG_VLLM_API_BASE=http://localhost:8000/v1
 # Ollama (https://ollama.com/)
 export AIKG_OLLAMA_API_BASE=http://localhost:11434
 
-# 硅基流动 (https://www.siliconflow.cn/)
-export AIKG_SILICONFLOW_API_KEY=sk-xxxxxxxxxxxxxxxxxxx
-
-# DeepSeek (https://www.deepseek.com/)
-export AIKG_DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxx
-
-# 火山引擎 (https://www.volcengine.com/)
-export AIKG_HUOSHAN_API_KEY=0cbf8bxxxxxx
+# 其他API接口。详细支持列表请参考docs/API.md
+export AIKG_XXXXX_API_KEY=xxxxxxxxxxxxxxxxxxx
 ```
-关于如何配置和使用 `llm_config.yaml`（用于注册新模型）和 `xxx_config.yaml`（用于编排任务流程）的更详细信息，请参考详细的 [API](./docs/CN/API.md) 文档。
+关于注册新模型配置 `llm_config.yaml`、 编排任务流程设置 `xxx_config.yaml`、查看当前支持API列表 等更多信息，请参考 [API](./docs/CN/API.md) 文档。
 
 ### 3.2 第三方依赖
 本项目使用 git submodule 管理部分第三方依赖。

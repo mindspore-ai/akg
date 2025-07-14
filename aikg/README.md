@@ -50,7 +50,7 @@ pip install output/ai_kernel_generator-*-py3-none-any.whl
 ## 3. Configuration
 
 ### 3.1 API and Model Configuration
-AIKG uses environment variables to set the API keys and service endpoints for various Large Language Model (LLM) services. Please configure the appropriate environment variables based on the service you are using:
+AIKG uses environment variables to set the API keys for various Large Language Model (LLM) services. Please configure the appropriate environment variables based on the service you are using:
 
 ```bash
 # VLLM (https://github.com/vllm-project/vllm)
@@ -59,16 +59,10 @@ export AIKG_VLLM_API_BASE=http://localhost:8000/v1
 # Ollama (https://ollama.com/)
 export AIKG_OLLAMA_API_BASE=http://localhost:11434
 
-# SiliconFlow (https://www.siliconflow.cn/)
-export AIKG_SILICONFLOW_API_KEY=sk-xxxxxxxxxxxxxxxxxxx
-
-# DeepSeek (https://www.deepseek.com/)
-export AIKG_DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxx
-
-# Volcengine (https://www.volcengine.com/)
-export AIKG_HUOSHAN_API_KEY=0cbf8bxxxxxx
+# Other API interfaces. For detailed supported list, please refer to docs/API.md
+export AIKG_XXXXX_API_KEY=xxxxxxxxxxxxxxxxxxx
 ```
-For more detailed information on how to configure and use `llm_config.yaml` (for registering new models) and `xxx_config.yaml` (for orchestrating task workflows), please refer to the comprehensive [API](./docs/API.md) documentation.
+For more information on registering new model configurations in `llm_config.yaml`, orchestrating task workflows in `xxx_config.yaml`, and viewing the current list of supported APIs, please refer to the [API](./docs/API.md) documentation.
 
 ### 3.2 Third-party Dependencies
 This project uses git submodules to manage certain third-party dependencies.
