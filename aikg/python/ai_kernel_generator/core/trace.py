@@ -57,7 +57,7 @@ class Trace:
             reasoning (str): 推理过程。
             action_type (ActionType): 操作类型。
         """
-        if action_type not in [ActionType.DO_DESIGNER, ActionType.DO_CODER, ActionType.FIX_DESIGNER, ActionType.FIX_CODER]:
+        if action_type not in [ActionType.DO_DESIGNER, ActionType.DO_CODER, ActionType.FIX_DESIGNER, ActionType.FIX_CODER, ActionType.DO_CODER_DIRECT]:
             raise ValueError("action_type must be Designer or Coder")
 
         record = Record(action_type=action_type, result=res, prompt=prompt, reasoning=reasoning)

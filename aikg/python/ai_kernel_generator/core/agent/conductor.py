@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 class Conductor(AgentBase):
-    def __init__(self, op_name: str, task_id: str, log_dir: str, impl_type: str, model_config: dict) -> None:
+    def __init__(self, op_name: str, task_id: str, log_dir: str, impl_type: str, model_config: dict, coder_only_mode: bool = False) -> None:
         """
         初始化任务类，用于记录任务的各种属性。
 
@@ -34,6 +34,7 @@ class Conductor(AgentBase):
             log_dir (str): 日志目录。
             impl_type (str): 实现类型。
             model_config (dict): 模型配置。
+            coder_only_mode (bool, optional): 是否为coder_only模式, 默认为False。
         """
 
         self.op_name = op_name
@@ -41,8 +42,15 @@ class Conductor(AgentBase):
         self.log_dir = log_dir
         self.impl_type = impl_type
         self.model_config = model_config
-        super().__init__(
-            agent_name=f"Conductor -- [impl_type] {self.impl_type} -- [action] Check_Designer -- [op_name] {self.op_name}")
+        self.coder_only_mode = coder_only_mode
+        
+        # 根据模式设置不同的agent_name
+        if coder_only_mode:
+            super().__init__(
+                agent_name=f"Conductor -- [impl_type] {self.impl_type} -- [action] CoderOnly -- [op_name] {self.op_name}")
+        else:
+            super().__init__(
+                agent_name=f"Conductor -- [impl_type] {self.impl_type} -- [action] Check_Designer -- [op_name] {self.op_name}")
 
         self.step = 0
         self.fixed_step = 0
@@ -51,10 +59,11 @@ class Conductor(AgentBase):
         self.check_parser = ParserFactory.get_check_parser()
         self.check_format_instructions = self.check_parser.get_format_instructions()
 
-        # 加载desginer检查模板
-        self.check_designer_prompt = self.load_template("conductor/check_designer_template.j2")
-        self.check_designer_base_doc = {}
-        self.check_designer_input = {}
+        # 只在非coder_only模式下加载designer检查模板
+        if not coder_only_mode:
+            self.check_designer_prompt = self.load_template("conductor/check_designer_template.j2")
+            self.check_designer_base_doc = {}
+            self.check_designer_input = {}
 
         # 根据impl_type选择不同的coder检查模板
         if self.impl_type == "triton":
@@ -77,20 +86,22 @@ class Conductor(AgentBase):
             logger.warning("trace.base_doc为空，无法初始化check_designer_base_doc")
             return
 
-        self.check_designer_base_doc = {
-            "op_name": self.trace.base_doc.get("op_name", ""),
-            "task_desc": self.trace.base_doc.get("task_desc", ""),
-            "aul_spec": self.load_doc("conductor_docs/check_aul.md"),
-            "supported_compute_api": self.trace.base_doc.get("supported_compute_api", ""),
-            "hardware_info": self.trace.base_doc.get("hardware_info", ""),
-            "aul_tiling": self.trace.base_doc.get("aul_tiling", ""),
-            "format_instructions": self.check_format_instructions,
-        }
-        self.check_designer_input = {
-            "aul_code": "",
-            **self.check_designer_base_doc,
-        }
-        logger.debug("check_designer_base_doc初始化完成")
+        # 只在非coder_only模式下初始化designer相关文档
+        if not self.coder_only_mode:
+            self.check_designer_base_doc = {
+                "op_name": self.trace.base_doc.get("op_name", ""),
+                "task_desc": self.trace.base_doc.get("task_desc", ""),
+                "aul_spec": self.load_doc("conductor_docs/check_aul.md"),
+                "supported_compute_api": self.trace.base_doc.get("supported_compute_api", ""),
+                "hardware_info": self.trace.base_doc.get("hardware_info", ""),
+                "aul_tiling": self.trace.base_doc.get("aul_tiling", ""),
+                "format_instructions": self.check_format_instructions,
+            }
+            self.check_designer_input = {
+                "aul_code": "",
+                **self.check_designer_base_doc,
+            }
+            logger.debug("check_designer_base_doc初始化完成")
 
         if self.impl_type == "triton":
             self.check_coder_base_doc = {
@@ -168,6 +179,19 @@ class Conductor(AgentBase):
             if pre_trace:
                 action_type = pre_trace.action_type
                 result = pre_trace.result
+                
+                # 在coder_only模式下，跳过designer相关的检查
+                if self.coder_only_mode and action_type in [ActionType.DO_DESIGNER, ActionType.FIX_DESIGNER]:
+                    logger.info(f"Task {self.task_id}, op_name: {self.op_name}, action_type: Skipping designer check in coder_only mode")
+                    return ActionType.EXIT, parsed_code, suggestions
+                
+                # 在coder_only模式下，跳过所有coder相关的self-check
+                if self.coder_only_mode and action_type in [ActionType.DO_CODER_DIRECT, ActionType.FIX_CODER]:
+                    logger.info(f"Task {self.task_id}, op_name: {self.op_name}, action_type: Skipping self-check for {action_type.name} in coder_only mode")
+                    # 解析代码并设置到parsed_code
+                    self._parse_and_set_code(action_type, result, parsed_code)
+                    return self._get_next_action(action_type, parsed_code, "")
+                
                 if action_type in [ActionType.DO_DESIGNER, ActionType.FIX_DESIGNER,
                                    ActionType.DO_CODER, ActionType.FIX_CODER]:
                     logger.info(f"Task {self.task_id}, op_name: {self.op_name}, action_type: Conductor Self-Check")
@@ -186,6 +210,11 @@ class Conductor(AgentBase):
 
     async def self_check(self, action_type: ActionType, result: str, parsed_code: ParsedCode):
         """一个简单的分析模块，解析code，并判断是否需要fix"""
+
+        # 在coder_only模式下，跳过designer相关的检查
+        if self.coder_only_mode and self._is_designer_action(action_type):
+            logger.debug("CoderOnly模式下跳过designer检查，直接跳转到下一步")
+            return self._get_next_action(action_type, parsed_code, "")
 
         # 更新重试计数
         self._update_fixed_step(action_type)
@@ -208,7 +237,7 @@ class Conductor(AgentBase):
 
     def _update_fixed_step(self, action_type: ActionType):
         """更新重试计数"""
-        if action_type in [ActionType.DO_DESIGNER, ActionType.DO_CODER, ActionType.VERIFY]:
+        if action_type in [ActionType.DO_DESIGNER, ActionType.DO_CODER, ActionType.DO_CODER_DIRECT, ActionType.VERIFY]:
             self.fixed_step = 0
         elif action_type in [ActionType.FIX_DESIGNER, ActionType.FIX_CODER]:
             self.fixed_step += 1
@@ -317,7 +346,18 @@ class Conductor(AgentBase):
         suggestions = parsed_result.suggestions
         return action_type, parsed_code, suggestions
 
-    def analyze_error(self, error_log: str, parsed_code: ParsedCode) -> Tuple[str, str, str]:
+    async def analyze_error(self, error_log: str, parsed_code: ParsedCode) -> Tuple[str, str, str]:
+        # 在coder_only模式下，直接返回FIX_CODER
+        if self.coder_only_mode:
+            logger.debug("CoderOnly模式下验证失败，直接返回FIX_CODER")
+            coder_code = self.find_last_parsed_code([ActionType.DO_CODER_DIRECT, ActionType.FIX_CODER])
+            if self.impl_type == "triton":
+                parsed_code.triton_code = coder_code
+            elif self.impl_type == "swft":
+                parsed_code.swft_code = coder_code
+            return ActionType.FIX_CODER, parsed_code, error_log
+        
+        # 原有的analyze_error逻辑
         designer_code = self.find_last_parsed_code([ActionType.DO_DESIGNER, ActionType.FIX_DESIGNER])
         coder_code = self.find_last_parsed_code([ActionType.DO_CODER, ActionType.FIX_CODER])
         parsed_code.aul_code = designer_code
@@ -333,7 +373,7 @@ class Conductor(AgentBase):
         self._parse_and_set_code(ActionType.VERIFY, "", parsed_code)
         self.analyze_error_input["error_log"] = error_log
 
-        return self.run_llm_analyze_error(parsed_code)
+        return await self.run_llm_analyze_error(parsed_code)
 
     def _is_designer_action(self, action_type: ActionType) -> bool:
         """判断是否为Designer相关动作"""
@@ -341,7 +381,7 @@ class Conductor(AgentBase):
 
     def _is_coder_action(self, action_type: ActionType) -> bool:
         """判断是否为Coder相关动作"""
-        return action_type in [ActionType.DO_CODER, ActionType.FIX_CODER]
+        return action_type in [ActionType.DO_CODER, ActionType.DO_CODER_DIRECT, ActionType.FIX_CODER]
 
     def _is_verifier_action(self, action_type: ActionType) -> bool:
         """判断是否为Verifier相关动作"""
@@ -353,6 +393,7 @@ class Conductor(AgentBase):
             ActionType.DO_DESIGNER: ActionType.DO_CODER,
             ActionType.FIX_DESIGNER: ActionType.DO_CODER,
             ActionType.DO_CODER: ActionType.VERIFY,
+            ActionType.DO_CODER_DIRECT: ActionType.VERIFY,
             ActionType.FIX_CODER: ActionType.VERIFY,
             ActionType.VERIFY: ActionType.EXIT
         }
@@ -365,6 +406,7 @@ class Conductor(AgentBase):
             ActionType.DO_DESIGNER: ActionType.FIX_DESIGNER,
             ActionType.FIX_DESIGNER: ActionType.FIX_DESIGNER,
             ActionType.DO_CODER: ActionType.FIX_CODER,
+            ActionType.DO_CODER_DIRECT: ActionType.FIX_CODER,
             ActionType.FIX_CODER: ActionType.FIX_CODER
         }
         fix_action = fix_actions.get(action_type, ActionType.EXIT)
