@@ -68,6 +68,7 @@ class TritonCoder(AgentBase):
 
         # 初始化Triton生成模板
         self.triton_gen_prompt = self.load_template("triton/triton_gen_template.j2")
+        self.triton_direct_gen_prompt = self.load_template("triton/triton_gen_template.j2")
         self.triton_fix_prompt = self.load_template("triton/triton_fix_template.j2")
 
         # 准备基础文档数据
@@ -84,18 +85,25 @@ class TritonCoder(AgentBase):
         # 初始化输入配置
         self.triton_gen_input = {
             "aul_code": "",
+            "from_aul": True,
+            **self.triton_base_doc,
+        }
+        self.triton_direct_gen_input = {
+            "aul_code": "",  # 空的aul_code字段
+            "from_aul": False,
             **self.triton_base_doc,
         }
         self.triton_fix_input = {
             "aul_code": "",
             "triton_code": "",
             "suggestions": "",
+            "from_aul": True,
             **self.triton_base_doc,
         }
 
     def update(self, action_type: ActionType, aul_code: str, triton_code: str, suggestions: str):
         """更新代理状态"""
-        if action_type != ActionType.DO_CODER:
+        if action_type not in [ActionType.DO_CODER, ActionType.DO_CODER_DIRECT]:
             self.agent_name = f"TritonCoder -- [impl_type] {self.impl_type} -- [action] {action_type.name} -- [op_name] {self.op_name}"
 
         if aul_code:
@@ -121,6 +129,8 @@ class TritonCoder(AgentBase):
             tuple: (生成内容, 格式化提示词, 推理内容)
         """
         # 提取代码内容并更新状态
+        assert action_type in [ActionType.DO_CODER, ActionType.DO_CODER_DIRECT,
+                               ActionType.FIX_CODER], f"TritonCoder不支持的动作类型: {action_type}"
         aul_code = parsed_code.aul_code if parsed_code else ""
         triton_code = parsed_code.triton_code if parsed_code else ""
         self.update(action_type, aul_code, triton_code, suggestions)
@@ -128,6 +138,8 @@ class TritonCoder(AgentBase):
         # 根据动作类型选择对应的处理逻辑
         if action_type == ActionType.DO_CODER:
             return await self.run_llm(self.triton_gen_prompt, self.triton_gen_input, self.model_config["triton_coder"])
+        elif action_type == ActionType.DO_CODER_DIRECT:
+            return await self.run_llm(self.triton_direct_gen_prompt, self.triton_direct_gen_input, self.model_config["triton_coder"])
         elif action_type == ActionType.FIX_CODER:
             return await self.run_llm(self.triton_fix_prompt, self.triton_fix_input, self.model_config["triton_coder_fix"])
         else:

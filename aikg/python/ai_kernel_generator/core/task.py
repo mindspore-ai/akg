@@ -17,16 +17,17 @@ import json
 import asyncio
 from typing import Tuple
 from ai_kernel_generator.core.async_pool.device_pool import DevicePool
-from ai_kernel_generator.core.utils import ActionType, ParsedCode, check_task_config, check_task_type
+from ai_kernel_generator.core.utils import ActionType, ParsedCode
 from ai_kernel_generator.core.agent.conductor import Conductor
 from ai_kernel_generator.core.agent.aul_designer import AULDesigner
 from ai_kernel_generator.core.agent.coder import CoderFactory
 from ai_kernel_generator.core.verifier.kernel_verifier import KernelVerifier
+from ai_kernel_generator.core.task_base import TaskBase
 
 logger = logging.getLogger(__name__)
 
 
-class Task:
+class Task(TaskBase):
     def __init__(self,
                  op_name: str,
                  task_desc: str,
@@ -54,27 +55,12 @@ class Task:
             task_type (str, optional): 任务类型, 默认为"precision_only"。
             limit_steps (int, optional): 限制步数, 默认为10。
         """
-
-        check_task_config(framework, backend, arch, impl_type)
-        check_task_type(task_type)
-
-        self.op_name = op_name
-        self.task_desc = task_desc
-        self.task_id = task_id
-        self.backend = backend.lower()
-        self.arch = arch.lower()
-        self.log_dir = config.get("log_dir")
-        self.model_name_dict = config.get("agent_model_config")
-        self.profile_settings = config.get("profile_settings")
-        self.impl_type = impl_type
-        self.framework = framework
-        self.task_type = task_type
-        self.limit_steps = limit_steps
-        self.device_pool = device_pool
-
+        super().__init__(op_name, task_desc, task_id, backend, arch, impl_type, config, device_pool, framework,
+                         task_type, limit_steps)
         self.designer = AULDesigner(self.op_name, self.task_desc, self.model_name_dict,
                                     self.impl_type, self.backend, self.arch)
-        self.coder = CoderFactory().create_coder(self.op_name, self.task_desc, self.model_name_dict, self.impl_type, self.framework)
+        self.coder = CoderFactory().create_coder(self.op_name, self.task_desc, self.model_name_dict, self.impl_type,
+                                                 self.framework)
         self.verifier = KernelVerifier(self.op_name, self.task_desc, self.log_dir,
                                        self.task_id, self.framework, self.impl_type, self.backend, self.arch)
         self.conductor = Conductor(self.op_name, self.task_id, self.log_dir, self.impl_type, self.model_name_dict)

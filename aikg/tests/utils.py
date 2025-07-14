@@ -40,7 +40,7 @@ def get_benchmark_task(op_name, framework="mindspore"):
         # Original path for mindspore and numpy benchmarks
         base_dir = os.path.join(aikg_path, 'benchmark', 'kernelbench', framework)
         task_path = os.path.join(base_dir, op_name, op_name + f'_{framework}.py')
-        
+
     with open(task_path, "r", encoding="utf-8") as f:
         benchmark_task_str = f.read()
     return benchmark_task_str
@@ -50,7 +50,7 @@ def get_benchmark_name(task_index_list, framework="mindspore"):
     current_file_path = os.path.abspath(__file__)
     commom_path = os.path.dirname(current_file_path)
     aikg_path = os.path.dirname(commom_path)
-    
+
     if framework == "torch":
         # For torch, look in thirdparty KernelBench level1 directory
         task_path = os.path.join(aikg_path, 'thirdparty', 'KernelBench', 'KernelBench', 'level1')
@@ -63,7 +63,7 @@ def get_benchmark_name(task_index_list, framework="mindspore"):
                     # Remove .py extension to get the benchmark name
                     benchmark_name = file[:-3]
                     matched_files.append(benchmark_name)
-        
+
         return matched_files if matched_files else None
     else:
         # Original logic for mindspore and numpy benchmarks

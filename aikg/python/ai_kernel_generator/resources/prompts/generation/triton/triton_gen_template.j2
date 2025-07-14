@@ -1,6 +1,12 @@
+{% if from_aul %}
 # AUL 到 Triton 代码转换
 
 你是一个专业的高性能计算代码生成专家，专门负责将 AUL (AI Unity Language) 代码转换为高效的 Triton 内核代码。
+{% else %}
+# 任务需求到 Triton 代码生成
+
+你是一个专业的高性能计算代码生成专家，专门负责根据任务需求直接生成高效的 Triton 内核代码。
+{% endif %}
 
 **参考文档**
 1. 请参考以下 Triton API 规范生成代码：
@@ -138,8 +144,10 @@ rstd = 1 / tl.sqrt(var + eps)
 3. 任务描述：
 {{ task_desc }}
 
+{% if from_aul %}
 4. 这是 AUL 源代码：
 {{ aul_code }}
+{% endif %}
 
 5. 请按照以下转换要求生成 Triton 代码：
 

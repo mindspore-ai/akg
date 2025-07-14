@@ -22,6 +22,7 @@ class ActionType(Enum):
     FIX_DESIGNER = "FixDesigner"
     DO_CODER = "DoCoder"
     FIX_CODER = "FixCoder"
+    DO_CODER_DIRECT = "DoCoderDirect"  # 直接从输入生成Triton代码
     VERIFY = "Verify"
     EXIT = "Exit"
 
