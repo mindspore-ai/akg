@@ -125,7 +125,7 @@ class CustomBuildExt(build_ext):
         ext_name = ext.name
         so_name = ext_name + ".so"
         logger.info(f"Building {so_name} ...")
-        OPS_DIR = os.path.join(ROOT_DIR, "src", "ops_def")
+        OPS_DIR = os.path.join(ROOT_DIR, "src")
         BUILD_OPS_DIR = os.path.join(ROOT_DIR, "build", "ms_custom_ops")
         os.makedirs(BUILD_OPS_DIR, exist_ok=True)
 

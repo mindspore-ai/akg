@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.16)
 project(ms_kernels_internal)
 
+# =============================================================================
+# Python and MindSpore Path Detection
+# =============================================================================
+
 # Find Python to get MindSpore installation path
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
@@ -54,6 +58,10 @@ else()
     get_filename_component(MS_PATH ${MS_MODULE_PATH} DIRECTORY)
 endif()
 
+# =============================================================================
+# Path Configuration
+# =============================================================================
+
 # Set MindSpore internal kernel paths (matching Python logic)
 set(INCLUDE_PATHS
     "${MS_PATH}/lib/plugin/ascend/ms_kernels_internal/internal_kernel"
@@ -74,14 +82,9 @@ message(STATUS "MindSpore path: ${MS_PATH}")
 message(STATUS "Internal kernel include path: ${INTERNAL_KERNEL_INC_PATH}")
 message(STATUS "Internal kernel library path: ${INTERNAL_KERNEL_LIB_PATH}")
 
-# Additional validation and debugging
-if(INTERNAL_KERNEL_INC_PATH MATCHES ".*std::cout.*")
-    message(FATAL_ERROR "std::cout output detected in INTERNAL_KERNEL_INC_PATH: ${INTERNAL_KERNEL_INC_PATH}")
-endif()
-
-if(INTERNAL_KERNEL_LIB_PATH MATCHES ".*std::cout.*")
-    message(FATAL_ERROR "std::cout output detected in INTERNAL_KERNEL_LIB_PATH: ${INTERNAL_KERNEL_LIB_PATH}")
-endif()
+# =============================================================================
+# Validation and Error Checking
+# =============================================================================
 
 # Check if paths exist
 foreach(INCLUDE_PATH ${INCLUDE_PATHS})
@@ -95,6 +98,10 @@ if(NOT EXISTS ${INTERNAL_KERNEL_LIB_PATH})
     message(WARNING "Internal kernel library path does not exist: ${INTERNAL_KERNEL_LIB_PATH}")
     message(WARNING "This may cause linking errors")
 endif()
+
+# =============================================================================
+# Library Detection
+# =============================================================================
 
 # Check for mindspore_internal_kernels library
 find_library(MINDSPORE_INTERNAL_KERNELS_LIB
@@ -111,6 +118,10 @@ else()
     message(WARNING "Will try to link with -lmindspore_internal_kernels")
     set(MINDSPORE_INTERNAL_KERNELS_LIB "mindspore_internal_kernels" PARENT_SCOPE)
 endif()
+
+# =============================================================================
+# Source File Collection
+# =============================================================================
 
 # Collect source files
 file(GLOB_RECURSE GRAPH_MODE_SRC_FILES ${CMAKE_CURRENT_SOURCE_DIR}/graphmode/*.cc)

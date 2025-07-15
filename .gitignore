@@ -7,7 +7,6 @@ st_tests
 kernel_meta/
 somas_meta/
 trace_code_graph_*
-ms_kernels_internal/
 
 # Cmake files
 CMakeFiles/

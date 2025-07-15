@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.16)
-project(Ops)
+project(ms_custom_ops)
+
+# =============================================================================
+# Configuration and Validation
+# =============================================================================
 
 set(MS_EXTENSION_NAME "" CACHE STRING "Extension Name")
 set(BUILD_EXTENSION_DIR "" CACHE STRING "Extension directory")
@@ -10,12 +14,14 @@ if (BUILD_EXTENSION_DIR STREQUAL "")
     message(FATAL_ERROR "BUILD_EXTENSION_DIR must be set. Use -DBUILD_EXTENSION_DIR=<path>")
 endif()
 
-# Build ascendc kernels
+# =============================================================================
+# Build Dependencies
+# =============================================================================
+
+# Build ms_kernels_internal
 add_subdirectory(ms_kernels_internal)
 
-# Collect source files
-# file(GLOB SRC_FILES ${CMAKE_CURRENT_SOURCE_DIR}/module/*.cpp)
-# 确保变量已经设置
+# Validate internal kernel variables
 if(NOT DEFINED INTERNAL_KERNEL_LIB_PATH)
     message(FATAL_ERROR "INTERNAL_KERNEL_LIB_PATH is not defined. Check if ms_kernels_internal subdirectory was processed correctly.")
 endif()
@@ -24,19 +30,17 @@ if(NOT DEFINED MINDSPORE_INTERNAL_KERNELS_LIB)
     message(FATAL_ERROR "MINDSPORE_INTERNAL_KERNELS_LIB is not defined. Check if ms_kernels_internal subdirectory was processed correctly.")
 endif()
 
+# Set library and source variables
 set(LIB_DIR ${INTERNAL_KERNEL_LIB_PATH})
 set(LIBS ${MINDSPORE_INTERNAL_KERNELS_LIB})
-
-# 定义多个include目录
-set(INCLUDE_DIRS 
-    ${INTERNAL_KERNEL_INC_PATH}
-    # 在这里添加更多的include目录，例如：
-    # ${CMAKE_CURRENT_SOURCE_DIR}/include
-    # ${CMAKE_CURRENT_SOURCE_DIR}/third_party/include
-    # /path/to/another/include
-)
-
 set(SRC_FILES ${MS_KERNELS_INTERNAL_SRC_FILES})
+
+# Define include directories
+set(INCLUDE_DIRS ${INTERNAL_KERNEL_INC_PATH})
+
+# =============================================================================
+# Debug Output and Validation
+# =============================================================================
 
 message(STATUS "LIB_DIR: ${LIB_DIR}")
 message(STATUS "LIBS: ${LIBS}")
@@ -52,7 +56,11 @@ if(LIB_DIR MATCHES ".*std::cout.*")
     message(FATAL_ERROR "std::cout output detected in LIB_DIR: ${LIB_DIR}")
 endif()
 
-# 将include目录列表转换为cflags格式
+# =============================================================================
+# Build Configuration
+# =============================================================================
+
+# Convert include directories to CFLAGS format
 set(CFLAGS_INCLUDES "")
 foreach(INC_DIR_ITEM ${INCLUDE_DIRS})
     if(CFLAGS_INCLUDES STREQUAL "")
@@ -64,7 +72,11 @@ endforeach()
 
 message(STATUS "CFLAGS_INCLUDES: ${CFLAGS_INCLUDES}")
 
-# Generate a temporary python script file to build custom ops with MindSpore's CustomOpBuilder
+# =============================================================================
+# Custom Op Builder
+# =============================================================================
+
+# Generate Python script for building custom ops with MindSpore's CustomOpBuilder
 set(PYTHON_SCRIPT_PATH "${CMAKE_BINARY_DIR}/build_custom_with_ms.py")
 file(WRITE ${PYTHON_SCRIPT_PATH} "
 import mindspore as ms
@@ -79,6 +91,7 @@ ms.ops.CustomOpBuilder(
 ).build()
 ")
 
+# Find Python and create custom target
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 add_custom_target(
     BuildCustomOp ALL

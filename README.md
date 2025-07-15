@@ -17,13 +17,13 @@ ms_custom_ops 提供了一套完整的自定义算子框架，支持在 PyNative
 ```
 ms_custom_ops/
 ├── src/
-│   ├── ops_def/
-│   │   ├── ms_kernels_internal/
-│   │   │   ├── pyboost/           # PyNative模式实现
-│   │   │   ├── graphmode/         # Graph模式实现
-│   │   │   └── 共享组件文件
-│   │   └── CMakeLists.txt
-│   └── python/
+│   ├── ms_kernels_internal/
+│   │   ├── pyboost/           # PyNative模式实现
+│   │   ├── graphmode/         # Graph模式实现
+│   │   └── 共享组件文件
+│   ├── swft/                  # SWFT相关组件
+│   ├── ascendc/               # 昇腾C相关组件
+│   └── CMakeLists.txt
 └── tests/
 ```
 
@@ -45,7 +45,7 @@ git clone <repository_url>
 cd ms_custom_ops
 
 # 安装（会自动编译自定义算子）
-pip install -e .
+python setup.py install
 ```
 
 编译过程会自动：
@@ -102,11 +102,11 @@ output = net(key, value, key_cache, value_cache, slot_mapping, head_num)
 
 #### PyBoost 模式实现
 
-在 `ms_custom_ops/src/ops_def/ms_kernels_internal/pyboost/ops/` 下创建新文件：
+在 `ms_custom_ops/src/ms_kernels_internal/pyboost/ops/` 下创建新文件：
 
 ```cpp
 // my_op_runner.cc
-#include "ms_custom_ops/src/ops_def/ms_kernels_internal/pyboost/internal_pyboost_runner.h"
+#include "ms_custom_ops/src/ms_kernels_internal/pyboost/internal_pyboost_runner.h"
 
 class MyOpRunner : public InternalPyboostRunner {
 public:
@@ -126,11 +126,11 @@ MS_KERNELS_INTERNAL_FACTORY_REG(MyOp, MyOpRunner);
 
 #### GraphMode 实现
 
-在 `ms_custom_ops/src/ops_def/ms_kernels_internal/graphmode/ops/` 下创建新文件：
+在 `ms_custom_ops/src/ms_kernels_internal/graphmode/ops/` 下创建新文件：
 
 ```cpp
 // my_op.cc
-#include "ms_custom_ops/src/ops_def/ms_kernels_internal/graphmode/internal_kernel_mod.h"
+#include "ms_custom_ops/src/ms_kernels_internal/graphmode/internal_kernel_mod.h"
 
 class CustomMyOp : public InternalKernelMod {
 public:
