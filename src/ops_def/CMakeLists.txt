@@ -43,6 +43,15 @@ message(STATUS "LIBS: ${LIBS}")
 message(STATUS "SRC_FILES: ${SRC_FILES}")
 message(STATUS "INCLUDE_DIRS: ${INCLUDE_DIRS}")
 
+# Validate that no std::cout output has been captured
+if(INCLUDE_DIRS MATCHES ".*std::cout.*")
+    message(FATAL_ERROR "std::cout output detected in INCLUDE_DIRS: ${INCLUDE_DIRS}")
+endif()
+
+if(LIB_DIR MATCHES ".*std::cout.*")
+    message(FATAL_ERROR "std::cout output detected in LIB_DIR: ${LIB_DIR}")
+endif()
+
 # 将include目录列表转换为cflags格式
 set(CFLAGS_INCLUDES "")
 foreach(INC_DIR_ITEM ${INCLUDE_DIRS})

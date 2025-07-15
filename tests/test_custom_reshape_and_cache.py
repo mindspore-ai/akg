@@ -21,7 +21,7 @@ from mindspore.ops import CustomOpBuilder, ModuleWrapper
 from mindspore import Tensor, context, Parameter, ops
 from tests.mark_utils import arg_mark
 import pytest
-from vllm_mindspore import ms_custom_ops
+import ms_custom_ops
 
 @pytest.mark.parametrize('exec_mode', [context.GRAPH_MODE, context.PYNATIVE_MODE])
 @pytest.mark.parametrize('np_dtype', [np.float16])

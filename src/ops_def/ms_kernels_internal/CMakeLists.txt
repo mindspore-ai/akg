@@ -9,13 +9,42 @@ if(DEFINED ENV{MINDSPORE_PATH})
     set(MS_PATH $ENV{MINDSPORE_PATH})
     message(STATUS "Using MINDSPORE_PATH environment variable: ${MS_PATH}")
 else()
-    # Get MindSpore installation path using Python
+    # Get MindSpore installation path using Python - get the last line of output
     execute_process(
         COMMAND ${Python3_EXECUTABLE} -c "import mindspore as ms; print(ms.__file__)"
-        OUTPUT_VARIABLE MS_MODULE_PATH
+        OUTPUT_VARIABLE MS_MODULE_PATH_RAW
         OUTPUT_STRIP_TRAILING_WHITESPACE
         RESULT_VARIABLE PYTHON_RESULT
+        ERROR_VARIABLE PYTHON_ERROR
     )
+    
+    # Extract the last non-empty line which should be the MindSpore path
+    string(REPLACE "\n" ";" OUTPUT_LINES "${MS_MODULE_PATH_RAW}")
+    
+    # Find the last non-empty line
+    set(MS_MODULE_PATH "")
+    foreach(LINE ${OUTPUT_LINES})
+        string(STRIP "${LINE}" STRIPPED_LINE)
+        if(NOT STRIPPED_LINE STREQUAL "")
+            set(MS_MODULE_PATH "${STRIPPED_LINE}")
+        endif()
+    endforeach()
+    
+    # Debug: Show the raw output and extracted path
+    string(LENGTH "${MS_MODULE_PATH_RAW}" RAW_LENGTH)
+    message(STATUS "Raw Python output length: ${RAW_LENGTH}")
+    list(LENGTH OUTPUT_LINES NUM_LINES)
+    message(STATUS "Number of output lines: ${NUM_LINES}")
+    message(STATUS "Extracted MindSpore path: ${MS_MODULE_PATH}")
+    
+    # Validate the result
+    if(NOT PYTHON_RESULT EQUAL 0)
+        message(FATAL_ERROR "Failed to find MindSpore installation: ${PYTHON_ERROR}")
+    endif()
+    
+    if(NOT MS_MODULE_PATH MATCHES ".*mindspore.*")
+        message(FATAL_ERROR "Invalid MindSpore path detected: ${MS_MODULE_PATH}")
+    endif()
     
     if(NOT PYTHON_RESULT EQUAL 0)
         message(FATAL_ERROR "Failed to find MindSpore installation. Please ensure MindSpore is installed or set MINDSPORE_PATH environment variable.")
@@ -44,6 +73,15 @@ message(STATUS "MS_PATH value: '${MS_PATH}'")
 message(STATUS "MindSpore path: ${MS_PATH}")
 message(STATUS "Internal kernel include path: ${INTERNAL_KERNEL_INC_PATH}")
 message(STATUS "Internal kernel library path: ${INTERNAL_KERNEL_LIB_PATH}")
+
+# Additional validation and debugging
+if(INTERNAL_KERNEL_INC_PATH MATCHES ".*std::cout.*")
+    message(FATAL_ERROR "std::cout output detected in INTERNAL_KERNEL_INC_PATH: ${INTERNAL_KERNEL_INC_PATH}")
+endif()
+
+if(INTERNAL_KERNEL_LIB_PATH MATCHES ".*std::cout.*")
+    message(FATAL_ERROR "std::cout output detected in INTERNAL_KERNEL_LIB_PATH: ${INTERNAL_KERNEL_LIB_PATH}")
+endif()
 
 # Check if paths exist
 foreach(INCLUDE_PATH ${INCLUDE_PATHS})
