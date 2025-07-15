@@ -85,11 +85,11 @@ def get_requirements() -> List[str]:
 
 
 def write_commit_id():
-    ret_code = os.system("git rev-parse --abbrev-ref HEAD > ./ms_custom_ops/.commit_id "
-                         "&& git log --abbrev-commit -1 >> ./ms_custom_ops/.commit_id")
+    ret_code = os.system("git rev-parse --abbrev-ref HEAD > .commit_id "
+                         "&& git log --abbrev-commit -1 >> .commit_id")
     if ret_code != 0:
         sys.stdout.write("Warning: Can not get commit id information. Please make sure git is available.")
-        os.system("echo 'git is not available while building.' > ./ms_custom_ops/.commit_id")
+        os.system("echo 'git is not available while building.' > .commit_id")
 
 
 def get_version():

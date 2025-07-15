@@ -32,7 +32,7 @@ ms_custom_ops/
 ### 1. 环境准备
 
 确保已安装：
-- MindSpore >= 2.0
+- MindSpore >= 2.6
 - 昇腾 CANN 工具包
 - CMake >= 3.14
 - Python >= 3.9
