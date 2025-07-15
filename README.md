@@ -59,7 +59,7 @@ python setup.py install
 
 ```python
 import mindspore as ms
-from vllm_mindspore import ms_custom_ops
+import ms_custom_ops
 
 # 设置为 PyNative 模式
 ms.set_context(mode=ms.context.PYNATIVE_MODE)
@@ -76,7 +76,7 @@ output = ms_custom_ops.reshape_and_cache(
 ```python
 import mindspore as ms
 from mindspore.ops import ModuleWrapper
-from vllm_mindspore import ms_custom_ops
+import ms_custom_ops
 
 # 设置为 Graph 模式
 ms.set_context(mode=ms.context.GRAPH_MODE)
@@ -151,7 +151,7 @@ MS_CUSTOM_INTERNAL_KERNEL_FACTORY_REG(MyOp, CustomMyOp);
 
 ### 2. 添加 Python 接口
 
-在 `vllm_mindspore/ms_custom_ops/__init__.py` 中添加：
+在 `ms_custom_ops/__init__.py` 中添加：
 
 ```python
 def my_op(*args, **kwargs):
@@ -167,7 +167,7 @@ def my_op(*args, **kwargs):
 import pytest
 import numpy as np
 import mindspore as ms
-from vllm_mindspore import ms_custom_ops
+import ms_custom_ops
 
 @pytest.mark.parametrize('exec_mode', [ms.context.GRAPH_MODE, ms.context.PYNATIVE_MODE])
 def test_my_op(exec_mode):
