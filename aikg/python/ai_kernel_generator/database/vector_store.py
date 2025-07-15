@@ -21,6 +21,13 @@ from watchdog.events import FileSystemEventHandler
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.documents import Document
+from ai_kernel_generator import get_project_root
+
+os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
+
+DEFAULT_DATABASE_PATH = Path(get_project_root()).parent.parent / "database"
+DEFAULT_INDEX_PATH = DEFAULT_DATABASE_PATH / "vector_store"
+DEFAULT_CONFIG_PATH = DEFAULT_DATABASE_PATH / "rag_config.yaml"
 
 class VectorStore:
     """
@@ -28,62 +35,45 @@ class VectorStore:
     """
     def __init__(
         self, 
-        database_path="database", 
-        config_path = "",
-        index_path="",
-        ):
-        self.database_path = database_path
-        self.config_path = config_path
-        self.index_path = index_path
-        self.embedding_model = self._load_embedding_model()
+        database_path: str = "",
+        index_path: str = "",
+        config_path: str = ""):
+        self.database_path = database_path if database_path else str(database_path)
+        self.index_path = index_path if index_path else str(DEFAULT_INDEX_PATH)
+        self.config_path = config_path if config_path else str(DEFAULT_CONFIG_PATH)
+        self.embedding_model = self.load_embedding_model()
         self.vector_store = self.load_or_create_vector_store()
-        self._setup_file_monitor()
+        self.setup_file_monitor()
         
-    def _load_embedding_model(self):
+    def load_embedding_model(self):
         """从配置文件加载嵌入模型"""
-        # 构建配置文件路径
-        config_path = Path(self.database_path / self.config_path)
-        
-        # 验证配置文件存在性
-        if not config_path.exists():
-            raise FileNotFoundError(f"配置文件不存在: {config_path}")
-        
-        # 加载并解析YAML配置
-        try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config = yaml.safe_load(f)
-        except yaml.YAMLError as e:
-            raise RuntimeError(f"配置文件解析失败: {str(e)}") from e
-        
-        # 提取嵌入模型名称
-        model_name = config.get('embedding_model')
-        if not model_name:
-            raise ValueError("配置文件中未找到embedding_model配置项")
-        
+        with open(self.config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+        embedding_model = config.get('embedding_model', 'GanymedeNil/text2vec-large-chinese')
         return HuggingFaceEmbeddings(
-            model_name=model_name,
+            model_name=embedding_model,
             model_kwargs={'device': 'cpu'},  # 如有GPU可改为'cuda'
             encode_kwargs={'normalize_embeddings': True}
         )
     
     def load_or_create_vector_store(self):
         """加载或创建向量存储"""
-        index_path = Path(self.database_path / self.index_path)
+        index_path = Path(self.index_path)
         
         # 如果索引不存在则创建
         if not (index_path / "index.faiss").exists():
             print("构建算子特征向量库...")
-            return self._build_vector_store()
+            return self.build_vector_store()
         
         # 加载现有索引
         print("加载现有向量索引...")
         return FAISS.load_local(
-            folder_path=str(index_path),
+            folder_path=self.index_path,
             embeddings=self.embedding_model,
             allow_dangerous_deserialization=True  # 注意安全性
         )
     
-    def _build_vector_store(self):
+    def build_vector_store(self):
         """从算子元数据构建向量存储"""
         root_dir = Path(self.database_path)
         documents = []
@@ -101,20 +91,15 @@ class VectorStore:
             with open(metadata_file, 'r') as f:
                 metadata = json.load(f)
             
-            # 查找算子实现文件
-            py_files = list(op_subdir.glob("*.py"))
-            if not py_files:
-                print(f"警告: 算子 {op_name} 目录下未找到Python实现文件，跳过该算子")
-                continue
-            
             # 创建检索文档
             doc = Document(
                 page_content=metadata['description'],
                 metadata={
                     "operator_name": op_name,
+                    "arch": metadata.get('arch', ''),
                     "operator_type": metadata.get('type', ''),
                     "operator_shape": metadata.get('shape', ''),
-                    "file_path": str(py_files[0]),
+                    "file_path": str(op_subdir),
                 }
             )
             documents.append(doc)
@@ -126,53 +111,62 @@ class VectorStore:
         )
         
         # 保存索引
-        vector_store.save_local(str(Path(self.database_path / self.index_path)))
+        vector_store.save_local(self.index_path)
         return vector_store
 
-    def add_to_vector_store(self, metadata_file: str):
+    def insert(self, op_name: str, arch: str):
         """向向量存储添加新的算子特征文档
         Args:
-            metadata_file: 算子元数据文件路径
+            op_name (str): 算子名称。
+            arch (str): 架构名称。
         """
-        if not Path(metadata_file).exists():
-            raise ValueError(f"算子元数据文件 {metadata_file} 不存在")
+        metadata_path = Path(self.database_path) / arch / op_name / 'metadata.json'
+        if not metadata_path.exists():
+            raise ValueError(f"算子元数据文件 {str(metadata_path)} 不存在")
         
-        with open(metadata_file, 'r') as f:
+        with open(str(metadata_path), 'r') as f:
             metadata = json.load(f)
         
-        # 获取算子目录并查找Python实现文件
-        op_dir = Path(metadata_file).parent
-        op_name = op_dir.name
-        py_files = list(op_dir.glob("*.py"))
-        if not py_files:
-            raise ValueError(f"算子 {op_name} 目录下未找到Python实现文件")
+        # 获取算子目录
+        op_dir = metadata_path.parent
 
         # 创建文档对象
         doc = Document(
             page_content=metadata['description'],
             metadata={
                 "operator_name": op_name,
+                "arch": arch,
                 "operator_type": metadata.get('type', ''),
                 "operator_shape": metadata.get('shape', ''),
-                "file_path": str(py_files[0]),
+                "file_path": str(op_dir),
             }
         )
 
         # 检查是否已存在相同算子的文档（去重并覆盖）
-        self.delete_from_vector_store(op_name)
+        self.delete(op_name, arch)
         
         # 添加到向量存储并保存
         self.vector_store.add_documents([doc])
         self.vector_store.save_local(self.index_path)
-        print(f"成功添加算子 {op_name} 到向量索引")
+        print(f"成功添加算子 {op_name} {arch}架构到向量索引")
+
+    def delete(self, op_name: str, arch: str):
+        existing_ids = list(self.vector_store.index_to_docstore_id.values())
+        for doc_id in existing_ids:
+            existing_doc = self.vector_store.docstore.search(doc_id)
+            if existing_doc.metadata.get("operator_name") == op_name and existing_doc.metadata.get("arch") == arch:
+                # 已存在相同算子的文档，删除旧文档
+                self.vector_store.delete([doc_id])
+                return 
+        print(f"算子 {op_name} {arch}架构不存在于向量索引中")
     
-    def _setup_file_monitor(self):
+    def setup_file_monitor(self):
         """设置文件系统监控器，监听新的metadata.json文件"""
         event_handler = VectorStoreEventHandler(self)
         self.observer = Observer()
         self.observer.schedule(
             event_handler,
-            path=str(self.database_path),
+            path=self.database_path,
             recursive=True  # 监控所有子目录
         )
         self.observer.start()
@@ -184,16 +178,6 @@ class VectorStore:
             self.observer.stop()
             self.observer.join()
             print("文件监控已停止")
-
-    def delete_from_vector_store(self, op_name: str):
-        existing_ids = list(self.vector_store.index_to_docstore_id.values())
-        for doc_id in existing_ids:
-            existing_doc = self.vector_store.docstore.search(doc_id)
-            if existing_doc.metadata.get("operator_name") == op_name:
-                # 已存在相同算子的文档，删除旧文档
-                self.vector_store.delete([doc_id])
-                return 
-        print(f"算子 {op_name} 不存在于向量索引中")
 
 
 class VectorStoreEventHandler(FileSystemEventHandler):
@@ -216,7 +200,12 @@ class VectorStoreEventHandler(FileSystemEventHandler):
 
             try:
                 # 调用添加向量存储的方法
-                self.vector_store.add_to_vector_store(str(file_path))
+                # 解析算子名称和架构
+                op_dir = file_path.parent
+                op_name = op_dir.name
+                arch = op_dir.parent.name
+                # 调用添加向量存储的方法
+                self.vector_store.insert(op_name, arch)
                 print(f"检测到新文件并添加到向量索引: {file_path}")
             except Exception as e:
                 print(f"处理文件 {file_path} 时出错: {str(e)}")
@@ -230,5 +219,25 @@ class VectorStoreEventHandler(FileSystemEventHandler):
             # 跳过隐藏目录
             if any(part.startswith('.') for part in dir_path.parts):
                 return
-            self.vector_store.delete_from_vector_store(op_name)
-            print(f"检测到算子目录删除，已从向量索引中移除: {op_name}")
+            try:
+                op_name = dir_path.name
+                arch = dir_path.parent.name
+                self.vector_store.delete(op_name, arch)
+                print(f"检测到算子目录删除，已从向量索引中移除: {op_name}")
+            except ValueError:
+                print(f"算子目录 {op_name} 已删除，无法找到metadata.json，跳过向量索引移除")
+        # 处理metadata.json文件删除
+        elif event.src_path.endswith('metadata.json'):
+            file_path = Path(event.src_path)
+            op_name = file_path.parent.name
+            # 跳过隐藏目录
+            if any(part.startswith('.') for part in file_path.parent.parts):
+                return
+            try:
+                op_dir = file_path.parent
+                op_name = op_dir.name
+                arch = op_dir.parent.name
+                self.vector_store.delete(op_name, arch)
+                print(f"检测到metadata.json删除，已从向量索引中移除算子: {op_name}")
+            except ValueError:
+                print(f"metadata.json文件 {file_path} 已删除，跳过向量索引移除")

@@ -40,7 +40,8 @@ class Task(TaskBase):
                  device_pool: DevicePool,
                  framework: str,
                  task_type="precision_only",
-                 limit_steps=10) -> None:
+                 limit_steps=10,
+                 rag_config_path: str = "rag_config.yaml") -> None:
         """
         初始化任务类，用于记录任务的各种属性。
 
@@ -55,31 +56,10 @@ class Task(TaskBase):
             framework (str): 框架名称。
             task_type (str, optional): 任务类型, 默认为"precision_only"。
             limit_steps (int, optional): 限制步数, 默认为10。
+            rag_config_path (str, optional): RAG配置路径, 默认为"rag_config.yaml"。
         """
-<<<<<<< HEAD
         super().__init__(op_name, task_desc, task_id, backend, arch, impl_type, config, device_pool, framework,
                          task_type, limit_steps)
-=======
-
-        check_task_config(framework, backend, arch, impl_type)
-        check_task_type(task_type)
-
-        self.op_name = op_name
-        self.task_desc = task_desc
-        self.task_id = task_id
-        self.backend = backend.lower()
-        self.arch = arch.lower()
-        self.log_dir = config.get("log_dir")
-        self.database_dir = "database"
-        self.model_name_dict = config.get("agent_model_config")
-        self.profile_settings = config.get("profile_settings")
-        self.impl_type = impl_type
-        self.framework = framework
-        self.task_type = task_type
-        self.limit_steps = limit_steps
-        self.device_pool = device_pool
-
->>>>>>> 309e4708 (add: vector store, ALL_TO_RAG_DATABASE)
         self.designer = AULDesigner(self.op_name, self.task_desc, self.model_name_dict,
                                     self.impl_type, self.backend, self.arch)
         self.coder = CoderFactory().create_coder(self.op_name, self.task_desc, self.model_name_dict, self.impl_type,
@@ -181,7 +161,9 @@ class Task(TaskBase):
 
             if verify_res:
                 if os.getenv("ALL_TO_RAG_DATABASE") == "1":
-                    self.verifier.insert_to_database(parsed_code, self.database_dir)
+                    self.database_rag.insert(
+                        parsed_code, 
+                        self.op_name, self.arch, self.framework, self.impl_type)
                 return self.op_name, True
             else:
                 return self.op_name, False

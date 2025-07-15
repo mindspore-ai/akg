@@ -13,9 +13,10 @@
 # limitations under the License.
 
 from pathlib import Path
-from langchain_core.documents import Document
-from langchain_core.retrievers import BaseRetriever
-from ai_kernel_generator.rag.op_feature_database import OpFeatureDatabase
+# from langchain_core.documents import Document
+# from langchain_core.retrievers import BaseRetriever
+from ai_kernel_generator.database.vector_store import VectorStore
+from ai_kernel_generator.core.utils import ParsedCode
 from ai_kernel_generator import get_project_root
 
 DEFAULT_DATABASE_PATH = Path(get_project_root()).parent.parent / "database"
@@ -25,14 +26,14 @@ class DatabaseRAG(BaseRetriever):
     # 必须显式声明所有字段
     database_path: str
     top_k: int
-    vector_store: OpFeatureDatabase
+    vector_store: VectorStore
 
-    def __init__(self, database_path: str = "", top_k: int = 5):
+    def __init__(self, config_path: str, database_path: str = "", top_k: int = 5):
         """初始化RAG系统"""
         # 加载配置文件
         database_path = database_path if database_path else str(DEFAULT_DATABASE_PATH)
         top_k = top_k
-        vector_store = OpFeatureDatabase()
+        vector_store = VectorStore(config_path)
 
         super().__init__(
             database_path = database_path,
@@ -40,12 +41,13 @@ class DatabaseRAG(BaseRetriever):
             vector_store=vector_store
         )
 
-    def _get_relevant_documents(self, query: str, *, run_manager=None):
+    def _get_relevant_documents(self, query: str, operator_features: str, *, run_manager=None):
         """实现基类要求的抽象方法"""
         tmp = self.vector_store._load_or_create_vector_store()
         return tmp.vector_store.similarity_search(
             query=query,
-            k=self.top_k
+            k=self.top_k,
+            filter={"arch": operator_features["arch"]}
         )
 
     def calculate_similarity(self, query: str, document: Document):
@@ -90,11 +92,25 @@ class DatabaseRAG(BaseRetriever):
         """
         pass
     
-    def insert(self):
+    def insert(self, parsed_code: ParsedCode, op_name, arch, framework, impl_type):
         """
         插入新的算子调度方案
         """
-        pass
+        operator_path = Path(database_path) / "operators"
+
+        # 创建框架实现文件
+        framework_file = operator_path / arch / op_name / f"{framework}.py"
+        with open(framework_file, "w", encoding="utf-8") as f:
+            f.write(self.framework_code)
+
+        # 创建具体实现文件
+        if impl_type == "triton":
+            impl_code = parsed_code.triton_code
+        elif impl_type == "swft":
+            impl_code = parsed_code.swft_code
+        impl_file = operator_path / arch / op_name / f"{impl_type}.py"
+        with open(impl_file, "w", encoding="utf-8") as f:
+            f.write(impl_code)
 
     def update(self):
         """
@@ -102,11 +118,17 @@ class DatabaseRAG(BaseRetriever):
         """
         pass
 
-    def delete(self):
+    def delete(self, op_name, arch, type=""):
         """
         删除算子调度方案
         """
-        pass
+        operator_path = Path(database_path) / "operators"
+        file_path = operator_path / arch / op_name
+        if type:
+            file_path = file_path / f"{type}.py"
+            file_path.unlink()
+        else:
+            file_path.rmdir()
 
 
 # 使用示例
@@ -119,7 +141,8 @@ if __name__ == "__main__":
         "type": "reduce+elementwise融合",
         "name": "custom_softmax",
         "shape": "reduce轴:64, 非reduce轴:8192",
-        "description": "包含exp和sum操作的融合算子"
+        "description": "包含exp和sum操作的融合算子",
+        "arch": "ascend910b4"
     }
 
     # 检索优化方案

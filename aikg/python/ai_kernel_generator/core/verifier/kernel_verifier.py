@@ -133,22 +133,6 @@ class KernelVerifier:
         with open(verify_file, "w", encoding="utf-8") as f:
             f.write(rendered_code)
 
-    def insert_to_database(self, parsed_code: ParsedCode, database_dir: str):
-        """将通过的框架和具体实现文件添加到数据库"""
-        # 创建框架实现文件
-        framework_file = os.path.join(database_dir, "operators", self.arch, self.op_name, f"{self.framework}.py")
-        with open(framework_file, "w", encoding="utf-8") as f:
-            f.write(self.framework_code)
-
-        # 创建具体实现文件
-        if self.impl_type == "triton":
-            impl_code = parsed_code.triton_code
-        elif self.impl_type == "swft":
-            impl_code = parsed_code.swft_code
-        impl_file = os.path.join(database_dir, "operators", self.arch, self.op_name, f"{self.impl_type}.py")
-        with open(impl_file, "w", encoding="utf-8") as f:
-            f.write(impl_code)
-
     def run_verify(self, verify_dir: str):
         """运行验证脚本"""
         os.chdir(verify_dir)
