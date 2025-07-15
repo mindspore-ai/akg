@@ -93,7 +93,7 @@ class ParserFactory:
     _code_parser = None
     _check_parser = None
     _api_parser = None
-
+    _feature_parser = None
     @classmethod
     def get_code_parser(cls):
         """获取代码解析器"""
