@@ -7,7 +7,7 @@ from ai_kernel_generator.config.config_validator import load_config
 @pytest.mark.level0
 @pytest.mark.asyncio
 @pytest.mark.parametrize("framework", ["numpy"])
-async def test_feature_extract(framework):
+async def test_database_rag(framework):
     benchmark_name = get_benchmark_name([19], framework=framework)
     config = load_config()
     model_name_dict = config.get("agent_model_config")

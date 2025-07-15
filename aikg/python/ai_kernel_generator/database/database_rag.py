@@ -12,12 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import hashlib
+import asyncio
 from pathlib import Path
-# from langchain_core.documents import Document
-# from langchain_core.retrievers import BaseRetriever
+from langchain_core.documents import Document
+from langchain_core.retrievers import BaseRetriever
 from ai_kernel_generator.database.vector_store import VectorStore
 from ai_kernel_generator.core.utils import ParsedCode
 from ai_kernel_generator import get_project_root
+from ai_kernel_generator.core.agent.feature_extraction import FeatureExtraction
 
 DEFAULT_DATABASE_PATH = Path(get_project_root()).parent.parent / "database"
 
@@ -63,8 +66,32 @@ class DatabaseRAG(BaseRetriever):
 
         # 避免除以零
         return dot_product / (norm_q * norm_d + 1e-10)
+
+    def get_feature_md5(self, task: str = "", backend: str = "", arch: str = "", framework: str = "", impl_type: str = "") -> str:
+        """生成特征唯一标识
+        Args:
+            task: 任务类型
+            backend: 计算后端
+            arch: 硬件架构
+            framework: 框架类型
+            impl_type: 实现类型
+        """
+        params = [str(p) for p in (task, backend, arch, framework, impl_type) if p]
+        return hashlib.md5(''.join(params).encode()).hexdigest()
+
+    def feature_extractor(self, task_code: str, feature_md5: str):
+        """计算余弦相似度"""
+        # 使用基类提供的标准方法检索文档
+        # 特征提取
+        feature_extractor = FeatureExtraction(
+            task_code=task_code,
+            model_config={"feature_extraction": self.model_config}
+        )
+        extracted_features, _, _ = asyncio.run(feature_extractor.run())
+        return extracted_features
     
-    def find(self, operator_features: str):
+
+    def sample(self, code: str, stragegy_mode: str = "random", task: str = "", backend: str = "", arch: str = ""):
         """
         检索最相似的算子优化方案
         Args:
@@ -72,8 +99,12 @@ class DatabaseRAG(BaseRetriever):
         Returns:
             list: 包含相似度、算子名称、文件路径和描述的字典列表
         """
-        # 使用基类提供的标准方法检索文档
-        docs = self.get_relevant_documents(operator_features)
+        # 生成特征md5
+        feature_md5 = self.get_feature_md5(task, backend, arch)
+        
+        operator_features = self.feature_extractor(code, feature_md5)
+        # 带md5的检索
+        docs = self._get_relevant_documents(f'{operator_features}||{feature_md5}')
 
         return [
             {
@@ -86,28 +117,12 @@ class DatabaseRAG(BaseRetriever):
             for doc in docs
         ]
     
-    def sample(self):
-        """
-        按照特定标准筛选算子优化方案
-        """
-        pass
-    
-    def insert(self, parsed_code: ParsedCode, op_name, arch, framework, impl_type):
+    def insert(self, task_code, op_name, arch, framework, impl_type):
         """
         插入新的算子调度方案
         """
-        operator_path = Path(database_path) / "operators"
-
-        # 创建框架实现文件
-        framework_file = operator_path / arch / op_name / f"{framework}.py"
-        with open(framework_file, "w", encoding="utf-8") as f:
-            f.write(self.framework_code)
-
-        # 创建具体实现文件
-        if impl_type == "triton":
-            impl_code = parsed_code.triton_code
-        elif impl_type == "swft":
-            impl_code = parsed_code.swft_code
+        operator_path = Path(self.database_path) / "operators"
+        impl_code = task_code
         impl_file = operator_path / arch / op_name / f"{impl_type}.py"
         with open(impl_file, "w", encoding="utf-8") as f:
             f.write(impl_code)
@@ -122,7 +137,7 @@ class DatabaseRAG(BaseRetriever):
         """
         删除算子调度方案
         """
-        operator_path = Path(database_path) / "operators"
+        operator_path = Path(self.database_path) / "operators"
         file_path = operator_path / arch / op_name
         if type:
             file_path = file_path / f"{type}.py"

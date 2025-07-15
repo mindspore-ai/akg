@@ -15,7 +15,6 @@
 import logging
 import json
 import asyncio
-import os
 from typing import Tuple
 from ai_kernel_generator.core.async_pool.device_pool import DevicePool
 from ai_kernel_generator.core.utils import ActionType, ParsedCode
@@ -40,8 +39,7 @@ class Task(TaskBase):
                  device_pool: DevicePool,
                  framework: str,
                  task_type="precision_only",
-                 limit_steps=10,
-                 rag_config_path: str = "rag_config.yaml") -> None:
+                 limit_steps=10) -> None:
         """
         初始化任务类，用于记录任务的各种属性。
 
@@ -56,7 +54,6 @@ class Task(TaskBase):
             framework (str): 框架名称。
             task_type (str, optional): 任务类型, 默认为"precision_only"。
             limit_steps (int, optional): 限制步数, 默认为10。
-            rag_config_path (str, optional): RAG配置路径, 默认为"rag_config.yaml"。
         """
         super().__init__(op_name, task_desc, task_id, backend, arch, impl_type, config, device_pool, framework,
                          task_type, limit_steps)
@@ -160,10 +157,6 @@ class Task(TaskBase):
                     action_type = ActionType.EXIT
 
             if verify_res:
-                if os.getenv("ALL_TO_RAG_DATABASE") == "1":
-                    self.database_rag.insert(
-                        parsed_code, 
-                        self.op_name, self.arch, self.framework, self.impl_type)
                 return self.op_name, True
             else:
                 return self.op_name, False
