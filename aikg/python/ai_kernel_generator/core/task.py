@@ -63,7 +63,7 @@ class Task(TaskBase):
                                                  self.framework)
         self.verifier = KernelVerifier(self.op_name, self.task_desc, self.log_dir,
                                        self.task_id, self.framework, self.impl_type, self.backend, self.arch)
-        self.conductor = Conductor(self.op_name, self.task_id, self.log_dir, self.impl_type, self.model_name_dict)
+        self.conductor = Conductor(self.op_name, self.task_id, self.log_dir, self.impl_type, self.model_name_dict, coder_only_mode=False)
 
     def init_conductor(self, init_action_type=ActionType.DO_DESIGNER, init_parsed_code=ParsedCode()):
         """

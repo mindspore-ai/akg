@@ -97,11 +97,12 @@ class TritonCoder(AgentBase):
             "aul_code": "",
             "triton_code": "",
             "suggestions": "",
+            "error_log": "",
             "from_aul": True,
             **self.triton_base_doc,
         }
 
-    def update(self, action_type: ActionType, aul_code: str, triton_code: str, suggestions: str):
+    def update(self, action_type: ActionType, aul_code: str, triton_code: str, informations: str):
         """更新代理状态"""
         if action_type not in [ActionType.DO_CODER, ActionType.DO_CODER_DIRECT]:
             self.agent_name = f"TritonCoder -- [impl_type] {self.impl_type} -- [action] {action_type.name} -- [op_name] {self.op_name}"
@@ -114,26 +115,44 @@ class TritonCoder(AgentBase):
         if triton_code:
             self.triton_fix_input["triton_code"] = triton_code
 
-        if suggestions:
-            self.triton_fix_input["suggestions"] = suggestions
+        if informations:
+            # 在coder_only模式下，informations实际上是error_log
+            if self.is_coder_only_mode(action_type):
+                self.triton_fix_input["error_log"] = informations
+            else:
+                self.triton_fix_input["suggestions"] = informations
 
-    async def run(self, action_type: ActionType, parsed_code: ParsedCode, suggestions: str) -> Tuple[str, str, str]:
+    def is_coder_only_mode(self, action_type: ActionType) -> bool:
+        """判断是否为coder_only模式"""
+        return action_type == ActionType.DO_CODER_DIRECT or (
+            action_type == ActionType.FIX_CODER and 
+            hasattr(self, '_from_coder_direct') and self._from_coder_direct
+        )
+
+    async def run(self, action_type: ActionType, parsed_code: ParsedCode, informations: str) -> Tuple[str, str, str]:
         """执行Triton代码生成或修复
 
         Args:
             action_type: 执行的动作类型
             parsed_code: conductor传入的解析代码内容
-            suggestions: 基于反馈的改进建议
+            informations: 基于反馈的改进建议或错误信息
 
         Returns:
-            tuple: (生成内容, 格式化提示词, 推理内容)
+            Tuple[str, str, str]: 生成的代码、提示信息和推理过程
         """
         # 提取代码内容并更新状态
         assert action_type in [ActionType.DO_CODER, ActionType.DO_CODER_DIRECT,
                                ActionType.FIX_CODER], f"TritonCoder不支持的动作类型: {action_type}"
         aul_code = parsed_code.aul_code if parsed_code else ""
         triton_code = parsed_code.triton_code if parsed_code else ""
-        self.update(action_type, aul_code, triton_code, suggestions)
+        
+        # 标记是否来自coder_direct模式
+        if action_type == ActionType.DO_CODER_DIRECT:
+            self._from_coder_direct = True
+        elif action_type == ActionType.FIX_CODER and not hasattr(self, '_from_coder_direct'):
+            self._from_coder_direct = False
+            
+        self.update(action_type, aul_code, triton_code, informations)
 
         # 根据动作类型选择对应的处理逻辑
         if action_type == ActionType.DO_CODER:
