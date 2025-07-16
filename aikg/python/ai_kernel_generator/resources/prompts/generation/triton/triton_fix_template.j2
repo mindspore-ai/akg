@@ -1,4 +1,8 @@
+{% if from_aul %}
 你是一个 Triton 内核验证修复专家，现在需要你修复一个 Triton 算子，这个算子是由AUL（AI Unity Language）转换而来。请仔细检查以下代码是否符合规范，并修复发现的问题。
+{% else %}
+你是一个 Triton 内核验证修复专家，现在需要你修复一个 Triton 算子。请仔细检查以下代码是否符合规范，并修复发现的问题。
+{% endif %}
 
 **参考文档**
 1. 请参考以下 Triton API 规范进行验证：
@@ -37,11 +41,15 @@
 ## 并行化和网格配置检查
 - 检查 `tl.program_id()` 的使用是否正确
 - 验证启动函数中的 `grid` 配置是否与内核逻辑匹配
-- 确保网格核数与 AUL 中的 `core_num` 一致
 - 检查数据在多核间的分配是否正确
+{% if from_aul %}
+- 确保网格核数与 AUL 中的 `core_num` 一致
+{% endif %}
 
 ## 数值计算正确性检查
+{% if from_aul %}
 - 验证计算逻辑是否与 AUL 源代码一致
+{% endif %}
 - 检查数据类型转换和一致性
 - 确保数值稳定性（Softmax 减去最大值防止溢出、除法添加小常数避免除零等）
 
@@ -73,7 +81,7 @@
 
 {{ task_desc }}
 
-{% if aul_code %}
+{% if from_aul and aul_code %}
 4. 这是 AUL 源代码：
 {{ aul_code }}
 {% endif %}

@@ -19,7 +19,8 @@
 {{ triton_sample_code }}
 
 
-4. 转换规则：
+4. 规则：
+{% if from_aul %}
 ## 内存管理转换规则
 - **AUL GlobalMem** → **Triton 指针参数**：全局内存在 Triton 中通过指针参数传递
 - **AUL VecBuf** → **Triton 寄存器**：向量缓存对应 Triton 中的寄存器存储
@@ -50,12 +51,19 @@
 
 ### 向量标量操作
 - `U.vectorscalar_op(op="adds", dst, src, factor=x)` → `dst = src + x` # subs/muls/divs/etc 同理
+{% endif %}
 
 ## 内存访问模式
 
 ### 1D 向量访问
+{% if from_aul %}
 ```python
-# AUL: U.data_copy(dst, src[start:end])
+# AUL
+U.data_copy(dst, src[start:end])
+```
+{% endif %}
+```python
+# Triton
 pid = tl.program_id(0)
 block_start = pid * BLOCK_SIZE
 offsets = block_start + tl.arange(0, BLOCK_SIZE)
@@ -64,8 +72,14 @@ data = tl.load(src_ptr + offsets, mask=mask)
 ```
 
 ### 2D 矩阵访问（按行）
+{% if from_aul %}
 ```python
-# AUL: U.data_copy(dst, src[row, :])
+# AUL
+U.data_copy(dst, src[row, :])
+```
+{% endif %}
+```python
+# Triton
 row_idx = tl.program_id(0)
 col_offsets = tl.arange(0, BLOCK_SIZE)
 mask = col_offsets < n_cols
@@ -80,18 +94,21 @@ ptrs = base_ptr + offsets * stride
 data = tl.load(ptrs, mask=mask)
 ```
 
-## 常见算子转换模式
+## 常见算子
 
-### Softmax 转换模式
+### Softmax
+{% if from_aul %}
 ```python
-# AUL 模式
-# U.vreduce_op(op="max", max_val, input_data, axis=-1)
-# U.vectorscalar_op(op="subs", shifted, input_data, factor=max_val)
-# U.vunary_op(op="exp", exp_data, shifted)
-# U.vreduce_op(op="sum", sum_val, exp_data, axis=-1)
-# U.vectorscalar_op(op="divs", output, exp_data, factor=sum_val)
-
-# Triton 转换
+# AUL
+U.vreduce_op(op="max", max_val, input_data, axis=-1)
+U.vectorscalar_op(op="subs", shifted, input_data, factor=max_val)
+U.vunary_op(op="exp", exp_data, shifted)
+U.vreduce_op(op="sum", sum_val, exp_data, axis=-1)
+U.vectorscalar_op(op="divs", output, exp_data, factor=sum_val)
+```
+{% endif %}
+```python
+# Triton
 row_max = tl.max(input_data, axis=0)
 shifted = input_data - row_max
 exp_data = tl.exp(shifted)
@@ -99,7 +116,7 @@ row_sum = tl.sum(exp_data, axis=0)
 output = exp_data / row_sum
 ```
 
-### Layer Normalization 转换模式
+### Layer Normalization
 ```python
 # 多轮循环处理：均值 → 方差 → 归一化
 # 第一轮：计算均值
@@ -190,10 +207,11 @@ def {{op_name}}_triton_{{framework}}(input_tensor, **kwargs):
     # 内核启动
     return output_tensor
 ```
-
+{% if from_aul %}
+【注意事项】grid开启的核数与AUL中core_num一致，计算逻辑与AUL保持一致
+{% endif %}
 【注意事项】不要进行设备断言，triton会自动适配
 【注意事项】核对代码中的input，确保triton文件中接收的输入为get_input()和get_init_input()按顺序的所有输入
-【注意事项】grid开启的核数与AUL中core_num一致，计算逻辑与AUL保持一致
 【注意事项】不要使用break等triton不支持的命令
 【注意事项】不要使用chained boolean operators，triton不支持链式布尔运算符
 【注意事项】不要使用lambda表达式，triton不支持lambda表达式
