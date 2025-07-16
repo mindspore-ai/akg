@@ -31,11 +31,11 @@ def test_custom_add(exec_mode, np_dtype):
         def __init__(self):
             super().__init__()
             if exec_mode is context.PYNATIVE_MODE:
-                self.add = ms_custom_ops.add
+                self.add = ms_custom_ops.Add
             else:
                 def add(x, y):
                     mod = ModuleWrapper("custom_add", ms_custom_ops)
-                    return mod.add(x, y)
+                    return mod.Add(x, y)
                 self.add = add
 
         def construct(self, x, y):

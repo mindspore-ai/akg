@@ -51,49 +51,9 @@ public:
   bool GeneralInferRegistered() const override { return true; }
 };
 
+// TODO
 CustomReshapeAndCacheOpFuncImpl gCustomReshapeAndCacheFuncImpl;
-
-// TODO use yaml generate this
-// TODO optional tensor how to use
-// clang-format off
-OpDef gReshapeAndCache = {
-  /*.name_=*/"Custom_reshape_and_cache",
-  /*.args_=*/ {
-
-        {/*.arg_name_=*/"key", /*.arg_dtype_=*/DT_TENSOR, /*.as_init_arg_=*/0, /*.arg_handler_=*/"", /*.cast_dtype_ =*/{}, /*.is_optional_=*/false},
-        {/*.arg_name_=*/"value", /*.arg_dtype_=*/DT_TENSOR, /*.as_init_arg_=*/0, /*.arg_handler_=*/"", /*.cast_dtype_ =*/{}, /*.is_optional_=*/true},
-        {/*.arg_name_=*/"key_cache", /*.arg_dtype_=*/DT_TENSOR, /*.as_init_arg_=*/0, /*.arg_handler_=*/"", /*.cast_dtype_ =*/{}, /*.is_optional_=*/true},
-        {/*.arg_name_=*/"value_cache", /*.arg_dtype_=*/DT_TENSOR, /*.as_init_arg_=*/0, /*.arg_handler_=*/"", /*.cast_dtype_ =*/{}, /*.is_optional_=*/true},
-        {/*.arg_name_=*/"slot_mapping", /*.arg_dtype_=*/DT_TENSOR, /*.as_init_arg_=*/0, /*.arg_handler_=*/"", /*.cast_dtype_ =*/{}, /*.is_optional_=*/true},
-        {/*.arg_name_=*/"head_num", /*.arg_dtype_=*/DT_INT, /*.as_init_arg_=*/0, /*.arg_handler_=*/"", /*.cast_dtype_ =*/{}, /*.is_optional_=*/false},
-  },
-  /* .returns_ = */ {
-    {/*.arg_name_=*/"out", /*.arg_dtype_=*/DT_TENSOR,
-                /*.inplace_input_index_=*/-1},
-  },
-  /*.signatures_ =*/ {
-    Signature("key", SignatureEnumRW::kRWDefault,          SignatureEnumKind::kKindPositionalKeyword, nullptr, SignatureEnumDType::kDType),
-     Signature("value", SignatureEnumRW::kRWDefault,          SignatureEnumKind::kKindPositionalKeyword, nullptr, SignatureEnumDType::kDType1),
-     Signature("key_cache", SignatureEnumRW::kRWWrite,          SignatureEnumKind::kKindPositionalKeyword, nullptr, SignatureEnumDType::kDType),
-     Signature("value_cache", SignatureEnumRW::kRWWrite,          SignatureEnumKind::kKindPositionalKeyword, nullptr, SignatureEnumDType::kDType1),
-     Signature("slot_mapping", SignatureEnumRW::kRWDefault,          SignatureEnumKind::kKindPositionalKeyword, nullptr, SignatureEnumDType::kDType2),
-     Signature("head_num", SignatureEnumRW::kRWDefault,          SignatureEnumKind::kKindPositionalKeyword, nullptr, SignatureEnumDType::kDType3),
-  },
-  /*.indexes_ =*/ {
-    {"key", 0},
-    {"value", 1},
-    {"key_cache", 2},
-    {"value_cache", 3},
-    {"slot_mapping", 4},
-    {"head_num", 5},
-  },
-  /*.func_impl_=*/gCustomReshapeAndCacheFuncImpl,
-  /*.enable_dispatch_ =*/true,
-  /*.is_view_ =*/false,
-  /*.is_graph_view_ =*/false,
-};
-REGISTER_PRIMITIVE_OP_DEF(Custom_reshape_and_cache, &gReshapeAndCache);
-// clang-format on
+OpFuncImpl &gCustom_ReshapeAndCacheFuncImpl = gCustomReshapeAndCacheFuncImpl;
 } // namespace ops
 } // namespace mindspore
 
@@ -124,10 +84,10 @@ protected:
   }
 };
 
-MS_CUSTOM_INTERNAL_KERNEL_FACTORY_REG(Custom_reshape_and_cache,
+MS_CUSTOM_INTERNAL_KERNEL_FACTORY_REG(Custom_ReshapeAndCache,
                                       internal::kInternalReshapeAndCacheOpName,
                                       CustomReshapeAndCache);
-REG_MS_TO_INTERNAL_IN_TENSOR_IDX_MAP(Custom_reshape_and_cache, INPUT_NUM_5,
+REG_MS_TO_INTERNAL_IN_TENSOR_IDX_MAP(Custom_ReshapeAndCache, INPUT_NUM_5,
                                      INDEX_0, INDEX_1, INDEX_2, INDEX_3,
                                      INDEX_4);
 } // namespace ms_custom_ops

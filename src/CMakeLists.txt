@@ -77,6 +77,25 @@ endforeach()
 message(STATUS "CFLAGS_INCLUDES: ${CFLAGS_INCLUDES}")
 
 # =============================================================================
+# Get YAML files
+# =============================================================================
+file(GLOB_RECURSE YAML_FILES "${CMAKE_CURRENT_SOURCE_DIR}/../yaml/*.yaml")
+message(STATUS "YAML_FILES: ${YAML_FILES}")
+
+# Build Python list format: ['path1', 'path2', 'path3']
+set(YAML_STRING "[")
+set(FIRST_ITEM TRUE)
+foreach(YAML_FILE ${YAML_FILES})
+    if(NOT FIRST_ITEM)
+        set(YAML_STRING "${YAML_STRING}, ")
+    endif()
+    set(YAML_STRING "${YAML_STRING}'${YAML_FILE}'")
+    set(FIRST_ITEM FALSE)
+endforeach()
+set(YAML_STRING "${YAML_STRING}]")
+message(STATUS "YAML_STRING: ${YAML_STRING}")
+
+# =============================================================================
 # Custom Op Builder
 # =============================================================================
 
@@ -88,6 +107,7 @@ src_files = '${SRC_FILES}'.split(';')
 ms.ops.CustomOpBuilder(
     name='${MS_EXTENSION_NAME}',
     sources=src_files,
+    yaml=${YAML_STRING},
     backend='Ascend',
     cflags='${CFLAGS_INCLUDES}',
     ldflags='-L${INTERNAL_KERNEL_LIB_PATH} -l${LIBS}',

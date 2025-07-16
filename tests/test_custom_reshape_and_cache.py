@@ -34,11 +34,11 @@ def test_custom_reshape_and_cache(exec_mode, np_dtype, kv_dim):
         def __init__(self):
             super().__init__()
             if exec_mode is context.PYNATIVE_MODE:
-                self.reshape_and_cache_func = ms_custom_ops.reshape_and_cache
+                self.reshape_and_cache_func = ms_custom_ops.ReshapeAndCache
             else:
                 def reshape_and_cache(key, value, key_cache, value_cache, slot_mapping, head_num):
                     mod = ModuleWrapper("custom_reshape_and_cache", ms_custom_ops)
-                    return mod.reshape_and_cache(key, value, key_cache, value_cache, slot_mapping, head_num)
+                    return mod.ReshapeAndCache(key, value, key_cache, value_cache, slot_mapping, head_num)
                 self.reshape_and_cache_func = reshape_and_cache
 
         def construct(self, key, value, key_cache, value_cache, slot_mapping, head_num):

@@ -38,31 +38,7 @@ public:
 };
 
 AddCustomOpFuncImpl gAddFuncImpl;
-
-OpDef gAddCustom = {
-  /*.name_=*/"Custom_add",
-  /*.args_=*/ {
-
-        {/*.arg_name_=*/"x", /*.arg_dtype_=*/DT_TENSOR, /*.as_init_arg_=*/0, /*.arg_handler_=*/"", /*.cast_dtype_ =*/{}, /*.is_optional_=*/false},
-        {/*.arg_name_=*/"y", /*.arg_dtype_=*/DT_TENSOR, /*.as_init_arg_=*/0, /*.arg_handler_=*/"", /*.cast_dtype_ =*/{}, /*.is_optional_=*/false},
-  },
-  /* .returns_ = */ {
-    {/*.arg_name_=*/"output", /*.arg_dtype_=*/DT_TENSOR,
-                /*.inplace_input_index_=*/-1},
-  },
-  /*.signatures_ =*/ {
-  },
-  /*.indexes_ =*/ {
-    {"x", 0},
-    {"y", 1},
-  },
-  /*.func_impl_=*/gAddFuncImpl,
-  /*.enable_dispatch_ =*/true,
-  /*.is_view_ =*/false,
-  /*.is_graph_view_ =*/false,
-};
-REGISTER_PRIMITIVE_OP_DEF(Custom_add, &gAddCustom);
-
+OpFuncImpl &gCustom_AddFuncImpl = gAddFuncImpl;
 } // namespace ops
 } // namespace mindspore
 
@@ -87,5 +63,5 @@ private:
 
 };
 
-MS_ASCENDC_KERNEL_FACTORY_REG(Custom_add, AddCustomAscend);
+MS_ASCENDC_KERNEL_FACTORY_REG(Custom_Add, AddCustomAscend);
 } // namespace ms_custom_ops
