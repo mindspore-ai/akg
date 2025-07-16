@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import hashlib
 import asyncio
 from pathlib import Path
 import shutil
@@ -20,7 +19,8 @@ from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 from ai_kernel_generator.database.vector_store import VectorStore
 from ai_kernel_generator import get_project_root
-from ai_kernel_generator.core.agent.feature_extraction import FeatureExtraction
+from ai_kernel_generator.core.agent.utils.feature_extraction import FeatureExtraction
+from ai_kernel_generator.utils.common_utils import get_md5_hash
 
 DEFAULT_DATABASE_PATH = Path(get_project_root()).parent.parent / "database"
 
@@ -44,12 +44,12 @@ class DatabaseRAG(BaseRetriever):
             vector_store=vector_store
         )
 
-    def _get_relevant_documents(self, query: str, arch: str, *, run_manager=None):
+    def _get_relevant_documents(self, query: str, feature_invariants: str, *, run_manager=None):
         """实现基类要求的抽象方法"""
         return self.vector_store.vector_store.similarity_search(
             query=query,
             k=self.top_k,
-            filter={"arch": arch}
+            filter={"feature_invariants": feature_invariants}
         )
 
     def calculate_similarity(self, query: str, document: Document):
@@ -66,59 +66,22 @@ class DatabaseRAG(BaseRetriever):
         # 避免除以零
         return dot_product / (norm_q * norm_d + 1e-10)
 
-    def get_feature_md5(self, task: str = "", backend: str = "", arch: str = "", framework: str = "", impl_type: str = "") -> str:
-        """生成特征唯一标识
-        Args:
-            task: 任务类型
-            backend: 计算后端
-            arch: 硬件架构
-            framework: 框架类型
-            impl_type: 实现类型
-        """
-        params = [str(p) for p in (task, backend, arch, framework, impl_type) if p]
-        return hashlib.md5(''.join(params).encode()).hexdigest()
-
-    def feature_extractor(self, task_code: str, feature_md5: str):
+    def feature_extractor(self, task_code: str, impl_type:str, backend:str, arch: str):
         """计算余弦相似度"""
         # 使用基类提供的标准方法检索文档
         # 特征提取
         feature_extractor = FeatureExtraction(
             task_code=task_code,
-            model_config={"feature_extraction": self.model_config}
+            model_config={"feature_extraction": self.model_config},
+            impl_type=impl_type,
+            backend=backend,
+            arch=arch
         )
         extracted_features, _, _ = asyncio.run(feature_extractor.run())
-        return extracted_features
-    
-    def _format_features_query(self, operator_features: dict):
-        """将特征字典转换为自然语言查询"""
-        return (f"算子类型: {operator_features.get('type')}, "
-                f"算子名称: {operator_features.get('name')}, "
-                f"算子形态: {operator_features.get('shape')}, "
-                f"描述: {operator_features.get('description')}")
-    
-    def find(self, operator_features: dict):
-        """
-        根据算子特征检索优化方案（对外接口）
-        operator_features: 包含算子特征的字符串
-        """
-        query = self._format_features_query(operator_features)
-
-        # 使用基类提供的标准方法检索文档
-        docs = self._get_relevant_documents(query, arch=operator_features['arch'])
-
-        return [
-            {
-                "similarity_score": self.calculate_similarity(query, doc),
-                "operator_name": doc.metadata["operator_name"],
-                "operator_type": doc.metadata["operator_type"],
-                "file_path": doc.metadata["file_path"],
-                "description": doc.page_content
-            }
-            for doc in docs
-        ]
+        return ', '.join([f"{k}: {v}" for k, v in extracted_features.items()])
     
 
-    def sample(self, code: str, stragegy_mode: str = "random", task: str = "", backend: str = "", arch: str = ""):
+    def sample(self, code: str, stragegy_mode: str = "random", backend: str = "", arch: str = "", impl_type: str = ""):
         """
         检索最相似的算子优化方案
         Args:
@@ -126,16 +89,13 @@ class DatabaseRAG(BaseRetriever):
         Returns:
             list: 包含相似度、算子名称、文件路径和描述的字典列表
         """
-        # 生成特征md5
-        feature_md5 = self.get_feature_md5(task, backend, arch)
-        
-        operator_features = self.feature_extractor(code, feature_md5)
-        # 带md5的检索
-        docs = self._get_relevant_documents(f'{operator_features}||{feature_md5}')
+        operator_features = self.feature_extractor(code, impl_type, backend, arch)
+        feature_invariants = get_md5_hash(impl_type, backend, arch)
+        docs = self._get_relevant_documents(operator_features, feature_invariants)
 
         return [
             {
-                "similarity_score": self.calculate_similarity(query, doc),
+                "similarity_score": self.calculate_similarity(code, doc),
                 "operator_name": doc.metadata["operator_name"],
                 "operator_type": doc.metadata["operator_type"],
                 "file_path": doc.metadata["file_path"],
@@ -144,15 +104,31 @@ class DatabaseRAG(BaseRetriever):
             for doc in docs
         ]
     
-    def insert(self, task_code, op_name, arch, framework, impl_type):
+    def insert(self, task_code, op_name: str = "", framework:str = "", backend: str = "", arch: str = "", impl_type: str = ""):
         """
         插入新的算子调度方案
         """
+        md5_hash = get_md5_hash(task_code, op_name=op_name, impl_type=impl_type, backend=backend, arch=arch)
+
+        framework_code = task_code.get("framework_code", "")
+        designer_code = task_code.get("designer_code", "")
+        coder_code = task_code.get("coder_code", "")
         operator_path = Path(self.database_path) / "operators"
-        impl_code = task_code
-        impl_file = operator_path / arch / op_name / f"{impl_type}.py"
-        with open(impl_file, "w", encoding="utf-8") as f:
-            f.write(impl_code)
+        impl_file = operator_path / arch / op_name / md5_hash
+        if designer_code:
+            impl_file = impl_file / "aul.py"
+            with open(impl_file, "w", encoding="utf-8") as f:
+                f.write(designer_code)
+        
+        if coder_code:
+            impl_file = impl_file / f"{impl_type}.py"
+            with open(impl_file, "w", encoding="utf-8") as f:
+                f.write(task_code)
+        
+        if framework_code:
+            impl_file = impl_file / f"{framework}.py"
+            with open(impl_file, "w", encoding="utf-8") as f:
+                f.write(framework_code)
 
         self.vector_store.insert(op_name, arch)
 
@@ -177,29 +153,3 @@ class DatabaseRAG(BaseRetriever):
     
     def test_insert(self, op_name, arch):
         self.vector_store.insert(op_name, arch)
-
-
-# 使用示例
-if __name__ == "__main__":
-    # 初始化系统
-    db_system = DatabaseRAG(str(Path(__file__).parent / "rag_config.yaml"))
-
-    # 准备查询特征
-    query_features = {
-        "type": "reduce+elementwise融合",
-        "name": "custom_softmax",
-        "shape": "reduce轴:64, 非reduce轴:8192",
-        "description": "包含exp和sum操作的融合算子",
-        "arch": "ascend310p3"
-    }
-
-    # 检索优化方案
-    results = db_system.find(query_features)
-
-    # 输出结果
-    print(f"找到 {len(results)} 个匹配的优化方案:")
-    for i, res in enumerate(results, 1):
-        print(f"\n#{i} 相似度: {res['similarity_score']:.4f}")
-        print(f"算子名称: {res['operator_name']}")
-        print(f"文件路径: {res['file_path']}")
-        print(f"特征描述: {res['description'][:100]}...")

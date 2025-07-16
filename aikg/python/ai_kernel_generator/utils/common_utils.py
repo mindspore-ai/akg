@@ -20,6 +20,7 @@ import tempfile
 import json
 import re
 import yaml
+import hashlib
 from dataclasses import dataclass
 from pydantic import create_model as create_pydantic_model
 from langchain.output_parsers import PydanticOutputParser
@@ -324,3 +325,29 @@ def remove_copyright_from_text(text: str) -> str:
         return text
 
     return cleaned_text
+
+def get_md5_hash(**kwargs) -> str:
+    """
+    生成参数的MD5哈希值
+
+    Args:
+        **kwargs: 任意数量的关键字参数
+
+    Returns:
+        str: 16进制格式的MD5哈希字符串
+
+    Example:
+        >>> get_md5_hash(a=1, b="test")
+        'a7262b12b8a1a379e4e71c879e0d5b2d'
+    """
+    # 过滤空值并排序
+    filtered_params = {k: v for k, v in kwargs.items() if v is not None}
+    if not filtered_params:
+        raise ValueError("至少需要提供一个有效参数")
+
+    # 标准化参数序列
+    sorted_params = sorted(filtered_params.items(), key=lambda x: x[0])
+    param_str = '&'.join(f"{k}={v}" for k, v in sorted_params)
+
+    # 生成MD5
+    return hashlib.md5(param_str.encode('utf-8')).hexdigest()

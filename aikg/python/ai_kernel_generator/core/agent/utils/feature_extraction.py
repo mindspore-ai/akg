@@ -1,13 +1,17 @@
 import logging
 from typing import Tuple
 from ai_kernel_generator.core.agent.agent_base import AgentBase
-from ai_kernel_generator.utils.common_utils import ParserFactory
+from ai_kernel_generator.utils.common_utils import ParserFactory, get_md5_hash
 logger = logging.getLogger(__name__)
 
 class FeatureExtraction(AgentBase):
-    def __init__(self, task_code: str, model_config: dict):
-        self.task_code = task_code
+    def __init__(self, op_name: str, task_desc: str, model_config: dict, impl_type: str = "", backend: str = "", arch: str = ""):
+        self.op_name = op_name
+        self.task_desc = task_desc
         self.model_config = model_config
+        self.impl_type = impl_type
+        self.backend = backend
+        self.arch = arch
 
         agent_name = f"FeatureExtraction"
         super().__init__(agent_name=agent_name)
@@ -20,7 +24,11 @@ class FeatureExtraction(AgentBase):
         self.feature_extraction_template = self.load_template("feature_extraction/feature_extraction_template.j2")
 
         self.feature_extraction_input = {
-            "task_code": self.task_code,
+            "op_name": self.op_name,
+            "task_desc": self.task_desc,
+            "impl_type": self.impl_type,
+            "backend": self.backend,
+            "arch": self.arch,
             "format_instructions": self.format_instructions,
         }
 
