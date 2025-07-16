@@ -1,0 +1,8 @@
+{
+    "op_type": "Elementwise",
+    "op_name_primary": "maximum",
+    "op_name_secondary": [],
+    "op_shape": ["big"],
+    "description": "逐元素操作，适用于激活函数场景，输入输出形状相同（16,16384）",
+    "arch": "ascend310p3"
+}

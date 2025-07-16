@@ -12,12 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import yaml
 import json
-import time
 from pathlib import Path
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.documents import Document
@@ -27,7 +25,6 @@ os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
 
 DEFAULT_DATABASE_PATH = Path(get_project_root()).parent.parent / "database"
 DEFAULT_INDEX_PATH = DEFAULT_DATABASE_PATH / "vector_store"
-DEFAULT_CONFIG_PATH = DEFAULT_DATABASE_PATH / "rag_config.yaml"
 
 class VectorStore:
     """
@@ -35,15 +32,14 @@ class VectorStore:
     """
     def __init__(
         self, 
+        config_path: str,
         database_path: str = "",
-        index_path: str = "",
-        config_path: str = ""):
-        self.database_path = database_path if database_path else str(database_path)
+        index_path: str = ""):
+        self.database_path = database_path if database_path else str(DEFAULT_DATABASE_PATH)
         self.index_path = index_path if index_path else str(DEFAULT_INDEX_PATH)
-        self.config_path = config_path if config_path else str(DEFAULT_CONFIG_PATH)
+        self.config_path = config_path
         self.embedding_model = self.load_embedding_model()
         self.vector_store = self.load_or_create_vector_store()
-        self.setup_file_monitor()
         
     def load_embedding_model(self):
         """从配置文件加载嵌入模型"""
@@ -103,7 +99,6 @@ class VectorStore:
                 }
             )
             documents.append(doc)
-        
         # 创建向量存储
         vector_store = FAISS.from_documents(
             documents=documents,
@@ -120,7 +115,7 @@ class VectorStore:
             op_name (str): 算子名称。
             arch (str): 架构名称。
         """
-        metadata_path = Path(self.database_path) / arch / op_name / 'metadata.json'
+        metadata_path = Path(self.database_path) / "operators" / arch / op_name / 'metadata.json'
         if not metadata_path.exists():
             raise ValueError(f"算子元数据文件 {str(metadata_path)} 不存在")
         
@@ -141,14 +136,13 @@ class VectorStore:
                 "file_path": str(op_dir),
             }
         )
-
         # 检查是否已存在相同算子的文档（去重并覆盖）
         self.delete(op_name, arch)
         
         # 添加到向量存储并保存
         self.vector_store.add_documents([doc])
         self.vector_store.save_local(self.index_path)
-        print(f"成功添加算子 {op_name} {arch}架构到向量索引")
+        print(f"成功添加算子{op_name} {arch}架构到向量索引")
 
     def delete(self, op_name: str, arch: str):
         existing_ids = list(self.vector_store.index_to_docstore_id.values())
@@ -157,87 +151,7 @@ class VectorStore:
             if existing_doc.metadata.get("operator_name") == op_name and existing_doc.metadata.get("arch") == arch:
                 # 已存在相同算子的文档，删除旧文档
                 self.vector_store.delete([doc_id])
+                self.vector_store.save_local(self.index_path)
+                print(f"成功从向量索引中删除算子{op_name} {arch}架构")
                 return 
-        print(f"算子 {op_name} {arch}架构不存在于向量索引中")
-    
-    def setup_file_monitor(self):
-        """设置文件系统监控器，监听新的metadata.json文件"""
-        event_handler = VectorStoreEventHandler(self)
-        self.observer = Observer()
-        self.observer.schedule(
-            event_handler,
-            path=self.database_path,
-            recursive=True  # 监控所有子目录
-        )
-        self.observer.start()
-        print(f"已启动文件监控，监听目录: {self.database_path}")
-
-    def stop_monitor(self):
-        """停止文件监控器"""
-        if hasattr(self, 'observer') and self.observer.is_alive():
-            self.observer.stop()
-            self.observer.join()
-            print("文件监控已停止")
-
-
-class VectorStoreEventHandler(FileSystemEventHandler):
-    """文件系统事件处理器，用于检测新的metadata.json文件"""
-    def __init__(self, vector_store: VectorStore):
-        self.vector_store = vector_store
-        self.processed_files = set()  # 用于去重已处理的文件
-
-    def on_created(self, event):
-        """当文件或目录被创建时触发"""
-        if not event.is_directory and event.src_path.endswith('metadata.json'):
-            # 等待文件写入完成（处理文件创建事件可能早于内容写入完成的情况）
-            time.sleep(0.5)
-            file_path = Path(event.src_path)
-
-            # 去重处理
-            if str(file_path) in self.processed_files:
-                return
-            self.processed_files.add(str(file_path))
-
-            try:
-                # 调用添加向量存储的方法
-                # 解析算子名称和架构
-                op_dir = file_path.parent
-                op_name = op_dir.name
-                arch = op_dir.parent.name
-                # 调用添加向量存储的方法
-                self.vector_store.insert(op_name, arch)
-                print(f"检测到新文件并添加到向量索引: {file_path}")
-            except Exception as e:
-                print(f"处理文件 {file_path} 时出错: {str(e)}")
-
-    def on_deleted(self, event):
-        """当文件或目录被删除时触发"""
-        # 处理目录删除
-        if event.is_directory:
-            dir_path = Path(event.src_path)
-            op_name = dir_path.name
-            # 跳过隐藏目录
-            if any(part.startswith('.') for part in dir_path.parts):
-                return
-            try:
-                op_name = dir_path.name
-                arch = dir_path.parent.name
-                self.vector_store.delete(op_name, arch)
-                print(f"检测到算子目录删除，已从向量索引中移除: {op_name}")
-            except ValueError:
-                print(f"算子目录 {op_name} 已删除，无法找到metadata.json，跳过向量索引移除")
-        # 处理metadata.json文件删除
-        elif event.src_path.endswith('metadata.json'):
-            file_path = Path(event.src_path)
-            op_name = file_path.parent.name
-            # 跳过隐藏目录
-            if any(part.startswith('.') for part in file_path.parent.parts):
-                return
-            try:
-                op_dir = file_path.parent
-                op_name = op_dir.name
-                arch = op_dir.parent.name
-                self.vector_store.delete(op_name, arch)
-                print(f"检测到metadata.json删除，已从向量索引中移除算子: {op_name}")
-            except ValueError:
-                print(f"metadata.json文件 {file_path} 已删除，跳过向量索引移除")
+        print(f"算子{op_name} {arch}架构不存在于向量索引中")

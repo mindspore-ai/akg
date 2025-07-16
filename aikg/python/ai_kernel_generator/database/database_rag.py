@@ -15,10 +15,10 @@
 import hashlib
 import asyncio
 from pathlib import Path
+import shutil
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 from ai_kernel_generator.database.vector_store import VectorStore
-from ai_kernel_generator.core.utils import ParsedCode
 from ai_kernel_generator import get_project_root
 from ai_kernel_generator.core.agent.feature_extraction import FeatureExtraction
 
@@ -44,13 +44,12 @@ class DatabaseRAG(BaseRetriever):
             vector_store=vector_store
         )
 
-    def _get_relevant_documents(self, query: str, operator_features: str, *, run_manager=None):
+    def _get_relevant_documents(self, query: str, arch: str, *, run_manager=None):
         """实现基类要求的抽象方法"""
-        tmp = self.vector_store._load_or_create_vector_store()
-        return tmp.vector_store.similarity_search(
+        return self.vector_store.vector_store.similarity_search(
             query=query,
             k=self.top_k,
-            filter={"arch": operator_features["arch"]}
+            filter={"arch": arch}
         )
 
     def calculate_similarity(self, query: str, document: Document):
@@ -90,6 +89,34 @@ class DatabaseRAG(BaseRetriever):
         extracted_features, _, _ = asyncio.run(feature_extractor.run())
         return extracted_features
     
+    def _format_features_query(self, operator_features: dict):
+        """将特征字典转换为自然语言查询"""
+        return (f"算子类型: {operator_features.get('type')}, "
+                f"算子名称: {operator_features.get('name')}, "
+                f"算子形态: {operator_features.get('shape')}, "
+                f"描述: {operator_features.get('description')}")
+    
+    def find(self, operator_features: dict):
+        """
+        根据算子特征检索优化方案（对外接口）
+        operator_features: 包含算子特征的字符串
+        """
+        query = self._format_features_query(operator_features)
+
+        # 使用基类提供的标准方法检索文档
+        docs = self._get_relevant_documents(query, arch=operator_features['arch'])
+
+        return [
+            {
+                "similarity_score": self.calculate_similarity(query, doc),
+                "operator_name": doc.metadata["operator_name"],
+                "operator_type": doc.metadata["operator_type"],
+                "file_path": doc.metadata["file_path"],
+                "description": doc.page_content
+            }
+            for doc in docs
+        ]
+    
 
     def sample(self, code: str, stragegy_mode: str = "random", task: str = "", backend: str = "", arch: str = ""):
         """
@@ -108,7 +135,7 @@ class DatabaseRAG(BaseRetriever):
 
         return [
             {
-                "similarity_score": self.calculate_similarity(operator_features, doc),
+                "similarity_score": self.calculate_similarity(query, doc),
                 "operator_name": doc.metadata["operator_name"],
                 "operator_type": doc.metadata["operator_type"],
                 "file_path": doc.metadata["file_path"],
@@ -127,6 +154,8 @@ class DatabaseRAG(BaseRetriever):
         with open(impl_file, "w", encoding="utf-8") as f:
             f.write(impl_code)
 
+        self.vector_store.insert(op_name, arch)
+
     def update(self):
         """
         更新已有算子调度方案
@@ -143,13 +172,17 @@ class DatabaseRAG(BaseRetriever):
             file_path = file_path / f"{type}.py"
             file_path.unlink()
         else:
-            file_path.rmdir()
+            shutil.rmtree(file_path)
+        self.vector_store.delete(op_name, arch)
+    
+    def test_insert(self, op_name, arch):
+        self.vector_store.insert(op_name, arch)
 
 
 # 使用示例
 if __name__ == "__main__":
     # 初始化系统
-    db_system = DatabaseRAG("./rag_config.yaml")
+    db_system = DatabaseRAG(str(Path(__file__).parent / "rag_config.yaml"))
 
     # 准备查询特征
     query_features = {
@@ -157,11 +190,11 @@ if __name__ == "__main__":
         "name": "custom_softmax",
         "shape": "reduce轴:64, 非reduce轴:8192",
         "description": "包含exp和sum操作的融合算子",
-        "arch": "ascend910b4"
+        "arch": "ascend310p3"
     }
 
     # 检索优化方案
-    results = db_system.retrieve_optimization_plans(query_features)
+    results = db_system.find(query_features)
 
     # 输出结果
     print(f"找到 {len(results)} 个匹配的优化方案:")
