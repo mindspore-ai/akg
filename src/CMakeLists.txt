@@ -21,6 +21,7 @@ endif()
 
 # Build ms_kernels_internal
 add_subdirectory(ms_kernels_internal)
+add_subdirectory(ascendc)
 
 # Validate internal kernel variables
 if(NOT DEFINED INTERNAL_KERNEL_LIB_PATH)
@@ -36,10 +37,10 @@ endif()
 # Set library and source variables
 set(LIB_DIR ${INTERNAL_KERNEL_LIB_PATH})
 set(LIBS ${MINDSPORE_INTERNAL_KERNELS_LIB})
-set(SRC_FILES ${MS_KERNELS_INTERNAL_SRC_FILES} ${CMAKE_CURRENT_SOURCE_DIR}/module.cc)
+set(SRC_FILES ${MS_KERNELS_INTERNAL_SRC_FILES} ${ASCENDC_SRC_FILES} ${CMAKE_CURRENT_SOURCE_DIR}/module.cc)
 
 # Define include directories
-set(INCLUDE_DIRS ${INTERNAL_KERNEL_INC_PATH})
+set(INCLUDE_DIRS ${INTERNAL_KERNEL_INC_PATH} ${ASCENDC_INC_PATH})
 
 # =============================================================================
 # Debug Output and Validation

@@ -132,6 +132,7 @@ class CustomBuildExt(build_ext):
         ascend_home_path = _get_ascend_home_path()
         env_script_path = _get_ascend_env_path()
         build_extension_dir = os.path.join(BUILD_OPS_DIR, "kernel_meta", ext_name)
+        dst_so_path = self.get_ext_fullpath(ext.name)
         # Combine all cmake commands into one string
         cmake_cmd = (
             f"source {env_script_path} && "
@@ -139,6 +140,7 @@ class CustomBuildExt(build_ext):
             f"  -DCMAKE_BUILD_TYPE=Release"
             f"  -DCMAKE_INSTALL_PREFIX={os.path.join(BUILD_OPS_DIR, 'install')}"
             f"  -DBUILD_EXTENSION_DIR={build_extension_dir}"
+            f"  -DASCENDC_INSTALL_PATH={os.path.dirname(dst_so_path)}"
             f"  -DMS_EXTENSION_NAME={ext_name}"
             f"  -DASCEND_CANN_PACKAGE_PATH={ascend_home_path} && "
             f"cmake --build {BUILD_OPS_DIR} -j --verbose"
@@ -158,7 +160,6 @@ class CustomBuildExt(build_ext):
 
         # Copy the generated .so file to the target directory
         src_so_path = os.path.join(build_extension_dir, so_name)
-        dst_so_path = self.get_ext_fullpath(ext.name)
         os.makedirs(os.path.dirname(dst_so_path), exist_ok=True)
         if os.path.exists(dst_so_path):
             os.remove(dst_so_path)
