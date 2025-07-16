@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import logging
+import importlib.util
 from typing import List, Tuple
 from ai_kernel_generator.core.trace import Trace
 from ai_kernel_generator.core.utils import ActionType, ParsedCode
@@ -66,7 +67,7 @@ class Conductor(AgentBase):
             self.check_designer_input = {}
 
         # 根据impl_type选择不同的coder检查模板
-        if self.impl_type == "triton":
+        if "triton" in self.impl_type:
             self.check_coder_prompt = self.load_template("conductor/check_triton_coder_template.j2")
         elif self.impl_type == "swft":
             self.check_coder_prompt = self.load_template("conductor/check_swft_coder_template.j2")
@@ -74,6 +75,11 @@ class Conductor(AgentBase):
             raise ValueError(f"不支持的impl_type: {self.impl_type}")
         self.check_coder_base_doc = {}
         self.check_coder_input = {}
+
+        if "triton" in self.impl_type and not importlib.util.find_spec('triton.backends'):
+            raise ImportError("please install triton first")
+        if self.impl_type == "triton-russia" and not importlib.util.find_spec('triton.backends.ascend'):
+            raise ImportError("please install triton-russia first")
 
         # 加载错误分析模板
         self.analyze_error_prompt = self.load_template("conductor/analyze_error_template.j2")
@@ -103,7 +109,7 @@ class Conductor(AgentBase):
             }
             logger.debug("check_designer_base_doc初始化完成")
 
-        if self.impl_type == "triton":
+        if "triton" in self.impl_type:
             self.check_coder_base_doc = {
                 "op_name": self.trace.base_doc.get("op_name", ""),
                 "task_desc": self.trace.base_doc.get("task_desc", ""),
@@ -252,7 +258,7 @@ class Conductor(AgentBase):
             self.check_designer_input["aul_code"] = code
             self.check_coder_input["aul_code"] = code
         elif self._is_coder_action(action_type):
-            if self.impl_type == "triton":
+            if "triton" in self.impl_type:
                 parsed_code.triton_code = code
                 self.check_coder_input["triton_code"] = code
             elif self.impl_type == "swft":
@@ -261,7 +267,7 @@ class Conductor(AgentBase):
                 self.check_coder_input["supported_api"] = self.trace.base_doc.get("supported_api", "")
         elif self._is_verifier_action(action_type):
             self.analyze_error_input["designer_code"] = parsed_code.aul_code
-            if self.impl_type == "triton":
+            if "triton" in self.impl_type:
                 self.analyze_error_input["coder_code"] = parsed_code.triton_code
             elif self.impl_type == "swft":
                 self.analyze_error_input["coder_code"] = parsed_code.swft_code
@@ -351,7 +357,7 @@ class Conductor(AgentBase):
         if self.coder_only_mode:
             logger.debug("CoderOnly模式下验证失败，直接返回FIX_CODER")
             coder_code = self.find_last_parsed_code([ActionType.DO_CODER_DIRECT, ActionType.FIX_CODER])
-            if self.impl_type == "triton":
+            if "triton" in self.impl_type:
                 parsed_code.triton_code = coder_code
             elif self.impl_type == "swft":
                 parsed_code.swft_code = coder_code
@@ -361,7 +367,7 @@ class Conductor(AgentBase):
         designer_code = self.find_last_parsed_code([ActionType.DO_DESIGNER, ActionType.FIX_DESIGNER])
         coder_code = self.find_last_parsed_code([ActionType.DO_CODER, ActionType.FIX_CODER])
         parsed_code.aul_code = designer_code
-        if self.impl_type == "triton":
+        if "triton" in self.impl_type:
             parsed_code.triton_code = coder_code
         elif self.impl_type == "swft":
             parsed_code.swft_code = coder_code

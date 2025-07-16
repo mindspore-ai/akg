@@ -30,7 +30,7 @@ MS_TO_NP_DTYPE_MAP = {
 }
 {% endif %}
 
-{% if impl_type == "triton" %}
+{% if "triton" in impl_type %}
 from {{ op_name }}_triton import {{ impl_func_name }}
 {% elif impl_type == "swft" %}
 from {{ op_name }}_swft import {{ impl_func_name }}
@@ -151,6 +151,7 @@ def verify_implementations():
     impl_type = "{{ impl_type }}"  # 实现方式
     
     {% if framework == "torch" %}
+    torch.manual_seed(0)
     # PyTorch设备设置
     if backend == "cuda":
         os.environ['CUDA_VISIBLE_DEVICES'] = str({{ device_id }})
@@ -161,11 +162,18 @@ def verify_implementations():
         elif arch == "v100":
             torch.cuda.set_device(0)  # 使用第一个v100设备
     elif backend == "ascend":
-        os.environ['DEVICE_ID'] = str({{ device_id }})
         if "ascend910" in arch:
+            {% if impl_type == "triton-russia" %}
+            os.environ['TRITON_ASCEND_DEVICE'] = str({{ device_id }})
+            device = torch.device("cpu")
+            {% else %}
+            os.environ['DEVICE_ID'] = str({{ device_id }})
             device = torch.device("npu")
+            torch.npu.manual_seed(0)
             torch.npu.set_device({{ device_id }})
+            {% endif %}
         elif "ascend310" in arch:
+            os.environ['DEVICE_ID'] = str({{ device_id }})
             device = torch.device("cpu")
         else:
             raise ValueError(f"不支持的ascend架构: {arch}")
@@ -222,9 +230,9 @@ def verify_implementations():
     # 运行框架实现
     framework_output = framework_model(*inputs)
     
-    {% if impl_type == "triton" %}
+    {% if "triton" in impl_type %}
     # 运行Triton实现
-    impl_output = {{ impl_func_name }}(*inputs, *init_params)
+    impl_output = {{ impl_func_name }}(*inputs)
     {% elif impl_type == "swft" %}
     # 运行SWFT实现
     data_dir = os.path.dirname(__file__)

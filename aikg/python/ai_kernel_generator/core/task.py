@@ -76,7 +76,7 @@ class Task(TaskBase):
         """
         # 初始化基础文档
         self.conductor.trace.base_doc.update(self.designer.aul_base_doc)
-        if self.impl_type == "triton":
+        if "triton" in self.impl_type:
             self.conductor.trace.base_doc.update(self.coder.triton_base_doc)
         elif self.impl_type == "swft":
             self.conductor.trace.base_doc.update(self.coder.swft_base_doc)
@@ -90,7 +90,7 @@ class Task(TaskBase):
                 json.dumps({"code": init_parsed_code.aul_code, "description": ""}), "", "", ActionType.DO_DESIGNER
             )
         if init_action_type == ActionType.VERIFY:
-            if self.impl_type == "triton":
+            if "triton" in self.impl_type:
                 self.conductor.trace.insert_designer_or_coder_record(
                     json.dumps({"code": init_parsed_code.triton_code, "description": ""}), "", "", ActionType.DO_CODER
                 )

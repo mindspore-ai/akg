@@ -14,8 +14,11 @@
 
 import os
 import re
-import subprocess
+import shutil
 import logging
+import subprocess
+import json
+from datetime import datetime
 from typing import Optional, Literal, Tuple
 from jinja2 import Template
 import pandas as pd
@@ -33,7 +36,7 @@ PROFILE_GENERATION_TEMPLATE_PATH = os.path.join(
 
 # 类型定义
 FrameworkType = Literal["torch", "mindspore", "numpy"]
-ImplType = Literal["triton", "swft"]
+ImplType = Literal["triton", "triton-russia", "swft"]
 BackendType = Literal["cuda", "ascend"]
 ArchType = Literal["a100", "v100", "ascend910b4", "ascend310p3"]
 
@@ -60,7 +63,7 @@ class KernelVerifier:
             log_dir (str): 调试信息目录
             task_id (str, optional): 任务ID，用于生成唯一目录名
             framework (FrameworkType): 深度学习框架，可选值包括 "torch", "mindspore", "numpy"
-            impl_type (ImplType): 实现类型，可选值包括 "triton", "swft"
+            impl_type (ImplType): 实现类型，可选值包括 "triton", "triton-russia", "swft"
             backend (BackendType): 计算设备后端，可选值包括 "cuda", "ascend"
             arch (ArchType): 硬件架构，可选值包括 "a100", "v100", "ascend910b4", "ascend310p3"
             impl_func_name (str, optional): 实现函数名，默认为op_name_impl_type_framework
@@ -71,9 +74,13 @@ class KernelVerifier:
         self.impl_type = impl_type
         self.backend = backend.lower()
         self.arch = arch.lower()
-        self.impl_func_name = impl_func_name or f"{op_name}_{impl_type}_{framework}"
         self.task_id = task_id
         self.log_dir = log_dir
+        if "triton" in self.impl_type:
+            self.impl_func_name = impl_func_name or f"{op_name}_triton_{framework}"
+        else:
+            self.impl_func_name = impl_func_name or f"{op_name}_{impl_type}_{framework}"
+            
 
         # 验证backend和arch的组合是否有效
         if self.backend == "cuda" and self.arch not in ["a100", "v100"]:
@@ -98,7 +105,11 @@ class KernelVerifier:
             f.write(self.framework_code)
 
         # 创建具体实现文件
-        impl_file = os.path.join(verify_dir, f"{self.op_name}_{self.impl_type}.py")
+        if "triton" in self.impl_type:
+            file_name = f"{self.op_name}_triton.py"
+        else:
+            file_name = f"{self.op_name}_{self.impl_type}.py"
+        impl_file = os.path.join(verify_dir, file_name)
         with open(impl_file, "w", encoding="utf-8") as f:
             f.write(impl_code)
 
@@ -274,7 +285,7 @@ class KernelVerifier:
             current_step: 步骤计数器，用于生成唯一目录名
             device_id: 设备ID
         """
-        if self.impl_type == "triton":
+        if "triton" in self.impl_type:
             impl_code = parsed_code.triton_code
         elif self.impl_type == "swft":
             impl_code = parsed_code.swft_code
@@ -286,4 +297,31 @@ class KernelVerifier:
         self.gen_verify_project(impl_code, verify_dir, device_id)
 
         # 运行验证
-        return self.run_verify(verify_dir)
+        verify_res, verify_log = self.run_verify(verify_dir)
+        
+        # 保存验证结果到JSONL文件（每行一个JSON对象）
+        result_jsonl_path = os.path.join(os.path.expanduser(self.log_dir), "verification_results.jsonl")
+        result_info = {
+            "task_name": self.op_name,
+            "task_id": self.task_id,
+            "step": current_step,
+            "verify_dir": verify_dir,
+            "passed": verify_res,
+            "error_log": verify_log,
+            "timestamp": datetime.now().isoformat(),
+            "framework": self.framework,
+            "impl_type": self.impl_type,
+            "backend": self.backend,
+            "arch": self.arch
+        }
+        
+        with open(result_jsonl_path, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(result_info, ensure_ascii=False, indent=2) + '\n\n')
+        
+        # 保存通过的验证文件
+        if verify_res:
+            foder_name = os.path.basename(verify_dir)
+            dst_dir = Path(self.log_dir) / "passed_cases" / self.op_name / foder_name
+            shutil.copytree(verify_dir, dst_dir)
+
+        return verify_res, verify_log

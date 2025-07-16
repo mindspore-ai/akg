@@ -67,7 +67,7 @@ def check_impl_type(impl_type: str):
     Args:
         impl_type: 实现类型(triton/swft)
     """
-    if impl_type not in ["triton", "swft"]:
+    if impl_type not in ["triton", "triton-russia", "swft"]:
         raise ValueError("impl_type must be triton or swft")
 
 
@@ -86,13 +86,13 @@ VALID_CONFIGS = {
     # framework -> backend -> arch -> impl_type
     "mindspore": {
         "ascend": {
-            "ascend910b4": ["triton"],
+            "ascend910b4": ["triton", "triton-russia"],
             "ascend310p3": ["swft"]
         },
     },
     "torch": {
         "ascend": {
-            "ascend910b4": ["triton"],
+            "ascend910b4": ["triton", "triton-russia"],
             "ascend310p3": ["swft"]
         },
         "cuda": {

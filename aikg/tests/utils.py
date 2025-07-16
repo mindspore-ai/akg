@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import os
-import re
 
 
 def get_op_task_str(op_name):
@@ -81,3 +80,24 @@ def get_benchmark_name(task_index_list, framework="mindspore"):
 
 def add_op_prefix(benchmark_name):
     return "aikg_" + benchmark_name
+
+
+def get_folder_names(folder_path):
+    python_files = []
+    
+    if os.path.exists(folder_path) and os.path.isdir(folder_path):
+        for file in os.listdir(folder_path):
+            if file.endswith('.py') and os.path.isfile(os.path.join(folder_path, file)):
+                python_files.append(file[:-3])
+    
+    return python_files
+
+
+def get_task_content(folder_path, file_name):
+    file_path = os.path.join(folder_path, file_name + '.py')
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except (FileNotFoundError, IOError, UnicodeDecodeError) as e:
+        print(f"读取文件 {file_path} 失败: {e}")
+        return ""

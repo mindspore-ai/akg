@@ -244,7 +244,7 @@ async def test_parallel_task_from_verifier(framework, impl_type, backend, arch):
         parsed_code.aul_code = aul_code
         if impl_type == "swft":
             parsed_code.swft_code = kernel_code
-        elif impl_type == "triton":
+        elif "triton" in impl_type:
             parsed_code.triton_code = kernel_code
         else:
             raise ValueError(f"Invalid implementation type: {impl_type}")

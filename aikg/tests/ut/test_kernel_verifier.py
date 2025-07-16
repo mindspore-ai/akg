@@ -52,7 +52,7 @@ def test_kernel_verifier_ascend910b4(op_name, framework, impl_type, backend):
     parsed_code = ParsedCode()
     if impl_type == "swft":
         parsed_code.swft_code = kernel_code
-    elif impl_type == "triton":
+    elif "triton" in impl_type:
         parsed_code.triton_code = kernel_code
     else:
         raise ValueError(f"Invalid implementation type: {impl_type}")
@@ -96,7 +96,7 @@ def test_kernel_verifier_ascend310p3(op_name, framework, impl_type, backend):
     parsed_code = ParsedCode()
     if impl_type == "swft":
         parsed_code.swft_code = kernel_code
-    elif impl_type == "triton":
+    elif "triton" in impl_type:
         parsed_code.triton_code = kernel_code
     else:
         raise ValueError(f"Invalid implementation type: {impl_type}")
@@ -138,7 +138,7 @@ def test_kernel_verifier_a100(op_name, framework, impl_type, backend):
     parsed_code = ParsedCode()
     if impl_type == "swft":
         parsed_code.swft_code = kernel_code
-    elif impl_type == "triton":
+    elif "triton" in impl_type:
         parsed_code.triton_code = kernel_code
     else:
         raise ValueError(f"Invalid implementation type: {impl_type}")
@@ -180,7 +180,7 @@ def test_kernel_verifier_v100(op_name, framework, impl_type, backend):
     parsed_code = ParsedCode()
     if impl_type == "swft":
         parsed_code.swft_code = kernel_code
-    elif impl_type == "triton":
+    elif "triton" in impl_type:
         parsed_code.triton_code = kernel_code
     else:
         raise ValueError(f"Invalid implementation type: {impl_type}")
@@ -223,7 +223,7 @@ def test_kernel_verifier_profiling_ascend910b4(op_name, framework, impl_type, ba
     parsed_code = ParsedCode()
     if impl_type == "swft":
         parsed_code.swft_code = kernel_code
-    elif impl_type == "triton":
+    elif "triton" in impl_type:
         parsed_code.triton_code = kernel_code
     else:
         raise ValueError(f"Invalid implementation type: {impl_type}")

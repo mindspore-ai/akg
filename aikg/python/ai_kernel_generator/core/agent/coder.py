@@ -27,6 +27,7 @@ class CoderFactory:
     CODER_TYPES = {
         "swft": SWFTCoder,
         "triton": TritonCoder,
+        "triton-russia": TritonCoder,
     }
 
     @classmethod
@@ -39,7 +40,7 @@ class CoderFactory:
             op_name (str): 算子名称
             task_desc (str): 算子功能描述
             model_config (dict): 模型配置
-            impl_type (str): 实现类型，支持 "swft" 和 "triton"
+            impl_type (str): 实现类型，支持 "swft" 和 "triton" 和 "triton-russia"
             framework (str): 框架类型，支持 "torch" 和 "mindspore"
         Returns:
             Union[SWFTCoder, TritonCoder]: 对应的coder实例

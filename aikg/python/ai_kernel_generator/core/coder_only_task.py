@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import logging
-import json
 import asyncio
 from typing import Tuple
 from ai_kernel_generator.core.task_base import TaskBase
@@ -63,7 +62,7 @@ class CoderOnlyTask(TaskBase):
                          task_type, limit_steps)
 
         # 只支持triton
-        if impl_type != "triton":
+        if "triton" not in impl_type:
             raise ValueError(f"CoderOnlyTask只支持triton，当前impl_type: {impl_type}")
 
         # 初始化coder

@@ -30,7 +30,7 @@ MS_TO_NP_DTYPE_MAP = {
 }
 {% endif %}
 
-{% if impl_type == "triton" %}
+{% if "triton" in impl_type %}
 from {{ op_name }}_triton import {{ impl_func_name }}
 {% elif impl_type == "swft" %}
 from {{ op_name }}_swft import {{ impl_func_name }}
