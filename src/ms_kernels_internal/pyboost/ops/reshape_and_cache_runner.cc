@@ -116,7 +116,7 @@ auto pyboost_reshape_and_cache(const ms::Tensor &key,
       slot_mapping, head_num);
 }
 
-PYBIND11_MODULE(MS_EXTENSION_NAME, m) {
+MS_CUSTOM_OPS_EXTENSION_MODULE(m) {
   m.def("reshape_and_cache", &pyboost_reshape_and_cache, "Reshape And Cache",
         pybind11::arg("key"), pybind11::arg("value") = std::nullopt,
         pybind11::arg("key_cache") = std::nullopt,

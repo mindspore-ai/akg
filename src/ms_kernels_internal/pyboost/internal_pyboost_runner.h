@@ -28,6 +28,7 @@
 #include "internal_pyboost_utils.h"
 #include "internal_spinlock.h"
 #include "internal_tiling_cache.h"
+#include "module.h"
 
 namespace ms::pynative {
 using namespace mindspore;

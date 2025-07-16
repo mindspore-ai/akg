@@ -65,6 +65,7 @@ endif()
 # Set MindSpore internal kernel paths (matching Python logic)
 set(INCLUDE_PATHS
     "${MS_PATH}/lib/plugin/ascend/ms_kernels_internal/internal_kernel"
+    "${CMAKE_CURRENT_SOURCE_DIR}/.."
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_CURRENT_SOURCE_DIR}/pyboost"
     "${CMAKE_CURRENT_SOURCE_DIR}/graphmode"

@@ -18,6 +18,7 @@ endif()
 # Build Dependencies
 # =============================================================================
 
+
 # Build ms_kernels_internal
 add_subdirectory(ms_kernels_internal)
 
@@ -30,10 +31,12 @@ if(NOT DEFINED MINDSPORE_INTERNAL_KERNELS_LIB)
     message(FATAL_ERROR "MINDSPORE_INTERNAL_KERNELS_LIB is not defined. Check if ms_kernels_internal subdirectory was processed correctly.")
 endif()
 
+
+
 # Set library and source variables
 set(LIB_DIR ${INTERNAL_KERNEL_LIB_PATH})
 set(LIBS ${MINDSPORE_INTERNAL_KERNELS_LIB})
-set(SRC_FILES ${MS_KERNELS_INTERNAL_SRC_FILES})
+set(SRC_FILES ${MS_KERNELS_INTERNAL_SRC_FILES} ${CMAKE_CURRENT_SOURCE_DIR}/module.cc)
 
 # Define include directories
 set(INCLUDE_DIRS ${INTERNAL_KERNEL_INC_PATH})
