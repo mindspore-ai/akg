@@ -177,8 +177,7 @@ class MyNet(ms.nn.Cell):
         super().__init__()
         
     def construct(self, key, value, key_cache, value_cache, slot_mapping, head_num):
-        mod = ModuleWrapper("custom_reshape_and_cache", ms_custom_ops)
-        return mod.reshape_and_cache(key, value, key_cache, value_cache, slot_mapping, head_num)
+        return ms_custom_ops.reshape_and_cache(key, value, key_cache, value_cache, slot_mapping, head_num)
 
 # 使用网络
 net = MyNet()
@@ -199,29 +198,98 @@ output = net(key, value, key_cache, value_cache, slot_mapping, head_num)
 
 ### 1. 创建算子实现
 
+
+
 #### PyBoost 模式实现
 
 在 `ms_custom_ops/src/ms_kernels_internal/pyboost/ops/` 下创建新文件：
 
 ```cpp
 // my_op_runner.cc
-#include "ms_custom_ops/src/ms_kernels_internal/pyboost/internal_pyboost_runner.h"
+#include "internal_pyboost_runner.h"
 
+using namespace ms_custom_ops;
+namespace ms::pynative {
 class MyOpRunner : public InternalPyboostRunner {
 public:
-    MyOpRunner() : InternalPyboostRunner("my_op", "MyOp") {}
-    
-    // 实现算子逻辑
-    void Setup(const diopiContext_t& pycontent, ...) override {
-        // 1. 设置参数
-        // 2. 计算 hash key
-        // 3. 创建内核
+    using InternalPyboostRunner::InternalPyboostRunner;
+
+protected:
+    internal::InternalOpPtr
+    CreateKernel(const internal::InputsImmutableInfoList &inputs,
+                 const internal::OutputsImmutableInfoList &outputs) override {
+        // 创建内部算子，这里需要根据具体算子实现
+        // 例如：return internal::CreateMyOp(inputs, outputs, param, internal::kInternalMyOpName);
+        return nullptr;
+    }
+
+    void LaunchKernel() {
+        tensor::TensorPtrList inputs;
+        inputs.reserve(2); // 根据实际输入数量调整
+
+        for (const auto &input : this->inputs()) {
+            inputs.push_back(input.is_defined() ? input.tensor() : nullptr);
+        }
+
+        tensor::TensorPtrList outputs;
+        TransInternalShapes(inputs, outputs);
+        LAUNCH_INTERNAL(_op_name_, this->_device_context_, this->stream_id(),
+                        inputs, outputs);
     }
 };
 
-// 注册算子
-MS_KERNELS_INTERNAL_FACTORY_REG(MyOp, MyOpRunner);
+// 注册算子名称映射
+MS_KERNELS_INTERNAL_FACTORY_REG(MyOp, internal::kInternalMyOpName);
+} // namespace ms::pynative
+
+namespace ms_custom_ops {
+// 辅助函数：生成结果张量
+ms::Tensor GenResultTensor(const ms::Tensor &input) {
+    return ms::Tensor(input.data_type(), input.shape());
+}
+
+// 主要算子函数
+ms::Tensor npu_my_op(const ms::Tensor &input1, const ms::Tensor &input2) {
+    auto result = GenResultTensor(input1);
+    auto op_name = "MyOp";
+    auto runner = std::make_shared<ms::pynative::MyOpRunner>(op_name);
+
+    // 设置参数（如果需要）
+    // runner->SetParam(param_value);
+
+    // 转换为 TensorPtr 用于 hash 计算
+    auto input1_tensor_ptr = input1.tensor();
+    auto input2_tensor_ptr = input2.tensor();
+
+    // 设置运行器参数（包括 hash 计算）
+    runner->Setup(op_name, input1_tensor_ptr, input2_tensor_ptr);
+
+    // 运行操作
+    runner->Run({input1, input2}, {result});
+    return result;
+}
+} // namespace ms_custom_ops
+
+// PyBoost 调用函数
+auto pyboost_my_op(const ms::Tensor &input1, const ms::Tensor &input2) {
+    return ms::pynative::PyboostRunner::Call<1>(
+        ms_custom_ops::npu_my_op, input1, input2);
+}
+
+// 注册到 Python 模块
+MS_CUSTOM_OPS_EXTENSION_MODULE(m) {
+    m.def("my_op", &pyboost_my_op, "My Custom Operator",
+          pybind11::arg("input1"), pybind11::arg("input2"));
+}
 ```
+
+**重要说明**：
+- PyBoost 算子需要继承 `InternalPyboostRunner` 并实现 `CreateKernel` 方法
+- 需要实现 `LaunchKernel` 方法来处理具体的执行逻辑
+- 使用 `MS_KERNELS_INTERNAL_FACTORY_REG` 注册算子名称映射
+- 需要提供 `npu_my_op` 函数作为主要算子实现
+- 使用 `pyboost_my_op` 函数作为 PyBoost 调用接口
+- 使用 `MS_CUSTOM_OPS_EXTENSION_MODULE` 注册到 Python 模块
 
 #### GraphMode 实现
 
@@ -230,23 +298,65 @@ MS_KERNELS_INTERNAL_FACTORY_REG(MyOp, MyOpRunner);
 ```cpp
 // my_op.cc
 #include "ms_custom_ops/src/ms_kernels_internal/graphmode/internal_kernel_mod.h"
+#include "mindspore/ops/ops_utils/op_utils.h"
+#include "ops/ops_func_impl/op_func_impl.h"
 
+namespace mindspore {
+namespace ops {
+class OPS_API CustomMyOpFuncImpl : public OpFuncImpl {
+public:
+    ShapeArray InferShape(const PrimitivePtr &primitive,
+                          const InferInfoPtrList &input_infos) const override {
+        return {input_infos[0]->GetShape()};
+    }
+    std::vector<TypeId>
+    InferType(const PrimitivePtr &primitive,
+              const InferInfoPtrList &input_infos) const override {
+        return {input_infos[0]->GetType()};
+    }
+
+    bool GeneralInferRegistered() const override { return true; }
+};
+} // namespace ops
+} // namespace mindspore
+
+namespace ms_custom_ops {
 class CustomMyOp : public InternalKernelMod {
 public:
-    CustomMyOp() : InternalKernelMod("my_op") {}
-    
-    bool Init(const PrimitivePtr &primitive, ...) override {
-        // 初始化参数
-    }
-    
-    bool Launch(const std::vector<KernelTensor*> &inputs, ...) override {
-        // 执行算子逻辑
+    CustomMyOp() : InternalKernelMod() {}
+    ~CustomMyOp() = default;
+
+protected:
+    internal::InternalOpPtr
+    CreateKernel(const internal::InputsImmutableInfoList &inputs,
+                 const internal::OutputsImmutableInfoList &outputs,
+                 const std::vector<KernelTensor *> &ms_inputs,
+                 const std::vector<KernelTensor *> &ms_outputs) override {
+        // 创建内部算子，这里需要根据具体算子实现
+        // 例如：return internal::CreateMyOp(inputs, outputs, param, internal::kInternalMyOpName);
+        return nullptr;
     }
 };
 
-// 注册算子
-MS_CUSTOM_INTERNAL_KERNEL_FACTORY_REG(MyOp, CustomMyOp);
+// 注册算子名称映射
+MS_CUSTOM_INTERNAL_KERNEL_NAME_REG(my_op, internal::kInternalMyOpName);
+
+// 注册输入输出索引映射（根据实际输入数量调整）
+REG_MS_TO_INTERNAL_IN_TENSOR_IDX_MAP(my_op, INPUT_NUM_2, INDEX_0, INDEX_1);
+REG_MS_TO_INTERNAL_OUT_TENSOR_IDX_MAP(my_op, OUTPUT_NUM_1, INDEX_0);
+
+} // namespace ms_custom_ops
+
+// 注册算子到 MindSpore 框架
+MS_CUSTOM_OPS_REGISTER(my_op, CustomMyOpFuncImpl, CustomMyOp);
 ```
+
+**重要说明**：
+- GraphMode 算子需要实现 `CreateKernel` 方法来创建内部算子
+- 基类 `InternalKernelMod` 已经实现了 `Resize` 和 `Launch` 的通用逻辑
+- 需要正确注册算子名称映射和输入输出索引映射
+- 如果算子需要额外的工作空间，可以在 `UpdateParam` 中设置 `workspace_size_list_`
+- 算子需要同时实现 `OpFuncImpl` 类来处理形状和类型推断
 
 ### 2. 添加 Python 接口
 
@@ -302,7 +412,69 @@ def test_my_op(exec_mode):
 
 ## 高级特性
 
-### 1. Hash 缓存优化
+### 1. 双模式执行机制
+
+#### GraphMode Resize 接口机制
+
+GraphMode 算子中的 `Resize` 接口是处理动态形状变化的核心机制：
+
+#### 基类 Resize 功能
+`InternalKernelMod` 基类的 `Resize` 方法自动处理：
+- **形状更新**：将输入输出张量的形状信息转换为内部格式
+- **内核重建**：当参数变化时自动重建内部算子内核
+- **Tiling 缓存**：智能缓存和复用 Tiling 策略
+- **内存管理**：自动管理工作空间内存分配
+
+#### 自定义 Resize 逻辑
+子类通常不需要重写 `Resize` 方法，基类已经处理了所有通用逻辑。如果需要添加特定逻辑，可以重写 `UpdateParam` 方法：
+
+```cpp
+bool UpdateParam(const std::vector<KernelTensor*> &inputs,
+                 const std::vector<KernelTensor*> &outputs) override {
+    // 验证输入形状
+    auto input_shape = inputs[0]->GetShapeVector();
+    if (input_shape.size() != 3) {
+        MS_LOG(ERROR) << "Input shape must be 3D";
+        return false;
+    }
+    
+    // 设置工作空间大小（如果需要）
+    workspace_size_list_ = {input_shape[0] * input_shape[1] * sizeof(float)};
+    
+    return true;
+}
+```
+
+#### PyBoost 动态执行机制
+
+PyBoost 模式下的算子执行采用动态方式：
+
+```cpp
+// 主要执行流程
+void LaunchKernel() {
+    // 1. 准备输入输出张量
+    tensor::TensorPtrList inputs;
+    for (const auto &input : this->inputs()) {
+        inputs.push_back(input.is_defined() ? input.tensor() : nullptr);
+    }
+    
+    // 2. 转换形状信息
+    tensor::TensorPtrList outputs;
+    TransInternalShapes(inputs, outputs);
+    
+    // 3. 启动内核执行
+    LAUNCH_INTERNAL(_op_name_, this->_device_context_, this->stream_id(),
+                    inputs, outputs);
+}
+```
+
+**PyBoost 特点**：
+- **动态执行**：每次调用都会重新计算 hash 和创建内核
+- **自动缓存**：框架自动缓存相同配置的算子实例
+- **内存管理**：自动管理工作空间内存的分配和释放
+- **异步执行**：支持异步执行和流管理
+
+### 2. Hash 缓存优化
 
 框架自动为算子提供基于 hash 的缓存机制：
 
@@ -343,6 +515,13 @@ profiler.analyse()
 
 ### 3. 常见问题
 
+**Q: Resize 接口返回 KRET_RESIZE_FAILED**  
+A: 检查以下几点：
+1. 确保 `CreateKernel` 方法正确实现并返回有效的内部算子
+2. 验证 `UpdateParam` 方法是否正确处理参数
+3. 检查输入输出索引映射是否正确注册
+4. 查看日志确认具体的失败原因
+
 **Q: 编译失败提示找不到 CANN 环境**  
 A: 确保正确安装昇腾 CANN 工具包，并设置环境变量：
 ```bash
@@ -354,6 +533,13 @@ A: 检查是否正确处理了 Parameter 和 Tensor 的区别，Graph 模式下�
 
 **Q: 性能不如预期**  
 A: 1) 检查是否正确使用了缓存机制；2) 确认内存访问模式是否高效；3) 使用 Profiler 定位瓶颈。
+
+**Q: PyBoost 模式下算子执行失败**  
+A: 检查以下几点：
+1. 确保 `CreateKernel` 方法正确实现并返回有效的内部算子
+2. 验证 `LaunchKernel` 方法中的张量处理逻辑
+3. 检查 `Setup` 方法中的参数设置和 hash 计算
+4. 确认 Python 模块注册是否正确
 
 ## 示例：reshape_and_cache 算子
 
