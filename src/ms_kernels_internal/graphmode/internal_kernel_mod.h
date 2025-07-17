@@ -22,7 +22,6 @@
 
 #include "common/kernel.h"
 #include "include/internal.h"
-#include "plugin/device/ascend/kernel/custom/custom_kernel_factory.h"
 #include "tiling_mem_mgr.h"
 
 #include "debug/profiler/profiling.h"
@@ -30,6 +29,7 @@
 #include "internal_kernel_in_out_map.h"
 #include "internal_spinlock.h"
 #include "internal_tiling_cache.h"
+#include "module.h"
 
 namespace ms_custom_ops {
 class InternalKernelMod : public KernelMod {
@@ -108,11 +108,9 @@ private:
 using InternalKernelModPtr = std::shared_ptr<InternalKernelMod>;
 using InternalKernelModPtrList = std::vector<InternalKernelModPtr>;
 
-#define MS_CUSTOM_INTERNAL_KERNEL_FACTORY_REG(PRIM_NAME_STR,                   \
-                                              INTERNAL_NAME_VAR, DERIVE)       \
-  MS_CUSTOM_KERNEL_FACTORY_REG(#PRIM_NAME_STR, DERIVE);                        \
+#define MS_CUSTOM_INTERNAL_KERNEL_NAME_REG(PRIM_NAME_STR, INTERNAL_NAME_VAR)   \
   static const InternalNameRegistrar                                           \
-      g_##PRIM_NAME_STR##_ms_to_internal_mapper(#PRIM_NAME_STR,                \
+      g_##PRIM_NAME_STR##_ms_to_internal_mapper("Custom_" #PRIM_NAME_STR,      \
                                                 INTERNAL_NAME_VAR);
 
 } // namespace ms_custom_ops

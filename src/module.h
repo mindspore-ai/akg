@@ -17,6 +17,7 @@
 #ifndef MS_CUSTOM_OPS_MODULE_H_
 #define MS_CUSTOM_OPS_MODULE_H_
 
+#include "plugin/device/ascend/kernel/custom/custom_kernel_factory.h"
 #include <functional>
 #include <pybind11/pybind11.h>
 #include <string>
@@ -83,4 +84,17 @@ private:
   }                                                                            \
   static void CONCATENATE(func_register_, __LINE__)(pybind11::module_ & m)
 
+#define MS_CUSTOM_OPS_REGISTER(OpName, OpFuncImplClass, KernelClass)           \
+  namespace mindspore {                                                        \
+  namespace ops {                                                              \
+  static OpFuncImplClass g##OpName##FuncImplReal;                              \
+  OpFuncImpl &gCustom_##OpName##FuncImpl = g##OpName##FuncImplReal;            \
+  } /* namespace ops */                                                        \
+  } /* namespace mindspore */                                                  \
+                                                                               \
+  namespace ms_custom_ops {                                                    \
+  using namespace mindspore::ops;                                              \
+  using namespace mindspore::kernel;                                           \
+  MS_CUSTOM_KERNEL_FACTORY_REG("Custom_" #OpName, KernelClass);                \
+  } /* namespace ms_custom_ops */
 #endif // MS_CUSTOM_OPS_MODULE_H_

@@ -28,11 +28,11 @@
 #include "common/kernel.h"
 #include "include/common/utils/utils.h"
 #include "kernel/ascend/acl_ir/op_api_exec.h"
-#include "utils/ms_utils.h"
+#include "module.h"
 #include "plugin/res_manager/ascend/mem_manager/ascend_memory_manager.h"
 #include "plugin/res_manager/ascend/stream_manager/ascend_stream_manager.h"
 #include "runtime/hardware/device_context_manager.h"
-#include "plugin/device/ascend/kernel/custom/custom_kernel_factory.h"
+#include "utils/ms_utils.h"
 
 namespace ms_custom_ops {
 using namespace mindspore;
@@ -228,9 +228,6 @@ class AscendCKernelMod : public KernelMod {
 private:
   std::string fullname_;
 };
-
-#define MS_ASCENDC_KERNEL_FACTORY_REG(NAME, DERIVE_CLASS) MS_CUSTOM_KERNEL_FACTORY_REG(#NAME, DERIVE_CLASS)
-
 }  // namespace ms_custom_ops
 
 #endif  // MS_CUSTOM_OPS_OP_DEF_ASCENDC_GRAPHMODE_ASCENDC_KERNEL_MOD_H_

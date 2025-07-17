@@ -111,11 +111,13 @@ public:
 };
 #define INTERNEL_KERNEL_IN_OUT_MUTABLE_LENGTH 999
 #define REG_MS_TO_INTERNAL_IN_TENSOR_IDX_MAP(op, map_cnt, ...)                 \
-  static InternalKernelModInOutRegistrar g_internal_map_in_##op##map_cnt(      \
-      #op, 0, map_cnt, ##__VA_ARGS__);
+  static InternalKernelModInOutRegistrar                                       \
+      g_internal_map_in_Custom_##op##map_cnt("Custom_" #op, 0, map_cnt,        \
+                                             ##__VA_ARGS__);
 #define REG_MS_TO_INTERNAL_OUT_TENSOR_IDX_MAP(op, map_cnt, ...)                \
-  static InternalKernelModInOutRegistrar g_internal_map_out_##op##map_cnt(     \
-      #op, 1, map_cnt, ##__VA_ARGS__);
+  static InternalKernelModInOutRegistrar                                       \
+      g_internal_map_out_Custom_##op##map_cnt("Custom_" #op, 1, map_cnt,       \
+                                              ##__VA_ARGS__);
 } // namespace ms_custom_ops
 
 #endif // MS_CUSTOM_OPS_INTERNAL_KERNEL_IN_OUT_MAP_H_

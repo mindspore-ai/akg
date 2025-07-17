@@ -15,10 +15,10 @@
  */
 
 #include "ascendc_kernel_mod.h"
-#include <vector>
+#include "ms_extension/api.h"
 #include <map>
 #include <string>
-#include "ms_extension/api.h"
+#include <vector>
 
 namespace mindspore {
 namespace ops {
@@ -36,9 +36,6 @@ public:
 
   bool GeneralInferRegistered() const override { return true; }
 };
-
-AddCustomOpFuncImpl gAddFuncImpl;
-OpFuncImpl &gCustom_addFuncImpl = gAddFuncImpl;
 } // namespace ops
 } // namespace mindspore
 
@@ -60,8 +57,7 @@ public:
   }
 private:
   DEFINE_GET_WORKSPACE_FOR_RESIZE();
-
 };
-
-MS_ASCENDC_KERNEL_FACTORY_REG(Custom_add, AddCustomAscend);
 } // namespace ms_custom_ops
+
+MS_CUSTOM_OPS_REGISTER(add, AddCustomOpFuncImpl, AddCustomAscend);

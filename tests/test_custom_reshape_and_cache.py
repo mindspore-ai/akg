@@ -14,12 +14,10 @@
 # ============================================================================
 """ tests_custom_pyboost_ascend """
 
-import os
 import numpy as np
 import mindspore as ms
 from mindspore.ops import CustomOpBuilder, ModuleWrapper
 from mindspore import Tensor, context, Parameter, ops
-from tests.mark_utils import arg_mark
 import pytest
 import ms_custom_ops
 
