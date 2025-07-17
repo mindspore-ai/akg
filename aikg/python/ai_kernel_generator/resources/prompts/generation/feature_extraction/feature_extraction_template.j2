@@ -7,11 +7,11 @@
   **op_type**：给出算子的类型，包括但不限于elementwise，reduce（reduce_all，reduce_x，reduce_y），broadcast，tranpose，matmul等
   **op_axes_size**：给出每一根轴的大小，自行根据数据量判断是small,middle还是big；
   **op_axes_type**：给出每一根轴的类型；
-  **op_name**: {{ op_name }}
+  **op_name**: 根据算子实现和输入特征简洁命名，比如square_matmul、standard_matmul、tall_skinny_matmul；
+  **description**：请简单扼要地说明算子类型，shape特征，以及对应的调度方案；
   **backend**: {{ backend }}
   **arch**: {{ arch }}
   **impl_type**: {{ impl_type }}
-  **description**：请简单扼要地说明算子类型，shape特征，以及对应的调度方案
 
 3. 示例
 ```
@@ -19,10 +19,10 @@
     "op_axes_size": ["small", "big"],
     "op_axes_type": ["elementwise", "elementwise"],
     "op_name": "elu",
+    "description": "elementwise算子，批量轴小（16），特征轴大（16384）核数设置为16，每个核处理16384个数据，批量轴完全映射到16个核上",
     "backend": "ascend",
     "arch": "ascend310p3",
-    "impl_type": "swft",
-    "description": "elementwise算子，批量轴小（16），特征轴大（16384）核数设置为16，每个核处理16384个数据，批量轴完全映射到16个核上"
+    "impl_type": "swft"
 ```
 
 【注意事项】请尽可能使用中文进行思考分析

@@ -1,28 +1,60 @@
 import pytest
-import json
-import os
 from pathlib import Path
 from ai_kernel_generator import get_project_root
-from ai_kernel_generator.database.database_rag import DatabaseRAG
+from ai_kernel_generator.database.database_rag import DatabaseRAG, DEFAULT_DATABASE_PATH
+
+DEFAULT_BENCHMARK_PATH = Path(get_project_root()).parent.parent / "benchmark"
+
+def gen_task_code(framework_path: str = "", impl_path: str = ""):
+    framework_code = ""
+    impl_code = ""
+    if framework_path:
+        framework_code = Path(framework_path).read_text()
+    if impl_path:
+        impl_code = Path(impl_path).read_text()
+    return {
+        "framework_code": framework_code,
+        "impl_code": impl_code
+    }
+
 
 @pytest.mark.level0
-def test_database_rag():
+def test_insert():
     # 初始化系统
     config_path = Path(get_project_root()) / "database" / "rag_config.yaml"
     db_system = DatabaseRAG(str(config_path))
 
-    # 准备查询特征
-    query_features = {
-        "type": "reduce+elementwise融合",
-        "name": "custom_softmax",
-        "shape": "reduce轴:64, 非reduce轴:8192",
-        "description": "包含exp和sum操作的融合算子",
-        "arch": "ascend310p3"
-    }
+    arch = "ascend910b4"
+    backend="ascend"
+    framework = "numpy"
+    impl_type="triton"
 
-    # 检索优化方案
-    results = db_system.find(query_features)
-    # 输出结果
+    # 插入示例
+    op_name_list = ["2_standard_matrix_multiplication_", "3_batched_matrix_multiplication"]
+    for op_name in op_name_list:
+        task_code = gen_task_code(
+            framework_path=DEFAULT_BENCHMARK_PATH / "kernelbench" / "numpy" / op_name / f"{op_name}_{framework}.py",
+            impl_path=DEFAULT_DATABASE_PATH / "triton" / arch / op_name / f"{op_name}_{impl_type}.py"
+        )
+        db_system.insert(task_code, backend, arch, impl_type, framework)
+
+
+@pytest.mark.level0
+def test_sample():
+    # 初始化系统
+    config_path = Path(get_project_root()) / "database" / "rag_config.yaml"
+    db_system = DatabaseRAG(str(config_path))
+
+    arch = "ascend910b4"
+    backend="ascend"
+    framework = "numpy"
+    impl_type="triton"
+
+    # 查询示例
+    op_name = "1_square_matrix_multiplication_"
+    query_code_path = DEFAULT_BENCHMARK_PATH / "kernelbench" / "numpy" / op_name / f"{op_name}_{framework}.py"
+    query_code = Path(query_code_path).read_text()
+    results = db_system.sample(query_code, backend=backend, arch=arch, impl_type=impl_type)
     print("===================================================")
     print(f"找到 {len(results)} 个匹配的优化方案:")
     for i, res in enumerate(results, 1):
@@ -32,44 +64,20 @@ def test_database_rag():
         print(f"特征描述: {res['description'][:100]}...")
     print("===================================================")
 
-    # 添加示例（向量）
-    new_metadata = {
-        "op_type": "reduce+elementwise融合",
-        "op_name": "custom_softmax",
-        "op_shape": "reduce轴:64, 非reduce轴:8192",
-        "description": "包含exp和sum操作的融合算子",
-        "arch": "ascend310p3"
-    }
-    meta_path = Path(get_project_root()).parent.parent / "database" / "operators" / "ascend310p3" / "custom_softmax" / "metadata.json"
-    os.makedirs(meta_path.parent, exist_ok=True)
-    print(str(meta_path.parent))
-    with open(str(meta_path), 'w', encoding='utf-8') as f:
-        json.dump(new_metadata, f, ensure_ascii=False, indent=4)
-    db_system.test_insert("custom_softmax", "ascend310p3")
 
-    # 检索优化方案
-    results = db_system.find(query_features)
-    # 输出结果
-    print("===================================================")
-    print(f"找到 {len(results)} 个匹配的优化方案:")
-    for i, res in enumerate(results, 1):
-        print(f"\n#{i} 相似度: {res['similarity_score']:.4f}")
-        print(f"算子名称: {res['operator_name']}")
-        print(f"文件路径: {res['file_path']}")
-        print(f"特征描述: {res['description'][:100]}...")
-    print("===================================================")
+@pytest.mark.level0
+def test_delete():
+    # 初始化系统
+    config_path = Path(get_project_root()) / "database" / "rag_config.yaml"
+    db_system = DatabaseRAG(str(config_path))
+
+    arch = "ascend910b4"
+    backend="ascend"
+    framework = "numpy"
+    impl_type="triton"
 
     # 删除示例
-    db_system.delete("custom_softmax", "ascend310p3")
-
-    # 检索优化方案
-    results = db_system.find(query_features)
-    # 输出结果
-    print("===================================================")
-    print(f"找到 {len(results)} 个匹配的优化方案:")
-    for i, res in enumerate(results, 1):
-        print(f"\n#{i} 相似度: {res['similarity_score']:.4f}")
-        print(f"算子名称: {res['operator_name']}")
-        print(f"文件路径: {res['file_path']}")
-        print(f"特征描述: {res['description'][:100]}...")
-    print("===================================================")
+    op_name = "3_batched_matrix_multiplication"
+    impl_path=DEFAULT_DATABASE_PATH / "triton" / arch / op_name / f"{op_name}_{impl_type}.py"
+    impl_code = Path(impl_path).read_text()
+    db_system.delete(impl_code, backend, arch, impl_type)

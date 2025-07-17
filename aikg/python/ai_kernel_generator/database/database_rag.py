@@ -15,12 +15,14 @@
 import asyncio
 from pathlib import Path
 import shutil
+import os
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 from ai_kernel_generator.database.vector_store import VectorStore
 from ai_kernel_generator import get_project_root
 from ai_kernel_generator.core.agent.utils.feature_extraction import FeatureExtraction
 from ai_kernel_generator.utils.common_utils import get_md5_hash
+from ai_kernel_generator.config.config_validator import load_config
 
 DEFAULT_DATABASE_PATH = Path(get_project_root()).parent.parent / "database"
 
@@ -71,14 +73,14 @@ class DatabaseRAG(BaseRetriever):
         # 使用基类提供的标准方法检索文档
         # 特征提取
         feature_extractor = FeatureExtraction(
-            task_code=task_code,
-            model_config={"feature_extraction": self.model_config},
+            task_desc=task_code,
+            model_config=load_config().get("agent_model_config"),
             impl_type=impl_type,
             backend=backend,
             arch=arch
         )
         extracted_features, _, _ = asyncio.run(feature_extractor.run())
-        return ', '.join([f"{k}: {v}" for k, v in extracted_features.items()])
+        return extracted_features.strip("```json").strip("```").strip()
     
 
     def sample(self, code: str, stragegy_mode: str = "random", backend: str = "", arch: str = "", impl_type: str = ""):
@@ -89,8 +91,8 @@ class DatabaseRAG(BaseRetriever):
         Returns:
             list: 包含相似度、算子名称、文件路径和描述的字典列表
         """
-        operator_features = self.feature_extractor(code, impl_type, backend, arch)
-        feature_invariants = get_md5_hash(impl_type, backend, arch)
+        operator_features = self.feature_extractor(code, impl_type, backend, arch).replace("\n", ", ")
+        feature_invariants = get_md5_hash(impl_type=impl_type, backend=backend, arch=arch)
         docs = self._get_relevant_documents(operator_features, feature_invariants)
 
         return [
@@ -104,33 +106,36 @@ class DatabaseRAG(BaseRetriever):
             for doc in docs
         ]
     
-    def insert(self, task_code, op_name: str = "", framework:str = "", backend: str = "", arch: str = "", impl_type: str = ""):
+    def insert(self, task_code, backend: str, arch: str, impl_type: str, framework:str = "", op_name: str = ""):
         """
         插入新的算子调度方案
         """
-        md5_hash = get_md5_hash(task_code, op_name=op_name, impl_type=impl_type, backend=backend, arch=arch)
-
         framework_code = task_code.get("framework_code", "")
-        designer_code = task_code.get("designer_code", "")
-        coder_code = task_code.get("coder_code", "")
+        impl_code = task_code.get("impl_code", "")
+
+        md5_hash = get_md5_hash(impl_code=impl_code, op_name=op_name, impl_type=impl_type, backend=backend, arch=arch)
+
         operator_path = Path(self.database_path) / "operators"
-        impl_file = operator_path / arch / op_name / md5_hash
-        if designer_code:
-            impl_file = impl_file / "aul.py"
+        file_path = operator_path / arch / impl_type / md5_hash
+        os.makedirs(file_path, exist_ok=True)
+        if impl_code:
+            impl_file = file_path / f"{impl_type}.py"
             with open(impl_file, "w", encoding="utf-8") as f:
-                f.write(designer_code)
-        
-        if coder_code:
-            impl_file = impl_file / f"{impl_type}.py"
-            with open(impl_file, "w", encoding="utf-8") as f:
-                f.write(task_code)
+                f.write(impl_code)
         
         if framework_code:
-            impl_file = impl_file / f"{framework}.py"
-            with open(impl_file, "w", encoding="utf-8") as f:
+            if not framework:
+                raise ValueError(f"framework={framework}：当提供框架代码时，必须指定框架名称")
+            framework_file = file_path / f"{framework}.py"
+            with open(framework_file, "w", encoding="utf-8") as f:
                 f.write(framework_code)
 
-        self.vector_store.insert(op_name, arch)
+        features = self.feature_extractor(task_code, impl_type, backend, arch)
+        metadata_file = file_path / "metadata.json"
+        with open(metadata_file, "w", encoding="utf-8") as f:
+                f.write(features)
+
+        self.vector_store.insert(arch, impl_type, md5_hash)
 
     def update(self):
         """
@@ -138,18 +143,21 @@ class DatabaseRAG(BaseRetriever):
         """
         pass
 
-    def delete(self, op_name, arch, type=""):
+    def delete(self, impl_code, backend: str, arch: str, impl_type: str, op_name: str = ""):
         """
         删除算子调度方案
         """
+        md5_hash = get_md5_hash(impl_code=impl_code, op_name=op_name, impl_type=impl_type, backend=backend, arch=arch)
+
         operator_path = Path(self.database_path) / "operators"
-        file_path = operator_path / arch / op_name
-        if type:
-            file_path = file_path / f"{type}.py"
-            file_path.unlink()
-        else:
-            shutil.rmtree(file_path)
-        self.vector_store.delete(op_name, arch)
-    
-    def test_insert(self, op_name, arch):
-        self.vector_store.insert(op_name, arch)
+        file_path = operator_path / arch / impl_type / md5_hash
+        shutil.rmtree(file_path)
+        # 删除空的上级目录
+        current_dir = file_path.parent
+        while current_dir.exists() and current_dir != operator_path:
+            if not any(current_dir.iterdir()):
+                current_dir.rmdir()
+                current_dir = current_dir.parent
+            else:
+                break
+        self.vector_store.delete(md5_hash)

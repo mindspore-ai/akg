@@ -20,6 +20,7 @@ from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.documents import Document
 from ai_kernel_generator import get_project_root
+from ai_kernel_generator.utils.common_utils import get_md5_hash
 
 os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
 
@@ -77,7 +78,6 @@ class VectorStore:
         # 递归查找所有metadata.json文件（支持任意目录结构）
         for metadata_file in root_dir.rglob("metadata.json"):
             op_subdir = metadata_file.parent  # 算子目录为元数据文件所在目录
-            op_name = op_subdir.name  # 算子名称为目录名
             
             # 跳过隐藏目录中的文件
             if any(part.startswith('.') for part in op_subdir.parts):
@@ -87,35 +87,48 @@ class VectorStore:
             with open(metadata_file, 'r') as f:
                 metadata = json.load(f)
             
+            arch = metadata.get('arch', '')
+            impl_type = metadata.get('impl_type', '')
+            backend = metadata.get('backend', '')
+            feature_invariants = get_md5_hash(impl_type=impl_type, backend=backend, arch=arch)
             # 创建检索文档
             doc = Document(
                 page_content=metadata['description'],
                 metadata={
-                    "operator_name": op_name,
-                    "arch": metadata.get('arch', ''),
-                    "operator_type": metadata.get('type', ''),
-                    "operator_shape": metadata.get('shape', ''),
+                    "operator_name": metadata.get('op_name', ''),
+                    "operator_type": metadata.get('op_type', ''),
+                    "operator_shape": metadata.get('op_axes_size', ''),
                     "file_path": str(op_subdir),
+                    "feature_invariants": feature_invariants
                 }
             )
             documents.append(doc)
         # 创建向量存储
-        vector_store = FAISS.from_documents(
-            documents=documents,
-            embedding=self.embedding_model
-        )
+        if not documents:
+            # 创建空向量存储
+            dummy_doc = Document(page_content="", metadata={})
+            vector_store = FAISS.from_documents([dummy_doc], self.embedding_model)
+            # 删除 dummy 文档
+            dummy_id = list(vector_store.index_to_docstore_id.values())[0]
+            vector_store.delete([dummy_id])
+        else:
+            vector_store = FAISS.from_documents(
+                documents=documents,
+                embedding=self.embedding_model
+            )
         
         # 保存索引
         vector_store.save_local(self.index_path)
         return vector_store
 
-    def insert(self, op_name: str, arch: str):
+    def insert(self, arch: str, impl_type: str, md5_hash: str):
         """向向量存储添加新的算子特征文档
         Args:
-            op_name (str): 算子名称。
             arch (str): 架构名称。
+            impl_type (str): 实现类型。
+            md5_hash (str): 哈希值
         """
-        metadata_path = Path(self.database_path) / "operators" / arch / op_name / 'metadata.json'
+        metadata_path = Path(self.database_path) / "operators" / arch / impl_type / md5_hash / 'metadata.json'
         if not metadata_path.exists():
             raise ValueError(f"算子元数据文件 {str(metadata_path)} 不存在")
         
@@ -126,32 +139,36 @@ class VectorStore:
         op_dir = metadata_path.parent
 
         # 创建文档对象
+        feature_invariants = get_md5_hash(impl_type=impl_type, backend=metadata.get('backend', ''), arch=arch)
+        # 创建检索文档
         doc = Document(
             page_content=metadata['description'],
             metadata={
-                "operator_name": op_name,
-                "arch": arch,
-                "operator_type": metadata.get('type', ''),
-                "operator_shape": metadata.get('shape', ''),
+                "operator_name": metadata.get('op_name', ''),
+                "operator_type": metadata.get('op_type', ''),
+                "operator_shape": metadata.get('op_axes_size', ''),
                 "file_path": str(op_dir),
+                "feature_invariants": feature_invariants
             }
         )
+
         # 检查是否已存在相同算子的文档（去重并覆盖）
-        self.delete(op_name, arch)
+        self.delete(md5_hash)
         
         # 添加到向量存储并保存
         self.vector_store.add_documents([doc])
         self.vector_store.save_local(self.index_path)
-        print(f"成功添加算子{op_name} {arch}架构到向量索引")
+        print(f"成功添加算子md5_hash={md5_hash}到向量索引")
 
-    def delete(self, op_name: str, arch: str):
+    def delete(self, md5_hash: str):
         existing_ids = list(self.vector_store.index_to_docstore_id.values())
         for doc_id in existing_ids:
             existing_doc = self.vector_store.docstore.search(doc_id)
-            if existing_doc.metadata.get("operator_name") == op_name and existing_doc.metadata.get("arch") == arch:
+            metadata_md5_hash = existing_doc.metadata.get("file_path").split('/')[-1]
+            if metadata_md5_hash == md5_hash:
                 # 已存在相同算子的文档，删除旧文档
                 self.vector_store.delete([doc_id])
                 self.vector_store.save_local(self.index_path)
-                print(f"成功从向量索引中删除算子{op_name} {arch}架构")
+                print(f"成功从向量索引中删除算子md5_hash={md5_hash}")
                 return 
-        print(f"算子{op_name} {arch}架构不存在于向量索引中")
+        print(f"算子md5_hash={md5_hash}不存在于向量索引中")

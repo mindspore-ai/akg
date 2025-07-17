@@ -22,7 +22,6 @@ async def test_feature_extract():
     with open(task_desc_path, "r", encoding="utf-8") as f:
         task_desc = f.read()
     feature = FeatureExtraction(
-        op_name=op_name,
         task_desc=task_desc,
         model_config=model_name_dict,
         impl_type=impl_type,

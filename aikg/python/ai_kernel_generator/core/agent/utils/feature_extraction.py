@@ -5,8 +5,7 @@ from ai_kernel_generator.utils.common_utils import ParserFactory, get_md5_hash
 logger = logging.getLogger(__name__)
 
 class FeatureExtraction(AgentBase):
-    def __init__(self, op_name: str, task_desc: str, model_config: dict, impl_type: str = "", backend: str = "", arch: str = ""):
-        self.op_name = op_name
+    def __init__(self, task_desc: str, model_config: dict, impl_type: str = "", backend: str = "", arch: str = ""):
         self.task_desc = task_desc
         self.model_config = model_config
         self.impl_type = impl_type
@@ -24,7 +23,6 @@ class FeatureExtraction(AgentBase):
         self.feature_extraction_template = self.load_template("feature_extraction/feature_extraction_template.j2")
 
         self.feature_extraction_input = {
-            "op_name": self.op_name,
             "task_desc": self.task_desc,
             "impl_type": self.impl_type,
             "backend": self.backend,

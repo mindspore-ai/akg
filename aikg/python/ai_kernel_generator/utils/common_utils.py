@@ -144,11 +144,14 @@ class ParserFactory:
             cls._feature_parser = cls.create_output_parser(
                 "FeatureBlock",
                 {
-                    'op_type': (str, ...),
-                    'op_name_primary': (str, ...),
-                    'op_name_secondary': (list[str], ...),
-                    'op_shape': (list[str], ...),
-                    'description': (str, ...)
+                    "op_type": (str, ...),
+                    "op_axes_size": (list[str], ...),
+                    "op_axes_type": (list[str], ...),
+                    "op_name": (str, ...),
+                    "description": (str, ...),
+                    "backend": (str, ...),
+                    "arch": (str, ...),
+                    "impl_type": (str, ...)
                 }
             )
         return cls._feature_parser
