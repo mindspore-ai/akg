@@ -68,7 +68,6 @@ class TritonCoder(AgentBase):
 
         # 初始化Triton生成模板
         self.triton_gen_prompt = self.load_template("triton/triton_gen_template.j2")
-        self.triton_direct_gen_prompt = self.load_template("triton/triton_gen_template.j2")
         self.triton_fix_prompt = self.load_template("triton/triton_fix_template.j2")
 
         # 准备基础文档数据
@@ -86,11 +85,6 @@ class TritonCoder(AgentBase):
         self.triton_gen_input = {
             "aul_code": "",
             "from_aul": True,
-            **self.triton_base_doc,
-        }
-        self.triton_direct_gen_input = {
-            "aul_code": "",  # 空的aul_code字段
-            "from_aul": False,
             **self.triton_base_doc,
         }
         self.triton_fix_input = {
@@ -121,6 +115,10 @@ class TritonCoder(AgentBase):
                 self.triton_fix_input["error_log"] = informations
             else:
                 self.triton_fix_input["suggestions"] = informations
+        
+        if self.is_coder_only_mode(action_type):
+            self.triton_gen_input["from_aul"] = False
+            self.triton_fix_input["from_aul"] = False
 
     def is_coder_only_mode(self, action_type: ActionType) -> bool:
         """判断是否为coder_only模式"""
@@ -158,7 +156,7 @@ class TritonCoder(AgentBase):
         if action_type == ActionType.DO_CODER:
             return await self.run_llm(self.triton_gen_prompt, self.triton_gen_input, self.model_config["triton_coder"])
         elif action_type == ActionType.DO_CODER_DIRECT:
-            return await self.run_llm(self.triton_direct_gen_prompt, self.triton_direct_gen_input, self.model_config["triton_coder"])
+            return await self.run_llm(self.triton_gen_prompt, self.triton_gen_input, self.model_config["triton_coder"])
         elif action_type == ActionType.FIX_CODER:
             return await self.run_llm(self.triton_fix_prompt, self.triton_fix_input, self.model_config["triton_coder_fix"])
         else:
