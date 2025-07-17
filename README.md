@@ -1,8 +1,20 @@
-# ms_custom_ops 自定义算子使用指南
+# ms_custom_ops - MindSpore 自定义算子框架
 
-## 概述
+[![License](https://img.shields.io/badge/License-Apache%202.0lue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![MindSpore](https://img.shields.io/badge/MindSpore-2.6-green.svg)](https://www.mindspore.cn/)
 
-ms_custom_ops 提供了一套完整的自定义算子框架，支持在 PyNative 和 Graph 两种执行模式下高效实现自定义算子。本文档将指导您如何使用这套框架开发和集成自定义算子。
+## 📖 概述
+
+`ms_custom_ops` 是一个专为 MindSpore 设计的自定义算子开发框架，支持在昇腾 NPU 上高效实现自定义算子。该框架提供了完整的 PyNative 和 Graph 两种执行模式支持，内置缓存优化、内存管理等高级特性，让开发者能够快速构建高性能的自定义算子。
+
+### ✨ 核心特性
+
+- **双模式支持**: 同时支持 PyNative 动态执行和 Graph 静态编译模式
+- **昇腾优化**: 专为昇腾 NPU 设计，充分利用硬件特性
+- **缓存机制**: 内置算子缓存和 Tiling 缓存，显著提升性能
+- **内存管理**: 自动管理设备内存和主机内存，确保内存安全
+- **开发友好**: 提供完整的开发工具链和测试框架
 
 ## 系统架构
 
@@ -12,19 +24,96 @@ ms_custom_ops 提供了一套完整的自定义算子框架，支持在 PyNative
 2. **GraphMode 框架**：用于静态图编译模式
 3. **共享组件**：包括内存管理、缓存优化等通用功能
 
+### 核心模块说明
+
+#### 1. ms_kernels_internal - 内部算子框架
+- **pyboost/**: PyNative模式下的算子实现
+  - `internal_pyboost_runner.h/cc`: PyBoost运行器基类，提供算子注册和执行框架
+  - `internal_pyboost_utils.h/cc`: PyBoost工具函数，提供内存管理和缓存功能
+  - `ops/`: 具体算子实现目录
+
+- **graphmode/**: Graph模式下的算子实现
+  - `internal_kernel_mod.h/cc`: 内部内核模块基类，提供Graph模式算子框架
+  - `internal_kernel_utils.h/cc`: 内核工具函数
+  - `internal_kernel_in_out_map.h/cc`: 输入输出映射管理
+  - `ops/`: 具体算子实现目录
+
+#### 2. ascendc - 昇腾C算子框架
+- **kernel/**: 昇腾内核实现
+  - `op_kernel/`: 设备端算子内核
+  - `op_host/`: 主机端算子实现
+- **pyboost/**: 昇腾PyBoost实现
+- **graphmode/**: 昇腾Graph模式实现
+- **op_compiler.py**: 算子编译器
+
+#### 3. 共享基础设施
+- **tiling_mem_mgr.h/cc**: Tiling内存管理器，负责设备内存分配和释放
+- **internal_tiling_cache.h/cc**: 内部Tiling缓存，提供算子缓存和Tiling策略缓存
+- **internal_helper.h/cc**: 内部辅助函数，提供通用工具函数
+- **internal_spinlock.h**: 自旋锁实现，用于多线程同步
+
 ### 目录结构
 
 ```
 ms_custom_ops/
-├── src/
-│   ├── ms_kernels_internal/
+├── src/                       # 源代码目录
+│   ├── module.h               # 模块头文件
+│   ├── module.cc              # 模块实现文件
+│   ├── CMakeLists.txt         # CMake构建配置
+│   ├── ms_kernels_internal/   # 内部算子实现
+│   │   ├── CMakeLists.txt     # 内部算子构建配置
+│   │   ├── internal_helper.h/cc        # 内部辅助函数
+│   │   ├── internal_spinlock.h         # 自旋锁实现
+│   │   ├── tiling_mem_mgr.h/cc         # Tiling内存管理器
+│   │   ├── internal_tiling_cache.h/cc  # 内部Tiling缓存
 │   │   ├── pyboost/           # PyNative模式实现
-│   │   ├── graphmode/         # Graph模式实现
-│   │   └── 共享组件文件
-│   ├── swft/                  # SWFT相关组件
+│   │   │   ├── internal_pyboost_runner.h/cc    # PyBoost运行器基类
+│   │   │   ├── internal_pyboost_utils.h/cc     # PyBoost工具函数
+│   │   │   └── ops/           # PyBoost算子实现
+│   │   │       └── reshape_and_cache_runner.cc  # reshape_and_cache算子
+│   │   └── graphmode/         # Graph模式实现
+│   │       ├── internal_kernel_mod.h/cc         # 内部内核模块基类
+│   │       ├── internal_kernel_utils.h/cc       # 内部内核工具函数
+│   │       ├── internal_kernel_in_out_map.h/cc  # 输入输出映射
+│   │       └── ops/           # Graph模式算子实现
+│   │           └── reshape_and_cache.cc         # reshape_and_cache算子
 │   ├── ascendc/               # 昇腾C相关组件
-│   └── CMakeLists.txt
-└── tests/
+│   │   ├── CMakeLists.txt     # 昇腾C构建配置
+│   │   ├── op_compiler.py     # 算子编译器
+│   │   ├── kernel/            # 昇腾内核实现
+│   │   │   ├── op_kernel/     # 算子内核
+│   │   │   │   └── add_custom.cpp      # 自定义加法算子
+│   │   │   └── op_host/       # 算子主机端
+│   │   │       ├── add_custom.cpp      # 主机端加法算子
+│   │   │       └── add_custom_tiling.h # 加法算子Tiling配置
+│   │   ├── pyboost/           # 昇腾PyBoost实现
+│   │   │   ├── ascendc_pyboost_runner.h # 昇腾PyBoost运行器
+│   │   │   └── ops/           # 昇腾PyBoost算子
+│   │   │       └── add_runner.cc       # 加法算子运行器
+│   │   └── graphmode/         # 昇腾Graph模式实现
+│   │       ├── ascendc_kernel_mod.h/cc # 昇腾内核模块
+│   │       └── ops/           # 昇腾Graph模式算子
+│   │           └── add.cc             # 加法算子实现
+│   └── swft/                  # SWFT相关组件（预留）
+├── yaml/                      # 算子描述yaml目录
+│   ├── ascendc/               # 昇腾算子yaml
+│   │   └── add_op.yaml        # 加法算子配置
+│   └── ms_kernels_internal/   # 内部算子yaml
+│       └── reshape_and_cache_op.yaml  # reshape_and_cache算子配置
+├── python/                    # Python包目录
+│   └── ms_custom_ops/         # 主包目录
+│       └── __init__.py        # 包初始化文件
+├── tests/                     # 测试目录
+│   ├── test_add.py            # 加法算子测试
+│   └── test_custom_reshape_and_cache.py  # reshape_and_cache算子测试
+├── build/                     # 构建输出目录
+├── dist/                      # 分发目录
+├── setup.py                   # 安装脚本
+├── requirements.txt           # Python依赖
+├── version.txt                # 版本信息
+├── .gitignore                 # Git忽略文件
+├── .commit_id                 # 提交ID文件
+└── README.md                  # 项目说明文档
 ```
 
 ## 快速开始
@@ -98,6 +187,16 @@ output = net(key, value, key_cache, value_cache, slot_mapping, head_num)
 
 ## 开发自定义算子
 
+### 开发流程概览
+
+开发一个新的自定义算子需要以下步骤：
+
+1. **设计算子接口** - 确定输入输出和参数
+2. **实现算子逻辑** - 编写PyBoost和GraphMode实现
+3. **添加配置文件** - 创建YAML配置文件
+4. **编写测试用例** - 创建单元测试
+5. **编译和验证** - 构建并测试算子
+
 ### 1. 创建算子实现
 
 #### PyBoost 模式实现
@@ -159,9 +258,25 @@ def my_op(*args, **kwargs):
     return ops.Custom(func_type="internal", func_name="MyOp", out_shape=..., out_dtype=...)(*args, **kwargs)
 ```
 
-### 3. 编写测试
+### 3. 添加配置文件
 
-创建测试文件 `ms_custom_ops/tests/test_my_op.py`：
+在 `yaml/ms_kernels_internal/` 下创建算子配置文件：
+
+```yaml
+# my_op.yaml
+op_name: "MyOp"
+func_name: "MyOp"
+input_names: ["input1", "input2"]
+output_names: ["output"]
+input_dtypes: ["float16", "float16"]
+output_dtypes: ["float16"]
+input_shapes: ["dynamic", "dynamic"]
+output_shapes: ["dynamic"]
+```
+
+### 4. 编写测试
+
+创建测试文件 `tests/test_my_op.py`：
 
 ```python
 import pytest
@@ -264,6 +379,25 @@ output = ms_custom_ops.reshape_and_cache(
 )
 ```
 
+## 文件命名规范
+
+为了保持项目结构的一致性，请遵循以下命名规范：
+
+### 算子实现文件
+- **PyBoost模式**: `{op_name}_runner.cc` (如: `reshape_and_cache_runner.cc`)
+- **GraphMode模式**: `{op_name}.cc` (如: `reshape_and_cache.cc`)
+- **昇腾算子**: `{op_name}_custom.cpp` (如: `add_custom.cpp`)
+
+### 配置文件
+- **YAML配置**: `{op_name}_op.yaml` (如: `reshape_and_cache_op.yaml`)
+
+### 测试文件
+- **测试文件**: `test_{op_name}.py` (如: `test_reshape_and_cache.py`)
+
+### 头文件
+- **基类头文件**: 使用描述性名称 (如: `internal_pyboost_runner.h`)
+- **工具头文件**: 使用功能描述 (如: `internal_helper.h`)
+
 ## 贡献指南
 
 欢迎贡献新的自定义算子！请遵循以下步骤：
@@ -277,6 +411,7 @@ output = ms_custom_ops.reshape_and_cache(
 - 代码符合项目编码规范
 - 添加充分的单元测试
 - 更新相关文档
+- 遵循文件命名规范
 
 ## 许可证
 
