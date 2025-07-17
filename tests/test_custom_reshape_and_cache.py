@@ -33,16 +33,9 @@ def test_custom_reshape_and_cache(exec_mode, np_dtype, kv_dim):
     class MyNet(ms.nn.Cell):
         def __init__(self):
             super().__init__()
-            if exec_mode is context.PYNATIVE_MODE:
-                self.reshape_and_cache_func = ms_custom_ops.ReshapeAndCache
-            else:
-                def reshape_and_cache(key, value, key_cache, value_cache, slot_mapping, head_num):
-                    mod = ModuleWrapper("custom_reshape_and_cache", ms_custom_ops)
-                    return mod.ReshapeAndCache(key, value, key_cache, value_cache, slot_mapping, head_num)
-                self.reshape_and_cache_func = reshape_and_cache
 
         def construct(self, key, value, key_cache, value_cache, slot_mapping, head_num):
-            return self.reshape_and_cache_func(key, value, key_cache, value_cache, slot_mapping, head_num)
+            return ms_custom_ops.reshape_and_cache(key, value, key_cache, value_cache, slot_mapping, head_num)
         
     num_slots = 50
     slot_size = 128

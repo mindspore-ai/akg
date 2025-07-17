@@ -53,7 +53,7 @@ public:
 
 // TODO
 CustomReshapeAndCacheOpFuncImpl gCustomReshapeAndCacheFuncImpl;
-OpFuncImpl &gCustom_ReshapeAndCacheFuncImpl = gCustomReshapeAndCacheFuncImpl;
+OpFuncImpl &gCustom_reshape_and_cacheFuncImpl = gCustomReshapeAndCacheFuncImpl;
 } // namespace ops
 } // namespace mindspore
 
@@ -84,10 +84,10 @@ protected:
   }
 };
 
-MS_CUSTOM_INTERNAL_KERNEL_FACTORY_REG(Custom_ReshapeAndCache,
+MS_CUSTOM_INTERNAL_KERNEL_FACTORY_REG(Custom_reshape_and_cache,
                                       internal::kInternalReshapeAndCacheOpName,
                                       CustomReshapeAndCache);
-REG_MS_TO_INTERNAL_IN_TENSOR_IDX_MAP(Custom_ReshapeAndCache, INPUT_NUM_5,
+REG_MS_TO_INTERNAL_IN_TENSOR_IDX_MAP(Custom_reshape_and_cache, INPUT_NUM_5,
                                      INDEX_0, INDEX_1, INDEX_2, INDEX_3,
                                      INDEX_4);
 } // namespace ms_custom_ops

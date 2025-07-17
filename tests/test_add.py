@@ -30,16 +30,9 @@ def test_custom_add(exec_mode, np_dtype):
     class MyNet(ms.nn.Cell):
         def __init__(self):
             super().__init__()
-            if exec_mode is context.PYNATIVE_MODE:
-                self.add = ms_custom_ops.Add
-            else:
-                def add(x, y):
-                    mod = ModuleWrapper("custom_add", ms_custom_ops)
-                    return mod.Add(x, y)
-                self.add = add
 
         def construct(self, x, y):
-            return self.add(x, y)
+            return ms_custom_ops.add(x, y)
     
     x = np.random.randn(4, 2048).astype(np_dtype)
     y = np.random.randn(4, 2048).astype(np_dtype)

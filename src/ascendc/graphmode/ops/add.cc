@@ -38,7 +38,7 @@ public:
 };
 
 AddCustomOpFuncImpl gAddFuncImpl;
-OpFuncImpl &gCustom_AddFuncImpl = gAddFuncImpl;
+OpFuncImpl &gCustom_addFuncImpl = gAddFuncImpl;
 } // namespace ops
 } // namespace mindspore
 
@@ -63,5 +63,5 @@ private:
 
 };
 
-MS_ASCENDC_KERNEL_FACTORY_REG(Custom_Add, AddCustomAscend);
+MS_ASCENDC_KERNEL_FACTORY_REG(Custom_add, AddCustomAscend);
 } // namespace ms_custom_ops

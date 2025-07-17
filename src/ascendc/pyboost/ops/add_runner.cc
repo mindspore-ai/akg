@@ -39,5 +39,5 @@ py::object pyboost_add(const ms::Tensor &x, const ms::Tensor &y) {
 }
 
 MS_CUSTOM_OPS_EXTENSION_MODULE(m) {
-  m.def("Add", &pyboost_add, "add", pybind11::arg("x"), pybind11::arg("y"));
+  m.def("add", &pyboost_add, "add", pybind11::arg("x"), pybind11::arg("y"));
 }

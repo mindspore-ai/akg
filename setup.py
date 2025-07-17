@@ -20,6 +20,7 @@ import logging
 import os
 import sys
 import shutil
+import multiprocessing
 from typing import List
 from pathlib import Path
 from setuptools import find_packages, setup
@@ -137,6 +138,14 @@ class CustomBuildExt(build_ext):
         dst_dir = os.path.dirname(dst_so_path)
         package_path = os.path.join(dst_dir, package_name)
         os.makedirs(package_path, exist_ok=True)
+        
+        # Also prepare the Python package directory for generated files
+        python_package_path = os.path.join(ROOT_DIR, "python", package_name)
+        os.makedirs(python_package_path, exist_ok=True)
+        # 动态检测CPU核心数，取一半，至少为1
+        available_cores = multiprocessing.cpu_count()
+        compile_cores = max(1, available_cores // 2)
+        logger.info(f"Available CPU cores: {available_cores}, using {compile_cores} cores for compilation")
         # Combine all cmake commands into one string
         cmake_cmd = (
             f"source {env_script_path} && "
@@ -147,7 +156,7 @@ class CustomBuildExt(build_ext):
             f"  -DASCENDC_INSTALL_PATH={package_path}"
             f"  -DMS_EXTENSION_NAME={ext_name}"
             f"  -DASCEND_CANN_PACKAGE_PATH={ascend_home_path} && "
-            f"cmake --build {BUILD_OPS_DIR} -j --verbose"
+            f"cmake --build {BUILD_OPS_DIR} -j{compile_cores} --verbose"
         )
 
         try:
@@ -170,6 +179,21 @@ class CustomBuildExt(build_ext):
         shutil.copy(src_so_path, os.path.join(package_path, so_name))
         logger.info(f"Copied {so_name} to {dst_so_path}")
 
+        # Copy generated Python files to Python package directory
+        auto_generate_dir = os.path.join(build_extension_dir, "auto_generate")
+        if os.path.exists(auto_generate_dir):
+            generated_files = ["gen_ops_def.py", "gen_ops_prim.py"]
+            for gen_file in generated_files:
+                src_gen_path = os.path.join(auto_generate_dir, gen_file)
+                if os.path.exists(src_gen_path):
+                    dst_gen_path = os.path.join(python_package_path, gen_file)
+                    shutil.copy(src_gen_path, dst_gen_path)
+                    logger.info(f"Copied {gen_file} to {dst_gen_path}")
+                else:
+                    logger.warning(f"Generated file not found: {src_gen_path}")
+        else:
+            logger.warning(f"Auto-generate directory not found: {auto_generate_dir}")
+
 
 
 
@@ -180,6 +204,10 @@ package_data = {
         "*.so",
         "lib/*.so",
         ".commit_id"
+    ],
+    "ms_custom_ops": [
+        "gen_ops_def.py",
+        "gen_ops_prim.py"
     ]
 }
 
