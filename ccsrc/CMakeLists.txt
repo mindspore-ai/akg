@@ -18,29 +18,17 @@ endif()
 # Build Dependencies
 # =============================================================================
 
+# Include find_lib.cmake to set up MindSpore paths
+include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/find_ms_internal_kernels_lib.cmake)
 
-# Build ms_kernels_internal
-add_subdirectory(ms_kernels_internal)
-add_subdirectory(ascendc)
-
-# Validate internal kernel variables
-if(NOT DEFINED INTERNAL_KERNEL_LIB_PATH)
-    message(FATAL_ERROR "INTERNAL_KERNEL_LIB_PATH is not defined. Check if ms_kernels_internal subdirectory was processed correctly.")
-endif()
-
-if(NOT DEFINED MINDSPORE_INTERNAL_KERNELS_LIB)
-    message(FATAL_ERROR "MINDSPORE_INTERNAL_KERNELS_LIB is not defined. Check if ms_kernels_internal subdirectory was processed correctly.")
-endif()
-
-
+add_subdirectory(base)
+add_subdirectory(ops)
 
 # Set library and source variables
 set(LIB_DIR ${INTERNAL_KERNEL_LIB_PATH})
 set(LIBS ${MINDSPORE_INTERNAL_KERNELS_LIB})
-set(SRC_FILES ${MS_KERNELS_INTERNAL_SRC_FILES} ${ASCENDC_SRC_FILES} ${CMAKE_CURRENT_SOURCE_DIR}/module.cc)
-
-# Define include directories
-set(INCLUDE_DIRS ${INTERNAL_KERNEL_INC_PATH} ${ASCENDC_INC_PATH})
+set(SRC_FILES ${BASE_SRC_FILES} ${OPS_SRC_FILES})
+set(INCLUDE_DIRS ${BASE_INCLUDE_DIRS} ${INTERNAL_KERNEL_INC_PATH})
 
 # =============================================================================
 # Debug Output and Validation
@@ -50,15 +38,6 @@ message(STATUS "LIB_DIR: ${LIB_DIR}")
 message(STATUS "LIBS: ${LIBS}")
 message(STATUS "SRC_FILES: ${SRC_FILES}")
 message(STATUS "INCLUDE_DIRS: ${INCLUDE_DIRS}")
-
-# Validate that no std::cout output has been captured
-if(INCLUDE_DIRS MATCHES ".*std::cout.*")
-    message(FATAL_ERROR "std::cout output detected in INCLUDE_DIRS: ${INCLUDE_DIRS}")
-endif()
-
-if(LIB_DIR MATCHES ".*std::cout.*")
-    message(FATAL_ERROR "std::cout output detected in LIB_DIR: ${LIB_DIR}")
-endif()
 
 # =============================================================================
 # Build Configuration

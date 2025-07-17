@@ -1,10 +1,21 @@
-cmake_minimum_required(VERSION 3.16)
-project(CustomOpBuild)
+# =============================================================================
+# Compile AscendC Ops
+# =============================================================================
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
-set(OP_HOST_PATH "${CMAKE_CURRENT_SOURCE_DIR}/kernel/op_host" CACHE PATH "Path to op_host")
-set(OP_KERNEL_PATH "${CMAKE_CURRENT_SOURCE_DIR}/kernel/op_kernel" CACHE PATH "Path to op_kernel")
+# OP_HOST_PATH, OP_KERNEL_PATH, and OP_COMPILER_SCRIPT should be set by the calling CMakeLists.txt
+if(NOT DEFINED OP_HOST_PATH)
+    message(FATAL_ERROR "OP_HOST_PATH must be set before including this file")
+endif()
+
+if(NOT DEFINED OP_KERNEL_PATH)
+    message(FATAL_ERROR "OP_KERNEL_PATH must be set before including this file")
+endif()
+
+if(NOT DEFINED OP_COMPILER_SCRIPT)
+    message(FATAL_ERROR "OP_COMPILER_SCRIPT must be set before including this file")
+endif()
 set(SOC_VERSION "Ascend910,Ascend910B,Ascend310P" CACHE STRING "SOC version")
 set(VENDOR_NAME "customize" CACHE STRING "Vendor name")
 set(ASCENDC_INSTALL_PATH "" CACHE PATH "Install path")
@@ -21,30 +32,9 @@ else()
     set(ASCEND_CANN_PACKAGE_PATH /usr/local/Ascend/ascend-toolkit/latest)
 endif()
 
-set(INCLUDE_PATHS
-    "${CMAKE_CURRENT_SOURCE_DIR}"
-    "${CMAKE_CURRENT_SOURCE_DIR}/.."
-    "${CMAKE_CURRENT_SOURCE_DIR}/pyboost"
-    "${CMAKE_CURRENT_SOURCE_DIR}/graphmode"
-)
-list(JOIN INCLUDE_PATHS ";" ASCENDC_INC_PATH)
-set(ASCENDC_INC_PATH "${ASCENDC_INC_PATH}" PARENT_SCOPE)
-
-file(GLOB_RECURSE ASCENDC_GRAPH_MODE_SRC_FILES ${CMAKE_CURRENT_SOURCE_DIR}/graphmode/*.cc)
-file(GLOB_RECURSE ASCENDC_BOOST_SRC_FILES ${CMAKE_CURRENT_SOURCE_DIR}/pyboost/*.cc)
-set(ASCENDC_SRC_FILES 
-    ${ASCENDC_GRAPH_MODE_SRC_FILES} 
-    ${ASCENDC_BOOST_SRC_FILES} 
-    PARENT_SCOPE
-)
-if(NOT ASCENDC_SRC_FILES)
-    message(WARNING "No .cc files found in ${CMAKE_CURRENT_SOURCE_DIR}")
-endif()
-
-
 add_custom_target(
     build_custom_op ALL
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/op_compiler.py
+    COMMAND ${Python3_EXECUTABLE} ${OP_COMPILER_SCRIPT}
         -o=${OP_HOST_PATH}
         -k=${OP_KERNEL_PATH}
         --soc_version=${SOC_VERSION}
