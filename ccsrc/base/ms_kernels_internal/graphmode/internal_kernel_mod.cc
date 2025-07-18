@@ -18,7 +18,6 @@
 
 #include "include/common/utils/ms_device_shape_transfer.h"
 #include "internal_helper.h"
-#include "internal_kernel_in_out_map.h"
 #include "internal_tiling_cache.h"
 #include <functional>
 #include <utility>
@@ -27,46 +26,22 @@ namespace ms_custom_ops {
 SimpleSpinLock InternalKernelMod::lock_ = SimpleSpinLock();
 
 bool InternalKernelMod::Init(const std::vector<KernelTensor *> &inputs, const std::vector<KernelTensor *> &outputs) {
-  internal_to_ms_input_indices_mapper_.clear();
-  internal_to_ms_output_indices_mapper_.clear();
-  bool input_mutable = false;
-  auto in_idx_list = InternalKernelModInOutMap::GetInstance()->GetKernelInMap(kernel_name_, &input_mutable);
-  if (input_mutable) {
-    for (size_t i = 0; i < inputs.size(); i++) {
-      (void)internal_to_ms_input_indices_mapper_.emplace_back(i);
-    }
-  } else {
-    for (size_t i = 0; i < in_idx_list.size(); i++) {
-      (void)internal_to_ms_input_indices_mapper_.emplace_back(static_cast<size_t>(in_idx_list.at(i)));
-    }
-  }
+  InitKernelInputsOutputsIndex();
 
-  bool output_mutable = false;
-  auto out_idx_list = InternalKernelModInOutMap::GetInstance()->GetKernelOutMap(kernel_name_, &output_mutable);
-  if (output_mutable) {
-    for (size_t i = 0; i < outputs.size(); i++) {
-      (void)internal_to_ms_output_indices_mapper_.emplace_back(i);
-    }
-  } else {
-    for (size_t i = 0; i < out_idx_list.size(); i++) {
-      (void)internal_to_ms_output_indices_mapper_.emplace_back(out_idx_list.at(i));
-    }
-  }
-
-  for (size_t i = 0; i < internal_to_ms_input_indices_mapper_.size(); i++) {
+  for (size_t i = 0; i < kernel_inputs_index_.size(); i++) {
     internal_inputs_addr_.emplace_back(nullptr);
     internal_inputs_shape_.emplace_back(internal::ShapeInfo{0});
   }
 
-  for (size_t i = 0; i < internal_to_ms_output_indices_mapper_.size(); i++) {
+  for (size_t i = 0; i < kernel_outputs_index_.size(); i++) {
     internal_outputs_addr_.emplace_back(nullptr);
     internal_outputs_shape_.emplace_back(internal::ShapeInfo{0});
   }
 
   for (size_t i = 0; i < inputs.size(); i++) {
     bool is_include = false;
-    for (auto idx : in_idx_list) {
-      if (i == static_cast<size_t>(idx)) {
+    for (auto idx : kernel_inputs_index_) {
+      if (i == idx) {
         is_include = true;
         break;
       }
@@ -82,7 +57,6 @@ bool InternalKernelMod::Init(const std::vector<KernelTensor *> &inputs, const st
       nz_output_indices_.emplace_back(i);
     }
   }
-
   return true;
 }
 
@@ -217,17 +191,15 @@ void InternalKernelMod::GetInternalKernel(const std::vector<KernelTensor *> &inp
   if (IsNeedRecreate(inputs, outputs)) {
     internal::InputsImmutableInfoList inputs_ii;
     internal::OutputsImmutableInfoList outputs_ii;
-    for (size_t i = 0; i < internal_to_ms_input_indices_mapper_.size(); i++) {
-      auto ms_index = internal_to_ms_input_indices_mapper_[i];
-      auto dtype = TransInternalDataType(inputs[ms_index]->dtype_id());
-      auto format = TransInternalFormat(inputs[ms_index]->format());
+    for (auto i : kernel_inputs_index_) {
+      auto dtype = TransInternalDataType(inputs[i]->dtype_id());
+      auto format = TransInternalFormat(inputs[i]->format());
       inputs_ii.emplace_back(dtype, format);
     }
 
-    for (size_t i = 0; i < internal_to_ms_output_indices_mapper_.size(); i++) {
-      auto ms_index = internal_to_ms_output_indices_mapper_[i];
-      auto dtype = TransInternalDataType(outputs[ms_index]->dtype_id());
-      auto format = TransInternalFormat(outputs[ms_index]->format());
+    for (auto i : kernel_outputs_index_) {
+      auto dtype = TransInternalDataType(outputs[i]->dtype_id());
+      auto format = TransInternalFormat(outputs[i]->format());
       outputs_ii.emplace_back(dtype, format);
     }
     internal_op_ = CreateKernel(inputs_ii, outputs_ii, inputs, outputs);
@@ -266,19 +238,17 @@ int InternalKernelMod::Resize(const std::vector<KernelTensor *> &inputs, const s
     return KRET_RESIZE_FAILED;
   }
 
-  for (size_t i = 0; i < internal_to_ms_input_indices_mapper_.size(); i++) {
-    auto ms_index = internal_to_ms_input_indices_mapper_[i];
-    auto shape = TransInternalShape(inputs[ms_index]->GetShapeVector());
-    if (inputs[ms_index]->dtype_id() == kMetaTypeNone) {
+  for (auto i : kernel_inputs_index_) {
+    auto shape = TransInternalShape(inputs[i]->GetShapeVector());
+    if (inputs[i]->dtype_id() == kMetaTypeNone) {
       shape = {};
     }
     internal_inputs_shape_[i] = std::move(shape);
   }
 
-  for (size_t i = 0; i < internal_to_ms_output_indices_mapper_.size(); i++) {
-    auto ms_index = internal_to_ms_output_indices_mapper_[i];
-    auto shape = TransInternalShape(outputs[ms_index]->GetShapeVector());
-    if (outputs[ms_index]->dtype_id() == kMetaTypeNone) {
+  for (auto i : kernel_outputs_index_) {
+    auto shape = TransInternalShape(outputs[i]->GetShapeVector());
+    if (outputs[i]->dtype_id() == kMetaTypeNone) {
       shape = {};
     }
     internal_outputs_shape_[i] = std::move(shape);
@@ -300,14 +270,12 @@ int InternalKernelMod::Resize(const std::vector<KernelTensor *> &inputs, const s
 void InternalKernelMod::UpdateAddr(const std::vector<KernelTensor *> &inputs,
                                    const std::vector<KernelTensor *> &outputs,
                                    const std::vector<KernelTensor *> &workspace) {
-  for (size_t i = 0; i < internal_to_ms_input_indices_mapper_.size(); i++) {
-    auto ms_index = internal_to_ms_input_indices_mapper_[i];
-    internal_inputs_addr_[i] = inputs[ms_index]->device_ptr();
+  for (auto i : kernel_inputs_index_) {
+    internal_inputs_addr_[i] = inputs[i]->device_ptr();
   }
 
-  for (size_t i = 0; i < internal_to_ms_output_indices_mapper_.size(); i++) {
-    auto ms_index = internal_to_ms_output_indices_mapper_[i];
-    internal_outputs_addr_[i] = outputs[ms_index]->device_ptr();
+  for (auto i : kernel_outputs_index_) {
+    internal_outputs_addr_[i] = outputs[i]->device_ptr();
   }
 
   for (size_t i = 0; i < workspace.size(); i++) {

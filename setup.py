@@ -162,7 +162,7 @@ class CustomBuildExt(build_ext):
         try:
             # Run the combined cmake command
             logger.info(f"Running combined CMake commands:\n{cmake_cmd}")
-            result = subprocess.run(cmake_cmd, cwd=self.ROOT_DIR, text=True, shell=True, capture_output=True)
+            result = subprocess.run(cmake_cmd, cwd=self.ROOT_DIR, text=True, shell=True, capture_output=False)
             if result.returncode != 0:
                 logger.info("CMake commands failed:")
                 logger.info(result.stdout)  # Print standard output

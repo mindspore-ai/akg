@@ -26,7 +26,6 @@
 
 #include "debug/profiler/profiling.h"
 #include "internal_helper.h"
-#include "internal_kernel_in_out_map.h"
 #include "internal_spinlock.h"
 #include "internal_tiling_cache.h"
 #include "module.h"
@@ -74,10 +73,13 @@ protected:
   }
 
   virtual uint64_t GenerateTilingKey(const std::vector<KernelTensor *> &inputs);
+  virtual void InitKernelInputsOutputsIndex() {
+    MS_LOG(EXCEPTION) << "InitKernelInputsOutputsIndex must be implemented in derived class.";
+  }
 
+  std::vector<size_t> kernel_inputs_index_;
+  std::vector<size_t> kernel_outputs_index_;
   internal::InternalOpPtr internal_op_{nullptr};
-  std::vector<size_t> internal_to_ms_input_indices_mapper_;
-  std::vector<size_t> internal_to_ms_output_indices_mapper_;
   internal::ShapeInfoList internal_inputs_shape_;
   internal::ShapeInfoList internal_outputs_shape_;
   internal::InputsAddrList internal_inputs_addr_;

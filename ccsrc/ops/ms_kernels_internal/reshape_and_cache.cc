@@ -53,10 +53,23 @@ public:
 } // namespace mindspore
 
 namespace ms_custom_ops {
+constexpr size_t kInputKeyIndex = 0;
+constexpr size_t kInputValueIndex = 1;
+constexpr size_t kInputKeyCacheIndex = 2;
+constexpr size_t kInputValueCacheIndex = 3;
+constexpr size_t kInputSlotMappingIndex = 4;
+constexpr size_t kInputHeadNumIndex = 5;
+constexpr size_t kOutputIndex = 0;
 class CustomReshapeAndCache : public InternalKernelMod {
 public:
   CustomReshapeAndCache() : InternalKernelMod() {}
   ~CustomReshapeAndCache() = default;
+
+  void InitKernelInputsOutputsIndex() override {
+    kernel_inputs_index_ = {kInputKeyIndex, kInputValueIndex, kInputKeyCacheIndex,
+                            kInputValueCacheIndex, kInputSlotMappingIndex};
+    kernel_outputs_index_ = {kOutputIndex};
+  }
 
 protected:
   internal::InternalOpPtr
@@ -78,11 +91,6 @@ protected:
         inputs, outputs, param, internal::kInternalReshapeAndCacheOpName);
   }
 };
-
-MS_CUSTOM_INTERNAL_KERNEL_NAME_REG(reshape_and_cache,
-                                   internal::kInternalReshapeAndCacheOpName);
-REG_MS_TO_INTERNAL_IN_TENSOR_IDX_MAP(reshape_and_cache, INPUT_NUM_5, INDEX_0,
-                                     INDEX_1, INDEX_2, INDEX_3, INDEX_4);
 } // namespace ms_custom_ops
 
 MS_CUSTOM_OPS_REGISTER(reshape_and_cache, CustomReshapeAndCacheOpFuncImpl,
