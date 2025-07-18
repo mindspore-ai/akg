@@ -143,15 +143,17 @@ class ParserFactory:
         if cls._feature_parser is None:
             cls._feature_parser = cls.create_output_parser(
                 "FeatureBlock",
-                {
-                    "op_type": (str, ...),
-                    "op_axes_size": (list[str], ...),
-                    "op_axes_type": (list[str], ...),
+                {   
                     "op_name": (str, ...),
-                    "description": (str, ...),
+                    "op_type": (str, ...),
+                    "input_specs": (str, ...),
+                    "output_specs": (str, ...),
+                    "computation": (str, ...),
+                    "schedule": (str, ...),
                     "backend": (str, ...),
                     "arch": (str, ...),
-                    "impl_type": (str, ...)
+                    "impl_type": (str, ...),
+                    "description": (str, ...)
                 }
             )
         return cls._feature_parser

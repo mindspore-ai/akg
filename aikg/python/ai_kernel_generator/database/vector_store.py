@@ -22,8 +22,6 @@ from langchain_core.documents import Document
 from ai_kernel_generator import get_project_root
 from ai_kernel_generator.utils.common_utils import get_md5_hash
 
-os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
-
 DEFAULT_DATABASE_PATH = Path(get_project_root()).parent.parent / "database"
 DEFAULT_INDEX_PATH = DEFAULT_DATABASE_PATH / "vector_store"
 
