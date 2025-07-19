@@ -113,32 +113,18 @@ public:
 protected:
   internal::InternalOpPtr
   CreateKernel(const internal::InputsImmutableInfoList &inputs,
-               const internal::OutputsImmutableInfoList &outputs) {
+               const internal::OutputsImmutableInfoList &outputs) override {
     internal::ReshapeAndCacheParam param;
     param.head_num = this->head_num_;
     return internal::CreateReshapeAndCacheOp(
         inputs, outputs, param, internal::kInternalReshapeAndCacheOpName);
   }
 
-  void LaunchKernel() {
-    tensor::TensorPtrList inputs;
-    inputs.reserve(5);
-
-    for (const auto &input : this->inputs()) {
-      inputs.push_back(input.is_defined() ? input.tensor() : nullptr);
-    }
-
-    tensor::TensorPtrList outputs;
-    TransInternalShapes(inputs, outputs);
-    LAUNCH_INTERNAL(_op_name_, this->_device_context_, this->stream_id(),
-                    inputs, outputs);
-  }
-
 private:
   int32_t head_num_{0};
 };
-MS_KERNELS_INTERNAL_FACTORY_REG(ReshapeAndCache,
-                                internal::kInternalReshapeAndCacheOpName);
+MS_KERNELS_INTERNAL_NAME_REG(ReshapeAndCache,
+                             internal::kInternalReshapeAndCacheOpName);
 } // namespace ms::pynative
 
 namespace ms_custom_ops {
@@ -148,46 +134,38 @@ ms::Tensor GetTensorOrEmpty(const std::optional<ms::Tensor> &opt_tensor) {
 }
 
 // infer shape and type func
-ms::Tensor GenResultTensor(const ms::Tensor &key) {
-  return ms::Tensor(key.data_type(), key.shape());
-}
+// ms::Tensor GenResultTensor(const ms::Tensor &key) {
+//   return ms::Tensor(key.data_type(), key.shape());
+// }
 
-ms::Tensor npu_reshape_and_cache(const ms::Tensor &key,
-                                 const std::optional<ms::Tensor> &value,
-                                 const std::optional<ms::Tensor> &key_cache,
-                                 const std::optional<ms::Tensor> &value_cache,
-                                 const std::optional<ms::Tensor> &slot_mapping,
-                                 std::optional<int64_t> head_num) {
-  auto result = GenResultTensor(key);
+void npu_reshape_and_cache(const ms::Tensor &key,
+                           const std::optional<ms::Tensor> &value,
+                           const std::optional<ms::Tensor> &key_cache,
+                           const std::optional<ms::Tensor> &value_cache,
+                           const std::optional<ms::Tensor> &slot_mapping,
+                           std::optional<int64_t> head_num) {
   auto op_name = "ReshapeAndCache";
   auto runner = std::make_shared<ms::pynative::ReshapeAndCacheRunner>(op_name);
+  MS_EXCEPTION_IF_NULL(runner);
 
   // Set head_num if provided
   if (head_num.has_value()) {
     runner->SetHeadNum(static_cast<int32_t>(head_num.value()));
   }
 
-  // Convert ms::Tensor to TensorPtr for hash calculation
-  auto key_tensor_ptr = key.tensor();
-  auto get_tensor_ptr = [](const std::optional<ms::Tensor> &opt_tensor) {
-    auto tensor = GetTensorOrEmpty(opt_tensor);
-    return tensor.is_defined() ? tensor.tensor() : nullptr;
-  };
-
-  auto value_tensor_ptr = get_tensor_ptr(value);
-  auto key_cache_tensor_ptr = get_tensor_ptr(key_cache);
-  auto value_cache_tensor_ptr = get_tensor_ptr(value_cache);
-  auto slot_mapping_tensor_ptr = get_tensor_ptr(slot_mapping);
-
   // Setup the runner with all parameters (including hash calculation)
-  runner->Setup(op_name, key_tensor_ptr, value_tensor_ptr, key_cache_tensor_ptr,
-                value_cache_tensor_ptr, slot_mapping_tensor_ptr, head_num);
+  runner->Setup(op_name, key, value, key_cache, value_cache, slot_mapping,
+                head_num);
 
-  // Run the operation
-  runner->Run({key, GetTensorOrEmpty(value), GetTensorOrEmpty(key_cache),
-               GetTensorOrEmpty(value_cache), GetTensorOrEmpty(slot_mapping)},
-              {result});
-  return result;
+  // if you need infer shape and type, you can use this
+  // auto result = GenResultTensor(key);
+  std::vector<ms::Tensor> inputs = {
+      key, GetTensorOrEmpty(value), GetTensorOrEmpty(key_cache),
+      GetTensorOrEmpty(value_cache), GetTensorOrEmpty(slot_mapping)};
+  std::vector<ms::Tensor> outputs = {};
+  runner->GetOrCreateKernel(inputs, outputs);
+  runner->Run(inputs, outputs);
+  return;
 }
 } // namespace ms_custom_ops
 
@@ -197,7 +175,7 @@ auto pyboost_reshape_and_cache(const ms::Tensor &key,
                                const std::optional<ms::Tensor> &value_cache,
                                const std::optional<ms::Tensor> &slot_mapping,
                                std::optional<int64_t> head_num) {
-  return ms::pynative::PyboostRunner::Call<1>(
+  return ms::pynative::PyboostRunner::Call<0>(
       ms_custom_ops::npu_reshape_and_cache, key, value, key_cache, value_cache,
       slot_mapping, head_num);
 }
