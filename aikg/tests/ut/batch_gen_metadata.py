@@ -1,19 +1,23 @@
+# Copyright 2025 Huawei Technologies Co., Ltd
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 '''
 # 使用示例：
-python database/batch_gen_metadata.py --impl_type "triton" --backend "ascend" --arch "ascend910b4" --path ""database/triton/ascend910b4"" --mode overwrite
-
-## 默认模式：跳过已存在的metadata.json
-python database/batch_gen_metadata.py --impl_type xxx --backend xxx --arch xxx --path "./your_files_dir" --mode skip
-
-## 覆盖模式：重新生成所有metadata.json
-python database/batch_gen_metadata.py --impl_type xxx --backend xxx --arch xxx --path "./your_files_dir" --mode overwrite
+python tests/ut/batch_gen_metadata.py --impl_type "triton" --framework "numpy" --backend "ascend" --arch "ascend910b4" --path "database/temp/2_standard_matrix_multiplication_"
 '''
 
 import argparse
-import json
-import asyncio
-import yaml
-import shutil
 import logging
 from pathlib import Path
 from ai_kernel_generator import get_project_root
@@ -21,11 +25,12 @@ from ai_kernel_generator.database.database_rag import DatabaseRAG
 
 DEFAULT_CONFIG_PATH = Path(get_project_root()) / "database" / "rag_config.yaml"
 
-def get_code(impl_type: str, framework:str, path: str):
+
+def get_code(impl_type: str, framework: str, path: str):
     """将目录下所有Python文件移动到对应的算子目录"""
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     src_dir = Path(path)
-    
+
     if not src_dir.is_dir():
         logging.error(f"无效的目录路径: {src_dir}")
         return
@@ -45,18 +50,19 @@ def get_code(impl_type: str, framework:str, path: str):
     # 读取文件内容生成md5_hash
     with open(impl_file, 'r', encoding='utf-8') as f:
         impl_code = f.read()
-        
+
     with open(framework_file, 'r', encoding='utf-8') as f:
         framework_code = f.read()
-        
+
     return impl_code, framework_code
 
 
-def insert_one_case(impl_type: str, framework:str, backend: str, arch: str, path:str):
+def insert_one_case(impl_type: str, framework: str, backend: str, arch: str, path: str):
     """处理指定架构下的所有算子目录，生成或更新metadata.json"""
     db_rag = DatabaseRAG()
     impl_code, framework_code = get_code(impl_type=impl_type, framework=framework, path=path)
     db_rag.insert(impl_code, framework_code, backend, arch, impl_type, framework)
+
 
 def main():
     # 解析命令行参数
@@ -74,7 +80,8 @@ def main():
         impl_type=args.impl_type,
         framework=args.framework,
         backend=args.backend,
-        arch=args.arch
+        arch=args.arch,
+        path=args.path
     )
 
 

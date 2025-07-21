@@ -95,6 +95,7 @@ class ParserFactory:
     _check_parser = None
     _api_parser = None
     _feature_parser = None
+
     @classmethod
     def get_code_parser(cls):
         """获取代码解析器"""
@@ -143,7 +144,7 @@ class ParserFactory:
         if cls._feature_parser is None:
             cls._feature_parser = cls.create_output_parser(
                 "FeatureBlock",
-                {   
+                {
                     "op_name": (str, ...),
                     "op_type": (str, ...),
                     "input_specs": (str, ...),
@@ -157,6 +158,7 @@ class ParserFactory:
                 }
             )
         return cls._feature_parser
+
     @staticmethod
     def create_output_parser(parser_name, fields):
         """创建输出解析器
@@ -330,6 +332,7 @@ def remove_copyright_from_text(text: str) -> str:
         return text
 
     return cleaned_text
+
 
 def get_md5_hash(**kwargs) -> str:
     """
