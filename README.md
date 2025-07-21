@@ -56,64 +56,53 @@
 
 ```
 ms_custom_ops/
-├── src/                       # 源代码目录
-│   ├── module.h               # 模块头文件
-│   ├── module.cc              # 模块实现文件
-│   ├── CMakeLists.txt         # CMake构建配置
-│   ├── ms_kernels_internal/   # 内部算子实现
-│   │   ├── CMakeLists.txt     # 内部算子构建配置
-│   │   ├── internal_helper.h/cc        # 内部辅助函数
-│   │   ├── internal_spinlock.h         # 自旋锁实现
-│   │   ├── tiling_mem_mgr.h/cc         # Tiling内存管理器
-│   │   ├── internal_tiling_cache.h/cc  # 内部Tiling缓存
-│   │   ├── pyboost/           # PyNative模式实现
-│   │   │   ├── internal_pyboost_runner.h/cc    # PyBoost运行器基类
-│   │   │   ├── internal_pyboost_utils.h/cc     # PyBoost工具函数
-│   │   │   └── ops/           # PyBoost算子实现
-│   │   │       └── reshape_and_cache_runner.cc  # reshape_and_cache算子
-│   │   └── graphmode/         # Graph模式实现
-│   │       ├── internal_kernel_mod.h/cc         # 内部内核模块基类
-│   │       ├── internal_kernel_utils.h/cc       # 内部内核工具函数
-│   │       ├── internal_kernel_in_out_map.h/cc  # 输入输出映射
-│   │       └── ops/           # Graph模式算子实现
-│   │           └── reshape_and_cache.cc         # reshape_and_cache算子
-│   ├── ascendc/               # 昇腾C相关组件
-│   │   ├── CMakeLists.txt     # 昇腾C构建配置
-│   │   ├── op_compiler.py     # 算子编译器
-│   │   ├── kernel/            # 昇腾内核实现
-│   │   │   ├── op_kernel/     # 算子内核
-│   │   │   │   └── add_custom.cpp      # 自定义加法算子
-│   │   │   └── op_host/       # 算子主机端
-│   │   │       ├── add_custom.cpp      # 主机端加法算子
-│   │   │       └── add_custom_tiling.h # 加法算子Tiling配置
-│   │   ├── pyboost/           # 昇腾PyBoost实现
-│   │   │   ├── ascendc_pyboost_runner.h # 昇腾PyBoost运行器
-│   │   │   └── ops/           # 昇腾PyBoost算子
-│   │   │       └── add_runner.cc       # 加法算子运行器
-│   │   └── graphmode/         # 昇腾Graph模式实现
-│   │       ├── ascendc_kernel_mod.h/cc # 昇腾内核模块
-│   │       └── ops/           # 昇腾Graph模式算子
-│   │           └── add.cc             # 加法算子实现
-│   └── swft/                  # SWFT相关组件（预留）
-├── yaml/                      # 算子描述yaml目录
-│   ├── ascendc/               # 昇腾算子yaml
-│   │   └── add_op.yaml        # 加法算子配置
-│   └── ms_kernels_internal/   # 内部算子yaml
-│       └── reshape_and_cache_op.yaml  # reshape_and_cache算子配置
-├── python/                    # Python包目录
-│   └── ms_custom_ops/         # 主包目录
-│       └── __init__.py        # 包初始化文件
-├── tests/                     # 测试目录
-│   ├── test_add.py            # 加法算子测试
-│   └── test_custom_reshape_and_cache.py  # reshape_and_cache算子测试
-├── build/                     # 构建输出目录
-├── dist/                      # 分发目录
-├── setup.py                   # 安装脚本
-├── requirements.txt           # Python依赖
-├── version.txt                # 版本信息
-├── .gitignore                 # Git忽略文件
-├── .commit_id                 # 提交ID文件
-└── README.md                  # 项目说明文档
+├── ccsrc/                        # C++核心源码
+│   ├── base/                     # 基础设施
+│   │   ├── ms_kernels_internal/  # 内部算子基础
+│   │   │   ├── pyboost/          # PyNative模式基类/工具
+│   │   │   ├── graphmode/        # Graph模式基类/工具
+│   │   │   ├── tiling_mem_mgr.h/cc
+│   │   │   ├── internal_helper.h/cc
+│   │   │   ├── internal_spinlock.h
+│   │   │   ├── internal_tiling_cache.h/cc
+│   │   └── ascendc/              # 昇腾算子基础
+│   │       ├── pyboost/
+│   │       ├── graphmode/
+│   ├── ops/                      # 算子实现
+│   │   ├── ms_kernels_internal/
+│   │   │   └── reshape_and_cache.cc
+│   │   ├── ascendc/
+│   │   │   ├── add.cc
+│   │   │   ├── kernel_impl/
+│   │   │   │   ├── op_kernel/
+│   │   │   │   │   └── add_custom.cpp
+│   │   │   │   ├── op_host/
+│   │   │   │   │   ├── add_custom.cpp
+│   │   │   │   │   └── add_custom_tiling.h
+│   │   │   └── CMakeLists.txt
+│   │   └── CMakeLists.txt
+│   ├── CMakeLists.txt
+│   ├── module.h
+│   └── module.cc
+├── python/
+│   └── ms_custom_ops/
+│       └── __init__.py
+├── yaml/
+│   ├── ascendc/
+│   │   └── add_op.yaml
+│   └── ms_kernels_internal/
+│       └── reshape_and_cache_op.yaml
+├── tests/
+│   ├── test_add.py
+│   └── test_custom_reshape_and_cache.py
+├── build/
+├── dist/
+├── setup.py
+├── requirements.txt
+├── version.txt
+├── .gitignore
+├── .commit_id
+└── README.md
 ```
 
 ## 快速开始
@@ -222,24 +211,10 @@ protected:
         // 例如：return internal::CreateMyOp(inputs, outputs, param, internal::kInternalMyOpName);
         return nullptr;
     }
-
-    void LaunchKernel() {
-        tensor::TensorPtrList inputs;
-        inputs.reserve(2); // 根据实际输入数量调整
-
-        for (const auto &input : this->inputs()) {
-            inputs.push_back(input.is_defined() ? input.tensor() : nullptr);
-        }
-
-        tensor::TensorPtrList outputs;
-        TransInternalShapes(inputs, outputs);
-        LAUNCH_INTERNAL(_op_name_, this->_device_context_, this->stream_id(),
-                        inputs, outputs);
-    }
 };
 
 // 注册算子名称映射
-MS_KERNELS_INTERNAL_FACTORY_REG(MyOp, internal::kInternalMyOpName);
+MS_KERNELS_INTERNAL_NAME_REG(MyOp, internal::kInternalMyOpName);
 } // namespace ms::pynative
 
 namespace ms_custom_ops {
@@ -254,15 +229,13 @@ ms::Tensor npu_my_op(const ms::Tensor &input1, const ms::Tensor &input2) {
     auto op_name = "MyOp";
     auto runner = std::make_shared<ms::pynative::MyOpRunner>(op_name);
 
-    // 设置参数（如果需要）
+    // 设置参数（如果需要将部分输入转为属性）
     // runner->SetParam(param_value);
 
-    // 转换为 TensorPtr 用于 hash 计算
-    auto input1_tensor_ptr = input1.tensor();
-    auto input2_tensor_ptr = input2.tensor();
-
     // 设置运行器参数（包括 hash 计算）
-    runner->Setup(op_name, input1_tensor_ptr, input2_tensor_ptr);
+    runner->Setup(op_name, input1, input2);
+
+    runner->GetOrCreateKernel(inputs, outputs);
 
     // 运行操作
     runner->Run({input1, input2}, {result});
@@ -326,6 +299,13 @@ public:
     CustomMyOp() : InternalKernelMod() {}
     ~CustomMyOp() = default;
 
+    // 输入和输出和底层算子的映射
+    void InitKernelInputsOutputsIndex() override {
+        kernel_inputs_index_ = {kInputKeyIndex, kInputValueIndex, kInputKeyCacheIndex,
+                                kInputValueCacheIndex, kInputSlotMappingIndex};
+        kernel_outputs_index_ = {kOutputIndex};
+    }
+
 protected:
     internal::InternalOpPtr
     CreateKernel(const internal::InputsImmutableInfoList &inputs,
@@ -337,38 +317,22 @@ protected:
         return nullptr;
     }
 };
-
-// 注册算子名称映射
-MS_CUSTOM_INTERNAL_KERNEL_NAME_REG(my_op, internal::kInternalMyOpName);
-
-// 注册输入输出索引映射（根据实际输入数量调整）
-REG_MS_TO_INTERNAL_IN_TENSOR_IDX_MAP(my_op, INPUT_NUM_2, INDEX_0, INDEX_1);
-REG_MS_TO_INTERNAL_OUT_TENSOR_IDX_MAP(my_op, OUTPUT_NUM_1, INDEX_0);
-
 } // namespace ms_custom_ops
 
 // 注册算子到 MindSpore 框架
-MS_CUSTOM_OPS_REGISTER(my_op, CustomMyOpFuncImpl, CustomMyOp);
+// 注册算子名称映射 (对外接口my_op, 内部算子库名字internal::kInternalMyOpName
+   对接的kernelmod CustomMyOp)
+MS_CUSTOM_OPS_REGISTER(my_op, internal::kInternalMyOpName,
+                       CustomMyOp);
 ```
 
 **重要说明**：
 - GraphMode 算子需要实现 `CreateKernel` 方法来创建内部算子
 - 基类 `InternalKernelMod` 已经实现了 `Resize` 和 `Launch` 的通用逻辑
 - 需要正确注册算子名称映射和输入输出索引映射
-- 如果算子需要额外的工作空间，可以在 `UpdateParam` 中设置 `workspace_size_list_`
 - 算子需要同时实现 `OpFuncImpl` 类来处理形状和类型推断
 
-### 2. 添加 Python 接口
-
-在 `ms_custom_ops/__init__.py` 中添加：
-
-```python
-def my_op(*args, **kwargs):
-    """My custom operator"""
-    return ops.Custom(func_type="internal", func_name="MyOp", out_shape=..., out_dtype=...)(*args, **kwargs)
-```
-
-### 3. 添加配置文件
+### 2. 添加配置文件
 
 在 `yaml/ms_kernels_internal/` 下创建算子配置文件：
 
@@ -384,7 +348,7 @@ input_shapes: ["dynamic", "dynamic"]
 output_shapes: ["dynamic"]
 ```
 
-### 4. 编写测试
+### 3. 编写测试
 
 创建测试文件 `tests/test_my_op.py`：
 
@@ -410,88 +374,6 @@ def test_my_op(exec_mode):
     assert np.allclose(output.asnumpy(), expected, rtol=1e-3, atol=1e-3)
 ```
 
-## 高级特性
-
-### 1. 双模式执行机制
-
-#### GraphMode Resize 接口机制
-
-GraphMode 算子中的 `Resize` 接口是处理动态形状变化的核心机制：
-
-#### 基类 Resize 功能
-`InternalKernelMod` 基类的 `Resize` 方法自动处理：
-- **形状更新**：将输入输出张量的形状信息转换为内部格式
-- **内核重建**：当参数变化时自动重建内部算子内核
-- **Tiling 缓存**：智能缓存和复用 Tiling 策略
-- **内存管理**：自动管理工作空间内存分配
-
-#### 自定义 Resize 逻辑
-子类通常不需要重写 `Resize` 方法，基类已经处理了所有通用逻辑。如果需要添加特定逻辑，可以重写 `UpdateParam` 方法：
-
-```cpp
-bool UpdateParam(const std::vector<KernelTensor*> &inputs,
-                 const std::vector<KernelTensor*> &outputs) override {
-    // 验证输入形状
-    auto input_shape = inputs[0]->GetShapeVector();
-    if (input_shape.size() != 3) {
-        MS_LOG(ERROR) << "Input shape must be 3D";
-        return false;
-    }
-    
-    // 设置工作空间大小（如果需要）
-    workspace_size_list_ = {input_shape[0] * input_shape[1] * sizeof(float)};
-    
-    return true;
-}
-```
-
-#### PyBoost 动态执行机制
-
-PyBoost 模式下的算子执行采用动态方式：
-
-```cpp
-// 主要执行流程
-void LaunchKernel() {
-    // 1. 准备输入输出张量
-    tensor::TensorPtrList inputs;
-    for (const auto &input : this->inputs()) {
-        inputs.push_back(input.is_defined() ? input.tensor() : nullptr);
-    }
-    
-    // 2. 转换形状信息
-    tensor::TensorPtrList outputs;
-    TransInternalShapes(inputs, outputs);
-    
-    // 3. 启动内核执行
-    LAUNCH_INTERNAL(_op_name_, this->_device_context_, this->stream_id(),
-                    inputs, outputs);
-}
-```
-
-**PyBoost 特点**：
-- **动态执行**：每次调用都会重新计算 hash 和创建内核
-- **自动缓存**：框架自动缓存相同配置的算子实例
-- **内存管理**：自动管理工作空间内存的分配和释放
-- **异步执行**：支持异步执行和流管理
-
-### 2. Hash 缓存优化
-
-框架自动为算子提供基于 hash 的缓存机制：
-
-- **算子缓存**：避免重复创建相同配置的算子
-- **Tiling 缓存**：缓存切分策略，加速执行
-
-### 2. 内存管理
-
-- 自动管理输入、输出和工作空间内存
-- 支持设备内存和主机内存
-- 引用计数机制确保内存安全
-
-### 3. 性能优化建议
-
-1. **使用缓存**：充分利用框架提供的缓存机制
-2. **批量处理**：设计算子时考虑批量数据处理
-3. **内存复用**：合理规划工作空间大小
 
 ## 调试技巧
 
@@ -527,9 +409,6 @@ A: 确保正确安装昇腾 CANN 工具包，并设置环境变量：
 ```bash
 source /usr/local/Ascend/ascend-toolkit/set_env.sh
 ```
-
-**Q: 算子在不同模式下行为不一致**  
-A: 检查是否正确处理了 Parameter 和 Tensor 的区别，Graph 模式下缓存通常使用 Parameter。
 
 **Q: 性能不如预期**  
 A: 1) 检查是否正确使用了缓存机制；2) 确认内存访问模式是否高效；3) 使用 Profiler 定位瓶颈。
