@@ -15,16 +15,17 @@
 import asyncio
 from pathlib import Path
 import shutil
-import os
-from langchain_core.documents import Document
+import yaml
+import json
 from langchain_core.retrievers import BaseRetriever
+from langchain_community.vectorstores.faiss import DistanceStrategy
 from ai_kernel_generator.database.vector_store import VectorStore
 from ai_kernel_generator import get_project_root
 from ai_kernel_generator.core.agent.utils.feature_extraction import FeatureExtraction
 from ai_kernel_generator.utils.common_utils import get_md5_hash
-from ai_kernel_generator.config.config_validator import load_config
 
 DEFAULT_DATABASE_PATH = Path(get_project_root()).parent.parent / "database"
+DEFAULT_CONFIG_PATH = Path(get_project_root()) / "database" / "rag_config.yaml"
 
 class DatabaseRAG(BaseRetriever):
     """算子优化方案RAG数据库系统"""
@@ -32,92 +33,113 @@ class DatabaseRAG(BaseRetriever):
     database_path: str
     top_k: int
     vector_store: VectorStore
+    config: dict
+    distance_strategy: str
+    verify_distance_strategy: str
 
-    def __init__(self, config_path: str, database_path: str = "", top_k: int = 5):
+    def __init__(self, config_path: str = "", database_path: str = "", top_k: int = 5):
         """初始化RAG系统"""
         # 加载配置文件
-        database_path = database_path if database_path else str(DEFAULT_DATABASE_PATH)
-        top_k = top_k
+        database_path = database_path or str(DEFAULT_DATABASE_PATH)
+        config_path = config_path or str(DEFAULT_CONFIG_PATH)
         vector_store = VectorStore(config_path)
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+        distance_strategy = config.get("distance_strategy") or "COSINE"
+        verify_distance_strategy = config.get("verify_distance_strategy") or "EUCLIDEAN_DISTANCE"
 
         super().__init__(
-            database_path = database_path,
-            top_k = top_k,
-            vector_store=vector_store
+            database_path=database_path,
+            top_k=top_k,
+            vector_store=vector_store,
+            config=config,
+            distance_strategy = distance_strategy,
+            verify_distance_strategy = verify_distance_strategy
         )
 
-    def _get_relevant_documents(self, query: str, feature_invariants: str, *, run_manager=None):
+    def _get_relevant_documents(self, query: str, feature_invariants: str, distance_strategy: str="COSINE", *, run_manager=None):
         """实现基类要求的抽象方法"""
-        return self.vector_store.vector_store.similarity_search(
+        if distance_strategy == "EUCLIDEAN_DISTANCE":
+            strategy = DistanceStrategy.EUCLIDEAN_DISTANCE
+        elif distance_strategy == "MAX_INNER_PRODUCT":
+            strategy = DistanceStrategy.MAX_INNER_PRODUCT
+        elif distance_strategy == "DOT_PRODUCT":
+            strategy = DistanceStrategy.DOT_PRODUCT
+        elif distance_strategy == "JACCARD":
+            strategy = DistanceStrategy.JACCARD
+        elif distance_strategy == "COSINE":
+            strategy = DistanceStrategy.COSINE
+        else:
+            raise ValueError(f"未知的距离策略: {distance_strategy}")
+
+        return self.vector_store.vector_store.similarity_search_with_score(
             query=query,
             k=self.top_k,
-            filter={"feature_invariants": feature_invariants}
+            filter={"feature_invariants": feature_invariants}, 
+            distance_strategy = strategy
         )
 
-    def calculate_similarity(self, query: str, document: Document):
-        """计算余弦相似度"""
-        # 获取查询和文档的嵌入向量
-        query_embed = self.vector_store.embedding_model.embed_query(query)
-        doc_embed = self.vector_store.embedding_model.embed_query(document.page_content)
-
-        # 计算余弦相似度
-        dot_product = sum(q * d for q, d in zip(query_embed, doc_embed))
-        norm_q = sum(q * q for q in query_embed) ** 0.5
-        norm_d = sum(d * d for d in doc_embed) ** 0.5
-
-        # 避免除以零
-        return dot_product / (norm_q * norm_d + 1e-10)
-
     def feature_extractor(self, task_code: str, impl_type:str, backend:str, arch: str):
-        """计算余弦相似度"""
-        # 使用基类提供的标准方法检索文档
+        """提取任务特征"""
         # 特征提取
         feature_extractor = FeatureExtraction(
             task_desc=task_code,
-            model_config=load_config().get("agent_model_config"),
+            model_config=self.config.get("model_config"),
             impl_type=impl_type,
             backend=backend,
             arch=arch
         )
-        extracted_features, _, _ = asyncio.run(feature_extractor.run())
-        return extracted_features.strip("```json").strip("```").strip()
+        feature_content, _, _ = asyncio.run(feature_extractor.run())
+        parsed_content = feature_extractor.feature_parser.parse(feature_content)
+        extracted_features = {
+            "op_name": parsed_content.op_name,
+            "op_type": parsed_content.op_type,
+            "input_specs": parsed_content.input_specs,
+            "output_specs": parsed_content.output_specs,
+            "computation": parsed_content.computation,
+            "schedule": parsed_content.schedule,
+            "backend": parsed_content.backend,
+            "arch": parsed_content.arch,
+            "impl_type": parsed_content.impl_type,
+            "description": parsed_content.description
+        }
+        return extracted_features
     
 
-    def sample(self, code: str, stragegy_mode: str = "random", backend: str = "", arch: str = "", impl_type: str = ""):
+    def sample(self, impl_code: str, stragegy_mode: str = "random", backend: str = "", arch: str = "", impl_type: str = ""):
         """
         检索最相似的算子优化方案
-        Args:
-            operator_features (str): 算子特征描述
         Returns:
             list: 包含相似度、算子名称、文件路径和描述的字典列表
         """
-        operator_features = self.feature_extractor(code, impl_type, backend, arch).replace("\n", ", ")
+        features = self.feature_extractor(impl_code, impl_type, backend, arch)
+        operator_features = ", ".join([f"{k}: {v}" for k, v in features.items()])
         feature_invariants = get_md5_hash(impl_type=impl_type, backend=backend, arch=arch)
-        docs = self._get_relevant_documents(operator_features, feature_invariants)
+        docs = self._get_relevant_documents(operator_features, feature_invariants, self.distance_strategy)
 
-        return [
+        recall = self.verify(operator_features, feature_invariants, docs, self.verify_distance_strategy)
+
+        return recall, [
             {
-                "similarity_score": self.calculate_similarity(code, doc),
+                "similarity_score": score,
                 "operator_name": doc.metadata["operator_name"],
-                "operator_type": doc.metadata["operator_type"],
-                "file_path": doc.metadata["file_path"],
-                "description": doc.page_content
+                "file_path": doc.metadata["file_path"]
             }
-            for doc in docs
+            for doc, score in docs
         ]
     
-    def insert(self, task_code, backend: str, arch: str, impl_type: str, framework:str = "", op_name: str = ""):
+    def insert(self, task_code, backend: str, arch: str, impl_type: str, framework:str = ""):
         """
         插入新的算子调度方案
         """
         framework_code = task_code.get("framework_code", "")
         impl_code = task_code.get("impl_code", "")
 
-        md5_hash = get_md5_hash(impl_code=impl_code, op_name=op_name, impl_type=impl_type, backend=backend, arch=arch)
+        md5_hash = get_md5_hash(impl_code=impl_code, impl_type=impl_type, backend=backend, arch=arch)
 
         operator_path = Path(self.database_path) / "operators"
         file_path = operator_path / arch / impl_type / md5_hash
-        os.makedirs(file_path, exist_ok=True)
+        file_path.mkdir(parents=True, exist_ok=True)
         if impl_code:
             impl_file = file_path / f"{impl_type}.py"
             with open(impl_file, "w", encoding="utf-8") as f:
@@ -133,9 +155,9 @@ class DatabaseRAG(BaseRetriever):
         features = self.feature_extractor(task_code, impl_type, backend, arch)
         metadata_file = file_path / "metadata.json"
         with open(metadata_file, "w", encoding="utf-8") as f:
-                f.write(features)
+            json.dump(features, f, ensure_ascii=False, indent=4)
 
-        self.vector_store.insert(arch, impl_type, md5_hash)
+        self.vector_store.insert(backend, arch, impl_type, md5_hash)
 
     def update(self):
         """
@@ -143,11 +165,11 @@ class DatabaseRAG(BaseRetriever):
         """
         pass
 
-    def delete(self, impl_code, backend: str, arch: str, impl_type: str, op_name: str = ""):
+    def delete(self, impl_code, backend: str, arch: str, impl_type: str):
         """
         删除算子调度方案
         """
-        md5_hash = get_md5_hash(impl_code=impl_code, op_name=op_name, impl_type=impl_type, backend=backend, arch=arch)
+        md5_hash = get_md5_hash(impl_code=impl_code, impl_type=impl_type, backend=backend, arch=arch)
 
         operator_path = Path(self.database_path) / "operators"
         file_path = operator_path / arch / impl_type / md5_hash
@@ -161,3 +183,13 @@ class DatabaseRAG(BaseRetriever):
             else:
                 break
         self.vector_store.delete(md5_hash)
+
+    def verify(self, query, feature_invariants, sample_docs, distance_strategy="EUCLIDEAN_DISTANCE"):
+        docs = self._get_relevant_documents(query, feature_invariants, distance_strategy)
+        paths = [doc.metadata["file_path"] for doc, _ in docs]
+        positives = len(sample_docs) 
+        true_positives = 0
+        for doc, _ in sample_docs:
+            if doc.metadata["file_path"] in paths:
+                true_positives += 1
+        return true_positives / positives

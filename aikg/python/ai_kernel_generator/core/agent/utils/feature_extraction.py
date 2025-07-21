@@ -1,7 +1,7 @@
 import logging
 from typing import Tuple
 from ai_kernel_generator.core.agent.agent_base import AgentBase
-from ai_kernel_generator.utils.common_utils import ParserFactory, get_md5_hash
+from ai_kernel_generator.utils.common_utils import ParserFactory
 logger = logging.getLogger(__name__)
 
 class FeatureExtraction(AgentBase):

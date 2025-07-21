@@ -2,12 +2,10 @@
 embedding_model: "GanymedeNil/text2vec-large-chinese"  # 适用于中文特征描述
 # 可选英文模型: "sentence-transformers/all-MiniLM-L6-v2"
 
-# 目录结构配置
-operator_path: "database/operators"
-index_path: "database/vector_store"
+# 向量数据库配置
+distance_strategy: "COSINE"
+verify_distance_strategy: "EUCLIDEAN_DISTANCE"
 
-# 检索参数
-top_k: 5  # 返回前N个最相似结果
-
-# 高级选项
-distance_metric: "COSINE"  # FAISS使用的距离度量
+# 特征提取模型预设配置
+model_config:
+  feature_extraction: deepseek_r1_default

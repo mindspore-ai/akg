@@ -12,9 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import yaml
 import json
+import logging
 from pathlib import Path
 from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
@@ -22,8 +22,11 @@ from langchain_core.documents import Document
 from ai_kernel_generator import get_project_root
 from ai_kernel_generator.utils.common_utils import get_md5_hash
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_DATABASE_PATH = Path(get_project_root()).parent.parent / "database"
 DEFAULT_INDEX_PATH = DEFAULT_DATABASE_PATH / "vector_store"
+DEFAULT_CONFIG_PATH = Path(get_project_root()) / "database" / "rag_config.yaml"
 
 class VectorStore:
     """
@@ -31,12 +34,12 @@ class VectorStore:
     """
     def __init__(
         self, 
-        config_path: str,
+        config_path: str = "",
         database_path: str = "",
         index_path: str = ""):
         self.database_path = database_path if database_path else str(DEFAULT_DATABASE_PATH)
         self.index_path = index_path if index_path else str(DEFAULT_INDEX_PATH)
-        self.config_path = config_path
+        self.config_path = config_path if config_path else str(DEFAULT_CONFIG_PATH)
         self.embedding_model = self.load_embedding_model()
         self.vector_store = self.load_or_create_vector_store()
         
@@ -57,11 +60,11 @@ class VectorStore:
         
         # 如果索引不存在则创建
         if not (index_path / "index.faiss").exists():
-            print("构建算子特征向量库...")
+            logger.info("构建算子特征向量库...")
             return self.build_vector_store()
         
         # 加载现有索引
-        print("加载现有向量索引...")
+        logger.info("加载现有向量索引...")
         return FAISS.load_local(
             folder_path=self.index_path,
             embeddings=self.embedding_model,
@@ -91,11 +94,9 @@ class VectorStore:
             feature_invariants = get_md5_hash(impl_type=impl_type, backend=backend, arch=arch)
             # 创建检索文档
             doc = Document(
-                page_content=metadata['description'],
+                page_content=", ".join([f"{k}: {v}" for k, v in metadata.items()]),
                 metadata={
                     "operator_name": metadata.get('op_name', ''),
-                    "operator_type": metadata.get('op_type', ''),
-                    "operator_shape": metadata.get('op_axes_size', ''),
                     "file_path": str(op_subdir),
                     "feature_invariants": feature_invariants
                 }
@@ -112,14 +113,14 @@ class VectorStore:
         else:
             vector_store = FAISS.from_documents(
                 documents=documents,
-                embedding=self.embedding_model
+                embedding=self.embedding_model,
             )
         
         # 保存索引
         vector_store.save_local(self.index_path)
         return vector_store
 
-    def insert(self, arch: str, impl_type: str, md5_hash: str):
+    def insert(self, backend: str, arch: str, impl_type: str, md5_hash: str):
         """向向量存储添加新的算子特征文档
         Args:
             arch (str): 架构名称。
@@ -137,14 +138,12 @@ class VectorStore:
         op_dir = metadata_path.parent
 
         # 创建文档对象
-        feature_invariants = get_md5_hash(impl_type=impl_type, backend=metadata.get('backend', ''), arch=arch)
+        feature_invariants = get_md5_hash(impl_type=impl_type, backend=backend, arch=arch)
         # 创建检索文档
         doc = Document(
-            page_content=metadata['description'],
+            page_content=", ".join([f"{k}: {v}" for k, v in metadata.items()]),
             metadata={
                 "operator_name": metadata.get('op_name', ''),
-                "operator_type": metadata.get('op_type', ''),
-                "operator_shape": metadata.get('op_axes_size', ''),
                 "file_path": str(op_dir),
                 "feature_invariants": feature_invariants
             }
@@ -156,7 +155,7 @@ class VectorStore:
         # 添加到向量存储并保存
         self.vector_store.add_documents([doc])
         self.vector_store.save_local(self.index_path)
-        print(f"成功添加算子md5_hash={md5_hash}到向量索引")
+        logger.info(f"成功添加算子md5_hash={md5_hash}到向量索引")
 
     def delete(self, md5_hash: str):
         existing_ids = list(self.vector_store.index_to_docstore_id.values())
@@ -167,6 +166,11 @@ class VectorStore:
                 # 已存在相同算子的文档，删除旧文档
                 self.vector_store.delete([doc_id])
                 self.vector_store.save_local(self.index_path)
-                print(f"成功从向量索引中删除算子md5_hash={md5_hash}")
+                logger.info(f"成功从向量索引中删除算子md5_hash={md5_hash}")
                 return 
-        print(f"算子md5_hash={md5_hash}不存在于向量索引中")
+        logger.info(f"算子md5_hash={md5_hash}不存在于向量索引中")
+    
+    def clear(self):
+        self.vector_store.delete(list(self.vector_store.index_to_docstore_id.values()))
+        self.vector_store.save_local(self.index_path)
+        logger.info("成功清空向量索引")
