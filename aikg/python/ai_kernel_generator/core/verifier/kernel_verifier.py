@@ -230,6 +230,73 @@ class KernelVerifier:
         except Exception as e:
             return False, f"分析数据时出错: {str(e)}", 0.0
 
+    def run_nsys(self, script_path: str) -> Tuple[bool, str, Optional[str]]:
+        """运行nsys性能分析"""
+        try:
+            output_name = "nsys_report"
+            cmd = f'nsys profile --output={output_name} --force-overwrite true python {script_path}'
+            print("run_nsys = ", cmd)
+            process = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
+            report_path = os.path.join(os.path.dirname(script_path), output_name + ".nsys-rep")
+            
+            if os.path.exists(report_path):
+                return True, "", report_path
+            return False, "未找到nsys报告文件", None
+        except Exception as e:
+            return False, f"执行错误: {str(e)}", None
+
+    def analyze_nsys_data(self, rep_path: str, warmup_times: int, run_times: int) -> Tuple[bool, str, float]:
+        """分析nsys生成的rep文件，返回平均耗时(us)，统计方式与analyze_prof_data一致"""
+        
+        try:
+            from pathlib import Path
+            dir_plib = Path(rep_path).resolve().parent
+            csv_path = dir_plib / "nsys_report" # rep_path.replace(".nsys-rep", ".csv")
+            # 导出csv
+            cmd = f'nsys stats --report gputrace  --timeunit us  --format csv --output {csv_path} {rep_path}'
+            print("analyze_nsys_data = ", cmd)
+            subprocess.run(cmd, shell=True, check=True)
+            csv_path = dir_plib / "nsys_report_gputrace.csv"
+            
+            if not os.path.exists(csv_path):
+                return False, "未生成csv文件", 0.0
+            df = pd.read_csv(csv_path)
+            # 兼容不同nsys版本的列名
+            name_col = None
+            for col in df.columns:
+                if col.lower() in ["name", "function name", "kernel name", "Name"]:
+                    name_col = col
+                    break
+            if not name_col:
+                # 兜底找包含name的列
+                for col in df.columns:
+                    if "name" in col.lower():
+                        name_col = col
+                        break
+            time_col = None
+            for col in df.columns:
+                if "time (ns)" in col.lower() or "average" in col.lower() or "duration" in  col.lower():
+                    time_col = col
+                    break
+            if not name_col or not time_col:
+                return False, "未找到kernel名或耗时列", 0.0
+            total_count = warmup_times + run_times
+            op_counts = df[name_col].value_counts()
+            valid_ops = op_counts[op_counts == total_count]
+            if len(valid_ops) == 0:
+                return False, "没有找到符合预期次数的kernel", 0.0
+            df_valid = df[df[name_col].isin(valid_ops.index)]
+            total_avg_time = 0.0
+            for op_name in valid_ops.index:
+                op_data = df_valid[df_valid[name_col] == op_name][time_col].tolist()
+                if len(op_data) > warmup_times:
+                    valid_data = op_data[warmup_times:]
+                    avg_time = sum(valid_data) / len(valid_data)
+                    total_avg_time += avg_time # timeunit us
+            return True, "", total_avg_time
+        except Exception as e:
+            return False, f"分析nsys数据时出错: {str(e)}", 0.0
+
     def save_speedup_result(self, speedup: float, base_time: float, gen_time: float, unique_dir: str):
         """保存加速比结果到txt文件"""
         try:
@@ -241,7 +308,7 @@ class KernelVerifier:
             with open(filepath, 'a', encoding='utf-8') as f:
                 f.write(f"op_name: {self.op_name}, task_id: {self.task_id}, unique_dir: {unique_dir}, ")
                 f.write(f"base_time: {base_time:.6f} us, generation_time: {gen_time:.6f} us, ")
-                f.write(f"speedup: {speedup:.6f}x\n\n")
+                f.write(f"speedup: {speedup:.6f}x\n")
 
             logger.debug(f"[{self.task_id}:{self.op_name}] 加速比结果已保存")
 
@@ -262,16 +329,25 @@ class KernelVerifier:
             # 生成profile脚本并运行
             self.gen_profile_project(verify_dir, device_id, warmup_times, run_times)
 
-            _, _, base_prof_path = self.run_msprof(os.path.join(verify_dir, f"profile_{self.op_name}_base.py"))
-            _, _, gen_prof_path = self.run_msprof(os.path.join(verify_dir, f"profile_{self.op_name}_generation.py"))
+            if self.backend == "ascend":
+                _, _, base_prof_path = self.run_msprof(os.path.join(verify_dir, f"profile_{self.op_name}_base.py"))
+                _, _, gen_prof_path = self.run_msprof(os.path.join(verify_dir, f"profile_{self.op_name}_generation.py"))
+                _, _, base_time = self.analyze_prof_data(base_prof_path, warmup_times, run_times)
+                _, _, gen_time = self.analyze_prof_data(gen_prof_path, warmup_times, run_times)
+            elif self.backend == "cuda":
+                _, _, base_prof_path = self.run_nsys(os.path.join(verify_dir, f"profile_{self.op_name}_base.py"))
+                _, _, base_time = self.analyze_nsys_data(base_prof_path, warmup_times, run_times)
+                _, _, gen_prof_path = self.run_nsys(os.path.join(verify_dir, f"profile_{self.op_name}_generation.py"))
+                _, _, gen_time = self.analyze_nsys_data(gen_prof_path, warmup_times, run_times)
+            else:
+                logger.warning(f"[{self.task_id}:{self.op_name}] 不支持的backend: {self.backend}")
+                return 0.0
 
-            _, _, base_time = self.analyze_prof_data(base_prof_path, warmup_times, run_times)
-            _, _, gen_time = self.analyze_prof_data(gen_prof_path, warmup_times, run_times)
-
-            speedup = base_time / gen_time if gen_time > 0 else 0.0
+            speedup = (base_time - gen_time) / base_time if gen_time > 0 else 0.0 * 100.
             self.save_speedup_result(speedup, base_time, gen_time, unique_dir_name)
-
-            logger.info(f"[{self.task_id}:{self.op_name}] 性能分析完成，加速比: {speedup:.2f}x")
+            logger.info(f"orig performance is {base_time:.2f} us")
+            logger.info(f"aikg performance is {gen_time:.2f} us")
+            logger.info(f"[{self.task_id}:{self.op_name}] 性能分析完成，性能提升: {speedup:.2f} %")
             return speedup
         except Exception as e:
             logger.warning(f"[{self.task_id}:{self.op_name}] 性能分析失败: {str(e)}")
