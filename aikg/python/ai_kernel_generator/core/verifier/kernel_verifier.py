@@ -354,12 +354,12 @@ class KernelVerifier:
                 logger.warning(f"[{self.task_id}:{self.op_name}] 不支持的backend: {self.backend}")
                 return 0.0
 
-            speedup = (base_time - gen_time) / base_time if gen_time > 0 else 0.0 * 100.
+            speedup = ((base_time - gen_time) / base_time if gen_time > 0 else 0.0) * 100.
             self.save_speedup_result(speedup, base_time, gen_time, unique_dir_name)
             logger.info(f"orig performance is {base_time:.2f} us")
             logger.info(f"aikg performance is {gen_time:.2f} us")
             logger.info(f"[{self.task_id}:{self.op_name}] 性能分析完成，性能提升: {speedup:.2f} %")
-            return speedup
+            return gen_time, base_time, speedup
         except Exception as e:
             logger.warning(f"[{self.task_id}:{self.op_name}] 性能分析失败: {str(e)}")
             return 0.0

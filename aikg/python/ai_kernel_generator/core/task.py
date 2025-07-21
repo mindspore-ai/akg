@@ -45,7 +45,8 @@ class Task:
                  device_pool: DevicePool,
                  framework: str,
                  task_type="precision_only",
-                 workflow: Optional[str] = None) -> None:
+                 workflow_config_path: Optional[str] = None,
+                 inspirations: Optional[List[str]] = None,) -> None:
         """
         初始化Task类，基于workflow配置进行工作流管理。
 
@@ -64,6 +65,7 @@ class Task:
                 - 文件名: "coder_only_workflow" -> "config/coder_only_workflow.yaml"
                 - 完整路径: "config/xxx.yaml"
                 - None: 使用默认配置
+            inspirations (List[str], optional): 启发示例列表。
         """
         # 验证任务配置
         check_task_config(framework, backend, arch, dsl)
@@ -79,6 +81,7 @@ class Task:
         self.framework = framework
         self.task_type = task_type
         self.device_pool = device_pool
+        self.inspirations = inspirations
 
         # 统一保存config，后续向下传递
         self.config = config
@@ -159,6 +162,9 @@ class Task:
         # 初始化任务信息
         self.conductor.set_task_info(base_doc)
 
+        # inspirations from evolution
+        self.conductor.task_info.update({"inspirations": self.inspirations})
+
         # 插入初始记录（如果有初始代码）
         # 注意：这里的逻辑假设从某个中间步骤开始，需要预先插入之前步骤的结果
         if init_task_info and init_task_info.get("designer_code"):
@@ -173,7 +179,7 @@ class Task:
                 result=json.dumps({"code": init_task_info.get("coder_code")})
             )
 
-    async def run(self, init_task_info: Optional[Dict[str, Any]] = None) -> Tuple[str, bool]:
+    async def run(self, init_task_info: Optional[Dict[str, Any]] = None) -> Tuple[str, bool, dict]:
         """
         异步运行任务，执行操作任务字符串
 
@@ -181,7 +187,7 @@ class Task:
             init_task_info: 初始任务信息字典，包含初始代码等
 
         Returns:
-            Tuple[str, bool]: (算子名称, 是否成功)
+            Tuple[str, bool, dict]: (算子名称, 是否成功, 任务信息)
         """
         try:
             # 初始化conductor
@@ -231,17 +237,16 @@ class Task:
                                 self.verifier.run,
                                 self.conductor.task_info, current_step, device_id
                             )
-                            profile_res = ""
+                            profile_res = None
                             if verify_res and self.task_type == "profile" and self.backend == "ascend":
                                 profile_settings = self.config.get("profile_settings", {})
-                                speedup = self.verifier.run_profile(current_step, device_id, profile_settings)
-                                profile_res = f"speedup: {speedup:.6f}x"
+                                profile_res = self.verifier.run_profile(current_step, device_id, profile_settings)
 
                             self.conductor.record_agent_execution(
                                 agent_name="verifier",
                                 result=str(verify_res),
                                 error_log=verify_log,
-                                profile=profile_res
+                                profile_res=profile_res
                             )
                         finally:
                             await self.device_pool.release_device(device_id)
@@ -259,12 +264,12 @@ class Task:
                         result=f"ERROR: Agent execution failed: {str(agent_error)}",
                         error_log=str(agent_error)
                     )
-                    return self.op_name, False
+                    return self.op_name, False, self.conductor.task_info
 
             # 获取最终结果
             final_success = self.conductor.task_info.get('verifier_result', False)
-            return self.op_name, final_success
+            return self.op_name, final_success, self.conductor.task_info
 
         except Exception as e:
             logger.error(f"Task {self.task_id} failed: {e}")
-            return self.op_name, False
+            return self.op_name, False, self.conductor.task_info

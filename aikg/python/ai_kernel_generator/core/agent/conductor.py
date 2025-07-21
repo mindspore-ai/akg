@@ -124,7 +124,7 @@ class Conductor(AgentBase):
         return ResultProcessor.get_agent_parser(agent_name, self.workflow_config_path, self.agent_parsers)
 
     def record_agent_execution(self, agent_name: str, result: str, prompt: str = "", reasoning: str = "",
-                               error_log: str = "", profile: str = "") -> bool:
+                               error_log: str = "", profile_res = []) -> bool:
         """
         记录agent执行结果，进行解析并更新任务信息
 
@@ -134,7 +134,7 @@ class Conductor(AgentBase):
             prompt: 使用的prompt
             reasoning: 推理过程
             error_log: 错误日志（主要用于verifier）
-            profile: 性能分析结果（主要用于verifier）
+            profile_res: 性能分析结果（主要用于verifier）
 
         Returns:
             bool: 解析是否成功（对于不需要解析器的agent返回True）
@@ -149,7 +149,7 @@ class Conductor(AgentBase):
                 prompt=prompt,
                 reasoning=reasoning,
                 error_log=error_log,
-                profile=profile
+                profile_res=profile_res
             )
 
             # 2. 进行解析并更新任务信息
@@ -161,6 +161,8 @@ class Conductor(AgentBase):
                     agent_name, result, self.task_info, agent_parser, self.trace, self.agent_info
                 )
             elif agent_name == "verifier":
+                if profile_res:
+                    self.task_info['profile_res'] = profile_res
                 ResultProcessor.update_verifier_result(result, error_log, self.task_info)
 
         except Exception as e:

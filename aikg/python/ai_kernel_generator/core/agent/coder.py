@@ -71,15 +71,40 @@ class Coder(AgentBase):
             # API和文档
             "api_docs": self.load_doc("api/api.md"),
             "dsl_basic_docs": self.load_doc("basic_docs.md"),
-            "dsl_sample_code": "",
+            "dsl_sample_code": self._load_dsl_sample_code(),
             "expert_suggestion": self.load_doc("suggestion_docs.md"),
 
             # 可选参数
             "hardware_docs": get_hardware_doc(self.backend, self.arch),
             "arch_name": self.arch,
             "database_examples": "",
-            "evolve_attempts": "",
         }
+
+
+    def _load_dsl_sample_code(self) -> str:
+        """
+        根据framework加载对应的DSL示例代码
+        
+        Returns:
+            str: 示例代码内容，如果找不到对应示例则返回空字符串
+        """
+        if not self.framework:
+            logger.warning("framework为空，无法加载示例代码")
+            return ""
+        
+        try:
+            # 使用现有的get_triton_sample_code函数
+            sample_code = get_triton_sample_code(self.framework)
+            if sample_code:
+                logger.info(f"成功加载{self.framework}示例代码")
+                return sample_code
+            else:
+                logger.warning(f"未找到{self.framework}的示例代码")
+                return ""
+        except Exception as e:
+            logger.warning(f"加载示例代码失败: {e}")
+            return ""
+        
 
     async def run(self, task_info: dict) -> Tuple[str, str, str]:
         """执行代码生成
@@ -102,7 +127,10 @@ class Coder(AgentBase):
             "sketch": sketch,  # AUL代码作为sketch
             "llm_suggestions": conductor_suggestion,  # Conductor建议
             "error_log": task_info.get('verifier_error', ''),
+            "inspirations": task_info.get('inspirations', ''),
         }
 
         # 执行LLM生成
         return await self.run_llm(self.coder_prompt, input_data, self.model_config["coder"])
+
+

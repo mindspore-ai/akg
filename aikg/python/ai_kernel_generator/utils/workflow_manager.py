@@ -153,6 +153,5 @@ class WorkflowManager:
         # 添加verifier特殊字段（因为verifier没有parser_definition）
         task_info['verifier_result'] = False
         task_info['verifier_error'] = ""
-        task_info['profiling_result'] = ""
 
         return task_info
