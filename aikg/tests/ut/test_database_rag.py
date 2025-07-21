@@ -1,7 +1,7 @@
 import pytest
 from pathlib import Path
 from ai_kernel_generator import get_project_root
-from ai_kernel_generator.database.database_rag import DatabaseRAG, DEFAULT_DATABASE_PATH
+from ai_kernel_generator.database.database_rag import DatabaseRAG
 from ..utils import get_benchmark_name
 
 DEFAULT_BENCHMARK_PATH = Path(get_project_root()).parent.parent / "benchmark"
@@ -13,10 +13,7 @@ def gen_task_code(framework_path: str = "", impl_path: str = ""):
         framework_code = Path(framework_path).read_text()
     if impl_path:
         impl_code = Path(impl_path).read_text()
-    return {
-        "framework_code": framework_code,
-        "impl_code": impl_code
-    }
+    return impl_code, framework_code
 
 
 @pytest.mark.level0
@@ -34,11 +31,11 @@ def test_insert():
     id_list = [2, 3, 4, 5]
     benchmark_name = get_benchmark_name(id_list)
     for op_name in benchmark_name:
-        task_code = gen_task_code(
+        impl_code, framework_code = gen_task_code(
             framework_path=DEFAULT_BENCHMARK_PATH / "kernelbench" / framework / op_name / f"{op_name}_{framework}.py",
             impl_path=DEFAULT_DATABASE_PATH / "triton" / arch / f"{op_name}_{impl_type}.py"
         )
-        db_system.insert(task_code, backend, arch, impl_type, framework)
+        db_system.insert(impl_code, framework_code, backend, arch, impl_type, framework)
 
 
 @pytest.mark.level0

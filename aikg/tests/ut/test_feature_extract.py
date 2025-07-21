@@ -2,28 +2,29 @@ import pytest
 import gc
 from pathlib import Path
 from ai_kernel_generator.core.agent.utils.feature_extraction import FeatureExtraction
-from ai_kernel_generator.config.config_validator import load_config
+from ai_kernel_generator.utils.common_utils import load_yaml
 from ai_kernel_generator import get_project_root
 
 DEFAULT_DATABASE_PATH = Path(get_project_root()).parent.parent / "database"
+DEFAULT_CONFIG_PATH = Path(get_project_root()) / "database" / "rag_config.yaml"
 
 @pytest.mark.level0
 @pytest.mark.asyncio
 async def test_feature_extract():
-    config = load_config()
-    model_name_dict = config.get("agent_model_config")
+    config = load_yaml(DEFAULT_CONFIG_PATH)['agent_model_config']
     op_name = "elu"
     backend = "ascend"
     arch = "ascend310p3"
     impl_type = "swft"
     op_name = "elu"
-    task_desc_path = DEFAULT_DATABASE_PATH / impl_type / arch / op_name / "aigen" / "elu_aul.py"
+    impl_code_path = DEFAULT_DATABASE_PATH / impl_type / arch / op_name / "aigen" / "elu_aul.py"
 
-    with open(task_desc_path, "r", encoding="utf-8") as f:
-        task_desc = f.read()
+    with open(impl_code_path, "r", encoding="utf-8") as f:
+        impl_code = f.read()
     feature = FeatureExtraction(
-        task_desc=task_desc,
-        model_config=model_name_dict,
+        model_config=config,
+        impl_code=impl_code,
+        framework_code="",
         impl_type=impl_type,
         backend=backend,
         arch=arch

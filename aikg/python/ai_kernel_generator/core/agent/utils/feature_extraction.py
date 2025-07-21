@@ -5,9 +5,10 @@ from ai_kernel_generator.utils.common_utils import ParserFactory
 logger = logging.getLogger(__name__)
 
 class FeatureExtraction(AgentBase):
-    def __init__(self, task_desc: str, model_config: dict, impl_type: str = "", backend: str = "", arch: str = ""):
-        self.task_desc = task_desc
+    def __init__(self, model_config: dict, impl_code: str = "", framework_code: str = "", impl_type: str = "", backend: str = "", arch: str = ""):
         self.model_config = model_config
+        self.impl_code = impl_code
+        self.framework_code = framework_code
         self.impl_type = impl_type
         self.backend = backend
         self.arch = arch
@@ -23,7 +24,8 @@ class FeatureExtraction(AgentBase):
         self.feature_extraction_template = self.load_template("feature_extraction/feature_extraction_template.j2")
 
         self.feature_extraction_input = {
-            "task_desc": self.task_desc,
+            "impl_code": self.impl_code,
+            "framework_code": self.framework_code,
             "impl_type": self.impl_type,
             "backend": self.backend,
             "arch": self.arch,

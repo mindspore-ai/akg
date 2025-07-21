@@ -1,7 +1,20 @@
 你是一个任意前端的算子特征提取专家，现在需要根据算子的初始实现或者调度，简单扼要分析出当前算子的特征信息
 
 1. 待解析代码：
-{{ task_desc }}
+{% if framework_code %}
+
+原始算子任务描述：
+{{ framework_code }}
+
+{% endif %}
+
+
+{% if impl_code %}
+
+经过调度优化后的算子描述：
+{{ impl_code }}
+
+{% endif %}
 
 2. 这是需要参考返回内容的要求，下面是核心解析规则：
 ## 算子基础信息
@@ -12,7 +25,11 @@
   **computation**：简单说明算子的计算逻辑；
 
 ## 调度策略
+{% if impl_code %}
   **schedule**：简单说明算子调度策略，包括切分策略，并行策略，硬件资源利用（每个核的数据量，​内存访问等），以及关键优化技术等
+{% else %}
+  **schedule**：没有经过调度优化的算子，调度策略为空
+{% endif %}
 
 ## 硬件信息和实现类型
   **backend**: {{ backend }}
@@ -26,8 +43,8 @@
 ```
 "op_name": "matmul",
 "op_type": "matmul",
-"input_specs": "输入 A: shape (M, K), dtype float16, 行优先布局（row-major）, 输入 B: shape (K, N), dtype float16, 行优先布局（row-major）",
-"output_specs": "输出 C: shape (M, N), dtype float16, 行优先布局（row-major）",
+"input_specs": "输入 A: shape (1024, 1024), dtype float16, 行优先布局（row-major）, 输入 B: shape (1024, 1024), dtype float16, 行优先布局（row-major）",
+"output_specs": "输出 C: shape (1024, 1024), dtype float16, 行优先布局（row-major）",
 "computation": "C = A * B + C",
 "schedule": "分块策略: M维度分块128, N维度分块32, K维度分块32；并行策略: GROUP_SIZE_M为8，将M维相邻的8个分块组合成工作组；计算优化: float32累加器避免半精度计算误差",
 "backend": "ascend",

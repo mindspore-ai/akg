@@ -79,12 +79,13 @@ class DatabaseRAG(BaseRetriever):
             distance_strategy = strategy
         )
 
-    def feature_extractor(self, task_code: str, impl_type:str, backend:str, arch: str):
+    def feature_extractor(self, task_code: str, framework_code:str, impl_type:str, backend:str, arch: str):
         """提取任务特征"""
         # 特征提取
         feature_extractor = FeatureExtraction(
+            model_config=self.config.get("agent_model_config"),
             task_desc=task_code,
-            model_config=self.config.get("model_config"),
+            framework_code=framework_code,
             impl_type=impl_type,
             backend=backend,
             arch=arch
@@ -106,13 +107,13 @@ class DatabaseRAG(BaseRetriever):
         return extracted_features
     
 
-    def sample(self, impl_code: str, stragegy_mode: str = "random", backend: str = "", arch: str = "", impl_type: str = ""):
+    def sample(self, impl_code: str, framework_code:str = "", stragegy_mode: str = "random", backend: str = "", arch: str = "", impl_type: str = ""):
         """
         检索最相似的算子优化方案
         Returns:
             list: 包含相似度、算子名称、文件路径和描述的字典列表
         """
-        features = self.feature_extractor(impl_code, impl_type, backend, arch)
+        features = self.feature_extractor(impl_code, framework_code, impl_type, backend, arch)
         operator_features = ", ".join([f"{k}: {v}" for k, v in features.items()])
         feature_invariants = get_md5_hash(impl_type=impl_type, backend=backend, arch=arch)
         docs = self._get_relevant_documents(operator_features, feature_invariants, self.distance_strategy)
@@ -128,13 +129,10 @@ class DatabaseRAG(BaseRetriever):
             for doc, score in docs
         ]
     
-    def insert(self, task_code, backend: str, arch: str, impl_type: str, framework:str = ""):
+    def insert(self, impl_code:str, framework_code:str, backend: str, arch: str, impl_type: str, framework:str = ""):
         """
         插入新的算子调度方案
         """
-        framework_code = task_code.get("framework_code", "")
-        impl_code = task_code.get("impl_code", "")
-
         md5_hash = get_md5_hash(impl_code=impl_code, impl_type=impl_type, backend=backend, arch=arch)
 
         operator_path = Path(self.database_path) / "operators"
@@ -152,7 +150,7 @@ class DatabaseRAG(BaseRetriever):
             with open(framework_file, "w", encoding="utf-8") as f:
                 f.write(framework_code)
 
-        features = self.feature_extractor(task_code, impl_type, backend, arch)
+        features = self.feature_extractor(impl_code, framework_code, impl_type, backend, arch)
         metadata_file = file_path / "metadata.json"
         with open(metadata_file, "w", encoding="utf-8") as f:
             json.dump(features, f, ensure_ascii=False, indent=4)
