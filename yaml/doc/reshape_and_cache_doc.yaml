@@ -1,0 +1,34 @@
+reshape_and_cache:
+    description: |
+        The ReshapeAndCache is used for updating the block-wise KVCache of transformer network.
+
+        Args:
+            key (Tensor): The key tensor with data type of float16.
+              :math:`(num\_tokens, num\_head, head\_dim)`.
+            value (Tensor, optional): The value tensor with data type of float16.
+              :math:`(num\_tokens, num\_head, head\_dim)`.
+            key_cache (Tensor): The cache tensor with data type of float16.
+              :math:`(num\_blocks, block\_size, num\_head, head\_dim)`.
+            value_cache (Tensor, optional): The cache tensor with data type of float16.
+              :math:`(num\_blocks, block\_size, num\_head, head\_dim)`.
+            slot_mapping (Tensor): The slot mapping tensor with data type of int32.
+              :math:`(num\_tokens,)`.
+                        
+        Outputs:
+            With same data type and same shape as `key` tensor.
+
+        Examples:
+            >>> from mindspore import Tensor, Parameter
+            >>> import ms_custom_ops
+            >>> num_tokens =  = 4
+            >>> num_head = 40
+            >>> head_dim = 128
+            >>> block_size = 16
+            >>> num_blocks = 128
+            >>> key = Tensor(np.random.randn(num_tokens, num_head, head_dim).astype(np.float16))
+            >>> value = Tensor(np.random.randn(num_tokens, num_head, head_dim).astype(np.float16))
+            >>> key_cache = Parameter(default_input=Tensor(np.random.randn(num_blocks, block_size, num_head, head_dim).astype(np.float16)))
+            >>> value_cache = Parameter(default_input=Tensor(np.random.randn(num_blocks, block_size, num_head, head_dim).astype(np.float16)))
+            >>> slot_mapping = Tensor(np.random.shuffle(np.arange(num_tokens, dtype=np.int32)))
+            >>> output = ms_custom_ops.reshape_and_cache(key, value, key_cache, value_cache, slot_mapping)
+            >>> print(key_cache)

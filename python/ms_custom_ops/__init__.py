@@ -23,7 +23,7 @@ def _init_env():
 
 _init_env()
 
-from ms_custom_ops.ms_custom_ops import *
+from .ms_custom_ops import *
 # Import generated ops interfaces
 try:
     from .gen_ops_def import *
@@ -40,7 +40,7 @@ __all__ = []
 
 # Add ops from gen_ops_def if available
 try:
-    import ms_custom_ops.gen_ops_def as gen_ops_def
+    from . import gen_ops_def
     if hasattr(gen_ops_def, '__all__'):
         __all__.extend(gen_ops_def.__all__)
     else:
@@ -51,7 +51,7 @@ except ImportError:
 
 # Add ops from gen_ops_prim if available  
 try:
-    import ms_custom_ops.gen_ops_prim as gen_ops_prim
+    from . import gen_ops_prim
     if hasattr(gen_ops_prim, '__all__'):
         __all__.extend(gen_ops_prim.__all__)
     else:

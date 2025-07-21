@@ -188,6 +188,11 @@ class CustomBuildExt(build_ext):
                 if os.path.exists(src_gen_path):
                     dst_gen_path = os.path.join(python_package_path, gen_file)
                     shutil.copy(src_gen_path, dst_gen_path)
+                    replace_cmd = ["sed", "-i", "s/import ms_cusrom_ops/from . import ms_custom_ops/g", dst_gen_path]
+                    try:
+                        result = subprocess.run(replace_cmd, cwd=self.ROOT_DIR, text=True, shell=False)
+                    except subprocess.CalledProcessError as e:
+                        raise RuntimeError(f"Failed to exec command {replace_cmd}: {e}")
                     logger.info(f"Copied {gen_file} to {dst_gen_path}")
                 else:
                     logger.warning(f"Generated file not found: {src_gen_path}")
