@@ -240,3 +240,53 @@ def test_kernel_verifier_profiling_ascend910b4(op_name, framework, impl_type, ba
     speedup = verifier.run_profile(current_step=0, device_id=0, profile_settings=profile_settings)
 
     print(f"Profiling测试通过，加速比: {speedup:.2f}x")
+
+# profiling功能测试（GPU/CUDA）
+
+
+@pytest.mark.level0
+@pytest.mark.parametrize("op_name", ["relu"])
+@pytest.mark.parametrize("framework,impl_type,backend", [
+    ("torch", "triton", "cuda"),
+])
+def test_kernel_verifier_profiling_a100(op_name, framework, impl_type, backend):
+    arch = "a100"
+    # 读取框架实现代码
+    op_task_file = f"./tests/resources/{op_name}_op/{op_name}_{framework}.py"
+    with open(op_task_file, "r", encoding="utf-8") as f:
+        op_task_str = textwrap.dedent(f.read())
+
+    # 读取实现代码
+    kernel_path = f"./tests/resources/{op_name}_op/{op_name}_{impl_type}.py"
+    with open(kernel_path, "r", encoding="utf-8") as f:
+        kernel_code = f.read()
+
+    log_dir = create_log_dir(f'{op_name}_{framework}_{backend}_{arch}_{impl_type}_profiling_test')
+    impl_func_name = f"{op_name}_{impl_type}_{framework}"
+    verifier = KernelVerifier(
+        op_name=op_name,
+        framework_code=op_task_str,
+        log_dir=log_dir,
+        task_id="profiling_test_001",
+        framework=framework,
+        impl_type=impl_type,
+        backend=backend,
+        arch=arch,
+        impl_func_name=impl_func_name
+    )
+    parsed_code = ParsedCode()
+    if "triton" in impl_type:
+        parsed_code.triton_code = kernel_code
+    else:
+        raise ValueError(f"Invalid implementation type: {impl_type}")
+
+    # 先进行验证，确保验证通过
+    result, error_log = verifier.run(parsed_code)
+    assert result, f"验证失败: {error_log}"
+
+    # 进行性能分析
+    profile_settings = {
+        "run_times": 50,
+        "warmup_times": 5
+    }
+    speedup = verifier.run_profile(current_step=0, device_id=0, profile_settings=profile_settings)

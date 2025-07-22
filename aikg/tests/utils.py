@@ -84,12 +84,12 @@ def add_op_prefix(benchmark_name):
 
 def get_folder_names(folder_path):
     python_files = []
-    
+
     if os.path.exists(folder_path) and os.path.isdir(folder_path):
         for file in os.listdir(folder_path):
             if file.endswith('.py') and os.path.isfile(os.path.join(folder_path, file)):
                 python_files.append(file[:-3])
-    
+
     return python_files
 
 

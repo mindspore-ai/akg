@@ -7,6 +7,8 @@ from ai_kernel_generator.core.async_pool.task_pool import TaskPool
 from ai_kernel_generator.core.async_pool.device_pool import DevicePool
 from ..utils import get_benchmark_name, get_benchmark_task, add_op_prefix, get_folder_names, get_task_content
 from ai_kernel_generator.config.config_validator import load_config
+from functools import partial
+from ai_kernel_generator.core.action_type import ActionType
 
 
 @pytest.mark.asyncio
@@ -39,7 +41,7 @@ async def test_parallel_coder_only_task_triton_ascend910b4(framework, impl_type,
             device_pool=device_pool,
             framework=framework
         )
-        task_pool.create_task(task.run)
+        task_pool.create_task(partial(task.run, init_action_type=ActionType.DO_CODER_DIRECT))
 
     results = await task_pool.wait_all()
     for op_name, result in results:

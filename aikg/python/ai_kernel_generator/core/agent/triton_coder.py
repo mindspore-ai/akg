@@ -115,7 +115,7 @@ class TritonCoder(AgentBase):
                 self.triton_fix_input["error_log"] = informations
             else:
                 self.triton_fix_input["suggestions"] = informations
-        
+
         if self.is_coder_only_mode(action_type):
             self.triton_gen_input["from_aul"] = False
             self.triton_fix_input["from_aul"] = False
@@ -123,7 +123,7 @@ class TritonCoder(AgentBase):
     def is_coder_only_mode(self, action_type: ActionType) -> bool:
         """判断是否为coder_only模式"""
         return action_type == ActionType.DO_CODER_DIRECT or (
-            action_type == ActionType.FIX_CODER and 
+            action_type == ActionType.FIX_CODER and
             hasattr(self, '_from_coder_direct') and self._from_coder_direct
         )
 
@@ -143,13 +143,13 @@ class TritonCoder(AgentBase):
                                ActionType.FIX_CODER], f"TritonCoder不支持的动作类型: {action_type}"
         aul_code = parsed_code.aul_code if parsed_code else ""
         triton_code = parsed_code.triton_code if parsed_code else ""
-        
+
         # 标记是否来自coder_direct模式
         if action_type == ActionType.DO_CODER_DIRECT:
             self._from_coder_direct = True
         elif action_type == ActionType.FIX_CODER and not hasattr(self, '_from_coder_direct'):
             self._from_coder_direct = False
-            
+
         self.update(action_type, aul_code, triton_code, informations)
 
         # 根据动作类型选择对应的处理逻辑
