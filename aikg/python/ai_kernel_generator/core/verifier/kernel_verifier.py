@@ -80,7 +80,6 @@ class KernelVerifier:
             self.impl_func_name = impl_func_name or f"{op_name}_triton_{framework}"
         else:
             self.impl_func_name = impl_func_name or f"{op_name}_{impl_type}_{framework}"
-            
 
         # 验证backend和arch的组合是否有效
         if self.backend == "cuda" and self.arch not in ["a100", "v100"]:
@@ -238,7 +237,7 @@ class KernelVerifier:
             print("run_nsys = ", cmd)
             process = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=600)
             report_path = os.path.join(os.path.dirname(script_path), output_name + ".nsys-rep")
-            
+
             if os.path.exists(report_path):
                 return True, "", report_path
             return False, "未找到nsys报告文件", None
@@ -247,17 +246,17 @@ class KernelVerifier:
 
     def analyze_nsys_data(self, rep_path: str, warmup_times: int, run_times: int) -> Tuple[bool, str, float]:
         """分析nsys生成的rep文件，返回平均耗时(us)，统计方式与analyze_prof_data一致"""
-        
+
         try:
             from pathlib import Path
             dir_plib = Path(rep_path).resolve().parent
-            csv_path = dir_plib / "nsys_report" # rep_path.replace(".nsys-rep", ".csv")
+            csv_path = dir_plib / "nsys_report"  # rep_path.replace(".nsys-rep", ".csv")
             # 导出csv
             cmd = f'nsys stats --report gputrace  --timeunit us  --format csv --output {csv_path} {rep_path}'
             print("analyze_nsys_data = ", cmd)
             subprocess.run(cmd, shell=True, check=True)
             csv_path = dir_plib / "nsys_report_gputrace.csv"
-            
+
             if not os.path.exists(csv_path):
                 return False, "未生成csv文件", 0.0
             df = pd.read_csv(csv_path)
@@ -275,7 +274,7 @@ class KernelVerifier:
                         break
             time_col = None
             for col in df.columns:
-                if "time (ns)" in col.lower() or "average" in col.lower() or "duration" in  col.lower():
+                if "time (ns)" in col.lower() or "average" in col.lower() or "duration" in col.lower():
                     time_col = col
                     break
             if not name_col or not time_col:
@@ -292,7 +291,7 @@ class KernelVerifier:
                 if len(op_data) > warmup_times:
                     valid_data = op_data[warmup_times:]
                     avg_time = sum(valid_data) / len(valid_data)
-                    total_avg_time += avg_time # timeunit us
+                    total_avg_time += avg_time  # timeunit us
             return True, "", total_avg_time
         except Exception as e:
             return False, f"分析nsys数据时出错: {str(e)}", 0.0
@@ -331,7 +330,8 @@ class KernelVerifier:
 
             if self.backend == "ascend":
                 _, _, base_prof_path = self.run_msprof(os.path.join(verify_dir, f"profile_{self.op_name}_base.py"))
-                _, _, gen_prof_path = self.run_msprof(os.path.join(verify_dir, f"profile_{self.op_name}_generation.py"))
+                _, _, gen_prof_path = self.run_msprof(os.path.join(
+                    verify_dir, f"profile_{self.op_name}_generation.py"))
                 _, _, base_time = self.analyze_prof_data(base_prof_path, warmup_times, run_times)
                 _, _, gen_time = self.analyze_prof_data(gen_prof_path, warmup_times, run_times)
             elif self.backend == "cuda":
@@ -374,7 +374,7 @@ class KernelVerifier:
 
         # 运行验证
         verify_res, verify_log = self.run_verify(verify_dir)
-        
+
         # 保存验证结果到JSONL文件（每行一个JSON对象）
         result_jsonl_path = os.path.join(os.path.expanduser(self.log_dir), "verification_results.jsonl")
         result_info = {
@@ -390,10 +390,10 @@ class KernelVerifier:
             "backend": self.backend,
             "arch": self.arch
         }
-        
+
         with open(result_jsonl_path, 'a', encoding='utf-8') as f:
             f.write(json.dumps(result_info, ensure_ascii=False, indent=2) + '\n\n')
-        
+
         # 保存通过的验证文件
         if verify_res:
             foder_name = os.path.basename(verify_dir)

@@ -74,8 +74,8 @@ class CoderOnlyTask(TaskBase):
                                        self.task_id, self.framework, self.impl_type, self.backend, self.arch)
 
         # 初始化conductor (coder_only模式)
-        self.conductor = Conductor(self.op_name, self.task_id, self.log_dir, self.impl_type, 
-                                  self.model_name_dict, coder_only_mode=True)
+        self.conductor = Conductor(self.op_name, self.task_id, self.log_dir, self.impl_type,
+                                   self.model_name_dict, coder_only_mode=True)
 
     def init_conductor(self):
         """
@@ -87,7 +87,7 @@ class CoderOnlyTask(TaskBase):
         # 初始化检查文档
         self.conductor.initialize_check_docs()
 
-    async def run(self, init_action_type=ActionType.DO_CODER_DIRECT, init_parsed_code=ParsedCode(), 
+    async def run(self, init_action_type=ActionType.DO_CODER_DIRECT, init_parsed_code=ParsedCode(),
                   init_suggestions="") -> Tuple[str, bool]:
         """
         运行CoderOnlyTask，使用DO_CODER_DIRECT直接生成代码并验证。
@@ -109,16 +109,17 @@ class CoderOnlyTask(TaskBase):
             current_action = init_action_type
             parsed_code = init_parsed_code
             suggestions = init_suggestions
-            
+
             verify_res = False
 
             while current_action != ActionType.EXIT:
-                logger.info(f"CoderOnlyTask {self.task_id}, op_name: {self.op_name}, action_type: {current_action.value}")
+                logger.info(
+                    f"CoderOnlyTask {self.task_id}, op_name: {self.op_name}, action_type: {current_action.value}")
 
                 if current_action in [ActionType.DO_CODER_DIRECT, ActionType.FIX_CODER]:
                     # 运行coder
                     logger.info("Running coder...")
-                    
+
                     coder_res, coder_prompt, coder_reasoning = await self.coder.run(
                         action_type=current_action,
                         parsed_code=parsed_code,
@@ -140,7 +141,7 @@ class CoderOnlyTask(TaskBase):
                             return self.op_name, False
 
                         parsed_code.triton_code = parsed_result.code
-                        
+
                     except Exception as e:
                         logger.error(f"Failed to parse coder result: {e}, content: {coder_res}")
                         return self.op_name, False
@@ -184,7 +185,7 @@ class CoderOnlyTask(TaskBase):
                 return self.op_name, True
             else:
                 return self.op_name, False
-                
+
         except Exception as e:
             logger.error(f"CoderOnlyTask {self.task_id} failed: {e}")
             return self.op_name, False

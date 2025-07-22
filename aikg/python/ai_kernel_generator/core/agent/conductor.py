@@ -44,7 +44,7 @@ class Conductor(AgentBase):
         self.impl_type = impl_type
         self.model_config = model_config
         self.coder_only_mode = coder_only_mode
-        
+
         # 根据模式设置不同的agent_name
         if coder_only_mode:
             super().__init__(
@@ -185,19 +185,21 @@ class Conductor(AgentBase):
             if pre_trace:
                 action_type = pre_trace.action_type
                 result = pre_trace.result
-                
+
                 # 在coder_only模式下，跳过designer相关的检查
                 if self.coder_only_mode and action_type in [ActionType.DO_DESIGNER, ActionType.FIX_DESIGNER]:
-                    logger.info(f"Task {self.task_id}, op_name: {self.op_name}, action_type: Skipping designer check in coder_only mode")
+                    logger.info(
+                        f"Task {self.task_id}, op_name: {self.op_name}, action_type: Skipping designer check in coder_only mode")
                     return ActionType.EXIT, parsed_code, suggestions
-                
+
                 # 在coder_only模式下，跳过所有coder相关的self-check
                 if self.coder_only_mode and action_type in [ActionType.DO_CODER_DIRECT, ActionType.FIX_CODER]:
-                    logger.info(f"Task {self.task_id}, op_name: {self.op_name}, action_type: Skipping self-check for {action_type.name} in coder_only mode")
+                    logger.info(
+                        f"Task {self.task_id}, op_name: {self.op_name}, action_type: Skipping self-check for {action_type.name} in coder_only mode")
                     # 解析代码并设置到parsed_code
                     self._parse_and_set_code(action_type, result, parsed_code)
                     return self._get_next_action(action_type, parsed_code, "")
-                
+
                 if action_type in [ActionType.DO_DESIGNER, ActionType.FIX_DESIGNER,
                                    ActionType.DO_CODER, ActionType.FIX_CODER]:
                     logger.info(f"Task {self.task_id}, op_name: {self.op_name}, action_type: Conductor Self-Check")
@@ -362,7 +364,7 @@ class Conductor(AgentBase):
             elif self.impl_type == "swft":
                 parsed_code.swft_code = coder_code
             return ActionType.FIX_CODER, parsed_code, error_log
-        
+
         # 原有的analyze_error逻辑
         designer_code = self.find_last_parsed_code([ActionType.DO_DESIGNER, ActionType.FIX_DESIGNER])
         coder_code = self.find_last_parsed_code([ActionType.DO_CODER, ActionType.FIX_CODER])

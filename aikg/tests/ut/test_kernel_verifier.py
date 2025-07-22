@@ -242,6 +242,8 @@ def test_kernel_verifier_profiling_ascend910b4(op_name, framework, impl_type, ba
     print(f"Profiling测试通过，加速比: {speedup:.2f}x")
 
 # profiling功能测试（GPU/CUDA）
+
+
 @pytest.mark.level0
 @pytest.mark.parametrize("op_name", ["relu"])
 @pytest.mark.parametrize("framework,impl_type,backend", [
