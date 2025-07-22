@@ -31,13 +31,3 @@ add:
             >>> output = ms_custom_ops.add(x, y)
             >>> print(output)
             [5. 7. 9.]
-            >>> # case 2: x is a scalar and y is a tensor
-            >>> x = ms.tensor(1, ms.int32)
-            >>> y = ms.tensor([4., 5., 6.])
-            >>> output = ms_custom_ops.add(x, y)
-            >>> print(output)
-            [5. 6. 7.]
-            >>> # the data type of x is int32, the data type of y is float32,
-            >>> # and the output is the data format of higher precision float32.
-            >>> print(output.dtype)
-            Float32

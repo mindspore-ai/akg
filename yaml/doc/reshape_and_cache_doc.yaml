@@ -14,8 +14,11 @@ reshape_and_cache:
             slot_mapping (Tensor): The slot mapping tensor with data type of int32.
               :math:`(num\_tokens,)`.
                         
-        Outputs:
+        Returns:
             With same data type and same shape as `key` tensor.
+
+        Supported Platforms:
+            ``Ascend``          
 
         Examples:
             >>> from mindspore import Tensor, Parameter
