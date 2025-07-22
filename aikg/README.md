@@ -90,6 +90,14 @@ Please refer to: https://gitee.com/ascend/triton-ascend
 ### 3.6 NVIDIA GPU Triton Backend Dependencies
 Please refer to: https://github.com/triton-lang/triton
 
+
+### 3.7 Similarity Detection Dependencies
+The text similarity detection tool text2vec-large-chinese: If the model cannot be loaded automatically, manually download it to the thirdparty directory.
+After downloading the model, add its local path to the corresponding YAML configuration in the database. For detailed configuration instructions, please refer to the [DataBase](./docs/DataBase.md) documentation.
+```bash
+bash download.sh --with_local_model
+```
+
 ## 4. Usage Examples
 For a simplified workflow demonstrating AIKG's automatic kernel generation capabilities, please refer to the [Tutorial](./docs/Tutorial.md) documentation and example code in the `examples` directory.
 
@@ -99,6 +107,7 @@ For a simplified workflow demonstrating AIKG's automatic kernel generation capab
 - `Trace`: Please refer to [Trace](./docs/Trace.md) documentation
 - `TaskPool`: Please refer to [TaskPool](./docs/TaskPool.md) documentation
 - `DevicePool`: Please refer to [DevicePool](./docs/DevicePool.md) documentation
+- `Database`: Please refer to [DataBase](./docs/Database.md) documentation
 
 ### 5.2 Designer
 Please refer to [Designer](./docs/Designer.md) documentation
@@ -116,4 +125,4 @@ Please refer to [Conductor](./docs/Conductor.md) documentation
 Please refer to [SWFT](./docs/SWFT.md) documentation
 
 ### 5.7 Triton Backend
-Please refer to [Triton](./docs/Triton.md) documentation 
+Please refer to [Triton](./docs/Triton.md) documentation

@@ -20,7 +20,7 @@ from ai_kernel_generator.utils.common_utils import load_yaml
 from ai_kernel_generator import get_project_root
 
 DEFAULT_DATABASE_PATH = Path(get_project_root()).parent.parent / "database"
-DEFAULT_CONFIG_PATH = Path(get_project_root()) / "database" / "rag_config.yaml"
+DEFAULT_CONFIG_PATH = Path(get_project_root()) / "database" / "database_config.yaml"
 
 
 @pytest.mark.level0
@@ -39,10 +39,7 @@ async def test_feature_extract():
     feature = FeatureExtraction(
         model_config=config,
         impl_code=impl_code,
-        framework_code="",
-        impl_type=impl_type,
-        backend=backend,
-        arch=arch
+        framework_code=""
     )
     try:
         feature_res, feature_prompt, feature_reasoning = await feature.run()

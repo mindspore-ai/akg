@@ -21,6 +21,7 @@ import json
 import re
 import yaml
 import hashlib
+from pathlib import Path
 from dataclasses import dataclass
 from pydantic import create_model as create_pydantic_model
 from langchain.output_parsers import PydanticOutputParser
@@ -151,9 +152,6 @@ class ParserFactory:
                     "output_specs": (str, ...),
                     "computation": (str, ...),
                     "schedule": (str, ...),
-                    "backend": (str, ...),
-                    "arch": (str, ...),
-                    "impl_type": (str, ...),
                     "description": (str, ...)
                 }
             )
@@ -359,3 +357,22 @@ def get_md5_hash(**kwargs) -> str:
 
     # 生成MD5
     return hashlib.md5(param_str.encode('utf-8')).hexdigest()
+
+
+def get_fixed_suffix_content(suffix: str, path: str):
+    """ 获取指定后缀的文件内容 """
+    src_dir = Path(path)
+
+    if not src_dir.is_dir():
+        return
+
+    # 查找指定后缀的Python文件
+    impl_files = list(src_dir.glob(f'*{suffix}.py'))
+    if len(impl_files) != 1:
+        raise ValueError(f"必须且只能有1个{suffix}.py文件")
+
+    impl_file = impl_files[0]
+    with open(impl_file, 'r', encoding='utf-8') as f:
+        impl_code = f.read()
+
+    return impl_code

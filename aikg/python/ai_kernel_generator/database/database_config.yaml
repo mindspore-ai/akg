@@ -1,6 +1,5 @@
 # 嵌入模型配置
 embedding_model: "GanymedeNil/text2vec-large-chinese"  # 适用于中文特征描述
-# 可选英文模型: "sentence-transformers/all-MiniLM-L6-v2"
 
 # 向量数据库配置
 distance_strategy: "COSINE"

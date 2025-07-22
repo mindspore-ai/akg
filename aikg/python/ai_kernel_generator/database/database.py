@@ -13,13 +13,13 @@
 # limitations under the License.
 
 import asyncio
-from pathlib import Path
 import shutil
 import yaml
 import json
 import logging
-from langchain_core.retrievers import BaseRetriever
-from langchain_community.vectorstores.faiss import DistanceStrategy
+from enum import Enum
+from typing import List
+from pathlib import Path
 from ai_kernel_generator.database.vector_store import VectorStore
 from ai_kernel_generator import get_project_root
 from ai_kernel_generator.core.agent.utils.feature_extraction import FeatureExtraction
@@ -27,54 +27,25 @@ from ai_kernel_generator.utils.common_utils import get_md5_hash
 
 logger = logging.getLogger(__name__)
 
+class RetrievalStragegy(Enum):
+    RANDOMICITY = "randomicity"
+    SIMILARITY = "similarity"
+    OPTIMALITY = "optimality"
+    RULE = "rule"
+
 DEFAULT_DATABASE_PATH = Path(get_project_root()).parent.parent / "database"
-DEFAULT_CONFIG_PATH = Path(get_project_root()) / "database" / "rag_config.yaml"
+DEFAULT_CONFIG_PATH = Path(get_project_root()) / "database" / "database_config.yaml"
 
-class Database(BaseRetriever):
-    """算子优化方案RAG数据库系统"""
-    # 必须显式声明所有字段
-    database_path: str
-    vector_store: VectorStore
-    config: dict
-
+class Database():
     def __init__(self, config_path: str = "", database_path: str = ""):
-        """初始化RAG系统"""
-        # 加载配置文件
-        database_path = database_path or str(DEFAULT_DATABASE_PATH)
+        """初始化数据库系统"""
+        self.database_path = database_path or str(DEFAULT_DATABASE_PATH)
         config_path = config_path or str(DEFAULT_CONFIG_PATH)
-        vector_store = VectorStore(config_path)
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
+        self.vector_store = VectorStore(config_path)
+        with open(config_path, 'r', encoding='utf-8') as f:
+            self.config = yaml.safe_load(f)
 
-        super().__init__(
-            database_path=database_path,
-            vector_store=vector_store,
-            config=config
-        )
-
-    def _get_relevant_documents(self, query: str, feature_invariants: str, distance_strategy: str="COSINE", top_k: int = 5, *, run_manager=None):
-        """实现基类要求的抽象方法"""
-        if distance_strategy == "EUCLIDEAN_DISTANCE":
-            strategy = DistanceStrategy.EUCLIDEAN_DISTANCE
-        elif distance_strategy == "MAX_INNER_PRODUCT":
-            strategy = DistanceStrategy.MAX_INNER_PRODUCT
-        elif distance_strategy == "DOT_PRODUCT":
-            strategy = DistanceStrategy.DOT_PRODUCT
-        elif distance_strategy == "JACCARD":
-            strategy = DistanceStrategy.JACCARD
-        elif distance_strategy == "COSINE":
-            strategy = DistanceStrategy.COSINE
-        else:
-            raise ValueError(f"未知的距离策略: {distance_strategy}")
-
-        return self.vector_store.vector_store.similarity_search_with_score(
-            query=query,
-            k=top_k,
-            filter={"feature_invariants": feature_invariants}, 
-            distance_strategy = strategy
-        )
-
-    def feature_extractor(self,impl_code: str, framework_code:str, impl_type:str, backend:str, arch: str):
+    def feature_extractor(self,impl_code: str, framework_code:str, impl_type:str, backend:str, arch: str, profile=float('inf')):
         """提取任务特征"""
         # 特征提取
         feature_extractor = FeatureExtraction(
@@ -94,40 +65,119 @@ class Database(BaseRetriever):
             "output_specs": parsed_content.output_specs,
             "computation": parsed_content.computation,
             "schedule": parsed_content.schedule,
-            "backend": parsed_content.backend,
-            "arch": parsed_content.arch,
-            "impl_type": parsed_content.impl_type,
+            "backend": backend,
+            "arch": arch,
+            "impl_type": impl_type,
+            "profile": profile,
             "description": parsed_content.description
         }
         return extracted_features
     
+    def get_output_content(self, output_content:List[str], stragegy_mode:RetrievalStragegy, docs, impl_type, framework):
+        result = []
+        for doc in docs:
+            case_path = Path(doc.metadata["file_path"])
+            
+            res_dict = {"stragegy_mode": stragegy_mode}
+            for content in output_content:
+                if content == "impl_code" and impl_type:
+                    code_file_path = case_path / f"{impl_type}.py"
+                    with open(code_file_path, "r", encoding="utf-8") as f:
+                        impl_code = f.read()
+                    res_dict[content] = impl_code
+                    continue
+                
+                if content == "framework_code" and framework:
+                    code_file_path = case_path / f"{framework}.py"
+                    with open(code_file_path, "r", encoding="utf-8") as f:
+                        framework_code = f.read()
+                    res_dict[content] = framework_code
+                    continue
+                
+                metadata_file = case_path / "metadata.json"
+                with open(metadata_file, 'r', encoding='utf-8') as f:
+                    metadata = json.load(f)
+                
+                if content in metadata:
+                    res_dict[content] = metadata[content]
+                else:
+                    raise ValueError(f"Content '{content}' not found in metadata. Available keys: {', '.join(metadata.keys())}")
 
-    def samples(self, impl_code: str, framework_code:str = "", top_k: int = 5, stragegy_mode: str = "random", backend: str = "", arch: str = "", impl_type: str = ""):
-        """
-        检索最相似的算子优化方案
-        Returns:
-            float：检索召回率
-            list: 包含相似度、算子名称、文件路径和描述的字典列表
-        """
-        distance_strategy = self.config.get("distance_strategy") or "COSINE"
-        verify_distance_strategy = self.config.get("verify_distance_strategy") or "EUCLIDEAN_DISTANCE"
-        features = self.feature_extractor(impl_code, framework_code, impl_type, backend, arch)
-        operator_features = ", ".join([f"{k}: {v}" for k, v in features.items()])
-        feature_invariants = get_md5_hash(impl_type=impl_type, backend=backend, arch=arch)
-        docs = self._get_relevant_documents(operator_features, feature_invariants, distance_strategy, top_k)
-
-        recall = self.verify(operator_features, feature_invariants, docs, verify_distance_strategy, top_k)
-
-        return recall, [
-            {
-                "similarity_score": score,
-                "operator_name": doc.metadata["operator_name"],
-                "file_path": doc.metadata["file_path"]
-            }
-            for doc, score in docs
-        ]
+            result.append(res_dict)
+        return result
     
-    def insert(self, impl_code:str, framework_code:str, backend: str, arch: str, impl_type: str, framework: str):
+    def randomicity_search(self, query: str, feature_invariants: str, k: int = 5):
+        return self.vector_store.loaded_vectorstore.max_marginal_relevance_search(
+            query=query,
+            k=k,
+            fetch_k = max(20, 10 * k),
+            lambda_mult = 0.2, # 极致多样性
+            filter={"feature_invariants": feature_invariants}, 
+        )
+        
+    def similarity_search(self, query: str, feature_invariants: str, k: int = 5):
+        return self.vector_store.loaded_vectorstore.similarity_search(
+            query=query,
+            k=k,
+            fetch_k = max(20, 10 * k),
+            filter={"feature_invariants": feature_invariants}
+        )
+        
+    def optimality_search(self, query: str, feature_invariants: str, k: int = 5):
+        return self.vector_store.loaded_vectorstore.similarity_search(
+            query=query,
+            k=k,
+            fetch_k = max(20, 10 * k),
+            filter={"feature_invariants": feature_invariants}
+        )
+
+    def samples_with_stragegy(self, stragegy_mode: RetrievalStragegy, output_content: List[str], features_str:str, feature_invariants:str,
+                              sample_num: int = 5, impl_type: str = "", framework: str = ""):
+        """根据指定的策略获取样本"""
+        if stragegy_mode == RetrievalStragegy.RANDOMICITY:
+            docs = self.randomicity_search(features_str, feature_invariants, sample_num)
+        elif stragegy_mode == RetrievalStragegy.SIMILARITY:
+            docs = self.similarity_search(features_str, feature_invariants, sample_num)
+        elif stragegy_mode == RetrievalStragegy.OPTIMALITY:
+            docs = self.optimality_search(features_str, feature_invariants, sample_num)
+        else:
+            raise ValueError("Invalid stragegy_mode")
+        
+        result = self.get_output_content(output_content, stragegy_mode, docs, impl_type, framework)
+        return result
+    
+    def samples(self, output_content: List[str], stragegy_mode: RetrievalStragegy = RetrievalStragegy.SIMILARITY, sample_num: int = 5, rule_desc: str = "",
+                impl_code: str = "", framework_code:str = "",backend: str = "", arch: str = "", impl_type: str = "", framework: str = ""):
+        """
+        基本采样，根据指定的策略获取样本
+        """
+        features = self.feature_extractor(impl_code, framework_code, impl_type, backend, arch)
+        features_str = ", ".join([f"{k}: {v}" for k, v in features.items()])
+        feature_invariants = get_md5_hash(impl_type=impl_type, backend=backend, arch=arch)
+        
+        result = self.samples_with_stragegy(stragegy_mode, output_content, features_str, feature_invariants, sample_num, impl_type, framework)
+        return result
+    
+    def combined_samples(self, stragegy_mode: List[RetrievalStragegy], output_content: List[str], sample_num: List[int], rule_desc:str = "",
+                         impl_code: str = "", framework_code:str = "",backend: str = "", arch: str = "", impl_type: str = "", framework: str = ""):
+        """
+        综合采样，根据不同的策略和数量获取样本
+        """
+        if len(stragegy_mode) != len(sample_num):
+            raise ValueError("stragegy_mode and sample_num must have the same length")
+        if not stragegy_mode or not sample_num:
+            raise ValueError("stragegy_mode and sample_num cannot be empty")
+
+        features = self.feature_extractor(impl_code, framework_code, impl_type, backend, arch)
+        features_str = ", ".join([f"{k}: {v}" for k, v in features.items()])
+        feature_invariants = get_md5_hash(impl_type=impl_type, backend=backend, arch=arch)
+        result = []
+        for stragegy, num in zip(stragegy_mode, sample_num):
+            res = self.samples_with_stragegy(stragegy, output_content, features_str, num, feature_invariants, impl_type, framework)
+            result.extend(res)
+        return result
+    
+    def insert(self, impl_code:str, framework_code:str, backend: str, arch: str, impl_type: str, framework: str, profile=float('inf')):
         """
         插入新的算子实现
         """
@@ -135,7 +185,7 @@ class Database(BaseRetriever):
         operator_path = Path(self.database_path) / "operators"
         file_path = operator_path / arch / impl_type / md5_hash
         
-        features = self.feature_extractor(impl_code, framework_code, impl_type, backend, arch)
+        features = self.feature_extractor(impl_code, framework_code, impl_type, backend, arch, profile)
         file_path.mkdir(parents=True, exist_ok=True)
         metadata_file = file_path / "metadata.json"
         with open(metadata_file, "w", encoding="utf-8") as f:
@@ -149,6 +199,7 @@ class Database(BaseRetriever):
             f.write(impl_code)
 
         self.vector_store.insert(backend, arch, impl_type, md5_hash)
+        logger.info(f"Operator implementation inserted successfully, file path: {file_path}")
 
     def update(self):
         """
@@ -156,7 +207,7 @@ class Database(BaseRetriever):
         """
         pass
 
-    def delete(self, impl_code, backend: str, arch: str, impl_type: str):
+    def delete(self, impl_code:str, backend: str, arch: str, impl_type: str):
         """
         删除算子实现
         """
@@ -165,7 +216,7 @@ class Database(BaseRetriever):
         operator_path = Path(self.database_path) / "operators"
         file_path = operator_path / arch / impl_type / md5_hash
         if not file_path.exists():
-            logger.warning(f"算子实现不存在：{file_path}")
+            logger.warning(f"Operator implementation does not exist: {file_path}")
             return
         shutil.rmtree(file_path)
         # 删除空的上级目录
@@ -177,13 +228,14 @@ class Database(BaseRetriever):
             else:
                 break
         self.vector_store.delete(md5_hash)
+        logger.info(f"Operator implementation deleted successfully, file path: {file_path}")
 
-    def verify(self, query, feature_invariants, sample_docs, distance_strategy="EUCLIDEAN_DISTANCE", top_k: int = 5):
-        docs = self._get_relevant_documents(query, feature_invariants, distance_strategy, top_k)
+    def verify(self, query, feature_invariants, sample_docs, top_k: int = 5):
+        docs = self.similarity_search(query, feature_invariants, top_k)
         paths = [doc.metadata["file_path"] for doc, _ in docs]
         positives = len(sample_docs) 
         true_positives = 0
         for doc, _ in sample_docs:
             if doc.metadata["file_path"] in paths:
                 true_positives += 1
-        return true_positives / positives if positives > 0 else 0
+        return (true_positives / positives * 100) if positives > 0 else 0

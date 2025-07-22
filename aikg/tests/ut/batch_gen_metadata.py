@@ -14,54 +14,34 @@
 
 '''
 # 使用示例：
-python tests/ut/batch_gen_metadata.py --impl_type "triton" --framework "numpy" --backend "ascend" --arch "ascend910b4" --path "database/temp/2_standard_matrix_multiplication_"
+python tests/ut/batch_gen_metadata.py --impl_type "triton" --framework "torch" --backend "ascend" --arch "ascend910b4" --path "temp"
 '''
 
 import argparse
-import logging
 from pathlib import Path
 from ai_kernel_generator import get_project_root
-from ai_kernel_generator.database.database_rag import DatabaseRAG
+from ai_kernel_generator.database.database import Database
+from ai_kernel_generator.utils.common_utils import get_fixed_suffix_content
 
-DEFAULT_CONFIG_PATH = Path(get_project_root()) / "database" / "rag_config.yaml"
-
-
-def get_code(impl_type: str, framework: str, path: str):
-    """将目录下所有Python文件移动到对应的算子目录"""
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-    src_dir = Path(path)
-
-    if not src_dir.is_dir():
-        logging.error(f"无效的目录路径: {src_dir}")
-        return
-
-    # 查找指定后缀的Python文件
-    impl_files = list(src_dir.glob(f'*{impl_type}.py'))
-    framework_files = list(src_dir.glob(f'*{framework}.py'))
-    if len(impl_files) != 1:
-        logging.error(f"找到{len(impl_files)}个{impl_type}.py文件，要求必须且只能有1个")
-        raise ValueError(f"必须且只能有1个{impl_type}.py文件")
-    if len(framework_files) != 1:
-        logging.error(f"找到{len(framework_files)}个{framework}.py文件，要求必须且只能有1个")
-        raise ValueError(f"必须且只能有1个{framework}.py文件")
-
-    impl_file = impl_files[0]
-    framework_file = framework_files[0]
-    # 读取文件内容生成md5_hash
-    with open(impl_file, 'r', encoding='utf-8') as f:
-        impl_code = f.read()
-
-    with open(framework_file, 'r', encoding='utf-8') as f:
-        framework_code = f.read()
-
-    return impl_code, framework_code
+DEFAULT_CONFIG_PATH = Path(get_project_root()) / "database" / "database_config.yaml"
 
 
 def insert_one_case(impl_type: str, framework: str, backend: str, arch: str, path: str):
     """处理指定架构下的所有算子目录，生成或更新metadata.json"""
-    db_rag = DatabaseRAG()
-    impl_code, framework_code = get_code(impl_type=impl_type, framework=framework, path=path)
+    db_rag = Database()
+    impl_code = get_fixed_suffix_content(suffix=impl_type, path=path)
+    framework_code = get_fixed_suffix_content(suffix=framework, path=path)
     db_rag.insert(impl_code, framework_code, backend, arch, impl_type, framework)
+
+
+def insert_multi_case(impl_type: str, framework: str, backend: str, arch: str, path: str):
+    """处理指定架构下的所有算子目录，生成或更新metadata.json"""
+    db_rag = Database()
+    for path in Path(path).iterdir():
+        if path.is_dir():
+            impl_code = get_fixed_suffix_content(suffix=impl_type, path=path)
+            framework_code = get_fixed_suffix_content(suffix=framework, path=path)
+            db_rag.insert(impl_code, framework_code, backend, arch, impl_type, framework)
 
 
 def main():
@@ -75,7 +55,6 @@ def main():
     parser.add_argument('--config_path', default=DEFAULT_CONFIG_PATH, help='配置文件路径')
     args = parser.parse_args()
 
-    # 第二步：处理metadata生成
     insert_one_case(
         impl_type=args.impl_type,
         framework=args.framework,
@@ -83,6 +62,14 @@ def main():
         arch=args.arch,
         path=args.path
     )
+
+    # insert_multi_case(
+    #     impl_type=args.impl_type,
+    #     framework=args.framework,
+    #     backend=args.backend,
+    #     arch=args.arch,
+    #     path=args.path
+    # )
 
 
 if __name__ == "__main__":

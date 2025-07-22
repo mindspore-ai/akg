@@ -29,13 +29,10 @@ class FeatureExtraction(AgentBase):
         - 特征信息总结
     """
 
-    def __init__(self, model_config: dict, impl_code: str = "", framework_code: str = "", impl_type: str = "", backend: str = "", arch: str = ""):
+    def __init__(self, model_config: dict, impl_code: str = "", framework_code: str = ""):
         self.model_config = model_config
         self.impl_code = impl_code
         self.framework_code = framework_code
-        self.impl_type = impl_type
-        self.backend = backend
-        self.arch = arch
 
         agent_name = f"FeatureExtraction"
         super().__init__(agent_name=agent_name)
@@ -50,9 +47,6 @@ class FeatureExtraction(AgentBase):
         self.feature_extraction_input = {
             "impl_code": self.impl_code,
             "framework_code": self.framework_code,
-            "impl_type": self.impl_type,
-            "backend": self.backend,
-            "arch": self.arch,
             "format_instructions": self.format_instructions,
         }
 

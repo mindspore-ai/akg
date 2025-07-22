@@ -67,13 +67,7 @@ def test_sample():
     op_name = get_benchmark_name([1])[0]
     query_code_path = DEFAULT_DATABASE_PATH / "triton" / arch / f"{op_name}_{impl_type}.py"
     query_code = Path(query_code_path).read_text()
-    recall, results = db_system.samples(query_code, backend=backend, arch=arch, impl_type=impl_type, top_k=3)
-    print(f"找到 {len(results)} 个匹配的优化方案:")
-    for i, res in enumerate(results, 1):
-        print(f"\n#{i} 距离: {res['similarity_score']:.4f}")
-        print(f"算子名称: {res['operator_name']}")
-        print(f"文件路径: {res['file_path']}")
-    print(f"\n召回率: {recall:.4f}")
+    db_system.samples(query_code, backend=backend, arch=arch, impl_type=impl_type, top_k=3)
 
 
 @pytest.mark.level0
@@ -119,14 +113,7 @@ async def test_async_database():
         query_code_path = DEFAULT_DATABASE_PATH / "triton" / arch / f"{op_name}_{impl_type}.py"
         query_code = Path(query_code_path).read_text()
         loop = asyncio.get_event_loop()
-        recall, results = await loop.run_in_executor(None, lambda: db_system.samples(query_code, backend=backend, arch=arch, impl_type=impl_type))
-        print(f"找到 {len(results)} 个匹配的优化方案:")
-        for i, res in enumerate(results, 1):
-            print(f"\n#{i} 距离: {res['similarity_score']:.4f}")
-            print(f"算子名称: {res['operator_name']}")
-            print(f"文件路径: {res['file_path']}")
-        print(f"\n召回率: {recall:.4f}")
-        return recall, results
+        return await loop.run_in_executor(None, lambda: db_system.samples(query_code, backend=backend, arch=arch, impl_type=impl_type))
 
     async def delete_task(benchmark_id):
         op_name = get_benchmark_name([benchmark_id])[0]
