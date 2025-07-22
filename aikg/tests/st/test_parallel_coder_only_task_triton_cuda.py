@@ -36,7 +36,7 @@ async def test_parallel_coder_only_task_triton_a100(framework, impl_type, backen
             device_pool=device_pool,
             framework=framework
         )
-        task_pool.create_task(partial(task.run, action_type=ActionType.DO_CODER_DIRECT))
+        task_pool.create_task(partial(task.run, init_action_type=ActionType.DO_CODER_DIRECT))
 
     results = await task_pool.wait_all()
     for op_name, result in results:
