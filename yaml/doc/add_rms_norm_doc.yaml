@@ -1,0 +1,50 @@
+add_rms_norm:
+    description: |
+        The AddRmsNorm is a fusion operator that fusing RmsNorm and its preceding Add operator, reducing the time for
+        moving data in and out.
+        It computes the following expression:
+
+        .. math::
+            \begin{array}{ll} \\
+                x_i = x1_i + x2_i \\
+                y_i=RmsNorm(x_i)=\frac{x_i}{\sqrt{\frac{1}{n}\sum_{i=1}^{n}{ x_i^2}+\varepsilon}}\gamma_i
+            \end{array}
+
+        .. warning::
+            This is an experimental API that is subject to change or deletion. This API is only supported in Atlas A2
+            training series for now.
+
+        Args:
+            x1 (Tensor): Input data of AddRmsNorm. Support data type: float16, float32, bfloat16.
+            x2 (Tensor): Input data of AddRmsNorm. Support data type: float16, float32, bfloat16.
+            gamma (Tensor): Learnable parameter :math:`\gamma` . Support data type: float16, float32, bfloat16.
+            epsilon (float, optional): A float number ranged in (0, 1] to prevent division by 0. Default value is `1e-6`.
+
+        Returns:
+            - Tensor, denotes the normalized result, has the same type and shape as `x1`.
+            - Tensor, with the float data type, denotes the reciprocal of the input standard deviation, used by gradient
+              calculation.
+            - Tensor, the sum of `x1` and `x2`.
+
+        Raises:
+            TypeError: If data type of `x1` or `x2` is not one of the following: float16, float32, bfloat16.
+            TypeError: If data type of `gamma` is not one of the following: float16, float32, bfloat16.
+            ValueError: If `epsilon` is not a float between 0 and 1.
+            ValueError: If the rank of `gamma` is greater than the rank of `x1` or `x2`.
+            RuntimeError: If the shapes of `x1` and `x2` are not same.
+
+        Supported Platforms:
+            ``Ascend``
+
+        Examples:
+            >>> import mindspore
+            >>> import numpy as np
+            >>> from mindspore import Tensor
+            >>> import ms_custom_ops
+            >>> x1 = Tensor(np.array([[0.5, 1.0, 1.5], [0.5, 1.0, 1.5]]), mindspore.float32)
+            >>> x2 = Tensor(np.array([[0.5, 1.0, 1.5], [0.5, 1.0, 1.5]]), mindspore.float32)
+            >>> gamma = Tensor(np.ones([3]), mindspore.float32)
+            >>> y, _, _ = ms_custom_ops.add_rms_norm(x1, x2, gamma)
+            >>> print(y)
+            [[0.46290997  0.92581993  1.3887299]
+             [0.46290997  0.92581993  1.3887299]]
