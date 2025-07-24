@@ -74,7 +74,7 @@ endfunction()
 
 file(GLOB_RECURSE OPS_YAML_FILES "${CMAKE_CURRENT_SOURCE_DIR}/../yaml/*_op.yaml")
 message(STATUS "OPS_YAML_FILES: ${OPS_YAML_FILES}")
-get_yaml_files("${OPS_YAML_FILES}" OPS_YAML_STRING)
+get_yaml_files("${OPS_YAML_FILES}" DEF_YAML_STRING)
 
 file(GLOB_RECURSE DOC_YAML_FILES "${CMAKE_CURRENT_SOURCE_DIR}/../yaml/*_doc.yaml")
 message(STATUS "DOC_YAML_FILES: ${DOC_YAML_FILES}")
@@ -92,8 +92,8 @@ src_files = '${SRC_FILES}'.split(';')
 ms.ops.CustomOpBuilder(
     name='${MS_EXTENSION_NAME}',
     sources=src_files,
-    yaml=${OPS_YAML_STRING},
-    doc=${DOC_YAML_STRING},
+    op_def=${DEF_YAML_STRING},
+    op_doc=${DOC_YAML_STRING},
     backend='Ascend',
     cflags='${CFLAGS_INCLUDES}',
     ldflags='-L${INTERNAL_KERNEL_LIB_PATH} -l${LIBS}',

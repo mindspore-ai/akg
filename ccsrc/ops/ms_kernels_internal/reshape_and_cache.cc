@@ -77,18 +77,8 @@ protected:
                const internal::OutputsImmutableInfoList &outputs,
                const std::vector<KernelTensor *> &ms_inputs,
                const std::vector<KernelTensor *> &ms_outputs) override {
-    internal::ReshapeAndCacheParam param;
-    auto head_num = ms_inputs.at(internal::kIndex5);
-    if (head_num->dtype_id() == TypeId::kNumberTypeInt64) {
-      param.head_num =
-          static_cast<int32_t>(head_num->GetValue<int64_t>().value());
-    } else {
-      MS_LOG(EXCEPTION)
-          << "ReshapeAndCache [head_num]'s dtype wrong, expect int64, but got: "
-          << head_num->dtype_id();
-    }
     return internal::CreateReshapeAndCacheOp(
-        inputs, outputs, param, internal::kInternalReshapeAndCacheOpName);
+        inputs, outputs, internal::kInternalReshapeAndCacheOpName);
   }
 };
 } // namespace ms_custom_ops
@@ -114,10 +104,8 @@ protected:
   internal::InternalOpPtr
   CreateKernel(const internal::InputsImmutableInfoList &inputs,
                const internal::OutputsImmutableInfoList &outputs) override {
-    internal::ReshapeAndCacheParam param;
-    param.head_num = this->head_num_;
     return internal::CreateReshapeAndCacheOp(
-        inputs, outputs, param, internal::kInternalReshapeAndCacheOpName);
+        inputs, outputs, internal::kInternalReshapeAndCacheOpName);
   }
 
 private:
