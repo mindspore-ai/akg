@@ -1,0 +1,12 @@
+{
+    "op_name": "matvec",
+    "op_type": "matmul",
+    "input_specs": "输入 A: shape (M, K), dtype float16, 行优先布局（row-major）; 输入 B: shape (K, 1), dtype float16, 行优先布局（row-major）",
+    "output_specs": "输出 C: shape (M, 1), dtype float16, 行优先布局（row-major）",
+    "computation": "C = A * B，其中A为矩阵，B为列向量",
+    "schedule": "分块策略: M维度分块128（BLOCK_SIZE_M=128），K维度分块64（BLOCK_SIZE_K=64）；并行策略: 在M维度一维并行（grid=ceil(M/128)）；内存优化: 使用float32累加器避免半精度误差，K维度循环分块减少内存压力",
+    "backend": "ascend",
+    "arch": "ascend910b4",
+    "impl_type": "triton",
+    "description": "该算子实现矩阵-向量乘法（M×K矩阵乘K×1向量），采用Triton在M维度分块并行（块大小128），K维度循环分块（块大小64），使用float32累加器保障半精度计算精度，通过掩码处理边界条件。"
+}

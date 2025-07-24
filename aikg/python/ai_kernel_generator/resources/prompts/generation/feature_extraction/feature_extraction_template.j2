@@ -1,0 +1,68 @@
+你是一个任意前端的算子特征提取专家，现在需要根据算子的初始实现或者调度，简单扼要分析出当前算子的特征信息
+
+1. 待解析代码：
+{% if framework_code %}
+
+原始算子任务描述：
+{{ framework_code }}
+
+{% endif %}
+
+
+{% if impl_code %}
+
+经过调度优化后的算子描述：
+{{ impl_code }}
+
+{% endif %}
+
+2. 这是需要参考返回内容的要求，下面是核心解析规则：
+## 算子基础信息
+  **op_name**: 根据算子功能和输入特征简洁命名，如hinge_loss, matmul, reduce_mean, softmax等；
+  **op_type**：算子的类型，如：
+    - elementwise：逐元素
+    - reduce：归约 reduce_all，reduce_x，reduce_y
+    - broadcast：广播
+    - tranpose：维度重排
+    - reshape：改变维度数量，不改变数据顺序
+    - slice：索引，如gather，scatter类
+    - matmul
+    - conv
+    - 融合算子：elementwise+broadcast，matmul+elementwise等
+  **input_specs**：输入tensor的shape，dtype等，明确给出具体值，不要用变量替代；
+  **output_specs**：输出tensor的shape，dtype等，不包含临时tensor，明确给出具体值，不要用变量替代；
+  **computation**：算子的计算逻辑；
+
+## 调度策略
+{% if impl_code %}
+  **schedule**：根据调度优化后的算子描述分析算子调度策略，如：
+    - 切分策略：每根轴的切分大小，明确给出具体切分值
+    - 并行策略：核数以及每个核的数据量（明确给出具体值），概述哪根轴映射到核上，负载均衡优化方案等
+    - ​​数据局部性优化：概述缓存机制，double buffer或者数据预取设计方案等
+    - 边界处理机制
+    - 硬件资源利用：概述​内存访问，寄存器使用情况等
+  【注意事项】若存在多个kernel实现，需要分别给出每个kernel的调度策略
+{% else %}
+  **schedule**：根据算子基础信息以及对应的调度，总结算子全部的特征信息
+{% endif %}
+
+## 总结
+  **description**：根据上述描述，简单扼要总结算子的特征信息
+
+3. 示例
+```json
+  "op_name": "hinge_loss",
+  "op_type": "elementwise+reduce",
+  "input_specs": "输入 predictions: shape (128, 1), dtype float32; 输入 targets: shape (128, 1), dtype float32",
+  "output_specs": "输出 final_output: shape (1,), dtype float32",
+  "computation": "element_loss = max(0, 1 - predictions * targets); final_output = mean(element_loss)",
+  "schedule": "elementwise_kernel: 切分策略BLOCK_SIZE=1024，并行策略grid=(128,)，每个核处理1024元素；reduce_kernel: 切分策略BLOCK_SIZE_REDUCE=1024，并行策略grid=(1,)，单核处理全量数据归约；边界处理通过mask机制自动处理越界访问；数据预取通过tl.load/tl.store显式管理",
+  "description": "该算子是一个elementwisereduce融合的Hinge Loss实现，使用双阶段计算策略：第一阶段通过1024分块并行计算每个元素的max(0,1-p*t)，第二阶段通过单核1024分块归约计算均值。采用Triton的显式内存管理优化数据局部性，通过mask机制处理非对齐数据。"
+ ```
+
+【注意事项】请尽可能使用中文进行思考分析
+【注意事项】涉及到数值，需要明确给出具体值，如shape，切分值，核数等
+
+**请按照以下格式输出你的结果，仅返回json字符串的格式，不要包含任何解释或额外内容：**
+
+{{ format_instructions }}

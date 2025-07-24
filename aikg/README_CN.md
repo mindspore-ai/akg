@@ -94,6 +94,14 @@ pip install https://repo.mindspore.cn/mindspore/mindspore/version/202506/2025061
 请参考：https://github.com/triton-lang/triton
 
 
+### 3.7 相似性检测依赖
+句子相似性检测工具text2vec-large-chinese： 若无法自动加载模型，需要手动下载到thirdparty目录下
+将下载后的模型地址添加到database对应的yaml中，请参考  [DataBase](./docs/CN/DataBase.md) 文档
+```bash
+bash download.sh --with_local_model
+```
+
+
 ## 4. 运行示例
 通过AIKG完成算子自动生成的简易流程，请参考[Tutorial](./docs/CN/Tutorial.md)文档以及`examples`目录中示例代码。
 
@@ -104,6 +112,7 @@ pip install https://repo.mindspore.cn/mindspore/mindspore/version/202506/2025061
 - `Trace`: 请参考 [Trace](./docs/CN/Trace.md) 文档
 - `TaskPool`: 请参考 [TaskPool](./docs/CN/TaskPool.md) 文档
 - `DevicePool`: 请参考 [DevicePool](./docs/CN/DevicePool.md) 文档
+- `DataBase`: 请参考 [DataBase](./docs/CN/DataBase.md) 文档
 
 ### 5.2 Designer
 请参考 [Designer](./docs/CN/Designer.md) 文档

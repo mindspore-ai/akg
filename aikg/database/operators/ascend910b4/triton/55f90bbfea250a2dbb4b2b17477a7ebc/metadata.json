@@ -1,0 +1,12 @@
+{
+    "op_name": "matrix_scalar_multiply",
+    "op_type": "elementwise",
+    "input_specs": "输入 A: shape (M, N), dtype float16, 行优先布局; 输入 s: 标量值 dtype float16",
+    "output_specs": "输出 C: shape (M, N), dtype float16, 行优先布局",
+    "computation": "对输入矩阵A的每个元素乘以标量s: C[i,j] = A[i,j] * s",
+    "schedule": "一维网格并行策略（16个核心）；总元素均匀切分至各核心；每核心分块处理（块大小1024），利用掩码处理边界；标量值加载后重复使用减少内存访问",
+    "backend": "ascend",
+    "arch": "ascend910b4",
+    "impl_type": "triton",
+    "description": "该算子是一个逐元素矩阵标量乘法实现，使用16个核心并行处理，每个核心以1024元素为块进行循环计算，利用掩码处理边界并优化标量访问。"
+}

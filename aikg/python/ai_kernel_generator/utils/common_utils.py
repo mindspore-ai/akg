@@ -20,6 +20,8 @@ import tempfile
 import json
 import re
 import yaml
+import hashlib
+from pathlib import Path
 from dataclasses import dataclass
 from pydantic import create_model as create_pydantic_model
 from langchain.output_parsers import PydanticOutputParser
@@ -93,6 +95,7 @@ class ParserFactory:
     _code_parser = None
     _check_parser = None
     _api_parser = None
+    _feature_parser = None
 
     @classmethod
     def get_code_parser(cls):
@@ -135,6 +138,24 @@ class ParserFactory:
                 }
             )
         return cls._api_parser
+
+    @classmethod
+    def get_feature_parser(cls):
+        """获取特征匹配的的解析器"""
+        if cls._feature_parser is None:
+            cls._feature_parser = cls.create_output_parser(
+                "FeatureBlock",
+                {
+                    "op_name": (str, ...),
+                    "op_type": (str, ...),
+                    "input_specs": (str, ...),
+                    "output_specs": (str, ...),
+                    "computation": (str, ...),
+                    "schedule": (str, ...),
+                    "description": (str, ...)
+                }
+            )
+        return cls._feature_parser
 
     @staticmethod
     def create_output_parser(parser_name, fields):
@@ -309,3 +330,49 @@ def remove_copyright_from_text(text: str) -> str:
         return text
 
     return cleaned_text
+
+
+def get_md5_hash(**kwargs) -> str:
+    """
+    生成参数的MD5哈希值
+
+    Args:
+        **kwargs: 任意数量的关键字参数
+
+    Returns:
+        str: 16进制格式的MD5哈希字符串
+
+    Example:
+        >>> get_md5_hash(a=1, b="test")
+        'a7262b12b8a1a379e4e71c879e0d5b2d'
+    """
+    # 过滤空值并排序
+    filtered_params = {k: v for k, v in kwargs.items() if v is not None}
+    if not filtered_params:
+        raise ValueError("至少需要提供一个有效参数")
+
+    # 标准化参数序列
+    sorted_params = sorted(filtered_params.items(), key=lambda x: x[0])
+    param_str = '&'.join(f"{k}={v}" for k, v in sorted_params)
+
+    # 生成MD5
+    return hashlib.md5(param_str.encode('utf-8')).hexdigest()
+
+
+def get_fixed_suffix_content(suffix: str, path: str):
+    """ 获取指定后缀的文件内容 """
+    src_dir = Path(path)
+
+    if not src_dir.is_dir():
+        return
+
+    # 查找指定后缀的Python文件
+    impl_files = list(src_dir.glob(f'*{suffix}.py'))
+    if len(impl_files) != 1:
+        raise ValueError(f"必须且只能有1个{suffix}.py文件")
+
+    impl_file = impl_files[0]
+    with open(impl_file, 'r', encoding='utf-8') as f:
+        impl_code = f.read()
+
+    return impl_code

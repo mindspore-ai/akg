@@ -9,7 +9,6 @@ agent_model_config:
   triton_coder_fix: deepseek_r1_default
   conductor_check: deepseek_v3_default
   conductor_analyze: deepseek_r1_default
-
 # 日志配置
 log_dir: "~/aikg_logs"
 
