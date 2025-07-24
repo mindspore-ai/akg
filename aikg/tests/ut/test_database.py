@@ -33,7 +33,8 @@ def gen_task_code(framework_path: str = "", impl_path: str = ""):
 
 
 @pytest.mark.level0
-def test_insert():
+@pytest.mark.asyncio
+async def test_insert():
     # 初始化系统
     db_system = Database()
 
@@ -50,11 +51,12 @@ def test_insert():
             framework_path=DEFAULT_BENCHMARK_PATH / "kernelbench" / framework / op_name / f"{op_name}_{framework}.py",
             impl_path=DEFAULT_DATABASE_PATH / "triton" / arch / f"{op_name}_{impl_type}.py"
         )
-        db_system.insert(impl_code, framework_code, backend, arch, impl_type, framework)
+        await db_system.insert(impl_code, framework_code, backend, arch, impl_type, framework)
 
 
 @pytest.mark.level0
-def test_sample():
+@pytest.mark.asyncio
+async def test_samples():
     # 初始化系统
     db_system = Database()
 
@@ -65,13 +67,14 @@ def test_sample():
 
     # 查询示例
     op_name = get_benchmark_name([1])[0]
-    query_code_path = DEFAULT_DATABASE_PATH / "triton" / arch / f"{op_name}_{impl_type}.py"
-    query_code = Path(query_code_path).read_text()
-    db_system.samples(query_code, backend=backend, arch=arch, impl_type=impl_type, top_k=3)
+    impl_code_path = DEFAULT_DATABASE_PATH / "triton" / arch / f"{op_name}_{impl_type}.py"
+    impl_code = Path(impl_code_path).read_text()
+    await db_system.samples(output_content=[], impl_code=impl_code, backend=backend, arch=arch, impl_type=impl_type, sample_num=3)
 
 
 @pytest.mark.level0
-def test_delete():
+@pytest.mark.asyncio
+async def test_delete():
     # 初始化系统
     db_system = Database()
 
@@ -84,7 +87,7 @@ def test_delete():
     op_name = get_benchmark_name([3])[0]
     impl_path = DEFAULT_DATABASE_PATH / "triton" / arch / f"{op_name}_{impl_type}.py"
     impl_code = Path(impl_path).read_text()
-    db_system.delete(impl_code, backend, arch, impl_type)
+    await db_system.delete(impl_code, backend, arch, impl_type)
 
 
 @pytest.mark.asyncio
@@ -105,22 +108,19 @@ async def test_async_database():
             framework_path=DEFAULT_BENCHMARK_PATH / "kernelbench" / framework / op_name / f"{op_name}_{framework}.py",
             impl_path=DEFAULT_DATABASE_PATH / "triton" / arch / f"{op_name}_{impl_type}.py"
         )
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, db_system.insert, impl_code, framework_code, backend, arch, impl_type, framework)
+        return await db_system.insert(impl_code, framework_code, backend, arch, impl_type, framework)
 
     async def sample_task(benchmark_id):
         op_name = get_benchmark_name([benchmark_id])[0]
-        query_code_path = DEFAULT_DATABASE_PATH / "triton" / arch / f"{op_name}_{impl_type}.py"
-        query_code = Path(query_code_path).read_text()
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, lambda: db_system.samples(query_code, backend=backend, arch=arch, impl_type=impl_type))
+        impl_code_path = DEFAULT_DATABASE_PATH / "triton" / arch / f"{op_name}_{impl_type}.py"
+        impl_code = Path(impl_code_path).read_text()
+        return await db_system.samples(output_content=[], impl_code=impl_code, backend=backend, arch=arch, impl_type=impl_type, sample_num=3)
 
     async def delete_task(benchmark_id):
         op_name = get_benchmark_name([benchmark_id])[0]
         impl_path = DEFAULT_DATABASE_PATH / "triton" / arch / f"{op_name}_{impl_type}.py"
         impl_code = Path(impl_path).read_text()
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, db_system.delete, impl_code, backend, arch, impl_type)
+        return await db_system.delete(impl_code, backend, arch, impl_type)
 
     # 创建多个并发任务
     tasks = [

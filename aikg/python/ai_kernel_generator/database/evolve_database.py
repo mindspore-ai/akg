@@ -48,12 +48,12 @@ class EvolveDatabase(Database):
         
         return [Document(page_content="", metadata={"file_path": min_path})] if min_path else []
 
-    def samples(self, output_content:List[str], sample_num:int = 5, impl_code: str = "", framework_code:str = "",
+    async def samples(self, output_content:List[str], sample_num:int = 5, impl_code: str = "", framework_code:str = "",
                 backend: str = "", arch: str = "", impl_type: str = "", framework: str = ""):
         """
         Evolve采样方案，根据当前算子的特征信息，从数据库中采样出优化性和随机性的算子实现。
         """
-        features = self.feature_extractor(impl_code, framework_code, impl_type, backend, arch)
+        features = await self.feature_extractor(impl_code, framework_code)
         features_str = ", ".join([f"{k}: {v}" for k, v in features.items()])
         feature_invariants = get_md5_hash(impl_type=impl_type, backend=backend, arch=arch)
 

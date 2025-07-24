@@ -25,7 +25,6 @@ class FeatureExtraction(AgentBase):
     特征信息包括：
         - 算子基础信息
         - 调度策略
-        - 硬件信息和实现类型
         - 特征信息总结
     """
 

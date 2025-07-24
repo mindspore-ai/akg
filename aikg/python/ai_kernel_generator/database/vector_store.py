@@ -110,10 +110,35 @@ class VectorStore:
             dummy_id = list(vector_store.index_to_docstore_id.values())[0]
             vector_store.delete([dummy_id])
         else:
-            vector_store = FAISS.from_documents(
-                documents=documents,
-                embedding=self.embedding_model,
-            )
+            # 捕获OpenBLAS警告和异常
+            original_stderr = sys.stderr
+            sys.stderr = captured_stderr = StringIO()
+            try:
+                vector_store = FAISS.from_documents(
+                    documents=documents,
+                    embedding=self.embedding_model,
+                )
+            except Exception as e:
+                # 恢复stderr并检查OpenBLAS警告
+                sys.stderr = original_stderr
+                stderr_output = captured_stderr.getvalue()
+                # 检查是否是NUM_THREADS超出导致的错误
+                if 'OpenBLAS WARNING' in stderr_output and 'NUM_THREADS exceeded' in stderr_output:
+                    logger.error(
+                        "OpenBLAS error: Precompiled NUM_THREADS exceeded. "
+                        "Please set: export OMP_NUM_THREADS=32 before running."
+                    )
+                raise
+            finally:
+                sys.stderr = original_stderr
+                
+            # 检查OpenBLAS警告
+            stderr_output = captured_stderr.getvalue()
+            if 'OpenBLAS warning' in stderr_output and 'NUM_THREADS exceeded' in stderr_output:
+                    logger.warning(
+                        "OpenBLAS warning: Precompiled NUM_THREADS exceeded. "
+                        "Consider setting: export OMP_NUM_THREADS=32"
+                    )
         
         # 保存索引
         vector_store.save_local(self.index_path)

@@ -45,18 +45,15 @@ class Database():
         with open(config_path, 'r', encoding='utf-8') as f:
             self.config = yaml.safe_load(f)
 
-    def feature_extractor(self,impl_code: str, framework_code:str, impl_type:str, backend:str, arch: str, profile=float('inf')):
+    async def feature_extractor(self,impl_code: str, framework_code:str, profile=float('inf')):
         """提取任务特征"""
         # 特征提取
         feature_extractor = FeatureExtraction(
             model_config=self.config.get("agent_model_config"),
             impl_code=impl_code,
-            framework_code=framework_code,
-            impl_type=impl_type,
-            backend=backend,
-            arch=arch
+            framework_code=framework_code
         )
-        feature_content, _, _ = asyncio.run(feature_extractor.run())
+        feature_content, _, _ = await feature_extractor.run()
         parsed_content = feature_extractor.feature_parser.parse(feature_content)
         extracted_features = {
             "op_name": parsed_content.op_name,
@@ -65,9 +62,6 @@ class Database():
             "output_specs": parsed_content.output_specs,
             "computation": parsed_content.computation,
             "schedule": parsed_content.schedule,
-            "backend": backend,
-            "arch": arch,
-            "impl_type": impl_type,
             "profile": profile,
             "description": parsed_content.description
         }
@@ -146,19 +140,19 @@ class Database():
         result = self.get_output_content(output_content, stragegy_mode, docs, impl_type, framework)
         return result
     
-    def samples(self, output_content: List[str], stragegy_mode: RetrievalStragegy = RetrievalStragegy.SIMILARITY, sample_num: int = 5, rule_desc: str = "",
+    async def samples(self, output_content: List[str], stragegy_mode: RetrievalStragegy = RetrievalStragegy.SIMILARITY, sample_num: int = 5, rule_desc: str = "",
                 impl_code: str = "", framework_code:str = "",backend: str = "", arch: str = "", impl_type: str = "", framework: str = ""):
         """
         基本采样，根据指定的策略获取样本
         """
-        features = self.feature_extractor(impl_code, framework_code, impl_type, backend, arch)
+        features = await self.feature_extractor(impl_code, framework_code)
         features_str = ", ".join([f"{k}: {v}" for k, v in features.items()])
         feature_invariants = get_md5_hash(impl_type=impl_type, backend=backend, arch=arch)
         
         result = self.samples_with_stragegy(stragegy_mode, output_content, features_str, feature_invariants, sample_num, impl_type, framework)
         return result
     
-    def combined_samples(self, stragegy_mode: List[RetrievalStragegy], output_content: List[str], sample_num: List[int], rule_desc:str = "",
+    async def combined_samples(self, stragegy_mode: List[RetrievalStragegy], output_content: List[str], sample_num: List[int], rule_desc:str = "",
                          impl_code: str = "", framework_code:str = "",backend: str = "", arch: str = "", impl_type: str = "", framework: str = ""):
         """
         综合采样，根据不同的策略和数量获取样本
@@ -168,7 +162,7 @@ class Database():
         if not stragegy_mode or not sample_num:
             raise ValueError("stragegy_mode and sample_num cannot be empty")
 
-        features = self.feature_extractor(impl_code, framework_code, impl_type, backend, arch)
+        features = await self.feature_extractor(impl_code, framework_code)
         features_str = ", ".join([f"{k}: {v}" for k, v in features.items()])
         feature_invariants = get_md5_hash(impl_type=impl_type, backend=backend, arch=arch)
         result = []
@@ -177,7 +171,7 @@ class Database():
             result.extend(res)
         return result
     
-    def insert(self, impl_code:str, framework_code:str, backend: str, arch: str, impl_type: str, framework: str, profile=float('inf')):
+    async def insert(self, impl_code:str, framework_code:str, backend: str, arch: str, impl_type: str, framework: str, profile=float('inf')):
         """
         插入新的算子实现
         """
@@ -185,7 +179,7 @@ class Database():
         operator_path = Path(self.database_path) / "operators"
         file_path = operator_path / arch / impl_type / md5_hash
         
-        features = self.feature_extractor(impl_code, framework_code, impl_type, backend, arch, profile)
+        features = await self.feature_extractor(impl_code, framework_code, profile)
         file_path.mkdir(parents=True, exist_ok=True)
         metadata_file = file_path / "metadata.json"
         with open(metadata_file, "w", encoding="utf-8") as f:
@@ -207,7 +201,7 @@ class Database():
         """
         pass
 
-    def delete(self, impl_code:str, backend: str, arch: str, impl_type: str):
+    async def delete(self, impl_code:str, backend: str, arch: str, impl_type: str):
         """
         删除算子实现
         """
