@@ -45,7 +45,7 @@ class Database():
         with open(config_path, 'r', encoding='utf-8') as f:
             self.config = yaml.safe_load(f)
 
-    async def feature_extractor(self,impl_code: str, framework_code:str, profile=float('inf')):
+    async def feature_extractor(self,impl_code: str, framework_code:str, backend:str, arch: str, impl_type:str, profile=float('inf')):
         """提取任务特征"""
         # 特征提取
         feature_extractor = FeatureExtraction(
@@ -63,6 +63,9 @@ class Database():
             "computation": parsed_content.computation,
             "schedule": parsed_content.schedule,
             "profile": profile,
+            "backend": backend,
+            "arch": arch,
+            "impl_type": impl_type,
             "description": parsed_content.description
         }
         return extracted_features
@@ -76,6 +79,8 @@ class Database():
             for content in output_content:
                 if content == "impl_code" and impl_type:
                     code_file_path = case_path / f"{impl_type}.py"
+                    if not code_file_path.exists():
+                        raise FileNotFoundError(f"Code file not found: {code_file_path}")
                     with open(code_file_path, "r", encoding="utf-8") as f:
                         impl_code = f.read()
                     res_dict[content] = impl_code
@@ -83,12 +88,16 @@ class Database():
                 
                 if content == "framework_code" and framework:
                     code_file_path = case_path / f"{framework}.py"
+                    if not code_file_path.exists():
+                        raise FileNotFoundError(f"Code file not found: {code_file_path}")
                     with open(code_file_path, "r", encoding="utf-8") as f:
                         framework_code = f.read()
                     res_dict[content] = framework_code
                     continue
                 
                 metadata_file = case_path / "metadata.json"
+                if not metadata_file.exists():
+                    raise FileNotFoundError(f"Metadata file not found: {metadata_file}")
                 with open(metadata_file, 'r', encoding='utf-8') as f:
                     metadata = json.load(f)
                 
@@ -104,7 +113,7 @@ class Database():
         return self.vector_store.loaded_vectorstore.max_marginal_relevance_search(
             query=query,
             k=k,
-            fetch_k = max(20, 10 * k),
+            fetch_k = max(20, 5 * k),
             lambda_mult = 0.2, # 极致多样性
             filter={"feature_invariants": feature_invariants}, 
         )
@@ -113,20 +122,43 @@ class Database():
         return self.vector_store.loaded_vectorstore.similarity_search(
             query=query,
             k=k,
-            fetch_k = max(20, 10 * k),
+            fetch_k = max(20, 5 * k),
             filter={"feature_invariants": feature_invariants}
         )
         
-    def optimality_search(self, query: str, feature_invariants: str, k: int = 5):
-        return self.vector_store.loaded_vectorstore.similarity_search(
+    def optimality_search(self, query: str, feature_invariants: str, k: int = 1):
+        docs = self.vector_store.loaded_vectorstore.similarity_search(
             query=query,
-            k=k,
+            k= 5 * k,
             fetch_k = max(20, 10 * k),
             filter={"feature_invariants": feature_invariants}
         )
 
+        min_profile = float('inf')
+        min_doc = None
+        for doc in docs:
+            metadata_file = Path(doc.metadata["file_path"]) / "metadata.json"
+            if not metadata_file.exists():
+                continue
+            with open(metadata_file, 'r', encoding='utf-8') as f:
+                metadata = json.load(f)
+            profile = metadata.get('profile', float('inf'))
+            if profile < min_profile:
+                min_profile = profile
+                min_doc = doc
+        
+        return [min_doc]
+    
+    def rule_search(self, query: str, feature_invariants: str, k: int = 5, rule_desc:str = ""):
+        return self.vector_store.loaded_vectorstore.similarity_search(
+            query=query,
+            k=k,
+            fetch_k = max(20, 5 * k),
+            filter={"feature_invariants": feature_invariants}
+        )
+
     def samples_with_stragegy(self, stragegy_mode: RetrievalStragegy, output_content: List[str], features_str:str, feature_invariants:str,
-                              sample_num: int = 5, impl_type: str = "", framework: str = ""):
+                              sample_num: int = 5, rule_desc:str = "", impl_type: str = "", framework: str = ""):
         """根据指定的策略获取样本"""
         if stragegy_mode == RetrievalStragegy.RANDOMICITY:
             docs = self.randomicity_search(features_str, feature_invariants, sample_num)
@@ -134,26 +166,28 @@ class Database():
             docs = self.similarity_search(features_str, feature_invariants, sample_num)
         elif stragegy_mode == RetrievalStragegy.OPTIMALITY:
             docs = self.optimality_search(features_str, feature_invariants, sample_num)
+        elif stragegy_mode == RetrievalStragegy.RULE:
+            docs = self.rule_search(features_str, feature_invariants, sample_num, rule_desc)
         else:
             raise ValueError("Invalid stragegy_mode")
         
         result = self.get_output_content(output_content, stragegy_mode, docs, impl_type, framework)
         return result
-    
+
     async def samples(self, output_content: List[str], stragegy_mode: RetrievalStragegy = RetrievalStragegy.SIMILARITY, sample_num: int = 5, rule_desc: str = "",
-                impl_code: str = "", framework_code:str = "",backend: str = "", arch: str = "", impl_type: str = "", framework: str = ""):
+                      impl_code: str = "", framework_code:str = "", backend: str = "", arch: str = "", impl_type: str = "", framework: str = ""):
         """
         基本采样，根据指定的策略获取样本
         """
-        features = await self.feature_extractor(impl_code, framework_code)
+        features = await self.feature_extractor(impl_code, framework_code, backend, arch, impl_type)
         features_str = ", ".join([f"{k}: {v}" for k, v in features.items()])
-        feature_invariants = get_md5_hash(impl_type=impl_type, backend=backend, arch=arch)
+        feature_invariants = get_md5_hash(backend=backend, arch=arch, impl_type=impl_type)
         
-        result = self.samples_with_stragegy(stragegy_mode, output_content, features_str, feature_invariants, sample_num, impl_type, framework)
+        result = self.samples_with_stragegy(stragegy_mode, output_content, features_str, feature_invariants, sample_num, rule_desc, impl_type, framework)
         return result
     
     async def combined_samples(self, stragegy_mode: List[RetrievalStragegy], output_content: List[str], sample_num: List[int], rule_desc:str = "",
-                         impl_code: str = "", framework_code:str = "",backend: str = "", arch: str = "", impl_type: str = "", framework: str = ""):
+                               impl_code: str = "", framework_code:str = "",backend: str = "", arch: str = "", impl_type: str = "", framework: str = ""):
         """
         综合采样，根据不同的策略和数量获取样本
         """
@@ -162,12 +196,12 @@ class Database():
         if not stragegy_mode or not sample_num:
             raise ValueError("stragegy_mode and sample_num cannot be empty")
 
-        features = await self.feature_extractor(impl_code, framework_code)
+        features = await self.feature_extractor(impl_code, framework_code, backend, arch, impl_type)
         features_str = ", ".join([f"{k}: {v}" for k, v in features.items()])
-        feature_invariants = get_md5_hash(impl_type=impl_type, backend=backend, arch=arch)
+        feature_invariants = get_md5_hash(backend=backend, arch=arch, impl_type=impl_type)
         result = []
         for stragegy, num in zip(stragegy_mode, sample_num):
-            res = self.samples_with_stragegy(stragegy, output_content, features_str, num, feature_invariants, impl_type, framework)
+            res = self.samples_with_stragegy(stragegy, output_content, features_str, feature_invariants, num, rule_desc, impl_type, framework)
             result.extend(res)
         return result
     
@@ -175,11 +209,11 @@ class Database():
         """
         插入新的算子实现
         """
-        md5_hash = get_md5_hash(impl_code=impl_code, impl_type=impl_type, backend=backend, arch=arch)
+        md5_hash = get_md5_hash(impl_code=impl_code, backend=backend, arch=arch, impl_type=impl_type)
         operator_path = Path(self.database_path) / "operators"
         file_path = operator_path / arch / impl_type / md5_hash
-        
-        features = await self.feature_extractor(impl_code, framework_code, profile)
+
+        features = await self.feature_extractor(impl_code, framework_code, backend, arch, impl_type, profile)
         file_path.mkdir(parents=True, exist_ok=True)
         metadata_file = file_path / "metadata.json"
         with open(metadata_file, "w", encoding="utf-8") as f:
@@ -205,7 +239,7 @@ class Database():
         """
         删除算子实现
         """
-        md5_hash = get_md5_hash(impl_code=impl_code, impl_type=impl_type, backend=backend, arch=arch)
+        md5_hash = get_md5_hash(impl_code=impl_code, backend=backend, arch=arch, impl_type=impl_type)
 
         operator_path = Path(self.database_path) / "operators"
         file_path = operator_path / arch / impl_type / md5_hash

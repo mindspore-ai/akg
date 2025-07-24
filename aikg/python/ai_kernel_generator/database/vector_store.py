@@ -88,13 +88,13 @@ class VectorStore:
             with open(metadata_file, 'r', encoding='utf-8') as f:
                 metadata = json.load(f)
             
+            backend = metadata.get('backend', '')
             arch = metadata.get('arch', '')
             impl_type = metadata.get('impl_type', '')
-            backend = metadata.get('backend', '')
-            feature_invariants = get_md5_hash(impl_type=impl_type, backend=backend, arch=arch)
+            feature_invariants = get_md5_hash(backend=backend, arch=arch, impl_type=impl_type)
             # 创建检索文档
             doc = Document(
-                page_content=", ".join([f"{k}: {v}" for k, v in metadata.items()]),
+                page_content=", ".join([f"{k}: {v}" for k, v in metadata.items() if k not in {'backend', 'arch', 'impl_type', 'profile'}]),
                 metadata={
                     "file_path": str(op_subdir),
                     "feature_invariants": feature_invariants
@@ -145,12 +145,7 @@ class VectorStore:
         return vector_store
 
     def insert(self, backend: str, arch: str, impl_type: str, md5_hash: str):
-        """向向量存储添加新的算子特征文档
-        Args:
-            arch (str): 架构名称。
-            impl_type (str): 实现类型。
-            md5_hash (str): 哈希值
-        """
+        """向向量存储添加新的算子特征文档"""
         metadata_path = Path(self.database_path) / "operators" / arch / impl_type / md5_hash / 'metadata.json'
         if not metadata_path.exists():
             raise ValueError(f"算子元数据文件 {str(metadata_path)} 不存在")
@@ -162,10 +157,10 @@ class VectorStore:
         op_dir = metadata_path.parent
 
         # 创建文档对象
-        feature_invariants = get_md5_hash(impl_type=impl_type, backend=backend, arch=arch)
+        feature_invariants = get_md5_hash(backend=backend, arch=arch, impl_type=impl_type)
         # 创建检索文档
         doc = Document(
-            page_content=", ".join([f"{k}: {v}" for k, v in metadata.items()]),
+            page_content=", ".join([f"{k}: {v}" for k, v in metadata.items() if k not in {'backend', 'arch', 'impl_type', 'profile'}]),
             metadata={
                 "file_path": str(op_dir),
                 "feature_invariants": feature_invariants

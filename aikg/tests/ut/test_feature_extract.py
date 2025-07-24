@@ -42,7 +42,7 @@ async def test_feature_extract():
         framework_code=""
     )
     try:
-        feature_res, feature_prompt, feature_reasoning = await feature.run()
+        feature_res, _, _ = await feature.run()
         print(f"模型返回的算子{op_name}的特征文本：{feature_res}\n")
     finally:
         if hasattr(feature, "close"):
