@@ -24,8 +24,7 @@
 #include <string>
 #include <vector>
 
-namespace mindspore {
-namespace ops {
+namespace ms_custom_ops {
 class OPS_API AddCustomOpFuncImpl : public OpFuncImpl {
 public:
   ShapeArray InferShape(const PrimitivePtr &primitive,
@@ -41,10 +40,7 @@ public:
 
   bool GeneralInferRegistered() const override { return true; }
 };
-} // namespace ops
-} // namespace mindspore
 
-namespace ms_custom_ops {
 class AddCustomAscend : public AscendCKernelMod {
 public:
   AddCustomAscend() : AscendCKernelMod(std::move("aclnnAddCustom")) {}
@@ -69,7 +65,8 @@ private:
 };
 } // namespace ms_custom_ops
 
-MS_CUSTOM_OPS_REGISTER(add, AddCustomOpFuncImpl, AddCustomAscend);
+REG_GRAPH_MODE_OP(add, ms_custom_ops::AddCustomOpFuncImpl,
+                  ms_custom_ops::AddCustomAscend);
 
 // =============================================================================
 // PYBOOST MODE IMPLEMENTATION

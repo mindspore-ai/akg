@@ -31,6 +31,8 @@
 #include "module.h"
 
 namespace ms_custom_ops {
+using namespace mindspore::ops;
+
 class InternalKernelMod : public KernelMod {
 public:
   InternalKernelMod() {

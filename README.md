@@ -322,7 +322,7 @@ protected:
 // 注册算子到 MindSpore 框架
 // 注册算子名称映射 (对外接口my_op, 内部算子库名字internal::kInternalMyOpName
    对接的kernelmod CustomMyOp)
-MS_CUSTOM_OPS_REGISTER(my_op, internal::kInternalMyOpName,
+REG_GRAPH_MODE_OP(my_op, internal::kInternalMyOpName,
                        CustomMyOp);
 ```
 

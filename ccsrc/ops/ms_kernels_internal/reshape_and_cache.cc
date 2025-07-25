@@ -33,8 +33,7 @@
 #include <utility>
 #include <vector>
 
-namespace mindspore {
-namespace ops {
+namespace ms_custom_ops {
 class OPS_API CustomReshapeAndCacheOpFuncImpl : public OpFuncImpl {
 public:
   ShapeArray InferShape(const PrimitivePtr &primitive,
@@ -49,10 +48,8 @@ public:
 
   bool GeneralInferRegistered() const override { return true; }
 };
-} // namespace ops
-} // namespace mindspore
 
-namespace ms_custom_ops {
+
 constexpr size_t kInputKeyIndex = 0;
 constexpr size_t kInputValueIndex = 1;
 constexpr size_t kInputKeyCacheIndex = 2;
@@ -66,8 +63,9 @@ public:
   ~CustomReshapeAndCache() = default;
 
   void InitKernelInputsOutputsIndex() override {
-    kernel_inputs_index_ = {kInputKeyIndex, kInputValueIndex, kInputKeyCacheIndex,
-                            kInputValueCacheIndex, kInputSlotMappingIndex};
+    kernel_inputs_index_ = {kInputKeyIndex, kInputValueIndex,
+                            kInputKeyCacheIndex, kInputValueCacheIndex,
+                            kInputSlotMappingIndex};
     kernel_outputs_index_ = {kOutputIndex};
   }
 
@@ -83,8 +81,8 @@ protected:
 };
 } // namespace ms_custom_ops
 
-MS_CUSTOM_OPS_REGISTER(reshape_and_cache, CustomReshapeAndCacheOpFuncImpl,
-                       CustomReshapeAndCache);
+REG_GRAPH_MODE_OP(reshape_and_cache, ms_custom_ops::CustomReshapeAndCacheOpFuncImpl,
+                  ms_custom_ops::CustomReshapeAndCache);
 
 // =============================================================================
 // PYBOOST MODE IMPLEMENTATION
