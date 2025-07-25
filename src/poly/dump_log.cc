@@ -251,7 +251,10 @@ void CreateDirIfNotExist(const std::string &file_name) {
   const int kMaxPathLen = 1024;
   char file_name_[kMaxPathLen] = {0};
   CHECK(file_name.size() < kMaxPathLen);
-  memcpy(file_name_, file_name.c_str(), file_name.size());
+  for(int i = 0; i < kMaxPathLen && i < static_cast<int>(file_name.size(); ++i) {
+    file_name_[i] = file_name[i];
+  }
+  file_name_[file_name.size()] = '\0';  // Ensure null-termination
 
   // dirname() updates "filename" in place, so "dir" is a substring of "filename".
   // Do not free "dir", and "filename" should be freed after both "dir" and "filename" are no longer used.
@@ -270,7 +273,10 @@ void CreateDirIfNotExist(const std::string &file_name) {
   const int dir_mode = S_IRUSR | S_IWUSR | S_IXUSR;
   if (mkdir(dir, dir_mode) != 0) {
     char dir_copy[kMaxPathLen] = {0};
-    memcpy(dir_copy, dir, strlen(dir));
+    for (int i = 0; i < kMaxPathLen && dir[i] != '\0'; ++i) {
+      dir_copy[i] = dir[i];
+    }
+    dir_copy[dir.size()] = '\0';  // Ensure null-termination
     char *parent_dir = dirname(dir_copy);
     CHECK(parent_dir != nullptr);
     CreateDirIfNotExist(parent_dir);
