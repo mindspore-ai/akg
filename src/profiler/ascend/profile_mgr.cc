@@ -78,8 +78,11 @@ uint64_t ProfileMgr::GetJobId() const {
 
 Status ProfileMgr::GetProfConf(MsprofGeOptions *prof) {
   std::string job_id = std::to_string(GetJobId());
-
-  if (memcpy(prof->jobId, job_id.c_str(), job_id.size()) == nullptr) {
+  for(int i = 0; i < static_cast<int>(job_id.size()); ++i) {
+    prof->jobId[i] = job_id[i];
+  }
+  prof->jobId[job_id.size()] = '\0';  // Ensure null-termination
+  if (prof->jobId == nullptr) {
     LOG(ERROR) << "Copy job_id failed.";
     return PROF_FAILED;
   }
@@ -94,8 +97,11 @@ Status ProfileMgr::GetProfConf(MsprofGeOptions *prof) {
   const std::string prof_options_str = "{\"output\":\"" + std::string(profile_dir) +
                                        "\", \"training_trace\":\"on\", \
       \"task_trace\":\"on\", \"aic_metrics\":\"PipeUtilization\", \"aicpu\":\"on\"}";
-
-  if (memcpy(prof->options, prof_options_str.c_str(), prof_options_str.size()) == nullptr) {
+  for(int i = 0; i < static_cast<int>(prof_options_str.size()); ++i) {
+    prof->options[i] = prof_options_str[i];
+  }
+  prof->options[prof_options_str.size()] = '\0';  // Ensure null-termination
+  if (prof->options == nullptr) {
     LOG(ERROR) << "Copy profiling_options failed";
     return PROF_FAILED;
   }
